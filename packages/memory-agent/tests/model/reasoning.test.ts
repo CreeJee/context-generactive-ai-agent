@@ -7,7 +7,6 @@ import { fromPrompt } from "../../src/model/prompt.ts";
 import { subscriptionModel, type StreamingOAuthClient } from "../../src/model/subscription.ts";
 import { NormalizedStreamEvent } from "../../src/oauth/protocol.ts";
 import type { SubscriptionModelSelection } from "../../src/providers/contracts.ts";
-import { nativeStream } from "../../src/runtime/native-stream.ts";
 
 /**
  * A response keeps the reasoning the next request needs, in the shape TanStack stored it: the
@@ -17,7 +16,7 @@ import { nativeStream } from "../../src/runtime/native-stream.ts";
  */
 
 const clientOf = (events: ReadonlyArray<NormalizedStreamEvent>): StreamingOAuthClient => ({
-  stream: () => nativeStream(Stream.fromIterable(events, { chunkSize: 1 })),
+  stream: () => Stream.fromIterable(events, { chunkSize: 1 }),
 });
 
 /** The assistant message the Effect AI model's response becomes, before the writer adds its fields. */

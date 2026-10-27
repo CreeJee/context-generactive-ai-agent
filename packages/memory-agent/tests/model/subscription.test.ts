@@ -1,6 +1,6 @@
 import { it } from "@effect/vitest";
-// AsyncGenerator mocks implement the native subscription client contract.
-import { Effect, Logger, Option, References, Schema, Stream } from "effect";
+// Stream fakes implement the subscription client contract.
+import { Deferred, Effect, Logger, Option, References, Schema, Stream } from "effect";
 import { Prompt } from "effect/ai";
 import { describe, expect } from "vite-plus/test";
 import {
@@ -20,8 +20,11 @@ import {
   ReasoningSummaryProtocolFailedReason,
   RequestNotSent,
 } from "../../src/oauth/protocol.ts";
+import {
+  OAuthHarnessError,
+  type SubscriptionClientFailure,
+} from "../../src/oauth/validation-harness.ts";
 import type { SubscriptionAccountProvider } from "../../src/providers/contracts.ts";
-import { nativeStream } from "../../src/runtime/native-stream.ts";
 
 /**
  * The subscription model's stream contract (docs/effect-ai-migration.md step 2): what it emits for
@@ -34,20 +37,15 @@ const prompt = Prompt.make([
   { role: "user", content: "private question" },
 ]);
 
-/** A client that yields `events`, then throws `failure` as the native SDK would. */
+/** A client that yields `events`, then fails with `failure` as the client would. */
 const clientOf = (
   events: ReadonlyArray<NormalizedStreamEvent>,
-  failure?: ProviderStreamFailed | Error,
+  failure?: SubscriptionClientFailure,
 ): StreamingOAuthClient => ({
   stream: () =>
-    nativeStream(
-      Stream.fromIterable(
-        (function* () {
-          yield* events;
-          if (failure !== undefined) throw failure;
-        })(),
-        { chunkSize: 1 },
-      ),
+    Stream.concat(
+      Stream.fromIterable(events, { chunkSize: 1 }),
+      failure === undefined ? Stream.empty : Stream.fail(failure),
     ),
 });
 
@@ -291,17 +289,15 @@ describe("subscription language model", () => {
       const client: StreamingOAuthClient = {
         stream: (body) => {
           bodies.push(body);
-          return nativeStream(
-            bodies.length === 1
-              ? Stream.fail(
-                  ProviderFeatureRejectedError.make({
-                    provider: "anthropic",
-                    feature: "prompt-cache",
-                    status: 400,
-                  }),
-                )
-              : Stream.make(NormalizedStreamEvent.text({ text: "fallback worked" })),
-          );
+          return bodies.length === 1
+            ? Stream.fail(
+                ProviderFeatureRejectedError.make({
+                  provider: "anthropic",
+                  feature: "prompt-cache",
+                  status: 400,
+                }),
+              )
+            : Stream.make(NormalizedStreamEvent.text({ text: "fallback worked" }));
         },
       };
       const parts = yield* partsOf("anthropic", client);
@@ -320,8 +316,8 @@ describe("subscription language model", () => {
       const client: StreamingOAuthClient = {
         stream: () => {
           attempts += 1;
-          return nativeStream(
-            Stream.make(NormalizedStreamEvent.error({ code: "overloaded_error", message: "busy" })),
+          return Stream.make(
+            NormalizedStreamEvent.error({ code: "overloaded_error", message: "busy" }),
           );
         },
       };
@@ -344,12 +340,18 @@ describe("subscription language model", () => {
       expect(
         yield* failureOf(
           "openai",
-          clientOf([NormalizedStreamEvent.text({ text: "partial" })], new Error()),
+          clientOf(
+            [NormalizedStreamEvent.text({ text: "partial" })],
+            OAuthHarnessError.fromCode("transport_unavailable"),
+          ),
         ),
       ).toEqual(failed(SubscriptionStreamFailedReason.cases.ResponseInterrupted.make({})));
-      expect(yield* failureOf("openai", clientOf([], new Error("socket hang up")))).toEqual(
-        failed(SubscriptionStreamFailedReason.cases.RequestOutcomeUnknown.make({})),
-      );
+      expect(
+        yield* failureOf(
+          "openai",
+          clientOf([], OAuthHarnessError.fromCode("transport_unavailable")),
+        ),
+      ).toEqual(failed(SubscriptionStreamFailedReason.cases.RequestOutcomeUnknown.make({})));
     }),
   );
 
@@ -474,14 +476,14 @@ describe("subscription language model", () => {
     }),
   );
 
-  it.effect("aborts the provider request when the stream is interrupted", () =>
+  it.effect("interrupts the provider stream when the stream is interrupted", () =>
     Effect.gen(function* () {
-      let signal: AbortSignal | undefined;
+      const ended = yield* Deferred.make<void>();
       const client: StreamingOAuthClient = {
-        stream: (_body, received) => {
-          signal = received;
-          return nativeStream(Stream.concat(Stream.make(start), Stream.never));
-        },
+        stream: () =>
+          Stream.concat(Stream.make(start), Stream.never).pipe(
+            Stream.ensuring(Deferred.succeed(ended, undefined)),
+          ),
       };
       const model = yield* modelOf("openai", client);
       const parts = yield* Stream.runCollect(
@@ -490,7 +492,7 @@ describe("subscription language model", () => {
           .pipe(Stream.takeUntil((part) => part.type === "reasoning-start")),
       );
       expect(parts.map((part) => part.type)).toEqual(["reasoning-start"]);
-      expect(signal?.aborted).toBe(true);
+      expect(yield* Deferred.isDone(ended)).toBe(true);
     }),
   );
 });

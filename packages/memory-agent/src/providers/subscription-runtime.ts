@@ -1,9 +1,11 @@
-import { Effect, Function as EffectFunction, Predicate, Schema } from "effect";
+import { Effect, Function as EffectFunction, Schema, type Scope } from "effect";
 import {
   subscriptionModel,
   shownSubscriptionFailure,
   type StreamingOAuthClient,
 } from "../model/subscription.ts";
+import type { OAuthProfileRejected } from "../oauth/accounts.ts";
+import type { OAuthHarnessError } from "../oauth/validation-harness.ts";
 import {
   ModelUnavailable,
   SubscriptionModelSelection,
@@ -17,7 +19,10 @@ const contextWindows: Readonly<Record<SubscriptionAccountProvider, number>> = {
 };
 
 export interface SubscriptionRuntimeDependencies {
-  readonly client: StreamingOAuthClient | (() => StreamingOAuthClient);
+  /** The client, or the run's account client, held until the run's scope closes. */
+  readonly client:
+    | StreamingOAuthClient
+    | Effect.Effect<StreamingOAuthClient, OAuthHarnessError | OAuthProfileRejected, Scope.Scope>;
   readonly catalogWindow?: (model: string) => number | null;
 }
 
@@ -43,11 +48,11 @@ export function createSubscriptionRuntimeImplementation(provider: SubscriptionAc
                 Schema.is(SubscriptionModelSelection)(candidate) && candidate.provider === provider,
               () => ModelUnavailable.make(selection),
             );
-            // Pinned for the run, so the account never changes mid-run.
-            const pinned = yield* Effect.acquireRelease(
-              Effect.sync(() => (Predicate.isFunction(client) ? client() : client)),
-              (held) => Effect.sync(() => held.releaseRun?.()),
-            );
+            // Pinned for the run, so the account never changes mid-run. A run without a usable
+            // account is a defect, as the client factory's throw was.
+            const pinned = yield* Effect.isEffect(client)
+              ? Effect.orDie(client)
+              : Effect.succeed(client);
             return {
               model: yield* subscriptionModel({
                 client: pinned,
@@ -86,7 +91,7 @@ export const createSubscriptionRuntime: {
 );
 function createSubscriptionRuntimeBody(
   provider: SubscriptionAccountProvider,
-  client: StreamingOAuthClient | (() => StreamingOAuthClient),
+  client: SubscriptionClient,
   catalogWindow: (model: string) => number | null = () => null,
 ): AgentModelRuntime {
   return createSubscriptionRuntimeImplementation(provider).bind({ client, catalogWindow });

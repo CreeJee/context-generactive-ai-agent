@@ -17,10 +17,7 @@ import { memoryAgentLayer } from "../src/layers.ts";
 import { readStructuredEvidence } from "../src/memory/evidence.ts";
 import { storedOAuthProfiles } from "./stored-profiles.ts";
 import { NormalizedStreamEvent, providerProtocols } from "../src/oauth/protocol.ts";
-import {
-  createKeychainProfileCredentialStore,
-  createSubscriptionOAuthClient,
-} from "../src/oauth/validation-harness.ts";
+import { createSubscriptionOAuthClient, OAuthKeychain } from "../src/oauth/validation-harness.ts";
 import { ModelSelection } from "../src/providers/contracts.ts";
 import { toPrompt } from "../src/model/prompt.ts";
 import { subscriptionBody } from "../src/model/subscription.ts";
@@ -330,9 +327,11 @@ const program = Effect.gen(function* () {
     Effect.mapError(() => BenchmarkFailed.make({ reason: "profile" })),
   );
   if (profile === undefined) return yield* BenchmarkFailed.make({ reason: "profile" });
-  const client = createSubscriptionOAuthClient({
+  const vault = yield* OAuthKeychain;
+  const client = yield* createSubscriptionOAuthClient({
     protocol: providerProtocols.anthropic,
-    store: createKeychainProfileCredentialStore(profile.id),
+    // A stored profile id is always a valid keychain slot id.
+    store: yield* Effect.orDie(vault.profileStore(profile.id)),
   });
   // Serial execution, balanced arm order, a per-request timeout and a fixed request count.
   // Save every completed answer; transport errors stop the run and never become wrong answers.
@@ -341,40 +340,34 @@ const program = Effect.gen(function* () {
       for (let position = 0; position < variants.length; position++) {
         const arm = arms[(index + repeat + position) % variants.length]!;
         const started = yield* Clock.currentTimeMillis;
-        const completed = yield* Effect.scoped(
-          Effect.gen(function* () {
-            const signal = yield* Effect.abortSignal;
-            let rawAnswer = "";
-            const usage: ReportedUsage = {
-              promptTokens: null,
-              completionTokens: null,
-              cachedPromptTokens: null,
-            };
-            yield* Stream.fromAsyncIterable(client.stream(arm.body, signal), () =>
-              BenchmarkFailed.make({ reason: "provider" }),
-            ).pipe(
-              Stream.runForEach(
-                Match.type<NormalizedStreamEvent>().pipe(
-                  Match.tag("text", (event) => {
-                    rawAnswer += event.text;
-                    return Effect.void;
-                  }),
-                  Match.tag("usage", (event) => {
-                    usage.promptTokens = event.promptTokens ?? usage.promptTokens;
-                    usage.completionTokens = event.completionTokens ?? usage.completionTokens;
-                    usage.cachedPromptTokens = event.cachedPromptTokens ?? usage.cachedPromptTokens;
-                    return Effect.void;
-                  }),
-                  Match.tag("error", () =>
-                    Effect.fail(BenchmarkFailed.make({ reason: "provider" })),
-                  ),
-                  Match.orElse(() => Effect.void),
-                ),
+        const completed = yield* Effect.gen(function* () {
+          let rawAnswer = "";
+          const usage: ReportedUsage = {
+            promptTokens: null,
+            completionTokens: null,
+            cachedPromptTokens: null,
+          };
+          yield* client.stream(arm.body).pipe(
+            Stream.mapError(() => BenchmarkFailed.make({ reason: "provider" })),
+            Stream.runForEach(
+              Match.type<NormalizedStreamEvent>().pipe(
+                Match.tag("text", (event) => {
+                  rawAnswer += event.text;
+                  return Effect.void;
+                }),
+                Match.tag("usage", (event) => {
+                  usage.promptTokens = event.promptTokens ?? usage.promptTokens;
+                  usage.completionTokens = event.completionTokens ?? usage.completionTokens;
+                  usage.cachedPromptTokens = event.cachedPromptTokens ?? usage.cachedPromptTokens;
+                  return Effect.void;
+                }),
+                Match.tag("error", () => Effect.fail(BenchmarkFailed.make({ reason: "provider" }))),
+                Match.orElse(() => Effect.void),
               ),
-            );
-            return { rawAnswer, usage };
-          }),
-        ).pipe(Effect.timeout("90 seconds"));
+            ),
+          );
+          return { rawAnswer, usage };
+        }).pipe(Effect.timeout("90 seconds"));
         const answer = yield* Schema.decodeEffect(Schema.fromJsonString(Answer))(
           completed.rawAnswer.trim(),
         ).pipe(Effect.catchTag("SchemaError", () => Effect.succeed(null)));
@@ -419,5 +412,7 @@ const program = Effect.gen(function* () {
   yield* Console.log(yield* encode(report().summary));
 });
 
-const runtime = ManagedRuntime.make(NodeServices.layer);
+const runtime = ManagedRuntime.make(
+  OAuthKeychain.keychain.pipe(Layer.provideMerge(NodeServices.layer)),
+);
 await runtime.runPromise(Effect.scoped(program)).finally(() => runtime.dispose());

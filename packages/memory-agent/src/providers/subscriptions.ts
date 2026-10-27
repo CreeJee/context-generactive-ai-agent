@@ -3,28 +3,31 @@ import { GlobalConfig } from "../config/global-config.ts";
 import { OAuthProfiles } from "../oauth/accounts.ts";
 import { createAccountBoundSubscriptionClients } from "../oauth/account-bound.ts";
 import { providerProtocols } from "../oauth/protocol.ts";
-import { createSubscriptionOAuthClient } from "../oauth/subscription-oauth.ts";
+import { createSubscriptionOAuthClient, OAuthKeychain } from "../oauth/subscription-oauth.ts";
 import { createSubscriptionProvider } from "./subscription-provider.ts";
 import { ProviderRegistry, providerRegistryFrom } from "./registry.ts";
 import { createSubscriptionRuntime } from "./subscription-runtime.ts";
 
 const make = Effect.gen(function* () {
   const config = yield* GlobalConfig;
-  const openaiClient = createSubscriptionOAuthClient({
+  const vault = yield* OAuthKeychain;
+  const openaiClient = yield* createSubscriptionOAuthClient({
     protocol: providerProtocols.openai,
+    store: vault.store,
   });
-  const anthropicClient = createSubscriptionOAuthClient({
+  const anthropicClient = yield* createSubscriptionOAuthClient({
     protocol: providerProtocols.anthropic,
+    store: vault.store,
   });
-  const openai = createSubscriptionProvider({
+  const openai = yield* createSubscriptionProvider({
     protocol: providerProtocols.openai,
     config,
-    client: openaiClient,
+    client: { ...openaiClient, startLogin: openaiClient.startLogin() },
   });
-  const anthropic = createSubscriptionProvider({
+  const anthropic = yield* createSubscriptionProvider({
     protocol: providerProtocols.anthropic,
     config,
-    client: anthropicClient,
+    client: { ...anthropicClient, startLogin: anthropicClient.startLogin() },
   });
 
   return providerRegistryFrom({
@@ -49,18 +52,21 @@ export const SubscriptionProviderRegistry = Layer.effect(ProviderRegistry, make)
 const makeForAccounts = Effect.gen(function* () {
   const config = yield* GlobalConfig;
   const profiles = yield* OAuthProfiles;
-  const openaiClient = createAccountBoundSubscriptionClients({ profiles, provider: "openai" });
-  const anthropicClient = createAccountBoundSubscriptionClients({
+  const openaiClient = yield* createAccountBoundSubscriptionClients({
+    profiles,
+    provider: "openai",
+  });
+  const anthropicClient = yield* createAccountBoundSubscriptionClients({
     profiles,
     provider: "anthropic",
   });
-  const openai = createSubscriptionProvider({
+  const openai = yield* createSubscriptionProvider({
     protocol: providerProtocols.openai,
     config,
     client: openaiClient.client,
     catalogKey: openaiClient.catalogKey,
   });
-  const anthropic = createSubscriptionProvider({
+  const anthropic = yield* createSubscriptionProvider({
     protocol: providerProtocols.anthropic,
     config,
     client: anthropicClient.client,

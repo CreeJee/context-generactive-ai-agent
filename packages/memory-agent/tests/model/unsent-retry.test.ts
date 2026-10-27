@@ -15,7 +15,10 @@ import {
   ProviderStreamFailed,
   RequestNotSent,
 } from "../../src/oauth/protocol.ts";
-import { nativeStream } from "../../src/runtime/native-stream.ts";
+import {
+  OAuthHarnessError,
+  type SubscriptionClientFailure,
+} from "../../src/oauth/validation-harness.ts";
 import { ProviderRetryOutcome } from "../../src/workflow/provider-retry.ts";
 
 /**
@@ -28,24 +31,19 @@ const prompt = Prompt.make([{ role: "user", content: "question" }]);
 
 interface Attempt {
   readonly events: ReadonlyArray<NormalizedStreamEvent>;
-  readonly failure?: ProviderStreamFailed | Error;
+  readonly failure?: SubscriptionClientFailure;
 }
 
-/** A client whose n-th request yields the n-th attempt's events, then throws its failure. */
+/** A client whose n-th request yields the n-th attempt's events, then fails with its failure. */
 const clientOf = (attempts: ReadonlyArray<Attempt>) => {
   let sent = 0;
   const client: StreamingOAuthClient = {
     stream: () => {
       const attempt = attempts[sent] ?? { events: [] };
       sent += 1;
-      return nativeStream(
-        Stream.fromIterable(
-          (function* () {
-            yield* attempt.events;
-            if (attempt.failure !== undefined) throw attempt.failure;
-          })(),
-          { chunkSize: 1 },
-        ),
+      return Stream.concat(
+        Stream.fromIterable(attempt.events, { chunkSize: 1 }),
+        attempt.failure === undefined ? Stream.empty : Stream.fail(attempt.failure),
       );
     },
   };
@@ -103,7 +101,9 @@ describe("unsent retry", () => {
   it.effect("never sends again a request the provider may have got", () =>
     Effect.gen(function* () {
       const waits: Array<UnsentRetry> = [];
-      const unknown = clientOf([{ events: [], failure: new Error("socket hang up") }]);
+      const unknown = clientOf([
+        { events: [], failure: OAuthHarnessError.fromCode("transport_unavailable") },
+      ]);
       expect(
         subscriptionFailure(
           yield* Effect.flip(streamed(unknown.client, ProviderRetryOutcome.Retry(), waits)),

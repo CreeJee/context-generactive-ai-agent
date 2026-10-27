@@ -11,7 +11,7 @@ import {
   type SubscriptionQuotaWindow,
 } from "../src/oauth/subscription-quota.ts";
 import { SubscriptionUsageCredentialExpired } from "../src/oauth/subscription-usage-probe.ts";
-import { OAuthHarnessError } from "../src/oauth/validation-harness.ts";
+import { OAuthHarnessError, OAuthKeychain } from "../src/oauth/validation-harness.ts";
 
 const fiveHour: SubscriptionQuotaWindow = {
   name: "five_hour",
@@ -40,7 +40,11 @@ const quotaService = Effect.fn(function* (failing: Ref.Ref<boolean>, calls: Ref.
   });
   const services = yield* Layer.build(
     SubscriptionQuota.layer.pipe(
-      Layer.provide(OAuthProfiles.layer.pipe(Layer.provide(Layer.succeedContext(database)))),
+      Layer.provide(
+        OAuthProfiles.layer.pipe(
+          Layer.provide(Layer.merge(Layer.succeedContext(database), OAuthKeychain.memory)),
+        ),
+      ),
       Layer.provide(usage),
     ),
   );

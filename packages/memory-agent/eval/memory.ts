@@ -29,9 +29,10 @@ const home = await Effect.runPromise(defaultStorageRoot);
 const footprint = Effect.fn("eval.footprint")(function* (
   field: "phys_footprint" | "phys_footprint_peak",
 ) {
-  const { stdout: output } = yield* nativePromise(() =>
-    runProcess({ command: "footprint", args: [String(process.pid)] }),
-  );
+  const { stdout: output } = yield* runProcess({
+    command: "footprint",
+    args: [String(process.pid)],
+  });
   const match = new RegExp(`${field}: ([0-9.]+) (KB|MB|GB)`).exec(output);
   if (!isTruthy(match)) return null;
   const scale = { KB: 1 / 1024, MB: 1, GB: 1024 }[match[2] ?? "MB"] ?? 1;
@@ -141,9 +142,7 @@ const runAll = Effect.fn("eval.runAll")(function* () {
   yield* Effect.forEach(
     Object.keys(scenarios),
     (name) =>
-      nativePromise(() =>
-        runProcess({ command: process.execPath, args: [...process.execArgv, script, name] }),
-      ).pipe(
+      runProcess({ command: process.execPath, args: [...process.execArgv, script, name] }).pipe(
         Effect.map((result) => result.stdout.trim().split("\n").at(-1) ?? ""),
         Effect.catch((error) =>
           Effect.succeed(

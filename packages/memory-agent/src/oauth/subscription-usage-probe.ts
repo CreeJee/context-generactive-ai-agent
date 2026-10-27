@@ -1,6 +1,5 @@
 import { DateTime, Effect, Option, Schema } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { nativePromise } from "../runtime/native-effect.ts";
 import { providerProtocols, type OAuthProvider } from "./protocol.ts";
 import {
   createSubscriptionOAuthClient,
@@ -61,9 +60,13 @@ const requestUsage = Effect.fn("requestSubscriptionUsage")(function* (options: {
   const protocol = providerProtocols[provider];
   const now = options.now ?? Date.now;
   const fetcher = options.fetch ?? fetch;
-  const readCredential = nativePromise(() => options.store.read(provider)).pipe(
-    Effect.filterOrFail(isTruthy, () => OAuthHarnessError.fromCode("not_connected", null, context)),
-  );
+  const readCredential = options.store
+    .read(provider)
+    .pipe(
+      Effect.filterOrFail(isTruthy, () =>
+        OAuthHarnessError.fromCode("not_connected", null, context),
+      ),
+    );
   const stored = yield* readCredential;
   // The app's own expiry margin: the same credential would be refreshed before a model request.
   const refreshed = stored.expiresAt <= now() + 30_000;
@@ -72,14 +75,15 @@ const requestUsage = Effect.fn("requestSubscriptionUsage")(function* (options: {
     Effect.succeed(refreshed && !options.refreshExpired),
   );
   const credential = refreshed
-    ? yield* nativePromise(() =>
-        createSubscriptionOAuthClient({
-          protocol,
-          store: options.store,
-          fetch: fetcher,
-          now,
-        }).refreshForValidation(),
-      ).pipe(Effect.andThen(readCredential))
+    ? yield* createSubscriptionOAuthClient({
+        protocol,
+        store: options.store,
+        fetch: fetcher,
+        now,
+      }).pipe(
+        Effect.flatMap((client) => client.refreshForValidation),
+        Effect.andThen(readCredential),
+      )
     : stored;
   const headers = new Headers(protocol.modelHeaders);
   headers.set("Accept", "application/json");
@@ -102,7 +106,7 @@ const requestUsage = Effect.fn("requestSubscriptionUsage")(function* (options: {
       (response) => OAuthHarnessError.fromCode("provider_rejected", response.status, context),
     ),
   );
-  const body = yield* nativePromise(() => response.json()).pipe(
+  const body = yield* Effect.tryPromise(() => response.json()).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(UsageObject)),
     Effect.mapError(() =>
       OAuthHarnessError.fromCode("provider_rejected", response.status, context),

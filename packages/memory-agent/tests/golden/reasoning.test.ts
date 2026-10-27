@@ -6,7 +6,6 @@ import {
 } from "../../src/model/subscription.ts";
 import { NormalizedStreamEvent } from "../../src/oauth/protocol.ts";
 import type { SubscriptionAccountProvider } from "../../src/providers/contracts.ts";
-import { nativeStream } from "../../src/runtime/native-stream.ts";
 import { testAgent } from "../support/test-env.ts";
 import { conversation, expectGolden } from "./driver.ts";
 
@@ -76,7 +75,7 @@ const turns = {
 const scriptedClient = (provider: SubscriptionAccountProvider): StreamingOAuthClient => ({
   stream: (body) => {
     const events: ReadonlyArray<NormalizedStreamEvent> = turns[provider](body.includes(readCall));
-    return nativeStream(Stream.fromIterable(events, { chunkSize: 1 }));
+    return Stream.fromIterable(events, { chunkSize: 1 });
   },
 });
 

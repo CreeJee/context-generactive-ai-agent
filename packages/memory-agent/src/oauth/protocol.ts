@@ -1,5 +1,4 @@
-import { Data, Effect, Function as EffectFunction } from "effect";
-import { oauthProtocolCrypto } from "./node-runtime.ts";
+import { Crypto, Data, Effect, Function as EffectFunction } from "effect";
 import { optionalProperty } from "../optional-property.ts";
 import { Option, Schema } from "effect";
 import { JsonValue } from "../json.ts";
@@ -137,18 +136,20 @@ export interface Pkce {
 
 const base64Url = (value: Uint8Array) => Buffer.from(value).toString("base64url");
 
-export function createPkce(): Pkce {
-  const verifier = base64Url(Effect.runSync(oauthProtocolCrypto.randomBytes(48)));
-  return {
+export const createPkce = Effect.gen(function* () {
+  const crypto = yield* Crypto.Crypto;
+  const verifier = base64Url(yield* crypto.randomBytes(48));
+  const pkce: Pkce = {
     verifier,
-    challenge: base64Url(
-      Effect.runSync(oauthProtocolCrypto.digest("SHA-256", new TextEncoder().encode(verifier))),
-    ),
+    challenge: base64Url(yield* crypto.digest("SHA-256", new TextEncoder().encode(verifier))),
   };
-}
+  return pkce;
+});
 
-export const createOAuthState = () =>
-  base64Url(Effect.runSync(oauthProtocolCrypto.randomBytes(32)));
+export const createOAuthState = Effect.map(
+  Effect.flatMap(Effect.service(Crypto.Crypto), (crypto) => crypto.randomBytes(32)),
+  base64Url,
+);
 
 export const ToolArguments = Schema.Record(Schema.String, JsonValue);
 export type ToolArguments = typeof ToolArguments.Type;

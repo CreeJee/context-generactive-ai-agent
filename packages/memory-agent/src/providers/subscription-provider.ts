@@ -1,5 +1,4 @@
-import { nativePromise } from "../runtime/native-effect.ts";
-import { Cause, Result, Function as EffectFunction } from "effect";
+import { Cause, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { ANTHROPIC_MODELS } from "./model-catalog.ts";
 import {
@@ -16,9 +15,10 @@ import {
   Semaphore,
 } from "effect";
 import type { Settings } from "../config/global-config.ts";
+import type { JsonValue } from "../json.ts";
 import { optionalProperty } from "../optional-property.ts";
+import type { OAuthProfileRejected, OAuthProfileStoreFailed } from "../oauth/accounts.ts";
 import {
-  createSubscriptionOAuthClient,
   OAuthHarnessError,
   type LoginAttempt,
   type OAuthConnectionStatus,
@@ -34,11 +34,15 @@ import {
   type ProviderModel,
 } from "./contracts.ts";
 
+/** What a subscription's account operations fail with; only an `OAuthHarnessError` is told apart. */
+type ProductClientFailure = OAuthHarnessError | OAuthProfileRejected | OAuthProfileStoreFailed;
+
+/** The account operations the product reaches a subscription through. */
 interface ProductOAuthClient {
-  status(): Promise<OAuthConnectionStatus>;
-  startLogin(): Promise<LoginAttempt>;
-  disconnect(): Promise<OAuthConnectionStatus>;
-  modelCatalog(signal?: AbortSignal): Promise<ReadonlyArray<unknown>>;
+  readonly status: Effect.Effect<OAuthConnectionStatus, ProductClientFailure>;
+  readonly startLogin: Effect.Effect<LoginAttempt<ProductClientFailure>, ProductClientFailure>;
+  readonly disconnect: Effect.Effect<OAuthConnectionStatus, ProductClientFailure>;
+  readonly modelCatalog: Effect.Effect<ReadonlyArray<JsonValue>, ProductClientFailure>;
 }
 
 interface SettingsStore {
@@ -51,7 +55,7 @@ interface SettingsStore {
 export interface SubscriptionProviderOptions {
   readonly protocol: ProviderProtocol;
   readonly config: SettingsStore;
-  readonly client?: ProductOAuthClient;
+  readonly client: ProductOAuthClient;
   /** Prevent one local account's catalogue from being served after provider selection changes. */
   readonly catalogKey?: () => string;
 }
@@ -261,16 +265,6 @@ const operationFailure = (
   operation: "auth" | "catalog" | "model",
 ) => ProviderOperationFailed.make({ provider, operation });
 
-const fromPromise = <A>(
-  provider: SubscriptionAccountProvider,
-  operation: "auth" | "catalog" | "model",
-  run: (signal: AbortSignal) => Promise<A>,
-) =>
-  Effect.tryPromise({
-    try: run,
-    catch: () => operationFailure(provider, operation),
-  });
-
 /** A catalog load in flight, or models served until `expiresAt`. */
 type CatalogState = Data.TaggedEnum<{
   Loading: {};
@@ -290,13 +284,17 @@ type Admission = Data.TaggedEnum<{
 }>;
 const Admission = Data.taggedEnum<Admission>();
 
-export function createSubscriptionProvider(
+export const createSubscriptionProvider = Effect.fnUntraced(function* (
   options: SubscriptionProviderOptions,
-): ProviderConfiguration & { readonly contextWindow: (model: string) => number | null } {
+): Effect.fn.Return<
+  ProviderConfiguration & { readonly contextWindow: (model: string) => number | null }
+> {
   const provider = options.protocol.provider;
-  const client = options.client ?? createSubscriptionOAuthClient({ protocol: options.protocol });
-  let pending: LoginAttempt | null = null;
-  let loginError: Data.TaggedEnum.Value<AuthConnectionState, "error"> | null = null;
+  const client = options.client;
+  const pending = yield* Ref.make(Option.none<LoginAttempt<ProductClientFailure>>());
+  const loginError = yield* Ref.make(
+    Option.none<Data.TaggedEnum.Value<AuthConnectionState, "error">>(),
+  );
   const failureState = (
     harnessError: Option.Option<OAuthHarnessError>,
   ): Data.TaggedEnum.Value<AuthConnectionState, "error"> =>
@@ -319,66 +317,90 @@ export function createSubscriptionProvider(
     connection.connected
       ? AuthConnectionState["signed-in"]({ provider })
       : AuthConnectionState["signed-out"]({ provider });
-  let catalogCache: {
-    readonly key: string;
-    readonly models: ReadonlyArray<ProviderModel>;
-  } | null = null;
+  const catalogCache = yield* Ref.make(
+    Option.none<{ readonly key: string; readonly models: ReadonlyArray<ProviderModel> }>(),
+  );
+  const currentCatalogKey = () => options.catalogKey?.() ?? "__default__";
 
   const authState = Effect.fn("SubscriptionProvider.authState")(function* (): Effect.fn.Return<
     AuthConnectionState,
-    Cause.UnknownError
+    ProductClientFailure
   > {
     // A login in progress or one that failed is known here; otherwise the account is asked.
+    const failed = yield* Ref.get(loginError);
     const local = Option.orElse(
-      Option.map(Option.fromNullishOr(pending), (attempt) =>
+      Option.map(yield* Ref.get(pending), (attempt): AuthConnectionState =>
         AuthConnectionState.pending({ provider, authorizationUrl: attempt.authorizationUrl }),
       ),
-      () => Option.fromNullishOr(loginError),
+      () => failed,
     );
     return yield* Option.match(local, {
       onSome: (state) => Effect.succeed<AuthConnectionState>(state),
       onNone: () =>
-        nativePromise(() => client.status()).pipe(
+        client.status.pipe(
           Effect.map(connectionState),
           Effect.catchIf(
-            (failure): failure is Cause.UnknownError & { readonly cause: OAuthHarnessError } =>
-              isHarnessError(failure.cause) &&
-              failure.cause.code === "credential_store_unavailable",
-            (failure) => Effect.succeed(failureState(Option.some(failure.cause))),
+            (failure): failure is OAuthHarnessError =>
+              isHarnessError(failure) && failure.code === "credential_store_unavailable",
+            (failure) => Effect.succeed(failureState(Option.some(failure))),
           ),
         ),
     });
   });
   const status = authState().pipe(Effect.mapError(() => operationFailure(provider, "auth")));
+  /** Only the attempt still pending settles the login state. */
+  const settleLogin = (
+    attempt: LoginAttempt<ProductClientFailure>,
+    exit: Exit.Exit<OAuthConnectionStatus, ProductClientFailure>,
+  ) =>
+    Effect.flatMap(
+      Ref.modify(pending, (current) =>
+        Option.exists(current, (started) => started === attempt)
+          ? [true, Option.none()]
+          : [false, current],
+      ),
+      (current) =>
+        Effect.when(
+          Ref.set(
+            loginError,
+            Option.some(
+              failureState(
+                Option.liftPredicate(
+                  Exit.isFailure(exit) ? Cause.squash(exit.cause) : null,
+                  isHarnessError,
+                ),
+              ),
+            ),
+          ),
+          Effect.succeed(current && Exit.isFailure(exit)),
+        ),
+    );
   const login = Effect.gen(function* () {
-    loginError = null;
-    const started = yield* Effect.result(nativePromise(() => client.startLogin()));
-    return Result.match(started, {
-      onFailure: (failure): AuthConnectionState => {
-        loginError = failureState(Option.liftPredicate(failure.cause, isHarnessError));
-        return loginError;
-      },
-      onSuccess: (attempt): AuthConnectionState => {
-        pending = attempt;
-        // Only the attempt still pending settles the login state.
-        const current = () => pending === attempt;
-        void attempt.completed.then(
-          () => {
-            pending = current() ? null : pending;
-          },
-          (error) => {
-            loginError = current()
-              ? failureState(Option.liftPredicate(error, isHarnessError))
-              : loginError;
-            pending = current() ? null : pending;
-          },
-        );
-        return AuthConnectionState.pending({
-          provider,
-          authorizationUrl: attempt.authorizationUrl,
-        });
-      },
-    });
+    yield* Ref.set(loginError, Option.none());
+    return yield* client.startLogin.pipe(
+      Effect.matchEffect({
+        onFailure: (failure) => {
+          const failed = failureState(Option.liftPredicate(failure, isHarnessError));
+          return Effect.as(Ref.set(loginError, Option.some(failed)), failed);
+        },
+        onSuccess: (attempt) =>
+          Ref.set(pending, Option.some(attempt)).pipe(
+            Effect.andThen(
+              Effect.forkDetach(
+                Effect.flatMap(Effect.exit(attempt.completed), (exit) =>
+                  settleLogin(attempt, exit),
+                ),
+              ),
+            ),
+            Effect.as(
+              AuthConnectionState.pending({
+                provider,
+                authorizationUrl: attempt.authorizationUrl,
+              }),
+            ),
+          ),
+      }),
+    );
   });
   const connect = authState().pipe(
     Effect.filterOrElse(
@@ -389,45 +411,41 @@ export function createSubscriptionProvider(
     ),
     Effect.mapError(() => operationFailure(provider, "auth")),
   );
-  const cancel = Effect.sync(() => {
-    const attempt = pending;
-    pending = null;
-    loginError = null;
-    attempt?.cancel();
-  }).pipe(
+  /** Forgets the login in progress or its failure, and cancels the login. */
+  const dropLogin = Effect.gen(function* () {
+    const attempt = yield* Ref.getAndSet(pending, Option.none());
+    yield* Ref.set(loginError, Option.none());
+    yield* Effect.transposeOption(Option.map(attempt, (started) => started.cancel));
+  });
+  const cancel = dropLogin.pipe(
     Effect.andThen(authState()),
     Effect.mapError(() => operationFailure(provider, "auth")),
   );
-  const catalogEntry = Ref.makeUnsafe<CatalogEntry | null>(null);
-  const catalogLock = Semaphore.makeUnsafe(1);
+  const catalogEntry = yield* Ref.make<CatalogEntry | null>(null);
+  const catalogLock = yield* Semaphore.make(1);
   const invalidateCatalog = catalogLock.withPermits(1)(
-    Effect.gen(function* () {
-      yield* Ref.set(catalogEntry, null);
-      catalogCache = null;
-    }),
+    Effect.andThen(Ref.set(catalogEntry, null), Ref.set(catalogCache, Option.none())),
   );
   const disconnect = Effect.gen(function* () {
     yield* invalidateCatalog;
-    const attempt = pending;
-    pending = null;
-    loginError = null;
-    attempt?.cancel();
-    return yield* fromPromise(provider, "auth", () => client.disconnect()).pipe(
+    yield* dropLogin;
+    return yield* client.disconnect.pipe(
       Effect.map(connectionState),
+      Effect.mapError(() => operationFailure(provider, "auth")),
     );
   }).pipe(Effect.ensuring(invalidateCatalog));
 
   // The first caller owns the load in its existing fiber/scope. Cancelling a
   // waiting caller only stops that wait; cancelling the owner interrupts all
-  // current waiters, and failed/interrupted entries permit retry. The owner signal reaches the
-  // native catalog fetch; a cancelled waiter cannot abort the owner's transport.
+  // current waiters, and failed/interrupted entries permit retry. The owner's interruption reaches
+  // the native catalog fetch; a cancelled waiter cannot abort the owner's transport.
   // Publish the owner only after installing its interruption cleanup. Network and waiter
   // effects restore caller interruptibility; the short admission section stays atomic.
   const list = Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
       const admission = yield* catalogLock.withPermits(1)(
         Effect.gen(function* () {
-          const key = options.catalogKey?.() ?? "__default__";
+          const key = currentCatalogKey();
           const current = Option.filter(
             Option.fromNullishOr(yield* Ref.get(catalogEntry)),
             (entry) => entry.key === key,
@@ -472,8 +490,8 @@ export function createSubscriptionProvider(
               const pages =
                 provider === "anthropic"
                   ? anthropicInstalledCatalog
-                  : yield* fromPromise(provider, "catalog", (signal) =>
-                      client.modelCatalog(signal),
+                  : yield* client.modelCatalog.pipe(
+                      Effect.mapError(() => operationFailure(provider, "catalog")),
                     );
               const models = yield* Effect.succeed(parseSubscriptionCatalog(provider, pages)).pipe(
                 Effect.filterOrFail(
@@ -483,13 +501,10 @@ export function createSubscriptionProvider(
               );
               // Kept for contextWindow while this load is still the current one.
               yield* Effect.when(
-                Effect.sync(() => {
-                  catalogCache = { key: entry.key, models };
-                }),
-                Effect.sync(
-                  () =>
-                    Ref.getUnsafe(catalogEntry)?.token === entry.token &&
-                    (options.catalogKey?.() ?? "__default__") === entry.key,
+                Ref.set(catalogCache, Option.some({ key: entry.key, models })),
+                Effect.map(
+                  Ref.get(catalogEntry),
+                  (current) => current?.token === entry.token && currentCatalogKey() === entry.key,
                 ),
               );
               return models;
@@ -507,7 +522,10 @@ export function createSubscriptionProvider(
                     });
                     yield* Effect.when(
                       Effect.flatMap(settled, (next) => Ref.set(catalogEntry, next)),
-                      Effect.sync(() => Ref.getUnsafe(catalogEntry)?.token === entry.token),
+                      Effect.map(
+                        Ref.get(catalogEntry),
+                        (current) => current?.token === entry.token,
+                      ),
                     );
                     yield* Deferred.done(entry.completion, exit);
                   }),
@@ -530,10 +548,16 @@ export function createSubscriptionProvider(
 
   return {
     provider,
+    // A synchronous read for the run's context budget.
     contextWindow: (model) =>
-      catalogCache?.key === (options.catalogKey?.() ?? "__default__")
-        ? (catalogCache.models.find((candidate) => candidate.id === model)?.contextWindow ?? null)
-        : null,
+      Option.match(
+        Option.filter(Ref.getUnsafe(catalogCache), (cache) => cache.key === currentCatalogKey()),
+        {
+          onNone: () => null,
+          onSome: (cache) =>
+            cache.models.find((candidate) => candidate.id === model)?.contextWindow ?? null,
+        },
+      ),
     auth: { provider, status, connect, cancel, disconnect },
     models: {
       provider,
@@ -577,4 +601,4 @@ export function createSubscriptionProvider(
         }),
     },
   };
-}
+});

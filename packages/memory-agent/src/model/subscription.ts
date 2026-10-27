@@ -7,6 +7,7 @@ import {
   Match,
   Option,
   Predicate,
+  Ref,
   Schema,
   Stream,
 } from "effect";
@@ -16,13 +17,13 @@ import {
   NormalizedStreamEvent,
   ProviderFeatureRejectedError,
   ProviderStatusRejected,
-  ProviderStreamFailed,
   ReasoningSummaryProtocolFailed,
   ReasoningSummaryProtocolFailedReason,
   RequestNotSent,
   ToolArguments,
   type OAuthProvider,
 } from "../oauth/protocol.ts";
+import type { SubscriptionClientFailure } from "../oauth/validation-harness.ts";
 import { optionalProperty } from "../optional-property.ts";
 import type {
   ModelSelection,
@@ -44,8 +45,9 @@ import { toolParameters } from "./tool-schema.ts";
  */
 
 export interface StreamingOAuthClient {
-  readonly releaseRun?: () => void;
-  stream(body: string, signal?: AbortSignal): AsyncGenerator<NormalizedStreamEvent>;
+  readonly stream: (
+    body: string,
+  ) => Stream.Stream<NormalizedStreamEvent, SubscriptionClientFailure>;
 }
 
 const openAiReasoningPrefix = "openai-reasoning:";
@@ -238,16 +240,14 @@ export type SubscriptionFailure =
   | ProviderFeatureRejectedError
   | ReasoningSummaryProtocolFailed;
 
-// A thrown value from the native client is classified only by its type and stream position.
+// A client failure is classified only by its type and stream position.
 const streamFailure = (
   provider: OAuthProvider,
-  cause: unknown,
+  cause: SubscriptionClientFailure,
   received: boolean,
 ): SubscriptionFailure =>
   Match.value(cause).pipe(
-    Match.when(Schema.is(ProviderFeatureRejectedError), (failure): SubscriptionFailure => failure),
-    Match.when(Schema.is(SubscriptionStreamFailed), (failure) => failure),
-    Match.when(Schema.is(ReasoningSummaryProtocolFailed), (failure) => failure),
+    Match.tag("ProviderFeatureRejectedError", (failure): SubscriptionFailure => failure),
     Match.when(
       () => received,
       () =>
@@ -256,15 +256,16 @@ const streamFailure = (
           reason: SubscriptionStreamFailedReason.cases.ResponseInterrupted.make({}),
         }),
     ),
-    Match.when(Schema.is(ProviderStreamFailed), (failure) =>
+    Match.tag("ProviderStreamFailed", (failure) =>
       SubscriptionStreamFailed.make({ provider, reason: failure.reason }),
     ),
-    Match.orElse(() =>
+    Match.tag("OAuthHarnessError", () =>
       SubscriptionStreamFailed.make({
         provider,
         reason: SubscriptionStreamFailedReason.cases.RequestOutcomeUnknown.make({}),
       }),
     ),
+    Match.exhaustive,
   );
 
 /** The failure's tag, which is all the error log says about it. */
@@ -278,54 +279,55 @@ const streamFailureCode = Match.typeTags<SubscriptionFailure, string>()({
  * The provider's events for `body`. When Anthropic rejects the prompt-cache feature before any
  * event, `onFallback` runs and `baselineBody`, the request without caching, goes once instead.
  */
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 function providerEventsWithPromptCacheFallback(options: {
   readonly client: StreamingOAuthClient;
   readonly provider: OAuthProvider;
   readonly body: string;
   readonly baselineBody: string;
-  readonly signal: AbortSignal | undefined;
   readonly onFallback: Effect.Effect<void>;
 }) {
-  const { client, provider, signal } = options;
-  return Stream.suspend(() => {
-    let emitted = false;
-    const source = (request: string) =>
-      Stream.suspend(() => {
-        let received = false;
-        return Stream.fromAsyncIterable(client.stream(request, signal), (cause) =>
-          streamFailure(provider, cause, received),
-        ).pipe(
-          Stream.tap(() =>
-            Effect.sync(() => {
-              received = true;
-            }),
+  const { client, provider } = options;
+  const source = (request: string) =>
+    Stream.unwrap(
+      Effect.map(Ref.make(false), (received) =>
+        client.stream(request).pipe(
+          Stream.tap(() => Ref.set(received, true)),
+          Stream.catch((cause) =>
+            Stream.fromEffect(
+              Effect.flatMap(Ref.get(received), (seen) =>
+                Effect.fail(streamFailure(provider, cause, seen)),
+              ),
+            ),
           ),
-        );
-      });
-    return source(options.body).pipe(
-      Stream.mapEffect((event) => {
-        if (provider === "anthropic" && isPromptCacheRejection(event)) {
-          return Effect.fail(
-            ProviderFeatureRejectedError.make({
-              provider: "anthropic",
-              feature: "prompt-cache",
-              status: null,
-            }),
-          );
-        }
-        return Effect.sync(() => {
-          emitted = true;
-          return event;
-        });
-      }),
-      Stream.catchTag("ProviderFeatureRejectedError", (failure) =>
-        provider === "anthropic" && !emitted && failure.feature === "prompt-cache"
-          ? Stream.unwrap(Effect.as(options.onFallback, source(options.baselineBody)))
-          : Stream.fail(failure),
+        ),
       ),
     );
-  });
+  return Stream.unwrap(
+    Effect.map(Ref.make(false), (emitted) =>
+      source(options.body).pipe(
+        Stream.mapEffect((event) =>
+          provider === "anthropic" && isPromptCacheRejection(event)
+            ? Effect.fail(
+                ProviderFeatureRejectedError.make({
+                  provider: "anthropic",
+                  feature: "prompt-cache",
+                  status: null,
+                }),
+              )
+            : Effect.as(Ref.set(emitted, true), event),
+        ),
+        Stream.catchTag("ProviderFeatureRejectedError", (failure) =>
+          Stream.unwrap(
+            Effect.map(Ref.get(emitted), (seen) =>
+              provider === "anthropic" && !seen && failure.feature === "prompt-cache"
+                ? Stream.unwrap(Effect.as(options.onFallback, source(options.baselineBody)))
+                : Stream.fail(failure),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1170,10 +1172,6 @@ export const subscriptionModel = Effect.fnUntraced(function* (options: Subscript
           Effect.fail(unsupported("Subscription models do not support structured output.")),
           Effect.succeed(request.responseFormat.type === "json"),
         );
-        const controller = yield* Effect.acquireRelease(
-          Effect.sync(() => new AbortController()),
-          (aborted) => Effect.sync(() => aborted.abort()),
-        );
         // Subscription providers read another model's turns as their own: no replay target.
         const replayed = { ...request, prompt: providerPrompt(request.prompt, undefined) };
         const body = subscriptionBody({ ...options, provider, ...replayed });
@@ -1199,7 +1197,6 @@ export const subscriptionModel = Effect.fnUntraced(function* (options: Subscript
           provider,
           body,
           baselineBody,
-          signal: controller.signal,
           onFallback: Effect.logDebug(
             "subscription prompt cache rejected; retrying baseline request",
           ).pipe(Effect.annotateLogs({ provider })),

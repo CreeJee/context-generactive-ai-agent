@@ -2,6 +2,7 @@ import { it } from "@effect/vitest";
 import { MutableHashMap, DateTime, Effect, Exit, Scope } from "effect";
 import { expect } from "vite-plus/test";
 import { createSubscriptionOAuthClient } from "../src/oauth/subscription-oauth.ts";
+import { withOAuthTestPlatform } from "./support/platform.ts";
 import { providerProtocols } from "../src/oauth/protocol.ts";
 import { ModelUnavailable, type ModelRun } from "../src/providers/contracts.ts";
 import { createSubscriptionRuntimeImplementation } from "../src/providers/subscription-runtime.ts";
@@ -25,21 +26,18 @@ it.effect("retained native implementation binds fresh central clients and pins e
       createSubscriptionOAuthClient({
         protocol: providerProtocols.openai,
         store: {
-          read() {
-            credentialReads++;
-            return Promise.resolve({
-              accessToken: account,
-              refreshToken: "controlled-refresh",
-              accountId: account,
-              expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 60_000,
-            });
-          },
-          write() {
-            return Promise.reject(new Error("unexpected credential refresh"));
-          },
-          remove() {
-            return Promise.reject(new Error("unexpected credential removal"));
-          },
+          read: () =>
+            Effect.sync(() => {
+              credentialReads++;
+              return {
+                accessToken: account,
+                refreshToken: "controlled-refresh",
+                accountId: account,
+                expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 60_000,
+              };
+            }),
+          write: () => Effect.die("unexpected credential refresh"),
+          remove: () => Effect.die("unexpected credential removal"),
         },
         fetch: (_url, init) =>
           run(
@@ -57,39 +55,44 @@ it.effect("retained native implementation binds fresh central clients and pins e
             }),
           ),
       });
-    const centralClients = { first: nativeClient("first"), second: nativeClient("second") };
+    const centralClients = {
+      first: yield* nativeClient("first"),
+      second: yield* nativeClient("second"),
+    };
     let selected: keyof typeof centralClients = "first";
     let acquisitions = 0;
     const firstRuntime = implementation.bind({
-      client: () => {
-        const account = selected;
-        const id = `run-${++acquisitions}`;
-        MutableHashMap.set(routes, id, account);
-        return {
-          stream: centralClients[account].stream.bind(centralClients[account]),
-          releaseRun: () => {
+      client: Effect.acquireRelease(
+        Effect.sync(() => {
+          const account = selected;
+          const id = `run-${++acquisitions}`;
+          MutableHashMap.set(routes, id, account);
+          return { id, client: centralClients[account] };
+        }),
+        ({ id }) =>
+          Effect.sync(() => {
             MutableHashMap.remove(routes, id);
             released.push(id);
-          },
-        };
-      },
+          }),
+      ).pipe(Effect.map(({ client }) => client)),
       catalogWindow: () => 111,
     });
     const firstScope = yield* Scope.make();
     const first = yield* Scope.provide(firstRuntime.model(selection, runOf(0)), firstScope);
     selected = "second";
     const secondRuntime = implementation.bind({
-      client: () => {
-        acquisitions++;
-        MutableHashMap.set(routes, "fresh-run", "second");
-        return {
-          stream: centralClients.second.stream.bind(centralClients.second),
-          releaseRun: () => {
+      client: Effect.acquireRelease(
+        Effect.sync(() => {
+          acquisitions++;
+          MutableHashMap.set(routes, "fresh-run", "second");
+          return centralClients.second;
+        }),
+        () =>
+          Effect.sync(() => {
             MutableHashMap.remove(routes, "fresh-run");
             released.push("fresh-run");
-          },
-        };
-      },
+          }),
+      ),
       catalogWindow: () => 222,
     });
     const secondScope = yield* Scope.make();
@@ -117,5 +120,5 @@ it.effect("retained native implementation binds fresh central clients and pins e
       ModelUnavailable.make(anthropic),
     );
     expect(acquisitions).toBe(2);
-  }),
+  }).pipe(withOAuthTestPlatform),
 );

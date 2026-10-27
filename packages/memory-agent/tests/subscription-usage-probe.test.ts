@@ -10,6 +10,7 @@ import {
   openAiUsageUrl,
 } from "../src/oauth/subscription-usage-probe.ts";
 import type { StoredCredential } from "../src/oauth/validation-harness.ts";
+import { withOAuthTestPlatform } from "./support/platform.ts";
 
 it.effect.each([
   { status: 200, expected: "probe" },
@@ -25,9 +26,12 @@ it.effect.each([
     const requests: Parameters<typeof fetch>[0][] = [];
     const outcome = yield* anthropicSubscriptionUsageProbe({
       store: {
-        read: () => Promise.resolve(credential),
-        write: () => Promise.resolve(void (writes += 1)),
-        remove: () => Promise.resolve(),
+        read: () => Effect.succeed(credential),
+        write: () =>
+          Effect.sync(() => {
+            writes += 1;
+          }),
+        remove: () => Effect.void,
       },
       fetch: (url) => {
         requests.push(url);
@@ -56,7 +60,7 @@ it.effect.each([
           failure: { code: "provider_rejected", status: 401, operation: "subscription_usage" },
         });
     }
-  }),
+  }).pipe(withOAuthTestPlatform),
 );
 
 it.effect(
@@ -69,9 +73,9 @@ it.effect(
         anthropicSubscriptionUsage({
           store: {
             read: () =>
-              Promise.resolve({ accessToken: "fixture", refreshToken: "fixture", expiresAt }),
-            write: () => Promise.reject(new Error("unexpected write")),
-            remove: () => Promise.resolve(),
+              Effect.succeed({ accessToken: "fixture", refreshToken: "fixture", expiresAt }),
+            write: () => Effect.die("unexpected write"),
+            remove: () => Effect.void,
           },
           fetch: (url) => {
             requests.push(url);
@@ -92,7 +96,7 @@ it.effect(
       });
       expect(yield* lookup(now)).toEqual(Result.fail(SubscriptionUsageCredentialExpired.make()));
       expect(requests).toEqual([anthropicUsageUrl]);
-    }),
+    }).pipe(withOAuthTestPlatform),
 );
 
 it.effect(
@@ -103,14 +107,14 @@ it.effect(
       const windows = yield* openAiSubscriptionUsage({
         store: {
           read: () =>
-            Promise.resolve({
+            Effect.succeed({
               accessToken: "fixture",
               refreshToken: "fixture",
               expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 3600_000,
               accountId: "account-fixture",
             }),
-          write: () => Promise.reject(new Error("unexpected write")),
-          remove: () => Promise.resolve(),
+          write: () => Effect.die("unexpected write"),
+          remove: () => Effect.void,
         },
         fetch: (url, init) => {
           requests.push({ url, accountId: new Headers(init?.headers).get("chatgpt-account-id") });
@@ -138,5 +142,5 @@ it.effect(
         },
       ]);
       expect(requests).toEqual([{ url: openAiUsageUrl, accountId: "account-fixture" }]);
-    }),
+    }).pipe(withOAuthTestPlatform),
 );

@@ -1,7 +1,7 @@
 import {
   Cache,
-  Cause,
   Context,
+  Crypto,
   DateTime,
   Duration,
   Effect,
@@ -10,6 +10,7 @@ import {
   Result,
   Schema,
 } from "effect";
+import { ChildProcessSpawner } from "effect/process";
 import { SubscriptionAccountProvider } from "../providers/contracts.ts";
 import { OAuthProfiles } from "./accounts.ts";
 import {
@@ -17,11 +18,7 @@ import {
   openAiSubscriptionUsage,
   type SubscriptionUsageCredentialExpired,
 } from "./subscription-usage-probe.ts";
-import {
-  createKeychainProfileCredentialStore,
-  type CredentialStore,
-  type OAuthHarnessError,
-} from "./validation-harness.ts";
+import { OAuthKeychain, type OAuthHarnessError } from "./validation-harness.ts";
 
 /**
  * A provider-reported window. `usedPercent` is the provider's own percentage of this named window,
@@ -81,10 +78,7 @@ export class SubscriptionQuotaError extends Schema.TaggedError<SubscriptionQuota
   { reason: Schema.Literal("profiles_unreadable"), cause: Schema.Defect() },
 ) {}
 
-const subscriptionUsageReaders: Record<
-  SubscriptionAccountProvider,
-  (options: { readonly store: CredentialStore }) => ReturnType<SubscriptionUsage["Service"]["read"]>
-> = {
+const subscriptionUsageReaders = {
   openai: openAiSubscriptionUsage,
   anthropic: anthropicSubscriptionUsage,
 };
@@ -98,17 +92,25 @@ export class SubscriptionUsage extends Context.Service<
       accountId: string,
     ) => Effect.Effect<
       readonly SubscriptionQuotaWindow[],
-      OAuthHarnessError | SubscriptionUsageCredentialExpired | Cause.UnknownError
+      OAuthHarnessError | SubscriptionUsageCredentialExpired
     >;
   }
 >()("memory-agent/oauth/subscription-quota/SubscriptionUsage") {
-  static readonly layer = Layer.succeed(
+  static readonly layer = Layer.effect(
     SubscriptionUsage,
-    SubscriptionUsage.of({
-      read: (provider, accountId) =>
-        subscriptionUsageReaders[provider]({
-          store: createKeychainProfileCredentialStore(accountId),
-        }),
+    Effect.gen(function* () {
+      const vault = yield* OAuthKeychain;
+      const platform = yield* Effect.context<
+        Crypto.Crypto | ChildProcessSpawner.ChildProcessSpawner
+      >();
+      return SubscriptionUsage.of({
+        read: (provider, accountId) =>
+          // Only listed accounts are read, and their ids are valid profile ids.
+          Effect.orDie(vault.profileStore(accountId)).pipe(
+            Effect.flatMap((store) => subscriptionUsageReaders[provider]({ store })),
+            Effect.provideContext(platform),
+          ),
+      });
     }),
   );
 }
@@ -140,21 +142,18 @@ export class SubscriptionQuota extends Context.Service<
         provider: SubscriptionAccountProvider,
         accountId: string,
       ) {
-        const lookupFailed = (error: string) =>
-          Effect.logWarning("subscription usage lookup failed").pipe(
-            Effect.annotateLogs({ error }),
-            Effect.as(Result.fail("lookup_failed" as const)),
-          );
         const windows = yield* usage.read(provider, accountId).pipe(
           Effect.map((windows) =>
             windows.length > 0 ? Result.succeed(windows) : Result.fail("lookup_failed" as const),
           ),
-          Effect.catchTag("SubscriptionUsageCredentialExpired", () =>
-            Effect.succeed(Result.fail("credential_expired" as const)),
-          ),
           Effect.catchTags({
-            OAuthHarnessError: () => lookupFailed("OAuthHarnessError"),
-            UnknownError: () => lookupFailed("UnknownError"),
+            SubscriptionUsageCredentialExpired: () =>
+              Effect.succeed(Result.fail("credential_expired" as const)),
+            OAuthHarnessError: () =>
+              Effect.logWarning("subscription usage lookup failed").pipe(
+                Effect.annotateLogs({ error: "OAuthHarnessError" }),
+                Effect.as(Result.fail("lookup_failed" as const)),
+              ),
           }),
         );
         const at = DateTime.formatIso(yield* DateTime.now);

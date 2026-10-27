@@ -3,21 +3,24 @@ import {
   Data,
   DateTime,
   Effect,
+  HashMap,
   Layer,
-  MutableHashMap,
   Option,
   Ref,
   Schema,
+  Scope,
+  SynchronizedRef,
 } from "effect";
 import { SqlClient, type SqlError } from "effect/sql";
 import { isTruthy } from "../truthy.ts";
 import { SubscriptionAccountProvider } from "../providers/contracts.ts";
 import type { OAuthProvider } from "./protocol.ts";
 import {
+  OAuthKeychain,
   StoredCredentialSchema,
-  createKeychainCredentialStore,
-  createKeychainProfileCredentialStore,
   type CredentialStore,
+  type OAuthHarnessError,
+  type OAuthProfileIdRejected,
   type StoredCredential,
 } from "./validation-harness.ts";
 
@@ -29,20 +32,33 @@ export interface OAuthProfile {
   readonly createdAt: number;
 }
 
+type ProfileCredentialFailure = OAuthHarnessError | OAuthProfileIdRejected;
+
 export interface ProfileCredentialStore {
-  read(provider: OAuthProvider, id: string): Promise<StoredCredential | null>;
-  write(provider: OAuthProvider, id: string, credential: StoredCredential): Promise<void>;
-  remove(provider: OAuthProvider, id: string): Promise<void>;
+  readonly read: (
+    provider: OAuthProvider,
+    id: string,
+  ) => Effect.Effect<StoredCredential | null, ProfileCredentialFailure>;
+  readonly write: (
+    provider: OAuthProvider,
+    id: string,
+    credential: StoredCredential,
+  ) => Effect.Effect<void, ProfileCredentialFailure>;
+  readonly remove: (
+    provider: OAuthProvider,
+    id: string,
+  ) => Effect.Effect<void, ProfileCredentialFailure>;
 }
 
 /** A distinct OS keychain account per local profile; never place credentials in SQLite. */
 export function createProfileCredentialStore(
-  open: (id: string) => CredentialStore = createKeychainProfileCredentialStore,
+  open: (id: string) => Effect.Effect<CredentialStore, OAuthProfileIdRejected>,
 ): ProfileCredentialStore {
   return {
-    read: (provider, id) => open(id).read(provider),
-    write: (provider, id, credential) => open(id).write(provider, credential),
-    remove: (provider, id) => open(id).remove(provider),
+    read: (provider, id) => Effect.flatMap(open(id), (store) => store.read(provider)),
+    write: (provider, id, credential) =>
+      Effect.flatMap(open(id), (store) => store.write(provider, credential)),
+    remove: (provider, id) => Effect.flatMap(open(id), (store) => store.remove(provider)),
   };
 }
 
@@ -73,11 +89,10 @@ export class OAuthProfileStoreFailed extends Schema.TaggedError<OAuthProfileStor
 ) {}
 
 const rejected = (reason: OAuthProfileRejected["reason"]) => OAuthProfileRejected.make({ reason });
-const keychain = <A>(operation: () => PromiseLike<A>) =>
-  Effect.tryPromise({
-    try: operation,
-    catch: (cause) => OAuthProfileStoreFailed.make({ operation: "keychain", cause }),
-  });
+const keychain = <A>(operation: Effect.Effect<A, ProfileCredentialFailure>) =>
+  Effect.mapError(operation, (cause) =>
+    OAuthProfileStoreFailed.make({ operation: "keychain", cause }),
+  );
 const databaseFailed = (cause: SqlError.SqlError | Schema.SchemaError) =>
   Effect.fail(OAuthProfileStoreFailed.make({ operation: "database", cause }));
 
@@ -115,6 +130,12 @@ interface ProfileSnapshot {
   readonly legacyRemoved: ReadonlyArray<OAuthProvider>;
 }
 
+/** One provider's part of a snapshot. */
+const providerSnapshot = (snapshot: ProfileSnapshot, provider: OAuthProvider) => ({
+  profiles: snapshot.profiles.filter((profile) => profile.provider === provider),
+  legacyRemoved: snapshot.legacyRemoved.includes(provider),
+});
+
 // Local server process only: no token or account label is retained. SQLite remains the source
 // for persisted profiles; this transient guard protects vault removal during a live model run.
 type ProfileRunState = Data.TaggedEnum<{
@@ -126,6 +147,8 @@ const runKey = (provider: OAuthProvider, id: string) => `${provider}:${id}`;
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+  const vault = yield* OAuthKeychain;
+  const keychainAccounts = createProfileCredentialStore(vault.profileStore);
   type DatabaseFailure = SqlError.SqlError | Schema.SchemaError;
 
   const load = Effect.gen(function* () {
@@ -172,30 +195,44 @@ const make = Effect.gen(function* () {
   const find = (provider: OAuthProvider, id: string) =>
     Effect.map(list(provider), (profiles) => profiles.find((profile) => profile.id === id));
 
-  const runs = MutableHashMap.empty<string, ProfileRunState>();
+  const runs = yield* SynchronizedRef.make(HashMap.empty<string, ProfileRunState>());
   const runState = (provider: OAuthProvider, id: string) =>
-    Option.getOrUndefined(MutableHashMap.get(runs, runKey(provider, id)));
+    Effect.map(SynchronizedRef.get(runs), (states) =>
+      Option.getOrUndefined(HashMap.get(states, runKey(provider, id))),
+    );
   const inUse = (provider: OAuthProvider, id: string) =>
-    ProfileRunState.$is("active")(runState(provider, id));
+    Effect.map(runState(provider, id), ProfileRunState.$is("active"));
   const removing = (provider: OAuthProvider, id: string) =>
-    ProfileRunState.$is("removing")(runState(provider, id));
+    Effect.map(runState(provider, id), ProfileRunState.$is("removing"));
 
-  /** Synchronous admission at run creation, an SDK boundary. Always call the release. */
-  const acquireRun = (provider: OAuthProvider, id: string): (() => void) => {
+  /** Admission at run creation; the run holds the profile until its scope closes. */
+  const acquireRun = (
+    provider: OAuthProvider,
+    id: string,
+  ): Effect.Effect<void, OAuthProfileRejected, Scope.Scope> => {
     const name = runKey(provider, id);
-    const current = runState(provider, id);
-    if (ProfileRunState.$is("removing")(current)) throw rejected("oauth_profile_removing");
-    const count = ProfileRunState.$is("active")(current) ? current.count : 0;
-    MutableHashMap.set(runs, name, ProfileRunState.active({ count: count + 1 }));
-    let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-      const active = Option.getOrUndefined(MutableHashMap.get(runs, name));
-      if (!ProfileRunState.$is("active")(active)) return;
-      if (active.count <= 1) MutableHashMap.remove(runs, name);
-      else MutableHashMap.set(runs, name, ProfileRunState.active({ count: active.count - 1 }));
-    };
+    return Effect.acquireRelease(
+      SynchronizedRef.modifyEffect(runs, (states) => {
+        const current = Option.getOrUndefined(HashMap.get(states, name));
+        const count = ProfileRunState.$is("active")(current) ? current.count : 0;
+        return ProfileRunState.$is("removing")(current)
+          ? Effect.fail(rejected("oauth_profile_removing"))
+          : Effect.succeed([
+              undefined,
+              HashMap.set(states, name, ProfileRunState.active({ count: count + 1 })),
+            ] as const);
+      }),
+      () =>
+        SynchronizedRef.update(runs, (states) =>
+          Option.match(Option.filter(HashMap.get(states, name), ProfileRunState.$is("active")), {
+            onNone: () => states,
+            onSome: (active) =>
+              active.count <= 1
+                ? HashMap.remove(states, name)
+                : HashMap.set(states, name, ProfileRunState.active({ count: active.count - 1 })),
+          }),
+        ),
+    );
   };
 
   /** Holds the removal gate for `use`; a live run or another removal of the provider refuses it. */
@@ -205,37 +242,37 @@ const make = Effect.gen(function* () {
     use: Effect.Effect<A, E, R>,
   ) =>
     Effect.acquireUseRelease(
-      Effect.gen(function* () {
-        yield* Effect.when(
-          Effect.fail(rejected("oauth_profile_in_use")),
-          Effect.succeed(inUse(provider, id)),
-        );
-        yield* Effect.when(
-          Effect.fail(rejected("oauth_profile_removing")),
-          Effect.succeed(
-            [...runs].some(
-              ([entry, state]) =>
-                entry.startsWith(`${provider}:`) && ProfileRunState.$is("removing")(state),
-            ),
-          ),
-        );
+      SynchronizedRef.modifyEffect(runs, (states) => {
         const state: ProfileRunState = ProfileRunState.removing();
-        MutableHashMap.set(runs, runKey(provider, id), state);
-        return state;
+        return Effect.gen(function* () {
+          yield* Effect.when(
+            Effect.fail(rejected("oauth_profile_in_use")),
+            Effect.succeed(
+              ProfileRunState.$is("active")(
+                Option.getOrUndefined(HashMap.get(states, runKey(provider, id))),
+              ),
+            ),
+          );
+          yield* Effect.when(
+            Effect.fail(rejected("oauth_profile_removing")),
+            Effect.succeed(
+              HashMap.some(
+                states,
+                (gate, entry) =>
+                  entry.startsWith(`${provider}:`) && ProfileRunState.$is("removing")(gate),
+              ),
+            ),
+          );
+          return [state, HashMap.set(states, runKey(provider, id), state)] as const;
+        });
       }),
       () => use,
       // Removes only this gate by identity; run states compare equal by structure.
       (state) =>
-        Effect.asVoid(
-          Effect.when(
-            Effect.sync(() => MutableHashMap.remove(runs, runKey(provider, id))),
-            Effect.sync(() =>
-              Option.exists(
-                MutableHashMap.get(runs, runKey(provider, id)),
-                (gate) => gate === state,
-              ),
-            ),
-          ),
+        SynchronizedRef.update(runs, (states) =>
+          Option.exists(HashMap.get(states, runKey(provider, id)), (gate) => gate === state)
+            ? HashMap.remove(states, runKey(provider, id))
+            : states,
         ),
     );
 
@@ -244,7 +281,7 @@ const make = Effect.gen(function* () {
     provider: OAuthProvider,
     id: string,
     label: string,
-    accounts: ProfileCredentialStore = createProfileCredentialStore(),
+    accounts: ProfileCredentialStore = keychainAccounts,
   ) {
     if (
       !profileIdPattern.test(id) ||
@@ -253,7 +290,7 @@ const make = Effect.gen(function* () {
       label.length > 80
     )
       return yield* rejected("invalid_oauth_profile");
-    yield* keychain(() => accounts.read(provider, id)).pipe(
+    yield* keychain(accounts.read(provider, id)).pipe(
       Effect.filterOrFail(isTruthy, () => rejected("oauth_profile_missing_credential")),
     );
     const createdAt = DateTime.toEpochMillis(yield* DateTime.now);
@@ -268,17 +305,17 @@ const make = Effect.gen(function* () {
   const select = Effect.fn("OAuthProfiles.select")(function* (
     provider: OAuthProvider,
     id: string,
-    accounts: ProfileCredentialStore = createProfileCredentialStore(),
+    accounts: ProfileCredentialStore = keychainAccounts,
   ) {
     const target = yield* find(provider, id).pipe(
       Effect.filterOrFail(isTruthy, () => rejected("oauth_profile_not_found")),
     );
     const refuseRemoving = Effect.when(
       Effect.fail(rejected("oauth_profile_removing")),
-      Effect.sync(() => removing(provider, id)),
+      removing(provider, id),
     );
     yield* refuseRemoving;
-    yield* keychain(() => accounts.read(provider, id)).pipe(
+    yield* keychain(accounts.read(provider, id)).pipe(
       Effect.filterOrFail(isTruthy, () => rejected("oauth_profile_missing_credential")),
     );
     yield* commit(
@@ -322,8 +359,8 @@ const make = Effect.gen(function* () {
   const remove = Effect.fn("OAuthProfiles.remove")(function* (
     provider: OAuthProvider,
     id: string,
-    accounts: ProfileCredentialStore = createProfileCredentialStore(),
-    legacy: CredentialStore = createKeychainCredentialStore(),
+    accounts: ProfileCredentialStore = keychainAccounts,
+    legacy: CredentialStore = vault.store,
   ) {
     const profile = yield* find(provider, id).pipe(
       Effect.filterOrFail(isTruthy, () => rejected("oauth_profile_not_found")),
@@ -339,10 +376,7 @@ const make = Effect.gen(function* () {
               Effect.findFirst(
                 listed.filter((item) => item.id !== id),
                 (candidate) =>
-                  Effect.map(
-                    keychain(() => accounts.read(provider, candidate.id)),
-                    isTruthy,
-                  ),
+                  Effect.map(keychain(accounts.read(provider, candidate.id)), isTruthy),
               ),
             ),
             Effect.succeed(profile.selected),
@@ -357,11 +391,11 @@ const make = Effect.gen(function* () {
               sql`INSERT OR IGNORE INTO oauth_legacy_removed(provider, removed_at)
                 VALUES (${provider}, ${removedAt})`,
             );
-            yield* keychain(() => legacy.remove(provider));
+            yield* keychain(legacy.remove(provider));
           }),
           Effect.succeed(id === `legacy-${provider}`),
         );
-        yield* keychain(() => accounts.remove(provider, id));
+        yield* keychain(accounts.remove(provider, id));
         yield* commit(
           Effect.gen(function* () {
             yield* sql`DELETE FROM oauth_profiles WHERE id = ${id} AND provider = ${provider}`;
@@ -380,15 +414,15 @@ const make = Effect.gen(function* () {
   /** Copy first, verify the new slot, then publish secret-free metadata. Never delete the legacy slot. */
   const importLegacy = Effect.fn("OAuthProfiles.importLegacy")(function* (
     provider: OAuthProvider,
-    accounts: ProfileCredentialStore = createProfileCredentialStore(),
-    legacy: CredentialStore = createKeychainCredentialStore(),
+    accounts: ProfileCredentialStore = keychainAccounts,
+    legacy: CredentialStore = vault.store,
   ) {
     const id = `legacy-${provider}`;
     if ((yield* read).legacyRemoved.includes(provider)) return null;
     const existing = yield* find(provider, id);
-    const stored = yield* keychain(() => accounts.read(provider, id));
+    const stored = yield* keychain(accounts.read(provider, id));
     if (isTruthy(existing) && isTruthy(stored)) return existing;
-    const credential = yield* keychain(() => legacy.read(provider));
+    const credential = yield* keychain(legacy.read(provider));
     if (!isTruthy(credential)) {
       if (isTruthy(existing)) return yield* rejected("oauth_profile_missing_credential");
       return null;
@@ -397,10 +431,10 @@ const make = Effect.gen(function* () {
     if (isTruthy(stored) && (yield* encodeCredential(stored)) !== expected)
       return yield* rejected("oauth_profile_conflicting_credential");
     yield* Effect.when(
-      keychain(() => accounts.write(provider, id, credential)),
+      keychain(accounts.write(provider, id, credential)),
       Effect.succeed(!isTruthy(stored)),
     );
-    const verified = yield* keychain(() => accounts.read(provider, id));
+    const verified = yield* keychain(accounts.read(provider, id));
     if (!isTruthy(verified) || (yield* encodeCredential(verified)) !== expected)
       return yield* rejected("oauth_profile_copy_unverified");
     const createdAt = DateTime.toEpochMillis(yield* DateTime.now);
@@ -422,13 +456,10 @@ const make = Effect.gen(function* () {
     remove,
     importLegacy,
     /** SDK boundary: the last committed profiles of a provider, without a database read. */
-    committed: (provider: OAuthProvider) => {
-      const snapshot = Ref.getUnsafe(committed);
-      return {
-        profiles: snapshot.profiles.filter((profile) => profile.provider === provider),
-        legacyRemoved: snapshot.legacyRemoved.includes(provider),
-      };
-    },
+    committed: (provider: OAuthProvider) => providerSnapshot(Ref.getUnsafe(committed), provider),
+    /** The last committed profiles of a provider, without a database read. */
+    snapshot: (provider: OAuthProvider) =>
+      Effect.map(Ref.get(committed), (snapshot) => providerSnapshot(snapshot, provider)),
     acquireRun,
     inUse,
     removing,

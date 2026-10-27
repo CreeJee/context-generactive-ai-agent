@@ -1,10 +1,8 @@
 import { Cause, Effect, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { runOAuthNodeEffect } from "../oauth/node-runtime.ts";
 
 interface CommandOptions {
   readonly cwd?: string;
-  readonly signal?: AbortSignal;
   readonly maxBuffer?: number;
   readonly timeout?: number;
 }
@@ -18,7 +16,6 @@ export function runProcess(
   const { command, args } = options;
   const program = Effect.scoped(
     Effect.gen(function* () {
-      yield* Effect.when(Effect.interrupt, Effect.succeed(options.signal?.aborted === true));
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const child = yield* spawner.spawn(
         ChildProcess.make(command, args, {
@@ -56,20 +53,5 @@ export function runProcess(
       return { stdout, stderr };
     }),
   );
-  const bounded =
-    options.timeout === undefined ? program : program.pipe(Effect.timeout(options.timeout));
-  const signal = options.signal;
-  const owned =
-    signal === undefined
-      ? bounded
-      : Effect.raceFirst(
-          bounded,
-          Effect.callback<never>((resume) => {
-            const abort = () => resume(Effect.interrupt);
-            signal.addEventListener("abort", abort, { once: true });
-            if (signal.aborted) abort();
-            return Effect.sync(() => signal.removeEventListener("abort", abort));
-          }),
-        );
-  return runOAuthNodeEffect(owned);
+  return options.timeout === undefined ? program : program.pipe(Effect.timeout(options.timeout));
 }

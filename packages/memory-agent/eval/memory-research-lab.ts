@@ -22,7 +22,7 @@ import {
   MutableHashMap,
   Option,
 } from "effect";
-import { runOAuthNodeEffect } from "../src/oauth/node-runtime.ts";
+import { nodePlatform } from "../src/runtime/node-platform.ts";
 import { fakeEmbedderLayer } from "../src/testing/fake-embedder.ts";
 import { fakeMorphLayer } from "../src/testing/fake-morph.ts";
 import { path } from "../src/runtime/synchronous-path.ts";
@@ -66,7 +66,7 @@ const dimensions = localModel.dimensions;
 
 /** Readable now, or the reason a model-dependent stage has to be skipped. */
 const readable = (file: string): Promise<boolean> =>
-  runOAuthNodeEffect(
+  nodePlatform.runPromise(
     Effect.flatMap(FileSystem.FileSystem, (fs) => fs.stat(file)).pipe(
       Effect.map((info) => Number(info.size) > 0),
       Effect.orElseSucceed(() => false),
@@ -392,7 +392,8 @@ const evaluateStage = Effect.fn("lab.stage")(function* (stage: Stage) {
   return outcome;
 });
 
-const runStage = (stage: Stage): Promise<StageOutcome> => runOAuthNodeEffect(evaluateStage(stage));
+const runStage = (stage: Stage): Promise<StageOutcome> =>
+  nodePlatform.runPromise(evaluateStage(stage));
 
 const top3 = (result: StageResult | undefined, setName: string): number | null => {
   const set = result?.sets.find((entry) => entry.name === setName);
@@ -403,7 +404,7 @@ const top3 = (result: StageResult | undefined, setName: string): number | null =
  * degraded/unindexed signals are the expected state, not failures. */
 const withoutEmbedder = (name: string) => name === "fts-only" || name === "morph-only";
 
-const print = (text: string) => runOAuthNodeEffect(Console.log(text));
+const print = (text: string) => nodePlatform.runPromise(Console.log(text));
 
 const only = process.argv.slice(2).find((argument) => argument !== "--");
 const results: StageOutcome[] = [];

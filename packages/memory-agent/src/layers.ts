@@ -1,4 +1,5 @@
-import { Function as EffectFunction, Schema } from "effect";
+import { type Crypto, Function as EffectFunction, Schema } from "effect";
+import type { ChildProcessSpawner } from "effect/process";
 import { nodePlatformLayer } from "./runtime/node-platform.ts";
 import { path } from "./runtime/synchronous-path.ts";
 const { join } = path;
@@ -80,6 +81,7 @@ import { ProviderRegistry } from "./providers/registry.ts";
 import { AccountSubscriptionProviderRegistry } from "./providers/subscriptions.ts";
 import { OAuthProfiles } from "./oauth/accounts.ts";
 import { OAuthAccountLogins } from "./oauth/account-login.ts";
+import { OAuthKeychain } from "./oauth/validation-harness.ts";
 import {
   ProviderToolCapabilityRegistry,
   providerToolDescriptors,
@@ -128,7 +130,11 @@ export interface MemoryAgentLayerOptions {
   /** Defaults to Kiwi (model downloaded on first use); tests pass a deterministic one. */
   readonly morphAnalyzer?: Layer.Layer<MorphAnalyzer, never, StorageRoot>;
   /** Provider-neutral registry override for tests. Production uses subscription providers. */
-  readonly providerRegistry?: Layer.Layer<ProviderRegistry, never, GlobalConfig>;
+  readonly providerRegistry?: Layer.Layer<
+    ProviderRegistry,
+    never,
+    GlobalConfig | OAuthKeychain | Crypto.Crypto | ChildProcessSpawner.ChildProcessSpawner
+  >;
   /** Provider Tool capability metadata override; it never executes tools or enforces policy. */
   readonly providerToolRegistry?: Layer.Layer<ProviderToolCapabilityRegistry>;
   /** Persisted model-dependent feature flag service override for tests. */
@@ -196,6 +202,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     Layer.provide(Layer.merge(ReportDelivery.layer(), SecretRedactor.layer)),
   );
   const foundation = OAuthProfiles.layer.pipe(
+    Layer.provideMerge(OAuthKeychain.keychain),
     Layer.provideMerge(defectReports),
     Layer.provideMerge(
       GlobalConfig.layer.pipe(

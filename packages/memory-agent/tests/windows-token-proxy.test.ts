@@ -1,6 +1,7 @@
 import { it } from "@effect/vitest";
 import { Effect } from "effect";
 import { expect, test } from "vite-plus/test";
+import { withOAuthTestPlatform } from "./support/platform.ts";
 import {
   classifyWindowsProxyOutput,
   parseWindowsProxy,
@@ -35,6 +36,6 @@ test("distinguishes direct, unavailable and usable proxy decisions without retur
 
 it.effect.skipIf(process.platform === "win32")("never queries Windows settings on another OS", () =>
   Effect.gen(function* () {
-    expect(yield* Effect.promise(() => windowsTokenProxy())).toEqual({ route: "unavailable" });
-  }),
+    expect(yield* windowsTokenProxy()).toEqual({ route: "unavailable" });
+  }).pipe(withOAuthTestPlatform),
 );

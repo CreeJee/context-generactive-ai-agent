@@ -4,11 +4,11 @@ import { isTruthy } from "../src/truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { NodeServices } from "@effect/platform-node";
 import { Context, Crypto, FileSystem } from "effect";
-import { runOAuthNodeEffect } from "../src/oauth/node-runtime.ts";
+import { nodePlatform, nodePlatformLayer } from "../src/runtime/node-platform.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { path } from "../src/runtime/synchronous-path.ts";
 const { join } = path;
-import { DateTime, Clock, Effect, Layer, Schedule, Schema, Stream } from "effect";
+import { DateTime, Clock, Effect, Layer, ManagedRuntime, Schedule, Schema, Stream } from "effect";
 import { SqlClient } from "effect/sql";
 import { Prompt } from "effect/ai";
 import { AgUiEvent } from "../src/loop/chunks.ts";
@@ -17,7 +17,6 @@ import { RunStore } from "../src/loop/store.ts";
 import { messageText } from "../src/agent/compaction.ts";
 import { GlobalConfig } from "../src/config/global-config.ts";
 import { defaultStorageRoot } from "../src/config/storage-root.ts";
-import { optionalProperty } from "../src/optional-property.ts";
 import { memoryAgentLayer } from "../src/layers.ts";
 import { Projects } from "../src/projects/projects.ts";
 import { ProviderRegistry } from "../src/providers/registry.ts";
@@ -30,10 +29,7 @@ import {
 import { SubscriptionProviderRegistry } from "../src/providers/subscriptions.ts";
 import { storedOAuthProfiles } from "./stored-profiles.ts";
 import { providerProtocols } from "../src/oauth/protocol.ts";
-import {
-  createKeychainProfileCredentialStore,
-  createSubscriptionOAuthClient,
-} from "../src/oauth/validation-harness.ts";
+import { createSubscriptionOAuthClient, OAuthKeychain } from "../src/oauth/validation-harness.ts";
 import { createSubscriptionProvider } from "../src/providers/subscription-provider.ts";
 import { createSubscriptionRuntime } from "../src/providers/subscription-runtime.ts";
 import { Sessions } from "../src/sessions/sessions.ts";
@@ -61,22 +57,28 @@ const selection = EffectFunction.flow(
   Schema.decodeResult(Schema.fromJsonString(Selection)),
   Result.getOrThrow,
 )(
-  await runOAuthNodeEffect(
+  await nodePlatform.runPromise(
     Effect.flatMap(FileSystem.FileSystem, (fs) =>
       Effect.flatMap(defaultStorageRoot, (root) => fs.readFileString(join(root, "config.json"))),
     ),
   ),
 );
-const selectedProfile = (await runOAuthNodeEffect(storedOAuthProfiles(selection.provider))).find(
-  (profile) => profile.selected,
-)?.id;
-const client = createSubscriptionOAuthClient({
-  protocol: providerProtocols.openai,
-  ...optionalProperty(
-    "store",
-    isTruthy(selectedProfile) ? createKeychainProfileCredentialStore(selectedProfile) : undefined,
-  ),
-});
+const oauth = ManagedRuntime.make(
+  OAuthKeychain.keychain.pipe(Layer.provideMerge(nodePlatformLayer)),
+);
+const client = await oauth.runPromise(
+  Effect.gen(function* () {
+    const vault = yield* OAuthKeychain;
+    const selectedProfile = (yield* storedOAuthProfiles(selection.provider)).find(
+      (profile) => profile.selected,
+    )?.id;
+    // A stored profile id is always a valid keychain slot id.
+    const store = isTruthy(selectedProfile)
+      ? yield* Effect.orDie(vault.profileStore(selectedProfile))
+      : vault.store;
+    return yield* createSubscriptionOAuthClient({ protocol: providerProtocols.openai, store });
+  }),
+);
 const baseline = `You can delegate with run_subagent, optionally to a named helper. A child sees only the task and uses the same workspace, model and permissions. Dispatch returns immediately. Retrieve its report with get_subagent_reports before relying on it. Before a final answer call adopt_subagent_reports with only the reports and evidence actually used.`;
 const Busy = Schema.Struct({ busy: Schema.Finite });
 /**
@@ -162,10 +164,10 @@ const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "opt
       const upstream = yield* ProviderRegistry;
       const { subscriptionDependencies: _nativeDependencies, ...fallback } = upstream;
       const config = yield* GlobalConfig;
-      const openai = createSubscriptionProvider({
+      const openai = yield* createSubscriptionProvider({
         protocol: providerProtocols.openai,
         config,
-        client,
+        client: { ...client, startLogin: client.startLogin() },
       });
       const openaiRuntime = createSubscriptionRuntime("openai", client, openai.contextWindow);
       return {

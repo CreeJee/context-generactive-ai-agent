@@ -7,6 +7,7 @@ export const OAuthCheckReason = Schema.TaggedUnion({
   refresh_not_connected: {},
   stream_text_missing: {},
   tool_call_missing: {},
+  cleanup_failed: {},
 });
 
 const reasonName = OAuthCheckReason.match({
@@ -15,6 +16,7 @@ const reasonName = OAuthCheckReason.match({
   refresh_not_connected: () => "refresh_not_connected",
   stream_text_missing: () => "stream_text_missing",
   tool_call_missing: () => "tool_call_missing",
+  cleanup_failed: () => "cleanup_failed",
 });
 
 /** Expected failures of the one-off OAuth protocol checks, without provider response content. */

@@ -1,10 +1,9 @@
-import { runNativeEffectWith } from "../src/runtime/native-effect.ts";
-import { nativeStream } from "../src/runtime/native-stream.ts";
 import { it as effectTest } from "@effect/vitest";
 import { Stream, DateTime, Deferred, Effect, Exit, Fiber } from "effect";
 import * as TestClock from "effect/testing/TestClock";
 import { describe, expect, test } from "vite-plus/test";
 import type { Settings } from "../src/config/global-config.ts";
+import type { JsonValue } from "../src/json.ts";
 import {
   OAuthHarnessError,
   type LoginAttempt,
@@ -18,26 +17,6 @@ import {
 } from "../src/providers/subscription-provider.ts";
 import { createSubscriptionRuntime } from "../src/providers/subscription-runtime.ts";
 
-// Native SDK callbacks receive a stable Promise backed by a Deferred owned by this test Scope.
-const sdkGateFactory = Effect.fn("subscriptionProviderTest.sdkGateFactory")(function* () {
-  const scope = yield* Effect.scope;
-  const run = runNativeEffectWith(yield* Effect.context());
-  return <A, E = never>() => {
-    const deferred = Deferred.makeUnsafe<A, E>();
-    let promise: Promise<A> | undefined;
-    return {
-      get promise() {
-        if (promise === undefined)
-          promise = run(
-            Deferred.await(deferred).pipe(Effect.forkIn(scope), Effect.flatMap(Fiber.join)),
-          );
-        return promise;
-      },
-      release: (value: A) => Deferred.doneUnsafe(deferred, Effect.succeed(value)),
-      reject: (error: E) => Deferred.doneUnsafe(deferred, Effect.fail(error)),
-    };
-  };
-});
 const settingsStore = () => {
   let settings: Settings = {};
   return {
@@ -55,49 +34,42 @@ const settingsStore = () => {
 
 const fakeClient = Effect.fn("subscriptionProviderTest.fakeClient")(function* (
   provider: "openai" | "anthropic",
-  pages: ReadonlyArray<unknown>,
+  pages: ReadonlyArray<JsonValue>,
 ) {
   let connected = false;
   let cancelled = false;
   let catalogRequests = 0;
-  const makeGate = yield* sdkGateFactory();
-  const completion = makeGate<OAuthConnectionStatus>();
+  const completion = yield* Deferred.make<OAuthConnectionStatus>();
   const attempt: LoginAttempt = {
     provider,
     authorizationUrl: `https://example.test/${provider}/authorize`,
-    get completed() {
-      return completion.promise;
-    },
-    cancel: () => {
+    completed: Deferred.await(completion),
+    cancel: Effect.sync(() => {
       cancelled = true;
-    },
+    }),
   };
   return {
     client: {
-      status: () => Promise.resolve({ provider, connected, expiresAt: null }),
-      startLogin: () => Promise.resolve(attempt),
-      disconnect: () =>
-        Promise.resolve().then(() => {
-          connected = false;
-          return { provider, connected, expiresAt: null };
-        }),
-      modelCatalog: () =>
-        Promise.resolve().then(() => {
-          catalogRequests += 1;
-          return pages;
-        }),
-      stream() {
-        return nativeStream(Stream.fromIterable((function* () {})(), { chunkSize: 1 }));
-      },
+      status: Effect.sync(() => ({ provider, connected, expiresAt: null })),
+      startLogin: Effect.succeed(attempt),
+      disconnect: Effect.sync(() => {
+        connected = false;
+        return { provider, connected, expiresAt: null };
+      }),
+      modelCatalog: Effect.sync(() => {
+        catalogRequests += 1;
+        return pages;
+      }),
+      stream: () => Stream.empty,
     },
-    complete: () => {
+    complete: Effect.gen(function* () {
       connected = true;
-      completion.release({
+      yield* Deferred.succeed(completion, {
         provider,
         connected: true,
-        expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 60_000,
+        expiresAt: DateTime.toEpochMillis(yield* DateTime.now) + 60_000,
       });
-    },
+    }),
     get cancelled() {
       return cancelled;
     },
@@ -111,41 +83,43 @@ const catalogPages = (id: string, window = 400_000) => [
   { models: [{ slug: id, context_window: window }] },
 ];
 const gatedCatalog = Effect.fn("subscriptionProviderTest.gatedCatalog")(function* () {
-  const makeGate = yield* sdkGateFactory();
   const gates: {
-    promise: Promise<ReadonlyArray<unknown>>;
-    release: (pages: ReadonlyArray<unknown>) => boolean;
-    reject: () => boolean;
+    release: (pages: ReadonlyArray<JsonValue>) => Effect.Effect<boolean>;
+    reject: Effect.Effect<boolean>;
+    interrupted: boolean;
   }[] = [];
-  const signals: (AbortSignal | undefined)[] = [];
   let key = "profile-a";
   const fake = yield* fakeClient("openai", []);
-  const provider = createSubscriptionProvider({
+  const provider = yield* createSubscriptionProvider({
     protocol: providerProtocols.openai,
     config: settingsStore(),
     catalogKey: () => key,
     client: {
       ...fake.client,
-      modelCatalog: (signal) => {
-        signals.push(signal);
-        const completion = makeGate<ReadonlyArray<unknown>, OAuthHarnessError>();
+      modelCatalog: Effect.gen(function* () {
+        const completion = yield* Deferred.make<ReadonlyArray<JsonValue>, OAuthHarnessError>();
         const gate = {
-          get promise() {
-            return completion.promise;
-          },
-          release: completion.release,
-          reject: () =>
-            completion.reject(OAuthHarnessError.fromCode("transport_unavailable", null)),
+          release: (pages: ReadonlyArray<JsonValue>) => Deferred.succeed(completion, pages),
+          reject: Deferred.fail(
+            completion,
+            OAuthHarnessError.fromCode("transport_unavailable", null),
+          ),
+          interrupted: false,
         };
         gates.push(gate);
-        return gate.promise;
-      },
+        return yield* Deferred.await(completion).pipe(
+          Effect.onInterrupt(() =>
+            Effect.sync(() => {
+              gate.interrupted = true;
+            }),
+          ),
+        );
+      }),
     },
   });
   return {
     provider,
     gates,
-    signals,
     changeProfile: (next: string) => {
       key = next;
     },
@@ -157,7 +131,7 @@ describe("subscription catalog concurrency", () => {
     Effect.gen(function* () {
       const { provider, gates } = yield* gatedCatalog();
       const first = yield* Effect.forkChild(provider.models.list, { startImmediately: true });
-      gates[0]!.release(catalogPages("first"));
+      yield* gates[0]!.release(catalogPages("first"));
       yield* Fiber.join(first);
       yield* TestClock.adjust("29 seconds");
       expect((yield* provider.models.list)[0]?.id).toBe("first");
@@ -165,7 +139,7 @@ describe("subscription catalog concurrency", () => {
       yield* TestClock.adjust("1 second");
       const fresh = yield* Effect.forkChild(provider.models.list, { startImmediately: true });
       expect(gates).toHaveLength(2);
-      gates[1]!.release(catalogPages("fresh"));
+      yield* gates[1]!.release(catalogPages("fresh"));
       expect((yield* Fiber.join(fresh))[0]?.id).toBe("fresh");
     }),
   );
@@ -179,7 +153,7 @@ describe("subscription catalog concurrency", () => {
           Effect.forkChild(provider.models.list, { startImmediately: true }),
         );
         expect(gates).toHaveLength(1);
-        gates[0]!.release(catalogPages("shared"));
+        yield* gates[0]!.release(catalogPages("shared"));
         const results = yield* Effect.forEach(callers, (fiber) => Fiber.join(fiber));
         expect(results.every((models) => models[0]?.id === "shared")).toBe(true);
         expect((yield* provider.models.list)[0]?.id).toBe("shared");
@@ -193,14 +167,14 @@ describe("subscription catalog concurrency", () => {
       const owner = yield* Effect.forkChild(provider.models.list, { startImmediately: true });
       const waiter = yield* Effect.forkChild(provider.models.list, { startImmediately: true });
       expect(gates).toHaveLength(1);
-      gates[0]!.reject();
+      yield* gates[0]!.reject;
       for (const fiber of [owner, waiter]) {
         const exit = yield* Fiber.await(fiber);
         expect(Exit.isFailure(exit)).toBe(true);
       }
       const retry = yield* Effect.forkChild(provider.models.list, { startImmediately: true });
       expect(gates).toHaveLength(2);
-      gates[1]!.release(catalogPages("retry"));
+      yield* gates[1]!.release(catalogPages("retry"));
       expect((yield* Fiber.join(retry))[0]?.id).toBe("retry");
     }),
   );
@@ -212,9 +186,9 @@ describe("subscription catalog concurrency", () => {
       changeProfile("profile-b");
       const current = yield* Effect.forkChild(provider.models.list, { startImmediately: true });
       expect(gates).toHaveLength(2);
-      gates[1]!.release(catalogPages("current", 300_000));
+      yield* gates[1]!.release(catalogPages("current", 300_000));
       yield* Fiber.join(current);
-      gates[0]!.release(catalogPages("old"));
+      yield* gates[0]!.release(catalogPages("old"));
       yield* Fiber.join(old);
       expect(provider.contextWindow("current")).toBe(300_000);
       expect(provider.contextWindow("old")).toBeNull();
@@ -228,12 +202,12 @@ describe("subscription catalog concurrency", () => {
       const { provider, gates } = yield* gatedCatalog();
       const old = yield* Effect.forkChild(provider.models.list, { startImmediately: true });
       yield* provider.auth.disconnect;
-      gates[0]!.release(catalogPages("old"));
+      yield* gates[0]!.release(catalogPages("old"));
       yield* Fiber.join(old);
       expect(provider.contextWindow("old")).toBeNull();
       const fresh = yield* Effect.forkChild(provider.models.list, { startImmediately: true });
       expect(gates).toHaveLength(2);
-      gates[1]!.release(catalogPages("fresh"));
+      yield* gates[1]!.release(catalogPages("fresh"));
       expect((yield* Fiber.join(fresh))[0]?.id).toBe("fresh");
     }),
   );
@@ -242,14 +216,14 @@ describe("subscription catalog concurrency", () => {
     "cancelling a shared waiter leaves its owner alive; owner interruption permits retry",
     () =>
       Effect.gen(function* () {
-        const { provider, gates, signals } = yield* gatedCatalog();
+        const { provider, gates } = yield* gatedCatalog();
         const owner = yield* Effect.forkChild(provider.models.list, { startImmediately: true });
         const waiter = yield* Effect.forkChild(provider.models.list, { startImmediately: true });
         const remaining = yield* Effect.forkChild(provider.models.list, { startImmediately: true });
         yield* Fiber.interrupt(waiter);
-        expect(signals[0]?.aborted).toBe(false);
+        expect(gates[0]?.interrupted).toBe(false);
         expect(gates).toHaveLength(1);
-        gates[0]!.release(catalogPages("shared"));
+        yield* gates[0]!.release(catalogPages("shared"));
         for (const fiber of [owner, remaining]) {
           expect((yield* Fiber.join(fiber))[0]?.id).toBe("shared");
         }
@@ -261,12 +235,12 @@ describe("subscription catalog concurrency", () => {
           startImmediately: true,
         });
         yield* Fiber.interrupt(interruptedOwner);
-        expect(signals[1]?.aborted).toBe(true);
+        expect(gates[1]?.interrupted).toBe(true);
         expect(Exit.isFailure(yield* Fiber.await(interruptedWaiter))).toBe(true);
-        gates[1]!.release(catalogPages("interrupted"));
+        yield* gates[1]!.release(catalogPages("interrupted"));
         const retry = yield* Effect.forkChild(provider.models.list, { startImmediately: true });
         expect(gates).toHaveLength(3);
-        gates[2]!.release(catalogPages("retry"));
+        yield* gates[2]!.release(catalogPages("retry"));
         yield* Fiber.join(retry);
         expect(provider.contextWindow("interrupted")).toBeNull();
         expect(provider.contextWindow("retry")).toBe(400_000);
@@ -324,7 +298,7 @@ describe("subscription provider product services", () => {
             ],
           },
         ]);
-        const provider = createSubscriptionProvider({
+        const provider = yield* createSubscriptionProvider({
           protocol: providerProtocols.openai,
           config: settingsStore(),
           client: fake.client,
@@ -372,7 +346,7 @@ describe("subscription provider product services", () => {
     () =>
       Effect.gen(function* () {
         const fake = yield* fakeClient("anthropic", []);
-        const provider = createSubscriptionProvider({
+        const provider = yield* createSubscriptionProvider({
           protocol: providerProtocols.anthropic,
           config: settingsStore(),
           client: fake.client,
@@ -391,7 +365,7 @@ describe("subscription provider product services", () => {
     () =>
       Effect.gen(function* () {
         const fake = yield* fakeClient("anthropic", []);
-        const provider = createSubscriptionProvider({
+        const provider = yield* createSubscriptionProvider({
           protocol: providerProtocols.anthropic,
           config: settingsStore(),
           client: fake.client,
@@ -404,7 +378,7 @@ describe("subscription provider product services", () => {
         );
         expect(provider.auth).not.toHaveProperty("token");
         expect(provider.auth).not.toHaveProperty("credential");
-        fake.complete();
+        yield* fake.complete;
         yield* Effect.yieldNow;
         expect(yield* provider.auth.status).toEqual(
           AuthConnectionState["signed-in"]({ provider: "anthropic" }),
@@ -414,31 +388,31 @@ describe("subscription provider product services", () => {
 
   effectTest.live("reports safe login diagnostics and does not surface raw provider text", () =>
     Effect.gen(function* () {
-      const makeGate = yield* sdkGateFactory();
-      const completion = makeGate<OAuthConnectionStatus, OAuthHarnessError>();
-      const completed = completion.promise;
-      const rejectLogin = completion.reject;
+      const completion = yield* Deferred.make<OAuthConnectionStatus, OAuthHarnessError>();
+      const signedOut = Effect.succeed({
+        provider: "openai" as const,
+        connected: false,
+        expiresAt: null,
+      });
       const client = {
-        status: () =>
-          Promise.resolve({ provider: "openai" as const, connected: false, expiresAt: null }),
-        startLogin: () =>
-          Promise.resolve<LoginAttempt>({
-            provider: "openai",
-            authorizationUrl: "https://example.test/authorize",
-            completed,
-            cancel: () => {},
-          }),
-        disconnect: () =>
-          Promise.resolve({ provider: "openai" as const, connected: false, expiresAt: null }),
-        modelCatalog: () => Promise.resolve([]),
+        status: signedOut,
+        startLogin: Effect.succeed<LoginAttempt>({
+          provider: "openai",
+          authorizationUrl: "https://example.test/authorize",
+          completed: Deferred.await(completion),
+          cancel: Effect.void,
+        }),
+        disconnect: signedOut,
+        modelCatalog: Effect.succeed([]),
       };
-      const provider = createSubscriptionProvider({
+      const provider = yield* createSubscriptionProvider({
         protocol: providerProtocols.openai,
         config: settingsStore(),
         client,
       });
       expect(AuthConnectionState.$is("pending")(yield* provider.auth.connect)).toBe(true);
-      rejectLogin(
+      yield* Deferred.fail(
+        completion,
         OAuthHarnessError.fromCode("provider_rejected", 403, {
           provider: "openai",
           operation: "token_exchange",
@@ -462,37 +436,34 @@ describe("subscription provider product services", () => {
 
   effectTest.live("shows a safe credential-store stage even when status reads also fail", () =>
     Effect.gen(function* () {
-      const login = (yield* sdkGateFactory())<OAuthConnectionStatus, OAuthHarnessError>();
-      const completed = login.promise;
-      const provider = createSubscriptionProvider({
+      const login = yield* Deferred.make<OAuthConnectionStatus, OAuthHarnessError>();
+      const provider = yield* createSubscriptionProvider({
         protocol: providerProtocols.openai,
         config: settingsStore(),
         client: {
-          status: () =>
-            Promise.resolve().then(() => {
-              throw OAuthHarnessError.fromCode("credential_store_unavailable", null, {
-                provider: "openai",
-                operation: "credential_store",
-                credentialStage: "read",
-              });
-            }),
-          startLogin: () =>
-            Promise.resolve<LoginAttempt>({
+          status: Effect.fail(
+            OAuthHarnessError.fromCode("credential_store_unavailable", null, {
               provider: "openai",
-              authorizationUrl: "https://example.test/authorize",
-              completed,
-              cancel: () => {},
+              operation: "credential_store",
+              credentialStage: "read",
             }),
-          disconnect: () =>
-            Promise.resolve({ provider: "openai", connected: false, expiresAt: null }),
-          modelCatalog: () => Promise.resolve([]),
+          ),
+          startLogin: Effect.succeed<LoginAttempt>({
+            provider: "openai",
+            authorizationUrl: "https://example.test/authorize",
+            completed: Deferred.await(login),
+            cancel: Effect.void,
+          }),
+          disconnect: Effect.succeed({ provider: "openai", connected: false, expiresAt: null }),
+          modelCatalog: Effect.succeed([]),
         },
       });
       const unreadable = yield* provider.auth.status;
       expect(AuthConnectionState.$is("error")(unreadable)).toBe(true);
       expect(unreadable).toMatchObject({ credentialStage: "read" });
       expect(AuthConnectionState.$is("pending")(yield* provider.auth.connect)).toBe(true);
-      login.reject(
+      yield* Deferred.fail(
+        login,
         OAuthHarnessError.fromCode("credential_store_unavailable", null, {
           provider: "openai",
           operation: "credential_store",
@@ -523,7 +494,7 @@ describe("subscription provider product services", () => {
           ],
         },
       ]);
-      const provider = createSubscriptionProvider({
+      const provider = yield* createSubscriptionProvider({
         protocol: providerProtocols.openai,
         config,
         client: fake.client,

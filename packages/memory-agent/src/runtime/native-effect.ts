@@ -1,4 +1,4 @@
-import { Cause, Context, Data, Effect, Exit, Function as EffectFunction } from "effect";
+import { Cause, Data, Effect, Exit, Function as EffectFunction } from "effect";
 
 export type NativeRejection = Data.TaggedEnum<{
   NativeRejection: { readonly cause: unknown };
@@ -34,8 +34,3 @@ function runNativeEffectBody<A, E>(
     }),
   );
 }
-
-export const runNativeEffectWith =
-  <R>(context: Context.Context<R>) =>
-  <A, E>(program: Effect.Effect<A, E, R>, options?: Effect.RunOptions): Promise<A> =>
-    runNativeEffect(program.pipe(Effect.provideContext(context)), options);
