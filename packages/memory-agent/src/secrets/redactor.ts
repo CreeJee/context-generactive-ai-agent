@@ -38,10 +38,10 @@ export interface Redaction {
   readonly hidden: number;
 }
 
-export class SecretRedactionFailed extends Schema.TaggedError<SecretRedactionFailed>()(
-  "SecretRedactionFailed",
-  { cause: Schema.Defect() },
-) {}
+export class SecretRedactionFailed extends Schema.TaggedError<
+  SecretRedactionFailed,
+  { readonly brand: unique symbol }
+>()("SecretRedactionFailed", { cause: Schema.Defect() }) {}
 
 const credentialName =
   "(?:TOKEN|SECRET|PASSWORD|PASSWD|PASSPHRASE|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIALS?|SESSION_?KEY|AUTH)";

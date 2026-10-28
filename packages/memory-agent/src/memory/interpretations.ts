@@ -39,10 +39,10 @@ const toInterpretation = (row: typeof Row.Type): Interpretation => ({
 });
 
 /** Interpretations could not be read or written; the cause stays with the error. */
-export class InterpretationStoreFailed extends Schema.TaggedError<InterpretationStoreFailed>()(
-  "InterpretationStoreFailed",
-  { cause: Schema.Defect() },
-) {}
+export class InterpretationStoreFailed extends Schema.TaggedError<
+  InterpretationStoreFailed,
+  { readonly brand: unique symbol }
+>()("InterpretationStoreFailed", { cause: Schema.Defect() }) {}
 const stored = <A, E>(effect: Effect.Effect<A, E>) =>
   Effect.mapError(effect, (cause) => InterpretationStoreFailed.make({ cause }));
 

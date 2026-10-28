@@ -30,7 +30,10 @@ export const repeatedToolCallCode = "repeated_tool_call";
  * The run stopped because its model kept repeating tool calls whose result could not change.
  * Persistence and the page read `code`; the message is the run's detail.
  */
-export class RepeatedToolCall extends Schema.TaggedError<RepeatedToolCall>()("RepeatedToolCall", {
+export class RepeatedToolCall extends Schema.TaggedError<
+  RepeatedToolCall,
+  { readonly brand: unique symbol }
+>()("RepeatedToolCall", {
   toolName: Schema.String,
   runId: Schema.String,
   threadId: Schema.String,

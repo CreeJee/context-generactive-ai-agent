@@ -157,7 +157,10 @@ export const readMcpFile: {
 } & typeof readMcpFileBody = EffectFunction.dual(2, readMcpFileBody);
 
 /** A `${NAME}` the configuration uses is not set; the message names the variable, not a value. */
-export class MissingVariable extends Schema.TaggedError<MissingVariable>()("MissingVariable", {
+export class MissingVariable extends Schema.TaggedError<
+  MissingVariable,
+  { readonly brand: unique symbol }
+>()("MissingVariable", {
   variable: Schema.String,
 }) {
   override get message() {

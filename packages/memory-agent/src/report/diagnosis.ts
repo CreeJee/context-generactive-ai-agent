@@ -10,13 +10,13 @@ import {
   type ReportDiagnosisInput,
 } from "./diagnosis-contract.ts";
 
-export class ReportDiagnosisError extends Schema.TaggedError<ReportDiagnosisError>()(
-  "ReportDiagnosisError",
-  {
-    reason: ReportDiagnosisFailure,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {}
+export class ReportDiagnosisError extends Schema.TaggedError<
+  ReportDiagnosisError,
+  { readonly brand: unique symbol }
+>()("ReportDiagnosisError", {
+  reason: ReportDiagnosisFailure,
+  cause: Schema.optional(Schema.Defect()),
+}) {}
 
 export const diagnosisInstructions = `You help a user write a bug report for a local coding-agent app.
 The developer reading the report cannot open the user's sessions; the report must explain the problem on its own.

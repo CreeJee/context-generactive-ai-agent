@@ -10,7 +10,10 @@ import {
   Semaphore,
 } from "effect";
 
-class LeaseActionFailed extends Schema.TaggedError<LeaseActionFailed>()("LeaseActionFailed", {
+class LeaseActionFailed extends Schema.TaggedError<
+  LeaseActionFailed,
+  { readonly brand: unique symbol }
+>()("LeaseActionFailed", {
   cause: Schema.Defect(),
 }) {}
 

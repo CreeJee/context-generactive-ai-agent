@@ -26,10 +26,10 @@ export const MaxDecompressedBytes = Context.Reference<number>(
   { defaultValue: () => 512 * 1024 * 1024 },
 );
 
-export class TranscriptDecompressFailed extends Schema.TaggedError<TranscriptDecompressFailed>()(
-  "TranscriptDecompressFailed",
-  { path: Schema.String, cause: Schema.Defect() },
-) {}
+export class TranscriptDecompressFailed extends Schema.TaggedError<
+  TranscriptDecompressFailed,
+  { readonly brand: unique symbol }
+>()("TranscriptDecompressFailed", { path: Schema.String, cause: Schema.Defect() }) {}
 
 export interface LinesRead {
   /** Where the next read starts: the end of the last complete line, never mid-line. */

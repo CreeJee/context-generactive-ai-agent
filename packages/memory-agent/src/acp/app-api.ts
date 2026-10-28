@@ -39,7 +39,10 @@ export const AppRequestReason = Schema.TaggedUnion({
   InvalidResponse: {},
 });
 
-export class AppRequestFailed extends Schema.TaggedError<AppRequestFailed>()("AppRequestFailed", {
+export class AppRequestFailed extends Schema.TaggedError<
+  AppRequestFailed,
+  { readonly brand: unique symbol }
+>()("AppRequestFailed", {
   status: Schema.Finite,
   code: Schema.String,
   message: Schema.String,

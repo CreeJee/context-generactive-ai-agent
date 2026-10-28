@@ -29,10 +29,12 @@ const evidenceKind = Evidence.$match({
 const evidenceLimit = 16384;
 
 /** A request value that has no canonical JSON form, or a legacy fingerprint no longer readable. */
-export class OwnerRpcFingerprintFailed extends Schema.TaggedError<OwnerRpcFingerprintFailed>()(
-  "OwnerRpcFingerprintFailed",
-  { reason: Schema.Literals(["non_finite", "non_json", "unsupported_legacy"]) },
-) {}
+export class OwnerRpcFingerprintFailed extends Schema.TaggedError<
+  OwnerRpcFingerprintFailed,
+  { readonly brand: unique symbol }
+>()("OwnerRpcFingerprintFailed", {
+  reason: Schema.Literals(["non_finite", "non_json", "unsupported_legacy"]),
+}) {}
 // Fingerprints are computed synchronously inside the ledger's SQLite boundary.
 const fail = (reason: OwnerRpcFingerprintFailed["reason"]): never => {
   throw OwnerRpcFingerprintFailed.make({ reason });

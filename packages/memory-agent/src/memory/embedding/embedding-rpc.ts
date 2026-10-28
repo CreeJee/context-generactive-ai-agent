@@ -18,17 +18,17 @@ export const EmbeddingWorkerData = Schema.Struct({
 });
 export type EmbeddingWorkerData = typeof EmbeddingWorkerData.Type;
 
-export class EmbeddingWorkerFailed extends Schema.TaggedError<EmbeddingWorkerFailed>()(
-  "EmbeddingWorkerFailed",
-  {
-    /**
-     * `run`: one request failed and the worker stays. `load`: the model never loaded, and `lost`:
-     * the worker or its transport is gone; the next request starts a new worker for both.
-     */
-    stage: Schema.Literals(["load", "run", "lost"]),
-    reason: Schema.String,
-  },
-) {}
+export class EmbeddingWorkerFailed extends Schema.TaggedError<
+  EmbeddingWorkerFailed,
+  { readonly brand: unique symbol }
+>()("EmbeddingWorkerFailed", {
+  /**
+   * `run`: one request failed and the worker stays. `load`: the model never loaded, and `lost`:
+   * the worker or its transport is gone; the next request starts a new worker for both.
+   */
+  stage: Schema.Literals(["load", "run", "lost"]),
+  reason: Schema.String,
+}) {}
 
 const Texts = Schema.Struct({ texts: Schema.Array(Schema.String) });
 

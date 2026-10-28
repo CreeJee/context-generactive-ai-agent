@@ -43,22 +43,22 @@ const codeSkillScript = (name: string, runtime: SkillRuntime) =>
   `${codeSkillDirectory(name)}/scripts/run.${runtime}`;
 const codeSkillDocument = (name: string) => `${codeSkillDirectory(name)}/SKILL.md`;
 
-export class CodeSkillRejected extends Schema.TaggedError<CodeSkillRejected>()(
-  "CodeSkillRejected",
-  {
-    reason: Schema.Literals([
-      "builtin_overlap",
-      "not_code_skill",
-      "network_line",
-      "input_line",
-      "input_schema",
-      "not_found",
-      "not_approved",
-      "ts_skill",
-    ]),
-    detail: Schema.String,
-  },
-) {
+export class CodeSkillRejected extends Schema.TaggedError<
+  CodeSkillRejected,
+  { readonly brand: unique symbol }
+>()("CodeSkillRejected", {
+  reason: Schema.Literals([
+    "builtin_overlap",
+    "not_code_skill",
+    "network_line",
+    "input_line",
+    "input_schema",
+    "not_found",
+    "not_approved",
+    "ts_skill",
+  ]),
+  detail: Schema.String,
+}) {
   override get message() {
     return `${this.reason}: ${this.detail}`;
   }

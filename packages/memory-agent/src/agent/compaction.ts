@@ -55,7 +55,10 @@ export const CompactionReason = Schema.TaggedUnion({
   MemoryFailed: {},
 });
 
-export class CompactionFailed extends Schema.TaggedError<CompactionFailed>()("CompactionFailed", {
+export class CompactionFailed extends Schema.TaggedError<
+  CompactionFailed,
+  { readonly brand: unique symbol }
+>()("CompactionFailed", {
   operation: Schema.Literals([
     "prepare-before",
     "read-state",

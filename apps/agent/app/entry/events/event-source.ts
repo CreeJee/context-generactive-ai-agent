@@ -20,13 +20,13 @@ export interface ConnectAppEventsOptions {
 }
 
 /** An app event whose payload is not the event the server promised; the payload is not kept. */
-export class AppEventDecodeFailed extends Schema.TaggedError<AppEventDecodeFailed>()(
-  "AppEventDecodeFailed",
-  {
-    event: Schema.Literals(["changed", "ready"]),
-    reason: Schema.Literals(["not_message", "invalid_payload"]),
-  },
-) {}
+export class AppEventDecodeFailed extends Schema.TaggedError<
+  AppEventDecodeFailed,
+  { readonly brand: unique symbol }
+>()("AppEventDecodeFailed", {
+  event: Schema.Literals(["changed", "ready"]),
+  reason: Schema.Literals(["not_message", "invalid_payload"]),
+}) {}
 
 const decodeChangedPayload = Schema.decodeUnknownResult(Schema.fromJsonString(AppChangedEvent));
 const decodeReadyPayload = Schema.decodeUnknownResult(Schema.fromJsonString(AppReadyEvent));

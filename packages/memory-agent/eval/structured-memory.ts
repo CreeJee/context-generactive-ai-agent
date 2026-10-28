@@ -30,7 +30,10 @@ import { seedChainCases, seedEvidenceCases } from "./structured-memory-fixtures.
 import { evidenceNarrative } from "./evidence-narrative.ts";
 import { estimateRequestTokens, exceedsRequestTokenBudget } from "./request-token-budget.ts";
 
-class BenchmarkFailed extends Schema.TaggedError<BenchmarkFailed>()("BenchmarkFailed", {
+class BenchmarkFailed extends Schema.TaggedError<
+  BenchmarkFailed,
+  { readonly brand: unique symbol }
+>()("BenchmarkFailed", {
   reason: Schema.Literals(["configuration", "profile", "fixture", "budget", "provider", "output"]),
 }) {}
 

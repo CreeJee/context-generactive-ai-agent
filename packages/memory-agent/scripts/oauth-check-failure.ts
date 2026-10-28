@@ -20,7 +20,10 @@ const reasonName = OAuthCheckReason.match({
 });
 
 /** Expected failures of the one-off OAuth protocol checks, without provider response content. */
-export class OAuthCheckFailed extends Schema.TaggedError<OAuthCheckFailed>()("OAuthCheckFailed", {
+export class OAuthCheckFailed extends Schema.TaggedError<
+  OAuthCheckFailed,
+  { readonly brand: unique symbol }
+>()("OAuthCheckFailed", {
   reason: OAuthCheckReason,
 }) {
   override get message(): string {

@@ -65,10 +65,10 @@ export const subagentToolNames = [
   "get_subagent_reports",
 ] as const;
 
-export class SubagentOperationFailed extends Schema.TaggedError<SubagentOperationFailed>()(
-  "SubagentOperationFailed",
-  { operation: Schema.Literal("store"), cause: Schema.Defect() },
-) {}
+export class SubagentOperationFailed extends Schema.TaggedError<
+  SubagentOperationFailed,
+  { readonly brand: unique symbol }
+>()("SubagentOperationFailed", { operation: Schema.Literal("store"), cause: Schema.Defect() }) {}
 
 const adoptionMessages = {
   NotReviewed: "Only reports reviewed in this run can be adopted",
@@ -76,13 +76,13 @@ const adoptionMessages = {
 } as const;
 
 /** Thrown to the SDK by `adopt_subagent_reports`; the model reads the fixed `message`. */
-export class SubagentAdoptionRejected extends Schema.TaggedError<SubagentAdoptionRejected>()(
-  "SubagentAdoptionRejected",
-  {
-    reason: Schema.Literals(["NotReviewed", "NotificationNotDelivered"]),
-    message: Schema.String,
-  },
-) {}
+export class SubagentAdoptionRejected extends Schema.TaggedError<
+  SubagentAdoptionRejected,
+  { readonly brand: unique symbol }
+>()("SubagentAdoptionRejected", {
+  reason: Schema.Literals(["NotReviewed", "NotificationNotDelivered"]),
+  message: Schema.String,
+}) {}
 
 const adoptionRejected = (reason: SubagentAdoptionRejected["reason"]) =>
   SubagentAdoptionRejected.make({ reason, message: adoptionMessages[reason] });

@@ -4,10 +4,10 @@ export const copyReportText: {
   (write: (text: string) => Promise<void>): (text: string) => ReturnType<typeof copyReportTextBody>;
 } & typeof copyReportTextBody = EffectFunction.dual(2, copyReportTextBody);
 /** The clipboard refused the text; the page only says the copy did not happen. */
-class ClipboardWriteFailed extends Schema.TaggedError<ClipboardWriteFailed>()(
-  "ClipboardWriteFailed",
-  {},
-) {}
+class ClipboardWriteFailed extends Schema.TaggedError<
+  ClipboardWriteFailed,
+  { readonly brand: unique symbol }
+>()("ClipboardWriteFailed", {}) {}
 function copyReportTextBody(
   text: string,
   write: (text: string) => Promise<void>,

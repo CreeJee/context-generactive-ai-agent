@@ -342,14 +342,14 @@ export const providerToolDescriptors = Object.freeze([
   }),
 ] as const);
 
-export class UnknownProviderTool extends Schema.TaggedError<UnknownProviderTool>()(
-  "UnknownProviderTool",
-  { id: Schema.String },
-) {}
-export class UnknownProviderToolModel extends Schema.TaggedError<UnknownProviderToolModel>()(
-  "UnknownProviderToolModel",
-  { provider: ProviderVendor, model: Schema.String },
-) {}
+export class UnknownProviderTool extends Schema.TaggedError<
+  UnknownProviderTool,
+  { readonly brand: unique symbol }
+>()("UnknownProviderTool", { id: Schema.String }) {}
+export class UnknownProviderToolModel extends Schema.TaggedError<
+  UnknownProviderToolModel,
+  { readonly brand: unique symbol }
+>()("UnknownProviderToolModel", { provider: ProviderVendor, model: Schema.String }) {}
 /** The descriptor or model tables contradict themselves; a programming error in the tables. */
 export const ProviderToolMetadataFailureReason = Schema.TaggedUnion({
   /** A descriptor id is not `<provider>:<kind>`. */
@@ -357,10 +357,10 @@ export const ProviderToolMetadataFailureReason = Schema.TaggedUnion({
   DuplicateTool: { id: Schema.String },
   DuplicateModel: { provider: ProviderVendor, model: Schema.String },
 });
-export class ProviderToolMetadataFailure extends Schema.TaggedError<ProviderToolMetadataFailure>()(
-  "ProviderToolMetadataFailure",
-  { reason: ProviderToolMetadataFailureReason },
-) {}
+export class ProviderToolMetadataFailure extends Schema.TaggedError<
+  ProviderToolMetadataFailure,
+  { readonly brand: unique symbol }
+>()("ProviderToolMetadataFailure", { reason: ProviderToolMetadataFailureReason }) {}
 export interface ProviderToolModelMetadata {
   readonly provider: ProviderToolVendor;
   readonly model: string;

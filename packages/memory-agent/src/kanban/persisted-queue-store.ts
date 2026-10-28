@@ -75,14 +75,14 @@ export const PersistedQueueItemsReason = Schema.TaggedUnion({
 });
 export type PersistedQueueItemsReason = typeof PersistedQueueItemsReason.Type;
 
-export class PersistedQueueItemsFailed extends Schema.TaggedError<PersistedQueueItemsFailed>()(
-  "PersistedQueueItemsFailed",
-  {
-    operation: Schema.Literals(["status", "dead_letters", "requeue"]),
-    reason: PersistedQueueItemsReason,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {}
+export class PersistedQueueItemsFailed extends Schema.TaggedError<
+  PersistedQueueItemsFailed,
+  { readonly brand: unique symbol }
+>()("PersistedQueueItemsFailed", {
+  operation: Schema.Literals(["status", "dead_letters", "requeue"]),
+  reason: PersistedQueueItemsReason,
+  cause: Schema.optional(Schema.Defect()),
+}) {}
 
 /**
  * The factory's private signal for a payload that can never decode. It has no public guard, so the

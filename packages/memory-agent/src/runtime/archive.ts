@@ -37,10 +37,10 @@ const UnsupportedAlgorithm = Schema.TaggedStruct("UnsupportedAlgorithm", {
   algorithm: Schema.String,
 });
 
-export class ArchiveIntegrityRejected extends Schema.TaggedError<ArchiveIntegrityRejected>()(
-  "ArchiveIntegrityRejected",
-  { reason: UnsupportedAlgorithm },
-) {
+export class ArchiveIntegrityRejected extends Schema.TaggedError<
+  ArchiveIntegrityRejected,
+  { readonly brand: unique symbol }
+>()("ArchiveIntegrityRejected", { reason: UnsupportedAlgorithm }) {
   override get message() {
     return `unsupported integrity algorithm: ${this.reason.algorithm}`;
   }

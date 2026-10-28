@@ -63,30 +63,33 @@ export function createProfileCredentialStore(
 }
 
 /** A profile change the store refused; the reason is the stable code callers branch on. */
-export class OAuthProfileRejected extends Schema.TaggedError<OAuthProfileRejected>()(
-  "OAuthProfileRejected",
-  {
-    reason: Schema.Literals([
-      "invalid_oauth_profile",
-      "oauth_profile_missing_credential",
-      "oauth_profile_not_found",
-      "oauth_profile_removing",
-      "oauth_profile_in_use",
-      "oauth_profile_conflicting_credential",
-      "oauth_profile_copy_unverified",
-    ]),
-  },
-) {
+export class OAuthProfileRejected extends Schema.TaggedError<
+  OAuthProfileRejected,
+  { readonly brand: unique symbol }
+>()("OAuthProfileRejected", {
+  reason: Schema.Literals([
+    "invalid_oauth_profile",
+    "oauth_profile_missing_credential",
+    "oauth_profile_not_found",
+    "oauth_profile_removing",
+    "oauth_profile_in_use",
+    "oauth_profile_conflicting_credential",
+    "oauth_profile_copy_unverified",
+  ]),
+}) {
   override get message(): string {
     return this.reason;
   }
 }
 
 /** The profile table or a keychain slot could not be read or written. */
-export class OAuthProfileStoreFailed extends Schema.TaggedError<OAuthProfileStoreFailed>()(
-  "OAuthProfileStoreFailed",
-  { operation: Schema.Literals(["database", "keychain"]), cause: Schema.Defect() },
-) {}
+export class OAuthProfileStoreFailed extends Schema.TaggedError<
+  OAuthProfileStoreFailed,
+  { readonly brand: unique symbol }
+>()("OAuthProfileStoreFailed", {
+  operation: Schema.Literals(["database", "keychain"]),
+  cause: Schema.Defect(),
+}) {}
 
 const rejected = (reason: OAuthProfileRejected["reason"]) => OAuthProfileRejected.make({ reason });
 const keychain = <A>(operation: Effect.Effect<A, ProfileCredentialFailure>) =>

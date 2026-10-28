@@ -192,10 +192,10 @@ const memoryCredentialStore = (
 };
 
 /** A keychain slot was asked for with an id no profile can have. */
-export class OAuthProfileIdRejected extends Schema.TaggedError<OAuthProfileIdRejected>()(
-  "OAuthProfileIdRejected",
-  {},
-) {
+export class OAuthProfileIdRejected extends Schema.TaggedError<
+  OAuthProfileIdRejected,
+  { readonly brand: unique symbol }
+>()("OAuthProfileIdRejected", {}) {
   override get message() {
     return "invalid_oauth_profile_id";
   }
@@ -357,21 +357,21 @@ const providerCode = (body: string): string | undefined =>
     Option.getOrUndefined,
   );
 
-export class OAuthHarnessError extends Schema.TaggedError<OAuthHarnessError>()(
-  "OAuthHarnessError",
-  {
-    code: OAuthHarnessFailure,
-    status: Schema.NullOr(Schema.Int),
-    provider: Schema.NullOr(SubscriptionAccountProvider),
-    operation: Schema.NullOr(OAuthHarnessOperation),
-    /** An allowlisted OAuth error code, never a raw response body. */
-    providerCode: Schema.NullOr(Schema.String),
-    credentialStage: Schema.NullOr(CredentialStoreStage),
-    transportCode: Schema.NullOr(Schema.String),
-    proxyRoute: Schema.NullOr(ProxyRoute),
-    detail: Schema.NullOr(OAuthHarnessDetail),
-  },
-) {
+export class OAuthHarnessError extends Schema.TaggedError<
+  OAuthHarnessError,
+  { readonly brand: unique symbol }
+>()("OAuthHarnessError", {
+  code: OAuthHarnessFailure,
+  status: Schema.NullOr(Schema.Int),
+  provider: Schema.NullOr(SubscriptionAccountProvider),
+  operation: Schema.NullOr(OAuthHarnessOperation),
+  /** An allowlisted OAuth error code, never a raw response body. */
+  providerCode: Schema.NullOr(Schema.String),
+  credentialStage: Schema.NullOr(CredentialStoreStage),
+  transportCode: Schema.NullOr(Schema.String),
+  proxyRoute: Schema.NullOr(ProxyRoute),
+  detail: Schema.NullOr(OAuthHarnessDetail),
+}) {
   static fromCode(
     code: OAuthHarnessFailure,
     status: number | null = null,

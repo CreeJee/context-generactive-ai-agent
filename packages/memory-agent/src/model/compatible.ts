@@ -50,13 +50,13 @@ export const CompatibleRunRequestFailedReason = Schema.TaggedUnion({
   /** fetch failed; `codes` are the Node/undici transport codes along its cause chain. */
   Transport: { codes: Schema.Array(Schema.String) },
 });
-export class CompatibleRunRequestFailed extends Schema.TaggedError<CompatibleRunRequestFailed>()(
-  "CompatibleRunRequestFailed",
-  {
-    reason: CompatibleRunRequestFailedReason,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
+export class CompatibleRunRequestFailed extends Schema.TaggedError<
+  CompatibleRunRequestFailed,
+  { readonly brand: unique symbol }
+>()("CompatibleRunRequestFailed", {
+  reason: CompatibleRunRequestFailedReason,
+  cause: Schema.optional(Schema.Defect()),
+}) {
   override get message() {
     return CompatibleRunRequestFailedReason.match(this.reason, {
       Cancelled: () => "Compatible run cancelled",

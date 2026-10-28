@@ -17,7 +17,10 @@ import { optionalProperty } from "../optional-property.ts";
  * as TanStack did. It declares no elicitation or sampling, which the app does not answer.
  */
 
-export class McpConnectFailed extends Schema.TaggedError<McpConnectFailed>()("McpConnectFailed", {
+export class McpConnectFailed extends Schema.TaggedError<
+  McpConnectFailed,
+  { readonly brand: unique symbol }
+>()("McpConnectFailed", {
   cause: Schema.Defect(),
 }) {
   override get message() {
@@ -26,7 +29,10 @@ export class McpConnectFailed extends Schema.TaggedError<McpConnectFailed>()("Mc
 }
 
 /** A call the server answered with an error, a request for input, or no result. */
-export class McpToolFailed extends Schema.TaggedError<McpToolFailed>()("McpToolFailed", {
+export class McpToolFailed extends Schema.TaggedError<
+  McpToolFailed,
+  { readonly brand: unique symbol }
+>()("McpToolFailed", {
   message: Schema.String,
 }) {}
 

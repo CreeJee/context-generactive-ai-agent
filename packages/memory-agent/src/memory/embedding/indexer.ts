@@ -18,7 +18,10 @@ export const embeddedKinds = ["user", "assistant", "topic"] as const satisfies r
 /** `n.kind` limited to {@link embeddedKinds}, for queries over nodes aliased `n`. */
 export const embeddedKindFilter = `n.kind IN (${embeddedKinds.map((kind) => `'${kind}'`).join(", ")})`;
 
-export class IndexingError extends Schema.TaggedError<IndexingError>()("IndexingError", {
+export class IndexingError extends Schema.TaggedError<
+  IndexingError,
+  { readonly brand: unique symbol }
+>()("IndexingError", {
   reason: Schema.Literals(["read-failed", "revalidation-failed", "mapping-commit-failed"]),
   cause: Schema.optional(Schema.Defect()),
 }) {}

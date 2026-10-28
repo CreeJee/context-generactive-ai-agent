@@ -73,10 +73,13 @@ export const SubscriptionQuotaReport = Schema.Struct({
 });
 export type SubscriptionQuotaReport = typeof SubscriptionQuotaReport.Type;
 
-export class SubscriptionQuotaError extends Schema.TaggedError<SubscriptionQuotaError>()(
-  "SubscriptionQuotaError",
-  { reason: Schema.Literal("profiles_unreadable"), cause: Schema.Defect() },
-) {}
+export class SubscriptionQuotaError extends Schema.TaggedError<
+  SubscriptionQuotaError,
+  { readonly brand: unique symbol }
+>()("SubscriptionQuotaError", {
+  reason: Schema.Literal("profiles_unreadable"),
+  cause: Schema.Defect(),
+}) {}
 
 const subscriptionUsageReaders = {
   openai: openAiSubscriptionUsage,

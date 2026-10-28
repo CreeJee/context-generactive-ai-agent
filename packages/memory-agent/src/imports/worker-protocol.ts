@@ -13,17 +13,17 @@ export const ImportWorkerSetup = Schema.Struct({
 export type ImportWorkerSetup = typeof ImportWorkerSetup.Type;
 
 /** The import worker could not run a pass or a count at all. */
-export class ImportWorkerFailed extends Schema.TaggedError<ImportWorkerFailed>()(
-  "ImportWorkerFailed",
-  {
-    /**
-     * `start`: the worker could not be started. `count` and `pass`: the worker could not count the
-     * transcripts or finish a pass; it stays, and the cause stays in its log. `lost`: the worker or
-     * its channel is gone; the next request starts a new one.
-     */
-    reason: Schema.Literals(["start", "count", "pass", "lost"]),
-  },
-) {}
+export class ImportWorkerFailed extends Schema.TaggedError<
+  ImportWorkerFailed,
+  { readonly brand: unique symbol }
+>()("ImportWorkerFailed", {
+  /**
+   * `start`: the worker could not be started. `count` and `pass`: the worker could not count the
+   * transcripts or finish a pass; it stays, and the cause stays in its log. `lost`: the worker or
+   * its channel is gone; the next request starts a new one.
+   */
+  reason: Schema.Literals(["start", "count", "pass", "lost"]),
+}) {}
 
 const TranscriptCounts = Schema.Array(
   Schema.Struct({ source: ImportSourceName, transcripts: Schema.Finite }),

@@ -7,10 +7,10 @@ const ResultPageReadReason = Schema.TaggedUnion({
   Changed: {},
 });
 
-export class ResultPageReadFailed extends Schema.TaggedError<ResultPageReadFailed>()(
-  "ResultPageReadFailed",
-  { reason: ResultPageReadReason },
-) {}
+export class ResultPageReadFailed extends Schema.TaggedError<
+  ResultPageReadFailed,
+  { readonly brand: unique symbol }
+>()("ResultPageReadFailed", { reason: ResultPageReadReason }) {}
 
 const Metadata = Schema.Struct({ size: Schema.Finite });
 const Block = Schema.Struct({ bytes: Schema.Uint8Array });

@@ -4,18 +4,18 @@ import { singleAnswerParts } from "../model/single-call.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import { type ImprovementItem, ItemInterpretation } from "./contracts.ts";
 
-export class InterpretationUnavailable extends Schema.TaggedError<InterpretationUnavailable>()(
-  "InterpretationUnavailable",
-  {
-    /**
-     * `model_unavailable`: no model is selected, or its provider is not signed in or cannot be
-     * resolved. `model_unreachable`: model calls kept failing or went silent in a row, so the
-     * server is taken to be down rather than the items being at fault.
-     */
-    reason: Schema.Literals(["model_unavailable", "model_unreachable"]),
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {}
+export class InterpretationUnavailable extends Schema.TaggedError<
+  InterpretationUnavailable,
+  { readonly brand: unique symbol }
+>()("InterpretationUnavailable", {
+  /**
+   * `model_unavailable`: no model is selected, or its provider is not signed in or cannot be
+   * resolved. `model_unreachable`: model calls kept failing or went silent in a row, so the
+   * server is taken to be down rather than the items being at fault.
+   */
+  reason: Schema.Literals(["model_unavailable", "model_unreachable"]),
+  cause: Schema.optional(Schema.Defect()),
+}) {}
 
 export const interpretationInstructions = `You review evidence gathered from one developer's use of coding agents in one repository.
 Decide whether it shows a recurring problem worth fixing in that repository, and if so, how to stop it.

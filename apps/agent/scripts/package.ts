@@ -25,15 +25,18 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { Hex } from "effect/encoding";
 import { build } from "vite-plus/pack";
 
-class CommandFailed extends Schema.TaggedError<CommandFailed>()("CommandFailed", {
-  command: Schema.String,
-  args: Schema.String,
-}) {}
-
-class PackagePreflightFailed extends Schema.TaggedError<PackagePreflightFailed>()(
-  "PackagePreflightFailed",
-  { message: Schema.String },
+class CommandFailed extends Schema.TaggedError<CommandFailed, { readonly brand: unique symbol }>()(
+  "CommandFailed",
+  {
+    command: Schema.String,
+    args: Schema.String,
+  },
 ) {}
+
+class PackagePreflightFailed extends Schema.TaggedError<
+  PackagePreflightFailed,
+  { readonly brand: unique symbol }
+>()("PackagePreflightFailed", { message: Schema.String }) {}
 
 const program = Effect.gen(function* () {
   const services = yield* Layer.build(NodeServices.layer);

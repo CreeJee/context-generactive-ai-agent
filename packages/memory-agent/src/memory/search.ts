@@ -82,16 +82,16 @@ export interface FindResult {
   readonly uninterpreted: number;
 }
 
-export class NativeMemorySearchFailed extends Schema.TaggedError<NativeMemorySearchFailed>()(
-  "NativeMemorySearchFailed",
-  {
-    reason: Schema.Literals(["budget-exceeded", "invalid-input", "read-failed", "index-failed"]),
-    /** The stage the native read stopped in, when it got that far. */
-    stage: Schema.optional(ReadStage),
-    /** How long the native read ran before it stopped. */
-    elapsedMs: Schema.optional(Schema.Finite),
-  },
-) {
+export class NativeMemorySearchFailed extends Schema.TaggedError<
+  NativeMemorySearchFailed,
+  { readonly brand: unique symbol }
+>()("NativeMemorySearchFailed", {
+  reason: Schema.Literals(["budget-exceeded", "invalid-input", "read-failed", "index-failed"]),
+  /** The stage the native read stopped in, when it got that far. */
+  stage: Schema.optional(ReadStage),
+  /** How long the native read ran before it stopped. */
+  elapsedMs: Schema.optional(Schema.Finite),
+}) {
   // The model and logs read the reason; without it a failed search looks like an empty one.
   override get message() {
     const where = this.stage === undefined ? "" : ` in the ${this.stage} stage`;

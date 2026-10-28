@@ -55,13 +55,13 @@ export const GoalExecutionErrorReason = Schema.TaggedUnion({
 });
 export type GoalExecutionErrorReason = typeof GoalExecutionErrorReason.Type;
 
-export class GoalExecutionError extends Schema.TaggedError<GoalExecutionError>()(
-  "GoalExecutionError",
-  {
-    executionId: ExecutionId,
-    reason: GoalExecutionErrorReason,
-  },
-) {}
+export class GoalExecutionError extends Schema.TaggedError<
+  GoalExecutionError,
+  { readonly brand: unique symbol }
+>()("GoalExecutionError", {
+  executionId: ExecutionId,
+  reason: GoalExecutionErrorReason,
+}) {}
 
 /** Only a succeeded receipt is replayable. Pending and uncertain operations stop execution. */
 export const GoalExecutionSideEffectState = Schema.TaggedUnion({

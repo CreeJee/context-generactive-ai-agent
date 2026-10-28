@@ -18,20 +18,20 @@ export function useSessionEventScope() {
 }
 
 /** A session view rendered outside a project's event scope: a mistake in the page tree. */
-export class ProjectScopeMissing extends Schema.TaggedError<ProjectScopeMissing>()(
-  "ProjectScopeMissing",
-  {
-    consumer: Schema.Literals([
-      "chat",
-      "delegated_work",
-      "message_queue",
-      "relayed_approval",
-      "run_state",
-      "session_lease",
-      "work_trace",
-    ]),
-  },
-) {}
+export class ProjectScopeMissing extends Schema.TaggedError<
+  ProjectScopeMissing,
+  { readonly brand: unique symbol }
+>()("ProjectScopeMissing", {
+  consumer: Schema.Literals([
+    "chat",
+    "delegated_work",
+    "message_queue",
+    "relayed_approval",
+    "run_state",
+    "session_lease",
+    "work_trace",
+  ]),
+}) {}
 
 /** The active project of a session view. React render cannot return a failure, so none throws. */
 export function useProjectScope(consumer: ProjectScopeMissing["consumer"]) {

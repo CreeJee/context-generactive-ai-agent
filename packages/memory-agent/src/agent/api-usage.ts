@@ -42,7 +42,10 @@ const CountRow = Schema.Struct({
   total_input_tokens: Schema.NullOr(Schema.Finite),
 });
 /** A usage record the ledger refuses: it would make the totals wrong or unattributed. */
-export class ApiUsageRejected extends Schema.TaggedError<ApiUsageRejected>()("ApiUsageRejected", {
+export class ApiUsageRejected extends Schema.TaggedError<
+  ApiUsageRejected,
+  { readonly brand: unique symbol }
+>()("ApiUsageRejected", {
   reason: Schema.Literals([
     "attribution-missing",
     "invalid-count",

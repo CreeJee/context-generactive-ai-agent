@@ -1,10 +1,15 @@
 import { NodeSocketServer } from "@effect/platform-node";
 import { Effect, Schema } from "effect";
 
-export class DevelopmentPortUnavailable extends Schema.TaggedError<DevelopmentPortUnavailable>()(
-  "DevelopmentPortUnavailable",
-  { label: Schema.String, host: Schema.String, port: Schema.Int, cause: Schema.Defect() },
-) {
+export class DevelopmentPortUnavailable extends Schema.TaggedError<
+  DevelopmentPortUnavailable,
+  { readonly brand: unique symbol }
+>()("DevelopmentPortUnavailable", {
+  label: Schema.String,
+  host: Schema.String,
+  port: Schema.Int,
+  cause: Schema.Defect(),
+}) {
   override get message() {
     return `${this.label} port ${this.port} (${this.host}) is unavailable: ${String(this.cause)}. Stop the existing dev server or choose another port.`;
   }

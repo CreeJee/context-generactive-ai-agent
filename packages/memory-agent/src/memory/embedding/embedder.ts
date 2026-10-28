@@ -32,7 +32,10 @@ import {
   EmbeddingWorkerFailed,
 } from "./embedding-rpc.ts";
 
-export class EmbeddingError extends Schema.TaggedError<EmbeddingError>()("EmbeddingError", {
+export class EmbeddingError extends Schema.TaggedError<
+  EmbeddingError,
+  { readonly brand: unique symbol }
+>()("EmbeddingError", {
   cause: Schema.Defect(),
 }) {}
 

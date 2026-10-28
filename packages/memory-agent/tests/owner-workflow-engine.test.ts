@@ -21,7 +21,10 @@ const ContractWorkflow = Workflow.make("OwnerWorkflowEngineContract", {
 class ActivityInput extends Context.Service<ActivityInput, { readonly value: string }>()(
   "memory-agent/tests/owner-workflow-engine.test/ActivityInput",
 ) {}
-class ActivityRefused extends Schema.TaggedError<ActivityRefused>()("ActivityRefused", {
+class ActivityRefused extends Schema.TaggedError<
+  ActivityRefused,
+  { readonly brand: unique symbol }
+>()("ActivityRefused", {
   reason: Schema.Literal("refused"),
   value: Schema.String,
 }) {}

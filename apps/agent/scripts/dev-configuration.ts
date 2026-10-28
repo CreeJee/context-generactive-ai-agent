@@ -2,10 +2,10 @@ import { Effect, Option, Path, Schema } from "effect";
 import { Argument, Flag } from "effect/cli";
 import { parseCommandLine } from "../server/command-line.ts";
 
-export class DevConfigurationError extends Schema.TaggedError<DevConfigurationError>()(
-  "DevConfigurationError",
-  { detail: Schema.String },
-) {
+export class DevConfigurationError extends Schema.TaggedError<
+  DevConfigurationError,
+  { readonly brand: unique symbol }
+>()("DevConfigurationError", { detail: Schema.String }) {
   override get message() {
     return this.detail;
   }

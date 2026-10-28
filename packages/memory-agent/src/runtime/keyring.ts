@@ -16,12 +16,12 @@ import { requireRuntime } from "./resources.ts";
 import { sha256 } from "./synchronous-crypto.ts";
 
 /** The encrypted secret directory could not be used. Never answered by falling back to the OS keychain. */
-export class SecretFileStoreFailed extends Schema.TaggedError<SecretFileStoreFailed>()(
-  "SecretFileStoreFailed",
-  {
-    reason: Schema.Literals(["key_missing", "key_invalid", "read", "write", "delete", "decrypt"]),
-  },
-) {}
+export class SecretFileStoreFailed extends Schema.TaggedError<
+  SecretFileStoreFailed,
+  { readonly brand: unique symbol }
+>()("SecretFileStoreFailed", {
+  reason: Schema.Literals(["key_missing", "key_invalid", "read", "write", "delete", "decrypt"]),
+}) {}
 type FailureReason = SecretFileStoreFailed["reason"];
 
 /** A keychain call failed, or the encrypted secret directory could not be used. */

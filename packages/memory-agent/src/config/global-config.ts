@@ -151,14 +151,14 @@ export const GlobalConfigFailedReason = Schema.TaggedUnion({
   InvalidSettings: {},
 });
 
-export class GlobalConfigFailed extends Schema.TaggedError<GlobalConfigFailed>()(
-  "GlobalConfigFailed",
-  {
-    operation: Schema.Literals(["read", "write"]),
-    reason: GlobalConfigFailedReason,
-    cause: Schema.Defect(),
-  },
-) {}
+export class GlobalConfigFailed extends Schema.TaggedError<
+  GlobalConfigFailed,
+  { readonly brand: unique symbol }
+>()("GlobalConfigFailed", {
+  operation: Schema.Literals(["read", "write"]),
+  reason: GlobalConfigFailedReason,
+  cause: Schema.Defect(),
+}) {}
 
 const make = Effect.gen(function* () {
   const storage = yield* StorageRoot;

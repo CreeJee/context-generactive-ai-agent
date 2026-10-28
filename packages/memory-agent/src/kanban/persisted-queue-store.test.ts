@@ -23,7 +23,10 @@ import {
   persistedQueueStoreLayer,
 } from "./persisted-queue-store.ts";
 
-class CardRunFailed extends Schema.TaggedError<CardRunFailed>()("CardRunFailed", {}) {}
+class CardRunFailed extends Schema.TaggedError<CardRunFailed, { readonly brand: unique symbol }>()(
+  "CardRunFailed",
+  {},
+) {}
 
 const Card = Schema.Struct({ cardId: Schema.String });
 const queueOptions = {

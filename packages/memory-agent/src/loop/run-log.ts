@@ -25,7 +25,10 @@ export interface RunLogEntry {
   readonly event: AgUiEvent;
 }
 
-export class RunLogFailed extends Schema.TaggedError<RunLogFailed>()("RunLogFailed", {
+export class RunLogFailed extends Schema.TaggedError<
+  RunLogFailed,
+  { readonly brand: unique symbol }
+>()("RunLogFailed", {
   reason: Schema.Literals([
     "binding_denied",
     "invalid_offset",

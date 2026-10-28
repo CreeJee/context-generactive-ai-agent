@@ -18,7 +18,10 @@ const { basename, dirname, isAbsolute, join, relative, resolve, sep } = path;
  * - `symlink` / `hard_link`: a link could redirect the operation past these checks
  * - `not_found` / `not_file` / `not_directory`: the filesystem does not match the request
  */
-export class PathRejected extends Schema.TaggedError<PathRejected>()("PathRejected", {
+export class PathRejected extends Schema.TaggedError<
+  PathRejected,
+  { readonly brand: unique symbol }
+>()("PathRejected", {
   path: Schema.String,
   reason: Schema.Literals([
     "invalid_path",

@@ -53,13 +53,13 @@ Reply with the bullet points and nothing else.`;
 
 const summaryTimeoutMs = 120_000;
 
-export class TurnSummaryFailed extends Schema.TaggedError<TurnSummaryFailed>()(
-  "TurnSummaryFailed",
-  {
-    operation: Schema.Literals(["model", "load-messages", "load-state", "persist", "empty-answer"]),
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {}
+export class TurnSummaryFailed extends Schema.TaggedError<
+  TurnSummaryFailed,
+  { readonly brand: unique symbol }
+>()("TurnSummaryFailed", {
+  operation: Schema.Literals(["model", "load-messages", "load-state", "persist", "empty-answer"]),
+  cause: Schema.optional(Schema.Defect()),
+}) {}
 
 const summaryFailed =
   (operation: TurnSummaryFailed["operation"]) =>

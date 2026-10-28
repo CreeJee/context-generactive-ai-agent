@@ -1,12 +1,12 @@
 import { Data, Effect, Exit, Ref, Schema, Scope, Semaphore } from "effect";
 import type { ReadAdmission } from "./client.ts";
 
-export class PublicationFailed extends Schema.TaggedError<PublicationFailed>()(
-  "PublicationFailed",
-  {
-    reason: Schema.Literals(["poisoned", "owner-mismatch"]),
-  },
-) {}
+export class PublicationFailed extends Schema.TaggedError<
+  PublicationFailed,
+  { readonly brand: unique symbol }
+>()("PublicationFailed", {
+  reason: Schema.Literals(["poisoned", "owner-mismatch"]),
+}) {}
 
 export type PublicationState = Data.TaggedEnum<{
   ready: { readonly generation: number };

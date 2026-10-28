@@ -86,21 +86,27 @@ export const ProviderModel = Schema.Struct({
 });
 export type ProviderModel = typeof ProviderModel.Type;
 
-export class ProviderUnavailable extends Schema.TaggedError<ProviderUnavailable>()(
-  "ProviderUnavailable",
-  { provider: ProviderId },
-) {}
+export class ProviderUnavailable extends Schema.TaggedError<
+  ProviderUnavailable,
+  { readonly brand: unique symbol }
+>()("ProviderUnavailable", { provider: ProviderId }) {}
 
-export class ModelUnavailable extends Schema.TaggedError<ModelUnavailable>()("ModelUnavailable", {
+export class ModelUnavailable extends Schema.TaggedError<
+  ModelUnavailable,
+  { readonly brand: unique symbol }
+>()("ModelUnavailable", {
   provider: ProviderId,
   model: Schema.String,
   reasoningEffort: Schema.optionalKey(Schema.String),
 }) {}
 
-export class ProviderOperationFailed extends Schema.TaggedError<ProviderOperationFailed>()(
-  "ProviderOperationFailed",
-  { provider: ProviderId, operation: Schema.Literals(["auth", "catalog", "model"]) },
-) {}
+export class ProviderOperationFailed extends Schema.TaggedError<
+  ProviderOperationFailed,
+  { readonly brand: unique symbol }
+>()("ProviderOperationFailed", {
+  provider: ProviderId,
+  operation: Schema.Literals(["auth", "catalog", "model"]),
+}) {}
 
 type AuthConnectionCases = {
   readonly "signed-out": { readonly provider: ProviderId };

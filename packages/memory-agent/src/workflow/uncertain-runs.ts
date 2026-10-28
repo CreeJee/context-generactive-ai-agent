@@ -51,10 +51,10 @@ const UncertainRunsFailedReason = Schema.TaggedUnion({
   Acknowledge: { cause: Schema.Defect() },
 });
 
-export class UncertainRunsFailed extends Schema.TaggedError<UncertainRunsFailed>()(
-  "UncertainRunsFailed",
-  { reason: UncertainRunsFailedReason },
-) {}
+export class UncertainRunsFailed extends Schema.TaggedError<
+  UncertainRunsFailed,
+  { readonly brand: unique symbol }
+>()("UncertainRunsFailed", { reason: UncertainRunsFailedReason }) {}
 
 const stateOf = (operation: typeof Operation.Type) =>
   Match.value(operation.status).pipe(

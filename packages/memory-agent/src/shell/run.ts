@@ -166,10 +166,10 @@ export interface CommandOptions {
 
 const SpawnFailed = Schema.TaggedStruct("SpawnFailed", {});
 
-export class CommandStartFailed extends Schema.TaggedError<CommandStartFailed>()(
-  "CommandStartFailed",
-  { reason: SpawnFailed, cause: Schema.Defect() },
-) {}
+export class CommandStartFailed extends Schema.TaggedError<
+  CommandStartFailed,
+  { readonly brand: unique symbol }
+>()("CommandStartFailed", { reason: SpawnFailed, cause: Schema.Defect() }) {}
 
 /** How a running command ended: the process exited and its pipes closed, or it was stopped. */
 type CommandOutcome = Data.TaggedEnum<{

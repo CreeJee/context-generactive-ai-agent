@@ -157,7 +157,10 @@ export const edgeOfRow = (row: typeof EdgeRow.Type): Edge => ({
 });
 
 /** The node store could not be read or written; the cause stays with the error. */
-export class NodeStoreFailed extends Schema.TaggedError<NodeStoreFailed>()("NodeStoreFailed", {
+export class NodeStoreFailed extends Schema.TaggedError<
+  NodeStoreFailed,
+  { readonly brand: unique symbol }
+>()("NodeStoreFailed", {
   cause: Schema.Defect(),
 }) {}
 const stored = <A, E>(effect: Effect.Effect<A, E>) =>

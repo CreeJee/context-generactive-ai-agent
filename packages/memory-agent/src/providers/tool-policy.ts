@@ -132,101 +132,101 @@ export interface ProviderToolExecutionDecision {
   readonly workspaceRoot: string | null;
 }
 
-export class ProviderToolUnsupported extends Schema.TaggedError<ProviderToolUnsupported>()(
-  "ProviderToolUnsupported",
-  {
-    toolId: Schema.String,
-    provider: Schema.String,
-    model: Schema.String,
-    reason: Schema.Literals(["unknown_tool", "unknown_model", "model_unsupported"]),
-  },
-) {}
-export class ProviderToolCapabilityDenied extends Schema.TaggedError<ProviderToolCapabilityDenied>()(
-  "ProviderToolCapabilityDenied",
-  {
-    toolId: Schema.String,
-    provider: ProviderVendor,
-    model: Schema.String,
-    reason: Schema.Literals(["account_unsupported"]),
-  },
-) {}
-export class ProviderToolPolicyDenied extends Schema.TaggedError<ProviderToolPolicyDenied>()(
-  "ProviderToolPolicyDenied",
-  {
-    toolId: Schema.String,
-    reason: Schema.Literals([
-      "app_disabled",
-      "user_disabled",
-      "category_denied",
-      "network_denied",
-      "provider_files_denied",
-      "high_risk_disabled",
-      "feature_flag_disabled",
+export class ProviderToolUnsupported extends Schema.TaggedError<
+  ProviderToolUnsupported,
+  { readonly brand: unique symbol }
+>()("ProviderToolUnsupported", {
+  toolId: Schema.String,
+  provider: Schema.String,
+  model: Schema.String,
+  reason: Schema.Literals(["unknown_tool", "unknown_model", "model_unsupported"]),
+}) {}
+export class ProviderToolCapabilityDenied extends Schema.TaggedError<
+  ProviderToolCapabilityDenied,
+  { readonly brand: unique symbol }
+>()("ProviderToolCapabilityDenied", {
+  toolId: Schema.String,
+  provider: ProviderVendor,
+  model: Schema.String,
+  reason: Schema.Literals(["account_unsupported"]),
+}) {}
+export class ProviderToolPolicyDenied extends Schema.TaggedError<
+  ProviderToolPolicyDenied,
+  { readonly brand: unique symbol }
+>()("ProviderToolPolicyDenied", {
+  toolId: Schema.String,
+  reason: Schema.Literals([
+    "app_disabled",
+    "user_disabled",
+    "category_denied",
+    "network_denied",
+    "provider_files_denied",
+    "high_risk_disabled",
+    "feature_flag_disabled",
+  ]),
+}) {}
+export class ProviderToolApprovalRequired extends Schema.TaggedError<
+  ProviderToolApprovalRequired,
+  { readonly brand: unique symbol }
+>()("ProviderToolApprovalRequired", { toolId: Schema.String }) {}
+export class ProviderToolApprovalDenied extends Schema.TaggedError<
+  ProviderToolApprovalDenied,
+  { readonly brand: unique symbol }
+>()("ProviderToolApprovalDenied", { toolId: Schema.String }) {}
+export class ProviderToolApprovalCancelled extends Schema.TaggedError<
+  ProviderToolApprovalCancelled,
+  { readonly brand: unique symbol }
+>()("ProviderToolApprovalCancelled", { toolId: Schema.String }) {}
+export class ProviderToolSandboxViolation extends Schema.TaggedError<
+  ProviderToolSandboxViolation,
+  { readonly brand: unique symbol }
+>()("ProviderToolSandboxViolation", {
+  toolId: Schema.String,
+  reason: Schema.Literals([
+    "trusted_profile_required",
+    /** The sandbox workspace root could not be resolved; `cause` has the path error. */
+    "workspace_root_unavailable",
+    "isolated_compute_required",
+    "isolated_desktop_required",
+    "network_denied",
+    "environment_denied",
+    "local_access_not_applicable",
+  ]),
+  cause: Schema.optional(Schema.Defect()),
+}) {}
+export class ProviderToolPathViolation extends Schema.TaggedError<
+  ProviderToolPathViolation,
+  { readonly brand: unique symbol }
+>()("ProviderToolPathViolation", {
+  toolId: Schema.String,
+  path: Schema.String,
+  reason: Schema.Union([
+    Schema.Literals([
+      "absolute_path",
+      "credential_path",
+      /** The filesystem could not be inspected; `cause` has the platform error. */
+      "inspection_failed",
     ]),
-  },
-) {}
-export class ProviderToolApprovalRequired extends Schema.TaggedError<ProviderToolApprovalRequired>()(
-  "ProviderToolApprovalRequired",
-  { toolId: Schema.String },
-) {}
-export class ProviderToolApprovalDenied extends Schema.TaggedError<ProviderToolApprovalDenied>()(
-  "ProviderToolApprovalDenied",
-  { toolId: Schema.String },
-) {}
-export class ProviderToolApprovalCancelled extends Schema.TaggedError<ProviderToolApprovalCancelled>()(
-  "ProviderToolApprovalCancelled",
-  { toolId: Schema.String },
-) {}
-export class ProviderToolSandboxViolation extends Schema.TaggedError<ProviderToolSandboxViolation>()(
-  "ProviderToolSandboxViolation",
-  {
-    toolId: Schema.String,
-    reason: Schema.Literals([
-      "trusted_profile_required",
-      /** The sandbox workspace root could not be resolved; `cause` has the path error. */
-      "workspace_root_unavailable",
-      "isolated_compute_required",
-      "isolated_desktop_required",
-      "network_denied",
-      "environment_denied",
-      "local_access_not_applicable",
-    ]),
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {}
-export class ProviderToolPathViolation extends Schema.TaggedError<ProviderToolPathViolation>()(
-  "ProviderToolPathViolation",
-  {
-    toolId: Schema.String,
-    path: Schema.String,
-    reason: Schema.Union([
-      Schema.Literals([
-        "absolute_path",
-        "credential_path",
-        /** The filesystem could not be inspected; `cause` has the platform error. */
-        "inspection_failed",
-      ]),
-      PathRejected.fields.reason,
-    ]),
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {}
-export class ProviderToolOptionsViolation extends Schema.TaggedError<ProviderToolOptionsViolation>()(
-  "ProviderToolOptionsViolation",
-  {
-    toolId: Schema.String,
-    reason: Schema.Literals([
-      "unknown_policy_option",
-      "timeout_limit_invalid",
-      "output_limit_invalid",
-      "memory_limit_invalid",
-      "processes_limit_invalid",
-      "path_request_invalid",
-      "tool_identity_mismatch",
-      "invalid_factory_options",
-    ]),
-  },
-) {}
+    PathRejected.fields.reason,
+  ]),
+  cause: Schema.optional(Schema.Defect()),
+}) {}
+export class ProviderToolOptionsViolation extends Schema.TaggedError<
+  ProviderToolOptionsViolation,
+  { readonly brand: unique symbol }
+>()("ProviderToolOptionsViolation", {
+  toolId: Schema.String,
+  reason: Schema.Literals([
+    "unknown_policy_option",
+    "timeout_limit_invalid",
+    "output_limit_invalid",
+    "memory_limit_invalid",
+    "processes_limit_invalid",
+    "path_request_invalid",
+    "tool_identity_mismatch",
+    "invalid_factory_options",
+  ]),
+}) {}
 export type ProviderToolPolicyFailure =
   | ProviderToolUnsupported
   | ProviderToolCapabilityDenied
@@ -780,62 +780,69 @@ export interface ComposedProviderTool<Id extends ProviderToolId = ProviderToolId
   /** The tool for the model. */
   readonly modelTool: Tool.Any;
 }
-export class ProviderToolNotExposed extends Schema.TaggedError<ProviderToolNotExposed>()(
-  "ProviderToolNotExposed",
-  { toolId: Schema.String, provider: ProviderVendor, model: Schema.String },
-) {}
-export class ProviderToolFactoryOptionsFailure extends Schema.TaggedError<ProviderToolFactoryOptionsFailure>()(
-  "ProviderToolFactoryOptionsFailure",
-  { toolId: Schema.String, reason: Schema.Literals(["invalid_request", "provider_mismatch"]) },
-) {}
-export class ProviderToolOperationFailure extends Schema.TaggedError<ProviderToolOperationFailure>()(
-  "ProviderToolOperationFailure",
-  {
-    toolId: ProviderToolId,
-    reason: Schema.Literals([
-      /** A provider-hosted tool was executed without its operation. */
-      "operation_missing",
-      /** The operation rejected; `cause` has its error. */
-      "operation_failed",
-    ]),
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {}
-export class ProviderToolLeaseFailure extends Schema.TaggedError<ProviderToolLeaseFailure>()(
-  "ProviderToolLeaseFailure",
-  {
-    toolId: ProviderToolId,
-    phase: Schema.Literals(["acquire", "release"]),
-    cause: Schema.Defect(),
-  },
-) {}
-export class ProviderToolLifecycleFailure extends Schema.TaggedError<ProviderToolLifecycleFailure>()(
-  "ProviderToolLifecycleFailure",
-  { toolId: ProviderToolId, cause: Schema.Defect() },
-) {}
-export class ProviderToolNormalizationFailure extends Schema.TaggedError<ProviderToolNormalizationFailure>()(
-  "ProviderToolNormalizationFailure",
-  { toolId: ProviderToolId, cause: Schema.Defect() },
-) {}
-export class ProviderToolPolicyPropagationFailure extends Schema.TaggedError<ProviderToolPolicyPropagationFailure>()(
-  "ProviderToolPolicyPropagationFailure",
-  {
-    toolId: Schema.optionalKey(ProviderToolId),
-    cause: Schema.Union([
-      ProviderToolUnsupported,
-      ProviderToolCapabilityDenied,
-      ProviderToolPolicyDenied,
-      ProviderToolApprovalRequired,
-      ProviderToolApprovalDenied,
-      ProviderToolApprovalCancelled,
-      ProviderToolSandboxViolation,
-      ProviderToolPathViolation,
-      ProviderToolOptionsViolation,
-      UnknownModelFeatureCapability,
-      ModelFeatureFlagStoreFailed,
-    ]),
-  },
-) {}
+export class ProviderToolNotExposed extends Schema.TaggedError<
+  ProviderToolNotExposed,
+  { readonly brand: unique symbol }
+>()("ProviderToolNotExposed", {
+  toolId: Schema.String,
+  provider: ProviderVendor,
+  model: Schema.String,
+}) {}
+export class ProviderToolFactoryOptionsFailure extends Schema.TaggedError<
+  ProviderToolFactoryOptionsFailure,
+  { readonly brand: unique symbol }
+>()("ProviderToolFactoryOptionsFailure", {
+  toolId: Schema.String,
+  reason: Schema.Literals(["invalid_request", "provider_mismatch"]),
+}) {}
+export class ProviderToolOperationFailure extends Schema.TaggedError<
+  ProviderToolOperationFailure,
+  { readonly brand: unique symbol }
+>()("ProviderToolOperationFailure", {
+  toolId: ProviderToolId,
+  reason: Schema.Literals([
+    /** A provider-hosted tool was executed without its operation. */
+    "operation_missing",
+    /** The operation rejected; `cause` has its error. */
+    "operation_failed",
+  ]),
+  cause: Schema.optional(Schema.Defect()),
+}) {}
+export class ProviderToolLeaseFailure extends Schema.TaggedError<
+  ProviderToolLeaseFailure,
+  { readonly brand: unique symbol }
+>()("ProviderToolLeaseFailure", {
+  toolId: ProviderToolId,
+  phase: Schema.Literals(["acquire", "release"]),
+  cause: Schema.Defect(),
+}) {}
+export class ProviderToolLifecycleFailure extends Schema.TaggedError<
+  ProviderToolLifecycleFailure,
+  { readonly brand: unique symbol }
+>()("ProviderToolLifecycleFailure", { toolId: ProviderToolId, cause: Schema.Defect() }) {}
+export class ProviderToolNormalizationFailure extends Schema.TaggedError<
+  ProviderToolNormalizationFailure,
+  { readonly brand: unique symbol }
+>()("ProviderToolNormalizationFailure", { toolId: ProviderToolId, cause: Schema.Defect() }) {}
+export class ProviderToolPolicyPropagationFailure extends Schema.TaggedError<
+  ProviderToolPolicyPropagationFailure,
+  { readonly brand: unique symbol }
+>()("ProviderToolPolicyPropagationFailure", {
+  toolId: Schema.optionalKey(ProviderToolId),
+  cause: Schema.Union([
+    ProviderToolUnsupported,
+    ProviderToolCapabilityDenied,
+    ProviderToolPolicyDenied,
+    ProviderToolApprovalRequired,
+    ProviderToolApprovalDenied,
+    ProviderToolApprovalCancelled,
+    ProviderToolSandboxViolation,
+    ProviderToolPathViolation,
+    ProviderToolOptionsViolation,
+    UnknownModelFeatureCapability,
+    ModelFeatureFlagStoreFailed,
+  ]),
+}) {}
 export type ProviderToolLifecycleStatus =
   | "pending"
   | "approval-required"

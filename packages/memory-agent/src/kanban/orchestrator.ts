@@ -90,12 +90,12 @@ export interface KanbanAttention {
   readonly reasons: readonly KanbanAttentionReason[];
 }
 
-export class KanbanStartRefused extends Schema.TaggedError<KanbanStartRefused>()(
-  "KanbanStartRefused",
-  {
-    reason: Schema.Literals(["goal_missing", "plan_not_executing", "worktree_unavailable"]),
-  },
-) {}
+export class KanbanStartRefused extends Schema.TaggedError<
+  KanbanStartRefused,
+  { readonly brand: unique symbol }
+>()("KanbanStartRefused", {
+  reason: Schema.Literals(["goal_missing", "plan_not_executing", "worktree_unavailable"]),
+}) {}
 
 /** How a repeated failure of a card is answered, by its place on the ladder. */
 export type FailureStep = Data.TaggedEnum<{

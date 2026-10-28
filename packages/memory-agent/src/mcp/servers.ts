@@ -102,7 +102,10 @@ export interface McpOverview {
 export const mcpToolPrefix = "mcp_";
 
 /** A server did not finish a step in time; its message is the server state settings show. */
-export class McpStepTimedOut extends Schema.TaggedError<McpStepTimedOut>()("McpStepTimedOut", {
+export class McpStepTimedOut extends Schema.TaggedError<
+  McpStepTimedOut,
+  { readonly brand: unique symbol }
+>()("McpStepTimedOut", {
   step: Schema.Literals(["connect", "tools/list"]),
 }) {
   override get message() {

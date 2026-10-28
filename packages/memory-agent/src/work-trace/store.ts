@@ -49,34 +49,34 @@ type TraceChange =
   | { readonly kind: "event"; readonly sessionId: string; readonly cursor: number }
   | { readonly kind: "progress"; readonly sessionId: string };
 
-export class WorkTraceReadFailed extends Schema.TaggedError<WorkTraceReadFailed>()(
-  "WorkTraceReadFailed",
-  {
-    operation: Schema.Literals(["latest_cursor", "snapshot"]),
-    reason: ReadFailed,
-    cause: Schema.Defect(),
-  },
-) {}
+export class WorkTraceReadFailed extends Schema.TaggedError<
+  WorkTraceReadFailed,
+  { readonly brand: unique symbol }
+>()("WorkTraceReadFailed", {
+  operation: Schema.Literals(["latest_cursor", "snapshot"]),
+  reason: ReadFailed,
+  cause: Schema.Defect(),
+}) {}
 
 /** A Work Trace write the store refused; `message` is safe to show the model. */
-export class WorkTraceRejected extends Schema.TaggedError<WorkTraceRejected>()(
-  "WorkTraceRejected",
-  {
-    reason: Schema.Literals([
-      "handle_mismatch",
-      "unsafe_file_path",
-      "missing_file_digest",
-      "artifact_kind_mismatch",
-      "origin_missing",
-      "invalid_transition",
-      "foreign_session",
-      "foreign_report",
-      "undelivered_notification",
-      "attempt_not_found",
-    ]),
-    message: Schema.String,
-  },
-) {}
+export class WorkTraceRejected extends Schema.TaggedError<
+  WorkTraceRejected,
+  { readonly brand: unique symbol }
+>()("WorkTraceRejected", {
+  reason: Schema.Literals([
+    "handle_mismatch",
+    "unsafe_file_path",
+    "missing_file_digest",
+    "artifact_kind_mismatch",
+    "origin_missing",
+    "invalid_transition",
+    "foreign_session",
+    "foreign_report",
+    "undelivered_notification",
+    "attempt_not_found",
+  ]),
+  message: Schema.String,
+}) {}
 const rejected = (reason: WorkTraceRejected["reason"], message: string) =>
   WorkTraceRejected.make({ reason, message });
 

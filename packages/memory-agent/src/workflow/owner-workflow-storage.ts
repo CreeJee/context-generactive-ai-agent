@@ -1,14 +1,14 @@
 import { type Cause, Context, Data, Effect, Exit, Layer, Match, Option, Schema } from "effect";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
 
-export class OwnerWorkflowStorageError extends Schema.TaggedError<OwnerWorkflowStorageError>()(
-  "OwnerWorkflowStorageError",
-  {
-    operation: Schema.String,
-    reason: Schema.Literals(["database", "invalid_state", "execution_conflict", "codec"]),
-    cause: Schema.Defect(),
-  },
-) {}
+export class OwnerWorkflowStorageError extends Schema.TaggedError<
+  OwnerWorkflowStorageError,
+  { readonly brand: unique symbol }
+>()("OwnerWorkflowStorageError", {
+  operation: Schema.String,
+  reason: Schema.Literals(["database", "invalid_state", "execution_conflict", "codec"]),
+  cause: Schema.Defect(),
+}) {}
 
 export const StoredWorkflowResult = Schema.TaggedUnion({
   Suspended: {},

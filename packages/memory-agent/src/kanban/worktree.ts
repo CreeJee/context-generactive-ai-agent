@@ -140,46 +140,46 @@ export const cardWorktreeFailedReasonName = CardWorktreeFailedReason.match({
   GitFailed: () => "GitFailed" as const,
 });
 
-export class CardWorktreeFailed extends Schema.TaggedError<CardWorktreeFailed>()(
-  "CardWorktreeFailed",
-  {
-    operation: Schema.Literals([
-      "goal_branch",
-      "lease",
-      "settle",
-      "commit",
-      "sync",
-      "squash",
-      "goal_merge",
-      "checkout",
-      "push",
-    ]),
-    reason: CardWorktreeFailedReason,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {}
+export class CardWorktreeFailed extends Schema.TaggedError<
+  CardWorktreeFailed,
+  { readonly brand: unique symbol }
+>()("CardWorktreeFailed", {
+  operation: Schema.Literals([
+    "goal_branch",
+    "lease",
+    "settle",
+    "commit",
+    "sync",
+    "squash",
+    "goal_merge",
+    "checkout",
+    "push",
+  ]),
+  reason: CardWorktreeFailedReason,
+  cause: Schema.optional(Schema.Defect()),
+}) {}
 
 /** Merging the Goal branch into the card stopped on conflicts; nothing was resolved automatically. */
-export class CardIntegrationConflict extends Schema.TaggedError<CardIntegrationConflict>()(
-  "CardIntegrationConflict",
-  {
-    goalInstanceId: Schema.String,
-    cardId: Schema.String,
-    files: Schema.Array(Schema.String),
-  },
-) {}
+export class CardIntegrationConflict extends Schema.TaggedError<
+  CardIntegrationConflict,
+  { readonly brand: unique symbol }
+>()("CardIntegrationConflict", {
+  goalInstanceId: Schema.String,
+  cardId: Schema.String,
+  files: Schema.Array(Schema.String),
+}) {}
 
 /** Taking the user's branch into the Goal branch stopped on conflicts; nothing was written. */
-export class GoalMergeConflict extends Schema.TaggedError<GoalMergeConflict>()(
-  "GoalMergeConflict",
-  {
-    goalInstanceId: Schema.String,
-    targetBranch: Schema.String,
-    goalHead: Schema.String,
-    targetHead: Schema.String,
-    files: Schema.Array(Schema.String),
-  },
-) {}
+export class GoalMergeConflict extends Schema.TaggedError<
+  GoalMergeConflict,
+  { readonly brand: unique symbol }
+>()("GoalMergeConflict", {
+  goalInstanceId: Schema.String,
+  targetBranch: Schema.String,
+  goalHead: Schema.String,
+  targetHead: Schema.String,
+  files: Schema.Array(Schema.String),
+}) {}
 
 /** What a card's run, verification and integration do with its worktree. */
 export interface CardWorkspace {

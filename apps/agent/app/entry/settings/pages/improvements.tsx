@@ -13,10 +13,10 @@ import { appFetch } from "../../shared/backend-restart";
 import { koreanLocalTime } from "../../shared/local-time";
 import { PageError, PageHeader, shortPath } from "../shared";
 
-class ImprovementRequestFailed extends Schema.TaggedError<ImprovementRequestFailed>()(
-  "ImprovementRequestFailed",
-  { message: Schema.String },
-) {}
+class ImprovementRequestFailed extends Schema.TaggedError<
+  ImprovementRequestFailed,
+  { readonly brand: unique symbol }
+>()("ImprovementRequestFailed", { message: Schema.String }) {}
 
 const queryKey = ["settings", "improvements"];
 

@@ -58,20 +58,18 @@ function toProject(decoded: typeof ProjectRow.Type): Project {
   };
 }
 
-export class ProjectRootRejected extends Schema.TaggedError<ProjectRootRejected>()(
-  "ProjectRootRejected",
-  {
-    root: Schema.String,
-    reason: Schema.Literals([
-      "not_found",
-      "not_directory",
-      "overlaps_storage",
-      "already_registered",
-    ]),
-  },
-) {}
+export class ProjectRootRejected extends Schema.TaggedError<
+  ProjectRootRejected,
+  { readonly brand: unique symbol }
+>()("ProjectRootRejected", {
+  root: Schema.String,
+  reason: Schema.Literals(["not_found", "not_directory", "overlaps_storage", "already_registered"]),
+}) {}
 
-export class ProjectNotFound extends Schema.TaggedError<ProjectNotFound>()("ProjectNotFound", {
+export class ProjectNotFound extends Schema.TaggedError<
+  ProjectNotFound,
+  { readonly brand: unique symbol }
+>()("ProjectNotFound", {
   id: Schema.String,
 }) {}
 
@@ -82,10 +80,10 @@ export const ProjectHostReason = Schema.TaggedUnion({
 });
 const hostFailure = ProjectHostReason.cases;
 
-export class ProjectHostFailed extends Schema.TaggedError<ProjectHostFailed>()(
-  "ProjectHostFailed",
-  { root: Schema.String, reason: ProjectHostReason },
-) {}
+export class ProjectHostFailed extends Schema.TaggedError<
+  ProjectHostFailed,
+  { readonly brand: unique symbol }
+>()("ProjectHostFailed", { root: Schema.String, reason: ProjectHostReason }) {}
 
 const make = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;

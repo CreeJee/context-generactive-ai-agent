@@ -29,7 +29,10 @@ export interface MigrationCount {
 }
 
 /** A migrated conversation could not be written; nothing of that piece was kept. */
-export class BulkWriteFailed extends Schema.TaggedError<BulkWriteFailed>()("BulkWriteFailed", {
+export class BulkWriteFailed extends Schema.TaggedError<
+  BulkWriteFailed,
+  { readonly brand: unique symbol }
+>()("BulkWriteFailed", {
   cause: Schema.Defect(),
 }) {}
 

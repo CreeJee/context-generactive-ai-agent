@@ -2,10 +2,10 @@ import { Array as Arr, Effect, Option, Schema, Stream } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { compactLegacyOwnerRpcFingerprint } from "./owner-rpc-fingerprint.ts";
 
-export class OwnerRpcFingerprintMigrationError extends Schema.TaggedError<OwnerRpcFingerprintMigrationError>()(
-  "OwnerRpcFingerprintMigrationError",
-  { cause: Schema.Defect() },
-) {}
+export class OwnerRpcFingerprintMigrationError extends Schema.TaggedError<
+  OwnerRpcFingerprintMigrationError,
+  { readonly brand: unique symbol }
+>()("OwnerRpcFingerprintMigrationError", { cause: Schema.Defect() }) {}
 
 const Row = Schema.Struct({
   rowid: Schema.Finite,

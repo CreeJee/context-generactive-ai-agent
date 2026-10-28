@@ -71,13 +71,13 @@ export const SubscriptionStreamFailedReason = Schema.TaggedUnion({
   EncryptedReasoningLimit: {},
 });
 
-export class SubscriptionStreamFailed extends Schema.TaggedError<SubscriptionStreamFailed>()(
-  "SubscriptionStreamFailed",
-  {
-    provider: Schema.Literals(["openai", "anthropic"]),
-    reason: SubscriptionStreamFailedReason,
-  },
-) {
+export class SubscriptionStreamFailed extends Schema.TaggedError<
+  SubscriptionStreamFailed,
+  { readonly brand: unique symbol }
+>()("SubscriptionStreamFailed", {
+  provider: Schema.Literals(["openai", "anthropic"]),
+  reason: SubscriptionStreamFailedReason,
+}) {
   override get message() {
     return "Subscription provider stream failed.";
   }

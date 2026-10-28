@@ -24,18 +24,18 @@ import { runtimeWorker, runtimeWorkerOptions } from "../../runtime/resources.ts"
 import { ignoreLogged } from "../../runtime/logged-failures.ts";
 import { KiwiRpcs, type KiwiWorkerData, KiwiWorkerFailed } from "./kiwi-rpc.ts";
 
-export class MorphAnalysisFailed extends Schema.TaggedError<MorphAnalysisFailed>()(
-  "MorphAnalysisFailed",
-  {
-    /**
-     * `not_ready`: the analyzer was not loaded yet and the caller did not wait. `disabled`: there is
-     * no analyzer. `model_install_failed`: the model could not be downloaded or extracted.
-     * `worker_failed`: the worker failed to load or answer; `cause` says which.
-     */
-    reason: Schema.Literals(["not_ready", "disabled", "model_install_failed", "worker_failed"]),
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {}
+export class MorphAnalysisFailed extends Schema.TaggedError<
+  MorphAnalysisFailed,
+  { readonly brand: unique symbol }
+>()("MorphAnalysisFailed", {
+  /**
+   * `not_ready`: the analyzer was not loaded yet and the caller did not wait. `disabled`: there is
+   * no analyzer. `model_install_failed`: the model could not be downloaded or extracted.
+   * `worker_failed`: the worker failed to load or answer; `cause` says which.
+   */
+  reason: Schema.Literals(["not_ready", "disabled", "model_install_failed", "worker_failed"]),
+  cause: Schema.optional(Schema.Defect()),
+}) {}
 
 export interface MorphAnalyzerApi {
   /** Changes whenever terms from this analyzer are not comparable with earlier ones. */

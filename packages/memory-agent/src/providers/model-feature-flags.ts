@@ -33,22 +33,22 @@ export interface ModelFeatureFlagDecision {
   readonly settingsVersion: 1 | null;
 }
 const UnknownCapability = Schema.TaggedStruct("UnknownCapability", {});
-export class UnknownModelFeatureCapability extends Schema.TaggedError<UnknownModelFeatureCapability>()(
-  "UnknownModelFeatureCapability",
-  {
-    capability: Schema.String,
-    reason: UnknownCapability,
-  },
-) {}
+export class UnknownModelFeatureCapability extends Schema.TaggedError<
+  UnknownModelFeatureCapability,
+  { readonly brand: unique symbol }
+>()("UnknownModelFeatureCapability", {
+  capability: Schema.String,
+  reason: UnknownCapability,
+}) {}
 const SettingsFailed = Schema.TaggedStruct("SettingsFailed", {});
-export class ModelFeatureFlagStoreFailed extends Schema.TaggedError<ModelFeatureFlagStoreFailed>()(
-  "ModelFeatureFlagStoreFailed",
-  {
-    operation: Schema.Literals(["read", "write"]),
-    reason: SettingsFailed,
-    cause: GlobalConfigFailed,
-  },
-) {}
+export class ModelFeatureFlagStoreFailed extends Schema.TaggedError<
+  ModelFeatureFlagStoreFailed,
+  { readonly brand: unique symbol }
+>()("ModelFeatureFlagStoreFailed", {
+  operation: Schema.Literals(["read", "write"]),
+  reason: SettingsFailed,
+  cause: GlobalConfigFailed,
+}) {}
 
 const emptySettings = (): ModelFeatureFlagSettings => ({
   version: 1,

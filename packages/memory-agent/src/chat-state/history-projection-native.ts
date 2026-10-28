@@ -9,12 +9,12 @@ import {
 } from "./history-groups.ts";
 import { historyProjectionSchema, historyProjectionSql as sql } from "./history-projection-sql.ts";
 
-export class HistoryPageUnavailable extends Schema.TaggedError<HistoryPageUnavailable>()(
-  "HistoryPageUnavailable",
-  {
-    reason: Schema.Literals(["not-ready", "id-collision", "invalid-transcript"]),
-  },
-) {}
+export class HistoryPageUnavailable extends Schema.TaggedError<
+  HistoryPageUnavailable,
+  { readonly brand: unique symbol }
+>()("HistoryPageUnavailable", {
+  reason: Schema.Literals(["not-ready", "id-collision", "invalid-transcript"]),
+}) {}
 const unavailable = (reason: HistoryPageUnavailable["reason"]) =>
   Effect.fail(HistoryPageUnavailable.make({ reason }));
 const Messages = Schema.fromJsonString(Schema.Array(StoredMessage));

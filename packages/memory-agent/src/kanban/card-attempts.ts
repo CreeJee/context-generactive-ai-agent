@@ -94,22 +94,22 @@ export const KanbanStorageReason = Schema.TaggedUnion({
 });
 export type KanbanStorageReason = typeof KanbanStorageReason.Type;
 
-export class KanbanStorageFailed extends Schema.TaggedError<KanbanStorageFailed>()(
-  "KanbanStorageFailed",
-  {
-    operation: Schema.Literals([
-      "goal",
-      "attempt",
-      "run",
-      "card",
-      "dead_letters",
-      "change_request",
-      "decision",
-    ]),
-    reason: KanbanStorageReason,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {}
+export class KanbanStorageFailed extends Schema.TaggedError<
+  KanbanStorageFailed,
+  { readonly brand: unique symbol }
+>()("KanbanStorageFailed", {
+  operation: Schema.Literals([
+    "goal",
+    "attempt",
+    "run",
+    "card",
+    "dead_letters",
+    "change_request",
+    "decision",
+  ]),
+  reason: KanbanStorageReason,
+  cause: Schema.optional(Schema.Defect()),
+}) {}
 
 const GoalRow = Schema.Struct({
   goal_instance_id: Schema.String,

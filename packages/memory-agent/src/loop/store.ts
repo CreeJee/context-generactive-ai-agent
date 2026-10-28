@@ -59,13 +59,13 @@ export interface PendingInterrupt {
 }
 
 /** An interrupt batch commit the stored interrupts refuse; nothing of the batch is written. */
-export class InterruptCommitRejected extends Schema.TaggedError<InterruptCommitRejected>()(
-  "InterruptCommitRejected",
-  {
-    reason: Schema.Literals(["duplicate-interrupt", "missing-interrupt", "interrupt-not-pending"]),
-    interruptId: Schema.String,
-  },
-) {}
+export class InterruptCommitRejected extends Schema.TaggedError<
+  InterruptCommitRejected,
+  { readonly brand: unique symbol }
+>()("InterruptCommitRejected", {
+  reason: Schema.Literals(["duplicate-interrupt", "missing-interrupt", "interrupt-not-pending"]),
+  interruptId: Schema.String,
+}) {}
 
 /** A run's record: its thread, how it stands, and why it failed. */
 export interface StoredRun {

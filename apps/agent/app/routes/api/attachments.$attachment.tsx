@@ -5,10 +5,10 @@ import { agent } from "~/.server/agent";
 import type { Route } from "./+types/attachments.$attachment";
 
 /** A stored image's file could not be read; the file system's text stays on the server. */
-class AttachmentUnreadable extends Schema.TaggedError<AttachmentUnreadable>()(
-  "AttachmentUnreadable",
-  {},
-) {}
+class AttachmentUnreadable extends Schema.TaggedError<
+  AttachmentUnreadable,
+  { readonly brand: unique symbol }
+>()("AttachmentUnreadable", {}) {}
 
 /**
  * GET /api/attachments/:attachment — a stored image. Other sites cannot embed it: images are

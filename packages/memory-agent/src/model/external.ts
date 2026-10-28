@@ -29,10 +29,13 @@ import { shownReason } from "./shown-failure.ts";
  * A turn that ended without an answer. The page words `code` and shows `detail`, the agent's own
  * text with secrets already hidden, only under the error's details.
  */
-export class ExternalAgentTurnFailed extends Schema.TaggedError<ExternalAgentTurnFailed>()(
-  "ExternalAgentTurnFailed",
-  { code: ExternalAgentFailureCode, detail: Schema.NullOr(Schema.String) },
-) {
+export class ExternalAgentTurnFailed extends Schema.TaggedError<
+  ExternalAgentTurnFailed,
+  { readonly brand: unique symbol }
+>()("ExternalAgentTurnFailed", {
+  code: ExternalAgentFailureCode,
+  detail: Schema.NullOr(Schema.String),
+}) {
   override get message() {
     return this.detail ?? this.code;
   }

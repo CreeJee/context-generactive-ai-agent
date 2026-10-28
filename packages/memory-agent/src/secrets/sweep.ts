@@ -172,7 +172,10 @@ export interface SweepProgress {
 }
 
 /** The sweep could not read or record its progress; it resumes from the last record next time. */
-export class SweepStoreFailed extends Schema.TaggedError<SweepStoreFailed>()("SweepStoreFailed", {
+export class SweepStoreFailed extends Schema.TaggedError<
+  SweepStoreFailed,
+  { readonly brand: unique symbol }
+>()("SweepStoreFailed", {
   cause: Schema.Defect(),
 }) {}
 const stored = <A, E>(effect: Effect.Effect<A, E>) =>

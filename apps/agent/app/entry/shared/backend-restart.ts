@@ -54,10 +54,10 @@ const observeBackendRestart = (response: Response) =>
     ),
     Effect.as(response),
   );
-class BackendTransportFailed extends Schema.TaggedError<BackendTransportFailed>()(
-  "BackendTransportFailed",
-  { cause: Schema.Defect() },
-) {}
+class BackendTransportFailed extends Schema.TaggedError<
+  BackendTransportFailed,
+  { readonly brand: unique symbol }
+>()("BackendTransportFailed", { cause: Schema.Defect() }) {}
 
 /** Pin requests to the backend used to build this client; never retry a rejected mutation. */
 export const backendFetch: {

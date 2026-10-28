@@ -442,12 +442,15 @@ const CrossProviderMediaRunApproval = Schema.Struct({
   executorMediaRouteId: Schema.String,
   capability: Schema.Literal("media.image.generate"),
 });
-export class ApiError extends Schema.TaggedError<ApiError>()("ApiError", {
-  status: Schema.Int,
-  code: ApiErrorCode,
-  reason: Schema.NullOr(Schema.String),
-  approval: Schema.optional(CrossProviderMediaRunApproval),
-}) {
+export class ApiError extends Schema.TaggedError<ApiError, { readonly brand: unique symbol }>()(
+  "ApiError",
+  {
+    status: Schema.Int,
+    code: ApiErrorCode,
+    reason: Schema.NullOr(Schema.String),
+    approval: Schema.optional(CrossProviderMediaRunApproval),
+  },
+) {
   override get message() {
     return this.code;
   }

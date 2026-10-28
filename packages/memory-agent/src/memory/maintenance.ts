@@ -7,10 +7,10 @@ import { VectorIndex } from "./embedding/vector-index.ts";
 import { meaningfulNodeFilter, memoryGraphRepairVersion, nonBlankTextSql } from "./quality.ts";
 import { createSupersededReads } from "./superseded-reads.ts";
 
-export class MemoryGraphRepairFailed extends Schema.TaggedError<MemoryGraphRepairFailed>()(
-  "MemoryGraphRepairFailed",
-  { cause: Schema.Defect() },
-) {}
+export class MemoryGraphRepairFailed extends Schema.TaggedError<
+  MemoryGraphRepairFailed,
+  { readonly brand: unique symbol }
+>()("MemoryGraphRepairFailed", { cause: Schema.Defect() }) {}
 
 const batchSize = 64;
 const Progress = Schema.Struct({

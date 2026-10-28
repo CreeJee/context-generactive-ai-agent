@@ -89,18 +89,18 @@ export interface GoalSchedule {
   readonly verifiedHead: string | null;
 }
 
-export class GoalScheduleRefused extends Schema.TaggedError<GoalScheduleRefused>()(
-  "GoalScheduleRefused",
-  {
-    reason: Schema.Literals([
-      "goal_missing",
-      "self_dependency",
-      "other_project",
-      "dependency_cycle",
-      "invalid_branch",
-    ]),
-  },
-) {}
+export class GoalScheduleRefused extends Schema.TaggedError<
+  GoalScheduleRefused,
+  { readonly brand: unique symbol }
+>()("GoalScheduleRefused", {
+  reason: Schema.Literals([
+    "goal_missing",
+    "self_dependency",
+    "other_project",
+    "dependency_cycle",
+    "invalid_branch",
+  ]),
+}) {}
 
 export const GoalScheduleStorageReason = Schema.TaggedUnion({
   /** The database or a stored row failed; `cause` has the SQL or decode error. */
@@ -110,13 +110,13 @@ export const GoalScheduleStorageReason = Schema.TaggedUnion({
 });
 export type GoalScheduleStorageReason = typeof GoalScheduleStorageReason.Type;
 
-export class GoalScheduleStorageFailed extends Schema.TaggedError<GoalScheduleStorageFailed>()(
-  "GoalScheduleStorageFailed",
-  {
-    reason: GoalScheduleStorageReason,
-    cause: Schema.Defect(),
-  },
-) {}
+export class GoalScheduleStorageFailed extends Schema.TaggedError<
+  GoalScheduleStorageFailed,
+  { readonly brand: unique symbol }
+>()("GoalScheduleStorageFailed", {
+  reason: GoalScheduleStorageReason,
+  cause: Schema.Defect(),
+}) {}
 
 const ScheduleRow = Schema.Struct({
   goal_instance_id: Schema.String,

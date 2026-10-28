@@ -92,7 +92,10 @@ export type BoardEditResult = Data.TaggedEnum<{
 }>;
 export const BoardEditResult = Data.taggedEnum<BoardEditResult>();
 
-export class BoardEditRefused extends Schema.TaggedError<BoardEditRefused>()("BoardEditRefused", {
+export class BoardEditRefused extends Schema.TaggedError<
+  BoardEditRefused,
+  { readonly brand: unique symbol }
+>()("BoardEditRefused", {
   reason: Schema.Literals([
     "plan_missing",
     "plan_closed",

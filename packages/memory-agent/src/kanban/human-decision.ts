@@ -209,20 +209,20 @@ export type DecisionCloseScope = Data.TaggedEnum<{
 }>;
 export const DecisionCloseScope = Data.taggedEnum<DecisionCloseScope>();
 
-export class HumanDecisionRefused extends Schema.TaggedError<HumanDecisionRefused>()(
-  "HumanDecisionRefused",
-  {
-    reason: Schema.Literals([
-      "card_missing",
-      "goal_superseded",
-      "request_missing",
-      "request_mismatch",
-      "request_closed",
-      "answer_invalid",
-      "answer_conflict",
-    ]),
-  },
-) {}
+export class HumanDecisionRefused extends Schema.TaggedError<
+  HumanDecisionRefused,
+  { readonly brand: unique symbol }
+>()("HumanDecisionRefused", {
+  reason: Schema.Literals([
+    "card_missing",
+    "goal_superseded",
+    "request_missing",
+    "request_mismatch",
+    "request_closed",
+    "answer_invalid",
+    "answer_conflict",
+  ]),
+}) {}
 
 const HumanDecisionPayload = Schema.Struct({
   sessionId: Schema.String,

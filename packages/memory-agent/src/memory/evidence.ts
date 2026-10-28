@@ -16,10 +16,10 @@ type ReadStage = typeof ReadStage.Type;
 
 const StorageRead = Schema.TaggedStruct("StorageRead", { stage: ReadStage });
 
-export class EvidenceReadFailed extends Schema.TaggedError<EvidenceReadFailed>()(
-  "EvidenceReadFailed",
-  { reason: StorageRead },
-) {}
+export class EvidenceReadFailed extends Schema.TaggedError<
+  EvidenceReadFailed,
+  { readonly brand: unique symbol }
+>()("EvidenceReadFailed", { reason: StorageRead }) {}
 
 /** Recorded changes describe evidence, not independently verified present-day truth. */
 type EvidenceAssessment =

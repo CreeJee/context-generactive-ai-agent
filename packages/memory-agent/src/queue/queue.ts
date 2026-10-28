@@ -58,13 +58,13 @@ function toMessage(row: typeof Row.Type): QueuedMessage {
 }
 
 /** The message is gone, already delivered, or not in a state that allows the change. */
-export class QueueChangeRefused extends Schema.TaggedError<QueueChangeRefused>()(
-  "QueueChangeRefused",
-  {
-    id: Schema.String,
-    reason: Schema.Literals(["not_found", "delivered", "not_held", "reserved"]),
-  },
-) {}
+export class QueueChangeRefused extends Schema.TaggedError<
+  QueueChangeRefused,
+  { readonly brand: unique symbol }
+>()("QueueChangeRefused", {
+  id: Schema.String,
+  reason: Schema.Literals(["not_found", "delivered", "not_held", "reserved"]),
+}) {}
 
 const SessionMessage = Schema.Struct({ sessionId: Schema.String, id: Schema.String });
 

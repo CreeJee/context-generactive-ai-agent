@@ -23,7 +23,10 @@ export interface KagiStatus {
   readonly enabled: boolean;
 }
 
-export class KagiKeyMissing extends Schema.TaggedError<KagiKeyMissing>()("KagiKeyMissing", {}) {}
+export class KagiKeyMissing extends Schema.TaggedError<
+  KagiKeyMissing,
+  { readonly brand: unique symbol }
+>()("KagiKeyMissing", {}) {}
 
 /**
  * Why a Kagi request did not produce a result. No request is retried: the model gets the reason
@@ -52,10 +55,13 @@ const failureMessages: Record<KagiFailureReason, string> = {
   invalid_response: "Kagi answered with a body that does not match its API schema.",
 };
 
-export class KagiFailed extends Schema.TaggedError<KagiFailed>()("KagiFailed", {
-  reason: KagiFailureReason,
-  status: Schema.NullOr(Schema.Int),
-}) {
+export class KagiFailed extends Schema.TaggedError<KagiFailed, { readonly brand: unique symbol }>()(
+  "KagiFailed",
+  {
+    reason: KagiFailureReason,
+    status: Schema.NullOr(Schema.Int),
+  },
+) {
   override get message() {
     return `kagi_${this.reason}: ${failureMessages[this.reason]}`;
   }

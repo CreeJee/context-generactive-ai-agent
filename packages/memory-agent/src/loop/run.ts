@@ -60,10 +60,13 @@ type ToolMessage = Extract<StoredMessage, { readonly role: "tool" }> & { readonl
 type Source = typeof MessageSource.Type;
 
 /** A run that cannot go on; `message` is what the user sees and the run row keeps. */
-export class RunFailed extends Schema.TaggedError<RunFailed>()("RunFailed", {
-  message: Schema.String,
-  code: Schema.optionalKey(Schema.String),
-}) {}
+export class RunFailed extends Schema.TaggedError<RunFailed, { readonly brand: unique symbol }>()(
+  "RunFailed",
+  {
+    message: Schema.String,
+    code: Schema.optionalKey(Schema.String),
+  },
+) {}
 
 /** The run a hook works for. */
 export interface RunScope {

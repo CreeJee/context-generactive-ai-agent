@@ -22,24 +22,38 @@ export const BtwThread = Schema.Struct({
 });
 export type BtwThread = typeof BtwThread.Type;
 
-export class BtwThreadNotFound extends Schema.TaggedError<BtwThreadNotFound>()(
-  "BtwThreadNotFound",
-  { threadId: Schema.String },
-) {}
+export class BtwThreadNotFound extends Schema.TaggedError<
+  BtwThreadNotFound,
+  { readonly brand: unique symbol }
+>()("BtwThreadNotFound", { threadId: Schema.String }) {}
 
-export class BtwParentNotFound extends Schema.TaggedError<BtwParentNotFound>()(
-  "BtwParentNotFound",
-  { sessionId: Schema.String },
-) {}
+export class BtwParentNotFound extends Schema.TaggedError<
+  BtwParentNotFound,
+  { readonly brand: unique symbol }
+>()("BtwParentNotFound", { sessionId: Schema.String }) {}
 
-export class BtwRunInProgress extends Schema.TaggedError<BtwRunInProgress>()("BtwRunInProgress", {
+export class BtwRunInProgress extends Schema.TaggedError<
+  BtwRunInProgress,
+  { readonly brand: unique symbol }
+>()("BtwRunInProgress", {
   threadId: Schema.String,
 }) {}
 
-export class BtwStorageFailed extends Schema.TaggedError<BtwStorageFailed>()("BtwStorageFailed", {
+export class BtwStorageFailed extends Schema.TaggedError<
+  BtwStorageFailed,
+  { readonly brand: unique symbol }
+>()("BtwStorageFailed", {
   operation: Schema.Literals(["purge_attachments", "create_thread", "read_transcript"]),
 }) {}
 
-export class BtwError extends Schema.TaggedError<BtwError>()("BtwError", {
-  reason: Schema.Union([BtwThreadNotFound, BtwParentNotFound, BtwRunInProgress, BtwStorageFailed]),
-}) {}
+export class BtwError extends Schema.TaggedError<BtwError, { readonly brand: unique symbol }>()(
+  "BtwError",
+  {
+    reason: Schema.Union([
+      BtwThreadNotFound,
+      BtwParentNotFound,
+      BtwRunInProgress,
+      BtwStorageFailed,
+    ]),
+  },
+) {}

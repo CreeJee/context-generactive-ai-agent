@@ -53,15 +53,15 @@ export interface DirectImageExecutionResult {
   readonly usage?: Readonly<Record<string, number>>;
 }
 
-export class DirectImageExecutionFailed extends Schema.TaggedError<DirectImageExecutionFailed>()(
-  "DirectImageExecutionFailed",
-  {
-    reason: Schema.Literals(["not_configured", "provider_rejected", "invalid_output", "network"]),
-    /** The provider's HTTP status when it rejected the request. */
-    status: Schema.optionalKey(Schema.Int),
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {}
+export class DirectImageExecutionFailed extends Schema.TaggedError<
+  DirectImageExecutionFailed,
+  { readonly brand: unique symbol }
+>()("DirectImageExecutionFailed", {
+  reason: Schema.Literals(["not_configured", "provider_rejected", "invalid_output", "network"]),
+  /** The provider's HTTP status when it rejected the request. */
+  status: Schema.optionalKey(Schema.Int),
+  cause: Schema.optional(Schema.Defect()),
+}) {}
 
 export interface DirectImageExecutorApi {
   readonly generate: (
@@ -193,41 +193,44 @@ export interface ImageMediaAsset {
   readonly providerRequestId?: string;
 }
 
-export class ImageMediaApprovalRequired extends Schema.TaggedError<ImageMediaApprovalRequired>()(
-  "ImageMediaApprovalRequired",
-  {
-    reason: Schema.optionalKey(Schema.Literals(["paid_execution", "cross_provider"])),
-    approval: Schema.optionalKey(RunApproval),
-  },
-) {}
-export class ImageMediaUnavailable extends Schema.TaggedError<ImageMediaUnavailable>()(
-  "ImageMediaUnavailable",
-  {
-    reason: Schema.Literals([
-      "prompt_empty",
-      "catalog_refresh_failed",
-      "settings_unavailable",
-      "no_direct_route",
-      /** The image context gate refused the selected route. */
-      "context_denied",
-      "consent_service_unavailable",
-      "consent_read_failed",
-      "consent_disabled",
-      /** Naming the run for a cross-provider approval failed. */
-      "run_id_failed",
-      "reroute_unavailable",
-      "attachment_persistence_failed",
-    ]),
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {}
+export class ImageMediaApprovalRequired extends Schema.TaggedError<
+  ImageMediaApprovalRequired,
+  { readonly brand: unique symbol }
+>()("ImageMediaApprovalRequired", {
+  reason: Schema.optionalKey(Schema.Literals(["paid_execution", "cross_provider"])),
+  approval: Schema.optionalKey(RunApproval),
+}) {}
+export class ImageMediaUnavailable extends Schema.TaggedError<
+  ImageMediaUnavailable,
+  { readonly brand: unique symbol }
+>()("ImageMediaUnavailable", {
+  reason: Schema.Literals([
+    "prompt_empty",
+    "catalog_refresh_failed",
+    "settings_unavailable",
+    "no_direct_route",
+    /** The image context gate refused the selected route. */
+    "context_denied",
+    "consent_service_unavailable",
+    "consent_read_failed",
+    "consent_disabled",
+    /** Naming the run for a cross-provider approval failed. */
+    "run_id_failed",
+    "reroute_unavailable",
+    "attachment_persistence_failed",
+  ]),
+  cause: Schema.optional(Schema.Defect()),
+}) {}
 const ImageRerouteConfirmationValue = Schema.declare(
   ImageRerouteConfirmation.$is("confirmation_required"),
 );
-export class ImageMediaExecutionFailed extends Schema.TaggedError<ImageMediaExecutionFailed>()(
-  "ImageMediaExecutionFailed",
-  { cause: DirectImageExecutionFailed, reroute: ImageRerouteConfirmationValue },
-) {}
+export class ImageMediaExecutionFailed extends Schema.TaggedError<
+  ImageMediaExecutionFailed,
+  { readonly brand: unique symbol }
+>()("ImageMediaExecutionFailed", {
+  cause: DirectImageExecutionFailed,
+  reroute: ImageRerouteConfirmationValue,
+}) {}
 
 export interface ImageMediaWorkflowApi {
   readonly generate: (

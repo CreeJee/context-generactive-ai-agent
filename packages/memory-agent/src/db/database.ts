@@ -9,10 +9,10 @@ import { goalHistoryMigration, migrations, tanStackRowsMigration } from "./migra
 import { migrationClient } from "./migration-client.ts";
 import { sqlClientOver } from "./sql-client.ts";
 
-export class DatabaseOpenError extends Schema.TaggedError<DatabaseOpenError>()(
-  "DatabaseOpenError",
-  { file: Schema.String, cause: Schema.Defect() },
-) {}
+export class DatabaseOpenError extends Schema.TaggedError<
+  DatabaseOpenError,
+  { readonly brand: unique symbol }
+>()("DatabaseOpenError", { file: Schema.String, cause: Schema.Defect() }) {}
 
 /**
  * Why a connection's schema cannot be used by this build. The startup migration fails with it and
@@ -32,10 +32,10 @@ export const DatabaseSchemaRejectedReason = Schema.TaggedUnion({
   InvalidForeignKeys: {},
 });
 
-export class DatabaseSchemaRejected extends Schema.TaggedError<DatabaseSchemaRejected>()(
-  "DatabaseSchemaRejected",
-  { reason: DatabaseSchemaRejectedReason },
-) {}
+export class DatabaseSchemaRejected extends Schema.TaggedError<
+  DatabaseSchemaRejected,
+  { readonly brand: unique symbol }
+>()("DatabaseSchemaRejected", { reason: DatabaseSchemaRejectedReason }) {}
 
 const schemaRejection = DatabaseSchemaRejectedReason.cases;
 const rejected = (reason: DatabaseSchemaRejected["reason"]) =>

@@ -109,13 +109,13 @@ const usePromotedMemory = {
 
 const NotRetrieved = Schema.TaggedStruct("NotRetrieved", {});
 
-export class PromotedMemoryUseRejected extends Schema.TaggedError<PromotedMemoryUseRejected>()(
-  "PromotedMemoryUseRejected",
-  {
-    reason: NotRetrieved,
-    message: Schema.Literal("Only promoted memories retrieved in this run can be used"),
-  },
-) {}
+export class PromotedMemoryUseRejected extends Schema.TaggedError<
+  PromotedMemoryUseRejected,
+  { readonly brand: unique symbol }
+>()("PromotedMemoryUseRejected", {
+  reason: NotRetrieved,
+  message: Schema.Literal("Only promoted memories retrieved in this run can be used"),
+}) {}
 
 const notFound = (id: string) => ({ error: "not_found", id });
 /** A run's memory tools are bound to; AgentChat prepares them before a Goal run admits its turn. */

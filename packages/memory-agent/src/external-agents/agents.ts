@@ -60,10 +60,10 @@ import {
 export const maxConsecutiveFailures = 2;
 
 /** The agent process started but did not answer `initialize` in time. */
-export class ExternalAgentInitializeTimedOut extends Schema.TaggedError<ExternalAgentInitializeTimedOut>()(
-  "ExternalAgentInitializeTimedOut",
-  {},
-) {
+export class ExternalAgentInitializeTimedOut extends Schema.TaggedError<
+  ExternalAgentInitializeTimedOut,
+  { readonly brand: unique symbol }
+>()("ExternalAgentInitializeTimedOut", {}) {
   override get message() {
     return "initialize timed out";
   }

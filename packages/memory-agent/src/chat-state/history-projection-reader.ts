@@ -56,10 +56,10 @@ export const HistoryProjectionReadReason = Schema.TaggedUnion({
 });
 const readReason = HistoryProjectionReadReason.cases;
 
-export class HistoryProjectionReadFailed extends Schema.TaggedError<HistoryProjectionReadFailed>()(
-  "HistoryProjectionReadFailed",
-  { reason: HistoryProjectionReadReason },
-) {}
+export class HistoryProjectionReadFailed extends Schema.TaggedError<
+  HistoryProjectionReadFailed,
+  { readonly brand: unique symbol }
+>()("HistoryProjectionReadFailed", { reason: HistoryProjectionReadReason }) {}
 
 const decodeRequest = Schema.decodeUnknownEffect(HistoryPageRequest);
 const decodeRows = Schema.decodeUnknownEffect(HistorySnapshotRows);

@@ -29,26 +29,29 @@ export interface BackgroundBinding {
   readonly abortSignal: AbortSignal;
 }
 
-export class BackgroundOperationFailed extends Schema.TaggedError<BackgroundOperationFailed>()(
-  "BackgroundOperationFailed",
-  { cause: Schema.Defect() },
-) {}
+export class BackgroundOperationFailed extends Schema.TaggedError<
+  BackgroundOperationFailed,
+  { readonly brand: unique symbol }
+>()("BackgroundOperationFailed", { cause: Schema.Defect() }) {}
 
-export class BackgroundResultStoreFailed extends Schema.TaggedError<BackgroundResultStoreFailed>()(
-  "BackgroundResultStoreFailed",
-  { operation: Schema.Literals(["read", "write", "decode"]), cause: Schema.Defect() },
-) {}
+export class BackgroundResultStoreFailed extends Schema.TaggedError<
+  BackgroundResultStoreFailed,
+  { readonly brand: unique symbol }
+>()("BackgroundResultStoreFailed", {
+  operation: Schema.Literals(["read", "write", "decode"]),
+  cause: Schema.Defect(),
+}) {}
 
-export class BackgroundTraceFailed extends Schema.TaggedError<BackgroundTraceFailed>()(
-  "BackgroundTraceFailed",
-  { cause: Schema.Defect() },
-) {}
+export class BackgroundTraceFailed extends Schema.TaggedError<
+  BackgroundTraceFailed,
+  { readonly brand: unique symbol }
+>()("BackgroundTraceFailed", { cause: Schema.Defect() }) {}
 
 /** The model reads `message`; it is fixed and names no task data. */
-export class BackgroundTaskNotFound extends Schema.TaggedError<BackgroundTaskNotFound>()(
-  "BackgroundTaskNotFound",
-  { message: Schema.String },
-) {}
+export class BackgroundTaskNotFound extends Schema.TaggedError<
+  BackgroundTaskNotFound,
+  { readonly brand: unique symbol }
+>()("BackgroundTaskNotFound", { message: Schema.String }) {}
 
 const parentInterrupted = (signal: AbortSignal) =>
   Effect.callback<never>((resume) => {

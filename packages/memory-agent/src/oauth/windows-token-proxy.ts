@@ -13,10 +13,10 @@ export interface TokenProxyResult {
 }
 
 /** PowerShell printed more than a proxy URL can be; its output is not read further. */
-class ProxyOutputTooLarge extends Schema.TaggedError<ProxyOutputTooLarge>()(
-  "ProxyOutputTooLarge",
-  {},
-) {}
+class ProxyOutputTooLarge extends Schema.TaggedError<
+  ProxyOutputTooLarge,
+  { readonly brand: unique symbol }
+>()("ProxyOutputTooLarge", {}) {}
 
 type ProxyResolution =
   | { readonly route: "direct" | "unavailable" }

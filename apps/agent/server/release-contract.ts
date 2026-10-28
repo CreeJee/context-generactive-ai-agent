@@ -94,7 +94,10 @@ export const ReleaseRejectedReason = Schema.TaggedUnion({
 export type ReleaseRejectedReason = typeof ReleaseRejectedReason.Type;
 const rejected = ReleaseRejectedReason.cases;
 
-export class ReleaseRejected extends Schema.TaggedError<ReleaseRejected>()("ReleaseRejected", {
+export class ReleaseRejected extends Schema.TaggedError<
+  ReleaseRejected,
+  { readonly brand: unique symbol }
+>()("ReleaseRejected", {
   reason: ReleaseRejectedReason,
 }) {}
 
@@ -105,14 +108,17 @@ export const ReleaseSigningFailedReason = Schema.TaggedUnion({
 export type ReleaseSigningFailedReason = typeof ReleaseSigningFailedReason.Type;
 const signing = ReleaseSigningFailedReason.cases;
 
-export class ReleaseSigningFailed extends Schema.TaggedError<ReleaseSigningFailed>()(
-  "ReleaseSigningFailed",
-  { reason: ReleaseSigningFailedReason },
-) {}
+export class ReleaseSigningFailed extends Schema.TaggedError<
+  ReleaseSigningFailed,
+  { readonly brand: unique symbol }
+>()("ReleaseSigningFailed", { reason: ReleaseSigningFailedReason }) {}
 
 const ed25519 = { name: "Ed25519" } as const;
 
-class ReleaseKeyInvalid extends Schema.TaggedError<ReleaseKeyInvalid>()("ReleaseKeyInvalid", {
+class ReleaseKeyInvalid extends Schema.TaggedError<
+  ReleaseKeyInvalid,
+  { readonly brand: unique symbol }
+>()("ReleaseKeyInvalid", {
   cause: Schema.Defect(),
 }) {}
 

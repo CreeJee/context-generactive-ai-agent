@@ -101,29 +101,32 @@ export type ImageRerouteConfirmation = Data.TaggedEnum<{
 }>;
 export const ImageRerouteConfirmation = Data.taggedEnum<ImageRerouteConfirmation>();
 
-export class ImageRouteFactsFailed extends Schema.TaggedError<ImageRouteFactsFailed>()(
-  "ImageRouteFactsFailed",
-  { routeId: Schema.optionalKey(Schema.String), cause: Schema.Defect() },
-) {}
+export class ImageRouteFactsFailed extends Schema.TaggedError<
+  ImageRouteFactsFailed,
+  { readonly brand: unique symbol }
+>()("ImageRouteFactsFailed", {
+  routeId: Schema.optionalKey(Schema.String),
+  cause: Schema.Defect(),
+}) {}
 
-export class ImageRoutingInvalidRequest extends Schema.TaggedError<ImageRoutingInvalidRequest>()(
-  "ImageRoutingInvalidRequest",
-  {
-    reason: Schema.Literals([
-      "invalid_source_image_count",
-      "invalid_cost_ceiling",
-      /** A route fact's quality or speed is outside 0..1. */
-      "invalid_route_fact_score",
-      "unknown_initiator_route",
-    ]),
-    routeId: Schema.optionalKey(Schema.String),
-  },
-) {}
+export class ImageRoutingInvalidRequest extends Schema.TaggedError<
+  ImageRoutingInvalidRequest,
+  { readonly brand: unique symbol }
+>()("ImageRoutingInvalidRequest", {
+  reason: Schema.Literals([
+    "invalid_source_image_count",
+    "invalid_cost_ceiling",
+    /** A route fact's quality or speed is outside 0..1. */
+    "invalid_route_fact_score",
+    "unknown_initiator_route",
+  ]),
+  routeId: Schema.optionalKey(Schema.String),
+}) {}
 
-export class ImageRouteUnavailable extends Schema.TaggedError<ImageRouteUnavailable>()(
-  "ImageRouteUnavailable",
-  { ranking: Schema.Array(ImageRouteScore) },
-) {}
+export class ImageRouteUnavailable extends Schema.TaggedError<
+  ImageRouteUnavailable,
+  { readonly brand: unique symbol }
+>()("ImageRouteUnavailable", { ranking: Schema.Array(ImageRouteScore) }) {}
 
 export const FixedImageRouteRejectedReason = Schema.TaggedUnion({
   /** Fixed mode was asked for without naming a route. */
@@ -133,13 +136,13 @@ export const FixedImageRouteRejectedReason = Schema.TaggedUnion({
   Ineligible: { reasons: Schema.Array(Schema.String) },
 });
 
-export class FixedImageRouteRejected extends Schema.TaggedError<FixedImageRouteRejected>()(
-  "FixedImageRouteRejected",
-  {
-    routeId: Schema.optionalKey(Schema.String),
-    reason: FixedImageRouteRejectedReason,
-  },
-) {}
+export class FixedImageRouteRejected extends Schema.TaggedError<
+  FixedImageRouteRejected,
+  { readonly brand: unique symbol }
+>()("FixedImageRouteRejected", {
+  routeId: Schema.optionalKey(Schema.String),
+  reason: FixedImageRouteRejectedReason,
+}) {}
 
 export interface ImageRouteFactsApi {
   readonly forRoutes: (

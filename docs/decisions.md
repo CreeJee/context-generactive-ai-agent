@@ -2961,3 +2961,9 @@
   - guard는 `Effect.when`으로 쓴다. 조건에 따라 줄을 모을 때는 `Option`과 `Array.getSomes`를 쓴다.
   - 같은 몸체를 여러 입력에 돌리던 테스트는 `it.effect.each`·`describe.each`나 한 테스트 안의 `Effect.forEach`로 바꾸되 테스트 이름은 그대로 둔다.
   - 동작이 바뀌지 않았는지는 HEAD 사본(`*-old.probe.*`, 커밋 전 삭제)과 같은 입력으로 출력을 비교해 확인했다. 유료 실행 평가(live-*, structured-memory의 live 모드)는 타입 검사만 했다.
+
+## Schema 클래스는 brand로 이름을 갖는다 (2026-10-28)
+
+- `Schema.Class`·`Schema.TaggedError` 같은 Schema 클래스는 두 번째 타입 인자로 `{ readonly brand: unique symbol }`를 단다. brand가 없으면 필드 모양이 같은 다른 값도 그 클래스 타입으로 통과한다. Effect SCHEMA.md의 클래스 branding과 같은 방식이고, brand는 인스턴스 타입에만 교차되며 런타임 값은 없다.
+- Effect LS의 `schemaClassMissingBrand`를 memory-agent와 apps/agent tsconfig에서 error로 올렸다. tools/chat-store-check는 memory-agent 설정을 이어받는다.
+- brand를 단 뒤 `traceStream`의 `new Response(...)`가 undici-types의 `Response`로 추론되어 서비스 타입을 이름 붙일 수 없게 됐다(TS2883). `json`처럼 전역 `Response`를 반환하는 `eventStream`으로 감쌌다. undici-types는 `@types/node`의 하위 의존성이라 따로 지울 것이 없다.

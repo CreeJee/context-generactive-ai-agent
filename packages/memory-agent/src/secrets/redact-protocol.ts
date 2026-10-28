@@ -8,7 +8,10 @@ export const RedactKind = Schema.Literals(["text", "json"]);
 export type RedactKind = typeof RedactKind.Type;
 
 /** The redaction worker could not hide secrets in a batch; the sweep resumes there next time. */
-export class RedactionFailed extends Schema.TaggedError<RedactionFailed>()("RedactionFailed", {
+export class RedactionFailed extends Schema.TaggedError<
+  RedactionFailed,
+  { readonly brand: unique symbol }
+>()("RedactionFailed", {
   /** `redaction-failed`: the detector failed on the batch. `worker-lost`: the worker is gone. */
   reason: Schema.Literals(["redaction-failed", "worker-lost"]),
 }) {}

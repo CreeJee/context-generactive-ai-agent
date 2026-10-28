@@ -239,21 +239,21 @@ export const StartNewGoal = Schema.Struct({
 });
 export type StartNewGoal = typeof StartNewGoal.Type;
 
-export class NewGoalTransitionRefused extends Schema.TaggedError<NewGoalTransitionRefused>()(
-  "NewGoalTransitionRefused",
-  {
-    reason: Schema.Literals([
-      "disabled",
-      "phase_not_authorized",
-      "goal_missing",
-      "workflow_changed",
-      "run_outcome_uncertain",
-      "transition_pending",
-      "owner_effect_uncertain",
-      "execution_outstanding",
-    ]),
-  },
-) {}
+export class NewGoalTransitionRefused extends Schema.TaggedError<
+  NewGoalTransitionRefused,
+  { readonly brand: unique symbol }
+>()("NewGoalTransitionRefused", {
+  reason: Schema.Literals([
+    "disabled",
+    "phase_not_authorized",
+    "goal_missing",
+    "workflow_changed",
+    "run_outcome_uncertain",
+    "transition_pending",
+    "owner_effect_uncertain",
+    "execution_outstanding",
+  ]),
+}) {}
 
 /** Where a run's queued new Goal stands once the owner settles it; `none` when it queued none. */
 export type NewGoalSettlement = Data.TaggedEnum<{
@@ -365,10 +365,10 @@ const encodeAuthor = Schema.encodeEffect(Schema.fromJsonString(BoardAuthor));
 const encodeChange = Schema.encodeEffect(Schema.fromJsonString(UserChange));
 
 /** The workflow store could not be read or written; the cause stays with the error. */
-export class WorkflowStorageError extends Schema.TaggedError<WorkflowStorageError>()(
-  "WorkflowStorageError",
-  { cause: Schema.Defect() },
-) {}
+export class WorkflowStorageError extends Schema.TaggedError<
+  WorkflowStorageError,
+  { readonly brand: unique symbol }
+>()("WorkflowStorageError", { cause: Schema.Defect() }) {}
 const persisted = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.catchIf(
     effect,
@@ -380,30 +380,30 @@ const encodeRequest = Schema.encodeEffect(Schema.fromJsonString(StartNewGoal));
 const decodeRequest = Schema.decodeEffect(Schema.fromJsonString(StartNewGoal));
 const sameSnapshot = Schema.toEquivalence(CompletionSnapshot);
 
-export class WorkflowTransitionRefused extends Schema.TaggedError<WorkflowTransitionRefused>()(
-  "WorkflowTransitionRefused",
-  { reason: WorkflowActionReason },
-) {}
+export class WorkflowTransitionRefused extends Schema.TaggedError<
+  WorkflowTransitionRefused,
+  { readonly brand: unique symbol }
+>()("WorkflowTransitionRefused", { reason: WorkflowActionReason }) {}
 
-export class WorkflowProgressRefused extends Schema.TaggedError<WorkflowProgressRefused>()(
-  "WorkflowProgressRefused",
-  {
-    reason: Schema.Union([
-      WorkflowActionReason,
-      Schema.Literals([
-        "plan_missing",
-        "unknown_step",
-        "step_evidence_required",
-        "verification_required",
-        "steps_incomplete",
-        "phase_not_executable",
-        "completion_evidence_required",
-        "completion_evidence_invalid",
-        "completion_snapshot_conflict",
-      ]),
+export class WorkflowProgressRefused extends Schema.TaggedError<
+  WorkflowProgressRefused,
+  { readonly brand: unique symbol }
+>()("WorkflowProgressRefused", {
+  reason: Schema.Union([
+    WorkflowActionReason,
+    Schema.Literals([
+      "plan_missing",
+      "unknown_step",
+      "step_evidence_required",
+      "verification_required",
+      "steps_incomplete",
+      "phase_not_executable",
+      "completion_evidence_required",
+      "completion_evidence_invalid",
+      "completion_snapshot_conflict",
     ]),
-  },
-) {}
+  ]),
+}) {}
 
 const implementationComplete = (plan: PlanArtifact) =>
   plan.steps.every((step) => step.status === "done" && step.evidence.length > 0);

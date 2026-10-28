@@ -19,10 +19,10 @@ export const PlanDependencyIssue = Schema.TaggedUnion({
 });
 export type PlanDependencyIssue = typeof PlanDependencyIssue.Type;
 
-export class PlanDependenciesRejected extends Schema.TaggedError<PlanDependenciesRejected>()(
-  "PlanDependenciesRejected",
-  { issues: Schema.NonEmptyArray(PlanDependencyIssue) },
-) {}
+export class PlanDependenciesRejected extends Schema.TaggedError<
+  PlanDependenciesRejected,
+  { readonly brand: unique symbol }
+>()("PlanDependenciesRejected", { issues: Schema.NonEmptyArray(PlanDependencyIssue) }) {}
 
 type DependencyStep = Pick<PlanStep, "id" | "dependsOn"> & Partial<Pick<PlanStep, "hold">>;
 

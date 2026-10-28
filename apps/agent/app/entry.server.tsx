@@ -12,10 +12,13 @@ export { configureAgentBackend, disposeAgent } from "./.server/agent.ts";
 export const streamTimeout = 5_000;
 
 /** React could not render the document; the renderer's error goes to `handleError`'s log only. */
-class DocumentRenderFailed extends Schema.TaggedError<DocumentRenderFailed>()(
-  "DocumentRenderFailed",
-  { stage: Schema.Literals(["shell", "all_ready"]), cause: Schema.Defect() },
-) {}
+class DocumentRenderFailed extends Schema.TaggedError<
+  DocumentRenderFailed,
+  { readonly brand: unique symbol }
+>()("DocumentRenderFailed", {
+  stage: Schema.Literals(["shell", "all_ready"]),
+  cause: Schema.Defect(),
+}) {}
 
 /**
  * A loader or action that throws. Node prints an Effect error as its fields without a stack, so

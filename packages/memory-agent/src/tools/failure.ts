@@ -44,13 +44,16 @@ export type ToolFailureResult = typeof ToolFailureResult.Type;
  * A tool call failed. `code` is the reason (`not_found`, `io_error`, …), `tag` the failure's tag;
  * the message keeps the `code: detail` form people and memory read.
  */
-export class ToolFailed extends Schema.TaggedError<ToolFailed>()("ToolFailed", {
-  code: Schema.String,
-  tag: Schema.String,
-  detail: Schema.String,
-  /** The tool refused before it changed anything, so the call had no effect. */
-  refused: Schema.optionalKey(Schema.Literal(true)),
-}) {
+export class ToolFailed extends Schema.TaggedError<ToolFailed, { readonly brand: unique symbol }>()(
+  "ToolFailed",
+  {
+    code: Schema.String,
+    tag: Schema.String,
+    detail: Schema.String,
+    /** The tool refused before it changed anything, so the call had no effect. */
+    refused: Schema.optionalKey(Schema.Literal(true)),
+  },
+) {
   override get message() {
     return `${this.code}: ${this.detail}`;
   }

@@ -25,14 +25,14 @@ export interface CrossProviderMediaConsentDecision extends CrossProviderMediaCon
 }
 
 const SettingsFailed = Schema.TaggedStruct("SettingsFailed", {});
-export class CrossProviderMediaConsentStoreFailed extends Schema.TaggedError<CrossProviderMediaConsentStoreFailed>()(
-  "CrossProviderMediaConsentStoreFailed",
-  {
-    operation: Schema.Literals(["read", "write"]),
-    reason: SettingsFailed,
-    cause: GlobalConfigFailed,
-  },
-) {}
+export class CrossProviderMediaConsentStoreFailed extends Schema.TaggedError<
+  CrossProviderMediaConsentStoreFailed,
+  { readonly brand: unique symbol }
+>()("CrossProviderMediaConsentStoreFailed", {
+  operation: Schema.Literals(["read", "write"]),
+  reason: SettingsFailed,
+  cause: GlobalConfigFailed,
+}) {}
 
 const emptySettings = (): CrossProviderMediaConsentSettings => ({ version: 1, pairs: {} });
 export const crossProviderMediaConsentKey = (pair: CrossProviderMediaConsentPair) =>

@@ -38,10 +38,10 @@ export interface SubscriptionUsageWindow {
 }
 
 /** The stored access token has expired and this lookup may not refresh it. */
-export class SubscriptionUsageCredentialExpired extends Schema.TaggedError<SubscriptionUsageCredentialExpired>()(
-  "SubscriptionUsageCredentialExpired",
-  {},
-) {}
+export class SubscriptionUsageCredentialExpired extends Schema.TaggedError<
+  SubscriptionUsageCredentialExpired,
+  { readonly brand: unique symbol }
+>()("SubscriptionUsageCredentialExpired", {}) {}
 
 /**
  * Sends exactly one usage request with the stored access token and never retries. An expired token

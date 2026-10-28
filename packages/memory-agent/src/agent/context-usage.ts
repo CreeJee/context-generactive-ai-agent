@@ -57,14 +57,14 @@ export const contextView = ({
 
 export const ContextUsageReason = Schema.TaggedUnion({ ReadFailed: {}, WriteFailed: {} });
 
-export class ContextUsageFailed extends Schema.TaggedError<ContextUsageFailed>()(
-  "ContextUsageFailed",
-  {
-    operation: Schema.Literals(["read-usage", "read-consumed", "write-usage", "consume"]),
-    reason: ContextUsageReason,
-    cause: Schema.Defect(),
-  },
-) {}
+export class ContextUsageFailed extends Schema.TaggedError<
+  ContextUsageFailed,
+  { readonly brand: unique symbol }
+>()("ContextUsageFailed", {
+  operation: Schema.Literals(["read-usage", "read-consumed", "write-usage", "consume"]),
+  reason: ContextUsageReason,
+  cause: Schema.Defect(),
+}) {}
 
 const metadataFailed =
   (operation: ContextUsageFailed["operation"]) =>

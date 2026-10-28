@@ -32,7 +32,10 @@ import { grouping, improvementItems } from "./items.ts";
 import { improvementReport } from "./report.ts";
 import { collectSignals } from "./signals.ts";
 
-export class DiscoveryFailed extends Schema.TaggedError<DiscoveryFailed>()("DiscoveryFailed", {
+export class DiscoveryFailed extends Schema.TaggedError<
+  DiscoveryFailed,
+  { readonly brand: unique symbol }
+>()("DiscoveryFailed", {
   /**
    * `storage`: the known worktree folders could not be read. `report`: a report or the index of
    * reports could not be written or read back. `cause` has the SQL, decode or file error.

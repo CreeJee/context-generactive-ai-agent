@@ -84,7 +84,10 @@ const Neighbor = Schema.Struct({
 });
 
 /** The memory graph could not be read; the cause stays with the error. */
-export class GraphReadFailed extends Schema.TaggedError<GraphReadFailed>()("GraphReadFailed", {
+export class GraphReadFailed extends Schema.TaggedError<
+  GraphReadFailed,
+  { readonly brand: unique symbol }
+>()("GraphReadFailed", {
   cause: Schema.Defect(),
 }) {}
 

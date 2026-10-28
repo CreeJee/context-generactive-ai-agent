@@ -115,29 +115,32 @@ export const RouteCatalogRefreshFailedReason = Schema.TaggedUnion({
   ProviderMismatch: {},
 });
 
-export class RouteCatalogRefreshFailed extends Schema.TaggedError<RouteCatalogRefreshFailed>()(
-  "RouteCatalogRefreshFailed",
-  {
-    provider: Schema.optionalKey(ProviderId),
-    operation: Schema.Literals(["provider", "auth", "models", "tools", "config"]),
-    reason: RouteCatalogRefreshFailedReason,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {}
+export class RouteCatalogRefreshFailed extends Schema.TaggedError<
+  RouteCatalogRefreshFailed,
+  { readonly brand: unique symbol }
+>()("RouteCatalogRefreshFailed", {
+  provider: Schema.optionalKey(ProviderId),
+  operation: Schema.Literals(["provider", "auth", "models", "tools", "config"]),
+  reason: RouteCatalogRefreshFailedReason,
+  cause: Schema.optional(Schema.Defect()),
+}) {}
 
-export class UnknownCatalogRoute extends Schema.TaggedError<UnknownCatalogRoute>()(
-  "UnknownCatalogRoute",
-  { routeType: Schema.Literals(["chat", "media", "execution"]), id: Schema.String },
-) {}
+export class UnknownCatalogRoute extends Schema.TaggedError<
+  UnknownCatalogRoute,
+  { readonly brand: unique symbol }
+>()("UnknownCatalogRoute", {
+  routeType: Schema.Literals(["chat", "media", "execution"]),
+  id: Schema.String,
+}) {}
 
-export class IncompatibleCatalogRoutes extends Schema.TaggedError<IncompatibleCatalogRoutes>()(
-  "IncompatibleCatalogRoutes",
-  {
-    chatRouteId: Schema.String,
-    mediaRouteId: Schema.String,
-    reason: Schema.Literals(["media_generation_unsupported"]),
-  },
-) {}
+export class IncompatibleCatalogRoutes extends Schema.TaggedError<
+  IncompatibleCatalogRoutes,
+  { readonly brand: unique symbol }
+>()("IncompatibleCatalogRoutes", {
+  chatRouteId: Schema.String,
+  mediaRouteId: Schema.String,
+  reason: Schema.Literals(["media_generation_unsupported"]),
+}) {}
 
 export interface RouteCatalogApi {
   readonly snapshot: Effect.Effect<RouteCatalogSnapshot>;

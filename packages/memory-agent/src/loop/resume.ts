@@ -30,7 +30,10 @@ export const ResumeEntry = Schema.Struct({
 export type ResumeEntry = typeof ResumeEntry.Type;
 
 /** A resume the pending interrupts refuse; `message` is what the page shows. */
-export class ResumeRejected extends Schema.TaggedError<ResumeRejected>()("ResumeRejected", {
+export class ResumeRejected extends Schema.TaggedError<
+  ResumeRejected,
+  { readonly brand: unique symbol }
+>()("ResumeRejected", {
   code: Schema.String,
   message: Schema.String,
 }) {}

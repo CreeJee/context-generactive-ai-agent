@@ -37,7 +37,10 @@ export const Signal = Schema.TaggedUnion({
 });
 export type Signal = typeof Signal.Type;
 
-export class SignalsFailed extends Schema.TaggedError<SignalsFailed>()("SignalsFailed", {
+export class SignalsFailed extends Schema.TaggedError<
+  SignalsFailed,
+  { readonly brand: unique symbol }
+>()("SignalsFailed", {
   /** The database read or a stored row failed; `cause` has the SQL or decode error. */
   reason: Schema.Literals(["storage"]),
   cause: Schema.Defect(),

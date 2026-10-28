@@ -26,10 +26,10 @@ export const HistoryProjectionPublishReason = Schema.TaggedUnion({
 });
 const publishReason = HistoryProjectionPublishReason.cases;
 
-export class HistoryProjectionPublishFailed extends Schema.TaggedError<HistoryProjectionPublishFailed>()(
-  "HistoryProjectionPublishFailed",
-  { reason: HistoryProjectionPublishReason },
-) {}
+export class HistoryProjectionPublishFailed extends Schema.TaggedError<
+  HistoryProjectionPublishFailed,
+  { readonly brand: unique symbol }
+>()("HistoryProjectionPublishFailed", { reason: HistoryProjectionPublishReason }) {}
 
 const decodePublication = Schema.decodeUnknownEffect(HistoryProjectionPublication);
 const validateSource = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Array(Schema.Json)));

@@ -25,10 +25,10 @@ export const ArchiveInstallFailedReason = Schema.TaggedUnion({
   },
 });
 
-export class ArchiveInstallFailed extends Schema.TaggedError<ArchiveInstallFailed>()(
-  "ArchiveInstallFailed",
-  { reason: ArchiveInstallFailedReason },
-) {}
+export class ArchiveInstallFailed extends Schema.TaggedError<
+  ArchiveInstallFailed,
+  { readonly brand: unique symbol }
+>()("ArchiveInstallFailed", { reason: ArchiveInstallFailedReason }) {}
 
 export interface ArchiveStaging {
   readonly directory: string;

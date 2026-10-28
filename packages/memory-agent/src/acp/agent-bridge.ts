@@ -112,10 +112,10 @@ const EditorRefusal = Schema.TaggedUnion({
   },
 });
 
-class EditorRequestRefused extends Schema.TaggedError<EditorRequestRefused>()(
-  "EditorRequestRefused",
-  { reason: EditorRefusal },
-) {}
+class EditorRequestRefused extends Schema.TaggedError<
+  EditorRequestRefused,
+  { readonly brand: unique symbol }
+>()("EditorRequestRefused", { reason: EditorRefusal }) {}
 
 const refusalMessage = EditorRefusal.match({
   FolderNotFound: ({ cwd }) => `폴더를 찾을 수 없어요: ${cwd}`,

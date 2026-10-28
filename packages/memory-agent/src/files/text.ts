@@ -42,7 +42,10 @@ export const textFileRejectedReasonName = (reason: TextFileRejected["reason"]): 
  * A file that is not editable text: over {@link maxTextBytes}, containing NUL bytes, or not UTF-8.
  * `changed` means its content no longer matches the version the caller last read.
  */
-export class TextFileRejected extends Schema.TaggedError<TextFileRejected>()("TextFileRejected", {
+export class TextFileRejected extends Schema.TaggedError<
+  TextFileRejected,
+  { readonly brand: unique symbol }
+>()("TextFileRejected", {
   path: Schema.String,
   reason: TextFileRejectedReason,
 }) {}
@@ -76,7 +79,10 @@ export const TextFileIoReason = Schema.TaggedStruct("IoFailed", {
   cause: Schema.Defect(),
 });
 
-export class TextFileIoFailed extends Schema.TaggedError<TextFileIoFailed>()("TextFileIoFailed", {
+export class TextFileIoFailed extends Schema.TaggedError<
+  TextFileIoFailed,
+  { readonly brand: unique symbol }
+>()("TextFileIoFailed", {
   path: Schema.String,
   reason: TextFileIoReason,
 }) {}

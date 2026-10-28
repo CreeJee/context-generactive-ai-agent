@@ -29,14 +29,14 @@ export const ModelHandoffReason = Schema.TaggedUnion({
   ReadMemoryFailed: {},
 });
 
-export class ModelHandoffFailed extends Schema.TaggedError<ModelHandoffFailed>()(
-  "ModelHandoffFailed",
-  {
-    reason: ModelHandoffReason,
-    message: Schema.String,
-    cause: Schema.optionalKey(Schema.Defect()),
-  },
-) {}
+export class ModelHandoffFailed extends Schema.TaggedError<
+  ModelHandoffFailed,
+  { readonly brand: unique symbol }
+>()("ModelHandoffFailed", {
+  reason: ModelHandoffReason,
+  message: Schema.String,
+  cause: Schema.optionalKey(Schema.Defect()),
+}) {}
 
 const storageFailed =
   (reason: ModelHandoffFailed["reason"]) =>

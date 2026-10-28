@@ -8,14 +8,14 @@ export { JsonValue } from "../json.ts";
 
 export type OAuthProvider = SubscriptionAccountProvider;
 
-export class ProviderFeatureRejectedError extends Schema.TaggedError<ProviderFeatureRejectedError>()(
-  "ProviderFeatureRejectedError",
-  {
-    provider: SubscriptionAccountProvider,
-    feature: Schema.Literal("prompt-cache"),
-    status: Schema.NullOr(Schema.Int),
-  },
-) {
+export class ProviderFeatureRejectedError extends Schema.TaggedError<
+  ProviderFeatureRejectedError,
+  { readonly brand: unique symbol }
+>()("ProviderFeatureRejectedError", {
+  provider: SubscriptionAccountProvider,
+  feature: Schema.Literal("prompt-cache"),
+  status: Schema.NullOr(Schema.Int),
+}) {
   override get message() {
     return `${this.provider} rejected the ${this.feature} request feature.`;
   }
@@ -36,13 +36,13 @@ export const ProviderStatusRejected = ProviderStreamFailedReason.cases.ProviderS
 export const ResponseInterrupted = ProviderStreamFailedReason.cases.ResponseInterrupted;
 export const RequestOutcomeUnknown = ProviderStreamFailedReason.cases.RequestOutcomeUnknown;
 
-export class ProviderStreamFailed extends Schema.TaggedError<ProviderStreamFailed>()(
-  "ProviderStreamFailed",
-  {
-    provider: Schema.Literals(["openai", "anthropic"]),
-    reason: ProviderStreamFailedReason,
-  },
-) {
+export class ProviderStreamFailed extends Schema.TaggedError<
+  ProviderStreamFailed,
+  { readonly brand: unique symbol }
+>()("ProviderStreamFailed", {
+  provider: Schema.Literals(["openai", "anthropic"]),
+  reason: ProviderStreamFailedReason,
+}) {
   override get message() {
     return "Provider model stream failed.";
   }
@@ -264,10 +264,10 @@ export const ReasoningSummaryProtocolFailedReason = Schema.TaggedUnion({
   IncompleteSummary: {},
 });
 
-export class ReasoningSummaryProtocolFailed extends Schema.TaggedError<ReasoningSummaryProtocolFailed>()(
-  "ReasoningSummaryProtocolFailed",
-  { reason: ReasoningSummaryProtocolFailedReason },
-) {
+export class ReasoningSummaryProtocolFailed extends Schema.TaggedError<
+  ReasoningSummaryProtocolFailed,
+  { readonly brand: unique symbol }
+>()("ReasoningSummaryProtocolFailed", { reason: ReasoningSummaryProtocolFailedReason }) {
   override get message() {
     return "Public reasoning summary protocol failed.";
   }

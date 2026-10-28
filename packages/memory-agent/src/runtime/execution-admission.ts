@@ -34,15 +34,15 @@ export const defaultExecutionAdmissionLimits: ExecutionAdmissionLimits = {
   tool: { active: 16, queued: 64 },
 };
 
-export class ExecutionSaturated extends Schema.TaggedError<ExecutionSaturated>()(
-  "ExecutionSaturated",
-  {
-    kind: ExecutionAdmissionKind,
-    active: Schema.Int,
-    queued: Schema.Int,
-    capacity: Schema.Int,
-  },
-) {}
+export class ExecutionSaturated extends Schema.TaggedError<
+  ExecutionSaturated,
+  { readonly brand: unique symbol }
+>()("ExecutionSaturated", {
+  kind: ExecutionAdmissionKind,
+  active: Schema.Int,
+  queued: Schema.Int,
+  capacity: Schema.Int,
+}) {}
 
 export interface ExecutionAdmissionSnapshot {
   readonly active: number;

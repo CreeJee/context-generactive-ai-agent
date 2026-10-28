@@ -46,7 +46,10 @@ export interface VectorIndexApi {
   ) => Effect.Effect<A, E | E2 | VectorIndexError, R | R2>;
 }
 
-export class VectorIndexError extends Schema.TaggedError<VectorIndexError>()("VectorIndexError", {
+export class VectorIndexError extends Schema.TaggedError<
+  VectorIndexError,
+  { readonly brand: unique symbol }
+>()("VectorIndexError", {
   operation: Schema.Literals(["open", "add", "remove", "search", "save"]),
   cause: Schema.Defect(),
 }) {

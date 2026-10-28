@@ -83,10 +83,10 @@ export const ImportStoreReason = Schema.TaggedUnion({
   FailureRecord: {},
 });
 
-export class ImportStoreFailed extends Schema.TaggedError<ImportStoreFailed>()(
-  "ImportStoreFailed",
-  { reason: ImportStoreReason, cause: Schema.Defect() },
-) {}
+export class ImportStoreFailed extends Schema.TaggedError<
+  ImportStoreFailed,
+  { readonly brand: unique symbol }
+>()("ImportStoreFailed", { reason: ImportStoreReason, cause: Schema.Defect() }) {}
 const stored = <A, E>(step: keyof typeof ImportStoreReason.cases, effect: Effect.Effect<A, E>) =>
   Effect.mapError(effect, (cause) =>
     ImportStoreFailed.make({ reason: ImportStoreReason.cases[step].make({}), cause }),

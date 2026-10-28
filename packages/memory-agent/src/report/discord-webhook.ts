@@ -54,14 +54,14 @@ const maxRateLimitRetries = 2;
 const requestTimeout = Duration.seconds(30);
 
 /** Carries only a reason and safe numbers: never the webhook URL, its token or a response body. */
-export class ReportDeliveryError extends Schema.TaggedError<ReportDeliveryError>()(
-  "ReportDeliveryError",
-  {
-    reason: ReportDeliveryFailure,
-    httpStatus: Schema.optional(Schema.Int),
-    retryAfterSeconds: Schema.optional(Schema.Finite),
-  },
-) {}
+export class ReportDeliveryError extends Schema.TaggedError<
+  ReportDeliveryError,
+  { readonly brand: unique symbol }
+>()("ReportDeliveryError", {
+  reason: ReportDeliveryFailure,
+  httpStatus: Schema.optional(Schema.Int),
+  retryAfterSeconds: Schema.optional(Schema.Finite),
+}) {}
 
 type Attempt = Data.TaggedEnum<{
   sending: {};

@@ -53,7 +53,10 @@ function toSession(row: typeof SessionRow.Type): Session {
   };
 }
 
-export class SessionNotFound extends Schema.TaggedError<SessionNotFound>()("SessionNotFound", {
+export class SessionNotFound extends Schema.TaggedError<
+  SessionNotFound,
+  { readonly brand: unique symbol }
+>()("SessionNotFound", {
   id: Schema.String,
 }) {}
 

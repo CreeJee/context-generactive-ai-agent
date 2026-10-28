@@ -112,6 +112,7 @@
           "returnEffectInGen": "error",
           "runEffectInsideEffect": "error",
           "runOfExitToRunExit": "error",
+          "schemaClassMissingBrand": "error",
           "schemaNumber": "error",
           "schemaStructWithTag": "error",
           "schemaSync": "warning",

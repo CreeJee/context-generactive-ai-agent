@@ -54,10 +54,12 @@ const decodeAnswer = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Struct({ statements: Schema.Array(Labelled) })),
 );
 
-export class InterpretationFailed extends Schema.TaggedError<InterpretationFailed>()(
-  "InterpretationFailed",
-  { reason: Schema.Literals(["model_call_failed", "unreadable_answer"]) },
-) {}
+export class InterpretationFailed extends Schema.TaggedError<
+  InterpretationFailed,
+  { readonly brand: unique symbol }
+>()("InterpretationFailed", {
+  reason: Schema.Literals(["model_call_failed", "unreadable_answer"]),
+}) {}
 
 const Job = Schema.Struct({ node_id: Schema.String, session_id: Schema.NullOr(Schema.String) });
 

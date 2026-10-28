@@ -31,17 +31,17 @@ const fragmentMessages = {
 } as const satisfies Record<CredentialFragmentsFailed["reason"], string>;
 
 /** Why a fragmented credential could not be read or written; the keychain store reports its stage. */
-export class CredentialFragmentsFailed extends Schema.TaggedError<CredentialFragmentsFailed>()(
-  "CredentialFragmentsFailed",
-  {
-    reason: Schema.Literals([
-      "invalid_manifest",
-      "incomplete_fragments",
-      "changed_while_reading",
-      "fragment_limit",
-    ]),
-  },
-) {
+export class CredentialFragmentsFailed extends Schema.TaggedError<
+  CredentialFragmentsFailed,
+  { readonly brand: unique symbol }
+>()("CredentialFragmentsFailed", {
+  reason: Schema.Literals([
+    "invalid_manifest",
+    "incomplete_fragments",
+    "changed_while_reading",
+    "fragment_limit",
+  ]),
+}) {
   override get message() {
     return fragmentMessages[this.reason];
   }

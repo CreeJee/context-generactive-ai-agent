@@ -103,19 +103,19 @@ const promotionMessages: Readonly<Record<MemoryPromotionReason, string>> = {
   claim_not_adopted: "Memory promotion source is not an adopted final-answer claim",
 };
 
-export class MemoryPromotionRejected extends Schema.TaggedError<MemoryPromotionRejected>()(
-  "MemoryPromotionRejected",
-  { reason: MemoryPromotionReason, message: Schema.String },
-) {}
+export class MemoryPromotionRejected extends Schema.TaggedError<
+  MemoryPromotionRejected,
+  { readonly brand: unique symbol }
+>()("MemoryPromotionRejected", { reason: MemoryPromotionReason, message: Schema.String }) {}
 
 const promotionRejected = (reason: MemoryPromotionReason) =>
   MemoryPromotionRejected.make({ reason, message: promotionMessages[reason] });
 
 /** A knowledge store read or write failed; the cause stays for diagnosis. */
-export class KnowledgeStoreFailed extends Schema.TaggedError<KnowledgeStoreFailed>()(
-  "KnowledgeStoreFailed",
-  { cause: Schema.Defect() },
-) {}
+export class KnowledgeStoreFailed extends Schema.TaggedError<
+  KnowledgeStoreFailed,
+  { readonly brand: unique symbol }
+>()("KnowledgeStoreFailed", { cause: Schema.Defect() }) {}
 
 /** Storage and codec failures keep their cause; promotion refusals pass through. */
 const stored = <A, E, R>(effect: Effect.Effect<A, E, R>) =>

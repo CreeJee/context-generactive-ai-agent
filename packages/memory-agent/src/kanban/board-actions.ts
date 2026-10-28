@@ -51,29 +51,29 @@ import type { LoopHealth } from "../runtime/loop-health.ts";
  * up from there.
  */
 
-export class KanbanActionRefused extends Schema.TaggedError<KanbanActionRefused>()(
-  "KanbanActionRefused",
-  {
-    reason: Schema.Literals([
-      "not_kanban",
-      "card_missing",
-      "card_running",
-      "request_missing",
-      "request_settled",
-      "reassign_needs_edit",
-      "no_goal_change",
-      "card_not_blocked",
-      "card_not_running",
-      "reorder_across_columns",
-      /** A card waiting for a person's decision stays until it is answered or cancelled. */
-      "card_waiting",
-      /** Other cards of the Plan depend on it; they would be left waiting for nothing. */
-      "card_has_dependents",
-      /** The transfer target is this Plan, another project's conversation, or has no Plan. */
-      "transfer_target_invalid",
-    ]),
-  },
-) {}
+export class KanbanActionRefused extends Schema.TaggedError<
+  KanbanActionRefused,
+  { readonly brand: unique symbol }
+>()("KanbanActionRefused", {
+  reason: Schema.Literals([
+    "not_kanban",
+    "card_missing",
+    "card_running",
+    "request_missing",
+    "request_settled",
+    "reassign_needs_edit",
+    "no_goal_change",
+    "card_not_blocked",
+    "card_not_running",
+    "reorder_across_columns",
+    /** A card waiting for a person's decision stays until it is answered or cancelled. */
+    "card_waiting",
+    /** Other cards of the Plan depend on it; they would be left waiting for nothing. */
+    "card_has_dependents",
+    /** The transfer target is this Plan, another project's conversation, or has no Plan. */
+    "transfer_target_invalid",
+  ]),
+}) {}
 
 /** How the orchestrator settles a user's change to an executing card. */
 export const ChangeDecision = Schema.TaggedUnion({

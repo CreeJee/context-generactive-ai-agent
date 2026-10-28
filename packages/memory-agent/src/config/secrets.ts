@@ -8,10 +8,10 @@ export const keychainService = "context-generactive-agent";
 export type SecretName = "kagi-api-key";
 
 /** The secret backend refused or failed. Never answered by storing the secret somewhere else (R14). */
-export class SecretStoreFailed extends Schema.TaggedError<SecretStoreFailed>()(
-  "SecretStoreFailed",
-  { operation: Schema.Literals(["read", "write", "delete"]) },
-) {}
+export class SecretStoreFailed extends Schema.TaggedError<
+  SecretStoreFailed,
+  { readonly brand: unique symbol }
+>()("SecretStoreFailed", { operation: Schema.Literals(["read", "write", "delete"]) }) {}
 
 export interface SecretStoreApi {
   readonly get: (name: SecretName) => Effect.Effect<string | null, SecretStoreFailed>;

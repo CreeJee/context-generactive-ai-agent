@@ -38,15 +38,20 @@ export const Attachment = Schema.Struct({
 });
 export type Attachment = typeof Attachment.Type;
 
-export class AttachmentRejected extends Schema.TaggedError<AttachmentRejected>()(
-  "AttachmentRejected",
-  { reason: Schema.Literals(["empty", "too_large", "unsupported_type"]) },
-) {}
+export class AttachmentRejected extends Schema.TaggedError<
+  AttachmentRejected,
+  { readonly brand: unique symbol }
+>()("AttachmentRejected", {
+  reason: Schema.Literals(["empty", "too_large", "unsupported_type"]),
+}) {}
 
-export class AttachmentStorageFailed extends Schema.TaggedError<AttachmentStorageFailed>()(
-  "AttachmentStorageFailed",
-  { operation: Schema.Literals(["save", "purge", "convert"]), cause: Schema.Defect() },
-) {}
+export class AttachmentStorageFailed extends Schema.TaggedError<
+  AttachmentStorageFailed,
+  { readonly brand: unique symbol }
+>()("AttachmentStorageFailed", {
+  operation: Schema.Literals(["save", "purge", "convert"]),
+  cause: Schema.Defect(),
+}) {}
 
 const AttachmentRow = Schema.Struct({
   id: Schema.String,

@@ -242,13 +242,19 @@ export interface SettingsPlaces {
 const AgentOperation = Schema.Literals(["load-transcript", "drain-followup"]);
 
 /** A subagent transcript or a follow-up's run log could not be read; `cause` stays on the server. */
-export class AgentOperationFailed extends Schema.TaggedError<AgentOperationFailed>()(
-  "AgentOperationFailed",
-  { operation: AgentOperation, cause: Schema.optional(Schema.Defect()) },
-) {}
+export class AgentOperationFailed extends Schema.TaggedError<
+  AgentOperationFailed,
+  { readonly brand: unique symbol }
+>()("AgentOperationFailed", {
+  operation: AgentOperation,
+  cause: Schema.optional(Schema.Defect()),
+}) {}
 
 /** The run read its user turn as evidence before the turn was admitted: a defect in the run. */
-class UserTurnReadEarly extends Schema.TaggedError<UserTurnReadEarly>()("UserTurnReadEarly", {}) {}
+class UserTurnReadEarly extends Schema.TaggedError<
+  UserTurnReadEarly,
+  { readonly brand: unique symbol }
+>()("UserTurnReadEarly", {}) {}
 
 /**
  * Where the file tools work, how to change files without losing the user's edits, the current
@@ -339,6 +345,16 @@ export type QueueRequest = typeof QueueRequest.Type;
  * inferred type portable.
  */
 const json = <T>(status: number, body: T): Response => Response.json(body, { status });
+
+/** A server-sent event stream answer, typed with the global `Response` for the same reason. */
+const eventStream = (body: ReadableStream<Uint8Array>): Response =>
+  new Response(body, {
+    headers: {
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "Content-Type": "text/event-stream; charset=utf-8",
+    },
+  });
 
 /** How long a cancel request waits for the run to actually stop before answering. */
 const cancelWaitMs = 5_000;
@@ -1291,13 +1307,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ),
           context,
         );
-        return new Response(body, {
-          headers: {
-            "Cache-Control": "no-cache, no-transform",
-            Connection: "keep-alive",
-            "Content-Type": "text/event-stream; charset=utf-8",
-          },
-        });
+        return eventStream(body);
       }).pipe(
         Effect.catchTags({
           SessionNotFound: sessionNotFound,

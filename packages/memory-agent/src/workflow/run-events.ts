@@ -12,7 +12,10 @@ export type RunEvent = {
 };
 
 /** A run event the owner refuses to append or replay. */
-export class RunEventRejected extends Schema.TaggedError<RunEventRejected>()("RunEventRejected", {
+export class RunEventRejected extends Schema.TaggedError<
+  RunEventRejected,
+  { readonly brand: unique symbol }
+>()("RunEventRejected", {
   reason: Schema.Literals(["unbound", "key-reused", "invalid-cursor", "invalid-limit"]),
 }) {}
 

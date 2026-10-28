@@ -22,19 +22,19 @@ export { Outcome as ProgramOutcome } from "./protocol.ts";
 export type ProgramFunction = (args: JsonValue) => Effect.Effect<unknown, ProgramCallFailed>;
 
 /** A call of the program failed; the program sees `message` as the error the call throws. */
-export class ProgramCallFailed extends Schema.TaggedError<ProgramCallFailed>()(
-  "ProgramCallFailed",
-  { message: Schema.String },
-) {}
+export class ProgramCallFailed extends Schema.TaggedError<
+  ProgramCallFailed,
+  { readonly brand: unique symbol }
+>()("ProgramCallFailed", { message: Schema.String }) {}
 
 /**
  * The sandbox could not run the program. `start`: its worker did not start. `engine`: QuickJS did
  * not load. `lost`: the worker stopped while the program ran.
  */
-export class CodeSandboxFailed extends Schema.TaggedError<CodeSandboxFailed>()(
-  "CodeSandboxFailed",
-  { reason: Schema.Literals(["start", "engine", "lost"]) },
-) {}
+export class CodeSandboxFailed extends Schema.TaggedError<
+  CodeSandboxFailed,
+  { readonly brand: unique symbol }
+>()("CodeSandboxFailed", { reason: Schema.Literals(["start", "engine", "lost"]) }) {}
 
 /** Calls of one program that run at once; the program's other calls wait for a free slot. */
 const callConcurrency = 8;

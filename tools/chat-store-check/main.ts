@@ -41,10 +41,13 @@ import { fromPrompt, toPrompt } from "../../packages/memory-agent/src/model/prom
 import { historyScreen } from "../../packages/memory-agent/tests/support/history-screen.ts";
 import { system } from "../../packages/memory-agent/tests/support/requests.ts";
 
-class CheckFailed extends Schema.TaggedError<CheckFailed>()("CheckFailed", {
-  message: Schema.String,
-  cause: Schema.optionalKey(Schema.Defect()),
-}) {}
+class CheckFailed extends Schema.TaggedError<CheckFailed, { readonly brand: unique symbol }>()(
+  "CheckFailed",
+  {
+    message: Schema.String,
+    cause: Schema.optionalKey(Schema.Defect()),
+  },
+) {}
 
 type JsonObject = { readonly [key: string]: JsonValue };
 type Entries = ReadonlyArray<readonly [string, JsonValue]>;

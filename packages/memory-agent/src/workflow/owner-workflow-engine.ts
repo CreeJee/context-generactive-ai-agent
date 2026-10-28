@@ -34,14 +34,14 @@ import {
  */
 export const workflowName = (workflow: Workflow.Any): string => workflow._tag;
 
-export class OwnerWorkflowEngineError extends Schema.TaggedError<OwnerWorkflowEngineError>()(
-  "OwnerWorkflowEngineError",
-  {
-    operation: Schema.String,
-    reason: Schema.Literals(["not_registered", "codec", "execution_conflict"]),
-    cause: Schema.Defect(),
-  },
-) {}
+export class OwnerWorkflowEngineError extends Schema.TaggedError<
+  OwnerWorkflowEngineError,
+  { readonly brand: unique symbol }
+>()("OwnerWorkflowEngineError", {
+  operation: Schema.String,
+  reason: Schema.Literals(["not_registered", "codec", "execution_conflict"]),
+  cause: Schema.Defect(),
+}) {}
 
 /** A workflow body as effect/workflow registers it with the low-level engine. */
 type EncodedWorkflowBody = Parameters<WorkflowEngine.Encoded["register"]>[1];

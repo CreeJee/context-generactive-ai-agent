@@ -61,21 +61,21 @@ const stringifyJson = EffectFunction.flow(
   Result.getOrThrow,
 );
 
-export class OpenAICompatibleFailed extends Schema.TaggedError<OpenAICompatibleFailed>()(
-  "OpenAICompatibleFailed",
-  {
-    operation: Schema.Literals([
-      "validation",
-      "missing",
-      "keychain",
-      "partial",
-      "test",
-      "models",
-      /** Naming a new account failed. */
-      "account_id",
-    ]),
-  },
-) {}
+export class OpenAICompatibleFailed extends Schema.TaggedError<
+  OpenAICompatibleFailed,
+  { readonly brand: unique symbol }
+>()("OpenAICompatibleFailed", {
+  operation: Schema.Literals([
+    "validation",
+    "missing",
+    "keychain",
+    "partial",
+    "test",
+    "models",
+    /** Naming a new account failed. */
+    "account_id",
+  ]),
+}) {}
 export interface CompatibleKeyStore {
   readonly get: Effect.Effect<string | null, KeyringOpenFailure>;
   /** Null deletes the stored key. */
