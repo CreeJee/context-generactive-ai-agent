@@ -54,8 +54,10 @@ export const globalSkillsDirectory = (home: string) => join(home, ".agents", "sk
 export const projectSkillsDirectory = (projectRoot: string) =>
   join(projectRoot, ".agents", "skills");
 
-/** Longest SKILL.md read, and longest description shown to the model. */
-export const maxSkillBytes = 256 * 1024;
+/** Longest SKILL.md read, in characters, and longest description shown to the model. */
+export const maxSkillCharacters = 32_000;
+/** Size past which a SKILL.md cannot fit: UTF-8 spends at most 3 bytes per UTF-16 unit. */
+export const maxSkillBytes = maxSkillCharacters * 3;
 export const maxDescriptionCharacters = 1_024;
 /** How many skills the instructions list at most. */
 export const maxListedSkills = 100;
@@ -177,6 +179,7 @@ const make = (options: SkillsOptions) =>
         );
         if (bytes.length > maxSkillBytes) return problem("too_large");
         const text = new TextDecoder().decode(bytes);
+        if (text.length > maxSkillCharacters) return problem("too_large");
         const { fields, body } = parseFrontMatter(text);
         const description = Option.getOrUndefined(MutableHashMap.get(fields, "description")) ?? "";
         if (description.length === 0) return problem("no_description");

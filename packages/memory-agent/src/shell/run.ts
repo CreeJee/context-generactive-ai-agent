@@ -17,9 +17,9 @@ import type { PlatformError } from "effect";
 import { shellInvocation } from "../runtime/host.ts";
 
 /** Output bytes kept from the start of each stream once it is too long. */
-const headBytes = 8 * 1024;
+const headBytes = 2 * 1024;
 /** Output bytes kept from the end of each stream; failures usually print last. */
-const tailBytes = 56 * 1024;
+const tailBytes = 14 * 1024;
 /** Grace period between SIGTERM and SIGKILL when stopping a command. */
 const killGraceMs = 3_000;
 /** Final wait for the output pipes after the process group stopped, before detached pipes are abandoned. */
