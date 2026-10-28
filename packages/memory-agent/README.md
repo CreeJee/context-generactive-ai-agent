@@ -200,3 +200,63 @@ vp check         # 루트에서: 포맷·lint·타입 검사
 승인, auto 모드 테스트는 채팅 API를 쓰는 탭(`tests/support/chat-client.ts`)으로 요청과 재개를 끝까지 주고받습니다.
 
 추가 지침은 `AGENT.md`에 있습니다.
+
+## Interface
+
+패키지 subpath export는 모두 `src`의 TypeScript 원본을 가리킨다. 디렉터리 구조는 위 `구조` 절 참고.
+
+- `memory-agent` (package `.` export) — `./src/index.ts` barrel. 앱의 `.server` 모듈과 API 라우트에서만 가져다 쓰는 Node 전용 진입점이다
+- `memory-agent/definitions` — `./src/tools/definitions.ts`. 브라우저에 필요한 도구 정의만 따로 내보낸다
+- `memory-agent/testing` — `./src/testing/index.ts`. 테스트용 어댑터와 임베더를 내보낸다
+- `memory-agent/chat-api` · `chat-session` · `chat-view` · `btw-thread` — `src/api/*.ts`. 채팅 API(Effect `HttpApi`) 정의, 세션 읽기, 화면 view, btw thread 계약을 내보낸다
+- `memory-agent/provider-contracts` · `compatible-config` — `src/providers/contracts.ts`, `src/providers/openai-compatible-config.ts`를 내보낸다
+- `memory-agent/acp` — `./src/acp/index.ts`. ACP 에이전트 다리 구성 요소를 내보낸다
+- `memory-agent/native-effect` · `node-platform` · `synchronous-path` · `host-system` — `src/runtime/*.ts`의 런타임 플랫폼 모듈을 내보낸다
+- `memory-agent/runtime-resources` — `./src/runtime/resources.ts`. `types`·`development`·`import`·`default` 조건이 모두 같은 파일을 가리킨다. 네이티브 패키지를 부르는 `requireRuntime`가 여기 있다
+- `memory-agent/kiwi-worker` · `embed-worker` · `import-worker` · `redact-worker` · `native-search-worker` · `sandbox-worker` · `code-worker` — worker thread 스크립트 진입점(`src/memory/morph/kiwi-worker.ts`, `src/memory/embedding/embed-worker.ts`, `src/imports/worker.ts`, `src/secrets/redact-worker.ts`, `src/memory/native-search/worker.ts`, `src/shell/sandbox-worker.ts`, `src/code/worker.ts`). `runtimeWorker`가 위치를 정할 수 있게 subpath로 내보낸다
+- `context-agent-acp` (bin) — `./bin/context-agent-acp.ts`. 에디터가 실행하는 ACP CLI다. 환경 변수 `CONTEXT_AGENT_URL`로 앱 주소를 받는다. 설정 예시는 위 `에디터에서 쓰기 (ACP)` 절 참고
+- `vp run build` / `test` / `test:unit` / `test:feature` / `typecheck` (`vite.config.ts` run tasks) — 각각 `vp pack`, `vp test --maxWorkers=4`, `vp test --project unit`, `vp test --project feature --maxWorkers=4`, `tsc`를 실행한다
+- `unit` / `feature` (Vitest projects) — `unit`은 `src/**/*.test.ts`, `feature`는 `tests/**/*.test.ts`를 포함한다
+- `eval:recall` · `eval:compaction` · `eval:structured-memory` · `eval:memory-lab` · `eval:prompt-overhead` (package scripts) — `node --no-warnings eval/<script>.ts`를 실행한다
+- `dev` / `check` / `prepare` / `prepublishOnly` (package scripts) — 순서대로 `vp pack --watch`, `vp check`, `effect-tsgo patch --typescript --oxlint`, `vp run build`를 실행한다
+
+하위 디렉터리와 문서:
+
+- [bench](./bench/README.md) — 파일 도구와 코드 스킬 지연 시간을 도구 실행 경계에서 재는 Vitest 벤치마크
+- [bin](./bin/README.md) — ACP CLI 진입점 `context-agent-acp.ts`
+- [eval](./eval/README.md) — 압축·recall·프롬프트 오버헤드·메모리·구조화 기억 평가 스크립트
+- [scripts](./scripts/README.md) — 구독형 OAuth 공급자를 실제 계정으로 검증하는 CLI 스크립트
+- [src](./src/README.md) — 공개 barrel `index.ts`와 composition root `memoryAgentLayer`
+- [AGENTS.md](./AGENTS.md) — 패키지 작업 지침
+- [skills/app-settings](./skills/app-settings/SKILL.md) — 내장 skill
+- [skills/code-skill-writing](./skills/code-skill-writing/SKILL.md) — 내장 skill
+- [skills/draw](./skills/draw/SKILL.md) — 내장 skill
+- `tests/` — 기능 테스트
+
+## Invariants
+
+- `exports`는 `src`의 TypeScript 원본을 가리켜야 한다. 앱이 원본을 import하므로 `pack.dts: false`, `pack.exports: false`를 둔다. 타입 검사는 `vp check`와 `typecheck` task가 맡는다
+- `build`·`test`·`test:unit`·`test:feature`는 `dependsOn: [{ task: "build", from: "dependencies" }]`를 지킨다. 벡터 인덱스와 테스트가 turbovec addon을 불러오므로 addon을 먼저 빌드해야 한다
+- `typecheck` task는 `cache: false`를 유지한다. Vite Task는 TypeScript 7 native tsc가 읽는 파일을 보지 못하므로, 캐시하면 새 오류가 가려진다
+- 전체 테스트와 feature 테스트는 `--maxWorkers=4`로 실행한다
+- `pack.deps.resolveDepSubpath: true`는 tsdown <0.23 호환을 위한 설정이다. 이 줄을 지우면 subpath import가 쓴 그대로 남는다
+- unit 테스트는 소스 옆 `src/**/*.test.ts`에 두고 실행 중인 에이전트 없이 모듈 하나를 검사한다. 실제 에이전트(TestEnv)나 실제 자원을 쓰는 feature 테스트는 `tests/**/*.test.ts`에 둔다
+- tsconfig는 `strict`, `exactOptionalPropertyTypes`, `noUnusedLocals`, `verbatimModuleSyntax`, `isolatedModules`, `noEmit`를 켠다. `@effect/language-service` 진단은 `nodeBuiltinImport`, `processEnvInEffect`, `asyncFunction`, `preferSchemaOverJson`, `globalErrorInEffectFailure`, `leakingRequirements` 등을 error로 둔다. `globalDate`, `globalTimers`, `globalFetch`, `globalRandom`, `processEnv`, `cryptoRandomUUID`는 warning이다
+- lint는 `typeAware: true`, `typeCheck: true`로 실행한다
+- 네이티브 패키지는 `requireRuntime`으로만 불러온다. 이유는 위 `구조` 절 참고
+- 앱 기본 skill은 `SKILL.md` 하나로 완결해야 한다. 이유는 위 `구조` 절 참고
+- `nodes` 원문 불변, 대화 threadId = 세션 id, 파일 도구 경로 제한, `SecretRedactor` 적용, Kagi 키 저장 위치는 위 `기억 모델`·`대화 상태와 새로고침`·`보안 경계` 절의 규칙을 따른다
+- 서비스는 Effect `Context.Tag` + `Layer`로 만들고 도구 입력 스키마는 Effect Schema로 쓴다(위 `구조` 절 참고)
+
+## Side Effects
+
+- `prepare` 스크립트(`effect-tsgo patch --typescript --oxlint`)는 설치된 typescript와 oxlint를 패치한다
+- `build` task(`vp pack`)는 번들 출력을 쓴다. `.gitignore`가 `dist`, `.vitest/`, `*.log`를 무시한다
+- `test` 계열 task는 임시 디렉터리에 실제 SQLite, turbovec, 파일 시스템을 쓴다
+- `eval:*` 스크립트는 `node`로 `eval/` 스크립트를 실행한다. `eval:recall`은 `~/.context-generactive-agent/models`에 모델 두 개가 있어야 한다
+- `vite.config.ts` 자체는 설정 객체만 내보내는 순수 모듈이다
+
+## Verification
+
+- Run: `vp run memory-agent#typecheck`
+- Run: `vp run memory-agent#test`
