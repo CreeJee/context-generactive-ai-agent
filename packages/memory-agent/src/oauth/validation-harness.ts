@@ -2,6 +2,7 @@ import { nativePromise } from "../runtime/native-effect.ts";
 import { Result } from "effect";
 import { isTruthy } from "../truthy.ts";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
+import { Sse } from "effect/encoding";
 import { HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 import { optionalProperty } from "../optional-property.ts";
@@ -9,7 +10,6 @@ import {
   Cause,
   Context,
   Crypto,
-  Data,
   Deferred,
   Fiber,
   Effect,
@@ -19,7 +19,6 @@ import {
   HashMap,
   HashSet,
   MutableHashSet,
-  DateTime,
   Option,
   Path,
   Predicate,
@@ -544,6 +543,7 @@ const openAiAccountId = (idToken: string) =>
 
 const parseTokens = (
   token: typeof TokenResponse.Type,
+  issuedAt: number,
   previous?: StoredCredential,
 ): Result.Result<StoredCredential, OAuthHarnessError> =>
   Result.map(
@@ -556,7 +556,7 @@ const parseTokens = (
       const credential: StoredCredential = {
         accessToken: token.access_token,
         refreshToken,
-        expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + token.expires_in * 1_000,
+        expiresAt: issuedAt + token.expires_in * 1_000,
       };
       const withIdentity = idToken === undefined ? credential : { ...credential, idToken };
       return accountId === undefined ? withIdentity : { ...withIdentity, accountId };
@@ -594,50 +594,24 @@ const tokenBody = (protocol: ProviderProtocol, values: TokenGrant): EncodedToken
       }
     : { body: JSON.stringify(values), contentType: "application/json" };
 
-/** One SSE frame of a provider stream: a decoded event, or the `[DONE]` marker. */
-type Frame = Data.TaggedEnum<{
-  Event: { readonly event: NormalizedStreamEvent };
-  Done: {};
-}>;
-const Frame = Data.taggedEnum<Frame>();
-
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 function sseEvents(provider: OAuthProvider, response: Response) {
   // The provider accepted the request once headers arrived; any later loss is an interrupted response.
   const interrupted = () =>
     ProviderStreamFailed.make({ provider, reason: ResponseInterrupted.make({}) });
-  return Stream.suspend<NormalizedStreamEvent, ProviderStreamFailed, never>(() => {
-    if (response.body === null) return Stream.fail(interrupted());
-    let buffer = "";
-    const frames = function* (part: string): Generator<Frame, void, unknown> {
-      buffer += part.replaceAll("\r\n", "\n");
-      for (;;) {
-        const boundary = buffer.indexOf("\n\n");
-        if (boundary < 0) return;
-        const frame = buffer.slice(0, boundary);
-        buffer = buffer.slice(boundary + 2);
-        for (const line of frame.split("\n")) {
-          if (!line.startsWith("data:")) continue;
-          const data = line.slice(5).trim();
-          if (data === "[DONE]") {
-            yield Frame.Done();
-            return;
-          }
-          const event = decodeProviderEvent(provider, data);
-          if (event !== null) yield Frame.Event({ event });
-        }
-      }
-    };
-    const body = response.body;
-    return Stream.fromReadableStream({
-      evaluate: () => body.pipeThrough(new TextDecoderStream()),
-      onError: interrupted,
-    }).pipe(
-      Stream.flatMap((part) => Stream.fromIterable(frames(part))),
-      Stream.takeWhile(Frame.$is("Event")),
-      Stream.map((frame) => frame.event),
-    );
-  });
+  const body = response.body;
+  if (body === null) return Stream.fail(interrupted());
+  return Stream.fromReadableStream({
+    evaluate: () => body.pipeThrough(new TextDecoderStream()),
+    onError: interrupted,
+  }).pipe(
+    Stream.pipeThroughChannel(Sse.decode()),
+    // Neither provider sends `retry`; one, or an oversized event, ends the response like a lost one.
+    Stream.catchTag(["Retry", "SseError"], () => Stream.fail(interrupted())),
+    Stream.takeWhile((event) => event.data !== "[DONE]"),
+    Stream.map((event) => decodeProviderEvent(provider, event.data)),
+    Stream.filter(Predicate.isNotNull),
+  );
 }
 
 export const createSubscriptionOAuthClient = Effect.fnUntraced(function* (
@@ -962,11 +936,7 @@ export const createSubscriptionOAuthClient = Effect.fnUntraced(function* (
       OAuthHarnessError.fromCode("invalid_token_response", response.status, context);
     const body = yield* nativePromise(() => response.json()).pipe(Effect.mapError(invalidResponse));
     const token = yield* Effect.fromOption(decodeTokenResponse(body), invalidResponse);
-    const parsed = yield* Effect.fromResult(parseTokens(token, previous));
-    return {
-      ...parsed,
-      expiresAt: now() + (parsed.expiresAt - DateTime.toEpochMillis(DateTime.nowUnsafe())),
-    };
+    return yield* Effect.fromResult(parseTokens(token, now(), previous));
   });
   const refresh = Effect.fn("OAuth.refresh")(function* (credential: StoredCredential) {
     const begin = Effect.gen(function* () {
