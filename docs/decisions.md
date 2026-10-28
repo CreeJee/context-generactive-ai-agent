@@ -2962,6 +2962,7 @@
   - guard는 `Effect.when`으로 쓴다. 조건에 따라 줄을 모을 때는 `Option`과 `Array.getSomes`를 쓴다.
   - 같은 몸체를 여러 입력에 돌리던 테스트는 `it.effect.each`·`describe.each`나 한 테스트 안의 `Effect.forEach`로 바꾸되 테스트 이름은 그대로 둔다.
   - 동작이 바뀌지 않았는지는 HEAD 사본(`*-old.probe.*`, 커밋 전 삭제)과 같은 입력으로 출력을 비교해 확인했다. 유료 실행 평가(live-*, structured-memory의 live 모드)는 타입 검사만 했다.
+- 그 뒤 tools/profile과 tools/chat-store-check도 바꿨다(`07b65b6b`). anti-slop Oxlint 플러그인(`tools/oxlint/anti-slop`)은 가져온 코드라서 이 기준을 적용하지 않는다. lint·fmt 대상에서도 빠져 있다. 반복을 조합자로 바꿔 봤지만 규칙 진단은 같았고, 원본과 달라지면 다시 가져올 때 충돌만 늘어난다.
 
 ## Schema 클래스는 brand로 이름을 갖는다 (2026-10-28)
 
