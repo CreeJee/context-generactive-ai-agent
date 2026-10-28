@@ -1,8 +1,8 @@
-import { FetchHttpClient, HttpClient } from "effect/http";
+import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
 import { NodeServices } from "@effect/platform-node";
 import { ManagedRuntime, Path } from "effect";
-import { Cause, Clock, Config, Console, Effect, Exit, FileSystem, Layer } from "effect";
-import { DateTime, Ref, Sink, Stdio, Stream } from "effect";
+import { Cause, Config, Console, Effect, Exit, FileSystem, Layer } from "effect";
+import { DateTime, MutableRef, Ref, Schedule, Sink, Stdio, Stream } from "effect";
 import { nativePromise } from "memory-agent/native-effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -87,31 +87,26 @@ const waitForBackend = Effect.fn("dev.waitForBackend")(function* (
   url: string,
   expectedBuildId: string,
 ) {
-  const deadline = (yield* Clock.currentTimeMillis) + 30_000;
-  const Health = Schema.Struct({
-    buildId: Schema.String,
-    status: Schema.Literals(["ready", "draining"]),
+  // Only the expected build, ready rather than draining, answers with this shape.
+  const Ready = Schema.Struct({
+    buildId: Schema.Literal(expectedBuildId),
+    status: Schema.Literal("ready"),
   });
-  while ((yield* Clock.currentTimeMillis) < deadline) {
-    const response = yield* HttpClient.get(`${url}/api/health`).pipe(
-      Effect.timeoutOption(1_000),
-      Effect.orElseSucceed(() => Option.none()),
-    );
-    if (Option.isSome(response)) {
-      const body = yield* response.value.json.pipe(Effect.option);
-      if (
-        response.value.status >= 200 &&
-        response.value.status < 300 &&
-        Option.isSome(body) &&
-        Schema.is(Health)(body.value) &&
-        body.value.buildId === expectedBuildId &&
-        body.value.status === "ready"
-      )
-        return;
-    }
-    yield* Effect.sleep(100);
-  }
-  return yield* new Cause.UnknownError(new Error(`stable backend did not become ready at ${url}`));
+  // Any other answer, or none within a second, is retried until the deadline.
+  yield* HttpClient.get(`${url}/api/health`).pipe(
+    Effect.timeout(1_000),
+    Effect.flatMap(HttpClientResponse.filterStatusOk),
+    Effect.flatMap((response) => response.json),
+    Effect.flatMap(Schema.decodeUnknownEffect(Ready)),
+    Effect.retry(Schedule.spaced(100)),
+    Effect.timeoutOrElse({
+      duration: 30_000,
+      orElse: () =>
+        Effect.fail(
+          new Cause.UnknownError(new Error(`stable backend did not become ready at ${url}`)),
+        ),
+    }),
+  );
 });
 
 const writeManifest = Effect.fn("dev.writeManifest")(function* (manifest: typeof Manifest.Type) {
@@ -305,12 +300,11 @@ const runWithBackend = Effect.fn("dev.runWithBackend")(function* (includeWeb: bo
   if (spans.kind === "local") yield* Console.log(`Collecting spans into ${spans.file}`);
   const backend = yield* stableBackend(buildId);
   yield* Console.log(`Backend log: ${yield* recordBackendOutput(backend, buildId)}`);
-  let web: ChildProcessSpawner.ChildProcessHandle | null = null;
-  let stopping = false;
+  const web = MutableRef.make<ChildProcessSpawner.ChildProcessHandle | null>(null);
+  const stopping = MutableRef.make(false);
   const shutdown = Effect.fn("dev.shutdown")(function* (signal: ChildProcess.Signal) {
-    if (stopping) return;
-    stopping = true;
-    yield* Effect.forEach([web, backend], (child) => stop(child, signal), {
+    if (MutableRef.getAndSet(stopping, true)) return;
+    yield* Effect.forEach([MutableRef.get(web), backend], (child) => stop(child, signal), {
       concurrency: "unbounded",
       discard: true,
     });
@@ -321,14 +315,15 @@ const runWithBackend = Effect.fn("dev.runWithBackend")(function* (includeWeb: bo
   // A second Ctrl+C while the children drain kills them now instead of leaving them behind.
   // Suspended so it reads the frontend started after this point, not the null it starts as.
   const forceStop = Effect.suspend(() =>
-    Effect.forEach([web, backend, collector], (child) => stop(child, "SIGKILL"), {
+    Effect.forEach([MutableRef.get(web), backend, collector], (child) => stop(child, "SIGKILL"), {
       concurrency: "unbounded",
       discard: true,
     }),
   ).pipe(Effect.andThen(removeManifest(buildId)));
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
   const handlers = signals.map(
-    (signal) => () => void developmentRuntime.runPromise(stopping ? forceStop : shutdown(signal)),
+    (signal) => () =>
+      void developmentRuntime.runPromise(MutableRef.get(stopping) ? forceStop : shutdown(signal)),
   );
   signals.forEach((signal, index) => process.on(signal, handlers[index]!));
   yield* Effect.addFinalizer(() =>
@@ -356,18 +351,23 @@ const runWithBackend = Effect.fn("dev.runWithBackend")(function* (includeWeb: bo
   yield* Console.log(`Stable agent backend: ${backendUrl}`);
   if (!includeWeb) {
     process.exitCode = yield* backend.exitCode.pipe(
-      Effect.catchCause((cause) => (stopping ? Effect.succeed(0) : Effect.failCause(cause))),
+      Effect.catchCause((cause) =>
+        MutableRef.get(stopping) ? Effect.succeed(0) : Effect.failCause(cause),
+      ),
     );
     return;
   }
-  web = yield* webFrontend({ backendUrl, buildId });
+  const frontend = yield* webFrontend({ backendUrl, buildId });
+  MutableRef.set(web, frontend);
   yield* Console.log(`HMR frontend: http://127.0.0.1:${webPort}`);
   const first = yield* Effect.raceFirst(
     backend.exitCode.pipe(Effect.map((code) => ({ child: "backend", code }))),
-    web.exitCode.pipe(Effect.map((code) => ({ child: "web", code }))),
+    frontend.exitCode.pipe(Effect.map((code) => ({ child: "web", code }))),
   ).pipe(
     Effect.catchCause((cause) =>
-      stopping ? Effect.succeed({ child: "backend", code: 0 }) : Effect.failCause(cause),
+      MutableRef.get(stopping)
+        ? Effect.succeed({ child: "backend", code: 0 })
+        : Effect.failCause(cause),
     ),
   );
   process.exitCode = first.code;

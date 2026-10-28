@@ -73,19 +73,18 @@ const program = Effect.gen(function* () {
         Effect.fail(new Cause.UnknownError(new Error("loopback listener has no TCP port"))),
     });
   }, Effect.scoped);
-  const until = Effect.fn("smoke.until")(function* <T, E, R>(
-    what: string,
-    probe: Effect.Effect<T | null, E, R>,
-    timeoutMs: number,
-  ) {
-    const deadline = (yield* Clock.currentTimeMillis) + timeoutMs;
-    while ((yield* Clock.currentTimeMillis) < deadline) {
-      const value = yield* probe.pipe(Effect.orElseSucceed(() => null));
-      if (value !== null) return value;
-      yield* Effect.sleep(250);
-    }
-    return yield* new Cause.UnknownError(new Error(`timed out waiting for ${what}`));
-  });
+  // A failed probe, like one that finds nothing yet, is tried again 250 ms later until the deadline.
+  const until = <T, E, R>(what: string, probe: Effect.Effect<T | null, E, R>, timeoutMs: number) =>
+    probe.pipe(
+      Effect.flatMap(Effect.fromNullishOr),
+      Effect.retry(Schedule.spaced(250)),
+      Effect.timeoutOrElse({
+        duration: timeoutMs,
+        orElse: () =>
+          Effect.fail(new Cause.UnknownError(new Error(`timed out waiting for ${what}`))),
+      }),
+      Effect.withSpan("smoke.until"),
+    );
   const start = (port: number) =>
     spawner.spawn(
       ChildProcess.make(executable, ["--port", String(port), "--no-open", "--storage", storage], {
@@ -139,7 +138,7 @@ const program = Effect.gen(function* () {
       ),
     );
 
-  let started = yield* Clock.currentTimeMillis;
+  const started = yield* Clock.currentTimeMillis;
   const server = yield* start(port);
   yield* until(
     "the server",

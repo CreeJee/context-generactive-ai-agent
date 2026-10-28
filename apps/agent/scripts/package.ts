@@ -8,6 +8,7 @@ import { BuildServerConfig, buildConfigAsset } from "../app/.server/build-config
 // The runtime manifest is hashed incrementally because staged native assets can be large.
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  Array as Arr,
   Config,
   Context,
   Crypto,
@@ -117,18 +118,22 @@ const program = Effect.gen(function* () {
     fromDirectory: string,
     name: string,
   ) {
-    for (
-      let directory = fromDirectory;
-      directory !== dirname(directory);
-      directory = dirname(directory)
-    ) {
-      const candidate =
-        basename(directory) === "node_modules"
-          ? join(directory, name)
-          : join(directory, "node_modules", name);
-      if (yield* fs.exists(join(candidate, "package.json"))) return yield* fs.realPath(candidate);
-    }
-    return null;
+    // Every folder from `fromDirectory` up to, but not including, the filesystem root.
+    const directories = Arr.unfold(fromDirectory, (directory) =>
+      directory === dirname(directory)
+        ? Option.none()
+        : Option.some([directory, dirname(directory)] as const),
+    );
+    const candidates = directories.map((directory) =>
+      basename(directory) === "node_modules"
+        ? join(directory, name)
+        : join(directory, "node_modules", name),
+    );
+    const found = yield* Effect.findFirst(candidates, (candidate) =>
+      fs.exists(join(candidate, "package.json")),
+    );
+    if (Option.isNone(found)) return null;
+    return yield* fs.realPath(found.value);
   });
 
   /** Files a package needs at run time; null keeps everything except nested node_modules. */
@@ -180,46 +185,62 @@ const program = Effect.gen(function* () {
       const kept = keptFiles(name);
       yield* copyPackage(realDirectory, destination, realDirectory, kept);
       const manifest = yield* readPackage(realDirectory);
-      for (const dependency of [
+      const dependencies = [
         ...Object.keys(manifest.dependencies ?? {}),
         ...Object.keys(manifest.optionalDependencies ?? {}),
-      ]) {
-        if (skipDependency(name, dependency)) continue;
-        // Optional platform packages for other machines are not installed and are skipped here.
-        const found = yield* findPackage(realDirectory, dependency);
-        if (isTruthy(found)) yield* place(found, dependency, destination);
-      }
+      ].filter((dependency) => !skipDependency(name, dependency));
+      yield* Effect.forEach(
+        dependencies,
+        Effect.fnUntraced(function* (dependency) {
+          // Optional platform packages for other machines are not installed and are skipped here.
+          const found = yield* findPackage(realDirectory, dependency);
+          if (isTruthy(found)) yield* place(found, dependency, destination);
+        }),
+        { discard: true },
+      );
     });
-    for (const root of [
-      "turbovec",
-      "@napi-rs/keyring",
-      "@huggingface/transformers",
-      "sharp",
-      "kiwi-nlp",
-      // Finds its helper binaries (seccomp, Windows helper, JVM proxy agent) next to its own files.
-      "@anthropic-ai/sandbox-runtime",
-      // The Kiwi and embedding workers load Effect and its platform services from here.
-      "effect",
-      "@effect/platform-node",
-    ]) {
-      const found = yield* findPackage(memoryAgent, root);
-      if (!isTruthy(found))
-        return yield* PackagePreflightFailed.make({
-          message: `${root} is not installed; run vp install`,
-        });
-      yield* place(found, root, stage);
-    }
+    yield* Effect.forEach(
+      [
+        "turbovec",
+        "@napi-rs/keyring",
+        "@huggingface/transformers",
+        "sharp",
+        "kiwi-nlp",
+        // Finds its helper binaries (seccomp, Windows helper, JVM proxy agent) next to its own files.
+        "@anthropic-ai/sandbox-runtime",
+        // The Kiwi and embedding workers load Effect and its platform services from here.
+        "effect",
+        "@effect/platform-node",
+      ],
+      Effect.fnUntraced(function* (root) {
+        const found = yield* findPackage(memoryAgent, root);
+        if (!isTruthy(found))
+          return yield* PackagePreflightFailed.make({
+            message: `${root} is not installed; run vp install`,
+          });
+        yield* place(found, root, stage);
+      }),
+      { discard: true },
+    );
 
     // onnxruntime ships every platform's binaries; keep this machine's.
     const binaries = join(stage, "node_modules", "onnxruntime-node", "bin", "napi-v6");
-    for (const platform of yield* fs.readDirectory(binaries)) {
-      if (platform !== process.platform)
-        yield* fs.remove(join(binaries, platform), { recursive: true });
-      else
-        for (const arch of yield* fs.readDirectory(join(binaries, platform)))
-          if (arch !== process.arch)
-            yield* fs.remove(join(binaries, platform, arch), { recursive: true });
-    }
+    yield* Effect.forEach(
+      yield* fs.readDirectory(binaries),
+      Effect.fnUntraced(function* (platform) {
+        if (platform !== process.platform)
+          return yield* fs.remove(join(binaries, platform), { recursive: true });
+        const otherArches = (yield* fs.readDirectory(join(binaries, platform))).filter(
+          (arch) => arch !== process.arch,
+        );
+        yield* Effect.forEach(
+          otherArches,
+          (arch) => fs.remove(join(binaries, platform, arch), { recursive: true }),
+          { discard: true },
+        );
+      }),
+      { discard: true },
+    );
   });
 
   /**
@@ -305,28 +326,30 @@ const program = Effect.gen(function* () {
   const listFiles = Effect.fn("package.listFiles")(function* (
     directory: string,
   ): Effect.fn.Return<string[], PlatformError> {
-    const files: string[] = [];
-    for (const name of yield* fs.readDirectory(directory)) {
-      const full = join(directory, name);
-      // The manifest excludes links as Dirent listing did, but FileSystem.stat follows them:
-      // readLink succeeds only for a link and fails with the unmapped `Unknown` reason (EINVAL) for
-      // anything else, which stat then classifies. The staged tree is this script's own output.
-      const type = yield* fs.readLink(full).pipe(
-        Effect.as("SymbolicLink" as const),
-        Effect.catchReason("PlatformError", "Unknown", () =>
-          Effect.map(fs.stat(full), (info) => info.type),
-        ),
-      );
-      switch (type) {
-        case "Directory":
-          files.push(...(yield* listFiles(full)));
-          break;
-        case "File":
-          files.push(full);
-          break;
-      }
-    }
-    return files;
+    const nested = yield* Effect.forEach(
+      yield* fs.readDirectory(directory),
+      Effect.fnUntraced(function* (name): Effect.fn.Return<string[], PlatformError> {
+        const full = join(directory, name);
+        // The manifest excludes links as Dirent listing did, but FileSystem.stat follows them:
+        // readLink succeeds only for a link and fails with the unmapped `Unknown` reason (EINVAL) for
+        // anything else, which stat then classifies. The staged tree is this script's own output.
+        const type = yield* fs.readLink(full).pipe(
+          Effect.as("SymbolicLink" as const),
+          Effect.catchReason("PlatformError", "Unknown", () =>
+            Effect.map(fs.stat(full), (info) => info.type),
+          ),
+        );
+        switch (type) {
+          case "Directory":
+            return yield* listFiles(full);
+          case "File":
+            return [full];
+          default:
+            return [];
+        }
+      }),
+    );
+    return nested.flat();
   });
   const copyPackage = Effect.fn("package.copyPackage")(function* (
     source: string,
@@ -344,8 +367,11 @@ const program = Effect.gen(function* () {
     switch (entry.type) {
       case "Directory":
         yield* fs.makeDirectory(destination, { recursive: true, mode: entry.mode });
-        for (const name of yield* fs.readDirectory(source))
-          yield* copyPackage(join(source, name), join(destination, name), root, kept);
+        yield* Effect.forEach(
+          yield* fs.readDirectory(source),
+          (name) => copyPackage(join(source, name), join(destination, name), root, kept),
+          { discard: true },
+        );
         break;
       case "File":
         yield* fs.copyFile(source, destination);
@@ -390,23 +416,27 @@ const program = Effect.gen(function* () {
       packages: false,
     },
   } as const;
-  for (const [name, { source, packages }] of Object.entries(bundledWorkers))
-    yield* Effect.tryPromise(() =>
-      build({
-        config: false,
-        entry: { [name]: source },
-        outDir: stage,
-        clean: false,
-        format: "esm",
-        platform: "node",
-        fixedExtension: true,
-        dts: false,
-        deps: packages ? { alwaysBundle: [/.*/], onlyBundle: false } : { neverBundle: true },
-        outputOptions: { codeSplitting: false },
-        report: false,
-        logLevel: "warn",
-      }),
-    );
+  yield* Effect.forEach(
+    Object.entries(bundledWorkers),
+    ([name, { source, packages }]) =>
+      Effect.tryPromise(() =>
+        build({
+          config: false,
+          entry: { [name]: source },
+          outDir: stage,
+          clean: false,
+          format: "esm",
+          platform: "node",
+          fixedExtension: true,
+          dts: false,
+          deps: packages ? { alwaysBundle: [/.*/], onlyBundle: false } : { neverBundle: true },
+          outputOptions: { codeSplitting: false },
+          report: false,
+          logLevel: "warn",
+        }),
+      ),
+    { discard: true },
+  );
   // The app's own skills; `builtinSkillsDirectory` looks for them next to the runtime files.
   yield* fs.copy(join(memoryAgent, "skills"), join(stage, "skills"));
   yield* collectPackages();
@@ -415,15 +445,19 @@ const program = Effect.gen(function* () {
   // Asset names and manifest entries use `/` on every platform; the executable joins them itself.
   const files = (yield* listFiles(stage)).map((file) => toPosix(relative(stage, file))).sort();
   // One digest per file, then a digest of the names and digests: no file is held past its turn.
-  const entries: string[] = [];
-  let bytes = 0;
-  const assets: Record<string, string> = {};
-  for (const file of files) {
-    const content = yield* fs.readFile(join(stage, file));
-    entries.push(`${file}\0${Hex.encode(yield* crypto.digest("SHA-256", content))}`);
-    bytes += content.length;
-    assets[`runtime/files/${file}`] = join(stage, file);
-  }
+  const digests = yield* Effect.forEach(
+    files,
+    Effect.fnUntraced(function* (file) {
+      const content = yield* fs.readFile(join(stage, file));
+      const digest = Hex.encode(yield* crypto.digest("SHA-256", content));
+      return { entry: `${file}\0${digest}`, size: content.length };
+    }),
+  );
+  const entries = digests.map(({ entry }) => entry);
+  const bytes = digests.reduce((total, { size }) => total + size, 0);
+  const assets: Record<string, string> = Object.fromEntries(
+    files.map((file) => [`runtime/files/${file}`, join(stage, file)]),
+  );
   const hash = Hex.encode(
     yield* crypto.digest("SHA-256", new TextEncoder().encode(entries.join("\n"))),
   );
