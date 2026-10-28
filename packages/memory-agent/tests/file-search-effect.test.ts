@@ -1,6 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import { assertTrue } from "@effect/vitest/utils";
-import { Deferred, Effect, Cause, Exit, Fiber } from "effect";
+import { Deferred, Effect, Cause, Exit, Fiber, Stream } from "effect";
+import { gitNames } from "../src/files/git-grep.ts";
 import { searchTextFilesEffect } from "../src/files/search.ts";
 import { PathRejected } from "../src/files/paths.ts";
 
@@ -74,6 +75,22 @@ it.effect("finishing a page interrupts all pending read-ahead work", () =>
     expect(page.next).toEqual({ file: 0, line: 100 });
     expect(active).toBe(0);
     expect(finished).toBe(4);
+  }),
+);
+
+it.effect("Git names split across chunks and stop one past the limit", () =>
+  Effect.gen(function* () {
+    const chunks = ["a\0b", "c\0", "\0d\0e", "\0f\0"].map((text) => new TextEncoder().encode(text));
+    expect(yield* gitNames({ stdout: Stream.fromIterable(chunks), limit: 10 })).toEqual({
+      names: ["a", "bc", "d", "e", "f"],
+      truncated: false,
+    });
+    // An endless output still ends: reading stops one name past the limit.
+    const endless = Stream.fromEffectRepeat(Effect.succeed(new TextEncoder().encode("x\0")));
+    expect(yield* gitNames({ stdout: endless, limit: 3 })).toEqual({
+      names: ["x", "x", "x"],
+      truncated: true,
+    });
   }),
 );
 

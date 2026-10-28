@@ -8,7 +8,7 @@ import { decodeSearchCursor, encodeSearchCursor, searchTextFilesEffect } from ".
 import { createTextPageReader, readFileBytesEffect } from "../files/text.ts";
 import type { Project } from "../projects/projects.ts";
 import { guardedEffect } from "./failure.ts";
-import { listPageSize } from "./files.ts";
+import { listPage } from "./files.ts";
 import { runTool } from "./run-tool.ts";
 
 export const outsideReadToolNames = [
@@ -124,7 +124,7 @@ const make = Effect.gen(function* () {
               "snapshot_expired: start again without snapshot and offset.",
             );
             const start = Math.max(0, offset ?? 0);
-            const paths = view.paths.slice(start, start + listPageSize);
+            const paths = listPage({ paths: view.paths, start });
             const next = start + paths.length;
             return {
               snapshot: view.id,

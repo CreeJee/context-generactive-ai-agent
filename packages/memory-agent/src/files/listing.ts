@@ -21,7 +21,7 @@ import {
   Array as EffectArray,
 } from "effect";
 import { findExecutable } from "../runtime/host.ts";
-import { gitEnvironment, gitOutputText } from "./git-grep.ts";
+import { gitEnvironment, gitNames } from "./git-grep.ts";
 import { isCredentialPath } from "./paths.ts";
 
 const { join } = hostPath;
@@ -51,7 +51,7 @@ const statConcurrency = 64;
 /** Directories skipped when walking a project that is not a Git work tree. */
 const walkSkips = HashSet.fromIterable([".git", "node_modules"]);
 
-/** Files a walk collects before it stops and reports itself truncated. */
+/** Files a walk or a Git listing collects before it stops and reports itself truncated. */
 export const walkLimit = 50_000;
 
 export interface FileListing {
@@ -61,7 +61,7 @@ export interface FileListing {
   readonly source: "git" | "walk";
   /** Files and directories left out because they look like credentials. */
   readonly excluded: number;
-  /** True when a walk stopped at {@link walkLimit} files. */
+  /** True when a walk or a Git listing stopped at {@link walkLimit} files. */
   readonly truncated: boolean;
 }
 
@@ -93,20 +93,17 @@ const gitFiles = Effect.fn("FileListing.gitFiles")(function* (root: string, dire
           },
         ),
       );
-      const stdout = yield* gitOutputText({
-        stdout: child.stdout,
-        maxBytes: 256 * 1024 * 1024,
-        overflow: "git listing output exceeds 256 MiB",
-      });
-      const code = yield* child.exitCode;
-      return Number(code) === 0 ? stdout.split("\0").filter(Boolean) : null;
+      const listed = yield* gitNames({ stdout: child.stdout, limit: walkLimit });
+      // A listing cut short is stopped with its Scope, without waiting for its exit.
+      return yield* listed.truncated
+        ? Effect.succeed({ paths: listed.names, truncated: true })
+        : Effect.map(child.exitCode, (code) =>
+            Number(code) === 0 ? { paths: listed.names, truncated: false } : null,
+          );
     }),
   ).pipe(
     // Without a usable git listing the caller walks the directory itself.
-    Effect.catchTags({
-      PlatformError: () => Effect.succeed(null),
-      UnknownError: () => Effect.succeed(null),
-    }),
+    Effect.catchTag("PlatformError", () => Effect.succeed(null)),
   );
 });
 
@@ -205,7 +202,7 @@ export const listProjectFilesEffect = Effect.fn("FileListing.project")(function*
   const fromGit = yield* gitFiles(root, directory);
   const walked = isTruthy(fromGit) ? undefined : yield* walkFiles(root, directory, "");
   const prefix = directory === "." ? "" : `${directory}/`;
-  const listed = EffectArray.dedupe(fromGit ?? walked?.files ?? []).filter(
+  const listed = EffectArray.dedupe(fromGit?.paths ?? walked?.files ?? []).filter(
     (path) =>
       path.startsWith(prefix) &&
       (glob === undefined || matchesGlob(path.slice(prefix.length), glob)) &&
@@ -232,7 +229,7 @@ export const listProjectFilesEffect = Effect.fn("FileListing.project")(function*
     paths: paths.toSorted(),
     source: isTruthy(fromGit) ? "git" : "walk",
     excluded,
-    truncated: walked?.truncated ?? false,
+    truncated: fromGit?.truncated ?? walked?.truncated ?? false,
   } satisfies FileListing;
 });
 

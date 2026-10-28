@@ -5,7 +5,7 @@ import { Context, FileSystem, Layer, MutableHashMap, Effect, Path, Schema, Strea
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { describe, expect } from "vite-plus/test";
 import type { JsonValue } from "../src/json.ts";
-import { FileTools } from "../src/tools/files.ts";
+import { FileTools, listPageCharacters } from "../src/tools/files.ts";
 import { callTool, failureCode } from "./support/run-tools.ts";
 
 const isText = Schema.is(Schema.String);
@@ -130,6 +130,28 @@ describe("list_files", () => {
       );
       expect(second.paths).toHaveLength(10);
       expect(second.nextOffset).toBeNull();
+    }).pipe(withTestPlatform),
+  );
+
+  it.live("keeps a page of long paths within the page's characters", () =>
+    Effect.gen(function* () {
+      const files = MutableHashMap.fromIterable(
+        Array.from(
+          { length: 300 },
+          (_, index) => [`${"deep/".repeat(40)}${String(index).padStart(3, "0")}.md`, "x"] as const,
+        ),
+      );
+      const { root } = yield* project(files);
+      const { listFiles } = yield* fileTools(root);
+      const first = yield* Schema.decodeUnknownEffect(ListPage)(yield* listFiles({}));
+      expect(first.paths.reduce((length, path) => length + path.length + 3, 0)).toBeLessThanOrEqual(
+        listPageCharacters,
+      );
+      expect(first.paths.length).toBeLessThan(300);
+      const second = yield* Schema.decodeUnknownEffect(ListPage)(
+        yield* listFiles({ snapshot: first.snapshot, offset: first.nextOffset }),
+      );
+      expect(second.paths[0]).not.toBe(first.paths.at(-1));
     }).pipe(withTestPlatform),
   );
 });

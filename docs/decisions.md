@@ -2944,3 +2944,14 @@
   - fetch 응답 본문 읽기(`nativePromise(() => response.text())`)는 Promise 경계로 둔다. OAuth harness는 주입한 `fetch`를 써서 `HttpClient`로 옮기지 않았다.
   - 결과: memory-agent 전체 테스트(206 파일, 1221개)는 부하 아래에서 native-search 시작 시간초과로 7 파일이 실패했다. 이 파일들은 따로 돌리면 통과한다. 앱 테스트(40 파일, 145개), `vp run test:browser`(5 파일, 12개), `vp check`, `vp run typecheck`가 통과한다.
 - 결과(2026-10-28): memory-agent 전체 테스트(206 파일, 1220개), 앱 테스트(40 파일, 145개), `vp run test:browser`(5 파일, 12개), `vp check`, `vp run typecheck`가 통과한다. 로컬 DB 검사 도구는 실패 없이 끝난다.
+
+## 반복과 분기는 조합자로 쓰고, 툴 출력은 컨텍스트 크기로 자른다 (2026-10-28)
+
+- `let`과 `while`을 쓰지 않는다. Effect v4 code-style 문서의 Looping 예시(`Effect.gen` 안의 `let`과 `while`)도 따르지 않는다. 바꿔 쓰는 변수는 반복과 클로저 사이에서 충분히 격리되지 않고, 이름 있는 조합자가 반복의 목적을 더 잘 드러낸다.
+  - 반복은 목적에 맞는 조합자로 쓴다: 다 읽을 때까지 읽기는 `Stream.paginate`, 앞서 읽기는 `Stream.mapEffect`의 `concurrency`, 누적은 `Stream.mapAccum`·`scanEffect`, 일찍 멈추기는 `Stream.takeUntil`·`take`·`runLast`, 찾다가 멈추기는 `Effect.findFirst`, 차례로 접기는 `Effect.reduce`. 순수한 반복은 `Array.scan`·`takeWhile`·`unfold`·`findFirstIndex`로 쓴다.
+  - `for`와 `if`도 같은 기준이다. 조합자가 맞으면 그것을 쓴다(`Effect.forEach`, `Effect.when`, `Match`, `Option`). 조건을 줄여 읽는 복합 guard만 `if`로 둔다.
+  - 맞는 조합자가 없으면 손으로 쓴 재귀를 쓰되 깊이가 작은 곳에만 둔다. JS에는 꼬리 호출 최적화가 없다(예: 정렬된 배열의 이진 탐색).
+- files 영역을 이렇게 바꿨다(`ef487739`). 이전 구현 사본과 같은 입력으로 결과를 비교해 같음을 확인했다. 목록은 52,000개 파일의 잘림까지, 검색은 대소문자·줄 경계·재개 위치·한 페이지 파일 수 경계까지 비교했다.
+- 모델에게 가는 툴 출력은 컨텍스트 크기로 자른다. 프로세스 출력은 바이트 수가 아니라 쓸 항목 수로 자른다. 256 MiB 같은 바이트 상한은 모델이 받는 양과 상관이 없어서 지웠다.
+  - `list_files`·`list_outside_files` 페이지는 경로 500개에 더해, JSON 따옴표와 쉼표를 포함한 글자 수 16,000자(`listPageCharacters`) 안에 든다. 남은 경로가 있으면 적어도 하나는 담는다. 읽기 페이지는 16,000자, 검색 페이지는 100건과 12,000자다.
+  - git 목록(`ls-files`)은 walk와 같은 `walkLimit`(50,000개)에서 읽기를 멈추고 `truncated`로 알린다. 멈춘 git은 종료를 기다리지 않고 Scope와 함께 끝낸다. git grep 후보도 50,000개를 넘으면 좁히기를 버리고 모든 파일을 검색한다.

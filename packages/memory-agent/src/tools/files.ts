@@ -18,7 +18,12 @@ import {
   Schema,
 } from "effect";
 import { gitGrepFilesEffect } from "../files/git-grep.ts";
-import { listProjectFilesEffect, createSnapshots, type Snapshot } from "../files/listing.ts";
+import {
+  listProjectFilesEffect,
+  createSnapshots,
+  walkLimit,
+  type Snapshot,
+} from "../files/listing.ts";
 import { PathRejected, resolveProjectPath } from "../files/paths.ts";
 import { decodeSearchCursor, encodeSearchCursor, searchTextFilesEffect } from "../files/search.ts";
 import {
@@ -162,6 +167,25 @@ const deleteFile = {
 
 export const listPageSize = 500;
 
+/** Characters of paths one list page holds, so long paths cannot crowd the model's context. */
+export const listPageCharacters = 16_000;
+
+/**
+ * The paths of one list page from `start`: at most {@link listPageSize} and, counting each with its
+ * JSON quotes and comma, {@link listPageCharacters}, but always one while any are left.
+ */
+export const listPage = (options: {
+  readonly paths: readonly string[];
+  readonly start: number;
+}) => {
+  const window = options.paths.slice(options.start, options.start + listPageSize);
+  const fitting = Arr.takeWhile(
+    Arr.scan(window, 0, (length, path) => length + path.length + 3).slice(1),
+    (length) => length <= listPageCharacters,
+  ).length;
+  return window.slice(0, Math.max(1, fitting));
+};
+
 /** Search candidates kept per snapshot and query, so later pages do not ask Git again. */
 const candidateCacheSize = 32;
 
@@ -283,6 +307,7 @@ const make = Effect.gen(function* () {
                       directory: view.directory,
                       query,
                       caseSensitive,
+                      limit: walkLimit,
                     }),
                   onSome: Fiber.join,
                 }).pipe(Effect.tap((candidates) => remember(key, candidates))),
@@ -324,7 +349,7 @@ const make = Effect.gen(function* () {
             "snapshot_expired: start again without snapshot and offset.",
           );
           const start = Math.max(0, offset ?? 0);
-          const paths = view.paths.slice(start, start + listPageSize);
+          const paths = listPage({ paths: view.paths, start });
           const next = start + paths.length;
           return {
             snapshot: view.id,
@@ -382,6 +407,7 @@ const make = Effect.gen(function* () {
                       directory: resolved.relative,
                       query,
                       caseSensitive,
+                      limit: walkLimit,
                     }),
                   ),
                 ),
