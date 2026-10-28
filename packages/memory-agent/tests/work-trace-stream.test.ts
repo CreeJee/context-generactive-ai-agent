@@ -228,6 +228,29 @@ describe("Work Trace durable stream source", () => {
     ),
   );
 
+  it.effect("keeps a beating attempt live past the lost window", () =>
+    run(
+      Effect.gen(function* () {
+        const trace = yield* WorkTraceStore;
+        yield* seed();
+        const handle = yield* trace.startAttempt({
+          sessionId: "s1",
+          parentRunId: "parent-1",
+          parentToolCallId: "call-1",
+          agentId: "agent-1",
+          title: "Research",
+          request: "Research the code",
+          kind: "start",
+          threadId: "subagent-agent-1",
+        });
+        yield* trace.transitionAttempt(handle, "s1", "running", "attempt_started", "Started");
+        yield* Effect.forkChild(trace.keepAlive(handle));
+        yield* TestClock.adjust(heartbeatLostMs + 2 * heartbeatIntervalMs);
+        expect((yield* trace.taskTree("s1"))[0]?.status).toBe("running");
+      }),
+    ),
+  );
+
   it.effect("interrupts a waiting tail without converting cancellation to a heartbeat", () =>
     run(
       Effect.gen(function* () {
