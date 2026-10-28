@@ -13,7 +13,7 @@ const agentAndVendoredIgnorePatterns = [
   ".pi/**",
   ".roo/**",
   ".windsurf/**",
-  "tools/oxlint/anti-slop/**",
+  "lint/anti-slop/**",
 ];
 
 export default defineConfig({
@@ -31,10 +31,10 @@ export default defineConfig({
     ignorePatterns: agentAndVendoredIgnorePatterns,
     jsPlugins: [
       { name: "vite-plus", specifier: "vite-plus/oxlint-plugin" },
-      { name: "anti-slop", specifier: "./tools/oxlint/anti-slop/index.ts" },
+      { name: "anti-slop", specifier: "./lint/anti-slop/index.ts" },
       {
         name: "anti-slop-effect",
-        specifier: "./tools/oxlint/anti-slop/effect/index.ts",
+        specifier: "./lint/anti-slop/effect/index.ts",
       },
       { name: "shadcn", specifier: "@shadcn/lint" },
     ],

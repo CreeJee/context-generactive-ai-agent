@@ -2963,6 +2963,8 @@
   - 같은 몸체를 여러 입력에 돌리던 테스트는 `it.effect.each`·`describe.each`나 한 테스트 안의 `Effect.forEach`로 바꾸되 테스트 이름은 그대로 둔다.
   - 동작이 바뀌지 않았는지는 HEAD 사본(`*-old.probe.*`, 커밋 전 삭제)과 같은 입력으로 출력을 비교해 확인했다. 유료 실행 평가(live-*, structured-memory의 live 모드)는 타입 검사만 했다.
 - 그 뒤 tools/profile과 tools/chat-store-check도 바꿨다(`07b65b6b`). anti-slop Oxlint 플러그인(`tools/oxlint/anti-slop`)은 가져온 코드라서 이 기준을 적용하지 않는다. lint·fmt 대상에서도 빠져 있다. 반복을 조합자로 바꿔 봤지만 규칙 진단은 같았고, 원본과 달라지면 다시 가져올 때 충돌만 늘어난다.
+- 사용자 결정: anti-slop 플러그인을 `lint/anti-slop`으로 옮겼다. `tools`는 memory-agent의 에이전트 도구(`src/tools`)와 이름이 겹쳐 헷갈리고, 플러그인은 이 저장소의 커스텀 린트 규칙으로만 쓰인다.
+- 사용자 결정: apps/agent도 같은 기준을 적용한다. 위에서 범위에서 뺀다고 한 것을 바꾼다.
 
 ## Schema 클래스는 brand로 이름을 갖는다 (2026-10-28)
 
