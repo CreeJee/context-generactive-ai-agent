@@ -1,5 +1,5 @@
 import { NodeCrypto } from "@effect/platform-node";
-import { Crypto, Effect, Layer, MutableHashMap, Option, Schema } from "effect";
+import { Crypto, Effect, Layer, MutableHashMap, MutableRef, Option, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
 import { modelHandoffNamespace } from "../src/agent/handoff-state.ts";
@@ -238,14 +238,14 @@ it.effect(
   "metadata failures stay typed and one preparation is shared across concurrent requests",
   () =>
     Effect.gen(function* () {
-      let reads = 0;
+      const reads = MutableRef.make(0);
       const cause = new Error("private metadata details");
       const restore = yield* modelHandoffHistoryEffect({
         metadata: {
           get: () =>
             Effect.andThen(
               Effect.sync(() => {
-                reads += 1;
+                MutableRef.increment(reads);
               }),
               Effect.fail(ChatMetadataFailed.make({ cause })),
             ),
@@ -261,12 +261,12 @@ it.effect(
       const failures = yield* Effect.all([Effect.flip(restore(past)), Effect.flip(restore(past))], {
         concurrency: "unbounded",
       });
-      expect(reads).toBe(1);
-      for (const failure of failures) {
+      expect(MutableRef.get(reads)).toBe(1);
+      failures.forEach((failure) => {
         expect(failure).toBeInstanceOf(ModelHandoffFailed);
         expect(ModelHandoffReason.guards.ReadStateFailed(failure.reason)).toBe(true);
         expect(failure.cause).toBe(cause);
         expect(failure.message).not.toContain("private metadata");
-      }
+      });
     }),
 );

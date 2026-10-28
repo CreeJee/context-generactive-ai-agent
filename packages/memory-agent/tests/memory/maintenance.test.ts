@@ -1,4 +1,15 @@
-import { Context, Crypto, Deferred, Effect, Fiber, FileSystem, Layer, Path, Scope } from "effect";
+import {
+  Context,
+  Crypto,
+  Deferred,
+  Effect,
+  Fiber,
+  FileSystem,
+  Layer,
+  Path,
+  Scope,
+  Stream,
+} from "effect";
 import { layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
 import { EmbedderRuntime, Embedder } from "../../src/memory/embedding/embedder.ts";
@@ -135,25 +146,19 @@ alone("other fibers can run between repair batches", () =>
   Effect.gen(function* () {
     const c = yield* legacy;
     const { project, session } = yield* TestEnv;
-    for (let i = 0; i < 256; i++) {
-      yield* c.nodes.append({
-        projectId: project.id,
-        sessionId: session.id,
-        kind: "user",
-        text: `유효한 문장 ${i}`,
-      });
-    }
+    yield* Effect.forEach(
+      Array.from({ length: 256 }, (_, i) => `유효한 문장 ${i}`),
+      (text) =>
+        c.nodes.append({ projectId: project.id, sessionId: session.id, kind: "user", text }),
+      { discard: true },
+    );
     yield* asOlderStore;
-    const observed: number[] = [];
-    const observer = Effect.gen(function* () {
-      for (;;) {
-        const snapshot = yield* overview;
-        observed.push(snapshot.scanned);
-        if (snapshot.status === "completed") return;
-        yield* Effect.yieldNow;
-      }
-    });
-    yield* Effect.all([run, observer], { concurrency: 2 });
+    const observer = Stream.fromEffectRepeat(overview.pipe(Effect.tap(Effect.yieldNow))).pipe(
+      Stream.takeUntil((snapshot) => snapshot.status === "completed"),
+      Stream.map((snapshot) => snapshot.scanned),
+      Stream.runCollect,
+    );
+    const [, observed] = yield* Effect.all([run, observer], { concurrency: 2 });
     const final = yield* overview;
     expect(observed.some((scanned) => scanned > 0 && scanned < final.scanned)).toBe(true);
   }),

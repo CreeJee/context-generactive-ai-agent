@@ -58,9 +58,11 @@ testAgent()("linked skill files", (it) => {
         const { project, skills: root } = yield* freshProject;
         const outside = yield* writeSkill(project.root, "outside", "description: Shared rules.");
         const source = path.join(outside, "SKILL.md");
-        for (const name of ["symbolic", "hard"]) {
-          yield* fs.makeDirectory(path.join(root, name), { recursive: true });
-        }
+        yield* Effect.forEach(
+          ["symbolic", "hard"],
+          (name) => fs.makeDirectory(path.join(root, name), { recursive: true }),
+          { discard: true },
+        );
         yield* fs.symlink(source, path.join(root, "symbolic", "SKILL.md"));
         yield* fs.link(source, path.join(root, "hard", "SKILL.md"));
         const skills = yield* Skills;
@@ -174,10 +176,10 @@ testAgent({ skillsBuiltin: await Effect.runPromise(builtinSkillsDirectory) })(
         expect(catalog.problems).toEqual([]);
         const shipped = catalog.skills.filter((skill) => skill.scope === "builtin");
         expect(shipped.map((skill) => skill.name)).toContain("draw");
-        for (const skill of shipped) {
+        shipped.forEach((skill) => {
           expect(skill.description.length).toBeGreaterThan(0);
           expect(skill.description.length).toBeLessThanOrEqual(maxDescriptionCharacters);
-        }
+        });
       }),
     );
   },

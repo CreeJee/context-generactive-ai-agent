@@ -192,36 +192,40 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
         const session = yield* (yield* Sessions).create(project.id);
         const nodes = yield* Nodes;
         const recorder = yield* Recorder;
-        for (const run of ["a", "b"]) {
-          const runId = `${session.id}:${run}`;
-          const user = yield* nodes.append({
-            projectId: project.id,
-            sessionId: session.id,
-            kind: "user",
-            text: `${run}: README 확인`,
-          });
-          yield* scriptedRun({
-            turns: [
-              {
-                toolCalls: [
-                  { id: `${run}-call`, name: "read_file", arguments: '{"path":"README.md"}' },
-                ],
-              },
-              { text: "확인했습니다." },
-            ],
-            runId,
-            conversation: [{ role: "user", content: user.text }],
-            tools: [readFile],
-            hooks: [
-              yield* recorder.hookFor({
-                projectId: project.id,
-                sessionId: session.id,
-                runId,
-                userNodeId: Effect.succeed(user.id),
-              }),
-            ],
-          });
-        }
+        yield* Effect.forEach(
+          ["a", "b"],
+          Effect.fnUntraced(function* (run) {
+            const runId = `${session.id}:${run}`;
+            const user = yield* nodes.append({
+              projectId: project.id,
+              sessionId: session.id,
+              kind: "user",
+              text: `${run}: README 확인`,
+            });
+            yield* scriptedRun({
+              turns: [
+                {
+                  toolCalls: [
+                    { id: `${run}-call`, name: "read_file", arguments: '{"path":"README.md"}' },
+                  ],
+                },
+                { text: "확인했습니다." },
+              ],
+              runId,
+              conversation: [{ role: "user", content: user.text }],
+              tools: [readFile],
+              hooks: [
+                yield* recorder.hookFor({
+                  projectId: project.id,
+                  sessionId: session.id,
+                  runId,
+                  userNodeId: Effect.succeed(user.id),
+                }),
+              ],
+            });
+          }),
+          { discard: true },
+        );
 
         const calls = (yield* nodes.session(session.id)).filter(
           (node) => node.kind === "tool_call",
@@ -349,13 +353,22 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
             expect(stored.filter((node) => node.kind === "tool_result")).toHaveLength(1);
             expect(stored.filter((node) => node.kind === "tool_call")).toHaveLength(1);
             expect(stored.map((node) => node.text).join("\n")).not.toContain(secret);
-            for (const assistant of stored.filter((node) => node.kind === "assistant")) {
-              expect(yield* nodes.edgesOf(assistant.id)).toEqual(
-                expect.arrayContaining([
-                  expect.objectContaining({ kind: "reply", fromId: assistant.id, toId: user.id }),
-                ]),
-              );
-            }
+            yield* Effect.forEach(
+              stored.filter((node) => node.kind === "assistant"),
+              (assistant) =>
+                Effect.map(nodes.edgesOf(assistant.id), (edges) =>
+                  expect(edges).toEqual(
+                    expect.arrayContaining([
+                      expect.objectContaining({
+                        kind: "reply",
+                        fromId: assistant.id,
+                        toId: user.id,
+                      }),
+                    ]),
+                  ),
+                ),
+              { discard: true },
+            );
           }),
           { concurrency: "unbounded" },
         );
