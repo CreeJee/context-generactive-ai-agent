@@ -2969,3 +2969,10 @@
 - `Schema.Class`·`Schema.TaggedError` 같은 Schema 클래스는 두 번째 타입 인자로 `{ readonly brand: unique symbol }`를 단다. brand가 없으면 필드 모양이 같은 다른 값도 그 클래스 타입으로 통과한다. Effect SCHEMA.md의 클래스 branding과 같은 방식이고, brand는 인스턴스 타입에만 교차되며 런타임 값은 없다.
 - Effect LS의 `schemaClassMissingBrand`를 memory-agent와 apps/agent tsconfig에서 error로 올렸다. tools/chat-store-check는 memory-agent 설정을 이어받는다.
 - brand를 단 뒤 `traceStream`의 `new Response(...)`가 undici-types의 `Response`로 추론되어 서비스 타입을 이름 붙일 수 없게 됐다(TS2883). `json`처럼 전역 `Response`를 반환하는 `eventStream`으로 감쌌다. undici-types는 `@types/node`의 하위 의존성이라 따로 지울 것이 없다.
+
+## 임베딩 worker는 닫힐 때 모델을 내려놓는다 (2026-10-28)
+
+- memory-research-lab 실행 한 번이 보고서를 다 쓴 뒤 `libc++abi: terminating due to uncaught exception of type std::__1::system_error: recursive_mutex lock failed: Invalid argument`로 끝났다. 임베딩 worker는 모델을 dispose하지 않고 끝났다. 그래서 onnxruntime 세션이 프로세스 종료까지 남아 있다가 정적 소멸자와 겹친 것으로 본다.
+- 고친 뒤 비교: 수정 전 전체 lab 6회와 수정 후 2회 모두 exit 0, 회당 약 200초였다. 이 abort는 다시 나오지 않아서, 이 수정이 막는다는 것은 확인하지 못했다.
+- 모델이 로드되면 worker 레이어의 scope에 dispose를 단다. 호스트가 worker를 닫으면(close 메시지) worker의 launch fiber가 인터럽트되고 레이어 scope가 닫힌다. 그래서 스레드가 끝나기 전에 세션을 놓는다.
+- `Embed`의 세션 실행은 인터럽트되지 않는다. 취소된 요청도 그 batch가 끝날 때까지 기다리므로 dispose가 실행 중인 세션과 겹치지 않는다. 서버는 한 번에 한 요청만 받으므로, 취소 뒤 다음 요청이 앞 batch와 겹쳐 돌지도 않는다.

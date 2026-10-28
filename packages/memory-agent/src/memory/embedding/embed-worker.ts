@@ -1,5 +1,5 @@
 import * as NodeWorkerRunner from "@effect/platform-node/NodeWorkerRunner";
-import { Array as Arr, Cause, Effect, Layer, Option, Result, Schema, Stream } from "effect";
+import { Array as Arr, Cause, Effect, Layer, Option, Result, Schema, Scope, Stream } from "effect";
 import { RpcServer } from "effect/rpc";
 import { nativeFailure, nativePromise, runNativeEffect } from "../../runtime/native-effect.ts";
 import { ignoreLogged } from "../../runtime/logged-failures.ts";
@@ -68,9 +68,11 @@ const embed = Effect.fn("EmbeddingWorker.embed")(function* (
   maxTokens: number,
 ) {
   const inputs = tokenizer([...texts], { padding: true, truncation: true, max_length: maxTokens });
-  const { last_hidden_state: hidden } = yield* nativePromise<
-    Awaited<ReturnType<LoadedModel["model"]>>
-  >(() => model(inputs));
+  // An interrupted request still waits for its session run, so the worker never disposes of the
+  // model while a run is in flight.
+  const { last_hidden_state: hidden } = yield* Effect.uninterruptible(
+    nativePromise<Awaited<ReturnType<LoadedModel["model"]>>>(() => model(inputs)),
+  );
   const [batch, tokens, dimensions] = hidden.dims;
   // CLS pooling: the first token's hidden state is the sentence vector.
   const rows = new Float32Array(batch * dimensions);
@@ -86,7 +88,22 @@ const handlers = EmbeddingRpcs.toLayer(
       Effect.mapError(failure("load")),
     );
     // Loaded once per worker; a failed load stays failed, and the host starts a new worker.
-    const model = yield* Effect.cached(load(setup).pipe(Effect.mapError(failure("load"))));
+    // The worker's scope disposes of the model when the host closes the worker, so the
+    // onnxruntime session is released before the thread exits rather than left to process exit.
+    const scope = yield* Scope.Scope;
+    const model = yield* Effect.cached(
+      load(setup).pipe(
+        Effect.tap(({ model: loaded, device }) =>
+          Scope.addFinalizer(
+            scope,
+            nativePromise(() => loaded.dispose()).pipe(
+              ignoreLogged("embedding_model_dispose_failed", { device }),
+            ),
+          ),
+        ),
+        Effect.mapError(failure("load")),
+      ),
+    );
     const run = <A, E>(work: (loaded: LoadedModel) => Effect.Effect<A, E>) =>
       Effect.flatMap(model, (loaded) => work(loaded).pipe(Effect.mapError(failure("run"))));
     return EmbeddingRpcs.of({
