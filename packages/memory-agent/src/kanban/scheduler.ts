@@ -5,6 +5,7 @@ import {
   Effect,
   Function as EffectFunction,
   Layer,
+  Match,
   Option,
   Predicate,
   PubSub,
@@ -259,51 +260,70 @@ const make = Effect.gen(function* () {
         (other) =>
           other.goalInstanceId !== goal.goalInstanceId && other.projectRoot === goal.projectRoot,
       );
-      for (const other of others) {
-        const schedule = yield* schedules.get(other.goalInstanceId);
-        if (Option.exists(schedule, (found) => mergeReleases(found.merge))) continue;
-        if ((yield* workflows.goalInstanceId(other.sessionId)) !== other.goalInstanceId) continue;
-        const steps = (yield* workflows.get(other.sessionId)).plan?.steps ?? [];
-        for (const step of steps) {
-          const files = overlappingBoundaries(card, step);
-          if (files.length === 0) continue;
-          const otherCard = {
-            otherGoalInstanceId: other.goalInstanceId,
-            otherCardId: step.id,
-          };
-          switch (step.status) {
-            case "in_progress":
-            case "verify":
-              return CrossGoalOverlap.Running(otherCard);
-            case "done": {
-              const chosen = (yield* decisions.forCard(
-                goal.sessionId,
-                goal.goalInstanceId,
-                card.id,
-              )).flatMap((request) =>
-                Predicate.isTagged(request.kind, "FileOverlap") &&
-                request.kind.otherGoalInstanceId === other.goalInstanceId &&
-                Predicate.isTagged(request.state, "Answered") &&
-                Predicate.isTagged(request.state.answer, "FileOverlap")
-                  ? [request.state.answer.choice]
-                  : [],
-              )[0];
-              switch (chosen) {
-                case "proceed":
-                  continue;
-                case "wait":
-                  return CrossGoalOverlap.Waiting(otherCard);
-                case undefined:
-                  return CrossGoalOverlap.Unmerged({ ...otherCard, files });
-              }
-              break;
-            }
-            default:
-              continue;
-          }
-        }
-      }
-      return CrossGoalOverlap.None();
+      /** How the card meets one card of another Goal, when it does. */
+      const overlapWith = (
+        other: KanbanGoal,
+        step: PlanStep,
+      ): Effect.Effect<Option.Option<CrossGoalOverlap>, KanbanStorageFailed> => {
+        const files = overlappingBoundaries(card, step);
+        const otherCard = {
+          otherGoalInstanceId: other.goalInstanceId,
+          otherCardId: step.id,
+        };
+        return files.length === 0
+          ? Effect.succeedNone
+          : Match.value(step.status).pipe(
+              Match.when(Match.is("in_progress", "verify"), () =>
+                Effect.succeedSome(CrossGoalOverlap.Running(otherCard)),
+              ),
+              Match.when("done", () =>
+                Effect.map(
+                  decisions.forCard(goal.sessionId, goal.goalInstanceId, card.id),
+                  (requests) =>
+                    Option.match(
+                      EffectArray.findFirst(requests, (request) =>
+                        Predicate.isTagged(request.kind, "FileOverlap") &&
+                        request.kind.otherGoalInstanceId === other.goalInstanceId &&
+                        Predicate.isTagged(request.state, "Answered") &&
+                        Predicate.isTagged(request.state.answer, "FileOverlap")
+                          ? Option.some(request.state.answer.choice)
+                          : Option.none(),
+                      ),
+                      {
+                        onNone: () =>
+                          Option.some(CrossGoalOverlap.Unmerged({ ...otherCard, files })),
+                        // A person who chose to go ahead is not asked again.
+                        onSome: (choice) =>
+                          choice === "proceed"
+                            ? Option.none()
+                            : Option.some(CrossGoalOverlap.Waiting(otherCard)),
+                      },
+                    ),
+                ),
+              ),
+              Match.orElse(() => Effect.succeedNone),
+            );
+      };
+      /** The cards of a Goal that still counts: unmerged, and still the session's Goal. */
+      const cardsOf = (other: KanbanGoal) =>
+        Effect.gen(function* () {
+          const schedule = yield* schedules.get(other.goalInstanceId);
+          if (Option.exists(schedule, (found) => mergeReleases(found.merge))) return [];
+          if ((yield* workflows.goalInstanceId(other.sessionId)) !== other.goalInstanceId)
+            return [];
+          return (yield* workflows.get(other.sessionId)).plan?.steps ?? [];
+        });
+      // The first card that meets this one decides; the Goals and their cards are read in order.
+      const first = yield* Stream.fromIterable(others).pipe(
+        Stream.mapEffect((other) =>
+          Effect.map(cardsOf(other), (steps) => steps.map((step) => [other, step] as const)),
+        ),
+        Stream.flattenIterable,
+        Stream.mapEffect(([other, step]) => overlapWith(other, step)),
+        Stream.filter(Option.isSome),
+        Stream.runHead,
+      );
+      return Option.getOrElse(Option.flatten(first), () => CrossGoalOverlap.None());
     }),
 
     /**

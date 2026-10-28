@@ -544,28 +544,27 @@ const make = (options: KanbanOrchestratorOptions) =>
           Passed: ({ evidence }) => integrate(card, evidence),
         });
       });
+      /** One round; true once the card is settled or no longer waits for verification. */
+      const round = Effect.flatMap(verifying, (card) =>
+        card === undefined
+          ? Effect.succeed(true)
+          : // A card whose worktree is gone is not verified anywhere else; it fails, and its next
+            // attempt leases the worktree again.
+            workspace(goal)
+              .present(cardRef(goal, cardId))
+              .pipe(
+                Effect.matchEffect({
+                  onFailure: (failure) =>
+                    Effect.as(failCard(goal, cardId, "verify", worktreeFailure(failure)), true),
+                  onSuccess: (worktree) => verifyIn(card, worktree),
+                }),
+              ),
+      );
       // Each round verifies the card as it now is; a sync with a moved Goal branch needs another.
-      for (let round = 0; round < 3; round++) {
-        const card = yield* verifying;
-        if (card === undefined) return;
-        // A card whose worktree is gone is not verified anywhere else; it fails, and its next
-        // attempt leases the worktree again.
-        const settled = yield* workspace(goal)
-          .present(cardRef(goal, cardId))
-          .pipe(
-            Effect.matchEffect({
-              onFailure: (failure) =>
-                Effect.as(failCard(goal, cardId, "verify", worktreeFailure(failure)), true),
-              onSuccess: (worktree) => verifyIn(card, worktree),
-            }),
-          );
-        if (settled) return;
-      }
-      return yield* failCard(
-        goal,
-        cardId,
-        "verify",
-        CardFailure.cases.GoalBranchKeptMoving.make({}),
+      const settled = yield* round.pipe(Effect.repeat({ until: (settled) => settled, times: 2 }));
+      yield* Effect.when(
+        failCard(goal, cardId, "verify", CardFailure.cases.GoalBranchKeptMoving.make({})),
+        Effect.succeed(!settled),
       );
     });
 
@@ -1037,7 +1036,9 @@ const make = (options: KanbanOrchestratorOptions) =>
             Stream.runForEach(() => PubSub.publish(pokes, goalInstanceId)),
             Effect.forkScoped,
           );
-          while (!loopStopped(yield* health.get(goalInstanceId))) {
+          /** One look, then a wait for the next reason to look; true once the loop stops. */
+          const look = Effect.gen(function* () {
+            if (loopStopped(yield* health.get(goalInstanceId))) return true;
             const step = yield* looking
               .withPermits(1)(tick(goalInstanceId))
               .pipe(health.supervise(board, "Kanban board look failed", {}));
@@ -1045,12 +1046,16 @@ const make = (options: KanbanOrchestratorOptions) =>
               Stopped: () => true,
               Continued: ({ value }) => value === "stopped",
             });
-            if (stopped) return;
-            yield* PubSub.take(wakeups).pipe(
-              Effect.repeat({ until: (woken) => woken === goalInstanceId }),
-              Effect.timeoutOption(pollInterval),
+            yield* Effect.when(
+              PubSub.take(wakeups).pipe(
+                Effect.repeat({ until: (woken) => woken === goalInstanceId }),
+                Effect.timeoutOption(pollInterval),
+              ),
+              Effect.succeed(!stopped),
             );
-          }
+            return stopped;
+          });
+          yield* look.pipe(Effect.repeat({ until: (stopped) => stopped }));
         }),
       );
 

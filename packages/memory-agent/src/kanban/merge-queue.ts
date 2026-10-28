@@ -1,4 +1,5 @@
 import {
+  Array as Arr,
   Context,
   Effect,
   FiberMap,
@@ -226,7 +227,7 @@ const make = Effect.gen(function* () {
   const mergeGoal = Effect.fnUntraced(function* (goal: KanbanGoal) {
     const found = yield* schedules.get(goal.goalInstanceId);
     if (Option.isNone(found) || goal.mode !== "worktree") return;
-    let schedule = found.value;
+    const schedule = found.value;
     const target = schedule.targetBranch;
     if (target === null) {
       if (schedule.merge === null)
@@ -248,7 +249,11 @@ const make = Effect.gen(function* () {
             Match.orElse((other) => Effect.succeed(!mergeSettled(other))),
           );
     if (!resumes) return;
-    for (let round = 0; round < mergeRounds; round++) {
+    /**
+     * One round of the merge, from the head verified so far. None when the round ended the pass;
+     * the head verified by then when the target moved before it could advance.
+     */
+    const round = Effect.fnUntraced(function* (verifiedHead: string | null) {
       const sync = yield* worktrees.mergeTargetIntoGoal(ref, target).pipe(
         Effect.asSome,
         Effect.catchTag("GoalMergeConflict", (conflict) =>
@@ -265,13 +270,13 @@ const make = Effect.gen(function* () {
           ),
         ),
       );
-      if (Option.isNone(sync)) return;
+      if (Option.isNone(sync)) return Option.none();
       const head = sync.value.head;
-      if (schedule.verifiedHead !== head) {
+      if (verifiedHead !== head) {
         yield* setMerge(goal, merge.Verifying.make({ head }));
         const workflow = yield* workflows.get(goal.sessionId);
         const artifact = workflow.goal;
-        if (artifact === null) return;
+        if (artifact === null) return Option.none();
         const verdict = yield* Effect.scoped(
           Effect.flatMap(worktrees.goalCheckout(ref, head), (checkout) =>
             goalVerifier.verify({
@@ -295,14 +300,13 @@ const make = Effect.gen(function* () {
             ),
           Passed: () => Effect.as(schedules.setVerifiedHead(goal.goalInstanceId, head), true),
         });
-        if (!passed) return;
-        schedule = { ...schedule, verifiedHead: head };
+        if (!passed) return Option.none();
       }
       if ((yield* schedules.protectedBranches(goal.projectId)).includes(target)) {
         const gh = yield* findExecutable("gh").pipe(
           Effect.provideService(FileSystem.FileSystem, fs),
         );
-        return yield* askGoal(
+        yield* askGoal(
           goal,
           `protected_branch:${head}`,
           DecisionKind.cases.ProtectedBranchMerge.make({
@@ -310,6 +314,7 @@ const make = Effect.gen(function* () {
             prAvailable: gh !== null,
           }),
         );
+        return Option.none();
       }
       const advanced = yield* worktrees.advanceTarget(ref, target, head);
       const settled = yield* Match.valueTags(advanced, {
@@ -325,9 +330,16 @@ const make = Effect.gen(function* () {
           Effect.as(setMerge(goal, merge.WaitingWorktree.make({ head, worktree })), true),
         TargetMoved: () => Effect.succeed(false),
       });
-      if (settled) return;
-    }
-    yield* setMerge(goal, merge.TargetMoving.make({}));
+      return settled ? Option.none() : Option.some(head);
+    });
+    const last = yield* Stream.paginate(schedule.verifiedHead, (verifiedHead) =>
+      Effect.map(round(verifiedHead), (next) => [Arr.of(next), next] as const),
+    ).pipe(Stream.take(mergeRounds), Stream.runLast);
+    // The target moved on in every round.
+    yield* Effect.when(
+      setMerge(goal, merge.TargetMoving.make({})),
+      Effect.succeed(Option.exists(last, Option.isSome)),
+    );
   });
 
   /**
