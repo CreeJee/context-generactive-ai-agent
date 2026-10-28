@@ -2955,3 +2955,9 @@
 - 모델에게 가는 툴 출력은 컨텍스트 크기로 자른다. 프로세스 출력은 바이트 수가 아니라 쓸 항목 수로 자른다. 256 MiB 같은 바이트 상한은 모델이 받는 양과 상관이 없어서 지웠다.
   - `list_files`·`list_outside_files` 페이지는 경로 500개에 더해, JSON 따옴표와 쉼표를 포함한 글자 수 16,000자(`listPageCharacters`) 안에 든다. 남은 경로가 있으면 적어도 하나는 담는다. 읽기 페이지는 16,000자, 검색 페이지는 100건과 12,000자다.
   - git 목록(`ls-files`)은 walk와 같은 `walkLimit`(50,000개)에서 읽기를 멈추고 `truncated`로 알린다. 멈춘 git은 종료를 기다리지 않고 Scope와 함께 끝낸다. git grep 후보도 50,000개를 넘으면 좁히기를 버리고 모든 파일을 검색한다.
+- memory-agent의 나머지 영역(src·tests·bench·eval)도 같은 기준으로 바꿨다(`4f80ef25`…`c145e2b6`). native-search(`turbovec` 읽기 계층)는 따로 다룬다. apps/agent와 tools는 Effect 백엔드가 아니어서 이번 범위에 넣지 않았다.
+  - 기다리며 다시 보기는 `Effect.repeat`의 `until`·`times`로 쓴다(`times: N`은 N+1번 실행이다). 페이지를 다 읽는 반복은 `Stream.paginate`로, 응답 본문 프레임 읽기는 `Stream.fromReadableStream`과 `scan`·`takeUntil`·`runLast`로 쓴다.
+  - 네이티브 콜백과 테스트 가짜가 동기적으로 바꾸는 상태는 `MutableRef`에 둔다. 엔진이 자기 자신을 참조하는 곳은 `Deferred`로 푼다. 던질 수 있는 동기 호출의 대체값은 `try`와 `let` 대신 `Option.liftThrowable`로 고른다.
+  - guard는 `Effect.when`으로 쓴다. 조건에 따라 줄을 모을 때는 `Option`과 `Array.getSomes`를 쓴다.
+  - 같은 몸체를 여러 입력에 돌리던 테스트는 `it.effect.each`·`describe.each`나 한 테스트 안의 `Effect.forEach`로 바꾸되 테스트 이름은 그대로 둔다.
+  - 동작이 바뀌지 않았는지는 HEAD 사본(`*-old.probe.*`, 커밋 전 삭제)과 같은 입력으로 출력을 비교해 확인했다. 유료 실행 평가(live-*, structured-memory의 live 모드)는 타입 검사만 했다.
