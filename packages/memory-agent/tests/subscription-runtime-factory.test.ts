@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest";
-import { MutableHashMap, DateTime, Effect, Exit, Scope } from "effect";
+import { MutableHashMap, MutableRef, DateTime, Effect, Exit, Scope } from "effect";
 import { expect } from "vite-plus/test";
 import { createSubscriptionOAuthClient } from "../src/oauth/subscription-oauth.ts";
 import { withOAuthTestPlatform } from "./support/platform.ts";
@@ -21,14 +21,14 @@ it.effect("retained native implementation binds fresh central clients and pins e
     const routes = MutableHashMap.empty<string, string>();
     const requests: { auth: string | null; body: string }[] = [];
     const released: string[] = [];
-    let credentialReads = 0;
+    const credentialReads = MutableRef.make(0);
     const nativeClient = (account: string) =>
       createSubscriptionOAuthClient({
         protocol: providerProtocols.openai,
         store: {
           read: () =>
             Effect.sync(() => {
-              credentialReads++;
+              MutableRef.increment(credentialReads);
               return {
                 accessToken: account,
                 refreshToken: "controlled-refresh",
@@ -59,13 +59,13 @@ it.effect("retained native implementation binds fresh central clients and pins e
       first: yield* nativeClient("first"),
       second: yield* nativeClient("second"),
     };
-    let selected: keyof typeof centralClients = "first";
-    let acquisitions = 0;
+    const selected = MutableRef.make<keyof typeof centralClients>("first");
+    const acquisitions = MutableRef.make(0);
     const firstRuntime = implementation.bind({
       client: Effect.acquireRelease(
         Effect.sync(() => {
-          const account = selected;
-          const id = `run-${++acquisitions}`;
+          const account = MutableRef.get(selected);
+          const id = `run-${MutableRef.incrementAndGet(acquisitions)}`;
           MutableHashMap.set(routes, id, account);
           return { id, client: centralClients[account] };
         }),
@@ -79,11 +79,11 @@ it.effect("retained native implementation binds fresh central clients and pins e
     });
     const firstScope = yield* Scope.make();
     const first = yield* Scope.provide(firstRuntime.model(selection, runOf(0)), firstScope);
-    selected = "second";
+    MutableRef.set(selected, "second");
     const secondRuntime = implementation.bind({
       client: Effect.acquireRelease(
         Effect.sync(() => {
-          acquisitions++;
+          MutableRef.increment(acquisitions);
           MutableHashMap.set(routes, "fresh-run", "second");
           return centralClients.second;
         }),
@@ -102,13 +102,19 @@ it.effect("retained native implementation binds fresh central clients and pins e
     );
     expect(firstRuntime.contextWindow(selection.model)).toBe(111);
     expect(secondRuntime.contextWindow(selection.model)).toBe(222);
-    for (const [index, { model }] of [first, second].entries())
-      expect((yield* model.generateText({ prompt: `fresh-${index}` })).text).toBe("native reply");
+    yield* Effect.forEach(
+      [first, second],
+      ({ model }, index) =>
+        Effect.map(model.generateText({ prompt: `fresh-${index}` }), (reply) =>
+          expect(reply.text).toBe("native reply"),
+        ),
+      { discard: true },
+    );
     expect(requests.map((request) => request.auth)).toEqual(["Bearer first", "Bearer second"]);
     expect(requests[0]?.body).toContain("fresh-0");
     expect(requests[1]?.body).toContain("fresh-1");
-    expect(credentialReads).toBe(2);
-    expect(acquisitions).toBe(2);
+    expect(MutableRef.get(credentialReads)).toBe(2);
+    expect(MutableRef.get(acquisitions)).toBe(2);
     expect(MutableHashMap.size(routes)).toBe(2);
     yield* Scope.close(firstScope, Exit.void);
     expect([...routes]).toEqual([["fresh-run", "second"]]);
@@ -119,6 +125,6 @@ it.effect("retained native implementation binds fresh central clients and pins e
     expect(yield* Effect.flip(Effect.scoped(secondRuntime.model(anthropic, runOf(2))))).toEqual(
       ModelUnavailable.make(anthropic),
     );
-    expect(acquisitions).toBe(2);
+    expect(MutableRef.get(acquisitions)).toBe(2);
   }).pipe(withOAuthTestPlatform),
 );

@@ -733,13 +733,24 @@ testAgent()("server workflow action policy", (it) => {
             expect(result.failure).toMatchObject({ reason: decision.reason });
           if (!decision.allowed) expect(yield* workflows.get(id)).toEqual(current);
         });
-        for (const current of states) {
-          const advertised = workflowActions(current);
-          for (const phase of ["chat", "goal", "plan", "execute", "verify"] as const)
-            yield* matches(current, advertised.phases[phase], workflows.setPhase(id, phase));
-          for (const action of ["pause", "resume", "stop"] as const)
-            yield* matches(current, advertised.controls[action], workflows.controlGoal(id, action));
-        }
+        yield* Effect.forEach(
+          states,
+          Effect.fnUntraced(function* (current) {
+            const advertised = workflowActions(current);
+            yield* Effect.forEach(
+              ["chat", "goal", "plan", "execute", "verify"] as const,
+              (phase) => matches(current, advertised.phases[phase], workflows.setPhase(id, phase)),
+              { discard: true },
+            );
+            yield* Effect.forEach(
+              ["pause", "resume", "stop"] as const,
+              (action) =>
+                matches(current, advertised.controls[action], workflows.controlGoal(id, action)),
+              { discard: true },
+            );
+          }),
+          { discard: true },
+        );
       }),
   );
 
@@ -761,14 +772,16 @@ testAgent()("server workflow action policy", (it) => {
       yield* workflows.updateGoal(id, goal);
       const state = yield* workflows.updatePlan(id, plan);
       const actions = workflowActions(state, { running: true, lease: { state: "mine" } });
-      for (const decision of Object.values(actions.phases))
-        expect(decision).toEqual({ allowed: false, reason: "run_in_progress" });
+      Object.values(actions.phases).forEach((decision) =>
+        expect(decision).toEqual({ allowed: false, reason: "run_in_progress" }),
+      );
       expect(actions.controls.resume).toEqual({ allowed: false, reason: "run_in_progress" });
       expect(actions.controls.pause.allowed).toBe(true);
       expect(actions.controls.stop.allowed).toBe(true);
       const held = workflowActions(state, { running: true, lease: { state: "other", since: 0 } });
-      for (const decision of [...Object.values(held.phases), ...Object.values(held.controls)])
-        expect(decision).toEqual({ allowed: false, reason: "session_in_use" });
+      [...Object.values(held.phases), ...Object.values(held.controls)].forEach((decision) =>
+        expect(decision).toEqual({ allowed: false, reason: "session_in_use" }),
+      );
       expect(
         evaluateWorkflowAction(state, WorkflowActionRequest.phase({ phase: "execute" }), {
           lease: { state: "free" },
@@ -785,20 +798,24 @@ testAgent()("server workflow action policy", (it) => {
       yield* workflows.updateGoal(id, goal);
       yield* workflows.updatePlan(id, plan);
       yield* agent.lease(id, "owner", "claim");
-      for (const holder of ["owner", "observer"]) {
-        const response = yield* agent.status(id, holder);
-        expect(response.status).toBe(200);
-        // SAFETY: the successful in-process status handler constructs a typed SessionRunState.
-        const snapshot = (yield* Effect.promise(() => response.json())) as SessionRunState;
-        expect(snapshot.actions).toEqual(
-          workflowActions(snapshot.workflow, {
-            lease: snapshot.lease,
-            running: snapshot.running !== null,
-          }),
-        );
-        const changed = yield* agent.setWorkflowPhase(id, holder, "execute");
-        expect(changed.status).toBe(snapshot.actions.phases.execute.allowed ? 200 : 423);
-      }
+      yield* Effect.forEach(
+        ["owner", "observer"],
+        Effect.fnUntraced(function* (holder) {
+          const response = yield* agent.status(id, holder);
+          expect(response.status).toBe(200);
+          // SAFETY: the successful in-process status handler constructs a typed SessionRunState.
+          const snapshot = (yield* Effect.promise(() => response.json())) as SessionRunState;
+          expect(snapshot.actions).toEqual(
+            workflowActions(snapshot.workflow, {
+              lease: snapshot.lease,
+              running: snapshot.running !== null,
+            }),
+          );
+          const changed = yield* agent.setWorkflowPhase(id, holder, "execute");
+          expect(changed.status).toBe(snapshot.actions.phases.execute.allowed ? 200 : 423);
+        }),
+        { discard: true },
+      );
     }),
   );
 });

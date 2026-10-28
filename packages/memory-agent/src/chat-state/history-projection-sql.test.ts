@@ -38,9 +38,9 @@ function publish(db: DatabaseSync, threadId: string, messages: StoredMessage[]) 
     db.prepare(releasedWriter).run(threadId, JSON.stringify(messages), 1);
     db.prepare(sql.removeGroups).run(threadId);
     const insert = db.prepare(sql.insertGroup);
-    for (const [ordinal, group] of groups.entries()) {
-      insert.run(threadId, ordinal, group.id, JSON.stringify(group.messages));
-    }
+    groups.forEach((group, ordinal) =>
+      insert.run(threadId, ordinal, group.id, JSON.stringify(group.messages)),
+    );
     db.prepare(sql.publish).run(threadId);
     db.exec("RELEASE history_fixture");
   } catch (error) {
@@ -88,12 +88,14 @@ describe("isolated history projection SQLite contract", () => {
         0,
       );
       expect(selectedBytes).toBeLessThan(originalBytes / 7);
-      for (const [query, bindings] of [
-        [sql.initial, ["a", 50]],
-        [sql.older, ["a", 350, 50]],
-        [sql.cursor, ["a", "message-350"]],
-        [sql.hasEarlier, ["a", 350]],
-      ] as const) {
+      (
+        [
+          [sql.initial, ["a", 50]],
+          [sql.older, ["a", 350, 50]],
+          [sql.cursor, ["a", "message-350"]],
+          [sql.hasEarlier, ["a", 350]],
+        ] as const
+      ).forEach(([query, bindings]) => {
         const plan = db.prepare(`EXPLAIN QUERY PLAN ${query}`).all(...bindings);
         expect(
           plan.some((row) => String(row.detail).includes("SEARCH chat_history_groups USING")),
@@ -102,7 +104,7 @@ describe("isolated history projection SQLite contract", () => {
           false,
         );
         expect(plan.some((row) => String(row.detail).includes("TEMP B-TREE"))).toBe(false);
-      }
+      });
     } finally {
       db.close();
     }
@@ -114,10 +116,10 @@ describe("isolated history projection SQLite contract", () => {
       publish(db, "a", transcript(400));
       const initial = db.prepare(snapshots.initial).all("a", 50);
       const older = db.prepare(snapshots.older).all("a", "message-350", 50);
-      for (const [rows, expected] of [
+      [
         [initial, db.prepare(sql.initial).all("a", 50)],
         [older, db.prepare(sql.older).all("a", 350, 50)],
-      ]) {
+      ].forEach(([rows, expected]) => {
         expect(rows).toHaveLength(50);
         expect(
           rows.every(
@@ -135,11 +137,13 @@ describe("isolated history projection SQLite contract", () => {
         expect(
           rows.reduce((bytes, row) => bytes + Buffer.byteLength(String(row.messages)), 0),
         ).toBeLessThan(Buffer.byteLength(JSON.stringify(transcript(400))) / 7);
-      }
-      for (const [query, bindings] of [
-        [snapshots.initial, ["a", 50]],
-        [snapshots.older, ["a", "message-350", 50]],
-      ] as const) {
+      });
+      (
+        [
+          [snapshots.initial, ["a", 50]],
+          [snapshots.older, ["a", "message-350", 50]],
+        ] as const
+      ).forEach(([query, bindings]) => {
         const plan = db.prepare(`EXPLAIN QUERY PLAN ${query}`).all(...bindings);
         expect(
           plan.some((row) => String(row.detail).includes("SEARCH chat_history_groups USING")),
@@ -148,7 +152,7 @@ describe("isolated history projection SQLite contract", () => {
           false,
         );
         expect(plan.some((row) => String(row.detail).includes("chat_threads"))).toBe(false);
-      }
+      });
     } finally {
       db.close();
     }
@@ -358,9 +362,9 @@ describe("isolated history projection SQLite contract", () => {
       const replaceFromSnapshot = () => {
         db.prepare(sql.markUnready).run("a");
         db.prepare(sql.removeGroups).run("a");
-        for (const [ordinal, group] of groups.entries()) {
-          db.prepare(sql.insertGroup).run("a", ordinal, group.id, JSON.stringify(group.messages));
-        }
+        groups.forEach((group, ordinal) =>
+          db.prepare(sql.insertGroup).run("a", ordinal, group.id, JSON.stringify(group.messages)),
+        );
         return db.prepare(sql.publishIfCurrent).run("a", source).changes;
       };
       db.exec("SAVEPOINT backfill_fixture");

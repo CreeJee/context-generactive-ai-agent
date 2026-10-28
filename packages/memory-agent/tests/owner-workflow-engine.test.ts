@@ -1,6 +1,6 @@
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { it } from "@effect/vitest";
-import { Context, Effect, FileSystem, Layer, Path, Schema } from "effect";
+import { Context, Effect, FileSystem, Layer, MutableRef, Path, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 import { Activity, Workflow, WorkflowEngine } from "effect/workflow";
 import { describe, expect } from "vite-plus/test";
@@ -56,7 +56,7 @@ const withEngine = <A, E, R>(
 describe("owner workflow engine", () => {
   it.live("preserves activity services and typed failures across durable replay", () =>
     withDatabase(() => {
-      let executions = 0;
+      const executions = MutableRef.make(0);
       const workflow = Workflow.make("OwnerActivityFailure", {
         payload: { value: Schema.String },
         error: ActivityRefused,
@@ -71,7 +71,7 @@ describe("owner workflow engine", () => {
               error: ActivityRefused,
               execute: Effect.gen(function* () {
                 const input = yield* ActivityInput;
-                executions++;
+                MutableRef.increment(executions);
                 return yield* ActivityRefused.make({ reason: "refused", value: input.value });
               }),
             }),
@@ -90,7 +90,7 @@ describe("owner workflow engine", () => {
         expect(first).toBeInstanceOf(ActivityRefused);
         expect(first).toMatchObject({ reason: "refused", value: "captured service" });
         expect(replayed).toEqual(first);
-        expect(executions).toBe(1);
+        expect(MutableRef.get(executions)).toBe(1);
       });
     }),
   );
@@ -127,7 +127,7 @@ describe("owner workflow engine", () => {
 
   it.live("replays a completed Activity after the scoped engine restarts", () =>
     withDatabase(() => {
-      let executions = 0;
+      const executions = MutableRef.make(0);
       const run = withEngine(
         Effect.gen(function* () {
           const engine = yield* WorkflowEngine.WorkflowEngine;
@@ -136,7 +136,7 @@ describe("owner workflow engine", () => {
               name: "OwnerWorkflowEngineContract.activity",
               success: Schema.String,
               execute: Effect.sync(() => {
-                executions += 1;
+                MutableRef.increment(executions);
                 return `done:${value}`;
               }),
             }),
@@ -150,7 +150,7 @@ describe("owner workflow engine", () => {
       return Effect.gen(function* () {
         const first = yield* run;
         const replayed = yield* run;
-        expect({ first, replayed, executions }).toEqual({
+        expect({ first, replayed, executions: MutableRef.get(executions) }).toEqual({
           first: "done:same",
           replayed: "done:same",
           executions: 1,
@@ -203,15 +203,15 @@ describe("owner workflow engine", () => {
             },
           ]);
 
-          let rebound = false;
+          const rebound = MutableRef.make(false);
           const duplicate = yield* admission.admit(
             request,
             Effect.sync(() => {
-              rebound = true;
+              MutableRef.set(rebound, true);
             }),
           );
           expect(OwnerWorkflowAdmissionResult.$is("existing")(duplicate)).toBe(true);
-          expect(rebound).toBe(false);
+          expect(MutableRef.get(rebound)).toBe(false);
         }),
       ),
     ),
@@ -220,12 +220,14 @@ describe("owner workflow engine", () => {
   it.live("interrupts live workflow fibers when the engine scope closes", () =>
     withDatabase(() =>
       Effect.gen(function* () {
-        let finalized = 0;
+        const finalized = MutableRef.make(0);
         yield* withEngine(
           Effect.gen(function* () {
             const engine = yield* WorkflowEngine.WorkflowEngine;
             yield* engine.register(ContractWorkflow, () =>
-              Effect.never.pipe(Effect.ensuring(Effect.sync(() => finalized++))),
+              Effect.never.pipe(
+                Effect.ensuring(Effect.sync(() => MutableRef.increment(finalized))),
+              ),
             );
             yield* engine.execute(ContractWorkflow, {
               executionId: "scope-owned-execution",
@@ -234,7 +236,7 @@ describe("owner workflow engine", () => {
             });
           }),
         );
-        expect(finalized).toBe(1);
+        expect(MutableRef.get(finalized)).toBe(1);
       }),
     ),
   );

@@ -107,21 +107,21 @@ testAgent()("structured memory evidence", (it) => {
         reason: "withdrawal",
         model: "fixture",
       });
-      for (let index = 0; index < 9; index++) {
-        const pending = yield* env.nodes.append({
-          ...at,
-          kind: "user",
-          text: `possible change ${index}`,
-        });
-        yield* env.interpretations.record({
-          nodeId: pending.id,
-          targetId: original.id,
-          kind: "corrects",
-          status: "unconfirmed",
-          reason: "ambiguous target",
-          model: "fixture",
-        });
-      }
+      yield* Effect.forEach(
+        Array.from({ length: 9 }, (_, index) => `possible change ${index}`),
+        Effect.fnUntraced(function* (text) {
+          const pending = yield* env.nodes.append({ ...at, kind: "user", text });
+          yield* env.interpretations.record({
+            nodeId: pending.id,
+            targetId: original.id,
+            kind: "corrects",
+            status: "unconfirmed",
+            reason: "ambiguous target",
+            model: "fixture",
+          });
+        }),
+        { discard: true },
+      );
       const { read } = reads(env, at.projectId);
       const result = yield* read({ id: original.id, offset: 4000 });
       expect(result).toHaveProperty("evidenceContext.changes.length", 8);
@@ -178,16 +178,19 @@ testAgent()("structured memory evidence", (it) => {
           kind: "assistant",
           text: "I changed your decision",
         });
-        for (const source of [older, assistant]) {
-          yield* env.interpretations.record({
-            nodeId: source.id,
-            targetId: original.id,
-            kind: "corrects",
-            status: "applied",
-            reason: "invalid authority",
-            model: "fixture",
-          });
-        }
+        yield* Effect.forEach(
+          [older, assistant],
+          (source) =>
+            env.interpretations.record({
+              nodeId: source.id,
+              targetId: original.id,
+              kind: "corrects",
+              status: "applied",
+              reason: "invalid authority",
+              model: "fixture",
+            }),
+          { discard: true },
+        );
         const { read } = reads(env, at.projectId);
         expect(yield* read({ id: original.id })).toMatchObject({
           evidenceContext: { assessment: { kind: "no_recorded_change" }, changes: [] },
@@ -249,15 +252,19 @@ testAgent()("structured memory evidence", (it) => {
         kind: "user",
         text: "수요일 오전으로 바꾸자",
       });
-      for (const source of [older, assistant, later])
-        yield* env.interpretations.record({
-          nodeId: source.id,
-          targetId: original.id,
-          kind: "corrects",
-          status: "applied",
-          reason: "fixture",
-          model: "fixture",
-        });
+      yield* Effect.forEach(
+        [older, assistant, later],
+        (source) =>
+          env.interpretations.record({
+            nodeId: source.id,
+            targetId: original.id,
+            kind: "corrects",
+            status: "applied",
+            reason: "fixture",
+            model: "fixture",
+          }),
+        { discard: true },
+      );
       yield* env.interpretations.record({
         nodeId: later.id,
         targetId: original.id,
@@ -474,16 +481,19 @@ testAgent()("structured memory evidence", (it) => {
         kind: "user",
         text: "foreign correction",
       });
-      for (const status of ["applied", "unconfirmed"] as const) {
-        yield* env.interpretations.record({
-          nodeId: foreignChange.id,
-          targetId: root.id,
-          kind: "corrects",
-          status,
-          reason: "different scope",
-          model: "fixture",
-        });
-      }
+      yield* Effect.forEach(
+        ["applied", "unconfirmed"] as const,
+        (status) =>
+          env.interpretations.record({
+            nodeId: foreignChange.id,
+            targetId: root.id,
+            kind: "corrects",
+            status,
+            reason: "different scope",
+            model: "fixture",
+          }),
+        { discard: true },
+      );
       const shared = reads(env, at.projectId).read;
       const scoped = callers(
         memoryReadRunTools({ env, projectId: at.projectId, scope: "project" }),

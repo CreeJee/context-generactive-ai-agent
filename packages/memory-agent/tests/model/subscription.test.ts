@@ -1,6 +1,6 @@
 import { it } from "@effect/vitest";
 // Stream fakes implement the subscription client contract.
-import { Deferred, Effect, Logger, Option, References, Schema, Stream } from "effect";
+import { Deferred, Effect, Logger, MutableRef, Option, References, Schema, Stream } from "effect";
 import { Prompt } from "effect/ai";
 import { describe, expect } from "vite-plus/test";
 import {
@@ -312,10 +312,10 @@ describe("subscription language model", () => {
 
   it.effect("does not retry other provider failures", () =>
     Effect.gen(function* () {
-      let attempts = 0;
+      const attempts = MutableRef.make(0);
       const client: StreamingOAuthClient = {
         stream: () => {
-          attempts += 1;
+          MutableRef.increment(attempts);
           return Stream.make(
             NormalizedStreamEvent.error({ code: "overloaded_error", message: "busy" }),
           );
@@ -324,7 +324,7 @@ describe("subscription language model", () => {
       expect(yield* failureOf("anthropic", client)).toEqual(
         failed(SubscriptionStreamFailedReason.cases.ProviderRejected.make({}), "anthropic"),
       );
-      expect(attempts).toBe(1);
+      expect(MutableRef.get(attempts)).toBe(1);
     }),
   );
 
@@ -383,16 +383,20 @@ describe("subscription language model", () => {
           clientOf([{ ...start, id: "x".repeat(publicReasoningLimits.idCharacters + 1) }]),
         ),
       ).toEqual(resourceLimit);
-      const parts: NormalizedStreamEvent[] = [];
-      for (let index = 0; index <= publicReasoningLimits.parts; index++)
-        parts.push({ ...start, summaryIndex: index }, { ...end, summaryIndex: index });
+      const parts = Array.from(
+        { length: publicReasoningLimits.parts + 1 },
+        (_, index): NormalizedStreamEvent[] => [
+          { ...start, summaryIndex: index },
+          { ...end, summaryIndex: index },
+        ],
+      ).flat();
       expect(yield* failureOf("openai", clientOf(parts))).toEqual(resourceLimit);
     }),
   );
 
   it.effect("fails conflicting, duplicate and late summaries", () =>
-    Effect.gen(function* () {
-      for (const events of [
+    Effect.forEach(
+      [
         [start, start],
         [
           start,
@@ -407,11 +411,13 @@ describe("subscription language model", () => {
           { ...start, text: "prefix" },
           { ...end, text: "different" },
         ],
-      ] satisfies NormalizedStreamEvent[][]) {
-        const failure = yield* failureOf("openai", clientOf(events));
-        expect(Option.getOrUndefined(failure)).toBeInstanceOf(ReasoningSummaryProtocolFailed);
-      }
-    }),
+      ] satisfies NormalizedStreamEvent[][],
+      (events) =>
+        Effect.map(failureOf("openai", clientOf(events)), (failure) =>
+          expect(Option.getOrUndefined(failure)).toBeInstanceOf(ReasoningSummaryProtocolFailed),
+        ),
+      { discard: true },
+    ),
   );
 
   it.effect("fails instead of finishing with an open summary, tool call or reasoning", () =>
@@ -419,13 +425,19 @@ describe("subscription language model", () => {
       expect(yield* failureOf("openai", clientOf([start]))).toEqual(
         summaryFailed(ReasoningSummaryProtocolFailedReason.cases.IncompleteSummary.make({})),
       );
-      for (const event of [
-        NormalizedStreamEvent["tool-call-start"]({ index: 0, id: "call", name: "fixture" }),
-        NormalizedStreamEvent["reasoning-start"]({ index: 0 }),
-      ])
-        expect(yield* failureOf("openai", clientOf([event]))).toEqual(
-          failed(SubscriptionStreamFailedReason.cases.IncompleteBlocks.make({})),
-        );
+      yield* Effect.forEach(
+        [
+          NormalizedStreamEvent["tool-call-start"]({ index: 0, id: "call", name: "fixture" }),
+          NormalizedStreamEvent["reasoning-start"]({ index: 0 }),
+        ],
+        (event) =>
+          Effect.map(failureOf("openai", clientOf([event])), (failure) =>
+            expect(failure).toEqual(
+              failed(SubscriptionStreamFailedReason.cases.IncompleteBlocks.make({})),
+            ),
+          ),
+        { discard: true },
+      );
     }),
   );
 

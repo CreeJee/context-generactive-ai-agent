@@ -53,7 +53,7 @@ const withPreBindingCheckDatabase = Effect.fn("withPreBindingCheckDatabase")(fun
   );
   try {
     sqlite.exec("PRAGMA foreign_keys = ON");
-    for (const step of migrations.slice(0, version)) sqlite.exec(step);
+    migrations.slice(0, version).forEach((step) => sqlite.exec(step));
     sqlite.exec(`PRAGMA user_version = ${version}`);
     use({ sqlite });
   } finally {
@@ -98,7 +98,7 @@ describe("Database", () => {
       Effect.gen(function* () {
         const sqlite = yield* memoryDatabase;
         sqlite.exec("PRAGMA foreign_keys=ON");
-        for (const step of migrations.slice(0, 47)) sqlite.exec(step);
+        migrations.slice(0, 47).forEach((step) => sqlite.exec(step));
         sqlite.exec(
           "PRAGMA user_version=47; CREATE TABLE owner_read_recoveries(existing_data TEXT)",
         );
@@ -153,7 +153,7 @@ describe("Database", () => {
       Effect.gen(function* () {
         const sqlite = yield* memoryDatabase;
         sqlite.exec("PRAGMA foreign_keys=ON");
-        for (const step of migrations.slice(0, 48)) sqlite.exec(step);
+        migrations.slice(0, 48).forEach((step) => sqlite.exec(step));
         sqlite.exec("PRAGMA user_version=48");
         seed({ sqlite });
         const before = sqlite.prepare("SELECT * FROM nodes ORDER BY seq").all();
@@ -209,7 +209,7 @@ describe("Database", () => {
         const state = '{"goal":{"version":4},"plan":{"version":7}}';
         try {
           old.exec("PRAGMA foreign_keys = ON");
-          for (const step of migrations.slice(0, releasedVersion)) old.exec(step);
+          migrations.slice(0, releasedVersion).forEach((step) => old.exec(step));
           old.exec(`PRAGMA user_version = ${releasedVersion}`);
           seed({ sqlite: old });
           old.prepare("INSERT INTO session_workflows VALUES ('s1', ?, 'released')").run(state);
