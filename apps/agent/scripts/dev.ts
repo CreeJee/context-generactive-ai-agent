@@ -319,10 +319,13 @@ const runWithBackend = Effect.fn("dev.runWithBackend")(function* (includeWeb: bo
     yield* removeManifest(buildId);
   });
   // A second Ctrl+C while the children drain kills them now instead of leaving them behind.
-  const forceStop = Effect.forEach([web, backend, collector], (child) => stop(child, "SIGKILL"), {
-    concurrency: "unbounded",
-    discard: true,
-  }).pipe(Effect.andThen(removeManifest(buildId)));
+  // Suspended so it reads the frontend started after this point, not the null it starts as.
+  const forceStop = Effect.suspend(() =>
+    Effect.forEach([web, backend, collector], (child) => stop(child, "SIGKILL"), {
+      concurrency: "unbounded",
+      discard: true,
+    }),
+  ).pipe(Effect.andThen(removeManifest(buildId)));
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
   const handlers = signals.map(
     (signal) => () => void developmentRuntime.runPromise(stopping ? forceStop : shutdown(signal)),
