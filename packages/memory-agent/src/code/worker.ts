@@ -23,6 +23,7 @@ import {
   Effect,
   HashMap,
   Layer,
+  MutableRef,
   Option,
   Queue,
   Ref,
@@ -162,17 +163,22 @@ interface LogBook {
 }
 const logBook = (): LogBook => {
   const lines: string[] = [];
-  let characters = 0;
-  let dropped = 0;
+  // The sandbox's console calls back synchronously.
+  const characters = MutableRef.make(0);
+  const dropped = MutableRef.make(0);
   return {
     write: (line) => {
-      if (lines.length >= maxLogLines || characters + line.length > maxLogCharacters) dropped++;
+      if (
+        lines.length >= maxLogLines ||
+        MutableRef.get(characters) + line.length > maxLogCharacters
+      )
+        MutableRef.increment(dropped);
       else {
         lines.push(line);
-        characters += line.length;
+        MutableRef.update(characters, (count) => count + line.length);
       }
     },
-    read: () => ({ logs: [...lines], dropped }),
+    read: () => ({ logs: [...lines], dropped: MutableRef.get(dropped) }),
   };
 };
 

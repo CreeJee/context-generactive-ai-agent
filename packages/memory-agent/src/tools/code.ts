@@ -1,4 +1,4 @@
-import { Context, Duration, Effect, HashSet, Layer, Option, Schema } from "effect";
+import { Context, Duration, Effect, HashSet, Layer, MutableRef, Option, Schema } from "effect";
 import {
   CodeSandbox,
   ProgramCallFailed,
@@ -157,8 +157,8 @@ const sandboxFailure = ({ reason }: CodeSandboxFailed) =>
  * below the program's own (`parent`), so the ids count only the calls whose input was accepted.
  */
 const programFunctions = (tools: ReadonlyArray<RunTool>, parent: string) => {
-  let calls = 0;
-  const nextId = () => `${parent}#${++calls}`;
+  const calls = MutableRef.make(0);
+  const nextId = () => `${parent}#${MutableRef.incrementAndGet(calls)}`;
   return Object.fromEntries(
     tools.map(({ tool, prepare }): [string, ProgramFunction] => [
       tool.name,

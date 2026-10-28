@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { Config, ConfigProvider, Effect, Option, Schema } from "effect";
+import { Config, ConfigProvider, Effect, MutableRef, Option, Schema } from "effect";
 import { workerData } from "node:worker_threads";
 import { path } from "./synchronous-path.ts";
 
@@ -25,18 +25,20 @@ const WorkerRuntime = Schema.Struct({
   contextAgentRuntime: Schema.Struct({ root: Schema.NullOr(Schema.String) }),
 });
 const inheritedRuntime = Schema.decodeUnknownOption(WorkerRuntime)(workerData);
-let configuredRuntime: { readonly root: string | null } | undefined =
-  Option.getOrUndefined(inheritedRuntime)?.contextAgentRuntime;
+const configuredRuntime = MutableRef.make(
+  Option.map(inheritedRuntime, ({ contextAgentRuntime }) => contextAgentRuntime),
+);
 
 /** Explicit host bootstrap; worker copies receive the same value through workerData. */
 export function configureRuntimeRoot(root: string | null): void {
-  configuredRuntime = { root };
+  MutableRef.set(configuredRuntime, Option.some({ root }));
 }
 
 export const runtimeRoot: Effect.Effect<string | null> = Effect.suspend(() =>
-  configuredRuntime !== undefined
-    ? Effect.succeed(configuredRuntime.root)
-    : Config.String("CONTEXT_AGENT_RUNTIME").pipe(
+  Option.match(MutableRef.get(configuredRuntime), {
+    onSome: ({ root }) => Effect.succeed(root),
+    onNone: () =>
+      Config.String("CONTEXT_AGENT_RUNTIME").pipe(
         Config.withDefault(null),
         Effect.provideService(
           ConfigProvider.ConfigProvider,
@@ -44,6 +46,7 @@ export const runtimeRoot: Effect.Effect<string | null> = Effect.suspend(() =>
         ),
         Effect.orDie,
       ),
+  }),
 );
 
 /** Preserve worker setup and inherited SDK environment without mutating process.env. */

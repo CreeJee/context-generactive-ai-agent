@@ -19,6 +19,7 @@ import {
   HashSet,
   Match,
   MutableHashMap,
+  MutableRef,
   DateTime,
   Clock,
   Context,
@@ -860,10 +861,8 @@ const make = Effect.gen(function* () {
           });
         const live = connected.success;
 
-        let sessionId = Option.getOrUndefined(
-          HashMap.get(yield* Ref.get(live.sessions), sessionKey),
-        );
-        if (!isTruthy(sessionId)) {
+        /** A new agent session for this conversation, or why the agent did not open one. */
+        const newSession = Effect.gen(function* () {
           const created = yield* Effect.result(
             nativePromise(() =>
               live.connection.agent.request(acp.methods.agent.session.new, {
@@ -874,25 +873,40 @@ const make = Effect.gen(function* () {
           );
           if (Result.isFailure(created)) {
             const error = rejectionError(created.failure);
-            return ExternalPromptOutcome.unavailable({
-              failure: yield* redactor.hideDetail({
-                code: "session_failed" as const,
-                detail: rejectionText(error),
+            return Result.fail(
+              ExternalPromptOutcome.unavailable({
+                failure: yield* redactor.hideDetail({
+                  code: "session_failed" as const,
+                  detail: rejectionText(error),
+                }),
               }),
-            });
+            );
           }
-          sessionId = created.success.sessionId;
-          yield* Ref.update(live.sessions, HashMap.set(sessionKey, sessionId));
-        }
+          yield* Ref.update(live.sessions, HashMap.set(sessionKey, created.success.sessionId));
+          return Result.succeed(created.success.sessionId);
+        });
+        const opened = yield* Option.match(
+          Option.filter(HashMap.get(yield* Ref.get(live.sessions), sessionKey), isTruthy),
+          {
+            onSome: (known) => Effect.succeed(Result.succeed(known)),
+            onNone: () => newSession,
+          },
+        );
+        if (Result.isFailure(opened)) return opened.failure;
+        const sessionId = opened.success;
 
-        let answer = "";
+        // The SDK hands the answer over in chunks, through a plain callback.
+        const answerSoFar = MutableRef.make("");
         const toolCalls = MutableHashMap.empty<string, ReportedToolCall>();
         MutableHashMap.set(live.handlers, sessionId, {
           onUpdate: (update) => {
             Match.value(update).pipe(
               Match.discriminators("sessionUpdate")({
                 agent_message_chunk: (chunk) => {
-                  answer += chunk.content.type === "text" ? chunk.content.text : "";
+                  MutableRef.update(
+                    answerSoFar,
+                    (answer) => answer + (chunk.content.type === "text" ? chunk.content.text : ""),
+                  );
                 },
                 tool_call: (call) =>
                   MutableHashMap.set(toolCalls, call.toolCallId, {
@@ -949,7 +963,7 @@ const make = Effect.gen(function* () {
             onSuccess: ({ stopReason }): Effect.Effect<ExternalPromptOutcome> => {
               const answered = {
                 stopReason,
-                answer,
+                answer: MutableRef.get(answerSoFar),
                 toolCalls: [...MutableHashMap.values(toolCalls)],
               };
               return Effect.succeed(
@@ -965,7 +979,7 @@ const make = Effect.gen(function* () {
                   live.connection.signal.aborted || current.live !== live
                     ? Effect.succeed(
                         ExternalPromptOutcome.disconnected({
-                          answer,
+                          answer: MutableRef.get(answerSoFar),
                           toolCalls: [...MutableHashMap.values(toolCalls)],
                         }),
                       )
@@ -977,7 +991,7 @@ const make = Effect.gen(function* () {
                         (shown) =>
                           ExternalPromptOutcome.failed({
                             failure: shown,
-                            answer,
+                            answer: MutableRef.get(answerSoFar),
                             toolCalls: [...MutableHashMap.values(toolCalls)],
                           }),
                       ),

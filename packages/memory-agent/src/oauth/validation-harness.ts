@@ -7,6 +7,7 @@ import { HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 import { optionalProperty } from "../optional-property.ts";
 import {
+  Array as Arr,
   Cause,
   Context,
   Crypto,
@@ -18,7 +19,6 @@ import {
   Stream,
   HashMap,
   HashSet,
-  MutableHashSet,
   Option,
   Path,
   Predicate,
@@ -510,9 +510,7 @@ const safeEqual = (left: string, right: string) => {
   const a = utf8.encode(left);
   const b = utf8.encode(right);
   if (a.length !== b.length) return false;
-  let difference = 0;
-  for (let index = 0; index < a.length; index++) difference |= a[index]! ^ b[index]!;
-  return difference === 0;
+  return a.reduce((difference, byte, index) => difference | (byte ^ b[index]!), 0) === 0;
 };
 
 const TokenResponse = Schema.Struct({
@@ -1039,31 +1037,45 @@ export const createSubscriptionOAuthClient = Effect.fnUntraced(function* (
     });
   });
 
+  /** A request, sent once more with a refreshed credential when the provider asks for one. */
+  const refreshingOnce = <E, R>(
+    credential: StoredCredential,
+    send: (credential: StoredCredential) => Effect.Effect<Response, E, R>,
+  ) =>
+    Effect.flatMap(send(credential), (response) =>
+      protocol.refreshStatuses.includes(response.status)
+        ? Effect.flatMap(refresh(credential), (fresh) =>
+            Effect.map(send(fresh), (retried) => ({ credential: fresh, response: retried })),
+          )
+        : Effect.succeed({ credential, response }),
+    );
+
   /** Fetches only the provider's fixed model-catalog endpoint and never returns credentials. */
   const modelCatalog = Effect.fn("OAuth.modelCatalog")(function* () {
     const context: OAuthHarnessErrorContext = {
       provider: protocol.provider,
       operation: "model_catalog",
     };
-    let credential = yield* freshCredential(context);
+    const credential = yield* freshCredential(context);
 
-    const pages: Array<JsonValue> = [];
     // Native HTTP boundary: keep the existing timeout and the Effect owner's
     // interruption signal across every page/retry of this single catalog load.
     const timeout = AbortSignal.timeout(30_000);
-    const seenCursors = MutableHashSet.empty<string>();
-    let afterId: string | undefined;
-    for (;;) {
+    /** One page, and where the next starts: its cursor, the credential so far and the pages read. */
+    const pageAt = Effect.fnUntraced(function* (at: {
+      readonly credential: StoredCredential;
+      readonly afterId: string | undefined;
+      readonly seenCursors: HashSet.HashSet<string>;
+      readonly read: number;
+    }) {
       const url = new URL(protocol.catalogUrl);
       if (protocol.provider === "anthropic") {
         url.searchParams.set("limit", "1000");
-        if (afterId !== undefined) url.searchParams.set("after_id", afterId);
+        if (at.afterId !== undefined) url.searchParams.set("after_id", at.afterId);
       }
-      let response = yield* authorizedCatalogRequest(url, credential, timeout);
-      if (protocol.refreshStatuses.includes(response.status)) {
-        credential = yield* refresh(credential);
-        response = yield* authorizedCatalogRequest(url, credential, timeout);
-      }
+      const { credential, response } = yield* refreshingOnce(at.credential, (current) =>
+        authorizedCatalogRequest(url, current, timeout),
+      );
       if (!response.ok)
         return yield* OAuthHarnessError.fromCode("provider_rejected", response.status, context);
       const page = yield* nativePromise(() => response.json()).pipe(
@@ -1072,19 +1084,34 @@ export const createSubscriptionOAuthClient = Effect.fnUntraced(function* (
           OAuthHarnessError.fromCode("provider_rejected", response.status, context),
         ),
       );
-      pages.push(page);
-      if (protocol.provider !== "anthropic") break;
-      const pagination = Option.getOrUndefined(decodeCatalogPage(page));
-      if (pagination?.has_more !== true || pagination.last_id === undefined) break;
-      if (pages.length >= 10 || MutableHashSet.has(seenCursors, pagination.last_id))
+      const read = at.read + 1;
+      const pagination =
+        protocol.provider === "anthropic"
+          ? Option.getOrUndefined(decodeCatalogPage(page))
+          : undefined;
+      if (pagination?.has_more !== true || pagination.last_id === undefined)
+        return [Arr.of(page), Option.none()] as const;
+      if (read >= 10 || HashSet.has(at.seenCursors, pagination.last_id))
         return yield* OAuthHarnessError.fromCode("provider_rejected", null, {
           ...context,
           detail: "catalog_pagination_unbounded",
         });
-      MutableHashSet.add(seenCursors, pagination.last_id);
-      afterId = pagination.last_id;
-    }
-    const catalog: ReadonlyArray<JsonValue> = pages;
+      return [
+        Arr.of(page),
+        Option.some({
+          credential,
+          afterId: pagination.last_id,
+          seenCursors: HashSet.add(at.seenCursors, pagination.last_id),
+          read,
+        }),
+      ] as const;
+    });
+    const catalog: ReadonlyArray<JsonValue> = yield* Stream.runCollect(
+      Stream.paginate(
+        { credential, afterId: undefined, seenCursors: HashSet.empty<string>(), read: 0 },
+        pageAt,
+      ),
+    );
     return catalog;
   });
 
@@ -1093,7 +1120,7 @@ export const createSubscriptionOAuthClient = Effect.fnUntraced(function* (
       provider: protocol.provider,
       operation: "model_stream",
     };
-    let credential = yield* freshCredential(context);
+    const credential = yield* freshCredential(context);
 
     const prepared =
       protocol.provider === "anthropic"
@@ -1130,11 +1157,7 @@ export const createSubscriptionOAuthClient = Effect.fnUntraced(function* (
       });
     });
 
-    let response = yield* request(credential);
-    if (protocol.refreshStatuses.includes(response.status)) {
-      credential = yield* refresh(credential);
-      response = yield* request(credential);
-    }
+    const { response } = yield* refreshingOnce(credential, request);
     if (!response.ok) {
       if (
         protocol.provider === "anthropic" &&

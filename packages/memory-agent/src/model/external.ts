@@ -1,5 +1,15 @@
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
-import { type Cause, Effect, Match, Option, Predicate, Queue, Schema, Stream } from "effect";
+import {
+  type Cause,
+  Effect,
+  Match,
+  MutableRef,
+  Option,
+  Predicate,
+  Queue,
+  Schema,
+  Stream,
+} from "effect";
 import { AiError, LanguageModel, type Prompt, type Response } from "effect/ai";
 import { ExternalPromptOutcome } from "../external-agents/agents.ts";
 import type { ShownFailure } from "../providers/contracts.ts";
@@ -52,11 +62,12 @@ const lastUserText = (prompt: Prompt.Prompt) => {
 
 /** The answer one turn streams: the agent's text as it arrives, then the calls it reported. */
 const makeAnswer = () => {
-  let open = false;
+  const open = MutableRef.make(false);
   const calls = new Map<string, { readonly title: string; readonly status: string }>();
   const text = (delta: string): Array<Part> => {
-    const start: Array<Part> = open ? [] : [{ type: "text-start", id: textId }];
-    open = true;
+    const start: Array<Part> = MutableRef.getAndSet(open, true)
+      ? []
+      : [{ type: "text-start", id: textId }];
     return [...start, { type: "text-delta", id: textId, delta }];
   };
   /** The parts one session update adds; tool calls are only remembered. */
@@ -90,7 +101,7 @@ const makeAnswer = () => {
           );
     return [
       ...reported,
-      ...(open ? [{ type: "text-end", id: textId } as const] : []),
+      ...(MutableRef.get(open) ? [{ type: "text-end", id: textId } as const] : []),
       { type: "finish", reason: "stop", usage: { inputTokens: {}, outputTokens: {} } },
     ];
   };

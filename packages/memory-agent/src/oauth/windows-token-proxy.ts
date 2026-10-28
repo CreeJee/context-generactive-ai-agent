@@ -70,22 +70,20 @@ export const windowsTokenProxy = Effect.fn("OAuth.windowsTokenProxy")(
             { windowsHide: true, detached: false, stdin: "ignore", stderr: "ignore" },
           ),
         );
-        const decoder = new TextDecoder();
-        let size = 0;
-        let output = "";
-        yield* child.stdout.pipe(
-          Stream.runForEach((chunk) =>
-            Effect.gen(function* () {
-              size += chunk.byteLength;
-              yield* Effect.when(
-                Effect.fail(ProxyOutputTooLarge.make()),
-                Effect.succeed(size > 2048),
-              );
-              output += decoder.decode(chunk, { stream: true });
-            }),
+        const output = yield* child.stdout.pipe(
+          Stream.mapAccum(
+            () => 0,
+            (size, chunk) => [size + chunk.byteLength, [{ chunk, size: size + chunk.byteLength }]],
           ),
+          Stream.mapEffect(({ chunk, size }) =>
+            Effect.as(
+              Effect.when(Effect.fail(ProxyOutputTooLarge.make()), Effect.succeed(size > 2048)),
+              chunk,
+            ),
+          ),
+          Stream.decodeText(),
+          Stream.mkString,
         );
-        output += decoder.decode();
         const exit = yield* child.exitCode;
         return exit === 0 ? classifyWindowsProxyOutput(output) : { route: "unavailable" as const };
       }),

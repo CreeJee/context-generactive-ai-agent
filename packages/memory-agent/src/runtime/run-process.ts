@@ -26,22 +26,24 @@ export function runProcess(
           stdin: "ignore",
         }),
       );
-      const collect = Effect.fnUntraced(function* (stream: typeof child.stdout) {
-        const decoder = new TextDecoder();
-        let size = 0;
-        let output = "";
-        yield* stream.pipe(
-          Stream.runForEach((chunk) =>
-            Effect.gen(function* () {
-              size += chunk.byteLength;
-              if (size > (options.maxBuffer ?? 1024 * 1024))
-                return yield* new Cause.UnknownError(new Error("command_output_limit"));
-              output += decoder.decode(chunk, { stream: true });
-            }),
+      const collect = (stream: typeof child.stdout) =>
+        stream.pipe(
+          Stream.mapAccum(
+            () => 0,
+            (size, chunk) => [size + chunk.byteLength, [{ chunk, size: size + chunk.byteLength }]],
           ),
+          Stream.mapEffect(({ chunk, size }) =>
+            Effect.as(
+              Effect.when(
+                Effect.fail(new Cause.UnknownError(new Error("command_output_limit"))),
+                Effect.succeed(size > (options.maxBuffer ?? 1024 * 1024)),
+              ),
+              chunk,
+            ),
+          ),
+          Stream.decodeText(),
+          Stream.mkString,
         );
-        return output + decoder.decode();
-      });
       const [stdout, stderr, exit] = yield* Effect.all(
         [collect(child.stdout), collect(child.stderr), child.exitCode],
         { concurrency: "unbounded" },
