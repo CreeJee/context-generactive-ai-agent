@@ -188,11 +188,15 @@ const makeReport = () => {
   const print = Effect.gen(function* () {
     const sorted = <V>(map: MutableHashMap.MutableHashMap<string, V>) =>
       [...map].sort(([left], [right]) => left.localeCompare(right));
-    for (const [name, total] of sorted(counts)) yield* Console.log(`${name}: ${total}`);
-    for (const [name, where] of sorted(failures)) {
-      yield* Console.log(`\n${name}:`);
-      for (const line of where) yield* Console.log(`  ${line}`);
-    }
+    yield* Effect.forEach(sorted(counts), ([name, total]) => Console.log(`${name}: ${total}`), {
+      discard: true,
+    });
+    yield* Effect.forEach(
+      sorted(failures),
+      ([name, where]) =>
+        Console.log([`\n${name}:`, ...where.map((line) => `  ${line}`)].join("\n")),
+      { discard: true },
+    );
   });
   return { count, fail, decoded, print };
 };

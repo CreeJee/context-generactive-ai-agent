@@ -58,18 +58,22 @@ const summarize = Command.make(
   },
   Effect.fn(function* ({ files, top }) {
     const root = yield* workingRoot;
-    for (const file of files) {
-      yield* Console.log(`== ${file}`);
-      switch (inputKind(file)) {
-        case "cpu":
-          yield* Console.log(summarizeCpuProfile(yield* readCpuProfile(file), root, top));
-          break;
-        case "spans":
-          yield* Console.log(summarizeSpans(yield* readSpans(file), top));
-          break;
-      }
-      yield* Console.log("");
-    }
+    yield* Effect.forEach(
+      files,
+      Effect.fnUntraced(function* (file) {
+        yield* Console.log(`== ${file}`);
+        switch (inputKind(file)) {
+          case "cpu":
+            yield* Console.log(summarizeCpuProfile(yield* readCpuProfile(file), root, top));
+            break;
+          case "spans":
+            yield* Console.log(summarizeSpans(yield* readSpans(file), top));
+            break;
+        }
+        yield* Console.log("");
+      }),
+      { discard: true },
+    );
   }),
 ).pipe(Command.withDescription("span NDJSON·CPU 프로파일을 텍스트로 요약"));
 
