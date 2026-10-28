@@ -3,7 +3,17 @@ import { ignoreLogged } from "../runtime/logged-failures.ts";
 import { DateTime, Semaphore } from "effect";
 import { NodeWorker } from "@effect/platform-node";
 import { Worker } from "node:worker_threads";
-import { Context, Data, Effect, Layer, Number as EffectNumber, Option, Schema } from "effect";
+import {
+  Array as Arr,
+  Context,
+  Data,
+  Effect,
+  Layer,
+  Number as EffectNumber,
+  Option,
+  Schema,
+  Stream,
+} from "effect";
 import { RpcClient } from "effect/rpc";
 import { Nodes } from "../memory/nodes.ts";
 import { SqlClient, SqlSchema } from "effect/sql";
@@ -371,18 +381,28 @@ const make = (running: boolean) =>
     const sweep = (redact: Redact, target: Target) =>
       Effect.gen(function* () {
         const start = yield* stored(progressOf(target));
-        let after = resumesFrom(target, start.after);
-        let hidden = start.hidden;
-        let sweptNow = 0;
-        let finished = false;
-        while (!finished) {
-          const batch = yield* batchOf(redact, target, after);
-          after = batch.last;
-          hidden += batch.hidden;
-          sweptNow += batch.hidden;
-          finished = batch.rows < batchSize;
-          yield* stored(saveProgress(target, after, finished, hidden));
-        }
+        // A short batch is the table's last.
+        const { sweptNow } = yield* Stream.paginate(resumesFrom(target, start.after), (after) =>
+          Effect.map(
+            batchOf(redact, target, after),
+            (batch) =>
+              [
+                Arr.of(batch),
+                batch.rows < batchSize ? Option.none<number>() : Option.some(batch.last),
+              ] as const,
+          ),
+        ).pipe(
+          Stream.runFoldEffect(
+            () => ({ hidden: start.hidden, sweptNow: 0 }),
+            (total, batch) => {
+              const hidden = total.hidden + batch.hidden;
+              return Effect.as(
+                stored(saveProgress(target, batch.last, batch.rows < batchSize, hidden)),
+                { hidden, sweptNow: total.sweptNow + batch.hidden },
+              );
+            },
+          ),
+        );
         return sweptNow;
       });
 

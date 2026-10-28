@@ -1,7 +1,7 @@
 import { Array as EffectArray, HashSet, Option } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { NodeCrypto } from "@effect/platform-node";
-import { Context, Crypto, Effect, Layer, Match, Schema } from "effect";
+import { Context, Crypto, Effect, Layer, Match, Ref, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { edgeWeights, type EdgeKind } from "../memory/edges.ts";
 import { hasStatementText } from "../memory/quality.ts";
@@ -107,10 +107,13 @@ const make = Effect.gen(function* () {
       const { source, projectId, sessionId } = migration;
       // Resuming mid-transcript (a later pass, or the next piece of a long one) must continue the
       // turn it stopped in, so the state comes from the session rather than from this batch.
-      let previousId = yield* idOf(lastInSession(sessionId));
-      let userNodeId = yield* idOf(lastUser(sessionId));
-      let assistantNodeId = yield* idOf(answerInOpenTurn(sessionId));
-      let written = 0;
+      const previousId = yield* Ref.make(yield* idOf(lastInSession(sessionId)));
+      /** The user node of the open turn, and the answer it has so far. */
+      const turn = yield* Ref.make({
+        user: yield* idOf(lastUser(sessionId)),
+        assistant: yield* idOf(answerInOpenTurn(sessionId)),
+      });
+      const written = yield* Ref.make(0);
 
       const append = Effect.fnUntraced(function* (
         kind: NodeKind,
@@ -122,7 +125,10 @@ const make = Effect.gen(function* () {
         const id = yield* crypto.randomUUIDv4();
         // A user turn opens its own run, and what answers it joins that run. `history.ts` groups a
         // transcript by run id, so this is what makes a migrated conversation render as turns.
-        const runId = kind === "user" ? `imported:${id}` : `imported:${userNodeId ?? sessionId}`;
+        const runId =
+          kind === "user"
+            ? `imported:${id}`
+            : `imported:${(yield* Ref.get(turn)).user ?? sessionId}`;
         yield* sql`INSERT INTO nodes ${sql.insert({
           id,
           project_id: projectId,
@@ -133,8 +139,7 @@ const make = Effect.gen(function* () {
           detail: yield* encodeDetail({ ...detail, importedFrom: source }),
           created_at: at,
         })}`;
-        yield* link(previousId, id, "next", at);
-        previousId = id;
+        yield* link(yield* Ref.getAndSet(previousId, id), id, "next", at);
         // An empty answer is not a statement; interpreting it would cost a model call for nothing.
         if (migration.interpret && HashSet.has(interpretedKinds, kind) && hasStatementText(text))
           yield* sql`INSERT INTO interpret_jobs (node_id, status, updated_at)
@@ -144,7 +149,7 @@ const make = Effect.gen(function* () {
             VALUES (${source}, ${externalId}, ${id}) ON CONFLICT DO NOTHING`,
           Effect.succeed(externalId !== null),
         );
-        written += 1;
+        yield* Ref.update(written, (count) => count + 1);
         return id;
       });
 
@@ -154,10 +159,11 @@ const make = Effect.gen(function* () {
        * node the live recorder writes in that case, so both look alike to `trace_evidence`.
        */
       const assistantFor = Effect.fnUntraced(function* (at: string) {
-        if (isTruthy(assistantNodeId)) return assistantNodeId;
+        const open = yield* Ref.get(turn);
+        if (isTruthy(open.assistant)) return open.assistant;
         const id = yield* append("assistant", "", at, null, {});
-        yield* link(id, userNodeId, "reply", at);
-        assistantNodeId = id;
+        yield* link(id, open.user, "reply", at);
+        yield* Ref.set(turn, { user: open.user, assistant: id });
         return id;
       });
 
@@ -180,13 +186,14 @@ const make = Effect.gen(function* () {
               item.externalId,
               Effect.gen(function* () {
                 const id = yield* append(item.role, item.text, item.at, item.externalId, {});
-                if (item.role === "user") {
-                  userNodeId = id;
-                  assistantNodeId = null;
-                  return;
-                }
-                yield* link(id, userNodeId, "reply", item.at);
-                assistantNodeId = id;
+                const { user } = yield* Ref.get(turn);
+                // A user message opens a turn; an answer replies to the turn's user message.
+                yield* item.role === "user"
+                  ? Ref.set(turn, { user: id, assistant: null })
+                  : Effect.andThen(
+                      link(id, user, "reply", item.at),
+                      Ref.set(turn, { user, assistant: id }),
+                    );
               }),
             ),
           tool_call: (item) =>
@@ -229,7 +236,7 @@ const make = Effect.gen(function* () {
         }),
       );
       return {
-        written,
+        written: yield* Ref.get(written),
         repeated: repeats.filter((repeat) => repeat).length,
       } satisfies MigrationCount;
     }).pipe(
