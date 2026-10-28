@@ -118,11 +118,13 @@ export class PromotedMemoryUseRejected extends Schema.TaggedError<PromotedMemory
 ) {}
 
 const notFound = (id: string) => ({ error: "not_found", id });
-interface RunBinding {
+/** A run's memory tools are bound to; AgentChat prepares them before a Goal run admits its turn. */
+export interface MemoryToolRunBinding {
   readonly projectId: string;
   readonly sessionId: string;
   readonly runId: string;
-  readonly userNodeId: string;
+  /** The user turn the run answers, read when a promotion needs it. */
+  readonly userNodeId: Effect.Effect<string>;
 }
 
 /** Live owner services; their storage and search resources remain owned by their Layers. */
@@ -132,10 +134,6 @@ export interface MemoryToolEnvironment {
   readonly graph: Graph["Service"];
   readonly interpretations: Interpretations["Service"];
   readonly knowledge: KnowledgePromotions["Service"];
-}
-
-export interface MemoryToolRunBinding extends Omit<RunBinding, "userNodeId"> {
-  readonly userNodeId: () => string;
 }
 
 /** Which projects' memory the tools read: those cross recall allows, or only the bound one. */
@@ -212,14 +210,15 @@ const memoryRunCalls = Effect.fnUntraced(function* (
         nodes.readToolResultPage(id, projectId, binding.sessionId, offset),
       ).pipe(Effect.map((page) => page ?? notFound(id))),
     promote: (input: typeof PromoteMemoryCandidateInput.Type) =>
-      Effect.flatMap(KnowledgePromotions, (knowledge) =>
-        knowledge.promote({
+      Effect.gen(function* () {
+        const knowledge = yield* KnowledgePromotions;
+        return yield* knowledge.promote({
           ...input,
           projectId,
           sessionId: binding.sessionId,
-          authorizedByUserNodeId: binding.userNodeId(),
-        }),
-      ),
+          authorizedByUserNodeId: yield* binding.userNodeId,
+        });
+      }),
     useMemory: ({ memoryNodeIds: ids }: typeof UsePromotedMemoryInput.Type) =>
       Ref.get(retrieved).pipe(
         Effect.filterOrFail(
@@ -338,18 +337,8 @@ const make = Effect.gen(function* () {
   };
   return {
     /** {@link memoryRunTools} over the agent's own memory. */
-    toolsFor: (binding: RunBinding, scope?: MemoryToolScope) =>
-      memoryRunTools({
-        env,
-        binding: {
-          projectId: binding.projectId,
-          sessionId: binding.sessionId,
-          runId: binding.runId,
-          // AgentChat prepares capabilities before admission; never spread its deferred getter.
-          userNodeId: () => binding.userNodeId,
-        },
-        ...optionalProperty("scope", scope),
-      }),
+    toolsFor: (binding: MemoryToolRunBinding, scope?: MemoryToolScope) =>
+      memoryRunTools({ env, binding, ...optionalProperty("scope", scope) }),
   };
 });
 

@@ -1,7 +1,17 @@
 import { isTruthy } from "../truthy.ts";
 import { Semaphore } from "effect";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import { Cause, Context, Crypto, Effect, Layer, Schema } from "effect";
+import {
+  Array as Arr,
+  Cause,
+  Context,
+  Crypto,
+  Effect,
+  Layer,
+  Option,
+  Schema,
+  Stream,
+} from "effect";
 import { singleAnswer } from "../model/single-call.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import { AuthConnectionState, type ModelSelection } from "../providers/contracts.ts";
@@ -155,7 +165,7 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
         nodeTexts: nodes.texts,
       };
       const { nodeText } = yield* memoryLookups(sources, [], state.blocks);
-      const blocks: SummaryBlock[] = linedUp(messages, state.blocks, nodeText);
+      const blocks: ReadonlyArray<SummaryBlock> = linedUp(messages, state.blocks, nodeText);
       if (!whole && blocks.length === 0) {
         const runtime = yield* active.runtime(selection);
         const threshold = (runtime.contextWindow(selection.model) * (yield* startPercent)) / 100;
@@ -176,21 +186,54 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
         return at !== undefined && sameTurn(messages[at], turnNodes[index]?.text ?? null);
       };
 
-      for (;;) {
-        const start = blocks.at(-1)?.end ?? 0;
+      /** The block that starts where the last one ended, while the turns left can fill one. */
+      const blockFrom = (start: number) => {
         const end = whole ? Math.min(start + summaryBlockTurns, limit) : start + summaryBlockTurns;
-        if (end <= start || end > limit) break;
         const first = turnNodes[start];
         const next = turnNodes[end];
-        if (!isTruthy(first) || !isTruthy(next) || !lines(start) || !lines(end)) break;
-        const part = sessionNodes.filter((node) => node.seq >= first.seq && node.seq < next.seq);
-        const text = yield* summarize(sessionId, part, selection);
-        blocks.push({ end, nextTurnNodeId: next.id, text });
-        yield* Effect.mapError(
-          runStore.chatMetadata.set(turnSummariesNamespace, sessionId, { blocks }),
-          summaryFailed("persist"),
-        );
-      }
+        return end > start &&
+          end <= limit &&
+          isTruthy(first) &&
+          isTruthy(next) &&
+          lines(start) &&
+          lines(end)
+          ? Option.some({ end, first, next })
+          : Option.none();
+      };
+      // Each block is kept as soon as it is summarized.
+      yield* Stream.paginate(blocks.at(-1)?.end ?? 0, (start) =>
+        Option.match(blockFrom(start), {
+          onNone: () => Effect.succeed([Arr.empty<SummaryBlock>(), Option.none<number>()] as const),
+          onSome: ({ end, first, next }) =>
+            summarize(
+              sessionId,
+              sessionNodes.filter((node) => node.seq >= first.seq && node.seq < next.seq),
+              selection,
+            ).pipe(
+              Effect.map(
+                (text) =>
+                  [
+                    Arr.of<SummaryBlock>({ end, nextTurnNodeId: next.id, text }),
+                    Option.some(end),
+                  ] as const,
+              ),
+            ),
+        }),
+      ).pipe(
+        Stream.runFoldEffect(
+          () => blocks,
+          (kept, block) => {
+            const all = Arr.append(kept, block);
+            return Effect.as(
+              Effect.mapError(
+                runStore.chatMetadata.set(turnSummariesNamespace, sessionId, { blocks: all }),
+                summaryFailed("persist"),
+              ),
+              all,
+            );
+          },
+        ),
+      );
       return "done" as const;
     }).pipe(
       // What was summarized before the failure is kept; the rest is tried again next time.

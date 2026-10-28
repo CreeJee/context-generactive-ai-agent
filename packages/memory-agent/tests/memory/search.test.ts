@@ -281,7 +281,7 @@ testAgent()("MemorySearch.find", (it) => {
         projectId: project.id,
         sessionId: newSession.id,
         runId,
-        userNodeId: question.id,
+        userNodeId: Effect.succeed(question.id),
       };
       yield* scriptedRun({
         turns: [

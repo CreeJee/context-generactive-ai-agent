@@ -101,12 +101,10 @@ const isText = Schema.is(Schema.String);
  */
 export function estimateTokens(message: ConversationMessage): number {
   const calls = isTruthy(message.toolCalls?.length) ? JSON.stringify(message.toolCalls) : "";
-  let ascii = 0;
-  let other = 0;
-  for (const character of messageText(message) + calls) {
-    if (character.charCodeAt(0) < 128) ascii += 1;
-    else other += 1;
-  }
+  const text = messageText(message) + calls;
+  const ascii = text.replace(/\P{ASCII}/gu, "").length;
+  // Each character outside ASCII is a token; a surrogate pair is one character.
+  const other = text.match(/\P{ASCII}/gu)?.length ?? 0;
   return Math.ceil(ascii / 4) + other;
 }
 

@@ -25,8 +25,11 @@ export interface RunBinding {
   readonly projectId: string;
   readonly sessionId: string;
   readonly runId: string;
-  /** The user turn this run answers. Assistant nodes get a `reply` edge to it. */
-  readonly userNodeId: string;
+  /**
+   * The user turn this run answers. Assistant nodes get a `reply` edge to it. A Goal run admits its
+   * turn after the run is prepared, so the turn is read when a node needs it.
+   */
+  readonly userNodeId: Effect.Effect<string>;
   /** Set when an external ACP agent answers instead of the app's model. */
   readonly externalAgent?: string;
 }
@@ -126,13 +129,16 @@ const recorderFor = Effect.fnUntraced(function* (binding: RunBinding) {
 
   /** The text has been through `hide` already. */
   const appendAssistant = (text: string, partial?: { reason: string }) =>
-    nodes.append({
-      ...base,
-      kind: "assistant",
-      text,
-      detail: partial !== undefined ? { ...source, partial: true, reason: partial.reason } : source,
-      links: [{ kind: "reply", nodeId: binding.userNodeId }],
-    });
+    Effect.flatMap(binding.userNodeId, (userNodeId) =>
+      nodes.append({
+        ...base,
+        kind: "assistant",
+        text,
+        detail:
+          partial !== undefined ? { ...source, partial: true, reason: partial.reason } : source,
+        links: [{ kind: "reply", nodeId: userNodeId }],
+      }),
+    );
 
   /**
    * A step's tool calls with what the model said alongside them. Every write first hides what it

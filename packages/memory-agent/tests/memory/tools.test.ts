@@ -1,5 +1,5 @@
 import { layer } from "@effect/vitest";
-import { Context, Effect, FileSystem, Layer, Schema, Tracer } from "effect";
+import { Context, Effect, FileSystem, Layer, Ref, Schema, Tracer } from "effect";
 import { expect } from "vite-plus/test";
 import { StepEnded, type RunHook } from "../../src/loop/run.ts";
 import { RunEnd } from "../../src/loop/store.ts";
@@ -587,7 +587,7 @@ layer(
           projectId: second.project.id,
           sessionId: second.session.id,
           runId: `${second.session.id}:run`,
-          userNodeId: "user",
+          userNodeId: Effect.succeed("user"),
         });
         expect(yield* callers(bound.tools).read({ id: b.id })).toMatchObject({ text: b.text });
       }),
@@ -608,24 +608,21 @@ testAgent()("memory tools per run", (it) => {
   });
 
   it.effect(
-    "fresh run getters and conversation bindings are not reused; native promotion gates remain",
+    "fresh run user-turn reads and conversation bindings are not reused; native promotion gates remain",
     () =>
       Effect.gen(function* () {
         const at = yield* freshSession;
         const env = yield* environment;
         const user = yield* env.nodes.append({ ...at, kind: "user", text: "save" });
-        let currentUser = "missing";
-        let readsA = 0;
-        let readsB = 0;
+        const currentUser = yield* Ref.make("missing");
+        const readsA = yield* Ref.make(0);
+        const readsB = yield* Ref.make(0);
         const a = yield* memoryRunTools({
           env,
           binding: {
             ...at,
             runId: `${at.sessionId}:run-a`,
-            userNodeId: () => {
-              readsA++;
-              return user.id;
-            },
+            userNodeId: Ref.update(readsA, (reads) => reads + 1).pipe(Effect.as(user.id)),
           },
         });
         const b = yield* memoryRunTools({
@@ -633,10 +630,9 @@ testAgent()("memory tools per run", (it) => {
           binding: {
             ...at,
             runId: `${at.sessionId}:run-b`,
-            userNodeId: () => {
-              readsB++;
-              return currentUser;
-            },
+            userNodeId: Ref.update(readsB, (reads) => reads + 1).pipe(
+              Effect.andThen(Ref.get(currentUser)),
+            ),
           },
         });
         const promoteA = callers(a.tools).promote;
@@ -650,10 +646,10 @@ testAgent()("memory tools per run", (it) => {
           tag: "MemoryPromotionRejected",
           detail: "Memory promotion requires the current user turn as authorization",
         });
-        currentUser = user.id;
+        yield* Ref.set(currentUser, user.id);
         expect(yield* Effect.flip(promoteB(unadoptedClaim))).toMatchObject(notAdopted);
-        expect(readsA).toBe(1);
-        expect(readsB).toBe(2);
+        expect(yield* Ref.get(readsA)).toBe(1);
+        expect(yield* Ref.get(readsB)).toBe(2);
         expect(a.hook).not.toBe(b.hook);
         expect(
           yield* Effect.flip(callers(b.tools).use({ memoryNodeIds: [user.id] })),
@@ -661,27 +657,26 @@ testAgent()("memory tools per run", (it) => {
       }),
   );
 
-  it.effect("the run binding keeps the deferred admission user-node getter", () =>
-    Effect.gen(function* () {
-      const at = yield* freshSession;
-      const env = yield* environment;
-      let reads = 0;
-      const user = yield* env.nodes.append({ ...at, kind: "user", text: "explicit save" });
-      const prepared = yield* (yield* MemoryTools).toolsFor({
-        ...at,
-        runId: `${at.sessionId}:deferred-run`,
-        get userNodeId() {
-          reads++;
-          return user.id;
-        },
-      });
-      expect(reads).toBe(0);
-      expect(yield* Effect.flip(callers(prepared.tools).promote(unadoptedClaim))).toMatchObject({
-        tag: "MemoryPromotionRejected",
-        detail: "Memory promotion source is not an adopted final-answer claim",
-      });
-      expect(reads).toBe(1);
-    }),
+  it.effect(
+    "the run binding reads the deferred admission user node only when a call needs it",
+    () =>
+      Effect.gen(function* () {
+        const at = yield* freshSession;
+        const env = yield* environment;
+        const reads = yield* Ref.make(0);
+        const user = yield* env.nodes.append({ ...at, kind: "user", text: "explicit save" });
+        const prepared = yield* (yield* MemoryTools).toolsFor({
+          ...at,
+          runId: `${at.sessionId}:deferred-run`,
+          userNodeId: Ref.update(reads, (count) => count + 1).pipe(Effect.as(user.id)),
+        });
+        expect(yield* Ref.get(reads)).toBe(0);
+        expect(yield* Effect.flip(callers(prepared.tools).promote(unadoptedClaim))).toMatchObject({
+          tag: "MemoryPromotionRejected",
+          detail: "Memory promotion source is not an adopted final-answer claim",
+        });
+        expect(yield* Ref.get(reads)).toBe(1);
+      }),
   );
 
   it.effect("runs a run's tool calls on its fiber, so their spans join the run's trace", () =>
@@ -698,7 +693,7 @@ testAgent()("memory tools per run", (it) => {
       const { tools } = yield* (yield* MemoryTools).toolsFor({
         ...at,
         runId: `${at.sessionId}:traced-run`,
-        userNodeId: "user",
+        userNodeId: Effect.succeed("user"),
       });
       const { run, toolSpans } = yield* Effect.gen(function* () {
         const run = yield* Effect.currentSpan;
@@ -752,7 +747,7 @@ testAgent()("memory tools per run", (it) => {
       const runA = `${sessionId}:memory-run-a`;
       const runB = `${sessionId}:memory-run-b`;
       const makeRun = (runId: string) =>
-        memoryRunTools({ env, binding: { ...at, runId, userNodeId: () => user.id } });
+        memoryRunTools({ env, binding: { ...at, runId, userNodeId: Effect.succeed(user.id) } });
       const first = yield* makeRun(runA);
       const second = yield* makeRun(runB);
       const firstCalls = callers(first.tools);

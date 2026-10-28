@@ -247,6 +247,9 @@ export class AgentOperationFailed extends Schema.TaggedError<AgentOperationFaile
   { operation: AgentOperation, cause: Schema.optional(Schema.Defect()) },
 ) {}
 
+/** The run read its user turn as evidence before the turn was admitted: a defect in the run. */
+class UserTurnReadEarly extends Schema.TaggedError<UserTurnReadEarly>()("UserTurnReadEarly", {}) {}
+
 /**
  * Where the file tools work, how to change files without losing the user's edits, the current
  * date and shell, and where the app keeps its own settings. Each settings file is listed in the
@@ -766,17 +769,23 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               if (directOrder !== 0) return directOrder;
               return Number(right.kind === "user") - Number(left.kind === "user");
             });
-          const lines: string[] = [];
-          let tokens = estimateTokens({ role: "assistant", content: "" });
-          for (const match of candidates) {
-            if (lines.length === retrievalAppendixLimits.lines) break;
-            const provenance = `${match.createdAt.slice(0, 10)} · ${match.projectName} · ${match.kind} · ${match.foundBy}`;
-            const line = `- node ${match.id} (${provenance}): ${match.snippet.replace(/\s+/g, " ")}`;
-            const next = estimateTokens({ role: "assistant", content: line });
-            if (tokens + next > retrievalAppendixLimits.tokens) continue;
-            tokens += next;
-            lines.push(line);
-          }
+          // A lead that would pass the token budget is skipped; a shorter one after it may still fit.
+          const { lines } = EffectArray.reduce(
+            candidates,
+            {
+              lines: EffectArray.empty<string>(),
+              tokens: estimateTokens({ role: "assistant", content: "" }),
+            },
+            (kept, match) => {
+              const provenance = `${match.createdAt.slice(0, 10)} · ${match.projectName} · ${match.kind} · ${match.foundBy}`;
+              const line = `- node ${match.id} (${provenance}): ${match.snippet.replace(/\s+/g, " ")}`;
+              const tokens = kept.tokens + estimateTokens({ role: "assistant", content: line });
+              return kept.lines.length < retrievalAppendixLimits.lines &&
+                tokens <= retrievalAppendixLimits.tokens
+                ? { lines: EffectArray.append(kept.lines, line), tokens }
+                : kept;
+            },
+          );
           return lines.length === 0
             ? null
             : {
@@ -981,7 +990,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     sessionId: string,
     phase: WorkflowPhase,
     runId: string,
-    goalExecution: () => GoalExecutionPayload | null,
+    goalExecution: Effect.Effect<GoalExecutionPayload | null>,
   ) {
     // The progress the run's tools made, each once in the order made, and how the run ended.
     const progress = yield* Ref.make<ReadonlyArray<string>>([]);
@@ -1022,7 +1031,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       const unresolved = Option.getOrUndefined(yield* unresolvedOperation(runId));
       const completed =
         outcome === "completed" && persistedStatus !== "failed" && persistedStatus !== "aborted";
-      const durable = goalExecution();
+      const durable = yield* goalExecution;
       if (durable !== null) {
         if (unresolved !== undefined)
           yield* goalExecutions.fail(
@@ -1306,10 +1315,19 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       const kanbanFollowup = InternalFollowup.$is("kanban")(internalFollowup)
         ? internalFollowup
         : null;
-      let claimedNext: string | null = null;
-      let cancellationToRelease: Effect.Effect<void> = Effect.void;
-      let stopSteeringOnExit: Effect.Effect<void> = Effect.void;
       return Effect.gen(function* () {
+        // What an early end must undo. The run takes over the cancellation and the steering once
+        // it is following its log.
+        const claimedNext = yield* Ref.make<string | null>(null);
+        const cancellationToRelease = yield* Ref.make<Effect.Effect<void>>(Effect.void);
+        const stopSteeringOnExit = yield* Ref.make<Effect.Effect<void>>(Effect.void);
+        yield* Effect.addFinalizer(() =>
+          Effect.flatMap(Ref.get(claimedNext), (next) =>
+            isTruthy(next) ? queue.releaseNext(sessionId, next) : Effect.void,
+          ).pipe(Effect.catch(logFailure("Queued next turn was not released"))),
+        );
+        yield* Effect.addFinalizer(() => Effect.flatten(Ref.get(stopSteeringOnExit)));
+        yield* Effect.addFinalizer(() => Effect.flatten(Ref.get(cancellationToRelease)));
         const { projectId, agent: external, title } = yield* sessions.get(sessionId);
         // Sending, approving and answering all come here; a read-only page may do none of them.
         if (internalFollowup === null && !(yield* leases.permits(sessionId, request.holder)))
@@ -1331,8 +1349,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // A process may exit after persistence commits a completed run but before its
         // asynchronous end callback applies a queued Goal. Recover only terminal runs;
         // running/interrupted ones remain pending and can never prove completion.
-        const pendingGoals = yield* acceptedNewGoals(sessionId);
-        for (const pending of pendingGoals) yield* settleNewGoal(sessionId, pending.run_id);
+        yield* Effect.forEach(
+          yield* acceptedNewGoals(sessionId),
+          (pending) => settleNewGoal(sessionId, pending.run_id),
+          { discard: true },
+        );
         // Repair stale persisted phases before choosing tools for the next turn. In particular, an
         // old Verify row with unfinished implementation must regain Execute capabilities.
         const workflow = yield* workflows.reconcile(sessionId);
@@ -1421,7 +1442,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const newGoalRun = isTruthy(latest?.goal_instance_id)
           ? { goalInstanceId: latest.goal_instance_id, revisionId: latest.id }
           : null;
-        let goalExecutionPayload: GoalExecutionPayload | null = null;
+        const goalExecutionPayload = yield* Ref.make<GoalExecutionPayload | null>(null);
         // The run already ended aborted: its stream is replayed, not run again.
         if (previousRun?.status === "aborted")
           return ChatStart.Following({ log: runLogs.of(runId), after: "-1" });
@@ -1432,7 +1453,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           InternalFollowup.$is("steered")(internalFollowup) || forwardedProps?.queuedNext === true;
         const next = queuedNext ? yield* queue.claimNext(sessionId) : null;
         if (queuedNext && !isTruthy(next)) return refused({ error: "queued_message_not_next" });
-        claimedNext = next?.id ?? null;
+        yield* Ref.set(claimedNext, next?.id ?? null);
         const queuedId = next?.id;
         const nextMessage = isTruthy(next) ? [yield* delivery.toUserMessage(next)] : [];
         // The thread already holds the conversation, so an internal follow-up brings only the
@@ -1474,7 +1495,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             ...optionalProperty("model", selection?.model ?? external ?? undefined),
           });
 
-        let userNode = turn !== null ? null : yield* nodes.latestOfKind(sessionId, "user");
+        const userNode = yield* Ref.make(
+          turn !== null ? null : yield* nodes.latestOfKind(sessionId, "user"),
+        );
         const keptTurn = turn !== null ? (yield* redactor.redactText(turn.text)).text : null;
         const persistUserTurn = Effect.gen(function* () {
           if (keptTurn === null) return;
@@ -1484,20 +1507,20 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             kind: "user",
             text: keptTurn,
           });
-          userNode = appended;
+          yield* Ref.set(userNode, appended);
           yield* attachments.link(appended.id, attached);
           if (title === null) yield* events.publishProject(projectId, "sessions");
         });
-        const userNodeId = () => {
-          if (!isTruthy(userNode)) throw new Error("User evidence accessed before admission");
-          return userNode.id;
-        };
+        const userNodeId = Effect.flatMap(Ref.get(userNode), (node) =>
+          isTruthy(node) ? Effect.succeed(node.id) : Effect.die(UserTurnReadEarly.make({})),
+        );
         if (newGoalRun === null) yield* persistUserTurn;
-        if (!isTruthy(userNode) && !(turn !== null)) return refused({ error: "no_user_turn" });
+        if (!isTruthy(yield* Ref.get(userNode)) && !(turn !== null))
+          return refused({ error: "no_user_turn" });
 
         if (external !== null) {
           const cancellation = yield* cancellations.allocate(serviceShutdown);
-          cancellationToRelease = cancellation.cancel;
+          yield* Ref.set(cancellationToRelease, cancellation.cancel);
           const abortController = cancellation.controller;
           const answeredBy = external;
           const askPermission = (permission: RequestPermissionRequest) =>
@@ -1521,15 +1544,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               yield* events.publishSession(sessionId, "relayed-approvals");
               return approved;
             });
-          const binding = {
-            projectId,
-            sessionId,
-            runId,
-            get userNodeId() {
-              return userNodeId();
-            },
-            externalAgent: answeredBy,
-          };
+          const binding = { projectId, sessionId, runId, userNodeId, externalAgent: answeredBy };
           const conversation = withPageTurns(
             yield* runStore.thread(sessionId),
             yield* pageTurns(messages),
@@ -1544,9 +1559,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 })
                 .pipe(Effect.mapError((cause) => new Cause.UnknownError(cause))),
             preamble: (text) =>
-              Effect.try({ try: userNodeId, catch: (cause) => new Cause.UnknownError(cause) }).pipe(
-                Effect.flatMap((nodeId) => memoryPreamble(project, text, nodeId)),
-              ),
+              Effect.flatMap(userNodeId, (nodeId) => memoryPreamble(project, text, nodeId)),
           });
           const loopEvents = runChat(
             {
@@ -1579,7 +1592,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             settle: settleQueue(sessionId, runId),
           });
           if (!isTruthy(claim)) return refused({ error: "run_in_progress" });
-          cancellationToRelease = cancellation.cancel.pipe(Effect.ensuring(claim.release));
+          yield* Ref.set(
+            cancellationToRelease,
+            cancellation.cancel.pipe(Effect.ensuring(claim.release)),
+          );
           yield* Effect.when(
             workTrace.resumeParentNotifications(sessionId),
             Effect.succeed(turn !== null),
@@ -1598,7 +1614,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           yield* Effect.forkIn(filledLog(delivered, log, { sessionId, runId }), scope, {
             startImmediately: true,
           });
-          cancellationToRelease = Effect.void;
+          yield* Ref.set(cancellationToRelease, Effect.void);
           return ChatStart.Following({ log, after: "-1" });
         }
         if (!isTruthy(selection)) return refused({ error: "model_selection_required" });
@@ -1667,7 +1683,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // Not tied to the request: a reload or a closed tab must not stop the run (R10). Only an
         // explicit cancel aborts it.
         const cancellation = yield* cancellations.allocate(serviceShutdown);
-        cancellationToRelease = cancellation.cancel;
+        yield* Ref.set(cancellationToRelease, cancellation.cancel);
         const abortController = cancellation.controller;
         if (notificationFollowup || kanbanFollowup !== null) {
           const current = yield* sessions.get(sessionId);
@@ -1716,7 +1732,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           sessionId,
           workflow.phase,
           runId,
-          () => goalExecutionPayload,
+          Ref.get(goalExecutionPayload),
         );
         const settleWorkflow = workflowLifecycle.settle.pipe(
           Effect.uninterruptible,
@@ -1859,7 +1875,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 workflowRevisionId,
               },
             });
-            goalExecutionPayload = payload;
+            yield* Ref.set(goalExecutionPayload, payload);
             return yield* goalExecutions
               .admitAndStart(
                 payload,
@@ -1977,14 +1993,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               () => [],
             )
           : [];
-        const answers = {
-          projectId,
-          sessionId,
-          runId,
-          get userNodeId() {
-            return userNodeId();
-          },
-        };
+        const answers = { projectId, sessionId, runId, userNodeId };
         const readOnly = workflowReadOnly || reportSource !== null;
         // Present only while the user has Kagi turned on with a key (R19).
         const webTools = reportSource !== null ? [] : yield* kagiTools.runTools;
@@ -2152,8 +2161,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
 
         // What the model pins for the run, such as an account, is let go when its stream ends.
         const modelScope = yield* Scope.make();
-        cancellationToRelease = cancellation.cancel.pipe(
-          Effect.ensuring(Scope.close(modelScope, Exit.void)),
+        yield* Ref.set(
+          cancellationToRelease,
+          cancellation.cancel.pipe(Effect.ensuring(Scope.close(modelScope, Exit.void))),
         );
         const runModel = yield* runtime
           .model(selection, {
@@ -2281,16 +2291,19 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           settle: settleQueue(sessionId, runId),
         });
         if (!isTruthy(claim)) return refused({ error: "run_in_progress" });
-        cancellationToRelease = cancellation.cancel.pipe(
-          Effect.ensuring(claim.release),
-          Effect.ensuring(Scope.close(modelScope, Exit.void)),
+        yield* Ref.set(
+          cancellationToRelease,
+          cancellation.cancel.pipe(
+            Effect.ensuring(claim.release),
+            Effect.ensuring(Scope.close(modelScope, Exit.void)),
+          ),
         );
         // A Goal run's answer is never cut: stopping it early would end the Goal step.
         yield* Effect.when(
           Ref.update(steerCuts, HashMap.set(sessionId, cuttable.steer)),
           Effect.succeed(!goalRun),
         );
-        stopSteeringOnExit = stopSteering(sessionId, cuttable.steer);
+        yield* Ref.set(stopSteeringOnExit, stopSteering(sessionId, cuttable.steer));
         yield* runStarted;
         const chunks = yield* cancellation.publish(
           goalRun ? boundRunRecorded(loopEvents) : loopEvents,
@@ -2309,17 +2322,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         yield* Effect.forkIn(filledLog(delivered, log, { sessionId, runId }), scope, {
           startImmediately: true,
         });
-        cancellationToRelease = Effect.void;
-        stopSteeringOnExit = Effect.void;
+        yield* Ref.set(cancellationToRelease, Effect.void);
+        yield* Ref.set(stopSteeringOnExit, Effect.void);
         return ChatStart.Following({ log, after: "-1" });
       }).pipe(
-        Effect.ensuring(Effect.suspend(() => cancellationToRelease)),
-        Effect.ensuring(Effect.suspend(() => stopSteeringOnExit)),
-        Effect.ensuring(
-          Effect.suspend(() =>
-            isTruthy(claimedNext) ? queue.releaseNext(sessionId, claimedNext) : Effect.void,
-          ).pipe(Effect.catch(logFailure("Queued next turn was not released"))),
-        ),
+        Effect.scoped,
         // The run's tool calls run under this span; they outlast it while the response streams.
         Effect.withSpan("AgentChat.start"),
       );
@@ -2611,18 +2618,30 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // A running board would start its cards again after their runs stop.
         yield* kanbanOrchestrator.stopSession(sessionId);
         yield* stopSessionRuns(sessionId);
-        for (const task of yield* workTrace.taskTree(sessionId)) {
-          if (task.deletedAt !== null) continue;
-          const taskRequest = yield* workTrace.requestTaskLifecycle({
-            sessionId,
-            taskId: task.id,
-            intent: "delete",
-            idempotencyKey: `session:${requested.operationId}:task:${task.id}`,
-          });
-          if (LifecycleRequest.$is("blocked")(taskRequest)) return json(409, taskRequest);
-          if (!LifecycleRequest.$is("completed")(taskRequest) && isTruthy(taskRequest.operationId))
-            yield* workTrace.finalizeTaskLifecycle(taskRequest.operationId);
-        }
+        // The live tasks are deleted one at a time; the first that cannot be stops the session's.
+        const blockedTask = yield* Stream.fromIterable(yield* workTrace.taskTree(sessionId)).pipe(
+          Stream.filter((task) => task.deletedAt === null),
+          Stream.mapEffect((task) =>
+            Effect.gen(function* () {
+              const taskRequest = yield* workTrace.requestTaskLifecycle({
+                sessionId,
+                taskId: task.id,
+                intent: "delete",
+                idempotencyKey: `session:${requested.operationId}:task:${task.id}`,
+              });
+              if (
+                !LifecycleRequest.$is("blocked")(taskRequest) &&
+                !LifecycleRequest.$is("completed")(taskRequest) &&
+                isTruthy(taskRequest.operationId)
+              )
+                yield* workTrace.finalizeTaskLifecycle(taskRequest.operationId);
+              return taskRequest;
+            }),
+          ),
+          Stream.filter(LifecycleRequest.$is("blocked")),
+          Stream.runHead,
+        );
+        if (Option.isSome(blockedTask)) return json(409, blockedTask.value);
         const completed = yield* workTrace.finalizeSessionLifecycle(requested.operationId);
         if (LifecycleOutcome.$is("completed")(completed)) {
           yield* attachments.purgeOrphans;
@@ -2920,18 +2939,22 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   yield* Effect.forEach(yield* execution.readySessions(), wakeNotifications, { discard: true });
   // A run a restart cut off before any tool continues in a new run once its provider retry wait
   // fires, at once without one. The wait survives another restart; the ended run is not replayed.
-  for (const { sessionId, runId } of yield* execution.retryingSessions())
-    yield* Effect.forkScoped(
-      providerRetries.awaitRun(runId).pipe(
-        Effect.flatMap(
-          Match.valueTags({
-            Cancelled: () => Effect.void,
-            Retry: () => Effect.asVoid(wakeNotifications(sessionId)),
-          }),
+  yield* Effect.forEach(
+    yield* execution.retryingSessions(),
+    ({ sessionId, runId }) =>
+      Effect.forkScoped(
+        providerRetries.awaitRun(runId).pipe(
+          Effect.flatMap(
+            Match.valueTags({
+              Cancelled: () => Effect.void,
+              Retry: () => Effect.asVoid(wakeNotifications(sessionId)),
+            }),
+          ),
+          Effect.catch(logFailure("Restarted Goal continuation deferred")),
         ),
-        Effect.catch(logFailure("Restarted Goal continuation deferred")),
       ),
-    );
+    { discard: true },
+  );
   return api;
 });
 

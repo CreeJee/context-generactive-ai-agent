@@ -71,7 +71,7 @@ const freshProject = Effect.gen(function* () {
       projectId: project.id,
       sessionId: session.id,
       runId: `${session.id}:trace`,
-      userNodeId: "user",
+      userNodeId: Effect.succeed("user"),
     });
     return yield* Schema.decodeUnknownEffect(Trace)(
       yield* callTool(tools, "trace_evidence", { id }),

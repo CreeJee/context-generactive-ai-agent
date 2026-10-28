@@ -1,5 +1,5 @@
 import { layer } from "@effect/vitest";
-import { Context, Effect, Layer, Schema, Scope } from "effect";
+import { Context, Effect, Layer, Ref, Schema, Scope } from "effect";
 import { expect } from "vite-plus/test";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { makeRecordingHook, Recorder } from "../../src/memory/record.ts";
@@ -86,7 +86,7 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
               projectId: project.id,
               sessionId: session.id,
               runId,
-              userNodeId: user.id,
+              userNodeId: Effect.succeed(user.id),
             }),
           ],
         });
@@ -177,7 +177,7 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
               projectId: project.id,
               sessionId: session.id,
               runId,
-              userNodeId: user.id,
+              userNodeId: Effect.succeed(user.id),
             }),
           ],
         });
@@ -217,7 +217,7 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
                 projectId: project.id,
                 sessionId: session.id,
                 runId,
-                userNodeId: user.id,
+                userNodeId: Effect.succeed(user.id),
               }),
             ],
           });
@@ -249,7 +249,7 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
               projectId: project.id,
               sessionId: session.id,
               runId,
-              userNodeId: user.id,
+              userNodeId: Effect.succeed(user.id),
             }),
           ],
         });
@@ -283,19 +283,18 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
               kind: "user",
               text: "test",
             });
-            let reads = 0;
-            let currentUserId = "not-yet-bound";
+            const reads = yield* Ref.make(0);
+            const currentUserId = yield* Ref.make("not-yet-bound");
             const hook = yield* makeRecordingHook({
               projectId: project.id,
               sessionId: entry.session.id,
               runId: entry.runId,
-              get userNodeId() {
-                reads++;
-                return currentUserId;
-              },
+              userNodeId: Ref.update(reads, (count) => count + 1).pipe(
+                Effect.andThen(Ref.get(currentUserId)),
+              ),
             });
-            expect(reads).toBe(0);
-            currentUserId = user.id;
+            expect(yield* Ref.get(reads)).toBe(0);
+            yield* Ref.set(currentUserId, user.id);
             yield* reviews.record({
               sessionId: entry.session.id,
               toolCallId: "shared-call",
@@ -333,7 +332,7 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
               tools: [probe],
               hooks: [hook],
             });
-            expect(reads).toBeGreaterThan(0);
+            expect(yield* Ref.get(reads)).toBeGreaterThan(0);
             const stored = yield* nodes.session(entry.session.id);
             expect(
               yield* nodes.toolNode(entry.session.id, "tool_result", "shared-call"),
@@ -380,7 +379,7 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
             projectId: project.id,
             sessionId: session.id,
             runId,
-            userNodeId: user.id,
+            userNodeId: Effect.succeed(user.id),
           });
           yield* scriptedRun({
             turns: [{ text: "owner answer" }],

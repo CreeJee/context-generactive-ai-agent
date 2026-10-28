@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Effect } from "effect";
+import { Effect, Ref } from "effect";
 import type { ChatMetadata } from "../chat-store/metadata.ts";
 import type { StoredMessage } from "../chat-store/schema.ts";
 import {
@@ -191,20 +191,19 @@ describe("compact", () => {
   // Retrieval cannot fail: its type has no error, so the request always goes.
   it.effect("adds bounded retrieval only after compaction omitted content", () =>
     Effect.gen(function* () {
-      let appendixCalls = 0;
+      const appendixCalls = yield* Ref.make(0);
       const sources: CompactionSources = {
         ...lookupSources({
           toolResultId: (toolCallId) => (toolCallId === "old-1" ? "omitted-node" : null),
           nodeText: () => null,
         }),
         retrievalAppendix: () =>
-          Effect.sync(() => {
-            appendixCalls += 1;
-            return {
+          Ref.update(appendixCalls, (calls) => calls + 1).pipe(
+            Effect.as({
               role: "assistant" as const,
               content: "[Retrieval appendix]\n- node omitted-node",
-            };
-          }),
+            }),
+          ),
       };
       const compacted = yield* compactEffect({
         messages: answeredShell,
@@ -212,23 +211,24 @@ describe("compact", () => {
         sources,
         budget: unlimited,
       });
-      expect(appendixCalls).toBe(1);
+      expect(yield* Ref.get(appendixCalls)).toBe(1);
       expect(compacted.messages.at(-2)).toEqual({
         role: "assistant",
         content: "[Retrieval appendix]\n- node omitted-node",
       });
       expect(compacted.messages.at(-1)).toEqual({ role: "user", content: "current question" });
-      let intactCalls = 0;
+      const intactCalls = yield* Ref.make(0);
       yield* compactEffect({
         messages: [{ role: "user", content: "uncompacted" }],
         state: fresh,
         sources: {
           ...sources,
-          retrievalAppendix: () => Effect.sync(() => ((intactCalls += 1), null)),
+          retrievalAppendix: () =>
+            Ref.update(intactCalls, (calls) => calls + 1).pipe(Effect.as(null)),
         },
         budget: unlimited,
       });
-      expect(intactCalls).toBe(0);
+      expect(yield* Ref.get(intactCalls)).toBe(0);
     }),
   );
 });

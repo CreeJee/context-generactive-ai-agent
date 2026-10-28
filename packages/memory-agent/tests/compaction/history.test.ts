@@ -77,7 +77,7 @@ testAgent()("compaction over recorded history", (it) => {
         const { tools } = yield* (yield* MemoryTools).toolsFor({
           ...at,
           runId: `${at.sessionId}:r1`,
-          userNodeId: wrongKind.id,
+          userNodeId: Effect.succeed(wrongKind.id),
         });
         const read = (params: JsonValue) => callTool(tools, "read_tool_result", params);
         expect(yield* read({ id: own.id, offset: 0 })).toMatchObject({
@@ -243,7 +243,7 @@ testAgent()("compaction over recorded history", (it) => {
           tools: (yield* (yield* MemoryTools).toolsFor({
             ...at,
             runId,
-            userNodeId: question.id,
+            userNodeId: Effect.succeed(question.id),
           })).tools,
           hooks: [compacting.hook],
         });
