@@ -1,25 +1,27 @@
-# vite-plus-starter
+# utils
 
-A starter project for Vite Plus.
+## Overview
+
+워크스페이스 공용 유틸리티를 둘 TypeScript ESM 라이브러리 패키지입니다. Vite+ 라이브러리 템플릿으로 만든 상태라 실제 유틸리티는 아직 없고, 예제 함수 `fn`만 내보냅니다. 저장소의 다른 패키지는 이 패키지를 가져다 쓰지 않습니다.
 
 ## Development
 
-Install dependencies:
+저장소 루트에서 의존성을 설치합니다:
 
 ```bash
 vp install
 ```
 
-Run the unit tests:
+단위 테스트를 실행합니다:
 
 ```bash
-vp test
+vp run utils#test
 ```
 
-Build the library:
+라이브러리를 빌드합니다:
 
 ```bash
-vp pack
+vp run utils#build
 ```
 
 ## Interface
