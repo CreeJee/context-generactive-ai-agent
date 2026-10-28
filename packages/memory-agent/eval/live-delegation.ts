@@ -3,7 +3,7 @@ import { Console, Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../src/truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { NodeServices } from "@effect/platform-node";
-import { Context, Crypto, FileSystem } from "effect";
+import { Context, Crypto, FileSystem, MutableRef } from "effect";
 import { nodePlatform, nodePlatformLayer } from "../src/runtime/node-platform.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { path } from "../src/runtime/synchronous-path.ts";
@@ -101,8 +101,8 @@ const settled = (sessionId: string) =>
       Effect.repeat({ schedule: Schedule.spaced("1 second"), while: ({ busy }) => busy > 0 }),
     ),
   );
-let totalCalls = 0;
-let estimatedInputTokens = 0;
+const totalCalls = MutableRef.make(0);
+const estimatedInputTokens = MutableRef.make(0);
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "optimized-guidance") {
@@ -131,13 +131,13 @@ const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "opt
     Effect.gen(function* () {
       if (selected.provider !== "openai") return yield* pilotStopped("openai_pilot_only");
       if (
-        totalCalls >= 24 ||
-        estimatedInputTokens + estimate.estimatedTokens > 200_000 ||
+        MutableRef.get(totalCalls) >= 24 ||
+        MutableRef.get(estimatedInputTokens) + estimate.estimatedTokens > 200_000 ||
         exceedsRequestTokenBudget(estimate, 30_000)
       )
         return yield* pilotStopped("delegation_pilot_budget_exceeded");
-      totalCalls++;
-      estimatedInputTokens += estimate.estimatedTokens;
+      MutableRef.increment(totalCalls);
+      MutableRef.update(estimatedInputTokens, (tokens) => tokens + estimate.estimatedTokens);
       const child = prompt.content.some(
         (message) => message.role === "system" && message.content.includes("You are a subagent"),
       );
@@ -275,8 +275,8 @@ await runNativeEffect(
       stringifyJson(
         {
           results,
-          totalCalls,
-          estimatedInputTokens,
+          totalCalls: MutableRef.get(totalCalls),
+          estimatedInputTokens: MutableRef.get(estimatedInputTokens),
           note: "A serial two-arm pilot, not statistically significant. The preflight estimate is not billed usage.",
         },
         null,

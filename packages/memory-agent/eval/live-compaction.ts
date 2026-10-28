@@ -11,7 +11,7 @@ import { Context, Crypto, FileSystem } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { path } from "../src/runtime/synchronous-path.ts";
 const { join } = path;
-import { DateTime, Effect, Layer, Schema } from "effect";
+import { Array as Arr, DateTime, Effect, Layer, MutableRef, Option, Schema } from "effect";
 import { AgentChat } from "../src/agent/chat.ts";
 import { ApiUsage } from "../src/agent/api-usage.ts";
 import { compactionStateEffect } from "../src/agent/compaction.ts";
@@ -43,12 +43,15 @@ const maxEstimatedInputTokens = 16_000;
 const model = "gpt-5.6-sol";
 const effort = "low";
 const phrase = "violet-copper-maple-17";
-let calls = 0;
+const calls = MutableRef.make(0);
 const withinBudget = ({ prompt, estimate }: PilotRequest) =>
   Effect.gen(function* () {
-    if (calls >= maxCalls || exceedsRequestTokenBudget(estimate, maxEstimatedInputTokens))
+    if (
+      MutableRef.get(calls) >= maxCalls ||
+      exceedsRequestTokenBudget(estimate, maxEstimatedInputTokens)
+    )
       return yield* pilotStopped("pilot_provider_budget_exceeded");
-    calls += 1;
+    MutableRef.increment(calls);
     return prompt;
   });
 const guardedRegistry = Layer.effect(
@@ -71,7 +74,7 @@ const guardedRegistry = Layer.effect(
   }),
 ).pipe(Layer.provide(SubscriptionProviderRegistry));
 
-const prompts = [
+const prompts: Arr.NonEmptyReadonlyArray<string> = [
   "Read src/checksum.ts with read_file. Give only the exported function name.",
   `Remember this exact user decision: ${phrase}. Acknowledge in one line.`,
   "Compute checksum([2,3]) from that file. Reply with just the number.",
@@ -128,44 +131,32 @@ const runArm = Effect.fn("eval.runArm")(function* (variant: "auto" | "auto-plus-
     servicesContext,
   );
   const started = DateTime.toEpochMillis(DateTime.nowUnsafe());
-  const answers: string[] = [];
-  let manual: {
-    cleared: number;
-    summarizedTurns: number;
-    summaryFailed: boolean;
-    tokensBefore: number;
-    tokensAfter: number;
-  } | null = null;
-  for (const [index, text] of prompts.entries()) {
-    if (index === 6) {
-      // Wait for equal automatic summary state; do not create a manual-only comparison.
-      yield* Effect.provideContext(
-        services.summaries.catchUp(services.sessionId, true),
-        servicesContext,
-      );
-      if (variant === "auto-plus-manual") {
-        const response = yield* Effect.provideContext(
-          services.agent.compact(services.sessionId, null),
-          servicesContext,
-        );
-        if (response.status !== 200) throw new Error(`manual_compact_status_${response.status}`);
-        // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-        manual = EffectFunction.flow(
-          Schema.decodeUnknownResult(
-            Schema.Struct({
-              cleared: Schema.Finite,
-              summarizedTurns: Schema.Finite,
-              summaryFailed: Schema.Boolean,
-              tokensBefore: Schema.Finite,
-              tokensAfter: Schema.Finite,
-            }),
-          ),
-          Result.getOrThrow,
-        )(yield* nativePromise(() => response.json()));
-        if (manual.cleared === 0 && manual.summarizedTurns === 0)
-          throw new Error("pilot_manual_compact_changed_nothing");
-      }
-    }
+  /** The manual /compact this arm runs before the final audit; it must change something. */
+  const compactManually = Effect.gen(function* () {
+    const response = yield* Effect.provideContext(
+      services.agent.compact(services.sessionId, null),
+      servicesContext,
+    );
+    if (response.status !== 200) throw new Error(`manual_compact_status_${response.status}`);
+    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+    const manual = EffectFunction.flow(
+      Schema.decodeUnknownResult(
+        Schema.Struct({
+          cleared: Schema.Finite,
+          summarizedTurns: Schema.Finite,
+          summaryFailed: Schema.Boolean,
+          tokensBefore: Schema.Finite,
+          tokensAfter: Schema.Finite,
+        }),
+      ),
+      Result.getOrThrow,
+    )(yield* nativePromise(() => response.json()));
+    if (manual.cleared === 0 && manual.summarizedTurns === 0)
+      throw new Error("pilot_manual_compact_changed_nothing");
+    return manual;
+  });
+  /** One user turn, which must complete; only the last turn may use the final provider call. */
+  const turn = Effect.fnUntraced(function* (text: string, last: boolean) {
     const events = yield* Effect.provideContext(
       services.chat
         .run({
@@ -179,11 +170,9 @@ const runArm = Effect.fn("eval.runArm")(function* (variant: "auto" | "auto-plus-
         .pipe(Effect.flatMap(Stream.runCollect), Effect.timeout("45 seconds")),
       servicesContext,
     );
-    answers.push(
-      events
-        .flatMap(({ data }) => (AgUiEvent.guards.TEXT_MESSAGE_CONTENT(data) ? [data.delta] : []))
-        .join(""),
-    );
+    const answer = events
+      .flatMap(({ data }) => (AgUiEvent.guards.TEXT_MESSAGE_CONTENT(data) ? [data.delta] : []))
+      .join("");
     const statusResponse = yield* Effect.provideContext(
       services.agent.status(services.sessionId, null),
       servicesContext,
@@ -199,9 +188,20 @@ const runArm = Effect.fn("eval.runArm")(function* (variant: "auto" | "auto-plus-
     )(yield* nativePromise(() => statusResponse.json()));
     if (status.lastRun?.status !== "completed")
       throw new Error(`pilot_run_${status.lastRun?.status ?? "missing"}`);
-    if (calls >= maxCalls && index < prompts.length - 1)
+    if (MutableRef.get(calls) >= maxCalls && !last)
       throw new Error("pilot_provider_budget_exceeded");
-  }
+    return answer;
+  });
+  const opening = yield* Effect.forEach(Arr.initNonEmpty(prompts), (text) => turn(text, false));
+  // Wait for equal automatic summary state; do not create a manual-only comparison.
+  yield* Effect.provideContext(
+    services.summaries.catchUp(services.sessionId, true),
+    servicesContext,
+  );
+  const manual = Option.getOrNull(
+    yield* Effect.when(compactManually, Effect.succeed(variant === "auto-plus-manual")),
+  );
+  const answers = [...opening, yield* turn(Arr.lastNonEmpty(prompts), true)];
   const blocks = (yield* compactionStateEffect({
     metadata: services.metadata,
     threadId: services.sessionId,
@@ -218,7 +218,7 @@ const runArm = Effect.fn("eval.runArm")(function* (variant: "auto" | "auto-plus-
     evidenceCorrect: final.includes(phrase),
     computationCorrect: /\b8\b/.test(final),
     elapsedMs: DateTime.toEpochMillis(DateTime.nowUnsafe()) - started,
-    providerCallsSoFar: calls,
+    providerCallsSoFar: MutableRef.get(calls),
   };
 }, Effect.scoped);
 
@@ -255,7 +255,7 @@ const runArms = Effect.forEach(
       stringifyJson({
         stopped: true,
         reason: error instanceof Error ? error.message : "unknown",
-        providerCallsSoFar: calls,
+        providerCallsSoFar: MutableRef.get(calls),
       }),
     ).pipe(Effect.as(true));
   }),

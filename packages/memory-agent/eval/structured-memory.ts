@@ -40,6 +40,12 @@ interface ReportedUsage {
   cachedPromptTokens: number | null;
 }
 
+/** What one request streamed back: its answer text and the usage it reported. */
+interface CompletedAnswer {
+  readonly rawAnswer: string;
+  readonly usage: ReportedUsage;
+}
+
 const encode = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 const wire = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json));
 const Answer = Schema.Struct({
@@ -335,80 +341,93 @@ const program = Effect.gen(function* () {
   });
   // Serial execution, balanced arm order, a per-request timeout and a fixed request count.
   // Save every completed answer; transport errors stop the run and never become wrong answers.
-  for (let repeat = 0; repeat < repeats; repeat++) {
-    for (const [index, arms] of snapshots.entries()) {
-      for (let position = 0; position < variants.length; position++) {
-        const arm = arms[(index + repeat + position) % variants.length]!;
-        const started = yield* Clock.currentTimeMillis;
-        const completed = yield* Effect.gen(function* () {
-          let rawAnswer = "";
-          const usage: ReportedUsage = {
-            promptTokens: null,
-            completionTokens: null,
-            cachedPromptTokens: null,
-          };
-          yield* client.stream(arm.body).pipe(
-            Stream.mapError(() => BenchmarkFailed.make({ reason: "provider" })),
-            Stream.runForEach(
-              Match.type<NormalizedStreamEvent>().pipe(
-                Match.tag("text", (event) => {
-                  rawAnswer += event.text;
-                  return Effect.void;
-                }),
-                Match.tag("usage", (event) => {
-                  usage.promptTokens = event.promptTokens ?? usage.promptTokens;
-                  usage.completionTokens = event.completionTokens ?? usage.completionTokens;
-                  usage.cachedPromptTokens = event.cachedPromptTokens ?? usage.cachedPromptTokens;
-                  return Effect.void;
-                }),
-                Match.tag("error", () => Effect.fail(BenchmarkFailed.make({ reason: "provider" }))),
-                Match.orElse(() => Effect.void),
-              ),
-            ),
-          );
-          return { rawAnswer, usage };
-        }).pipe(Effect.timeout("90 seconds"));
-        const answer = yield* Schema.decodeEffect(Schema.fromJsonString(Answer))(
-          completed.rawAnswer.trim(),
-        ).pipe(Effect.catchTag("SchemaError", () => Effect.succeed(null)));
-        const value = answer?.value.trim().toUpperCase() ?? "";
-        const valid = (answer?.evidence ?? []).filter(
-          (citation) =>
-            arm.fixture.sources.some(
-              (source) => source.id === citation.id && source.text.includes(citation.quote),
-            ) && arm.contextText.includes(citation.quote),
-        );
-        const citedSupport = arm.fixture.support.filter((required) =>
-          valid.some(
-            (citation) => citation.id === required.id && citation.quote.includes(required.quote),
-          ),
-        ).length;
-        rows.push({
-          case: arm.fixture.name,
-          variant: arm.variant,
-          repeat,
-          value,
-          answer,
+  // Each repeat runs every case once per variant, the arm order rotating with the case and repeat.
+  const schedule = Array.from({ length: repeats }, (_, repeat) => repeat).flatMap((repeat) =>
+    snapshots.flatMap((arms, index) =>
+      variants.map((_, position) => ({
+        repeat,
+        arm: arms[(index + repeat + position) % variants.length]!,
+      })),
+    ),
+  );
+  /** The answer text and the latest usage the provider reported, one stream event at a time. */
+  const answered = (
+    completed: CompletedAnswer,
+    event: NormalizedStreamEvent,
+  ): Effect.Effect<CompletedAnswer, BenchmarkFailed> =>
+    Match.value(event).pipe(
+      Match.tag("text", (text) =>
+        Effect.succeed({ ...completed, rawAnswer: completed.rawAnswer + text.text }),
+      ),
+      Match.tag("usage", (usage) =>
+        Effect.succeed({
           ...completed,
-          validOutput: answer !== null,
-          correct: value === arm.fixture.expected,
-          revokedValueUsed: arm.fixture.revoked.includes(value),
-          supportIncluded: arm.supportIncluded,
-          supportTotal: arm.supportTotal,
-          fullSupport: arm.fullSupport,
-          citedSupport,
-          validCitations: valid.length,
-          citationCount: answer?.evidence.length ?? 0,
-          estimatedInputTokens: arm.estimate.estimatedTokens,
-          durationMs: (yield* Clock.currentTimeMillis) - started,
-        });
-        yield* save();
-        yield* Console.log(
-          `${rows.length}/${seeded.cases.length * variants.length * repeats} ${arm.fixture.name} ${arm.variant}: ${value === arm.fixture.expected ? "correct" : "incorrect"}`,
-        );
-      }
-    }
-  }
+          usage: {
+            promptTokens: usage.promptTokens ?? completed.usage.promptTokens,
+            completionTokens: usage.completionTokens ?? completed.usage.completionTokens,
+            cachedPromptTokens: usage.cachedPromptTokens ?? completed.usage.cachedPromptTokens,
+          },
+        }),
+      ),
+      Match.tag("error", () => Effect.fail(BenchmarkFailed.make({ reason: "provider" }))),
+      Match.orElse(() => Effect.succeed(completed)),
+    );
+  yield* Effect.forEach(
+    schedule,
+    Effect.fnUntraced(function* ({ repeat, arm }) {
+      const started = yield* Clock.currentTimeMillis;
+      const completed = yield* client.stream(arm.body).pipe(
+        Stream.mapError(() => BenchmarkFailed.make({ reason: "provider" })),
+        Stream.runFoldEffect(
+          (): CompletedAnswer => ({
+            rawAnswer: "",
+            usage: { promptTokens: null, completionTokens: null, cachedPromptTokens: null },
+          }),
+          answered,
+        ),
+        Effect.timeout("90 seconds"),
+      );
+      const answer = yield* Schema.decodeEffect(Schema.fromJsonString(Answer))(
+        completed.rawAnswer.trim(),
+      ).pipe(Effect.catchTag("SchemaError", () => Effect.succeed(null)));
+      const value = answer?.value.trim().toUpperCase() ?? "";
+      const valid = (answer?.evidence ?? []).filter(
+        (citation) =>
+          arm.fixture.sources.some(
+            (source) => source.id === citation.id && source.text.includes(citation.quote),
+          ) && arm.contextText.includes(citation.quote),
+      );
+      const citedSupport = arm.fixture.support.filter((required) =>
+        valid.some(
+          (citation) => citation.id === required.id && citation.quote.includes(required.quote),
+        ),
+      ).length;
+      rows.push({
+        case: arm.fixture.name,
+        variant: arm.variant,
+        repeat,
+        value,
+        answer,
+        ...completed,
+        validOutput: answer !== null,
+        correct: value === arm.fixture.expected,
+        revokedValueUsed: arm.fixture.revoked.includes(value),
+        supportIncluded: arm.supportIncluded,
+        supportTotal: arm.supportTotal,
+        fullSupport: arm.fullSupport,
+        citedSupport,
+        validCitations: valid.length,
+        citationCount: answer?.evidence.length ?? 0,
+        estimatedInputTokens: arm.estimate.estimatedTokens,
+        durationMs: (yield* Clock.currentTimeMillis) - started,
+      });
+      yield* save();
+      yield* Console.log(
+        `${rows.length}/${seeded.cases.length * variants.length * repeats} ${arm.fixture.name} ${arm.variant}: ${value === arm.fixture.expected ? "correct" : "incorrect"}`,
+      );
+    }),
+    { discard: true },
+  );
   yield* Console.log(yield* encode(report().summary));
 });
 

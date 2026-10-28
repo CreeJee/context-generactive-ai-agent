@@ -41,11 +41,14 @@ import { technicalQueries, technicalSessions } from "./recall-technical.ts";
 const home = await Effect.runPromise(defaultStorageRoot);
 const embeddingModel = join(home, "models", localModel.id, modelFile("quint8"));
 const kiwiFile = join(home, "models", `kiwi-${kiwiModel.version}`, kiwiModel.directory, "cong.mdl");
-for (const file of [embeddingModel, kiwiFile])
-  if (
-    !(await nodePlatform.runPromise(Effect.flatMap(FileSystem.FileSystem, (fs) => fs.exists(file))))
-  )
-    throw new Error(`model missing: ${file}`);
+const missingModel = await nodePlatform.runPromise(
+  Effect.flatMap(FileSystem.FileSystem, (fs) =>
+    Effect.findFirst([embeddingModel, kiwiFile], (file) =>
+      Effect.map(fs.exists(file), (exists) => !exists),
+    ),
+  ),
+);
+if (Option.isSome(missingModel)) throw new Error(`model missing: ${missingModel.value}`);
 
 const sharedModels = StorageRoot.layer(home);
 const embedder = Embedder.localVariant("fp32").pipe(Layer.provide(sharedModels));
@@ -120,19 +123,25 @@ const evaluate = Effect.fn("eval.evaluate")(function* (
     Effect.gen(function* () {
       const project = yield* (yield* Projects).add(projectRoot);
       const nodes = yield* Nodes;
-      const keys = MutableHashMap.empty<string, string>();
-      for (const statements of set.sessions) {
-        const session = yield* (yield* Sessions).create(project.id);
-        for (const statement of statements) {
-          const node = yield* nodes.append({
-            projectId: project.id,
-            sessionId: session.id,
-            kind: statement.kind ?? "user",
-            text: statement.text,
-          });
-          MutableHashMap.set(keys, node.id, statement.key);
-        }
-      }
+      // Each recorded node, by the key of the statement it holds.
+      const recorded = yield* Effect.forEach(
+        set.sessions,
+        Effect.fnUntraced(function* (statements) {
+          const session = yield* (yield* Sessions).create(project.id);
+          return yield* Effect.forEach(statements, (statement) =>
+            Effect.map(
+              nodes.append({
+                projectId: project.id,
+                sessionId: session.id,
+                kind: statement.kind ?? "user",
+                text: statement.text,
+              }),
+              (node) => [node.id, statement.key] as const,
+            ),
+          );
+        }),
+      );
+      const keys = MutableHashMap.fromIterable(recorded.flat());
       const indexer = yield* Indexer;
       const [indexed] = yield* Effect.timed(
         Effect.ignore(indexer.indexAll()).pipe(Effect.andThen(Effect.ignore(indexer.analyzeAll()))),
@@ -147,31 +156,36 @@ const evaluate = Effect.fn("eval.evaluate")(function* (
             ),
           );
 
-      let top1 = 0;
-      let top3 = 0;
-      let top5 = 0;
-      let reciprocal = 0;
-      const misses: string[] = [];
       const searchStarted = yield* Clock.currentTimeNanos;
-      for (const item of set.queries) {
-        const result = yield* search.find({
-          query: item.query,
-          projectId: project.id,
-          limit: 10,
-        });
-        const found = result.matches.map((match) =>
-          Option.getOrUndefined(MutableHashMap.get(keys, match.id)),
-        );
-        const rank = found.indexOf(item.expected);
-        if (rank === 0) top1++;
-        if (rank >= 0 && rank < 3) top3++;
-        if (rank >= 0 && rank < 5) top5++;
-        if (rank >= 0) reciprocal += 1 / (rank + 1);
-        if (rank !== 0)
-          misses.push(
-            `${item.query} → ${rank < 0 ? "없음" : `${rank + 1}위`} (1위 ${found[0] ?? "-"}, degraded ${result.degraded.join(",") || "-"})`,
+      // Where each query's expected statement ranked; -1 when it was not found.
+      const ranked = yield* Effect.forEach(
+        set.queries,
+        Effect.fnUntraced(function* (item) {
+          const result = yield* search.find({
+            query: item.query,
+            projectId: project.id,
+            limit: 10,
+          });
+          const found = result.matches.map((match) =>
+            Option.getOrUndefined(MutableHashMap.get(keys, match.id)),
           );
-      }
+          return { item, found, rank: found.indexOf(item.expected), degraded: result.degraded };
+        }),
+      );
+      const ranks = ranked.map(({ rank }) => rank);
+      const within = (limit: number) => ranks.filter((rank) => rank >= 0 && rank < limit).length;
+      const top1 = within(1);
+      const top3 = within(3);
+      const top5 = within(5);
+      const reciprocal = ranks
+        .filter((rank) => rank >= 0)
+        .reduce((sum, rank) => sum + 1 / (rank + 1), 0);
+      const misses = ranked
+        .filter(({ rank }) => rank !== 0)
+        .map(
+          ({ item, found, rank, degraded }) =>
+            `${item.query} → ${rank < 0 ? "없음" : `${rank + 1}위`} (1위 ${found[0] ?? "-"}, degraded ${degraded.join(",") || "-"})`,
+        );
       const total = set.queries.length;
       return {
         name: `${set.name} · ${configuration.name}`,

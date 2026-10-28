@@ -40,12 +40,13 @@ const footprint = Effect.fn("eval.footprint")(function* (
 });
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 const settle = Effect.fn("eval.settle")(function* () {
-  for (let round = 0; round < 3; round++) {
-    globalThis.gc?.();
+  // Three rounds: collect, then give the process 300 ms to return the memory.
+  yield* Effect.sync(() => globalThis.gc?.()).pipe(
     // Native callback heartbeat/debounce timing remains at the protocol boundary.
     // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-    yield* Effect.sleep(300);
-  }
+    Effect.andThen(Effect.sleep(300)),
+    Effect.repeat({ times: 2 }),
+  );
   return yield* footprint("phys_footprint");
 });
 
@@ -107,9 +108,7 @@ const scenarios = {
   "embedder quint8, 1 long + 15 short": () => embed("quint8", mixed),
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   "embedder quint8, three reloads": Effect.fn("eval.reloads")(function* () {
-    const rounds = [];
-    for (let round = 0; round < 3; round++) rounds.push(yield* embed("quint8", short));
-    return { rounds };
+    return { rounds: yield* Effect.replicateEffect(embed("quint8", short), 3) };
   }),
 };
 

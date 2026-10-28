@@ -1,5 +1,5 @@
 import { Function as EffectFunction } from "effect";
-import { Schema } from "effect";
+import { Option, Schema } from "effect";
 import { encodingForModel, getEncoding, getEncodingNameForModel, type Tiktoken } from "js-tiktoken";
 
 type KnownModel = Parameters<typeof encodingForModel>[0];
@@ -16,24 +16,23 @@ type EncodingName = Parameters<typeof getEncoding>[0];
 const encoders: Partial<Record<EncodingName, Tiktoken>> = {};
 const encoderFor = (name: EncodingName) => (encoders[name] ??= getEncoding(name));
 
+const knownEncoding = Option.liftThrowable((model: string): EncodingName =>
+  // SAFETY: the library checks this runtime model string against its supported mapping and
+  // throws on an unknown catalog id; liftThrowable turns that throw into the explicit fallback.
+  getEncodingNameForModel(model as KnownModel),
+);
+
 const estimateRequestTokensBody = (
   serializedRequest: string,
   model: string,
 ): RequestTokenEstimate => {
-  let encoding: Parameters<typeof getEncoding>[0] = "o200k_base";
-  let fallback = true;
-  try {
-    // SAFETY: the library checks this runtime model string against its supported mapping and
-    // throws on an unknown catalog id; the catch below selects the explicit fallback.
-    encoding = getEncodingNameForModel(model as KnownModel);
-    fallback = false;
-  } catch {
-    // Unknown model: use the o200k_base encoding as an approximation, never as billed usage.
-  }
+  const known = knownEncoding(model);
+  // Unknown model: use the o200k_base encoding as an approximation, never as billed usage.
+  const encoding = Option.getOrElse(known, (): EncodingName => "o200k_base");
   return {
     estimatedTokens: encoderFor(encoding).encode(serializedRequest).length,
     encoding,
-    fallback,
+    fallback: Option.isNone(known),
   };
 };
 export const estimateRequestTokens: {
