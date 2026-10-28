@@ -248,7 +248,7 @@ const make = Effect.gen(function* () {
   type Candidates = HashSet.HashSet<string> | null;
   /** Oldest first. */
   const candidateCache = yield* Ref.make<ReadonlyArray<readonly [string, Candidates]>>([]);
-  const readPage = createTextPageReader();
+  const readPage = yield* createTextPageReader;
 
   /** Keeps `candidates` under `key`, dropping the oldest entries past the cache's size. */
   const remember = (key: string, candidates: Candidates) =>

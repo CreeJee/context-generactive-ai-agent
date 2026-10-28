@@ -11,6 +11,27 @@ import { path as hostPath } from "../runtime/synchronous-path.ts";
 export const gitEnvironment = (git: string) =>
   helperEnvironment([hostPath.dirname(git)], { user: false });
 
+/** A Git command's output as text, failing with `overflow` once it passes `maxBytes`. */
+export const gitOutputText = <E, R>(options: {
+  readonly stdout: Stream.Stream<Uint8Array, E, R>;
+  readonly maxBytes: number;
+  readonly overflow: string;
+}) =>
+  options.stdout.pipe(
+    // Each chunk carries the output size up to and including it.
+    Stream.mapAccum(
+      () => 0,
+      (size, chunk) => [size + chunk.byteLength, [[size + chunk.byteLength, chunk] as const]],
+    ),
+    Stream.mapEffect(([size, chunk]) =>
+      size <= options.maxBytes
+        ? Effect.succeed(chunk)
+        : Effect.fail(new Cause.UnknownError(options.overflow)),
+    ),
+    Stream.decodeText(),
+    Stream.mkString,
+  );
+
 /** Only ASCII case folding is the same in `git grep -i` and JavaScript. */
 const isAscii = (text: string) => /^[\x20-\x7e]*$/.test(text);
 
@@ -65,20 +86,11 @@ export const gitGrepFilesEffect = (options: {
             stderr: "ignore",
           }),
         );
-        let size = 0;
-        const stdout = yield* child.stdout.pipe(
-          Stream.mapEffect((chunk) => {
-            size += chunk.byteLength;
-            return size <= 64 * 1024 * 1024
-              ? Effect.succeed(chunk)
-              : Effect.fail(new Cause.UnknownError("git grep output exceeds 64 MiB"));
-          }),
-          Stream.decodeText(),
-          Stream.runFold(
-            () => "",
-            (text, chunk) => text + chunk,
-          ),
-        );
+        const stdout = yield* gitOutputText({
+          stdout: child.stdout,
+          maxBytes: 64 * 1024 * 1024,
+          overflow: "git grep output exceeds 64 MiB",
+        });
         // git grep exits 1 when nothing matched; any other failure leaves the search to the caller.
         return Match.value(Number(yield* child.exitCode)).pipe(
           Match.when(0, () => HashSet.fromIterable(stdout.split("\0").filter(Boolean))),

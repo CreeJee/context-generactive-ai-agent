@@ -1,7 +1,7 @@
 import { FileSystem } from "effect";
 import { Function as EffectFunction } from "effect";
 import { path } from "../runtime/synchronous-path.ts";
-import { Effect, HashSet, Option, Schema } from "effect";
+import { Array as Arr, Effect, HashSet, Match, Option, Schema, Stream } from "effect";
 import type { PlatformError } from "effect";
 
 // Path operations remain synchronous at these public host boundaries.
@@ -190,20 +190,32 @@ const isSameOrBelow = Effect.fn("Paths.isSameOrBelow")(function* (
   const target = yield* lstat(root);
   if (!(target !== undefined)) return pathsOverlap(root, candidate);
   if (Option.isNone(target.ino)) return yield* reject(candidate, "invalid_path");
-  for (let current = candidate; ; current = dirname(current)) {
-    const stats = yield* lstat(current);
-    if (
-      stats !== undefined &&
-      stats.dev === target.dev &&
-      Option.isSome(stats.ino) &&
-      Option.isSome(target.ino) &&
-      stats.ino.value === target.ino.value
-    )
-      return true;
-    if (stats !== undefined && Option.isNone(stats.ino))
-      return yield* reject(candidate, "invalid_path");
-    if (dirname(current) === current) return false;
-  }
+  // The candidate and each of its parents up to the filesystem root.
+  const ancestors = Arr.unfold(
+    Option.some(candidate),
+    Option.map(
+      (current) =>
+        [
+          current,
+          Option.some(dirname(current)).pipe(Option.filter((parent) => parent !== current)),
+        ] as const,
+    ),
+  );
+  const reached = yield* Effect.findFirst(ancestors, (current) =>
+    Effect.flatMap(lstat(current), (stats) =>
+      // A missing ancestor is passed over; one without an inode cannot be compared.
+      stats !== undefined && Option.isNone(stats.ino)
+        ? reject(candidate, "invalid_path")
+        : Effect.succeed(
+            stats !== undefined &&
+              stats.dev === target.dev &&
+              Option.isSome(stats.ino) &&
+              Option.isSome(target.ino) &&
+              stats.ino.value === target.ino.value,
+          ),
+    ),
+  );
+  return Option.isSome(reached);
 });
 
 export interface ProjectPath {
@@ -250,32 +262,59 @@ function resolveProjectPathBody(
       return yield* reject(path, "git_internal");
     if (isCredentialPath(spelled)) return yield* reject(path, "credential");
 
-    let current = root;
-    let stats = yield* lstat(root);
-    if (!(stats?.type === "Directory")) return yield* reject(path, "not_found");
-    for (const [index, segment] of segments.entries()) {
-      const last = index === segments.length - 1;
-      current = join(current, segment);
-      stats = yield* lstat(current);
-      if (!(stats !== undefined)) {
-        if (kind === "new-or-file")
-          return yield* Effect.succeed({
-            absolute: join(root, ...segments),
-            relative: spelled,
-            stats,
-          });
-        return yield* reject(path, "not_found");
-      }
-      if (stats.type === "SymbolicLink") return yield* reject(path, "symlink");
-      if (!last && stats.type !== "Directory") return yield* reject(path, "not_directory");
-    }
-
-    if (kind === "directory") {
-      if (stats?.type !== "Directory") return yield* reject(path, "not_directory");
-    } else {
-      if (stats?.type !== "File") return yield* reject(path, "not_file");
-      if (!Option.contains(stats.nlink, 1)) return yield* reject(path, "hard_link");
-    }
+    const rootStats = yield* lstat(root);
+    if (!(rootStats?.type === "Directory")) return yield* reject(path, "not_found");
+    // Each segment's entry, one at a time down from the root, up to the first missing one.
+    const reached = yield* Stream.fromIterable(
+      Arr.scan(segments, root, (current, segment) => join(current, segment)).slice(1),
+    ).pipe(
+      Stream.mapEffect((current, index) =>
+        Effect.map(lstat(current), (stats) => ({
+          current,
+          stats,
+          last: index === segments.length - 1,
+        })),
+      ),
+      Stream.takeUntil(({ stats }) => stats === undefined),
+      Stream.tap(({ stats, last }) =>
+        reject(path, "symlink").pipe(
+          Effect.when(Effect.succeed(stats?.type === "SymbolicLink")),
+          Effect.andThen(
+            Effect.when(
+              reject(path, "not_directory"),
+              Effect.succeed(!last && stats !== undefined && stats.type !== "Directory"),
+            ),
+          ),
+        ),
+      ),
+      Stream.runLast,
+    );
+    const { current, stats } = Option.getOrElse(reached, () => ({
+      current: root,
+      stats: rootStats,
+    }));
+    if (!(stats !== undefined))
+      return yield* Match.value(kind).pipe(
+        Match.when("new-or-file", () =>
+          Effect.succeed({ absolute: join(root, ...segments), relative: spelled, stats }),
+        ),
+        Match.orElse(() => reject(path, "not_found")),
+      );
+    yield* Match.value(kind).pipe(
+      Match.when("directory", () =>
+        Effect.when(reject(path, "not_directory"), Effect.succeed(stats.type !== "Directory")),
+      ),
+      Match.orElse(() =>
+        Effect.when(reject(path, "not_file"), Effect.succeed(stats.type !== "File")).pipe(
+          Effect.andThen(
+            Effect.when(
+              reject(path, "hard_link"),
+              Effect.succeed(!Option.contains(stats.nlink, 1)),
+            ),
+          ),
+        ),
+      ),
+    );
     return { absolute: current, relative: spelled, stats };
   });
 }

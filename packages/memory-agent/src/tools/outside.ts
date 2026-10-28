@@ -77,7 +77,7 @@ const searchOutsideFile = {
 const make = Effect.gen(function* () {
   const storage = yield* StorageRoot;
   const snapshots = yield* createSnapshots();
-  const readPage = createTextPageReader();
+  const readPage = yield* createTextPageReader;
   const platform = yield* Effect.context<FileSystem.FileSystem | Crypto.Crypto>();
 
   /** The listing `lookup` finds, failing with `expired` when its snapshot is gone. */

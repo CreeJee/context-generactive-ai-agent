@@ -101,7 +101,7 @@ layer(NodeServices.layer)((it) => {
       const path = yield* Path.Path;
       const directory = yield* fs.makeTempDirectoryScoped();
       const absolute = path.join(directory, "text");
-      const reader = createTextPageReader();
+      const reader = yield* createTextPageReader;
       const texts = [
         "",
         "😀\r\n",
@@ -141,7 +141,7 @@ layer(NodeServices.layer)((it) => {
         const absolute = path.join(directory, "text");
         const text = "İ match 😀\r\n".repeat(700) + "x".repeat(20000) + "match\nlast match";
         yield* fs.writeFileString(absolute, text);
-        const reader = createTextPageReader();
+        const reader = yield* createTextPageReader;
         const lines: number[] = [];
         let start = { file: 0, line: 0 };
         while (true) {
@@ -171,7 +171,9 @@ layer(NodeServices.layer)((it) => {
       const absolute = path.join(directory, "text");
       yield* fs.writeFileString(absolute, "x\n".repeat(maxTextBytes / 2));
       const reading = yield* Effect.forkChild(
-        createTextPageReader()({ absolute, path: absolute, startLine: 1, maxLines: 1 }),
+        Effect.flatMap(createTextPageReader, (reader) =>
+          reader({ absolute, path: absolute, startLine: 1, maxLines: 1 }),
+        ),
       );
       while ((yield* handlesFor(absolute)) === 0) yield* Effect.yieldNow;
       yield* Fiber.interrupt(reading);

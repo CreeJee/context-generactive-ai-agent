@@ -12,16 +12,16 @@ import {
   FileSystem,
   Crypto,
   Layer,
-  Cause,
   Stream,
   Option,
   Effect,
   Ref,
   HashSet,
+  Chunk,
   Array as EffectArray,
 } from "effect";
 import { findExecutable } from "../runtime/host.ts";
-import { gitEnvironment } from "./git-grep.ts";
+import { gitEnvironment, gitOutputText } from "./git-grep.ts";
 import { isCredentialPath } from "./paths.ts";
 
 const { join } = hostPath;
@@ -93,20 +93,11 @@ const gitFiles = Effect.fn("FileListing.gitFiles")(function* (root: string, dire
           },
         ),
       );
-      let size = 0;
-      const stdout = yield* child.stdout.pipe(
-        Stream.mapEffect((chunk) => {
-          size += chunk.byteLength;
-          return size <= 256 * 1024 * 1024
-            ? Effect.succeed(chunk)
-            : Effect.fail(new Cause.UnknownError("git listing output exceeds 256 MiB"));
-        }),
-        Stream.decodeText(),
-        Stream.runFold(
-          () => "",
-          (text, chunk) => text + chunk,
-        ),
-      );
+      const stdout = yield* gitOutputText({
+        stdout: child.stdout,
+        maxBytes: 256 * 1024 * 1024,
+        overflow: "git listing output exceeds 256 MiB",
+      });
       const code = yield* child.exitCode;
       return Number(code) === 0 ? stdout.split("\0").filter(Boolean) : null;
     }),
@@ -118,6 +109,13 @@ const gitFiles = Effect.fn("FileListing.gitFiles")(function* (root: string, dire
     }),
   );
 });
+
+/** Files a walk listed in visiting order, credential-looking directories it left out, and whether it stopped. */
+interface Walk {
+  readonly files: Chunk.Chunk<string>;
+  readonly excluded: number;
+  readonly truncated: boolean;
+}
 
 /**
  * Regular files below `directory` (relative to `base`), not following links and not descending
@@ -131,47 +129,67 @@ const walkFiles = Effect.fn("FileListing.walkFiles")(function* (
   credentialPrefix: string,
 ) {
   const fs = yield* nodeFileSystem;
-  const files: string[] = [];
-  let excluded = 0;
-  let truncated = false;
-  const pending = [directory];
-  while (pending.length > 0) {
-    if (files.length >= walkLimit) {
-      truncated = true;
-      break;
-    }
-    const relative = pending.pop()!;
-    // Finish and close this directory before visiting children, so depth never consumes more FDs.
-    // An unreadable directory is skipped; what it yielded before failing is kept.
-    yield* Effect.scoped(
-      Effect.gen(function* () {
-        const handle = yield* fs.openDirectory(join(base, relative));
-        while (true) {
-          const next = yield* handle.read;
-          if (Option.isNone(next)) return;
-          const entry = next.value;
-          if (files.length >= walkLimit) {
-            truncated = true;
-            return;
-          }
-          const path = relative === "." ? entry.name : `${relative}/${entry.name}`;
-          switch (entry.type) {
-            case "Directory":
-              if (HashSet.has(walkSkips, entry.name)) continue;
-              if (isCredentialPath(join(credentialPrefix, path))) excluded++;
-              else pending.push(path);
-              continue;
-            case "File":
-              files.push(path);
-              continue;
-            default:
-              continue;
-          }
-        }
-      }),
-    ).pipe(Effect.catchTag("PlatformError", () => Effect.void));
-  }
-  return { files, excluded, truncated };
+  /**
+   * One directory's entries, each with whether `room` files were already listed from it when it
+   * arrived; reading stops at the first such entry.
+   */
+  const readDirectory = (relative: string, room: number) =>
+    Stream.unwrap(
+      Effect.map(fs.openDirectory(join(base, relative)), (handle) =>
+        Stream.fromEffectRepeat(handle.read).pipe(Stream.takeWhile(Option.isSome)),
+      ),
+    ).pipe(
+      // An unreadable directory is skipped; what it yielded before failing is kept.
+      Stream.catchTag("PlatformError", () => Stream.empty),
+      Stream.mapAccum(
+        () => 0,
+        (listed, { value: entry }) => [
+          entry.type === "File" ? listed + 1 : listed,
+          [{ entry, full: listed >= room }],
+        ],
+      ),
+      Stream.takeUntil(({ full }) => full),
+      Stream.runCollect,
+    );
+  /** Walks `relative` and then its subdirectories, `listed` files having been listed before it. */
+  const walk = (relative: string, listed: number): Effect.Effect<Walk> =>
+    Effect.gen(function* () {
+      if (listed >= walkLimit) return { files: Chunk.empty(), excluded: 0, truncated: true };
+      // Finish and close this directory before visiting children, so depth never consumes more FDs.
+      const entries = yield* readDirectory(relative, walkLimit - listed);
+      const read = entries
+        .filter(({ full }) => !full)
+        .map(({ entry }) => ({
+          entry,
+          path: relative === "." ? entry.name : `${relative}/${entry.name}`,
+        }));
+      const directories = read
+        .filter(({ entry }) => entry.type === "Directory" && !HashSet.has(walkSkips, entry.name))
+        .map(({ path }) => path);
+      const credential = (path: string) => isCredentialPath(join(credentialPrefix, path));
+      const here: Walk = {
+        files: Chunk.fromIterable(
+          read.filter(({ entry }) => entry.type === "File").map(({ path }) => path),
+        ),
+        excluded: directories.filter(credential).length,
+        truncated: entries.some(({ full }) => full),
+      };
+      // The last subdirectory read is visited first, as from a stack of pending directories.
+      return yield* Effect.reduce(
+        directories.filter((path) => !credential(path)).toReversed(),
+        () => here,
+        (walked, child) =>
+          walked.truncated
+            ? Effect.succeed(walked)
+            : Effect.map(walk(child, listed + Chunk.size(walked.files)), (below) => ({
+                files: Chunk.appendAll(walked.files, below.files),
+                excluded: walked.excluded + below.excluded,
+                truncated: below.truncated,
+              })),
+      );
+    });
+  const walked = yield* walk(directory, 0);
+  return { ...walked, files: Chunk.toReadonlyArray(walked.files) };
 });
 
 /**

@@ -3,7 +3,7 @@ import { Hex } from "effect/encoding";
 import { Context, Crypto, FileSystem } from "effect";
 import { Function as EffectFunction } from "effect";
 import { path } from "../runtime/synchronous-path.ts";
-import { Effect, Exit, Match, MutableHashMap, Option, Schema, Scope } from "effect";
+import { Array as Arr, Effect, Exit, Match, Option, Ref, Schema, Scope, Stream } from "effect";
 import { PathRejected } from "./paths.ts";
 
 // Path operations remain synchronous at these public host boundaries.
@@ -50,6 +50,14 @@ export class TextFileRejected extends Schema.TaggedError<TextFileRejected>()("Te
 /** The file no longer has the content the caller read. */
 const changed = (path: string) =>
   Effect.fail(TextFileRejected.make({ path, reason: rejection.changed.make({}) }));
+
+/** The file is over {@link maxTextBytes}. */
+const tooLarge = (path: string) =>
+  Effect.fail(TextFileRejected.make({ path, reason: rejection.too_large.make({}) }));
+
+/** The file holds NUL bytes. */
+const binary = (path: string) =>
+  Effect.fail(TextFileRejected.make({ path, reason: rejection.binary.make({}) }));
 
 /** The file operation that failed and its system code; see {@link TextFileIoFailed}. */
 export const TextFileIoReason = Schema.TaggedStruct("IoFailed", {
@@ -129,23 +137,31 @@ const readOpenedFile = Effect.fnUntraced(function* (
     return yield* PathRejected.make({ path, reason: "not_file" });
   if (checkLeaf && Option.getOrUndefined(stats.nlink) !== 1)
     return yield* PathRejected.make({ path, reason: "hard_link" });
-  if (stats.size > BigInt(maxTextBytes))
-    return yield* TextFileRejected.make({ path, reason: rejection.too_large.make({}) });
-  const chunks: Buffer[] = [];
-  let size = 0;
-  while (true) {
-    const buffer = Buffer.alloc(Math.min(64 * 1024, maxTextBytes + 1 - size));
-    const read = yield* Effect.uninterruptible(
-      fileIo(path, "read", handle.read(buffer, { position: BigInt(size) })),
-    );
-    if (read === 0) break;
-    size += read;
-    if (size > maxTextBytes)
-      return yield* TextFileRejected.make({ path, reason: rejection.too_large.make({}) });
-    chunks.push(buffer.subarray(0, read));
-    yield* Effect.yieldNow;
-  }
-  return { bytes: Buffer.concat(chunks, size), mode: stats.mode & 0o7777 };
+  yield* Effect.when(tooLarge(path), Effect.succeed(stats.size > BigInt(maxTextBytes)));
+  // Each page is the chunk read at the size read so far, until the end of the file.
+  const chunks = yield* Stream.paginate(0, (size: number) =>
+    Effect.uninterruptible(
+      fileIo(
+        path,
+        "read",
+        handle.readAlloc(Math.min(64 * 1024, maxTextBytes + 1 - size), {
+          position: BigInt(size),
+        }),
+      ),
+    ).pipe(
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.succeed([Arr.empty<Uint8Array>(), Option.none<number>()] as const),
+          onSome: (chunk) =>
+            Effect.when(tooLarge(path), Effect.succeed(size + chunk.length > maxTextBytes)).pipe(
+              Effect.andThen(Effect.yieldNow),
+              Effect.as([Arr.of(chunk), Option.some(size + chunk.length)] as const),
+            ),
+        }),
+      ),
+    ),
+  ).pipe(Stream.runCollect);
+  return { bytes: Buffer.concat(chunks), mode: stats.mode & 0o7777 };
 });
 
 // Windows has no O_NOFOLLOW. lstat rejects an observed linked leaf; this does not provide POSIX's
@@ -156,7 +172,10 @@ const readWindowsFileBytes = Effect.fn("readWindowsFileBytes")(function* (
   const { absolute, path } = options;
   const fileSystem = yield* FileSystem.FileSystem;
   const leaf = yield* fileIo(path, "open", fileSystem.lstat(absolute));
-  if (leaf.type === "SymbolicLink") return yield* PathRejected.make({ path, reason: "symlink" });
+  yield* Effect.when(
+    Effect.fail(PathRejected.make({ path, reason: "symlink" })),
+    Effect.succeed(leaf.type === "SymbolicLink"),
+  );
   return yield* Effect.scoped(
     fileIo(path, "open", fileSystem.open(absolute)).pipe(
       Effect.flatMap((handle) => readOpenedFile(handle, options)),
@@ -193,10 +212,7 @@ export const decodeTextEffect = Effect.fnUntraced(function* (options: {
   readonly path: string;
 }) {
   const { bytes, path } = options;
-  yield* Effect.when(
-    Effect.fail(TextFileRejected.make({ path, reason: rejection.binary.make({}) })),
-    Effect.succeed(bytes.includes(0)),
-  );
+  yield* Effect.when(binary(path), Effect.succeed(bytes.includes(0)));
   return yield* Effect.try({
     try: () => decoder.decode(bytes),
     catch: () => TextFileRejected.make({ path, reason: rejection.invalid_utf8.make({}) }),
@@ -347,19 +363,18 @@ export const linePageOf: {
 function linePageOfBody(lines: readonly string[], startLine: number, maxLines: number): LinePage {
   const totalLines = lines.length;
   const first = Math.max(1, Math.min(startLine, totalLines + 1));
-  let content = "";
-  let line = first;
-  while (line <= totalLines && line - first < maxLines) {
-    const next = lines[line - 1]!;
-    if (content.length + next.length > readPageCharacters) break;
-    content += next;
-    line++;
-  }
+  const window = lines.slice(first - 1, first - 1 + maxLines);
+  // The page takes lines while their running length stays within the page.
+  const taken = Arr.takeWhile(
+    Arr.scan(window, 0, (length, next) => length + next.length).slice(1),
+    (length) => length <= readPageCharacters,
+  ).length;
+  const content = window.slice(0, taken).join("");
+  const line = first + taken;
   if (line === first && line <= totalLines) {
     // One line alone is bigger than a page (minified code): show its start, never split a pair.
-    let end = readPageCharacters;
-    const code = lines[line - 1]!.charCodeAt(end - 1);
-    if (code >= 0xd800 && code <= 0xdbff) end--;
+    const code = lines[line - 1]!.charCodeAt(readPageCharacters - 1);
+    const end = code >= 0xd800 && code <= 0xdbff ? readPageCharacters - 1 : readPageCharacters;
     return {
       content: lines[line - 1]!.slice(0, end),
       startLine: first,
@@ -386,9 +401,72 @@ interface LineIndex {
   readonly size: number;
 }
 
+/** Reads a whole opened file to index where its lines start, rejecting text the tools cannot edit. */
+const indexOpenedFile = Effect.fnUntraced(function* (
+  handle: FileSystem.File,
+  options: { readonly path: string; readonly stamp: string; readonly size: number },
+) {
+  const { path, stamp, size } = options;
+  const crypto = yield* Crypto.Crypto;
+  const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+  // At most maxTextBytes: the whole content stays in memory for one Crypto.digest.
+  const contents = Buffer.alloc(size);
+  /** Reads and checks the chunk at `position`; its page is the line starts inside it. */
+  const indexChunk = Effect.fnUntraced(function* (position: number) {
+    // Positional reads cannot be aborted by Node: await each native read before Scope closes.
+    const read = yield* Effect.uninterruptible(
+      fileIo(
+        path,
+        "read",
+        handle.read(contents.subarray(position, Math.min(position + 64 * 1024, size)), {
+          position: BigInt(position),
+        }),
+      ),
+    );
+    yield* Effect.when(changed(path), Effect.succeed(read === 0));
+    const bytes = contents.subarray(position, position + read);
+    yield* Effect.when(binary(path), Effect.succeed(bytes.includes(0)));
+    yield* Effect.try({
+      try: () => utf8.decode(bytes, { stream: true }),
+      catch: () => TextFileRejected.make({ path, reason: rejection.invalid_utf8.make({}) }),
+    });
+    // A line starts after each newline, except one that ends the file.
+    const lineStarts = Arr.unfold(bytes.indexOf(10), (at) =>
+      at === -1
+        ? Option.none()
+        : Option.some([position + at + 1, bytes.indexOf(10, at + 1)] as const),
+    ).filter((start) => start < size);
+    yield* Effect.yieldNow;
+    return [
+      lineStarts,
+      Option.some(position + read).pipe(Option.filter((next) => next < size)),
+    ] as const;
+  });
+  // The first line starts at 0 unless the file is empty.
+  const lines: Stream.Stream<number, TextFileRejected | TextFileIoFailed> =
+    size === 0 ? Stream.empty : Stream.concat(Stream.succeed(0), Stream.paginate(0, indexChunk));
+  const starts = yield* Stream.runCollect(lines);
+  yield* Effect.try({
+    try: () => utf8.decode(),
+    catch: () => TextFileRejected.make({ path, reason: rejection.invalid_utf8.make({}) }),
+  });
+  // NodeCrypto digest only fails as a defect, as createHash did.
+  const digest = yield* Effect.orDie(crypto.digest("SHA-256", contents));
+  return {
+    stamp,
+    size,
+    offsets: Uint32Array.from(starts),
+    sha256: Hex.encode(digest),
+  } satisfies LineIndex;
+});
+
+/** How many files' line indexes a page reader keeps. */
+const lineIndexCacheSize = 8;
+
 /** Only offsets and a digest survive a call; handles and decoded text belong to that call's Scope. */
-export const createTextPageReader = () => {
-  const cache = MutableHashMap.empty<string, LineIndex>();
+export const createTextPageReader = Effect.gen(function* () {
+  /** Oldest first. */
+  const cache = yield* Ref.make<ReadonlyArray<readonly [string, LineIndex]>>([]);
   return Effect.fn("readTextPage")(function* (options: {
     readonly absolute: string;
     readonly path: string;
@@ -398,80 +476,63 @@ export const createTextPageReader = () => {
   }) {
     const { absolute, path, startLine, maxLines, checkLeaf = false } = options;
     const fileSystem = yield* FileSystem.FileSystem;
-    const crypto = yield* Crypto.Crypto;
     const noFollow = (yield* FileReadPlatform) === "posix";
     return yield* Effect.scoped(
       Effect.gen(function* () {
         const handle = yield* fileIo(path, "open", fileSystem.open(absolute, { noFollow }));
         const stats = yield* fileIo(path, "stat", handle.stat);
-        if (stats.type !== "File") return yield* PathRejected.make({ path, reason: "not_file" });
+        yield* Effect.when(
+          Effect.fail(PathRejected.make({ path, reason: "not_file" })),
+          Effect.succeed(stats.type !== "File"),
+        );
         if (checkLeaf && Option.getOrUndefined(stats.nlink) !== 1)
           return yield* PathRejected.make({ path, reason: "hard_link" });
-        if (stats.size > BigInt(maxTextBytes))
-          return yield* TextFileRejected.make({ path, reason: rejection.too_large.make({}) });
+        yield* Effect.when(tooLarge(path), Effect.succeed(stats.size > BigInt(maxTextBytes)));
         const stampOf = (stat: FileSystem.File.Info) =>
           `${stat.dev}:${Option.getOrNull(stat.ino)}:${stat.size}:${Option.getOrNull(stat.ctimeNs)}:${Option.getOrNull(stat.mtimeNs)}`;
         const stamp = stampOf(stats);
-        let index = Option.getOrUndefined(MutableHashMap.get(cache, absolute));
-        if (index?.stamp !== stamp) {
-          const size = Number(stats.size);
-          const offsets: number[] = size === 0 ? [] : [0];
-          const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
-          // At most maxTextBytes: the whole content stays in memory for one Crypto.digest.
-          const contents = Buffer.alloc(size);
-          let position = 0;
-          while (position < size) {
-            // Positional reads cannot be aborted by Node: await each native read before Scope closes.
-            const read = yield* Effect.uninterruptible(
-              fileIo(
-                path,
-                "read",
-                handle.read(contents.subarray(position, Math.min(position + 64 * 1024, size)), {
-                  position: BigInt(position),
-                }),
-              ),
-            );
-            if (read === 0)
-              return yield* TextFileRejected.make({ path, reason: rejection.changed.make({}) });
-            const bytes = contents.subarray(position, position + read);
-            if (bytes.includes(0))
-              return yield* TextFileRejected.make({ path, reason: rejection.binary.make({}) });
-            yield* Effect.try({
-              try: () => utf8.decode(bytes, { stream: true }),
-              catch: () => TextFileRejected.make({ path, reason: rejection.invalid_utf8.make({}) }),
-            });
-            for (let i = 0; i < bytes.length; i++)
-              if (bytes[i] === 10 && position + i + 1 < size) offsets.push(position + i + 1);
-            position += read;
-            yield* Effect.yieldNow;
-          }
-          yield* Effect.try({
-            try: () => utf8.decode(),
-            catch: () => TextFileRejected.make({ path, reason: rejection.invalid_utf8.make({}) }),
-          });
-          // NodeCrypto digest only fails as a defect, as createHash did.
-          const digest = yield* Effect.orDie(crypto.digest("SHA-256", contents));
-          index = { stamp, size, offsets: Uint32Array.from(offsets), sha256: Hex.encode(digest) };
-        }
+        const index = yield* Arr.findFirst(
+          yield* Ref.get(cache),
+          ([known, index]) => known === absolute && index.stamp === stamp,
+        ).pipe(
+          Option.match({
+            onNone: () => indexOpenedFile(handle, { path, stamp, size: Number(stats.size) }),
+            onSome: ([, index]) => Effect.succeed(index),
+          }),
+        );
         const totalLines = index.offsets.length;
         const first = Math.max(1, Math.min(startLine, totalLines + 1));
         const begin = index.offsets[first - 1] ?? index.size;
         const end = index.offsets[Math.min(first - 1 + maxLines, totalLines)] ?? index.size;
         // Enough bytes for the UTF-16 page budget, plus an incomplete UTF-8 boundary.
-        const buffer = Buffer.alloc(Math.min(end - begin, readPageCharacters * 4 + 4));
-        let consumed = 0;
-        while (consumed < buffer.length) {
-          const read = yield* Effect.uninterruptible(
-            fileIo(
-              path,
-              "read",
-              handle.read(buffer.subarray(consumed), { position: BigInt(begin + consumed) }),
-            ),
-          );
-          if (read === 0)
-            return yield* TextFileRejected.make({ path, reason: rejection.changed.make({}) });
-          consumed += read;
-        }
+        const wanted = Math.min(end - begin, readPageCharacters * 4 + 4);
+        // Each page is the chunk read after the bytes already read; the file ending first has changed.
+        const chunks: Stream.Stream<Uint8Array, TextFileRejected | TextFileIoFailed> =
+          wanted === 0
+            ? Stream.empty
+            : Stream.paginate(0, (consumed: number) =>
+                Effect.uninterruptible(
+                  fileIo(
+                    path,
+                    "read",
+                    handle.readAlloc(wanted - consumed, { position: BigInt(begin + consumed) }),
+                  ),
+                ).pipe(
+                  Effect.flatMap(
+                    Option.match({
+                      onNone: () => changed(path),
+                      onSome: (chunk) =>
+                        Effect.succeed([
+                          [chunk],
+                          Option.some(consumed + chunk.length).pipe(
+                            Option.filter((next) => next < wanted),
+                          ),
+                        ] as const),
+                    }),
+                  ),
+                ),
+              );
+        const buffer = Buffer.concat(yield* Stream.runCollect(chunks));
         const text = yield* Effect.try({
           try: () =>
             new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(buffer, {
@@ -481,12 +542,12 @@ export const createTextPageReader = () => {
         });
         const latest = yield* fileIo(path, "stat", handle.stat);
         yield* Effect.when(changed(path), Effect.succeed(stampOf(latest) !== stamp));
-        MutableHashMap.remove(cache, absolute);
-        MutableHashMap.set(cache, absolute, index);
-        // Keys come out oldest first; the file just indexed is the newest.
-        Array.from(MutableHashMap.keys(cache))
-          .slice(0, Math.max(0, MutableHashMap.size(cache) - 8))
-          .forEach((old) => MutableHashMap.remove(cache, old));
+        // The file just indexed is the newest; the oldest past the cache's size are dropped.
+        yield* Ref.update(cache, (cached) =>
+          [...cached.filter(([known]) => known !== absolute), [absolute, index] as const].slice(
+            -lineIndexCacheSize,
+          ),
+        );
         const page = linePage(text, 1, maxLines);
         const endLine = first + page.endLine - 1;
         return {
@@ -501,4 +562,4 @@ export const createTextPageReader = () => {
       }),
     );
   });
-};
+});
