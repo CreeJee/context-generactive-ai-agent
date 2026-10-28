@@ -255,10 +255,10 @@ export class AgentOperationFailed extends Schema.TaggedError<AgentOperationFaile
 const workspaceInstructionsBody = Effect.fn("workspaceInstructions")(function* (
   project: Project,
   places: SettingsPlaces,
-  now: Date = DateTime.toDateUtc(DateTime.nowUnsafe()),
+  now?: Date,
 ) {
   const { timeZone } = Intl.DateTimeFormat().resolvedOptions();
-  const today = dayjs(now).format("YYYY-MM-DD");
+  const today = dayjs(now ?? DateTime.toDateUtc(yield* DateTime.now)).format("YYYY-MM-DD");
   const shell = yield* hostShell(process.env);
   return `The current project is "${project.name}" at ${project.root}.
 - Today is ${today} (${timeZone}). Scripts of sh skills run with /bin/sh on ${process.platform} (the user's shell is ${shell}).

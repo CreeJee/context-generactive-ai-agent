@@ -391,13 +391,12 @@ function makeRouteCatalogBody(
   now?: () => number,
 ): Effect.Effect<RouteCatalogApi> {
   return Effect.gen(function* () {
-    const clock = yield* Clock.Clock;
     const state = yield* Ref.make<RouteCatalogSnapshot>(
       freezeSnapshot({ revision: 0, refreshedAt: 0, chat: [], media: [], execution: [] }),
     );
     const refresh = Effect.gen(function* () {
       const loaded = yield* source.load;
-      const refreshedAt = now === undefined ? clock.currentTimeMillisUnsafe() : now();
+      const refreshedAt = now === undefined ? yield* Clock.currentTimeMillis : now();
       return yield* Ref.updateAndGet(state, (previous) =>
         freezeSnapshot({ ...loaded, revision: previous.revision + 1, refreshedAt }),
       );

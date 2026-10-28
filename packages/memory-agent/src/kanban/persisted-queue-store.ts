@@ -137,7 +137,6 @@ const make = Effect.fnUntraced(function* (options?: {
   /** Longest wait between looks when nothing in this process announced new work. */
   readonly pollInterval?: Duration.Input | undefined;
 }) {
-  const clock = yield* Clock.Clock;
   const sql = yield* SqlClient.SqlClient;
   const pollMillis = Math.max(
     1,
@@ -152,7 +151,6 @@ const make = Effect.fnUntraced(function* (options?: {
       }),
     ),
   );
-  const now = () => clock.currentTimeMillisUnsafe();
   const queueError = (message: string) => (cause: SqlError.SqlError | Schema.SchemaError) =>
     PersistedQueue.PersistedQueueError.make({ message, cause });
 
@@ -179,8 +177,12 @@ const make = Effect.fnUntraced(function* (options?: {
     Effect.mapError(queueError("Failed to release persisted queue items of an earlier owner")),
   );
 
-  const settle = (sequence: number, update: Effect.Effect<unknown, SqlError.SqlError>) =>
-    update.pipe(
+  const settle = (
+    sequence: number,
+    update: (at: number) => Effect.Effect<unknown, SqlError.SqlError>,
+  ) =>
+    Clock.currentTimeMillis.pipe(
+      Effect.flatMap(update),
       // A finalizer cannot fail. The row stays claimed by this process and is released on restart.
       Effect.tapCause((cause) =>
         Effect.logError("Failed to settle a persisted queue item", { sequence, cause }),
@@ -191,8 +193,8 @@ const make = Effect.fnUntraced(function* (options?: {
   const markFailed = (sequence: number, cause: Cause.Cause<unknown>) =>
     settle(
       sequence,
-      sql`UPDATE persisted_queue_items
-          SET state = 'failed', acquired_by = NULL, last_failure = ${failureSummary(cause)}, updated_at = ${now()}
+      (at) => sql`UPDATE persisted_queue_items
+          SET state = 'failed', acquired_by = NULL, last_failure = ${failureSummary(cause)}, updated_at = ${at}
           WHERE sequence = ${sequence} AND acquired_by = ${worker}`,
     );
 
@@ -202,7 +204,7 @@ const make = Effect.fnUntraced(function* (options?: {
     readonly retryDelay: (attempts: number) => Effect.Effect<Duration.Duration>;
   }) =>
     Effect.gen(function* () {
-      const at = now();
+      const at = yield* Clock.currentTimeMillis;
       // An earlier owner may have crashed during the final attempt; no finalizer will settle it.
       yield* sql`UPDATE persisted_queue_items
           SET state = 'failed', last_failure = COALESCE(last_failure, 'Crashed after final attempt'), updated_at = ${at}
@@ -227,15 +229,15 @@ const make = Effect.fnUntraced(function* (options?: {
                 Complete: () =>
                   settle(
                     row.sequence,
-                    sql`UPDATE persisted_queue_items
-                  SET state = 'completed', acquired_by = NULL, updated_at = ${now()}
+                    (at) => sql`UPDATE persisted_queue_items
+                  SET state = 'completed', acquired_by = NULL, updated_at = ${at}
                   WHERE sequence = ${row.sequence} AND acquired_by = ${worker}`,
                   ),
                 Release: () =>
                   settle(
                     row.sequence,
-                    sql`UPDATE persisted_queue_items
-                  SET acquired_by = NULL, attempts = attempts - 1, updated_at = ${now()}
+                    (at) => sql`UPDATE persisted_queue_items
+                  SET acquired_by = NULL, attempts = attempts - 1, updated_at = ${at}
                   WHERE sequence = ${row.sequence} AND acquired_by = ${worker}`,
                   ),
                 DeadLetter: ({ cause }) => markFailed(row.sequence, cause),
@@ -243,9 +245,9 @@ const make = Effect.fnUntraced(function* (options?: {
                   Effect.flatMap(options.retryDelay(row.attempts), (delay) =>
                     settle(
                       row.sequence,
-                      sql`UPDATE persisted_queue_items
-                    SET acquired_by = NULL, visible_at = ${now() + Duration.toMillis(delay)},
-                        last_failure = ${failureSummary(cause)}, updated_at = ${now()}
+                      (at) => sql`UPDATE persisted_queue_items
+                    SET acquired_by = NULL, visible_at = ${at + Duration.toMillis(delay)},
+                        last_failure = ${failureSummary(cause)}, updated_at = ${at}
                     WHERE sequence = ${row.sequence} AND acquired_by = ${worker}`,
                     ),
                   ),
@@ -269,7 +271,7 @@ const make = Effect.fnUntraced(function* (options?: {
     offer: ({ name, id, element, delay }) =>
       Effect.gen(function* () {
         const json = yield* Schema.encodeEffect(JsonElement)(element);
-        const at = now();
+        const at = yield* Clock.currentTimeMillis;
         yield* sql`INSERT OR IGNORE INTO persisted_queue_items
             (queue_name, id, element_json, state, attempts, visible_at, created_at, updated_at)
             VALUES (${name}, ${id}, ${json}, 'pending', 0, ${delay === undefined ? at : at + Duration.toMillis(delay)}, ${at}, ${at})`;
@@ -300,8 +302,11 @@ const make = Effect.fnUntraced(function* (options?: {
                   ),
                 ),
               onNone: () =>
-                nextVisible(options.name, options.maxAttempts).pipe(
-                  Effect.flatMap((next) =>
+                Effect.all([
+                  nextVisible(options.name, options.maxAttempts),
+                  Clock.currentTimeMillis,
+                ]).pipe(
+                  Effect.flatMap(([next, at]) =>
                     restore(
                       Effect.race(
                         latch.await,
@@ -309,7 +314,7 @@ const make = Effect.fnUntraced(function* (options?: {
                           Duration.millis(
                             next === null
                               ? pollMillis
-                              : Math.min(pollMillis, Math.max(0, next - now())),
+                              : Math.min(pollMillis, Math.max(0, next - at)),
                           ),
                         ),
                       ),
@@ -329,7 +334,7 @@ const make = Effect.fnUntraced(function* (options?: {
 
     cleanup: ({ timeToLive, failedTimeToLive }) =>
       Effect.gen(function* () {
-        const at = now();
+        const at = yield* Clock.currentTimeMillis;
         yield* sql`DELETE FROM persisted_queue_items
             WHERE state = 'completed' AND updated_at <= ${at - Duration.toMillis(timeToLive)}`;
         yield* Effect.transposeOption(
@@ -405,16 +410,18 @@ const make = Effect.fnUntraced(function* (options?: {
         refuse(PersistedQueueItemsReason.cases.NotFound.make({})),
       );
       return yield* Match.value(found.state).pipe(
-        Match.when("failed", () => {
+        Match.when("failed", () =>
           // Status and update run back to back on the single owner connection.
-          const at = now();
-          return sql`UPDATE persisted_queue_items
+          Clock.currentTimeMillis.pipe(
+            Effect.flatMap(
+              (at) => sql`UPDATE persisted_queue_items
               SET state = 'pending', attempts = 0, visible_at = ${at}, last_failure = NULL, updated_at = ${at}
-              WHERE queue_name = ${name} AND id = ${id} AND state = 'failed'`.pipe(
+              WHERE queue_name = ${name} AND id = ${id} AND state = 'failed'`,
+            ),
             Effect.mapError(itemsError("requeue")),
             Effect.andThen(nudge(name)),
-          );
-        }),
+          ),
+        ),
         Match.whenOr("pending", "completed", (state) =>
           Effect.fail(refuse(PersistedQueueItemsReason.cases.NotDeadLettered.make({ state }))),
         ),
