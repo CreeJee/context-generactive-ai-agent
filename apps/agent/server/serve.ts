@@ -220,11 +220,12 @@ export function serve(options: ServeOptions) {
   });
 
   if (development !== null) {
-    for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const)
+    (["SIGINT", "SIGTERM", "SIGHUP"] as const).forEach((signal) =>
       process.once(signal, () => {
         development.beginDrain();
         server.close();
-      });
+      }),
+    );
   }
 
   // Node owns the listening server; the startup callback subscription ends with the handshake.

@@ -19,7 +19,7 @@ import { ndJsonStream } from "@agentclientprotocol/sdk";
 import { defaultStorageRoot } from "memory-agent";
 import { createAppApi, startAcpAgent } from "memory-agent/acp";
 import { SdkStreams } from "memory-agent/acp";
-import { Cause, Context, Exit, Layer, Scope, Stream } from "effect";
+import { Cause, Context, Exit, Layer, MutableRef, Scope, Stream } from "effect";
 import * as build from "#server-build";
 import {
   isThisApp,
@@ -192,10 +192,9 @@ if (folderArgument === "acp") {
   const backendScope = Scope.makeUnsafe();
   const closeBackend = () => runNativeEffect(Scope.close(backendScope, Exit.void));
   await runNativeEffect(Scope.addFinalizer(backendScope, Effect.promise(releaseStorageLock)));
-  let stopping = false;
+  const stopping = MutableRef.make(false);
   const shutdown = () => {
-    if (stopping) return;
-    stopping = true;
+    if (MutableRef.getAndSet(stopping, true)) return;
     void closeBackend().finally(() => process.exit(0));
   };
   // The dev script holds stdin open and never writes to it. Its end, or a failed read, means the
@@ -204,15 +203,21 @@ if (folderArgument === "acp") {
     Effect.exit,
   );
   if (commandLine.devBackend) void nodePlatform.runPromise(devScriptGone).then(shutdown);
-  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-    process.once(signal, shutdown);
-    await runNativeEffect(
-      Scope.addFinalizer(
-        backendScope,
-        Effect.sync(() => process.off(signal, shutdown)),
-      ),
-    );
-  }
+  await runNativeEffect(
+    Effect.forEach(
+      ["SIGINT", "SIGTERM", "SIGHUP"] as const,
+      (signal) =>
+        Effect.sync(() => process.once(signal, shutdown)).pipe(
+          Effect.andThen(
+            Scope.addFinalizer(
+              backendScope,
+              Effect.sync(() => process.off(signal, shutdown)),
+            ),
+          ),
+        ),
+      { discard: true },
+    ),
+  );
   const beforeExit = () => void closeBackend();
   process.once("beforeExit", beforeExit);
   await runNativeEffect(

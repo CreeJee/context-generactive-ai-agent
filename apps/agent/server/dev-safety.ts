@@ -8,7 +8,17 @@ import { Hex } from "effect/encoding";
 import { nativeFailure } from "memory-agent/native-effect";
 import { nodePlatform } from "memory-agent/node-platform";
 import { path as hostPath } from "memory-agent/synchronous-path";
-import { DateTime, Match, Option, Schema, Scope, Exit, Cause } from "effect";
+import {
+  Array as Arr,
+  DateTime,
+  Match,
+  MutableRef,
+  Option,
+  Schema,
+  Scope,
+  Exit,
+  Cause,
+} from "effect";
 
 const { join, resolve } = hostPath;
 
@@ -36,13 +46,15 @@ const fingerprintFiles = Effect.fn("dev.fingerprintFiles")(function* (
       return basename(path).includes(".test.") ? [] : [path];
     case "Directory": {
       const entries = yield* fs.readDirectory(path).pipe(Effect.orDie);
-      const results: string[] = [];
-      for (const entry of entries) {
-        const child = join(path, entry);
-        if (Option.isSome(yield* fs.readLink(child).pipe(Effect.option))) continue;
-        results.push(...(yield* fingerprintFiles(child)));
-      }
-      return results;
+      const results = yield* Effect.forEach(
+        entries,
+        Effect.fnUntraced(function* (entry) {
+          const child = join(path, entry);
+          if (Option.isSome(yield* fs.readLink(child).pipe(Effect.option))) return [];
+          return yield* fingerprintFiles(child);
+        }),
+      );
+      return results.flat();
     }
     default:
       return [];
@@ -53,27 +65,25 @@ const fingerprint = Effect.fn("dev.fingerprint")(function* (appRoot: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const crypto = yield* Crypto.Crypto;
-  const files: string[] = [];
-  for (const watched of developmentBackendWatchPaths(appRoot))
-    files.push(...(yield* fingerprintFiles(watched)));
+  const files = (yield* Effect.forEach(
+    developmentBackendWatchPaths(appRoot),
+    fingerprintFiles,
+  )).flat();
   files.sort();
   const encoder = new TextEncoder();
   const delimiter = encoder.encode("\\0");
-  const chunks: Uint8Array[] = [];
-  for (const file of files) {
-    chunks.push(
+  const chunks = (yield* Effect.forEach(files, (file) =>
+    Effect.map(fs.readFile(file), (content) => [
       encoder.encode(path.relative(appRoot, file)),
       delimiter,
-      yield* fs.readFile(file),
+      content,
       delimiter,
-    );
-  }
-  const input = new Uint8Array(chunks.reduce((size, chunk) => size + chunk.byteLength, 0));
-  let offset = 0;
-  for (const chunk of chunks) {
-    input.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
+    ]),
+  )).flat();
+  // Each chunk starts where the ones before it end; the last offset is the whole size.
+  const offsets = Arr.scan(chunks, 0, (offset, chunk) => offset + chunk.byteLength);
+  const input = new Uint8Array(Arr.lastNonEmpty(offsets));
+  Arr.zip(chunks, offsets).forEach(([chunk, offset]) => input.set(chunk, offset));
   return Hex.encode(yield* crypto.digest("SHA-256", input)).slice(0, 24);
 });
 
@@ -116,14 +126,14 @@ export function createDevelopmentBoundary({
   readonly buildId: string;
   readonly instanceId: string;
 }): DevelopmentBoundary {
-  let isDraining = false;
+  const isDraining = MutableRef.make(false);
   return {
     buildId,
     instanceId,
     startedAt: DateTime.formatIso(DateTime.nowUnsafe()),
-    draining: () => isDraining,
+    draining: () => MutableRef.get(isDraining),
     beginDrain: () => {
-      isDraining = true;
+      MutableRef.set(isDraining, true);
     },
   };
 }
