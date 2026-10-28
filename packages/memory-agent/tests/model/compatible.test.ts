@@ -1,6 +1,6 @@
 import { it } from "@effect/vitest";
 // Native fetch fixtures implement the compatible endpoint the model sends to.
-import { Effect, Logger, Option, Predicate, References, Schema, Stream } from "effect";
+import { Effect, Logger, MutableRef, Option, Predicate, References, Schema, Stream } from "effect";
 import { Prompt, Tool } from "effect/ai";
 import { describe, expect } from "vite-plus/test";
 import type { JsonValue } from "../../src/json.ts";
@@ -331,10 +331,14 @@ describe("compatible language model", () => {
         [[chunk({ content: "odd" }, "paused")], "Provider finish_reason: paused"],
         [[{ error: { message: "model crashed" } }], "model crashed"],
       ] as const;
-      for (const [events, message] of cases) {
-        const { error } = yield* failureOf(options(endpointOf(streamOf(events))));
-        expect(error.message).toContain(message);
-      }
+      yield* Effect.forEach(
+        cases,
+        ([events, message]) =>
+          Effect.map(failureOf(options(endpointOf(streamOf(events)))), ({ error }) =>
+            expect(error.message).toContain(message),
+          ),
+        { discard: true },
+      );
     }),
   );
 
@@ -377,10 +381,10 @@ describe("compatible language model", () => {
 
   it.effect("aborts the request when the stream is interrupted", () =>
     Effect.gen(function* () {
-      let signal: AbortSignal | undefined;
+      const signal = MutableRef.make<AbortSignal | undefined>(undefined);
       const model = yield* compatibleModel(
         options((_url, init) => {
-          signal = init?.signal ?? undefined;
+          MutableRef.set(signal, init?.signal ?? undefined);
           return Promise.resolve(openStream(chunk({ content: "partial" })));
         }),
       );
@@ -390,7 +394,7 @@ describe("compatible language model", () => {
           .pipe(Stream.takeUntil((part) => part.type === "text-delta")),
       );
       expect(parts.map((part) => part.type)).toEqual(["text-start", "text-delta"]);
-      expect(signal?.aborted).toBe(true);
+      expect(MutableRef.get(signal)?.aborted).toBe(true);
     }),
   );
 });

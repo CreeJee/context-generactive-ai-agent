@@ -1,6 +1,6 @@
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { it } from "@effect/vitest";
-import { Context, Effect, FileSystem, Layer, Path } from "effect";
+import { Context, Effect, FileSystem, Layer, MutableRef, Path } from "effect";
 import { SqlClient } from "effect/sql";
 import { describe, expect } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
@@ -69,11 +69,11 @@ describe("GoalExecution workflow", () => {
     withGoalExecutions(() =>
       Effect.gen(function* () {
         const goals = yield* GoalExecutions;
-        let binds = 0;
+        const binds = MutableRef.make(0);
         const admitted = yield* goals.admitAndStart(
           payload,
           Effect.sync((): Admission => {
-            binds += 1;
+            MutableRef.increment(binds);
             return Admission.bound({ binding });
           }),
         );
@@ -98,7 +98,7 @@ describe("GoalExecution workflow", () => {
             outcome: "completed",
           }),
         );
-        expect(binds).toBe(1);
+        expect(MutableRef.get(binds)).toBe(1);
       }),
     ),
   );
@@ -109,36 +109,30 @@ describe("GoalExecution workflow", () => {
       withGoalExecutions(() =>
         Effect.gen(function* () {
           const goals = yield* GoalExecutions;
-          let binds = 0;
-          yield* goals.admitAndStart(
-            payload,
-            Effect.sync((): Admission => {
-              binds += 1;
-              return Admission.bound({ binding });
+          const binds = MutableRef.make(0);
+          const bind = Effect.sync((): Admission => {
+            MutableRef.increment(binds);
+            return Admission.bound({ binding });
+          });
+          yield* goals.admitAndStart(payload, bind);
+          yield* Effect.forEach(
+            [
+              { ownerId: "project-2", generation: "generation-1" },
+              { ownerId: "project-1", generation: "generation-2" },
+            ],
+            Effect.fnUntraced(function* (owner) {
+              const changedOwner: GoalExecutionPayload = {
+                ...payload,
+                identity: { ...payload.identity, owner },
+              };
+              const failure = yield* goals.admitAndStart(changedOwner, bind).pipe(Effect.flip);
+              expect(failure).toEqual(
+                GoalExecutionAdmissionRefused.make({ reason: "owner_mismatch" }),
+              );
             }),
+            { discard: true },
           );
-          for (const owner of [
-            { ownerId: "project-2", generation: "generation-1" },
-            { ownerId: "project-1", generation: "generation-2" },
-          ]) {
-            const changedOwner: GoalExecutionPayload = {
-              ...payload,
-              identity: { ...payload.identity, owner },
-            };
-            const failure = yield* goals
-              .admitAndStart(
-                changedOwner,
-                Effect.sync((): Admission => {
-                  binds += 1;
-                  return Admission.bound({ binding });
-                }),
-              )
-              .pipe(Effect.flip);
-            expect(failure).toEqual(
-              GoalExecutionAdmissionRefused.make({ reason: "owner_mismatch" }),
-            );
-          }
-          expect(binds).toBe(1);
+          expect(MutableRef.get(binds)).toBe(1);
           expect(yield* sqlGet("SELECT count(*) AS n FROM owner_workflow_executions")).toEqual({
             n: 1,
           });

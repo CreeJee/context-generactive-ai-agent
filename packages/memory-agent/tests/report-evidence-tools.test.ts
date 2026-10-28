@@ -103,17 +103,22 @@ describe("report evidence tools", () => {
   it.effect("cannot read other sessions, projects or arbitrary ids", () =>
     Effect.gen(function* () {
       const { invoke } = yield* fixture;
-      for (const [section, id] of [
-        ["run", "other-run"],
-        ["approval", "2"],
-        ["approval", "1xyz"],
-        ["node", "other-node"],
-        ["node", "foreign-node"],
-        ["trace", "foreign-task"],
-        ["node", "unknown"],
-      ]) {
-        expect(yield* invoke("read_report_item", { section, id })).toEqual({ error: "not_found" });
-      }
+      yield* Effect.forEach(
+        [
+          ["run", "other-run"],
+          ["approval", "2"],
+          ["approval", "1xyz"],
+          ["node", "other-node"],
+          ["node", "foreign-node"],
+          ["trace", "foreign-task"],
+          ["node", "unknown"],
+        ],
+        ([section, id]) =>
+          Effect.map(invoke("read_report_item", { section, id }), (result) =>
+            expect(result).toEqual({ error: "not_found" }),
+          ),
+        { discard: true },
+      );
       expect(
         yield* Effect.flip(invoke("list_report_evidence", { section: "calls", offset: 201 })),
       ).toBeInstanceOf(Schema.SchemaError);
@@ -128,11 +133,13 @@ describe("report evidence tools", () => {
         db.prepare(
           'UPDATE nodes SET detail = \'{"toolCallId":"call-1","ok":false}\' WHERE id = \'result\'',
         ).run();
-        for (let i = 0; i < 15; i++) {
-          db.prepare(
-            "INSERT INTO nodes(id,seq,session_id,project_id,kind,created_at,text,detail) VALUES (?,?, 'source','p','tool_result','2026-01-06','recent success','{\"ok\":true}')",
-          ).run(`success-${i}`, 10 + i);
-        }
+        Array.from({ length: 15 }, (_, i) => i).forEach((i) =>
+          db
+            .prepare(
+              "INSERT INTO nodes(id,seq,session_id,project_id,kind,created_at,text,detail) VALUES (?,?, 'source','p','tool_result','2026-01-06','recent success','{\"ok\":true}')",
+            )
+            .run(`success-${i}`, 10 + i),
+        );
         db.prepare(
           "INSERT INTO nodes(id,seq,session_id,project_id,kind,created_at,text,detail) VALUES ('failed',0,'source','p','tool_result','2026-01-01','old failed output','{\"ok\":false}')",
         ).run();

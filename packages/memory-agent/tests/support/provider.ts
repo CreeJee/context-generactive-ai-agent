@@ -11,7 +11,17 @@ import {
   scriptedSource,
   shownScriptedFailure,
 } from "../../src/testing/scripted-model.ts";
-import { Cause, Deferred, Function, MutableHashMap, Option, Effect, Layer, Schema } from "effect";
+import {
+  Cause,
+  Deferred,
+  Function,
+  MutableHashMap,
+  MutableRef,
+  Option,
+  Effect,
+  Layer,
+  Schema,
+} from "effect";
 import type { StoredMessage } from "../../src/chat-store/schema.ts";
 import {
   GlobalConfig,
@@ -58,14 +68,10 @@ const lastUserText = (messages: ReadonlyArray<StoredMessage>) =>
   messageText(
     messages.findLast((message) => message.role === "user") ?? { role: "user", content: "" },
   );
-const trailingTools = (messages: ReadonlyArray<StoredMessage>) => {
-  const tools: ToolMessage[] = [];
-  for (const message of messages.toReversed()) {
-    if (!isToolMessage(message)) break;
-    tools.unshift(message);
-  }
-  return tools;
-};
+const trailingTools = (messages: ReadonlyArray<StoredMessage>) =>
+  messages
+    .slice(messages.findLastIndex((message) => !isToolMessage(message)) + 1)
+    .filter(isToolMessage);
 const toolText = (message: ToolMessage) =>
   Schema.is(Schema.String)(message.content) ? message.content : JSON.stringify(message.content);
 const call = (id: string, name: string, args: Json): ScriptedTurn => ({
@@ -301,10 +307,11 @@ export const selectTestModel = Effect.fn("selectTestModel")(function* (
 });
 
 export function testProvider(options: TestProviderOptions = {}): TestProvider {
-  let auth: AuthConnectionState =
+  const auth = MutableRef.make<AuthConnectionState>(
     options.signedIn === false
       ? AuthConnectionState["signed-out"]({ provider: "openai" })
-      : AuthConnectionState["signed-in"]({ provider: "openai" });
+      : AuthConnectionState["signed-in"]({ provider: "openai" }),
+  );
   const responder = options.responder ?? defaultTestResponder;
   const respond = Effect.fn("testProvider.responder")((invocation: ScriptedInvocation) =>
     Effect.try({
@@ -336,13 +343,13 @@ export function testProvider(options: TestProviderOptions = {}): TestProvider {
         provider: "openai" as const,
         auth: {
           provider: "openai" as const,
-          status: Effect.sync(() => auth),
-          connect: Effect.sync(
-            () => (auth = AuthConnectionState["signed-in"]({ provider: "openai" })),
+          status: Effect.sync(() => MutableRef.get(auth)),
+          connect: Effect.sync(() =>
+            MutableRef.setAndGet(auth, AuthConnectionState["signed-in"]({ provider: "openai" })),
           ),
-          cancel: Effect.sync(() => auth),
-          disconnect: Effect.sync(
-            () => (auth = AuthConnectionState["signed-out"]({ provider: "openai" })),
+          cancel: Effect.sync(() => MutableRef.get(auth)),
+          disconnect: Effect.sync(() =>
+            MutableRef.setAndGet(auth, AuthConnectionState["signed-out"]({ provider: "openai" })),
           ),
         },
         models: {

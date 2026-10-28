@@ -47,7 +47,7 @@ const turnOf =
   (text, onUpdate) =>
     Effect.sync(() => {
       sent.push(text);
-      for (const update of updates) onUpdate(update);
+      updates.forEach(onUpdate);
       return outcome;
     });
 
@@ -102,8 +102,8 @@ describe("external agent model", () => {
   );
 
   it.effect("fails with the turn failure when the agent did not answer", () =>
-    Effect.gen(function* () {
-      for (const [outcome, failure] of [
+    Effect.forEach(
+      [
         [
           ExternalPromptOutcome.failed({
             failure: { code: "agent_error", detail: "agent text" },
@@ -120,14 +120,16 @@ describe("external agent model", () => {
           ExternalPromptOutcome.disconnected({ answer: "", toolCalls: [] }),
           { code: "disconnected", detail: null },
         ],
-      ] as const) {
-        const error = yield* Effect.flip(partsOf(options(turnOf([], outcome))));
-        expect(Option.getOrUndefined(externalFailure(error))).toStrictEqual(
-          ExternalAgentTurnFailed.make(failure),
-        );
-        expect(error.reason).toMatchObject({ description: failure.detail ?? failure.code });
-      }
-    }),
+      ] as const,
+      ([outcome, failure]) =>
+        Effect.map(Effect.flip(partsOf(options(turnOf([], outcome)))), (error) => {
+          expect(Option.getOrUndefined(externalFailure(error))).toStrictEqual(
+            ExternalAgentTurnFailed.make(failure),
+          );
+          expect(error.reason).toMatchObject({ description: failure.detail ?? failure.code });
+        }),
+      { discard: true },
+    ),
   );
 
   it.effect("fails with the rejection's message when the turn rejected", () =>

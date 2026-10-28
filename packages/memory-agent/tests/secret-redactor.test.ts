@@ -72,7 +72,12 @@ describe("SecretRedactor", () => {
           ['password: "hunter2hunter2"', 'password: "[redacted:credential]"'],
           ["api_key = 'ak-99887766'", "api_key = '[redacted:credential]'"],
         ] as const;
-        for (const [input, expected] of cases) expect((yield* redact(input)).text).toBe(expected);
+        yield* Effect.forEach(
+          cases,
+          ([input, expected]) =>
+            Effect.map(redact(input), (redacted) => expect(redacted.text).toBe(expected)),
+          { discard: true },
+        );
       }),
   );
 
@@ -90,7 +95,12 @@ describe("SecretRedactor", () => {
         "apiKey: config.apiKey,",
         "The token limit is 2048 and the secret is to batch.",
       ];
-      for (const text of untouched) expect(yield* redact(text)).toEqual({ text, hidden: 0 });
+      yield* Effect.forEach(
+        untouched,
+        (text) =>
+          Effect.map(redact(text), (redacted) => expect(redacted).toEqual({ text, hidden: 0 })),
+        { discard: true },
+      );
     }),
   );
 
@@ -212,7 +222,11 @@ describe("SecretRedactor", () => {
     Effect.gen(function* () {
       // secretlint's profiler would add about 60 marks per check, and nothing ever clears them.
       const before = performance.getEntriesByType("mark").length;
-      for (let i = 0; i < 20; i++) yield* redact(`line ${i} GITHUB_TOKEN=${fake.github}`);
+      yield* Effect.forEach(
+        Array.from({ length: 20 }, (_, i) => `line ${i} GITHUB_TOKEN=${fake.github}`),
+        redact,
+        { discard: true },
+      );
       yield* Effect.sleep(10);
       expect(performance.getEntriesByType("mark").length).toBe(before);
     }),

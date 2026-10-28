@@ -153,8 +153,14 @@ it.live(
             const second = yield* pinned(fresh, "run-1");
             const legacy = yield* pinned(compatibility, "run-2");
             requests.length = 0;
-            for (const { model } of [first, second, legacy])
-              expect((yield* model.generateText({ prompt: "hello" })).text).toBe("reply");
+            yield* Effect.forEach(
+              [first, second, legacy],
+              ({ model }) =>
+                Effect.map(model.generateText({ prompt: "hello" }), (reply) =>
+                  expect(reply.text).toBe("reply"),
+                ),
+              { discard: true },
+            );
             expect(requests).toEqual(["Bearer first", "Bearer second", "Bearer second"]);
             expect(created).toEqual(["first", "second"]);
             expect(yield* profiles.inUse("openai", "first")).toBe(true);
@@ -201,12 +207,16 @@ it.live(
         const unavailable = Effect.gen(function* () {
           const registry = yield* ProviderRegistry;
           expect(registry.providers).toEqual([]);
-          for (const provider of ["openai", "anthropic"] as const) {
-            const missing = yield* Effect.result(registry.subscriptionDependencies!(provider));
-            expect(Result.isFailure(missing) && missing.failure).toEqual(
-              ProviderUnavailable.make({ provider }),
-            );
-          }
+          yield* Effect.forEach(
+            ["openai", "anthropic"] as const,
+            (provider) =>
+              Effect.map(Effect.result(registry.subscriptionDependencies!(provider)), (missing) =>
+                expect(Result.isFailure(missing) && missing.failure).toEqual(
+                  ProviderUnavailable.make({ provider }),
+                ),
+              ),
+            { discard: true },
+          );
         });
         // Test entry point owns this Layer and its resource scope.
         yield* unavailable.pipe(
@@ -218,16 +228,19 @@ it.live(
         const storage = yield* temporary;
         yield* Effect.gen(function* () {
           const registry = yield* ProviderRegistry;
-          for (const provider of registry.providers) {
-            if (!Schema.is(SubscriptionAccountProvider)(provider)) continue;
-            const dependencies = yield* registry.subscriptionDependencies!(provider);
-            const runtime = yield* registry.runtime(provider);
-            expect(
-              createSubscriptionRuntimeImplementation(provider)
-                .bind(dependencies)
-                .contextWindow("unknown"),
-            ).toBe(runtime.contextWindow("unknown"));
-          }
+          yield* Effect.forEach(
+            registry.providers.filter(Schema.is(SubscriptionAccountProvider)),
+            Effect.fnUntraced(function* (provider) {
+              const dependencies = yield* registry.subscriptionDependencies!(provider);
+              const runtime = yield* registry.runtime(provider);
+              expect(
+                createSubscriptionRuntimeImplementation(provider)
+                  .bind(dependencies)
+                  .contextWindow("unknown"),
+              ).toBe(runtime.contextWindow("unknown"));
+            }),
+            { discard: true },
+          );
         }).pipe(
           // Test entry point owns this Layer and its resource scope.
           Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {

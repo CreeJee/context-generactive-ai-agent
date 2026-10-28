@@ -11,8 +11,7 @@ const block = 512;
 
 /** A gzipped ustar archive of regular files, byte-for-byte what `tar -czf` would give a reader. */
 export function tgz(entries: readonly TarEntry[]): Buffer {
-  const parts: Buffer[] = [];
-  for (const entry of entries) {
+  const parts = entries.flatMap((entry) => {
     const content = Buffer.from(entry.content);
     const header = Buffer.alloc(block);
     const field = (offset: number, length: number, value: string) =>
@@ -29,11 +28,9 @@ export function tgz(entries: readonly TarEntry[]): Buffer {
     field(156, 1, "0");
     field(257, 6, "ustar\0");
     field(263, 2, "00");
-    let sum = 0;
-    for (const byte of header) sum += byte;
+    const sum = header.reduce((total, byte) => total + byte, 0);
     field(148, 8, `${sum.toString(8).padStart(6, "0")}\0 `);
-    parts.push(header, content, Buffer.alloc((block - (content.length % block)) % block));
-  }
-  parts.push(Buffer.alloc(block * 2));
-  return gzipSync(Buffer.concat(parts));
+    return [header, content, Buffer.alloc((block - (content.length % block)) % block)];
+  });
+  return gzipSync(Buffer.concat([...parts, Buffer.alloc(block * 2)]));
 }
