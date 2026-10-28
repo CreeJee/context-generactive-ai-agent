@@ -1,5 +1,6 @@
 import {
   Clock,
+  Deferred,
   Duration,
   Effect,
   Exit,
@@ -152,7 +153,8 @@ const makeEngine = Effect.gen(function* () {
   const clocks = yield* FiberMap.make<string>();
   const deferredState = WorkflowEngine.makeDeferredState();
 
-  let engine: WorkflowEngine.WorkflowEngine["Service"];
+  // A run is given the engine it is part of, which is made after the steps that start runs.
+  const engineMade = yield* Deferred.make<WorkflowEngine.WorkflowEngine["Service"]>();
 
   const registered = (workflowName: string): Effect.Effect<RegisteredWorkflow> =>
     Effect.map(Ref.get(workflows), HashMap.get(workflowName)).pipe(
@@ -233,7 +235,7 @@ const makeEngine = Effect.gen(function* () {
     yield* defect("execution.running", () => storage.setRunning(executionId));
 
     const run = entry.execute(state.payload, executionId).pipe(
-      Effect.provideService(WorkflowEngine.WorkflowEngine, engine),
+      Effect.provideServiceEffect(WorkflowEngine.WorkflowEngine, Deferred.await(engineMade)),
       (effect) => deferredState.trackRun(instance, effect),
       Effect.tap((result) =>
         Effect.andThen(
@@ -308,7 +310,7 @@ const makeEngine = Effect.gen(function* () {
       Effect.asVoid,
     );
 
-  engine = WorkflowEngine.makeUnsafe({
+  const engine = WorkflowEngine.makeUnsafe({
     register: Effect.fnUntraced(function* <A, E>(
       workflow: Workflow.Any,
       execute: (
@@ -475,6 +477,7 @@ const makeEngine = Effect.gen(function* () {
         });
       }),
   });
+  yield* Deferred.succeed(engineMade, engine);
 
   yield* Effect.forEach(yield* defect("clock.pending", () => storage.pendingClocks), armClock, {
     discard: true,

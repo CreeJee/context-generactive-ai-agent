@@ -1,4 +1,12 @@
-import { Array as EffectArray, Data, Effect, Function as EffectFunction, Schema } from "effect";
+import {
+  Array as EffectArray,
+  Data,
+  Effect,
+  Function as EffectFunction,
+  HashSet,
+  Option,
+  Schema,
+} from "effect";
 import { stepProgressStatus, type CardStatus, type StepProgressStatus } from "./card.ts";
 import type { PlanStep } from "./workflow.ts";
 
@@ -47,25 +55,40 @@ export function planDependencyIssues(
 
   const edges = knownDependencies(steps);
   const dependencies = new Map(steps.map((step) => [step.id, edges(step)]));
-  // Depth-first search; every back edge closes one reported cycle.
-  const cycles: PlanDependencyIssue[] = [];
-  const finished = new Set<string>();
-  const path: string[] = [];
-  const visit = (id: string) => {
-    path.push(id);
-    for (const next of dependencies.get(id) ?? []) {
-      const index = path.indexOf(next);
-      if (index >= 0)
-        cycles.push(
-          PlanDependencyIssue.cases.DependencyCycle.make({ cycle: [...path.slice(index), next] }),
-        );
-      else if (!finished.has(next)) visit(next);
-    }
-    path.pop();
-    finished.add(id);
+  // Depth-first search; every back edge closes one reported cycle. A Plan is small, so the
+  // search recurses as deep as its longest dependency chain.
+  const visit = (search: CycleSearch, id: string, path: ReadonlyArray<string>): CycleSearch => {
+    const along = EffectArray.append(path, id);
+    const searched = EffectArray.reduce(dependencies.get(id) ?? [], search, (search, next) =>
+      Option.match(
+        EffectArray.findFirstIndex(along, (onPath) => onPath === next),
+        {
+          onSome: (index) => ({
+            ...search,
+            cycles: EffectArray.append(
+              search.cycles,
+              PlanDependencyIssue.cases.DependencyCycle.make({
+                cycle: [...along.slice(index), next],
+              }),
+            ),
+          }),
+          onNone: () => (HashSet.has(search.finished, next) ? search : visit(search, next, along)),
+        },
+      ),
+    );
+    return { ...searched, finished: HashSet.add(searched.finished, id) };
   };
-  for (const id of dependencies.keys()) if (!finished.has(id)) visit(id);
+  const unsearched: CycleSearch = { cycles: [], finished: HashSet.empty() };
+  const { cycles } = EffectArray.reduce([...dependencies.keys()], unsearched, (search, id) =>
+    HashSet.has(search.finished, id) ? search : visit(search, id, []),
+  );
   return [...duplicates, ...references, ...cycles];
+}
+
+/** The cycles found so far, and the steps whose dependencies are all searched. */
+interface CycleSearch {
+  readonly cycles: ReadonlyArray<PlanDependencyIssue>;
+  readonly finished: HashSet.HashSet<string>;
 }
 
 /** Plan saves reject dependency defects; persisted Plans are only read through planSchedule. */
