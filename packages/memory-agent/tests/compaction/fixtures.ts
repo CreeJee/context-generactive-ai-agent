@@ -1,4 +1,4 @@
-import { Cause, Effect, Function as EffectFunction } from "effect";
+import { Cause, Effect, Function as EffectFunction, Option } from "effect";
 import {
   requestHistory,
   type Budget,
@@ -60,48 +60,58 @@ export const conversation: {
 
 function conversationBody(nodes: Nodes["Service"], at: ConversationAt, answers: readonly string[]) {
   return Effect.gen(function* () {
-    const userNodes: Node[] = [];
-    const messages: StoredMessage[] = [];
     const toolOutput = "테스트 결과 ".repeat(200);
-    let toolResult: Node | null = null;
-    for (const [index, answer] of answers.entries()) {
-      const question = `질문 ${index + 1}`;
-      userNodes.push(yield* nodes.append({ ...at, kind: "user", text: question }));
-      messages.push({ role: "user", content: question });
-      if (index === 0) {
-        yield* nodes.append({
-          ...at,
-          kind: "tool_call",
-          text: 'run_shell {"command":"pnpm test"}',
-          detail: { toolName: "run_shell", toolCallId: "old-1" },
-        });
-        toolResult = yield* nodes.append({
-          ...at,
-          kind: "tool_result",
-          text: toolOutput,
-          detail: { toolName: "run_shell", toolCallId: "old-1", ok: true },
-        });
-        messages.push(
+    const usedTool = Effect.andThen(
+      nodes.append({
+        ...at,
+        kind: "tool_call",
+        text: 'run_shell {"command":"pnpm test"}',
+        detail: { toolName: "run_shell", toolCallId: "old-1" },
+      }),
+      nodes.append({
+        ...at,
+        kind: "tool_result",
+        text: toolOutput,
+        detail: { toolName: "run_shell", toolCallId: "old-1", ok: true },
+      }),
+    );
+    const toolMessages: StoredMessage[] = [
+      {
+        role: "assistant",
+        content: null,
+        toolCalls: [
           {
-            role: "assistant",
-            content: null,
-            toolCalls: [
-              {
-                id: "old-1",
-                type: "function",
-                function: { name: "run_shell", arguments: '{"command":"pnpm test"}' },
-              },
-            ],
+            id: "old-1",
+            type: "function",
+            function: { name: "run_shell", arguments: '{"command":"pnpm test"}' },
           },
-          { role: "tool", toolCallId: "old-1", content: toolOutput },
-        );
-      }
-      yield* nodes.append({ ...at, kind: "assistant", text: answer });
-      messages.push({ role: "assistant", content: answer });
-    }
+        ],
+      },
+      { role: "tool", toolCallId: "old-1", content: toolOutput },
+    ];
+    const turns = yield* Effect.forEach(
+      answers,
+      Effect.fnUntraced(function* (answer, index) {
+        const question = `질문 ${index + 1}`;
+        const userNode = yield* nodes.append({ ...at, kind: "user", text: question });
+        const toolResult = yield* Effect.when(usedTool, Effect.succeed(index === 0));
+        yield* nodes.append({ ...at, kind: "assistant", text: answer });
+        const messages: StoredMessage[] = [
+          { role: "user", content: question },
+          ...(Option.isSome(toolResult) ? toolMessages : []),
+          { role: "assistant", content: answer },
+        ];
+        return { userNode, toolResult, messages };
+      }),
+    );
     const last = `질문 ${answers.length + 1}`;
-    userNodes.push(yield* nodes.append({ ...at, kind: "user", text: last }));
-    messages.push({ role: "user", content: last });
-    return { userNodes, messages, toolOutput, toolResult: toolResult! };
+    const lastNode = yield* nodes.append({ ...at, kind: "user", text: last });
+    const userNodes: Node[] = [...turns.map((turn) => turn.userNode), lastNode];
+    const messages: StoredMessage[] = [
+      ...turns.flatMap((turn) => turn.messages),
+      { role: "user", content: last },
+    ];
+    const toolResult = Option.getOrThrow(Option.firstSomeOf(turns.map((turn) => turn.toolResult)));
+    return { userNodes, messages, toolOutput, toolResult };
   });
 }

@@ -1,26 +1,23 @@
 import { it } from "@effect/vitest";
-import { Effect, Exit, Scope } from "effect";
+import { Effect, Exit, Option, Scope, Stream } from "effect";
+import { identity } from "effect/Function";
 import { TestClock } from "effect/testing";
 import { describe, expect } from "vite-plus/test";
 import { makeAppEvents } from "../src/events/app-events.ts";
 
-const readFrames = Effect.fnUntraced(function* (options: { response: Response; count: number }) {
-  return yield* Effect.acquireUseRelease(
-    Effect.sync(() => options.response.body!.getReader()),
-    (reader) =>
-      Effect.gen(function* () {
-        const decoder = new TextDecoder();
-        let text = "";
-        while (text.split("\n\n").filter(Boolean).length < options.count) {
-          const next = yield* Effect.promise(() => reader.read());
-          if (next.done) break;
-          text += decoder.decode(next.value, { stream: true });
-        }
-        return text;
-      }),
-    (reader) => Effect.promise(() => reader.cancel()),
+// Reads until the response holds `count` frames or ends; the stream cancels its reader when done.
+const readFrames = (options: { response: Response; count: number }) =>
+  Stream.fromReadableStream({ evaluate: () => options.response.body!, onError: identity }).pipe(
+    Stream.orDie,
+    Stream.decodeText(),
+    Stream.scan(
+      () => "",
+      (text, chunk) => text + chunk,
+    ),
+    Stream.takeUntil((text) => text.split("\n\n").filter(Boolean).length >= options.count),
+    Stream.runLast,
+    Effect.map(Option.getOrElse(() => "")),
   );
-});
 
 describe("AppEvents", () => {
   it.effect("closes a stream when its request aborts", () =>

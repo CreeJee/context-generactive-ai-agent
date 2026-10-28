@@ -1,5 +1,5 @@
 import { NodeServices, NodeWorker, NodeWorkerRunner } from "@effect/platform-node";
-import { Context, Effect, FileSystem, Layer, Schema } from "effect";
+import { Context, Effect, FileSystem, Layer, MutableRef, Schema } from "effect";
 import { Rpc, RpcClient, RpcGroup, RpcServer } from "effect/rpc";
 import { Worker, isMainThread } from "node:worker_threads";
 import { createReadFixture } from "../../src/memory/native-search/read-fixture.ts";
@@ -28,7 +28,7 @@ if (!isMainThread) {
         initializeNodeSqlite(addon.addonPath);
         initializeNodeSqlite(addon.addonPath);
         const index = new binding.VectorIndex(384, 4);
-        for (let i = 0; i < reads; i++) {
+        Array.from({ length: reads }, (_, i) => i).forEach((i) => {
           const reader = new binding.MemoryReadSession(path);
           const control = new binding.SearchControl(`lock-${i}`, "lock", "lock", String(i), 5_000);
           try {
@@ -59,7 +59,7 @@ if (!isMainThread) {
             reader.close();
             control.close();
           }
-        }
+        });
         return reads;
       }),
   });
@@ -87,10 +87,12 @@ if (!isMainThread) {
           ),
         );
         const client = yield* RpcClient.make(Reader).pipe(Effect.provide(protocol));
-        let writes = 0;
+        const writes = MutableRef.make(0);
         const write = Effect.sync(() => {
-          writer.exec(`BEGIN; UPDATE nodes SET text = 'write-${writes}' WHERE seq = 1; COMMIT;`);
-          writes++;
+          writer.exec(
+            `BEGIN; UPDATE nodes SET text = 'write-${MutableRef.get(writes)}' WHERE seq = 1; COMMIT;`,
+          );
+          MutableRef.increment(writes);
         }).pipe(
           Effect.andThen(
             Effect.callback<void>((resume) => {
@@ -113,7 +115,7 @@ if (!isMainThread) {
               writes: Schema.Int,
             }),
           ),
-        )({ status: "passed", reads: completed, writes });
+        )({ status: "passed", reads: completed, writes: MutableRef.get(writes) });
         process.stdout.write(report + "\n");
       }),
     ),

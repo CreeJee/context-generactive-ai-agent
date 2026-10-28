@@ -103,13 +103,17 @@ testAgent({ testProvider: { delayedTurnGate: slowTurn.waitFor } })(
     it.effect("new Goal turns automatically acquire a durable binding", () =>
       Effect.gen(function* () {
         const session = yield* withGoal;
-        for (const runId of [`${session}:automatic`, `${session}:another-automatic`]) {
-          const events = yield* eventsOf(yield* post(session, runId));
-          expect(streamedText(events)).toContain("Hello from fast-1");
-          expect(yield* sqlGet("SELECT status FROM chat_runs WHERE run_id = ?", runId)).toEqual({
-            status: "completed",
-          });
-        }
+        yield* Effect.forEach(
+          [`${session}:automatic`, `${session}:another-automatic`],
+          Effect.fnUntraced(function* (runId) {
+            const events = yield* eventsOf(yield* post(session, runId));
+            expect(streamedText(events)).toContain("Hello from fast-1");
+            expect(yield* sqlGet("SELECT status FROM chat_runs WHERE run_id = ?", runId)).toEqual({
+              status: "completed",
+            });
+          }),
+          { discard: true },
+        );
         expect(yield* count("nodes WHERE session_id = ? AND kind = 'user'", session)).toEqual({
           n: 2,
         });
@@ -228,16 +232,15 @@ testAgent({ testProvider: {} })("Goal chat run binding across reopen", (it) => {
         expect(yield* Stream.runCollect(yield* join(session, runId, firstOffset))).toEqual(
           delivered.slice(1),
         );
-        for (const badOffset of [
-          "memory:v1:wrong:1",
-          "sdk-stream:v1:wrong:1",
-          `sdk-stream:v1:${runId}:99999999`,
-          "now",
-        ]) {
-          expect(yield* Effect.flip(join(session, runId, badOffset))).toEqual({
-            error: "invalid_stream_offset",
-          });
-        }
+        yield* Effect.forEach(
+          ["memory:v1:wrong:1", "sdk-stream:v1:wrong:1", `sdk-stream:v1:${runId}:99999999`, "now"],
+          Effect.fnUntraced(function* (badOffset) {
+            expect(yield* Effect.flip(join(session, runId, badOffset))).toEqual({
+              error: "invalid_stream_offset",
+            });
+          }),
+          { discard: true },
+        );
         const other = yield* env.use(freshSession);
         expect(yield* Effect.flip(join(other, runId, firstOffset))).toEqual({
           error: "run_not_found",

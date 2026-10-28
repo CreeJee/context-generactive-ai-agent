@@ -14,7 +14,7 @@ function owner(path: string) {
   const sqlite = new DatabaseSync(path);
   sqlite.exec("PRAGMA foreign_keys = ON");
   if (!isTruthy(sqlite.prepare("SELECT name FROM sqlite_master WHERE name = 'projects'").get())) {
-    for (const migration of migrations) sqlite.exec(migration);
+    migrations.forEach((migration) => sqlite.exec(migration));
     sqlite.exec(`
       INSERT INTO projects (id, root, name, created_at) VALUES ('project', '/test', 'test', 'now');
       INSERT INTO sessions (id, project_id, created_at) VALUES ('session', 'project', 'now');
@@ -58,10 +58,15 @@ describe("central SQLite run log", () => {
         });
         yield* log.append(lifecycle("RUN_STARTED"));
         const [first] = yield* Stream.runCollect(Stream.take(log.read("-1"), 1));
-        for (const resumeOffset of ["1", "sdk-stream:v1:other:1"])
-          expect(yield* Effect.flip(runLog(db, { ...binding, resumeOffset }))).toMatchObject({
-            reason: "invalid_offset",
-          });
+        yield* Effect.forEach(
+          ["1", "sdk-stream:v1:other:1"],
+          Effect.fnUntraced(function* (resumeOffset) {
+            expect(yield* Effect.flip(runLog(db, { ...binding, resumeOffset }))).toMatchObject({
+              reason: "invalid_offset",
+            });
+          }),
+          { discard: true },
+        );
         yield* log.close;
         yield* log.close;
         expect(yield* Effect.flip(log.append(lifecycle("RUN_FINISHED")))).toMatchObject({

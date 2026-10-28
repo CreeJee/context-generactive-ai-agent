@@ -1,6 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import { assertTrue } from "@effect/vitest/utils";
-import { Deferred, Effect, Cause, Exit, Fiber, Stream } from "effect";
+import { Deferred, Effect, Cause, Exit, Fiber, MutableRef, Stream } from "effect";
 import { gitNames } from "../src/files/git-grep.ts";
 import { searchTextFilesEffect } from "../src/files/search.ts";
 import { PathRejected } from "../src/files/paths.ts";
@@ -47,8 +47,8 @@ it.effect(
 it.effect("finishing a page interrupts all pending read-ahead work", () =>
   Effect.gen(function* () {
     const started = yield* Deferred.make<void>();
-    let active = 0;
-    let finished = 0;
+    const active = MutableRef.make(0);
+    const finished = MutableRef.make(0);
     const page = yield* searchTextFilesEffect({
       paths: Array.from({ length: 5 }, (_, index) => String(index)),
       query: "match",
@@ -62,19 +62,22 @@ it.effect("finishing a page interrupts all pending read-ahead work", () =>
           : Effect.gen(function* () {
               yield* Effect.addFinalizer(() =>
                 Effect.sync(() => {
-                  active--;
-                  finished++;
+                  MutableRef.decrement(active);
+                  MutableRef.increment(finished);
                 }),
               );
-              active++;
-              if (active === 4) yield* Deferred.succeed(started, undefined);
+              const running = MutableRef.incrementAndGet(active);
+              yield* Effect.when(
+                Deferred.succeed(started, undefined),
+                Effect.succeed(running === 4),
+              );
               return yield* Effect.never;
             }),
     });
     expect(page.matches).toHaveLength(100);
     expect(page.next).toEqual({ file: 0, line: 100 });
-    expect(active).toBe(0);
-    expect(finished).toBe(4);
+    expect(MutableRef.get(active)).toBe(0);
+    expect(MutableRef.get(finished)).toBe(4);
   }),
 );
 

@@ -46,8 +46,11 @@ const seed = Effect.fnUntraced(function* (count: number) {
     content: `Message ${ordinal}`,
   }));
   yield* sqlRun("INSERT INTO chat_threads VALUES(?, ?, ?)", "a", encodeJson(messages), 1);
-  for (const [ordinal, message] of messages.entries())
-    yield* sqlRun(sql.insertGroup, "a", ordinal, message.id, encodeJson([message]));
+  yield* Effect.forEach(
+    messages,
+    (message, ordinal) => sqlRun(sql.insertGroup, "a", ordinal, message.id, encodeJson([message])),
+    { discard: true },
+  );
   yield* sqlRun(sql.publish, "a");
 });
 
@@ -170,11 +173,15 @@ describe("Effect history projection reader boundary", () => {
             request.initial.make({ threadId: "a", limit: Infinity }, unchecked),
             request.older.make({ threadId: "a", limit: 3, before: "" }, unchecked),
           ];
-          for (const input of inputs) {
-            const failure = yield* reader.read(input).pipe(Effect.flip);
-            expect(failure).toBeInstanceOf(HistoryProjectionReadFailed);
-            expect(failure.reason).toEqual(readReason.InvalidRequest.make({}));
-          }
+          yield* Effect.forEach(
+            inputs,
+            Effect.fnUntraced(function* (input) {
+              const failure = yield* reader.read(input).pipe(Effect.flip);
+              expect(failure).toBeInstanceOf(HistoryProjectionReadFailed);
+              expect(failure.reason).toEqual(readReason.InvalidRequest.make({}));
+            }),
+            { discard: true },
+          );
         }),
       ),
   );

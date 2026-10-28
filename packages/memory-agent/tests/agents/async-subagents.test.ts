@@ -200,12 +200,17 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
       expect(yield* send(sessionId, `review-batch ${yield* encodeJson(attempts)}`)).toBe(
         "Used both reviewed reports.",
       );
-      for (const attempt of attempts)
-        expect(
-          (yield* trace.taskDetail(sessionId, attempt.taskId))?.answerClaims.flatMap(
-            (claim) => claim.sources,
-          ),
-        ).toContainEqual(attempt);
+      yield* Effect.forEach(
+        attempts,
+        Effect.fnUntraced(function* (attempt) {
+          expect(
+            (yield* trace.taskDetail(sessionId, attempt.taskId))?.answerClaims.flatMap(
+              (claim) => claim.sources,
+            ),
+          ).toContainEqual(attempt);
+        }),
+        { discard: true },
+      );
     }),
   );
 
@@ -318,8 +323,9 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
           sessionId,
         ),
       );
-      for (let index = 1; index < runs.length; index++)
-        expect(runs[index]!.started_at).toBeGreaterThanOrEqual(runs[index - 1]!.finished_at);
+      runs.slice(1).forEach((run, index) => {
+        expect(run.started_at).toBeGreaterThanOrEqual(runs[index]!.finished_at);
+      });
       expect(yield* userNodes(sessionId)).toBe(2);
     }),
   );

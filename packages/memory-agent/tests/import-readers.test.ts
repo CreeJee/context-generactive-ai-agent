@@ -142,10 +142,11 @@ describe("Claude Code transcripts", () => {
       "[Request interrupted by user for tool use]",
       "This session is being continued from a previous conversation that ran out of context.",
     ];
-    for (const text of injected)
+    injected.forEach((text) => {
       expect(kinds(claudeLine({ ...userLine, message: { role: "user", content: text } }))).toEqual([
         "session",
       ]);
+    });
   });
 
   test("strips system reminders from around a statement", () => {
@@ -284,7 +285,7 @@ describe("Codex rollouts", () => {
       "# AGENTS.md instructions for /Users/someone/work/api",
       "The following is the Codex agent history whose request action you are answering.",
     ];
-    for (const [index, text] of injected.entries())
+    injected.forEach((text, index) => {
       expect(
         codexLine({
           timestamp: "2026-09-02T01:00:07.000Z",
@@ -293,6 +294,7 @@ describe("Codex rollouts", () => {
           payload: { type: "message", role: "user", content: [{ type: "input_text", text }] },
         }),
       ).toEqual([]);
+    });
   });
 
   test("ignores reasoning and the CLI's own events", () => {

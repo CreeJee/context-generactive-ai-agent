@@ -35,12 +35,16 @@ const project = Effect.fn("fileToolsTest.project")(function* (
   );
   const root = path.join(base, "project");
   yield* fs.makeDirectory(root);
-  for (const [relative, content] of files) {
-    const target = path.join(root, relative);
-    yield* fs.makeDirectory(path.dirname(target), { recursive: true });
-    if (isText(content)) yield* fs.writeFileString(target, content);
-    else yield* fs.writeFile(target, content);
-  }
+  yield* Effect.forEach(
+    files,
+    Effect.fnUntraced(function* ([relative, content]) {
+      const target = path.join(root, relative);
+      yield* fs.makeDirectory(path.dirname(target), { recursive: true });
+      if (isText(content)) yield* fs.writeFileString(target, content);
+      else yield* fs.writeFile(target, content);
+    }),
+    { discard: true },
+  );
   return { base, root };
 });
 const fileTools = Effect.fn("fileToolsTest.tools")(function* (root: string) {
@@ -118,8 +122,9 @@ describe("list_files", () => {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const files = MutableHashMap.fromIterable([["node_modules/pkg/index.js", "x"]]);
-      for (let index = 0; index < 510; index++)
-        MutableHashMap.set(files, `notes/${String(index).padStart(3, "0")}.md`, "note\n");
+      Array.from({ length: 510 }, (_, index) => index).forEach((index) =>
+        MutableHashMap.set(files, `notes/${String(index).padStart(3, "0")}.md`, "note\n"),
+      );
       const { root } = yield* project(files);
       const { listFiles } = yield* fileTools(root);
       const first = yield* Schema.decodeUnknownEffect(ListPage)(yield* listFiles({}));

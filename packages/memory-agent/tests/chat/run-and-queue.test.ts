@@ -139,8 +139,9 @@ testAgent({ testProvider: { responder: gatedResponder } })("chat runs", (it) => 
       yield* until(() => session.invocations().length === 1, "the provider run to start");
       const running = yield* statusOf(session.id);
       expect(running.running).not.toBeNull();
-      for (const decision of Object.values(running.actions.phases))
+      Object.values(running.actions.phases).forEach((decision) => {
         expect(decision).toEqual({ allowed: false, reason: "run_in_progress" });
+      });
       expect(running.actions.controls.resume).toEqual({
         allowed: false,
         reason: "run_in_progress",
@@ -216,14 +217,18 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
       const second = yield* queue.add(sessionId, "second", [], false);
       expect((yield* queue.claimNext(sessionId))?.id).toBe(first.id);
       expect(yield* queue.claimNext(sessionId)).toBeNull();
-      for (const change of [
-        queue.edit(sessionId, first.id, "draft"),
-        queue.save(sessionId, first.id, "changed"),
-        queue.remove(sessionId, first.id),
-        queue.confirm(sessionId, first.id),
-      ]) {
-        expect(yield* Effect.flip(change)).toMatchObject({ reason: "reserved" });
-      }
+      yield* Effect.forEach(
+        [
+          queue.edit(sessionId, first.id, "draft"),
+          queue.save(sessionId, first.id, "changed"),
+          queue.remove(sessionId, first.id),
+          queue.confirm(sessionId, first.id),
+        ],
+        Effect.fnUntraced(function* (change) {
+          expect(yield* Effect.flip(change)).toMatchObject({ reason: "reserved" });
+        }),
+        { discard: true },
+      );
       expect((yield* queue.get(sessionId, first.id))?.text).toBe("first");
       yield* queue.releaseNext(sessionId, "wrong-id");
       expect(yield* queue.claimNext(sessionId)).toBeNull();

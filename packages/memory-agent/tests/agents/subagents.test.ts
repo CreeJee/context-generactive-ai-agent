@@ -95,15 +95,16 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
         expect(parentStart?.system.join("\n")).toContain("ROOT INSTRUCTIONS FOR EVERY AGENT");
         expect(childStart?.system.join("\n")).toContain("ROOT INSTRUCTIONS FOR EVERY AGENT");
         // No nesting, and nothing the parent does not have.
-        for (const tool of [
+        [
           "run_subagent",
           "update_goal",
           "update_plan",
           "update_workflow_progress",
           "record_workflow_blocker",
           "delegate_to_agent",
-        ])
+        ].forEach((tool) => {
           expect(childStart?.toolNames).not.toContain(tool);
+        });
         expect(childStart?.system.some((prompt) => prompt.includes("Current workflow"))).toBe(
           false,
         );
@@ -286,14 +287,19 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
         (yield* reviews.latest(sessionId, `subagent-${children[1]!.id}:call-shell`))?.decision,
       ).toBe("denied");
       // Both calls ended: the approved one settled, the denied one never started.
-      for (const child of children)
-        expect(
-          yield* sqlGet(
-            `SELECT a.pending_tool_call_ids FROM agent_run_attempts a
+      yield* Effect.forEach(
+        children,
+        Effect.fnUntraced(function* (child) {
+          expect(
+            yield* sqlGet(
+              `SELECT a.pending_tool_call_ids FROM agent_run_attempts a
                JOIN work_tasks t ON t.id = a.task_id WHERE t.agent_id = ?`,
-            child.id,
-          ),
-        ).toEqual({ pending_tool_call_ids: "[]" });
+              child.id,
+            ),
+          ).toEqual({ pending_tool_call_ids: "[]" });
+        }),
+        { discard: true },
+      );
     }),
   );
 
