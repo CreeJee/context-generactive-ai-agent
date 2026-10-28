@@ -66,26 +66,26 @@ export const CompatibleRequestFailedReason = Schema.TaggedUnion({
 export type CompatibleRequestFailedReason = typeof CompatibleRequestFailedReason.Type;
 const reasons = CompatibleRequestFailedReason.cases;
 
-export class CompatibleRequestFailed extends Schema.TaggedError<CompatibleRequestFailed>()(
-  "CompatibleRequestFailed",
-  {
-    operation: Schema.Literals([
-      "list",
-      "create",
-      "connect",
-      "rename",
-      "save-model",
-      "remove-model",
-      "select",
-      "remove",
-      "test",
-      "discover",
-    ]),
-    status: Schema.Finite,
-    reason: CompatibleRequestFailedReason,
-    message: Schema.String,
-  },
-) {}
+export class CompatibleRequestFailed extends Schema.TaggedError<
+  CompatibleRequestFailed,
+  { readonly brand: unique symbol }
+>()("CompatibleRequestFailed", {
+  operation: Schema.Literals([
+    "list",
+    "create",
+    "connect",
+    "rename",
+    "save-model",
+    "remove-model",
+    "select",
+    "remove",
+    "test",
+    "discover",
+  ]),
+  status: Schema.Finite,
+  reason: CompatibleRequestFailedReason,
+  message: Schema.String,
+}) {}
 
 type WithoutProvider<T> = T extends unknown ? Omit<T, "provider"> : never;
 /** A compatible-endpoint command that changes accounts; each answers with the complete list. */

@@ -1,7 +1,7 @@
 import { Array as EffectArray, HashSet, Option } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { NodeCrypto } from "@effect/platform-node";
-import { Context, Crypto, Effect, Layer, Match, Schema } from "effect";
+import { Context, Crypto, Effect, Layer, Match, Ref, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { edgeWeights, type EdgeKind } from "../memory/edges.ts";
 import { hasStatementText } from "../memory/quality.ts";
@@ -29,7 +29,10 @@ export interface MigrationCount {
 }
 
 /** A migrated conversation could not be written; nothing of that piece was kept. */
-export class BulkWriteFailed extends Schema.TaggedError<BulkWriteFailed>()("BulkWriteFailed", {
+export class BulkWriteFailed extends Schema.TaggedError<
+  BulkWriteFailed,
+  { readonly brand: unique symbol }
+>()("BulkWriteFailed", {
   cause: Schema.Defect(),
 }) {}
 
@@ -87,9 +90,15 @@ const make = Effect.gen(function* () {
       WHERE source = ${source} AND external_id = ${externalId}`,
   });
 
-  const link = (fromId: string, toId: string, kind: EdgeKind, at: string) =>
-    sql`INSERT INTO edges VALUES (${fromId}, ${toId}, ${kind}, 'structure', ${edgeWeights[kind]},
-      ${at}) ON CONFLICT DO NOTHING`;
+  /** An edge between two nodes; none while an end is unknown (nothing before it, a call unseen). */
+  const link = (fromId: string | null, toId: string | null, kind: EdgeKind, at: string) =>
+    Option.match(Option.all([Option.fromNullishOr(fromId), Option.fromNullishOr(toId)]), {
+      onNone: () => Effect.void,
+      onSome: ([from, to]) =>
+        Effect.asVoid(sql`INSERT INTO edges
+          VALUES (${from}, ${to}, ${kind}, 'structure', ${edgeWeights[kind]}, ${at})
+          ON CONFLICT DO NOTHING`),
+    });
 
   /**
    * Writes one conversation as nodes, keeping the times the other tool recorded. This is the bulk
@@ -101,11 +110,13 @@ const make = Effect.gen(function* () {
       const { source, projectId, sessionId } = migration;
       // Resuming mid-transcript (a later pass, or the next piece of a long one) must continue the
       // turn it stopped in, so the state comes from the session rather than from this batch.
-      let previousId = yield* idOf(lastInSession(sessionId));
-      let userNodeId = yield* idOf(lastUser(sessionId));
-      let assistantNodeId = yield* idOf(answerInOpenTurn(sessionId));
-      let written = 0;
-      let repeated = 0;
+      const previousId = yield* Ref.make(yield* idOf(lastInSession(sessionId)));
+      /** The user node of the open turn, and the answer it has so far. */
+      const turn = yield* Ref.make({
+        user: yield* idOf(lastUser(sessionId)),
+        assistant: yield* idOf(answerInOpenTurn(sessionId)),
+      });
+      const written = yield* Ref.make(0);
 
       const append = Effect.fnUntraced(function* (
         kind: NodeKind,
@@ -117,7 +128,10 @@ const make = Effect.gen(function* () {
         const id = yield* crypto.randomUUIDv4();
         // A user turn opens its own run, and what answers it joins that run. `history.ts` groups a
         // transcript by run id, so this is what makes a migrated conversation render as turns.
-        const runId = kind === "user" ? `imported:${id}` : `imported:${userNodeId ?? sessionId}`;
+        const runId =
+          kind === "user"
+            ? `imported:${id}`
+            : `imported:${(yield* Ref.get(turn)).user ?? sessionId}`;
         yield* sql`INSERT INTO nodes ${sql.insert({
           id,
           project_id: projectId,
@@ -128,16 +142,17 @@ const make = Effect.gen(function* () {
           detail: yield* encodeDetail({ ...detail, importedFrom: source }),
           created_at: at,
         })}`;
-        if (isTruthy(previousId)) yield* link(previousId, id, "next", at);
-        previousId = id;
+        yield* link(yield* Ref.getAndSet(previousId, id), id, "next", at);
         // An empty answer is not a statement; interpreting it would cost a model call for nothing.
         if (migration.interpret && HashSet.has(interpretedKinds, kind) && hasStatementText(text))
           yield* sql`INSERT INTO interpret_jobs (node_id, status, updated_at)
             VALUES (${id}, 'pending', ${at})`;
-        if (externalId !== null)
-          yield* sql`INSERT INTO imported_nodes (source, external_id, node_id)
-            VALUES (${source}, ${externalId}, ${id}) ON CONFLICT DO NOTHING`;
-        written += 1;
+        yield* Effect.when(
+          sql`INSERT INTO imported_nodes (source, external_id, node_id)
+            VALUES (${source}, ${externalId}, ${id}) ON CONFLICT DO NOTHING`,
+          Effect.succeed(externalId !== null),
+        );
+        yield* Ref.update(written, (count) => count + 1);
         return id;
       });
 
@@ -147,60 +162,86 @@ const make = Effect.gen(function* () {
        * node the live recorder writes in that case, so both look alike to `trace_evidence`.
        */
       const assistantFor = Effect.fnUntraced(function* (at: string) {
-        if (isTruthy(assistantNodeId)) return assistantNodeId;
+        const open = yield* Ref.get(turn);
+        if (isTruthy(open.assistant)) return open.assistant;
         const id = yield* append("assistant", "", at, null, {});
-        if (isTruthy(userNodeId)) yield* link(id, userNodeId, "reply", at);
-        assistantNodeId = id;
+        yield* link(id, open.user, "reply", at);
+        yield* Ref.set(turn, { user: open.user, assistant: id });
         return id;
       });
 
-      for (const item of migration.items) {
-        if (TranscriptItem.$is("session")(item) || TranscriptItem.$is("ignored")(item)) continue;
-        if (Option.isSome(yield* alreadyImported({ source, externalId: item.externalId }))) {
-          repeated += 1;
-          continue;
-        }
-        yield* Match.valueTags(item, {
+      /** Writes an item unless its line already became a node; those only count as repeated. */
+      const once = <E, R>(externalId: string, writeItem: Effect.Effect<void, E, R>) =>
+        Effect.flatMap(
+          alreadyImported({ source, externalId }),
+          Option.match({
+            onSome: () => Effect.succeed(true),
+            onNone: () => Effect.as(writeItem, false),
+          }),
+        );
+
+      const repeats = yield* Effect.forEach(migration.items, (item) =>
+        Match.valueTags(item, {
+          session: () => Effect.succeed(false),
+          ignored: () => Effect.succeed(false),
           message: (item) =>
-            Effect.gen(function* () {
-              const id = yield* append(item.role, item.text, item.at, item.externalId, {});
-              if (item.role === "user") {
-                userNodeId = id;
-                assistantNodeId = null;
-                return;
-              }
-              if (isTruthy(userNodeId)) yield* link(id, userNodeId, "reply", item.at);
-              assistantNodeId = id;
-            }),
+            once(
+              item.externalId,
+              Effect.gen(function* () {
+                const id = yield* append(item.role, item.text, item.at, item.externalId, {});
+                const { user } = yield* Ref.get(turn);
+                // A user message opens a turn; an answer replies to the turn's user message.
+                yield* item.role === "user"
+                  ? Ref.set(turn, { user: id, assistant: null })
+                  : Effect.andThen(
+                      link(id, user, "reply", item.at),
+                      Ref.set(turn, { user, assistant: id }),
+                    );
+              }),
+            ),
           tool_call: (item) =>
-            Effect.gen(function* () {
-              const calledBy = yield* assistantFor(item.at);
-              const id = yield* append("tool_call", item.text, item.at, item.externalId, {
-                toolName: item.toolName,
-                toolCallId: item.toolCallId,
-              });
-              yield* link(calledBy, id, "calls", item.at);
-              for (const ref of EffectArray.dedupe(item.refs)) {
-                const earlier = yield* idOf(latestWithRef({ ref, projectId }));
-                yield* sql`INSERT INTO node_refs VALUES (${id}, ${ref}) ON CONFLICT DO NOTHING`;
-                if (isTruthy(earlier)) yield* link(id, earlier, "touches", item.at);
-              }
-            }),
+            once(
+              item.externalId,
+              Effect.gen(function* () {
+                const calledBy = yield* assistantFor(item.at);
+                const id = yield* append("tool_call", item.text, item.at, item.externalId, {
+                  toolName: item.toolName,
+                  toolCallId: item.toolCallId,
+                });
+                yield* link(calledBy, id, "calls", item.at);
+                yield* Effect.forEach(
+                  EffectArray.dedupe(item.refs),
+                  (ref) =>
+                    Effect.gen(function* () {
+                      const earlier = yield* idOf(latestWithRef({ ref, projectId }));
+                      yield* sql`INSERT INTO node_refs VALUES (${id}, ${ref}) ON CONFLICT DO NOTHING`;
+                      yield* link(id, earlier, "touches", item.at);
+                    }),
+                  { discard: true },
+                );
+              }),
+            ),
           tool_result: (item) =>
-            Effect.gen(function* () {
-              const called = Option.getOrNull(
-                yield* callNode({ sessionId, toolCallId: item.toolCallId }),
-              );
-              const id = yield* append("tool_result", item.text, item.at, item.externalId, {
-                toolName: called?.tool_name ?? undefined,
-                toolCallId: item.toolCallId,
-                ok: item.ok,
-              });
-              if (isTruthy(called)) yield* link(called.id, id, "returns", item.at);
-            }),
-        });
-      }
-      return { written, repeated } satisfies MigrationCount;
+            once(
+              item.externalId,
+              Effect.gen(function* () {
+                const called = Option.getOrNull(
+                  yield* callNode({ sessionId, toolCallId: item.toolCallId }),
+                );
+                const id = yield* append("tool_result", item.text, item.at, item.externalId, {
+                  toolName: called?.tool_name ?? undefined,
+                  toolCallId: item.toolCallId,
+                  ok: item.ok,
+                });
+                yield* link(called?.id ?? null, id, "returns", item.at);
+              }),
+            ),
+        }),
+      );
+      return {
+        written: yield* Ref.get(written),
+        repeated: repeats.filter((repeat) => repeat).length,
+      } satisfies MigrationCount;
     }).pipe(
       sql.withTransaction,
       Effect.mapError((cause) => BulkWriteFailed.make({ cause })),

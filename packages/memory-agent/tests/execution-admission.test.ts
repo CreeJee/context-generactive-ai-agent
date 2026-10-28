@@ -10,7 +10,6 @@ import {
 
 const limits: ExecutionAdmissionLimits = {
   workflow: { active: 1, queued: 1 },
-  worker: { active: 1, queued: 1 },
   model: { active: 1, queued: 1 },
   tool: { active: 1, queued: 1 },
 };

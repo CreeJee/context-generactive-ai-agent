@@ -24,8 +24,7 @@ function movedBody(
   if (!order.includes(item) || item === before) return order;
   const rest = order.filter((other) => other !== item);
   const at = before === null ? rest.length : rest.indexOf(before);
-  if (at < 0) return order;
-  return [...rest.slice(0, at), item, ...rest.slice(at)];
+  return at < 0 ? order : [...rest.slice(0, at), item, ...rest.slice(at)];
 }
 
 const SessionRow = Schema.Struct({ session_id: Schema.String });
@@ -80,22 +79,26 @@ const make = Effect.gen(function* () {
     ) {
       const current = yield* goals(projectId);
       const next = moved(current, sessionId, before);
-      if (next === current) return current;
-      const at = yield* now;
-      yield* sql
-        .withTransaction(
-          Effect.gen(function* () {
-            yield* sql`DELETE FROM kanban_goal_ranks WHERE project_id = ${projectId}`;
-            yield* Effect.forEach(
-              next,
-              (session, rank) => sql`INSERT INTO kanban_goal_ranks
-                (project_id, session_id, rank, updated_at)
-                VALUES (${projectId}, ${session}, ${rank}, ${at})`,
-              { discard: true },
-            );
-          }),
-        )
-        .pipe(Effect.mapError(failed));
+      yield* Effect.when(
+        now.pipe(
+          Effect.flatMap((at) =>
+            sql.withTransaction(
+              Effect.andThen(
+                sql`DELETE FROM kanban_goal_ranks WHERE project_id = ${projectId}`,
+                Effect.forEach(
+                  next,
+                  (session, rank) => sql`INSERT INTO kanban_goal_ranks
+                    (project_id, session_id, rank, updated_at)
+                    VALUES (${projectId}, ${session}, ${rank}, ${at})`,
+                  { discard: true },
+                ),
+              ),
+            ),
+          ),
+          Effect.mapError(failed),
+        ),
+        Effect.succeed(next !== current),
+      );
       return next;
     }),
 
@@ -106,21 +109,25 @@ const make = Effect.gen(function* () {
     ) {
       const current = yield* projects;
       const next = moved(current, projectId, before);
-      if (next === current) return current;
-      const at = yield* now;
-      yield* sql
-        .withTransaction(
-          Effect.gen(function* () {
-            yield* sql`DELETE FROM kanban_project_ranks`;
-            yield* Effect.forEach(
-              next,
-              (project, rank) => sql`INSERT INTO kanban_project_ranks
-                (project_id, rank, updated_at) VALUES (${project}, ${rank}, ${at})`,
-              { discard: true },
-            );
-          }),
-        )
-        .pipe(Effect.mapError(failed));
+      yield* Effect.when(
+        now.pipe(
+          Effect.flatMap((at) =>
+            sql.withTransaction(
+              Effect.andThen(
+                sql`DELETE FROM kanban_project_ranks`,
+                Effect.forEach(
+                  next,
+                  (project, rank) => sql`INSERT INTO kanban_project_ranks
+                    (project_id, rank, updated_at) VALUES (${project}, ${rank}, ${at})`,
+                  { discard: true },
+                ),
+              ),
+            ),
+          ),
+          Effect.mapError(failed),
+        ),
+        Effect.succeed(next !== current),
+      );
       return next;
     }),
   };

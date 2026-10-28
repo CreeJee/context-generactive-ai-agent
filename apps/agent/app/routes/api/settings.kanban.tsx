@@ -67,7 +67,7 @@ export function action({ request }: Route.ActionArgs) {
           }),
       });
       // Other windows' kanban settings show both values, so they read them again.
-      (yield* AppEvents).publishGlobal("kanban");
+      yield* (yield* AppEvents).publishGlobal("kanban");
       return yield* settings;
     }).pipe(answerKanbanFailures),
   );

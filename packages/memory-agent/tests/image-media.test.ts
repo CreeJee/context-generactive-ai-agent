@@ -1,6 +1,7 @@
 import { Schema } from "effect";
 import { it as effectTest } from "@effect/vitest";
-import { Effect, Result } from "effect";
+import { Crypto, Effect, MutableRef, Result } from "effect";
+import { withTestPlatform } from "./support/platform.ts";
 import {
   ImageExecutorModel,
   DirectImageExecutionFailed,
@@ -68,22 +69,23 @@ function attachmentStore(saved: Uint8Array[]) {
 describe("ImageMediaWorkflow", () => {
   effectTest.effect("requires explicit approval before paid execution", () =>
     Effect.gen(function* () {
-      let executions = 0;
+      const executions = MutableRef.make(0);
       const workflow = makeImageMediaWorkflow({
         feature: feature,
         router: router,
         executor: {
           generate: () => {
-            executions += 1;
+            MutableRef.increment(executions);
             return Effect.die("must not execute");
           },
         },
         attachments: attachmentStore([]),
+        crypto: yield* Crypto.Crypto,
       });
       const result = yield* Effect.result(workflow.generate({ ...request, approved: false }));
       expect(Result.isFailure(result) && result.failure).toBeInstanceOf(ImageMediaApprovalRequired);
-      expect(executions).toBe(0);
-    }),
+      expect(MutableRef.get(executions)).toBe(0);
+    }).pipe(withTestPlatform),
   );
 
   effectTest.effect(
@@ -105,6 +107,7 @@ describe("ImageMediaWorkflow", () => {
               }),
           },
           attachments: attachmentStore(saved),
+          crypto: yield* Crypto.Crypto,
         });
         const asset = yield* workflow.generate(request);
         expect(saved).toEqual([bytes]);
@@ -120,7 +123,7 @@ describe("ImageMediaWorkflow", () => {
         expect(
           yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(asset),
         ).not.toContain("base64");
-      }),
+      }).pipe(withTestPlatform),
   );
 
   effectTest.effect(
@@ -134,31 +137,32 @@ describe("ImageMediaWorkflow", () => {
           crossProviderConsentMode: "ask",
           crossProviderApprovalRequired: true,
         };
-        let mode: "disabled" | "ask" | "always" = "ask";
-        let executions = 0;
+        const mode = MutableRef.make<"disabled" | "ask" | "always">("ask");
+        const executions = MutableRef.make(0);
         const workflow = makeImageMediaWorkflow({
           feature: feature,
           router: { ...router, select: () => Effect.succeed(crossDecision) },
           executor: {
             generate: () => {
-              executions += 1;
+              MutableRef.increment(executions);
               return Effect.succeed({ bytes: Uint8Array.of(1), contentType: "image/png" });
             },
           },
           attachments: attachmentStore([]),
+          crypto: yield* Crypto.Crypto,
           catalog: undefined,
           crossProviderConsent: {
             read: Effect.succeed({ version: 1, pairs: {} }),
             decide: (pair) =>
-              Effect.succeed({
+              Effect.sync(() => ({
                 ...pair,
                 crossProvider: true,
-                mode,
-                allowedWithoutPrompt: mode === "always",
-                requiresApproval: mode === "ask",
+                mode: MutableRef.get(mode),
+                allowedWithoutPrompt: MutableRef.get(mode) === "always",
+                requiresApproval: MutableRef.get(mode) === "ask",
                 reasons: [],
                 settingsVersion: 1,
-              }),
+              })),
             set: () => Effect.die("unused"),
           },
         });
@@ -173,7 +177,7 @@ describe("ImageMediaWorkflow", () => {
           runId: approval.runId,
           crossProviderApproval: approval,
         });
-        expect(executions).toBe(1);
+        expect(MutableRef.get(executions)).toBe(1);
         const wrong = yield* Effect.result(
           workflow.generate({
             ...request,
@@ -182,15 +186,15 @@ describe("ImageMediaWorkflow", () => {
           }),
         );
         expect(Result.isFailure(wrong) && wrong.failure).toBeInstanceOf(ImageMediaApprovalRequired);
-        mode = "disabled";
+        MutableRef.set(mode, "disabled");
         const revoked = yield* Effect.result(
           workflow.generate({ ...request, runId: approval.runId, crossProviderApproval: approval }),
         );
         const unavailable = Result.isFailure(revoked) && revoked.failure;
         expect(unavailable).toBeInstanceOf(ImageMediaUnavailable);
         expect(unavailable).toMatchObject({ reason: "consent_disabled" });
-        expect(executions).toBe(1);
-      }),
+        expect(MutableRef.get(executions)).toBe(1);
+      }).pipe(withTestPlatform),
   );
 
   effectTest.effect("returns confirmation-required reroute evidence after execution failure", () =>
@@ -203,6 +207,7 @@ describe("ImageMediaWorkflow", () => {
             Effect.fail(DirectImageExecutionFailed.make({ reason: "provider_rejected" })),
         },
         attachments: attachmentStore([]),
+        crypto: yield* Crypto.Crypto,
       });
       const result = yield* Effect.result(workflow.generate(request));
       const failed = Result.isFailure(result) && result.failure;
@@ -210,6 +215,6 @@ describe("ImageMediaWorkflow", () => {
       const reroute = Schema.is(ImageMediaExecutionFailed)(failed) ? failed.reroute : undefined;
       expect(ImageRerouteConfirmation.$is("confirmation_required")(reroute)).toBe(true);
       expect(failed).toMatchObject({ reroute: { alternatives: [] } });
-    }),
+    }).pipe(withTestPlatform),
   );
 });

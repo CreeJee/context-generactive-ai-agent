@@ -27,6 +27,17 @@ export const emptyUserMessageMigration = `
 `;
 
 /**
+ * The step where startup moves the chat rows TanStack wrote to the shapes of
+ * `chat-store/schema.ts`. They are JSON that SQL alone cannot rewrite, so the work is
+ * `migrateTanStackRows`, which startup runs with this step (`db/database.ts`). A fixture that only
+ * runs the texts has no TanStack rows to move.
+ */
+export const tanStackRowsMigration = `
+  -- The chat rows TanStack wrote move to the Effect AI shapes (docs/effect-ai-migration.md, "DB
+  -- 저장 형식과 migration"); startup runs migrateTanStackRows with this step.
+`;
+
+/**
  * Ordered schema steps. `PRAGMA user_version` records how many have been applied.
  * Append new steps; never edit an applied one.
  */
@@ -1938,6 +1949,7 @@ export const migrations: readonly string[] = [
     WHEN NOT EXISTS (SELECT 1 FROM goal_history_purges WHERE session_id = OLD.session_id)
     BEGIN SELECT RAISE(ABORT, 'read recovery receipt is retained'); END;
   `,
+  tanStackRowsMigration,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

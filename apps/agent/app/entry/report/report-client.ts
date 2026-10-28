@@ -14,15 +14,15 @@ interface ReviewedReport {
   readonly evidence: ReportBundle | null;
 }
 
-export class ReportRequestFailed extends Schema.TaggedError<ReportRequestFailed>()(
-  "ReportRequestFailed",
-  {
-    operation: Schema.Literals(["session", "evidence", "diagnosis", "delivery"]),
-    phase: Schema.Literals(["transport", "status", "response"]),
-    /** Only the status code is kept from a rejected response; its body is never read. */
-    httpStatus: Schema.optional(Schema.Int),
-  },
-) {}
+export class ReportRequestFailed extends Schema.TaggedError<
+  ReportRequestFailed,
+  { readonly brand: unique symbol }
+>()("ReportRequestFailed", {
+  operation: Schema.Literals(["session", "evidence", "diagnosis", "delivery"]),
+  phase: Schema.Literals(["transport", "status", "response"]),
+  /** Only the status code is kept from a rejected response; its body is never read. */
+  httpStatus: Schema.optional(Schema.Int),
+}) {}
 
 /** What `/api/reports/delivery` accepts: a reviewed report to send, or the defect-report switch. */
 export const DeliveryCommand = Schema.TaggedUnion({

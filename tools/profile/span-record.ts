@@ -20,11 +20,12 @@ export type SpanRecord = typeof SpanRecord.Type;
 
 export const SpanLine = Schema.fromJsonString(SpanRecord);
 
-export const scalarAttributes = (entries: Iterable<readonly [string, unknown]>) => {
-  const kept: Record<string, number | boolean> = {};
-  for (const [key, value] of entries) if (isScalarAttribute(value)) kept[key] = value;
-  return kept;
-};
+export const scalarAttributes = (entries: Iterable<readonly [string, unknown]>) =>
+  Object.fromEntries(
+    Array.from(entries).flatMap(([key, value]) =>
+      isScalarAttribute(value) ? [[key, value] as const] : [],
+    ),
+  );
 
 export const nanosToMillis = (nanos: bigint) => Number(nanos / 1_000n) / 1_000;
 

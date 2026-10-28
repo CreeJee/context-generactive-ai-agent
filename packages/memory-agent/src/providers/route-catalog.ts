@@ -3,7 +3,8 @@ import {
   Clock,
   Function as EffectFunction,
   Predicate,
-  MutableHashMap,
+  Array as EffectArray,
+  HashMap,
   ConfigProvider,
   Option,
   Config,
@@ -29,8 +30,8 @@ import {
   type ProviderToolAuth,
   type ProviderToolCategory,
   type ProviderToolCost,
-  type ProviderToolId,
 } from "./tool-capabilities.ts";
+import type { ProviderToolId } from "./provider-tool-id.ts";
 
 export type RouteEvidenceStatus = "verified" | "unverified" | "unsupported";
 
@@ -114,29 +115,32 @@ export const RouteCatalogRefreshFailedReason = Schema.TaggedUnion({
   ProviderMismatch: {},
 });
 
-export class RouteCatalogRefreshFailed extends Schema.TaggedError<RouteCatalogRefreshFailed>()(
-  "RouteCatalogRefreshFailed",
-  {
-    provider: Schema.optionalKey(ProviderId),
-    operation: Schema.Literals(["provider", "auth", "models", "tools", "config"]),
-    reason: RouteCatalogRefreshFailedReason,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {}
+export class RouteCatalogRefreshFailed extends Schema.TaggedError<
+  RouteCatalogRefreshFailed,
+  { readonly brand: unique symbol }
+>()("RouteCatalogRefreshFailed", {
+  provider: Schema.optionalKey(ProviderId),
+  operation: Schema.Literals(["provider", "auth", "models", "tools", "config"]),
+  reason: RouteCatalogRefreshFailedReason,
+  cause: Schema.optional(Schema.Defect()),
+}) {}
 
-export class UnknownCatalogRoute extends Schema.TaggedError<UnknownCatalogRoute>()(
-  "UnknownCatalogRoute",
-  { routeType: Schema.Literals(["chat", "media", "execution"]), id: Schema.String },
-) {}
+export class UnknownCatalogRoute extends Schema.TaggedError<
+  UnknownCatalogRoute,
+  { readonly brand: unique symbol }
+>()("UnknownCatalogRoute", {
+  routeType: Schema.Literals(["chat", "media", "execution"]),
+  id: Schema.String,
+}) {}
 
-export class IncompatibleCatalogRoutes extends Schema.TaggedError<IncompatibleCatalogRoutes>()(
-  "IncompatibleCatalogRoutes",
-  {
-    chatRouteId: Schema.String,
-    mediaRouteId: Schema.String,
-    reason: Schema.Literals(["media_generation_unsupported"]),
-  },
-) {}
+export class IncompatibleCatalogRoutes extends Schema.TaggedError<
+  IncompatibleCatalogRoutes,
+  { readonly brand: unique symbol }
+>()("IncompatibleCatalogRoutes", {
+  chatRouteId: Schema.String,
+  mediaRouteId: Schema.String,
+  reason: Schema.Literals(["media_generation_unsupported"]),
+}) {}
 
 export interface RouteCatalogApi {
   readonly snapshot: Effect.Effect<RouteCatalogSnapshot>;
@@ -198,96 +202,94 @@ const sourceFromServices = Effect.gen(function* () {
   const providers = yield* ProviderRegistry;
   const tools = yield* ProviderToolCapabilityRegistry;
 
-  return {
-    load: Effect.gen(function* () {
-      const chat: ChatRoute[] = [];
-      const media: MediaRoute[] = [];
-      const execution: ExecutionRoute[] = [];
-      const authByProvider = MutableHashMap.empty<ProviderId, RouteAuthEvidence>();
-
-      for (const provider of [...providers.providers].toSorted()) {
-        const configuration = yield* providers.get(provider).pipe(
-          Effect.mapError((cause) =>
-            RouteCatalogRefreshFailed.make({
-              provider,
-              operation: "provider",
-              reason: RouteCatalogRefreshFailedReason.cases.Failed.make({}),
-              cause,
-            }),
-          ),
-        );
-        const status = yield* configuration.auth.status.pipe(
-          Effect.mapError((cause) =>
-            RouteCatalogRefreshFailed.make({
-              provider,
-              operation: "auth",
-              reason: RouteCatalogRefreshFailedReason.cases.Failed.make({}),
-              cause,
-            }),
-          ),
-        );
-        const connection = providerConnection(provider);
-        const compatible = ProviderConnection.isAnyOf(["compatible-endpoint"])(connection);
-        const authentication = authEvidence(
-          provider,
-          status,
-          compatible ? "openai_compatible" : "subscription_oauth",
-        );
-        MutableHashMap.set(authByProvider, provider, authentication);
-        const models = yield* configuration.models.list.pipe(
-          Effect.mapError((cause) =>
-            RouteCatalogRefreshFailed.make({
-              provider,
-              operation: "models",
-              reason: RouteCatalogRefreshFailedReason.cases.Failed.make({}),
-              cause,
-            }),
-          ),
-        );
-        for (const model of models) {
-          if (model.provider !== provider)
-            return yield* RouteCatalogRefreshFailed.make({
-              provider,
-              operation: "models",
-              reason: RouteCatalogRefreshFailedReason.cases.ProviderMismatch.make({}),
-            });
-          const chatRoute: ChatRoute = Object.freeze({
-            type: "chat",
-            id: `chat:${provider}:${model.id}`,
+  /** One provider's chat and tool execution routes, with how it is signed in. */
+  const providerRoutes = (provider: ProviderId) =>
+    Effect.gen(function* () {
+      const configuration = yield* providers.get(provider).pipe(
+        Effect.mapError((cause) =>
+          RouteCatalogRefreshFailed.make({
             provider,
-            model: model.id,
-            displayName: model.displayName,
-            capabilities: model.capabilities,
-            reasoningEfforts: Object.freeze([...model.supportedReasoningEfforts]),
-            defaultReasoningEffort: model.defaultReasoningEffort,
-            authentication,
-            entitlement: Object.freeze({
-              status: authentication.verified ? "verified" : "unverified",
-              source: compatible ? "endpoint_configuration" : "provider_model_catalog",
-              detail: compatible
-                ? "Model is configured locally; endpoint authentication and model access are unverified."
-                : "Model was returned by the configured provider catalog.",
-            }),
-          });
-          chat.push(chatRoute);
-
-          const resolved = yield* NativeToolSupport.match(connection.nativeTools, {
-            unsupported: () => Effect.succeed([]),
-            "vendor-native": ({ vendor }) =>
-              tools.resolve({ provider: vendor, model: model.id }).pipe(
-                Effect.catchTag("UnknownProviderToolModel", () => Effect.succeed([])),
-                Effect.mapError((cause) =>
-                  RouteCatalogRefreshFailed.make({
-                    provider,
-                    operation: "tools",
-                    reason: RouteCatalogRefreshFailedReason.cases.Failed.make({}),
-                    cause,
-                  }),
+            operation: "provider",
+            reason: RouteCatalogRefreshFailedReason.cases.Failed.make({}),
+            cause,
+          }),
+        ),
+      );
+      const status = yield* configuration.auth.status.pipe(
+        Effect.mapError((cause) =>
+          RouteCatalogRefreshFailed.make({
+            provider,
+            operation: "auth",
+            reason: RouteCatalogRefreshFailedReason.cases.Failed.make({}),
+            cause,
+          }),
+        ),
+      );
+      const connection = providerConnection(provider);
+      const compatible = ProviderConnection.isAnyOf(["compatible-endpoint"])(connection);
+      const authentication = authEvidence(
+        provider,
+        status,
+        compatible ? "openai_compatible" : "subscription_oauth",
+      );
+      const models = yield* configuration.models.list.pipe(
+        Effect.mapError((cause) =>
+          RouteCatalogRefreshFailed.make({
+            provider,
+            operation: "models",
+            reason: RouteCatalogRefreshFailedReason.cases.Failed.make({}),
+            cause,
+          }),
+        ),
+      );
+      const modelRoutes = yield* Effect.forEach(models, (model) =>
+        Effect.succeed(model).pipe(
+          Effect.filterOrFail(
+            (listed) => listed.provider === provider,
+            () =>
+              RouteCatalogRefreshFailed.make({
+                provider,
+                operation: "models",
+                reason: RouteCatalogRefreshFailedReason.cases.ProviderMismatch.make({}),
+              }),
+          ),
+          Effect.andThen(
+            NativeToolSupport.match(connection.nativeTools, {
+              unsupported: () => Effect.succeed([]),
+              "vendor-native": ({ vendor }) =>
+                tools.resolve({ provider: vendor, model: model.id }).pipe(
+                  Effect.catchTag("UnknownProviderToolModel", () => Effect.succeed([])),
+                  Effect.mapError((cause) =>
+                    RouteCatalogRefreshFailed.make({
+                      provider,
+                      operation: "tools",
+                      reason: RouteCatalogRefreshFailedReason.cases.Failed.make({}),
+                      cause,
+                    }),
+                  ),
                 ),
-              ),
-          });
-          for (const descriptor of resolved) {
-            execution.push(
+            }),
+          ),
+          Effect.map((resolved) => ({
+            chat: Object.freeze({
+              type: "chat",
+              id: `chat:${provider}:${model.id}`,
+              provider,
+              model: model.id,
+              displayName: model.displayName,
+              capabilities: model.capabilities,
+              reasoningEfforts: Object.freeze([...model.supportedReasoningEfforts]),
+              defaultReasoningEffort: model.defaultReasoningEffort,
+              authentication,
+              entitlement: Object.freeze({
+                status: authentication.verified ? "verified" : "unverified",
+                source: compatible ? "endpoint_configuration" : "provider_model_catalog",
+                detail: compatible
+                  ? "Model is configured locally; endpoint authentication and model access are unverified."
+                  : "Model was returned by the configured provider catalog.",
+              }),
+            }) satisfies ChatRoute,
+            execution: resolved.map((descriptor): ExecutionRoute =>
               Object.freeze({
                 type: "execution",
                 id: `execution:${descriptor.provider}:${model.id}:${descriptor.id}`,
@@ -305,10 +307,24 @@ const sourceFromServices = Effect.gen(function* () {
                 requiredAuth: Object.freeze([...descriptor.auth]),
                 cost: descriptor.cost,
               }),
-            );
-          }
-        }
-      }
+            ),
+          })),
+        ),
+      );
+      return {
+        provider,
+        authentication,
+        chat: modelRoutes.map((routes): ChatRoute => routes.chat),
+        execution: modelRoutes.flatMap((routes) => routes.execution),
+      };
+    });
+
+  return {
+    load: Effect.gen(function* () {
+      const loaded = yield* Effect.forEach([...providers.providers].toSorted(), providerRoutes);
+      const authByProvider = HashMap.fromIterable(
+        loaded.map(({ provider, authentication }) => [provider, authentication] as const),
+      );
 
       const openAIKey = yield* Config.String("OPENAI_API_KEY")
         .pipe(Config.option)
@@ -322,46 +338,45 @@ const sourceFromServices = Effect.gen(function* () {
             }),
           ),
         );
-      const openAIAuth =
-        Option.getOrUndefined(MutableHashMap.get(authByProvider, "openai")) ??
+      const openAIAuth = Option.getOrElse(HashMap.get(authByProvider, "openai"), () =>
         authEvidence(
           "openai",
           AuthConnectionState["signed-out"]({ provider: "openai" }),
           "subscription_oauth",
-        );
-      for (const contract of imageRouteContracts) {
-        const authentication =
-          contract.executionMode === "direct_adapter"
-            ? Object.freeze({
-                mechanism: "openai_api_key" as const,
-                status: Option.isNone(openAIKey) ? ("signed-out" as const) : ("signed-in" as const),
-                verified: Option.isSome(openAIKey),
-              })
-            : openAIAuth;
-        media.push(
-          Object.freeze({
-            type: "media",
-            id: `media:${contract.id}`,
-            provider: contract.provider,
-            executionMode: contract.executionMode,
-            executorModel: contract.executorModel,
-            operations: contract.operations,
-            authentication,
-            entitlement: Object.freeze({
-              status: "unverified",
-              source: "account_smoke_test_not_run",
-              detail:
-                "The execution path is implemented; account image access is validated by execution.",
-            }),
-            billingAttribution: contract.billingAttribution,
-            contract,
+        ),
+      );
+      const media = imageRouteContracts.map((contract): MediaRoute =>
+        Object.freeze({
+          type: "media",
+          id: `media:${contract.id}`,
+          provider: contract.provider,
+          executionMode: contract.executionMode,
+          executorModel: contract.executorModel,
+          operations: contract.operations,
+          authentication:
+            contract.executionMode === "direct_adapter"
+              ? Object.freeze({
+                  mechanism: "openai_api_key" as const,
+                  status: Option.isNone(openAIKey)
+                    ? ("signed-out" as const)
+                    : ("signed-in" as const),
+                  verified: Option.isSome(openAIKey),
+                })
+              : openAIAuth,
+          entitlement: Object.freeze({
+            status: "unverified",
+            source: "account_smoke_test_not_run",
+            detail:
+              "The execution path is implemented; account image access is validated by execution.",
           }),
-        );
-      }
+          billingAttribution: contract.billingAttribution,
+          contract,
+        }),
+      );
       return {
-        chat: chat.toSorted(compareId),
+        chat: loaded.flatMap((routes) => routes.chat).toSorted(compareId),
         media: media.toSorted(compareId),
-        execution: execution.toSorted(compareId),
+        execution: loaded.flatMap((routes) => routes.execution).toSorted(compareId),
       };
     }),
   } satisfies RouteCatalogSource;
@@ -379,13 +394,12 @@ function makeRouteCatalogBody(
   now?: () => number,
 ): Effect.Effect<RouteCatalogApi> {
   return Effect.gen(function* () {
-    const clock = yield* Clock.Clock;
     const state = yield* Ref.make<RouteCatalogSnapshot>(
       freezeSnapshot({ revision: 0, refreshedAt: 0, chat: [], media: [], execution: [] }),
     );
     const refresh = Effect.gen(function* () {
       const loaded = yield* source.load;
-      const refreshedAt = now === undefined ? clock.currentTimeMillisUnsafe() : now();
+      const refreshedAt = now === undefined ? yield* Clock.currentTimeMillis : now();
       return yield* Ref.updateAndGet(state, (previous) =>
         freezeSnapshot({ ...loaded, revision: previous.revision + 1, refreshedAt }),
       );
@@ -394,12 +408,11 @@ function makeRouteCatalogBody(
       routeType: UnknownCatalogRoute["routeType"],
       routes: readonly Route[],
       id: string,
-    ): Effect.Effect<Route, UnknownCatalogRoute> => {
-      const route = routes.find((candidate) => candidate.id === id);
-      return route === undefined
-        ? Effect.fail(UnknownCatalogRoute.make({ routeType, id }))
-        : Effect.succeed(route);
-    };
+    ): Effect.Effect<Route, UnknownCatalogRoute> =>
+      Effect.fromOption(
+        EffectArray.findFirst(routes, (candidate) => candidate.id === id),
+        () => UnknownCatalogRoute.make({ routeType, id }),
+      );
     return {
       snapshot: Ref.get(state),
       refresh,
@@ -412,13 +425,17 @@ function makeRouteCatalogBody(
         Effect.gen(function* () {
           const snapshot = yield* Ref.get(state);
           const chatRoute = yield* find("chat", snapshot.chat, chatRouteId);
-          const mediaRoute = yield* find("media", snapshot.media, mediaRouteId);
-          if (!mediaRoute.operations.includes("generate"))
-            return yield* IncompatibleCatalogRoutes.make({
-              chatRouteId,
-              mediaRouteId,
-              reason: "media_generation_unsupported",
-            });
+          const mediaRoute = yield* find("media", snapshot.media, mediaRouteId).pipe(
+            Effect.filterOrFail(
+              (route) => route.operations.includes("generate"),
+              () =>
+                IncompatibleCatalogRoutes.make({
+                  chatRouteId,
+                  mediaRouteId,
+                  reason: "media_generation_unsupported",
+                }),
+            ),
+          );
           return Object.freeze({
             initiatorChatRouteId: chatRoute.id,
             executorMediaRouteId: mediaRoute.id,

@@ -1,5 +1,4 @@
-import { Data, Effect, Function as EffectFunction } from "effect";
-import { oauthProtocolCrypto } from "./node-runtime.ts";
+import { Crypto, Data, Effect, Function as EffectFunction } from "effect";
 import { optionalProperty } from "../optional-property.ts";
 import { Option, Schema } from "effect";
 import { JsonValue } from "../json.ts";
@@ -9,14 +8,14 @@ export { JsonValue } from "../json.ts";
 
 export type OAuthProvider = SubscriptionAccountProvider;
 
-export class ProviderFeatureRejectedError extends Schema.TaggedError<ProviderFeatureRejectedError>()(
-  "ProviderFeatureRejectedError",
-  {
-    provider: SubscriptionAccountProvider,
-    feature: Schema.Literal("prompt-cache"),
-    status: Schema.NullOr(Schema.Int),
-  },
-) {
+export class ProviderFeatureRejectedError extends Schema.TaggedError<
+  ProviderFeatureRejectedError,
+  { readonly brand: unique symbol }
+>()("ProviderFeatureRejectedError", {
+  provider: SubscriptionAccountProvider,
+  feature: Schema.Literal("prompt-cache"),
+  status: Schema.NullOr(Schema.Int),
+}) {
   override get message() {
     return `${this.provider} rejected the ${this.feature} request feature.`;
   }
@@ -37,13 +36,13 @@ export const ProviderStatusRejected = ProviderStreamFailedReason.cases.ProviderS
 export const ResponseInterrupted = ProviderStreamFailedReason.cases.ResponseInterrupted;
 export const RequestOutcomeUnknown = ProviderStreamFailedReason.cases.RequestOutcomeUnknown;
 
-export class ProviderStreamFailed extends Schema.TaggedError<ProviderStreamFailed>()(
-  "ProviderStreamFailed",
-  {
-    provider: Schema.Literals(["openai", "anthropic"]),
-    reason: ProviderStreamFailedReason,
-  },
-) {
+export class ProviderStreamFailed extends Schema.TaggedError<
+  ProviderStreamFailed,
+  { readonly brand: unique symbol }
+>()("ProviderStreamFailed", {
+  provider: Schema.Literals(["openai", "anthropic"]),
+  reason: ProviderStreamFailedReason,
+}) {
   override get message() {
     return "Provider model stream failed.";
   }
@@ -137,18 +136,20 @@ export interface Pkce {
 
 const base64Url = (value: Uint8Array) => Buffer.from(value).toString("base64url");
 
-export function createPkce(): Pkce {
-  const verifier = base64Url(Effect.runSync(oauthProtocolCrypto.randomBytes(48)));
-  return {
+export const createPkce = Effect.gen(function* () {
+  const crypto = yield* Crypto.Crypto;
+  const verifier = base64Url(yield* crypto.randomBytes(48));
+  const pkce: Pkce = {
     verifier,
-    challenge: base64Url(
-      Effect.runSync(oauthProtocolCrypto.digest("SHA-256", new TextEncoder().encode(verifier))),
-    ),
+    challenge: base64Url(yield* crypto.digest("SHA-256", new TextEncoder().encode(verifier))),
   };
-}
+  return pkce;
+});
 
-export const createOAuthState = () =>
-  base64Url(Effect.runSync(oauthProtocolCrypto.randomBytes(32)));
+export const createOAuthState = Effect.map(
+  Effect.flatMap(Effect.service(Crypto.Crypto), (crypto) => crypto.randomBytes(32)),
+  base64Url,
+);
 
 export const ToolArguments = Schema.Record(Schema.String, JsonValue);
 export type ToolArguments = typeof ToolArguments.Type;
@@ -263,10 +264,10 @@ export const ReasoningSummaryProtocolFailedReason = Schema.TaggedUnion({
   IncompleteSummary: {},
 });
 
-export class ReasoningSummaryProtocolFailed extends Schema.TaggedError<ReasoningSummaryProtocolFailed>()(
-  "ReasoningSummaryProtocolFailed",
-  { reason: ReasoningSummaryProtocolFailedReason },
-) {
+export class ReasoningSummaryProtocolFailed extends Schema.TaggedError<
+  ReasoningSummaryProtocolFailed,
+  { readonly brand: unique symbol }
+>()("ReasoningSummaryProtocolFailed", { reason: ReasoningSummaryProtocolFailedReason }) {
   override get message() {
     return "Public reasoning summary protocol failed.";
   }

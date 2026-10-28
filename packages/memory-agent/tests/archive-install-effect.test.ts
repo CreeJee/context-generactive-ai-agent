@@ -9,6 +9,7 @@ import {
   Fiber,
   FileSystem,
   Layer,
+  MutableRef,
   Path,
   PlatformError,
 } from "effect";
@@ -167,37 +168,44 @@ it.live("native adapter installs real tar contents and keeps an existing target 
     yield* installer.install({ archive: { ...pin, digest }, target });
     expect(yield* fs.readFileString(path.join(target, "package/tool"))).toBe("installed");
     expect(yield* fs.readDirectory(directory)).toEqual(["tool"]);
-    for (const rejected of [
-      {
-        bytes: tgz([{ name: "../outside", content: "escape" }]),
-        isReason: ArchiveInstallFailedReason.guards.UnsafeEntry,
-      },
-      {
-        bytes: new Uint8Array([1, 2, 3]),
-        isReason: ArchiveInstallFailedReason.guards.HostOperationFailed,
-      },
-    ]) {
-      const rejectedDigest = yield* native.checksum({ bytes: rejected.bytes, algorithm: "sha256" });
-      const rejectedContext = yield* Layer.build(
-        ArchiveInstaller.layer.pipe(
-          Layer.provide(
-            Layer.succeed(ArchiveHost, {
-              ...native,
-              download: () => Effect.succeed(rejected.bytes),
-            }),
+    yield* Effect.forEach(
+      [
+        {
+          bytes: tgz([{ name: "../outside", content: "escape" }]),
+          isReason: ArchiveInstallFailedReason.guards.UnsafeEntry,
+        },
+        {
+          bytes: new Uint8Array([1, 2, 3]),
+          isReason: ArchiveInstallFailedReason.guards.HostOperationFailed,
+        },
+      ],
+      Effect.fnUntraced(function* (rejected) {
+        const rejectedDigest = yield* native.checksum({
+          bytes: rejected.bytes,
+          algorithm: "sha256",
+        });
+        const rejectedContext = yield* Layer.build(
+          ArchiveInstaller.layer.pipe(
+            Layer.provide(
+              Layer.succeed(ArchiveHost, {
+                ...native,
+                download: () => Effect.succeed(rejected.bytes),
+              }),
+            ),
           ),
-        ),
-      );
-      const failure = yield* Effect.flip(
-        Context.get(rejectedContext, ArchiveInstaller).install({
-          archive: { ...pin, digest: rejectedDigest },
-          target,
-        }),
-      );
-      expect(rejected.isReason(failure.reason)).toBe(true);
-      expect(yield* fs.readFileString(path.join(target, "package/tool"))).toBe("installed");
-      expect(yield* fs.readDirectory(directory)).toEqual(["tool"]);
-    }
+        );
+        const failure = yield* Effect.flip(
+          Context.get(rejectedContext, ArchiveInstaller).install({
+            archive: { ...pin, digest: rejectedDigest },
+            target,
+          }),
+        );
+        expect(rejected.isReason(failure.reason)).toBe(true);
+        expect(yield* fs.readFileString(path.join(target, "package/tool"))).toBe("installed");
+        expect(yield* fs.readDirectory(directory)).toEqual(["tool"]);
+      }),
+      { discard: true },
+    );
     expect(yield* fs.exists(path.join(directory, "outside"))).toBe(false);
     expect(() => npmIntegrity(pin.url, "sha256-abc")).toThrow(ArchiveIntegrityRejected);
   }),
@@ -205,7 +213,7 @@ it.live("native adapter installs real tar contents and keeps an existing target 
 
 it.effect("platform cleanup retries transient errno failures and interruption stops retries", () =>
   Effect.gen(function* () {
-    let attempts = 0;
+    const attempts = MutableRef.make(0);
     const busy = PlatformError.systemError({
       _tag: "Busy",
       module: "FileSystem",
@@ -215,7 +223,7 @@ it.effect("platform cleanup retries transient errno failures and interruption st
     const filesystem = FileSystem.makeNoop({
       remove: () =>
         Effect.suspend(() => {
-          attempts++;
+          MutableRef.increment(attempts);
           return Effect.fail(busy);
         }),
     });
@@ -239,14 +247,14 @@ it.effect("platform cleanup retries transient errno failures and interruption st
         cause: busy,
       }),
     );
-    expect(attempts).toBe(11);
-    attempts = 0;
+    expect(MutableRef.get(attempts)).toBe(11);
+    MutableRef.set(attempts, 0);
     const cancelled = yield* Effect.forkChild(host.cleanup(staging));
     yield* TestClock.adjust("600 millis");
     yield* Fiber.interrupt(cancelled);
     assertTrue(Exit.hasInterrupts(yield* Fiber.await(cancelled)));
-    const before = attempts;
+    const before = MutableRef.get(attempts);
     yield* TestClock.adjust("20 seconds");
-    expect(attempts).toBe(before);
+    expect(MutableRef.get(attempts)).toBe(before);
   }),
 );

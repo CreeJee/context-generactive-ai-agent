@@ -1,5 +1,5 @@
 import { isTruthy } from "../../truthy.ts";
-import { Context, Data, Effect, Layer } from "effect";
+import { Context, Data, Effect, Layer, Match, Ref } from "effect";
 import { logFailure } from "../../runtime/logged-failures.ts";
 import { GlobalConfig, type EmbeddingChoice, type Settings } from "../../config/global-config.ts";
 import { StorageRoot } from "../../config/storage-root.ts";
@@ -47,17 +47,14 @@ export interface EmbeddingOverview {
  * for the GPU. A machine below the memory threshold stays on the CPU under `auto`, so it is not
  * checked unless asked.
  */
-const wantsCheck = (settings: Settings, memoryBytes: number) => {
-  if (isTruthy(settings.gpuCheck)) return false;
-  switch (settings.embeddingDevice ?? "auto") {
-    case "cpu":
-      return false;
-    case "gpu":
-      return true;
-    case "auto":
-      return memoryBytes >= gpuMemoryThreshold;
-  }
-};
+const wantsCheck = (settings: Settings, memoryBytes: number) =>
+  !isTruthy(settings.gpuCheck) &&
+  Match.value(settings.embeddingDevice ?? "auto").pipe(
+    Match.when("cpu", () => false),
+    Match.when("gpu", () => true),
+    Match.when("auto", () => memoryBytes >= gpuMemoryThreshold),
+    Match.exhaustive,
+  );
 
 const make = Effect.gen(function* () {
   const config = yield* GlobalConfig;
@@ -68,41 +65,39 @@ const make = Effect.gen(function* () {
   const maintenance = yield* MemoryGraphMaintenance;
   const memoryBytes = yield* totalMemory;
   const layerScope = yield* Effect.scope;
-  let checking = false;
+  const checking = yield* Ref.make(false);
 
   /**
    * Checks WebGPU in the background and remembers the answer. It loads the full-precision model in
    * a worker of its own (downloading it first if needed), so it is done once, not on every start.
    */
-  const startCheck = Effect.suspend(() => {
+  const startCheck = Effect.gen(function* () {
     // Tests and evaluations run other embedders; there is no local model to check for them.
-    if (checking || !EmbedderRuntime.$is("local")(embedder.runtime())) return Effect.void;
-    checking = true;
-    events.publishGlobal("embedding");
-    return Effect.asVoid(
-      Effect.forkIn(
-        checkGpu(storage.path).pipe(
-          Effect.flatMap((result) => config.update({ gpuCheck: result })),
-          // Unchecked stays unchecked; the next start or a changed setting checks again.
-          Effect.catch(logFailure("embedding_gpu_check_failed")),
-          Effect.ensuring(
-            Effect.sync(() => {
-              checking = false;
-              events.publishGlobal("embedding");
-            }),
-          ),
+    if (!EmbedderRuntime.$is("local")(embedder.runtime())) return;
+    if (yield* Ref.getAndSet(checking, true)) return;
+    yield* events.publishGlobal("embedding");
+    yield* Effect.forkIn(
+      checkGpu(storage.path).pipe(
+        Effect.flatMap((result) => config.update({ gpuCheck: result })),
+        // Unchecked stays unchecked; the next start or a changed setting checks again.
+        Effect.catch(logFailure("embedding_gpu_check_failed")),
+        Effect.ensuring(
+          Effect.andThen(Ref.set(checking, false), events.publishGlobal("embedding")),
         ),
-        layerScope,
       ),
+      layerScope,
     );
   });
 
-  if (wantsCheck(yield* config.read, memoryBytes)) yield* startCheck;
+  yield* Effect.when(
+    startCheck,
+    Effect.map(config.read, (settings) => wantsCheck(settings, memoryBytes)),
+  );
 
   // A changed chunk identity must rebuild existing conversations even when no new import or
   // chat arrives. The service Scope owns the drain; failed nodes remain pending for the next run.
-  if (EmbedderRuntime.$is("local")(embedder.runtime()))
-    yield* Effect.forkIn(
+  yield* Effect.when(
+    Effect.forkIn(
       indexer.indexAll().pipe(
         Effect.catchTags({
           EmbeddingError: () => Effect.logWarning("memory_backfill_embedding_failed"),
@@ -111,11 +106,13 @@ const make = Effect.gen(function* () {
         }),
       ),
       layerScope,
-    );
+    ),
+    Effect.succeed(EmbedderRuntime.$is("local")(embedder.runtime())),
+  );
 
   const overview = Effect.gen(function* () {
     const settings = yield* config.read;
-    const gpu: GpuState = checking
+    const gpu: GpuState = (yield* Ref.get(checking))
       ? GpuState.checking()
       : (settings.gpuCheck ?? GpuState.unchecked());
     return {
@@ -136,9 +133,9 @@ const make = Effect.gen(function* () {
     choose: (choice: EmbeddingChoice) =>
       Effect.gen(function* () {
         const settings = yield* config.update({ embeddingDevice: choice });
-        events.publishGlobal("embedding");
+        yield* events.publishGlobal("embedding");
         yield* maintenance.start;
-        if (wantsCheck(settings, memoryBytes)) yield* startCheck;
+        yield* Effect.when(startCheck, Effect.succeed(wantsCheck(settings, memoryBytes)));
         return yield* overview;
       }),
     /** Checks WebGPU again, for a machine whose drivers or hardware changed. */

@@ -43,7 +43,7 @@ describe("stable development backend safety", () => {
       // A UI-only HMR update must not block an otherwise valid mutation.
       expect(
         developmentRequestDecision(
-          createDevelopmentBoundary({ buildId: initial }),
+          createDevelopmentBoundary({ buildId: initial, instanceId: "instance-test" }),
           "POST",
           "/api/projects",
           uiBuildId,
@@ -55,7 +55,7 @@ describe("stable development backend safety", () => {
       // Editing disk sources does not change the running backend's identity.
       expect(
         developmentRequestDecision(
-          createDevelopmentBoundary({ buildId: initial }),
+          createDevelopmentBoundary({ buildId: initial, instanceId: "instance-test" }),
           "POST",
           "/api/chat",
           initial,
@@ -64,7 +64,7 @@ describe("stable development backend safety", () => {
       // An unvalidated UI/backend contract must not silently mutate the old backend.
       expect(
         developmentRequestDecision(
-          createDevelopmentBoundary({ buildId: initial }),
+          createDevelopmentBoundary({ buildId: initial, instanceId: "instance-test" }),
           "POST",
           "/api/projects",
           changedBackendId,
@@ -73,59 +73,8 @@ describe("stable development backend safety", () => {
     }),
   );
 
-  it.live("Goal worker source changes retain the current global gate and read/replay path", () =>
-    Effect.gen(function* () {
-      const { root, fs, path } = yield* fixture("context-agent-goal-source-gate-");
-      const app = path.join(root, "apps", "agent");
-      const source = path.join(root, "packages", "memory-agent", "src", "agent");
-      yield* fs.makeDirectory(source, { recursive: true });
-      yield* fs.writeFileString(
-        path.join(source, "full-loop-worker.ts"),
-        "export const worker = 'v1';",
-      );
-      yield* fs.writeFileString(
-        path.join(source, "full-loop-codec.ts"),
-        "export const codec = 'v1';",
-      );
-      const initial = yield* Effect.tryPromise(() => developmentBuildId(app));
-      const boundary = createDevelopmentBoundary({ buildId: initial });
-      yield* fs.writeFileString(
-        path.join(source, "full-loop-worker.ts"),
-        "export const worker = 'v2';",
-      );
-      const changedWorker = yield* Effect.tryPromise(() => developmentBuildId(app));
-      expect(changedWorker).not.toBe(initial);
-      yield* fs.writeFileString(
-        path.join(source, "full-loop-codec.ts"),
-        "export const codec = 'v2';",
-      );
-      const changedCodec = yield* Effect.tryPromise(() => developmentBuildId(app));
-      expect(changedCodec).not.toBe(changedWorker);
-      expect(affectsDevelopmentBackend(path.join(source, "full-loop-worker.ts"))).toBe(true);
-      expect(affectsDevelopmentBackend(path.join(source, "full-loop-codec.ts"))).toBe(true);
-      expect(developmentRequestDecision(boundary, "POST", "/api/chat", changedCodec)).toMatchObject(
-        {
-          kind: "reject",
-          status: 409,
-          error: "backend_restart_required",
-        },
-      );
-      // Source-pinned SDK tests do not authorize bypassing the actual dev request gate.
-      expect(developmentRequestDecision(boundary, "GET", "/api/chat", changedCodec)).toEqual({
-        kind: "allow",
-      });
-      expect(
-        developmentRequestDecision(boundary, "GET", "/api/health", changedCodec),
-      ).toMatchObject({
-        kind: "health",
-        status: 200,
-      });
-      expect(boundary.draining()).toBe(false);
-    }),
-  );
-
   test("reports its build and rejects stale or draining mutations", () => {
-    const boundary = createDevelopmentBoundary({ buildId: "build-a" });
+    const boundary = createDevelopmentBoundary({ buildId: "build-a", instanceId: "instance-test" });
     expect(developmentRequestDecision(boundary, "GET", "/api/health", undefined)).toMatchObject({
       kind: "health",
       status: 200,

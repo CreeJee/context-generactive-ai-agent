@@ -1,6 +1,5 @@
 import { it } from "@effect/vitest";
 import { assertExitFailure } from "@effect/vitest/utils";
-import type { MetadataStore, ModelMessage } from "@tanstack/ai";
 import { Cause, Deferred, Effect, Exit, Fiber } from "effect";
 import { describe, expect } from "vite-plus/test";
 import {
@@ -10,9 +9,11 @@ import {
   compactionStateEffect,
   lookupSources,
 } from "../src/agent/compaction.ts";
+import { type ChatMetadata, ChatMetadataFailed } from "../src/chat-store/metadata.ts";
+import type { StoredMessage } from "../src/chat-store/schema.ts";
 
 const state = { manual: { clearedThrough: 0, summarizedTurns: 0 }, blocks: [] };
-const messages: readonly ModelMessage[] = [
+const messages: ReadonlyArray<StoredMessage> = [
   {
     role: "assistant",
     content: null,
@@ -29,10 +30,9 @@ describe("Compaction failure boundaries", () => {
   it.effect("keeps metadata failures in the typed error channel", () =>
     Effect.gen(function* () {
       const cause = new Error("native metadata unavailable");
-      const metadata: MetadataStore = {
-        get: () => Promise.reject(cause),
-        set: () => Promise.resolve(),
-        delete: () => Promise.resolve(),
+      const metadata: ChatMetadata = {
+        get: () => Effect.fail(ChatMetadataFailed.make({ cause })),
+        set: () => Effect.void,
       };
       const error = yield* compactionStateEffect({ metadata, threadId: "t1" }).pipe(Effect.flip);
       expect(error).toBeInstanceOf(CompactionFailed);
@@ -48,7 +48,6 @@ describe("Compaction failure boundaries", () => {
       Effect.gen(function* () {
         const defect = new Error("broken tool-result mapping");
         const exit = yield* compactEffect({
-          threadId: "thread",
           messages,
           state,
           sources: lookupSources({
@@ -63,19 +62,13 @@ describe("Compaction failure boundaries", () => {
       }),
   );
 
-  it.effect("interrupts an in-flight native metadata read", () =>
+  it.effect("interrupts an in-flight metadata read", () =>
     Effect.gen(function* () {
-      const context = yield* Effect.context();
       const started = yield* Deferred.make<void>();
       const finish = yield* Deferred.make<null>();
-      const read = Effect.gen(function* () {
-        yield* Deferred.succeed(started, undefined);
-        return yield* Deferred.await(finish);
-      });
-      const metadata: MetadataStore = {
-        get: () => Effect.runPromiseWith(context)(read),
-        set: () => Promise.resolve(),
-        delete: () => Promise.resolve(),
+      const metadata: ChatMetadata = {
+        get: () => Effect.andThen(Deferred.succeed(started, undefined), Deferred.await(finish)),
+        set: () => Effect.void,
       };
       yield* Effect.acquireUseRelease(
         Effect.forkChild(compactionStateEffect({ metadata, threadId: "t1" })),

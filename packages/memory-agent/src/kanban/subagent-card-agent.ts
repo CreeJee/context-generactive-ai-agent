@@ -1,5 +1,4 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
 import { Context, Crypto, Effect, HashSet, Layer, Match, Option, Ref, Schema } from "effect";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import { Projects } from "../projects/projects.ts";
@@ -10,7 +9,7 @@ import { gatedToolNames } from "../tools/definitions.ts";
 import { errorTag } from "../tools/failure.ts";
 import { FileTools } from "../tools/files.ts";
 import { OutsideTools } from "../tools/outside.ts";
-import { toToolSchema } from "../tools/schema.ts";
+import { runTool, type RunTool } from "../tools/run-tool.ts";
 import type { PlanStep } from "../workflow/workflow.ts";
 import {
   CardAgent,
@@ -75,6 +74,39 @@ const CardVerdictInput = Schema.Struct({
   ),
 });
 
+const recordCardVerdict = {
+  name: "record_card_verdict",
+  description: "Record whether the card meets its acceptance criteria and required evidence.",
+  parameters: CardVerdictInput,
+} as const;
+
+const rejected = (failure: VerdictFailure): CardVerdict => CardVerdict.Failed({ failure });
+
+/** record_card_verdict for one verifier run, and the verdict it recorded. */
+export const verdictRecorder = Effect.gen(function* () {
+  const verdict = yield* Ref.make(Option.none<CardVerdict>());
+  const record = (input: typeof CardVerdictInput.Type) =>
+    Effect.as(
+      Ref.set(
+        verdict,
+        Option.some<CardVerdict>(
+          input.passed
+            ? CardVerdict.Passed({ evidence: input.evidence })
+            : rejected(
+                VerdictFailure.cases.Rejected.make({
+                  note: input.reason ?? input.evidence.join("; "),
+                }),
+              ),
+        ),
+      ),
+      { recorded: true },
+    );
+  return {
+    verdict: Ref.get(verdict),
+    runTool: runTool({ ...recordCardVerdict, handler: record }),
+  };
+});
+
 const readToolNames = HashSet.fromIterable(["list_files", "search_files", "read_file"]);
 const checkToolNames = HashSet.fromIterable(["run_skill"]);
 
@@ -110,8 +142,6 @@ const make = Effect.gen(function* () {
       Effect.logWarning("Kanban card agent unavailable", { error, reason }),
       failed("unavailable"),
     );
-  const rejected = (failure: VerdictFailure): CardVerdict => CardVerdict.Failed({ failure });
-
   const agent = CardAgent.of({
     run: Effect.fnUntraced(
       function* (run: CardAgentRun) {
@@ -120,46 +150,55 @@ const make = Effect.gen(function* () {
           run.projectId,
           run.worktree,
         );
-        if (Option.isNone(selection)) return failed("model_selection_required");
-        const message = [
-          ...(run.continuation
-            ? [
-                "You worked on this card before and were cut off. Your earlier changes are already in your folder: check what is there before you change anything, and do not redo work that is done.",
-              ]
-            : []),
-          ...listed("The orchestrator changed the card since your last run", run.notes),
-          cardText(run.card),
-        ].join("\n\n");
-        const outcome = yield* subagents.runAttempt(
-          {
-            project,
-            sessionId: run.sessionId,
-            runId: `kanban:${run.goalInstanceId}:${run.card.id}:${run.attemptNo}`,
-            selection: selection.value,
-            tools: [
-              ...(yield* fileTools.forProject(project)),
-              ...(yield* outsideTools.forProject(project)),
-              ...(yield* approvedTools.forProject(project, "gate")),
-            ],
-            systemPrompts: [],
-            gated: gatedToolNames,
-          },
-          {
-            agent: `card-${run.card.id}-g${run.generation}`,
-            message,
-            instructions: cardInstructions,
-          },
-          (handle) => run.register({ runId: handle.chatRunId, traceAttemptId: handle.id }),
-        );
-        if (outcome === null) return failed("not_started");
-        return Match.value(outcome).pipe(
-          Match.discriminatorsExhaustive("status")({
-            completed: ({ answer }) => CardAgentOutcome.Finished({ report: answer }),
-            failed: () => failed("failed"),
-            cancelled: () => failed("cancelled"),
-            interrupted: () => failed("cancelled"),
-          }),
-        );
+        const attempt = (chosen: Option.Option.Value<typeof selection>) =>
+          Effect.gen(function* () {
+            const message = [
+              ...(run.continuation
+                ? [
+                    "You worked on this card before and were cut off. Your earlier changes are already in your folder: check what is there before you change anything, and do not redo work that is done.",
+                  ]
+                : []),
+              ...listed("The orchestrator changed the card since your last run", run.notes),
+              cardText(run.card),
+            ].join("\n\n");
+            const outcome = yield* subagents.runAttempt(
+              {
+                project,
+                sessionId: run.sessionId,
+                runId: `kanban:${run.goalInstanceId}:${run.card.id}:${run.attemptNo}`,
+                selection: chosen,
+                tools: [
+                  ...fileTools.toolsFor(project),
+                  ...outsideTools.toolsFor(project),
+                  ...approvedTools.toolsFor(project, "gate"),
+                ],
+                systemPrompts: [],
+                gated: gatedToolNames,
+              },
+              {
+                agent: `card-${run.card.id}-g${run.generation}`,
+                message,
+                instructions: cardInstructions,
+              },
+              (handle) => run.register({ runId: handle.chatRunId, traceAttemptId: handle.id }),
+            );
+            return Option.match(Option.fromNullishOr(outcome), {
+              onNone: () => failed("not_started"),
+              onSome: (ended) =>
+                Match.value(ended).pipe(
+                  Match.discriminatorsExhaustive("status")({
+                    completed: ({ answer }) => CardAgentOutcome.Finished({ report: answer }),
+                    failed: () => failed("failed"),
+                    cancelled: () => failed("cancelled"),
+                    interrupted: () => failed("cancelled"),
+                  }),
+                ),
+            });
+          });
+        return yield* Option.match(selection, {
+          onNone: () => Effect.succeed(failed("model_selection_required")),
+          onSome: attempt,
+        });
         // Its session, project or run records failed; the error stays in the logs only.
       },
       // A database failure also names its kind (lock, constraint, ...), never its statement.
@@ -188,63 +227,44 @@ const make = Effect.gen(function* () {
         input.projectId,
         input.worktree,
       );
-      if (Option.isNone(selection))
-        return rejected(VerdictFailure.cases.ModelSelectionRequired.make({}));
-      const verdict = yield* Ref.make(Option.none<CardVerdict>());
-      const runSync = Effect.runSyncWith(yield* Effect.context<never>());
-      const record = toolDefinition({
-        name: "record_card_verdict",
-        description: "Record whether the card meets its acceptance criteria and required evidence.",
-        inputSchema: toToolSchema(CardVerdictInput),
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      }).server((input) =>
-        runSync(
-          Effect.as(
-            Ref.set(
-              verdict,
-              Option.some<CardVerdict>(
-                input.passed
-                  ? CardVerdict.Passed({ evidence: input.evidence })
-                  : rejected(
-                      VerdictFailure.cases.Rejected.make({
-                        note: input.reason ?? input.evidence.join("; "),
-                      }),
-                    ),
-              ),
+      const verified = (chosen: Option.Option.Value<typeof selection>) =>
+        Effect.gen(function* () {
+          const recorder = yield* verdictRecorder;
+          const tools: RunTool[] = [
+            ...fileTools
+              .toolsFor(project)
+              .filter(({ tool }) => HashSet.has(readToolNames, tool.name)),
+            ...approvedTools
+              .toolsFor(project, "gate")
+              .filter(({ tool }) => HashSet.has(checkToolNames, tool.name)),
+            recorder.runTool,
+          ];
+          const outcome = yield* subagents.runAttempt(
+            {
+              project,
+              sessionId: input.sessionId,
+              runId,
+              selection: chosen,
+              tools,
+              systemPrompts: [],
+              gated: gatedToolNames,
+            },
+            { agent: input.agent, message: input.message, instructions: input.instructions },
+            () => Effect.void,
+          );
+          return Option.getOrElse(yield* recorder.verdict, () =>
+            rejected(
+              outcome?.status === "completed"
+                ? VerdictFailure.cases.NoVerdict.make({})
+                : VerdictFailure.cases.NotFinished.make({}),
             ),
-            { recorded: true },
-          ),
-        ),
-      );
-      const tools: AnyServerTool[] = [
-        ...(yield* fileTools.forProject(project)).filter((tool) =>
-          HashSet.has(readToolNames, tool.name),
-        ),
-        ...(yield* approvedTools.forProject(project, "gate")).filter((tool) =>
-          HashSet.has(checkToolNames, tool.name),
-        ),
-        record,
-      ];
-      const outcome = yield* subagents.runAttempt(
-        {
-          project,
-          sessionId: input.sessionId,
-          runId,
-          selection: selection.value,
-          tools,
-          systemPrompts: [],
-          gated: gatedToolNames,
-        },
-        { agent: input.agent, message: input.message, instructions: input.instructions },
-        () => Effect.void,
-      );
-      return Option.getOrElse(yield* Ref.get(verdict), () =>
-        rejected(
-          outcome?.status === "completed"
-            ? VerdictFailure.cases.NoVerdict.make({})
-            : VerdictFailure.cases.NotFinished.make({}),
-        ),
-      );
+          );
+        });
+      return yield* Option.match(selection, {
+        onNone: () =>
+          Effect.succeed(rejected(VerdictFailure.cases.ModelSelectionRequired.make({}))),
+        onSome: verified,
+      });
     },
     Effect.catch((error) =>
       Effect.as(

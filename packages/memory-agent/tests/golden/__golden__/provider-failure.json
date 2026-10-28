@@ -1,0 +1,74 @@
+{
+  "acknowledgements": [],
+  "artifacts": [],
+  "attempts": [],
+  "bindings": [],
+  "events": [],
+  "history": [
+    {
+      "format_version": 1,
+      "messages": [
+        {
+          "content": "golden:fail",
+          "createdAt": "<time>",
+          "id": "<id-1>",
+          "role": "user"
+        }
+      ],
+      "ordinal": 0,
+      "ready": 1,
+      "thread_id": "<session>",
+      "ui_id": "<id-1>"
+    }
+  ],
+  "interrupts": [],
+  "ledger": [],
+  "metadata": [
+    {
+      "key": "<session>",
+      "namespace": "memory-agent/model-handoff",
+      "value": {
+        "_tag": "baseline",
+        "target": "[\"openai\",\"fast-1\",null]"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "detail": {},
+      "kind": "user",
+      "run_id": null,
+      "text": "golden:fail"
+    }
+  ],
+  "notifications": [],
+  "queue": [],
+  "runs": [
+    {
+      "cancel_requested": null,
+      "error": "partial answer",
+      "error_code": null,
+      "run_id": "<id-2>",
+      "status": "failed",
+      "thread_id": "<session>",
+      "usage": null
+    }
+  ],
+  "subagents": [],
+  "tasks": [],
+  "threads": [
+    {
+      "messages": [
+        {
+          "content": "golden:fail",
+          "createdAt": "<time>",
+          "id": "<id-1>",
+          "role": "user"
+        }
+      ],
+      "thread_id": "<session>"
+    }
+  ],
+  "usage": [],
+  "workflow": []
+}

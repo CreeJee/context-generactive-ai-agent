@@ -14,7 +14,9 @@ import {
 } from "./rules.ts";
 
 export const projectWorkflowRulesPath = ".agents/workflow-rules.json";
-const maxProjectRuleBytes = 256 * 1024;
+const maxProjectRuleCharacters = 32_000;
+/** Size past which the rule file cannot fit: UTF-8 spends at most 3 bytes per UTF-16 unit. */
+const maxProjectRuleBytes = maxProjectRuleCharacters * 3;
 const ProjectRuleFile = Schema.Struct({
   rules: Schema.Array(WorkflowRule.mapFields(Struct.omit(["source"]))),
 });
@@ -115,6 +117,7 @@ export const projectWorkflowRules = Effect.fn("projectWorkflowRules")(function* 
     if (stats.type !== "File") return problem("unreadable");
     if (stats.size > BigInt(maxProjectRuleBytes)) return problem("too_large");
     const text = yield* fs.readFileString(absolute);
+    if (text.length > maxProjectRuleCharacters) return problem("too_large");
     const loaded = structuredWorkflowRules(
       text,
       StructuredRuleOrigin.project({ path: projectWorkflowRulesPath }),

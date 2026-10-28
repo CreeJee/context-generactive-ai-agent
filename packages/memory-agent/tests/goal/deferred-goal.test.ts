@@ -1,11 +1,11 @@
 import { Cause, Effect, MutableHashMap, Option, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 import { expect } from "vite-plus/test";
-import { AgentChat } from "../../src/agent/chat.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
-import type { ScriptedResponder } from "../../src/testing/scripted-adapter.ts";
+import type { ScriptedResponder } from "../../src/testing/scripted-model.ts";
 import { isTruthy } from "../../src/truthy.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
+import { runTurn, streamedText } from "../support/chat-client.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { waitUntil } from "../support/wait-until.ts";
@@ -65,15 +65,13 @@ const continuation = Effect.fnUntraced(function* (threadId: string, runId: strin
 
 const responder: ScriptedResponder = (invocation) =>
   Effect.gen(function* () {
-    const threadId = invocation.threadId ?? "";
+    const threadId = invocation.run.threadId;
     const script = Option.getOrUndefined(MutableHashMap.get(scripts, threadId));
     if (script === undefined)
       return yield* new Cause.UnknownError(undefined, `Unexpected model iteration in ${threadId}`);
-    if (invocation.messages.some((message) => message.role === "tool"))
-      return yield* continuation(threadId, invocation.runId ?? "", script);
-    const id = invocation.systemPrompts
-      .join("\n")
-      .match(/Current Goal instance ID: ([\w-]+)\./)?.[1];
+    if (invocation.history.some((message) => message.role === "tool"))
+      return yield* continuation(threadId, invocation.run.runId, script);
+    const id = invocation.system.join("\n").match(/Current Goal instance ID: ([\w-]+)\./)?.[1];
     if (!isTruthy(id)) return yield* new Cause.UnknownError(undefined, "Goal ID missing");
     MutableHashMap.set(scripts, threadId, { ...script, seenId: id });
     const applies = script.scenario === "goal" || script.scenario === "completed";
@@ -131,25 +129,7 @@ const sessionIn = Effect.fnUntraced(function* (scenario: Scenario) {
 /** Ask for a new independent Goal through a real chat turn and wait until the run settles. */
 const requestNewGoal = Effect.fnUntraced(function* (session: string) {
   const runId = `${session}:new-goal`;
-  const response = yield* (yield* AgentChat).handle(
-    new Request("http://localhost/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: yield* encodeJson({
-        threadId: session,
-        runId,
-        messages: [{ id: "user-1", role: "user", content: "Please start a new independent goal" }],
-        tools: [],
-        context: [],
-      }).pipe(Effect.orDie),
-    }),
-    session,
-  );
-  expect(response.status).toBe(200);
-  const body = yield* Effect.tryPromise({
-    try: () => response.text(),
-    catch: (cause) => new Cause.UnknownError(cause),
-  });
+  const body = streamedText(yield* runTurn(session, runId, "Please start a new independent goal"));
   yield* waitUntil(
     Effect.zipWith(
       sqlGet("SELECT status FROM chat_runs WHERE run_id = ?", runId),

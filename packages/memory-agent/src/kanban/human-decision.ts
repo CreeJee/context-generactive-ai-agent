@@ -209,20 +209,20 @@ export type DecisionCloseScope = Data.TaggedEnum<{
 }>;
 export const DecisionCloseScope = Data.taggedEnum<DecisionCloseScope>();
 
-export class HumanDecisionRefused extends Schema.TaggedError<HumanDecisionRefused>()(
-  "HumanDecisionRefused",
-  {
-    reason: Schema.Literals([
-      "card_missing",
-      "goal_superseded",
-      "request_missing",
-      "request_mismatch",
-      "request_closed",
-      "answer_invalid",
-      "answer_conflict",
-    ]),
-  },
-) {}
+export class HumanDecisionRefused extends Schema.TaggedError<
+  HumanDecisionRefused,
+  { readonly brand: unique symbol }
+>()("HumanDecisionRefused", {
+  reason: Schema.Literals([
+    "card_missing",
+    "goal_superseded",
+    "request_missing",
+    "request_mismatch",
+    "request_closed",
+    "answer_invalid",
+    "answer_conflict",
+  ]),
+}) {}
 
 const HumanDecisionPayload = Schema.Struct({
   sessionId: Schema.String,
@@ -361,18 +361,24 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const stateOf = (execution: StoredExecution) =>
-    Effect.gen(function* () {
-      const answer = yield* storedAnswer(execution.executionId);
-      if (Option.isSome(answer)) return DecisionState.Answered({ answer: answer.value });
-      const closed = yield* closure(execution.executionId);
-      if (Option.isSome(closed)) return DecisionState.Closed({ reason: closed.value.reason });
-      const state: DecisionState =
-        execution.status === "interrupted"
-          ? DecisionState.Closed({ reason: null })
-          : DecisionState.Pending();
-      return state;
-    });
+  const stateOf = (execution: StoredExecution): Effect.Effect<DecisionState, KanbanStorageFailed> =>
+    Effect.flatMap(
+      storedAnswer(execution.executionId),
+      Option.match({
+        onSome: (answer) => Effect.succeed(DecisionState.Answered({ answer })),
+        onNone: () =>
+          Effect.map(
+            closure(execution.executionId),
+            Option.match({
+              onSome: (closed): DecisionState => DecisionState.Closed({ reason: closed.reason }),
+              onNone: (): DecisionState =>
+                execution.status === "interrupted"
+                  ? DecisionState.Closed({ reason: null })
+                  : DecisionState.Pending(),
+            }),
+          ),
+      }),
+    );
 
   const view = (execution: StoredExecution, payload: HumanDecisionPayload) =>
     Effect.map(stateOf(execution), (state): HumanDecisionRequest => ({
@@ -391,6 +397,9 @@ const make = Effect.gen(function* () {
         Option.map(decoded(execution), (payload) => ({ execution, payload })),
       ),
     );
+  /** A request this owner just stored or answered, which must be there to read back. */
+  const readStored = (requestId: string) =>
+    Effect.flatMap(read(requestId), (found) => Effect.fromOption(found, () => missing));
 
   /** Every request of this kind with its payload; other workflows' executions are skipped. */
   const requests = (executions: ReadonlyArray<StoredExecution>) =>
@@ -466,9 +475,11 @@ const make = Effect.gen(function* () {
   const pendingOf = (sessionIds: ReadonlySet<string>) =>
     Effect.gen(function* () {
       const requests = (yield* open()).filter((request) => sessionIds.has(request.sessionId));
-      const current = new Map<string, string | null>();
-      for (const sessionId of new Set(requests.map((request) => request.sessionId)))
-        current.set(sessionId, yield* pointer(sessionId));
+      const current = new Map(
+        yield* Effect.forEach(new Set(requests.map((request) => request.sessionId)), (sessionId) =>
+          Effect.map(pointer(sessionId), (goalInstanceId) => [sessionId, goalInstanceId] as const),
+        ),
+      );
       return requests
         .filter((request) => current.get(request.sessionId) === request.goalInstanceId)
         .sort((left, right) => left.createdAt - right.createdAt);
@@ -478,10 +489,9 @@ const make = Effect.gen(function* () {
   yield* Effect.forEach(
     yield* stored(storage.pendingExecutions(humanDecisionWorkflow)),
     (execution) =>
-      Effect.flatMap(closure(execution.executionId), (closed) =>
-        Option.isNone(closed)
-          ? Effect.void
-          : provideEngine(HumanDecisionExecution.interrupt(execution.executionId)),
+      Effect.when(
+        provideEngine(HumanDecisionExecution.interrupt(execution.executionId)),
+        Effect.map(closure(execution.executionId), Option.isSome),
       ),
     { discard: true },
   );
@@ -510,39 +520,52 @@ const make = Effect.gen(function* () {
         const existing = yield* read(requestId);
         if (Option.isSome(existing))
           return yield* view(existing.value.execution, existing.value.payload);
-        if ((yield* pointer(input.sessionId)) !== input.goalInstanceId)
-          return yield* HumanDecisionRefused.make({ reason: "goal_superseded" });
-        switch (decisionSubject(input.kind)) {
-          case "goal":
-            if (input.cardId !== goalDecisionCardId)
-              return yield* HumanDecisionRefused.make({ reason: "request_mismatch" });
-            break;
-          case "card": {
-            const card = (yield* workflows.get(input.sessionId)).plan?.steps.find(
-              (step) => step.id === input.cardId,
-            );
-            if (card === undefined)
-              return yield* HumanDecisionRefused.make({ reason: "card_missing" });
-            // The card moves first: a wait never exists for a card the orchestrator still runs.
-            if (card.status !== "human_decision")
-              yield* workflows.transitionCard(
-                input.sessionId,
-                {
-                  cardId: input.cardId,
-                  from: card.status,
-                  to: "human_decision",
-                  detail: `card ${input.cardId} waits for a decision: ${decisionKindName(input.kind)}`,
-                },
-                input.author,
-              );
-          }
-        }
+        yield* Effect.when(
+          Effect.fail(HumanDecisionRefused.make({ reason: "goal_superseded" })),
+          Effect.map(pointer(input.sessionId), (current) => current !== input.goalInstanceId),
+        );
+        yield* Match.value(decisionSubject(input.kind)).pipe(
+          Match.when("goal", () =>
+            Effect.when(
+              Effect.fail(HumanDecisionRefused.make({ reason: "request_mismatch" })),
+              Effect.succeed(input.cardId !== goalDecisionCardId),
+            ),
+          ),
+          Match.when("card", () =>
+            workflows.get(input.sessionId).pipe(
+              Effect.flatMap((state) =>
+                Effect.fromOption(
+                  Option.fromUndefinedOr(
+                    state.plan?.steps.find((step) => step.id === input.cardId),
+                  ),
+                  () => HumanDecisionRefused.make({ reason: "card_missing" }),
+                ),
+              ),
+              // The card moves first: a wait never exists for a card the orchestrator still runs.
+              Effect.flatMap((card) =>
+                Effect.when(
+                  workflows.transitionCard(
+                    input.sessionId,
+                    {
+                      cardId: input.cardId,
+                      from: card.status,
+                      to: "human_decision",
+                      detail: `card ${input.cardId} waits for a decision: ${decisionKindName(input.kind)}`,
+                    },
+                    input.author,
+                  ),
+                  Effect.succeed(card.status !== "human_decision"),
+                ),
+              ),
+            ),
+          ),
+          Match.exhaustive,
+        );
         yield* provideEngine(HumanDecisionExecution.execute(payload, { discard: true }));
         yield* events.publishSession(input.sessionId, "run-state");
         // A concurrent request with the same key may have admitted first; its payload wins.
-        const admitted = yield* read(requestId);
-        if (Option.isNone(admitted)) return yield* missing;
-        return yield* view(admitted.value.execution, admitted.value.payload);
+        const admitted = yield* readStored(requestId);
+        return yield* view(admitted.execution, admitted.payload);
       }),
 
     /**
@@ -551,35 +574,41 @@ const make = Effect.gen(function* () {
      */
     answer: (input: DecisionAnswerInput) =>
       Effect.gen(function* () {
-        const found = yield* read(input.requestId);
-        if (Option.isNone(found))
-          return yield* HumanDecisionRefused.make({ reason: "request_missing" });
-        const { execution, payload } = found.value;
+        const { execution, payload } = yield* Effect.flatMap(read(input.requestId), (found) =>
+          Effect.fromOption(found, () => HumanDecisionRefused.make({ reason: "request_missing" })),
+        );
         if (
           payload.sessionId !== input.sessionId ||
           payload.goalInstanceId !== input.goalInstanceId ||
           payload.cardId !== input.cardId
         )
           return yield* HumanDecisionRefused.make({ reason: "request_mismatch" });
-        if (!answerFits(payload.kind, input.answer))
-          return yield* HumanDecisionRefused.make({ reason: "answer_invalid" });
+        yield* Effect.when(
+          Effect.fail(HumanDecisionRefused.make({ reason: "answer_invalid" })),
+          Effect.succeed(!answerFits(payload.kind, input.answer)),
+        );
         const settle = Effect.gen(function* () {
-          const answer = yield* storedAnswer(execution.executionId);
-          if (Option.isNone(answer)) return yield* missing;
-          if (!sameAnswer(answer.value, input.answer))
-            return yield* HumanDecisionRefused.make({ reason: "answer_conflict" });
+          const answer = yield* Effect.flatMap(storedAnswer(execution.executionId), (found) =>
+            Effect.fromOption(found, () => missing),
+          );
+          yield* Effect.when(
+            Effect.fail(HumanDecisionRefused.make({ reason: "answer_conflict" })),
+            Effect.succeed(!sameAnswer(answer, input.answer)),
+          );
           // Joins the run, so the card has moved when the answer returns. A failed move stays a
           // failure: the answer is stored, but the card did not leave human_decision.
           yield* provideEngine(HumanDecisionExecution.execute(payload));
-          const current = yield* read(input.requestId);
-          if (Option.isNone(current)) return yield* missing;
-          return yield* view(current.value.execution, current.value.payload);
+          const current = yield* readStored(input.requestId);
+          return yield* view(current.execution, current.payload);
         });
         const admit = Effect.gen(function* () {
-          if ((yield* pointer(input.sessionId)) !== payload.goalInstanceId) {
-            yield* closeOne(input, "goal_replaced");
-            return yield* HumanDecisionRefused.make({ reason: "goal_superseded" });
-          }
+          yield* Effect.when(
+            Effect.andThen(
+              closeOne(input, "goal_replaced"),
+              Effect.fail(HumanDecisionRefused.make({ reason: "goal_superseded" })),
+            ),
+            Effect.map(pointer(input.sessionId), (current) => current !== payload.goalInstanceId),
+          );
           const token = DurableDeferred.tokenFromExecutionId(DecisionAnswered, {
             workflow: HumanDecisionExecution,
             executionId: execution.executionId,
@@ -652,11 +681,20 @@ const make = Effect.gen(function* () {
         const sessions = yield* stored(projectSessions(projectId));
         const titles = new Map(sessions.map((session) => [session.id, session.title]));
         const requests = yield* pendingOf(new Set(titles.keys()));
-        const cardTitles = new Map<string, Map<string, string>>();
-        for (const sessionId of new Set(requests.map((request) => request.sessionId))) {
-          const steps = (yield* workflows.get(sessionId)).plan?.steps ?? [];
-          cardTitles.set(sessionId, new Map(steps.map((step) => [step.id, step.title])));
-        }
+        const cardTitles = new Map(
+          yield* Effect.forEach(
+            new Set(requests.map((request) => request.sessionId)),
+            (sessionId) =>
+              Effect.map(
+                workflows.get(sessionId),
+                (state) =>
+                  [
+                    sessionId,
+                    new Map((state.plan?.steps ?? []).map((step) => [step.id, step.title])),
+                  ] as const,
+              ),
+          ),
+        );
         return requests.map((request): DecisionInboxItem => ({
           ...request,
           sessionTitle: titles.get(request.sessionId) ?? null,

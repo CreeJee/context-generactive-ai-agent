@@ -1,10 +1,18 @@
 import { isTruthy } from "../truthy.ts";
 import { Semaphore } from "effect";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import { chat, type ChatMiddleware } from "@tanstack/ai";
-import { Cause, Context, Crypto, Effect, Layer, Schema } from "effect";
-import { sdkPromise } from "../runtime/sdk-promise.ts";
-import { ChatState } from "../chat-state/chat-state.ts";
+import {
+  Array as Arr,
+  Cause,
+  Context,
+  Crypto,
+  Effect,
+  Layer,
+  Option,
+  Schema,
+  Stream,
+} from "effect";
+import { singleAnswer } from "../model/single-call.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import { AuthConnectionState, type ModelSelection } from "../providers/contracts.ts";
 import { Nodes, type Node, type NodeKind } from "../memory/nodes.ts";
@@ -14,11 +22,13 @@ import {
   recentRawUserTurns,
   summaryBlockTurns,
 } from "./compaction-policy.ts";
-import { ApiUsage, collectApiUsage } from "./api-usage.ts";
+import { ApiUsage, recordUsage } from "./api-usage.ts";
 import { fallbackLogged, logDefect } from "../runtime/logged-failures.ts";
+import type { RunHook } from "../loop/run.ts";
+import { finishedRun, RunStore } from "../loop/store.ts";
 import {
   compactEffect,
-  compactionState,
+  compactionStateEffect,
   estimateConversation,
   linedUp,
   memoryLookups,
@@ -43,22 +53,18 @@ Reply with the bullet points and nothing else.`;
 
 const summaryTimeoutMs = 120_000;
 
-export class TurnSummaryFailed extends Schema.TaggedError<TurnSummaryFailed>()(
-  "TurnSummaryFailed",
-  {
-    operation: Schema.Literals(["model", "load-messages", "load-state", "persist", "empty-answer"]),
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {}
+export class TurnSummaryFailed extends Schema.TaggedError<
+  TurnSummaryFailed,
+  { readonly brand: unique symbol }
+>()("TurnSummaryFailed", {
+  operation: Schema.Literals(["model", "load-messages", "load-state", "persist", "empty-answer"]),
+  cause: Schema.optional(Schema.Defect()),
+}) {}
 
-const summaryPromise = <A>(
-  operation: TurnSummaryFailed["operation"],
-  evaluate: () => PromiseLike<A>,
-) =>
-  Effect.tryPromise({
-    try: evaluate,
-    catch: (cause) => TurnSummaryFailed.make({ operation, cause }),
-  });
+const summaryFailed =
+  (operation: TurnSummaryFailed["operation"]) =>
+  <E>(cause: E) =>
+    TurnSummaryFailed.make({ operation, cause });
 const inputCharacters = 60_000;
 const summaryCharacters = 6_000;
 /** How much of each node the summarizer reads. */
@@ -78,10 +84,9 @@ const nodeLine = (node: Node) =>
   `[${node.kind} ${node.id}${node.detail.ok === false ? " failed" : ""}]\n${shorten(node.text, nodeCharacters[node.kind])}`;
 
 const make = Effect.fnUntraced(function* (automatic: boolean) {
-  const run = Effect.runPromiseWith(yield* Effect.context());
   const scope = yield* Effect.scope;
   const nodes = yield* Nodes;
-  const chatState = yield* ChatState;
+  const runStore = yield* RunStore;
   const active = yield* ActiveProvider;
   const usageLedger = yield* ApiUsage;
   const crypto = yield* Crypto.Crypto;
@@ -91,7 +96,6 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
     config.read,
     (settings) => settings.summaryStartPercent ?? defaultSummaryStartPercent,
   );
-  const { messages: messageStore, metadata } = chatState.persistence.stores;
 
   const summarize = Effect.fn("TurnSummaries.summarize")(function* (
     sessionId: string,
@@ -106,24 +110,23 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
       .join("\n\n")
       .slice(0, inputCharacters);
     const threadId = yield* crypto.randomUUIDv4();
-    const answer = yield* sdkPromise((abortController) =>
-      chat({
-        adapter: services.runtime.adapter(cheap),
-        messages: [{ role: "user", content: `Nodes:\n\n${input}` }],
-        systemPrompts: [summaryInstructions],
-        threadId,
-        middleware: [
-          collectApiUsage(usageLedger, {
-            rootSessionId: sessionId,
-            purpose: "summary",
-            provider: cheap.provider,
-            model: cheap.model,
-          }),
-        ],
-        abortController,
-        stream: false,
-      }),
-    ).pipe(
+    const answer = yield* singleAnswer({
+      runtime: services.runtime,
+      selection: cheap,
+      threadId,
+      system: summaryInstructions,
+      prompt: `Nodes:\n\n${input}`,
+    }).pipe(
+      Effect.tap(({ usage }) =>
+        recordUsage(usageLedger, {
+          rootSessionId: sessionId,
+          purpose: "summary",
+          provider: cheap.provider,
+          model: cheap.model,
+          threadId,
+          usage,
+        }),
+      ),
       Effect.timeout(summaryTimeoutMs),
       Effect.mapError((cause) => TurnSummaryFailed.make({ operation: "model", cause })),
     );
@@ -149,21 +152,24 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
       const auth = yield* active.auth(selection);
       if (!AuthConnectionState.$is("signed-in")(auth)) return "unavailable" as const;
 
-      const messages = yield* summaryPromise("load-messages", () =>
-        messageStore.loadThread(sessionId),
+      const messages = yield* Effect.mapError(
+        runStore.thread(sessionId),
+        summaryFailed("load-messages"),
       );
-      const state = yield* summaryPromise("load-state", () => compactionState(metadata, sessionId));
+      const state = yield* Effect.mapError(
+        compactionStateEffect({ metadata: runStore.chatMetadata, threadId: sessionId }),
+        summaryFailed("load-state"),
+      );
       const sources: CompactionSources = {
         toolResultIds: (toolCallIds) => nodes.toolResultIds(sessionId, toolCallIds),
         nodeTexts: nodes.texts,
       };
       const { nodeText } = yield* memoryLookups(sources, [], state.blocks);
-      const blocks: SummaryBlock[] = linedUp(messages, state.blocks, nodeText);
+      const blocks: ReadonlyArray<SummaryBlock> = linedUp(messages, state.blocks, nodeText);
       if (!whole && blocks.length === 0) {
         const runtime = yield* active.runtime(selection);
         const threshold = (runtime.contextWindow(selection.model) * (yield* startPercent)) / 100;
         const unsummarized = yield* compactEffect({
-          threadId: sessionId,
           messages,
           state: { manual: state.manual, blocks: [] },
           sources,
@@ -180,26 +186,66 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
         return at !== undefined && sameTurn(messages[at], turnNodes[index]?.text ?? null);
       };
 
-      for (;;) {
-        const start = blocks.at(-1)?.end ?? 0;
+      /** The block that starts where the last one ended, while the turns left can fill one. */
+      const blockFrom = (start: number) => {
         const end = whole ? Math.min(start + summaryBlockTurns, limit) : start + summaryBlockTurns;
-        if (end <= start || end > limit) break;
         const first = turnNodes[start];
         const next = turnNodes[end];
-        if (!isTruthy(first) || !isTruthy(next) || !lines(start) || !lines(end)) break;
-        const part = sessionNodes.filter((node) => node.seq >= first.seq && node.seq < next.seq);
-        const text = yield* summarize(sessionId, part, selection);
-        blocks.push({ end, nextTurnNodeId: next.id, text });
-        yield* summaryPromise("persist", () =>
-          metadata.set(turnSummariesNamespace, sessionId, { blocks }),
-        );
-      }
+        return end > start &&
+          end <= limit &&
+          isTruthy(first) &&
+          isTruthy(next) &&
+          lines(start) &&
+          lines(end)
+          ? Option.some({ end, first, next })
+          : Option.none();
+      };
+      // Each block is kept as soon as it is summarized.
+      yield* Stream.paginate(blocks.at(-1)?.end ?? 0, (start) =>
+        Option.match(blockFrom(start), {
+          onNone: () => Effect.succeed([Arr.empty<SummaryBlock>(), Option.none<number>()] as const),
+          onSome: ({ end, first, next }) =>
+            summarize(
+              sessionId,
+              sessionNodes.filter((node) => node.seq >= first.seq && node.seq < next.seq),
+              selection,
+            ).pipe(
+              Effect.map(
+                (text) =>
+                  [
+                    Arr.of<SummaryBlock>({ end, nextTurnNodeId: next.id, text }),
+                    Option.some(end),
+                  ] as const,
+              ),
+            ),
+        }),
+      ).pipe(
+        Stream.runFoldEffect(
+          () => blocks,
+          (kept, block) => {
+            const all = Arr.append(kept, block);
+            return Effect.as(
+              Effect.mapError(
+                runStore.chatMetadata.set(turnSummariesNamespace, sessionId, { blocks: all }),
+                summaryFailed("persist"),
+              ),
+              all,
+            );
+          },
+        ),
+      );
       return "done" as const;
     }).pipe(
       // What was summarized before the failure is kept; the rest is tried again next time.
       fallbackLogged("Turn summaries stopped", () => "failed" as const),
       oneAtATime.withPermits(1),
     );
+
+  // Retried after the next run; a failure here never reaches the conversation.
+  const inBackground = (sessionId: string) =>
+    Effect.catchDefect(catchUp(sessionId, false), (defect) =>
+      logDefect("Turn summaries stopped")(Cause.die(defect)),
+    ).pipe(Effect.forkIn(scope), Effect.when(Effect.succeed(automatic)), Effect.asVoid);
 
   return {
     catchUp,
@@ -209,21 +255,13 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
     setStartPercent: (percent: number) =>
       Effect.as(config.update({ summaryStartPercent: percent }), percent),
 
-    /** Summarizes in the background once a run has finished, so compaction never waits for it. */
-    afterRun: (sessionId: string): ChatMiddleware => ({
-      name: "memory-agent/turn-summaries",
-      onFinish: () => {
-        if (!automatic) return;
-        // Retried after the next run; a failure here never reaches the conversation.
-        void run(
-          Effect.forkIn(
-            Effect.catchDefect(catchUp(sessionId, false), (defect) =>
-              logDefect("Turn summaries stopped")(Cause.die(defect)),
-            ),
-            scope,
-          ),
-        );
-      },
+    /**
+     * Summarizes in the background once a run has finished, so compaction never waits for it. A
+     * run that failed or was cancelled starts none.
+     */
+    hookFor: (sessionId: string): RunHook => ({
+      ended: (_scope, end) =>
+        Effect.when(inBackground(sessionId), Effect.succeed(finishedRun(end))).pipe(Effect.asVoid),
     }),
   };
 });

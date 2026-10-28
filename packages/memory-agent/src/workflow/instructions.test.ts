@@ -185,7 +185,7 @@ describe("workflowInstructions", () => {
       },
     };
     const prompt = workflowInstructions(current, resolved("execute"));
-    for (const text of [
+    [
       "Approved Plan v11",
       "P03B2 [in_progress]",
       "Continue owner integration",
@@ -199,8 +199,9 @@ describe("workflowInstructions", () => {
       "rather than merely listing remaining tasks",
       "is not by itself execution intent or new approval",
       "pending permissions or a confirmed blocker",
-    ])
+    ].forEach((text) => {
       expect(prompt).toContain(text);
+    });
     expect(prompt).not.toContain("receipt-0");
     expect(current.plan?.steps[0]?.status).toBe("in_progress");
   });

@@ -1,4 +1,4 @@
-import { Cause, Effect, FileSystem, Schema } from "effect";
+import { Effect, FileSystem, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { Interpretations } from "../../src/memory/interpretations.ts";
@@ -9,6 +9,7 @@ import { Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { MemoryTools } from "../../src/tools/memory.ts";
 import { selectTestModel } from "../support/provider.ts";
+import { callTool } from "../support/run-tools.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { sqlAll, sqlGet } from "../support/sql.ts";
 
@@ -31,12 +32,6 @@ const Trace = Schema.Struct({
     Schema.Struct({ id: Schema.String, possibleRelation: Schema.String, reason: Schema.String }),
   ),
 });
-
-const call = <A>(execute: () => A) =>
-  Effect.tryPromise({
-    try: () => Promise.resolve(execute()),
-    catch: (cause) => new Cause.UnknownError(cause),
-  });
 
 /**
  * A fresh project in the shared agent. Topics, search results and uninterpreted counts are
@@ -72,9 +67,14 @@ const freshProject = Effect.gen(function* () {
   const find = (query: string) =>
     Effect.flatMap(MemorySearch, (search) => search.find({ query, projectId: project.id }));
   const trace = Effect.fnUntraced(function* (id: string) {
-    const tools = (yield* MemoryTools).forProject(project.id);
+    const { tools } = yield* (yield* MemoryTools).toolsFor({
+      projectId: project.id,
+      sessionId: session.id,
+      runId: `${session.id}:trace`,
+      userNodeId: Effect.succeed("user"),
+    });
     return yield* Schema.decodeUnknownEffect(Trace)(
-      yield* call(() => tools.find((tool) => tool.name === "trace_evidence")!.execute!({ id })),
+      yield* callTool(tools, "trace_evidence", { id }),
     );
   });
   return { project, say, edges, job, find, trace };

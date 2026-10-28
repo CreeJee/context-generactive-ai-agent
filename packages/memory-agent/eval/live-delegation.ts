@@ -1,44 +1,44 @@
-import { nativePromise, runNativeEffect } from "../src/runtime/native-effect.ts";
+import { runNativeEffect } from "../src/runtime/native-effect.ts";
 import { Console, Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../src/truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { randomUUID } from "../src/runtime/synchronous-crypto.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { NodeServices } from "@effect/platform-node";
-import { Context, FileSystem } from "effect";
-import { runOAuthNodeEffect } from "../src/oauth/node-runtime.ts";
+import { Context, Crypto, FileSystem, MutableRef } from "effect";
+import { nodePlatform, nodePlatformLayer } from "../src/runtime/node-platform.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { path } from "../src/runtime/synchronous-path.ts";
 const { join } = path;
-import { DateTime, Clock, Effect, Layer, Schedule, Schema } from "effect";
+import { DateTime, Clock, Effect, Layer, ManagedRuntime, Schedule, Schema, Stream } from "effect";
 import { SqlClient } from "effect/sql";
-import { maxIterations, normalizeSystemPrompts, type ModelMessage } from "@tanstack/ai";
-import { AgentChat } from "../src/agent/chat.ts";
+import { Prompt } from "effect/ai";
+import { AgUiEvent } from "../src/loop/chunks.ts";
 import { ApiUsage } from "../src/agent/api-usage.ts";
-import { ChatState } from "../src/chat-state/chat-state.ts";
-import { messageText } from "../src/messages/text.ts";
+import { RunStore } from "../src/loop/store.ts";
+import { messageText } from "../src/agent/compaction.ts";
 import { GlobalConfig } from "../src/config/global-config.ts";
 import { defaultStorageRoot } from "../src/config/storage-root.ts";
-import { optionalProperty } from "../src/optional-property.ts";
 import { memoryAgentLayer } from "../src/layers.ts";
 import { Projects } from "../src/projects/projects.ts";
 import { ProviderRegistry } from "../src/providers/registry.ts";
-import { AuthConnectionState, type ProviderId } from "../src/providers/contracts.ts";
+import {
+  AuthConnectionState,
+  type ModelRun,
+  type ModelSelection,
+  type ProviderId,
+} from "../src/providers/contracts.ts";
 import { SubscriptionProviderRegistry } from "../src/providers/subscriptions.ts";
 import { storedOAuthProfiles } from "./stored-profiles.ts";
 import { providerProtocols } from "../src/oauth/protocol.ts";
-import {
-  createKeychainProfileCredentialStore,
-  createSubscriptionOAuthClient,
-} from "../src/oauth/validation-harness.ts";
+import { createSubscriptionOAuthClient, OAuthKeychain } from "../src/oauth/validation-harness.ts";
 import { createSubscriptionProvider } from "../src/providers/subscription-provider.ts";
 import { createSubscriptionRuntime } from "../src/providers/subscription-runtime.ts";
 import { Sessions } from "../src/sessions/sessions.ts";
 import { Subagents } from "../src/subagents/subagents.ts";
 import { fakeEmbedderLayer } from "../src/testing/fake-embedder.ts";
 import { fakeMorphLayer } from "../src/testing/fake-morph.ts";
-import { estimateRequestTokens, exceedsRequestTokenBudget } from "./request-token-budget.ts";
-import { subscriptionRequest } from "../src/providers/subscription-adapter.ts";
+import { inProcessChatApi } from "../src/testing/chat-api.ts";
+import { pilotGuarded, pilotStopped, type PilotRequest } from "./pilot-guard.ts";
+import { exceedsRequestTokenBudget } from "./request-token-budget.ts";
 
 // Explicit live pilot over synthetic files only. Never writes the user's config or project.
 // This comparison changes parent guidance only; it is not a benchmark of old runtime behavior.
@@ -57,22 +57,28 @@ const selection = EffectFunction.flow(
   Schema.decodeResult(Schema.fromJsonString(Selection)),
   Result.getOrThrow,
 )(
-  await runOAuthNodeEffect(
+  await nodePlatform.runPromise(
     Effect.flatMap(FileSystem.FileSystem, (fs) =>
-      fs.readFileString(join(defaultStorageRoot, "config.json")),
+      Effect.flatMap(defaultStorageRoot, (root) => fs.readFileString(join(root, "config.json"))),
     ),
   ),
 );
-const selectedProfile = (await runOAuthNodeEffect(storedOAuthProfiles(selection.provider))).find(
-  (profile) => profile.selected,
-)?.id;
-const client = createSubscriptionOAuthClient({
-  protocol: providerProtocols.openai,
-  ...optionalProperty(
-    "store",
-    isTruthy(selectedProfile) ? createKeychainProfileCredentialStore(selectedProfile) : undefined,
-  ),
-});
+const oauth = ManagedRuntime.make(
+  OAuthKeychain.keychain.pipe(Layer.provideMerge(nodePlatformLayer)),
+);
+const client = await oauth.runPromise(
+  Effect.gen(function* () {
+    const vault = yield* OAuthKeychain;
+    const selectedProfile = (yield* storedOAuthProfiles(selection.provider)).find(
+      (profile) => profile.selected,
+    )?.id;
+    // A stored profile id is always a valid keychain slot id.
+    const store = isTruthy(selectedProfile)
+      ? yield* Effect.orDie(vault.profileStore(selectedProfile))
+      : vault.store;
+    return yield* createSubscriptionOAuthClient({ protocol: providerProtocols.openai, store });
+  }),
+);
 const baseline = `You can delegate with run_subagent, optionally to a named helper. A child sees only the task and uses the same workspace, model and permissions. Dispatch returns immediately. Retrieve its report with get_subagent_reports before relying on it. Before a final answer call adopt_subagent_reports with only the reports and evidence actually used.`;
 const Busy = Schema.Struct({ busy: Schema.Finite });
 /**
@@ -95,20 +101,14 @@ const settled = (sessionId: string) =>
       Effect.repeat({ schedule: Schedule.spaced("1 second"), while: ({ busy }) => busy > 0 }),
     ),
   );
-const frames = Schema.fromJsonString(
-  Schema.Struct({
-    type: Schema.String,
-    delta: Schema.optionalKey(Schema.String),
-    message: Schema.optionalKey(Schema.String),
-  }),
-);
-let totalCalls = 0;
-let estimatedInputTokens = 0;
+const totalCalls = MutableRef.make(0);
+const estimatedInputTokens = MutableRef.make(0);
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "optimized-guidance") {
   const platform = yield* Layer.build(NodeServices.layer);
   const fs = Context.get(platform, FileSystem.FileSystem);
+  const crypto = Context.get(platform, Crypto.Crypto);
   const base = yield* fs.makeTempDirectoryScoped({ prefix: "delegation-live-eval-" });
   const projectRoot = join(base, "project");
   const home = join(base, "home");
@@ -123,18 +123,51 @@ const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "opt
     "export const childTotal = [7, 11].reduce((sum, x) => sum + x, 0);\n",
   );
   const observations: { at: number; child: boolean; toolCalls: readonly string[] }[] = [];
+  /**
+   * Within the pilot's budget, records who asks and which tools the conversation called so far,
+   * and gives the parent the baseline guidance in that arm.
+   */
+  const observed = ({ selection: selected, prompt, estimate }: PilotRequest) =>
+    Effect.gen(function* () {
+      if (selected.provider !== "openai") return yield* pilotStopped("openai_pilot_only");
+      if (
+        MutableRef.get(totalCalls) >= 24 ||
+        MutableRef.get(estimatedInputTokens) + estimate.estimatedTokens > 200_000 ||
+        exceedsRequestTokenBudget(estimate, 30_000)
+      )
+        return yield* pilotStopped("delegation_pilot_budget_exceeded");
+      MutableRef.increment(totalCalls);
+      MutableRef.update(estimatedInputTokens, (tokens) => tokens + estimate.estimatedTokens);
+      const child = prompt.content.some(
+        (message) => message.role === "system" && message.content.includes("You are a subagent"),
+      );
+      const calls = prompt.content.flatMap((message) =>
+        message.role === "assistant"
+          ? message.content.flatMap((part) => (part.type === "tool-call" ? [part.name] : []))
+          : [],
+      );
+      observations.push({ at: yield* Clock.currentTimeMillis, child, toolCalls: calls });
+      return variant === "baseline-guidance" && !child
+        ? Prompt.fromMessages(
+            prompt.content.map((message) =>
+              message.role === "system" &&
+              message.content.startsWith("You can delegate with run_subagent")
+                ? Prompt.systemMessage({ content: baseline })
+                : message,
+            ),
+          )
+        : prompt;
+    });
   const registry = Layer.effect(
     ProviderRegistry,
     Effect.gen(function* () {
-      const effectClock = yield* Clock.Clock;
-
       const upstream = yield* ProviderRegistry;
       const { subscriptionDependencies: _nativeDependencies, ...fallback } = upstream;
       const config = yield* GlobalConfig;
-      const openai = createSubscriptionProvider({
+      const openai = yield* createSubscriptionProvider({
         protocol: providerProtocols.openai,
         config,
-        client,
+        client: { ...client, startLogin: client.startLogin() },
       });
       const openaiRuntime = createSubscriptionRuntime("openai", client, openai.contextWindow);
       return {
@@ -146,62 +179,11 @@ const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "opt
             provider === "openai" ? Effect.succeed(openaiRuntime) : upstream.runtime(provider),
             (service) => ({
               ...service,
-              agentLoop: maxIterations(12),
-              adapter: (selected: Parameters<typeof service.adapter>[0]) => {
-                const adapter = service.adapter(selected);
-                return new Proxy(adapter, {
-                  get(target, key) {
-                    if (key !== "chatStream") {
-                      // SDK adapters have private fields; bind transparent forwarding to the original.
-                      // oxlint-disable-next-line anti-slop/no-reflect-get
-                      const value = Reflect.get(target, key, target);
-                      // oxlint-disable-next-line anti-slop/no-runtime-typeof
-                      return typeof value === "function" ? value.bind(target) : value;
-                    }
-                    return (options: Parameters<typeof adapter.chatStream>[0]) => {
-                      if (selected.provider !== "openai") throw new Error("openai_pilot_only");
-                      const estimate = estimateRequestTokens(
-                        subscriptionRequest({
-                          provider: selected.provider,
-                          selection: selected,
-                          options: options,
-                        }),
-                        selected.model,
-                      );
-                      if (
-                        totalCalls >= 24 ||
-                        estimatedInputTokens + estimate.estimatedTokens > 200_000 ||
-                        exceedsRequestTokenBudget(estimate, 30_000)
-                      )
-                        throw new Error("delegation_pilot_budget_exceeded");
-                      totalCalls++;
-                      estimatedInputTokens += estimate.estimatedTokens;
-                      const child = normalizeSystemPrompts(options.systemPrompts ?? []).some(
-                        (prompt) => prompt.content.includes("You are a subagent"),
-                      );
-                      const calls = options.messages.flatMap((message) =>
-                        message.role === "assistant"
-                          ? (message.toolCalls ?? []).map((call) => call.function.name)
-                          : [],
-                      );
-                      observations.push({
-                        at: effectClock.currentTimeMillisUnsafe(),
-                        child,
-                        toolCalls: calls,
-                      });
-                      const prompts =
-                        variant === "baseline-guidance" && !child
-                          ? normalizeSystemPrompts(options.systemPrompts ?? []).map((prompt) =>
-                              prompt.content.startsWith("You can delegate with run_subagent")
-                                ? baseline
-                                : prompt,
-                            )
-                          : (options.systemPrompts ?? []);
-                      return target.chatStream({ ...options, systemPrompts: prompts });
-                    };
-                  },
-                });
-              },
+              model: (selected: ModelSelection, run: ModelRun) =>
+                Effect.map(
+                  service.model(selected, run),
+                  pilotGuarded({ selection: selected, check: observed }),
+                ),
             }),
           ),
       };
@@ -232,8 +214,8 @@ const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "opt
       const project = yield* projects.setPermissionMode(initial.id, "full");
       const session = yield* (yield* Sessions).create(project.id);
       return {
-        agent: yield* AgentChat,
-        state: yield* ChatState,
+        chat: yield* inProcessChatApi,
+        runStore: yield* RunStore,
         children: yield* Subagents,
         usage: yield* ApiUsage,
         session,
@@ -242,38 +224,24 @@ const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "opt
     servicesContext,
   );
   const started = DateTime.toEpochMillis(DateTime.nowUnsafe());
-  const prompt = `Audit two independent files without modifying them. Delegate child.ts to one subagent; its task must first run the finite command node -e 'setTimeout(()=>Effect.runSync(Console.log("ready")),10000)' and then read child.ts and report childTotal. You personally read main.ts and calculate mainTotal while the child runs. Retrieve and review the child's report before giving both totals. Do not change the Goal or Plan. Do not create another delegation to poll.`;
-  const response = yield* Effect.provideContext(
-    services.agent.handle(
-      new Request("http://local/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: stringifyJson({
-          threadId: services.session.id,
-          runId: randomUUID(),
-          messages: [{ id: randomUUID(), role: "user", content: prompt }],
-          tools: [],
-          context: [],
-        }),
-      }),
-      services.session.id,
-    ),
+  const prompt = `Audit two independent files without modifying them. Delegate child.ts to one subagent; its task must first run the finite command node -e 'setTimeout(()=>console.log("ready"),10000)' and then read child.ts and report childTotal. You personally read main.ts and calculate mainTotal while the child runs. Retrieve and review the child's report before giving both totals. Do not change the Goal or Plan. Do not create another delegation to poll.`;
+  const events = yield* Effect.provideContext(
+    services.chat
+      .run({
+        params: { session: services.session.id },
+        headers: {},
+        payload: {
+          runId: yield* crypto.randomUUIDv4(),
+          messages: [{ id: yield* crypto.randomUUIDv4(), role: "user", content: prompt }],
+        },
+      })
+      .pipe(Effect.flatMap(Stream.runCollect)),
     servicesContext,
   );
-  const sse = yield* nativePromise(() => response.text());
-  if (!response.ok) throw new Error(`pilot_http_${response.status}: ${sse}`);
-  const events = sse.split("\n").flatMap((line) =>
-    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-    line.startsWith("data: ")
-      ? [EffectFunction.flow(Schema.decodeResult(frames), Result.getOrThrow)(line.slice(6))]
-      : [],
-  );
-  const errors = events.filter((event) => event.type === "RUN_ERROR" || event.type === "error");
+  const errors = events.flatMap(({ data }) => (AgUiEvent.guards.RUN_ERROR(data) ? [data] : []));
   if (errors.length > 0) throw new Error(`pilot_run_failed: ${stringifyJson(errors)}`);
   yield* Effect.provideContext(settled(services.session.id), servicesContext);
-  const messages: ModelMessage[] = yield* nativePromise(() =>
-    services.state.persistence.stores.messages.loadThread(services.session.id),
-  );
+  const messages = yield* services.runStore.thread(services.session.id);
   const last = messages.findLast((message) => message.role === "assistant");
   const answer = last === undefined ? "" : messageText(last);
   const calls = messages.flatMap((message) =>
@@ -300,22 +268,20 @@ const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "opt
     usage: yield* services.usage.byRootSession(services.session.id),
   };
 }, Effect.scoped);
-const results = [
-  await runNativeEffect(arm("baseline-guidance")),
-  await runNativeEffect(arm("optimized-guidance")),
-];
-// Native stdout/stderr or SDK logging boundary preserves the existing output format.
-Effect.runSync(
-  Console.log(
-    stringifyJson(
-      {
-        results,
-        totalCalls,
-        estimatedInputTokens,
-        note: "A serial two-arm pilot, not statistically significant. The preflight estimate is not billed usage.",
-      },
-      null,
-      2,
+await runNativeEffect(
+  Effect.flatMap(Effect.all([arm("baseline-guidance"), arm("optimized-guidance")]), (results) =>
+    // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+    Console.log(
+      stringifyJson(
+        {
+          results,
+          totalCalls: MutableRef.get(totalCalls),
+          estimatedInputTokens: MutableRef.get(estimatedInputTokens),
+          note: "A serial two-arm pilot, not statistically significant. The preflight estimate is not billed usage.",
+        },
+        null,
+        2,
+      ),
     ),
   ),
 );

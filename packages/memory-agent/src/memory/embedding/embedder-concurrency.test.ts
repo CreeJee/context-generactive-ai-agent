@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest";
-import { Deferred, Effect, Fiber, Queue } from "effect";
+import { Deferred, Effect, Fiber, MutableRef, Queue } from "effect";
 import { expect } from "vite-plus/test";
 import type { ChunkSpan } from "./chunks.ts";
 import { modelWorker, type ModelSession } from "./embedder.ts";
@@ -15,10 +15,10 @@ const fixture = Effect.gen(function* () {
   const sent = yield* Queue.make<Sent>();
   const terminations: number[] = [];
   const terminate: Array<Effect.Effect<void>> = [];
-  let sessions = 0;
+  const sessions = MutableRef.make(0);
   const connect = () =>
     Effect.sync((): ModelSession => {
-      const session = sessions++;
+      const session = MutableRef.getAndIncrement(sessions);
       return {
         device: "cpu",
         countTokens: () => Effect.succeed([]),
@@ -41,7 +41,7 @@ const fixture = Effect.gen(function* () {
     { variant: "quint8", devices: ["cpu"] },
     connect,
   );
-  return { sent, terminations, terminate, sessions: () => sessions, model };
+  return { sent, terminations, terminate, sessions: () => MutableRef.get(sessions), model };
 });
 
 it.effect("bounds concurrent requests and removes a cancelled waiter before dispatch", () =>
@@ -55,12 +55,16 @@ it.effect("bounds concurrent requests and removes a cancelled waiter before disp
     expect(yield* Queue.size(sent)).toBe(1);
     yield* Fiber.interrupt(calls[1]!);
     expect(terminations).toEqual([]);
-    for (const i of [0, 2, 3, 4, 5, 6, 7]) {
-      const { texts, reply } = yield* Queue.take(sent);
-      expect(texts).toEqual([String(i)]);
-      yield* Deferred.succeed(reply, [[{ start: i, end: i + 1 }]]);
-      expect(yield* Fiber.join(calls[i]!)).toEqual([[{ start: i, end: i + 1 }]]);
-    }
+    yield* Effect.forEach(
+      [0, 2, 3, 4, 5, 6, 7],
+      Effect.fnUntraced(function* (i) {
+        const { texts, reply } = yield* Queue.take(sent);
+        expect(texts).toEqual([String(i)]);
+        yield* Deferred.succeed(reply, [[{ start: i, end: i + 1 }]]);
+        expect(yield* Fiber.join(calls[i]!)).toEqual([[{ start: i, end: i + 1 }]]);
+      }),
+      { discard: true },
+    );
     expect(yield* Queue.size(sent)).toBe(0);
     expect(terminations).toEqual([]);
   }).pipe(Effect.scoped),

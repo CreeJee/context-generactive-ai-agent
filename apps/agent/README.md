@@ -117,9 +117,9 @@ UI 컴포넌트는 shadcn으로 추가합니다(`AGENT.md`).
 | `GET /api/sessions/:session/approvals`       | run을 멈추지 못하는 승인 대기(서브에이전트, 외부 에이전트)                           |
 | `GET /api/sessions/:session/subagents/:id`   | 서브에이전트 대화 기록                                                               |
 | `POST .../approvals/:approval`               | 그 호출 승인/거부 `{approved}`(소유 탭만)                                            |
-| `GET /api/chat?session=&threadId=`           | 새로고침 복원: 대화, 진행 중인 run, 대기 중인 승인                                   |
-| `GET /api/chat?session=&runId=&offset=`      | 진행 중이거나 끝난 run의 답변을 로그에서 다시 읽기                                   |
-| `POST /api/chat?session=`                    | 채팅 실행(SSE), 승인 재개 포함(소유 탭만)                                            |
+| `GET /api/sessions/:session/messages?limit=` | 최근 메시지 한 쪽(`before`로 이전 쪽), 진행 중인 run, 대기 중인 승인                 |
+| `POST /api/sessions/:session/runs`           | 채팅 실행(SSE), 승인 재개 포함(소유 탭만)                                            |
+| `GET .../runs/:run/events?after=`            | 진행 중이거나 끝난 run의 답변을 로그에서 `after` 다음부터 다시 읽기                  |
 | `GET/POST /api/settings/kagi`                | Kagi 상태, `register`, `enable`, `disable`, `remove`                                 |
 | `POST /api/attachments`                      | 이미지 원본 바이트 업로드(png/jpeg/gif/webp, 20 MiB 이하)                            |
 | `GET /api/attachments/:attachment`           | 저장된 이미지(다른 사이트 삽입 차단)                                                 |
@@ -136,3 +136,60 @@ server/        프로덕션 진입점: main.ts(CLI/acp), serve.ts(node:http + Re
                runtime-assets.ts(실행 파일 자원 풀기), launch-project.ts(실행 폴더를 프로젝트로 열기)
 scripts/       package.ts(실행 파일 만들기), smoke-package.ts(배포물 확인)
 ```
+
+## Interface
+
+실행 명령은 위 `실행` 절, API 라우트는 위 `API 라우트` 절, 디렉터리 구조는 위 `구조` 절을 참고한다.
+
+- `developmentApiProxy` (`vite.config.ts`) — `EffectFunction.dual(2, ...)`로 `(target, backendBuildId)` 형태와 `(backendBuildId)(target)` 형태를 모두 받는다. Vite `ProxyOptions`를 돌려주고, 요청에 `x-context-agent-build-id` 헤더가 없을 때만 backendBuildId를 넣는다
+- `default` (`vite.config.ts`) — `defineConfig(({ command }) => ...)` Vite+ 설정. `ManagedRuntime.make(NodeFileSystem.layer)`로 Effect를 실행해 env를 읽고 define, test, server.proxy, lint, plugins(tailwindcss, reactRouter), resolve, optimizeDeps, ssr, pack, run.tasks를 만든다
+- `import.meta.env.VITE_CONTEXT_AGENT_BUILD_ID` — `CONTEXT_AGENT_BUILD_ID`(없으면 `""`)를 JSON 문자열로 인코딩해 클라이언트 코드에 주입하는 define 상수
+- `run.tasks` (`vite.config.ts`) — `build`(`react-router build`, 의존 워크스페이스 build 먼저), `bundle`(`vp pack`, build 의존), `typecheck`(`react-router typegen && tsc && tsc -p server/tests/tsconfig.json`), `package`(`node scripts/package.ts`, build 의존), `smoke-package`, `notarize`(`node scripts/notarize-macos.ts`) Vite Task 작업
+- `pack` (`vite.config.ts`) — entry `{ "context-agent": "server/main.ts" }`, esm/node, outDir `dist`. 모든 의존성을 번들하고 `codeSplitting: false`로 단일 파일을 만든다. `CONTEXT_AGENT_EXE_ASSETS`가 있으면 `exe`(fileName `context-agent`, `seaConfig.execArgvExtension: "none"`, assets)를 켠다
+- `default` (`react-router.config.ts`) — React Router `Config`: `ssr: true`, `future.unstable_enableNodeReadableStream: true`
+- `default` (`vite.browser.config.ts`) — 브라우저 테스트용 Vite+ 설정. Playwright chromium headless, `app/entry/...*.browser.tsx` 포함, `@dnd-kit/*`·`jotai`를 `optimizeDeps.include`로 미리 번들한다
+- `package.json` `imports["#server-build"]` — `./build/server/index.js`(React Router 서버 빌드) 별칭
+- `package.json` scripts — `dev`/`dev:agent`(`vp run memory-agent#build` 후 `node --experimental-strip-types scripts/dev.ts [agent]`), `dev:web`(`scripts/dev.ts web`), `start`(`node dist/context-agent.mjs`)
+- `tsconfig.json` — 앱 타입체크 설정. `~/*` → `./app/*` 경로 별칭, `.react-router/types` rootDirs, `server/tests`·`build`·`dist` 제외, `@effect/language-service` 진단 심각도 표
+- `components.json` — shadcn 설정(style `base-mira`, css `app/app.css`, baseColor zinc, lucide, 별칭 `~/components`, `~/components/ui`, `~/lib/utils`, `~/lib`, `~/hooks`)
+- `entitlements.plist` — macOS hardened runtime 권한 `allow-jit`, `allow-unsigned-executable-memory`, `disable-library-validation`
+- [AGENTS.md](./AGENTS.md) — 앱 작업 지침
+- [app](./app/README.md) — React Router v7 앱 루트(`root.tsx`, `entry.server.tsx`, `routes.ts`, `app.css`)
+- [scripts](./scripts/README.md) — 개발(`dev.ts`)과 SEA 실행 파일 패키징·공증·스모크 점검 스크립트
+- [server](./server/README.md) — `context-agent` 실행 파일의 프로덕션 진입점(`main.ts`, `serve`, 저장소 lock, 개발 백엔드 경계)
+
+## Invariants
+
+- dev `/api` 프록시는 이미 `x-context-agent-build-id` 헤더가 있는 요청의 헤더를 덮어쓰지 않는다. 헤더 없는 레거시 요청에만 startup build id(`CONTEXT_AGENT_BUILD_ID`, 없으면 `"missing"`)를 넣는다
+- `/api` 프록시는 `CONTEXT_AGENT_DEV_BACKEND`가 truthy(`isTruthy`)일 때만 켜진다
+- SSR `noExternal`은 `command === "build"`일 때 `true`(모든 JS 의존성 번들)이고, dev에서는 `["memory-agent"]`만이다. memory-agent는 TypeScript 소스로 배포되기 때문이다. 프로덕션 서버와 실행 파일은 node_modules 없이 동작해야 한다
+- 네이티브·임베딩 패키지는 정적으로 import하지 않는다. memory-agent가 runtime 폴더에서 `require`한다
+- Node SEA는 스크립트 하나만 담으므로 `pack.outputOptions.codeSplitting: false`로 동적 import도 인라인해야 한다
+- SEA `execArgvExtension: "none"` — 배포 앱은 `NODE_OPTIONS`를 무시해야 한다. 개발자·도구의 Node 플래그가 앱을 바꾸거나 깨뜨리면 안 된다
+- `typecheck`·`package`·`smoke-package`·`notarize` 작업은 캐시하지 않는다(`cache: false`). Vite Task가 TypeScript 7 native tsc가 읽는 파일을 추적하지 못하고, 실행 파일 기동이 파일 추적과 충돌하기 때문이다
+- `build` 작업은 워크스페이스 의존성 build(turbovec 네이티브 애드온까지)가 먼저 끝나야 한다. `bundle`과 `package`는 `build`에 의존한다
+- `optimizeDeps.entries`는 `app/**/*.tsx`(테스트 제외) 전체를 크롤링해야 한다. 라우트만 스캔하면 다이얼로그·설정 페이지 의존성을 첫 사용 때 발견해 페이지가 리로드되고 클릭이 사라진다
+- `CONTEXT_AGENT_EXE_ASSETS` 파일은 `Record<string, string>` JSON이어야 한다. Schema 디코딩 실패 시 설정 로드가 실패한다
+- `entitlements.plist`의 세 권한은 각각 없으면 실행 파일이 시작되지 않는다. turbovec·onnxruntime·sharp·keyring 네이티브 애드온은 `<storage>/runtime`에 풀려 타 서명자 서명으로 로드되므로 library validation을 끈다
+- lint는 `react/rules-of-hooks`, `react/only-export-components`(allowConstantExport), `vite-plus/prefer-vite-plus-imports`를 error로 강제하고 typeAware·typeCheck를 켠다
+- 서버 측 코드(API route loader/action, 서버 런타임 연결, 개발·패키징 scripts)는 Effect 기반으로 작성한다. Promise/콜백 인터페이스는 경계에서만 변환한다. React UI에는 적용하지 않는다(`AGENTS.md`)
+- UI는 shadcn으로만 구현한다(`AGENTS.md`)
+- 상태를 바꾸는 API 요청은 교차 사이트 요청을 거부한다(위 `API 라우트` 절)
+- 같은 저장 위치를 사용하는 backend는 하나만 실행된다(위 `실행` 절)
+- 실행 파일 서버는 `127.0.0.1`에만 열고 루프백이 아닌 Host는 거부한다(위 `프로덕션 서버와 실행 파일` 절)
+
+## Side Effects
+
+- `vite.config.ts`가 환경 변수 `CONTEXT_AGENT_DEV_BACKEND`, `CONTEXT_AGENT_BUILD_ID`, `CONTEXT_AGENT_EXE_ASSETS`, `CONTEXT_AGENT_EXE_DIR`를 Effect `Config`로 읽는다
+- `CONTEXT_AGENT_EXE_ASSETS`가 비어 있지 않으면 그 경로의 JSON 파일을 `FileSystem.readFileString`으로 읽는다
+- 모듈 로드 시 설정 평가용 `ManagedRuntime.make(NodeFileSystem.layer)` 런타임을 만든다
+- dev 서버 프록시가 `/api` 요청을 `CONTEXT_AGENT_DEV_BACKEND` 대상 백엔드로 전달하고 `x-context-agent-build-id` 요청 헤더를 설정한다
+- `vp pack`이 `dist/context-agent.mjs`를 쓰고, exe 설정이 켜지면 `CONTEXT_AGENT_EXE_DIR`에 `context-agent` 실행 파일을 만든다
+- Vite Task 작업이 `react-router build`, `vp pack`, `tsc`, `node scripts/package.ts`, `node scripts/smoke-package.ts`, `node scripts/notarize-macos.ts` 자식 프로세스를 실행한다
+- `vite.browser.config.ts`가 Playwright로 headless chromium 브라우저를 띄워 테스트한다
+- 앱 데이터는 `~/.context-generactive-agent`에 저장되고, 실행 파일은 첫 실행에서 네이티브 패키지와 worker 자원을 `~/.context-generactive-agent/runtime/<해시>`에 푼다(위 `실행` 절)
+
+## Verification
+
+- Run: `vp run agent#typecheck` (저장소 루트)
+- Run: `vp test` (`apps/agent`에서)

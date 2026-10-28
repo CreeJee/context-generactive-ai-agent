@@ -90,12 +90,12 @@ export interface KanbanAttention {
   readonly reasons: readonly KanbanAttentionReason[];
 }
 
-export class KanbanStartRefused extends Schema.TaggedError<KanbanStartRefused>()(
-  "KanbanStartRefused",
-  {
-    reason: Schema.Literals(["goal_missing", "plan_not_executing", "worktree_unavailable"]),
-  },
-) {}
+export class KanbanStartRefused extends Schema.TaggedError<
+  KanbanStartRefused,
+  { readonly brand: unique symbol }
+>()("KanbanStartRefused", {
+  reason: Schema.Literals(["goal_missing", "plan_not_executing", "worktree_unavailable"]),
+}) {}
 
 /** How a repeated failure of a card is answered, by its place on the ladder. */
 export type FailureStep = Data.TaggedEnum<{
@@ -206,15 +206,12 @@ const make = (options: KanbanOrchestratorOptions) =>
         .pipe(
           Effect.tap(() => events.publishSession(goal.sessionId, "run-state")),
           Effect.as(true),
-          Effect.catchTag("BoardEditRefused", (refused: BoardEditRefused) => {
-            switch (refused.reason) {
-              case "card_status_changed":
-              case "card_missing":
-                return Effect.succeed(false);
-              default:
-                return Effect.fail(refused);
-            }
-          }),
+          Effect.catchTag("BoardEditRefused", (refused: BoardEditRefused) =>
+            Match.value(refused.reason).pipe(
+              Match.whenOr("card_status_changed", "card_missing", () => Effect.succeed(false)),
+              Match.orElse(() => Effect.fail(refused)),
+            ),
+          ),
         );
 
     /** The card's latest attempt, the one whose outcome the loop is acting on. */
@@ -233,40 +230,37 @@ const make = (options: KanbanOrchestratorOptions) =>
       key: string,
       kind: DecisionKind,
     ) {
-      const card = stepOf(yield* workflows.get(goal.sessionId), cardId);
-      if (!Option.exists(card, (step) => step.status === from || step.status === "human_decision"))
-        return;
-      yield* decisions
-        .request({
-          sessionId: goal.sessionId,
-          goalInstanceId: goal.goalInstanceId,
-          cardId,
-          key,
-          kind,
-          author: loopAuthor(goal.goalInstanceId),
-        })
-        .pipe(
-          Effect.catchTags({
-            HumanDecisionRefused: (refused) => {
-              switch (refused.reason) {
-                case "goal_superseded":
-                case "card_missing":
-                  return Effect.void;
-                default:
-                  return Effect.fail(refused);
-              }
-            },
-            BoardEditRefused: (refused) => {
-              switch (refused.reason) {
-                case "card_status_changed":
-                case "card_missing":
-                  return Effect.void;
-                default:
-                  return Effect.fail(refused);
-              }
-            },
-          }),
-        );
+      yield* Effect.when(
+        decisions
+          .request({
+            sessionId: goal.sessionId,
+            goalInstanceId: goal.goalInstanceId,
+            cardId,
+            key,
+            kind,
+            author: loopAuthor(goal.goalInstanceId),
+          })
+          .pipe(
+            Effect.catchTags({
+              HumanDecisionRefused: (refused) =>
+                Match.value(refused.reason).pipe(
+                  Match.whenOr("goal_superseded", "card_missing", () => Effect.void),
+                  Match.orElse(() => Effect.fail(refused)),
+                ),
+              BoardEditRefused: (refused) =>
+                Match.value(refused.reason).pipe(
+                  Match.whenOr("card_status_changed", "card_missing", () => Effect.void),
+                  Match.orElse(() => Effect.fail(refused)),
+                ),
+            }),
+          ),
+        Effect.map(workflows.get(goal.sessionId), (state) =>
+          Option.exists(
+            stepOf(state, cardId),
+            (step) => step.status === from || step.status === "human_decision",
+          ),
+        ),
+      );
     });
 
     /** Offers the card's next attempt with the Goal and Plan versions it runs against. */
@@ -398,42 +392,46 @@ const make = (options: KanbanOrchestratorOptions) =>
           }),
         );
 
-    /**
-     * A conflicting card is re-applied by a resolution card on the current Goal branch, which takes
-     * its place in the Plan. A resolution card that conflicts again goes to a person.
-     */
-    const resolveConflict = Effect.fnUntraced(function* (
+    /** A resolution card that conflicts again goes to a person. */
+    const askAboutConflict = Effect.fnUntraced(function* (
       goal: KanbanGoal,
       card: PlanStep,
       files: readonly string[],
     ) {
-      const ladder = yield* attempts.ladder(goal.goalInstanceId, card.id);
+      yield* attempts.updateLadder(goal.goalInstanceId, card.id, (current) => ({
+        ...current,
+        reason: CardHoldReason.cases.MergeConflict.make({ files }),
+      }));
+      const attemptNo = yield* latestAttempt(goal, card.id);
+      // A person who answered sends the card on; a conflict after that is a new occasion.
+      const answered = (yield* decisions.forCard(
+        goal.sessionId,
+        goal.goalInstanceId,
+        card.id,
+      )).filter(
+        (request) =>
+          Predicate.isTagged(request.kind, "IntegrationConflict") &&
+          Predicate.isTagged(request.state, "Answered"),
+      ).length;
+      yield* askPerson(
+        goal,
+        card.id,
+        "verify",
+        `integration_conflict:${attemptNo}:${answered}`,
+        DecisionKind.cases.IntegrationConflict.make({ files }),
+      );
+    });
+
+    /**
+     * A conflicting card is re-applied by a resolution card on the current Goal branch, which takes
+     * its place in the Plan.
+     */
+    const addResolutionCard = Effect.fnUntraced(function* (
+      goal: KanbanGoal,
+      card: PlanStep,
+      files: readonly string[],
+    ) {
       const listed = files.join(", ");
-      if (ladder.resolutionOf !== null) {
-        yield* attempts.updateLadder(goal.goalInstanceId, card.id, (current) => ({
-          ...current,
-          reason: CardHoldReason.cases.MergeConflict.make({ files }),
-        }));
-        const attemptNo = yield* latestAttempt(goal, card.id);
-        // A person who answered sends the card on; a conflict after that is a new occasion.
-        const answered = (yield* decisions.forCard(
-          goal.sessionId,
-          goal.goalInstanceId,
-          card.id,
-        )).filter(
-          (request) =>
-            Predicate.isTagged(request.kind, "IntegrationConflict") &&
-            Predicate.isTagged(request.state, "Answered"),
-        ).length;
-        yield* askPerson(
-          goal,
-          card.id,
-          "verify",
-          `integration_conflict:${attemptNo}:${answered}`,
-          DecisionKind.cases.IntegrationConflict.make({ files }),
-        );
-        return;
-      }
       const author = loopAuthor(goal.goalInstanceId);
       const resolution = yield* ops.addCard(
         goal.sessionId,
@@ -455,6 +453,17 @@ const make = (options: KanbanOrchestratorOptions) =>
       // The conflicting card's branch stays as the resolution card's reference.
       yield* ops.replaceCards(goal.sessionId, [card.id], [resolution.value.id], author);
       yield* workspace(goal).settle(cardRef(goal, card.id), WorktreeDisposition.Cancelled());
+    });
+
+    const resolveConflict = Effect.fnUntraced(function* (
+      goal: KanbanGoal,
+      card: PlanStep,
+      files: readonly string[],
+    ) {
+      const ladder = yield* attempts.ladder(goal.goalInstanceId, card.id);
+      return yield* ladder.resolutionOf === null
+        ? addResolutionCard(goal, card, files)
+        : askAboutConflict(goal, card, files);
     });
 
     /** Verifies a finished card and puts it on the Goal branch, syncing when the Goal moved. */
@@ -485,15 +494,16 @@ const make = (options: KanbanOrchestratorOptions) =>
         return yield* Match.valueTags(integration, {
           Integrated: ({ commit }) =>
             Effect.gen(function* () {
-              const moved = yield* move(
-                goal,
-                cardId,
-                "verify",
-                "done",
-                `card ${cardId} integrated${commit === null ? " (no changes)" : ` as ${commit}`}; evidence: ${evidence.join("; ")}`,
+              yield* Effect.when(
+                workspace(goal).settle(cardRef(goal, cardId), WorktreeDisposition.Done()),
+                move(
+                  goal,
+                  cardId,
+                  "verify",
+                  "done",
+                  `card ${cardId} integrated${commit === null ? " (no changes)" : ` as ${commit}`}; evidence: ${evidence.join("; ")}`,
+                ),
               );
-              if (moved)
-                yield* workspace(goal).settle(cardRef(goal, cardId), WorktreeDisposition.Done());
               yield* attempts.updateLadder(goal.goalInstanceId, cardId, (current) => ({
                 ...current,
                 failureStreak: 0,
@@ -534,28 +544,27 @@ const make = (options: KanbanOrchestratorOptions) =>
           Passed: ({ evidence }) => integrate(card, evidence),
         });
       });
+      /** One round; true once the card is settled or no longer waits for verification. */
+      const round = Effect.flatMap(verifying, (card) =>
+        card === undefined
+          ? Effect.succeed(true)
+          : // A card whose worktree is gone is not verified anywhere else; it fails, and its next
+            // attempt leases the worktree again.
+            workspace(goal)
+              .present(cardRef(goal, cardId))
+              .pipe(
+                Effect.matchEffect({
+                  onFailure: (failure) =>
+                    Effect.as(failCard(goal, cardId, "verify", worktreeFailure(failure)), true),
+                  onSuccess: (worktree) => verifyIn(card, worktree),
+                }),
+              ),
+      );
       // Each round verifies the card as it now is; a sync with a moved Goal branch needs another.
-      for (let round = 0; round < 3; round++) {
-        const card = yield* verifying;
-        if (card === undefined) return;
-        // A card whose worktree is gone is not verified anywhere else; it fails, and its next
-        // attempt leases the worktree again.
-        const settled = yield* workspace(goal)
-          .present(cardRef(goal, cardId))
-          .pipe(
-            Effect.matchEffect({
-              onFailure: (failure) =>
-                Effect.as(failCard(goal, cardId, "verify", worktreeFailure(failure)), true),
-              onSuccess: (worktree) => verifyIn(card, worktree),
-            }),
-          );
-        if (settled) return;
-      }
-      return yield* failCard(
-        goal,
-        cardId,
-        "verify",
-        CardFailure.cases.GoalBranchKeptMoving.make({}),
+      const settled = yield* round.pipe(Effect.repeat({ until: (settled) => settled, times: 2 }));
+      yield* Effect.when(
+        failCard(goal, cardId, "verify", CardFailure.cases.GoalBranchKeptMoving.make({})),
+        Effect.succeed(!settled),
       );
     });
 
@@ -619,7 +628,8 @@ const make = (options: KanbanOrchestratorOptions) =>
           goal.hold !== null
             ? Effect.succeed(false)
             : Effect.as(
-                Effect.flatMap(
+                Effect.when(
+                  startIntegration(goal, attempt.cardId, report),
                   move(
                     goal,
                     attempt.cardId,
@@ -627,7 +637,6 @@ const make = (options: KanbanOrchestratorOptions) =>
                     "verify",
                     `card ${attempt.cardId} finished`,
                   ),
-                  (moved) => (moved ? startIntegration(goal, attempt.cardId, report) : Effect.void),
                 ),
                 true,
               ),
@@ -751,22 +760,30 @@ const make = (options: KanbanOrchestratorOptions) =>
       );
       yield* Effect.forEach(
         dead,
-        Effect.fnUntraced(function* (item) {
-          const attempt = yield* attempts.attempt(item);
-          if (Option.isNone(attempt) || attempt.value.handled) return;
-          yield* attempts.updateLadder(goal.goalInstanceId, item.cardId, (current) => ({
-            ...current,
-            reason: CardHoldReason.cases.DeadLettered.make({}),
-          }));
-          yield* move(
-            goal,
-            item.cardId,
-            "in_progress",
-            "blocked",
-            `card ${item.cardId} ran out of deliveries; requeue it from the board`,
-          );
-          yield* attempts.markHandled(item);
-        }),
+        (item) =>
+          Effect.when(
+            attempts
+              .updateLadder(goal.goalInstanceId, item.cardId, (current) => ({
+                ...current,
+                reason: CardHoldReason.cases.DeadLettered.make({}),
+              }))
+              .pipe(
+                Effect.andThen(
+                  move(
+                    goal,
+                    item.cardId,
+                    "in_progress",
+                    "blocked",
+                    `card ${item.cardId} ran out of deliveries; requeue it from the board`,
+                  ),
+                ),
+                Effect.andThen(attempts.markHandled(item)),
+              ),
+            Effect.map(
+              attempts.attempt(item),
+              Option.exists((attempt) => !attempt.handled),
+            ),
+          ),
         { discard: true },
       );
     });
@@ -777,10 +794,15 @@ const make = (options: KanbanOrchestratorOptions) =>
      */
     const halt = Effect.fnUntraced(function* (goal: KanbanGoal, steps: readonly PlanStep[]) {
       const { goalInstanceId } = goal;
-      for (const step of steps) {
-        yield* runs.stop(goalInstanceId, step.id);
-        yield* FiberMap.remove(integrations, `${goalInstanceId}:${step.id}`);
-      }
+      yield* Effect.forEach(
+        steps,
+        (step) =>
+          Effect.andThen(
+            runs.stop(goalInstanceId, step.id),
+            FiberMap.remove(integrations, `${goalInstanceId}:${step.id}`),
+          ),
+        { discard: true },
+      );
       yield* attempts.stopGoal(goalInstanceId);
       yield* decisions.close(
         DecisionCloseScope.Goal({ sessionId: goal.sessionId, goalInstanceId }),
@@ -790,59 +812,122 @@ const make = (options: KanbanOrchestratorOptions) =>
       yield* scheduler.clearNotices(goalInstanceId);
     });
 
+    /** A Goal changed since its cards were classified holds assignment until they are again. */
+    const holdAssignment = (goal: KanbanGoal, goalVersion: number) => {
+      const hold = AssignmentHold.make({ fromVersion: goal.goalVersion, toVersion: goalVersion });
+      return Effect.as(attempts.setHold(goal.goalInstanceId, hold, goal.goalVersion), {
+        ...goal,
+        hold,
+      });
+    };
+
+    /** The board's cards that may start now, in the order they start. */
+    const assignable = Effect.fnUntraced(function* (
+      goal: KanbanGoal,
+      steps: readonly PlanStep[],
+      ladders: ReadonlyMap<string, CardLadder>,
+    ) {
+      const busy = new Set(
+        (yield* attempts.pending(goal.goalInstanceId)).map((attempt) => attempt.cardId),
+      );
+      const now = yield* Clock.currentTimeMillis;
+      const working = steps.filter((step) => busy.has(step.id) || step.status === "verify");
+      // A card a person or a restart left in_progress without an attempt continues first.
+      const orphans = steps.filter((step) => step.status === "in_progress" && !busy.has(step.id));
+      const ready = steps.filter(
+        (step) =>
+          step.status === "ready" &&
+          !busy.has(step.id) &&
+          (ladders.get(step.id)?.notBefore ?? 0) <= now,
+      );
+      return yield* Effect.reduce(
+        [...orphans, ...ready],
+        (): readonly PlanStep[] => [],
+        (planned, step) =>
+          // Expected files that overlap a working card wait for it; this is a hint, not a lock.
+          [...working, ...planned].some(
+            (other) => other.id !== step.id && boundariesOverlap(step, other),
+          )
+            ? Effect.succeed(planned)
+            : Effect.flatMap(scheduler.crossGoalOverlap(goal, step), (overlap) =>
+                Match.valueTags(overlap, {
+                  None: () => Effect.succeed([...planned, step]),
+                  // Another Goal's running card goes first; both boards hear about it.
+                  Running: (running) =>
+                    Effect.as(scheduler.notice(goal.goalInstanceId, step.id, running), planned),
+                  Waiting: () => Effect.succeed(planned),
+                  // Another Goal finished these files but has not merged: a person picks the order.
+                  Unmerged: ({ otherGoalInstanceId, otherCardId, files }) =>
+                    Effect.as(
+                      askPerson(
+                        goal,
+                        step.id,
+                        step.status,
+                        `file_overlap:${otherGoalInstanceId}`,
+                        DecisionKind.cases.FileOverlap.make({
+                          otherGoalInstanceId,
+                          otherCardId,
+                          files,
+                        }),
+                      ),
+                      planned,
+                    ),
+                }),
+              ),
+      );
+    });
+
     /** One look at a board: take up outcomes, then assign what may run. */
     const tick = Effect.fnUntraced(function* (goalInstanceId: string) {
       const found = yield* attempts.goal(goalInstanceId);
       if (Option.isNone(found) || !found.value.active) return "stopped" as const;
-      let goal = found.value;
-      if ((yield* workflows.goalInstanceId(goal.sessionId)) !== goalInstanceId) {
+      const stored = found.value;
+      if ((yield* workflows.goalInstanceId(stored.sessionId)) !== goalInstanceId) {
         // A new Goal took over the session; this board's items complete as Superseded and its
         // people's waits close.
         yield* attempts.stopGoal(goalInstanceId);
-        yield* decisions.closeSuperseded(goal.sessionId);
+        yield* decisions.closeSuperseded(stored.sessionId);
         yield* scheduler.forget(goalInstanceId);
         yield* scheduler.clearNotices(goalInstanceId);
         return "stopped" as const;
       }
-      let state = yield* workflows.get(goal.sessionId);
-      if (state.plan?.status === "closed") {
+      const before = yield* workflows.get(stored.sessionId);
+      if (before.plan?.status === "closed") {
         // A closed Plan runs no card again: its running cards stop, its board stops and its
         // people's waits close with the cards.
-        yield* halt(goal, state.plan.steps);
+        yield* halt(stored, before.plan.steps);
         return "stopped" as const;
       }
-      const reasons: KanbanAttentionReason[] = [];
-      const goalVersion = state.goal?.version ?? goal.goalVersion;
-      if (goalVersion > goal.goalVersion && goal.hold === null) {
-        const hold = AssignmentHold.make({
-          fromVersion: goal.goalVersion,
-          toVersion: goalVersion,
-        });
-        yield* attempts.setHold(goalInstanceId, hold, goal.goalVersion);
-        goal = { ...goal, hold };
-      }
-      if (goal.hold !== null) reasons.push("goal_changed");
+      const goalVersion = before.goal?.version ?? stored.goalVersion;
+      const goal: KanbanGoal =
+        goalVersion > stored.goalVersion && stored.hold === null
+          ? yield* holdAssignment(stored, goalVersion)
+          : stored;
 
       yield* blockDeadLetters(goal);
-      const open = yield* attempts.pending(goalInstanceId);
+      const outcomes = (yield* attempts.pending(goalInstanceId)).flatMap((attempt) =>
+        attempt.outcome === null ? [] : [{ attempt, outcome: attempt.outcome }],
+      );
       yield* Effect.forEach(
-        open,
-        Effect.fnUntraced(function* (attempt) {
-          if (attempt.outcome === null) return;
-          if (yield* takeUp(goal, state, attempt, attempt.outcome))
-            yield* attempts.markHandled(attempt);
-        }),
+        outcomes,
+        ({ attempt, outcome }) =>
+          Effect.when(attempts.markHandled(attempt), takeUp(goal, before, attempt, outcome)),
         { discard: true },
       );
 
-      state = yield* workflows.get(goal.sessionId);
+      const state = yield* workflows.get(goal.sessionId);
       // After reading the board: an answer is stored before it moves its card, so every card an
       // answer moved in this board is followed before it can be assigned.
       yield* followAnswers(goal);
       const steps = state.plan?.steps ?? [];
-      const ladders = new Map<string, CardLadder>();
-      for (const step of steps)
-        ladders.set(step.id, yield* attempts.ladder(goalInstanceId, step.id));
+      const ladders = new Map(
+        yield* Effect.forEach(steps, (step) =>
+          Effect.map(
+            attempts.ladder(goalInstanceId, step.id),
+            (ladder) => [step.id, ladder] as const,
+          ),
+        ),
+      );
       const replanning = steps
         .filter(
           (step) =>
@@ -850,101 +935,70 @@ const make = (options: KanbanOrchestratorOptions) =>
             Predicate.isTagged(ladders.get(step.id)?.reason, "ReplanRequested"),
         )
         .map((step) => step.id);
-      if (replanning.length > 0) reasons.push("replan_requested");
       const requests = yield* attempts.pendingChangeRequests(goal.sessionId);
-      if (requests > 0) reasons.push("change_requested");
-      if (steps.length > 0 && steps.every((step) => step.status === "done"))
-        reasons.push("cards_done");
+      const allDone = steps.length > 0 && steps.every((step) => step.status === "done");
 
       // Cards in verify that no integration is working on (after a restart, or a person moved
       // them there) are verified again.
-      for (const step of steps)
-        if (
-          step.status === "verify" &&
-          !(yield* FiberMap.has(integrations, `${goalInstanceId}:${step.id}`))
-        )
-          yield* startIntegration(goal, step.id, "");
+      yield* Effect.forEach(
+        steps.filter((step) => step.status === "verify"),
+        (step) =>
+          Effect.when(
+            startIntegration(goal, step.id, ""),
+            Effect.map(
+              FiberMap.has(integrations, `${goalInstanceId}:${step.id}`),
+              (integrating) => !integrating,
+            ),
+          ),
+        { discard: true },
+      );
 
       const executing = state.phase === "execute" && state.plan?.status === "executing";
       // A Goal waiting for another Goal's merge takes no slots; its cards stay where they are.
       const waitingOn = yield* scheduler.waitingOn(goalInstanceId);
       yield* scheduler.clearNotices(goalInstanceId);
-      const planned: PlanStep[] = [];
-      if (executing && goal.hold === null && waitingOn.length === 0) {
-        const busy = new Set(
-          (yield* attempts.pending(goalInstanceId)).map((attempt) => attempt.cardId),
-        );
-        const now = yield* Clock.currentTimeMillis;
-        const working = steps.filter((step) => busy.has(step.id) || step.status === "verify");
-        // A card a person or a restart left in_progress without an attempt continues first.
-        const orphans = steps.filter((step) => step.status === "in_progress" && !busy.has(step.id));
-        const ready = steps.filter(
-          (step) =>
-            step.status === "ready" &&
-            !busy.has(step.id) &&
-            (ladders.get(step.id)?.notBefore ?? 0) <= now,
-        );
-        for (const step of [...orphans, ...ready]) {
-          // Expected files that overlap a working card wait for it; this is a hint, not a lock.
-          if (
-            [...working, ...planned].some(
-              (other) => other.id !== step.id && boundariesOverlap(step, other),
-            )
-          )
-            continue;
-          const overlap = yield* scheduler.crossGoalOverlap(goal, step);
-          yield* Match.valueTags(overlap, {
-            None: () =>
-              Effect.sync(() => {
-                planned.push(step);
-              }),
-            // Another Goal's running card goes first; both boards hear about it.
-            Running: (running) => scheduler.notice(goalInstanceId, step.id, running),
-            Waiting: () => Effect.void,
-            // Another Goal finished these files but has not merged: a person picks the order.
-            Unmerged: ({ otherGoalInstanceId, otherCardId, files }) =>
-              askPerson(
-                goal,
-                step.id,
-                step.status,
-                `file_overlap:${otherGoalInstanceId}`,
-                DecisionKind.cases.FileOverlap.make({ otherGoalInstanceId, otherCardId, files }),
-              ),
-          });
-        }
-      }
+      const planned =
+        executing && goal.hold === null && waitingOn.length === 0
+          ? yield* assignable(goal, steps, ladders)
+          : [];
       // Every look reports the cards it could start; the scheduler picks the project's next ones.
       const granted = yield* scheduler.grant(goal, planned);
-      for (const step of granted) {
-        const started =
-          step.status === "in_progress" ||
-          (yield* move(goal, step.id, "ready", "in_progress", `card ${step.id} assigned`));
-        if (started) yield* offer(goal, state, step);
-      }
+      yield* Effect.forEach(
+        granted,
+        (step) =>
+          Effect.when(
+            offer(goal, state, step),
+            step.status === "in_progress"
+              ? Effect.succeed(true)
+              : move(goal, step.id, "ready", "in_progress", `card ${step.id} assigned`),
+          ),
+        { discard: true },
+      );
 
       // Every card is done: the merge queue takes the Goal into its target branch.
       const schedule = yield* schedules.get(goalInstanceId);
-      if (
-        executing &&
-        goal.hold === null &&
-        steps.length > 0 &&
-        steps.every((step) => step.status === "done")
-      )
-        yield* merges.offer(goal);
-      if (Option.exists(schedule, (found) => found.upstreamPending))
-        yield* merges.takeUpstream(goal);
-      if (Option.exists(schedule, (found) => Predicate.isTagged(found.merge, "VerifyFailed")))
-        reasons.push("goal_unverified");
-      if (
-        steps.some(
+      if (executing && goal.hold === null && allDone) yield* merges.offer(goal);
+      yield* Effect.when(
+        merges.takeUpstream(goal),
+        Effect.succeed(Option.exists(schedule, (found) => found.upstreamPending)),
+      );
+      const notices = yield* scheduler.notices(goalInstanceId);
+      const raised = {
+        goal_changed: goal.hold !== null,
+        replan_requested: replanning.length > 0,
+        change_requested: requests > 0,
+        cards_done: allDone,
+        file_overlap: notices.length > 0,
+        goal_unverified: Option.exists(schedule, (found) =>
+          Predicate.isTagged(found.merge, "VerifyFailed"),
+        ),
+        upstream_regressed: steps.some(
           (step) =>
             step.status === "done" &&
             Predicate.isTagged(ladders.get(step.id)?.reason, "UpstreamRegressed"),
-        )
-      )
-        reasons.push("upstream_regressed");
-      const notices = yield* scheduler.notices(goalInstanceId);
-      if (notices.length > 0) reasons.push("file_overlap");
+        ),
+      } as const satisfies Record<KanbanAttentionReason, boolean>;
+      const reasons = KanbanAttentionReason.literals.filter((reason) => raised[reason]);
 
       // The model hears about a situation once; a later look finding the same one stays quiet.
       const situation = [
@@ -982,7 +1036,9 @@ const make = (options: KanbanOrchestratorOptions) =>
             Stream.runForEach(() => PubSub.publish(pokes, goalInstanceId)),
             Effect.forkScoped,
           );
-          while (!loopStopped(yield* health.get(goalInstanceId))) {
+          /** One look, then a wait for the next reason to look; true once the loop stops. */
+          const look = Effect.gen(function* () {
+            if (loopStopped(yield* health.get(goalInstanceId))) return true;
             const step = yield* looking
               .withPermits(1)(tick(goalInstanceId))
               .pipe(health.supervise(board, "Kanban board look failed", {}));
@@ -990,12 +1046,16 @@ const make = (options: KanbanOrchestratorOptions) =>
               Stopped: () => true,
               Continued: ({ value }) => value === "stopped",
             });
-            if (stopped) return;
-            yield* PubSub.take(wakeups).pipe(
-              Effect.repeat({ until: (woken) => woken === goalInstanceId }),
-              Effect.timeoutOption(pollInterval),
+            yield* Effect.when(
+              PubSub.take(wakeups).pipe(
+                Effect.repeat({ until: (woken) => woken === goalInstanceId }),
+                Effect.timeoutOption(pollInterval),
+              ),
+              Effect.succeed(!stopped),
             );
-          }
+            return stopped;
+          });
+          yield* look.pipe(Effect.repeat({ until: (stopped) => stopped }));
         }),
       );
 

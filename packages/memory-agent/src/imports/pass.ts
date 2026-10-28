@@ -5,7 +5,18 @@ import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { path as platformPath } from "../runtime/synchronous-path.ts";
 const { isAbsolute, relative, sep } = platformPath;
-import { Option, DateTime, Cause, Context, Effect, FileSystem, Layer, Schema } from "effect";
+import {
+  Array as EffectArray,
+  Number as EffectNumber,
+  Option,
+  DateTime,
+  Cause,
+  Context,
+  Effect,
+  FileSystem,
+  Layer,
+  Schema,
+} from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { GlobalConfig } from "../config/global-config.ts";
 import { StorageRoot } from "../config/storage-root.ts";
@@ -72,10 +83,10 @@ export const ImportStoreReason = Schema.TaggedUnion({
   FailureRecord: {},
 });
 
-export class ImportStoreFailed extends Schema.TaggedError<ImportStoreFailed>()(
-  "ImportStoreFailed",
-  { reason: ImportStoreReason, cause: Schema.Defect() },
-) {}
+export class ImportStoreFailed extends Schema.TaggedError<
+  ImportStoreFailed,
+  { readonly brand: unique symbol }
+>()("ImportStoreFailed", { reason: ImportStoreReason, cause: Schema.Defect() }) {}
 const stored = <A, E>(step: keyof typeof ImportStoreReason.cases, effect: Effect.Effect<A, E>) =>
   Effect.mapError(effect, (cause) =>
     ImportStoreFailed.make({ reason: ImportStoreReason.cases[step].make({}), cause }),
@@ -104,7 +115,9 @@ const make = (home: string) =>
     const bulk = yield* BulkNodes;
     const config = yield* GlobalConfig;
     const redactor = yield* SecretRedactor;
-    const storageRoot = yield* canonicalPathEffect(storage.path);
+    const canonicalPath = (path: string) =>
+      canonicalPathEffect(path).pipe(Effect.provideContext(filesystemContext));
+    const storageRoot = yield* canonicalPath(storage.path);
     const checkouts = yield* Checkouts;
 
     const hideText = (text: string) =>
@@ -197,20 +210,24 @@ const make = (home: string) =>
      */
     const projectOf = (cwd: string) =>
       Effect.gen(function* () {
-        const canonical = yield* canonicalPathEffect(cwd);
+        const canonical = yield* canonicalPath(cwd);
         const registered = yield* projects.listAll;
-        const owner = registered
-          .filter((project) => isWithin(project.root, canonical))
-          .sort((a, b) => b.root.length - a.root.length)
-          .at(0);
-        if (isTruthy(owner)) return { project: owner, rejected: null };
-        // A folder that has been deleted, or one inside this app's own storage, is left alone.
-        return yield* projects.add(canonical).pipe(
-          Effect.map((project) => ({ project, rejected: null })),
-          Effect.catchTag("ProjectRootRejected", (rejection) =>
-            Effect.succeed({ project: null, rejected: rejection.reason }),
-          ),
+        const owner = EffectArray.head(
+          registered
+            .filter((project) => isWithin(project.root, canonical))
+            .sort((a, b) => b.root.length - a.root.length),
         );
+        return yield* Option.match(owner, {
+          onSome: (project) => Effect.succeed({ project, rejected: null }),
+          // A folder that has been deleted, or one inside this app's own storage, is left alone.
+          onNone: () =>
+            projects.add(canonical).pipe(
+              Effect.map((project) => ({ project, rejected: null })),
+              Effect.catchTag("ProjectRootRejected", (rejection) =>
+                Effect.succeed({ project: null, rejected: rejection.reason }),
+              ),
+            ),
+        });
       });
 
     /**
@@ -354,7 +371,7 @@ const make = (home: string) =>
         const read = source.reader(transcript.externalId);
         const lines: TranscriptItem[] = [];
         const { offset } = yield* readLinesFrom(transcript.path, from, (line) => {
-          for (const item of read(line)) lines.push(item);
+          lines.push(...read(line));
         }).pipe(Effect.provideContext(filesystemContext));
         // Another agent's transcript holds whatever its shell printed; memory keeps none of it.
         const items = yield* Effect.forEach(lines, hideSecrets);
@@ -387,30 +404,38 @@ const make = (home: string) =>
           sessions.setArchived(sessionId, true),
           Effect.succeed(transcript.archived && firstPlaced && session.archivedAt === null),
         );
-        let written = 0;
-        for (let index = 0; index < items.length; index += writeChunk) {
-          written += (yield* bulk.write({
-            source: transcript.source,
-            projectId: session.projectId,
-            sessionId,
-            items: items.slice(index, index + writeChunk),
-            interpret,
-          })).written;
-          // Lets other work in the worker (a count for settings) in between pieces.
-          yield* Effect.yieldNow;
-        }
+        const writes = yield* Effect.forEach(EffectArray.chunksOf(items, writeChunk), (chunk) =>
+          bulk
+            .write({
+              source: transcript.source,
+              projectId: session.projectId,
+              sessionId,
+              items: chunk,
+              interpret,
+            })
+            .pipe(
+              // Lets other work in the worker (a count for settings) in between pieces.
+              Effect.tap(() => Effect.yieldNow),
+            ),
+        );
+        const written = EffectNumber.sumAll(writes.map((write) => write.written));
         // A conversation is named by what the person opened it with.
-        if (session.title === null) {
-          const opening = items.find(
-            (item) => TranscriptItem.$is("message")(item) && item.role === "user",
-          );
-          if (TranscriptItem.$is("message")(opening))
-            yield* stored(
-              "Title",
-              sql`UPDATE sessions SET title = ${firstLine(opening.text)}
-                WHERE id = ${sessionId} AND title IS NULL`,
-            );
-        }
+        const opening = EffectArray.findFirst(
+          items.filter(TranscriptItem.$is("message")),
+          (item) => item.role === "user",
+        );
+        yield* Option.match(
+          Option.filter(opening, () => session.title === null),
+          {
+            onNone: () => Effect.void,
+            onSome: (message) =>
+              stored(
+                "Title",
+                sql`UPDATE sessions SET title = ${firstLine(message.text)}
+                  WHERE id = ${sessionId} AND title IS NULL`,
+              ),
+          },
+        );
         yield* stored(
           "Cursor",
           saveCursor(transcript, {
@@ -433,7 +458,7 @@ const make = (home: string) =>
         Effect.flatMap(
           Effect.filter(
             (transcript) =>
-              canonicalPathEffect(transcript.path).pipe(
+              canonicalPath(transcript.path).pipe(
                 Effect.map((canonical) => !isWithin(storageRoot, canonical)),
               ),
             { concurrency: 16 },
@@ -460,8 +485,8 @@ const make = (home: string) =>
           const settings = yield* config.read;
           const interpret = settings.importsInterpret ?? true;
           const found = yield* transcripts();
-          let progress: PassProgress = { checked: 0, total: found.length, written: 0, failed: 0 };
-          yield* onProgress(progress);
+          const started: PassProgress = { checked: 0, total: found.length, written: 0, failed: 0 };
+          yield* onProgress(started);
           const registered = yield* projects.listAll;
           const placement = yield* checkouts.forRoots(
             yield* stored(
@@ -475,25 +500,28 @@ const make = (home: string) =>
             ),
           );
           yield* foldWorktreeProjects(placement);
-          for (const transcript of found) {
-            const outcome = yield* migrate(transcript, interpret, placement).pipe(
-              Effect.map((written) => ({ written, failed: 0 })),
-              // A defect is not the transcript's: it stops the pass, and the watcher reports it.
-              Effect.catch((error) =>
-                Effect.as(stored("FailureRecord", recordFailure(transcript, Cause.fail(error))), {
-                  written: 0,
-                  failed: 1,
-                }),
+          const progress = yield* Effect.reduce(
+            found,
+            () => started,
+            (before, transcript) =>
+              migrate(transcript, interpret, placement).pipe(
+                Effect.map((written) => ({ written, failed: 0 })),
+                // A defect is not the transcript's: it stops the pass, and the watcher reports it.
+                Effect.catch((error) =>
+                  Effect.as(stored("FailureRecord", recordFailure(transcript, Cause.fail(error))), {
+                    written: 0,
+                    failed: 1,
+                  }),
+                ),
+                Effect.map((outcome): PassProgress => ({
+                  checked: before.checked + 1,
+                  total: before.total,
+                  written: before.written + outcome.written,
+                  failed: before.failed + outcome.failed,
+                })),
+                Effect.tap(onProgress),
               ),
-            );
-            progress = {
-              checked: progress.checked + 1,
-              total: progress.total,
-              written: progress.written + outcome.written,
-              failed: progress.failed + outcome.failed,
-            };
-            yield* onProgress(progress);
-          }
+          );
           // What git showed this pass outlives the worktrees it was seen through.
           const seen = yield* placement.seen;
           const kept = seen.flatMap(({ root, parents }) =>

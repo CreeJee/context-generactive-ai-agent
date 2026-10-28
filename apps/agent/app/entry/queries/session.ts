@@ -53,12 +53,6 @@ export const sessionQueries = {
       queryKey: appQueryKeys.session.btw(projectId, sessionId),
       queryFn: () => api.btwThreads(sessionId),
     }),
-  transcript: (projectId: string, sessionId: string) =>
-    queryOptions({
-      queryKey: [...appQueryKeys.session.root(projectId, sessionId), "transcript"] as const,
-      queryFn: () => api.transcript(sessionId),
-      staleTime: 0,
-    }),
 };
 
 const useRunStateQueryBody = (projectId: string, sessionId: string, holder: string) =>

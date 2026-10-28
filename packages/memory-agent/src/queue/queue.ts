@@ -6,9 +6,10 @@ import {
   Crypto,
   Effect,
   Layer,
+  HashMap,
   Match,
-  MutableHashMap,
   Option,
+  Ref,
   Schema,
 } from "effect";
 import { SqlClient, SqlError, SqlSchema } from "effect/sql";
@@ -57,25 +58,28 @@ function toMessage(row: typeof Row.Type): QueuedMessage {
 }
 
 /** The message is gone, already delivered, or not in a state that allows the change. */
-export class QueueChangeRefused extends Schema.TaggedError<QueueChangeRefused>()(
-  "QueueChangeRefused",
-  {
-    id: Schema.String,
-    reason: Schema.Literals(["not_found", "delivered", "not_held", "reserved"]),
-  },
-) {}
+export class QueueChangeRefused extends Schema.TaggedError<
+  QueueChangeRefused,
+  { readonly brand: unique symbol }
+>()("QueueChangeRefused", {
+  id: Schema.String,
+  reason: Schema.Literals(["not_found", "delivered", "not_held", "reserved"]),
+}) {}
 
 const SessionMessage = Schema.Struct({ sessionId: Schema.String, id: Schema.String });
+
+/** The next turn each session has selected, by session id. */
+type Reservations = HashMap.HashMap<
+  string,
+  { readonly id: string; readonly holdOnRelease: boolean }
+>;
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const crypto = yield* Crypto.Crypto;
   const now = Clock.currentTimeMillis;
-  // Reservations are checked and changed without a yield in between, so no two fibres claim one.
-  const reservations = MutableHashMap.empty<
-    string,
-    { readonly id: string; readonly holdOnRelease: boolean }
-  >();
+  // Reservations are checked and changed in one Ref.modify, so no two fibres claim one.
+  const reservations = yield* Ref.make<Reservations>(HashMap.empty());
   const findOne = SqlSchema.findOneOption({
     Request: SessionMessage,
     Result: Row,
@@ -88,12 +92,22 @@ const make = Effect.gen(function* () {
     );
   /** The message, if it may still change (not delivered). */
   const pending = Effect.fnUntraced(function* (sessionId: string, id: string) {
-    const message = yield* get(sessionId, id);
-    if (message === null) return yield* QueueChangeRefused.make({ id, reason: "not_found" });
-    if (Option.getOrUndefined(MutableHashMap.get(reservations, sessionId))?.id === id)
-      return yield* QueueChangeRefused.make({ id, reason: "reserved" });
-    if (QueueItemState.$is("delivered")(message.state))
-      return yield* QueueChangeRefused.make({ id, reason: "delivered" });
+    const message = yield* findOne({ sessionId, id }).pipe(
+      Effect.flatMap((row) =>
+        Effect.fromOption(row, () => QueueChangeRefused.make({ id, reason: "not_found" })),
+      ),
+      Effect.map(toMessage),
+    );
+    yield* Effect.when(
+      Effect.fail(QueueChangeRefused.make({ id, reason: "reserved" })),
+      Effect.map(Ref.get(reservations), (held) =>
+        Option.exists(HashMap.get(held, sessionId), (reserved) => reserved.id === id),
+      ),
+    );
+    yield* Effect.when(
+      Effect.fail(QueueChangeRefused.make({ id, reason: "delivered" })),
+      Effect.succeed(QueueItemState.$is("delivered")(message.state)),
+    );
     return message;
   });
   // Every change of state, editing included, takes a message off the steered path.
@@ -209,10 +223,12 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const id = yield* crypto.randomUUIDv4();
         const at = yield* now;
-        if (steered)
-          yield* sql`
+        yield* Effect.when(
+          sql`
             UPDATE queued_messages SET steered = 1
-            WHERE session_id = ${sessionId} AND state = 'waiting'`;
+            WHERE session_id = ${sessionId} AND state = 'waiting'`,
+          Effect.succeed(steered),
+        );
         const row = yield* insert({
           id,
           sessionId,
@@ -273,28 +289,45 @@ const make = Effect.gen(function* () {
 
     /** Atomically select and reserve the current head until delivery or explicit release. */
     claimNext: (sessionId: string) =>
-      MutableHashMap.has(reservations, sessionId)
-        ? Effect.succeed(null)
-        : Effect.map(head(sessionId), (row) => {
-            const message = Option.getOrNull(
-              Option.map(
-                Option.filter(row, (found) => found.state === "waiting"),
-                toMessage,
+      Effect.gen(function* () {
+        if (HashMap.has(yield* Ref.get(reservations), sessionId)) return null;
+        const row = yield* head(sessionId);
+        return yield* Ref.modify(
+          reservations,
+          (held): readonly [QueuedMessage | null, Reservations] =>
+            Option.match(
+              Option.filter(
+                row,
+                // Checked again after the read: another fibre may have claimed the head meanwhile.
+                (found) => found.state === "waiting" && !HashMap.has(held, sessionId),
               ),
-            );
-            // Checked again after the read: another fibre may have claimed the head meanwhile.
-            if (message === null || MutableHashMap.has(reservations, sessionId)) return null;
-            MutableHashMap.set(reservations, sessionId, { id: message.id, holdOnRelease: false });
-            return message;
-          }),
+              {
+                onNone: () => [null, held],
+                onSome: (found) => {
+                  const message = toMessage(found);
+                  return [
+                    message,
+                    HashMap.set(held, sessionId, { id: message.id, holdOnRelease: false }),
+                  ];
+                },
+              },
+            ),
+        );
+      }),
 
     releaseNext: (sessionId: string, id: string) =>
-      Effect.suspend(() => {
-        const reservation = Option.getOrUndefined(MutableHashMap.get(reservations, sessionId));
-        if (reservation?.id !== id) return Effect.void;
-        MutableHashMap.remove(reservations, sessionId);
-        return reservation.holdOnRelease ? Effect.asVoid(setState(id, "held")) : Effect.void;
-      }),
+      Ref.modify(reservations, (held): readonly [boolean, Reservations] =>
+        Option.match(
+          Option.filter(HashMap.get(held, sessionId), (reservation) => reservation.id === id),
+          {
+            onNone: () => [false, held],
+            onSome: (reservation) => [reservation.holdOnRelease, HashMap.remove(held, sessionId)],
+          },
+        ),
+      ).pipe(
+        Effect.flatMap((hold) => Effect.when(setState(id, "held"), Effect.succeed(hold))),
+        Effect.asVoid,
+      ),
 
     markDelivered: (id: string, via: Exclude<DeliveryVia, "steer">, runId: string | null) =>
       Effect.gen(function* () {
@@ -302,8 +335,10 @@ const make = Effect.gen(function* () {
           UPDATE queued_messages SET state = 'delivered', delivered_via = ${via}, run_id = ${runId},
             draft = NULL, updated_at = ${yield* now}
           WHERE id = ${id}`;
-        for (const [sessionId, reservation] of reservations)
-          if (reservation.id === id) MutableHashMap.remove(reservations, sessionId);
+        yield* Ref.update(
+          reservations,
+          HashMap.filter((reservation) => reservation.id !== id),
+        );
       }),
 
     markFailed: (id: string, reason: string) =>
@@ -319,12 +354,20 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         // A selected next turn is locked until committed or released. Holding it here would allow
         // a different state to be delivered from the content already selected for this request.
-        const reserved = Option.getOrUndefined(MutableHashMap.get(reservations, sessionId));
-        if (reserved !== undefined)
-          MutableHashMap.set(reservations, sessionId, { ...reserved, holdOnRelease: true });
+        const reserved = yield* Ref.modify(reservations, (held) => [
+          HashMap.get(held, sessionId),
+          HashMap.modify(held, sessionId, (reservation) => ({
+            ...reservation,
+            holdOnRelease: true,
+          })),
+        ]);
+        const reservedId = Option.match(reserved, {
+          onNone: () => "",
+          onSome: (reservation) => reservation.id,
+        });
         yield* sql`
           UPDATE queued_messages SET state = 'held', steered = 0, updated_at = ${yield* now}
-          WHERE session_id = ${sessionId} AND state = 'waiting' AND id != ${reserved?.id ?? ""}
+          WHERE session_id = ${sessionId} AND state = 'waiting' AND id != ${reservedId}
             AND (${cause === "stopped" ? 1 : 0} OR steered = 0)`;
       }),
   };

@@ -1,0 +1,250 @@
+{
+  "acknowledgements": [],
+  "artifacts": [],
+  "attempts": [],
+  "bindings": [],
+  "events": [],
+  "history": [
+    {
+      "format_version": 1,
+      "messages": [
+        {
+          "content": "golden:queue",
+          "createdAt": "<time>",
+          "id": "<id-1>",
+          "role": "user"
+        }
+      ],
+      "ordinal": 0,
+      "ready": 1,
+      "thread_id": "<session>",
+      "ui_id": "<id-1>"
+    },
+    {
+      "format_version": 1,
+      "messages": [
+        {
+          "content": null,
+          "createdAt": "<time>",
+          "finishReason": "tool_calls",
+          "id": "<id-2>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          },
+          "toolCalls": [
+            {
+              "function": {
+                "arguments": "{\"path\":\"notes.txt\"}",
+                "name": "read_file"
+              },
+              "id": "queue-read@<session>",
+              "type": "function"
+            }
+          ]
+        },
+        {
+          "content": "{\"path\":\"notes.txt\",\"sha256\":\"c2097f55f01fc297fc7f4acf21438123e06e4d409a818524428534e850642f4f\",\"content\":\"first line\\nsecond line\\n\",\"startLine\":1,\"endLine\":2,\"totalLines\":2,\"nextStartLine\":null,\"lineTruncated\":false}",
+          "id": "stored:<session>:2",
+          "role": "tool",
+          "toolCallId": "queue-read@<session>"
+        }
+      ],
+      "ordinal": 1,
+      "ready": 1,
+      "thread_id": "<session>",
+      "ui_id": "<id-2>"
+    },
+    {
+      "format_version": 1,
+      "messages": [
+        {
+          "content": "and the second line",
+          "id": "<id-3>",
+          "role": "user"
+        }
+      ],
+      "ordinal": 2,
+      "ready": 1,
+      "thread_id": "<session>",
+      "ui_id": "<id-3>"
+    },
+    {
+      "format_version": 1,
+      "messages": [
+        {
+          "content": "Hello from fast-1",
+          "createdAt": "<time>",
+          "finishReason": "stop",
+          "id": "<id-4>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          }
+        }
+      ],
+      "ordinal": 3,
+      "ready": 1,
+      "thread_id": "<session>",
+      "ui_id": "<id-4>"
+    }
+  ],
+  "interrupts": [],
+  "ledger": [],
+  "metadata": [
+    {
+      "key": "<session>",
+      "namespace": "memory-agent/model-handoff",
+      "value": {
+        "_tag": "baseline",
+        "target": "[\"openai\",\"fast-1\",null]"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "detail": {},
+      "kind": "user",
+      "run_id": null,
+      "text": "golden:queue"
+    },
+    {
+      "detail": {},
+      "kind": "assistant",
+      "run_id": "<id-5>",
+      "text": ""
+    },
+    {
+      "detail": {
+        "toolCallId": "queue-read@<session>",
+        "toolName": "read_file"
+      },
+      "kind": "tool_call",
+      "run_id": "<id-5>",
+      "text": "read_file {\"path\":\"notes.txt\"}"
+    },
+    {
+      "detail": {
+        "ok": true,
+        "toolCallId": "queue-read@<session>",
+        "toolName": "read_file"
+      },
+      "kind": "tool_result",
+      "run_id": "<id-5>",
+      "text": {
+        "content": "first line\nsecond line\n",
+        "endLine": 2,
+        "lineTruncated": false,
+        "nextStartLine": null,
+        "path": "notes.txt",
+        "sha256": "c2097f55f01fc297fc7f4acf21438123e06e4d409a818524428534e850642f4f",
+        "startLine": 1,
+        "totalLines": 2
+      }
+    },
+    {
+      "detail": {},
+      "kind": "user",
+      "run_id": "<id-5>",
+      "text": "and the second line"
+    },
+    {
+      "detail": {},
+      "kind": "assistant",
+      "run_id": "<id-5>",
+      "text": "Hello from fast-1"
+    }
+  ],
+  "notifications": [],
+  "queue": [
+    {
+      "delivered_via": "tool_boundary",
+      "failure": null,
+      "in_transcript": 0,
+      "run_id": "<id-5>",
+      "state": "delivered",
+      "steered": 0,
+      "text": "and the second line"
+    }
+  ],
+  "runs": [
+    {
+      "cancel_requested": null,
+      "error": null,
+      "error_code": null,
+      "run_id": "<id-5>",
+      "status": "completed",
+      "thread_id": "<session>",
+      "usage": null
+    }
+  ],
+  "subagents": [],
+  "tasks": [],
+  "threads": [
+    {
+      "messages": [
+        {
+          "content": "golden:queue",
+          "createdAt": "<time>",
+          "id": "<id-1>",
+          "role": "user"
+        },
+        {
+          "content": null,
+          "createdAt": "<time>",
+          "finishReason": "tool_calls",
+          "id": "<id-2>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          },
+          "toolCalls": [
+            {
+              "function": {
+                "arguments": "{\"path\":\"notes.txt\"}",
+                "name": "read_file"
+              },
+              "id": "queue-read@<session>",
+              "type": "function"
+            }
+          ]
+        },
+        {
+          "content": "{\"path\":\"notes.txt\",\"sha256\":\"c2097f55f01fc297fc7f4acf21438123e06e4d409a818524428534e850642f4f\",\"content\":\"first line\\nsecond line\\n\",\"startLine\":1,\"endLine\":2,\"totalLines\":2,\"nextStartLine\":null,\"lineTruncated\":false}",
+          "role": "tool",
+          "toolCallId": "queue-read@<session>"
+        },
+        {
+          "content": "and the second line",
+          "id": "<id-3>",
+          "role": "user"
+        },
+        {
+          "content": "Hello from fast-1",
+          "createdAt": "<time>",
+          "finishReason": "stop",
+          "id": "<id-4>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          }
+        }
+      ],
+      "thread_id": "<session>"
+    }
+  ],
+  "usage": [],
+  "workflow": []
+}

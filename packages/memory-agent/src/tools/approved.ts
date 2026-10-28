@@ -1,12 +1,14 @@
 import { Function as EffectFunction } from "effect";
-import { randomUUID } from "../runtime/synchronous-crypto.ts";
-import { isTruthy } from "../truthy.ts";
-import { toolDefinition, type ToolExecutionContext } from "@tanstack/ai";
 import { path } from "../runtime/synchronous-path.ts";
 const { isAbsolute, relative, sep } = path;
-import { Cause, Context, Effect, FileSystem, Layer, Match, Schema } from "effect";
+import { Context, Crypto, Effect, FileSystem, Layer, Match, Option, Schema } from "effect";
+import { ChildProcessSpawner } from "effect/process";
 import { AttemptFailureReason } from "../work-trace/contracts.ts";
-import { BackgroundTasks, backgroundOperation, type BackgroundBinding } from "./background.ts";
+import {
+  BackgroundOperationFailed,
+  BackgroundTasks,
+  type BackgroundBinding,
+} from "./background.ts";
 import { StorageRoot } from "../config/storage-root.ts";
 import { temporaryDirectory } from "../runtime/host-system.ts";
 import {
@@ -37,25 +39,24 @@ import {
   skillCommand,
 } from "../skills/code-skills.ts";
 import {
-  approvalToolDefinitions,
-  reviewedToolDefinitions,
+  deleteOutsideFileSpec,
   RunSkillInput,
+  saveCodeSkillSpec,
+  writeOutsideFileSpec,
   type DeleteOutsideFileInput,
   type SaveCodeSkillInput,
   type WriteOutsideFileInput,
 } from "./definitions.ts";
-import { runTrace } from "../runtime/run-trace.ts";
-import { guardedWith } from "./failure.ts";
-import { lazily } from "./lazy.ts";
-import { toToolSchema } from "./schema.ts";
+import { guardedChange, guardedEffect } from "./failure.ts";
+import { runTool } from "./run-tool.ts";
 
 /** Not gated per call: the program it runs was approved when it was saved. */
-export const runSkillDefinition = toolDefinition({
+const runSkill = {
   name: "run_skill",
   description:
     "Run a project code skill. A skill runs only as it was approved when saved; an edited or unapproved one is refused until saved again with save_code_skill. A ts skill takes input, checked against its schema, and returns what its program returned, as run_code does. A sh skill takes args and runs sandboxed: what the sandbox blocked is listed in stderr under <sandbox_violations>; to reach a blocked host the job needs, save the skill again with that host in network. It returns the output and exit status, or a taskId if still running after yieldMs; retrieve the final result with get_background_result. A running receipt does not prove success.",
-  inputSchema: toToolSchema(RunSkillInput),
-});
+  parameters: RunSkillInput,
+} as const;
 
 const ShellResult = Schema.Struct({
   workdir: Schema.String,
@@ -102,10 +103,15 @@ function resolveShellWorkingDirectoryBody(
   storageRoot: string,
   workdir: string,
 ) {
-  if (!isAbsolute(workdir)) return resolveProjectPath(projectRoot, workdir, "directory");
-  const resolved = resolveOutsidePath(projectRoot, storageRoot, workdir, "directory");
+  return isAbsolute(workdir)
+    ? outsideWorkingDirectory(projectRoot, storageRoot, workdir)
+    : resolveProjectPath(projectRoot, workdir, "directory");
+}
+
+/** An absolute working directory, which must be under a temporary directory. */
+function outsideWorkingDirectory(projectRoot: string, storageRoot: string, workdir: string) {
   return Effect.gen(function* () {
-    const directory = yield* resolved;
+    const directory = yield* resolveOutsidePath(projectRoot, storageRoot, workdir, "directory");
     const tempRoots = yield* Effect.all(
       [canonicalPathEffect("/tmp"), Effect.flatMap(temporaryDirectory, canonicalPathEffect)],
       { concurrency: 2 },
@@ -125,205 +131,227 @@ const make = Effect.gen(function* () {
   const background = yield* BackgroundTasks;
   const codeSkills = yield* CodeSkills;
   const fileSystem = yield* FileSystem.FileSystem;
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const platform = yield* Effect.context<FileSystem.FileSystem | Crypto.Crypto>();
+
+  /** The approved tools' calls for `project`, each failing with what the model reads. */
+  const callsFor = (project: Fenced<Project>, binding?: BackgroundBinding) => ({
+    saveCodeSkill: ({ name, description, program, usage }: typeof SaveCodeSkillInput.Type) =>
+      guardedEffect(name, codeSkills.save(project, { name, description, usage, program })),
+
+    /** Interrupting the call stops the command. */
+    runSkill: (
+      { name, args = [], workdir, timeoutSeconds, yieldMs }: typeof RunSkillInput.Type,
+      toolCallId: string,
+    ) =>
+      guardedEffect(
+        name,
+        Effect.gen(function* () {
+          // A ts skill is run by `CodeTools`, which knows the run's tools; one reaches here
+          // only from a program, which runs sh skills alone.
+          const runnable = yield* SavedProgram.$match(yield* codeSkills.runnable(project, name), {
+            ts: () =>
+              Effect.fail(
+                CodeSkillRejected.make({
+                  reason: "ts_skill",
+                  detail: `${name} is a ts skill, which a program cannot run. Call run_skill for it yourself.`,
+                }),
+              ),
+            sh: (saved) => Effect.succeed(saved),
+          });
+          const command = skillCommand(name, runnable.text, args);
+          const label = [name, ...args].join(" ");
+          const directory = yield* resolveShellWorkingDirectory(
+            project.root,
+            storage.path,
+            workdir ?? ".",
+          ).pipe(Effect.provideContext(platform));
+          const seconds = Math.min(
+            Math.max(1, timeoutSeconds ?? defaultTimeoutSeconds),
+            maxTimeoutSeconds,
+          );
+          const runLine = (line: string) =>
+            runCommand({
+              command: line,
+              cwd: directory.absolute,
+              timeoutSeconds: seconds,
+              env: process.env,
+            });
+          const setup = {
+            command,
+            commandId: toolCallId,
+            ...(yield* sandboxPolicy({
+              projectRoot: project.root,
+              storageRoot: storage.path,
+              network: runnable.network,
+            })),
+          };
+          // Without an OS sandbox here, only `full` mode, which already runs unapproved scripts,
+          // falls back to running the script as it is.
+          type LineRun = ReturnType<typeof runLine>;
+          const execute = runSandboxed(setup, runLine).pipe(
+            Effect.catchTag(
+              "SandboxUnavailable",
+              (
+                unavailable,
+              ): Effect.Effect<
+                CommandResult,
+                SandboxUnavailable | Effect.Error<LineRun>,
+                Effect.Services<LineRun>
+              > =>
+                project.permissionMode === "full" ? runLine(command) : Effect.fail(unavailable),
+            ),
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          );
+          const inBackground = (bound: BackgroundBinding) =>
+            Effect.gen(function* () {
+              const receipt = yield* background.start(
+                bound,
+                toolCallId,
+                "shell",
+                label,
+                execute.pipe(
+                  Effect.mapError((cause) => BackgroundOperationFailed.make({ cause })),
+                  Effect.map((result) => ({
+                    report: JSON.stringify({
+                      workdir: directory.relative,
+                      ...result,
+                      command: label,
+                    }),
+                    failure: commandFailure(result),
+                  })),
+                ),
+              );
+              const saved = yield* background.waitResult(
+                bound.sessionId,
+                receipt.taskId,
+                yieldMs ?? 1000,
+              );
+              return yield* Option.match(Option.fromNullishOr(saved), {
+                onNone: () => Effect.succeed(receipt),
+                onSome: (result) =>
+                  Match.value(result).pipe(
+                    Match.when({ status: "completed" }, ({ result: text }) =>
+                      Schema.decodeEffect(Schema.fromJsonString(ShellResult))(text),
+                    ),
+                    Match.orElse((running) =>
+                      Effect.succeed({ taskId: receipt.taskId, ...running }),
+                    ),
+                  ),
+              });
+            });
+          const inline = Effect.map(execute, (result) => ({
+            workdir: directory.relative,
+            ...result,
+            command: label,
+          }));
+          return yield* Option.match(Option.fromNullishOr(binding), {
+            onNone: () => inline,
+            onSome: inBackground,
+          });
+        }),
+      ),
+
+    writeOutsideFile: ({ path, content, expectedSha256 }: typeof WriteOutsideFileInput.Type) =>
+      guardedChange(
+        path,
+        Effect.gen(function* () {
+          const target = yield* resolveFencedOutsidePath(
+            project.toolFence,
+            project.root,
+            storage.path,
+            path,
+            "new-or-file",
+          );
+          // Without a hash the file must be new; with one it replaces the file it names.
+          return yield* Option.match(Option.fromNullishOr(expectedSha256), {
+            onNone: () =>
+              Effect.map(
+                createTextFileEffect({ absolute: target.absolute, path, text: content }),
+                (created) => ({ path: target.absolute, created: true, ...created }),
+              ),
+            onSome: (expected) =>
+              Effect.succeed(target).pipe(
+                Effect.filterOrFail(
+                  (existing) => existing.stats !== undefined,
+                  () => PathRejected.make({ path, reason: "not_found" }),
+                ),
+                Effect.andThen(
+                  replaceTextFileEffect({
+                    absolute: target.absolute,
+                    path,
+                    expectedSha256: expected,
+                    text: content,
+                  }),
+                ),
+                Effect.map((replaced) => ({ path: target.absolute, created: false, ...replaced })),
+              ),
+          });
+        }).pipe(Effect.provideContext(platform)),
+      ),
+
+    deleteOutsideFile: ({ path, expectedSha256 }: typeof DeleteOutsideFileInput.Type) =>
+      guardedChange(
+        path,
+        Effect.gen(function* () {
+          const target = yield* resolveFencedOutsidePath(
+            project.toolFence,
+            project.root,
+            storage.path,
+            path,
+            "file",
+          );
+          const removed = yield* deleteTextFileEffect({
+            absolute: target.absolute,
+            path,
+            expectedSha256,
+          });
+          return { path: target.absolute, deleted: true, ...removed };
+        }).pipe(Effect.provideContext(platform)),
+      ),
+  });
 
   return {
     /**
-     * Server side of the approval-gated tools. With `static` approval (`ask` mode) TanStack waits
-     * for the user; with `gate` (`auto`/`full` modes, subagents) middleware either reviews the call
-     * or full mode lets it proceed. Permission mode never lifts path, credential or `.git` rules.
-     * They run on the run's context, so their spans join the run's trace.
+     * The approval-gated tools. With `static` approval (`ask` mode) the gated tools carry
+     * `needsApproval`, which the loop asks the user about; with `gate` (`auto`/`full` modes,
+     * subagents) the loop's review decides each call, or full mode lets it proceed. Permission mode
+     * never lifts path, credential or `.git` rules. They run on the loop's fiber, so their spans
+     * join the run's trace.
      */
-    forProject: (
+    toolsFor: (
       project: Fenced<Project>,
       approval: "static" | "gate" = project.permissionMode === "ask" ? "static" : "gate",
       binding?: BackgroundBinding,
-    ) =>
-      Effect.map(runTrace, (caller) => {
-        const guarded = guardedWith(caller);
-        const saveCodeSkill = ({
-          name,
-          description,
-          program,
-          usage,
-        }: typeof SaveCodeSkillInput.Type) =>
-          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-          guarded(name, () => codeSkills.save(project, { name, description, usage, program }));
-
-        const runSkill = (
-          { name, args = [], workdir, timeoutSeconds, yieldMs }: typeof RunSkillInput.Type,
-          context?: ToolExecutionContext,
-        ) =>
-          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-          guarded(name, () =>
-            Effect.gen(function* () {
-              // A ts skill is run by `CodeTools`, which knows the run's tools; one reaches here
-              // only from a program, which runs sh skills alone.
-              const runnable = yield* SavedProgram.$match(
-                yield* codeSkills.runnable(project, name),
-                {
-                  ts: () =>
-                    Effect.fail(
-                      CodeSkillRejected.make({
-                        reason: "ts_skill",
-                        detail: `${name} is a ts skill, which a program cannot run. Call run_skill for it yourself.`,
-                      }),
-                    ),
-                  sh: (saved) => Effect.succeed(saved),
-                },
-              );
-              const command = skillCommand(name, runnable.text, args);
-              const label = [name, ...args].join(" ");
-              const directory = yield* resolveShellWorkingDirectory(
-                project.root,
-                storage.path,
-                workdir ?? ".",
-              );
-              const seconds = Math.min(
-                Math.max(1, timeoutSeconds ?? defaultTimeoutSeconds),
-                maxTimeoutSeconds,
-              );
-              const runLine = (signal: AbortSignal | undefined) => (line: string) =>
-                Effect.tryPromise(() =>
-                  runCommand(line, {
-                    cwd: directory.absolute,
-                    timeoutSeconds: seconds,
-                    signal,
-                    env: process.env,
-                  }),
-                );
-              const setup = {
-                command,
-                commandId: context?.toolCallId ?? randomUUID(),
-                ...(yield* sandboxPolicy({
-                  projectRoot: project.root,
-                  storageRoot: storage.path,
-                  network: runnable.network,
-                })),
-              };
-              // Without an OS sandbox here, only `full` mode, which already runs unapproved scripts,
-              // falls back to running the script as it is.
-              const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
-              const execute = (signal: AbortSignal | undefined) =>
-                runPromise(
-                  runSandboxed(setup, runLine(signal)).pipe(
-                    Effect.catchTag(
-                      "SandboxUnavailable",
-                      (
-                        unavailable,
-                      ): Effect.Effect<CommandResult, SandboxUnavailable | Cause.UnknownError> =>
-                        project.permissionMode === "full"
-                          ? runLine(signal)(command)
-                          : Effect.fail(unavailable),
-                    ),
-                    Effect.provideService(FileSystem.FileSystem, fileSystem),
-                  ),
-                );
-              if (binding !== undefined) {
-                const receipt = yield* background.start(
-                  binding,
-                  context?.toolCallId ?? randomUUID(),
-                  "shell",
-                  label,
-                  backgroundOperation(execute).pipe(
-                    Effect.map((result) => ({
-                      report: JSON.stringify({
-                        workdir: directory.relative,
-                        ...result,
-                        command: label,
-                      }),
-                      failure: commandFailure(result),
-                    })),
-                  ),
-                );
-                const result = yield* background.waitResult(
-                  binding.sessionId,
-                  receipt.taskId,
-                  yieldMs ?? 1000,
-                );
-                if (result?.status === "completed")
-                  return yield* Schema.decodeEffect(Schema.fromJsonString(ShellResult))(
-                    result.result,
-                  );
-                if (isTruthy(result)) return { taskId: receipt.taskId, ...result };
-                return receipt;
-              }
-              const result = yield* Effect.tryPromise(() => execute(context?.abortSignal));
-              return { workdir: directory.relative, ...result, command: label };
-            }),
-          );
-
-        const writeOutsideFile = ({
-          path,
-          content,
-          expectedSha256,
-        }: typeof WriteOutsideFileInput.Type) =>
-          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-          guarded(path, () =>
-            Effect.gen(function* () {
-              const target = yield* resolveFencedOutsidePath(
-                project.toolFence,
-                project.root,
-                storage.path,
-                path,
-                "new-or-file",
-              );
-              if (expectedSha256 === undefined) {
-                const created = yield* createTextFileEffect({
-                  absolute: target.absolute,
-                  path,
-                  text: content,
-                });
-                return { path: target.absolute, created: true, ...created };
-              }
-              if (!(target.stats !== undefined))
-                return yield* PathRejected.make({ path, reason: "not_found" });
-              const replaced = yield* replaceTextFileEffect({
-                absolute: target.absolute,
-                path,
-                expectedSha256,
-                text: content,
-              });
-              return { path: target.absolute, created: false, ...replaced };
-            }),
-          );
-
-        const deleteOutsideFile = ({ path, expectedSha256 }: typeof DeleteOutsideFileInput.Type) =>
-          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-          guarded(path, () =>
-            Effect.gen(function* () {
-              const target = yield* resolveFencedOutsidePath(
-                project.toolFence,
-                project.root,
-                storage.path,
-                path,
-                "file",
-              );
-              const removed = yield* deleteTextFileEffect({
-                absolute: target.absolute,
-                path,
-                expectedSha256,
-              });
-              return { path: target.absolute, deleted: true, ...removed };
-            }),
-          );
-
-        if (approval === "gate") {
-          const [save, write, remove] = reviewedToolDefinitions;
-          return [
-            lazily(save.server(saveCodeSkill)),
-            runSkillDefinition.server(runSkill),
-            lazily(write.server(writeOutsideFile)),
-            lazily(remove.server(deleteOutsideFile)),
-          ] as const;
-        }
-        const [save, write, remove] = approvalToolDefinitions;
-        return [
-          lazily(save.server(saveCodeSkill)),
-          runSkillDefinition.server(runSkill),
-          lazily(write.server(writeOutsideFile)),
-          lazily(remove.server(deleteOutsideFile)),
-        ] as const;
-      }),
+    ) => {
+      const calls = callsFor(project, binding);
+      const needsApproval = approval === "static";
+      return [
+        runTool({
+          ...saveCodeSkillSpec,
+          needsApproval,
+          lazy: true,
+          handler: calls.saveCodeSkill,
+        }),
+        runTool({
+          ...runSkill,
+          handler: (input, call) => calls.runSkill(input, call.toolCallId),
+        }),
+        runTool({
+          ...writeOutsideFileSpec,
+          needsApproval,
+          lazy: true,
+          handler: calls.writeOutsideFile,
+        }),
+        runTool({
+          ...deleteOutsideFileSpec,
+          needsApproval,
+          lazy: true,
+          handler: calls.deleteOutsideFile,
+        }),
+      ];
+    },
   };
 });
 

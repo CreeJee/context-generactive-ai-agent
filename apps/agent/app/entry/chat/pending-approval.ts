@@ -1,26 +1,14 @@
-import type { useChat } from "@tanstack/ai-react";
-import { Data, Option, Schema } from "effect";
-import {
-  PermissionReviewPayload,
-  permissionReviewInterrupt,
-  type approvalToolDefinitions,
-} from "memory-agent/definitions";
-
-export type ApprovalTools = typeof approvalToolDefinitions;
-export type ApprovalInterrupts = readonly [typeof permissionReviewInterrupt];
-type ChatInterrupt = ReturnType<
-  typeof useChat<ApprovalTools, undefined, unknown, ApprovalInterrupts>
->["interrupts"][number];
+import { Data, Match } from "effect";
+import type { PendingInterrupts, ResumeEntry } from "memory-agent/chat-api";
 
 /** A call waiting for the user, whichever permission mode asked. */
 export type PendingApproval = Data.TaggedEnum<{
-  /** `ask` mode: TanStack paused before a needsApproval tool. */
+  /** `ask` mode: the run paused before a tool that needs approval. */
   "tool-approval": {
     readonly id: string;
     readonly toolCallId: string;
     readonly toolName: string;
     readonly argumentsJson: string;
-    readonly answer: (approved: boolean) => void;
   };
   /** `auto` mode: the review could not allow the call alone. */
   "permission-review": {
@@ -31,41 +19,37 @@ export type PendingApproval = Data.TaggedEnum<{
     readonly reviewReason: string;
     /** Whether a review was unsure, or the tool asks on every call. */
     readonly askedBy: "review" | "every_call";
-    readonly answer: (approved: boolean) => void;
   };
 }>;
 export const PendingApproval = Data.taggedEnum<PendingApproval>();
 
-const decodeReview = Schema.decodeUnknownOption(
-  Schema.Struct({ payload: PermissionReviewPayload }),
-);
-
-/** Converts a TanStack interrupt to the approval shape rendered by the app. */
-export function toPendingApproval(interrupt: ChatInterrupt): PendingApproval | null {
-  switch (interrupt.kind) {
-    case "tool-approval":
-      return PendingApproval["tool-approval"]({
+/** An interrupt the run waits for, as the approval card shows it. */
+export const toPendingApproval = Match.type<PendingInterrupts["pending"][number]>().pipe(
+  Match.discriminatorsExhaustive("reason")({
+    tool_call: (interrupt) =>
+      PendingApproval["tool-approval"]({
         id: interrupt.id,
         toolCallId: interrupt.toolCallId,
-        toolName: interrupt.toolName,
-        argumentsJson: JSON.stringify(interrupt.originalArgs),
-        answer: (approved) => interrupt.resolveInterrupt(approved),
-      });
-    case "generic": {
-      if (interrupt.binding.definitionId !== permissionReviewInterrupt.id) return null;
-      const review = Option.getOrUndefined(decodeReview(interrupt));
-      if (!(review !== undefined)) return null;
-      return PendingApproval["permission-review"]({
-        id: interrupt.id,
-        toolCallId: review.payload.toolCallId,
-        toolName: review.payload.toolName,
-        argumentsJson: review.payload.arguments,
-        reviewReason: review.payload.reason,
-        askedBy: review.payload.askedBy ?? "review",
-        answer: (approved) => interrupt.resolveInterrupt({ approved }),
-      });
-    }
-    case "unbound":
-      return null;
-  }
-}
+        toolName: interrupt.metadata.toolName,
+        argumentsJson: JSON.stringify(interrupt.metadata.input),
+      }),
+    permission_review: ({ id, metadata: { payload } }) =>
+      PendingApproval["permission-review"]({
+        id,
+        toolCallId: payload.toolCallId,
+        toolName: payload.toolName,
+        argumentsJson: payload.arguments,
+        reviewReason: payload.reason,
+        askedBy: payload.askedBy ?? "review",
+      }),
+  }),
+);
+
+/** The page's decision on one approval, as the run that resumes reads it. */
+export const approvalAnswer = ({
+  id,
+  approved,
+}: {
+  readonly id: string;
+  readonly approved: boolean;
+}): ResumeEntry => ({ interruptId: id, status: "resolved", payload: { approved } });

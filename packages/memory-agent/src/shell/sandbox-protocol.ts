@@ -21,20 +21,20 @@ export const SandboxUnavailableReason = Schema.Literals([
   "setup_failed",
 ]);
 
-export class SandboxUnavailable extends Schema.TaggedError<SandboxUnavailable>()(
-  "SandboxUnavailable",
-  { reason: SandboxUnavailableReason, detail: Schema.String },
-) {
+export class SandboxUnavailable extends Schema.TaggedError<
+  SandboxUnavailable,
+  { readonly brand: unique symbol }
+>()("SandboxUnavailable", { reason: SandboxUnavailableReason, detail: Schema.String }) {
   override get message() {
     return `sandbox_unavailable (${this.reason}): ${this.detail}`;
   }
 }
 
 /** The sandbox's violation log could not be read; the command's own stderr stands. */
-export class SandboxReportFailed extends Schema.TaggedError<SandboxReportFailed>()(
-  "SandboxReportFailed",
-  { reason: Schema.Literals(["annotate_failed"]) },
-) {}
+export class SandboxReportFailed extends Schema.TaggedError<
+  SandboxReportFailed,
+  { readonly brand: unique symbol }
+>()("SandboxReportFailed", { reason: Schema.Literals(["annotate_failed"]) }) {}
 
 /** The command line to run instead of the original one, or why the sandbox cannot run it. */
 export const Prepare = Rpc.make("Prepare", { success: Schema.String, error: SandboxUnavailable });

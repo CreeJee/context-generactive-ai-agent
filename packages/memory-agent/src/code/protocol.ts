@@ -54,10 +54,10 @@ export const RunEvent = Schema.TaggedUnion({
 export type RunEvent = typeof RunEvent.Type;
 
 /** The worker could not load its engine; the cause stays in its log. */
-export class CodeEngineFailed extends Schema.TaggedError<CodeEngineFailed>()(
-  "CodeEngineFailed",
-  {},
-) {}
+export class CodeEngineFailed extends Schema.TaggedError<
+  CodeEngineFailed,
+  { readonly brand: unique symbol }
+>()("CodeEngineFailed", {}) {}
 
 /** Runs one program. A worker runs one program and is then stopped. */
 export const Run = Rpc.make("Run", {

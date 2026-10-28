@@ -12,10 +12,13 @@ export { configureAgentBackend, disposeAgent } from "./.server/agent.ts";
 export const streamTimeout = 5_000;
 
 /** React could not render the document; the renderer's error goes to `handleError`'s log only. */
-class DocumentRenderFailed extends Schema.TaggedError<DocumentRenderFailed>()(
-  "DocumentRenderFailed",
-  { stage: Schema.Literals(["shell", "all_ready"]), cause: Schema.Defect() },
-) {}
+class DocumentRenderFailed extends Schema.TaggedError<
+  DocumentRenderFailed,
+  { readonly brand: unique symbol }
+>()("DocumentRenderFailed", {
+  stage: Schema.Literals(["shell", "all_ready"]),
+  cause: Schema.Defect(),
+}) {}
 
 /**
  * A loader or action that throws. Node prints an Effect error as its fields without a stack, so
@@ -28,7 +31,7 @@ export const handleError: HandleErrorFunction & {
   (error: Parameters<HandleErrorFunction>[0], { request }: Parameters<HandleErrorFunction>[1]) => {
     if (request.signal.aborted) return;
     // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-    Effect.runSync(
+    Effect.runFork(
       Console.error(
         `[server] ${request.method} ${new URL(request.url).pathname} failed\n${Cause.pretty(Cause.die(error))}`,
       ),
@@ -45,7 +48,7 @@ const renderDocument = Effect.fn("server.renderDocument")(function* (
 ) {
   if (request.method === "HEAD") return new Response(null, { status, headers });
   let shellRendered = false;
-  const logError = Effect.runSyncWith(yield* Effect.context<never>());
+  const logError = Effect.runForkWith(yield* Effect.context<never>());
   const body = yield* Effect.tryPromise({
     try: () =>
       renderToReadableStream(<ServerRouter context={context} url={request.url} />, {

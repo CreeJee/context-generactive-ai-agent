@@ -12,7 +12,7 @@ import {
   Semaphore,
 } from "effect";
 
-export const ExecutionAdmissionKind = Schema.Literals(["workflow", "worker", "model", "tool"]);
+export const ExecutionAdmissionKind = Schema.Literals(["workflow", "model", "tool"]);
 export type ExecutionAdmissionKind = typeof ExecutionAdmissionKind.Type;
 
 const GateLimits = Schema.Struct({
@@ -23,7 +23,6 @@ export type GateLimits = typeof GateLimits.Type;
 
 export const ExecutionAdmissionLimits = Schema.Struct({
   workflow: GateLimits,
-  worker: GateLimits,
   model: GateLimits,
   tool: GateLimits,
 });
@@ -31,20 +30,19 @@ export type ExecutionAdmissionLimits = typeof ExecutionAdmissionLimits.Type;
 
 export const defaultExecutionAdmissionLimits: ExecutionAdmissionLimits = {
   workflow: { active: 32, queued: 64 },
-  worker: { active: 4, queued: 8 },
   model: { active: 8, queued: 16 },
   tool: { active: 16, queued: 64 },
 };
 
-export class ExecutionSaturated extends Schema.TaggedError<ExecutionSaturated>()(
-  "ExecutionSaturated",
-  {
-    kind: ExecutionAdmissionKind,
-    active: Schema.Int,
-    queued: Schema.Int,
-    capacity: Schema.Int,
-  },
-) {}
+export class ExecutionSaturated extends Schema.TaggedError<
+  ExecutionSaturated,
+  { readonly brand: unique symbol }
+>()("ExecutionSaturated", {
+  kind: ExecutionAdmissionKind,
+  active: Schema.Int,
+  queued: Schema.Int,
+  capacity: Schema.Int,
+}) {}
 
 export interface ExecutionAdmissionSnapshot {
   readonly active: number;
@@ -118,18 +116,6 @@ const configuredLimits = Config.all({
       0,
     ),
   }),
-  worker: Config.all({
-    active: configValue(
-      "CONTEXT_AGENT_WORKER_CONCURRENCY",
-      defaultExecutionAdmissionLimits.worker.active,
-      1,
-    ),
-    queued: configValue(
-      "CONTEXT_AGENT_WORKER_QUEUE_CAPACITY",
-      defaultExecutionAdmissionLimits.worker.queued,
-      0,
-    ),
-  }),
   model: Config.all({
     active: configValue(
       "CONTEXT_AGENT_MODEL_CONCURRENCY",
@@ -169,7 +155,6 @@ const makeGate = Effect.fnUntraced(function* (limits: GateLimits) {
 const make = Effect.fnUntraced(function* (limits: ExecutionAdmissionLimits) {
   const gates = {
     workflow: yield* makeGate(limits.workflow),
-    worker: yield* makeGate(limits.worker),
     model: yield* makeGate(limits.model),
     tool: yield* makeGate(limits.tool),
   } satisfies Record<ExecutionAdmissionKind, Gate>;

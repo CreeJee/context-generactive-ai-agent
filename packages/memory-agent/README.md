@@ -29,14 +29,16 @@ src/
     embedding/  로컬 임베딩 모델(worker thread) + turbovec 벡터 인덱스 + 인덱서(형태소 분석 포함)
     morph/      Kiwi 한국어 형태소 분석(worker thread, 모델은 처음 쓸 때 내려받음)
   oauth/        provider 구독 계정의 OAuth 로그인·토큰 갱신
-  providers/    provider별 모델 목록·TanStack 어댑터·실행 중 모델 선택
+  providers/    provider별 모델 목록·Effect AI 모델·실행 중 모델 선택
   files/        경로·자격 증명 검사, 텍스트 파일 읽기/쓰기, 목록, 줄 검색
   attachments/  업로드 이미지 저장(sha256, 바이트 서명 검사)과 메시지 연결, 첨부 URL 규칙
   shell/        호스트 셸 실행(프로세스 그룹, timeout, 출력 앞뒤 보존)
   permissions/  auto 모드: 분류 모델, 판정 기록, 게이트 middleware
   tools/        모델이 쓰는 도구 정의와 구현
-  agent/        /api/chat 핸들러(POST 실행, GET 복원), 저장된 대화를 UIMessage로 변환
-  chat-state/   TanStack AI persistence의 SQLite 저장소(대화·run·interrupt·metadata)
+  agent/        채팅 run(`AgentChat`: 실행, 복원, 취소), 노드에서 예전 대화 다시 만들기
+  api/          채팅 API(Effect `HttpApi`) 정의와 페이지가 세션을 읽는 방법
+  loop/         Effect AI 모델 위의 run loop: 도구 실행, 승인 interrupt, 대화·run 저장(`RunStore`)
+  chat-state/   저장된 대화의 화면 projection(페이지 읽기)과 시작할 때 run·interrupt 정리
   testing/      테스트용 어댑터·임베더
   layers.ts     모든 서비스를 저장 루트 하나로 조립하는 Effect Layer
 bin/
@@ -50,7 +52,7 @@ skills/
 네이티브 패키지(turbovec, `@napi-rs/keyring`, sharp)는 정적 import하지 않고 `runtime/resources.ts`의 `requireRuntime`으로 불러옵니다. 실행 파일(Node SEA)은 디스크 파일을 `import()`하지 못하고, 이 패키지들을 `CONTEXT_AGENT_RUNTIME` 폴더에 풀어 두기 때문입니다. 임베딩 모델(`@huggingface/transformers`)과 Kiwi는 worker thread에서 돌고, worker 스크립트(`embed-worker.ts`, `kiwi-worker.ts`)가 옆의 패키지를 직접 불러옵니다. 가져오기(`imports/worker.ts`)와 비밀 소급 정리의 탐지(`secrets/redact-worker.ts`)도 worker thread에서 돕니다. worker는 TypeScript라 저장소에서는 그대로 돌고, 실행 파일에는 worker마다 한 파일로 묶여 들어갑니다. 임베딩·Kiwi worker는 자기 모듈만 묶고 패키지는 runtime 폴더의 것을 씁니다. 스크립트 위치는 `runtimeWorker`가 정합니다(저장소에서는 package exports, 실행 파일에서는 runtime 폴더).
 
 서비스는 Effect `Context.Tag` + `Layer`로 만들고, 앱은 `ManagedRuntime` 하나로 씁니다.
-도구 입력 스키마는 Effect Schema이며 `toToolSchema`로 TanStack이 요구하는 Standard JSON Schema로 바꿉니다.
+도구 입력 스키마는 Effect Schema이며 provider에는 `tools/schema.ts`가 만든 draft-07 JSON Schema로 보냅니다.
 
 ## 기억 모델
 
@@ -96,7 +98,7 @@ Claude Code(`~/.claude/projects/**/*.jsonl`)와 Codex CLI(`~/.codex/sessions/**/
 
 권한 모드는 프로젝트마다 고릅니다.
 
-- `ask`(기본): 승인이 필요한 호출마다 TanStack이 멈추고 사용자가 답합니다(`needsApproval`).
+- `ask`(기본): 승인이 필요한 호출마다 run이 멈추고 사용자가 답합니다(`needsApproval`).
 - `auto`: `PermissionGate` middleware가 실행 직전 호출을 `PermissionClassifier`에 보냅니다.
   분류 모델(선택한 모델의 가장 낮은 추론 강도, 도구 없는 일회용 스레드)이 `allow`/`ask`/`block`을 판정합니다.
   - 입력은 호출 내용, DB에 저장된 실제 사용자 발언, 프로젝트 경로뿐입니다. 도구 결과, 파일 내용은 넣지 않습니다.
@@ -113,15 +115,15 @@ MCP 도구는 실행 중에 생기므로 브라우저가 정의를 모릅니다.
 
 ## 대화 상태와 새로고침
 
-- TanStack 대화 threadId는 항상 세션 id입니다(클라이언트가 보낸 값은 무시).
-- `ChatState`가 `@tanstack/ai-persistence`의 `withPersistence` middleware로 run마다 대화(ModelMessage), run 상태, interrupt를 SQLite(`chat_threads`, `chat_runs`, `chat_interrupts`, `chat_metadata`)에 저장합니다.
-- 새로고침한 페이지는 `useChat({ persistence: true })`가 `GET /api/chat`으로 `reconstructChat` 결과를 받아 대화와 대기 중인 승인을 되살립니다. 다른 세션의 thread는 읽을 수 없습니다.
+- 대화 threadId는 항상 세션 id입니다(클라이언트가 보낸 값은 무시).
+- `RunStore`(`loop/store.ts`)가 run마다 대화(`StoredMessage`), run 상태, interrupt, metadata를 SQLite(`chat_threads`, `chat_runs`, `chat_interrupts`, `chat_metadata`)에 저장합니다.
+- 새로고침한 페이지는 `GET /api/sessions/:session/messages`(채팅 API의 `snapshot`)로 최근 대화 페이지와 진행 중인 run, 대기 중인 승인을 되살립니다. 다른 세션의 thread는 읽을 수 없습니다.
 - 이 저장소는 화면 복원용이고 기억의 원본은 여전히 `nodes`입니다. chat state가 없는 예전 세션은 노드에서 대화를 다시 만들어 엽니다.
-- 저장소 계약은 `@tanstack/ai-persistence/testkit`의 conformance 테스트로 확인합니다.
+- 테스트는 `tests/loop/store.test.ts`, `tests/chat/history.test.ts`.
 
 ## 실행 중 새로고침, 취소, 재시작
 
-- run은 HTTP 요청과 독립적으로 실행됩니다. 답변 chunk는 delivery durability 로그(`memoryStream`)에 먼저 쓰이고, 새로고침한 페이지는 `GET /api/chat?runId=&offset=-1`로 처음부터 다시 읽으며 따라갑니다. 모델을 다시 호출하지 않습니다.
+- run은 HTTP 요청과 독립적으로 실행됩니다. run 이벤트는 run 로그(`workflow/durable-stream.ts`)에 먼저 쓰이고, 새로고침한 페이지는 `GET /api/sessions/:session/runs/:run/events`로 처음부터 다시 읽으며 따라갑니다. 모델을 다시 호출하지 않습니다.
 - `LiveRuns`가 세션마다 진행 중인 run 하나를 들고 있습니다. 같은 세션의 두 번째 run은 409이고, 취소(`AgentChat.cancel`)는 여기서 run을 찾아 `requestRunCancel` 후 `RUN_CANCEL_REASON`으로 abort합니다. provider 어댑터가 abort 신호를 처리합니다.
 - `AgentChat.status`는 진행 중인 run과 마지막 run의 상태, 오류를 돌려줍니다(`SessionRunState`).
 - `ChatState`가 만들어질 때 `running`으로 남은 run은 `failed`/`server_restarted`로 바뀝니다. 다시 실행하지 않습니다.
@@ -130,7 +132,7 @@ MCP 도구는 실행 중에 생기므로 브라우저가 정의를 모릅니다.
 - `MessageQueue`는 답변 중에 보낸 메시지를 순서대로 둡니다(`waiting`, `editing`, `held`, `delivered`, `failed`). `deliverable`은 앞에서부터 `waiting`만 돌려주고 편집 중이거나 확인이 필요한 메시지에서 멈춥니다. 새 프로세스는 남은 `waiting`/`editing`을 `held`로 바꿉니다.
 - `QueueDelivery.forRun` middleware는 도구 결과 뒤(`beforeModel`) 대기 메시지를 provider의 live-turn steering과 대화에 함께 넣고 사용자 노드로 기록합니다. `steer`를 지원하지 않는 provider에서는 다음 모델 요청의 대화로 전달합니다.
 - `AgentChat.enqueue`, `editQueued`, `queued`가 대기열 API입니다. 조회는 `{ items, nextDelivery }`를 돌려주고, 소유 페이지가 `forwardedProps.queuedNext: true`로 다음 턴을 요청하면 서버가 현재 대기열의 첫 메시지를 선택·예약해 전달합니다. 전달 가능한 묶음은 도구 경계에서만 계산합니다. run이 끝날 때(`LiveRuns` onEnded) 취소, 실패, 소유 페이지 없음이면 남은 메시지를 `held`로 둡니다. 테스트는 `tests/queue.test.ts`, `tests/queue-next-turn.test.ts`.
-- 테스트(`tests/runs.test.ts`)는 실제 `ChatClient`로 중간 새로고침 후 이어 읽기, 취소, 동시 run 거절, 재시작 후 실패 기록, 재시작을 넘긴 승인을 확인합니다.
+- 테스트(`tests/chat/`)는 채팅 API를 쓰는 탭(`tests/support/chat-client.ts`)으로 중간 새로고침 후 이어 읽기, 취소, 동시 run 거절, 재시작 후 실패 기록, 재시작을 넘긴 승인을 확인합니다.
 
 ## 이미지
 
@@ -195,6 +197,66 @@ vp check         # 루트에서: 포맷·lint·타입 검사
 ```
 
 테스트는 임시 디렉터리의 실제 SQLite, turbovec, 파일 시스템을 씁니다.
-승인, auto 모드 테스트는 실제 `@tanstack/ai-client` `ChatClient`로 요청과 재개를 끝까지 주고받습니다.
+승인, auto 모드 테스트는 채팅 API를 쓰는 탭(`tests/support/chat-client.ts`)으로 요청과 재개를 끝까지 주고받습니다.
 
 추가 지침은 `AGENT.md`에 있습니다.
+
+## Interface
+
+패키지 subpath export는 모두 `src`의 TypeScript 원본을 가리킨다. 디렉터리 구조는 위 `구조` 절 참고.
+
+- `memory-agent` (package `.` export) — `./src/index.ts` barrel. 앱의 `.server` 모듈과 API 라우트에서만 가져다 쓰는 Node 전용 진입점이다
+- `memory-agent/definitions` — `./src/tools/definitions.ts`. 브라우저에 필요한 도구 정의만 따로 내보낸다
+- `memory-agent/testing` — `./src/testing/index.ts`. 테스트용 어댑터와 임베더를 내보낸다
+- `memory-agent/chat-api` · `chat-session` · `chat-view` · `btw-thread` — `src/api/*.ts`. 채팅 API(Effect `HttpApi`) 정의, 세션 읽기, 화면 view, btw thread 계약을 내보낸다
+- `memory-agent/provider-contracts` · `compatible-config` — `src/providers/contracts.ts`, `src/providers/openai-compatible-config.ts`를 내보낸다
+- `memory-agent/acp` — `./src/acp/index.ts`. ACP 에이전트 다리 구성 요소를 내보낸다
+- `memory-agent/native-effect` · `node-platform` · `synchronous-path` · `host-system` — `src/runtime/*.ts`의 런타임 플랫폼 모듈을 내보낸다
+- `memory-agent/runtime-resources` — `./src/runtime/resources.ts`. `types`·`development`·`import`·`default` 조건이 모두 같은 파일을 가리킨다. 네이티브 패키지를 부르는 `requireRuntime`가 여기 있다
+- `memory-agent/kiwi-worker` · `embed-worker` · `import-worker` · `redact-worker` · `native-search-worker` · `sandbox-worker` · `code-worker` — worker thread 스크립트 진입점(`src/memory/morph/kiwi-worker.ts`, `src/memory/embedding/embed-worker.ts`, `src/imports/worker.ts`, `src/secrets/redact-worker.ts`, `src/memory/native-search/worker.ts`, `src/shell/sandbox-worker.ts`, `src/code/worker.ts`). `runtimeWorker`가 위치를 정할 수 있게 subpath로 내보낸다
+- `context-agent-acp` (bin) — `./bin/context-agent-acp.ts`. 에디터가 실행하는 ACP CLI다. 환경 변수 `CONTEXT_AGENT_URL`로 앱 주소를 받는다. 설정 예시는 위 `에디터에서 쓰기 (ACP)` 절 참고
+- `vp run build` / `test` / `test:unit` / `test:feature` / `typecheck` (`vite.config.ts` run tasks) — 각각 `vp pack`, `vp test --maxWorkers=4`, `vp test --project unit`, `vp test --project feature --maxWorkers=4`, `tsc`를 실행한다
+- `unit` / `feature` (Vitest projects) — `unit`은 `src/**/*.test.ts`, `feature`는 `tests/**/*.test.ts`를 포함한다
+- `eval:recall` · `eval:compaction` · `eval:structured-memory` · `eval:memory-lab` · `eval:prompt-overhead` (package scripts) — `node --no-warnings eval/<script>.ts`를 실행한다
+- `dev` / `check` / `prepare` / `prepublishOnly` (package scripts) — 순서대로 `vp pack --watch`, `vp check`, `effect-tsgo patch --typescript --oxlint`, `vp run build`를 실행한다
+
+하위 디렉터리와 문서:
+
+- [bench](./bench/README.md) — 파일 도구와 코드 스킬 지연 시간을 도구 실행 경계에서 재는 Vitest 벤치마크
+- [bin](./bin/README.md) — ACP CLI 진입점 `context-agent-acp.ts`
+- [eval](./eval/README.md) — 압축·recall·프롬프트 오버헤드·메모리·구조화 기억 평가 스크립트
+- [scripts](./scripts/README.md) — 구독형 OAuth 공급자를 실제 계정으로 검증하는 CLI 스크립트
+- [src](./src/README.md) — 공개 barrel `index.ts`와 composition root `memoryAgentLayer`
+- [AGENTS.md](./AGENTS.md) — 패키지 작업 지침
+- [skills/app-settings](./skills/app-settings/SKILL.md) — 내장 skill
+- [skills/code-skill-writing](./skills/code-skill-writing/SKILL.md) — 내장 skill
+- [skills/draw](./skills/draw/SKILL.md) — 내장 skill
+- `tests/` — 기능 테스트
+
+## Invariants
+
+- `exports`는 `src`의 TypeScript 원본을 가리켜야 한다. 앱이 원본을 import하므로 `pack.dts: false`, `pack.exports: false`를 둔다. 타입 검사는 `vp check`와 `typecheck` task가 맡는다
+- `build`·`test`·`test:unit`·`test:feature`는 `dependsOn: [{ task: "build", from: "dependencies" }]`를 지킨다. 벡터 인덱스와 테스트가 turbovec addon을 불러오므로 addon을 먼저 빌드해야 한다
+- `typecheck` task는 `cache: false`를 유지한다. Vite Task는 TypeScript 7 native tsc가 읽는 파일을 보지 못하므로, 캐시하면 새 오류가 가려진다
+- 전체 테스트와 feature 테스트는 `--maxWorkers=4`로 실행한다
+- `pack.deps.resolveDepSubpath: true`는 tsdown <0.23 호환을 위한 설정이다. 이 줄을 지우면 subpath import가 쓴 그대로 남는다
+- unit 테스트는 소스 옆 `src/**/*.test.ts`에 두고 실행 중인 에이전트 없이 모듈 하나를 검사한다. 실제 에이전트(TestEnv)나 실제 자원을 쓰는 feature 테스트는 `tests/**/*.test.ts`에 둔다
+- tsconfig는 `strict`, `exactOptionalPropertyTypes`, `noUnusedLocals`, `verbatimModuleSyntax`, `isolatedModules`, `noEmit`를 켠다. `@effect/language-service` 진단은 `nodeBuiltinImport`, `processEnvInEffect`, `asyncFunction`, `preferSchemaOverJson`, `globalErrorInEffectFailure`, `leakingRequirements` 등을 error로 둔다. `globalDate`, `globalTimers`, `globalFetch`, `globalRandom`, `processEnv`, `cryptoRandomUUID`는 warning이다
+- lint는 `typeAware: true`, `typeCheck: true`로 실행한다
+- 네이티브 패키지는 `requireRuntime`으로만 불러온다. 이유는 위 `구조` 절 참고
+- 앱 기본 skill은 `SKILL.md` 하나로 완결해야 한다. 이유는 위 `구조` 절 참고
+- `nodes` 원문 불변, 대화 threadId = 세션 id, 파일 도구 경로 제한, `SecretRedactor` 적용, Kagi 키 저장 위치는 위 `기억 모델`·`대화 상태와 새로고침`·`보안 경계` 절의 규칙을 따른다
+- 서비스는 Effect `Context.Tag` + `Layer`로 만들고 도구 입력 스키마는 Effect Schema로 쓴다(위 `구조` 절 참고)
+
+## Side Effects
+
+- `prepare` 스크립트(`effect-tsgo patch --typescript --oxlint`)는 설치된 typescript와 oxlint를 패치한다
+- `build` task(`vp pack`)는 번들 출력을 쓴다. `.gitignore`가 `dist`, `.vitest/`, `*.log`를 무시한다
+- `test` 계열 task는 임시 디렉터리에 실제 SQLite, turbovec, 파일 시스템을 쓴다
+- `eval:*` 스크립트는 `node`로 `eval/` 스크립트를 실행한다. `eval:recall`은 `~/.context-generactive-agent/models`에 모델 두 개가 있어야 한다
+- `vite.config.ts` 자체는 설정 객체만 내보내는 순수 모듈이다
+
+## Verification
+
+- Run: `vp run memory-agent#typecheck`
+- Run: `vp run memory-agent#test`

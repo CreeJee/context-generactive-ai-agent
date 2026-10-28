@@ -5,7 +5,7 @@
 ## Used Libraries
 
 - UI & style: tailwind, cn, cva, shadcn
-- AI: @tanstack/ai @tanstack/ai-react @tanstack/ai-openai
+- AI: Effect AI (`effect/ai`), 채팅은 `memory-agent/chat-api`의 Effect `HttpApi`
 - Router: React Router Framework mode
 
 lint와 format은 vite+ 가이드라인을 따르세요.

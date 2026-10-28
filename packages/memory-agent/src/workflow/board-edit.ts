@@ -1,4 +1,5 @@
-import { Data, Effect, Schema, Struct, type Types } from "effect";
+import { Data, Effect, Match, Schema, Struct } from "effect";
+import { optionalProperty } from "../optional-property.ts";
 import { BoardAuthor, CardRisk, cardContractKeys, type CardStatus } from "./card.ts";
 import {
   notStartedStatus,
@@ -91,7 +92,10 @@ export type BoardEditResult = Data.TaggedEnum<{
 }>;
 export const BoardEditResult = Data.taggedEnum<BoardEditResult>();
 
-export class BoardEditRefused extends Schema.TaggedError<BoardEditRefused>()("BoardEditRefused", {
+export class BoardEditRefused extends Schema.TaggedError<
+  BoardEditRefused,
+  { readonly brand: unique symbol }
+>()("BoardEditRefused", {
   reason: Schema.Literals([
     "plan_missing",
     "plan_closed",
@@ -147,36 +151,27 @@ const field = <A>(current: A | undefined, next: A | null | undefined) =>
 
 const patched = (card: PlanStep, patch: CardPatch): PlanStep => {
   const { outcome, boundaries, risk, requiredEvidence, humanDecision, ...core } = patch;
-  const next: Types.Mutable<PlanStep> = { ...Struct.omit(card, cardContractKeys), ...core };
-  const nextOutcome = field(card.outcome, outcome);
-  if (nextOutcome !== undefined) next.outcome = nextOutcome;
-  const nextBoundaries = field(card.boundaries, boundaries);
-  if (nextBoundaries !== undefined) next.boundaries = nextBoundaries;
-  const nextRisk = field(card.risk, risk);
-  if (nextRisk !== undefined) next.risk = nextRisk;
-  const nextEvidence = field(card.requiredEvidence, requiredEvidence);
-  if (nextEvidence !== undefined) next.requiredEvidence = nextEvidence;
-  const nextDecision = field(card.humanDecision, humanDecision);
-  if (nextDecision !== undefined) next.humanDecision = nextDecision;
-  return next;
+  return {
+    ...Struct.omit(card, cardContractKeys),
+    ...core,
+    ...optionalProperty("outcome", field(card.outcome, outcome)),
+    ...optionalProperty("boundaries", field(card.boundaries, boundaries)),
+    ...optionalProperty("risk", field(card.risk, risk)),
+    ...optionalProperty("requiredEvidence", field(card.requiredEvidence, requiredEvidence)),
+    ...optionalProperty("humanDecision", field(card.humanDecision, humanDecision)),
+  };
 };
 
 /** A card not started yet moves between backlog and ready with its dependencies. */
-const restatus = (steps: readonly PlanStep[], card: PlanStep): PlanStep => {
-  switch (card.status) {
-    case "backlog":
-    case "ready": {
+const restatus = (steps: readonly PlanStep[], card: PlanStep): PlanStep =>
+  Match.value(card.status).pipe(
+    Match.whenOr("backlog", "ready", (): PlanStep => {
       const done = new Set(steps.filter((step) => step.status === "done").map((step) => step.id));
       return { ...card, status: notStartedStatus(steps, (id) => done.has(id))(card) };
-    }
-    case "in_progress":
-    case "verify":
-    case "human_decision":
-    case "done":
-    case "blocked":
-      return card;
-  }
-};
+    }),
+    Match.whenOr("in_progress", "verify", "human_decision", "done", "blocked", () => card),
+    Match.exhaustive,
+  );
 
 const replace = (steps: readonly PlanStep[], card: PlanStep) => {
   const next = steps.map((step) => (step.id === card.id ? card : step));

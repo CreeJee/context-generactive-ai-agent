@@ -1,5 +1,4 @@
 import { isTruthy } from "../truthy.ts";
-import type { UIMessage } from "@tanstack/ai-client";
 import { Effect, Function as EffectFunction, Result, Schema } from "effect";
 import { sessionHolderHeader } from "../sessions/lease-state.ts";
 import { ApprovalRequester } from "../approvals/relayed-state.ts";
@@ -40,18 +39,26 @@ export const AppRequestReason = Schema.TaggedUnion({
   InvalidResponse: {},
 });
 
-export class AppRequestFailed extends Schema.TaggedError<AppRequestFailed>()("AppRequestFailed", {
+export class AppRequestFailed extends Schema.TaggedError<
+  AppRequestFailed,
+  { readonly brand: unique symbol }
+>()("AppRequestFailed", {
   status: Schema.Finite,
   code: Schema.String,
   message: Schema.String,
   reason: AppRequestReason,
 }) {}
 
-const requestFailure = (
-  status: number,
-  code: string,
-  reason: keyof typeof AppRequestReason.cases,
-) =>
+/** The app refused a request with `code`, or could not be reached (`unreachable`, status 0). */
+export const requestFailure = ({
+  status,
+  code,
+  reason,
+}: {
+  readonly status: number;
+  readonly code: string;
+  readonly reason: keyof typeof AppRequestReason.cases;
+}) =>
   AppRequestFailed.make({
     status,
     code,
@@ -70,18 +77,23 @@ export const createAppApi: {
   (fetcher: typeof fetch): (baseUrl: string) => ReturnType<typeof createAppApiBody>;
 } = EffectFunction.dual((args) => Schema.is(Schema.String)(args[0]), createAppApiBody);
 function createAppApiBody(baseUrl: string, fetcher: typeof fetch = fetch) {
-  const requestEffect = <A, I>(schema: Schema.Codec<A, I>, path: string, init: RequestInit = {}) =>
+  const request = <A, I>(schema: Schema.Codec<A, I>, path: string, init: RequestInit = {}) =>
     Effect.gen(function* () {
       const ownerSignal = yield* Effect.abortSignal;
       const signal =
         init.signal == null ? ownerSignal : AbortSignal.any([init.signal, ownerSignal]);
       const response = yield* Effect.tryPromise({
         try: () => fetcher(`${baseUrl}${path}`, { ...init, signal }),
-        catch: () => requestFailure(0, "unreachable", "TransportFailed"),
+        catch: () => requestFailure({ status: 0, code: "unreachable", reason: "TransportFailed" }),
       });
       const parsed = yield* Effect.tryPromise({
         try: () => response.json(),
-        catch: () => requestFailure(response.status, "unexpected_response", "InvalidResponse"),
+        catch: () =>
+          requestFailure({
+            status: response.status,
+            code: "unexpected_response",
+            reason: "InvalidResponse",
+          }),
       }).pipe(Effect.result);
       if (!response.ok) {
         const body = Result.isSuccess(parsed) ? parsed.success : null;
@@ -89,7 +101,7 @@ function createAppApiBody(baseUrl: string, fetcher: typeof fetch = fetch) {
           onFailure: () => "request_failed",
           onSuccess: (body) => body.error,
         });
-        return yield* requestFailure(response.status, code, "RequestRejected");
+        return yield* requestFailure({ status: response.status, code, reason: "RequestRejected" });
       }
       const json: unknown = yield* Result.match(parsed, {
         onFailure: Effect.fail,
@@ -97,17 +109,14 @@ function createAppApiBody(baseUrl: string, fetcher: typeof fetch = fetch) {
       });
       return yield* Schema.decodeUnknownEffect(schema)(json).pipe(
         Effect.mapError(() =>
-          requestFailure(response.status, "unexpected_response", "InvalidResponse"),
+          requestFailure({
+            status: response.status,
+            code: "unexpected_response",
+            reason: "InvalidResponse",
+          }),
         ),
       );
     }).pipe(Effect.scoped);
-
-  // The ACP SDK consumes native Promises; request composition and failures remain Effect values.
-  const call = <A, I>(
-    schema: Schema.Codec<A, I>,
-    path: string,
-    init: RequestInit = {},
-  ): Promise<A> => Effect.runPromise(requestEffect(schema, path, init));
 
   const post = (body: JsonBody, holder?: string): RequestInit => {
     const headers = new Headers({ "Content-Type": "application/json" });
@@ -118,54 +127,38 @@ function createAppApiBody(baseUrl: string, fetcher: typeof fetch = fetch) {
   return {
     baseUrl,
     fetcher,
-    requestEffect,
+    request,
 
-    auth: () => call(AuthSummary, "/api/auth"),
+    auth: request(AuthSummary, "/api/auth"),
 
-    projects: () => call(Schema.Array(ProjectSummary), "/api/projects"),
+    projects: request(Schema.Array(ProjectSummary), "/api/projects"),
 
     createSession: (projectId: string, title: string) =>
-      call(SessionSummary, "/api/sessions", post({ projectId, title })),
+      request(SessionSummary, "/api/sessions", post({ projectId, title })),
 
     sessionState: (sessionId: string, holder: string) =>
-      call(
+      request(
         RunSummary,
         `/api/sessions/${encodeURIComponent(sessionId)}?holder=${encodeURIComponent(holder)}`,
       ),
 
     lease: (sessionId: string, holder: string, action: "claim" | "release") =>
-      call(
+      request(
         LeaseSummary,
         `/api/sessions/${encodeURIComponent(sessionId)}/lease`,
         post({ holder, action }),
       ),
 
     cancel: (sessionId: string, holder: string) =>
-      call(
+      request(
         Schema.Unknown,
         `/api/sessions/${encodeURIComponent(sessionId)}/cancel`,
         post({}, holder),
       ),
 
-    /** The saved conversation, as a reloaded page gets it. */
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    transcript: (sessionId: string): Promise<UIMessage[]> =>
-      Effect.runPromise(
-        requestEffect(
-          Schema.Struct({ messages: Schema.Array(Schema.Unknown) }),
-          `/api/chat?session=${encodeURIComponent(sessionId)}&threadId=${encodeURIComponent(sessionId)}`,
-        ).pipe(
-          Effect.map(
-            (body) =>
-              // SAFETY: the app serializes UIMessage values; this native SDK boundary reads their roles and parts.
-              body.messages as UIMessage[],
-          ),
-        ),
-      ),
-
     /** Calls of subagents and external agents waiting for the user. */
     approvals: (sessionId: string) =>
-      call(
+      request(
         Schema.Array(
           Schema.Struct({
             id: Schema.String,
@@ -178,13 +171,11 @@ function createAppApiBody(baseUrl: string, fetcher: typeof fetch = fetch) {
       ),
 
     answerApproval: (sessionId: string, holder: string, approvalId: string, approved: boolean) =>
-      call(
+      request(
         Schema.Unknown,
         `/api/sessions/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(approvalId)}`,
         post({ approved }, holder),
       ),
-
-    chatUrl: (sessionId: string) => `${baseUrl}/api/chat?session=${encodeURIComponent(sessionId)}`,
   };
 }
 

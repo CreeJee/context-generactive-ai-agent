@@ -2,14 +2,13 @@ import { Function as EffectFunction } from "effect";
 import { failureTags } from "../runtime/logged-failures.ts";
 import { isTruthy } from "../truthy.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import { chat } from "@tanstack/ai";
 import { Cause, Context, Crypto, Effect, Layer, Option, Schema } from "effect";
 import { ActiveProvider } from "../providers/active-provider.ts";
-import { ApiUsage, collectApiUsage } from "../agent/api-usage.ts";
+import { ApiUsage, recordUsage } from "../agent/api-usage.ts";
+import { singleAnswer } from "../model/single-call.ts";
 import type { ModelSelection } from "../providers/contracts.ts";
 import { Nodes } from "../memory/nodes.ts";
 import type { Project } from "../projects/projects.ts";
-import { sdkPromise } from "../runtime/sdk-promise.ts";
 
 /** Standing instructions for the reviewer. It sees the call and the user's words, nothing else. */
 export const reviewInstructions = `You review one tool call that an AI coding agent wants to run on the user's computer, and decide whether it may run without asking the user.
@@ -119,7 +118,6 @@ function routineShellVerdictBody(toolName: string, argumentsJson: string): Verdi
 }
 
 const make = Effect.gen(function* () {
-  const run = Effect.runPromiseWith(yield* Effect.context());
   const active = yield* ActiveProvider;
   const usageLedger = yield* ApiUsage;
   const nodes = yield* Nodes;
@@ -149,25 +147,21 @@ const make = Effect.gen(function* () {
       const { services } = yield* active.resolve(request.selection);
       const cheap = yield* services.models.cheapestEffort(request.selection);
       const threadId = yield* crypto.randomUUIDv4();
-      const content = yield* prompt(request);
-      const answer = yield* sdkPromise((abortController) =>
-        chat({
-          adapter: services.runtime.adapter(cheap),
-          messages: [{ role: "user", content }],
-          systemPrompts: [reviewInstructions],
-          threadId,
-          middleware: [
-            collectApiUsage(usageLedger, {
-              rootSessionId: request.sessionId,
-              purpose: "permission-classification",
-              provider: cheap.provider,
-              model: cheap.model,
-            }),
-          ],
-          abortController,
-          stream: false,
-        }),
-      );
+      const answer = yield* singleAnswer({
+        runtime: services.runtime,
+        selection: cheap,
+        threadId,
+        system: reviewInstructions,
+        prompt: yield* prompt(request),
+      });
+      yield* recordUsage(usageLedger, {
+        rootSessionId: request.sessionId,
+        purpose: "permission-classification",
+        provider: cheap.provider,
+        model: cheap.model,
+        threadId,
+        usage: answer.usage,
+      });
       const json = answer.text.match(/\{[\s\S]*\}/)?.[0] ?? "";
       const verdict = Option.getOrUndefined(decodeVerdict(json));
       return verdict === undefined ? fallback : { ...verdict, decidedBy: "classifier" as const };
@@ -187,7 +181,7 @@ const make = Effect.gen(function* () {
 
   return {
     /** Timeout, provider errors and unreadable output always require user review. */
-    classify: (request: ReviewRequest): Promise<Verdict> => run(classify(request)),
+    classify,
   };
 });
 

@@ -1,6 +1,6 @@
 import { Layer } from "effect";
 import { it as effectTest } from "@effect/vitest";
-import { Effect, Result } from "effect";
+import { Effect, MutableRef, Result } from "effect";
 import {
   FixedImageRouteRejected,
   ImageExecutorModel,
@@ -136,7 +136,7 @@ describe("image router", () => {
     "filters disabled cross-provider routes and marks ask routes for approval",
     () =>
       Effect.gen(function* () {
-        let mode: "disabled" | "ask" | "always" = "disabled";
+        const mode = MutableRef.make<"disabled" | "ask" | "always">("disabled");
         const consent: NonNullable<Parameters<typeof makeImageRouter>[0]["crossProviderConsent"]> =
           {
             read: Effect.succeed({ version: 1, pairs: {} }),
@@ -144,9 +144,9 @@ describe("image router", () => {
               Effect.succeed({
                 ...pair,
                 crossProvider: true,
-                mode,
-                allowedWithoutPrompt: mode === "always",
-                requiresApproval: mode === "ask",
+                mode: MutableRef.get(mode),
+                allowedWithoutPrompt: MutableRef.get(mode) === "always",
+                requiresApproval: MutableRef.get(mode) === "ask",
                 reasons: [],
                 settingsVersion: 1,
               }),
@@ -159,7 +159,7 @@ describe("image router", () => {
           policy: { mode: "auto" as const },
         };
         expect(Result.isFailure(yield* Effect.result(service.select(request)))).toBe(true);
-        mode = "ask";
+        MutableRef.set(mode, "ask");
         expect(yield* service.select(request)).toMatchObject({
           initiatorProvider: "anthropic",
           provider: "openai",
@@ -167,7 +167,7 @@ describe("image router", () => {
           crossProviderConsentMode: "ask",
           crossProviderApprovalRequired: true,
         });
-        mode = "always";
+        MutableRef.set(mode, "always");
         expect(yield* service.select(request)).toMatchObject({
           crossProviderConsentMode: "always",
           crossProviderApprovalRequired: false,

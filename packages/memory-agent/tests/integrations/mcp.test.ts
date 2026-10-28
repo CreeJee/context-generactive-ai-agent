@@ -5,8 +5,8 @@ import { Nodes } from "../../src/memory/nodes.ts";
 import { PermissionReviews } from "../../src/permissions/reviews.ts";
 import { Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
-import { chatClient, scopedCallId, sdk, sessionScopedResponder } from "../support/chat-client.ts";
-import { inRun } from "../support/run-span.ts";
+import { openPage, scopedCallId, sessionScopedResponder } from "../support/chat-client.ts";
+import { matchGolden, runToolRequestBodies } from "../support/requests.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { waitUntil } from "../support/wait-until.ts";
@@ -91,7 +91,7 @@ const freshProject = Effect.gen(function* () {
 const stubEnv = (values: Record<string, string>) =>
   Effect.acquireRelease(
     Effect.sync(() => {
-      for (const [name, value] of Object.entries(values)) vi.stubEnv(name, value);
+      Object.entries(values).forEach(([name, value]) => vi.stubEnv(name, value));
     }),
     () => Effect.sync(() => vi.unstubAllEnvs()),
   );
@@ -109,16 +109,17 @@ testAgent()("MCP servers of a project", (it) => {
           mcpServers: { fake: fake.entry({ FAKE_MCP_LIST_LOG: listLog }) },
         });
         yield* servers.setTrusted(project, "project", "fake", true);
-        // Trusting lists the tools once. A listing of a server on the 2025 protocol is two
-        // tools/list requests: the SDK lists again to fill its own cache.
+        // Trusting lists the tools once.
         const listing = (yield* lines(listLog)).length;
         const [left, right] = yield* Effect.all(
-          [inRun(servers.tools(project)), inRun(servers.tools(project))],
+          [servers.runTools(project), servers.runTools(project)],
           {
             concurrency: "unbounded",
           },
         );
-        expect(left.tools.map((tool) => tool.name)).toEqual(right.tools.map((tool) => tool.name));
+        expect(left.tools.map((tool) => tool.tool.name)).toEqual(
+          right.tools.map((tool) => tool.tool.name),
+        );
         expect(yield* lines(listLog)).toHaveLength(2 * listing);
       }),
     serverStartTimeout,
@@ -137,7 +138,7 @@ testAgent()("MCP servers of a project", (it) => {
         yield* writeJson(fake.config, { mcpServers: {} });
         expect((yield* servers.overview(project)).servers).toEqual([]);
         yield* until(() => !processAlive(pid), "the removed MCP server to stop");
-        expect((yield* inRun(servers.tools(project))).tools).toEqual([]);
+        expect((yield* servers.runTools(project)).tools).toEqual([]);
       }),
     serverStartTimeout,
   );
@@ -153,21 +154,64 @@ testAgent()("MCP servers of a project", (it) => {
           mcpServers: { fake: fake.entry({ FAKE_MCP_TOKEN: "${FAKE_TOKEN_SOURCE}" }) },
         });
         yield* servers.setTrusted(project, "project", "fake", true);
-        const where = (yield* inRun(servers.tools(project))).tools.find(
-          (tool) => tool.name === mcpToolName("fake", "where"),
+        const where = (yield* servers.runTools(project)).tools.find(
+          (tool) => tool.tool.name === mcpToolName("fake", "where"),
         );
-        const result = yield* sdk(() => Promise.resolve(where?.execute?.({})));
-        expect(
-          yield* Schema.decodeEffect(
-            Schema.fromJsonString(
-              Schema.Struct({
-                cwd: Schema.String,
-                token: Schema.String,
-                inheritedSecret: Schema.Null,
-              }),
-            ),
-          )(String(result)),
-        ).toEqual({ cwd: project.root, token: "expanded-token", inheritedSecret: null });
+        const call = yield* Effect.flatMap(Effect.fromNullishOr(where), (tool) => tool.prepare({}));
+        // The server answers JSON text, which the model reads parsed.
+        expect(yield* call({ toolCallId: "call-where" })).toEqual({
+          cwd: project.root,
+          token: "expanded-token",
+          inheritedSecret: null,
+        });
+      }),
+    serverStartTimeout,
+  );
+
+  it.effect(
+    "a server's tools ask with its schema and answer with its result",
+    () =>
+      Effect.gen(function* () {
+        const servers = yield* McpServers;
+        const { project, fake } = yield* freshProject;
+        yield* writeJson(fake.config, { mcpServers: { fake: fake.entry() } });
+        yield* servers.setTrusted(project, "project", "fake", true);
+        const run = yield* servers.runTools(project);
+        yield* Effect.flatMap(
+          runToolRequestBodies(run.tools),
+          matchGolden("./__golden__/mcp.json"),
+        );
+        const name = mcpToolName("fake", "echo");
+        const runEcho = Effect.fromNullishOr(run.tools.find((tool) => tool.tool.name === name));
+        const ran = yield* runEcho.pipe(
+          Effect.flatMap((tool) => tool.prepare({ text: "same" })),
+          Effect.flatMap((call) => call({ toolCallId: "call-echo" })),
+        );
+        expect(ran).toBe("echo: same");
+        // The arguments are checked against the server's schema, as TanStack checked them.
+        const rejected = yield* Effect.flip(
+          Effect.flatMap(runEcho, (tool) => tool.prepare({ count: 1 })),
+        );
+        expect(rejected.message).toContain('required property "text"');
+      }),
+    serverStartTimeout,
+  );
+
+  it.effect(
+    "a tool that must run as a task answers once its task ends",
+    () =>
+      Effect.gen(function* () {
+        const servers = yield* McpServers;
+        const { project, fake } = yield* freshProject;
+        yield* writeJson(fake.config, {
+          mcpServers: { fake: fake.entry({ FAKE_MCP_TASKS: "true" }) },
+        });
+        yield* servers.setTrusted(project, "project", "fake", true);
+        const later = (yield* servers.runTools(project)).tools.find(
+          (tool) => tool.tool.name === mcpToolName("fake", "later"),
+        );
+        const call = yield* Effect.flatMap(Effect.fromNullishOr(later), (tool) => tool.prepare({}));
+        expect(yield* call({ toolCallId: "call-later" })).toBe("later: done");
       }),
     serverStartTimeout,
   );
@@ -215,7 +259,7 @@ testAgent()("MCP trust of the global and project configuration", (it) => {
         ]);
         // Values of the environment and headers never leave the server.
         expect(yield* encodeJson(listed)).not.toContain("NOT_SHOWN");
-        expect((yield* inRun(servers.tools(project))).tools).toEqual([]);
+        expect((yield* servers.runTools(project)).tools).toEqual([]);
         expect(yield* fake.starts).toBe(0);
         // `fake` needs NOT_SHOWN, which the environment does not have: trusting reports why it failed.
         const failed = yield* servers.setTrusted(project, "global", "fake", true);
@@ -229,8 +273,8 @@ testAgent()("MCP trust of the global and project configuration", (it) => {
         // A connection starts the server twice: a short-lived copy answers which protocol it
         // speaks (`server/discover`), then the session starts.
         expect(yield* fake.starts).toBe(2);
-        const { tools, guides } = yield* inRun(servers.tools(project));
-        expect(tools.map((tool) => tool.name)).toEqual(["mcp_docs__echo", "mcp_docs__where"]);
+        const { tools, guides } = yield* servers.runTools(project);
+        expect(tools.map((tool) => tool.tool.name)).toEqual(["mcp_docs__echo", "mcp_docs__where"]);
         // What the server said at connect about its tools goes to the run, under the configured name.
         expect(guides).toEqual([{ server: "docs", text: "Call echo to repeat text back." }]);
         expect(yield* fake.starts).toBe(2);
@@ -241,7 +285,7 @@ testAgent()("MCP trust of the global and project configuration", (it) => {
         expect((yield* servers.overview(project)).servers[2]?.state).toEqual(
           McpServerState.changed(),
         );
-        expect((yield* inRun(servers.tools(project))).tools).toEqual([]);
+        expect((yield* servers.runTools(project)).tools).toEqual([]);
         const untrusted = yield* servers.setTrusted(project, "project", "docs", false);
         expect(untrusted.servers[2]?.state).toEqual(McpServerState.untrusted());
       }),
@@ -297,13 +341,8 @@ const mcpChat = Effect.fnUntraced(function* (mode: "ask" | "auto") {
   yield* (yield* Projects).setPermissionMode(project.id, mode);
   yield* (yield* McpServers).setTrusted(project, "project", "fake", true);
   const session = (yield* (yield* Sessions).create(project.id)).id;
-  const page = yield* chatClient(session, "send");
-  return {
-    ...page,
-    session,
-    callId: scopedCallId("call-mcp_fake__echo", session),
-    finished: page.answered("mcp_fake__echo said", "the answer"),
-  };
+  const page = yield* openPage(session);
+  return { page, session, callId: scopedCallId("call-mcp_fake__echo", session) };
 });
 
 // Interrupt IDs are unique across the database, so the model scopes its call IDs to the session.
@@ -314,24 +353,17 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })(
       "ask mode asks before every MCP call and runs it once approved",
       () =>
         Effect.gen(function* () {
-          const { client, text, send, pendingInterrupt, finished, session, callId } =
-            yield* mcpChat("ask");
+          const { page, session, callId } = yield* mcpChat("ask");
           const nodes = yield* Nodes;
-          yield* send('call mcp_fake__echo {"text":"hi from mcp"}');
-          yield* pendingInterrupt;
-          expect(client.getInterrupts()[0]).toMatchObject({
-            kind: "generic",
-            definitionId: "permission-review",
-            payload: { toolName: "mcp_fake__echo" },
-          });
+          yield* page.send('call mcp_fake__echo {"text":"hi from mcp"}');
+          expect(page.pending()).toMatchObject([
+            { reason: "permission_review", metadata: { payload: { toolName: "mcp_fake__echo" } } },
+          ]);
           expect((yield* nodes.session(session)).some((node) => node.kind === "tool_result")).toBe(
             false,
           );
-          client.resolveInterrupts((item) => {
-            if (item.kind === "generic") item.resolveInterrupt({ approved: true });
-          });
-          yield* finished;
-          expect(text()).toContain("echo: hi from mcp");
+          yield* page.resolve(() => true);
+          expect(page.answer()).toContain("echo: hi from mcp");
           expect(yield* (yield* PermissionReviews).latest(session, callId)).toMatchObject({
             decision: "approved",
             decidedBy: "user",
@@ -344,14 +376,12 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })(
       "a declined MCP call never reaches the server",
       () =>
         Effect.gen(function* () {
-          const { client, text, send, pendingInterrupt, finished, session } = yield* mcpChat("ask");
-          yield* send('call mcp_fake__echo {"text":"never"}');
-          yield* pendingInterrupt;
-          client.resolveInterrupts((item) => {
-            if (item.kind === "generic") item.resolveInterrupt({ approved: false });
-          });
-          yield* finished;
-          expect(text()).not.toContain("echo: never");
+          const { page, session } = yield* mcpChat("ask");
+          yield* page.send('call mcp_fake__echo {"text":"never"}');
+          expect(page.pending()).toHaveLength(1);
+          yield* page.resolve(() => false);
+          expect(page.answer()).toContain("mcp_fake__echo said");
+          expect(page.answer()).not.toContain("echo: never");
           expect(
             (yield* (yield* Nodes).session(session)).find((node) => node.kind === "tool_result")
               ?.detail,
@@ -364,11 +394,10 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })(
       "auto mode sends MCP calls through the permission review",
       () =>
         Effect.gen(function* () {
-          const { client, text, send, finished, session, callId } = yield* mcpChat("auto");
-          yield* send('call mcp_fake__echo {"text":"reviewed"}');
-          yield* finished;
-          expect(client.getInterrupts()).toHaveLength(0);
-          expect(text()).toContain("echo: reviewed");
+          const { page, session, callId } = yield* mcpChat("auto");
+          yield* page.send('call mcp_fake__echo {"text":"reviewed"}');
+          expect(page.pending()).toHaveLength(0);
+          expect(page.answer()).toContain("echo: reviewed");
           expect(yield* (yield* PermissionReviews).latest(session, callId)).toMatchObject({
             decision: "allow",
             decidedBy: "classifier",

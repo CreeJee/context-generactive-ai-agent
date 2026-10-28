@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema } from "effect";
+import { Array as EffectArray, Context, Effect, Layer, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 import { historyProjectionSnapshots } from "./history-projection-sql.ts";
 
@@ -56,10 +56,10 @@ export const HistoryProjectionReadReason = Schema.TaggedUnion({
 });
 const readReason = HistoryProjectionReadReason.cases;
 
-export class HistoryProjectionReadFailed extends Schema.TaggedError<HistoryProjectionReadFailed>()(
-  "HistoryProjectionReadFailed",
-  { reason: HistoryProjectionReadReason },
-) {}
+export class HistoryProjectionReadFailed extends Schema.TaggedError<
+  HistoryProjectionReadFailed,
+  { readonly brand: unique symbol }
+>()("HistoryProjectionReadFailed", { reason: HistoryProjectionReadReason }) {}
 
 const decodeRequest = Schema.decodeUnknownEffect(HistoryPageRequest);
 const decodeRows = Schema.decodeUnknownEffect(HistorySnapshotRows);
@@ -106,24 +106,23 @@ export class HistoryProjectionReader extends Context.Service<
             HistoryProjectionReadFailed.make({ reason: readReason.InvalidSnapshot.make({}) }),
           ),
         );
-        const state = rows[0];
-        if (state === undefined)
-          return yield* HistoryProjectionReadFailed.make({
-            reason: readReason.InvalidSnapshot.make({}),
-          });
+        const state = yield* Effect.fromOption(EffectArray.head(rows), () =>
+          HistoryProjectionReadFailed.make({ reason: readReason.InvalidSnapshot.make({}) }),
+        );
         if (state.format_version === 0) return snapshot["not-ready"].make({ reason: "unprepared" });
         if (state.format_version !== 1)
           return snapshot["not-ready"].make({ reason: "unsupported-format" });
         if (state.ready === 0) return snapshot["not-ready"].make({ reason: "stale" });
         if (state.cursor_valid === 0) return snapshot["unknown-cursor"].make({});
-        // Do not parse arbitrary model-message JSON here. The SDK codec/adapter must
-        // validate and decode these selected groups, never the authoritative transcript.
-        const groups: Array<typeof Group.Type> = [];
-        for (const row of rows) {
-          if (row.ordinal !== null)
-            groups.push({ ordinal: row.ordinal, uiId: row.ui_id, messages: row.messages });
-        }
-        groups.sort((a, b) => a.ordinal - b.ordinal);
+        // Do not parse arbitrary model-message JSON here. The chat snapshot (`snapshot.ts`)
+        // validates and decodes these selected groups, never the authoritative transcript.
+        const groups = rows
+          .flatMap((row): Array<typeof Group.Type> =>
+            row.ordinal === null
+              ? []
+              : [{ ordinal: row.ordinal, uiId: row.ui_id, messages: row.messages }],
+          )
+          .toSorted((a, b) => a.ordinal - b.ordinal);
         const truncated = state.has_earlier === 1;
         return snapshot.page.make({
           groups,

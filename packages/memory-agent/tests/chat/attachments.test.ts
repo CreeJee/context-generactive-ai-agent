@@ -1,7 +1,6 @@
 import { Effect, FileSystem, Match, Path, Schema } from "effect";
 import type { SqlError } from "effect/sql";
 import { expect } from "vite-plus/test";
-import { AgentChat } from "../../src/agent/chat.ts";
 import { sessionMessages } from "../../src/agent/history.ts";
 import {
   type AttachmentRejected,
@@ -16,8 +15,9 @@ import type { JsonValue } from "../../src/json.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { requireRuntime } from "../../src/runtime/resources.ts";
 import { FileTools } from "../../src/tools/files.ts";
+import { runTurn, toolResults } from "../support/chat-client.ts";
 import { tinyPng } from "../support/images.ts";
-import { inRun } from "../support/run-span.ts";
+import { callTool } from "../support/run-tools.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { current, freshSession, sdk } from "./tab.ts";
@@ -30,8 +30,9 @@ const square = (fill: string) => svg(`<rect width="64" height="64" fill="${fill}
 
 /** The colour at the centre of a stored picture. */
 const centre = Effect.fnUntraced(function* (path: string) {
+  const sharp = yield* requireRuntime("sharp");
   const { data, info } = yield* sdk(() =>
-    requireRuntime("sharp")(path).removeAlpha().raw().toBuffer({ resolveWithObject: true }),
+    sharp(path).removeAlpha().raw().toBuffer({ resolveWithObject: true }),
   );
   const at = (Math.floor(info.height / 2) * info.width + Math.floor(info.width / 2)) * 3;
   return [data[at], data[at + 1], data[at + 2]];
@@ -73,13 +74,8 @@ const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 /** The project's file tools wrapped with drawing previews, called as the model would. */
 const fileTool = Effect.fnUntraced(function* (name: string, args: Record<string, JsonValue>) {
   const { project } = yield* TestEnv;
-  const files = yield* inRun((yield* FileTools).forProject(project));
-  const tool = (yield* inRun((yield* DrawingPreviews).withPreviews(project, files))).find(
-    (candidate) => candidate.name === name,
-  );
-  return yield* sdk(() =>
-    tool?.execute?.(args, { toolCallId: name, emitCustomEvent: () => undefined }),
-  );
+  const files = (yield* FileTools).toolsFor(project);
+  return yield* callTool((yield* DrawingPreviews).withPreviews(project, files), name, args);
 });
 
 /** Replace the attachment directory with a file until the test ends. */
@@ -118,9 +114,9 @@ testAgent({ testProvider: {} })("attachments", (it) => {
         (yield* attachments.forNode(node.id)).map((attachment) => attachment.mimeType),
       ).toEqual(["image/png", "image/gif"]);
       const stored = attachments.pathOf(first);
-      expect(
-        yield* sdk(() => attachments.dataUrl({ path: stored, mimeType: first.mimeType })),
-      ).toBe(`data:image/png;base64,${tinyPng.toString("base64")}`);
+      expect(yield* attachments.dataUrl({ path: stored, mimeType: first.mimeType })).toBe(
+        `data:image/png;base64,${tinyPng.toString("base64")}`,
+      );
       expect(stored.startsWith(path.join(storage, "attachments"))).toBe(true);
       expect(Buffer.from(yield* fs.readFile(stored))).toEqual(tinyPng);
     }),
@@ -131,7 +127,7 @@ testAgent({ testProvider: {} })("attachments", (it) => {
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const sharp = requireRuntime("sharp");
+        const sharp = yield* requireRuntime("sharp");
         // A wide screenshot of text, where a lossless WebP is smaller than the PNG upload.
         const lines = Array.from(
           { length: 28 },
@@ -153,10 +149,10 @@ testAgent({ testProvider: {} })("attachments", (it) => {
         const attachments = yield* Attachments;
         const png = yield* attachments.save(screenshot);
         const animated = yield* attachments.save(gif);
-        const image = yield* sdk(() => attachments.forModel(png));
+        const image = yield* attachments.forModel(png);
         expect(image.mimeType).toBe("image/webp");
         expect(image.path.endsWith(`${png.id}.model.webp`)).toBe(true);
-        expect(yield* sdk(() => attachments.forModel(png))).toEqual(image);
+        expect(yield* attachments.forModel(png)).toEqual(image);
         const size = yield* sdk(() => sharp(image.path).metadata());
         expect([size.width, size.height]).toEqual([
           modelImageEdge,
@@ -165,10 +161,10 @@ testAgent({ testProvider: {} })("attachments", (it) => {
         const bytes = Number((yield* fs.stat(image.path)).size);
         expect(bytes).toBeLessThanOrEqual(maxModelImageBytes);
         expect(bytes).toBeLessThan(png.bytes);
-        expect(
-          (yield* sdk(() => attachments.dataUrl(image))).startsWith("data:image/webp;base64,"),
-        ).toBe(true);
-        expect(yield* sdk(() => attachments.forModel(animated))).toEqual({
+        expect((yield* attachments.dataUrl(image)).startsWith("data:image/webp;base64,")).toBe(
+          true,
+        );
+        expect(yield* attachments.forModel(animated)).toEqual({
           path: attachments.pathOf(animated),
           mimeType: "image/gif",
         });
@@ -182,16 +178,16 @@ testAgent({ testProvider: {} })("attachments", (it) => {
     () =>
       Effect.gen(function* () {
         // A repeating pattern PNG compresses better than lossless WebP does.
-        const pixels = Buffer.alloc(3000 * 1000 * 3);
-        for (let index = 0; index < pixels.length; index++) pixels[index] = (index * 7919) % 251;
+        const pixels = Buffer.alloc(3000 * 1000 * 3).map((_, index) => (index * 7919) % 251);
+        const sharp = yield* requireRuntime("sharp");
         const pattern = yield* sdk(() =>
-          requireRuntime("sharp")(pixels, { raw: { width: 3000, height: 1000, channels: 3 } })
+          sharp(pixels, { raw: { width: 3000, height: 1000, channels: 3 } })
             .png()
             .toBuffer(),
         );
         const attachments = yield* Attachments;
         const png = yield* attachments.save(pattern);
-        expect(yield* sdk(() => attachments.forModel(png))).toEqual({
+        expect(yield* attachments.forModel(png)).toEqual({
           path: attachments.pathOf(png),
           mimeType: "image/png",
         });
@@ -241,8 +237,9 @@ testAgent({ testProvider: {} })("attachments", (it) => {
       const attachments = yield* Attachments;
       // A green square on disk; an SVG written by a prompt-injected model tries to embed it.
       const secret = (yield* Path.Path).join(base, "secret.png");
+      const sharp = yield* requireRuntime("sharp");
       yield* sdk(() =>
-        requireRuntime("sharp")({
+        sharp({
           create: { width: 64, height: 64, channels: 3, background: "#00ff00" },
         })
           .png()
@@ -332,22 +329,8 @@ testAgent({ testProvider: {} })("attachments", (it) => {
       yield* selectTestModel();
       const sessionId = yield* freshSession;
       const args = yield* encodeJson({ path: "arch.svg", content: square("#00aa00") });
-      const body = yield* encodeJson({
-        threadId: sessionId,
-        runId: `${sessionId}-draw`,
-        messages: [{ id: "m1", role: "user", content: `call write_file ${args}` }],
-        tools: [],
-        context: [],
-      });
-      const response = yield* (yield* AgentChat).handle(
-        new Request("http://127.0.0.1/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body,
-        }),
-        sessionId,
-      );
-      expect(yield* sdk(() => response.text())).toContain("attachmentId");
+      const events = yield* runTurn(sessionId, `${sessionId}-draw`, `call write_file ${args}`);
+      expect(toolResults(events).join("\n")).toContain("attachmentId");
       const nodes = yield* (yield* Nodes).session(sessionId);
       const stored = nodes.find((node) => node.kind === "tool_result");
       const preview = (yield* Schema.decodeEffect(Schema.fromJsonString(Written))(
@@ -398,8 +381,9 @@ testAgent()("attachments across closing the agent", (it) => {
       const env = yield* TestEnv;
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
+      const sharp = yield* requireRuntime("sharp");
       const png = yield* sdk(() =>
-        requireRuntime("sharp")({
+        sharp({
           create: { width: 512, height: 512, channels: 3, background: "#00ff00" },
         })
           .png()

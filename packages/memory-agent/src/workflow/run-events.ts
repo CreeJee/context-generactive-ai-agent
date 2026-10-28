@@ -1,6 +1,6 @@
-import type { StreamChunk } from "@tanstack/ai";
 import { DateTime, Effect, Option, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
+import type { AgUiEvent } from "../loop/chunks.ts";
 
 export type RunEventKind = "chunk" | "run_error" | "run_completed";
 export type RunEvent = {
@@ -12,7 +12,10 @@ export type RunEvent = {
 };
 
 /** A run event the owner refuses to append or replay. */
-export class RunEventRejected extends Schema.TaggedError<RunEventRejected>()("RunEventRejected", {
+export class RunEventRejected extends Schema.TaggedError<
+  RunEventRejected,
+  { readonly brand: unique symbol }
+>()("RunEventRejected", {
   reason: Schema.Literals(["unbound", "key-reused", "invalid-cursor", "invalid-limit"]),
 }) {}
 
@@ -69,14 +72,16 @@ export const workflowRunEvents = Effect.gen(function* () {
       runId: string,
       eventKey: string,
       kind: RunEventKind,
-      payload: StreamChunk | Schema.Json,
+      payload: AgUiEvent | Schema.Json,
     ) =>
       Effect.gen(function* () {
         const json = yield* Schema.encodeUnknownEffect(PayloadText)(payload);
         return yield* sql.withTransaction(
           Effect.gen(function* () {
-            if (!(yield* permitted(sessionId, runId)))
-              return yield* RunEventRejected.make({ reason: "unbound" });
+            yield* Effect.when(
+              Effect.fail(RunEventRejected.make({ reason: "unbound" })),
+              Effect.map(permitted(sessionId, runId), (bound) => !bound),
+            );
             yield* sql`
               INSERT INTO workflow_run_events (run_id, event_key, kind, payload_json, created_at)
               VALUES (${runId}, ${eventKey}, ${kind}, ${json}, ${DateTime.formatIso(yield* DateTime.now)})

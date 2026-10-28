@@ -1,8 +1,9 @@
-import { Function as EffectFunction } from "effect";
+import { Crypto, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { Effect } from "effect";
-import type { ChatMiddleware, MetadataStore } from "@tanstack/ai";
-import { randomUUID } from "../runtime/synchronous-crypto.ts";
+import type { ChatMetadata, ChatMetadataFailed } from "../chat-store/metadata.ts";
+import { asRunFailed, type RunHook } from "../loop/run.ts";
+import { RunStore } from "../loop/store.ts";
 import { Option, Schema } from "effect";
 import { budgetFor } from "./compaction.ts";
 import { contextUsageEvent, type CompactionStage, type ContextView } from "./run-state.ts";
@@ -56,47 +57,36 @@ export const contextView = ({
 
 export const ContextUsageReason = Schema.TaggedUnion({ ReadFailed: {}, WriteFailed: {} });
 
-export class ContextUsageFailed extends Schema.TaggedError<ContextUsageFailed>()(
-  "ContextUsageFailed",
-  {
-    operation: Schema.Literals(["read-usage", "read-consumed", "write-usage", "consume"]),
-    reason: ContextUsageReason,
-    cause: Schema.Defect(),
-  },
-) {}
+export class ContextUsageFailed extends Schema.TaggedError<
+  ContextUsageFailed,
+  { readonly brand: unique symbol }
+>()("ContextUsageFailed", {
+  operation: Schema.Literals(["read-usage", "read-consumed", "write-usage", "consume"]),
+  reason: ContextUsageReason,
+  cause: Schema.Defect(),
+}) {}
 
-const metadataOperation = <A>(
-  operation: ContextUsageFailed["operation"],
-  run: () => Promise<A>,
-): Effect.Effect<A, ContextUsageFailed> =>
-  Effect.tryPromise({
-    try: run,
-    catch: (cause) =>
-      ContextUsageFailed.make({
-        operation,
-        reason:
-          operation === "read-usage" || operation === "read-consumed"
-            ? ContextUsageReason.cases.ReadFailed.make({})
-            : ContextUsageReason.cases.WriteFailed.make({}),
-        cause,
-      }),
-  });
-
-export const lastContextUsageEffect = (input: {
-  readonly metadata: MetadataStore;
-  readonly threadId: string;
-}) =>
-  metadataOperation("read-usage", () =>
-    input.metadata.get(contextUsageNamespace, input.threadId),
-  ).pipe(Effect.map((stored) => Option.getOrNull(decodeContextUsage(stored))));
+const metadataFailed =
+  (operation: ContextUsageFailed["operation"]) =>
+  ({ cause }: ChatMetadataFailed) =>
+    ContextUsageFailed.make({
+      operation,
+      reason:
+        operation === "read-usage" || operation === "read-consumed"
+          ? ContextUsageReason.cases.ReadFailed.make({})
+          : ContextUsageReason.cases.WriteFailed.make({}),
+      cause,
+    });
 
 /** The latest provider-reported prompt/cache usage in a session, if it has made a request. */
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-const lastContextUsageBody = (metadata: MetadataStore, threadId: string) =>
-  Effect.runPromise(lastContextUsageEffect({ metadata, threadId }));
-export const lastContextUsage: {
-  (threadId: string): (metadata: MetadataStore) => ReturnType<typeof lastContextUsageBody>;
-} & typeof lastContextUsageBody = EffectFunction.dual(2, lastContextUsageBody);
+export const lastContextUsageEffect = (input: {
+  readonly metadata: ChatMetadata;
+  readonly threadId: string;
+}) =>
+  input.metadata.get(contextUsageNamespace, input.threadId).pipe(
+    Effect.mapError(metadataFailed("read-usage")),
+    Effect.map((stored) => Option.getOrNull(decodeContextUsage(stored))),
+  );
 
 /** A provider-reported zero is distinct from no report; each observation may trigger only once. */
 const coldObservationIdBody = (
@@ -113,110 +103,67 @@ export const coldObservationId: {
 } & typeof coldObservationIdBody = EffectFunction.dual(2, coldObservationIdBody);
 
 /** Read the pending observation without treating legacy/unknown usage as a cache miss. */
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export const pendingColdObservation: {
-  (threadId: string): (metadata: MetadataStore) => ReturnType<typeof pendingColdObservationBody>;
-} & typeof pendingColdObservationBody = EffectFunction.dual(2, pendingColdObservationBody);
 export const pendingColdObservationEffect = (input: {
-  readonly metadata: MetadataStore;
+  readonly metadata: ChatMetadata;
   readonly threadId: string;
 }) =>
   Effect.gen(function* () {
     const [usage, consumed] = yield* Effect.all(
       [
         lastContextUsageEffect(input),
-        metadataOperation("read-consumed", () =>
-          input.metadata.get(consumedColdUsageNamespace, input.threadId),
-        ),
+        input.metadata
+          .get(consumedColdUsageNamespace, input.threadId)
+          .pipe(Effect.mapError(metadataFailed("read-consumed"))),
       ],
       { concurrency: "unbounded" },
     );
     const consumedId = Option.getOrNull(Schema.decodeUnknownOption(Schema.String)(consumed));
     return coldObservationId(usage, consumedId);
   });
-function pendingColdObservationBody(
-  metadata: MetadataStore,
-  threadId: string,
-): Promise<string | null> {
-  return Effect.runPromise(pendingColdObservationEffect({ metadata, threadId }));
-}
-
 /** Consume an observation when the request has attempted its early compact. */
-const consumeColdObservationBody = (
-  metadata: MetadataStore,
-  threadId: string,
-  observationId: string,
-): Promise<void> =>
-  Effect.runPromise(consumeColdObservationEffect({ metadata, threadId, observationId }));
 export const consumeColdObservationEffect = (input: {
-  readonly metadata: MetadataStore;
+  readonly metadata: ChatMetadata;
   readonly threadId: string;
   readonly observationId: string;
 }) =>
-  metadataOperation("consume", () =>
-    input.metadata.set(consumedColdUsageNamespace, input.threadId, input.observationId),
-  );
-export const consumeColdObservation: {
-  (
-    threadId: string,
-    observationId: string,
-  ): (metadata: MetadataStore) => ReturnType<typeof consumeColdObservationBody>;
-} & typeof consumeColdObservationBody = EffectFunction.dual(3, consumeColdObservationBody);
-
-/** The tokens the model read in its latest request in a session, if it has made one. */
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-const lastInputTokensBody = (metadata: MetadataStore, threadId: string) =>
-  Effect.runPromise(
-    lastContextUsageEffect({ metadata, threadId }).pipe(
-      Effect.map((usage) => usage?.inputTokens ?? null),
-    ),
-  );
-export const lastInputTokens: {
-  (threadId: string): (metadata: MetadataStore) => ReturnType<typeof lastInputTokensBody>;
-} & typeof lastInputTokensBody = EffectFunction.dual(2, lastInputTokensBody);
-
+  input.metadata
+    .set(consumedColdUsageNamespace, input.threadId, input.observationId)
+    .pipe(Effect.mapError(metadataFailed("consume")));
 /**
- * Keeps how much each model request of a run read, and tells the page as it happens.
- * The window and its provenance are read on each request from the current model catalog.
+ * Keeps how much each model request of a run read, in the run store's chat metadata, and tells the
+ * page as it happens. The window and its provenance are read on each request from the current
+ * model catalog.
  */
-export function recordContextUsage({
-  metadata,
-  windowTokens,
-  compactionStage = () => "none",
-  windowKnown = () => false,
-}: {
-  readonly metadata: MetadataStore;
-  readonly windowTokens: () => number;
-  readonly compactionStage?: () => CompactionStage;
-  readonly windowKnown?: () => boolean;
-}): ChatMiddleware {
-  return {
-    name: "memory-agent/context-usage",
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    onUsage: (ctx, usage) =>
-      Effect.runPromise(
+export const contextUsageHook = (options: {
+  readonly windowTokens: Effect.Effect<number>;
+  readonly compactionStage: Effect.Effect<CompactionStage>;
+  readonly windowKnown: Effect.Effect<boolean>;
+}): RunHook<RunStore | Crypto.Crypto> => ({
+  usage: ({ threadId, emit }, { inputTokens }) =>
+    Effect.transposeOption(
+      Option.map(Option.fromNullishOr(inputTokens.total), (usedTokens) =>
         Effect.gen(function* () {
-          const cachedTokens = usage.promptTokensDetails?.cachedTokens ?? null;
+          const store = yield* RunStore;
+          const crypto = yield* Crypto.Crypto;
           const stored: StoredContextUsage = {
-            inputTokens: usage.promptTokens,
-            cachedTokens,
-            observationId: randomUUID(),
-            compactionStage: compactionStage(),
+            inputTokens: usedTokens,
+            cachedTokens: inputTokens.cacheRead ?? null,
+            observationId: yield* crypto.randomUUIDv4(),
+            compactionStage: yield* options.compactionStage,
           };
-          yield* metadataOperation("write-usage", () =>
-            metadata.set(contextUsageNamespace, ctx.threadId, stored),
-          );
-          ctx.emitCustomEvent(
-            contextUsageEvent,
-            contextView({
-              usedTokens: usage.promptTokens,
-              windowTokens: windowTokens(),
-              cachedTokens,
+          yield* store.metadata.set(contextUsageNamespace, threadId, stored);
+          yield* emit({
+            type: "CUSTOM",
+            name: contextUsageEvent,
+            value: contextView({
+              usedTokens,
+              windowTokens: yield* options.windowTokens,
+              cachedTokens: stored.cachedTokens,
               compactionStage: stored.compactionStage,
-              windowKnown: windowKnown(),
+              windowKnown: yield* options.windowKnown,
             }),
-          );
+          });
         }),
       ),
-  };
-}
+    ).pipe(Effect.asVoid, Effect.mapError(asRunFailed)),
+});

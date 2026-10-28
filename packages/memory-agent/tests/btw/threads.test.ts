@@ -1,51 +1,37 @@
-import { Cause, Effect, FileSystem, Schema } from "effect";
+import { Crypto, Effect, FileSystem, Schema, Stream } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { Attachments } from "../../src/attachments/attachments.ts";
 import { attachmentUrl } from "../../src/attachments/urls.ts";
 import { BtwChat } from "../../src/btw/chat.ts";
 import { BtwError, BtwThreadNotFound, btwToolNames } from "../../src/btw/contracts.ts";
-import { btwToolGuard } from "../../src/btw/tools.ts";
+import { AgUiEvent } from "../../src/loop/chunks.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
-import { randomUUID } from "../../src/runtime/synchronous-crypto.ts";
-import type { ScriptedResponder } from "../../src/testing/scripted-adapter.ts";
+import type { ScriptedResponder } from "../../src/testing/scripted-model.ts";
+import { btwApi } from "../support/chat-api.ts";
 import { tinyPng } from "../support/images.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { freshSession, TestEnv, testAgent } from "../support/test-env.ts";
 import { sqlGet } from "../support/sql.ts";
 
-const sdk = <A>(operation: () => A | PromiseLike<A>) =>
-  Effect.tryPromise({
-    try: () => Promise.resolve(operation()),
-    catch: (cause) => new Cause.UnknownError(cause),
-  });
-
-const btwRequest = (text: string, imageIds: readonly string[] = []) =>
-  new Request("http://127.0.0.1/api/btw/chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      threadId: "page-thread",
-      runId: `run-${randomUUID()}`,
-      messages: [
-        {
-          id: randomUUID(),
-          role: "user",
-          content: [
-            { type: "text", content: text },
-            ...imageIds.map((id) => ({
-              type: "image",
-              source: { type: "url", value: attachmentUrl(id) },
-            })),
-          ],
-        },
+const question = Effect.fnUntraced(function* (text: string, imageIds: readonly string[]) {
+  const crypto = yield* Crypto.Crypto;
+  return {
+    runId: `run-${yield* crypto.randomUUIDv4()}`,
+    message: {
+      id: yield* crypto.randomUUIDv4(),
+      role: "user" as const,
+      content: [
+        { type: "text" as const, content: text },
+        ...imageIds.map((id) => ({
+          type: "image" as const,
+          source: { type: "url" as const, value: attachmentUrl(id) },
+        })),
       ],
-      // A changed request cannot bring tools of its own.
-      tools: [{ name: "write_file", description: "write", parameters: {} }],
-      context: [],
-    }),
-  });
+    },
+  };
+});
 
 const Count = Schema.Struct({ count: Schema.Finite });
 const count = (sql: string, ...values: string[]) =>
@@ -56,25 +42,33 @@ const count = (sql: string, ...values: string[]) =>
 
 /** Calls the tool its question names (`promote` asks for a write), then answers. */
 const responder: ScriptedResponder = (invocation) => {
-  const last = invocation.messages.at(-1);
+  const last = invocation.history.at(-1);
   if (last?.role === "tool") return { text: "BTW answer" };
   const wantsWrite = JSON.stringify(last).includes("promote");
   const [name, args] = wantsWrite
     ? ["promote_memory_candidate", { claimId: "c", taskId: "t" }]
     : ["find_memory", { query: "SQLite" }];
   return {
-    toolCalls: [{ id: `call-${randomUUID()}`, name, arguments: JSON.stringify(args) }],
+    toolCalls: [{ id: `call-${invocation.index}`, name, arguments: JSON.stringify(args) }],
   };
 };
 
+/** Asks through the API and gives the answer's text once its run ends. */
 const ask = Effect.fn("btwTest.ask")(function* (
   threadId: string,
   text: string,
   images: readonly string[] = [],
 ) {
-  const response = yield* (yield* BtwChat).handle(btwRequest(text, images), threadId);
-  expect(response.status).toBe(200);
-  return yield* sdk(() => response.text());
+  const events = yield* (yield* btwApi).ask({
+    params: { thread: threadId },
+    payload: yield* question(text, images),
+  });
+  return yield* Stream.runFold(
+    events,
+    () => "",
+    (answer, { data }) =>
+      AgUiEvent.guards.TEXT_MESSAGE_CONTENT(data) ? answer + data.delta : answer,
+  );
 });
 
 testAgent({ testProvider: { responder } })("BTW threads", (it) => {
@@ -84,42 +78,12 @@ testAgent({ testProvider: { responder } })("BTW threads", (it) => {
       const { provider } = yield* TestEnv;
       const thread = yield* (yield* BtwChat).create(yield* freshSession);
       yield* ask(thread.id, "promote it");
-      const [first, second] = provider!.adapter.invocations.slice(-2);
+      const [first, second] = provider!.invocations.slice(-2);
       expect(first!.toolNames.toSorted()).toEqual([...btwToolNames].toSorted());
-      expect(second!.messages.at(-1)).toMatchObject({
+      expect(second!.history.at(-1)).toMatchObject({
         content: expect.stringContaining("Unknown tool: promote_memory_candidate"),
       });
       expect(yield* count("SELECT count(*) AS count FROM memory_candidates")).toBe(0);
-
-      // Even a write tool that reached the request is dropped, and a call to it is skipped.
-      const writeTool = { name: "write_file", description: "write" };
-      const findTool = { name: "find_memory", description: "find" };
-      // SAFETY: the guard reads neither hook's middleware context, only the config and call.
-      const ctx = {} as Parameters<NonNullable<typeof btwToolGuard.onConfig>>[0];
-      expect(
-        yield* sdk(() =>
-          btwToolGuard.onConfig!(ctx, {
-            messages: [],
-            systemPrompts: [],
-            tools: [findTool, writeTool],
-          }),
-        ),
-      ).toEqual({ tools: [findTool] });
-      expect(
-        yield* sdk(() =>
-          btwToolGuard.onBeforeToolCall!(ctx, {
-            toolCall: {
-              id: "w",
-              type: "function",
-              function: { name: "write_file", arguments: "{}" },
-            },
-            tool: writeTool,
-            args: {},
-            toolName: "write_file",
-            toolCallId: "w",
-          }),
-        ),
-      ).toEqual({ type: "skip", result: { error: "btw_tool_not_allowed", tool: "write_file" } });
     }),
   );
 
@@ -190,9 +154,9 @@ testAgent({ testProvider: { responder } })("BTW non-collection", (it) => {
 
         const thread = yield* (yield* BtwChat).create(env.session.id);
         expect(yield* ask(thread.id, "btw-question-only-here")).toContain("BTW answer");
-        const [first, second] = env.provider!.adapter.invocations.slice(-2);
-        expect(first!.systemPrompts.join("\n")).toContain("저장소는 SQLite로 결정했다.");
-        expect(second!.messages.at(-1)).toMatchObject({
+        const [first, second] = env.provider!.invocations.slice(-2);
+        expect(first!.system.join("\n")).toContain("저장소는 SQLite로 결정했다.");
+        expect(second!.history.at(-1)).toMatchObject({
           content: expect.stringContaining("SQLite"),
         });
 
@@ -216,12 +180,12 @@ testAgent({ testProvider: { responder } })("BTW non-collection", (it) => {
         );
         expect(after).toEqual({ ...before, fts: 0, pending: 0, stored: 1 });
 
-        const hydrated = yield* env.use(
-          Effect.flatMap(BtwChat, (chat) =>
-            chat.hydrate(new Request(`http://127.0.0.1/api/btw?threadId=${thread.id}`), thread.id),
-          ),
-        );
-        expect(yield* sdk(() => hydrated.text())).toContain("btw-question-only-here");
+        const reopened = yield* (yield* btwApi).messages({ params: { thread: thread.id } });
+        expect(reopened[0]).toEqual({
+          id: expect.any(String),
+          role: "user",
+          parts: [{ type: "text", content: "btw-question-only-here" }],
+        });
       }),
   );
 });

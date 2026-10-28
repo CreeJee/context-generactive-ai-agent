@@ -288,30 +288,20 @@ export const isActiveAttemptStatus = (status: AttemptStatus) =>
 export const isTerminalAttemptStatus = (status: AttemptStatus) =>
   HashSet.has(terminalAttemptStatuses, status);
 
-const canTransitionAttemptBody = (from: AttemptStatus, to: AttemptStatus) => {
-  if (from === to) return true;
-  switch (from) {
-    case "queued":
-      return to === "running" || to === "cancelled" || to === "failed";
-    case "running":
-      return (
-        to === "waiting" ||
-        to === "blocked" ||
-        to === "interrupted" ||
-        to === "completed" ||
-        to === "failed" ||
-        to === "cancelled"
-      );
-    case "waiting":
-    case "blocked":
-      return to === "running" || to === "interrupted" || to === "failed" || to === "cancelled";
-    case "interrupted":
-    case "completed":
-    case "failed":
-    case "cancelled":
-      return false;
-  }
+/** Where an attempt may go from each status besides staying; a terminal status goes nowhere. */
+const attemptTransitions: Record<AttemptStatus, ReadonlyArray<AttemptStatus>> = {
+  queued: ["running", "cancelled", "failed"],
+  running: ["waiting", "blocked", "interrupted", "completed", "failed", "cancelled"],
+  waiting: ["running", "interrupted", "failed", "cancelled"],
+  blocked: ["running", "interrupted", "failed", "cancelled"],
+  interrupted: [],
+  completed: [],
+  failed: [],
+  cancelled: [],
 };
+
+const canTransitionAttemptBody = (from: AttemptStatus, to: AttemptStatus) =>
+  from === to || attemptTransitions[from].includes(to);
 export const canTransitionAttempt: {
   (to: AttemptStatus): (from: AttemptStatus) => ReturnType<typeof canTransitionAttemptBody>;
 } & typeof canTransitionAttemptBody = EffectFunction.dual(2, canTransitionAttemptBody);

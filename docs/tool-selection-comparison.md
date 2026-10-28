@@ -2,6 +2,8 @@
 
 2026-10-08. 실험 상태는 중지다. 이번 변경에서는 실제 인증 확인, 서버 재시작, 모델 요청을 실행하지 않았다.
 
+2026-10-27. TanStack을 지우면서 `tool-comparison.ts`와 이를 서버 runtime에서 실행하던 `agent.ts`의 `runToolComparison`을 지웠다. 이 경로는 TanStack run adapter만 감쌌고, 저장소 안에서는 호출하는 곳이 없었다. 가드가 받던 요청도 TanStack 형식이어서 바깥 평가 컨트롤러는 어차피 다시 써야 한다. 실험을 다시 하면 `packages/memory-agent/eval/pilot-guard.ts`의 `pilotGuarded`처럼 run의 model을 감싸서 요청을 확인한다.
+
 ## 구현
 
 - `apps/agent/app/.server/agent.ts`의 `runToolComparison`은 기존 앱 singleton의 ManagedRuntime에서 실행한다. 새 Node 인증 프로세스를 만들지 않는다.

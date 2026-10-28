@@ -18,12 +18,37 @@ await Effect.runPromise(
       const inheritedSecret = yield* Config.String("SHOULD_NOT_LEAK").pipe(
         Config.withDefault(null),
       );
+      // A spec 2025 task tool, `later`, which answers once its task ends.
+      const tasks = yield* Config.Boolean("FAKE_MCP_TASKS").pipe(Config.withDefault(false));
       if (isTruthy(startLog))
         yield* fs.writeFileString(startLog, "start " + process.pid + "\n", { flag: "a" });
       const server = new Server(
         { name: "fake", version: "1.0.0" },
-        { capabilities: { tools: {} }, instructions: "Call echo to repeat text back." },
+        {
+          capabilities: tasks
+            ? { tools: {}, tasks: { requests: { tools: { call: {} } } } }
+            : { tools: {} },
+          instructions: "Call echo to repeat text back.",
+        },
       );
+      const task = (status: "working" | "completed") => ({
+        taskId: "task-1",
+        status,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        lastUpdatedAt: "2026-01-01T00:00:00.000Z",
+        ttl: null,
+        pollInterval: 10,
+      });
+      // The SDK types no longer list the task methods, so they are registered as custom ones.
+      const taskRequest = {
+        params: Schema.toStandardSchemaV1(Schema.Struct({ taskId: Schema.String })),
+      };
+      if (tasks) {
+        server.setRequestHandler("tasks/get", taskRequest, () => task("completed"));
+        server.setRequestHandler("tasks/result", taskRequest, () => ({
+          content: [{ type: "text", text: "later: done" }],
+        }));
+      }
 
       server.setRequestHandler("tools/list", () =>
         runNative(
@@ -45,6 +70,16 @@ await Effect.runPromise(
                   description: "Working directory and whether the configured secret arrived.",
                   inputSchema: { type: "object", properties: {} },
                 },
+                ...(tasks
+                  ? [
+                      {
+                        name: "later",
+                        description: "Answers once its task ends.",
+                        inputSchema: { type: "object" as const, properties: {} },
+                        execution: { taskSupport: "required" as const },
+                      },
+                    ]
+                  : []),
               ],
             };
           }),
@@ -55,6 +90,8 @@ await Effect.runPromise(
         runNative(
           Effect.gen(function* () {
             switch (request.params.name) {
+              case "later":
+                return { task: task("working"), content: [] };
               case "echo":
                 return {
                   content: [

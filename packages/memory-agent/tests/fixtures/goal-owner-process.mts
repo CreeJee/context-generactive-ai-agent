@@ -1,7 +1,7 @@
-import { chatRoute } from "../support/chat-route.ts";
 import { testHttpServer, HttpServerRequest, HttpServerResponse } from "../support/http.ts";
 import { withTestPlatform } from "../support/platform.ts";
-import { nativeStream } from "../../src/runtime/native-stream.ts";
+import { optionalProperty } from "../../src/optional-property.ts";
+import type { LanguageModel } from "effect/ai";
 // Native subprocess signals, IPC, environment and SDK AsyncGenerator are the fixture owner boundary.
 import {
   Cause,
@@ -9,13 +9,22 @@ import {
   Deferred,
   Effect,
   FileSystem,
+  Layer,
   ManagedRuntime,
   Path,
   Schema,
   Stream,
 } from "effect";
-import { memoryAgentLayer, Projects, Sessions } from "../../src/index.ts";
-import { AgentChat } from "../../src/agent/chat.ts";
+import { HttpRouter, HttpServer } from "effect/http";
+import { HttpApiBuilder } from "effect/http-api";
+import {
+  BtwApiHandlers,
+  ChatApiHandlers,
+  memoryAgentLayer,
+  Projects,
+  Sessions,
+} from "../../src/index.ts";
+import { ChatApi, SameSite } from "../../src/api/chat-api.ts";
 import { SqlClient } from "effect/sql";
 import { SecretStore } from "../../src/config/secrets.ts";
 import { fakeEmbedderLayer } from "../../src/testing/fake-embedder.ts";
@@ -28,6 +37,25 @@ const [base, mode] = process.argv.slice(2);
 if (base === undefined || base === "") throw new Error("Missing owned temporary root");
 const gate = turnGate();
 let appendModelCall = Effect.void;
+// Preserve the scripted model; only wrap its stream in this owned subprocess to hold the run
+// behind its text.
+const heldAfterText = (model: LanguageModel.LanguageModel): LanguageModel.LanguageModel => ({
+  ...model,
+  // SAFETY: the parts pass through unchanged; only their timing changes.
+  streamText: ((options: Parameters<LanguageModel.LanguageModel["streamText"]>[0]) =>
+    model
+      .streamText(options)
+      .pipe(
+        Stream.flatMap((part) =>
+          Stream.concat(
+            Stream.succeed(part),
+            Stream.fromEffect(part.type === "text-delta" ? gate.waitFor : Effect.void).pipe(
+              Stream.drain,
+            ),
+          ),
+        ),
+      )) as LanguageModel.LanguageModel["streamText"],
+});
 const provider = testProvider({
   responder: Effect.fn("recordFixtureModelCall")(function* () {
     yield* appendModelCall;
@@ -35,25 +63,8 @@ const provider = testProvider({
       ? { text: "never completed", waitFor: gate.waitFor }
       : { text: "completed owner turn" };
   }),
+  ...optionalProperty("model", mode === "partial" ? heldAfterText : undefined),
 });
-// Preserve the original adapter instance, capabilities and methods; only wrap
-// its stream in this owned subprocess to hold the terminal behind a text chunk.
-if (mode === "partial") {
-  const original = provider.adapter.chatStream.bind(provider.adapter);
-  provider.adapter.chatStream = (...args) =>
-    nativeStream(
-      Stream.fromAsyncIterable(original(...args), (cause) => new Cause.UnknownError(cause)).pipe(
-        Stream.flatMap((chunk) =>
-          Stream.concat(
-            Stream.succeed(chunk),
-            Stream.fromEffect(
-              chunk.type === "TEXT_MESSAGE_CONTENT" ? gate.waitFor : Effect.void,
-            ).pipe(Stream.drain),
-          ),
-        ),
-      ),
-    );
-}
 const sdkCall = <A,>(call: () => A | PromiseLike<A>) =>
   Effect.tryPromise(() => Promise.resolve(call()));
 
@@ -90,9 +101,24 @@ await Effect.runPromise(
       yield* sdkCall(() => provider.select(runtime));
       const services = yield* runtime.contextEffect;
       const runNative = Effect.runPromiseWith(services);
-      const { chat, sql, workflows } = yield* Effect.provideContext(
-        Effect.all({ chat: AgentChat, sql: SqlClient.SqlClient, workflows: Workflows }),
+      const { sql, workflows } = yield* Effect.provideContext(
+        Effect.all({ sql: SqlClient.SqlClient, workflows: Workflows }),
         services,
+      );
+      // The chat API as the app serves it; these requests come from the test itself.
+      const chatApi = yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          HttpRouter.toWebHandler(
+            HttpApiBuilder.layer(ChatApi).pipe(
+              Layer.provide(Layer.merge(ChatApiHandlers, BtwApiHandlers)),
+              Layer.provide(Layer.succeed(SameSite, (httpEffect) => httpEffect)),
+              Layer.provide(Layer.succeedContext(services)),
+              Layer.provide(HttpServer.layerServices),
+            ),
+            { disableLogger: true },
+          ),
+        ),
+        (web) => sdkCall(() => web.dispose()).pipe(Effect.orDie),
       );
       let sessionId: string;
       if (mode === "reopen") sessionId = yield* fs.readFileString(path.join(base, "session"));
@@ -129,7 +155,6 @@ await Effect.runPromise(
               bindings: sqlAll("SELECT * FROM workflow_run_bindings"),
               operations: sqlAll("SELECT * FROM owner_rpc_operations"),
               revisions: sqlAll("SELECT * FROM workflow_state_revisions"),
-              dispatches: sqlAll("SELECT * FROM workflow_worker_dispatches"),
               executions: sqlAll(
                 "SELECT json_extract(payload_json, '$.identity.runId') AS runId, status FROM owner_workflow_executions WHERE workflow_name = 'GoalExecution'",
               ),
@@ -138,11 +163,7 @@ await Effect.runPromise(
               Effect.flatMap(HttpServerResponse.json),
             );
           const request = yield* HttpServerRequest.toWeb(incoming);
-          const response = yield* Effect.provideContext(
-            chatRoute(chat, request, sessionId),
-            services,
-          );
-          return HttpServerResponse.fromWeb(response);
+          return HttpServerResponse.fromWeb(yield* sdkCall(() => chatApi.handler(request)));
         }).pipe(
           Effect.catchCause((cause) =>
             Effect.succeed(HttpServerResponse.text(Cause.pretty(cause), { status: 500 })),

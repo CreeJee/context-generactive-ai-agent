@@ -1,15 +1,11 @@
-import { NodePath } from "@effect/platform-node";
-import { ManagedRuntime, Path } from "effect";
-import { Effect, Option, Schema } from "effect";
+import { Effect, Option, Path, Schema } from "effect";
 import { Argument, Flag } from "effect/cli";
 import { parseCommandLine } from "../server/command-line.ts";
 
-const { resolve, join } = ManagedRuntime.make(NodePath.layer).runSync(Path.Path);
-
-export class DevConfigurationError extends Schema.TaggedError<DevConfigurationError>()(
-  "DevConfigurationError",
-  { detail: Schema.String },
-) {
+export class DevConfigurationError extends Schema.TaggedError<
+  DevConfigurationError,
+  { readonly brand: unique symbol }
+>()("DevConfigurationError", { detail: Schema.String }) {
   override get message() {
     return this.detail;
   }
@@ -22,6 +18,7 @@ export const readDevConfiguration = Effect.fn("dev.readConfiguration")(function*
   environment: NodeJS.ProcessEnv,
   app: string,
 ) {
+  const { resolve, join } = yield* Path.Path;
   const parsed = yield* parseCommandLine("dev", devCommandLine, devHelp, args).pipe(
     Effect.mapError(() =>
       DevConfigurationError.make({ detail: "Invalid dev arguments; use --help." }),

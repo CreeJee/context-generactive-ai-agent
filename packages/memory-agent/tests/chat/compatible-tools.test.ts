@@ -1,13 +1,13 @@
+import { NodeCrypto } from "@effect/platform-node";
 import { Effect, Layer, Schema } from "effect";
 import { expect } from "vite-plus/test";
-import { AgentChat } from "../../src/agent/chat.ts";
 import {
   CompatibleFetch,
   CompatibleKeyring,
   OpenAICompatibleSettings,
 } from "../../src/providers/openai-compatible.ts";
-import { testAgent } from "../support/test-env.ts";
-import { freshSession, sdk } from "./tab.ts";
+import { runTurn, streamedText } from "../support/chat-client.ts";
+import { freshSession, testAgent } from "../support/test-env.ts";
 
 const ChatRequest = Schema.fromJsonString(
   Schema.Struct({
@@ -41,7 +41,8 @@ const chunk = (delta: Delta, finishReason: string | null = null) => ({
 // tool result it answers in text.
 const requests: ChatRequest[] = [];
 const endpoint: typeof fetch = (input, init) => {
-  if (!(input instanceof Request ? input.url : input.toString()).endsWith("/chat/completions"))
+  const sent = new Request(input, init);
+  if (!sent.url.endsWith("/chat/completions"))
     return Promise.resolve(Response.json({ object: "list", data: [] }));
   const answer = (request: ChatRequest) => {
     requests.push(request);
@@ -62,17 +63,19 @@ const endpoint: typeof fetch = (input, init) => {
           chunk({}, "tool_calls"),
         );
   };
-  return Effect.runPromise(Effect.map(Schema.decodeUnknownEffect(ChatRequest)(init?.body), answer));
+  return Effect.runPromise(
+    Effect.tryPromise(() => sent.text()).pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(ChatRequest)),
+      Effect.map(answer),
+    ),
+  );
 };
 
 testAgent({
   compatibleSettings: OpenAICompatibleSettings.layerWith(
-    Layer.succeed(CompatibleKeyring, () => ({
-      get: () => Promise.resolve(null),
-      set: () => Promise.resolve(),
-    })),
+    Layer.succeed(CompatibleKeyring, () => ({ get: Effect.succeed(null), set: () => Effect.void })),
     Layer.succeed(CompatibleFetch, endpoint),
-  ),
+  ).pipe(Layer.provide(NodeCrypto.layer)),
 })("compatible chat tools", (it) => {
   it.effect("runs a tool the model calls after text and continues the turn", () =>
     Effect.gen(function* () {
@@ -87,28 +90,12 @@ testAgent({
       });
       yield* compatible.services.models.select("manual");
       const sessionId = yield* freshSession;
-      const body = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
-        threadId: "thread-ui",
-        runId: `${sessionId}-run`,
-        messages: [{ id: "m1", role: "user", content: "가져온다고 하고 멈췄는데?" }],
-        tools: [],
-        context: [],
-      });
-      const response = yield* (yield* AgentChat).handle(
-        new Request("http://127.0.0.1/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body,
-        }),
-        sessionId,
-      );
-      expect(response.status).toBe(200);
-      const stream = yield* sdk(() => response.text());
+      const events = yield* runTurn(sessionId, `${sessionId}-run`, "가져온다고 하고 멈췄는데?");
 
       expect(requests[0]?.tools?.map((tool) => tool.function.name)).toContain("find_memory");
       expect(requests).toHaveLength(2);
       expect(requests[1]?.messages.map((message) => message.role)).toContain("tool");
-      expect(stream).toContain("done");
+      expect(streamedText(events)).toContain("done");
     }),
   );
 });

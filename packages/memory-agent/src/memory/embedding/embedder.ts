@@ -5,13 +5,13 @@ import { Worker } from "node:worker_threads";
 import {
   Path,
   DateTime,
-  Clock,
   Context,
   Data,
   Deferred,
   Effect,
   Exit,
   Layer,
+  Match,
   Option,
   Schema,
   Scope,
@@ -32,7 +32,10 @@ import {
   EmbeddingWorkerFailed,
 } from "./embedding-rpc.ts";
 
-export class EmbeddingError extends Schema.TaggedError<EmbeddingError>()("EmbeddingError", {
+export class EmbeddingError extends Schema.TaggedError<
+  EmbeddingError,
+  { readonly brand: unique symbol }
+>()("EmbeddingError", {
   cause: Schema.Defect(),
 }) {}
 
@@ -104,9 +107,7 @@ const variantFile = {
 export const modelFile = (variant: ModelVariant) => `onnx/${variantFile[variant]}.onnx`;
 
 export function normalize(vector: Float32Array): Float32Array {
-  let norm = 0;
-  for (const value of vector) norm += value * value;
-  norm = Math.sqrt(norm);
+  const norm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0));
   return norm > 0 ? vector.map((value) => value / norm) : vector;
 }
 
@@ -131,25 +132,16 @@ function planBatchesBody(
   const order = tokenCounts
     .map((_, index) => index)
     .sort((a, b) => tokenCounts[a]! - tokenCounts[b]!);
-  const batches: number[][] = [];
-  let current: number[] = [];
-  let longest = 0;
-  for (const index of order) {
-    const count = tokenCounts[index]!;
-    const wider = Math.max(longest, count);
-    if (
+  return order.reduce<number[][]>((batches, index) => {
+    const current = batches.at(-1) ?? [];
+    // Counts ascend, so the text joining a batch is its longest.
+    const longest = tokenCounts[index]!;
+    const fits =
       current.length > 0 &&
-      (current.length + 1 > limits.size || (current.length + 1) * wider * wider > limits.cost)
-    ) {
-      batches.push(current);
-      current = [];
-      longest = 0;
-    }
-    current.push(index);
-    longest = Math.max(longest, count);
-  }
-  if (current.length > 0) batches.push(current);
-  return batches;
+      current.length + 1 <= limits.size &&
+      (current.length + 1) * longest * longest <= limits.cost;
+    return fits ? [...batches.slice(0, -1), [...current, index]] : [...batches, [index]];
+  }, []);
 }
 
 /** Which file to load, and the devices to try it on in order. */
@@ -176,18 +168,19 @@ export const embeddingModeFor: {
   (memoryBytes: number): (settings: Settings) => EmbeddingMode;
 } = EffectFunction.dual((args) => !Schema.is(Schema.Finite)(args[0]), embeddingModeForBody);
 function embeddingModeForBody(settings: Settings, memoryBytes: number): EmbeddingMode {
-  switch (settings.embeddingDevice ?? "auto") {
-    case "cpu":
-      return "cpu";
-    case "gpu":
-      return "gpu";
-    case "auto":
-      return memoryBytes >= gpuMemoryThreshold &&
-        settings.gpuCheck !== undefined &&
-        GpuCheck.guards.available(settings.gpuCheck)
+  return Match.value(settings.embeddingDevice ?? "auto").pipe(
+    Match.withReturnType<EmbeddingMode>(),
+    Match.when("cpu", () => "cpu"),
+    Match.when("gpu", () => "gpu"),
+    Match.when("auto", () =>
+      memoryBytes >= gpuMemoryThreshold &&
+      settings.gpuCheck !== undefined &&
+      GpuCheck.guards.available(settings.gpuCheck)
         ? "gpu"
-        : "cpu";
-  }
+        : "cpu",
+    ),
+    Match.exhaustive,
+  );
 }
 
 /**
@@ -213,8 +206,12 @@ export interface ModelSession {
 const rpcSession = (data: EmbeddingWorkerData) =>
   Effect.gen(function* () {
     const spawned = yield* Deferred.make<Worker>();
+    const lost = (cause: unknown) =>
+      EmbeddingWorkerFailed.make({ stage: "lost", reason: String(cause) });
+    const file = yield* runtimeWorker("embed-worker").pipe(Effect.mapError(lost));
+    const options = yield* runtimeWorkerOptions(data);
     const workers = NodeWorker.layer(() => {
-      const worker = new Worker(runtimeWorker("embed-worker"), runtimeWorkerOptions(data));
+      const worker = new Worker(file, options);
       worker.unref();
       Deferred.doneUnsafe(spawned, Exit.succeed(worker));
       return worker;
@@ -223,8 +220,6 @@ const rpcSession = (data: EmbeddingWorkerData) =>
       RpcClient.layerProtocolWorker({ size: 1, concurrency: 1 }).pipe(Layer.provide(workers)),
     );
     const client = yield* RpcClient.make(EmbeddingRpcs).pipe(Effect.provide(protocol));
-    const lost = (cause: unknown) =>
-      EmbeddingWorkerFailed.make({ stage: "lost", reason: String(cause) });
     const call = <A>(
       effect: Effect.Effect<A, EmbeddingWorkerFailed | RpcClientError.RpcClientError>,
     ) => effect.pipe(Effect.catchTag("RpcClientError", (error) => Effect.fail(lost(error))));
@@ -297,22 +292,18 @@ export const modelWorker = Effect.fnUntraced(function* (
     }),
   );
   /** A worker that failed to load or was lost is replaced by the next request's new one. */
-  const keepsSession = (error: EmbeddingWorkerFailed) => {
-    switch (error.stage) {
-      case "run":
-        return true;
-      case "load":
-      case "lost":
-        return false;
-    }
-  };
+  const keepsSession = {
+    run: true,
+    load: false,
+    lost: false,
+  } as const satisfies Record<EmbeddingWorkerFailed["stage"], boolean>;
   const request = <A>(call: (current: ModelSession) => Effect.Effect<A, EmbeddingWorkerFailed>) =>
     Effect.flatMap(live, (current) =>
       current.busy(call(current)).pipe(
         // Only one request owns this worker: terminate it and await its exit before handing
         // the permit to another agent.
         Effect.onInterrupt(() => current.terminate.pipe(Effect.andThen(discard))),
-        Effect.tapError((error) => (keepsSession(error) ? Effect.void : discard)),
+        Effect.tapError((error) => (keepsSession[error.stage] ? Effect.void : discard)),
       ),
     ).pipe(
       Effect.mapError((cause) => EmbeddingError.make({ cause })),
@@ -337,9 +328,10 @@ export const modelWorker = Effect.fnUntraced(function* (
           ),
         ),
       );
-      const vectors: Float32Array[] = [];
-      for (const [index, vector] of embedded.flat()) vectors[index] = vector;
-      return vectors;
+      return embedded
+        .flat()
+        .toSorted(([left], [right]) => left - right)
+        .map(([, vector]) => vector);
     }),
   };
 });
@@ -376,42 +368,31 @@ const makeLocal = (setup: ModelSetup, purpose: LocalPurpose) =>
 export const checkGpu = (storageRoot: string) =>
   Effect.scoped(
     Effect.gen(function* () {
-      const effectClock = yield* Clock.Clock;
       const paths = yield* Path.Path;
 
       const model = yield* modelWorker(paths.join(storageRoot, "models"), {
         variant: "fp32",
         devices: ["webgpu"],
       });
-      return yield* model.embed(["준비"]).pipe(
-        Effect.map((): GpuCheck =>
-          model.device() === "webgpu"
-            ? GpuCheck.cases.available.make({
-                checkedAt: DateTime.formatIso(
-                  DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
-                ),
-              })
-            : GpuCheck.cases.unavailable.make({
-                checkedAt: DateTime.formatIso(
-                  DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
-                ),
-                reason: "no WebGPU device",
-              }),
+      /** Why the GPU cannot be used, if it cannot. */
+      const unavailable = yield* model.embed(["준비"]).pipe(
+        Effect.map(() =>
+          model.device() === "webgpu" ? Option.none<string>() : Option.some("no WebGPU device"),
         ),
         Effect.catchTag("EmbeddingError", (error) =>
-          Effect.succeed<GpuCheck>(
-            GpuCheck.cases.unavailable.make({
-              checkedAt: DateTime.formatIso(
-                DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
-              ),
-              // A code, not the worker's text: that can hold paths and native messages.
-              reason: Schema.is(EmbeddingWorkerFailed)(error.cause)
-                ? `worker_${error.cause.stage}_failed`
-                : "embedding_failed",
-            }),
+          Effect.succeedSome(
+            // A code, not the worker's text: that can hold paths and native messages.
+            Schema.is(EmbeddingWorkerFailed)(error.cause)
+              ? `worker_${error.cause.stage}_failed`
+              : "embedding_failed",
           ),
         ),
       );
+      const checkedAt = DateTime.formatIso(yield* DateTime.now);
+      return Option.match(unavailable, {
+        onNone: (): GpuCheck => GpuCheck.cases.available.make({ checkedAt }),
+        onSome: (reason): GpuCheck => GpuCheck.cases.unavailable.make({ checkedAt, reason }),
+      });
     }),
   );
 

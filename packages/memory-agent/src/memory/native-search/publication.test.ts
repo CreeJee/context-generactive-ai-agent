@@ -3,7 +3,10 @@ import { expect, it } from "vite-plus/test";
 import { makePublication, PublicationFailed, PublicationState } from "./publication.ts";
 import { ReadAdmission } from "./client.ts";
 
-class SaveFailed extends Schema.TaggedError<SaveFailed>()("SaveFailed", {}) {}
+class SaveFailed extends Schema.TaggedError<SaveFailed, { readonly brand: unique symbol }>()(
+  "SaveFailed",
+  {},
+) {}
 
 it("maps only gate admission errors and preserves identically-tagged callback failures", () =>
   Effect.runPromise(

@@ -1,4 +1,5 @@
 import { Context, Effect, Layer } from "effect";
+import { failedReasons } from "./failed-checks.ts";
 import {
   GlobalConfig,
   type GlobalConfigFailed,
@@ -38,11 +39,11 @@ export interface ImageFeatureApi {
 }
 
 export function decideImageContext(input: ImageContextGateInput): ImageContextGateDecision {
-  const reasons: string[] = [];
-  if (!input.status.imageGenerationEnabled)
-    reasons.push("user image generation setting is disabled");
-  if (input.intent.kind !== "generate_image") reasons.push("turn has no explicit image intent");
-  if (input.route === null) reasons.push("no eligible image route was selected");
+  const reasons = failedReasons([
+    [!input.status.imageGenerationEnabled, "user image generation setting is disabled"],
+    [input.intent.kind !== "generate_image", "turn has no explicit image intent"],
+    [input.route === null, "no eligible image route was selected"],
+  ]);
 
   const imageGenerationAllowed = reasons.length === 0;
   const directWorkflowAllowed =

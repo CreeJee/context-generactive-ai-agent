@@ -1,0 +1,903 @@
+{
+  "acknowledgements": [],
+  "artifacts": [],
+  "attempts": [
+    {
+      "attempt_number": 1,
+      "chat_run_id": "<id-21>",
+      "failure": null,
+      "pending_tool_call_ids": [],
+      "resumability": {
+        "state": "not_needed"
+      },
+      "resume_reason": null,
+      "status": "completed",
+      "task_id": "<id-4>",
+      "thread_id": "subagent-<id-3>"
+    },
+    {
+      "attempt_number": 1,
+      "chat_run_id": "<id-23>",
+      "failure": null,
+      "pending_tool_call_ids": [],
+      "resumability": {
+        "state": "not_needed"
+      },
+      "resume_reason": null,
+      "status": "completed",
+      "task_id": "<id-12>",
+      "thread_id": "subagent-<id-3>"
+    }
+  ],
+  "bindings": [],
+  "events": [],
+  "history": [
+    {
+      "format_version": 1,
+      "messages": [
+        {
+          "content": "golden:subagent-first",
+          "createdAt": "<time>",
+          "id": "<id-1>",
+          "role": "user"
+        }
+      ],
+      "ordinal": 0,
+      "ready": 1,
+      "thread_id": "<session>",
+      "ui_id": "<id-1>"
+    },
+    {
+      "format_version": 1,
+      "messages": [
+        {
+          "content": null,
+          "createdAt": "<time>",
+          "finishReason": "tool_calls",
+          "id": "<id-2>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          },
+          "toolCalls": [
+            {
+              "function": {
+                "arguments": "{\"agent\":\"helper\",\"task\":\"first task\"}",
+                "name": "run_subagent"
+              },
+              "id": "first@<session>",
+              "type": "function"
+            }
+          ]
+        },
+        {
+          "content": "{\"status\":\"running\",\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-4>\",\"attemptId\":\"<id-5>\"}",
+          "id": "stored:<session>:2",
+          "role": "tool",
+          "toolCallId": "first@<session>"
+        }
+      ],
+      "ordinal": 1,
+      "ready": 1,
+      "thread_id": "<session>",
+      "ui_id": "<id-2>"
+    },
+    {
+      "format_version": 1,
+      "messages": [
+        {
+          "content": "first started",
+          "createdAt": "<time>",
+          "finishReason": "stop",
+          "id": "<id-6>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          }
+        }
+      ],
+      "ordinal": 2,
+      "ready": 1,
+      "thread_id": "<session>",
+      "ui_id": "<id-6>"
+    },
+    {
+      "format_version": 1,
+      "messages": [
+        {
+          "content": null,
+          "createdAt": "<time>",
+          "finishReason": "tool_calls",
+          "id": "<id-7>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          },
+          "toolCalls": [
+            {
+              "function": {
+                "arguments": "{\"attempts\":[{\"taskId\":\"<id-4>\",\"attemptId\":\"<id-5>\"}]}",
+                "name": "get_subagent_reports"
+              },
+              "id": "call-reports@<id-8>",
+              "type": "function"
+            }
+          ]
+        },
+        {
+          "content": "{\"reports\":[{\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-4>\",\"attemptId\":\"<id-5>\",\"status\":\"completed\",\"answer\":\"child done: first task (earlier user messages: 0)\",\"error\":null}]}",
+          "id": "stored:<session>:5",
+          "role": "tool",
+          "toolCallId": "call-reports@<id-8>"
+        }
+      ],
+      "ordinal": 3,
+      "ready": 1,
+      "thread_id": "<session>",
+      "ui_id": "<id-7>"
+    },
+    {
+      "format_version": 1,
+      "messages": [
+        {
+          "content": "Background work completed. {\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-4>\",\"attemptId\":\"<id-5>\",\"status\":\"completed\",\"answer\":\"child done: first task (earlier user messages: 0)\",\"error\":null}",
+          "createdAt": "<time>",
+          "finishReason": "stop",
+          "id": "<id-9>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          }
+        }
+      ],
+      "ordinal": 4,
+      "ready": 1,
+      "thread_id": "<session>",
+      "ui_id": "<id-9>"
+    },
+    {
+      "format_version": 1,
+      "messages": [
+        {
+          "content": "golden:subagent-second",
+          "createdAt": "<time>",
+          "id": "<id-10>",
+          "role": "user"
+        }
+      ],
+      "ordinal": 5,
+      "ready": 1,
+      "thread_id": "<session>",
+      "ui_id": "<id-10>"
+    },
+    {
+      "format_version": 1,
+      "messages": [
+        {
+          "content": null,
+          "createdAt": "<time>",
+          "finishReason": "tool_calls",
+          "id": "<id-11>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          },
+          "toolCalls": [
+            {
+              "function": {
+                "arguments": "{\"agent\":\"helper\",\"task\":\"second task\"}",
+                "name": "run_subagent"
+              },
+              "id": "second@<session>",
+              "type": "function"
+            }
+          ]
+        },
+        {
+          "content": "{\"status\":\"running\",\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-12>\",\"attemptId\":\"<id-13>\"}",
+          "id": "stored:<session>:9",
+          "role": "tool",
+          "toolCallId": "second@<session>"
+        }
+      ],
+      "ordinal": 6,
+      "ready": 1,
+      "thread_id": "<session>",
+      "ui_id": "<id-11>"
+    },
+    {
+      "format_version": 1,
+      "messages": [
+        {
+          "content": "second started",
+          "createdAt": "<time>",
+          "finishReason": "stop",
+          "id": "<id-14>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          }
+        }
+      ],
+      "ordinal": 7,
+      "ready": 1,
+      "thread_id": "<session>",
+      "ui_id": "<id-14>"
+    },
+    {
+      "format_version": 1,
+      "messages": [
+        {
+          "content": null,
+          "createdAt": "<time>",
+          "finishReason": "tool_calls",
+          "id": "<id-15>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          },
+          "toolCalls": [
+            {
+              "function": {
+                "arguments": "{\"attempts\":[{\"taskId\":\"<id-12>\",\"attemptId\":\"<id-13>\"}]}",
+                "name": "get_subagent_reports"
+              },
+              "id": "call-reports@<id-16>",
+              "type": "function"
+            }
+          ]
+        },
+        {
+          "content": "{\"reports\":[{\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-12>\",\"attemptId\":\"<id-13>\",\"status\":\"completed\",\"answer\":\"child done: second task (earlier user messages: 1)\",\"error\":null}]}",
+          "id": "stored:<session>:12",
+          "role": "tool",
+          "toolCallId": "call-reports@<id-16>"
+        }
+      ],
+      "ordinal": 8,
+      "ready": 1,
+      "thread_id": "<session>",
+      "ui_id": "<id-15>"
+    },
+    {
+      "format_version": 1,
+      "messages": [
+        {
+          "content": "Background work completed. {\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-12>\",\"attemptId\":\"<id-13>\",\"status\":\"completed\",\"answer\":\"child done: second task (earlier user messages: 1)\",\"error\":null}",
+          "createdAt": "<time>",
+          "finishReason": "stop",
+          "id": "<id-17>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          }
+        }
+      ],
+      "ordinal": 9,
+      "ready": 1,
+      "thread_id": "<session>",
+      "ui_id": "<id-17>"
+    },
+    {
+      "format_version": 1,
+      "messages": [
+        {
+          "content": "first task",
+          "id": "stored:subagent-<id-3>:0",
+          "role": "user"
+        }
+      ],
+      "ordinal": 0,
+      "ready": 1,
+      "thread_id": "subagent-<id-3>",
+      "ui_id": "stored:subagent-<id-3>:0"
+    },
+    {
+      "format_version": 1,
+      "messages": [
+        {
+          "content": "child done: first task (earlier user messages: 0)",
+          "createdAt": "<time>",
+          "finishReason": "stop",
+          "id": "<id-18>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          }
+        }
+      ],
+      "ordinal": 1,
+      "ready": 1,
+      "thread_id": "subagent-<id-3>",
+      "ui_id": "<id-18>"
+    },
+    {
+      "format_version": 1,
+      "messages": [
+        {
+          "content": "second task",
+          "id": "stored:subagent-<id-3>:2",
+          "role": "user"
+        }
+      ],
+      "ordinal": 2,
+      "ready": 1,
+      "thread_id": "subagent-<id-3>",
+      "ui_id": "stored:subagent-<id-3>:2"
+    },
+    {
+      "format_version": 1,
+      "messages": [
+        {
+          "content": "child done: second task (earlier user messages: 1)",
+          "createdAt": "<time>",
+          "finishReason": "stop",
+          "id": "<id-19>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          }
+        }
+      ],
+      "ordinal": 3,
+      "ready": 1,
+      "thread_id": "subagent-<id-3>",
+      "ui_id": "<id-19>"
+    }
+  ],
+  "interrupts": [],
+  "ledger": [],
+  "metadata": [
+    {
+      "key": "<session>",
+      "namespace": "memory-agent/model-handoff",
+      "value": {
+        "_tag": "baseline",
+        "target": "[\"openai\",\"fast-1\",null]"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "detail": {},
+      "kind": "user",
+      "run_id": null,
+      "text": "golden:subagent-first"
+    },
+    {
+      "detail": {},
+      "kind": "assistant",
+      "run_id": "<id-20>",
+      "text": ""
+    },
+    {
+      "detail": {
+        "toolCallId": "first@<session>",
+        "toolName": "run_subagent"
+      },
+      "kind": "tool_call",
+      "run_id": "<id-20>",
+      "text": "run_subagent {\"agent\":\"helper\",\"task\":\"first task\"}"
+    },
+    {
+      "detail": {
+        "ok": true,
+        "toolCallId": "first@<session>",
+        "toolName": "run_subagent"
+      },
+      "kind": "tool_result",
+      "run_id": "<id-20>",
+      "text": {
+        "agent": "helper",
+        "attemptId": "<id-5>",
+        "status": "running",
+        "subagentId": "<id-3>",
+        "taskId": "<id-4>"
+      }
+    },
+    {
+      "detail": {},
+      "kind": "assistant",
+      "run_id": "<id-20>",
+      "text": "first started"
+    },
+    {
+      "detail": {},
+      "kind": "assistant",
+      "run_id": "<id-8>",
+      "text": ""
+    },
+    {
+      "detail": {
+        "toolCallId": "call-reports@<id-8>",
+        "toolName": "get_subagent_reports"
+      },
+      "kind": "tool_call",
+      "run_id": "<id-8>",
+      "text": "get_subagent_reports {\"attempts\":[{\"taskId\":\"<id-4>\",\"attemptId\":\"<id-5>\"}]}"
+    },
+    {
+      "detail": {
+        "ok": true,
+        "toolCallId": "call-reports@<id-8>",
+        "toolName": "get_subagent_reports"
+      },
+      "kind": "tool_result",
+      "run_id": "<id-8>",
+      "text": {
+        "reports": [
+          {
+            "agent": "helper",
+            "answer": "child done: first task (earlier user messages: 0)",
+            "attemptId": "<id-5>",
+            "error": null,
+            "status": "completed",
+            "subagentId": "<id-3>",
+            "taskId": "<id-4>"
+          }
+        ]
+      }
+    },
+    {
+      "detail": {},
+      "kind": "assistant",
+      "run_id": "<id-8>",
+      "text": "Background work completed. {\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-4>\",\"attemptId\":\"<id-5>\",\"status\":\"completed\",\"answer\":\"child done: first task (earlier user messages: 0)\",\"error\":null}"
+    },
+    {
+      "detail": {},
+      "kind": "user",
+      "run_id": null,
+      "text": "golden:subagent-second"
+    },
+    {
+      "detail": {},
+      "kind": "assistant",
+      "run_id": "<id-22>",
+      "text": ""
+    },
+    {
+      "detail": {
+        "toolCallId": "second@<session>",
+        "toolName": "run_subagent"
+      },
+      "kind": "tool_call",
+      "run_id": "<id-22>",
+      "text": "run_subagent {\"agent\":\"helper\",\"task\":\"second task\"}"
+    },
+    {
+      "detail": {
+        "ok": true,
+        "toolCallId": "second@<session>",
+        "toolName": "run_subagent"
+      },
+      "kind": "tool_result",
+      "run_id": "<id-22>",
+      "text": {
+        "agent": "helper",
+        "attemptId": "<id-13>",
+        "status": "running",
+        "subagentId": "<id-3>",
+        "taskId": "<id-12>"
+      }
+    },
+    {
+      "detail": {},
+      "kind": "assistant",
+      "run_id": "<id-22>",
+      "text": "second started"
+    },
+    {
+      "detail": {},
+      "kind": "assistant",
+      "run_id": "<id-16>",
+      "text": ""
+    },
+    {
+      "detail": {
+        "toolCallId": "call-reports@<id-16>",
+        "toolName": "get_subagent_reports"
+      },
+      "kind": "tool_call",
+      "run_id": "<id-16>",
+      "text": "get_subagent_reports {\"attempts\":[{\"taskId\":\"<id-12>\",\"attemptId\":\"<id-13>\"}]}"
+    },
+    {
+      "detail": {
+        "ok": true,
+        "toolCallId": "call-reports@<id-16>",
+        "toolName": "get_subagent_reports"
+      },
+      "kind": "tool_result",
+      "run_id": "<id-16>",
+      "text": {
+        "reports": [
+          {
+            "agent": "helper",
+            "answer": "child done: second task (earlier user messages: 1)",
+            "attemptId": "<id-13>",
+            "error": null,
+            "status": "completed",
+            "subagentId": "<id-3>",
+            "taskId": "<id-12>"
+          }
+        ]
+      }
+    },
+    {
+      "detail": {},
+      "kind": "assistant",
+      "run_id": "<id-16>",
+      "text": "Background work completed. {\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-12>\",\"attemptId\":\"<id-13>\",\"status\":\"completed\",\"answer\":\"child done: second task (earlier user messages: 1)\",\"error\":null}"
+    }
+  ],
+  "notifications": [
+    {
+      "delivered_to_run_id": "<id-8>",
+      "kind": "completed",
+      "parent_run_id": "<id-20>",
+      "payload": {
+        "attemptId": "<id-5>"
+      },
+      "summary": "Subagent completed",
+      "task_id": "<id-4>"
+    },
+    {
+      "delivered_to_run_id": "<id-16>",
+      "kind": "completed",
+      "parent_run_id": "<id-22>",
+      "payload": {
+        "attemptId": "<id-13>"
+      },
+      "summary": "Subagent completed",
+      "task_id": "<id-12>"
+    }
+  ],
+  "queue": [],
+  "runs": [
+    {
+      "cancel_requested": null,
+      "error": null,
+      "error_code": null,
+      "run_id": "<id-20>",
+      "status": "completed",
+      "thread_id": "<session>",
+      "usage": null
+    },
+    {
+      "cancel_requested": null,
+      "error": null,
+      "error_code": null,
+      "run_id": "<id-21>",
+      "status": "completed",
+      "thread_id": "subagent-<id-3>",
+      "usage": null
+    },
+    {
+      "cancel_requested": null,
+      "error": null,
+      "error_code": null,
+      "run_id": "<id-8>",
+      "status": "completed",
+      "thread_id": "<session>",
+      "usage": null
+    },
+    {
+      "cancel_requested": null,
+      "error": null,
+      "error_code": null,
+      "run_id": "<id-22>",
+      "status": "completed",
+      "thread_id": "<session>",
+      "usage": null
+    },
+    {
+      "cancel_requested": null,
+      "error": null,
+      "error_code": null,
+      "run_id": "<id-23>",
+      "status": "completed",
+      "thread_id": "subagent-<id-3>",
+      "usage": null
+    },
+    {
+      "cancel_requested": null,
+      "error": null,
+      "error_code": null,
+      "run_id": "<id-16>",
+      "status": "completed",
+      "thread_id": "<session>",
+      "usage": null
+    }
+  ],
+  "subagents": [
+    {
+      "error": null,
+      "id": "<id-3>",
+      "instructions": null,
+      "last_answer": "child done: second task (earlier user messages: 1)",
+      "last_task": "second task",
+      "name": "helper",
+      "parent_run_id": "<id-22>",
+      "status": "completed"
+    }
+  ],
+  "tasks": [
+    {
+      "agent_id": "<id-3>",
+      "agent_name": "helper",
+      "id": "<id-4>",
+      "parent_run_id": "<id-20>",
+      "parent_task_id": null,
+      "parent_tool_call_id": "first@<session>",
+      "request": "first task",
+      "status": "completed",
+      "title": "first task"
+    },
+    {
+      "agent_id": "<id-3>",
+      "agent_name": "helper",
+      "id": "<id-12>",
+      "parent_run_id": "<id-22>",
+      "parent_task_id": null,
+      "parent_tool_call_id": "second@<session>",
+      "request": "second task",
+      "status": "completed",
+      "title": "second task"
+    }
+  ],
+  "threads": [
+    {
+      "messages": [
+        {
+          "content": "golden:subagent-first",
+          "createdAt": "<time>",
+          "id": "<id-1>",
+          "role": "user"
+        },
+        {
+          "content": null,
+          "createdAt": "<time>",
+          "finishReason": "tool_calls",
+          "id": "<id-2>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          },
+          "toolCalls": [
+            {
+              "function": {
+                "arguments": "{\"agent\":\"helper\",\"task\":\"first task\"}",
+                "name": "run_subagent"
+              },
+              "id": "first@<session>",
+              "type": "function"
+            }
+          ]
+        },
+        {
+          "content": "{\"status\":\"running\",\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-4>\",\"attemptId\":\"<id-5>\"}",
+          "role": "tool",
+          "toolCallId": "first@<session>"
+        },
+        {
+          "content": "first started",
+          "createdAt": "<time>",
+          "finishReason": "stop",
+          "id": "<id-6>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          }
+        },
+        {
+          "content": null,
+          "createdAt": "<time>",
+          "finishReason": "tool_calls",
+          "id": "<id-7>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          },
+          "toolCalls": [
+            {
+              "function": {
+                "arguments": "{\"attempts\":[{\"taskId\":\"<id-4>\",\"attemptId\":\"<id-5>\"}]}",
+                "name": "get_subagent_reports"
+              },
+              "id": "call-reports@<id-8>",
+              "type": "function"
+            }
+          ]
+        },
+        {
+          "content": "{\"reports\":[{\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-4>\",\"attemptId\":\"<id-5>\",\"status\":\"completed\",\"answer\":\"child done: first task (earlier user messages: 0)\",\"error\":null}]}",
+          "role": "tool",
+          "toolCallId": "call-reports@<id-8>"
+        },
+        {
+          "content": "Background work completed. {\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-4>\",\"attemptId\":\"<id-5>\",\"status\":\"completed\",\"answer\":\"child done: first task (earlier user messages: 0)\",\"error\":null}",
+          "createdAt": "<time>",
+          "finishReason": "stop",
+          "id": "<id-9>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          }
+        },
+        {
+          "content": "golden:subagent-second",
+          "createdAt": "<time>",
+          "id": "<id-10>",
+          "role": "user"
+        },
+        {
+          "content": null,
+          "createdAt": "<time>",
+          "finishReason": "tool_calls",
+          "id": "<id-11>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          },
+          "toolCalls": [
+            {
+              "function": {
+                "arguments": "{\"agent\":\"helper\",\"task\":\"second task\"}",
+                "name": "run_subagent"
+              },
+              "id": "second@<session>",
+              "type": "function"
+            }
+          ]
+        },
+        {
+          "content": "{\"status\":\"running\",\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-12>\",\"attemptId\":\"<id-13>\"}",
+          "role": "tool",
+          "toolCallId": "second@<session>"
+        },
+        {
+          "content": "second started",
+          "createdAt": "<time>",
+          "finishReason": "stop",
+          "id": "<id-14>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          }
+        },
+        {
+          "content": null,
+          "createdAt": "<time>",
+          "finishReason": "tool_calls",
+          "id": "<id-15>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          },
+          "toolCalls": [
+            {
+              "function": {
+                "arguments": "{\"attempts\":[{\"taskId\":\"<id-12>\",\"attemptId\":\"<id-13>\"}]}",
+                "name": "get_subagent_reports"
+              },
+              "id": "call-reports@<id-16>",
+              "type": "function"
+            }
+          ]
+        },
+        {
+          "content": "{\"reports\":[{\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-12>\",\"attemptId\":\"<id-13>\",\"status\":\"completed\",\"answer\":\"child done: second task (earlier user messages: 1)\",\"error\":null}]}",
+          "role": "tool",
+          "toolCallId": "call-reports@<id-16>"
+        },
+        {
+          "content": "Background work completed. {\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-12>\",\"attemptId\":\"<id-13>\",\"status\":\"completed\",\"answer\":\"child done: second task (earlier user messages: 1)\",\"error\":null}",
+          "createdAt": "<time>",
+          "finishReason": "stop",
+          "id": "<id-17>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          }
+        }
+      ],
+      "thread_id": "<session>"
+    },
+    {
+      "messages": [
+        {
+          "content": "first task",
+          "role": "user"
+        },
+        {
+          "content": "child done: first task (earlier user messages: 0)",
+          "createdAt": "<time>",
+          "finishReason": "stop",
+          "id": "<id-18>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          }
+        },
+        {
+          "content": "second task",
+          "role": "user"
+        },
+        {
+          "content": "child done: second task (earlier user messages: 1)",
+          "createdAt": "<time>",
+          "finishReason": "stop",
+          "id": "<id-19>",
+          "model": "scripted-1",
+          "role": "assistant",
+          "source": {
+            "api": "text",
+            "model": "scripted-1",
+            "provider": "scripted"
+          }
+        }
+      ],
+      "thread_id": "subagent-<id-3>"
+    }
+  ],
+  "usage": [],
+  "workflow": []
+}

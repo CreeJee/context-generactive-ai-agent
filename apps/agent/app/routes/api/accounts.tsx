@@ -9,7 +9,7 @@ import {
   type AccountLoginState,
   type OAuthProfile,
 } from "memory-agent";
-import { accountLogin, answerAccountFailures } from "~/.server/account-failures";
+import { answerAccountFailures } from "~/.server/account-failures";
 import { agent } from "~/.server/agent";
 import {
   CompatibleAccountCommand,
@@ -93,22 +93,15 @@ export function action({ request }: Route.ActionArgs) {
       const manager = yield* OAuthAccountLogins;
       const events = yield* AppEvents;
       if (intent === "add") {
-        const started = yield* accountLogin("start", () => manager.start(provider, label!));
+        const started = yield* manager.start(provider, label!);
         // The login finishes in another tab; pages hear it instead of polling.
         yield* Effect.forkDetach(
-          accountLogin("settle", () => manager.settled(provider)).pipe(
-            Effect.catch(logFailure("Account login did not settle")),
-            Effect.ensuring(Effect.sync(() => events.publishGlobal("auth"))),
-          ),
+          manager.settled(provider).pipe(Effect.ensuring(events.publishGlobal("auth"))),
         );
         return reply(SubscriptionView.subscription(started));
       }
       if (intent === "cancel")
-        return reply(
-          SubscriptionView.subscription(
-            yield* accountLogin("cancel", () => manager.cancel(provider)),
-          ),
-        );
+        return reply(SubscriptionView.subscription(yield* manager.cancel(provider)));
       switch (intent) {
         case "remove":
           yield* profiles.remove(provider, accountId!);

@@ -1,4 +1,4 @@
-import { Clock, Context, Effect, Layer, Option, Schema } from "effect";
+import { Array as EffectArray, Clock, Context, Effect, Layer, Option, Schema } from "effect";
 import { SqlClient, type SqlError } from "effect/sql";
 import { VerdictFailure } from "./failures.ts";
 
@@ -89,18 +89,18 @@ export interface GoalSchedule {
   readonly verifiedHead: string | null;
 }
 
-export class GoalScheduleRefused extends Schema.TaggedError<GoalScheduleRefused>()(
-  "GoalScheduleRefused",
-  {
-    reason: Schema.Literals([
-      "goal_missing",
-      "self_dependency",
-      "other_project",
-      "dependency_cycle",
-      "invalid_branch",
-    ]),
-  },
-) {}
+export class GoalScheduleRefused extends Schema.TaggedError<
+  GoalScheduleRefused,
+  { readonly brand: unique symbol }
+>()("GoalScheduleRefused", {
+  reason: Schema.Literals([
+    "goal_missing",
+    "self_dependency",
+    "other_project",
+    "dependency_cycle",
+    "invalid_branch",
+  ]),
+}) {}
 
 export const GoalScheduleStorageReason = Schema.TaggedUnion({
   /** The database or a stored row failed; `cause` has the SQL or decode error. */
@@ -110,13 +110,13 @@ export const GoalScheduleStorageReason = Schema.TaggedUnion({
 });
 export type GoalScheduleStorageReason = typeof GoalScheduleStorageReason.Type;
 
-export class GoalScheduleStorageFailed extends Schema.TaggedError<GoalScheduleStorageFailed>()(
-  "GoalScheduleStorageFailed",
-  {
-    reason: GoalScheduleStorageReason,
-    cause: Schema.Defect(),
-  },
-) {}
+export class GoalScheduleStorageFailed extends Schema.TaggedError<
+  GoalScheduleStorageFailed,
+  { readonly brand: unique symbol }
+>()("GoalScheduleStorageFailed", {
+  reason: GoalScheduleStorageReason,
+  cause: Schema.Defect(),
+}) {}
 
 const ScheduleRow = Schema.Struct({
   goal_instance_id: Schema.String,
@@ -145,15 +145,11 @@ const toSchedule = (row: typeof ScheduleRow.Type): GoalSchedule => ({
 /** Whether `from` reaches `to` along the dependency edges. */
 const reaches = (edges: ReadonlyMap<string, readonly string[]>, from: string, to: string) => {
   const seen = new Set<string>();
-  const stack = [from];
-  while (stack.length > 0) {
-    const next = stack.pop() ?? "";
-    if (next === to) return true;
-    if (seen.has(next)) continue;
+  const visit = (next: string): boolean => {
     seen.add(next);
-    stack.push(...(edges.get(next) ?? []));
-  }
-  return false;
+    return next === to || (edges.get(next) ?? []).some((other) => !seen.has(other) && visit(other));
+  };
+  return visit(from);
 };
 
 const make = Effect.gen(function* () {
@@ -200,12 +196,14 @@ const make = Effect.gen(function* () {
         JOIN kanban_goal_schedules s ON s.goal_instance_id = d.goal_instance_id
         WHERE s.project_id = ${projectId} ORDER BY d.created_at, d.depends_on`.pipe(
       rows(DependencyRow),
-      Effect.map((found): ReadonlyMap<string, readonly string[]> => {
-        const map = new Map<string, string[]>();
-        for (const row of found)
-          map.set(row.goal_instance_id, [...(map.get(row.goal_instance_id) ?? []), row.depends_on]);
-        return map;
-      }),
+      Effect.map(
+        (found): ReadonlyMap<string, readonly string[]> =>
+          new Map(
+            Object.entries(EffectArray.groupBy(found, (row) => row.goal_instance_id)).map(
+              ([goal, group]) => [goal, group.map((row) => row.depends_on)],
+            ),
+          ),
+      ),
       Effect.mapError(failed),
     );
   /** One update stamped with the current time. */
@@ -242,34 +240,47 @@ const make = Effect.gen(function* () {
       goalInstanceId: string,
       dependsOn: readonly string[],
     ) {
-      const goal = yield* get(goalInstanceId);
-      if (Option.isNone(goal)) return yield* GoalScheduleRefused.make({ reason: "goal_missing" });
+      const refused = (reason: GoalScheduleRefused["reason"]) =>
+        Effect.fail(GoalScheduleRefused.make({ reason }));
+      const existing = (id: string) =>
+        Effect.flatMap(
+          get(id),
+          Option.match({ onNone: () => refused("goal_missing"), onSome: Effect.succeed }),
+        );
+      const goal = yield* existing(goalInstanceId);
       const wanted = [...new Set(dependsOn)];
-      if (wanted.includes(goalInstanceId))
-        return yield* GoalScheduleRefused.make({ reason: "self_dependency" });
-      const project = new Set(
-        (yield* forProject(goal.value.projectId)).map((s) => s.goalInstanceId),
+      yield* Effect.when(
+        refused("self_dependency"),
+        Effect.succeed(wanted.includes(goalInstanceId)),
       );
-      for (const other of wanted) {
-        const found = yield* get(other);
-        if (Option.isNone(found))
-          return yield* GoalScheduleRefused.make({ reason: "goal_missing" });
-        if (!project.has(other))
-          return yield* GoalScheduleRefused.make({ reason: "other_project" });
-      }
-      const current = new Map(yield* edges(goal.value.projectId));
+      const project = new Set((yield* forProject(goal.projectId)).map((s) => s.goalInstanceId));
+      yield* Effect.forEach(
+        wanted,
+        (other) =>
+          Effect.andThen(
+            existing(other),
+            Effect.when(refused("other_project"), Effect.succeed(!project.has(other))),
+          ),
+        { discard: true },
+      );
+      const current = new Map(yield* edges(goal.projectId));
       current.set(goalInstanceId, wanted);
-      if (wanted.some((other) => reaches(current, other, goalInstanceId)))
-        return yield* GoalScheduleRefused.make({ reason: "dependency_cycle" });
+      yield* Effect.when(
+        refused("dependency_cycle"),
+        Effect.succeed(wanted.some((other) => reaches(current, other, goalInstanceId))),
+      );
       const at = yield* now;
       yield* sql
         .withTransaction(
-          Effect.gen(function* () {
-            yield* sql`DELETE FROM kanban_goal_dependencies WHERE goal_instance_id = ${goalInstanceId}`;
-            for (const other of wanted)
-              yield* sql`INSERT INTO kanban_goal_dependencies (goal_instance_id, depends_on, created_at)
-                VALUES (${goalInstanceId}, ${other}, ${at})`;
-          }),
+          Effect.andThen(
+            sql`DELETE FROM kanban_goal_dependencies WHERE goal_instance_id = ${goalInstanceId}`,
+            Effect.forEach(
+              wanted,
+              (other) => sql`INSERT INTO kanban_goal_dependencies
+                (goal_instance_id, depends_on, created_at) VALUES (${goalInstanceId}, ${other}, ${at})`,
+              { discard: true },
+            ),
+          ),
         )
         .pipe(Effect.mapError(failed));
       return wanted;

@@ -31,6 +31,7 @@ release. Add a tool name to select part of the graph. For example, run
 - apps의 agent는 메인 에이전트 앱으로, 최종 로딩과 채팅 라우터 API를 담당한다.
 - packages의 memory-agent는 에이전트 로직을 담당하고, turbovec은 이전 POC의 네이티브 모듈이다.
 - tools에는 개발 도구를 둔다.
+- lint에는 이 저장소의 커스텀 린트 규칙(anti-slop Oxlint 플러그인)을 둔다. 가져온 코드라 lint·fmt 대상에서 빠진다.
 - 래포지토리에서는 typescript 를 무조건 사용해야한다.
 
 ## common Rules

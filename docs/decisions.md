@@ -704,6 +704,7 @@
 
 - Goal 네이티브 artifact 생성에 사용하는 Vite는 checkout의 설치된 패키지에서 필요할 때 로드한다. 서버·SEA 번들에 Vite와 선택적 devtools·tsx·esbuild 의존성을 포함하지 않는다. 네이티브 entry도 번들 위치가 아닌 memory-agent 패키지의 원본 경로로 해석한다. 독립 실행 파일의 네이티브 artifact 생성 지원은 별도 검증 범위다.
 - full-loop worker·codec·RPC client 원본은 TypeScript로 관리한다. Node 26의 타입 제거로 실행할 수 있는 문법만 사용하고, Goal 스냅샷과 런타임 패키징은 세 파일 및 형제 import를 그대로 보존한다. codec의 태그·재귀 값과 RPC 요청·응답·대기열을 타입으로 표현한다. SDK의 동적 hook·값 복원 경계는 기존 동작을 유지한다.
+- (2026-10-27 대체) native Goal 구현과 full-loop worker·codec·RPC client를 지웠다. 아래 "Goal run은 스위치와 관계없이 새 loop로 돌고, Goal worker를 지운다 (2026-10-27)".
 
 ### 개발 요청의 백엔드 빌드 고정 (2026-10-03)
 
@@ -729,14 +730,16 @@
 - Dev accepts CLI backend/web ports, storage and manifest paths, with CLI values taking precedence over environment defaults. Readiness requires the matching build ID and `status: ready`; frontend HMR remains enabled and backend changes require an explicit rebuild/restart. Isolated verification uses temporary storage and alternate ports, leaving existing servers and user sessions alone.
 - Goal source generation identifies both the Goal and worker build bytes. The separate worker hash verifies bytes; identical worker builds in different Goals must not collide with the database's globally unique generation constraint. Previously saved content-hash pins remain verifiable and are not rewritten.
 - New-Goal intent admission excludes only the calling run's pending RPC; uncertain effects remain refused. Applying the intent after termination rechecks all owner receipts without that exclusion.
-- Criterion mappings from a running recorder are proposals, not completion snapshots. Only after successful SDK and durable Goal settlement does the owner revalidate versions, node ownership/success, dispatch identity and all operation receipts to publish completion evidence. Failed or uncertain runs cannot complete the Goal.
+- Criterion mappings from a running recorder are proposals, not completion snapshots. Only after successful SDK and durable Goal settlement does the owner revalidate versions, node ownership/success, dispatch identity and all operation receipts to publish completion evidence. Failed or uncertain runs cannot complete the Goal. (2026-10-27: dispatch identity is no longer required; see "Goal run은 스위치와 관계없이 새 loop로 돌고, Goal worker를 지운다 (2026-10-27)".)
 - Worker approval continuation requires owner persistence. The SDK validates the stored complete interrupt batch and original response schemas; only its owner-validated approval Map authorizes pending calls. A resolved pause is distinct from a crash and does not replay completed tools or fabricate success for the interrupted run.
 - A definite read-tool error crosses the RPC as a tagged failed result and retains `ok: false`; it does not become an uncertain side effect. Write/provider failures still use the conservative uncertainty gate.
+- (2026-10-27 대체) Goal worker를 지워 worker 세대 식별, worker 승인 재개, RPC의 읽기 실패 전달은 없어졌다. 읽기 실패를 `succeeded`로 적는 규칙은 새 loop의 도구 장부가 이어받고, 바꾸기 전에 거절한 쓰기도 `succeeded`로 적는다. "Goal run은 스위치와 관계없이 새 loop로 돌고, Goal worker를 지운다 (2026-10-27)".
 - Native SQLite read sessions close explicitly before worker teardown. The owner awaits a close acknowledgement before termination, with a bounded fallback for a failed worker. This makes SQLite and N-API resource lifetime explicit across runtime reopen. Scope-owned test runtimes close before temporary storage is removed. Parallel and serial stress runs still produced a SQLite WAL/SHM SIGBUS on macOS; this lifetime change alone is not evidence that the crash is resolved. The same-process Node SQLite/bundled rusqlite boundary requires further review; do not bypass locking or WAL visibility to force a green test.
 - Existing Effect diagnostic severity remains unchanged. Approved unstable API use is inventoried separately from ordinary TypeScript errors; it is not reported as a passing configured type check.
 
 ### Effect execution admission and safe observability (2026-10-10)
 
+- (2026-10-27 대체) `worker` gate와 `CONTEXT_AGENT_WORKER_*` 설정은 Goal worker와 함께 지웠다. 남은 gate는 workflow, model, tool이다. "Goal run은 스위치와 관계없이 새 loop로 돌고, Goal worker를 지운다 (2026-10-27)".
 - One process-scoped `ExecutionAdmission` service owns separate workflow, worker, model and tool gates. Each gate uses an active `Semaphore` plus a total-admitted `Semaphore`, so active work and queued waiters are both bounded. Configuration is validated from `CONTEXT_AGENT_{WORKFLOW,WORKER,MODEL,TOOL}_{CONCURRENCY,QUEUE_CAPACITY}`; invalid values fail Layer construction.
 - (2026-10-14 대체) 대기열까지 꽉 차도 바로 실패하지 않는다. 호출자는 지터를 둔 지수 백오프(50ms에서 시작해 최대 2초 간격)로 다시 시도한다. 이미 실행 중인 일(worker, 모델 호출, 도구, 실행 중 provider 재시도 대기)은 살아 있는 동안 계속 기다리고, 취소되면 기다림도 끝난다. 사용자의 요청이 기다리는 새 Goal 실행 admission만 30초 뒤에 `ExecutionSaturated`로 실패해 HTTP 503 `goal_workflow_saturated`가 된다. 로컬 동시성 한도 때문에 이미 시작한 실행이 중간에 실패하면 안 되기 때문이다.
 - A full queue fails immediately with typed `ExecutionSaturated`. Workflow admission maps this to HTTP 503 before issuing a worker capability; full-loop workers hold a worker permit for their Scope, model `next()` calls hold model permits, and owner tool implementations hold tool permits. Interruption and Scope finalization release both permits exactly once.
@@ -750,6 +753,7 @@
 - The native artifact keeps the explicitly shared Effect/TanStack runtime imports and is evaluated from a scoped staging directory adjacent to the checkout/package runtime so those imports resolve to the owner's module identities. Its immutable bytes are copied once into owner storage under the artifact hash before an atomic Goal registration. Existing Goals load only their registered durable bytes, so a new application build cannot silently replace historical execution code.
 - The full-loop worker is bundled except for `node:` imports. A new Goal copies the verified build artifact into its durable Goal pin and records a Goal-specific manifest. `sourceGeneration` hashes the Goal ID and worker hash; the worker SHA-256 separately verifies file integrity. Cold adoption validates saved bytes and manifest without reading current build inputs, including earlier content-hash generation pins. Worker leases still prevent registry disposal while an OS worker is active.
 - Missing, malformed, corrupt, or mismatched manifests/artifacts are explicit startup or admission failures. There is no source-tree/SDK-tree capture, `.ts` worker fallback, runtime compiler, or legacy artifact fallback on these paths.
+- (2026-10-27 대체) Goal worker와 native Goal 구현을 지워 `memory-agent#build`는 `vp pack`만 한다. `native.mjs`, `full-loop-worker.mjs`, manifest를 만들지 않고, packaging은 manifest를 검사하거나 복사하지 않으며 runtime `node_modules`에 `@tanstack/ai`를 넣지 않는다. 시작은 manifest를 읽지 않는다. Goal 저장소에 남은 artifact와 pin은 지우지 않는다. "Goal run은 스위치와 관계없이 새 loop로 돌고, Goal worker를 지운다 (2026-10-27)".
 
 ### Durable approval, timer, and queue boundary (2026-10-10)
 
@@ -769,6 +773,7 @@
 - 이 결정은 `DurableQueue` 보류(2026-10-10)를 바꾸지 않는다.
 - 구현(2026-10-13): 재시도는 Goal 실행(full-loop worker)의 provider 호출에만 적용한다. 일반 채팅은 이어서 달성할 목적이 없으므로 제외한다. 실패를 바로 표시하고 사용자가 다시 보낸다.
 - 구현: 재시도 범위는 owner의 모델 스트림 pull이다. `RequestNotSent`이고 어댑터의 `RUN_STARTED` 외 chunk가 worker에 하나도 가지 않았을 때만 같은 요청을 새 스트림으로 다시 보내고, 새 스트림의 `RUN_STARTED`는 건너뛴다. 그 외 실패, 소진, 취소는 원래 provider 실패로 끝난다. 각 pull은 model 게이트를 거치고, 대기하는 동안에는 model permit을 잡지 않는다. 대기 workflow는 Goal 실행처럼 workflow 게이트를 거쳐 admission한다.
+- (2026-10-27 대체) 재시도 범위는 owner의 모델 스트림 pull이 아니라 새 loop에서 Goal run의 모델이다(`model/unsent-retry.ts`). part가 하나도 오지 않은 `RequestNotSent`만 다시 보내고, 대기·소진·취소 규칙은 그대로다. "Goal run은 스위치와 관계없이 새 loop로 돌고, Goal worker를 지운다 (2026-10-27)".
 - 구현: Goal run 하나가 attempt 하나다. 상위 Goal run은 `agent_run_attempts`를 만들지 않으므로 키는 bound run ID와 그 run의 대기 순번이다. 순번은 프로세스 카운터가 아니라 그 run에 저장된 대기 workflow 수에서 정한다. 백오프와 한도는 한 provider 요청의 연속 재시도 횟수와 첫 실패 시각으로 센다. `retryAt`은 admission 전에 owner가 한 번 계산해 workflow payload(SQLite)에 저장한다. workflow 본문은 저장된 값으로 `DurableClock`만 다시 건다.
 - 구현: 소진되면 `external_dependency` blocker를 기록한다. run이 실패로 끝나도 blocker가 남는다. 취소·일시 중지·중단·phase 변경은 대기 workflow를 interrupt하고 timer를 지운다. 대기 중인 시각은 workflow 패널에 표시한다.
 - 소진 한도(2026-10-13 확정): 한 provider 요청의 첫 실패부터 다음 재시도 시각까지 24시간. 횟수 한도는 두지 않는다. 대기 상한이 30분이라 횟수 한도는 경과 시간 한도보다 먼저 끝나 긴 장애를 버티지 못한다. 재시도는 같은 요청을 다시 보낼 뿐 새 작업이나 단계를 만들지 않으므로 순환·무한 작업 감지는 이 경계에 두지 않는다. Plan 의존 순환은 `PlanDependenciesRejected`가 막는다.
@@ -789,6 +794,8 @@
 
 ### Goal full-loop transport: Effect Worker/RPC protocol boundary (2026-10-10)
 
+- (2026-10-27 대체) Goal worker와 이 전송을 지웠다. "Goal run은 스위치와 관계없이 새 loop로 돌고, Goal worker를 지운다 (2026-10-27)".
+
 - The production full-loop uses `@effect/platform-node` `NodeWorker`, `effect/workers` `Worker`/`SerializedWorker`, and `effect/rpc` `Rpc`/`RpcGroup`/`RpcMiddleware`. The old handwritten worker frame parser, pending-Promise resolver, and chunk-ack listener are no longer on this production path.
 - `RunFullLoop` is a schema-decoded streaming RPC. Its capability middleware compares the complete session/run/Goal/revision/generation/token tuple before the SDK loop runs. Transferable `MessagePort` schema carries a dedicated reverse owner-RPC channel; the reverse server still executes the existing owner ledger/admission checks, so RPC transport does not become a second authority or source of truth.
 - The MessagePort protocol adapter is project-owned and scoped: bounded inbound queue, typed close/message/overflow failures, structured-clone codec, transfer-list support, native RPC acknowledgements, and listener/port cleanup. `streamBufferSize: 0` keeps producer progress tied to consumer acknowledgement rather than adding an unbounded application buffer.
@@ -796,6 +803,8 @@
 - Goal worker pins copy the build-produced self-contained `.mjs`; its SHA-256 verifies bytes and a Goal/build hash identifies the source generation. They no longer capture protocol source files or SDK dependency trees on first request.
 
 ### Owner RPC fingerprint의 bounded evidence와 해시 비교 (2026-10-11)
+
+- (2026-10-27 대체) owner RPC를 지워 fingerprint를 비교하는 곳(권한·high-water·cached reply·uncertain fence)이 없다. 새 도구 장부는 같은 형식으로 도구 호출만 적는다. 큰 middleware의 index/hook 보관은 새 행에 없고, 구형 fingerprint의 offline 변환은 남는다. "Goal run은 스위치와 관계없이 새 loop로 돌고, Goal worker를 지운다 (2026-10-27)".
 
 - 반복 context snapshot을 fingerprint에 저장하지 않고, 기존 canonical request 전체의 SHA-256과 명시적 버전 envelope로 비교한다. 진단·읽기 복구 입력은 16,384자까지, 큰 middleware는 index/hook만 보관한다. 권한·high-water·cached reply·uncertain fence는 유지한다.
 - 구형 fingerprint도 동일 digest로 비교하며 명시적 offline 변환만 지원한다. 불변 읽기 복구 receipt에 연결된 원래 fingerprint를 변경하지 않는다. 실제 변환과 공간 회수는 검증된 복구 백업과 전후 비-fingerprint 데이터 일치 확인을 전제로 한다.
@@ -1557,7 +1566,7 @@
   - Git 작업 트리에서는 `git grep --untracked -F`로 후보 파일만 연다(목록 조회와 동시에 시작, 같은 스냅숏, 검색어의 다음 페이지는 결과 재사용). 대소문자 무시 + 비ASCII 검색어는 Git과 JS의 대소문자 규칙이 달라 전체 검색으로 간다.
   - Git 목록의 파일 확인(lstat)을 64개씩 동시에 한다. Git 없이 걸은 목록은 이미 일반 파일만 모았으므로 다시 확인하지 않는다.
   - read_file은 크기, ctime, mtime(ns), inode가 같으면 앞서 읽은 줄과 sha256을 재사용한다(최근 8개 파일). 쓰기, 편집, 삭제의 sha256 확인은 항상 새로 읽는다.
-  - 한 모델 단계에서 읽기 전용 도구(기억, 파일, 밖 파일 읽기/검색, skill, Kagi)를 여러 개 부르면 첫 호출에서 모두 시작하고 결과는 호출 순서로 돌려준다(`parallelReads`). 그 단계에서 읽기 전용이 아닌 호출이 나오면 그 뒤의 읽기는 앞 호출이 끝난 뒤에 실행한다. 서브에이전트에도 같다.
+  - 한 모델 단계에서 읽기 전용 도구(기억, 파일, 밖 파일 읽기/검색, skill, Kagi)를 여러 개 부르면 첫 호출에서 모두 시작하고 결과는 호출 순서로 돌려준다(`parallelReads`). 그 단계에서 읽기 전용이 아닌 호출이 나오면 그 뒤의 읽기는 앞 호출이 끝난 뒤에 실행한다. 서브에이전트에도 같다. (순서 규칙은 "도구 호출 사이에 순서를 두지 않는다 (2026-10-27)"로 대체)
 - 검색 결과 계약 변경: 이진 또는 비UTF-8 파일은 그 파일 바이트에 검색어가 들어 있어 일치했을 수도 있을 때만 `skipped`로 알린다. 검색어가 없는 파일은 일치할 수 없으므로 알리지 않는다. 너무 크거나 읽지 못한 파일은 그대로 알린다.
 - 셸은 이미 헬퍼 프로세스 없이 직접 실행해 10 ms라 바꾸지 않았다. 셸 중간 출력, 실행 handle(fx 방식)은 이번에 하지 않았다.
 
@@ -1709,11 +1718,15 @@
 
 ### 검증된 background 읽기 실패의 명시적 복구 (2026-10-11)
 
+- (2026-10-27 대체) operator API를 지웠다. 새 receipt는 만들지 않는다. 0.0.17이 만든 receipt는 입장 검사가 계속 인정한다(`workflow/read-recoveries.ts`). "Goal run은 스위치와 관계없이 새 loop로 돌고, Goal worker를 지운다 (2026-10-27)".
+
 - 현재 Goal의 terminal 실패 run에서 마지막 `get_background_result` 하나만 uncertain인 경우, 직전 승인·binding·durable Failure와 다른 미완료 작업의 부재를 검증한 operator API가 별도 불변 receipt를 남긴다. schema 49는 원본 failed/uncertain/Failure를 보존하며 성공·완료 근거를 위조하지 않는다.
 - 새 run의 입장 검사와 owner effect fence는 receipt를 원본과 대조하여 해당 과거 run만 제외한다. 원래 run ID 재입장과 그 run의 새 read/write RPC 예약은 계속 거부한다. 다른 pending/uncertain, stale preview, 변경된 원본과 새로운 Goal의 별도 보호는 유지한다.
 - API는 fresh assessment digest·no-replay 확인·운영자가 복원 검증한 일관된 백업 식별자·세션 lease/cross-site 검사를 요구한다. 백업 확인은 operator assertion이며 API의 파일 검증이 아니다. 모델 도구로 제공하거나 메시지/agent 실행을 자동 요청하지 않는다. 실제 적용은 충분한 백업 공간과 복원 검증, 공유 서버 재시작/receipt 적용 승인을 확보한 뒤 진행한다.
 
 ### 최소 읽기 복구와 DB 단일 기준 (2026-10-11)
+
+- (2026-10-27 대체) 읽기 복구 부분은 위 항목처럼 operator API와 함께 없어졌다. DB 단일 기준 부분은 그대로다.
 
 - 한 건의 append-only 읽기 복구에는 원본 관련 레코드의 일관된 snapshot을 격리 DB에서 복원 검증하고 불변 revoke event로 차단을 되돌릴 수 있으면 `operator_verified_original_records`를 허용한다. 전체 DB backup만을 요구하는 앞선 판단을 수정한다. 실제 backup 검증은 operator 책임이며 전체 DB 복원 가능성을 보장하지 않는다.
 - 이미 실제 저장소에 적용된 schema 49를 유지하며 추가 version을 만들지 않는다. 실패 run·uncertain RPC·durable Failure는 수정하지 않고 새 run만 허용한다. 같은 binding 검사 함수의 preview로 admission을 확인하며 메시지·모델 호출·재생은 하지 않는다.
@@ -2629,7 +2642,7 @@
 - 영속화: 1.0 conformance는 activity store를 요구한다. 이 앱은 AG-UI activity를 내지 않으므로 store를 두지 않고 conformance에서 뺀다. 0.61이 저장한 interrupt에는 이미 binding이 있어서 1.0에서도 이어진다.
 - 사용량: 1.0에서 TanStack Anthropic 어댑터의 `promptTokens`는 캐시 읽기·쓰기를 포함한다. 이 앱의 Anthropic 대화는 TanStack 어댑터가 아니라 구독 어댑터(`oauth/protocol.ts`)로 간다. 그래서 사용량 장부의 `separate` 의미는 바뀌지 않는다.
 - 거절한 승인: 1.0은 모델에 `{ error: "User declined tool execution" }`을 준다(0.61은 `approved: false`). 기록은 그대로 실패 결과로 남는다.
-- Goal worker 경계(owner↔worker)는 1.0 프로토콜에 맞춘다. TanStack의 Durable Runs·Takeover는 sandbox 실행을 다른 호스트가 이어받는 기능이다. 그래서 owner 부작용을 한 번만 실행하는 이 경계를 대신하지 않는다.
+- Goal worker 경계(owner↔worker)는 1.0 프로토콜에 맞춘다(2026-10-27 대체: Goal worker를 지웠다. "Goal run은 스위치와 관계없이 새 loop로 돌고, Goal worker를 지운다 (2026-10-27)"). TanStack의 Durable Runs·Takeover는 sandbox 실행을 다른 호스트가 이어받는 기능이다. 그래서 owner 부작용을 한 번만 실행하는 이 경계를 대신하지 않는다.
   - 1.0 SDK는 tool call마다 스트림 출처를 담은 `metadata`를 붙인다. owner의 관찰 기록에는 이것이 없다. owner는 worker가 보낸 tool call을 id·type·이름·인자로만 대조한다. hook에는 여전히 owner 자신의 기록을 넘긴다.
   - 1.0 persistence는 `onConfig`에서 재개 상태를 함수(`Symbol.for("tanstack.ai.durableResume")`)로 돌려준다. `chat()`은 onConfig 체인 뒤에 그 함수를 부른다. 함수는 worker로 갈 수 없어서, owner가 자기 도구로 부르고 그 결과를 `resumeToolState`로 보낸다. 이 처리가 없으면 승인 뒤 재개한 Goal run이 승인을 잃는다. 이 심볼은 `@tanstack/ai`와 `@tanstack/ai-persistence` 사이의 내부 약속이다. 그래서 1.x 업그레이드 때 승인 재개 테스트로 확인한다.
 - MCP: `@tanstack/ai-mcp` 1.0은 프로토콜 협상을 `auto`로 고정한다. 그래서 stdio 서버에 연결할 때마다 SDK가 짧게 사는 복제 프로세스로 `server/discover`를 먼저 묻는다. 서버 프로세스는 연결 한 번에 두 번 시작된다. 2025 프로토콜 서버는 도구 목록 한 번에 `tools/list`를 두 번 받는다(SDK 캐시 채우기). TanStack이 고른 기본값이므로 따른다. 시작이 무거운 서버가 문제가 되면 `prior`로 협상을 건너뛸 수 있다.
@@ -2715,9 +2728,253 @@
   - 끊긴 run은 지금처럼 재생하지 않는다. 자동 이어가기 조건(`endedWithKnownEffectsSql`, 2026-10-13)도 그대로다.
 - 동시 실행
   - 읽기 도구끼리는 admission의 tool gate 말고는 서로 기다리지 않는다.
-  - 쓰기 호출과 앞뒤 호출의 순서는 Goal과 일반 채팅이 같은 규칙을 쓴다. 규칙은 아직 정하지 않았다([effect-ai-migration.md](effect-ai-migration.md) "열린 항목").
+  - 쓰기 호출과 앞뒤 호출의 순서는 Goal과 일반 채팅이 같은 규칙을 쓴다. 규칙은 아직 정하지 않았다([effect-ai-migration.md](effect-ai-migration.md) "열린 항목"). (2026-10-27 정함: 아래 "도구 호출 사이에 순서를 두지 않는다 (2026-10-27)")
   - 지금 상태: TanStack 1.0으로 올린 뒤(2026-10-24) 한 step의 호출은 순서 없이 동시에 돈다. `chat()`에 `toolExecution`을 넘기지 않아 기본값 `'parallel'`이다. 그래서 "도구 성능 (2026-09-15)"의 "쓰기 뒤의 읽기는 그 쓰기가 끝난 뒤에" 규칙은 지켜지지 않는다.
   - owner가 읽기를 미리 실행하던 `parallelReads`는 지운다. TanStack이 도구를 순서대로 실행하던 때의 우회다. 순서 규칙은 loop의 도구 실행이 맡는다.
 - read recovery(2026-10-11)의 새 receipt는 만들지 않는다. 로컬 DB에서 쓰인 적이 없다. 0.0.17 릴리즈에 들어 있으므로 이미 있는 receipt는 계속 인정한다.
-- 옛 Goal 세션도 새 코드에서 이어서 run을 시작한다. worker 세대·native artifact·dispatch와 옛 장부 행은 지우지 않고 읽기만 한다. 완료 근거는 worker 세대가 있는 Goal의 새 run도 받는다. 지금은 dispatch 세대가 없는 run을 거절한다.
-- 실행 계획은 [effect-ai-migration.md](effect-ai-migration.md)의 "5. Goal 실행"이다. 구현 시점은 정하지 않았다. 구현 커밋에서 Goal worker를 전제로 한 결정들에 대체 표시를 단다. 대상 목록은 같은 문서에 있다.
+- 옛 Goal 세션도 새 코드에서 이어서 run을 시작한다. worker 세대·native artifact·dispatch와 옛 장부 행은 지우지 않고 읽기만 한다. 완료 근거는 worker 세대가 있는 Goal의 새 run도 받는다. 지금은 dispatch 세대가 없는 run을 거절한다. (2026-10-27 바꿨다: 아래 "Goal run은 스위치와 관계없이 새 loop로 돌고, Goal worker를 지운다 (2026-10-27)")
+- 실행 계획은 [effect-ai-migration.md](effect-ai-migration.md)의 "5. Goal 실행"이다. 전환 안에서 한다(아래 "TanStack AI를 Effect AI로 전환한다 (2026-10-26)"). 구현 커밋에서 Goal worker를 전제로 한 결정들에 대체 표시를 단다. 대상 목록은 같은 문서에 있다. (2026-10-27 달았다.)
+
+## TanStack AI를 Effect AI로 전환한다 (2026-10-26)
+
+- 사용자 결정: TanStack AI 패키지 9개와 pnpm patch 2개를 모두 빼고, 모델 호출·도구·agent loop·채팅 전송을 Effect AI(`effect/ai`)와 직접 만든 코드로 옮긴다. 2026-10-26에 시작한다. 계획은 [effect-ai-migration.md](effect-ai-migration.md)다.
+- 점진적 전환은 하지 않는다. TanStack과 Effect를 잇는 bridge를 두지 않고, 새 모듈을 모두 만든 뒤 한 릴리즈에서 한 번에 바꾼다. 새 모듈은 계획의 7단계 전까지 앱에 연결하지 않는다. (2026-10-27 Goal만 예외: 아래 "Goal run은 스위치와 관계없이 새 loop로 돌고, Goal worker를 지운다 (2026-10-27)")
+- provider 패키지는 `@effect/ai-openai-compat` 하나만 쓴다. 구독 Anthropic·ChatGPT, external ACP, scripted provider는 `LanguageModel.make`로 직접 만든다. `@effect/ai-anthropic`은 구독 요청의 `display: "summarized"`와 `block_binding`을 표현하지 못한다.
+- DB의 테이블·열은 바꾸지 않는다. JSON 열 안의 TanStack 메타데이터는 migration 하나로 지우고, 쓰는 값만 우리 필드로 옮긴다. 조건은 기존 채팅이 지금처럼 열리고 이어서 대화할 수 있는 것이다.
+- API payload는 새 client에 맞춰 바꾼다. chunk는 AG-UI 1.0 표준 모양으로만 쓴다. client는 `useChat` 대신 `@effect/atom-react`로 만든 hook을 쓴다.
+- 도구는 Effect의 자동 해석 대신 앱이 stream을 읽으며 실행한다(계획의 "도구 실행 방식"). 자동 해석은 등록되지 않은 이름 하나로 호출 전체가 실패하고, 승인 판정이 boolean뿐이며, 응답이 끊기면 실행 중인 핸들러를 끊는다.
+- TanStack을 전제로 한 결정들은 해당 단계를 구현할 때 대체 표시를 단다. 대상 목록은 계획에 있다.
+
+## 채팅 저장 행에서 TanStack 메타데이터를 지운다 (2026-10-26)
+
+- 위 "TanStack AI를 Effect AI로 전환한다 (2026-10-26)"의 migration이 행을 어떻게 바꾸는지다. 새 모양의 Schema는 `packages/memory-agent/src/chat-store/schema.ts`, migration은 `tanstack-migration.ts`다. migration은 전환 커밋(계획의 7단계)에서 등록한다. 지금 코드는 `metadata.tanstack.model`을 읽기 때문이다.
+- 메시지는 `metadata.tanstack`의 `model`, `source`, `finishReason`, `stopReason`을 메시지 필드로 옮긴다. `createdAt`은 메시지에 없을 때만 옮긴다.
+  - 넷 다 지금 요청을 만들 때 읽는 값이다. handoff는 이전 model을 찾고, replay는 다른 source의 메시지를 text로 보내며 실패·취소된 turn을 뺀다. 변환 규칙은 그대로 둔다. 이어서 대화할 때 provider 요청이 지금과 같아야 하기 때문이다.
+  - 나머지(`responseId`, `run`, `index`, `toolCallMetadata`, `runId`, `threadId`)와 tool call의 metadata는 읽는 곳이 없어서 지운다. 비게 된 `metadata`도 지운다.
+- `chat_runs.usage`는 AG-UI 1.0 `TokenUsage` 하나(평평한 `inputTokens`, `outputTokens`, `totalTokens`, `cachedInputTokens`, `cacheWriteInputTokens`, `reasoningTokens`)로 저장한다. stream의 `RUN_FINISHED`가 싣는 모양이다. 캐시 값과 reasoning은 합계의 일부이고, 더하는 값이 아니다.
+  - 456191fe("구독 어댑터가 `chat()`의 promptCache를 따른다 (2026-10-25)") 전의 Anthropic 구독 run은 입력에 캐시가 빠져 있다. migration이 캐시 읽기·쓰기를 더한다.
+  - 가르는 기준은 시각이 아니라 `promptTokensDetails.cacheWriteTokens` 키다. 그 커밋부터 Anthropic run은 이 키를 늘 채운다. 0.0.17까지의 릴리즈에는 이 커밋이 없으므로, 릴리즈 사용자의 행은 커밋 시각 뒤에도 옛 뜻이다.
+- interrupt payload는 TanStack의 재개 binding(`tanstack:interruptBinding`)을 지운다. 재개 검증에 쓰던 도구 이름, tool call id, 인자는 payload의 앱 필드에 있다.
+  - permission review의 요청은 TanStack이 `tanstack:interruptPayload`에 두고 있었다. `metadata.payload`로 옮긴다. 이 값에는 `askedBy`가 있다. 0단계 golden은 TanStack 키를 통째로 빼고 비교해서 이 값까지 빠지고 있었다.
+- history group은 다시 만들지 않는다. 메시지마다 같은 변환으로 고치고, thread마다 migration 전의 `ready`로 되돌린다. group은 thread의 메시지를 나눠 담은 것이라 둘이 계속 맞는다.
+- model handoff의 anchor는 메시지 전체의 해시라 migration이 바꾼다. migration 전 메시지에서 경계를 찾고, migration 뒤의 같은 메시지로 anchor를 다시 계산한다. legacy anchor는 실행 중 upgrade와 같은 규칙으로 v2가 된다. 이미 맞지 않던 anchor는 그대로 둔다. 다른 `chat_metadata` namespace는 메시지 순번과 글자를 저장하므로 바꾸지 않는다.
+- Goal의 옛 chunk(`workflow_run_events`)는 바꾸지 않는다. 계획의 "DB 저장 형식과 migration"대로다.
+- 확인: golden 시나리오마다 DB에서 migration을 돌린 행이 변환 결과와 같고 handoff가 replay된다. 로컬 DB 사본은 `tools/chat-store-check`로 확인했다. 모든 행이 새 Schema로 decode되고, 정의 밖 key도 없다. 메시지 내용과 anchor도 원본과 같다. 결과는 계획의 1단계 "결과"에 있다.
+- 등록(2026-10-27): 시작 migration의 마지막 단계(`tanStackRowsMigration`, `packages/memory-agent/src/db/migrations.ts`)에서 돈다. 행이 JSON이라 SQL만으로는 바꿀 수 없다. 그래서 이 단계의 SQL은 주석뿐이고, 시작 코드(`db/database.ts`)가 같은 transaction 안에서 `migrateTanStackRows`를 부른다. SQL 단계만 실행하는 fixture에는 옮길 TanStack 행이 없다.
+  - `btw_threads.messages`도 같은 변환으로 옮긴다. BTW도 `RunStore`로 저장한다.
+  - 변환해도 값이 같은 행은 쓰지 않는다. 저장된 글자가 아니라 읽은 값끼리 비교하므로, 들여쓰기만 다른 행도 그대로 둔다.
+  - handoff 상태와 fingerprint는 `agent/handoff-state.ts`로 옮겼다. 시작 migration과 native search worker가 loop 전체를 읽지 않게 하기 위해서다. model handoff는 이제 메시지의 `model` 필드만 읽는다.
+  - `aa056aa2`부터 이 등록 전까지는 새 loop가 thread를 저장할 때 옛 메시지의 `metadata.tanstack`을 버렸다. `StoredMessage` decode가 모르는 key를 빼기 때문이다. 로컬 DB에는 그 사이에 저장한 thread가 없었다. 릴리즈에는 해당하지 않는다.
+  - 로컬 DB 사본에서 migration은 14초 걸렸다. 다시 돌리면 바뀌는 행이 없다.
+
+## Effect AI 모델은 TanStack adapter와 같은 요청을 보낸다 (2026-10-26)
+
+- 위 "TanStack AI를 Effect AI로 전환한다 (2026-10-26)"의 provider 단계다. 구독, OpenAI 호환, external ACP, scripted 모델을 `LanguageModel.make`로 만들었다. 파일과 검사 결과는 계획의 2단계 "결과"에 있다.
+- 기준은 이어서 대화할 때 provider가 받는 요청이 TanStack 때와 같은 것이다. prompt cache와 reasoning 서명이 그대로 이어져야 하기 때문이다. golden과 로컬 DB 사본의 모든 thread에서 같다.
+- 모델은 저장된 대화를 `Prompt`로 받고, history replay는 각 provider가 자기 규칙으로 적용한다. 같은 대화도 보내는 모델에 따라 다르게 다듬기 때문이다. 구독 provider는 다른 모델의 turn도 자기 것으로 읽고, OpenAI 호환 provider는 다른 모델의 turn을 text로 바꾸고 tool call id를 다시 붙인다.
+- OpenAI encrypted reasoning은 바로 앞 요약 block의 서명으로 싣는다. TanStack이 그렇게 저장했다. 따로 빈 block으로 두면 저장할 때 thinking이 하나 더 생긴다.
+- 앱이 정한 실패(구독 stream 실패, OpenAI 호환 요청 거절, external 턴 실패)는 `AiError`의 `UnknownError` metadata에 typed 값으로 싣는다. 화면 code와 로그는 이 값에서 만든다. provider가 쓴 오류 문구와 URL은 화면에 그대로 보이지 않는다.
+- 취소는 fiber interrupt다. 모델은 `AbortSignal`을 받지 않는다.
+- OpenAI 호환 provider는 모든 도구를 작성한 schema 그대로 `strict: false`로 보낸다. TanStack 때와 다른 점은 strict와 맞지 않는 schema에서 지원하지 않는 `format`을 더는 지우지 않는 것 하나다. 앱이 이미 strict를 끄고 원래 schema로 되돌리고 있었다.
+- provider tool 18개는 `Tool.providerDefined`로 만들고, 구독 요청에는 TanStack처럼 이름과 설명만 있는 function tool로 보낸다. 모델 표와 모델별 provider tool 표는 앱이 가진다.
+
+## Effect AI 도구는 loop가 decode·게이트·실행을 나눠 부른다 (2026-10-27)
+
+- 위 "TanStack AI를 Effect AI로 전환한다 (2026-10-26)"의 tool 단계다. 파일과 TanStack과 달라진 점은 계획의 3단계 "결과"에 있다.
+- 도구 단위는 `RunTool`(모델에 알리는 `Tool`, lazy 여부, 인자를 decode해 호출을 만드는 `prepare`)이다. `Toolkit.handle`과 `Toolkit.toLayer`는 쓰지 않는다. loop는 decode 뒤 게이트를 거쳐 실행하므로 두 단계를 나눠야 한다.
+- MCP는 `@tanstack/ai-mcp` 대신 SDK `Client`로 붙는다. TanStack 도구와 Effect AI 도구가 같은 연결을 쓴다. (2026-10-27 TanStack 도구를 지웠다. 아래 "TanStack 패키지를 지운다 (2026-10-27)")
+  - client는 elicitation·sampling capability를 알리지 않는다. 서버가 그래도 입력을 요청하면 도구 실패다. TanStack은 이를 `mcp_input` interrupt로 바꿨지만 앱은 그 interrupt를 다루지 않았다.
+  - 2025 프로토콜 서버의 도구 목록은 `tools/list` 한 번이다. "TanStack 패키지를 1.0으로 올림 (2026-10-24)"의 "`tools/list`를 두 번 받는다"를 대체한다. 프로토콜 협상은 TanStack처럼 `auto`다.
+  - 페이지 상한은 SDK 기본값 64다(TanStack 100). 2026 프로토콜의 `tools/list_changed`는 구독하지 않고 run마다 목록을 다시 읽는다.
+- provider tool 요청은 TanStack factory 인자 배열 대신 `{ id, config }`다. 설정은 `providers/provider-tools.ts`의 표가 검사하고, 등록되지 않은 id는 `invalid_request`로 거절한다.
+- `RunTool`의 결과와 실패 상세는 `withHiddenRunResults`(2026-10-27부터 `withHiddenResults`)가 가린다. 가리기가 실패하면 원문 대신 `redaction_failed` 실패를 돌려준다. TanStack 경로는 `{error: message}`였다.
+- 브라우저가 import하는 `tools/definitions.ts`에는 Effect Schema spec만 둔다. 런타임 import 그래프에 secrets·permissions·`effect/ai`가 없다.
+
+## 도구 호출 사이에 순서를 두지 않는다 (2026-10-27)
+
+- 사용자 결정: 한 모델 턴의 도구 호출은 서로 독립이라고 보고 모두 동시에 돌린다. 쓰기를 장벽으로 두지 않고, 자원 키로 줄 세우지도 않는다. 순서가 필요하면 모델이 다음 턴으로 나눈다. 위 "Goal도 owner 프로세스에서 돌고 도구를 병렬로 실행한다 (2026-10-26)"가 미뤄 둔 규칙이고, 일반 채팅과 Goal에 같다.
+- "도구 성능 (2026-09-15)"의 "읽기 전용이 아닌 호출 뒤의 읽기는 앞 호출이 끝난 뒤에" 규칙을 대체한다. TanStack 1.0으로 올린 뒤(2026-10-24) 이미 지켜지지 않던 규칙이다. 지금 동작을 규칙으로 정한 것이다.
+- 순서와 무관한 규칙은 그대로 지킨다.
+  - 읽기 호출은 받는 즉시 시작한다.
+  - 쓰기 호출은 그 step의 응답이 완전한 finish(`stop`, `tool-calls`, `pause`)로 끝난 뒤에 시작한다. 끊긴 응답의 쓰기는 실행하지 않는다.
+  - 실행 중인 호출은 응답 사정으로 끊지 않는다.
+  - 모델에 돌려주는 결과는 끝난 순서가 아니라 호출 순서로 놓는다.
+- 승인 대기는 그 호출만 기다린다. 다른 호출은 승인을 기다리지 않고 실행해 결과를 기록한다. 재개 run으로 넘어가는 것은 승인 대기 호출뿐이고, 재개 run은 결과가 없는 호출만 실행한다. "권한 모드 (2026-09-14)"의 "묶음 전체를 한 번에 묻는다(TanStack 재개 단위)" 중 실행 부분을 대체한다. 승인 요청은 지금처럼 한 interrupt 묶음으로 묻는다.
+- 모델에는 한 턴의 호출이 동시에 돈다고 시스템 프롬프트에서 한 번 알린다. 여러 도구에 걸친 원칙이라 도구 설명이 아니라 시스템 프롬프트에 둔다("시스템 프롬프트와 도구 설명은 규칙을 한 곳에만 둔다 (2026-10-24)").
+- 같은 파일을 한 턴에 두 번 쓰면 쓰기 도구의 기대 sha256 검사가 하나를 실패시킨다("잘못된 성공 거르기 (2026-10-14)"). 셸·코드 실행·MCP에는 이런 검사가 없다. 받아들이는 위험이다.
+- 실행 계획은 [effect-ai-migration.md](effect-ai-migration.md)의 "도구 실행 방식"과 4단계다.
+
+## AgentChat은 ChatLoop 스위치로 새 loop를 고른다 (2026-10-27)
+
+- 위 "TanStack AI를 Effect AI로 전환한다 (2026-10-26)"의 4단계다. 파일과 TanStack과 달라진 점은 계획의 4단계 "결과"에 있다.
+- `ChatLoop`(`"tanstack"` | `"effect-ai"`)를 `MemoryAgentLayerOptions.chatLoop`로 고른다. 기본값은 `"tanstack"`이다. 스위치는 6단계 client 전까지 테스트와 개발 확인용이다. 새 loop의 interrupt에는 TanStack binding이 없어서 지금 페이지는 승인을 풀지 못한다. 7단계에서 스위치와 TanStack 경로를 함께 지운다. (2026-10-27 대체: 아래 "채팅 진입점을 모두 채팅 API와 새 loop로 옮기고 `/api/chat`을 지운다 (2026-10-27)". 스위치를 지웠고 모든 run이 새 loop로 돈다.)
+- Goal worker run, 구현 Goal run, bound run, 이미지 provider 도구를 쓰는 run은 스위치와 관계없이 지금 경로로 돈다. 앞의 셋은 5단계에서 옮긴다. (2026-10-27 대체: 아래 "Goal run은 스위치와 관계없이 새 loop로 돌고, Goal worker를 지운다 (2026-10-27)". Goal run은 스위치와 관계없이 새 loop로 돈다.)
+- 새 loop의 대화는 저장된 thread에 아직 저장되지 않은 사용자 메시지(id로 비교)를 더한 것이다. 페이지가 보낸 assistant·tool 메시지는 쓰지 않는다. 서버가 쓴 답과 도구 결과는 서버 저장본이 맞기 때문이다. 페이지에 편집과 재생성이 없으므로 잘라 낼 지점은 두지 않는다.
+- 취소는 실행만 끊는다. run이 어떻게 끝났는지는 loop가 정하고, 그 마지막 이벤트까지 페이지에 보낸다.
+
+## Goal run은 스위치와 관계없이 새 loop로 돌고, Goal worker를 지운다 (2026-10-27)
+
+- 위 "TanStack AI를 Effect AI로 전환한다 (2026-10-26)"의 5단계다. 파일과 golden 차이는 계획의 5단계 "결과"에 있다.
+- 사용자 결정: "새 모듈은 7단계 전까지 앱에 연결하지 않는다"를 Goal에 대해 거둬들인다. Goal run(새 Goal 턴, bound run, 승인 뒤 재개)은 `ChatLoop`와 관계없이 새 loop로 돈다. 위 "AgentChat은 ChatLoop 스위치로 새 loop를 고른다 (2026-10-27)"에서 지금 경로로 남겼던 Goal worker run, 구현 Goal run, bound run이 모두 새 loop로 간다.
+  - 대가: 지금 페이지는 새 loop의 interrupt를 풀지 못한다. 그래서 페이지에서 Goal run을 승인하는 흐름은 6단계 client부터 된다. 사용자가 받아들였다.
+  - 이미지 provider 도구를 쓰는 Goal run은 409 `goal_image_tool_unavailable`로 시작하지 않는다. 새 loop에는 provider 이미지 도구가 아직 없고, Goal의 도구 장부는 새 loop에만 있다.
+- 그래서 Goal worker를 7단계까지 남길 이유가 없다. 5단계에서 지운다: Goal worker와 owner RPC, native Goal 구현, read recovery operator API, `ExecutionAdmission`의 `worker` gate와 `CONTEXT_AGENT_WORKER_*` 설정, "옛 Goal 처리"의 packaging·build. 옛 기록(worker 세대, native artifact, dispatch, 옛 장부 행, read recovery receipt)은 지우지 않고 읽기만 한다.
+- 도구 장부는 위 "Goal도 owner 프로세스에서 돌고 도구를 병렬로 실행한다 (2026-10-26)"대로다.
+  - 호출마다 실행 전에 run의 다음 번호로 `pending`을 예약한다. 번호는 한 SQL 문장 안에서 정하므로 동시에 예약해도 겹치지 않는다. 예약하지 못한 호출은 실행하지 않는다.
+  - 읽기 도구는 실패하거나 취소돼도 `succeeded`다. worker의 판정("Configurable dev and Goal settlement boundaries (2026-10-10)")과 같다.
+  - 사용자 결정: 쓰기 도구가 아무것도 바꾸기 전에 거절한 실패도 `succeeded`(`output: "refused"`)다. 바뀐 것이 없다고 확실한 실패까지 `uncertain`으로 두면, 모델이 바로 고칠 수 있는 거절 하나로 Goal이 사용자 확인을 기다리게 된다.
+    - 거절로 보는 실패: 한 번의 commit으로 바꾸는 파일 도구(`write_file`, `edit_file`, `delete_file`, `write_outside_file`, `delete_outside_file`)가 파일 입출력 실패(`TextFileIoFailed`)도 defect도 없이 실패한 경우다. 경로 거절, 기대 sha256 불일치, edit의 `no_match`·`ambiguous_match`가 여기 든다. 표시는 도구가 단다(`ToolFailed.refused`).
+    - 셸·코드 실행·스킬 저장처럼 여러 단계를 거치는 쓰기는 표시하지 않는다.
+  - 그 밖의 쓰기 실패와 취소는 `uncertain`이다. 결과를 적지 못한 행은 `pending`으로 남는다. 어느 쪽이든 다음 run 입장에서 사용자 확인을 받는다.
+- provider 요청 전 transport 실패의 재시도("Provider 요청 전 transport 실패의 durable 재시도 경계 (2026-10-13)")는 새 loop에서 모델을 감싸 한다. 조건은 같다: `RequestNotSent`이고 모델 part가 하나도 오지 않았다.
+- 완료 근거는 dispatch 세대(`workflow_worker_dispatches`)를 더 요구하지 않는다. "Configurable dev and Goal settlement boundaries (2026-10-10)"의 "dispatch identity" 검사를 대체한다. binding·revision, durable 실행 완료, 장부의 미해결 쓰기 검사는 그대로다.
+- 아직 도는 run이 적은 criterion mapping은 Goal 종류와 관계없이 제안으로 보관하고(`completionRequest`), run이 끝난 뒤 `finishRun`에서 장부까지 다시 검사해 완료 근거로 적는다. 전에는 worker 세대나 native 등록이 있는 Goal만 이렇게 했다. 새 loop는 기록하는 호출 자신을 실행이 끝날 때까지 장부에 `pending`으로 두므로, 바로 검사하면 모든 mapping이 거절된다. "Configurable dev and Goal settlement boundaries (2026-10-10)"의 "proposals, not completion snapshots" 규칙을 모든 Goal에 넓힌 것이다.
+
+## 채팅 run과 join을 Effect HttpApi로 연다 (2026-10-27)
+
+- 위 "TanStack AI를 Effect AI로 전환한다 (2026-10-26)"의 6단계 앞부분이다. 6단계 client가 쓸 endpoint를 먼저 만든다. 계획은 [effect-ai-migration.md](effect-ai-migration.md)의 6단계 "서버 endpoint"다.
+- 사용자 결정: 채팅 endpoint를 React Router route가 아니라 Effect `HttpApi`로 선언한다. 이 앱에서 React Router가 맡는 일이 적다. 범위는 채팅 run과 join 두 endpoint와 그 SSE다. 다른 API는 지금 route에 남는다.
+- 계약은 `memory-agent/chat-api`의 `ChatApi`(group `chat`)다. browser에서도 import한다. 서버에서 정의한 atom은 client가 쓸 수 없으므로, client와 나누는 것은 이 계약이다.
+  - `run`: `POST /api/sessions/:session/runs`. payload는 AG-UI `RunAgentInput` 중 쓰는 필드다: `runId`, `parentRunId`, 사용자 메시지, `resume`, `forwardedProps`의 `queuedNext`·`imageIntent`. 응답은 run 로그를 따라가는 SSE다.
+  - `join`: `GET /api/sessions/:session/runs/:run/events?after=<offset>`. 같은 SSE를 그 offset 뒤부터 준다.
+  - SSE 이벤트의 `id`는 run 로그 offset이다. client는 받은 마지막 `id`를 `after`로 보내 다시 붙는다.
+  - 거절은 `/api/chat`과 같은 `{ error, ...details }` JSON과 status다. status마다 code 목록을 Schema로 선언해 client가 타입으로 받는다.
+  - 다른 사이트의 `run`은 `SameSite` middleware가 403(`cross_site_request`, `invalid_origin`)으로 막는다. 검사 함수는 page route의 `rejectCrossSite`와 같다. `join`은 읽기라 걸지 않는다.
+- `AgentChat.start`가 거절을 응답 대신 값(`ChatStart`)으로 돌려준다. `/api/chat`(`AgentChat.handle`)은 그 값을 전과 같은 응답으로 바꾼다. 페이지가 받는 응답은 바뀌지 않는다. (2026-10-27 대체: 아래 "채팅 진입점을 모두 채팅 API와 새 loop로 옮기고 `/api/chat`을 지운다 (2026-10-27)". `/api/chat`과 `handle`·`hydrate`를 지웠다.)
+- API run은 `ChatLoop`와 관계없이 새 loop로 돈다.
+  - core가 run 이벤트를 로그에 채운다. 채우는 fiber는 AgentChat 서비스 scope에 fork하고, 응답은 로그를 읽기만 한다. 그래서 client가 끊어도 run은 멈추지 않는다. 끝 이벤트 없이 실패하면 `RUN_ERROR`를 적고 로그를 닫는다. TanStack `toServerSentEventsResponse`의 durability 동작과 같다.
+  - 로그는 Goal run이면 sqlite(`streamDurability`), 아니면 memory다. `join`은 `hydrate`와 같은 검사(`followRun`)를 거친다.
+  - 외부 에이전트 세션은 409 `external_agent_unsupported`로 받지 않는다. 외부 에이전트 경로는 TanStack 응답을 그대로 돌려주기 때문이다.
+  - 이미지 provider 도구를 쓰는 run은 409 `image_tool_unavailable`로 받지 않는다. 새 loop에 그 도구가 아직 없다.
+- 앱 연결: React Router resource route 두 개가 요청을 `HttpRouter.toWebHandler`로 만든 handler에 넘긴다. handler는 첫 요청 때 agent runtime의 context로 만든다. server가 runtime을 설정하기 전에 module이 load되기 때문이다. server에 직접 붙일지는 7단계에서 정한다. (2026-10-27: 직접 붙이지 않고 route가 넘기는 방식을 둔다. 아래 "채팅 진입점을 모두 채팅 API와 새 loop로 옮기고 `/api/chat`을 지운다 (2026-10-27)".)
+- 미룬 것:
+  - SSE keepalive. 연결이 loopback이고 지금 run SSE에도 없다. Effect의 AG-UI PR(#9842)이 들어오면 다시 본다.
+  - BTW endpoint, 처음 화면용 snapshot·history endpoint
+  - web handler의 `dispose`를 `disposeAgent`에 잇기. handler가 가진 자원은 router뿐이고, run fiber는 agent runtime의 scope에 있다.
+
+## 채팅 client는 memory-agent의 atom이고, 처음 화면은 snapshot endpoint로 읽는다 (2026-10-27)
+
+- 위 "TanStack AI를 Effect AI로 전환한다 (2026-10-26)"의 6단계다. 파일과 확인은 [effect-ai-migration.md](effect-ai-migration.md)의 6단계 "진행"에 있다.
+- `ChatApi`에 `snapshot`(`GET /api/sessions/:session/messages?limit=&before=`)을 더한다. 메시지 한 페이지, 더 오래된 페이지의 `before`, 진행 중 run, 승인 대기를 준다. 메시지와 part는 페이지가 보여 주는 모양(text, thinking, image, tool-call, tool-result)의 Schema이고, 보여 주지 않는 part(subagent 카드 등)는 뺀다. 지금은 `hydrate`(`reconstructChat`)의 응답을 decode하고, 7단계에서 TanStack 없이 만든다.
+- 채팅 client의 규칙(reducer와 세션 atom)은 앱이 아니라 memory-agent(`memory-agent/chat-view`, `memory-agent/chat-session`)에 둔다. 서버에서 정의한 atom을 페이지가 쓰는 것이 아니라, 같은 module을 페이지의 registry에서 만든다. ACP bridge도 같은 client를 쓰기 때문이다. 앱의 hook(`useAgentChat`)은 `@effect/atom-react`로 읽기만 한다.
+- 화면 메시지는 run 뒤 `snapshot`과 같은 모양이다. 한 model step이 assistant 메시지 하나이고, 결과가 온 호출은 `complete`다. 처음부터 다시 붙은 stream은 메시지를 비우고 다시 쓴다.
+- run이 끝나면 최신 페이지를 다시 읽는다. run 이벤트에 없는 것(run이 받아들인 대기 메시지, 저장된 결과 상태)은 저장본이 맞기 때문이다.
+- TanStack client의 interrupt 오류 코드 5종 검사는 옮기지 않는다. 같은 경우를 서버가 거절 code로 막는다.
+- 계획 변경: ACP bridge의 `ChatClient` 교체는 6단계가 아니라 7단계에서 한다. 진입점을 새 loop로 바꾸는 일이라, Goal 말고는 7단계 전에 연결하지 않는다는 규칙을 따른다.
+
+## 채팅 진입점을 모두 채팅 API와 새 loop로 옮기고 `/api/chat`을 지운다 (2026-10-27)
+
+- 위 "TanStack AI를 Effect AI로 전환한다 (2026-10-26)"의 7단계 첫 커밋 묶음이다. 커밋과 남은 일은 [effect-ai-migration.md](effect-ai-migration.md)의 7단계 "진행"에 있다.
+- 모든 채팅 run이 새 loop로 돈다: 본 채팅, 외부 에이전트 직접 대화, 승인 재개, 내부 follow-up(알림, kanban, steered, workflow 이어가기), Goal. 부모 run이 만드는 서브에이전트는 `RunTools`로 돈다. `ChatLoop` 스위치와 TanStack 실행 경로를 지운다.
+- run을 시작하면 core가 run 로그를 채우는 fiber를 AgentChat 서비스 scope에 fork한다. 페이지, ACP bridge, 내부 follow-up은 모두 그 로그를 읽기만 한다. `/api/chat`, `AgentChat.handle`·`hydrate`, run을 응답으로 바로 보내던 page delivery를 지운다.
+- 다시 붙기는 `join`(path의 runId, `after` offset)뿐이다. `Last-Event-ID`, `?offset=`, `X-Run-Id` 규칙은 `hydrate`와 함께 없어졌다. 그 run의 로그가 아닌 offset은 `invalid_stream_offset`이다.
+- 앱 연결: `ChatApi`를 server에 직접 붙이지 않는다. React Router resource route가 web handler로 넘기는 방식을 둔다. 다른 API가 아직 route에 있고, route는 요청을 넘기기만 해서 옮겨 얻는 것이 적다. 앱 테스트는 같은 handler(`chatApiRoutes`)를 테스트 agent로 만든다.
+- 취소와 재시작: 사용자의 취소와 세션 보관·삭제만 run을 `aborted`로 끝낸다. owner 종료로, 또는 종료 순서상 먼저 끊긴 로그 fiber로 controller가 abort된 run은 `failed/server_restarted`다. "테스트의 Fiber와 네이티브 SDK 게이트 (2026-10-07)"의 규칙을 새 loop에서도 지킨다.
+  - 취소는 run의 controller를 우리 reason(`cancel_requested`)으로 abort하기만 한다. TanStack의 `RUN_CANCEL_REASON`과 `requestRunCancel`은 쓰지 않는다. `chat_runs.cancel_requested`도 더 쓰지 않는다. TanStack sandbox가 detach와 취소를 가르던 열이고, 앱에는 읽는 곳이 없다.
+- 사용자 턴의 `createdAt`은 서버가 요청을 받은 시각이다. 페이지는 시각을 보내지 않는다.
+- client가 끊은 SSE는 로그 읽기를 abort해서 바로 닫는다. 로그 reader에 `return`을 묻지 않는다. async generator는 대기 중인 읽기가 끝나야 답하므로, 조용한 run에서는 다음 로그 항목까지 stream이 열려 있게 된다.
+- ACP bridge는 `ChatApi`의 `HttpApiClient`로 run을 보내고 SSE를 editor의 session update로 넘긴다. run이 승인을 기다리며 끝나면 editor에 하나씩 묻고 resume run으로 답한다. 세션을 다시 열면 snapshot 한 페이지(500개)를 보여 준다. 화면 상태가 필요 없어 atom은 쓰지 않는다.
+- BTW는 `ChatApi`의 `btw` 그룹(`messages`, `ask`)이다. 답은 요청과 떨어져 돌아서 패널을 닫아도 저장된다. BTW run은 `btw_threads.messages`만 쓰고 run·interrupt 행을 남기지 않는다.
+- 단발 모델 호출(권한 분류, 턴 요약, 리포트 진단, 메모리 해석, 개선 해석)은 `generateText`·`streamText`다. 사용량 수치를 보내지 않은 응답은 사용량 행을 남기지 않는다.
+- release 전에 `migrateTanStackRows`를 등록해야 한다. 등록 전에는 옛 행의 TanStack metadata를 새 loop가 읽지 않으므로, 새 loop가 다시 쓴 thread에서 `finishReason`·`model`·`source`가 빠질 수 있다.
+  - 등록했다(2026-10-27, `1abbb951`). "채팅 저장 행에서 TanStack 메타데이터를 지운다 (2026-10-26)"의 "등록"에 있다.
+
+## TanStack 패키지를 지운다 (2026-10-27)
+
+- 위 "TanStack AI를 Effect AI로 전환한다 (2026-10-26)"의 7단계 둘째 커밋 묶음이다. 커밋과 검사 결과는 [effect-ai-migration.md](effect-ai-migration.md)의 7단계 "2번 진행"에 있다. 저장소에 TanStack AI 패키지, patch, import가 남지 않는다.
+- 아래 표의 TanStack 부품을 말하는 결정은 같은 역할의 우리 모듈로 읽는다. 계획의 "대체 결정이 필요한 decisions.md 항목"이 이 표로 대체된다. 표에 없는 동작 차이는 이 항목과 앞의 Effect AI 항목들에 따로 적었다.
+
+| TanStack                                                     | 지금                                                                  |
+| ------------------------------------------------------------ | --------------------------------------------------------------------- |
+| `chat()` agent loop, middleware                              | `loop/run.ts`의 run loop와 `RunHook`                                  |
+| provider adapter                                             | `model/`의 `LanguageModel.make` 모델과 `@effect/ai-openai-compat`     |
+| `toolDefinition`, Standard JSON Schema(`toToolSchema`)       | `RunTool`(`tools/run-tool.ts`), draft-07 파라미터(`tools/schema.ts`)  |
+| `LazyToolManager`                                            | `tools/discovery.ts`                                                  |
+| `@tanstack/ai-mcp`                                           | `mcp/client.ts`                                                       |
+| `withPersistence`, `@tanstack/ai-persistence` store          | `RunStore`(`loop/store.ts`)                                           |
+| `memoryStream`, `StreamDurability`                           | `RunLog`(`loop/run-log.ts`), Goal은 `sqliteRunLog`                    |
+| `useChat`, `ChatClient`, `/api/chat`, `reconstructChat`      | 채팅 API(`api/chat-api.ts`)의 `snapshot`·`run`·`join`, `useAgentChat` |
+| `convertMessagesToModelMessages`(노드로 만든 예전 thread)    | `agent/history.ts`의 `sessionMessages`                                |
+| `modelMessagesToUIMessages`(화면 메시지)                     | `chat-state/snapshot.ts`의 `shownMessage`                             |
+| `@tanstack/ai` patch(`Symbol.for("tanstack-ai.toolResult")`) | `failureResult`(`tools/failure.ts`)                                   |
+| `@tanstack/openai-base` patch(lifecycle event의 run id)      | 우리 loop가 run id를 직접 싣는다                                      |
+
+- 예전 세션의 thread를 노드에서 만들 때 TanStack의 규칙을 그대로 옮긴다. 다른 점은 둘이다. `blockOrder`를 쓰지 않고, 빈 사용자 턴을 thread에 넣지 않는다. "빈 사용자 텍스트의 재유입 방지 (2026-10-05)"와 같은 방향이다.
+- history projection은 원본 thread를 `StoredMessage` Schema로 decode하고, 맞지 않으면 `invalid-transcript`다. TanStack 때는 역할만 확인했다. 로컬 DB 사본의 모든 thread가 decode된다.
+- provider tool descriptor에는 TanStack factory가 없다. `ProviderToolRuntime.compose`는 Effect AI 도구만 만들고, factory 실패(`ProviderToolFactoryFailure`)도 없어졌다.
+- TanStack과 비교하던 테스트를 지웠다: 모델 목록, provider tool factory, SSE 응답의 durability, Standard Schema 변환, MCP 도구의 TanStack 대비 결과. 요청이 같은지는 `0e0e7f0d`에서 고정한 golden 파일로 확인한다.
+- `vp run typecheck`의 exit code는 경고에도 1이다. 이 묶음은 새 경고를 더하지 않았다.
+
+## 전환 뒤 백엔드를 Effect의 상태와 실행 모델로 맞춘다 (2026-10-28)
+
+- 위 "TanStack AI를 Effect AI로 전환한다 (2026-10-26)"의 7단계 뒤 후속 정리다. 사용자가 고른 범위: SDK가 남긴 Promise 경계, Effect Crypto id, `runSyncWith`와 `runSync`, `MutableRef`·`let` 상태, 이름 정리, lint 끄기 주석, `Effect.sync`. 커밋은 `5503f878`부터 `56ebc032`까지다.
+- `vp run typecheck`가 0으로 끝난다. Effect LS 경고를 끄지 않고 코드를 고쳤다(`5503f878`).
+- 동기 실행: 서비스와 모듈은 `Effect.runSync`·`runSyncWith`로 Effect를 꺼내지 않고 Effect를 돌려준다. 남긴 동기 경계는 넷이다.
+  - `runtime/synchronous-path.ts`, `runtime/synchronous-crypto.ts`, `runtime/node-platform.ts`: 동기 API만 받는 호출자(모듈 load, 앱 서버 설정)를 위한 경계다.
+  - 브라우저의 `browserCrypto`(`session-lease.ts`, `draft-images.ts`)
+  - 스크립트는 `NodeRuntime.runMain`이나 top-level await로 한 Effect 프로그램을 돈다. eval은 `ManagedRuntime`을 쓴다.
+- Promise 경계는 Promise를 요구하는 SDK와 host 쪽에만 둔다(`nativePromise`, `runNativeEffect`). 우리 서비스끼리는 Effect로 잇는다.
+  - OAuth: `CredentialStore`, `PasswordEntry`, `SubscriptionOAuthClient`, 계정 로그인이 Effect와 Stream을 돌려준다. 키체인은 `OAuthKeychain` 서비스이고 테스트는 메모리 키체인을 쓴다. 로그인 취소는 상태만 바꾸고 바로 돌아오며, 콜백 서버 종료와 결과 통지는 그 뒤에 이어진다. run의 계정 고정은 Scope로 잡고 푼다(`releaseRun`을 지웠다).
+  - MCP와 외부 에이전트: 연결 표와 연결마다의 상태를 `SynchronizedRef`로 두고, 연결 시도와 도구 탐색은 서비스 Scope의 Fiber로 둔다. 같은 시도를 기다리는 호출자들은 그 Fiber를 같이 기다리고, 기다림을 멈춰도 시도는 멈추지 않는다. 쓰이지 않게 된 `McpOperationFailed`, `ExternalAgentOperationFailed`를 지웠다.
+  - `NativeSearchClient`(native-search의 worker 계약)는 그대로 둔다. 네이티브 읽기 계층을 다시 설계할 때 함께 본다.
+- id는 Effect `Crypto`의 `randomUUIDv7`·`randomUUIDv4`로 만든다(`bb80beeb`).
+- 상태: 바꿔 쓰는 변수, `MutableRef`, `MutableHashMap`, `EventTarget`, 상태를 바꾸는 `Effect.sync` 대신 `Ref`, `SynchronizedRef`, `SubscriptionRef`, `PubSub`, `Deferred`, `Latch.make`를 쓴다.
+  - 확인하고 바꾸는 일은 `Ref.modify` 하나로 한다. DB 읽기를 잠금 안에 두지 않는다. sqlite 연결 하나를 쓰는 transaction과 서로 기다릴 수 있기 때문이다. 큐 예약은 읽은 뒤 `Ref.modify`에서 다시 확인한다.
+  - 같은 일을 여러 호출자가 기다리면 `SynchronizedRef`에 Fiber를 두고, Fiber가 끝나며 표에서 지우는 일은 같은 잠금을 기다린다. 그래서 표에 넣기 전에 지우지 않는다.
+  - 앱 변경 알림(`AppEvents`)은 `PubSub`와 `SynchronizedRef`다. 번호 매기기와 발행을 잠금 하나 안에서 해서 구독자는 번호 순서대로 받는다. SSE 스트림은 같은 잠금 안에서 구독하고 시작 번호를 읽는다. `publish` 계열과 `revision`은 Effect다.
+  - 작업 기록의 변경 알림은 콜백 집합 대신 `PubSub`다. `waitForChange`는 구독해서 받는다.
+  - `liveRuns.claim`은 객체 하나를 받고, 쓰이지 않던 `onEnded`를 지웠다. `SteerCut.cut`은 Effect다.
+- `Effect.sync`는 네이티브 동기 부수 효과를 감쌀 때만 쓴다. 값만 만드는 곳은 `Effect.succeed`다. 남긴 것:
+  - Node·OS와 SDK 호출: `host-system`, sqlite 열기·닫기·migration, native-search와 worker의 `close`·`cancel`·`ref`·`unref`, `AbortController.abort`, `removeEventListener`, `SandboxManager`, secretlint redactor 만들기, ACP SDK의 `notify`, QuickJS에 답 넣기, `URL.revokeObjectURL`
+  - 앱의 React `setState`와 콜백, `window.location`
+  - 네이티브 콜백이 동기로 읽는 상태는 네이티브 자료구조로 둔다: 셸의 실행 중 명령 집합(프로세스 종료 hook), 외부 에이전트의 `handlers` 표(SDK 콜백), 코드 워커의 console 기록(QuickJS console 콜백), 앱의 backend 재시작 표시(`useSyncExternalStore`)와 work trace의 EventSource 상태
+  - 채팅 세션·BTW atom의 쓰기는 호출의 `get.set`이다. registry의 `Atom.set`과 달리 새 호출이 이전 호출을 대신하면 늦은 쓰기를 버린다. 읽기는 `Atom.get`이다.
+  - `chat.ts`의 `windowTokens`·`windowKnown`: 모델 runtime의 동기 API다.
+  - 테스트 fake의 호출 수 세기
+- 미룬 것:
+  - 워크플로 엔진의 `executions` 표. 값이 effect/workflow의 바꿔 쓰는 `WorkflowInstance`를 따라가므로 엔진을 다시 설계할 때 본다. 등록 표만 `Ref`로 옮겼다. 다시 실행할 때 새 instance를 넣고 interrupt 표시를 옮기는 일은 yield 없이 한 번에 일어나야 한다. 표만 `Ref`로 바꾸고 기록을 바꿀 수 없게 하면 그 사이에 interrupt가 끼어 표시를 잃을 수 있다.
+  - native-search의 eslint 끄기 주석(`native-vector-index.ts`, `vector-index.ts`). 네이티브 읽기 계층을 다시 설계할 때 본다. 다른 oxlint 끄기 주석은 코드를 고쳐 지웠다(`3d0f4baf`).
+- 이어서 한 것(`77d85a4d`부터 `27ea313e`까지):
+  - 하위 에이전트의 heartbeat가 처음 시각을 계속 적던 문제를 고쳤다(`77d85a4d`). `keepAlive`가 UPDATE 문을 한 번 만들고 `Effect.forever`로 되풀이해서, 1분 넘게 도는 시도가 `HeartbeatLost`로 끝났다. 이제 매번 시계를 읽는다. 이 문제는 main의 `91b8f349`에서 들어왔고 릴리즈에는 없다.
+  - 시각은 `Clock.currentTimeMillis`와 `DateTime.now`로 읽는다. memory-agent에는 `currentTimeMillisUnsafe`와 `DateTime.nowUnsafe`가 남지 않았다. 워크플로의 ledger 사건과 Plan을 닫는 도우미는 시각을 인자로 받는다. 영속 큐의 `settle`은 시각을 받아 문장을 만든다.
+  - `SessionLeases`는 lease를 `Ref`에 두고, 모든 메서드가 Effect를 돌려준다. 시각을 주입하던 인자를 지우고 테스트는 `TestClock`을 쓴다.
+  - 구독 OAuth의 응답 스트림은 손으로 쓴 버퍼 대신 Effect의 `Sse.decode`로 나눈다. 두 provider 모두 `retry`를 보내지 않으므로, `retry`나 너무 큰 사건은 끊긴 응답으로 다룬다.
+  - 시각 주입 인자는 남겼다: `makeRouteCatalog`·`RouteCatalog.layerFrom`, `workspaceInstructions`, `SubscriptionOAuthClientOptions.now`. 테스트와 사용량 확인 스크립트가 넘긴다. 넘기지 않으면 Effect의 시계를 읽는다(OAuth의 `now`는 `Date.now`).
+  - 개발 서버의 `createDevelopmentBoundary`(`startedAt`)와 앱 React 렌더의 `DateTime.nowUnsafe`는 동기 경계라서 남겼다.
+  - fetch 응답 본문 읽기(`nativePromise(() => response.text())`)는 Promise 경계로 둔다. OAuth harness는 주입한 `fetch`를 써서 `HttpClient`로 옮기지 않았다.
+  - 결과: memory-agent 전체 테스트(206 파일, 1221개)는 부하 아래에서 native-search 시작 시간초과로 7 파일이 실패했다. 이 파일들은 따로 돌리면 통과한다. 앱 테스트(40 파일, 145개), `vp run test:browser`(5 파일, 12개), `vp check`, `vp run typecheck`가 통과한다.
+- 결과(2026-10-28): memory-agent 전체 테스트(206 파일, 1220개), 앱 테스트(40 파일, 145개), `vp run test:browser`(5 파일, 12개), `vp check`, `vp run typecheck`가 통과한다. 로컬 DB 검사 도구는 실패 없이 끝난다.
+
+## 반복과 분기는 조합자로 쓰고, 툴 출력은 컨텍스트 크기로 자른다 (2026-10-28)
+
+- `let`과 `while`을 쓰지 않는다. Effect v4 code-style 문서의 Looping 예시(`Effect.gen` 안의 `let`과 `while`)도 따르지 않는다. 바꿔 쓰는 변수는 반복과 클로저 사이에서 충분히 격리되지 않고, 이름 있는 조합자가 반복의 목적을 더 잘 드러낸다.
+  - 반복은 목적에 맞는 조합자로 쓴다: 다 읽을 때까지 읽기는 `Stream.paginate`, 앞서 읽기는 `Stream.mapEffect`의 `concurrency`, 누적은 `Stream.mapAccum`·`scanEffect`, 일찍 멈추기는 `Stream.takeUntil`·`take`·`runLast`, 찾다가 멈추기는 `Effect.findFirst`, 차례로 접기는 `Effect.reduce`. 순수한 반복은 `Array.scan`·`takeWhile`·`unfold`·`findFirstIndex`로 쓴다.
+  - `for`와 `if`도 같은 기준이다. 조합자가 맞으면 그것을 쓴다(`Effect.forEach`, `Effect.when`, `Match`, `Option`). 조건을 줄여 읽는 복합 guard만 `if`로 둔다.
+  - 맞는 조합자가 없으면 손으로 쓴 재귀를 쓰되 깊이가 작은 곳에만 둔다. JS에는 꼬리 호출 최적화가 없다(예: 정렬된 배열의 이진 탐색).
+- files 영역을 이렇게 바꿨다(`ef487739`). 이전 구현 사본과 같은 입력으로 결과를 비교해 같음을 확인했다. 목록은 52,000개 파일의 잘림까지, 검색은 대소문자·줄 경계·재개 위치·한 페이지 파일 수 경계까지 비교했다.
+- 모델에게 가는 툴 출력은 컨텍스트 크기로 자른다. 프로세스 출력은 바이트 수가 아니라 쓸 항목 수로 자른다. 256 MiB 같은 바이트 상한은 모델이 받는 양과 상관이 없어서 지웠다.
+  - `list_files`·`list_outside_files` 페이지는 경로 500개에 더해, JSON 따옴표와 쉼표를 포함한 글자 수 16,000자(`listPageCharacters`) 안에 든다. 남은 경로가 있으면 적어도 하나는 담는다. 읽기 페이지는 16,000자, 검색 페이지는 100건과 12,000자다.
+  - git 목록(`ls-files`)은 walk와 같은 `walkLimit`(50,000개)에서 읽기를 멈추고 `truncated`로 알린다. 멈춘 git은 종료를 기다리지 않고 Scope와 함께 끝낸다. git grep 후보도 50,000개를 넘으면 좁히기를 버리고 모든 파일을 검색한다.
+  - shell 출력은 스트림마다 앞 2 KiB와 뒤 14 KiB를 남긴다(이전 8 KiB + 56 KiB). SKILL.md와 `.agents/workflow-rules.json`은 32,000자를 넘으면 `too_large`로 쓰지 않는다(이전 256 KiB). 읽기 전에는 UTF-8이 UTF-16 한 단위에 최대 3바이트를 쓰는 점으로 32,000 × 3바이트를 넘는 파일을 먼저 거른다.
+- memory-agent의 나머지 영역(src·tests·bench·eval)도 같은 기준으로 바꿨다(`4f80ef25`…`c145e2b6`). native-search(`turbovec` 읽기 계층)는 따로 다룬다. apps/agent와 tools는 Effect 백엔드가 아니어서 이번 범위에 넣지 않았다.
+  - 기다리며 다시 보기는 `Effect.repeat`의 `until`·`times`로 쓴다(`times: N`은 N+1번 실행이다). 페이지를 다 읽는 반복은 `Stream.paginate`로, 응답 본문 프레임 읽기는 `Stream.fromReadableStream`과 `scan`·`takeUntil`·`runLast`로 쓴다.
+  - 네이티브 콜백과 테스트 가짜가 동기적으로 바꾸는 상태는 `MutableRef`에 둔다. 엔진이 자기 자신을 참조하는 곳은 `Deferred`로 푼다. 던질 수 있는 동기 호출의 대체값은 `try`와 `let` 대신 `Option.liftThrowable`로 고른다.
+  - guard는 `Effect.when`으로 쓴다. 조건에 따라 줄을 모을 때는 `Option`과 `Array.getSomes`를 쓴다.
+  - 같은 몸체를 여러 입력에 돌리던 테스트는 `it.effect.each`·`describe.each`나 한 테스트 안의 `Effect.forEach`로 바꾸되 테스트 이름은 그대로 둔다.
+  - 동작이 바뀌지 않았는지는 HEAD 사본(`*-old.probe.*`, 커밋 전 삭제)과 같은 입력으로 출력을 비교해 확인했다. 유료 실행 평가(live-*, structured-memory의 live 모드)는 타입 검사만 했다.
+- 그 뒤 tools/profile과 tools/chat-store-check도 바꿨다(`07b65b6b`). anti-slop Oxlint 플러그인(`tools/oxlint/anti-slop`)은 가져온 코드라서 이 기준을 적용하지 않는다. lint·fmt 대상에서도 빠져 있다. 반복을 조합자로 바꿔 봤지만 규칙 진단은 같았고, 원본과 달라지면 다시 가져올 때 충돌만 늘어난다.
+- 사용자 결정: anti-slop 플러그인을 `lint/anti-slop`으로 옮겼다. `tools`는 memory-agent의 에이전트 도구(`src/tools`)와 이름이 겹쳐 헷갈리고, 플러그인은 이 저장소의 커스텀 린트 규칙으로만 쓰인다.
+- 사용자 결정: apps/agent도 같은 기준을 적용한다. 위에서 범위에서 뺀다고 한 것을 바꾼다.
+
+## Schema 클래스는 brand로 이름을 갖는다 (2026-10-28)
+
+- `Schema.Class`·`Schema.TaggedError` 같은 Schema 클래스는 두 번째 타입 인자로 `{ readonly brand: unique symbol }`를 단다. brand가 없으면 필드 모양이 같은 다른 값도 그 클래스 타입으로 통과한다. Effect SCHEMA.md의 클래스 branding과 같은 방식이고, brand는 인스턴스 타입에만 교차되며 런타임 값은 없다.
+- Effect LS의 `schemaClassMissingBrand`를 memory-agent와 apps/agent tsconfig에서 error로 올렸다. tools/chat-store-check는 memory-agent 설정을 이어받는다.
+- brand를 단 뒤 `traceStream`의 `new Response(...)`가 undici-types의 `Response`로 추론되어 서비스 타입을 이름 붙일 수 없게 됐다(TS2883). `json`처럼 전역 `Response`를 반환하는 `eventStream`으로 감쌌다. undici-types는 `@types/node`의 하위 의존성이라 따로 지울 것이 없다.
+
+## 임베딩 worker는 닫힐 때 모델을 내려놓는다 (2026-10-28)
+
+- memory-research-lab 실행 한 번이 보고서를 다 쓴 뒤 `libc++abi: terminating due to uncaught exception of type std::__1::system_error: recursive_mutex lock failed: Invalid argument`로 끝났다. 임베딩 worker는 모델을 dispose하지 않고 끝났다. 그래서 onnxruntime 세션이 프로세스 종료까지 남아 있다가 정적 소멸자와 겹친 것으로 본다.
+- 고친 뒤 비교: 수정 전 전체 lab 6회와 수정 후 2회 모두 exit 0, 회당 약 200초였다. 이 abort는 다시 나오지 않아서, 이 수정이 막는다는 것은 확인하지 못했다.
+- 모델이 로드되면 worker 레이어의 scope에 dispose를 단다. 호스트가 worker를 닫으면(close 메시지) worker의 launch fiber가 인터럽트되고 레이어 scope가 닫힌다. 그래서 스레드가 끝나기 전에 세션을 놓는다.
+- `Embed`의 세션 실행은 인터럽트되지 않는다. 취소된 요청도 그 batch가 끝날 때까지 기다리므로 dispose가 실행 중인 세션과 겹치지 않는다. 서버는 한 번에 한 요청만 받으므로, 취소 뒤 다음 요청이 앞 batch와 겹쳐 돌지도 않는다.

@@ -79,6 +79,8 @@ const make = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const git = yield* findExecutable("git");
+  const canonicalPath = (path: string) =>
+    canonicalPathEffect(path).pipe(Effect.provideService(FileSystem.FileSystem, fs));
 
   /** Git's output when it answered; none when it could not (no git, no repository, no folder). */
   const output = (cwd: string, args: readonly string[]) =>
@@ -117,9 +119,7 @@ const make = Effect.gen(function* () {
     ]).pipe(
       Effect.flatMap((answer) =>
         Effect.map(
-          canonicalPathEffect(cwd).pipe(
-            Effect.catchTag("PlatformError", () => Effect.succeed(cwd)),
-          ),
+          canonicalPath(cwd).pipe(Effect.catchTag("PlatformError", () => Effect.succeed(cwd))),
           (real) =>
             Option.flatMap(answer, (text) => {
               const [top, gitDir, common] = lines(text);
@@ -166,7 +166,7 @@ const make = Effect.gen(function* () {
         "--show-toplevel",
         "--git-common-dir",
       ]);
-      const real = yield* canonicalPathEffect(root).pipe(
+      const real = yield* canonicalPath(root).pipe(
         Effect.catchTag("PlatformError", () => Effect.succeed(root)),
       );
       const isMain = Option.exists(answer, (text) => {

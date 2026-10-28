@@ -2,7 +2,7 @@ import { HashSet } from "effect";
 import { GlobalConfigFailed, GlobalConfigFailedReason } from "../src/config/global-config.ts";
 import { ModelFeatureFlagScope } from "../src/providers/model-feature-flags.ts";
 import { it as effectTest } from "@effect/vitest";
-import { Effect, Result } from "effect";
+import { Effect, MutableRef, Result } from "effect";
 import {
   decideModelFeatureFlag,
   makeModelFeatureFlags,
@@ -47,30 +47,34 @@ describe("model feature flag policy", () => {
     expect(
       decideModelFeatureFlag(enabled(), query, HashSet.fromIterable([capability])).allowed,
     ).toBe(true);
-    for (const settings of [
+    [
       { ...enabled(), global: false },
       { ...enabled(), providers: { openai: false } },
       { ...enabled(), capabilities: { [capability]: false } },
       { ...enabled(), models: { "openai:gpt-test": { [capability]: false } } },
       { ...enabled(), routes: { "chat:openai:gpt-test": false } },
-    ])
+    ].forEach((settings) => {
       expect(
         decideModelFeatureFlag(settings, query, HashSet.fromIterable([capability])).allowed,
       ).toBe(false);
+    });
   });
 });
 
 describe("ModelFeatureFlags service", () => {
   function fixture(initial: Settings = {}) {
-    let settings = initial;
+    const settings = MutableRef.make(initial);
     const service = makeModelFeatureFlags(
       {
-        read: Effect.sync(() => settings),
-        update: (patch) => Effect.sync(() => (settings = { ...settings, ...patch })),
+        read: Effect.sync(() => MutableRef.get(settings)),
+        update: (patch) =>
+          Effect.sync(() =>
+            MutableRef.updateAndGet(settings, (current) => ({ ...current, ...patch })),
+          ),
       },
       [capability],
     );
-    return { service, settings: () => settings };
+    return { service, settings: () => MutableRef.get(settings) };
   }
 
   effectTest.effect("persists versioned global/provider/capability/model/route scopes", () =>

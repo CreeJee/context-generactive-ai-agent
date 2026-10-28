@@ -1,6 +1,5 @@
-import { Cause, Effect, FileSystem, Path, Schema } from "effect";
+import { Effect, FileSystem, Path } from "effect";
 import { expect } from "vite-plus/test";
-import { AgentChat } from "../../src/agent/chat.ts";
 import { FileReadPlatform } from "../../src/files/text.ts";
 import { Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
@@ -11,15 +10,10 @@ import {
 } from "../../src/skills/skills.ts";
 import { SkillTools } from "../../src/tools/skills.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
+import { runTurn, toolResults } from "../support/chat-client.ts";
 import { selectTestModel } from "../support/provider.ts";
-import { inRun } from "../support/run-span.ts";
+import { callTool } from "../support/run-tools.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
-
-const sdk = <A>(operation: () => A | PromiseLike<A>) =>
-  Effect.tryPromise({
-    try: () => Promise.resolve(operation()),
-    catch: (cause) => new Cause.UnknownError(cause),
-  });
 
 const writeSkill = Effect.fnUntraced(function* (
   root: string,
@@ -64,9 +58,11 @@ testAgent()("linked skill files", (it) => {
         const { project, skills: root } = yield* freshProject;
         const outside = yield* writeSkill(project.root, "outside", "description: Shared rules.");
         const source = path.join(outside, "SKILL.md");
-        for (const name of ["symbolic", "hard"]) {
-          yield* fs.makeDirectory(path.join(root, name), { recursive: true });
-        }
+        yield* Effect.forEach(
+          ["symbolic", "hard"],
+          (name) => fs.makeDirectory(path.join(root, name), { recursive: true }),
+          { discard: true },
+        );
         yield* fs.symlink(source, path.join(root, "symbolic", "SKILL.md"));
         yield* fs.link(source, path.join(root, "hard", "SKILL.md"));
         const skills = yield* Skills;
@@ -117,18 +113,17 @@ testAgent()("global and project skills", (it) => {
         expect(catalog.problems).toEqual([
           { scope: "global", directory: path.join(global, "broken"), problem: "no_description" },
         ]);
-        const tools = yield* inRun((yield* SkillTools).forProject(project));
+        const tools = yield* (yield* SkillTools).toolsFor(project);
         expect(tools.instructions).toContain("- review (project): Project review.");
-        const read = tools.tools[0]?.execute;
         // How to treat a skill comes with the skill read, not with the list.
-        expect(yield* sdk(() => read?.({ name: "review" }))).toMatchObject({
+        expect(yield* callTool(tools.tools, "read_skill", { name: "review" })).toMatchObject({
           scope: "project",
           directory: path.join(local, "review"),
           files: ["checklist.md"],
           instructions: "Project rules.",
           note: expect.stringMatching(/guidance, not permission.*with read_file\.$/),
         });
-        expect(yield* sdk(() => read?.({ name: "linked" }))).toEqual({
+        expect(yield* callTool(tools.tools, "read_skill", { name: "linked" })).toEqual({
           error: "skill_not_found",
           name: "linked",
         });
@@ -172,44 +167,33 @@ testAgent()("built-in skills", (it) => {
   );
 });
 
-testAgent({ skillsBuiltin: builtinSkillsDirectory() })("the skills this app ships", (it) => {
-  it.effect("are readable and within limits", () =>
-    Effect.gen(function* () {
-      const catalog = yield* (yield* Skills).catalog((yield* TestEnv).project);
-      expect(catalog.problems).toEqual([]);
-      const shipped = catalog.skills.filter((skill) => skill.scope === "builtin");
-      expect(shipped.map((skill) => skill.name)).toContain("draw");
-      for (const skill of shipped) {
-        expect(skill.description.length).toBeGreaterThan(0);
-        expect(skill.description.length).toBeLessThanOrEqual(maxDescriptionCharacters);
-      }
-    }),
-  );
-});
+testAgent({ skillsBuiltin: await Effect.runPromise(builtinSkillsDirectory) })(
+  "the skills this app ships",
+  (it) => {
+    it.effect("are readable and within limits", () =>
+      Effect.gen(function* () {
+        const catalog = yield* (yield* Skills).catalog((yield* TestEnv).project);
+        expect(catalog.problems).toEqual([]);
+        const shipped = catalog.skills.filter((skill) => skill.scope === "builtin");
+        expect(shipped.map((skill) => skill.name)).toContain("draw");
+        shipped.forEach((skill) => {
+          expect(skill.description.length).toBeGreaterThan(0);
+          expect(skill.description.length).toBeLessThanOrEqual(maxDescriptionCharacters);
+        });
+      }),
+    );
+  },
+);
 
-const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
-
-/** Post one user message to AgentChat and read the run's whole event stream. */
+/** Sends one user turn: its run's tool results, and the model's first invocation in it. */
 const send = Effect.fnUntraced(function* (session: string, runId: string, text: string) {
   const { provider } = yield* TestEnv;
-  const invocationIndex = provider?.adapter.invocations.length ?? 0;
-  const body = yield* encodeJson({
-    threadId: session,
-    runId,
-    messages: [{ id: runId, role: "user", content: text }],
-    tools: [],
-    context: [],
-  });
-  const response = yield* (yield* AgentChat).handle(
-    new Request("http://127.0.0.1/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body,
-    }),
-    session,
-  );
-  const events = yield* sdk(() => response.text());
-  return { events, invocation: provider?.adapter.invocations[invocationIndex] };
+  const invocationIndex = provider?.invocations.length ?? 0;
+  const events = yield* runTurn(session, runId, text);
+  return {
+    results: toolResults(events),
+    invocation: provider?.invocations[invocationIndex],
+  };
 });
 
 testAgent({ testProvider: {} })("skills in a run", (it) => {
@@ -252,10 +236,10 @@ testAgent({ testProvider: {} })("skills in a run", (it) => {
           'call read_skill {"name":"greet"}',
         );
         expect(withSkill.invocation?.toolNames).toContain("read_skill");
-        expect(withSkill.invocation?.systemPrompts.join("\n")).toContain(
+        expect(withSkill.invocation?.system.join("\n")).toContain(
           "- greet (project): Greet warmly.",
         );
-        expect(withSkill.events).toContain("Say hello in Korean.");
+        expect(withSkill.results.join("\n")).toContain("Say hello in Korean.");
       }),
   );
 });

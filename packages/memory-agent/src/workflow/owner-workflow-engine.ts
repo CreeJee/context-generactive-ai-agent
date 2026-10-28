@@ -1,20 +1,21 @@
 import {
   Clock,
+  Deferred,
   Duration,
   Effect,
   Exit,
   Fiber,
   FiberMap,
+  HashMap,
   Layer,
   Match,
   Option,
   Predicate,
+  Ref,
   Result,
   Schema,
   Scope,
 } from "effect";
-/* Effect's low-level encoded workflow contract necessarily crosses object and unknown boundaries. */
-/* oxlint-disable anti-slop/no-object-parameters, anti-slop/no-unknown-parameters, anti-slop/no-unknown-returns, anti-slop/require-safety-comment-for-type-assertion */
 import { Workflow } from "effect/workflow";
 import type { Activity, DurableDeferred } from "effect/workflow";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
@@ -33,20 +34,22 @@ import {
  */
 export const workflowName = (workflow: Workflow.Any): string => workflow._tag;
 
-export class OwnerWorkflowEngineError extends Schema.TaggedError<OwnerWorkflowEngineError>()(
-  "OwnerWorkflowEngineError",
-  {
-    operation: Schema.String,
-    reason: Schema.Literals(["not_registered", "codec", "execution_conflict"]),
-    cause: Schema.Defect(),
-  },
-) {}
+export class OwnerWorkflowEngineError extends Schema.TaggedError<
+  OwnerWorkflowEngineError,
+  { readonly brand: unique symbol }
+>()("OwnerWorkflowEngineError", {
+  operation: Schema.String,
+  reason: Schema.Literals(["not_registered", "codec", "execution_conflict"]),
+  cause: Schema.Defect(),
+}) {}
+
+/** A workflow body as effect/workflow registers it with the low-level engine. */
+type EncodedWorkflowBody = Parameters<WorkflowEngine.Encoded["register"]>[1];
 
 type RegisteredWorkflow = {
   readonly workflow: Workflow.Any;
   readonly execute: (
-    payload: object,
-    executionId: string,
+    ...input: Parameters<EncodedWorkflowBody>
   ) => Effect.Effect<
     Workflow.Result<unknown, unknown>,
     never,
@@ -72,10 +75,15 @@ type ExitSchemaOwner = {
 const jsonExit = (owner: ExitSchemaOwner) =>
   // Effect's type-erased Workflow.Any exposes Top schemas although every registered workflow
   // carries a concrete service-free codec at runtime; keep that unavoidable cast in this adapter.
-  // oxlint-disable-next-line anti-slop/no-chained-type-assertions
+  // SAFETY: registered workflows declare success and error schemas without decoding or encoding
+  // services, so the derived JSON codec needs none either.
   Schema.toCodecJson(
-    Schema.Exit(owner.successSchema, owner.errorSchema, Schema.Defect()),
-  ) as unknown as Schema.Codec<Exit.Exit<unknown, unknown>, unknown>;
+    Schema.Exit(
+      owner.successSchema as Schema.Codec<unknown, unknown>,
+      owner.errorSchema as Schema.Codec<unknown, unknown>,
+      Schema.Defect(),
+    ),
+  );
 
 const engineFailure = (
   operation: string,
@@ -83,35 +91,29 @@ const engineFailure = (
   cause: unknown,
 ) => OwnerWorkflowEngineError.make({ operation, reason, cause });
 
-const encodeExit = (owner: ExitSchemaOwner, exit: Exit.Exit<unknown, unknown>): unknown => {
-  const result = Schema.encodeUnknownResult(jsonExit(owner))(exit);
-  if (Result.isFailure(result)) throw engineFailure("exit.encode", "codec", result.failure);
-  return result.success;
-};
+const encodeExit = (owner: ExitSchemaOwner, exit: Exit.Exit<unknown, unknown>): Schema.Json =>
+  Result.getOrThrowWith(Schema.encodeResult(jsonExit(owner))(exit), (failure) =>
+    engineFailure("exit.encode", "codec", failure),
+  );
 
-const decodeExit = (owner: ExitSchemaOwner, encoded: unknown): Exit.Exit<unknown, unknown> => {
-  const result = Schema.decodeUnknownResult(jsonExit(owner))(encoded);
-  if (Result.isFailure(result)) throw engineFailure("exit.decode", "codec", result.failure);
-  return result.success as Exit.Exit<unknown, unknown>;
-};
+const decodeExit = (owner: ExitSchemaOwner, encoded: Schema.Json): Exit.Exit<unknown, unknown> =>
+  Result.getOrThrowWith(Schema.decodeResult(jsonExit(owner))(encoded), (failure) =>
+    engineFailure("exit.decode", "codec", failure),
+  );
 
 // `makeUnsafe` owns the typed deferred codecs. The low-level engine only reconstructs the Exit/Cause
 // shape after JSON persistence and must leave success/error payloads encoded for that outer codec.
 const encodedExit = Schema.toCodecJson(
   Schema.Exit(Schema.Unknown, Schema.Unknown, Schema.Defect()),
 );
-const encodeEncodedExit = (exit: Exit.Exit<unknown, unknown>): unknown => {
-  const result = Schema.encodeUnknownResult(encodedExit)(exit);
-  if (Result.isFailure(result))
-    throw engineFailure("deferred.exit.encode", "codec", result.failure);
-  return result.success;
-};
-const decodeEncodedExit = (encoded: unknown): Exit.Exit<unknown, unknown> => {
-  const result = Schema.decodeUnknownResult(encodedExit)(encoded);
-  if (Result.isFailure(result))
-    throw engineFailure("deferred.exit.decode", "codec", result.failure);
-  return result.success;
-};
+const encodeEncodedExit = (exit: Exit.Exit<unknown, unknown>): Schema.Json =>
+  Result.getOrThrowWith(Schema.encodeResult(encodedExit)(exit), (failure) =>
+    engineFailure("deferred.exit.encode", "codec", failure),
+  );
+const decodeEncodedExit = (encoded: Schema.Json): Exit.Exit<unknown, unknown> =>
+  Result.getOrThrowWith(Schema.decodeResult(encodedExit)(encoded), (failure) =>
+    engineFailure("deferred.exit.decode", "codec", failure),
+  );
 
 const encodeResult = (
   owner: ExitSchemaOwner,
@@ -145,21 +147,34 @@ const defect = <A, E>(operation: string, evaluate: () => Effect.Effect<A, E>): E
 const makeEngine = Effect.gen(function* () {
   const ownerScope = yield* Effect.scope;
   const storage = yield* OwnerWorkflowStorage;
-  const workflows = new Map<string, RegisteredWorkflow>();
+  const workflows = yield* Ref.make(HashMap.empty<string, RegisteredWorkflow>());
   const executions = new Map<string, LiveExecution>();
   const runs = yield* FiberMap.make<string, Workflow.Result<unknown, unknown>>();
   const clocks = yield* FiberMap.make<string>();
   const deferredState = WorkflowEngine.makeDeferredState();
 
-  let engine: WorkflowEngine.WorkflowEngine["Service"];
+  // A run is given the engine it is part of, which is made after the steps that start runs.
+  const engineMade = yield* Deferred.make<WorkflowEngine.WorkflowEngine["Service"]>();
 
   const registered = (workflowName: string): Effect.Effect<RegisteredWorkflow> =>
-    Effect.suspend(() => {
-      const entry = workflows.get(workflowName);
-      return entry === undefined
-        ? Effect.die(engineFailure("workflow.lookup", "not_registered", workflowName))
-        : Effect.succeed(entry);
-    });
+    Effect.map(Ref.get(workflows), HashMap.get(workflowName)).pipe(
+      Effect.flatMap(
+        Option.match({
+          onNone: () =>
+            Effect.die(engineFailure("workflow.lookup", "not_registered", workflowName)),
+          onSome: Effect.succeed,
+        }),
+      ),
+    );
+
+  const cancelClocks = Effect.fnUntraced(function* (executionId: string) {
+    const cancelled = yield* defect("clock.cancel", () => storage.cancelClocks(executionId));
+    yield* Effect.forEach(
+      cancelled,
+      (clockName) => FiberMap.remove(clocks, `${executionId}/${clockName}`),
+      { discard: true },
+    );
+  });
 
   const liveExecution = Effect.fnUntraced(function* (
     workflow: Workflow.Any,
@@ -174,11 +189,7 @@ const makeEngine = Effect.gen(function* () {
       return current;
     }
     const stored = yield* defect("execution.read", () => storage.execution(executionId));
-    if (Option.isNone(stored))
-      return yield* Effect.die(
-        engineFailure("execution.lookup", "execution_conflict", executionId),
-      );
-    if (stored.value.workflowName !== workflowName(workflow))
+    if (Option.isNone(stored) || stored.value.workflowName !== workflowName(workflow))
       return yield* Effect.die(
         engineFailure("execution.lookup", "execution_conflict", executionId),
       );
@@ -213,7 +224,8 @@ const makeEngine = Effect.gen(function* () {
       yield* Fiber.await(running);
       return yield* resumeExecution(workflow, executionId);
     }
-    if (existing !== undefined && running !== undefined) yield* FiberMap.remove(runs, executionId);
+    // A fiber still remembered here has already finished; drop it before the replay.
+    yield* Effect.when(FiberMap.remove(runs, executionId), Effect.succeed(running !== undefined));
 
     const scope = yield* Scope.fork(ownerScope);
     const instance = WorkflowEngine.WorkflowInstance.initial(workflow, executionId, scope);
@@ -223,21 +235,18 @@ const makeEngine = Effect.gen(function* () {
     yield* defect("execution.running", () => storage.setRunning(executionId));
 
     const run = entry.execute(state.payload, executionId).pipe(
-      Effect.provideService(WorkflowEngine.WorkflowEngine, engine),
+      Effect.provideServiceEffect(WorkflowEngine.WorkflowEngine, Deferred.await(engineMade)),
       (effect) => deferredState.trackRun(instance, effect),
       Effect.tap((result) =>
-        Effect.gen(function* () {
-          yield* defect("execution.result", () =>
+        Effect.andThen(
+          defect("execution.result", () =>
             storage.setResult(executionId, encodeResult(workflow, result)),
-          );
-          if (!Predicate.isTagged(result, "Complete")) return;
-          const cancelled = yield* defect("clock.cancel", () => storage.cancelClocks(executionId));
-          yield* Effect.forEach(
-            cancelled,
-            (clockName) => FiberMap.remove(clocks, `${executionId}/${clockName}`),
-            { discard: true },
-          );
-        }),
+          ),
+          Effect.when(
+            cancelClocks(executionId),
+            Effect.succeed(Predicate.isTagged(result, "Complete")),
+          ),
+        ),
       ),
       Effect.tap((result) => {
         if (state.parentExecutionId === undefined || !Predicate.isTagged(result, "Complete"))
@@ -260,8 +269,21 @@ const makeEngine = Effect.gen(function* () {
     deferredName: string,
   ): Effect.fn.Return<void> {
     yield* deferredState.deferredDone(executionId, deferredName);
-    const entry = workflows.get(workflowName);
-    if (entry !== undefined) yield* resumeExecution(entry.workflow, executionId);
+    const entry = HashMap.get(yield* Ref.get(workflows), workflowName);
+    yield* Effect.transposeOption(
+      Option.map(entry, (registered) => resumeExecution(registered.workflow, executionId)),
+    );
+  });
+
+  const interruptExecution = Effect.fnUntraced(function* (operation: string, executionId: string) {
+    const state = executions.get(executionId);
+    if (state !== undefined) {
+      state.interrupted = true;
+      state.instance.interrupted = true;
+    }
+    yield* FiberMap.remove(runs, executionId);
+    yield* defect(operation, () => storage.setInterrupted(executionId));
+    yield* cancelClocks(executionId);
   });
 
   const armClock = (clock: {
@@ -273,11 +295,14 @@ const makeEngine = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
-      if (clock.dueAt > now) yield* Effect.sleep(Duration.millis(clock.dueAt - now));
-      const fired = yield* defect("clock.fire", () =>
-        storage.fireClock(clock.executionId, clock.clockName),
+      yield* Effect.when(
+        Effect.sleep(Duration.millis(clock.dueAt - now)),
+        Effect.succeed(clock.dueAt > now),
       );
-      if (fired) yield* wakeExecution(clock.workflowName, clock.executionId, clock.deferredName);
+      yield* Effect.when(
+        wakeExecution(clock.workflowName, clock.executionId, clock.deferredName),
+        defect("clock.fire", () => storage.fireClock(clock.executionId, clock.clockName)),
+      );
     }).pipe(
       FiberMap.run(clocks, `${clock.executionId}/${clock.clockName}`, {
         onlyIfMissing: true,
@@ -285,12 +310,11 @@ const makeEngine = Effect.gen(function* () {
       Effect.asVoid,
     );
 
-  engine = WorkflowEngine.makeUnsafe({
+  const engine = WorkflowEngine.makeUnsafe({
     register: Effect.fnUntraced(function* <A, E>(
       workflow: Workflow.Any,
       execute: (
-        payload: object,
-        executionId: string,
+        ...input: Parameters<EncodedWorkflowBody>
       ) => Effect.Effect<A, E, WorkflowEngine.WorkflowInstance | WorkflowEngine.WorkflowEngine>,
     ) {
       const scope = yield* Effect.scope;
@@ -302,11 +326,14 @@ const makeEngine = Effect.gen(function* () {
         scope,
       };
       const name = workflowName(workflow);
-      workflows.set(name, entry);
+      yield* Ref.update(workflows, HashMap.set(name, entry));
+      // A later registration of the same name keeps its entry.
       yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          if (workflows.get(name) === entry) workflows.delete(name);
-        }),
+        Ref.update(workflows, (current) =>
+          Option.exists(HashMap.get(current, name), (registered) => registered === entry)
+            ? HashMap.remove(current, name)
+            : current,
+        ),
       );
       const pending = yield* defect("execution.pending", () => storage.pendingExecutions(name));
       yield* Effect.forEach(
@@ -334,23 +361,24 @@ const makeEngine = Effect.gen(function* () {
           }),
         );
         if (Predicate.isTagged(admitted.result, "Complete")) {
-          return (
-            options.discard ? undefined : decodeResult(workflow, admitted.result)
-          ) as Discard extends true ? void : Workflow.Result<unknown, unknown>;
+          return options.discard ? undefined : decodeResult(workflow, admitted.result);
         }
         yield* resumeExecution(workflow, options.executionId);
-        if (options.discard)
-          return undefined as Discard extends true ? void : Workflow.Result<unknown, unknown>;
+        if (options.discard) return undefined;
         const state = yield* liveExecution(workflow, options.executionId);
         const fiber = state.fiber;
         if (fiber === undefined)
           return yield* Effect.die(
             engineFailure("execution.await", "execution_conflict", options.executionId),
           );
-        return (yield* Fiber.join(fiber)) as Discard extends true
-          ? void
-          : Workflow.Result<unknown, unknown>;
-      }),
+        return yield* Fiber.join(fiber);
+      }).pipe(
+        // SAFETY: every branch above answers undefined exactly when `discard` is true, as the
+        // conditional result type states; TypeScript cannot narrow that type through the generic.
+        Effect.map(
+          (result) => result as Discard extends true ? void : Workflow.Result<unknown, unknown>,
+        ),
+      ),
     poll: (_workflow, executionId) =>
       defect("execution.poll", () =>
         Effect.map(storage.execution(executionId), (execution) =>
@@ -361,36 +389,9 @@ const makeEngine = Effect.gen(function* () {
           ),
         ),
       ),
-    interrupt: Effect.fnUntraced(function* (_workflow, executionId) {
-      const state = executions.get(executionId);
-      if (state !== undefined) {
-        state.interrupted = true;
-        state.instance.interrupted = true;
-      }
-      yield* FiberMap.remove(runs, executionId);
-      yield* defect("execution.interrupt", () => storage.setInterrupted(executionId));
-      const cancelled = yield* defect("clock.cancel", () => storage.cancelClocks(executionId));
-      yield* Effect.forEach(
-        cancelled,
-        (clockName) => FiberMap.remove(clocks, `${executionId}/${clockName}`),
-        { discard: true },
-      );
-    }),
-    interruptUnsafe: Effect.fnUntraced(function* (_workflow, executionId) {
-      const state = executions.get(executionId);
-      if (state !== undefined) {
-        state.interrupted = true;
-        state.instance.interrupted = true;
-      }
-      yield* FiberMap.remove(runs, executionId);
-      yield* defect("execution.interruptUnsafe", () => storage.setInterrupted(executionId));
-      const cancelled = yield* defect("clock.cancel", () => storage.cancelClocks(executionId));
-      yield* Effect.forEach(
-        cancelled,
-        (clockName) => FiberMap.remove(clocks, `${executionId}/${clockName}`),
-        { discard: true },
-      );
-    }),
+    interrupt: (_workflow, executionId) => interruptExecution("execution.interrupt", executionId),
+    interruptUnsafe: (_workflow, executionId) =>
+      interruptExecution("execution.interruptUnsafe", executionId),
     resume: (workflow, executionId) => resumeExecution(workflow, executionId),
     activityExecute: Effect.fnUntraced(function* <A, E, R>(
       activity: Pick<Activity.Any, "name"> & { readonly executeEncoded: Effect.Effect<A, E, R> },
@@ -439,22 +440,21 @@ const makeEngine = Effect.gen(function* () {
     // before the public engine reapplies the deferred's typed schema.
     deferredDone: (options) =>
       Effect.gen(function* () {
-        const inserted = yield* defect("deferred.complete", () =>
-          storage.setDeferredResult(
-            options.workflowName,
-            options.executionId,
-            options.deferredName,
-            encodeEncodedExit(options.exit),
-          ),
-        );
-        if (!inserted) return;
         const wake = wakeExecution(options.workflowName, options.executionId, options.deferredName);
         const current = yield* Effect.serviceOption(WorkflowEngine.WorkflowInstance);
-        if (Option.isSome(current) && current.value.executionId === options.executionId) {
-          yield* wake.pipe(Effect.forkIn(ownerScope));
-        } else {
-          yield* wake;
-        }
+        // The execution completing its own deferred cannot wait for its own replay.
+        const inside = Option.isSome(current) && current.value.executionId === options.executionId;
+        yield* Effect.when(
+          inside ? Effect.asVoid(Effect.forkIn(wake, ownerScope)) : wake,
+          defect("deferred.complete", () =>
+            storage.setDeferredResult(
+              options.workflowName,
+              options.executionId,
+              options.deferredName,
+              encodeEncodedExit(options.exit),
+            ),
+          ),
+        );
       }),
     scheduleClock: (workflow, options) =>
       Effect.gen(function* () {
@@ -477,6 +477,7 @@ const makeEngine = Effect.gen(function* () {
         });
       }),
   });
+  yield* Deferred.succeed(engineMade, engine);
 
   yield* Effect.forEach(yield* defect("clock.pending", () => storage.pendingClocks), armClock, {
     discard: true,

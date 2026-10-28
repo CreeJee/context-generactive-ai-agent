@@ -247,10 +247,9 @@ export function ApprovalCard({
   disabled: boolean;
   /** Who asks, when it is not the conversation's own agent (a subagent). */
   requester?: string;
-  /** A decision staged for an atomic TanStack interrupt batch. */
+  /** A decision staged for the approvals the run waits for together. */
   decision?: boolean;
-  /** Stages a decision instead of resolving this interrupt immediately. */
-  onAnswer?: (approved: boolean) => void;
+  onAnswer: (approved: boolean) => void;
 }) {
   const view = describe(decodeCall(approval.toolName, approval.argumentsJson));
   const reviewReason = PendingApproval.$match(approval, {
@@ -282,7 +281,7 @@ export function ApprovalCard({
           variant={decision === true ? "default" : "outline"}
           disabled={disabled}
           aria-pressed={decision === true}
-          onClick={() => (onAnswer ?? approval.answer)(true)}
+          onClick={() => onAnswer(true)}
         >
           {decision === true ? "승인 선택됨" : "승인"}
         </Button>
@@ -291,7 +290,7 @@ export function ApprovalCard({
           variant={decision === false ? "destructive" : "outline"}
           disabled={disabled}
           aria-pressed={decision === false}
-          onClick={() => (onAnswer ?? approval.answer)(false)}
+          onClick={() => onAnswer(false)}
         >
           {decision === false ? "거부 선택됨" : "거부"}
         </Button>

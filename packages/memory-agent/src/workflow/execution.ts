@@ -34,7 +34,7 @@ const Progress = Schema.Struct({
   completedSteps: Schema.Array(Schema.String),
   evidence: Schema.Array(Schema.String),
   toolResults: Schema.Array(Schema.String).pipe(
-    Schema.withDecodingDefaultTypeKey(Effect.sync(() => [])),
+    Schema.withDecodingDefaultTypeKey(Effect.succeed([])),
   ),
 });
 const executionFields = {
@@ -75,13 +75,13 @@ const isRetrying = WorkflowExecutionState.isAnyOf(["retrying"]);
 const isPending = WorkflowExecutionState.isAnyOf(["ready", "retrying"]);
 const executionKeys = Struct.keys(executionFields);
 
-export class WorkflowExecutionFailed extends Schema.TaggedError<WorkflowExecutionFailed>()(
-  "WorkflowExecutionFailed",
-  {
-    operation: Schema.Literals(["read", "write"]),
-    cause: Schema.Defect(),
-  },
-) {}
+export class WorkflowExecutionFailed extends Schema.TaggedError<
+  WorkflowExecutionFailed,
+  { readonly brand: unique symbol }
+>()("WorkflowExecutionFailed", {
+  operation: Schema.Literals(["read", "write"]),
+  cause: Schema.Defect(),
+}) {}
 
 const namespace = "memory-agent/workflow-execution";
 const encode = Schema.encodeEffect(Schema.fromJsonString(WorkflowExecutionState));

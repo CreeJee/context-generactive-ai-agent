@@ -2,21 +2,22 @@ import { Result, Function as EffectFunction } from "effect";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
 import { DatabaseSync } from "node:sqlite";
-import { Context, Effect, FileSystem, Layer, Path, Schema, Semaphore } from "effect";
-import { Migrator, SqlClient } from "effect/sql";
-import { goalHistoryMigration, migrations } from "./migrations.ts";
+import { Context, Effect, Exit, FileSystem, Layer, Path, Schema, Semaphore } from "effect";
+import { Migrator, SqlClient, SqlError } from "effect/sql";
+import { migrateTanStackRows } from "../chat-store/tanstack-migration.ts";
+import { goalHistoryMigration, migrations, tanStackRowsMigration } from "./migrations.ts";
 import { migrationClient } from "./migration-client.ts";
 import { sqlClientOver } from "./sql-client.ts";
 
-export class DatabaseOpenError extends Schema.TaggedError<DatabaseOpenError>()(
-  "DatabaseOpenError",
-  { file: Schema.String, cause: Schema.Defect() },
-) {}
+export class DatabaseOpenError extends Schema.TaggedError<
+  DatabaseOpenError,
+  { readonly brand: unique symbol }
+>()("DatabaseOpenError", { file: Schema.String, cause: Schema.Defect() }) {}
 
 /**
- * Why a connection's schema cannot be used by this build. Thrown by the synchronous startup and
- * reader checks, which run before any Effect owns the connection; `make` carries it as the cause of
- * `DatabaseOpenError`. A failing SQL step keeps SQLite's own error.
+ * Why a connection's schema cannot be used by this build. The startup migration fails with it and
+ * the synchronous reader check throws it; `make` carries it as the cause of `DatabaseOpenError`. A
+ * failing SQL step fails as its `SqlError`, with SQLite's own error as the cause.
  */
 export const DatabaseSchemaRejectedReason = Schema.TaggedUnion({
   /** Migration was asked to run inside a transaction it cannot own. */
@@ -31,10 +32,10 @@ export const DatabaseSchemaRejectedReason = Schema.TaggedUnion({
   InvalidForeignKeys: {},
 });
 
-export class DatabaseSchemaRejected extends Schema.TaggedError<DatabaseSchemaRejected>()(
-  "DatabaseSchemaRejected",
-  { reason: DatabaseSchemaRejectedReason },
-) {}
+export class DatabaseSchemaRejected extends Schema.TaggedError<
+  DatabaseSchemaRejected,
+  { readonly brand: unique symbol }
+>()("DatabaseSchemaRejected", { reason: DatabaseSchemaRejectedReason }) {}
 
 const schemaRejection = DatabaseSchemaRejectedReason.cases;
 const rejected = (reason: DatabaseSchemaRejected["reason"]) =>
@@ -42,20 +43,45 @@ const rejected = (reason: DatabaseSchemaRejected["reason"]) =>
 
 const UserVersion = Schema.Struct({ user_version: Schema.Finite });
 
-/** Startup-only: call before handing this connection to any service or writer. */
-export function migrateDatabase(sqlite: DatabaseSync) {
-  if (sqlite.isTransaction) throw rejected(schemaRejection.InsideTransaction.make({}));
-  const foreignKeys = EffectFunction.flow(
-    Schema.decodeUnknownResult(Schema.Struct({ foreign_keys: Schema.Finite })),
-    Result.getOrThrow,
-  )(sqlite.prepare("PRAGMA foreign_keys").get()).foreign_keys;
+/** A schema rejection as it is; anything else SQLite threw, as its `SqlError`. */
+const migrationFailure = (cause: unknown) =>
+  Schema.is(DatabaseSchemaRejected)(cause)
+    ? cause
+    : SqlError.SqlError.make({ reason: SqlError.classifySqliteError(cause) });
+
+/** Synchronous work on the connection, failing with what it threw. */
+const attempt = <A>(work: () => A) => Effect.try({ try: work, catch: migrationFailure });
+
+/** Startup-only: run before handing this connection to any service or writer. */
+export const migrateDatabase = Effect.fnUntraced(function* (sqlite: DatabaseSync) {
+  if (sqlite.isTransaction) return yield* rejected(schemaRejection.InsideTransaction.make({}));
+  const foreignKeys = yield* attempt(
+    () =>
+      EffectFunction.flow(
+        Schema.decodeUnknownResult(Schema.Struct({ foreign_keys: Schema.Finite })),
+        Result.getOrThrow,
+      )(sqlite.prepare("PRAGMA foreign_keys").get()).foreign_keys,
+  );
   // Startup owns this connection. FK suspension permits the historical referenced-table rebuild;
   // every pending step and its version cursor commit together, and FK validity is checked before commit.
-  sqlite.exec("PRAGMA foreign_keys = OFF");
-  let started = false;
-  try {
-    sqlite.exec("BEGIN IMMEDIATE");
-    started = true;
+  yield* attempt(() => sqlite.exec("PRAGMA foreign_keys = OFF"));
+  yield* Effect.acquireUseRelease(
+    attempt(() => sqlite.exec("BEGIN IMMEDIATE")),
+    () => migrateInTransaction(sqlite),
+    (_, exit) =>
+      Exit.isSuccess(exit) ? Effect.void : Effect.orDie(attempt(() => sqlite.exec("ROLLBACK"))),
+  ).pipe(
+    Effect.ensuring(
+      Effect.orDie(
+        attempt(() => sqlite.exec(`PRAGMA foreign_keys = ${foreignKeys === 1 ? "ON" : "OFF"}`)),
+      ),
+    ),
+  );
+});
+
+/** Every pending step, its version cursor and the schema check, inside the startup transaction. */
+const migrateInTransaction = Effect.fnUntraced(function* (sqlite: DatabaseSync) {
+  const { applied, loader } = yield* attempt(() => {
     // Read the authority only after taking the migration lock: another starter may have completed it.
     const applied = databaseSchemaVersion(sqlite);
     if (applied > migrations.length)
@@ -86,7 +112,9 @@ export function migrateDatabase(sqlite: DatabaseSync) {
       "INSERT OR IGNORE INTO effect_sql_migrations (migration_id,name) VALUES (?,?)",
     );
     if (!hasMetadata)
-      for (let version = 1; version <= applied; version++) adopt.run(version, `schema_${version}`);
+      Array.from({ length: applied }, (_, index) => index + 1).forEach((version) =>
+        adopt.run(version, `schema_${version}`),
+      );
     const recorded = sqlite
       .prepare("SELECT migration_id FROM effect_sql_migrations ORDER BY migration_id")
       .all();
@@ -102,7 +130,7 @@ export function migrateDatabase(sqlite: DatabaseSync) {
             index + 1,
             `schema_${index + 1}`,
             // The Migrator turns a step's failure into a generic defect; throwing keeps the reason
-            // as the defect itself, so `migrateDatabase` rethrows it unchanged.
+            // as the defect itself, so `migrateDatabase` fails with it unchanged.
             Effect.succeed(
               Effect.sync(() => {
                 const rebuild = index + 1 === goalHistoryMigration.version;
@@ -115,17 +143,27 @@ export function migrateDatabase(sqlite: DatabaseSync) {
                   if (sqlite.prepare("PRAGMA foreign_key_check").all().length !== 0)
                     throw rejected(schemaRejection.InvalidForeignKeys.make({}));
                 }
-                sqlite.exec(`PRAGMA user_version = ${index + 1}`);
-              }),
+              }).pipe(
+                Effect.andThen(
+                  migrateTanStackRows().pipe(
+                    Effect.orDie,
+                    Effect.when(Effect.succeed(step === tanStackRowsMigration)),
+                  ),
+                ),
+                Effect.andThen(
+                  Effect.sync(() => sqlite.exec(`PRAGMA user_version = ${index + 1}`)),
+                ),
+              ),
             ),
           ] as const,
       ),
     );
-    Effect.runSync(
-      Effect.flatMap(migrationClient(sqlite), (client) =>
-        Migrator.make({})({ loader }).pipe(Effect.provideService(SqlClient.SqlClient, client)),
-      ),
-    );
+    return { applied, loader };
+  });
+  yield* Effect.flatMap(migrationClient(sqlite), (client) =>
+    Migrator.make({})({ loader }).pipe(Effect.provideService(SqlClient.SqlClient, client)),
+  ).pipe(Effect.catchDefect((defect) => Effect.fail(migrationFailure(defect))));
+  yield* attempt(() => {
     if (
       applied < migrations.length &&
       sqlite.prepare("PRAGMA foreign_key_check").all().length !== 0
@@ -133,14 +171,8 @@ export function migrateDatabase(sqlite: DatabaseSync) {
       throw rejected(schemaRejection.InvalidForeignKeys.make({}));
     assertDatabaseSchema(sqlite);
     sqlite.exec("COMMIT");
-    started = false;
-  } catch (error) {
-    if (started) sqlite.exec("ROLLBACK");
-    throw error;
-  } finally {
-    sqlite.exec(`PRAGMA foreign_keys = ${foreignKeys === 1 ? "ON" : "OFF"}`);
-  }
-}
+  });
+});
 
 export const databaseSchemaVersion = (sqlite: DatabaseSync) =>
   EffectFunction.flow(
@@ -178,28 +210,26 @@ const make = Effect.fn("Database.make")(function* (
       .makeDirectory(path.dirname(file), { recursive: true, mode: 0o700 })
       .pipe(Effect.mapError((cause) => DatabaseOpenError.make({ file, cause })));
   }
+  const openFailed = (cause: unknown) => DatabaseOpenError.make({ file, cause });
   return yield* Effect.acquireRelease(
-    Effect.try({
-      try: () => {
-        const sqlite = open(file);
-        try {
+    Effect.try({ try: () => open(file), catch: openFailed }),
+    (sqlite) => Effect.sync(() => sqlite.close()),
+  ).pipe(
+    Effect.tap((sqlite) =>
+      Effect.try({
+        try: () => {
           sqlite.exec("PRAGMA journal_mode = WAL");
           sqlite.exec("PRAGMA foreign_keys = ON");
           sqlite.exec("PRAGMA busy_timeout = 5000");
           // Up to 64 MiB of pages instead of 2: updating the trigram index reads and rewrites many of
           // them, and a bulk write took a fifth less time (docs/decisions.md).
           sqlite.exec("PRAGMA cache_size = -65536");
-          migrateDatabase(sqlite);
-          return sqlite;
-        } catch (error) {
-          sqlite.close();
-          throw error;
-        }
-      },
-      catch: (cause) => DatabaseOpenError.make({ file, cause }),
-    }),
-    (sqlite) => Effect.sync(() => sqlite.close()),
-  ).pipe(Effect.flatMap(connectionContext));
+        },
+        catch: openFailed,
+      }).pipe(Effect.andThen(Effect.mapError(migrateDatabase(sqlite), openFailed))),
+    ),
+    Effect.flatMap(connectionContext),
+  );
 });
 
 /**

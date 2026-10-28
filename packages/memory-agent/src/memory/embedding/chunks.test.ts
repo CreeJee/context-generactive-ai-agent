@@ -15,19 +15,23 @@ it.effect(
       expect(spans.length).toBeGreaterThan(3);
       expect(spans[0]!.start).toBe(0);
       expect(spans.at(-1)!.end).toBe(text.length);
-      for (const [index, span] of spans.entries()) {
-        const part = text.slice(span.start, span.end);
-        expect(new TextDecoder().decode(new TextEncoder().encode(part))).toBe(part);
-        expect(yield* count(part, true)).toBeLessThanOrEqual(chunkPolicy.tokens);
-        const previous = spans[index - 1];
-        if (previous !== undefined) {
-          expect(span.start).toBeGreaterThan(previous.start);
-          expect(span.start).toBeLessThan(previous.end);
-          expect(yield* count(text.slice(span.start, previous.end), false)).toBeLessThanOrEqual(
-            chunkPolicy.overlap,
-          );
-        }
-      }
+      yield* Effect.forEach(
+        spans,
+        Effect.fnUntraced(function* (span, index) {
+          const part = text.slice(span.start, span.end);
+          expect(new TextDecoder().decode(new TextEncoder().encode(part))).toBe(part);
+          expect(yield* count(part, true)).toBeLessThanOrEqual(chunkPolicy.tokens);
+          const previous = spans[index - 1];
+          if (previous !== undefined) {
+            expect(span.start).toBeGreaterThan(previous.start);
+            expect(span.start).toBeLessThan(previous.end);
+            expect(yield* count(text.slice(span.start, previous.end), false)).toBeLessThanOrEqual(
+              chunkPolicy.overlap,
+            );
+          }
+        }),
+        { discard: true },
+      );
       expect(text.slice(spans.at(-1)!.start)).toContain("마지막 결정은 목요일");
       expect(yield* chunkText("", count)).toEqual([]);
       expect(yield* chunkText("짧은 원문🙂", count)).toEqual([{ start: 0, end: 7 }]);

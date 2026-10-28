@@ -1,13 +1,10 @@
-import { nativePromise, runNativeEffectWith } from "../runtime/native-effect.ts";
-import { onRun, runTrace } from "../runtime/run-trace.ts";
-import { HashSet } from "effect";
-import { isTruthy } from "../truthy.ts";
 import { errorTag } from "../tools/failure.ts";
-import type { AnyServerTool } from "@tanstack/ai";
-import { Context, Effect, Layer, Option, Schema } from "effect";
+import { Context, Effect, FileSystem, HashSet, Layer, Option, Predicate, Schema } from "effect";
 import { resolveProjectPath } from "../files/paths.ts";
 import { readFileBytesEffect } from "../files/text.ts";
+import type { JsonValue } from "../json.ts";
 import type { Project } from "../projects/projects.ts";
+import type { PreparedCall, RunTool } from "../tools/run-tool.ts";
 import { Attachments } from "./attachments.ts";
 
 /** File tools whose result names the project file they just wrote. */
@@ -31,8 +28,8 @@ export interface DrawingPreview {
 const isDrawing = (path: string) => path.toLowerCase().endsWith(".svg");
 
 const make = Effect.gen(function* () {
-  const services = yield* Effect.context<never>();
   const attachments = yield* Attachments;
+  const fileSystem = yield* FileSystem.FileSystem;
 
   /**
    * A preview of the SVG a tool just wrote, or nothing. The file is read back through the same
@@ -49,6 +46,7 @@ const make = Effect.gen(function* () {
         mimeType: picture.mimeType,
       });
     }).pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
       // The preview is extra: the tool's own result stands without it.
       Effect.catch((error) =>
         Effect.as(
@@ -62,35 +60,49 @@ const make = Effect.gen(function* () {
     /**
      * The same tools; `write_file` and `edit_file` add a `preview` to their result when the file is
      * an SVG. The model gets the result too, and the preview only tells it a picture was made.
-     * The preview runs on the run's context, so its spans join the run's trace.
+     * The preview runs on the loop's fiber, so its spans join the run's trace.
      */
-    withPreviews: (project: Project, tools: readonly AnyServerTool[]) =>
-      Effect.map(runTrace, (caller): AnyServerTool[] => {
-        const run = runNativeEffectWith(onRun(services, caller));
-        return tools.map((tool): AnyServerTool => {
-          const execute = tool.execute;
-          if (!isTruthy(execute) || !HashSet.has(writingToolNames, tool.name)) return tool;
-          return {
-            ...tool,
-            // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-            execute: (...call: Parameters<typeof execute>) =>
-              run(
-                Effect.gen(function* () {
-                  const result = yield* nativePromise(() => Promise.resolve(execute(...call)));
-                  const written = Option.getOrUndefined(decodeWritten(result));
-                  if (!(written !== undefined) || !isDrawing(written.path)) return result;
-                  const preview = yield* previewOf(project, written.path);
-                  return Option.match(preview, {
-                    onNone: () => result,
-                    onSome: (picture) => ({ ...result, preview: picture }),
-                  });
-                }),
-              ),
-          };
-        });
-      }),
+    withPreviews: (project: Project, tools: ReadonlyArray<RunTool>): Array<RunTool> =>
+      tools.map((tool) =>
+        HashSet.has(writingToolNames, tool.tool.name)
+          ? {
+              ...tool,
+              prepare: (params) =>
+                Effect.map(
+                  tool.prepare(params),
+                  (run): PreparedCall =>
+                    (call) =>
+                      Effect.flatMap(run(call), (result) =>
+                        Option.match(drawingIn(result), {
+                          onNone: () => Effect.succeed(result),
+                          onSome: ({ written, path }) =>
+                            Effect.map(
+                              previewOf(project, path),
+                              Option.match({
+                                onNone: (): JsonValue => written,
+                                onSome: (picture) => ({ ...written, preview: { ...picture } }),
+                              }),
+                            ),
+                        }),
+                      ),
+                ),
+            }
+          : tool,
+      ),
   };
 });
+
+const isJsonRecord = (value: JsonValue): value is { readonly [key: string]: JsonValue } =>
+  Predicate.isObject(value) && !Array.isArray(value);
+
+/** The result of a call that wrote an SVG, with the drawing's path. */
+const drawingIn = (result: JsonValue) =>
+  Option.liftPredicate(result, isJsonRecord).pipe(
+    Option.flatMap((written) =>
+      Option.map(decodeWritten(written), ({ path }) => ({ written, path })),
+    ),
+    Option.filter(({ path }) => isDrawing(path)),
+  );
 
 /** Pictures of the drawings the model writes, for showing them in the conversation. */
 export class DrawingPreviews extends Context.Service<

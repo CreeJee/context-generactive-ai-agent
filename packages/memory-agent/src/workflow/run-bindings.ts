@@ -1,6 +1,6 @@
 import { Data, DateTime, Effect, Function as EffectFunction, Option, Schema } from "effect";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
-import { recoveredReadRunSql } from "../agent/owner-read-recovery.ts";
+import { recoveredReadRunSql } from "./read-recoveries.ts";
 import { readOnlyToolNames } from "../tools/effects.ts";
 
 export type RunBinding = {
@@ -163,17 +163,15 @@ export const workflowRunBindings = Effect.gen(function* () {
           (yield* unresolved(sessionId, goal.value.goal_instance_id)).length > 0
         )
           return Admission.refused({ reason: "run_outcome_uncertain" });
-        switch (mode) {
-          case "commit":
-            yield* sql`
-              INSERT INTO workflow_run_bindings
-                (run_id, session_id, goal_instance_id, goal_version, plan_version, workflow_revision_id, created_at)
-              VALUES (${runId}, ${sessionId}, ${goal.value.goal_instance_id}, ${state.goal_version},
-                ${state.plan_version}, ${state.id}, ${DateTime.formatIso(yield* DateTime.now)})`;
-            break;
-          case "preview":
-            break;
-        }
+        const at = DateTime.formatIso(yield* DateTime.now);
+        yield* Effect.when(
+          sql`
+            INSERT INTO workflow_run_bindings
+              (run_id, session_id, goal_instance_id, goal_version, plan_version, workflow_revision_id, created_at)
+            VALUES (${runId}, ${sessionId}, ${goal.value.goal_instance_id}, ${state.goal_version},
+              ${state.plan_version}, ${state.id}, ${at})`,
+          Effect.succeed(mode === "commit"),
+        );
         return Admission.bound({
           binding: {
             runId,

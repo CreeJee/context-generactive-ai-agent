@@ -275,8 +275,12 @@ export const executingSession = Effect.fn("executingSession")(function* (
     status: "ready",
   });
   const ops = boardOps(workflows);
-  for (const [cardId, files] of Object.entries(boundaries))
-    yield* ops.editCard(session.id, cardId, { boundaries: files }, BoardAuthor.cases.User.make({}));
+  yield* Effect.forEach(
+    Object.entries(boundaries),
+    ([cardId, files]) =>
+      ops.editCard(session.id, cardId, { boundaries: files }, BoardAuthor.cases.User.make({})),
+    { discard: true },
+  );
   yield* workflows.setPhase(session.id, "execute");
   const goalInstanceId = Option.getOrThrow(
     Option.fromNullishOr(yield* workflows.goalInstanceId(session.id)),

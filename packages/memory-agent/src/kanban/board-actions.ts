@@ -1,4 +1,14 @@
-import { Context, Effect, Layer, Match, Option, Predicate, Schema, type Types } from "effect";
+import {
+  Array as EffectArray,
+  Context,
+  Effect,
+  Layer,
+  Match,
+  Option,
+  Predicate,
+  Schema,
+} from "effect";
+import { optionalProperty } from "../optional-property.ts";
 import {
   BoardEdit,
   BoardEditRefused,
@@ -41,29 +51,29 @@ import type { LoopHealth } from "../runtime/loop-health.ts";
  * up from there.
  */
 
-export class KanbanActionRefused extends Schema.TaggedError<KanbanActionRefused>()(
-  "KanbanActionRefused",
-  {
-    reason: Schema.Literals([
-      "not_kanban",
-      "card_missing",
-      "card_running",
-      "request_missing",
-      "request_settled",
-      "reassign_needs_edit",
-      "no_goal_change",
-      "card_not_blocked",
-      "card_not_running",
-      "reorder_across_columns",
-      /** A card waiting for a person's decision stays until it is answered or cancelled. */
-      "card_waiting",
-      /** Other cards of the Plan depend on it; they would be left waiting for nothing. */
-      "card_has_dependents",
-      /** The transfer target is this Plan, another project's conversation, or has no Plan. */
-      "transfer_target_invalid",
-    ]),
-  },
-) {}
+export class KanbanActionRefused extends Schema.TaggedError<
+  KanbanActionRefused,
+  { readonly brand: unique symbol }
+>()("KanbanActionRefused", {
+  reason: Schema.Literals([
+    "not_kanban",
+    "card_missing",
+    "card_running",
+    "request_missing",
+    "request_settled",
+    "reassign_needs_edit",
+    "no_goal_change",
+    "card_not_blocked",
+    "card_not_running",
+    "reorder_across_columns",
+    /** A card waiting for a person's decision stays until it is answered or cancelled. */
+    "card_waiting",
+    /** Other cards of the Plan depend on it; they would be left waiting for nothing. */
+    "card_has_dependents",
+    /** The transfer target is this Plan, another project's conversation, or has no Plan. */
+    "transfer_target_invalid",
+  ]),
+}) {}
 
 /** How the orchestrator settles a user's change to an executing card. */
 export const ChangeDecision = Schema.TaggedUnion({
@@ -140,20 +150,17 @@ export interface KanbanBoardView {
 const running = (card: PlanStep) => card.status === "in_progress" || card.status === "verify";
 
 /** The card as a draft for another Plan: its contract travels, its dependencies do not. */
-const draftOf = (card: PlanStep): CardDraft => {
-  const draft: Types.Mutable<CardDraft> = {
-    title: card.title,
-    description: card.description,
-    dependsOn: [],
-    acceptanceCriteria: card.acceptanceCriteria,
-  };
-  if (card.outcome !== undefined) draft.outcome = card.outcome;
-  if (card.boundaries !== undefined) draft.boundaries = card.boundaries;
-  if (card.risk !== undefined) draft.risk = card.risk;
-  if (card.requiredEvidence !== undefined) draft.requiredEvidence = card.requiredEvidence;
-  if (card.humanDecision !== undefined) draft.humanDecision = card.humanDecision;
-  return draft;
-};
+const draftOf = (card: PlanStep): CardDraft => ({
+  title: card.title,
+  description: card.description,
+  dependsOn: [],
+  acceptanceCriteria: card.acceptanceCriteria,
+  ...optionalProperty("outcome", card.outcome),
+  ...optionalProperty("boundaries", card.boundaries),
+  ...optionalProperty("risk", card.risk),
+  ...optionalProperty("requiredEvidence", card.requiredEvidence),
+  ...optionalProperty("humanDecision", card.humanDecision),
+});
 
 const describePatch = (patch: CardPatch) =>
   Object.entries(patch)
@@ -308,14 +315,16 @@ const make = Effect.gen(function* () {
   ) {
     yield* ops.editCard(goal.sessionId, card.id, patch, author);
     yield* note(goal, card.id, text, fresh ? 1 : 0);
-    if (running(card))
-      yield* interrupt(
+    yield* Effect.when(
+      interrupt(
         goal,
         card,
         card.status === "verify" ? "in_progress" : "ready",
         `card ${card.id} changed: ${text}`,
         author,
-      );
+      ),
+      Effect.succeed(running(card)),
+    );
   });
 
   /**
@@ -333,9 +342,9 @@ const make = Effect.gen(function* () {
     // Moving a waiting card decides for the person; their wait ends unanswered.
     if (card.status === "human_decision" && move.to !== "human_decision")
       yield* closeDecisions(goal, [card.id], "orchestrator_cancelled");
-    if (running(card) && card.status === move.from)
-      yield* interrupt(goal, card, move.to, detail, author);
-    else yield* workflows.transitionCard(sessionId, { ...move, detail }, author);
+    yield* running(card) && card.status === move.from
+      ? interrupt(goal, card, move.to, detail, author)
+      : workflows.transitionCard(sessionId, { ...move, detail }, author);
     if (move.to === "ready" || move.to === "backlog")
       yield* attempts.updateLadder(goal.goalInstanceId, move.cardId, (current) => ({
         ...current,
@@ -357,15 +366,18 @@ const make = Effect.gen(function* () {
     ) {
       const goal = yield* board(sessionId);
       const card = yield* idle(sessionId, cardId);
-      const added: string[] = [];
-      for (const part of parts) {
-        const saved = yield* ops.addCard(
-          sessionId,
-          { ...part, dependsOn: [...card.dependsOn, ...part.dependsOn] },
-          author,
-        );
-        if (Option.isSome(saved)) added.push(saved.value.id);
-      }
+      const added = EffectArray.getSomes(
+        yield* Effect.forEach(parts, (part) =>
+          Effect.map(
+            ops.addCard(
+              sessionId,
+              { ...part, dependsOn: [...card.dependsOn, ...part.dependsOn] },
+              author,
+            ),
+            Option.map((saved) => saved.id),
+          ),
+        ),
+      );
       yield* ops.replaceCards(sessionId, [cardId], added, author);
       yield* retire(goal, [cardId]);
       yield* orchestrator.poke(goal.goalInstanceId);
@@ -404,8 +416,9 @@ const make = Effect.gen(function* () {
       yield* ops.cancelCard(sessionId, cardId, author);
       yield* closeDecisions(goal, [cardId], "card_stopped");
       // A running attempt ends as Stopped and the loop then settles the worktree.
-      if (running(card)) yield* orchestrator.stopAttempt(goal.goalInstanceId, cardId);
-      else yield* retire(goal, [cardId]);
+      yield* running(card)
+        ? orchestrator.stopAttempt(goal.goalInstanceId, cardId)
+        : retire(goal, [cardId]);
       yield* orchestrator.poke(goal.goalInstanceId);
     }),
 
@@ -443,14 +456,20 @@ const make = Effect.gen(function* () {
        * it was), then cancelled here, which keeps its earlier work on its card branch.
        */
       const transfer = Effect.fnUntraced(function* (toSessionId: string, at: string | null) {
-        if (toSessionId === sessionId) return yield* refuse("transfer_target_invalid");
-        if (running(card)) return yield* refuse("card_running");
-        if (card.status === "human_decision") return yield* refuse("card_waiting");
-        if (card.status === "done")
-          return yield* BoardEditRefused.make({ reason: "card_finished" });
+        const refuseWhen = (reason: KanbanActionRefused["reason"], refused: boolean) =>
+          Effect.when(Effect.fail(refuse(reason)), Effect.succeed(refused));
+        yield* refuseWhen("transfer_target_invalid", toSessionId === sessionId);
+        yield* refuseWhen("card_running", running(card));
+        yield* refuseWhen("card_waiting", card.status === "human_decision");
+        yield* Effect.when(
+          Effect.fail(BoardEditRefused.make({ reason: "card_finished" })),
+          Effect.succeed(card.status === "done"),
+        );
         const steps = (yield* workflows.get(sessionId)).plan?.steps ?? [];
-        if (steps.some((step) => step.id !== card.id && step.dependsOn.includes(card.id)))
-          return yield* refuse("card_has_dependents");
+        yield* refuseWhen(
+          "card_has_dependents",
+          steps.some((step) => step.id !== card.id && step.dependsOn.includes(card.id)),
+        );
         // Two reads, not `Effect.all` over a tuple: that contextual type loses the error types.
         const source = yield* sessions.get(sessionId);
         const target = yield* sessions.get(toSessionId).pipe(
@@ -486,9 +505,13 @@ const make = Effect.gen(function* () {
         Reorder: Effect.fnUntraced(function* ({ at }) {
           const steps = (yield* workflows.get(sessionId)).plan?.steps ?? [];
           const index = steps.findIndex((step) => step.id === at);
-          const target = steps[index];
-          if (target === undefined) return yield* refuse("card_missing");
-          if (target.status !== card.status) return yield* refuse("reorder_across_columns");
+          const target = yield* Effect.fromOption(Option.fromUndefinedOr(steps[index]), () =>
+            refuse("card_missing"),
+          );
+          yield* Effect.when(
+            Effect.fail(refuse("reorder_across_columns")),
+            Effect.succeed(target.status !== card.status),
+          );
           const result = yield* workflows.editBoard(
             sessionId,
             BoardEdit.cases.MoveCard.make({ planVersion, cardId: card.id, index }),
@@ -499,11 +522,16 @@ const make = Effect.gen(function* () {
         }),
         Requeue: Effect.fnUntraced(function* () {
           yield* board(sessionId);
-          if (card.status !== "blocked") return yield* refuse("card_not_blocked");
+          yield* Effect.when(
+            Effect.fail(refuse("card_not_blocked")),
+            Effect.succeed(card.status !== "blocked"),
+          );
           // A dead-lettered attempt continues as the same queue item; any other blocked card
           // starts a new failure streak from ready.
-          if (!(yield* orchestrator.requeue(sessionId, card.id, author)))
-            yield* moveCard(sessionId, { cardId: card.id, from: "blocked", to: "ready" }, author);
+          yield* Effect.when(
+            moveCard(sessionId, { cardId: card.id, from: "blocked", to: "ready" }, author),
+            Effect.map(orchestrator.requeue(sessionId, card.id, author), (requeued) => !requeued),
+          );
           return yield* applied;
         }),
         Hold: () => hold(true),
@@ -543,7 +571,10 @@ const make = Effect.gen(function* () {
       const request = yield* Effect.fromOption(
         yield* attempts.changeRequest(sessionId, requestId),
       ).pipe(Effect.mapError(() => refuse("request_missing")));
-      if (request.status !== "pending") return yield* refuse("request_settled");
+      yield* Effect.when(
+        Effect.fail(refuse("request_settled")),
+        Effect.succeed(request.status !== "pending"),
+      );
       const change: UserChange = request.change_json;
       const settle = (status: "applied" | "reassigned" | "rejected", reason: string | null) =>
         attempts.settleChangeRequest(requestId, { status, reason });
@@ -556,8 +587,9 @@ const make = Effect.gen(function* () {
                   const card = yield* cardOf(sessionId, request.card_id);
                   yield* ops.cancelCard(sessionId, card.id, author);
                   yield* closeDecisions(goal, [card.id], "card_stopped");
-                  if (running(card)) yield* orchestrator.stopAttempt(goal.goalInstanceId, card.id);
-                  else yield* retire(goal, [card.id]);
+                  yield* running(card)
+                    ? orchestrator.stopAttempt(goal.goalInstanceId, card.id)
+                    : retire(goal, [card.id]);
                 }),
           Edit: ({ patch }) =>
             Effect.flatMap(cardOf(sessionId, request.card_id), (card) =>
@@ -593,8 +625,9 @@ const make = Effect.gen(function* () {
       author: BoardAuthor,
     ) {
       const goal = yield* board(sessionId);
-      if (goal.hold === null) return yield* refuse("no_goal_change");
-      const hold = goal.hold;
+      const hold = yield* Effect.fromOption(Option.fromNullishOr(goal.hold), () =>
+        refuse("no_goal_change"),
+      );
       yield* Effect.forEach(
         verdicts,
         Effect.fnUntraced(function* (verdict) {
@@ -640,9 +673,9 @@ const make = Effect.gen(function* () {
                   author,
                 );
                 // The replaced card's branch stays for the new card to consult.
-                if (running(card))
-                  return yield* orchestrator.stopAttempt(goal.goalInstanceId, card.id);
-                return yield* retire(goal, [card.id]);
+                yield* running(card)
+                  ? orchestrator.stopAttempt(goal.goalInstanceId, card.id)
+                  : retire(goal, [card.id]);
               }),
             NeedsDecision: ({ question }) =>
               Effect.gen(function* () {
@@ -664,8 +697,10 @@ const make = Effect.gen(function* () {
                   }),
                   author,
                 });
-                if (running(card))
-                  return yield* orchestrator.stopAttempt(goal.goalInstanceId, card.id);
+                yield* Effect.when(
+                  orchestrator.stopAttempt(goal.goalInstanceId, card.id),
+                  Effect.succeed(running(card)),
+                );
               }),
           });
         }),

@@ -93,35 +93,32 @@ export const OwnerReply = Schema.TaggedUnion({
 });
 export type OwnerReply = typeof OwnerReply.Type;
 
-export class NativeOwnerFailed extends Schema.TaggedError<NativeOwnerFailed>()(
-  "NativeOwnerFailed",
-  {
-    reason: Schema.Literals([
-      "invalid-input",
-      "queue-full",
-      "input-budget",
-      "worker-exit",
-      "worker-error",
-      "startup-timeout",
-      "request-timeout",
-      "closed",
-      "epoch-mismatch",
-      "index-failed",
-      "lease-unavailable",
-      "read-failed",
-      "native-incompatible",
-    ]),
-    /** The native exception, kept inside the process that caught it; IPC carries only `reason`. */
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
+export class NativeOwnerFailed extends Schema.TaggedError<
+  NativeOwnerFailed,
+  { readonly brand: unique symbol }
+>()("NativeOwnerFailed", {
+  reason: Schema.Literals([
+    "invalid-input",
+    "queue-full",
+    "input-budget",
+    "worker-exit",
+    "worker-error",
+    "startup-timeout",
+    "request-timeout",
+    "closed",
+    "epoch-mismatch",
+    "index-failed",
+    "lease-unavailable",
+    "read-failed",
+    "native-incompatible",
+  ]),
+  /** The native exception, kept inside the process that caught it; IPC carries only `reason`. */
+  cause: Schema.optional(Schema.Defect()),
+}) {
   override get message() {
-    switch (this.reason) {
-      case "lease-unavailable":
-        return "Vector index is held by another process using the same storage root";
-      default:
-        return `Native search owner failed: ${this.reason}`;
-    }
+    return this.reason === "lease-unavailable"
+      ? "Vector index is held by another process using the same storage root"
+      : `Native search owner failed: ${this.reason}`;
   }
 }
 

@@ -1,0 +1,746 @@
+{
+  "subscription": {
+    "anthropic": {
+      "model": "claude-opus-5-5",
+      "max_tokens": 32000,
+      "stream": true,
+      "system": [
+        {
+          "type": "text",
+          "text": "Follow the rules. ",
+          "cache_control": {
+            "type": "ephemeral",
+            "ttl": "1h"
+          }
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "next",
+              "cache_control": {
+                "type": "ephemeral",
+                "ttl": "1h"
+              }
+            }
+          ]
+        }
+      ],
+      "tools": [
+        {
+          "name": "list_files",
+          "description": "List files.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "directory": {
+                "type": "string",
+                "description": "Where."
+              },
+              "offset": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "order": {
+                "type": "string",
+                "enum": [
+                  "name",
+                  "time"
+                ]
+              }
+            },
+            "required": [
+              "order"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "list_tasks",
+          "description": "List tasks.",
+          "input_schema": {
+            "not": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "name": "run_skill",
+          "description": "Run a skill.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 64,
+                "description": "A project code skill's name."
+              },
+              "input": {
+                "type": "object",
+                "description": "A ts skill's input, as its Input in the list says."
+              },
+              "args": {
+                "type": "array",
+                "description": "A sh skill's arguments, passed as $1, $2, … without shell parsing.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "workdir": {
+                "type": "string",
+                "description": "A sh skill's directory to run in: project-relative, or absolute below /tmp. Defaults to the project root (\".\")."
+              },
+              "timeoutSeconds": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991,
+                "description": "Stop the skill after this long. 120 by default, at most 1800."
+              },
+              "yieldMs": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 30000,
+                "description": "A sh skill returns a background taskId if unfinished after this many milliseconds (default 1000; 0 dispatches at once). Separate from timeoutSeconds."
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "save_code_skill",
+          "description": "Save a skill.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 64,
+                "description": "Skill name: lowercase words joined by hyphens, naming the job (e.g. test-failures, package-exports)."
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "description": "One line on what the skill does and when to use it; it is listed so later runs can find it."
+              },
+              "program": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "runtime": {
+                        "type": "string",
+                        "enum": [
+                          "ts"
+                        ]
+                      },
+                      "code": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "TypeScript for one job: the body of an async function that reads `input`, calls tools as `await external_<tool name>(input)` and returns a small JSON value."
+                      },
+                      "input": {
+                        "type": "object",
+                        "description": "JSON Schema of `input`, of type \"object\"; every run is checked against it. Omit when the skill takes no input."
+                      }
+                    },
+                    "required": [
+                      "runtime",
+                      "code"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "runtime": {
+                        "type": "string",
+                        "enum": [
+                          "sh"
+                        ]
+                      },
+                      "script": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "POSIX sh script for one job, run in the working directory with arguments as $1, $2, …. Print only what the task needs: filter or cap noisy output in the script."
+                      },
+                      "network": {
+                        "type": "array",
+                        "maxItems": 32,
+                        "description": "The only hosts the script may connect to, exactly as it needs them (e.g. \"registry.npmjs.org\", \"*.github.com\", \"api.example.com:443\"). Omit for no network; localhost only if listed.",
+                        "items": {
+                          "type": "string",
+                          "maxLength": 253
+                        }
+                      }
+                    },
+                    "required": [
+                      "runtime",
+                      "script"
+                    ],
+                    "additionalProperties": false
+                  }
+                ],
+                "description": "ts for work done with your tools (reading, changing and checking files, combining results, running sh skills); sh only for host commands no tool runs: builds, tests, git, package managers."
+              },
+              "usage": {
+                "type": "string",
+                "description": "What the input or arguments mean and what the result shows."
+              },
+              "reason": {
+                "type": "string",
+                "description": "One sentence on why, shown to the user when asking."
+              }
+            },
+            "required": [
+              "name",
+              "description",
+              "program"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "write_outside_file",
+          "description": "Write a file.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "Absolute path outside the project."
+              },
+              "content": {
+                "type": "string",
+                "description": "The complete new file content."
+              },
+              "expectedSha256": {
+                "type": "string",
+                "description": "Required to replace an existing file: the sha256 from read_outside_file."
+              },
+              "reason": {
+                "type": "string",
+                "description": "One sentence on why, shown to the user when asking."
+              }
+            },
+            "required": [
+              "path",
+              "content"
+            ],
+            "additionalProperties": false
+          },
+          "cache_control": {
+            "type": "ephemeral",
+            "ttl": "1h"
+          }
+        }
+      ],
+      "tool_choice": {
+        "type": "auto"
+      },
+      "thinking": {
+        "type": "adaptive",
+        "display": "summarized",
+        "block_binding": {
+          "prefix_mismatch_behavior": "drop_block"
+        }
+      },
+      "output_config": {
+        "effort": "high"
+      }
+    },
+    "openai": {
+      "model": "gpt-5.5",
+      "instructions": "Follow the rules. ",
+      "input": [
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "next"
+            }
+          ]
+        }
+      ],
+      "tools": [
+        {
+          "type": "function",
+          "name": "list_files",
+          "description": "List files.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "directory": {
+                "type": "string",
+                "description": "Where."
+              },
+              "offset": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "order": {
+                "type": "string",
+                "enum": [
+                  "name",
+                  "time"
+                ]
+              }
+            },
+            "required": [
+              "order"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "type": "function",
+          "name": "list_tasks",
+          "description": "List tasks.",
+          "parameters": {
+            "not": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "type": "function",
+          "name": "run_skill",
+          "description": "Run a skill.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 64,
+                "description": "A project code skill's name."
+              },
+              "input": {
+                "type": "object",
+                "description": "A ts skill's input, as its Input in the list says."
+              },
+              "args": {
+                "type": "array",
+                "description": "A sh skill's arguments, passed as $1, $2, … without shell parsing.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "workdir": {
+                "type": "string",
+                "description": "A sh skill's directory to run in: project-relative, or absolute below /tmp. Defaults to the project root (\".\")."
+              },
+              "timeoutSeconds": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991,
+                "description": "Stop the skill after this long. 120 by default, at most 1800."
+              },
+              "yieldMs": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 30000,
+                "description": "A sh skill returns a background taskId if unfinished after this many milliseconds (default 1000; 0 dispatches at once). Separate from timeoutSeconds."
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "type": "function",
+          "name": "save_code_skill",
+          "description": "Save a skill.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 64,
+                "description": "Skill name: lowercase words joined by hyphens, naming the job (e.g. test-failures, package-exports)."
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "description": "One line on what the skill does and when to use it; it is listed so later runs can find it."
+              },
+              "program": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "runtime": {
+                        "type": "string",
+                        "enum": [
+                          "ts"
+                        ]
+                      },
+                      "code": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "TypeScript for one job: the body of an async function that reads `input`, calls tools as `await external_<tool name>(input)` and returns a small JSON value."
+                      },
+                      "input": {
+                        "type": "object",
+                        "description": "JSON Schema of `input`, of type \"object\"; every run is checked against it. Omit when the skill takes no input."
+                      }
+                    },
+                    "required": [
+                      "runtime",
+                      "code"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "runtime": {
+                        "type": "string",
+                        "enum": [
+                          "sh"
+                        ]
+                      },
+                      "script": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "POSIX sh script for one job, run in the working directory with arguments as $1, $2, …. Print only what the task needs: filter or cap noisy output in the script."
+                      },
+                      "network": {
+                        "type": "array",
+                        "maxItems": 32,
+                        "description": "The only hosts the script may connect to, exactly as it needs them (e.g. \"registry.npmjs.org\", \"*.github.com\", \"api.example.com:443\"). Omit for no network; localhost only if listed.",
+                        "items": {
+                          "type": "string",
+                          "maxLength": 253
+                        }
+                      }
+                    },
+                    "required": [
+                      "runtime",
+                      "script"
+                    ],
+                    "additionalProperties": false
+                  }
+                ],
+                "description": "ts for work done with your tools (reading, changing and checking files, combining results, running sh skills); sh only for host commands no tool runs: builds, tests, git, package managers."
+              },
+              "usage": {
+                "type": "string",
+                "description": "What the input or arguments mean and what the result shows."
+              },
+              "reason": {
+                "type": "string",
+                "description": "One sentence on why, shown to the user when asking."
+              }
+            },
+            "required": [
+              "name",
+              "description",
+              "program"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "type": "function",
+          "name": "write_outside_file",
+          "description": "Write a file.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "Absolute path outside the project."
+              },
+              "content": {
+                "type": "string",
+                "description": "The complete new file content."
+              },
+              "expectedSha256": {
+                "type": "string",
+                "description": "Required to replace an existing file: the sha256 from read_outside_file."
+              },
+              "reason": {
+                "type": "string",
+                "description": "One sentence on why, shown to the user when asking."
+              }
+            },
+            "required": [
+              "path",
+              "content"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ],
+      "tool_choice": "auto",
+      "parallel_tool_calls": true,
+      "reasoning": {
+        "effort": "medium",
+        "summary": "auto"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "prompt_cache_key": "thread-1",
+      "stream": true,
+      "store": false
+    }
+  },
+  "compatible": {
+    "max_tokens": 4096,
+    "model": "local-model",
+    "messages": [
+      {
+        "role": "system",
+        "content": "Follow the rules. "
+      },
+      {
+        "role": "user",
+        "content": "next"
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "save_code_skill",
+          "description": "Save a skill.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 64,
+                "description": "Skill name: lowercase words joined by hyphens, naming the job (e.g. test-failures, package-exports)."
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "description": "One line on what the skill does and when to use it; it is listed so later runs can find it."
+              },
+              "program": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "runtime": {
+                        "type": "string",
+                        "enum": [
+                          "ts"
+                        ]
+                      },
+                      "code": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "TypeScript for one job: the body of an async function that reads `input`, calls tools as `await external_<tool name>(input)` and returns a small JSON value."
+                      },
+                      "input": {
+                        "type": "object",
+                        "description": "JSON Schema of `input`, of type \"object\"; every run is checked against it. Omit when the skill takes no input."
+                      }
+                    },
+                    "required": [
+                      "runtime",
+                      "code"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "runtime": {
+                        "type": "string",
+                        "enum": [
+                          "sh"
+                        ]
+                      },
+                      "script": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "POSIX sh script for one job, run in the working directory with arguments as $1, $2, …. Print only what the task needs: filter or cap noisy output in the script."
+                      },
+                      "network": {
+                        "type": "array",
+                        "maxItems": 32,
+                        "description": "The only hosts the script may connect to, exactly as it needs them (e.g. \"registry.npmjs.org\", \"*.github.com\", \"api.example.com:443\"). Omit for no network; localhost only if listed.",
+                        "items": {
+                          "type": "string",
+                          "maxLength": 253
+                        }
+                      }
+                    },
+                    "required": [
+                      "runtime",
+                      "script"
+                    ],
+                    "additionalProperties": false
+                  }
+                ],
+                "description": "ts for work done with your tools (reading, changing and checking files, combining results, running sh skills); sh only for host commands no tool runs: builds, tests, git, package managers."
+              },
+              "usage": {
+                "type": "string",
+                "description": "What the input or arguments mean and what the result shows."
+              },
+              "reason": {
+                "type": "string",
+                "description": "One sentence on why, shown to the user when asking."
+              }
+            },
+            "required": [
+              "name",
+              "description",
+              "program"
+            ],
+            "additionalProperties": false
+          },
+          "strict": false
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "run_skill",
+          "description": "Run a skill.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 64,
+                "description": "A project code skill's name."
+              },
+              "input": {
+                "type": "object",
+                "description": "A ts skill's input, as its Input in the list says."
+              },
+              "args": {
+                "type": "array",
+                "description": "A sh skill's arguments, passed as $1, $2, … without shell parsing.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "workdir": {
+                "type": "string",
+                "description": "A sh skill's directory to run in: project-relative, or absolute below /tmp. Defaults to the project root (\".\")."
+              },
+              "timeoutSeconds": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991,
+                "description": "Stop the skill after this long. 120 by default, at most 1800."
+              },
+              "yieldMs": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 30000,
+                "description": "A sh skill returns a background taskId if unfinished after this many milliseconds (default 1000; 0 dispatches at once). Separate from timeoutSeconds."
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "additionalProperties": false
+          },
+          "strict": false
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "write_outside_file",
+          "description": "Write a file.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "Absolute path outside the project."
+              },
+              "content": {
+                "type": "string",
+                "description": "The complete new file content."
+              },
+              "expectedSha256": {
+                "type": "string",
+                "description": "Required to replace an existing file: the sha256 from read_outside_file."
+              },
+              "reason": {
+                "type": "string",
+                "description": "One sentence on why, shown to the user when asking."
+              }
+            },
+            "required": [
+              "path",
+              "content"
+            ],
+            "additionalProperties": false
+          },
+          "strict": false
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "list_files",
+          "description": "List files.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "directory": {
+                "type": "string",
+                "description": "Where."
+              },
+              "offset": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "order": {
+                "type": "string",
+                "enum": [
+                  "name",
+                  "time"
+                ]
+              }
+            },
+            "required": [
+              "order"
+            ],
+            "additionalProperties": false
+          },
+          "strict": false
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "list_tasks",
+          "description": "List tasks.",
+          "parameters": {
+            "not": {
+              "type": "null"
+            }
+          },
+          "strict": false
+        }
+      }
+    ],
+    "stream": true,
+    "stream_options": {
+      "include_usage": true
+    }
+  }
+}

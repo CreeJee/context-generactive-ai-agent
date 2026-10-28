@@ -1,25 +1,11 @@
-import {
-  Context as PlatformContext,
-  Effect as PlatformEffect,
-  Layer as PlatformLayer,
-  Path,
-  FileSystem,
-} from "effect";
+import { FileSystem } from "effect";
 import { Function as EffectFunction } from "effect";
-import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
-import * as NodePath from "@effect/platform-node/NodePath";
-import { Effect, HashSet, Option, Schema } from "effect";
+import { path } from "../runtime/synchronous-path.ts";
+import { Array as Arr, Effect, HashSet, Match, Option, Schema, Stream } from "effect";
 import type { PlatformError } from "effect";
 
 // Path operations remain synchronous at these public host boundaries.
-const { basename, dirname, isAbsolute, join, relative, resolve, sep } = PlatformEffect.runSync(
-  PlatformEffect.scoped(
-    PlatformEffect.gen(function* () {
-      const services = yield* PlatformLayer.build(NodePath.layer);
-      return PlatformContext.get(services, Path.Path);
-    }),
-  ),
-);
+const { basename, dirname, isAbsolute, join, relative, resolve, sep } = path;
 
 /**
  * Why a path was refused. Messages the model sees name the reason, never file contents.
@@ -32,7 +18,10 @@ const { basename, dirname, isAbsolute, join, relative, resolve, sep } = Platform
  * - `symlink` / `hard_link`: a link could redirect the operation past these checks
  * - `not_found` / `not_file` / `not_directory`: the filesystem does not match the request
  */
-export class PathRejected extends Schema.TaggedError<PathRejected>()("PathRejected", {
+export class PathRejected extends Schema.TaggedError<
+  PathRejected,
+  { readonly brand: unique symbol }
+>()("PathRejected", {
   path: Schema.String,
   reason: Schema.Literals([
     "invalid_path",
@@ -162,18 +151,8 @@ function pathsOverlapBody(left: string, right: string): boolean {
   return contains(left, right) || contains(right, left);
 }
 
-// These exports are host filesystem boundaries, like text.ts. Build the first-party service once;
-// every inspection remains an interruptible Effect, with PlatformError in its failure channel.
-const fileSystem = PlatformEffect.runSync(
-  PlatformEffect.scoped(
-    PlatformEffect.gen(function* () {
-      const services = yield* PlatformLayer.build(NodeFileSystem.layer);
-      return PlatformContext.get(services, FileSystem.FileSystem);
-    }),
-  ),
-);
 const lstat = (path: string) =>
-  fileSystem.lstat(path).pipe(
+  Effect.flatMap(FileSystem.FileSystem, (fs) => fs.lstat(path)).pipe(
     Effect.asSome,
     Effect.catchReason("PlatformError", "NotFound", () => Effect.succeedNone),
     Effect.map(Option.getOrUndefined),
@@ -187,8 +166,9 @@ const lstat = (path: string) =>
  */
 export const canonicalPathEffect = Effect.fn("Paths.canonicalPath")(function* (
   path: string,
-): Effect.fn.Return<string, PlatformError.PlatformError> {
-  return yield* fileSystem.realPath(path).pipe(
+): Effect.fn.Return<string, PlatformError.PlatformError, FileSystem.FileSystem> {
+  const fs = yield* FileSystem.FileSystem;
+  return yield* fs.realPath(path).pipe(
     Effect.catchReason("PlatformError", "NotFound", () => {
       const parent = dirname(path);
       return parent === path
@@ -213,20 +193,32 @@ const isSameOrBelow = Effect.fn("Paths.isSameOrBelow")(function* (
   const target = yield* lstat(root);
   if (!(target !== undefined)) return pathsOverlap(root, candidate);
   if (Option.isNone(target.ino)) return yield* reject(candidate, "invalid_path");
-  for (let current = candidate; ; current = dirname(current)) {
-    const stats = yield* lstat(current);
-    if (
-      stats !== undefined &&
-      stats.dev === target.dev &&
-      Option.isSome(stats.ino) &&
-      Option.isSome(target.ino) &&
-      stats.ino.value === target.ino.value
-    )
-      return true;
-    if (stats !== undefined && Option.isNone(stats.ino))
-      return yield* reject(candidate, "invalid_path");
-    if (dirname(current) === current) return false;
-  }
+  // The candidate and each of its parents up to the filesystem root.
+  const ancestors = Arr.unfold(
+    Option.some(candidate),
+    Option.map(
+      (current) =>
+        [
+          current,
+          Option.some(dirname(current)).pipe(Option.filter((parent) => parent !== current)),
+        ] as const,
+    ),
+  );
+  const reached = yield* Effect.findFirst(ancestors, (current) =>
+    Effect.flatMap(lstat(current), (stats) =>
+      // A missing ancestor is passed over; one without an inode cannot be compared.
+      stats !== undefined && Option.isNone(stats.ino)
+        ? reject(candidate, "invalid_path")
+        : Effect.succeed(
+            stats !== undefined &&
+              stats.dev === target.dev &&
+              Option.isSome(stats.ino) &&
+              Option.isSome(target.ino) &&
+              stats.ino.value === target.ino.value,
+          ),
+    ),
+  );
+  return Option.isSome(reached);
 });
 
 export interface ProjectPath {
@@ -256,7 +248,7 @@ function resolveProjectPathBody(
   root: string,
   path: string,
   kind: "file" | "directory" | "new-or-file",
-): Effect.Effect<ProjectPath, PathRejected | PlatformError.PlatformError> {
+): Effect.Effect<ProjectPath, PathRejected | PlatformError.PlatformError, FileSystem.FileSystem> {
   return Effect.gen(function* () {
     const spelled = path === "" ? "." : path;
     if (isAbsolute(spelled) || spelled.includes("\\") || hasControlCharacter(spelled))
@@ -273,32 +265,59 @@ function resolveProjectPathBody(
       return yield* reject(path, "git_internal");
     if (isCredentialPath(spelled)) return yield* reject(path, "credential");
 
-    let current = root;
-    let stats = yield* lstat(root);
-    if (!(stats?.type === "Directory")) return yield* reject(path, "not_found");
-    for (const [index, segment] of segments.entries()) {
-      const last = index === segments.length - 1;
-      current = join(current, segment);
-      stats = yield* lstat(current);
-      if (!(stats !== undefined)) {
-        if (kind === "new-or-file")
-          return yield* Effect.succeed({
-            absolute: join(root, ...segments),
-            relative: spelled,
-            stats,
-          });
-        return yield* reject(path, "not_found");
-      }
-      if (stats.type === "SymbolicLink") return yield* reject(path, "symlink");
-      if (!last && stats.type !== "Directory") return yield* reject(path, "not_directory");
-    }
-
-    if (kind === "directory") {
-      if (stats?.type !== "Directory") return yield* reject(path, "not_directory");
-    } else {
-      if (stats?.type !== "File") return yield* reject(path, "not_file");
-      if (!Option.contains(stats.nlink, 1)) return yield* reject(path, "hard_link");
-    }
+    const rootStats = yield* lstat(root);
+    if (!(rootStats?.type === "Directory")) return yield* reject(path, "not_found");
+    // Each segment's entry, one at a time down from the root, up to the first missing one.
+    const reached = yield* Stream.fromIterable(
+      Arr.scan(segments, root, (current, segment) => join(current, segment)).slice(1),
+    ).pipe(
+      Stream.mapEffect((current, index) =>
+        Effect.map(lstat(current), (stats) => ({
+          current,
+          stats,
+          last: index === segments.length - 1,
+        })),
+      ),
+      Stream.takeUntil(({ stats }) => stats === undefined),
+      Stream.tap(({ stats, last }) =>
+        reject(path, "symlink").pipe(
+          Effect.when(Effect.succeed(stats?.type === "SymbolicLink")),
+          Effect.andThen(
+            Effect.when(
+              reject(path, "not_directory"),
+              Effect.succeed(!last && stats !== undefined && stats.type !== "Directory"),
+            ),
+          ),
+        ),
+      ),
+      Stream.runLast,
+    );
+    const { current, stats } = Option.getOrElse(reached, () => ({
+      current: root,
+      stats: rootStats,
+    }));
+    if (!(stats !== undefined))
+      return yield* Match.value(kind).pipe(
+        Match.when("new-or-file", () =>
+          Effect.succeed({ absolute: join(root, ...segments), relative: spelled, stats }),
+        ),
+        Match.orElse(() => reject(path, "not_found")),
+      );
+    yield* Match.value(kind).pipe(
+      Match.when("directory", () =>
+        Effect.when(reject(path, "not_directory"), Effect.succeed(stats.type !== "Directory")),
+      ),
+      Match.orElse(() =>
+        Effect.when(reject(path, "not_file"), Effect.succeed(stats.type !== "File")).pipe(
+          Effect.andThen(
+            Effect.when(
+              reject(path, "hard_link"),
+              Effect.succeed(!Option.contains(stats.nlink, 1)),
+            ),
+          ),
+        ),
+      ),
+    );
     return { absolute: current, relative: spelled, stats };
   });
 }
@@ -329,7 +348,7 @@ function resolveOutsidePathBody(
   storageRoot: string,
   path: string,
   kind: "file" | "directory" | "new-or-file",
-): Effect.Effect<OutsidePath, PathRejected | PlatformError.PlatformError> {
+): Effect.Effect<OutsidePath, PathRejected | PlatformError.PlatformError, FileSystem.FileSystem> {
   return Effect.gen(function* () {
     if (!isAbsolute(path) || hasControlCharacter(path)) return yield* reject(path, "invalid_path");
     const spelled = resolve(path);
@@ -377,12 +396,24 @@ export const resolveFencedOutsidePath = Effect.fn("Paths.resolveFencedOutsidePat
   storageRoot: string,
   path: string,
   kind: "file" | "directory" | "new-or-file",
-): Effect.fn.Return<OutsidePath, PathRejected | PlatformError.PlatformError> {
+): Effect.fn.Return<
+  OutsidePath,
+  PathRejected | PlatformError.PlatformError,
+  FileSystem.FileSystem
+> {
   const resolved = yield* resolveOutsidePathBody(projectRoot, storageRoot, path, kind);
-  for (const denied of fence?.deniedRoots ?? []) {
-    const root = yield* canonicalPathEffect(denied);
-    if (pathsOverlap(root, resolved.absolute) || (yield* isSameOrBelow(denied, resolved.absolute)))
-      return yield* reject(path, "outside_tool_root");
-  }
+  yield* Effect.forEach(
+    fence?.deniedRoots ?? [],
+    (denied) =>
+      Effect.gen(function* () {
+        const root = yield* canonicalPathEffect(denied);
+        if (
+          pathsOverlap(root, resolved.absolute) ||
+          (yield* isSameOrBelow(denied, resolved.absolute))
+        )
+          return yield* reject(path, "outside_tool_root");
+      }),
+    { discard: true },
+  );
   return resolved;
 });

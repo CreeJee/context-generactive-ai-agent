@@ -1,10 +1,11 @@
-import { Cause, Effect, FileSystem, Layer, Path, Result, Schema } from "effect";
+import { Effect, FileSystem, Layer, Path, Schema } from "effect";
 import { it } from "@effect/vitest";
 import { describe, expect } from "vite-plus/test";
 import { StorageRoot } from "../src/config/storage-root.ts";
+import type { JsonValue } from "../src/json.ts";
 import { OutsideTools } from "../src/tools/outside.ts";
 import { withTestPlatform } from "./support/platform.ts";
-import { inRun } from "./support/run-span.ts";
+import { callTool, failureCode } from "./support/run-tools.ts";
 
 const layout = Effect.fn("outsideTools.layout")(function* () {
   const fs = yield* FileSystem.FileSystem;
@@ -14,8 +15,11 @@ const layout = Effect.fn("outsideTools.layout")(function* () {
   const project = path.join(base, "project");
   const storage = path.join(base, "storage");
   const docs = path.join(base, "docs");
-  for (const directory of [project, storage, path.join(docs, "guide"), path.join(docs, ".ssh")])
-    yield* fs.makeDirectory(directory, { recursive: true });
+  yield* Effect.forEach(
+    [project, storage, path.join(docs, "guide"), path.join(docs, ".ssh")],
+    (directory) => fs.makeDirectory(directory, { recursive: true }),
+    { discard: true },
+  );
   yield* fs.writeFileString(path.join(project, "app.ts"), "export {};\n");
   yield* fs.writeFileString(path.join(docs, "guide", "intro.md"), "# Intro\nDeploy with care.\n");
   yield* fs.writeFileString(path.join(docs, "notes.txt"), "deploy on friday\r\nnothing else\r\n");
@@ -30,44 +34,21 @@ const outsideTools = Effect.fn("outsideTools")(function* (project: string, stora
     OutsideTools.layer.pipe(Layer.provide(StorageRoot.layer(storage))),
   );
   const service = yield* Effect.provideContext(OutsideTools, services);
-  const [listOutside, readOutside, searchOutside] = yield* inRun(
-    service.forProject({
-      id: "p1",
-      root: project,
-      name: "project",
-      crossRecallExcluded: false,
-      permissionMode: "ask",
-      createdAt: "2026-09-14T00:00:00.000Z",
-      hiddenAt: null,
-    }),
-  );
-  return { listOutside, readOutside, searchOutside };
-});
-
-const run = Effect.fn("outsideTools.sdkCall")(function* <I, O>(
-  tool: { execute?: ((args: I) => O) | undefined },
-  input: I,
-) {
-  const execute = tool.execute;
-  if (execute === undefined) throw new Error("tool has no server implementation");
-  return yield* Effect.tryPromise({
-    try: () => Promise.resolve(execute(input)),
-    catch: (cause) => new Cause.UnknownError(cause),
+  const tools = service.toolsFor({
+    id: "p1",
+    root: project,
+    name: "project",
+    crossRecallExcluded: false,
+    permissionMode: "ask",
+    createdAt: "2026-09-14T00:00:00.000Z",
+    hiddenAt: null,
   });
-});
-
-const FailureMessage = Schema.Struct({ message: Schema.String });
-const failure = Effect.fn("outsideTools.failure")(function* <A>(
-  program: Effect.Effect<A, Cause.UnknownError>,
-) {
-  const outcome = yield* Effect.result(program);
-  return yield* Result.match(outcome, {
-    onSuccess: () => Effect.succeed("resolved"),
-    onFailure: (error) =>
-      Schema.decodeUnknownEffect(FailureMessage)(error.cause).pipe(
-        Effect.map((error) => error.message.split(":")[0]),
-      ),
-  });
+  const caller = (name: string) => (params: JsonValue) => callTool(tools, name, params);
+  return {
+    listOutside: caller("list_outside_files"),
+    readOutside: caller("read_outside_file"),
+    searchOutside: caller("search_outside_file"),
+  };
 });
 
 const Matches = Schema.Struct({
@@ -82,7 +63,7 @@ describe("outside tools", () => {
       const { project, storage, docs, base, fs, path } = yield* layout();
       yield* fs.symlink(path.join(base, "project"), path.join(docs, "project-link"));
       const { listOutside } = yield* outsideTools(project, storage);
-      expect(yield* run(listOutside, { directory: docs })).toMatchObject({
+      expect(yield* listOutside({ directory: docs })).toMatchObject({
         directory: docs,
         paths: [path.join(docs, "guide", "intro.md"), path.join(docs, "notes.txt")],
         excludedCredentialFiles: 2,
@@ -96,22 +77,22 @@ describe("outside tools", () => {
     Effect.gen(function* () {
       const { project, storage, docs, path } = yield* layout();
       const { readOutside, searchOutside } = yield* outsideTools(project, storage);
-      expect(
-        yield* run(readOutside, { path: path.join(docs, "notes.txt"), maxLines: 1 }),
-      ).toMatchObject({
-        path: path.join(docs, "notes.txt"),
-        content: "deploy on friday\r\n",
-        nextStartLine: 2,
-      });
+      expect(yield* readOutside({ path: path.join(docs, "notes.txt"), maxLines: 1 })).toMatchObject(
+        {
+          path: path.join(docs, "notes.txt"),
+          content: "deploy on friday\r\n",
+          nextStartLine: 2,
+        },
+      );
       const inDirectory = yield* Schema.decodeUnknownEffect(Matches)(
-        yield* run(searchOutside, { path: docs, query: "deploy", caseSensitive: false }),
+        yield* searchOutside({ path: docs, query: "deploy", caseSensitive: false }),
       );
       expect(inDirectory.matches).toEqual([
         { path: path.join(docs, "guide", "intro.md"), line: 2, text: "Deploy with care." },
         { path: path.join(docs, "notes.txt"), line: 1, text: "deploy on friday" },
       ]);
       expect(
-        yield* run(searchOutside, { path: path.join(docs, "notes.txt"), query: "else" }),
+        yield* searchOutside({ path: path.join(docs, "notes.txt"), query: "else" }),
       ).toMatchObject({ matches: [{ line: 2, text: "nothing else" }], complete: true });
     }).pipe(withTestPlatform),
   );
@@ -120,18 +101,16 @@ describe("outside tools", () => {
     Effect.gen(function* () {
       const { project, storage, docs, path } = yield* layout();
       const { readOutside, searchOutside, listOutside } = yield* outsideTools(project, storage);
-      expect(yield* failure(run(readOutside, { path: path.join(docs, ".env") }))).toBe(
+      expect(yield* failureCode(readOutside({ path: path.join(docs, ".env") }))).toBe("credential");
+      expect(yield* failureCode(readOutside({ path: path.join(docs, ".ssh", "id_ed25519") }))).toBe(
         "credential",
       );
-      expect(
-        yield* failure(run(readOutside, { path: path.join(docs, ".ssh", "id_ed25519") })),
-      ).toBe("credential");
-      expect(yield* failure(run(readOutside, { path: path.join(project, "app.ts") }))).toBe(
+      expect(yield* failureCode(readOutside({ path: path.join(project, "app.ts") }))).toBe(
         "inside_project",
       );
-      expect(yield* failure(run(listOutside, { directory: storage }))).toBe("credential");
-      expect(yield* failure(run(searchOutside, { path: "docs", query: "x" }))).toBe("invalid_path");
-      expect(yield* failure(run(readOutside, { path: path.join(docs, "missing.txt") }))).toBe(
+      expect(yield* failureCode(listOutside({ directory: storage }))).toBe("credential");
+      expect(yield* failureCode(searchOutside({ path: "docs", query: "x" }))).toBe("invalid_path");
+      expect(yield* failureCode(readOutside({ path: path.join(docs, "missing.txt") }))).toBe(
         "not_found",
       );
     }).pipe(withTestPlatform),

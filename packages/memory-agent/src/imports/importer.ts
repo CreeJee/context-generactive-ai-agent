@@ -25,6 +25,7 @@ import {
   Schema,
   ScopedRef,
   Stream,
+  SynchronizedRef,
 } from "effect";
 import { RpcClient } from "effect/rpc";
 import { GlobalConfig } from "../config/global-config.ts";
@@ -126,10 +127,14 @@ interface WorkerSession {
 const rpcSession = (setup: ImportWorkerSetup) =>
   Effect.gen(function* () {
     const spawned = yield* Deferred.make<Worker, ImportWorkerFailed>();
+    const file = yield* runtimeWorker("import-worker").pipe(
+      Effect.mapError(() => ImportWorkerFailed.make({ reason: "start" })),
+    );
+    const options = yield* runtimeWorkerOptions(setup);
     const workers = NodeWorker.layer(() => {
       // A spawn that throws is only retried by the protocol; settle the wait below with it.
       try {
-        const worker = new Worker(runtimeWorker("import-worker"), runtimeWorkerOptions(setup));
+        const worker = new Worker(file, options);
         worker.unref();
         Deferred.doneUnsafe(spawned, Exit.succeed(worker));
         return worker;
@@ -262,17 +267,18 @@ const make = (watching: boolean, home: string) =>
       );
 
     /** Transcripts on disk per source, counted by the worker so the folders are walked there. */
-    let latestCounts: TranscriptCounts | null = null;
+    const latestCounts = yield* Ref.make<TranscriptCounts | null>(null);
     const countTranscripts = request((current) => current.count).pipe(
-      Effect.tap((counts) =>
-        Effect.sync(() => {
-          latestCounts = counts;
-        }),
-      ),
+      Effect.tap((counts) => Ref.set(latestCounts, counts)),
     );
 
-    let activity: ImportActivity | null = null;
-    let running: Deferred.Deferred<number, ImportWorkerFailed> | null = null;
+    const activity = yield* Ref.make<ImportActivity | null>(null);
+    /** Shows the pass as it is now in settings. */
+    const showActivity = (next: ImportActivity) =>
+      Effect.andThen(Ref.set(activity, next), events.publishGlobal("imports"));
+    const running = yield* SynchronizedRef.make(
+      Option.none<Deferred.Deferred<number, ImportWorkerFailed>>(),
+    );
 
     const pass = (startedAt: string) =>
       request((current) =>
@@ -283,17 +289,12 @@ const make = (watching: boolean, home: string) =>
               PassEvent.match(event, {
                 Progress: (progress) =>
                   Effect.as(
-                    Effect.sync(() => {
-                      activity = ImportActivity.running({ startedAt, ...progressOf(progress) });
-                      events.publishGlobal("imports");
-                    }),
+                    showActivity(ImportActivity.running({ startedAt, ...progressOf(progress) })),
                     outcome,
                   ),
                 Finished: (finished) =>
                   Effect.as(
-                    Effect.sync(() => {
-                      latestCounts = finished.counts;
-                    }),
+                    Ref.set(latestCounts, finished.counts),
                     Option.some(progressOf(finished)),
                   ),
               }),
@@ -308,10 +309,7 @@ const make = (watching: boolean, home: string) =>
         ),
       ).pipe(
         Effect.tap(() =>
-          Effect.sync(() => {
-            events.publishGlobal("imports");
-            events.publishGlobal("projects");
-          }),
+          Effect.andThen(events.publishGlobal("imports"), events.publishGlobal("projects")),
         ),
       );
 
@@ -321,75 +319,77 @@ const make = (watching: boolean, home: string) =>
 
     const crashed = (startedAt: string, reason: ImportWorkerFailed["reason"]) =>
       Effect.flatMap(Clock.currentTimeMillis, (now) =>
-        Effect.sync(() => {
-          activity = ImportActivity.crashed({
+        showActivity(
+          ImportActivity.crashed({
             startedAt,
             finishedAt: DateTime.formatIso(DateTime.makeUnsafe(now)),
             reason,
-          });
-          events.publishGlobal("imports");
-        }),
+          }),
+        ),
       );
 
-    /** The running pass, or a new one. Two passes would import a line twice before either marks it. */
-    const begin = Effect.suspend(() => {
-      if (running !== null) return Effect.succeed(running);
-      return Effect.gen(function* () {
-        const effectClock = yield* Clock.Clock;
-
-        const done = yield* Deferred.make<number, ImportWorkerFailed>();
-        running = done;
-        const startedAt = DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
-        activity = ImportActivity.running({
-          startedAt,
-          checked: 0,
-          total: 0,
-          written: 0,
-          failed: 0,
-        });
-        events.publishGlobal("imports");
-        yield* pass(startedAt).pipe(
-          Effect.tap((progress) =>
-            Effect.sync(() => {
-              activity = ImportActivity.finished({
+    /**
+     * The running pass, or a new one. Two passes would import a line twice before either marks it,
+     * so the check and the start hold the ref together.
+     */
+    const begin = SynchronizedRef.modifyEffect(running, (current) =>
+      Option.match(current, {
+        onSome: (done) => Effect.succeed([done, current] as const),
+        onNone: () =>
+          Effect.gen(function* () {
+            const done = yield* Deferred.make<number, ImportWorkerFailed>();
+            const startedAt = DateTime.formatIso(
+              DateTime.makeUnsafe(yield* Clock.currentTimeMillis),
+            );
+            yield* showActivity(
+              ImportActivity.running({
                 startedAt,
-                finishedAt: DateTime.formatIso(
-                  DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
+                checked: 0,
+                total: 0,
+                written: 0,
+                failed: 0,
+              }),
+            );
+            yield* pass(startedAt).pipe(
+              Effect.tap((progress) =>
+                Effect.flatMap(Clock.currentTimeMillis, (now) =>
+                  showActivity(
+                    ImportActivity.finished({
+                      startedAt,
+                      finishedAt: DateTime.formatIso(DateTime.makeUnsafe(now)),
+                      ...progress,
+                    }),
+                  ),
                 ),
-                ...progress,
-              });
-              events.publishGlobal("imports");
-            }),
-          ),
-          Effect.tap(() =>
-            Effect.tap(projects.listAll, (list) =>
-              Effect.sync(() => {
-                for (const project of list) events.publishProject(project.id, "sessions");
-              }),
-            ).pipe(
-              // The pass is done either way; pages only miss the hint to reload their lists.
-              Effect.catch((error) =>
-                Effect.logWarning("Imported sessions were not announced", error),
               ),
-            ),
-          ),
-          Effect.tapError((failure) => crashed(startedAt, failure.reason)),
-          // A defect in the worker's pass stops it; the watcher reports it.
-          Effect.tapDefect(() => crashed(startedAt, "pass")),
-          Effect.map((progress) => progress.written),
-          Effect.onExit((exit) =>
-            Effect.andThen(
-              Effect.sync(() => {
-                running = null;
-              }),
-              Deferred.done(done, exit),
-            ),
-          ),
-          Effect.forkIn(layerScope),
-        );
-        return done;
-      });
-    });
+              Effect.tap(() =>
+                Effect.tap(projects.listAll, (list) =>
+                  Effect.forEach(list, (project) => events.publishProject(project.id, "sessions"), {
+                    discard: true,
+                  }),
+                ).pipe(
+                  // The pass is done either way; pages only miss the hint to reload their lists.
+                  Effect.catch((error) =>
+                    Effect.logWarning("Imported sessions were not announced", error),
+                  ),
+                ),
+              ),
+              Effect.tapError((failure) => crashed(startedAt, failure.reason)),
+              // A defect in the worker's pass stops it; the watcher reports it.
+              Effect.tapDefect(() => crashed(startedAt, "pass")),
+              Effect.map((progress) => progress.written),
+              Effect.onExit((exit) =>
+                Effect.andThen(
+                  SynchronizedRef.set(running, Option.none()),
+                  Deferred.done(done, exit),
+                ),
+              ),
+              Effect.forkIn(layerScope),
+            );
+            return [done, Option.some(done)] as const;
+          }),
+      }),
+    );
 
     /** One pass, waited for. Returns how many nodes it wrote; embedding them is left to the caller. */
     const runOnce = Effect.flatMap(begin, Deferred.await);
@@ -417,13 +417,14 @@ const make = (watching: boolean, home: string) =>
       ),
     ).pipe(Effect.asVoid);
 
-    let watchHealth: LoopHealth = healthyLoop;
+    const watchHealth = yield* Ref.make<LoopHealth>(healthyLoop);
     const setWatchHealth = (next: LoopHealth) =>
-      Effect.sync(() => {
-        if (sameLoopHealth(watchHealth, next)) return;
-        watchHealth = next;
-        events.publishGlobal("imports");
-      });
+      Effect.asVoid(
+        Effect.when(
+          events.publishGlobal("imports"),
+          Ref.modify(watchHealth, (current) => [!sameLoopHealth(current, next), next]),
+        ),
+      );
     /**
      * Runs a pass every few minutes while migration is on. A failed round is retried with backoff;
      * when the retries run out, or a defect happens, the watcher stops and settings shows why
@@ -431,8 +432,10 @@ const make = (watching: boolean, home: string) =>
      */
     const watchLoop = Effect.gen(function* () {
       const settings = yield* config.read;
-      if (settings.importsEnabled !== true) return;
-      if ((yield* runOnce) > 0) yield* backfill;
+      const pass = Effect.flatMap(runOnce, (written) =>
+        Effect.when(backfill, Effect.succeed(written > 0)),
+      );
+      yield* Effect.when(pass, Effect.succeed(settings.importsEnabled === true));
     }).pipe(
       superviseLoopStep({ message: "import_watch_failed", setHealth: setWatchHealth }),
       Effect.repeat({
@@ -442,22 +445,23 @@ const make = (watching: boolean, home: string) =>
     );
     const watcher = yield* FiberHandle.make();
     const startWatch = FiberHandle.run(watcher, watchLoop, { onlyIfMissing: true });
-    if (watching) yield* startWatch;
+    yield* Effect.when(startWatch, Effect.succeed(watching));
 
     const overview = Effect.gen(function* () {
       // As it was when asked; counting below may take long enough for a short pass to end.
-      const current = activity;
+      const current = yield* Ref.get(activity);
       const settings = yield* config.read;
+      const known = yield* Ref.get(latestCounts);
       // While a pass runs, the counts it started from are good enough and spare the worker a walk.
       const counts =
-        ImportActivity.$is("running")(current) && isTruthy(latestCounts)
-          ? latestCounts
+        ImportActivity.$is("running")(current) && isTruthy(known)
+          ? known
           : yield* countTranscripts.pipe(
               // The worker could not count: the last counts, or none, until it can.
               Effect.catchTag("ImportWorkerFailed", (error) =>
-                Effect.as(
+                Effect.andThen(
                   Effect.logDebug("import_count_failed", { reason: error.reason }),
-                  latestCounts ?? [],
+                  Effect.map(Ref.get(latestCounts), (last) => last ?? []),
                 ),
               ),
             );
@@ -478,7 +482,7 @@ const make = (watching: boolean, home: string) =>
         failures: yield* failedTranscripts(),
         unindexed: yield* indexer.pending,
         activity: current,
-        watch: watching ? watchHealth : null,
+        watch: watching ? yield* Ref.get(watchHealth) : null,
       } satisfies ImportOverview;
     });
 
@@ -487,7 +491,7 @@ const make = (watching: boolean, home: string) =>
       start: startPass,
       overview,
       /** The watch loop's health without counting transcripts; `null` when not watching. */
-      watchHealth: Effect.sync(() => (watching ? watchHealth : null)),
+      watchHealth: Effect.map(Ref.get(watchHealth), (health) => (watching ? health : null)),
       /** Turns migration on or off and, when turning it on, starts reading what is there now. */
       setEnabled: (enabled: boolean) =>
         Effect.andThen(

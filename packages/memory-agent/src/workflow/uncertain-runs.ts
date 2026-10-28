@@ -1,4 +1,4 @@
-import { Data, DateTime, Effect, HashSet, Schema } from "effect";
+import { Array as EffectArray, Data, DateTime, Effect, HashSet, Match, Schema } from "effect";
 import { SqlClient, type SqlError } from "effect/sql";
 import { readOnlyToolNames } from "../tools/effects.ts";
 import { invocationFieldSql, resolvedRunSql, toolOperationSql } from "./run-bindings.ts";
@@ -51,25 +51,24 @@ const UncertainRunsFailedReason = Schema.TaggedUnion({
   Acknowledge: { cause: Schema.Defect() },
 });
 
-export class UncertainRunsFailed extends Schema.TaggedError<UncertainRunsFailed>()(
-  "UncertainRunsFailed",
-  { reason: UncertainRunsFailedReason },
-) {}
+export class UncertainRunsFailed extends Schema.TaggedError<
+  UncertainRunsFailed,
+  { readonly brand: unique symbol }
+>()("UncertainRunsFailed", { reason: UncertainRunsFailedReason }) {}
 
-const stateOf = (operation: typeof Operation.Type): UncertainToolState | null => {
-  switch (operation.status) {
-    case "pending":
-    case "uncertain":
-    case "rejected":
-      return operation.status;
-    case "succeeded":
-      return operation.operation === "tool" &&
-        !HashSet.has(readOnlyToolNames, operation.name ?? "") &&
-        operation.recorded === 0
+const stateOf = (operation: typeof Operation.Type) =>
+  Match.value(operation.status).pipe(
+    Match.withReturnType<UncertainToolState | null>(),
+    Match.whenOr("pending", "uncertain", "rejected", (status) => status),
+    Match.when("succeeded", () =>
+      operation.operation === "tool" &&
+      !HashSet.has(readOnlyToolNames, operation.name ?? "") &&
+      operation.recorded === 0
         ? "unrecorded"
-        : null;
-  }
-};
+        : null,
+    ),
+    Match.exhaustive,
+  );
 
 /**
  * Bound runs that admission refuses to start past, and the user's choice to continue anyway. Runs
@@ -114,19 +113,17 @@ export const uncertainRuns = Effect.gen(function* () {
   const tools = Effect.fnUntraced(function* (runId: string) {
     const rows = yield* read(operations(runId));
     const decoded = yield* decodeOperations(rows);
-    // An authorization and the call it allowed share one tool call id; show the call once.
-    const seen = new Set<string>();
-    return decoded.flatMap((operation): UncertainTool[] => {
+    const listed = decoded.flatMap((operation): UncertainTool[] => {
       const state = stateOf(operation);
-      if (state === null) return [];
-      if (operation.toolCallId !== null) {
-        if (seen.has(operation.toolCallId)) return [];
-        seen.add(operation.toolCallId);
-      }
-      return [
-        { toolCallId: operation.toolCallId, name: operation.name, call: operation.call, state },
-      ];
+      return state === null
+        ? []
+        : [{ toolCallId: operation.toolCallId, name: operation.name, call: operation.call, state }];
     });
+    // An authorization and the call it allowed share one tool call id; show the call once.
+    return EffectArray.dedupeWith(
+      listed,
+      (left, right) => left.toolCallId !== null && left.toolCallId === right.toolCallId,
+    );
   });
 
   const list = Effect.fnUntraced(function* (sessionId: string) {
@@ -159,7 +156,11 @@ export const uncertainRuns = Effect.gen(function* () {
             if ((yield* producing(sessionId)).length > 0)
               return UncertainContinue.refused({ reason: "run_in_progress" });
             const runs = yield* Schema.decodeUnknownEffect(Runs)(yield* blocking(sessionId));
-            for (const { runId } of runs) yield* decodeOperations(yield* operations(runId));
+            yield* Effect.forEach(
+              runs,
+              ({ runId }) => Effect.flatMap(operations(runId), decodeOperations),
+              { discard: true },
+            );
             const current = runs.map((run) => run.runId);
             const asked = new Set(runIds);
             if (
@@ -168,10 +169,13 @@ export const uncertainRuns = Effect.gen(function* () {
               !current.every((id) => asked.has(id))
             )
               return UncertainContinue.refused({ reason: "uncertain_runs_changed" });
-            for (const runId of current)
-              yield* sql`
+            yield* Effect.forEach(
+              current,
+              (runId) => sql`
                 INSERT INTO workflow_uncertain_acknowledgements (run_id, session_id, acknowledged_at)
-                VALUES (${runId}, ${sessionId}, ${at}) ON CONFLICT DO NOTHING`;
+                VALUES (${runId}, ${sessionId}, ${at}) ON CONFLICT DO NOTHING`,
+              { discard: true },
+            );
             return UncertainContinue.acknowledged();
           }),
         )

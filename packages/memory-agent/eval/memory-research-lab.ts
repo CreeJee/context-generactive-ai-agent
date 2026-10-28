@@ -12,6 +12,7 @@
 // Model stages need the model files under the real storage root; where they are unreadable the
 // stage is skipped with the reason instead of failing the whole run.
 import {
+  Array as Arr,
   Cause,
   Console,
   Context,
@@ -20,9 +21,10 @@ import {
   FileSystem,
   Layer,
   MutableHashMap,
+  MutableRef,
   Option,
 } from "effect";
-import { runOAuthNodeEffect } from "../src/oauth/node-runtime.ts";
+import { nodePlatform } from "../src/runtime/node-platform.ts";
 import { fakeEmbedderLayer } from "../src/testing/fake-embedder.ts";
 import { fakeMorphLayer } from "../src/testing/fake-morph.ts";
 import { path } from "../src/runtime/synchronous-path.ts";
@@ -58,7 +60,7 @@ const repoRoot = join(process.cwd(), "..", "..");
 const tmpBase = join(repoRoot, "node_modules", ".vp-tmp");
 const labPrefix = "memory-research-lab-";
 
-const home = defaultStorageRoot;
+const home = await Effect.runPromise(defaultStorageRoot);
 const quint8File = join(home, "models", localModel.id, modelFile("quint8"));
 const fp32File = join(home, "models", localModel.id, modelFile("fp32"));
 const kiwiFile = join(home, "models", `kiwi-${kiwiModel.version}`, kiwiModel.directory, "cong.mdl");
@@ -66,7 +68,7 @@ const dimensions = localModel.dimensions;
 
 /** Readable now, or the reason a model-dependent stage has to be skipped. */
 const readable = (file: string): Promise<boolean> =>
-  runOAuthNodeEffect(
+  nodePlatform.runPromise(
     Effect.flatMap(FileSystem.FileSystem, (fs) => fs.stat(file)).pipe(
       Effect.map((info) => Number(info.size) > 0),
       Effect.orElseSucceed(() => false),
@@ -83,12 +85,12 @@ const noEmbedder = Layer.succeed(Embedder, {
 /** Embedder wrapper plus the accumulated embed time it reports through. */
 interface TimedEmbedder<E, R> {
   readonly layer: Layer.Layer<Embedder, E, R>;
-  readonly nanos: { value: bigint };
+  readonly nanos: MutableRef.MutableRef<bigint>;
 }
 
 /** Wraps an embedder so the lab can report how long embedding took, apart from search. */
 const timedEmbedder = <E, R>(inner: Layer.Layer<Embedder, E, R>): TimedEmbedder<E, R> => {
-  const nanos = { value: 0n };
+  const nanos = MutableRef.make(0n);
   return {
     nanos,
     layer: inner.pipe(
@@ -101,7 +103,7 @@ const timedEmbedder = <E, R>(inner: Layer.Layer<Embedder, E, R>): TimedEmbedder<
               .embed(texts)
               .pipe(
                 Effect.map((vectors) => {
-                  nanos.value += process.hrtime.bigint() - startedAt;
+                  MutableRef.update(nanos, (total) => total + process.hrtime.bigint() - startedAt);
                   return vectors;
                 }),
               );
@@ -119,7 +121,7 @@ interface Stage {
   readonly morph: Layer.Layer<MorphAnalyzer, never, StorageRoot>;
   /** Trigram and short substring ranking on top of the channels above. */
   readonly text: boolean;
-  readonly embedNanos: { value: bigint };
+  readonly embedNanos: MutableRef.MutableRef<bigint>;
 }
 
 const embedVariant = (await readable(quint8File))
@@ -160,7 +162,7 @@ const stages: readonly Stage[] = [
     embedder: noEmbedder,
     morph: fakeMorphLayer,
     text: true,
-    embedNanos: { value: 0n },
+    embedNanos: MutableRef.make(0n),
   },
   ...(kiwiAvailable
     ? [
@@ -170,7 +172,7 @@ const stages: readonly Stage[] = [
           embedder: noEmbedder,
           morph: MorphAnalyzer.kiwi,
           text: false,
-          embedNanos: { value: 0n },
+          embedNanos: MutableRef.make(0n),
         } satisfies Stage,
       ]
     : []),
@@ -253,19 +255,25 @@ const runStageEffects = Effect.fn("lab.stage.effects")(function* (stage: Stage) 
   // folder it runs in; the temporary storage root lives outside it under node_modules/.vp-tmp.
   const project = yield* (yield* Projects).add(process.cwd());
   const nodes = yield* Nodes;
-  const keys = MutableHashMap.empty<string, string>();
-  for (const statements of sets.flatMap((set) => set.sessions)) {
-    const session = yield* (yield* Sessions).create(project.id);
-    for (const statement of statements) {
-      const node = yield* nodes.append({
-        projectId: project.id,
-        sessionId: session.id,
-        kind: statement.kind ?? "user",
-        text: statement.text,
-      });
-      MutableHashMap.set(keys, node.id, statement.key);
-    }
-  }
+  // Each recorded node, by the key of the statement it holds.
+  const recorded = yield* Effect.forEach(
+    sets.flatMap((set) => set.sessions),
+    Effect.fnUntraced(function* (statements) {
+      const session = yield* (yield* Sessions).create(project.id);
+      return yield* Effect.forEach(statements, (statement) =>
+        Effect.map(
+          nodes.append({
+            projectId: project.id,
+            sessionId: session.id,
+            kind: statement.kind ?? "user",
+            text: statement.text,
+          }),
+          (node) => [node.id, statement.key] as const,
+        ),
+      );
+    }),
+  );
+  const keys = MutableHashMap.fromIterable(recorded.flat());
   const indexer = yield* Indexer;
   const [indexDuration] = yield* Effect.timed(
     Effect.ignore(indexer.indexAll()).pipe(Effect.andThen(Effect.ignore(indexer.analyzeAll()))),
@@ -279,56 +287,71 @@ const runStageEffects = Effect.fn("lab.stage.effects")(function* (stage: Stage) 
         ),
       );
 
-  const metrics: SetMetrics[] = [];
-  let unindexed = -1;
-  const degradedSeen = new Set<string>();
-  for (const set of sets) {
-    let top1 = 0;
-    let top3 = 0;
-    let top5 = 0;
-    let reciprocal = 0;
-    let searchNanos = 0n;
-    let maxQueryMs = 0;
-    const misses: string[] = [];
-    for (const item of set.queries) {
-      const startedAt = process.hrtime.bigint();
-      const result = yield* search.find({ query: item.query, projectId: project.id, limit: 10 });
-      const queryNanos = process.hrtime.bigint() - startedAt;
-      searchNanos += queryNanos;
-      maxQueryMs = Math.max(maxQueryMs, Math.round(Number(queryNanos) / 1e6));
-      unindexed = result.unindexed;
-      for (const path of result.degraded) degradedSeen.add(path);
-      const found = result.matches.map((match) =>
-        Option.getOrUndefined(MutableHashMap.get(keys, match.id)),
-      );
-      const rank = found.indexOf(item.expected);
-      if (rank === 0) top1++;
-      if (rank >= 0 && rank < 3) top3++;
-      if (rank >= 0 && rank < 5) top5++;
-      if (rank >= 0) reciprocal += 1 / (rank + 1);
-      if (rank !== 0)
-        misses.push(
+  // Each set's queries, timed one at a time, with where the expected statement ranked (-1: not found).
+  const measured = yield* Effect.forEach(sets, (set) =>
+    Effect.map(
+      Effect.forEach(
+        set.queries,
+        Effect.fnUntraced(function* (item) {
+          const startedAt = process.hrtime.bigint();
+          const result = yield* search.find({
+            query: item.query,
+            projectId: project.id,
+            limit: 10,
+          });
+          const queryNanos = process.hrtime.bigint() - startedAt;
+          const found = result.matches.map((match) =>
+            Option.getOrUndefined(MutableHashMap.get(keys, match.id)),
+          );
+          return {
+            item,
+            found,
+            rank: found.indexOf(item.expected),
+            queryNanos,
+            unindexed: result.unindexed,
+            degraded: result.degraded,
+          };
+        }),
+      ),
+      (queries) => ({ set, queries }),
+    ),
+  );
+  const metrics = measured.map(({ set, queries }): SetMetrics => {
+    const ranks = queries.map(({ rank }) => rank);
+    const within = (limit: number) => ranks.filter((rank) => rank >= 0 && rank < limit).length;
+    const reciprocal = ranks
+      .filter((rank) => rank >= 0)
+      .reduce((sum, rank) => sum + 1 / (rank + 1), 0);
+    const searchNanos = queries.reduce((sum, { queryNanos }) => sum + queryNanos, 0n);
+    const misses = queries
+      .filter(({ rank }) => rank !== 0)
+      .map(
+        ({ item, found, rank, degraded }) =>
           `✗ ${item.query} → ${rank < 0 ? "없음" : `${rank + 1}위`} (1위 ${found[0] ?? "-"}${
-            result.degraded.length > 0 ? `, degraded ${result.degraded.join(",")}` : ""
+            degraded.length > 0 ? `, degraded ${degraded.join(",")}` : ""
           })`,
-        );
-    }
+      );
     const total = set.queries.length;
     const averageMs = Number(searchNanos) / 1e6 / total;
-    metrics.push({
+    return {
       name: set.name,
       total,
-      top1,
-      top3,
-      top5,
+      top1: within(1),
+      top3: within(3),
+      top5: within(5),
       mrr: (reciprocal / total).toFixed(3),
       searchMsPerQuery: averageMs.toFixed(1),
-      maxQueryMs,
+      maxQueryMs: queries.reduce(
+        (longest, { queryNanos }) => Math.max(longest, Math.round(Number(queryNanos) / 1e6)),
+        0,
+      ),
       missCount: misses.length,
       misses: misses.slice(0, 6),
-    });
-  }
-  const embedMs = stage.embedder === noEmbedder ? 0 : Number(stage.embedNanos.value) / 1e6;
+    };
+  });
+  const searched = measured.flatMap(({ queries }) => queries);
+  const embedMs =
+    stage.embedder === noEmbedder ? 0 : Number(MutableRef.get(stage.embedNanos)) / 1e6;
   const queryCount = sets.reduce((sum, set) => sum + set.queries.length, 0);
   return {
     kind: "ok" as const,
@@ -336,8 +359,9 @@ const runStageEffects = Effect.fn("lab.stage.effects")(function* (stage: Stage) 
     detail: stage.detail,
     indexMs: Math.round(Duration.toMillis(indexDuration)),
     embedMsPerQuery: (embedMs / queryCount).toFixed(1),
-    unindexed,
-    degraded: [...degradedSeen],
+    // What the last search reported; -1 when no query ran.
+    unindexed: searched.at(-1)?.unindexed ?? -1,
+    degraded: [...new Set(searched.flatMap(({ degraded }) => degraded))],
     sets: metrics,
   } satisfies StageResult;
 });
@@ -392,52 +416,58 @@ const evaluateStage = Effect.fn("lab.stage")(function* (stage: Stage) {
   return outcome;
 });
 
-const runStage = (stage: Stage): Promise<StageOutcome> => runOAuthNodeEffect(evaluateStage(stage));
-
-const top3 = (result: StageResult | undefined, setName: string): number | null => {
-  const set = result?.sets.find((entry) => entry.name === setName);
-  return set === undefined ? null : set.top3 / set.total;
-};
+const top3 = (result: StageResult | undefined, setName: string): Option.Option<number> =>
+  Option.fromNullishOr(result?.sets.find((entry) => entry.name === setName)).pipe(
+    Option.map((set) => set.top3 / set.total),
+  );
 
 /** Stages that run with no embedder: the vector channel is absent by design there, so its
  * degraded/unindexed signals are the expected state, not failures. */
 const withoutEmbedder = (name: string) => name === "fts-only" || name === "morph-only";
 
-const print = (text: string) => runOAuthNodeEffect(Console.log(text));
+const print = (text: string) => nodePlatform.runPromise(Console.log(text));
+
+/** What the run prints for a stage that finished: each set's numbers, then its signals and misses. */
+const stageLines = (ok: StageResult): readonly string[] => [
+  ...ok.sets.map(
+    (set) =>
+      `  ${set.name.padEnd(9)}: top1 ${set.top1}/${set.total} top3 ${set.top3}/${set.total} top5 ${set.top5}/${set.total} MRR ${set.mrr} | index ${ok.indexMs}ms, search ${set.searchMsPerQuery}ms/query (max ${set.maxQueryMs}ms), embed ${ok.embedMsPerQuery}ms/query`,
+  ),
+  `  unindexed ${ok.unindexed}${withoutEmbedder(ok.name) ? " (임베더 없음 스테이지라 예상)" : ""} | degraded ${
+    ok.degraded.length > 0
+      ? ok.degraded.join(",") + (withoutEmbedder(ok.name) ? " (임베더 없음 스테이지라 예상)" : "")
+      : "없음"
+  }`,
+  ...(ok.sets.some((set) => set.missCount > 0)
+    ? [
+        `  misses (처음 ${Math.min(6, Math.max(...ok.sets.map((set) => set.missCount)))}개):`,
+        ...ok.sets.flatMap((set) => set.misses.map((miss) => `    ${miss}`)),
+      ]
+    : []),
+];
 
 const only = process.argv.slice(2).find((argument) => argument !== "--");
-const results: StageOutcome[] = [];
-for (const stage of stages) {
-  if (only !== undefined && stage.name !== only) continue;
-  const outcome = await runStage(stage);
-  results.push(outcome);
-  await print(`\n== stage ${stage.name} — ${stage.detail} ==`);
-  if (outcome.kind === "failed") {
-    await print(`  failed: ${outcome.reason}`);
-    continue;
-  } else {
-    const ok = outcome;
-    for (const set of ok.sets)
-      await print(
-        `  ${set.name.padEnd(9)}: top1 ${set.top1}/${set.total} top3 ${set.top3}/${set.total} top5 ${set.top5}/${set.total} MRR ${set.mrr} | index ${ok.indexMs}ms, search ${set.searchMsPerQuery}ms/query (max ${set.maxQueryMs}ms), embed ${ok.embedMsPerQuery}ms/query`,
-      );
-    await print(
-      `  unindexed ${ok.unindexed}${withoutEmbedder(ok.name) ? " (임베더 없음 스테이지라 예상)" : ""} | degraded ${
-        ok.degraded.length > 0
-          ? ok.degraded.join(",") +
-            (withoutEmbedder(ok.name) ? " (임베더 없음 스테이지라 예상)" : "")
-          : "없음"
-      }`,
-    );
-    if (ok.sets.some((set) => set.missCount > 0)) {
-      await print(
-        `  misses (처음 ${Math.min(6, Math.max(...ok.sets.map((set) => set.missCount)))}개):`,
-      );
-      for (const set of ok.sets) for (const miss of set.misses) await print(`    ${miss}`);
-    }
-  }
-}
-for (const entry of skipped) await print(`\n== stage ${entry.name} — skipped: ${entry.reason} ==`);
+const results = await nodePlatform.runPromise(
+  Effect.forEach(
+    stages.filter((stage) => only === undefined || stage.name === only),
+    (stage) =>
+      Effect.tap(evaluateStage(stage), (outcome) =>
+        Console.log(
+          [
+            `\n== stage ${stage.name} — ${stage.detail} ==`,
+            ...(outcome.kind === "failed" ? [`  failed: ${outcome.reason}`] : stageLines(outcome)),
+          ].join("\n"),
+        ),
+      ),
+  ),
+);
+await nodePlatform.runPromise(
+  Effect.forEach(
+    skipped,
+    (entry) => Console.log(`\n== stage ${entry.name} — skipped: ${entry.reason} ==`),
+    { discard: true },
+  ),
+);
 
 // Verdict: which stage explains what the numbers show. Every line names the comparison behind it.
 const ok = (name: string) => {
@@ -449,72 +479,79 @@ const real = ok("real-embed");
 const fts = ok("fts-only");
 const morph = ok("morph-only");
 const full = ok("full");
-const lines: string[] = [];
-for (const set of sets) {
+/** How far one stage's top3 is above another's, when both stages ran. */
+const gap = (above: Option.Option<number>, below: Option.Option<number>) =>
+  Option.zipWith(above, below, (high, low) => high - low);
+/** The verdict lines one set's numbers support, in the order the stages compare. */
+const setVerdict = (set: RecallSet): readonly string[] => {
   const textChannel = top3(fts, set.name);
-  if (textChannel !== null && textChannel < 0.25)
-    lines.push(
-      `- [${set.name}] trigram FTS 채널 자체가 거의 회수하지 못함 (top3 ${Math.round(textChannel * 100)}%): 세그먼트·FTS 인덱스·매치 구성을 의심`,
-    );
   const fakeChannel = top3(fake, set.name);
-  const textDelta = fakeChannel !== null && textChannel !== null ? fakeChannel - textChannel : null;
-  if (textDelta !== null)
-    lines.push(
-      textDelta >= -0.05
-        ? `- [${set.name}] 벡터 경로(가짜 임베더)는 FTS 대비 top3 ${Math.round(textDelta * 100)}%p — ${textDelta > 0.05 ? "정상 범위" : "기여가 작음"}`
-        : `- [${set.name}] 가짜 해시 임베더가 FTS보다 top3 ${Math.round(-textDelta * 100)}%p 낮음 — 랩용 해시 벡터의 한계로 보며 제품 실패로 읽지 않음`,
-    );
-  if (real !== null && fake !== null) {
-    const realChannel = top3(real, set.name);
-    const modelDelta =
-      realChannel !== null && fakeChannel !== null ? realChannel - fakeChannel : null;
-    if (modelDelta !== null)
-      lines.push(
+  const realChannel = top3(real, set.name);
+  return Arr.getSomes([
+    textChannel.pipe(
+      Option.filter((channel) => channel < 0.25),
+      Option.map(
+        (channel) =>
+          `- [${set.name}] trigram FTS 채널 자체가 거의 회수하지 못함 (top3 ${Math.round(channel * 100)}%): 세그먼트·FTS 인덱스·매치 구성을 의심`,
+      ),
+    ),
+    gap(fakeChannel, textChannel).pipe(
+      Option.map((textDelta) =>
+        textDelta >= -0.05
+          ? `- [${set.name}] 벡터 경로(가짜 임베더)는 FTS 대비 top3 ${Math.round(textDelta * 100)}%p — ${textDelta > 0.05 ? "정상 범위" : "기여가 작음"}`
+          : `- [${set.name}] 가짜 해시 임베더가 FTS보다 top3 ${Math.round(-textDelta * 100)}%p 낮음 — 랩용 해시 벡터의 한계로 보며 제품 실패로 읽지 않음`,
+      ),
+    ),
+    gap(realChannel, fakeChannel).pipe(
+      Option.map((modelDelta) =>
         modelDelta >= 0
           ? `- [${set.name}] 실제 모델이 가짜 대비 top3 +${Math.round(modelDelta * 100)}%p — 임베딩 채널 정상`
           : `- [${set.name}] 실제 모델이 가짜 대비 top3 ${Math.round(modelDelta * 100)}%p — 모델 로딩·identity·청킹 문제를 의심`,
-      );
-  }
-  if (morph !== null) {
-    const morphChannel = top3(morph, set.name);
-    if (morphChannel !== null && morphChannel < 0.1)
-      lines.push(
-        `- [${set.name}] Kiwi 형태소 채널 단독 top3 ${Math.round(morphChannel * 100)}% — 용어 추출이 이 코퍼스에서 거의 매치하지 않음`,
-      );
-  }
-  if (full !== null && real !== null) {
-    const fullChannel = top3(full, set.name);
-    const realChannel = top3(real, set.name);
-    const kiwiDelta =
-      fullChannel !== null && realChannel !== null ? fullChannel - realChannel : null;
-    if (kiwiDelta !== null)
-      lines.push(
+      ),
+    ),
+    top3(morph, set.name).pipe(
+      Option.filter((morphChannel) => morphChannel < 0.1),
+      Option.map(
+        (morphChannel) =>
+          `- [${set.name}] Kiwi 형태소 채널 단독 top3 ${Math.round(morphChannel * 100)}% — 용어 추출이 이 코퍼스에서 거의 매치하지 않음`,
+      ),
+    ),
+    gap(top3(full, set.name), realChannel).pipe(
+      Option.map((kiwiDelta) =>
         kiwiDelta >= 0
           ? `- [${set.name}] Kiwi 추가가 top3 +${Math.round(kiwiDelta * 100)}%p`
           : `- [${set.name}] Kiwi 추가가 top3 ${Math.round(kiwiDelta * 100)}%p — 퓨전에서 형태소 용어가 방해할 수 있음`,
-      );
-  }
-}
+      ),
+    ),
+  ]);
+};
 const degradedStages = results.flatMap((result) =>
   result.kind === "ok" && !withoutEmbedder(result.name) && result.degraded.includes("vector")
     ? [result.name]
     : [],
 );
-if (degradedStages.length > 0)
-  lines.push(
-    `- 임베더가 실행 중 실패한 단계: ${degradedStages.join(", ")} (degraded vector) — 모델 로딩/워커 실패`,
-  );
 const unindexedStages = results.flatMap((result) =>
   result.kind === "ok" && !withoutEmbedder(result.name) && result.unindexed > 0
     ? [`${result.name}(${result.unindexed})`]
     : [],
 );
-if (unindexedStages.length > 0)
-  lines.push(
-    `- 인덱싱이 끝까지 비우지 못한 단계: ${unindexedStages.join(", ")} — indexAll 드레인 실패 의심`,
-  );
-await print("\n== verdict ==");
-for (const line of lines) await print(line);
+const lines = [
+  ...sets.flatMap(setVerdict),
+  ...(degradedStages.length > 0
+    ? [
+        `- 임베더가 실행 중 실패한 단계: ${degradedStages.join(", ")} (degraded vector) — 모델 로딩/워커 실패`,
+      ]
+    : []),
+  ...(unindexedStages.length > 0
+    ? [
+        `- 인덱싱이 끝까지 비우지 못한 단계: ${unindexedStages.join(", ")} — indexAll 드레인 실패 의심`,
+      ]
+    : []),
+];
 await print(
-  "\n모델 단계(real-embed, morph-only, full)는 스토리지 루트의 모델 파일을 읽을 수 있어야 실행됩니다. 샌드박스 안에서는 건너뛰어질 수 있습니다.",
+  [
+    "\n== verdict ==",
+    ...lines,
+    "\n모델 단계(real-embed, morph-only, full)는 스토리지 루트의 모델 파일을 읽을 수 있어야 실행됩니다. 샌드박스 안에서는 건너뛰어질 수 있습니다.",
+  ].join("\n"),
 );

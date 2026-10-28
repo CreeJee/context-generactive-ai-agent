@@ -1,9 +1,7 @@
 import { Array as EffectArray } from "effect";
 import { Layer } from "effect";
 import { it as effectTest } from "@effect/vitest";
-import { memoryTool } from "@tanstack/ai-anthropic/tools";
 import { optionalProperty } from "../src/optional-property.ts";
-import { OPENAI_CHAT_MODELS } from "@tanstack/ai-openai";
 import { Effect, Result } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import {
@@ -13,7 +11,6 @@ import {
   UnknownProviderTool,
   UnknownProviderToolModel,
   filterProviderTools,
-  installedProviderToolModelMetadata,
   makeProviderToolCapabilityRegistry,
   providerToolDescriptors,
   type ProviderToolCapabilityRegistryApi,
@@ -39,7 +36,7 @@ describe("ProviderToolCapabilityRegistry", () => {
     expect(providerToolDescriptors.every((entry) => Object.isFrozen(entry))).toBe(true);
   });
 
-  test("preserves provider factory identity and complete capability metadata", () => {
+  test("keeps complete capability metadata", () => {
     const descriptor = providerToolDescriptors.find((entry) => entry.id === "anthropic:memory");
     expect(descriptor).toMatchObject({
       provider: "anthropic",
@@ -52,7 +49,6 @@ describe("ProviderToolCapabilityRegistry", () => {
       sandbox: ["principal_storage_required"],
       resultNormalizer: { strategy: "provider_native_preserve", preservesUnknownParts: true },
     });
-    expect(descriptor?.extension.factory).toBe(memoryTool);
   });
 
   effectTest.effect(
@@ -85,11 +81,6 @@ describe("ProviderToolCapabilityRegistry", () => {
 
   effectTest.effect("resolves exact OpenAI full, subset, single, and empty capability tuples", () =>
     Effect.gen(function* () {
-      const openAIModels = installedProviderToolModelMetadata.filter(
-        (entry) => entry.provider === "openai",
-      );
-      expect(openAIModels.map((entry) => entry.model)).toEqual([...OPENAI_CHAT_MODELS]);
-
       const resolved = yield* withDefault(
         Effect.gen(function* () {
           const registry = yield* ProviderToolCapabilityRegistry;

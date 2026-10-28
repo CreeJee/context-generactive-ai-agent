@@ -1,6 +1,7 @@
 import { it } from "@effect/vitest";
 import { NodeCrypto } from "@effect/platform-node";
 import { Effect, Fiber, FileSystem, Layer, Option, Queue } from "effect";
+import type { LanguageModel } from "effect/ai";
 import { TestClock } from "effect/testing";
 import { expect } from "vite-plus/test";
 import { GlobalConfig } from "../src/config/global-config.ts";
@@ -10,7 +11,12 @@ import { ImprovementInterpreter } from "../src/improve/interpret.ts";
 import { ActiveProvider } from "../src/providers/active-provider.ts";
 import { AuthConnectionState, type ProviderServices } from "../src/providers/contracts.ts";
 import { ProviderRegistry } from "../src/providers/registry.ts";
-import { ScriptedTextAdapter, type ScriptedTurn } from "../src/testing/scripted-adapter.ts";
+import {
+  scriptedModel,
+  scriptedSource,
+  shownScriptedFailure,
+  type ScriptedTurn,
+} from "../src/testing/scripted-model.ts";
 import { withTestPlatform } from "./support/platform.ts";
 
 const item: ImprovementItem = {
@@ -30,7 +36,7 @@ const answered: ScriptedTurn = {
 };
 
 /** A signed-in provider whose model answers with `turns` in order. */
-const provider = (adapter: ScriptedTextAdapter): ProviderServices => ({
+const provider = (model: LanguageModel.LanguageModel): ProviderServices => ({
   provider: "openai",
   auth: {
     provider: "openai",
@@ -49,14 +55,9 @@ const provider = (adapter: ScriptedTextAdapter): ProviderServices => ({
   },
   runtime: {
     provider: "openai",
-    adapter: () => adapter,
+    model: () =>
+      Effect.succeed({ model, source: scriptedSource, shownFailure: shownScriptedFailure }),
     contextWindow: () => 0,
-    agentLoop: () => {
-      throw new Error("not used");
-    },
-    runMiddleware: () => {
-      throw new Error("not used");
-    },
   },
 });
 
@@ -68,13 +69,12 @@ const interpreter = Effect.fnUntraced(function* (replies: readonly Reply[]) {
   const fs = yield* FileSystem.FileSystem;
   const storage = yield* fs.makeTempDirectoryScoped({ prefix: "improve-interpret-" });
   const asked = yield* Queue.unbounded<number>();
-  const openai = provider(
-    new ScriptedTextAdapter(({ index }) =>
-      Queue.offer(asked, index).pipe(
-        Effect.as(replies[index] === "silent" ? { waitFor: Effect.never } : answered),
-      ),
+  const scripted = yield* scriptedModel(({ index }) =>
+    Queue.offer(asked, index).pipe(
+      Effect.as(replies[index] === "silent" ? { waitFor: Effect.never } : answered),
     ),
   );
+  const openai = provider(scripted.model);
   const services = yield* Layer.build(
     ImprovementInterpreter.layer.pipe(
       Layer.provideMerge(ActiveProvider.layer),

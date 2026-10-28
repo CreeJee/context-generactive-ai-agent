@@ -1,4 +1,4 @@
-import { Effect, FileSystem, MutableHashMap, MutableHashSet, Option, Path, Schema } from "effect";
+import { Array as Arr, Effect, FileSystem, MutableHashMap, Option, Path, Schema } from "effect";
 
 const CpuProfile = Schema.Struct({
   nodes: Schema.Array(
@@ -57,12 +57,14 @@ const share = (micros: number, whole: number) =>
   `${((micros / whole) * 100).toFixed(1).padStart(5)}%`;
 
 export const summarizeCpuProfile = (profile: CpuProfile, root: string, top: number) => {
-  const nodes = MutableHashMap.empty<number, ProfileNode>();
-  const parents = MutableHashMap.empty<number, number>();
-  for (const node of profile.nodes) {
-    MutableHashMap.set(nodes, node.id, node);
-    for (const child of node.children ?? []) MutableHashMap.set(parents, child, node.id);
-  }
+  const nodes = MutableHashMap.fromIterable(profile.nodes.map((node) => [node.id, node] as const));
+  const parents = MutableHashMap.fromIterable(
+    profile.nodes.flatMap((node) =>
+      (node.children ?? []).map((child) => [child, node.id] as const),
+    ),
+  );
+  const parentOf = (node: ProfileNode) =>
+    Option.flatMap(MutableHashMap.get(parents, node.id), (id) => MutableHashMap.get(nodes, id));
   const keyOf = (node: ProfileNode) => {
     const { functionName, url, lineNumber } = node.callFrame;
     if (vmCategories.includes(functionName)) return functionName;
@@ -89,18 +91,12 @@ export const summarizeCpuProfile = (profile: CpuProfile, root: string, top: numb
     add(self, leafKey, duration);
     add(owners, ownerOf(fileOf(leaf.value.callFrame.url, root)), duration);
     // Count a function once per sample even when it recurses.
-    const seen = MutableHashSet.empty<string>();
-    let current: Option.Option<ProfileNode> = leaf;
-    while (Option.isSome(current)) {
-      const key = keyOf(current.value);
-      if (!MutableHashSet.has(seen, key)) {
-        MutableHashSet.add(seen, key);
-        add(total, key, duration);
-      }
-      current = Option.flatMap(MutableHashMap.get(parents, current.value.id), (id) =>
-        MutableHashMap.get(nodes, id),
-      );
-    }
+    Arr.dedupe(
+      Arr.unfold(
+        leaf,
+        Option.map((node) => [keyOf(node), parentOf(node)] as const),
+      ),
+    ).forEach((key) => add(total, key, duration));
   });
 
   const category = (name: string) =>

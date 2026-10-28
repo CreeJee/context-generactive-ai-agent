@@ -9,7 +9,7 @@ it.effect("classifies transport, rejection and invalid response failures", () =>
     const transport = createAppApi("http://localhost", () =>
       Promise.reject(new Error("private transport detail")),
     );
-    const unreachable = yield* Effect.flip(transport.requestEffect(response, "/api/auth"));
+    const unreachable = yield* Effect.flip(transport.request(response, "/api/auth"));
     expect(AppRequestReason.guards.TransportFailed(unreachable.reason)).toBe(true);
     expect(unreachable.code).toBe("unreachable");
     expect(unreachable.message).not.toContain("private");
@@ -17,7 +17,7 @@ it.effect("classifies transport, rejection and invalid response failures", () =>
     const rejected = createAppApi("http://localhost", () =>
       Promise.resolve(new Response("invalid JSON", { status: 403 })),
     );
-    const forbidden = yield* Effect.flip(rejected.requestEffect(response, "/api/auth"));
+    const forbidden = yield* Effect.flip(rejected.request(response, "/api/auth"));
     expect(AppRequestReason.guards.RequestRejected(forbidden.reason)).toBe(true);
     expect(forbidden.status).toBe(403);
     expect(forbidden.code).toBe("request_failed");
@@ -25,7 +25,7 @@ it.effect("classifies transport, rejection and invalid response failures", () =>
     const malformed = createAppApi("http://localhost", () =>
       Promise.resolve(Response.json({ status: 42, private: "internal response detail" })),
     );
-    const invalid = yield* Effect.flip(malformed.requestEffect(response, "/api/auth"));
+    const invalid = yield* Effect.flip(malformed.request(response, "/api/auth"));
     expect(AppRequestReason.guards.InvalidResponse(invalid.reason)).toBe(true);
     expect(invalid.code).toBe("unexpected_response");
     expect(invalid.message).not.toContain("internal");
@@ -45,7 +45,7 @@ it.effect("interrupts the native request through its Effect-owned signal", () =>
       );
     });
     yield* Effect.acquireUseRelease(
-      Effect.forkChild(client.requestEffect(Schema.Unknown, "/api/auth")),
+      Effect.forkChild(client.request(Schema.Unknown, "/api/auth")),
       (running) =>
         Effect.gen(function* () {
           const signal = yield* Deferred.await(started);

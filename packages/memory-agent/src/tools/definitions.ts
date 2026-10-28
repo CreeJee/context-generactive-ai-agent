@@ -1,13 +1,10 @@
 /**
- * Definitions of the tools that need the user's approval before they run (R04/R05).
+ * Definitions of the tools that need the user's approval before they run (R04/R05), with the
+ * contracts the chat UI shares with the server.
  *
- * This module is safe to import in the browser: the chat UI registers these same definitions so
- * TanStack can match an approval interrupt to its tool by schema hash and let the user answer it.
- * The server implementations live in `approved.ts`.
+ * This module is safe to import in the browser. The server implementations live in `approved.ts`.
  */
-import { defineInterrupt, toolDefinition } from "@tanstack/ai";
 import { HashSet, Schema } from "effect";
-import { toToolSchema } from "./schema.ts";
 
 export { attachmentIdOf, attachmentUrl } from "../attachments/urls.ts";
 export {
@@ -192,63 +189,34 @@ export const DeleteOutsideFileInput = Schema.Struct({
   ),
 });
 
-const saveCodeSkill = {
+/** The gated tools' names, descriptions and parameters, which their Effect AI tools share. */
+export const saveCodeSkillSpec = {
   name: "save_code_skill",
   description:
     "Save a project code skill (.agents/skills/<name>/ with SKILL.md and scripts/run.ts or scripts/run.sh) for run_skill to run. Make each skill one purpose-specific job, reuse a listed skill when one fits, and do not wrap a single tool call. A ts skill is a program that calls your tools as functions, as in run_code, with the input it declares. A sh skill is a script, the only way to run host commands: it runs sandboxed, writes only inside the project, temp folders and package caches, cannot read credential folders or the app's storage, and reaches only the hosts in network. Saving asks for approval of the exact program and host list; later runs of the unchanged program, with any input or arguments, do not ask. Saving under an existing skill's name replaces it. Read the code-skill-writing skill before the first save in a conversation.",
-  inputSchema: toToolSchema(SaveCodeSkillInput),
+  parameters: SaveCodeSkillInput,
 } as const;
 
-const writeOutsideFile = {
+export const writeOutsideFileSpec = {
   name: "write_outside_file",
   description:
     "Create a text file outside the project, or replace one when expectedSha256 is given. Each write is approved first. Credential files are refused even with approval.",
-  inputSchema: toToolSchema(WriteOutsideFileInput),
+  parameters: WriteOutsideFileInput,
 } as const;
 
-const deleteOutsideFile = {
+export const deleteOutsideFileSpec = {
   name: "delete_outside_file",
   description:
     "Delete one text file outside the project whose content still matches expectedSha256. Each deletion is approved first.",
-  inputSchema: toToolSchema(DeleteOutsideFileInput),
+  parameters: DeleteOutsideFileInput,
 } as const;
 
 /** Names of the tools that never run without an approval, in either permission mode. */
 export const gatedToolNames = HashSet.fromIterable([
-  saveCodeSkill.name,
-  writeOutsideFile.name,
-  deleteOutsideFile.name,
+  saveCodeSkillSpec.name,
+  writeOutsideFileSpec.name,
+  deleteOutsideFileSpec.name,
 ]);
-
-export const saveCodeSkillDefinition = toolDefinition({ ...saveCodeSkill, needsApproval: true });
-export const writeOutsideFileDefinition = toolDefinition({
-  ...writeOutsideFile,
-  needsApproval: true,
-});
-export const deleteOutsideFileDefinition = toolDefinition({
-  ...deleteOutsideFile,
-  needsApproval: true,
-});
-
-/**
- * `ask` mode: TanStack pauses before each call until the user answers.
- * Register these with `useChat({ tools })` so approval requests can be answered.
- */
-export const approvalToolDefinitions = [
-  saveCodeSkillDefinition,
-  writeOutsideFileDefinition,
-  deleteOutsideFileDefinition,
-] as const;
-
-/**
- * `auto` mode: the same tools without TanStack's static approval. The permission review
- * middleware decides each call instead, and asks the user through {@link permissionReviewInterrupt}.
- */
-export const reviewedToolDefinitions = [
-  toolDefinition({ ...saveCodeSkill, needsApproval: false }),
-  toolDefinition({ ...writeOutsideFile, needsApproval: false }),
-  toolDefinition({ ...deleteOutsideFile, needsApproval: false }),
-] as const;
 
 export const PermissionReviewPayload = Schema.Struct({
   toolCallId: Schema.String,
@@ -265,12 +233,5 @@ export const PermissionReviewPayload = Schema.Struct({
 });
 
 export const PermissionReviewResponse = Schema.Struct({ approved: Schema.Boolean });
-
-/** `auto` mode: the review could not allow a call on its own and asks the user. */
-export const permissionReviewInterrupt = defineInterrupt({
-  id: "permission-review",
-  payloadSchema: toToolSchema(PermissionReviewPayload),
-  responseSchema: toToolSchema(PermissionReviewResponse),
-});
 export { reportedTitle, ScanState, sourceLabels } from "../improve/contracts.ts";
 export type { ScanFailure } from "../improve/contracts.ts";

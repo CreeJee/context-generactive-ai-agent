@@ -4,11 +4,7 @@ import { isTruthy } from "../truthy.ts";
 import { logFailure } from "../runtime/logged-failures.ts";
 import { optionalProperty } from "../optional-property.ts";
 import {
-  Cause,
-  Deferred,
-  Exit,
   MutableHashMap,
-  MutableHashSet,
   DateTime,
   Clock,
   Context,
@@ -16,7 +12,9 @@ import {
   Data,
   Effect,
   Layer,
+  Match,
   Option,
+  PubSub,
   Schema,
 } from "effect";
 import { SqlClient, type Statement } from "effect/sql";
@@ -46,34 +44,39 @@ export const heartbeatLostMs = 60_000;
 
 const ReadFailed = Schema.TaggedStruct("ReadFailed", {});
 
-export class WorkTraceReadFailed extends Schema.TaggedError<WorkTraceReadFailed>()(
-  "WorkTraceReadFailed",
-  {
-    operation: Schema.Literals(["latest_cursor", "snapshot"]),
-    reason: ReadFailed,
-    cause: Schema.Defect(),
-  },
-) {}
+/** What trace readers wait for: a new event of a session, or progress a heartbeat reported. */
+type TraceChange =
+  | { readonly kind: "event"; readonly sessionId: string; readonly cursor: number }
+  | { readonly kind: "progress"; readonly sessionId: string };
+
+export class WorkTraceReadFailed extends Schema.TaggedError<
+  WorkTraceReadFailed,
+  { readonly brand: unique symbol }
+>()("WorkTraceReadFailed", {
+  operation: Schema.Literals(["latest_cursor", "snapshot"]),
+  reason: ReadFailed,
+  cause: Schema.Defect(),
+}) {}
 
 /** A Work Trace write the store refused; `message` is safe to show the model. */
-export class WorkTraceRejected extends Schema.TaggedError<WorkTraceRejected>()(
-  "WorkTraceRejected",
-  {
-    reason: Schema.Literals([
-      "handle_mismatch",
-      "unsafe_file_path",
-      "missing_file_digest",
-      "artifact_kind_mismatch",
-      "origin_missing",
-      "invalid_transition",
-      "foreign_session",
-      "foreign_report",
-      "undelivered_notification",
-      "attempt_not_found",
-    ]),
-    message: Schema.String,
-  },
-) {}
+export class WorkTraceRejected extends Schema.TaggedError<
+  WorkTraceRejected,
+  { readonly brand: unique symbol }
+>()("WorkTraceRejected", {
+  reason: Schema.Literals([
+    "handle_mismatch",
+    "unsafe_file_path",
+    "missing_file_digest",
+    "artifact_kind_mismatch",
+    "origin_missing",
+    "invalid_transition",
+    "foreign_session",
+    "foreign_report",
+    "undelivered_notification",
+    "attempt_not_found",
+  ]),
+  message: Schema.String,
+}) {}
 const rejected = (reason: WorkTraceRejected["reason"], message: string) =>
   WorkTraceRejected.make({ reason, message });
 
@@ -601,26 +604,17 @@ export interface RecordArtifactInput {
   readonly verification?: Exclude<EvidenceVerification, "source_deleted">;
 }
 
-const taskStatusForAttempt = (status: AttemptStatus): TaskStatus => {
-  switch (status) {
-    case "queued":
-      return "queued";
-    case "running":
-      return "running";
-    case "waiting":
-      return "waiting";
-    case "blocked":
-      return "blocked";
-    case "interrupted":
-      return "resumable";
-    case "completed":
-      return "completed";
-    case "failed":
-      return "failed";
-    case "cancelled":
-      return "cancelled";
-  }
-};
+/** The status a task takes when its attempt reaches a status. */
+const taskStatusForAttempt = {
+  queued: "queued",
+  running: "running",
+  waiting: "waiting",
+  blocked: "blocked",
+  interrupted: "resumable",
+  completed: "completed",
+  failed: "failed",
+  cancelled: "cancelled",
+} as const satisfies Record<AttemptStatus, TaskStatus>;
 
 /** What a heartbeat says once an attempt reaches a status by transition. */
 const heartbeatStateForAttempt = {
@@ -634,10 +628,31 @@ const heartbeatStateForAttempt = {
   cancelled: "idle",
 } as const satisfies Record<AttemptStatus, HeartbeatState>;
 
-const make = Effect.gen(function* () {
-  const effectClock = yield* Clock.Clock;
-  const runPromiseExit = Effect.runPromiseExitWith(yield* Effect.context());
+/** The status an attempt's invocation takes when the attempt reaches a status. */
+const invocationStatusForAttempt = {
+  queued: "running",
+  running: "running",
+  waiting: "running",
+  blocked: "running",
+  interrupted: "failed",
+  completed: "completed",
+  failed: "failed",
+  cancelled: "cancelled",
+} as const satisfies Record<AttemptStatus, string>;
 
+/** What the parent hears when an attempt reaches a status; `resumed` only for a retry. */
+const notificationForAttempt = {
+  queued: null,
+  running: "resumed",
+  waiting: null,
+  blocked: null,
+  interrupted: "interrupted",
+  completed: "completed",
+  failed: "failed",
+  cancelled: "stopped",
+} as const satisfies Record<AttemptStatus, string | null>;
+
+const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const crypto = yield* Crypto.Crypto;
   /** The first row a query returns, if any. */
@@ -656,11 +671,12 @@ const make = Effect.gen(function* () {
     const found = yield* first(sql`SELECT 1 FROM agent_run_attempts
       WHERE id = ${handle.id} AND task_id = ${handle.taskId} AND invocation_id = ${handle.invocationId}
         AND chat_run_id = ${handle.chatRunId} AND thread_id = ${handle.threadId}`);
-    if (!isTruthy(found))
-      return yield* rejected(
-        "handle_mismatch",
-        "Evidence AttemptHandle does not match a durable attempt",
-      );
+    yield* Effect.when(
+      Effect.fail(
+        rejected("handle_mismatch", "Evidence AttemptHandle does not match a durable attempt"),
+      ),
+      Effect.succeed(!isTruthy(found)),
+    );
   });
   const assertSafeFile = Effect.fnUntraced(function* (locator: {
     readonly path: string;
@@ -676,11 +692,12 @@ const make = Effect.gen(function* () {
         "unsafe_file_path",
         "Evidence file paths must be project-relative and normalized",
       );
-    if (!/^[a-f\d]{64}$/i.test(locator.sha256))
-      return yield* rejected(
-        "missing_file_digest",
-        "Evidence file locators require a sha256 digest",
-      );
+    yield* Effect.when(
+      Effect.fail(
+        rejected("missing_file_digest", "Evidence file locators require a sha256 digest"),
+      ),
+      Effect.succeed(!/^[a-f\d]{64}$/i.test(locator.sha256)),
+    );
   });
   const handleOf = (attempt: typeof AttemptRow.Type): AttemptHandle => ({
     id: attempt.id,
@@ -730,14 +747,16 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       yield* assertHandle(input.handle);
       const locator = yield* Schema.decodeEffect(ArtifactLocator)(input.locator);
-      if (!ArtifactLocator.guards[input.kind](locator))
-        return yield* rejected("artifact_kind_mismatch", "Artifact kind must match its locator");
+      yield* Effect.when(
+        Effect.fail(rejected("artifact_kind_mismatch", "Artifact kind must match its locator")),
+        Effect.succeed(!ArtifactLocator.guards[input.kind](locator)),
+      );
       if (ArtifactLocator.guards.file(locator)) yield* assertSafeFile(locator);
       const encoded = yield* encodeArtifactLocator(locator);
       const existing = yield* first(sql`SELECT * FROM work_artifacts
         WHERE attempt_id = ${input.handle.id} AND kind = ${input.kind} AND locator = ${encoded}`);
       if (isTruthy(existing)) return yield* artifactView(yield* decodeArtifactRow(existing));
-      const now = effectClock.currentTimeMillisUnsafe();
+      const now = yield* Clock.currentTimeMillis;
       const inserted = yield* first(sql`INSERT INTO work_artifacts
         (id, task_id, attempt_id, kind, locator, media_type, verification, created_at, updated_at)
         VALUES (${yield* crypto.randomUUIDv4()}, ${input.handle.taskId}, ${input.handle.id},
@@ -752,15 +771,16 @@ const make = Effect.gen(function* () {
     verification: Exclude<EvidenceVerification, "source_deleted">,
   ) =>
     Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
       const row = yield* first(sql`UPDATE work_artifacts SET verification = ${verification},
-          source_deleted_at = NULL, updated_at = ${effectClock.currentTimeMillisUnsafe()}
+          source_deleted_at = NULL, updated_at = ${now}
         WHERE id = ${artifactId} AND locator IS NOT NULL RETURNING *`);
       return isTruthy(row) ? yield* artifactView(yield* decodeArtifactRow(row)) : null;
     }).pipe(sql.withTransaction);
 
   const markArtifactSourceDeleted = (artifactId: string) =>
     Effect.gen(function* () {
-      const now = effectClock.currentTimeMillisUnsafe();
+      const now = yield* Clock.currentTimeMillis;
       const row = yield* first(sql`UPDATE work_artifacts
         SET locator = NULL, media_type = NULL, verification = 'source_deleted',
             source_deleted_at = ${now}, updated_at = ${now}
@@ -806,7 +826,7 @@ const make = Effect.gen(function* () {
   // Attempts the previous process left live failed with it. Retrying is the user's or the
   // parent's call, never automatic.
   const recoveredAttempts = yield* Effect.gen(function* () {
-    const now = effectClock.currentTimeMillisUnsafe();
+    const now = yield* Clock.currentTimeMillis;
     const attempts = yield* decodeRecoveryRows(
       yield* sql`SELECT a.id, a.task_id, t.project_id, t.origin_session_id, t.agent_id,
           t.parent_run_id
@@ -818,43 +838,48 @@ const make = Effect.gen(function* () {
       stage: "restart",
     };
     const encodedFailure = yield* encodeFailure(failure);
-    for (const row of attempts) {
-      const uncertain = (yield* pendingToolsOf(row.id)).length > 0;
-      const retryable = row.origin_session_id !== null && row.agent_id !== null;
-      yield* run(sql`UPDATE agent_run_attempts
-        SET status = 'interrupted', resume_reason = 'server_restarted', failure = ${encodedFailure},
-            heartbeat_state = 'idle', heartbeat_step = 'Stopped by a server restart',
-            finished_at = ${now}, updated_at = ${now}
-        WHERE id = ${row.id}`);
-      yield* run(sql`UPDATE work_tasks
-        SET status = ${!retryable ? "interrupted" : uncertain ? "blocked" : "resumable"},
-            active_attempt_id = NULL, updated_at = ${now}
-        WHERE id = ${row.task_id}`);
-      const summary = !retryable
-        ? "Execution was interrupted by a server restart."
-        : uncertain
-          ? "Subagent execution was interrupted by a server restart. A tool call may have run; check its effects before retrying."
-          : "Subagent execution was interrupted by a server restart and can be retried.";
-      yield* run(sql`INSERT INTO parent_notifications
-        (id, project_id, task_id, origin_session_id, parent_run_id, kind, summary, payload,
-         idempotency_key, created_at)
-        VALUES (${yield* crypto.randomUUIDv4()}, ${row.project_id}, ${row.task_id},
-          ${row.origin_session_id}, ${row.parent_run_id}, 'interrupted', ${summary},
-          ${yield* encodeJson({ attemptId: row.id, failure })},
-          ${`recovery:${row.id}:interrupted`}, ${now})
-        ON CONFLICT(idempotency_key) DO NOTHING`);
-    }
+    yield* Effect.forEach(
+      attempts,
+      (row) =>
+        Effect.gen(function* () {
+          const uncertain = (yield* pendingToolsOf(row.id)).length > 0;
+          const retryable = row.origin_session_id !== null && row.agent_id !== null;
+          yield* run(sql`UPDATE agent_run_attempts
+            SET status = 'interrupted', resume_reason = 'server_restarted', failure = ${encodedFailure},
+                heartbeat_state = 'idle', heartbeat_step = 'Stopped by a server restart',
+                finished_at = ${now}, updated_at = ${now}
+            WHERE id = ${row.id}`);
+          yield* run(sql`UPDATE work_tasks
+            SET status = ${!retryable ? "interrupted" : uncertain ? "blocked" : "resumable"},
+                active_attempt_id = NULL, updated_at = ${now}
+            WHERE id = ${row.task_id}`);
+          const summary = !retryable
+            ? "Execution was interrupted by a server restart."
+            : uncertain
+              ? "Subagent execution was interrupted by a server restart. A tool call may have run; check its effects before retrying."
+              : "Subagent execution was interrupted by a server restart and can be retried.";
+          yield* run(sql`INSERT INTO parent_notifications
+            (id, project_id, task_id, origin_session_id, parent_run_id, kind, summary, payload,
+             idempotency_key, created_at)
+            VALUES (${yield* crypto.randomUUIDv4()}, ${row.project_id}, ${row.task_id},
+              ${row.origin_session_id}, ${row.parent_run_id}, 'interrupted', ${summary},
+              ${yield* encodeJson({ attemptId: row.id, failure })},
+              ${`recovery:${row.id}:interrupted`}, ${now})
+            ON CONFLICT(idempotency_key) DO NOTHING`);
+        }),
+      { discard: true },
+    );
     return attempts.length;
   }).pipe(sql.withTransaction);
 
-  const listeners = MutableHashSet.empty<(sessionId: string, cursor: number) => void>();
+  const changes = yield* PubSub.unbounded<TraceChange>();
   const appendEvent = Effect.fnUntraced(function* (input: AppendEventInput) {
     const event = yield* Effect.gen(function* () {
       const next = yield* decodeSequence(
         yield* first(sql`SELECT coalesce(max(attempt_sequence), 0) + 1 AS sequence
           FROM run_events WHERE attempt_id = ${input.handle.id}`),
       );
-      const occurredAt = input.occurredAt ?? effectClock.currentTimeMillisUnsafe();
+      const occurredAt = input.occurredAt ?? (yield* Clock.currentTimeMillis);
       const id = yield* crypto.randomUUIDv4();
       const payload = yield* encodeJson(input.payload ?? {});
       const row = yield* decodeCursor(
@@ -868,16 +893,17 @@ const make = Effect.gen(function* () {
       );
       return { id, cursor: row.seq, attemptSequence: next.sequence, occurredAt };
     }).pipe(sql.withTransaction);
-    for (const listener of listeners) listener(input.sessionId, event.cursor);
+    yield* PubSub.publish(changes, {
+      kind: "event",
+      sessionId: input.sessionId,
+      cursor: event.cursor,
+    });
     return event;
   });
 
   /** Wakes trace readers when a heartbeat says something new. Periodic beats alone do not. */
-  const progressListeners = MutableHashSet.empty<(sessionId: string) => void>();
   const announceProgress = (sessionId: string) =>
-    Effect.sync(() => {
-      for (const listener of progressListeners) listener(sessionId);
-    });
+    PubSub.publish(changes, { kind: "progress", sessionId });
   const liveStatuses = sql.literal("('queued', 'running', 'waiting', 'blocked')");
 
   /** Records what a live attempt is doing now. An attempt that already ended keeps its last beat. */
@@ -886,10 +912,11 @@ const make = Effect.gen(function* () {
     sessionId: string,
     update: { readonly state: HeartbeatState; readonly step: string },
   ) =>
-    run(sql`UPDATE agent_run_attempts
-      SET heartbeat_state = ${update.state}, heartbeat_step = ${update.step},
-          heartbeat_at = ${effectClock.currentTimeMillisUnsafe()}
-      WHERE id = ${handle.id} AND status IN ${liveStatuses}`).pipe(
+    Effect.flatMap(Clock.currentTimeMillis, (now) =>
+      run(sql`UPDATE agent_run_attempts
+      SET heartbeat_state = ${update.state}, heartbeat_step = ${update.step}, heartbeat_at = ${now}
+      WHERE id = ${handle.id} AND status IN ${liveStatuses}`),
+    ).pipe(
       Effect.flatMap((result) =>
         result.changes === 1 ? announceProgress(sessionId) : Effect.void,
       ),
@@ -901,27 +928,27 @@ const make = Effect.gen(function* () {
     sessionId: string,
     toolCall: { readonly id: string; readonly name: string },
   ) =>
-    run(sql`UPDATE agent_run_attempts
+    Effect.flatMap(Clock.currentTimeMillis, (now) =>
+      run(sql`UPDATE agent_run_attempts
       SET pending_tool_call_ids = json_insert(pending_tool_call_ids, '$[#]', ${toolCall.id}),
           heartbeat_state = 'working', heartbeat_step = ${`Running ${toolCall.name}`},
-          heartbeat_at = ${effectClock.currentTimeMillisUnsafe()}
-      WHERE id = ${handle.id} AND status IN ${liveStatuses}`).pipe(
-      Effect.andThen(announceProgress(sessionId)),
-    );
+          heartbeat_at = ${now}
+      WHERE id = ${handle.id} AND status IN ${liveStatuses}`),
+    ).pipe(Effect.andThen(announceProgress(sessionId)));
 
   const toolSettled = (
     handle: AttemptHandle,
     sessionId: string,
     toolCall: { readonly id: string; readonly name: string },
   ) =>
-    run(sql`UPDATE agent_run_attempts
+    Effect.flatMap(Clock.currentTimeMillis, (now) =>
+      run(sql`UPDATE agent_run_attempts
       SET pending_tool_call_ids = (SELECT json_group_array(value)
             FROM json_each(pending_tool_call_ids) WHERE value <> ${toolCall.id}),
           heartbeat_state = 'working', heartbeat_step = ${`Finished ${toolCall.name}`},
-          heartbeat_at = ${effectClock.currentTimeMillisUnsafe()}
-      WHERE id = ${handle.id} AND status IN ${liveStatuses}`).pipe(
-      Effect.andThen(announceProgress(sessionId)),
-    );
+          heartbeat_at = ${now}
+      WHERE id = ${handle.id} AND status IN ${liveStatuses}`),
+    ).pipe(Effect.andThen(announceProgress(sessionId)));
 
   /**
    * Beats for a live attempt until interrupted. The owner forks it into the attempt's own scope,
@@ -931,9 +958,10 @@ const make = Effect.gen(function* () {
   const keepAlive = (handle: AttemptHandle) =>
     Effect.forever(
       Effect.sleep(heartbeatIntervalMs).pipe(
-        Effect.andThen(
-          run(sql`UPDATE agent_run_attempts
-            SET heartbeat_at = ${effectClock.currentTimeMillisUnsafe()}
+        // Each beat reads the clock; a statement built once would write its first time forever.
+        Effect.andThen(Clock.currentTimeMillis),
+        Effect.flatMap((now) =>
+          run(sql`UPDATE agent_run_attempts SET heartbeat_at = ${now}
             WHERE id = ${handle.id} AND status IN ${liveStatuses}`),
         ),
         Effect.catch(logFailure("work_trace_heartbeat_not_recorded")),
@@ -962,7 +990,7 @@ const make = Effect.gen(function* () {
         yield* first(sql`SELECT project_id, origin_session_id, parent_run_id FROM work_tasks
           WHERE id = ${input.taskId}`),
       );
-      const now = effectClock.currentTimeMillisUnsafe();
+      const now = yield* Clock.currentTimeMillis;
       const id = yield* crypto.randomUUIDv4();
       const payload = yield* encodeJson(input.payload ?? {});
       const deliveredToRunId =
@@ -992,28 +1020,30 @@ const make = Effect.gen(function* () {
           FROM parent_notifications
           WHERE origin_session_id = ${sessionId} AND delivered_at IS NULL ORDER BY seq`,
       );
-      const now = effectClock.currentTimeMillisUnsafe();
-      const delivered: ParentNotificationView[] = [];
-      for (const row of rows) {
-        const claimed = yield* run(sql`UPDATE parent_notifications
-          SET delivered_to_run_id = ${deliveredToRunId}, delivered_at = ${now}
-          WHERE id = ${row.id} AND delivered_at IS NULL`);
-        if (claimed.changes !== 1) continue;
-        delivered.push({
+      const now = yield* Clock.currentTimeMillis;
+      const claimed = yield* Effect.filter(rows, (row) =>
+        Effect.map(
+          run(sql`UPDATE parent_notifications
+            SET delivered_to_run_id = ${deliveredToRunId}, delivered_at = ${now}
+            WHERE id = ${row.id} AND delivered_at IS NULL`),
+          (result) => result.changes === 1,
+        ),
+      );
+      return yield* Effect.forEach(claimed, (row) =>
+        Effect.map(decodePayload(row.payload), (payload): ParentNotificationView => ({
           id: row.id,
           taskId: row.task_id,
           kind: row.kind,
           summary: row.summary,
-          payload: yield* decodePayload(row.payload),
+          payload,
           createdAt: row.created_at,
-        });
-      }
-      return delivered;
+        })),
+      );
     }).pipe(sql.withTransaction);
 
   const startAttempt = (input: StartAttemptInput) =>
     Effect.gen(function* () {
-      const now = effectClock.currentTimeMillisUnsafe();
+      const now = yield* Clock.currentTimeMillis;
       const taskId = yield* crypto.randomUUIDv4();
       const invocationId = yield* crypto.randomUUIDv4();
       const attemptId = yield* crypto.randomUUIDv4();
@@ -1034,11 +1064,12 @@ const make = Effect.gen(function* () {
           'queued', ${input.title}, ${input.request}, NULL, ${now}, ${now}
         FROM sessions s LEFT JOIN subagents a ON a.session_id = s.id AND a.id = ${agentId}
         WHERE s.id = ${input.sessionId} AND (${agentId} IS NULL OR a.id IS NOT NULL)`);
-      if (insertedTask.changes !== 1)
-        return yield* rejected(
-          "origin_missing",
-          "Work Trace origin session or subagent no longer exists",
-        );
+      yield* Effect.when(
+        Effect.fail(
+          rejected("origin_missing", "Work Trace origin session or subagent no longer exists"),
+        ),
+        Effect.succeed(insertedTask.changes !== 1),
+      );
       const idempotencyKey = `${input.parentRunId}:${input.parentToolCallId}`;
       yield* run(sql`INSERT INTO agent_invocations
         (id, task_id, parent_run_id, parent_tool_call_id, kind, status, message,
@@ -1081,7 +1112,7 @@ const make = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       const id = yield* crypto.randomUUIDv4();
-      const now = effectClock.currentTimeMillisUnsafe();
+      const now = yield* Clock.currentTimeMillis;
       yield* run(sql`INSERT INTO agent_invocations
         (id, task_id, parent_run_id, parent_tool_call_id, kind, status, message,
          target_attempt_id, idempotency_key, created_at, finished_at)
@@ -1117,12 +1148,13 @@ const make = Effect.gen(function* () {
         yield* first(sql`SELECT * FROM agent_run_attempts WHERE id = ${handle.id}`),
       );
       const from = current.status;
-      if (!canTransitionAttempt(from, status))
-        return yield* rejected(
-          "invalid_transition",
-          `Invalid attempt transition ${from} -> ${status}`,
-        );
-      const now = effectClock.currentTimeMillisUnsafe();
+      yield* Effect.when(
+        Effect.fail(
+          rejected("invalid_transition", `Invalid attempt transition ${from} -> ${status}`),
+        ),
+        Effect.succeed(!canTransitionAttempt(from, status)),
+      );
+      const now = yield* Clock.currentTimeMillis;
       const terminal = ["interrupted", "completed", "failed", "cancelled"].includes(status);
       const recorded: AttemptFailure | null = isTruthy(failure)
         ? { reason: failure.reason, stage: failure.stage ?? (yield* stageOf(handle.id)) }
@@ -1134,18 +1166,10 @@ const make = Effect.gen(function* () {
             heartbeat_state = ${heartbeatStateForAttempt[status]}, heartbeat_step = ${summary},
             heartbeat_at = ${now}
         WHERE id = ${handle.id}`);
-      yield* run(sql`UPDATE work_tasks SET status = ${taskStatusForAttempt(status)},
+      yield* run(sql`UPDATE work_tasks SET status = ${taskStatusForAttempt[status]},
           active_attempt_id = ${terminal ? null : handle.id}, updated_at = ${now}
         WHERE id = ${handle.taskId}`);
-      const invocationStatus =
-        status === "completed"
-          ? "completed"
-          : status === "cancelled"
-            ? "cancelled"
-            : status === "failed" || status === "interrupted"
-              ? "failed"
-              : "running";
-      yield* run(sql`UPDATE agent_invocations SET status = ${invocationStatus},
+      yield* run(sql`UPDATE agent_invocations SET status = ${invocationStatusForAttempt[status]},
           finished_at = ${terminal ? now : null}
         WHERE id = ${handle.invocationId}`);
       const appended = yield* appendEvent({
@@ -1156,31 +1180,26 @@ const make = Effect.gen(function* () {
         payload: recorded === null ? detail : { ...detail, failure: recorded },
         occurredAt: now,
       });
-      const notificationKind =
-        status === "completed"
-          ? "completed"
-          : status === "failed"
-            ? "failed"
-            : status === "cancelled"
-              ? "stopped"
-              : status === "interrupted"
-                ? "interrupted"
-                : status === "running" && handle.attemptNumber > 1
-                  ? "resumed"
-                  : null;
-      if (isTruthy(notificationKind))
-        yield* notifyParent({
-          taskId: handle.taskId,
-          kind: notificationKind,
-          summary,
-          idempotencyKey: `attempt:${handle.id}:${notificationKind}`,
-          payload:
-            recorded === null
-              ? { attemptId: handle.id }
-              : { attemptId: handle.id, failure: recorded },
-          deliveredImmediately,
-          ...optionalProperty("deliveredToRunId", deliveredToRunId),
-        });
+      const notificationKind = Option.filter(
+        Option.fromNullishOr(notificationForAttempt[status]),
+        (kind) => kind !== "resumed" || handle.attemptNumber > 1,
+      );
+      yield* Option.match(notificationKind, {
+        onNone: () => Effect.void,
+        onSome: (kind) =>
+          notifyParent({
+            taskId: handle.taskId,
+            kind,
+            summary,
+            idempotencyKey: `attempt:${handle.id}:${kind}`,
+            payload:
+              recorded === null
+                ? { attemptId: handle.id }
+                : { attemptId: handle.id, failure: recorded },
+            deliveredImmediately,
+            ...optionalProperty("deliveredToRunId", deliveredToRunId),
+          }),
+      });
       return appended;
     }).pipe(sql.withTransaction);
 
@@ -1248,52 +1267,75 @@ const make = Effect.gen(function* () {
       if (isTruthy(existing)) return (yield* decodeId(existing)).id;
       const session = yield* first(sql`SELECT 1 FROM sessions
         WHERE id = ${input.sessionId} AND project_id = ${input.projectId}`);
-      if (!isTruthy(session))
-        return yield* rejected(
-          "foreign_session",
-          "Final answer session does not belong to the project",
-        );
+      yield* Effect.when(
+        Effect.fail(
+          rejected("foreign_session", "Final answer session does not belong to the project"),
+        ),
+        Effect.succeed(!isTruthy(session)),
+      );
       const reports = EffectArray.dedupeWith(
         input.usedReports,
         (a, b) => a.taskId === b.taskId && a.attemptId === b.attemptId,
       );
-      for (const report of reports)
-        if (
-          !isTruthy(
-            yield* first(sql`SELECT 1 FROM agent_run_attempts a JOIN work_tasks t ON t.id = a.task_id
+      yield* Effect.forEach(
+        reports,
+        (report) =>
+          Effect.flatMap(
+            first(sql`SELECT 1 FROM agent_run_attempts a JOIN work_tasks t ON t.id = a.task_id
               WHERE a.id = ${report.attemptId} AND a.task_id = ${report.taskId}
                 AND t.project_id = ${input.projectId} AND t.origin_session_id = ${input.sessionId}`),
-          )
-        )
-          return yield* rejected(
-            "foreign_report",
-            "Final answer selected another session's report",
-          );
-      const notificationTasks = MutableHashMap.empty<string, string>();
-      for (const notificationId of input.reflectedNotificationIds) {
-        const row = yield* first(sql`SELECT n.task_id FROM parent_notifications n
-          JOIN work_tasks t ON t.id = n.task_id
-          WHERE n.id = ${notificationId} AND n.origin_session_id = ${input.sessionId}
-            AND n.delivered_to_run_id = ${input.parentRunId} AND t.project_id = ${input.projectId}`);
-        if (!isTruthy(row))
-          return yield* rejected(
-            "undelivered_notification",
-            "Final answer selected an undelivered parent notification",
-          );
-        MutableHashMap.set(notificationTasks, notificationId, (yield* decodeTaskId(row)).task_id);
-      }
+            (found) =>
+              Effect.when(
+                Effect.fail(
+                  rejected("foreign_report", "Final answer selected another session's report"),
+                ),
+                Effect.succeed(!isTruthy(found)),
+              ),
+          ),
+        { discard: true },
+      );
+      // A notification listed twice is recorded once.
+      const notificationTasks = MutableHashMap.fromIterable(
+        yield* Effect.forEach(input.reflectedNotificationIds, (notificationId) =>
+          first(sql`SELECT n.task_id FROM parent_notifications n
+            JOIN work_tasks t ON t.id = n.task_id
+            WHERE n.id = ${notificationId} AND n.origin_session_id = ${input.sessionId}
+              AND n.delivered_to_run_id = ${input.parentRunId} AND t.project_id = ${input.projectId}`).pipe(
+            Effect.flatMap((row) =>
+              Effect.fromOption(Option.fromUndefinedOr(row), () =>
+                rejected(
+                  "undelivered_notification",
+                  "Final answer selected an undelivered parent notification",
+                ),
+              ),
+            ),
+            Effect.flatMap(decodeTaskId),
+            Effect.map(({ task_id }) => [notificationId, task_id] as const),
+          ),
+        ),
+      );
       const claimId = yield* crypto.randomUUIDv4();
+      const claimedAt = yield* Clock.currentTimeMillis;
       yield* run(sql`INSERT INTO final_answer_claims
         (id, project_id, origin_session_id, parent_run_id, parent_message_id, created_at)
         VALUES (${claimId}, ${input.projectId}, ${input.sessionId}, ${input.parentRunId},
-          ${input.parentMessageId}, ${effectClock.currentTimeMillisUnsafe()})`);
-      for (const report of reports)
-        yield* run(sql`INSERT INTO final_answer_sources (id, claim_id, task_id, attempt_id)
-          VALUES (${yield* crypto.randomUUIDv4()}, ${claimId}, ${report.taskId},
-            ${report.attemptId})`);
-      for (const [id, taskId] of notificationTasks)
-        yield* run(sql`INSERT INTO final_answer_notifications (claim_id, notification_id, task_id)
-          VALUES (${claimId}, ${id}, ${taskId})`);
+          ${input.parentMessageId}, ${claimedAt})`);
+      yield* Effect.forEach(
+        reports,
+        (report) =>
+          Effect.flatMap(crypto.randomUUIDv4(), (id) =>
+            run(sql`INSERT INTO final_answer_sources (id, claim_id, task_id, attempt_id)
+              VALUES (${id}, ${claimId}, ${report.taskId}, ${report.attemptId})`),
+          ),
+        { discard: true },
+      );
+      yield* Effect.forEach(
+        notificationTasks,
+        ([id, taskId]) =>
+          run(sql`INSERT INTO final_answer_notifications (claim_id, notification_id, task_id)
+            VALUES (${claimId}, ${id}, ${taskId})`),
+        { discard: true },
+      );
       return claimId;
     }).pipe(sql.withTransaction);
 
@@ -1485,7 +1527,7 @@ const make = Effect.gen(function* () {
       if (uncertain.length > 0 && !input.confirmUncertain)
         return resumeBlocked("uncertain_side_effect");
 
-      const now = effectClock.currentTimeMillisUnsafe();
+      const now = yield* Clock.currentTimeMillis;
       const invocationId = yield* crypto.randomUUIDv4();
       const attemptId = yield* crypto.randomUUIDv4();
       const chatRunId = yield* crypto.randomUUIDv4();
@@ -1585,7 +1627,7 @@ const make = Effect.gen(function* () {
         return LifecycleRequest.blocked({ blocker: "session_not_archived" });
       if (input.intent === "archive" && session.archived_at !== null)
         return LifecycleRequest.completed({ targetId: input.sessionId, intent: input.intent });
-      const now = effectClock.currentTimeMillisUnsafe();
+      const now = yield* Clock.currentTimeMillis;
       const operationId = yield* crypto.randomUUIDv4();
       yield* run(sql`INSERT INTO lifecycle_operations
         (id, project_id, origin_session_id, target_kind, target_id, intent, status,
@@ -1675,16 +1717,24 @@ const make = Effect.gen(function* () {
     yield* run(sql`DELETE FROM chat_metadata WHERE namespace = 'background-task-result'
       AND key IN (SELECT id FROM work_tasks WHERE origin_session_id = ${sessionId})`);
     const threadIds = [sessionId, ...subagentRows.map((row) => `subagent-${row.id}`)];
-    for (const threadId of threadIds) {
-      const chatRuns = yield* decodeRunIds(
-        yield* sql`SELECT run_id FROM chat_runs WHERE thread_id = ${threadId}`,
-      );
-      for (const chatRun of chatRuns)
-        yield* run(sql`DELETE FROM chat_interrupts WHERE run_id = ${chatRun.run_id}`);
-      yield* run(sql`DELETE FROM chat_interrupts WHERE thread_id = ${threadId}`);
-      yield* run(sql`DELETE FROM chat_runs WHERE thread_id = ${threadId}`);
-      yield* run(sql`DELETE FROM chat_threads WHERE thread_id = ${threadId}`);
-    }
+    yield* Effect.forEach(
+      threadIds,
+      (threadId) =>
+        Effect.gen(function* () {
+          const chatRuns = yield* decodeRunIds(
+            yield* sql`SELECT run_id FROM chat_runs WHERE thread_id = ${threadId}`,
+          );
+          yield* Effect.forEach(
+            chatRuns,
+            (chatRun) => run(sql`DELETE FROM chat_interrupts WHERE run_id = ${chatRun.run_id}`),
+            { discard: true },
+          );
+          yield* run(sql`DELETE FROM chat_interrupts WHERE thread_id = ${threadId}`);
+          yield* run(sql`DELETE FROM chat_runs WHERE thread_id = ${threadId}`);
+          yield* run(sql`DELETE FROM chat_threads WHERE thread_id = ${threadId}`);
+        }),
+      { discard: true },
+    );
     yield* run(sql`DELETE FROM permission_reviews WHERE session_id = ${sessionId}`);
     yield* run(sql`DELETE FROM queued_messages WHERE session_id = ${sessionId}`);
     yield* run(sql`DELETE FROM imported_sessions WHERE session_id = ${sessionId}`);
@@ -1706,6 +1756,34 @@ const make = Effect.gen(function* () {
         ${sessionId}, 1, ${purgedCounts}, ${retainedKinds}, ${now})`);
   });
 
+  /**
+   * Purges a conversation being deleted, unless something keeps it: then the operation records
+   * that blocker and stays unfinished.
+   */
+  const deleteSession = Effect.fnUntraced(function* (
+    operation: typeof LifecycleOperationRow.Type,
+    now: number,
+  ) {
+    const blockedBy = (blocker: "goal_dependents" | "task_purge_required") =>
+      Effect.as(
+        run(sql`UPDATE lifecycle_operations SET status = 'blocked',
+            blocker = ${blocker}, updated_at = ${now}
+          WHERE id = ${operation.id}`),
+        Option.some(LifecycleOutcome.blocked({ blocker, operationId: operation.id })),
+      );
+    // A request recorded before another Goal came to wait for this conversation's Goal.
+    if (yield* goalDependents(operation.target_id)) return yield* blockedBy("goal_dependents");
+    const remaining = (yield* decodeId(
+      yield* first(sql`SELECT coalesce(max(id), '') AS id FROM work_tasks
+        WHERE origin_session_id = ${operation.target_id} AND deleted_at IS NULL`),
+    )).id;
+    if (remaining !== "") return yield* blockedBy("task_purge_required");
+    yield* run(sql`UPDATE lifecycle_operations SET status = 'purging', updated_at = ${now}
+      WHERE id = ${operation.id}`);
+    yield* purgeSession(operation, now);
+    return Option.none();
+  });
+
   const finalizeSessionLifecycle = (operationId: string) =>
     Effect.gen(function* () {
       const found = yield* first(sql`SELECT * FROM lifecycle_operations WHERE id = ${operationId}`);
@@ -1713,7 +1791,7 @@ const make = Effect.gen(function* () {
       const operation = yield* decodeLifecycleOperation(found);
       if (operation.status === "completed")
         return LifecycleOutcome.completed({ operationId, targetId: operation.target_id });
-      const now = effectClock.currentTimeMillisUnsafe();
+      const now = yield* Clock.currentTimeMillis;
       const active = (yield* decodeId(
         yield* first(sql`SELECT coalesce(max(active_attempt_id), '') AS id FROM work_tasks
           WHERE origin_session_id = ${operation.target_id} AND active_attempt_id IS NOT NULL`),
@@ -1723,46 +1801,37 @@ const make = Effect.gen(function* () {
           WHERE id = ${operationId}`);
         return LifecycleOutcome.waiting_for_stop({ operationId, targetId: operation.target_id });
       }
-      switch (operation.intent) {
-        case "restore":
-          yield* run(sql`UPDATE sessions SET archived_at = NULL WHERE id = ${operation.target_id}`);
-          break;
-        case "archive":
-          yield* run(sql`UPDATE sessions
-            SET archived_at = ${DateTime.formatIso(DateTime.makeUnsafe(now))}
-            WHERE id = ${operation.target_id}`);
-          break;
-        case "delete": {
-          // A request recorded before another Goal came to wait for this conversation's Goal.
-          if (yield* goalDependents(operation.target_id)) {
-            yield* run(sql`UPDATE lifecycle_operations SET status = 'blocked',
-                blocker = 'goal_dependents', updated_at = ${now}
-              WHERE id = ${operationId}`);
-            return LifecycleOutcome.blocked({ blocker: "goal_dependents", operationId });
-          }
-          const remaining = (yield* decodeId(
-            yield* first(sql`SELECT coalesce(max(id), '') AS id FROM work_tasks
-              WHERE origin_session_id = ${operation.target_id} AND deleted_at IS NULL`),
-          )).id;
-          if (remaining !== "") {
-            yield* run(sql`UPDATE lifecycle_operations SET status = 'blocked',
-                blocker = 'task_purge_required', updated_at = ${now}
-              WHERE id = ${operationId}`);
-            return LifecycleOutcome.blocked({ blocker: "task_purge_required", operationId });
-          }
-          yield* run(sql`UPDATE lifecycle_operations SET status = 'purging', updated_at = ${now}
-            WHERE id = ${operationId}`);
-          yield* purgeSession(operation, now);
-          break;
-        }
-      }
-      yield* run(sql`UPDATE lifecycle_operations SET status = 'completed', blocker = NULL,
-          updated_at = ${now}, completed_at = ${now}
-        WHERE id = ${operationId}`);
-      return LifecycleOutcome.completed({
-        operationId,
-        targetId: operation.target_id,
-        intent: operation.intent,
+      const kept = yield* Match.value(operation.intent).pipe(
+        Match.when("restore", () =>
+          Effect.as(
+            run(sql`UPDATE sessions SET archived_at = NULL WHERE id = ${operation.target_id}`),
+            Option.none(),
+          ),
+        ),
+        Match.when("archive", () =>
+          Effect.as(
+            run(sql`UPDATE sessions
+              SET archived_at = ${DateTime.formatIso(DateTime.makeUnsafe(now))}
+              WHERE id = ${operation.target_id}`),
+            Option.none(),
+          ),
+        ),
+        Match.when("delete", () => deleteSession(operation, now)),
+        Match.exhaustive,
+      );
+      return yield* Option.match(kept, {
+        onSome: Effect.succeed,
+        onNone: () =>
+          Effect.as(
+            run(sql`UPDATE lifecycle_operations SET status = 'completed', blocker = NULL,
+                updated_at = ${now}, completed_at = ${now}
+              WHERE id = ${operationId}`),
+            LifecycleOutcome.completed({
+              operationId,
+              targetId: operation.target_id,
+              intent: operation.intent,
+            }),
+          ),
       });
     }).pipe(sql.withTransaction);
 
@@ -1802,7 +1871,7 @@ const make = Effect.gen(function* () {
           intent: input.intent,
           operationId: null,
         });
-      const now = effectClock.currentTimeMillisUnsafe();
+      const now = yield* Clock.currentTimeMillis;
       const id = yield* crypto.randomUUIDv4();
       const status = task.active_attempt_id === null ? "requested" : "cancelling";
       yield* run(sql`INSERT INTO lifecycle_operations
@@ -1810,9 +1879,11 @@ const make = Effect.gen(function* () {
          idempotency_key, requested_at, updated_at)
         VALUES (${id}, ${task.project_id}, ${task.origin_session_id}, 'task', ${input.taskId},
           ${input.intent}, ${status}, ${input.idempotencyKey}, ${now}, ${now})`);
-      if (input.intent === "delete")
-        yield* run(sql`UPDATE work_tasks SET delete_requested_at = ${now}, updated_at = ${now}
-          WHERE id = ${input.taskId}`);
+      yield* Effect.when(
+        run(sql`UPDATE work_tasks SET delete_requested_at = ${now}, updated_at = ${now}
+          WHERE id = ${input.taskId}`),
+        Effect.succeed(input.intent === "delete"),
+      );
       return LifecycleRequest[status]({
         operationId: id,
         projectId: task.project_id,
@@ -1900,26 +1971,30 @@ const make = Effect.gen(function* () {
         return LifecycleOutcome.completed({ operationId, targetId: operation.target_id });
       }
       const task = yield* lifecycleTaskOf(operation.target_id);
-      const now = effectClock.currentTimeMillisUnsafe();
+      const now = yield* Clock.currentTimeMillis;
       if (task.active_attempt_id !== null) {
         yield* run(sql`UPDATE lifecycle_operations SET status = 'waiting_for_stop', updated_at = ${now}
           WHERE id = ${operationId}`);
         return LifecycleOutcome.waiting_for_stop({ operationId, targetId: operation.target_id });
       }
-      let receiptId: string | null = null;
-      switch (operation.intent) {
-        case "restore":
-          yield* run(sql`UPDATE work_tasks SET archived_at = NULL, updated_at = ${now}
-            WHERE id = ${operation.target_id}`);
-          break;
-        case "archive":
-          yield* run(sql`UPDATE work_tasks SET archived_at = ${now}, updated_at = ${now}
-            WHERE id = ${operation.target_id}`);
-          break;
-        case "delete":
-          receiptId = yield* purgeTask(operation, now);
-          break;
-      }
+      const receiptId = yield* Match.value(operation.intent).pipe(
+        Match.when("restore", () =>
+          Effect.as(
+            run(sql`UPDATE work_tasks SET archived_at = NULL, updated_at = ${now}
+              WHERE id = ${operation.target_id}`),
+            null,
+          ),
+        ),
+        Match.when("archive", () =>
+          Effect.as(
+            run(sql`UPDATE work_tasks SET archived_at = ${now}, updated_at = ${now}
+              WHERE id = ${operation.target_id}`),
+            null,
+          ),
+        ),
+        Match.when("delete", () => purgeTask(operation, now)),
+        Match.exhaustive,
+      );
       yield* run(sql`UPDATE lifecycle_operations SET status = 'completed', blocker = NULL,
           updated_at = ${now}, completed_at = ${now}
         WHERE id = ${operationId}`);
@@ -1944,16 +2019,21 @@ const make = Effect.gen(function* () {
           WHERE origin_session_id = ${operation.target_id} AND deleted_at IS NULL
           ORDER BY created_at, id`,
       );
-      for (const task of tasks) {
-        const requested = yield* requestTaskLifecycle({
-          sessionId: operation.target_id,
-          taskId: task.id,
-          intent: "delete",
-          idempotencyKey: `session:${operation.id}:task:${task.id}`,
-        });
-        if (!LifecycleRequest.$is("completed")(requested) && isTruthy(requested.operationId))
-          yield* finalizeTaskLifecycle(requested.operationId);
-      }
+      yield* Effect.forEach(
+        tasks,
+        (task) =>
+          Effect.gen(function* () {
+            const requested = yield* requestTaskLifecycle({
+              sessionId: operation.target_id,
+              taskId: task.id,
+              intent: "delete",
+              idempotencyKey: `session:${operation.id}:task:${task.id}`,
+            });
+            if (!LifecycleRequest.$is("completed")(requested) && isTruthy(requested.operationId))
+              yield* finalizeTaskLifecycle(requested.operationId);
+          }),
+        { discard: true },
+      );
     }
     return yield* finalizeSessionLifecycle(operation.id);
   });
@@ -1989,12 +2069,16 @@ const make = Effect.gen(function* () {
         WHERE ${unfinishedLifecycle}
         ORDER BY CASE target_kind WHEN 'task' THEN 0 ELSE 1 END, requested_at, id`,
     );
-    for (const operation of pending)
-      yield* recoverLifecycleOperation(operation).pipe(
-        Effect.catch(
-          logFailure("work_trace_lifecycle_not_recovered", { operationId: operation.id }),
+    yield* Effect.forEach(
+      pending,
+      (operation) =>
+        recoverLifecycleOperation(operation).pipe(
+          Effect.catch(
+            logFailure("work_trace_lifecycle_not_recovered", { operationId: operation.id }),
+          ),
         ),
-      );
+      { discard: true },
+    );
   });
 
   const archiveTask = (sessionId: string, taskId: string) =>
@@ -2015,7 +2099,7 @@ const make = Effect.gen(function* () {
       if (task.active_attempt_id !== null) return TaskArchive.blocked({ reason: "attempt_alive" });
       if (!["interrupted", "resumable", "completed", "failed", "cancelled"].includes(task.status))
         return TaskArchive.blocked({ reason: "task_not_archivable" });
-      const now = effectClock.currentTimeMillisUnsafe();
+      const now = yield* Clock.currentTimeMillis;
       yield* run(sql`UPDATE work_tasks SET archived_at = ${now}, updated_at = ${now}
         WHERE id = ${taskId}`);
       return TaskArchive.archived({ taskId });
@@ -2054,7 +2138,7 @@ const make = Effect.gen(function* () {
       if ((yield* pendingToolsOf(task.previous_attempt_id)).length > 0 && !input.confirmUncertain)
         return blocked("uncertain_side_effect");
 
-      const now = effectClock.currentTimeMillisUnsafe();
+      const now = yield* Clock.currentTimeMillis;
       yield* run(sql`UPDATE work_tasks SET retry_requested_at = ${now},
           retry_confirm_uncertain = ${input.confirmUncertain ? 1 : 0}, updated_at = ${now}
         WHERE id = ${task.id}`);
@@ -2075,32 +2159,43 @@ const make = Effect.gen(function* () {
           WHERE t.origin_session_id = ${sessionId} AND t.retry_requested_at IS NOT NULL
           ORDER BY t.retry_requested_at, t.id`,
       );
-      const claimed: Array<Data.TaggedEnum.Value<ResumeClaim, "started">> = [];
-      for (const task of requested) {
-        const acquired = yield* run(sql`UPDATE work_tasks SET retry_requested_at = NULL
-          WHERE id = ${task.id} AND retry_requested_at IS NOT NULL`);
-        if (acquired.changes !== 1) continue;
-        const claim = yield* claimResume({
-          sessionId,
-          taskId: task.id,
-          expectedAttemptId: task.previous_attempt_id,
-          parentRunId,
-          parentToolCallId: `retry:${task.previous_attempt_id}`,
-          confirmUncertain: task.retry_confirm_uncertain === 1,
-        });
-        yield* ResumeClaim.$match(claim, {
-          started: (started) => Effect.sync(() => claimed.push(started)),
-          blocked: ({ reason }) =>
-            notifyParent({
-              taskId: task.id,
-              kind: "resume_blocked",
-              summary: `Requested retry could not start: ${reason}`,
-              idempotencyKey: `retry:${task.previous_attempt_id}:blocked`,
-              payload: { reason },
-            }),
-        });
-      }
-      return claimed;
+      // Each retry is taken off its task before it starts, so a second claim skips it.
+      const claims = yield* Effect.forEach(requested, (task) =>
+        Effect.when(
+          claimResume({
+            sessionId,
+            taskId: task.id,
+            expectedAttemptId: task.previous_attempt_id,
+            parentRunId,
+            parentToolCallId: `retry:${task.previous_attempt_id}`,
+            confirmUncertain: task.retry_confirm_uncertain === 1,
+          }).pipe(
+            Effect.flatMap((claim) =>
+              ResumeClaim.$match(claim, {
+                // Spelled out so the claim keeps its type; a bare generic loses it.
+                started: (started) => Effect.succeedSome(started),
+                blocked: ({ reason }) =>
+                  Effect.as(
+                    notifyParent({
+                      taskId: task.id,
+                      kind: "resume_blocked",
+                      summary: `Requested retry could not start: ${reason}`,
+                      idempotencyKey: `retry:${task.previous_attempt_id}:blocked`,
+                      payload: { reason },
+                    }),
+                    Option.none(),
+                  ),
+              }),
+            ),
+          ),
+          Effect.map(
+            run(sql`UPDATE work_tasks SET retry_requested_at = NULL
+              WHERE id = ${task.id} AND retry_requested_at IS NOT NULL`),
+            (acquired) => acquired.changes === 1,
+          ),
+        ),
+      );
+      return EffectArray.getSomes(claims.map(Option.flatten));
     }).pipe(sql.withTransaction);
 
   const events = (sessionId: string, afterCursor = 0, limit = 200) =>
@@ -2171,50 +2266,24 @@ const make = Effect.gen(function* () {
   }) {
     const { sessionId, afterCursor } = options;
     if ((yield* latestCursorEffect(sessionId)) > afterCursor) return "event" as const;
-    const changed = yield* Deferred.make<"event" | "progress">();
-    const listener = (changedSessionId: string, cursor: number) => {
-      if (changedSessionId === sessionId && cursor > afterCursor)
-        Deferred.doneUnsafe(changed, Effect.succeed("event"));
-    };
-    const progressed = (changedSessionId: string) => {
-      if (changedSessionId === sessionId) Deferred.doneUnsafe(changed, Effect.succeed("progress"));
-    };
-    return yield* Effect.acquireUseRelease(
-      Effect.sync(() => {
-        MutableHashSet.add(listeners, listener);
-        MutableHashSet.add(progressListeners, progressed);
+    const wanted = (change: TraceChange) =>
+      change.sessionId === sessionId && (change.kind === "progress" || change.cursor > afterCursor);
+    return yield* Effect.scoped(
+      Effect.gen(function* () {
+        const subscription = yield* PubSub.subscribe(changes);
+        // Close the gap between the first durable read and subscribing.
+        if ((yield* latestCursorEffect(sessionId)) > afterCursor) return "event" as const;
+        const result = yield* PubSub.take(subscription).pipe(
+          Effect.repeat({ until: wanted }),
+          Effect.timeoutOption(Math.max(1, options.heartbeatMs ?? 15_000)),
+        );
+        return Option.match(result, {
+          onNone: () => "heartbeat" as const,
+          onSome: (change) => change.kind,
+        });
       }),
-      () =>
-        Effect.gen(function* () {
-          // Close the gap between the first durable read and listener registration.
-          if ((yield* latestCursorEffect(sessionId)) > afterCursor) return "event" as const;
-          const result = yield* Deferred.await(changed).pipe(
-            Effect.timeoutOption(Math.max(1, options.heartbeatMs ?? 15_000)),
-          );
-          return Option.getOrElse(result, () => "heartbeat" as const);
-        }),
-      () =>
-        Effect.sync(() => {
-          MutableHashSet.remove(listeners, listener);
-          MutableHashSet.remove(progressListeners, progressed);
-        }),
     );
   });
-
-  /** Native stream/SDK compatibility boundary; interruption alone means an aborted wait. */
-  const waitForChange = (
-    sessionId: string,
-    afterCursor: number,
-    signal: AbortSignal,
-    heartbeatMs = 15_000,
-  ): Promise<"event" | "progress" | "heartbeat" | "aborted"> =>
-    runPromiseExit(waitForChangeEffect({ sessionId, afterCursor, heartbeatMs }), { signal }).then(
-      (exit) => {
-        if (Exit.isSuccess(exit)) return exit.value;
-        if (Cause.hasInterruptsOnly(exit.cause)) return "aborted";
-        throw Cause.squash(exit.cause);
-      },
-    );
 
   const attemptHandle = (taskId: string, attemptId: string) =>
     Effect.gen(function* () {
@@ -2234,24 +2303,29 @@ const make = Effect.gen(function* () {
 
   /** Fails live attempts whose beats stopped: their fiber ended without settling, or hangs. */
   const failLostAttempts = Effect.gen(function* () {
+    const now = yield* Clock.currentTimeMillis;
     const lost = yield* decodeLostAttemptRows(
       yield* sql`SELECT a.id, a.task_id, a.invocation_id, a.attempt_number, a.chat_run_id,
           a.thread_id, a.status, t.origin_session_id
         FROM agent_run_attempts a JOIN work_tasks t ON t.id = a.task_id
         WHERE a.status IN ${liveStatuses} AND t.origin_session_id IS NOT NULL
           AND coalesce(a.heartbeat_at, a.created_at)
-            < ${effectClock.currentTimeMillisUnsafe() - heartbeatLostMs}`,
+            < ${now - heartbeatLostMs}`,
     );
-    for (const attempt of lost)
-      yield* transitionAttempt(
-        handleOf(attempt),
-        attempt.origin_session_id ?? "",
-        "failed",
-        "attempt_failed",
-        "Stopped responding",
-        { reason: AttemptFailureReason.cases.HeartbeatLost.make({}) },
-        false,
-      ).pipe(Effect.catch(logFailure("work_trace_lost_attempt_not_recorded")));
+    yield* Effect.forEach(
+      lost,
+      (attempt) =>
+        transitionAttempt(
+          handleOf(attempt),
+          attempt.origin_session_id ?? "",
+          "failed",
+          "attempt_failed",
+          "Stopped responding",
+          { reason: AttemptFailureReason.cases.HeartbeatLost.make({}) },
+          false,
+        ).pipe(Effect.catch(logFailure("work_trace_lost_attempt_not_recorded"))),
+      { discard: true },
+    );
   });
   yield* Effect.forever(
     Effect.sleep(heartbeatIntervalMs).pipe(
@@ -2268,11 +2342,11 @@ const make = Effect.gen(function* () {
     notifyParent,
     consumeParentNotifications,
     holdParentNotifications: (sessionId: string) =>
-      Effect.asVoid(
+      Effect.flatMap(Clock.currentTimeMillis, (now) =>
         run(sql`INSERT INTO parent_notification_holds (session_id, held_at)
-          SELECT id, ${effectClock.currentTimeMillisUnsafe()} FROM sessions WHERE id = ${sessionId}
+          SELECT id, ${now} FROM sessions WHERE id = ${sessionId}
           ON CONFLICT(session_id) DO UPDATE SET held_at = excluded.held_at`),
-      ),
+      ).pipe(Effect.asVoid),
     resumeParentNotifications: (sessionId: string) =>
       Effect.asVoid(
         run(sql`DELETE FROM parent_notification_holds WHERE session_id = ${sessionId}`),
@@ -2321,7 +2395,6 @@ const make = Effect.gen(function* () {
     snapshot,
     latestCursor,
     projectLatestCursor,
-    waitForChange,
     waitForChangeEffect,
     snapshotEffect,
     attemptHandle,

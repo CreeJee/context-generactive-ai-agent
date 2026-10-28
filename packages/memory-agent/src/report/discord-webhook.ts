@@ -9,6 +9,7 @@ import {
   Effect,
   Function as EffectFunction,
   Layer,
+  Match,
   Option,
   Redacted,
   Ref,
@@ -53,14 +54,14 @@ const maxRateLimitRetries = 2;
 const requestTimeout = Duration.seconds(30);
 
 /** Carries only a reason and safe numbers: never the webhook URL, its token or a response body. */
-export class ReportDeliveryError extends Schema.TaggedError<ReportDeliveryError>()(
-  "ReportDeliveryError",
-  {
-    reason: ReportDeliveryFailure,
-    httpStatus: Schema.optional(Schema.Int),
-    retryAfterSeconds: Schema.optional(Schema.Finite),
-  },
-) {}
+export class ReportDeliveryError extends Schema.TaggedError<
+  ReportDeliveryError,
+  { readonly brand: unique symbol }
+>()("ReportDeliveryError", {
+  reason: ReportDeliveryFailure,
+  httpStatus: Schema.optional(Schema.Int),
+  retryAfterSeconds: Schema.optional(Schema.Finite),
+}) {}
 
 type Attempt = Data.TaggedEnum<{
   sending: {};
@@ -170,12 +171,12 @@ const make = (options: ReportDeliveryOptions) =>
     const attempts = yield* Ref.make<ReadonlyMap<string, Attempt>>(new Map());
     const now = Effect.map(DateTime.now, DateTime.formatIso);
     const setAttempt = (hash: string, attempt: Attempt | null) =>
-      Ref.update(attempts, (current) => {
-        const next = new Map(current);
-        if (attempt === null) next.delete(hash);
-        else next.set(hash, attempt);
-        return next;
-      });
+      Ref.update(attempts, (current) =>
+        Option.match(Option.fromNullishOr(attempt), {
+          onNone: () => new Map([...current].filter(([key]) => key !== hash)),
+          onSome: (recorded) => new Map(current).set(hash, recorded),
+        }),
+      );
 
     // A config read error (not a missing key) means the value is unusable, like a malformed URL.
     const config: WebhookConfig = yield* Config.option(Config.Redacted(webhookConfigKey)).pipe(
@@ -199,7 +200,7 @@ const make = (options: ReportDeliveryOptions) =>
       }),
     );
 
-    const status = Effect.sync(() =>
+    const status = Effect.succeed(
       WebhookConfig.$match(config, {
         missing: () => ({ configured: false, webhookIdSuffix: null }),
         invalid: () => ({ configured: false, webhookIdSuffix: null }),
@@ -230,38 +231,55 @@ const make = (options: ReportDeliveryOptions) =>
             ),
           );
         const httpStatus = response.status;
-        if (httpStatus >= 200 && httpStatus < 300) {
-          const body = yield* response.json.pipe(
-            Effect.flatMap(Schema.decodeUnknownEffect(MessageBody)),
-            Effect.mapError(() => ReportDeliveryError.make({ reason: "uncertain", httpStatus })),
-          );
-          return body.id;
-        }
-        if (httpStatus === 429) {
-          const headerRetryAfter = () => Number(response.headers["retry-after"] ?? Number.NaN);
-          const retryAfter = yield* response.json.pipe(
-            Effect.flatMap(Schema.decodeUnknownEffect(RateLimitBody)),
-            Effect.map((body) => body.retry_after),
-            // An unreadable body falls back to the header Discord also sends.
-            Effect.catchTags({
-              HttpClientError: () => Effect.succeed(headerRetryAfter()),
-              SchemaError: () => Effect.succeed(headerRetryAfter()),
-            }),
-          );
-          return yield* Number.isFinite(retryAfter)
-            ? ReportDeliveryError.make({
-                reason: "rate_limited",
-                httpStatus,
-                retryAfterSeconds: retryAfter,
-              })
-            : ReportDeliveryError.make({ reason: "rate_limited", httpStatus });
-        }
-        // Discord asks not to reuse a webhook that answered 404; 401/403 mean a revoked token.
-        if (httpStatus === 401 || httpStatus === 403 || httpStatus === 404)
-          return yield* ReportDeliveryError.make({ reason: "webhook_rejected", httpStatus });
-        if (httpStatus >= 500)
-          return yield* ReportDeliveryError.make({ reason: "discord_unavailable", httpStatus });
-        return yield* ReportDeliveryError.make({ reason: "payload_rejected", httpStatus });
+        const headerRetryAfter = () => Number(response.headers["retry-after"] ?? Number.NaN);
+        return yield* Match.value(httpStatus).pipe(
+          Match.withReturnType<Effect.Effect<string, ReportDeliveryError>>(),
+          Match.when(
+            (status) => status >= 200 && status < 300,
+            () =>
+              response.json.pipe(
+                Effect.flatMap(Schema.decodeUnknownEffect(MessageBody)),
+                Effect.map((body) => body.id),
+                Effect.mapError(() =>
+                  ReportDeliveryError.make({ reason: "uncertain", httpStatus }),
+                ),
+              ),
+          ),
+          Match.when(429, () =>
+            response.json.pipe(
+              Effect.flatMap(Schema.decodeUnknownEffect(RateLimitBody)),
+              Effect.map((body) => body.retry_after),
+              // An unreadable body falls back to the header Discord also sends.
+              Effect.catchTags({
+                HttpClientError: () => Effect.succeed(headerRetryAfter()),
+                SchemaError: () => Effect.succeed(headerRetryAfter()),
+              }),
+              Effect.flatMap((retryAfter) =>
+                Effect.fail(
+                  Number.isFinite(retryAfter)
+                    ? ReportDeliveryError.make({
+                        reason: "rate_limited",
+                        httpStatus,
+                        retryAfterSeconds: retryAfter,
+                      })
+                    : ReportDeliveryError.make({ reason: "rate_limited", httpStatus }),
+                ),
+              ),
+            ),
+          ),
+          // Discord asks not to reuse a webhook that answered 404; 401/403 mean a revoked token.
+          Match.whenOr(401, 403, 404, () =>
+            Effect.fail(ReportDeliveryError.make({ reason: "webhook_rejected", httpStatus })),
+          ),
+          Match.when(
+            (status) => status >= 500,
+            () =>
+              Effect.fail(ReportDeliveryError.make({ reason: "discord_unavailable", httpStatus })),
+          ),
+          Match.orElse(() =>
+            Effect.fail(ReportDeliveryError.make({ reason: "payload_rejected", httpStatus })),
+          ),
+        );
       }).pipe(Effect.scoped);
 
     const postWithShortWaits = (target: WebhookUrl, report: ReportSend, retries: number) =>
@@ -297,9 +315,10 @@ const make = (options: ReportDeliveryOptions) =>
         attempts,
         (current): [Attempt | "claimed", ReadonlyMap<string, Attempt>] => {
           const previous = current.get(hash);
-          if (Attempt.$is("sending")(previous)) return [previous, current];
-          if (previous !== undefined && !resend) return [previous, current];
-          return ["claimed", new Map(current).set(hash, Attempt.sending())];
+          // A send still running is never joined by another; a settled one only when asked.
+          return previous !== undefined && (Attempt.$is("sending")(previous) || !resend)
+            ? [previous, current]
+            : ["claimed", new Map(current).set(hash, Attempt.sending())];
         },
       );
       if (claimed !== "claimed")

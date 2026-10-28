@@ -2,7 +2,6 @@ import { Effect } from "effect";
 import { runUiEffect, uiPromise } from "../shared/ui-effect";
 import { isTruthy } from "../../truthy.ts";
 import { SchemaTransformation } from "effect";
-import type { UIMessage } from "@tanstack/ai-react";
 import { Data, DateTime, Option, Schema } from "effect";
 import { BotIcon, ChevronRightIcon, Clock3Icon, WrenchIcon } from "lucide-react";
 import type { TraceTaskView } from "memory-agent";
@@ -10,15 +9,15 @@ import { memo, useState } from "react";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "~/components/ui/collapsible";
+import type { ChatMessage, MessagePart } from "memory-agent/chat-api";
 import { attachmentIdOf, attachmentUrl, type QueuedMessage } from "memory-agent/definitions";
 import { DrawingPicture, UserMessageBody } from "./images";
 import { Markdown } from "./markdown";
 import { failureLabel } from "../session/attempt-failure";
 import { taskForToolCall, type TraceConnection } from "../session/work-trace";
 
-type Part = UIMessage["parts"][number];
-type ToolCall = Extract<Part, { type: "tool-call" }>;
-type ToolResult = Extract<Part, { type: "tool-result" }>;
+type ToolCall = (typeof MessagePart.cases)["tool-call"]["Type"];
+type ToolResult = (typeof MessagePart.cases)["tool-result"]["Type"];
 
 const toolLabels = {
   find_memory: "기억 검색",
@@ -49,7 +48,7 @@ const toolLabels = {
   // Calls recorded before run_subagent took a helper name.
   message_subagent: "서브에이전트에게 메시지 보내기",
   delegate_to_agent: "외부 에이전트에게 맡기기",
-  // TanStack's discovery call for a tool sent by name only.
+  // Calls TanStack recorded to load a tool sent by name only.
   __lazy__tool__discovery__: "도구 불러오기",
 } satisfies Record<string, string>;
 
@@ -68,14 +67,6 @@ function pretty(text: string) {
   } catch {
     return text;
   }
-}
-
-function resultText(result: ToolResult) {
-  return Array.isArray(result.content)
-    ? result.content
-        .map((part) => (part.type === "text" ? part.content : `[${part.type}]`))
-        .join("")
-    : result.content;
 }
 
 /** Where a tool call stands, as the badge shows it. */
@@ -138,7 +129,7 @@ const decodeDrawing = Schema.decodeUnknownOption(
 /** The picture to show for a result, when it is one of this app's stored images. */
 function drawingOf(result: ToolResult | undefined) {
   if (!isTruthy(result)) return null;
-  const drawing = Option.getOrUndefined(decodeDrawing(resultText(result)));
+  const drawing = Option.getOrUndefined(decodeDrawing(result.content));
   if (!(drawing !== undefined)) return null;
   const url = attachmentUrl(drawing.preview.attachmentId);
   return isTruthy(attachmentIdOf(url)) ? { url, path: drawing.path } : null;
@@ -149,7 +140,7 @@ function callStatus(call: ToolCall, result: ToolResult | undefined, awaitingAppr
     return awaitingApproval || call.state === "approval-requested"
       ? CallStatus["awaiting-approval"]()
       : CallStatus.running();
-  const refusal = Option.getOrUndefined(decodeRefusal(resultText(result)));
+  const refusal = Option.getOrUndefined(decodeRefusal(result.content));
   if (isTruthy(refusal)) return refusalStatus[refusal];
   return result.state === "error" ? CallStatus.failed() : CallStatus.completed();
 }
@@ -496,7 +487,7 @@ const ToolCallCard = memo(function ToolCallCard({
           <div>
             <div className="mb-1 text-muted-foreground">결과</div>
             <pre className="max-h-72 overflow-auto rounded bg-background p-2 whitespace-pre-wrap break-all">
-              {pretty(resultText(result))}
+              {pretty(result.content)}
             </pre>
           </div>
         )}
@@ -518,7 +509,7 @@ export function DeliveredMessageView({ message }: { message: QueuedMessage }) {
 }
 
 type MessageViewProps = {
-  message: UIMessage;
+  message: ChatMessage;
   streaming: boolean;
   /** Tool call ids with an approval card open. */
   awaitingApproval: readonly string[];

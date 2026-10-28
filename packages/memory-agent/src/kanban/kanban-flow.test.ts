@@ -172,8 +172,13 @@ it.live(
       expect(yield* git(fixture.project, "log", "-1", "--format=%s", "main")).toBe("Card c");
       expect(yield* git(fixture.project, "status", "--porcelain")).toBe("");
       const fs = yield* FileSystem.FileSystem;
-      for (const id of ["a", "b", "c"])
-        expect(yield* fs.readFileString(`${fixture.project}/${id}.txt`)).toBe(`${id}\n`);
+      yield* Effect.forEach(
+        ["a", "b", "c"],
+        Effect.fnUntraced(function* (id) {
+          expect(yield* fs.readFileString(`${fixture.project}/${id}.txt`)).toBe(`${id}\n`);
+        }),
+        { discard: true },
+      );
     }).pipe(withNode),
   gitTimeout,
 );

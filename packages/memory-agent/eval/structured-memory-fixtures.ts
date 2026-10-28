@@ -18,10 +18,10 @@ export interface EvidenceCase {
 
 const Storage = Schema.TaggedStruct("Storage", { cause: Schema.Defect() });
 
-class EvidenceFixtureFailed extends Schema.TaggedError<EvidenceFixtureFailed>()(
-  "EvidenceFixtureFailed",
-  { reason: Storage },
-) {}
+class EvidenceFixtureFailed extends Schema.TaggedError<
+  EvidenceFixtureFailed,
+  { readonly brand: unique symbol }
+>()("EvidenceFixtureFailed", { reason: Storage }) {}
 
 /** Fixed candidates and explicit interpretations isolate reading from retrieval/model extraction. */
 export const seedEvidenceCases = Effect.fn("eval.seedEvidenceCases")(function* (projectId: string) {

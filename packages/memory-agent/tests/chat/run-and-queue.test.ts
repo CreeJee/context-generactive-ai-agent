@@ -1,9 +1,12 @@
-import { Effect, Option, Schedule, Schema } from "effect";
+import { Effect, Fiber, Option, Schedule, Schema } from "effect";
+import { SqlError } from "effect/sql";
 import { expect, vi } from "vite-plus/test";
-import { ChatState } from "../../src/chat-state/chat-state.ts";
+import { ChatMessage } from "../../src/api/chat-api.ts";
+import { RunStore } from "../../src/loop/store.ts";
 import { MessageQueue } from "../../src/queue/queue.ts";
 import { NextDelivery, QueueEdit, QueueItemState } from "../../src/queue/queue-state.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
+import { type ChatPage, openPage, runTurn } from "../support/chat-client.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import {
@@ -14,8 +17,6 @@ import {
   holdDelayedTurns,
   invocationsOf,
   json,
-  openTab,
-  sdk,
   until,
   userTexts,
 } from "./tab.ts";
@@ -107,27 +108,23 @@ const enqueue = Effect.fnUntraced(function* (
   return { status: response.status, body: yield* json(response) };
 });
 
-/** Send from the tab without waiting: the send only settles once the run does. */
-const sendInBackground = (tab: Effect.Success<ReturnType<typeof openTab>>, text: string) =>
-  Effect.forkChild(
-    sdk(() => tab.client.sendMessage(text)),
-    { startImmediately: true },
-  );
+/** Send from the page without waiting: the send settles only once the run's stream ends. */
+const sendInBackground = (page: ChatPage, text: string) =>
+  Effect.forkChild(page.send(text), { startImmediately: true });
 
 testAgent({ testProvider: { responder: gatedResponder } })("chat runs", (it) => {
   it.effect("a reloaded page rejoins a durable app run without invoking the provider again", () =>
     Effect.gen(function* () {
       const session = yield* chatSession;
-      const first = yield* openTab(session.id);
-      yield* sendInBackground(first, "please be slow");
+      const first = yield* openPage(session.id);
+      const sending = yield* sendInBackground(first, "please be slow");
       yield* until(() => session.invocations().length === 1, "the provider run to start");
       // The tab reloads mid-answer.
-      first.client.dispose();
-      const second = yield* openTab(session.id);
+      yield* Fiber.interrupt(sending);
+      const second = yield* openPage(session.id);
       yield* session.release;
-      yield* until(() => second.answer().endsWith("done"), "the rest of the answer");
+      yield* second.rejoin;
       expect(second.answer()).toBe("done");
-      yield* until(() => !second.client.getSessionGenerating(), "the rejoined run to settle");
       expect(session.invocations()).toHaveLength(1);
       expect((yield* statusOf(session.id)).lastRun?.status).toBe("completed");
     }),
@@ -137,13 +134,14 @@ testAgent({ testProvider: { responder: gatedResponder } })("chat runs", (it) => 
     Effect.gen(function* () {
       const session = yield* chatSession;
       const agent = yield* agentChat;
-      const tab = yield* openTab(session.id);
-      yield* sendInBackground(tab, "please be slow");
+      const page = yield* openPage(session.id);
+      const sending = yield* sendInBackground(page, "please be slow");
       yield* until(() => session.invocations().length === 1, "the provider run to start");
       const running = yield* statusOf(session.id);
       expect(running.running).not.toBeNull();
-      for (const decision of Object.values(running.actions.phases))
+      Object.values(running.actions.phases).forEach((decision) => {
         expect(decision).toEqual({ allowed: false, reason: "run_in_progress" });
+      });
       expect(running.actions.controls.resume).toEqual({
         allowed: false,
         reason: "run_in_progress",
@@ -155,19 +153,18 @@ testAgent({ testProvider: { responder: gatedResponder } })("chat runs", (it) => 
         yield* json(yield* agent.cancel(session.id, null)),
       );
       expect(cancelled).toMatchObject({ stopped: true, status: "aborted" });
+      yield* Fiber.join(sending);
       expect(session.invocations()).toHaveLength(1);
-      expect(tab.answer()).not.toContain("done");
+      expect(page.answer()).not.toContain("done");
       const status = yield* statusOf(session.id);
       expect(status.running).toBeNull();
       expect(status.lastRun?.status).toBe("aborted");
       // Nothing is running any more, so a second cancel has nothing to stop.
       expect((yield* agent.cancel(session.id, null)).status).toBe(409);
-      const seen = tab.answer();
-      tab.client.dispose();
       // A reload shows exactly the durable text saved before cancellation and does not rerun it.
-      const reloaded = yield* openTab(session.id);
-      yield* until(() => reloaded.client.getMessages().length > 0, "the stored transcript");
-      expect(reloaded.answer()).toBe(seen);
+      const reloaded = yield* openPage(session.id);
+      expect(reloaded.view().messages.length).toBeGreaterThan(0);
+      expect(reloaded.answer()).toBe(page.answer());
       expect(session.invocations()).toHaveLength(1);
     }),
   );
@@ -177,8 +174,7 @@ testAgent({ testProvider: { responder: gatedResponder } })("chat runs", (it) => 
       const session = yield* chatSession;
       const agent = yield* agentChat;
       expect((yield* agent.setWorkflowPhase(session.id, null, "plan")).status).toBe(200);
-      const tab = yield* openTab(session.id);
-      yield* sendInBackground(tab, "please be slow");
+      yield* sendInBackground(yield* openPage(session.id), "please be slow");
       yield* until(() => session.invocations().length === 1, "the Plan run to start");
       const running = yield* statusOf(session.id);
       expect(running.running).not.toBeNull();
@@ -202,27 +198,11 @@ testAgent({ testProvider: { responder: gatedResponder } })("chat runs", (it) => 
     Effect.gen(function* () {
       const session = yield* chatSession;
       const agent = yield* agentChat;
-      const tab = yield* openTab(session.id);
-      yield* sendInBackground(tab, "please be slow");
+      yield* sendInBackground(yield* openPage(session.id), "please be slow");
       yield* until(() => session.invocations().length === 1, "the first run to start");
-      const body = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
-        threadId: session.id,
-        runId: `${session.id}-second`,
-        state: {},
-        messages: [{ id: "m-2", role: "user", parts: [{ type: "text", content: "hi" }] }],
-        tools: [],
-        context: [],
-        forwardedProps: {},
+      expect(yield* Effect.flip(runTurn(session.id, `${session.id}-second`, "hi"))).toMatchObject({
+        error: "run_in_progress",
       });
-      const response = yield* agent.handle(
-        new Request(`http://127.0.0.1/api/chat?session=${session.id}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body,
-        }),
-        session.id,
-      );
-      expect(response.status).toBe(409);
       yield* agent.cancel(session.id, null);
     }),
   );
@@ -237,14 +217,18 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
       const second = yield* queue.add(sessionId, "second", [], false);
       expect((yield* queue.claimNext(sessionId))?.id).toBe(first.id);
       expect(yield* queue.claimNext(sessionId)).toBeNull();
-      for (const change of [
-        queue.edit(sessionId, first.id, "draft"),
-        queue.save(sessionId, first.id, "changed"),
-        queue.remove(sessionId, first.id),
-        queue.confirm(sessionId, first.id),
-      ]) {
-        expect(yield* Effect.flip(change)).toMatchObject({ reason: "reserved" });
-      }
+      yield* Effect.forEach(
+        [
+          queue.edit(sessionId, first.id, "draft"),
+          queue.save(sessionId, first.id, "changed"),
+          queue.remove(sessionId, first.id),
+          queue.confirm(sessionId, first.id),
+        ],
+        Effect.fnUntraced(function* (change) {
+          expect(yield* Effect.flip(change)).toMatchObject({ reason: "reserved" });
+        }),
+        { discard: true },
+      );
       expect((yield* queue.get(sessionId, first.id))?.text).toBe("first");
       yield* queue.releaseNext(sessionId, "wrong-id");
       expect(yield* queue.claimNext(sessionId)).toBeNull();
@@ -362,14 +346,11 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
     () =>
       Effect.gen(function* () {
         const session = yield* chatSession;
-        const tab = yield* openTab(session.id);
-        yield* sdk(() => tab.client.sendMessage("first turn"));
-        yield* until(() => !tab.client.getIsLoading(), "the first turn to finish");
-        yield* sdk(() => tab.client.sendMessage("second turn"));
-        yield* until(() => !tab.client.getIsLoading(), "the second turn to finish");
+        const page = yield* openPage(session.id);
+        yield* page.send("first turn");
+        yield* page.send("second turn");
 
-        const reloaded = yield* openTab(session.id);
-        yield* until(() => reloaded.texts("user").length > 0, "the persisted turns");
+        const reloaded = yield* openPage(session.id);
         expect(reloaded.texts("user")).toEqual(["first turn", "second turn"]);
       }),
     15_000,
@@ -378,8 +359,7 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
   it.effect("a queued message reaches the agent when the next tool call returns", () =>
     Effect.gen(function* () {
       const session = yield* chatSession;
-      const tab = yield* openTab(session.id);
-      yield* sendInBackground(tab, "please check files");
+      const sending = yield* sendInBackground(yield* openPage(session.id), "please check files");
       const active = yield* statusOf(session.id).pipe(
         Effect.repeat({
           until: (status) => status.running !== null,
@@ -396,12 +376,12 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
       );
       yield* session.release;
 
-      yield* until(() => session.invocations().length === 2, "the provider continuation");
-      yield* until(() => !tab.client.getIsLoading(), "the run to finish");
+      yield* Fiber.join(sending);
+      expect(session.invocations()).toHaveLength(2);
       expect(
         session
           .invocations()[1]
-          ?.messages.some(
+          ?.history.some(
             (message) => message.role === "user" && message.content === "look in the tests folder",
           ),
       ).toBe(true);
@@ -415,11 +395,9 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
         "please check files",
         "look in the tests folder",
       ]);
-      tab.client.dispose();
 
       // The saved conversation has it too, so the next send does not drop it.
-      const reloaded = yield* openTab(session.id);
-      yield* until(() => reloaded.texts("user").length === 2, "the saved conversation");
+      const reloaded = yield* openPage(session.id);
       expect(reloaded.texts("user")).toEqual(["please check files", "look in the tests folder"]);
     }),
   );
@@ -427,11 +405,10 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
   it.effect("steering cuts the answer and the server sends the messages next", () =>
     Effect.gen(function* () {
       const session = yield* chatSession;
-      const tab = yield* openTab(session.id);
-      yield* sendInBackground(tab, "please be slow");
+      const sending = yield* sendInBackground(yield* openPage(session.id), "please be slow");
       yield* until(() => session.invocations().length === 1, "the run to start");
       // No page holds the session afterwards: only the server can send what follows.
-      tab.client.dispose();
+      yield* Fiber.interrupt(sending);
 
       // Steering takes the message waiting before it along, so the order holds.
       yield* enqueue(session.id, "and the tests", "queue");
@@ -439,7 +416,7 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
 
       // The slow answer is never released: the cut ends it, then each message is a turn.
       yield* until(() => session.invocations().length === 3, "both steered turns");
-      expect(session.invocations().map((invocation) => invocation.messages.at(-1))).toMatchObject([
+      expect(session.invocations().map((invocation) => invocation.history.at(-1))).toMatchObject([
         { role: "user", content: "please be slow" },
         { role: "user", content: "and the tests" },
         { role: "user", content: "shorter please" },
@@ -468,26 +445,20 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
       const agent = yield* agentChat;
       // The page holds the session, so waiting messages are left for it to send.
       yield* agent.lease(session.id, "tab", "claim");
-      const tab = yield* openTab(session.id, "tab");
-      yield* sendInBackground(tab, "please be slow");
+      const page = yield* openPage(session.id, "tab");
+      const sending = yield* sendInBackground(page, "please be slow");
       yield* until(() => session.invocations().length === 1, "the answer to start");
       const first = yield* decodeQueued(
         (yield* enqueue(session.id, "hello again", "queue", "tab")).body,
       );
-      const second = yield* decodeQueued(
-        (yield* enqueue(session.id, "and once more", "queue", "tab")).body,
-      );
+      yield* enqueue(session.id, "and once more", "queue", "tab");
       yield* session.release;
-      yield* until(() => tab.answer().includes("done"), "the first answer");
-      yield* until(() => !tab.client.getIsLoading(), "the run to finish");
+      yield* Fiber.join(sending);
+      expect(page.answer()).toContain("done");
       // No tool call happened, so both are still waiting for the page.
       expect((yield* queueOf(session.id)).items.map((message) => stateName(message.state))).toEqual(
         ["waiting", "waiting"],
       );
-
-      // Supplying an ID is no longer a valid request; the server alone picks the head.
-      yield* sdk(() => tab.client.sendMessage("and once more", { queuedMessageId: second.id }));
-      expect(tab.client.getError()?.message).toContain("400");
 
       // A snapshot captured `first`, but the server must select the current head after an edit.
       const edited = yield* agent.editQueued(
@@ -497,9 +468,8 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
         QueueEdit.save({ text: "hello, freshly edited" }),
       );
       expect(edited.status).toBe(200);
-      yield* sdk(() => tab.client.sendMessage("stale client placeholder", { queuedNext: true }));
-      yield* until(() => tab.answer().includes("Hello from fast-1"), "the next turn");
-      yield* until(() => !tab.client.getIsLoading(), "the next turn to finish");
+      yield* page.send("stale client placeholder", { queuedNext: true });
+      expect(page.answer()).toContain("Hello from fast-1");
       expect(
         (yield* queueOf(session.id)).items.map((message) => [
           message.text,
@@ -513,7 +483,7 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
       expect(
         session
           .invocations()[1]
-          ?.messages.some(
+          ?.history.some(
             (message) => message.role === "user" && message.content === "hello, freshly edited",
           ),
       ).toBe(true);
@@ -542,9 +512,10 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
           }
         });
         const item = yield* blocked;
-        const tab = yield* openTab(session.id);
-        yield* sdk(() => tab.client.sendMessage("stale client placeholder", { queuedNext: true }));
-        expect(tab.client.getError()?.message).toContain("409");
+        const page = yield* openPage(session.id);
+        expect(
+          yield* Effect.flip(page.send("stale client placeholder", { queuedNext: true })),
+        ).toEqual({ error: "queued_message_not_next" });
         if (item !== null)
           expect((yield* queue.get(session.id, item))?.state).toEqual(
             QueueItemState.editing({ draft: "unsaved draft" }),
@@ -560,10 +531,8 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
       const stale = yield* queue.add(session.id, "original", [], false);
       yield* queue.add(session.id, "second", [], false);
       yield* queue.save(session.id, stale.id, "edited on server");
-      const tab = yield* openTab(session.id);
-      yield* sdk(() => tab.client.sendMessage({ content: [] }, { queuedNext: true }));
-      yield* until(() => !tab.client.getIsLoading(), "the run to finish");
-      expect(tab.client.getError()).toBeUndefined();
+      const page = yield* openPage(session.id);
+      yield* page.send([], { queuedNext: true });
       const staleState = (yield* queue.get(session.id, stale.id))?.state;
       expect(
         staleState !== undefined && QueueItemState.$is("delivered")(staleState) && staleState.via,
@@ -572,31 +541,17 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
       expect(
         session
           .invocations()[0]
-          ?.messages.some(
+          ?.history.some(
             (message) => message.role === "user" && message.content === "edited on server",
           ),
       ).toBe(true);
-      const chatState = yield* ChatState;
-      const stored = yield* sdk(() => chatState.persistence.stores.messages.loadThread(session.id));
+      // The stored conversation keeps the queued message as the server sent it.
+      const stored = page.view().messages;
+      expect(stored.find((message) => message.role === "user")?.id).toBe(stale.id);
+      expect(page.texts("user")).toEqual(["edited on server"]);
       expect(
-        stored.some(
-          (message) =>
-            message.id === stale.id &&
-            message.role === "user" &&
-            message.content === "edited on server",
-        ),
-      ).toBe(true);
-      expect(
-        yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Array(Schema.Unknown)))(stored),
+        yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Array(ChatMessage)))(stored),
       ).not.toContain("original");
-      const hydrated = yield* (yield* agentChat).hydrate(
-        new Request(`http://127.0.0.1/api/chat?session=${session.id}&threadId=${session.id}`),
-        session.id,
-      );
-      const history = yield* Schema.decodeUnknownEffect(
-        Schema.Struct({ messages: Schema.Array(Schema.Struct({ id: Schema.String })) }),
-      )(yield* json(hydrated));
-      expect(history.messages.some((message) => message.id === stale.id)).toBe(true);
     }),
   );
 
@@ -604,24 +559,26 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
     Effect.gen(function* () {
       const session = yield* chatSession;
       const agent = yield* agentChat;
-      const chatState = yield* ChatState;
+      const runStore = yield* RunStore;
       // The page holds the session, so a settled finish would leave the message waiting for it.
       yield* agent.lease(session.id, "tab", "claim");
-      const tab = yield* openTab(session.id, "tab");
-      yield* sendInBackground(tab, "please be slow");
+      const sending = yield* sendInBackground(yield* openPage(session.id, "tab"), "please be slow");
       yield* until(() => session.invocations().length === 1, "the answer to start");
       yield* enqueue(session.id, "and the tests", "queue", "tab");
       const runId = (yield* statusOf(session.id)).running!.runId;
-      const original = chatState.run;
-      const lookup = vi
-        .spyOn(chatState, "run")
-        .mockImplementation((sessionId, id) =>
-          id === runId ? Promise.reject(new Error("store unavailable")) : original(sessionId, id),
-        );
+      const original = runStore.run;
+      const lookup = vi.spyOn(runStore, "run").mockImplementation((id) =>
+        id === runId
+          ? Effect.fail(
+              SqlError.SqlError.make({
+                reason: SqlError.classifySqliteError(new Error("store unavailable")),
+              }),
+            )
+          : original(id),
+      );
       yield* Effect.addFinalizer(() => Effect.sync(() => lookup.mockRestore()));
       yield* session.release;
-      yield* until(() => !tab.client.getIsLoading(), "the run to finish");
-      expect(tab.client.getError()).toBeUndefined();
+      yield* Fiber.join(sending);
       yield* queueOf(session.id).pipe(
         Effect.repeat({
           until: (snapshot) =>
@@ -636,14 +593,12 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
     Effect.gen(function* () {
       const session = yield* chatSession;
       const agent = yield* agentChat;
-      const tab = yield* openTab(session.id);
-      yield* sendInBackground(tab, "please be slow");
+      const sending = yield* sendInBackground(yield* openPage(session.id), "please be slow");
       yield* until(() => session.invocations().length === 1, "the answer to start");
       yield* enqueue(session.id, "never mind", "queue");
       yield* agent.cancel(session.id, null);
-      yield* until(() => !tab.client.getIsLoading(), "the run to stop");
+      yield* Fiber.join(sending);
       expect(session.invocations()).toHaveLength(1);
-      tab.client.stop();
 
       const [held] = (yield* queueOf(session.id)).items;
       expect(held?.state).toEqual(QueueItemState.held({ draft: null }));
@@ -726,18 +681,19 @@ testAgent({ testProvider: { responder: gatedResponder } })("chat across restarts
       Effect.gen(function* () {
         const env = yield* TestEnv;
         const session = yield* chatSession;
-        const tab = yield* openTab(session.id);
-        yield* sendInBackground(tab, message);
+        const page = yield* openPage(session.id);
+        const sending = yield* sendInBackground(page, message);
         switch (interrupted) {
           case "answer":
             yield* until(() => session.invocations().length === 1, "the run to be answering");
             break;
           case "approval":
-            // Approval pauses the request, so wait for the interrupt rather than for the send.
-            yield* until(() => tab.client.getInterrupts().length === 1, "the approval request");
+            // Approval ends the run, so its stream ends with the approval it waits for.
+            yield* Fiber.join(sending);
+            expect(page.pending()).toHaveLength(1);
             break;
         }
-        tab.client.dispose();
+        yield* Fiber.interrupt(sending);
         const asked = session.invocations().length;
         yield* env.reopen;
         expect(yield* statusOf(session.id)).toMatchObject({
@@ -745,11 +701,10 @@ testAgent({ testProvider: { responder: gatedResponder } })("chat across restarts
           lastRun: { status: "failed", error: { code: "server_restarted" } },
         });
         // No run or approval is offered again, and the provider was not asked to start anything.
-        const reloaded = yield* openTab(session.id);
-        yield* until(() => reloaded.client.getMessages().length > 0, "the stored transcript");
-        expect(reloaded.client.getSessionGenerating()).toBe(false);
-        expect(reloaded.client.getInterrupts()).toEqual([]);
-        expect(reloaded.client.getError()).toBeUndefined();
+        const reloaded = yield* openPage(session.id);
+        expect(reloaded.view().messages.length).toBeGreaterThan(0);
+        expect(reloaded.opened.activeRun).toBeNull();
+        expect(reloaded.pending()).toEqual([]);
         expect(session.invocations()).toHaveLength(asked);
       }),
   );

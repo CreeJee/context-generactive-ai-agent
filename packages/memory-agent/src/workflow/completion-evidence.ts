@@ -1,5 +1,5 @@
 import { isTruthy } from "../truthy.ts";
-import { Data, Effect, MutableHashMap, MutableHashSet, Option, Schema } from "effect";
+import { Array as Arr, Data, Effect, MutableHashMap, Option, Schema, Stream } from "effect";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
 import type { WorkflowState } from "./workflow.ts";
 
@@ -214,16 +214,12 @@ export const completionEvidence = Effect.gen(function* () {
         ? bound
         : null;
     });
+    // A Goal worker's run names its dispatch; a run on the owner loop has none, even in a Goal a
+    // worker ran before (decisions.md "Goal도 owner 프로세스에서 돌고 도구를 병렬로 실행한다 (2026-10-26)").
     const provenance = Effect.fnUntraced(function* (runId: string, bound: typeof Binding.Type) {
-      if (pendingRecorder && runId === recorderRunId) {
-        const dispatch = yield* dispatchGenerationOf(runId);
-        if (sourceGeneration !== undefined && dispatch === undefined) return null;
-        return {
-          runId,
-          workflowRevisionId: bound.workflow_revision_id,
-          dispatchGeneration: dispatch ?? null,
-        };
-      }
+      const dispatchGeneration = (yield* dispatchGenerationOf(runId)) ?? null;
+      if (pendingRecorder && runId === recorderRunId)
+        return { runId, workflowRevisionId: bound.workflow_revision_id, dispatchGeneration };
       if (
         yield* exists(
           sql`SELECT 1 FROM owner_rpc_operations WHERE run_id = ${runId}
@@ -231,14 +227,8 @@ export const completionEvidence = Effect.gen(function* () {
         )
       )
         return null;
-      const dispatchGeneration = yield* dispatchGenerationOf(runId);
-      if (sourceGeneration !== undefined && dispatchGeneration === undefined) return null;
       if (sourceGeneration === undefined)
-        return {
-          runId,
-          workflowRevisionId: bound.workflow_revision_id,
-          dispatchGeneration: dispatchGeneration ?? null,
-        };
+        return { runId, workflowRevisionId: bound.workflow_revision_id, dispatchGeneration };
       const durable = yield* durableExecutionOf({
         sessionId,
         runId,
@@ -250,7 +240,7 @@ export const completionEvidence = Effect.gen(function* () {
         : {
             runId,
             workflowRevisionId: bound.workflow_revision_id,
-            dispatchGeneration: dispatchGeneration ?? null,
+            dispatchGeneration,
             durableExecutionId: durable.value.execution_id,
           };
     });
@@ -258,10 +248,8 @@ export const completionEvidence = Effect.gen(function* () {
     if (recorder === null) return refused;
     const recorderProvenance = yield* provenance(recorderRunId, recorder);
     if (recorderProvenance === null) return refused;
-    const runs = MutableHashMap.empty<string, typeof RunProvenance.Type>();
-    MutableHashMap.set(runs, recorderRunId, recorderProvenance);
-    const coverage = MutableHashSet.empty<number>();
-    for (const mapping of mappings) {
+    /** The outcome a mapping covers and its run's provenance, once every part of it holds. */
+    const covered = Effect.fnUntraced(function* (mapping: CriterionMapping) {
       const step = plan.steps.find((candidate) => candidate.id === mapping.stepId);
       const bound = yield* valid(mapping.runId);
       if (
@@ -275,22 +263,42 @@ export const completionEvidence = Effect.gen(function* () {
         step.acceptanceCriteria[mapping.acceptanceIndex] !== mapping.acceptanceText ||
         mapping.evidenceNodeIds.length === 0
       )
-        return refused;
-      for (const nodeId of mapping.evidenceNodeIds) {
+        return Option.none();
+      const unproven = yield* Effect.findFirst(mapping.evidenceNodeIds, (nodeId) =>
         // A background receipt only says the work was accepted, not that it was done.
-        const node = yield* exists(sql`SELECT 1 FROM nodes WHERE id = ${nodeId}
+        Effect.map(
+          exists(sql`SELECT 1 FROM nodes WHERE id = ${nodeId}
           AND session_id = ${sessionId} AND project_id = ${projectId} AND run_id = ${mapping.runId}
           AND kind = 'tool_result' AND json_extract(detail, '$.ok') = 1 AND length(trim(text)) > 0
           AND NOT coalesce(CASE WHEN json_valid(text) THEN json_extract(text, '$.taskId') IS NOT NULL
-            AND coalesce(json_extract(text, '$.status'), '') NOT IN ('completed', 'succeeded') END, 0)`);
-        if (!node) return refused;
-      }
-      MutableHashSet.add(coverage, mapping.outcomeIndex);
-      const runProvenance = yield* provenance(mapping.runId, bound);
-      if (runProvenance === null) return refused;
-      MutableHashMap.set(runs, mapping.runId, runProvenance);
-    }
-    if (MutableHashSet.size(coverage) !== goal.outcomes.length) return refused;
+            AND coalesce(json_extract(text, '$.status'), '') NOT IN ('completed', 'succeeded') END, 0)`),
+          (found) => !found,
+        ),
+      );
+      if (Option.isSome(unproven)) return Option.none();
+      return Option.map(
+        Option.fromNullishOr(yield* provenance(mapping.runId, bound)),
+        (runProvenance) => ({ outcomeIndex: mapping.outcomeIndex, runProvenance }),
+      );
+    });
+    // The mappings are checked in order; the first that does not hold refuses them all.
+    const checked = Option.all(
+      yield* Stream.fromIterable(mappings).pipe(
+        Stream.mapEffect(covered),
+        Stream.takeUntil(Option.isNone),
+        Stream.runCollect,
+      ),
+    );
+    if (
+      Option.isNone(checked) ||
+      Arr.dedupe(checked.value.map(({ outcomeIndex }) => outcomeIndex)).length !==
+        goal.outcomes.length
+    )
+      return refused;
+    const runs = MutableHashMap.fromIterable([
+      [recorderRunId, recorderProvenance] as const,
+      ...checked.value.map(({ runProvenance }) => [runProvenance.runId, runProvenance] as const),
+    ]);
     const registration = Option.getOrNull(yield* registrationOf(goalId));
     const accepted: Derived = Derived.accepted({
       snapshot: {

@@ -22,18 +22,18 @@ import {
   type OwnerWorkflowAdmissionResult,
 } from "./owner-workflow-storage.ts";
 
-export class GoalExecutionAdmissionRefused extends Schema.TaggedError<GoalExecutionAdmissionRefused>()(
-  "GoalExecutionAdmissionRefused",
-  {
-    reason: Schema.Literals([
-      "legacy_unbound",
-      "workflow_changed",
-      "run_id_conflict",
-      "run_outcome_uncertain",
-      "owner_mismatch",
-    ]),
-  },
-) {}
+export class GoalExecutionAdmissionRefused extends Schema.TaggedError<
+  GoalExecutionAdmissionRefused,
+  { readonly brand: unique symbol }
+>()("GoalExecutionAdmissionRefused", {
+  reason: Schema.Literals([
+    "legacy_unbound",
+    "workflow_changed",
+    "run_id_conflict",
+    "run_outcome_uncertain",
+    "owner_mismatch",
+  ]),
+}) {}
 
 const goalExecutionWorkflow = "GoalExecution";
 

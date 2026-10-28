@@ -1,6 +1,5 @@
 import { DateTime, Effect, Option, Schema } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { nativePromise } from "../runtime/native-effect.ts";
 import { providerProtocols, type OAuthProvider } from "./protocol.ts";
 import {
   createSubscriptionOAuthClient,
@@ -39,10 +38,10 @@ export interface SubscriptionUsageWindow {
 }
 
 /** The stored access token has expired and this lookup may not refresh it. */
-export class SubscriptionUsageCredentialExpired extends Schema.TaggedError<SubscriptionUsageCredentialExpired>()(
-  "SubscriptionUsageCredentialExpired",
-  {},
-) {}
+export class SubscriptionUsageCredentialExpired extends Schema.TaggedError<
+  SubscriptionUsageCredentialExpired,
+  { readonly brand: unique symbol }
+>()("SubscriptionUsageCredentialExpired", {}) {}
 
 /**
  * Sends exactly one usage request with the stored access token and never retries. An expired token
@@ -61,24 +60,31 @@ const requestUsage = Effect.fn("requestSubscriptionUsage")(function* (options: {
   const protocol = providerProtocols[provider];
   const now = options.now ?? Date.now;
   const fetcher = options.fetch ?? fetch;
-  let credential = yield* nativePromise(() => options.store.read(provider));
-  if (!isTruthy(credential))
-    return yield* OAuthHarnessError.fromCode("not_connected", null, context);
+  const readCredential = options.store
+    .read(provider)
+    .pipe(
+      Effect.filterOrFail(isTruthy, () =>
+        OAuthHarnessError.fromCode("not_connected", null, context),
+      ),
+    );
+  const stored = yield* readCredential;
   // The app's own expiry margin: the same credential would be refreshed before a model request.
-  const refreshed = credential.expiresAt <= now() + 30_000;
-  if (refreshed) {
-    if (!options.refreshExpired) return yield* SubscriptionUsageCredentialExpired.make({});
-    const client = createSubscriptionOAuthClient({
-      protocol,
-      store: options.store,
-      fetch: fetcher,
-      now,
-    });
-    yield* nativePromise(() => client.refreshForValidation());
-    credential = yield* nativePromise(() => options.store.read(provider));
-    if (!isTruthy(credential))
-      return yield* OAuthHarnessError.fromCode("not_connected", null, context);
-  }
+  const refreshed = stored.expiresAt <= now() + 30_000;
+  yield* Effect.when(
+    Effect.fail(SubscriptionUsageCredentialExpired.make({})),
+    Effect.succeed(refreshed && !options.refreshExpired),
+  );
+  const credential = refreshed
+    ? yield* createSubscriptionOAuthClient({
+        protocol,
+        store: options.store,
+        fetch: fetcher,
+        now,
+      }).pipe(
+        Effect.flatMap((client) => client.refreshForValidation),
+        Effect.andThen(readCredential),
+      )
+    : stored;
   const headers = new Headers(protocol.modelHeaders);
   headers.set("Accept", "application/json");
   headers.delete("Content-Type");
@@ -94,10 +100,13 @@ const requestUsage = Effect.fn("requestSubscriptionUsage")(function* (options: {
         signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
       }),
     catch: () => OAuthHarnessError.fromCode("transport_unavailable", null, context),
-  });
-  if (!response.ok)
-    return yield* OAuthHarnessError.fromCode("provider_rejected", response.status, context);
-  const body = yield* nativePromise(() => response.json()).pipe(
+  }).pipe(
+    Effect.filterOrFail(
+      (response) => response.ok,
+      (response) => OAuthHarnessError.fromCode("provider_rejected", response.status, context),
+    ),
+  );
+  const body = yield* Effect.tryPromise(() => response.json()).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(UsageObject)),
     Effect.mapError(() =>
       OAuthHarnessError.fromCode("provider_rejected", response.status, context),

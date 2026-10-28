@@ -1,10 +1,9 @@
-import { Cause, Effect, Result, Schema } from "effect";
+import { Effect, Result, Schema } from "effect";
 import { SqlError } from "effect/sql";
 import { expect, vi } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import type { SessionRunState } from "../../src/agent/run-state.ts";
 import { AppEvents } from "../../src/events/app-events.ts";
-import { isTruthy } from "../../src/truthy.ts";
 import {
   evaluateWorkflowAction,
   WorkflowActionRequest,
@@ -17,8 +16,9 @@ import {
   Workflows,
   type WorkflowState,
 } from "../../src/workflow/workflow.ts";
+import type { JsonValue } from "../../src/json.ts";
 import { TestEnv, freshSession, testAgent } from "../support/test-env.ts";
-import { inRun } from "../support/run-span.ts";
+import { callTool } from "../support/run-tools.ts";
 import { sqlAll, sqlRun, sqlExec } from "../support/sql.ts";
 
 const goal = {
@@ -70,21 +70,14 @@ const verifying = Effect.fnUntraced(function* (sessionId: string) {
   return yield* workflows.finishRun(sessionId, "execute");
 });
 
-const serverTool = Effect.fnUntraced(function* (
+/** The workflow tool `name` of `phase`, called as the model would. */
+const workflowTool = Effect.fnUntraced(function* (
   sessionId: string,
   phase: WorkflowState["phase"],
   name: string,
 ) {
-  const tool = (yield* inRun((yield* WorkflowTools).forSession(sessionId, phase))).find(
-    (t) => t.name === name,
-  );
-  if (!isTruthy(tool?.execute)) throw new Error(`Missing server tool: ${name}`);
-  const execute = tool.execute;
-  return (input: Parameters<typeof execute>[0]) =>
-    Effect.tryPromise({
-      try: () => Promise.resolve(execute(input)),
-      catch: (cause) => new Cause.UnknownError(cause),
-    });
+  const tools = (yield* WorkflowTools).toolsFor(sessionId, phase);
+  return (input: JsonValue) => callTool(tools, name, input);
 });
 
 testAgent()("Workflows", (it) => {
@@ -171,7 +164,7 @@ testAgent()("Workflows", (it) => {
       const id = yield* freshSession;
       const workflows = yield* Workflows;
       yield* executing(id);
-      const progressTool = yield* serverTool(id, "execute", "update_workflow_progress");
+      const progressTool = yield* workflowTool(id, "execute", "update_workflow_progress");
       yield* workflows.updatePlan(id, { ...plan, summary: "Revised execution scope" });
       const stale = {
         ...noProgress,
@@ -591,8 +584,8 @@ testAgent()("WorkflowTools live refresh", (it) => {
         const before = yield* workflows.get(id);
         expect(before.phase).toBe(phase);
         const identity = yield* workflows.goalInstanceId(id);
-        const updateGoal = yield* serverTool(id, phase, "update_goal");
-        const progress = yield* serverTool(id, phase, "update_workflow_progress");
+        const updateGoal = yield* workflowTool(id, phase, "update_goal");
+        const progress = yield* workflowTool(id, phase, "update_workflow_progress");
         expect(yield* updateGoal({ ...goal, nonGoals: [] })).toMatchObject({
           phase: "plan",
           goal: { version: 2, nonGoals: [] },
@@ -628,7 +621,7 @@ testAgent()("WorkflowTools live refresh", (it) => {
         const workflows = yield* Workflows;
         yield* executing(id);
         const events = yield* AppEvents;
-        const beforeRevision = events.revision();
+        const beforeRevision = yield* events.revision;
         const persistedAtPublish: unknown[] = [];
         const published: unknown[] = [];
         const publishSession = events.publishSession;
@@ -641,7 +634,7 @@ testAgent()("WorkflowTools live refresh", (it) => {
           ),
         );
         yield* Effect.addFinalizer(() => Effect.sync(() => publish.mockRestore()));
-        const tool = yield* serverTool(id, name === "update_goal" ? "goal" : "execute", name);
+        const tool = yield* workflowTool(id, name === "update_goal" ? "goal" : "execute", name);
         const input =
           name === "update_goal"
             ? { ...goal, statement: "Revised goal" }
@@ -683,15 +676,15 @@ testAgent()("WorkflowTools live refresh", (it) => {
       yield* workflows.updatePlan(id, plan);
       const before = yield* workflows.setPhase(id, "plan");
       const events = yield* AppEvents;
-      const beforeRevision = events.revision();
+      const beforeRevision = yield* events.revision;
       const publish = vi.spyOn(events, "publishSession");
       yield* Effect.addFinalizer(() => Effect.sync(() => publish.mockRestore()));
-      const progress = yield* serverTool(id, "execute", "update_workflow_progress");
+      const progress = yield* workflowTool(id, "execute", "update_workflow_progress");
       expect(
         yield* progress({ ...noProgress, planStatus: "executing", detail: "Stale progress" }),
       ).toEqual({ error: "workflow_progress_refused", reason: "phase_not_executable" });
       expect(publish).not.toHaveBeenCalled();
-      expect(events.revision()).toBe(beforeRevision);
+      expect(yield* events.revision).toBe(beforeRevision);
       expect(yield* workflows.get(id)).toEqual(before);
     }),
   );
@@ -740,13 +733,24 @@ testAgent()("server workflow action policy", (it) => {
             expect(result.failure).toMatchObject({ reason: decision.reason });
           if (!decision.allowed) expect(yield* workflows.get(id)).toEqual(current);
         });
-        for (const current of states) {
-          const advertised = workflowActions(current);
-          for (const phase of ["chat", "goal", "plan", "execute", "verify"] as const)
-            yield* matches(current, advertised.phases[phase], workflows.setPhase(id, phase));
-          for (const action of ["pause", "resume", "stop"] as const)
-            yield* matches(current, advertised.controls[action], workflows.controlGoal(id, action));
-        }
+        yield* Effect.forEach(
+          states,
+          Effect.fnUntraced(function* (current) {
+            const advertised = workflowActions(current);
+            yield* Effect.forEach(
+              ["chat", "goal", "plan", "execute", "verify"] as const,
+              (phase) => matches(current, advertised.phases[phase], workflows.setPhase(id, phase)),
+              { discard: true },
+            );
+            yield* Effect.forEach(
+              ["pause", "resume", "stop"] as const,
+              (action) =>
+                matches(current, advertised.controls[action], workflows.controlGoal(id, action)),
+              { discard: true },
+            );
+          }),
+          { discard: true },
+        );
       }),
   );
 
@@ -768,14 +772,16 @@ testAgent()("server workflow action policy", (it) => {
       yield* workflows.updateGoal(id, goal);
       const state = yield* workflows.updatePlan(id, plan);
       const actions = workflowActions(state, { running: true, lease: { state: "mine" } });
-      for (const decision of Object.values(actions.phases))
-        expect(decision).toEqual({ allowed: false, reason: "run_in_progress" });
+      Object.values(actions.phases).forEach((decision) =>
+        expect(decision).toEqual({ allowed: false, reason: "run_in_progress" }),
+      );
       expect(actions.controls.resume).toEqual({ allowed: false, reason: "run_in_progress" });
       expect(actions.controls.pause.allowed).toBe(true);
       expect(actions.controls.stop.allowed).toBe(true);
       const held = workflowActions(state, { running: true, lease: { state: "other", since: 0 } });
-      for (const decision of [...Object.values(held.phases), ...Object.values(held.controls)])
-        expect(decision).toEqual({ allowed: false, reason: "session_in_use" });
+      [...Object.values(held.phases), ...Object.values(held.controls)].forEach((decision) =>
+        expect(decision).toEqual({ allowed: false, reason: "session_in_use" }),
+      );
       expect(
         evaluateWorkflowAction(state, WorkflowActionRequest.phase({ phase: "execute" }), {
           lease: { state: "free" },
@@ -792,20 +798,24 @@ testAgent()("server workflow action policy", (it) => {
       yield* workflows.updateGoal(id, goal);
       yield* workflows.updatePlan(id, plan);
       yield* agent.lease(id, "owner", "claim");
-      for (const holder of ["owner", "observer"]) {
-        const response = yield* agent.status(id, holder);
-        expect(response.status).toBe(200);
-        // SAFETY: the successful in-process status handler constructs a typed SessionRunState.
-        const snapshot = (yield* Effect.promise(() => response.json())) as SessionRunState;
-        expect(snapshot.actions).toEqual(
-          workflowActions(snapshot.workflow, {
-            lease: snapshot.lease,
-            running: snapshot.running !== null,
-          }),
-        );
-        const changed = yield* agent.setWorkflowPhase(id, holder, "execute");
-        expect(changed.status).toBe(snapshot.actions.phases.execute.allowed ? 200 : 423);
-      }
+      yield* Effect.forEach(
+        ["owner", "observer"],
+        Effect.fnUntraced(function* (holder) {
+          const response = yield* agent.status(id, holder);
+          expect(response.status).toBe(200);
+          // SAFETY: the successful in-process status handler constructs a typed SessionRunState.
+          const snapshot = (yield* Effect.promise(() => response.json())) as SessionRunState;
+          expect(snapshot.actions).toEqual(
+            workflowActions(snapshot.workflow, {
+              lease: snapshot.lease,
+              running: snapshot.running !== null,
+            }),
+          );
+          const changed = yield* agent.setWorkflowPhase(id, holder, "execute");
+          expect(changed.status).toBe(snapshot.actions.phases.execute.allowed ? 200 : 423);
+        }),
+        { discard: true },
+      );
     }),
   );
 });

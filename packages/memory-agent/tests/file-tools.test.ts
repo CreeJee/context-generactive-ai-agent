@@ -1,21 +1,12 @@
 import { it } from "@effect/vitest";
 import { withTestPlatform } from "./support/platform.ts";
 import { NodeServices } from "@effect/platform-node";
-import {
-  Cause,
-  Context,
-  FileSystem,
-  Layer,
-  MutableHashMap,
-  Effect,
-  Path,
-  Schema,
-  Stream,
-} from "effect";
+import { Context, FileSystem, Layer, MutableHashMap, Effect, Path, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { describe, expect } from "vite-plus/test";
-import { FileTools } from "../src/tools/files.ts";
-import { inRun } from "./support/run-span.ts";
+import type { JsonValue } from "../src/json.ts";
+import { FileTools, listPageCharacters } from "../src/tools/files.ts";
+import { callTool, failureCode } from "./support/run-tools.ts";
 
 const isText = Schema.is(Schema.String);
 const gitFixture = Effect.fn("fileToolsTest.gitFixture")(function* (root: string, args: string[]) {
@@ -44,49 +35,39 @@ const project = Effect.fn("fileToolsTest.project")(function* (
   );
   const root = path.join(base, "project");
   yield* fs.makeDirectory(root);
-  for (const [relative, content] of files) {
-    const target = path.join(root, relative);
-    yield* fs.makeDirectory(path.dirname(target), { recursive: true });
-    if (isText(content)) yield* fs.writeFileString(target, content);
-    else yield* fs.writeFile(target, content);
-  }
+  yield* Effect.forEach(
+    files,
+    Effect.fnUntraced(function* ([relative, content]) {
+      const target = path.join(root, relative);
+      yield* fs.makeDirectory(path.dirname(target), { recursive: true });
+      if (isText(content)) yield* fs.writeFileString(target, content);
+      else yield* fs.writeFile(target, content);
+    }),
+    { discard: true },
+  );
   return { base, root };
 });
 const fileTools = Effect.fn("fileToolsTest.tools")(function* (root: string) {
   const service = yield* Effect.provideContext(FileTools, yield* Layer.build(FileTools.layer));
-  const [listFiles, searchFiles, readFile, writeFile, editFile, deleteFile] = yield* inRun(
-    service.forProject({
-      id: "p1",
-      root,
-      name: "project",
-      crossRecallExcluded: false,
-      permissionMode: "ask",
-      createdAt: "2026-09-14T00:00:00.000Z",
-      hiddenAt: null,
-    }),
-  );
-  return { listFiles, searchFiles, readFile, writeFile, editFile, deleteFile };
-});
-const run = Effect.fn("fileToolsTest.run")(function* <I, O>(
-  tool: { execute?: ((args: I) => O) | undefined },
-  input: I,
-) {
-  const execute = tool.execute;
-  if (execute === undefined) throw new Error("tool has no server implementation");
-  return yield* Effect.tryPromise({
-    try: () => Promise.resolve(execute(input)),
-    catch: (cause) => new Cause.UnknownError(cause),
+  const tools = service.toolsFor({
+    id: "p1",
+    root,
+    name: "project",
+    crossRecallExcluded: false,
+    permissionMode: "ask",
+    createdAt: "2026-09-14T00:00:00.000Z",
+    hiddenAt: null,
   });
+  const named = (name: string) => (input: JsonValue) => callTool(tools, name, input);
+  return {
+    listFiles: named("list_files"),
+    searchFiles: named("search_files"),
+    readFile: named("read_file"),
+    writeFile: named("write_file"),
+    editFile: named("edit_file"),
+    deleteFile: named("delete_file"),
+  };
 });
-const failure = <A>(operation: Effect.Effect<A, Cause.UnknownError>) =>
-  operation.pipe(
-    Effect.map(() => "resolved"),
-    Effect.catch((error) =>
-      error.cause instanceof Error
-        ? Effect.succeed(error.cause.message.split(":")[0])
-        : Effect.die(error.cause),
-    ),
-  );
 
 const ListPage = Schema.Struct({
   snapshot: Schema.String,
@@ -117,19 +98,19 @@ describe("list_files", () => {
       yield* fs.symlink(path.join(base, "outside.txt"), path.join(root, "link.txt"));
       yield* gitFixture(root, ["init", "-q"]);
       const { listFiles } = yield* fileTools(root);
-      expect(yield* run(listFiles, {})).toMatchObject({
+      expect(yield* listFiles({})).toMatchObject({
         source: "git",
         paths: [".gitignore", "README.md", "src/app.ts"],
         excludedCredentialFiles: 1,
         nextOffset: null,
       });
-      expect(yield* run(listFiles, { directory: "src", glob: "*.ts" })).toMatchObject({
+      expect(yield* listFiles({ directory: "src", glob: "*.ts" })).toMatchObject({
         directory: "src",
         paths: ["src/app.ts"],
       });
       // An empty optional snapshot in model-generated arguments means the first page.
       expect(
-        yield* run(listFiles, { directory: "src", glob: "*.ts", snapshot: "", offset: 0 }),
+        yield* listFiles({ directory: "src", glob: "*.ts", snapshot: "", offset: 0 }),
       ).toMatchObject({
         paths: ["src/app.ts"],
       });
@@ -141,18 +122,41 @@ describe("list_files", () => {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const files = MutableHashMap.fromIterable([["node_modules/pkg/index.js", "x"]]);
-      for (let index = 0; index < 510; index++)
-        MutableHashMap.set(files, `notes/${String(index).padStart(3, "0")}.md`, "note\n");
+      Array.from({ length: 510 }, (_, index) => index).forEach((index) =>
+        MutableHashMap.set(files, `notes/${String(index).padStart(3, "0")}.md`, "note\n"),
+      );
       const { root } = yield* project(files);
       const { listFiles } = yield* fileTools(root);
-      const first = yield* Schema.decodeUnknownEffect(ListPage)(yield* run(listFiles, {}));
+      const first = yield* Schema.decodeUnknownEffect(ListPage)(yield* listFiles({}));
       expect(first).toMatchObject({ nextOffset: 500 });
       yield* fs.writeFileString(path.join(root, "notes", "000-new.md"), "added between pages\n");
       const second = yield* Schema.decodeUnknownEffect(ListPage)(
-        yield* run(listFiles, { snapshot: first.snapshot, offset: 500 }),
+        yield* listFiles({ snapshot: first.snapshot, offset: 500 }),
       );
       expect(second.paths).toHaveLength(10);
       expect(second.nextOffset).toBeNull();
+    }).pipe(withTestPlatform),
+  );
+
+  it.live("keeps a page of long paths within the page's characters", () =>
+    Effect.gen(function* () {
+      const files = MutableHashMap.fromIterable(
+        Array.from(
+          { length: 300 },
+          (_, index) => [`${"deep/".repeat(40)}${String(index).padStart(3, "0")}.md`, "x"] as const,
+        ),
+      );
+      const { root } = yield* project(files);
+      const { listFiles } = yield* fileTools(root);
+      const first = yield* Schema.decodeUnknownEffect(ListPage)(yield* listFiles({}));
+      expect(first.paths.reduce((length, path) => length + path.length + 3, 0)).toBeLessThanOrEqual(
+        listPageCharacters,
+      );
+      expect(first.paths.length).toBeLessThan(300);
+      const second = yield* Schema.decodeUnknownEffect(ListPage)(
+        yield* listFiles({ snapshot: first.snapshot, offset: first.nextOffset }),
+      );
+      expect(second.paths[0]).not.toBe(first.paths.at(-1));
     }).pipe(withTestPlatform),
   );
 });
@@ -171,34 +175,34 @@ describe("search_files", () => {
       );
       const { searchFiles } = yield* fileTools(root);
       // A binary file is reported only when its bytes contain the text, so it might have matched.
-      expect(yield* run(searchFiles, { query: "TODO second" })).toMatchObject({
+      expect(yield* searchFiles({ query: "TODO second" })).toMatchObject({
         matches: [{ path: "src/a.ts", line: 3, text: "// TODO second" }],
         skipped: [{ path: "src/data.bin", reason: "binary" }],
         nextCursor: null,
         complete: false,
       });
-      expect(yield* run(searchFiles, { query: "first" })).toMatchObject({
+      expect(yield* searchFiles({ query: "first" })).toMatchObject({
         matches: [{ path: "src/a.ts", line: 1 }],
         skipped: [],
         complete: true,
       });
       // An empty optional cursor in model-generated arguments also starts a fresh search.
-      expect(yield* run(searchFiles, { query: "first", cursor: "" })).toMatchObject({
+      expect(yield* searchFiles({ query: "first", cursor: "" })).toMatchObject({
         matches: [{ path: "src/a.ts", line: 1 }],
         complete: true,
       });
       const first = yield* Schema.decodeUnknownEffect(SearchPage)(
-        yield* run(searchFiles, { query: "todo", caseSensitive: false }),
+        yield* searchFiles({ query: "todo", caseSensitive: false }),
       );
       expect(first.matches).toHaveLength(100);
       const cursor = first.nextCursor ?? "";
       expect(cursor).not.toBe("");
       const second = yield* Schema.decodeUnknownEffect(SearchPage)(
-        yield* run(searchFiles, { query: "todo", caseSensitive: false, cursor }),
+        yield* searchFiles({ query: "todo", caseSensitive: false, cursor }),
       );
       expect(second.matches).toHaveLength(52);
       expect(second.nextCursor).toBeNull();
-      expect(yield* failure(run(searchFiles, { query: "other", cursor }))).toBe("invalid_cursor");
+      expect(yield* failureCode(searchFiles({ query: "other", cursor }))).toBe("invalid_cursor");
     }).pipe(withTestPlatform),
   );
 });
@@ -223,7 +227,7 @@ describe("search_files in a Git work tree", () => {
         yield* gitFixture(root, ["init", "-q"]);
         yield* gitFixture(root, ["add", "src/tracked.ts", ".gitignore"]);
         const { searchFiles } = yield* fileTools(root);
-        expect(yield* run(searchFiles, { query: "needle" })).toMatchObject({
+        expect(yield* searchFiles({ query: "needle" })).toMatchObject({
           matches: [
             { path: "src/untracked.ts", line: 1 },
             { path: "src/한글.md", line: 2, text: "바늘 needle 둘째 줄" },
@@ -231,7 +235,7 @@ describe("search_files in a Git work tree", () => {
           skipped: [],
           complete: true,
         });
-        expect(yield* run(searchFiles, { query: "NEEDLE", caseSensitive: false })).toMatchObject({
+        expect(yield* searchFiles({ query: "NEEDLE", caseSensitive: false })).toMatchObject({
           matches: [
             { path: "src/tracked.ts", line: 1 },
             { path: "src/untracked.ts", line: 1 },
@@ -239,12 +243,12 @@ describe("search_files in a Git work tree", () => {
           ],
         });
         // Non-ASCII case-insensitive queries are searched without git grep.
-        expect(yield* run(searchFiles, { query: "바늘", caseSensitive: false })).toMatchObject({
+        expect(yield* searchFiles({ query: "바늘", caseSensitive: false })).toMatchObject({
           matches: [{ path: "src/한글.md", line: 2 }],
         });
         // Git reads the files as they are on disk now, not as committed.
         yield* fs.writeFileString(path.join(root, "src/tracked.ts"), "const needle = 3;\n");
-        expect(yield* run(searchFiles, { query: "needle" })).toMatchObject({
+        expect(yield* searchFiles({ query: "needle" })).toMatchObject({
           matches: [
             { path: "src/tracked.ts", line: 1 },
             { path: "src/untracked.ts", line: 1 },
@@ -263,11 +267,11 @@ describe("read, write, edit and delete", () => {
       const { root } = yield* project(MutableHashMap.fromIterable([["log.txt", "a\nb\nc\n"]]));
       const { readFile } = yield* fileTools(root);
       const first = yield* Schema.decodeUnknownEffect(WithSha)(
-        yield* run(readFile, { path: "log.txt", maxLines: 1 }),
+        yield* readFile({ path: "log.txt", maxLines: 1 }),
       );
       // Same size, different content: the second page must see the new file.
       yield* fs.writeFileString(path.join(root, "log.txt"), "x\ny\nz\n");
-      const second = yield* run(readFile, { path: "log.txt", startLine: 2, maxLines: 1 });
+      const second = yield* readFile({ path: "log.txt", startLine: 2, maxLines: 1 });
       expect(second).toMatchObject({ content: "y\n" });
       expect((yield* Schema.decodeUnknownEffect(WithSha)(second)).sha256).not.toBe(first.sha256);
     }).pipe(withTestPlatform),
@@ -279,7 +283,7 @@ describe("read, write, edit and delete", () => {
         MutableHashMap.fromIterable([["notes.txt", "one\r\ntwo\r\nthree\r\n"]]),
       );
       const { readFile } = yield* fileTools(root);
-      expect(yield* run(readFile, { path: "notes.txt", startLine: 2, maxLines: 1 })).toMatchObject({
+      expect(yield* readFile({ path: "notes.txt", startLine: 2, maxLines: 1 })).toMatchObject({
         content: "two\r\n",
         startLine: 2,
         endLine: 2,
@@ -300,28 +304,28 @@ describe("read, write, edit and delete", () => {
       const shaOf = () =>
         Effect.gen(function* () {
           return (yield* Schema.decodeUnknownEffect(WithSha)(
-            yield* run(readFile, { path: "docs/plan.md" }),
+            yield* readFile({ path: "docs/plan.md" }),
           )).sha256;
         });
-      const created = yield* run(writeFile, { path: "docs/plan.md", content: "v1\n" });
+      const created = yield* writeFile({ path: "docs/plan.md", content: "v1\n" });
       expect(created).toMatchObject({ created: true, bytes: 3 });
-      expect(yield* failure(run(writeFile, { path: "docs/plan.md", content: "x" }))).toBe("exists");
+      expect(yield* failureCode(writeFile({ path: "docs/plan.md", content: "x" }))).toBe("exists");
       const firstSha = yield* shaOf();
       yield* fs.writeFileString(plan, "user edit\n");
       expect(
-        yield* failure(
-          run(writeFile, { path: "docs/plan.md", content: "v2\n", expectedSha256: firstSha }),
+        yield* failureCode(
+          writeFile({ path: "docs/plan.md", content: "v2\n", expectedSha256: firstSha }),
         ),
       ).toBe("changed");
       expect(yield* fs.readFileString(plan)).toBe("user edit\n");
       const currentSha = yield* shaOf();
-      yield* run(writeFile, { path: "docs/plan.md", content: "v2\n", expectedSha256: currentSha });
+      yield* writeFile({ path: "docs/plan.md", content: "v2\n", expectedSha256: currentSha });
       expect(yield* fs.readFileString(plan)).toBe("v2\n");
       expect(
-        yield* failure(run(deleteFile, { path: "docs/plan.md", expectedSha256: currentSha })),
+        yield* failureCode(deleteFile({ path: "docs/plan.md", expectedSha256: currentSha })),
       ).toBe("changed");
       expect(
-        yield* run(deleteFile, { path: "docs/plan.md", expectedSha256: yield* shaOf() }),
+        yield* deleteFile({ path: "docs/plan.md", expectedSha256: yield* shaOf() }),
       ).toMatchObject({ deleted: true });
     }).pipe(withTestPlatform),
   );
@@ -338,7 +342,7 @@ describe("read, write, edit and delete", () => {
       );
       const { editFile } = yield* fileTools(root);
       expect(
-        yield* run(editFile, {
+        yield* editFile({
           path: "app.ts",
           oldText: "const a = 1;\nconst b",
           newText: "const a = 2;\nconst b",
@@ -347,13 +351,13 @@ describe("read, write, edit and delete", () => {
       expect(yield* fs.readFileString(path.join(root, "app.ts"))).toBe(
         "const a = 2;\r\nconst b = 1;\r\n",
       );
-      expect(yield* failure(run(editFile, { path: "twice.ts", oldText: "x", newText: "y" }))).toBe(
+      expect(yield* failureCode(editFile({ path: "twice.ts", oldText: "x", newText: "y" }))).toBe(
         "ambiguous_match",
       );
       expect(
-        yield* run(editFile, { path: "twice.ts", oldText: "x", newText: "y", replaceAll: true }),
+        yield* editFile({ path: "twice.ts", oldText: "x", newText: "y", replaceAll: true }),
       ).toMatchObject({ replacements: 2 });
-      expect(yield* failure(run(editFile, { path: "twice.ts", oldText: "zzz", newText: "" }))).toBe(
+      expect(yield* failureCode(editFile({ path: "twice.ts", oldText: "zzz", newText: "" }))).toBe(
         "no_match",
       );
     }).pipe(withTestPlatform),
@@ -369,7 +373,7 @@ describe("read, write, edit and delete", () => {
       const { readFile, editFile, writeFile } = yield* fileTools(root);
       // The model reads `const API_KEY = "[redacted:credential]";` and edits that line.
       expect(
-        yield* run(editFile, {
+        yield* editFile({
           path: "config.ts",
           oldText: 'const url = "a";\nconst API_KEY = "[redacted:credential]";',
           newText: 'const url = "b";\nexport const API_KEY = "[redacted:credential]";',
@@ -379,8 +383,8 @@ describe("read, write, edit and delete", () => {
         'const url = "b";\nexport const API_KEY = "kq83jd92kslw01";\n',
       );
       expect(
-        yield* failure(
-          run(editFile, {
+        yield* failureCode(
+          editFile({
             path: "config.ts",
             oldText: 'API_KEY = "[redacted:cred',
             newText: "x",
@@ -389,9 +393,9 @@ describe("read, write, edit and delete", () => {
       ).toBe("hidden_value_split");
 
       const { sha256 } = yield* Schema.decodeUnknownEffect(WithSha)(
-        yield* run(readFile, { path: "config.ts" }),
+        yield* readFile({ path: "config.ts" }),
       );
-      yield* run(writeFile, {
+      yield* writeFile({
         path: "config.ts",
         expectedSha256: sha256,
         content: '// rewritten\nexport const API_KEY = "[redacted:credential]";\n',
@@ -416,13 +420,13 @@ describe("read, write, edit and delete", () => {
       yield* fs.writeFileString(path.join(base, "outside.txt"), "outside\n");
       yield* fs.symlink(path.join(base, "outside.txt"), path.join(root, "link.txt"));
       const { readFile, writeFile } = yield* fileTools(root);
-      expect(yield* failure(run(readFile, { path: ".env" }))).toBe("credential");
-      expect(yield* failure(run(writeFile, { path: ".git/config", content: "x" }))).toBe(
+      expect(yield* failureCode(readFile({ path: ".env" }))).toBe("credential");
+      expect(yield* failureCode(writeFile({ path: ".git/config", content: "x" }))).toBe(
         "git_internal",
       );
-      expect(yield* failure(run(readFile, { path: "link.txt" }))).toBe("symlink");
-      expect(yield* failure(run(readFile, { path: "../outside.txt" }))).toBe("invalid_path");
-      expect(yield* failure(run(readFile, { path: "missing.txt" }))).toBe("not_found");
+      expect(yield* failureCode(readFile({ path: "link.txt" }))).toBe("symlink");
+      expect(yield* failureCode(readFile({ path: "../outside.txt" }))).toBe("invalid_path");
+      expect(yield* failureCode(readFile({ path: "missing.txt" }))).toBe("not_found");
     }).pipe(withTestPlatform),
   );
 });

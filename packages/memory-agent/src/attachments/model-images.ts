@@ -1,80 +1,107 @@
-import type { ChatMiddleware, ChatMiddlewareConfig, ModelMessage } from "@tanstack/ai";
-import { Effect, Function as EffectFunction, MutableHashMap, Option } from "effect";
+import { Array as Arr, Effect, HashMap, Option, Schema } from "effect";
+import type { StoredMessage } from "../chat-store/schema.ts";
+import { asRunFailed, type RunHook } from "../loop/run.ts";
 import type { Attachment, AttachmentsApi } from "./attachments.ts";
 import { attachmentIdOf } from "./urls.ts";
 
-/** Image inlining must never replace the already-compacted provider view with transcript history. */
-export const modelBoundMessages = (
-  config: Pick<ChatMiddlewareConfig, "messages" | "providerMessages">,
-): readonly ModelMessage[] => config.providerMessages ?? config.messages;
+type ImageAttachments = Pick<AttachmentsApi, "get" | "forModel" | "dataUrl">;
 
-type ImageAttachments = Pick<AttachmentsApi, "get" | "forModelEffect" | "dataUrlEffect">;
-type ImageRun = <A, E>(effect: Effect.Effect<A, E>) => Promise<A>;
+interface Part {
+  readonly type: string;
+}
+
+const decodeUrlImage = Schema.decodeUnknownOption(
+  Schema.Struct({
+    type: Schema.Literal("image"),
+    source: Schema.Struct({ type: Schema.Literal("url"), value: Schema.String }),
+  }),
+);
+
+/** The attachment a part shows by its URL, if it is one. */
+const attachmentOf = (part: Part) =>
+  Option.flatMap(decodeUrlImage(part), ({ source }) =>
+    Option.fromNullishOr(attachmentIdOf(source.value)),
+  );
+
+const attachmentsIn = (contents: ReadonlyArray<ReadonlyArray<Part>>) =>
+  Arr.dedupe(Arr.flatMap(contents, (parts) => Arr.getSomes(parts.map(attachmentOf))));
+
+/** What a part that shows an attachment by its URL becomes for the model. */
+type InlinePart =
+  | { readonly type: "text"; readonly content: string }
+  | {
+      readonly type: "image";
+      readonly source: { readonly type: "data"; readonly value: string; readonly mimeType: string };
+    };
+
+const unavailable: InlinePart = { type: "text", content: "[Attached image is unavailable.]" };
+
+const inlineImage = Effect.fn("modelImages.inlineImage")(function* (
+  attachments: ImageAttachments,
+  attachment: Attachment,
+) {
+  const image = yield* attachments.forModel(attachment);
+  const prefix = `data:${image.mimeType};base64,`;
+  const dataUrl = yield* attachments.dataUrl(image);
+  return {
+    type: "image" as const,
+    source: {
+      type: "data" as const,
+      value: dataUrl.slice(prefix.length),
+      mimeType: image.mimeType,
+    },
+  };
+});
+
+/**
+ * Reads each of `ids` once, all at the same time, and gives what puts them inline: a part that
+ * shows one of them by URL becomes its image data, or a note when it is gone.
+ */
+const inlinerFor = Effect.fnUntraced(function* (
+  attachments: ImageAttachments,
+  ids: ReadonlyArray<string>,
+) {
+  const parts = HashMap.fromIterable(
+    yield* Effect.forEach(
+      ids,
+      (id) =>
+        Effect.flatMap(attachments.get(id), (attachment) =>
+          Option.match(Option.fromNullishOr(attachment), {
+            onNone: () => Effect.succeed<InlinePart>(unavailable),
+            onSome: (found) => inlineImage(attachments, found),
+          }),
+        ).pipe(Effect.map((part) => [id, part] as const)),
+      { concurrency: "unbounded" },
+    ),
+  );
+  return <P extends Part>(part: P) =>
+    Option.getOrElse(
+      Option.flatMap(attachmentOf(part), (id) => HashMap.get(parts, id)),
+      () => part,
+    );
+});
+
+const isText = Schema.is(Schema.String);
+
+const storedParts = (message: StoredMessage): ReadonlyArray<Part> =>
+  message.role === "assistant" || isText(message.content) ? [] : message.content;
+
 /**
  * Stored transcripts use browser-safe relative attachment URLs. Providers cannot fetch those, so
- * only the model-bound copy gets the smaller stored image as provider-neutral inline data.
- * `run` is the owner's runtime: SDK middleware is a Promise boundary.
+ * only the model-bound copy gets the smaller stored image as provider-neutral inline data: each
+ * model step's history gets the images inline.
  */
-export const modelImages: {
-  (run: ImageRun): (attachments: ImageAttachments) => ChatMiddleware;
-} & typeof modelImagesBody = EffectFunction.dual(2, modelImagesBody);
-function modelImagesBody(attachments: ImageAttachments, run: ImageRun): ChatMiddleware {
-  return {
-    name: "memory-agent/model-images",
-    onConfig: (ctx, config) =>
-      run(
-        Effect.gen(function* () {
-          if (ctx.phase === "init") return;
-          let changed = false;
-          const inlineImage = Effect.fn("modelImages.inlineImage")(function* (
-            attachment: Attachment,
-          ) {
-            const image = yield* attachments.forModelEffect(attachment);
-            const prefix = `data:${image.mimeType};base64,`;
-            const dataUrl = yield* attachments.dataUrlEffect(image);
-            return {
-              type: "image" as const,
-              source: {
-                type: "data" as const,
-                value: dataUrl.slice(prefix.length),
-                mimeType: image.mimeType,
-              },
-            };
-          });
-          const inlineImages = MutableHashMap.empty<string, ReturnType<typeof inlineImage>>();
-          const providerMessages = yield* Effect.forEach(
-            modelBoundMessages(config),
-            (message) =>
-              Effect.gen(function* () {
-                if (!Array.isArray(message.content)) return message;
-                const content = yield* Effect.forEach(
-                  message.content,
-                  (part) =>
-                    Effect.gen(function* () {
-                      if (part.type !== "image" || part.source.type !== "url") return part;
-                      const id = attachmentIdOf(part.source.value);
-                      if (id === null) return part;
-                      changed = true;
-                      const attachment = yield* attachments.get(id);
-                      if (attachment === null)
-                        return {
-                          type: "text" as const,
-                          content: "[Attached image is unavailable.]",
-                        };
-                      const known = Option.getOrUndefined(MutableHashMap.get(inlineImages, id));
-                      if (known !== undefined) return yield* known;
-                      const inline = yield* Effect.cachedWithTTL(inlineImage(attachment), 0);
-                      MutableHashMap.set(inlineImages, id, inline);
-                      return yield* inline;
-                    }),
-                  { concurrency: "unbounded" },
-                );
-                return { ...message, content };
-              }),
-            { concurrency: "unbounded" },
-          );
-          return changed ? { providerMessages } : undefined;
-        }),
-      ),
-  };
-}
+export const modelImagesHook = (attachments: ImageAttachments): RunHook => ({
+  request: (_scope, request) =>
+    inlinerFor(attachments, attachmentsIn(request.history.map(storedParts))).pipe(
+      Effect.map((inline) => ({
+        ...request,
+        history: request.history.map((message) =>
+          message.role === "assistant" || isText(message.content)
+            ? message
+            : { ...message, content: message.content.map(inline) },
+        ),
+      })),
+      Effect.mapError(asRunFailed),
+    ),
+});

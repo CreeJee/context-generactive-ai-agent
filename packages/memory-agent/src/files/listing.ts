@@ -3,7 +3,6 @@ import * as NodeChildProcessSpawner from "@effect/platform-node/NodeChildProcess
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Effect Path has no glob matcher; minimatch is what Node's `path.matchesGlob` runs.
 import { minimatch } from "minimatch";
@@ -13,16 +12,16 @@ import {
   FileSystem,
   Crypto,
   Layer,
-  Cause,
   Stream,
-  MutableHashMap,
   Option,
   Effect,
+  Ref,
   HashSet,
+  Chunk,
   Array as EffectArray,
 } from "effect";
 import { findExecutable } from "../runtime/host.ts";
-import { gitEnvironment } from "./git-grep.ts";
+import { gitEnvironment, gitNames } from "./git-grep.ts";
 import { isCredentialPath } from "./paths.ts";
 
 const { join } = hostPath;
@@ -52,7 +51,7 @@ const statConcurrency = 64;
 /** Directories skipped when walking a project that is not a Git work tree. */
 const walkSkips = HashSet.fromIterable([".git", "node_modules"]);
 
-/** Files a walk collects before it stops and reports itself truncated. */
+/** Files a walk or a Git listing collects before it stops and reports itself truncated. */
 export const walkLimit = 50_000;
 
 export interface FileListing {
@@ -62,11 +61,10 @@ export interface FileListing {
   readonly source: "git" | "walk";
   /** Files and directories left out because they look like credentials. */
   readonly excluded: number;
-  /** True when a walk stopped at {@link walkLimit} files. */
+  /** True when a walk or a Git listing stopped at {@link walkLimit} files. */
   readonly truncated: boolean;
 }
 
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 const gitFiles = Effect.fn("FileListing.gitFiles")(function* (root: string, directory: string) {
   const git = yield* Effect.scoped(
     Layer.build(NodeFileSystem.layer).pipe(
@@ -95,31 +93,26 @@ const gitFiles = Effect.fn("FileListing.gitFiles")(function* (root: string, dire
           },
         ),
       );
-      let size = 0;
-      const stdout = yield* child.stdout.pipe(
-        Stream.mapEffect((chunk) => {
-          size += chunk.byteLength;
-          return size <= 256 * 1024 * 1024
-            ? Effect.succeed(chunk)
-            : Effect.fail(new Cause.UnknownError("git listing output exceeds 256 MiB"));
-        }),
-        Stream.decodeText(),
-        Stream.runFold(
-          () => "",
-          (text, chunk) => text + chunk,
-        ),
-      );
-      const code = yield* child.exitCode;
-      return Number(code) === 0 ? stdout.split("\0").filter(Boolean) : null;
+      const listed = yield* gitNames({ stdout: child.stdout, limit: walkLimit });
+      // A listing cut short is stopped with its Scope, without waiting for its exit.
+      return yield* listed.truncated
+        ? Effect.succeed({ paths: listed.names, truncated: true })
+        : Effect.map(child.exitCode, (code) =>
+            Number(code) === 0 ? { paths: listed.names, truncated: false } : null,
+          );
     }),
   ).pipe(
     // Without a usable git listing the caller walks the directory itself.
-    Effect.catchTags({
-      PlatformError: () => Effect.succeed(null),
-      UnknownError: () => Effect.succeed(null),
-    }),
+    Effect.catchTag("PlatformError", () => Effect.succeed(null)),
   );
 });
+
+/** Files a walk listed in visiting order, credential-looking directories it left out, and whether it stopped. */
+interface Walk {
+  readonly files: Chunk.Chunk<string>;
+  readonly excluded: number;
+  readonly truncated: boolean;
+}
 
 /**
  * Regular files below `directory` (relative to `base`), not following links and not descending
@@ -127,54 +120,73 @@ const gitFiles = Effect.fn("FileListing.gitFiles")(function* (root: string, dire
  * `credentialPrefix` joined with the relative path: empty for a project, whose root may itself sit
  * under an unusual name, and the absolute base outside, where `~/.config` + `gh` must still match.
  */
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 const walkFiles = Effect.fn("FileListing.walkFiles")(function* (
   base: string,
   directory: string,
   credentialPrefix: string,
 ) {
   const fs = yield* nodeFileSystem;
-  const files: string[] = [];
-  let excluded = 0;
-  let truncated = false;
-  const pending = [directory];
-  while (pending.length > 0) {
-    if (files.length >= walkLimit) {
-      truncated = true;
-      break;
-    }
-    const relative = pending.pop()!;
-    // Finish and close this directory before visiting children, so depth never consumes more FDs.
-    // An unreadable directory is skipped; what it yielded before failing is kept.
-    yield* Effect.scoped(
-      Effect.gen(function* () {
-        const handle = yield* fs.openDirectory(join(base, relative));
-        while (true) {
-          const next = yield* handle.read;
-          if (Option.isNone(next)) return;
-          const entry = next.value;
-          if (files.length >= walkLimit) {
-            truncated = true;
-            return;
-          }
-          const path = relative === "." ? entry.name : `${relative}/${entry.name}`;
-          switch (entry.type) {
-            case "Directory":
-              if (HashSet.has(walkSkips, entry.name)) continue;
-              if (isCredentialPath(join(credentialPrefix, path))) excluded++;
-              else pending.push(path);
-              continue;
-            case "File":
-              files.push(path);
-              continue;
-            default:
-              continue;
-          }
-        }
-      }),
-    ).pipe(Effect.catchTag("PlatformError", () => Effect.void));
-  }
-  return { files, excluded, truncated };
+  /**
+   * One directory's entries, each with whether `room` files were already listed from it when it
+   * arrived; reading stops at the first such entry.
+   */
+  const readDirectory = (relative: string, room: number) =>
+    Stream.unwrap(
+      Effect.map(fs.openDirectory(join(base, relative)), (handle) =>
+        Stream.fromEffectRepeat(handle.read).pipe(Stream.takeWhile(Option.isSome)),
+      ),
+    ).pipe(
+      // An unreadable directory is skipped; what it yielded before failing is kept.
+      Stream.catchTag("PlatformError", () => Stream.empty),
+      Stream.mapAccum(
+        () => 0,
+        (listed, { value: entry }) => [
+          entry.type === "File" ? listed + 1 : listed,
+          [{ entry, full: listed >= room }],
+        ],
+      ),
+      Stream.takeUntil(({ full }) => full),
+      Stream.runCollect,
+    );
+  /** Walks `relative` and then its subdirectories, `listed` files having been listed before it. */
+  const walk = (relative: string, listed: number): Effect.Effect<Walk> =>
+    Effect.gen(function* () {
+      if (listed >= walkLimit) return { files: Chunk.empty(), excluded: 0, truncated: true };
+      // Finish and close this directory before visiting children, so depth never consumes more FDs.
+      const entries = yield* readDirectory(relative, walkLimit - listed);
+      const read = entries
+        .filter(({ full }) => !full)
+        .map(({ entry }) => ({
+          entry,
+          path: relative === "." ? entry.name : `${relative}/${entry.name}`,
+        }));
+      const directories = read
+        .filter(({ entry }) => entry.type === "Directory" && !HashSet.has(walkSkips, entry.name))
+        .map(({ path }) => path);
+      const credential = (path: string) => isCredentialPath(join(credentialPrefix, path));
+      const here: Walk = {
+        files: Chunk.fromIterable(
+          read.filter(({ entry }) => entry.type === "File").map(({ path }) => path),
+        ),
+        excluded: directories.filter(credential).length,
+        truncated: entries.some(({ full }) => full),
+      };
+      // The last subdirectory read is visited first, as from a stack of pending directories.
+      return yield* Effect.reduce(
+        directories.filter((path) => !credential(path)).toReversed(),
+        () => here,
+        (walked, child) =>
+          walked.truncated
+            ? Effect.succeed(walked)
+            : Effect.map(walk(child, listed + Chunk.size(walked.files)), (below) => ({
+                files: Chunk.appendAll(walked.files, below.files),
+                excluded: walked.excluded + below.excluded,
+                truncated: below.truncated,
+              })),
+      );
+    });
+  const walked = yield* walk(directory, 0);
+  return { ...walked, files: Chunk.toReadonlyArray(walked.files) };
 });
 
 /**
@@ -182,13 +194,6 @@ const walkFiles = Effect.fn("FileListing.walkFiles")(function* (
  * by a glob relative to that directory. Symlinks, `.git` and credential-looking files are left out;
  * a tracked file deleted from disk is not listed.
  */
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export const listProjectFiles: {
-  (
-    directory: string,
-    glob: string | undefined,
-  ): (root: string) => ReturnType<typeof listProjectFilesBody>;
-} & typeof listProjectFilesBody = EffectFunction.dual(3, listProjectFilesBody);
 export const listProjectFilesEffect = Effect.fn("FileListing.project")(function* (
   root: string,
   directory: string,
@@ -197,18 +202,14 @@ export const listProjectFilesEffect = Effect.fn("FileListing.project")(function*
   const fromGit = yield* gitFiles(root, directory);
   const walked = isTruthy(fromGit) ? undefined : yield* walkFiles(root, directory, "");
   const prefix = directory === "." ? "" : `${directory}/`;
-  let excluded = walked?.excluded ?? 0;
-  const kept: string[] = [];
-  for (const path of EffectArray.dedupe(fromGit ?? walked?.files ?? [])) {
-    if (!path.startsWith(prefix)) continue;
-    if (glob !== undefined && !matchesGlob(path.slice(prefix.length), glob)) continue;
-    if (path.split("/").some((segment) => segment.toLowerCase() === ".git")) continue;
-    if (isCredentialPath(path)) {
-      excluded++;
-      continue;
-    }
-    kept.push(path);
-  }
+  const listed = EffectArray.dedupe(fromGit?.paths ?? walked?.files ?? []).filter(
+    (path) =>
+      path.startsWith(prefix) &&
+      (glob === undefined || matchesGlob(path.slice(prefix.length), glob)) &&
+      !path.split("/").some((segment) => segment.toLowerCase() === ".git"),
+  );
+  const kept = listed.filter((path) => !isCredentialPath(path));
+  const excluded = (walked?.excluded ?? 0) + listed.length - kept.length;
   // A walk already saw regular files only. Git lists links and deleted files too, so check those,
   // many at a time.
   const fs = yield* nodeFileSystem;
@@ -224,52 +225,35 @@ export const listProjectFilesEffect = Effect.fn("FileListing.project")(function*
         { concurrency: statConcurrency },
       )).filter((path) => path !== null)
     : kept;
-  paths.sort();
   return {
-    paths,
+    paths: paths.toSorted(),
     source: isTruthy(fromGit) ? "git" : "walk",
     excluded,
-    truncated: walked?.truncated ?? false,
+    truncated: fromGit?.truncated ?? walked?.truncated ?? false,
   } satisfies FileListing;
 });
-
-function listProjectFilesBody(
-  root: string,
-  directory: string,
-  glob: string | undefined,
-): Promise<FileListing> {
-  return Effect.runPromise(listProjectFilesEffect(root, directory, glob));
-}
 
 /**
  * Every regular file below an outside `directory` (canonical, already validated), as absolute
  * paths, optionally filtered by a glob relative to it. Never uses Git ignore rules: outside
  * listings show what is on disk, minus links, `.git`, `node_modules` and credentials.
  */
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export const listOutsideFiles: {
-  (glob: string | undefined): (directory: string) => ReturnType<typeof listOutsideFilesBody>;
-} & typeof listOutsideFilesBody = EffectFunction.dual(2, listOutsideFilesBody);
 export const listOutsideFilesEffect = Effect.fn("FileListing.outside")(function* (
   directory: string,
   glob: string | undefined,
 ) {
   const walked = yield* walkFiles(directory, ".", directory);
-  let excluded = walked.excluded;
-  const paths: string[] = [];
-  for (const relative of walked.files) {
-    if (glob !== undefined && !matchesGlob(relative, glob)) continue;
-    const absolute = join(directory, relative);
-    if (isCredentialPath(absolute)) excluded++;
-    else paths.push(absolute);
-  }
-  paths.sort();
-  return { paths, source: "walk", excluded, truncated: walked.truncated } satisfies FileListing;
+  const listed = walked.files
+    .filter((relative) => glob === undefined || matchesGlob(relative, glob))
+    .map((relative) => join(directory, relative));
+  const paths = listed.filter((absolute) => !isCredentialPath(absolute));
+  return {
+    paths: paths.toSorted(),
+    source: "walk",
+    excluded: walked.excluded + listed.length - paths.length,
+    truncated: walked.truncated,
+  } satisfies FileListing;
 });
-
-function listOutsideFilesBody(directory: string, glob: string | undefined): Promise<FileListing> {
-  return Effect.runPromise(listOutsideFilesEffect(directory, glob));
-}
 
 export interface Snapshot extends FileListing {
   readonly id: string;
@@ -286,29 +270,30 @@ export const createSnapshots = (capacity = 32) =>
   Effect.gen(function* () {
     const services = yield* Effect.scoped(Layer.build(NodeCrypto.layer));
     const crypto = Context.get(services, Crypto.Crypto);
-    const runSync = Effect.runSyncWith(services);
-    const entries = MutableHashMap.empty<string, Snapshot>();
+    /** Oldest first; the snapshot just added is the newest. */
+    const entries = yield* Ref.make<ReadonlyArray<Snapshot>>([]);
     return {
-      add(root: string, directory: string, glob: string | undefined, listing: FileListing) {
+      add: Effect.fnUntraced(function* (
+        root: string,
+        directory: string,
+        glob: string | undefined,
+        listing: FileListing,
+      ) {
         const snapshot: Snapshot = {
-          id: runSync(crypto.randomUUIDv4()),
+          id: yield* crypto.randomUUIDv4(),
           root,
           directory,
           glob,
           ...listing,
         };
-        MutableHashMap.set(entries, snapshot.id, snapshot);
-        for (const id of MutableHashMap.keys(entries)) {
-          if (MutableHashMap.size(entries) <= capacity) break;
-          MutableHashMap.remove(entries, id);
-        }
+        yield* Ref.update(entries, (kept) => [...kept, snapshot].slice(-capacity));
         return snapshot;
-      },
+      }),
 
       /** A snapshot taken for this project root, or undefined when unknown or evicted. */
-      get(id: string, root: string) {
-        const snapshot = Option.getOrUndefined(MutableHashMap.get(entries, id));
-        return snapshot?.root === root ? snapshot : undefined;
-      },
+      get: (id: string, root: string) =>
+        Effect.map(Ref.get(entries), (kept) =>
+          kept.find((snapshot) => snapshot.id === id && snapshot.root === root),
+        ),
     };
   });

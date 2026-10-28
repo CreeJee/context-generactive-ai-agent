@@ -43,11 +43,15 @@ const unpack = Effect.fn("runtime.unpack")(function* (storageRoot: string) {
         ),
       (path) => fs.remove(path, { recursive: true, force: true }).pipe(Effect.ignore),
     );
-    for (const file of manifest.files) {
-      const target = join(staging, file);
-      yield* fs.makeDirectory(dirname(target), { recursive: true, mode: 0o700 });
-      yield* fs.writeFile(target, new Uint8Array(getRawAsset(`${runtimeFilePrefix}${file}`)));
-    }
+    yield* Effect.forEach(
+      manifest.files,
+      Effect.fnUntraced(function* (file) {
+        const target = join(staging, file);
+        yield* fs.makeDirectory(dirname(target), { recursive: true, mode: 0o700 });
+        yield* fs.writeFile(target, new Uint8Array(getRawAsset(`${runtimeFilePrefix}${file}`)));
+      }),
+      { discard: true },
+    );
     yield* fs.writeFileString(join(staging, completeMarker), "");
     yield* fs.remove(root, { recursive: true, force: true });
     const promoted = yield* fs.rename(staging, root).pipe(Effect.option);
@@ -57,9 +61,14 @@ const unpack = Effect.fn("runtime.unpack")(function* (storageRoot: string) {
         return yield* new Cause.UnknownError(new Error("runtime unpack failed"));
     }
   }
-  for (const entry of yield* fs.readDirectory(runtimeFolder))
-    if (hashFolder.test(entry) && entry !== manifest.hash)
-      yield* fs.remove(join(runtimeFolder, entry), { recursive: true, force: true });
+  const stale = (yield* fs.readDirectory(runtimeFolder)).filter(
+    (entry) => hashFolder.test(entry) && entry !== manifest.hash,
+  );
+  yield* Effect.forEach(
+    stale,
+    (entry) => fs.remove(join(runtimeFolder, entry), { recursive: true, force: true }),
+    { discard: true },
+  );
   return root;
 });
 

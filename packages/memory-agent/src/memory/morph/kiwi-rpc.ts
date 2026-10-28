@@ -5,7 +5,10 @@ import { Rpc, RpcGroup } from "effect/rpc";
 export const KiwiWorkerData = Schema.Struct({ modelDirectory: Schema.String });
 export type KiwiWorkerData = typeof KiwiWorkerData.Type;
 
-export class KiwiWorkerFailed extends Schema.TaggedError<KiwiWorkerFailed>()("KiwiWorkerFailed", {
+export class KiwiWorkerFailed extends Schema.TaggedError<
+  KiwiWorkerFailed,
+  { readonly brand: unique symbol }
+>()("KiwiWorkerFailed", {
   /**
    * `run`: one request failed and the worker stays. `load`: the model never loaded, and `lost`: the
    * worker or its transport is gone; the next request starts a new worker for both.

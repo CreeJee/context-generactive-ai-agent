@@ -1,6 +1,6 @@
 import { HashSet } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { Option, Schema } from "effect";
+import { Match, Option, Schema } from "effect";
 import { refsInArguments } from "../memory/refs.ts";
 import {
   branchOf,
@@ -56,9 +56,13 @@ const OutputPayload = Schema.Struct({
   call_id: Schema.String,
   output: Schema.Union([Schema.String, Schema.Unknown]),
 });
-const decodePayload = Schema.decodeUnknownOption(
-  Schema.Union([MessagePayload, FunctionCallPayload, CustomCallPayload, OutputPayload]),
-);
+const Payload = Schema.Union([
+  MessagePayload,
+  FunctionCallPayload,
+  CustomCallPayload,
+  OutputPayload,
+]);
+const decodePayload = Schema.decodeUnknownOption(Payload);
 
 const SessionLine = Schema.Struct({
   type: Schema.Literal("session_meta"),
@@ -102,82 +106,85 @@ const partsText = (parts: readonly { readonly text?: string | undefined }[]) =>
  */
 export const codexReader =
   (transcriptId: string): TranscriptReader =>
-  (line) => {
-    const decoded = Option.getOrUndefined(decodeLine(line));
-    if (!isTruthy(decoded)) return [];
+  (line) =>
+    Option.toArray(decodeLine(line)).flatMap((decoded) =>
+      Match.value(decoded).pipe(
+        Match.withReturnType<readonly TranscriptItem[]>(),
+        Match.discriminatorsExhaustive("type")({
+          session_meta: (decoded) => [
+            TranscriptItem.session({
+              externalId: decoded.payload.session_id,
+              cwd: decoded.payload.cwd,
+              startedAt: decoded.timestamp,
+              repository: isTruthy(decoded.payload.git)
+                ? {
+                    remoteUrl: decoded.payload.git.repository_url ?? null,
+                    commit: decoded.payload.git.commit_hash ?? null,
+                  }
+                : null,
+              branch: branchOf(decoded.payload.git?.branch),
+            }),
+          ],
+          response_item: (decoded) =>
+            Option.toArray(decodePayload(decoded.payload)).flatMap((payload) =>
+              payloadItems(payload, `${transcriptId}:${decoded.ordinal}`, decoded.timestamp),
+            ),
+        }),
+      ),
+    );
 
-    switch (decoded.type) {
-      case "session_meta":
-        return [
-          TranscriptItem.session({
-            externalId: decoded.payload.session_id,
-            cwd: decoded.payload.cwd,
-            startedAt: decoded.timestamp,
-            repository: isTruthy(decoded.payload.git)
-              ? {
-                  remoteUrl: decoded.payload.git.repository_url ?? null,
-                  commit: decoded.payload.git.commit_hash ?? null,
-                }
-              : null,
-            branch: branchOf(decoded.payload.git?.branch),
-          }),
-        ];
-      case "response_item": {
-        const payload = Option.getOrUndefined(decodePayload(decoded.payload));
-        if (!isTruthy(payload)) return [];
-        const at = decoded.timestamp;
-        const externalId = `${transcriptId}:${decoded.ordinal}`;
-        switch (payload.type) {
-          case "message":
-          case "agent_message": {
-            // `agent_message` is one Codex agent talking to another; it answers like an assistant.
-            const role =
-              payload.type === "message" && payload.role === "user" ? "user" : "assistant";
-            if (
-              payload.type === "message" &&
-              payload.role !== "user" &&
-              payload.role !== "assistant"
-            )
-              return [];
-            const text = partsText(payload.content);
-            if (text.length === 0 || (role === "user" && isInjectedText(text, injected))) return [];
-            return [TranscriptItem.message({ role, externalId, at, text })];
-          }
-          case "function_call":
-            return [
-              TranscriptItem.tool_call({
-                externalId,
-                at,
-                toolName: payload.name,
-                toolCallId: payload.call_id,
-                text: `${payload.name} ${payload.arguments}`,
-                refs: refsInArguments(payload.arguments),
-              }),
-            ];
-          case "custom_tool_call":
-            return [
-              TranscriptItem.tool_call({
-                externalId,
-                at,
-                toolName: payload.name,
-                toolCallId: payload.call_id,
-                text: `${payload.name} ${payload.input}`,
-                refs: [],
-              }),
-            ];
-          case "function_call_output":
-          case "custom_tool_call_output":
-            return [
-              TranscriptItem.tool_result({
-                externalId,
-                at,
-                toolCallId: payload.call_id,
-                // A rollout records what the tool returned, not whether the CLI treated it as an error.
-                ok: true,
-                text: isText(payload.output) ? payload.output : JSON.stringify(payload.output),
-              }),
-            ];
-        }
-      }
-    }
+/** What one `response_item` carries: a message, a tool call, or a tool's output. */
+const payloadItems = (
+  payload: typeof Payload.Type,
+  externalId: string,
+  at: string,
+): readonly TranscriptItem[] => {
+  const message = (payload: typeof MessagePayload.Type) => {
+    // `agent_message` is one Codex agent talking to another; it answers like an assistant.
+    const role = payload.type === "message" && payload.role === "user" ? "user" : "assistant";
+    if (payload.type === "message" && payload.role !== "user" && payload.role !== "assistant")
+      return [];
+    const text = partsText(payload.content);
+    if (text.length === 0 || (role === "user" && isInjectedText(text, injected))) return [];
+    return [TranscriptItem.message({ role, externalId, at, text })];
   };
+  const output = (payload: typeof OutputPayload.Type) => [
+    TranscriptItem.tool_result({
+      externalId,
+      at,
+      toolCallId: payload.call_id,
+      // A rollout records what the tool returned, not whether the CLI treated it as an error.
+      ok: true,
+      text: isText(payload.output) ? payload.output : JSON.stringify(payload.output),
+    }),
+  ];
+  return Match.value(payload).pipe(
+    Match.withReturnType<readonly TranscriptItem[]>(),
+    Match.discriminatorsExhaustive("type")({
+      message,
+      agent_message: message,
+      function_call: (payload) => [
+        TranscriptItem.tool_call({
+          externalId,
+          at,
+          toolName: payload.name,
+          toolCallId: payload.call_id,
+          text: `${payload.name} ${payload.arguments}`,
+          refs: refsInArguments(payload.arguments),
+        }),
+      ],
+      custom_tool_call: (payload) => [
+        TranscriptItem.tool_call({
+          externalId,
+          at,
+          toolName: payload.name,
+          toolCallId: payload.call_id,
+          text: `${payload.name} ${payload.input}`,
+          refs: [],
+        }),
+      ],
+      function_call_output: output,
+      custom_tool_call_output: output,
+    }),
+  );
+};

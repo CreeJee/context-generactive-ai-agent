@@ -36,7 +36,7 @@ export function action({ request, params }: Route.ActionArgs) {
         if (permissionMode !== undefined)
           project = yield* projects.setPermissionMode(project.id, permissionMode);
         if (hidden !== undefined) project = yield* projects.setHidden(project.id, hidden);
-        (yield* AppEvents).publishGlobal("projects");
+        yield* (yield* AppEvents).publishGlobal("projects");
         return Response.json(project);
       }).pipe(
         Effect.catchTag("ProjectNotFound", () =>

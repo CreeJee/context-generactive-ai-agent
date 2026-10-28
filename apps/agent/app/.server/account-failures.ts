@@ -1,42 +1,16 @@
 import type { Cause } from "effect";
-import { Effect, Function as EffectFunction, Match, Schema } from "effect";
-import { OAuthHarnessError, OAuthProfileRejected, OAuthProfileStoreFailed } from "memory-agent";
-
-/**
- * The account login manager's Promise rejected with something other than its own typed failures.
- * Only the operation is kept; the rejection can hold keychain or provider text.
- */
-export class AccountLoginFailed extends Schema.TaggedError<AccountLoginFailed>()(
-  "AccountLoginFailed",
-  { operation: Schema.Literals(["start", "cancel", "settle"]) },
-) {}
-
-const isManagerFailure = Schema.is(
-  Schema.Union([OAuthProfileRejected, OAuthProfileStoreFailed, OAuthHarnessError]),
-);
-
-/**
- * Runs one of the account login manager's Promise operations. The manager rejects with its typed
- * failure, which is recovered here so the route can answer it by tag.
- */
-export const accountLogin: {
-  <A>(
-    run: () => Promise<A>,
-  ): (operation: AccountLoginFailed["operation"]) => ReturnType<typeof accountLoginBody<A>>;
-} & typeof accountLoginBody = EffectFunction.dual(2, accountLoginBody);
-function accountLoginBody<A>(operation: AccountLoginFailed["operation"], run: () => Promise<A>) {
-  return Effect.tryPromise({
-    try: run,
-    catch: (cause) => (isManagerFailure(cause) ? cause : AccountLoginFailed.make({ operation })),
-  });
-}
+import { Effect, Match } from "effect";
+import type {
+  OAuthHarnessError,
+  OAuthProfileRejected,
+  OAuthProfileStoreFailed,
+} from "memory-agent";
 
 /** Every expected failure the subscription account routes answer. */
 export type AccountRouteFailure =
   | OAuthProfileRejected
   | OAuthProfileStoreFailed
   | OAuthHarnessError
-  | AccountLoginFailed
   /** The only other promise these routes await is reading the request body. */
   | Cause.UnknownError;
 
@@ -64,7 +38,6 @@ export const accountFailureResponse = (failure: AccountRouteFailure): Response =
     OAuthProfileStoreFailed: () => reply(503, "account_store_unavailable"),
     OAuthHarnessError: ({ code }) =>
       code === "login_in_progress" ? reply(409, code) : reply(502, "account_login_failed"),
-    AccountLoginFailed: () => reply(500, "account_action_failed"),
     UnknownError: () => reply(400, "invalid_json"),
   });
 

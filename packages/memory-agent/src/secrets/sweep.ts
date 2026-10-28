@@ -3,7 +3,17 @@ import { ignoreLogged } from "../runtime/logged-failures.ts";
 import { DateTime, Semaphore } from "effect";
 import { NodeWorker } from "@effect/platform-node";
 import { Worker } from "node:worker_threads";
-import { Context, Data, Effect, Layer, Option, Schema } from "effect";
+import {
+  Array as Arr,
+  Context,
+  Data,
+  Effect,
+  Layer,
+  Number as EffectNumber,
+  Option,
+  Schema,
+  Stream,
+} from "effect";
 import { RpcClient } from "effect/rpc";
 import { Nodes } from "../memory/nodes.ts";
 import { SqlClient, SqlSchema } from "effect/sql";
@@ -112,9 +122,11 @@ type Redact = (
  * the checks it needs stay loaded only while it runs.
  */
 const redactionWorker = Effect.gen(function* () {
-  const workers = NodeWorker.layer(
-    () => new Worker(runtimeWorker("redact-worker"), runtimeWorkerOptions({})),
+  const file = yield* runtimeWorker("redact-worker").pipe(
+    Effect.mapError(() => RedactionFailed.make({ reason: "worker-lost" })),
   );
+  const options = yield* runtimeWorkerOptions({});
+  const workers = NodeWorker.layer(() => new Worker(file, options));
   const protocol = yield* Layer.build(
     RpcClient.layerProtocolWorker({ size: 1, concurrency: 1 }).pipe(Layer.provide(workers)),
   );
@@ -160,7 +172,10 @@ export interface SweepProgress {
 }
 
 /** The sweep could not read or record its progress; it resumes from the last record next time. */
-export class SweepStoreFailed extends Schema.TaggedError<SweepStoreFailed>()("SweepStoreFailed", {
+export class SweepStoreFailed extends Schema.TaggedError<
+  SweepStoreFailed,
+  { readonly brand: unique symbol }
+>()("SweepStoreFailed", {
   cause: Schema.Defect(),
 }) {}
 const stored = <A, E>(effect: Effect.Effect<A, E>) =>
@@ -243,13 +258,14 @@ const make = (running: boolean) =>
         // being dropped here and its text changing.
         yield* indexer.exclusive(
           Effect.gen(function* () {
-            if (changed.length > 0) {
+            yield* Effect.when(
               // Saved before the database commits, as the indexer does: a crash in between leaves
               // the index and the table disagreeing on size, which reopening detects and rebuilds.
-              yield* vectors.remove(changed.map((row) => row.seq));
-              yield* vectors.save;
-            }
-            if (changed.length > 0) nodes.invalidateResultPages();
+              vectors
+                .remove(changed.map((row) => row.seq))
+                .pipe(Effect.andThen(vectors.save), Effect.andThen(nodes.invalidateResultPages)),
+              Effect.succeed(changed.length > 0),
+            );
             yield* stored(
               Effect.forEach(changed, rewriteNode, { discard: true }).pipe(sql.withTransaction),
             );
@@ -368,18 +384,29 @@ const make = (running: boolean) =>
     const sweep = (redact: Redact, target: Target) =>
       Effect.gen(function* () {
         const start = yield* stored(progressOf(target));
-        let after = resumesFrom(target, start.after);
-        let hidden = start.hidden;
-        let sweptNow = 0;
-        for (;;) {
-          const batch = yield* batchOf(redact, target, after);
-          after = batch.last;
-          hidden += batch.hidden;
-          sweptNow += batch.hidden;
-          const finished = batch.rows < batchSize;
-          yield* stored(saveProgress(target, after, finished, hidden));
-          if (finished) return sweptNow;
-        }
+        // A short batch is the table's last.
+        const { sweptNow } = yield* Stream.paginate(resumesFrom(target, start.after), (after) =>
+          Effect.map(
+            batchOf(redact, target, after),
+            (batch) =>
+              [
+                Arr.of(batch),
+                batch.rows < batchSize ? Option.none<number>() : Option.some(batch.last),
+              ] as const,
+          ),
+        ).pipe(
+          Stream.runFoldEffect(
+            () => ({ hidden: start.hidden, sweptNow: 0 }),
+            (total, batch) => {
+              const hidden = total.hidden + batch.hidden;
+              return Effect.as(
+                stored(saveProgress(target, batch.last, batch.rows < batchSize, hidden)),
+                { hidden, sweptNow: total.sweptNow + batch.hidden },
+              );
+            },
+          ),
+        );
+        return sweptNow;
       });
 
     /**
@@ -387,26 +414,30 @@ const make = (running: boolean) =>
      * again afterwards, from the hidden text. Returns how many nodes changed.
      */
     const run = Effect.gen(function* () {
-      let changedNodes = 0;
-      yield* Effect.scoped(
+      const changedNodes = yield* Effect.scoped(
         Effect.gen(function* () {
           const redact = yield* redactionWorker;
-          for (const target of targets) {
-            const hidden = yield* sweep(redact, target);
-            if (Target.$is("nodes")(target)) changedNodes = hidden;
-          }
+          const hidden = yield* Effect.forEach(targets, (target) =>
+            Effect.map(sweep(redact, target), (count) => (Target.$is("nodes")(target) ? count : 0)),
+          );
+          return EffectNumber.sumAll(hidden);
         }),
       );
-      if (changedNodes > 0)
+      yield* Effect.when(
         // The hidden text is already stored; nodes left unindexed are indexed by the next pass.
-        yield* Effect.andThen(indexer.indexAll(), indexer.analyzeAll()).pipe(
+        Effect.andThen(indexer.indexAll(), indexer.analyzeAll()).pipe(
           ignoreLogged("secret_sweep_reindex_failed"),
-        );
+        ),
+        Effect.succeed(changedNodes > 0),
+      );
       return changedNodes;
     }).pipe(onePassAtATime.withPermits(1));
 
     // Progress is stored per target; the next start resumes a sweep that failed.
-    if (running) yield* Effect.forkScoped(run.pipe(ignoreLogged("secret_sweep_failed")));
+    yield* Effect.when(
+      Effect.forkScoped(run.pipe(ignoreLogged("secret_sweep_failed"))),
+      Effect.succeed(running),
+    );
 
     return {
       run,

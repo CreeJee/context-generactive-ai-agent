@@ -1,9 +1,7 @@
-import { runNativeEffect } from "../runtime/native-effect.ts";
 import { isTruthy } from "../truthy.ts";
-import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
-import { Effect, Option, Schema } from "effect";
+import { Array as Arr, Effect, Match, Option, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
-import { toToolSchema } from "./schema.ts";
+import { runTool, type RunTool } from "./run-tool.ts";
 
 const ReportBinding = Schema.Struct({
   sourceSessionId: Schema.String,
@@ -72,18 +70,20 @@ const ReportRow = Schema.Struct({
 });
 const reportRows = Schema.decodeUnknownEffect(Schema.Array(ReportRow));
 
-/** Small, failure-first snapshot for the first diagnostic request. Source text is untrusted data. */
-export const initialReportEvidence = Effect.fnUntraced(function* <E, TraceE>(
-  reportSessionId: string,
-  projectId: string,
-  redact: Redact<E>,
-  taskTree: Effect.Effect<ReadonlyArray<TraceItem>, TraceE>,
-) {
-  const sql = yield* SqlClient.SqlClient;
-  const binding = yield* reportBinding(reportSessionId, projectId);
-  if (Option.isNone(binding))
-    return "원본 바인딩을 확인할 수 없음; 증상만으로 계속 진행하고 추측을 사실로 적지 마세요.";
-  const { sourceSessionId } = binding.value;
+/** {@link initialReportEvidence} for a report still bound to `sourceSessionId`. */
+const sourceSnapshot = Effect.fnUntraced(function* <E, TraceE>({
+  sql,
+  projectId,
+  sourceSessionId,
+  redact,
+  taskTree,
+}: {
+  readonly sql: SqlClient.SqlClient;
+  readonly projectId: string;
+  readonly sourceSessionId: string;
+  readonly redact: Redact<E>;
+  readonly taskTree: Effect.Effect<ReadonlyArray<TraceItem>, TraceE>;
+}) {
   // A failed section is reported as unverified evidence; the snapshot still covers the others.
   const collect = <LoadE, R>(
     name: keyof typeof INITIAL_LIMITS,
@@ -157,8 +157,41 @@ export const initialReportEvidence = Effect.fnUntraced(function* <E, TraceE>(
   );
 });
 
-/** The trace callback must already be scoped to the source session; no session id is passed to it. */
-export const reportToolsForSession = Effect.fnUntraced(function* <E, TraceE>(
+/** Small, failure-first snapshot for the first diagnostic request. Source text is untrusted data. */
+export const initialReportEvidence = Effect.fnUntraced(function* <E, TraceE>(
+  reportSessionId: string,
+  projectId: string,
+  redact: Redact<E>,
+  taskTree: Effect.Effect<ReadonlyArray<TraceItem>, TraceE>,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  const binding = yield* reportBinding(reportSessionId, projectId);
+  return yield* Option.match(binding, {
+    onNone: () =>
+      Effect.succeed(
+        "원본 바인딩을 확인할 수 없음; 증상만으로 계속 진행하고 추측을 사실로 적지 마세요.",
+      ),
+    onSome: ({ sourceSessionId }) =>
+      sourceSnapshot({ sql, projectId, sourceSessionId, redact, taskTree }),
+  });
+});
+
+const listReportEvidence = {
+  name: "list_report_evidence",
+  description:
+    "List bounded, redacted evidence from this report's bound source session only. Sections: runs, approvals, transcript, calls, trace. Offset is capped at 200.",
+  parameters: ListInput,
+} as const;
+
+const readReportItem = {
+  name: "read_report_item",
+  description:
+    "Read one bounded, redacted run, approval, evidence node or Work Trace item belonging to this report's source. Never executes a tool.",
+  parameters: ReadInput,
+} as const;
+
+/** The report tools' calls, when the report is still bound to its source. */
+const reportCalls = Effect.fnUntraced(function* <E, TraceE>(
   reportSessionId: string,
   projectId: string,
   redact: Redact<E>,
@@ -166,8 +199,21 @@ export const reportToolsForSession = Effect.fnUntraced(function* <E, TraceE>(
 ) {
   const sql = yield* SqlClient.SqlClient;
   const found = yield* reportBinding(reportSessionId, projectId);
-  if (Option.isNone(found)) return [];
-  const bound = found.value;
+  return Option.map(found, (bound) => boundReportCalls({ sql, bound, redact, taskTree }));
+});
+
+const boundReportCalls = <E, TraceE>({
+  sql,
+  bound,
+  redact,
+  taskTree,
+}: {
+  readonly sql: SqlClient.SqlClient;
+  readonly bound: ReportBinding;
+  readonly redact: Redact<E>;
+  readonly taskTree: Effect.Effect<ReadonlyArray<TraceItem>, TraceE>;
+}) => {
+  const { reportSessionId, projectId } = bound;
   const current = reportBinding(reportSessionId, projectId).pipe(
     Effect.map(
       Option.exists(
@@ -191,139 +237,176 @@ export const reportToolsForSession = Effect.fnUntraced(function* <E, TraceE>(
     ),
   );
   const absent = { error: "not_found" as const };
-  const listed = (
-    section: Exclude<(typeof ListInput.Type)["section"], "trace">,
-    offset: number,
-  ) => {
-    switch (section) {
-      case "runs":
-        return sql`SELECT run_id AS id, status, started_at AS time, error AS text, NULL AS toolCallId
+  /** `found` while the report is still bound to its source, and `absent` once it is not. */
+  const whileBound = <A, E2>(found: Effect.Effect<A, E2>) =>
+    Effect.flatMap(current, (still): Effect.Effect<A | typeof absent, E2> =>
+      still ? found : Effect.succeed(absent),
+    );
+  const nodes = (kinds: string, offset: number) =>
+    sql`SELECT id, kind AS status, created_at AS time, text,
+      json_extract(detail, '$.toolCallId') AS toolCallId FROM nodes
+      WHERE session_id = ${bound.sourceSessionId} AND project_id = ${bound.projectId}
+        AND kind IN (${sql.literal(kinds)})
+      ORDER BY seq DESC LIMIT ${PAGE + 1} OFFSET ${offset}`;
+  const listed = (section: Exclude<(typeof ListInput.Type)["section"], "trace">, offset: number) =>
+    Match.value(section).pipe(
+      Match.when(
+        "runs",
+        () => sql`SELECT run_id AS id, status, started_at AS time, error AS text, NULL AS toolCallId
           FROM chat_runs WHERE thread_id = ${bound.sourceSessionId}
-          ORDER BY started_at DESC, run_id DESC LIMIT ${PAGE + 1} OFFSET ${offset}`;
-      case "approvals":
-        return sql`SELECT id, decision AS status, created_at AS time, reason AS text,
+          ORDER BY started_at DESC, run_id DESC LIMIT ${PAGE + 1} OFFSET ${offset}`,
+      ),
+      Match.when(
+        "approvals",
+        () => sql`SELECT id, decision AS status, created_at AS time, reason AS text,
           tool_call_id AS toolCallId FROM permission_reviews WHERE session_id = ${bound.sourceSessionId}
-          ORDER BY id DESC LIMIT ${PAGE + 1} OFFSET ${offset}`;
-      case "calls":
-      case "transcript":
-        return sql`SELECT id, kind AS status, created_at AS time, text,
-          json_extract(detail, '$.toolCallId') AS toolCallId FROM nodes
-          WHERE session_id = ${bound.sourceSessionId} AND project_id = ${bound.projectId}
-            AND kind IN (${sql.literal(section === "calls" ? "'tool_call','tool_result'" : "'user','assistant'")})
-          ORDER BY seq DESC LIMIT ${PAGE + 1} OFFSET ${offset}`;
-    }
-  };
-  const item = (section: Exclude<(typeof ReadInput.Type)["section"], "trace">, id: string) => {
-    switch (section) {
-      case "run":
-        return sql`SELECT run_id AS id, status, started_at AS time, error AS text, NULL AS toolCallId
-          FROM chat_runs WHERE run_id = ${id} AND thread_id = ${bound.sourceSessionId}`;
-      case "approval":
-        return sql`SELECT id, decision AS status, created_at AS time,
+          ORDER BY id DESC LIMIT ${PAGE + 1} OFFSET ${offset}`,
+      ),
+      Match.when("calls", () => nodes("'tool_call','tool_result'", offset)),
+      Match.when("transcript", () => nodes("'user','assistant'", offset)),
+      Match.exhaustive,
+    );
+  const item = (section: Exclude<(typeof ReadInput.Type)["section"], "trace">, id: string) =>
+    Match.value(section).pipe(
+      Match.when(
+        "run",
+        () => sql`SELECT run_id AS id, status, started_at AS time, error AS text, NULL AS toolCallId
+          FROM chat_runs WHERE run_id = ${id} AND thread_id = ${bound.sourceSessionId}`,
+      ),
+      Match.when(
+        "approval",
+        () => sql`SELECT id, decision AS status, created_at AS time,
           reason || '\nTool: ' || tool_name || '\nInput: ' || input AS text,
           tool_call_id AS toolCallId FROM permission_reviews
-          WHERE id = ${Number(id)} AND session_id = ${bound.sourceSessionId}`;
-      case "node":
-        return sql`SELECT id, kind AS status, created_at AS time, text,
+          WHERE id = ${Number(id)} AND session_id = ${bound.sourceSessionId}`,
+      ),
+      Match.when(
+        "node",
+        () => sql`SELECT id, kind AS status, created_at AS time, text,
           json_extract(detail, '$.toolCallId') AS toolCallId FROM nodes
           WHERE id = ${id} AND session_id = ${bound.sourceSessionId} AND project_id = ${bound.projectId}
-            AND kind IN ('user','assistant','tool_call','tool_result')`;
-    }
-  };
-  const list = toolDefinition({
-    name: "list_report_evidence",
-    description:
-      "List bounded, redacted evidence from this report's bound source session only. Sections: runs, approvals, transcript, calls, trace. Offset is capped at 200.",
-    inputSchema: toToolSchema(ListInput),
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  }).server((input) =>
-    runNativeEffect(
-      Effect.gen(function* () {
-        const { section, offset } = yield* Schema.decodeEffect(ListInput)(input);
-        if (!(yield* current)) return absent;
-        if (section === "trace") {
-          const all = yield* traces;
-          const items = all.slice(offset, offset + PAGE);
-          return {
-            section,
-            items: yield* Effect.forEach(
-              items,
-              (item) =>
-                Effect.gen(function* () {
-                  return {
-                    id: item.id,
-                    status: item.status,
-                    time: item.createdAt,
-                    toolCallId: item.parentToolCallId,
-                    ...(yield* limited(item.title)),
-                  };
-                }),
-              { concurrency: "unbounded" },
-            ),
-            nextOffset: all.length > offset + PAGE && offset + PAGE <= 200 ? offset + PAGE : null,
-          };
-        }
-        const rows = yield* listed(section, offset).pipe(Effect.flatMap(reportRows));
-        return {
-          section,
-          items: yield* Effect.forEach(
-            rows.slice(0, PAGE),
-            (row) =>
-              Effect.gen(function* () {
-                return {
-                  id: String(row.id),
-                  status: row.status,
-                  time: row.time,
-                  toolCallId: row.toolCallId,
-                  ...(yield* limited(row.text)),
-                };
-              }),
-            { concurrency: "unbounded" },
+            AND kind IN ('user','assistant','tool_call','tool_result')`,
+      ),
+      Match.exhaustive,
+    );
+  const listTraces = (offset: number) =>
+    Effect.gen(function* () {
+      const all = yield* traces;
+      const items = all.slice(offset, offset + PAGE);
+      return {
+        section: "trace" as const,
+        items: yield* Effect.forEach(
+          items,
+          (item) =>
+            Effect.gen(function* () {
+              return {
+                id: item.id,
+                status: item.status,
+                time: item.createdAt,
+                toolCallId: item.parentToolCallId,
+                ...(yield* limited(item.title)),
+              };
+            }),
+          { concurrency: "unbounded" },
+        ),
+        nextOffset: all.length > offset + PAGE && offset + PAGE <= 200 ? offset + PAGE : null,
+      };
+    });
+  const listRows = (
+    section: Exclude<(typeof ListInput.Type)["section"], "trace">,
+    offset: number,
+  ) =>
+    Effect.gen(function* () {
+      const rows = yield* listed(section, offset).pipe(Effect.flatMap(reportRows));
+      return {
+        section,
+        items: yield* Effect.forEach(
+          rows.slice(0, PAGE),
+          (row) =>
+            Effect.gen(function* () {
+              return {
+                id: String(row.id),
+                status: row.status,
+                time: row.time,
+                toolCallId: row.toolCallId,
+                ...(yield* limited(row.text)),
+              };
+            }),
+          { concurrency: "unbounded" },
+        ),
+        nextOffset: rows.length > PAGE && offset + PAGE <= 200 ? offset + PAGE : null,
+      };
+    });
+  const list = ({ section, offset }: typeof ListInput.Type) =>
+    whileBound(
+      Match.value(section).pipe(
+        Match.when("trace", () => listTraces(offset)),
+        Match.orElse((table) => listRows(table, offset)),
+      ),
+    );
+  const readTrace = (id: string) =>
+    Effect.gen(function* () {
+      const found = Arr.findFirst(yield* traces, (entry) => entry.id === id);
+      return yield* Option.match(found, {
+        onNone: () => Effect.succeed(absent),
+        onSome: (item) =>
+          Effect.map(
+            limited([item.title, item.request, item.latestActivity ?? ""].join("\n")),
+            (text) => ({
+              id,
+              section: "trace" as const,
+              status: item.status,
+              time: item.createdAt,
+              toolCallId: item.parentToolCallId,
+              ...text,
+            }),
           ),
-          nextOffset: rows.length > PAGE && offset + PAGE <= 200 ? offset + PAGE : null,
-        };
-      }),
-    ),
-  );
-  const read = toolDefinition({
-    name: "read_report_item",
-    description:
-      "Read one bounded, redacted run, approval, evidence node or Work Trace item belonging to this report's source. Never executes a tool.",
-    inputSchema: toToolSchema(ReadInput),
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  }).server((input) =>
-    runNativeEffect(
-      Effect.gen(function* () {
-        const { section, id } = yield* Schema.decodeEffect(ReadInput)(input);
-        if (!(yield* current)) return absent;
-        if (section === "trace") {
-          const item = (yield* traces).find((entry) => entry.id === id);
-          if (!isTruthy(item)) return absent;
-          return {
-            id,
+      });
+    });
+  const readRow = (section: Exclude<(typeof ReadInput.Type)["section"], "trace">, id: string) =>
+    Effect.gen(function* () {
+      const rows = yield* item(section, id).pipe(Effect.flatMap(reportRows));
+      return yield* Option.match(Arr.head(rows), {
+        onNone: () => Effect.succeed(absent),
+        onSome: (row) =>
+          Effect.map(limited(row.text), (text) => ({
+            id: String(row.id),
             section,
-            status: item.status,
-            time: item.createdAt,
-            toolCallId: item.parentToolCallId,
-            ...(yield* limited([item.title, item.request, item.latestActivity ?? ""].join("\n"))),
-          };
-        }
-        // Numeric ids are canonicalized to prevent accepting prefixes or coercing arbitrary ids.
-        if (section === "approval" && (!/^[1-9]\d*$/.test(id) || !Number.isSafeInteger(Number(id))))
-          return absent;
-        const [row] = yield* item(section, id).pipe(Effect.flatMap(reportRows));
-        if (!isTruthy(row)) return absent;
-        return {
-          id: String(row.id),
-          section,
-          status: row.status,
-          time: row.time,
-          toolCallId: row.toolCallId,
-          ...(yield* limited(row.text)),
-        };
-      }),
-    ),
-  );
-  const tools: AnyServerTool[] = [list, read];
-  return tools;
+            status: row.status,
+            time: row.time,
+            toolCallId: row.toolCallId,
+            ...text,
+          })),
+      });
+    });
+  // Numeric ids are canonicalized to prevent accepting prefixes or coercing arbitrary ids.
+  const canonical = (section: (typeof ReadInput.Type)["section"], id: string) =>
+    section !== "approval" || (/^[1-9]\d*$/.test(id) && Number.isSafeInteger(Number(id)));
+  const read = ({ section, id }: typeof ReadInput.Type) =>
+    whileBound(
+      Match.value(section).pipe(
+        Match.when("trace", () => readTrace(id)),
+        Match.orElse((table) =>
+          canonical(table, id) ? readRow(table, id) : Effect.succeed(absent),
+        ),
+      ),
+    );
+  return { list, read };
+};
+
+/** The trace callback must already be scoped to the source session; no session id is passed to it. */
+export const reportRunToolsForSession = Effect.fnUntraced(function* <E, TraceE>(
+  reportSessionId: string,
+  projectId: string,
+  redact: Redact<E>,
+  taskTree: Effect.Effect<ReadonlyArray<TraceItem>, TraceE>,
+) {
+  const calls = yield* reportCalls(reportSessionId, projectId, redact, taskTree);
+  return Option.match(calls, {
+    onNone: (): Array<RunTool> => [],
+    onSome: ({ list, read }) => [
+      runTool({ ...listReportEvidence, handler: list }),
+      runTool({ ...readReportItem, handler: read }),
+    ],
+  });
 });

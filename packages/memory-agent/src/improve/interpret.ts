@@ -1,32 +1,21 @@
-import { chat } from "@tanstack/ai";
 import { AuthConnectionState } from "../providers/contracts.ts";
-import {
-  Cause,
-  Context,
-  Crypto,
-  Duration,
-  Effect,
-  Layer,
-  Option,
-  Ref,
-  Schema,
-  Stream,
-} from "effect";
+import { Context, Crypto, Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
+import { singleAnswerParts } from "../model/single-call.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import { type ImprovementItem, ItemInterpretation } from "./contracts.ts";
 
-export class InterpretationUnavailable extends Schema.TaggedError<InterpretationUnavailable>()(
-  "InterpretationUnavailable",
-  {
-    /**
-     * `model_unavailable`: no model is selected, or its provider is not signed in or cannot be
-     * resolved. `model_unreachable`: model calls kept failing or went silent in a row, so the
-     * server is taken to be down rather than the items being at fault.
-     */
-    reason: Schema.Literals(["model_unavailable", "model_unreachable"]),
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {}
+export class InterpretationUnavailable extends Schema.TaggedError<
+  InterpretationUnavailable,
+  { readonly brand: unique symbol }
+>()("InterpretationUnavailable", {
+  /**
+   * `model_unavailable`: no model is selected, or its provider is not signed in or cannot be
+   * resolved. `model_unreachable`: model calls kept failing or went silent in a row, so the
+   * server is taken to be down rather than the items being at fault.
+   */
+  reason: Schema.Literals(["model_unavailable", "model_unreachable"]),
+  cause: Schema.optional(Schema.Defect()),
+}) {}
 
 export const interpretationInstructions = `You review evidence gathered from one developer's use of coding agents in one repository.
 Decide whether it shows a recurring problem worth fixing in that repository, and if so, how to stop it.
@@ -80,18 +69,6 @@ const silenceLimit = Duration.seconds(60);
 const failuresInARow = 2;
 const maxText = 800;
 
-/**
- * The iterable without `return`. A stream awaits `return` when it ends early, but an async
- * generator's `return` waits behind its pending `next`, which only the abort ends, and the abort
- * runs after the stream: with `return` a silent call would never end.
- */
-const withoutReturn = <A>(iterable: AsyncIterable<A>): AsyncIterable<A> => ({
-  [Symbol.asyncIterator]: () => {
-    const iterator = iterable[Symbol.asyncIterator]();
-    return { next: () => iterator.next() };
-  },
-});
-
 /** Strips a code fence the model may add despite the instructions, then decodes. */
 export const parseInterpretation = (answer: string) =>
   Schema.decodeEffect(Answer)(
@@ -128,46 +105,38 @@ const make = Effect.gen(function* () {
    * instead of every item.
    */
   const model = Effect.gen(function* () {
-    const selection = yield* active.selected.pipe(Effect.mapError(unavailable));
-    if (selection === null) return yield* unavailable(null);
+    const selection = yield* active.selected.pipe(
+      Effect.mapError(unavailable),
+      Effect.flatMap((selected) =>
+        Effect.fromOption(Option.fromNullishOr(selected), () => unavailable(null)),
+      ),
+    );
     const auth = yield* active.auth(selection);
-    if (!AuthConnectionState.$is("signed-in")(auth)) return yield* unavailable(null);
+    yield* Effect.when(
+      Effect.fail(unavailable(null)),
+      Effect.succeed(!AuthConnectionState.$is("signed-in")(auth)),
+    );
     const { services } = yield* active.resolve(selection).pipe(Effect.mapError(unavailable));
-    const adapter = services.runtime.adapter(selection);
     // Per scan: a later scan starts trusting the server again.
     const consecutiveFailures = yield* Ref.make(0);
 
     /** The answer's text, streamed so silence can be told from a long answer. */
     const answer = (item: ImprovementItem, threadId: string) =>
-      Effect.acquireRelease(
-        Effect.sync(() => new AbortController()),
-        (controller) => Effect.sync(() => controller.abort()),
-      ).pipe(
-        Effect.flatMap((controller) =>
-          Stream.fromAsyncIterable(
-            withoutReturn(
-              chat({
-                adapter,
-                messages: [{ role: "user", content: interpretationPrompt(item) }],
-                systemPrompts: [interpretationInstructions],
-                threadId,
-                abortController: controller,
-                stream: true,
-              }),
-            ),
-            (cause) => new Cause.UnknownError(cause),
-          ).pipe(
-            Stream.timeoutOrElse({
-              duration: silenceLimit,
-              orElse: () => Stream.fail("silent" as const),
-            }),
-            Stream.runFold(
-              () => "",
-              (text, chunk) => (chunk.type === "TEXT_MESSAGE_CONTENT" ? text + chunk.delta : text),
-            ),
-          ),
+      singleAnswerParts({
+        runtime: services.runtime,
+        selection,
+        threadId,
+        system: interpretationInstructions,
+        prompt: interpretationPrompt(item),
+      }).pipe(
+        Stream.timeoutOrElse({
+          duration: silenceLimit,
+          orElse: () => Stream.fail("silent" as const),
+        }),
+        Stream.runFold(
+          () => "",
+          (text, part) => (part.type === "text-delta" ? text + part.delta : text),
         ),
-        Effect.scoped,
       );
 
     /**

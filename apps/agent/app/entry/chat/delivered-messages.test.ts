@@ -1,14 +1,18 @@
-import type { UIMessage } from "@tanstack/ai-react";
+import type { ChatMessage } from "memory-agent/chat-api";
 import { type QueuedMessage, QueueItemState } from "memory-agent/definitions";
 import { describe, expect, test } from "vite-plus/test";
 import { missingDeliveredMessages } from "./delivered-messages";
 
-// SAFETY: this unit only reads id, role and text parts; both synthetic fixtures provide them.
-const user = (id: string, text: string): UIMessage =>
-  ({ id, role: "user", parts: [{ type: "text", content: text }] }) as UIMessage;
-// SAFETY: the synthetic assistant has every field the reconciliation unit reads.
-const assistant = (id: string): UIMessage =>
-  ({ id, role: "assistant", parts: [{ type: "text", content: "answer" }] }) as UIMessage;
+const user = (id: string, text: string): ChatMessage => ({
+  id,
+  role: "user",
+  parts: [{ type: "text", content: text }],
+});
+const assistant = (id: string): ChatMessage => ({
+  id,
+  role: "assistant",
+  parts: [{ type: "text", content: "answer" }],
+});
 const delivered = (id: string, text: string): QueuedMessage => ({
   id,
   seq: 1,

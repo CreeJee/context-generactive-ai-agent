@@ -33,8 +33,8 @@ const editor = Effect.fnUntraced(function* (answerPermission: "allow" | "reject"
   const updates: SessionNotification[] = [];
   const permissions: string[] = [];
   const { agent } = yield* Effect.acquireRelease(
-    Effect.sync(() => {
-      const bridge = startAcpAgent({
+    Effect.map(
+      startAcpAgent({
         stream: streams.agent,
         api: createAppApi("http://app.test", (input, init) =>
           new URL(input instanceof Request ? input.url : input).pathname === "/api/auth"
@@ -43,19 +43,21 @@ const editor = Effect.fnUntraced(function* (answerPermission: "allow" | "reject"
               )
             : fetcher(input, init),
         ),
-      });
-      const client = acp
-        .client({ name: "test-editor" })
-        .onNotification(acp.methods.client.session.update, (ctx) => {
-          updates.push(ctx.params);
-        })
-        .onRequest(acp.methods.client.session.requestPermission, (ctx) => {
-          permissions.push(ctx.params.toolCall.title ?? "");
-          return { outcome: { outcome: "selected", optionId: answerPermission } };
-        })
-        .connect(streams.client);
-      return { agent: client.agent, close: () => (client.close(), bridge.close()) };
-    }),
+      }),
+      (bridge) => {
+        const client = acp
+          .client({ name: "test-editor" })
+          .onNotification(acp.methods.client.session.update, (ctx) => {
+            updates.push(ctx.params);
+          })
+          .onRequest(acp.methods.client.session.requestPermission, (ctx) => {
+            permissions.push(ctx.params.toolCall.title ?? "");
+            return { outcome: { outcome: "selected", optionId: answerPermission } };
+          })
+          .connect(streams.client);
+        return { agent: client.agent, close: () => (client.close(), bridge.close()) };
+      },
+    ),
     ({ close }) => Effect.sync(close),
   );
   yield* sdk(() =>
@@ -178,7 +180,7 @@ testAgent({ testProvider: { delayedTurnGate: slowTurn.waitFor } })("ACP cancella
         const { agent, newSession } = yield* editor();
         const sessionId = yield* newSession;
         const invocations = () =>
-          provider!.adapter.invocations.filter((invocation) => invocation.threadId === sessionId);
+          provider!.invocations.filter((invocation) => invocation.run.threadId === sessionId);
         const prompt = agent.request(acp.methods.agent.session.prompt, {
           sessionId,
           prompt: [{ type: "text", text: "slow" }],

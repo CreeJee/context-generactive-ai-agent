@@ -14,13 +14,15 @@ const decodeErrorCode = Schema.decodeUnknownOption(Schema.Struct({ code: Schema.
  * and its message (redacted by the server) becomes the folded detail. An error without a known
  * code, such as a dropped connection or a run saved by an older version, is a general failure.
  */
-export const runFailureOf = (error: Error): ShownFailure<RunFailureCode> => ({
+export const runFailureOf = (error: {
+  readonly message: string;
+}): ShownFailure<RunFailureCode> => ({
   code: runFailureCodeOf(Option.getOrUndefined(decodeErrorCode(error))?.code),
   detail: error.message,
 });
 
 /** A failed run's wording, with the run's own text folded under it. */
-export function RunFailureText({ error }: { error: Error }) {
+export function RunFailureText({ error }: { error: { readonly message: string } }) {
   const failure = runFailureOf(error);
   return (
     <>

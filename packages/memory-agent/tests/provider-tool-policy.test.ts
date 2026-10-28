@@ -1,13 +1,24 @@
 import { withTestPlatform } from "./support/platform.ts";
 import { it as effectTest } from "@effect/vitest";
-import { Deferred, Effect, Result, Fiber, FileSystem, Layer, Path } from "effect";
-import { describe, expect, test } from "vite-plus/test";
+import {
+  Array as Arr,
+  Deferred,
+  Effect,
+  Result,
+  Fiber,
+  FileSystem,
+  Layer,
+  MutableRef,
+  Path,
+  Ref,
+} from "effect";
+import { describe, expect } from "vite-plus/test";
 import { makeModelFeatureFlags } from "../src/providers/model-feature-flags.ts";
+import { matchGolden, subscriptionToolRequestBodies } from "./support/requests.ts";
 import {
   ProviderToolCapabilityRegistry,
   makeProviderToolCapabilityRegistry,
   providerToolDescriptors,
-  type ProviderToolCapabilityRegistryApi,
   type ProviderToolMetadataFailure,
 } from "../src/providers/tool-capabilities.ts";
 import {
@@ -15,7 +26,6 @@ import {
   ProviderToolApprovalDenied,
   ProviderToolApprovalRequired,
   ProviderToolCapabilityDenied,
-  ProviderToolFactoryFailure,
   ProviderToolFactoryOptionsFailure,
   ProviderToolLeaseFailure,
   ProviderToolNotExposed,
@@ -27,13 +37,12 @@ import {
   ProviderToolRuntime,
   ProviderToolSandboxViolation,
   makeProviderToolPolicy,
-  makeProviderToolRuntime,
   normalizeProviderToolUsage,
-  providerToolFactoryValidatorIds,
   type ProviderToolExecutionRevalidationInput,
-  type ProviderToolFactoryRequest,
+  type ProviderToolRequest,
   type ProviderToolPolicyApi,
   type ProviderToolPolicyContext,
+  type ProviderToolResultEnvelope,
   type ProviderToolRuntimeApi,
 } from "../src/providers/tool-policy.ts";
 
@@ -42,7 +51,11 @@ const defaultPolicyLayer = ProviderToolPolicy.layer.pipe(
 );
 const run = Effect.fn("providerPolicy.run")(function* <A, E>(
   effect: Effect.Effect<A, E, ProviderToolPolicy>,
-  layer: Layer.Layer<ProviderToolPolicy, ProviderToolMetadataFailure> = defaultPolicyLayer,
+  layer: Layer.Layer<
+    ProviderToolPolicy,
+    ProviderToolMetadataFailure,
+    FileSystem.FileSystem
+  > = defaultPolicyLayer,
 ) {
   const services = yield* Layer.build(layer);
   return yield* Effect.provideContext(effect, services);
@@ -117,15 +130,15 @@ describe("ProviderToolPolicy", () => {
 
   effectTest.effect("uses the same fresh feature flag policy for exposure and execution", () =>
     Effect.gen(function* () {
-      let allowed = true;
+      const allowed = MutableRef.make(true);
       const flags = makeModelFeatureFlags(
         {
           read: Effect.sync(() => ({
             modelFeatureFlags: {
               version: 1 as const,
-              global: allowed,
-              providers: { openai: allowed },
-              capabilities: { "openai:web_search": allowed },
+              global: MutableRef.get(allowed),
+              providers: { openai: MutableRef.get(allowed) },
+              capabilities: { "openai:web_search": MutableRef.get(allowed) },
               models: {},
               routes: {},
             },
@@ -139,11 +152,12 @@ describe("ProviderToolPolicy", () => {
         registry: registry,
         config: {},
         featureFlags: flags,
+        fileSystem: yield* FileSystem.FileSystem,
       });
       expect((yield* policy.expose(basePolicy())).tools.map((tool) => tool.id)).toEqual([
         "openai:web_search",
       ]);
-      allowed = false;
+      MutableRef.set(allowed, false);
       expect((yield* policy.expose(basePolicy())).tools).toEqual([]);
       const denied = yield* errorOf(
         policy.revalidateExecution({
@@ -157,7 +171,7 @@ describe("ProviderToolPolicy", () => {
       );
       expect(denied).toBeInstanceOf(ProviderToolPolicyDenied);
       expect(denied).toMatchObject({ reason: "feature_flag_disabled" });
-    }),
+    }).pipe(withTestPlatform),
   );
 
   effectTest.live("does not expose local high-risk tools without trusted authority", () =>
@@ -517,7 +531,7 @@ describe("ProviderToolRuntime", () => {
         const openai = yield* runRuntime(
           Effect.flatMap(ProviderToolRuntime, (runtime) =>
             runtime.compose(basePolicy({ accountToolKinds: ["web_search"] }), [
-              { id: "openai:web_search", args: [{ type: "web_search" }] },
+              { id: "openai:web_search", config: { type: "web_search" } },
             ]),
           ),
         );
@@ -531,35 +545,29 @@ describe("ProviderToolRuntime", () => {
                 app: { allowNetwork: true },
                 user: { allowNetwork: true },
               },
-              [{ id: "anthropic:web_fetch", args: [] }],
+              [{ id: "anthropic:web_fetch", config: {} }],
             ),
           ),
         );
         expect(openai.map((entry) => entry.id)).toEqual(["openai:web_search"]);
         expect(anthropic.map((entry) => entry.id)).toEqual(["anthropic:web_fetch"]);
-        expect(openai[0]?.tool).toBeDefined();
-        expect(anthropic[0]?.tool).toBeDefined();
+        // The Effect AI tool reaches the provider as the TanStack one made from the same request.
+        yield* matchGolden("./__golden__/provider-tool-policy.json")(
+          subscriptionToolRequestBodies([...openai, ...anthropic].map((entry) => entry.modelTool)),
+        );
       }).pipe(withTestPlatform),
   );
 
-  test("has a runtime factory validator for every installed provider tool", () => {
-    expect(providerToolFactoryValidatorIds).toEqual(
-      providerToolDescriptors.map((descriptor) => descriptor.id).toSorted(),
-    );
-    expect(providerToolFactoryValidatorIds).toHaveLength(18);
-  });
-
-  /* oxlint-disable anti-slop/no-chained-type-assertions, anti-slop/require-safety-comment-for-type-assertion -- Deliberately malformed runtime inputs must bypass the public compile-time request union. */
   effectTest.live("rejects representative hosted and caller-loop factory option violations", () =>
     Effect.gen(function* () {
       const invalid = [
         [
           basePolicy({ accountToolKinds: ["web_search"] }),
-          { id: "openai:web_search", args: [{ type: "web_search", unexpected: true }] },
+          { id: "openai:web_search", config: { type: "web_search", unexpected: true } },
         ],
         [
           basePolicy({ accountToolKinds: ["local_shell"] }),
-          { id: "openai:local_shell", args: [{ type: "local_shell" }] },
+          { id: "openai:local_shell", config: { type: "local_shell" } },
         ],
         [
           {
@@ -569,7 +577,7 @@ describe("ProviderToolRuntime", () => {
             app: { allowNetwork: true },
             user: { allowNetwork: true },
           },
-          { id: "anthropic:web_search", args: [{ type: "wrong_version" }] },
+          { id: "anthropic:web_search", config: { type: "wrong_version" } },
         ],
         [
           {
@@ -579,13 +587,13 @@ describe("ProviderToolRuntime", () => {
             app: { allowHighRisk: true },
             user: { allowHighRisk: true },
           },
-          { id: "anthropic:bash", args: [{ type: "bash_20250124", unexpected: true }] },
+          { id: "anthropic:bash", config: { type: "bash_20250124", unexpected: true } },
         ],
       ] as const;
       const errors = yield* runRuntime(
         Effect.flatMap(ProviderToolRuntime, (runtime) =>
           Effect.forEach(invalid, ([policy, request]) =>
-            errorOf(runtime.compose(policy, [request as unknown as ProviderToolFactoryRequest])),
+            errorOf(runtime.compose(policy, [request])),
           ),
         ),
       );
@@ -595,7 +603,6 @@ describe("ProviderToolRuntime", () => {
       );
     }).pipe(withTestPlatform),
   );
-  /* oxlint-enable anti-slop/no-chained-type-assertions, anti-slop/require-safety-comment-for-type-assertion */
 
   effectTest.live(
     "rejects requested IDs that exposure did not allow and defaults to no tools",
@@ -609,7 +616,7 @@ describe("ProviderToolRuntime", () => {
                 runtime.compose(basePolicy({ accountToolKinds: ["web_search"] }), [
                   {
                     id: "openai:file_search",
-                    args: [{ type: "file_search", vector_store_ids: ["vs_1"] }],
+                    config: { type: "file_search", vector_store_ids: ["vs_1"] },
                   },
                 ]),
               ),
@@ -619,56 +626,6 @@ describe("ProviderToolRuntime", () => {
         expect(result[0]).toEqual([]);
         expect(result[1]).toBeInstanceOf(ProviderToolNotExposed);
       }).pipe(withTestPlatform),
-  );
-
-  effectTest.effect(
-    "turns synchronous factory throws into typed failures without changing arguments",
-    () =>
-      Effect.gen(function* () {
-        const original = providerToolDescriptors.find((entry) => entry.id === "openai:web_search");
-        if (original === undefined) throw new Error("missing fixture descriptor");
-        const expected: Parameters<typeof original.extension.factory>[0] = { type: "web_search" };
-        let received: unknown;
-        const throwing: typeof original = {
-          ...original,
-          extension: {
-            factory: (value) => {
-              received = value;
-              throw new Error("factory failed");
-            },
-          },
-        };
-        const registry: ProviderToolCapabilityRegistryApi = {
-          descriptors: [throwing],
-          get: () => Effect.succeed(throwing),
-          filter: () => [throwing],
-          resolve: () => Effect.succeed([throwing]),
-        };
-        const policy: ProviderToolPolicyApi = {
-          expose: () =>
-            Effect.succeed({
-              tools: [
-                {
-                  id: throwing.id,
-                  provider: throwing.provider,
-                  kind: throwing.kind,
-                  category: throwing.category,
-                  risk: "read_only",
-                  requiresApproval: false,
-                  sandbox: throwing.sandbox,
-                },
-              ],
-            }),
-          revalidateExecution: () => Effect.die("unused"),
-        };
-        const error = yield* errorOf(
-          makeProviderToolRuntime(registry, policy).compose(basePolicy(), [
-            { id: "openai:web_search", args: [expected] },
-          ]),
-        );
-        expect(received).toBe(expected);
-        expect(error).toBeInstanceOf(ProviderToolFactoryFailure);
-      }),
   );
 
   effectTest.live(
@@ -693,7 +650,7 @@ describe("ProviderToolRuntime", () => {
               runId: "run-1",
               options: { networkRequested: true },
               approval: "not_requested",
-              operation: () => Promise.resolve({ raw, usage }),
+              operation: () => Effect.succeed({ raw, usage }),
             }),
           ),
         );
@@ -731,7 +688,7 @@ describe("ProviderToolRuntime", () => {
     () =>
       Effect.gen(function* () {
         const raw = Object.freeze({ type: "future_provider_event", payload: { value: 42 } });
-        const lifecycle: unknown[] = [];
+        const lifecycle = yield* Ref.make<ReadonlyArray<ProviderToolResultEnvelope>>([]);
         const result = yield* runRuntime(
           Effect.flatMap(ProviderToolRuntime, (runtime) =>
             runtime.execute({
@@ -742,13 +699,11 @@ describe("ProviderToolRuntime", () => {
               runId: "run-unknown",
               options: { networkRequested: true },
               approval: "not_requested",
-              operation: ({ progress }) => {
-                progress({ raw: { pending: true }, kind: "approval_required" });
-                return { raw, kind: "future_provider_event" };
-              },
-              onLifecycle: (event) => {
-                lifecycle.push(event);
-              },
+              operation: ({ progress }) =>
+                progress({ raw: { pending: true }, kind: "approval_required" }).pipe(
+                  Effect.as({ raw, kind: "future_provider_event" }),
+                ),
+              onLifecycle: (event) => Ref.update(lifecycle, Arr.append(event)),
             }),
           ),
         );
@@ -758,7 +713,7 @@ describe("ProviderToolRuntime", () => {
           unknownKind: true,
         });
         expect(result.raw).toBe(raw);
-        expect(lifecycle).toEqual(
+        expect(yield* Ref.get(lifecycle)).toEqual(
           expect.arrayContaining([
             expect.objectContaining({ status: "approval-required", unknownKind: false }),
             expect.objectContaining({
@@ -773,8 +728,8 @@ describe("ProviderToolRuntime", () => {
 
   effectTest.live("emits ordered terminal lifecycle states for failure and interruption", () =>
     Effect.gen(function* () {
-      const failedLifecycle: string[] = [];
-      let rejectedReleases = 0;
+      const failedLifecycle = yield* Ref.make<ReadonlyArray<string>>([]);
+      const rejectedReleases = yield* Ref.make(0);
       const rejection = yield* runRuntime(
         Effect.flatMap(ProviderToolRuntime, (runtime) =>
           errorOf(
@@ -786,33 +741,22 @@ describe("ProviderToolRuntime", () => {
               runId: "run-1",
               options: { networkRequested: true },
               approval: "not_requested",
-              acquire: () => ({
-                release: () => {
-                  rejectedReleases++;
-                },
-              }),
-              operation: () => Promise.reject(new Error("provider rejected")),
-              onLifecycle: (event) => {
-                failedLifecycle.push(event.status);
-              },
+              acquire: Effect.succeed({ release: Ref.update(rejectedReleases, (n) => n + 1) }),
+              operation: () => Effect.fail("provider rejected"),
+              onLifecycle: (event) => Ref.update(failedLifecycle, Arr.append(event.status)),
             }),
           ),
         ),
       );
       expect(rejection).toBeInstanceOf(ProviderToolOperationFailure);
-      expect(rejectedReleases).toBe(1);
-      expect(failedLifecycle).toEqual(["running", "failed"]);
-      let aborted = false;
-      let cancelledReleases = 0;
-      const cancelledLifecycle: string[] = [];
-      const operationContext = yield* Effect.context<never>();
+      expect(yield* Ref.get(rejectedReleases)).toBe(1);
+      expect(yield* Ref.get(failedLifecycle)).toEqual(["running", "failed"]);
+      const aborted = yield* Ref.make(false);
+      const cancelledReleases = yield* Ref.make(0);
+      const cancelledLifecycle = yield* Ref.make<ReadonlyArray<string>>([]);
       const operationStarted = yield* Deferred.make<void>();
-      const operationCompleted = yield* Deferred.make<{ raw: null }>();
-      const lateAllowed = yield* Deferred.make<void>();
-      let lateProgress = () => {};
-      const lateFiber = yield* Effect.forkChild(
-        Deferred.await(lateAllowed).pipe(Effect.andThen(Effect.sync(() => lateProgress()))),
-      );
+      // A progress report the operation could still send after its execution ended.
+      const lateProgress = yield* Deferred.make<Effect.Effect<void>>();
       yield* Effect.gen(function* () {
         const runtime = yield* ProviderToolRuntime;
         const fiber = yield* Effect.forkChild(
@@ -824,25 +768,23 @@ describe("ProviderToolRuntime", () => {
             runId: "run-1",
             options: { networkRequested: true },
             approval: "not_requested",
-            acquire: () => ({
-              release: () => {
-                cancelledReleases++;
-              },
-            }),
-            operation: ({ signal, progress }) => {
-              signal.addEventListener("abort", () => {
-                aborted = true;
-                progress({ raw: "before-cancel", kind: "progress" });
-                lateProgress = () => progress({ raw: "too-late", kind: "progress" });
-                Deferred.doneUnsafe(operationCompleted, Effect.succeed({ raw: null }));
-              });
-              Deferred.doneUnsafe(operationStarted, Effect.void);
-              // The SDK operation returns a Promise; execution cancellation settles its Deferred.
-              return Effect.runPromiseWith(operationContext)(Deferred.await(operationCompleted));
-            },
-            onLifecycle: (event) => {
-              cancelledLifecycle.push(event.status);
-            },
+            acquire: Effect.succeed({ release: Ref.update(cancelledReleases, (n) => n + 1) }),
+            operation: ({ progress }) =>
+              Deferred.succeed(operationStarted, undefined).pipe(
+                Effect.andThen(Effect.never),
+                Effect.onInterrupt(() =>
+                  Ref.set(aborted, true).pipe(
+                    Effect.andThen(progress({ raw: "before-cancel", kind: "progress" })),
+                    Effect.andThen(
+                      Deferred.succeed(
+                        lateProgress,
+                        progress({ raw: "too-late", kind: "progress" }),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            onLifecycle: (event) => Ref.update(cancelledLifecycle, Arr.append(event.status)),
           }),
         );
         yield* Deferred.await(operationStarted);
@@ -854,13 +796,12 @@ describe("ProviderToolRuntime", () => {
           return yield* Effect.provideContext(program, services);
         }, Effect.scoped),
       );
-      expect(aborted).toBe(true);
-      expect(cancelledReleases).toBe(1);
-      const callbacksAtScopeEnd = cancelledLifecycle.length;
-      yield* Deferred.succeed(lateAllowed, undefined);
-      yield* Fiber.join(lateFiber);
-      expect(cancelledLifecycle.at(-1)).toBe("cancelled");
-      expect(cancelledLifecycle).toHaveLength(callbacksAtScopeEnd);
+      expect(yield* Ref.get(aborted)).toBe(true);
+      expect(yield* Ref.get(cancelledReleases)).toBe(1);
+      const callbacksAtScopeEnd = (yield* Ref.get(cancelledLifecycle)).length;
+      yield* Effect.flatten(Deferred.await(lateProgress));
+      expect((yield* Ref.get(cancelledLifecycle)).at(-1)).toBe("cancelled");
+      expect(yield* Ref.get(cancelledLifecycle)).toHaveLength(callbacksAtScopeEnd);
     }).pipe(withTestPlatform),
   );
 
@@ -877,10 +818,8 @@ describe("ProviderToolRuntime", () => {
               runId: "run-release",
               options: { networkRequested: true },
               approval: "not_requested",
-              acquire: () => ({
-                release: () => Promise.reject(new Error("release failed")),
-              }),
-              operation: () => ({ raw: "completed" }),
+              acquire: Effect.succeed({ release: Effect.fail("release failed") }),
+              operation: () => Effect.succeed({ raw: "completed" }),
             }),
           ),
         ),
@@ -894,14 +833,14 @@ describe("ProviderToolRuntime", () => {
     Effect.gen(function* () {
       const unknownFields = {
         id: "openai:web_search",
-        args: [{ type: "web_search" }],
-      } satisfies ProviderToolFactoryRequest;
+        config: { type: "web_search" },
+      } satisfies ProviderToolRequest;
       Reflect.set(unknownFields, "unexpected", true);
       const [unknown, mismatch] = yield* runRuntime(
         Effect.flatMap(ProviderToolRuntime, (runtime) =>
           Effect.all([
             errorOf(runtime.compose(basePolicy(), [unknownFields])),
-            errorOf(runtime.compose(basePolicy(), [{ id: "anthropic:web_fetch", args: [] }])),
+            errorOf(runtime.compose(basePolicy(), [{ id: "anthropic:web_fetch", config: {} }])),
           ]),
         ),
       );
@@ -928,7 +867,7 @@ describe("ProviderToolRuntime", () => {
           Layer.provide(policyLayer),
           Layer.provide(ProviderToolCapabilityRegistry.layer),
         );
-        let executed = false;
+        const executed = yield* Ref.make(false);
         const result = yield* Effect.flatMap(
           ProviderToolRuntime,
           (runtime) =>
@@ -944,10 +883,7 @@ describe("ProviderToolRuntime", () => {
               runId: "run-local",
               options: {},
               approval: "granted",
-              operation: () => {
-                executed = true;
-                return { raw: "must-not-run" };
-              },
+              operation: () => Ref.set(executed, true).pipe(Effect.as({ raw: "must-not-run" })),
             }),
           // Test entry point owns this Layer and its resource scope.
         ).pipe(
@@ -956,7 +892,7 @@ describe("ProviderToolRuntime", () => {
             return yield* Effect.provideContext(program, services);
           }, Effect.scoped),
         );
-        expect(executed).toBe(false);
+        expect(yield* Ref.get(executed)).toBe(false);
         expect(result).toMatchObject({
           status: "pending",
           runId: "run-local",

@@ -1,31 +1,33 @@
 import { nativePromise, runNativeEffect } from "../src/runtime/native-effect.ts";
-import { AuthConnectionState } from "../src/providers/contracts.ts";
-import { Config, Console, Result, Function as EffectFunction } from "effect";
-import { isTruthy } from "../src/truthy.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { randomUUID } from "../src/runtime/synchronous-crypto.ts";
+import {
+  AuthConnectionState,
+  type ModelRun,
+  type ModelSelection,
+} from "../src/providers/contracts.ts";
+import { Cause, Config, Console, Result, Function as EffectFunction, Stream } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { NodeServices } from "@effect/platform-node";
-import { Context, FileSystem } from "effect";
+import { Context, Crypto, FileSystem } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { path } from "../src/runtime/synchronous-path.ts";
 const { join } = path;
-import { maxIterations } from "@tanstack/ai";
-import { DateTime, Effect, Layer, Schema } from "effect";
+import { Array as Arr, DateTime, Effect, Layer, MutableRef, Option, Schema } from "effect";
 import { AgentChat } from "../src/agent/chat.ts";
 import { ApiUsage } from "../src/agent/api-usage.ts";
-import { compactionState } from "../src/agent/compaction.ts";
-import { ChatState } from "../src/chat-state/chat-state.ts";
+import { compactionStateEffect } from "../src/agent/compaction.ts";
+import { RunStore } from "../src/loop/store.ts";
 import { memoryAgentLayer } from "../src/layers.ts";
 import { fakeEmbedderLayer } from "../src/testing/fake-embedder.ts";
 import { fakeMorphLayer } from "../src/testing/fake-morph.ts";
+import { inProcessChatApi } from "../src/testing/chat-api.ts";
+import { AgUiEvent } from "../src/loop/chunks.ts";
 import { Projects } from "../src/projects/projects.ts";
 import { ProviderRegistry } from "../src/providers/registry.ts";
-import { subscriptionRequest } from "../src/providers/subscription-adapter.ts";
 import { SubscriptionProviderRegistry } from "../src/providers/subscriptions.ts";
 import { Sessions } from "../src/sessions/sessions.ts";
 import { TurnSummaries } from "../src/agent/turn-summaries.ts";
-import { estimateRequestTokens, exceedsRequestTokenBudget } from "./request-token-budget.ts";
+import { pilotGuarded, pilotStopped, type PilotRequest } from "./pilot-guard.ts";
+import { exceedsRequestTokenBudget } from "./request-token-budget.ts";
 
 // Explicit, paid, serial pilot only. The adapter guard stops before a provider request, including
 // a summary request. It does not turn token estimates into reported usage.
@@ -41,7 +43,17 @@ const maxEstimatedInputTokens = 16_000;
 const model = "gpt-5.6-sol";
 const effort = "low";
 const phrase = "violet-copper-maple-17";
-let calls = 0;
+const calls = MutableRef.make(0);
+const withinBudget = ({ prompt, estimate }: PilotRequest) =>
+  Effect.gen(function* () {
+    if (
+      MutableRef.get(calls) >= maxCalls ||
+      exceedsRequestTokenBudget(estimate, maxEstimatedInputTokens)
+    )
+      return yield* pilotStopped("pilot_provider_budget_exceeded");
+    MutableRef.increment(calls);
+    return prompt;
+  });
 const guardedRegistry = Layer.effect(
   ProviderRegistry,
   Effect.gen(function* () {
@@ -52,47 +64,17 @@ const guardedRegistry = Layer.effect(
       runtime: (provider: "openai" | "anthropic" | "openai-compatible") =>
         Effect.map(upstream.runtime(provider), (runtime) => ({
           ...runtime,
-          agentLoop: maxIterations(2),
-          adapter: (selection: Parameters<typeof runtime.adapter>[0]) => {
-            const adapter = runtime.adapter(selection);
-            return new Proxy(adapter, {
-              get(target, key) {
-                if (key !== "chatStream") {
-                  // The installed SDK adapter is a class with private fields; transparent proxy
-                  // forwarding must bind its dynamic methods to the original instance.
-                  // oxlint-disable-next-line anti-slop/no-reflect-get
-                  const value = Reflect.get(target, key, target);
-                  // oxlint-disable-next-line anti-slop/no-runtime-typeof
-                  return typeof value === "function" ? value.bind(target) : value;
-                }
-                return (options: Parameters<typeof adapter.chatStream>[0]) => {
-                  // Estimate the entire serialized request including tool schemas. This local
-                  // BPE count is only a preflight guard; billed/cached usage comes from provider.
-                  if (selection.provider === "openai-compatible")
-                    throw new Error("subscription_pilot_only");
-                  const serialized = subscriptionRequest({
-                    provider: selection.provider,
-                    selection: selection,
-                    options: options,
-                  });
-                  const estimated = estimateRequestTokens(serialized, selection.model);
-                  if (
-                    calls >= maxCalls ||
-                    exceedsRequestTokenBudget(estimated, maxEstimatedInputTokens)
-                  )
-                    throw new Error("pilot_provider_budget_exceeded");
-                  calls += 1;
-                  return target.chatStream(options);
-                };
-              },
-            });
-          },
+          model: (selection: ModelSelection, run: ModelRun) =>
+            Effect.map(
+              runtime.model(selection, run),
+              pilotGuarded({ selection, check: withinBudget }),
+            ),
         })),
     };
   }),
 ).pipe(Layer.provide(SubscriptionProviderRegistry));
 
-const prompts = [
+const prompts: Arr.NonEmptyReadonlyArray<string> = [
   "Read src/checksum.ts with read_file. Give only the exported function name.",
   `Remember this exact user decision: ${phrase}. Acknowledge in one line.`,
   "Compute checksum([2,3]) from that file. Reply with just the number.",
@@ -104,32 +86,11 @@ const prompts = [
 const fixture =
   "export function checksum(values: readonly number[]) { return values.reduce((sum, value, index) => sum + value * (index + 1), 0); }\n";
 
-const Delta = Schema.fromJsonString(
-  Schema.Struct({ type: Schema.String, delta: Schema.optional(Schema.String) }),
-);
-function answerFromSse(sse: string) {
-  return sse
-    .split("\n")
-    .flatMap((line) => {
-      if (!line.startsWith("data: ")) return [];
-      try {
-        // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-        const chunk = EffectFunction.flow(
-          Schema.decodeResult(Delta),
-          Result.getOrThrow,
-        )(line.slice(6));
-        return chunk.type === "TEXT_MESSAGE_CONTENT" && isTruthy(chunk.delta) ? [chunk.delta] : [];
-      } catch {
-        return [];
-      }
-    })
-    .join("");
-}
-
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 const runArm = Effect.fn("eval.runArm")(function* (variant: "auto" | "auto-plus-manual") {
   const platform = yield* Layer.build(NodeServices.layer);
   const fs = Context.get(platform, FileSystem.FileSystem);
+  const crypto = Context.get(platform, Crypto.Crypto);
   const base = yield* fs.makeTempDirectoryScoped({ prefix: "memory-agent-paid-ab-" });
   const projectRoot = join(base, "project");
   const home = join(base, "home");
@@ -160,73 +121,58 @@ const runArm = Effect.fn("eval.runArm")(function* (variant: "auto" | "auto-plus-
       const session = yield* (yield* Sessions).create(project.id);
       return {
         agent: yield* AgentChat,
+        chat: yield* inProcessChatApi,
         usage: yield* ApiUsage,
         summaries: yield* TurnSummaries,
-        metadata: (yield* ChatState).persistence.stores.metadata,
+        metadata: (yield* RunStore).chatMetadata,
         sessionId: session.id,
       };
     }),
     servicesContext,
   );
   const started = DateTime.toEpochMillis(DateTime.nowUnsafe());
-  const answers: string[] = [];
-  let manual: {
-    cleared: number;
-    summarizedTurns: number;
-    summaryFailed: boolean;
-    tokensBefore: number;
-    tokensAfter: number;
-  } | null = null;
-  for (const [index, text] of prompts.entries()) {
-    if (index === 6) {
-      // Wait for equal automatic summary state; do not create a manual-only comparison.
-      yield* Effect.provideContext(
-        services.summaries.catchUp(services.sessionId, true),
-        servicesContext,
-      );
-      if (variant === "auto-plus-manual") {
-        const response = yield* Effect.provideContext(
-          services.agent.compact(services.sessionId, null),
-          servicesContext,
-        );
-        if (response.status !== 200) throw new Error(`manual_compact_status_${response.status}`);
-        // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-        manual = EffectFunction.flow(
-          Schema.decodeUnknownResult(
-            Schema.Struct({
-              cleared: Schema.Finite,
-              summarizedTurns: Schema.Finite,
-              summaryFailed: Schema.Boolean,
-              tokensBefore: Schema.Finite,
-              tokensAfter: Schema.Finite,
-            }),
-          ),
-          Result.getOrThrow,
-        )(yield* nativePromise(() => response.json()));
-        if (manual.cleared === 0 && manual.summarizedTurns === 0)
-          throw new Error("pilot_manual_compact_changed_nothing");
-      }
-    }
+  /** The manual /compact this arm runs before the final audit; it must change something. */
+  const compactManually = Effect.gen(function* () {
     const response = yield* Effect.provideContext(
-      services.agent.handle(
-        new Request("http://localhost/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          signal: AbortSignal.timeout(45_000),
-          body: stringifyJson({
-            threadId: services.sessionId,
-            runId: randomUUID(),
-            messages: [{ id: randomUUID(), role: "user", content: text }],
-            tools: [],
-            context: [],
-          }),
-        }),
-        services.sessionId,
-      ),
+      services.agent.compact(services.sessionId, null),
       servicesContext,
     );
-    if (response.status !== 200) throw new Error(`chat_status_${response.status}`);
-    answers.push(answerFromSse(yield* nativePromise(() => response.text())));
+    if (response.status !== 200) throw new Error(`manual_compact_status_${response.status}`);
+    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+    const manual = EffectFunction.flow(
+      Schema.decodeUnknownResult(
+        Schema.Struct({
+          cleared: Schema.Finite,
+          summarizedTurns: Schema.Finite,
+          summaryFailed: Schema.Boolean,
+          tokensBefore: Schema.Finite,
+          tokensAfter: Schema.Finite,
+        }),
+      ),
+      Result.getOrThrow,
+    )(yield* nativePromise(() => response.json()));
+    if (manual.cleared === 0 && manual.summarizedTurns === 0)
+      throw new Error("pilot_manual_compact_changed_nothing");
+    return manual;
+  });
+  /** One user turn, which must complete; only the last turn may use the final provider call. */
+  const turn = Effect.fnUntraced(function* (text: string, last: boolean) {
+    const events = yield* Effect.provideContext(
+      services.chat
+        .run({
+          params: { session: services.sessionId },
+          headers: {},
+          payload: {
+            runId: yield* crypto.randomUUIDv4(),
+            messages: [{ id: yield* crypto.randomUUIDv4(), role: "user", content: text }],
+          },
+        })
+        .pipe(Effect.flatMap(Stream.runCollect), Effect.timeout("45 seconds")),
+      servicesContext,
+    );
+    const answer = events
+      .flatMap(({ data }) => (AgUiEvent.guards.TEXT_MESSAGE_CONTENT(data) ? [data.delta] : []))
+      .join("");
     const statusResponse = yield* Effect.provideContext(
       services.agent.status(services.sessionId, null),
       servicesContext,
@@ -242,12 +188,24 @@ const runArm = Effect.fn("eval.runArm")(function* (variant: "auto" | "auto-plus-
     )(yield* nativePromise(() => statusResponse.json()));
     if (status.lastRun?.status !== "completed")
       throw new Error(`pilot_run_${status.lastRun?.status ?? "missing"}`);
-    if (calls >= maxCalls && index < prompts.length - 1)
+    if (MutableRef.get(calls) >= maxCalls && !last)
       throw new Error("pilot_provider_budget_exceeded");
-  }
-  const blocks = (yield* nativePromise(() =>
-    compactionState(services.metadata, services.sessionId),
-  )).blocks.length;
+    return answer;
+  });
+  const opening = yield* Effect.forEach(Arr.initNonEmpty(prompts), (text) => turn(text, false));
+  // Wait for equal automatic summary state; do not create a manual-only comparison.
+  yield* Effect.provideContext(
+    services.summaries.catchUp(services.sessionId, true),
+    servicesContext,
+  );
+  const manual = Option.getOrNull(
+    yield* Effect.when(compactManually, Effect.succeed(variant === "auto-plus-manual")),
+  );
+  const answers = [...opening, yield* turn(Arr.lastNonEmpty(prompts), true)];
+  const blocks = (yield* compactionStateEffect({
+    metadata: services.metadata,
+    threadId: services.sessionId,
+  })).blocks.length;
   const final = answers.at(-1) ?? "";
   return {
     variant,
@@ -260,43 +218,57 @@ const runArm = Effect.fn("eval.runArm")(function* (variant: "auto" | "auto-plus-
     evidenceCorrect: final.includes(phrase),
     computationCorrect: /\b8\b/.test(final),
     elapsedMs: DateTime.toEpochMillis(DateTime.nowUnsafe()) - started,
-    providerCallsSoFar: calls,
+    providerCallsSoFar: MutableRef.get(calls),
   };
 }, Effect.scoped);
 
 // This historical A/B is invalid if automatic catch-up has already done manual /compact's work.
 // Do not accidentally repeat it. A redesigned comparator needs a fresh explicit paid opt-in.
 // Native host/SDK configuration boundary reads or forwards the host environment.
-if (
-  Effect.runSync(
-    Config.String("MEMORY_AGENT_ENABLE_PAID_COMPACTION_PILOT").pipe(Config.withDefault("")),
-  ) !== "1"
-) {
-  // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-  Effect.runSync(
-    Console.log(stringifyJson({ stopped: true, reason: "paid_pilot_disabled_until_redesign" })),
-  );
-} else {
-  try {
-    for (const variant of ["auto", "auto-plus-manual"] as const) {
-      const outcome = await runNativeEffect(runArm(variant));
-      // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-      Effect.runSync(Console.log(stringifyJson(outcome)));
-      // A comparison of failed coding/evidence tasks is not worth another paid arm.
-      if (!outcome.evidenceCorrect || !outcome.computationCorrect)
-        throw new Error("pilot_baseline_quality_failed");
-    }
-  } catch (error) {
-    // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-    Effect.runSync(
-      Console.log(
-        stringifyJson({
-          stopped: true,
-          reason: error instanceof Error ? error.message : "unknown",
-          providerCallsSoFar: calls,
-        }),
+const pilotEnabled = Effect.map(
+  Config.String("MEMORY_AGENT_ENABLE_PAID_COMPACTION_PILOT").pipe(Config.withDefault("")),
+  (value) => value === "1",
+);
+
+/** Both arms in order, then whether the pilot stopped on a failure. */
+const runArms = Effect.forEach(
+  ["auto", "auto-plus-manual"] as const,
+  (variant) =>
+    Effect.flatMap(runArm(variant), (outcome) =>
+      Effect.andThen(
+        // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+        Console.log(stringifyJson(outcome)),
+        // A comparison of failed coding/evidence tasks is not worth another paid arm.
+        Effect.when(
+          Effect.die(new Error("pilot_baseline_quality_failed")),
+          Effect.succeed(!outcome.evidenceCorrect || !outcome.computationCorrect),
+        ),
       ),
-    );
-    process.exitCode = 1;
-  }
-}
+    ),
+  { discard: true },
+).pipe(
+  Effect.as(false),
+  Effect.catchCause((cause) => {
+    const error = Cause.squash(cause);
+    // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+    return Console.log(
+      stringifyJson({
+        stopped: true,
+        reason: error instanceof Error ? error.message : "unknown",
+        providerCallsSoFar: MutableRef.get(calls),
+      }),
+    ).pipe(Effect.as(true));
+  }),
+);
+
+const failed = await runNativeEffect(
+  Effect.flatMap(pilotEnabled, (enabled) =>
+    enabled
+      ? runArms
+      : // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+        Console.log(
+          stringifyJson({ stopped: true, reason: "paid_pilot_disabled_until_redesign" }),
+        ).pipe(Effect.as(false)),
+  ),
+);
+if (failed) process.exitCode = 1;

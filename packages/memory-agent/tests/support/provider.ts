@@ -1,7 +1,28 @@
-import { AuthConnectionState, ProviderOperationFailed } from "../../src/providers/contracts.ts";
+import {
+  AuthConnectionState,
+  ProviderOperationFailed,
+  type AgentModelRuntime,
+  type ModelRun,
+} from "../../src/providers/contracts.ts";
 import { isTruthy } from "../../src/truthy.ts";
-import type { ModelMessage } from "@tanstack/ai";
-import { Cause, Deferred, Function, MutableHashMap, Option, Effect, Layer, Schema } from "effect";
+import type { LanguageModel } from "effect/ai";
+import {
+  scriptedModel,
+  scriptedSource,
+  shownScriptedFailure,
+} from "../../src/testing/scripted-model.ts";
+import {
+  Cause,
+  Deferred,
+  Function,
+  MutableHashMap,
+  MutableRef,
+  Option,
+  Effect,
+  Layer,
+  Schema,
+} from "effect";
+import type { StoredMessage } from "../../src/chat-store/schema.ts";
 import {
   GlobalConfig,
   ModelUnavailable,
@@ -11,13 +32,7 @@ import {
   type ModelSelection,
   type ProviderModel,
 } from "memory-agent";
-import {
-  ScriptedTextAdapter,
-  type AdapterInvocation,
-  type ScriptedResponder,
-  type ScriptedTurn,
-} from "memory-agent/testing";
-import { subscriptionAgentLoop } from "../../src/providers/subscription-runtime.ts";
+import type { ScriptedInvocation, ScriptedResponder, ScriptedTurn } from "memory-agent/testing";
 
 const models: readonly ProviderModel[] = [
   {
@@ -40,28 +55,23 @@ const models: readonly ProviderModel[] = [
   },
 ];
 
-type ToolMessage = ModelMessage & { readonly role: "tool"; readonly toolCallId: string };
-const isToolMessage = (message: ModelMessage): message is ToolMessage =>
-  message.role === "tool" && Schema.is(Schema.String)(message.toolCallId);
+type ToolMessage = Extract<StoredMessage, { readonly role: "tool" }>;
+const isToolMessage = (message: StoredMessage): message is ToolMessage => message.role === "tool";
 
-const messageText = (message: ModelMessage) =>
+const messageText = (message: StoredMessage) =>
   Schema.is(Schema.String)(message.content)
     ? message.content
     : (message.content ?? [])
         .flatMap((part) => (part.type === "text" ? [part.content] : []))
         .join("");
-const lastUserText = (messages: readonly ModelMessage[]) =>
+const lastUserText = (messages: ReadonlyArray<StoredMessage>) =>
   messageText(
     messages.findLast((message) => message.role === "user") ?? { role: "user", content: "" },
   );
-const trailingTools = (messages: readonly ModelMessage[]) => {
-  const tools: ToolMessage[] = [];
-  for (const message of messages.toReversed()) {
-    if (!isToolMessage(message)) break;
-    tools.unshift(message);
-  }
-  return tools;
-};
+const trailingTools = (messages: ReadonlyArray<StoredMessage>) =>
+  messages
+    .slice(messages.findLastIndex((message) => !isToolMessage(message)) + 1)
+    .filter(isToolMessage);
 const toolText = (message: ToolMessage) =>
   Schema.is(Schema.String)(message.content) ? message.content : JSON.stringify(message.content);
 const call = (id: string, name: string, args: Json): ScriptedTurn => ({
@@ -69,12 +79,10 @@ const call = (id: string, name: string, args: Json): ScriptedTurn => ({
 });
 
 /** Provider-neutral behavior shared by orchestration tests formerly backed by a child process. */
-export const defaultTestResponder = (
-  invocation: AdapterInvocation,
-): ScriptedTurn | Promise<ScriptedTurn> => {
-  const instructions = invocation.systemPrompts.join("\n");
-  const user = lastUserText(invocation.messages);
-  const tools = trailingTools(invocation.messages);
+export const defaultTestResponder = (invocation: ScriptedInvocation): ScriptedTurn => {
+  const instructions = invocation.system.join("\n");
+  const user = lastUserText(invocation.history);
+  const tools = trailingTools(invocation.history);
 
   if (instructions.includes("You review one tool call")) {
     const reviewed = user.match(/Arguments \(JSON\): (.*)$/s)?.[1] ?? "";
@@ -180,9 +188,9 @@ export const defaultTestResponder = (
       return { text: `Both: ${[...MutableHashMap.values(byId)].join(" | ")}` };
     const sequential = user.match(/^sequential weather (\d+)$/);
     if (isTruthy(sequential)) {
-      const done = invocation.messages.filter(
+      const done = invocation.history.filter(
         (message): message is ToolMessage =>
-          message.role === "tool" && message.toolCallId?.startsWith("call-seq-") === true,
+          message.role === "tool" && message.toolCallId.startsWith("call-seq-"),
       );
       if (done.length < Number(sequential[1]))
         return call(`call-seq-${done.length}`, "get_weather", { city: `City${done.length}` });
@@ -240,13 +248,13 @@ export const defaultTestResponder = (
     };
   if (user.includes("weather")) return call("call-1", "get_weather", { city: "Seoul" });
   if (user.includes("look at")) {
-    const images = invocation.messages.flatMap((message) =>
+    const images = invocation.history.flatMap((message) =>
       Array.isArray(message.content) ? message.content.filter((part) => part.type === "image") : [],
     );
     return { text: `Saw ${images.length} image(s)` };
   }
   if (instructions.includes("You are a subagent")) {
-    const earlier = invocation.messages.filter((message) => message.role === "user").length - 1;
+    const earlier = invocation.history.filter((message) => message.role === "user").length - 1;
     return { text: `child done: ${user} (earlier user messages: ${Math.max(0, earlier)})` };
   }
   return { text: "Hello from fast-1" };
@@ -257,6 +265,10 @@ export interface TestProviderOptions {
   readonly responder?: ScriptedResponder;
   /** Replace scripted delays with a test-controlled gate. */
   readonly delayedTurnGate?: ScriptedTurn["waitFor"];
+  /** Run chats on this model instead of the scripted one, such as a provider's own model. */
+  readonly runModel?: AgentModelRuntime["model"];
+  /** Wraps the scripted model the Effect AI loop runs on, such as to hold its stream. */
+  readonly model?: (model: LanguageModel.LanguageModel) => LanguageModel.LanguageModel;
 }
 
 export function turnGate() {
@@ -268,7 +280,8 @@ export function turnGate() {
 }
 
 export interface TestProvider {
-  readonly adapter: ScriptedTextAdapter;
+  /** Every step the scripted model was asked for, in order, across runs. */
+  readonly invocations: ReadonlyArray<ScriptedInvocation>;
   readonly layer: NonNullable<MemoryAgentLayerOptions["providerRegistry"]>;
   readonly select: (
     runtime: { runPromise<A, E>(effect: Effect.Effect<A, E, GlobalConfig>): Promise<A> },
@@ -294,48 +307,49 @@ export const selectTestModel = Effect.fn("selectTestModel")(function* (
 });
 
 export function testProvider(options: TestProviderOptions = {}): TestProvider {
-  let auth: AuthConnectionState =
+  const auth = MutableRef.make<AuthConnectionState>(
     options.signedIn === false
       ? AuthConnectionState["signed-out"]({ provider: "openai" })
-      : AuthConnectionState["signed-in"]({ provider: "openai" });
+      : AuthConnectionState["signed-in"]({ provider: "openai" }),
+  );
   const responder = options.responder ?? defaultTestResponder;
-  const adapter = new ScriptedTextAdapter(
-    Effect.fn("testProvider.responder")((invocation: AdapterInvocation) =>
-      Effect.try({
-        try: () => ({ response: responder(invocation) }),
-        catch: (cause) => new Cause.UnknownError(cause),
-      }).pipe(
-        Effect.flatMap(({ response }) =>
-          Effect.isEffect(response)
-            ? response
-            : Effect.tryPromise({
-                try: () => Promise.resolve(response),
-                catch: (cause) => new Cause.UnknownError(cause),
-              }),
-        ),
-        Effect.map((turn) => {
-          if (!isTruthy(options.delayedTurnGate) || turn.delayMs === undefined) return turn;
-          const { delayMs: _delayMs, ...gatedTurn } = turn;
-          return { ...gatedTurn, waitFor: options.delayedTurnGate };
-        }),
+  const respond = Effect.fn("testProvider.responder")((invocation: ScriptedInvocation) =>
+    Effect.try({
+      try: () => ({ response: responder(invocation) }),
+      catch: (cause) => new Cause.UnknownError(cause),
+    }).pipe(
+      Effect.flatMap(({ response }) =>
+        Effect.isEffect(response) ? response : Effect.succeed(response),
       ),
+      Effect.map((turn) => {
+        if (!isTruthy(options.delayedTurnGate) || turn.delayMs === undefined) return turn;
+        const { delayMs: _delayMs, ...gatedTurn } = turn;
+        return { ...gatedTurn, waitFor: options.delayedTurnGate };
+      }),
     ),
   );
+  const invocations: Array<ScriptedInvocation> = [];
+  /** Each step the loop asks for is recorded, then answered by the responder. */
+  const respondToStep = (invocation: ScriptedInvocation) => {
+    invocations.push(invocation);
+    return respond(invocation);
+  };
   const layer = Layer.effect(
     ProviderRegistry,
     Effect.gen(function* () {
       const config = yield* GlobalConfig;
+      const scripted = yield* scriptedModel(respondToStep);
       const configuration = {
         provider: "openai" as const,
         auth: {
           provider: "openai" as const,
-          status: Effect.sync(() => auth),
-          connect: Effect.sync(
-            () => (auth = AuthConnectionState["signed-in"]({ provider: "openai" })),
+          status: Effect.sync(() => MutableRef.get(auth)),
+          connect: Effect.sync(() =>
+            MutableRef.setAndGet(auth, AuthConnectionState["signed-in"]({ provider: "openai" })),
           ),
-          cancel: Effect.sync(() => auth),
-          disconnect: Effect.sync(
-            () => (auth = AuthConnectionState["signed-out"]({ provider: "openai" })),
+          cancel: Effect.sync(() => MutableRef.get(auth)),
+          disconnect: Effect.sync(() =>
+            MutableRef.setAndGet(auth, AuthConnectionState["signed-out"]({ provider: "openai" })),
           ),
         },
         models: {
@@ -387,28 +401,33 @@ export function testProvider(options: TestProviderOptions = {}): TestProvider {
         runtime: () =>
           Effect.succeed({
             provider: "openai" as const,
-            adapter: () => adapter,
+            model:
+              options.runModel ??
+              ((_selection: ModelSelection, run: ModelRun) =>
+                Effect.map(scripted.forRun(run), (model) => ({
+                  model: options.model?.(model) ?? model,
+                  source: scriptedSource,
+                  shownFailure: shownScriptedFailure,
+                }))),
             contextWindow: () => 200_000,
-            agentLoop: subscriptionAgentLoop,
-            runMiddleware: () => ({ name: "memory-agent/test-provider" }),
           }),
       };
     }),
   );
   return {
-    adapter,
+    invocations,
     layer,
     select: (runtime, model, effort) => runtime.runPromise(selectTestModel(model, effort)),
   };
 }
 
-const isProvider = Schema.is(Schema.Struct({ adapter: Schema.ObjectKeyword }));
+const isProvider = Schema.is(Schema.Struct({ invocations: Schema.ObjectKeyword }));
 
 export const providerInvocation: {
-  (provider: TestProvider, index?: number): AdapterInvocation | undefined;
-  (index?: number): (provider: TestProvider) => AdapterInvocation | undefined;
+  (provider: TestProvider, index?: number): ScriptedInvocation | undefined;
+  (index?: number): (provider: TestProvider) => ScriptedInvocation | undefined;
 } = Function.dual(
   (args) => isProvider(args[0]),
-  (provider: TestProvider, index = -1): AdapterInvocation | undefined =>
-    index < 0 ? provider.adapter.invocations.at(index) : provider.adapter.invocations[index],
+  (provider: TestProvider, index = -1): ScriptedInvocation | undefined =>
+    index < 0 ? provider.invocations.at(index) : provider.invocations[index],
 );

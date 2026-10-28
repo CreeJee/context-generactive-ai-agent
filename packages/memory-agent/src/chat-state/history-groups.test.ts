@@ -1,13 +1,14 @@
-import { modelMessagesToUIMessages, type ModelMessage } from "@tanstack/ai";
 import { describe, expect, it } from "vite-plus/test";
+import type { StoredMessage } from "../chat-store/schema.ts";
 import {
   groupHistoryMessages as computeHistoryGroups,
+  type HistoryGroup,
   HistoryGroupingResult,
   HistoryMessagesResult,
   historyProjectionMessages,
 } from "./history-groups.ts";
 
-function groupHistoryMessages(threadId: string, messages: readonly ModelMessage[]) {
+function groupHistoryMessages(threadId: string, messages: readonly StoredMessage[]) {
   return HistoryGroupingResult.$match(computeHistoryGroups(threadId, messages), {
     ready: ({ groups }) => groups,
     "id-collision": ({ id }) => {
@@ -16,7 +17,11 @@ function groupHistoryMessages(threadId: string, messages: readonly ModelMessage[
   });
 }
 
-const linkedMessages: ModelMessage[] = [
+/** Each group's id with the ids of its messages. */
+const membership = (groups: readonly HistoryGroup[]) =>
+  groups.map((group) => [group.id, group.messages.map((message) => message.id)]);
+
+const linkedMessages: StoredMessage[] = [
   { id: "user", role: "user", content: "Question" },
   {
     id: "assistant",
@@ -24,7 +29,6 @@ const linkedMessages: ModelMessage[] = [
     content: "Checking",
     toolCalls: [{ id: "call", type: "function", function: { name: "read", arguments: "{}" } }],
   },
-  { id: "orphan", role: "tool", content: "Standalone" },
   { id: "result", role: "tool", toolCallId: "call", content: '{"ok":true}' },
   {
     id: "assistant-segment-1",
@@ -38,7 +42,7 @@ const linkedMessages: ModelMessage[] = [
 
 describe("history storage UI groups", () => {
   it("allocates stable fallback IDs around explicit IDs and retains published cursors", () => {
-    const messages: ModelMessage[] = [
+    const messages: StoredMessage[] = [
       { role: "assistant", content: "Legacy" },
       { id: "user", role: "user", content: "Next" },
       { id: "stored:thread:0", role: "assistant", content: "Explicit" },
@@ -83,8 +87,8 @@ describe("history storage UI groups", () => {
     });
     expect(JSON.stringify(messages)).toBe(original);
   });
-  it("folds reused assistant IDs into stable SDK segments without changing the transcript", () => {
-    const messages: ModelMessage[] = [
+  it("folds reused assistant IDs into stable segments without changing the transcript", () => {
+    const messages: StoredMessage[] = [
       { id: "user", role: "user", content: "Question" },
       {
         id: "answer",
@@ -99,17 +103,11 @@ describe("history storage UI groups", () => {
     const original = JSON.stringify(messages);
     const groups = groupHistoryMessages("thread", messages);
     expect(groups.map((group) => group.id)).toEqual(["user", "answer", "next"]);
-    const ui = modelMessagesToUIMessages(groups[1]!.messages);
-    expect(ui).toHaveLength(1);
-    expect(ui[0]!.id).toBe("answer");
-    expect(ui[0]!.parts).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ type: "text", content: "Checking" }),
-        expect.objectContaining({ type: "tool-result", toolCallId: "call", content: "Result" }),
-        expect.objectContaining({ type: "text", content: "Done" }),
-      ]),
-    );
-    expect(groups[1]!.messages[2]!.id).toBe("answer-segment-history-3");
+    expect(groups[1]!.messages).toEqual([
+      messages[1],
+      { ...messages[2], id: expect.stringMatching(/^history-legacy-/) },
+      { ...messages[3], id: "answer-segment-history-3" },
+    ]);
     expect(
       groupHistoryMessages("thread", [
         ...messages,
@@ -131,7 +129,7 @@ describe("history storage UI groups", () => {
     ).toEqual(HistoryGroupingResult["id-collision"]({ id: "answer" }));
   });
   it("reports an appended ID collision instead of silently changing a legacy cursor", () => {
-    const messages: ModelMessage[] = [{ role: "user", content: "Old" }];
+    const messages: StoredMessage[] = [{ role: "user", content: "Old" }];
     const previousId = groupHistoryMessages("thread", messages)[0]!.id;
     const before = JSON.stringify(messages);
     expect(
@@ -149,30 +147,19 @@ describe("history storage UI groups", () => {
       ]),
     ).toEqual(HistoryGroupingResult["id-collision"]({ id: "duplicate" }));
   });
-  it("matches the full SDK conversion including noncontiguous results and segments", () => {
+  it("keeps results and segments with their assistant, and a result after a user alone", () => {
     const groups = groupHistoryMessages("thread", linkedMessages);
-    expect(groups.map((group) => group.id)).toEqual([
-      "user",
-      "assistant",
-      "orphan",
-      "next-user",
-      "after-user",
+    expect(membership(groups)).toEqual([
+      ["user", ["user"]],
+      ["assistant", ["assistant", "result", "assistant-segment-1"]],
+      ["next-user", ["next-user"]],
+      ["after-user", ["after-user"]],
     ]);
-    expect(groups.flatMap((group) => modelMessagesToUIMessages(group.messages))).toEqual(
-      modelMessagesToUIMessages(linkedMessages),
-    );
-    for (let boundary = 0; boundary <= groups.length; boundary++) {
-      expect(
-        modelMessagesToUIMessages(groups.slice(0, boundary).flatMap((group) => group.messages)),
-      ).toEqual(modelMessagesToUIMessages(linkedMessages).slice(0, boundary));
-      expect(
-        modelMessagesToUIMessages(groups.slice(boundary).flatMap((group) => group.messages)),
-      ).toEqual(modelMessagesToUIMessages(linkedMessages).slice(boundary));
-    }
+    expect(groups.flatMap((group) => group.messages)).toEqual(linkedMessages);
   });
 
   it("creates stable isolated legacy IDs without mutating the original transcript", () => {
-    const messages: ModelMessage[] = [
+    const messages: StoredMessage[] = [
       { role: "user", content: "Legacy question" },
       { role: "assistant", content: "Legacy answer" },
       { role: "tool", toolCallId: "legacy-call", content: "Legacy detail" },
@@ -187,15 +174,12 @@ describe("history storage UI groups", () => {
       { role: "user", content: "New" },
     ]);
     expect(appended.slice(0, groups.length)).toEqual(groups);
-    expect(
-      modelMessagesToUIMessages(groups.flatMap((group) => group.messages)).map(
-        (message) => message.id,
-      ),
-    ).toEqual(groups.map((group) => group.id));
+    // Each group shows as its first message, whose id is the group's.
+    expect(groups.map((group) => group.messages[0]?.id)).toEqual(groups.map((group) => group.id));
   });
 
-  it("does not merge unrelated assistants and preserves result errors and metadata", () => {
-    const messages: ModelMessage[] = [
+  it("does not merge unrelated assistants and preserves result errors", () => {
+    const messages: StoredMessage[] = [
       { id: "first", role: "assistant", content: "First" },
       { id: "second", role: "assistant", content: "Second" },
       {
@@ -204,13 +188,13 @@ describe("history storage UI groups", () => {
         toolCallId: "missing-call",
         content: "failed",
         error: "read failed",
-        metadata: { source: "fixture" },
       },
     ];
     const groups = groupHistoryMessages("thread", messages);
-    expect(groups).toHaveLength(2);
-    expect(groups.flatMap((group) => modelMessagesToUIMessages(group.messages))).toEqual(
-      modelMessagesToUIMessages(messages),
-    );
+    expect(membership(groups)).toEqual([
+      ["first", ["first"]],
+      ["second", ["second", "error"]],
+    ]);
+    expect(groups[1]?.messages[1]).toEqual(messages[2]);
   });
 });

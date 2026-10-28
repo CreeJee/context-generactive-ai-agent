@@ -1,4 +1,3 @@
-import { Function as EffectFunction } from "effect";
 import {
   Clock,
   Data,
@@ -9,18 +8,18 @@ import {
   Match,
   MutableHashSet,
   Option,
+  Ref,
   Schema,
   Stream,
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import type { PlatformError } from "effect";
-import { runOAuthNodeEffect } from "../oauth/node-runtime.ts";
 import { shellInvocation } from "../runtime/host.ts";
 
 /** Output bytes kept from the start of each stream once it is too long. */
-const headBytes = 8 * 1024;
+const headBytes = 2 * 1024;
 /** Output bytes kept from the end of each stream; failures usually print last. */
-const tailBytes = 56 * 1024;
+const tailBytes = 14 * 1024;
 /** Grace period between SIGTERM and SIGKILL when stopping a command. */
 const killGraceMs = 3_000;
 /** Final wait for the output pipes after the process group stopped, before detached pipes are abandoned. */
@@ -50,11 +49,11 @@ const activeCommands = shellProcessState.activeCommands;
 
 /** Stops every shell command owned by this process, normally during server shutdown. */
 export function stopAllCommands(force = false) {
-  for (const command of activeCommands) (force ? command.force : command.cancel)();
+  Array.from(activeCommands).forEach((command) => (force ? command.force : command.cancel)());
 }
 
 // The app installs graceful signal handlers. Its eventual process.exit reaches this final,
-// synchronous safety net even if runtime disposal did not propagate an AbortSignal to a tool.
+// synchronous safety net even if runtime disposal did not interrupt a running command.
 if (!shellProcessState.exitListenerInstalled) {
   shellProcessState.exitListenerInstalled = true;
   process.once("exit", () => stopAllCommands(true));
@@ -72,11 +71,12 @@ const secretVariable =
   /(TOKEN|SECRET|PASSWORD|PASSWD|PASSPHRASE|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL|COOKIE|SESSION_?KEY|AUTH)/i;
 
 export function commandEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {};
-  for (const [name, value] of Object.entries(source))
-    if (value !== undefined && !secretVariable.test(name)) env[name] = value;
   return {
-    ...env,
+    ...Object.fromEntries(
+      Object.entries(source).filter(
+        ([name, value]) => value !== undefined && !secretVariable.test(name),
+      ),
+    ),
     TERM: "dumb",
     NO_COLOR: "1",
     PAGER: "cat",
@@ -90,40 +90,57 @@ export function hostShell(source: NodeJS.ProcessEnv) {
   return Effect.map(shellInvocation("", source), (invocation) => invocation.file);
 }
 
+/** The first and last bytes of a stream, and how many it had in all. */
+interface Captured {
+  readonly head: Buffer;
+  readonly tailChunks: ReadonlyArray<Uint8Array>;
+  readonly tailLength: number;
+  readonly total: number;
+}
+
+const nothingCaptured: Captured = {
+  head: Buffer.alloc(0),
+  tailChunks: [],
+  tailLength: 0,
+  total: 0,
+};
+
+/** Drops the oldest tail chunks that the last `tailBytes` no longer reach. */
+const trimmedTail = (
+  chunks: ReadonlyArray<Uint8Array>,
+  length: number,
+): Pick<Captured, "tailChunks" | "tailLength"> => {
+  const [first, ...rest] = chunks;
+  return first !== undefined && length - first.length >= tailBytes
+    ? trimmedTail(rest, length - first.length)
+    : { tailChunks: chunks, tailLength: length };
+};
+
 /** Keeps the first and last bytes of a stream and counts what was dropped in between. */
-const makeCapture = () => {
-  let head = Buffer.alloc(0);
-  const tailChunks: Uint8Array[] = [];
-  let tailLength = 0;
-  let total = 0;
-
-  const push = (input: Uint8Array) => {
-    let chunk = input;
-    total += chunk.length;
-    if (head.length < headBytes) {
-      const room = headBytes - head.length;
-      head = Buffer.concat([head, chunk.subarray(0, room)]);
-      chunk = chunk.subarray(room);
-    }
-    if (chunk.length === 0) return;
-    tailChunks.push(chunk);
-    tailLength += chunk.length;
-    while (tailLength - (tailChunks[0]?.length ?? 0) >= tailBytes) {
-      tailLength -= tailChunks.shift()!.length;
-    }
+const captured = (state: Captured, input: Uint8Array): Captured => {
+  const room = Math.max(headBytes - state.head.length, 0);
+  const chunk = input.subarray(room);
+  const tail =
+    chunk.length === 0
+      ? state
+      : trimmedTail([...state.tailChunks, chunk], state.tailLength + chunk.length);
+  return {
+    head: room > 0 ? Buffer.concat([state.head, input.subarray(0, room)]) : state.head,
+    tailChunks: tail.tailChunks,
+    tailLength: tail.tailLength,
+    total: state.total + input.length,
   };
+};
 
-  const result = () => {
-    let tail = Buffer.concat(tailChunks);
-    if (tail.length > tailBytes) tail = tail.subarray(tail.length - tailBytes);
-    const omitted = total - head.length - tail.length;
-    const text =
-      omitted > 0
-        ? `${head.toString("utf8")}\n… ${omitted} bytes omitted …\n${tail.toString("utf8")}`
-        : Buffer.concat([head, tail]).toString("utf8");
-    return { text, truncated: omitted > 0, bytes: total };
-  };
-  return { push, result };
+const capturedText = ({ head, tailChunks, total }: Captured) => {
+  const kept = Buffer.concat(tailChunks);
+  const tail = kept.subarray(Math.max(kept.length - tailBytes, 0));
+  const omitted = total - head.length - tail.length;
+  const text =
+    omitted > 0
+      ? `${head.toString("utf8")}\n… ${omitted} bytes omitted …\n${tail.toString("utf8")}`
+      : Buffer.concat([head, tail]).toString("utf8");
+  return { text, truncated: omitted > 0, bytes: total };
 };
 
 export interface CommandResult {
@@ -141,26 +158,18 @@ export interface CommandResult {
 }
 
 export interface CommandOptions {
+  readonly command: string;
   readonly cwd: string;
   readonly timeoutSeconds: number;
-  readonly signal: AbortSignal | undefined;
   readonly env: NodeJS.ProcessEnv;
 }
 
-/**
- * Runs one command line on the host, in its own process group on POSIX. Timeout and cancellation
- * stop everything it started (SIGTERM, then SIGKILL; the whole tree at once on Windows). This is
- * host execution: path rules do not sandbox it.
- */
-export const runCommand: {
-  (options: CommandOptions): (command: string) => ReturnType<typeof runCommandBody>;
-} & typeof runCommandBody = EffectFunction.dual(2, runCommandBody);
 const SpawnFailed = Schema.TaggedStruct("SpawnFailed", {});
 
-export class CommandStartFailed extends Schema.TaggedError<CommandStartFailed>()(
-  "CommandStartFailed",
-  { reason: SpawnFailed, cause: Schema.Defect() },
-) {}
+export class CommandStartFailed extends Schema.TaggedError<
+  CommandStartFailed,
+  { readonly brand: unique symbol }
+>()("CommandStartFailed", { reason: SpawnFailed, cause: Schema.Defect() }) {}
 
 /** How a running command ended: the process exited and its pipes closed, or it was stopped. */
 type CommandOutcome = Data.TaggedEnum<{
@@ -169,54 +178,40 @@ type CommandOutcome = Data.TaggedEnum<{
 }>;
 const CommandOutcome = Data.taggedEnum<CommandOutcome>();
 
-function runCommandBody(command: string, options: CommandOptions): Promise<CommandResult> {
-  // Register the request before asynchronous runtime/host-shell resolution so shutdown cannot miss it.
-  const pending = new AbortController();
-  const entry: ActiveCommand = { cancel: () => pending.abort(), force: () => pending.abort() };
-  MutableHashSet.add(activeCommands, entry);
-  const signal =
-    options.signal === undefined
-      ? pending.signal
-      : AbortSignal.any([pending.signal, options.signal]);
-  return runOAuthNodeEffect(runCommandEffect({ command, ...options, signal })).finally(() => {
-    MutableHashSet.remove(activeCommands, entry);
-  });
-}
-
-const isAborted = (signal: AbortSignal | undefined) => signal?.aborted === true;
-
-export const runCommandEffect = (options: CommandOptions & { readonly command: string }) =>
+/**
+ * Runs one command line on the host, in its own process group on POSIX. Timeout, interruption and
+ * `stopAllCommands` stop everything it started (SIGTERM, then SIGKILL; the whole tree at once on
+ * Windows). This is host execution: path rules do not sandbox it.
+ */
+export const runCommand = (options: CommandOptions) =>
   Effect.scoped(
     Effect.gen(function* () {
       const { command } = options;
-      const effectClock = yield* Clock.Clock;
       const invocation = yield* shellInvocation(command, options.env);
       const shell = invocation.file;
-      const started = effectClock.currentTimeMillisUnsafe();
-      const stdout = makeCapture();
-      const stderr = makeCapture();
-      const result = (
+      const started = yield* Clock.currentTimeMillis;
+      const stdout = yield* Ref.make(nothingCaptured);
+      const stderr = yield* Ref.make(nothingCaptured);
+      const result = Effect.fnUntraced(function* (
         status: CommandResult["status"],
         exitCode: number | null,
         signal: string | null,
-      ): CommandResult => {
-        const out = stdout.result();
-        const err = stderr.result();
+      ): Effect.fn.Return<CommandResult> {
+        const out = capturedText(yield* Ref.get(stdout));
+        const err = capturedText(yield* Ref.get(stderr));
         return {
           command,
           shell,
           status,
           exitCode,
           signal,
-          durationMs: effectClock.currentTimeMillisUnsafe() - started,
+          durationMs: (yield* Clock.currentTimeMillis) - started,
           stdout: out.text,
           stderr: err.text,
           stdoutTruncated: out.truncated,
           stderrTruncated: err.truncated,
         };
-      };
-      if (isAborted(options.signal)) return { ...result("cancelled", null, null), durationMs: 0 };
-
+      });
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const handle = yield* spawner
         .spawn(
@@ -248,24 +243,17 @@ export const runCommandEffect = (options: CommandOptions & { readonly command: s
           runFork(handle.kill({ killSignal: "SIGKILL" }));
         },
       };
+      // The process exit hook reads this set synchronously, so it stays a native mutable set.
       yield* Effect.acquireRelease(
         Effect.sync(() => MutableHashSet.add(activeCommands, active)),
         () => Effect.sync(() => MutableHashSet.remove(activeCommands, active)),
       );
-      const onAbort = () => active.cancel();
-      yield* Effect.acquireRelease(
-        Effect.sync(() => options.signal?.addEventListener("abort", onAbort, { once: true })),
-        () => Effect.sync(() => options.signal?.removeEventListener("abort", onAbort)),
-      );
-      // Close the abort-listener registration race after the child is tracked.
-      if (isAborted(options.signal)) onAbort();
-
       const drain = (
         output: Stream.Stream<Uint8Array, PlatformError.PlatformError>,
-        capture: typeof stdout,
+        capture: Ref.Ref<Captured>,
       ) =>
         output.pipe(
-          Stream.runForEach((chunk) => Effect.sync(() => capture.push(chunk))),
+          Stream.runForEach((chunk) => Ref.update(capture, (state) => captured(state, chunk))),
           Effect.forkScoped,
         );
       const pipes = yield* Effect.all([drain(handle.stdout, stdout), drain(handle.stderr, stderr)]);
@@ -315,7 +303,7 @@ export const runCommandEffect = (options: CommandOptions & { readonly command: s
           Signaled: (status) => ({ exitCode: null, signal: status.signal }),
         }),
       });
-      return result(
+      return yield* result(
         ended.reason ?? (exit.exitCode === 0 ? "succeeded" : "failed"),
         exit.exitCode,
         exit.signal,

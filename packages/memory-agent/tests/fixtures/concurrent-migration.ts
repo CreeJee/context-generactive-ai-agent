@@ -16,7 +16,7 @@ await Effect.runPromise(
           try {
             sqlite.exec("PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON");
             process.stdout.write("ready\n");
-            migrateDatabase(sqlite);
+            yield* migrateDatabase(sqlite);
             expect(sqlite.prepare("PRAGMA user_version").get()?.user_version).toBe(
               migrations.length,
             );
@@ -35,38 +35,42 @@ await Effect.runPromise(
           const file = path.join(directory, "agent.db");
           const sqlite = new DatabaseSync(file);
           try {
-            for (const step of migrations.slice(0, 48)) sqlite.exec(step);
+            migrations.slice(0, 48).forEach((step) => sqlite.exec(step));
             sqlite.exec("PRAGMA user_version=48; BEGIN IMMEDIATE");
-            const starts = [];
-            for (const _ of [0, 1]) {
-              const child = yield* spawner.spawn(
-                ChildProcess.make(process.execPath, [script, "child", file], {
-                  stdin: "ignore",
-                  killSignal: "SIGKILL",
-                }),
-              );
-              const ready = yield* Deferred.make<void>();
-              let output = "";
-              yield* child.stdout.pipe(
-                Stream.decodeText(),
-                Stream.runForEach((chunk) => {
-                  output += chunk;
-                  return output === "ready\n" ? Deferred.succeed(ready, undefined) : Effect.void;
-                }),
-                Effect.forkScoped,
-              );
-              const errors = yield* child.stderr.pipe(
-                Stream.decodeText(),
-                Stream.mkString,
-                Effect.forkScoped,
-              );
-              const exit = yield* Effect.gen(function* () {
-                const code = yield* child.exitCode;
-                const stderr = yield* Fiber.join(errors);
-                expect(code, stderr).toBe(0);
-              }).pipe(Effect.forkScoped);
-              starts.push({ ready, exit });
-            }
+            const starts = yield* Effect.forEach(
+              [0, 1],
+              Effect.fnUntraced(function* () {
+                const child = yield* spawner.spawn(
+                  ChildProcess.make(process.execPath, [script, "child", file], {
+                    stdin: "ignore",
+                    killSignal: "SIGKILL",
+                  }),
+                );
+                const ready = yield* Deferred.make<void>();
+                yield* child.stdout.pipe(
+                  Stream.decodeText(),
+                  Stream.scan(
+                    () => "",
+                    (output, chunk) => output + chunk,
+                  ),
+                  Stream.runForEach((output) =>
+                    output === "ready\n" ? Deferred.succeed(ready, undefined) : Effect.void,
+                  ),
+                  Effect.forkScoped,
+                );
+                const errors = yield* child.stderr.pipe(
+                  Stream.decodeText(),
+                  Stream.mkString,
+                  Effect.forkScoped,
+                );
+                const exit = yield* Effect.gen(function* () {
+                  const code = yield* child.exitCode;
+                  const stderr = yield* Fiber.join(errors);
+                  expect(code, stderr).toBe(0);
+                }).pipe(Effect.forkScoped);
+                return { ready, exit };
+              }),
+            );
             yield* Effect.forEach(starts, (start) => Deferred.await(start.ready));
             // Both children encounter the held migration lock before it is released.
             yield* Effect.sleep("100 millis");

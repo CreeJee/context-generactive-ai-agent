@@ -9,6 +9,7 @@ import {
   assertDatabaseSchema,
 } from "../src/db/database.ts";
 import { migrations } from "../src/db/migrations.ts";
+import { SqlError } from "effect/sql";
 import { withTestPlatform } from "./support/platform.ts";
 
 const databaseFile = Effect.fn("databaseFile")(function* () {
@@ -52,13 +53,18 @@ const withPreBindingCheckDatabase = Effect.fn("withPreBindingCheckDatabase")(fun
   );
   try {
     sqlite.exec("PRAGMA foreign_keys = ON");
-    for (const step of migrations.slice(0, version)) sqlite.exec(step);
+    migrations.slice(0, version).forEach((step) => sqlite.exec(step));
     sqlite.exec(`PRAGMA user_version = ${version}`);
     use({ sqlite });
   } finally {
     sqlite.close();
   }
 }, Effect.scoped);
+
+const memoryDatabase = Effect.acquireRelease(
+  Effect.sync(() => new DatabaseSync(":memory:")),
+  (sqlite) => Effect.sync(() => sqlite.close()),
+);
 
 function seed(db: RawDatabase) {
   const now = DateTime.formatIso(DateTime.nowUnsafe());
@@ -79,90 +85,98 @@ function seed(db: RawDatabase) {
   insert.run("n2", "tool_call", '{"path":"README.md"}', now);
 }
 
+/** A failed migration's SQLite message. */
+const sqliteMessage = (sqlite: DatabaseSync) =>
+  Effect.map(Effect.flip(migrateDatabase(sqlite)), (failure) =>
+    SqlError.isSqlError(failure) ? String(failure.reason.cause) : failure.message,
+  );
+
 describe("Database", () => {
-  it("rolls back the entire pending migration path and restores FK enforcement when a later step fails", () => {
-    const sqlite = new DatabaseSync(":memory:");
-    try {
-      sqlite.exec("PRAGMA foreign_keys=ON");
-      for (const step of migrations.slice(0, 47)) sqlite.exec(step);
-      sqlite.exec("PRAGMA user_version=47; CREATE TABLE owner_read_recoveries(existing_data TEXT)");
-      seed({ sqlite });
-      const before = sqlite.prepare("SELECT * FROM nodes ORDER BY seq").all();
-      expect(() => migrateDatabase(sqlite)).toThrow(/already exists/);
-      expect(sqlite.prepare("PRAGMA user_version").get()).toEqual({ user_version: 47 });
-      expect(
-        sqlite
-          .prepare("SELECT name FROM sqlite_schema WHERE name='owner_workflow_executions'")
-          .get(),
-      ).toBeUndefined();
-      expect(sqlite.prepare("SELECT * FROM nodes ORDER BY seq").all()).toEqual(before);
-      expect(sqlite.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
-    } finally {
-      sqlite.close();
-    }
-  });
+  it.effect(
+    "rolls back the entire pending migration path and restores FK enforcement when a later step fails",
+    () =>
+      Effect.gen(function* () {
+        const sqlite = yield* memoryDatabase;
+        sqlite.exec("PRAGMA foreign_keys=ON");
+        migrations.slice(0, 47).forEach((step) => sqlite.exec(step));
+        sqlite.exec(
+          "PRAGMA user_version=47; CREATE TABLE owner_read_recoveries(existing_data TEXT)",
+        );
+        seed({ sqlite });
+        const before = sqlite.prepare("SELECT * FROM nodes ORDER BY seq").all();
+        expect(yield* sqliteMessage(sqlite)).toMatch(/already exists/);
+        expect(sqlite.prepare("PRAGMA user_version").get()).toEqual({ user_version: 47 });
+        expect(
+          sqlite
+            .prepare("SELECT name FROM sqlite_schema WHERE name='owner_workflow_executions'")
+            .get(),
+        ).toBeUndefined();
+        expect(sqlite.prepare("SELECT * FROM nodes ORDER BY seq").all()).toEqual(before);
+        expect(sqlite.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+      }),
+  );
 
-  it("readers require the actual current DB contract and reject stale, newer or damaged schemas before execution", () => {
-    const sqlite = new DatabaseSync(":memory:");
-    try {
-      expect(() => assertDatabaseSchema(sqlite)).toThrow(
-        expect.objectContaining({
-          reason: DatabaseSchemaRejectedReason.cases.MigrationPending.make({
-            actual: 0,
-            supported: migrations.length,
+  it.effect(
+    "readers require the actual current DB contract and reject stale, newer or damaged schemas before execution",
+    () =>
+      Effect.gen(function* () {
+        const sqlite = yield* memoryDatabase;
+        expect(() => assertDatabaseSchema(sqlite)).toThrow(
+          expect.objectContaining({
+            reason: DatabaseSchemaRejectedReason.cases.MigrationPending.make({
+              actual: 0,
+              supported: migrations.length,
+            }),
           }),
-        }),
-      );
-      migrateDatabase(sqlite);
-      expect(assertDatabaseSchema(sqlite)).toBe(migrations.length);
-      sqlite.exec(`PRAGMA user_version=${migrations.length + 1}`);
-      expect(() => assertDatabaseSchema(sqlite)).toThrow(
-        expect.objectContaining({
-          reason: DatabaseSchemaRejectedReason.cases.NewerThanBuild.make({
-            actual: migrations.length + 1,
-            supported: migrations.length,
+        );
+        yield* migrateDatabase(sqlite);
+        expect(assertDatabaseSchema(sqlite)).toBe(migrations.length);
+        sqlite.exec(`PRAGMA user_version=${migrations.length + 1}`);
+        expect(() => assertDatabaseSchema(sqlite)).toThrow(
+          expect.objectContaining({
+            reason: DatabaseSchemaRejectedReason.cases.NewerThanBuild.make({
+              actual: migrations.length + 1,
+              supported: migrations.length,
+            }),
           }),
-        }),
-      );
-      sqlite.exec(
-        `PRAGMA user_version=${migrations.length}; ALTER TABLE owner_read_recoveries RENAME TO missing_receipts`,
-      );
-      expect(() => assertDatabaseSchema(sqlite)).toThrow(/owner_read_recoveries/);
-    } finally {
-      sqlite.close();
-    }
-  });
+        );
+        sqlite.exec(
+          `PRAGMA user_version=${migrations.length}; ALTER TABLE owner_read_recoveries RENAME TO missing_receipts`,
+        );
+        expect(() => assertDatabaseSchema(sqlite)).toThrow(/owner_read_recoveries/);
+      }),
+  );
 
-  it("adds recovery receipts to schema 48 without changing evidence and leaves 48 intact on a failed upgrade", () => {
-    const sqlite = new DatabaseSync(":memory:");
-    try {
-      sqlite.exec("PRAGMA foreign_keys=ON");
-      for (const step of migrations.slice(0, 48)) sqlite.exec(step);
-      sqlite.exec("PRAGMA user_version=48");
-      seed({ sqlite });
-      const before = sqlite.prepare("SELECT * FROM nodes ORDER BY seq").all();
-      sqlite.exec("PRAGMA query_only=ON");
-      expect(() => migrateDatabase(sqlite)).toThrow(/readonly|read-only/i);
-      expect(sqlite.prepare("PRAGMA user_version").get()).toEqual({ user_version: 48 });
-      expect(
-        sqlite.prepare("SELECT name FROM sqlite_schema WHERE name='owner_read_recoveries'").get(),
-      ).toBeUndefined();
-      expect(sqlite.prepare("SELECT * FROM nodes ORDER BY seq").all()).toEqual(before);
-      sqlite.exec("PRAGMA query_only=OFF");
-      migrateDatabase(sqlite);
-      expect(sqlite.prepare("PRAGMA user_version").get()).toEqual({
-        user_version: migrations.length,
-      });
-      expect(sqlite.prepare("SELECT * FROM nodes ORDER BY seq").all()).toEqual(before);
-      expect(sqlite.prepare("SELECT count(*) AS n FROM owner_read_recoveries").get()).toEqual({
-        n: 0,
-      });
-      expect(sqlite.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-      expect(sqlite.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-    } finally {
-      sqlite.close();
-    }
-  });
+  it.effect(
+    "adds recovery receipts to schema 48 without changing evidence and leaves 48 intact on a failed upgrade",
+    () =>
+      Effect.gen(function* () {
+        const sqlite = yield* memoryDatabase;
+        sqlite.exec("PRAGMA foreign_keys=ON");
+        migrations.slice(0, 48).forEach((step) => sqlite.exec(step));
+        sqlite.exec("PRAGMA user_version=48");
+        seed({ sqlite });
+        const before = sqlite.prepare("SELECT * FROM nodes ORDER BY seq").all();
+        sqlite.exec("PRAGMA query_only=ON");
+        expect(yield* sqliteMessage(sqlite)).toMatch(/readonly|read-only/i);
+        expect(sqlite.prepare("PRAGMA user_version").get()).toEqual({ user_version: 48 });
+        expect(
+          sqlite.prepare("SELECT name FROM sqlite_schema WHERE name='owner_read_recoveries'").get(),
+        ).toBeUndefined();
+        expect(sqlite.prepare("SELECT * FROM nodes ORDER BY seq").all()).toEqual(before);
+        sqlite.exec("PRAGMA query_only=OFF");
+        yield* migrateDatabase(sqlite);
+        expect(sqlite.prepare("PRAGMA user_version").get()).toEqual({
+          user_version: migrations.length,
+        });
+        expect(sqlite.prepare("SELECT * FROM nodes ORDER BY seq").all()).toEqual(before);
+        expect(sqlite.prepare("SELECT count(*) AS n FROM owner_read_recoveries").get()).toEqual({
+          n: 0,
+        });
+        expect(sqlite.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+        expect(sqlite.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+      }),
+  );
 
   it.live("creates the directory, applies every migration once and reopens", () =>
     Effect.gen(function* () {
@@ -195,7 +209,7 @@ describe("Database", () => {
         const state = '{"goal":{"version":4},"plan":{"version":7}}';
         try {
           old.exec("PRAGMA foreign_keys = ON");
-          for (const step of migrations.slice(0, releasedVersion)) old.exec(step);
+          migrations.slice(0, releasedVersion).forEach((step) => old.exec(step));
           old.exec(`PRAGMA user_version = ${releasedVersion}`);
           seed({ sqlite: old });
           old.prepare("INSERT INTO session_workflows VALUES ('s1', ?, 'released')").run(state);

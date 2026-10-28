@@ -17,6 +17,14 @@ const { transformSync } = await import(
   ).href
 );
 
+const javaScriptOf = (url: string, source: string): string => {
+  try {
+    return stripTypeScriptTypes(source);
+  } catch {
+    return transformSync(fileURLToPath(url), source).code;
+  }
+};
+
 registerHooks({
   load(url, context, nextLoad) {
     if (url.startsWith("file:") && /\.(?:ts|mts)$/.test(url)) {
@@ -24,13 +32,7 @@ registerHooks({
       const loaded = nextLoad(url, context);
       if (!isBytes(loaded.source)) return loaded;
       const source = new TextDecoder().decode(loaded.source);
-      let code: string;
-      try {
-        code = stripTypeScriptTypes(source);
-      } catch {
-        code = transformSync(fileURLToPath(url), source).code;
-      }
-      return { format: "module", shortCircuit: true, source: code };
+      return { format: "module", shortCircuit: true, source: javaScriptOf(url, source) };
     }
     if (!url.endsWith(".node")) return nextLoad(url, context);
     return {

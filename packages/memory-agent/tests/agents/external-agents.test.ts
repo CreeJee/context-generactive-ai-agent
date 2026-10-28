@@ -1,8 +1,6 @@
 // Native ACP processes prove actual OS environment isolation, reconnect and cancellation.
-import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
-import { Cause, Effect, Fiber, FiberSet, FileSystem, Path, Schedule, Schema } from "effect";
+import { Effect, Fiber, FileSystem, Path, Schedule, Schema, Stream } from "effect";
 import { expect, vi } from "vite-plus/test";
-import { AgentChat } from "../../src/agent/chat.ts";
 import { GlobalConfig } from "../../src/config/global-config.ts";
 import { RelayedApprovals } from "../../src/approvals/relayed.ts";
 import { ApprovalRequester } from "../../src/approvals/relayed-state.ts";
@@ -13,15 +11,19 @@ import {
   ExternalPromptOutcome,
 } from "../../src/external-agents/agents.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
+import { AgUiEvent } from "../../src/loop/chunks.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { BackgroundTasks } from "../../src/tools/background.ts";
 import { DelegateTools } from "../../src/tools/delegate.ts";
-import { approvalToolDefinitions, permissionReviewInterrupt } from "../../src/tools/definitions.ts";
+import { chatApi } from "../support/chat-api.ts";
+import { openPage } from "../support/chat-client.ts";
 import { selectTestModel } from "../support/provider.ts";
-import { inRun } from "../support/run-span.ts";
+import { callTool } from "../support/run-tools.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
-import { current, encodeJson, freshProject, post, sdk, until } from "./agent-env.ts";
+import { current, encodeJson, freshProject, until } from "./agent-env.ts";
+
+const isTextContent = AgUiEvent.guards.TEXT_MESSAGE_CONTENT;
 
 const Start = Schema.fromJsonString(
   Schema.Struct({ pid: Schema.Int, cwd: Schema.String, secret: Schema.NullOr(Schema.String) }),
@@ -88,14 +90,9 @@ const fakeAgentProject = Effect.fnUntraced(function* () {
   const link = Effect.map(agents.overview(project), ({ agents: [view] }) =>
     view !== undefined && AgentTrustState.$is("trusted")(view.state) ? view.state.link : null,
   );
-  const prompt = (text: string, options: { signal?: AbortSignal; approve?: boolean } = {}) =>
-    Effect.tryPromise({
-      try: (signal) =>
-        agents.prompt(project, "fake", sessionId, text, {
-          signal: options.signal ?? signal,
-          askPermission: () => Promise.resolve(options.approve ?? false),
-        }),
-      catch: (cause) => new Cause.UnknownError(cause),
+  const prompt = (text: string, options: { approve?: boolean } = {}) =>
+    agents.prompt(project, "fake", sessionId, text, {
+      askPermission: () => Effect.succeed(options.approve ?? false),
     });
   const trust = agents.setTrusted(project, "project", "fake", true);
   return { project, sessionId, agents, config, log, refuse, starts, link, prompt, trust };
@@ -191,24 +188,15 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
       }),
   );
 
-  it.effect("cancelling sends session/cancel", () =>
+  it.effect("interrupting a prompt sends session/cancel and waits for the agent's answer", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const { log, prompt, trust } = yield* fakeAgentProject();
       yield* trust;
-      // The ACP caller cancels its own request through its AbortSignal.
-      const controller = yield* Effect.acquireRelease(
-        Effect.sync(() => new AbortController()),
-        (controller) => Effect.sync(() => controller.abort()),
-      );
-      const pending = yield* Effect.forkChild(prompt("slow", { signal: controller.signal }), {
-        startImmediately: true,
-      });
+      const pending = yield* Effect.forkChild(prompt("slow"), { startImmediately: true });
       yield* eventually(fs.exists(`${log}.slow`), "the slow prompt to reach the agent");
-      controller.abort();
-      const cancelled = yield* Fiber.join(pending);
-      expect(ExternalPromptOutcome.$is("cancelled")(cancelled)).toBe(true);
-      expect(cancelled).toMatchObject({ stopReason: "cancelled" });
+      yield* Fiber.interrupt(pending);
+      expect(yield* fs.exists(`${log}.cancelled`)).toBe(true);
     }),
   );
 
@@ -217,20 +205,47 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
       const fs = yield* FileSystem.FileSystem;
       const { project, sessionId, agents, log, prompt, trust } = yield* fakeAgentProject();
       yield* trust;
-      const signal = yield* Effect.abortSignal;
-      const delegate = (yield* inRun((yield* DelegateTools).forRun(project, sessionId, signal)))
-        .tools[0]!;
+      const { tools } = yield* (yield* DelegateTools).toolsFor({
+        project,
+        sessionId,
+        signal: yield* Effect.abortSignal,
+        runId: `${sessionId}:run`,
+      });
       expect(
-        yield* sdk(() => delegate.execute!({ agent: "fake", task: "slow task", yieldMs: 0 })),
+        yield* callTool(tools, "delegate_to_agent", {
+          agent: "fake",
+          task: "slow task",
+          yieldMs: 0,
+        }),
       ).toMatchObject({ status: "running" });
       yield* eventually(fs.exists(`${log}.slow`), "the background ACP prompt to arrive");
       const tasks = yield* BackgroundTasks;
       yield* tasks.stopSession(sessionId);
-      expect(tasks.hasSession(sessionId)).toBe(false);
+      expect(yield* tasks.hasSession(sessionId)).toBe(false);
       expect(isConnected((yield* agents.overview(project)).agents[0]?.state)).toBe(true);
       expect(ExternalPromptOutcome.$is("completed")(yield* prompt("after cancellation"))).toBe(
         true,
       );
+    }),
+  );
+
+  it.effect("a quick delegation returns the agent's report inline", () =>
+    Effect.gen(function* () {
+      const { project, sessionId, trust } = yield* fakeAgentProject();
+      yield* trust;
+      const { tools } = yield* (yield* DelegateTools).toolsFor({
+        project,
+        sessionId,
+        signal: yield* Effect.abortSignal,
+        runId: `${sessionId}:run`,
+      });
+      expect(
+        yield* callTool(tools, "delegate_to_agent", { agent: "fake", task: "hi", yieldMs: 5000 }),
+      ).toMatchObject({
+        agent: "fake",
+        status: "completed",
+        answer: "external: hi (turn 1)",
+      });
     }),
   );
 
@@ -288,45 +303,23 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
         yield* trust;
         yield* current(selectTestModel());
         const relayed = yield* RelayedApprovals;
-        const agent = yield* AgentChat;
-        const run = yield* FiberSet.makeRuntimePromise<never>();
-        const client = yield* Effect.acquireRelease(
-          Effect.sync(
-            () =>
-              new ChatClient({
-                threadId: "thread",
-                tools: approvalToolDefinitions,
-                interrupts: [permissionReviewInterrupt],
-                connection: fetchServerSentEvents("http://127.0.0.1/api/chat", {
-                  fetchClient: (input, init) =>
-                    run(agent.handle(new Request(input, init), sessionId)),
-                }),
-              }),
-          ),
-          (client) => Effect.sync(() => client.dispose()),
+        const page = yield* openPage(sessionId);
+        // The delegation waits for its report inline, however long the relayed answer takes.
+        yield* page.send(
+          'call delegate_to_agent {"agent":"fake","task":"needs permission to edit","yieldMs":15000}',
         );
-        const answer = () =>
-          client
-            .getMessages()
-            .flatMap((message) =>
-              message.role === "assistant"
-                ? message.parts.flatMap((part) => (part.type === "text" ? [part.content] : []))
-                : [],
-            )
-            .join("");
-
-        yield* sdk(() =>
-          client.sendMessage(
-            'call delegate_to_agent {"agent":"fake","task":"needs permission to edit"}',
-          ),
+        expect(page.pending()).toMatchObject([
+          {
+            reason: "permission_review",
+            metadata: { payload: { toolName: "delegate_to_agent", askedBy: "every_call" } },
+          },
+        ]);
+        const resumed = yield* Effect.forkChild(
+          page.resolve(() => true),
+          {
+            startImmediately: true,
+          },
         );
-        yield* until(() => client.getInterrupts().length === 1, "approval of the delegation");
-        expect(client.getInterrupts()[0]).toMatchObject({
-          payload: { toolName: "delegate_to_agent", askedBy: "every_call" },
-        });
-        client.resolveInterrupts((item) => {
-          if (item.kind === "generic") item.resolveInterrupt({ approved: true });
-        });
         yield* until(
           Effect.map(relayed.pending(sessionId), (pending) => pending.length === 1),
           "the agent's permission request",
@@ -338,7 +331,8 @@ testAgent({ testProvider: {} })("external ACP agents", (it) => {
           askedBy: "agent",
         });
         yield* relayed.answer(sessionId, request!.id, true);
-        yield* until(() => answer().includes("permission: once"), "the delegation result");
+        yield* Fiber.join(resumed);
+        expect(page.answer()).toContain("permission: once");
       }),
     // Three bounded approval/process waits can exceed Vitest's default five seconds under load.
     20_000,
@@ -364,21 +358,35 @@ testAgent({ testProvider: {} })("direct external agent conversations", (it) => {
         const direct = yield* sessions.create(project.id, null, "fake");
         const untrusted = yield* sessions.create(project.id, null, "fake");
 
+        const api = yield* chatApi;
+        const answer = (session: string, runId: string, text: string) =>
+          api
+            .run({
+              params: { session },
+              headers: {},
+              payload: { runId, messages: [{ id: `${runId}:user`, role: "user", content: text }] },
+            })
+            .pipe(
+              Effect.flatMap(Stream.runCollect),
+              Effect.map((events) =>
+                events.flatMap(({ data }) => (isTextContent(data) ? [data.delta] : [])).join(""),
+              ),
+            );
+
         // Not trusted yet: the conversation cannot start the agent.
-        expect((yield* post(untrusted.id, "hello")).status).toBe(409);
+        expect(yield* Effect.flip(answer(untrusted.id, "untrusted-1", "hello"))).toMatchObject({
+          error: "external_agent_unavailable",
+        });
 
         yield* trust;
         // Memory leaves for the external process only once the user allows it.
-        const withheld = yield* post(untrusted.id, "로그 포맷 뭐였지?");
-        expect(yield* sdk(() => withheld.text())).not.toContain(
+        expect(yield* answer(untrusted.id, "untrusted-2", "로그 포맷 뭐였지?")).not.toContain(
           "Memory from context-generactive-agent",
         );
         yield* (yield* GlobalConfig).update({ externalAgentMemory: true });
-        const response = yield* post(direct.id, "로그 포맷 뭐였지?");
-        expect(response.status).toBe(200);
-        const events = yield* sdk(() => response.text());
-        expect(events).toContain("Memory from context-generactive-agent");
-        expect(events).toContain("logfmt");
+        const answered = yield* answer(direct.id, "direct-1", "로그 포맷 뭐였지?");
+        expect(answered).toContain("Memory from context-generactive-agent");
+        expect(answered).toContain("logfmt");
 
         const recorded = yield* nodes.session(direct.id);
         expect(recorded.map((node) => node.kind)).toEqual(["user", "assistant"]);

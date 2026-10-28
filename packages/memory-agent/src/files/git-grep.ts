@@ -1,23 +1,43 @@
-import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import * as NodeChildProcessSpawner from "@effect/platform-node/NodeChildProcessSpawner";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
-import { Context, Effect, HashSet, Layer, Path, Stream, Cause } from "effect";
+import { Context, Effect, HashSet, Layer, Match, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { findExecutable, helperEnvironment } from "../runtime/host.ts";
+import { path as hostPath } from "../runtime/synchronous-path.ts";
 
 /** Git runs with its own folder and the system folders on its search path, and nothing else. */
-const hostPath = Effect.runSync(
-  Effect.scoped(
-    Effect.gen(function* () {
-      const services = yield* Layer.build(NodePath.layer);
-      return Context.get(services, Path.Path);
-    }),
-  ),
-);
 export const gitEnvironment = (git: string) =>
   helperEnvironment([hostPath.dirname(git)], { user: false });
+
+/**
+ * The first `limit` names a Git command prints with `-z`, and whether more followed. Reading stops
+ * one name past the limit, so a huge tree costs no more than the names that are kept.
+ */
+export const gitNames = <E, R>(options: {
+  readonly stdout: Stream.Stream<Uint8Array, E, R>;
+  readonly limit: number;
+}) =>
+  options.stdout.pipe(
+    Stream.decodeText(),
+    // Each chunk completes the name the previous one left open; what follows its last NUL stays open.
+    Stream.mapAccum(
+      () => "",
+      (open, text) => {
+        const parts = (open + text).split("\0");
+        return [parts.at(-1) ?? "", parts.slice(0, -1)] as const;
+      },
+      { onHalt: (open) => [open] },
+    ),
+    Stream.filter((name) => name !== ""),
+    Stream.take(options.limit + 1),
+    Stream.runCollect,
+    Effect.map((names) => ({
+      names: names.slice(0, options.limit),
+      truncated: names.length > options.limit,
+    })),
+  );
 
 /** Only ASCII case folding is the same in `git grep -i` and JavaScript. */
 const isAscii = (text: string) => /^[\x20-\x7e]*$/.test(text);
@@ -27,31 +47,17 @@ const isAscii = (text: string) => /^[\x20-\x7e]*$/.test(text);
  * tracked and untracked (not ignored) files as they are on disk. Null when Git cannot answer
  * (not a work tree, git missing, or a case-insensitive query with non-ASCII letters), so the caller
  * searches every file instead. Lines are matched afterwards by the caller; this only narrows files.
+ * More than `limit` matching files narrow nothing worth keeping, so that is null too.
  */
-export const gitGrepFiles: {
-  (
-    directory: string,
-    query: string,
-    caseSensitive: boolean,
-  ): (root: string) => ReturnType<typeof gitGrepFilesBody>;
-} & typeof gitGrepFilesBody = EffectFunction.dual(4, gitGrepFilesBody);
-function gitGrepFilesBody(
-  root: string,
-  directory: string,
-  query: string,
-  caseSensitive: boolean,
-): Promise<HashSet.HashSet<string> | null> {
-  return Effect.runPromise(gitGrepFilesEffect({ root, directory, query, caseSensitive }));
-}
-
 export const gitGrepFilesEffect = (options: {
   readonly root: string;
   readonly directory: string;
   readonly query: string;
   readonly caseSensitive: boolean;
+  readonly limit: number;
 }) =>
   Effect.gen(function* () {
-    const { root, directory, query, caseSensitive } = options;
+    const { root, directory, query, caseSensitive, limit } = options;
     if (query.includes("\n") || (!caseSensitive && !isAscii(query))) return null;
     const git = yield* Effect.scoped(
       Layer.build(NodeFileSystem.layer).pipe(
@@ -89,35 +95,21 @@ export const gitGrepFilesEffect = (options: {
             stderr: "ignore",
           }),
         );
-        let size = 0;
-        const stdout = yield* child.stdout.pipe(
-          Stream.mapEffect((chunk) => {
-            size += chunk.byteLength;
-            return size <= 64 * 1024 * 1024
-              ? Effect.succeed(chunk)
-              : Effect.fail(new Cause.UnknownError("git grep output exceeds 64 MiB"));
-          }),
-          Stream.decodeText(),
-          Stream.runFold(
-            () => "",
-            (text, chunk) => text + chunk,
-          ),
-        );
-        const code = yield* child.exitCode;
-        switch (Number(code)) {
-          case 0:
-            return HashSet.fromIterable(stdout.split("\0").filter(Boolean));
-          case 1:
-            return HashSet.empty<string>();
-          default:
-            return null;
-        }
+        const matched = yield* gitNames({ stdout: child.stdout, limit });
+        // git grep exits 1 when nothing matched; any other failure leaves the search to the caller.
+        // One cut short is stopped with its Scope, without waiting for its exit.
+        return yield* matched.truncated
+          ? Effect.succeed(null)
+          : Effect.map(child.exitCode, (code) =>
+              Match.value(Number(code)).pipe(
+                Match.when(0, () => HashSet.fromIterable(matched.names)),
+                Match.when(1, () => HashSet.empty<string>()),
+                Match.orElse(() => null),
+              ),
+            );
       }),
     ).pipe(
       // Without a usable git grep the caller searches the files itself.
-      Effect.catchTags({
-        PlatformError: () => Effect.succeed(null),
-        UnknownError: () => Effect.succeed(null),
-      }),
+      Effect.catchTag("PlatformError", () => Effect.succeed(null)),
     );
   });

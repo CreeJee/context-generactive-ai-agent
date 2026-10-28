@@ -19,10 +19,9 @@ it("settles scoped admission on real pin or terminal result and propagates pre-a
           const directory = yield* fs.makeTempDirectoryScoped({ prefix: "admission-" });
           const databasePath = paths.join(directory, "fixture.sqlite");
           const db = yield* Effect.acquireRelease(
-            Effect.try({
-              try: () => createApplicationReadFixture(databasePath),
-              catch: () => NativeOwnerFailed.make({ reason: "read-failed" }),
-            }),
+            createApplicationReadFixture(databasePath).pipe(
+              Effect.mapError(() => NativeOwnerFailed.make({ reason: "read-failed" })),
+            ),
             (value) => Effect.sync(() => value.close()),
           );
           yield* Effect.scoped(

@@ -1,6 +1,6 @@
-import { Effect } from "effect";
+import { Array as EffectArray, Effect } from "effect";
 import { isTruthy } from "../src/truthy.ts";
-import type { ModelMessage } from "@tanstack/ai";
+import type { StoredMessage } from "../src/chat-store/schema.ts";
 import {
   recentRawUserTurns,
   retrievalTokenLimit,
@@ -59,40 +59,43 @@ const userText = (turn: number) => {
 const answerText = (turn: number) =>
   `장기 대화 답변 ${turn}. ${"확인한 파일과 테스트 결과를 설명한다. ".repeat(28)}`;
 
-function conversation(turns: number): ModelMessage[] {
-  const messages: ModelMessage[] = [];
-  for (let turn = 1; turn <= turns; turn++) {
-    messages.push({ role: "user", content: userText(turn) });
-    if (turn === turns) continue;
-    if (turn === 1) {
-      messages.push(
-        {
-          role: "assistant",
-          content: null,
-          toolCalls: [
-            {
-              id: "long-tool",
-              type: "function",
-              function: { name: "read_file", arguments: '{"path":"large.log"}' },
-            },
-          ],
-        },
-        {
-          role: "tool",
-          toolCallId: "long-tool",
-          content: `대형 도구 결과 ${"빌드 및 테스트 로그 ".repeat(1_000)}`,
-        },
-      );
-    }
-    messages.push({ role: "assistant", content: answerText(turn) });
-  }
-  return messages;
+/** The first answer read a large log before it answered. */
+const firstToolCall: StoredMessage[] = [
+  {
+    role: "assistant",
+    content: null,
+    toolCalls: [
+      {
+        id: "long-tool",
+        type: "function",
+        function: { name: "read_file", arguments: '{"path":"large.log"}' },
+      },
+    ],
+  },
+  {
+    role: "tool",
+    toolCallId: "long-tool",
+    content: `대형 도구 결과 ${"빌드 및 테스트 로그 ".repeat(1_000)}`,
+  },
+];
+
+const answered = (turn: number): StoredMessage[] => [
+  ...(turn === 1 ? firstToolCall : []),
+  { role: "assistant", content: answerText(turn) },
+];
+
+function conversation(turns: number): StoredMessage[] {
+  return Array.from({ length: turns }, (_, index) => index + 1).flatMap((turn): StoredMessage[] => [
+    { role: "user", content: userText(turn) },
+    // The last question is still waiting for its answer.
+    ...(turn === turns ? [] : answered(turn)),
+  ]);
 }
 
-const userIndexes = (messages: readonly ModelMessage[]) =>
+const userIndexes = (messages: readonly StoredMessage[]) =>
   messages.flatMap((message, index) => (message.role === "user" ? [index] : []));
 
-function legacyRequest(messages: readonly ModelMessage[]): ModelMessage[] {
+function legacyRequest(messages: readonly StoredMessage[]): StoredMessage[] {
   const turns = userIndexes(messages);
   const eligible = Math.max(0, turns.length - legacyRecentTurns);
   const summarized = Math.floor(eligible / legacyBlockTurns) * legacyBlockTurns;
@@ -115,17 +118,20 @@ const nodeText = (id: string) => {
 
 function summaryBlocks(turns: number): SummaryBlock[] {
   const through = turns - recentRawUserTurns;
-  const blocks: SummaryBlock[] = [];
-  for (let end = summaryBlockTurns; end <= through; end += summaryBlockTurns) {
+  // Whole blocks only: each ends a multiple of summaryBlockTurns turns in, no later than `through`.
+  const ends = Array.from(
+    { length: Math.max(0, Math.floor(through / summaryBlockTurns)) },
+    (_, index) => (index + 1) * summaryBlockTurns,
+  );
+  return ends.map((end) => {
     const decision =
       end < 14 ? "배포 창은 화요일 오후라는 초기 결정" : "배포 창은 목요일 오후라는 최신 정정";
-    blocks.push({
+    return {
       end,
       nextTurnNodeId: nodeId(end + 1),
       text: `- ${decision}을 포함해 ${end - summaryBlockTurns + 1}-${end}턴을 요약했다. (node ${nodeId(end)})`,
-    });
-  }
-  return blocks;
+    };
+  });
 }
 
 const retrieval = {
@@ -136,13 +142,12 @@ const retrieval = {
 };
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-const currentRequest = Effect.fnUntraced(function* (messages: readonly ModelMessage[]) {
+const currentRequest = Effect.fnUntraced(function* (messages: readonly StoredMessage[]) {
   const state: CompactionState = {
     manual: { clearedThrough: 0, summarizedTurns: 0 },
     blocks: summaryBlocks(userIndexes(messages).length),
   };
   const result = yield* compactEffect({
-    threadId: "thread",
     messages,
     state,
     sources: {
@@ -150,31 +155,26 @@ const currentRequest = Effect.fnUntraced(function* (messages: readonly ModelMess
         toolResultId: (toolCallId) => (toolCallId === "long-tool" ? "node-tool-result" : null),
         nodeText,
       }),
-      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      retrievalAppendix: () => Promise.resolve(retrieval),
+      retrievalAppendix: () => Effect.succeed(retrieval),
     },
     budget: { compactAt: 1, leaveOutAt: 1_000_000 },
   });
   return [...result.messages];
 });
 
-const sameMessage = (left: ModelMessage, right: ModelMessage) =>
+const sameMessage = (left: StoredMessage, right: StoredMessage) =>
   JSON.stringify(left) === JSON.stringify(right);
 
-function commonPrefixTokens(previous: readonly ModelMessage[], current: readonly ModelMessage[]) {
-  let count = 0;
-  while (
-    count < previous.length &&
-    count < current.length &&
-    sameMessage(previous[count]!, current[count]!)
-  )
-    count++;
-  return estimateConversation(current.slice(0, count));
+function commonPrefixTokens(previous: readonly StoredMessage[], current: readonly StoredMessage[]) {
+  const shared = EffectArray.takeWhile(EffectArray.zip(previous, current), ([before, now]) =>
+    sameMessage(before, now),
+  );
+  return estimateConversation(current.slice(0, shared.length));
 }
 
 function profile(
   name: string,
-  requests: readonly (readonly ModelMessage[])[],
+  requests: readonly (readonly StoredMessage[])[],
   summaryCalls: number,
 ): ProfileResult {
   const input = requests.map((request) => fixedPrefixTokens + estimateConversation(request));

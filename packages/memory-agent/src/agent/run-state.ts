@@ -1,4 +1,4 @@
-import type { RunStatus } from "@tanstack/ai-persistence";
+import type { StoredRunStatus } from "../chat-store/schema.ts";
 import type { LeaseView } from "../sessions/lease-state.ts";
 import type { WorkflowActions } from "../workflow/actions.ts";
 import type { WorkflowState } from "../workflow/workflow.ts";
@@ -8,8 +8,13 @@ import type { UncertainRun } from "../workflow/uncertain-runs.ts";
 
 /** Browser-safe shapes of the session run endpoints. */
 
+/** How a run stands, as `chat_runs.status` keeps it. */
+export type RunStatus = typeof StoredRunStatus.Type;
+
 /** Error code on runs that were still producing when the previous server process ended. */
 export const serverRestartedCode = "server_restarted";
+/** The error of those runs. */
+export const serverRestartedMessage = "The server stopped before this answer finished.";
 
 /** Error code after the user discards an approval whose continuation can no longer start. */
 export const interruptContinuationLostCode = "interrupt_continuation_lost";
@@ -62,7 +67,7 @@ export interface CompactResult {
  */
 export type CompactionStage = "none" | "clear-answered" | "summarize" | "leave-out";
 
-export interface ContextView {
+export type ContextView = {
   /**
    * Tokens the model read in its latest request in this conversation: instructions, tools and
    * the conversation. Null before the first.
@@ -80,6 +85,6 @@ export interface ContextView {
   readonly windowKnown: boolean;
   /** Estimated conversation size past which earlier parts are compacted. */
   readonly compactAtTokens: number;
-}
+};
 
 export const contextUsageEvent = "memory-agent.context";

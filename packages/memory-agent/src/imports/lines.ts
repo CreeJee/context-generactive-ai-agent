@@ -1,4 +1,13 @@
-import { Context, Effect, FileSystem, Function as EffectFunction, Schema } from "effect";
+import {
+  Array as Arr,
+  Context,
+  Effect,
+  FileSystem,
+  Function as EffectFunction,
+  Option,
+  Schema,
+  Stream,
+} from "effect";
 // Effect has no zstd codec; Node's zlib decodes the archives Codex compresses its rollouts into.
 import { zstdDecompress } from "node:zlib";
 
@@ -17,10 +26,10 @@ export const MaxDecompressedBytes = Context.Reference<number>(
   { defaultValue: () => 512 * 1024 * 1024 },
 );
 
-export class TranscriptDecompressFailed extends Schema.TaggedError<TranscriptDecompressFailed>()(
-  "TranscriptDecompressFailed",
-  { path: Schema.String, cause: Schema.Defect() },
-) {}
+export class TranscriptDecompressFailed extends Schema.TaggedError<
+  TranscriptDecompressFailed,
+  { readonly brand: unique symbol }
+>()("TranscriptDecompressFailed", { path: Schema.String, cause: Schema.Defect() }) {}
 
 export interface LinesRead {
   /** Where the next read starts: the end of the last complete line, never mid-line. */
@@ -34,19 +43,18 @@ function completeLines(
   decoder: TextDecoder,
   onLine: (line: string) => void,
 ): LinesRead {
-  let start = 0;
-  let lines = 0;
-  while (true) {
+  const spans = Arr.unfold(0, (start) => {
     const end = bytes.indexOf(newline, start);
-    if (end === -1) break;
-    const line = decoder.decode(bytes.subarray(start, end)).trim();
-    if (line.length > 0) {
-      onLine(line);
-      lines += 1;
-    }
-    start = end + 1;
-  }
-  return { offset: start, lines };
+    return end === -1 ? Option.none() : Option.some([{ start, end }, end + 1] as const);
+  });
+  const lines = spans
+    .map(({ start, end }) => decoder.decode(bytes.subarray(start, end)).trim())
+    .filter((line) => line.length > 0);
+  lines.forEach(onLine);
+  return {
+    offset: Option.match(Arr.last(spans), { onNone: () => 0, onSome: ({ end }) => end + 1 }),
+    lines: lines.length,
+  };
 }
 
 const decompress = (path: string, compressed: Uint8Array, maxBytes: number) =>
@@ -78,28 +86,24 @@ const readPlainLines = Effect.fn("readPlainLines")(function* (
   onLine: (line: string) => void,
 ) {
   const fs = yield* FileSystem.FileSystem;
-  return yield* Effect.scoped(
-    Effect.gen(function* () {
-      const handle = yield* fs.open(path, { flag: "r" });
-      yield* handle.seek(BigInt(offset), "start");
-      const chunk = new Uint8Array(chunkBytes);
-      const decoder = new TextDecoder();
-      let pending = new Uint8Array(0);
-      let lines = 0;
-      while (true) {
-        const read = yield* handle.read(chunk);
-        if (read === 0) break;
-        const combined = new Uint8Array(pending.length + read);
+  const decoder = new TextDecoder();
+  // A line cut at a chunk's end is carried into the next chunk.
+  const { read } = yield* fs.stream(path, { offset, chunkSize: chunkBytes }).pipe(
+    Stream.runFold(
+      () => ({ pending: new Uint8Array(0), read: { offset, lines: 0 } satisfies LinesRead }),
+      ({ pending, read }, chunk) => {
+        const combined = new Uint8Array(pending.length + chunk.length);
         combined.set(pending);
-        combined.set(chunk.subarray(0, read), pending.length);
+        combined.set(chunk, pending.length);
         const complete = completeLines(combined, decoder, onLine);
-        lines += complete.lines;
-        offset += complete.offset;
-        pending = combined.subarray(complete.offset);
-      }
-      return { offset, lines } satisfies LinesRead;
-    }),
+        return {
+          pending: combined.subarray(complete.offset),
+          read: { offset: read.offset + complete.offset, lines: read.lines + complete.lines },
+        };
+      },
+    ),
   );
+  return read;
 });
 
 /**

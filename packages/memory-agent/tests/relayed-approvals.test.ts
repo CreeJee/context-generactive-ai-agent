@@ -2,10 +2,10 @@ import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import { SqlClient } from "effect/sql";
 import {
-  Cause,
   Context,
   Effect,
   Exit,
+  Fiber,
   FileSystem,
   Layer,
   Path,
@@ -19,7 +19,7 @@ import { RelayedApprovals, type RelayedRequest } from "../src/approvals/relayed.
 import { ApprovalRequester } from "../src/approvals/relayed-state.ts";
 import { Database } from "../src/db/database.ts";
 import { migrations } from "../src/db/migrations.ts";
-import { sdkCancellation } from "./support/sdk-cancellation.ts";
+import { runCancellation } from "./support/run-cancellation.ts";
 import { sqlGet, sqlRun } from "./support/sql.ts";
 
 const request: RelayedRequest = {
@@ -29,12 +29,6 @@ const request: RelayedRequest = {
   reason: "Approve this write",
   askedBy: "every_call",
 };
-
-const result = <A>(promise: Promise<A>) =>
-  Effect.tryPromise({
-    try: () => promise,
-    catch: (cause) => new Cause.UnknownError(cause),
-  });
 
 const withRelay = <A, E, R>(
   use: (relay: RelayedApprovals["Service"]) => Effect.Effect<A, E, R | SqlClient.SqlClient>,
@@ -82,18 +76,18 @@ const pending = (relay: RelayedApprovals["Service"], sessionId: string, count: n
     Effect.retry(Schedule.recurs(100)),
   );
 
+// Looks for the completed workflow 100 times, yielding to it between looks.
 const completed = () =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 100; attempt += 1) {
-      const row = yield* sqlGet(
-        "SELECT status FROM owner_workflow_executions WHERE workflow_name = 'RelayedApprovalExecution'",
-      );
-      if (Schema.is(Schema.Struct({ status: Schema.String }))(row) && row.status === "completed")
-        return;
-      yield* Effect.yieldNow;
-    }
-    return yield* Effect.fail("approval workflow did not complete");
-  });
+  sqlGet(
+    "SELECT status FROM owner_workflow_executions WHERE workflow_name = 'RelayedApprovalExecution'",
+  ).pipe(
+    Effect.map(Schema.is(Schema.Struct({ status: Schema.Literal("completed") }))),
+    Effect.tap((done) => Effect.when(Effect.yieldNow, Effect.succeed(!done))),
+    Effect.repeat({ until: (done) => done, times: 99 }),
+    Effect.flatMap((done) =>
+      done ? Effect.void : Effect.fail("approval workflow did not complete"),
+    ),
+  );
 
 describe("durable relayed approvals", () => {
   it.live(
@@ -101,16 +95,16 @@ describe("durable relayed approvals", () => {
     () =>
       withRelay((relay) =>
         Effect.gen(function* () {
-          const { controller } = yield* sdkCancellation;
-          const first = relay.ask("s", "run-1", request, controller.signal);
-          const second = relay.ask("s", "run-2", request, controller.signal);
+          const { controller } = yield* runCancellation;
+          const first = yield* relay.ask("s", "run-1", request, controller.signal);
+          const second = yield* relay.ask("s", "run-2", request, controller.signal);
           const [a, b] = yield* pending(relay, "s", 2);
           expect(yield* relay.answer("other", b!.id, true)).toBe(false);
           expect(yield* relay.answer("s", b!.id, true)).toBe(true);
           expect(yield* relay.answer("s", b!.id, true)).toBe(true);
           expect(yield* relay.answer("s", b!.id, false)).toBe(false);
           expect(yield* relay.answer("s", a!.id, false)).toBe(true);
-          expect(yield* Effect.forEach([first, second], result, { concurrency: 2 })).toEqual([
+          expect(yield* Effect.forEach([first, second], Fiber.join, { concurrency: 2 })).toEqual([
             false,
             true,
           ]);
@@ -122,11 +116,11 @@ describe("durable relayed approvals", () => {
   it.live("interrupts a cancelled owner's durable wait and rejects a late answer", () =>
     withRelay((relay) =>
       Effect.gen(function* () {
-        const { controller } = yield* sdkCancellation;
-        const waiting = relay.ask("s", "run-1", request, controller.signal);
+        const { controller } = yield* runCancellation;
+        const waiting = yield* relay.ask("s", "run-1", request, controller.signal);
         const [approval] = yield* pending(relay, "s", 1);
         controller.abort();
-        expect(yield* result(waiting)).toBe(false);
+        expect(yield* Fiber.join(waiting)).toBe(false);
         expect(yield* pending(relay, "s", 0)).toEqual([]);
         expect(yield* relay.answer("s", approval!.id, true)).toBe(false);
         expect(
@@ -151,9 +145,8 @@ describe("durable relayed approvals", () => {
         const directory = yield* fs.makeTempDirectoryScoped({ prefix: "relayed-approval-" });
         const file = path.join(directory, "owner.db");
         const first = yield* openRelay(file);
-        const { controller } = yield* sdkCancellation;
-        const waiting = first.relay.ask("s", "run-1", request, controller.signal);
-        void waiting.catch(() => false);
+        const { controller } = yield* runCancellation;
+        yield* first.relay.ask("s", "run-1", request, controller.signal);
         const [approval] = yield* pending(first.relay, "s", 1);
         yield* Scope.close(first.scope, Exit.void);
 
@@ -181,9 +174,8 @@ describe("durable relayed approvals", () => {
         const directory = yield* fs.makeTempDirectoryScoped({ prefix: "relayed-requester-" });
         const file = path.join(directory, "owner.db");
         const first = yield* openRelay(file);
-        const { controller } = yield* sdkCancellation;
-        const waiting = first.relay.ask("s", "run-1", request, controller.signal);
-        void waiting.catch(() => false);
+        const { controller } = yield* runCancellation;
+        yield* first.relay.ask("s", "run-1", request, controller.signal);
         const [approval] = yield* pending(first.relay, "s", 1);
         yield* Scope.close(first.scope, Exit.void);
 
@@ -228,9 +220,8 @@ describe("durable relayed approvals", () => {
         const directory = yield* fs.makeTempDirectoryScoped({ prefix: "relayed-timeout-" });
         const file = path.join(directory, "owner.db");
         const first = yield* openRelay(file);
-        const { controller } = yield* sdkCancellation;
-        const waiting = first.relay.ask("s", "run-1", request, controller.signal);
-        void waiting.catch(() => false);
+        const { controller } = yield* runCancellation;
+        yield* first.relay.ask("s", "run-1", request, controller.signal);
         const [approval] = yield* pending(first.relay, "s", 1);
         yield* Scope.close(first.scope, Exit.void);
 

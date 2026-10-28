@@ -99,9 +99,11 @@ export const textWindow: {
 } & typeof textWindowBody = EffectFunction.dual(3, textWindowBody);
 function textWindowBody(text: string, offset: number, length: number) {
   const start = Math.min(Math.max(0, Math.trunc(offset)), text.length);
-  let end = Math.min(start + length, text.length);
-  const last = text.charCodeAt(end - 1);
-  if (end < text.length && end - start > 1 && last >= 0xd800 && last <= 0xdbff) end -= 1;
+  const cut = Math.min(start + length, text.length);
+  const last = text.charCodeAt(cut - 1);
+  // A window that would end between the halves of a pair stops before it, unless that leaves it empty.
+  const end =
+    cut < text.length && cut - start > 1 && last >= 0xd800 && last <= 0xdbff ? cut - 1 : cut;
   return {
     text: text.slice(start, end),
     offset: start,
@@ -155,7 +157,10 @@ export const edgeOfRow = (row: typeof EdgeRow.Type): Edge => ({
 });
 
 /** The node store could not be read or written; the cause stays with the error. */
-export class NodeStoreFailed extends Schema.TaggedError<NodeStoreFailed>()("NodeStoreFailed", {
+export class NodeStoreFailed extends Schema.TaggedError<
+  NodeStoreFailed,
+  { readonly brand: unique symbol }
+>()("NodeStoreFailed", {
   cause: Schema.Defect(),
 }) {}
 const stored = <A, E>(effect: Effect.Effect<A, E>) =>
@@ -278,7 +283,7 @@ const make = Effect.gen(function* () {
           created_at: createdAt,
         })} RETURNING *`;
         const node = nodeOfRow(yield* Schema.decodeUnknownEffect(NodeRow)(inserted));
-        if (node.kind === "tool_result") resultPages.remember(node.id, node.text);
+        if (node.kind === "tool_result") yield* resultPages.remember(node.id, node.text);
         // Only the first accepted, redacted user message names a local conversation.
         if (
           input.kind === "user" &&
@@ -293,17 +298,32 @@ const make = Effect.gen(function* () {
                 WHERE session_id = ${input.sessionId} AND kind = 'user' AND seq < ${node.seq})`;
         }
 
-        if (Option.isSome(previous)) yield* link(previous.value, node.id, "next", createdAt);
-        for (const declared of input.links ?? []) {
-          if (declared.kind === "reply") yield* link(node.id, declared.nodeId, "reply", createdAt);
-          else yield* link(declared.nodeId, node.id, declared.kind, createdAt);
-        }
-        for (const ref of EffectArray.dedupe(input.refs ?? [])) {
-          const earlier = idOf(yield* latestWithRef({ ref, projectId: input.projectId }));
-          yield* sql`INSERT INTO node_refs VALUES (${node.id}, ${ref}) ON CONFLICT DO NOTHING`;
-          if (Option.isSome(earlier)) yield* link(node.id, earlier.value, "touches", createdAt);
-        }
-        if (node.kind === "tool_result") yield* supersedeEarlierReads(node.id);
+        yield* Effect.transposeOption(
+          Option.map(previous, (id) => link(id, node.id, "next", createdAt)),
+        );
+        yield* Effect.forEach(
+          input.links ?? [],
+          (declared) =>
+            declared.kind === "reply"
+              ? link(node.id, declared.nodeId, "reply", createdAt)
+              : link(declared.nodeId, node.id, declared.kind, createdAt),
+          { discard: true },
+        );
+        yield* Effect.forEach(
+          EffectArray.dedupe(input.refs ?? []),
+          Effect.fnUntraced(function* (ref) {
+            const earlier = idOf(yield* latestWithRef({ ref, projectId: input.projectId }));
+            yield* sql`INSERT INTO node_refs VALUES (${node.id}, ${ref}) ON CONFLICT DO NOTHING`;
+            yield* Effect.transposeOption(
+              Option.map(earlier, (id) => link(node.id, id, "touches", createdAt)),
+            );
+          }),
+          { discard: true },
+        );
+        yield* Effect.when(
+          supersedeEarlierReads(node.id),
+          Effect.succeed(node.kind === "tool_result"),
+        );
         if (HashSet.has(interpretedKinds, node.kind) && hasStatementText(node.text))
           yield* sql`INSERT INTO interpret_jobs (node_id, status, updated_at)
             VALUES (${node.id}, 'pending', ${createdAt})`;
@@ -311,10 +331,14 @@ const make = Effect.gen(function* () {
       }).pipe(sql.withTransaction),
     );
 
-  function page(node: Node, offset = 0): EvidencePage {
-    if (node.kind === "tool_result") resultPages.remember(node.id, node.text);
-    return { id: node.id, kind: node.kind, ...textWindow(node.text, offset, evidencePageLength) };
-  }
+  const page = (node: Node, offset = 0): Effect.Effect<EvidencePage> =>
+    Effect.as(
+      Effect.when(
+        resultPages.remember(node.id, node.text),
+        Effect.succeed(node.kind === "tool_result"),
+      ),
+      { id: node.id, kind: node.kind, ...textWindow(node.text, offset, evidencePageLength) },
+    );
   const found = Effect.map(Option.match({ onNone: () => null, onSome: nodeOfRow }));
 
   return {
@@ -393,8 +417,11 @@ const make = Effect.gen(function* () {
     read: (id: string, offset = 0) =>
       stored(
         one(id).pipe(
-          Effect.map(
-            Option.match({ onNone: () => null, onSome: (row) => page(nodeOfRow(row), offset) }),
+          Effect.flatMap(
+            Option.match({
+              onNone: () => Effect.succeed(null),
+              onSome: (row) => page(nodeOfRow(row), offset),
+            }),
           ),
         ),
       ),

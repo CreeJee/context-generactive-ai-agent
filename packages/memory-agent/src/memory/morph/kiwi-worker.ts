@@ -1,7 +1,17 @@
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
 import * as NodeWorkerRunner from "@effect/platform-node/NodeWorkerRunner";
-import { Cause, Effect, FileSystem, HashSet, Layer, Path, Result, Schema } from "effect";
+import {
+  Array as Arr,
+  Cause,
+  Effect,
+  FileSystem,
+  HashSet,
+  Layer,
+  Path,
+  Result,
+  Schema,
+} from "effect";
 import { RpcServer } from "effect/rpc";
 import { nativeFailure, nativePromise, runNativeEffect } from "../../runtime/native-effect.ts";
 import { KiwiRpcs, KiwiWorkerData, KiwiWorkerFailed } from "./kiwi-rpc.ts";
@@ -51,43 +61,51 @@ const load = Effect.fn("KiwiWorker.load")(function* (modelDirectory: string) {
     "kiwi-wasm.wasm",
   );
   const builder = yield* nativePromise(() => KiwiBuilder.create(wasmPath));
-  const modelFiles: Record<string, Uint8Array> = {};
-  for (const name of yield* fs.readDirectory(modelDirectory)) {
-    const path = paths.join(modelDirectory, name);
-    // readdir's previous isFile contract excluded symbolic links, including dangling links.
-    const link = yield* fs.readLink(path).pipe(Effect.result);
-    if (Result.isSuccess(link)) continue;
-    const info = yield* fs.stat(path);
-    if (info.type === "File") modelFiles[name] = yield* fs.readFile(path);
-  }
+  const files = yield* Effect.forEach(
+    yield* fs.readDirectory(modelDirectory),
+    Effect.fnUntraced(function* (name) {
+      const path = paths.join(modelDirectory, name);
+      // readdir's previous isFile contract excluded symbolic links, including dangling links.
+      const link = yield* fs.readLink(path).pipe(Effect.result);
+      const regular = Result.isFailure(link) && (yield* fs.stat(path)).type === "File";
+      return regular ? [[name, yield* fs.readFile(path)] as const] : [];
+    }),
+  );
+  const modelFiles = Object.fromEntries(files.flat());
   return yield* nativePromise(() => builder.build({ modelFiles, modelType: "cong" }));
 });
 
 function termsOf(kiwi: Kiwi, input: string) {
   const text = input.normalize("NFKC");
-  const terms: string[] = [];
   // Compound nouns are split inconsistently ("데이터베이스" vs "데이터 베이스"), so a run of nouns
   // written without spaces also counts as one term.
-  let run: string[] = [];
-  let runEnd = -1;
-  const closeRun = () => {
-    if (run.length > 1) terms.push(run.join(""));
-    run = [];
-  };
-  for (const token of kiwi.tokenize(text)) {
-    const tag = token.tag.replace(/-[RI]$/, "");
-    if (HashSet.has(nouns, tag)) {
-      if (token.position !== runEnd) closeRun();
-      run.push(token.str);
-      runEnd = token.position + token.length;
-    } else closeRun();
-    const latin = token.str.search(latinOrNumber) >= 0;
-    if (HashSet.has(kept, tag) && !HashSet.has(lightStems, token.str) && !latin)
-      terms.push(token.str);
-  }
-  closeRun();
-  for (const [word] of text.matchAll(latinOrNumber)) terms.push(word);
-  return terms.map((term) => term.toLowerCase());
+  const compound = (run: ReadonlyArray<string>) => (run.length > 1 ? [run.join("")] : []);
+  const [last, perToken] = Arr.mapAccum(
+    kiwi.tokenize(text),
+    { run: Arr.empty<string>(), runEnd: -1 },
+    (open, token) => {
+      const tag = token.tag.replace(/-[RI]$/, "");
+      const noun = HashSet.has(nouns, tag);
+      // A noun right after the run goes on with it; anything else ends it.
+      const continues = noun && token.position === open.runEnd;
+      const carried = continues ? open.run : [];
+      const latin = token.str.search(latinOrNumber) >= 0;
+      const term =
+        HashSet.has(kept, tag) && !HashSet.has(lightStems, token.str) && !latin ? [token.str] : [];
+      return [
+        {
+          run: noun ? [...carried, token.str] : [],
+          runEnd: noun ? token.position + token.length : open.runEnd,
+        },
+        [...(continues ? [] : compound(open.run)), ...term],
+      ] as const;
+    },
+  );
+  return [
+    ...perToken.flat(),
+    ...compound(last.run),
+    ...Array.from(text.matchAll(latinOrNumber), ([word]) => word),
+  ].map((term) => term.toLowerCase());
 }
 
 const handlers = KiwiRpcs.toLayer(

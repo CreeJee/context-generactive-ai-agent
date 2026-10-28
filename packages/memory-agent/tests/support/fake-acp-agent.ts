@@ -6,6 +6,7 @@ import {
   Layer,
   MutableHashMap,
   MutableHashSet,
+  MutableRef,
   Option,
   Schema,
 } from "effect";
@@ -46,7 +47,7 @@ const { fs, log } = await runNative(
 
 const history = MutableHashMap.empty<string, string[]>();
 const cancelled = MutableHashSet.empty<string>();
-let nextSession = 1;
+const nextSession = MutableRef.make(1);
 
 const say = (client: acp.AgentContext, sessionId: string, text: string) =>
   client.notify(acp.methods.client.session.update, {
@@ -91,7 +92,7 @@ acp
     authMethods: [],
   }))
   .onRequest(acp.methods.agent.session.new, () => {
-    const sessionId = `ext-${nextSession++}`;
+    const sessionId = `ext-${MutableRef.getAndIncrement(nextSession)}`;
     MutableHashMap.set(history, sessionId, []);
     return { sessionId };
   })
@@ -158,12 +159,17 @@ acp
           // Lets a test cancel only after the prompt has really arrived.
           if (log.length > 0)
             yield* fs.writeFileString(`${log}.slow`, `${sessionId}\n`, { flag: "a" });
-          for (let step = 0; step < 50; step++) {
-            if (MutableHashSet.has(cancelled, sessionId)) {
-              MutableHashSet.remove(cancelled, sessionId);
-              return { stopReason: "cancelled" };
-            }
-            yield* Effect.sleep(40);
+          // Looks for the cancellation 50 times, 40 ms apart.
+          const sawCancel = yield* Effect.sync(() => MutableHashSet.has(cancelled, sessionId)).pipe(
+            Effect.tap((seen) => Effect.when(Effect.sleep(40), Effect.succeed(!seen))),
+            Effect.repeat({ until: (seen) => seen, times: 49 }),
+          );
+          if (sawCancel) {
+            MutableHashSet.remove(cancelled, sessionId);
+            // Lets a test see that the cancellation arrived before the turn answered.
+            if (log.length > 0)
+              yield* fs.writeFileString(`${log}.cancelled`, `${sessionId}\n`, { flag: "a" });
+            return { stopReason: "cancelled" };
           }
         }
         yield* sdkCall(() =>

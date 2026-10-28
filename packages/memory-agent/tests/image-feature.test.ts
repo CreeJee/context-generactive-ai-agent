@@ -1,5 +1,5 @@
 import { it as effectTest } from "@effect/vitest";
-import { Effect } from "effect";
+import { Effect, MutableRef } from "effect";
 import {
   ImageExecutorModel,
   decideImageContext,
@@ -47,12 +47,12 @@ describe("image context gate", () => {
       },
       { status: enabled, intent, route: null },
     ];
-    for (const input of inputs) {
+    inputs.forEach((input) => {
       const decision = decideImageContext(input);
       expect(decision.injectProviderTool).toBe(false);
       expect(decision.injectWorkflowPrompt).toBe(false);
       expect(decision.directWorkflowAllowed).toBe(false);
-    }
+    });
   });
 
   it("allows a direct adapter for an explicit image request", () => {
@@ -78,18 +78,17 @@ describe("image context gate", () => {
 
 describe("ImageFeature settings", () => {
   function fixture(initial: Settings = {}) {
-    let settings = initial;
+    const settings = MutableRef.make(initial);
     const config = {
-      read: Effect.sync(() => settings),
+      read: Effect.sync(() => MutableRef.get(settings)),
       update: (patch: Partial<Settings>) =>
-        Effect.sync(() => {
-          settings = { ...settings, ...patch };
-          return settings;
-        }),
+        Effect.sync(() =>
+          MutableRef.updateAndGet(settings, (current) => ({ ...current, ...patch })),
+        ),
     };
     return {
       feature: makeImageFeature(config),
-      read: () => settings,
+      read: () => MutableRef.get(settings),
     };
   }
 

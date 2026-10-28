@@ -77,15 +77,20 @@ const fixture = Effect.fnUntraced(function* () {
       "INSERT INTO sessions (id, project_id, title, created_at) VALUES ('s1', ?, NULL, '2026-10-01')",
       project.id,
     );
-    for (const id of ["f1", "f2", "f3"])
-      yield* sqlRun(
-        `INSERT INTO nodes (id, project_id, session_id, kind, text, detail, created_at)
+    yield* Effect.forEach(
+      ["f1", "f2", "f3"],
+      Effect.fnUntraced(function* (id) {
+        yield* sqlRun(
+          `INSERT INTO nodes (id, project_id, session_id, kind, text, detail, created_at)
          VALUES (?, ?, 's1', 'tool_result', 'Error: cannot open /a.ts', ?, ?)`,
-        id,
-        project.id,
-        '{"toolName":"Bash","ok":false,"importedFrom":"claude-code"}',
-        DateTime.formatIso(yield* DateTime.now),
-      );
+          id,
+          project.id,
+          '{"toolName":"Bash","ok":false,"importedFrom":"claude-code"}',
+          DateTime.formatIso(yield* DateTime.now),
+        );
+      }),
+      { discard: true },
+    );
   });
   yield* Effect.provideContext(seed, services);
   return { improvement: Context.get(services, ProjectImprovement), asked, release, storage };

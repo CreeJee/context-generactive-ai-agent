@@ -1,4 +1,4 @@
-import { Config, Crypto, DateTime, Effect, Option, Schema } from "effect";
+import { Config, Crypto, DateTime, Effect, Match, Option, Schema } from "effect";
 import { Hex } from "effect/encoding";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { GlobalConfig } from "../config/global-config.ts";
@@ -352,50 +352,50 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
   const eventsOf = (rows: readonly NodeRow[], texts: readonly BundleText[]) => {
     const events: BundleEvent[] = [];
     const calls = new Map<string, number>();
-    let callSeq = 0;
-    rows.forEach((row, index) => {
+    // Each row hands on the number of the last tool call so far.
+    rows.reduce((callSeq, row, index) => {
       const text = texts[index] ?? { text: "", cut: false };
-      switch (row.kind) {
-        case "user":
-        case "assistant":
-          events.push(BundleEvent.cases.Message.make({ role: row.kind, at: row.created_at, text }));
-          return;
-        case "tool_call":
-          callSeq += 1;
+      return Match.value(row.kind).pipe(
+        Match.whenOr("user", "assistant", (role) => {
+          events.push(BundleEvent.cases.Message.make({ role, at: row.created_at, text }));
+          return callSeq;
+        }),
+        Match.when("tool_call", () => {
           if (row.tool_call_id !== null) calls.set(row.tool_call_id, events.length);
           events.push(
             BundleEvent.cases.ToolCall.make({
-              seq: callSeq,
+              seq: callSeq + 1,
               name: row.tool_name,
               at: row.created_at,
               input: text,
               result: null,
             }),
           );
-          return;
-        case "tool_result": {
+          return callSeq + 1;
+        }),
+        Match.when("tool_result", () => {
           const result = { ok: row.ok === null ? null : row.ok !== 0, at: row.created_at, text };
           const at = row.tool_call_id === null ? undefined : calls.get(row.tool_call_id);
           const call = at === undefined ? undefined : events[at];
           if (BundleEvent.guards.ToolCall(call)) {
             events[at ?? 0] = { ...call, result };
-            return;
+            return callSeq;
           }
           // The call itself fell outside the bundle.
-          callSeq += 1;
           events.push(
             BundleEvent.cases.ToolCall.make({
-              seq: callSeq,
+              seq: callSeq + 1,
               name: row.tool_name,
               at: row.created_at,
               input: { text: "", cut: true },
               result,
             }),
           );
-          return;
-        }
-      }
-    });
+          return callSeq + 1;
+        }),
+        Match.exhaustive,
+      );
+    }, 0);
     return { events, calls };
   };
 

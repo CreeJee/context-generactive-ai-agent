@@ -1,7 +1,7 @@
 import {
   Cache,
-  Cause,
   Context,
+  Crypto,
   DateTime,
   Duration,
   Effect,
@@ -10,6 +10,7 @@ import {
   Result,
   Schema,
 } from "effect";
+import { ChildProcessSpawner } from "effect/process";
 import { SubscriptionAccountProvider } from "../providers/contracts.ts";
 import { OAuthProfiles } from "./accounts.ts";
 import {
@@ -17,10 +18,7 @@ import {
   openAiSubscriptionUsage,
   type SubscriptionUsageCredentialExpired,
 } from "./subscription-usage-probe.ts";
-import {
-  createKeychainProfileCredentialStore,
-  type OAuthHarnessError,
-} from "./validation-harness.ts";
+import { OAuthKeychain, type OAuthHarnessError } from "./validation-harness.ts";
 
 /**
  * A provider-reported window. `usedPercent` is the provider's own percentage of this named window,
@@ -75,10 +73,18 @@ export const SubscriptionQuotaReport = Schema.Struct({
 });
 export type SubscriptionQuotaReport = typeof SubscriptionQuotaReport.Type;
 
-export class SubscriptionQuotaError extends Schema.TaggedError<SubscriptionQuotaError>()(
-  "SubscriptionQuotaError",
-  { reason: Schema.Literal("profiles_unreadable"), cause: Schema.Defect() },
-) {}
+export class SubscriptionQuotaError extends Schema.TaggedError<
+  SubscriptionQuotaError,
+  { readonly brand: unique symbol }
+>()("SubscriptionQuotaError", {
+  reason: Schema.Literal("profiles_unreadable"),
+  cause: Schema.Defect(),
+}) {}
+
+const subscriptionUsageReaders = {
+  openai: openAiSubscriptionUsage,
+  anthropic: anthropicSubscriptionUsage,
+};
 
 /** Reads the provider-reported windows of one stored account. */
 export class SubscriptionUsage extends Context.Service<
@@ -89,22 +95,25 @@ export class SubscriptionUsage extends Context.Service<
       accountId: string,
     ) => Effect.Effect<
       readonly SubscriptionQuotaWindow[],
-      OAuthHarnessError | SubscriptionUsageCredentialExpired | Cause.UnknownError
+      OAuthHarnessError | SubscriptionUsageCredentialExpired
     >;
   }
 >()("memory-agent/oauth/subscription-quota/SubscriptionUsage") {
-  static readonly layer = Layer.succeed(
+  static readonly layer = Layer.effect(
     SubscriptionUsage,
-    SubscriptionUsage.of({
-      read: (provider, accountId) => {
-        const store = createKeychainProfileCredentialStore(accountId);
-        switch (provider) {
-          case "openai":
-            return openAiSubscriptionUsage({ store });
-          case "anthropic":
-            return anthropicSubscriptionUsage({ store });
-        }
-      },
+    Effect.gen(function* () {
+      const vault = yield* OAuthKeychain;
+      const platform = yield* Effect.context<
+        Crypto.Crypto | ChildProcessSpawner.ChildProcessSpawner
+      >();
+      return SubscriptionUsage.of({
+        read: (provider, accountId) =>
+          // Only listed accounts are read, and their ids are valid profile ids.
+          Effect.orDie(vault.profileStore(accountId)).pipe(
+            Effect.flatMap((store) => subscriptionUsageReaders[provider]({ store })),
+            Effect.provideContext(platform),
+          ),
+      });
     }),
   );
 }
@@ -136,40 +145,44 @@ export class SubscriptionQuota extends Context.Service<
         provider: SubscriptionAccountProvider,
         accountId: string,
       ) {
-        const lookupFailed = (error: string) =>
-          Effect.logWarning("subscription usage lookup failed").pipe(
-            Effect.annotateLogs({ error }),
-            Effect.as(Result.fail("lookup_failed" as const)),
-          );
         const windows = yield* usage.read(provider, accountId).pipe(
           Effect.map((windows) =>
             windows.length > 0 ? Result.succeed(windows) : Result.fail("lookup_failed" as const),
           ),
-          Effect.catchTag("SubscriptionUsageCredentialExpired", () =>
-            Effect.succeed(Result.fail("credential_expired" as const)),
-          ),
           Effect.catchTags({
-            OAuthHarnessError: () => lookupFailed("OAuthHarnessError"),
-            UnknownError: () => lookupFailed("UnknownError"),
+            SubscriptionUsageCredentialExpired: () =>
+              Effect.succeed(Result.fail("credential_expired" as const)),
+            OAuthHarnessError: () =>
+              Effect.logWarning("subscription usage lookup failed").pipe(
+                Effect.annotateLogs({ error: "OAuthHarnessError" }),
+                Effect.as(Result.fail("lookup_failed" as const)),
+              ),
           }),
         );
         const at = DateTime.formatIso(yield* DateTime.now);
-        if (Result.isSuccess(windows)) {
-          const observed: ObservedQuota = SubscriptionQuotaStatus.cases.observed.make({
-            windows: windows.success,
-            observedAt: at,
-          });
-          yield* Ref.update(lastObserved, (map) => new Map(map).set(accountId, observed));
-          return observed;
-        }
-        const previous = (yield* Ref.get(lastObserved)).get(accountId);
-        return previous === undefined
-          ? SubscriptionQuotaStatus.cases.unavailable.make({ reason: windows.failure })
-          : SubscriptionQuotaStatus.cases.stale.make({
-              windows: previous.windows,
-              observedAt: previous.observedAt,
-              failedAt: at,
+        return yield* Result.match(windows, {
+          onSuccess: (observedWindows) => {
+            const observed: ObservedQuota = SubscriptionQuotaStatus.cases.observed.make({
+              windows: observedWindows,
+              observedAt: at,
             });
+            return Effect.as(
+              Ref.update(lastObserved, (map) => new Map(map).set(accountId, observed)),
+              observed,
+            );
+          },
+          onFailure: (reason) =>
+            Effect.map(Ref.get(lastObserved), (map) => {
+              const previous = map.get(accountId);
+              return previous === undefined
+                ? SubscriptionQuotaStatus.cases.unavailable.make({ reason })
+                : SubscriptionQuotaStatus.cases.stale.make({
+                    windows: previous.windows,
+                    observedAt: previous.observedAt,
+                    failedAt: at,
+                  });
+            }),
+        });
       });
       // Profile ids are unique across providers, so one cache per provider keys by id alone.
       const providerCache = (provider: SubscriptionAccountProvider) =>

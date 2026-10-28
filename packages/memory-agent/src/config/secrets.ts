@@ -1,5 +1,5 @@
-import { MutableHashMap, Option, Context, Effect, Layer, Schema } from "effect";
-import { openKeyringEntry } from "../runtime/keyring.ts";
+import { HashMap, Option, Context, Effect, FileSystem, Layer, Path, Ref, Schema } from "effect";
+import { type KeyringEntry, type KeyringFailure, openKeyringEntry } from "../runtime/keyring.ts";
 
 /** Keychain service name every secret of this app is stored under. */
 export const keychainService = "context-generactive-agent";
@@ -8,10 +8,10 @@ export const keychainService = "context-generactive-agent";
 export type SecretName = "kagi-api-key";
 
 /** The secret backend refused or failed. Never answered by storing the secret somewhere else (R14). */
-export class SecretStoreFailed extends Schema.TaggedError<SecretStoreFailed>()(
-  "SecretStoreFailed",
-  { operation: Schema.Literals(["read", "write", "delete"]) },
-) {}
+export class SecretStoreFailed extends Schema.TaggedError<
+  SecretStoreFailed,
+  { readonly brand: unique symbol }
+>()("SecretStoreFailed", { operation: Schema.Literals(["read", "write", "delete"]) }) {}
 
 export interface SecretStoreApi {
   readonly get: (name: SecretName) => Effect.Effect<string | null, SecretStoreFailed>;
@@ -20,26 +20,27 @@ export interface SecretStoreApi {
   readonly remove: (name: SecretName) => Effect.Effect<void, SecretStoreFailed>;
 }
 
-/** The native keyring addon loads on first use, so a failure to load is a failed operation. */
-const entry = (name: SecretName) => openKeyringEntry(keychainService, name);
-
-const keychain: SecretStoreApi = {
-  get: (name) =>
-    Effect.tryPromise({
-      try: () => entry(name).getPassword(),
-      catch: () => SecretStoreFailed.make({ operation: "read" }),
-    }).pipe(Effect.map((value) => value ?? null)),
-  set: (name, value) =>
-    Effect.tryPromise({
-      try: () => entry(name).setPassword(value),
-      catch: () => SecretStoreFailed.make({ operation: "write" }),
-    }),
-  remove: (name) =>
-    Effect.tryPromise({
-      try: () => entry(name).deletePassword(),
-      catch: () => SecretStoreFailed.make({ operation: "delete" }),
-    }).pipe(Effect.asVoid),
-};
+const keychain = Effect.map(
+  Effect.context<FileSystem.FileSystem | Path.Path>(),
+  (platform): SecretStoreApi => {
+    /** The native keyring addon loads on first use, so a failure to load is a failed operation. */
+    const withEntry = <A>(
+      name: SecretName,
+      operation: SecretStoreFailed["operation"],
+      use: (entry: KeyringEntry) => Effect.Effect<A, KeyringFailure>,
+    ) =>
+      Effect.flatMap(openKeyringEntry(keychainService, name), use).pipe(
+        Effect.provideContext(platform),
+        Effect.mapError(() => SecretStoreFailed.make({ operation })),
+      );
+    return {
+      get: (name) => withEntry(name, "read", (entry) => entry.getPassword),
+      set: (name, value) => withEntry(name, "write", (entry) => entry.setPassword(value)),
+      remove: (name) =>
+        withEntry(name, "delete", (entry) => entry.deletePassword).pipe(Effect.asVoid),
+    };
+  },
+);
 
 /**
  * Secrets such as the Kagi API key. They live in the OS keychain (macOS Keychain, Windows
@@ -49,16 +50,16 @@ const keychain: SecretStoreApi = {
 export class SecretStore extends Context.Service<SecretStore, SecretStoreApi>()(
   "memory-agent/config/secrets/SecretStore",
 ) {
-  static readonly keychain = Layer.succeed(SecretStore, keychain);
+  static readonly keychain = Layer.effect(SecretStore, keychain);
 
   /** Kept in memory only, for tests. */
-  static readonly memory = Layer.sync(SecretStore, () => {
-    const values = MutableHashMap.empty<SecretName, string>();
-    return {
+  static readonly memory = Layer.effect(
+    SecretStore,
+    Effect.map(Ref.make(HashMap.empty<SecretName, string>()), (values): SecretStoreApi => ({
       get: (name) =>
-        Effect.sync(() => Option.getOrUndefined(MutableHashMap.get(values, name)) ?? null),
-      set: (name, value) => Effect.sync(() => void MutableHashMap.set(values, name, value)),
-      remove: (name) => Effect.sync(() => void MutableHashMap.remove(values, name)),
-    };
-  });
+        Effect.map(Ref.get(values), (stored) => Option.getOrNull(HashMap.get(stored, name))),
+      set: (name, value) => Ref.update(values, HashMap.set(name, value)),
+      remove: (name) => Ref.update(values, HashMap.remove(name)),
+    })),
+  );
 }

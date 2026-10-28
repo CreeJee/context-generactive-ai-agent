@@ -69,14 +69,19 @@ it.live("rejects missing, file and storage-overlapping roots", () =>
     const file = path.join(base, "notes.txt");
     yield* fs.writeFileString(file, "x");
     const projects = yield* fixture.open(fs);
-    for (const input of [
-      { root: path.join(base, "missing"), reason: "not_found" },
-      { root: file, reason: "not_directory" },
-      { root: storage, reason: "overlaps_storage" },
-      { root: base, reason: "overlaps_storage" },
-    ] as const) {
-      expect(yield* Effect.flip(projects.add(input.root))).toEqual(ProjectRootRejected.make(input));
-    }
+    yield* Effect.forEach(
+      [
+        { root: path.join(base, "missing"), reason: "not_found" },
+        { root: file, reason: "not_directory" },
+        { root: storage, reason: "overlaps_storage" },
+        { root: base, reason: "overlaps_storage" },
+      ] as const,
+      (input) =>
+        Effect.map(Effect.flip(projects.add(input.root)), (rejected) =>
+          expect(rejected).toEqual(ProjectRootRejected.make(input)),
+        ),
+      { discard: true },
+    );
   }),
 );
 
@@ -100,9 +105,14 @@ it.live("starts in ask mode and switches the permission mode", () =>
     const projects = yield* fixture.open(fixture.fs);
     const project = yield* projects.add(fixture.app);
     expect(project.permissionMode).toBe("ask");
-    for (const mode of ["auto", "full", "ask"] as const) {
-      expect((yield* projects.setPermissionMode(project.id, mode)).permissionMode).toBe(mode);
-    }
+    yield* Effect.forEach(
+      ["auto", "full", "ask"] as const,
+      (mode) =>
+        Effect.map(projects.setPermissionMode(project.id, mode), (changed) =>
+          expect(changed.permissionMode).toBe(mode),
+        ),
+      { discard: true },
+    );
     expect(yield* Effect.flip(projects.setPermissionMode("nope", "auto"))).toBeInstanceOf(
       ProjectNotFound,
     );

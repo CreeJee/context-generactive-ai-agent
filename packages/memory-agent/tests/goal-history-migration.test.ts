@@ -9,7 +9,7 @@ import { withTestPlatform } from "./support/platform.ts";
 function oldDatabase(file: string) {
   const db = new DatabaseSync(file);
   db.exec("PRAGMA foreign_keys = ON");
-  for (const step of migrations.slice(0, goalHistoryMigration.version - 1)) db.exec(step);
+  migrations.slice(0, goalHistoryMigration.version - 1).forEach((step) => db.exec(step));
   db.exec(`PRAGMA user_version = ${goalHistoryMigration.version - 1}`);
   db.exec(`
     INSERT INTO projects (id, root, name, created_at) VALUES ('p', '/test', 'test', 'old');
@@ -47,9 +47,9 @@ it.live(
       const path = yield* Path.Path;
       const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goal-history-migration-" });
       const file = path.join(directory, "db.sqlite");
-      let db = yield* scopedDatabase(() => oldDatabase(file));
+      const db = yield* scopedDatabase(() => oldDatabase(file));
       const before = snapshot(db);
-      migrateDatabase(db);
+      yield* migrateDatabase(db);
       // Later steps only add the nullable board author; every preserved value stays as it was.
       expect(
         snapshot(db).map((rows) => rows.map(({ author_json: _author, ...row }) => row)),
@@ -89,14 +89,14 @@ it.live(
         ),
       ).toThrow("session mismatch");
       db.close();
-      db = yield* scopedDatabase(() => new DatabaseSync(file));
-      db.exec("PRAGMA foreign_keys = ON");
-      migrateDatabase(db);
+      const reopened = yield* scopedDatabase(() => new DatabaseSync(file));
+      reopened.exec("PRAGMA foreign_keys = ON");
+      yield* migrateDatabase(reopened);
       expect(
-        db.prepare("SELECT * FROM workflow_goal_instances ORDER BY created_at").all(),
+        reopened.prepare("SELECT * FROM workflow_goal_instances ORDER BY created_at").all(),
       ).toHaveLength(2);
-      expect(db.prepare("SELECT * FROM workflow_run_events").all()).toEqual(before[4]);
-      expect(db.prepare("SELECT * FROM owner_rpc_operations").all()).toEqual(before[6]);
+      expect(reopened.prepare("SELECT * FROM workflow_run_events").all()).toEqual(before[4]);
+      expect(reopened.prepare("SELECT * FROM owner_rpc_operations").all()).toEqual(before[6]);
     }).pipe(withTestPlatform),
 );
 
@@ -109,11 +109,9 @@ it.live(
         "PRAGMA foreign_keys = OFF; DROP TRIGGER workflow_run_bindings_no_update; UPDATE workflow_run_bindings SET goal_instance_id = 'missing'; PRAGMA foreign_keys = ON",
       );
       const before = snapshot(db);
-      expect(() => migrateDatabase(db)).toThrow(
-        expect.objectContaining({
-          reason: DatabaseSchemaRejectedReason.cases.InvalidForeignKeys.make({}),
-        }),
-      );
+      expect(yield* Effect.flip(migrateDatabase(db))).toMatchObject({
+        reason: DatabaseSchemaRejectedReason.cases.InvalidForeignKeys.make({}),
+      });
       expect(snapshot(db)).toEqual(before);
       expect(db.prepare("PRAGMA user_version").get()).toEqual({
         user_version: goalHistoryMigration.version - 1,

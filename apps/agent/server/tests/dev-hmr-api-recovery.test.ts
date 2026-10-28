@@ -3,6 +3,7 @@ import {
   FetchHttpClient,
   HttpBody,
   HttpClient,
+  HttpRouter,
   HttpServer,
   HttpServerRequest,
   HttpServerResponse,
@@ -13,7 +14,7 @@ import { Array as EffectArray } from "effect";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { Effect, FileSystem, Layer, Path, Schema } from "effect";
 import { NetAddress } from "effect/net";
-import { AgentChat, Sessions, Workflows } from "memory-agent";
+import { Sessions, Workflows } from "memory-agent";
 import { createServer } from "vite-plus";
 import { expect } from "vite-plus/test";
 import {
@@ -21,6 +22,7 @@ import {
   testAgent,
   type AgentServices,
 } from "../../../../packages/memory-agent/tests/support/test-env.ts";
+import { chatApiRoutes } from "../../app/.server/chat-api";
 import { developmentApiProxy } from "../../vite.config";
 import { createDevelopmentBoundary, developmentRequestDecision } from "../dev-safety";
 import { sqlAll } from "../../../../packages/memory-agent/tests/support/sql.ts";
@@ -51,12 +53,8 @@ testAgent({ testProvider: {} })("dev HMR API recovery", (it) => {
             const context = yield* TestEnv;
             const services = yield* Effect.context<AgentServices>();
             yield* selectTestModel();
-            const { chat, sessions, workflows } = yield* Effect.provideContext(
-              Effect.all({
-                chat: AgentChat,
-                sessions: Sessions,
-                workflows: Workflows,
-              }),
+            const { sessions, workflows } = yield* Effect.provideContext(
+              Effect.all({ sessions: Sessions, workflows: Workflows }),
               services,
             );
             const second = yield* Effect.provideContext(
@@ -86,6 +84,14 @@ testAgent({ testProvider: {} })("dev HMR API recovery", (it) => {
             });
             yield* Effect.scoped(
               Effect.gen(function* () {
+                const chatApi = yield* Effect.acquireRelease(
+                  Effect.sync(() =>
+                    HttpRouter.toWebHandler(chatApiRoutes(Effect.succeed(services)), {
+                      disableLogger: true,
+                    }),
+                  ),
+                  (web) => sdkCall(() => web.dispose()).pipe(Effect.orDie),
+                );
                 const backendServices = yield* Layer.build(Layer.fresh(NodeHttpServer.layerTest));
                 const backend = yield* Effect.provideContext(
                   HttpServer.HttpServer,
@@ -108,17 +114,9 @@ testAgent({ testProvider: {} })("dev HMR API recovery", (it) => {
                           contentType: "application/json",
                         });
                       const request = yield* HttpServerRequest.toWeb(incoming);
-                      const sessionId = url.searchParams.get("session")!;
-                      const routed: Effect.Effect<
-                        Response,
-                        | Effect.Error<ReturnType<typeof chat.handle>>
-                        | Effect.Error<ReturnType<typeof chat.hydrate>>
-                      > =
-                        incoming.method === "POST"
-                          ? chat.handle(request, sessionId)
-                          : chat.hydrate(request, sessionId);
-                      const response = yield* Effect.provideContext(routed, services);
-                      return HttpServerResponse.fromWeb(response);
+                      return HttpServerResponse.fromWeb(
+                        yield* sdkCall(() => chatApi.handler(request)),
+                      );
                     }).pipe(
                       Effect.catchCause(() =>
                         Effect.succeed(
@@ -165,14 +163,11 @@ testAgent({ testProvider: {} })("dev HMR API recovery", (it) => {
                   const headers = new Headers({ "Content-Type": "application/json" });
                   if (buildId !== undefined) headers.set("x-context-agent-build-id", buildId);
                   const body = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
-                    threadId: sessionId,
                     runId,
                     messages: [{ id: runId, role: "user", content: "finite dev request" }],
-                    tools: [],
-                    context: [],
                   });
                   return yield* http
-                    .post(`${base}/api/chat?session=${sessionId}`, {
+                    .post(`${base}/api/sessions/${sessionId}/runs`, {
                       headers,
                       body: HttpBody.text(body, "application/json"),
                     })
@@ -180,7 +175,7 @@ testAgent({ testProvider: {} })("dev HMR API recovery", (it) => {
                 });
                 const rejected = yield* post(context.session.id, "incompatible", "other-contract");
                 expect(rejected.status).toBe(409);
-                expect(context.provider!.adapter.invocations).toHaveLength(0);
+                expect(context.provider!.invocations).toHaveLength(0);
                 const first = yield* post(context.session.id, "run-a");
                 expect(first.status).toBe(200);
                 const firstStream = yield* first.text;
@@ -200,7 +195,7 @@ testAgent({ testProvider: {} })("dev HMR API recovery", (it) => {
                   backendUrl,
                 );
                 expect(direct.status).toBe(409);
-                const calls = context.provider!.adapter.invocations.length;
+                const calls = context.provider!.invocations.length;
                 const duplicate = yield* post(context.session.id, "run-a", boundary.buildId);
                 expect(duplicate.status).toBe(409);
                 yield* duplicate.text;
@@ -210,8 +205,7 @@ testAgent({ testProvider: {} })("dev HMR API recovery", (it) => {
                 expect(ids.length).toBeGreaterThan(1);
                 const reconnect = yield* http
                   .get(
-                    `${frontendUrl}/api/chat?session=${context.session.id}&runId=run-a&offset=-1`,
-                    { headers: { "Last-Event-ID": ids[0]! } },
+                    `${frontendUrl}/api/sessions/${context.session.id}/runs/run-a/events?after=${encodeURIComponent(ids[0]!)}`,
                   )
                   .pipe(Effect.timeout(10000));
                 expect(reconnect.status).toBe(200);
@@ -219,7 +213,7 @@ testAgent({ testProvider: {} })("dev HMR API recovery", (it) => {
                 const resumedIds = [...resumed.matchAll(/^id: (.+)$/gm)].map((match) => match[1]!);
                 expect(resumedIds).toEqual(ids.slice(1));
                 expect(EffectArray.dedupe(resumedIds).length).toBe(resumedIds.length);
-                expect(context.provider!.adapter.invocations).toHaveLength(calls);
+                expect(context.provider!.invocations).toHaveLength(calls);
                 expect(
                   yield* sqlAll(
                     "SELECT run_id, session_id FROM workflow_run_bindings ORDER BY run_id",

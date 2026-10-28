@@ -6,6 +6,7 @@ import {
   Context,
   Effect,
   Layer,
+  Match,
   Result,
   Schema,
 } from "effect";
@@ -81,16 +82,16 @@ export interface FindResult {
   readonly uninterpreted: number;
 }
 
-export class NativeMemorySearchFailed extends Schema.TaggedError<NativeMemorySearchFailed>()(
-  "NativeMemorySearchFailed",
-  {
-    reason: Schema.Literals(["budget-exceeded", "invalid-input", "read-failed", "index-failed"]),
-    /** The stage the native read stopped in, when it got that far. */
-    stage: Schema.optional(ReadStage),
-    /** How long the native read ran before it stopped. */
-    elapsedMs: Schema.optional(Schema.Finite),
-  },
-) {
+export class NativeMemorySearchFailed extends Schema.TaggedError<
+  NativeMemorySearchFailed,
+  { readonly brand: unique symbol }
+>()("NativeMemorySearchFailed", {
+  reason: Schema.Literals(["budget-exceeded", "invalid-input", "read-failed", "index-failed"]),
+  /** The stage the native read stopped in, when it got that far. */
+  stage: Schema.optional(ReadStage),
+  /** How long the native read ran before it stopped. */
+  elapsedMs: Schema.optional(Schema.Finite),
+}) {
   // The model and logs read the reason; without it a failed search looks like an empty one.
   override get message() {
     const where = this.stage === undefined ? "" : ` in the ${this.stage} stage`;
@@ -316,81 +317,79 @@ const make = (tuning: SearchTuning) =>
         morphMs: result.morphMs,
         coverageMs: result.coverageMs,
       });
-      switch (result.kind) {
-        case "cancelled":
-          return yield* Effect.interrupt;
-        case "success": {
-          const spanOf = new Map(
-            (yield* chunkSpans(result.vectorSeqs.map(Number)).pipe(
-              Effect.mapError(() => NativeMemorySearchFailed.make({ reason: "read-failed" })),
-            )).map(({ vector_id, start, end }) => [vector_id, { start, end }] as const),
-          );
-          // Best-ranked chunk per node, keyed by node id. Hits arrive best first, so the first
-          // span stored for a node wins.
-          const spans = result.vectorSeqs.reduce((spans, seq, index) => {
-            const id = result.vectorIds[index]!;
-            const span = spanOf.get(Number(seq));
-            if (span !== undefined && !MutableHashMap.has(spans, id))
-              MutableHashMap.set(spans, id, span);
-            return spans;
-          }, MutableHashMap.empty<string, ChunkSpan>());
-          return {
-            vector: result.vectorIds.map((id, index) => ({
-              id,
-              score: result.vectorScores[index]!,
-            })),
-            text: result.textIds,
-            morph: result.morphIds,
-            vectorUnavailable: result.vectorUnavailable,
-            spans,
-            coverage: {
-              unindexed: result.unindexed,
-              uninterpreted: result.uninterpreted,
-            },
-          };
-        }
-        default:
-          return yield* NativeMemorySearchFailed.make({
-            reason: result.kind,
-            ...optionalProperty("stage", result.failedStage ?? undefined),
-            elapsedMs:
-              result.candidateMs +
-              result.vectorMs +
-              result.mappingMs +
-              result.textMs +
-              result.morphMs +
-              result.coverageMs,
-          });
-      }
+      return yield* Match.value(result.kind).pipe(
+        Match.when("cancelled", () => Effect.interrupt),
+        Match.when("success", () =>
+          chunkSpans(result.vectorSeqs.map(Number)).pipe(
+            Effect.mapError(() => NativeMemorySearchFailed.make({ reason: "read-failed" })),
+            Effect.map((rows) => {
+              const spanOf = new Map(
+                rows.map(({ vector_id, start, end }) => [vector_id, { start, end }] as const),
+              );
+              // Best-ranked chunk per node, keyed by node id. Hits arrive best first, so the first
+              // span stored for a node wins.
+              const spans = result.vectorSeqs.reduce((spans, seq, index) => {
+                const id = result.vectorIds[index]!;
+                const span = spanOf.get(Number(seq));
+                if (span !== undefined && !MutableHashMap.has(spans, id))
+                  MutableHashMap.set(spans, id, span);
+                return spans;
+              }, MutableHashMap.empty<string, ChunkSpan>());
+              return {
+                vector: result.vectorIds.map((id, index) => ({
+                  id,
+                  score: result.vectorScores[index]!,
+                })),
+                text: result.textIds,
+                morph: result.morphIds,
+                vectorUnavailable: result.vectorUnavailable,
+                spans,
+                coverage: {
+                  unindexed: result.unindexed,
+                  uninterpreted: result.uninterpreted,
+                },
+              };
+            }),
+          ),
+        ),
+        Match.orElse((reason) =>
+          Effect.fail(
+            NativeMemorySearchFailed.make({
+              reason,
+              ...optionalProperty("stage", result.failedStage ?? undefined),
+              elapsedMs:
+                result.candidateMs +
+                result.vectorMs +
+                result.mappingMs +
+                result.textMs +
+                result.morphMs +
+                result.coverageMs,
+            }),
+          ),
+        ),
+      );
     });
 
     const collectSeeds = Effect.fn("MemorySearch.collectSeeds")(function* (
       input: FindInput,
       allowed: readonly string[],
       limit: number,
-      degraded: FindResult["degraded"][number][],
     ) {
       // Model/network stays in the host, outside the publication admission permit.
-      const query = yield* embedder.embed([input.query]).pipe(
+      const embedded = yield* embedder.embed([input.query]).pipe(
         Effect.map((values) => values[0]),
-        Effect.catch(() => {
-          degraded.push("vector");
-          return Effect.void;
-        }),
+        Effect.option,
       );
-      const terms = yield* Effect.gen(function* () {
+      const query = Option.getOrUndefined(embedded);
+      const analyzed = yield* Effect.gen(function* () {
         if (!analyzer.ready()) {
           analyzer.warm();
           return yield* MorphAnalysisFailed.make({ reason: "not_ready" });
         }
         const [tokens = []] = yield* analyzer.terms([input.query]);
         return EffectArray.dedupe(tokens).filter((term) => term.length > 0);
-      }).pipe(
-        Effect.catch(() => {
-          if (analyzer.identity !== "none") degraded.push("morph");
-          return Effect.succeed([]);
-        }),
-      );
+      }).pipe(Effect.option);
+      const terms = Option.getOrElse(analyzed, (): ReadonlyArray<string> => []);
       const grouped = searchTerms(input.query);
       const readOver = (projects: readonly string[]) =>
         readSeeds({
@@ -416,11 +415,7 @@ const make = (tuning: SearchTuning) =>
       // search.
       const [own, ...others] = allowed;
       const ownSeeds = yield* readOver([own!]);
-      const skip = (skipped: SkippedRead) =>
-        Effect.sync(() => {
-          degraded.push("other-projects");
-          return Result.fail(skipped);
-        });
+      const skip = (skipped: SkippedRead) => Effect.succeed(Result.fail(skipped));
       const otherSeeds =
         others.length === 0
           ? Result.succeed(Option.none())
@@ -440,8 +435,13 @@ const make = (tuning: SearchTuning) =>
               }),
             );
       const scopes = [ownSeeds, ...Option.toArray(Option.flatten(Result.getSuccess(otherSeeds)))];
-      if (scopes.some((scope) => scope.vectorUnavailable) && !degraded.includes("vector"))
-        degraded.unshift("vector");
+      const degraded: FindResult["degraded"] = [
+        ...(Option.isNone(embedded) || scopes.some((scope) => scope.vectorUnavailable)
+          ? ["vector" as const]
+          : []),
+        ...(Option.isNone(analyzed) && analyzer.identity !== "none" ? ["morph" as const] : []),
+        ...(Result.isFailure(otherSeeds) ? ["other-projects" as const] : []),
+      ];
       // The projects' matches are disjoint. Cosine scores compare across reads, so vectors merge
       // by score; text and morph lists carry only ranks, so their ranks alternate, own first.
       return {
@@ -458,6 +458,7 @@ const make = (tuning: SearchTuning) =>
           uninterpreted: scopes.reduce((sum, scope) => sum + scope.coverage.uninterpreted, 0),
         },
         otherProjectsSkipped: Option.getOrUndefined(Result.getFailure(otherSeeds)),
+        degraded,
       };
     });
 
@@ -465,10 +466,8 @@ const make = (tuning: SearchTuning) =>
       Effect.gen(function* () {
         const limit = input.limit ?? defaultLimit;
         const allowed = yield* allowedProjects(input.projectId, input.crossProject ?? true);
-        const degraded: FindResult["degraded"][number][] = [];
-
-        const { byVector, byText, byMorph, coverage, spans, otherProjectsSkipped } =
-          yield* collectSeeds(input, allowed, limit, degraded);
+        const { byVector, byText, byMorph, coverage, spans, otherProjectsSkipped, degraded } =
+          yield* collectSeeds(input, allowed, limit);
         // The vector list is always full, related or not. For a query that names something
         // exactly it would outvote the text match, so the text ranking goes first and counts more.
         const morph = byMorph.length > 0 ? [byMorph] : [];

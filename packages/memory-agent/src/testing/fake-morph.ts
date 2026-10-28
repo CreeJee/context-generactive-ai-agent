@@ -43,5 +43,5 @@ export const fakeMorphLayer = Layer.succeed(MorphAnalyzer, {
   identity: "fake-morph-v1",
   ready: () => true,
   warm: () => undefined,
-  terms: (texts) => Effect.sync(() => texts.map(fakeTerms)),
+  terms: (texts) => Effect.succeed(texts.map(fakeTerms)),
 });

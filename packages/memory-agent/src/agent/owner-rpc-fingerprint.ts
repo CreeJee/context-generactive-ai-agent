@@ -1,6 +1,9 @@
-import { Data, Function as EffectFunction, Option, Result, Schema } from "effect";
+import { Data, Function as EffectFunction, Match, Option, Predicate, Result, Schema } from "effect";
 import { sha256 } from "../runtime/synchronous-crypto.ts";
-import type { OwnerRpcJson } from "./owner-rpc.ts";
+import type { JsonValue } from "../json.ts";
+
+/** The owner ledger's JSON: what its fingerprints were computed over. */
+type OwnerRpcJson = JsonValue;
 
 const Digest = Schema.String.pipe(Schema.check(Schema.isPattern(/^[0-9a-f]{64}$/)));
 const Compact = Schema.TaggedStruct("OwnerRpcFingerprintV1", {
@@ -9,68 +12,76 @@ const Compact = Schema.TaggedStruct("OwnerRpcFingerprintV1", {
   digest: Digest,
   operation: Schema.String,
   input: Schema.Json,
+  // The Goal worker kept the hook of a middleware call too large to keep whole.
   inputKind: Schema.Literals(["complete", "middleware-hook", "omitted"]),
 });
 const Descriptor = Schema.Struct({ operation: Schema.String, input: Schema.Json });
 type Evidence = Data.TaggedEnum<{
   complete: { readonly input: OwnerRpcJson };
-  "middleware-hook": { readonly input: OwnerRpcJson };
   omitted: { readonly input: null };
 }>;
 const Evidence = Data.taggedEnum<Evidence>();
 const evidenceKind = Evidence.$match({
   complete: () => "complete" as const,
-  "middleware-hook": () => "middleware-hook" as const,
   omitted: () => "omitted" as const,
 });
-// Covers the bounded 32-report recovery request as well as ordinary read evidence.
+// Covers a bounded 32-report read request as well as ordinary call arguments.
 const evidenceLimit = 16384;
 
 /** A request value that has no canonical JSON form, or a legacy fingerprint no longer readable. */
-export class OwnerRpcFingerprintFailed extends Schema.TaggedError<OwnerRpcFingerprintFailed>()(
-  "OwnerRpcFingerprintFailed",
-  { reason: Schema.Literals(["non_finite", "non_json", "unsupported_legacy"]) },
-) {}
-// Fingerprints are computed synchronously inside the ledger's SQLite and RPC boundaries.
+export class OwnerRpcFingerprintFailed extends Schema.TaggedError<
+  OwnerRpcFingerprintFailed,
+  { readonly brand: unique symbol }
+>()("OwnerRpcFingerprintFailed", {
+  reason: Schema.Literals(["non_finite", "non_json", "unsupported_legacy"]),
+}) {}
+// Fingerprints are computed synchronously inside the ledger's SQLite boundary.
 const fail = (reason: OwnerRpcFingerprintFailed["reason"]): never => {
   throw OwnerRpcFingerprintFailed.make({ reason });
 };
 
-/** The existing canonical byte contract, including key ordering and finite numbers. */
-export function ownerRpcCanonicalJson(value: OwnerRpcJson): string {
-  if (value === null) return "null";
-  // Primitive discrimination belongs to this JSON serialization boundary.
-  // oxlint-disable-next-line anti-slop/no-runtime-typeof
-  switch (typeof value) {
-    case "boolean":
-    case "string":
-      return JSON.stringify(value);
-    case "number":
-      if (!Number.isFinite(value)) return fail("non_finite");
-      return JSON.stringify(value);
-    case "object":
-      if (Array.isArray(value)) return `[${value.map(ownerRpcCanonicalJson).join(",")}]`;
-      return `{${Object.entries(value)
-        .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-        .map(([key, entry]) => `${JSON.stringify(key)}:${ownerRpcCanonicalJson(entry)}`)
-        .join(",")}}`;
-    default:
-      return fail("non_json");
-  }
-}
+const isList = (value: JsonValue): value is ReadonlyArray<JsonValue> => Array.isArray(value);
+const isFields = (value: JsonValue): value is { readonly [key: string]: JsonValue } =>
+  Predicate.isObject(value) && !isList(value);
 
-function middlewareEvidence(input: OwnerRpcJson): Evidence {
-  // Inspect only the top-level tagged wire fields; do not decode the full SDK context.
-  if (Array.isArray(input) && input[0] === "object" && Array.isArray(input[1])) {
-    const fields = input[1].filter(
-      (field) => Array.isArray(field) && (field[0] === "index" || field[0] === "hook"),
-    );
-    const selected: OwnerRpcJson = ["object", fields];
-    if (ownerRpcCanonicalJson(selected).length <= evidenceLimit)
-      return Evidence["middleware-hook"]({ input: selected });
-  }
-  return Evidence.omitted({ input: null });
-}
+/** The existing canonical byte contract, including key ordering and finite numbers. */
+export const ownerRpcCanonicalJson = (value: OwnerRpcJson): string =>
+  Match.value(value).pipe(
+    Match.when(Match.null, () => "null"),
+    Match.when(Match.boolean, (flag) => JSON.stringify(flag)),
+    Match.when(Match.string, (text) => JSON.stringify(text)),
+    Match.when(Match.number, (number) =>
+      Number.isFinite(number) ? JSON.stringify(number) : fail("non_finite"),
+    ),
+    Match.when(isList, (items) => `[${items.map(ownerRpcCanonicalJson).join(",")}]`),
+    Match.when(
+      isFields,
+      (fields) =>
+        `{${Object.entries(fields)
+          .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+          .map(([key, entry]) => `${JSON.stringify(key)}:${ownerRpcCanonicalJson(entry)}`)
+          .join(",")}}`,
+    ),
+    // Values outside the JSON type, such as undefined, reach here only from untyped callers.
+    Match.orElse(() => fail("non_json")),
+  );
+
+/**
+ * A value in the frame the Goal worker's codec sent it in, which ledger rows keep their input in
+ * (`invocationFieldSql` reads it).
+ */
+export const ownerRpcFrame = (value: JsonValue): JsonValue =>
+  Match.value(value).pipe(
+    Match.when(Match.null, (): JsonValue => ["null"]),
+    Match.when(Match.boolean, (flag): JsonValue => ["boolean", flag]),
+    Match.when(Match.number, (number): JsonValue => ["number", number]),
+    Match.when(Match.string, (text): JsonValue => ["string", text]),
+    Match.when(isList, (items): JsonValue => ["array", items.map(ownerRpcFrame)]),
+    Match.orElse((fields): JsonValue => [
+      "object",
+      Object.entries(fields).map(([key, field]): JsonValue => [key, ownerRpcFrame(field)]),
+    ]),
+  );
 
 function encodeFingerprint(operation: string, canonical: string, evidence: Evidence): string {
   return JSON.stringify(
@@ -85,27 +96,18 @@ function encodeFingerprint(operation: string, canonical: string, evidence: Evide
   );
 }
 
-/** Full request bytes are hashed; only bounded diagnostic/recovery evidence is retained. */
+/** Full request bytes are hashed; only bounded diagnostic evidence is retained. */
 function fingerprintBody(operation: string, input: OwnerRpcJson): string {
   const canonical = ownerRpcCanonicalJson({ operation, input });
   const evidence: Evidence =
     canonical.length <= evidenceLimit
       ? Evidence.complete({ input })
-      : operation === "middleware"
-        ? middlewareEvidence(input)
-        : Evidence.omitted({ input: null });
+      : Evidence.omitted({ input: null });
   return encodeFingerprint(operation, canonical, evidence);
 }
 export const ownerRpcFingerprint: {
   (input: OwnerRpcJson): (operation: string) => string;
 } & typeof fingerprintBody = EffectFunction.dual(2, fingerprintBody);
-
-/** Legacy request JSON remains comparable without rewriting an operational database. */
-export function ownerRpcFingerprintDigest(fingerprint: string): string {
-  if (fingerprint.length > evidenceLimit + 1024) return sha256(fingerprint);
-  const compact = Schema.decodeOption(Schema.fromJsonString(Compact))(fingerprint);
-  return Option.isSome(compact) ? compact.value.digest : sha256(fingerprint);
-}
 
 /** Explicit offline conversion, never an automatic startup backfill. */
 export function compactLegacyOwnerRpcFingerprint(fingerprint: string): string {

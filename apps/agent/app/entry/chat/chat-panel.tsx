@@ -1,16 +1,9 @@
 import { Data, Effect, Fiber, Match } from "effect";
 import { runUiEffect, uiPromise } from "../shared/ui-effect";
 import { isTruthy } from "../../truthy.ts";
-import { fetchServerSentEvents, useChat } from "@tanstack/ai-react";
-import { useQueryClient } from "@tanstack/react-query";
-import {
-  approvalToolDefinitions,
-  attachmentUrl,
-  contextUsageEvent,
-  permissionReviewInterrupt,
-  queueDeliveredEvent,
-  sessionHolderHeader,
-} from "memory-agent/definitions";
+import type { Refusal } from "memory-agent/chat-api";
+import type { UserContent } from "memory-agent/chat-session";
+import { attachmentUrl, contextUsageEvent, queueDeliveredEvent } from "memory-agent/definitions";
 import { cn } from "cn";
 import type { TraceTaskView } from "memory-agent";
 import { Option } from "effect";
@@ -24,11 +17,9 @@ import { Marker, MarkerContent, MarkerIcon } from "~/components/ui/marker";
 import { Spinner } from "~/components/ui/spinner";
 import { DraftImage, renumberReferences, useDraftImages } from "./draft-images";
 import { missingDeliveredMessages } from "./delivered-messages";
-import { interruptContinuationState } from "../session/interrupt-recovery";
 import {
   ArchiveTaskResult,
   isApiError,
-  chatFetch,
   compactErrorMessage,
   refusalOf,
   eventDecoders,
@@ -59,7 +50,8 @@ import {
 import { AddOutcome, isTakenIn, useMessageQueue } from "../session/message-queue";
 import { SubagentPanel } from "./subagent-panel";
 import { ReadOnlyBar } from "./read-only-bar";
-import { toPendingApproval, type ApprovalInterrupts, type ApprovalTools } from "./pending-approval";
+import { approvalAnswer, toPendingApproval } from "./pending-approval";
+import { useAgentChat } from "./use-agent-chat";
 import { RunNoticeView } from "../session/run-state";
 import { sessionDraftsAtom } from "../session/session-drafts";
 import { useSessionLease, type PageLease } from "../session/session-lease";
@@ -68,7 +60,6 @@ import { useBackendRestartRequired } from "../shared/use-backend-restart";
 import { useImageGeneration } from "../media/use-image-generation";
 import { useRunState } from "../session/use-run-state";
 import { useProjectScope } from "../events/context";
-import { sessionQueries } from "../queries/session";
 import {
   useArchiveTraceTaskMutation,
   useCompactSessionMutation,
@@ -101,9 +92,6 @@ export interface SlashSupport {
     >,
   ) => Promise<void>;
 }
-
-// Stable references: useChat treats a new array as changed options on every render.
-const approvalInterrupts: ApprovalInterrupts = [permissionReviewInterrupt];
 
 const imageFiles = (files: FileList | null) =>
   Array.from(files ?? []).filter((file) => file.type.startsWith("image/"));
@@ -170,16 +158,38 @@ function compacted(result: CompactResult): Notice {
   return { tone: "done", text: [...done, ...failed, size].join(" ") };
 }
 
-/** A user turn from text and uploaded images, as the chat endpoint expects it. */
-const contentOf = (text: string, attachmentIds: readonly string[]) => ({
-  content: [
-    ...(text.length > 0 ? [{ type: "text" as const, content: text }] : []),
-    ...attachmentIds.map((id) => ({
-      type: "image" as const,
-      source: { type: "url" as const, value: attachmentUrl(id) },
-    })),
-  ],
-});
+/** A user turn from text and uploaded images, as the chat API takes it. */
+const contentOf = (text: string, attachmentIds: readonly string[]): UserContent => [
+  ...(text.length > 0 ? [{ type: "text" as const, content: text }] : []),
+  ...attachmentIds.map((id) => ({
+    type: "image" as const,
+    source: { type: "url" as const, value: attachmentUrl(id) },
+  })),
+];
+
+/** A refused turn's code as the user reads it; the other codes show as they are. */
+const refusalTexts: Partial<Record<Refusal["error"], string>> = {
+  provider_auth_unavailable: "인증 상태를 확인할 수 없어요. 잠시 후 다시 시도해 주세요.",
+  provider_unavailable: "선택한 제공자를 사용할 수 없어요. 제공자 설정을 확인해 주세요.",
+  login_required: "선택한 공급자에 로그인해야 해요.",
+  model_selection_required: "먼저 모델을 선택하세요.",
+  images_not_supported: "선택한 모델은 이미지를 읽지 못해요.",
+  run_in_progress: "이 대화가 아직 답하는 중이에요.",
+  session_in_use: "다른 창이 이 대화를 쓰고 있어요.",
+};
+
+/** Why the last turn got no answer: the server refused it, it was not sent, or its run failed. */
+function NoAnswer({
+  refusal,
+  error,
+}: {
+  refusal: Refusal | null;
+  error: { readonly message: string } | null;
+}) {
+  if (refusal !== null)
+    return refusalTexts[refusal.error] ?? `서버가 요청을 거절했어요 (${refusal.error}).`;
+  return error !== null && <RunFailureText error={error} />;
+}
 
 /** The queued message that goes next, if the one at the front is simply waiting. */
 const isEditable = (message: QueuedMessage) =>
@@ -226,8 +236,8 @@ export function SessionView({
 }
 
 /**
- * One session's live conversation. The server owns the transcript: on mount the chat hydrates it by
- * session id, together with any approval still waiting, so a reload shows the same card again.
+ * One session's live conversation. The server owns the transcript: on mount the page reads its
+ * newest messages, together with any approval still waiting, so a reload shows the same card again.
  */
 function ChatPanel({
   sessionId,
@@ -250,7 +260,6 @@ function ChatPanel({
   slash: SlashSupport;
   sendingEnabled: boolean;
 }) {
-  const queryClient = useQueryClient();
   const projectId = useProjectScope("chat");
   // The inbox leads here with the card to open the board on. Closing only the card peek
   // keeps the board, so the summary holding it stays mounted.
@@ -290,8 +299,6 @@ function ChatPanel({
   // What the run in progress reports; the server's record covers the time before and after it.
   const [liveContext, setLiveContext] = useState<ContextView | null>(null);
   const [placements, setPlacements] = useState<Readonly<Record<string, Placement>>>({});
-  // Set while the conversation is read again after a run, so taken-in messages do not blink out.
-  const [catchingUp, setCatchingUp] = useState(false);
   const place = (ids: readonly string[], placement: Placement) =>
     setPlacements((current) => ({
       ...current,
@@ -301,47 +308,33 @@ function ChatPanel({
   const composerInput = useRef<ChatComposerHandle>(null);
   const {
     messages,
-    setMessages,
     hasOlderMessages,
     loadOlderMessages,
     sendMessage,
     stop,
     isLoading,
     sessionGenerating,
-    error,
-    status,
-    interrupts,
-    interruptErrors,
     resuming,
+    failure,
+    refusal,
+    unsent,
+    interrupts,
+    answerProblem,
     resolveInterrupts,
-    retryInterrupts,
-  } = useChat<ApprovalTools, undefined, unknown, ApprovalInterrupts>({
-    connection: fetchServerSentEvents(`/api/chat?session=${encodeURIComponent(sessionId)}`, {
-      // The server refuses sends and approval answers from a page that does not hold the session.
-      headers: { [sessionHolderHeader]: holder },
-      fetchClient: chatFetch,
-    }),
-    threadId: sessionId,
-    persistence: true,
-    // Enables TanStack's server-authoritative delta protocol: hydrated and completed message ids are
-    // remembered, so the next turn sends only messages the server has not persisted already.
-    // Keep first delivery bounded; earlier turns remain available via loadOlderMessages.
-    history: { pageSize: 20 },
-    // The same definitions the server uses, so approval requests can be matched and answered:
-    // tool approvals in `ask` mode, permission reviews in `auto` mode.
-    tools: approvalToolDefinitions,
-    interrupts: approvalInterrupts,
-    onCustomEvent: (eventType, data) => {
-      switch (eventType) {
+  } = useAgentChat({
+    sessionId,
+    holder,
+    onCustomEvent: (event) => {
+      switch (event.name) {
         case contextUsageEvent: {
-          const view = Option.getOrNull(eventDecoders.context(data));
+          const view = Option.getOrNull(eventDecoders.context(event.value));
           if (isTruthy(view)) setLiveContext(view);
           return;
         }
         case queueDeliveredEvent: {
           // Taken in at a tool call: after the message that made it, before the answer that follows.
           const last = messages.at(-1);
-          const delivered = Option.getOrNull(eventDecoders.delivered(data));
+          const delivered = Option.getOrNull(eventDecoders.delivered(event.value));
           if (isTruthy(last) && delivered !== null)
             place(delivered.ids, { side: "after", messageId: last.id });
           void queue.refresh();
@@ -350,23 +343,16 @@ function ChatPanel({
       }
     },
   });
-  const approvals = interrupts.flatMap((interrupt) => toPendingApproval(interrupt) ?? []);
+  const approvals = (interrupts?.pending ?? []).map(toPendingApproval);
   const approvalBatchKey = approvals.map((approval) => approval.id).join("\u0000");
-  const waitingForApproval = interrupts.length > 0;
+  const waitingForApproval = interrupts !== null;
   const awaitingApproval = approvals.map((approval) => approval.toolCallId);
-  const incompleteApprovalBatch = approvals.length !== interrupts.length;
-  const staleApprovalBatch = interruptErrors.some((interruptError) =>
-    ["incomplete-batch", "unknown-interrupt", "stale", "conflict", "expired"].includes(
-      interruptError.code,
-    ),
-  );
-  const retryableApprovalBatch = interruptErrors.some((interruptError) => interruptError.retryable);
-  const approvalErrorMessage = interruptErrors.at(-1)?.message;
-  const continuation = interruptContinuationState(error?.message, interrupts.length);
-  const continuationStartFailed = continuation === "lost";
-  const continuationReachedNextApproval = continuation === "continued";
   // A run rejoined after a reload streams without a local request, so both count as busy.
   const generating = isLoading || sessionGenerating;
+  // Sent, and nothing of the answer has come yet.
+  const submitted = generating && messages.at(-1)?.role === "user";
+  // A turn that was not sent is newer than the failure of the run before it.
+  const noAnswer = unsent ?? failure;
   // What the conversation ends with: text means an answer, a tool call means work in between.
   const lastPart = messages
     .at(-1)
@@ -429,7 +415,7 @@ function ChatPanel({
         // Even a continuation rechecks the current server policy before dispatching another turn.
         if (!isTruthy(yield* uiPromise(() => changeWorkflowPhase("execute")))) return;
         setNotice(null);
-        void sendMessage(
+        sendMessage(
           contentOf(
             retryingFailedVerification
               ? "저장된 검증 실패 evidence를 바탕으로 구현 결함을 수정하고 다시 검증해 줘."
@@ -451,7 +437,7 @@ function ChatPanel({
           return;
         }
         setNotice(null);
-        void sendMessage(contentOf("일시 중지한 Goal을 현재 상태에서 이어서 진행해 줘.", []));
+        sendMessage(contentOf("일시 중지한 Goal을 현재 상태에서 이어서 진행해 줘.", []));
       }).pipe(
         Effect.catchTag("UnknownError", () =>
           Effect.sync(() => {
@@ -468,7 +454,7 @@ function ChatPanel({
 
   // Messages the run took in, shown in the conversation until it is read again with them.
   const inFlight =
-    generating || waitingForApproval || catchingUp
+    generating || waitingForApproval
       ? missingDeliveredMessages(queue.items.filter(isTakenIn), messages)
       : [];
   const takenIn = (side: Placement["side"], messageId: string) =>
@@ -622,48 +608,32 @@ function ChatPanel({
     }
     pendingQueuedStart.current = false;
     // A content-less placeholder is replaced by the server's current queued turn.
-    void sendMessage(contentOf("", []), { body: { queuedNext: true } });
+    sendMessage(contentOf("", []), { queuedNext: true });
   };
 
-  // When this page's run stops: catch up with messages the run took in along the way, then, after
-  // a normal finish, send what is waiting as the next turn (R03). Not after a cancel or failure.
+  // When this page's run stops, with the messages it took in already read again: after a normal
+  // finish, send what is waiting as the next turn (R03). Not after a cancel or failure.
   const wasGenerating = useRef(generating);
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const handleRunSettled = useEffectEvent(() =>
     runUiEffect(
       Effect.gen(function* () {
-        setCatchingUp(true);
-        return yield* Effect.gen(function* () {
-          const [snapshot, state] = yield* uiPromise(() =>
-            Promise.all([queue.refresh(), run.refresh()]),
-          );
-          if (
-            !isTruthy(snapshot) ||
-            !isTruthy(state) ||
-            isTruthy(state.running) ||
-            state.lastRun?.status === "interrupted"
-          )
-            return;
-          if (snapshot.items.some(isTakenIn))
-            setMessages(
-              (yield* uiPromise(() =>
-                queryClient.fetchQuery(sessionQueries.transcript(projectId, sessionId)),
-              )).messages,
-            );
-          if (
-            state.lastRun?.status === "completed" &&
-            NextDelivery.$is("ready")(snapshot.nextDelivery)
-          )
-            sendNextQueued(snapshot);
-        }).pipe(
-          Effect.ensuring(
-            Effect.sync(() => {
-              setCatchingUp(false);
-              setPlacements({});
-            }),
-          ),
+        const [snapshot, state] = yield* uiPromise(() =>
+          Promise.all([queue.refresh(), run.refresh()]),
         );
-      }),
+        if (
+          !isTruthy(snapshot) ||
+          !isTruthy(state) ||
+          isTruthy(state.running) ||
+          state.lastRun?.status === "interrupted"
+        )
+          return;
+        if (
+          state.lastRun?.status === "completed" &&
+          NextDelivery.$is("ready")(snapshot.nextDelivery)
+        )
+          sendNextQueued(snapshot);
+      }).pipe(Effect.ensuring(Effect.sync(() => setPlacements({})))),
     ),
   );
   useEffect(() => {
@@ -875,7 +845,7 @@ function ChatPanel({
         };
         const sendTurn = () => {
           clearDraft();
-          void sendMessage(contentOf(text, attachmentIds));
+          sendMessage(contentOf(text, attachmentIds));
         };
         if (!generating && media.intent) {
           if (attachmentIds.length > 0)
@@ -985,22 +955,14 @@ function ChatPanel({
           sessionId={sessionId}
           holder={holder}
           approvals={approvals}
-          incomplete={incompleteApprovalBatch}
-          stale={staleApprovalBatch}
-          retryable={retryableApprovalBatch}
-          continuationLost={continuationStartFailed}
-          errorCount={interruptErrors.length}
-          errorMessage={approvalErrorMessage ?? null}
+          problem={answerProblem}
           readOnly={readOnly}
           resuming={resuming}
           onResolve={(decisions) =>
-            resolveInterrupts((interrupt) => {
-              const pending = toPendingApproval(interrupt);
-              const decision = decisions[interrupt.id];
-              if (pending !== null && decision !== undefined) pending.answer(decision);
-            })
+            resolveInterrupts(
+              approvals.map(({ id }) => approvalAnswer({ id, approved: decisions[id] === true })),
+            )
           }
-          onRetry={retryInterrupts}
           onResync={onResync}
           onProblem={(message) => setNotice(problem(message))}
         />
@@ -1018,7 +980,7 @@ function ChatPanel({
           generating={generating}
           readOnly={readOnly}
         />
-        {status === "submitted" && (
+        {submitted && (
           <Marker role="status">
             <MarkerIcon>
               <Spinner />
@@ -1027,7 +989,7 @@ function ChatPanel({
           </Marker>
         )}
         {/* Between tool calls nothing streams, so the thread itself says the answer goes on. */}
-        {generating && status !== "submitted" && !waitingForApproval && !endsWithText && (
+        {generating && !submitted && !waitingForApproval && !endsWithText && (
           <Marker role="status">
             <MarkerIcon>
               <Spinner />
@@ -1035,22 +997,13 @@ function ChatPanel({
             <MarkerContent>작업 중…</MarkerContent>
           </Marker>
         )}
-        {error &&
-          !continuationStartFailed &&
-          !continuationReachedNextApproval &&
+        {(refusal !== null || noAnswer !== null) &&
+          answerProblem === null &&
           run.notice === null && (
             <Alert variant="destructive">
               <AlertTitle>응답을 받지 못했어요</AlertTitle>
               <AlertDescription>
-                {isApiError(error) && error.code === "provider_auth_unavailable" ? (
-                  "인증 상태를 확인할 수 없어요. 잠시 후 다시 시도해 주세요."
-                ) : isApiError(error) && error.code === "provider_unavailable" ? (
-                  "선택한 제공자를 사용할 수 없어요. 제공자 설정을 확인해 주세요."
-                ) : isApiError(error) ? (
-                  error.message
-                ) : (
-                  <RunFailureText error={error} />
-                )}
+                <NoAnswer refusal={refusal} error={noAnswer} />
               </AlertDescription>
             </Alert>
           )}

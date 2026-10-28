@@ -16,41 +16,45 @@ const seededSession = Effect.fnUntraced(function* (runs: number) {
   const { project } = yield* TestEnv;
   const sql = yield* SqlClient.SqlClient;
   const session = yield* (yield* Sessions).create(project.id);
-  for (let index = 1; index <= runs; index++) {
-    const run = `${session.id}-run-${index}`;
-    const failed = index % 5 === 0;
-    yield* sql`INSERT INTO chat_runs (run_id, thread_id, status, started_at, finished_at, error, error_code)
+  yield* Effect.forEach(
+    Array.from({ length: runs }, (_, offset) => offset + 1),
+    Effect.fnUntraced(function* (index) {
+      const run = `${session.id}-run-${index}`;
+      const failed = index % 5 === 0;
+      yield* sql`INSERT INTO chat_runs (run_id, thread_id, status, started_at, finished_at, error, error_code)
       VALUES (${run}, ${session.id}, ${failed ? "failed" : "completed"}, ${1_000 + index},
         ${1_500 + index}, ${failed ? `upstream said API_KEY=${secret}` : null},
         ${failed ? "provider_failed" : null})`;
-    const at = (offset: number) =>
-      DateTime.formatIso(DateTime.makeUnsafe(1_000 + index * 10 + offset));
-    const node = (
-      id: string,
-      kind: string,
-      text: string,
-      detail: Readonly<Record<string, string | boolean>>,
-      offset: number,
-    ) =>
-      sql`INSERT INTO nodes (id, project_id, session_id, run_id, kind, text, detail, created_at)
+      const at = (offset: number) =>
+        DateTime.formatIso(DateTime.makeUnsafe(1_000 + index * 10 + offset));
+      const node = (
+        id: string,
+        kind: string,
+        text: string,
+        detail: Readonly<Record<string, string | boolean>>,
+        offset: number,
+      ) =>
+        sql`INSERT INTO nodes (id, project_id, session_id, run_id, kind, text, detail, created_at)
         VALUES (${`${run}-${id}`}, ${project.id}, ${session.id}, ${run}, ${kind}, ${text},
           ${JSON.stringify(detail)}, ${at(offset)})`;
-    yield* node("ask", "user", `read file ${index}`, {}, 0);
-    yield* node(
-      "call",
-      "tool_call",
-      `{"path":"f${index}"}`,
-      { toolCallId: `c${index}`, toolName: "read_file" },
-      1,
-    );
-    yield* node(
-      "result",
-      "tool_result",
-      failed ? `ENOENT f${index} ${"x".repeat(7_000)}` : `contents ${secret}`,
-      { toolCallId: `c${index}`, toolName: "read_file", ok: !failed },
-      2,
-    );
-  }
+      yield* node("ask", "user", `read file ${index}`, {}, 0);
+      yield* node(
+        "call",
+        "tool_call",
+        `{"path":"f${index}"}`,
+        { toolCallId: `c${index}`, toolName: "read_file" },
+        1,
+      );
+      yield* node(
+        "result",
+        "tool_result",
+        failed ? `ENOENT f${index} ${"x".repeat(7_000)}` : `contents ${secret}`,
+        { toolCallId: `c${index}`, toolName: "read_file", ok: !failed },
+        2,
+      );
+    }),
+    { discard: true },
+  );
   return { project, session: { id: session.id, title: null } };
 });
 

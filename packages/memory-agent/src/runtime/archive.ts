@@ -33,20 +33,14 @@ export {
   type PinnedArchive,
 } from "./archive-install.ts";
 
-/** Public result for the native caller; domain code uses ArchiveInstallFailed. */
-export interface ArchiveFailure {
-  readonly reason: "download_failed" | "checksum_mismatch" | "unsafe_archive" | "extract_failed";
-  readonly detail: string;
-}
-
 const UnsupportedAlgorithm = Schema.TaggedStruct("UnsupportedAlgorithm", {
   algorithm: Schema.String,
 });
 
-export class ArchiveIntegrityRejected extends Schema.TaggedError<ArchiveIntegrityRejected>()(
-  "ArchiveIntegrityRejected",
-  { reason: UnsupportedAlgorithm },
-) {
+export class ArchiveIntegrityRejected extends Schema.TaggedError<
+  ArchiveIntegrityRejected,
+  { readonly brand: unique symbol }
+>()("ArchiveIntegrityRejected", { reason: UnsupportedAlgorithm }) {
   override get message() {
     return `unsupported integrity algorithm: ${this.reason.algorithm}`;
   }
@@ -64,11 +58,6 @@ function npmIntegrityBody(url: string, integrity: string): PinnedArchive {
   }
   return { url, algorithm, digest: Buffer.from(base64, "base64").toString("hex") };
 }
-
-const explain = (cause: unknown): string => {
-  if (!(cause instanceof Error)) return String(cause);
-  return cause.cause instanceof Error ? `${cause.message}: ${explain(cause.cause)}` : cause.message;
-};
 
 const HostOperationFailed = ArchiveInstallFailedReason.cases.HostOperationFailed;
 
@@ -101,15 +90,7 @@ const archiveCommand = Effect.fn("ArchiveHost.command")(function* (
           return Effect.succeed({ chunks: state.chunks, size });
         },
       ),
-      Effect.map(({ chunks, size }) => {
-        const bytes = new Uint8Array(size);
-        let offset = 0;
-        for (const chunk of chunks) {
-          bytes.set(chunk, offset);
-          offset += chunk.byteLength;
-        }
-        return new TextDecoder().decode(bytes);
-      }),
+      Effect.map(({ chunks, size }) => new TextDecoder().decode(Buffer.concat(chunks, size))),
     );
   return yield* Effect.scoped(
     Effect.gen(function* () {
@@ -120,8 +101,10 @@ const archiveCommand = Effect.fn("ArchiveHost.command")(function* (
         [collect(child.stdout), collect(child.stderr), child.exitCode],
         { concurrency: "unbounded" },
       );
-      if (exitCode !== 0)
-        return yield* hostFailure(options.operation)(`tar exited with code ${exitCode}`);
+      yield* Effect.when(
+        Effect.fail(hostFailure(options.operation)(`tar exited with code ${exitCode}`)),
+        Effect.succeed(exitCode !== 0),
+      );
       return stdout;
     }).pipe(
       Effect.mapError((cause) =>
@@ -254,39 +237,3 @@ export const archiveInstallerLayer = ArchiveInstaller.layer.pipe(
   Layer.provide(archiveHostLayer),
   Layer.provide(Layer.mergeAll(NodeCrypto.layer, NodeFileSystem.layer, NodePath.layer)),
 );
-
-const nativeFailure = (error: ArchiveInstallFailed) =>
-  ArchiveInstallFailedReason.match<ArchiveFailure>(error.reason, {
-    DownloadFailed: ({ cause }) => ({ reason: "download_failed", detail: explain(cause) }),
-    HttpStatus: ({ status }) => ({ reason: "download_failed", detail: `HTTP ${status}` }),
-    ChecksumMismatch: ({ algorithm }) => ({
-      reason: "checksum_mismatch",
-      detail: `${algorithm} differs from the pin`,
-    }),
-    UnsafeEntry: ({ entry }) => ({ reason: "unsafe_archive", detail: entry }),
-    HostOperationFailed: ({ cause }) => ({ reason: "extract_failed", detail: explain(cause) }),
-  });
-
-/** Native Promise entry point. Effect consumers compose ArchiveInstaller in their own runtime. */
-export const installArchive: {
-  (target: string): (archive: PinnedArchive) => ReturnType<typeof installArchiveBody>;
-} & typeof installArchiveBody = EffectFunction.dual(2, installArchiveBody);
-function installArchiveBody(
-  archive: PinnedArchive,
-  target: string,
-): Promise<ArchiveFailure | null> {
-  return Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const context = yield* Layer.build(archiveInstallerLayer);
-        return yield* Effect.flatMap(ArchiveInstaller, (installer) =>
-          installer.install({ archive, target }),
-        ).pipe(
-          Effect.provideContext(context),
-          Effect.as(null),
-          Effect.catchTag("ArchiveInstallFailed", (error) => Effect.succeed(nativeFailure(error))),
-        );
-      }),
-    ),
-  );
-}

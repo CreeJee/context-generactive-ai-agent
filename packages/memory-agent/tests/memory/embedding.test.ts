@@ -405,7 +405,7 @@ const cachedModels = await Effect.runPromise(
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const root = yield* Config.String("MEMORY_EMBEDDING_TEST_ROOT").pipe(
-          Config.withDefault(defaultStorageRoot),
+          Config.withDefault(yield* defaultStorageRoot),
         );
         const available = (file: string) =>
           fs
@@ -444,17 +444,21 @@ describe.skipIf(!cachedModels.cpu)("real model chunk retrieval", () => {
             kind: "user",
             text: body,
           });
-          for (const text of [
-            "창고 재고 실사는 월요일 오전에 진행합니다.",
-            "주문 배송 현황은 수요일에 확인합니다.",
-            "빌드 오류를 해결하고 테스트를 통과했습니다.",
-          ])
-            yield* nodes.append({
-              projectId: project.id,
-              sessionId: session.id,
-              kind: "user",
-              text,
-            });
+          yield* Effect.forEach(
+            [
+              "창고 재고 실사는 월요일 오전에 진행합니다.",
+              "주문 배송 현황은 수요일에 확인합니다.",
+              "빌드 오류를 해결하고 테스트를 통과했습니다.",
+            ],
+            (text) =>
+              nodes.append({
+                projectId: project.id,
+                sessionId: session.id,
+                kind: "user",
+                text,
+              }),
+            { discard: true },
+          );
           yield* (yield* Indexer).indexAll();
           const result = yield* (yield* MemorySearch).find({
             projectId: project.id,

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
-import { OAuthProfileRejected } from "memory-agent";
-import { accountLogin, answerAccountFailures } from "./account-failures";
+import { OAuthProfileRejected, OAuthProfileStoreFailed } from "memory-agent";
+import { answerAccountFailures } from "./account-failures";
 import { answerDefect } from "./http";
 
 const answered = (response: Response) =>
@@ -11,10 +11,10 @@ const answered = (response: Response) =>
   );
 
 describe("account route failures", () => {
-  it.effect("answers the login manager's typed rejection by its reason", () =>
+  it.effect("answers a typed profile rejection by its reason", () =>
     Effect.gen(function* () {
-      const response = yield* accountLogin("start", () =>
-        Promise.reject(OAuthProfileRejected.make({ reason: "oauth_profile_in_use" })),
+      const response = yield* Effect.fail(
+        OAuthProfileRejected.make({ reason: "oauth_profile_in_use" }),
       ).pipe(Effect.as(Response.json({})), answerAccountFailures);
       expect(yield* answered(response)).toEqual({
         status: 409,
@@ -23,14 +23,17 @@ describe("account route failures", () => {
     }),
   );
 
-  it.effect("answers an unknown rejection and a defect with fixed codes, never their text", () =>
+  it.effect("answers a keychain failure and a defect with fixed codes, never their text", () =>
     Effect.gen(function* () {
-      const rejected = yield* accountLogin("cancel", () =>
-        Promise.reject(new Error("keychain item /Users/someone/token")),
+      const rejected = yield* Effect.fail(
+        OAuthProfileStoreFailed.make({
+          operation: "keychain",
+          cause: new Error("keychain item /Users/someone/token"),
+        }),
       ).pipe(Effect.as(Response.json({})), answerAccountFailures);
       expect(yield* answered(rejected)).toEqual({
-        status: 500,
-        body: '{"error":"account_action_failed"}',
+        status: 503,
+        body: '{"error":"account_store_unavailable"}',
       });
       const defect = yield* Effect.die(new Error("SQLITE_CORRUPT /Users/someone/agent.db")).pipe(
         Effect.as(Response.json({})),

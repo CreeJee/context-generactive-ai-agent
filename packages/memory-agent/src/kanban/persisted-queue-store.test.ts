@@ -13,6 +13,7 @@ import {
 } from "effect";
 import { Exit, Scope } from "effect";
 import { PersistedQueue } from "effect/persistence";
+import { SqlClient } from "effect/sql";
 import { expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
 import { Database } from "../db/database.ts";
@@ -22,7 +23,10 @@ import {
   persistedQueueStoreLayer,
 } from "./persisted-queue-store.ts";
 
-class CardRunFailed extends Schema.TaggedError<CardRunFailed>()("CardRunFailed", {}) {}
+class CardRunFailed extends Schema.TaggedError<CardRunFailed, { readonly brand: unique symbol }>()(
+  "CardRunFailed",
+  {},
+) {}
 
 const Card = Schema.Struct({ cardId: Schema.String });
 const queueOptions = {
@@ -37,13 +41,17 @@ const openOwner = (file: string, scope: Scope.Scope) =>
   Layer.buildWithScope(
     PersistedQueue.layer.pipe(
       Layer.provideMerge(persistedQueueStoreLayer()),
-      Layer.provide(Layer.merge(Database.layer(file), NodeCrypto.layer)),
+      Layer.provideMerge(Layer.merge(Database.layer(file), NodeCrypto.layer)),
     ),
     scope,
   ).pipe(
     Effect.map((context) => ({
       run: <A, E>(
-        effect: Effect.Effect<A, E, PersistedQueue.PersistedQueueFactory | PersistedQueueItems>,
+        effect: Effect.Effect<
+          A,
+          E,
+          PersistedQueue.PersistedQueueFactory | PersistedQueueItems | SqlClient.SqlClient
+        >,
       ) => Effect.provideContext(effect, context),
     })),
   );
@@ -95,6 +103,25 @@ it.live("redelivers a card whose owner crashed before acknowledging it", () =>
     expect(
       Option.map(status, ({ state, attempts, claimed }) => ({ state, attempts, claimed })),
     ).toEqual(Option.some({ state: "completed", attempts: 2, claimed: false }));
+  }).pipe(Effect.scoped),
+);
+
+it.live("dead-letters an undecodable payload and delivers the next card as itself", () =>
+  Effect.gen(function* () {
+    const owner = yield* openOwner(yield* databaseFile, yield* Effect.scope);
+    yield* owner.run(
+      Effect.gen(function* () {
+        const queue = yield* cards;
+        yield* queue.offer({ cardId: "x" }, { id: "g:x:1" });
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE persisted_queue_items SET element_json = 'not json' WHERE id = 'g:x:1'`;
+        yield* queue.offer({ cardId: "y" }, { id: "g:y:1" });
+      }),
+    );
+    const delivered = yield* owner.run(
+      Effect.flatMap(cards, (queue) => queue.take((card, meta) => Effect.succeed({ card, meta }))),
+    );
+    expect(delivered).toEqual({ card: { cardId: "y" }, meta: { id: "g:y:1", attempts: 1 } });
   }).pipe(Effect.scoped),
 );
 

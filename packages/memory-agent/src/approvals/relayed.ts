@@ -1,5 +1,17 @@
-import { randomUUID } from "../runtime/synchronous-crypto.ts";
-import { Cause, Clock, Context, Duration, Effect, Layer, Option, Result, Schema } from "effect";
+import {
+  Cause,
+  Clock,
+  Context,
+  Crypto,
+  Duration,
+  Effect,
+  type Fiber,
+  Layer,
+  Option,
+  Result,
+  Schema,
+} from "effect";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { DurableClock, DurableDeferred, Workflow, WorkflowEngine } from "effect/workflow";
 import { ownerWorkflowEngineLayer } from "../workflow/owner-workflow-engine.ts";
 import { OwnerWorkflowStorage } from "../workflow/owner-workflow-storage.ts";
@@ -69,9 +81,9 @@ const payloadView = (payload: RelayedApprovalPayload): RelayedApprovalView => ({
 const make = (timeoutMs: number) =>
   Effect.gen(function* () {
     const engine = yield* WorkflowEngine.WorkflowEngine;
+    const crypto = yield* Crypto.Crypto;
     const storage = yield* OwnerWorkflowStorage;
-    const context = yield* Effect.context<never>();
-    const runPromise = Effect.runPromiseWith(context);
+    const scope = yield* Effect.scope;
     const provideEngine = <A, E>(effect: Effect.Effect<A, E, WorkflowEngine.WorkflowEngine>) =>
       Effect.provideService(effect, WorkflowEngine.WorkflowEngine, engine);
 
@@ -93,48 +105,53 @@ const make = (timeoutMs: number) =>
       /**
        * Persists the approval wait as an Effect Workflow execution. Owner cancellation interrupts
        * that execution; process/layer restart without cancellation preserves the pending race.
+       * The wait belongs to this service, not the caller: interrupting the caller leaves it to
+       * `signal`. Join the fiber for the answer.
        */
       ask: (
         sessionId: string,
         runId: string,
         request: RelayedRequest,
         signal: AbortSignal,
-      ): Promise<boolean> => {
-        if (signal.aborted) return Promise.resolve(false);
-        return runPromise(
-          Effect.gen(function* () {
-            const payload: RelayedApprovalPayload = {
-              ...request,
-              approvalId: randomUUID(),
-              sessionId,
-              runId,
-              createdAt: yield* Clock.currentTimeMillis,
-              timeoutMs,
-            };
-            const executionId = yield* RelayedApprovalExecution.executionId(payload);
-            const execute = provideEngine(RelayedApprovalExecution.execute(payload)).pipe(
-              Effect.map(
-                RelayedApprovalOutcome.match({
-                  Answered: ({ approved }) => approved,
-                  TimedOut: () => false,
-                }),
-              ),
-              Effect.catchCauseIf(Cause.hasInterrupts, () => Effect.succeed(false)),
-            );
-            const cancel = Effect.callback<void>((resume) => {
-              const onAbort = () => resume(Effect.void);
-              signal.addEventListener("abort", onAbort, { once: true });
-              // An abort that came while the execution id was hashed fired its event already.
-              if (signal.aborted) onAbort();
-              return Effect.sync(() => signal.removeEventListener("abort", onAbort));
-            }).pipe(
-              Effect.andThen(provideEngine(RelayedApprovalExecution.interrupt(executionId))),
-              Effect.as(false),
-            );
-            return yield* Effect.raceFirst(execute, cancel);
-          }),
-        );
-      },
+      ): Effect.Effect<Fiber.Fiber<boolean>> =>
+        Effect.forkIn(
+          signal.aborted
+            ? Effect.succeed(false)
+            : Effect.gen(function* () {
+                const payload: RelayedApprovalPayload = {
+                  ...request,
+                  // NodeCrypto draws ids synchronously; a failure here is a defect, not an answer.
+                  approvalId: yield* crypto.randomUUIDv4().pipe(Effect.orDie),
+                  sessionId,
+                  runId,
+                  createdAt: yield* Clock.currentTimeMillis,
+                  timeoutMs,
+                };
+                const executionId = yield* RelayedApprovalExecution.executionId(payload);
+                const execute = provideEngine(RelayedApprovalExecution.execute(payload)).pipe(
+                  Effect.map(
+                    RelayedApprovalOutcome.match({
+                      Answered: ({ approved }) => approved,
+                      TimedOut: () => false,
+                    }),
+                  ),
+                  Effect.catchCauseIf(Cause.hasInterrupts, () => Effect.succeed(false)),
+                );
+                const cancel = Effect.callback<void>((resume) => {
+                  const onAbort = () => resume(Effect.void);
+                  signal.addEventListener("abort", onAbort, { once: true });
+                  // An abort that came while the execution id was hashed fired its event already.
+                  if (signal.aborted) onAbort();
+                  return Effect.sync(() => signal.removeEventListener("abort", onAbort));
+                }).pipe(
+                  Effect.andThen(provideEngine(RelayedApprovalExecution.interrupt(executionId))),
+                  Effect.as(false),
+                );
+                return yield* Effect.raceFirst(execute, cancel);
+              }),
+          scope,
+          { startImmediately: true },
+        ),
 
       pending: (sessionId: string) =>
         Effect.map(storage.pendingExecutions(relayedApprovalWorkflow), (executions) =>
@@ -187,7 +204,10 @@ export class RelayedApprovals extends Context.Service<
     const timeoutMs = options?.timeoutMs ?? Duration.toMillis(Duration.days(1));
     const service = Layer.effect(RelayedApprovals, make(timeoutMs));
     const handler = RelayedApprovalExecution.toLayer(approvalHandler);
-    return Layer.merge(service, handler).pipe(Layer.provideMerge(ownerWorkflowEngineLayer));
+    return Layer.merge(service, handler).pipe(
+      Layer.provideMerge(ownerWorkflowEngineLayer),
+      Layer.provide(NodeCrypto.layer),
+    );
   };
 
   static readonly layer = RelayedApprovals.layerWith();

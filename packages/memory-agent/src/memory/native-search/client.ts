@@ -15,6 +15,7 @@ import {
   FiberMap,
   HashMap,
   Layer,
+  Match,
   Option,
   Predicate,
   Ref,
@@ -53,6 +54,10 @@ type RequestControl = {
   cancel(): void;
   close(): void;
 };
+/** A native SearchControl whose prototype reports whether a read pinned its snapshot. */
+const SnapshotPinningControl = Schema.Struct({
+  snapshotWasPinned: Schema.declare(Predicate.isFunction),
+});
 type Job = {
   readonly command: OwnerCommand;
   readonly control: Option.Option<RequestControl>;
@@ -110,8 +115,9 @@ export const rpcTransport: OwnerConnect = Effect.fn("NativeOwner.rpcTransport")(
   function* ({ setup, workerFile }: OwnerWorker) {
     const spawned = yield* Deferred.make<Worker>();
     const exited = yield* Deferred.make<void>();
+    const options = yield* runtimeWorkerOptions(setup);
     const workers = NodeWorker.layer(() => {
-      const worker = new Worker(workerFile, runtimeWorkerOptions(setup));
+      const worker = new Worker(workerFile, options);
       worker.once("exit", () => Deferred.doneUnsafe(exited, Exit.void));
       Deferred.doneUnsafe(spawned, Exit.succeed(worker));
       return worker;
@@ -149,18 +155,18 @@ export const rpcTransport: OwnerConnect = Effect.fn("NativeOwner.rpcTransport")(
 );
 
 /** A worker reporting these has a broken index or reader; nothing after it can be trusted. */
-const fatal = (error: NativeOwnerFailed) => {
-  switch (error.reason) {
-    case "index-failed":
-    case "read-failed":
-    case "native-incompatible":
-    case "worker-exit":
-    case "worker-error":
-      return true;
-    default:
-      return false;
-  }
-};
+const fatal = (error: NativeOwnerFailed) =>
+  Match.value(error.reason).pipe(
+    Match.whenOr(
+      "index-failed",
+      "read-failed",
+      "native-incompatible",
+      "worker-exit",
+      "worker-error",
+      () => true,
+    ),
+    Match.orElse(() => false),
+  );
 
 /**
  * Scoped native owner. Each request is a job fibre in a `FiberMap` keyed by request id: queued
@@ -195,15 +201,20 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
     yield* State.$match(previous, {
       failed: () => Effect.void,
       open: (previous) =>
-        Effect.gen(function* () {
-          for (const job of HashMap.values(previous.jobs)) {
-            yield* Effect.sync(() => {
-              if (Option.isSome(job.control)) job.control.value.close();
-            });
-            yield* Deferred.fail(job.result, error);
-          }
-          yield* FiberMap.clear(jobs);
-        }),
+        Effect.andThen(
+          Effect.forEach(
+            HashMap.values(previous.jobs),
+            (job) =>
+              Effect.andThen(
+                Effect.transposeOption(
+                  Option.map(job.control, (control) => Effect.sync(() => control.close())),
+                ),
+                Deferred.fail(job.result, error),
+              ),
+            { discard: true },
+          ),
+          FiberMap.clear(jobs),
+        ),
     });
   });
   yield* Effect.addFinalizer(() => failAll(NativeOwnerFailed.make({ reason: "closed" })));
@@ -313,8 +324,10 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
     const input = yield* Schema.decodeEffect(OwnerCommand)(command).pipe(
       Effect.mapError(() => NativeOwnerFailed.make({ reason: "invalid-input" })),
     );
-    if (input.epoch !== validated.epoch)
-      return yield* NativeOwnerFailed.make({ reason: "epoch-mismatch" });
+    yield* Effect.when(
+      Effect.fail(NativeOwnerFailed.make({ reason: "epoch-mismatch" })),
+      Effect.succeed(input.epoch !== validated.epoch),
+    );
     if (
       OwnerCommand.guards["memory-search"](input) &&
       nativeReadInputLogicalBytes(input.input) > input.input.inputBudgetBytes
@@ -412,9 +425,9 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
           return yield* restore(
             Deferred.await(result).pipe(
               Effect.onInterrupt(() =>
-                Effect.sync(() => {
-                  if (Option.isSome(control)) control.value.cancel();
-                }),
+                Effect.transposeOption(
+                  Option.map(control, (requested) => Effect.sync(() => requested.cancel())),
+                ),
               ),
               Effect.timeoutOrElse({
                 duration: replyDeadline(input),
@@ -441,64 +454,67 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
     const token = yield* crypto
       .randomUUIDv4()
       .pipe(Effect.mapError(() => NativeOwnerFailed.make({ reason: "worker-error" })));
+    const controlled = (budget: number) =>
+      requireRuntime("turbovec").pipe(
+        Effect.mapError(() => NativeOwnerFailed.make({ reason: "invalid-input" })),
+        Effect.flatMap((turbovec) =>
+          Effect.try({
+            try: () => {
+              const binding = turbovec.loadTurbovec();
+              if (!Predicate.isFunction(binding.SearchControl))
+                throw NativeOwnerFailed.make({ reason: "native-incompatible" });
+              // ABI capability inspection only; the method is never invoked without its receiver.
+              if (
+                admission !== undefined &&
+                !Schema.is(SnapshotPinningControl)(binding.SearchControl.prototype)
+              )
+                throw NativeOwnerFailed.make({ reason: "native-incompatible" });
+              const control = new binding.SearchControl(
+                token,
+                ownerKey,
+                validated.epoch,
+                command.requestId,
+                budget,
+              );
+              return Option.some<RequestControl>({
+                token: control.token(),
+                snapshotWasPinned: () => control.snapshotWasPinned(),
+                cancel: () => control.cancel(),
+                close: () => control.close(),
+              });
+            },
+            catch: (error) =>
+              Schema.is(NativeOwnerFailed)(error)
+                ? error
+                : NativeOwnerFailed.make({ reason: "invalid-input" }),
+          }),
+        ),
+      );
     return yield* Effect.acquireUseRelease(
-      Effect.try({
-        try: (): Option.Option<RequestControl> => {
-          const controlled = (budget: number) => {
-            const binding = requireRuntime("turbovec").loadTurbovec();
-            if (!Predicate.isFunction(binding.SearchControl))
-              throw NativeOwnerFailed.make({ reason: "native-incompatible" });
-            // eslint-disable-next-line typescript/unbound-method -- ABI capability inspection only; the method is never invoked without its receiver.
-            if (
-              admission !== undefined &&
-              // eslint-disable-next-line typescript/unbound-method -- Inspection only, not an unbound invocation.
-              !Predicate.isFunction(binding.SearchControl.prototype.snapshotWasPinned)
-            )
-              throw NativeOwnerFailed.make({ reason: "native-incompatible" });
-            const control = new binding.SearchControl(
-              token,
-              ownerKey,
-              validated.epoch,
-              command.requestId,
-              budget,
-            );
-            return Option.some<RequestControl>({
-              token: control.token(),
-              snapshotWasPinned: () => control.snapshotWasPinned(),
-              cancel: () => control.cancel(),
-              close: () => control.close(),
-            });
-          };
-          return OwnerCommand.match<Option.Option<RequestControl>>(command, {
-            "memory-search": (command) => controlled(command.input.remainingMs),
-            "vector-search-controlled": (command) => controlled(command.budgetMs),
-            add: () => Option.none(),
-            remove: () => Option.none(),
-            reset: () => Option.none(),
-            save: () => Option.none(),
-            validate: () => Option.none(),
-            "vector-search": () => Option.none(),
-          });
-        },
-        catch: (error) =>
-          Schema.is(NativeOwnerFailed)(error)
-            ? error
-            : NativeOwnerFailed.make({ reason: "invalid-input" }),
+      OwnerCommand.match<Effect.Effect<Option.Option<RequestControl>, NativeOwnerFailed>>(command, {
+        "memory-search": (command) => controlled(command.input.remainingMs),
+        "vector-search-controlled": (command) => controlled(command.budgetMs),
+        add: () => Effect.succeedNone,
+        remove: () => Effect.succeedNone,
+        reset: () => Effect.succeedNone,
+        save: () => Effect.succeedNone,
+        validate: () => Effect.succeedNone,
+        "vector-search": () => Effect.succeedNone,
       }),
       (control) => executeRegistered(command, control, admission),
       (control) =>
-        Effect.sync(() => {
-          if (Option.isSome(control)) control.value.close();
-        }),
+        Effect.transposeOption(Option.map(control, (opened) => Effect.sync(() => opened.close()))),
     );
   });
   const cancel = Effect.fn("NativeOwner.cancel")(function* (requestId: string) {
     const current = yield* Ref.get(state);
     if (State.$is("failed")(current)) return yield* current.error;
-    const control = Option.flatMap(HashMap.get(current.jobs, requestId), (job) => job.control);
-    if (Option.isNone(control)) return yield* NativeOwnerFailed.make({ reason: "invalid-input" });
+    const control = yield* Effect.fromOption(
+      Option.flatMap(HashMap.get(current.jobs, requestId), (job) => job.control),
+      () => NativeOwnerFailed.make({ reason: "invalid-input" }),
+    );
     // Direct main-thread native atomic store, never a message to the blocked worker.
-    yield* Effect.sync(() => control.value.cancel());
+    yield* Effect.sync(() => control.cancel());
   });
   const startRead = Effect.fn("NativeOwner.startRead")(function* (
     command: (typeof OwnerCommand.cases)["memory-search"]["Type"],

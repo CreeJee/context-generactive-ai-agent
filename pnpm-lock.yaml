@@ -173,6 +173,9 @@ catalogs:
     '@base-ui/react':
       specifier: ^1.9.0
       version: 1.9.0
+    '@cfworker/json-schema':
+      specifier: 4.1.1
+      version: 4.1.1
     '@dnd-kit/core':
       specifier: 6.3.1
       version: 6.3.1
@@ -182,6 +185,12 @@ catalogs:
     '@dnd-kit/utilities':
       specifier: 3.2.2
       version: 3.2.2
+    '@effect/ai-openai-compat':
+      specifier: https://pkg.pr.new/Effect-TS/effect/@effect/ai-openai-compat@844a77b18c03b4faa386cf04bf94908d3d37abc7
+      version: https://pkg.pr.new/Effect-TS/effect/@effect/ai-openai-compat@844a77b18c03b4faa386cf04bf94908d3d37abc7
+    '@effect/atom-react':
+      specifier: https://pkg.pr.new/Effect-TS/effect/@effect/atom-react@844a77b18c03b4faa386cf04bf94908d3d37abc7
+      version: https://pkg.pr.new/Effect-TS/effect/@effect/atom-react@844a77b18c03b4faa386cf04bf94908d3d37abc7
     '@effect/tsgo':
       specifier: 0.53.3
       version: 0.53.3
@@ -224,9 +233,6 @@ catalogs:
     '@shadcn/lint':
       specifier: ^0.2.1
       version: 0.2.1
-    '@standard-schema/spec':
-      specifier: ^1.1.0
-      version: 1.1.0
     '@streamdown/cjk':
       specifier: ^1.0.4
       version: 1.0.4
@@ -236,30 +242,6 @@ catalogs:
     '@tailwindcss/vite':
       specifier: ^4.3.3
       version: 4.3.3
-    '@tanstack/ai':
-      specifier: ^1.0.0
-      version: 1.0.0
-    '@tanstack/ai-anthropic':
-      specifier: 1.0.0
-      version: 1.0.0
-    '@tanstack/ai-client':
-      specifier: ^1.0.0
-      version: 1.0.0
-    '@tanstack/ai-compaction':
-      specifier: ^1.0.0
-      version: 1.0.0
-    '@tanstack/ai-mcp':
-      specifier: 1.0.0
-      version: 1.0.0
-    '@tanstack/ai-openai':
-      specifier: ^1.0.0
-      version: 1.0.0
-    '@tanstack/ai-persistence':
-      specifier: ^1.0.0
-      version: 1.0.0
-    '@tanstack/ai-react':
-      specifier: 1.0.0
-      version: 1.0.0
     '@tanstack/react-query':
       specifier: ^5.104.5
       version: 5.104.5
@@ -396,8 +378,6 @@ overrides:
 patchedDependencies:
   '@effect/platform-node-shared@4.0.3': c57a6807f1e17ea8ad6b140030b3f305bbf566a23ecee92d57d0bcb017f7ff56
   '@effect/platform-node@4.0.3': fe1f5aa94f50ade5a8b9e7cfec43edc29b5e1eddb0d419a3b58de9e5ede4076a
-  '@tanstack/ai@1.0.0': d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88
-  '@tanstack/openai-base@1.0.0': 97bafdd42d359e1e6213813a35ff4130b0ebbb1144bdab05332d7a20186c075a
   effect@4.0.3: 7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16
   react-simplikit@0.3.3: 9570e6c7166ad0f77aaecf872cff939621299620e91851ef97e2d4c60f8453f3
 
@@ -468,6 +448,9 @@ importers:
       '@dnd-kit/utilities':
         specifier: 'catalog:'
         version: 3.2.2(react@19.3.1)
+      '@effect/atom-react':
+        specifier: 'catalog:'
+        version: https://pkg.pr.new/Effect-TS/effect/@effect/atom-react@844a77b18c03b4faa386cf04bf94908d3d37abc7(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16))(react@19.3.1)(scheduler@0.28.0)
       '@effect/platform-node':
         specifier: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7
         version: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=fe1f5aa94f50ade5a8b9e7cfec43edc29b5e1eddb0d419a3b58de9e5ede4076a)(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16))(redis@6.3.0(@opentelemetry/api@1.10.0))
@@ -486,15 +469,6 @@ importers:
       '@streamdown/code':
         specifier: 'catalog:'
         version: 2.0.0(react@19.3.1)
-      '@tanstack/ai':
-        specifier: 'catalog:'
-        version: 1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7)
-      '@tanstack/ai-openai':
-        specifier: 'catalog:'
-        version: 1.0.0(@tanstack/ai@1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7))(undici@8.12.2)(ws@8.22.0)(zod@4.6.7)
-      '@tanstack/ai-react':
-        specifier: 'catalog:'
-        version: 1.0.0(@opentelemetry/api@1.10.0)(@tanstack/ai@1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(zod@4.6.7)
       '@tanstack/react-query':
         specifier: 'catalog:'
         version: 5.104.5(@types/react@19.3.0)(react@19.3.1)
@@ -604,6 +578,12 @@ importers:
       '@anthropic-ai/sandbox-runtime':
         specifier: 'catalog:'
         version: 0.0.79
+      '@cfworker/json-schema':
+        specifier: 'catalog:'
+        version: 4.1.1
+      '@effect/ai-openai-compat':
+        specifier: 'catalog:'
+        version: https://pkg.pr.new/Effect-TS/effect/@effect/ai-openai-compat@844a77b18c03b4faa386cf04bf94908d3d37abc7(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16))
       '@effect/platform-node':
         specifier: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7
         version: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=fe1f5aa94f50ade5a8b9e7cfec43edc29b5e1eddb0d419a3b58de9e5ede4076a)(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16))(redis@6.3.0(@opentelemetry/api@1.10.0))
@@ -634,30 +614,6 @@ importers:
       '@secretlint/secretlint-rule-preset-recommend':
         specifier: 'catalog:'
         version: 13.0.7
-      '@standard-schema/spec':
-        specifier: 'catalog:'
-        version: 1.1.0
-      '@tanstack/ai':
-        specifier: 'catalog:'
-        version: 1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7)
-      '@tanstack/ai-anthropic':
-        specifier: 'catalog:'
-        version: 1.0.0(@tanstack/ai@1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7))(zod@4.6.7)
-      '@tanstack/ai-client':
-        specifier: 'catalog:'
-        version: 1.0.0(@opentelemetry/api@1.10.0)(zod@4.6.7)
-      '@tanstack/ai-compaction':
-        specifier: 'catalog:'
-        version: 1.0.0(@tanstack/ai@1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7))
-      '@tanstack/ai-mcp':
-        specifier: 'catalog:'
-        version: 1.0.0(@opentelemetry/api@1.10.0)(zod@4.6.7)
-      '@tanstack/ai-openai':
-        specifier: 'catalog:'
-        version: 1.0.0(@tanstack/ai@1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7))(undici@8.12.2)(ws@8.22.0)(zod@4.6.7)
-      '@tanstack/ai-persistence':
-        specifier: 'catalog:'
-        version: 1.0.0(@tanstack/ai@1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7))(vitest@5.0.5)
       cross-spawn:
         specifier: 'catalog:'
         version: 7.0.6
@@ -746,14 +702,6 @@ importers:
 
 packages:
 
-  '@ag-ui/core@1.0.0':
-    resolution: {integrity: sha512-yCRhsQvb4+lmGMrDsi4TOJxqKpm/kb3H64wwL+Z90jNVrkhy17RErfzsNgybfbjNKLM0nenEDYDVJsZHJJSigQ==}
-    peerDependencies:
-      zod: ^4.6.7
-    peerDependenciesMeta:
-      zod:
-        optional: true
-
   '@agentclientprotocol/sdk@1.9.0':
     resolution: {integrity: sha512-saCOTPYBK1iqWqJFAYHXbg3+zCoFXyZZFoqQAwdTWkbrZZPpAETr80QOnYr2l+dzPwL0jpNhn3eDY8MoEIDbUA==}
     peerDependencies:
@@ -763,15 +711,6 @@ packages:
     resolution: {integrity: sha512-WjBmS9fbTpnQwQkM9SU+JjhM2CcXo9eWEELktY1100RMvTy/jPhP44yZ3NXhh+GHB350OgPbM3+FubE5WVRtSA==}
     engines: {node: '>=22.12.0'}
     hasBin: true
-
-  '@anthropic-ai/sdk@0.135.0':
-    resolution: {integrity: sha512-WWrdL57JhU5KoynpTjt9GXK6k7ud9nPw2uw/Trn+oBXh6s0KpjhAccWZm2Qxw08ARYG1UDQj5iC+JO42j1rt/g==}
-    hasBin: true
-    peerDependencies:
-      zod: ^4.6.7
-    peerDependenciesMeta:
-      zod:
-        optional: true
 
   '@babel/code-frame@7.29.7':
     resolution: {integrity: sha512-Aup7aUOfpbAUg2ROOJN6Iw5f9DMBlzu0mIkm/malLQFN/YQgO48wCj0Kxa3sEHJvPVFg7siR+qRInwXd2qhQKw==}
@@ -973,6 +912,20 @@ packages:
 
   '@dotenvx/primitives@0.8.0':
     resolution: {integrity: sha512-VYJy0uhFm9zTJ1TxBaW/pA8bjbOM/OttaNMwZ1RHG4JKyRG7DhSdiqD1ipQoAyoD22olUtxbP78W9xY3Wd11bg==}
+
+  '@effect/ai-openai-compat@https://pkg.pr.new/Effect-TS/effect/@effect/ai-openai-compat@844a77b18c03b4faa386cf04bf94908d3d37abc7':
+    resolution: {integrity: sha512-RKjyPkZFzA3ZZTeghZ2K6ejPABeQ6B3GFxqYxhXn6t+L7daPpks8a7xAK8EImwBUsEZKx3Y2wVbUxG+N4PgYZA==, tarball: https://pkg.pr.new/Effect-TS/effect/@effect/ai-openai-compat@844a77b18c03b4faa386cf04bf94908d3d37abc7}
+    version: 4.0.3
+    peerDependencies:
+      effect: ^4.0.3
+
+  '@effect/atom-react@https://pkg.pr.new/Effect-TS/effect/@effect/atom-react@844a77b18c03b4faa386cf04bf94908d3d37abc7':
+    resolution: {integrity: sha512-EKpSJLh0pKXjcfzvT3NIIBGT3D/CoEV+5lsoGiOOejS50cSoeo79VIWWzSIbOpXl2BmHkUiv6ylDhiXrV2hU1Q==, tarball: https://pkg.pr.new/Effect-TS/effect/@effect/atom-react@844a77b18c03b4faa386cf04bf94908d3d37abc7}
+    version: 4.0.3
+    peerDependencies:
+      effect: ^4.0.3
+      react: '>=19.0.0 <20.0.0'
+      scheduler: '>=0.25.0 <0.29.0'
 
   '@effect/platform-node-shared@https://pkg.pr.new/Effect-TS/effect/@effect/platform-node-shared@844a77b18c03b4faa386cf04bf94908d3d37abc7':
     resolution: {integrity: sha512-so2qmRvmS9+9CRG4t2tEXTcjxu/zaUa9FNfbuUoK8gu9mEycWD/kt7iiT/d0rTfy6DsyVxn19lx3d5eWMEAZww==, tarball: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node-shared@844a77b18c03b4faa386cf04bf94908d3d37abc7}
@@ -2326,9 +2279,6 @@ packages:
     resolution: {integrity: sha512-tlqY9xq5ukxTUZBmoOp+m61cqwQD5pHJtFY3Mn8CA8ps6yghLH/Hw8UPdqg4OLmFW3IFlcXnQNmo/dh8HzXYIQ==}
     engines: {node: '>=18'}
 
-  '@stablelib/base64@1.0.1':
-    resolution: {integrity: sha512-1bnPQqSxSuc3Ii6MhBysoWCg58j97aUjuCSZrGSmDxNqtytIi0k8utUenAwTZN4V5mXXYGsVUI9zeBqy+jBOSQ==}
-
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
 
@@ -2437,96 +2387,6 @@ packages:
     peerDependencies:
       vite: ^5.2.0 || ^6 || ^7 || ^8
 
-  '@tanstack/ai-anthropic@1.0.0':
-    resolution: {integrity: sha512-YeJoyaSJ4wSqALXHfIX5Lxd9CulqwqU55bcNaLaqPPut+X6eH96aFXhX2qRhUOvH9vhK/8r7MmIroE/dpICBww==}
-    peerDependencies:
-      '@anthropic-ai/vertex-sdk': ^0.19.0
-      '@tanstack/ai': ^1.0.0
-    peerDependenciesMeta:
-      '@anthropic-ai/vertex-sdk':
-        optional: true
-
-  '@tanstack/ai-client@1.0.0':
-    resolution: {integrity: sha512-lPba8LAMmJn7X/D6LongAR4RfwWv/6I/XJPiYKZ8C235VKQMN1ZszhswyFOCIDYJzgzO1N7azHTwoEwSohR48Q==}
-
-  '@tanstack/ai-compaction@1.0.0':
-    resolution: {integrity: sha512-UEnCgeCi78pTATi0cvFWM7XPoFebuQV2rptV2lm08g+DoD4WF2bTBJEoXpauUwLIIYaBc/rbAww7vvdRfqebVA==}
-    peerDependencies:
-      '@tanstack/ai': ^1.0.0
-
-  '@tanstack/ai-event-client@1.0.0':
-    resolution: {integrity: sha512-RXlk6XkIYU4n25QYoCmETKiFjPnEpwvQv5Ve62pdtHaEVP//VZUdwGSRGCf/PATgwYdib8FT49tPmqnKtXPDhw==}
-
-  '@tanstack/ai-mcp@1.0.0':
-    resolution: {integrity: sha512-HPjtpK1nb7WKaAr5cE1/DlcDR/BJyLYeYoMcuS64V7ZefCJvF/6Dj0yb+Elt9B4dZpJ85SWRBzNyf7qGjJI1hQ==}
-    hasBin: true
-    peerDependencies:
-      '@tanstack/ai-harness': ^0.1.0
-    peerDependenciesMeta:
-      '@tanstack/ai-harness':
-        optional: true
-
-  '@tanstack/ai-openai@1.0.0':
-    resolution: {integrity: sha512-p0blsUs98FSnIXgYk8KMAbyBTWCHdZj4PyvhrUuO3vU4aNAnjlwunDyrqVhmP8gXA3k0oSUru4UAmXXKnN5j4g==}
-    peerDependencies:
-      '@tanstack/ai': ^1.0.0
-
-  '@tanstack/ai-persistence@1.0.0':
-    resolution: {integrity: sha512-IS+KFKm64fSGpL3wVIWK1d/OuB31NhNjVImCIdrFMYT6K4IEPfHvQchRzxXBeK4xUta5iki9bdOkQnvHjRQQmA==}
-    peerDependencies:
-      '@tanstack/ai': ^1.0.0
-      vitest: 5.0.5
-    peerDependenciesMeta:
-      vitest:
-        optional: true
-
-  '@tanstack/ai-react@1.0.0':
-    resolution: {integrity: sha512-PFX+M5JoP69/16UnkT4MOL6iRNywi8QVecaDdRJLwX2MnVHjFArD6HFFyU7LOgf5IxLuqXd8XpODI6imgVRrDA==}
-    peerDependencies:
-      '@mcp-ui/client': ^7
-      '@tanstack/ai': ^1.0.0
-      '@types/react': '>=18.0.0'
-      react: '>=18.0.0'
-      react-dom: '>=18.0.0'
-    peerDependenciesMeta:
-      '@mcp-ui/client':
-        optional: true
-      react-dom:
-        optional: true
-
-  '@tanstack/ai-utils@1.0.0':
-    resolution: {integrity: sha512-0Nl9rUmS3zTGKP8dPmyS2zJ18mieAheKqS9V+390vjViJvD6kpP+1gdCdHkNUqQsSzSFvb32QW8bkTVCAOv0qA==}
-
-  '@tanstack/ai@1.0.0':
-    resolution: {integrity: sha512-kqHkfJPLmNwZ5+dwC5cCZy4UASfIEVToBBSccRUP2ued2g1/TytZkTOHMlNsbVca2Q1pJ/pQfdQkQ7xwhze8qw==}
-    engines: {node: '>=18'}
-    peerDependencies:
-      '@opentelemetry/api': '>=1.9.0'
-    peerDependenciesMeta:
-      '@opentelemetry/api':
-        optional: true
-
-  '@tanstack/devtools-event-client@0.4.4':
-    resolution: {integrity: sha512-6T5Yop/793YI+H+5J8Hsyj4kCih9sl4t3ElLgKioW5hk3ocn+ZdSJ94tT7vL7uabxSugWYBZlOTMPzEw2puvQw==}
-    engines: {node: '>=18'}
-    hasBin: true
-
-  '@tanstack/markdown@0.0.13':
-    resolution: {integrity: sha512-ZSQP2ulBvlPzdpZeRheBJnaELo7e4ET/D/XrfgweHyqhhLMN5vUJJAUl7ufSRd7GlfO/vwdzjKPh0E0JwqJkDA==}
-    peerDependencies:
-      octane: '>=0.1.12'
-      react: '>=18'
-    peerDependenciesMeta:
-      octane:
-        optional: true
-      react:
-        optional: true
-
-  '@tanstack/openai-base@1.0.0':
-    resolution: {integrity: sha512-PCihnJASpykPy72tI3VkZX1VI4AxutXPRzr/yyWsCXPXnM7NIN8Nc/YgLqkYm+2wNDNQumX4vXge2iIsoYF+KQ==}
-    peerDependencies:
-      '@tanstack/ai': ^1.0.0
-
   '@tanstack/query-core@5.104.5':
     resolution: {integrity: sha512-Q94gI8Opd+CbdVNOdj8ZCyV8WqLYitrDq1t96Xc8WZT6lY0r5iRnJLXYDxMex7EEf2v+mXvn4FcjaBKSxXZQ9A==}
 
@@ -2538,9 +2398,6 @@ packages:
     peerDependenciesMeta:
       '@types/react':
         optional: true
-
-  '@tanstack/store@0.11.2':
-    resolution: {integrity: sha512-sJ4mjol8uQsHV0gOJzzjwXfh2Fwm+Sz0+8deqiTm4jGbMdjzNSW+xZCFm0kUa870uhd8yi+DpKnZb5Kc4apa0Q==}
 
   '@testing-library/dom@10.4.2':
     resolution: {integrity: sha512-yzr2S9HyAIdhz2/6qHgbs665Q7PKVcDF05vsOlHPxG1mo36gKVesdYVeDLnXgfjJ03CrKRk08knc6+E/9m8v2Q==}
@@ -3644,17 +3501,11 @@ packages:
     resolution: {integrity: sha512-7MptL8U0cqcFdzIzwOTHoilX9x5BrNqye7Z/LuC7kCMRio1EMSyqRK3BEAUD7sXRq4iT4AzTVuZdhgQ2TCvYLg==}
     engines: {node: '>=8.6.0'}
 
-  fast-json-patch@3.1.1:
-    resolution: {integrity: sha512-vf6IHUX2SBcA+5/+4883dsIjpBTqmfBjmYiWK1savxQmFk4JfBMLa7ynTYOs1Rolp/T1betJxHiGD3g1Mn8lUQ==}
-
   fast-json-stable-stringify@2.1.0:
     resolution: {integrity: sha512-lhd/wF+Lk98HZoTCtlVraHtfh5XYijIjalXck7saUtuanSDyLMxnHhSXEDJqHxD7msR8D0uCmqlkwjCV8xvwHw==}
 
   fast-levenshtein@2.0.6:
     resolution: {integrity: sha512-DCXu6Ifhqcks7TZKY3Hxp3y6qphY5SJZmrWMDrKcERSOXWQdMhU9Ig/PYrzyw/ul9jOIyh0N4M0tbC5hodg8dw==}
-
-  fast-sha256@1.3.0:
-    resolution: {integrity: sha512-n11RGP/lrWEFI/bWdygLxhI+pVeo1ZYIVwvvPkW7azl/rOy+F3HYRZ2K5zeE9mmkhQppyv9sQFx0JM9UabnpPQ==}
 
   fast-uri@3.1.7:
     resolution: {integrity: sha512-dOvZVzjdZdz7phd9v6jCbwxrBW3fK6n8Rc0CtdmM4bumzMnxywBYhuph6J819RRw/ku+rLbelwfMunktuzVVHg==}
@@ -4024,10 +3875,6 @@ packages:
     resolution: {integrity: sha512-/sM3dO2FOzXjKQhJuo0Q173wf2KOo8t4I8vHy6lF9poUp7bKT0/NHE8fPX23PwfhnykfqnC2xRxOnVw5XuGIaA==}
     engines: {node: '>=6'}
     hasBin: true
-
-  json-schema-to-ts@3.1.1:
-    resolution: {integrity: sha512-+DWg8jCJG2TEnpy7kOm/7/AxaYoaRbjVB4LFZLySZlWn8exGs3A4OLJR966cVvU26N7X9TWxl+Jsw7dzAqKT6g==}
-    engines: {node: '>=16'}
 
   json-schema-traverse@0.4.1:
     resolution: {integrity: sha512-xbbCH5dCYU5T8LcEhhuh7HJ88HXuW3qsI3Y0zOZFKfZEHcpWiHU/Jxzk629Brsab/mMiHQti9wMP+845RPe3Vg==}
@@ -4652,33 +4499,6 @@ packages:
     resolution: {integrity: sha512-7x81NCL719oNbsq/3mh+hVrAWmFuEYUqrq/Iw3kUzH8ReypT9QQ0BLoJS7/G9k6N81XjW4qHWtjWwe/9eLy1EQ==}
     engines: {node: '>=12'}
 
-  openai@7.43.0:
-    resolution: {integrity: sha512-fBjKaDFG8AVfkGYoIo/E+xNRlNk7nx2nQ9GoQtXfePzPjg4QcT6nejkhXayJnEwSpFGfthOrAPI2KXj5yAqg9A==}
-    engines: {node: '>=22.0.0'}
-    peerDependencies:
-      '@aws-sdk/credential-provider-node': '>=3.972.0 <4'
-      '@smithy/hash-node': '>=4.3.0 <5'
-      '@smithy/signature-v4': '>=5.4.0 <6'
-      google-auth-library: '>=9.15.1 <11'
-      undici: '>=5 <9'
-      ws: ^8.21.0
-      zod: ^4.6.7
-    peerDependenciesMeta:
-      '@aws-sdk/credential-provider-node':
-        optional: true
-      '@smithy/hash-node':
-        optional: true
-      '@smithy/signature-v4':
-        optional: true
-      google-auth-library:
-        optional: true
-      undici:
-        optional: true
-      ws:
-        optional: true
-      zod:
-        optional: true
-
   optionator@0.9.4:
     resolution: {integrity: sha512-6IpQ7mKUxRcZNLIObR0hz7lxsapSSIYNZJwXPGeF0mTVqGKFIXj1DQcMoT22S3ROcLyY/rz0PWaWZ9ayWmad9g==}
     engines: {node: '>= 0.8.0'}
@@ -4773,9 +4593,6 @@ packages:
   parseurl@1.3.3:
     resolution: {integrity: sha512-CiyeOxFT/JZyN5m0z9PfXw4SCBJ6Sygz1Dpl0wqjlhDEGGBP1GnsUVEL0p63hoG1fcj3fHynXi9NYO4nWOL+qQ==}
     engines: {node: '>= 0.8'}
-
-  partial-json@0.1.7:
-    resolution: {integrity: sha512-Njv/59hHaokb/hRUjce3Hdv12wd60MtM9Z5Olmn+nehe0QDAsRtRbJPvJ0Z91TusF0SuZRIvnM+S4l6EIP8leA==}
 
   path-browserify@1.0.1:
     resolution: {integrity: sha512-b7uo2UCUOYZcnF/3ID0lulOJi/bafxa1xPe7ZPsammBSpjSWQkjNxlt635YGS2MiR9GjvuXCtz2emr3jbsz98g==}
@@ -5190,9 +5007,6 @@ packages:
   space-separated-tokens@2.0.2:
     resolution: {integrity: sha512-PEGlAwrG8yXGXRjW32fGbg66JAlOAwbObuqVoJpv/mRgoWDQfgH1wDPvtzWyUSNAXBGSk8h755YDbbcEy3SH2Q==}
 
-  standardwebhooks@1.1.1:
-    resolution: {integrity: sha512-bCbX9ZEyFkWPsRz7Bl3NuQUJohmwGSev/yhr7vhaGPlc4AfIrspIRa6cPTBuI1ItmrTDJ4d/S2hCsfe4+vQGnQ==}
-
   statuses@2.0.2:
     resolution: {integrity: sha512-DvEy55V3DB7uknRo+4iOGT5fP1slR8wQohVdknigZPMpMstaKJQWhwiYBACJE3Ul2pTnATihhBYnRhZQHGBiRw==}
     engines: {node: '>= 0.8'}
@@ -5318,9 +5132,6 @@ packages:
 
   trough@2.2.0:
     resolution: {integrity: sha512-tmMpK00BjZiUyVyvrBK7knerNgmgvcV/KLVyuma/SC+TQN167GrMRciANTz09+k3zW8L8t60jWO1GpfkZdjTaw==}
-
-  ts-algebra@2.0.0:
-    resolution: {integrity: sha512-FPAhNPFMrkwz76P7cdjdmiShwMynZYN6SgOujD1urY4oNm80Ou9oMdmbR45LotcKOXoy7wSmHkRFE6Mxbrhefw==}
 
   ts-interface-checker@0.1.13:
     resolution: {integrity: sha512-Y/arvbn+rrz3JCKl9C4kVNfTfSm2/mEp5FSz5EsZSANGPSlQrpRI5M4PKF+mJnE52jOO90PnPSc3Ur3bTQw0gA==}
@@ -5646,10 +5457,6 @@ packages:
 
 snapshots:
 
-  '@ag-ui/core@1.0.0(zod@4.6.7)':
-    optionalDependencies:
-      zod: 4.6.7
-
   '@agentclientprotocol/sdk@1.9.0(zod@4.6.7)':
     dependencies:
       zod: 4.6.7
@@ -5660,14 +5467,6 @@ snapshots:
       commander: 12.1.0
       node-forge: 1.4.0
       zod: 3.25.76
-
-  '@anthropic-ai/sdk@0.135.0(zod@4.6.7)':
-    dependencies:
-      '@opentelemetry/api': 1.10.0
-      json-schema-to-ts: 3.1.1
-      standardwebhooks: 1.1.1
-    optionalDependencies:
-      zod: 4.6.7
 
   '@babel/code-frame@7.29.7':
     dependencies:
@@ -5943,6 +5742,16 @@ snapshots:
       yocto-spinner: 1.2.2
 
   '@dotenvx/primitives@0.8.0': {}
+
+  '@effect/ai-openai-compat@https://pkg.pr.new/Effect-TS/effect/@effect/ai-openai-compat@844a77b18c03b4faa386cf04bf94908d3d37abc7(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16))':
+    dependencies:
+      effect: https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16)
+
+  '@effect/atom-react@https://pkg.pr.new/Effect-TS/effect/@effect/atom-react@844a77b18c03b4faa386cf04bf94908d3d37abc7(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16))(react@19.3.1)(scheduler@0.28.0)':
+    dependencies:
+      effect: https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16)
+      react: 19.3.1
+      scheduler: 0.28.0
 
   '@effect/platform-node-shared@https://pkg.pr.new/Effect-TS/effect/@effect/platform-node-shared@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=c57a6807f1e17ea8ad6b140030b3f305bbf566a23ecee92d57d0bcb017f7ff56)(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=7f58f237642ddcd945ed6dd3a69e7d3ed11a001487c59b0731940ec5ae7b1c16))':
     dependencies:
@@ -6350,7 +6159,8 @@ snapshots:
       '@nodelib/fs.scandir': 2.1.5
       fastq: 1.20.3
 
-  '@opentelemetry/api@1.10.0': {}
+  '@opentelemetry/api@1.10.0':
+    optional: true
 
   '@oxc-parser/binding-android-arm-eabi@0.148.0':
     optional: true
@@ -6940,8 +6750,6 @@ snapshots:
 
   '@sindresorhus/merge-streams@4.0.0': {}
 
-  '@stablelib/base64@1.0.1': {}
-
   '@standard-schema/spec@1.1.0': {}
 
   '@streamdown/cjk@1.0.4(@types/mdast@4.0.4)(micromark-util-types@2.0.2)(micromark@4.0.2)(react@19.3.1)(unified@11.0.5)':
@@ -7031,114 +6839,6 @@ snapshots:
       tailwindcss: 4.3.3
       vite: '@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1)'
 
-  '@tanstack/ai-anthropic@1.0.0(@tanstack/ai@1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7))(zod@4.6.7)':
-    dependencies:
-      '@anthropic-ai/sdk': 0.135.0(zod@4.6.7)
-      '@tanstack/ai': 1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7)
-      '@tanstack/ai-utils': 1.0.0
-    transitivePeerDependencies:
-      - zod
-
-  '@tanstack/ai-client@1.0.0(@opentelemetry/api@1.10.0)(zod@4.6.7)':
-    dependencies:
-      '@tanstack/ai': 1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7)
-      '@tanstack/ai-event-client': 1.0.0
-      '@tanstack/ai-utils': 1.0.0
-      '@tanstack/store': 0.11.2
-    transitivePeerDependencies:
-      - '@opentelemetry/api'
-      - zod
-
-  '@tanstack/ai-compaction@1.0.0(@tanstack/ai@1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7))':
-    dependencies:
-      '@tanstack/ai': 1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7)
-
-  '@tanstack/ai-event-client@1.0.0':
-    dependencies:
-      '@tanstack/devtools-event-client': 0.4.4
-
-  '@tanstack/ai-mcp@1.0.0(@opentelemetry/api@1.10.0)(zod@4.6.7)':
-    dependencies:
-      '@modelcontextprotocol/client': 2.3.1
-      '@modelcontextprotocol/server': 2.3.1
-      '@tanstack/ai': 1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7)
-      jose: 6.2.12
-    transitivePeerDependencies:
-      - '@opentelemetry/api'
-      - zod
-
-  '@tanstack/ai-openai@1.0.0(@tanstack/ai@1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7))(undici@8.12.2)(ws@8.22.0)(zod@4.6.7)':
-    dependencies:
-      '@tanstack/ai': 1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7)
-      '@tanstack/ai-utils': 1.0.0
-      '@tanstack/openai-base': 1.0.0(patch_hash=97bafdd42d359e1e6213813a35ff4130b0ebbb1144bdab05332d7a20186c075a)(@tanstack/ai@1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7))(undici@8.12.2)(ws@8.22.0)(zod@4.6.7)
-      openai: 7.43.0(undici@8.12.2)(ws@8.22.0)(zod@4.6.7)
-    transitivePeerDependencies:
-      - '@aws-sdk/credential-provider-node'
-      - '@smithy/hash-node'
-      - '@smithy/signature-v4'
-      - google-auth-library
-      - undici
-      - ws
-      - zod
-
-  '@tanstack/ai-persistence@1.0.0(@tanstack/ai@1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7))(vitest@5.0.5)':
-    dependencies:
-      '@tanstack/ai': 1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7)
-      '@tanstack/ai-utils': 1.0.0
-    optionalDependencies:
-      vitest: 5.0.5(@opentelemetry/api@1.10.0)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/browser-preview@5.0.5)(@vitest/ui@5.0.5)(@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))
-
-  '@tanstack/ai-react@1.0.0(@opentelemetry/api@1.10.0)(@tanstack/ai@1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(zod@4.6.7)':
-    dependencies:
-      '@tanstack/ai': 1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7)
-      '@tanstack/ai-client': 1.0.0(@opentelemetry/api@1.10.0)(zod@4.6.7)
-      '@tanstack/markdown': 0.0.13(react@19.3.1)
-      '@types/react': 19.3.0
-      react: 19.3.1
-    optionalDependencies:
-      react-dom: 19.3.1(react@19.3.1)
-    transitivePeerDependencies:
-      - '@opentelemetry/api'
-      - octane
-      - zod
-
-  '@tanstack/ai-utils@1.0.0': {}
-
-  '@tanstack/ai@1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7)':
-    dependencies:
-      '@ag-ui/core': 1.0.0(zod@4.6.7)
-      '@cfworker/json-schema': 4.1.1
-      '@standard-schema/spec': 1.1.0
-      '@tanstack/ai-event-client': 1.0.0
-      '@tanstack/ai-utils': 1.0.0
-      fast-json-patch: 3.1.1
-      partial-json: 0.1.7
-    optionalDependencies:
-      '@opentelemetry/api': 1.10.0
-    transitivePeerDependencies:
-      - zod
-
-  '@tanstack/devtools-event-client@0.4.4': {}
-
-  '@tanstack/markdown@0.0.13(react@19.3.1)':
-    optionalDependencies:
-      react: 19.3.1
-
-  '@tanstack/openai-base@1.0.0(patch_hash=97bafdd42d359e1e6213813a35ff4130b0ebbb1144bdab05332d7a20186c075a)(@tanstack/ai@1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7))(undici@8.12.2)(ws@8.22.0)(zod@4.6.7)':
-    dependencies:
-      '@tanstack/ai': 1.0.0(patch_hash=d49c26c2492fdd59e8ddea0b0d9c91fec3e909cdb0c75ad8ab1921ac467dbc88)(@opentelemetry/api@1.10.0)(zod@4.6.7)
-      '@tanstack/ai-utils': 1.0.0
-      openai: 7.43.0(undici@8.12.2)(ws@8.22.0)(zod@4.6.7)
-    transitivePeerDependencies:
-      - '@aws-sdk/credential-provider-node'
-      - '@smithy/hash-node'
-      - '@smithy/signature-v4'
-      - google-auth-library
-      - undici
-      - ws
-      - zod
-
   '@tanstack/query-core@5.104.5': {}
 
   '@tanstack/react-query@5.104.5(@types/react@19.3.0)(react@19.3.1)':
@@ -7147,8 +6847,6 @@ snapshots:
       react: 19.3.1
     optionalDependencies:
       '@types/react': 19.3.0
-
-  '@tanstack/store@0.11.2': {}
 
   '@testing-library/dom@10.4.2':
     dependencies:
@@ -8117,15 +7815,11 @@ snapshots:
       merge2: 1.4.1
       micromatch: 4.0.8
 
-  fast-json-patch@3.1.1: {}
-
   fast-json-stable-stringify@2.1.0:
     optional: true
 
   fast-levenshtein@2.0.6:
     optional: true
-
-  fast-sha256@1.3.0: {}
 
   fast-uri@3.1.7: {}
 
@@ -8498,11 +8192,6 @@ snapshots:
   js-tokens@4.0.0: {}
 
   jsesc@3.1.0: {}
-
-  json-schema-to-ts@3.1.1:
-    dependencies:
-      '@babel/runtime': 7.29.7
-      ts-algebra: 2.0.0
 
   json-schema-traverse@0.4.1:
     optional: true
@@ -9248,12 +8937,6 @@ snapshots:
       is-docker: 2.2.1
       is-wsl: 2.2.0
 
-  openai@7.43.0(undici@8.12.2)(ws@8.22.0)(zod@4.6.7):
-    optionalDependencies:
-      undici: 8.12.2
-      ws: 8.22.0
-      zod: 4.6.7
-
   optionator@0.9.4:
     dependencies:
       deep-is: 0.1.4
@@ -9426,8 +9109,6 @@ snapshots:
       entities: 6.0.1
 
   parseurl@1.3.3: {}
-
-  partial-json@0.1.7: {}
 
   path-browserify@1.0.1: {}
 
@@ -9936,11 +9617,6 @@ snapshots:
 
   space-separated-tokens@2.0.2: {}
 
-  standardwebhooks@1.1.1:
-    dependencies:
-      '@stablelib/base64': 1.0.1
-      fast-sha256: 1.3.0
-
   statuses@2.0.2: {}
 
   std-env@4.3.0: {}
@@ -10064,8 +9740,6 @@ snapshots:
   trim-lines@3.0.1: {}
 
   trough@2.2.0: {}
-
-  ts-algebra@2.0.0: {}
 
   ts-interface-checker@0.1.13: {}
 

@@ -4,10 +4,10 @@ import { getAsset, isSea } from "node:sea";
 import { BuildServerConfig, buildConfigAsset } from "../app/.server/build-config.ts";
 
 /** The embedded settings could not be decoded. Carries no content: the asset holds a secret. */
-export class BuildConfigInvalid extends Schema.TaggedError<BuildConfigInvalid>()(
-  "BuildConfigInvalid",
-  {},
-) {}
+export class BuildConfigInvalid extends Schema.TaggedError<
+  BuildConfigInvalid,
+  { readonly brand: unique symbol }
+>()("BuildConfigInvalid", {}) {}
 
 /** Settings embedded by `scripts/package.ts`; source bundles have none. */
 export const readBuildConfig: Effect.Effect<BuildServerConfig, BuildConfigInvalid> = Effect.suspend(

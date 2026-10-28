@@ -1,15 +1,16 @@
 import { it } from "@effect/vitest";
-import { isTruthy } from "../src/truthy.ts";
-import { Cause, Effect, Option, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect } from "vite-plus/test";
 import { connectionContext } from "../src/db/database.ts";
 import { SqlClient } from "effect/sql";
+import type { JsonValue } from "../src/json.ts";
 import {
   initialReportEvidence,
   reportBinding,
-  reportToolsForSession,
+  reportRunToolsForSession,
 } from "../src/tools/report-evidence.ts";
+import { callTool } from "./support/run-tools.ts";
 
 const redactSecret = (text: string) => Effect.succeed(text.replaceAll("SECRET", "[redacted]"));
 const keep = (text: string) => Effect.succeed(text);
@@ -41,7 +42,7 @@ const fixture = Effect.gen(function* () {
       ('foreign-node',5,'source','q','tool_result','2026-01-05','private','{}');
     ALTER TABLE nodes ADD COLUMN run_id TEXT;`);
   const tools = yield* over(db)(
-    reportToolsForSession(
+    reportRunToolsForSession(
       "report",
       "p",
       redactSecret,
@@ -69,16 +70,7 @@ const fixture = Effect.gen(function* () {
       ]),
     ),
   );
-  const invoke = (name: string, input: Schema.Json) =>
-    Effect.tryPromise({
-      try: () => {
-        const tool = tools.find((entry) => entry.name === name);
-        if (!isTruthy(tool?.execute)) throw new Error(`Missing tool ${name}`);
-        // SAFETY: each tool server decodes its own input schema, including invalid-input test cases.
-        return Promise.resolve(tool.execute(input as never));
-      },
-      catch: (cause) => new Cause.UnknownError(cause),
-    });
+  const invoke = (name: string, input: JsonValue) => callTool(tools, name, input);
   return { db, tools, invoke };
 });
 
@@ -86,7 +78,10 @@ describe("report evidence tools", () => {
   it.effect("exposes only two bound read tools, without mutation or arbitrary search", () =>
     Effect.gen(function* () {
       const { tools } = yield* fixture;
-      expect(tools.map((tool) => tool.name)).toEqual(["list_report_evidence", "read_report_item"]);
+      expect(tools.map(({ tool }) => tool.name)).toEqual([
+        "list_report_evidence",
+        "read_report_item",
+      ]);
     }),
   );
 
@@ -100,7 +95,7 @@ describe("report evidence tools", () => {
       expect(yield* read(reportBinding("report", "q"))).toEqual(Option.none());
       expect(yield* read(reportBinding("bad-report", "p"))).toEqual(Option.none());
       expect(
-        yield* read(reportToolsForSession("bad-report", "p", keep, Effect.succeed([]))),
+        yield* read(reportRunToolsForSession("bad-report", "p", keep, Effect.succeed([]))),
       ).toEqual([]);
     }),
   );
@@ -108,22 +103,25 @@ describe("report evidence tools", () => {
   it.effect("cannot read other sessions, projects or arbitrary ids", () =>
     Effect.gen(function* () {
       const { invoke } = yield* fixture;
-      for (const [section, id] of [
-        ["run", "other-run"],
-        ["approval", "2"],
-        ["approval", "1xyz"],
-        ["node", "other-node"],
-        ["node", "foreign-node"],
-        ["trace", "foreign-task"],
-        ["node", "unknown"],
-      ]) {
-        expect(yield* invoke("read_report_item", { section, id })).toEqual({ error: "not_found" });
-      }
+      yield* Effect.forEach(
+        [
+          ["run", "other-run"],
+          ["approval", "2"],
+          ["approval", "1xyz"],
+          ["node", "other-node"],
+          ["node", "foreign-node"],
+          ["trace", "foreign-task"],
+          ["node", "unknown"],
+        ],
+        ([section, id]) =>
+          Effect.map(invoke("read_report_item", { section, id }), (result) =>
+            expect(result).toEqual({ error: "not_found" }),
+          ),
+        { discard: true },
+      );
       expect(
-        (yield* Effect.flip(
-          Effect.asVoid(invoke("list_report_evidence", { section: "calls", offset: 201 })),
-        )).cause,
-      ).toBeInstanceOf(Error);
+        yield* Effect.flip(invoke("list_report_evidence", { section: "calls", offset: 201 })),
+      ).toBeInstanceOf(Schema.SchemaError);
     }),
   );
 
@@ -135,11 +133,13 @@ describe("report evidence tools", () => {
         db.prepare(
           'UPDATE nodes SET detail = \'{"toolCallId":"call-1","ok":false}\' WHERE id = \'result\'',
         ).run();
-        for (let i = 0; i < 15; i++) {
-          db.prepare(
-            "INSERT INTO nodes(id,seq,session_id,project_id,kind,created_at,text,detail) VALUES (?,?, 'source','p','tool_result','2026-01-06','recent success','{\"ok\":true}')",
-          ).run(`success-${i}`, 10 + i);
-        }
+        Array.from({ length: 15 }, (_, i) => i).forEach((i) =>
+          db
+            .prepare(
+              "INSERT INTO nodes(id,seq,session_id,project_id,kind,created_at,text,detail) VALUES (?,?, 'source','p','tool_result','2026-01-06','recent success','{\"ok\":true}')",
+            )
+            .run(`success-${i}`, 10 + i),
+        );
         db.prepare(
           "INSERT INTO nodes(id,seq,session_id,project_id,kind,created_at,text,detail) VALUES ('failed',0,'source','p','tool_result','2026-01-01','old failed output','{\"ok\":false}')",
         ).run();
@@ -217,21 +217,26 @@ describe("report evidence tools", () => {
         text: "[redacted] result",
         truncated: false,
       });
-      const approval = yield* invoke("read_report_item", { section: "approval", id: "1" });
-      expect(approval.text).toContain("[redacted]");
-      expect(approval.toolCallId).toBe("call-1");
+      expect(yield* invoke("read_report_item", { section: "approval", id: "1" })).toMatchObject({
+        text: expect.stringContaining("[redacted]"),
+        toolCallId: "call-1",
+      });
       const run = yield* invoke("read_report_item", { section: "run", id: "run" });
       expect(run).toMatchObject({ status: "failed", time: 10, text: "[redacted] failure" });
-      const long = yield* invoke("read_report_item", { section: "node", id: "long" });
-      expect(long.text).toHaveLength(8000);
-      expect(long.truncated).toBe(true);
-      const calls = yield* invoke("list_report_evidence", { section: "calls" });
-      expect(calls.items.map((item: { id: string }) => item.id)).toEqual(["result", "call"]);
-      expect(calls.items[0].toolCallId).toBe("call-1");
-      const trace = yield* invoke("read_report_item", { section: "trace", id: "task" });
-      expect(trace.text).toContain("[redacted] request");
-      expect(trace.toolCallId).toBe("call-1");
-      expect((yield* invoke("list_report_evidence", { section: "trace" })).items).toHaveLength(1);
+      expect(yield* invoke("read_report_item", { section: "node", id: "long" })).toMatchObject({
+        text: expect.stringMatching(/^[\s\S]{8000}$/),
+        truncated: true,
+      });
+      expect(yield* invoke("list_report_evidence", { section: "calls" })).toMatchObject({
+        items: [{ id: "result", toolCallId: "call-1" }, { id: "call" }],
+      });
+      expect(yield* invoke("read_report_item", { section: "trace", id: "task" })).toMatchObject({
+        text: expect.stringContaining("[redacted] request"),
+        toolCallId: "call-1",
+      });
+      expect(yield* invoke("list_report_evidence", { section: "trace" })).toMatchObject({
+        items: [expect.anything()],
+      });
     }),
   );
 });

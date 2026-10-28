@@ -1,13 +1,8 @@
 import { Cause } from "effect";
 import { logFailure } from "../runtime/logged-failures.ts";
-import { runNativeEffectWith } from "../runtime/native-effect.ts";
-import { onRun, runTrace } from "../runtime/run-trace.ts";
-
-type NativeRunner = ReturnType<typeof runNativeEffectWith<never>>;
-import { toolDefinition, type AnyServerTool, type ToolExecutionContext } from "@tanstack/ai";
-import { HashSet, Context, Effect, Layer, Schema } from "effect";
+import { HashSet, Context, Effect, Layer, Option, Schema } from "effect";
 import { Kagi, maxExtractUrls } from "../kagi/kagi.ts";
-import { toToolSchema } from "./schema.ts";
+import { runTool, type RunTool } from "./run-tool.ts";
 
 export const kagiToolNames = ["kagi_search", "kagi_extract"] as const;
 
@@ -27,6 +22,19 @@ const KagiExtractInput = Schema.Struct({
   }),
 });
 
+const kagiSearch = {
+  name: "kagi_search",
+  description:
+    "Search the web with Kagi. Returns titles, URLs and snippets (summaries, not page text). Each call costs money.",
+  parameters: KagiSearchInput,
+} as const;
+
+const kagiExtract = {
+  name: "kagi_extract",
+  description: `Read up to ${maxExtractUrls} web pages as Markdown with Kagi. Pages can fail one by one while the request succeeds. Each call costs money.`,
+  parameters: KagiExtractInput,
+} as const;
+
 export const kagiInstructions = `Kagi web search is enabled. kagi_search finds pages and kagi_extract reads them as Markdown.
 - Every call is billed to the user's Kagi account. Search only when the answer needs current or outside information, and extract only pages you need.
 - Search snippets are summaries, not page text. Extracted Markdown is a conversion, not the original HTML, and single pages can fail. Say which URL a fact came from.
@@ -43,109 +51,96 @@ const isWebUrl = (value: string) => {
 
 const make = Effect.gen(function* () {
   const kagi = yield* Kagi;
-  const services = yield* Effect.context<never>();
 
-  // The tool fails with the `kagi_<reason>: ...` message, which is what the model sees.
-  const search = (run: NativeRunner) =>
-    toolDefinition({
-      name: "kagi_search",
-      description:
-        "Search the web with Kagi. Returns titles, URLs and snippets (summaries, not page text). Each call costs money.",
-      inputSchema: toToolSchema(KagiSearchInput),
-      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    }).server(({ query, limit }, context?: ToolExecutionContext) =>
-      run(
-        Effect.gen(function* () {
-          const response = yield* kagi.search(
-            { query, limit: Math.min(Math.max(limit ?? 10, 1), 20) },
-            context?.abortSignal,
-          );
-          return {
-            results: response.data?.search ?? [],
-            directAnswers: response.data?.directAnswer ?? [],
-            news: response.data?.news ?? [],
-            note: "Snippets are summaries from Kagi, not verbatim page content. Use kagi_extract to read a page.",
-          };
-        }),
+  // The calls fail with the `kagi_<reason>: ...` message, which is what the model sees. Without a
+  // signal, interrupting the call stops its request.
+  const search = ({ query, limit }: typeof KagiSearchInput.Type) =>
+    Effect.gen(function* () {
+      const response = yield* kagi.search(
+        { query, limit: Math.min(Math.max(limit ?? 10, 1), 20) },
+        undefined,
+      );
+      return {
+        results: response.data?.search ?? [],
+        directAnswers: response.data?.directAnswer ?? [],
+        news: response.data?.news ?? [],
+        note: "Snippets are summaries from Kagi, not verbatim page content. Use kagi_extract to read a page.",
+      };
+    });
+
+  const extract = ({ urls }: typeof KagiExtractInput.Type) =>
+    Effect.succeed(urls).pipe(
+      Effect.filterOrFail(
+        (given) => given.length > 0 && given.length <= maxExtractUrls,
+        () => new Cause.UnknownError(new Error(`invalid_urls: pass 1 to ${maxExtractUrls} URLs.`)),
       ),
-    );
-
-  const extract = (run: NativeRunner) =>
-    toolDefinition({
-      name: "kagi_extract",
-      description: `Read up to ${maxExtractUrls} web pages as Markdown with Kagi. Pages can fail one by one while the request succeeds. Each call costs money.`,
-      inputSchema: toToolSchema(KagiExtractInput),
-      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    }).server(({ urls }, context?: ToolExecutionContext) =>
-      run(
-        Effect.gen(function* () {
-          if (urls.length === 0 || urls.length > maxExtractUrls)
-            return yield* new Cause.UnknownError(
-              new Error(`invalid_urls: pass 1 to ${maxExtractUrls} URLs.`),
-            );
-          const rejected = urls.filter((url) => !isWebUrl(url));
-          if (rejected.length > 0)
-            return yield* new Cause.UnknownError(
-              new Error(`invalid_urls: not http(s): ${rejected.join(", ")}`),
-            );
-          const response = yield* kagi.extract(urls, context?.abortSignal);
-          const pages = response.data.map((page) => {
-            if (page.markdown === undefined || page.markdown === null)
-              return {
-                url: page.url,
-                status: "failed" as const,
-                error: page.error ?? "no content",
-              };
-            const truncated = page.markdown.length > maxPageCharacters;
-            return {
+      Effect.filterOrFail(
+        (given) => given.every(isWebUrl),
+        (given) =>
+          new Cause.UnknownError(
+            new Error(
+              `invalid_urls: not http(s): ${given.filter((url) => !isWebUrl(url)).join(", ")}`,
+            ),
+          ),
+      ),
+      Effect.flatMap((given) => kagi.extract(given, undefined)),
+      Effect.map((response) => {
+        const pages = response.data.map((page) =>
+          Option.match(Option.fromNullishOr(page.markdown), {
+            onNone: () => ({
+              url: page.url,
+              status: "failed" as const,
+              error: page.error ?? "no content",
+            }),
+            onSome: (markdown) => ({
               url: page.url,
               status: "ok" as const,
-              markdown: truncated ? page.markdown.slice(0, maxPageCharacters) : page.markdown,
-              truncated,
-            };
-          });
-          const answered = HashSet.fromIterable(pages.map((page) => page.url));
-          return {
-            pages,
-            // URLs Kagi reported an error for, or left out of the answer entirely.
-            errors: [
-              ...(response.errors ?? []).map((error) => ({
-                url: error.url,
-                code: error.code,
-                message: error.message ?? null,
-              })),
-              ...urls
-                .filter((url) => !HashSet.has(answered, url))
-                .map((url) => ({ url, code: "missing", message: null })),
-            ],
-            requested: urls.length,
-            succeeded: pages.filter((page) => page.status === "ok").length,
-            note: "Markdown is Kagi's conversion of each page, not the original HTML.",
-          };
-        }),
-      ),
+              markdown: markdown.slice(0, maxPageCharacters),
+              truncated: markdown.length > maxPageCharacters,
+            }),
+          }),
+        );
+        const answered = HashSet.fromIterable(pages.map((page) => page.url));
+        return {
+          pages,
+          // URLs Kagi reported an error for, or left out of the answer entirely.
+          errors: [
+            ...(response.errors ?? []).map((error) => ({
+              url: error.url,
+              code: error.code,
+              message: error.message ?? null,
+            })),
+            ...urls
+              .filter((url) => !HashSet.has(answered, url))
+              .map((url) => ({ url, code: "missing", message: null })),
+          ],
+          requested: urls.length,
+          succeeded: pages.filter((page) => page.status === "ok").length,
+          note: "Markdown is Kagi's conversion of each page, not the original HTML.",
+        };
+      }),
     );
+
+  // An unreadable Kagi setting hides the tools, as a disabled one does.
+  const enabled = Effect.catch(kagi.status, (error) =>
+    Effect.as(logFailure("kagi_status_unavailable")(error), {
+      keyRegistered: false,
+      enabled: false,
+    }),
+  ).pipe(Effect.map((status) => status.enabled));
 
   return {
     /**
      * Both tools while Kagi is enabled with a key; none otherwise, so the model never sees them.
-     * They run on the run's context, so their spans join the run's trace.
+     * They run on the loop's fiber, so their spans join the run's trace.
      */
-    tools: Effect.map(
-      Effect.all([
-        // An unreadable Kagi setting hides the tools, as a disabled one does.
-        Effect.catch(kagi.status, (error) =>
-          Effect.as(logFailure("kagi_status_unavailable")(error), {
-            keyRegistered: false,
-            enabled: false,
-          }),
-        ),
-        runTrace,
-      ]),
-      ([status, caller]): AnyServerTool[] => {
-        const run = runNativeEffectWith(onRun(services, caller));
-        return status.enabled ? [search(run), extract(run)] : [];
-      },
+    runTools: Effect.map(enabled, (on): RunTool[] =>
+      on
+        ? [
+            runTool({ ...kagiSearch, handler: search }),
+            runTool({ ...kagiExtract, handler: extract }),
+          ]
+        : [],
     ),
   };
 });

@@ -1,10 +1,7 @@
 import { createRequire } from "node:module";
-import * as NodePath from "@effect/platform-node/NodePath";
-import { Config, ConfigProvider, Effect, ManagedRuntime, Path, Option, Schema } from "effect";
+import { Config, ConfigProvider, Effect, MutableRef, Option, Schema } from "effect";
 import { workerData } from "node:worker_threads";
-
-const pathRuntime = ManagedRuntime.make(NodePath.layer);
-const path = pathRuntime.runSync(Path.Path);
+import { path } from "./synchronous-path.ts";
 
 /**
  * Packages this app loads from disk at run time rather than bundling: native addons (vector index,
@@ -28,50 +25,54 @@ const WorkerRuntime = Schema.Struct({
   contextAgentRuntime: Schema.Struct({ root: Schema.NullOr(Schema.String) }),
 });
 const inheritedRuntime = Schema.decodeUnknownOption(WorkerRuntime)(workerData);
-let configuredRuntime: { readonly root: string | null } | undefined =
-  Option.getOrUndefined(inheritedRuntime)?.contextAgentRuntime;
+const configuredRuntime = MutableRef.make(
+  Option.map(inheritedRuntime, ({ contextAgentRuntime }) => contextAgentRuntime),
+);
 
 /** Explicit host bootstrap; worker copies receive the same value through workerData. */
 export function configureRuntimeRoot(root: string | null): void {
-  configuredRuntime = { root };
+  MutableRef.set(configuredRuntime, Option.some({ root }));
 }
 
-export const runtimeRoot = () =>
-  configuredRuntime !== undefined
-    ? configuredRuntime.root
-    : Effect.runSync(
-        Config.String("CONTEXT_AGENT_RUNTIME").pipe(
-          Config.withDefault(null),
-          Effect.provideService(
-            ConfigProvider.ConfigProvider,
-            ConfigProvider.fromEnv({ preserveEmptyStrings: true }),
-          ),
+export const runtimeRoot: Effect.Effect<string | null> = Effect.suspend(() =>
+  Option.match(MutableRef.get(configuredRuntime), {
+    onSome: ({ root }) => Effect.succeed(root),
+    onNone: () =>
+      Config.String("CONTEXT_AGENT_RUNTIME").pipe(
+        Config.withDefault(null),
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromEnv({ preserveEmptyStrings: true }),
         ),
-      );
+        Effect.orDie,
+      ),
+  }),
+);
 
 /** Preserve worker setup and inherited SDK environment without mutating process.env. */
-export function runtimeWorkerOptions<A extends object>(setup: A) {
-  return { workerData: { ...setup, contextAgentRuntime: { root: runtimeRoot() } } };
-}
+export const runtimeWorkerOptions = <A extends object>(setup: A) =>
+  Effect.map(runtimeRoot, (root) => ({ workerData: { ...setup, contextAgentRuntime: { root } } }));
 
 /**
  * `require` rooted where runtime packages live: the unpacked runtime folder, or this package in a
  * checkout. Resolved from the memory-agent package rather than this module because the app bundles
  * this module into its server build.
  */
-export function runtimeRequire() {
-  const root = runtimeRoot();
-  if (root !== null) return createRequire(path.join(root, "package.json"));
-  return createRequire(createRequire(import.meta.url).resolve("memory-agent/package.json"));
-}
+const requireAt = (root: string | null) =>
+  createRequire(
+    Option.match(Option.fromNullishOr(root), {
+      onNone: () => createRequire(import.meta.url).resolve("memory-agent/package.json"),
+      onSome: (root) => path.join(root, "package.json"),
+    }),
+  );
+export const runtimeRequire = Effect.map(runtimeRoot, requireAt);
 
 /** Loads a runtime package with `require` (its CommonJS build, or require(esm) for turbovec). */
-export function requireRuntime<Name extends keyof RuntimePackages>(
-  name: Name,
-): RuntimePackages[Name] {
-  // SAFETY: each name maps to the package's own published types; `require` returns that module.
-  return runtimeRequire()(name) as RuntimePackages[Name];
-}
+export const requireRuntime = <Name extends keyof RuntimePackages>(name: Name) =>
+  Effect.flatMap(runtimeRoot, (root) =>
+    // SAFETY: each name maps to the package's own published types; `require` returns that module.
+    Effect.try(() => requireAt(root)(name) as RuntimePackages[Name]),
+  );
 
 /**
  * Worker scripts. Kiwi and the embedder are plain `.mjs` files that load their runtime package; the
@@ -87,29 +88,15 @@ export type RuntimeWorker =
   | "sandbox-worker"
   | "code-worker";
 
-/** File-backed SDK metadata, resolved with ESM conditions without importing owner code. */
-export function runtimeArtifact(name: "artifact-manifest.json" | "native.mjs") {
-  const root = runtimeRoot();
-  return root === null
-    ? path.join(
-        createRequire(import.meta.url).resolve("memory-agent/package.json"),
-        "..",
-        "dist",
-        "runtime",
-        name,
-      )
-    : path.join(root, name);
-}
-
 /**
  * A worker script's file. In a checkout it is found through the package exports rather than next to
  * the module that starts it, because the app bundles that module into its server build while the
  * worker file stays in the package. The executable unpacks it into its runtime folder, next to
  * `node_modules`.
  */
-export function runtimeWorker(name: RuntimeWorker) {
-  const root = runtimeRoot();
-  return root === null
-    ? runtimeRequire().resolve(`memory-agent/${name}`)
-    : path.join(root, `${name}.mjs`);
-}
+export const runtimeWorker = (name: RuntimeWorker) =>
+  Effect.flatMap(runtimeRoot, (root) =>
+    root === null
+      ? Effect.try(() => requireAt(root).resolve(`memory-agent/${name}`))
+      : Effect.succeed(path.join(root, `${name}.mjs`)),
+  );

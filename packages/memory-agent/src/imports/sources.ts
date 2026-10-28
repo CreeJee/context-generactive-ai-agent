@@ -33,28 +33,31 @@ const transcriptFiles = Effect.fn("transcriptFiles")(function* (
   suffixes: readonly string[],
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const found: string[] = [];
-  const walk = (directory: string): Effect.Effect<void> =>
+  const walk = (directory: string): Effect.Effect<readonly string[]> =>
     Effect.gen(function* () {
       // An unreadable directory or entry is skipped, and a link is not followed.
       const entries = yield* fs
         .readDirectory(directory)
         .pipe(Effect.catchTag("PlatformError", () => Effect.succeed([])));
-      for (const name of entries.sort((a, b) => a.localeCompare(b))) {
-        const path = join(directory, name);
-        const link = yield* fs.readLink(path).pipe(
-          Effect.asSome,
-          Effect.catchTag("PlatformError", () => Effect.succeedNone),
-        );
-        const stats = Option.isSome(link)
-          ? undefined
-          : yield* fs.stat(path).pipe(Effect.catchTag("PlatformError", () => Effect.void));
-        if (stats?.type === "Directory") yield* walk(path);
-        else if (suffixes.some((suffix) => name.endsWith(suffix))) found.push(path);
-      }
+      const found = yield* Effect.forEach(
+        entries.sort((a, b) => a.localeCompare(b)),
+        (name) =>
+          Effect.gen(function* () {
+            const path = join(directory, name);
+            const link = yield* fs.readLink(path).pipe(
+              Effect.asSome,
+              Effect.catchTag("PlatformError", () => Effect.succeedNone),
+            );
+            const stats = Option.isSome(link)
+              ? undefined
+              : yield* fs.stat(path).pipe(Effect.catchTag("PlatformError", () => Effect.void));
+            if (stats?.type === "Directory") return yield* walk(path);
+            return suffixes.some((suffix) => name.endsWith(suffix)) ? [path] : [];
+          }),
+      );
+      return found.flat();
     });
-  yield* walk(root);
-  return found;
+  return yield* walk(root);
 });
 
 /** Codex compresses rollouts it no longer appends to; the conversation keeps its id. */

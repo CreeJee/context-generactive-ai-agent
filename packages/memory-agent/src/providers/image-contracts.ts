@@ -1,4 +1,4 @@
-import { OPENAI_IMAGE_MODELS, type OpenAIImageModel } from "@tanstack/ai-openai";
+import { OPENAI_IMAGE_MODELS, type OpenAIImageModel } from "./model-catalog.ts";
 import { Data } from "effect";
 
 export type ImageExecutionMode = "provider_tool" | "direct_adapter";
@@ -99,7 +99,7 @@ export const openAIImageRouteContracts: readonly ImageRouteContract[] = Object.f
     },
     cancellation: "chat_run_abort_signal",
     evidence: [
-      "@tanstack/ai-openai/tools imageGenerationTool export",
+      "providers/provider-tools.ts openai:image_generation",
       "OpenAI Responses image_generation provider tool",
     ],
   },
@@ -135,8 +135,8 @@ export const openAIImageRouteContracts: readonly ImageRouteContract[] = Object.f
       },
       cancellation: "request_abort_signal",
       evidence: [
-        "@tanstack/ai-openai OPENAI_IMAGE_MODELS",
-        "OpenAIImageAdapter.generateImages installed implementation",
+        "providers/model-catalog.ts OPENAI_IMAGE_MODELS",
+        "providers/image-media.ts OpenAI Images API request",
       ],
     };
   }),
@@ -149,8 +149,8 @@ export const anthropicImageProviderContract: UnsupportedImageProviderContract = 
   imageInputSupported: true,
   imageGenerationSupported: false,
   evidence: [
-    "@tanstack/ai-anthropic exports no image adapter or image generation Provider Tool",
-    "TanStack Anthropic adapter documentation: image generation is unsupported",
+    "providers/provider-tools.ts has no Anthropic image generation Provider Tool",
+    "Anthropic Messages API: image generation is unsupported",
   ],
 });
 

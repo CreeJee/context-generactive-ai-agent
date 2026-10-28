@@ -84,17 +84,21 @@ it.live("starts cards in the priority tree's order and never runs more than the 
         // Nobody placed the Goals: the older one comes first. A person then puts the new Goal on
         // top, and each freed slot goes to its cards until it has none left to start.
         yield* scheduler.moveGoal(first.projectId, second.sessionId, first.sessionId);
-        for (const [release, next] of [
-          ["a1", "b1"],
-          ["a2", "b2"],
-          ["b1", "b3"],
-          ["b2", "a3"],
-        ] as const) {
-          const before = (yield* Ref.get(started)).length;
-          yield* gate.open(release);
-          const list = yield* eventually(Ref.get(started), (now) => now.length === before + 1);
-          expect(list.at(-1)).toBe(next);
-        }
+        yield* Effect.forEach(
+          [
+            ["a1", "b1"],
+            ["a2", "b2"],
+            ["b1", "b3"],
+            ["b2", "a3"],
+          ] as const,
+          Effect.fnUntraced(function* ([release, next]) {
+            const before = (yield* Ref.get(started)).length;
+            yield* gate.open(release);
+            const list = yield* eventually(Ref.get(started), (now) => now.length === before + 1);
+            expect(list.at(-1)).toBe(next);
+          }),
+          { discard: true },
+        );
         yield* Effect.forEach(ids, gate.open, { discard: true });
       }),
     );
@@ -108,12 +112,12 @@ it.live("keeps a Goal that waits for another Goal off the slots until that Goal 
     const gate = yield* gates(["a1", "b1"]);
     const seen = yield* Ref.make<ReadonlyMap<string, GoalMergeState | null>>(new Map());
     // Where Goal A's merge stands; set once Goal A exists.
-    let mergeOfA: Effect.Effect<GoalMergeState | null> = Effect.succeed(null);
+    const mergeOfA = yield* Ref.make<Effect.Effect<GoalMergeState | null>>(Effect.succeed(null));
     const run = yield* openKanbanOwner(fixture, yield* Effect.scope, {
       cores: 4,
       agent: (agent) =>
         Effect.gen(function* () {
-          const merge = yield* mergeOfA;
+          const merge = yield* Effect.flatten(Ref.get(mergeOfA));
           yield* Ref.update(seen, (known) => new Map(known).set(agent.card.id, merge));
           yield* gate.wait(agent.card.id);
           return finished;
@@ -125,13 +129,16 @@ it.live("keeps a Goal that waits for another Goal off the slots until that Goal 
         const schedules = yield* GoalSchedules;
         const scheduler = yield* ProjectScheduler;
         const goalA = yield* executingPlan(fixture, [card("a1")]);
-        mergeOfA = schedules
-          .get(goalA.goalInstanceId)
-          .pipe(
-            Effect.map(Option.flatMap((schedule) => Option.fromNullishOr(schedule.merge))),
-            Effect.map(Option.getOrNull),
-            Effect.orDie,
-          );
+        yield* Ref.set(
+          mergeOfA,
+          schedules
+            .get(goalA.goalInstanceId)
+            .pipe(
+              Effect.map(Option.flatMap((schedule) => Option.fromNullishOr(schedule.merge))),
+              Effect.map(Option.getOrNull),
+              Effect.orDie,
+            ),
+        );
         yield* schedules.setProtectedBranches(goalA.projectId, []);
         yield* orchestrator.start(goalA.sessionId);
         yield* eventually(Ref.get(seen), (known) => known.has("a1"));
@@ -139,15 +146,19 @@ it.live("keeps a Goal that waits for another Goal off the slots until that Goal 
         // B is told to wait for A before its board starts; C waits for A too.
         const goalB = yield* executingSession(goalA.projectId, [card("b1")]);
         const goalC = yield* executingSession(goalA.projectId, [card("c1")]);
-        for (const goal of [goalB, goalC]) {
-          yield* schedules.register({
-            goalInstanceId: goal.goalInstanceId,
-            projectId: goal.projectId,
-            targetBranch: "main",
-          });
-          yield* scheduler.setDependencies(goal.goalInstanceId, [goalA.goalInstanceId]);
-          yield* orchestrator.start(goal.sessionId);
-        }
+        yield* Effect.forEach(
+          [goalB, goalC],
+          Effect.fnUntraced(function* (goal) {
+            yield* schedules.register({
+              goalInstanceId: goal.goalInstanceId,
+              projectId: goal.projectId,
+              targetBranch: "main",
+            });
+            yield* scheduler.setDependencies(goal.goalInstanceId, [goalA.goalInstanceId]);
+            yield* orchestrator.start(goal.sessionId);
+          }),
+          { discard: true },
+        );
         const cycle = yield* scheduler
           .setDependencies(goalA.goalInstanceId, [goalC.goalInstanceId])
           .pipe(Effect.flip);

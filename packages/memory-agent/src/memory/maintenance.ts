@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Option, Schema, Semaphore } from "effect";
+import { Context, Effect, Layer, Option, Ref, Schema, Semaphore } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { AppEvents } from "../events/app-events.ts";
 import { logFailure } from "../runtime/logged-failures.ts";
@@ -7,10 +7,10 @@ import { VectorIndex } from "./embedding/vector-index.ts";
 import { meaningfulNodeFilter, memoryGraphRepairVersion, nonBlankTextSql } from "./quality.ts";
 import { createSupersededReads } from "./superseded-reads.ts";
 
-export class MemoryGraphRepairFailed extends Schema.TaggedError<MemoryGraphRepairFailed>()(
-  "MemoryGraphRepairFailed",
-  { cause: Schema.Defect() },
-) {}
+export class MemoryGraphRepairFailed extends Schema.TaggedError<
+  MemoryGraphRepairFailed,
+  { readonly brand: unique symbol }
+>()("MemoryGraphRepairFailed", { cause: Schema.Defect() }) {}
 
 const batchSize = 64;
 const Progress = Schema.Struct({
@@ -32,7 +32,7 @@ const make = Effect.gen(function* () {
   const events = yield* AppEvents;
   const scope = yield* Effect.scope;
   const permit = yield* Semaphore.make(1);
-  let started = false;
+  const started = yield* Ref.make(false);
   const version = memoryGraphRepairVersion;
   const meaningful = sql.literal(meaningfulNodeFilter);
   const nonBlankTarget = sql.literal(nonBlankTextSql("target.text"));
@@ -78,12 +78,14 @@ const make = Effect.gen(function* () {
   /** One node's repairs, in the batch's transaction. */
   const repairNode = Effect.fnUntraced(function* (id: string) {
     // Remember only topics affected by empty-source links, not every orphan topic.
-    if (yield* emptyNode(id))
-      yield* sql`
+    yield* Effect.when(
+      sql`
         INSERT INTO memory_graph_topic_candidates (node_seq)
         SELECT t.seq FROM edges e JOIN nodes t ON t.id = e.to_id
         WHERE e.from_id = ${id} AND e.origin = 'llm' AND e.kind = 'about' AND t.kind = 'topic'
-        ON CONFLICT DO NOTHING`;
+        ON CONFLICT DO NOTHING`,
+      emptyNode(id),
+    );
     yield* sql`
       INSERT INTO memory_graph_edge_repairs
         (version, from_id, to_id, kind, origin, weight, created_at, action, replacement_added)
@@ -203,8 +205,10 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         yield* repaired(
           Effect.gen(function* () {
-            for (const node of rows) yield* repairNode(node.id);
-            for (const topic of candidates) yield* retireTopic(topic.seq);
+            yield* Effect.forEach(rows, (node) => repairNode(node.id), { discard: true });
+            yield* Effect.forEach(candidates, (topic) => retireTopic(topic.seq), {
+              discard: true,
+            });
             yield* update(rows.at(-1)?.seq ?? current.after_seq, rows.length);
           }).pipe(sql.withTransaction),
         );
@@ -212,7 +216,7 @@ const make = Effect.gen(function* () {
         yield* vectors.flushRemovals;
       }),
     );
-    events.publishGlobal("embedding");
+    yield* events.publishGlobal("embedding");
     return true;
   });
 
@@ -220,7 +224,7 @@ const make = Effect.gen(function* () {
     yield* setStatus("failed", "그래프 정리를 완료하지 못했어요. 다음 시작 시 다시 시도해요.").pipe(
       Effect.catch(logFailure("Memory graph maintenance status not saved")),
     );
-    events.publishGlobal("embedding");
+    yield* events.publishGlobal("embedding");
   });
 
   const run = Effect.gen(function* () {
@@ -230,11 +234,11 @@ const make = Effect.gen(function* () {
       ON CONFLICT DO NOTHING`);
     if ((yield* repaired(progress)).status === "completed") return;
     yield* repaired(setStatus("running"));
-    events.publishGlobal("embedding");
+    yield* events.publishGlobal("embedding");
     yield* indexer.exclusive(vectors.flushRemovals);
-    while (yield* batch) yield* Effect.yieldNow;
+    yield* batch.pipe(Effect.tap(Effect.yieldNow), Effect.repeat({ while: (more) => more }));
     yield* repaired(setStatus("completed"));
-    events.publishGlobal("embedding");
+    yield* events.publishGlobal("embedding");
   }).pipe(
     // The next start retries a failed or broken run. Logs carry the tag only: causes hold SQL.
     // A defect stays in the run's exit after the status is saved.
@@ -250,20 +254,10 @@ const make = Effect.gen(function* () {
     permit.withPermits(1),
   );
 
-  const start = Effect.suspend(() => {
-    if (started) return Effect.void;
-    started = true;
-    return Effect.forkIn(
-      run.pipe(
-        Effect.ensuring(
-          Effect.sync(() => {
-            started = false;
-          }),
-        ),
-      ),
-      scope,
-    ).pipe(Effect.asVoid);
-  });
+  const start = Effect.forkIn(run.pipe(Effect.ensuring(Ref.set(started, false))), scope).pipe(
+    Effect.when(Effect.map(Ref.getAndSet(started, true), (was) => !was)),
+    Effect.asVoid,
+  );
   yield* start;
   return {
     run,

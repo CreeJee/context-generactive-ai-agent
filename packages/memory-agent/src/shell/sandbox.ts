@@ -114,18 +114,25 @@ const finishTimeout = Duration.seconds(5);
  * sandbox blocked to stderr. The worker and its scratch folder end with the scope, whether the
  * command finished, failed or was interrupted.
  */
-type Sandboxed<E> = Effect.Effect<CommandResult, E | SandboxUnavailable, FileSystem.FileSystem>;
+type Sandboxed<E, R> = Effect.Effect<
+  CommandResult,
+  E | SandboxUnavailable,
+  FileSystem.FileSystem | R
+>;
 
 export const runSandboxed: {
-  <E>(
-    run: (command: string) => Effect.Effect<CommandResult, E>,
-  ): (setup: SandboxSetup) => Sandboxed<E>;
-  <E>(setup: SandboxSetup, run: (command: string) => Effect.Effect<CommandResult, E>): Sandboxed<E>;
+  <E, R>(
+    run: (command: string) => Effect.Effect<CommandResult, E, R>,
+  ): (setup: SandboxSetup) => Sandboxed<E, R>;
+  <E, R>(
+    setup: SandboxSetup,
+    run: (command: string) => Effect.Effect<CommandResult, E, R>,
+  ): Sandboxed<E, R>;
 } = EffectFunction.dual(2, runSandboxedBody);
-function runSandboxedBody<E>(
+function runSandboxedBody<E, R>(
   setup: SandboxSetup,
-  run: (command: string) => Effect.Effect<CommandResult, E>,
-): Sandboxed<E> {
+  run: (command: string) => Effect.Effect<CommandResult, E, R>,
+): Sandboxed<E, R> {
   return Effect.scoped(
     Effect.gen(function* () {
       const unavailable = (detail: string) =>
@@ -136,12 +143,12 @@ function runSandboxedBody<E>(
       const scratch = yield* fileSystem
         .makeTempDirectoryScoped({ prefix: "context-agent-sandbox-" })
         .pipe(Effect.mapError(() => unavailable("could not create the sandbox's scratch folder")));
+      const file = yield* runtimeWorker("sandbox-worker").pipe(
+        Effect.mapError(() => unavailable("could not start the sandbox worker")),
+      );
+      const options = yield* runtimeWorkerOptions({ sandbox: setup });
       const workers = NodeWorker.layer(
-        () =>
-          new Worker(runtimeWorker("sandbox-worker"), {
-            ...runtimeWorkerOptions({ sandbox: setup }),
-            env: { ...process.env, TMPDIR: scratch },
-          }),
+        () => new Worker(file, { ...options, env: { ...process.env, TMPDIR: scratch } }),
       );
       const protocol = yield* Layer.build(
         RpcClient.layerProtocolWorker({ size: 1, concurrency: 1 }).pipe(Layer.provide(workers)),

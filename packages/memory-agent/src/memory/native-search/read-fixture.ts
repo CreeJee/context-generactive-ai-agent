@@ -1,5 +1,6 @@
 // Minimal differential fixture for native read-session tests, not an application DB initializer.
 import { DatabaseSync } from "node:sqlite";
+import { Effect, Array as EffectArray } from "effect";
 import { meaningfulNodeFilter } from "../quality.ts";
 import { migrateDatabase } from "../../db/database.ts";
 
@@ -28,11 +29,11 @@ export function createReadFixture(path: string) {
   const node = db.prepare("INSERT INTO nodes VALUES (?, ?, ?, ?, ?)");
   const text = db.prepare("INSERT INTO nodes_fts(rowid,text) VALUES (?, ?)");
   const morph = db.prepare("INSERT INTO nodes_morph(rowid,terms) VALUES (?, ?)");
-  for (const [seq, id, kind, project, body] of rows) {
+  rows.forEach(([seq, id, kind, project, body]) => {
     node.run(seq, id, kind, project, body);
     text.run(seq, body);
     morph.run(seq, "로그 포맷 메모리");
-  }
+  });
   db.exec(`
     INSERT INTO memory_graph_suppressed_nodes VALUES (4);
     INSERT INTO node_vectors VALUES (1,'fixture'),(2,'fixture'),(3,'fixture');
@@ -42,10 +43,10 @@ export function createReadFixture(path: string) {
 }
 
 /** Worker integration uses the real owner migration path rather than relabeling a minimal DB. */
-export function createApplicationReadFixture(path: string) {
+export const createApplicationReadFixture = Effect.fnUntraced(function* (path: string) {
   const db = new DatabaseSync(path);
   db.exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON");
-  migrateDatabase(db);
+  yield* migrateDatabase(db);
   db.exec(
     "INSERT INTO projects(id,root,name,created_at) VALUES ('allowed','/tmp/allowed','allowed','fixture'),('other-project','/tmp/other','other','fixture')",
   );
@@ -56,35 +57,34 @@ export function createApplicationReadFixture(path: string) {
     "INSERT INTO nodes(seq,id,kind,project_id,text,session_id,created_at) VALUES (?,?,?,?,?,?,'fixture')",
   );
   const morph = db.prepare("INSERT INTO nodes_morph(rowid,terms) VALUES (?,'로그 포맷 메모리')");
-  for (const [seq, id, kind, project, body] of rows) {
+  rows.forEach(([seq, id, kind, project, body]) => {
     node.run(seq, id, kind, project, body, `${project}-session`);
     morph.run(seq);
-  }
+  });
   db.exec(`
     INSERT INTO memory_graph_suppressed_nodes VALUES (4,1,'fixture');
     INSERT INTO node_vectors VALUES (1,'fixture'),(2,'fixture'),(3,'fixture');
     INSERT OR REPLACE INTO interpret_jobs(node_id,status,updated_at) VALUES ('alpha','pending','fixture'),('beta','done','fixture'),('other','pending','fixture'),('suppressed','pending','fixture'),('whitespace','pending','fixture'),('latest','pending','fixture');
   `);
   return db;
-}
+});
 
 /** Copies the inspected old SQL's project-before-limit and each-short-term append order. */
 export function legacyFixtureChannels(db: DatabaseSync) {
   const terms = ["로그", "포맷"];
-  const text = db
+  const ranked = db
     .prepare(`SELECT n.id FROM nodes_fts f JOIN nodes n ON n.seq=f.rowid
     WHERE ${meaningfulNodeFilter} AND nodes_fts MATCH ? AND n.project_id IN (?) ORDER BY f.rank LIMIT ?`)
     .all('"sqlite"', "allowed", 2)
     .map((row) => String(row.id));
-  for (const term of terms) {
-    for (const row of db
+  const contained = terms.flatMap((term) =>
+    db
       .prepare(`SELECT n.id FROM nodes n WHERE ${meaningfulNodeFilter}
       AND instr(n.text,?)>0 AND n.project_id IN (?) ORDER BY seq DESC LIMIT ?`)
-      .all(term, "allowed", 2)) {
-      const id = String(row.id);
-      if (!text.includes(id)) text.push(id);
-    }
-  }
+      .all(term, "allowed", 2)
+      .map((row) => String(row.id)),
+  );
+  const text = EffectArray.dedupe([...ranked, ...contained]);
   const morph = db
     .prepare(`SELECT n.id FROM nodes_morph f JOIN nodes n ON n.seq=f.rowid
     WHERE ${meaningfulNodeFilter} AND nodes_morph MATCH ? AND n.project_id IN (?) ORDER BY f.rank LIMIT ?`)

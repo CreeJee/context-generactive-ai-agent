@@ -18,20 +18,15 @@ import { TestClock } from "effect/testing";
 import { Result, Function as EffectFunction } from "effect";
 // Native SDK fetch, keyring and AsyncGenerator adapters remain explicit Promise boundaries.
 import { testHttpServer, HttpServerRequest, HttpServerResponse } from "./support/http.ts";
-import { DatabaseSync } from "node:sqlite";
-import { chat } from "@tanstack/ai";
-import { reconstructChat, withPersistence } from "@tanstack/ai-persistence";
-import { resolveDebugOption } from "@tanstack/ai/adapter-internals";
-import { Cause, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect";
+import { webCrypto } from "./support/platform.ts";
+import { Cause, Deferred, Effect, Fiber, Layer, MutableRef, Schema, Stream } from "effect";
+import { Tool, Toolkit } from "effect/ai";
 import { GlobalConfig } from "../src/config/global-config.ts";
 import { ActiveProvider } from "../src/providers/active-provider.ts";
 import { ModelUnavailable } from "../src/providers/contracts.ts";
 import { ProviderRegistry } from "../src/providers/registry.ts";
 import { describe, expect } from "vite-plus/test";
 import type { Settings } from "../src/config/global-config.ts";
-import { chatPersistence } from "../src/chat-state/persistence.ts";
-import { connectionContext } from "../src/db/database.ts";
-import { migrations } from "../src/db/migrations.ts";
 import {
   makeOpenAICompatibleSettings,
   type CompatibleKeyStore,
@@ -55,6 +50,7 @@ function singleEndpointSettings(options: {
   const api = makeOpenAICompatibleSettings({
     config: options.config,
     keys: () => options.keys,
+    crypto: webCrypto,
     fetcher: options.fetcher,
   });
   // Read from the config so locating the endpoint never touches a gated keychain.
@@ -83,8 +79,11 @@ function singleEndpointSettings(options: {
           : existing.id;
       if (existing !== null) yield* api.connect(id, connection);
       yield* api.saveModel(id, { id: model, ...limits });
-      for (const other of existing?.models ?? [])
-        if (other.id !== model) yield* api.removeModel(id, other.id);
+      yield* Effect.forEach(
+        (existing?.models ?? []).filter((other) => other.id !== model),
+        (other) => api.removeModel(id, other.id),
+        { discard: true },
+      );
       return single(yield* api.status);
     });
   return {
@@ -119,8 +118,6 @@ const stalledFetch =
     return Effect.runPromise(Effect.never, { signal });
   };
 
-const sdkCall = <A>(call: () => A | PromiseLike<A>) =>
-  Effect.tryPromise(() => Promise.resolve(call()));
 const nativeEffect = <A>(program: Effect.Effect<A, Cause.UnknownError>) =>
   Effect.runPromise(Effect.result(program)).then(
     Result.match({
@@ -137,15 +134,17 @@ const nativeFetch =
   ): typeof fetch =>
   (input, init) =>
     nativeEffect(reply(input, init));
-const nativeWrite =
-  (write: (value: string | null) => Effect.Effect<void, Cause.UnknownError>) =>
-  (value: string | null) =>
-    nativeEffect(write(value));
+/** The body a fetch fixture was given; the model's client sends bytes, not a string. */
+const requestText = (init: RequestInit | undefined) =>
+  Effect.tryPromise(() => new Response(init?.body).text());
 // Wire fixtures encode synchronously at the SDK boundary; Effect assertions use typed decoders.
 const jsonStringify = EffectFunction.flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
   Result.getOrThrow,
 );
+
+/** The run every model here is made for. */
+const run = { threadId: "thread", runId: "run", cacheRetention: "none" } as const;
 
 const configuration = {
   baseUrl: "http://127.0.0.1:1234/v1",
@@ -159,92 +158,29 @@ const ChatRequest = Schema.Struct({
   tools: Schema.optional(Schema.Array(Schema.Unknown)),
 });
 function fixture(fetcher?: typeof fetch, initial: Settings = {}) {
-  let saved: Settings = initial;
-  let key: string | null = null;
+  const saved = MutableRef.make(initial);
+  const key = MutableRef.make<string | null>(null);
   const config = {
     // Asynchronous like the real config file read.
-    read: Effect.promise(() => Promise.resolve(saved)),
-    update: (patch: Partial<Settings>) => Effect.sync(() => (saved = { ...saved, ...patch })),
+    read: Effect.promise(() => Promise.resolve(MutableRef.get(saved))),
+    update: (patch: Partial<Settings>) =>
+      Effect.sync(() => MutableRef.updateAndGet(saved, (current) => ({ ...current, ...patch }))),
   };
   const keys = {
-    get: () => Promise.resolve(key),
-    set: nativeWrite((value: string | null) =>
+    get: Effect.sync(() => MutableRef.get(key)),
+    set: (value: string | null) =>
       Effect.sync(() => {
-        key = value;
+        MutableRef.set(key, value);
       }),
-    ),
   };
   return {
     config,
     api: singleEndpointSettings({ config: config, keys: keys, fetcher: fetcher }),
     restore: () => singleEndpointSettings({ config: config, keys: keys, fetcher: fetcher }),
-    saved: () => saved,
+    saved: () => MutableRef.get(saved),
   };
 }
 describe("OpenAI compatible settings", () => {
-  effectTest.live.each([
-    ["private question", "text:16:plain"],
-    ["<tool_response>private result</tool_response>", "text:45:tool-response"],
-  ])("reports wire query shapes without exposing content (%s)", ([content, diagnostic]) =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const f = fixture(
-          nativeFetch(() =>
-            Effect.sync(() =>
-              Response.json(
-                {
-                  error: {
-                    message: "No user query found in messages.",
-                    type: "invalid_request_error",
-                  },
-                },
-                { status: 400 },
-              ),
-            ),
-          ),
-        );
-        yield* f.api.update(configuration);
-        const adapter = (yield* f.api.runtime).adapter({
-          provider: "openai-compatible",
-          model: configuration.model,
-          reasoningEffort: "default",
-        });
-        yield* Effect.addFinalizer(() => Effect.sync(() => adapter.releaseRun?.()));
-        try {
-          const errors: string[] = [];
-          yield* Stream.runForEach(
-            Stream.fromAsyncIterable(
-              adapter.chatStream({
-                threadId: "thread",
-                logger: resolveDebugOption(false),
-                model: configuration.model,
-                messages: [{ role: "user", content }],
-              }),
-              (cause) => new Cause.UnknownError(cause),
-            ),
-            (chunk) =>
-              Effect.sync(() => {
-                switch (chunk.type) {
-                  case "RUN_ERROR":
-                    errors.push(chunk.message);
-                    break;
-                }
-              }),
-          );
-          expect(errors).toHaveLength(1);
-          expect(errors[0]).toContain(
-            "Compatible request messages: total=1, user=1, assistant=0, tool=0, first=user, last=user",
-          );
-          expect(errors[0]).toContain(
-            `model=manual-model, toolDefinitions=0, userContent=[${diagnostic}]`,
-          );
-          expect(errors[0]).not.toContain(content);
-        } finally {
-          adapter.releaseRun?.();
-        }
-      }),
-    ),
-  );
   effectTest.effect(
     "uses the provider-normalized effort for chat when the stored effort is unsupported",
     () =>
@@ -271,9 +207,7 @@ describe("OpenAI compatible settings", () => {
           reasoningEffort: "default",
         });
         expect(f.saved().reasoningEffort).toBe("low");
-        const adapter = (yield* f.api.runtime).adapter(selection!);
-        yield* Effect.addFinalizer(() => Effect.sync(() => adapter.releaseRun?.()));
-        adapter.releaseRun?.();
+        yield* Effect.scoped((yield* f.api.runtime).model(selection!, run));
       }),
   );
   effectTest.live("ignores and clears cached capabilities from the removed LM Studio probe", () =>
@@ -527,7 +461,7 @@ describe("OpenAI compatible settings", () => {
           const bodies: (typeof Body.Type)[] = [];
           const f = fixture(
             nativeFetch((url, init) =>
-              Effect.sync(() => {
+              Effect.map(requestText(init), (body) => {
                 const address =
                   url instanceof Request ? url.url : url instanceof URL ? url.href : url;
                 if (address.endsWith("/models"))
@@ -545,10 +479,7 @@ describe("OpenAI compatible settings", () => {
                     ],
                   });
                 bodies.push(
-                  EffectFunction.flow(
-                    Schema.decodeUnknownResult(Body),
-                    Result.getOrThrow,
-                  )(init?.body),
+                  EffectFunction.flow(Schema.decodeUnknownResult(Body), Result.getOrThrow)(body),
                 );
                 return new Response(
                   'data: {"id":"x","object":"chat.completion.chunk","created":1,"model":"manual-model","choices":[{"index":0,"delta":{"content":"OK"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
@@ -567,31 +498,19 @@ describe("OpenAI compatible settings", () => {
           expect(
             yield* Effect.flip(f.api.services.models.select(configuration.model, "medium")),
           ).toBeInstanceOf(Error);
-          for (const effort of ["xhigh", "default"]) {
-            const selection = yield* f.api.services.models.select(configuration.model, effort);
-            expect(yield* f.restore().services.models.selected).toEqual(selection);
-            const adapter = (yield* f.api.runtime).adapter(selection);
-            yield* Effect.addFinalizer(() => Effect.sync(() => adapter.releaseRun?.()));
-            try {
-              yield* Stream.runForEach(
-                Stream.fromAsyncIterable(
-                  adapter.chatStream({
-                    threadId: "thread",
-                    logger: resolveDebugOption(false),
-                    model: configuration.model,
-                    messages: [{ role: "user", content: "hi" }],
-                  }),
-                  (cause) => new Cause.UnknownError(cause),
+          yield* Effect.forEach(
+            ["xhigh", "default"],
+            Effect.fnUntraced(function* (effort) {
+              const selection = yield* f.api.services.models.select(configuration.model, effort);
+              expect(yield* f.restore().services.models.selected).toEqual(selection);
+              yield* Effect.scoped(
+                Effect.flatMap((yield* f.api.runtime).model(selection, run), ({ model }) =>
+                  model.generateText({ prompt: "hi" }),
                 ),
-                (_chunk) =>
-                  Effect.sync(() => {
-                    /* consume */
-                  }),
               );
-            } finally {
-              adapter.releaseRun?.();
-            }
-          }
+            }),
+            { discard: true },
+          );
           expect(bodies[0]?.reasoning_effort).toBe("xhigh");
           expect(bodies[1]).not.toHaveProperty("reasoning_effort");
           yield* f.api.services.models.select(configuration.model, "xhigh");
@@ -599,104 +518,6 @@ describe("OpenAI compatible settings", () => {
           expect((yield* f.restore().services.models.selected)?.reasoningEffort).toBe("xhigh");
           yield* f.api.update({ ...configuration, model: "other-model" });
           expect((yield* f.restore().services.models.selected)?.reasoningEffort).toBe("default");
-        }),
-      ),
-  );
-  effectTest.live.each(["reasoning_content", "reasoning"])(
-    "streams and restores %s separately from the final answer",
-    (field) =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const sqlite = yield* Effect.acquireRelease(
-            Effect.sync(() => new DatabaseSync(":memory:")),
-            (sqlite) =>
-              Effect.sync(() => {
-                if (sqlite.isOpen) sqlite.close();
-              }),
-          );
-          for (const step of migrations) sqlite.exec(step);
-          const persistence = yield* Effect.flatMap(connectionContext(sqlite), (context) =>
-            Effect.provideContext(chatPersistence, context),
-          );
-          const f = fixture(
-            nativeFetch(() =>
-              Effect.sync(() => {
-                const chunks = [
-                  ...[{ [field]: "Compare the values." }, { content: "The answer is 42." }].map(
-                    (delta) => ({
-                      id: "reasoning-test",
-                      object: "chat.completion.chunk",
-                      created: 1,
-                      model: configuration.model,
-                      choices: [{ index: 0, delta, finish_reason: null }],
-                    }),
-                  ),
-                  {
-                    id: "reasoning-test",
-                    object: "chat.completion.chunk",
-                    created: 1,
-                    model: configuration.model,
-                    choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-                  },
-                ];
-                return new Response(
-                  chunks.map((chunk) => `data: ${jsonStringify(chunk)}\n\n`).join("") +
-                    "data: [DONE]\n\n",
-                  { headers: { "Content-Type": "text/event-stream" } },
-                );
-              }),
-            ),
-          );
-          yield* f.api.update(configuration);
-          const adapter = (yield* f.api.runtime).adapter({
-            provider: "openai-compatible",
-            model: configuration.model,
-            reasoningEffort: "default",
-          });
-          yield* Effect.addFinalizer(() => Effect.sync(() => adapter.releaseRun?.()));
-          try {
-            const events = yield* Stream.runCollect(
-              Stream.fromAsyncIterable(
-                chat({
-                  adapter,
-                  messages: [{ role: "user", content: "Answer the question." }],
-                  threadId: "reasoning",
-                  runId: "reasoning-run",
-                  middleware: [withPersistence(persistence)],
-                }),
-                (cause) => new Cause.UnknownError(cause),
-              ),
-            );
-            expect(events).toContainEqual(
-              expect.objectContaining({
-                type: "REASONING_MESSAGE_CONTENT",
-                delta: "Compare the values.",
-              }),
-            );
-            expect(events).toContainEqual(
-              expect.objectContaining({ type: "TEXT_MESSAGE_CONTENT", delta: "The answer is 42." }),
-            );
-            // A bound run's durable log refuses lifecycle events named after another run.
-            expect(
-              new Set(
-                events.flatMap((event) =>
-                  event.type === "RUN_STARTED" || event.type === "RUN_FINISHED"
-                    ? [event.runId]
-                    : [],
-                ),
-              ),
-            ).toEqual(new Set(["reasoning-run"]));
-            const response = yield* sdkCall(() =>
-              reconstructChat(persistence, new Request("http://localhost/chat?threadId=reasoning")),
-            );
-            const restored = yield* sdkCall(() => response.json());
-            expect(jsonStringify(restored)).toContain('"type":"thinking"');
-            expect(jsonStringify(restored)).toContain("Compare the values.");
-            expect(jsonStringify(restored)).toContain("The answer is 42.");
-          } finally {
-            adapter.releaseRun?.();
-            sqlite.close();
-          }
         }),
       ),
   );
@@ -719,17 +540,21 @@ describe("OpenAI compatible settings", () => {
       expect(rejected.operation).toBe("validation");
       yield* f.api.update({ ...configuration, apiKey: null });
       expect((yield* f.api.status).hasApiKey).toBe(false);
-      for (const patch of [
-        { baseUrl: "file:///tmp/server" },
-        { baseUrl: "https://user:password@example.com/v1" },
-        { contextWindow: 0 },
-        { outputBudget: 8192 },
-        { outputBudget: -1 },
-      ])
-        expect(
-          (yield* Effect.flip(validateCompatibleConfiguration({ ...configuration, ...patch })))
-            .operation,
-        ).toBe("validation");
+      yield* Effect.forEach(
+        [
+          { baseUrl: "file:///tmp/server" },
+          { baseUrl: "https://user:password@example.com/v1" },
+          { contextWindow: 0 },
+          { outputBudget: 8192 },
+          { outputBudget: -1 },
+        ],
+        (patch) =>
+          Effect.map(
+            Effect.flip(validateCompatibleConfiguration({ ...configuration, ...patch })),
+            (rejected) => expect(rejected.operation).toBe("validation"),
+          ),
+        { discard: true },
+      );
     }),
   );
   effectTest.live("restores a manual model without discovery and isolates discovery errors", () =>
@@ -758,10 +583,10 @@ describe("OpenAI compatible settings", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const requested = yield* Deferred.make<void>();
-        let signal: AbortSignal | undefined;
+        const signal = MutableRef.make<AbortSignal | undefined>(undefined);
         const f = fixture(
           stalledFetch((observed) => {
-            signal = observed;
+            MutableRef.set(signal, observed);
             void nativeEffect(Deferred.succeed(requested, undefined));
           }),
         );
@@ -769,16 +594,16 @@ describe("OpenAI compatible settings", () => {
         const fiber = yield* Effect.forkChild(f.api.listModels, { startImmediately: true });
         yield* Deferred.await(requested);
         yield* Fiber.interrupt(fiber);
-        expect(signal?.aborted).toBe(true);
+        expect(MutableRef.get(signal)?.aborted).toBe(true);
       }),
     ),
   );
   effectTest.effect("times out discovery with a typed failure and aborts the request", () =>
     Effect.gen(function* () {
-      let signal: AbortSignal | undefined;
+      const signal = MutableRef.make<AbortSignal | undefined>(undefined);
       const f = fixture(
         stalledFetch((observed) => {
-          signal = observed;
+          MutableRef.set(signal, observed);
         }),
       );
       yield* f.api.update(configuration);
@@ -790,37 +615,38 @@ describe("OpenAI compatible settings", () => {
         yield* Fiber.join(discovery),
         OpenAICompatibleFailed.make({ operation: "models" }),
       );
-      expect(signal?.aborted).toBe(true);
+      expect(MutableRef.get(signal)?.aborted).toBe(true);
     }),
   );
   effectTest.effect("reports an uncertain keyring write as partial without writing settings", () =>
     Effect.gen(function* () {
-      let saved: Settings = {};
+      const saved = MutableRef.make<Settings>({});
       const api = singleEndpointSettings({
         config: {
-          read: Effect.sync(() => saved),
-          update: (patch: Partial<Settings>) => Effect.sync(() => (saved = { ...saved, ...patch })),
+          read: Effect.sync(() => MutableRef.get(saved)),
+          update: (patch: Partial<Settings>) =>
+            Effect.sync(() =>
+              MutableRef.updateAndGet(saved, (current) => ({ ...current, ...patch })),
+            ),
         },
         keys: {
-          get: () => Promise.resolve(null),
-          set: nativeWrite(() =>
-            Effect.fail(new Cause.UnknownError(new Error("private keyring detail"))),
-          ),
+          get: Effect.succeed(null),
+          set: () => Effect.fail(new Cause.UnknownError(new Error("private keyring detail"))),
         },
       });
       const result = yield* Effect.flip(api.update({ ...configuration, apiKey: "secret" }));
       expect(result.operation).toBe("partial");
       expect(
-        yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(saved),
+        yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(MutableRef.get(saved)),
       ).not.toContain("secret");
-      expect(endpointOf(saved)).toBeUndefined();
+      expect(endpointOf(MutableRef.get(saved))).toBeUndefined();
     }),
   );
   effectTest.effect(
     "reports config failure after a key write as partial without persisting a secret",
     () =>
       Effect.gen(function* () {
-        let key: string | null = null;
+        const key = MutableRef.make<string | null>(null);
         const api = singleEndpointSettings({
           config: {
             read: Effect.succeed({}),
@@ -834,17 +660,16 @@ describe("OpenAI compatible settings", () => {
               ),
           },
           keys: {
-            get: () => Promise.resolve(key),
-            set: nativeWrite((value) =>
+            get: Effect.sync(() => MutableRef.get(key)),
+            set: (value) =>
               Effect.sync(() => {
-                key = value;
+                MutableRef.set(key, value);
               }),
-            ),
           },
         });
         const error = yield* Effect.flip(api.update({ ...configuration, apiKey: "secret" }));
         expect(error.operation).toBe("partial");
-        expect(key).toContain("secret");
+        expect(MutableRef.get(key)).toContain("secret");
         expect(
           yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(error),
         ).not.toContain("secret");
@@ -855,29 +680,30 @@ describe("OpenAI compatible settings", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          let saved: Settings = {};
-          let key: string | null = null;
+          const saved = MutableRef.make<Settings>({});
+          const key = MutableRef.make<string | null>(null);
           const writing = yield* Deferred.make<void>();
           const gate = yield* Deferred.make<void>();
           yield* Effect.addFinalizer(() => Deferred.succeed(gate, undefined));
           const seen: Array<{ url: string; authorization: string | null }> = [];
           const api = singleEndpointSettings({
             config: {
-              read: Effect.sync(() => saved),
+              read: Effect.sync(() => MutableRef.get(saved)),
               update: (patch: Partial<Settings>) =>
-                Effect.sync(() => (saved = { ...saved, ...patch })),
+                Effect.sync(() =>
+                  MutableRef.updateAndGet(saved, (current) => ({ ...current, ...patch })),
+                ),
             },
             keys: {
-              get: () => Promise.resolve(key),
-              set: nativeWrite((value) =>
+              get: Effect.sync(() => MutableRef.get(key)),
+              set: (value) =>
                 Effect.gen(function* () {
                   if (value?.includes('"key":"second"') === true) {
                     yield* Deferred.succeed(writing, undefined);
                     yield* Deferred.await(gate);
                   }
-                  key = value;
+                  MutableRef.set(key, value);
                 }),
-              ),
             },
             fetcher: nativeFetch((url, init) =>
               Effect.sync(() => {
@@ -914,24 +740,26 @@ describe("OpenAI compatible settings", () => {
   );
   effectTest.effect("keeps the old endpoint unauthenticated after an uncertain changed key", () =>
     Effect.gen(function* () {
-      let saved: Settings = {};
-      let key: string | null = null;
-      let rejectWrite = false;
+      const saved = MutableRef.make<Settings>({});
+      const key = MutableRef.make<string | null>(null);
+      const rejectWrite = MutableRef.make(false);
       const headers: Array<string | null> = [];
       const api = singleEndpointSettings({
         config: {
-          read: Effect.sync(() => saved),
-          update: (patch: Partial<Settings>) => Effect.sync(() => (saved = { ...saved, ...patch })),
+          read: Effect.sync(() => MutableRef.get(saved)),
+          update: (patch: Partial<Settings>) =>
+            Effect.sync(() =>
+              MutableRef.updateAndGet(saved, (current) => ({ ...current, ...patch })),
+            ),
         },
         keys: {
-          get: () => Promise.resolve(key),
-          set: nativeWrite((value) =>
+          get: Effect.sync(() => MutableRef.get(key)),
+          set: (value) =>
             Effect.gen(function* () {
-              key = value;
-              if (rejectWrite)
+              MutableRef.set(key, value);
+              if (MutableRef.get(rejectWrite))
                 return yield* new Cause.UnknownError(new Error("uncertain keyring outcome"));
             }),
-          ),
         },
         fetcher: nativeFetch((_url, init) =>
           Effect.sync(() => {
@@ -941,7 +769,7 @@ describe("OpenAI compatible settings", () => {
         ),
       });
       yield* api.update({ ...configuration, apiKey: "first" });
-      rejectWrite = true;
+      MutableRef.set(rejectWrite, true);
       const error = yield* Effect.flip(
         api.update({
           ...configuration,
@@ -972,24 +800,25 @@ describe("OpenAI compatible settings", () => {
   effectTest.live("serializes model selection with an in-flight settings update", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        let saved: Settings = {};
+        const saved = MutableRef.make<Settings>({});
         const writing = yield* Deferred.make<void>();
         const gate = yield* Deferred.make<void>();
         yield* Effect.addFinalizer(() => Deferred.succeed(gate, undefined));
         const api = singleEndpointSettings({
           config: {
-            read: Effect.sync(() => saved),
+            read: Effect.sync(() => MutableRef.get(saved)),
             update: (patch: Partial<Settings>) =>
-              Effect.sync(() => (saved = { ...saved, ...patch })),
+              Effect.sync(() =>
+                MutableRef.updateAndGet(saved, (current) => ({ ...current, ...patch })),
+              ),
           },
           keys: {
-            get: () => Promise.resolve(null),
-            set: nativeWrite(() =>
+            get: Effect.succeed(null),
+            set: () =>
               Effect.gen(function* () {
                 yield* Deferred.succeed(writing, undefined);
                 yield* Deferred.await(gate);
               }),
-            ),
           },
         });
         yield* api.update(configuration);
@@ -1018,116 +847,67 @@ describe("OpenAI compatible settings", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const neverRead = yield* Effect.forkChild(Effect.never, { startImmediately: true });
-        let saved: Settings = { openaiCompatible: configuration };
+        const saved = MutableRef.make<Settings>({ openaiCompatible: configuration });
         const api = singleEndpointSettings({
           config: {
-            read: Effect.sync(() => saved),
+            read: Effect.sync(() => MutableRef.get(saved)),
             update: (patch: Partial<Settings>) =>
-              Effect.sync(() => (saved = { ...saved, ...patch })),
+              Effect.sync(() =>
+                MutableRef.updateAndGet(saved, (current) => ({ ...current, ...patch })),
+              ),
           },
-          keys: {
-            get: () => nativeEffect(Fiber.join(neverRead)),
-            set: nativeWrite(() => Effect.sync(() => {})),
-          },
+          keys: { get: Fiber.join(neverRead), set: () => Effect.void },
           fetcher: nativeFetch(() =>
             Effect.fail(new Cause.UnknownError(new Error("must not reach network"))),
           ),
         });
-        const adapter = (yield* api.runtime).adapter({
-          provider: "openai-compatible",
-          model: configuration.model,
-          reasoningEffort: "default",
-        });
-        yield* Effect.addFinalizer(() => Effect.sync(() => adapter.releaseRun?.()));
-        const consumed = yield* Effect.forkChild(
-          Stream.runForEach(
-            Stream.fromAsyncIterable(
-              adapter.chatStream({
-                threadId: "thread",
-                logger: resolveDebugOption(false),
+        const runtime = yield* api.runtime;
+        const making = yield* Effect.forkChild(
+          Effect.scoped(
+            runtime.model(
+              {
+                provider: "openai-compatible",
                 model: configuration.model,
-                messages: [{ role: "user", content: "hi" }],
-              }),
-              (cause) => new Cause.UnknownError(cause),
+                reasoningEffort: "default",
+              },
+              run,
             ),
-            (_chunk) =>
-              Effect.sync(() => {
-                /* drain */
-              }),
           ),
           { startImmediately: true },
         );
-        adapter.releaseRun?.();
-        expect(yield* Fiber.join(consumed).pipe(Effect.timeout("1 second"))).toBeUndefined();
-      }),
-    ),
-  );
-  effectTest.live("releaseRun aborts an in-flight compatible SDK request", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const requested = yield* Deferred.make<void>();
-        let signal: AbortSignal | undefined;
-        const f = fixture(
-          stalledFetch((observed) => {
-            signal = observed;
-            void nativeEffect(Deferred.succeed(requested, undefined));
-          }),
-        );
-        yield* f.api.update(configuration);
-        const adapter = (yield* f.api.runtime).adapter({
-          provider: "openai-compatible",
-          model: configuration.model,
-          reasoningEffort: "default",
-        });
-        yield* Effect.addFinalizer(() => Effect.sync(() => adapter.releaseRun?.()));
-        const iterator = adapter
-          .chatStream({
-            threadId: "thread",
-            logger: resolveDebugOption(false),
-            model: configuration.model,
-            messages: [{ role: "user", content: "hi" }],
-          })
-          [Symbol.asyncIterator]();
-        const result = iterator.next();
-        yield* Deferred.await(requested);
-        adapter.releaseRun?.();
-        expect(signal?.aborted).toBe(true);
-        yield* sdkCall(() => result);
-        yield* sdkCall(() => iterator.return?.());
+        yield* Fiber.interrupt(making).pipe(Effect.timeout("1 second"));
       }),
     ),
   );
   effectTest.live(
-    "pins endpoint, model, key, and budget to an adapter across later settings edits",
+    "pins endpoint, model, key, and budget to a run's model across later settings edits",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          let saved: Settings = {};
-          let key: string | null = null;
+          const saved = MutableRef.make<Settings>({});
+          const key = MutableRef.make<string | null>(null);
           const observed: Array<{ url: string; authorization: string | null; body: string }> = [];
           const api = singleEndpointSettings({
             config: {
-              read: Effect.sync(() => saved),
+              read: Effect.sync(() => MutableRef.get(saved)),
               update: (patch: Partial<Settings>) =>
-                Effect.sync(() => (saved = { ...saved, ...patch })),
+                Effect.sync(() =>
+                  MutableRef.updateAndGet(saved, (current) => ({ ...current, ...patch })),
+                ),
             },
             keys: {
-              get: () => Promise.resolve(key),
-              set: nativeWrite((value) =>
+              get: Effect.sync(() => MutableRef.get(key)),
+              set: (value) =>
                 Effect.sync(() => {
-                  key = value;
+                  MutableRef.set(key, value);
                 }),
-              ),
             },
             fetcher: nativeFetch((url, init) =>
-              Effect.sync(() => {
+              Effect.map(requestText(init), (body) => {
                 observed.push({
                   url: url instanceof Request ? url.url : url instanceof URL ? url.href : url,
                   authorization: new Headers(init?.headers).get("authorization"),
-                  body: EffectFunction.flow(
-                    Schema.decodeUnknownResult(Schema.String),
-                    Result.getOrThrow,
-                  )(init?.body ?? "{}"),
+                  body,
                 });
                 return new Response(
                   'data: {"id":"x","object":"chat.completion.chunk","created":1,"model":"manual-model","choices":[{"index":0,"delta":{"content":"OK"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
@@ -1137,34 +917,21 @@ describe("OpenAI compatible settings", () => {
             ),
           });
           yield* api.update({ ...configuration, apiKey: "first" });
-          const adapter = (yield* api.runtime).adapter({
-            provider: "openai-compatible",
-            model: configuration.model,
-            reasoningEffort: "default",
-          });
-          yield* Effect.addFinalizer(() => Effect.sync(() => adapter.releaseRun?.()));
+          const { model } = yield* (yield* api.runtime).model(
+            {
+              provider: "openai-compatible",
+              model: configuration.model,
+              reasoningEffort: "default",
+            },
+            run,
+          );
           yield* api.update({
             ...configuration,
             baseUrl: "http://127.0.0.1:9876/v1",
             outputBudget: 128,
             apiKey: "second",
           });
-          yield* Stream.runForEach(
-            Stream.fromAsyncIterable(
-              adapter.chatStream({
-                threadId: "thread",
-                logger: resolveDebugOption(false),
-                model: configuration.model,
-                messages: [{ role: "user", content: "hi" }],
-              }),
-              (cause) => new Cause.UnknownError(cause),
-            ),
-            (_chunk) =>
-              Effect.sync(() => {
-                /* consume */
-              }),
-          );
-          adapter.releaseRun?.();
+          yield* model.generateText({ prompt: "hi" });
           expect(observed).toHaveLength(1);
           expect(observed[0]?.url).toContain("127.0.0.1:1234/v1/chat/completions");
           expect(observed[0]?.authorization).toBe("Bearer first");
@@ -1245,44 +1012,37 @@ describe("OpenAI compatible settings", () => {
             yield* f.api.update(settings);
             expect(yield* f.api.listModels).toEqual(["discovered"]);
             const selection = yield* f.api.services.models.select(configuration.model);
-            const tool = {
-              name: "lookup",
-              description: "Lookup",
-              inputSchema: {
-                type: "object",
-                properties: { glob: { type: "string" } },
-                additionalProperties: false,
-              },
-            };
-            const consume = () =>
-              Effect.gen(function* () {
-                const chunks = yield* Stream.runCollect(
-                  Stream.fromAsyncIterable(
-                    (yield* f.api.runtime).adapter(selection).chatStream({
-                      threadId: "thread",
-                      logger: resolveDebugOption(false),
-                      model: configuration.model,
-                      messages: [{ role: "user", content: "hello" }],
-                      tools: [tool],
-                    }),
-                    (cause) => new Cause.UnknownError(cause),
-                  ),
-                );
-                return chunks;
-              });
-            const toolChunks = yield* consume();
-            expect(toolChunks).toContainEqual(
-              expect.objectContaining({
-                type: "TOOL_CALL_START",
-                toolCallId: "call_lookup",
-                toolCallName: "lookup",
+            const toolkit = Toolkit.make(
+              Tool.dynamic("lookup", {
+                description: "Lookup",
+                parameters: {
+                  type: "object",
+                  properties: { glob: { type: "string" } },
+                  additionalProperties: false,
+                },
               }),
             );
-            expect(toolChunks).toContainEqual(
-              expect.objectContaining({ type: "TOOL_CALL_END", toolCallId: "call_lookup" }),
+            // The parts of a run's model, with tool calls left for the caller as the loop leaves them.
+            const consume = (prompt: string) =>
+              Effect.scoped(
+                Effect.gen(function* () {
+                  const { model } = yield* (yield* f.api.runtime).model(selection, run);
+                  return yield* Stream.runCollect(
+                    model.streamText({
+                      prompt,
+                      toolkit,
+                      disableToolCallResolution: true,
+                      toolCallValidation: "deferred",
+                    }),
+                  );
+                }),
+              );
+            const toolParts = yield* consume("hello");
+            expect(toolParts).toContainEqual(
+              expect.objectContaining({ type: "tool-call", id: "call_lookup", name: "lookup" }),
             );
-            expect(toolChunks).toContainEqual(
-              expect.objectContaining({ type: "RUN_FINISHED", finishReason: "tool_calls" }),
+            expect(toolParts).toContainEqual(
+              expect.objectContaining({ type: "finish", reason: "tool-calls" }),
             );
             expect(requests.at(-1)?.path).toBe("/v1/chat/completions");
             expect(requests.at(-1)?.body.max_tokens).toBe(512);
@@ -1302,31 +1062,17 @@ describe("OpenAI compatible settings", () => {
             ]);
             expect(requests.at(-1)?.authorization).toBeUndefined();
             yield* f.api.update({ ...settings, toolCalling: false });
-            yield* consume();
+            yield* consume("hello");
             expect(requests.at(-1)?.body.tools).toBeUndefined();
             // No output limit: the server's own limit applies and no input room is reserved.
             yield* f.api.update({ ...settings, toolCalling: false, outputBudget: null });
-            yield* consume();
+            yield* consume("hello");
             expect(requests.at(-1)?.body.max_tokens).toBeUndefined();
             expect((yield* f.api.runtime).contextWindow(configuration.model)).toBe(
               configuration.contextWindow,
             );
-            const adapter = (yield* f.api.runtime).adapter(selection);
-            yield* Effect.addFinalizer(() => Effect.sync(() => adapter.releaseRun?.()));
             const before = requests.length;
-
-            const chunks = yield* Stream.runCollect(
-              Stream.fromAsyncIterable(
-                adapter.chatStream({
-                  threadId: "thread",
-                  logger: resolveDebugOption(false),
-                  model: configuration.model,
-                  messages: [{ role: "user", content: "x".repeat(100_000) }],
-                }),
-                (cause) => new Cause.UnknownError(cause),
-              ),
-            );
-            expect(chunks.some((chunk) => chunk.type === "RUN_ERROR")).toBe(true);
+            yield* Effect.flip(consume("x".repeat(100_000)));
             expect(requests.length).toBe(before);
           }
         }),
@@ -1337,28 +1083,31 @@ describe("OpenAI compatible settings", () => {
     "keeps each endpoint's key apart and moves the model choice with the selected endpoint",
     () =>
       Effect.gen(function* () {
-        let saved: Settings = {
+        const saved = MutableRef.make<Settings>({
           provider: "openai-compatible",
           model: configuration.model,
           reasoningEffort: "default",
           openaiCompatible: configuration,
-        };
+        });
         const stored = new Map<string, string>([
           [LEGACY_COMPATIBLE_CREDENTIAL_ENTRY, "legacy-key-from-before-accounts"],
         ]);
         const api = makeOpenAICompatibleSettings({
           config: {
-            read: Effect.sync(() => saved),
+            read: Effect.sync(() => MutableRef.get(saved)),
             update: (patch: Partial<Settings>) =>
-              Effect.sync(() => (saved = { ...saved, ...patch })),
+              Effect.sync(() =>
+                MutableRef.updateAndGet(saved, (current) => ({ ...current, ...patch })),
+              ),
           },
           keys: (entry) => ({
-            get: () => Promise.resolve(stored.get(entry) ?? null),
+            get: Effect.sync(() => stored.get(entry) ?? null),
             set: (value) =>
-              Promise.resolve(
-                void (value === null ? stored.delete(entry) : stored.set(entry, value)),
+              Effect.sync(
+                () => void (value === null ? stored.delete(entry) : stored.set(entry, value)),
               ),
           }),
+          crypto: webCrypto,
         });
         const legacy = (yield* api.status).accounts;
         expect(legacy).toMatchObject([
@@ -1382,7 +1131,7 @@ describe("OpenAI compatible settings", () => {
           selected: false,
           models: [],
         });
-        expect(saved.openaiCompatible).toBeUndefined();
+        expect(MutableRef.get(saved).openaiCompatible).toBeUndefined();
         expect(stored.get(LEGACY_COMPATIBLE_CREDENTIAL_ENTRY)).toBe(
           "legacy-key-from-before-accounts",
         );
@@ -1398,16 +1147,19 @@ describe("OpenAI compatible settings", () => {
         yield* api.saveModel(id, { ...second, id: configuration.model });
         // The same model registered on both endpoints stays chosen across a switch.
         yield* api.select(id);
-        expect(saved).toMatchObject({ model: configuration.model });
+        expect(MutableRef.get(saved)).toMatchObject({ model: configuration.model });
         yield* api.removeModel(id, configuration.model);
-        expect(saved).toMatchObject({ provider: "openai-compatible", model: "second" });
+        expect(MutableRef.get(saved)).toMatchObject({
+          provider: "openai-compatible",
+          model: "second",
+        });
         const runtime = yield* api.runtime;
         expect(runtime.contextWindow("second")).toBe(second.contextWindow - second.outputBudget);
         expect(runtime.contextWindow(configuration.model)).toBe(0);
 
         yield* api.remove(id);
         expect(stored.size).toBe(1);
-        expect(saved).toMatchObject({ model: configuration.model });
+        expect(MutableRef.get(saved)).toMatchObject({ model: configuration.model });
         expect((yield* api.status).accounts).toMatchObject([
           { id: LEGACY_COMPATIBLE_ACCOUNT_ID, selected: true },
         ]);

@@ -1,8 +1,12 @@
-import { Layer } from "effect";
+import { Layer, Schema, Stream } from "effect";
 import { it as effectTest } from "@effect/vitest";
 import { Effect } from "effect";
 import { describe, expect, test } from "vite-plus/test";
+import { shownRunErrors } from "../src/agent/run-errors.ts";
+import type { AgUiEvent } from "../src/loop/chunks.ts";
 import { SecretRedactor, mergeFindings } from "../src/secrets/redactor.ts";
+import { ToolFailed } from "../src/tools/failure.ts";
+import { runTool } from "../src/tools/run-tool.ts";
 
 /**
  * Keys are assembled at run time so this file holds nothing shaped like a real key; repository
@@ -68,7 +72,12 @@ describe("SecretRedactor", () => {
           ['password: "hunter2hunter2"', 'password: "[redacted:credential]"'],
           ["api_key = 'ak-99887766'", "api_key = '[redacted:credential]'"],
         ] as const;
-        for (const [input, expected] of cases) expect((yield* redact(input)).text).toBe(expected);
+        yield* Effect.forEach(
+          cases,
+          ([input, expected]) =>
+            Effect.map(redact(input), (redacted) => expect(redacted.text).toBe(expected)),
+          { discard: true },
+        );
       }),
   );
 
@@ -86,7 +95,12 @@ describe("SecretRedactor", () => {
         "apiKey: config.apiKey,",
         "The token limit is 2048 and the secret is to batch.",
       ];
-      for (const text of untouched) expect(yield* redact(text)).toEqual({ text, hidden: 0 });
+      yield* Effect.forEach(
+        untouched,
+        (text) =>
+          Effect.map(redact(text), (redacted) => expect(redacted).toEqual({ text, hidden: 0 })),
+        { discard: true },
+      );
     }),
   );
 
@@ -131,6 +145,68 @@ describe("SecretRedactor", () => {
       }),
   );
 
+  effectTest.effect("hides secrets in a run tool's result and in its failure's text", () =>
+    Effect.gen(function* () {
+      const redactor = yield* SecretRedactor;
+      const [shell] = redactor.withHiddenResults([
+        runTool({
+          name: "run_skill",
+          description: "Run a skill.",
+          parameters: Schema.Struct({ fail: Schema.Boolean }),
+          handler: ({ fail }) =>
+            fail
+              ? Effect.fail(
+                  ToolFailed.make({
+                    code: "tool_failed",
+                    tag: "SkillFailed",
+                    detail: `GITHUB_TOKEN=${fake.github}`,
+                  }),
+                )
+              : Effect.succeed({ stdout: `GITHUB_TOKEN=${fake.github}` }),
+        }),
+      ]);
+      const call = (fail: boolean) =>
+        Effect.flatMap(shell!.prepare({ fail }), (run) => run({ toolCallId: "call-1" }));
+      expect(yield* call(false)).toEqual({ stdout: "GITHUB_TOKEN=[redacted:github]" });
+      expect(yield* Effect.flip(call(true))).toMatchObject({
+        code: "tool_failed",
+        tag: "SkillFailed",
+        detail: "GITHUB_TOKEN=[redacted:github]",
+      });
+    }).pipe(
+      // Test entry point owns this Layer and its resource scope.
+      Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
+        const services = yield* Layer.build(SecretRedactor.layer);
+        return yield* Effect.provideContext(program, services);
+      }, Effect.scoped),
+    ),
+  );
+
+  effectTest.effect("hides secrets in the run's RUN_ERROR message and keeps its code", () =>
+    Effect.gen(function* () {
+      const redactor = yield* SecretRedactor;
+      const events = yield* Stream.runCollect(
+        shownRunErrors(
+          Stream.make<ReadonlyArray<AgUiEvent>>(
+            { type: "TEXT_MESSAGE_CONTENT", messageId: "m", delta: fake.github },
+            { type: "RUN_ERROR", message: `push failed: ${fake.github}`, code: "tool_failed" },
+          ),
+          redactor,
+        ),
+      );
+      expect(events).toEqual([
+        { type: "TEXT_MESSAGE_CONTENT", messageId: "m", delta: fake.github },
+        { type: "RUN_ERROR", message: "push failed: [redacted:github]", code: "tool_failed" },
+      ]);
+    }).pipe(
+      // Test entry point owns this Layer and its resource scope.
+      Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
+        const services = yield* Layer.build(SecretRedactor.layer);
+        return yield* Effect.provideContext(program, services);
+      }, Effect.scoped),
+    ),
+  );
+
   effectTest.live("large output stays fast", () =>
     Effect.gen(function* () {
       const log = `${"2026-09-16T10:00:00Z INFO handled path=/api/items id=01a0a8f6 in 12ms\n".repeat(3000)}GITHUB_TOKEN=${fake.github}\n`;
@@ -146,7 +222,11 @@ describe("SecretRedactor", () => {
     Effect.gen(function* () {
       // secretlint's profiler would add about 60 marks per check, and nothing ever clears them.
       const before = performance.getEntriesByType("mark").length;
-      for (let i = 0; i < 20; i++) yield* redact(`line ${i} GITHUB_TOKEN=${fake.github}`);
+      yield* Effect.forEach(
+        Array.from({ length: 20 }, (_, i) => `line ${i} GITHUB_TOKEN=${fake.github}`),
+        redact,
+        { discard: true },
+      );
       yield* Effect.sleep(10);
       expect(performance.getEntriesByType("mark").length).toBe(before);
     }),

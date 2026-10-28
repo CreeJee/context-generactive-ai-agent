@@ -1,107 +1,152 @@
-import { Config, Console, Effect, Schema } from "effect";
+import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
+import { Config, Console, Effect, Layer, Ref, Schema, Stream } from "effect";
 import { OAuthCheckFailed, OAuthCheckReason } from "./oauth-check-failure.ts";
+import { nodePlatformLayer } from "../src/runtime/node-platform.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { runProcess } from "../src/runtime/run-process.ts";
-import { OAuthHarnessError, OAuthValidationHarness } from "../src/oauth/validation-harness.ts";
+import {
+  createSubscriptionOAuthClient,
+  OAuthHarnessError,
+  OAuthKeychain,
+  type SubscriptionOAuthClient,
+} from "../src/oauth/validation-harness.ts";
 import { NormalizedStreamEvent, providerProtocols } from "../src/oauth/protocol.ts";
 
-const openBrowser = (command: string, args: string[]) => runProcess({ command, args });
-// Native host/SDK configuration boundary reads or forwards the host environment.
-const model = Effect.runSync(
-  Config.String("CONTEXT_AGENT_ANTHROPIC_VALIDATION_MODEL").pipe(
-    Config.withDefault("claude-sonnet-4-6"),
-  ),
-);
+const textRequest = (model: string) =>
+  JSON.stringify({
+    model,
+    max_tokens: 64,
+    stream: true,
+    system: "Return exactly the word OK and nothing else.",
+    messages: [{ role: "user", content: "Protocol check." }],
+  });
 
-const textRequest = JSON.stringify({
-  model,
-  max_tokens: 64,
-  stream: true,
-  system: "Return exactly the word OK and nothing else.",
-  messages: [{ role: "user", content: "Protocol check." }],
-});
-
-const toolRequest = JSON.stringify({
-  model,
-  max_tokens: 128,
-  stream: true,
-  system: "Call echo_probe exactly once. Do not produce conversational text.",
-  messages: [{ role: "user", content: "Call echo_probe with value set to ok." }],
-  tools: [
-    {
-      name: "echo_probe",
-      description: "Protocol validation tool.",
-      input_schema: {
-        type: "object",
-        properties: { value: { type: "string" } },
-        required: ["value"],
-        additionalProperties: false,
+const toolRequest = (model: string) =>
+  JSON.stringify({
+    model,
+    max_tokens: 128,
+    stream: true,
+    system: "Call echo_probe exactly once. Do not produce conversational text.",
+    messages: [{ role: "user", content: "Call echo_probe with value set to ok." }],
+    tools: [
+      {
+        name: "echo_probe",
+        description: "Protocol validation tool.",
+        input_schema: {
+          type: "object",
+          properties: { value: { type: "string" } },
+          required: ["value"],
+          additionalProperties: false,
+        },
       },
-    },
-  ],
-  tool_choice: { type: "tool", name: "echo_probe" },
-});
+    ],
+    tool_choice: { type: "tool", name: "echo_probe" },
+  });
 
-const harness = OAuthValidationHarness({ protocol: providerProtocols.anthropic });
-let attempt: Awaited<ReturnType<typeof harness.startLogin>> | null = null;
+const checkFailed = (reason: OAuthCheckFailed["reason"]) =>
+  Effect.fail(OAuthCheckFailed.make({ reason }));
 
-const cancel = () => attempt?.cancel();
-process.once("SIGINT", cancel);
-process.once("SIGTERM", cancel);
+/** Whether the whole stream for `body` held an event that `seen` matches. */
+const streamed = (
+  client: SubscriptionOAuthClient,
+  body: string,
+  seen: (event: NormalizedStreamEvent) => boolean,
+) =>
+  client.stream(body).pipe(
+    Stream.filter(seen),
+    Stream.runCount,
+    Effect.map((count) => count > 0),
+  );
 
-try {
-  // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-  Effect.runSync(Console.log("ANTHROPIC_VALIDATION login_waiting"));
-  attempt = await harness.startLogin({ timeoutMs: 10 * 60_000 });
-  await openBrowser("open", [attempt.authorizationUrl]);
-  const login = await attempt.completed;
-  if (!login.connected)
-    throw OAuthCheckFailed.make({ reason: OAuthCheckReason.cases.login_not_connected.make({}) });
-  // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-  Effect.runSync(Console.log("ANTHROPIC_VALIDATION login_passed"));
+const validate = Effect.fnUntraced(function* (client: SubscriptionOAuthClient) {
+  // Native host/SDK configuration boundary reads or forwards the host environment.
+  const model = yield* Config.String("CONTEXT_AGENT_ANTHROPIC_VALIDATION_MODEL").pipe(
+    Config.withDefault("claude-sonnet-4-6"),
+  );
+  yield* Console.log("ANTHROPIC_VALIDATION login_waiting");
+  const attempt = yield* Effect.acquireRelease(
+    client.startLogin({ timeoutMs: 10 * 60_000 }),
+    (started) => started.cancel,
+  );
+  yield* runProcess({ command: "open", args: [attempt.authorizationUrl] }).pipe(
+    Effect.catch(() => checkFailed(OAuthCheckReason.cases.browser_open_failed.make({}))),
+  );
+  const login = yield* attempt.completed;
+  yield* Effect.when(
+    checkFailed(OAuthCheckReason.cases.login_not_connected.make({})),
+    Effect.succeed(!login.connected),
+  );
+  yield* Console.log("ANTHROPIC_VALIDATION login_passed");
 
-  const refreshed = await harness.refreshForValidation();
-  if (!refreshed.connected)
-    throw OAuthCheckFailed.make({ reason: OAuthCheckReason.cases.refresh_not_connected.make({}) });
-  // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-  Effect.runSync(Console.log("ANTHROPIC_VALIDATION refresh_passed"));
+  const refreshed = yield* client.refreshForValidation;
+  yield* Effect.when(
+    checkFailed(OAuthCheckReason.cases.refresh_not_connected.make({})),
+    Effect.succeed(!refreshed.connected),
+  );
+  yield* Console.log("ANTHROPIC_VALIDATION refresh_passed");
 
-  let textSeen = false;
-  for await (const event of harness.stream(textRequest))
-    if (NormalizedStreamEvent.$is("text")(event) && event.text.length > 0) textSeen = true;
-  if (!textSeen)
-    throw OAuthCheckFailed.make({ reason: OAuthCheckReason.cases.stream_text_missing.make({}) });
-  // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-  Effect.runSync(Console.log("ANTHROPIC_VALIDATION streaming_passed"));
-
-  let toolSeen = false;
-  for await (const event of harness.stream(toolRequest))
-    if (NormalizedStreamEvent.$is("tool-call")(event) && event.name === "echo_probe")
-      toolSeen = true;
-  if (!toolSeen)
-    throw OAuthCheckFailed.make({ reason: OAuthCheckReason.cases.tool_call_missing.make({}) });
-  // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-  Effect.runSync(Console.log("ANTHROPIC_VALIDATION tool_call_passed"));
-} catch (error) {
-  const code = Schema.is(OAuthHarnessError)(error) ? error.code : "validation_failed";
-  const status = Schema.is(OAuthHarnessError)(error) ? error.status : null;
-  // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-  Effect.runSync(
-    Console.error(
-      `ANTHROPIC_VALIDATION failed ${code}${status === null ? "" : ` status=${status}`}`,
+  yield* Effect.when(
+    checkFailed(OAuthCheckReason.cases.stream_text_missing.make({})),
+    Effect.map(
+      streamed(
+        client,
+        textRequest(model),
+        (event) => NormalizedStreamEvent.$is("text")(event) && event.text.length > 0,
+      ),
+      (seen) => !seen,
     ),
   );
-  process.exitCode = 1;
-} finally {
-  process.removeListener("SIGINT", cancel);
-  process.removeListener("SIGTERM", cancel);
-  try {
-    await harness.disconnect();
-    // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-    Effect.runSync(Console.log("ANTHROPIC_VALIDATION credentials_removed"));
-  } catch {
-    // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-    Effect.runSync(Console.error("ANTHROPIC_VALIDATION cleanup_failed"));
-    process.exitCode = 1;
-  }
-}
+  yield* Console.log("ANTHROPIC_VALIDATION streaming_passed");
+
+  yield* Effect.when(
+    checkFailed(OAuthCheckReason.cases.tool_call_missing.make({})),
+    Effect.map(
+      streamed(
+        client,
+        toolRequest(model),
+        (event) => NormalizedStreamEvent.$is("tool-call")(event) && event.name === "echo_probe",
+      ),
+      (seen) => !seen,
+    ),
+  );
+  yield* Console.log("ANTHROPIC_VALIDATION tool_call_passed");
+}, Effect.scoped);
+
+const program = Effect.gen(function* () {
+  const client = yield* createSubscriptionOAuthClient({
+    protocol: providerProtocols.anthropic,
+    store: (yield* OAuthKeychain).store,
+  });
+  const cleanupFailed = yield* Ref.make(false);
+  yield* validate(client).pipe(
+    Effect.tapError((error) => {
+      const code = Schema.is(OAuthHarnessError)(error) ? error.code : "validation_failed";
+      const status = Schema.is(OAuthHarnessError)(error) ? error.status : null;
+      return Console.error(
+        `ANTHROPIC_VALIDATION failed ${code}${status === null ? "" : ` status=${status}`}`,
+      );
+    }),
+    // The validation credentials are removed on every exit, Ctrl+C included.
+    Effect.ensuring(
+      client.disconnect.pipe(
+        Effect.andThen(Console.log("ANTHROPIC_VALIDATION credentials_removed")),
+        Effect.catch(() =>
+          Console.error("ANTHROPIC_VALIDATION cleanup_failed").pipe(
+            Effect.andThen(Ref.set(cleanupFailed, true)),
+          ),
+        ),
+      ),
+    ),
+  );
+  yield* Effect.when(
+    checkFailed(OAuthCheckReason.cases.cleanup_failed.make({})),
+    Ref.get(cleanupFailed),
+  );
+});
+
+// Every failure is already printed in the check's own format; the exit code reports it.
+Layer.build(OAuthKeychain.keychain.pipe(Layer.provideMerge(nodePlatformLayer))).pipe(
+  Effect.flatMap((services) => Effect.provideContext(program, services)),
+  Effect.scoped,
+  NodeRuntime.runMain({ disableErrorReporting: true }),
+);

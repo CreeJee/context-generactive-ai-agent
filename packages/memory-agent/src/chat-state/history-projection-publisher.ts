@@ -26,10 +26,10 @@ export const HistoryProjectionPublishReason = Schema.TaggedUnion({
 });
 const publishReason = HistoryProjectionPublishReason.cases;
 
-export class HistoryProjectionPublishFailed extends Schema.TaggedError<HistoryProjectionPublishFailed>()(
-  "HistoryProjectionPublishFailed",
-  { reason: HistoryProjectionPublishReason },
-) {}
+export class HistoryProjectionPublishFailed extends Schema.TaggedError<
+  HistoryProjectionPublishFailed,
+  { readonly brand: unique symbol }
+>()("HistoryProjectionPublishFailed", { reason: HistoryProjectionPublishReason }) {}
 
 const decodePublication = Schema.decodeUnknownEffect(HistoryProjectionPublication);
 const validateSource = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Array(Schema.Json)));
@@ -94,21 +94,24 @@ export class HistoryProjectionPublisher extends Context.Service<
             Effect.gen(function* () {
               yield* client.unsafe(sql.markUnready, [threadId]);
               yield* client.unsafe(sql.removeGroups, [threadId]);
-              for (const [ordinal, group] of publication.groups.entries())
-                yield* client.unsafe(sql.insertGroup, [
-                  threadId,
-                  ordinal,
-                  group.id,
-                  group.messages,
-                ]);
+              yield* Effect.forEach(
+                publication.groups,
+                (group, ordinal) =>
+                  client.unsafe(sql.insertGroup, [threadId, ordinal, group.id, group.messages]),
+                { discard: true },
+              );
               const published = yield* client.unsafe(
                 `${sql.publishIfCurrent} RETURNING thread_id`,
                 [threadId, publication.sourceJSON],
               );
-              if (published.length === 0)
-                return yield* HistoryProjectionPublishFailed.make({
-                  reason: publishReason.SourceChanged.make({}),
-                });
+              yield* Effect.when(
+                Effect.fail(
+                  HistoryProjectionPublishFailed.make({
+                    reason: publishReason.SourceChanged.make({}),
+                  }),
+                ),
+                Effect.succeed(published.length === 0),
+              );
               return HistoryProjectionPublicationResult.cases.published.make({
                 groupCount: publication.groups.length,
               });

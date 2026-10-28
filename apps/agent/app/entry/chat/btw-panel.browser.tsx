@@ -17,27 +17,23 @@ const earlier = {
   updatedAt: 1,
 };
 let threads = [earlier];
-const transcript = {
-  messages: [
-    { id: "u1", role: "user", parts: [{ type: "text", content: "이전 질문" }] },
-    {
-      id: "a1",
-      role: "assistant",
-      parts: [
-        {
-          type: "tool-call",
-          id: "c1",
-          name: "find_memory",
-          arguments: "{}",
-          state: "input-complete",
-        },
-        { type: "text", content: "이전 답변" },
-      ],
-    },
-  ],
-  activeRun: null,
-  interrupts: null,
-};
+const messages = [
+  { id: "u1", role: "user", parts: [{ type: "text", content: "이전 질문" }] },
+  {
+    id: "a1",
+    role: "assistant",
+    parts: [
+      {
+        type: "tool-call",
+        id: "c1",
+        name: "find_memory",
+        arguments: "{}",
+        state: "input-complete",
+      },
+      { type: "text", content: "이전 답변" },
+    ],
+  },
+];
 
 /** The server behind the real API client and transport. */
 const server = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -45,7 +41,7 @@ const server = (input: RequestInfo | URL, init?: RequestInit): Promise<Response>
   const { pathname } = new URL(request.url);
   requests.push(`${request.method} ${pathname}`);
   if (pathname === "/api/sessions/session-1/btw") return Promise.resolve(Response.json(threads));
-  if (pathname === "/api/btw/btw-1/chat") return Promise.resolve(Response.json(transcript));
+  if (pathname === "/api/btw/btw-1/messages") return Promise.resolve(Response.json(messages));
   if (pathname === "/api/btw/btw-1" && request.method === "DELETE") {
     threads = [];
     return Promise.resolve(Response.json({ deleted: true, filesPending: false }));

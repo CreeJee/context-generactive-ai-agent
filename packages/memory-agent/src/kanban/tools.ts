@@ -1,8 +1,7 @@
-import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
 import { Context, Effect, Layer, Match, Option, Schema } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import { AppEvents } from "../events/app-events.ts";
-import { toToolSchema } from "../tools/schema.ts";
+import { runTool, type RunTool } from "../tools/run-tool.ts";
 import { CardDraft, type BoardEditRefused } from "../workflow/board-edit.ts";
 import type { PlanDependenciesRejected } from "../workflow/plan-schedule.ts";
 import type { WorkflowStorageError } from "../workflow/workflow.ts";
@@ -63,61 +62,16 @@ type ActionFailure =
   | WorkflowStorageError
   | PlatformError;
 
-const make = Effect.gen(function* () {
-  const events = yield* AppEvents;
-  const runtime = yield* Effect.context<KanbanBoardActions | Boards>();
-  const run = Effect.runPromiseWith(runtime);
+const readBoard = {
+  name: "read_kanban_board",
+  description:
+    "Read the kanban board: each card's status, why the loop stopped it (failures, replan requests, conflicts, uncertain effects), users' pending change requests, and whether a changed Goal holds new assignments.",
+  parameters: ReadBoardInput,
+} as const;
 
-  return {
-    forSession(sessionId: string, runId: string): AnyServerTool[] {
-      const author: BoardAuthor = BoardAuthor.cases.Orchestrator.make({ runId });
-      /** Runs a board change and tells pages the board moved; a refusal is the call's answer. */
-      const change = <A>(
-        effect: (actions: KanbanBoardActions["Service"]) => Effect.Effect<A, ActionFailure>,
-      ) =>
-        Effect.flatMap(KanbanBoardActions, effect).pipe(
-          Effect.tap(() => events.publishSession(sessionId, "run-state")),
-          Effect.catchTags({
-            KanbanActionRefused: (refused) =>
-              Effect.succeed({ error: "kanban_action_refused" as const, reason: refused.reason }),
-            BoardEditRefused: (refused) =>
-              Effect.succeed({ error: "board_edit_refused" as const, reason: refused.reason }),
-            HumanDecisionRefused: (refused) =>
-              Effect.succeed({ error: "human_decision_refused" as const, reason: refused.reason }),
-            PlanDependenciesRejected: () =>
-              Effect.succeed({ error: "plan_dependencies_rejected" as const }),
-          }),
-          run,
-        );
-
-      const readBoard = toolDefinition({
-        name: "read_kanban_board",
-        description:
-          "Read the kanban board: each card's status, why the loop stopped it (failures, replan requests, conflicts, uncertain effects), users' pending change requests, and whether a changed Goal holds new assignments.",
-        inputSchema: toToolSchema(ReadBoardInput),
-      }).server(() =>
-        run(
-          Effect.gen(function* () {
-            const view = yield* (yield* KanbanBoardActions).view(sessionId);
-            if (Option.isNone(view)) return { error: "not_kanban" as const };
-            const board = yield* (yield* Boards).view(sessionId);
-            const titles = new Map(board.cards.map(({ card }) => [card.id, card]));
-            return {
-              ...view.value,
-              cards: view.value.cards.map((card) => ({
-                ...card,
-                title: titles.get(card.cardId)?.title ?? "",
-                dependsOn: titles.get(card.cardId)?.dependsOn ?? [],
-              })),
-              pendingChanges: board.pendingChanges,
-            };
-          }),
-        ),
-      );
-
-      const editBoard = toolDefinition({
-        name: "edit_kanban_board",
-        description: `Change the kanban board; edit._tag picks the change:
+const editBoard = {
+  name: "edit_kanban_board",
+  description: `Change the kanban board; edit._tag picks the change:
 - Split: replace a card that is not running with smaller cards. The parts keep its dependencies, and cards that depended on it wait for every part.
 - Merge: replace cards that are not running with one card that does all of their work. Cards that depended on any of them depend on the new card.
 - Cancel: take a card off the board. A running attempt is stopped; the card's work stays on its branch.
@@ -125,8 +79,58 @@ const make = Effect.gen(function* () {
 - Requeue: put a blocked card whose deliveries ran out back on the queue. It continues in its worktree with a fresh delivery budget.
 - SettleChangeRequest: settle a user's pending change to a running card. Apply continues the card with the change at once, Reassign applies it and restarts the card in a fresh agent conversation, Reject keeps the card as it is and records your reason for the user.
 - ApplyGoalChange: after the Goal changed, give one verdict per card that is not done (a card without one continues): Continue, Amend (change the card and tell its agent), Stop (block it with a reason), Replace (a new card takes its place) or NeedsDecision (a person decides). New assignments resume once this is saved.`,
-        inputSchema: toToolSchema(EditBoardInput),
-      }).server(({ edit }) =>
+  parameters: EditBoardInput,
+} as const;
+
+const make = Effect.gen(function* () {
+  const events = yield* AppEvents;
+  const runtime = yield* Effect.context<KanbanBoardActions | Boards>();
+
+  /** The tools' calls in `sessionId`, each change saved as the run `runId`'s. */
+  const callsFor = (sessionId: string, runId: string) => {
+    const author: BoardAuthor = BoardAuthor.cases.Orchestrator.make({ runId });
+    /** Runs a board change and tells pages the board moved; a refusal is the call's answer. */
+    const change = <A>(
+      effect: (actions: KanbanBoardActions["Service"]) => Effect.Effect<A, ActionFailure>,
+    ) =>
+      Effect.flatMap(KanbanBoardActions, effect).pipe(
+        Effect.tap(() => events.publishSession(sessionId, "run-state")),
+        Effect.catchTags({
+          KanbanActionRefused: (refused) =>
+            Effect.succeed({ error: "kanban_action_refused" as const, reason: refused.reason }),
+          BoardEditRefused: (refused) =>
+            Effect.succeed({ error: "board_edit_refused" as const, reason: refused.reason }),
+          HumanDecisionRefused: (refused) =>
+            Effect.succeed({ error: "human_decision_refused" as const, reason: refused.reason }),
+          PlanDependenciesRejected: () =>
+            Effect.succeed({ error: "plan_dependencies_rejected" as const }),
+        }),
+        Effect.provideContext(runtime),
+      );
+
+    return {
+      readBoard: () =>
+        Effect.gen(function* () {
+          const boards = yield* Boards;
+          return yield* Option.match(yield* (yield* KanbanBoardActions).view(sessionId), {
+            onNone: () => Effect.succeed({ error: "not_kanban" as const }),
+            onSome: (view) =>
+              Effect.map(boards.view(sessionId), (board) => {
+                const titles = new Map(board.cards.map(({ card }) => [card.id, card]));
+                return {
+                  ...view,
+                  cards: view.cards.map((card) => ({
+                    ...card,
+                    title: titles.get(card.cardId)?.title ?? "",
+                    dependsOn: titles.get(card.cardId)?.dependsOn ?? [],
+                  })),
+                  pendingChanges: board.pendingChanges,
+                };
+              }),
+          });
+        }).pipe(Effect.provideContext(runtime)),
+
+      editBoard: ({ edit }: typeof EditBoardInput.Type) =>
         change((actions) =>
           Match.valueTags(edit, {
             Split: ({ cardId, parts }) => actions.splitCard(sessionId, cardId, parts, author),
@@ -143,8 +147,17 @@ const make = Effect.gen(function* () {
             ApplyGoalChange: ({ verdicts }) => actions.applyGoalChange(sessionId, verdicts, author),
           }),
         ),
-      );
-      return [readBoard, editBoard];
+    };
+  };
+
+  return {
+    /** The board tools of a run in `sessionId`. */
+    toolsFor(sessionId: string, runId: string): RunTool[] {
+      const calls = callsFor(sessionId, runId);
+      return [
+        runTool({ ...readBoard, handler: calls.readBoard }),
+        runTool({ ...editBoard, handler: calls.editBoard }),
+      ];
     },
   };
 });

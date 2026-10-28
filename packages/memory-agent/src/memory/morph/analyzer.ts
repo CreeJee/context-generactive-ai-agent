@@ -4,6 +4,7 @@ import { NodeFileSystem, NodePath, NodeWorker } from "@effect/platform-node";
 
 import { Worker } from "node:worker_threads";
 import {
+  Array as EffectArray,
   Context,
   Deferred,
   FileSystem,
@@ -23,18 +24,18 @@ import { runtimeWorker, runtimeWorkerOptions } from "../../runtime/resources.ts"
 import { ignoreLogged } from "../../runtime/logged-failures.ts";
 import { KiwiRpcs, type KiwiWorkerData, KiwiWorkerFailed } from "./kiwi-rpc.ts";
 
-export class MorphAnalysisFailed extends Schema.TaggedError<MorphAnalysisFailed>()(
-  "MorphAnalysisFailed",
-  {
-    /**
-     * `not_ready`: the analyzer was not loaded yet and the caller did not wait. `disabled`: there is
-     * no analyzer. `model_install_failed`: the model could not be downloaded or extracted.
-     * `worker_failed`: the worker failed to load or answer; `cause` says which.
-     */
-    reason: Schema.Literals(["not_ready", "disabled", "model_install_failed", "worker_failed"]),
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {}
+export class MorphAnalysisFailed extends Schema.TaggedError<
+  MorphAnalysisFailed,
+  { readonly brand: unique symbol }
+>()("MorphAnalysisFailed", {
+  /**
+   * `not_ready`: the analyzer was not loaded yet and the caller did not wait. `disabled`: there is
+   * no analyzer. `model_install_failed`: the model could not be downloaded or extracted.
+   * `worker_failed`: the worker failed to load or answer; `cause` says which.
+   */
+  reason: Schema.Literals(["not_ready", "disabled", "model_install_failed", "worker_failed"]),
+  cause: Schema.optional(Schema.Defect()),
+}) {}
 
 export interface MorphAnalyzerApi {
   /** Changes whenever terms from this analyzer are not comparable with earlier ones. */
@@ -71,12 +72,16 @@ const ensureModel = Effect.fn("MorphAnalyzer.ensureModel")(
     const installer = yield* ArchiveInstaller;
     const root = paths.join(storageRoot, "models", `kiwi-${kiwiModel.version}`);
     const modelDirectory = paths.join(root, kiwiModel.directory);
-    if (yield* fs.exists(paths.join(modelDirectory, "cong.mdl"))) return modelDirectory;
-    yield* fs.makeDirectory(paths.dirname(root), { recursive: true, mode: 0o700 });
-    yield* installer.install({
-      archive: { url: kiwiModel.url, algorithm: "sha256", digest: kiwiModel.sha256 },
-      target: root,
-    });
+    yield* Effect.when(
+      Effect.andThen(
+        fs.makeDirectory(paths.dirname(root), { recursive: true, mode: 0o700 }),
+        installer.install({
+          archive: { url: kiwiModel.url, algorithm: "sha256", digest: kiwiModel.sha256 },
+          target: root,
+        }),
+      ),
+      Effect.map(fs.exists(paths.join(modelDirectory, "cong.mdl")), (installed) => !installed),
+    );
     return modelDirectory;
   },
   Effect.mapError((cause) => MorphAnalysisFailed.make({ reason: "model_install_failed", cause })),
@@ -95,8 +100,12 @@ interface KiwiSession {
 const rpcSession = (data: KiwiWorkerData) =>
   Effect.gen(function* () {
     const spawned = yield* Deferred.make<Worker>();
+    const lost = (cause: unknown) =>
+      KiwiWorkerFailed.make({ stage: "lost", reason: String(cause) });
+    const file = yield* runtimeWorker("kiwi-worker").pipe(Effect.mapError(lost));
+    const options = yield* runtimeWorkerOptions(data);
     const workers = NodeWorker.layer(() => {
-      const worker = new Worker(runtimeWorker("kiwi-worker"), runtimeWorkerOptions(data));
+      const worker = new Worker(file, options);
       worker.unref();
       Deferred.doneUnsafe(spawned, Exit.succeed(worker));
       return worker;
@@ -105,8 +114,6 @@ const rpcSession = (data: KiwiWorkerData) =>
       RpcClient.layerProtocolWorker({ size: 1, concurrency: 1 }).pipe(Layer.provide(workers)),
     );
     const client = yield* RpcClient.make(KiwiRpcs).pipe(Effect.provideContext(protocol));
-    const lost = (cause: unknown) =>
-      KiwiWorkerFailed.make({ stage: "lost", reason: String(cause) });
     const call = <A>(effect: Effect.Effect<A, KiwiWorkerFailed | RpcClientError.RpcClientError>) =>
       effect.pipe(Effect.catchTag("RpcClientError", (error) => Effect.fail(lost(error))));
     yield* call(client.Load());
@@ -127,15 +134,11 @@ const rpcSession = (data: KiwiWorkerData) =>
   );
 
 /** A worker that failed to load or was lost is replaced by the next request's new one. */
-const keepsSession = (error: KiwiWorkerFailed) => {
-  switch (error.stage) {
-    case "run":
-      return true;
-    case "load":
-    case "lost":
-      return false;
-  }
-};
+const keepsSession = {
+  run: true,
+  load: false,
+  lost: false,
+} as const satisfies Record<KiwiWorkerFailed["stage"], boolean>;
 
 const workerFailed = (cause: KiwiWorkerFailed) =>
   Effect.fail(MorphAnalysisFailed.make({ reason: "worker_failed", cause }));
@@ -177,7 +180,7 @@ const makeKiwi = Effect.gen(function* () {
   const request = (texts: readonly string[]) =>
     Effect.flatMap(live, (current) =>
       current.busy(current.terms(texts.map((text) => text.slice(0, maxCharacters)))).pipe(
-        Effect.tapError((error) => (keepsSession(error) ? Effect.void : discard)),
+        Effect.tapError((error) => (keepsSession[error.stage] ? Effect.void : discard)),
         Effect.catchTag("KiwiWorkerFailed", workerFailed),
       ),
     ).pipe(oneRequest.withPermits(1));
@@ -197,14 +200,10 @@ const makeKiwi = Effect.gen(function* () {
         ),
       );
     },
-    terms: Effect.fnUntraced(function* (texts: readonly string[]) {
-      const all: string[][] = [];
-      for (let index = 0; index < texts.length; index += batchSize)
-        all.push(
-          ...(yield* request(texts.slice(index, index + batchSize))).map((terms) => [...terms]),
-        );
-      return all;
-    }),
+    terms: (texts: readonly string[]) =>
+      Effect.map(Effect.forEach(EffectArray.chunksOf(texts, batchSize), request), (batches) =>
+        batches.flat().map((terms) => [...terms]),
+      ),
   } satisfies MorphAnalyzerApi;
 });
 

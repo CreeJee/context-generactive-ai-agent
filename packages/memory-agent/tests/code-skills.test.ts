@@ -1,6 +1,5 @@
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
-import { toolDefinition } from "@tanstack/ai";
-import { Cause, Effect, FileSystem, HashSet, Option, Path, Schema } from "effect";
+import { Effect, FileSystem, HashSet, Option, Path, Schema } from "effect";
 import { HttpServerResponse } from "effect/http";
 import { NetAddress } from "effect/net";
 import { StorageRoot } from "../src/config/storage-root.ts";
@@ -8,10 +7,9 @@ import { expect, test } from "vite-plus/test";
 import { builtinOverlap } from "../src/skills/code-skills.ts";
 import { ApprovedTools } from "../src/tools/approved.ts";
 import { CodeTools } from "../src/tools/code.ts";
-import { toToolSchema } from "../src/tools/schema.ts";
+import { runTool } from "../src/tools/run-tool.ts";
 import { TestEnv, testAgent } from "./support/test-env.ts";
-import { inRun } from "./support/run-span.ts";
-import { sdk } from "./agents/agent-env.ts";
+import { callTool } from "./support/run-tools.ts";
 
 const portOf = (address: NetAddress.SocketAddress) =>
   Effect.succeed(address).pipe(
@@ -19,13 +17,6 @@ const portOf = (address: NetAddress.SocketAddress) =>
       Effect.die("the test server listens on TCP"),
     ),
     Effect.map((inet) => inet.port),
-  );
-
-const rejection = <A, R>(operation: Effect.Effect<A, Cause.UnknownError, R>) =>
-  operation.pipe(
-    Effect.flip,
-    Effect.orDie,
-    Effect.map((error) => error.cause),
   );
 
 test("a script that only wraps built-in tools is refused, a filter after a build is not", () => {
@@ -39,16 +30,17 @@ testAgent()("code skills", (it) => {
   it.effect("an approved script runs with its arguments; an edited one is refused", () =>
     Effect.gen(function* () {
       const { project } = yield* TestEnv;
-      const [save, run] = yield* inRun((yield* ApprovedTools).forProject(project, "gate"));
-      yield* sdk(() =>
-        save.execute!({
-          name: "echo-args",
-          description: "Print the arguments",
-          program: { runtime: "sh", script: 'printf "%s|" "$@"' },
-        }),
-      );
+      const tools = (yield* ApprovedTools).toolsFor(project, "gate");
+      yield* callTool(tools, "save_code_skill", {
+        name: "echo-args",
+        description: "Print the arguments",
+        program: { runtime: "sh", script: 'printf "%s|" "$@"' },
+      });
       expect(
-        yield* sdk(() => run.execute!({ name: "echo-args", args: ["a b", "$(whoami)", "it's"] })),
+        yield* callTool(tools, "run_skill", {
+          name: "echo-args",
+          args: ["a b", "$(whoami)", "it's"],
+        }),
       ).toMatchObject({ status: "succeeded", stdout: "a b|$(whoami)|it's|" });
 
       // A file tool edit needs no approval, so the edited script must not run.
@@ -57,55 +49,64 @@ testAgent()("code skills", (it) => {
         path.join(project.root, ".agents/skills/echo-args/scripts/run.sh"),
         "printf changed\n",
       );
-      expect(yield* rejection(sdk(() => run.execute!({ name: "echo-args" })))).toMatchObject({
-        message: expect.stringContaining("not_approved"),
-      });
-
-      const [, runFull] = yield* inRun(
-        (yield* ApprovedTools).forProject({ ...project, permissionMode: "full" }, "gate"),
+      expect(yield* Effect.flip(callTool(tools, "run_skill", { name: "echo-args" }))).toMatchObject(
+        {
+          message: expect.stringContaining("not_approved"),
+        },
       );
-      expect(yield* sdk(() => runFull.execute!({ name: "echo-args" }))).toMatchObject({
+
+      const full = (yield* ApprovedTools).toolsFor({ ...project, permissionMode: "full" }, "gate");
+      expect(yield* callTool(full, "run_skill", { name: "echo-args" })).toMatchObject({
         stdout: "changed",
       });
     }),
   );
 
-  it.effect("a ts skill runs its program on checked input; a program cannot run one", () =>
+  it.effect("run_skill runs ts skills over the run's tools, and sh skills; a program cannot", () =>
     Effect.gen(function* () {
       const { project } = yield* TestEnv;
-      const [save, run] = yield* inRun((yield* ApprovedTools).forProject(project, "gate"));
-      const echo = toolDefinition({
+      const tools = (yield* ApprovedTools).toolsFor(project, "gate");
+      const [, run] = tools;
+      const echo = runTool({
         name: "echo_text",
         description: "echo_text",
-        inputSchema: toToolSchema(Schema.Struct({ text: Schema.String })),
-      }).server(({ text }) => ({ text }));
-      const programs = yield* (yield* CodeTools).forTools([echo, run], HashSet.empty());
-      const runSkill = programs.codeSkills(project, run);
+        parameters: Schema.Struct({ text: Schema.String }),
+        handler: ({ text }) => Effect.succeed({ text }),
+      });
+      const sh = yield* Effect.fromNullishOr(run);
+      const runSkill = [
+        (yield* CodeTools).forRunTools([echo, sh], HashSet.empty()).codeSkills(project, sh),
+      ];
       expect(
-        yield* sdk(() =>
-          save.execute!({
-            name: "shout",
-            description: "Echo a text in capitals",
-            program: {
-              runtime: "ts",
-              code: "const { text } = await external_echo_text({ text: input.text.toUpperCase() });\nreturn text;",
-              input: {
-                type: "object",
-                properties: { text: { type: "string" } },
-                required: ["text"],
-              },
-            },
-          }),
-        ),
+        yield* callTool(tools, "save_code_skill", {
+          name: "shout",
+          description: "Echo a text in capitals",
+          program: {
+            runtime: "ts",
+            code: "const { text } = await external_echo_text({ text: input.text.toUpperCase() });\nreturn text;",
+            input: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
+          },
+        }),
       ).toMatchObject({ runtime: "ts", input: "{ text: string }" });
-      expect(yield* sdk(() => runSkill.execute!({ name: "shout", input: { text: "hi" } }))).toEqual(
-        { status: "returned", value: "HI", logs: [] },
-      );
-      expect(yield* rejection(sdk(() => runSkill.execute!({ name: "shout" })))).toMatchObject({
+      yield* callTool(tools, "save_code_skill", {
+        name: "echo-run",
+        description: "Print the arguments",
+        program: { runtime: "sh", script: 'printf "%s|" "$@"' },
+      });
+      expect(
+        yield* callTool(runSkill, "run_skill", { name: "shout", input: { text: "hi" } }),
+      ).toEqual({ status: "returned", value: "HI", logs: [] });
+      expect(yield* Effect.flip(callTool(runSkill, "run_skill", { name: "shout" }))).toMatchObject({
         message: expect.stringContaining("invalid_input"),
       });
+      expect(
+        yield* callTool(runSkill, "run_skill", { name: "echo-run", args: ["a"] }),
+      ).toMatchObject({
+        status: "succeeded",
+        stdout: "a|",
+      });
       // What a program gets as external_run_skill runs sh skills only.
-      expect(yield* rejection(sdk(() => run.execute!({ name: "shout" })))).toMatchObject({
+      expect(yield* Effect.flip(callTool(tools, "run_skill", { name: "shout" }))).toMatchObject({
         message: expect.stringContaining("ts_skill"),
       });
     }),
@@ -120,7 +121,7 @@ testAgent()("code skills", (it) => {
         const storage = yield* StorageRoot;
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const [save, run] = yield* inRun((yield* ApprovedTools).forProject(project, "gate"));
+        const tools = (yield* ApprovedTools).toolsFor(project, "gate");
         const server = yield* NodeHttpServer.make(NodeHttpServer.createServer, {
           port: 0,
           host: "127.0.0.1",
@@ -129,19 +130,20 @@ testAgent()("code skills", (it) => {
         const port = yield* portOf(server.address);
         const fetch = (network: readonly string[], proxied: boolean) =>
           Effect.gen(function* () {
-            yield* sdk(() =>
-              save.execute!({
-                name: "fetch-local",
-                description: "Fetch the local test server",
-                program: {
-                  runtime: "sh",
-                  // Loopback skips the proxy unless told otherwise; through it, it stands in for a host.
-                  script: `curl -fsS --max-time 5 ${proxied ? "--noproxy ''" : ""} "http://127.0.0.1:$1/"`,
-                  network,
-                },
-              }),
-            );
-            return yield* sdk(() => run.execute!({ name: "fetch-local", args: [String(port)] }));
+            yield* callTool(tools, "save_code_skill", {
+              name: "fetch-local",
+              description: "Fetch the local test server",
+              program: {
+                runtime: "sh",
+                // Loopback skips the proxy unless told otherwise; through it, it stands in for a host.
+                script: `curl -fsS --max-time 5 ${proxied ? "--noproxy ''" : ""} "http://127.0.0.1:$1/"`,
+                network,
+              },
+            });
+            return yield* callTool(tools, "run_skill", {
+              name: "fetch-local",
+              args: [String(port)],
+            });
           });
 
         expect(yield* fetch([], true)).toMatchObject({
@@ -160,18 +162,16 @@ testAgent()("code skills", (it) => {
 
         const secret = path.join(storage.path, "sandbox-probe.txt");
         yield* fs.writeFileString(secret, "secret\n");
-        yield* sdk(() =>
-          save.execute!({
-            name: "touch-around",
-            description: "Write a skill file, then read the file named by $1",
-            program: {
-              runtime: "sh",
-              script: 'echo x > .agents/skills/echo-args/SKILL.md; wc -c < "$1"',
-            },
-          }),
-        );
+        yield* callTool(tools, "save_code_skill", {
+          name: "touch-around",
+          description: "Write a skill file, then read the file named by $1",
+          program: {
+            runtime: "sh",
+            script: 'echo x > .agents/skills/echo-args/SKILL.md; wc -c < "$1"',
+          },
+        });
         expect(
-          yield* sdk(() => run.execute!({ name: "touch-around", args: [secret] })),
+          yield* callTool(tools, "run_skill", { name: "touch-around", args: [secret] }),
         ).toMatchObject({
           status: "failed",
           stderr: expect.stringMatching(

@@ -1,3 +1,4 @@
+import { Match } from "effect";
 import {
   BundleEvent,
   type BundleRun,
@@ -32,18 +33,14 @@ const clip = (text: string, limit: number) =>
 
 const shown = (text: BundleText) => (text.cut ? `${text.text} [잘림]` : text.text);
 
-const callOutcome = (ok: boolean | null | undefined) => {
-  switch (ok) {
-    case true:
-      return "ok";
-    case false:
-      return "FAILED";
-    case null:
-      return "?";
-    case undefined:
-      return "no result";
-  }
-};
+const callOutcome = (ok: boolean | null | undefined) =>
+  Match.value(ok).pipe(
+    Match.when(true, () => "ok"),
+    Match.when(false, () => "FAILED"),
+    Match.when(Match.null, () => "?"),
+    Match.when(Match.undefined, () => "no result"),
+    Match.exhaustive,
+  );
 
 const eventLine = BundleEvent.match({
   Message: (event) => `${event.role}: ${clip(event.text.text.replace(/\s+/g, " "), 120)}`,

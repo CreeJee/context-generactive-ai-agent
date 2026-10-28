@@ -1,15 +1,12 @@
-import { chatRoute } from "../support/chat-route.ts";
-import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
-import { Cause, Effect, FiberSet, FileSystem, Option, Result, Schedule, Schema } from "effect";
+import { Cause, Effect, FileSystem, Option, Result, Schedule, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { MemorySearch } from "../../src/memory/search.ts";
 import { Projects } from "../../src/projects/projects.ts";
-import { sessionHolderHeader } from "../../src/sessions/lease-state.ts";
 import { SessionNotFound, Sessions } from "../../src/sessions/sessions.ts";
-import { approvalToolDefinitions } from "../../src/tools/definitions.ts";
+import { openPage } from "../support/chat-client.ts";
 import { selectTestModel, turnGate } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 
@@ -92,26 +89,9 @@ testAgent({ testProvider: { delayedTurnGate: gate.waitFor } })("archived convers
       yield* agent.lease(session, "tab-a", "claim");
       expect((yield* archive("tab-b")).status).toBe(423);
 
-      // Tab A's page: requests run in fibers owned by the test.
-      const run = yield* FiberSet.makeRuntimePromise<AgentChat>();
-      const client = yield* Effect.acquireRelease(
-        Effect.sync(
-          () =>
-            new ChatClient({
-              threadId: session,
-              persistence: true,
-              tools: approvalToolDefinitions,
-              connection: fetchServerSentEvents(`http://127.0.0.1/api/chat?session=${session}`, {
-                headers: { [sessionHolderHeader]: "tab-a" },
-                fetchClient: (input, init) =>
-                  run(chatRoute(agent, new Request(input, init), session)),
-              }),
-            }),
-        ),
-        (client) => Effect.sync(() => client.dispose()),
-      );
-      client.attach();
-      void client.sendMessage("please be slow");
+      // Tab A's page sends a turn in a fiber the test owns.
+      const page = yield* openPage(session, "tab-a");
+      yield* Effect.forkChild(page.send("please be slow"), { startImmediately: true });
       const running = Effect.flatMap(agent.status(session, "tab-a"), (response) =>
         Effect.map(
           Effect.flatMap(json(response), Schema.decodeUnknownEffect(Running)),

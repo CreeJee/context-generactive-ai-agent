@@ -63,13 +63,13 @@ export function action({ request, params }: Route.ActionArgs) {
                 archived,
                 idempotencyKey ?? (yield* (yield* Crypto.Crypto).randomUUIDv4()),
               );
-              events.publishProject(session.projectId, "sessions");
+              yield* events.publishProject(session.projectId, "sessions");
               return result;
             }),
           Delete: ({ idempotencyKey }) =>
             Effect.gen(function* () {
               const result = yield* chat.deleteSession(params.session, holder, idempotencyKey);
-              events.publishProject(session.projectId, "sessions");
+              yield* events.publishProject(session.projectId, "sessions");
               return result;
             }),
           Phase: ({ phase }) =>

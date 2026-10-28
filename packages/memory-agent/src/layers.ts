@@ -1,17 +1,19 @@
-import { Function as EffectFunction, Schema } from "effect";
+import { type Crypto, Function as EffectFunction, Schema } from "effect";
+import type { ChildProcessSpawner } from "effect/process";
 import { nodePlatformLayer } from "./runtime/node-platform.ts";
 import { path } from "./runtime/synchronous-path.ts";
 const { join } = path;
 import { optionalProperty } from "./optional-property.ts";
 import { Effect, Layer } from "effect";
 import { ProviderUnavailable, type ProviderId } from "./providers/contracts.ts";
-import { AgentChat, GoalWorkerConfiguration, type GoalWorkerOptions } from "./agent/chat.ts";
+import { AgentChat } from "./agent/chat.ts";
 import { BtwChat } from "./btw/chat.ts";
 import { ProjectImprovement } from "./improve/discovery.ts";
 import { ApiUsage } from "./agent/api-usage.ts";
 import { TurnSummaries } from "./agent/turn-summaries.ts";
 import { ReportDiagnoser } from "./report/diagnosis.ts";
 import { ChatState } from "./chat-state/chat-state.ts";
+import { RunStore } from "./loop/store.ts";
 import { RelayedApprovals } from "./approvals/relayed.ts";
 import { Attachments } from "./attachments/attachments.ts";
 import { DrawingPreviews } from "./attachments/previews.ts";
@@ -79,6 +81,7 @@ import { ProviderRegistry } from "./providers/registry.ts";
 import { AccountSubscriptionProviderRegistry } from "./providers/subscriptions.ts";
 import { OAuthProfiles } from "./oauth/accounts.ts";
 import { OAuthAccountLogins } from "./oauth/account-login.ts";
+import { OAuthKeychain } from "./oauth/validation-harness.ts";
 import {
   ProviderToolCapabilityRegistry,
   providerToolDescriptors,
@@ -109,7 +112,6 @@ import { Boards } from "./workflow/board.ts";
 import { WorkflowExecution } from "./workflow/execution.ts";
 import { goalExecutionLayer } from "./workflow/goal-execution.ts";
 import { providerRetryLayer } from "./workflow/provider-retry.ts";
-import { OwnerReadRecovery } from "./agent/owner-read-recovery.ts";
 import { WorkflowTools } from "./workflow/tools.ts";
 import { WorkflowRules } from "./workflow/rules.ts";
 import { OpenAICompatibleSettings } from "./providers/openai-compatible.ts";
@@ -119,7 +121,6 @@ import {
 } from "./runtime/execution-admission.ts";
 
 export interface MemoryAgentLayerOptions {
-  readonly goalWorker?: GoalWorkerOptions;
   readonly executionAdmission?: ExecutionAdmissionLimits;
   readonly openDatabase?: Parameters<typeof Database.layer>[1];
   /** Isolated evaluation transport; production uses its endpoint-bound keyring. */
@@ -129,7 +130,11 @@ export interface MemoryAgentLayerOptions {
   /** Defaults to Kiwi (model downloaded on first use); tests pass a deterministic one. */
   readonly morphAnalyzer?: Layer.Layer<MorphAnalyzer, never, StorageRoot>;
   /** Provider-neutral registry override for tests. Production uses subscription providers. */
-  readonly providerRegistry?: Layer.Layer<ProviderRegistry, never, GlobalConfig>;
+  readonly providerRegistry?: Layer.Layer<
+    ProviderRegistry,
+    never,
+    GlobalConfig | OAuthKeychain | Crypto.Crypto | ChildProcessSpawner.ChildProcessSpawner
+  >;
   /** Provider Tool capability metadata override; it never executes tools or enforces policy. */
   readonly providerToolRegistry?: Layer.Layer<ProviderToolCapabilityRegistry>;
   /** Persisted model-dependent feature flag service override for tests. */
@@ -197,6 +202,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     Layer.provide(Layer.merge(ReportDelivery.layer(), SecretRedactor.layer)),
   );
   const foundation = OAuthProfiles.layer.pipe(
+    Layer.provideMerge(OAuthKeychain.keychain),
     Layer.provideMerge(defectReports),
     Layer.provideMerge(
       GlobalConfig.layer.pipe(
@@ -285,7 +291,6 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     WorkflowExecution.layer,
     goalExecutionLayer,
     providerRetryLayer,
-    OwnerReadRecovery.layer,
     WorkTraceStore.layer,
     OAuthAccountLogins.layer,
     SubscriptionQuota.layer.pipe(Layer.provide(SubscriptionUsage.layer)),
@@ -306,6 +311,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     Graph.layer,
     VectorIndex.layer,
     ChatState.layer,
+    RunStore.layer,
     // Above the stores: the webhook URL is read from the keychain right before each send.
     ReportDelivery.layer(),
     Kagi.layer(options.kagiBaseUrl === undefined ? {} : { baseUrl: options.kagiBaseUrl }),
@@ -382,7 +388,6 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     ),
   );
   return AgentChat.layer.pipe(
-    Layer.provide(Layer.succeed(GoalWorkerConfiguration, options.goalWorker ?? {})),
     Layer.provideMerge(kanbanRuntime),
     Layer.provideMerge(
       Layer.mergeAll(

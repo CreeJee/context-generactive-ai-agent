@@ -1,8 +1,8 @@
-import type { ChatMiddleware } from "@tanstack/ai";
 import { optionalProperty } from "../optional-property.ts";
-import { runNativeEffect } from "../runtime/native-effect.ts";
-import { Clock, Context, Effect, Function as EffectFunction, Layer, Schema } from "effect";
+import { Clock, Context, Effect, Function as EffectFunction, Layer, Option, Schema } from "effect";
+import type { Response } from "effect/ai";
 import { SqlClient, SqlSchema } from "effect/sql";
+import { asRunFailed, type RunHook } from "../loop/run.ts";
 import type { ProviderId } from "../providers/contracts.ts";
 
 export type ApiUsageProvider = ProviderId;
@@ -42,7 +42,10 @@ const CountRow = Schema.Struct({
   total_input_tokens: Schema.NullOr(Schema.Finite),
 });
 /** A usage record the ledger refuses: it would make the totals wrong or unattributed. */
-export class ApiUsageRejected extends Schema.TaggedError<ApiUsageRejected>()("ApiUsageRejected", {
+export class ApiUsageRejected extends Schema.TaggedError<
+  ApiUsageRejected,
+  { readonly brand: unique symbol }
+>()("ApiUsageRejected", {
   reason: Schema.Literals([
     "attribution-missing",
     "invalid-count",
@@ -152,40 +155,60 @@ const make = Effect.gen(function* () {
 
 type UsageLedger = Pick<Effect.Success<typeof make>, "record">;
 
+/** An Effect AI response: who it counts for, and the provider's counts. */
+type UsageResponse = Omit<
+  ApiUsageResponse,
+  "inputTokens" | "outputTokens" | "cacheReadTokens" | "cacheWriteTokens"
+> & { readonly usage: Response.Usage };
+
+/** An Effect AI response's counts as the ledger keeps them. */
+const usageRecord = ({
+  usage: { inputTokens, outputTokens },
+  ...response
+}: UsageResponse): ApiUsageResponse => ({
+  ...response,
+  // `total` is the whole input; an Anthropic row keeps only its uncached part.
+  inputTokens: Option.getOrNull(
+    Option.map(Option.fromNullishOr(inputTokens.total), (total) =>
+      response.provider === "anthropic"
+        ? total - (inputTokens.cacheRead ?? 0) - (inputTokens.cacheWrite ?? 0)
+        : total,
+    ),
+  ),
+  outputTokens: outputTokens.total ?? null,
+  ...optionalProperty("cacheReadTokens", inputTokens.cacheRead),
+  ...optionalProperty("cacheWriteTokens", inputTokens.cacheWrite),
+});
+
+/** Records an Effect AI response; one whose provider reported no counts leaves no row. */
+const recordUsageBody = (ledger: UsageLedger, response: UsageResponse) =>
+  Effect.when(
+    ledger.record(usageRecord(response)),
+    Effect.succeed(
+      response.usage.inputTokens.total !== undefined ||
+        response.usage.outputTokens.total !== undefined,
+    ),
+  );
+export const recordUsage: {
+  (response: UsageResponse): (ledger: UsageLedger) => ReturnType<typeof recordUsageBody>;
+} & typeof recordUsageBody = EffectFunction.dual(2, recordUsageBody);
+
 /** Counts-only provider response capture; never persist prompts, messages or tool arguments. */
-const collectApiUsageBody = (
+const apiUsageHookBody = (
   ledger: UsageLedger,
   source: Pick<ApiUsageResponse, "rootSessionId" | "purpose" | "provider" | "model">,
-): ChatMiddleware => ({
-  name: "memory-agent/api-usage",
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  onUsage(ctx, usage) {
-    const read = usage.promptTokensDetails?.cachedTokens;
-    const write = usage.promptTokensDetails?.cacheWriteTokens;
-    return runNativeEffect(
-      Effect.asVoid(
-        ledger.record({
-          ...source,
-          runId: ctx.runId,
-          threadId: ctx.threadId,
-          // `promptTokens` is the whole input; an Anthropic row keeps only its uncached part.
-          inputTokens:
-            source.provider === "anthropic"
-              ? usage.promptTokens - (read ?? 0) - (write ?? 0)
-              : usage.promptTokens,
-          outputTokens: usage.completionTokens,
-          ...optionalProperty("cacheReadTokens", read),
-          ...optionalProperty("cacheWriteTokens", write),
-        }),
-      ),
-    );
-  },
+): RunHook => ({
+  usage: ({ runId, threadId }, usage) =>
+    recordUsage(ledger, { ...source, runId, threadId, usage }).pipe(
+      Effect.asVoid,
+      Effect.mapError(asRunFailed),
+    ),
 });
-export const collectApiUsage: {
+export const apiUsageHook: {
   (
     source: Pick<ApiUsageResponse, "rootSessionId" | "purpose" | "provider" | "model">,
-  ): (ledger: UsageLedger) => ReturnType<typeof collectApiUsageBody>;
-} & typeof collectApiUsageBody = EffectFunction.dual(2, collectApiUsageBody);
+  ): (ledger: UsageLedger) => ReturnType<typeof apiUsageHookBody>;
+} & typeof apiUsageHookBody = EffectFunction.dual(2, apiUsageHookBody);
 
 export class ApiUsage extends Context.Service<ApiUsage, Effect.Success<typeof make>>()(
   "memory-agent/agent/api-usage/ApiUsage",

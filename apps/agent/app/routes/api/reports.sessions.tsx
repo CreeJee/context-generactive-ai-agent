@@ -27,7 +27,7 @@ export function action({ request }: Route.ActionArgs) {
         const result = yield* openReportSession(projectId, sourceSessionId);
         if (!(result !== null))
           return Response.json({ error: "report_source_not_found" }, { status: 404 });
-        (yield* AppEvents).publishProject(projectId, "sessions");
+        yield* (yield* AppEvents).publishProject(projectId, "sessions");
         return Response.json(result, { headers: { "Cache-Control": "no-store" } });
       }
     }),

@@ -1,9 +1,11 @@
 import {
+  Array as EffectArray,
   Context,
   Data,
   Effect,
   Function as EffectFunction,
   Layer,
+  Match,
   Option,
   Predicate,
   PubSub,
@@ -85,21 +87,31 @@ const assign = (
   held: ReadonlyMap<string, number>,
   free: number,
   limit: number,
-) => {
-  const given = new Map(held);
-  const assigned = new Map<string, string[]>();
-  let left = free;
-  for (const candidate of candidates) {
-    if (left <= 0) break;
-    const id = candidate.goal.goalInstanceId;
-    const cap = candidate.goal.mode === "sequential" ? 1 : limit;
-    const mine = given.get(id) ?? 0;
-    if (mine >= cap) continue;
-    given.set(id, mine + 1);
-    assigned.set(id, [...(assigned.get(id) ?? []), candidate.cardId]);
-    left -= 1;
-  }
-  return assigned;
+): ReadonlyMap<string, readonly string[]> => {
+  const slots = candidates.reduce<{
+    readonly left: number;
+    readonly given: ReadonlyMap<string, number>;
+    readonly taken: readonly Candidate[];
+  }>(
+    (slots, candidate) => {
+      const id = candidate.goal.goalInstanceId;
+      const mine = slots.given.get(id) ?? 0;
+      const cap = candidate.goal.mode === "sequential" ? 1 : limit;
+      return slots.left <= 0 || mine >= cap
+        ? slots
+        : {
+            left: slots.left - 1,
+            given: new Map(slots.given).set(id, mine + 1),
+            taken: [...slots.taken, candidate],
+          };
+    },
+    { left: free, given: held, taken: [] },
+  );
+  return new Map(
+    Object.entries(
+      EffectArray.groupBy(slots.taken, (candidate) => candidate.goal.goalInstanceId),
+    ).map(([id, taken]) => [id, taken.map((candidate) => candidate.cardId)]),
+  );
 };
 
 const make = Effect.gen(function* () {
@@ -121,12 +133,12 @@ const make = Effect.gen(function* () {
     const schedule = yield* schedules.get(goalInstanceId);
     if (Option.isNone(schedule)) return [];
     const edges = yield* schedules.edges(schedule.value.projectId);
-    const waiting: string[] = [];
-    for (const other of edges.get(goalInstanceId) ?? []) {
-      const found = yield* schedules.get(other);
-      if (Option.isSome(found) && !mergeReleases(found.value.merge)) waiting.push(other);
-    }
-    return waiting;
+    return yield* Effect.filter(edges.get(goalInstanceId) ?? [], (other) =>
+      Effect.map(
+        schedules.get(other),
+        Option.exists((found) => !mergeReleases(found.merge)),
+      ),
+    );
   });
 
   /** Wakes every board of the project, after something they wait on may have changed. */
@@ -182,32 +194,35 @@ const make = Effect.gen(function* () {
       const projectPlace = new Map(
         (yield* goalOrder.projects).map((projectId, index) => [projectId, index] as const),
       );
-      const goalPlace = new Map<string, number>();
-      for (const projectId of new Set(active.map((other) => other.projectId)))
-        (yield* goalOrder.goals(projectId)).forEach((sessionId, index) =>
-          goalPlace.set(`${projectId}:${sessionId}`, index),
-        );
-      const candidates: Candidate[] = [];
-      for (const other of active) {
-        // A Goal waiting for another Goal's merge takes no slots.
-        if ((yield* waitingOn(other.goalInstanceId)).length > 0) continue;
-        const wanted =
+      const goalPlace = new Map(
+        (yield* Effect.forEach(new Set(active.map((other) => other.projectId)), (projectId) =>
+          Effect.map(goalOrder.goals(projectId), (order) =>
+            order.map((sessionId, index) => [`${projectId}:${sessionId}`, index] as const),
+          ),
+        )).flat(),
+      );
+      // A Goal waiting for another Goal's merge takes no slots.
+      const ready = yield* Effect.filter(active, (other) =>
+        Effect.map(waitingOn(other.goalInstanceId), (waiting) => waiting.length === 0),
+      );
+      const candidates = (yield* Effect.forEach(ready, (other) =>
+        Effect.map(
           other.goalInstanceId === goal.goalInstanceId
-            ? planned
-            : yield* startable(other, known.get(other.goalInstanceId));
-        wanted.forEach((step, index) =>
-          candidates.push({
-            goal: other,
-            cardId: step.id,
-            key: [
-              projectPlace.get(other.projectId) ?? Number.POSITIVE_INFINITY,
-              goalPlace.get(`${other.projectId}:${other.sessionId}`) ?? Number.POSITIVE_INFINITY,
-              // A card left in progress continues before its Goal starts anything.
-              step.status === "in_progress" ? -1 : index,
-            ],
-          }),
-        );
-      }
+            ? Effect.succeed(planned)
+            : startable(other, known.get(other.goalInstanceId)),
+          (wanted) =>
+            wanted.map((step, index): Candidate => ({
+              goal: other,
+              cardId: step.id,
+              key: [
+                projectPlace.get(other.projectId) ?? Number.POSITIVE_INFINITY,
+                goalPlace.get(`${other.projectId}:${other.sessionId}`) ?? Number.POSITIVE_INFINITY,
+                // A card left in progress continues before its Goal starts anything.
+                step.status === "in_progress" ? -1 : index,
+              ],
+            })),
+        ),
+      )).flat();
       const total = [...held.values()].reduce((sum, count) => sum + count, 0);
       const assigned = assign(candidates.toSorted(byKey), held, limit - total, limit);
       const mine = new Set(assigned.get(goal.goalInstanceId) ?? []);
@@ -245,51 +260,70 @@ const make = Effect.gen(function* () {
         (other) =>
           other.goalInstanceId !== goal.goalInstanceId && other.projectRoot === goal.projectRoot,
       );
-      for (const other of others) {
-        const schedule = yield* schedules.get(other.goalInstanceId);
-        if (Option.exists(schedule, (found) => mergeReleases(found.merge))) continue;
-        if ((yield* workflows.goalInstanceId(other.sessionId)) !== other.goalInstanceId) continue;
-        const steps = (yield* workflows.get(other.sessionId)).plan?.steps ?? [];
-        for (const step of steps) {
-          const files = overlappingBoundaries(card, step);
-          if (files.length === 0) continue;
-          const otherCard = {
-            otherGoalInstanceId: other.goalInstanceId,
-            otherCardId: step.id,
-          };
-          switch (step.status) {
-            case "in_progress":
-            case "verify":
-              return CrossGoalOverlap.Running(otherCard);
-            case "done": {
-              const chosen = (yield* decisions.forCard(
-                goal.sessionId,
-                goal.goalInstanceId,
-                card.id,
-              )).flatMap((request) =>
-                Predicate.isTagged(request.kind, "FileOverlap") &&
-                request.kind.otherGoalInstanceId === other.goalInstanceId &&
-                Predicate.isTagged(request.state, "Answered") &&
-                Predicate.isTagged(request.state.answer, "FileOverlap")
-                  ? [request.state.answer.choice]
-                  : [],
-              )[0];
-              switch (chosen) {
-                case "proceed":
-                  continue;
-                case "wait":
-                  return CrossGoalOverlap.Waiting(otherCard);
-                case undefined:
-                  return CrossGoalOverlap.Unmerged({ ...otherCard, files });
-              }
-              break;
-            }
-            default:
-              continue;
-          }
-        }
-      }
-      return CrossGoalOverlap.None();
+      /** How the card meets one card of another Goal, when it does. */
+      const overlapWith = (
+        other: KanbanGoal,
+        step: PlanStep,
+      ): Effect.Effect<Option.Option<CrossGoalOverlap>, KanbanStorageFailed> => {
+        const files = overlappingBoundaries(card, step);
+        const otherCard = {
+          otherGoalInstanceId: other.goalInstanceId,
+          otherCardId: step.id,
+        };
+        return files.length === 0
+          ? Effect.succeedNone
+          : Match.value(step.status).pipe(
+              Match.when(Match.is("in_progress", "verify"), () =>
+                Effect.succeedSome(CrossGoalOverlap.Running(otherCard)),
+              ),
+              Match.when("done", () =>
+                Effect.map(
+                  decisions.forCard(goal.sessionId, goal.goalInstanceId, card.id),
+                  (requests) =>
+                    Option.match(
+                      EffectArray.findFirst(requests, (request) =>
+                        Predicate.isTagged(request.kind, "FileOverlap") &&
+                        request.kind.otherGoalInstanceId === other.goalInstanceId &&
+                        Predicate.isTagged(request.state, "Answered") &&
+                        Predicate.isTagged(request.state.answer, "FileOverlap")
+                          ? Option.some(request.state.answer.choice)
+                          : Option.none(),
+                      ),
+                      {
+                        onNone: () =>
+                          Option.some(CrossGoalOverlap.Unmerged({ ...otherCard, files })),
+                        // A person who chose to go ahead is not asked again.
+                        onSome: (choice) =>
+                          choice === "proceed"
+                            ? Option.none()
+                            : Option.some(CrossGoalOverlap.Waiting(otherCard)),
+                      },
+                    ),
+                ),
+              ),
+              Match.orElse(() => Effect.succeedNone),
+            );
+      };
+      /** The cards of a Goal that still counts: unmerged, and still the session's Goal. */
+      const cardsOf = (other: KanbanGoal) =>
+        Effect.gen(function* () {
+          const schedule = yield* schedules.get(other.goalInstanceId);
+          if (Option.exists(schedule, (found) => mergeReleases(found.merge))) return [];
+          if ((yield* workflows.goalInstanceId(other.sessionId)) !== other.goalInstanceId)
+            return [];
+          return (yield* workflows.get(other.sessionId)).plan?.steps ?? [];
+        });
+      // The first card that meets this one decides; the Goals and their cards are read in order.
+      const first = yield* Stream.fromIterable(others).pipe(
+        Stream.mapEffect((other) =>
+          Effect.map(cardsOf(other), (steps) => steps.map((step) => [other, step] as const)),
+        ),
+        Stream.flattenIterable,
+        Stream.mapEffect(([other, step]) => overlapWith(other, step)),
+        Stream.filter(Option.isSome),
+        Stream.runHead,
+      );
+      return Option.getOrElse(Option.flatten(first), () => CrossGoalOverlap.None());
     }),
 
     /**
@@ -303,12 +337,16 @@ const make = Effect.gen(function* () {
     ) {
       const key = `${goalInstanceId}/${cardId}~${other.otherGoalInstanceId}/${other.otherCardId}`;
       const known = yield* Ref.get(notices);
-      if (known.has(key)) return;
-      yield* Ref.set(
-        notices,
-        new Map(known).set(key, [goalInstanceId, other.otherGoalInstanceId] as const),
+      yield* Effect.when(
+        Effect.andThen(
+          Ref.set(
+            notices,
+            new Map(known).set(key, [goalInstanceId, other.otherGoalInstanceId] as const),
+          ),
+          poke(other.otherGoalInstanceId),
+        ),
+        Effect.succeed(!known.has(key)),
       );
-      yield* poke(other.otherGoalInstanceId);
     }),
 
     /** Drops the notices of cards of `goal` that waited; its next look records the current ones. */
@@ -355,7 +393,7 @@ const make = Effect.gen(function* () {
     ) {
       const saved = yield* schedules.setDependencies(goalInstanceId, dependsOn);
       const schedule = yield* schedules.get(goalInstanceId);
-      if (Option.isSome(schedule)) yield* pokeProject(schedule.value.projectId);
+      yield* Effect.transposeOption(Option.map(schedule, (found) => pokeProject(found.projectId)));
       return saved;
     }),
   };

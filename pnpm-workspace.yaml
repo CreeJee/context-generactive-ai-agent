@@ -10,15 +10,8 @@ catalog:
   "@huggingface/transformers": 4.3.1
   "@oxlint/plugins": 1.87.0
   "@react-router/fs-routes": ^8.4.0
-  "@standard-schema/spec": ^1.1.0
   "@streamdown/cjk": ^1.0.4
   "@streamdown/code": ^2.0.0
-  "@tanstack/ai": ^1.0.0
-  "@tanstack/ai-anthropic": 1.0.0
-  "@tanstack/ai-client": ^1.0.0
-  "@tanstack/ai-persistence": ^1.0.0
-  "@tanstack/ai-openai": ^1.0.0
-  "@tanstack/ai-react": 1.0.0
   "@types/node": ^26.6.5
   "@types/react": ^19.3.0
   "@types/react-dom": ^19.3.0
@@ -27,6 +20,8 @@ catalog:
   effect: https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7
   "@effect/vitest": https://pkg.pr.new/Effect-TS/effect/@effect/vitest@844a77b18c03b4faa386cf04bf94908d3d37abc7
   "@effect/platform-node-shared": https://pkg.pr.new/Effect-TS/effect/@effect/platform-node-shared@844a77b18c03b4faa386cf04bf94908d3d37abc7
+  "@effect/ai-openai-compat": https://pkg.pr.new/Effect-TS/effect/@effect/ai-openai-compat@844a77b18c03b4faa386cf04bf94908d3d37abc7
+  "@effect/atom-react": https://pkg.pr.new/Effect-TS/effect/@effect/atom-react@844a77b18c03b4faa386cf04bf94908d3d37abc7
   lucide-react: ^1.58.0
   react: ^19.3.0
   react-dom: ^19.3.0
@@ -40,7 +35,6 @@ catalog:
   "@modelcontextprotocol/client": ^2.3.1
   "@modelcontextprotocol/server": ^2.3.1
   "@napi-rs/keyring": 2.1.1
-  "@tanstack/ai-mcp": 1.0.0
   cmdk: ^1.1.1
   kiwi-nlp: 0.24.0
   cross-spawn: 7.0.6
@@ -52,7 +46,6 @@ catalog:
   "@shadcn/lint": ^0.2.1
   motion: ^14.3.0
   dayjs: ^1.11.23
-  "@tanstack/ai-compaction": ^1.0.0
   jotai: ^3.0.1
   nuqs: ^2.10.2
   "@tanstack/react-query": ^5.104.5
@@ -91,6 +84,9 @@ catalog:
   quickjs-emscripten-core: 0.32.0
   "@jitl/quickjs-singlefile-mjs-release-sync": 0.32.0
   sucrase: 3.35.1
+  # Checks tool call arguments against the JSON Schema the model was sent, as TanStack did with the
+  # same validator (packages/memory-agent/src/tools/input-repair.ts).
+  "@cfworker/json-schema": 4.1.1
 # Effect comes from pkg.pr.new URLs, and @effect/platform-node pulls them in as subdependencies.
 # pnpm has no per-package allowlist, so this stays off until Effect resolves from the registry.
 blockExoticSubdeps: false
@@ -127,7 +123,5 @@ minimumReleaseAgeExclude:
 patchedDependencies:
   "@effect/platform-node-shared@4.0.3": patches/@effect__platform-node-shared@4.0.3.patch
   "@effect/platform-node@4.0.3": patches/@effect__platform-node@4.0.3.patch
-  "@tanstack/ai@1.0.0": patches/@tanstack__ai@1.0.0.patch
-  "@tanstack/openai-base@1.0.0": patches/@tanstack__openai-base@1.0.0.patch
   effect@4.0.3: patches/effect@4.0.3.patch
   react-simplikit@0.3.3: patches/react-simplikit@0.3.3.patch

@@ -1,13 +1,13 @@
 import { layer } from "@effect/vitest";
-import { Cause, Data, Effect, Layer, Schema } from "effect";
+import { Data, Effect, Layer, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { Sessions } from "../../src/sessions/sessions.ts";
-import { isTruthy } from "../../src/truthy.ts";
+import type { JsonValue } from "../../src/json.ts";
 import { Admission, workflowRunBindings } from "../../src/workflow/run-bindings.ts";
 import { WorkflowTools } from "../../src/workflow/tools.ts";
 import { NewGoalSettlement, Workflows, type WorkflowState } from "../../src/workflow/workflow.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
-import { inRun } from "../support/run-span.ts";
+import { callTool } from "../support/run-tools.ts";
 import { sqlAll, sqlGet, sqlRun } from "../support/sql.ts";
 
 const goal = {
@@ -64,18 +64,18 @@ const rows = (table: keyof typeof sessionRows, session: string) =>
 /** Everything a new Goal must leave as it was: earlier revisions and every bound run's record. */
 const history = ["revisions", "bindings", "events", "dispatches", "receipts"] as const;
 const snapshot = (session: string) => Effect.forEach(history, (table) => rows(table, session));
-const expectHistoryKept = Effect.fnUntraced(function* (
-  session: string,
-  before: Effect.Success<ReturnType<typeof snapshot>>,
-) {
-  for (const [index, table] of history.entries()) {
-    const actual = yield* rows(table, session);
-    // A new Goal appends revisions; the ones before it stay untouched.
-    expect(table === "revisions" ? actual.slice(0, before[index]?.length) : actual).toEqual(
-      before[index],
-    );
-  }
-});
+const expectHistoryKept = (session: string, before: Effect.Success<ReturnType<typeof snapshot>>) =>
+  Effect.forEach(
+    history,
+    (table, index) =>
+      Effect.map(rows(table, session), (actual) =>
+        // A new Goal appends revisions; the ones before it stay untouched.
+        expect(table === "revisions" ? actual.slice(0, before[index]?.length) : actual).toEqual(
+          before[index],
+        ),
+      ),
+    { discard: true },
+  );
 
 const identity = (session: string) =>
   Effect.gen(function* () {
@@ -231,17 +231,10 @@ const transitionCases: ReadonlyArray<{
   })),
 ];
 
+/** The session's start_new_goal, called as the model would. */
 const goalTool = Effect.fnUntraced(function* (session: string) {
-  const tool = (yield* inRun((yield* WorkflowTools).forSession(session, "goal"))).find(
-    (t) => t.name === "start_new_goal",
-  );
-  if (!isTruthy(tool?.execute)) throw new Error("owner action missing");
-  const execute = tool.execute;
-  return (input: Parameters<typeof execute>[0]) =>
-    Effect.tryPromise({
-      try: () => Promise.resolve(execute(input)),
-      catch: (cause) => new Cause.UnknownError(cause),
-    });
+  const tools = (yield* WorkflowTools).toolsFor(session, "goal");
+  return (input: JsonValue) => callTool(tools, "start_new_goal", input);
 });
 
 testAgent()("explicit new Goal transition", (it) => {
@@ -307,12 +300,11 @@ testAgent()("explicit new Goal transition", (it) => {
       const { workflows, session, old } = yield* withHistory();
       const tools = yield* WorkflowTools;
       const exposed = (phase: WorkflowState["phase"]) =>
-        Effect.map(inRun(tools.forSession(session, phase)), (list) =>
-          list.some((tool) => tool.name === "start_new_goal"),
-        );
-      for (const phase of ["chat", "execute"] as const) expect(yield* exposed(phase)).toBe(false);
-      for (const phase of ["goal", "plan", "verify", "completed"] as const)
-        expect(yield* exposed(phase)).toBe(true);
+        tools.toolsFor(session, phase).some(({ tool }) => tool.name === "start_new_goal");
+      (["chat", "execute"] as const).forEach((phase) => expect(exposed(phase)).toBe(false));
+      (["goal", "plan", "verify", "completed"] as const).forEach((phase) =>
+        expect(exposed(phase)).toBe(true),
+      );
       const execute = yield* goalTool(session);
       yield* workflows.setPhase(session, "execute");
       expect(yield* execute(transition(old))).toMatchObject({
@@ -397,15 +389,20 @@ testAgent()("deferred new Goal request", (it) => {
     Effect.gen(function* () {
       const f = yield* withInvokingRun();
       const before = yield* rows("revisions", f.session);
-      for (const stale of ["stale", null])
-        expect(
-          yield* Effect.flip(
-            f.workflows.requestNewGoal(f.session, f.invoking, {
-              ...transition(f.old),
-              previousGoalInstanceId: stale,
-            }),
+      yield* Effect.forEach(
+        ["stale", null],
+        (stale) =>
+          Effect.map(
+            Effect.flip(
+              f.workflows.requestNewGoal(f.session, f.invoking, {
+                ...transition(f.old),
+                previousGoalInstanceId: stale,
+              }),
+            ),
+            (refused) => expect(refused).toMatchObject({ reason: "workflow_changed" }),
           ),
-        ).toMatchObject({ reason: "workflow_changed" });
+        { discard: true },
+      );
       expect(yield* rows("requests", f.session)).toEqual([]);
       const other = `${f.session}:other`;
       yield* startRun(f.session, other, "running");

@@ -16,10 +16,7 @@ import { useProjectScope } from "../events/context";
 import { useRelayedApprovalMutation } from "../queries/mutations/session";
 import { PendingApproval } from "./pending-approval";
 
-function toPending(
-  approval: RelayedApprovalView,
-  answer: (approved: boolean) => void,
-): PendingApproval {
+function toPending(approval: RelayedApprovalView): PendingApproval {
   return PendingApproval["permission-review"]({
     id: approval.id,
     toolCallId: approval.id,
@@ -27,7 +24,6 @@ function toPending(
     argumentsJson: approval.argumentsJson,
     reviewReason: approval.reason,
     askedBy: approval.askedBy === "review" ? "review" : "every_call",
-    answer,
   });
 }
 
@@ -83,8 +79,9 @@ export function SubagentPanel({
         <ApprovalCard
           key={approval.id}
           requester={requesterLabel(approval.requester)}
-          approval={toPending(approval, (approved) => answer(approval.id, approved))}
+          approval={toPending(approval)}
           disabled={readOnly}
+          onAnswer={(approved) => answer(approval.id, approved)}
         />
       ))}
     </div>

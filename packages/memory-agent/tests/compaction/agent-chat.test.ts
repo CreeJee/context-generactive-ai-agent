@@ -1,21 +1,17 @@
-import type { ModelMessage } from "@tanstack/ai";
-import { Effect, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { ApiUsage } from "../../src/agent/api-usage.ts";
 import { AgentChat } from "../../src/agent/chat.ts";
-import {
-  budgetFor,
-  compaction,
-  turnSummariesNamespace,
-  type Budget,
-} from "../../src/agent/compaction.ts";
+import { budgetFor, turnSummariesNamespace } from "../../src/agent/compaction.ts";
 import { TurnSummaries } from "../../src/agent/turn-summaries.ts";
-import { ChatState } from "../../src/chat-state/chat-state.ts";
+import { AgUiEvent } from "../../src/loop/chunks.ts";
+import { RunStore } from "../../src/loop/store.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
+import { runTurn } from "../support/chat-client.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
-import { call, conversation, firstSent, noLimit, sourcesOf } from "./fixtures.ts";
+import { call, conversation, nextRequest } from "./fixtures.ts";
 
 const stringifyJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
@@ -43,14 +39,7 @@ const decodeStatus = Schema.decodeUnknownEffect(
   }),
 );
 const decodeStoredSummaries = Schema.decodeUnknownEffect(
-  Schema.NullishOr(Schema.Struct({ blocks: Schema.Array(Schema.Unknown) })),
-);
-const StreamEvent = Schema.fromJsonString(
-  Schema.Struct({
-    type: Schema.String,
-    name: Schema.optional(Schema.String),
-    value: Schema.optional(Schema.Unknown),
-  }),
+  Schema.Struct({ blocks: Schema.Array(Schema.Unknown) }),
 );
 
 /** A fresh session in the shared agent, with the default test model selected. */
@@ -61,42 +50,15 @@ const freshSession = Effect.gen(function* () {
   return { projectId: project.id, sessionId: session.id };
 });
 
-/** Post one user message to AgentChat the way the page does, returning the SSE body. */
-const send = Effect.fnUntraced(function* (sessionId: string, runId: string, text: string) {
-  const response = yield* (yield* AgentChat).handle(
-    new Request("http://127.0.0.1/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: yield* stringifyJson({
-        threadId: sessionId,
-        runId: `${sessionId}:${runId}`,
-        messages: [{ id: `${sessionId}:${runId}-message`, role: "user", content: text }],
-        tools: [],
-        context: [],
-      }),
-    }),
-    sessionId,
-  );
-  expect(response.status).toBe(200);
-  return yield* call(() => response.text());
-});
+/** Sends one user turn as the page does, returning its run's events. */
+const send = (sessionId: string, runId: string, text: string) =>
+  runTurn(sessionId, `${sessionId}:${runId}`, text);
 
 const lastInvocation = Effect.map(TestEnv, ({ provider }) =>
   provider === undefined
     ? expect.unreachable("the block has a test provider")
-    : provider.adapter.invocations.at(-1)!.messages,
+    : provider.invocations.at(-1)!.history,
 );
-
-/** What the model is sent next, under automatic compaction alone. */
-const nextRequest = Effect.fnUntraced(function* (
-  messages: readonly ModelMessage[],
-  sessionId: string,
-  budget: Budget = { compactAt: noLimit, leaveOutAt: noLimit },
-) {
-  const { metadata } = (yield* ChatState).persistence.stores;
-  const sources = sourcesOf(yield* Nodes, sessionId);
-  return yield* firstSent(messages, compaction(metadata, sources, budget), sessionId);
-});
 
 /** A recorded conversation, saved as the session's thread. */
 const savedConversation = Effect.fnUntraced(function* (
@@ -104,8 +66,7 @@ const savedConversation = Effect.fnUntraced(function* (
   answers: readonly string[],
 ) {
   const recorded = yield* conversation(yield* Nodes, at, answers);
-  const { stores } = (yield* ChatState).persistence;
-  yield* call(() => stores.messages.saveThread(at.sessionId, recorded.messages));
+  yield* (yield* RunStore).saveThread(at.sessionId, recorded.messages);
   return recorded;
 });
 
@@ -123,15 +84,17 @@ testAgent({ testProvider: {} })("compaction through AgentChat", (it) => {
     () =>
       Effect.gen(function* () {
         const { sessionId } = yield* freshSession;
-        const { messages } = (yield* ChatState).persistence.stores;
-        expect(yield* send(sessionId, "before-switch", "빌드 결과를 검증해 줘")).not.toContain(
-          '"type":"RUN_ERROR"',
-        );
-        const before = yield* call(() => messages.loadThread(sessionId));
+        const { thread } = yield* RunStore;
+        expect(
+          (yield* send(sessionId, "before-switch", "빌드 결과를 검증해 줘")).find(
+            AgUiEvent.guards.RUN_ERROR,
+          ),
+        ).toBeUndefined();
+        const before = yield* thread(sessionId);
         yield* selectTestModel("deep-1", "medium");
-        expect(yield* send(sessionId, "after-switch", "이어서해줘")).not.toContain(
-          '"type":"RUN_ERROR"',
-        );
+        expect(
+          (yield* send(sessionId, "after-switch", "이어서해줘")).find(AgUiEvent.guards.RUN_ERROR),
+        ).toBeUndefined();
         const request = yield* lastInvocation;
         expect(request[0]?.content).toContain("The model changed in this conversation");
         expect(request).toContainEqual(
@@ -140,7 +103,7 @@ testAgent({ testProvider: {} })("compaction through AgentChat", (it) => {
         expect(request).toContainEqual(
           expect.objectContaining({ role: "user", content: "이어서해줘" }),
         );
-        const saved = yield* call(() => messages.loadThread(sessionId));
+        const saved = yield* thread(sessionId);
         expect(saved.slice(0, before.length)).toEqual(before);
         expect(saved.some((message) => message.content === request[0]?.content)).toBe(false);
         yield* send(sessionId, "same-new-model", "계속 검증해 줘");
@@ -196,8 +159,7 @@ testAgent({ testProvider: {} })("compaction through AgentChat", (it) => {
         expect(sent[1]).toEqual({ role: "user", content: "질문 5" });
         expect(yield* stringifyJson(sent)).not.toContain(toolResult.id);
         // The saved conversation still has everything.
-        const { stores } = (yield* ChatState).persistence;
-        const kept = yield* call(() => stores.messages.loadThread(at.sessionId));
+        const kept = yield* (yield* RunStore).thread(at.sessionId);
         expect(kept.find((message) => message.role === "tool")?.content).toBe(toolOutput);
       }),
   );
@@ -216,12 +178,9 @@ testAgent({ testProvider: {} })("compaction through AgentChat", (it) => {
         ]);
         // The pilot forces automatic catch-up before B's manual call: four older user turns
         // are already summarized and the two most recent user turns must stay raw.
-        const { metadata } = (yield* ChatState).persistence.stores;
-        yield* call(() =>
-          metadata.set(turnSummariesNamespace, at.sessionId, {
-            blocks: [{ end: 4, nextTurnNodeId: userNodes[4]!.id, text: "- 결정 보존" }],
-          }),
-        );
+        yield* (yield* RunStore).metadata.set(turnSummariesNamespace, at.sessionId, {
+          blocks: [{ end: 4, nextTurnNodeId: userNodes[4]!.id, text: "- 결정 보존" }],
+        });
         const before = yield* nextRequest(messages, at.sessionId, budgetFor(200_000));
         const result = yield* compactSession(at.sessionId, null);
         expect(result.status).toBe(200);
@@ -235,10 +194,14 @@ testAgent({ testProvider: {} })("compaction through AgentChat", (it) => {
       const at = yield* freshSession;
       yield* savedConversation(at, ["네", "네", "네", "네", "네"]);
       const summaries = yield* TurnSummaries;
-      const { metadata } = (yield* ChatState).persistence.stores;
-      const blocks = call(() => metadata.get(turnSummariesNamespace, at.sessionId)).pipe(
-        Effect.flatMap(decodeStoredSummaries),
-        Effect.map((stored) => stored?.blocks ?? []),
+      const { metadata } = yield* RunStore;
+      const blocks = metadata.get(turnSummariesNamespace, at.sessionId).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.succeed([]),
+            onSome: (stored) => Effect.map(decodeStoredSummaries(stored), (found) => found.blocks),
+          }),
+        ),
       );
 
       expect(yield* summaries.startPercent).toBe(25);
@@ -256,15 +219,16 @@ testAgent({ testProvider: {} })("compaction through AgentChat", (it) => {
 // The responder reports a cache hit only on the provider's first request, so it needs its own agent.
 testAgent({
   testProvider: {
-    responder: (invocation) => ({
-      text: "ok",
-      usage: {
-        promptTokens: 120,
-        completionTokens: 5,
-        totalTokens: 125,
-        promptTokensDetails: { cachedTokens: invocation.index === 0 ? 30 : 0 },
-      },
-    }),
+    responder: (invocation) => {
+      const cacheRead = invocation.index === 0 ? 30 : 0;
+      return {
+        text: "ok",
+        usage: {
+          inputTokens: { uncached: 120 - cacheRead, total: 120, cacheRead },
+          outputTokens: { total: 5 },
+        },
+      };
+    },
   },
 })("context usage reporting", (it) => {
   it.effect("reports prompt cache usage across consecutive requests and distinguishes zero", () =>
@@ -274,13 +238,7 @@ testAgent({
         const response = yield* (yield* AgentChat).status(sessionId, null);
         return (yield* decodeStatus(yield* call(() => response.json()))).context;
       });
-      const events = Effect.fnUntraced(function* (runId: string) {
-        const body = yield* send(sessionId, runId, "hello");
-        return yield* Effect.forEach(
-          body.split("\n").filter((line) => line.startsWith("data: ")),
-          (line) => Schema.decodeEffect(StreamEvent)(line.slice(6)),
-        );
-      });
+      const events = (runId: string) => send(sessionId, runId, "hello");
       expect(yield* status).toEqual({
         usedTokens: null,
         cachedTokens: null,
@@ -291,7 +249,7 @@ testAgent({
       });
       expect(
         (yield* events("run-1")).some(
-          (event) => event.type === "CUSTOM" && event.name === "memory-agent.context",
+          (event) => AgUiEvent.guards.CUSTOM(event) && event.name === "memory-agent.context",
         ),
       ).toBe(true);
       expect(yield* status).toMatchObject({

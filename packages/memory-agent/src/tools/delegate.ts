@@ -1,17 +1,12 @@
-import { randomUUID } from "../runtime/synchronous-crypto.ts";
-import { isTruthy } from "../truthy.ts";
-import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
-import { Context, Effect, Layer, Schema } from "effect";
-import type { SqlError } from "effect/sql";
+import { Context, Effect, Fiber, Layer, Match, Option, Schema } from "effect";
 import { RelayedApprovals } from "../approvals/relayed.ts";
 import { ApprovalRequester } from "../approvals/relayed-state.ts";
 import { ExternalAgents, ExternalPromptOutcome } from "../external-agents/agents.ts";
 import { AttemptFailureReason } from "../work-trace/contracts.ts";
 import { ExternalAgentFailureCode } from "../runtime/shown-failure.ts";
 import type { Project } from "../projects/projects.ts";
-import { onRun, runTrace, type RunTrace } from "../runtime/run-trace.ts";
-import { toToolSchema } from "./schema.ts";
-import { BackgroundTasks, backgroundOperation } from "./background.ts";
+import { BackgroundOperationFailed, BackgroundTasks } from "./background.ts";
+import { runTool, type RunTool } from "./run-tool.ts";
 
 export const delegateToolName = "delegate_to_agent";
 
@@ -79,6 +74,13 @@ const externalReport = ExternalPromptOutcome.$match({
   unavailable: ({ failure }) => ({ status: "unavailable", failure }),
 });
 
+const delegate = {
+  name: delegateToolName,
+  description:
+    "Dispatch a task to a trusted external ACP agent. Returns an inline report if it finishes within yieldMs (default 1000), otherwise a background receipt. Continue independent work and use get_background_result after completion. The project's approval policy applies.",
+  parameters: DelegateInput,
+} as const;
+
 export function delegateInstructions(agents: readonly string[]) {
   return `External coding agents are available through delegate_to_agent: ${agents.join(", ")}.
 - Each works in this project with its own tools and its own login. Its permission requests are relayed through the app. Dispatch follows the project's approval mode, including full mode without per-call approval.
@@ -90,43 +92,38 @@ export function delegateInstructions(agents: readonly string[]) {
 
 /** What delegation adds to a run. */
 export interface DelegateToolset {
-  readonly tools: AnyServerTool[];
+  readonly tools: RunTool[];
   readonly instructions: string | null;
+}
+
+/** The run a delegation belongs to. */
+export interface DelegateBinding {
+  readonly project: Project;
+  readonly sessionId: string;
+  /** Stops the run's background tasks. */
+  readonly signal: AbortSignal;
+  readonly runId: string;
 }
 
 const make = Effect.gen(function* () {
   const agents = yield* ExternalAgents;
   const relayed = yield* RelayedApprovals;
   const background = yield* BackgroundTasks;
-  const services = yield* Effect.context<never>();
 
-  const toolsFor = Effect.fn("DelegateTools.forRun")(function* (
-    caller: RunTrace,
-    project: Project,
-    sessionId: string,
-    signal: AbortSignal,
-    runId: string,
-  ): Effect.fn.Return<DelegateToolset, SqlError.SqlError | Schema.SchemaError> {
-    const available = yield* agents.available(project);
-    if (available.length === 0) return { tools: [], instructions: null };
-    const run = Effect.runPromiseWith(onRun(services, caller));
-    const delegate = toolDefinition({
-      name: delegateToolName,
-      description:
-        "Dispatch a task to a trusted external ACP agent. Returns an inline report if it finishes within yieldMs (default 1000), otherwise a background receipt. Continue independent work and use get_background_result after completion. The project's approval policy applies.",
-      inputSchema: toToolSchema(DelegateInput),
-    }).server(({ agent, task, yieldMs }, context) =>
-      run(
-        Effect.gen(function* () {
-          const receipt = yield* background.start(
-            { sessionId, runId, abortSignal: signal },
-            context?.toolCallId ?? randomUUID(),
-            "external_agent",
-            task,
-            backgroundOperation((runSignal) =>
-              agents.prompt(project, agent, sessionId, task, {
-                signal: runSignal,
-                askPermission: (request) =>
+  /** A delegation from the run `runId`, which `signal` stops. */
+  const delegateCall =
+    ({ project, sessionId, signal, runId }: DelegateBinding) =>
+    ({ agent, task, yieldMs }: typeof DelegateInput.Type, toolCallId: string) =>
+      Effect.gen(function* () {
+        const receipt = yield* background.start(
+          { sessionId, runId, abortSignal: signal },
+          toolCallId,
+          "external_agent",
+          task,
+          agents
+            .prompt(project, agent, sessionId, task, {
+              askPermission: (request, turnSignal) =>
+                Effect.flatMap(
                   relayed.ask(
                     sessionId,
                     runId,
@@ -137,10 +134,13 @@ const make = Effect.gen(function* () {
                       reason: "외부 에이전트가 권한을 요청했어요.",
                       askedBy: "agent",
                     },
-                    runSignal,
+                    turnSignal,
                   ),
-              }),
-            ).pipe(
+                  Fiber.join,
+                ),
+            })
+            .pipe(
+              Effect.mapError((cause) => BackgroundOperationFailed.make({ cause })),
               Effect.map((outcome) => ({
                 report: JSON.stringify({
                   agent,
@@ -150,29 +150,41 @@ const make = Effect.gen(function* () {
                 failure: externalFailure(outcome),
               })),
             ),
-          );
-          const saved = yield* background.waitResult(sessionId, receipt.taskId, yieldMs ?? 1000);
-          if (saved?.status === "completed")
-            return yield* Schema.decodeEffect(Schema.fromJsonString(ExternalResult))(saved.result);
-          if (isTruthy(saved)) return { taskId: receipt.taskId, ...saved };
-          return receipt;
-        }),
-      ),
-    );
-    return { tools: [delegate], instructions: delegateInstructions(available) };
-  });
+        );
+        const saved = yield* background.waitResult(sessionId, receipt.taskId, yieldMs ?? 1000);
+        return yield* Option.match(Option.fromNullishOr(saved), {
+          onNone: () => Effect.succeed(receipt),
+          onSome: (result) =>
+            Match.value(result).pipe(
+              Match.when({ status: "completed" }, ({ result: text }) =>
+                Schema.decodeEffect(Schema.fromJsonString(ExternalResult))(text),
+              ),
+              Match.orElse((running) => Effect.succeed({ taskId: receipt.taskId, ...running })),
+            ),
+        });
+      });
 
   return {
     /**
      * delegate_to_agent for a run, or nothing when no external agent is trusted in the project.
-     * The tool runs on the run's context, so its spans join the run's trace.
+     * The tool runs on the loop's fiber, so its spans join the run's trace.
      */
-    forRun: (
-      project: Project,
-      sessionId: string,
-      signal: AbortSignal,
-      runId: string = randomUUID(),
-    ) => Effect.flatMap(runTrace, (caller) => toolsFor(caller, project, sessionId, signal, runId)),
+    toolsFor: Effect.fn("DelegateTools.toolsFor")((binding: DelegateBinding) => {
+      const call = delegateCall(binding);
+      return Effect.map(agents.available(binding.project), (available): DelegateToolset =>
+        available.length === 0
+          ? { tools: [], instructions: null }
+          : {
+              tools: [
+                runTool({
+                  ...delegate,
+                  handler: (input, { toolCallId }) => call(input, toolCallId),
+                }),
+              ],
+              instructions: delegateInstructions(available),
+            },
+      );
+    }),
   };
 });
 

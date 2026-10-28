@@ -488,7 +488,7 @@ alone("reads Codex rollouts too, and queues migrated statements for interpretati
     const rendered = sessionMessages(yield* (yield* Nodes).session(session.id), () => []);
     expect(rendered).toHaveLength(1);
     expect(rendered[0]?.role).toBe("user");
-    expect(rendered[0]?.parts).toEqual([{ type: "text", content: "이어서" }]);
+    expect(rendered[0]?.content).toBe("이어서");
   }),
 );
 

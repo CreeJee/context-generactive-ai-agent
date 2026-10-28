@@ -1,10 +1,13 @@
 import { isTruthy } from "../truthy.ts";
 import {
+  Array as EffectArray,
   Clock,
   Context,
+  Crypto,
   Data,
   DateTime,
   Effect,
+  FileSystem,
   Function as EffectFunction,
   HashSet,
   Layer,
@@ -40,22 +43,22 @@ const codeSkillScript = (name: string, runtime: SkillRuntime) =>
   `${codeSkillDirectory(name)}/scripts/run.${runtime}`;
 const codeSkillDocument = (name: string) => `${codeSkillDirectory(name)}/SKILL.md`;
 
-export class CodeSkillRejected extends Schema.TaggedError<CodeSkillRejected>()(
-  "CodeSkillRejected",
-  {
-    reason: Schema.Literals([
-      "builtin_overlap",
-      "not_code_skill",
-      "network_line",
-      "input_line",
-      "input_schema",
-      "not_found",
-      "not_approved",
-      "ts_skill",
-    ]),
-    detail: Schema.String,
-  },
-) {
+export class CodeSkillRejected extends Schema.TaggedError<
+  CodeSkillRejected,
+  { readonly brand: unique symbol }
+>()("CodeSkillRejected", {
+  reason: Schema.Literals([
+    "builtin_overlap",
+    "not_code_skill",
+    "network_line",
+    "input_line",
+    "input_schema",
+    "not_found",
+    "not_approved",
+    "ts_skill",
+  ]),
+  detail: Schema.String,
+}) {
   override get message() {
     return `${this.reason}: ${this.detail}`;
   }
@@ -105,16 +108,14 @@ const leadingPrograms = (script: string) =>
     .filter((line) => line !== "" && !line.startsWith("#"))
     .flatMap((line) => line.split(/;|&&|\|\|/))
     .map((step) => (step.split("|")[0] ?? "").trim().split(/\s+/))
-    .map((words) => {
-      let index = 0;
-      while (
-        index < words.length &&
-        (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index] ?? "") ||
-          HashSet.has(prefixes, words[index] ?? ""))
-      )
-        index++;
-      return (words[index] ?? "").split("/").at(-1) ?? "";
-    })
+    .map(
+      (words) =>
+        EffectArray.dropWhile(
+          words,
+          (word) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(word) || HashSet.has(prefixes, word),
+        )[0] ?? "",
+    )
+    .map((program) => program.split("/").at(-1) ?? "")
     .filter((program) => program !== "" && !HashSet.has(setup, program));
 
 /** Refuses a script that only wraps what built-in tools do. */
@@ -346,6 +347,7 @@ export const SavedProgram = Data.taggedEnum<SavedProgram>();
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+  const platform = yield* Effect.context<FileSystem.FileSystem | Crypto.Crypto>();
   // The table keeps its name from when every saved skill was a shell script.
   const approved = (projectId: string, name: string, sha256: string) =>
     Effect.map(
@@ -486,7 +488,7 @@ const make = Effect.gen(function* () {
           }),
         }),
       );
-    }),
+    }, Effect.provideContext(platform)),
 
     /** The program to run: refused unless its current content is approved (or the project is `full`). */
     runnable: Effect.fn("CodeSkills.runnable")(function* (project: Project, name: string) {
@@ -501,7 +503,7 @@ const make = Effect.gen(function* () {
               detail: `${name}'s program changed since it was approved, or was never approved. Read it, then save it again with save_code_skill so the user can approve this content.`,
             }),
           );
-    }),
+    }, Effect.provideContext(platform)),
   };
 });
 

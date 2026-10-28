@@ -5,10 +5,10 @@ import { agent } from "~/.server/agent";
 import type { Route } from "./+types/attachments.$attachment";
 
 /** A stored image's file could not be read; the file system's text stays on the server. */
-class AttachmentUnreadable extends Schema.TaggedError<AttachmentUnreadable>()(
-  "AttachmentUnreadable",
-  {},
-) {}
+class AttachmentUnreadable extends Schema.TaggedError<
+  AttachmentUnreadable,
+  { readonly brand: unique symbol }
+>()("AttachmentUnreadable", {}) {}
 
 /**
  * GET /api/attachments/:attachment — a stored image. Other sites cannot embed it: images are
@@ -23,16 +23,14 @@ export function loader({ request, params }: Route.LoaderArgs) {
         return Response.json({ error: "cross_site_request" }, { status: 403 });
 
       const found = yield* Effect.flatMap(Attachments, (attachments) =>
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
         Effect.gen(function* () {
           const attachment = yield* attachments.get(params.attachment);
           return isTruthy(attachment)
             ? {
                 attachment,
-                bytes: yield* Effect.tryPromise({
-                  try: () => attachments.read(attachment),
-                  catch: () => AttachmentUnreadable.make({}),
-                }),
+                bytes: yield* attachments
+                  .read(attachment)
+                  .pipe(Effect.mapError(() => AttachmentUnreadable.make({}))),
               }
             : null;
         }),

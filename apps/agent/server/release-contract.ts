@@ -1,4 +1,4 @@
-import { Effect, Result, Function as EffectFunction } from "effect";
+import { Array as Arr, Effect, Option, Result, Function as EffectFunction } from "effect";
 import { Base64 } from "effect/encoding";
 import { isTruthy } from "../app/truthy.ts";
 import { Predicate, Schema } from "effect";
@@ -94,7 +94,10 @@ export const ReleaseRejectedReason = Schema.TaggedUnion({
 export type ReleaseRejectedReason = typeof ReleaseRejectedReason.Type;
 const rejected = ReleaseRejectedReason.cases;
 
-export class ReleaseRejected extends Schema.TaggedError<ReleaseRejected>()("ReleaseRejected", {
+export class ReleaseRejected extends Schema.TaggedError<
+  ReleaseRejected,
+  { readonly brand: unique symbol }
+>()("ReleaseRejected", {
   reason: ReleaseRejectedReason,
 }) {}
 
@@ -105,14 +108,17 @@ export const ReleaseSigningFailedReason = Schema.TaggedUnion({
 export type ReleaseSigningFailedReason = typeof ReleaseSigningFailedReason.Type;
 const signing = ReleaseSigningFailedReason.cases;
 
-export class ReleaseSigningFailed extends Schema.TaggedError<ReleaseSigningFailed>()(
-  "ReleaseSigningFailed",
-  { reason: ReleaseSigningFailedReason },
-) {}
+export class ReleaseSigningFailed extends Schema.TaggedError<
+  ReleaseSigningFailed,
+  { readonly brand: unique symbol }
+>()("ReleaseSigningFailed", { reason: ReleaseSigningFailedReason }) {}
 
 const ed25519 = { name: "Ed25519" } as const;
 
-class ReleaseKeyInvalid extends Schema.TaggedError<ReleaseKeyInvalid>()("ReleaseKeyInvalid", {
+class ReleaseKeyInvalid extends Schema.TaggedError<
+  ReleaseKeyInvalid,
+  { readonly brand: unique symbol }
+>()("ReleaseKeyInvalid", {
   cause: Schema.Defect(),
 }) {}
 
@@ -219,25 +225,34 @@ export const compareVersions: {
 function compareVersionsBody(left: string, right: string) {
   const a = parseVersion(left);
   const b = parseVersion(right);
-  for (let index = 0; index < a.core.length; index++) {
-    const compared = a.core[index]! - b.core[index]!;
-    if (compared !== 0) return Math.sign(compared);
-  }
+  const core = Arr.findFirst(a.core, (part, index) => {
+    const compared = part - b.core[index]!;
+    return compared === 0 ? Option.none() : Option.some(Math.sign(compared));
+  });
+  if (Option.isSome(core)) return core.value;
   if (a.prerelease.length === 0 || b.prerelease.length === 0)
     return a.prerelease.length === b.prerelease.length ? 0 : a.prerelease.length === 0 ? 1 : -1;
   const length = Math.max(a.prerelease.length, b.prerelease.length);
-  for (let index = 0; index < length; index++) {
-    const aa = a.prerelease[index];
-    const bb = b.prerelease[index];
-    if (aa === undefined || bb === undefined) return aa === bb ? 0 : aa === undefined ? -1 : 1;
-    if (aa === bb) continue;
-    const an = /^(0|[1-9]\d*)$/.test(aa) ? Number(aa) : null;
-    const bn = /^(0|[1-9]\d*)$/.test(bb) ? Number(bb) : null;
-    if (an !== null && bn !== null) return an < bn ? -1 : 1;
-    if (an !== null || bn !== null) return an !== null ? -1 : 1;
-    return aa < bb ? -1 : 1;
-  }
-  return 0;
+  return Option.getOrElse(
+    Arr.findFirst(Arr.makeBy(length, EffectFunction.identity), (index) =>
+      prereleaseIdentifierOrder(a.prerelease[index], b.prerelease[index]),
+    ),
+    () => 0,
+  );
+}
+
+/** The order two prerelease identifiers at one position give; none when they are equal. */
+function prereleaseIdentifierOrder(
+  aa: string | undefined,
+  bb: string | undefined,
+): Option.Option<number> {
+  if (aa === bb) return Option.none();
+  if (aa === undefined || bb === undefined) return Option.some(aa === undefined ? -1 : 1);
+  const an = /^(0|[1-9]\d*)$/.test(aa) ? Number(aa) : null;
+  const bn = /^(0|[1-9]\d*)$/.test(bb) ? Number(bb) : null;
+  if (an !== null && bn !== null) return Option.some(an < bn ? -1 : 1);
+  if (an !== null || bn !== null) return Option.some(an !== null ? -1 : 1);
+  return Option.some(aa < bb ? -1 : 1);
 }
 
 export const releaseAssetName: {

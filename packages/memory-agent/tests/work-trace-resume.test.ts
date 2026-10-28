@@ -77,7 +77,9 @@ const interruptedAttempt = Effect.fnUntraced(function* (
   });
   yield* trace.transitionAttempt(handle, "s1", "running", "attempt_started", "Started");
   yield* toolCall(trace, handle, "tool-complete", true);
-  for (const toolCallId of uncertain) yield* toolCall(trace, handle, toolCallId, false);
+  yield* Effect.forEach(uncertain, (toolCallId) => toolCall(trace, handle, toolCallId, false), {
+    discard: true,
+  });
   yield* trace.transitionAttempt(
     handle,
     "s1",

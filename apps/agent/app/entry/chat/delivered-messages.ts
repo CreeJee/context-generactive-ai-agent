@@ -1,16 +1,16 @@
 import { Function as EffectFunction } from "effect";
-import type { UIMessage } from "@tanstack/ai-react";
+import type { ChatMessage } from "memory-agent/chat-api";
 import { attachmentIdOf, type QueuedMessage } from "memory-agent/definitions";
 
 /** A delivered queue item is temporary UI only until its user turn appears in the transcript. */
 export const missingDeliveredMessages: {
   (
-    messages: readonly UIMessage[],
+    messages: readonly ChatMessage[],
   ): (items: readonly QueuedMessage[]) => ReturnType<typeof missingDeliveredMessagesBody>;
 } & typeof missingDeliveredMessagesBody = EffectFunction.dual(2, missingDeliveredMessagesBody);
 function missingDeliveredMessagesBody(
   items: readonly QueuedMessage[],
-  messages: readonly UIMessage[],
+  messages: readonly ChatMessage[],
 ): QueuedMessage[] {
   // Older turns were saved without the queue id. Reconcile those by their exact contents, but only
   // after an assistant turn: the initial user request must not consume an identical follow-up.

@@ -1,47 +1,39 @@
-import { Cause, DateTime, Effect, Option, Schema, Stream } from "effect";
+import {
+  Array as EffectArray,
+  Cause,
+  DateTime,
+  Effect,
+  Option,
+  Result,
+  Schema,
+  Stream,
+} from "effect";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
-import { runNativeEffect } from "../runtime/native-effect.ts";
-import { nativeStream } from "../runtime/native-stream.ts";
-import { isTruthy } from "../truthy.ts";
-import type { StreamChunk, StreamDurability } from "@tanstack/ai";
+import { AgUiEvent } from "../loop/chunks.ts";
+import { RunLogFailed, type RunLog, type RunLogEntry } from "../loop/run-log.ts";
 
 const namespace = "sdk-stream:v1:";
 const closedKey = `${namespace}closed`;
+/** How often a reader at the end of an open log looks for what was appended since. */
+const pollInterval = "20 millis";
 
-export class StreamDurabilityError extends Schema.TaggedError<StreamDurabilityError>()(
-  "StreamDurabilityError",
-  {
-    reason: Schema.Literals([
-      "binding_denied",
-      "invalid_offset",
-      "unknown_offset",
-      "closed",
-      "missing_chunk",
-      "run_mismatch",
-      "session_mismatch",
-      "storage",
-    ]),
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {}
-type Rejection = Exclude<StreamDurabilityError["reason"], "storage">;
+type Rejection = Exclude<RunLogFailed["reason"], "storage">;
 
-const rejected = (reason: Rejection) => StreamDurabilityError.make({ reason });
+const rejected = (reason: Rejection) => RunLogFailed.make({ reason });
 const stored = (cause: SqlError.SqlError | Schema.SchemaError | Cause.NoSuchElementError) =>
-  StreamDurabilityError.make({ reason: "storage", cause });
+  RunLogFailed.make({ reason: "storage", cause });
 
-const Entry = Schema.Struct({
-  cursor: Schema.Finite,
-  payload_json: Schema.fromJsonString(Schema.Unknown),
-});
+const Entry = Schema.Struct({ cursor: Schema.Finite, payload_json: Schema.String });
 const Cursor = Schema.Struct({ cursor: Schema.Finite });
+const encodeEvent = Schema.encodeEffect(Schema.fromJsonString(AgUiEvent));
+const decodeEvent = Schema.decodeResult(Schema.fromJsonString(AgUiEvent));
 
-/** Owner-only SDK delivery log. Receipt cursors are NOT SDK offsets: only this
+/** Owner-only delivery log. Receipt cursors are NOT log offsets: only this
  * namespace's persisted chunks mint resumable tokens. Authentication belongs to
- * the HTTP route; this adapter additionally checks the immutable session/run binding.
+ * the HTTP route; this log additionally checks the immutable session/run binding.
  * Use the central DB's SqlClient, never a worker-local database.
  */
-export const sqliteStreamDurability = Effect.fn("sqliteStreamDurability")(function* (input: {
+export const sqliteRunLog = Effect.fn("sqliteRunLog")(function* (input: {
   readonly sessionId: string;
   readonly runId: string;
   readonly resumeOffset?: string | null;
@@ -121,32 +113,31 @@ export const sqliteStreamDurability = Effect.fn("sqliteStreamDurability")(functi
               Effect.as(cursor),
             ),
         });
-  const entries = (after: number) =>
-    chunkRows(after).pipe(
-      Effect.mapError(stored),
-      Effect.map((rows) =>
-        rows.map((row) => ({
-          offset: token(row.cursor),
-          // SAFETY: this reserved namespace contains only SDK chunks written by append below.
-          chunk: row.payload_json as StreamChunk,
-        })),
+  /** What the log holds after `after`, and whether it is closed, read at one moment. */
+  const page = (after: number) =>
+    check.pipe(
+      Effect.andThen(Effect.all({ rows: Effect.mapError(chunkRows(after), stored), closed })),
+      sql.withTransaction,
+      Effect.catchTag("SqlError", (cause) => Effect.fail(stored(cause))),
+    );
+  // AG-UI message/tool/error events and the accepted marker have no runId.
+  // Reject explicit cross-run lifecycle events; otherwise the owner binding scopes them.
+  const named = (event: { readonly runId: string; readonly threadId: string }) =>
+    Effect.succeed(event).pipe(
+      Effect.filterOrFail(
+        (lifecycle) => lifecycle.runId === runId,
+        () => rejected("run_mismatch"),
+      ),
+      Effect.filterOrFail(
+        ({ threadId }) => threadId === sessionId,
+        () => rejected("session_mismatch"),
       ),
     );
-  // AG-UI message/tool events and SDK RUN_ACCEPTED have no runId.
-  // Reject explicit cross-run lifecycle events; otherwise the owner binding scopes them.
-  const payload = (chunk: StreamChunk | undefined) => {
-    if (!isTruthy(chunk)) return Effect.fail(rejected("missing_chunk"));
-    switch (chunk.type) {
-      case "RUN_STARTED":
-      case "RUN_FINISHED":
-      case "RUN_ERROR":
-        if (chunk.runId !== undefined && chunk.runId !== runId)
-          return Effect.fail(rejected("run_mismatch"));
-        if (chunk.threadId !== undefined && chunk.threadId !== sessionId)
-          return Effect.fail(rejected("session_mismatch"));
-    }
-    return Effect.succeed(JSON.stringify(chunk));
-  };
+  const payload = (event: AgUiEvent) =>
+    Effect.andThen(
+      AgUiEvent.isAnyOf(["RUN_STARTED", "RUN_FINISHED"])(event) ? named(event) : Effect.void,
+      Effect.mapError(encodeEvent(event), stored),
+    );
   const record = (event_key: string, kind: string, payload_json: string) =>
     insert({ event_key, kind, payload_json }).pipe(Effect.mapError(stored));
   yield* check;
@@ -154,102 +145,66 @@ export const sqliteStreamDurability = Effect.fn("sqliteStreamDurability")(functi
     onNone: () => Effect.void,
     onSome: parse,
   });
-  const durability: StreamDurability = {
-    resumeFrom: () => input.resumeOffset ?? null,
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    append: (chunks) =>
-      runNativeEffect(
-        Effect.gen(function* () {
-          yield* check;
-          if (yield* closed) return yield* rejected("closed");
-          // Validate every entry before any write, including sparse arrays.
-          const payloads = yield* Effect.forEach(
-            Array.from({ length: chunks.length }, (_, index) => chunks[index]),
-            payload,
-          );
-          return yield* Effect.forEach(payloads, (json) =>
-            lastCursor().pipe(
-              Effect.mapError(stored),
-              Effect.flatMap(({ cursor }) =>
-                record(`${namespace}chunk:${cursor + 1}`, "chunk", json),
+  const log: RunLog = {
+    append: (event) =>
+      Effect.gen(function* () {
+        yield* check;
+        if (yield* closed) return yield* rejected("closed");
+        const json = yield* payload(event);
+        const { cursor } = yield* Effect.mapError(lastCursor(), stored);
+        yield* record(`${namespace}chunk:${cursor + 1}`, "chunk", json);
+      }).pipe(
+        sql.withTransaction,
+        Effect.catchTag("SqlError", (cause) => Effect.fail(stored(cause))),
+      ),
+    close: check.pipe(
+      Effect.andThen(closed),
+      Effect.flatMap((done) =>
+        done
+          ? Effect.void
+          : record(closedKey, "run_completed", JSON.stringify({ deliveryClosed: true })),
+      ),
+      Effect.asVoid,
+      sql.withTransaction,
+      Effect.catchTag("SqlError", (cause) => Effect.fail(stored(cause))),
+    ),
+    // Entries written before the log held only AG-UI events, which no page reads, are left out.
+    read: (offset) =>
+      Stream.unwrap(
+        check.pipe(
+          Effect.andThen(parse(offset)),
+          Effect.map((start) =>
+            Stream.paginate(start, (after) =>
+              Effect.flatMap(page(after), ({ rows, closed: ended }) =>
+                Effect.as(
+                  Effect.when(
+                    Effect.sleep(pollInterval),
+                    Effect.succeed(rows.length === 0 && !ended),
+                  ),
+                  [
+                    rows,
+                    ended
+                      ? Option.none()
+                      : Option.some(
+                          Option.getOrElse(
+                            Option.map(EffectArray.last(rows), ({ cursor }) => cursor),
+                            () => after,
+                          ),
+                        ),
+                  ] as const,
+                ),
               ),
-              Effect.map(({ cursor }) => token(cursor)),
             ),
-          );
-        }).pipe(
-          sql.withTransaction,
-          Effect.catchTag("SqlError", (cause) => Effect.fail(stored(cause))),
-        ),
-      ),
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    snapshot: () =>
-      runNativeEffect(
-        check.pipe(
-          Effect.andThen(entries(0)),
-          sql.withTransaction,
-          Effect.catchTag("SqlError", (cause) => Effect.fail(stored(cause))),
-        ),
-      ),
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    close: () =>
-      runNativeEffect(
-        check.pipe(
-          Effect.andThen(closed),
-          Effect.flatMap((done) =>
-            done
-              ? Effect.void
-              : record(closedKey, "run_completed", JSON.stringify({ deliveryClosed: true })),
           ),
-          Effect.asVoid,
-          sql.withTransaction,
-          Effect.catchTag("SqlError", (cause) => Effect.fail(stored(cause))),
         ),
-      ),
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    read: (offset, signal) =>
-      nativeStream(
-        Stream.fromPull(
-          check.pipe(
-            Effect.andThen(parse(offset)),
-            Effect.map((initialCursor) => {
-              let cursor = initialCursor;
-              let pending: Effect.Success<ReturnType<typeof entries>> = [];
-              let ended = false;
-              return Effect.gen(function* () {
-                while (signal?.aborted !== true) {
-                  const entry = pending.shift();
-                  if (entry !== undefined) {
-                    cursor = yield* parse(entry.offset);
-                    return [entry] as const;
-                  }
-                  if (ended) return yield* Cause.done();
-                  const page = yield* check.pipe(
-                    Effect.andThen(Effect.all({ entries: entries(cursor), closed })),
-                    sql.withTransaction,
-                    Effect.catchTag("SqlError", (cause) => Effect.fail(stored(cause))),
-                  );
-                  pending = [...page.entries];
-                  ended = page.closed;
-                  if (pending.length > 0 || ended) continue;
-                  const pause = Effect.sleep("20 millis");
-                  if (signal === undefined) yield* pause;
-                  else
-                    yield* Effect.raceFirst(
-                      pause,
-                      Effect.callback<never, Cause.Done>((resume) => {
-                        const abort = () => resume(Cause.done());
-                        signal.addEventListener("abort", abort, { once: true });
-                        if (signal.aborted) abort();
-                        return Effect.sync(() => signal.removeEventListener("abort", abort));
-                      }),
-                    );
-                }
-                return yield* Cause.done();
-              });
-            }),
-          ),
+      ).pipe(
+        Stream.filterMap((row) =>
+          Result.map(decodeEvent(row.payload_json), (event): RunLogEntry => ({
+            offset: token(row.cursor),
+            event,
+          })),
         ),
       ),
   };
-  return durability;
+  return log;
 });

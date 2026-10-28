@@ -1,9 +1,22 @@
-import { Cause } from "effect";
-import { ProviderUnavailable, SubscriptionAccountProvider } from "../src/providers/contracts.ts";
-import { Clock, Context, Effect, FileSystem, Layer, Result, Schema, Stream } from "effect";
+import {
+  ProviderUnavailable,
+  SubscriptionAccountProvider,
+  type AgentModelRuntime,
+} from "../src/providers/contracts.ts";
+import {
+  Clock,
+  Context,
+  type Crypto,
+  Effect,
+  Exit,
+  FileSystem,
+  Layer,
+  Result,
+  Schema,
+  Scope,
+} from "effect";
+import type { ChildProcessSpawner } from "effect/process";
 import { SqlClient } from "effect/sql";
-import { EventType } from "@tanstack/ai";
-import { InternalLogger } from "@tanstack/ai/adapter-internals";
 import { it } from "@effect/vitest";
 import { expect } from "vite-plus/test";
 import { GlobalConfig } from "../src/config/global-config.ts";
@@ -20,34 +33,33 @@ import {
   createSubscriptionRuntime,
   createSubscriptionRuntimeImplementation,
 } from "../src/providers/subscription-runtime.ts";
-import { withTestPlatform } from "./support/platform.ts";
+import { withOAuthTestPlatform, withTestPlatform } from "./support/platform.ts";
 
-const logger = new InternalLogger(
-  { debug() {}, info() {}, warn() {}, error() {} },
-  {
-    request: false,
-    provider: false,
-    output: false,
-    middleware: false,
-    tools: false,
-    agentLoop: false,
-    config: false,
-    errors: false,
-    sandbox: false,
-  },
-);
 const selection = { provider: "openai", model: "gpt-5", reasoningEffort: "low" } as const;
+/** A run's model, pinned until `release` or the test's scope ends. */
+const pinned = Effect.fnUntraced(function* (runtime: AgentModelRuntime, runId: string) {
+  const scope = yield* Scope.make();
+  const release = Scope.close(scope, Exit.void);
+  yield* Effect.addFinalizer(() => release);
+  const { model } = yield* Scope.provide(
+    runtime.model(selection, { threadId: "thread", runId, cacheRetention: "none" }),
+    scope,
+  );
+  return { model, release };
+});
 const temporary = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   return yield* fs.makeTempDirectoryScoped({ prefix: "subscription-dependencies-" });
 }).pipe(withTestPlatform);
 
 it.live(
-  "native registry exports fresh account dependencies without selecting until adapter creation",
+  "native registry exports fresh account dependencies without selecting until a run's model is made",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const effectClock = yield* Clock.Clock;
+        const platform = yield* Effect.context<
+          Crypto.Crypto | ChildProcessSpawner.ChildProcessSpawner
+        >();
 
         const storage = yield* temporary;
         const database = yield* Layer.build(Database.layer(":memory:"));
@@ -62,47 +74,48 @@ it.live(
         );
         const requests: string[] = [];
         const created: string[] = [];
-        const clients = createAccountBoundSubscriptionClients({
+        const clients = yield* createAccountBoundSubscriptionClients({
           profiles,
           provider: "openai",
-          createClient: (id) => {
-            created.push(id!);
-            return createSubscriptionOAuthClient({
-              protocol: providerProtocols.openai,
-              store: {
-                read: () =>
-                  Promise.resolve({
-                    accessToken: id!,
-                    refreshToken: "fixture",
-                    expiresAt: effectClock.currentTimeMillisUnsafe() + 60_000,
-                  }),
-                write: () => Promise.reject(new Error("unexpected refresh")),
-                remove: () => Promise.reject(new Error("unexpected removal")),
-              },
-              fetch: (url, init) => {
-                requests.push(new Headers(init?.headers).get("authorization")!);
-                return Promise.resolve(
-                  (url instanceof Request ? url.url : url.toString()).includes("/models")
-                    ? Response.json({
-                        models: [{ slug: "gpt-5", context_window: id === "first" ? 111 : 222 }],
-                      })
-                    : new Response(
-                        'data: {"type":"response.output_text.delta","delta":"reply"}\n\ndata: {"type":"response.completed"}\n\n',
-                        { headers: { "content-type": "text/event-stream" } },
-                      ),
-                );
-              },
-            });
-          },
+          createClient: (id) =>
+            Effect.suspend(() => {
+              created.push(id!);
+              return createSubscriptionOAuthClient({
+                protocol: providerProtocols.openai,
+                store: {
+                  read: () =>
+                    Effect.map(Clock.currentTimeMillis, (now) => ({
+                      accessToken: id!,
+                      refreshToken: "fixture",
+                      expiresAt: now + 60_000,
+                    })),
+                  write: () => Effect.die("unexpected refresh"),
+                  remove: () => Effect.die("unexpected removal"),
+                },
+                fetch: (url, init) => {
+                  requests.push(new Headers(init?.headers).get("authorization")!);
+                  return Promise.resolve(
+                    (url instanceof Request ? url.url : url.toString()).includes("/models")
+                      ? Response.json({
+                          models: [{ slug: "gpt-5", context_window: id === "first" ? 111 : 222 }],
+                        })
+                      : new Response(
+                          'data: {"type":"response.output_text.delta","delta":"reply"}\n\ndata: {"type":"response.completed"}\n\n',
+                          { headers: { "content-type": "text/event-stream" } },
+                        ),
+                  );
+                },
+              }).pipe(Effect.provideContext(platform));
+            }),
           accounts: {
-            read: () => Promise.resolve(null),
-            write: () => Promise.reject(new Error("unexpected profile write")),
-            remove: () => Promise.reject(new Error("unexpected profile removal")),
+            read: () => Effect.succeed(null),
+            write: () => Effect.die("unexpected profile write"),
+            remove: () => Effect.die("unexpected profile removal"),
           },
         });
         const program = Effect.gen(function* () {
           const config = yield* GlobalConfig;
-          const provider = createSubscriptionProvider({
+          const provider = yield* createSubscriptionProvider({
             protocol: providerProtocols.openai,
             config,
             client: clients.client,
@@ -126,52 +139,38 @@ it.live(
             yield* provider.models.list;
             const oldRuntime = implementation.bind(dependencies);
             expect(oldRuntime.contextWindow("gpt-5")).toBe(111);
-            const first = oldRuntime.adapter(selection);
-            yield* Effect.addFinalizer(() => Effect.sync(() => first.releaseRun?.()));
+            const first = yield* pinned(oldRuntime, "run-0");
             yield* profiles.select("openai", "second", {
               read: () =>
-                Promise.resolve({ accessToken: "second", refreshToken: "fixture", expiresAt: 0 }),
-              write: () => Promise.reject(new Error("unexpected profile write")),
-              remove: () => Promise.reject(new Error("unexpected profile removal")),
+                Effect.succeed({ accessToken: "second", refreshToken: "fixture", expiresAt: 0 }),
+              write: () => Effect.die("unexpected profile write"),
+              remove: () => Effect.die("unexpected profile removal"),
             });
             expect(oldRuntime.contextWindowKnown?.("gpt-5")).toBe(false);
             yield* provider.models.list;
             const fresh = implementation.bind(yield* registry.subscriptionDependencies!("openai"));
             expect(fresh.contextWindow("gpt-5")).toBe(222);
-            const second = fresh.adapter(selection);
-            const legacy = compatibility.adapter(selection);
-            yield* Effect.addFinalizer(() =>
-              Effect.sync(() => {
-                second.releaseRun?.();
-                legacy.releaseRun?.();
-              }),
-            );
+            const second = yield* pinned(fresh, "run-1");
+            const legacy = yield* pinned(compatibility, "run-2");
             requests.length = 0;
-            for (const [index, adapter] of [first, second, legacy].entries()) {
-              const chunks = yield* Stream.runCollect(
-                Stream.fromAsyncIterable(
-                  adapter.chatStream({
-                    messages: [{ role: "user", content: "hello" }],
-                    model: selection.model,
-                    logger,
-                    runId: `run-${index}`,
-                    threadId: "thread",
-                  }),
-                  (cause) => new Cause.UnknownError(cause),
+            yield* Effect.forEach(
+              [first, second, legacy],
+              ({ model }) =>
+                Effect.map(model.generateText({ prompt: "hello" }), (reply) =>
+                  expect(reply.text).toBe("reply"),
                 ),
-              );
-              expect(chunks.some((chunk) => chunk.type === EventType.RUN_FINISHED)).toBe(true);
-            }
+              { discard: true },
+            );
             expect(requests).toEqual(["Bearer first", "Bearer second", "Bearer second"]);
             expect(created).toEqual(["first", "second"]);
-            expect(profiles.inUse("openai", "first")).toBe(true);
-            expect(profiles.inUse("openai", "second")).toBe(true);
-            first.releaseRun?.();
-            second.releaseRun?.();
-            expect(profiles.inUse("openai", "first")).toBe(false);
-            expect(profiles.inUse("openai", "second")).toBe(true);
-            legacy.releaseRun?.();
-            expect(profiles.inUse("openai", "second")).toBe(false);
+            expect(yield* profiles.inUse("openai", "first")).toBe(true);
+            expect(yield* profiles.inUse("openai", "second")).toBe(true);
+            yield* first.release;
+            yield* second.release;
+            expect(yield* profiles.inUse("openai", "first")).toBe(false);
+            expect(yield* profiles.inUse("openai", "second")).toBe(true);
+            yield* legacy.release;
+            expect(yield* profiles.inUse("openai", "second")).toBe(false);
             const missing = yield* Effect.result(registry.subscriptionDependencies!("anthropic"));
             expect(Result.isFailure(missing) && missing.failure).toEqual(
               ProviderUnavailable.make({ provider: "anthropic" }),
@@ -197,7 +196,7 @@ it.live(
           }, Effect.scoped),
         );
       }),
-    ),
+    ).pipe(withOAuthTestPlatform),
 );
 
 it.live(
@@ -208,12 +207,16 @@ it.live(
         const unavailable = Effect.gen(function* () {
           const registry = yield* ProviderRegistry;
           expect(registry.providers).toEqual([]);
-          for (const provider of ["openai", "anthropic"] as const) {
-            const missing = yield* Effect.result(registry.subscriptionDependencies!(provider));
-            expect(Result.isFailure(missing) && missing.failure).toEqual(
-              ProviderUnavailable.make({ provider }),
-            );
-          }
+          yield* Effect.forEach(
+            ["openai", "anthropic"] as const,
+            (provider) =>
+              Effect.map(Effect.result(registry.subscriptionDependencies!(provider)), (missing) =>
+                expect(Result.isFailure(missing) && missing.failure).toEqual(
+                  ProviderUnavailable.make({ provider }),
+                ),
+              ),
+            { discard: true },
+          );
         });
         // Test entry point owns this Layer and its resource scope.
         yield* unavailable.pipe(
@@ -225,16 +228,19 @@ it.live(
         const storage = yield* temporary;
         yield* Effect.gen(function* () {
           const registry = yield* ProviderRegistry;
-          for (const provider of registry.providers) {
-            if (!Schema.is(SubscriptionAccountProvider)(provider)) continue;
-            const dependencies = yield* registry.subscriptionDependencies!(provider);
-            const runtime = yield* registry.runtime(provider);
-            expect(
-              createSubscriptionRuntimeImplementation(provider)
-                .bind(dependencies)
-                .contextWindow("unknown"),
-            ).toBe(runtime.contextWindow("unknown"));
-          }
+          yield* Effect.forEach(
+            registry.providers.filter(Schema.is(SubscriptionAccountProvider)),
+            Effect.fnUntraced(function* (provider) {
+              const dependencies = yield* registry.subscriptionDependencies!(provider);
+              const runtime = yield* registry.runtime(provider);
+              expect(
+                createSubscriptionRuntimeImplementation(provider)
+                  .bind(dependencies)
+                  .contextWindow("unknown"),
+              ).toBe(runtime.contextWindow("unknown"));
+            }),
+            { discard: true },
+          );
         }).pipe(
           // Test entry point owns this Layer and its resource scope.
           Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
@@ -247,5 +253,5 @@ it.live(
           }, Effect.scoped),
         );
       }),
-    ),
+    ).pipe(withOAuthTestPlatform),
 );

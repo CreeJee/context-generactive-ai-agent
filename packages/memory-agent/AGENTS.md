@@ -5,5 +5,5 @@
 ## Used Libraries
 
 - Security: @secretlint/*
-- AI: @tanstack/ai-*
+- AI: Effect AI (`effect/ai`)
 - logic flow: effect

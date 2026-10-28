@@ -1,4 +1,4 @@
-import { Array as EffectArray, Effect, HashSet, Schema } from "effect";
+import { Array as EffectArray, Effect, HashSet, Match, Schema } from "effect";
 import { isChangeAuthority, scopedChain } from "./changes.ts";
 import { Graph, type Provenance } from "./graph.ts";
 import { Interpretations, type Interpretation } from "./interpretations.ts";
@@ -16,10 +16,10 @@ type ReadStage = typeof ReadStage.Type;
 
 const StorageRead = Schema.TaggedStruct("StorageRead", { stage: ReadStage });
 
-export class EvidenceReadFailed extends Schema.TaggedError<EvidenceReadFailed>()(
-  "EvidenceReadFailed",
-  { reason: StorageRead },
-) {}
+export class EvidenceReadFailed extends Schema.TaggedError<
+  EvidenceReadFailed,
+  { readonly brand: unique symbol }
+>()("EvidenceReadFailed", { reason: StorageRead }) {}
 
 /** Recorded changes describe evidence, not independently verified present-day truth. */
 type EvidenceAssessment =
@@ -91,20 +91,17 @@ const pendingChanges = Effect.fnUntraced(function* (chain: readonly Node[]) {
   );
   const changes = yield* storageRead(
     "pending_changes",
-    Effect.forEach(targeting, (entry): Effect.Effect<PendingChange[], NodeStoreFailed> => {
-      switch (entry.kind) {
-        case "about":
-        case "related":
-          return Effect.succeed([]);
-        case "corrects":
-        case "retracts": {
-          const relation = entry.kind;
-          return Effect.map(nodes.get(entry.nodeId), (source) => [
+    Effect.forEach(targeting, (entry): Effect.Effect<PendingChange[], NodeStoreFailed> =>
+      Match.value(entry.kind).pipe(
+        Match.whenOr("about", "related", () => Effect.succeed([])),
+        Match.whenOr("corrects", "retracts", (relation) =>
+          Effect.map(nodes.get(entry.nodeId), (source) => [
             { source, targetId: entry.targetId, relation, reason: entry.reason },
-          ]);
-        }
-      }
-    }),
+          ]),
+        ),
+        Match.exhaustive,
+      ),
+    ),
   );
   return changes.flat();
 });
@@ -173,12 +170,16 @@ function excerpt(node: Node) {
 }
 
 function assess(id: string, traced: boolean, changes: readonly Change[]): EvidenceAssessment {
-  if (!traced) return { kind: "untraced" };
-  if (changes.some((change) => change.status === "applied" && change.targetId === id))
-    return { kind: "recorded_change" };
-  if (changes.some((change) => change.status === "applied")) return { kind: "context_changed" };
-  if (changes.length > 0) return { kind: "unresolved" };
-  return { kind: "no_recorded_change" };
+  const applied = changes.filter((change) => change.status === "applied");
+  return !traced
+    ? { kind: "untraced" }
+    : applied.some((change) => change.targetId === id)
+      ? { kind: "recorded_change" }
+      : applied.length > 0
+        ? { kind: "context_changed" }
+        : changes.length > 0
+          ? { kind: "unresolved" }
+          : { kind: "no_recorded_change" };
 }
 
 function assemble(
@@ -276,7 +277,7 @@ export const readStructuredEvidence = Effect.fn("Memory.readStructuredEvidence")
       Effect.flatMap(Effect.fromNullishOr),
       Effect.filterOrFail((source) => HashSet.has(allowed, source.projectId)),
     );
-    const page = nodes.page(node, offset);
+    const page = yield* nodes.page(node, offset);
     // A visible source whose provenance cannot be traced is still evidence, reported as untraced.
     const { trace, chain } = yield* visibleTrace(id, allowed).pipe(
       Effect.catchTag("NoSuchElementError", () =>

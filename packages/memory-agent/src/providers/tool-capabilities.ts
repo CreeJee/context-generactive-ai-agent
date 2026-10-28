@@ -1,11 +1,7 @@
-import { ANTHROPIC_MODELS, type AnthropicChatModel } from "@tanstack/ai-anthropic";
-import * as AnthropicTools from "@tanstack/ai-anthropic/tools";
-import { OPENAI_CHAT_MODELS, type OpenAIChatModel } from "@tanstack/ai-openai";
-import * as OpenAITools from "@tanstack/ai-openai/tools";
 import {
   Array as EffectArray,
   Function as EffectFunction,
-  MutableHashMap,
+  HashMap,
   HashSet,
   Option,
   Context,
@@ -14,6 +10,18 @@ import {
   Schema,
 } from "effect";
 import { ProviderVendor } from "./contracts.ts";
+import {
+  ANTHROPIC_MODELS,
+  OPENAI_CHAT_MODELS,
+  type AnthropicChatModel,
+  type OpenAIChatModel,
+} from "./model-catalog.ts";
+import type {
+  AnthropicProviderToolKind,
+  OpenAIProviderToolKind,
+  ProviderToolId,
+  ProviderToolKind,
+} from "./provider-tool-id.ts";
 import {
   anthropicModelToolCapabilities,
   openAIModelToolCapabilities,
@@ -62,40 +70,6 @@ export type ProviderToolSandbox =
   | "isolated_desktop_required"
   | "workspace_required"
   | "principal_storage_required";
-export const OpenAIProviderToolKind = Schema.Literals([
-  "web_search",
-  "web_search_preview",
-  "file_search",
-  "image_generation",
-  "code_interpreter",
-  "mcp",
-  "computer_use",
-  "local_shell",
-  "shell",
-  "apply_patch",
-  "custom",
-]);
-export type OpenAIProviderToolKind = typeof OpenAIProviderToolKind.Type;
-export const AnthropicProviderToolKind = Schema.Literals([
-  "web_search",
-  "web_fetch",
-  "code_execution",
-  "computer_use",
-  "bash",
-  "text_editor",
-  "memory",
-]);
-export type AnthropicProviderToolKind = typeof AnthropicProviderToolKind.Type;
-export type ProviderToolKind = OpenAIProviderToolKind | AnthropicProviderToolKind;
-export const ProviderToolId = Schema.Union([
-  Schema.TemplateLiteral(["openai:", OpenAIProviderToolKind]),
-  Schema.TemplateLiteral(["anthropic:", AnthropicProviderToolKind]),
-]);
-export type ProviderToolId = typeof ProviderToolId.Type;
-
-export interface ProviderToolFactoryExtension<TFactory extends (...args: never[]) => object> {
-  readonly factory: TFactory;
-}
 export interface ProviderToolResultNormalizerMetadata {
   readonly strategy: "provider_native_preserve";
   readonly preservesUnknownParts: true;
@@ -104,7 +78,6 @@ export interface ProviderToolResultNormalizerMetadata {
 export interface ProviderToolDescriptor<
   TProvider extends ProviderToolVendor = ProviderToolVendor,
   TKind extends ProviderToolKind = ProviderToolKind,
-  TFactory extends (...args: never[]) => object = (...args: never[]) => object,
 > {
   readonly id: `${TProvider}:${TKind}`;
   readonly provider: TProvider;
@@ -118,12 +91,11 @@ export interface ProviderToolDescriptor<
   readonly sideEffect: ProviderToolSideEffect;
   readonly approval: ProviderToolApproval;
   readonly sandbox: readonly ProviderToolSandbox[];
-  readonly extension: ProviderToolFactoryExtension<TFactory>;
   readonly resultNormalizer: ProviderToolResultNormalizerMetadata;
 }
 export type AnyProviderToolDescriptor =
-  | ProviderToolDescriptor<"openai", OpenAIProviderToolKind, (...args: never[]) => object>
-  | ProviderToolDescriptor<"anthropic", AnthropicProviderToolKind, (...args: never[]) => object>;
+  | ProviderToolDescriptor<"openai", OpenAIProviderToolKind>
+  | ProviderToolDescriptor<"anthropic", AnthropicProviderToolKind>;
 
 const normalizer = Object.freeze({
   strategy: "provider_native_preserve",
@@ -133,13 +105,9 @@ const normalizer = Object.freeze({
 function descriptor<
   const TProvider extends ProviderToolVendor,
   const TKind extends ProviderToolKind,
-  TFactory extends (...args: never[]) => object,
 >(
-  value: Omit<
-    ProviderToolDescriptor<TProvider, TKind, TFactory>,
-    "id" | "modelSupport" | "resultNormalizer"
-  >,
-): ProviderToolDescriptor<TProvider, TKind, TFactory> {
+  value: Omit<ProviderToolDescriptor<TProvider, TKind>, "id" | "modelSupport" | "resultNormalizer">,
+): ProviderToolDescriptor<TProvider, TKind> {
   return Object.freeze({
     ...value,
     id: `${value.provider}:${value.kind}`,
@@ -147,7 +115,6 @@ function descriptor<
     auth: Object.freeze([...value.auth]),
     dataAccess: Object.freeze([...value.dataAccess]),
     sandbox: Object.freeze([...value.sandbox]),
-    extension: Object.freeze(value.extension),
     resultNormalizer: normalizer,
   });
 }
@@ -168,7 +135,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "external_read",
     approval: "run_optional",
     sandbox: hostedSandbox,
-    extension: { factory: OpenAITools.webSearchTool },
   }),
   descriptor({
     provider: "openai",
@@ -181,7 +147,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "external_read",
     approval: "run_optional",
     sandbox: hostedSandbox,
-    extension: { factory: OpenAITools.webSearchPreviewTool },
   }),
   descriptor({
     provider: "openai",
@@ -194,7 +159,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "external_read",
     approval: "run_optional",
     sandbox: hostedSandbox,
-    extension: { factory: OpenAITools.fileSearchTool },
   }),
   descriptor({
     provider: "openai",
@@ -207,7 +171,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "stateful_execution",
     approval: "run_optional",
     sandbox: hostedSandbox,
-    extension: { factory: OpenAITools.imageGenerationTool },
   }),
   descriptor({
     provider: "openai",
@@ -220,7 +183,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "stateful_execution",
     approval: "run_optional",
     sandbox: hostedSandbox,
-    extension: { factory: OpenAITools.codeInterpreterTool },
   }),
   descriptor({
     provider: "openai",
@@ -233,7 +195,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "write",
     approval: "provider_interrupt",
     sandbox: ["remote_trust_boundary"],
-    extension: { factory: OpenAITools.mcpTool },
   }),
   descriptor({
     provider: "openai",
@@ -246,7 +207,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "write",
     approval: "action_required",
     sandbox: ["isolated_desktop_required"],
-    extension: { factory: OpenAITools.computerUseTool },
   }),
   descriptor({
     provider: "openai",
@@ -259,7 +219,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "write",
     approval: "action_required",
     sandbox: isolatedCompute,
-    extension: { factory: OpenAITools.localShellTool },
   }),
   descriptor({
     provider: "openai",
@@ -272,7 +231,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "write",
     approval: "action_required",
     sandbox: isolatedCompute,
-    extension: { factory: OpenAITools.shellTool },
   }),
   descriptor({
     provider: "openai",
@@ -285,7 +243,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "write",
     approval: "action_required",
     sandbox: workspace,
-    extension: { factory: OpenAITools.applyPatchTool },
   }),
   descriptor({
     provider: "openai",
@@ -298,7 +255,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "write",
     approval: "action_required",
     sandbox: isolatedCompute,
-    extension: { factory: OpenAITools.customTool },
   }),
   descriptor({
     provider: "anthropic",
@@ -311,7 +267,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "external_read",
     approval: "run_optional",
     sandbox: hostedSandbox,
-    extension: { factory: AnthropicTools.webSearchTool },
   }),
   descriptor({
     provider: "anthropic",
@@ -324,7 +279,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "external_read",
     approval: "run_optional",
     sandbox: hostedSandbox,
-    extension: { factory: AnthropicTools.webFetchTool },
   }),
   descriptor({
     provider: "anthropic",
@@ -337,7 +291,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "stateful_execution",
     approval: "run_optional",
     sandbox: hostedSandbox,
-    extension: { factory: AnthropicTools.codeExecutionTool },
   }),
   descriptor({
     provider: "anthropic",
@@ -350,7 +303,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "write",
     approval: "action_required",
     sandbox: ["isolated_desktop_required"],
-    extension: { factory: AnthropicTools.computerUseTool },
   }),
   descriptor({
     provider: "anthropic",
@@ -363,7 +315,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "write",
     approval: "action_required",
     sandbox: isolatedCompute,
-    extension: { factory: AnthropicTools.bashTool },
   }),
   descriptor({
     provider: "anthropic",
@@ -376,7 +327,6 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "write",
     approval: "action_required",
     sandbox: workspace,
-    extension: { factory: AnthropicTools.textEditorTool },
   }),
   descriptor({
     provider: "anthropic",
@@ -389,18 +339,17 @@ export const providerToolDescriptors = Object.freeze([
     sideEffect: "write",
     approval: "action_required",
     sandbox: ["principal_storage_required"],
-    extension: { factory: AnthropicTools.memoryTool },
   }),
 ] as const);
 
-export class UnknownProviderTool extends Schema.TaggedError<UnknownProviderTool>()(
-  "UnknownProviderTool",
-  { id: Schema.String },
-) {}
-export class UnknownProviderToolModel extends Schema.TaggedError<UnknownProviderToolModel>()(
-  "UnknownProviderToolModel",
-  { provider: ProviderVendor, model: Schema.String },
-) {}
+export class UnknownProviderTool extends Schema.TaggedError<
+  UnknownProviderTool,
+  { readonly brand: unique symbol }
+>()("UnknownProviderTool", { id: Schema.String }) {}
+export class UnknownProviderToolModel extends Schema.TaggedError<
+  UnknownProviderToolModel,
+  { readonly brand: unique symbol }
+>()("UnknownProviderToolModel", { provider: ProviderVendor, model: Schema.String }) {}
 /** The descriptor or model tables contradict themselves; a programming error in the tables. */
 export const ProviderToolMetadataFailureReason = Schema.TaggedUnion({
   /** A descriptor id is not `<provider>:<kind>`. */
@@ -408,10 +357,10 @@ export const ProviderToolMetadataFailureReason = Schema.TaggedUnion({
   DuplicateTool: { id: Schema.String },
   DuplicateModel: { provider: ProviderVendor, model: Schema.String },
 });
-export class ProviderToolMetadataFailure extends Schema.TaggedError<ProviderToolMetadataFailure>()(
-  "ProviderToolMetadataFailure",
-  { reason: ProviderToolMetadataFailureReason },
-) {}
+export class ProviderToolMetadataFailure extends Schema.TaggedError<
+  ProviderToolMetadataFailure,
+  { readonly brand: unique symbol }
+>()("ProviderToolMetadataFailure", { reason: ProviderToolMetadataFailureReason }) {}
 export interface ProviderToolModelMetadata {
   readonly provider: ProviderToolVendor;
   readonly model: string;
@@ -495,61 +444,70 @@ function makeProviderToolCapabilityRegistryBody(
   descriptors: readonly AnyProviderToolDescriptor[] = providerToolDescriptors,
   models: readonly ProviderToolModelMetadata[] = installedModelMetadata(),
 ): Effect.Effect<ProviderToolCapabilityRegistryApi, ProviderToolMetadataFailure> {
+  const metadataFailure = (reason: typeof ProviderToolMetadataFailureReason.Type) =>
+    ProviderToolMetadataFailure.make({ reason });
   return Effect.gen(function* () {
-    const byId = MutableHashMap.empty<string, AnyProviderToolDescriptor>();
-    for (const entry of descriptors) {
-      if (entry.id !== `${entry.provider}:${entry.kind}`)
-        return yield* ProviderToolMetadataFailure.make({
-          reason: ProviderToolMetadataFailureReason.cases.InvalidId.make({ id: entry.id }),
-        });
-      if (MutableHashMap.has(byId, entry.id))
-        return yield* ProviderToolMetadataFailure.make({
-          reason: ProviderToolMetadataFailureReason.cases.DuplicateTool.make({ id: entry.id }),
-        });
-      MutableHashMap.set(byId, entry.id, entry);
-    }
-    const byModel = MutableHashMap.empty<string, HashSet.HashSet<string>>();
-    for (const model of models) {
-      const key = `${model.provider}:${model.model}`;
-      if (MutableHashMap.has(byModel, key))
-        return yield* ProviderToolMetadataFailure.make({
-          reason: ProviderToolMetadataFailureReason.cases.DuplicateModel.make({
-            provider: model.provider,
-            model: model.model,
-          }),
-        });
-      MutableHashMap.set(byModel, key, HashSet.fromIterable(model.tools));
-    }
+    const byId = yield* Effect.reduce(
+      descriptors,
+      () => HashMap.empty<string, AnyProviderToolDescriptor>(),
+      (known, entry) =>
+        Effect.succeed(entry).pipe(
+          Effect.filterOrFail(
+            ({ id, provider, kind }) => id === `${provider}:${kind}`,
+            ({ id }) =>
+              metadataFailure(ProviderToolMetadataFailureReason.cases.InvalidId.make({ id })),
+          ),
+          Effect.filterOrFail(
+            ({ id }) => !HashMap.has(known, id),
+            ({ id }) =>
+              metadataFailure(ProviderToolMetadataFailureReason.cases.DuplicateTool.make({ id })),
+          ),
+          Effect.map((valid) => HashMap.set(known, valid.id, valid)),
+        ),
+    );
+    const byModel = yield* Effect.reduce(
+      models,
+      () => HashMap.empty<string, HashSet.HashSet<string>>(),
+      (known, model) =>
+        Effect.succeed(`${model.provider}:${model.model}`).pipe(
+          Effect.filterOrFail(
+            (key) => !HashMap.has(known, key),
+            () =>
+              metadataFailure(
+                ProviderToolMetadataFailureReason.cases.DuplicateModel.make({
+                  provider: model.provider,
+                  model: model.model,
+                }),
+              ),
+          ),
+          Effect.map((key) => HashMap.set(known, key, HashSet.fromIterable(model.tools))),
+        ),
+    );
     const stableDescriptors = Object.freeze([...descriptors].toSorted(compareDescriptor));
     return {
       descriptors: stableDescriptors,
-      get: (id) => {
-        const found = Option.getOrUndefined(MutableHashMap.get(byId, id));
-        return found === undefined
-          ? Effect.fail(UnknownProviderTool.make({ id }))
-          : Effect.succeed(found);
-      },
+      get: (id) => Effect.fromOption(HashMap.get(byId, id), () => UnknownProviderTool.make({ id })),
       filter: (query) => filterProviderTools(stableDescriptors, query),
-      resolve: (query) => {
-        const supported = Option.getOrUndefined(
-          MutableHashMap.get(byModel, `${query.provider}:${query.model}`),
-        );
-        if (supported === undefined)
-          return Effect.fail(
+      resolve: (query) =>
+        Effect.map(
+          Effect.fromOption(HashMap.get(byModel, `${query.provider}:${query.model}`), () =>
             UnknownProviderToolModel.make({ provider: query.provider, model: query.model }),
-          );
-        const account =
-          query.accountToolKinds === undefined
-            ? null
-            : HashSet.fromIterable(query.accountToolKinds);
-        return Effect.succeed(
-          filterProviderTools(stableDescriptors, query).filter(
-            (entry) =>
-              HashSet.has(supported, entry.kind) &&
-              (account === null || HashSet.has(account, entry.kind)),
           ),
-        );
-      },
+          (supported) => {
+            const account = Option.map(
+              Option.fromNullishOr(query.accountToolKinds),
+              HashSet.fromIterable,
+            );
+            return filterProviderTools(stableDescriptors, query).filter(
+              (entry) =>
+                HashSet.has(supported, entry.kind) &&
+                Option.match(account, {
+                  onNone: () => true,
+                  onSome: (kinds) => HashSet.has(kinds, entry.kind),
+                }),
+            );
+          },
+        ),
     };
   });
 }

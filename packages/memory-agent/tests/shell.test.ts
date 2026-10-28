@@ -1,8 +1,13 @@
+import { layer } from "@effect/vitest";
+import { NodeServices } from "@effect/platform-node";
 import { Cause, Effect, Exit, Fiber, FileSystem, Path, Result, Schedule, Schema } from "effect";
-import { it } from "@effect/vitest";
-import { withTestPlatform } from "./support/platform.ts";
 import { describe, expect } from "vite-plus/test";
-import { commandEnvironment, runCommand, stopAllCommands } from "../src/shell/run.ts";
+import {
+  commandEnvironment,
+  CommandStartFailed,
+  runCommand,
+  stopAllCommands,
+} from "../src/shell/run.ts";
 import { resolveShellWorkingDirectory } from "../src/tools/approved.ts";
 
 const sdkCall = Effect.fn("shellTest.sdkCall")(function* <A>(operation: () => A | PromiseLike<A>) {
@@ -11,208 +16,212 @@ const sdkCall = Effect.fn("shellTest.sdkCall")(function* <A>(operation: () => A 
     catch: (cause) => new Cause.UnknownError(cause),
   });
 });
-const command = Effect.fn("shellTest.command")(function* (
-  text: string,
-  settings: Parameters<typeof runCommand>[1],
-) {
-  let running: ReturnType<typeof runCommand> | undefined;
-  // The Promise boundary receives Fiber cancellation, independently of the fixture Scope.
-  return yield* Effect.tryPromise({
-    try: (signal) => {
-      running = runCommand(text, {
-        ...settings,
-        signal: settings.signal === undefined ? signal : AbortSignal.any([signal, settings.signal]),
-      });
-      return running;
-    },
-    catch: (cause) => new Cause.UnknownError(cause),
-  }).pipe(
-    Effect.ensuring(
-      Effect.promise(() =>
-        running === undefined
-          ? Promise.resolve()
-          : running.then(
-              () => undefined,
-              () => undefined,
-            ),
-      ),
-    ),
-  );
-});
 const workdir = Effect.fn("shellTest.workdir")(function* () {
   const fs = yield* FileSystem.FileSystem;
   return yield* fs.realPath(yield* fs.makeTempDirectoryScoped({ prefix: "memory-agent-shell-" }));
 });
 
-const options = (
-  cwd: string,
-  env: NodeJS.ProcessEnv = { PATH: "/usr/bin:/bin", SHELL: "/bin/sh" },
-) => ({
+const env = { PATH: "/usr/bin:/bin", SHELL: "/bin/sh" };
+const options = (cwd: string, source: NodeJS.ProcessEnv = env) => ({
   cwd,
   timeoutSeconds: 10,
-  signal: undefined,
-  env,
+  env: source,
 });
 
-describe("runCommand", () => {
-  it.live("interrupting the owning Fiber waits for native command settlement", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const cwd = yield* workdir();
-      const running = yield* Effect.forkChild(
-        command("printf ready > started; sleep 30", options(cwd)),
-      );
-      yield* fs
-        .exists(path.join(cwd, "started"))
-        .pipe(
-          Effect.repeat({ while: (started) => !started, schedule: Schedule.spaced("20 millis") }),
-          Effect.timeout("1000 millis"),
-        );
-      yield* Fiber.interrupt(running);
-      expect(Exit.isFailure(yield* Fiber.await(running))).toBe(true);
-    }).pipe(withTestPlatform),
-  );
-
-  it.live("installs one exit listener across duplicate module evaluations", () =>
-    Effect.gen(function* () {
-      const listeners = process.listenerCount("exit");
-      yield* sdkCall(
-        () => import(new URL("../src/shell/run.ts?duplicate=1", import.meta.url).href),
-      );
-      yield* sdkCall(
-        () => import(new URL("../src/shell/run.ts?duplicate=2", import.meta.url).href),
-      );
-      expect(process.listenerCount("exit")).toBe(listeners);
-    }).pipe(withTestPlatform),
-  );
-
-  it.live("allows shell experiments below /tmp but not arbitrary absolute workdirs", () =>
-    Effect.gen(function* () {
-      const project = yield* workdir();
-      const storage = yield* workdir();
-      const scratch = yield* workdir();
-      const allowed = yield* resolveShellWorkingDirectory(project, storage, scratch).pipe(
-        Effect.result,
-      );
-      expect(Result.isSuccess(allowed)).toBe(true);
-      if (Result.isSuccess(allowed)) expect(allowed.success.absolute).toBe(scratch);
-      const refused = yield* resolveShellWorkingDirectory(project, storage, "/usr").pipe(
-        Effect.result,
-      );
-      expect(Result.isFailure(refused)).toBe(true);
-      if (Result.isFailure(refused)) expect(refused.failure.reason).toBe("invalid_path");
-    }).pipe(withTestPlatform),
-  );
-
-  it.live("reports output, exit code and the working directory", () =>
-    Effect.gen(function* () {
-      const cwd = yield* workdir();
-      const ok = yield* command("pwd; printf 'err' >&2", options(cwd));
-      expect(ok).toMatchObject({
-        status: "succeeded",
-        exitCode: 0,
-        stdout: `${cwd}\n`,
-        stderr: "err",
-        stdoutTruncated: false,
-      });
-      expect(yield* command("exit 3", options(cwd))).toMatchObject({
-        status: "failed",
-        exitCode: 3,
-      });
-    }).pipe(withTestPlatform),
-  );
-
-  it.live("keeps the start and end of long output", () =>
-    Effect.gen(function* () {
-      const result = yield* command(
-        "printf 'START'; head -c 200000 /dev/zero | tr '\\0' x; printf 'END'",
-        options(yield* workdir()),
-      );
-      expect(result.stdoutTruncated).toBe(true);
-      expect(result.stdout.startsWith("START")).toBe(true);
-      expect(result.stdout.endsWith("END")).toBe(true);
-      expect(result.stdout).toContain("bytes omitted");
-      expect(result.stdout.length).toBeLessThan(70_000);
-    }).pipe(withTestPlatform),
-  );
-
-  it.live("stops the whole process group on timeout and on cancellation", () => {
-    // Represent a native SDK caller explicitly cancelling its request.
-    const controller = new AbortController();
-    return Effect.gen(function* () {
-      const cwd = yield* workdir();
-      const timedOut = yield* command("sleep 30 & sleep 30; wait", {
-        ...options(cwd),
-        timeoutSeconds: 0.25,
-      });
-      expect(timedOut.status).toBe("timed_out");
-      expect(timedOut.durationMs).toBeLessThan(5_000);
-
-      yield* Effect.forkChild(
-        Effect.sleep("100 millis").pipe(Effect.andThen(Effect.sync(() => controller.abort()))),
-      );
-      yield* Effect.addFinalizer(() => Effect.sync(() => controller.abort()));
-      const cancelled = yield* command("sleep 30", { ...options(cwd), signal: controller.signal });
-      expect(cancelled.status).toBe("cancelled");
-    }).pipe(withTestPlatform);
-  });
-
-  it.live("cancels active commands during server shutdown", () =>
-    Effect.gen(function* () {
-      const running = yield* Effect.forkChild(command("sleep 30", options(yield* workdir())), {
-        startImmediately: true,
-      });
-      stopAllCommands();
-      expect(yield* Fiber.join(running)).toMatchObject({ status: "cancelled" });
-    }).pipe(withTestPlatform),
-  );
-
-  it.live(
-    "settles after timeout when a detached Node child keeps the output pipes open",
-    () =>
+layer(NodeServices.layer, { excludeTestServices: true })((it) => {
+  describe("runCommand", () => {
+    it.effect("interrupting a command drains its process group before returning", () =>
       Effect.gen(function* () {
-        const cwd = yield* workdir();
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const holdStdio = yield* path.fromFileUrl(
-          new URL("./support/hold-stdio.ts", import.meta.url),
+        const cwd = yield* fs.makeTempDirectoryScoped();
+        const running = yield* runCommand({
+          command: "echo $$ > child.pid; sleep 30",
+          cwd,
+          timeoutSeconds: 60,
+          env,
+        }).pipe(Effect.forkChild);
+        const recorded = yield* fs
+          .readFileString(path.join(cwd, "child.pid"))
+          .pipe(Effect.retry({ schedule: Schedule.spaced("10 millis"), times: 100 }));
+        const pid = yield* Schema.decodeEffect(
+          Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThan(0)),
+        )(recorded.trim());
+        yield* Fiber.interrupt(running);
+        expect(Exit.hasInterrupts(yield* Fiber.await(running))).toBe(true);
+        expect(() => process.kill(pid, 0)).toThrow();
+      }),
+    );
+
+    it.effect("native process startup failures use the typed error channel", () =>
+      Effect.gen(function* () {
+        const failure = yield* Effect.flip(
+          runCommand({
+            command: "true",
+            cwd: "/missing-context-agent-command-directory",
+            timeoutSeconds: 10,
+            env,
+          }),
         );
-        const pidFile = path.join(cwd, "detached.pid");
-        let pid: number | null = null;
-        try {
-          const result = yield* command(
-            (yield* Effect.forEach([process.execPath, holdStdio, pidFile], (part) =>
+        expect(failure).toBeInstanceOf(CommandStartFailed);
+        expect(Schema.is(CommandStartFailed.fields.reason)(failure.reason)).toBe(true);
+      }),
+    );
+
+    it.effect("defects in command preparation stay defects", () =>
+      Effect.gen(function* () {
+        const defect = new Error("invalid command environment implementation");
+        const broken = Object.defineProperty({}, "SHELL", {
+          get: () => {
+            throw defect;
+          },
+        });
+        const exit = yield* Effect.exit(
+          runCommand({ command: "true", cwd: "/tmp", timeoutSeconds: 10, env: broken }),
+        );
+        expect(Exit.hasDies(exit)).toBe(true);
+        if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBe(defect);
+      }),
+    );
+
+    it.effect("installs one exit listener across duplicate module evaluations", () =>
+      Effect.gen(function* () {
+        const listeners = process.listenerCount("exit");
+        yield* sdkCall(
+          () => import(new URL("../src/shell/run.ts?duplicate=1", import.meta.url).href),
+        );
+        yield* sdkCall(
+          () => import(new URL("../src/shell/run.ts?duplicate=2", import.meta.url).href),
+        );
+        expect(process.listenerCount("exit")).toBe(listeners);
+      }),
+    );
+
+    it.effect("allows shell experiments below /tmp but not arbitrary absolute workdirs", () =>
+      Effect.gen(function* () {
+        const project = yield* workdir();
+        const storage = yield* workdir();
+        const scratch = yield* workdir();
+        const allowed = yield* resolveShellWorkingDirectory(project, storage, scratch).pipe(
+          Effect.result,
+        );
+        expect(Result.isSuccess(allowed)).toBe(true);
+        if (Result.isSuccess(allowed)) expect(allowed.success.absolute).toBe(scratch);
+        const refused = yield* resolveShellWorkingDirectory(project, storage, "/usr").pipe(
+          Effect.result,
+        );
+        expect(Result.isFailure(refused)).toBe(true);
+        if (Result.isFailure(refused)) expect(refused.failure.reason).toBe("invalid_path");
+      }),
+    );
+
+    it.effect("reports output, exit code and the working directory", () =>
+      Effect.gen(function* () {
+        const cwd = yield* workdir();
+        const ok = yield* runCommand({ ...options(cwd), command: "pwd; printf 'err' >&2" });
+        expect(ok).toMatchObject({
+          status: "succeeded",
+          exitCode: 0,
+          stdout: `${cwd}\n`,
+          stderr: "err",
+          stdoutTruncated: false,
+        });
+        expect(yield* runCommand({ ...options(cwd), command: "exit 3" })).toMatchObject({
+          status: "failed",
+          exitCode: 3,
+        });
+      }),
+    );
+
+    it.effect("keeps the start and end of long output", () =>
+      Effect.gen(function* () {
+        const result = yield* runCommand({
+          ...options(yield* workdir()),
+          command: "printf 'START'; head -c 200000 /dev/zero | tr '\\0' x; printf 'END'",
+        });
+        expect(result.stdoutTruncated).toBe(true);
+        expect(result.stdout.startsWith("START")).toBe(true);
+        expect(result.stdout.endsWith("END")).toBe(true);
+        expect(result.stdout).toContain("bytes omitted");
+        expect(result.stdout.length).toBeLessThan(70_000);
+      }),
+    );
+
+    it.effect("stops the whole process group on timeout", () =>
+      Effect.gen(function* () {
+        const timedOut = yield* runCommand({
+          ...options(yield* workdir()),
+          command: "sleep 30 & sleep 30; wait",
+          timeoutSeconds: 0.25,
+        });
+        expect(timedOut.status).toBe("timed_out");
+        expect(timedOut.durationMs).toBeLessThan(5_000);
+      }),
+    );
+
+    it.effect("cancels active commands during server shutdown", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* workdir();
+        const running = yield* Effect.forkChild(
+          runCommand({ ...options(cwd), command: "printf ready > started; sleep 30" }),
+        );
+        yield* fs
+          .exists(path.join(cwd, "started"))
+          .pipe(
+            Effect.repeat({ while: (started) => !started, schedule: Schedule.spaced("20 millis") }),
+            Effect.timeout("1000 millis"),
+          );
+        stopAllCommands();
+        expect(yield* Fiber.join(running)).toMatchObject({ status: "cancelled" });
+      }),
+    );
+
+    it.effect(
+      "settles after timeout when a detached Node child keeps the output pipes open",
+      () =>
+        Effect.gen(function* () {
+          const cwd = yield* workdir();
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const holdStdio = yield* path.fromFileUrl(
+            new URL("./support/hold-stdio.ts", import.meta.url),
+          );
+          const pidFile = path.join(cwd, "detached.pid");
+          // Kills the detached child once the test ends, if it lived long enough to write its pid.
+          yield* Effect.addFinalizer(() =>
+            fs.readFileString(pidFile).pipe(
+              Effect.flatMap((pid) => Effect.try(() => process.kill(Number(pid), "SIGKILL"))),
+              Effect.ignore,
+            ),
+          );
+          const result = yield* runCommand({
+            ...options(cwd),
+            command: (yield* Effect.forEach([process.execPath, holdStdio, pidFile], (part) =>
               Schema.encodeEffect(Schema.fromJsonString(Schema.String))(part),
             )).join(" "),
-            { ...options(cwd), timeoutSeconds: 1.5 },
-          );
-          pid = Number(yield* fs.readFileString(pidFile));
+            timeoutSeconds: 1.5,
+          });
           expect(result.status).toBe("timed_out");
           expect(result.durationMs).toBeLessThan(4_500);
-        } finally {
-          if (pid !== null) {
-            const stoppedPid = pid;
-            yield* Effect.try(() => process.kill(stoppedPid, "SIGKILL")).pipe(Effect.ignore);
-          }
-        }
-      }).pipe(withTestPlatform),
-    8_000,
-  );
+        }),
+      8_000,
+    );
 
-  it.live("does not pass secret-looking variables to commands", () =>
-    Effect.gen(function* () {
-      const env = {
-        PATH: "/usr/bin:/bin",
-        SHELL: "/bin/sh",
-        GITHUB_TOKEN: "ghp_secret",
-        OPENAI_API_KEY: "sk-secret",
-        PLAIN_SETTING: "visible",
-      };
-      expect(Object.keys(commandEnvironment(env))).not.toContain("GITHUB_TOKEN");
-      const result = yield* command("env", options(yield* workdir(), env));
-      expect(result.stdout).toContain("PLAIN_SETTING=visible");
-      expect(result.stdout).not.toContain("secret");
-    }).pipe(withTestPlatform),
-  );
+    it.effect("does not pass secret-looking variables to commands", () =>
+      Effect.gen(function* () {
+        const secrets = {
+          ...env,
+          GITHUB_TOKEN: "ghp_secret",
+          OPENAI_API_KEY: "sk-secret",
+          PLAIN_SETTING: "visible",
+        };
+        expect(Object.keys(commandEnvironment(secrets))).not.toContain("GITHUB_TOKEN");
+        const result = yield* runCommand({ ...options(yield* workdir(), secrets), command: "env" });
+        expect(result.stdout).toContain("PLAIN_SETTING=visible");
+        expect(result.stdout).not.toContain("secret");
+      }),
+    );
+  });
 });

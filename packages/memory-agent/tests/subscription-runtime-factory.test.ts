@@ -1,63 +1,43 @@
-import { Cause } from "effect";
 import { it } from "@effect/vitest";
-import { MutableHashMap, DateTime, Effect, Stream } from "effect";
-import { EventType, type TextOptions } from "@tanstack/ai";
-import { InternalLogger } from "@tanstack/ai/adapter-internals";
+import { MutableHashMap, MutableRef, DateTime, Effect, Exit, Scope } from "effect";
 import { expect } from "vite-plus/test";
-import { sdkCancellation } from "./support/sdk-cancellation.ts";
 import { createSubscriptionOAuthClient } from "../src/oauth/subscription-oauth.ts";
+import { withOAuthTestPlatform } from "./support/platform.ts";
 import { providerProtocols } from "../src/oauth/protocol.ts";
-import { SubscriptionTextAdapter } from "../src/providers/subscription-adapter.ts";
+import { ModelUnavailable, type ModelRun } from "../src/providers/contracts.ts";
 import { createSubscriptionRuntimeImplementation } from "../src/providers/subscription-runtime.ts";
 
-const logger = new InternalLogger(
-  { debug() {}, info() {}, warn() {}, error() {} },
-  {
-    request: false,
-    provider: false,
-    output: false,
-    middleware: false,
-    tools: false,
-    agentLoop: false,
-    config: false,
-    errors: false,
-    sandbox: false,
-  },
-);
-
 const selection = { provider: "openai", model: "gpt-5", reasoningEffort: "low" } as const;
+const runOf = (index: number): ModelRun => ({
+  threadId: `thread-${index}`,
+  runId: `run-${index}`,
+  cacheRetention: "none",
+});
 
 it.effect("retained native implementation binds fresh central clients and pins each run", () =>
   Effect.gen(function* () {
     const run = Effect.runPromiseWith(yield* Effect.context());
     const implementation = createSubscriptionRuntimeImplementation("openai");
     const routes = MutableHashMap.empty<string, string>();
-    const requests: {
-      auth: string | null;
-      body: string;
-      signal: AbortSignal | null | undefined;
-    }[] = [];
+    const requests: { auth: string | null; body: string }[] = [];
     const released: string[] = [];
-    let credentialReads = 0;
+    const credentialReads = MutableRef.make(0);
     const nativeClient = (account: string) =>
       createSubscriptionOAuthClient({
         protocol: providerProtocols.openai,
         store: {
-          read() {
-            credentialReads++;
-            return Promise.resolve({
-              accessToken: account,
-              refreshToken: "controlled-refresh",
-              accountId: account,
-              expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 60_000,
-            });
-          },
-          write() {
-            return Promise.reject(new Error("unexpected credential refresh"));
-          },
-          remove() {
-            return Promise.reject(new Error("unexpected credential removal"));
-          },
+          read: () =>
+            Effect.sync(() => {
+              MutableRef.increment(credentialReads);
+              return {
+                accessToken: account,
+                refreshToken: "controlled-refresh",
+                accountId: account,
+                expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 60_000,
+              };
+            }),
+          write: () => Effect.die("unexpected credential refresh"),
+          remove: () => Effect.die("unexpected credential removal"),
         },
         fetch: (_url, init) =>
           run(
@@ -65,7 +45,6 @@ it.effect("retained native implementation binds fresh central clients and pins e
               requests.push({
                 auth: new Headers(init?.headers).get("authorization"),
                 body: yield* Effect.promise(() => new Response(init?.body).text()),
-                signal: init?.signal,
               });
               return new Response(
                 'data: {"type":"response.output_text.delta","delta":"native reply"}\n\ndata: {"type":"response.completed"}\n\n',
@@ -76,85 +55,76 @@ it.effect("retained native implementation binds fresh central clients and pins e
             }),
           ),
       });
-    const centralClients = { first: nativeClient("first"), second: nativeClient("second") };
-    let selected: keyof typeof centralClients = "first";
-    let acquisitions = 0;
+    const centralClients = {
+      first: yield* nativeClient("first"),
+      second: yield* nativeClient("second"),
+    };
+    const selected = MutableRef.make<keyof typeof centralClients>("first");
+    const acquisitions = MutableRef.make(0);
     const firstRuntime = implementation.bind({
-      client: () => {
-        const account = selected;
-        const id = `run-${++acquisitions}`;
-        MutableHashMap.set(routes, id, account);
-        return {
-          stream: centralClients[account].stream.bind(centralClients[account]),
-          releaseRun: () => {
+      client: Effect.acquireRelease(
+        Effect.sync(() => {
+          const account = MutableRef.get(selected);
+          const id = `run-${MutableRef.incrementAndGet(acquisitions)}`;
+          MutableHashMap.set(routes, id, account);
+          return { id, client: centralClients[account] };
+        }),
+        ({ id }) =>
+          Effect.sync(() => {
             MutableHashMap.remove(routes, id);
             released.push(id);
-          },
-        };
-      },
+          }),
+      ).pipe(Effect.map(({ client }) => client)),
       catalogWindow: () => 111,
     });
-    const firstAdapter = firstRuntime.adapter(selection);
-    selected = "second";
+    const firstScope = yield* Scope.make();
+    const first = yield* Scope.provide(firstRuntime.model(selection, runOf(0)), firstScope);
+    MutableRef.set(selected, "second");
     const secondRuntime = implementation.bind({
-      client: () => {
-        acquisitions++;
-        MutableHashMap.set(routes, "fresh-run", "second");
-        return {
-          stream: centralClients.second.stream.bind(centralClients.second),
-          releaseRun: () => {
+      client: Effect.acquireRelease(
+        Effect.sync(() => {
+          MutableRef.increment(acquisitions);
+          MutableHashMap.set(routes, "fresh-run", "second");
+          return centralClients.second;
+        }),
+        () =>
+          Effect.sync(() => {
             MutableHashMap.remove(routes, "fresh-run");
             released.push("fresh-run");
-          },
-        };
-      },
+          }),
+      ),
       catalogWindow: () => 222,
     });
-    const secondAdapter = secondRuntime.adapter({ ...selection, reasoningEffort: "high" });
-    expect(firstAdapter).toBeInstanceOf(SubscriptionTextAdapter);
-    expect(secondAdapter).toBeInstanceOf(SubscriptionTextAdapter);
+    const secondScope = yield* Scope.make();
+    const second = yield* Scope.provide(
+      secondRuntime.model({ ...selection, reasoningEffort: "high" }, runOf(1)),
+      secondScope,
+    );
     expect(firstRuntime.contextWindow(selection.model)).toBe(111);
     expect(secondRuntime.contextWindow(selection.model)).toBe(222);
-    const controllers = [(yield* sdkCancellation).controller, (yield* sdkCancellation).controller];
-    for (const [index, adapter] of [firstAdapter, secondAdapter].entries()) {
-      const options: TextOptions<Record<string, never>> = {
-        messages: [{ role: "user", content: `fresh-${index}` }],
-        model: selection.model,
-        logger,
-        abortController: controllers[index],
-        runId: `sdk-run-${index}`,
-        threadId: `thread-${index}`,
-      };
-      const chunks = yield* Stream.runCollect(
-        Stream.fromAsyncIterable(
-          adapter.chatStream(options),
-          (cause) => new Cause.UnknownError(cause),
+    yield* Effect.forEach(
+      [first, second],
+      ({ model }, index) =>
+        Effect.map(model.generateText({ prompt: `fresh-${index}` }), (reply) =>
+          expect(reply.text).toBe("native reply"),
         ),
-      );
-      expect(
-        chunks.some(
-          (chunk) => chunk.type === EventType.RUN_FINISHED && chunk.runId === `sdk-run-${index}`,
-        ),
-      ).toBe(true);
-    }
+      { discard: true },
+    );
     expect(requests.map((request) => request.auth)).toEqual(["Bearer first", "Bearer second"]);
     expect(requests[0]?.body).toContain("fresh-0");
     expect(requests[1]?.body).toContain("fresh-1");
-    expect(requests[0]?.signal).toBe(controllers[0]?.signal);
-    expect(requests[1]?.signal).toBe(controllers[1]?.signal);
-    expect(credentialReads).toBe(2);
-    expect(acquisitions).toBe(2);
+    expect(MutableRef.get(credentialReads)).toBe(2);
+    expect(MutableRef.get(acquisitions)).toBe(2);
     expect(MutableHashMap.size(routes)).toBe(2);
-    firstAdapter.releaseRun?.();
+    yield* Scope.close(firstScope, Exit.void);
     expect([...routes]).toEqual([["fresh-run", "second"]]);
-    secondAdapter.releaseRun?.();
+    yield* Scope.close(secondScope, Exit.void);
     expect(MutableHashMap.size(routes)).toBe(0);
     expect(released).toEqual(["run-1", "fresh-run"]);
-    expect(firstRuntime.runMiddleware()).toEqual(secondRuntime.runMiddleware());
-    expect(firstRuntime.runMiddleware()).not.toBe(secondRuntime.runMiddleware());
-    expect(() => secondRuntime.adapter({ ...selection, provider: "anthropic" })).toThrow(
-      "Provider mismatch",
+    const anthropic = { ...selection, provider: "anthropic" } as const;
+    expect(yield* Effect.flip(Effect.scoped(secondRuntime.model(anthropic, runOf(2))))).toEqual(
+      ModelUnavailable.make(anthropic),
     );
-    expect(acquisitions).toBe(2);
-  }),
+    expect(MutableRef.get(acquisitions)).toBe(2);
+  }).pipe(withOAuthTestPlatform),
 );

@@ -1,17 +1,12 @@
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { NodeFileSystem } from "@effect/platform-node";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { posix, win32 } from "./synchronous-path.ts";
 import {
   Array as EffectArray,
   Effect,
   FileSystem,
-  ManagedRuntime,
   Function as EffectFunction,
-  HashSet,
   Option,
-  Schedule,
   Schema,
 } from "effect";
 
@@ -66,17 +61,16 @@ function findExecutableBody(
     const path = pathModule(platform);
     const extensions =
       platform === "win32" ? ["", ...(env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";")] : [""];
-    for (const directory of searchPath(env, platform).split(platform === "win32" ? ";" : ":")) {
-      if (!path.isAbsolute(directory)) continue;
-      for (const extension of extensions) {
-        const candidate = path.join(directory, `${name}${extension.toLowerCase()}`);
-        if (
-          yield* isFile === undefined ? fileExists(candidate) : Effect.sync(() => isFile(candidate))
-        )
-          return candidate;
-      }
-    }
-    return null;
+    const candidates = searchPath(env, platform)
+      .split(platform === "win32" ? ";" : ":")
+      .filter((directory) => path.isAbsolute(directory))
+      .flatMap((directory) =>
+        extensions.map((extension) => path.join(directory, `${name}${extension.toLowerCase()}`)),
+      );
+    const found = yield* Effect.findFirst(candidates, (candidate) =>
+      isFile === undefined ? fileExists(candidate) : Effect.succeed(isFile(candidate)),
+    );
+    return Option.getOrNull(found);
   });
 }
 
@@ -105,75 +99,6 @@ function tarExecutableBody(
   if (platform !== "win32") return "tar";
   return win32.join(env.SystemRoot ?? env.SYSTEMROOT ?? "C:\\Windows", "System32", "tar.exe");
 }
-
-const ErrorCode = Schema.Struct({ code: Schema.String });
-/** What Windows returns while another process (antivirus, search indexer) still holds a file open. */
-const busyCodes = HashSet.make("EPERM", "EACCES", "EBUSY");
-
-/**
- * `renameSync`, retried on Windows for up to ~10 s while the moved files are still held open:
- * antivirus may scan freshly written executables or native libraries before releasing their folder.
- */
-const RenameFailed = Schema.TaggedStruct("RenameFailed", { code: Schema.String });
-
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export class DirectoryRenameFailed extends Schema.TaggedError<DirectoryRenameFailed>()(
-  "DirectoryRenameFailed",
-  {
-    from: Schema.String,
-    to: Schema.String,
-    reason: RenameFailed,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message() {
-    return `rename_failed (${this.reason.code})`;
-  }
-}
-
-interface RenameOptions {
-  readonly to: string;
-  readonly platform?: NodeJS.Platform;
-  readonly rename?: (from: string, to: string) => void;
-}
-
-const renameRuntime = ManagedRuntime.make(NodeFileSystem.layer);
-
-/** Native archive installer entry point; Effect callers retain the caller clock and interruption. */
-export function renameWhenReleased(
-  options: RenameOptions & { readonly from: string },
-): Promise<void> {
-  return renameRuntime.runPromise(renameWhenReleasedEffect(options));
-}
-
-export const renameWhenReleasedEffect = Effect.fn("renameWhenReleased")(function* (
-  options: RenameOptions & { readonly from: string },
-) {
-  const { from, to, platform = process.platform, rename } = options;
-  const mapFailure = (cause: unknown) => {
-    const decoded = Schema.decodeUnknownOption(ErrorCode)(cause);
-    if (Option.isNone(decoded)) throw cause;
-    return DirectoryRenameFailed.make({
-      from,
-      to,
-      reason: RenameFailed.make({ code: decoded.value.code }),
-      cause,
-    });
-  };
-  const operation =
-    rename === undefined
-      ? Effect.flatMap(FileSystem.FileSystem, (fs) =>
-          fs.rename(from, to).pipe(Effect.mapError((error) => mapFailure(error.cause))),
-        )
-      : Effect.try({ try: () => rename(from, to), catch: mapFailure });
-  return yield* operation.pipe(
-    Effect.retry({
-      times: 19,
-      schedule: Schedule.spaced("500 millis"),
-      while: (error) => platform === "win32" && HashSet.has(busyCodes, error.reason.code),
-    }),
-  );
-});
 
 /** What Windows programs need to start at all, whatever else they are given. */
 const windowsSystemVariables = [
@@ -296,7 +221,7 @@ function shellInvocationBody(
 ) {
   return Effect.gen(function* (): Effect.fn.Return<ShellInvocation, never, FileSystem.FileSystem> {
     const check = (file: string) =>
-      exists === undefined ? fileExists(file) : Effect.sync(() => exists(file));
+      exists === undefined ? fileExists(file) : Effect.succeed(exists(file));
     if (platform === "win32") {
       const comSpec = env.ComSpec ?? env.COMSPEC;
       const file =

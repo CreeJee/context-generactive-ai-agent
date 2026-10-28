@@ -1,4 +1,3 @@
-import { fetchServerSentEvents, useChat, type UIMessage } from "@tanstack/ai-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { cn } from "cn";
 import {
@@ -32,11 +31,13 @@ import {
 import { Spinner } from "~/components/ui/spinner";
 import { Textarea } from "~/components/ui/textarea";
 import { dayAndTime } from "~/lib/dates";
-import { api, chatFetch, isApiError, type BtwThread } from "../api";
+import type { ChatMessage } from "memory-agent/chat-api";
+import { api, isApiError, type BtwThread } from "../api";
 import { appQueryKeys } from "../queries/keys";
 import { sessionQueries } from "../queries/session";
 import { Markdown } from "./markdown";
 import { RunFailureText } from "./run-failure";
+import { useBtwThread } from "./use-btw-thread";
 
 const separateCopy =
   "메인 대화와 이 프로젝트의 기억을 읽고 근거를 찾아 답해요. 여기서 나눈 질문·답변·조회 결과는 메인 대화나 검색 기억에 들어가지 않고, 닫아도 다시 열 수 있게 이 BTW에만 남아요.";
@@ -60,9 +61,11 @@ function toolLabel(name: string) {
 const threadLabel = (thread: BtwThread) =>
   thread.title ?? `새 BTW · ${dayAndTime(thread.createdAt)}`;
 
-function btwErrorMessage(error: Error) {
-  if (!isApiError(error)) return <RunFailureText error={error} />;
-  switch (error.code) {
+const unanswered = "답하지 못했어요. 잠시 후 다시 시도하세요.";
+
+/** A refusal's code as the user reads it; an unknown or missing code is a general failure. */
+function refusalText(code: string | undefined) {
+  switch (code) {
     case "login_required":
       return "선택한 공급자에 로그인해야 해요.";
     case "model_selection_required":
@@ -74,11 +77,15 @@ function btwErrorMessage(error: Error) {
     case "images_not_supported":
       return "선택한 모델은 이미지를 읽지 못해요.";
     default:
-      return "답하지 못했어요. 잠시 후 다시 시도하세요.";
+      return unanswered;
   }
 }
 
-function BtwMessage({ message, streaming }: { message: UIMessage; streaming: boolean }) {
+function btwErrorMessage(error: Error) {
+  return isApiError(error) ? refusalText(error.code) : <RunFailureText error={error} />;
+}
+
+function BtwMessage({ message, streaming }: { message: ChatMessage; streaming: boolean }) {
   if (message.role === "user") {
     const text = message.parts.flatMap((part) => (part.type === "text" ? [part.content] : []));
     return (
@@ -112,13 +119,10 @@ function BtwMessage({ message, streaming }: { message: UIMessage; streaming: boo
 function BtwConversation({ thread }: { thread: BtwThread }) {
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState("");
-  const { messages, sendMessage, isLoading, error, status } = useChat({
-    connection: fetchServerSentEvents(`/api/btw/${encodeURIComponent(thread.id)}/chat`, {
-      fetchClient: chatFetch,
-    }),
+  const { messages, ask, isLoading, failure, error, refusal } = useBtwThread({
     threadId: thread.id,
-    persistence: true,
-    onFinish: () =>
+    // The thread's title is its first question.
+    onAnswered: () =>
       void queryClient.invalidateQueries({
         queryKey: appQueryKeys.session.btw(thread.projectId, thread.parentSessionId),
       }),
@@ -127,7 +131,7 @@ function BtwConversation({ thread }: { thread: BtwThread }) {
     const text = draft.trim();
     if (text.length === 0 || isLoading) return;
     setDraft("");
-    void sendMessage(text);
+    ask(text);
   };
 
   return (
@@ -145,7 +149,7 @@ function BtwConversation({ thread }: { thread: BtwThread }) {
             streaming={isLoading && index === messages.length - 1}
           />
         ))}
-        {status === "submitted" && (
+        {isLoading && messages.at(-1)?.role === "user" && (
           <Marker role="status">
             <MarkerIcon>
               <Spinner />
@@ -153,10 +157,12 @@ function BtwConversation({ thread }: { thread: BtwThread }) {
             <MarkerContent>생각하는 중…</MarkerContent>
           </Marker>
         )}
-        {error && (
+        {(error !== null || failure !== null) && (
           <Alert variant="destructive">
             <AlertTitle>응답을 받지 못했어요</AlertTitle>
-            <AlertDescription>{btwErrorMessage(error)}</AlertDescription>
+            <AlertDescription>
+              {failure !== null ? <RunFailureText error={failure} /> : refusalText(refusal?.error)}
+            </AlertDescription>
           </Alert>
         )}
       </div>

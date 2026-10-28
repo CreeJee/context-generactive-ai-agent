@@ -1,4 +1,14 @@
-import { MutableHashMap, Option, Context, Data, Effect, Layer, Schema } from "effect";
+import {
+  Array as EffectArray,
+  MutableHashMap,
+  Option,
+  Context,
+  Data,
+  Effect,
+  Layer,
+  Schema,
+} from "effect";
+import { failedReasons } from "./failed-checks.ts";
 import { optionalProperty } from "../optional-property.ts";
 import {
   RouteCatalog,
@@ -91,29 +101,32 @@ export type ImageRerouteConfirmation = Data.TaggedEnum<{
 }>;
 export const ImageRerouteConfirmation = Data.taggedEnum<ImageRerouteConfirmation>();
 
-export class ImageRouteFactsFailed extends Schema.TaggedError<ImageRouteFactsFailed>()(
-  "ImageRouteFactsFailed",
-  { routeId: Schema.optionalKey(Schema.String), cause: Schema.Defect() },
-) {}
+export class ImageRouteFactsFailed extends Schema.TaggedError<
+  ImageRouteFactsFailed,
+  { readonly brand: unique symbol }
+>()("ImageRouteFactsFailed", {
+  routeId: Schema.optionalKey(Schema.String),
+  cause: Schema.Defect(),
+}) {}
 
-export class ImageRoutingInvalidRequest extends Schema.TaggedError<ImageRoutingInvalidRequest>()(
-  "ImageRoutingInvalidRequest",
-  {
-    reason: Schema.Literals([
-      "invalid_source_image_count",
-      "invalid_cost_ceiling",
-      /** A route fact's quality or speed is outside 0..1. */
-      "invalid_route_fact_score",
-      "unknown_initiator_route",
-    ]),
-    routeId: Schema.optionalKey(Schema.String),
-  },
-) {}
+export class ImageRoutingInvalidRequest extends Schema.TaggedError<
+  ImageRoutingInvalidRequest,
+  { readonly brand: unique symbol }
+>()("ImageRoutingInvalidRequest", {
+  reason: Schema.Literals([
+    "invalid_source_image_count",
+    "invalid_cost_ceiling",
+    /** A route fact's quality or speed is outside 0..1. */
+    "invalid_route_fact_score",
+    "unknown_initiator_route",
+  ]),
+  routeId: Schema.optionalKey(Schema.String),
+}) {}
 
-export class ImageRouteUnavailable extends Schema.TaggedError<ImageRouteUnavailable>()(
-  "ImageRouteUnavailable",
-  { ranking: Schema.Array(ImageRouteScore) },
-) {}
+export class ImageRouteUnavailable extends Schema.TaggedError<
+  ImageRouteUnavailable,
+  { readonly brand: unique symbol }
+>()("ImageRouteUnavailable", { ranking: Schema.Array(ImageRouteScore) }) {}
 
 export const FixedImageRouteRejectedReason = Schema.TaggedUnion({
   /** Fixed mode was asked for without naming a route. */
@@ -123,13 +136,13 @@ export const FixedImageRouteRejectedReason = Schema.TaggedUnion({
   Ineligible: { reasons: Schema.Array(Schema.String) },
 });
 
-export class FixedImageRouteRejected extends Schema.TaggedError<FixedImageRouteRejected>()(
-  "FixedImageRouteRejected",
-  {
-    routeId: Schema.optionalKey(Schema.String),
-    reason: FixedImageRouteRejectedReason,
-  },
-) {}
+export class FixedImageRouteRejected extends Schema.TaggedError<
+  FixedImageRouteRejected,
+  { readonly brand: unique symbol }
+>()("FixedImageRouteRejected", {
+  routeId: Schema.optionalKey(Schema.String),
+  reason: FixedImageRouteRejectedReason,
+}) {}
 
 export interface ImageRouteFactsApi {
   readonly forRoutes: (
@@ -191,22 +204,26 @@ export interface RankImageRoutesInput {
 
 const finiteUnit = (value: number) => Number.isFinite(value) && value >= 0 && value <= 1;
 
-function validateInput(input: RankImageRoutesInput): ImageRoutingInvalidRequest | undefined {
+function validateInput(input: RankImageRoutesInput): Option.Option<ImageRoutingInvalidRequest> {
   if (!Number.isInteger(input.intent.sourceImageCount) || input.intent.sourceImageCount < 0)
-    return ImageRoutingInvalidRequest.make({ reason: "invalid_source_image_count" });
+    return Option.some(ImageRoutingInvalidRequest.make({ reason: "invalid_source_image_count" }));
   if (
     input.policy.maximumEstimatedCostUsd !== undefined &&
     (!Number.isFinite(input.policy.maximumEstimatedCostUsd) ||
       input.policy.maximumEstimatedCostUsd < 0)
   )
-    return ImageRoutingInvalidRequest.make({ reason: "invalid_cost_ceiling" });
-  for (const fact of input.facts)
-    if (!finiteUnit(fact.quality) || !finiteUnit(fact.speed))
-      return ImageRoutingInvalidRequest.make({
+    return Option.some(ImageRoutingInvalidRequest.make({ reason: "invalid_cost_ceiling" }));
+  return Option.map(
+    EffectArray.findFirst(
+      input.facts,
+      (fact) => !finiteUnit(fact.quality) || !finiteUnit(fact.speed),
+    ),
+    (fact) =>
+      ImageRoutingInvalidRequest.make({
         reason: "invalid_route_fact_score",
         routeId: fact.routeId,
-      });
-  return undefined;
+      }),
+  );
 }
 
 const weights: Record<
@@ -225,37 +242,43 @@ function scoreRoute(
   intent: ImageRoutingIntent,
   policy: ImageRoutingPolicy,
 ): ImageRouteScore {
-  const reasons: string[] = [];
-  if (route.contract.verification !== "verified") reasons.push("route contract is not verified");
-  if (!route.authentication.verified) reasons.push("provider account is not authenticated");
-  if (!route.contract.productionEnabled) reasons.push("route is not production-enabled");
-  if (!route.operations.includes(intent.operation))
-    reasons.push(`route does not support ${intent.operation}`);
-  if (intent.sourceImageCount > route.contract.input.maximumSourceImages)
-    reasons.push(`route accepts at most ${route.contract.input.maximumSourceImages} source images`);
-  if (intent.sourceImageCount > 0 && !route.contract.input.images)
-    reasons.push("route does not accept source images");
-  if (intent.requiresMask && !route.contract.input.mask)
-    reasons.push("route does not support masks");
-  if (policy.allowedProviders !== undefined && !policy.allowedProviders.includes(route.provider))
-    reasons.push("provider is excluded by policy");
-  if (
-    policy.allowedExecutionModes !== undefined &&
-    !policy.allowedExecutionModes.includes(route.executionMode)
-  )
-    reasons.push("execution mode is excluded by policy");
-  if (fact === undefined) reasons.push("account route facts are unavailable");
-  else if (!fact.available) reasons.push("route is unavailable for the account");
-
   const cost = fact?.estimatedCostUsd;
-  if (cost !== undefined && (!Number.isFinite(cost) || cost < 0))
-    reasons.push("estimated cost is invalid");
-  if (policy.maximumEstimatedCostUsd !== undefined) {
-    if (cost === undefined && policy.allowUnknownCost !== true)
-      reasons.push("cost is unknown under a strict cost ceiling");
-    else if (cost !== undefined && cost > policy.maximumEstimatedCostUsd)
-      reasons.push("estimated cost exceeds the cost ceiling");
-  }
+  const ceiling = policy.maximumEstimatedCostUsd;
+  const reasons = failedReasons([
+    [route.contract.verification !== "verified", "route contract is not verified"],
+    [!route.authentication.verified, "provider account is not authenticated"],
+    [!route.contract.productionEnabled, "route is not production-enabled"],
+    [!route.operations.includes(intent.operation), `route does not support ${intent.operation}`],
+    [
+      intent.sourceImageCount > route.contract.input.maximumSourceImages,
+      `route accepts at most ${route.contract.input.maximumSourceImages} source images`,
+    ],
+    [
+      intent.sourceImageCount > 0 && !route.contract.input.images,
+      "route does not accept source images",
+    ],
+    [intent.requiresMask && !route.contract.input.mask, "route does not support masks"],
+    [
+      policy.allowedProviders !== undefined && !policy.allowedProviders.includes(route.provider),
+      "provider is excluded by policy",
+    ],
+    [
+      policy.allowedExecutionModes !== undefined &&
+        !policy.allowedExecutionModes.includes(route.executionMode),
+      "execution mode is excluded by policy",
+    ],
+    [fact === undefined, "account route facts are unavailable"],
+    [fact !== undefined && !fact.available, "route is unavailable for the account"],
+    [cost !== undefined && (!Number.isFinite(cost) || cost < 0), "estimated cost is invalid"],
+    [
+      ceiling !== undefined && cost === undefined && policy.allowUnknownCost !== true,
+      "cost is unknown under a strict cost ceiling",
+    ],
+    [
+      ceiling !== undefined && cost !== undefined && cost > ceiling,
+      "estimated cost exceeds the cost ceiling",
+    ],
+  ]);
 
   const affordability =
     cost === undefined
@@ -286,22 +309,25 @@ function scoreRoute(
 export function rankImageRoutes(
   input: RankImageRoutesInput,
 ): Effect.Effect<readonly ImageRouteScore[], ImageRoutingInvalidRequest> {
-  const invalid = validateInput(input);
-  if (invalid !== undefined) return Effect.fail(invalid);
-  const facts = MutableHashMap.fromIterable(input.facts.map((fact) => [fact.routeId, fact]));
-  const ranking = input.routes
-    .map((route) =>
-      scoreRoute(
-        route,
-        Option.getOrUndefined(MutableHashMap.get(facts, route.id)),
-        input.intent,
-        input.policy,
-      ),
-    )
-    .toSorted(
-      (left, right) => right.score - left.score || left.routeId.localeCompare(right.routeId),
-    );
-  return Effect.succeed(Object.freeze(ranking));
+  return Option.match(validateInput(input), {
+    onSome: (invalid) => Effect.fail(invalid),
+    onNone: () => {
+      const facts = MutableHashMap.fromIterable(input.facts.map((fact) => [fact.routeId, fact]));
+      const ranking = input.routes
+        .map((route) =>
+          scoreRoute(
+            route,
+            Option.getOrUndefined(MutableHashMap.get(facts, route.id)),
+            input.intent,
+            input.policy,
+          ),
+        )
+        .toSorted(
+          (left, right) => right.score - left.score || left.routeId.localeCompare(right.routeId),
+        );
+      return Effect.succeed(Object.freeze(ranking));
+    },
+  });
 }
 
 export interface ImageRouterRequest {
@@ -422,14 +448,11 @@ function makeImageRouterBody(
             }),
           });
       }
-      if (selectedScore === undefined)
-        return yield* ImageRouteUnavailable.make({ ranking: result.ranking });
-      const route = Option.getOrUndefined(
-        MutableHashMap.get(result.routeById, selectedScore.routeId),
-      )!;
-      const fact = Option.getOrUndefined(
-        MutableHashMap.get(result.factById, selectedScore.routeId),
-      )!;
+      const selected = yield* Effect.fromOption(Option.fromUndefinedOr(selectedScore), () =>
+        ImageRouteUnavailable.make({ ranking: result.ranking }),
+      );
+      const route = Option.getOrUndefined(MutableHashMap.get(result.routeById, selected.routeId))!;
+      const fact = Option.getOrUndefined(MutableHashMap.get(result.factById, selected.routeId))!;
       const preference = request.policy.preference ?? "balanced";
       return Object.freeze(
         ImageRouteDecision.selected({
@@ -450,8 +473,8 @@ function makeImageRouterBody(
             Option.getOrUndefined(MutableHashMap.get(result.consentByRoute, route.id)) === "ask",
           accountId: fact.accountId,
           executionMode: route.executionMode,
-          ...optionalProperty("estimatedCostUsd", selectedScore.estimatedCostUsd),
-          score: selectedScore.score,
+          ...optionalProperty("estimatedCostUsd", selected.estimatedCostUsd),
+          score: selected.score,
           reasons: Object.freeze([
             `${preference} preference selected the highest eligible deterministic score`,
             ...fact.evidence,
@@ -469,17 +492,19 @@ function makeImageRouterBody(
           ...request,
           policy: { ...request.policy, mode: "auto" },
         });
-        const alternatives: ImageRouteDecision[] = [];
-        for (const candidate of result.ranking) {
-          if (!candidate.eligible || candidate.routeId === decision.executorMediaRouteId) continue;
-          const route = Option.getOrUndefined(
-            MutableHashMap.get(result.routeById, candidate.routeId),
-          )!;
-          const fact = Option.getOrUndefined(
-            MutableHashMap.get(result.factById, candidate.routeId),
-          )!;
-          alternatives.push(
-            Object.freeze({
+        const alternatives = result.ranking
+          .filter(
+            (candidate) =>
+              candidate.eligible && candidate.routeId !== decision.executorMediaRouteId,
+          )
+          .map((candidate): ImageRouteDecision => {
+            const route = Option.getOrUndefined(
+              MutableHashMap.get(result.routeById, candidate.routeId),
+            )!;
+            const fact = Option.getOrUndefined(
+              MutableHashMap.get(result.factById, candidate.routeId),
+            )!;
+            return Object.freeze({
               ...decision,
               mode: "auto",
               executorMediaRouteId: route.id,
@@ -494,9 +519,8 @@ function makeImageRouterBody(
                 ...fact.evidence,
               ]),
               ranking: result.ranking,
-            }),
-          );
-        }
+            });
+          });
         return Object.freeze(
           ImageRerouteConfirmation.confirmation_required({
             failedDecision: decision,

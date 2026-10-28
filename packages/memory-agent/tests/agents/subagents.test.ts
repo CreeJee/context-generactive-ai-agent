@@ -84,33 +84,30 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
           status: "completed",
           lastTask: "list what matters",
         });
-        const invocations = provider!.adapter.invocations;
-        const parentStart = invocations.find((invocation) => invocation.threadId === sessionId);
+        const invocations = provider!.invocations;
+        const parentStart = invocations.find((invocation) => invocation.run.threadId === sessionId);
         const childStart = invocations.find(
-          (invocation) => invocation.threadId === subagentThreadId(child!.id),
+          (invocation) => invocation.run.threadId === subagentThreadId(child!.id),
         );
-        expect(parentStart?.systemPrompts.join("\n")).toContain(
-          "You can delegate with run_subagent",
-        );
-        expect(childStart?.systemPrompts.join("\n")).toContain("You are a subagent");
+        expect(parentStart?.system.join("\n")).toContain("You can delegate with run_subagent");
+        expect(childStart?.system.join("\n")).toContain("You are a subagent");
         expect(parentStart?.toolNames).toContain("run_subagent");
-        expect(parentStart?.systemPrompts.join("\n")).toContain(
-          "ROOT INSTRUCTIONS FOR EVERY AGENT",
-        );
-        expect(childStart?.systemPrompts.join("\n")).toContain("ROOT INSTRUCTIONS FOR EVERY AGENT");
+        expect(parentStart?.system.join("\n")).toContain("ROOT INSTRUCTIONS FOR EVERY AGENT");
+        expect(childStart?.system.join("\n")).toContain("ROOT INSTRUCTIONS FOR EVERY AGENT");
         // No nesting, and nothing the parent does not have.
-        for (const tool of [
+        [
           "run_subagent",
           "update_goal",
           "update_plan",
           "update_workflow_progress",
           "record_workflow_blocker",
           "delegate_to_agent",
-        ])
+        ].forEach((tool) => {
           expect(childStart?.toolNames).not.toContain(tool);
-        expect(
-          childStart?.systemPrompts.some((prompt) => prompt.includes("Current workflow")),
-        ).toBe(false);
+        });
+        expect(childStart?.system.some((prompt) => prompt.includes("Current workflow"))).toBe(
+          false,
+        );
         expect(childStart?.toolNames).toContain("read_subagent_tool_result");
         // The only child-specific tool reads bounded pages of that child's own persisted results.
         expect(
@@ -120,14 +117,14 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
         ).toBe(true);
         // The parent's conversation is not copied into the child.
         expect(
-          childStart?.messages.some(
+          childStart?.history.some(
             (message) =>
               message.role === "user" &&
               Schema.is(Schema.String)(message.content) &&
               message.content.includes("call run_subagent"),
           ),
         ).toBe(false);
-        const transcript = yield* sdk(() => subagents.transcript(sessionId, child!.id));
+        const transcript = yield* subagents.transcript(sessionId, child!.id);
         expect(transcript?.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
         const trace = yield* Schema.decodeUnknownEffect(TraceSummary)(
           yield* sqlGet(
@@ -290,14 +287,19 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
         (yield* reviews.latest(sessionId, `subagent-${children[1]!.id}:call-shell`))?.decision,
       ).toBe("denied");
       // Both calls ended: the approved one settled, the denied one never started.
-      for (const child of children)
-        expect(
-          yield* sqlGet(
-            `SELECT a.pending_tool_call_ids FROM agent_run_attempts a
+      yield* Effect.forEach(
+        children,
+        Effect.fnUntraced(function* (child) {
+          expect(
+            yield* sqlGet(
+              `SELECT a.pending_tool_call_ids FROM agent_run_attempts a
                JOIN work_tasks t ON t.id = a.task_id WHERE t.agent_id = ?`,
-            child.id,
-          ),
-        ).toEqual({ pending_tool_call_ids: "[]" });
+              child.id,
+            ),
+          ).toEqual({ pending_tool_call_ids: "[]" });
+        }),
+        { discard: true },
+      );
     }),
   );
 

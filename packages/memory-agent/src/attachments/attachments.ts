@@ -1,5 +1,14 @@
-import { isTruthy } from "../truthy.ts";
-import { HashMap, MutableHashMap, Option, DateTime, Clock, Semaphore, Fiber, Scope } from "effect";
+import {
+  Array as EffectArray,
+  HashMap,
+  Option,
+  DateTime,
+  Clock,
+  Semaphore,
+  Fiber,
+  Scope,
+  SynchronizedRef,
+} from "effect";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
@@ -29,15 +38,20 @@ export const Attachment = Schema.Struct({
 });
 export type Attachment = typeof Attachment.Type;
 
-export class AttachmentRejected extends Schema.TaggedError<AttachmentRejected>()(
-  "AttachmentRejected",
-  { reason: Schema.Literals(["empty", "too_large", "unsupported_type"]) },
-) {}
+export class AttachmentRejected extends Schema.TaggedError<
+  AttachmentRejected,
+  { readonly brand: unique symbol }
+>()("AttachmentRejected", {
+  reason: Schema.Literals(["empty", "too_large", "unsupported_type"]),
+}) {}
 
-export class AttachmentStorageFailed extends Schema.TaggedError<AttachmentStorageFailed>()(
-  "AttachmentStorageFailed",
-  { operation: Schema.Literals(["save", "purge", "convert"]), cause: Schema.Defect() },
-) {}
+export class AttachmentStorageFailed extends Schema.TaggedError<
+  AttachmentStorageFailed,
+  { readonly brand: unique symbol }
+>()("AttachmentStorageFailed", {
+  operation: Schema.Literals(["save", "purge", "convert"]),
+  cause: Schema.Defect(),
+}) {}
 
 const AttachmentRow = Schema.Struct({
   id: Schema.String,
@@ -57,14 +71,24 @@ function toAttachment(decoded: typeof AttachmentRow.Type): Attachment {
 const startsWith = (bytes: Uint8Array, signature: readonly number[], offset = 0) =>
   signature.every((value, index) => bytes[offset + index] === value);
 
+/** Each image type's signature: bytes it holds at an offset (WebP's RIFF header names it at 8). */
+const signatures = {
+  "image/png": [[0, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]]],
+  "image/jpeg": [[0, [0xff, 0xd8, 0xff]]],
+  "image/gif": [[0, [0x47, 0x49, 0x46, 0x38]]],
+  "image/webp": [
+    [0, [0x52, 0x49, 0x46, 0x46]],
+    [8, [0x57, 0x45, 0x42, 0x50]],
+  ],
+} satisfies Record<AttachmentMimeType, ReadonlyArray<readonly [number, readonly number[]]>>;
+
 /** The image type the bytes really are, from their signature; a declared type is not trusted. */
 export function sniffImageType(bytes: Uint8Array): AttachmentMimeType | null {
-  if (startsWith(bytes, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return "image/png";
-  if (startsWith(bytes, [0xff, 0xd8, 0xff])) return "image/jpeg";
-  if (startsWith(bytes, [0x47, 0x49, 0x46, 0x38])) return "image/gif";
-  if (startsWith(bytes, [0x52, 0x49, 0x46, 0x46]) && startsWith(bytes, [0x57, 0x45, 0x42, 0x50], 8))
-    return "image/webp";
-  return null;
+  return Option.getOrNull(
+    EffectArray.findFirst(AttachmentMimeType.literals, (type) =>
+      signatures[type].every(([offset, signature]) => startsWith(bytes, signature, offset)),
+    ),
+  );
 }
 
 /** Attachment ids are sha256 hex digests; anything else never touches the filesystem. */
@@ -89,16 +113,15 @@ export interface ModelImage {
   readonly mimeType: AttachmentMimeType;
 }
 
-const extensions = HashMap.fromIterable<AttachmentMimeType, string>([
-  ["image/png", "png"],
-  ["image/jpeg", "jpg"],
-  ["image/gif", "gif"],
-  ["image/webp", "webp"],
-]);
+const extensions = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/gif": "gif",
+  "image/webp": "webp",
+} satisfies Record<AttachmentMimeType, string>;
 
 const make = Effect.gen(function* () {
   const conversionScope = yield* Scope.Scope;
-  const run = Effect.runPromiseWith(yield* Effect.context());
   const sql = yield* SqlClient.SqlClient;
   const storage = yield* StorageRoot;
   const fs = yield* FileSystem.FileSystem;
@@ -140,10 +163,7 @@ const make = Effect.gen(function* () {
   });
 
   const fileOf = (attachment: Attachment) =>
-    path.join(
-      directory,
-      `${attachment.id}.${Option.getOrUndefined(HashMap.get(extensions, attachment.mimeType))}`,
-    );
+    path.join(directory, `${attachment.id}.${extensions[attachment.mimeType]}`);
 
   const get = (id: string) =>
     isAttachmentId(id)
@@ -204,19 +224,17 @@ const make = Effect.gen(function* () {
         .pipe(Effect.catchTag("PlatformError", () => Effect.void));
       if (original !== undefined) return upload;
       const encoded = yield* Effect.gen(function* () {
-        const sharp = yield* Effect.try({
-          try: () => requireRuntime("sharp"),
-          catch: (cause) => AttachmentStorageFailed.make({ operation: "convert", cause }),
-        });
-        const attempts = [
+        const sharp = yield* requireRuntime("sharp").pipe(
+          Effect.mapError((cause) => AttachmentStorageFailed.make({ operation: "convert", cause })),
+        );
+        const [first, ...smaller] = [
           { edge: modelImageEdge, quality: 86 },
           { edge: 1600, quality: 78 },
           { edge: 1280, quality: 70 },
           { edge: 1024, quality: 64 },
         ] as const;
-        let candidate: Uint8Array = new Uint8Array();
-        for (const attempt of attempts) {
-          candidate = yield* io("convert", () =>
+        const convert = (attempt: { readonly edge: number; readonly quality: number }) =>
+          io("convert", () =>
             sharp(upload.path)
               .rotate()
               .resize({
@@ -228,9 +246,14 @@ const make = Effect.gen(function* () {
               .webp({ quality: attempt.quality, smartSubsample: true })
               .toBuffer(),
           );
-          if (candidate.length <= maxModelImageBytes) break;
-        }
-        return candidate;
+        // A smaller attempt runs only while the previous one is still too large.
+        const initial = yield* convert(first);
+        return yield* Effect.reduce(
+          smaller,
+          () => initial,
+          (candidate, attempt) =>
+            candidate.length <= maxModelImageBytes ? Effect.succeed(candidate) : convert(attempt),
+        );
       }).pipe(conversionPermits.withPermits(1));
       if (encoded.length >= attachment.bytes) {
         yield* fileIo("convert", fs.writeFileString(noCopy, "", { mode: 0o600 }));
@@ -251,26 +274,29 @@ const make = Effect.gen(function* () {
 
   // The service owns native Sharp and filesystem work until it settles. These SDK operations
   // cannot be aborted safely midway through publishing their files.
-  const conversions = MutableHashMap.empty<string, Fiber.Fiber<ModelImage>>();
-  const conversionLock = yield* Semaphore.make(1);
+  const conversions = yield* SynchronizedRef.make(HashMap.empty<string, Fiber.Fiber<ModelImage>>());
   const conversionFor = Effect.fn("Attachments.conversionFor")(function* (attachment: Attachment) {
-    const existing = MutableHashMap.get(conversions, attachment.id);
-    if (Option.isSome(existing)) return existing.value;
-    const fiber = yield* Effect.forkIn(
-      encodeForModel(attachment).pipe(
-        Effect.uninterruptible,
-        Effect.ensuring(Effect.sync(() => MutableHashMap.remove(conversions, attachment.id))),
-      ),
-      conversionScope,
-      { startImmediately: true },
+    return yield* SynchronizedRef.modifyEffect(conversions, (running) =>
+      Option.match(HashMap.get(running, attachment.id), {
+        onSome: (fiber) => Effect.succeed([fiber, running] as const),
+        onNone: () =>
+          Effect.forkIn(
+            encodeForModel(attachment).pipe(
+              Effect.uninterruptible,
+              // Waits for the lock, so it runs after the conversion was stored.
+              Effect.ensuring(SynchronizedRef.update(conversions, HashMap.remove(attachment.id))),
+            ),
+            conversionScope,
+            { startImmediately: true },
+          ).pipe(
+            Effect.map((fiber) => [fiber, HashMap.set(running, attachment.id, fiber)] as const),
+          ),
+      }),
     );
-    MutableHashMap.set(conversions, attachment.id, fiber);
-    return fiber;
-  }, conversionLock.withPermits(1));
-  const forModelEffect = (attachment: Attachment) =>
+  });
+  const forModel = (attachment: Attachment) =>
     Effect.flatMap(conversionFor(attachment), Fiber.join);
-  const forModel = (attachment: Attachment): Promise<ModelImage> => run(forModelEffect(attachment));
-  const dataUrlEffect = (image: ModelImage) =>
+  const dataUrl = (image: ModelImage) =>
     fileIo("convert", fs.readFile(image.path)).pipe(
       Effect.map(
         (bytes) => `data:${image.mimeType};base64,${Buffer.from(bytes).toString("base64")}`,
@@ -283,12 +309,17 @@ const make = Effect.gen(function* () {
    */
   const save = (bytes: Uint8Array) =>
     Effect.gen(function* () {
-      if (bytes.length === 0) return yield* AttachmentRejected.make({ reason: "empty" });
-      if (bytes.length > maxAttachmentBytes)
-        return yield* AttachmentRejected.make({ reason: "too_large" });
-      const mimeType = sniffImageType(bytes);
-      if (!isTruthy(mimeType))
-        return yield* AttachmentRejected.make({ reason: "unsupported_type" });
+      yield* Effect.when(
+        Effect.fail(AttachmentRejected.make({ reason: "empty" })),
+        Effect.succeed(bytes.length === 0),
+      );
+      yield* Effect.when(
+        Effect.fail(AttachmentRejected.make({ reason: "too_large" })),
+        Effect.succeed(bytes.length > maxAttachmentBytes),
+      );
+      const mimeType = yield* Effect.fromOption(Option.fromNullishOr(sniffImageType(bytes)), () =>
+        AttachmentRejected.make({ reason: "unsupported_type" }),
+      );
 
       const attachment: Attachment = {
         id: Hex.encode(yield* fileIo("save", crypto.digest("SHA-256", bytes))),
@@ -324,12 +355,20 @@ const make = Effect.gen(function* () {
    */
   const saveDrawing = (svg: Uint8Array) =>
     Effect.gen(function* () {
-      if (svg.length === 0) return yield* AttachmentRejected.make({ reason: "empty" });
-      if (svg.length > maxDrawingBytes)
-        return yield* AttachmentRejected.make({ reason: "too_large" });
+      yield* Effect.when(
+        Effect.fail(AttachmentRejected.make({ reason: "empty" })),
+        Effect.succeed(svg.length === 0),
+      );
+      yield* Effect.when(
+        Effect.fail(AttachmentRejected.make({ reason: "too_large" })),
+        Effect.succeed(svg.length > maxDrawingBytes),
+      );
+      const sharp = yield* requireRuntime("sharp").pipe(
+        Effect.mapError(() => AttachmentRejected.make({ reason: "unsupported_type" })),
+      );
       const png = yield* Effect.tryPromise({
         try: () =>
-          requireRuntime("sharp")(Buffer.from(svg), { density: 144 })
+          sharp(Buffer.from(svg), { density: 144 })
             .resize({
               width: modelImageEdge,
               height: modelImageEdge,
@@ -352,16 +391,13 @@ const make = Effect.gen(function* () {
     pathOf: fileOf,
 
     read: (attachment: Attachment) =>
-      run(fs.readFile(fileOf(attachment)).pipe(Effect.map((bytes) => Buffer.from(bytes)))),
+      fs.readFile(fileOf(attachment)).pipe(Effect.map((bytes) => Buffer.from(bytes))),
 
     /** Model derivative, eagerly made on upload with a lazy fallback for pre-existing files. */
     forModel,
-    forModelEffect,
-    dataUrlEffect,
 
     /** `data:` URL of an image file, for replaying earlier turns to the model. */
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    dataUrl: (image: ModelImage) => run(dataUrlEffect(image)),
+    dataUrl,
 
     /** Records the images a message carried, in order. */
     link: (nodeId: string, attachments: readonly Attachment[]) =>
@@ -387,17 +423,20 @@ const make = Effect.gen(function* () {
     /** Removes content-addressed blobs only after their last message reference is gone. */
     purgeOrphans: Effect.gen(function* () {
       const orphaned = (yield* deleteOrphans()).map(toAttachment);
-      for (const attachment of orphaned) {
-        yield* Effect.forEach(
-          [
-            fileOf(attachment),
-            path.join(directory, `${attachment.id}.model.webp`),
-            path.join(directory, `${attachment.id}.model-original`),
-          ],
-          (path) => fileIo("purge", fs.remove(path, { force: true })),
-          { concurrency: 3, discard: true },
-        );
-      }
+      yield* Effect.forEach(
+        orphaned,
+        (attachment) =>
+          Effect.forEach(
+            [
+              fileOf(attachment),
+              path.join(directory, `${attachment.id}.model.webp`),
+              path.join(directory, `${attachment.id}.model-original`),
+            ],
+            (path) => fileIo("purge", fs.remove(path, { force: true })),
+            { concurrency: 3, discard: true },
+          ),
+        { discard: true },
+      );
       return orphaned.length;
     }),
   };

@@ -1,7 +1,7 @@
 import { it } from "@effect/vitest";
-import type { MetadataStore } from "@tanstack/ai";
-import { Effect, Option, Schema } from "effect";
+import { Effect, MutableRef, Option, Schema } from "effect";
 import { expect } from "vite-plus/test";
+import { type ChatMetadata, ChatMetadataFailed } from "../src/chat-store/metadata.ts";
 import {
   consumeColdObservationEffect,
   ContextUsageFailed,
@@ -13,10 +13,9 @@ import {
 it.effect("keeps context metadata read and write failures typed", () =>
   Effect.gen(function* () {
     const cause = new Error("private metadata failure");
-    const metadata: MetadataStore = {
-      get: () => Promise.reject(cause),
-      set: () => Promise.reject(cause),
-      delete: () => Promise.resolve(),
+    const metadata: ChatMetadata = {
+      get: () => Effect.fail(ChatMetadataFailed.make({ cause })),
+      set: () => Effect.fail(ChatMetadataFailed.make({ cause })),
     };
     const read = yield* Effect.flip(lastContextUsageEffect({ metadata, threadId: "thread" }));
     expect(read).toBeInstanceOf(ContextUsageFailed);
@@ -34,27 +33,34 @@ it.effect("keeps context metadata read and write failures typed", () =>
 
 it.effect("retains cold-observation identity and excludes consumed or legacy reports", () =>
   Effect.gen(function* () {
-    let consumed: string | null = null;
-    let observationId: string | null = "observation";
-    const metadata: MetadataStore = {
+    const consumed = MutableRef.make<string | null>(null);
+    const observationId = MutableRef.make<string | null>("observation");
+    const metadata: ChatMetadata = {
       get: (namespace) =>
-        Promise.resolve(
+        Effect.sync(() =>
           namespace.endsWith("consumed-cold-usage")
-            ? consumed
-            : { inputTokens: 100, cachedTokens: 0, observationId, compactionStage: null },
+            ? MutableRef.get(consumed)
+            : {
+                inputTokens: 100,
+                cachedTokens: 0,
+                observationId: MutableRef.get(observationId),
+                compactionStage: null,
+              },
         ),
-      set: (_namespace, _key, value) => {
-        consumed = Option.getOrNull(Schema.decodeUnknownOption(Schema.String)(value));
-        return Promise.resolve();
-      },
-      delete: () => Promise.resolve(),
+      set: (_namespace, _key, value) =>
+        Effect.sync(() => {
+          MutableRef.set(
+            consumed,
+            Option.getOrNull(Schema.decodeUnknownOption(Schema.String)(value)),
+          );
+        }),
     };
     const input = { metadata, threadId: "thread" };
     expect(yield* pendingColdObservationEffect(input)).toBe("observation");
     yield* consumeColdObservationEffect({ ...input, observationId: "observation" });
     expect(yield* pendingColdObservationEffect(input)).toBeNull();
-    observationId = null;
-    consumed = null;
+    MutableRef.set(observationId, null);
+    MutableRef.set(consumed, null);
     expect(yield* pendingColdObservationEffect(input)).toBeNull();
   }),
 );

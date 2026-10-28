@@ -8,45 +8,30 @@ import { GlobalConfig } from "../../src/config/global-config.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { ProviderRegistry } from "../../src/providers/registry.ts";
+import {
+  scriptedModel,
+  scriptedSource,
+  shownScriptedFailure,
+} from "../../src/testing/scripted-model.ts";
 import { WorkTraceStore } from "../../src/work-trace/store.ts";
+import type { UserContent } from "../../src/api/chat-session.ts";
+import { chatApi } from "../support/chat-api.ts";
+import { eventsOf, openPage, streamedText } from "../support/chat-client.ts";
 import { tinyPng } from "../support/images.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
-import { freshSession, invocationsOf, json, openTab, sdk, until } from "./tab.ts";
+import { freshSession, invocationsOf, json } from "./tab.ts";
 import { sqlGet, sqlRun } from "../support/sql.ts";
 
-type Content = string | readonly object[];
-
-/** POST one user message straight to AgentChat, as a page without a client would. */
-const post = Effect.fnUntraced(function* (sessionId: string, content: Content) {
-  const body = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
-    threadId: "thread-ui",
-    runId: `${sessionId}-run`,
-    messages: [{ id: "m1", role: "user", content }],
-    tools: [],
-    context: [],
+/** Starts one run on the chat API: its stream of events, or the server's refusal. */
+const post = Effect.fnUntraced(function* (sessionId: string, content: UserContent) {
+  const api = yield* chatApi;
+  const runId = `${sessionId}-run`;
+  return yield* api.run({
+    params: { session: sessionId },
+    headers: {},
+    payload: { runId, messages: [{ id: runId, role: "user", content }] },
   });
-  return yield* (yield* AgentChat).handle(
-    new Request("http://127.0.0.1/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body,
-    }),
-    sessionId,
-  );
-});
-
-/** Count the provider's account releases for the rest of the test. */
-const countReleases = Effect.gen(function* () {
-  const { adapter } = (yield* TestEnv).provider!;
-  const released = MutableRef.make(0);
-  yield* Effect.acquireRelease(
-    Effect.sync(() =>
-      Object.assign(adapter, { releaseRun: () => void MutableRef.increment(released) }),
-    ),
-    () => Effect.sync(() => Reflect.deleteProperty(adapter, "releaseRun")),
-  );
-  return () => MutableRef.get(released);
 });
 
 const imagePart = Effect.fnUntraced(function* () {
@@ -65,14 +50,12 @@ const inlineImage = {
   source: { type: "data", value: expect.any(String), mimeType: expect.stringMatching(/^image\//) },
 };
 
-testAgent({ testProvider: {} })("AgentChat.handle", (it) => {
+testAgent({ testProvider: {} })("chat runs", (it) => {
   it.effect("rejects empty user text before creating evidence or a run", () =>
     Effect.gen(function* () {
       yield* selectTestModel();
       const sessionId = yield* freshSession;
-      const response = yield* post(sessionId, "");
-      expect(response.status).toBe(400);
-      expect(yield* json(response)).toEqual({ error: "empty_message" });
+      expect(yield* Effect.flip(post(sessionId, ""))).toEqual({ error: "empty_message" });
       expect({
         runs: (yield* sqlGet(
           "SELECT count(*) AS count FROM chat_runs WHERE thread_id = ?",
@@ -84,40 +67,6 @@ testAgent({ testProvider: {} })("AgentChat.handle", (it) => {
         ))?.count,
       }).toEqual({ runs: 0, users: 0 });
     }),
-  );
-
-  it.effect.each([{ run: "streamed" }, { run: "model_mismatch" }] as const)(
-    "releases a pinned account exactly once when the run is $run",
-    ({ run }) =>
-      Effect.gen(function* () {
-        yield* selectTestModel();
-        const sessionId = yield* freshSession;
-        switch (run) {
-          case "streamed": {
-            const released = yield* countReleases;
-            const response = yield* post(sessionId, "hello");
-            expect(response.status).toBe(200);
-            // Only after the durable SSE stream finishes.
-            yield* sdk(() => response.text());
-            expect(released()).toBe(1);
-            break;
-          }
-          case "model_mismatch": {
-            yield* (yield* GlobalConfig).update({
-              provider: "openai",
-              model: "not-in-new-account",
-              reasoningEffort: "low",
-            });
-            const released = yield* countReleases;
-            const response = yield* post(sessionId, "hello");
-            // Early, before streaming.
-            expect(response.status).toBe(409);
-            expect(yield* json(response)).toMatchObject({ error: "model_unavailable_for_account" });
-            expect(released()).toBe(1);
-            break;
-          }
-        }
-      }),
   );
 
   it.effect("answers from memory through provider tools, records the run and indexes it", () =>
@@ -135,23 +84,8 @@ testAgent({ testProvider: {} })("AgentChat.handle", (it) => {
       yield* indexer.indexAll();
       const sessionId = yield* freshSession;
 
-      const response = yield* post(sessionId, "what did we decide? remember");
-      expect(response.status).toBe(200);
-      expect(response.headers.get("Content-Type")).toContain("text/event-stream");
-      const Delta = Schema.fromJsonString(
-        Schema.Struct({ type: Schema.String, delta: Schema.optional(Schema.String) }),
-      );
-      const events = yield* Effect.forEach(
-        (yield* sdk(() => response.text())).split("\n").filter((line) => line.startsWith("data: ")),
-        (line) => Schema.decodeEffect(Delta)(line.slice(6)),
-      );
-      expect(
-        events
-          .flatMap((event) =>
-            event.type === "TEXT_MESSAGE_CONTENT" && event.delta !== undefined ? [event.delta] : [],
-          )
-          .join(""),
-      ).toBe("Found: 저장소는 SQLite로 결정했다.");
+      const events = yield* eventsOf(yield* post(sessionId, "what did we decide? remember"));
+      expect(streamedText(events)).toBe("Found: 저장소는 SQLite로 결정했다.");
 
       const recorded = yield* nodes.session(sessionId);
       expect(recorded.map((node) => node.kind)).toEqual([
@@ -219,7 +153,9 @@ testAgent({ testProvider: {} })("AgentChat.handle", (it) => {
   it.effect("refuses to run for an unknown session", () =>
     Effect.gen(function* () {
       yield* selectTestModel();
-      expect((yield* post("no-such-session", "hi")).status).toBe(404);
+      expect(yield* Effect.flip(post("no-such-session", "hi"))).toEqual({
+        error: "session_not_found",
+      });
     }),
   );
 
@@ -229,13 +165,10 @@ testAgent({ testProvider: {} })("AgentChat.handle", (it) => {
       const sessionId = yield* freshSession;
       const invocations = yield* invocationsOf(sessionId);
       const { attachment, part } = yield* imagePart();
-      const tab = yield* openTab(sessionId);
+      const page = yield* openPage(sessionId);
 
-      yield* sdk(() =>
-        tab.client.sendMessage({ content: [{ type: "text", content: "look at #1 please" }, part] }),
-      );
-      yield* until(() => !tab.client.getIsLoading() && tab.answer().length > 0, "the answer");
-      expect(tab.answer()).toBe("Saw 1 image(s)");
+      yield* page.send([{ type: "text", content: "look at #1 please" }, part]);
+      expect(page.answer()).toBe("Saw 1 image(s)");
 
       const nodes = yield* Nodes;
       const attachments = yield* Attachments;
@@ -244,22 +177,22 @@ testAgent({ testProvider: {} })("AgentChat.handle", (it) => {
       expect((yield* attachments.forNode(user?.id ?? "")).map((stored) => stored.id)).toEqual([
         attachment.id,
       ]);
-      expect(
-        invocations()[0]?.messages.find((message) => message.role === "user")?.content,
-      ).toEqual([{ type: "text", content: "look at #1 please" }, inlineImage]);
-      expect(invocations()[0]?.systemPrompts.join("\n")).toContain(attachmentInstructions);
+      expect(invocations()[0]?.history.find((message) => message.role === "user")?.content).toEqual(
+        [{ type: "text", content: "look at #1 please" }, inlineImage],
+      );
+      expect(invocations()[0]?.system.join("\n")).toContain(attachmentInstructions);
 
       // A later turn replays the earlier image as inline data the provider can read.
-      yield* sdk(() => tab.client.sendMessage("look at it again"));
-      yield* until(() => invocations().length === 2, "the second provider invocation");
+      yield* page.send("look at it again");
+      expect(invocations()).toHaveLength(2);
       expect(
-        invocations()[1]?.messages.flatMap((message) =>
+        invocations()[1]?.history.flatMap((message) =>
           Array.isArray(message.content)
             ? message.content.filter((content) => content.type === "image")
             : [],
         ),
       ).toEqual([inlineImage]);
-      expect(invocations()[1]?.systemPrompts.join("\n")).toContain(attachmentInstructions);
+      expect(invocations()[1]?.system.join("\n")).toContain(attachmentInstructions);
 
       // The stored transcript shows the image again after a reload.
       const session = yield* nodes.session(sessionId);
@@ -270,7 +203,7 @@ testAgent({ testProvider: {} })("AgentChat.handle", (it) => {
         session,
         (nodeId) => images.find((entry) => entry.nodeId === nodeId)?.found ?? [],
       );
-      expect(firstUser?.parts).toEqual([{ type: "text", content: "look at #1 please" }, part]);
+      expect(firstUser?.content).toEqual([{ type: "text", content: "look at #1 please" }, part]);
     }),
   );
 
@@ -279,9 +212,8 @@ testAgent({ testProvider: {} })("AgentChat.handle", (it) => {
       yield* selectTestModel();
       const sessionId = yield* freshSession;
       const invocations = yield* invocationsOf(sessionId);
-      const response = yield* post(sessionId, "hi");
-      yield* sdk(() => response.text());
-      expect(invocations()[0]?.systemPrompts.join("\n")).not.toContain(attachmentInstructions);
+      yield* eventsOf(yield* post(sessionId, "hi"));
+      expect(invocations()[0]?.system.join("\n")).not.toContain(attachmentInstructions);
     }),
   );
 
@@ -291,53 +223,72 @@ testAgent({ testProvider: {} })("AgentChat.handle", (it) => {
       const sessionId = yield* freshSession;
       const { part } = yield* imagePart();
 
-      const unsupported = yield* post(sessionId, [{ type: "text", content: "look at this" }, part]);
-      expect(unsupported.status).toBe(422);
-      expect(yield* json(unsupported)).toMatchObject({ error: "images_not_supported" });
-
-      const unknown = yield* post(sessionId, [
-        { type: "image", source: { type: "url", value: attachmentUrl("f".repeat(64)) } },
-      ]);
-      expect(unknown.status).toBe(400);
+      expect(
+        yield* Effect.flip(post(sessionId, [{ type: "text", content: "look at this" }, part])),
+      ).toMatchObject({ error: "images_not_supported" });
+      expect(
+        yield* Effect.flip(
+          post(sessionId, [
+            { type: "image", source: { type: "url", value: attachmentUrl("f".repeat(64)) } },
+          ]),
+        ),
+      ).toEqual({ error: "unknown_attachment" });
     }),
   );
 });
 
 /** What AgentChat answers before any run when the account or provider cannot serve one. */
-const refusal = Effect.gen(function* () {
-  const response = yield* post((yield* TestEnv).session.id, "hi");
-  return { status: response.status, body: yield* json(response) };
-});
+const refusal = Effect.flatMap(TestEnv, ({ session }) => Effect.flip(post(session.id, "hi")));
 
-testAgent({ testProvider: { signedIn: false } })("AgentChat.handle signed out", (it) => {
+testAgent({ testProvider: { signedIn: false } })("chat runs signed out", (it) => {
   it.effect("refuses to run without login", () =>
     Effect.gen(function* () {
-      expect((yield* refusal).status).toBe(401);
+      expect(yield* refusal).toEqual({ error: "login_required" });
     }),
   );
 });
 
-testAgent({ testProvider: {} })("AgentChat.handle without a chosen model", (it) => {
+testAgent({ testProvider: {} })("chat runs without a chosen model", (it) => {
   it.effect("refuses to run without a chosen model", () =>
     Effect.gen(function* () {
-      expect(yield* refusal).toEqual({
-        status: 412,
-        body: { error: "model_selection_required" },
-      });
+      expect(yield* refusal).toEqual({ error: "model_selection_required" });
     }),
   );
 });
 
 testAgent({ providerRegistry: ProviderRegistry.layer([], []) })(
-  "AgentChat.handle without a provider",
+  "chat runs without a provider",
   (it) => {
     it.effect("refuses to run when no provider can authenticate", () =>
       Effect.gen(function* () {
-        expect(yield* refusal).toEqual({
-          status: 503,
-          body: { error: "provider_auth_unavailable", provider: "openai" },
-        });
+        expect(yield* refusal).toEqual({ error: "provider_auth_unavailable", provider: "openai" });
       }),
     );
   },
 );
+
+/** How many runs let their model go, as a run lets its pinned account go. */
+const released = MutableRef.make(0);
+
+testAgent({
+  testProvider: {
+    runModel: (_selection, run) =>
+      Effect.gen(function* () {
+        yield* Effect.addFinalizer(() => Effect.sync(() => MutableRef.increment(released)));
+        const scripted = yield* scriptedModel([{ text: "hello" }]);
+        return {
+          model: yield* scripted.forRun(run),
+          source: scriptedSource,
+          shownFailure: shownScriptedFailure,
+        };
+      }),
+  },
+})("a run's model", (it) => {
+  it.effect("is let go once, when the run's stream ends", () =>
+    Effect.gen(function* () {
+      yield* selectTestModel();
+      yield* eventsOf(yield* post(yield* freshSession, "hello"));
+      expect(MutableRef.get(released)).toBe(1);
+    }),
+  );
+});

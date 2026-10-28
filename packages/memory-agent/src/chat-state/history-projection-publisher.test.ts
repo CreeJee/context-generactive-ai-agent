@@ -2,7 +2,7 @@ import { Effect, Layer, Match, Schema, Result, Function as EffectFunction } from
 import { describe, expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
 import { SqlClient } from "effect/sql";
-import type { ModelMessage } from "@tanstack/ai";
+import type { StoredMessage } from "../chat-store/schema.ts";
 import { Database } from "../db/database.ts";
 import { groupHistoryMessages, HistoryGroupingResult } from "./history-groups.ts";
 import {
@@ -37,7 +37,7 @@ function run<A, E>(
 ) {
   return program.pipe(provideFixture(layer));
 }
-function publication(messages: ModelMessage[]): HistoryProjectionPublication {
+function publication(messages: StoredMessage[]): HistoryProjectionPublication {
   return HistoryGroupingResult.$match(groupHistoryMessages("a", messages), {
     "id-collision": () => {
       throw new Error("Unexpected fixture ID collision");
@@ -162,21 +162,29 @@ describe("Effect history projection publication", () => {
         yield* writeOriginal(first.sourceJSON);
         yield* service.publish(first);
         const current = yield* reader.read(initialPage);
-        for (const input of [
-          { ...first, threadId: "" },
-          { ...first, groups: [{ id: "", messages: first.sourceJSON }] },
-        ]) {
-          const failed = yield* service.publish(input).pipe(Effect.flip);
-          expect(failed.reason).toEqual(publishReason.InvalidPublication.make({}));
-          expect(yield* reader.read(initialPage)).toEqual(current);
-        }
-        for (const messages of ["not JSON", "{}", "[]"]) {
-          const failed = yield* service
-            .publish({ ...first, groups: [{ id: "old", messages }] })
-            .pipe(Effect.flip);
-          expect(failed.reason).toEqual(publishReason.InvalidPreparedJson.make({}));
-          expect(yield* reader.read(initialPage)).toEqual(current);
-        }
+        yield* Effect.forEach(
+          [
+            { ...first, threadId: "" },
+            { ...first, groups: [{ id: "", messages: first.sourceJSON }] },
+          ],
+          Effect.fnUntraced(function* (input) {
+            const failed = yield* service.publish(input).pipe(Effect.flip);
+            expect(failed.reason).toEqual(publishReason.InvalidPublication.make({}));
+            expect(yield* reader.read(initialPage)).toEqual(current);
+          }),
+          { discard: true },
+        );
+        yield* Effect.forEach(
+          ["not JSON", "{}", "[]"],
+          Effect.fnUntraced(function* (messages) {
+            const failed = yield* service
+              .publish({ ...first, groups: [{ id: "old", messages }] })
+              .pipe(Effect.flip);
+            expect(failed.reason).toEqual(publishReason.InvalidPreparedJson.make({}));
+            expect(yield* reader.read(initialPage)).toEqual(current);
+          }),
+          { discard: true },
+        );
         const failed = yield* service
           .publish({ ...first, groups: [...first.groups, ...first.groups] })
           .pipe(Effect.flip);
