@@ -99,9 +99,11 @@ export const textWindow: {
 } & typeof textWindowBody = EffectFunction.dual(3, textWindowBody);
 function textWindowBody(text: string, offset: number, length: number) {
   const start = Math.min(Math.max(0, Math.trunc(offset)), text.length);
-  let end = Math.min(start + length, text.length);
-  const last = text.charCodeAt(end - 1);
-  if (end < text.length && end - start > 1 && last >= 0xd800 && last <= 0xdbff) end -= 1;
+  const cut = Math.min(start + length, text.length);
+  const last = text.charCodeAt(cut - 1);
+  // A window that would end between the halves of a pair stops before it, unless that leaves it empty.
+  const end =
+    cut < text.length && cut - start > 1 && last >= 0xd800 && last <= 0xdbff ? cut - 1 : cut;
   return {
     text: text.slice(start, end),
     offset: start,

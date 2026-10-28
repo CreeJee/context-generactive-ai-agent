@@ -2,7 +2,7 @@ import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { HashSet, Array as EffectArray, DateTime, Semaphore } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { Cause, Context, Crypto, Effect, Layer, Match, Option, Schema } from "effect";
+import { Cause, Context, Crypto, Effect, Layer, Match, Option, Schema, Stream } from "effect";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import { failureTags } from "../runtime/logged-failures.ts";
 import { ApiUsage, recordUsage } from "../agent/api-usage.ts";
@@ -374,33 +374,37 @@ const make = Effect.gen(function* () {
       if (!isTruthy(selection)) return 0;
       const auth = yield* active.auth(selection);
       if (!AuthConnectionState.$is("signed-in")(auth)) return 0;
-      let interpreted = 0;
-      for (let round = 0; round < batchesPerRun; round++) {
-        const batch = yield* nextBatch;
-        if (batch.length === 0) break;
-        const now = yield* nowIso;
-        yield* Effect.forEach(batch, (statement) => markRunning(statement.id, now), {
-          discard: true,
-        }).pipe(sql.withTransaction);
-        interpreted += yield* interpretBatch(batch, selection).pipe(
-          Effect.catch((error) =>
-            Effect.gen(function* () {
-              const reason = Match.value(error).pipe(
-                Match.tag("InterpretationFailed", (failure) => failure.reason),
-                Match.orElse(() => "interpret_failed"),
-              );
-              const failedAt = yield* nowIso;
-              yield* Effect.forEach(
-                batch,
-                (statement) => markFailed(statement.id, reason, failedAt),
-                { discard: true },
-              ).pipe(sql.withTransaction);
-              return 0;
-            }),
-          ),
-        );
-      }
-      return interpreted;
+      // Each batch is read after the one before it is settled, until none is left.
+      return yield* Stream.fromEffectRepeat(nextBatch).pipe(
+        Stream.take(batchesPerRun),
+        Stream.takeWhile(EffectArray.isReadonlyArrayNonEmpty),
+        Stream.mapEffect((batch) =>
+          Effect.gen(function* () {
+            const now = yield* nowIso;
+            yield* Effect.forEach(batch, (statement) => markRunning(statement.id, now), {
+              discard: true,
+            }).pipe(sql.withTransaction);
+            return yield* interpretBatch(batch, selection).pipe(
+              Effect.catch((error) =>
+                Effect.gen(function* () {
+                  const reason = Match.value(error).pipe(
+                    Match.tag("InterpretationFailed", (failure) => failure.reason),
+                    Match.orElse(() => "interpret_failed"),
+                  );
+                  const failedAt = yield* nowIso;
+                  yield* Effect.forEach(
+                    batch,
+                    (statement) => markFailed(statement.id, reason, failedAt),
+                    { discard: true },
+                  ).pipe(sql.withTransaction);
+                  return 0;
+                }),
+              ),
+            );
+          }),
+        ),
+        Stream.runSum,
+      );
     }).pipe(oneRunAtATime.withPermits(1)),
   };
 });

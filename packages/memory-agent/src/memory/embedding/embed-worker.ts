@@ -1,5 +1,5 @@
 import * as NodeWorkerRunner from "@effect/platform-node/NodeWorkerRunner";
-import { Cause, Effect, Layer, Result, Schema } from "effect";
+import { Array as Arr, Cause, Effect, Layer, Option, Result, Schema, Stream } from "effect";
 import { RpcServer } from "effect/rpc";
 import { nativeFailure, nativePromise, runNativeEffect } from "../../runtime/native-effect.ts";
 import { ignoreLogged } from "../../runtime/logged-failures.ts";
@@ -24,34 +24,39 @@ const load = Effect.fn("EmbeddingWorker.load")(function* (setup: EmbeddingWorker
   env.cacheDir = setup.cacheDir;
   env.allowLocalModels = false;
   const tokenizer = yield* nativePromise(() => AutoTokenizer.from_pretrained(setup.modelId));
-  const failures: string[] = [];
-  for (const device of setup.devices) {
-    let model: Awaited<ReturnType<typeof AutoModel.from_pretrained>> | null = null;
-    const outcome = yield* Effect.result(
-      Effect.gen(function* () {
-        const loaded = yield* nativePromise(() =>
-          AutoModel.from_pretrained(setup.modelId, {
-            dtype: "fp32",
-            model_file_name: setup.modelFileName,
-            device,
-            session_options: { enableCpuMemArena: false },
-          }),
-        );
-        model = loaded;
-        yield* nativePromise(() =>
-          loaded(tokenizer(["준비"], { padding: true, truncation: true })),
-        );
-        return { tokenizer, model: loaded, device };
+  /** The model on `device`, once it has run; one that loaded and then failed is disposed of. */
+  const onDevice = (device: EmbeddingWorkerData["devices"][number]) =>
+    nativePromise(() =>
+      AutoModel.from_pretrained(setup.modelId, {
+        dtype: "fp32",
+        model_file_name: setup.modelFileName,
+        device,
+        session_options: { enableCpuMemArena: false },
       }),
+    ).pipe(
+      Effect.flatMap((loaded) =>
+        nativePromise(() => loaded(tokenizer(["준비"], { padding: true, truncation: true }))).pipe(
+          Effect.as({ tokenizer, model: loaded, device }),
+          Effect.tapError(() =>
+            nativePromise(() => loaded.dispose()).pipe(
+              ignoreLogged("embedding_model_dispose_failed", { device }),
+            ),
+          ),
+        ),
+      ),
+      Effect.mapError((cause) => `${device}: ${String(nativeFailure(Cause.fail(cause)).cause)}`),
+      Effect.result,
     );
-    if (Result.isSuccess(outcome)) return outcome.success;
-    failures.push(`${device}: ${String(nativeFailure(Cause.fail(outcome.failure)).cause)}`);
-    if (model !== null)
-      yield* nativePromise(() => model!.dispose()).pipe(
-        ignoreLogged("embedding_model_dispose_failed", { device }),
-      );
-  }
-  return yield* new Cause.UnknownError(new Error(failures.join("; ")));
+  // The devices are tried in order until one works.
+  const tried = yield* Stream.fromIterable(setup.devices).pipe(
+    Stream.mapEffect(onDevice),
+    Stream.takeUntil(Result.isSuccess),
+    Stream.runCollect,
+  );
+  return yield* Option.match(Arr.findFirst(tried, Result.isSuccess), {
+    onSome: ({ success }) => Effect.succeed(success),
+    onNone: () => Effect.fail(new Cause.UnknownError(new Error(Arr.getFailures(tried).join("; ")))),
+  });
 });
 type LoadedModel = Effect.Success<ReturnType<typeof load>>;
 
@@ -69,10 +74,9 @@ const embed = Effect.fn("EmbeddingWorker.embed")(function* (
   const [batch, tokens, dimensions] = hidden.dims;
   // CLS pooling: the first token's hidden state is the sentence vector.
   const rows = new Float32Array(batch * dimensions);
-  for (let row = 0; row < batch; row++) {
-    const start = row * tokens * dimensions;
-    rows.set(hidden.data.subarray(start, start + dimensions), row * dimensions);
-  }
+  Array.from({ length: batch }, (_, row) => row * tokens * dimensions).forEach((start, row) =>
+    rows.set(hidden.data.subarray(start, start + dimensions), row * dimensions),
+  );
   return rows;
 });
 

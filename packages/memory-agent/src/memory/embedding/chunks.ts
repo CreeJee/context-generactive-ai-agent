@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { Array as Arr, Effect, Schema, Stream } from "effect";
 
 /** UTF-16 offsets into the unchanged original, suitable for read_evidence(offset). */
 export const ChunkSpan = Schema.Struct({
@@ -35,31 +35,65 @@ export const chunkText = Effect.fn("Embedding.chunkText")(function* (
   text: string,
   count: (text: string, specialTokens: boolean) => Effect.Effect<number, ChunkingFailed>,
 ) {
-  const spans: ChunkSpan[] = [];
-  let start = 0;
-  while (start < text.length) {
-    let low = start;
-    let high = boundary(text, Math.min(text.length, start + chunkPolicy.tokens * 8));
-    // Retain only measured, fitting endpoints. Token counts need not be strictly monotonic for
-    // this to preserve coverage and the hard bound; a non-monotonic tokenizer may yield less fill.
-    while (low < high) {
-      let middle = boundary(text, Math.ceil((low + high) / 2));
-      if (middle <= low) middle = Math.min(high, low + 2);
-      if ((yield* count(text.slice(start, middle), true)) <= chunkPolicy.tokens) low = middle;
-      else high = boundary(text, middle - 1);
-    }
-    const end = low;
-    if (end <= start) return yield* ChunkingFailed.make({ reason: "token-limit" });
-    spans.push({ start, end });
-    if (end === text.length) break;
-    low = start + (text.codePointAt(start)! > 0xffff ? 2 : 1);
-    high = end;
-    while (low < high) {
-      const middle = boundary(text, Math.floor((low + high) / 2));
-      if ((yield* count(text.slice(middle, end), false)) <= chunkPolicy.overlap) high = middle;
-      else low = middle + (text.codePointAt(middle)! > 0xffff ? 2 : 1);
-    }
-    start = high;
-  }
-  return spans;
+  /** UTF-16 units of the character at `offset`. */
+  const width = (offset: number) => (text.codePointAt(offset)! > 0xffff ? 2 : 1);
+
+  // Both searches halve their range at each step, so their depth stays small.
+  /**
+   * The farthest end between `low` and `high` whose span from `start` fits. Retain only measured,
+   * fitting endpoints. Token counts need not be strictly monotonic for this to preserve coverage
+   * and the hard bound; a non-monotonic tokenizer may yield less fill.
+   */
+  const fittingEnd = (
+    start: number,
+    low: number,
+    high: number,
+  ): Effect.Effect<number, ChunkingFailed> => {
+    const half = boundary(text, Math.ceil((low + high) / 2));
+    const middle = half <= low ? Math.min(high, low + 2) : half;
+    return low >= high
+      ? Effect.succeed(low)
+      : Effect.flatMap(count(text.slice(start, middle), true), (tokens) =>
+          tokens <= chunkPolicy.tokens
+            ? fittingEnd(start, middle, high)
+            : fittingEnd(start, low, boundary(text, middle - 1)),
+        );
+  };
+
+  /** The earliest start between `low` and `high` whose overlap up to `end` fits. */
+  const overlapStart = (
+    end: number,
+    low: number,
+    high: number,
+  ): Effect.Effect<number, ChunkingFailed> => {
+    const middle = boundary(text, Math.floor((low + high) / 2));
+    return low >= high
+      ? Effect.succeed(high)
+      : Effect.flatMap(count(text.slice(middle, end), false), (tokens) =>
+          tokens <= chunkPolicy.overlap
+            ? overlapStart(end, low, middle)
+            : overlapStart(end, middle + width(middle), high),
+        );
+  };
+
+  /** The span from `start`, and where the next one starts unless this one reaches the end. */
+  const spanFrom = (start: number) =>
+    Effect.gen(function* () {
+      const end = yield* fittingEnd(
+        start,
+        start,
+        boundary(text, Math.min(text.length, start + chunkPolicy.tokens * 8)),
+      );
+      yield* Effect.when(
+        Effect.fail(ChunkingFailed.make({ reason: "token-limit" })),
+        Effect.succeed(end <= start),
+      );
+      const next = yield* Effect.when(
+        overlapStart(end, start + width(start), end),
+        Effect.succeed(end < text.length),
+      );
+      return [Arr.of<ChunkSpan>({ start, end }), next] as const;
+    });
+
+  return text.length === 0 ? [] : yield* Stream.runCollect(Stream.paginate(0, spanFrom));
 });
