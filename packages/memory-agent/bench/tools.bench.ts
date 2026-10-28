@@ -8,7 +8,16 @@ import { optionalProperty } from "../src/optional-property.ts";
 
 import { path } from "../src/runtime/synchronous-path.ts";
 const { join } = path;
-import { Cause, Effect, FileSystem, Stream, ManagedRuntime, Schema } from "effect";
+import {
+  Array as Arr,
+  Cause,
+  Effect,
+  FileSystem,
+  Stream,
+  ManagedRuntime,
+  Option,
+  Schema,
+} from "effect";
 import { test, describe, afterAll } from "vite-plus/test";
 import { SecretStore } from "../src/config/secrets.ts";
 import { memoryAgentLayer } from "../src/layers.ts";
@@ -32,40 +41,56 @@ const makeRepository = Effect.fn("ToolBench.makeRepository")(function* (
   git: boolean,
 ) {
   yield* fs.makeDirectory(root, { recursive: true });
-  for (let d = 0; d < directories; d++) {
-    const directory = join(root, "src", `module-${d}`);
-    yield* fs.makeDirectory(directory, { recursive: true });
-    for (let f = 0; f < filesPerDirectory; f++) {
-      const index = d * filesPerDirectory + f;
-      const lines = Array.from({ length: 120 }, (_, line) =>
-        index < needleFiles && line % 10 === 0
-          ? `  const needle${line} = compute(${index}, ${line}); // 한글 주석 needle`
-          : `  export function helper${index}_${line}(value: number) { return value * ${line}; }`,
+  yield* Effect.forEach(
+    Array.from({ length: directories }, (_, d) => d),
+    Effect.fnUntraced(function* (d) {
+      const directory = join(root, "src", `module-${d}`);
+      yield* fs.makeDirectory(directory, { recursive: true });
+      yield* Effect.forEach(
+        Array.from({ length: filesPerDirectory }, (_, f) => f),
+        (f) => {
+          const index = d * filesPerDirectory + f;
+          const lines = Array.from({ length: 120 }, (_, line) =>
+            index < needleFiles && line % 10 === 0
+              ? `  const needle${line} = compute(${index}, ${line}); // 한글 주석 needle`
+              : `  export function helper${index}_${line}(value: number) { return value * ${line}; }`,
+          );
+          return fs.writeFileString(join(directory, `file-${f}.ts`), `${lines.join("\n")}\n`);
+        },
+        { discard: true },
       );
-      yield* fs.writeFileString(join(directory, `file-${f}.ts`), `${lines.join("\n")}\n`);
-    }
-  }
+    }),
+    { discard: true },
+  );
   const big = Array.from({ length: 6000 }, (_, line) => `line ${line}: ${"x".repeat(60)} 😀\r`);
   yield* fs.writeFileString(join(root, "big.txt"), big.join("\n"));
-  if (git) {
+  const commitFixture = Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const env = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" };
-    for (const args of [
-      ["init", "-q"],
-      ["add", "-A"],
-      ["-c", "user.email=b@e", "-c", "user.name=bench", "commit", "-qm", "fixture"],
-    ]) {
-      const child = yield* spawner.spawn(
-        ChildProcess.make("git", args, { cwd: root, env, extendEnv: true, stdin: "ignore" }),
-      );
-      const [, , code] = yield* Effect.all(
-        [Stream.runDrain(child.stdout), Stream.runDrain(child.stderr), child.exitCode],
-        { concurrency: "unbounded" },
-      );
-      if (code !== 0)
-        return yield* new Cause.UnknownError(new Error(`Git fixture failed: ${code}`));
-    }
-  }
+    yield* Effect.forEach(
+      [
+        ["init", "-q"],
+        ["add", "-A"],
+        ["-c", "user.email=b@e", "-c", "user.name=bench", "commit", "-qm", "fixture"],
+      ],
+      Effect.fnUntraced(function* (args) {
+        const child = yield* spawner.spawn(
+          ChildProcess.make("git", args, { cwd: root, env, extendEnv: true, stdin: "ignore" }),
+        );
+        yield* Effect.all(
+          [Stream.runDrain(child.stdout), Stream.runDrain(child.stderr), child.exitCode],
+          { concurrency: "unbounded" },
+        ).pipe(
+          Effect.filterOrFail(
+            ([, , code]) => code === 0,
+            ([, , code]) => new Cause.UnknownError(new Error(`Git fixture failed: ${code}`)),
+          ),
+        );
+      }),
+      { discard: true },
+    );
+  });
+  yield* Effect.when(commitFixture, Effect.succeed(git));
 });
 
 const base = await platformRuntime.runPromise(
@@ -142,40 +167,48 @@ type Call<E> = (input: JsonValue) => Effect.Effect<JsonValue, E>;
 const pageOf = <E>(call: Call<E>, input: JsonValue) =>
   Effect.flatMap(call(input), Schema.decodeUnknownEffect(Page));
 
+/** The pages of a call from `first` on; `next` gives the input for the page after one, if any. */
+const pages = <E>(
+  call: Call<E>,
+  first: JsonValue,
+  next: (page: typeof Page.Type) => Option.Option<JsonValue>,
+) =>
+  Stream.paginate(first, (input) =>
+    Effect.map(pageOf(call, input), (page) => [Arr.of(page), next(page)] as const),
+  );
+
 /** Every page of a listing, as a model paging through it would. */
-const listAll = Effect.fn("ToolBench.listAll")(function* <E>(list: Call<E>) {
-  let page = yield* pageOf(list, {});
-  while (isTruthy(page.nextOffset)) {
-    const input = {
-      ...optionalProperty("snapshot", page.snapshot),
-      offset: page.nextOffset,
-    };
-    page = yield* pageOf(list, input);
-  }
-});
+const listAll = <E>(list: Call<E>) =>
+  pages(list, {}, (page) =>
+    isTruthy(page.nextOffset)
+      ? Option.some({ ...optionalProperty("snapshot", page.snapshot), offset: page.nextOffset })
+      : Option.none(),
+  ).pipe(Stream.runDrain, Effect.withSpan("ToolBench.listAll"));
 
 /** Every page of a search. */
-const searchAll = Effect.fn("ToolBench.searchAll")(function* <E>(
+const searchAll = <E>(
   search: Call<E>,
   query: { readonly query: string; readonly directory?: string },
-) {
-  let page = yield* pageOf(search, query);
-  while (isTruthy(page.nextCursor)) {
-    const input = { ...query, cursor: page.nextCursor };
-    page = yield* pageOf(search, input);
-  }
-});
+) =>
+  pages(search, query, (page) =>
+    isTruthy(page.nextCursor) ? Option.some({ ...query, cursor: page.nextCursor }) : Option.none(),
+  ).pipe(Stream.runDrain, Effect.withSpan("ToolBench.searchAll"));
 
-const readAll = Effect.fn("ToolBench.readAll")(function* <E>(read: Call<E>) {
-  let page = yield* pageOf(read, { path: "big.txt", maxLines: 2000 });
-  let pages = 1;
-  while (isTruthy(page.nextStartLine)) {
-    const input = { path: "big.txt", startLine: page.nextStartLine, maxLines: 2000 };
-    page = yield* pageOf(read, input);
-    pages++;
-  }
-  if (pages < 10) throw new Error(`expected many pages, got ${pages}`);
-});
+const readAll = <E>(read: Call<E>) =>
+  pages(read, { path: "big.txt", maxLines: 2000 }, (page) =>
+    isTruthy(page.nextStartLine)
+      ? Option.some({ path: "big.txt", startLine: page.nextStartLine, maxLines: 2000 })
+      : Option.none(),
+  ).pipe(
+    Stream.runCount,
+    Effect.tap((count) =>
+      Effect.when(
+        Effect.die(new Error(`expected many pages, got ${count}`)),
+        Effect.succeed(count < 10),
+      ),
+    ),
+    Effect.withSpan("ToolBench.readAll"),
+  );
 
 describe("file tools (3,000 files)", () => {
   test("list_files, plain directory", ({ bench }) =>
