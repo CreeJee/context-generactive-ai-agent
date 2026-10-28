@@ -1,6 +1,16 @@
 import { layer } from "@effect/vitest";
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
-import { Effect, FileSystem, Layer, MutableHashMap, Option, Path, Random, Schema } from "effect";
+import {
+  Effect,
+  FileSystem,
+  Layer,
+  MutableHashMap,
+  MutableRef,
+  Option,
+  Path,
+  Random,
+  Schema,
+} from "effect";
 import { describe, expect } from "vite-plus/test";
 import { StorageRoot, defaultStorageRoot } from "../../src/config/storage-root.ts";
 import { EmbedderRuntime, Embedder, EmbeddingError } from "../../src/memory/embedding/embedder.ts";
@@ -466,11 +476,13 @@ testAgent({ embedder: brokenEmbedder })("MemorySearch.find with a failing embedd
   );
 });
 
-let warmed = 0;
+const warmed = MutableRef.make(0);
 const loadingAnalyzer = Layer.succeed(MorphAnalyzer, {
   identity: "loading",
   ready: () => false,
-  warm: () => void warmed++,
+  warm: () => {
+    MutableRef.increment(warmed);
+  },
   terms: () => Effect.die("not loaded"),
 });
 
@@ -480,7 +492,7 @@ testAgent({ morphAnalyzer: loadingAnalyzer })("MemorySearch.find while Kiwi load
       const { project } = yield* TestEnv;
       const result = yield* find({ query: "아무거나", projectId: project.id });
       expect(result.degraded).toEqual(["morph"]);
-      expect(warmed).toBe(1);
+      expect(MutableRef.get(warmed)).toBe(1);
     }),
   );
 });

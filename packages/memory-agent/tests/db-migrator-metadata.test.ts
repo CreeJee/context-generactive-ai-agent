@@ -16,7 +16,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const db = yield* open;
-      for (const sql of migrations) db.exec(sql);
+      migrations.forEach((sql) => db.exec(sql));
       db.exec(`PRAGMA user_version = ${migrations.length}`);
       yield* migrateDatabase(db);
       const before = db.prepare("SELECT * FROM effect_sql_migrations ORDER BY migration_id").all();

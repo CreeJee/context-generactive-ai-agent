@@ -16,7 +16,7 @@ import { InterruptAnswer, RunStore } from "../../src/loop/store.ts";
 const database = Effect.acquireRelease(
   Effect.sync(() => {
     const sqlite = new DatabaseSync(":memory:");
-    for (const migration of migrations) sqlite.exec(migration);
+    migrations.forEach((migration) => sqlite.exec(migration));
     return sqlite;
   }),
   (sqlite) => Effect.sync(() => sqlite.close()),

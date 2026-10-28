@@ -18,7 +18,7 @@ test("successful modifications count but no-op writes and edits do not", () => {
 });
 
 test("failures, refusals and empty results are not substantive progress", () => {
-  for (const result of [
+  [
     null,
     "",
     {},
@@ -27,8 +27,9 @@ test("failures, refusals and empty results are not substantive progress", () => 
     { approved: false },
     { exitCode: 1, output: "failed" },
     { exitCode: 0, signal: "SIGTERM" },
-  ])
+  ].forEach((result) => {
     expect(fingerprint("run_shell", "{}", result)).toBeNull();
+  });
   expect(
     fingerprint("run_shell", "{}", { exitCode: 0, output: "passed", signal: null }),
   ).not.toBeNull();

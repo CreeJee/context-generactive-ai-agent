@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest";
-import { DateTime, Effect, Result } from "effect";
+import { DateTime, Effect, MutableRef, Result } from "effect";
 import { expect } from "vite-plus/test";
 import {
   SubscriptionUsageCredentialExpired,
@@ -22,14 +22,14 @@ it.effect.each([
       refreshToken: "fixture",
       expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 3600_000,
     };
-    let writes = 0;
+    const writes = MutableRef.make(0);
     const requests: Parameters<typeof fetch>[0][] = [];
     const outcome = yield* anthropicSubscriptionUsageProbe({
       store: {
         read: () => Effect.succeed(credential),
         write: () =>
           Effect.sync(() => {
-            writes += 1;
+            MutableRef.increment(writes);
           }),
         remove: () => Effect.void,
       },
@@ -44,7 +44,7 @@ it.effect.each([
       },
     }).pipe(Effect.result);
     expect(requests).toEqual([anthropicUsageUrl]);
-    expect(writes).toBe(0);
+    expect(MutableRef.get(writes)).toBe(0);
     switch (expected) {
       case "probe":
         return expect(outcome).toMatchObject({

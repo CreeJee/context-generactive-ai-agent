@@ -43,7 +43,7 @@ describe("Effect built-in workflow engine contract", () => {
         const file = path.join(directory, "owner.db");
         const release = new DatabaseSync(file);
         try {
-          for (const migration of migrations.slice(0, 30)) release.exec(migration);
+          migrations.slice(0, 30).forEach((migration) => release.exec(migration));
           release.exec("PRAGMA user_version = 30");
           release
             .prepare("INSERT INTO projects (id, root, name, created_at) VALUES (?, ?, ?, ?)")

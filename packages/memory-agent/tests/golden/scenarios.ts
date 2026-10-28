@@ -175,8 +175,9 @@ export const chatScenarios = (it: It) => {
   );
   scenario("/compact summarizes earlier turns for the next one", "compaction", "ask", (chat) =>
     Effect.gen(function* () {
-      for (const turn of ["turn one", "turn two", "turn three", "turn four"])
-        yield* chat.send(turn);
+      yield* Effect.forEach(["turn one", "turn two", "turn three", "turn four"], chat.send, {
+        discard: true,
+      });
       yield* chat.compact;
       yield* chat.send("turn five");
     }),

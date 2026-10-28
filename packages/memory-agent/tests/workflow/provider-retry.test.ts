@@ -248,7 +248,7 @@ describe("durable provider retry", () => {
               // The schema as 0.0.17 wrote it: every step before the execution migration, so the
               // reopen below replays that migration and the ones after it on a database like that.
               sqlite.exec("PRAGMA foreign_keys = OFF");
-              for (const step of migrations.slice(0, executionMigration)) sqlite.exec(step);
+              migrations.slice(0, executionMigration).forEach((step) => sqlite.exec(step));
               sqlite.exec(`PRAGMA user_version = ${executionMigration}`);
               // The state as 0.0.17 wrote it, with its case under kind.
               sqlite

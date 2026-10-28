@@ -16,7 +16,7 @@ it.effect("opening a database moves the chat rows TanStack wrote, BTW threads in
       (db) => Effect.sync(() => db.close()),
     );
     const index = migrations.indexOf(tanStackRowsMigration);
-    for (const step of migrations.slice(0, index)) db.exec(step);
+    migrations.slice(0, index).forEach((step) => db.exec(step));
     db.exec(`PRAGMA user_version = ${index}`);
     db.exec(
       "INSERT INTO projects (id, root, name, created_at) VALUES ('project', '/tmp/project', 'project', 'old')",

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Duration, Option } from "effect";
+import { Array as Arr, Duration, Option } from "effect";
 import {
   admitDefect,
   fingerprintWindow,
@@ -19,12 +19,14 @@ describe("admitDefect", () => {
   });
 
   it("caps the messages per minute across fingerprints", () => {
-    let state = empty;
-    const counts = Array.from({ length: messagesPerMinute + 1 }, (_, index) => {
-      const admitted = admitDefect(state, `Defect@step${index}`, index);
-      state = admitted.state;
-      return Option.isSome(admitted.count);
-    });
+    const [state, counts] = Arr.mapAccum(
+      Array.from({ length: messagesPerMinute + 1 }, (_, index) => index),
+      empty,
+      (sent, index) => {
+        const admitted = admitDefect(sent, `Defect@step${index}`, index);
+        return [admitted.state, Option.isSome(admitted.count)];
+      },
+    );
     expect(counts.filter(Boolean)).toHaveLength(messagesPerMinute);
     expect(admitDefect(state, "Defect@late", 60_000).count).toEqual(Option.some(1));
   });

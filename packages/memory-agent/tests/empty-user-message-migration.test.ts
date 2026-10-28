@@ -17,7 +17,7 @@ it.effect("migration removes only empty user text, preserving payloads, order an
       (db) => Effect.sync(() => db.close()),
     );
     const migrationIndex = migrations.indexOf(emptyUserMessageMigration);
-    for (const step of migrations.slice(0, migrationIndex)) db.exec(step);
+    migrations.slice(0, migrationIndex).forEach((step) => db.exec(step));
     db.exec(`PRAGMA user_version = ${migrationIndex}`);
     const empty: JsonValue = { id: "empty", role: "user", content: "", metadata: { tanstack: {} } };
     const retained: ReadonlyArray<JsonValue> = [

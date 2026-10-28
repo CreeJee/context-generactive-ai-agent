@@ -1,5 +1,5 @@
 import { it as effectTest } from "@effect/vitest";
-import { Context, Effect, Result, Layer, pipe } from "effect";
+import { Context, Effect, MutableRef, Result, Layer, pipe } from "effect";
 import {
   AuthConnectionState,
   ImageExecutorModel,
@@ -163,11 +163,10 @@ describe("RouteCatalog", () => {
 
   effectTest.effect("does not replace the previous snapshot when refresh fails", () =>
     Effect.gen(function* () {
-      let attempt = 0;
+      const attempt = MutableRef.make(0);
       const changing: RouteCatalogSource = {
-        load: Effect.suspend(() => {
-          attempt += 1;
-          return attempt === 1
+        load: Effect.suspend(() =>
+          MutableRef.incrementAndGet(attempt) === 1
             ? Effect.succeed(loaded)
             : Effect.fail(
                 RouteCatalogRefreshFailed.make({
@@ -175,10 +174,10 @@ describe("RouteCatalog", () => {
                   reason: RouteCatalogRefreshFailedReason.cases.Failed.make({}),
                   cause: new Error("unavailable"),
                 }),
-              );
-        }),
+              ),
+        ),
       };
-      const catalog = yield* makeRouteCatalog(changing, () => attempt);
+      const catalog = yield* makeRouteCatalog(changing, () => MutableRef.get(attempt));
       const first = yield* catalog.refresh;
       const failure = yield* Effect.result(catalog.refresh);
       expect(Result.isFailure(failure) && failure.failure).toBeInstanceOf(

@@ -73,8 +73,9 @@ describe("tool input repair", () => {
       ],
       [{ type: "string", nullable: true, minLength: 2 }, null, undefined],
     ];
-    for (const [schema, value, issues] of cases)
+    cases.forEach(([schema, value, issues]) => {
       expect(Option.getOrUndefined(jsonSchemaIssues({ schema, value }))).toEqual(issues);
+    });
   });
 
   it.effect("repairs and refuses the arguments TanStack did", () =>

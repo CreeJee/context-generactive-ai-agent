@@ -7,7 +7,7 @@ import {
   makeCrossProviderMediaConsent,
   type Settings,
 } from "../src/index.ts";
-import { Cause, Effect } from "effect";
+import { Cause, Effect, MutableRef } from "effect";
 import { assertExitFailure } from "@effect/vitest/utils";
 
 const pair = {
@@ -16,14 +16,16 @@ const pair = {
   capability: "media.image.generate",
 };
 const config = (initial: Settings = {}) => {
-  let settings = initial;
+  const settings = MutableRef.make(initial);
   return {
     api: {
-      read: Effect.sync(() => settings),
+      read: Effect.sync(() => MutableRef.get(settings)),
       update: (patch: Partial<Settings>) =>
-        Effect.sync(() => (settings = { ...settings, ...patch })),
+        Effect.sync(() =>
+          MutableRef.updateAndGet(settings, (current) => ({ ...current, ...patch })),
+        ),
     },
-    get: () => settings,
+    get: () => MutableRef.get(settings),
   };
 };
 

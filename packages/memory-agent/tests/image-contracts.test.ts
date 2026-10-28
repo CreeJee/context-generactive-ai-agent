@@ -39,11 +39,11 @@ describe("image route contracts", () => {
   });
 
   it("requires persistence and defers MIME to provider options or byte detection", () => {
-    for (const route of imageRouteContracts) {
+    imageRouteContracts.forEach((route) => {
       expect(route.output.persistenceRequired).toBe(true);
       expect(route.output.mime).toBe("provider_option_or_detect_bytes");
       expect(route.usage.costKnownBeforeExecution).toBe(false);
-    }
+    });
   });
 
   it("classifies Anthropic image input separately from unsupported generation", () => {

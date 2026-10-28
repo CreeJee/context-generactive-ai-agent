@@ -8,6 +8,7 @@ import {
   Fiber,
   FileSystem,
   Layer,
+  MutableRef,
   Path,
   Ref,
 } from "effect";
@@ -129,15 +130,15 @@ describe("ProviderToolPolicy", () => {
 
   effectTest.effect("uses the same fresh feature flag policy for exposure and execution", () =>
     Effect.gen(function* () {
-      let allowed = true;
+      const allowed = MutableRef.make(true);
       const flags = makeModelFeatureFlags(
         {
           read: Effect.sync(() => ({
             modelFeatureFlags: {
               version: 1 as const,
-              global: allowed,
-              providers: { openai: allowed },
-              capabilities: { "openai:web_search": allowed },
+              global: MutableRef.get(allowed),
+              providers: { openai: MutableRef.get(allowed) },
+              capabilities: { "openai:web_search": MutableRef.get(allowed) },
               models: {},
               routes: {},
             },
@@ -156,7 +157,7 @@ describe("ProviderToolPolicy", () => {
       expect((yield* policy.expose(basePolicy())).tools.map((tool) => tool.id)).toEqual([
         "openai:web_search",
       ]);
-      allowed = false;
+      MutableRef.set(allowed, false);
       expect((yield* policy.expose(basePolicy())).tools).toEqual([]);
       const denied = yield* errorOf(
         policy.revalidateExecution({

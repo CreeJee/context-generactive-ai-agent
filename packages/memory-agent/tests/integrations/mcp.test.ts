@@ -91,7 +91,7 @@ const freshProject = Effect.gen(function* () {
 const stubEnv = (values: Record<string, string>) =>
   Effect.acquireRelease(
     Effect.sync(() => {
-      for (const [name, value] of Object.entries(values)) vi.stubEnv(name, value);
+      Object.entries(values).forEach(([name, value]) => vi.stubEnv(name, value));
     }),
     () => Effect.sync(() => vi.unstubAllEnvs()),
   );

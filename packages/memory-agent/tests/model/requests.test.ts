@@ -235,11 +235,12 @@ const goldenFile = (name: string) =>
 describe("Effect AI subscription and compatible models", () => {
   it.effect("keeps every stored message through the prompt", () =>
     Effect.gen(function* () {
-      for (const { name, history } of yield* allHistories)
+      (yield* allHistories).forEach(({ name, history }) => {
         expect(fromPrompt(toPrompt(history, [system])), name).toStrictEqual({
           system: [system],
           history,
         });
+      });
     }),
   );
 

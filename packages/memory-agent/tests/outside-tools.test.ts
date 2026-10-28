@@ -15,8 +15,11 @@ const layout = Effect.fn("outsideTools.layout")(function* () {
   const project = path.join(base, "project");
   const storage = path.join(base, "storage");
   const docs = path.join(base, "docs");
-  for (const directory of [project, storage, path.join(docs, "guide"), path.join(docs, ".ssh")])
-    yield* fs.makeDirectory(directory, { recursive: true });
+  yield* Effect.forEach(
+    [project, storage, path.join(docs, "guide"), path.join(docs, ".ssh")],
+    (directory) => fs.makeDirectory(directory, { recursive: true }),
+    { discard: true },
+  );
   yield* fs.writeFileString(path.join(project, "app.ts"), "export {};\n");
   yield* fs.writeFileString(path.join(docs, "guide", "intro.md"), "# Intro\nDeploy with care.\n");
   yield* fs.writeFileString(path.join(docs, "notes.txt"), "deploy on friday\r\nnothing else\r\n");

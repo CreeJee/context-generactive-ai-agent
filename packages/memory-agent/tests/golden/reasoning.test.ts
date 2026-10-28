@@ -79,7 +79,7 @@ const scriptedClient = (provider: SubscriptionAccountProvider): StreamingOAuthCl
   },
 });
 
-for (const provider of ["anthropic", "openai"] as const)
+(["anthropic", "openai"] as const).forEach((provider) => {
   testAgent({
     testProvider: {
       // As the provider's runtime makes it, on the scripted client.
@@ -109,3 +109,4 @@ for (const provider of ["anthropic", "openai"] as const)
       20_000,
     );
   });
+});

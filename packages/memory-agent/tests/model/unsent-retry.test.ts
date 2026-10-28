@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest";
-import { Effect, Option, Stream } from "effect";
+import { Effect, MutableRef, Option, Stream } from "effect";
 import { Prompt } from "effect/ai";
 import { describe, expect } from "vite-plus/test";
 import {
@@ -36,18 +36,17 @@ interface Attempt {
 
 /** A client whose n-th request yields the n-th attempt's events, then fails with its failure. */
 const clientOf = (attempts: ReadonlyArray<Attempt>) => {
-  let sent = 0;
+  const sent = MutableRef.make(0);
   const client: StreamingOAuthClient = {
     stream: () => {
-      const attempt = attempts[sent] ?? { events: [] };
-      sent += 1;
+      const attempt = attempts[MutableRef.getAndIncrement(sent)] ?? { events: [] };
       return Stream.concat(
         Stream.fromIterable(attempt.events, { chunkSize: 1 }),
         attempt.failure === undefined ? Stream.empty : Stream.fail(attempt.failure),
       );
     },
   };
-  return { client, sent: () => sent };
+  return { client, sent: () => MutableRef.get(sent) };
 };
 
 /** Streams the request through the retried model; each wait is recorded and answered `outcome`. */

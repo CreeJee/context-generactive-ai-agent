@@ -1,4 +1,4 @@
-import { Crypto, Effect, Fiber, FileSystem, Path, Schema, Stream } from "effect";
+import { Crypto, Effect, Fiber, FileSystem, MutableRef, Path, Schema, Stream } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { Refusal, refusalStatus, type RunEvent } from "../../src/api/chat-api.ts";
@@ -83,7 +83,7 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
   // restart replaces the agent, and the page opens the session again. A send reads its run to the
   // end, so the next one finds the page idle, as the user would.
   const page = { tab: yield* openPage(sessionId) };
-  let handWrittenTurns = 0;
+  const handWrittenTurns = MutableRef.make(0);
   const deliver = (text: string) => page.tab.send(text);
   /** The agent's own view: it holds no live run or background turn for the conversation. */
   const idle = Effect.flatMap(TestEnv, (env) =>
@@ -158,7 +158,9 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
         params: { session: sessionId },
         headers: {},
         payload: {
-          runId: turn.runId ?? `${sessionId}:hand-written-${(handWrittenTurns += 1)}`,
+          runId:
+            turn.runId ??
+            `${sessionId}:hand-written-${MutableRef.incrementAndGet(handWrittenTurns)}`,
           messages: turn.messages ?? [],
           ...optionalProperty("parentRunId", turn.parentRunId),
           ...optionalProperty("resume", turn.resume),

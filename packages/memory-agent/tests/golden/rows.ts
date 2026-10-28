@@ -1,4 +1,11 @@
-import { Effect, Function as EffectFunction, MutableHashMap, Option, Schema } from "effect";
+import {
+  Effect,
+  Function as EffectFunction,
+  MutableHashMap,
+  MutableRef,
+  Option,
+  Schema,
+} from "effect";
 import { expect } from "vite-plus/test";
 import { HandoffState, modelHandoffNamespace } from "../../src/agent/handoff-state.ts";
 import { handoffHistory } from "../../src/agent/model-handoff.ts";
@@ -49,10 +56,10 @@ const timeKey = /(?:_at|At|^timestamp|_since)$/;
  */
 const placeholders = (fixed: ReadonlyArray<readonly [string, string]>) => {
   const seen = MutableHashMap.fromIterable(fixed);
-  let count = 0;
+  const count = MutableRef.make(0);
   const of = (id: string) =>
     Option.getOrElse(MutableHashMap.get(seen, id), () => {
-      const name = `<id-${++count}>`;
+      const name = `<id-${MutableRef.incrementAndGet(count)}>`;
       MutableHashMap.set(seen, id, name);
       return name;
     });

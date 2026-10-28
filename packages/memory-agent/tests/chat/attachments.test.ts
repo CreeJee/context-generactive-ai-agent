@@ -178,8 +178,7 @@ testAgent({ testProvider: {} })("attachments", (it) => {
     () =>
       Effect.gen(function* () {
         // A repeating pattern PNG compresses better than lossless WebP does.
-        const pixels = Buffer.alloc(3000 * 1000 * 3);
-        for (let index = 0; index < pixels.length; index++) pixels[index] = (index * 7919) % 251;
+        const pixels = Buffer.alloc(3000 * 1000 * 3).map((_, index) => (index * 7919) % 251);
         const sharp = yield* requireRuntime("sharp");
         const pattern = yield* sdk(() =>
           sharp(pixels, { raw: { width: 3000, height: 1000, channels: 3 } })

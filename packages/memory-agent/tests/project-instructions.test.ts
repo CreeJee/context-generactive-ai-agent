@@ -29,10 +29,14 @@ const stepSystem = (root: string, system: ReadonlyArray<string> = []) =>
 it.live("loads root guidance and a recursive catalog, not the scoped files' content", () =>
   Effect.gen(function* () {
     const { root, fs, path } = yield* fixture();
-    for (const directory of ["node_modules/dependency", ".git", ".ssh"]) {
-      yield* fs.makeDirectory(path.join(root, directory), { recursive: true });
-      yield* fs.writeFileString(path.join(root, directory, "AGENTS.md"), "EXCLUDED RULE");
-    }
+    yield* Effect.forEach(
+      ["node_modules/dependency", ".git", ".ssh"],
+      Effect.fnUntraced(function* (directory) {
+        yield* fs.makeDirectory(path.join(root, directory), { recursive: true });
+        yield* fs.writeFileString(path.join(root, directory, "AGENTS.md"), "EXCLUDED RULE");
+      }),
+      { discard: true },
+    );
     yield* fs.symlink(
       path.join(root, "apps", "AGENTS.md"),
       path.join(root, "packages", "memory", "src", "AGENTS.md"),

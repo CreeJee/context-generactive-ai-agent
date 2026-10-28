@@ -201,10 +201,14 @@ layer(kagiAgent, { excludeTestServices: true })("Kagi tools", (it) => {
       const { received } = yield* serve();
       yield* enable;
       const search = yield* toolNamed("kagi_search");
-      for (const { reply, reason } of replies) {
-        yield* Ref.set(fake.reply, () => reply);
-        yield* rejects(search({ query: reason }), reason);
-      }
+      yield* Effect.forEach(
+        replies,
+        Effect.fnUntraced(function* ({ reply, reason }) {
+          yield* Ref.set(fake.reply, () => reply);
+          yield* rejects(search({ query: reason }), reason);
+        }),
+        { discard: true },
+      );
       expect(yield* received).toHaveLength(replies.length);
     }),
   );

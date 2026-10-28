@@ -1,4 +1,15 @@
-import { Deferred, Effect, Fiber, FileSystem, Option, Path, Ref, Schema, Stream } from "effect";
+import {
+  Deferred,
+  Effect,
+  Fiber,
+  FileSystem,
+  MutableRef,
+  Option,
+  Path,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
 import { SqlError } from "effect/sql";
 import { expect, vi } from "vite-plus/test";
 import { RunStore } from "../../src/loop/store.ts";
@@ -237,12 +248,12 @@ testAgent()("background result storage failure", (it) => {
         const tasks = yield* BackgroundTasks;
         const { metadata } = yield* RunStore;
         const original = metadata.set;
-        let resultWrites = 0;
+        const resultWrites = MutableRef.make(0);
         yield* Effect.acquireRelease(
           Effect.sync(() =>
             vi.spyOn(metadata, "set").mockImplementation((namespace, key, value) => {
               if (namespace !== "background-task-result") return original(namespace, key, value);
-              resultWrites++;
+              MutableRef.increment(resultWrites);
               return Effect.fail(
                 SqlError.SqlError.make({
                   reason: SqlError.classifySqliteError(new Error("storage offline")),
@@ -272,7 +283,7 @@ testAgent()("background result storage failure", (it) => {
         expect(yield* readResult(session.id, { taskId: receipt.taskId })).toMatchObject({
           status: "failed",
         });
-        expect(resultWrites).toBe(1);
+        expect(MutableRef.get(resultWrites)).toBe(1);
         expect(yield* Fiber.join(notified)).toEqual([session.id]);
         expect(yield* tasks.hasSession(session.id)).toBe(false);
       }),

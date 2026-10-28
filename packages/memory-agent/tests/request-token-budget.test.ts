@@ -8,7 +8,7 @@ import { subscriptionBody } from "../src/model/subscription.ts";
 describe("paid pilot OpenAI token preflight", () => {
   test("counts serialized ASCII and Korean with the selected fallback BPE", () => {
     const encoder = getEncoding("o200k_base");
-    for (const request of ['{"input":"hello world"}', '{"input":"안녕하세요 도구를 읽어주세요"}']) {
+    ['{"input":"hello world"}', '{"input":"안녕하세요 도구를 읽어주세요"}'].forEach((request) => {
       const estimate = estimateRequestTokens(request, "gpt-5.6-sol");
       expect(estimate).toEqual({
         estimatedTokens: encoder.encode(request).length,
@@ -16,7 +16,7 @@ describe("paid pilot OpenAI token preflight", () => {
         fallback: true,
       });
       expect(estimate.estimatedTokens).toBeGreaterThan(0);
-    }
+    });
   });
 
   test("uses a known model mapping but marks unknown models as fallback", () => {

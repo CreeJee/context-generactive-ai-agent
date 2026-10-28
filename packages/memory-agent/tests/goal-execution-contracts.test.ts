@@ -51,9 +51,9 @@ describe("GoalExecution contracts", () => {
       { ...identity(), owner: { ownerId: "", generation: "generation-1" } },
       { ...identity(), owner: { ownerId: "owner-a", generation: "" } },
     ];
-    for (const value of malformed) {
+    malformed.forEach((value) => {
       expect(Schema.is(GoalExecutionPayload)({ ...payload, identity: value })).toBe(false);
-    }
+    });
     expect(
       Schema.is(GoalExecutionSuccess)({ ...success, executionId: "not-a-goal-execution-id" }),
     ).toBe(false);

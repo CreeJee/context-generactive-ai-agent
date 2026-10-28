@@ -133,7 +133,7 @@ const delayed: Delayed[] = [];
 
 const releaseWhere = Effect.fnUntraced(function* (matches: (entry: Delayed) => boolean) {
   const released = delayed.filter(matches);
-  for (const entry of released) delayed.splice(delayed.indexOf(entry), 1);
+  released.forEach((entry) => delayed.splice(delayed.indexOf(entry), 1));
   yield* Effect.forEach(released, ({ gate }) => Deferred.succeed(gate, undefined));
 });
 

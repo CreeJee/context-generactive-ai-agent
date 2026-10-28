@@ -189,24 +189,22 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             new URL("./support/hold-stdio.ts", import.meta.url),
           );
           const pidFile = path.join(cwd, "detached.pid");
-          let pid: number | null = null;
-          try {
-            const result = yield* runCommand({
-              ...options(cwd),
-              command: (yield* Effect.forEach([process.execPath, holdStdio, pidFile], (part) =>
-                Schema.encodeEffect(Schema.fromJsonString(Schema.String))(part),
-              )).join(" "),
-              timeoutSeconds: 1.5,
-            });
-            pid = Number(yield* fs.readFileString(pidFile));
-            expect(result.status).toBe("timed_out");
-            expect(result.durationMs).toBeLessThan(4_500);
-          } finally {
-            if (pid !== null) {
-              const stoppedPid = pid;
-              yield* Effect.try(() => process.kill(stoppedPid, "SIGKILL")).pipe(Effect.ignore);
-            }
-          }
+          // Kills the detached child once the test ends, if it lived long enough to write its pid.
+          yield* Effect.addFinalizer(() =>
+            fs.readFileString(pidFile).pipe(
+              Effect.flatMap((pid) => Effect.try(() => process.kill(Number(pid), "SIGKILL"))),
+              Effect.ignore,
+            ),
+          );
+          const result = yield* runCommand({
+            ...options(cwd),
+            command: (yield* Effect.forEach([process.execPath, holdStdio, pidFile], (part) =>
+              Schema.encodeEffect(Schema.fromJsonString(Schema.String))(part),
+            )).join(" "),
+            timeoutSeconds: 1.5,
+          });
+          expect(result.status).toBe("timed_out");
+          expect(result.durationMs).toBeLessThan(4_500);
         }),
       8_000,
     );

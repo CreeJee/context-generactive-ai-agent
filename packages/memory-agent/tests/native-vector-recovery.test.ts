@@ -10,8 +10,9 @@ import { VectorIndex } from "../src/memory/embedding/vector-index.ts";
 import { requireRuntime } from "../src/runtime/resources.ts";
 
 layer(Layer.merge(NodeServices.layer, NodeCrypto.layer))((it) => {
-  for (const kind of ["missing", "layout-mismatch", "unrecorded-ahead"] as const) {
-    it.effect(`native startup repairs ${kind} without a second owner`, () =>
+  it.effect.each(["missing", "layout-mismatch", "unrecorded-ahead"] as const)(
+    "native startup repairs %s without a second owner",
+    (kind) =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
@@ -27,16 +28,21 @@ layer(Layer.merge(NodeServices.layer, NodeCrypto.layer))((it) => {
           ),
         );
         // Seed a saved-file fixture BEFORE the scoped owner exists; no host lease/index service.
-        if (kind !== "missing") {
-          yield* fs.makeDirectory(cache, { recursive: true, mode: 0o700 });
-          const { VectorIndex: FixtureIndex } = (yield* requireRuntime("turbovec")).loadTurbovec();
-          const dimensions = kind === "layout-mismatch" ? 64 : 384;
-          const saved = new FixtureIndex(dimensions, 4);
-          const value = new Float32Array(dimensions);
-          value[0] = 1;
-          saved.add(value, ["999"]);
-          saved.save(path.join(cache, "index.tvim"));
-        }
+        yield* Effect.when(
+          Effect.gen(function* () {
+            yield* fs.makeDirectory(cache, { recursive: true, mode: 0o700 });
+            const { VectorIndex: FixtureIndex } = (yield* requireRuntime(
+              "turbovec",
+            )).loadTurbovec();
+            const dimensions = kind === "layout-mismatch" ? 64 : 384;
+            const saved = new FixtureIndex(dimensions, 4);
+            const value = new Float32Array(dimensions);
+            value[0] = 1;
+            saved.add(value, ["999"]);
+            saved.save(path.join(cache, "index.tvim"));
+          }),
+          Effect.succeed(kind !== "missing"),
+        );
         const foundation = Layer.mergeAll(
           StorageRoot.layer(directory),
           Database.layer(path.join(directory, "memory.sqlite")),
@@ -64,6 +70,5 @@ layer(Layer.merge(NodeServices.layer, NodeCrypto.layer))((it) => {
           services,
         );
       }),
-    );
-  }
+  );
 });

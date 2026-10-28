@@ -76,18 +76,18 @@ const pending = (relay: RelayedApprovals["Service"], sessionId: string, count: n
     Effect.retry(Schedule.recurs(100)),
   );
 
+// Looks for the completed workflow 100 times, yielding to it between looks.
 const completed = () =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 100; attempt += 1) {
-      const row = yield* sqlGet(
-        "SELECT status FROM owner_workflow_executions WHERE workflow_name = 'RelayedApprovalExecution'",
-      );
-      if (Schema.is(Schema.Struct({ status: Schema.String }))(row) && row.status === "completed")
-        return;
-      yield* Effect.yieldNow;
-    }
-    return yield* Effect.fail("approval workflow did not complete");
-  });
+  sqlGet(
+    "SELECT status FROM owner_workflow_executions WHERE workflow_name = 'RelayedApprovalExecution'",
+  ).pipe(
+    Effect.map(Schema.is(Schema.Struct({ status: Schema.Literal("completed") }))),
+    Effect.tap((done) => Effect.when(Effect.yieldNow, Effect.succeed(!done))),
+    Effect.repeat({ until: (done) => done, times: 99 }),
+    Effect.flatMap((done) =>
+      done ? Effect.void : Effect.fail("approval workflow did not complete"),
+    ),
+  );
 
 describe("durable relayed approvals", () => {
   it.live(

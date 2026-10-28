@@ -11,7 +11,7 @@ import {
 test("accepts only credential-free HTTP proxy authorities", () => {
   expect(parseWindowsProxy("http://proxy.example:8080")).toBe("http://proxy.example:8080/");
   expect(parseWindowsProxy("https://proxy.example:443")).toBe("https://proxy.example/");
-  for (const value of [
+  [
     "",
     "DIRECT",
     "socks5://proxy.example:1080",
@@ -20,8 +20,9 @@ test("accepts only credential-free HTTP proxy authorities", () => {
     "http://proxy.example:8080/?token=secret",
     "http://proxy.example:8080/#fragment",
     "http://proxy.example:8080\nhttp://other.example:8080",
-  ])
+  ].forEach((value) => {
     expect(parseWindowsProxy(value)).toBeNull();
+  });
 });
 
 test("distinguishes direct, unavailable and usable proxy decisions without returning addresses to the UI", () => {

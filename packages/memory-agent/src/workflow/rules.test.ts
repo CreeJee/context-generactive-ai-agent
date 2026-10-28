@@ -1,5 +1,5 @@
 import { Array as EffectArray } from "effect";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, MutableRef } from "effect";
 import { describe, expect, it, layer as testLayer } from "@effect/vitest";
 import { EmbedderRuntime, Embedder, EmbeddingError } from "../memory/embedding/embedder.ts";
 import { builtInWorkflowRules, WorkflowRules } from "./rules.ts";
@@ -51,14 +51,14 @@ describe("WorkflowRules", () => {
     );
   });
 
-  let failRuleVectors = true;
+  const failRuleVectors = MutableRef.make(true);
   const recoveringEmbedder = Layer.succeed(Embedder, {
     identity: "recovering-fake",
     dimensions: 64,
     embed: (texts) =>
       Effect.gen(function* () {
-        if (failRuleVectors && texts.length > 1) {
-          failRuleVectors = false;
+        // Only the first batch of rule vectors fails.
+        if (texts.length > 1 && MutableRef.getAndSet(failRuleVectors, false)) {
           return yield* EmbeddingError.make({ cause: "temporary" });
         }
         return texts.map(fakeVector);

@@ -270,12 +270,16 @@ testAgent()("kanban board", (it) => {
       yield* workflows.updateGoal(executing, goal);
       yield* workflows.updatePlan(executing, plan, orchestrator);
       yield* workflows.setPhase(executing, "execute");
-      for (const [from, to] of [
-        ["ready", "in_progress"],
-        ["in_progress", "verify"],
-        ["verify", "done"],
-      ] as const)
-        yield* workflows.transitionCard(executing, { cardId: "a", from, to }, orchestrator);
+      yield* Effect.forEach(
+        [
+          ["ready", "in_progress"],
+          ["in_progress", "verify"],
+          ["verify", "done"],
+        ] as const,
+        ([from, to]) =>
+          workflows.transitionCard(executing, { cardId: "a", from, to }, orchestrator),
+        { discard: true },
+      );
       yield* workflows.holdCard(executing, { cardId: "b", hold: true }, user);
       const closed = yield* workflows.editBoard(
         executing,
