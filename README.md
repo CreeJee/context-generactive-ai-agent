@@ -204,3 +204,44 @@ cd apps/agent
 vp run package
 vp run smoke-package
 ```
+
+## System Overview
+
+pnpm 워크스페이스 모노레포이고, Vite+(`vp`)로 설치·검사·테스트·빌드를 실행합니다. 실행 파일은 `apps/agent` 하나입니다. 이 앱은 API 라우트와 UI를 제공하고, 대화 실행·기억·도구·권한 같은 서버 로직은 `packages/memory-agent`에서 가져옵니다. `packages/turbovec`은 벡터 인덱스용 로컬 N-API 애드온이고, `tools`에는 개발 도구와 저장소 전용 lint 플러그인이 있습니다. 제품 소개와 런타임 구조는 위 `아키텍처` 절을 참고하세요.
+
+## Local Interface & Invariants
+
+- `vite.config.ts` — 저장소 전체 Vite+ 설정입니다. `lint`는 oxlint JS 플러그인 `vite-plus`, `anti-slop`(`tools/oxlint/anti-slop/index.ts`), `anti-slop-effect`(`tools/oxlint/anti-slop/effect/index.ts`), `@shadcn/lint`를 불러오고 `typeAware`·`typeCheck`로 실행합니다. `fmt`는 golden 파일(`**/__golden__/**`)을 포맷하지 않고, `staged`는 커밋 전에 `vp check --fix`를 실행하며, `run.cache`는 Vite Task 캐시를 켭니다.
+- `package.json` scripts — `build`(`agent#package`), `typecheck`(워크스페이스와 도구 tsconfig 전체), `ready`, `dev`, `test:browser`, `build:docker`, `start`.
+- anti-slop 규칙과 shadcn 규칙은 모두 `error`입니다. `apps/agent/app/components/ui/**`만 `shadcn/no-restyle`, `shadcn/no-arbitrary-values`, `shadcn/require-static-classes`를 끕니다.
+- 에이전트 작업 폴더(`.claude/**`, `.codex/**`, `.agents/**` 등)와 `tools/oxlint/anti-slop/**`은 lint와 fmt 대상에서 뺍니다.
+
+## Subdirectories & System Boundaries
+
+- apps: [`./apps/README.md`](./apps/README.md) - 실행 가능한 앱 패키지. 메인 에이전트 웹 앱 `agent`(React Router SSR, API 라우트, UI, 단일 실행 파일 패키징)를 둡니다.
+- packages: [`./packages/README.md`](./packages/README.md) - 앱이 가져다 쓰는 워크스페이스 패키지. 에이전트 서버 로직 `memory-agent`, 네이티브 벡터 인덱스 바인딩 `turbovec`, 스타터 라이브러리 `utils`를 둡니다.
+- tools: [`./tools/README.md`](./tools/README.md) - 개발 도구. 세션 이동 검증 스크립트, 채팅 저장소 마이그레이션 검사 CLI, 프로파일 요약 CLI, oxlint `anti-slop` 플러그인을 둡니다.
+- `docs/` - 설계 문서, 성능·평가 기록, 확정 결정(`docs/decisions.md`). 코드가 없어 계약 문서를 두지 않습니다.
+- `patches/` - pnpm patch(`effect`, `@effect/platform-node`, `@effect/platform-node-shared`, `react-simplikit`). 코드가 없어 계약 문서를 두지 않습니다.
+
+## Global Invariants
+
+- 저장소 코드는 TypeScript로 작성합니다. 예외는 `packages/turbovec`의 Rust 애드온과 `tools/navigation-verification.mjs`입니다.
+- 서버 로직은 `packages/memory-agent`에 둡니다. `apps/agent`는 라우트와 UI만 맡습니다. `memory-agent` 루트 export는 Node 전용이고, 브라우저 코드는 `memory-agent/definitions`만 가져옵니다.
+- 확정한 제품·설계 결정은 날짜와 함께 `docs/decisions.md`에 남깁니다. 하위호환성은 GitHub 릴리스를 기준으로 판단합니다.
+- 툴체인은 `vp`로 실행합니다. Node는 `>=26.12.1`(`.node-version`)이고 패키지 매니저는 pnpm `12.13.0`입니다.
+- `memory-agent`의 `build`·`test` task는 `dependsOn`으로 의존 패키지의 `build`를 먼저 실행합니다. 벡터 인덱스와 테스트가 `turbovec` 애드온을 불러오기 때문입니다.
+
+## Global Side Effects
+
+- 데이터 루트 `~/.context-generactive-agent`: SQLite `agent.db`(nodes, edges, FTS, 채팅 상태), turbovec 벡터 인덱스, 임베딩·Kiwi 모델, `config.json`, `agents.json`.
+- OS 키체인: OAuth 토큰과 API 키 같은 비밀값을 저장합니다.
+- 네트워크: 모델 공급자 API(OpenAI·Anthropic 구독 OAuth, OpenAI 호환 엔드포인트), MCP 서버, 외부 ACP 에이전트 프로세스, Kagi Search를 사용합니다.
+- 로컬 기록 읽기: Claude Code(`~/.claude/projects`)와 Codex CLI(`~/.codex/sessions`) transcript를 가져옵니다.
+- worker thread: 임베딩, 형태소 분석, 가져오기, 비밀 가리기, 네이티브 검색, 셸 sandbox, 코드 실행.
+- 빌드 산출물: `packages/turbovec/memory-turbovec.node`(cargo), `apps/agent/dist` 번들과 실행 파일.
+
+## System Verification
+
+- Run: `vp run ready`
+- Run: `vp run test:browser`
