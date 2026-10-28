@@ -820,7 +820,7 @@
 - 큐 저장소는 owner Database 연결을 쓰는 프로젝트 소유 `PersistedQueue` store다. 별도 DB를 두지 않는다.
 - 동시에 실행하는 카드 수는 기기 사양에 따라 다르므로 사용자 설정으로 둔다.
 - 보드·큐 멱등 키·브랜치는 `goalInstanceId` 기준이다. Goal 수정은 instance를 유지하고 버전만 올리므로 key를 다시 매기지 않는다. 카드 attempt는 배정 시 Goal·Plan 버전을 고정하고, 최신 값과는 배정·verify·merge 경계에서만 비교한다. 새 Goal 전환으로 pointer가 바뀐 뒤 재전달된 이전 instance item은 실행하지 않고 `Superseded`로 완료한다.
-- 칸반 모드에서 같은 instance의 Goal을 수정하면 일괄 정지하지 않는다. 시작 전 카드 배정만 잠시 멈추고, 오케스트레이터가 카드마다 `Continue`·`Amend`·`Stop`·`Replace`·`NeedsDecision` 중 하나로 판정해 바로 적용한다. 사용자는 어떤 판정이든 보드에서 뒤집을 수 있다. worktree를 남기므로 `Stop`·`Replace`도 되돌릴 수 있다. 이 규칙은 칸반 모드에서 "실행 중 명시적 Goal 변경 동기화 (2026-10-06)"의 즉시 Plan 복귀를 대신한다.
+- 칸반 모드에서 같은 instance의 Goal을 수정하면 일괄 정지하지 않는다. 시작 전 카드 배정만 잠시 멈추고, 오케스트레이터가 카드마다 `Continue`·`Amend`·`Stop`·`Replace`·`NeedsDecision` 중 하나로 판정해 바로 적용한다. 사용자는 어떤 판정이든 보드에서 뒤집을 수 있다. 카드 브랜치에 작업을 남기므로 `Stop`·`Replace`도 되돌릴 수 있다(2026-10-29 정정: 코드는 이 카드를 `Cancelled`로 정리해 스냅샷 커밋 뒤 폴더를 지운다). 이 규칙은 칸반 모드에서 "실행 중 명시적 Goal 변경 동기화 (2026-10-06)"의 즉시 Plan 복귀를 대신한다.
 - 통합 검증을 통과한 Goal 브랜치는 Goal을 시작한 사용자 브랜치에 자동으로 merge한다. 대상이 보호 브랜치(프로젝트 설정, 기본 `main`·`staging`)면 자동 merge하지 않고 사용자가 PR이나 수동 merge를 고른다. 같은 대상으로 가는 merge는 대상 브랜치별로 하나씩 처리하고, 충돌은 사용자 판단으로 넘긴다. 대상 브랜치가 checkout된 작업 트리에 커밋하지 않은 변경이 있으면 merge하지 않고 기다린다.
 - 카드는 Goal 브랜치에 카드당 squash commit 하나로 통합한다. 저장소의 실제 브랜치 전략과 같다.
 - 카드 worktree는 `~/.context-generactive-agent-worktrees/<goalInstanceId>/<cardId>`에 둔다. storage root는 credential directory라 그 아래에 두지 않고, 보호 경계에 예외를 만들지 않는다. 카드 서브에이전트의 도구 루트는 그 worktree다.
@@ -2978,3 +2978,71 @@
 - 고친 뒤 비교: 수정 전 전체 lab 6회와 수정 후 2회 모두 exit 0, 회당 약 200초였다. 이 abort는 다시 나오지 않아서, 이 수정이 막는다는 것은 확인하지 못했다.
 - 모델이 로드되면 worker 레이어의 scope에 dispose를 단다. 호스트가 worker를 닫으면(close 메시지) worker의 launch fiber가 인터럽트되고 레이어 scope가 닫힌다. 그래서 스레드가 끝나기 전에 세션을 놓는다.
 - `Embed`의 세션 실행은 인터럽트되지 않는다. 취소된 요청도 그 batch가 끝날 때까지 기다리므로 dispose가 실행 중인 세션과 겹치지 않는다. 서버는 한 번에 한 요청만 받으므로, 취소 뒤 다음 요청이 앞 batch와 겹쳐 돌지도 않는다.
+
+## Workflow 엔진 교체를 목표로 두고, admission과 조회를 먼저 엔진에서 뗀다 (2026-10-28)
+
+- 사용자 결정: owner workflow 엔진(`workflow/owner-workflow-engine.ts`)을 Effect의 `ClusterWorkflowEngine` + `SingleRunner`로 옮기는 것을 목표로 둔다. 최종 교체 여부는 spike 결과로 정한다.
+- 사용자 결정: 아래 두 일을 엔진 교체보다 먼저 한다. 둘 다 교체하지 않아도 필요한 일이다. 2026-10-29부터는 정상화 다음 단계다(아래 "Workflow 개편은 지금 엔진과 Goal 상태 기계의 정상화부터 한다 (2026-10-29)").
+  - admission을 엔진 저장소에서 뗀다. 지금 `admitWith`는 run binding과 `owner_workflow_executions` INSERT를 한 transaction에 둔다. 바꾼 뒤에는 binding과 실행 의도 행을 한 transaction에 쓰고, 엔진에는 결정적 executionId로 멱등하게 보낸다. 시작할 때 의도만 있고 실행이 없는 행을 다시 보낸다. 같은 executionId에 다른 payload가 오면 거절하는 owner 펜스(workflow README Invariants)는 이 층이 지킨다. cluster의 `run`은 payload를 비교하지 않는다.
+  - 앱이 읽는 durable 조회를 앱 소유 표로 옮긴다. `RelayedApprovals`, `ProviderRetries`(재시도 순번), `HumanDecisions`, `GoalExecutions`는 `OwnerWorkflowStorage`를 직접 읽지 않는다. cluster에는 workflow별 목록 API가 없다. 지금 조회는 호출마다 그 workflow의 이력 전체를 decode한다.
+- 그다음 순서는 다음과 같다. 교체와 drain의 세부는 아직 정하지 않았다.
+  1. spike: cluster 엔진을 공유 `SqlClient`와 `runnerStorage: "memory"`로 돌려 세 가지를 잰다. clock 발화 지연, 놀 때의 SQL 문장 수, 재시작 뒤 재개 지연이다.
+  2. 교체: 0.0.17의 진행 중 행은 cluster 형식으로 변환하지 않고 owner 엔진이 끝까지 처리한다(drain).
+- 2026-10-10 기록 복원: Effect 실행 경계 계획의 EFX-02는 `ClusterWorkflowEngine` + `SingleRunner`를 첫 production 후보로 계약 테스트했다. 독립 SqlClient transaction이 owner run binding과 첫 durable 요청을 원자적으로 묶지 못해서 후보에서 뺐고, `WorkflowEngine.makeUnsafe`로 owner 엔진을 만들었다. 이 판단이 이 문서에서 빠져 있었다. 공유 `SqlClient`로 바뀐 지금도 이 조건이 풀렸다는 근거는 없다. 위의 admission 분리가 이 조건을 엔진 선택과 떼어 놓는다.
+
+## Workflow 개편은 지금 엔진과 Goal 상태 기계의 정상화부터 한다 (2026-10-29)
+
+- 사용자 결정: workflow 개편은 네 단계를 이 순서로 한다.
+  1. 정상화: owner 엔진, Goal 상태 기계, 칸반 worktree 정리에서 고장 난 것과 대기 지연을 고친다. 저장 형식은 거의 바꾸지 않는다.
+  2. 엔진에서 떼어 내기: admission 분리와 앱 소유 조회 표(위 2026-10-28 항목).
+  3. 엔진 spike: `ClusterWorkflowEngine` + `SingleRunner`를 1단계를 마친 owner 엔진과 비교한다. 합격 기준은 "owner 엔진보다 나빠지지 않는다"이다.
+  4. 카드 작업 공간 준비 방식 spike: 기준선은 지금 방식에 정리를 더한 것이고, 비교 대상은 worktree 재사용 pool과 허용 목록 COW 복제다.
+- 정상화를 먼저 하는 이유:
+  - 사용자가 처음 말한 목표(안정성, 메모리 누수, Goal 전환이 안 됨)가 바로 이 결함들이다.
+  - 엔진 spike는 고친 owner 엔진을 기준선으로 삼아야 비교가 공정하다.
+  - Goal 전환 막힘은 `workflow/workflow.ts` 상태 기계에 있어 엔진을 바꿔도 남는다.
+  - 저장 형식을 거의 바꾸지 않아 0.0.17의 진행 중 행을 옮길 필요가 없다.
+- 1단계에서 고칠 결함:
+  - owner 엔진이 `WorkflowEngine.makeUnsafe`에 `awaitComplete`를 넘기지 않는다. 그래서 대기하는 호출자가 `suspendedRetrySchedule`(최대 30초)로 poll하고, 매번 admit, resume, body replay를 하며, scope fork를 닫지 않는다.
+  - `executions` Map에서 항목을 지우지 않고, resume마다 만든 scope를 닫지 않는다.
+  - `settleNewGoalRequest`가 run이 진행 중이거나 중단된 상태에서 `accepted`를 돌려주어 `transition_pending`에 멈춘다. 새 Goal 요청의 거절은 흔적이 남지 않는다.
+  - 카드 worktree가 `halt`와 새 Goal 전환 경로에서 정리되지 않는다. Goal 부모 폴더와 `ctx/*` 브랜치도 지우지 않는다.
+- 대가: owner 엔진에만 하는 수정은 엔진을 교체하면 버려진다. 변경이 작고, spike가 실패하면 어차피 필요하다.
+
+## Workflow 정상화의 미정 항목을 정한다 (2026-10-29)
+
+- "체감 없는 업그레이드"의 정의: 일반 재시작과 같은 표시 말고는 사용자가 따로 할 일이 없다. 진행 중 run은 지금처럼 `server_restarted`로 끝나고, 대기 항목만 이어진다.
+- 막힌 세션은 이미 있는 `Workflows.reconcile`을 넓혀 고친다.
+  - `reconcile`은 phase가 어긋나면 새 revision과 ledger `state reconciled`를 남긴다. 지금은 `execute`·`verify` phase만 고친다. 이것을 Goal 상태 불변식 검사 기준으로 넓힌다.
+  - 순수 파생 함수로 phase를 계산하는 방식은 고치는 경로를 하나 더 만들어 뺐다.
+  - 고친 세션의 실행 상태는 `stopped`로 고정해, 업그레이드 직후 자동 run이 시작되지 않게 한다.
+- `Workflows.locked`의 session key lock(`keyedSerialLimit`)을 뺀다. "DB 읽기를 잠금 안에 두지 않는다"는 규칙 위반으로 본다.
+  - 앱의 SQLite 연결은 하나이고, transaction(`BEGIN IMMEDIATE`)이 끝날 때까지 semaphore로 그 연결을 쥔다(`db/sql-client.ts`). 그래서 key lock 없이도 세션의 read-modify-write는 하나씩 돈다.
+  - key lock은 이득 없이 교착 위험만 만든다. transaction 안에서 `Workflows`를 부르면, key lock을 쥔 쪽은 연결을 기다리고 transaction 쪽은 key lock을 기다릴 수 있다.
+- 카드 worktree 보존
+  - `Blocked`·`HumanDecision` 카드의 worktree는 Goal이 살아 있는 동안 폴더로 둔다.
+  - Goal이 끝나거나(완료, supersede, halt) 마지막 lease 뒤 14일 동안 활동이 없으면 `Cancelled`처럼 정리한다. 스냅샷 커밋 뒤 폴더를 지우고 카드 브랜치만 남긴다. 다음 lease와 `resolved` 뒤 재검증은 그 브랜치에서 worktree를 다시 만든다.
+  - `Stop`·`Replace`로 보드에서 빠지는 카드는 지금처럼 `Cancelled`로 정리한다.
+- 사용자 결정: 취소 카드의 스냅샷 브랜치는 지우지 않는다.
+  - 로컬 보관이 문제가 되면 지우지 않고 원격에 올린다. 이어서 할 때 원격에서 checkout한다.
+  - 원격에 올리면 진행 중 작업이 공개되므로, 사용자가 켤 때만 한다.
+- 사용자 결정: `ctx/*` 브랜치는 자동으로 지우지 않는다. Goal 브랜치도 마찬가지다.
+  - 정리가 필요하면 사용자가 부르는 브랜치 gc를 둔다. gc는 target 브랜치에 이미 들어간 브랜치를 정리한다.
+  - `Done` 카드 브랜치는 지금처럼 정리 때 지운다. 내용은 squash로 Goal 브랜치에 들어가 있다.
+
+## durable 행 보존 기준과 카드 작업 공간 복제 규칙 (2026-10-29)
+
+- 사용자 결정: durable 행은 근거로 쓸 가치가 있으면 남기고, 아니면 운영에 필요 없어진 뒤 지운다. 근거는 다른 에이전트가 `read_evidence`·`trace_evidence`로 읽거나, 사람이 화면에서 보는 기록이다. owner workflow 엔진 표와 엔진 밖의 durable 표(`owner_rpc_operations`, `workflow_run_events` 등)에 모두 적용한다. 표마다의 분류는 엔진에서 조회를 떼어 내는 단계에서 한다.
+  - 엔진 표는 에이전트도 사람도 근거로 읽지 않는다. 승인 답은 이미 memory node(`tool_result`의 `permission`)에 남는다.
+  - 지금 지우는 행은 `owner_workflow_clocks`뿐이다.
+  - `owner_workflow_executions`는 provider 재시도 순번을 세는 데 쓰인다. 그래서 순번을 앱 소유 표로 옮기기 전에는 지우지 않는다.
+- 카드 worktree에 base의 gitignore 폴더를 COW로 복제하는 방식을 고를 경우의 규칙:
+  - 허용 목록 대신 제외 규칙을 쓴다. ignore 폴더를 모두 복제하되 `isCredentialPath`에 걸리는 경로, `.git`이 든 하위 폴더, 크기 상한을 넘는 폴더는 뺀다.
+  - 복제한 경로는 worktree에서 `git check-ignore`로 다시 거른다. 복제한 경로가 커밋에 들어 있으면 실패시킨다.
+  - 커밋 직전에 staged 변경을 secretlint 권장 preset으로 검사한다. 복제 단계에서는 검사하지 않는다. 내용 검사라 `node_modules`를 모두 읽으면 준비가 느려지기 때문이다.
+- 사용자 결정: AgentFS(Turso)는 카드 작업 공간 후보에서 뺀다. 공식 README·MANUAL을 확인한 결과(2026-10-29) 이득이 미묘했다.
+  - `agentfs init --base`와 `agentfs mount`로 상시 overlay mount는 된다. macOS는 NFS, Linux는 FUSE다.
+  - lower를 카드 worktree로 두면 `node_modules`가 없어 준비 비용이 줄지 않는다.
+  - lower를 base checkout으로 두면 사용자의 브랜치와 미커밋 변경이 보인다. 카드 커밋도 overlay 안의 `.git`에 쌓인다.
+  - lower를 base의 `node_modules`로만 두면 COW 복제와 같은 일을 NFS mount로 하는 셈이다.
+  - BETA이고, Windows mount는 문서에 없으며, 별도 CLI 설치가 필요하다.
