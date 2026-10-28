@@ -19,7 +19,7 @@ import { Result, Function as EffectFunction } from "effect";
 // Native SDK fetch, keyring and AsyncGenerator adapters remain explicit Promise boundaries.
 import { testHttpServer, HttpServerRequest, HttpServerResponse } from "./support/http.ts";
 import { webCrypto } from "./support/platform.ts";
-import { Cause, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect";
+import { Cause, Deferred, Effect, Fiber, Layer, MutableRef, Schema, Stream } from "effect";
 import { Tool, Toolkit } from "effect/ai";
 import { GlobalConfig } from "../src/config/global-config.ts";
 import { ActiveProvider } from "../src/providers/active-provider.ts";
@@ -79,8 +79,11 @@ function singleEndpointSettings(options: {
           : existing.id;
       if (existing !== null) yield* api.connect(id, connection);
       yield* api.saveModel(id, { id: model, ...limits });
-      for (const other of existing?.models ?? [])
-        if (other.id !== model) yield* api.removeModel(id, other.id);
+      yield* Effect.forEach(
+        (existing?.models ?? []).filter((other) => other.id !== model),
+        (other) => api.removeModel(id, other.id),
+        { discard: true },
+      );
       return single(yield* api.status);
     });
   return {
@@ -155,25 +158,26 @@ const ChatRequest = Schema.Struct({
   tools: Schema.optional(Schema.Array(Schema.Unknown)),
 });
 function fixture(fetcher?: typeof fetch, initial: Settings = {}) {
-  let saved: Settings = initial;
-  let key: string | null = null;
+  const saved = MutableRef.make(initial);
+  const key = MutableRef.make<string | null>(null);
   const config = {
     // Asynchronous like the real config file read.
-    read: Effect.promise(() => Promise.resolve(saved)),
-    update: (patch: Partial<Settings>) => Effect.sync(() => (saved = { ...saved, ...patch })),
+    read: Effect.promise(() => Promise.resolve(MutableRef.get(saved))),
+    update: (patch: Partial<Settings>) =>
+      Effect.sync(() => MutableRef.updateAndGet(saved, (current) => ({ ...current, ...patch }))),
   };
   const keys = {
-    get: Effect.sync(() => key),
+    get: Effect.sync(() => MutableRef.get(key)),
     set: (value: string | null) =>
       Effect.sync(() => {
-        key = value;
+        MutableRef.set(key, value);
       }),
   };
   return {
     config,
     api: singleEndpointSettings({ config: config, keys: keys, fetcher: fetcher }),
     restore: () => singleEndpointSettings({ config: config, keys: keys, fetcher: fetcher }),
-    saved: () => saved,
+    saved: () => MutableRef.get(saved),
   };
 }
 describe("OpenAI compatible settings", () => {
@@ -494,15 +498,19 @@ describe("OpenAI compatible settings", () => {
           expect(
             yield* Effect.flip(f.api.services.models.select(configuration.model, "medium")),
           ).toBeInstanceOf(Error);
-          for (const effort of ["xhigh", "default"]) {
-            const selection = yield* f.api.services.models.select(configuration.model, effort);
-            expect(yield* f.restore().services.models.selected).toEqual(selection);
-            yield* Effect.scoped(
-              Effect.flatMap((yield* f.api.runtime).model(selection, run), ({ model }) =>
-                model.generateText({ prompt: "hi" }),
-              ),
-            );
-          }
+          yield* Effect.forEach(
+            ["xhigh", "default"],
+            Effect.fnUntraced(function* (effort) {
+              const selection = yield* f.api.services.models.select(configuration.model, effort);
+              expect(yield* f.restore().services.models.selected).toEqual(selection);
+              yield* Effect.scoped(
+                Effect.flatMap((yield* f.api.runtime).model(selection, run), ({ model }) =>
+                  model.generateText({ prompt: "hi" }),
+                ),
+              );
+            }),
+            { discard: true },
+          );
           expect(bodies[0]?.reasoning_effort).toBe("xhigh");
           expect(bodies[1]).not.toHaveProperty("reasoning_effort");
           yield* f.api.services.models.select(configuration.model, "xhigh");
@@ -532,17 +540,21 @@ describe("OpenAI compatible settings", () => {
       expect(rejected.operation).toBe("validation");
       yield* f.api.update({ ...configuration, apiKey: null });
       expect((yield* f.api.status).hasApiKey).toBe(false);
-      for (const patch of [
-        { baseUrl: "file:///tmp/server" },
-        { baseUrl: "https://user:password@example.com/v1" },
-        { contextWindow: 0 },
-        { outputBudget: 8192 },
-        { outputBudget: -1 },
-      ])
-        expect(
-          (yield* Effect.flip(validateCompatibleConfiguration({ ...configuration, ...patch })))
-            .operation,
-        ).toBe("validation");
+      yield* Effect.forEach(
+        [
+          { baseUrl: "file:///tmp/server" },
+          { baseUrl: "https://user:password@example.com/v1" },
+          { contextWindow: 0 },
+          { outputBudget: 8192 },
+          { outputBudget: -1 },
+        ],
+        (patch) =>
+          Effect.map(
+            Effect.flip(validateCompatibleConfiguration({ ...configuration, ...patch })),
+            (rejected) => expect(rejected.operation).toBe("validation"),
+          ),
+        { discard: true },
+      );
     }),
   );
   effectTest.live("restores a manual model without discovery and isolates discovery errors", () =>
@@ -571,10 +583,10 @@ describe("OpenAI compatible settings", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const requested = yield* Deferred.make<void>();
-        let signal: AbortSignal | undefined;
+        const signal = MutableRef.make<AbortSignal | undefined>(undefined);
         const f = fixture(
           stalledFetch((observed) => {
-            signal = observed;
+            MutableRef.set(signal, observed);
             void nativeEffect(Deferred.succeed(requested, undefined));
           }),
         );
@@ -582,16 +594,16 @@ describe("OpenAI compatible settings", () => {
         const fiber = yield* Effect.forkChild(f.api.listModels, { startImmediately: true });
         yield* Deferred.await(requested);
         yield* Fiber.interrupt(fiber);
-        expect(signal?.aborted).toBe(true);
+        expect(MutableRef.get(signal)?.aborted).toBe(true);
       }),
     ),
   );
   effectTest.effect("times out discovery with a typed failure and aborts the request", () =>
     Effect.gen(function* () {
-      let signal: AbortSignal | undefined;
+      const signal = MutableRef.make<AbortSignal | undefined>(undefined);
       const f = fixture(
         stalledFetch((observed) => {
-          signal = observed;
+          MutableRef.set(signal, observed);
         }),
       );
       yield* f.api.update(configuration);
@@ -603,16 +615,19 @@ describe("OpenAI compatible settings", () => {
         yield* Fiber.join(discovery),
         OpenAICompatibleFailed.make({ operation: "models" }),
       );
-      expect(signal?.aborted).toBe(true);
+      expect(MutableRef.get(signal)?.aborted).toBe(true);
     }),
   );
   effectTest.effect("reports an uncertain keyring write as partial without writing settings", () =>
     Effect.gen(function* () {
-      let saved: Settings = {};
+      const saved = MutableRef.make<Settings>({});
       const api = singleEndpointSettings({
         config: {
-          read: Effect.sync(() => saved),
-          update: (patch: Partial<Settings>) => Effect.sync(() => (saved = { ...saved, ...patch })),
+          read: Effect.sync(() => MutableRef.get(saved)),
+          update: (patch: Partial<Settings>) =>
+            Effect.sync(() =>
+              MutableRef.updateAndGet(saved, (current) => ({ ...current, ...patch })),
+            ),
         },
         keys: {
           get: Effect.succeed(null),
@@ -622,16 +637,16 @@ describe("OpenAI compatible settings", () => {
       const result = yield* Effect.flip(api.update({ ...configuration, apiKey: "secret" }));
       expect(result.operation).toBe("partial");
       expect(
-        yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(saved),
+        yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(MutableRef.get(saved)),
       ).not.toContain("secret");
-      expect(endpointOf(saved)).toBeUndefined();
+      expect(endpointOf(MutableRef.get(saved))).toBeUndefined();
     }),
   );
   effectTest.effect(
     "reports config failure after a key write as partial without persisting a secret",
     () =>
       Effect.gen(function* () {
-        let key: string | null = null;
+        const key = MutableRef.make<string | null>(null);
         const api = singleEndpointSettings({
           config: {
             read: Effect.succeed({}),
@@ -645,16 +660,16 @@ describe("OpenAI compatible settings", () => {
               ),
           },
           keys: {
-            get: Effect.sync(() => key),
+            get: Effect.sync(() => MutableRef.get(key)),
             set: (value) =>
               Effect.sync(() => {
-                key = value;
+                MutableRef.set(key, value);
               }),
           },
         });
         const error = yield* Effect.flip(api.update({ ...configuration, apiKey: "secret" }));
         expect(error.operation).toBe("partial");
-        expect(key).toContain("secret");
+        expect(MutableRef.get(key)).toContain("secret");
         expect(
           yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(error),
         ).not.toContain("secret");
@@ -665,27 +680,29 @@ describe("OpenAI compatible settings", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          let saved: Settings = {};
-          let key: string | null = null;
+          const saved = MutableRef.make<Settings>({});
+          const key = MutableRef.make<string | null>(null);
           const writing = yield* Deferred.make<void>();
           const gate = yield* Deferred.make<void>();
           yield* Effect.addFinalizer(() => Deferred.succeed(gate, undefined));
           const seen: Array<{ url: string; authorization: string | null }> = [];
           const api = singleEndpointSettings({
             config: {
-              read: Effect.sync(() => saved),
+              read: Effect.sync(() => MutableRef.get(saved)),
               update: (patch: Partial<Settings>) =>
-                Effect.sync(() => (saved = { ...saved, ...patch })),
+                Effect.sync(() =>
+                  MutableRef.updateAndGet(saved, (current) => ({ ...current, ...patch })),
+                ),
             },
             keys: {
-              get: Effect.sync(() => key),
+              get: Effect.sync(() => MutableRef.get(key)),
               set: (value) =>
                 Effect.gen(function* () {
                   if (value?.includes('"key":"second"') === true) {
                     yield* Deferred.succeed(writing, undefined);
                     yield* Deferred.await(gate);
                   }
-                  key = value;
+                  MutableRef.set(key, value);
                 }),
             },
             fetcher: nativeFetch((url, init) =>
@@ -723,21 +740,24 @@ describe("OpenAI compatible settings", () => {
   );
   effectTest.effect("keeps the old endpoint unauthenticated after an uncertain changed key", () =>
     Effect.gen(function* () {
-      let saved: Settings = {};
-      let key: string | null = null;
-      let rejectWrite = false;
+      const saved = MutableRef.make<Settings>({});
+      const key = MutableRef.make<string | null>(null);
+      const rejectWrite = MutableRef.make(false);
       const headers: Array<string | null> = [];
       const api = singleEndpointSettings({
         config: {
-          read: Effect.sync(() => saved),
-          update: (patch: Partial<Settings>) => Effect.sync(() => (saved = { ...saved, ...patch })),
+          read: Effect.sync(() => MutableRef.get(saved)),
+          update: (patch: Partial<Settings>) =>
+            Effect.sync(() =>
+              MutableRef.updateAndGet(saved, (current) => ({ ...current, ...patch })),
+            ),
         },
         keys: {
-          get: Effect.sync(() => key),
+          get: Effect.sync(() => MutableRef.get(key)),
           set: (value) =>
             Effect.gen(function* () {
-              key = value;
-              if (rejectWrite)
+              MutableRef.set(key, value);
+              if (MutableRef.get(rejectWrite))
                 return yield* new Cause.UnknownError(new Error("uncertain keyring outcome"));
             }),
         },
@@ -749,7 +769,7 @@ describe("OpenAI compatible settings", () => {
         ),
       });
       yield* api.update({ ...configuration, apiKey: "first" });
-      rejectWrite = true;
+      MutableRef.set(rejectWrite, true);
       const error = yield* Effect.flip(
         api.update({
           ...configuration,
@@ -780,15 +800,17 @@ describe("OpenAI compatible settings", () => {
   effectTest.live("serializes model selection with an in-flight settings update", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        let saved: Settings = {};
+        const saved = MutableRef.make<Settings>({});
         const writing = yield* Deferred.make<void>();
         const gate = yield* Deferred.make<void>();
         yield* Effect.addFinalizer(() => Deferred.succeed(gate, undefined));
         const api = singleEndpointSettings({
           config: {
-            read: Effect.sync(() => saved),
+            read: Effect.sync(() => MutableRef.get(saved)),
             update: (patch: Partial<Settings>) =>
-              Effect.sync(() => (saved = { ...saved, ...patch })),
+              Effect.sync(() =>
+                MutableRef.updateAndGet(saved, (current) => ({ ...current, ...patch })),
+              ),
           },
           keys: {
             get: Effect.succeed(null),
@@ -825,12 +847,14 @@ describe("OpenAI compatible settings", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const neverRead = yield* Effect.forkChild(Effect.never, { startImmediately: true });
-        let saved: Settings = { openaiCompatible: configuration };
+        const saved = MutableRef.make<Settings>({ openaiCompatible: configuration });
         const api = singleEndpointSettings({
           config: {
-            read: Effect.sync(() => saved),
+            read: Effect.sync(() => MutableRef.get(saved)),
             update: (patch: Partial<Settings>) =>
-              Effect.sync(() => (saved = { ...saved, ...patch })),
+              Effect.sync(() =>
+                MutableRef.updateAndGet(saved, (current) => ({ ...current, ...patch })),
+              ),
           },
           keys: { get: Fiber.join(neverRead), set: () => Effect.void },
           fetcher: nativeFetch(() =>
@@ -860,20 +884,22 @@ describe("OpenAI compatible settings", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          let saved: Settings = {};
-          let key: string | null = null;
+          const saved = MutableRef.make<Settings>({});
+          const key = MutableRef.make<string | null>(null);
           const observed: Array<{ url: string; authorization: string | null; body: string }> = [];
           const api = singleEndpointSettings({
             config: {
-              read: Effect.sync(() => saved),
+              read: Effect.sync(() => MutableRef.get(saved)),
               update: (patch: Partial<Settings>) =>
-                Effect.sync(() => (saved = { ...saved, ...patch })),
+                Effect.sync(() =>
+                  MutableRef.updateAndGet(saved, (current) => ({ ...current, ...patch })),
+                ),
             },
             keys: {
-              get: Effect.sync(() => key),
+              get: Effect.sync(() => MutableRef.get(key)),
               set: (value) =>
                 Effect.sync(() => {
-                  key = value;
+                  MutableRef.set(key, value);
                 }),
             },
             fetcher: nativeFetch((url, init) =>
@@ -1057,20 +1083,22 @@ describe("OpenAI compatible settings", () => {
     "keeps each endpoint's key apart and moves the model choice with the selected endpoint",
     () =>
       Effect.gen(function* () {
-        let saved: Settings = {
+        const saved = MutableRef.make<Settings>({
           provider: "openai-compatible",
           model: configuration.model,
           reasoningEffort: "default",
           openaiCompatible: configuration,
-        };
+        });
         const stored = new Map<string, string>([
           [LEGACY_COMPATIBLE_CREDENTIAL_ENTRY, "legacy-key-from-before-accounts"],
         ]);
         const api = makeOpenAICompatibleSettings({
           config: {
-            read: Effect.sync(() => saved),
+            read: Effect.sync(() => MutableRef.get(saved)),
             update: (patch: Partial<Settings>) =>
-              Effect.sync(() => (saved = { ...saved, ...patch })),
+              Effect.sync(() =>
+                MutableRef.updateAndGet(saved, (current) => ({ ...current, ...patch })),
+              ),
           },
           keys: (entry) => ({
             get: Effect.sync(() => stored.get(entry) ?? null),
@@ -1103,7 +1131,7 @@ describe("OpenAI compatible settings", () => {
           selected: false,
           models: [],
         });
-        expect(saved.openaiCompatible).toBeUndefined();
+        expect(MutableRef.get(saved).openaiCompatible).toBeUndefined();
         expect(stored.get(LEGACY_COMPATIBLE_CREDENTIAL_ENTRY)).toBe(
           "legacy-key-from-before-accounts",
         );
@@ -1119,16 +1147,19 @@ describe("OpenAI compatible settings", () => {
         yield* api.saveModel(id, { ...second, id: configuration.model });
         // The same model registered on both endpoints stays chosen across a switch.
         yield* api.select(id);
-        expect(saved).toMatchObject({ model: configuration.model });
+        expect(MutableRef.get(saved)).toMatchObject({ model: configuration.model });
         yield* api.removeModel(id, configuration.model);
-        expect(saved).toMatchObject({ provider: "openai-compatible", model: "second" });
+        expect(MutableRef.get(saved)).toMatchObject({
+          provider: "openai-compatible",
+          model: "second",
+        });
         const runtime = yield* api.runtime;
         expect(runtime.contextWindow("second")).toBe(second.contextWindow - second.outputBudget);
         expect(runtime.contextWindow(configuration.model)).toBe(0);
 
         yield* api.remove(id);
         expect(stored.size).toBe(1);
-        expect(saved).toMatchObject({ model: configuration.model });
+        expect(MutableRef.get(saved)).toMatchObject({ model: configuration.model });
         expect((yield* api.status).accounts).toMatchObject([
           { id: LEGACY_COMPATIBLE_ACCOUNT_ID, selected: true },
         ]);

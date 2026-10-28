@@ -111,19 +111,29 @@ describe("OAuth per-profile secret storage and non-destructive migration", () =>
   it.live("two profiles per provider have isolated secrets and secret-free metadata", () =>
     Effect.gen(function* () {
       const { profiles, accounts, profileSecrets } = yield* fixture();
-      for (const [index, provider] of providers.entries()) {
-        for (const suffix of [1, 2]) {
-          const id = `00000000-0000-4000-8000-${String(index * 2 + suffix).padStart(12, "0")}`;
-          yield* accounts.write(provider, id, token(`${provider}-${id}`));
-          yield* profiles.publish(provider, id, `로컬 ${id}`, accounts);
-        }
-      }
-      for (const [index, provider] of providers.entries()) {
-        for (const suffix of [1, 2]) {
-          const id = `00000000-0000-4000-8000-${String(index * 2 + suffix).padStart(12, "0")}`;
-          expect(yield* accounts.read(provider, id)).toEqual(token(`${provider}-${id}`));
-        }
-      }
+      const profileIds = providers.flatMap((provider, index) =>
+        [1, 2].map((suffix) => ({
+          provider,
+          id: `00000000-0000-4000-8000-${String(index * 2 + suffix).padStart(12, "0")}`,
+        })),
+      );
+      yield* Effect.forEach(
+        profileIds,
+        ({ provider, id }) =>
+          Effect.andThen(
+            accounts.write(provider, id, token(`${provider}-${id}`)),
+            profiles.publish(provider, id, `로컬 ${id}`, accounts),
+          ),
+        { discard: true },
+      );
+      yield* Effect.forEach(
+        profileIds,
+        ({ provider, id }) =>
+          Effect.map(accounts.read(provider, id), (credential) =>
+            expect(credential).toEqual(token(`${provider}-${id}`)),
+          ),
+        { discard: true },
+      );
       expect(MutableHashMap.size(profileSecrets)).toBe(4);
       expect(yield* serialize(yield* profiles.list())).not.toContain("access-");
       expect(yield* serialize(yield* profiles.list())).not.toContain("refresh-");
@@ -195,17 +205,25 @@ describe("OAuth per-profile secret storage and non-destructive migration", () =>
         const chosen = "00000000-0000-4000-8000-000000000002";
         yield* Effect.gen(function* () {
           const profiles = yield* openProfiles(path);
-          for (const provider of providers) {
-            yield* legacy.write(provider, token(`original-${provider}`));
-            yield* profiles.importLegacy(provider, accounts, legacy);
-            for (const suffix of [1, 2]) {
-              const id = `00000000-0000-4000-8000-${String((provider === "openai" ? 0 : 2) + suffix).padStart(12, "0")}`;
-              yield* accounts.write(provider, id, token(`${provider}-${suffix}`));
-              expect(
-                yield* profiles.publish(provider, id, `계정 ${suffix}`, accounts),
-              ).toMatchObject({ selected: false });
-            }
-          }
+          yield* Effect.forEach(
+            providers,
+            Effect.fnUntraced(function* (provider) {
+              yield* legacy.write(provider, token(`original-${provider}`));
+              yield* profiles.importLegacy(provider, accounts, legacy);
+              yield* Effect.forEach(
+                [1, 2],
+                Effect.fnUntraced(function* (suffix) {
+                  const id = `00000000-0000-4000-8000-${String((provider === "openai" ? 0 : 2) + suffix).padStart(12, "0")}`;
+                  yield* accounts.write(provider, id, token(`${provider}-${suffix}`));
+                  expect(
+                    yield* profiles.publish(provider, id, `계정 ${suffix}`, accounts),
+                  ).toMatchObject({ selected: false });
+                }),
+                { discard: true },
+              );
+            }),
+            { discard: true },
+          );
           expect(selectedIds(yield* profiles.list("openai"))).toEqual(["legacy-openai"]);
           yield* profiles.select("openai", chosen, accounts);
           expect(selectedIds(yield* profiles.list("openai"))).toEqual([chosen]);
@@ -248,10 +266,15 @@ describe("OAuth per-profile secret storage and non-destructive migration", () =>
     () =>
       Effect.gen(function* () {
         const { profiles, legacy, accounts } = yield* fixture();
-        for (const provider of providers) {
-          yield* legacy.write(provider, token(`original-${provider}`));
-          yield* profiles.importLegacy(provider, accounts, legacy);
-        }
+        yield* Effect.forEach(
+          providers,
+          (provider) =>
+            Effect.andThen(
+              legacy.write(provider, token(`original-${provider}`)),
+              profiles.importLegacy(provider, accounts, legacy),
+            ),
+          { discard: true },
+        );
         const first = "00000000-0000-4000-8000-000000000001";
         const second = "00000000-0000-4000-8000-000000000002";
         yield* accounts.write("openai", first, token("first"));

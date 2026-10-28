@@ -1,5 +1,5 @@
 import { testHttpClient } from "./support/http.ts";
-import { Cause, Data, Effect, MutableHashMap, Option, Schema } from "effect";
+import { Cause, Data, Effect, MutableHashMap, MutableRef, Option, Schema } from "effect";
 import { it } from "@effect/vitest";
 import { expect } from "vite-plus/test";
 import {
@@ -25,8 +25,8 @@ const rejects = Effect.fn("credentialRejects")(function* <
 
 function vault() {
   const values = MutableHashMap.empty<string, string>();
-  let rejectedAccount: string | null = null;
-  let fragmentWritesBeforeFailure: number | null = null;
+  const rejectedAccount = MutableRef.make<string | null>(null);
+  const fragmentWritesBeforeFailure = MutableRef.make<number | null>(null);
   const refused = (message: string) => Effect.fail(new VaultRejected({ message }));
   const open = (account: string): PasswordEntry<VaultRejected> => ({
     getPassword: Effect.sync(() => Option.getOrNull(MutableHashMap.get(values, account))),
@@ -34,10 +34,11 @@ function vault() {
       Effect.suspend(() => {
         if (Buffer.byteLength(password, "utf16le") > 2_560)
           return refused("Windows credential blob limit exceeded.");
-        if (account === rejectedAccount) return refused("Synthetic write failure.");
-        if (account !== "subscription-oauth" && fragmentWritesBeforeFailure !== null) {
-          if (fragmentWritesBeforeFailure === 0) return refused("Synthetic fragment failure.");
-          fragmentWritesBeforeFailure--;
+        if (account === MutableRef.get(rejectedAccount)) return refused("Synthetic write failure.");
+        const fragmentWrites = MutableRef.get(fragmentWritesBeforeFailure);
+        if (account !== "subscription-oauth" && fragmentWrites !== null) {
+          if (fragmentWrites === 0) return refused("Synthetic fragment failure.");
+          MutableRef.set(fragmentWritesBeforeFailure, fragmentWrites - 1);
         }
         MutableHashMap.set(values, account, password);
         return Effect.void;
@@ -56,10 +57,10 @@ function vault() {
       account: "subscription-oauth",
     }),
     failRootWrite: () => {
-      rejectedAccount = "subscription-oauth";
+      MutableRef.set(rejectedAccount, "subscription-oauth");
     },
     failFragmentWrite: () => {
-      fragmentWritesBeforeFailure = 1;
+      MutableRef.set(fragmentWritesBeforeFailure, 1);
     },
   };
 }
@@ -97,8 +98,9 @@ it.live(
       yield* entry.setPassword(credential);
       expect(yield* entry.getPassword).toBe(credential);
       expect(MutableHashMap.size(storage.values)).toBeGreaterThan(2);
-      for (const value of MutableHashMap.values(storage.values))
-        expect(Buffer.byteLength(value, "utf16le")).toBeLessThanOrEqual(2_560);
+      Array.from(MutableHashMap.values(storage.values)).forEach((value) =>
+        expect(Buffer.byteLength(value, "utf16le")).toBeLessThanOrEqual(2_560),
+      );
       yield* entry.deleteCredential;
       expect(MutableHashMap.size(storage.values)).toBe(0);
       expect(yield* entry.getPassword).toBeNull();
@@ -112,12 +114,16 @@ it.live("preserves existing unchunked credentials and the exact 1,280 character 
     const entry = yield* storage.entry;
     MutableHashMap.set(storage.values, "subscription-oauth", '{"accessToken":"legacy"}');
     expect(yield* entry.getPassword).toBe('{"accessToken":"legacy"}');
-    for (const length of [1_280, 1_281]) {
-      const password = "x".repeat(length);
-      yield* entry.setPassword(password);
-      expect(yield* entry.getPassword).toBe(password);
-      expect(MutableHashMap.size(storage.values)).toBe(length === 1_280 ? 1 : 3);
-    }
+    yield* Effect.forEach(
+      [1_280, 1_281],
+      Effect.fnUntraced(function* (length) {
+        const password = "x".repeat(length);
+        yield* entry.setPassword(password);
+        expect(yield* entry.getPassword).toBe(password);
+        expect(MutableHashMap.size(storage.values)).toBe(length === 1_280 ? 1 : 3);
+      }),
+      { discard: true },
+    );
   }).pipe(withTestPlatform),
 );
 
@@ -133,8 +139,9 @@ it.live(
       );
       yield* entry.setPassword("new".repeat(1_000));
       expect(yield* entry.getPassword).toBe("new".repeat(1_000));
-      for (const account of oldAccounts)
-        expect(MutableHashMap.has(storage.values, account)).toBe(false);
+      oldAccounts.forEach((account) =>
+        expect(MutableHashMap.has(storage.values, account)).toBe(false),
+      );
       yield* entry.setPassword("short");
       expect(Array.from(storage.values)).toEqual([["subscription-oauth", "short"]]);
     }).pipe(withTestPlatform),
@@ -158,8 +165,9 @@ it.live.each(["fragment", "manifest"] as const)(
 );
 
 it.live("rejects missing or corrupted fragments instead of returning partial credentials", () =>
-  Effect.gen(function* () {
-    for (const corruption of ["missing", "changed"] as const) {
+  Effect.forEach(
+    ["missing", "changed"] as const,
+    Effect.fnUntraced(function* (corruption) {
       const storage = vault();
       const entry = yield* storage.entry;
       yield* entry.setPassword("credential".repeat(400));
@@ -169,8 +177,9 @@ it.live("rejects missing or corrupted fragments instead of returning partial cre
       if (corruption === "missing") MutableHashMap.remove(storage.values, account);
       else MutableHashMap.set(storage.values, account, "corrupted");
       yield* rejects(entry.getPassword, "Incomplete");
-    }
-  }).pipe(withTestPlatform),
+    }),
+    { discard: true },
+  ).pipe(withTestPlatform),
 );
 
 it.live("rejects malformed manifests and excessive fragment counts", () =>
@@ -205,17 +214,17 @@ it.live(
       const storage = vault();
       const entry = yield* storage.entry;
       const store = createKeychainCredentialStore(() => Effect.succeed(entry));
-      let tokenRequests = 0;
-      let proxyAttempts = 0;
+      const tokenRequests = MutableRef.make(0);
+      const proxyAttempts = MutableRef.make(0);
       const client = yield* createSubscriptionOAuthClient({
         protocol: { ...providerProtocols.openai, callbackPort: null },
         store,
         fetch: () => {
-          tokenRequests++;
+          const request = MutableRef.incrementAndGet(tokenRequests);
           return Promise.resolve(
             Response.json({
-              access_token: `access-${tokenRequests}-` + "x".repeat(4_000),
-              refresh_token: `refresh-${tokenRequests}-` + "y".repeat(2_000),
+              access_token: `access-${request}-` + "x".repeat(4_000),
+              refresh_token: `refresh-${request}-` + "y".repeat(2_000),
               id_token: "z".repeat(3_000),
               expires_in: 3_600,
             }),
@@ -224,7 +233,7 @@ it.live(
         tokenProxyFetch: () =>
           Effect.andThen(
             Effect.sync(() => {
-              proxyAttempts++;
+              MutableRef.increment(proxyAttempts);
             }),
             Effect.fail(
               new Cause.UnknownError(
@@ -245,8 +254,8 @@ it.live(
       expect((yield* attempt.completed).connected).toBe(true);
       expect((yield* client.refreshForValidation).connected).toBe(true);
       expect((yield* store.read("openai"))?.accessToken).toContain("access-2-");
-      expect(tokenRequests).toBe(2);
-      expect(proxyAttempts).toBe(0);
+      expect(MutableRef.get(tokenRequests)).toBe(2);
+      expect(MutableRef.get(proxyAttempts)).toBe(0);
       expect((yield* client.disconnect).connected).toBe(false);
       expect(MutableHashMap.size(storage.values)).toBe(0);
     }).pipe(withOAuthTestPlatform),

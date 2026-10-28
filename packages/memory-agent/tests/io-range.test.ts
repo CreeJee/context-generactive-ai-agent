@@ -2,7 +2,18 @@
 import { DatabaseSync } from "node:sqlite";
 import { NodeServices } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
-import { Cause, Effect, Exit, Fiber, FileSystem, Layer, Option, Path } from "effect";
+import {
+  Array as Arr,
+  Cause,
+  Effect,
+  Exit,
+  Fiber,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Stream,
+} from "effect";
 import { connectionContext } from "../src/db/database.ts";
 import { createResultPageReader } from "../src/memory/result-pages.ts";
 import {
@@ -51,6 +62,12 @@ const handlesFor = Effect.fn("handlesFor")(function* (absolute: string) {
   return matching.length;
 });
 
+/** Waits until the forked reader holds a handle on the fixture. */
+const opened = (absolute: string) =>
+  Effect.andThen(Effect.yieldNow, handlesFor(absolute)).pipe(
+    Effect.repeat({ until: (handles) => handles > 0 }),
+  );
+
 layer(NodeServices.layer)((it) => {
   it.effect(
     "saved results page UTF-16 offsets across UTF-8 blocks, NULs and surrogate boundaries",
@@ -63,25 +80,34 @@ layer(NodeServices.layer)((it) => {
         const reader = yield* Effect.provideContext(createResultPageReader, context);
         expect(yield* reader.read("r", "other", "s", 0)).toBeNull();
         expect(yield* reader.read("r", "p", "other", 0)).toBeNull();
-        let offset = 0;
-        let joined = "";
-        while (true) {
-          const page = yield* reader.read("r", "p", "s", offset);
+        const pages = yield* Stream.runCollect(
+          Stream.paginate(0, (offset) =>
+            Effect.map(
+              reader.read("r", "p", "s", offset),
+              (page) => [Arr.of({ offset, page }), Option.fromNullishOr(page?.nextOffset)] as const,
+            ),
+          ),
+        );
+        pages.forEach(({ offset, page }) => {
           expect(page?.offset).toBe(offset);
           expect(page?.length).toBe(text.length);
-          joined += page?.text;
-          if (page?.nextOffset == null) break;
-          offset = page.nextOffset;
-        }
-        expect(joined).toBe(text);
-        for (const start of [3999, 4000, 65535, 100003, text.length + 1]) {
-          const page = yield* reader.read("r", "p", "s", start);
-          const begin = Math.min(start, text.length);
-          let end = Math.min(begin + 4000, text.length);
-          const last = text.charCodeAt(end - 1);
-          if (end < text.length && end - begin > 1 && last >= 0xd800 && last <= 0xdbff) end--;
-          expect(page?.text).toBe(text.slice(begin, end));
-        }
+        });
+        expect(pages.map(({ page }) => page?.text).join("")).toBe(text);
+        yield* Effect.forEach(
+          [3999, 4000, 65535, 100003, text.length + 1],
+          (start) =>
+            Effect.map(reader.read("r", "p", "s", start), (page) => {
+              const begin = Math.min(start, text.length);
+              const cut = Math.min(begin + 4000, text.length);
+              const last = text.charCodeAt(cut - 1);
+              const end =
+                cut < text.length && cut - begin > 1 && last >= 0xd800 && last <= 0xdbff
+                  ? cut - 1
+                  : cut;
+              expect(page?.text).toBe(text.slice(begin, end));
+            }),
+          { discard: true },
+        );
         const seeded = yield* Effect.provideContext(createResultPageReader, context);
         yield* seeded.remember("r", text);
         expect(yield* seeded.read("r", "p", "s", 100003)).toEqual(
@@ -109,13 +135,25 @@ layer(NodeServices.layer)((it) => {
         "😀".repeat(40000) + "\nlast",
         "x\n".repeat(100000),
       ];
-      for (const text of texts) {
-        yield* fs.writeFileString(absolute, text);
-        for (const startLine of [0, 1, 2, 15000, 200001]) {
-          const page = yield* reader({ absolute, path: "text", startLine, maxLines: 2000 });
-          expect(page).toEqual({ sha256: sha256(text), ...linePage(text, startLine, 2000) });
-        }
-      }
+      yield* Effect.forEach(
+        texts,
+        (text) =>
+          Effect.andThen(
+            fs.writeFileString(absolute, text),
+            Effect.forEach(
+              [0, 1, 2, 15000, 200001],
+              (startLine) =>
+                Effect.map(reader({ absolute, path: "text", startLine, maxLines: 2000 }), (page) =>
+                  expect(page).toEqual({
+                    sha256: sha256(text),
+                    ...linePage(text, startLine, 2000),
+                  }),
+                ),
+              { discard: true },
+            ),
+          ),
+        { discard: true },
+      );
       yield* fs.writeFile(absolute, new Uint8Array([0xff]));
       expect(
         (yield* Effect.flip(reader({ absolute, path: "text", startLine: 1, maxLines: 1 }))).reason,
@@ -142,24 +180,26 @@ layer(NodeServices.layer)((it) => {
         const text = "İ match 😀\r\n".repeat(700) + "x".repeat(20000) + "match\nlast match";
         yield* fs.writeFileString(absolute, text);
         const reader = yield* createTextPageReader;
-        const lines: number[] = [];
-        let start = { file: 0, line: 0 };
-        while (true) {
-          const page = yield* searchTextFilesEffect({
-            paths: [absolute],
-            query: "MATCH",
-            caseSensitive: false,
-            start,
-            readBytes: () => Effect.succeed(Buffer.from(text)),
-            readPage: (_, startLine) =>
-              reader({ absolute, path: absolute, startLine, maxLines: 2000 }),
-          });
-          expect(page.matches.length).toBeLessThanOrEqual(100);
-          lines.push(...page.matches.map((match) => match.line));
-          if (page.next === null) break;
-          start = page.next;
-        }
-        expect(lines).toEqual(Array.from({ length: 702 }, (_, index) => index + 1));
+        const pages = yield* Stream.runCollect(
+          Stream.paginate({ file: 0, line: 0 }, (start) =>
+            Effect.map(
+              searchTextFilesEffect({
+                paths: [absolute],
+                query: "MATCH",
+                caseSensitive: false,
+                start,
+                readBytes: () => Effect.succeed(Buffer.from(text)),
+                readPage: (_, startLine) =>
+                  reader({ absolute, path: absolute, startLine, maxLines: 2000 }),
+              }),
+              (page) => [Arr.of(page), Option.fromNullishOr(page.next)] as const,
+            ),
+          ),
+        );
+        pages.forEach((page) => expect(page.matches.length).toBeLessThanOrEqual(100));
+        expect(pages.flatMap((page) => page.matches.map((match) => match.line))).toEqual(
+          Array.from({ length: 702 }, (_, index) => index + 1),
+        );
       }),
   );
 
@@ -175,12 +215,16 @@ layer(NodeServices.layer)((it) => {
           reader({ absolute, path: absolute, startLine: 1, maxLines: 1 }),
         ),
       );
-      while ((yield* handlesFor(absolute)) === 0) yield* Effect.yieldNow;
+      yield* opened(absolute);
       yield* Fiber.interrupt(reading);
       expect(yield* handlesFor(absolute)).toBe(0);
-      for (let i = 0; i < 100; i++) yield* fs.writeFileString(path.join(directory, String(i)), "x");
+      yield* Effect.forEach(
+        Arr.makeBy(100, (i) => path.join(directory, String(i))),
+        (file) => fs.writeFileString(file, "x"),
+        { discard: true },
+      );
       const listing = yield* Effect.forkChild(listOutsideFilesEffect(directory, undefined));
-      while ((yield* handlesFor(directory)) === 0) yield* Effect.yieldNow;
+      yield* opened(directory);
       yield* Fiber.interrupt(listing);
       expect(yield* handlesFor(directory)).toBe(0);
       const complete = yield* listOutsideFilesEffect(directory, undefined);
@@ -208,7 +252,7 @@ layer(NodeServices.layer)((it) => {
       const reading = yield* Effect.forkChild(
         callTool(tools, "read_file", { path: "text", maxLines: 1 }),
       );
-      while ((yield* handlesFor(absolute)) === 0) yield* Effect.yieldNow;
+      yield* opened(absolute);
       yield* Fiber.interrupt(reading);
       expect(yield* handlesFor(absolute)).toBe(0);
       const exit = yield* Fiber.await(reading);

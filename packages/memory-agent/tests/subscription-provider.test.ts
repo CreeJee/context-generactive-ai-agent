@@ -1,5 +1,5 @@
 import { it as effectTest } from "@effect/vitest";
-import { Stream, DateTime, Deferred, Effect, Exit, Fiber } from "effect";
+import { Stream, DateTime, Deferred, Effect, Exit, Fiber, MutableRef } from "effect";
 import * as TestClock from "effect/testing/TestClock";
 import { describe, expect, test } from "vite-plus/test";
 import type { Settings } from "../src/config/global-config.ts";
@@ -18,17 +18,14 @@ import {
 import { createSubscriptionRuntime } from "../src/providers/subscription-runtime.ts";
 
 const settingsStore = () => {
-  let settings: Settings = {};
+  const settings = MutableRef.make<Settings>({});
   return {
     get value() {
-      return settings;
+      return MutableRef.get(settings);
     },
-    read: Effect.sync(() => settings),
+    read: Effect.sync(() => MutableRef.get(settings)),
     update: (patch: Partial<Settings>) =>
-      Effect.sync(() => {
-        settings = { ...settings, ...patch };
-        return settings;
-      }),
+      Effect.sync(() => MutableRef.updateAndGet(settings, (current) => ({ ...current, ...patch }))),
   };
 };
 
@@ -36,34 +33,39 @@ const fakeClient = Effect.fn("subscriptionProviderTest.fakeClient")(function* (
   provider: "openai" | "anthropic",
   pages: ReadonlyArray<JsonValue>,
 ) {
-  let connected = false;
-  let cancelled = false;
-  let catalogRequests = 0;
+  const connected = MutableRef.make(false);
+  const cancelled = MutableRef.make(false);
+  const catalogRequests = MutableRef.make(0);
   const completion = yield* Deferred.make<OAuthConnectionStatus>();
   const attempt: LoginAttempt = {
     provider,
     authorizationUrl: `https://example.test/${provider}/authorize`,
     completed: Deferred.await(completion),
     cancel: Effect.sync(() => {
-      cancelled = true;
+      MutableRef.set(cancelled, true);
     }),
   };
   return {
     client: {
-      status: Effect.sync(() => ({ provider, connected, expiresAt: null })),
+      status: Effect.sync(() => ({
+        provider,
+        connected: MutableRef.get(connected),
+        expiresAt: null,
+      })),
       startLogin: Effect.succeed(attempt),
-      disconnect: Effect.sync(() => {
-        connected = false;
-        return { provider, connected, expiresAt: null };
-      }),
+      disconnect: Effect.sync(() => ({
+        provider,
+        connected: MutableRef.setAndGet(connected, false),
+        expiresAt: null,
+      })),
       modelCatalog: Effect.sync(() => {
-        catalogRequests += 1;
+        MutableRef.increment(catalogRequests);
         return pages;
       }),
       stream: () => Stream.empty,
     },
     complete: Effect.gen(function* () {
-      connected = true;
+      MutableRef.set(connected, true);
       yield* Deferred.succeed(completion, {
         provider,
         connected: true,
@@ -71,10 +73,10 @@ const fakeClient = Effect.fn("subscriptionProviderTest.fakeClient")(function* (
       });
     }),
     get cancelled() {
-      return cancelled;
+      return MutableRef.get(cancelled);
     },
     get catalogRequests() {
-      return catalogRequests;
+      return MutableRef.get(catalogRequests);
     },
   };
 });
@@ -88,12 +90,12 @@ const gatedCatalog = Effect.fn("subscriptionProviderTest.gatedCatalog")(function
     reject: Effect.Effect<boolean>;
     interrupted: boolean;
   }[] = [];
-  let key = "profile-a";
+  const key = MutableRef.make("profile-a");
   const fake = yield* fakeClient("openai", []);
   const provider = yield* createSubscriptionProvider({
     protocol: providerProtocols.openai,
     config: settingsStore(),
-    catalogKey: () => key,
+    catalogKey: () => MutableRef.get(key),
     client: {
       ...fake.client,
       modelCatalog: Effect.gen(function* () {
@@ -121,7 +123,7 @@ const gatedCatalog = Effect.fn("subscriptionProviderTest.gatedCatalog")(function
     provider,
     gates,
     changeProfile: (next: string) => {
-      key = next;
+      MutableRef.set(key, next);
     },
   };
 });
@@ -168,10 +170,12 @@ describe("subscription catalog concurrency", () => {
       const waiter = yield* Effect.forkChild(provider.models.list, { startImmediately: true });
       expect(gates).toHaveLength(1);
       yield* gates[0]!.reject;
-      for (const fiber of [owner, waiter]) {
-        const exit = yield* Fiber.await(fiber);
-        expect(Exit.isFailure(exit)).toBe(true);
-      }
+      yield* Effect.forEach(
+        [owner, waiter],
+        (fiber) =>
+          Effect.map(Fiber.await(fiber), (exit) => expect(Exit.isFailure(exit)).toBe(true)),
+        { discard: true },
+      );
       const retry = yield* Effect.forkChild(provider.models.list, { startImmediately: true });
       expect(gates).toHaveLength(2);
       yield* gates[1]!.release(catalogPages("retry"));
@@ -224,9 +228,12 @@ describe("subscription catalog concurrency", () => {
         expect(gates[0]?.interrupted).toBe(false);
         expect(gates).toHaveLength(1);
         yield* gates[0]!.release(catalogPages("shared"));
-        for (const fiber of [owner, remaining]) {
-          expect((yield* Fiber.join(fiber))[0]?.id).toBe("shared");
-        }
+        yield* Effect.forEach(
+          [owner, remaining],
+          (fiber) =>
+            Effect.map(Fiber.join(fiber), (models) => expect(models[0]?.id).toBe("shared")),
+          { discard: true },
+        );
         yield* provider.auth.disconnect;
         const interruptedOwner = yield* Effect.forkChild(provider.models.list, {
           startImmediately: true,

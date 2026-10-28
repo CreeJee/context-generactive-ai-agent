@@ -7,6 +7,7 @@ import {
   Layer,
   Fiber,
   MutableHashMap,
+  MutableRef,
   Option,
   Effect,
   Exit,
@@ -81,9 +82,13 @@ const dbFixture = Effect.fn("oauthBound.dbFixture")(function* (provider: OAuthPr
   const profiles = yield* seededProfiles(
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      for (const [index, id] of ids.entries())
-        yield* sql`INSERT INTO oauth_profiles(id, provider, label, selected, created_at)
-          VALUES (${id}, ${provider}, ${`account ${index}`}, ${index === 0 ? 1 : 0}, ${index})`;
+      yield* Effect.forEach(
+        ids,
+        (id, index) =>
+          sql`INSERT INTO oauth_profiles(id, provider, label, selected, created_at)
+          VALUES (${id}, ${provider}, ${`account ${index}`}, ${index === 0 ? 1 : 0}, ${index})`,
+        { discard: true },
+      );
     }),
   );
   const vault: ProfileCredentialStore = {
@@ -128,17 +133,17 @@ describe("account-bound subscription provider", () => {
               MutableHashMap.remove(vault, id);
             }),
         };
-        let legacyRemoved = false;
+        const legacyRemoved = MutableRef.make(false);
         const legacy: CredentialStore = {
-          read: () => Effect.sync(() => (legacyRemoved ? null : credential)),
+          read: () => Effect.sync(() => (MutableRef.get(legacyRemoved) ? null : credential)),
           write: () => Effect.void,
           remove: () =>
             Effect.sync(() => {
-              legacyRemoved = true;
+              MutableRef.set(legacyRemoved, true);
             }),
         };
         const created: string[] = [];
-        let finish!: Effect.Effect<boolean>;
+        const finish = MutableRef.make<Effect.Effect<boolean>>(Effect.die("login not started"));
         const bound = yield* createAccountBoundSubscriptionClients({
           profiles,
           provider: provider,
@@ -151,10 +156,13 @@ describe("account-bound subscription provider", () => {
                     expect(id).not.toBeNull();
                     created.push(id!);
                     const completion = yield* Deferred.make<OAuthConnectionStatus>();
-                    finish = Effect.sync(() => {
-                      MutableHashMap.set(vault, id!, credential);
-                    }).pipe(
-                      Effect.andThen(Deferred.succeed(completion, connection(provider, true))),
+                    MutableRef.set(
+                      finish,
+                      Effect.sync(() => {
+                        MutableHashMap.set(vault, id!, credential);
+                      }).pipe(
+                        Effect.andThen(Deferred.succeed(completion, connection(provider, true))),
+                      ),
                     );
                     return {
                       provider,
@@ -174,32 +182,36 @@ describe("account-bound subscription provider", () => {
           client: bound.client,
           catalogKey: bound.catalogKey,
         });
-        for (let round = 0; round < 2; round++) {
-          expect(AuthConnectionState.$is("signed-out")(yield* configured.auth.disconnect)).toBe(
-            true,
-          );
-          expect(yield* profiles.list(provider)).toEqual([]);
-          yield* rejects(Effect.scoped(bound.forRun), "not_connected");
-          expect(AuthConnectionState.$is("pending")(yield* configured.auth.connect)).toBe(true);
-          expect(yield* profiles.list(provider)).toEqual([]);
-          yield* finish;
-          expect(
-            AuthConnectionState.$is("signed-in")(
-              yield* configured.auth.status.pipe(
-                Effect.repeat({
-                  until: AuthConnectionState.$is("signed-in"),
-                  schedule: Schedule.spaced("20 millis"),
-                }),
-                Effect.timeout("1000 millis"),
+        yield* Effect.forEach(
+          [0, 1],
+          Effect.fnUntraced(function* (round) {
+            expect(AuthConnectionState.$is("signed-out")(yield* configured.auth.disconnect)).toBe(
+              true,
+            );
+            expect(yield* profiles.list(provider)).toEqual([]);
+            yield* rejects(Effect.scoped(bound.forRun), "not_connected");
+            expect(AuthConnectionState.$is("pending")(yield* configured.auth.connect)).toBe(true);
+            expect(yield* profiles.list(provider)).toEqual([]);
+            yield* MutableRef.get(finish);
+            expect(
+              AuthConnectionState.$is("signed-in")(
+                yield* configured.auth.status.pipe(
+                  Effect.repeat({
+                    until: AuthConnectionState.$is("signed-in"),
+                    schedule: Schedule.spaced("20 millis"),
+                  }),
+                  Effect.timeout("1000 millis"),
+                ),
               ),
-            ),
-          ).toBe(true);
-          expect(yield* profiles.list(provider)).toMatchObject([
-            { id: created[round], provider, selected: true },
-          ]);
-          yield* Effect.scoped(bound.forRun);
-        }
-        expect(legacyRemoved).toBe(true);
+            ).toBe(true);
+            expect(yield* profiles.list(provider)).toMatchObject([
+              { id: created[round], provider, selected: true },
+            ]);
+            yield* Effect.scoped(bound.forRun);
+          }),
+          { discard: true },
+        );
+        expect(MutableRef.get(legacyRemoved)).toBe(true);
         expect(EffectArray.dedupe(created).length).toBe(2);
         expect(profiles.committed(provider).legacyRemoved).toBe(true);
       }).pipe(withOAuthTestPlatform),
@@ -225,7 +237,7 @@ describe("account-bound subscription provider", () => {
             }),
         };
         const disconnected = Effect.succeed(connection("openai", false));
-        let finish!: Effect.Effect<boolean>;
+        const finish = MutableRef.make<Effect.Effect<boolean>>(Effect.die("login not started"));
         const bound = yield* createAccountBoundSubscriptionClients({
           profiles,
           provider: "openai",
@@ -240,10 +252,12 @@ describe("account-bound subscription provider", () => {
                       OAuthConnectionStatus,
                       OAuthHarnessError
                     >();
-                    finish =
+                    MutableRef.set(
+                      finish,
                       intent === "reject"
                         ? Deferred.fail(completion, OAuthHarnessError.fromCode("provider_rejected"))
-                        : Deferred.succeed(completion, connection("openai", true));
+                        : Deferred.succeed(completion, connection("openai", true)),
+                    );
                     return {
                       provider: "openai",
                       authorizationUrl: "https://example.com/login",
@@ -257,7 +271,7 @@ describe("account-bound subscription provider", () => {
         });
         const attempt = yield* bound.client.startLogin;
         yield* Effect.when(attempt.cancel, Effect.succeed(intent === "cancel"));
-        yield* finish;
+        yield* MutableRef.get(finish);
         yield* rejects(attempt.completed, intent === "cancel" ? "cancelled" : "provider_rejected");
         expect(removed).toHaveLength(1);
         expect(yield* profiles.list("openai")).toEqual([]);

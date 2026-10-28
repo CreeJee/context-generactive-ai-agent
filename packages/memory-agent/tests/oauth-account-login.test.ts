@@ -10,6 +10,7 @@ import {
   Fiber,
   Layer,
   MutableHashMap,
+  MutableRef,
   Option,
 } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
@@ -112,7 +113,7 @@ describe("multi-account OAuth login manager", () => {
         const gate = yield* Deferred.make<void>();
         const exchanging = yield* Deferred.make<void>();
         const runNative = Effect.runPromiseWith(yield* Effect.context());
-        let writes = 0;
+        const writes = MutableRef.make(0);
         const tokenFetch = vi.fn(() =>
           runNative(
             Effect.gen(function* () {
@@ -141,7 +142,7 @@ describe("multi-account OAuth login manager", () => {
                 ...slot(id),
                 write: (key, value) =>
                   Effect.suspend(() => {
-                    writes += 1;
+                    MutableRef.increment(writes);
                     return slot(id).write(key, value);
                   }),
               },
@@ -162,20 +163,24 @@ describe("multi-account OAuth login manager", () => {
           { startImmediately: true },
         );
         yield* Deferred.await(exchanging);
-        for (const [code, state] of [
-          ["first-code", authorize.searchParams.get("state")!],
-          ["second-code", authorize.searchParams.get("state")!],
-          ["second-code", "wrong-state"],
-        ]) {
-          const duplicate = new URL(callback);
-          duplicate.searchParams.set("code", code!);
-          duplicate.searchParams.set("state", state!);
-          const rejected = yield* (yield* testHttpClient()).get(duplicate.toString());
-          expect(rejected.status).toBe(410);
-          yield* rejected.text;
-        }
+        yield* Effect.forEach(
+          [
+            ["first-code", authorize.searchParams.get("state")!],
+            ["second-code", authorize.searchParams.get("state")!],
+            ["second-code", "wrong-state"],
+          ],
+          Effect.fnUntraced(function* ([code, state]) {
+            const duplicate = new URL(callback);
+            duplicate.searchParams.set("code", code!);
+            duplicate.searchParams.set("state", state!);
+            const rejected = yield* (yield* testHttpClient()).get(duplicate.toString());
+            expect(rejected.status).toBe(410);
+            yield* rejected.text;
+          }),
+          { discard: true },
+        );
         expect(tokenFetch).toHaveBeenCalledTimes(1);
-        expect(writes).toBe(0);
+        expect(MutableRef.get(writes)).toBe(0);
         expect((yield* manager.profiles(provider)).profiles).toEqual([]);
         yield* Deferred.succeed(gate, undefined);
         const response = yield* Fiber.join(initiated);
@@ -189,7 +194,7 @@ describe("multi-account OAuth login manager", () => {
           "login completion",
           1000,
         );
-        expect(writes).toBe(1);
+        expect(MutableRef.get(writes)).toBe(1);
         expect(MutableHashMap.size(slots)).toBe(1);
         expect((yield* manager.profiles(provider)).profiles).toEqual([
           expect.objectContaining({ label: "concurrent profile", selected: true }),
@@ -205,20 +210,24 @@ describe("multi-account OAuth login manager", () => {
           yield* fixture();
         yield* legacyStore.write(provider, credential("original"));
         yield* profiles.importLegacy(provider, accounts, legacyStore);
-        for (const suffix of [1, 2]) {
-          const pending = yield* manager.start(provider, `계정 ${suffix}`);
-          expect(AccountLoginState.$is("pending")(pending.login)).toBe(true);
-          const attempt = Option.getOrUndefined(MutableHashMap.get(attempts, provider))!;
-          yield* accounts.write(provider, attempt.id, credential(`${provider}-${suffix}`));
-          yield* attempt.succeed;
-          yield* waitUntil(
-            Effect.map(manager.profiles(provider), (state) =>
-              AccountLoginState.$is("completed")(state.login),
-            ),
-            "login completion",
-            1000,
-          );
-        }
+        yield* Effect.forEach(
+          [1, 2],
+          Effect.fnUntraced(function* (suffix) {
+            const pending = yield* manager.start(provider, `계정 ${suffix}`);
+            expect(AccountLoginState.$is("pending")(pending.login)).toBe(true);
+            const attempt = Option.getOrUndefined(MutableHashMap.get(attempts, provider))!;
+            yield* accounts.write(provider, attempt.id, credential(`${provider}-${suffix}`));
+            yield* attempt.succeed;
+            yield* waitUntil(
+              Effect.map(manager.profiles(provider), (state) =>
+                AccountLoginState.$is("completed")(state.login),
+              ),
+              "login completion",
+              1000,
+            );
+          }),
+          { discard: true },
+        );
         expect(
           (yield* manager.profiles(provider)).profiles.map((profile) => profile.label).sort(),
         ).toEqual(

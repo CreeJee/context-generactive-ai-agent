@@ -7,6 +7,7 @@ import {
   Fiber,
   Function as EffectFunction,
   MutableHashMap,
+  MutableRef,
   Option,
   DateTime,
   Result,
@@ -96,7 +97,7 @@ it.live("catalog interruption aborts the native HTTP signal without credential w
         refreshToken: "fixture",
         expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 3600_000,
       });
-      let observed: AbortSignal | null | undefined;
+      const observed = MutableRef.make<AbortSignal | null | undefined>(undefined);
       const starting = yield* Deferred.make<void>();
       const client = yield* createSubscriptionOAuthClient({
         protocol: providerProtocols.openai,
@@ -104,7 +105,8 @@ it.live("catalog interruption aborts the native HTTP signal without credential w
         fetch: (_url, init) =>
           runSdk(
             Effect.gen(function* () {
-              observed = init?.signal;
+              const signal = init?.signal;
+              MutableRef.set(observed, signal);
               yield* Deferred.succeed(starting, undefined);
               return yield* Effect.callback<Response, Cause.UnknownError>((resume) => {
                 const abort = () =>
@@ -113,9 +115,9 @@ it.live("catalog interruption aborts the native HTTP signal without credential w
                       new Cause.UnknownError(new DOMException("Aborted fixture", "AbortError")),
                     ),
                   );
-                observed?.addEventListener("abort", abort, { once: true });
-                if (observed?.aborted === true) abort();
-                return Effect.sync(() => observed?.removeEventListener("abort", abort));
+                signal?.addEventListener("abort", abort, { once: true });
+                if (signal?.aborted === true) abort();
+                return Effect.sync(() => signal?.removeEventListener("abort", abort));
               });
             }),
           ),
@@ -123,7 +125,7 @@ it.live("catalog interruption aborts the native HTTP signal without credential w
       const catalog = yield* Effect.forkChild(client.modelCatalog, { startImmediately: true });
       yield* Deferred.await(starting);
       yield* Fiber.interrupt(catalog);
-      expect(observed?.aborted).toBe(true);
+      expect(MutableRef.get(observed)?.aborted).toBe(true);
       expect(store.writes).toBe(1);
     }),
   ).pipe(withOAuthTestPlatform),
@@ -206,12 +208,12 @@ const jsonStringify = EffectFunction.flow(
   Result.getOrThrow,
 );
 const fakeProvider = Effect.fn("fakeOAuthProvider")(function* (provider: OAuthProvider) {
-  let tokenRequests = 0;
-  let refreshRequests = 0;
-  let modelRequests = 0;
-  let catalogRequests = 0;
-  let forceUnauthorized = false;
-  let rejectRefresh: number | null = null;
+  const tokenRequests = MutableRef.make(0);
+  const refreshRequests = MutableRef.make(0);
+  const modelRequests = MutableRef.make(0);
+  const catalogRequests = MutableRef.make(0);
+  const forceUnauthorized = MutableRef.make(false);
+  const rejectRefresh = MutableRef.make<number | null>(null);
   const authorizations: string[] = [];
   const tokenBodies: string[] = [];
   const modelBodies: string[] = [];
@@ -233,16 +235,16 @@ const fakeProvider = Effect.fn("fakeOAuthProvider")(function* (provider: OAuthPr
         });
       }
       if (url.pathname === "/token") {
-        tokenRequests += 1;
+        MutableRef.increment(tokenRequests);
         const raw = yield* request.text;
         tokenBodies.push(raw);
         const isRefresh =
           request.headers["content-type"] === "application/json"
             ? raw.includes('"grant_type":"refresh_token"')
             : new URLSearchParams(raw).get("grant_type") === "refresh_token";
-        if (isRefresh) refreshRequests += 1;
-        if (isRefresh && rejectRefresh !== null)
-          return HttpServerResponse.empty({ status: rejectRefresh });
+        if (isRefresh) MutableRef.increment(refreshRequests);
+        const rejection = MutableRef.get(rejectRefresh);
+        if (isRefresh && rejection !== null) return HttpServerResponse.empty({ status: rejection });
         const suffix = isRefresh ? "2" : "1";
         const claims = Buffer.from(
           jsonStringify({
@@ -257,10 +259,13 @@ const fakeProvider = Effect.fn("fakeOAuthProvider")(function* (provider: OAuthPr
         });
       }
       if (url.pathname === "/catalog") {
-        catalogRequests += 1;
+        MutableRef.increment(catalogRequests);
         catalogHeaders.push(request.headers);
         catalogUrls.push(url.toString());
-        if (forceUnauthorized && request.headers.authorization === "Bearer access-secret-1")
+        if (
+          MutableRef.get(forceUnauthorized) &&
+          request.headers.authorization === "Bearer access-secret-1"
+        )
           return HttpServerResponse.empty({ status: provider === "openai" ? 401 : 403 });
         return yield* HttpServerResponse.json(
           provider === "openai"
@@ -271,10 +276,13 @@ const fakeProvider = Effect.fn("fakeOAuthProvider")(function* (provider: OAuthPr
         );
       }
       if (url.pathname === "/model") {
-        modelRequests += 1;
+        MutableRef.increment(modelRequests);
         modelHeaders.push(request.headers);
         modelBodies.push(yield* request.text);
-        if (forceUnauthorized && request.headers.authorization === "Bearer access-secret-1")
+        if (
+          MutableRef.get(forceUnauthorized) &&
+          request.headers.authorization === "Bearer access-secret-1"
+        )
           return HttpServerResponse.empty({ status: 401 });
         const events: string[] = [];
         if (provider === "openai") {
@@ -325,12 +333,17 @@ const fakeProvider = Effect.fn("fakeOAuthProvider")(function* (provider: OAuthPr
     modelHeaders,
     catalogHeaders,
     catalogUrls,
-    counts: () => ({ tokenRequests, refreshRequests, modelRequests, catalogRequests }),
+    counts: () => ({
+      tokenRequests: MutableRef.get(tokenRequests),
+      refreshRequests: MutableRef.get(refreshRequests),
+      modelRequests: MutableRef.get(modelRequests),
+      catalogRequests: MutableRef.get(catalogRequests),
+    }),
     requireRefresh: () => {
-      forceUnauthorized = true;
+      MutableRef.set(forceUnauthorized, true);
     },
     rejectRefresh: (status = 401) => {
-      rejectRefresh = status;
+      MutableRef.set(rejectRefresh, status);
     },
   };
 });
@@ -450,14 +463,14 @@ it.live("retries an OpenAI pre-connect timeout once on a scoped proxy route", ()
     Effect.gen(function* () {
       const scope = yield* Effect.scope;
       const fake = yield* fakeProvider("openai");
-      let proxyCalls = 0;
+      const proxyCalls = MutableRef.make(0);
       const harness = yield* createSubscriptionOAuthClient({
         protocol: fake.protocol,
         store: new MemoryCredentialStore(),
         fetch: connectTimeout,
         tokenProxyFetch: (url, body, contentType) =>
           Effect.gen(function* () {
-            proxyCalls += 1;
+            MutableRef.increment(proxyCalls);
             expect(url).toBe(fake.protocol.tokenUrl);
             return {
               route: "attempted" as const,
@@ -471,14 +484,15 @@ it.live("retries an OpenAI pre-connect timeout once on a scoped proxy route", ()
           }),
       });
       expect(yield* login(harness)).toMatchObject({ provider: "openai", connected: true });
-      expect(proxyCalls).toBe(1);
+      expect(MutableRef.get(proxyCalls)).toBe(1);
       expect(fake.counts().tokenRequests).toBe(1);
     }),
   ).pipe(withOAuthTestPlatform),
 );
 
-for (const route of ["direct", "unavailable", "attempted"] as const) {
-  it.live(`reports proxy route ${route} without exposing the proxy address`, () =>
+it.live.each(["direct", "unavailable", "attempted"] as const)(
+  "reports proxy route %s without exposing the proxy address",
+  (route) =>
     Effect.scoped(
       Effect.gen(function* () {
         const fake = yield* fakeProvider("openai");
@@ -512,21 +526,20 @@ for (const route of ["direct", "unavailable", "attempted"] as const) {
         expect(jsonStringify(failure)).not.toContain("private-proxy.example");
       }),
     ).pipe(withOAuthTestPlatform),
-  );
-}
+);
 
 it.live("does not replay an authorization code after a non-connect failure", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const fake = yield* fakeProvider("openai");
-      let proxyCalls = 0;
+      const proxyCalls = MutableRef.make(0);
       const harness = yield* createSubscriptionOAuthClient({
         protocol: fake.protocol,
         store: new MemoryCredentialStore(),
         fetch: () => Promise.reject(new DOMException("timed out", "TimeoutError")),
         tokenProxyFetch: () =>
           Effect.sync(() => {
-            proxyCalls += 1;
+            MutableRef.increment(proxyCalls);
             return { route: "unavailable" as const, response: null };
           }),
       });
@@ -538,7 +551,7 @@ it.live("does not replay an authorization code after a non-connect failure", () 
         code: "transport_unavailable",
         transportCode: "timeout",
       });
-      expect(proxyCalls).toBe(0);
+      expect(MutableRef.get(proxyCalls)).toBe(0);
     }),
   ).pipe(withOAuthTestPlatform),
 );
@@ -585,48 +598,104 @@ it.live("exposes only a validated provider error code from a failed token exchan
   ).pipe(withOAuthTestPlatform),
 );
 
-for (const provider of ["openai", "anthropic"] as const) {
-  describe(`${provider} OAuth validation harness`, () => {
-    it.live("uses PKCE/state, exchanges the callback internally, and exposes only status", () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const fake = yield* fakeProvider(provider);
-          const store = new MemoryCredentialStore();
-          const harness = yield* createSubscriptionOAuthClient({ protocol: fake.protocol, store });
-          const status = yield* login(harness);
+describe.each(["openai", "anthropic"] as const)("%s OAuth validation harness", (provider) => {
+  it.live("uses PKCE/state, exchanges the callback internally, and exposes only status", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = yield* fakeProvider(provider);
+        const store = new MemoryCredentialStore();
+        const harness = yield* createSubscriptionOAuthClient({ protocol: fake.protocol, store });
+        const status = yield* login(harness);
 
-          expect(status).toMatchObject({ provider, connected: true });
-          expect(jsonStringify(status)).not.toContain("secret");
-          const auth = new URLSearchParams(fake.authorizations[0]);
-          const redirect = new URL(auth.get("redirect_uri")!);
-          expect(redirect.hostname).toBe(provider === "openai" ? "127.0.0.1" : "localhost");
-          expect(redirect.pathname).toBe(fake.protocol.callbackPath);
-          expect(fake.tokenBodies[0]).toContain(
-            provider === "openai" ? encodeURIComponent(redirect.toString()) : redirect.toString(),
-          );
-          expect(auth.get("code_challenge_method")).toBe("S256");
-          expect(auth.get("code_challenge")).toMatch(/^[A-Za-z0-9_-]{43}$/);
-          expect(auth.get("state")).toMatch(/^[A-Za-z0-9_-]{40,}$/);
-          expect(auth.get("scope")).toContain(
-            provider === "anthropic" ? "user:inference" : "offline_access",
-          );
-          expect(fake.tokenBodies[0]).toContain("code_verifier");
-          expect(fake.tokenBodies[0]).toContain("authorization-code-secret");
-          if (provider === "anthropic") {
-            const expectedState = auth.get("state");
-            expect(fake.tokenBodies[0]).toContain(`"state":"${expectedState}"`);
-            expect(fake.tokenBodies[0]).toContain(`"code_verifier":"${expectedState}"`);
-          }
-          expect(yield* harness.disconnect).toEqual({
-            provider,
-            connected: false,
-            expiresAt: null,
-          });
-        }),
-      ).pipe(withOAuthTestPlatform),
-    );
+        expect(status).toMatchObject({ provider, connected: true });
+        expect(jsonStringify(status)).not.toContain("secret");
+        const auth = new URLSearchParams(fake.authorizations[0]);
+        const redirect = new URL(auth.get("redirect_uri")!);
+        expect(redirect.hostname).toBe(provider === "openai" ? "127.0.0.1" : "localhost");
+        expect(redirect.pathname).toBe(fake.protocol.callbackPath);
+        expect(fake.tokenBodies[0]).toContain(
+          provider === "openai" ? encodeURIComponent(redirect.toString()) : redirect.toString(),
+        );
+        expect(auth.get("code_challenge_method")).toBe("S256");
+        expect(auth.get("code_challenge")).toMatch(/^[A-Za-z0-9_-]{43}$/);
+        expect(auth.get("state")).toMatch(/^[A-Za-z0-9_-]{40,}$/);
+        expect(auth.get("scope")).toContain(
+          provider === "anthropic" ? "user:inference" : "offline_access",
+        );
+        expect(fake.tokenBodies[0]).toContain("code_verifier");
+        expect(fake.tokenBodies[0]).toContain("authorization-code-secret");
+        if (provider === "anthropic") {
+          const expectedState = auth.get("state");
+          expect(fake.tokenBodies[0]).toContain(`"state":"${expectedState}"`);
+          expect(fake.tokenBodies[0]).toContain(`"code_verifier":"${expectedState}"`);
+        }
+        expect(yield* harness.disconnect).toEqual({
+          provider,
+          connected: false,
+          expiresAt: null,
+        });
+      }),
+    ).pipe(withOAuthTestPlatform),
+  );
 
-    it.live("streams text and one tool call with provider headers", () =>
+  it.live("streams text and one tool call with provider headers", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = yield* fakeProvider(provider);
+        const harness = yield* createSubscriptionOAuthClient({
+          protocol: fake.protocol,
+          store: new MemoryCredentialStore(),
+        });
+        yield* login(harness);
+
+        const events = yield* Stream.runCollect(harness.stream('{"model":"test","stream":true}'));
+
+        expect(events).toEqual(
+          provider === "openai"
+            ? [
+                NormalizedStreamEvent.text({ text: "hello" }),
+                NormalizedStreamEvent["tool-call"]({
+                  id: "call-1",
+                  name: "lookup",
+                  arguments: { q: "x" },
+                }),
+              ]
+            : [
+                NormalizedStreamEvent.text({ text: "hello" }),
+                NormalizedStreamEvent["tool-call-start"]({
+                  index: 1,
+                  id: "call-1",
+                  name: "lookup",
+                }),
+                NormalizedStreamEvent["tool-call-arguments"]({
+                  index: 1,
+                  delta: '{"q":"x"}',
+                }),
+                NormalizedStreamEvent["content-block-end"]({ index: 1 }),
+              ],
+        );
+        expect(fake.modelHeaders[0]?.authorization).toBe("Bearer access-secret-1");
+        if (provider === "openai")
+          expect(fake.modelHeaders[0]?.["chatgpt-account-id"]).toBe("account-internal-1");
+        if (provider === "anthropic") {
+          expect(fake.modelHeaders[0]?.["anthropic-version"]).toBe("2023-06-01");
+          expect(fake.modelHeaders[0]?.["anthropic-beta"]).toContain("claude-code-20250219");
+          expect(fake.modelHeaders[0]?.["anthropic-beta"]).toContain("oauth-2025-04-20");
+          expect(fake.modelHeaders[0]?.["x-claude-code-session-id"]).toBeTruthy();
+          expect(fake.modelHeaders[0]?.["x-client-request-id"]).toBeTruthy();
+          expect(fake.modelHeaders[0]?.["anthropic-dangerous-direct-browser-access"]).toBe("true");
+          expect(fake.modelBodies[0]).toContain("x-anthropic-billing-header");
+          expect(fake.modelBodies[0]).toContain("Claude Agent SDK");
+          expect(fake.modelBodies[0]).toContain('\\"account_uuid\\":\\"unknown-account\\"');
+          expect(fake.modelBodies[0]).toContain('"metadata":{"user_id":');
+          expect(fake.modelBodies[0]).not.toContain("access-secret");
+        }
+      }),
+    ).pipe(withOAuthTestPlatform),
+  );
+
+  if (provider === "anthropic")
+    it.live("sends effort, and bound summarized thinking only to always-thinking models", () =>
       Effect.scoped(
         Effect.gen(function* () {
           const fake = yield* fakeProvider(provider);
@@ -635,67 +704,10 @@ for (const provider of ["openai", "anthropic"] as const) {
             store: new MemoryCredentialStore(),
           });
           yield* login(harness);
-
-          const events = yield* Stream.runCollect(harness.stream('{"model":"test","stream":true}'));
-
-          expect(events).toEqual(
-            provider === "openai"
-              ? [
-                  NormalizedStreamEvent.text({ text: "hello" }),
-                  NormalizedStreamEvent["tool-call"]({
-                    id: "call-1",
-                    name: "lookup",
-                    arguments: { q: "x" },
-                  }),
-                ]
-              : [
-                  NormalizedStreamEvent.text({ text: "hello" }),
-                  NormalizedStreamEvent["tool-call-start"]({
-                    index: 1,
-                    id: "call-1",
-                    name: "lookup",
-                  }),
-                  NormalizedStreamEvent["tool-call-arguments"]({
-                    index: 1,
-                    delta: '{"q":"x"}',
-                  }),
-                  NormalizedStreamEvent["content-block-end"]({ index: 1 }),
-                ],
-          );
-          expect(fake.modelHeaders[0]?.authorization).toBe("Bearer access-secret-1");
-          if (provider === "openai")
-            expect(fake.modelHeaders[0]?.["chatgpt-account-id"]).toBe("account-internal-1");
-          if (provider === "anthropic") {
-            expect(fake.modelHeaders[0]?.["anthropic-version"]).toBe("2023-06-01");
-            expect(fake.modelHeaders[0]?.["anthropic-beta"]).toContain("claude-code-20250219");
-            expect(fake.modelHeaders[0]?.["anthropic-beta"]).toContain("oauth-2025-04-20");
-            expect(fake.modelHeaders[0]?.["x-claude-code-session-id"]).toBeTruthy();
-            expect(fake.modelHeaders[0]?.["x-client-request-id"]).toBeTruthy();
-            expect(fake.modelHeaders[0]?.["anthropic-dangerous-direct-browser-access"]).toBe(
-              "true",
-            );
-            expect(fake.modelBodies[0]).toContain("x-anthropic-billing-header");
-            expect(fake.modelBodies[0]).toContain("Claude Agent SDK");
-            expect(fake.modelBodies[0]).toContain('\\"account_uuid\\":\\"unknown-account\\"');
-            expect(fake.modelBodies[0]).toContain('"metadata":{"user_id":');
-            expect(fake.modelBodies[0]).not.toContain("access-secret");
-          }
-        }),
-      ).pipe(withOAuthTestPlatform),
-    );
-
-    if (provider === "anthropic")
-      it.live("sends effort, and bound summarized thinking only to always-thinking models", () =>
-        Effect.scoped(
-          Effect.gen(function* () {
-            const fake = yield* fakeProvider(provider);
-            const harness = yield* createSubscriptionOAuthClient({
-              protocol: fake.protocol,
-              store: new MemoryCredentialStore(),
-            });
-            yield* login(harness);
-            for (const model of ["claude-opus-5-5", "claude-opus-5"])
-              yield* Stream.runDrain(
+          yield* Effect.forEach(
+            ["claude-opus-5-5", "claude-opus-5"],
+            (model) =>
+              Stream.runDrain(
                 harness.stream(
                   subscriptionBody({
                     provider,
@@ -705,218 +717,217 @@ for (const provider of ["openai", "anthropic"] as const) {
                     promptCache: undefined,
                   }),
                 ),
-              );
-            const [bound, plain] = fake.modelBodies.map((body) => JSON.parse(body));
-            expect(bound.output_config).toEqual({ effort: "high" });
-            expect(bound.thinking).toEqual({
-              type: "adaptive",
-              display: "summarized",
-              block_binding: { prefix_mismatch_behavior: "drop_block" },
-            });
-            expect(fake.modelHeaders[0]?.["anthropic-beta"]).toContain(
-              "thinking-binding-controls-2026-08-01",
-            );
-            expect(plain.output_config).toEqual({ effort: "high" });
-            expect(plain.thinking).toBeUndefined();
-            expect(fake.modelHeaders[1]?.["anthropic-beta"]).toBe(
-              providerProtocols.anthropic.modelHeaders["anthropic-beta"],
-            );
-          }),
-        ).pipe(withOAuthTestPlatform),
-      );
-
-    it.live("fetches the fixed catalog, paginates, and returns no credentials", () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const fake = yield* fakeProvider(provider);
-          const harness = yield* createSubscriptionOAuthClient({
-            protocol: fake.protocol,
-            store: new MemoryCredentialStore(),
+              ),
+            { discard: true },
+          );
+          const [bound, plain] = fake.modelBodies.map((body) => JSON.parse(body));
+          expect(bound.output_config).toEqual({ effort: "high" });
+          expect(bound.thinking).toEqual({
+            type: "adaptive",
+            display: "summarized",
+            block_binding: { prefix_mismatch_behavior: "drop_block" },
           });
-          yield* login(harness);
-          const pages = yield* harness.modelCatalog;
-
-          expect(pages).toHaveLength(provider === "anthropic" ? 2 : 1);
-          expect(jsonStringify(pages)).not.toContain("secret");
-          expect(fake.catalogHeaders[0]?.authorization).toBe("Bearer access-secret-1");
-          expect(fake.catalogHeaders[0]?.accept).toBe("application/json");
-          expect(fake.catalogHeaders[0]?.["content-type"]).toBeUndefined();
-          if (provider === "anthropic") {
-            expect(fake.catalogUrls[0]).toContain("limit=1000");
-            expect(fake.catalogUrls[1]).toContain("after_id=page-1");
-          }
-        }),
-      ).pipe(withOAuthTestPlatform),
-    );
-
-    it.live("refreshes once when the fixed catalog rejects the current token", () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const fake = yield* fakeProvider(provider);
-          const harness = yield* createSubscriptionOAuthClient({
-            protocol: fake.protocol,
-            store: new MemoryCredentialStore(),
-          });
-          yield* login(harness);
-          fake.requireRefresh();
-          yield* harness.modelCatalog;
-
-          expect(fake.counts().refreshRequests).toBe(1);
-          expect(fake.catalogHeaders.at(-1)?.authorization).toBe("Bearer access-secret-2");
-        }),
-      ).pipe(withOAuthTestPlatform),
-    );
-
-    it.live("rotates refresh tokens once for concurrent 401/403 retries", () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const fake = yield* fakeProvider(provider);
-          const store = new MemoryCredentialStore();
-          const harness = yield* createSubscriptionOAuthClient({ protocol: fake.protocol, store });
-          yield* login(harness);
-          fake.requireRefresh();
-
-          const collect = Stream.runCollect(harness.stream('{"stream":true}'));
-          const [first, second] = yield* Effect.all([collect, collect], {
-            concurrency: "unbounded",
-          });
-
-          expect(first).toHaveLength(provider === "openai" ? 2 : 4);
-          expect(second).toHaveLength(provider === "openai" ? 2 : 4);
-          expect(fake.counts().refreshRequests).toBe(1);
-          expect(
-            Option.getOrUndefined(MutableHashMap.get(store.values, provider))?.refreshToken,
-          ).toBe("refresh-secret-2");
-          expect(fake.modelHeaders.at(-1)?.authorization).toBe("Bearer access-secret-2");
-        }),
-      ).pipe(withOAuthTestPlatform),
-    );
-
-    it.live("refreshes an expiring credential while checking connection status", () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const fake = yield* fakeProvider(provider);
-          const store = new MemoryCredentialStore();
-          const harness = yield* createSubscriptionOAuthClient({ protocol: fake.protocol, store });
-          yield* login(harness);
-          const credential = Option.getOrUndefined(MutableHashMap.get(store.values, provider))!;
-          MutableHashMap.set(store.values, provider, {
-            ...credential,
-            expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 20_000,
-          });
-
-          expect(yield* harness.status).toMatchObject({ provider, connected: true });
-          expect(fake.counts().refreshRequests).toBe(1);
-          expect(
-            Option.getOrUndefined(MutableHashMap.get(store.values, provider))?.accessToken,
-          ).toBe("access-secret-2");
-        }),
-      ).pipe(withOAuthTestPlatform),
-    );
-
-    it.live("signs out after the provider permanently rejects an expired credential", () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const fake = yield* fakeProvider(provider);
-          const store = new MemoryCredentialStore();
-          const harness = yield* createSubscriptionOAuthClient({ protocol: fake.protocol, store });
-          yield* login(harness);
-          const credential = Option.getOrUndefined(MutableHashMap.get(store.values, provider))!;
-          MutableHashMap.set(store.values, provider, {
-            ...credential,
-            expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) - 1,
-          });
-          fake.rejectRefresh();
-
-          expect(yield* harness.status).toEqual({
-            provider,
-            connected: false,
-            expiresAt: null,
-          });
-          expect(fake.counts().refreshRequests).toBe(1);
-          expect(MutableHashMap.has(store.values, provider)).toBe(false);
-        }),
-      ).pipe(withOAuthTestPlatform),
-    );
-
-    it.live("keeps the login when a refresh is refused with 403", () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const fake = yield* fakeProvider(provider);
-          const store = new MemoryCredentialStore();
-          const harness = yield* createSubscriptionOAuthClient({ protocol: fake.protocol, store });
-          yield* login(harness);
-          const credential = Option.getOrUndefined(MutableHashMap.get(store.values, provider))!;
-          const expired = {
-            ...credential,
-            expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) - 1,
-          };
-          MutableHashMap.set(store.values, provider, expired);
-          fake.rejectRefresh(403);
-
-          expect(yield* Effect.flip(harness.status)).toMatchObject({
-            code: "provider_rejected",
-            status: 403,
-          });
-          expect(Option.getOrUndefined(MutableHashMap.get(store.values, provider))).toEqual(
-            expired,
+          expect(fake.modelHeaders[0]?.["anthropic-beta"]).toContain(
+            "thinking-binding-controls-2026-08-01",
+          );
+          expect(plain.output_config).toEqual({ effort: "high" });
+          expect(plain.thinking).toBeUndefined();
+          expect(fake.modelHeaders[1]?.["anthropic-beta"]).toBe(
+            providerProtocols.anthropic.modelHeaders["anthropic-beta"],
           );
         }),
       ).pipe(withOAuthTestPlatform),
     );
 
-    it.live("a caller holding a credential rotated meanwhile reuses the new one", () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const fake = yield* fakeProvider(provider);
-          const store = new MemoryCredentialStore();
-          const reading = yield* Deferred.make<void>();
-          const held = yield* Deferred.make<void>();
-          yield* Effect.addFinalizer(() => Deferred.succeed(held, undefined));
-          let holdNextRead = false;
-          const gated: CredentialStore = {
-            read: (key) =>
-              Effect.suspend(() => {
-                if (!holdNextRead) return store.read(key);
-                holdNextRead = false;
-                // Snapshot before waiting, as a caller that read the keychain just before a refresh.
-                return store
-                  .read(key)
-                  .pipe(
-                    Effect.tap(Deferred.succeed(reading, undefined)),
-                    Effect.tap(Deferred.await(held)),
-                  );
-              }),
-            write: (key, value) => store.write(key, value),
-            remove: (key) => store.remove(key),
-          };
-          const harness = yield* createSubscriptionOAuthClient({
-            protocol: fake.protocol,
-            store: gated,
-          });
-          yield* login(harness);
-          const credential = Option.getOrUndefined(MutableHashMap.get(store.values, provider))!;
-          MutableHashMap.set(store.values, provider, {
-            ...credential,
-            expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) - 1,
-          });
+  it.live("fetches the fixed catalog, paginates, and returns no credentials", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = yield* fakeProvider(provider);
+        const harness = yield* createSubscriptionOAuthClient({
+          protocol: fake.protocol,
+          store: new MemoryCredentialStore(),
+        });
+        yield* login(harness);
+        const pages = yield* harness.modelCatalog;
 
-          holdNextRead = true;
-          const stale = yield* Effect.forkChild(harness.status, { startImmediately: true });
-          yield* Deferred.await(reading);
-          yield* harness.status;
-          yield* Deferred.succeed(held, undefined);
+        expect(pages).toHaveLength(provider === "anthropic" ? 2 : 1);
+        expect(jsonStringify(pages)).not.toContain("secret");
+        expect(fake.catalogHeaders[0]?.authorization).toBe("Bearer access-secret-1");
+        expect(fake.catalogHeaders[0]?.accept).toBe("application/json");
+        expect(fake.catalogHeaders[0]?.["content-type"]).toBeUndefined();
+        if (provider === "anthropic") {
+          expect(fake.catalogUrls[0]).toContain("limit=1000");
+          expect(fake.catalogUrls[1]).toContain("after_id=page-1");
+        }
+      }),
+    ).pipe(withOAuthTestPlatform),
+  );
 
-          expect(yield* Fiber.join(stale)).toMatchObject({ provider, connected: true });
-          expect(fake.counts().refreshRequests).toBe(1);
-          expect(
-            Option.getOrUndefined(MutableHashMap.get(store.values, provider))?.refreshToken,
-          ).toBe("refresh-secret-2");
-        }),
-      ).pipe(withOAuthTestPlatform),
-    );
-  });
-}
+  it.live("refreshes once when the fixed catalog rejects the current token", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = yield* fakeProvider(provider);
+        const harness = yield* createSubscriptionOAuthClient({
+          protocol: fake.protocol,
+          store: new MemoryCredentialStore(),
+        });
+        yield* login(harness);
+        fake.requireRefresh();
+        yield* harness.modelCatalog;
+
+        expect(fake.counts().refreshRequests).toBe(1);
+        expect(fake.catalogHeaders.at(-1)?.authorization).toBe("Bearer access-secret-2");
+      }),
+    ).pipe(withOAuthTestPlatform),
+  );
+
+  it.live("rotates refresh tokens once for concurrent 401/403 retries", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = yield* fakeProvider(provider);
+        const store = new MemoryCredentialStore();
+        const harness = yield* createSubscriptionOAuthClient({ protocol: fake.protocol, store });
+        yield* login(harness);
+        fake.requireRefresh();
+
+        const collect = Stream.runCollect(harness.stream('{"stream":true}'));
+        const [first, second] = yield* Effect.all([collect, collect], {
+          concurrency: "unbounded",
+        });
+
+        expect(first).toHaveLength(provider === "openai" ? 2 : 4);
+        expect(second).toHaveLength(provider === "openai" ? 2 : 4);
+        expect(fake.counts().refreshRequests).toBe(1);
+        expect(
+          Option.getOrUndefined(MutableHashMap.get(store.values, provider))?.refreshToken,
+        ).toBe("refresh-secret-2");
+        expect(fake.modelHeaders.at(-1)?.authorization).toBe("Bearer access-secret-2");
+      }),
+    ).pipe(withOAuthTestPlatform),
+  );
+
+  it.live("refreshes an expiring credential while checking connection status", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = yield* fakeProvider(provider);
+        const store = new MemoryCredentialStore();
+        const harness = yield* createSubscriptionOAuthClient({ protocol: fake.protocol, store });
+        yield* login(harness);
+        const credential = Option.getOrUndefined(MutableHashMap.get(store.values, provider))!;
+        MutableHashMap.set(store.values, provider, {
+          ...credential,
+          expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 20_000,
+        });
+
+        expect(yield* harness.status).toMatchObject({ provider, connected: true });
+        expect(fake.counts().refreshRequests).toBe(1);
+        expect(Option.getOrUndefined(MutableHashMap.get(store.values, provider))?.accessToken).toBe(
+          "access-secret-2",
+        );
+      }),
+    ).pipe(withOAuthTestPlatform),
+  );
+
+  it.live("signs out after the provider permanently rejects an expired credential", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = yield* fakeProvider(provider);
+        const store = new MemoryCredentialStore();
+        const harness = yield* createSubscriptionOAuthClient({ protocol: fake.protocol, store });
+        yield* login(harness);
+        const credential = Option.getOrUndefined(MutableHashMap.get(store.values, provider))!;
+        MutableHashMap.set(store.values, provider, {
+          ...credential,
+          expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) - 1,
+        });
+        fake.rejectRefresh();
+
+        expect(yield* harness.status).toEqual({
+          provider,
+          connected: false,
+          expiresAt: null,
+        });
+        expect(fake.counts().refreshRequests).toBe(1);
+        expect(MutableHashMap.has(store.values, provider)).toBe(false);
+      }),
+    ).pipe(withOAuthTestPlatform),
+  );
+
+  it.live("keeps the login when a refresh is refused with 403", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = yield* fakeProvider(provider);
+        const store = new MemoryCredentialStore();
+        const harness = yield* createSubscriptionOAuthClient({ protocol: fake.protocol, store });
+        yield* login(harness);
+        const credential = Option.getOrUndefined(MutableHashMap.get(store.values, provider))!;
+        const expired = {
+          ...credential,
+          expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) - 1,
+        };
+        MutableHashMap.set(store.values, provider, expired);
+        fake.rejectRefresh(403);
+
+        expect(yield* Effect.flip(harness.status)).toMatchObject({
+          code: "provider_rejected",
+          status: 403,
+        });
+        expect(Option.getOrUndefined(MutableHashMap.get(store.values, provider))).toEqual(expired);
+      }),
+    ).pipe(withOAuthTestPlatform),
+  );
+
+  it.live("a caller holding a credential rotated meanwhile reuses the new one", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = yield* fakeProvider(provider);
+        const store = new MemoryCredentialStore();
+        const reading = yield* Deferred.make<void>();
+        const held = yield* Deferred.make<void>();
+        yield* Effect.addFinalizer(() => Deferred.succeed(held, undefined));
+        const holdNextRead = MutableRef.make(false);
+        const gated: CredentialStore = {
+          read: (key) =>
+            Effect.suspend(() =>
+              MutableRef.getAndSet(holdNextRead, false)
+                ? // Snapshot before waiting, as a caller that read the keychain just before a refresh.
+                  store
+                    .read(key)
+                    .pipe(
+                      Effect.tap(Deferred.succeed(reading, undefined)),
+                      Effect.tap(Deferred.await(held)),
+                    )
+                : store.read(key),
+            ),
+          write: (key, value) => store.write(key, value),
+          remove: (key) => store.remove(key),
+        };
+        const harness = yield* createSubscriptionOAuthClient({
+          protocol: fake.protocol,
+          store: gated,
+        });
+        yield* login(harness);
+        const credential = Option.getOrUndefined(MutableHashMap.get(store.values, provider))!;
+        MutableHashMap.set(store.values, provider, {
+          ...credential,
+          expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) - 1,
+        });
+
+        MutableRef.set(holdNextRead, true);
+        const stale = yield* Effect.forkChild(harness.status, { startImmediately: true });
+        yield* Deferred.await(reading);
+        yield* harness.status;
+        yield* Deferred.succeed(held, undefined);
+
+        expect(yield* Fiber.join(stale)).toMatchObject({ provider, connected: true });
+        expect(fake.counts().refreshRequests).toBe(1);
+        expect(
+          Option.getOrUndefined(MutableHashMap.get(store.values, provider))?.refreshToken,
+        ).toBe("refresh-secret-2");
+      }),
+    ).pipe(withOAuthTestPlatform),
+  );
+});
 
 describe("provider wire contracts", () => {
   test("matches the registered OpenAI Codex loopback redirect and login prompt", () => {
