@@ -45,7 +45,7 @@ export function action({ request, params }: Route.ActionArgs) {
       if (Result.isFailure(body))
         return Response.json({ error: "invalid_board_edit" }, { status: 400 });
       const holder = request.headers.get(sessionHolderHeader);
-      if (!(yield* SessionLeases).permits(params.session, holder))
+      if (!(yield* SessionLeases.use((leases) => leases.permits(params.session, holder))))
         return Response.json({ error: "session_in_use" }, { status: 423 });
       yield* (yield* Sessions).get(params.session);
       const workflows = yield* Workflows;

@@ -33,7 +33,7 @@ export function action({ request, params }: Route.ActionArgs) {
       if (Result.isFailure(body))
         return Response.json({ error: "invalid_decision_answer" }, { status: 400 });
       const holder = request.headers.get(sessionHolderHeader);
-      if (!(yield* SessionLeases).permits(params.session, holder))
+      if (!(yield* SessionLeases.use((leases) => leases.permits(params.session, holder))))
         return Response.json({ error: "session_in_use" }, { status: 423 });
       const answered = yield* (yield* HumanDecisions).answer({
         ...body.success,

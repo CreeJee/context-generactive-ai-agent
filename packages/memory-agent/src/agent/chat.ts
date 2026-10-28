@@ -672,7 +672,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   );
   // An owner that vanished without releasing: like a release, nothing will send its waiting
   // messages, and read-only pages hear the session is free so one can take over.
-  leases.onExpired((sessionId) =>
+  yield* leases.onExpired((sessionId) =>
     Effect.gen(function* () {
       if (!isTruthy(yield* liveRuns.get(sessionId)))
         yield* queue.holdWaiting(sessionId, "pageLeft");
@@ -897,7 +897,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     switch (run?.status) {
       case "completed":
         yield* settleNewGoal(sessionId, runId);
-        if (leases.view(sessionId, null).state === "free")
+        if ((yield* leases.view(sessionId, null)).state === "free")
           yield* queue.holdWaiting(sessionId, "pageLeft");
         return;
       case "failed":
@@ -1161,7 +1161,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       Effect.gen(function* () {
         if (!(yield* workTraceExposed)) return workTraceUnavailable();
         yield* sessions.get(sessionId);
-        if (!leases.permits(sessionId, holder)) return inUse();
+        if (!(yield* leases.permits(sessionId, holder))) return inUse();
         const requested = yield* workTrace.requestTaskLifecycle({
           sessionId,
           taskId,
@@ -1191,7 +1191,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       Effect.gen(function* () {
         if (!(yield* workTraceExposed)) return workTraceUnavailable();
         yield* sessions.get(sessionId);
-        if (!leases.permits(sessionId, holder)) return inUse();
+        if (!(yield* leases.permits(sessionId, holder))) return inUse();
         const result = yield* workTrace.requestResume({
           sessionId,
           taskId,
@@ -1312,7 +1312,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       return Effect.gen(function* () {
         const { projectId, agent: external, title } = yield* sessions.get(sessionId);
         // Sending, approving and answering all come here; a read-only page may do none of them.
-        if (internalFollowup === null && !leases.permits(sessionId, request.holder))
+        if (internalFollowup === null && !(yield* leases.permits(sessionId, request.holder)))
           return refused({ error: "session_in_use" });
         // Sessions reference projects by foreign key, so a missing project is a broken store.
         const project = yield* projects.get(projectId);
@@ -2345,7 +2345,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
      */
     cancel: (sessionId: string, holder: string | null) =>
       Effect.gen(function* () {
-        if (!leases.permits(sessionId, holder)) return inUse();
+        if (!(yield* leases.permits(sessionId, holder))) return inUse();
         const pendingExecution = WorkflowExecutionState.isAnyOf(["ready"])(
           yield* execution.get(sessionId),
         );
@@ -2402,7 +2402,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     ) =>
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
-        if (!leases.permits(sessionId, holder)) return inUse();
+        if (!(yield* leases.permits(sessionId, holder))) return inUse();
         if (isTruthy(yield* liveRuns.get(sessionId)) || (yield* background.hasSession(sessionId)))
           return json(409, { error: "run_in_progress" });
         const result = yield* uncertain.acknowledge(sessionId, input.runIds);
@@ -2419,7 +2419,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
      */
     discardInterrupts: (sessionId: string, holder: string | null) =>
       Effect.gen(function* () {
-        if (!leases.permits(sessionId, holder)) return inUse();
+        if (!(yield* leases.permits(sessionId, holder))) return inUse();
         yield* sessions.get(sessionId);
         if (isTruthy(yield* liveRuns.get(sessionId)))
           return json(409, { error: "run_in_progress" });
@@ -2436,7 +2436,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
      */
     compact: (sessionId: string, holder: string | null) =>
       Effect.gen(function* () {
-        if (!leases.permits(sessionId, holder)) return inUse();
+        if (!(yield* leases.permits(sessionId, holder))) return inUse();
         yield* sessions.get(sessionId);
         if (isTruthy(yield* liveRuns.get(sessionId)))
           return json(409, { error: "run_in_progress" });
@@ -2473,7 +2473,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const workflow = isTruthy(live)
           ? yield* workflows.get(sessionId)
           : yield* workflows.reconcile(sessionId);
-        const lease = leases.view(sessionId, holder);
+        const lease = yield* leases.view(sessionId, holder);
         const window = yield* windowFor(yield* active.selected);
         const state: SessionRunState = {
           running: isTruthy(live) ? { runId: live.runId } : null,
@@ -2506,7 +2506,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     /** Changes the durable workflow phase. Execute also records the user's Plan approval. */
     setWorkflowPhase: (sessionId: string, holder: string | null, phase: WorkflowPhase) =>
       Effect.gen(function* () {
-        if (!leases.permits(sessionId, holder)) return inUse();
+        if (!(yield* leases.permits(sessionId, holder))) return inUse();
         yield* sessions.get(sessionId);
         if (isTruthy(yield* liveRuns.get(sessionId)))
           return json(409, { error: "run_in_progress" });
@@ -2525,7 +2525,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     /** Pauses, resumes or permanently stops the active Goal and cancels its run when needed. */
     controlWorkflow: (sessionId: string, holder: string | null, action: WorkflowAction) =>
       Effect.gen(function* () {
-        if (!leases.permits(sessionId, holder)) return inUse();
+        if (!(yield* leases.permits(sessionId, holder))) return inUse();
         yield* sessions.get(sessionId);
         const live = yield* liveRuns.get(sessionId);
         if (action === "resume" && isTruthy(live)) return json(409, { error: "run_in_progress" });
@@ -2554,19 +2554,19 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         yield* sessions.get(sessionId);
         switch (action) {
           case "claim":
-            leases.claim(sessionId, holder);
+            yield* leases.claim(sessionId, holder);
             break;
           case "release":
-            leases.release(sessionId, holder);
+            yield* leases.release(sessionId, holder);
             // The page is gone: nothing will send its waiting messages as a next turn.
             if (
               !isTruthy(yield* liveRuns.get(sessionId)) &&
-              leases.view(sessionId, null).state === "free"
+              (yield* leases.view(sessionId, null)).state === "free"
             )
               yield* queue.holdWaiting(sessionId, "pageLeft");
             break;
         }
-        return json(200, leases.view(sessionId, holder));
+        return json(200, yield* leases.view(sessionId, holder));
       }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
 
     /** Archive/restore a conversation, safely stopping its parent and children first when needed. */
@@ -2577,7 +2577,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       idempotencyKey?: string,
     ) =>
       Effect.gen(function* () {
-        if (!leases.permits(sessionId, holder)) return inUse();
+        if (!(yield* leases.permits(sessionId, holder))) return inUse();
         yield* sessions.get(sessionId);
         const requested = yield* workTrace.requestSessionLifecycle({
           sessionId,
@@ -2597,7 +2597,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     /** Delete private conversation content while retaining project-owned task/memory provenance. */
     deleteSession: (sessionId: string, holder: string | null, idempotencyKey: string) =>
       Effect.gen(function* () {
-        if (!leases.permits(sessionId, holder)) return inUse();
+        if (!(yield* leases.permits(sessionId, holder))) return inUse();
         yield* sessions.get(sessionId);
         const requested = yield* workTrace.requestSessionLifecycle({
           sessionId,
@@ -2649,7 +2649,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     enqueue: (sessionId: string, holder: string | null, request: QueueRequest) =>
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
-        if (!leases.permits(sessionId, holder)) return inUse();
+        if (!(yield* leases.permits(sessionId, holder))) return inUse();
         const { text, attachmentIds, mode } = request;
         if (text.trim().length === 0 && attachmentIds.length === 0)
           return json(400, { error: "empty_message" });
@@ -2711,7 +2711,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       approved: boolean,
     ) =>
       Effect.gen(function* () {
-        if (!leases.permits(sessionId, holder)) return inUse();
+        if (!(yield* leases.permits(sessionId, holder))) return inUse();
         return (yield* relayed.answer(sessionId, approvalId, approved))
           ? json(200, yield* relayed.pending(sessionId))
           : json(404, { error: "approval_not_pending" });
@@ -2720,7 +2720,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     /** Edits, removes or confirms one queued message. */
     editQueued: (sessionId: string, holder: string | null, id: string, edit: QueueEdit) =>
       Effect.gen(function* () {
-        if (!leases.permits(sessionId, holder)) return inUse();
+        if (!(yield* leases.permits(sessionId, holder))) return inUse();
         return yield* applyEdit(sessionId, id, edit).pipe(
           Effect.map((message) => json(200, message)),
           Effect.catchTag("QueueChangeRefused", (refusal) =>

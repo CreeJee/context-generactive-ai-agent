@@ -459,8 +459,6 @@ const childResultIn = (
 const isAnswerPayload = Schema.is(Schema.Struct({ messageId: Schema.String }));
 
 const make = Effect.gen(function* () {
-  const effectClock = yield* Clock.Clock;
-
   const scope = yield* Effect.scope;
   const sql = yield* SqlClient.SqlClient;
   const events = yield* AppEvents;
@@ -512,18 +510,21 @@ const make = Effect.gen(function* () {
     task: string,
     subagentId: string,
   ) =>
-    returned(sql`UPDATE subagents SET status = 'running', instructions = ${instructions},
-      parent_run_id = ${parentRunId}, last_task = ${task}, error = NULL,
-      updated_at = ${effectClock.currentTimeMillisUnsafe()}
-      WHERE id = ${subagentId} RETURNING *`);
+    Effect.flatMap(Clock.currentTimeMillis, (now) =>
+      returned(sql`UPDATE subagents SET status = 'running', instructions = ${instructions},
+      parent_run_id = ${parentRunId}, last_task = ${task}, error = NULL, updated_at = ${now}
+      WHERE id = ${subagentId} RETURNING *`),
+    );
   const finish = (
     status: SubagentRow["status"],
     answer: string,
     error: string | null,
     subagentId: string,
   ) =>
-    stored(sql`UPDATE subagents SET status = ${status}, last_answer = ${answer}, error = ${error},
-      updated_at = ${effectClock.currentTimeMillisUnsafe()} WHERE id = ${subagentId}`);
+    Effect.flatMap(Clock.currentTimeMillis, (now) =>
+      stored(sql`UPDATE subagents SET status = ${status}, last_answer = ${answer}, error = ${error},
+      updated_at = ${now} WHERE id = ${subagentId}`),
+    );
   const byName = SqlSchema.findOneOption({
     Request: Schema.Struct({ sessionId: Schema.String, name: Schema.String }),
     Result: SubagentRow,

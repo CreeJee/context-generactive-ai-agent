@@ -78,7 +78,7 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
           }),
           services,
         );
-        expect(leases.claim(context.session.id, "owning-page")).toEqual({ claimed: true });
+        expect(yield* leases.claim(context.session.id, "owning-page")).toEqual({ claimed: true });
         const foreign = yield* serve(
           yield* request(context.session.id, "foreign", "owning-page", "http://evil.example"),
         );
@@ -114,7 +114,7 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
         expect(yield* sdkCall(() => snapshot.text())).toContain("Hello from fast-1");
         // Leases enforce local page ownership, not login identity. The route currently
         // still permits a same-origin script when a session has no live page lease.
-        leases.release(context.session.id, "owning-page");
+        yield* leases.release(context.session.id, "owning-page");
         const unleased = yield* serve(
           yield* request(context.session.id, "unleased-local-run", null, "http://localhost"),
         );
@@ -150,7 +150,7 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
           }),
           services,
         );
-        expect(leases.claim(context.session.id, "valid-page")).toEqual({ claimed: true });
+        expect(yield* leases.claim(context.session.id, "valid-page")).toEqual({ claimed: true });
         const tables = [
           "nodes",
           "chat_runs",
@@ -227,7 +227,7 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
         const original = yield* serve(yield* native(context.session.id, "session-a-run", null));
         expect(original.status).toBe(200);
         expect(yield* sdkCall(() => original.text())).toContain("Hello from fast-1");
-        expect(leases.claim(second.id, "page-b")).toEqual({ claimed: true });
+        expect(yield* leases.claim(second.id, "page-b")).toEqual({ claimed: true });
         const tables = [
           "nodes",
           "chat_runs",
@@ -247,7 +247,7 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
         );
         expect(context.provider!.invocations).toHaveLength(calls);
         expect(yield* snapshot).toEqual(before);
-        leases.release(second.id, "page-b");
+        yield* leases.release(second.id, "page-b");
         const allowed = yield* serve(yield* native(second.id, "session-b-run", null));
         expect(
           allowed.status,

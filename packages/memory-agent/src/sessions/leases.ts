@@ -1,14 +1,4 @@
-import {
-  Clock,
-  DateTime,
-  Function as EffectFunction,
-  MutableHashMap,
-  Option,
-  Context,
-  Effect,
-  Layer,
-  Schema,
-} from "effect";
+import { Array as Arr, Clock, Context, Effect, HashMap, Layer, Option, Ref } from "effect";
 import type { ClaimResult, LeaseView } from "./lease-state.ts";
 
 /**
@@ -21,7 +11,7 @@ export const defaultLeaseTtlMs = 90_000;
 interface Lease {
   readonly holder: string;
   readonly since: number;
-  renewedAt: number;
+  readonly renewedAt: number;
 }
 
 /**
@@ -29,15 +19,15 @@ interface Lease {
  * Leases live in memory: after a restart the page that still has the session open claims it again
  * with its next renewal. When the owner leaves or stops renewing, a read-only page takes over.
  */
-export class SessionLeases extends Context.Service<SessionLeases, ReturnType<typeof makeLeases>>()(
-  "memory-agent/sessions/leases/SessionLeases",
-) {
+export class SessionLeases extends Context.Service<
+  SessionLeases,
+  Effect.Success<ReturnType<typeof makeLeases>>
+>()("memory-agent/sessions/leases/SessionLeases") {
   static readonly layer = (ttlMs = defaultLeaseTtlMs) =>
     Layer.effect(
       SessionLeases,
       Effect.gen(function* () {
-        const clock = yield* Clock.Clock;
-        const leases = makeLeases(ttlMs, () => clock.currentTimeMillisUnsafe());
+        const leases = yield* makeLeases(ttlMs);
         // Swept often, so a read-only page hears soon that a vanished owner's session is free.
         yield* Effect.forkScoped(
           Effect.forever(
@@ -51,89 +41,97 @@ export class SessionLeases extends Context.Service<SessionLeases, ReturnType<typ
     );
 }
 
-export const makeLeases: {
-  (now: () => number): (ttlMs: number) => ReturnType<typeof makeLeasesBody>;
-  (ttlMs: number): ReturnType<typeof makeLeasesBody>;
-  (ttlMs: number, now: () => number): ReturnType<typeof makeLeasesBody>;
-} = EffectFunction.dual((args) => Schema.is(Schema.Finite)(args[0]), makeLeasesBody);
-function makeLeasesBody(
-  ttlMs: number,
-  now: () => number = () => DateTime.toEpochMillis(DateTime.nowUnsafe()),
-) {
-  const leases = MutableHashMap.empty<string, Lease>();
-  const expiredListeners: Array<(sessionId: string) => Effect.Effect<void>> = [];
-  const live = (sessionId: string): Option.Option<Lease> =>
-    Option.flatMap(MutableHashMap.get(leases, sessionId), (lease) => {
-      if (now() - lease.renewedAt < ttlMs) return Option.some(lease);
-      MutableHashMap.remove(leases, sessionId);
-      return Option.none();
-    });
+export const makeLeases = Effect.fnUntraced(function* (ttlMs: number) {
+  const leases = yield* Ref.make(HashMap.empty<string, Lease>());
+  const expiredListeners = yield* Ref.make<
+    ReadonlyArray<(sessionId: string) => Effect.Effect<void>>
+  >([]);
+  const liveAt = (now: number) => (lease: Lease) => now - lease.renewedAt < ttlMs;
+  /** The session's live lease. An expired one is removed as it is read. */
+  const live = (sessionId: string) =>
+    Effect.flatMap(Clock.currentTimeMillis, (now) =>
+      Ref.modify(leases, (current) => {
+        const lease = Option.filter(HashMap.get(current, sessionId), liveAt(now));
+        return [lease, Option.isSome(lease) ? current : HashMap.remove(current, sessionId)];
+      }),
+    );
 
   return {
     /**
      * Remove leases whose pages stopped renewing, including sessions nobody asks about again, and
      * tell the listeners each session is free.
      */
-    sweepExpired: Effect.suspend(() => {
-      const current = now();
-      const expired = Array.from(leases)
-        .filter(([, lease]) => current - lease.renewedAt >= ttlMs)
-        .map(([sessionId]) => sessionId);
-      expired.forEach((sessionId) => MutableHashMap.remove(leases, sessionId));
+    sweepExpired: Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      const expired = yield* Ref.modify(leases, (current) => {
+        const gone = Array.from(
+          HashMap.keys(HashMap.filter(current, (lease) => !liveAt(now)(lease))),
+        );
+        return [gone, HashMap.removeMany(current, gone)];
+      });
+      const listeners = yield* Ref.get(expiredListeners);
       // Each freed session's listeners run in turn, in the order they registered.
-      return Effect.forEach(
+      yield* Effect.forEach(
         expired,
         (sessionId) =>
-          Effect.forEach(expiredListeners, (listener) => listener(sessionId), { discard: true }),
+          Effect.forEach(listeners, (listener) => listener(sessionId), { discard: true }),
         { discard: true },
-      ).pipe(Effect.as(expired));
+      );
+      return expired;
     }),
 
     /** Run with each session whose lease the sweep found expired. */
-    onExpired(listener: (sessionId: string) => Effect.Effect<void>) {
-      expiredListeners.push(listener);
-    },
+    onExpired: (listener: (sessionId: string) => Effect.Effect<void>) =>
+      Ref.update(expiredListeners, Arr.append(listener)),
 
-    view(sessionId: string, holder: string | null): LeaseView {
-      return Option.match(live(sessionId), {
-        onNone: (): LeaseView => ({ state: "free" }),
-        onSome: (lease): LeaseView =>
-          lease.holder === holder ? { state: "mine" } : { state: "other", since: lease.since },
-      });
-    },
+    view: (sessionId: string, holder: string | null) =>
+      Effect.map(
+        live(sessionId),
+        Option.match({
+          onNone: (): LeaseView => ({ state: "free" }),
+          onSome: (lease): LeaseView =>
+            lease.holder === holder ? { state: "mine" } : { state: "other", since: lease.since },
+        }),
+      ),
 
     /**
      * Takes or renews the session for `holder`. Refused while another page's lease is live, so two
      * pages asking at once cannot both win: the loser stays read-only.
      */
-    claim(sessionId: string, holder: string): ClaimResult {
-      return Option.match(live(sessionId), {
-        onNone: (): ClaimResult => {
-          MutableHashMap.set(leases, sessionId, { holder, since: now(), renewedAt: now() });
-          return { claimed: true };
-        },
-        onSome: (lease): ClaimResult => {
-          if (lease.holder !== holder) return { claimed: false, heldSince: lease.since };
-          lease.renewedAt = now();
-          return { claimed: true };
-        },
-      });
-    },
+    claim: (sessionId: string, holder: string) =>
+      Effect.flatMap(Clock.currentTimeMillis, (now) =>
+        Ref.modify(leases, (current): [ClaimResult, HashMap.HashMap<string, Lease>] =>
+          Option.match(Option.filter(HashMap.get(current, sessionId), liveAt(now)), {
+            onNone: () => [
+              { claimed: true },
+              HashMap.set(current, sessionId, { holder, since: now, renewedAt: now }),
+            ],
+            onSome: (lease) =>
+              lease.holder === holder
+                ? [{ claimed: true }, HashMap.set(current, sessionId, { ...lease, renewedAt: now })]
+                : [{ claimed: false, heldSince: lease.since }, current],
+          }),
+        ),
+      ),
 
-    release(sessionId: string, holder: string) {
-      if (Option.exists(MutableHashMap.get(leases, sessionId), (lease) => lease.holder === holder))
-        MutableHashMap.remove(leases, sessionId);
-    },
+    release: (sessionId: string, holder: string) =>
+      Ref.update(leases, (current) =>
+        Option.exists(HashMap.get(current, sessionId), (lease) => lease.holder === holder)
+          ? HashMap.remove(current, sessionId)
+          : current,
+      ),
 
     /**
      * Whether a change from `holder` may go ahead: yes when it owns the session, or when nobody does
      * (callers without pages, like tests and scripts, send no holder).
      */
-    permits(sessionId: string, holder: string | null) {
-      return Option.match(live(sessionId), {
-        onNone: () => true,
-        onSome: (lease) => lease.holder === holder,
-      });
-    },
+    permits: (sessionId: string, holder: string | null) =>
+      Effect.map(
+        live(sessionId),
+        Option.match({
+          onNone: () => true,
+          onSome: (lease) => lease.holder === holder,
+        }),
+      ),
   };
-}
+});

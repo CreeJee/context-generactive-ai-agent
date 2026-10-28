@@ -5,7 +5,6 @@ import { Worker } from "node:worker_threads";
 import {
   Path,
   DateTime,
-  Clock,
   Context,
   Data,
   Deferred,
@@ -366,42 +365,31 @@ const makeLocal = (setup: ModelSetup, purpose: LocalPurpose) =>
 export const checkGpu = (storageRoot: string) =>
   Effect.scoped(
     Effect.gen(function* () {
-      const effectClock = yield* Clock.Clock;
       const paths = yield* Path.Path;
 
       const model = yield* modelWorker(paths.join(storageRoot, "models"), {
         variant: "fp32",
         devices: ["webgpu"],
       });
-      return yield* model.embed(["준비"]).pipe(
-        Effect.map((): GpuCheck =>
-          model.device() === "webgpu"
-            ? GpuCheck.cases.available.make({
-                checkedAt: DateTime.formatIso(
-                  DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
-                ),
-              })
-            : GpuCheck.cases.unavailable.make({
-                checkedAt: DateTime.formatIso(
-                  DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
-                ),
-                reason: "no WebGPU device",
-              }),
+      /** Why the GPU cannot be used, if it cannot. */
+      const unavailable = yield* model.embed(["준비"]).pipe(
+        Effect.map(() =>
+          model.device() === "webgpu" ? Option.none<string>() : Option.some("no WebGPU device"),
         ),
         Effect.catchTag("EmbeddingError", (error) =>
-          Effect.succeed<GpuCheck>(
-            GpuCheck.cases.unavailable.make({
-              checkedAt: DateTime.formatIso(
-                DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
-              ),
-              // A code, not the worker's text: that can hold paths and native messages.
-              reason: Schema.is(EmbeddingWorkerFailed)(error.cause)
-                ? `worker_${error.cause.stage}_failed`
-                : "embedding_failed",
-            }),
+          Effect.succeedSome(
+            // A code, not the worker's text: that can hold paths and native messages.
+            Schema.is(EmbeddingWorkerFailed)(error.cause)
+              ? `worker_${error.cause.stage}_failed`
+              : "embedding_failed",
           ),
         ),
       );
+      const checkedAt = DateTime.formatIso(yield* DateTime.now);
+      return Option.match(unavailable, {
+        onNone: (): GpuCheck => GpuCheck.cases.available.make({ checkedAt }),
+        onSome: (reason): GpuCheck => GpuCheck.cases.unavailable.make({ checkedAt, reason }),
+      });
     }),
   );
 
