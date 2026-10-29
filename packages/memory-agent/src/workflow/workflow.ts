@@ -10,11 +10,22 @@ import {
   Match,
   Option,
   Predicate,
+  Result,
   Schema,
 } from "effect";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
 import { optionalProperty } from "../optional-property.ts";
-import { evaluateWorkflowAction, WorkflowActionReason, WorkflowActionRequest } from "./actions.ts";
+import { WorkflowActionReason } from "./actions.ts";
+import {
+  decodeGoalState,
+  GoalEvent,
+  goalStateOf,
+  goalTransitions,
+  reconciledPhase,
+  type Standing,
+  standingOf,
+  stepsOf,
+} from "./goal-transitions.ts";
 import {
   completionEvidence,
   CompletionRequest,
@@ -38,7 +49,6 @@ import {
   planBoardEdit,
   planCardHold,
   planCardTransition,
-  planEnded,
   UserChange,
   type BoardEdit,
   type CardTransition,
@@ -259,7 +269,7 @@ export type NewGoalSettlement = Data.TaggedEnum<{
   none: {};
   accepted: {};
   applied: { readonly goalInstanceId: string | null };
-  rejected: { readonly reason: string | null };
+  rejected: { readonly reason: NewGoalTransitionRefused["reason"] | null };
 }>;
 export const NewGoalSettlement = Data.taggedEnum<NewGoalSettlement>();
 
@@ -397,6 +407,7 @@ export class WorkflowProgressRefused extends Schema.TaggedError<
       "verification_required",
       "steps_incomplete",
       "phase_not_executable",
+      "goal_completion_required",
       "completion_evidence_required",
       "completion_evidence_invalid",
       "completion_snapshot_conflict",
@@ -404,62 +415,21 @@ export class WorkflowProgressRefused extends Schema.TaggedError<
   ]),
 }) {}
 
-const implementationComplete = (plan: PlanArtifact) =>
-  plan.steps.every((step) => step.status === "done" && step.evidence.length > 0);
-
-/** Source-state authorization is distinct from the run/owner-effect quiescence checks. */
-function newGoalTransitionSource(
-  state: WorkflowState,
-):
-  | { allowed: true; closedVerification: boolean }
-  | { allowed: false; reason: "phase_not_authorized" | "goal_missing" } {
-  const closedVerification =
-    state.goal?.status === "completed" && state.goal.verification.status === "passed";
-  // Goal/Plan accept an explicitly independent task; execution and chat never do.
-  if (state.phase === "goal" || state.phase === "plan")
-    return state.goal === null
-      ? { allowed: false, reason: "goal_missing" }
-      : { allowed: true, closedVerification: false };
-  // Verify remains open unless its Goal's verification is complete. A completed
-  // phase must also have a completed Plan, not merely a mismatched persisted phase.
-  if (
-    closedVerification &&
-    (state.phase === "verify" ||
-      (state.phase === "completed" &&
-        state.plan?.status === "completed" &&
-        state.plan.verification.status === "passed"))
-  )
-    return { allowed: true, closedVerification: true };
-  return { allowed: false, reason: "phase_not_authorized" };
-}
-
-/** Derives the only phase that can make progress from the durable artifacts. */
-export function reconciledWorkflowPhase(state: WorkflowState): WorkflowPhase {
-  if (state.phase !== "execute" && state.phase !== "verify") return state.phase;
-  if (state.plan === null || state.goal === null) return state.goal === null ? "goal" : "plan";
-  if (state.plan.goalVersion !== state.goal.version) return "plan";
-  if (state.plan.status !== "executing")
-    return state.plan.status === "completed" || state.plan.status === "blocked"
-      ? state.phase
-      : "plan";
-
-  const complete = implementationComplete(state.plan);
-  if (state.plan.verification.status === "failed" && state.plan.verification.evidence.length > 0)
-    return "execute";
-  if (state.phase === "execute") return complete ? "verify" : "execute";
-  if (!complete) return "execute";
-
-  const verification = state.plan.verification;
-  if (verification.evidence.length === 0) return "verify";
-  return Match.value(verification.status).pipe(
-    Match.withReturnType<WorkflowPhase>(),
-    Match.when("failed", () => "execute"),
-    Match.when("invalid_hypothesis", () => verification.recoveryPhase ?? "plan"),
-    Match.whenOr("invalid_criterion", "inconclusive", () => "plan"),
-    Match.whenOr("not_run", "passed", "blocked", () => "verify"),
-    Match.exhaustive,
-  );
-}
+/** `state` with the phase and statuses `standing` decided; a changed artifact is stamped `at`. */
+const withStanding = (state: WorkflowState, standing: Standing, at: string): WorkflowState => ({
+  ...state,
+  phase: standing.phase,
+  goal:
+    state.goal === null || standing.goal === null || standing.goal.status === state.goal.status
+      ? state.goal
+      : { ...state.goal, status: standing.goal.status, updatedAt: at },
+  plan:
+    state.plan === null || standing.plan === null || standing.plan.status === state.plan.status
+      ? state.plan
+      : { ...state.plan, status: standing.plan.status, updatedAt: at },
+});
+const unchanged = (next: WorkflowState, current: WorkflowState) =>
+  next.phase === current.phase && next.goal === current.goal && next.plan === current.plan;
 
 const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
   Effect.gen(function* () {
@@ -520,7 +490,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
         payload_json: Schema.String,
         source_revision_id: Schema.Finite,
         status: Schema.Literals(["accepted", "applied", "rejected"]),
-        reason: Schema.NullOr(Schema.String),
+        reason: Schema.NullOr(NewGoalTransitionRefused.fields.reason),
         applied_goal_instance_id: Schema.NullOr(Schema.String),
       }),
       execute: (runId) => sql`SELECT session_id, payload_json, source_revision_id, status, reason,
@@ -593,15 +563,14 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
       kind,
       detail,
     });
-    /** The state after a Plan ends without completion; an executing workflow goes back to Plan. */
+    /** The state after a Plan ends without completion; the transition decided its `phase`. */
     const closing = (
       current: WorkflowState,
       plan: PlanArtifact,
       detail: string,
       at: string,
+      phase: WorkflowPhase,
     ): WorkflowState => {
-      const phase =
-        current.phase === "execute" || current.phase === "verify" ? "plan" : current.phase;
       const closed: WorkflowState = {
         ...current,
         phase,
@@ -614,10 +583,55 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
             ...closed,
             ledger: [
               ...closed.ledger,
-              event(closed, "phase_changed", `${current.phase} -> plan (plan closed)`, at),
+              event(closed, "phase_changed", `${current.phase} -> ${phase} (plan closed)`, at),
             ],
           };
     };
+    /** The state of `current`, a conflict 0.0.17 left repaired in memory. */
+    const goalState = (current: WorkflowState) => goalStateOf(standingOf(current));
+    /** `current` with a conflict repaired and a stale progress position corrected, saved if changed. */
+    const reconciled = Effect.fnUntraced(function* (sessionId: string, current: WorkflowState) {
+      const repaired = goalState(current).standing;
+      const phase = reconciledPhase(repaired);
+      const now = yield* nowIso;
+      const next = withStanding(current, { ...repaired, phase }, now);
+      if (unchanged(next, current)) return current;
+      return yield* save(sessionId, {
+        ...next,
+        ledger: [
+          ...next.ledger,
+          event(current, "phase_changed", `${current.phase} -> ${phase} (state reconciled)`, now),
+        ],
+      });
+    });
+    /** Whether a verify run's completion evidence holds, and the snapshot that completes the Goal. */
+    const finishedCompletion = Effect.fnUntraced(function* (
+      sessionId: string,
+      current: WorkflowState,
+    ) {
+      const { goal, plan } = current;
+      const request = goal?.completionRequest;
+      const derived =
+        request !== undefined &&
+        goal !== null &&
+        plan !== null &&
+        request.goalVersion === goal.version &&
+        request.planVersion === plan.version
+          ? yield* completion.derive(sessionId, current, request.mappings, request.recorderRunId)
+          : undefined;
+      const snapshot =
+        derived !== undefined && Derived.$is("accepted")(derived)
+          ? derived.snapshot
+          : goal?.completion;
+      // Native registration authorizes execution, not successful criterion coverage.
+      // Legacy/unprovenanced Goals retain the release-compatible automatic completion.
+      const recorded =
+        !(yield* completion.required(sessionId)) ||
+        (isTruthy(snapshot) &&
+          snapshot.goalVersion === goal?.version &&
+          snapshot.planVersion === plan?.version);
+      return { recorded, snapshot };
+    });
 
     const refuseNewGoal = (reason: NewGoalTransitionRefused["reason"]) =>
       Effect.fail(NewGoalTransitionRefused.make({ reason }));
@@ -626,12 +640,17 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
     const checkNewGoal = Effect.fnUntraced(function* (
       sessionId: string,
       input: StartNewGoal,
+      request: Extract<GoalEvent, { readonly _tag: "NewGoalRequested" | "NewGoalStarted" }>,
       callingRunId?: string,
     ) {
       if (options.allowNewGoal === false) return yield* refuseNewGoal("disabled");
       const current = yield* get(sessionId);
-      const source = newGoalTransitionSource(current);
-      if (!source.allowed) return yield* refuseNewGoal(source.reason);
+      const state = goalState(current);
+      const source = Match.valueTags(request, {
+        NewGoalRequested: (requested) => goalTransitions.NewGoalRequested(state, requested),
+        NewGoalStarted: (started) => goalTransitions.NewGoalStarted(state, started),
+      });
+      if (source._tag === "Refused") return yield* refuseNewGoal(source.reason);
       const identity = yield* goalIdentity(sessionId);
       if (
         Option.getOrNull(Option.map(identity, (row) => row.goal_instance_id)) !==
@@ -665,10 +684,14 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
           AND status NOT IN ('completed', 'archived') LIMIT 1`)
       )
         return yield* refuseNewGoal("execution_outstanding");
-      return { current, identity, closedVerification: source.closedVerification };
+      return { current, identity, standing: source.standing };
     });
     const commitNewGoal = Effect.fnUntraced(function* (sessionId: string, input: StartNewGoal) {
-      const { current, identity, closedVerification } = yield* checkNewGoal(sessionId, input);
+      const { current, identity, standing } = yield* checkNewGoal(
+        sessionId,
+        input,
+        GoalEvent.NewGoalStarted({ status: input.goal.status }),
+      );
       const now = yield* nowIso;
       const newId = yield* crypto.randomUUIDv4();
       // An unbound legacy Goal never receives a fabricated historical identity.
@@ -680,7 +703,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
           )
         : insertGoalIdentity(sessionId, newId, now);
       const state = yield* save(sessionId, {
-        phase: closedVerification ? "goal" : current.phase,
+        phase: standing.phase,
         goal: {
           ...input.goal,
           version: 1,
@@ -701,6 +724,96 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
       });
       return { state, newId };
     });
+    /**
+     * Idempotent owner settlement of a run's new Goal request. A run `waiting` may still finish, so
+     * its request stays accepted; a failed or missing run can never apply its intent.
+     */
+    const settleRequest = (
+      sessionId: string,
+      runId: string,
+      waiting: (run: { readonly status: string }) => boolean,
+    ) =>
+      transacted(
+        Effect.gen(function* () {
+          const found = yield* settlementOf(runId);
+          if (Option.isNone(found) || found.value.session_id !== sessionId)
+            return NewGoalSettlement.none();
+          const row = found.value;
+          if (row.status === "applied")
+            return NewGoalSettlement.applied({ goalInstanceId: row.applied_goal_instance_id });
+          if (row.status === "rejected") return NewGoalSettlement.rejected({ reason: row.reason });
+          const run = Option.getOrUndefined(yield* runOf(runId));
+          if (run?.thread_id === sessionId && waiting(run)) return NewGoalSettlement.accepted();
+          const reject = (reason: NewGoalTransitionRefused["reason"]) =>
+            nowIso.pipe(
+              Effect.flatMap(
+                (
+                  now,
+                ) => sql`UPDATE workflow_new_goal_requests SET status = 'rejected', reason = ${reason},
+              settled_at = ${now} WHERE run_id = ${runId} AND status = 'accepted'`,
+              ),
+              Effect.as(NewGoalSettlement.rejected({ reason })),
+            );
+          if (run?.thread_id !== sessionId || run.status !== "completed")
+            return yield* reject("run_outcome_uncertain");
+          const latest = yield* latestRevision(sessionId);
+          if (Option.getOrUndefined(latest)?.id !== row.source_revision_id)
+            return yield* reject("workflow_changed");
+          const input = yield* decodeRequest(row.payload_json);
+          return yield* commitNewGoal(sessionId, input).pipe(
+            Effect.flatMap(({ newId }) =>
+              nowIso.pipe(
+                Effect.flatMap(
+                  (now) => sql`UPDATE workflow_new_goal_requests
+                SET status = 'applied', applied_goal_instance_id = ${newId}, settled_at = ${now}
+                WHERE run_id = ${runId} AND status = 'accepted'`,
+                ),
+                Effect.as(NewGoalSettlement.applied({ goalInstanceId: newId })),
+              ),
+            ),
+            Effect.catchTag("NewGoalTransitionRefused", (error) => reject(error.reason)),
+          );
+        }),
+      );
+    const storedStates = SqlSchema.findAll({
+      Request: Schema.Void,
+      Result: Schema.Struct({ session_id: Schema.String, state_json: Schema.String }),
+      execute: () => sql`SELECT session_id, state_json FROM session_workflows ORDER BY session_id`,
+    });
+    const acceptedRequests = SqlSchema.findAll({
+      Request: Schema.Void,
+      Result: Schema.Struct({ session_id: Schema.String, run_id: Schema.String }),
+      execute: () => sql`SELECT session_id, run_id FROM workflow_new_goal_requests
+        WHERE status = 'accepted' ORDER BY run_id`,
+    });
+
+    /** The standing after a board change to `plan`; `closes` when it ends the Plan. */
+    const boardEdited = (current: WorkflowState, plan: PlanArtifact, closes: boolean) => {
+      const outcome = goalTransitions.BoardEdited(
+        goalState(current),
+        GoalEvent.BoardEdited({ closes, ...stepsOf(plan.steps) }),
+      );
+      return outcome._tag === "Refused"
+        ? Effect.fail(BoardEditRefused.make({ reason: outcome.reason }))
+        : Effect.succeed(outcome.standing);
+    };
+    /** `current` with a board change to its cards, recorded in the ledger. */
+    const boardChanged = (
+      current: WorkflowState,
+      planned: { readonly plan: PlanArtifact; readonly detail: string },
+      at: string,
+    ) =>
+      Effect.map(boardEdited(current, planned.plan, false), (standing) =>
+        withStanding(
+          {
+            ...current,
+            plan: { ...planned.plan, updatedAt: at },
+            ledger: [...current.ledger, event(current, "board_updated", planned.detail, at)],
+          },
+          standing,
+          at,
+        ),
+      );
 
     return {
       get: (sessionId: string) => persisted(get(sessionId)),
@@ -715,47 +828,64 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
 
       /** Repairs stale persisted phases before a new turn or an idle status response. */
       reconcile: (sessionId: string) =>
-        transacted(
-          Effect.gen(function* () {
-            const current = yield* get(sessionId);
-            const phase = reconciledWorkflowPhase(current);
-            if (phase === current.phase) return current;
-            const next = { ...current, phase };
-            return yield* save(sessionId, {
-              ...next,
-              ledger: [
-                ...next.ledger,
-                event(
-                  current,
-                  "phase_changed",
-                  `${current.phase} -> ${phase} (state reconciled)`,
-                  yield* nowIso,
+        transacted(Effect.flatMap(get(sessionId), (current) => reconciled(sessionId, current))),
+
+      /**
+       * Repairs every session whose stored Goal and Plan no transition makes, and returns their ids.
+       * An active kanban board's orchestrator still uses its Plan, so its session is only logged.
+       */
+      checkAll: () =>
+        persisted(storedStates()).pipe(
+          Effect.flatMap((rows) =>
+            Effect.forEach(rows, ({ session_id: sessionId, state_json: json }) =>
+              decodeWorkflowState(json).pipe(
+                Effect.flatMap((current) =>
+                  Result.isSuccess(decodeGoalState(standingOf(current)))
+                    ? Effect.succeed([])
+                    : Effect.flatMap(persisted(kanbanBoard(sessionId)), (kanban) =>
+                        kanban
+                          ? Effect.as(
+                              Effect.logWarning("Kanban Goal left in a conflicting state", {
+                                sessionId,
+                                state: json,
+                              }),
+                              [],
+                            )
+                          : Effect.as(
+                              transacted(
+                                Effect.flatMap(get(sessionId), (stored) =>
+                                  reconciled(sessionId, stored),
+                                ),
+                              ),
+                              [sessionId],
+                            ),
+                      ),
                 ),
-              ],
-            });
-          }),
+                Effect.catch((cause) =>
+                  Effect.as(
+                    Effect.logWarning("Workflow state unreadable at startup", { sessionId, cause }),
+                    [],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Effect.map((repaired) => repaired.flat()),
         ),
 
       setPhase: (sessionId: string, phase: WorkflowPhase) =>
         transacted(
           Effect.gen(function* () {
             const current = yield* get(sessionId);
-            const decision = evaluateWorkflowAction(
-              current,
-              WorkflowActionRequest.phase({ phase }),
-            );
-            if (!decision.allowed)
-              return yield* WorkflowTransitionRefused.make({ reason: decision.reason });
+            const state = goalState(current);
+            const outcome =
+              phase === "execute"
+                ? goalTransitions.ExecutionApproved(state, GoalEvent.ExecutionApproved())
+                : goalTransitions.Navigated(state, GoalEvent.Navigated({ phase }));
+            if (outcome._tag === "Refused")
+              return yield* WorkflowTransitionRefused.make({ reason: outcome.reason });
             const now = yield* nowIso;
-            const goal =
-              phase === "execute" && current.goal?.status === "draft"
-                ? { ...current.goal, status: "active" as const, updatedAt: now }
-                : current.goal;
-            const plan =
-              phase === "execute" && current.plan?.status === "ready"
-                ? { ...current.plan, status: "executing" as const, updatedAt: now }
-                : current.plan;
-            const next = { ...current, phase, goal, plan };
+            const next = withStanding(current, outcome.standing, now);
             return yield* save(sessionId, {
               ...next,
               ledger: [
@@ -770,29 +900,18 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
         transacted(
           Effect.gen(function* () {
             const current = yield* get(sessionId);
-            const decision = evaluateWorkflowAction(
-              current,
-              WorkflowActionRequest.control({ action }),
+            const state = goalState(current);
+            const outcome = Match.value(action).pipe(
+              Match.when("pause", () => goalTransitions.GoalPaused(state, GoalEvent.GoalPaused())),
+              Match.when("resume", () =>
+                goalTransitions.GoalResumed(state, GoalEvent.GoalResumed()),
+              ),
+              Match.when("stop", () => goalTransitions.GoalStopped(state, GoalEvent.GoalStopped())),
+              Match.exhaustive,
             );
-            if (!decision.allowed)
-              return yield* WorkflowProgressRefused.make({ reason: decision.reason });
-            // An allowed control always has a goal; keep narrowing local to the mutation.
-            if (current.goal === null)
-              return yield* WorkflowProgressRefused.make({ reason: "goal_missing" });
-            const currentGoal = current.goal;
+            if (outcome._tag === "Refused")
+              return yield* WorkflowProgressRefused.make({ reason: outcome.reason });
             const now = yield* nowIso;
-            const goalStatus =
-              action === "pause" ? "paused" : action === "resume" ? "active" : "failed";
-            const plan =
-              action === "stop" && current.plan?.status === "executing"
-                ? { ...current.plan, status: "blocked" as const, updatedAt: now }
-                : current.plan;
-            const phase =
-              action === "resume"
-                ? plan?.status === "executing"
-                  ? "execute"
-                  : "goal"
-                : current.phase;
             const kind =
               action === "pause"
                 ? "goal_paused"
@@ -805,12 +924,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                 : action === "resume"
                   ? "Resumed by the user"
                   : "Stopped by the user";
-            const next: WorkflowState = {
-              ...current,
-              phase,
-              goal: { ...currentGoal, status: goalStatus, updatedAt: now },
-              plan,
-            };
+            const next = withStanding(current, outcome.standing, now);
             return yield* save(sessionId, {
               ...next,
               ledger: [...next.ledger, event(current, kind, detail, now)],
@@ -822,107 +936,40 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
         change(sessionId, (current) =>
           Effect.gen(function* () {
             const now = yield* nowIso;
-            if (startedPhase === "execute" && current.phase === "execute") {
-              const readyToVerify =
-                current.plan !== null &&
-                current.plan.status === "executing" &&
-                current.plan.verification.status !== "failed" &&
-                implementationComplete(current.plan);
-              if (!readyToVerify) return current;
-              const next = { ...current, phase: "verify" as const };
+            const finished =
+              startedPhase === "verify"
+                ? yield* finishedCompletion(sessionId, current)
+                : { recorded: false, snapshot: undefined };
+            const { standing } = goalTransitions.RunFinished(
+              goalState(current),
+              GoalEvent.RunFinished({ startedPhase, completionRecorded: finished.recorded }),
+            );
+            const next = withStanding(current, standing, now);
+            if (unchanged(next, current)) return current;
+            if (next.plan?.status === "completed" && current.plan?.status !== "completed")
               return {
                 ...next,
-                ledger: [...next.ledger, event(current, "phase_changed", "execute -> verify", now)],
+                goal:
+                  next.goal === null
+                    ? null
+                    : {
+                        ...next.goal,
+                        verification: current.plan?.verification ?? next.goal.verification,
+                        ...optionalProperty("completion", finished.snapshot),
+                      },
+                ledger: [
+                  ...next.ledger,
+                  event(current, "progress_updated", "Verification completed the workflow", now),
+                ],
               };
-            }
-            if (
-              startedPhase !== "verify" ||
-              current.phase !== "verify" ||
-              current.plan === null ||
-              current.plan.status === "completed"
-            )
-              return current;
-            const verification = current.plan.verification;
-            if (verification.status === "not_run" || verification.evidence.length === 0)
-              return current;
-            if (verification.status !== "passed") {
-              const phase =
-                verification.status === "failed"
-                  ? ("execute" as const)
-                  : verification.status === "invalid_hypothesis"
-                    ? (verification.recoveryPhase ?? "plan")
-                    : verification.status === "blocked"
-                      ? ("verify" as const)
-                      : ("plan" as const);
-              const plan =
-                verification.status === "blocked"
-                  ? { ...current.plan, status: "blocked" as const, updatedAt: now }
-                  : current.plan;
-              if (phase === current.phase && plan === current.plan) return current;
-              return {
-                ...current,
-                phase,
-                plan,
-                ledger:
-                  phase === current.phase
-                    ? current.ledger
-                    : [
-                        ...current.ledger,
-                        event(
-                          current,
-                          "phase_changed",
-                          `verify -> ${phase} (${verification.status})`,
-                          now,
-                        ),
-                      ],
-              };
-            }
-            const verified = current.plan.steps.every((step) => step.status === "done");
-            if (!verified) return current;
-            const request = current.goal?.completionRequest;
-            const derived =
-              request !== undefined &&
-              current.goal !== null &&
-              request.goalVersion === current.goal.version &&
-              request.planVersion === current.plan.version
-                ? yield* completion.derive(
-                    sessionId,
-                    current,
-                    request.mappings,
-                    request.recorderRunId,
-                  )
-                : undefined;
-            const snapshot =
-              derived !== undefined && Derived.$is("accepted")(derived)
-                ? derived.snapshot
-                : current.goal?.completion;
-            // Native registration authorizes execution, not successful criterion coverage.
-            // Legacy/unprovenanced Goals retain the release-compatible automatic completion.
-            if (
-              (yield* completion.required(sessionId)) &&
-              (!isTruthy(snapshot) ||
-                snapshot.goalVersion !== current.goal?.version ||
-                snapshot.planVersion !== current.plan.version)
-            )
-              return current;
-            const goal = isTruthy(current.goal)
-              ? {
-                  ...current.goal,
-                  status: "completed" as const,
-                  verification: current.plan.verification,
-                  updatedAt: now,
-                  ...optionalProperty("completion", snapshot),
-                }
-              : null;
-            const plan = { ...current.plan, status: "completed" as const, updatedAt: now };
+            if (next.phase === current.phase) return next;
+            const cause =
+              startedPhase === "verify" ? ` (${current.plan?.verification.status})` : "";
             return {
-              ...current,
-              phase: "completed" as const,
-              goal,
-              plan,
+              ...next,
               ledger: [
-                ...current.ledger,
-                event(current, "progress_updated", "Verification completed the workflow", now),
+                ...next.ledger,
+                event(current, "phase_changed", `${current.phase} -> ${next.phase}${cause}`, now),
               ],
             };
           }),
@@ -956,7 +1003,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
             if (!(runId.length > 0) || run?.thread_id !== sessionId || run.status !== "running")
               return yield* refuseNewGoal("run_outcome_uncertain");
             if (yield* pendingNewGoal(sessionId)) return yield* refuseNewGoal("transition_pending");
-            yield* checkNewGoal(sessionId, input, runId);
+            yield* checkNewGoal(sessionId, input, GoalEvent.NewGoalRequested(), runId);
             const binding = Option.getOrUndefined(yield* bindingOf(runId));
             const revision = yield* latestRevision(sessionId);
             if (
@@ -974,56 +1021,33 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
               ${payload}, 'accepted', ${yield* nowIso})`;
             return { status: "accepted" as const, runId };
           }),
+        ).pipe(
+          Effect.tapErrorTag("NewGoalTransitionRefused", ({ reason }) =>
+            Effect.logWarning("New Goal request refused", { sessionId, runId, reason }),
+          ),
         ),
 
       /** Idempotent owner settlement. A failed or missing run can never apply its intent. */
       settleNewGoalRequest: (sessionId: string, runId: string) =>
-        transacted(
-          Effect.gen(function* () {
-            const found = yield* settlementOf(runId);
-            if (Option.isNone(found) || found.value.session_id !== sessionId)
-              return NewGoalSettlement.none();
-            const row = found.value;
-            if (row.status === "applied")
-              return NewGoalSettlement.applied({ goalInstanceId: row.applied_goal_instance_id });
-            if (row.status === "rejected")
-              return NewGoalSettlement.rejected({ reason: row.reason });
-            const run = Option.getOrUndefined(yield* runOf(runId));
-            if (
-              run?.thread_id === sessionId &&
-              (run.status === "running" || run.status === "interrupted")
-            )
-              return NewGoalSettlement.accepted();
-            const reject = (reason: string) =>
-              nowIso.pipe(
-                Effect.flatMap(
-                  (
-                    now,
-                  ) => sql`UPDATE workflow_new_goal_requests SET status = 'rejected', reason = ${reason},
-              settled_at = ${now} WHERE run_id = ${runId} AND status = 'accepted'`,
-                ),
-                Effect.as(NewGoalSettlement.rejected({ reason })),
-              );
-            if (run?.thread_id !== sessionId || run.status !== "completed")
-              return yield* reject("run_outcome_uncertain");
-            const latest = yield* latestRevision(sessionId);
-            if (Option.getOrUndefined(latest)?.id !== row.source_revision_id)
-              return yield* reject("workflow_changed");
-            const input = yield* decodeRequest(row.payload_json);
-            return yield* commitNewGoal(sessionId, input).pipe(
-              Effect.flatMap(({ newId }) =>
-                nowIso.pipe(
-                  Effect.flatMap(
-                    (now) => sql`UPDATE workflow_new_goal_requests
-                SET status = 'applied', applied_goal_instance_id = ${newId}, settled_at = ${now}
-                WHERE run_id = ${runId} AND status = 'accepted'`,
-                  ),
-                  Effect.as(NewGoalSettlement.applied({ goalInstanceId: newId })),
-                ),
-              ),
-              Effect.catchTag("NewGoalTransitionRefused", (error) => reject(error.reason)),
-            );
-          }),
+        settleRequest(
+          sessionId,
+          runId,
+          // A run waiting for an approval in this process settles once it finishes.
+          ({ status }) => status === "running" || status === "interrupted",
+        ),
+
+      /**
+       * Settles every accepted request at startup. No run of an earlier process can still finish, so
+       * only a completed run applies its request. Returns how many were settled.
+       */
+      settleAbandonedNewGoalRequests: () =>
+        persisted(acceptedRequests()).pipe(
+          Effect.flatMap((rows) =>
+            Effect.forEach(rows, ({ session_id: sessionId, run_id: runId }) =>
+              settleRequest(sessionId, runId, () => false),
+            ),
+          ),
+          Effect.map((settled) => settled.length),
         ),
 
       updateGoal: (sessionId: string, input: UpdateGoal) =>
@@ -1047,27 +1071,34 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
             };
             // A kanban board keeps executing: its orchestrator classifies each card against the new
             // Goal instead (docs/kanban-orchestration.md "식별자와 Goal 변경").
-            const phase =
-              (current.phase === "execute" || current.phase === "verify") &&
-              !(yield* kanbanBoard(sessionId))
-                ? "plan"
-                : current.phase;
-            const revised = {
-              ...current,
-              phase,
-              goal,
-              ledger: [
-                ...current.ledger,
-                event(current, "goal_updated", `goal v${goal.version} (${goal.status})`, now),
-              ],
-            };
-            return phase === current.phase
+            const { standing } = goalTransitions.GoalEdited(
+              goalState(current),
+              GoalEvent.GoalEdited({ status: input.status, kanban: yield* kanbanBoard(sessionId) }),
+            );
+            const revised = withStanding(
+              {
+                ...current,
+                goal,
+                ledger: [
+                  ...current.ledger,
+                  event(current, "goal_updated", `goal v${goal.version} (${goal.status})`, now),
+                ],
+              },
+              standing,
+              now,
+            );
+            return revised.phase === current.phase
               ? revised
               : {
                   ...revised,
                   ledger: [
                     ...revised.ledger,
-                    event(revised, "phase_changed", `${current.phase} -> plan (goal revised)`, now),
+                    event(
+                      revised,
+                      "phase_changed",
+                      `${current.phase} -> ${revised.phase} (goal revised)`,
+                      now,
+                    ),
                   ],
                 };
           }),
@@ -1104,21 +1135,24 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                     goalVersion: current.goal?.version ?? 0,
                     updatedAt: now,
                   };
+                  const { standing } = goalTransitions.PlanEdited(
+                    goalState(current),
+                    GoalEvent.PlanEdited({ status: input.status, ...stepsOf(plan.steps) }),
+                  );
                   const kind = current.plan === null ? "plan_updated" : "plan_replanned";
-                  const phase =
-                    current.phase === "execute" || current.phase === "verify"
-                      ? "plan"
-                      : current.phase;
-                  const planned = {
-                    ...current,
-                    phase,
-                    plan,
-                    ledger: [
-                      ...current.ledger,
-                      event(current, kind, `plan v${plan.version} (${plan.status})`, now),
-                    ],
-                  };
-                  return phase === current.phase
+                  const planned = withStanding(
+                    {
+                      ...current,
+                      plan,
+                      ledger: [
+                        ...current.ledger,
+                        event(current, kind, `plan v${plan.version} (${plan.status})`, now),
+                      ],
+                    },
+                    standing,
+                    now,
+                  );
+                  return planned.phase === current.phase
                     ? planned
                     : {
                         ...planned,
@@ -1127,7 +1161,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                           event(
                             planned,
                             "phase_changed",
-                            `${current.phase} -> plan (plan revised)`,
+                            `${current.phase} -> ${planned.phase} (plan revised)`,
                             now,
                           ),
                         ],
@@ -1147,25 +1181,6 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
         transacted(
           Effect.gen(function* () {
             const current = yield* get(sessionId);
-            if (input.goalStatus !== undefined && current.goal === null)
-              return yield* WorkflowProgressRefused.make({ reason: "goal_missing" });
-            if ((input.planStatus !== undefined || input.steps.length > 0) && current.plan === null)
-              return yield* WorkflowProgressRefused.make({ reason: "plan_missing" });
-            if (
-              input.steps.some(
-                (update) => !isTruthy(current.plan?.steps.some((step) => step.id === update.id)),
-              )
-            )
-              return yield* WorkflowProgressRefused.make({ reason: "unknown_step" });
-            if (
-              current.phase === "plan" &&
-              (input.planStatus !== undefined ||
-                input.steps.length > 0 ||
-                input.planEvidence.length > 0 ||
-                input.verification !== undefined)
-            )
-              return yield* WorkflowProgressRefused.make({ reason: "phase_not_executable" });
-
             // Progress names a step in the model's vocabulary; an untouched card keeps its column.
             const steps = cardStatuses(
               current.plan?.steps.map((step) => {
@@ -1179,9 +1194,6 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                   : step;
               }) ?? [],
             );
-            if (steps.some((step) => step.status === "done" && step.evidence.length === 0))
-              return yield* WorkflowProgressRefused.make({ reason: "step_evidence_required" });
-
             const verification = isTruthy(input.verification)
               ? {
                   ...input.verification,
@@ -1189,23 +1201,37 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                   updatedAt: yield* nowIso,
                 }
               : null;
-            const goalVerification = verification ?? current.goal?.verification;
-            if (
-              input.goalStatus === "completed" &&
-              (goalVerification?.status !== "passed" || goalVerification.evidence.length === 0)
-            )
-              return yield* WorkflowProgressRefused.make({ reason: "verification_required" });
-            const planVerification = verification ?? current.plan?.verification;
-            if (
-              input.planStatus === "completed" &&
-              (planVerification?.status !== "passed" || planVerification.evidence.length === 0)
-            )
-              return yield* WorkflowProgressRefused.make({ reason: "verification_required" });
-            if (input.planStatus === "completed" && steps.some((step) => step.status !== "done"))
-              return yield* WorkflowProgressRefused.make({ reason: "steps_incomplete" });
-
             // The ledger holds a running recorder's own calls as pending until the run settles.
             const stageCompletion = yield* completion.running(recorderRunId);
+            const outcome = goalTransitions.ProgressRecorded(
+              goalState(current),
+              GoalEvent.ProgressRecorded({
+                goalStatus: input.goalStatus ?? null,
+                planStatus: input.planStatus ?? null,
+                staged: stageCompletion,
+                unknownStep: input.steps.some(
+                  (update) => !isTruthy(current.plan?.steps.some((step) => step.id === update.id)),
+                ),
+                stepsUpdated: input.steps.length > 0,
+                stepEvidenceMissing: steps.some(
+                  (step) => step.status === "done" && step.evidence.length === 0,
+                ),
+                ...stepsOf(steps),
+                planEvidence: input.planEvidence.length > 0,
+                verification:
+                  verification === null
+                    ? null
+                    : {
+                        status: verification.status,
+                        evidence: verification.evidence.length > 0,
+                        recoveryPhase: verification.recoveryPhase,
+                      },
+              }),
+            );
+            if (outcome._tag === "Refused")
+              return yield* WorkflowProgressRefused.make({ reason: outcome.reason });
+            const goalVerification = verification ?? current.goal?.verification;
+
             const mappings = input.criterionMappings;
             const derived =
               mappings === undefined
@@ -1288,10 +1314,6 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
             const goal = isTruthy(current.goal)
               ? {
                   ...current.goal,
-                  status:
-                    stageCompletion && input.goalStatus === "completed"
-                      ? current.goal.status
-                      : (input.goalStatus ?? current.goal.status),
                   evidence: [...current.goal.evidence, ...input.goalEvidence],
                   verification: recordGoalVerification ? verification : current.goal.verification,
                   updatedAt: now,
@@ -1302,10 +1324,6 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
             const plan = isTruthy(current.plan)
               ? {
                   ...current.plan,
-                  status:
-                    stageCompletion && input.planStatus === "completed"
-                      ? current.plan.status
-                      : (input.planStatus ?? current.plan.status),
                   steps,
                   evidence: [...current.plan.evidence, ...input.planEvidence],
                   verification: recordPlanVerification ? verification : current.plan.verification,
@@ -1325,10 +1343,28 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                           verification.status === "invalid_criterion"
                         ? "verification_invalidated"
                         : "verification_recorded";
-            const next: WorkflowState = { ...current, goal, plan };
+            const next = withStanding({ ...current, goal, plan }, outcome.standing, now);
+            const recordedNext: WorkflowState = {
+              ...next,
+              ledger: [...next.ledger, event(current, kind, input.detail, now)],
+            };
+            // Completing the Goal and its Plan together ends the progress position too.
             return yield* save(
               sessionId,
-              { ...next, ledger: [...next.ledger, event(current, kind, input.detail, now)] },
+              next.phase === current.phase
+                ? recordedNext
+                : {
+                    ...recordedNext,
+                    ledger: [
+                      ...recordedNext.ledger,
+                      event(
+                        recordedNext,
+                        "phase_changed",
+                        `${current.phase} -> ${next.phase} (goal completed)`,
+                        now,
+                      ),
+                    ],
+                  },
               author,
             );
           }),
@@ -1342,14 +1378,22 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
         transacted(
           Effect.gen(function* () {
             const current = yield* get(sessionId);
+            const outcome = goalTransitions.PlanClosed(goalState(current), GoalEvent.PlanClosed());
+            if (outcome._tag === "Refused")
+              return yield* BoardEditRefused.make({ reason: outcome.reason });
+            // The transition refused a missing Plan; this narrows its type.
             if (current.plan === null)
               return yield* BoardEditRefused.make({ reason: "plan_missing" });
-            if (planEnded(current.plan))
-              return yield* BoardEditRefused.make({ reason: "plan_closed" });
             const detail = `plan v${current.plan.version} closed: ${reason}`;
             return yield* save(
               sessionId,
-              closing(current, closedPlan(current.plan), detail, yield* nowIso),
+              closing(
+                current,
+                closedPlan(current.plan),
+                detail,
+                yield* nowIso,
+                outcome.standing.phase,
+              ),
               author,
             );
           }),
@@ -1367,12 +1411,8 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
             const planned = yield* planBoardEdit(current.plan, edit, author, cardId);
             const now = yield* nowIso;
             return yield* Match.valueTags(planned, {
-              Apply: Effect.fnUntraced(function* ({ plan, detail }) {
-                const next: WorkflowState = {
-                  ...current,
-                  plan: { ...plan, updatedAt: now },
-                  ledger: [...current.ledger, event(current, "board_updated", detail, now)],
-                };
+              Apply: Effect.fnUntraced(function* (change) {
+                const next = yield* boardChanged(current, change, now);
                 return BoardEditResult.Applied({ state: yield* save(sessionId, next, author) });
               }),
               Request: Effect.fnUntraced(function* ({ cardId, change }) {
@@ -1397,7 +1437,8 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                 return BoardEditResult.Requested({ request });
               }),
               Close: Effect.fnUntraced(function* ({ plan, detail }) {
-                const next = closing(current, plan, detail, now);
+                const standing = yield* boardEdited(current, plan, true);
+                const next = closing(current, plan, detail, now, standing.phase);
                 return BoardEditResult.Applied({ state: yield* save(sessionId, next, author) });
               }),
             });
@@ -1415,12 +1456,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
             const current = yield* get(sessionId);
             const now = yield* nowIso;
             const planned = yield* planCardHold(current.plan, change, author, now);
-            const next: WorkflowState = {
-              ...current,
-              plan: { ...planned.plan, updatedAt: now },
-              ledger: [...current.ledger, event(current, "board_updated", planned.detail, now)],
-            };
-            return yield* save(sessionId, next, author);
+            return yield* save(sessionId, yield* boardChanged(current, planned, now), author);
           }),
         ),
 
@@ -1434,12 +1470,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
             const current = yield* get(sessionId);
             const planned = yield* planCardTransition(current.plan, transition);
             const now = yield* nowIso;
-            const next: WorkflowState = {
-              ...current,
-              plan: { ...planned.plan, updatedAt: now },
-              ledger: [...current.ledger, event(current, "board_updated", planned.detail, now)],
-            };
-            return yield* save(sessionId, next, author);
+            return yield* save(sessionId, yield* boardChanged(current, planned, now), author);
           }),
         ),
     };

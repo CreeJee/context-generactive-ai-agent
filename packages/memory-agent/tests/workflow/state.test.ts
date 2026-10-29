@@ -372,7 +372,12 @@ testAgent()("Workflows", (it) => {
         verification: { status: "passed" },
         steps: [{ id: "store", status: "done", evidence: ["workflow.test.ts passed"] }],
       });
-      expect(state.ledger.at(-1)?.kind).toBe("verification_recorded");
+      // Completing the Goal with its Plan leaves Execute, so 0.0.17's stuck phase cannot recur.
+      expect(state.phase).toBe("completed");
+      expect(state.ledger.slice(-2).map((event) => event.kind)).toEqual([
+        "verification_recorded",
+        "phase_changed",
+      ]);
     }),
   );
 

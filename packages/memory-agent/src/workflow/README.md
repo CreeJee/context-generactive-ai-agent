@@ -11,7 +11,8 @@
 - `Workflows` — 세션 범위의 버전 있는 Goal/Plan 산출물과 실행 ledger 서비스(`layer`, `layerWithOptions({ allowNewGoal })`)
 - `WorkflowState` / `GoalArtifact` / `PlanArtifact` / `PlanStep` / `WorkflowPhase` / `WorkflowAction` / `VerificationStatus` — 워크플로 상태 스키마(phase: chat|goal|plan|execute|verify|completed)
 - `UpdateGoal` / `StartNewGoal` / `UpdatePlan` / `UpdateWorkflowProgress` — 모델 도구 입력 스키마
-- `decodeWorkflowState`, `reconciledWorkflowPhase` — 저장된 상태 JSON 디코드와 phase 재조정
+- `decodeWorkflowState` — 저장된 상태 JSON 디코드
+- `GoalState` / `GoalStateConflict` / `GoalEvent` / `Standing` / `goalTransitions` / `transition` / `decodeGoalState` / `goalStateOf` / `repair` / `reconciledPhase` / `standingOf` / `stepsOf` — Goal 상태 전이 순수 함수(`goal-transitions.ts`)
 - `WorkflowStorageError` / `WorkflowTransitionRefused` / `WorkflowProgressRefused` / `NewGoalTransitionRefused`, `NewGoalSettlement` — 워크플로 오류와 새 Goal 정산 결과
 - `evaluateWorkflowAction` / `workflowActions` / `WorkflowActionRequest` / `WorkflowActionReason` — phase 이동·pause/resume/stop 허용 판정(dual API)
 - `CardStatus` / `StepProgressStatus` / `stepProgressStatus` / `CardRisk` / `cardContractFields` / `cardContract` / `BoardAuthor` / `CardHold` / `cardHoldFields` — 칸반 카드 상태와 카드 계약 스키마
@@ -44,6 +45,9 @@
 - 앱의 `SqlClient`만 연결과 writer를 소유하며 root가 공급한다. `ownerWorkflowEngineLayer`는 engine·admission·storage를 하나의 scoped graph로 묶는다.
 - `sqliteRunLog`는 중앙 DB의 SqlClient를 써야 하며 worker 로컬 DB를 쓰면 안 된다. 인증은 HTTP route가 맡고, 이 로그는 `workflow_run_bindings`로 session/run 바인딩을 추가로 확인한다. receipt cursor는 로그 offset이 아니며, 재개 토큰은 이 namespace(`sdk-stream:v1:`)에 저장된 chunk만 만든다.
 - 카드 이전에 저장된 Plan의 step status(`pending`/`completed`)는 읽기만 하고 제자리에서 다시 쓰지 않는다. 읽을 때 `pending`은 의존성이 끝났으면 ready, 아니면 backlog가 되고, `completed`는 `done`이 된다.
+- Goal 상태 전이는 `goal-transitions.ts`의 `goalTransitions` 한 곳에서 정한다. 사건마다 아홉 상태를 모두 적으므로 빠진 쌍은 타입 오류다. `Workflows` 메서드와 `evaluateWorkflowAction`은 저장된 상태를 `Standing`으로 읽어 전이를 부르고, 전이가 정한 phase와 Goal·Plan status를 저장한다. 산출물 내용(버전, 근거, 검증)은 메서드가 만든다.
+- 전이는 0.0.17이 남긴 모순 상태(R1 Goal·Plan 완료인데 phase가 execute, R2 현재 버전 Plan 완료인데 Goal이 열림)를 만들지 않는다. Goal과 Plan을 함께 완료하면 phase도 `completed`가 되고, Plan만 완료하는 기록은 `goal_completion_required`로 거부된다. 모순 상태를 읽으면 `repair`가 고친 상태에서 전이한다. `goal-transitions.test.ts`가 새 세션에서 모든 사건을 보내 이것을 확인하고, 그 결과를 `docs/goal-transitions.md`로 만든다.
+- 완료되거나 실패한 Goal은 progress 기록으로 다시 열리지 않는다(`goal_terminal`). 새 Goal 버전(`updateGoal`)이나 새 Goal만 연다. 사용자가 멈춘 뒤 끝난 run은 상태를 바꾸지 않는다.
 - `completed` phase는 서버가 소유하는 종료 phase이므로 사용자 이동 대상이 될 수 없다. execute 외의 phase 이동은 산출물을 승인하거나 바꾸지 않는다.
 - execute phase 진입은 `plan.goalVersion === goal.version`이고 plan status가 `ready` 또는 `executing`일 때만 허용된다. lease가 다른 소유자면 `session_in_use`, run이 진행 중이면 phase 요청과 resume이 `run_in_progress`로 거부된다.
 - 실행 가능 조건: phase가 execute 또는 verify이고, goal status가 active, plan status가 executing이며, plan의 goalVersion이 goal의 version과 같아야 한다.

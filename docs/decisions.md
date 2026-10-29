@@ -3157,3 +3157,25 @@
 - 전: 한 fiber가 transaction을 연 뒤 `Workflows`를 부르고, 그 사이 다른 fiber가 같은 세션의 `Workflows`를 부르면 교착했다. 뒤의 fiber는 key lock을 쥐고 연결을 기다리고, 앞의 fiber는 연결을 쥐고 key lock을 기다린다. `tests/workflow/state.test.ts`의 새 테스트가 고치기 전 코드에서 2초 timeout으로 실패했다. 후: 같은 테스트가 통과한다.
 - `keyedSerialLimit` 모듈은 남긴다. 하위 에이전트 메시지와 `AgentChat`이 쓴다.
 - 결과: `vp check`가 통과한다. memory-agent 전체 테스트(207 파일)가 모두 통과한다. 0.0.17 업그레이드 테스트의 기대 실패 2개는 7단계에서 뒤집는다.
+
+## Workflow 정상화 7단계 A: Goal 상태 전이를 한 곳에 모은다 (2026-10-29)
+
+- 설계 문서 `docs/designs/workflow-normalization.md`의 Step 7 중 결정 1(D1)의 전이 함수를 구현했다. 새 모듈 `workflow/goal-transitions.ts`가 Goal 상태, 모순, 사건, 전이를 가진다. `Workflows`의 phase·Goal·Plan status 변경과 `evaluateWorkflowAction`의 판정이 이 전이를 부른다. 시작 검사(B)는 다음 커밋이다.
+- 구현하며 정한 것:
+  - 상태와 사건은 `Data.TaggedEnum`이다. 저장하지 않는 값이라 Schema가 필요 없다. 전이는 사건마다 `Match.valueTags`로 아홉 상태를 모두 적는 객체(`goalTransitions`)다. 빠진 쌍은 타입 오류다. 거절 이유가 없는 사건은 결과 타입에 `Refused`가 없다.
+  - 전이는 저장된 상태 전체가 아니라 `Standing`(phase, Goal의 status·검증 통과·근거, Plan의 status·현재 버전 여부·step 완료·근거·검증)을 받고 돌려준다. 산출물 내용(버전, 근거, 검증 기록)은 지금처럼 메서드가 만든다.
+  - Goal 없이 Plan만 있는 저장 상태는 `NoGoal`로 읽는다. 지금 코드가 만들 수 있다.
+  - R1은 phase가 `execute`일 때만 모순이다. Goal이 완료됐고 phase가 `verify`인 상태는 완료 기록 직전에 정상으로 지난다.
+  - 그 밖의 모순(Goal `draft`인데 현재 버전 Plan이 `executing`)은 phase를 `goal`로, Plan을 `ready`로 고친다. Plan을 그대로 두면 고친 상태가 다시 모순이다.
+  - 실행 중 decode가 모순을 내면 `Refused{state_reconciled}` 대신 고친 상태를 저장하고 그 상태에서 전이한다. ledger에는 `(state reconciled)`를 남긴다. 사용자가 같은 요청을 다시 보낼 필요가 없다. 그래서 `WorkflowActionReason`에 `state_reconciled`를 더하지 않는다.
+  - 화면의 `display`(`card_reclassifying`)는 전이가 아니라 상태 응답이 계산한다. 화면만 쓰는 값이다.
+  - 사건 이름은 `GoalPaused`·`GoalResumed`·`GoalStopped`다.
+- 전이를 새 세션에서 모두 훑는 테스트(`goal-transitions.test.ts`)가 찾아 고친 규칙:
+  - 닫힌 Plan에서 verify run이 끝나면 phase가 `execute`로 가서 R1이 생겼다. 끝난 run의 verify 분기는 Plan이 `completed`·`closed`면 건너뛴다.
+  - 완료·실패한 Goal을 progress 기록이 다시 열었다. status를 바꾸는 기록은 `goal_terminal`로 거절한다.
+  - 사용자가 멈춘 Goal을 그 뒤 끝난 run이 완료했다. `Stopped`에서 `RunFinished`는 바꾸는 것이 없다.
+  - `Stopped`·`Completed`에서 실행 승인은 `goal_terminal`로 거절한다. `completed` phase에서 Goal을 고치면 phase는 `goal`로 간다.
+  - Goal이 `draft`인데 현재 버전 Plan을 `executing`으로 기록하면 `goal_not_active`로 거절한다.
+- 같은 테스트가 도달한 상태와 상태별 사건 결과를 `docs/goal-transitions.md`로 만든다. 전이를 바꾸면 그 파일의 diff를 리뷰한다. 표는 formatter가 열을 다시 맞춰 snapshot과 어긋나므로 목록으로 만든다.
+- 칸반 세션의 reconcile 동작(모순이면 로그만)은 바꾸지 않았다.
+- 결과: `vp check`가 통과한다. memory-agent 전체 테스트(208 파일)가 통과한다. 0.0.17 업그레이드 테스트의 기대 실패 2개는 B에서 뒤집는다.
