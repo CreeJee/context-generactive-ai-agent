@@ -3046,3 +3046,81 @@
   - lower를 base checkout으로 두면 사용자의 브랜치와 미커밋 변경이 보인다. 카드 커밋도 overlay 안의 `.git`에 쌓인다.
   - lower를 base의 `node_modules`로만 두면 COW 복제와 같은 일을 NFS mount로 하는 셈이다.
   - BETA이고, Windows mount는 문서에 없으며, 별도 CLI 설치가 필요하다.
+
+## Workflow 정상화 설계의 구조 결정 D1–D4 (2026-10-29)
+
+설계 문서는 `docs/designs/workflow-normalization.md`(1단계 정상화)에 있다. 아래 "Workflow 정상화 설계 리뷰 반영" 항목이 이 항목의 D1 범위, D2, D3 일부, D4를 바꾼다.
+
+- 사용자 결정 D1: Goal 상태 전이는 순수 함수 `transition(state, event)` 하나에 모은다.
+  - `GoalState`와 `GoalEvent`는 `Schema.TaggedUnion`이다. 구현은 `Match.valueTags`를 겹쳐 써서 모든 (상태, 사건) 쌍을 적는다. 쌍 하나가 빠지면 컴파일이 실패한다.
+  - 같은 결과의 쌍은 `Match.tags`·`Match.whenOr`로 묶되, 묶은 tag를 모두 이름으로 적는다. `Match.orElse`와 기본 분기는 쓰지 않는다. ts-pattern과 같은 보장을 Effect `Match`로 얻으므로 새 의존성은 더하지 않는다.
+  - 저장된 다섯 값(phase, `goal.status`, `plan.status`, 실행 상태, 새 Goal 요청)과 `GoalState`는 Schema decode/encode로 오간다. 저장 형식은 바뀌지 않는다.
+  - 도달할 수 있는 상태는 테스트가 너비 우선으로 모은다. 그 결과로 `docs/goal-transitions.md`를 만들어 사람이 리뷰한다.
+- 사용자 결정 D2: owner 실행의 상태 값에 `failed`를 더한다.
+  - `owner_workflow_executions`의 status CHECK를 바꾸려고 표를 다시 만든다. 같은 재생성에서 `created_at`, `updated_at`, `failure_json` 열을 더한다.
+  - `migrateDatabase`는 transaction을 열기 전에 외래 키를 끈다. 그래서 원래 표를 지워도 activities·deferreds·clocks가 cascade로 지워지지 않는다. 외래 키는 commit 직전에 검사한다.
+  - 참조되는 표의 재생성을 migration 42번 하나로 묶어 둔 규칙(`goalHistoryMigration`)을 목록으로 넓힌다. 항목마다 보존할 표를 적고, 실행 전후의 행을 비교한다.
+  - `failed` 실행은 시작 때 resume하지 않는다. 사용자가 다시 시도하면 `running`으로 되돌린다.
+- 사용자 결정 D3: 사람 결정 요청을 "무엇을 묻는지"(occasion)와 "물을 때 본 사실"(facts)로 나눈다.
+  - 엔진 payload에는 occasion만 넣는다. 같은 occasion은 항상 같은 payload이므로, 동시에 와도 lock 없이 하나로 모인다. key는 지금 문자열 형식대로 occasion에서 만든다. 그래서 executionId가 바뀌지 않는다.
+  - 사실은 `human_decision_facts`에 덮어쓰지 않고 쌓는다. 질문은 하나로 남고, 화면에는 최신 사실과 "물은 뒤 바뀜"을 보인다. 오래된 사실(`factsSeq`)로 한 답은 `facts_changed`로 거절한다.
+  - 뺀 안
+    - 먼저 온 요청이 이기는 방식: 바뀐 사실을 조용히 버린다.
+    - 앱 서비스가 먼저 확인하는 방식: 같은 프로세스 안의 경쟁만 막는다.
+    - kind 전체로 key를 만드는 방식: 사실이 바뀔 때마다 같은 occasion의 질문이 늘고, executionId도 바뀐다.
+    - 충돌하면 새 질문을 여는 방식: 그 질문의 key가 다시 필요하다. 카드 하나에 대기가 둘 생긴다. 동시 요청의 결함은 엔진 오류 채널이 `never`라 질문으로 바꿀 수 없다.
+  - 칸반을 실제로 쓴 사람은 사용자 한 명이다(사용자 확인). 그래서 0.0.17 칸반 행은 fixture에 넣지 않는다. TypeScript migration 단계 하나와 migration 테스트로만 다룬다.
+- 사용자 결정 D4: `failed` 실행의 다시 시도는 소유자별로 나눈다.
+  - run이 기다리는 실행(`RelayedApproval`, `ProviderRetryWait`, `GoalExecution`)에는 다시 시도 경로를 두지 않는다. run은 `Fiber.join`으로 이 실행을 기다리므로, 실행이 결함으로 끝나면 run도 끝나고 no-replay 규칙상 다시 돌지 않는다. 사용자는 새 run을 보낸다.
+  - 사람 결정은 결정 프롬프트에 다시 시도 버튼을 둔다. 저장소가 `failed`를 `running`으로 되돌리고 엔진이 같은 실행을 resume한다.
+  - 뺀 안
+    - 실행 단위 공통 retry: 끝난 run의 승인 대기를 다시 돌리면 아무도 답하지 않는 대기가 생긴다.
+    - 다시 시도 없이 카드를 `blocked`로 보내는 방식: 같은 occasion은 같은 executionId라서, attempt 번호가 key에 없는 질문은 다시 물을 수 없다.
+
+## Workflow 정상화 설계 리뷰 반영 (2026-10-29)
+
+`docs/designs/workflow-normalization.md`를 EGM 리뷰(통합 보고서의 C1–C45)로 고쳤다. 사용자가 기술 판단을 맡겼다(2026-10-29). 아래 판단 기준은 사용자가 정한 목표다: 안정성과 누수 방지, Effect 권장 방식, 실제 시나리오가 끝까지 돎, 0.0.17 사용자가 체감하지 않는 업그레이드, 끝난 worktree 정리. 각 항목은 리뷰 근거를 코드와 로컬 DB로 다시 확인한 뒤 정했다.
+
+- D2를 줄인다: 엔진 실행 status에 `failed`를 더하지 않고 표를 다시 만들지 않는다.
+  - 엔진이 결과를 encode하지 못하는 결정적 실패만 `Complete{exit: die(OwnerWorkflowEngineError{reason: "result_unencodable"})}`로 저장한다. 라이브러리가 본문 결함을 저장하는 방식(`CaptureDefects`, effect 4.0.3 `workflow/Workflow.ts:732-734`, `:1023-1028`)과 같다.
+  - SQL 쓰기 실패는 지금처럼 `running`으로 남아 다음 시작에서 다시 돈다. 일시 실패일 수 있다.
+  - 이유: 본문 결함은 이미 `completed`로 저장되고, 로컬 DB의 실행 73건 중 `running`은 0건이다. 원안은 표 재생성, 참조 표 재생성 규칙의 일반화, `failed`를 읽는 소비자 셋(승인 응답, 사람 결정 목록, 카드 attempt 복구)의 수정을 부른다.
+  - `created_at`·`updated_at`은 `ALTER TABLE ADD COLUMN`으로 더한다. 0.0.17 행은 NULL이다. `failure_json`은 두지 않는다.
+- D4를 미룬다: 사람 결정의 다시 시도 버튼과 `HumanDecisions.retry`를 만들지 않는다.
+  - D2의 `failed`가 없으면 되돌릴 상태가 없다. 실제로 생기는 실패(답 저장 뒤 카드 이동 실패)는 `Complete{failure}`라 원안도 다루지 못했다.
+  - 그 경우 카드는 `human_decision`에 남고, 사용자는 카드 Stop·Replace로 빠져나간다. 지금 동작과 같다. 실패가 span·로그로 보이면 다시 정한다.
+- D3를 줄인다. 핵심(occasion과 facts 분리, 쌓는 `human_decision_facts`, `factsSeq` 거절)은 그대로다.
+  - 엔진 payload는 `{sessionId, goalInstanceId, cardId, key}`다. key는 문자열 그대로 둔다. `DecisionOccasion` union은 코드 안에서만 쓰고 지금 key 형식을 만든다.
+  - 0.0.17 행 변환은 옛 payload를 지금 schema로 decode하고, 앱과 같은 Schema로 다시 encode한다. decode되지 않는 행은 그대로 두고 시작을 막지 않는다. 앱은 이미 그런 행을 건너뛴다.
+  - 이전 사실을 펼쳐 보는 화면은 미룬다. 화면은 최신 사실과 "물은 뒤 바뀜"만 보인다.
+  - 이미 있는 요청에 사실을 더하는 일은 admission 뒤 transaction 하나에서 한다. 엔진 호출은 transaction 밖에 둔다. 답했거나 닫힌 요청에는 더하지 않는다.
+  - 비교와 답 기록 사이의 경합은 받아들인다. 사용자가 한 명이고 창이 짧다. 한 transaction으로 묶으면 엔진 resume과 교착한다.
+- D1의 범위를 줄인다: `GoalState`는 `session_workflows.state_json`의 phase, Goal, Plan만으로 정한다.
+  - 세션 실행 상태(이미 tag union)와 새 Goal 요청은 각자의 표와 서비스에 둔다. 앱 시작 검사가 둘이 Goal 상태와 맞는지 본다.
+  - `transition`으로 옮기는 것은 `Workflows` 메서드 14개뿐이다. `WorkflowExecution`은 `stopped.reason`에 `state_reconciled`만 더한다.
+  - 화면 위치(`chat`, `goal`, `plan`)는 모든 상태에서 허용한다. 진행 위치(`execute`, `verify`, `completed`)는 상태마다 정한다.
+- 로컬 DB의 끝으로 갈 수 없는 세션 6개를 두 규칙으로 고친다. 6개 모두 칸반이 아니다.
+  - R1: Goal이 `completed`인데 phase가 `execute`·`verify`면 phase를 `completed`로 둔다. 3개.
+  - R2: Plan이 `completed`인데 Goal이 열려 있으면 Plan을 `executing`, phase를 `verify`로 둔다. Goal 완료 근거를 다시 기록하면 끝난다. 3개.
+  - 그 밖의 모순은 phase를 `goal`로 둔다. 고친 세션은 모두 `stopped{state_reconciled}`다. 활성 `kanban_goals`가 있는 세션은 고치지 않고 로그만 남긴다.
+  - 원인은 `updateProgress`가 Goal과 Plan status를 따로 바꾸고 phase를 바꾸지 않는 것이다. Plan만 완료로 바꾸는 진행 기록은 `goal_completion_required`로 거절하고, Goal 완료는 phase도 `completed`로 바꾼다.
+- 새 Goal 요청 정산 규칙을 바로잡는다.
+  - 프로세스 안에서 승인을 기다리는 run(`interrupted`)의 `accepted` 요청은 정상 대기다. run이 끝나면 다시 정산된다.
+  - 갇히는 경우는 재시작 뒤뿐이다. 앱 시작 검사가 모든 `accepted` 요청을 정산한다. run이 `completed`가 아니면 `rejected{run_outcome_uncertain}`, `completed`면 지금 규칙이다.
+  - 도구 호출 때의 거절은 영속하지 않는다. ledger에 쓰면 revision이 바뀌어 이미 `accepted`인 요청이 `workflow_changed`로 거절된다. 도구 결과, 화면 문구, 경고 로그로 보인다.
+- 앱 시작 순서를 layer 의존으로 정한다.
+  - 새 marker 서비스 `WorkflowStartup`이 Goal 상태 검사, 세션 실행 상태 검사, `accepted` 정산을 한다. owner 엔진이 이 서비스에 의존하므로 어느 workflow도 검사 전에 resume하지 않는다.
+  - 새 `CardWorkspaceJanitor` layer가 만들어질 때 sweep을 돈다. 칸반 오케스트레이터가 janitor에 의존하므로 sweep이 recover보다 먼저다.
+- 대기 schedule: 세 workflow 정의(`RelayedApprovalExecution`, `ProviderRetryWait`, `GoalExecution`)에 `suspendedRetrySchedule`을 둔다. 1초에서 2배씩, 상한 5분이다. `awaitComplete`만으로는 재호출이 줄지 않는다. 라이브러리가 hook과 schedule sleep 중 먼저 끝나는 쪽을 쓰기 때문이다.
+- 카드 worktree 정리의 범위를 줄인다.
+  - 소유는 폴더의 goalInstanceId가 이 DB의 `kanban_goals`에 있는지로 판정한다. `card_worktrees` 표와 owner 표식 파일은 두지 않는다. 이 규칙은 업그레이드 전에 남은 폴더도 덮는다.
+  - `settleGoal`은 오케스트레이터 `tick`의 닫힌 Plan 분기와 supersede 분기에서 부른다. `stopSession`(대화 삭제)에서는 부르지 않는다. 디스크를 지우지 않는다는 결정("Goal을 실행한 대화를 지우면 Goal 기록도 같이 지운다 (2026-10-25)")과 맞춘다.
+  - halt 때 lease 중이던 카드는 delivery가 끝날 때 정리한다.
+  - sweep 동작은 사용자 설정이 아니라 코드 상수다. 첫 릴리즈는 기록만 하고, 다음 릴리즈에서 지우기로 바꾼다. 지울 때도 스냅샷 커밋 뒤 제거한다.
+- 위 "미정 항목" 항목의 "마지막 lease 뒤 14일" TTL과 `resolved` 뒤 worktree 재생성을 미룬다.
+  - 사람이 그 폴더에서 직접 고치는 카드를 lease 없이 지울 위험이 있다. 재생성은 네 경로가 함께 쓰는 `presentWorktree`를 바꿔야 한다.
+  - Goal이 끝날 때의 정리는 그대로 한다. 남은 폴더 수는 sweep span으로 보고 다시 정한다.
+- 측정은 span으로만 한다. 새 metric 모듈은 만들지 않는다.
+  - 기존 `tools/profile` OTLP 수집기는 span을 읽고 metric을 버린다. 로컬 수집기가 문자열 속성을 버리므로 크기와 개수는 숫자 속성으로 달고, reason은 경고 로그에 남긴다.
+- G4의 범위를 줄인다: "이 단계가 다루는 실패 원인"의 표(설계 문서 B3)만 처리를 정한다. provider 오류 분류 변경은 Non-Goals로 옮긴다.
+- 0.0.17 fixture는 태그 `0.0.17`의 코드로 한 번 만들고 SQL dump만 커밋한다. 만드는 스크립트는 커밋하지 않고 dump 머리 주석에 방법을 적는다.
