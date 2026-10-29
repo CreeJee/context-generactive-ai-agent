@@ -3273,3 +3273,11 @@
 - `read_tool_result`는 읽기 도구다(`builtinToolEffects`). compaction이 줄인 도구 결과에 "full result: read_tool_result ID …"를 적는데, 읽기 전용 단계에는 이 도구가 없어서 원문을 읽을 수 없었다.
 - `use_promoted_memory`는 답에 쓴 promoted memory를 기록할 뿐 프로젝트 파일을 바꾸지 않는다. 없으면 이 단계에서 `find_memory`로 찾아 쓴 기억의 사용이 남지 않는다.
 - `promote_memory_candidate`는 계속 주지 않는다. 사용자가 고른 문구를 프로젝트 기억으로 저장하는 쓰기다.
+
+## 페이지의 세션 Atom 묶음을 페이지 수명 동안 쥔다 (2026-10-29)
+
+- 증상: 추론 중이나 답이 오는 중에 채팅 화면이 깜빡였다. 대화 전체가 다시 그려지는 것처럼 보였다.
+- 근거: 개발 서버 span에서 Goal run 하나(19:11:00–19:11:30) 동안 페이지가 `chatSnapshot`과 run 로그 join을 12번, 짧게는 200–300ms마다 다시 불렀다. 그 동안 세션 lease는 한 holder가 19:10:16부터 계속 쥐고 있었고 HMR 대상 파일도 바뀌지 않았다.
+- 원인: `chatSessions`·`btwThreads`는 `Atom.family`로 `{ state, open, send, … }` 묶음을 돌려줬다. `Atom.family`는 만든 값을 WeakRef로만 쥔다. 훅은 렌더마다 묶음을 꺼내 쓰고 버리므로 묶음을 쥐는 곳이 없었다. 스트리밍 중 GC가 돌면 다음 렌더가 새 묶음을 받았다. 새 `state`는 비어 있어 대화가 사라지고, 새 `open`은 effect를 다시 돌려 snapshot과 join으로 run을 처음부터 다시 그렸다. 그때마다 Streamdown이 글자 fade를 다시 걸었다. 버려진 묶음의 keepAlive `state`는 registry에 남아 메모리도 샜다. `node --expose-gc`에서 GC 한 번 뒤 같은 id가 다른 묶음을 돌려주는 것을 확인했다.
+- 결정: 묶음은 `api/kept-atom-groups.ts`의 `keptAtomGroups`가 키별로 페이지 수명 동안 강하게 쥔다. 묶음 안의 `state`가 이미 keepAlive라 수명이 같다. 열어 본 세션 수만큼만 남는다.
+- 버린 안: 훅에서 `useMemo`로 묶음을 쥐기. 마운트된 동안은 막지만, 다시 마운트할 때 새 keepAlive `state`가 생겨 앞의 것이 registry에 남는다. 묶음을 Atom 하나씩의 family로 쪼개기. Effect 방식에 더 맞지만 두 훅과 테스트의 모양이 바뀌고, 쥐는 곳이 registry와 React 훅에 흩어진다.
