@@ -864,7 +864,6 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                         ? Effect.as(
                             Effect.logWarning("Kanban Goal left in a conflicting state", {
                               sessionId,
-                              state: json,
                             }),
                             [],
                           )
