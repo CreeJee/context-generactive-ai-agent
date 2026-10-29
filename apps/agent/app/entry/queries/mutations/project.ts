@@ -87,6 +87,15 @@ export function useHideProjectMutation() {
   });
 }
 
+/** Archive release: the project is back in the list (and out of the archive). */
+export function useRestoreProjectMutation() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: api.restoreProject,
+    onSuccess: () => client.invalidateQueries({ queryKey: globalQueries.projects().queryKey }),
+  });
+}
+
 export function useCreateSessionMutation(projectId: string) {
   const client = useQueryClient();
   return useMutation({

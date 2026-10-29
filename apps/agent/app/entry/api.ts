@@ -675,9 +675,15 @@ export const api = {
     }),
   setPermissionMode: (projectId: string, permissionMode: PermissionMode) =>
     call<Project>("POST", `/api/projects/${encodeURIComponent(projectId)}`, { permissionMode }),
-  /** Takes a project out of the sidebar. Its memory stays and adding the folder again brings it back. */
+  /** Archives a project: out of the sidebar list. Its conversations and memory stay. */
   hideProject: (projectId: string) =>
     call<Project>("POST", `/api/projects/${encodeURIComponent(projectId)}`, { hidden: true }),
+  /** Puts an archived project back in the sidebar list. */
+  restoreProject: (projectId: string) =>
+    call<Project>("POST", `/api/projects/${encodeURIComponent(projectId)}`, { hidden: false }),
+  hiddenProjects: () => call<Project[]>("GET", "/api/projects?hidden=1"),
+  /** Opens the folder dialog of the machine running the app; nothing is registered yet. */
+  pickFolder: () => call<FolderPick>("POST", "/api/projects/pick"),
 
   sessions: (projectId: string) =>
     call<Session[]>("GET", `/api/sessions?project=${encodeURIComponent(projectId)}`),
@@ -1128,6 +1134,14 @@ export function attachmentErrorMessage(error: ApiError | null) {
     ? attachmentRejections[error.reason]
     : error.reason;
 }
+
+/** The folder dialog's answer (POST /api/projects/pick). */
+export const FolderPick = Schema.TaggedUnion({
+  picked: { root: Schema.String },
+  cancelled: {},
+  unavailable: {},
+});
+export type FolderPick = typeof FolderPick.Type;
 
 const ProjectRejection = Schema.Literals([
   "not_found",

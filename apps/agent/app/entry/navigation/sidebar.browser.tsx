@@ -115,11 +115,14 @@ describe("sidebar disclosures", () => {
                 },
               ]}
               projectId="project-1"
+              hiddenProjects={[]}
               onSelect={() => {}}
               onAdd={() => Promise.resolve(null)}
+              onPickFolder={() => Promise.resolve({ _tag: "cancelled" })}
               onPermissionMode={() => {}}
               onCrossRecall={() => {}}
               onHide={() => {}}
+              onRestore={() => {}}
             />
           </div>,
         ),
@@ -130,6 +133,48 @@ describe("sidebar disclosures", () => {
       yield* sdkCall(() => trigger.click());
       alignedTerms(screen.container, ["프로젝트", "권한", "기억", "목록"]);
     }),
+  );
+
+  it.live(
+    "choosing an archived project releases it, and an open folder already listed is selected",
+    () =>
+      Effect.gen(function* () {
+        const project = (id: string, hiddenAt: string | null) => ({
+          id,
+          root: `/tmp/${id}`,
+          name: id,
+          crossRecallExcluded: false,
+          permissionMode: "ask" as const,
+          createdAt: "2026-10-01T00:00:00.000Z",
+          hiddenAt,
+        });
+        const events: string[] = [];
+        // The section's open state persists across tests; start closed like a first visit.
+        yield* Effect.sync(() => localStorage.removeItem("context-agent-project-section-open-v2"));
+        const screen = yield* sdkCall(() =>
+          render(
+            <div className="w-72">
+              <ProjectSection
+                projects={[project("alpha", null)]}
+                hiddenProjects={[project("beta", "2026-10-02T00:00:00.000Z")]}
+                projectId="alpha"
+                onSelect={(id) => void events.push(`select:${id}`)}
+                onAdd={(root) => Promise.resolve(void events.push(`add:${root}`)).then(() => null)}
+                onPickFolder={() => Promise.resolve({ _tag: "picked", root: "/tmp/alpha" })}
+                onPermissionMode={() => {}}
+                onCrossRecall={() => {}}
+                onHide={() => {}}
+                onRestore={(id) => void events.push(`restore:${id}`)}
+              />
+            </div>,
+          ),
+        );
+        yield* sdkCall(() => screen.getByRole("button", { name: "프로젝트 alpha" }).click());
+        yield* sdkCall(() => screen.getByRole("combobox", { name: "프로젝트 선택" }).click());
+        yield* sdkCall(() => screen.getByRole("option", { name: /beta/ }).click());
+        yield* sdkCall(() => screen.getByRole("button", { name: "폴더 열기" }).click());
+        yield* sdkCall(() => expect.poll(() => events).toEqual(["restore:beta", "select:alpha"]));
+      }),
   );
 
   it.live("the account manager lists every provider's accounts in one editable list", () =>

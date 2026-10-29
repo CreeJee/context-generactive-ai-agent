@@ -1,8 +1,13 @@
 import { Effect, Match, Predicate } from "effect";
 import { runUiEffect, uiPromise } from "./shared/ui-effect";
 import { isTruthy } from "../truthy.ts";
-import { useAuthQuery, useModelsQuery, useProjectsQuery } from "./queries/global";
-import { ProviderAuthState } from "./api";
+import {
+  useAuthQuery,
+  useHiddenProjectsQuery,
+  useModelsQuery,
+  useProjectsQuery,
+} from "./queries/global";
+import { api, ProviderAuthState } from "./api";
 import {
   useAddProjectMutation,
   useSelectModelMutation,
@@ -14,6 +19,7 @@ import {
   useCrossRecallMutation,
   useHideProjectMutation,
   usePermissionModeMutation,
+  useRestoreProjectMutation,
   SessionLifecycleChange,
   useSessionLifecycleMutation,
 } from "./queries/mutations/project";
@@ -136,6 +142,7 @@ export function App() {
   const [selection, setSelection] = useState<ModelSelection | null>(null);
   const projectsQuery = useProjectsQuery();
   const projects = projectsQuery.data ?? [];
+  const hiddenProjects = useHiddenProjectsQuery().data ?? [];
   const [
     { project: projectId, session: sessionId, boards: boardsOpen, boardCard: boardCardKeyParam },
     setLocation,
@@ -148,6 +155,7 @@ export function App() {
   const permissionMutation = usePermissionModeMutation(projectId ?? "");
   const crossRecallMutation = useCrossRecallMutation(projectId ?? "");
   const hideProjectMutation = useHideProjectMutation();
+  const restoreProjectMutation = useRestoreProjectMutation();
   const createSessionMutation = useCreateSessionMutation(projectId ?? "");
   const lifecycleMutation = useSessionLifecycleMutation(projectId ?? "", pageHolder);
   const sessionsQuery = useProjectSessionsQuery(projectId);
@@ -488,9 +496,16 @@ export function App() {
               </AccountModelPanel>
               <ProjectSection
                 projects={projects}
+                hiddenProjects={hiddenProjects}
                 projectId={projectId}
                 onSelect={selectProject}
                 onAdd={addProject}
+                onPickFolder={api.pickFolder}
+                onRestore={(restoredId) => {
+                  void restoreProjectMutation
+                    .mutateAsync(restoredId)
+                    .then(() => selectProject(restoredId));
+                }}
                 onPermissionMode={(mode) => {
                   if (!isTruthy(projectId)) return;
                   void permissionMutation.mutateAsync(mode);
