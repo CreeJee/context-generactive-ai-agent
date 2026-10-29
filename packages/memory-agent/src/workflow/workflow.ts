@@ -851,44 +851,43 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
        * Repairs every session whose stored Goal and Plan no transition makes, and returns their ids.
        * An active kanban board's orchestrator still uses its Plan, so its session is only logged.
        */
-      checkAll: () =>
-        persisted(storedStates()).pipe(
-          Effect.flatMap((rows) =>
-            Effect.forEach(rows, ({ session_id: sessionId, state_json: json }) =>
-              decodeWorkflowState(json).pipe(
-                Effect.flatMap((current) =>
-                  Result.isSuccess(decodeGoalState(standingOf(current)))
-                    ? Effect.succeed([])
-                    : Effect.flatMap(persisted(kanbanBoard(sessionId)), (kanban) =>
-                        kanban
-                          ? Effect.as(
-                              Effect.logWarning("Kanban Goal left in a conflicting state", {
-                                sessionId,
-                                state: json,
-                              }),
-                              [],
-                            )
-                          : Effect.as(
-                              transacted(
-                                Effect.flatMap(get(sessionId), (stored) =>
-                                  reconciled(sessionId, stored),
-                                ),
+      checkAll: persisted(storedStates()).pipe(
+        Effect.flatMap((rows) =>
+          Effect.forEach(rows, ({ session_id: sessionId, state_json: json }) =>
+            decodeWorkflowState(json).pipe(
+              Effect.flatMap((current) =>
+                Result.isSuccess(decodeGoalState(standingOf(current)))
+                  ? Effect.succeed([])
+                  : Effect.flatMap(persisted(kanbanBoard(sessionId)), (kanban) =>
+                      kanban
+                        ? Effect.as(
+                            Effect.logWarning("Kanban Goal left in a conflicting state", {
+                              sessionId,
+                              state: json,
+                            }),
+                            [],
+                          )
+                        : Effect.as(
+                            transacted(
+                              Effect.flatMap(get(sessionId), (stored) =>
+                                reconciled(sessionId, stored),
                               ),
-                              [sessionId],
                             ),
-                      ),
-                ),
-                Effect.catch((cause) =>
-                  Effect.as(
-                    Effect.logWarning("Workflow state unreadable at startup", { sessionId, cause }),
-                    [],
-                  ),
+                            [sessionId],
+                          ),
+                    ),
+              ),
+              Effect.catch((cause) =>
+                Effect.as(
+                  Effect.logWarning("Workflow state unreadable at startup", { sessionId, cause }),
+                  [],
                 ),
               ),
             ),
           ),
-          Effect.map((repaired) => repaired.flat()),
         ),
+        Effect.map((repaired) => repaired.flat()),
+      ),
 
       setPhase: (sessionId: string, phase: WorkflowPhase) =>
         transacted(
@@ -1057,15 +1056,14 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
        * Settles every accepted request at startup. No run of an earlier process can still finish, so
        * only a completed run applies its request. Returns how many were settled.
        */
-      settleAbandonedNewGoalRequests: () =>
-        persisted(acceptedRequests()).pipe(
-          Effect.flatMap((rows) =>
-            Effect.forEach(rows, ({ session_id: sessionId, run_id: runId }) =>
-              settleRequest(sessionId, runId, () => false),
-            ),
+      settleAbandonedNewGoalRequests: persisted(acceptedRequests()).pipe(
+        Effect.flatMap((rows) =>
+          Effect.forEach(rows, ({ session_id: sessionId, run_id: runId }) =>
+            settleRequest(sessionId, runId, () => false),
           ),
-          Effect.map((settled) => settled.length),
         ),
+        Effect.map((settled) => settled.length),
+      ),
 
       updateGoal: (sessionId: string, input: UpdateGoal) =>
         change(sessionId, (current) =>

@@ -260,9 +260,8 @@ describe("Goal transitions", () => {
     ).toEqual([]);
   });
 
-  it("matches the reviewed list of transitions", async () => {
-    await expect(transitionsDocument()).toMatchFileSnapshot("../../../../docs/goal-transitions.md");
-  });
+  it("matches the reviewed list of transitions", () =>
+    expect(transitionsDocument()).toMatchFileSnapshot("../../../../docs/goal-transitions.md"));
 
   it("repairs each conflict 0.0.17 could leave to a state it stays in", () => {
     const goal = { status: "completed", passed: true, proven: true } as const;

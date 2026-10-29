@@ -17,7 +17,7 @@ export class WorkflowStartup extends Context.Service<
     Effect.gen(function* () {
       const workflows = yield* Workflows;
       const execution = yield* WorkflowExecution;
-      const repaired = yield* workflows.checkAll();
+      const repaired = yield* workflows.checkAll;
       const pending = [
         ...(yield* execution.readySessions()),
         ...(yield* execution.retryingSessions()).map(({ sessionId }) => sessionId),
@@ -31,7 +31,7 @@ export class WorkflowStartup extends Context.Service<
       yield* Effect.forEach([...new Set([...repaired, ...halted])], execution.stopReconciled, {
         discard: true,
       });
-      const settled = yield* workflows.settleAbandonedNewGoalRequests();
+      const settled = yield* workflows.settleAbandonedNewGoalRequests;
       yield* Effect.annotateCurrentSpan({
         repaired: repaired.length,
         halted: halted.length,

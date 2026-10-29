@@ -1,4 +1,4 @@
-import { Data, Match, Result } from "effect";
+import { Data, Function as EffectFunction, Match, Result } from "effect";
 import type {
   GoalArtifact,
   PlanArtifact,
@@ -410,7 +410,10 @@ const record =
       return refused("phase_not_executable");
     if (event.stepEvidenceMissing) return refused("step_evidence_required");
     const verified = verification?.status === "passed" && verification.evidence;
-    if (event.goalStatus === "completed" && !(verification === null ? goal?.proven : verified))
+    if (
+      event.goalStatus === "completed" &&
+      !(verification === null ? goal?.proven === true : verified)
+    )
       return refused("verification_required");
     if (
       event.planStatus === "completed" &&
@@ -725,7 +728,10 @@ export const goalTransitions: GoalTransitions = {
 };
 
 /** `event` in `state`, whichever event it is. */
-export const transition = (state: GoalState, event: GoalEvent): Transition<GoalRefusal> =>
+export const transition: {
+  (event: GoalEvent): (state: GoalState) => Transition<GoalRefusal>;
+  (state: GoalState, event: GoalEvent): Transition<GoalRefusal>;
+} = EffectFunction.dual(2, (state: GoalState, event: GoalEvent): Transition<GoalRefusal> =>
   Match.valueTags(event, {
     Navigated: (value) => goalTransitions.Navigated(state, value),
     ExecutionApproved: (value) => goalTransitions.ExecutionApproved(state, value),
@@ -740,4 +746,5 @@ export const transition = (state: GoalState, event: GoalEvent): Transition<GoalR
     NewGoalRequested: (value) => goalTransitions.NewGoalRequested(state, value),
     NewGoalStarted: (value) => goalTransitions.NewGoalStarted(state, value),
     BoardEdited: (value) => goalTransitions.BoardEdited(state, value),
-  });
+  }),
+);

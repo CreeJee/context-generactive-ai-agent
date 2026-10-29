@@ -1,11 +1,12 @@
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { it } from "@effect/vitest";
-import { Context, Effect, Exit, FileSystem, Layer, Path, Scope } from "effect";
+import { Context, Effect, Exit, FileSystem, Layer, Path, Schema, Scope } from "effect";
 import { DatabaseSync } from "node:sqlite";
 import { SqlClient } from "effect/sql";
 import { describe, expect } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
 import { humanDecisionFactsMigration, migrations } from "../src/db/migrations.ts";
+import { HumanDecisionPayload } from "../src/kanban/human-decision-schema.ts";
 import {
   OwnerWorkflowStorage,
   ownerWorkflowStorageLayer,
@@ -19,19 +20,12 @@ const identity = (cardId: string) => ({
   key: `retry_exhausted:${cardId}`,
 });
 const kind = { _tag: "RetryExhausted", attempts: 3 };
+const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+/** The payload as the app encodes it, which asking the same occasion again compares. */
+const encodePayload = Schema.encodeEffect(Schema.fromJsonString(HumanDecisionPayload));
 /** A request as 0.0.17 stored it: the facts and the time it asked ride in the payload. */
 const legacy = (cardId: string, createdAt: number) =>
-  JSON.stringify({ ...identity(cardId), kind, createdAt });
-const rows = [
-  { id: "waiting", status: "suspended", payload: legacy("a", 1_000) },
-  { id: "answered", status: "completed", payload: legacy("b", 2_000) },
-  { id: "closed", status: "interrupted", payload: legacy("c", 3_000) },
-  {
-    id: "unreadable",
-    status: "suspended",
-    payload: JSON.stringify({ ...identity("d"), kind: { _tag: "Unknown" }, createdAt: 4_000 }),
-  },
-];
+  encodeJson({ ...identity(cardId), kind, createdAt });
 
 const tempFile = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
@@ -44,6 +38,21 @@ describe("human decision rows from 0.0.17", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const file = yield* tempFile;
+        const rows = [
+          { id: "waiting", status: "suspended", payload: yield* legacy("a", 1_000) },
+          { id: "answered", status: "completed", payload: yield* legacy("b", 2_000) },
+          { id: "closed", status: "interrupted", payload: yield* legacy("c", 3_000) },
+          {
+            id: "unreadable",
+            status: "suspended",
+            payload: yield* encodeJson({
+              ...identity("d"),
+              kind: { _tag: "Unknown" },
+              createdAt: 4_000,
+            }),
+          },
+        ];
+        const kindJson = yield* encodeJson(kind);
         const factsMigration = migrations.indexOf(humanDecisionFactsMigration);
         expect(factsMigration).toBeGreaterThanOrEqual(0);
         yield* Effect.acquireUseRelease(
@@ -78,18 +87,18 @@ describe("human decision rows from 0.0.17", () => {
           ).toEqual([
             {
               execution_id: "answered",
-              payload_json: JSON.stringify(identity("b")),
+              payload_json: yield* encodePayload(identity("b")),
               created_at: 2_000,
             },
             {
               execution_id: "closed",
-              payload_json: JSON.stringify(identity("c")),
+              payload_json: yield* encodePayload(identity("c")),
               created_at: 3_000,
             },
             { execution_id: "unreadable", payload_json: rows[3]?.payload, created_at: null },
             {
               execution_id: "waiting",
-              payload_json: JSON.stringify(identity("a")),
+              payload_json: yield* encodePayload(identity("a")),
               created_at: 1_000,
             },
           ]);
@@ -105,7 +114,7 @@ describe("human decision rows from 0.0.17", () => {
             ].map(([id, at]) => ({
               execution_id: id,
               seq: 1,
-              kind_json: JSON.stringify(kind),
+              kind_json: kindJson,
               observed_at: at,
             })),
           );

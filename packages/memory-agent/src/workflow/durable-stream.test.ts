@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest";
-import { Effect, Fiber, FileSystem, Path, Stream, Tracer } from "effect";
+import { Effect, Fiber, FileSystem, Layer, Path, Stream, Tracer } from "effect";
 import { TestClock } from "effect/testing";
 import { withTestPlatform } from "../../tests/support/platform.ts";
 // SQLite retains its native synchronous transaction contract.
@@ -46,7 +46,11 @@ const scopedOwner = Effect.acquireRelease(
 );
 /** The test platform, with one `RunLogSignals` for every log a test opens, as `AgentChat` has. */
 const withOwnerLogs = <A, E, R>(program: Effect.Effect<A, E, R>) =>
-  withTestPlatform(Effect.provide(program, RunLogSignals.layer));
+  withTestPlatform(
+    Effect.flatMap(Layer.build(RunLogSignals.layer), (context) =>
+      Effect.provideContext(program, context),
+    ),
+  );
 /** Lets the forked reader run up to its next wait on the test clock. */
 const settle = Effect.repeat(Effect.yieldNow, { times: 50 });
 

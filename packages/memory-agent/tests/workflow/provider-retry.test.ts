@@ -241,6 +241,49 @@ describe("durable provider retry", () => {
           step.includes("workflow execution state names its case under _tag"),
         );
         expect(executionMigration).toBeGreaterThanOrEqual(0);
+        // The session's Goal runs, so the startup check leaves its execution ready.
+        const verification = {
+          status: "not_run",
+          summary: "",
+          evidence: [],
+          recoveryPhase: null,
+          updatedAt: null,
+        };
+        const artifact = {
+          outcomes: [],
+          constraints: [],
+          nonGoals: [],
+          assumptions: [],
+          openQuestions: [],
+          evidence: [],
+          verification,
+          updatedAt: "old",
+        };
+        const state = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
+          phase: "execute",
+          goal: { ...artifact, version: 2, statement: "goal", status: "active" },
+          plan: {
+            ...artifact,
+            version: 3,
+            goalVersion: 2,
+            summary: "plan",
+            steps: [
+              {
+                id: "p1",
+                title: "p1",
+                description: "",
+                dependsOn: [],
+                acceptanceCriteria: [],
+                ruleRefs: [],
+                status: "ready",
+                evidence: [],
+              },
+            ],
+            risks: [],
+            status: "executing",
+          },
+          ledger: [],
+        });
         yield* Effect.acquireUseRelease(
           Effect.sync(() => new DatabaseSync(file)),
           (sqlite) =>
@@ -250,55 +293,11 @@ describe("durable provider retry", () => {
               sqlite.exec("PRAGMA foreign_keys = OFF");
               migrations.slice(0, executionMigration).forEach((step) => sqlite.exec(step));
               sqlite.exec(`PRAGMA user_version = ${executionMigration}`);
-              // The session's Goal runs, so the startup check leaves its execution ready.
-              const verification = {
-                status: "not_run",
-                summary: "",
-                evidence: [],
-                recoveryPhase: null,
-                updatedAt: null,
-              };
-              const artifact = {
-                outcomes: [],
-                constraints: [],
-                nonGoals: [],
-                assumptions: [],
-                openQuestions: [],
-                evidence: [],
-                verification,
-                updatedAt: "old",
-              };
               sqlite.exec(`
                 INSERT INTO projects (id, root, name, created_at) VALUES ('p', '/test', 'test', 'old');
                 INSERT INTO sessions (id, project_id, created_at) VALUES ('s', 'p', 'old');
               `);
-              sqlite.prepare("INSERT INTO session_workflows VALUES ('s', ?, 'old')").run(
-                JSON.stringify({
-                  phase: "execute",
-                  goal: { ...artifact, version: 2, statement: "goal", status: "active" },
-                  plan: {
-                    ...artifact,
-                    version: 3,
-                    goalVersion: 2,
-                    summary: "plan",
-                    steps: [
-                      {
-                        id: "p1",
-                        title: "p1",
-                        description: "",
-                        dependsOn: [],
-                        acceptanceCriteria: [],
-                        ruleRefs: [],
-                        status: "ready",
-                        evidence: [],
-                      },
-                    ],
-                    risks: [],
-                    status: "executing",
-                  },
-                  ledger: [],
-                }),
-              );
+              sqlite.prepare("INSERT INTO session_workflows VALUES ('s', ?, 'old')").run(state);
               // The state as 0.0.17 wrote it, with its case under kind.
               sqlite
                 .prepare("INSERT INTO chat_metadata (namespace, key, value) VALUES (?, 's', ?)")
