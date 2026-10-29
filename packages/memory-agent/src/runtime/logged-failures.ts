@@ -1,6 +1,14 @@
-import { Cause, Effect, Function as EffectFunction, Match, Option, Schema } from "effect";
+import {
+  Array as EffectArray,
+  Cause,
+  Effect,
+  Function as EffectFunction,
+  Match,
+  Option,
+  Schema,
+} from "effect";
 import { DefectReporter } from "./defect-reporter.ts";
-import { reasonTagOf, tagOf, tagOfUnknown } from "./failure-tag.ts";
+import { causeTagsOf, reasonTagOf, tagOf, tagOfUnknown } from "./failure-tag.ts";
 
 /**
  * Helpers for expected failures an owner logs instead of propagating. Each one logs a failure by
@@ -10,10 +18,12 @@ import { reasonTagOf, tagOf, tagOfUnknown } from "./failure-tag.ts";
 
 type Annotations = Readonly<Record<string, string>>;
 
-const tagged = <E extends { readonly _tag: string }>(annotations: Annotations, error: E) => ({
-  ...annotations,
-  error: tagOf(error),
-});
+/** The failure's tag, and the tags of what caused it, outermost first, when it names a cause. */
+const tagged = <E extends { readonly _tag: string }>(annotations: Annotations, error: E) =>
+  EffectArray.match(causeTagsOf(error), {
+    onEmpty: () => ({ ...annotations, error: tagOf(error) }),
+    onNonEmpty: (causes) => ({ ...annotations, error: tagOf(error), cause: causes.join(" < ") }),
+  });
 
 /** The data-first call names the message; the pipeable one gives only the annotations. */
 const messageFirst = (args: IArguments) => Schema.is(Schema.String)(args[0]);
