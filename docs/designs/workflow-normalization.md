@@ -606,21 +606,25 @@ human_decision_facts
 ### Step 2. 0.0.17 업그레이드 fixture (G9)
 
 - **fixture 만들기 (한 번, 커밋하지 않는 스크립트).**
-  - scratch 폴더에 `git worktree add <scratch> 0.0.17`로 태그를 꺼내고 `vp install`을 돈다.
-  - 그 태그의 `memoryAgentLayer`를 임시 storage root로 열고, 0.0.17의 테스트 지원 layer(가짜 provider)로 다음을 만든다.
-    - 대기 중인 relayed 승인
-    - 발화 전 provider 재시도 clock
+  - scratch 폴더에 `git worktree add --detach <scratch> 0.0.17`로 태그를 꺼낸다. `vp install`, `packages/turbovec`의 `node build-turbovec.ts`, `packages/memory-agent`의 `vp run build`를 돈다.
+  - 그 checkout의 테스트 하나가 `testAgent()`를 열고, 0.0.17의 서비스로 다음을 만든다.
+    - 대기 중인 relayed 승인(`RelayedApprovals.ask`)
+    - 발화 전 provider 재시도 clock(`ProviderRetries.wait`, retry 10이라 약 17분 뒤)
     - `running` 상태로 끊긴 chat run과, 그 run의 `accepted` 새 Goal 요청
-    - 승인 대기로 `interrupted`인 chat run과, 그 run의 `accepted` 새 Goal 요청
-  - 앱을 끄고 R1·R2 모양의 세션을 SQL로 넣는다. 값은 로컬 DB의 모양(phase, Goal·Plan status, 검증 status)만 따르고 내용은 지어낸다.
-  - `sqlite3 <db> .dump`로 텍스트를 만든다. 리뷰할 수 있게 바이너리 DB 대신 텍스트로 둔다. 만든 방법(태그, 명령, 넣은 SQL)은 dump 머리 주석에 적는다.
+    - `interrupted`인 chat run과, 그 run의 `accepted` 새 Goal 요청
+    - R1·R2 세션: Execute에서 모든 단계를 끝낸 뒤 `updateProgress`로 Plan(R1은 Goal도)을 `completed`로 바꾼다. 로컬 DB의 세션이 생긴 것과 같은 버그 경로다.
+  - chat run 행은 0.0.17의 테스트처럼 SQL로 넣는다.
+  - `VACUUM INTO`로 연 DB를 복사하고 `sqlite3 <copy> .dump`로 텍스트를 만든다. 리뷰할 수 있게 바이너리 DB 대신 텍스트로 둔다. `.dump`는 `PRAGMA user_version`을 빼므로 끝에 더한다. 만든 방법은 dump 머리 주석에 적는다.
 - **새 `memory-agent/tests/fixtures/release-0.0.17.sql`**: 위 dump다.
+- **`memory-agent/tests/support/test-env.ts`**: `TestEnvOptions`에 `beforeOpen(storage)`를 더한다. 첫 agent를 열기 전에 storage root에 옛 DB를 넣기 위해서다.
 - **새 `memory-agent/tests/upgrade-0.0.17.test.ts`**
-  - dump를 임시 DB에 넣고, `src/testing`의 가짜 provider와 임시 storage root로 `memoryAgentLayer`를 연다. 그래야 `ChatState`의 재시작 처리, 시작 검사, 엔진 등록이 모두 돈다.
-  - 확인할 것과 통과하는 단계(`it.fails`로 두었다가 그 단계에서 `it`으로 바꾼다)
-    - 대기 승인과 clock이 이어진다: Step 2부터 통과
+  - `beforeOpen`에서 dump를 defensive를 끈 연결로 넣고, 새 연결에서 `migrateDatabase`를 잰다. FTS5 표는 `writable_schema`로 되살아나 새 연결에서만 보인다.
+  - 업그레이드가 fixture를 만든 직후라고 보고, 승인 timeout clock은 그때와의 거리를 유지하고 provider 재시도 clock은 지금으로 옮긴다. 그래야 재시작한 agent가 재시도 clock을 발화하는 것을 볼 수 있다.
+  - 그다음 `testAgent`가 `memoryAgentLayer`를 연다. 그래야 `ChatState`의 재시작 처리, 시작 검사, 엔진 등록이 모두 돈다.
+  - 확인할 것과 통과하는 단계(`it.effect.fails`로 두었다가 그 단계에서 `it.effect`로 바꾼다)
+    - 대기 승인이 남아 답할 수 있고, provider 재시도 clock이 발화한다: Step 2부터 통과
     - 두 chat run이 `failed`, `error_code = server_restarted`다: Step 2부터 통과
-    - 실행 행에 `created_at`·`updated_at` 열이 있고 0.0.17 행은 NULL이다: Step 3
+    - 실행 행에 `created_at` 열이 있고 0.0.17 행은 NULL이다: Step 3
     - 두 `accepted` 요청이 `rejected{run_outcome_uncertain}`이다: Step 7
     - R1 세션은 `Completed`, R2 세션은 `Running{view: verify}`이고 둘 다 `stopped{state_reconciled}`이다: Step 7
     - migration 시간이 2초 안이다. 시간은 테스트 로그에 남긴다: Step 2부터 통과
