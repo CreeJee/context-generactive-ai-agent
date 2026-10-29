@@ -3281,3 +3281,11 @@
 - 원인: `chatSessions`·`btwThreads`는 `Atom.family`로 `{ state, open, send, … }` 묶음을 돌려줬다. `Atom.family`는 만든 값을 WeakRef로만 쥔다. 훅은 렌더마다 묶음을 꺼내 쓰고 버리므로 묶음을 쥐는 곳이 없었다. 스트리밍 중 GC가 돌면 다음 렌더가 새 묶음을 받았다. 새 `state`는 비어 있어 대화가 사라지고, 새 `open`은 effect를 다시 돌려 snapshot과 join으로 run을 처음부터 다시 그렸다. 그때마다 Streamdown이 글자 fade를 다시 걸었다. 버려진 묶음의 keepAlive `state`는 registry에 남아 메모리도 샜다. `node --expose-gc`에서 GC 한 번 뒤 같은 id가 다른 묶음을 돌려주는 것을 확인했다.
 - 결정: 묶음은 `api/kept-atom-groups.ts`의 `keptAtomGroups`가 키별로 페이지 수명 동안 강하게 쥔다. 묶음 안의 `state`가 이미 keepAlive라 수명이 같다. 열어 본 세션 수만큼만 남는다.
 - 버린 안: 훅에서 `useMemo`로 묶음을 쥐기. 마운트된 동안은 막지만, 다시 마운트할 때 새 keepAlive `state`가 생겨 앞의 것이 registry에 남는다. 묶음을 Atom 하나씩의 family로 쪼개기. Effect 방식에 더 맞지만 두 훅과 테스트의 모양이 바뀌고, 쥐는 곳이 registry와 React 훅에 흩어진다.
+
+## 기본으로 thinking하는 Anthropic 모델에도 추론 요약을 요청한다 (2026-10-29)
+
+- 증상: Goal 실행 중 "추론 중"을 펼쳐도 내용이 비어 있었다.
+- 근거: 오늘 run 로그에서 `claude-opus-5-5` run(16:55)은 추론 글자가 있었고, 그 뒤 `claude-opus-5` run들은 추론 블록마다 `REASONING_MESSAGE_CONTENT`가 하나뿐이고 `delta`가 빈 문자열이었다.
+- 원인: 2026-10-13 결정은 thinking을 끌 수 없는 Opus 5.5·Fable 5.1에만 `display: "summarized"`를 보냈다. Opus 5는 `thinking`을 보내지 않아도 adaptive thinking으로 돌고, 표시 기본값이 `"omitted"`라 빈 thinking 블록이 온다.
+- 결정: 요청이 말하지 않아도 thinking하는 모델(Opus 5, Sonnet 5·5.5, Haiku 5.5, Fable 5)에는 `thinking: { type: "adaptive", display: "summarized" }`를 보낸다. 이 모델들은 이미 adaptive로 돌기 때문에 바뀌는 것은 보이는 내용뿐이다. `block_binding`과 그 베타는 계속 Opus 5.5·Fable 5.1에만 보낸다.
+- 그대로 둔 것: Opus 4.8·4.7은 `thinking`을 보내지 않으면 thinking하지 않는다. adaptive를 보내면 동작과 비용이 바뀌므로 보내지 않는다.
