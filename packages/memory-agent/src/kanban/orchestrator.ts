@@ -62,6 +62,7 @@ import { loopStopped } from "../runtime/loop-health.ts";
 import { BoardHealth, type BoardRef } from "./board-health.ts";
 import { GoalMerges } from "./merge-queue.ts";
 import { overlappingBoundaries, ProjectScheduler } from "./scheduler.ts";
+import { CardWorkspaceJanitor } from "./workspace-janitor.ts";
 
 /**
  * The Goal orchestrator loop of a kanban board (docs/kanban-orchestration.md "오케스트레이터
@@ -163,6 +164,7 @@ const make = (options: KanbanOrchestratorOptions) =>
     const merges = yield* GoalMerges;
     const schedules = yield* GoalSchedules;
     const health = yield* BoardHealth;
+    const janitor = yield* CardWorkspaceJanitor;
     const pollInterval = Duration.fromInputUnsafe(options.pollInterval ?? Duration.seconds(5));
     const backoff = Duration.fromInputUnsafe(options.backoff ?? Duration.minutes(2));
     const loops = yield* FiberMap.make<string>();
@@ -880,6 +882,7 @@ const make = (options: KanbanOrchestratorOptions) =>
         yield* decisions.closeSuperseded(stored.sessionId);
         yield* scheduler.forget(goalInstanceId);
         yield* scheduler.clearNotices(goalInstanceId);
+        yield* janitor.settleGoal(stored);
         return "stopped" as const;
       }
       const before = yield* workflows.get(stored.sessionId);
@@ -887,6 +890,8 @@ const make = (options: KanbanOrchestratorOptions) =>
         // A closed Plan runs no card again: its running cards stop, its board stops and its
         // people's waits close with the cards.
         yield* halt(stored, before.plan.steps);
+        // Not in `halt`: a conversation being deleted halts its boards too and keeps the disk.
+        yield* janitor.settleGoal(stored);
         return "stopped" as const;
       }
       const goalVersion = before.goal?.version ?? stored.goalVersion;

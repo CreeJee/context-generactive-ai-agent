@@ -3207,3 +3207,21 @@
 - 0.0.17 행은 마이그레이션(`humanDecisionFactsMigration` + `migrateHumanDecisionRows`)이 옮긴다. payload의 `kind`와 `createdAt`을 `seq` 1 행과 `created_at`으로 옮기고 payload를 새 형태로 다시 encode한다. 답한 요청과 닫힌 요청도 옮긴다. 이력이 같은 decoder로 읽혀야 하기 때문이다. decode하지 못하는 행은 그대로 두고 개수만 경고한다. 앱은 이미 그런 행을 건너뛴다.
 - `DecisionKind`와 payload Schema는 `kanban/human-decision-schema.ts`로 옮겼다. `db/database.ts`가 마이그레이션을 import하고 worker bundle도 `db/database.ts`를 import하므로, 마이그레이션이 결정 서비스 전체를 끌어오지 않게 하려는 것이다.
 - 7단계 C 뒤 전체 suite에서 실패 3개(native search `startup-timeout` 2개, `scheduler.test` import 5초 timeout 1개)가 있었다. 셋 다 `--maxWorkers=2`로 따로 돌리면 통과해 부하에 따른 flaky로 보았다.
+
+## Workflow 정상화 9단계: 끝난 Goal의 카드 worktree를 정리한다 (2026-10-29)
+
+- 설계의 F(G7)를 구현했다. `CardWorkspaceJanitor`(`kanban/workspace-janitor.ts`)가 정리를 맡고, git 명령은 `CardWorktrees`를 통해서만 부른다. 모든 카드 worktree는 `settle`로 지워서, 커밋하지 않은 작업은 카드 브랜치에 snapshot으로 남는다. janitor는 브랜치를 지우지 않는다.
+- Goal이 "끝났다"는 것은 보드가 멈췄고 Plan이 닫혔거나 대화가 다른 Goal instance로 넘어갔다는 뜻이다. 설계의 W2는 Goal이 활성이 아니면 delivery 뒤에 정리했는데, `stopSession`도 보드를 멈추므로 대화를 지울 때 실행 중이던 카드의 폴더가 지워진다. 대화를 지울 때 디스크를 그대로 둔다는 결정(2026-10-25)과 어긋나서, delivery 뒤 정리(`settleDelivered`)와 시작 sweep도 끝난 Goal에만 적용한다.
+- `settleGoal`은 오케스트레이터 `tick`의 두 분기(닫힌 Plan, 새 Goal로 넘어감)에서 부른다. 폴더가 남은 카드는 상태와 상관없이 `Cancelled`로 정리한다. 새 Goal로 넘어간 뒤에는 이전 Plan의 카드 상태가 없고, 브랜치를 남기면 작업을 잃지 않는다. `Done` 카드의 폴더는 통합 때 이미 지워진다.
+- `settleDelivered`는 카드를 정리한 뒤 Goal 폴더가 비었으면 그것도 지운다. 그래서 attempt가 쥐고 있던 카드의 부모 폴더가 다음 시작을 기다리지 않는다.
+- W3: `Done`인데 커밋하지 않은 변경이 남은 worktree는 `WorktreeDirty`로 실패하지 않고, snapshot 커밋 뒤 폴더를 지우고 카드 브랜치를 남긴다(`branchKept: true`).
+- `CardWorktrees`에 더한 메서드는 설계의 `registered(repository)`, `removeGoalCheckout(goal)` 대신 `goalFolders`, `goalFolder(goalInstanceId)`, `removeGoalFolder(goal)`, `staleWorktrees(projectRoot)`, `prune(projectRoot)`이다. janitor는 Goal id와 project root만 알고, worktree 위치와 저장소 경로는 git 구현이 계속 쥔다. 실패 `operation`에 `list`, `remove_goal_folder`, `prune`을 더했다.
+- `.goal` checkout은 카드 lease처럼 메모리 표시를 둔다. Plan이 닫히거나 새 Goal로 넘어갈 때 Goal-level check가 그 checkout에서 돌고 있을 수 있어서, `removeGoalFolder`는 check가 쥔 checkout을 지우지 않고 폴더도 남긴다. 그 checkout은 scope가 닫힐 때 지워진다.
+- 빈 Goal 폴더 지우기: Node의 `fs.rm`은 빈 디렉터리도 `recursive` 없이는 지우지 못한다. 그래서 checkout 키 아래에서 디렉터리가 비었는지 읽고, 비었을 때만 지운다.
+- 시작 sweep은 janitor layer가 만들어질 때 돈다. layer는 card queue worker와 오케스트레이터 아래에 있어서, 어떤 카드도 시작하기 전이고 어떤 보드도 복구하기 전이다. 동작은 상수 `sweepMode = "report"`다. 판정은 다음과 같다.
+  - DB에 없는 Goal의 폴더는 건너뛴다(다른 설치본, 지운 대화).
+  - 멈췄지만 끝나지 않은 Goal(삭제가 막힌 대화)과 대화가 이미 다른 Goal로 넘어간 실행 중 보드는 건너뛴다. 뒤의 것은 그 보드의 다음 look이 정리한다.
+  - 실행 중인 보드에서는 pending attempt가 있거나 Plan에 끝나지 않은 카드로 남은 폴더를 쓰는 중으로 본다. `done` 카드는 `Done`, Plan에서 빠진 카드는 `Cancelled`로 정리 대상이다.
+  - 폴더가 없는 git worktree 등록은 DB에 있는 Goal과 실행 중인 보드의 저장소에서만 찾는다. 폴더까지 통째로 사라진 멈춘 Goal의 등록은 찾지 못한다. 폴더가 없으니 디스크를 쓰지 않는다.
+- 기록은 sweep span의 숫자 속성(`found`, `orphaned`, `cleaned`, `skipped`)과 판정마다 경고 로그(goalInstanceId, cardId, 판정)다. `delete` 판정은 테스트가 `sweep("delete")`로 확인한다.
+- 앞 단계(5·7·8)의 커밋이 `vp run memory-agent#typecheck`의 Effect 진단(lazy Effect 서비스 메서드, 테스트의 `JSON.stringify`, async 테스트, 테스트의 `Effect.provide(layer)`)을 남겼다. `vp check`는 이 진단을 돌리지 않는다. 9단계 전에 따로 고쳤다(`fcb7e8b7`).

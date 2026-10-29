@@ -54,6 +54,7 @@ import {
   type HumanDecisionRequest,
 } from "./human-decision.ts";
 import { KanbanOrchestrator } from "./orchestrator.ts";
+import { CardWorktrees } from "./worktree.ts";
 
 type Owner = Layer.Success<ReturnType<typeof kanbanBoardOwner>>;
 
@@ -911,6 +912,8 @@ it.live(
           expect(late).toMatchObject({ reason: "request_closed" });
 
           // A new Goal takes over the session: the loop stops and closes c's wait.
+          const worktrees = yield* CardWorktrees;
+          expect((yield* worktrees.goalFolder(board.goalInstanceId)).cardIds).toContain("b");
           yield* switchGoalInstance(board.sessionId);
           yield* (yield* KanbanOrchestrator).poke(board.goalInstanceId);
           const c = yield* eventually(
@@ -919,6 +922,14 @@ it.live(
           );
           expect(c.state).toEqual(DecisionState.Closed({ reason: "goal_replaced" }));
           expect(yield* decisions.inbox(board.projectId)).toEqual([]);
+          // The replaced Goal's worktrees go; b's work stays on its branch.
+          yield* eventually(
+            worktrees.goalFolder(board.goalInstanceId),
+            (folder) => folder.cardIds.length === 0,
+          );
+          expect(
+            yield* git(fixture.project, "branch", "--list", `ctx/card/${board.goalInstanceId}/b`),
+          ).not.toBe("");
         }),
       );
     }).pipe(withNode),
@@ -964,6 +975,17 @@ it.live(
           );
           const state = yield* workflows.get(board.sessionId);
           expect(state.plan?.steps.map((step) => step.status)).toEqual(["blocked", "blocked"]);
+          // The running card's worktree goes once its delivery ends, and the Goal's folder with it;
+          // its work stays on its branch.
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          yield* eventually(
+            fs.exists(path.join(fixture.worktrees, board.goalInstanceId)),
+            (exists) => !exists,
+          );
+          expect(
+            yield* git(fixture.project, "branch", "--list", `ctx/card/${board.goalInstanceId}/a`),
+          ).not.toBe("");
         }),
       );
     }).pipe(withNode),
@@ -996,12 +1018,18 @@ it.live(
           // A deleted conversation's records go right after this; nothing may still run then.
           yield* (yield* KanbanOrchestrator).stopSession(board.sessionId);
           expect(yield* Deferred.isDone(stopped)).toBe(true);
+          const attempts = yield* CardAttempts;
           expect(
-            Option.exists(
-              yield* (yield* CardAttempts).goal(board.goalInstanceId),
-              (goal) => goal.active,
-            ),
+            Option.exists(yield* attempts.goal(board.goalInstanceId), (goal) => goal.active),
           ).toBe(false);
+          // It keeps what is on disk, also once the stopped card's delivery ended.
+          yield* eventually(
+            attempts.attempt({ goalInstanceId: board.goalInstanceId, cardId: "a", attemptNo: 1 }),
+            Option.exists((attempt) => attempt.outcome !== null),
+          );
+          expect((yield* (yield* CardWorktrees).goalFolder(board.goalInstanceId)).cardIds).toEqual([
+            "a",
+          ]);
         }),
       );
     }).pipe(withNode),
