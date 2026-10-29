@@ -3242,3 +3242,19 @@
   - DB의 칸반 Goal 하나는 멈췄고 폴더가 없다. 그 저장소에는 worktree 위치 아래 등록과 `ctx/card/*` 브랜치가 없다.
 - 지우기가 틀려도 잃는 것은 폴더와 설치한 의존성이다. sweep은 어떤 카드도 시작하기 전에 돌고, 커밋하지 않은 작업은 카드 브랜치에 snapshot으로 남기며 브랜치는 지우지 않는다.
 - `report`는 남긴다. 판정이 틀린 것을 보면 상수 하나로 되돌린다.
+
+## 가져오기 worker의 쓰기 잠금이 이벤트 루프를 막지 않게 한다 (2026-10-29)
+
+- 증상: 개발 앱에서 답변을 스트리밍하는 동안 "답변이 아직 진행 중이에요 / 다시 연결"이 자주 떴다. 백엔드 로그에는 `database is locked`, `Run log delivery failed`, `Bound run delivery failed (run_record_failed)`가 남았다.
+- 원인: 가져오기 worker는 같은 DB에 자기 연결을 열고 쓴다(2026-09-16 결정). 그 연결이 쓰기 잠금을 쥔 동안 메인 연결의 동기 `BEGIN IMMEDIATE`가 `busy_timeout`(5초)만큼 이벤트 루프를 멈췄고, 5초를 넘기면 실패했다.
+  - span으로 본 것: 앱 transaction 안의 SQL은 0–2ms인데 transaction은 1.5–5.2초였다. 5.2초에 끝난 7개는 오류였다. 모두 가져오기 회차(약 4분 30초, 노드 8,334개) 안이었다. DB를 3일 만에 열어 밀린 기록이 많았다.
+  - worker는 기록을 항목 200개씩 썼지만, 실제 DB에서 200개 묶음의 글자 수는 평균 253KB, 최대 2.4MB였다(1MB 넘는 묶음 24개). trigram 색인 비용은 글자 수를 따른다.
+- 고친 것:
+  - 메인 연결은 SQLite 안에서 오래 기다리지 않는다. `busy_timeout`을 20ms로 두고, `BEGIN IMMEDIATE`와 트랜잭션 밖의 statement가 잠금으로 실패하면 sleep한 뒤 다시 시도한다(10ms부터 늘려 최대 250ms 간격, 30초까지, jitter). 둘 다 실패할 때 바꾼 것이 없다. 트랜잭션 안의 statement와 여러 문장 스크립트는 다시 시도하지 않는다. `busy_timeout = 5000`은 열 때의 마이그레이션에만 쓴다.
+  - node:sqlite 오류는 결과 코드를 `errcode`에 싣는데 Effect의 `classifySqliteError`는 `code`·`errno`만 읽는다. 그래서 잠금 대기가 `UnknownError`였다. client가 `errcode`의 `SQLITE_BUSY`를 `LockTimeoutError`로 분류한다.
+  - worker는 조각을 항목 수 대신 글자 수로 자른다. `Sink.reduceWhile`로 항목을 담다가 256K에 닿으면 닫고, `Stream.transduce`로 흘려 조각마다 쓴다. 고정 개수 200은 뺐다. 항목 하나는 쪼개지 않는다. 항목마다 값을 바인딩한 한 행 INSERT라 조각 크기는 SQL 문장과 무관하다. Effect SQL의 `Statement.stream`은 읽은 행을 Stream으로 받는 쪽이고 스트리밍 쓰기는 없다. SQLite는 쓰는 쪽이 하나라, 쓰기를 흘려도 한 트랜잭션 안이면 그동안 잠금을 쥔다. 잠금 시간을 정하는 것은 트랜잭션 경계다.
+- 버린 안:
+  - 쓰기를 RPC로 메인 연결에 맡기기: 잠금 충돌은 없어지지만, 가져오기 CPU의 80%인 SQLite 쓰기(그중 71%가 FTS trigram 트리거)가 메인 스레드로 돌아온다. 2.4MB 조각이면 메인 스레드가 몇 초 멈춘다.
+  - connection pool: SQLite는 한 파일에 쓰는 쪽이 한 번에 하나이고, `DatabaseSync`는 동기 API라 메인 스레드의 연결을 늘려도 대기는 그대로 스레드를 막는다. pool이 돕는 것은 worker thread의 읽기 연결뿐이다.
+- 확인: `sql-client.test.ts`의 새 테스트는 다른 연결이 쓰기 잠금을 쥔 동안 statement와 transaction이 기다리고, 그동안 300ms sleep이 2초 안에 끝나며, 잠금이 풀리면 둘 다 쓰는지 본다. memory-agent 전체 테스트에서 3 파일(git worktree 5초 timeout, merge queue, native search `startup-timeout`)이 실패했고, `--maxWorkers=2`로 따로 돌리면 통과했다. 개발 서버가 같이 돌고 있었다.
+- 조각 하나가 실제로 잠금을 얼마나 쥐는지는 재지 못했다. worker는 span을 내보내지 않는다.

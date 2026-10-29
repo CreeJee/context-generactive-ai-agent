@@ -37,6 +37,7 @@
 - worker thread는 쉬는 동안 `unref` 상태여야 한다. 요청이 진행 중일 때만 `busy`가 in-flight 카운트로 `ref`하고, 카운트가 0이 되면 다시 `unref`한다.
 - RPC worker protocol은 `size: 1, concurrency: 4`이다. pass가 stream되는 동안에도 count 요청이 슬롯을 받아야 한다.
 - `BulkNodes.write`는 대화 조각 하나를 `sql.withTransaction` 하나로 쓴다. 실패하면 `BulkWriteFailed`가 되고 그 조각은 아무것도 남지 않는다.
+- 조각은 항목 수가 아니라 글자 수로 자른다(`pass.ts`의 `writePiece`, `Sink.reduceWhile`). 항목을 담다가 글자 수가 256K(`writeChunkText`)에 닿으면 조각을 닫는다. 항목 하나는 쪼개지 않고, 항목마다 값을 바인딩한 한 행 INSERT로 쓰므로 조각 크기는 SQL 문장과 무관하다. trigram 색인 비용은 글자 수를 따르고, 그동안 worker가 쓰기 잠금을 쥐어 서버의 쓰기가 기다린다.
 - bulk 경로는 일부러 `Nodes.append`를 쓰지 않는다. `Nodes.append`는 현재 시각을 찍고 node마다 transaction을 연다. bulk 경로는 다른 도구가 기록한 시각(`created_at: at`)을 유지한다. node는 불변 evidence이고 live node와 같은 구조 edge를 받는다.
 - 중간부터 이어 쓸 때(다음 pass, 긴 transcript의 다음 조각) turn 상태(previous, user, 열린 turn의 assistant)는 배치가 아니라 session의 DB 행에서 가져와야 한다.
 - 중복 방지 키는 `imported_nodes(source, external_id)`이다. 이미 node가 된 줄은 다시 쓰지 않고 `repeated`로만 센다. transcript를 다시 읽어도 비용이 없어야 한다.
