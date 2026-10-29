@@ -2506,6 +2506,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             windowKnown: window.known,
           }),
           workflow,
+          display: yield* workflows.display(sessionId, workflow),
           execution: yield* execution.get(sessionId),
           providerRetry:
             (yield* providerRetries

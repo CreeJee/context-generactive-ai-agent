@@ -64,8 +64,14 @@ const verificationStatusLabels: Record<
   blocked: "외부 요인으로 막힘",
 };
 
+/** What each `display` note says. */
+const displayTexts: Readonly<Record<NonNullable<SessionRunState["display"]>, string>> = {
+  card_reclassifying: "Goal이 바뀌어 카드를 다시 분류하는 중이에요.",
+};
+
 export function WorkflowArtifactPanel({
   state,
+  display,
   execution,
   providerRetry,
   actions,
@@ -81,6 +87,7 @@ export function WorkflowArtifactPanel({
   boardOpen = false,
 }: {
   readonly state: WorkflowState | null;
+  readonly display?: SessionRunState["display"];
   readonly execution?: SessionRunState["execution"] | null;
   readonly providerRetry?: SessionRunState["providerRetry"];
   readonly actions: SessionRunState["actions"] | null;
@@ -195,6 +202,11 @@ export function WorkflowArtifactPanel({
           : planStatusLabels[plan.status]}
       </AlertTitle>
       <AlertDescription>
+        {isTruthy(display) && (
+          <p className="mb-3" role="status">
+            {displayTexts[display]}
+          </p>
+        )}
         {WorkflowExecutionState.$is("blocked")(execution) && (
           <p className="mb-3 whitespace-pre-wrap" role="status">
             자동 진행 중단: {execution.detail}

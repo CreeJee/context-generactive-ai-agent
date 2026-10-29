@@ -567,13 +567,43 @@ testAgent()("new Goal transition across reopening", (it) => {
         expect(
           yield* sqlGet("SELECT status FROM chat_runs WHERE run_id = ?", f.invoking),
         ).not.toEqual({ status: "completed" });
+        // The startup check settles it before any run asks again.
+        expect(yield* rows("requests", f.session)).toMatchObject([
+          { status: "rejected", reason: "run_outcome_uncertain" },
+        ]);
         const result = yield* workflows.settleNewGoalRequest(f.session, f.invoking);
         expect(result).toEqual(NewGoalSettlement.rejected({ reason: "run_outcome_uncertain" }));
         expect(yield* workflows.settleNewGoalRequest(f.session, f.invoking)).toEqual(result);
         expect(yield* identity(f.session)).toBe(f.old);
         expect(yield* rows("goalInstances", f.session)).toHaveLength(1);
         expect(yield* rows("revisions", f.session)).toEqual(before);
+        // The settled request no longer holds the session: the next run may ask again.
+        const next = `${f.session}:next`;
+        yield* env.use(bindRun(f.session, next));
+        yield* startRun(f.session, next, "running");
+        expect(yield* workflows.requestNewGoal(f.session, next, transition(f.old))).toEqual({
+          status: "accepted",
+          runId: next,
+        });
       }),
+  );
+
+  it.effect("a kanban Goal edit keeps the phase while the cards are sorted again", () =>
+    Effect.gen(function* () {
+      const env = yield* TestEnv;
+      const { workflows, session, old } = yield* env.use(withHistory());
+      yield* workflows.setPhase(session, "execute");
+      yield* sqlRun(
+        `INSERT INTO kanban_goals (goal_instance_id, session_id, project_id, project_root, mode,
+           goal_version, status, created_at, updated_at)
+         VALUES (?, ?, 'p1', '/tmp/p1', 'sequential', 1, 'active', 1, 1)`,
+        old,
+        session,
+      );
+      const edited = yield* workflows.updateGoal(session, { ...goal, statement: "revised" });
+      expect(edited.phase).toBe("execute");
+      expect(yield* workflows.display(session, edited)).toBe("card_reclassifying");
+    }),
   );
 });
 

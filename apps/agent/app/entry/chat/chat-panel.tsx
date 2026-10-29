@@ -928,6 +928,7 @@ function ChatPanel({
         ))}
         <WorkflowArtifactPanel
           state={run.workflow}
+          display={run.display}
           execution={run.execution}
           providerRetry={run.providerRetry}
           actions={run.actions}

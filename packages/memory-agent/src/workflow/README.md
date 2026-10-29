@@ -50,6 +50,7 @@
 - Goal 상태 전이는 `goal-transitions.ts`의 `goalTransitions` 한 곳에서 정한다. 사건마다 아홉 상태를 모두 적으므로 빠진 쌍은 타입 오류다. `Workflows` 메서드와 `evaluateWorkflowAction`은 저장된 상태를 `Standing`으로 읽어 전이를 부르고, 전이가 정한 phase와 Goal·Plan status를 저장한다. 산출물 내용(버전, 근거, 검증)은 메서드가 만든다.
 - 전이는 0.0.17이 남긴 모순 상태(R1 Goal·Plan 완료인데 phase가 execute, R2 현재 버전 Plan 완료인데 Goal이 열림)를 만들지 않는다. Goal과 Plan을 함께 완료하면 phase도 `completed`가 되고, Plan만 완료하는 기록은 `goal_completion_required`로 거부된다. 모순 상태를 읽으면 `repair`가 고친 상태에서 전이한다. `goal-transitions.test.ts`가 새 세션에서 모든 사건을 보내 이것을 확인하고, 그 결과를 `docs/goal-transitions.md`로 만든다.
 - 완료되거나 실패한 Goal은 progress 기록으로 다시 열리지 않는다(`goal_terminal`). 새 Goal 버전(`updateGoal`)이나 새 Goal만 연다. 사용자가 멈춘 뒤 끝난 run은 상태를 바꾸지 않는다.
+- 칸반 Goal을 고치면 phase는 그대로이고 Plan만 이전 버전이 된다. `Workflows.display`가 그 동안 상태 응답에 `card_reclassifying`을 싣는다. 전이는 화면 문구를 정하지 않는다.
 - `completed` phase는 서버가 소유하는 종료 phase이므로 사용자 이동 대상이 될 수 없다. execute 외의 phase 이동은 산출물을 승인하거나 바꾸지 않는다.
 - execute phase 진입은 `plan.goalVersion === goal.version`이고 plan status가 `ready` 또는 `executing`일 때만 허용된다. lease가 다른 소유자면 `session_in_use`, run이 진행 중이면 phase 요청과 resume이 `run_in_progress`로 거부된다.
 - 실행 가능 조건: phase가 execute 또는 verify이고, goal status가 active, plan status가 executing이며, plan의 goalVersion이 goal의 version과 같아야 한다.

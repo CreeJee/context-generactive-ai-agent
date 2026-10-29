@@ -228,6 +228,9 @@ export const WorkflowState = Schema.Struct({
 });
 export type WorkflowState = typeof WorkflowState.Type;
 
+/** A note the page shows beside the workflow state; see `Workflows.display`. */
+export type WorkflowDisplay = "card_reclassifying";
+
 export const UpdateGoal = Schema.Struct({
   statement: Schema.String,
   outcomes: Schema.Array(Schema.String),
@@ -829,6 +832,20 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
       /** Repairs stale persisted phases before a new turn or an idle status response. */
       reconcile: (sessionId: string) =>
         transacted(Effect.flatMap(get(sessionId), (current) => reconciled(sessionId, current))),
+
+      /**
+       * What the page says beside `state` that the state alone does not show: a kanban Goal edit
+       * keeps the phase while the orchestrator sorts the cards again for the new Goal version.
+       */
+      display: (
+        sessionId: string,
+        state: WorkflowState,
+      ): Effect.Effect<WorkflowDisplay | null, WorkflowStorageError> =>
+        goalStateOf(standingOf(state))._tag === "GoalChanged"
+          ? Effect.map(persisted(kanbanBoard(sessionId)), (kanban) =>
+              kanban ? "card_reclassifying" : null,
+            )
+          : Effect.succeed(null),
 
       /**
        * Repairs every session whose stored Goal and Plan no transition makes, and returns their ids.

@@ -3189,3 +3189,10 @@
 - 화면은 `stopped{state_reconciled}`인 세션에 "앱이 상태를 고쳤어요" 알림을 마지막 run의 결과보다 먼저 보인다. 사용자 turn이 시작되면 실행 상태를 `idle`로 지운다. R1 세션처럼 Goal이 끝나 `start`가 실행 상태를 쓰지 않는 세션에서도 알림이 남지 않게 하려는 것이다. 자동 continuation은 지우지 않는다.
 - 결과: 0.0.17 업그레이드 테스트의 기대 실패 2개가 통과로 뒤집혔다. 재시작 뒤의 `accepted` 요청은 `rejected{run_outcome_uncertain}`이고, R1·R2 세션은 각각 `completed`·`verify`로 고쳐져 `stopped{state_reconciled}`다.
 - 0.0.17의 `kind` 실행 상태를 읽는 provider retry 테스트는 Goal 없는 세션의 `ready` 실행을 썼다. 시작 검사가 그 실행을 멈추므로, fixture에 실행 중인 Goal과 Plan을 더했다.
+
+## Workflow 정상화 7단계 C: 칸반 Goal 수정 표시와 새 Goal 요청 경로 (2026-10-29)
+
+- 상태 응답(`SessionRunState`)에 `display`를 더했다. 값은 `card_reclassifying`이나 null이다. Goal 상태가 `GoalChanged`이고 세션의 Goal이 활성 칸반이면 `Workflows.display`가 `card_reclassifying`을 돌려주고, 패널은 "Goal이 바뀌어 카드를 다시 분류하는 중이에요."를 보인다.
+- 설계의 `display`에 있던 `state_reconciled`는 넣지 않았다. 같은 문구를 실행 알림(B)이 이미 보인다. 두 곳에 보이면 같은 말을 두 번 한다.
+- 도구 결과의 새 Goal 거절 reason을 위한 전용 문구는 만들지 않았다. 앱은 도구 결과를 일반 카드로 보이고, 모델이 거절 이유를 사용자에게 전한다. 도구 하나를 위한 렌더러는 이 단계의 목표(Goal이 끝까지 넘어감) 밖이다.
+- G1의 경로 확인: 재시작 뒤 시작 검사가 `accepted` 요청을 `rejected{run_outcome_uncertain}`으로 정산하고, 그 세션의 다음 run이 새 Goal을 다시 요청하면 받아들여진다. 전에는 정산되지 않은 요청이 남아 다음 요청이 `transition_pending`으로 막혔다. 칸반 Goal을 고치면 phase가 `execute`로 남고 `display`가 `card_reclassifying`이다. 도구 호출 때의 거절과 이미 `accepted`인 요청의 적용은 기존 테스트가 덮어 더하지 않았다.
