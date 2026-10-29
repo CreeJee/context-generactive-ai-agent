@@ -3266,3 +3266,10 @@
   - 읽기 전용 연결 분리(보류): 읽기 전용 연결은 쓰기 잠금을 잡지 않아 이벤트 루프를 막지 않고, 기다리는 쓰기 뒤에 읽기가 줄 서는 것을 푼다. 하지만 로그에 남은 실패는 쓰기였다. `SqlClient`는 트랜잭션 밖 statement를 acquirer 하나로 받아 읽기와 쓰기를 가르지 않으므로, 나누려면 읽기 서비스를 따로 두고 호출부를 옮겨야 한다. 쓰기를 읽기 서비스로 보내도 타입이 막지 못한다. 쓰기 대기가 짧아진 뒤에도 읽기가 막히면 다시 본다.
 - 확인: `sql-client.test.ts`의 새 테스트는 다른 연결이 쓰기 잠금을 쥔 동안 statement와 transaction이 기다리고, 그동안 300ms sleep이 2초 안에 끝나며, 잠금이 풀리면 둘 다 쓰는지 본다. memory-agent 전체 테스트에서 3 파일(git worktree 5초 timeout, merge queue, native search `startup-timeout`)이 실패했고, `--maxWorkers=2`로 따로 돌리면 통과했다. 개발 서버가 같이 돌고 있었다.
 - 조각 하나가 실제로 잠금을 얼마나 쥐는지는 재지 못했다. worker는 span을 내보내지 않는다.
+
+## 읽기 전용 워크플로 단계에 기억 도구를 더 준다 (2026-10-29)
+
+- 사용자 요청: 읽기 전용 단계에도 기억·근거 도구를 연다. 지금까지 Plan·Verify·completed 단계의 기억 도구는 `find_memory`·`read_evidence`·`trace_evidence`뿐이었다. 여기에 `read_tool_result`와 `use_promoted_memory`를 더한다.
+- `read_tool_result`는 읽기 도구다(`builtinToolEffects`). compaction이 줄인 도구 결과에 "full result: read_tool_result ID …"를 적는데, 읽기 전용 단계에는 이 도구가 없어서 원문을 읽을 수 없었다.
+- `use_promoted_memory`는 답에 쓴 promoted memory를 기록할 뿐 프로젝트 파일을 바꾸지 않는다. 없으면 이 단계에서 `find_memory`로 찾아 쓴 기억의 사용이 남지 않는다.
+- `promote_memory_candidate`는 계속 주지 않는다. 사용자가 고른 문구를 프로젝트 기억으로 저장하는 쓰기다.

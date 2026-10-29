@@ -375,6 +375,10 @@ const workflowReadToolNames = HashSet.fromIterable([
   "find_memory",
   "read_evidence",
   "trace_evidence",
+  // Compaction points a shortened result at this tool, so a read-only phase needs it too.
+  "read_tool_result",
+  // Records which promoted memories the answer used; it changes no project file.
+  "use_promoted_memory",
   "list_files",
   "search_files",
   "read_file",
