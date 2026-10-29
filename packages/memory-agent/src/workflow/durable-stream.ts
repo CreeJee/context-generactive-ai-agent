@@ -23,6 +23,12 @@ const closedKey = `${namespace}closed`;
  * so a write that sends no signal still reaches it.
  */
 const signalWait = "1 second";
+/**
+ * How long a woken reader waits before it reads. A model writes many small events close together,
+ * and each page a reader sends is one update of the page showing the answer; a frame's worth of
+ * events comes in one.
+ */
+const gatherWindow = "16 millis";
 
 /**
  * Wakes the readers of open run logs: a log sends its run id once an append or its close has
@@ -152,7 +158,8 @@ export const sqliteRunLog = Effect.fn("sqliteRunLog")(function* (input: {
     );
   /**
    * The page after `after`. At the end of an open log it then waits until this run writes or
-   * `signalWait` passes. It subscribes before reading, so a write right after the read still wakes it.
+   * `signalWait` passes, and after a write `gatherWindow` more, so what follows comes in one page.
+   * It subscribes before reading, so a write right after the read still wakes it.
    */
   const nextPage = (after: number) =>
     Effect.scoped(
@@ -162,6 +169,7 @@ export const sqliteRunLog = Effect.fn("sqliteRunLog")(function* (input: {
         yield* Effect.when(
           PubSub.take(writes).pipe(
             Effect.repeat({ until: (written) => written === runId }),
+            Effect.andThen(Effect.sleep(gatherWindow)),
             Effect.timeoutOption(signalWait),
           ),
           Effect.succeed(current.rows.length === 0 && !current.closed),
