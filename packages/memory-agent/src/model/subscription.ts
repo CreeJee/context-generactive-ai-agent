@@ -12,6 +12,7 @@ import {
   Stream,
 } from "effect";
 import { AiError, LanguageModel, type Prompt, type Response, Tool } from "effect/ai";
+import { reasonTagOf, tagOf } from "../runtime/failure-tag.ts";
 import { sha256 } from "../runtime/synchronous-crypto.ts";
 import {
   NormalizedStreamEvent,
@@ -290,12 +291,21 @@ const streamFailure = (
     Match.exhaustive,
   );
 
-/** The failure's tag, which is all the error log says about it. */
-const streamFailureCode = Match.typeTags<SubscriptionFailure, string>()({
-  SubscriptionStreamFailed: () => "SubscriptionStreamFailed",
-  ProviderFeatureRejectedError: () => "ProviderFeatureRejectedError",
-  ReasoningSummaryProtocolFailed: () => "ReasoningSummaryProtocolFailed",
-});
+/** The class of the status a provider rejected the request with, when that is the failure. */
+const rejectedStatusClass = (failure: SubscriptionFailure) =>
+  Predicate.isTagged(failure, "SubscriptionStreamFailed") &&
+  failure.reason._tag === "ProviderStatusRejected"
+    ? [failure.reason.statusClass]
+    : [];
+
+/**
+ * The failure's tag, its reason's, and a rejected status's class, such as
+ * `SubscriptionStreamFailed:ProviderStatusRejected:client_error`: all the error log says about it.
+ */
+const streamFailureCode = (failure: SubscriptionFailure) =>
+  [tagOf(failure), ...Option.toArray(reasonTagOf(failure)), ...rejectedStatusClass(failure)].join(
+    ":",
+  );
 
 /**
  * The provider's events for `body`. When Anthropic rejects the prompt-cache feature before any
