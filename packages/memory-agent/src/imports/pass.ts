@@ -32,6 +32,7 @@ import { TranscriptItem, type ImportSourceName, type TranscriptStart } from "./i
 import { Checkouts, type Placement } from "./checkouts.ts";
 import { readLinesFrom } from "./lines.ts";
 import { findTranscripts, importSources, type Transcript } from "./sources.ts";
+import { WriteTurns } from "./write-turns.ts";
 
 /** How long a conversation's title may be; the session list shows one line. */
 const titleLength = 60;
@@ -143,6 +144,7 @@ const make = (home: string) =>
     const projects = yield* Projects;
     const sessions = yield* Sessions;
     const bulk = yield* BulkNodes;
+    const turns = yield* WriteTurns;
     const config = yield* GlobalConfig;
     const redactor = yield* SecretRedactor;
     const canonicalPath = (path: string) =>
@@ -439,14 +441,16 @@ const make = (home: string) =>
           // The sink also ends once more on the stream's end, with nothing taken.
           Stream.filter((piece) => Chunk.isNonEmpty(piece.items)),
           Stream.mapEffect((piece) =>
-            bulk
-              .write({
-                source: transcript.source,
-                projectId: session.projectId,
-                sessionId,
-                items: Chunk.toReadonlyArray(piece.items),
-                interpret,
-              })
+            turns
+              .writing(
+                bulk.write({
+                  source: transcript.source,
+                  projectId: session.projectId,
+                  sessionId,
+                  items: Chunk.toReadonlyArray(piece.items),
+                  interpret,
+                }),
+              )
               .pipe(
                 // Lets other work in the worker (a count for settings) in between pieces.
                 Effect.tap(() => Effect.yieldNow),

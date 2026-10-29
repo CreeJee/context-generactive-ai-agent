@@ -25,14 +25,14 @@ const sqlError = (cause: unknown) =>
 const beginTransaction = "BEGIN IMMEDIATE";
 
 /**
- * How long SQLite itself waits for another connection's lock. Its wait blocks the thread, so it
- * only covers brief locks; a longer one is waited out between attempts (`lockRetry`).
+ * Another connection's lock is waited out between attempts, never inside SQLite, whose wait
+ * (`busy_timeout`, 0 here) blocks the thread. A failed attempt only looks at the lock, so it asks
+ * often: at most every 30ms with jitter, for up to half a minute. The import worker's long writes
+ * take their turn on this connection instead (`imports/write-turns.ts`); what is left to wait out
+ * here are its brief ones.
  */
-const lockWaitMillis = 20;
-
-/** Soon at first, then every quarter second, for up to half a minute. */
 const lockRetry = Schedule.max([
-  Schedule.min([Schedule.exponential("10 millis"), Schedule.spaced("250 millis")]),
+  Schedule.min([Schedule.exponential("5 millis"), Schedule.spaced("25 millis")]),
   Schedule.during("30 seconds"),
 ]).pipe(Schedule.jittered);
 
@@ -51,10 +51,7 @@ export const sqlClientOver = Effect.fn("sqlClientOver")(function* (
   sqlite: DatabaseSync,
   semaphore: Semaphore.Semaphore,
 ) {
-  yield* Effect.try({
-    try: () => sqlite.exec(`PRAGMA busy_timeout = ${lockWaitMillis}`),
-    catch: sqlError,
-  });
+  yield* Effect.try({ try: () => sqlite.exec("PRAGMA busy_timeout = 0"), catch: sqlError });
   const waitingForLock = <A>(effect: Effect.Effect<A, SqlError.SqlError>) =>
     Effect.retry(effect, {
       schedule: lockRetry,

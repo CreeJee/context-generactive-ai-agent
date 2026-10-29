@@ -3250,11 +3250,18 @@
   - span으로 본 것: 앱 transaction 안의 SQL은 0–2ms인데 transaction은 1.5–5.2초였다. 5.2초에 끝난 7개는 오류였다. 모두 가져오기 회차(약 4분 30초, 노드 8,334개) 안이었다. DB를 3일 만에 열어 밀린 기록이 많았다.
   - worker는 기록을 항목 200개씩 썼지만, 실제 DB에서 200개 묶음의 글자 수는 평균 253KB, 최대 2.4MB였다(1MB 넘는 묶음 24개). trigram 색인 비용은 글자 수를 따른다.
 - 고친 것:
-  - 메인 연결은 SQLite 안에서 오래 기다리지 않는다. `busy_timeout`을 20ms로 두고, `BEGIN IMMEDIATE`와 트랜잭션 밖의 statement가 잠금으로 실패하면 sleep한 뒤 다시 시도한다(10ms부터 늘려 최대 250ms 간격, 30초까지, jitter). 둘 다 실패할 때 바꾼 것이 없다. 트랜잭션 안의 statement와 여러 문장 스크립트는 다시 시도하지 않는다. `busy_timeout = 5000`은 열 때의 마이그레이션에만 쓴다.
+  - 메인 연결은 SQLite 안에서 기다리지 않는다(`busy_timeout = 0`). `BEGIN IMMEDIATE`와 트랜잭션 밖의 statement가 잠금으로 실패하면 sleep한 뒤 다시 시도한다(5ms부터 늘려 최대 25ms 간격, jitter로 30ms 안쪽, 30초까지). 실패한 시도는 잠금만 보고 끝나서 자주 물어도 스레드를 거의 쓰지 않는다. 둘 다 실패할 때 바꾼 것이 없다. 트랜잭션 안의 statement와 여러 문장 스크립트는 다시 시도하지 않는다. `busy_timeout = 5000`은 열 때의 마이그레이션에만 쓴다.
   - node:sqlite 오류는 결과 코드를 `errcode`에 싣는데 Effect의 `classifySqliteError`는 `code`·`errno`만 읽는다. 그래서 잠금 대기가 `UnknownError`였다. client가 `errcode`의 `SQLITE_BUSY`를 `LockTimeoutError`로 분류한다.
   - worker는 조각을 항목 수 대신 글자 수로 자른다. `Sink.reduceWhile`로 항목을 담다가 256K에 닿으면 닫고, `Stream.transduce`로 흘려 조각마다 쓴다. 고정 개수 200은 뺐다. 항목 하나는 쪼개지 않는다. 항목마다 값을 바인딩한 한 행 INSERT라 조각 크기는 SQL 문장과 무관하다. Effect SQL의 `Statement.stream`은 읽은 행을 Stream으로 받는 쪽이고 스트리밍 쓰기는 없다. SQLite는 쓰는 쪽이 하나라, 쓰기를 흘려도 한 트랜잭션 안이면 그동안 잠금을 쥔다. 잠금 시간을 정하는 것은 트랜잭션 경계다.
+  - worker는 조각을 서버가 준 차례 안에서만 쓴다(`imports/write-turns.ts`, RPC `WriteTurns`·`Turn`). 두 연결 사이에는 대기열이 없다. SQLite 잠금은 줄을 세우지 않고, 기다리는 쪽은 다시 묻기만 하니 순서도 우선순위도 없다. 처음 안은 조각 사이에 `Effect.yieldNow`만 두었다. 그러면 긴 대화 하나를 쓰는 동안 다음 조각이 바로 잠금을 다시 잡아, 메인의 쓰기가 그 틈에 걸릴 일이 드물었다. 기다리는 쓰기는 연결 임대를 쥐고 있어(`makeSqliteAcquirers`는 statement·트랜잭션 scope 동안 permit을 쥔다) 메인의 읽기도 그 뒤에 줄을 섰다.
+    - 그래서 조각은 먼저 서버에 차례를 청한다. 서버는 자기 연결을 `sql.reserve`로 쥐고 `Turn`을 부르고, worker는 조각을 다 쓴 뒤에 `Turn`을 돌려준다. 서버의 statement와 조각이 같은 semaphore에서 FIFO로 줄을 서므로 두 연결이 잠금을 두고 서로 기다리지 않는다. 서버의 쓰기는 길어야 앞선 조각 하나만큼 기다린다. 조각을 쓰는 동안 서버의 읽기도 기다린다.
+    - 가져오기는 INSERT만 해서(`nodes`는 불변) 서버의 쓰기와 의미상 충돌하지 않는다. 그래서 어느 조각 사이에서 양보해도 결과가 같고, 우선순위 없이 FIFO면 된다. 조각마다 `imported_nodes` 표시가 같은 트랜잭션에 들고, 다음 조각은 이어 쓸 자리를 세션에서 다시 읽는다.
+    - 30초 안에 차례를 받지 못한 조각은 그냥 쓴다. 그때는 SQLite 잠금이 두 연결을 가르고 순서만 잃는다. 대화마다 한 번인 cursor·제목·보관 같은 작은 쓰기는 차례 없이 쓰고 잠금이 겹치면 다시 시도한다.
+    - RPC 동시 요청 수를 4에서 8로 올렸다. pass 동안 `Run`과 `WriteTurns`가 둘을 계속 쥐고, 서버가 연결을 쥔 채 부르는 `Turn`은 빈자리를 기다리면 안 된다.
+    - 버린 안: 조각마다 정해진 시간 쉬기. 메인이 묻는 간격보다 길게 쉬면 메인이 틈을 잡지만, 메인 타이머가 늦으면 놓치고, 기다리는 쪽이 없어도 매번 쉰다.
 - 버린 안:
   - 쓰기를 RPC로 메인 연결에 맡기기: 잠금 충돌은 없어지지만, 가져오기 CPU의 80%인 SQLite 쓰기(그중 71%가 FTS trigram 트리거)가 메인 스레드로 돌아온다. 2.4MB 조각이면 메인 스레드가 몇 초 멈춘다.
   - connection pool: SQLite는 한 파일에 쓰는 쪽이 한 번에 하나이고, `DatabaseSync`는 동기 API라 메인 스레드의 연결을 늘려도 대기는 그대로 스레드를 막는다. pool이 돕는 것은 worker thread의 읽기 연결뿐이다.
+  - 읽기 전용 연결 분리(보류): 읽기 전용 연결은 쓰기 잠금을 잡지 않아 이벤트 루프를 막지 않고, 기다리는 쓰기 뒤에 읽기가 줄 서는 것을 푼다. 하지만 로그에 남은 실패는 쓰기였다. `SqlClient`는 트랜잭션 밖 statement를 acquirer 하나로 받아 읽기와 쓰기를 가르지 않으므로, 나누려면 읽기 서비스를 따로 두고 호출부를 옮겨야 한다. 쓰기를 읽기 서비스로 보내도 타입이 막지 못한다. 쓰기 대기가 짧아진 뒤에도 읽기가 막히면 다시 본다.
 - 확인: `sql-client.test.ts`의 새 테스트는 다른 연결이 쓰기 잠금을 쥔 동안 statement와 transaction이 기다리고, 그동안 300ms sleep이 2초 안에 끝나며, 잠금이 풀리면 둘 다 쓰는지 본다. memory-agent 전체 테스트에서 3 파일(git worktree 5초 timeout, merge queue, native search `startup-timeout`)이 실패했고, `--maxWorkers=2`로 따로 돌리면 통과했다. 개발 서버가 같이 돌고 있었다.
 - 조각 하나가 실제로 잠금을 얼마나 쥐는지는 재지 못했다. worker는 span을 내보내지 않는다.

@@ -2,14 +2,15 @@
 
 ## Overview
 
-`packages/memory-agent/src/imports`는 가져오기(import) 계층이다. 다른 코딩 에이전트(Claude Code `~/.claude/projects`, Codex CLI `~/.codex/sessions`)의 로컬 transcript를 읽어 이 앱의 메모리 노드·엣지로 옮긴다. 서버 쪽 `Importer` 서비스는 별도 worker thread(`worker.ts`)를 Effect RPC(`ImportRpcs`: `Count`, `Run`)로 띄우고 5분마다 pass를 돌린다. worker 안에서는 `TranscriptPass`가 transcript를 줄 단위로 읽는다. 소스별 리더(`readClaudeCodeLine`, `codexReader`)가 `TranscriptItem`을 만든다. `Checkouts`(git 기반 worktree→본 checkout 배치)가 프로젝트를 정하고, `BulkNodes`가 SQLite에 한꺼번에 기록한다. 진행 상황은 settings 화면(`apps/agent/app/routes/api/settings.imports.tsx`)과 report bundle이 `Importer`로 읽는다.
+`packages/memory-agent/src/imports`는 가져오기(import) 계층이다. 다른 코딩 에이전트(Claude Code `~/.claude/projects`, Codex CLI `~/.codex/sessions`)의 로컬 transcript를 읽어 이 앱의 메모리 노드·엣지로 옮긴다. 서버 쪽 `Importer` 서비스는 별도 worker thread(`worker.ts`)를 Effect RPC(`ImportRpcs`: `Count`, `Run`, `WriteTurns`, `Turn`)로 띄우고 5분마다 pass를 돌린다. worker 안에서는 `TranscriptPass`가 transcript를 줄 단위로 읽는다. 소스별 리더(`readClaudeCodeLine`, `codexReader`)가 `TranscriptItem`을 만든다. `Checkouts`(git 기반 worktree→본 checkout 배치)가 프로젝트를 정하고, `BulkNodes`가 SQLite에 한꺼번에 기록한다. 진행 상황은 settings 화면(`apps/agent/app/routes/api/settings.imports.tsx`)과 report bundle이 `Importer`로 읽는다.
 
 ## Interface
 
 - `Importer` — 다른 에이전트 transcript를 가져오고 계속 따라가는 Effect 서비스. `Importer.layer(watching = true, home?)`이고 settings.imports 라우트와 `collectReportBundle`이 사용한다
 - `ImportOverview` / `ImportActivity`(`running`·`finished`·`crashed` TaggedEnum) / `ImportFailure` / `UnplacedFolder` — settings에 보여 줄 가져오기 현황 타입(소스별 transcript·migrated·nodes·failed, unplaced 폴더, 실패 목록, unindexed, watch `LoopHealth`)
 - `ImportWorkerFailed` — worker 실패 TaggedError. reason은 `start`·`count`·`pass`·`lost`이고 `importer.ts`에서 re-export한다
-- `ImportRpcs` / `Count` / `Run` — 서버와 import worker 사이의 Effect RPC 그룹. `Count`는 소스별 transcript 수를, `Run`은 `PassEvent` stream을 돌려준다
+- `ImportRpcs` / `Count` / `Run` / `WriteTurns` / `Turn` — 서버와 import worker 사이의 Effect RPC 그룹. `Count`는 소스별 transcript 수를, `Run`은 `PassEvent` stream을 돌려준다. `WriteTurns`는 차례를 청하는 조각마다 이벤트 하나를 보내고, 서버는 각각 `Turn`으로 답한다
+- `WriteTurns`(`write-turns.ts`) — worker 쪽 쓰기 차례 대기열. `writing(effect)`는 서버가 차례를 줄 때까지 기다렸다 `effect`를 돌리고, `grant`는 가장 오래 기다린 조각을 쓰게 한 뒤 다 쓸 때까지 돌아오지 않는다. `asked`는 차례를 청한 조각마다 이벤트를 하나 낸다
 - `PassEvent` — `Progress`(checked·total·written·failed)와 `Finished`(+`counts`)로 된 TaggedUnion
 - `ImportWorkerSetup` — worker 시작 인자 스키마(`storageRoot`, `home`)
 - `TranscriptPass` — worker가 돌리는 transcript 1회 pass 서비스. `TranscriptPass.layer(home)`이고 `pass.ts` 본문은 바이트 상한 때문에 읽지 않았다
@@ -38,6 +39,7 @@
 - RPC worker protocol은 `size: 1, concurrency: 4`이다. pass가 stream되는 동안에도 count 요청이 슬롯을 받아야 한다.
 - `BulkNodes.write`는 대화 조각 하나를 `sql.withTransaction` 하나로 쓴다. 실패하면 `BulkWriteFailed`가 되고 그 조각은 아무것도 남지 않는다.
 - 조각은 항목 수가 아니라 글자 수로 자른다(`pass.ts`의 `writePiece`, `Sink.reduceWhile`). 항목을 담다가 글자 수가 256K(`writeChunkText`)에 닿으면 조각을 닫는다. 항목 하나는 쪼개지 않고, 항목마다 값을 바인딩한 한 행 INSERT로 쓰므로 조각 크기는 SQL 문장과 무관하다. trigram 색인 비용은 글자 수를 따르고, 그동안 worker가 쓰기 잠금을 쥐어 서버의 쓰기가 기다린다.
+- 조각은 서버가 준 차례 안에서만 쓴다(`WriteTurns`). 서버는 차례마다 자기 연결을 `sql.reserve`로 쥐고 `Turn`이 돌아올 때까지 놓지 않는다. 서버의 statement와 조각이 같은 semaphore에서 FIFO로 줄을 서므로, 두 연결은 SQLite 쓰기 잠금을 두고 서로 기다리지 않고 서버의 쓰기는 길어야 앞선 조각 하나만큼 기다린다. 30초 안에 차례를 받지 못한 조각은 그냥 쓴다. 그때는 SQLite 잠금이 두 연결을 가르고 순서만 잃는다. 대화마다 한 번인 cursor·제목·보관 같은 작은 쓰기는 차례 없이 쓰고, 잠금이 겹치면 client가 다시 시도한다.
 - bulk 경로는 일부러 `Nodes.append`를 쓰지 않는다. `Nodes.append`는 현재 시각을 찍고 node마다 transaction을 연다. bulk 경로는 다른 도구가 기록한 시각(`created_at: at`)을 유지한다. node는 불변 evidence이고 live node와 같은 구조 edge를 받는다.
 - 중간부터 이어 쓸 때(다음 pass, 긴 transcript의 다음 조각) turn 상태(previous, user, 열린 turn의 assistant)는 배치가 아니라 session의 DB 행에서 가져와야 한다.
 - 중복 방지 키는 `imported_nodes(source, external_id)`이다. 이미 node가 된 줄은 다시 쓰지 않고 `repeated`로만 센다. transcript를 다시 읽어도 비용이 없어야 한다.
