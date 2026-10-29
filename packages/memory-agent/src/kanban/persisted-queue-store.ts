@@ -16,6 +16,7 @@ import { Crypto, Option, Predicate, Schema, Scope } from "effect";
 import { PersistedQueue } from "effect/persistence";
 import { SqlClient, type SqlError } from "effect/sql";
 import { tagOfUnknown } from "../runtime/failure-tag.ts";
+import { failureTags } from "../runtime/logged-failures.ts";
 
 /**
  * `PersistedQueueStore` on the owner Database connection (`persisted_queue_items`), so card runs
@@ -185,7 +186,10 @@ const make = Effect.fnUntraced(function* (options?: {
       Effect.flatMap(update),
       // A finalizer cannot fail. The row stays claimed by this process and is released on restart.
       Effect.tapCause((cause) =>
-        Effect.logError("Failed to settle a persisted queue item", { sequence, cause }),
+        Effect.logError("Failed to settle a persisted queue item", {
+          sequence,
+          error: failureTags(cause),
+        }),
       ),
       Effect.orDie,
       Effect.asVoid,

@@ -80,7 +80,7 @@ export const withDetail: {
 );
 
 /** The failure's tag, or its class name when it has none (a plain `Error`, an SDK's error). */
-export const errorTag = (error: Error) => Option.getOrElse(tagOfUnknown(error), () => error.name);
+const errorTag = (error: Error) => Option.getOrElse(tagOfUnknown(error), () => error.name);
 
 const toolAuthored = /^([a-z_]+): ([\s\S]*)$/;
 const isToolFailed = Schema.is(ToolFailed);

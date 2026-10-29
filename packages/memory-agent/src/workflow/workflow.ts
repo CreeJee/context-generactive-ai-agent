@@ -55,6 +55,7 @@ import {
   type UserChangeRequest,
 } from "./board-edit.ts";
 import { acknowledgedRunSql, resolvedRunSql } from "./run-bindings.ts";
+import { logFailure } from "../runtime/logged-failures.ts";
 
 export const WorkflowPhase = Schema.Literals([
   "chat",
@@ -877,9 +878,9 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                           ),
                     ),
               ),
-              Effect.catch((cause) =>
+              Effect.catch((error) =>
                 Effect.as(
-                  Effect.logWarning("Workflow state unreadable at startup", { sessionId, cause }),
+                  logFailure("Workflow state unreadable at startup", { sessionId })(error),
                   [],
                 ),
               ),

@@ -6,7 +6,6 @@ import { Sessions } from "../sessions/sessions.ts";
 import { Subagents } from "../subagents/subagents.ts";
 import { ApprovedTools } from "../tools/approved.ts";
 import { gatedToolNames } from "../tools/definitions.ts";
-import { errorTag } from "../tools/failure.ts";
 import { FileTools } from "../tools/files.ts";
 import { OutsideTools } from "../tools/outside.ts";
 import { runTool, type RunTool } from "../tools/run-tool.ts";
@@ -23,6 +22,7 @@ import {
 } from "./card-agent.ts";
 import { cardToolProject, type CardWorktree } from "./worktree.ts";
 import { CardFailure, VerdictFailure, type AgentFailureCode } from "./failures.ts";
+import { logFailure } from "../runtime/logged-failures.ts";
 
 /**
  * Production card agents: each card attempt and each verification is a named session subagent
@@ -137,11 +137,8 @@ const make = Effect.gen(function* () {
 
   const failed = (code: AgentFailureCode): CardAgentOutcome =>
     CardAgentOutcome.Failed({ failure: CardFailure.cases.Agent.make({ code }) });
-  const unavailable = (error: string, reason: string | null) =>
-    Effect.as(
-      Effect.logWarning("Kanban card agent unavailable", { error, reason }),
-      failed("unavailable"),
-    );
+  const unavailable = <E extends { readonly _tag: string }>(error: E) =>
+    Effect.as(logFailure("Kanban card agent unavailable")(error), failed("unavailable"));
   const agent = CardAgent.of({
     run: Effect.fnUntraced(
       function* (run: CardAgentRun) {
@@ -201,9 +198,8 @@ const make = Effect.gen(function* () {
         });
         // Its session, project or run records failed; the error stays in the logs only.
       },
-      // A database failure also names its kind (lock, constraint, ...), never its statement.
-      Effect.catchTag("SqlError", (error) => unavailable("SqlError", errorTag(error.reason))),
-      Effect.catch((error) => unavailable(errorTag(error), null)),
+      // A database failure is named with its kind (lock, constraint, ...), never its statement.
+      Effect.catch(unavailable),
       // The card run's tool calls join this span's trace.
       Effect.withSpan("CardAgent.run"),
     ),
@@ -268,7 +264,7 @@ const make = Effect.gen(function* () {
     },
     Effect.catch((error) =>
       Effect.as(
-        Effect.logWarning("Kanban verifier unavailable", { error: errorTag(error) }),
+        logFailure("Kanban verifier unavailable")(error),
         rejected(VerdictFailure.cases.Unavailable.make({})),
       ),
     ),

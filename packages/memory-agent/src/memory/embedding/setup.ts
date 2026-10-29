@@ -100,9 +100,10 @@ const make = Effect.gen(function* () {
     Effect.forkIn(
       indexer.indexAll().pipe(
         Effect.catchTags({
-          EmbeddingError: () => Effect.logWarning("memory_backfill_embedding_failed"),
-          VectorIndexError: () => Effect.logWarning("memory_backfill_vector_failed"),
-          IndexingError: () => Effect.logWarning("memory_backfill_mapping_failed"),
+          EmbeddingError: logFailure("memory_backfill_embedding_failed"),
+          VectorIndexError: logFailure("memory_backfill_vector_failed"),
+          IndexingError: (error) =>
+            logFailure("memory_backfill_mapping_failed", { reason: error.reason })(error),
         }),
       ),
       layerScope,

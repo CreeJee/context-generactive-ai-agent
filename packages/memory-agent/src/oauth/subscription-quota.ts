@@ -152,9 +152,9 @@ export class SubscriptionQuota extends Context.Service<
           Effect.catchTags({
             SubscriptionUsageCredentialExpired: () =>
               Effect.succeed(Result.fail("credential_expired" as const)),
-            OAuthHarnessError: () =>
+            OAuthHarnessError: (error) =>
               Effect.logWarning("subscription usage lookup failed").pipe(
-                Effect.annotateLogs({ error: "OAuthHarnessError" }),
+                Effect.annotateLogs({ error: "OAuthHarnessError", code: error.code }),
                 Effect.as(Result.fail("lookup_failed" as const)),
               ),
           }),

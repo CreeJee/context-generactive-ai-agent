@@ -147,9 +147,10 @@ export const createOAuthAccountLoginManager = Effect.fnUntraced(function* (optio
             : // Best-effort removal of the unpublished slot; the login already failed.
               accounts.remove(provider, attempt.id).pipe(
                 Effect.catchTags({
-                  OAuthHarnessError: () =>
+                  OAuthHarnessError: (error) =>
                     Effect.logWarning("OAuth login slot cleanup failed", {
                       error: "OAuthHarnessError",
+                      code: error.code,
                     }),
                   OAuthProfileIdRejected: () =>
                     Effect.logWarning("OAuth login slot cleanup failed", {

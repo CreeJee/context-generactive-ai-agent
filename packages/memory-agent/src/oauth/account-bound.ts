@@ -19,7 +19,8 @@ import {
   type SubscriptionOAuthClient,
 } from "./validation-harness.ts";
 
-const cleanupFailed = (error: string) => Effect.logWarning("OAuth login cleanup failed", { error });
+const cleanupFailed = (annotations: Readonly<Record<string, string>>) =>
+  Effect.logWarning("OAuth login cleanup failed", annotations);
 
 const legacyKey = "__legacy__";
 
@@ -137,9 +138,9 @@ export const createAccountBoundSubscriptionClients = Effect.fnUntraced(function*
           ).pipe(
             // Cleanup only: the login's own failure stands, so this one is logged by tag.
             Effect.catchTags({
-              OAuthProfileStoreFailed: () => cleanupFailed("OAuthProfileStoreFailed"),
-              OAuthHarnessError: () => cleanupFailed("OAuthHarnessError"),
-              OAuthProfileIdRejected: () => cleanupFailed("OAuthProfileIdRejected"),
+              OAuthProfileStoreFailed: () => cleanupFailed({ error: "OAuthProfileStoreFailed" }),
+              OAuthHarnessError: ({ code }) => cleanupFailed({ error: "OAuthHarnessError", code }),
+              OAuthProfileIdRejected: () => cleanupFailed({ error: "OAuthProfileIdRejected" }),
             }),
           ),
         ),

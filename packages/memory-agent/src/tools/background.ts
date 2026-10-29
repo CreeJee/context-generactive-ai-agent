@@ -20,7 +20,7 @@ import { SecretRedactor } from "../secrets/redactor.ts";
 import { AttemptFailureReason } from "../work-trace/contracts.ts";
 import { WorkTraceStore } from "../work-trace/store.ts";
 import { runTool, type RunTool } from "./run-tool.ts";
-import { failureTags } from "../runtime/logged-failures.ts";
+import { failureAnnotations, failureTags } from "../runtime/logged-failures.ts";
 import { SqlClient, SqlSchema } from "effect/sql";
 
 export interface BackgroundBinding {
@@ -304,7 +304,7 @@ const make = Effect.gen(function* () {
             Effect.catch((error) =>
               Effect.logError("Background terminal recording failed", {
                 taskId: handle.taskId,
-                error: failureTags(Cause.fail(error)),
+                ...failureAnnotations(error),
               }),
             ),
           ),

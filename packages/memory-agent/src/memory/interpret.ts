@@ -2,9 +2,9 @@ import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { HashSet, Array as EffectArray, DateTime, Semaphore } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { Cause, Context, Crypto, Effect, Layer, Match, Option, Schema, Stream } from "effect";
+import { Context, Crypto, Effect, Layer, Match, Option, Schema, Stream } from "effect";
 import { ActiveProvider } from "../providers/active-provider.ts";
-import { failureTags } from "../runtime/logged-failures.ts";
+import { failureAnnotations } from "../runtime/logged-failures.ts";
 import { ApiUsage, recordUsage } from "../agent/api-usage.ts";
 import { singleAnswer } from "../model/single-call.ts";
 import { AuthConnectionState, type ModelSelection } from "../providers/contracts.ts";
@@ -177,7 +177,7 @@ const make = Effect.gen(function* () {
           Effect.catch((error) =>
             Effect.as(
               Effect.logDebug("interpret_candidates_unavailable", {
-                error: failureTags(Cause.fail(error)),
+                ...failureAnnotations(error),
               }),
               { matches: [] },
             ),

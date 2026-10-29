@@ -1,5 +1,5 @@
 import { NodeWorker } from "@effect/platform-node";
-import { ignoreLogged } from "../runtime/logged-failures.ts";
+import { ignoreLogged, logFailure } from "../runtime/logged-failures.ts";
 import {
   healthyLoop,
   LoopStep,
@@ -385,9 +385,7 @@ const make = (watching: boolean, home: string) =>
                   }),
                 ).pipe(
                   // The pass is done either way; pages only miss the hint to reload their lists.
-                  Effect.catch((error) =>
-                    Effect.logWarning("Imported sessions were not announced", error),
-                  ),
+                  Effect.catch(logFailure("Imported sessions were not announced")),
                 ),
               ),
               Effect.tapError((failure) => crashed(startedAt, failure.reason)),

@@ -14,8 +14,8 @@
 - `archiveHostLayer` / `archiveInstallerLayer` — Node 호스트 구현 Layer(FetchHttpClient, NodeChildProcessSpawner, NodeCrypto, NodeFileSystem, NodePath 제공)
 - `npmIntegrity` / `ArchiveIntegrityRejected` — npm `sha512-<base64>` integrity를 hex digest의 `PinnedArchive`로 바꿈. 다른 알고리즘이면 throw함
 - `DefectReporter` — Context.Reference. `report(DefectEvent)`와 `recent`를 가지며 기본값은 no-op임. 앱이 Discord reporter(`report/defect-reports.ts`)를 제공함. 타입 `DefectEvent`, `RecentDefect`
-- `tagOf` / `tagOfUnknown` / `reasonTagOf` / `causeTagsOf` — 실패의 `_tag`(와 `reason._tag`)를 읽는 유일한 지점. `causeTagsOf`는 `cause` 사슬을 따라 태그를 모으고, 태그 없는 cause에서 멈춤
-- `logFailure` / `fallbackLogged` / `ignoreLogged` / `logDefect` / `failureTags` — 예상 실패를 태그로만 로그하고 fallback하거나 무시하는 헬퍼, defect 기록, Cause를 태그 문자열로 요약하는 함수
+- `tagOf` / `tagOfUnknown` / `reasonTagOf` / `failureNameOf` / `failureNameOfUnknown` / `causeTagsOf` — 실패의 `_tag`(와 `reason._tag`)를 읽는 유일한 지점. 실패의 이름은 태그에 태그 붙은 reason을 붙인 것임(예: `SqlError:LockTimeoutError`). `causeTagsOf`는 실패 자신의 reason 다음부터 `cause` 사슬을 따라 이름을 모으고, 태그 없는 cause에서 멈춤
+- `logFailure` / `fallbackLogged` / `ignoreLogged` / `logDefect` / `failureAnnotations` / `failureTags` — 예상 실패를 태그로만 로그하고 fallback하거나 무시하는 헬퍼, defect 기록, 실패를 로그 주석(`error`, `cause`)으로 바꾸는 함수, Cause를 태그 문자열로 요약하는 함수
 - `homeDirectory` / `temporaryDirectory` / `totalMemory` / `availableCores` / `hostPlatform` — node:os 정보를 `Effect.sync`로 감싼 값
 - `findExecutable` — PATH의 절대 경로 항목에서만 실행 파일을 찾음(Windows는 PATHEXT 포함). 결과는 Effect<string | null>
 - `tarExecutable` — 시스템 tar 경로. POSIX는 `tar`, Windows는 `%SystemRoot%\System32\tar.exe`
@@ -49,7 +49,7 @@
 - `findExecutable`은 PATH의 절대 경로 항목만 봄. 상대 경로(프로젝트 폴더)가 실행 파일을 가로채지 못하게 하기 위함임
 - `helperEnvironment`는 시스템 시작에 필요한 변수와 고정 검색 경로만 넘김. 사용자의 다른 환경변수는 절대 넘기지 않음(R14)
 - 로그, 보고, 저장된 요약은 오류를 태그로만 부름. cause와 message에는 경로, SQL, 명령 출력, provider 텍스트가 들어갈 수 있음. 태그 읽기는 `failure-tag.ts`에서만 함
-- `logFailure`/`ignoreLogged`(와 `fallbackLogged`)는 실패가 cause를 가지면 그 태그 사슬을 `cause` 주석으로 남김(예: `VectorIndexError < SqlError:LockTimeoutError`). 태그만 남기고 메시지는 남기지 않음
+- 실패를 로그하는 곳은 `logFailure`/`ignoreLogged`/`fallbackLogged`를 쓰거나, 직접 로그하면 `failureAnnotations`로 주석을 만듦. `error`에는 실패의 이름을, 실패가 cause를 가지면 그 이름 사슬을 `cause`에 남김(예: `error: IndexingError`, `cause: VectorIndexError < SqlError:LockTimeoutError`). 태그만 남기고 메시지는 남기지 않음
 - `logFailure`/`fallbackLogged`/`ignoreLogged`는 예상 실패만 처리함. defect와 인터럽트는 그대로 통과시킴. 프로세스를 끝내지 않고 기록하는 defect는 모두 `logDefect`를 거쳐 `DefectReporter.report`로 감
 - `RecentDefect`는 fingerprint(tag, location, count, lastAt)만 담음. message나 stack은 담지 않음
 - 비밀 파일 백엔드는 `CONTEXT_AGENT_SECRET_DIRECTORY`가 있을 때만 선택됨. 실패해도 OS 키체인으로 fallback하지 않음. 키는 디렉터리 밖(`CONTEXT_AGENT_SECRET_KEY` 또는 `_KEY_FILE`)에서 가져오며 base64 32바이트여야 함. 키는 사용할 때마다 읽으므로 교체가 즉시 반영됨

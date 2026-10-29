@@ -827,9 +827,10 @@ export const createSubscriptionOAuthClient = Effect.fnUntraced(function* (
                   ? store.remove(protocol.provider)
                   : store.write(protocol.provider, previous)
                 ).pipe(
-                  Effect.catchTag("OAuthHarnessError", () =>
+                  Effect.catchTag("OAuthHarnessError", (error) =>
                     Effect.logWarning("OAuth credential rollback failed", {
                       error: "OAuthHarnessError",
+                      code: error.code,
                     }),
                   ),
                 ),

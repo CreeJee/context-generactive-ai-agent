@@ -34,6 +34,7 @@ import {
   type GoalRef,
   type WorktreeDisposition,
 } from "./worktree.ts";
+import { logFailure } from "../runtime/logged-failures.ts";
 
 /**
  * {@link CardWorktrees} on git. A Goal gets the branch `ctx/goal/<goalInstanceId>` from the user's
@@ -830,9 +831,7 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
             "--force",
             checkout.path,
           ]).pipe(
-            Effect.catchTag("CardWorktreeFailed", (failure) =>
-              Effect.logWarning("Goal checkout was not removed", { reason: failure.reason }),
-            ),
+            Effect.catchTag("CardWorktreeFailed", logFailure("Goal checkout was not removed")),
             // One left behind is removed with the Goal's folder.
             Effect.ensuring(Ref.update(checkouts, HashSet.remove(goalKey(goal)))),
           ),
