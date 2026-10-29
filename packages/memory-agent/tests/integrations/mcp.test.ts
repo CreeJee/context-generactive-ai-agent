@@ -198,6 +198,21 @@ testAgent()("MCP servers of a project", (it) => {
   );
 
   it.effect(
+    "read-only phases get only the tools a server marks read-only",
+    () =>
+      Effect.gen(function* () {
+        const servers = yield* McpServers;
+        const { project, fake } = yield* freshProject;
+        yield* writeJson(fake.config, { mcpServers: { fake: fake.entry() } });
+        yield* servers.setTrusted(project, "project", "fake", true);
+        const { tools, guides } = yield* servers.readOnlyRunTools(project);
+        expect(tools.map((tool) => tool.tool.name)).toEqual([mcpToolName("fake", "where")]);
+        expect(guides.map((guide) => guide.server)).toEqual(["fake"]);
+      }),
+    serverStartTimeout,
+  );
+
+  it.effect(
     "a tool that must run as a task answers once its task ends",
     () =>
       Effect.gen(function* () {

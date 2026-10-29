@@ -188,6 +188,8 @@ interface ServerTool {
   readonly description: string;
   readonly inputSchema: JsonSchema.JsonSchema;
   readonly outputSchema: McpTool["outputSchema"];
+  /** The server marks it as not changing its environment (`readOnlyHint`), which nothing checks. */
+  readonly readOnly: boolean;
   readonly call: (
     args: JsonObject,
   ) => Effect.Effect<unknown, McpToolFailed | Schema.SchemaError | Cause.UnknownError>;
@@ -504,6 +506,7 @@ const make = Effect.gen(function* () {
           description: `[MCP ${server.name}] ${tool.description ?? ""}`.trim(),
           inputSchema: inputSchemaOf(tool),
           outputSchema: tool.outputSchema,
+          readOnly: tool.annotations?.readOnlyHint === true,
           call: (args) => callTool({ client, tool, args }).pipe(Effect.flatMap(limited)),
         })),
         guide: guide === "" ? null : guide,
@@ -662,6 +665,20 @@ const make = Effect.gen(function* () {
      * settings); the run goes on without them. Each call is a span where the loop runs it.
      */
     runTools: (project: Project) => Effect.map(discoveredFor(project), runToolsOf),
+
+    /**
+     * Only the tools their servers mark read-only, for the workflow phases that change nothing.
+     * The mark is the server's own claim, so each call still goes through the permission mode.
+     */
+    readOnlyRunTools: (project: Project) =>
+      Effect.map(discoveredFor(project), (found) =>
+        runToolsOf(
+          found.map((server) => ({
+            ...server,
+            tools: server.tools.filter((tool) => tool.readOnly),
+          })),
+        ),
+      ),
   };
 });
 

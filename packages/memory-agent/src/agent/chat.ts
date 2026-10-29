@@ -76,7 +76,7 @@ import {
 import { createSubscriptionRuntimeImplementation } from "../providers/subscription-runtime.ts";
 import { ProviderRegistry } from "../providers/registry.ts";
 import { ProviderToolRuntime } from "../providers/tool-policy.ts";
-import { McpServers, mcpInstructionsForMode } from "../mcp/servers.ts";
+import { McpServers, isMcpToolName, mcpInstructionsForMode } from "../mcp/servers.ts";
 import { Indexer } from "../memory/embedding/indexer.ts";
 import { Interpreter } from "../memory/interpret.ts";
 import { KnowledgePromotions } from "../memory/knowledge.ts";
@@ -366,7 +366,10 @@ const cancelWaitMs = 5_000;
  */
 const afterRunBudget = 200;
 
-/** Plan/Verify never receive project mutation, outside access, MCP or delegation tools. */
+/**
+ * Plan/Verify never receive project mutation, outside access or delegation tools, and receive
+ * only the MCP tools their servers mark read-only.
+ */
 const readOnlyWorkflowPhases = HashSet.fromIterable<WorkflowPhase>(["plan", "verify", "completed"]);
 const workflowReadToolNames = HashSet.fromIterable([
   "find_memory",
@@ -2010,7 +2013,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // Present only while the user has Kagi turned on with a key (R19).
         const webTools = reportSource !== null ? [] : yield* kagiTools.runTools;
         // A report session never connects external MCP servers or loads additional skills.
-        const mcp = readOnly ? { tools: [], guides: [] } : yield* mcpServers.runTools(project);
+        const mcp =
+          reportSource !== null
+            ? { tools: [], guides: [] }
+            : yield* workflowReadOnly
+                ? mcpServers.readOnlyRunTools(project)
+                : mcpServers.runTools(project);
         const skills =
           reportSource !== null
             ? { skills: [], tools: [], instructions: null }
@@ -2095,7 +2103,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 ),
               )
             : allSharedTools.filter(
-                ({ tool }) => !workflowReadOnly || HashSet.has(workflowReadToolNames, tool.name),
+                ({ tool }) =>
+                  !workflowReadOnly ||
+                  HashSet.has(workflowReadToolNames, tool.name) ||
+                  isMcpToolName(tool.name),
               );
         /** The standing rules for an agent with these tools: this run's, or a child's. */
         const standingPromptsFor = (tools: ReadonlyArray<RunTool>) => [
@@ -2103,7 +2114,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             ? [reportAnalysisInstructions]
             : [memoryRulesFor(tools.map(({ tool }) => tool))]),
           ...(webTools.length > 0 ? [kagiInstructions] : []),
-          ...(!workflowReadOnly && mcp.tools.length > 0
+          ...(mcp.tools.length > 0
             ? [mcpInstructionsForMode(project.permissionMode, mcp.guides)]
             : []),
           ...(injectImageProviderTool ? [imageProviderWorkflowPrompt] : []),
