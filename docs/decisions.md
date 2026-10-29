@@ -3142,3 +3142,10 @@
   - 엔진 Map의 항목은 `Equal.byReferenceUnsafe`로 참조 비교한다. `HashMap.set`이 바뀌는 값을 구조 비교하면서 라이브러리의 scope와 latch까지 내려가 throw했다.
 - 10분 테스트는 1초 단위로 시계를 600번 진행하므로 부하 아래에서 5초를 넘는다. 그 테스트만 timeout을 30초로 둔다.
 - 결과: memory-agent 전체 테스트(207 파일)에서 workflow 테스트는 모두 통과한다. 두 번 돌려 매번 다른 2 파일이 native 검색 시작 시간초과(`NativeOwnerFailed: startup-timeout`)로 실패했고, 따로 돌리면 통과한다. `vp check`가 통과한다.
+
+## Workflow 정상화 5단계: run 로그 reader를 쓰기 신호로 깨운다 (2026-10-29)
+
+- 설계 문서 `docs/designs/workflow-normalization.md`의 Step 5를 구현했다. 새 서비스 `RunLogSignals`(`workflow/durable-stream.ts`)가 run id를 싣는 `PubSub`를 가진다. 로그의 append와 close는 transaction이 commit된 뒤 run id를 보낸다. `AgentChat`이 서비스를 읽어 `committedLog`에 넣고, layer는 `layers.ts`의 `stores`에 있다.
+- reader는 페이지마다 구독한 뒤 읽는다. 로그 끝이면 그 구독으로 자기 run id를 기다리고, 1초가 지나면 다시 읽는다. 원안(끝에서 구독하고 한 번 더 읽기)은 쓰기가 없을 때 1초에 두 번 읽어서 바꿨다.
+- 전: 로그 끝에서 20ms마다 페이지를 읽었다. 10초면 약 500번이다. 후: 쓰기가 없으면 10초에 11번(처음 한 번과 1초마다) 읽는다. 쓰기가 있으면 시계를 기다리지 않고 바로 깨어난다. 둘 다 `src/workflow/durable-stream.test.ts`가 TestClock으로 본다. 횟수는 SQL span의 `db.query.text`로 센다.
+- 결과: `vp check`가 통과한다. memory-agent 전체 테스트는 기계 부하 평균 25에서 돌아 17 파일이 native 검색 시작 시간초과(`NativeOwnerFailed: startup-timeout`)로 실패했다. 그 17 파일은 `--maxWorkers=2`로 따로 돌리면 모두 통과한다.

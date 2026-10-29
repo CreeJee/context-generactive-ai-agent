@@ -680,6 +680,7 @@ human_decision_facts
 - **`memory-agent/src/workflow/durable-stream.test.ts`**: 테스트 context(`:32-34`)에 `RunLogSignals.layer`를 더한다. 더할 테스트
   - 쓰기가 없는 동안 reader의 SQL이 1초에 1번 이하다. TestClock으로 잰다.
   - 읽기와 구독 사이에 들어온 append도 놓치지 않는다.
+  - (구현에서 바꿈, 2026-10-29) reader는 페이지마다 구독한 뒤 읽고, 끝이면 그 구독으로 기다린다. 기다린 뒤 다시 구독하고 읽으므로 쓰기가 없을 때 1초에 한 번만 읽는다. 원안처럼 끝에서 구독한 뒤 한 번 더 읽으면 1초에 두 번 읽는다. 읽기와 기다림 사이의 append는 이미 연 구독이 받으므로, 그 틈을 테스트로 만드는 대신 시계를 움직이지 않고 append가 reader를 깨우는지 본다. 한 테스트의 두 로그는 `AgentChat`처럼 `RunLogSignals` 하나를 같이 쓴다.
 - **`memory-agent/src/workflow/README.md`**: 20 millis polling 설명(`:62`)을 바꾸고, SQLite 쓰기 목록(`:58`)에 `RunLogSignals`를 적는다.
 
 ### Step 6. `Workflows.locked`의 key lock 제거 (E)

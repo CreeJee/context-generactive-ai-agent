@@ -136,7 +136,7 @@ import {
   uncertainRuns,
   type UncertainContinueRequest,
 } from "../workflow/uncertain-runs.ts";
-import { sqliteRunLog } from "../workflow/durable-stream.ts";
+import { RunLogSignals, sqliteRunLog } from "../workflow/durable-stream.ts";
 import {
   serverRestartedCode,
   serverRestartedMessage,
@@ -494,7 +494,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const runEvents = yield* workflowRunEvents;
   const sql = yield* SqlClient.SqlClient;
   const withSql = Effect.provideService(SqlClient.SqlClient, sql);
-  const committedLog = (input: Parameters<typeof sqliteRunLog>[0]) => withSql(sqliteRunLog(input));
+  const runLogSignals = yield* RunLogSignals;
+  const committedLog = (input: Parameters<typeof sqliteRunLog>[0]) =>
+    sqliteRunLog(input).pipe(withSql, Effect.provideService(RunLogSignals, runLogSignals));
   const runLogs = yield* memoryRunLogs;
   const persistedRunStatus = SqlSchema.findOneOption({
     Request: Schema.Struct({ runId: Schema.String, sessionId: Schema.String }),

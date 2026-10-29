@@ -23,9 +23,10 @@
 - `GoalExecutionCompletion` — SDK 루프가 한 번 완료하는 `DurableDeferred` 대기 지점
 - `GoalExecutions` / `goalExecutionLayer` / `GoalExecutionAdmissionRefused` — Goal 실행 admission 서비스와 레이어
 - `GoalExecutionIdentity` / `GoalExecutionOwnerIdentity` / `GoalExecutionPayload` / `GoalExecutionSuccess` / `GoalExecutionError` / `GoalExecutionErrorReason` / `GoalExecutionSideEffectState` / `goalExecutionIdempotencyKey` — Goal 실행 계약 스키마와 멱등 키
-- `ownerWorkflowEngineLayer` / `layer` / `admissionLayer` / `workflowName` / `OwnerWorkflowEngineError` — SqlClient 기반 프로젝트 소유 WorkflowEngine 레이어
+- `ownerWorkflowEngineLayer` / `layer` / `admissionLayer` / `workflowName` / `suspendedRetrySchedule` / `OwnerWorkflowEngineError` — SqlClient 기반 프로젝트 소유 WorkflowEngine 레이어
 - `OwnerWorkflowStorage` / `OwnerWorkflowStorageApi` / `ownerWorkflowStorageLayer` / `OwnerWorkflowAdmission` / `OwnerWorkflowAdmissionResult` / `StoredExecution` / `StoredWorkflowResult` / `ScheduledClock` / `OwnerWorkflowStorageError` — 실행·activity·deferred·clock 영속 저장소
 - `sqliteRunLog` — session/run 바인딩을 확인하는 owner 전용 AG-UI 이벤트 전달 로그(`RunLog` 구현)
+- `RunLogSignals` — 로그에 쓴 run id를 알려 로그 끝의 reader를 깨우는 서비스
 - `workflowRunEvents` / `RunEvent` / `RunEventKind` / `RunEventRejected` — run 이벤트(chunk|run_error|run_completed) 기록
 - `workflowRunBindings` / `RunBinding` / `Admission` / `toolOperationSql` / `endedWithKnownEffectsSql` / `acknowledgedRunSql` / `resolvedRunSql` / `invocationFieldSql` / `recoveredReadRunSql` — run 바인딩 admission과 공유 SQL 조각
 - `toolLedger` / `toolProgressFingerprint` / `uncertainRuns` / `UncertainContinue` / `UncertainRunsFailed` — tool 부수효과 ledger와 결과 불확실 run 처리
@@ -63,7 +64,7 @@
 - SQLite 읽기/쓰기(`workflow.ts`): `session_workflows`, `workflow_state_revisions`, `workflow_goal_identities`, `workflow_goal_instances`, `workflow_new_goal_requests`, `board_change_requests`에 INSERT/UPDATE. `chat_runs`, `kanban_goals`, `work_tasks`, `owner_rpc_operations`, `workflow_run_bindings`는 조회
 - SQLite 쓰기: `run-bindings.ts`는 `workflow_run_bindings`에, `run-events.ts`·`durable-stream.ts`는 `workflow_run_events`에, `tool-ledger.ts`는 `owner_rpc_operations`에 INSERT/UPDATE, `uncertain-runs.ts`는 `workflow_uncertain_acknowledgements`에 INSERT, `execution.ts`는 `chat_metadata`에 INSERT
 - SQLite 읽기: `board.ts`, `completion-evidence.ts`, `read-recoveries.ts`가 `kanban_goals`, `sessions`, `nodes`, `chat_runs`, `chat_interrupts`, `owner_read_recoveries`, `workflow_goal_native_artifacts`, `workflow_goal_worker_generations`, `workflow_worker_dispatches` 등을 조회
-- 타이머: `sqliteRunLog`는 열린 로그 끝에 도달한 reader가 20 millis 간격으로 새 항목을 polling한다. owner workflow engine은 `Clock`·`FiberMap`으로 durable clock을 예약하고 발화하며 실행 fiber를 관리한다. 대기 중인 호출자는 workflow 정의의 `suspendedRetrySchedule` 간격으로 실행을 다시 돈다
+- 타이머: `sqliteRunLog`는 열린 로그 끝에 도달한 reader가 자기 run의 `RunLogSignals` 신호를 기다리고, 신호가 없으면 1초 뒤 다시 읽는다. append와 close는 transaction이 commit된 뒤 신호를 보낸다. owner workflow engine은 `Clock`·`FiberMap`으로 durable clock을 예약하고 발화하며 실행 fiber를 관리한다. 대기 중인 호출자는 workflow 정의의 `suspendedRetrySchedule` 간격으로 실행을 다시 돈다
 - 암호화: `goalExecutionIdempotencyKey`가 `sha256`을 쓰고, `workflow.ts`는 `Crypto`/`NodeCrypto`로 id를 생성한다
 - 파일 시스템: `sources.ts`가 프로젝트의 `.agents/workflow-rules.json`(`projectWorkflowRulesPath`)을 워크플로 규칙 소스로 읽는다. 이 항목은 export 이름으로만 확인했고 본문은 읽지 않았다
 

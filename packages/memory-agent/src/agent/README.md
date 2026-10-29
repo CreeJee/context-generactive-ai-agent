@@ -68,7 +68,7 @@
 - `fingerprint`/`legacyFingerprint`는 동기 sha256(`packages/memory-agent/src/runtime/synchronous-crypto.ts`)을 계산한다.
 - `workspaceInstructions`는 `process.env`로 호스트 셸을 확인하고(`hostShell`) `process.platform`, `Intl` 타임존, `DateTime.now`를 읽는다.
 - `projectInstructionsHook`은 실행마다 프로젝트 루트의 안내 파일과 경로 카탈로그를 읽는다.
-- `chat.ts`의 `AgentChat`은 import 기준으로 SqlClient(실행·워크플로 바인딩 SQL, `sqliteRunLog` durable 로그), FileSystem/Path, Queue/Fiber/Scope 기반 동시성, Crypto/NodeCrypto id 생성, 프로바이더 네트워크 호출(ActiveProvider·ProviderRegistry·subscription runtime), MCP 서버, 외부 에이전트, 백그라운드 작업, AppEvents를 사용한다.
+- `chat.ts`의 `AgentChat`은 import 기준으로 SqlClient(실행·워크플로 바인딩 SQL, `sqliteRunLog` durable 로그), `RunLogSignals`(로그 끝 reader 깨우기), FileSystem/Path, Queue/Fiber/Scope 기반 동시성, Crypto/NodeCrypto id 생성, 프로바이더 네트워크 호출(ActiveProvider·ProviderRegistry·subscription runtime), MCP 서버, 외부 에이전트, 백그라운드 작업, AppEvents를 사용한다.
 - `TurnSummaries`는 `summaryInstructions`로 모델에 이전 턴 요약을 요청한다. `layer(automatic = true)` 설정이 있다.
 - `migrateOwnerRpcFingerprintBatch(afterRowid, limit)`는 owner RPC 행을 배치로 읽고 legacy fingerprint를 압축 형식으로 다시 쓴다.
 

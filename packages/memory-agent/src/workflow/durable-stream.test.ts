@@ -1,12 +1,13 @@
 import { it } from "@effect/vitest";
-import { Effect, Fiber, FileSystem, Path, Stream } from "effect";
+import { Effect, Fiber, FileSystem, Path, Stream, Tracer } from "effect";
+import { TestClock } from "effect/testing";
 import { withTestPlatform } from "../../tests/support/platform.ts";
 // SQLite retains its native synchronous transaction contract.
 import { isTruthy } from "../truthy.ts";
 import { describe, expect } from "vite-plus/test";
 import { DatabaseSync } from "node:sqlite";
 import type { AgUiEvent } from "../loop/chunks.ts";
-import { sqliteRunLog } from "./durable-stream.ts";
+import { RunLogSignals, sqliteRunLog } from "./durable-stream.ts";
 import { connectionContext } from "../db/database.ts";
 import { migrations } from "../db/migrations.ts";
 
@@ -43,10 +44,15 @@ const scopedOwner = Effect.acquireRelease(
   Effect.sync(() => owner(":memory:")),
   (db) => Effect.sync(() => db.close()),
 );
+/** The test platform, with one `RunLogSignals` for every log a test opens, as `AgentChat` has. */
+const withOwnerLogs = <A, E, R>(program: Effect.Effect<A, E, R>) =>
+  withTestPlatform(Effect.provide(program, RunLogSignals.layer));
+/** Lets the forked reader run up to its next wait on the test clock. */
+const settle = Effect.repeat(Effect.yieldNow, { times: 50 });
 
 describe("central SQLite run log", () => {
   it.live("validates binding, minted offsets, lifecycle runs and close", () =>
-    withTestPlatform(
+    withOwnerLogs(
       Effect.gen(function* () {
         const db = yield* scopedOwner;
         const log = yield* runLog(db);
@@ -79,7 +85,7 @@ describe("central SQLite run log", () => {
   );
 
   it.live("tails across owner logs and interrupts open reads without closing them", () =>
-    withTestPlatform(
+    withOwnerLogs(
       Effect.gen(function* () {
         const db = yield* scopedOwner;
         const reader = yield* runLog(db);
@@ -95,8 +101,52 @@ describe("central SQLite run log", () => {
     ),
   );
 
+  it.effect("wakes a reader at the end of the log as soon as its run writes", () =>
+    withOwnerLogs(
+      Effect.gen(function* () {
+        const db = yield* scopedOwner;
+        const log = yield* runLog(db);
+        const tail = yield* Effect.forkChild(Stream.runCollect(Stream.take(log.read("-1"), 1)));
+        yield* settle;
+        yield* log.append(lifecycle("RUN_STARTED"));
+        yield* settle;
+        // The test clock never moved, so the reader did not wait out its fallback.
+        expect(tail.pollUnsafe()?._tag).toBe("Success");
+      }),
+    ),
+  );
+
+  it.effect("reads the end of an open log at most once a second while nothing is written", () =>
+    withOwnerLogs(
+      Effect.gen(function* () {
+        const db = yield* scopedOwner;
+        const log = yield* runLog(db);
+        const spans: Array<Tracer.NativeSpan> = [];
+        const tracer = Tracer.make({
+          span(options) {
+            const span = new Tracer.NativeSpan(options);
+            spans.push(span);
+            return span;
+          },
+        });
+        yield* Effect.forkChild(Stream.runDrain(log.read("-1")).pipe(Effect.withTracer(tracer)));
+        yield* settle;
+        yield* Effect.forEach(
+          Array.from({ length: 10 }),
+          () => Effect.andThen(TestClock.adjust("1 second"), settle),
+          { discard: true },
+        );
+        const pages = spans.filter((span) =>
+          String(span.attributes.get("db.query.text")).includes("cursor >"),
+        );
+        // The first read, then one per second.
+        expect(pages.length).toBe(11);
+      }),
+    ),
+  );
+
   it.live("replays persisted offsets after an owner DB restart", () =>
-    withTestPlatform(
+    withOwnerLogs(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const paths = yield* Path.Path;
