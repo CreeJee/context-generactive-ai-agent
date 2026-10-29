@@ -3233,3 +3233,12 @@
 - 마이그레이션 73–75가 경고 없이 지나갔다. 사람 결정 실행 15개는 모두 새 payload로 바뀌고 `human_decision_facts`에 `seq` 1 행 15개가 생겼다. 결정 실행의 `created_at`은 모두 채워졌다. 나머지 실행 58개는 마이그레이션 주석대로 `created_at`·`updated_at`이 NULL이다.
 - 시작 검사 결과는 `repaired` 6, `halted` 0, `settled` 0이다. 설계가 예상한 "끝으로 갈 수 없는 세션 6개"와 같다. 6개 모두 `stopped{state_reconciled}`이고, R1 세션 3개는 phase `completed`로, R2 세션 3개는 `verify`로 고쳐졌다. 남은 `accepted` 새 Goal 요청은 없었다.
 - 시작 sweep은 복사본에서 돌리지 않았다. sweep은 실제 worktree 위치와 git 저장소를 읽으므로 복사본 DB로는 판정이 실제 디스크와 맞지 않는다. 앱을 다음에 시작할 때 `report` 모드의 경고 로그로 본다.
+
+## 카드 worktree 시작 sweep을 처음부터 지우기 모드로 둔다 (2026-10-29)
+
+- 9단계의 시작 sweep은 첫 릴리즈에 `report`로 판정만 기록하고, 기록을 본 뒤 `delete`로 바꾸기로 했었다. 첫 릴리즈부터 `sweepMode = "delete"`로 둔다.
+- 기다려도 볼 기록이 없다. 칸반을 실제로 돌린 사용자는 사실상 한 명이다. 로컬 데이터를 읽기만 하며 sweep 판정을 대 보니 지울 대상이 0개였다.
+  - worktree 위치(`~/.context-generactive-agent-worktrees`)에는 Goal 폴더 하나(카드 3개, 12K)만 있다. 다른 세션이 2026-10-18에 돌린 smoke test가 남긴 것이고, 원본 저장소가 없고 DB에도 없다. sweep은 DB에 없는 Goal을 건너뛰므로 어느 모드든 남는다.
+  - DB의 칸반 Goal 하나는 멈췄고 폴더가 없다. 그 저장소에는 worktree 위치 아래 등록과 `ctx/card/*` 브랜치가 없다.
+- 지우기가 틀려도 잃는 것은 폴더와 설치한 의존성이다. sweep은 어떤 카드도 시작하기 전에 돌고, 커밋하지 않은 작업은 카드 브랜치에 snapshot으로 남기며 브랜치는 지우지 않는다.
+- `report`는 남긴다. 판정이 틀린 것을 보면 상수 하나로 되돌린다.

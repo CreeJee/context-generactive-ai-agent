@@ -17,9 +17,9 @@ import {
  * nobody committed stays on the card branch, and no branch is deleted here.
  */
 
-/** What the startup sweep does with what it finds; `report` only logs, until the logs show its judgement holds. */
+/** What the startup sweep does with what it finds; `report` only logs, the way back if `delete` misjudges. */
 export type SweepMode = "report" | "delete";
-const sweepMode: SweepMode = "report";
+const sweepMode: SweepMode = "delete";
 
 /** The startup sweep's counts, also on its span. */
 export interface SweepSummary {
