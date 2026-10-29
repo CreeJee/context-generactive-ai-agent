@@ -3225,3 +3225,11 @@
   - 폴더가 없는 git worktree 등록은 DB에 있는 Goal과 실행 중인 보드의 저장소에서만 찾는다. 폴더까지 통째로 사라진 멈춘 Goal의 등록은 찾지 못한다. 폴더가 없으니 디스크를 쓰지 않는다.
 - 기록은 sweep span의 숫자 속성(`found`, `orphaned`, `cleaned`, `skipped`)과 판정마다 경고 로그(goalInstanceId, cardId, 판정)다. `delete` 판정은 테스트가 `sweep("delete")`로 확인한다.
 - 앞 단계(5·7·8)의 커밋이 `vp run memory-agent#typecheck`의 Effect 진단(lazy Effect 서비스 메서드, 테스트의 `JSON.stringify`, async 테스트, 테스트의 `Effect.provide(layer)`)을 남겼다. `vp check`는 이 진단을 돌리지 않는다. 9단계 전에 따로 고쳤다(`fcb7e8b7`).
+
+## Workflow 정상화 10단계: 기록 확인 (2026-10-29)
+
+- 설계의 Step 10대로 기록을 확인했다. Step 1의 기준선(본문 실행 횟수, 엔진 Map, encode 실패)은 4단계 항목에 있다. 시작 검사가 실제 DB에서 고친 세션 수는 없어서 이번에 쟀다.
+- 로컬 DB(`~/.context-generactive-agent/agent.db`)를 `sqlite3 -readonly`의 `.backup`으로 복사하고, 복사본에 `WorkflowStartup.layer`와 `Database.layer`만 올려 시작 검사를 돌렸다. 원본은 열지 않았다. 복사본은 schema 72였고 `session_workflows` 55행, owner 실행 73행이다.
+- 마이그레이션 73–75가 경고 없이 지나갔다. 사람 결정 실행 15개는 모두 새 payload로 바뀌고 `human_decision_facts`에 `seq` 1 행 15개가 생겼다. 결정 실행의 `created_at`은 모두 채워졌다. 나머지 실행 58개는 마이그레이션 주석대로 `created_at`·`updated_at`이 NULL이다.
+- 시작 검사 결과는 `repaired` 6, `halted` 0, `settled` 0이다. 설계가 예상한 "끝으로 갈 수 없는 세션 6개"와 같다. 6개 모두 `stopped{state_reconciled}`이고, R1 세션 3개는 phase `completed`로, R2 세션 3개는 `verify`로 고쳐졌다. 남은 `accepted` 새 Goal 요청은 없었다.
+- 시작 sweep은 복사본에서 돌리지 않았다. sweep은 실제 worktree 위치와 git 저장소를 읽으므로 복사본 DB로는 판정이 실제 디스크와 맞지 않는다. 앱을 다음에 시작할 때 `report` 모드의 경고 로그로 본다.
