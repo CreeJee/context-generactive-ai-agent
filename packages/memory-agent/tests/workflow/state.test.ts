@@ -1,5 +1,5 @@
-import { Effect, Result, Schema } from "effect";
-import { SqlError } from "effect/sql";
+import { Deferred, Effect, Fiber, Result, Schema } from "effect";
+import { SqlClient, SqlError } from "effect/sql";
 import { expect, vi } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import type { SessionRunState } from "../../src/agent/run-state.ts";
@@ -268,6 +268,30 @@ testAgent()("Workflows", (it) => {
       expect(goalEvents.map((event) => event.sequence)).toEqual(
         Array.from({ length: count }, (_, index) => index + 1),
       );
+    }),
+  );
+
+  it.effect("finishes a Workflows call made inside an open transaction", () =>
+    Effect.gen(function* () {
+      const id = yield* freshSession;
+      const workflows = yield* Workflows;
+      const sql = yield* SqlClient.SqlClient;
+      const opened = yield* Deferred.make<void>();
+      // Another caller for the same session, waiting for the one connection.
+      const other = yield* Effect.forkChild(
+        Effect.andThen(Deferred.await(opened), workflows.updateGoal(id, goal)),
+      );
+      yield* sql
+        .withTransaction(
+          Effect.gen(function* () {
+            yield* Deferred.succeed(opened, undefined);
+            yield* Effect.sleep("50 millis");
+            yield* workflows.updateGoal(id, goal);
+          }),
+        )
+        .pipe(Effect.timeout("2 seconds"));
+      yield* Fiber.join(other);
+      expect((yield* workflows.get(id)).goal?.version).toBe(2);
     }),
   );
 

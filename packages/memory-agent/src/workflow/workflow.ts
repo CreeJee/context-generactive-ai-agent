@@ -13,7 +13,6 @@ import {
   Schema,
 } from "effect";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
-import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
 import { optionalProperty } from "../optional-property.ts";
 import { evaluateWorkflowAction, WorkflowActionReason, WorkflowActionRequest } from "./actions.ts";
 import {
@@ -467,11 +466,14 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
     const crypto = yield* Crypto.Crypto;
     const sql = yield* SqlClient.SqlClient;
     const completion = yield* completionEvidence;
-    const serialize = yield* keyedSerialLimit();
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
-    /** One session's read-modify-write runs alone and commits or rolls back as a whole. */
-    const locked = <A, E>(sessionId: string, effect: Effect.Effect<A, E>) =>
-      serialize(sessionId, persisted(sql.withTransaction(effect)));
+    /**
+     * One session's read-modify-write commits or rolls back as a whole. The transaction holds the
+     * one connection, so it already runs alone; a key lock around it would deadlock a caller that
+     * opened the transaction first.
+     */
+    const transacted = <A, E>(effect: Effect.Effect<A, E>) =>
+      persisted(sql.withTransaction(effect));
     const selectState = SqlSchema.findOneOption({
       Request: Schema.String,
       Result: Schema.Struct({ state_json: Schema.String }),
@@ -568,8 +570,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
       update: (current: WorkflowState) => Effect.Effect<WorkflowState, E>,
       author?: BoardAuthor,
     ) =>
-      locked(
-        sessionId,
+      transacted(
         Effect.gen(function* () {
           const current = yield* get(sessionId);
           const next = yield* update(current);
@@ -714,8 +715,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
 
       /** Repairs stale persisted phases before a new turn or an idle status response. */
       reconcile: (sessionId: string) =>
-        locked(
-          sessionId,
+        transacted(
           Effect.gen(function* () {
             const current = yield* get(sessionId);
             const phase = reconciledWorkflowPhase(current);
@@ -737,8 +737,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
         ),
 
       setPhase: (sessionId: string, phase: WorkflowPhase) =>
-        locked(
-          sessionId,
+        transacted(
           Effect.gen(function* () {
             const current = yield* get(sessionId);
             const decision = evaluateWorkflowAction(
@@ -768,8 +767,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
         ),
 
       controlGoal: (sessionId: string, action: WorkflowAction) =>
-        locked(
-          sessionId,
+        transacted(
           Effect.gen(function* () {
             const current = yield* get(sessionId);
             const decision = evaluateWorkflowAction(
@@ -932,8 +930,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
 
       /** Direct owner transition requires a fully quiescent session. */
       startNewGoal: (sessionId: string, input: StartNewGoal) =>
-        locked(
-          sessionId,
+        transacted(
           Effect.gen(function* () {
             if (yield* pendingNewGoal(sessionId)) return yield* refuseNewGoal("transition_pending");
             return (yield* commitNewGoal(sessionId, input)).state;
@@ -942,8 +939,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
 
       /** Tool admission only records a durable request; never claims a new Goal was saved. */
       requestNewGoal: (sessionId: string, runId: string, input: StartNewGoal) =>
-        locked(
-          sessionId,
+        transacted(
           Effect.gen(function* () {
             const payload = yield* encodeRequest(input);
             const existing = yield* requestOf(runId);
@@ -972,18 +968,17 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
             )
               return yield* refuseNewGoal("workflow_changed");
             yield* sql`INSERT INTO workflow_new_goal_requests
-              (run_id, session_id, previous_goal_instance_id, source_revision_id,
-               payload_json, status, created_at)
-              VALUES (${runId}, ${sessionId}, ${input.previousGoalInstanceId}, ${revision.value.id},
-                ${payload}, 'accepted', ${yield* nowIso})`;
+            (run_id, session_id, previous_goal_instance_id, source_revision_id,
+             payload_json, status, created_at)
+            VALUES (${runId}, ${sessionId}, ${input.previousGoalInstanceId}, ${revision.value.id},
+              ${payload}, 'accepted', ${yield* nowIso})`;
             return { status: "accepted" as const, runId };
           }),
         ),
 
       /** Idempotent owner settlement. A failed or missing run can never apply its intent. */
       settleNewGoalRequest: (sessionId: string, runId: string) =>
-        locked(
-          sessionId,
+        transacted(
           Effect.gen(function* () {
             const found = yield* settlementOf(runId);
             if (Option.isNone(found) || found.value.session_id !== sessionId)
@@ -1005,7 +1000,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                   (
                     now,
                   ) => sql`UPDATE workflow_new_goal_requests SET status = 'rejected', reason = ${reason},
-                settled_at = ${now} WHERE run_id = ${runId} AND status = 'accepted'`,
+              settled_at = ${now} WHERE run_id = ${runId} AND status = 'accepted'`,
                 ),
                 Effect.as(NewGoalSettlement.rejected({ reason })),
               );
@@ -1020,8 +1015,8 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                 nowIso.pipe(
                   Effect.flatMap(
                     (now) => sql`UPDATE workflow_new_goal_requests
-                  SET status = 'applied', applied_goal_instance_id = ${newId}, settled_at = ${now}
-                  WHERE run_id = ${runId} AND status = 'accepted'`,
+                SET status = 'applied', applied_goal_instance_id = ${newId}, settled_at = ${now}
+                WHERE run_id = ${runId} AND status = 'accepted'`,
                   ),
                   Effect.as(NewGoalSettlement.applied({ goalInstanceId: newId })),
                 ),
@@ -1149,8 +1144,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
         recorderRunId = "",
         author?: BoardAuthor,
       ) =>
-        locked(
-          sessionId,
+        transacted(
           Effect.gen(function* () {
             const current = yield* get(sessionId);
             if (input.goalStatus !== undefined && current.goal === null)
@@ -1345,8 +1339,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
        * Plan or it already ended.
        */
       closePlan: (sessionId: string, reason: string, author?: BoardAuthor) =>
-        locked(
-          sessionId,
+        transacted(
           Effect.gen(function* () {
             const current = yield* get(sessionId);
             if (current.plan === null)
@@ -1367,8 +1360,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
        * pending request for the orchestrator and leaves the card as it is.
        */
       editBoard: (sessionId: string, edit: BoardEdit, author: BoardAuthor) =>
-        locked(
-          sessionId,
+        transacted(
           Effect.gen(function* () {
             const current = yield* get(sessionId);
             const cardId = `card-${(yield* crypto.randomUUIDv4()).slice(0, 8)}`;
@@ -1388,11 +1380,11 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                 const inserted = yield* sql<{
                   readonly id: number;
                 }>`INSERT INTO board_change_requests
-                  (session_id, goal_instance_id, card_id, plan_version, change_json, status, created_at)
-                  VALUES (${sessionId},
-                    (SELECT goal_instance_id FROM workflow_goal_identities WHERE session_id = ${sessionId}),
-                    ${cardId}, ${edit.planVersion}, ${changeJson}, 'pending', ${now})
-                  RETURNING id`;
+                (session_id, goal_instance_id, card_id, plan_version, change_json, status, created_at)
+                VALUES (${sessionId},
+                  (SELECT goal_instance_id FROM workflow_goal_identities WHERE session_id = ${sessionId}),
+                  ${cardId}, ${edit.planVersion}, ${changeJson}, 'pending', ${now})
+                RETURNING id`;
                 const request: UserChangeRequest = {
                   id: Number(inserted[0]?.id),
                   cardId,
@@ -1418,8 +1410,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
         change: { readonly cardId: string; readonly hold: boolean },
         author: BoardAuthor,
       ) =>
-        locked(
-          sessionId,
+        transacted(
           Effect.gen(function* () {
             const current = yield* get(sessionId);
             const now = yield* nowIso;
@@ -1438,8 +1429,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
        * two authors racing for the same card cannot both win.
        */
       transitionCard: (sessionId: string, transition: CardTransition, author: BoardAuthor) =>
-        locked(
-          sessionId,
+        transacted(
           Effect.gen(function* () {
             const current = yield* get(sessionId);
             const planned = yield* planCardTransition(current.plan, transition);

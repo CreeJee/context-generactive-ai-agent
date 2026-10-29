@@ -3149,3 +3149,11 @@
 - reader는 페이지마다 구독한 뒤 읽는다. 로그 끝이면 그 구독으로 자기 run id를 기다리고, 1초가 지나면 다시 읽는다. 원안(끝에서 구독하고 한 번 더 읽기)은 쓰기가 없을 때 1초에 두 번 읽어서 바꿨다.
 - 전: 로그 끝에서 20ms마다 페이지를 읽었다. 10초면 약 500번이다. 후: 쓰기가 없으면 10초에 11번(처음 한 번과 1초마다) 읽는다. 쓰기가 있으면 시계를 기다리지 않고 바로 깨어난다. 둘 다 `src/workflow/durable-stream.test.ts`가 TestClock으로 본다. 횟수는 SQL span의 `db.query.text`로 센다.
 - 결과: `vp check`가 통과한다. memory-agent 전체 테스트는 기계 부하 평균 25에서 돌아 17 파일이 native 검색 시작 시간초과(`NativeOwnerFailed: startup-timeout`)로 실패했다. 그 17 파일은 `--maxWorkers=2`로 따로 돌리면 모두 통과한다.
+
+## Workflow 정상화 6단계: `Workflows`의 세션 key lock을 뺀다 (2026-10-29)
+
+- 설계 문서 `docs/designs/workflow-normalization.md`의 Step 6(결정 6)을 구현했다. `Workflows`의 쓰기는 이제 `persisted(sql.withTransaction(effect))`로만 감싼다. 감싸는 함수 이름은 lock이 없으므로 `locked`에서 `transacted`로 바꾸고, 쓰지 않게 된 session id 인자를 뺐다.
+- 앱은 SQLite 연결 하나를 쓰고, transaction은 commit이나 rollback까지 그 연결의 semaphore를 쥔다(`db/sql-client.ts`). 그래서 같은 세션의 쓰기는 key lock 없이도 하나씩 돈다. 동시 갱신 24개가 version을 잃지 않는 기존 테스트가 그대로 통과한다.
+- 전: 한 fiber가 transaction을 연 뒤 `Workflows`를 부르고, 그 사이 다른 fiber가 같은 세션의 `Workflows`를 부르면 교착했다. 뒤의 fiber는 key lock을 쥐고 연결을 기다리고, 앞의 fiber는 연결을 쥐고 key lock을 기다린다. `tests/workflow/state.test.ts`의 새 테스트가 고치기 전 코드에서 2초 timeout으로 실패했다. 후: 같은 테스트가 통과한다.
+- `keyedSerialLimit` 모듈은 남긴다. 하위 에이전트 메시지와 `AgentChat`이 쓴다.
+- 결과: `vp check`가 통과한다. memory-agent 전체 테스트(207 파일)가 모두 통과한다. 0.0.17 업그레이드 테스트의 기대 실패 2개는 7단계에서 뒤집는다.
