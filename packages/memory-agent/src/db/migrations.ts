@@ -38,6 +38,25 @@ export const tanStackRowsMigration = `
 `;
 
 /**
+ * The step that splits kanban human decision requests into what they ask and the facts seen when
+ * asking. 0.0.17 kept the facts in the workflow payload, JSON that SQL alone cannot move, so
+ * startup runs `migrateHumanDecisionRows` with this step (`db/database.ts`).
+ */
+export const humanDecisionFactsMigration = `
+  -- The facts a kanban human decision request saw, oldest first. Asking the same occasion again
+  -- adds a row when they changed; rows are never rewritten. The first row of a 0.0.17 request is
+  -- the facts its payload kept (migrateHumanDecisionRows).
+  CREATE TABLE human_decision_facts (
+    execution_id TEXT NOT NULL REFERENCES owner_workflow_executions(execution_id)
+      ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED,
+    seq INTEGER NOT NULL CHECK (seq > 0),
+    kind_json TEXT NOT NULL CHECK (json_valid(kind_json)),
+    observed_at INTEGER NOT NULL,
+    PRIMARY KEY (execution_id, seq)
+  );
+`;
+
+/**
  * Ordered schema steps. `PRAGMA user_version` records how many have been applied.
  * Append new steps; never edit an applied one.
  */
@@ -1956,6 +1975,7 @@ export const migrations: readonly string[] = [
   ALTER TABLE owner_workflow_executions ADD COLUMN created_at INTEGER;
   ALTER TABLE owner_workflow_executions ADD COLUMN updated_at INTEGER;
   `,
+  humanDecisionFactsMigration,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

@@ -14,14 +14,17 @@ import type { Route } from "./+types/sessions.$session.decisions.$decision";
 const Answer = Schema.Struct({
   goalInstanceId: Schema.String,
   cardId: Schema.String,
+  /** The facts the person saw; the request's latest are answered only. */
+  factsSeq: Schema.Int,
   answer: DecisionAnswer,
 });
 
 /**
- * POST /api/sessions/:session/decisions/:decision { goalInstanceId, cardId, answer } — a person
- * answers a card's decision, from its board or from the project inbox. The same answer again is
- * accepted; a different one (409), a closed request (409) or one of another session, Goal or card
- * (404) is refused, as is a session another page holds (423).
+ * POST /api/sessions/:session/decisions/:decision { goalInstanceId, cardId, factsSeq, answer } — a
+ * person answers a card's decision, from its board or from the project inbox. The same answer again
+ * is accepted; a different one (409), a closed request (409), facts that changed since the person
+ * saw them (409 `facts_changed`) or one of another session, Goal or card (404) is refused, as is a
+ * session another page holds (423).
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 export function action({ request, params }: Route.ActionArgs) {

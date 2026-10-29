@@ -287,6 +287,7 @@ export const ApiErrorCode = Schema.Literals([
   "cross_site_request",
   "empty_message",
   "external_agent_unavailable",
+  "facts_changed",
   "goal_missing",
   "goal_not_active",
   "goal_not_paused",
@@ -709,13 +710,21 @@ export const api = {
     call<ProjectBoard[]>("GET", `/api/projects/${encodeURIComponent(projectId)}/boards`),
   answerDecision: (
     holder: string,
-    request: Pick<HumanDecisionRequest, "requestId" | "sessionId" | "goalInstanceId" | "cardId">,
+    request: Pick<
+      HumanDecisionRequest,
+      "requestId" | "sessionId" | "goalInstanceId" | "cardId" | "factsSeq"
+    >,
     answer: DecisionAnswer,
   ) =>
     call<HumanDecisionRequest>(
       "POST",
       `/api/sessions/${encodeURIComponent(request.sessionId)}/decisions/${encodeURIComponent(request.requestId)}`,
-      { goalInstanceId: request.goalInstanceId, cardId: request.cardId, answer },
+      {
+        goalInstanceId: request.goalInstanceId,
+        cardId: request.cardId,
+        factsSeq: request.factsSeq,
+        answer,
+      },
       { [sessionHolderHeader]: holder },
     ),
   kanban: (sessionId: string) =>

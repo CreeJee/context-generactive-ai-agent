@@ -2,17 +2,20 @@ import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { Effect, FileSystem, Option, Path, Result, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { freshSession, TestEnv, testAgent } from "../../tests/support/test-env.ts";
-import { sqlGet, sqlRun } from "../../tests/support/sql.ts";
+import { sqlAll, sqlGet, sqlRun } from "../../tests/support/sql.ts";
 import { Projects } from "../projects/projects.ts";
 import { Sessions } from "../sessions/sessions.ts";
 import { Boards } from "../workflow/board.ts";
 import { BoardAuthor } from "../workflow/card.ts";
 import { Workflows } from "../workflow/workflow.ts";
 import {
+  type DecisionAsked,
   DecisionAnswer,
   DecisionCloseScope,
   DecisionKind,
+  DecisionOccasion,
   DecisionState,
+  goalDecisionCardId,
   HumanDecisionRefused,
   HumanDecisions,
 } from "./human-decision.ts";
@@ -37,10 +40,13 @@ const step = (id: string) => ({
 });
 
 const orchestrator = BoardAuthor.cases.Orchestrator.make({ runId: "run-1" });
-const uncertain: DecisionKind = DecisionKind.cases.UncertainSideEffect.make({
-  runId: "card-run-1",
-  toolNames: ["write_file"],
-});
+const uncertain: DecisionAsked = {
+  occasion: DecisionOccasion.UncertainSideEffect({ runId: "card-run-1", attemptNo: 1 }),
+  kind: DecisionKind.cases.UncertainSideEffect.make({
+    runId: "card-run-1",
+    toolNames: ["write_file"],
+  }),
+};
 
 /** A session whose Goal has cards `a` and `b`, both ready. */
 const boardSession = (sessionId?: string) =>
@@ -82,19 +88,17 @@ testAgent()("human decisions", (it) => {
         sessionId,
         goalInstanceId,
         cardId: "a",
-        key: "attempt-1",
-        kind: uncertain,
+        ...uncertain,
         author: orchestrator,
       });
       expect(request.state).toEqual(DecisionState.Pending());
       expect(yield* cardStatus(sessionId, "a")).toBe("human_decision");
-      // The same key is the same request; the card is not moved again.
+      // The same occasion is the same request; the card is not moved again.
       const again = yield* decisions.request({
         sessionId,
         goalInstanceId,
         cardId: "a",
-        key: "attempt-1",
-        kind: uncertain,
+        ...uncertain,
         author: orchestrator,
       });
       expect(again.requestId).toBe(request.requestId);
@@ -107,6 +111,7 @@ testAgent()("human decisions", (it) => {
         goalInstanceId,
         cardId: "a",
         requestId: request.requestId,
+        factsSeq: request.factsSeq,
         answer: DecisionAnswer.cases.UncertainSideEffect.make({ choice: "stop" }),
       });
       expect(answered.state).toEqual(
@@ -133,7 +138,7 @@ testAgent()("human decisions", (it) => {
         sessionId,
         goalInstanceId,
         cardId: "a",
-        key: "k",
+        occasion: DecisionOccasion.RetryExhausted({ attemptNo: 3 }),
         kind: DecisionKind.cases.RetryExhausted.make({ attempts: 3 }),
         author: orchestrator,
       });
@@ -146,6 +151,7 @@ testAgent()("human decisions", (it) => {
           goalInstanceId,
           cardId: "a",
           requestId: request.requestId,
+          factsSeq: request.factsSeq,
           answer: DecisionAnswer.cases.RetryExhausted.make({ choice }),
           ...fields,
         });
@@ -197,8 +203,7 @@ testAgent()("human decisions", (it) => {
           sessionId,
           goalInstanceId,
           cardId,
-          key: "k",
-          kind: uncertain,
+          ...uncertain,
           author: orchestrator,
         });
       const stopped = yield* request("a");
@@ -232,6 +237,7 @@ testAgent()("human decisions", (it) => {
           goalInstanceId,
           cardId: "a",
           requestId: stopped.requestId,
+          factsSeq: stopped.factsSeq,
           answer: DecisionAnswer.cases.UncertainSideEffect.make({ choice: "continue" }),
         }),
       );
@@ -248,7 +254,7 @@ testAgent()("human decisions", (it) => {
         sessionId,
         goalInstanceId,
         cardId: "a",
-        key: "k",
+        occasion: DecisionOccasion.ImpactUnclear({ fromVersion: 1, toVersion: 2 }),
         kind: DecisionKind.cases.ImpactUnclear.make({ fromGoalVersion: 1, toGoalVersion: 2 }),
         author: orchestrator,
       });
@@ -268,6 +274,7 @@ testAgent()("human decisions", (it) => {
           goalInstanceId,
           cardId: "a",
           requestId: request.requestId,
+          factsSeq: request.factsSeq,
           answer: DecisionAnswer.cases.ImpactUnclear.make({ choice: "continue" }),
         }),
       );
@@ -276,6 +283,54 @@ testAgent()("human decisions", (it) => {
       expect(Option.map(yield* decisions.get(request.requestId), (entry) => entry.state)).toEqual(
         Option.some(DecisionState.Closed({ reason: "goal_replaced" })),
       );
+    }),
+  );
+
+  it.effect("keeps one request per occasion and adds the facts that changed while it waits", () =>
+    Effect.gen(function* () {
+      const decisions = yield* HumanDecisions;
+      const { sessionId, goalInstanceId } = yield* boardSession();
+      const ask = (prAvailable: boolean) =>
+        decisions.request({
+          sessionId,
+          goalInstanceId,
+          cardId: goalDecisionCardId,
+          occasion: DecisionOccasion.ProtectedBranchMerge({ head: "abc" }),
+          kind: DecisionKind.cases.ProtectedBranchMerge.make({ targetBranch: "main", prAvailable }),
+          author: orchestrator,
+        });
+      const facts = (requestId: string) =>
+        sqlAll(
+          "SELECT seq FROM human_decision_facts WHERE execution_id = ? ORDER BY seq",
+          requestId,
+        );
+      const [first, raced] = yield* Effect.all([ask(false), ask(false)], {
+        concurrency: "unbounded",
+      });
+      expect(raced.requestId).toBe(first.requestId);
+      expect(yield* ask(false)).toMatchObject({ factsSeq: 1, factsChanged: false });
+      expect(yield* facts(first.requestId)).toEqual([{ seq: 1 }]);
+
+      expect(yield* ask(true)).toMatchObject({
+        requestId: first.requestId,
+        factsSeq: 2,
+        factsChanged: true,
+        kind: { prAvailable: true },
+      });
+      const answer = (factsSeq: number) =>
+        decisions.answer({
+          sessionId,
+          goalInstanceId,
+          cardId: goalDecisionCardId,
+          requestId: first.requestId,
+          factsSeq,
+          answer: DecisionAnswer.cases.ProtectedBranchMerge.make({ choice: "create_pr" }),
+        });
+      expect(yield* Effect.flip(answer(1))).toMatchObject({ reason: "facts_changed" });
+      yield* answer(2);
+      // The answer was for this occasion, so facts seen after it are not added.
+      expect(yield* ask(false)).toMatchObject({ factsSeq: 2 });
+      expect(yield* facts(first.requestId)).toEqual([{ seq: 1 }, { seq: 2 }]);
     }),
   );
 
@@ -291,8 +346,8 @@ testAgent()("human decisions", (it) => {
       const first = yield* boardSession(yield* sessionIn);
       const second = yield* boardSession(yield* sessionIn);
       const elsewhere = yield* boardSession();
-      const ask = (target: typeof first, cardId: string, key = "k") =>
-        decisions.request({ ...target, cardId, key, kind: uncertain, author: orchestrator });
+      const ask = (target: typeof first, cardId: string) =>
+        decisions.request({ ...target, cardId, ...uncertain, author: orchestrator });
 
       const waiting = yield* ask(first, "a");
       const answered = yield* ask(first, "b");
@@ -302,6 +357,7 @@ testAgent()("human decisions", (it) => {
         ...first,
         cardId: "b",
         requestId: answered.requestId,
+        factsSeq: answered.factsSeq,
         answer: DecisionAnswer.cases.UncertainSideEffect.make({ choice: "retry" }),
       });
 
@@ -326,7 +382,7 @@ testAgent()("human decisions across a restart", (it) => {
         sessionId,
         goalInstanceId,
         cardId: "a",
-        key: "k",
+        occasion: DecisionOccasion.IntegrationConflict({ attemptNo: 1, answered: 0 }),
         kind: DecisionKind.cases.IntegrationConflict.make({ files: ["src/a.ts"] }),
         author: orchestrator,
       });
@@ -341,6 +397,7 @@ testAgent()("human decisions across a restart", (it) => {
             goalInstanceId,
             cardId: "a",
             requestId: request.requestId,
+            factsSeq: request.factsSeq,
             answer: DecisionAnswer.cases.IntegrationConflict.make({ choice: "resolved" }),
           });
           return {

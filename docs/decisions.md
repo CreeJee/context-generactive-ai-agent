@@ -3196,3 +3196,14 @@
 - 설계의 `display`에 있던 `state_reconciled`는 넣지 않았다. 같은 문구를 실행 알림(B)이 이미 보인다. 두 곳에 보이면 같은 말을 두 번 한다.
 - 도구 결과의 새 Goal 거절 reason을 위한 전용 문구는 만들지 않았다. 앱은 도구 결과를 일반 카드로 보이고, 모델이 거절 이유를 사용자에게 전한다. 도구 하나를 위한 렌더러는 이 단계의 목표(Goal이 끝까지 넘어감) 밖이다.
 - G1의 경로 확인: 재시작 뒤 시작 검사가 `accepted` 요청을 `rejected{run_outcome_uncertain}`으로 정산하고, 그 세션의 다음 run이 새 Goal을 다시 요청하면 받아들여진다. 전에는 정산되지 않은 요청이 남아 다음 요청이 `transition_pending`으로 막혔다. 칸반 Goal을 고치면 phase가 `execute`로 남고 `display`가 `card_reclassifying`이다. 도구 호출 때의 거절과 이미 `accepted`인 요청의 적용은 기존 테스트가 덮어 더하지 않았다.
+
+## Workflow 정상화 8단계: 사람 결정 요청을 occasion과 사실로 나눈다 (2026-10-29)
+
+- 설계의 D3를 구현했다. 사람 결정 요청의 payload는 `{ sessionId, goalInstanceId, cardId, key }`뿐이다. `key`는 `DecisionOccasion`(무엇 때문에 묻는지)에서 만든다. 전에는 payload에 `kind`와 `createdAt`이 들어 있어, 같은 occasion을 다시 물으면 payload가 달라 `execution_conflict`가 나거나 처음 본 사실이 그대로 남았다.
+- 묻는 순간 본 사실(`DecisionKind`)은 새 테이블 `human_decision_facts(execution_id, seq, kind_json, observed_at)`에 둔다. 첫 요청은 admission과 같은 트랜잭션에서 `seq` 1을 쓴다. 같은 occasion을 다시 물으면 사실 JSON이 달라졌고 요청이 아직 대기 중일 때만 다음 `seq`를 더한다. 답했거나 닫힌 요청에는 더하지 않는다.
+- 답은 화면이 본 `factsSeq`를 함께 보낸다. 대기 중인 요청의 최신 `seq`와 다르면 `facts_changed`(409)로 거절하고, 화면은 결정 목록을 다시 읽는다. 이미 답한 요청은 같은 답이면 받아들이는 기존 규칙을 따르고 `factsSeq`를 보지 않는다. 답은 한 번 기록되면 바뀌지 않기 때문이다.
+- 요청 응답에 `factsSeq`와 `factsChanged`(`seq` > 1)를 더했다. 화면은 `factsChanged`일 때 "처음 물은 뒤 상황이 바뀌어 최신 내용으로 보여요."를 보인다.
+- `DecisionOccasion`은 저장하지 않는 값이라 `Data.TaggedEnum`이다. `DecisionAsked`는 같은 tag의 occasion과 kind만 짝지을 수 있는 mapped union이라 tag가 다른 짝은 컴파일 오류다. `occasionKey`는 모듈 밖에 내보내지 않는다. key 문자열은 0.0.17과 같다.
+- 0.0.17 행은 마이그레이션(`humanDecisionFactsMigration` + `migrateHumanDecisionRows`)이 옮긴다. payload의 `kind`와 `createdAt`을 `seq` 1 행과 `created_at`으로 옮기고 payload를 새 형태로 다시 encode한다. 답한 요청과 닫힌 요청도 옮긴다. 이력이 같은 decoder로 읽혀야 하기 때문이다. decode하지 못하는 행은 그대로 두고 개수만 경고한다. 앱은 이미 그런 행을 건너뛴다.
+- `DecisionKind`와 payload Schema는 `kanban/human-decision-schema.ts`로 옮겼다. `db/database.ts`가 마이그레이션을 import하고 worker bundle도 `db/database.ts`를 import하므로, 마이그레이션이 결정 서비스 전체를 끌어오지 않게 하려는 것이다.
+- 7단계 C 뒤 전체 suite에서 실패 3개(native search `startup-timeout` 2개, `scheduler.test` import 5초 timeout 1개)가 있었다. 셋 다 `--maxWorkers=2`로 따로 돌리면 통과해 부하에 따른 flaky로 보았다.

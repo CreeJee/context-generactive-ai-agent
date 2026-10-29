@@ -418,6 +418,7 @@ export {
   DecisionAnswer,
   DecisionCloseReason,
   DecisionKind,
+  DecisionOccasion,
   HumanDecisionRefused,
   HumanDecisions,
   answeredCardStatus,

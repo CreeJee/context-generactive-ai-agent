@@ -5,7 +5,13 @@ import { DatabaseSync } from "node:sqlite";
 import { Context, Effect, Exit, FileSystem, Layer, Path, Schema, Semaphore } from "effect";
 import { Migrator, SqlClient, SqlError } from "effect/sql";
 import { migrateTanStackRows } from "../chat-store/tanstack-migration.ts";
-import { goalHistoryMigration, migrations, tanStackRowsMigration } from "./migrations.ts";
+import { migrateHumanDecisionRows } from "../kanban/human-decision-migration.ts";
+import {
+  goalHistoryMigration,
+  humanDecisionFactsMigration,
+  migrations,
+  tanStackRowsMigration,
+} from "./migrations.ts";
 import { migrationClient } from "./migration-client.ts";
 import { sqlClientOver } from "./sql-client.ts";
 
@@ -148,6 +154,12 @@ const migrateInTransaction = Effect.fnUntraced(function* (sqlite: DatabaseSync) 
                   migrateTanStackRows().pipe(
                     Effect.orDie,
                     Effect.when(Effect.succeed(step === tanStackRowsMigration)),
+                  ),
+                ),
+                Effect.andThen(
+                  migrateHumanDecisionRows().pipe(
+                    Effect.orDie,
+                    Effect.when(Effect.succeed(step === humanDecisionFactsMigration)),
                   ),
                 ),
                 Effect.andThen(

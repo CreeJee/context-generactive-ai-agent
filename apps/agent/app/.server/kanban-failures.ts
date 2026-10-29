@@ -61,6 +61,7 @@ const humanDecisionStatus: Record<HumanDecisionRefused["reason"], number> = {
   goal_superseded: 409,
   request_closed: 409,
   answer_conflict: 409,
+  facts_changed: 409,
 };
 
 export const kanbanFailureResponse = (failure: KanbanRouteFailure): Response =>

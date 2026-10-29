@@ -45,7 +45,10 @@ function useAnswerDecisionMutationBody(projectId: string, holder: string) {
       request,
       answer,
     }: {
-      request: Pick<HumanDecisionRequest, "requestId" | "sessionId" | "goalInstanceId" | "cardId">;
+      request: Pick<
+        HumanDecisionRequest,
+        "requestId" | "sessionId" | "goalInstanceId" | "cardId" | "factsSeq"
+      >;
       answer: DecisionAnswer;
     }) => api.answerDecision(holder, request, answer),
     onSettled: (_answered, _error, { request }) =>

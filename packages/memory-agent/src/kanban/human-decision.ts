@@ -1,4 +1,5 @@
 import {
+  Array as EffectArray,
   Clock,
   Context,
   Data,
@@ -20,52 +21,20 @@ import {
   ownerWorkflowEngineLayer,
   suspendedRetrySchedule,
 } from "../workflow/owner-workflow-engine.ts";
-import { OwnerWorkflowStorage, type StoredExecution } from "../workflow/owner-workflow-storage.ts";
+import {
+  OwnerWorkflowAdmission,
+  OwnerWorkflowAdmissionResult,
+  OwnerWorkflowStorage,
+  type StoredExecution,
+} from "../workflow/owner-workflow-storage.ts";
 import { Workflows, WorkflowStorageError } from "../workflow/workflow.ts";
+import {
+  DecisionKind,
+  HumanDecisionPayload,
+  humanDecisionWorkflow,
+} from "./human-decision-schema.ts";
 
-/** What a card waits on a person for. The metadata is safe to show: no provider text or paths. */
-export const DecisionKind = Schema.TaggedUnion({
-  /**
-   * An attempt's run left a tool whose effect is unknown; the person says what really happened.
-   * `toolNames` is empty when the run's records do not name the tools.
-   */
-  UncertainSideEffect: {
-    runId: Schema.String,
-    toolNames: Schema.Array(Schema.String),
-  },
-  /** Integrating the card into the Goal branch conflicted in these files. */
-  IntegrationConflict: { files: Schema.Array(Schema.String) },
-  /** A Goal change whose effect on the card the orchestrator could not judge (NeedsDecision). */
-  ImpactUnclear: {
-    fromGoalVersion: Schema.Int,
-    toGoalVersion: Schema.Int,
-  },
-  /** Every attempt of the card failed. */
-  RetryExhausted: { attempts: Schema.Int },
-  /**
-   * The Goal would merge into a protected branch, which is never automatic. A pull request is
-   * offered only when the GitHub CLI was found when the Goal asked.
-   */
-  ProtectedBranchMerge: {
-    targetBranch: Schema.String,
-    prAvailable: Schema.Boolean,
-  },
-  /** Merging the user's branch into the Goal branch conflicted in these files. */
-  MergeConflict: {
-    targetBranch: Schema.String,
-    files: Schema.Array(Schema.String),
-  },
-  /**
-   * The card's expected files overlap a card another Goal finished but has not merged yet; the
-   * scheduler cannot tell which Goal should go first.
-   */
-  FileOverlap: {
-    otherGoalInstanceId: Schema.String,
-    otherCardId: Schema.String,
-    files: Schema.Array(Schema.String),
-  },
-});
-export type DecisionKind = typeof DecisionKind.Type;
+export { DecisionKind } from "./human-decision-schema.ts";
 
 /** The kind's tag, as the card's history and pages name it. */
 export const decisionKindName = DecisionKind.match({
@@ -169,7 +138,12 @@ export interface HumanDecisionRequest {
   readonly sessionId: string;
   readonly goalInstanceId: string;
   readonly cardId: string;
+  /** The latest facts the orchestrator saw at the occasion. */
   readonly kind: DecisionKind;
+  /** Which facts `kind` is, counting from 1; an answer names it. */
+  readonly factsSeq: number;
+  /** The facts changed after the request first asked. */
+  readonly factsChanged: boolean;
   readonly createdAt: number;
   readonly state: DecisionState;
 }
@@ -180,16 +154,50 @@ export interface DecisionInboxItem extends HumanDecisionRequest {
   readonly cardTitle: string;
 }
 
-/** What the orchestrator asks. `key` is stable per occasion, so a retried request is the same one. */
-export interface DecisionRequestInput {
+/**
+ * What a request asks about, one case per kind. The same occasion of a card is the same request,
+ * however its facts changed meanwhile.
+ */
+export type DecisionOccasion = Data.TaggedEnum<{
+  UncertainSideEffect: { readonly runId: string; readonly attemptNo: number };
+  IntegrationConflict: { readonly attemptNo: number; readonly answered: number };
+  ImpactUnclear: { readonly fromVersion: number; readonly toVersion: number };
+  RetryExhausted: { readonly attemptNo: number };
+  ProtectedBranchMerge: { readonly head: string };
+  MergeConflict: { readonly goalHead: string; readonly targetHead: string };
+  FileOverlap: { readonly otherGoalInstanceId: string };
+}>;
+export const DecisionOccasion = Data.taggedEnum<DecisionOccasion>();
+
+/** The occasion's part of the request's identity, in the form stored requests already use. */
+const occasionKey = (occasion: DecisionOccasion) =>
+  Match.valueTags(occasion, {
+    UncertainSideEffect: ({ runId, attemptNo }) => `uncertain_side_effect:${runId}:${attemptNo}`,
+    IntegrationConflict: ({ attemptNo, answered }) =>
+      `integration_conflict:${attemptNo}:${answered}`,
+    ImpactUnclear: ({ fromVersion, toVersion }) => `impact_unclear:${fromVersion}:${toVersion}`,
+    RetryExhausted: ({ attemptNo }) => `retry_exhausted:${attemptNo}`,
+    ProtectedBranchMerge: ({ head }) => `protected_branch:${head}`,
+    MergeConflict: ({ goalHead, targetHead }) => `merge_conflict:${goalHead}:${targetHead}`,
+    FileOverlap: ({ otherGoalInstanceId }) => `file_overlap:${otherGoalInstanceId}`,
+  });
+
+/** An occasion and the facts seen at it, both of one kind. */
+export type DecisionAsked = {
+  readonly [Tag in DecisionKind["_tag"]]: {
+    readonly occasion: Extract<DecisionOccasion, { readonly _tag: Tag }>;
+    readonly kind: Extract<DecisionKind, { readonly _tag: Tag }>;
+  };
+}[DecisionKind["_tag"]];
+
+/** What the orchestrator asks. Asking the same occasion again adds changed facts to its request. */
+export type DecisionRequestInput = DecisionAsked & {
   readonly sessionId: string;
   readonly goalInstanceId: string;
   readonly cardId: string;
-  readonly key: string;
-  readonly kind: DecisionKind;
   /** Recorded on the card's move to `human_decision`. */
   readonly author: BoardAuthor;
-}
+};
 
 /** A person's answer, admitted only when it names the request's own session, Goal and card. */
 export interface DecisionAnswerInput {
@@ -197,6 +205,8 @@ export interface DecisionAnswerInput {
   readonly goalInstanceId: string;
   readonly cardId: string;
   readonly requestId: string;
+  /** The facts the person answered; older ones than the latest are refused. */
+  readonly factsSeq: number;
   readonly answer: DecisionAnswer;
 }
 
@@ -224,20 +234,9 @@ export class HumanDecisionRefused extends Schema.TaggedError<
     "request_closed",
     "answer_invalid",
     "answer_conflict",
+    "facts_changed",
   ]),
 }) {}
-
-const HumanDecisionPayload = Schema.Struct({
-  sessionId: Schema.String,
-  goalInstanceId: Schema.String,
-  cardId: Schema.String,
-  key: Schema.String,
-  kind: DecisionKind,
-  createdAt: Schema.Finite,
-});
-type HumanDecisionPayload = typeof HumanDecisionPayload.Type;
-
-const humanDecisionWorkflow = "HumanDecisionExecution";
 
 const HumanDecisionExecution = Workflow.make(humanDecisionWorkflow, {
   payload: HumanDecisionPayload,
@@ -294,6 +293,29 @@ const decisionHandler = (payload: HumanDecisionPayload) =>
 
 const StoredAnswer = Schema.TaggedStruct("Success", { value: DecisionAnswer });
 const ClosureRow = Schema.Struct({ reason: DecisionCloseReason });
+const FactsRow = Schema.Struct({
+  seq: Schema.Int,
+  kind_json: Schema.String,
+  observed_at: Schema.Finite,
+});
+const decodeKind = Schema.decodeUnknownResult(Schema.fromJsonString(DecisionKind));
+const encodeKind = Schema.encodeEffect(Schema.fromJsonString(DecisionKind));
+
+/** What the orchestrator saw at an occasion, as the request's latest `human_decision_facts` row. */
+interface Facts {
+  readonly seq: number;
+  readonly kind: DecisionKind;
+  /** The stored JSON, which tells whether facts seen again changed. */
+  readonly json: string;
+  readonly observedAt: number;
+}
+
+/** A stored request: its execution, its identity and its latest facts. */
+interface StoredRequest {
+  readonly execution: StoredExecution;
+  readonly payload: HumanDecisionPayload;
+  readonly facts: Facts;
+}
 const SessionRow = Schema.Struct({ id: Schema.String, title: Schema.NullOr(Schema.String) });
 
 /** An answer must be for the request's kind; a pull request needs the GitHub CLI. */
@@ -314,20 +336,20 @@ const sameAnswer = (left: DecisionAnswer, right: DecisionAnswer) =>
 const make = Effect.gen(function* () {
   const engine = yield* WorkflowEngine.WorkflowEngine;
   const storage = yield* OwnerWorkflowStorage;
+  const admission = yield* OwnerWorkflowAdmission;
   const workflows = yield* Workflows;
   const sql = yield* SqlClient.SqlClient;
   // Requests ride on board changes, so pages refresh them with the board.
   const events = yield* AppEvents;
   const provideEngine = <A, E>(effect: Effect.Effect<A, E, WorkflowEngine.WorkflowEngine>) =>
     Effect.provideService(effect, WorkflowEngine.WorkflowEngine, engine);
-  const stored = <A, E>(effect: Effect.Effect<A, E>) =>
-    Effect.mapError(effect, (cause) =>
-      KanbanStorageFailed.make({
-        operation: "decision",
-        reason: KanbanStorageReason.cases.Storage.make({}),
-        cause,
-      }),
-    );
+  const storageFailed = (cause: unknown) =>
+    KanbanStorageFailed.make({
+      operation: "decision",
+      reason: KanbanStorageReason.cases.Storage.make({}),
+      cause,
+    });
+  const stored = <A, E>(effect: Effect.Effect<A, E>) => Effect.mapError(effect, storageFailed);
   /** A request or answer this owner just stored is not there to read back. */
   const missing = KanbanStorageFailed.make({
     operation: "decision",
@@ -354,6 +376,31 @@ const make = Effect.gen(function* () {
     execution.workflowName === humanDecisionWorkflow
       ? Result.getSuccess(Schema.decodeUnknownResult(HumanDecisionPayload)(execution.payload))
       : Option.none();
+  const latestFacts = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: FactsRow,
+    execute: (executionId) => sql`SELECT seq, kind_json, observed_at FROM human_decision_facts
+      WHERE execution_id = ${executionId} ORDER BY seq DESC LIMIT 1`,
+  });
+  /** A request's latest facts; none when there are none it can read. */
+  const factsOf = (executionId: string) =>
+    Effect.map(
+      stored(latestFacts(executionId)),
+      Option.flatMap((row) =>
+        Option.map(Result.getSuccess(decodeKind(row.kind_json)), (kind): Facts => ({
+          seq: row.seq,
+          kind,
+          json: row.kind_json,
+          observedAt: row.observed_at,
+        })),
+      ),
+    );
+  const insertFacts = (executionId: string, seq: number, json: string) =>
+    Effect.flatMap(
+      Clock.currentTimeMillis,
+      (now) => sql`INSERT INTO human_decision_facts (execution_id, seq, kind_json, observed_at)
+        VALUES (${executionId}, ${seq}, ${json}, ${now})`,
+    );
 
   const storedAnswer = (executionId: string) =>
     Effect.map(stored(storage.deferredResult(executionId, DecisionAnswered.name)), (result) =>
@@ -384,37 +431,62 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const view = (execution: StoredExecution, payload: HumanDecisionPayload) =>
+  const view = ({ execution, payload, facts }: StoredRequest) =>
     Effect.map(stateOf(execution), (state): HumanDecisionRequest => ({
       requestId: execution.executionId,
       sessionId: payload.sessionId,
       goalInstanceId: payload.goalInstanceId,
       cardId: payload.cardId,
-      kind: payload.kind,
-      createdAt: payload.createdAt,
+      kind: facts.kind,
+      factsSeq: facts.seq,
+      factsChanged: facts.seq > 1,
+      createdAt: execution.createdAt ?? facts.observedAt,
       state,
     }));
 
+  /** The request an execution holds; none for other workflows and for rows it cannot read. */
+  const requestOf = (execution: StoredExecution) =>
+    Option.match(decoded(execution), {
+      onNone: () => Effect.succeedNone,
+      onSome: (payload) =>
+        Effect.map(
+          factsOf(execution.executionId),
+          Option.map((facts): StoredRequest => ({ execution, payload, facts })),
+        ),
+    });
   const read = (requestId: string) =>
-    Effect.map(stored(storage.execution(requestId)), (found) =>
-      Option.flatMap(found, (execution) =>
-        Option.map(decoded(execution), (payload) => ({ execution, payload })),
-      ),
+    Effect.flatMap(
+      stored(storage.execution(requestId)),
+      Option.match({ onNone: () => Effect.succeedNone, onSome: requestOf }),
     );
   /** A request this owner just stored or answered, which must be there to read back. */
   const readStored = (requestId: string) =>
     Effect.flatMap(read(requestId), (found) => Effect.fromOption(found, () => missing));
 
-  /** Every request of this kind with its payload; other workflows' executions are skipped. */
+  /** Every request of this kind; other workflows' executions and unreadable rows are skipped. */
   const requests = (executions: ReadonlyArray<StoredExecution>) =>
-    Effect.forEach(
-      executions.flatMap((execution) =>
-        Option.match(decoded(execution), {
-          onNone: () => [],
-          onSome: (payload) => [{ execution, payload }],
-        }),
-      ),
-      ({ execution, payload }) => view(execution, payload),
+    Effect.forEach(executions, requestOf).pipe(
+      Effect.flatMap((found) => Effect.forEach(EffectArray.getSomes(found), view)),
+    );
+
+  /**
+   * Adds the facts seen at an occasion again to its open request when they changed, in one
+   * transaction. An answered or closed request keeps its facts: the answer was for that occasion.
+   * Returns whether it added them.
+   */
+  const appendFacts = (requestId: string, kind: DecisionKind) =>
+    Effect.flatMap(stored(encodeKind(kind)), (json) =>
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            const found = yield* read(requestId);
+            if (Option.isNone(found) || found.value.facts.json === json) return false;
+            if (!DecisionState.$is("Pending")(yield* stateOf(found.value.execution))) return false;
+            yield* insertFacts(requestId, found.value.facts.seq + 1, json);
+            return true;
+          }),
+        )
+        .pipe(Effect.catchTag("SqlError", (cause) => Effect.fail(storageFailed(cause)))),
     );
 
   /** Waits that are still open: not answered and not closed. */
@@ -508,7 +580,8 @@ const make = Effect.gen(function* () {
   return {
     /**
      * Moves the card to `human_decision` and starts a durable wait for the answer. A request with
-     * the same session, Goal, card and key is the existing one, whatever its state.
+     * the same session, Goal, card and occasion is the existing one, whatever its state; facts
+     * that changed since are added to it while it waits.
      */
     request: (input: DecisionRequestInput) =>
       Effect.gen(function* () {
@@ -516,14 +589,15 @@ const make = Effect.gen(function* () {
           sessionId: input.sessionId,
           goalInstanceId: input.goalInstanceId,
           cardId: input.cardId,
-          key: input.key,
-          kind: input.kind,
-          createdAt: yield* Clock.currentTimeMillis,
+          key: occasionKey(input.occasion),
         };
         const requestId = yield* HumanDecisionExecution.executionId(payload);
-        const existing = yield* read(requestId);
-        if (Option.isSome(existing))
-          return yield* view(existing.value.execution, existing.value.payload);
+        const changed = (added: boolean) =>
+          Effect.when(events.publishSession(input.sessionId, "run-state"), Effect.succeed(added));
+        if (Option.isSome(yield* read(requestId))) {
+          yield* changed(yield* appendFacts(requestId, input.kind));
+          return yield* view(yield* readStored(requestId));
+        }
         yield* Effect.when(
           Effect.fail(HumanDecisionRefused.make({ reason: "goal_superseded" })),
           Effect.map(pointer(input.sessionId), (current) => current !== input.goalInstanceId),
@@ -565,21 +639,36 @@ const make = Effect.gen(function* () {
           ),
           Match.exhaustive,
         );
+        const json = yield* stored(encodeKind(input.kind));
+        const admitted = yield* stored(
+          admission.admit(
+            { workflowName: humanDecisionWorkflow, executionId: requestId, payload },
+            insertFacts(requestId, 1, json),
+          ),
+        );
+        // A concurrent request for the same occasion admitted first; these facts join it.
+        yield* Effect.when(
+          appendFacts(requestId, input.kind),
+          Effect.succeed(OwnerWorkflowAdmissionResult.$is("existing")(admitted)),
+        );
         yield* provideEngine(HumanDecisionExecution.execute(payload, { discard: true }));
         yield* events.publishSession(input.sessionId, "run-state");
-        // A concurrent request with the same key may have admitted first; its payload wins.
-        const admitted = yield* readStored(requestId);
-        return yield* view(admitted.execution, admitted.payload);
+        return yield* view(yield* readStored(requestId));
       }),
 
     /**
      * Completes the wait with a person's answer and moves the card. The same answer again is
-     * accepted; a different one is refused. Closed requests and other Goals' requests are refused.
+     * accepted; a different one is refused. Closed requests, other Goals' requests and answers to
+     * facts that changed since are refused.
      */
     answer: (input: DecisionAnswerInput) =>
       Effect.gen(function* () {
-        const { execution, payload } = yield* Effect.flatMap(read(input.requestId), (found) =>
-          Effect.fromOption(found, () => HumanDecisionRefused.make({ reason: "request_missing" })),
+        const { execution, payload, facts } = yield* Effect.flatMap(
+          read(input.requestId),
+          (found) =>
+            Effect.fromOption(found, () =>
+              HumanDecisionRefused.make({ reason: "request_missing" }),
+            ),
         );
         if (
           payload.sessionId !== input.sessionId ||
@@ -589,7 +678,7 @@ const make = Effect.gen(function* () {
           return yield* HumanDecisionRefused.make({ reason: "request_mismatch" });
         yield* Effect.when(
           Effect.fail(HumanDecisionRefused.make({ reason: "answer_invalid" })),
-          Effect.succeed(!answerFits(payload.kind, input.answer)),
+          Effect.succeed(!answerFits(facts.kind, input.answer)),
         );
         const settle = Effect.gen(function* () {
           const answer = yield* Effect.flatMap(storedAnswer(execution.executionId), (found) =>
@@ -602,10 +691,14 @@ const make = Effect.gen(function* () {
           // Joins the run, so the card has moved when the answer returns. A failed move stays a
           // failure: the answer is stored, but the card did not leave human_decision.
           yield* provideEngine(HumanDecisionExecution.execute(payload));
-          const current = yield* readStored(input.requestId);
-          return yield* view(current.execution, current.payload);
+          return yield* view(yield* readStored(input.requestId));
         });
         const admit = Effect.gen(function* () {
+          // Compared without a lock: facts added between this and the answer are one step newer.
+          yield* Effect.when(
+            Effect.fail(HumanDecisionRefused.make({ reason: "facts_changed" })),
+            Effect.succeed(input.factsSeq !== facts.seq),
+          );
           yield* Effect.when(
             Effect.andThen(
               closeOne(input, "goal_replaced"),
@@ -663,7 +756,7 @@ const make = Effect.gen(function* () {
       Effect.flatMap(read(requestId), (found) =>
         Option.match(found, {
           onNone: () => Effect.succeedNone,
-          onSome: ({ execution, payload }) => Effect.asSome(view(execution, payload)),
+          onSome: (found) => Effect.asSome(view(found)),
         }),
       ),
 

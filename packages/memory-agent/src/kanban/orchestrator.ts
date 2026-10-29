@@ -49,7 +49,9 @@ import {
 } from "./worktree.ts";
 import {
   DecisionCloseScope,
+  type DecisionAsked,
   DecisionKind,
+  DecisionOccasion,
   HumanDecisions,
   type DecisionAnswer,
   type HumanDecisionRequest,
@@ -220,24 +222,22 @@ const make = (options: KanbanOrchestratorOptions) =>
 
     /**
      * Asks a person about a card the loop saw in `from`; the request moves the card to
-     * `human_decision`. The key names the occasion, so taking up the same occasion again returns
-     * the existing request instead of asking twice. A card someone moved meanwhile stays put.
+     * `human_decision`. Taking up the same occasion again returns the existing request instead of
+     * asking twice. A card someone moved meanwhile stays put.
      */
     const askPerson = Effect.fnUntraced(function* (
       goal: KanbanGoal,
       cardId: string,
       from: CardStatus,
-      key: string,
-      kind: DecisionKind,
+      asked: DecisionAsked,
     ) {
       yield* Effect.when(
         decisions
           .request({
+            ...asked,
             sessionId: goal.sessionId,
             goalInstanceId: goal.goalInstanceId,
             cardId,
-            key,
-            kind,
             author: loopAuthor(goal.goalInstanceId),
           })
           .pipe(
@@ -345,13 +345,10 @@ const make = (options: KanbanOrchestratorOptions) =>
               reason: CardHoldReason.cases.RepeatedFailure.make({ failure }),
             }));
             const attemptNo = yield* latestAttempt(goal, cardId);
-            yield* askPerson(
-              goal,
-              cardId,
-              from,
-              `retry_exhausted:${attemptNo}`,
-              DecisionKind.cases.RetryExhausted.make({ attempts: attemptNo }),
-            );
+            yield* askPerson(goal, cardId, from, {
+              occasion: DecisionOccasion.RetryExhausted({ attemptNo }),
+              kind: DecisionKind.cases.RetryExhausted.make({ attempts: attemptNo }),
+            });
           }),
       });
     });
@@ -413,13 +410,10 @@ const make = (options: KanbanOrchestratorOptions) =>
           Predicate.isTagged(request.kind, "IntegrationConflict") &&
           Predicate.isTagged(request.state, "Answered"),
       ).length;
-      yield* askPerson(
-        goal,
-        card.id,
-        "verify",
-        `integration_conflict:${attemptNo}:${answered}`,
-        DecisionKind.cases.IntegrationConflict.make({ files }),
-      );
+      yield* askPerson(goal, card.id, "verify", {
+        occasion: DecisionOccasion.IntegrationConflict({ attemptNo, answered }),
+        kind: DecisionKind.cases.IntegrationConflict.make({ files }),
+      });
     });
 
     /**
@@ -611,13 +605,13 @@ const make = (options: KanbanOrchestratorOptions) =>
                 ...current,
                 reason: CardHoldReason.cases.UncertainEffect.make({ runId }),
               })),
-              askPerson(
-                goal,
-                attempt.cardId,
-                "in_progress",
-                `uncertain_side_effect:${runId}:${attempt.attemptNo}`,
-                DecisionKind.cases.UncertainSideEffect.make({ runId, toolNames: [] }),
-              ),
+              askPerson(goal, attempt.cardId, "in_progress", {
+                occasion: DecisionOccasion.UncertainSideEffect({
+                  runId,
+                  attemptNo: attempt.attemptNo,
+                }),
+                kind: DecisionKind.cases.UncertainSideEffect.make({ runId, toolNames: [] }),
+              }),
             ),
             true,
           ),
@@ -859,17 +853,14 @@ const make = (options: KanbanOrchestratorOptions) =>
                   // Another Goal finished these files but has not merged: a person picks the order.
                   Unmerged: ({ otherGoalInstanceId, otherCardId, files }) =>
                     Effect.as(
-                      askPerson(
-                        goal,
-                        step.id,
-                        step.status,
-                        `file_overlap:${otherGoalInstanceId}`,
-                        DecisionKind.cases.FileOverlap.make({
+                      askPerson(goal, step.id, step.status, {
+                        occasion: DecisionOccasion.FileOverlap({ otherGoalInstanceId }),
+                        kind: DecisionKind.cases.FileOverlap.make({
                           otherGoalInstanceId,
                           otherCardId,
                           files,
                         }),
-                      ),
+                      }),
                       planned,
                     ),
                 }),

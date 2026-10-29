@@ -19,6 +19,7 @@
 - `goalHistoryMigration` — `{ version: 42, kind: "goal-history-binding-fk-rebuild", preservedTables }`. FK 검사를 멈춘 채 참조되는 테이블을 재구성할 수 있는 유일한 단계
 - `tanStackRowsMigration` — SQL 주석뿐인 단계. 시작 시 이 단계와 함께 `migrateTanStackRows`가 실행된다
 - `emptyUserMessageMigration` — chat_threads.messages에서 빈 user ModelMessage만 제거하는 SQL 단계
+- `humanDecisionFactsMigration` — `human_decision_facts` 테이블을 만드는 단계. 시작 시 이 단계와 함께 `migrateHumanDecisionRows`가 실행된다
 - 하위 디렉터리 없음
 
 ## Invariants
@@ -49,6 +50,7 @@
 - 마이그레이션 DDL과 DML을 실행한다. 테이블, 인덱스, 트리거, FTS를 생성하고 chat_threads 메시지 정리 등을 한다.
 - `effect_sql_migrations` 테이블을 만들고 INSERT OR IGNORE로 기록한다(Migrator 메타데이터).
 - `tanStackRowsMigration` 단계에서 `migrateTanStackRows()`를 실행해 TanStack이 쓴 chat 행을 Effect AI 형태로 다시 쓴다.
+- `humanDecisionFactsMigration` 단계에서 `migrateHumanDecisionRows()`를 실행해 0.0.17이 payload에 넣은 사람 결정의 사실과 시각을 `human_decision_facts` 첫 행과 `created_at`으로 옮기고 payload를 다시 encode한다. 읽지 못하는 행은 그대로 둔다.
 - `BEGIN IMMEDIATE`, `COMMIT`, `ROLLBACK`, SAVEPOINT로 트랜잭션을 제어하고 SQLite 쓰기 잠금을 잡는다.
 - 런타임 `SqlClient`로 모든 SQLite 읽기·쓰기를 실행한다. Semaphore 임대와 prepared statement Cache를 쓴다.
 
