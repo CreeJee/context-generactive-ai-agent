@@ -392,7 +392,10 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
           }),
         ),
         () => Ref.update(leases, HashSet.remove(cardKey(card))),
-      ).pipe(Effect.map((worktree) => toolView(card.projectRoot, worktree))),
+      ).pipe(
+        Effect.map((worktree) => toolView(card.projectRoot, worktree)),
+        Effect.withSpan("CardWorktrees.lease"),
+      ),
 
     present: (card: CardRef) =>
       Effect.map(presentWorktree("lease", card), (worktree) =>

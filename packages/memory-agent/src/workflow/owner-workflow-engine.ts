@@ -167,6 +167,15 @@ const makeEngine = Effect.gen(function* () {
       ),
     );
 
+  // Numeric so the local OTLP collector keeps it: whether finished executions leave memory.
+  const annotateSizes = Effect.gen(function* () {
+    yield* Effect.annotateCurrentSpan({
+      executions: executions.size,
+      runs: yield* FiberMap.size(runs),
+      clocks: yield* FiberMap.size(clocks),
+    });
+  });
+
   const cancelClocks = Effect.fnUntraced(function* (executionId: string) {
     const cancelled = yield* defect("clock.cancel", () => storage.cancelClocks(executionId));
     yield* Effect.forEach(
@@ -208,10 +217,11 @@ const makeEngine = Effect.gen(function* () {
     return state;
   });
 
-  const resumeExecution = Effect.fnUntraced(function* (
+  const resumeExecution = Effect.fn("OwnerWorkflowEngine.resumeExecution")(function* (
     workflow: Workflow.Any,
     executionId: string,
   ): Effect.fn.Return<void> {
+    yield* annotateSizes;
     const stored = yield* defect("execution.read", () => storage.execution(executionId));
     if (Option.isNone(stored) || stored.value.status === "completed") return;
     const entry = yield* registered(workflowName(workflow));
@@ -263,11 +273,12 @@ const makeEngine = Effect.gen(function* () {
     state.fiber = yield* FiberMap.run(runs, executionId, run, { onlyIfMissing: true });
   });
 
-  const wakeExecution = Effect.fnUntraced(function* (
+  const wakeExecution = Effect.fn("OwnerWorkflowEngine.wakeExecution")(function* (
     workflowName: string,
     executionId: string,
     deferredName: string,
   ): Effect.fn.Return<void> {
+    yield* annotateSizes;
     yield* deferredState.deferredDone(executionId, deferredName);
     const entry = HashMap.get(yield* Ref.get(workflows), workflowName);
     yield* Effect.transposeOption(
@@ -275,7 +286,11 @@ const makeEngine = Effect.gen(function* () {
     );
   });
 
-  const interruptExecution = Effect.fnUntraced(function* (operation: string, executionId: string) {
+  const interruptExecution = Effect.fn("OwnerWorkflowEngine.interruptExecution")(function* (
+    operation: string,
+    executionId: string,
+  ) {
+    yield* annotateSizes;
     const state = executions.get(executionId);
     if (state !== undefined) {
       state.interrupted = true;
@@ -286,14 +301,15 @@ const makeEngine = Effect.gen(function* () {
     yield* cancelClocks(executionId);
   });
 
-  const armClock = (clock: {
+  const armClock = Effect.fn("OwnerWorkflowEngine.armClock")(function* (clock: {
     readonly workflowName: string;
     readonly executionId: string;
     readonly clockName: string;
     readonly deferredName: string;
     readonly dueAt: number;
-  }) =>
-    Effect.gen(function* () {
+  }) {
+    yield* annotateSizes;
+    yield* Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
       yield* Effect.when(
         Effect.sleep(Duration.millis(clock.dueAt - now)),
@@ -307,8 +323,8 @@ const makeEngine = Effect.gen(function* () {
       FiberMap.run(clocks, `${clock.executionId}/${clock.clockName}`, {
         onlyIfMissing: true,
       }),
-      Effect.asVoid,
     );
+  });
 
   const engine = WorkflowEngine.makeUnsafe({
     register: Effect.fnUntraced(function* <A, E>(

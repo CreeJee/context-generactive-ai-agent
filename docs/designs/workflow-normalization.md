@@ -601,7 +601,7 @@ human_decision_facts
   - `resumeExecution`, `wakeExecution`, `interruptExecution`을 `Effect.fnUntraced`에서 `Effect.fn("OwnerWorkflowEngine.<이름>")`으로 바꾼다. `armClock`(`:289`)은 일반 함수이므로 `Effect.fn`으로 감싼다.
   - 각 span에 숫자 속성 `executions`(Map 크기), `runs`, `clocks`(FiberMap 크기)를 단다.
 - **`memory-agent/src/kanban/git-worktrees.ts`**: `lease`(`:379`)에 span `CardWorktrees.lease`를 단다.
-- **측정.** 개발 앱을 OTLP 수집기로 띄우고(`.claude/skills/effect-profile/SKILL.md`의 1절), 승인 대기 하나를 10분 둔다. 그 실행의 `OwnerWorkflowEngine.resume` span 수와 `executions` 값의 변화를 센다. 결과를 `docs/decisions.md`에 기준선으로 남긴다.
+- **측정.** 개발 앱을 OTLP 수집기로 띄우고(`.claude/skills/effect-profile/SKILL.md`의 1절), 승인 대기 하나를 10분 둔다. 그 실행의 `OwnerWorkflowEngine.resumeExecution` span 수와 `executions` 값의 변화를 센다. 결과를 `docs/decisions.md`에 기준선으로 남긴다.
 
 ### Step 2. 0.0.17 업그레이드 fixture (G9)
 
