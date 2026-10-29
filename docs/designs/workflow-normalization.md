@@ -635,9 +635,11 @@ human_decision_facts
 - **`memory-agent/src/db/database.ts`**: `assertDatabaseSchema`(`:184-200`)가 새 열을 읽는다. 계약이 깨진 DB를 시작 전에 잡기 위해서다.
 - **`memory-agent/src/db/README.md`**: `assertDatabaseSchema` 열 목록(`:34`)에 두 열을 더한다.
 - **`memory-agent/src/workflow/owner-workflow-storage.ts`**
-  - `StoredExecution`에 `createdAt: number | null`, `updatedAt: number | null`을 더한다.
-  - admit은 `created_at`과 `updated_at`을 쓰고, 상태 쓰기(`setRunning`, `setInterrupted`, `setResult`)는 `updated_at`을 쓴다.
+  - `StoredExecution`에 `createdAt: number | undefined`, `updatedAt: number | undefined`를 더한다. 옆의 `parentExecutionId`처럼 NULL은 `undefined`로 읽는다.
+  - admit은 `created_at`과 `updated_at`을 쓰고, 상태 쓰기(`setRunning`, `setInterrupted`, `setResult`)는 `updated_at`을 쓴다. 시각은 `Clock`에서 읽어 TestClock으로 시험할 수 있다.
 - **`memory-agent/src/workflow/README.md`**: SQLite 쓰기 목록(`:58`)에 두 열을 적는다.
+- **`memory-agent/tests/owner-workflow-engine.test.ts`**: 대기했다가 끝난 실행의 `created_at`이 admission 시각으로 남고 `updated_at`이 완료 시각이 되는지 TestClock으로 본다.
+- **`memory-agent/tests/upgrade-0.0.17.test.ts`**: 시각 열 확인을 `it.effect.fails`에서 `it.effect`로 바꾼다.
 
 ### Step 4. owner 엔진 (B1–B3)
 

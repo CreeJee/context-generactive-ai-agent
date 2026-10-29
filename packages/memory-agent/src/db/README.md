@@ -31,7 +31,7 @@
 - `effect_sql_migrations`가 없으면 1..applied를 `schema_N` 이름으로 adopt한다. 과거 SQL은 다시 실행하지 않는다. 기록이 1..applied와 연속으로 맞지 않으면 `MetadataMismatch`로 거부한다.
 - FK를 멈춘 채 참조 테이블을 재구성할 수 있는 단계는 `goalHistoryMigration`(version 42)뿐이다. 이 단계 전후로 `preservedTables`의 rowid 순 스냅샷이 같아야 하고, `PRAGMA foreign_key_check`가 비어 있어야 한다.
 - 대기 단계가 있었다면 COMMIT 전에 `PRAGMA foreign_key_check`를 통과하고 `assertDatabaseSchema`를 통과해야 한다.
-- `assertDatabaseSchema`는 chat_runs(run_id,thread_id,status), workflow_run_bindings(run_id,workflow_revision_id,goal_instance_id), owner_read_recoveries(receipt_id,authorization_fingerprint,execution_payload_json), nodes(id,seq,project_id,session_id,kind,text) 컬럼을 prepare로 검사한다. version cursor만으로 런타임 계약을 보장하지 않는다.
+- `assertDatabaseSchema`는 chat_runs(run_id,thread_id,status), workflow_run_bindings(run_id,workflow_revision_id,goal_instance_id), owner_read_recoveries(receipt_id,authorization_fingerprint,execution_payload_json), owner_workflow_executions(execution_id,created_at,updated_at), nodes(id,seq,project_id,session_id,kind,text) 컬럼을 prepare로 검사한다. version cursor만으로 런타임 계약을 보장하지 않는다.
 - Migrator는 단계 실패를 일반 defect로 바꾼다. 그래서 단계 안에서는 `DatabaseSchemaRejected`를 throw해 사유를 보존하고, `catchDefect`에서 `migrationFailure`로 되돌린다.
 - 앱은 SQLite 연결을 하나만 쓴다. 두 번째 연결을 열면 한 연결에서 멈춘 트랜잭션이 다른 연결의 동기 `BEGIN IMMEDIATE`를 이벤트 루프에서 막는다. 모든 statement와 트랜잭션은 `semaphore`(크기 1)로 연결을 임대한다.
 - `migrationClient`는 바깥 BEGIN IMMEDIATE가 이미 잡혀 있다고 가정한다. 그래서 `SAVEPOINT effect_migrate`, `RELEASE effect_migrate`, `ROLLBACK TO effect_migrate; RELEASE effect_migrate`를 쓰고, 두 번째 DB를 열지 않는다.

@@ -2,7 +2,8 @@ import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import { Context, Effect, FileSystem, Layer, MutableRef, Path, Schema } from "effect";
 import { SqlClient } from "effect/sql";
-import { Activity, Workflow, WorkflowEngine } from "effect/workflow";
+import { TestClock } from "effect/testing";
+import { Activity, DurableDeferred, Workflow, WorkflowEngine } from "effect/workflow";
 import { describe, expect } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
 import { ownerWorkflowEngineLayer, workflowName } from "../src/workflow/owner-workflow-engine.ts";
@@ -241,6 +242,47 @@ describe("owner workflow engine", () => {
         );
         expect(MutableRef.get(finalized)).toBe(1);
       }),
+    ),
+  );
+
+  it.effect("stamps when an execution was admitted and when it last changed", () =>
+    withDatabase(() =>
+      withEngine(
+        Effect.gen(function* () {
+          const engine = yield* WorkflowEngine.WorkflowEngine;
+          const workflow = Workflow.make("OwnerWorkflowTimes", {
+            payload: { value: Schema.String },
+            idempotencyKey: ({ value }) => value,
+          });
+          const gate = DurableDeferred.make("OwnerWorkflowTimes/Gate");
+          yield* engine.register(workflow, () => DurableDeferred.await(gate));
+          const reaches = (status: string) =>
+            Effect.yieldNow.pipe(
+              Effect.andThen(
+                sqlAll("SELECT status, created_at, updated_at FROM owner_workflow_executions"),
+              ),
+              Effect.repeat({ until: (rows) => rows[0]?.status === status }),
+            );
+          yield* TestClock.setTime(1_000);
+          yield* engine.execute(workflow, {
+            executionId: "stamped-execution",
+            payload: { value: "stamped" },
+            discard: true,
+          });
+          yield* reaches("suspended");
+          yield* TestClock.setTime(5_000);
+          yield* DurableDeferred.succeed(gate, {
+            token: DurableDeferred.tokenFromExecutionId(gate, {
+              workflow,
+              executionId: "stamped-execution",
+            }),
+            value: undefined,
+          });
+          expect(yield* reaches("completed")).toEqual([
+            { status: "completed", created_at: 1_000, updated_at: 5_000 },
+          ]);
+        }),
+      ),
     ),
   );
 });

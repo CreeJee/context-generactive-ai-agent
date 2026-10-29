@@ -195,6 +195,9 @@ export function assertDatabaseSchema(sqlite: DatabaseSync) {
   sqlite.prepare(
     "SELECT receipt_id,authorization_fingerprint,execution_payload_json FROM owner_read_recoveries LIMIT 0",
   );
+  sqlite.prepare(
+    "SELECT execution_id,created_at,updated_at FROM owner_workflow_executions LIMIT 0",
+  );
   sqlite.prepare("SELECT id,seq,project_id,session_id,kind,text FROM nodes LIMIT 0");
   return actual;
 }

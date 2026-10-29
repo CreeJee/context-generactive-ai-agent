@@ -1950,6 +1950,12 @@ export const migrations: readonly string[] = [
     BEGIN SELECT RAISE(ABORT, 'read recovery receipt is retained'); END;
   `,
   tanStackRowsMigration,
+  `
+  -- When an owner workflow execution was admitted and last changed, in epoch milliseconds, so a
+  -- stuck or leaking execution can be measured. Rows written before this step keep both NULL.
+  ALTER TABLE owner_workflow_executions ADD COLUMN created_at INTEGER;
+  ALTER TABLE owner_workflow_executions ADD COLUMN updated_at INTEGER;
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

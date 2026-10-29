@@ -55,7 +55,7 @@
 
 ## Side Effects
 
-- SQLite 읽기/쓰기(`owner_workflow_storage`): `owner_workflow_executions`, `owner_workflow_activities`, `owner_workflow_deferreds`, `owner_workflow_clocks`에 INSERT/UPDATE/SELECT
+- SQLite 읽기/쓰기(`owner_workflow_storage`): `owner_workflow_executions`, `owner_workflow_activities`, `owner_workflow_deferreds`, `owner_workflow_clocks`에 INSERT/UPDATE/SELECT. 실행 행의 `created_at`은 admission 때, `updated_at`은 상태가 바뀔 때마다 `Clock`의 millis로 쓴다. 이 열이 생기기 전의 행은 둘 다 NULL이다.
 - SQLite 읽기/쓰기(`workflow.ts`): `session_workflows`, `workflow_state_revisions`, `workflow_goal_identities`, `workflow_goal_instances`, `workflow_new_goal_requests`, `board_change_requests`에 INSERT/UPDATE. `chat_runs`, `kanban_goals`, `work_tasks`, `owner_rpc_operations`, `workflow_run_bindings`는 조회
 - SQLite 쓰기: `run-bindings.ts`는 `workflow_run_bindings`에, `run-events.ts`·`durable-stream.ts`는 `workflow_run_events`에, `tool-ledger.ts`는 `owner_rpc_operations`에 INSERT/UPDATE, `uncertain-runs.ts`는 `workflow_uncertain_acknowledgements`에 INSERT, `execution.ts`는 `chat_metadata`에 INSERT
 - SQLite 읽기: `board.ts`, `completion-evidence.ts`, `read-recoveries.ts`가 `kanban_goals`, `sessions`, `nodes`, `chat_runs`, `chat_interrupts`, `owner_read_recoveries`, `workflow_goal_native_artifacts`, `workflow_goal_worker_generations`, `workflow_worker_dispatches` 등을 조회

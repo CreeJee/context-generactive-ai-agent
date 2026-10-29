@@ -108,8 +108,7 @@ testAgent({ beforeOpen: seed })("upgrade from 0.0.17", (it) => {
     }),
   );
 
-  // Step 3 of docs/designs/workflow-normalization.md adds the column.
-  it.effect.fails("leaves the creation time of 0.0.17 executions unknown", () =>
+  it.effect("leaves the creation time of 0.0.17 executions unknown", () =>
     Effect.gen(function* () {
       expect(yield* sqlAll("SELECT created_at FROM owner_workflow_executions")).toEqual([
         { created_at: null },
