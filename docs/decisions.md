@@ -1468,6 +1468,7 @@
 - 연결은 프로젝트, 서버마다 한 번 열어 다음 run에도 쓴다. 시작, 도구 목록이 20초 안에 안 되면 실패로 표시하고 그 run은 그 서버 없이 진행한다. 다음 run에서 다시 시도한다. 서버 종료 시 모두 닫는다.
 - 결과는 6만 자에서 자른다. MCP 결과는 도구 결과로 기록되며 사용자 발언, 승인으로 승격하지 않는다.
 - 연결 방식은 stdio와 Streamable HTTP다. MCP OAuth 로그인은 아직 지원하지 않는다(헤더의 `${TOKEN}`으로 대신).
+- 수정(2026-10-29): HTTP 서버의 OAuth 인증을 지원한다. 아래 "MCP 서버 OAuth 인증 (2026-10-29)"을 본다. HTTP 항목은 `{type: "http", url, headers?, oauth?}`가 된다.
 
 ### Skills (2026-09-15)
 
@@ -3289,3 +3290,18 @@
 - 원인: 2026-10-13 결정은 thinking을 끌 수 없는 Opus 5.5·Fable 5.1에만 `display: "summarized"`를 보냈다. Opus 5는 `thinking`을 보내지 않아도 adaptive thinking으로 돌고, 표시 기본값이 `"omitted"`라 빈 thinking 블록이 온다.
 - 결정: 요청이 말하지 않아도 thinking하는 모델(Opus 5, Sonnet 5·5.5, Haiku 5.5, Fable 5)에는 `thinking: { type: "adaptive", display: "summarized" }`를 보낸다. 이 모델들은 이미 adaptive로 돌기 때문에 바뀌는 것은 보이는 내용뿐이다. `block_binding`과 그 베타는 계속 Opus 5.5·Fable 5.1에만 보낸다.
 - 그대로 둔 것: Opus 4.8·4.7은 `thinking`을 보내지 않으면 thinking하지 않는다. adaptive를 보내면 동작과 비용이 바뀌므로 보내지 않는다.
+
+## MCP 서버 OAuth 인증 (2026-10-29)
+
+- 사용자 요청: 인증이 붙은 MCP 서버를 쓸 수 있게 한다. 범위는 MCP 인가 스펙 전체다(사용자 결정).
+- HTTP 서버가 401을 주면 SDK의 `auth()`로 스펙 흐름을 따른다. 보호 리소스 메타데이터(RFC 9728)와 인가 서버 메타데이터(RFC 8414)를 찾고, PKCE S256, `resource` 지시자(RFC 8707), `iss` 검증(RFC 9207), refresh를 쓴다. 인가 서버가 ES256 DPoP를 알리면 DPoP(RFC 9449)로 토큰을 묶는다. 403 `insufficient_scope`는 step-up으로 다룬다.
+- 클라이언트: `clientId`가 없으면 앱이 스스로 등록한다. 인가 서버가 Client ID Metadata Document를 지원하고 `clientMetadataUrl`이 있으면 그 URL이 client id다. 아니면 동적 등록(RFC 7591)을 한다. `clientId`를 적으면 미리 등록한 클라이언트를 쓰고, `clientSecret` 또는 `privateKey`(private_key_jwt, RFC 7523)로 증명한다. `grant: "client_credentials"`는 사람 없이 앱 자신으로 토큰을 받는다.
+- `oauth`가 없는 HTTP 서버도 `Authorization` 헤더를 적지 않았으면 자동 등록과 사람 로그인으로 다룬다. 서버가 401을 주기 전에는 아무것도 하지 않는다. 헤더에 `Authorization`을 적은 서버는 그 헤더만 쓴다.
+- 로그인은 설정 화면에서 사람이 시작한다. 브라우저는 루프백 `http://127.0.0.1:<port>/callback`으로 돌아온다. `callbackPort`를 적으면 그 포트를 쓰고, 아니면 매번 빈 포트를 쓴다. 동적 등록한 클라이언트의 redirect URI가 지금 포트와 다르면 다시 등록한다(사용자 결정). 로그인은 5분 안에 끝나야 한다. 로그인 중에는 설정 화면이 2초마다 상태를 다시 읽는다.
+- 실행 중의 연결은 브라우저 로그인을 시작하지 않고, 클라이언트를 등록하지도 않는다. refresh token이 없거나 refresh가 안 되면 서버를 "로그인 필요"로 보여 주고 그 서버 없이 실행한다. 로그인, 로그아웃, 신뢰 변경 전까지 그 서버에 다시 묻지 않는다.
+- 동시에 온 401은 refresh 한 번으로 처리한다. refresh token을 바꿔 주는 인가 서버에서는 같은 token으로 두 번째 refresh를 하면 실패하기 때문이다. 같은 로그인을 쓰는 연결은 로그인 하나를 함께 쓴다. 공통 서버의 로그인은 모든 프로젝트가 함께 쓴다.
+- 저장: 토큰, 등록한 클라이언트, DPoP 키, 서버가 요구한 scope는 서버마다 OS 키체인 항목 하나(`mcp-oauth:<scope>:<프로젝트 id, 공통이면 빈칸>:<서버 이름>`)에 둔다. SQLite에는 두지 않는다. 항목에 URL과 `oauth` 설정의 해시를 같이 적고, 설정이 바뀌면 이전 로그인을 쓰지 않는다. 발견 결과와 PKCE verifier는 메모리에만 둔다. Windows 자격 증명은 하나에 2,560바이트까지라 나눠 저장한다.
+- 설정 파일의 비밀(`clientSecret`, `privateKey.key`)은 `${이름}` 참조만 받는다. 값은 연결할 때 앱 환경에서 읽는다.
+- step-up: 앱 자신(client_credentials)은 넓힌 scope로 토큰을 다시 받고 호출을 한 번 더 한다. 사람 로그인은 동의가 다시 필요하므로 호출을 실패로 돌려준다. 설정 화면에서 "다시 로그인"하면 넓힌 scope를 요청한다.
+- 신뢰를 거두면 그 서버의 로그인도 지운다. 로그아웃하면 저장한 로그인을 지우고 서버에 다시 물어 상태를 보여 준다.
+- 하지 않은 것: Enterprise-managed authorization(ID-JAG, Cross-App Access)은 기업 IdP의 ID 토큰이 있어야 해서 넣지 않았다. 앱이 브라우저를 직접 열지 않는다. 설정 화면의 링크로 연다.
