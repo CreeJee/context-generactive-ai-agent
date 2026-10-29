@@ -307,13 +307,14 @@ AgentChat: 끊긴 run의 afterRestart, ready·retrying 세션 재개 (agent/chat
 - hook은 먼저 구독하고, 저장소에서 status를 읽는다. status가 `completed`나 `interrupted`면 바로 끝난다. 그 밖이면 자기 executionId가 올 때까지 기다린다.
   - `result_json`이 NULL인 `running` 행도 기다린다. hook이 일찍 끝나면 호출자가 sleep 없이 바로 다시 돌기 때문이다(`effect:workflow/WorkflowEngine.ts:433-438`).
   - 구독을 먼저 하므로 그 사이에 끝난 실행도 놓치지 않는다.
-- 세 workflow 정의(`RelayedApprovalExecution` `approvals/relayed.ts:41`, `ProviderRetryWait` `workflow/provider-retry.ts:78`, `GoalExecution` `workflow/goal-execution.ts:41`)에 `suspendedRetrySchedule`을 둔다. 1초에서 2배씩, 상한 5분이고 끝나지 않는다. 정의의 필드이므로(`effect:workflow/Workflow.ts:62`) 호출하는 쪽은 바뀌지 않는다. schedule이 끝나면 라이브러리가 결함을 내므로(`effect:workflow/WorkflowEngine.ts:573-577`) 끝나지 않는 schedule이어야 한다.
+- 호출자가 기다리는 네 workflow 정의(`RelayedApprovalExecution` `approvals/relayed.ts:41`, `ProviderRetryWait` `workflow/provider-retry.ts:78`, `GoalExecution` `workflow/goal-execution.ts:41`, 구현에서 더한 `HumanDecisionExecution` `kanban/human-decision.ts:239`)에 `suspendedRetrySchedule`을 둔다. 1초에서 2배씩, 상한 5분이고 끝나지 않는다. 정의의 필드이므로(`effect:workflow/Workflow.ts:62`) 호출하는 쪽은 바뀌지 않는다. schedule이 끝나면 라이브러리가 결함을 내므로(`effect:workflow/WorkflowEngine.ts:573-577`) 끝나지 않는 schedule이어야 한다.
 
 **B2. 실행의 메모리 수명.**
 
 - `executions` Map의 항목은 Complete·interrupt 때 지운다. 새 항목을 넣는 일과 interrupt 표시를 옮기는 일은 한 번의 원자 갱신에서 한다(`docs/decisions.md:2935`).
-- scope는 실행마다 하나만 만든다. resume 사이에는 재사용하고, Complete·interrupt 때 닫는다.
-- child가 끝났을 때 부모를 Map이 아니라 저장소에서 찾는다. 그래서 부모가 Map에서 빠져 있어도(재시작 직후) 깨어난다(`workflow/owner-workflow-engine.ts:251-261`).
+- (구현에서 바꿈, 2026-10-29) scope는 pass마다 새로 만들고 엔진 scope에 묶지 않는다. 라이브러리의 두 엔진(`effect:cluster/ClusterWorkflowEngine.ts:462`, `:509`)과 같다. 완료된 pass의 scope는 `Workflow.intoResult`가 닫는다(`effect:workflow/Workflow.ts:737-745`). 대기로 끝난 pass의 scope는 instance와 함께 사라진다. 원안처럼 scope를 resume 사이에 재사용하면, replay마다 등록한 `Workflow.addFinalizer`가 같은 scope에 쌓여 완료 때 여러 번 돈다. activity의 scope도 같은 이유로 엔진 scope에 묶지 않는다.
+- (구현에서 바꿈, 2026-10-29) child가 끝났을 때 부모는 지금처럼 Map에서 찾는다. 등록이 대기 중인 실행을 모두 resume하므로, 등록된 workflow의 대기 중인 부모는 늘 Map에 있다. Map에 없는 부모는 아직 등록되지 않았거나(등록 때 resume되어 저장된 child 결과를 읽는다) interrupt된 것(깨우면 안 된다)이다.
+- (구현에서 더함, 2026-10-29) interrupt된 실행은 끝난 실행으로 다룬다. 엔진은 pass를 다시 시작하지 않고, 그 실행을 다시 `execute`한 호출자는 interrupt로 끝난다. B1의 hook이 interrupt에도 돌아오므로, 그대로 두면 깨어난 호출자가 interrupt된 실행을 replay해 `suspended`로 되살린다. 승인 취소와 provider 재시도 취소의 기존 테스트가 이 되살림을 잡았다.
 
 **B3. 실패 원인과 처리 (G4).**
 
@@ -602,6 +603,7 @@ human_decision_facts
   - 각 span에 숫자 속성 `executions`(Map 크기), `runs`, `clocks`(FiberMap 크기)를 단다.
 - **`memory-agent/src/kanban/git-worktrees.ts`**: `lease`(`:379`)에 span `CardWorktrees.lease`를 단다.
 - **측정.** 개발 앱을 OTLP 수집기로 띄우고(`.claude/skills/effect-profile/SKILL.md`의 1절), 승인 대기 하나를 10분 둔다. 그 실행의 `OwnerWorkflowEngine.resumeExecution` span 수와 `executions` 값의 변화를 센다. 결과를 `docs/decisions.md`에 기준선으로 남긴다.
+  - (구현에서 바꿈, 2026-10-29) 개발 앱에는 가짜 모델 스위치가 없어 승인 대기를 만들려면 실제 모델 호출이 필요하다. 그래서 Step 4의 엔진 테스트를 먼저 쓰고 고치기 전 엔진에서 돌려 기준선을 쟀다. 테스트는 TestClock으로 10분을 진행한다.
 
 ### Step 2. 0.0.17 업그레이드 fixture (G9)
 
@@ -648,22 +650,23 @@ human_decision_facts
     - 엔진 안에 executionId를 싣는 `PubSub`를 둔다. 결과가 Complete로 저장될 때와 interrupt될 때 발행한다.
     - `makeUnsafe`에 `awaitComplete`를 넘긴다. hook은 구독 → status 읽기 → `completed`·`interrupted`면 끝 → 아니면 자기 id를 기다림 순서다.
   - B2
-    - `executions`를 `new Map`(`:151`)에서 `SynchronizedRef<HashMap<string, LiveExecution>>`로 바꾼다. 상태를 바꾸는 변수 대신 `Ref` 계열을 쓰는 규칙(`docs/decisions.md:2921`)을 따른다. 새 항목을 넣는 일과 interrupt 표시를 옮기는 일은 `SynchronizedRef.modify` 하나에서 한다.
-    - `liveExecution`(`:196`)의 scope 생성을 지운다.
-    - `resumeExecution`(`:230`)은 실행의 scope를 처음 한 번만 만들고, 그다음부터 재사용한다.
-    - 결과가 Complete일 때와 interrupt 때 scope를 닫고 Map에서 지운다.
-    - 부모 wake(`:251-261`)는 저장소에서 부모의 workflow 이름을 읽어 등록된 workflow로 resume한다.
+    - `executions`를 `new Map`(`:151`)에서 `SynchronizedRef<HashMap<string, LiveExecution>>`로 바꾼다. 상태를 바꾸는 변수 대신 `Ref` 계열을 쓰는 규칙(`docs/decisions.md:2921`)을 따른다. 새 pass를 시작하고 항목을 넣는 일, interrupt 표시를 옮기고 항목을 지우는 일은 각각 `SynchronizedRef` 갱신 하나에서 한다. DB 읽기와 쓰기는 잠금 밖에 둔다(`setRunning`은 pass fiber의 첫 단계로 옮긴다).
+    - 항목은 `Equal.byReferenceUnsafe`로 참조 비교한다. `HashMap.set`은 바뀌는 값을 옛 값과 구조 비교하는데, instance 안의 scope와 latch까지 내려가다 strict 함수의 `arguments`에서 throw한다.
+    - `liveExecution`(`:196`)을 지운다. pass마다 `WorkflowInstance.initial(workflow, executionId)`로 엔진 scope에 묶이지 않은 instance를 만든다. activity instance도 같다.
+    - 결과가 Complete일 때와 interrupt 때 Map에서 지운다.
+    - 부모 wake(`:251-261`)는 Map에서 찾는다(B2의 이유).
+    - `resumeExecution`은 저장된 status가 `completed`나 `interrupted`면 pass를 시작하지 않는다. `execute`는 그런 실행에 저장된 결과를, 결과가 없으면 interrupt를 돌려준다.
   - B3
     - `setResult`에 넘길 값의 encode(`encodeResult`, `:120-126`)가 throw하면, `Complete{exit: die(OwnerWorkflowEngineError{operation: "execution.result", reason: "result_unencodable"})}`를 다시 encode해 저장한다. 이 저장도 실패하면 지금처럼 결함으로 끝나고 `running`으로 남는다.
     - SQL 오류는 지금처럼 `defect`(`:138-145`)가 결함으로 끝낸다.
     - `OwnerWorkflowEngineError`의 reason literal에 `result_unencodable`을 더한다.
-- **`memory-agent/src/approvals/relayed.ts`**, **`memory-agent/src/workflow/provider-retry.ts`**, **`memory-agent/src/workflow/goal-execution.ts`**: 각 `Workflow.make`(`:41`, `:78`, `:41`)에 `suspendedRetrySchedule`을 둔다. 1초에서 2배씩, 상한 5분이고 끝나지 않는 schedule이다. 세 곳이 같은 값을 쓰도록 `workflow/owner-workflow-engine.ts`에서 내보낸다.
+- **`memory-agent/src/approvals/relayed.ts`**, **`memory-agent/src/workflow/provider-retry.ts`**, **`memory-agent/src/workflow/goal-execution.ts`**, **`memory-agent/src/kanban/human-decision.ts`**: 각 `Workflow.make`(`:41`, `:78`, `:41`, `:239`)에 `suspendedRetrySchedule`을 둔다. 1초에서 2배씩, 상한 5분이고 끝나지 않는 schedule이다. 네 곳이 같은 값을 쓰도록 `workflow/owner-workflow-engine.ts`에서 내보낸다. `HumanDecisionExecution`은 답이 카드를 옮길 때까지 호출자가 기다리므로(`kanban/human-decision.ts:600`) 넣는다. `KanbanCardAttempt`는 `discard`로만 실행되어 schedule을 쓰지 않으므로 넣지 않는다. schedule은 `Workflow.execute`가 엔진에 넘기므로(`effect:workflow/Workflow.ts:365-370`) 엔진의 `execute`를 직접 부르는 호출에는 쓰이지 않는다.
 - **`memory-agent/tests/owner-workflow-engine.test.ts`**에 더할 것
   - deferred가 끝나면 TestClock을 진행하지 않아도 호출자가 깨어난다.
   - 대기 중 TestClock을 10분 진행했을 때 workflow 본문 실행 횟수가 schedule이 정한 수(1, 2, 4 … 초, 그 뒤 5분 간격)와 같다.
-  - 실행 하나가 Complete된 뒤 Map 크기가 시작값으로 돌아온다.
-  - 부모가 Map에 없을 때(재시작 직후)도 child 완료가 부모를 깨운다.
+  - 실행 하나가 Complete된 뒤 Map 크기가 시작값으로 돌아온다. 다음 실행의 `resumeExecution` span 속성 `executions`로 본다.
   - 결과 encode가 실패하면 실행이 결함 결과의 `completed`가 되고, 다시 시작해도 resume되지 않는다.
+  - (구현에서 뺌) 부모가 Map에 없을 때 child 완료가 부모를 깨우는 테스트. B2의 이유로 부모 wake를 바꾸지 않았다.
 
 ### Step 5. run 로그 reader (D)
 

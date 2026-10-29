@@ -16,7 +16,10 @@ import { Activity, DurableDeferred, Workflow, WorkflowEngine } from "effect/work
 import { AppEvents } from "../events/app-events.ts";
 import { KanbanStorageFailed, KanbanStorageReason } from "./card-attempts.ts";
 import { BoardAuthor, type CardStatus } from "../workflow/card.ts";
-import { ownerWorkflowEngineLayer } from "../workflow/owner-workflow-engine.ts";
+import {
+  ownerWorkflowEngineLayer,
+  suspendedRetrySchedule,
+} from "../workflow/owner-workflow-engine.ts";
 import { OwnerWorkflowStorage, type StoredExecution } from "../workflow/owner-workflow-storage.ts";
 import { Workflows, WorkflowStorageError } from "../workflow/workflow.ts";
 
@@ -242,6 +245,7 @@ const HumanDecisionExecution = Workflow.make(humanDecisionWorkflow, {
   error: WorkflowStorageError,
   idempotencyKey: ({ sessionId, goalInstanceId, cardId, key }) =>
     [sessionId, goalInstanceId, cardId, key].join("\u0000"),
+  suspendedRetrySchedule,
 });
 
 const DecisionAnswered = DurableDeferred.make("HumanDecision/Answer", { success: DecisionAnswer });

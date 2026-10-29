@@ -3,6 +3,7 @@ import {
   Deferred,
   Duration,
   Effect,
+  Equal,
   Exit,
   Fiber,
   FiberMap,
@@ -11,10 +12,13 @@ import {
   Match,
   Option,
   Predicate,
+  PubSub,
   Ref,
   Result,
+  Schedule,
   Schema,
   Scope,
+  SynchronizedRef,
 } from "effect";
 import { Workflow } from "effect/workflow";
 import type { Activity, DurableDeferred } from "effect/workflow";
@@ -25,6 +29,7 @@ import {
   OwnerWorkflowStorage,
   OwnerWorkflowStorageError,
   ownerWorkflowStorageLayer,
+  type StoredExecution,
   StoredWorkflowResult,
 } from "./owner-workflow-storage.ts";
 
@@ -34,12 +39,21 @@ import {
  */
 export const workflowName = (workflow: Workflow.Any): string => workflow._tag;
 
+/**
+ * How often a caller waiting on a suspended execution replays it when no completion reached it:
+ * after 1s, doubling up to every 5 minutes. It never ends, since an ended schedule kills the caller.
+ */
+export const suspendedRetrySchedule = Schedule.min([
+  Schedule.exponential("1 second", 2),
+  Schedule.spaced("5 minutes"),
+]);
+
 export class OwnerWorkflowEngineError extends Schema.TaggedError<
   OwnerWorkflowEngineError,
   { readonly brand: unique symbol }
 >()("OwnerWorkflowEngineError", {
   operation: Schema.String,
-  reason: Schema.Literals(["not_registered", "codec", "execution_conflict"]),
+  reason: Schema.Literals(["not_registered", "codec", "execution_conflict", "result_unencodable"]),
   cause: Schema.Defect(),
 }) {}
 
@@ -58,15 +72,27 @@ type RegisteredWorkflow = {
   readonly scope: Scope.Scope;
 };
 
+type Pass = Fiber.Fiber<Workflow.Result<unknown, unknown>>;
+
+/** An execution with a pass in memory, until it completes or is interrupted. */
 type LiveExecution = {
   readonly workflow: Workflow.Any;
   readonly payload: object;
   readonly parentExecutionId: string | undefined;
-  scope: Scope.Closeable;
-  instance: WorkflowEngine.WorkflowInstance["Service"];
-  interrupted: boolean;
-  fiber: Fiber.Fiber<Workflow.Result<unknown, unknown>> | undefined;
+  /** The latest pass's instance; the library reads its interrupt mark while the pass runs. */
+  readonly instance: WorkflowEngine.WorkflowInstance["Service"];
+  readonly fiber: Pass;
 };
+
+/** A pass to join, and whether this call started it. */
+type PassStart = { readonly fiber: Pass; readonly started: boolean };
+
+/**
+ * Whether an execution has ended. An interrupted one never runs again: a replay would wait on what
+ * the interrupt cancelled, and the stored status would say it waits again.
+ */
+const hasEnded = (status: StoredExecution["status"]) =>
+  status === "completed" || status === "interrupted";
 
 type ExitSchemaOwner = {
   readonly successSchema: Schema.Top;
@@ -115,14 +141,30 @@ const decodeEncodedExit = (encoded: Schema.Json): Exit.Exit<unknown, unknown> =>
     engineFailure("deferred.exit.decode", "codec", failure),
   );
 
-const encodeResult = (
+/**
+ * What a pass ended with, and what to store for it. A result the workflow's codec cannot encode
+ * would fail the same way on every replay, so it completes the execution as that defect instead.
+ */
+const settledResult = (
   owner: ExitSchemaOwner,
   result: Workflow.Result<unknown, unknown>,
-): StoredWorkflowResult =>
+): readonly [Workflow.Result<unknown, unknown>, StoredWorkflowResult] =>
   Match.valueTags(result, {
-    Suspended: (): StoredWorkflowResult => StoredWorkflowResult.cases.Suspended.make({}),
-    Complete: ({ exit }): StoredWorkflowResult =>
-      StoredWorkflowResult.cases.Complete.make({ exit: encodeExit(owner, exit) }),
+    Suspended: () => [result, StoredWorkflowResult.cases.Suspended.make({})] as const,
+    Complete: ({ exit }) =>
+      Result.match(Schema.encodeResult(jsonExit(owner))(exit), {
+        onSuccess: (encoded) =>
+          [result, StoredWorkflowResult.cases.Complete.make({ exit: encoded })] as const,
+        onFailure: (cause) => {
+          const unencodable = Exit.die(
+            engineFailure("execution.result", "result_unencodable", cause),
+          );
+          return [
+            new Workflow.Complete({ exit: unencodable }),
+            StoredWorkflowResult.cases.Complete.make({ exit: encodeExit(owner, unencodable) }),
+          ] as const;
+        },
+      }),
   });
 
 const decodeResult = (
@@ -133,6 +175,15 @@ const decodeResult = (
     Suspended: () => Workflow.Suspended.make({}),
     Complete: ({ exit }) => new Workflow.Complete({ exit: decodeExit(owner, exit) }),
   });
+
+/** What a caller of an ended execution gets: its stored result, or else the interruption. */
+const endedResult = (
+  owner: ExitSchemaOwner,
+  execution: StoredExecution,
+): Workflow.Result<unknown, unknown> =>
+  execution.result !== undefined && Predicate.isTagged(execution.result, "Complete")
+    ? decodeResult(owner, execution.result)
+    : new Workflow.Complete({ exit: Exit.interrupt() });
 
 /** A storage step the engine cannot recover from; encoding throws stay with their operation. */
 const defect = <A, E>(operation: string, evaluate: () => Effect.Effect<A, E>): Effect.Effect<A> =>
@@ -148,7 +199,11 @@ const makeEngine = Effect.gen(function* () {
   const ownerScope = yield* Effect.scope;
   const storage = yield* OwnerWorkflowStorage;
   const workflows = yield* Ref.make(HashMap.empty<string, RegisteredWorkflow>());
-  const executions = new Map<string, LiveExecution>();
+  // Starting a pass and moving the interrupt mark to its instance happen under one lock, so an
+  // interrupt cannot fall between them.
+  const executions = yield* SynchronizedRef.make(HashMap.empty<string, LiveExecution>());
+  // Ids of executions that completed or were interrupted, for the callers waiting on them.
+  const endedExecutions = yield* PubSub.unbounded<string>();
   const runs = yield* FiberMap.make<string, Workflow.Result<unknown, unknown>>();
   const clocks = yield* FiberMap.make<string>();
   const deferredState = WorkflowEngine.makeDeferredState();
@@ -170,7 +225,7 @@ const makeEngine = Effect.gen(function* () {
   // Numeric so the local OTLP collector keeps it: whether finished executions leave memory.
   const annotateSizes = Effect.gen(function* () {
     yield* Effect.annotateCurrentSpan({
-      executions: executions.size,
+      executions: HashMap.size(yield* SynchronizedRef.get(executions)),
       runs: yield* FiberMap.size(runs),
       clocks: yield* FiberMap.size(clocks),
     });
@@ -185,92 +240,129 @@ const makeEngine = Effect.gen(function* () {
     );
   });
 
-  const liveExecution = Effect.fnUntraced(function* (
-    workflow: Workflow.Any,
+  /** The stored result of an execution, once it has one. */
+  const storedResult = (workflow: Workflow.Any, executionId: string) =>
+    defect("execution.poll", () =>
+      Effect.map(storage.execution(executionId), (execution) =>
+        Option.flatMap(execution, (value) =>
+          value.result === undefined
+            ? Option.none()
+            : Option.some(decodeResult(workflow, value.result)),
+        ),
+      ),
+    );
+
+  /** A completed execution leaves memory and wakes its waiting callers and its parent. */
+  const completed = Effect.fnUntraced(function* (
     executionId: string,
-  ): Effect.fn.Return<LiveExecution> {
-    const current = executions.get(executionId);
-    if (current !== undefined) {
-      if (!Predicate.isTagged(current.workflow, workflowName(workflow)))
-        return yield* Effect.die(
-          engineFailure("execution.lookup", "execution_conflict", executionId),
-        );
-      return current;
-    }
-    const stored = yield* defect("execution.read", () => storage.execution(executionId));
-    if (Option.isNone(stored) || stored.value.workflowName !== workflowName(workflow))
-      return yield* Effect.die(
-        engineFailure("execution.lookup", "execution_conflict", executionId),
-      );
-    const scope = yield* Scope.fork(ownerScope);
-    const instance = WorkflowEngine.WorkflowInstance.initial(workflow, executionId, scope);
-    const state: LiveExecution = {
-      workflow,
-      payload: stored.value.payload,
-      parentExecutionId: stored.value.parentExecutionId,
-      scope,
-      instance,
-      interrupted: stored.value.status === "interrupted",
-      fiber: undefined,
-    };
-    executions.set(executionId, state);
-    return state;
+    instance: WorkflowEngine.WorkflowInstance["Service"],
+    parentExecutionId: string | undefined,
+  ) {
+    yield* cancelClocks(executionId);
+    yield* SynchronizedRef.update(executions, (current) =>
+      Option.exists(HashMap.get(current, executionId), (live) => live.instance === instance)
+        ? HashMap.remove(current, executionId)
+        : current,
+    );
+    yield* PubSub.publish(endedExecutions, executionId);
+    // A waiting parent of a registered workflow is in memory: registration resumes every pending
+    // execution. One that is not waits for its registration, which reads this stored result.
+    const current = yield* SynchronizedRef.get(executions);
+    const parent = Option.flatMap(Option.fromUndefinedOr(parentExecutionId), (id) =>
+      HashMap.get(current, id),
+    );
+    yield* Effect.transposeOption(
+      Option.map(parent, (live) =>
+        Effect.forkIn(resumeExecution(live.workflow, live.instance.executionId), ownerScope),
+      ),
+    );
   });
 
+  /** One pass over the execution's body; what it ended with is stored before the pass returns it. */
+  const runPass = (
+    workflow: Workflow.Any,
+    entry: RegisteredWorkflow,
+    executionId: string,
+    execution: Pick<LiveExecution, "payload" | "parentExecutionId">,
+    instance: WorkflowEngine.WorkflowInstance["Service"],
+  ) =>
+    defect("execution.running", () => storage.setRunning(executionId)).pipe(
+      Effect.andThen(
+        entry
+          .execute(execution.payload, executionId)
+          .pipe(
+            Effect.provideServiceEffect(WorkflowEngine.WorkflowEngine, Deferred.await(engineMade)),
+            (effect) => deferredState.trackRun(instance, effect),
+          ),
+      ),
+      Effect.flatMap((result) =>
+        defect("execution.result", () => {
+          const [settled, stored] = settledResult(workflow, result);
+          return Effect.as(storage.setResult(executionId, stored), settled);
+        }),
+      ),
+      Effect.tap((result) =>
+        Effect.when(
+          completed(executionId, instance, execution.parentExecutionId),
+          Effect.succeed(Predicate.isTagged(result, "Complete")),
+        ),
+      ),
+    );
+
+  /**
+   * Starts a pass over the execution unless one is running, and answers it; none once the execution
+   * ended. A running pass is awaited first and then replayed: a deferred may complete while it
+   * still persists Suspended, and that wake would be lost without the replay.
+   */
   const resumeExecution = Effect.fn("OwnerWorkflowEngine.resumeExecution")(function* (
     workflow: Workflow.Any,
     executionId: string,
-  ): Effect.fn.Return<void> {
+  ): Effect.fn.Return<Option.Option<Pass>> {
     yield* annotateSizes;
     const stored = yield* defect("execution.read", () => storage.execution(executionId));
-    if (Option.isNone(stored) || stored.value.status === "completed") return;
+    if (Option.isNone(stored) || hasEnded(stored.value.status)) return Option.none();
+    if (stored.value.workflowName !== workflowName(workflow))
+      return yield* Effect.die(
+        engineFailure("execution.lookup", "execution_conflict", executionId),
+      );
     const entry = yield* registered(workflowName(workflow));
-    const state = yield* liveExecution(workflow, executionId);
-    const running = state.fiber;
-    const existing = running?.pollUnsafe();
-    if (existing === undefined && running !== undefined) {
-      // A deferred may complete while the first pass is still persisting Suspended. Wait for that
-      // pass before installing the replay; otherwise the wake is lost and the execution strands.
-      yield* Fiber.await(running);
-      return yield* resumeExecution(workflow, executionId);
-    }
-    // A fiber still remembered here has already finished; drop it before the replay.
-    yield* Effect.when(FiberMap.remove(runs, executionId), Effect.succeed(running !== undefined));
-
-    const scope = yield* Scope.fork(ownerScope);
-    const instance = WorkflowEngine.WorkflowInstance.initial(workflow, executionId, scope);
-    instance.interrupted = state.interrupted;
-    state.scope = scope;
-    state.instance = instance;
-    yield* defect("execution.running", () => storage.setRunning(executionId));
-
-    const run = entry.execute(state.payload, executionId).pipe(
-      Effect.provideServiceEffect(WorkflowEngine.WorkflowEngine, Deferred.await(engineMade)),
-      (effect) => deferredState.trackRun(instance, effect),
-      Effect.tap((result) =>
-        Effect.andThen(
-          defect("execution.result", () =>
-            storage.setResult(executionId, encodeResult(workflow, result)),
+    const { fiber, started } = yield* SynchronizedRef.modifyEffect(
+      executions,
+      (current): Effect.Effect<readonly [PassStart, HashMap.HashMap<string, LiveExecution>]> => {
+        const live = HashMap.get(current, executionId);
+        if (Option.isSome(live) && live.value.fiber.pollUnsafe() === undefined)
+          return Effect.succeed([{ fiber: live.value.fiber, started: false }, current] as const);
+        const execution = Option.getOrElse(live, () => ({
+          workflow,
+          payload: stored.value.payload,
+          parentExecutionId: stored.value.parentExecutionId,
+        }));
+        // Like the library's engines, a pass's scope is its own: intoResult closes it when the
+        // execution completes, and one a suspended pass leaves open goes with its instance.
+        const instance = WorkflowEngine.WorkflowInstance.initial(workflow, executionId);
+        return Effect.map(
+          FiberMap.run(
+            runs,
+            executionId,
+            runPass(workflow, entry, executionId, execution, instance),
           ),
-          Effect.when(
-            cancelClocks(executionId),
-            Effect.succeed(Predicate.isTagged(result, "Complete")),
-          ),
-        ),
-      ),
-      Effect.tap((result) => {
-        if (state.parentExecutionId === undefined || !Predicate.isTagged(result, "Complete"))
-          return Effect.void;
-        const parent = executions.get(state.parentExecutionId);
-        return parent === undefined
-          ? Effect.void
-          : resumeExecution(parent.workflow, parent.instance.executionId).pipe(
-              Effect.forkIn(ownerScope),
-              Effect.asVoid,
-            );
-      }),
+          (fiber) =>
+            [
+              { fiber, started: true },
+              // By reference: replacing a value compares it with the old one, and a structural
+              // comparison would walk the library's scopes and latches.
+              HashMap.set(
+                current,
+                executionId,
+                Equal.byReferenceUnsafe({ ...execution, instance, fiber }),
+              ),
+            ] as const,
+        );
+      },
     );
-    state.fiber = yield* FiberMap.run(runs, executionId, run, { onlyIfMissing: true });
+    if (started) return Option.some(fiber);
+    yield* Fiber.await(fiber);
+    return yield* resumeExecution(workflow, executionId);
   });
 
   const wakeExecution = Effect.fn("OwnerWorkflowEngine.wakeExecution")(function* (
@@ -291,14 +383,16 @@ const makeEngine = Effect.gen(function* () {
     executionId: string,
   ) {
     yield* annotateSizes;
-    const state = executions.get(executionId);
-    if (state !== undefined) {
-      state.interrupted = true;
-      state.instance.interrupted = true;
-    }
+    yield* SynchronizedRef.update(executions, (current) => {
+      const live = HashMap.get(current, executionId);
+      // The library reads the mark from the instance of the pass that is running.
+      if (Option.isSome(live)) live.value.instance.interrupted = true;
+      return HashMap.remove(current, executionId);
+    });
     yield* FiberMap.remove(runs, executionId);
     yield* defect(operation, () => storage.setInterrupted(executionId));
     yield* cancelClocks(executionId);
+    yield* PubSub.publish(endedExecutions, executionId);
   });
 
   const armClock = Effect.fn("OwnerWorkflowEngine.armClock")(function* (clock: {
@@ -376,18 +470,22 @@ const makeEngine = Effect.gen(function* () {
             parentExecutionId: options.parent?.executionId,
           }),
         );
-        if (Predicate.isTagged(admitted.result, "Complete")) {
-          return options.discard ? undefined : decodeResult(workflow, admitted.result);
-        }
-        yield* resumeExecution(workflow, options.executionId);
+        if (hasEnded(admitted.status))
+          return options.discard ? undefined : endedResult(workflow, admitted);
+        const pass = yield* resumeExecution(workflow, options.executionId);
         if (options.discard) return undefined;
-        const state = yield* liveExecution(workflow, options.executionId);
-        const fiber = state.fiber;
-        if (fiber === undefined)
-          return yield* Effect.die(
-            engineFailure("execution.await", "execution_conflict", options.executionId),
-          );
-        return yield* Fiber.join(fiber);
+        if (Option.isSome(pass)) return yield* Fiber.join(pass.value);
+        // It ended between admission and the pass.
+        return yield* Effect.flatMap(
+          defect("execution.read", () => storage.execution(options.executionId)),
+          Option.match({
+            onNone: () =>
+              Effect.die(
+                engineFailure("execution.await", "execution_conflict", options.executionId),
+              ),
+            onSome: (execution) => Effect.succeed(endedResult(workflow, execution)),
+          }),
+        );
       }).pipe(
         // SAFETY: every branch above answers undefined exactly when `discard` is true, as the
         // conditional result type states; TypeScript cannot narrow that type through the generic.
@@ -395,20 +493,24 @@ const makeEngine = Effect.gen(function* () {
           (result) => result as Discard extends true ? void : Workflow.Result<unknown, unknown>,
         ),
       ),
-    poll: (_workflow, executionId) =>
-      defect("execution.poll", () =>
-        Effect.map(storage.execution(executionId), (execution) =>
-          Option.flatMap(execution, (value) =>
-            value.result === undefined
-              ? Option.none()
-              : Option.some(decodeResult(_workflow, value.result)),
-          ),
-        ),
-      ),
+    poll: storedResult,
     interrupt: (_workflow, executionId) => interruptExecution("execution.interrupt", executionId),
     interruptUnsafe: (_workflow, executionId) =>
       interruptExecution("execution.interruptUnsafe", executionId),
-    resume: (workflow, executionId) => resumeExecution(workflow, executionId),
+    resume: (workflow, executionId) => Effect.asVoid(resumeExecution(workflow, executionId)),
+    // A caller waiting on a suspended execution returns once it completes or is interrupted; its
+    // retry schedule stays the fallback. Subscribing before reading the status keeps an ending
+    // that falls between the two, and waiting through every other status keeps the caller from
+    // replaying without a pause.
+    awaitComplete: (_workflow, executionId) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const endings = yield* PubSub.subscribe(endedExecutions);
+          const stored = yield* storage.execution(executionId);
+          if (Option.exists(stored, ({ status }) => hasEnded(status))) return;
+          yield* PubSub.take(endings).pipe(Effect.repeat({ until: (id) => id === executionId }));
+        }),
+      ).pipe(Effect.catchCause(() => Effect.never)),
     activityExecute: Effect.fnUntraced(function* <A, E, R>(
       activity: Pick<Activity.Any, "name"> & { readonly executeEncoded: Effect.Effect<A, E, R> },
       attempt: number,
@@ -420,11 +522,10 @@ const makeEngine = Effect.gen(function* () {
       if (Option.isSome(previous) && Predicate.isTagged(previous.value, "Complete"))
         return new Workflow.Complete({ exit: decodeEncodedExit(previous.value.exit) });
 
-      const activityScope = yield* Scope.fork(ownerScope);
+      // As with a pass, intoResult closes the activity's own scope when the activity completes.
       const activityInstance = WorkflowEngine.WorkflowInstance.initial(
         instance.workflow,
         instance.executionId,
-        activityScope,
       );
       activityInstance.interrupted = instance.interrupted;
       const result = yield* Workflow.intoResult(activity.executeEncoded).pipe(

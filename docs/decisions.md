@@ -3124,3 +3124,21 @@
   - 기존 `tools/profile` OTLP 수집기는 span을 읽고 metric을 버린다. 로컬 수집기가 문자열 속성을 버리므로 크기와 개수는 숫자 속성으로 달고, reason은 경고 로그에 남긴다.
 - G4의 범위를 줄인다: "이 단계가 다루는 실패 원인"의 표(설계 문서 B3)만 처리를 정한다. provider 오류 분류 변경은 Non-Goals로 옮긴다.
 - 0.0.17 fixture는 태그 `0.0.17`의 코드로 한 번 만들고 SQL dump만 커밋한다. 만드는 스크립트는 커밋하지 않고 dump 머리 주석에 방법을 적는다.
+
+## Workflow 정상화 4단계: owner 엔진의 깨움과 메모리 수명 (2026-10-29)
+
+- 설계 문서 `docs/designs/workflow-normalization.md`의 Step 4(B1–B3)를 구현했다. 아래는 구현하며 바꾼 것과 잰 값이다.
+- 기준선은 개발 앱 대신 엔진 테스트로 쟀다. 개발 앱에는 가짜 모델 스위치가 없어 승인 대기를 만들려면 실제 모델 호출이 필요하다. `tests/owner-workflow-engine.test.ts`의 새 테스트를 고치기 전 엔진에서 돌렸다.
+  - 승인처럼 deferred를 기다리는 실행에 호출자가 붙어 있으면, TestClock 10분 동안 workflow 본문이 31번 돌았다. 기본 schedule(200ms에서 1.5배, 상한 30초)이다. 하루면 약 2,880번이다.
+  - deferred가 끝나도 호출자는 schedule의 다음 단계까지 깨어나지 않았다.
+  - 완료된 실행이 엔진 Map에 남았다(실행 하나를 끝낸 뒤 다음 실행의 span 속성 `executions`가 1).
+  - 결과를 encode하지 못한 실행은 `running`으로 남아, 엔진을 다시 열고 같은 요청을 다시 보내자 본문이 3번 돌았다.
+- 고친 뒤: 본문은 10분 동안 10번 돈다(첫 pass와 1, 2, 4 … 256초 단계). 하루면 약 295번이다. deferred가 끝나면 시계를 진행하지 않아도 호출자가 돌아온다. 완료된 실행은 Map에서 빠진다. encode 실패는 결함 결과로 완료되어 다시 돌지 않는다.
+- 바꾼 것:
+  - pass의 scope를 실행마다 하나로 재사용하지 않고 pass마다 새로 만들며, 엔진 scope에 묶지 않는다. 라이브러리의 두 엔진이 이렇게 한다. 재사용하면 replay마다 등록한 `Workflow.addFinalizer`가 쌓여 완료 때 여러 번 돈다. 엔진 scope에 묶으면 대기로 끝난 pass의 scope가 엔진이 닫힐 때까지 남는다. activity scope도 같다.
+  - 부모 wake는 저장소가 아니라 지금처럼 엔진 Map에서 찾는다. 등록이 대기 중인 실행을 모두 resume하므로 등록된 workflow의 대기 중인 부모는 Map에 있다. 그래서 그 테스트도 뺐다.
+  - interrupt된 실행은 끝난 실행으로 다룬다. 엔진은 pass를 다시 시작하지 않고, 그 실행을 다시 `execute`한 호출자는 interrupt로 끝난다. 새 hook이 interrupt에도 호출자를 깨우므로, 그대로 두면 깨어난 호출자가 실행을 replay해 `suspended`로 되살린다. 승인 취소, provider 재시도 취소, 하위 에이전트 취소의 기존 테스트가 이것을 잡았다.
+  - `suspendedRetrySchedule`을 `HumanDecisionExecution`에도 둔다. 답이 카드를 옮길 때까지 호출자가 기다린다. `KanbanCardAttempt`는 `discard`로만 실행되므로 두지 않는다.
+  - 엔진 Map의 항목은 `Equal.byReferenceUnsafe`로 참조 비교한다. `HashMap.set`이 바뀌는 값을 구조 비교하면서 라이브러리의 scope와 latch까지 내려가 throw했다.
+- 10분 테스트는 1초 단위로 시계를 600번 진행하므로 부하 아래에서 5초를 넘는다. 그 테스트만 timeout을 30초로 둔다.
+- 결과: memory-agent 전체 테스트(207 파일)에서 workflow 테스트는 모두 통과한다. 두 번 돌려 매번 다른 2 파일이 native 검색 시작 시간초과(`NativeOwnerFailed: startup-timeout`)로 실패했고, 따로 돌리면 통과한다. `vp check`가 통과한다.

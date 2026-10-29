@@ -18,7 +18,7 @@ import { RequestNotSent } from "../oauth/protocol.ts";
 import { ExecutionAdmission } from "../runtime/execution-admission.ts";
 import { sha256 } from "../runtime/synchronous-crypto.ts";
 import { WorkflowExecution } from "./execution.ts";
-import { ownerWorkflowEngineLayer } from "./owner-workflow-engine.ts";
+import { ownerWorkflowEngineLayer, suspendedRetrySchedule } from "./owner-workflow-engine.ts";
 import { OwnerWorkflowStorage } from "./owner-workflow-storage.ts";
 
 /**
@@ -78,6 +78,7 @@ const providerRetryWorkflow = "ProviderRetryWait";
 const ProviderRetryWait = Workflow.make(providerRetryWorkflow, {
   payload: ProviderRetryWaitPayload,
   idempotencyKey: ({ runId, sequence }) => providerRetryIdempotencyKey(runId, sequence),
+  suspendedRetrySchedule,
 });
 
 const waitHandler = (payload: ProviderRetryWaitPayload) =>

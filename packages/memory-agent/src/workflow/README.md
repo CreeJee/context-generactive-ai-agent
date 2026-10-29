@@ -52,6 +52,10 @@
 - `StartNewGoal`은 별도의 독립 성공 기준이다. `updateGoal`을 암묵적으로 해석해 만들어서는 안 된다.
 - `toolOperationSql`은 `side_effect = 1`인 작업을 tool로 센다. fingerprint에 operation이 없어도 tool로 센다. 단, `middleware`와 `routedPersistence` operation은 owner bookkeeping이라 제외한다.
 - 발화한 clock은 자신의 deferred를 void 성공으로 완료하고, 그 결과는 엔진이 인코딩하는 Exit 형태로 저장한다. workflow payload는 레코드 필드를 인코딩한 JSON 객체로 저장한다.
+- 끝난 owner 실행을 기다리는 호출자는 retry schedule을 기다리지 않는다. 엔진은 실행이 완료되거나 interrupt되면 그 id를 `PubSub`에 발행하고, `awaitComplete` hook이 그 id를 받으면 돌아온다. 호출자를 기다리게 하는 workflow 정의는 `suspendedRetrySchedule`(1초에서 2배씩, 상한 5분, 끝나지 않음)을 둔다. schedule은 hook이 놓친 깨움을 되살리는 안전망이고, 끝나면 호출자가 결함으로 죽으므로 끝나지 않아야 한다.
+- 엔진 메모리에는 pass가 있는 실행만 남는다. 실행이 완료되거나 interrupt되면 표에서 지운다. pass마다 `WorkflowInstance`와 scope를 새로 만들고 엔진 scope에 묶지 않는다. 완료된 pass의 scope는 `Workflow.intoResult`가 닫고, 대기로 끝난 pass의 scope는 instance와 함께 사라진다.
+- interrupt된 실행은 끝난 실행이다. 엔진은 그 실행의 pass를 다시 시작하지 않고, 그 실행을 다시 `execute`한 호출자는 interrupt로 끝난다.
+- workflow 정의의 codec이 결과를 encode하지 못하면 `OwnerWorkflowEngineError{operation: "execution.result", reason: "result_unencodable"}` 결함으로 실행을 완료한다. 다시 돌아도 같은 실패이기 때문이다. 엔진의 SQL 쓰기 실패는 결함으로 끝나고 행이 `running`으로 남아 다음 시작에서 다시 돈다.
 
 ## Side Effects
 
@@ -59,7 +63,7 @@
 - SQLite 읽기/쓰기(`workflow.ts`): `session_workflows`, `workflow_state_revisions`, `workflow_goal_identities`, `workflow_goal_instances`, `workflow_new_goal_requests`, `board_change_requests`에 INSERT/UPDATE. `chat_runs`, `kanban_goals`, `work_tasks`, `owner_rpc_operations`, `workflow_run_bindings`는 조회
 - SQLite 쓰기: `run-bindings.ts`는 `workflow_run_bindings`에, `run-events.ts`·`durable-stream.ts`는 `workflow_run_events`에, `tool-ledger.ts`는 `owner_rpc_operations`에 INSERT/UPDATE, `uncertain-runs.ts`는 `workflow_uncertain_acknowledgements`에 INSERT, `execution.ts`는 `chat_metadata`에 INSERT
 - SQLite 읽기: `board.ts`, `completion-evidence.ts`, `read-recoveries.ts`가 `kanban_goals`, `sessions`, `nodes`, `chat_runs`, `chat_interrupts`, `owner_read_recoveries`, `workflow_goal_native_artifacts`, `workflow_goal_worker_generations`, `workflow_worker_dispatches` 등을 조회
-- 타이머: `sqliteRunLog`는 열린 로그 끝에 도달한 reader가 20 millis 간격으로 새 항목을 polling한다. owner workflow engine은 `Clock`·`FiberMap`·`Scope`로 durable clock을 예약하고 발화하며 실행 fiber를 관리한다
+- 타이머: `sqliteRunLog`는 열린 로그 끝에 도달한 reader가 20 millis 간격으로 새 항목을 polling한다. owner workflow engine은 `Clock`·`FiberMap`으로 durable clock을 예약하고 발화하며 실행 fiber를 관리한다. 대기 중인 호출자는 workflow 정의의 `suspendedRetrySchedule` 간격으로 실행을 다시 돈다
 - 암호화: `goalExecutionIdempotencyKey`가 `sha256`을 쓰고, `workflow.ts`는 `Crypto`/`NodeCrypto`로 id를 생성한다
 - 파일 시스템: `sources.ts`가 프로젝트의 `.agents/workflow-rules.json`(`projectWorkflowRulesPath`)을 워크플로 규칙 소스로 읽는다. 이 항목은 export 이름으로만 확인했고 본문은 읽지 않았다
 
