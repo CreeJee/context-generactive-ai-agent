@@ -1,13 +1,14 @@
-import { Effect, Result, Schema } from "effect";
+import { Effect, Match, Result, Schema } from "effect";
 import { McpScope, McpServers, Projects } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/projects.$project.mcp";
 
-const TrustChange = Schema.Struct({
-  scope: McpScope,
-  name: Schema.NonEmptyString,
-  trusted: Schema.Boolean,
+const McpChange = Schema.TaggedUnion({
+  trust: { scope: McpScope, name: Schema.NonEmptyString, trusted: Schema.Boolean },
+  login: { scope: McpScope, name: Schema.NonEmptyString },
+  cancelLogin: { scope: McpScope, name: Schema.NonEmptyString },
+  logout: { scope: McpScope, name: Schema.NonEmptyString },
 });
 
 const projectNotFound = () =>
@@ -28,8 +29,11 @@ export function loader({ params }: Route.LoaderArgs) {
 }
 
 /**
- * POST /api/projects/:project/mcp { scope, name, trusted } (R18)
- * Trusting starts that exact configuration; it does not approve any tool call.
+ * POST /api/projects/:project/mcp (R18)
+ * - `trust` { scope, name, trusted }: starts that exact configuration; it does not approve any
+ *   tool call. Distrusting also forgets the server's OAuth login.
+ * - `login` { scope, name }: starts an OAuth login; the answer shows where to log in.
+ * - `cancelLogin` / `logout` { scope, name }: stops that login, or forgets the stored one.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 export function action({ request, params }: Route.ActionArgs) {
@@ -37,13 +41,21 @@ export function action({ request, params }: Route.ActionArgs) {
     Effect.gen(function* () {
       const rejected = rejectCrossSite(request);
       if (rejected !== null) return rejected;
-      const body = yield* Effect.tryPromise(() => readJson(request, TrustChange));
+      const body = yield* Effect.tryPromise(() => readJson(request, McpChange));
       if (Result.isFailure(body))
         return Response.json({ error: "invalid_mcp_change" }, { status: 400 });
-      const { scope, name, trusted } = body.success;
+      const change = body.success;
       return yield* Effect.gen(function* () {
         const project = yield* (yield* Projects).get(params.project);
-        return Response.json(yield* (yield* McpServers).setTrusted(project, scope, name, trusted));
+        const servers = yield* McpServers;
+        return Response.json(
+          yield* Match.valueTags(change, {
+            trust: ({ scope, name, trusted }) => servers.setTrusted(project, scope, name, trusted),
+            login: ({ scope, name }) => servers.login(project, scope, name),
+            cancelLogin: ({ scope, name }) => servers.cancelLogin(project, scope, name),
+            logout: ({ scope, name }) => servers.logout(project, scope, name),
+          }),
+        );
       }).pipe(Effect.catchTag("ProjectNotFound", projectNotFound));
     }),
   );

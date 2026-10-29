@@ -1,4 +1,4 @@
-import { Effect, FileSystem, Path, Schema } from "effect";
+import { Effect, FileSystem, Path, Schedule, Schema } from "effect";
 import { expect, vi } from "vite-plus/test";
 import { McpServers, McpServerState, mcpToolName } from "../../src/mcp/servers.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
@@ -7,6 +7,8 @@ import { Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { openPage, scopedCallId, sessionScopedResponder } from "../support/chat-client.ts";
 import { matchGolden, runToolRequestBodies } from "../support/requests.ts";
+import { fakeOAuthMcpServer } from "../support/fake-oauth-mcp-server.ts";
+import { testHttpClient } from "../support/http.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { waitUntil } from "../support/wait-until.ts";
@@ -345,6 +347,73 @@ testAgent()("MCP configuration errors", (it) => {
       expect(failed.servers[0]?.target).toContain("API_KEY=");
       expect(yield* encodeJson(failed)).not.toContain("zq81Hd72kdP0xQ");
     }),
+  );
+});
+
+// A login is kept per server for the whole agent, so these tests own an agent.
+testAgent()("MCP servers behind OAuth", (it) => {
+  it.effect(
+    "a server that wants a login connects with it, refreshes it, and forgets it on logout",
+    () =>
+      Effect.gen(function* () {
+        const servers = yield* McpServers;
+        const { project, fake } = yield* freshProject;
+        const oauth = yield* fakeOAuthMcpServer;
+        yield* writeJson(fake.config, { mcpServers: { docs: { type: "http", url: oauth.url } } });
+        const trusted = yield* servers.setTrusted(project, "project", "docs", true);
+        expect(trusted.servers[0]).toMatchObject({
+          signedIn: false,
+          state: McpServerState.needsLogin({ failure: null }),
+        });
+        expect((yield* servers.runTools(project)).tools).toEqual([]);
+
+        const started = (yield* servers.login(project, "project", "docs")).servers[0]?.state;
+        const authorizationUrl = yield* Effect.fromNullishOr(
+          started !== undefined && McpServerState.$is("loggingIn")(started)
+            ? started.authorizationUrl
+            : undefined,
+        );
+        expect(new URL(authorizationUrl).searchParams.get("code_challenge_method")).toBe("S256");
+        // The browser: the authorization server consents at once and sends it back to the app.
+        const callback = yield* (yield* testHttpClient()).get(authorizationUrl);
+        expect(callback.status).toBe(200);
+        const connected = yield* servers.overview(project).pipe(
+          Effect.map((overview) => overview.servers[0]),
+          Effect.repeat({
+            until: (server) =>
+              server !== undefined && McpServerState.$is("connected")(server.state),
+            schedule: Schedule.spaced("20 millis"),
+          }),
+          Effect.timeout("5 seconds"),
+        );
+        expect(connected).toMatchObject({
+          signedIn: true,
+          state: McpServerState.connected({ tools: ["echo"] }),
+        });
+
+        const echo = (text: string) =>
+          Effect.gen(function* () {
+            const tool = yield* Effect.fromNullishOr(
+              (yield* servers.runTools(project)).tools.find(
+                (candidate) => candidate.tool.name === mcpToolName("docs", "echo"),
+              ),
+            );
+            const call = yield* tool.prepare({ text });
+            return yield* call({ toolCallId: `call-${text}` });
+          });
+        expect(yield* echo("first")).toBe("echo: first");
+        // An access token the server no longer takes is refreshed once, and the call goes through.
+        yield* oauth.expireTokens;
+        expect(yield* echo("again")).toBe("echo: again");
+        expect(yield* oauth.refreshes).toBe(1);
+
+        const loggedOut = yield* servers.logout(project, "project", "docs");
+        expect(loggedOut.servers[0]).toMatchObject({
+          signedIn: false,
+          state: McpServerState.needsLogin({ failure: null }),
+        });
+      }),
+    serverStartTimeout,
   );
 });
 
