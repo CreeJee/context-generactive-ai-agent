@@ -20,8 +20,8 @@ memory-agent의 사용자 전역 설정 계층이다. `<storage>/config.json`(`G
 - `KanbanSettingsRefused` — 범위 밖 값(`concurrency_out_of_range`) 거부 오류
 - `KanbanConcurrencySetting` — `configured: Option<number>`와 실제 적용값 `effective`
 - `defaultKanbanConcurrency(cores)` — 코어 절반, 최소 1·최대 4
-- `SecretStore` — 비밀값 get/set/remove 서비스. `SecretStore.keychain`(OS 키체인, FileSystem·Path 요구)과 `SecretStore.memory`(테스트용 메모리) 레이어
-- `SecretStoreApi` / `SecretStoreFailed` / `SecretName` — 비밀 저장소 API 타입, operation(`read`|`write`|`delete`) 실패 오류, 비밀 이름(`kagi-api-key`)
+- `SecretStore` — 비밀값 get/set/remove 서비스. `SecretStore.keychain`(OS 키체인, FileSystem·Path·Crypto 요구)과 `SecretStore.memory`(테스트용 메모리) 레이어
+- `SecretStoreApi` / `SecretStoreFailed` / `SecretName` — 비밀 저장소 API 타입, operation(`read`|`write`|`delete`) 실패 오류, 비밀 이름(`kagi-api-key`, MCP 서버 로그인 `mcp-oauth:<scope>:<프로젝트 id>:<서버 이름>`)
 - `keychainService` — 키체인 서비스 이름 상수 `context-generactive-agent`
 - `StorageRoot` — DB·벡터 인덱스·모델·설정을 담는 디렉터리 경로 서비스. `StorageRoot.layer(path)`와 `StorageRoot.home` 레이어
 - `defaultStorageRoot` — 홈 디렉터리 아래 `.context-generactive-agent` 경로를 계산하는 Effect
@@ -44,7 +44,7 @@ memory-agent의 사용자 전역 설정 계층이다. `<storage>/config.json`(`G
 
 - 파일 시스템: `<storage>/config.json` 읽기, 임시 파일 쓰기 후 rename, 임시 파일 삭제, storage 디렉터리 recursive 생성(`0o700`)
 - 임시 파일 이름에 `process.pid`를 사용한다
-- OS 키체인 접근: `openKeyringEntry(keychainService, name)`로 네이티브 keyring 애드온을 첫 사용 시 로드하고 password get/set/delete
+- OS 키체인 접근: `openKeyringEntry(keychainService, name)`로 네이티브 keyring 애드온을 첫 사용 시 로드하고 password get/set/delete. Windows에서는 자격 증명 하나가 2,560바이트까지라 `createChunkedPasswordEntry`로 나눠 저장한다(MCP 로그인처럼 긴 값)
 - 홈 디렉터리 조회(`homeDirectory`)와 CPU 코어 수 조회(`availableCores`, `packages/memory-agent/src/runtime/host-system`)
 - 인메모리 상태: `KanbanSettings`의 unbounded PubSub 발행, `Semaphore` permit, `SecretStore.memory`의 `Ref<HashMap>`
 

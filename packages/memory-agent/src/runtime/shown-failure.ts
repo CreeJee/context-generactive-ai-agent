@@ -39,6 +39,18 @@ export const McpFailureCode = Schema.Literals([
 ]);
 export type McpFailureCode = typeof McpFailureCode.Type;
 
+/** Why a login to an MCP server's authorization server did not finish. */
+export const McpLoginFailureCode = Schema.Literals([
+  /** The loopback port the browser returns to is taken. */
+  "callback_port_unavailable",
+  "login_timed_out",
+  /** The person or the authorization server refused (`access_denied`). */
+  "login_denied",
+  /** Discovery, registration or the token exchange failed some other way. */
+  "login_failed",
+]);
+export type McpLoginFailureCode = typeof McpLoginFailureCode.Type;
+
 /** Why an `mcp.json` or `agents.json` file is not (fully) used. A missing file is not one. */
 export const ConfigFileFailureCode = Schema.Literals([
   "unreadable",

@@ -660,6 +660,7 @@ export {
   ConfigFileFailureCode,
   ExternalAgentFailureCode,
   McpFailureCode,
+  McpLoginFailureCode,
   RunFailureCode,
   externalAgentFailureText,
   runFailureCodeOf,
