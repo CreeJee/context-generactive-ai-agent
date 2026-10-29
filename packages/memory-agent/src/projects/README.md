@@ -25,7 +25,7 @@
 - `add`는 루트가 저장소 루트를 포함하거나 저장소 루트 안에 있으면 등록을 거부한다. 비교는 정규화한 실경로끼리 `path.relative`로 한다.
 - 저장소 루트(`StorageRoot.path`)는 layer를 만들 때 한 번 정규화한다. 경로가 아직 없으면 존재하는 부모까지 올라가 `realPath`를 구한 뒤 남은 basename을 다시 붙인다.
 - `projects.root`에는 UNIQUE 충돌 대상이 있어야 한다. INSERT가 `ON CONFLICT(root)`에 의존하기 때문이다. 숨긴 프로젝트를 다시 add하면 `hidden_at`만 NULL로 되돌린다(un-hide). 숨기지 않은 기존 루트를 add하면 RETURNING이 비어 `already_registered`로 실패한다.
-- 숨기거나 cross-recall에서 제외한 프로젝트도 메모리를 그대로 가진다. 숨긴 프로젝트는 계속 검색되고, 제외한 프로젝트는 다른 프로젝트에서 검색되지 않는다(R08). `list`는 `hidden_at IS NULL`인 행만, `listAll`은 importer용으로 숨긴 행까지 돌려준다.
+- 숨기거나 cross-recall에서 제외한 프로젝트도 메모리를 그대로 가진다. 숨긴 프로젝트는 계속 검색되고, 제외한 프로젝트는 다른 프로젝트에서 검색되지 않는다(R08). `list`는 `hidden_at IS NULL`인 행만, `listAll`은 숨긴 행까지 돌려준다. importer와 앱의 보관한 프로젝트 목록(GET /api/projects?hidden=1)이 쓴다.
 - 목록은 `ORDER BY created_at, id` 순서로 정렬된다.
 - `id`는 `Crypto.randomUUIDv4`, 시각은 `Clock.currentTimeMillis`를 `DateTime.formatIso`로 바꾼 ISO 문자열이다.
 - 새 프로젝트의 기본값은 `permissionMode: "ask"`, `crossRecallExcluded: false`이고, `name`은 루트의 basename이다(비어 있으면 root 전체).

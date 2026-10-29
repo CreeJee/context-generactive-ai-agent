@@ -100,11 +100,12 @@ UI 컴포넌트는 shadcn으로 추가합니다(`AGENT.md`).
 | `GET/POST /api/auth`                         | 로그인 상태 조회, `login`, `cancel`, `logout`                                        |
 | `GET /api/models`                            | 계정에서 쓸 수 있는 모델 목록과 현재 선택                                            |
 | `POST /api/models/:model`                    | 모델과 추론 강도 선택(없는 모델은 자동 대체 없이 오류)                               |
-| `GET/POST /api/projects`                     | 프로젝트 목록, 경로로 추가                                                           |
+| `GET/POST /api/projects`                     | 프로젝트 목록(`hidden=1`이면 보관한 프로젝트), 경로로 추가                           |
+| `POST /api/projects/pick`                    | 앱이 도는 컴퓨터의 폴더 선택 창을 열고 고른 경로를 돌려줌(등록은 하지 않음)          |
 | `GET/POST /api/projects/:project/agents`     | 외부 ACP 에이전트 목록과 연결 상태, `trust`, `reconnect`                             |
 | `GET /api/projects/:project/skills`          | 이 프로젝트에서 쓸 수 있는 skill과 읽지 못한 폴더                                    |
 | `GET/POST /api/projects/:project/mcp`        | MCP 서버 목록과 상태, `{scope, name, trusted}`로 신뢰/중지                           |
-| `POST /api/projects/:project`                | `crossRecallExcluded`, `permissionMode`(`ask`/`auto`) 변경                           |
+| `POST /api/projects/:project`                | `crossRecallExcluded`, `permissionMode`(`ask`/`auto`), `hidden`(보관과 해제) 변경    |
 | `GET/POST /api/sessions`                     | 프로젝트별 대화 목록(`archived=1`이면 보관함), 새 대화(`agent`로 외부 에이전트 직접) |
 | `GET /api/sessions/:session?holder=`         | 진행 중인 run, 마지막 run의 끝난 방식, 이 탭의 소유 여부, 컨텍스트 사용량            |
 | `POST /api/sessions/:session`                | `{archived}` 보관과 복원(답변 중 409, 다른 탭 사용 중 423)                           |
@@ -128,7 +129,7 @@ UI 컴포넌트는 shadcn으로 추가합니다(`AGENT.md`).
 
 ```
 app/
-  .server/     ManagedRuntime(agent.ts), HTTP 헬퍼
+  .server/     ManagedRuntime(agent.ts), HTTP 헬퍼, 폴더 선택 창(folder-picker.ts)
   entry/       화면: 사이드바, 대화, 메시지, 마크다운, 승인 카드, API 클라이언트
   components/  shadcn UI
   routes/      _index.tsx, api/*
