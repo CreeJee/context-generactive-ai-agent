@@ -3179,3 +3179,13 @@
 - 같은 테스트가 도달한 상태와 상태별 사건 결과를 `docs/goal-transitions.md`로 만든다. 전이를 바꾸면 그 파일의 diff를 리뷰한다. 표는 formatter가 열을 다시 맞춰 snapshot과 어긋나므로 목록으로 만든다.
 - 칸반 세션의 reconcile 동작(모순이면 로그만)은 바꾸지 않았다.
 - 결과: `vp check`가 통과한다. memory-agent 전체 테스트(208 파일)가 통과한다. 0.0.17 업그레이드 테스트의 기대 실패 2개는 B에서 뒤집는다.
+
+## Workflow 정상화 7단계 B: 앱 시작 검사 (2026-10-29)
+
+- 설계 문서 `docs/designs/workflow-normalization.md`의 Step 7 중 `WorkflowStartup`을 구현했다. owner 엔진의 `make`가 이 서비스를 읽으므로, workflow 등록이 대기 중인 실행을 resume하기 전에 검사가 끝난다.
+- 검사 순서: 저장된 Goal 상태의 모순을 고친다(`Workflows.checkAll`) → 세션 실행 상태가 `ready`·`retrying`인데 Goal이 `Running`이 아닌 세션을 찾는다 → 둘을 합친 세션을 `stopped{state_reconciled}`로 둔다 → 남은 `accepted` 새 Goal 요청을 정산한다. 숫자는 span `WorkflowStartup.check`의 속성(`repaired`, `halted`, `settled`)이다.
+- `checkAll`은 모순만 고친다. 오래된 phase는 지금처럼 다음 turn의 reconcile이 고친다.
+- 검사가 실패하면 오류 로그를 남기고 앱은 시작한다. 세션은 이전 버전이 둔 그대로다.
+- 화면은 `stopped{state_reconciled}`인 세션에 "앱이 상태를 고쳤어요" 알림을 마지막 run의 결과보다 먼저 보인다. 사용자 turn이 시작되면 실행 상태를 `idle`로 지운다. R1 세션처럼 Goal이 끝나 `start`가 실행 상태를 쓰지 않는 세션에서도 알림이 남지 않게 하려는 것이다. 자동 continuation은 지우지 않는다.
+- 결과: 0.0.17 업그레이드 테스트의 기대 실패 2개가 통과로 뒤집혔다. 재시작 뒤의 `accepted` 요청은 `rejected{run_outcome_uncertain}`이고, R1·R2 세션은 각각 `completed`·`verify`로 고쳐져 `stopped{state_reconciled}`다.
+- 0.0.17의 `kind` 실행 상태를 읽는 provider retry 테스트는 Goal 없는 세션의 `ready` 실행을 썼다. 시작 검사가 그 실행을 멈추므로, fixture에 실행 중인 Goal과 Plan을 더했다.

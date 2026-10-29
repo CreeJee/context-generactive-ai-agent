@@ -64,7 +64,14 @@ export const WorkflowExecutionState = Schema.TaggedUnion({
     ...blockerFields,
   },
   stopped: {
-    reason: Schema.Literals(["user", "run_failed", "workflow_changed", "completed"]),
+    /** `state_reconciled`: the startup check repaired a Goal no transition makes, or one not running. */
+    reason: Schema.Literals([
+      "user",
+      "run_failed",
+      "workflow_changed",
+      "completed",
+      "state_reconciled",
+    ]),
   },
 });
 export type WorkflowExecutionState = typeof WorkflowExecutionState.Type;
@@ -73,6 +80,8 @@ const isRunning = WorkflowExecutionState.isAnyOf(["running"]);
 const isRetrying = WorkflowExecutionState.isAnyOf(["retrying"]);
 /** A run that ended with its Plan left to continue. */
 const isPending = WorkflowExecutionState.isAnyOf(["ready", "retrying"]);
+const isReconciled = (state: WorkflowExecutionState) =>
+  state._tag === "stopped" && state.reason === "state_reconciled";
 const executionKeys = Struct.keys(executionFields);
 
 export class WorkflowExecutionFailed extends Schema.TaggedError<
@@ -256,12 +265,24 @@ const make = Effect.gen(function* () {
       );
     }),
 
+    /** Stops the automatic runs of a session the startup check repaired. */
+    stopReconciled: Effect.fn("WorkflowExecution.stopReconciled")((sessionId: string) =>
+      writing(save(sessionId, cases.stopped.make({ reason: "state_reconciled" }))),
+    ),
+
     start: Effect.fn("WorkflowExecution.start")(
       (sessionId: string, runId: string, state: WorkflowState, userTurn: boolean) =>
         writing(
           Effect.gen(function* () {
-            if (!executable(state) || state.goal === null || state.plan === null) return;
             const previous = yield* read(sessionId);
+            // A user turn is what the repair notice asks for, also in a Goal that does not run.
+            if (!executable(state) || state.goal === null || state.plan === null) {
+              yield* Effect.when(
+                save(sessionId, cases.idle.make({})),
+                Effect.succeed(userTurn && isReconciled(previous)),
+              );
+              return;
+            }
             if (isRunning(previous) && previous.runId === runId) return;
             const continued = isPending(previous);
             yield* save(

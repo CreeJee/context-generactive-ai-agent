@@ -117,8 +117,7 @@ testAgent({ beforeOpen: seed })("upgrade from 0.0.17", (it) => {
     }),
   );
 
-  // Step 7: the startup check settles requests whose run the restart ended.
-  it.effect.fails("rejects new-Goal requests whose run outcome the restart lost", () =>
+  it.effect("rejects new-Goal requests whose run outcome the restart lost", () =>
     Effect.gen(function* () {
       expect(
         yield* sqlAll(
@@ -134,8 +133,7 @@ testAgent({ beforeOpen: seed })("upgrade from 0.0.17", (it) => {
     }),
   );
 
-  // Step 7: the startup check repairs R1 and R2 and stops their automatic runs.
-  it.effect.fails("repairs the sessions 0.0.17 left unable to finish", () =>
+  it.effect("repairs the sessions 0.0.17 left unable to finish", () =>
     Effect.gen(function* () {
       const workflows = yield* Workflows;
       const execution = yield* WorkflowExecution;
@@ -150,6 +148,14 @@ testAgent({ beforeOpen: seed })("upgrade from 0.0.17", (it) => {
       expect(
         yield* Effect.forEach([sessions.goalCompleted, sessions.planCompleted], execution.get),
       ).toEqual(Array.from({ length: 2 }, () => ({ _tag: "stopped", reason: "state_reconciled" })));
+      // The repair notice stays until the user sends the next turn, also in a Goal that is done.
+      const turn = (userTurn: boolean) =>
+        Effect.andThen(
+          execution.start(sessions.goalCompleted, "next", completed, userTurn),
+          execution.get(sessions.goalCompleted),
+        );
+      expect(yield* turn(false)).toEqual({ _tag: "stopped", reason: "state_reconciled" });
+      expect(yield* turn(true)).toEqual({ _tag: "idle" });
     }),
   );
 });

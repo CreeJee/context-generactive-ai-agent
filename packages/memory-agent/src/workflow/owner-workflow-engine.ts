@@ -24,6 +24,7 @@ import { Workflow } from "effect/workflow";
 import type { Activity, DurableDeferred } from "effect/workflow";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import type { SqlClient } from "effect/sql";
+import { WorkflowStartup } from "./workflow-startup.ts";
 import {
   OwnerWorkflowAdmission,
   OwnerWorkflowStorage,
@@ -196,6 +197,8 @@ const defect = <A, E>(operation: string, evaluate: () => Effect.Effect<A, E>): E
   }).pipe(Effect.flatten, Effect.orDie);
 
 const makeEngine = Effect.gen(function* () {
+  // Registering a workflow resumes its waiting executions, so the startup check runs first.
+  yield* WorkflowStartup;
   const ownerScope = yield* Effect.scope;
   const storage = yield* OwnerWorkflowStorage;
   const workflows = yield* Ref.make(HashMap.empty<string, RegisteredWorkflow>());
@@ -621,11 +624,12 @@ const admissionServiceLayer = Layer.effect(
  */
 export const ownerWorkflowEngineLayer = Layer.merge(engineLayer, admissionServiceLayer).pipe(
   Layer.provideMerge(ownerWorkflowStorageLayer),
+  Layer.provide(WorkflowStartup.layer),
 );
 
 /** Project-owned durable Effect WorkflowEngine backed by the shared SqlClient connection. */
 export const layer: Layer.Layer<WorkflowEngine.WorkflowEngine, never, SqlClient.SqlClient> =
-  engineLayer.pipe(Layer.provide(ownerWorkflowStorageLayer));
+  engineLayer.pipe(Layer.provide([ownerWorkflowStorageLayer, WorkflowStartup.layer]));
 
 /** Atomic owner admission; bind and the first durable workflow request share one transaction. */
 export const admissionLayer: Layer.Layer<OwnerWorkflowAdmission, never, SqlClient.SqlClient> =

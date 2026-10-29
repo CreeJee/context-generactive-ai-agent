@@ -82,5 +82,14 @@ export function RunNoticeView({ notice }: { notice: RunNotice }) {
         </AlertDescription>
       </Alert>
     ),
+    reconciled: () => (
+      <Alert>
+        <AlertTitle>앱이 상태를 고쳤어요</AlertTitle>
+        <AlertDescription>
+          이전 버전이 끝내지 못한 Goal 상태를 고치고 자동 실행을 멈췄어요. 이어서 하려면 메시지를
+          보내 주세요.
+        </AlertDescription>
+      </Alert>
+    ),
   });
 }

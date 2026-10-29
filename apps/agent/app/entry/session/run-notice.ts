@@ -22,6 +22,8 @@ export type RunNotice = Data.TaggedEnum<{
   stopped: {};
   /** Finished, but the last thing it produced was not an answer (e.g. only tool calls). */
   "no-answer": {};
+  /** The app repaired a Goal state an earlier version left and stopped its automatic runs. */
+  reconciled: {};
 }>;
 export const RunNotice = Data.taggedEnum<RunNotice>();
 
@@ -39,6 +41,12 @@ export const noticeOf: {
 function noticeOfBody(state: SessionRunState | null, page: PageView): RunNotice | null {
   if (!(state !== null)) return null;
   if (state.running !== null) return RunNotice.detached();
+  // The repair explains the run before it, which an earlier version could not finish.
+  if (
+    WorkflowExecutionState.$is("stopped")(state.execution) &&
+    state.execution.reason === "state_reconciled"
+  )
+    return RunNotice.reconciled();
   const lastRun = state.lastRun;
   if (!(lastRun !== null)) return null;
   // A restart is recorded as an error; the status may have been rewritten since.

@@ -25,6 +25,7 @@
 - `GoalExecutions` / `goalExecutionLayer` / `GoalExecutionAdmissionRefused` — Goal 실행 admission 서비스와 레이어
 - `GoalExecutionIdentity` / `GoalExecutionOwnerIdentity` / `GoalExecutionPayload` / `GoalExecutionSuccess` / `GoalExecutionError` / `GoalExecutionErrorReason` / `GoalExecutionSideEffectState` / `goalExecutionIdempotencyKey` — Goal 실행 계약 스키마와 멱등 키
 - `ownerWorkflowEngineLayer` / `layer` / `admissionLayer` / `workflowName` / `suspendedRetrySchedule` / `OwnerWorkflowEngineError` — SqlClient 기반 프로젝트 소유 WorkflowEngine 레이어
+- `WorkflowStartup` — owner 엔진이 workflow를 resume하기 전에 도는 시작 검사(Goal 상태 모순 수리, 자동 실행 정지, 남은 새 Goal 요청 정산)
 - `OwnerWorkflowStorage` / `OwnerWorkflowStorageApi` / `ownerWorkflowStorageLayer` / `OwnerWorkflowAdmission` / `OwnerWorkflowAdmissionResult` / `StoredExecution` / `StoredWorkflowResult` / `ScheduledClock` / `OwnerWorkflowStorageError` — 실행·activity·deferred·clock 영속 저장소
 - `sqliteRunLog` — session/run 바인딩을 확인하는 owner 전용 AG-UI 이벤트 전달 로그(`RunLog` 구현)
 - `RunLogSignals` — 로그에 쓴 run id를 알려 로그 끝의 reader를 깨우는 서비스
@@ -43,6 +44,7 @@
 - `GoalExecutionCompletion`은 SDK 루프가 정확히 한 번 완료한다. workflow body를 replay해도 모델이나 tool을 다시 호출하지 않는다.
 - owner admission에서 `bind`와 첫 durable workflow 요청은 한 트랜잭션에서 실행된다(`admitWith`, `admissionLayer`).
 - 앱의 `SqlClient`만 연결과 writer를 소유하며 root가 공급한다. `ownerWorkflowEngineLayer`는 engine·admission·storage를 하나의 scoped graph로 묶는다.
+- owner 엔진은 `WorkflowStartup`에 의존한다. 그래서 시작 검사가 끝나기 전에는 어느 workflow 등록도 대기 중인 실행을 resume하지 않는다. 검사는 고친 세션과, Goal이 `Running`이 아닌데 `ready`·`retrying`인 세션을 `stopped{state_reconciled}`로 둔다. 검사가 실패해도 앱은 시작한다.
 - `sqliteRunLog`는 중앙 DB의 SqlClient를 써야 하며 worker 로컬 DB를 쓰면 안 된다. 인증은 HTTP route가 맡고, 이 로그는 `workflow_run_bindings`로 session/run 바인딩을 추가로 확인한다. receipt cursor는 로그 offset이 아니며, 재개 토큰은 이 namespace(`sdk-stream:v1:`)에 저장된 chunk만 만든다.
 - 카드 이전에 저장된 Plan의 step status(`pending`/`completed`)는 읽기만 하고 제자리에서 다시 쓰지 않는다. 읽을 때 `pending`은 의존성이 끝났으면 ready, 아니면 backlog가 되고, `completed`는 `done`이 된다.
 - Goal 상태 전이는 `goal-transitions.ts`의 `goalTransitions` 한 곳에서 정한다. 사건마다 아홉 상태를 모두 적으므로 빠진 쌍은 타입 오류다. `Workflows` 메서드와 `evaluateWorkflowAction`은 저장된 상태를 `Standing`으로 읽어 전이를 부르고, 전이가 정한 phase와 Goal·Plan status를 저장한다. 산출물 내용(버전, 근거, 검증)은 메서드가 만든다.
