@@ -308,6 +308,7 @@ function ChatPanel({
   const composerInput = useRef<ChatComposerHandle>(null);
   const {
     messages,
+    opened,
     hasOlderMessages,
     loadOlderMessages,
     sendMessage,
@@ -899,6 +900,7 @@ function ChatPanel({
       )}
       <ChatHistory
         messages={messages}
+        opened={opened}
         hasOlderMessages={hasOlderMessages}
         loadOlderMessages={loadOlderMessages}
         renderMessage={(message, index) => (

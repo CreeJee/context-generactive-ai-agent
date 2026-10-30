@@ -66,6 +66,8 @@ export function useAgentChat({
   const sendError = AsyncResult.error(sending);
   return {
     messages: Option.match(view, { onNone: () => noMessages, onSome: ({ messages }) => messages }),
+    /** The session was read once; before that, no messages does not mean a new conversation. */
+    opened: Option.isSome(state),
     hasOlderMessages: Option.exists(view, ({ older }) => older !== null),
     loadOlderMessages: () => loadOlder(undefined),
     sendMessage: (content: Send["content"], forwardedProps?: Send["forwardedProps"]) =>

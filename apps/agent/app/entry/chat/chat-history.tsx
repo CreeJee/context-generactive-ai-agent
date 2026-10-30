@@ -17,12 +17,15 @@ import type { ChatMessage } from "memory-agent/chat-api";
 /** Owns history paging and scroll position; the caller owns the content of each message. */
 export function ChatHistory({
   messages,
+  opened,
   hasOlderMessages,
   loadOlderMessages,
   renderMessage,
   children,
 }: {
   messages: readonly ChatMessage[];
+  /** The conversation was read; only then do no messages show it as new. */
+  opened: boolean;
   hasOlderMessages: boolean;
   loadOlderMessages: () => Promise<void>;
   renderMessage: (message: ChatMessage, index: number) => ReactNode;
@@ -144,7 +147,7 @@ export function ChatHistory({
           messages.length > 0 && "pt-6",
         )}
       >
-        {messages.length === 0 && (
+        {opened && messages.length === 0 && (
           <Empty className="mt-24">
             <EmptyHeader>
               <EmptyMedia variant="icon">

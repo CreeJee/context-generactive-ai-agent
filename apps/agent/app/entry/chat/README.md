@@ -11,7 +11,7 @@
 - `SessionView` — 한 세션의 진입 컴포넌트다. `useSessionLease`로 lease를 따른다. 읽기 전용 페이지는 소유 페이지가 run을 시작하거나 끝낼 때 revision 키로 `ChatPanel`을 다시 마운트한다. props: `sessionId`, `imagesSupported`, `slash`, `sendingEnabled`
 - `SlashSupport` — 슬래시 명령의 `SlashContext`와, 패널 밖에서 실행할 명령(new/agent/mode/model/effort/settings/report)을 처리하는 `run`을 묶은 인터페이스
 - `chatRuntime` — 페이지 전체가 공유하는 `Atom.runtime`이다. `ChatApiClient.layer`+`FetchHttpClient.layer`, `FetchHttpClient.Fetch`=`appFetch`, `Crypto.Crypto`=`browserCrypto`를 합친다
-- `useAgentChat` — 한 세션 대화 훅이다. 열면 최신 메시지를 읽고 진행 중 run에 다시 붙는다. 반환: `messages`, `hasOlderMessages`, `loadOlderMessages`, `sendMessage`, `stop`, `isLoading`, `sessionGenerating`, `resuming`, `failure`, `refusal`, `unsent`, `interrupts`, `answerProblem`, `resolveInterrupts`
+- `useAgentChat` — 한 세션 대화 훅이다. 열면 최신 메시지를 읽고 진행 중 run에 다시 붙는다. 반환: `messages`, `opened`(세션을 한 번 읽었는지. `ChatHistory`는 읽기 전에는 "새 대화"를 보이지 않는다), `hasOlderMessages`, `loadOlderMessages`, `sendMessage`, `stop`, `isLoading`, `sessionGenerating`, `resuming`, `failure`, `refusal`, `unsent`, `interrupts`, `answerProblem`, `resolveInterrupts`
 - `AnswerProblem` — 승인 답이 이어지지 못한 이유: `"unsent"` | `"refused"` | `"lost"`
 - `useBtwThread` — BTW 스레드 하나의 훅(`btwThreads(chatRuntime)`)이다. 반환: `messages`, `ask`, `isLoading`, `failure`, `error`, `refusal`
 - `PendingApproval` / `toPendingApproval` / `approvalAnswer` — 승인 대기 TaggedEnum(`tool-approval`, `permission-review`)이다. `PendingInterrupts`의 interrupt를 reason별로 바꾸고, 결정을 `ResumeEntry`로 만든다
