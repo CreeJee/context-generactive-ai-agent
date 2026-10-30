@@ -2354,6 +2354,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         Effect.scoped,
         // The run's tool calls run under this span; they outlast it while the response streams.
         Effect.withSpan("AgentChat.start"),
+        // Starting belongs to this service, as the run it starts does: the user turn is in memory
+        // before the run exists, so a page that leaves halfway would leave the turn there and out
+        // of the conversation.
+        Effect.forkIn(scope, { startImmediately: true }),
+        Effect.flatMap(Fiber.join),
       );
     },
 

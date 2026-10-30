@@ -3318,3 +3318,10 @@
 - 증상: 채팅 화면이 간헐적으로 "새 대화"로 보였다가 다시 대화로 돌아왔다. 보낸 turn이 사라지기도 했다.
 - 근거: 개발 서버(로컬 `main` 562e84c3, 세션 Atom 묶음 수정 전) span에서 run 없이 1초 안에 `chatSnapshot`이 여러 번(14:47:52에 8번) 불렸다. `open`이 다시 돌았다는 뜻이다. 그 사이 `AgentChat.start` 세 번(13:32:11, 14:45:33, 14:46:41)이 run을 만들기 전에 interrupted로 끝났고, 그 turn은 `chat_runs`와 `chat_threads`에 남지 않았다. 묶음이 바뀌면 이전 `send` Atom의 구독이 풀려 요청 fiber가 끊긴다. 수정(`keptAtomGroups`)은 PR #43으로 `origin/main`에 있었지만 로컬 `main`이 뒤처져 있었다.
 - 결정: `useAgentChat`은 `opened`(세션을 한 번 읽었는지)를 돌려주고, `ChatHistory`는 `opened`일 때만 빈 목록을 "새 대화"로 보인다. 처음 여는 세션이 snapshot을 기다리는 동안, 또는 개발 중 HMR로 Atom 묶음이 새로 생긴 동안 빈 목록을 새 대화로 보이지 않는다.
+
+## run 시작은 요청이 아니라 `AgentChat` 서비스 scope에 속한다 (2026-10-30)
+
+- 증상: 세션 `7e33255a`에서 보낸 첫 메시지가 채팅에 없었다. snapshot이 빈 대화를 돌려줬지만 메모리(`nodes`)에는 그 user turn이 있었다. 같은 날 `8346ac43`의 turn도 같은 식으로 사라졌다.
+- 원인: `AgentChat.start`는 user turn을 메모리 node로 먼저 쓰고(`persistUserTurn`), run과 대화 기록은 그 뒤에 만든다. `start`가 HTTP 요청 fiber에서 돌아서, 페이지가 그 사이에 요청을 끊으면(세션 Atom 묶음 교체, 세션 이동, 탭 닫기) turn은 메모리에만 남고 run은 생기지 않았다. span에서 이 시작 단계는 0.6–14초 걸렸고 세 번 interrupted로 끝났다.
+- 결정: `start`는 서비스 scope에 fork하고 호출자는 그 fiber를 join한다(`Effect.forkIn(scope)` + `Fiber.join`). 호출자가 끊겨도 run 시작까지 마치고, 이미 시작된 run처럼 서버에서 계속 돈다. 서비스가 닫힐 때만 중단된다. 내부 follow-up도 이미 서비스 scope에서 `start`를 부르므로 동작이 같다.
+- 버린 안: 시작 구간을 `Effect.uninterruptible`로 묶기. 서비스 종료도 그 구간이 끝날 때까지 기다리게 된다. 요청 핸들러 layer의 scope에 fork하기. `toWebHandler` 수명이라 서버 종료 때 닫히지 않는다.

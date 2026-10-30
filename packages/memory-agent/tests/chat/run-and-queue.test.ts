@@ -130,6 +130,33 @@ testAgent({ testProvider: { responder: gatedResponder } })("chat runs", (it) => 
     }),
   );
 
+  it.effect("a turn whose page leaves before its run starts still reaches the conversation", () =>
+    Effect.gen(function* () {
+      const session = yield* chatSession;
+      const agent = yield* agentChat;
+      const starting = yield* Effect.forkChild(
+        agent.start(
+          {
+            holder: null,
+            input: {
+              runId: `${session.id}-left`,
+              messages: [{ id: "m-1", role: "user", content: "hi" }],
+            },
+          },
+          session.id,
+          null,
+        ),
+        { startImmediately: true },
+      );
+      // The request ends before the turn has a run.
+      yield* Fiber.interrupt(starting);
+      yield* until(() => session.invocations().length === 1, "the turn's run to start");
+      const reloaded = yield* openPage(session.id);
+      yield* reloaded.rejoin;
+      expect(reloaded.texts("user")).toEqual(["hi"]);
+    }),
+  );
+
   it.effect("cancel stops the running run and reports that it really stopped", () =>
     Effect.gen(function* () {
       const session = yield* chatSession;
