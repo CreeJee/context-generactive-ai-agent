@@ -143,12 +143,28 @@ const rpcSession = (setup: ImportWorkerSetup) =>
         throw cause;
       }
     });
-    // A count may be asked for while a pass streams; each holds a slot until it is answered.
+    // A count may be asked for while a pass streams; each holds a slot until it is answered. The
+    // pass's write turns hold two more, and a turn must not wait for a slot while it holds the
+    // server's connection.
     const protocol = yield* Layer.build(
-      RpcClient.layerProtocolWorker({ size: 1, concurrency: 4 }).pipe(Layer.provide(workers)),
+      RpcClient.layerProtocolWorker({ size: 1, concurrency: 8 }).pipe(Layer.provide(workers)),
     );
     const client = yield* RpcClient.make(ImportRpcs).pipe(Effect.provideContext(protocol));
     const worker = yield* Deferred.await(spawned);
+    // Each piece of a pass is written while the server's connection is held for it, in line with
+    // the server's own statements (`write-turns.ts`).
+    const sql = yield* SqlClient.SqlClient;
+    yield* client.WriteTurns().pipe(
+      Stream.runForEach(() =>
+        Effect.scoped(Effect.andThen(sql.reserve, client.Turn())).pipe(
+          // A turn not given only makes that piece wait out its timeout.
+          Effect.ignore,
+        ),
+      ),
+      // The worker is gone; the next request finds that out and replaces it.
+      Effect.ignore,
+      Effect.forkScoped,
+    );
     const lost = () => ImportWorkerFailed.make({ reason: "lost" });
     const inFlight = yield* Ref.make(0);
     return {

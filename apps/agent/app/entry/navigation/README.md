@@ -7,7 +7,7 @@
 ## Interface
 
 - `ModelSection` — 모델 Select와, 선택한 모델이 허용하는 추론 강도 Select를 그리는 사이드바 섹션 (sidebar.tsx)
-- `ProjectSection` — 접히는 프로젝트 섹션. 프로젝트 선택·추가 다이얼로그, 권한 모드(ask/auto/full), 다른 프로젝트 기억 검색 토글(R08), 보관하기를 담는다 (sidebar.tsx)
+- `ProjectSection` — 접히는 프로젝트 섹션. 이름으로 찾는 프로젝트 Combobox(보관한 프로젝트는 따로 묶음), 폴더 열기 버튼, 권한 모드(ask/auto/full), 다른 프로젝트 기억 검색 토글(R08), 보관하기를 담는다 (sidebar.tsx)
 - `SessionSection` — 세션·보관 세션 목록. 위치 필터(`sessionPlace`·`placeFilterOf`·`shownIn`)로 나눠 보여 준다 (sidebar.tsx, `App`이 렌더)
 - `Separator` — sidebar.tsx가 `~/components/ui/separator`에서 다시 내보내는 구분선
 - `SidebarDisclosureTrigger` — `CollapsibleTrigger` 래퍼. `leading` 슬롯, 말줄임 본문, 회전하는 chevron을 그린다
@@ -44,8 +44,10 @@
 - 계정 전환기의 '사용 중' 계정은 `activeProvider === provider && selected`로 정한다. 사용 계정은 모델 선택을 따른다. 이미 사용 중인 항목을 클릭하면 아무 일도 하지 않는다. 호환 항목 key는 `openai-compatible:` 접두사를 붙인다.
 - 한도는 앱이 추정하지 않는다(주석). `unavailable` 사유는 `credential_expired`·`lookup_failed`뿐이다. `stale` 값은 흐리게 표시한다. 사용률은 0~100으로 자른다.
 - `AccountManager`는 계정 시트가 열려 있는 동안에만 마운트된다(주석).
-- 폴더 등록은 파일 도구가 접근할 수 있는 범위를 넓힌다. 그래서 등록은 별도 다이얼로그(`AddProjectDialog`)에서 절대 경로를 받는다. 앞뒤 공백을 자르고, 빈 값은 무시한다. `onAdd`가 오류 문자열을 돌려주면 다이얼로그를 닫지 않는다.
-- `ProjectSection`의 `onHide`는 프로젝트를 목록에서만 뺀다. 대화와 기억은 남는다(주석).
+- 폴더 등록은 파일 도구가 접근할 수 있는 범위를 넓힌다. 폴더 열기는 `onPickFolder`(서버 기기의 폴더 선택 창)의 답을 `FolderPick.match`로 나눈다. `cancelled`는 아무것도 하지 않는다. `picked`는 그 경로를 `onAdd`로 등록하고, 서버가 거부하면 그 경로와 사유를 채운 경로 입력 다이얼로그(`AddProjectDialog`)를 연다. `unavailable`이나 호출 실패는 빈 다이얼로그를 연다.
+- 경로 입력 다이얼로그는 앞뒤 공백을 자르고, 빈 값은 무시한다. `onAdd`가 오류 문자열을 돌려주면 다이얼로그를 닫지 않는다.
+- 이미 목록에 있는 폴더를 고르면 다시 등록하지 않고 그 프로젝트를 선택한다(`onSelect`). 다시 등록하면 `already_registered`로 거부되기 때문이다.
+- `ProjectSection`의 `onHide`는 프로젝트를 목록에서만 뺀다(보관). 대화와 기억은 남는다(주석). Combobox에서 보관한 프로젝트를 고르면 `onRestore`로 보관을 푼다.
 - UI의 Effect 실행은 `runUiEffect`/`uiPromise` 경계를 거친다. 도메인 Effect는 호출자 런타임에서 실행된다(주석).
 
 ## Side Effects

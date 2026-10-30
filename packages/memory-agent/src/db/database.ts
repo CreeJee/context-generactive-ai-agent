@@ -5,7 +5,13 @@ import { DatabaseSync } from "node:sqlite";
 import { Context, Effect, Exit, FileSystem, Layer, Path, Schema, Semaphore } from "effect";
 import { Migrator, SqlClient, SqlError } from "effect/sql";
 import { migrateTanStackRows } from "../chat-store/tanstack-migration.ts";
-import { goalHistoryMigration, migrations, tanStackRowsMigration } from "./migrations.ts";
+import { migrateHumanDecisionRows } from "../kanban/human-decision-migration.ts";
+import {
+  goalHistoryMigration,
+  humanDecisionFactsMigration,
+  migrations,
+  tanStackRowsMigration,
+} from "./migrations.ts";
 import { migrationClient } from "./migration-client.ts";
 import { sqlClientOver } from "./sql-client.ts";
 
@@ -151,6 +157,12 @@ const migrateInTransaction = Effect.fnUntraced(function* (sqlite: DatabaseSync) 
                   ),
                 ),
                 Effect.andThen(
+                  migrateHumanDecisionRows().pipe(
+                    Effect.orDie,
+                    Effect.when(Effect.succeed(step === humanDecisionFactsMigration)),
+                  ),
+                ),
+                Effect.andThen(
                   Effect.sync(() => sqlite.exec(`PRAGMA user_version = ${index + 1}`)),
                 ),
               ),
@@ -195,6 +207,9 @@ export function assertDatabaseSchema(sqlite: DatabaseSync) {
   sqlite.prepare(
     "SELECT receipt_id,authorization_fingerprint,execution_payload_json FROM owner_read_recoveries LIMIT 0",
   );
+  sqlite.prepare(
+    "SELECT execution_id,created_at,updated_at FROM owner_workflow_executions LIMIT 0",
+  );
   sqlite.prepare("SELECT id,seq,project_id,session_id,kind,text FROM nodes LIMIT 0");
   return actual;
 }
@@ -220,6 +235,8 @@ const make = Effect.fn("Database.make")(function* (
         try: () => {
           sqlite.exec("PRAGMA journal_mode = WAL");
           sqlite.exec("PRAGMA foreign_keys = ON");
+          // For the migrations below, before anything serves; the client then waits out locks
+          // between attempts instead (`sqlClientOver`).
           sqlite.exec("PRAGMA busy_timeout = 5000");
           // Up to 64 MiB of pages instead of 2: updating the trigram index reads and rewrites many of
           // them, and a bulk write took a fifth less time (docs/decisions.md).

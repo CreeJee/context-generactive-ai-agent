@@ -129,15 +129,18 @@ it.live(
         const again = yield* Effect.scoped(worktrees.lease(card));
         expect(again.toolRoot).toBe(leased.toolRoot);
         expect(yield* fs.readFileString(path.join(again.toolRoot, "progress.txt"))).toBe("half\n");
-        expect(
-          (yield* Effect.flip(worktrees.settle(card, WorktreeDisposition.Done()))).reason,
-        ).toEqual(CardWorktreeFailedReason.cases.WorktreeDirty.make({}));
-        yield* worktrees.commitWork(card, "progress");
+        // A finished card's uncommitted changes stay on its branch; a clean one's branch goes.
         expect(yield* worktrees.settle(card, WorktreeDisposition.Done())).toEqual(
-          WorktreeSettlement.Removed({ branchKept: false }),
+          WorktreeSettlement.Removed({ branchKept: true }),
         );
         expect(yield* fs.exists(leased.toolRoot)).toBe(false);
-        expect(yield* git(project, "branch", "--list", "ctx/card/g1/c1")).toBe("");
+        expect(yield* git(project, "show", "ctx/card/g1/c1:progress.txt")).toBe("half");
+        const clean = { ...card, cardId: "c3" };
+        yield* Effect.scoped(worktrees.lease(clean));
+        expect(yield* worktrees.settle(clean, WorktreeDisposition.Done())).toEqual(
+          WorktreeSettlement.Removed({ branchKept: false }),
+        );
+        expect(yield* git(project, "branch", "--list", "ctx/card/g1/c3")).toBe("");
 
         // Cancelled work stays recoverable on the card branch.
         const other = yield* Effect.scoped(worktrees.lease(cancelled));

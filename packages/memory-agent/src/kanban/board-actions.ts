@@ -32,6 +32,7 @@ import { CardHoldReason } from "./failures.ts";
 import {
   DecisionCloseScope,
   DecisionKind,
+  DecisionOccasion,
   HumanDecisions,
   type DecisionCloseReason,
 } from "./human-decision.ts";
@@ -690,7 +691,10 @@ const make = Effect.gen(function* () {
                   sessionId,
                   goalInstanceId: goal.goalInstanceId,
                   cardId: card.id,
-                  key: `impact_unclear:${hold.fromVersion}:${hold.toVersion}`,
+                  occasion: DecisionOccasion.ImpactUnclear({
+                    fromVersion: hold.fromVersion,
+                    toVersion: hold.toVersion,
+                  }),
                   kind: DecisionKind.cases.ImpactUnclear.make({
                     fromGoalVersion: hold.fromVersion,
                     toGoalVersion: hold.toVersion,

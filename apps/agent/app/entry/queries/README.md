@@ -6,12 +6,12 @@
 
 ## Interface
 
-- `appQueryKeys` — 모든 React Query 키의 단일 정의. `root`(`["app"]`), `global.*`(auth, accountsRoot/accounts(provider), accountQuota(provider), imports, embedding, imageSettings, kagi, conversation, recall, kanban, modelsRoot/models(provider), projects), `project.*`(root, sessions, mcp, agents, skills, trace, decisions, boards, kanban, traceTask), `session.*`(root, runState, queue, subagents, approvals, trace, btw, board, decisions, kanban)
+- `appQueryKeys` — 모든 React Query 키의 단일 정의. `root`(`["app"]`), `global.*`(auth, accountsRoot/accounts(provider), accountQuota(provider), imports, embedding, imageSettings, kagi, conversation, recall, kanban, modelsRoot/models(provider), projects, hiddenProjects), `project.*`(root, sessions, mcp, agents, skills, trace, decisions, boards, kanban, traceTask), `session.*`(root, runState, queue, subagents, approvals, trace, btw, board, decisions, kanban)
 - `AppQueryKey` — 쿼리 키 타입 `readonly unknown[]`
-- `globalQueries` — global 범위 `queryOptions` 팩토리: auth(60초 `refetchInterval`), accounts, compatibleAccounts(`compatibleQueryKey`+`compatibleClient.list`), accountQuota, projects, imports, embedding, imageSettings, kagi, conversation, recall, kanban, models
+- `globalQueries` — global 범위 `queryOptions` 팩토리: auth(60초 `refetchInterval`), accounts, compatibleAccounts(`compatibleQueryKey`+`compatibleClient.list`), accountQuota, projects, hiddenProjects, imports, embedding, imageSettings, kagi, conversation, recall, kanban, models
 - `projectQueries` — project 범위 `queryOptions` 팩토리: sessions(active와 archived를 `runUiEffect`+`Effect.gen`으로 묶어 `{active, archived}` 반환), mcp, agents, skills, trace, decisions, boards, traceTask, kanban
 - `sessionQueries` — session 범위 `queryOptions` 팩토리: runState(holder 인자), queue, subagents, approvals, trace, board, decisions, kanban, btw
-- `useAuthQuery` / `useCompatibleAccountsQuery` / `useProjectsQuery` / `useImageSettingsQuery` — global 범위의 일반 `useQuery` 훅
+- `useAuthQuery` / `useCompatibleAccountsQuery` / `useProjectsQuery` / `useHiddenProjectsQuery` / `useImageSettingsQuery` — global 범위의 일반 `useQuery` 훅
 - `useAccountsQuery` / `useAccountQuotaQuery` / `useModelsQuery` — `(provider, enabled)` 형태의 global 훅. `Function.dual(2, ...)`로 data-last `(enabled)(provider)` 호출도 지원한다
 - `useSuspenseImageSettingsQuery` / `useImportsQuery` / `useEmbeddingQuery` / `useKagiQuery` / `useConversationSettingsQuery` / `useRecallSettingsQuery` / `useKanbanSettingsQuery` — 설정 페이지용 `useSuspenseQuery` 훅
 - `useProjectSessionsQuery(projectId | null)` / `useAgentsQuery(projectId | null)` — projectId가 null이면 `enabled: false`로 비활성화한다
@@ -29,6 +29,7 @@
 - 쿼리 키는 `appQueryKeys`로만 만든다. 모든 키는 `["app", ...]` 접두사 계층을 따른다. 예외로 `globalQueries.auth`는 키를 `[...appQueryKeys.global.auth, provider]`로 인라인 조합한다.
 - session 키는 `["app","project",projectId,"session",sessionId, ...]`로 project 키 아래에 중첩된다. 그래서 project root 키를 무효화하면 그 프로젝트의 session 쿼리도 함께 무효화된다. session API 호출은 sessionId만 쓰지만 키에는 projectId를 넣어야 한다.
 - `accounts(provider)`와 `models(provider)` 키는 `accountsRoot`와 `modelsRoot` 아래에 놓인다. 그래서 root 키로 모든 provider를 한꺼번에 무효화할 수 있다. mutation의 `publishModelSelection`은 이 구조에 의존한다.
+- `hiddenProjects` 키는 `projects` 키 아래(`["app","global","projects","hidden"]`)에 놓인다. 그래서 프로젝트 목록을 무효화하면 보관 목록도 함께 다시 읽는다.
 - `sessionQueries.runState` 키에는 `holder`가 들어가지 않는다. 같은 세션의 run-state 캐시는 holder와 관계없이 하나다.
 - staleTime 0을 유지하는 쿼리: project decisions·boards, session runState·board·decisions·kanban. 이 쿼리들은 항상 최신 서버 상태를 다시 읽어야 한다.
 - nullable id 훅(`useProjectSessionsQuery`, `useAgentsQuery`, `useProjectTraceTaskQuery`)은 null이면 키에 빈 문자열을 넣고 `enabled: false`로 둔다. 코드 주석은 '프로젝트는 URL과 프로젝트 목록이 정리되는 동안 없을 수 있다'고 설명한다.
@@ -38,7 +39,7 @@
 
 ## Side Effects
 
-- 네트워크: queryFn이 `api.*`(auth, accounts, accountQuota, projects, imports, embedding, imageSettings, kagi, conversationSettings, recallSettings, kanbanSettings, models, sessions, archivedSessions, mcpServers, externalAgents, skills, projectWorkTrace, decisionInbox, projectBoards, projectWorkTraceTask, projectKanban, sessionRunState, queue, subagents, relayedApprovals, workTrace, board, decisions, kanban, btwThreads)와 `compatibleClient.list`로 백엔드를 읽는다
+- 네트워크: queryFn이 `api.*`(auth, accounts, accountQuota, projects, hiddenProjects, imports, embedding, imageSettings, kagi, conversationSettings, recallSettings, kanbanSettings, models, sessions, archivedSessions, mcpServers, externalAgents, skills, projectWorkTrace, decisionInbox, projectBoards, projectWorkTraceTask, projectKanban, sessionRunState, queue, subagents, relayedApprovals, workTrace, board, decisions, kanban, btwThreads)와 `compatibleClient.list`로 백엔드를 읽는다
 - 타이머: `globalQueries.auth`는 `refetchInterval: 60_000`으로 60초마다 다시 요청한다
 - React Query 캐시: 훅이 쿼리 결과를 QueryClient 캐시에 읽고 쓴다
 - `QuerySection`의 '다시 시도' 버튼은 `QueryErrorResetBoundary`의 reset으로 실패한 쿼리를 다시 시도하게 한다

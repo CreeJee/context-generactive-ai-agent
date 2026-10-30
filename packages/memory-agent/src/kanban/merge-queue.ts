@@ -22,7 +22,9 @@ import { CardHoldReason } from "./failures.ts";
 import { GoalMergeState, GoalSchedules, mergeSettled } from "./goal-schedules.ts";
 import {
   DecisionAnswer,
+  type DecisionAsked,
   DecisionKind,
+  DecisionOccasion,
   goalDecisionCardId,
   HumanDecisions,
 } from "./human-decision.ts";
@@ -78,13 +80,12 @@ const make = Effect.gen(function* () {
     );
 
   /** Asks a person about the Goal's merge; the same occasion returns the same request. */
-  const askGoal = Effect.fnUntraced(function* (goal: KanbanGoal, key: string, kind: DecisionKind) {
+  const askGoal = Effect.fnUntraced(function* (goal: KanbanGoal, asked: DecisionAsked) {
     const request = yield* decisions.request({
+      ...asked,
       sessionId: goal.sessionId,
       goalInstanceId: goal.goalInstanceId,
       cardId: goalDecisionCardId,
-      key,
-      kind,
       author: queueAuthor(goal.goalInstanceId),
     });
     yield* setMerge(goal, merge.AwaitingDecision.make({ requestId: request.requestId }));
@@ -258,14 +259,16 @@ const make = Effect.gen(function* () {
         Effect.asSome,
         Effect.catchTag("GoalMergeConflict", (conflict) =>
           Effect.as(
-            askGoal(
-              goal,
-              `merge_conflict:${conflict.goalHead}:${conflict.targetHead}`,
-              DecisionKind.cases.MergeConflict.make({
+            askGoal(goal, {
+              occasion: DecisionOccasion.MergeConflict({
+                goalHead: conflict.goalHead,
+                targetHead: conflict.targetHead,
+              }),
+              kind: DecisionKind.cases.MergeConflict.make({
                 targetBranch: target,
                 files: conflict.files,
               }),
-            ),
+            }),
             Option.none(),
           ),
         ),
@@ -306,14 +309,13 @@ const make = Effect.gen(function* () {
         const gh = yield* findExecutable("gh").pipe(
           Effect.provideService(FileSystem.FileSystem, fs),
         );
-        yield* askGoal(
-          goal,
-          `protected_branch:${head}`,
-          DecisionKind.cases.ProtectedBranchMerge.make({
+        yield* askGoal(goal, {
+          occasion: DecisionOccasion.ProtectedBranchMerge({ head }),
+          kind: DecisionKind.cases.ProtectedBranchMerge.make({
             targetBranch: target,
             prAvailable: gh !== null,
           }),
-        );
+        });
         return Option.none();
       }
       const advanced = yield* worktrees.advanceTarget(ref, target, head);

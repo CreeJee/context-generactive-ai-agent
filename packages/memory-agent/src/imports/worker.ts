@@ -19,6 +19,7 @@ import { BulkNodes } from "./bulk.ts";
 import { Checkouts } from "./checkouts.ts";
 import { TranscriptPass } from "./pass.ts";
 import { ImportRpcs, ImportWorkerFailed, ImportWorkerSetup, PassEvent } from "./worker-protocol.ts";
+import { WriteTurns } from "./write-turns.ts";
 
 /** Progress is sent at most this often; the last count of a pass always goes out. */
 const progressEveryMs = 100;
@@ -38,8 +39,11 @@ const failed =
 const handlers = ImportRpcs.toLayer(
   Effect.gen(function* () {
     const pass = yield* TranscriptPass;
+    const turns = yield* WriteTurns;
     return ImportRpcs.of({
       Count: () => pass.counts.pipe(failed("count", "Import count failed")),
+      WriteTurns: () => turns.asked,
+      Turn: () => turns.grant,
       Run: () =>
         Stream.callback<PassEvent, ImportWorkerFailed>((queue) =>
           Effect.gen(function* () {
@@ -80,6 +84,7 @@ const services = Layer.unwrap(
           BulkNodes.layer,
           SecretRedactor.layer,
           Checkouts.layer,
+          WriteTurns.layer,
         ),
       ),
       Layer.provideMerge(

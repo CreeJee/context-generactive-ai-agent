@@ -35,6 +35,7 @@ import {
 } from "../kanban/card-queue.ts";
 import { gitCardWorktreesLayer } from "../kanban/git-worktrees.ts";
 import { persistedQueueStoreLayer } from "../kanban/persisted-queue-store.ts";
+import { CardWorkspaceJanitor } from "../kanban/workspace-janitor.ts";
 import { CardWorktrees } from "../kanban/worktree.ts";
 import { Projects } from "../projects/projects.ts";
 import { Sessions } from "../sessions/sessions.ts";
@@ -98,6 +99,7 @@ export const passingVerifier = Layer.succeed(
 const kanbanOwnerBase = (fixture: KanbanFixture, cores: number) =>
   cardQueueFactoryLayer.pipe(
     Layer.provideMerge(CardQueueGate.layer),
+    Layer.provideMerge(CardWorkspaceJanitor.layer),
     Layer.provideMerge(KanbanSettings.layer(cores)),
     Layer.provideMerge(GlobalConfig.layer),
     Layer.provideMerge(ownerWorkflowEngineLayer),

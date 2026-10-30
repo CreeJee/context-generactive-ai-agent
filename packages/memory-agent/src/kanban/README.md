@@ -23,12 +23,13 @@
 - `cardQueueWorkerLayer` / `cardQueueFactoryLayer` — 카드 큐 worker(`handleCardRun`) 레이어입니다. owner용 `PersistedQueueFactory`는 카드 큐에 delivery 한도와 gate를 적용합니다.
 - `CardQueueGate` / `CardRuns` — `CardQueueGate`는 모든 Goal에 걸쳐 동시에 실행할 카드 수를 정하는 Semaphore로, `KanbanSettings`에서 값을 읽습니다. `CardRuns`는 실행 중인 카드 에이전트의 `FiberMap`이며 항목을 건드리지 않고 run을 멈출 때 씁니다.
 - `CardFailure` / `CardHoldReason` / `VerdictFailure` / `AgentFailureCode` / `WorktreeFailureReason` — 카드 실패와 hold 사유를 정한 닫힌 태그 집합입니다(`failures.ts`). 변환 헬퍼로 `failureCode`와 `worktreeFailure`가 있습니다.
-- `CardWorktrees` / `CardWorktreesApi` / `CardWorkspace` — 카드 worktree와 Goal 브랜치의 계약입니다. 메서드는 `lease`, `present`, `settle`, `commitWork`, `syncWithGoal`, `squashIntoGoal`, `earlierWork`, `prepareGoal`, `currentBranch`, `goalHead`, `mergeTargetIntoGoal`, `advanceTarget`, `goalCheckout`, `pushGoalBranch`이며, owner 프로세스에서만 씁니다.
-- `GoalRef` / `CardRef` / `CardWorktree` / `WorktreeDisposition` / `WorktreeSettlement` / `GoalSync` / `CardIntegration` / `TargetSync` / `TargetAdvance` — worktree 계약이 쓰는 값 타입이며 `Data.taggedEnum`입니다.
+- `CardWorktrees` / `CardWorktreesApi` / `CardWorkspace` — 카드 worktree와 Goal 브랜치의 계약입니다. 메서드는 `lease`, `present`, `settle`, `commitWork`, `syncWithGoal`, `squashIntoGoal`, `earlierWork`, `prepareGoal`, `currentBranch`, `goalHead`, `mergeTargetIntoGoal`, `advanceTarget`, `goalCheckout`, `pushGoalBranch`, `goalFolders`, `goalFolder`, `removeGoalFolder`, `staleWorktrees`, `prune`이며, owner 프로세스에서만 씁니다.
+- `GoalRef` / `CardRef` / `CardWorktree` / `GoalFolder` / `WorktreeDisposition` / `WorktreeSettlement` / `GoalSync` / `CardIntegration` / `TargetSync` / `TargetAdvance` — worktree 계약이 쓰는 값 타입이며 앞의 넷은 interface, 나머지는 `Data.taggedEnum`입니다.
+- `CardWorkspaceJanitor` / `SweepMode` / `SweepSummary` — 끝난 Goal의 카드 worktree를 정리하는 서비스입니다(`workspace-janitor.ts`). `settleGoal`은 오케스트레이터가 Plan을 닫거나 새 Goal로 넘어간 보드를 멈춘 뒤 부르고, `settleDelivered`는 card queue가 delivery의 lease를 닫은 뒤 부릅니다. `sweep`은 layer가 만들어질 때 상수 `sweepMode`(`delete`)로 한 번 돕니다.
 - `CardWorktreeFailed` / `CardWorktreeFailedReason` / `cardWorktreeFailedReasonName` / `CardIntegrationConflict` / `GoalMergeConflict` — worktree 작업의 실패와 충돌 오류입니다.
 - `cardToolProject` / `sequentialWorkspace` / `cardWorkspace` — `cardToolProject`는 프로젝트를 카드 worktree 루트와 `deniedRoots` fence로 좁힙니다. `sequentialWorkspace`는 worktree 없이 프로젝트 자체에서 실행하는 workspace입니다. `cardWorkspace`는 모드에 따라 workspace를 고릅니다.
 - `gitCardWorktreesLayer(worktreesBase?)` — `CardWorktrees`의 git 구현 레이어입니다. 카드 worktree는 `worktreesBase` 아래에 만들고, 기본값은 `defaultWorktreesBase`(home 디렉터리 기준)입니다.
-- `HumanDecisions` — 칸반 카드의 durable `human_decision` 대기 서비스입니다. `HumanDecisions.layer`는 `HumanDecisionExecution` workflow를 함께 등록합니다. 관련 export로 `DecisionKind`, `DecisionAnswer`, `DecisionCloseScope`, `DecisionCloseReason`, `DecisionAnswered`, `HumanDecisionRefused`가 있습니다.
+- `HumanDecisions` — 칸반 카드의 durable `human_decision` 대기 서비스입니다. `HumanDecisions.layer`는 `HumanDecisionExecution` workflow를 함께 등록합니다. 관련 export로 `DecisionKind`, `DecisionOccasion`, `DecisionAnswer`, `DecisionCloseScope`, `DecisionCloseReason`, `DecisionAnswered`, `HumanDecisionRefused`가 있습니다. 저장 형태(`DecisionKind`, `HumanDecisionPayload`)는 Schema만 쓰는 `human-decision-schema.ts`에 있어 DB 마이그레이션이 서비스 없이 읽습니다.
 - `GoalSchedules` / `GoalMergeState` / `GoalScheduleRefused` / `GoalScheduleStorageFailed` — 프로젝트 스케줄러가 쓰는 Goal 일정 서비스와 그 타입입니다. 일정에는 대상 브랜치, 의존 edge, merge 상태, 보호 브랜치가 들어갑니다. `board-actions.ts`는 `get`, `edges`, `forProject`를 호출합니다.
 - `ProjectScheduler` / `GoalOrder` / `GoalMerges` — `ProjectScheduler`는 프로젝트 스케줄러로, slot을 배정하고 `waitingOn`을 제공합니다. `GoalOrder`는 프로젝트 순서와 프로젝트별 Goal 순서를, `GoalMerges`는 Goal merge queue를 맡습니다. 셋 다 `.layer`를 가집니다.
 - `KanbanTools` / `kanbanAttentionPrompt` — `KanbanTools`는 칸반 세션의 보드 도구(`readBoard`, `editBoard`)입니다. `kanbanAttentionPrompt`는 루프가 모델을 필요로 할 때 보내는 자동 후속 프롬프트입니다.
@@ -45,11 +46,14 @@
 - `squashIntoGoal`을 하려면 카드에 이미 Goal HEAD가 들어 있어야 하고, 아니면 `GoalAdvanced`로 실패합니다. 한 Goal의 integration은 한 번에 하나씩만 실행합니다. `syncWithGoal`이 `Merged`를 돌려준 카드는 squash 전에 다시 검증해야 합니다.
 - 충돌은 자동으로 해결하지 않고 파일 단위로 보고합니다. `mergeTargetIntoGoal`은 충돌이 나면 아무것도 쓰지 않고 어떤 checkout도 건드리지 않습니다. `advanceTarget`은 uncommitted 변경이 있는 checkout을 덮어쓰지 않고 기다립니다. `pushGoalBranch`는 push를 반복하지 않습니다.
 - `prepareGoal`은 사용자의 checkout, index, 현재 브랜치를 바꾸지 않습니다. Goal 브랜치는 사용자의 현재 HEAD에서 시작합니다.
-- `WorktreeDisposition`에 따른 보존 규칙은 다음과 같습니다. `Done`이면 worktree와 카드 브랜치를 제거합니다. `Cancelled`이면 먼저 카드 브랜치에 snapshot을 commit해 복구할 수 있게 한 뒤 worktree를 제거합니다. `Blocked`와 `HumanDecision`이면 worktree를 그대로 둡니다.
+- `WorktreeDisposition`에 따른 보존 규칙은 다음과 같습니다. `Done`이면 worktree와 카드 브랜치를 제거하되, 커밋하지 않은 변경이 남아 있으면 snapshot을 commit하고 브랜치를 남깁니다. `Cancelled`이면 먼저 카드 브랜치에 snapshot을 commit해 복구할 수 있게 한 뒤 worktree를 제거합니다. `Blocked`와 `HumanDecision`이면 worktree를 그대로 둡니다.
+- worktree는 Goal이 살아 있는 동안 폴더로, Goal이 끝나면 snapshot commit 뒤 카드 브랜치로 남습니다. Goal이 끝났다는 것은 보드가 멈췄고 Plan이 닫혔거나 대화가 다른 Goal instance로 넘어갔다는 뜻입니다. 대화를 지워 멈춘 보드는 디스크를 그대로 둡니다(`docs/decisions.md` "Goal을 실행한 대화를 지우면 Goal 기록도 같이 지운다 (2026-10-25)"). janitor는 브랜치를 지우지 않습니다.
+- Goal 폴더가 이 owner의 것인지는 그 goalInstanceId가 이 DB의 `kanban_goals`에 있는지로 판정합니다. 다른 설치본과 지운 대화의 폴더는 건드리지 않습니다. Goal-level check가 쥔 `.goal` checkout은 그 scope가 닫힐 때까지 지우지 않습니다.
 - `sequential` 모드(git 없음, git 저장소 아님, commit 없음)에서는 Goal의 카드를 프로젝트 자체에서 한 번에 하나씩 실행합니다. 이때 commit, sync, merge는 no-op입니다.
 - `CardWorktrees`는 owner 프로세스에서만 씁니다. `persistedQueueStoreLayer`는 owner 프로세스에서 한 번만 만듭니다.
 - `boardOps`는 변경할 때마다 그 순간 Plan의 `planVersion`을 새로 읽어 `editBoard`에 넘깁니다. 그래서 그 사이에 들어온 다른 변경을 덮어쓰지 않습니다. `replaceCards`는 먼저 dependent의 `dependsOn`을 대체 카드로 바꾼 뒤, 대체되는 카드를 leaf부터 취소합니다.
 - 보드 동작은 호출한 run의 `Orchestrator` author로 저장합니다. 카드가 `in_progress` 또는 `verify`에 있으면 실행 중으로 보고 `card_running`으로 거절합니다. `interrupt`는 카드 상태를 먼저 전이한 뒤 `stopAttempt`를 부릅니다. 그러면 delivery는 Stopped로 끝나고, 카드는 그 뒤에 다시 배정됩니다.
+- 사람 결정 요청의 정체성은 카드와 `DecisionOccasion`(무엇 때문에 묻는지)뿐입니다. 같은 occasion을 다시 물으면 같은 요청이고, 그때 본 사실(`DecisionKind`)이 달라졌을 때만 `human_decision_facts`에 다음 `seq` 행을 더합니다. 답은 화면이 본 `factsSeq`를 함께 보내고, 대기 중인 요청의 최신 `seq`와 다르면 `facts_changed`로 거절합니다. 답한 뒤나 닫힌 뒤에는 사실을 더하지 않습니다.
 - 카드를 retire할 때는 열린 사람 결정 대기를 `card_stopped`로 닫습니다. 닫기는 답이 아니므로 카드를 옮기지 않습니다. 그다음 worktree를 `Cancelled`로 settle합니다.
 - 대화가 다른 Goal instance로 교체한 Goal은 이 Goal이 기다릴 대상 목록에서 뺍니다. 기준은 `workflows.goalInstanceId(sessionId)`와 같은지입니다.
 - `BoardHealth`는 메모리에만 있습니다. 한 번 멈춘 보드는 `restart` 전까지 그 상태를 유지하고, 이후 들어오는 step 보고가 멈춘 이유를 덮지 않습니다. owner를 재시작하면 모든 보드가 healthy로 다시 시작합니다.
@@ -60,7 +64,7 @@
 
 ## Side Effects
 
-- SQLite(owner 연결의 `SqlClient`)를 읽고 씁니다. 대상 테이블은 `kanban_goals`, `kanban_card_attempts`, `kanban_cards`이고 change request, run, dead letter 행도 포함합니다(`CardAttempts`). Goal 일정·순서·사람 결정·persisted queue 저장소도 SQL을 씁니다(서비스 doc 기준).
+- SQLite(owner 연결의 `SqlClient`)를 읽고 씁니다. 대상 테이블은 `kanban_goals`, `kanban_card_attempts`, `kanban_cards`이고 change request, run, dead letter 행도 포함합니다(`CardAttempts`). Goal 일정·순서·사람 결정(`human_decision_facts`, `human_decision_closures`)·persisted queue 저장소도 SQL을 씁니다(서비스 doc 기준).
 - 프로세스 안의 `PubSub`로 결과가 새로 기록된 Goal instance를 알립니다(`CardAttempts`).
 - `AppEvents.publishSession(sessionId, "run-state")`로 보드 상태가 바뀐 것을 발행합니다(`BoardHealth`). 상태는 `Ref`에 둡니다.
 - git 명령을 실행하고 파일 시스템을 바꿉니다. worktree 생성·제거, 카드·Goal 브랜치, commit, squash, merge, 사용자 브랜치 전진을 다루며 위치는 home 디렉터리 기준 `defaultWorktreesBase` 아래입니다(`gitCardWorktreesLayer`).

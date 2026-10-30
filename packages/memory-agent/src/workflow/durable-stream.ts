@@ -1,11 +1,15 @@
 import {
   Array as EffectArray,
   Cause,
+  Context,
   DateTime,
   Effect,
+  Layer,
   Option,
+  PubSub,
   Result,
   Schema,
+  type Scope,
   Stream,
 } from "effect";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
@@ -14,8 +18,33 @@ import { RunLogFailed, type RunLog, type RunLogEntry } from "../loop/run-log.ts"
 
 const namespace = "sdk-stream:v1:";
 const closedKey = `${namespace}closed`;
-/** How often a reader at the end of an open log looks for what was appended since. */
-const pollInterval = "20 millis";
+/**
+ * How long a reader at the end of an open log waits for its run's signal before it reads again,
+ * so a write that sends no signal still reaches it.
+ */
+const signalWait = "1 second";
+
+/**
+ * Wakes the readers of open run logs: a log sends its run id once an append or its close has
+ * committed, and a reader at the end of the log waits for its own run's id.
+ */
+export class RunLogSignals extends Context.Service<
+  RunLogSignals,
+  {
+    readonly written: (runId: string) => Effect.Effect<void>;
+    readonly subscribe: Effect.Effect<PubSub.Subscription<string>, never, Scope.Scope>;
+  }
+>()("memory-agent/workflow/durable-stream/RunLogSignals") {
+  static readonly layer = Layer.effect(
+    RunLogSignals,
+    Effect.map(PubSub.unbounded<string>(), (written) =>
+      RunLogSignals.of({
+        written: (runId) => Effect.asVoid(PubSub.publish(written, runId)),
+        subscribe: PubSub.subscribe(written),
+      }),
+    ),
+  );
+}
 
 type Rejection = Exclude<RunLogFailed["reason"], "storage">;
 
@@ -40,6 +69,7 @@ export const sqliteRunLog = Effect.fn("sqliteRunLog")(function* (input: {
 }) {
   const { sessionId, runId } = input;
   const sql = yield* SqlClient.SqlClient;
+  const signals = yield* RunLogSignals;
   const check = SqlSchema.findOneOption({
     Request: Schema.Void,
     Result: Schema.Struct({ session_id: Schema.String }),
@@ -120,6 +150,25 @@ export const sqliteRunLog = Effect.fn("sqliteRunLog")(function* (input: {
       sql.withTransaction,
       Effect.catchTag("SqlError", (cause) => Effect.fail(stored(cause))),
     );
+  /**
+   * The page after `after`. At the end of an open log it then waits until this run writes or
+   * `signalWait` passes. It subscribes before reading, so a write right after the read still wakes it.
+   */
+  const nextPage = (after: number) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const writes = yield* signals.subscribe;
+        const current = yield* page(after);
+        yield* Effect.when(
+          PubSub.take(writes).pipe(
+            Effect.repeat({ until: (written) => written === runId }),
+            Effect.timeoutOption(signalWait),
+          ),
+          Effect.succeed(current.rows.length === 0 && !current.closed),
+        );
+        return current;
+      }),
+    );
   // AG-UI message/tool/error events and the accepted marker have no runId.
   // Reject explicit cross-run lifecycle events; otherwise the owner binding scopes them.
   const named = (event: { readonly runId: string; readonly threadId: string }) =>
@@ -156,6 +205,7 @@ export const sqliteRunLog = Effect.fn("sqliteRunLog")(function* (input: {
       }).pipe(
         sql.withTransaction,
         Effect.catchTag("SqlError", (cause) => Effect.fail(stored(cause))),
+        Effect.andThen(signals.written(runId)),
       ),
     close: check.pipe(
       Effect.andThen(closed),
@@ -167,6 +217,7 @@ export const sqliteRunLog = Effect.fn("sqliteRunLog")(function* (input: {
       Effect.asVoid,
       sql.withTransaction,
       Effect.catchTag("SqlError", (cause) => Effect.fail(stored(cause))),
+      Effect.andThen(signals.written(runId)),
     ),
     // Entries written before the log held only AG-UI events, which no page reads, are left out.
     read: (offset) =>
@@ -175,12 +226,9 @@ export const sqliteRunLog = Effect.fn("sqliteRunLog")(function* (input: {
           Effect.andThen(parse(offset)),
           Effect.map((start) =>
             Stream.paginate(start, (after) =>
-              Effect.flatMap(page(after), ({ rows, closed: ended }) =>
-                Effect.as(
-                  Effect.when(
-                    Effect.sleep(pollInterval),
-                    Effect.succeed(rows.length === 0 && !ended),
-                  ),
+              Effect.map(
+                nextPage(after),
+                ({ rows, closed: ended }) =>
                   [
                     rows,
                     ended
@@ -192,7 +240,6 @@ export const sqliteRunLog = Effect.fn("sqliteRunLog")(function* (input: {
                           ),
                         ),
                   ] as const,
-                ),
               ),
             ),
           ),

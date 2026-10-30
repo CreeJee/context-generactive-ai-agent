@@ -115,6 +115,8 @@ const errorText = (code: ApiErrorCode) => {
   switch (code) {
     case "answer_conflict":
       return "이미 다른 답이 기록됐어요. 보드를 다시 확인해 주세요.";
+    case "facts_changed":
+      return "답을 고르는 동안 상황이 바뀌었어요. 바뀐 내용을 확인하고 다시 골라 주세요.";
     case "request_closed":
       return "이 결정 요청은 닫혔어요. 카드가 멈췄거나 실행이 취소됐어요.";
     case "goal_superseded":
@@ -155,6 +157,9 @@ export function DecisionPrompt({
     >
       <p className="font-medium text-foreground">{title}</p>
       <p>{detail}</p>
+      {request.factsChanged && (
+        <p className="text-muted-foreground">처음 물은 뒤 상황이 바뀌어 최신 내용으로 보여요.</p>
+      )}
       <div className="flex flex-wrap gap-1">
         {answerOptions(request.kind).map((option) => (
           <Button

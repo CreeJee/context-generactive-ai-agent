@@ -63,7 +63,9 @@ type BoardAuthor =
 
 - 카드 실행 = 서브에이전트 attempt 1개. 카드가 실행을 시작할 때 Goal 브랜치에서 카드 전용 git worktree를 만든다. 서브에이전트의 파일·셸 도구 cwd는 그 worktree로 고정한다.
 - 동시 실행 카드 수(WIP)는 사용자 설정이다. 기기 사양에 따라 다르다. 상한은 `Semaphore`로 둔다. `human_decision`·재시도 대기처럼 기다리는 카드는 슬롯을 반환한다.
-- worktree는 카드가 `done`이 되거나 취소되면 정리한다. `blocked`·`human_decision` 카드의 worktree는 보존한다.
+- worktree는 카드가 `done`이 되거나 취소되면 정리한다. `blocked`·`human_decision` 카드의 worktree는 Goal이 살아 있는 동안 보존한다. `done` 카드에 커밋하지 않은 변경이 남아 있으면 카드 브랜치에 스냅샷 커밋하고 브랜치를 남긴다.
+- worktree 정리(2026-10-29): Goal이 끝나면(Plan을 닫거나 새 Goal로 넘어감) `CardWorkspaceJanitor`가 남은 카드 worktree마다 스냅샷 커밋 뒤 폴더를 지우고 카드 브랜치를 남긴다. 그때 attempt가 쥔 worktree는 그 delivery가 끝날 때 정리한다. 대화를 지워 멈춘 Goal은 디스크를 그대로 둔다. `ctx/*` 브랜치는 지우지 않는다.
+- 시작 sweep: owner가 시작할 때 card queue와 보드보다 먼저 worktree 위치를 훑는다. goalInstanceId가 이 DB에 있는 폴더만 판정하고, 끝난 Goal의 폴더, 실행 중인 보드에서 끝났거나 Plan에서 빠진 카드의 폴더, 폴더가 없는 git worktree 등록을 찾는다. 찾은 것은 경고 로그와 span 숫자로 남기고 정리한다(`delete`). 판정이 틀리면 상수를 기록만 하는 `report`로 되돌린다.
 - worktree 위치(확정): `~/.context-generactive-agent-worktrees/<goalInstanceId>/<cardId>`. storage root(`~/.context-generactive-agent`)는 `files/paths.ts`의 credential directory라 그 아래에 두지 않는다. 보호 경계에 예외를 만들지 않는다.
 - 카드 서브에이전트의 파일·셸 도구 루트는 프로젝트 루트가 아니라 그 카드 worktree다. 다른 카드 worktree와 사용자 작업 트리는 거부한다.
 - 기본값(확정): 동시 실행 수 = CPU 코어 수의 절반(최소 1, 최대 4), 사용자 설정으로 바꾼다. 카드당 최대 시도 수 = 3. provider 장애 재시도(24시간 한도)는 시도 수와 따로 센다.

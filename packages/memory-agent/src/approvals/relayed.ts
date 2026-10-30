@@ -13,7 +13,10 @@ import {
 } from "effect";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { DurableClock, DurableDeferred, Workflow, WorkflowEngine } from "effect/workflow";
-import { ownerWorkflowEngineLayer } from "../workflow/owner-workflow-engine.ts";
+import {
+  ownerWorkflowEngineLayer,
+  suspendedRetrySchedule,
+} from "../workflow/owner-workflow-engine.ts";
 import { OwnerWorkflowStorage } from "../workflow/owner-workflow-storage.ts";
 import { ApprovalRequester, type RelayedApprovalView } from "./relayed-state.ts";
 
@@ -43,6 +46,7 @@ const RelayedApprovalExecution = Workflow.make(relayedApprovalWorkflow, {
   success: RelayedApprovalOutcome,
   idempotencyKey: ({ sessionId, runId, approvalId }) =>
     `${sessionId}\u0000${runId}\u0000${approvalId}`,
+  suspendedRetrySchedule,
 });
 
 const RelayedApprovalDecision = DurableDeferred.make("RelayedApproval/Decision", {

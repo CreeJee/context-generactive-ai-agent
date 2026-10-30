@@ -69,6 +69,7 @@ await Effect.runPromise(
                   name: "where",
                   description: "Working directory and whether the configured secret arrived.",
                   inputSchema: { type: "object", properties: {} },
+                  annotations: { readOnlyHint: true },
                 },
                 ...(tasks
                   ? [

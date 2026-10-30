@@ -47,5 +47,9 @@ export type PassEvent = typeof PassEvent.Type;
 export const Count = Rpc.make("Count", { success: TranscriptCounts, error: ImportWorkerFailed });
 /** One pass over every transcript. */
 export const Run = Rpc.make("Run", { success: PassEvent, error: ImportWorkerFailed, stream: true });
+/** One event per piece of a pass that asks for its turn (`write-turns.ts`). */
+export const WriteTurns = Rpc.make("WriteTurns", { stream: true });
+/** Lets the oldest asking piece write; it returns once that piece is written. */
+export const Turn = Rpc.make("Turn");
 
-export const ImportRpcs = RpcGroup.make(Count, Run);
+export const ImportRpcs = RpcGroup.make(Count, Run, WriteTurns, Turn);

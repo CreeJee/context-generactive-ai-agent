@@ -1,6 +1,12 @@
-import { Data, Function as EffectFunction, Predicate, Schema } from "effect";
-import { isTruthy } from "../truthy.ts";
+import { Data, Function as EffectFunction, Match, Predicate, Schema } from "effect";
 import type { LeaseView } from "../sessions/lease-state.ts";
+import {
+  GoalEvent,
+  goalStateOf,
+  goalTransitions,
+  standingOf,
+  type Transition,
+} from "./goal-transitions.ts";
 import type { WorkflowAction, WorkflowPhase, WorkflowState } from "./workflow.ts";
 
 export const WorkflowActionReason = Schema.Literals([
@@ -64,33 +70,31 @@ function evaluateWorkflowActionBody(
     (WorkflowActionRequest.$is("phase")(request) || request.action === "resume")
   )
     return { allowed: false, reason: "run_in_progress" };
-  const { goal, plan } = state;
+  const goalState = goalStateOf(standingOf(state));
+  const decided = (outcome: Transition<WorkflowActionReason>): WorkflowActionDecision =>
+    outcome._tag === "Refused" ? { allowed: false, reason: outcome.reason } : { allowed: true };
   return WorkflowActionRequest.$match(request, {
     phase: ({ phase }): WorkflowActionDecision => {
-      // Completion is a server-owned terminal phase, never a user navigation target.
-      if (phase === "completed") return { allowed: false, reason: "goal_terminal" };
-      // Non-execution phase navigation does not approve or mutate artifacts.
-      if (phase !== "execute") return { allowed: true };
-      if (isTruthy(goal) && isTruthy(plan) && plan.goalVersion !== goal.version)
-        return { allowed: false, reason: "plan_outdated" };
-      if (
-        !isTruthy(goal) ||
-        !isTruthy(plan) ||
-        (plan.status !== "ready" && plan.status !== "executing")
-      )
-        return { allowed: false, reason: "plan_not_ready" };
-      return { allowed: true, intent: plan.status === "executing" ? "continue" : "start" };
+      if (phase !== "execute")
+        return decided(goalTransitions.Navigated(goalState, GoalEvent.Navigated({ phase })));
+      const approved = decided(
+        goalTransitions.ExecutionApproved(goalState, GoalEvent.ExecutionApproved()),
+      );
+      return approved.allowed
+        ? { allowed: true, intent: state.plan?.status === "executing" ? "continue" : "start" }
+        : approved;
     },
-    control: ({ action }): WorkflowActionDecision => {
-      if (!isTruthy(goal)) return { allowed: false, reason: "goal_missing" };
-      if (goal.status === "completed" || goal.status === "failed")
-        return { allowed: false, reason: "goal_terminal" };
-      if (action === "pause" && goal.status === "paused")
-        return { allowed: false, reason: "goal_not_active" };
-      if (action === "resume" && goal.status !== "paused")
-        return { allowed: false, reason: "goal_not_paused" };
-      return { allowed: true };
-    },
+    control: ({ action }): WorkflowActionDecision =>
+      decided(
+        Match.value(action).pipe(
+          Match.when("pause", () => goalTransitions.GoalPaused(goalState, GoalEvent.GoalPaused())),
+          Match.when("resume", () =>
+            goalTransitions.GoalResumed(goalState, GoalEvent.GoalResumed()),
+          ),
+          Match.when("stop", () => goalTransitions.GoalStopped(goalState, GoalEvent.GoalStopped())),
+          Match.exhaustive,
+        ),
+      ),
   });
 }
 

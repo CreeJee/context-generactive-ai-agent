@@ -13,6 +13,7 @@
 - `Attachment`, `AttachmentGroup`, `AttachmentMedia`, `AttachmentContent`, `AttachmentTitle`, `AttachmentDescription`, `AttachmentActions`, `AttachmentAction`, `AttachmentTrigger` — 첨부 파일 카드 묶음이다. `state`는 idle/uploading/processing/error/done이고 size·orientation variant를 둔다
 - `Card`, `CardHeader`, `CardTitle`, `CardDescription`, `CardAction`, `CardContent`, `CardFooter` — 카드 레이아웃이다. size는 default/sm, variant는 default/warning이다
 - `Collapsible`, `CollapsibleTrigger`, `CollapsibleContent` — Base UI Collapsible 래퍼다
+- `Combobox`, `ComboboxInput`, `ComboboxContent`, `ComboboxList`, `ComboboxItem`, `ComboboxGroup`, `ComboboxLabel`, `ComboboxCollection`, `ComboboxEmpty`, `ComboboxSeparator`, `ComboboxChips`, `ComboboxChip`, `ComboboxChipsInput`, `ComboboxTrigger`, `ComboboxValue`, `useComboboxAnchor` — Base UI Combobox 래퍼다. `ComboboxInput`은 input-group 안에 열기 버튼(`showTrigger`, 기본 true)과 지우기 버튼(`showClear`)을 둔다. `ComboboxContent`는 `anchor`가 있으면 `data-chips`로 칩 입력 너비를 따른다
 - `Command`, `CommandDialog`, `CommandInput`, `CommandList`, `CommandEmpty`, `CommandGroup`, `CommandItem`, `CommandShortcut`, `CommandSeparator` — `cmdk` 기반 커맨드 팔레트다. variant는 default/composer이다
 - `DataList`, `DataListItem` — `dl`/`dt`/`dd` 2열 grid 키-값 목록이다. 이 파일만 `~/lib/utils`의 `cn`을 쓴다
 - `Dialog`, `DialogTrigger`, `DialogPortal`, `DialogClose`, `DialogOverlay`, `DialogContent`, `DialogHeader`, `DialogFooter`, `DialogTitle`, `DialogDescription` — Base UI Dialog 래퍼다. `showCloseButton` 옵션이 있다
@@ -40,12 +41,12 @@
 - `FieldError`는 `children`을 `errors`보다 먼저 쓴다. `errors`는 `message` 기준으로 중복을 제거하고, 1개면 텍스트, 여러 개면 `ul`로 보여 준다. 내용이 없으면 `null`을 렌더하며, truthy 판정은 `../../truthy.ts`의 `isTruthy`로 한다
 - `DialogContent`의 `showCloseButton` 기본값은 true다. `DialogFooter`와 `CommandDialog`는 기본 false다. `CommandDialog`는 접근성을 위해 `DialogTitle`/`DialogDescription`을 `sr-only` 헤더로 항상 렌더한다
 - `DropdownMenuSubContent`는 `DropdownMenuContent`를 재사용하고, 기본값으로 side=right, alignOffset=-3, sideOffset=0을 쓴다. Portal과 Positioner 구조를 같이 공유한다
-- 컴포넌트 사이 의존 방향은 다음과 같다. `command`는 `dialog`, `input-group`에 의존한다. `attachment`/`dialog`/`sheet`/`input-group`는 `button`에 의존한다. `field`는 `label`, `separator`에 의존한다. `prompt-input`은 `input-group`에, `input-group`은 `input`, `textarea`에, `item`은 `separator`에 의존한다. 모두 `~/components/ui/*` alias로 가져온다
-- 클래스 병합은 `cn` 모듈 alias로 하고 variant는 `cva`로 정의한다. 예외로 `data-list.tsx`는 `~/lib/utils`의 `cn`을 쓴다. `field.tsx`, `label.tsx`, `separator.tsx`는 파일 맨 위에 `"use client"`를 선언한다
+- 컴포넌트 사이 의존 방향은 다음과 같다. `command`는 `dialog`, `input-group`에 의존한다. `combobox`는 `button`, `input-group`에 의존한다. `attachment`/`dialog`/`sheet`/`input-group`는 `button`에 의존한다. `field`는 `label`, `separator`에 의존한다. `prompt-input`은 `input-group`에, `input-group`은 `input`, `textarea`에, `item`은 `separator`에 의존한다. 모두 `~/components/ui/*` alias로 가져온다
+- 클래스 병합은 `cn` 모듈 alias로 하고 variant는 `cva`로 정의한다. 예외로 `data-list.tsx`는 `~/lib/utils`의 `cn`을 쓴다. `field.tsx`, `label.tsx`, `separator.tsx`, `combobox.tsx`는 파일 맨 위에 `"use client"`를 선언한다
 
 ## Side Effects
 
-- `DialogContent`, `DropdownMenuContent`, `HoverCardContent`는 Base UI Portal로 팝업을 문서 body 쪽 DOM에 렌더한다
+- `DialogContent`, `DropdownMenuContent`, `HoverCardContent`, `ComboboxContent`는 Base UI Portal로 팝업을 문서 body 쪽 DOM에 렌더한다
 - `AnimatedNumber`는 `useEffect`에서 `motion/react` spring 값을 바꿔 브라우저 애니메이션 프레임을 돌린다
 - 이 밖에 SQLite, 파일 시스템, 네트워크, 환경 변수 접근은 읽은 파일에 없다
 

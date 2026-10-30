@@ -27,6 +27,7 @@ import {
 } from "./card-attempts.ts";
 import { cardWorkspace, CardWorktrees } from "./worktree.ts";
 import { CardFailure, worktreeFailure } from "./failures.ts";
+import { CardWorkspaceJanitor } from "./workspace-janitor.ts";
 
 /**
  * Kanban card assignment on DurableQueue (docs/kanban-orchestration.md "큐: DurableQueue"). One
@@ -167,6 +168,7 @@ const deliver = Effect.fnUntraced(function* (payload: CardRunPayload) {
   const worktrees = yield* CardWorktrees;
   const agent = yield* CardAgent;
   const runs = yield* CardRuns;
+  const janitor = yield* CardWorkspaceJanitor;
   const key = payload satisfies CardAttemptKey;
 
   // A new Goal instance took over the session: an earlier instance's card never runs.
@@ -242,6 +244,8 @@ const deliver = Effect.fnUntraced(function* (payload: CardRunPayload) {
     Effect.catchTag("CardWorktreeFailed", (failure) =>
       failure.pipe(worktreeFailure, failedWith, Effect.succeed),
     ),
+    // The lease is closed: a Goal that ended while the card ran left its worktree to this delivery.
+    Effect.tap(() => janitor.settleDelivered(payload.goalInstanceId, payload.cardId)),
   );
 });
 

@@ -1,4 +1,4 @@
-import { Data, Effect } from "effect";
+import { Array, Data, Effect, Option } from "effect";
 import { runUiEffect, uiPromise } from "../shared/ui-effect";
 import { isTruthy } from "../../truthy.ts";
 import {
@@ -7,8 +7,7 @@ import {
   BotIcon,
   ChevronDownIcon,
   ChevronRightIcon,
-  EyeOffIcon,
-  FolderPlusIcon,
+  FolderOpenIcon,
   GitBranchIcon,
   PlusIcon,
   Trash2Icon,
@@ -29,8 +28,18 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "~/components/ui/dialog";
+import {
+  Combobox,
+  ComboboxCollection,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxGroup,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxLabel,
+  ComboboxList,
+} from "~/components/ui/combobox";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -55,7 +64,14 @@ import { Spinner } from "~/components/ui/spinner";
 import { Switch } from "~/components/ui/switch";
 import { dayAndTime } from "~/lib/dates";
 import { cn } from "~/lib/utils";
-import type { ProviderModel, ModelSelection, PermissionMode, Project, Session } from "../api";
+import {
+  FolderPick,
+  type ProviderModel,
+  type ModelSelection,
+  type PermissionMode,
+  type Project,
+  type Session,
+} from "../api";
 import { DataList, DataListItem } from "~/components/ui/data-list";
 import { SidebarDisclosureTrigger } from "./sidebar-disclosure-trigger";
 import { effortChoices } from "./providers";
@@ -139,22 +155,31 @@ const projectSectionOpenAtom = atomWithStorage("context-agent-project-section-op
 
 export function ProjectSection({
   projects,
+  hiddenProjects,
   projectId,
   onSelect,
   onAdd,
+  onPickFolder,
   onPermissionMode,
   onCrossRecall,
   onHide,
+  onRestore,
 }: {
   projects: Project[];
+  /** Archived projects; choosing one releases it from the archive. */
+  hiddenProjects: Project[];
   projectId: string | null;
   onSelect: (projectId: string) => void;
   onAdd: (root: string) => Promise<string | null>;
+  /** The host's folder dialog. */
+  onPickFolder: () => Promise<FolderPick>;
   onPermissionMode: (mode: PermissionMode) => void;
   /** Whether conversations in other projects may recall this project's memory (R08). */
   onCrossRecall: (allowed: boolean) => void;
-  /** Takes the project out of this list; its conversations and memory stay. */
+  /** Archives the project: out of this list; its conversations and memory stay. */
   onHide: (projectId: string) => void;
+  /** Releases an archived project back into the list. */
+  onRestore: (projectId: string) => void;
 }) {
   const current = projects.find((project) => project.id === projectId);
   const [open, setOpen] = useAtom(projectSectionOpenAtom);
@@ -176,29 +201,25 @@ export function ProjectSection({
           <DataList className="grid-cols-[3.5rem_minmax(0,1fr)]">
             <DataListItem term="프로젝트">
               <div className="flex min-w-0 items-center gap-2">
-                {projects.length > 0 ? (
-                  <Select
-                    value={projectId}
-                    items={projects.map((project) => ({ value: project.id, label: project.name }))}
-                    onValueChange={(value) => value && onSelect(value)}
-                  >
-                    <SelectTrigger className="min-w-0 flex-1" size="sm" aria-label="프로젝트 선택">
-                      <SelectValue placeholder="프로젝트를 선택하세요" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {projects.map((project) => (
-                        <SelectItem key={project.id} value={project.id}>
-                          {project.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                {projects.length > 0 || hiddenProjects.length > 0 ? (
+                  <ProjectCombobox
+                    projects={projects}
+                    hiddenProjects={hiddenProjects}
+                    current={current ?? null}
+                    onSelect={onSelect}
+                    onRestore={onRestore}
+                  />
                 ) : (
                   <p className="min-w-0 flex-1 text-xs text-muted-foreground">
                     등록된 프로젝트가 없어요.
                   </p>
                 )}
-                <AddProjectDialog onAdd={onAdd} />
+                <OpenFolderButton
+                  projects={projects}
+                  onAdd={onAdd}
+                  onSelect={onSelect}
+                  onPickFolder={onPickFolder}
+                />
               </div>
             </DataListItem>
             {current && (
@@ -237,10 +258,10 @@ export function ProjectSection({
                   <Button
                     variant="ghost-muted"
                     size="sm"
-                    title="보관하기"
+                    title="프로젝트 보관"
                     onClick={() => onHide(current.id)}
                   >
-                    <EyeOffIcon /> 보관하기
+                    <ArchiveIcon /> 보관하기
                   </Button>
                 </DataListItem>
               </>
@@ -252,28 +273,179 @@ export function ProjectSection({
   );
 }
 
-/** Registering a folder widens what the file tools may touch, so it lives in its own dialog. */
-function AddProjectDialog({ onAdd }: { onAdd: (root: string) => Promise<string | null> }) {
-  const [open, setOpen] = useState(false);
-  const [root, setRoot] = useState("");
-  const [error, setError] = useState<string | null>(null);
+const archivedGroup = "보관된 프로젝트";
+
+/** Picks among the projects by name; archived ones sit in their own group and come back when chosen. */
+function ProjectCombobox({
+  projects,
+  hiddenProjects,
+  current,
+  onSelect,
+  onRestore,
+}: {
+  projects: Project[];
+  hiddenProjects: Project[];
+  current: Project | null;
+  onSelect: (projectId: string) => void;
+  onRestore: (projectId: string) => void;
+}) {
+  const groups = [
+    { value: "프로젝트", items: projects },
+    ...(hiddenProjects.length > 0 ? [{ value: archivedGroup, items: hiddenProjects }] : []),
+  ];
+  return (
+    <Combobox
+      items={groups}
+      value={current}
+      itemToStringLabel={(project: Project) => project.name}
+      isItemEqualToValue={(item: Project, value: Project) => item.id === value.id}
+      onValueChange={(project: Project | null) => {
+        if (project === null) return;
+        if (project.hiddenAt !== null) onRestore(project.id);
+        else onSelect(project.id);
+      }}
+    >
+      <ComboboxInput
+        className="h-6 min-w-0 flex-1"
+        placeholder="프로젝트 검색"
+        aria-label="프로젝트 선택"
+      />
+      <ComboboxContent>
+        <ComboboxEmpty>맞는 프로젝트가 없어요.</ComboboxEmpty>
+        <ComboboxList>
+          {(group: (typeof groups)[number]) => (
+            <ComboboxGroup key={group.value} items={group.items}>
+              {groups.length > 1 && <ComboboxLabel>{group.value}</ComboboxLabel>}
+              <ComboboxCollection>
+                {(project: Project) => (
+                  <ComboboxItem key={project.id} value={project} title={project.root}>
+                    <span className="min-w-0 flex-1 truncate">{project.name}</span>
+                    {project.hiddenAt !== null && (
+                      <span className="flex shrink-0 items-center gap-1 pr-5 text-muted-foreground">
+                        <ArchiveRestoreIcon /> 보관 해제
+                      </span>
+                    )}
+                  </ComboboxItem>
+                )}
+              </ComboboxCollection>
+            </ComboboxGroup>
+          )}
+        </ComboboxList>
+      </ComboboxContent>
+    </Combobox>
+  );
+}
+
+/**
+ * Adds a project from the host's folder dialog. Registering a folder widens what the file tools
+ * may touch, so the server still checks the path. Without a dialog on the host, or when the
+ * chosen folder is refused, the path dialog opens with what is known so far.
+ */
+function OpenFolderButton({
+  projects,
+  onAdd,
+  onSelect,
+  onPickFolder,
+}: {
+  projects: Project[];
+  onAdd: (root: string) => Promise<string | null>;
+  onSelect: (projectId: string) => void;
+  onPickFolder: () => Promise<FolderPick>;
+}) {
+  const [picking, setPicking] = useState(false);
+  const [fallback, setFallback] = useState<{ root: string; error: string | null } | null>(null);
+
+  // A folder already in the list is simply chosen; adding it again would be refused.
+  const add = (root: string) =>
+    Option.match(
+      Array.findFirst(projects, (project) => project.root === root),
+      {
+        onNone: () => onAdd(root),
+        onSome: (known) => {
+          onSelect(known.id);
+          return Promise.resolve(null);
+        },
+      },
+    );
+
+  // A refused folder opens the path dialog on it, with the reason.
+  const addPicked = (root: string) =>
+    uiPromise(() => add(root)).pipe(
+      Effect.flatMap((error) =>
+        Effect.sync(() => setFallback({ root, error })).pipe(
+          Effect.when(Effect.succeed(isTruthy(error))),
+        ),
+      ),
+      Effect.asVoid,
+    );
+
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  const open = () =>
+    runUiEffect(
+      Effect.gen(function* () {
+        setPicking(true);
+        const pick = yield* uiPromise(onPickFolder).pipe(
+          Effect.ensuring(Effect.sync(() => setPicking(false))),
+        );
+        yield* FolderPick.match(pick, {
+          cancelled: () => Effect.void,
+          unavailable: () => Effect.sync(() => setFallback({ root: "", error: null })),
+          picked: ({ root }) => addPicked(root),
+        });
+      }).pipe(
+        Effect.catchTag("UnknownError", () =>
+          Effect.sync(() => setFallback({ root: "", error: null })),
+        ),
+      ),
+    );
+
+  return (
+    <>
+      <Button
+        variant="outline"
+        size="icon"
+        aria-label="폴더 열기"
+        title="폴더 열기"
+        disabled={picking}
+        onClick={() => void open()}
+      >
+        {picking ? <Spinner /> : <FolderOpenIcon />}
+      </Button>
+      {fallback !== null && (
+        <AddProjectDialog
+          initialRoot={fallback.root}
+          initialError={fallback.error}
+          onAdd={add}
+          onClose={() => setFallback(null)}
+        />
+      )}
+    </>
+  );
+}
+
+/** Typing the path: for hosts without a folder dialog, or to correct a refused folder. */
+function AddProjectDialog({
+  initialRoot,
+  initialError,
+  onAdd,
+  onClose,
+}: {
+  initialRoot: string;
+  initialError: string | null;
+  onAdd: (root: string) => Promise<string | null>;
+  onClose: () => void;
+}) {
+  const [root, setRoot] = useState(initialRoot);
+  const [error, setError] = useState<string | null>(initialError);
   const [adding, setAdding] = useState(false);
 
   return (
     <Dialog
-      open={open}
+      open
       onOpenChange={(next) => {
-        setOpen(next);
-        if (!next) setError(null);
+        if (!next) onClose();
       }}
     >
-      <DialogTrigger
-        render={
-          <Button variant="outline" size="icon" aria-label="프로젝트 추가" title="프로젝트 추가" />
-        }
-      >
-        <FolderPlusIcon />
-      </DialogTrigger>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>프로젝트 추가</DialogTitle>
@@ -294,8 +466,7 @@ function AddProjectDialog({ onAdd }: { onAdd: (root: string) => Promise<string |
                 setAdding(false);
                 setError(failure);
                 if (isTruthy(failure)) return;
-                setRoot("");
-                setOpen(false);
+                onClose();
               }),
             )
           }

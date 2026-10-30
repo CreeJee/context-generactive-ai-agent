@@ -1,5 +1,5 @@
-import { Effect, Result, Schema } from "effect";
-import { SqlError } from "effect/sql";
+import { Deferred, Effect, Fiber, Result, Schema } from "effect";
+import { SqlClient, SqlError } from "effect/sql";
 import { expect, vi } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import type { SessionRunState } from "../../src/agent/run-state.ts";
@@ -271,6 +271,30 @@ testAgent()("Workflows", (it) => {
     }),
   );
 
+  it.effect("finishes a Workflows call made inside an open transaction", () =>
+    Effect.gen(function* () {
+      const id = yield* freshSession;
+      const workflows = yield* Workflows;
+      const sql = yield* SqlClient.SqlClient;
+      const opened = yield* Deferred.make<void>();
+      // Another caller for the same session, waiting for the one connection.
+      const other = yield* Effect.forkChild(
+        Effect.andThen(Deferred.await(opened), workflows.updateGoal(id, goal)),
+      );
+      yield* sql
+        .withTransaction(
+          Effect.gen(function* () {
+            yield* Deferred.succeed(opened, undefined);
+            yield* Effect.sleep("50 millis");
+            yield* workflows.updateGoal(id, goal);
+          }),
+        )
+        .pipe(Effect.timeout("2 seconds"));
+      yield* Fiber.join(other);
+      expect((yield* workflows.get(id)).goal?.version).toBe(2);
+    }),
+  );
+
   it.effect("records immutable full-state revisions and keeps one Goal identity", () =>
     Effect.gen(function* () {
       const id = yield* freshSession;
@@ -348,7 +372,12 @@ testAgent()("Workflows", (it) => {
         verification: { status: "passed" },
         steps: [{ id: "store", status: "done", evidence: ["workflow.test.ts passed"] }],
       });
-      expect(state.ledger.at(-1)?.kind).toBe("verification_recorded");
+      // Completing the Goal with its Plan leaves Execute, so 0.0.17's stuck phase cannot recur.
+      expect(state.phase).toBe("completed");
+      expect(state.ledger.slice(-2).map((event) => event.kind)).toEqual([
+        "verification_recorded",
+        "phase_changed",
+      ]);
     }),
   );
 

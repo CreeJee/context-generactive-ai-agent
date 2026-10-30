@@ -30,6 +30,7 @@ import {
   WorktreeSettlement,
   type CardRef,
   type CardWorktree,
+  type GoalFolder,
   type GoalRef,
   type WorktreeDisposition,
 } from "./worktree.ts";
@@ -96,9 +97,18 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
   const git = yield* findExecutable("git");
   const serially = yield* keyedSerialLimit();
   const leases = yield* Ref.make(HashSet.empty<string>());
+  // Goal-level checks running now; their checkout stays until their scope closes.
+  const checkouts = yield* Ref.make(HashSet.empty<string>());
 
   const fail = (operation: Operation, reason: Reason, cause?: unknown) =>
     Effect.fail(CardWorktreeFailed.make({ operation, reason, cause }));
+  /** A file system failure under the worktrees base, reported as git's. */
+  const onDisk = (operation: Operation) => (cause: unknown) =>
+    CardWorktreeFailed.make({
+      operation,
+      reason: reasons.GitFailed.make({ exitCode: null }),
+      cause,
+    });
 
   /** One git process, scoped so interruption ends it. Exit codes are the caller's to read. */
   const run = (operation: Operation, cwd: string, args: ReadonlyArray<string>) =>
@@ -234,6 +244,14 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
           ),
         );
       }),
+    );
+
+  /** The kanban ids among a folder's entries; a gone folder has none. */
+  const idsIn = (operation: Operation, folder: string) =>
+    fs.exists(folder).pipe(
+      Effect.flatMap((exists) => (exists ? fs.readDirectory(folder) : Effect.succeed([]))),
+      Effect.map((names) => names.filter(Schema.is(KanbanId))),
+      Effect.mapError(onDisk(operation)),
     );
 
   const describe = Effect.fnUntraced(function* (operation: Operation, card: CardRef) {
@@ -392,7 +410,10 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
           }),
         ),
         () => Ref.update(leases, HashSet.remove(cardKey(card))),
-      ).pipe(Effect.map((worktree) => toolView(card.projectRoot, worktree))),
+      ).pipe(
+        Effect.map((worktree) => toolView(card.projectRoot, worktree)),
+        Effect.withSpan("CardWorktrees.lease"),
+      ),
 
     present: (card: CardRef) =>
       Effect.map(presentWorktree("lease", card), (worktree) =>
@@ -416,36 +437,44 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
               Effect.map(Ref.get(leases), HashSet.has(cardKey(card))),
             );
             const { worktree, state } = yield* lookup("settle", card);
-            yield* Match.value(state).pipe(
+            const branchKept = yield* Match.value(state).pipe(
               Match.when("present", () =>
-                Effect.andThen(
-                  // A cancelled card's work is kept on its branch; a finished card's must be committed.
-                  keepBranch
-                    ? commitIn("settle", worktree, `Cancelled card ${card.cardId} (snapshot)`)
-                    : requireClean("settle", worktree.path),
-                  expect("settle", worktree.repository, ["worktree", "remove", worktree.path]).pipe(
-                    Effect.uninterruptible,
-                  ),
-                ),
+                Effect.gen(function* () {
+                  // A cancelled card's work is kept on its branch, and so are changes a finished
+                  // card left uncommitted.
+                  const snapshot = yield* commitIn(
+                    "settle",
+                    worktree,
+                    keepBranch
+                      ? `Cancelled card ${card.cardId} (snapshot)`
+                      : `Changes card ${card.cardId} left uncommitted (snapshot)`,
+                  );
+                  yield* expect("settle", worktree.repository, [
+                    "worktree",
+                    "remove",
+                    worktree.path,
+                  ]).pipe(Effect.uninterruptible);
+                  return keepBranch || Option.isSome(snapshot);
+                }),
               ),
               Match.when("stale", () =>
-                expect("settle", worktree.repository, ["worktree", "prune"]),
+                Effect.as(expect("settle", worktree.repository, ["worktree", "prune"]), keepBranch),
               ),
-              Match.when("absent", () => Effect.void),
+              Match.when("absent", () => Effect.succeed(keepBranch)),
               Match.exhaustive,
             );
             yield* Effect.when(
               expect("settle", worktree.repository, ["branch", "-D", worktree.branch]).pipe(
                 Effect.uninterruptible,
               ),
-              keepBranch
+              branchKept
                 ? Effect.succeed(false)
                 : Effect.map(
                     revision("settle", worktree.repository, `refs/heads/${worktree.branch}`),
                     Option.isSome,
                   ),
             );
-            return WorktreeSettlement.Removed({ branchKept: keepBranch });
+            return WorktreeSettlement.Removed({ branchKept });
           }),
         );
       return yield* Match.valueTags(disposition, {
@@ -784,6 +813,7 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
               ),
             );
             yield* expect("checkout", repository, ["worktree", "add", "--detach", folder, head]);
+            yield* Ref.update(checkouts, HashSet.add(goalKey(goal)));
             return {
               repository,
               branch: goalBranchName(goal.goalInstanceId),
@@ -803,6 +833,8 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
             Effect.catchTag("CardWorktreeFailed", (failure) =>
               Effect.logWarning("Goal checkout was not removed", { reason: failure.reason }),
             ),
+            // One left behind is removed with the Goal's folder.
+            Effect.ensuring(Ref.update(checkouts, HashSet.remove(goalKey(goal)))),
           ),
       ).pipe(Effect.map((checkout) => toolView(goal.projectRoot, checkout))),
 
@@ -816,6 +848,81 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
         Effect.uninterruptible,
       );
       return pushed.exitCode === 0 ? Option.some(branch) : Option.none<string>();
+    }),
+
+    goalFolders: idsIn("list", worktreesBase).pipe(Effect.withSpan("CardWorktrees.goalFolders")),
+
+    goalFolder: Effect.fn("CardWorktrees.goalFolder")(function* (goalInstanceId: string) {
+      yield* checkIds("list", [goalInstanceId]);
+      const folder = path.join(worktreesBase, goalInstanceId);
+      return {
+        cardIds: yield* idsIn("list", folder),
+        goalCheckout: yield* fs
+          .exists(path.join(folder, goalCheckoutFolder))
+          .pipe(Effect.mapError(onDisk("list"))),
+      } satisfies GoalFolder;
+    }),
+
+    /** The checkout is a detached copy of the Goal branch, so nothing is lost with it. */
+    removeGoalFolder: Effect.fn("CardWorktrees.removeGoalFolder")(function* (goal: GoalRef) {
+      yield* checkIds("remove_goal_folder", [goal.goalInstanceId]);
+      const { repository, base } = yield* repositoryOf("remove_goal_folder", goal.projectRoot);
+      const folder = path.join(base, goal.goalInstanceId);
+      const checkout = path.join(folder, goalCheckoutFolder);
+      return yield* serially(
+        `checkout:${goal.goalInstanceId}`,
+        Effect.gen(function* () {
+          if (HashSet.has(yield* Ref.get(checkouts), goalKey(goal))) return false;
+          const listed = (yield* registered("remove_goal_folder", repository)).some(
+            (entry) => entry.path === checkout,
+          );
+          const present = yield* fs
+            .exists(checkout)
+            .pipe(Effect.mapError(onDisk("remove_goal_folder")));
+          yield* Effect.when(
+            expect("remove_goal_folder", repository, ["worktree", "remove", "--force", checkout]),
+            Effect.succeed(listed && present),
+          );
+          yield* Effect.when(
+            expect("remove_goal_folder", repository, ["worktree", "prune"]),
+            Effect.succeed(listed && !present),
+          );
+          // A checkout a crash left unregistered goes too.
+          yield* fs
+            .remove(checkout, { recursive: true, force: true })
+            .pipe(Effect.mapError(onDisk("remove_goal_folder")));
+          const entries = yield* fs.exists(folder).pipe(
+            Effect.flatMap((exists) => (exists ? fs.readDirectory(folder) : Effect.succeed(null))),
+            Effect.mapError(onDisk("remove_goal_folder")),
+          );
+          if (entries === null) return true;
+          // Card worktrees still in it are settled one by one; the folder waits for them.
+          if (entries.length > 0) return false;
+          yield* fs
+            .remove(folder, { recursive: true })
+            .pipe(Effect.mapError(onDisk("remove_goal_folder")));
+          return true;
+        }),
+      );
+    }),
+
+    staleWorktrees: Effect.fn("CardWorktrees.staleWorktrees")(function* (projectRoot: string) {
+      const { repository, base } = yield* repositoryOf("list", projectRoot);
+      return yield* Effect.filter(
+        (yield* registered("list", repository))
+          .map((entry) => entry.path)
+          .filter((worktree) => worktree !== base && pathsOverlap(base, worktree)),
+        (worktree) =>
+          fs.exists(worktree).pipe(
+            Effect.map((present) => !present),
+            Effect.mapError(onDisk("list")),
+          ),
+      );
+    }),
+
+    prune: Effect.fn("CardWorktrees.prune")(function* (projectRoot: string) {
+      const { repository } = yield* repositoryOf("prune", projectRoot);
+      yield* expect("prune", repository, ["worktree", "prune"]);
     }),
   });
 });

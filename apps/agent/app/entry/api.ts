@@ -287,6 +287,7 @@ export const ApiErrorCode = Schema.Literals([
   "cross_site_request",
   "empty_message",
   "external_agent_unavailable",
+  "facts_changed",
   "goal_missing",
   "goal_not_active",
   "goal_not_paused",
@@ -674,9 +675,15 @@ export const api = {
     }),
   setPermissionMode: (projectId: string, permissionMode: PermissionMode) =>
     call<Project>("POST", `/api/projects/${encodeURIComponent(projectId)}`, { permissionMode }),
-  /** Takes a project out of the sidebar. Its memory stays and adding the folder again brings it back. */
+  /** Archives a project: out of the sidebar list. Its conversations and memory stay. */
   hideProject: (projectId: string) =>
     call<Project>("POST", `/api/projects/${encodeURIComponent(projectId)}`, { hidden: true }),
+  /** Puts an archived project back in the sidebar list. */
+  restoreProject: (projectId: string) =>
+    call<Project>("POST", `/api/projects/${encodeURIComponent(projectId)}`, { hidden: false }),
+  hiddenProjects: () => call<Project[]>("GET", "/api/projects?hidden=1"),
+  /** Opens the folder dialog of the machine running the app; nothing is registered yet. */
+  pickFolder: () => call<FolderPick>("POST", "/api/projects/pick"),
 
   sessions: (projectId: string) =>
     call<Session[]>("GET", `/api/sessions?project=${encodeURIComponent(projectId)}`),
@@ -709,13 +716,21 @@ export const api = {
     call<ProjectBoard[]>("GET", `/api/projects/${encodeURIComponent(projectId)}/boards`),
   answerDecision: (
     holder: string,
-    request: Pick<HumanDecisionRequest, "requestId" | "sessionId" | "goalInstanceId" | "cardId">,
+    request: Pick<
+      HumanDecisionRequest,
+      "requestId" | "sessionId" | "goalInstanceId" | "cardId" | "factsSeq"
+    >,
     answer: DecisionAnswer,
   ) =>
     call<HumanDecisionRequest>(
       "POST",
       `/api/sessions/${encodeURIComponent(request.sessionId)}/decisions/${encodeURIComponent(request.requestId)}`,
-      { goalInstanceId: request.goalInstanceId, cardId: request.cardId, answer },
+      {
+        goalInstanceId: request.goalInstanceId,
+        cardId: request.cardId,
+        factsSeq: request.factsSeq,
+        answer,
+      },
       { [sessionHolderHeader]: holder },
     ),
   kanban: (sessionId: string) =>
@@ -1119,6 +1134,14 @@ export function attachmentErrorMessage(error: ApiError | null) {
     ? attachmentRejections[error.reason]
     : error.reason;
 }
+
+/** The folder dialog's answer (POST /api/projects/pick). */
+export const FolderPick = Schema.TaggedUnion({
+  picked: { root: Schema.String },
+  cancelled: {},
+  unavailable: {},
+});
+export type FolderPick = typeof FolderPick.Type;
 
 const ProjectRejection = Schema.Literals([
   "not_found",

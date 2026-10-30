@@ -76,7 +76,7 @@ import {
 import { createSubscriptionRuntimeImplementation } from "../providers/subscription-runtime.ts";
 import { ProviderRegistry } from "../providers/registry.ts";
 import { ProviderToolRuntime } from "../providers/tool-policy.ts";
-import { McpServers, mcpInstructionsForMode } from "../mcp/servers.ts";
+import { McpServers, isMcpToolName, mcpInstructionsForMode } from "../mcp/servers.ts";
 import { Indexer } from "../memory/embedding/indexer.ts";
 import { Interpreter } from "../memory/interpret.ts";
 import { KnowledgePromotions } from "../memory/knowledge.ts";
@@ -136,7 +136,7 @@ import {
   uncertainRuns,
   type UncertainContinueRequest,
 } from "../workflow/uncertain-runs.ts";
-import { sqliteRunLog } from "../workflow/durable-stream.ts";
+import { RunLogSignals, sqliteRunLog } from "../workflow/durable-stream.ts";
 import {
   serverRestartedCode,
   serverRestartedMessage,
@@ -366,12 +366,19 @@ const cancelWaitMs = 5_000;
  */
 const afterRunBudget = 200;
 
-/** Plan/Verify never receive project mutation, outside access, MCP or delegation tools. */
+/**
+ * Plan/Verify never receive project mutation, outside access or delegation tools, and receive
+ * only the MCP tools their servers mark read-only.
+ */
 const readOnlyWorkflowPhases = HashSet.fromIterable<WorkflowPhase>(["plan", "verify", "completed"]);
 const workflowReadToolNames = HashSet.fromIterable([
   "find_memory",
   "read_evidence",
   "trace_evidence",
+  // Compaction points a shortened result at this tool, so a read-only phase needs it too.
+  "read_tool_result",
+  // Records which promoted memories the answer used; it changes no project file.
+  "use_promoted_memory",
   "list_files",
   "search_files",
   "read_file",
@@ -494,7 +501,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const runEvents = yield* workflowRunEvents;
   const sql = yield* SqlClient.SqlClient;
   const withSql = Effect.provideService(SqlClient.SqlClient, sql);
-  const committedLog = (input: Parameters<typeof sqliteRunLog>[0]) => withSql(sqliteRunLog(input));
+  const runLogSignals = yield* RunLogSignals;
+  const committedLog = (input: Parameters<typeof sqliteRunLog>[0]) =>
+    sqliteRunLog(input).pipe(withSql, Effect.provideService(RunLogSignals, runLogSignals));
   const runLogs = yield* memoryRunLogs;
   const persistedRunStatus = SqlSchema.findOneOption({
     Request: Schema.Struct({ runId: Schema.String, sessionId: Schema.String }),
@@ -2008,7 +2017,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // Present only while the user has Kagi turned on with a key (R19).
         const webTools = reportSource !== null ? [] : yield* kagiTools.runTools;
         // A report session never connects external MCP servers or loads additional skills.
-        const mcp = readOnly ? { tools: [], guides: [] } : yield* mcpServers.runTools(project);
+        const mcp =
+          reportSource !== null
+            ? { tools: [], guides: [] }
+            : yield* workflowReadOnly
+                ? mcpServers.readOnlyRunTools(project)
+                : mcpServers.runTools(project);
         const skills =
           reportSource !== null
             ? { skills: [], tools: [], instructions: null }
@@ -2093,7 +2107,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 ),
               )
             : allSharedTools.filter(
-                ({ tool }) => !workflowReadOnly || HashSet.has(workflowReadToolNames, tool.name),
+                ({ tool }) =>
+                  !workflowReadOnly ||
+                  HashSet.has(workflowReadToolNames, tool.name) ||
+                  isMcpToolName(tool.name),
               );
         /** The standing rules for an agent with these tools: this run's, or a child's. */
         const standingPromptsFor = (tools: ReadonlyArray<RunTool>) => [
@@ -2101,7 +2118,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             ? [reportAnalysisInstructions]
             : [memoryRulesFor(tools.map(({ tool }) => tool))]),
           ...(webTools.length > 0 ? [kagiInstructions] : []),
-          ...(!workflowReadOnly && mcp.tools.length > 0
+          ...(mcp.tools.length > 0
             ? [mcpInstructionsForMode(project.permissionMode, mcp.guides)]
             : []),
           ...(injectImageProviderTool ? [imageProviderWorkflowPrompt] : []),
@@ -2504,6 +2521,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             windowKnown: window.known,
           }),
           workflow,
+          display: yield* workflows.display(sessionId, workflow),
           execution: yield* execution.get(sessionId),
           providerRetry:
             (yield* providerRetries

@@ -11,11 +11,14 @@ import {
   Option,
   DateTime,
   Cause,
+  Chunk,
   Context,
   Effect,
   FileSystem,
   Layer,
   Schema,
+  Sink,
+  Stream,
 } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { GlobalConfig } from "../config/global-config.ts";
@@ -29,17 +32,45 @@ import { TranscriptItem, type ImportSourceName, type TranscriptStart } from "./i
 import { Checkouts, type Placement } from "./checkouts.ts";
 import { readLinesFrom } from "./lines.ts";
 import { findTranscripts, importSources, type Transcript } from "./sources.ts";
+import { WriteTurns } from "./write-turns.ts";
 
 /** How long a conversation's title may be; the session list shows one line. */
 const titleLength = 60;
 /** How much of a failure settings shows; the rest adds nothing to "this file could not be read". */
 const failureLength = 300;
 /**
- * Items written per transaction. The pass runs in a worker with its own connection, and while it
- * holds the write lock the server's own writes wait on its main thread, so a long transcript is
- * written in pieces.
+ * Text written per transaction. The pass runs in a worker with its own connection, and while it
+ * holds the write lock the server's own writes wait, so a long transcript is written in pieces.
+ * The trigram index's cost follows the text, not the item count: 200 items of tool output held up
+ * to 2.4 MB, and the write lock for seconds.
  */
-const writeChunk = 200;
+const writeChunkText = 256 * 1024;
+
+/** The text an item adds to the trigram index. */
+const indexedText = (item: TranscriptItem) =>
+  TranscriptItem.$match(item, {
+    session: () => 0,
+    ignored: () => 0,
+    message: ({ text }) => text.length,
+    tool_result: ({ text }) => text.length,
+    tool_call: ({ text, refs }) => text.length + EffectNumber.sumAll(refs.map((ref) => ref.length)),
+  });
+
+/** Items written in one transaction, and the text they add to the index. */
+interface WritePiece {
+  readonly items: Chunk.Chunk<TranscriptItem>;
+  readonly text: number;
+}
+
+/** Takes items into one piece until their text reaches `writeChunkText`. */
+const writePiece = Sink.reduceWhile(
+  (): WritePiece => ({ items: Chunk.empty(), text: 0 }),
+  (piece) => piece.text < writeChunkText,
+  (piece, item: TranscriptItem): WritePiece => ({
+    items: Chunk.append(piece.items, item),
+    text: piece.text + indexedText(item),
+  }),
+);
 
 /** Where a pass stands: transcripts looked at of those found, nodes written, transcripts failed. */
 export interface PassProgress {
@@ -113,6 +144,7 @@ const make = (home: string) =>
     const projects = yield* Projects;
     const sessions = yield* Sessions;
     const bulk = yield* BulkNodes;
+    const turns = yield* WriteTurns;
     const config = yield* GlobalConfig;
     const redactor = yield* SecretRedactor;
     const canonicalPath = (path: string) =>
@@ -404,21 +436,31 @@ const make = (home: string) =>
           sessions.setArchived(sessionId, true),
           Effect.succeed(transcript.archived && firstPlaced && session.archivedAt === null),
         );
-        const writes = yield* Effect.forEach(EffectArray.chunksOf(items, writeChunk), (chunk) =>
-          bulk
-            .write({
-              source: transcript.source,
-              projectId: session.projectId,
-              sessionId,
-              items: chunk,
-              interpret,
-            })
-            .pipe(
-              // Lets other work in the worker (a count for settings) in between pieces.
-              Effect.tap(() => Effect.yieldNow),
-            ),
+        const written = yield* Stream.fromIterable(items).pipe(
+          Stream.transduce(writePiece),
+          // The sink also ends once more on the stream's end, with nothing taken.
+          Stream.filter((piece) => Chunk.isNonEmpty(piece.items)),
+          Stream.mapEffect((piece) =>
+            turns
+              .writing(
+                bulk.write({
+                  source: transcript.source,
+                  projectId: session.projectId,
+                  sessionId,
+                  items: Chunk.toReadonlyArray(piece.items),
+                  interpret,
+                }),
+              )
+              .pipe(
+                // Lets other work in the worker (a count for settings) in between pieces.
+                Effect.tap(() => Effect.yieldNow),
+              ),
+          ),
+          Stream.runFold(
+            () => 0,
+            (total, write) => total + write.written,
+          ),
         );
-        const written = EffectNumber.sumAll(writes.map((write) => write.written));
         // A conversation is named by what the person opened it with.
         const opening = EffectArray.findFirst(
           items.filter(TranscriptItem.$is("message")),

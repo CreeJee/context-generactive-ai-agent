@@ -32,9 +32,10 @@ export interface CardWorktree {
 
 /**
  * What happens to a card worktree once the card leaves execution. `Done` work is in the Goal
- * branch, so the worktree and card branch go. `Cancelled` work is committed to the card branch as a
- * snapshot before the worktree goes, so it stays recoverable. `Blocked` and `HumanDecision` keep
- * the worktree for the next attempt or for the person deciding.
+ * branch, so the worktree and card branch go; changes the card left uncommitted are committed to
+ * the card branch as a snapshot first, and the branch then stays. `Cancelled` work is committed to
+ * the card branch as a snapshot before the worktree goes, so it stays recoverable. `Blocked` and
+ * `HumanDecision` keep the worktree for the next attempt or for the person deciding.
  */
 export type WorktreeDisposition = Data.TaggedEnum<{
   Done: {};
@@ -43,6 +44,14 @@ export type WorktreeDisposition = Data.TaggedEnum<{
   HumanDecision: {};
 }>;
 export const WorktreeDisposition = Data.taggedEnum<WorktreeDisposition>();
+
+/** A Goal's folder below the worktrees base as the disk has it; a gone folder holds nothing. */
+export interface GoalFolder {
+  /** Cards with a folder in it. */
+  readonly cardIds: readonly string[];
+  /** Whether the Goal-level checkout's folder is there. */
+  readonly goalCheckout: boolean;
+}
 
 export type WorktreeSettlement = Data.TaggedEnum<{
   Removed: { readonly branchKept: boolean };
@@ -154,6 +163,9 @@ export class CardWorktreeFailed extends Schema.TaggedError<
     "goal_merge",
     "checkout",
     "push",
+    "list",
+    "remove_goal_folder",
+    "prune",
   ]),
   reason: CardWorktreeFailedReason,
   cause: Schema.optional(Schema.Defect()),
@@ -263,6 +275,21 @@ export interface CardWorktreesApi extends CardWorkspace {
   readonly pushGoalBranch: (
     goal: GoalRef,
   ) => Effect.Effect<Option.Option<string>, CardWorktreeFailed>;
+  /** Goal instances with a folder below the worktrees base; folders not named by a kanban id are left out. */
+  readonly goalFolders: Effect.Effect<readonly string[], CardWorktreeFailed>;
+  /** What a Goal's folder holds. */
+  readonly goalFolder: (goalInstanceId: string) => Effect.Effect<GoalFolder, CardWorktreeFailed>;
+  /**
+   * Removes the Goal-level checkout unless a check still holds it, then the Goal's folder when
+   * nothing is left in it: true once the folder is gone. Card worktrees in it are settled one by one.
+   */
+  readonly removeGoalFolder: (goal: GoalRef) => Effect.Effect<boolean, CardWorktreeFailed>;
+  /** Worktrees below the worktrees base that the project's repository registers but whose folders are gone. */
+  readonly staleWorktrees: (
+    projectRoot: string,
+  ) => Effect.Effect<readonly string[], CardWorktreeFailed>;
+  /** Makes the project's repository forget worktrees whose folders are gone (`git worktree prune`). */
+  readonly prune: (projectRoot: string) => Effect.Effect<void, CardWorktreeFailed>;
 }
 
 /** Card worktrees and Goal branches of kanban execution. Owner process only. */

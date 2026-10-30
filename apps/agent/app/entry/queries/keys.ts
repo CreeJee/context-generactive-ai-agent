@@ -18,6 +18,8 @@ export const appQueryKeys = {
     modelsRoot: ["app", "global", "models"] as const,
     models: (provider: string) => [...appQueryKeys.global.modelsRoot, provider] as const,
     projects: ["app", "global", "projects"] as const,
+    /** Under `projects`, so whatever refreshes the list refreshes the archive too. */
+    hiddenProjects: ["app", "global", "projects", "hidden"] as const,
   },
   project: {
     root: (projectId: string) => ["app", "project", projectId] as const,

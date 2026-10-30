@@ -35,6 +35,7 @@ import {
   CardRuns,
 } from "./kanban/card-queue.ts";
 import { KanbanOrchestrator } from "./kanban/orchestrator.ts";
+import { CardWorkspaceJanitor } from "./kanban/workspace-janitor.ts";
 import { subagentCardAgentsLayer } from "./kanban/subagent-card-agent.ts";
 import { GoalOrder } from "./kanban/goal-order.ts";
 import { GoalSchedules } from "./kanban/goal-schedules.ts";
@@ -110,6 +111,7 @@ import { WorkTraceStore } from "./work-trace/store.ts";
 import { Workflows } from "./workflow/workflow.ts";
 import { Boards } from "./workflow/board.ts";
 import { WorkflowExecution } from "./workflow/execution.ts";
+import { RunLogSignals } from "./workflow/durable-stream.ts";
 import { goalExecutionLayer } from "./workflow/goal-execution.ts";
 import { providerRetryLayer } from "./workflow/provider-retry.ts";
 import { WorkflowTools } from "./workflow/tools.ts";
@@ -291,6 +293,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     WorkflowExecution.layer,
     goalExecutionLayer,
     providerRetryLayer,
+    RunLogSignals.layer,
     WorkTraceStore.layer,
     OAuthAccountLogins.layer,
     SubscriptionQuota.layer.pipe(Layer.provide(SubscriptionUsage.layer)),
@@ -376,6 +379,8 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     Layer.provideMerge(Layer.mergeAll(cardQueueWorkerLayer, cardAttemptExecutionLayer)),
     Layer.provideMerge(subagentCardAgentsLayer),
     Layer.provideMerge(cardQueueFactoryLayer),
+    // Below the card queue workers and the boards: its sweep runs before either starts.
+    Layer.provideMerge(CardWorkspaceJanitor.layer),
     Layer.provideMerge(
       Layer.mergeAll(
         CardQueueGate.layer,

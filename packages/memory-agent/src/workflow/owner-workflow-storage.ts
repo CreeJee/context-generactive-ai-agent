@@ -1,4 +1,15 @@
-import { type Cause, Context, Data, Effect, Exit, Layer, Match, Option, Schema } from "effect";
+import {
+  type Cause,
+  Clock,
+  Context,
+  Data,
+  Effect,
+  Exit,
+  Layer,
+  Match,
+  Option,
+  Schema,
+} from "effect";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
 
 export class OwnerWorkflowStorageError extends Schema.TaggedError<
@@ -23,6 +34,9 @@ export type StoredExecution = {
   readonly parentExecutionId: string | undefined;
   readonly status: "running" | "suspended" | "completed" | "interrupted";
   readonly result: StoredWorkflowResult | undefined;
+  /** Epoch millis of admission and of the last change; unknown for rows older than the columns. */
+  readonly createdAt: number | undefined;
+  readonly updatedAt: number | undefined;
 };
 
 export type OwnerWorkflowAdmissionRequest = {
@@ -57,6 +71,8 @@ const ExecutionRow = Schema.Struct({
   parent_execution_id: Schema.NullOr(Schema.String),
   status: Schema.Literals(["running", "suspended", "completed", "interrupted"]),
   result_json: Schema.NullOr(Schema.String),
+  created_at: Schema.NullOr(Schema.Finite),
+  updated_at: Schema.NullOr(Schema.Finite),
 });
 type ExecutionRow = typeof ExecutionRow.Type;
 const ClockRow = Schema.Struct({
@@ -164,21 +180,24 @@ const makeOwnerWorkflowStorage = Effect.gen(function* () {
     Request: Schema.String,
     Result: ExecutionRow,
     execute: (executionId) => sql`
-      SELECT execution_id, workflow_name, payload_json, parent_execution_id, status, result_json
+      SELECT execution_id, workflow_name, payload_json, parent_execution_id, status, result_json,
+        created_at, updated_at
       FROM owner_workflow_executions WHERE execution_id = ${executionId}`,
   });
   const allByWorkflow = SqlSchema.findAll({
     Request: Schema.String,
     Result: ExecutionRow,
     execute: (workflowName) => sql`
-      SELECT execution_id, workflow_name, payload_json, parent_execution_id, status, result_json
+      SELECT execution_id, workflow_name, payload_json, parent_execution_id, status, result_json,
+        created_at, updated_at
       FROM owner_workflow_executions WHERE workflow_name = ${workflowName} ORDER BY execution_id`,
   });
   const pendingByWorkflow = SqlSchema.findAll({
     Request: Schema.String,
     Result: ExecutionRow,
     execute: (workflowName) => sql`
-      SELECT execution_id, workflow_name, payload_json, parent_execution_id, status, result_json
+      SELECT execution_id, workflow_name, payload_json, parent_execution_id, status, result_json,
+        created_at, updated_at
       FROM owner_workflow_executions
       WHERE workflow_name = ${workflowName} AND status IN ('running', 'suspended')
       ORDER BY execution_id`,
@@ -245,6 +264,8 @@ const makeOwnerWorkflowStorage = Effect.gen(function* () {
       parentExecutionId: row.parent_execution_id ?? undefined,
       status: row.status,
       result: yield* storedResult("execution.result", row.result_json),
+      createdAt: row.created_at ?? undefined,
+      updatedAt: row.updated_at ?? undefined,
     } satisfies StoredExecution;
   });
 
@@ -269,11 +290,13 @@ const makeOwnerWorkflowStorage = Effect.gen(function* () {
         return yield* failure("execution.admit", "execution_conflict", request.executionId);
       return existing.value;
     }
+    const now = yield* Clock.currentTimeMillis;
     yield* step("execution.admit")(sql`
       INSERT INTO owner_workflow_executions
-        (execution_id, workflow_name, payload_json, parent_execution_id, status, result_json)
+        (execution_id, workflow_name, payload_json, parent_execution_id, status, result_json,
+          created_at, updated_at)
       VALUES (${request.executionId}, ${request.workflowName}, ${payloadJson},
-        ${request.parentExecutionId ?? null}, 'running', NULL)`);
+        ${request.parentExecutionId ?? null}, 'running', NULL, ${now}, ${now})`);
     return yield* Effect.fromOption(yield* readExecution(request.executionId), () =>
       failure("execution.admit", "invalid_state", request.executionId),
     );
@@ -332,15 +355,20 @@ const makeOwnerWorkflowStorage = Effect.gen(function* () {
       ),
     setRunning: (executionId) =>
       step("execution.running")(
-        Effect.asVoid(sql`
-          UPDATE owner_workflow_executions SET status = 'running', result_json = NULL
-          WHERE execution_id = ${executionId} AND status <> 'completed'`),
+        Effect.flatMap(Clock.currentTimeMillis, (now) =>
+          Effect.asVoid(sql`
+            UPDATE owner_workflow_executions
+            SET status = 'running', result_json = NULL, updated_at = ${now}
+            WHERE execution_id = ${executionId} AND status <> 'completed'`),
+        ),
       ),
     setInterrupted: (executionId) =>
       step("execution.interrupt")(
-        Effect.asVoid(sql`
-          UPDATE owner_workflow_executions SET status = 'interrupted'
-          WHERE execution_id = ${executionId} AND status <> 'completed'`),
+        Effect.flatMap(Clock.currentTimeMillis, (now) =>
+          Effect.asVoid(sql`
+            UPDATE owner_workflow_executions SET status = 'interrupted', updated_at = ${now}
+            WHERE execution_id = ${executionId} AND status <> 'completed'`),
+        ),
       ),
     setResult: Effect.fnUntraced(function* (executionId, result) {
       const status = Match.valueTags(result, {
@@ -348,8 +376,10 @@ const makeOwnerWorkflowStorage = Effect.gen(function* () {
         Suspended: () => "suspended" as const,
       });
       const json = yield* encodeJson("execution.result", result);
+      const now = yield* Clock.currentTimeMillis;
       const changed = yield* step("execution.result")(sql`
-        UPDATE owner_workflow_executions SET status = ${status}, result_json = ${json}
+        UPDATE owner_workflow_executions
+        SET status = ${status}, result_json = ${json}, updated_at = ${now}
         WHERE execution_id = ${executionId} RETURNING execution_id`);
       yield* Effect.when(
         Effect.fail(failure("execution.result", "invalid_state", executionId)),

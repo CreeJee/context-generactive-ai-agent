@@ -14,7 +14,7 @@ import {
   type GoalExecutionErrorReason,
   type GoalExecutionPayload as GoalExecutionPayloadType,
 } from "./goal-execution-contracts.ts";
-import { ownerWorkflowEngineLayer } from "./owner-workflow-engine.ts";
+import { ownerWorkflowEngineLayer, suspendedRetrySchedule } from "./owner-workflow-engine.ts";
 import {
   OwnerWorkflowAdmission,
   OwnerWorkflowStorage,
@@ -43,6 +43,7 @@ export const GoalExecution = Workflow.make(goalExecutionWorkflow, {
   success: GoalExecutionSuccess,
   error: GoalExecutionError,
   idempotencyKey: ({ identity }) => goalExecutionIdempotencyKey(identity),
+  suspendedRetrySchedule,
 });
 
 /**

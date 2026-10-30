@@ -22,6 +22,10 @@ type AgentError = Layer.Error<AgentLayer>;
 
 export interface TestEnvOptions extends MemoryAgentLayerOptions {
   readonly testProvider?: TestProviderOptions;
+  /** Runs on the storage root before the first agent opens, e.g. to seed an older release's DB. */
+  readonly beforeOpen?: (
+    storage: string,
+  ) => Effect.Effect<void, never, FileSystem.FileSystem | Path.Path>;
 }
 
 /**
@@ -68,7 +72,8 @@ const makeTestEnv = Effect.fnUntraced(function* (overrides: TestEnvOptions) {
   const projectRoot = path.join(base, "project");
   yield* fs.makeDirectory(home);
   yield* fs.makeDirectory(projectRoot);
-  const { testProvider: providerOptions, ...layerOverrides } = overrides;
+  const { testProvider: providerOptions, beforeOpen, ...layerOverrides } = overrides;
+  yield* beforeOpen === undefined ? Effect.void : beforeOpen(storage);
   const provider = providerOptions === undefined ? undefined : makeTestProvider(providerOptions);
   const baseOptions: MemoryAgentLayerOptions = {
     embedder: fakeEmbedderLayer,

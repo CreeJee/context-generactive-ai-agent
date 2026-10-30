@@ -19,6 +19,7 @@
 - `goalHistoryMigration` — `{ version: 42, kind: "goal-history-binding-fk-rebuild", preservedTables }`. FK 검사를 멈춘 채 참조되는 테이블을 재구성할 수 있는 유일한 단계
 - `tanStackRowsMigration` — SQL 주석뿐인 단계. 시작 시 이 단계와 함께 `migrateTanStackRows`가 실행된다
 - `emptyUserMessageMigration` — chat_threads.messages에서 빈 user ModelMessage만 제거하는 SQL 단계
+- `humanDecisionFactsMigration` — `human_decision_facts` 테이블을 만드는 단계. 시작 시 이 단계와 함께 `migrateHumanDecisionRows`가 실행된다
 - 하위 디렉터리 없음
 
 ## Invariants
@@ -31,14 +32,16 @@
 - `effect_sql_migrations`가 없으면 1..applied를 `schema_N` 이름으로 adopt한다. 과거 SQL은 다시 실행하지 않는다. 기록이 1..applied와 연속으로 맞지 않으면 `MetadataMismatch`로 거부한다.
 - FK를 멈춘 채 참조 테이블을 재구성할 수 있는 단계는 `goalHistoryMigration`(version 42)뿐이다. 이 단계 전후로 `preservedTables`의 rowid 순 스냅샷이 같아야 하고, `PRAGMA foreign_key_check`가 비어 있어야 한다.
 - 대기 단계가 있었다면 COMMIT 전에 `PRAGMA foreign_key_check`를 통과하고 `assertDatabaseSchema`를 통과해야 한다.
-- `assertDatabaseSchema`는 chat_runs(run_id,thread_id,status), workflow_run_bindings(run_id,workflow_revision_id,goal_instance_id), owner_read_recoveries(receipt_id,authorization_fingerprint,execution_payload_json), nodes(id,seq,project_id,session_id,kind,text) 컬럼을 prepare로 검사한다. version cursor만으로 런타임 계약을 보장하지 않는다.
+- `assertDatabaseSchema`는 chat_runs(run_id,thread_id,status), workflow_run_bindings(run_id,workflow_revision_id,goal_instance_id), owner_read_recoveries(receipt_id,authorization_fingerprint,execution_payload_json), owner_workflow_executions(execution_id,created_at,updated_at), nodes(id,seq,project_id,session_id,kind,text) 컬럼을 prepare로 검사한다. version cursor만으로 런타임 계약을 보장하지 않는다.
 - Migrator는 단계 실패를 일반 defect로 바꾼다. 그래서 단계 안에서는 `DatabaseSchemaRejected`를 throw해 사유를 보존하고, `catchDefect`에서 `migrationFailure`로 되돌린다.
 - 앱은 SQLite 연결을 하나만 쓴다. 두 번째 연결을 열면 한 연결에서 멈춘 트랜잭션이 다른 연결의 동기 `BEGIN IMMEDIATE`를 이벤트 루프에서 막는다. 모든 statement와 트랜잭션은 `semaphore`(크기 1)로 연결을 임대한다.
+- 가져오기 worker는 같은 파일에 자기 연결을 연다. 그 연결이 쓰기 잠금을 쥔 동안 `BEGIN IMMEDIATE`와 트랜잭션 밖의 statement는 SQLite 안에서 기다리지 않고(`busy_timeout = 0`) 바로 실패한다. client가 sleep한 뒤 다시 시도한다(처음엔 5ms, 늘려 가며 최대 25ms 간격에 jitter, 30초까지). 실패한 시도는 잠금만 보고 끝나서 자주 물어도 된다. 그동안 이벤트 루프는 계속 돈다. 기다리는 statement와 트랜잭션은 연결 임대를 쥔 채 기다리므로, 그동안 메인의 다른 statement도 줄을 선다. 둘 다 실패할 때 바꾼 것이 없어서 다시 시도해도 된다. 트랜잭션 안의 statement와 여러 문장 스크립트는 다시 시도하지 않는다.
+- node:sqlite 오류는 SQLite 결과 코드를 `errcode`에 싣는다. `classifySqliteError`는 `code`·`errno`만 읽어 잠금 대기를 `UnknownError`로 분류하므로, client가 `errcode`의 `SQLITE_BUSY`를 `LockTimeoutError`로 바꾼다.
 - `migrationClient`는 바깥 BEGIN IMMEDIATE가 이미 잡혀 있다고 가정한다. 그래서 `SAVEPOINT effect_migrate`, `RELEASE effect_migrate`, `ROLLBACK TO effect_migrate; RELEASE effect_migrate`를 쓰고, 두 번째 DB를 열지 않는다.
 - 바인딩 파라미터는 string, finite number, bigint, null, Uint8Array만 허용한다(Schema 디코드). BigInt 읽기 모드는 fiber의 `SqlClient.SafeIntegers` 값을 따른다.
 - prepared statement 캐시는 용량 200이다. 성공한 prepare만 10분 동안 캐시하고, 실패한 prepare는 즉시 만료한다.
 - `nodes`는 불변이다(`nodes_immutable` 트리거가 UPDATE를 막는다). `nodes.seq`는 turbovec 벡터 id로도 쓰인다. nodes_fts(trigram)는 INSERT 트리거로 채워진다.
-- 연결 PRAGMA는 `journal_mode = WAL`, `foreign_keys = ON`, `busy_timeout = 5000`, `cache_size = -65536`(64 MiB, `docs/decisions.md` 근거)이다.
+- 연결 PRAGMA는 `journal_mode = WAL`, `foreign_keys = ON`, `busy_timeout = 5000`, `cache_size = -65536`(64 MiB, `docs/decisions.md` 근거)이다. `busy_timeout = 5000`은 열 때의 마이그레이션에만 쓰고, `sqlClientOver`가 0으로 둔다.
 - DB 디렉터리는 `:memory:`가 아닐 때 mode `0o700`으로 recursive 생성한다.
 
 ## Side Effects
@@ -49,6 +52,7 @@
 - 마이그레이션 DDL과 DML을 실행한다. 테이블, 인덱스, 트리거, FTS를 생성하고 chat_threads 메시지 정리 등을 한다.
 - `effect_sql_migrations` 테이블을 만들고 INSERT OR IGNORE로 기록한다(Migrator 메타데이터).
 - `tanStackRowsMigration` 단계에서 `migrateTanStackRows()`를 실행해 TanStack이 쓴 chat 행을 Effect AI 형태로 다시 쓴다.
+- `humanDecisionFactsMigration` 단계에서 `migrateHumanDecisionRows()`를 실행해 0.0.17이 payload에 넣은 사람 결정의 사실과 시각을 `human_decision_facts` 첫 행과 `created_at`으로 옮기고 payload를 다시 encode한다. 읽지 못하는 행은 그대로 둔다.
 - `BEGIN IMMEDIATE`, `COMMIT`, `ROLLBACK`, SAVEPOINT로 트랜잭션을 제어하고 SQLite 쓰기 잠금을 잡는다.
 - 런타임 `SqlClient`로 모든 SQLite 읽기·쓰기를 실행한다. Semaphore 임대와 prepared statement Cache를 쓴다.
 

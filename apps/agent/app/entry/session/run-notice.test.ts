@@ -72,4 +72,12 @@ describe("run notices", () => {
     };
     expect(noticeOf(resuming, page)).toEqual(RunNotice.resuming({ at: 9_000 }));
   });
+
+  test("a session the app repaired says so instead of how its last run ended", () => {
+    const repaired: SessionRunState = {
+      ...ended("failed", serverRestartedCode),
+      execution: WorkflowExecutionState.stopped({ reason: "state_reconciled" }),
+    };
+    expect(noticeOf(repaired, page)).toEqual(RunNotice.reconciled());
+  });
 });

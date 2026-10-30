@@ -11,7 +11,8 @@
 - `Workflows` — 세션 범위의 버전 있는 Goal/Plan 산출물과 실행 ledger 서비스(`layer`, `layerWithOptions({ allowNewGoal })`)
 - `WorkflowState` / `GoalArtifact` / `PlanArtifact` / `PlanStep` / `WorkflowPhase` / `WorkflowAction` / `VerificationStatus` — 워크플로 상태 스키마(phase: chat|goal|plan|execute|verify|completed)
 - `UpdateGoal` / `StartNewGoal` / `UpdatePlan` / `UpdateWorkflowProgress` — 모델 도구 입력 스키마
-- `decodeWorkflowState`, `reconciledWorkflowPhase` — 저장된 상태 JSON 디코드와 phase 재조정
+- `decodeWorkflowState` — 저장된 상태 JSON 디코드
+- `GoalState` / `GoalStateConflict` / `GoalEvent` / `Standing` / `goalTransitions` / `transition` / `decodeGoalState` / `goalStateOf` / `repair` / `reconciledPhase` / `standingOf` / `stepsOf` — Goal 상태 전이 순수 함수(`goal-transitions.ts`)
 - `WorkflowStorageError` / `WorkflowTransitionRefused` / `WorkflowProgressRefused` / `NewGoalTransitionRefused`, `NewGoalSettlement` — 워크플로 오류와 새 Goal 정산 결과
 - `evaluateWorkflowAction` / `workflowActions` / `WorkflowActionRequest` / `WorkflowActionReason` — phase 이동·pause/resume/stop 허용 판정(dual API)
 - `CardStatus` / `StepProgressStatus` / `stepProgressStatus` / `CardRisk` / `cardContractFields` / `cardContract` / `BoardAuthor` / `CardHold` / `cardHoldFields` — 칸반 카드 상태와 카드 계약 스키마
@@ -23,9 +24,11 @@
 - `GoalExecutionCompletion` — SDK 루프가 한 번 완료하는 `DurableDeferred` 대기 지점
 - `GoalExecutions` / `goalExecutionLayer` / `GoalExecutionAdmissionRefused` — Goal 실행 admission 서비스와 레이어
 - `GoalExecutionIdentity` / `GoalExecutionOwnerIdentity` / `GoalExecutionPayload` / `GoalExecutionSuccess` / `GoalExecutionError` / `GoalExecutionErrorReason` / `GoalExecutionSideEffectState` / `goalExecutionIdempotencyKey` — Goal 실행 계약 스키마와 멱등 키
-- `ownerWorkflowEngineLayer` / `layer` / `admissionLayer` / `workflowName` / `OwnerWorkflowEngineError` — SqlClient 기반 프로젝트 소유 WorkflowEngine 레이어
+- `ownerWorkflowEngineLayer` / `layer` / `admissionLayer` / `workflowName` / `suspendedRetrySchedule` / `OwnerWorkflowEngineError` — SqlClient 기반 프로젝트 소유 WorkflowEngine 레이어
+- `WorkflowStartup` — owner 엔진이 workflow를 resume하기 전에 도는 시작 검사(Goal 상태 모순 수리, 자동 실행 정지, 남은 새 Goal 요청 정산)
 - `OwnerWorkflowStorage` / `OwnerWorkflowStorageApi` / `ownerWorkflowStorageLayer` / `OwnerWorkflowAdmission` / `OwnerWorkflowAdmissionResult` / `StoredExecution` / `StoredWorkflowResult` / `ScheduledClock` / `OwnerWorkflowStorageError` — 실행·activity·deferred·clock 영속 저장소
 - `sqliteRunLog` — session/run 바인딩을 확인하는 owner 전용 AG-UI 이벤트 전달 로그(`RunLog` 구현)
+- `RunLogSignals` — 로그에 쓴 run id를 알려 로그 끝의 reader를 깨우는 서비스
 - `workflowRunEvents` / `RunEvent` / `RunEventKind` / `RunEventRejected` — run 이벤트(chunk|run_error|run_completed) 기록
 - `workflowRunBindings` / `RunBinding` / `Admission` / `toolOperationSql` / `endedWithKnownEffectsSql` / `acknowledgedRunSql` / `resolvedRunSql` / `invocationFieldSql` / `recoveredReadRunSql` — run 바인딩 admission과 공유 SQL 조각
 - `toolLedger` / `toolProgressFingerprint` / `uncertainRuns` / `UncertainContinue` / `UncertainRunsFailed` — tool 부수효과 ledger와 결과 불확실 run 처리
@@ -41,8 +44,13 @@
 - `GoalExecutionCompletion`은 SDK 루프가 정확히 한 번 완료한다. workflow body를 replay해도 모델이나 tool을 다시 호출하지 않는다.
 - owner admission에서 `bind`와 첫 durable workflow 요청은 한 트랜잭션에서 실행된다(`admitWith`, `admissionLayer`).
 - 앱의 `SqlClient`만 연결과 writer를 소유하며 root가 공급한다. `ownerWorkflowEngineLayer`는 engine·admission·storage를 하나의 scoped graph로 묶는다.
+- owner 엔진은 `WorkflowStartup`에 의존한다. 그래서 시작 검사가 끝나기 전에는 어느 workflow 등록도 대기 중인 실행을 resume하지 않는다. 검사는 고친 세션과, Goal이 `Running`이 아닌데 `ready`·`retrying`인 세션을 `stopped{state_reconciled}`로 둔다. 검사가 실패해도 앱은 시작한다.
 - `sqliteRunLog`는 중앙 DB의 SqlClient를 써야 하며 worker 로컬 DB를 쓰면 안 된다. 인증은 HTTP route가 맡고, 이 로그는 `workflow_run_bindings`로 session/run 바인딩을 추가로 확인한다. receipt cursor는 로그 offset이 아니며, 재개 토큰은 이 namespace(`sdk-stream:v1:`)에 저장된 chunk만 만든다.
 - 카드 이전에 저장된 Plan의 step status(`pending`/`completed`)는 읽기만 하고 제자리에서 다시 쓰지 않는다. 읽을 때 `pending`은 의존성이 끝났으면 ready, 아니면 backlog가 되고, `completed`는 `done`이 된다.
+- Goal 상태 전이는 `goal-transitions.ts`의 `goalTransitions` 한 곳에서 정한다. 사건마다 아홉 상태를 모두 적으므로 빠진 쌍은 타입 오류다. `Workflows` 메서드와 `evaluateWorkflowAction`은 저장된 상태를 `Standing`으로 읽어 전이를 부르고, 전이가 정한 phase와 Goal·Plan status를 저장한다. 산출물 내용(버전, 근거, 검증)은 메서드가 만든다.
+- 전이는 0.0.17이 남긴 모순 상태(R1 Goal·Plan 완료인데 phase가 execute, R2 현재 버전 Plan 완료인데 Goal이 열림)를 만들지 않는다. Goal과 Plan을 함께 완료하면 phase도 `completed`가 되고, Plan만 완료하는 기록은 `goal_completion_required`로 거부된다. 모순 상태를 읽으면 `repair`가 고친 상태에서 전이한다. `goal-transitions.test.ts`가 새 세션에서 모든 사건을 보내 이것을 확인하고, 그 결과를 `docs/goal-transitions.md`로 만든다.
+- 완료되거나 실패한 Goal은 progress 기록으로 다시 열리지 않는다(`goal_terminal`). 새 Goal 버전(`updateGoal`)이나 새 Goal만 연다. 사용자가 멈춘 뒤 끝난 run은 상태를 바꾸지 않는다.
+- 칸반 Goal을 고치면 phase는 그대로이고 Plan만 이전 버전이 된다. `Workflows.display`가 그 동안 상태 응답에 `card_reclassifying`을 싣는다. 전이는 화면 문구를 정하지 않는다.
 - `completed` phase는 서버가 소유하는 종료 phase이므로 사용자 이동 대상이 될 수 없다. execute 외의 phase 이동은 산출물을 승인하거나 바꾸지 않는다.
 - execute phase 진입은 `plan.goalVersion === goal.version`이고 plan status가 `ready` 또는 `executing`일 때만 허용된다. lease가 다른 소유자면 `session_in_use`, run이 진행 중이면 phase 요청과 resume이 `run_in_progress`로 거부된다.
 - 실행 가능 조건: phase가 execute 또는 verify이고, goal status가 active, plan status가 executing이며, plan의 goalVersion이 goal의 version과 같아야 한다.
@@ -52,14 +60,18 @@
 - `StartNewGoal`은 별도의 독립 성공 기준이다. `updateGoal`을 암묵적으로 해석해 만들어서는 안 된다.
 - `toolOperationSql`은 `side_effect = 1`인 작업을 tool로 센다. fingerprint에 operation이 없어도 tool로 센다. 단, `middleware`와 `routedPersistence` operation은 owner bookkeeping이라 제외한다.
 - 발화한 clock은 자신의 deferred를 void 성공으로 완료하고, 그 결과는 엔진이 인코딩하는 Exit 형태로 저장한다. workflow payload는 레코드 필드를 인코딩한 JSON 객체로 저장한다.
+- 끝난 owner 실행을 기다리는 호출자는 retry schedule을 기다리지 않는다. 엔진은 실행이 완료되거나 interrupt되면 그 id를 `PubSub`에 발행하고, `awaitComplete` hook이 그 id를 받으면 돌아온다. 호출자를 기다리게 하는 workflow 정의는 `suspendedRetrySchedule`(1초에서 2배씩, 상한 5분, 끝나지 않음)을 둔다. schedule은 hook이 놓친 깨움을 되살리는 안전망이고, 끝나면 호출자가 결함으로 죽으므로 끝나지 않아야 한다.
+- 엔진 메모리에는 pass가 있는 실행만 남는다. 실행이 완료되거나 interrupt되면 표에서 지운다. pass마다 `WorkflowInstance`와 scope를 새로 만들고 엔진 scope에 묶지 않는다. 완료된 pass의 scope는 `Workflow.intoResult`가 닫고, 대기로 끝난 pass의 scope는 instance와 함께 사라진다.
+- interrupt된 실행은 끝난 실행이다. 엔진은 그 실행의 pass를 다시 시작하지 않고, 그 실행을 다시 `execute`한 호출자는 interrupt로 끝난다.
+- workflow 정의의 codec이 결과를 encode하지 못하면 `OwnerWorkflowEngineError{operation: "execution.result", reason: "result_unencodable"}` 결함으로 실행을 완료한다. 다시 돌아도 같은 실패이기 때문이다. 엔진의 SQL 쓰기 실패는 결함으로 끝나고 행이 `running`으로 남아 다음 시작에서 다시 돈다.
 
 ## Side Effects
 
-- SQLite 읽기/쓰기(`owner_workflow_storage`): `owner_workflow_executions`, `owner_workflow_activities`, `owner_workflow_deferreds`, `owner_workflow_clocks`에 INSERT/UPDATE/SELECT
+- SQLite 읽기/쓰기(`owner_workflow_storage`): `owner_workflow_executions`, `owner_workflow_activities`, `owner_workflow_deferreds`, `owner_workflow_clocks`에 INSERT/UPDATE/SELECT. 실행 행의 `created_at`은 admission 때, `updated_at`은 상태가 바뀔 때마다 `Clock`의 millis로 쓴다. 이 열이 생기기 전의 행은 둘 다 NULL이다.
 - SQLite 읽기/쓰기(`workflow.ts`): `session_workflows`, `workflow_state_revisions`, `workflow_goal_identities`, `workflow_goal_instances`, `workflow_new_goal_requests`, `board_change_requests`에 INSERT/UPDATE. `chat_runs`, `kanban_goals`, `work_tasks`, `owner_rpc_operations`, `workflow_run_bindings`는 조회
 - SQLite 쓰기: `run-bindings.ts`는 `workflow_run_bindings`에, `run-events.ts`·`durable-stream.ts`는 `workflow_run_events`에, `tool-ledger.ts`는 `owner_rpc_operations`에 INSERT/UPDATE, `uncertain-runs.ts`는 `workflow_uncertain_acknowledgements`에 INSERT, `execution.ts`는 `chat_metadata`에 INSERT
 - SQLite 읽기: `board.ts`, `completion-evidence.ts`, `read-recoveries.ts`가 `kanban_goals`, `sessions`, `nodes`, `chat_runs`, `chat_interrupts`, `owner_read_recoveries`, `workflow_goal_native_artifacts`, `workflow_goal_worker_generations`, `workflow_worker_dispatches` 등을 조회
-- 타이머: `sqliteRunLog`는 열린 로그 끝에 도달한 reader가 20 millis 간격으로 새 항목을 polling한다. owner workflow engine은 `Clock`·`FiberMap`·`Scope`로 durable clock을 예약하고 발화하며 실행 fiber를 관리한다
+- 타이머: `sqliteRunLog`는 열린 로그 끝에 도달한 reader가 자기 run의 `RunLogSignals` 신호를 기다리고, 신호가 없으면 1초 뒤 다시 읽는다. append와 close는 transaction이 commit된 뒤 신호를 보낸다. owner workflow engine은 `Clock`·`FiberMap`으로 durable clock을 예약하고 발화하며 실행 fiber를 관리한다. 대기 중인 호출자는 workflow 정의의 `suspendedRetrySchedule` 간격으로 실행을 다시 돈다
 - 암호화: `goalExecutionIdempotencyKey`가 `sha256`을 쓰고, `workflow.ts`는 `Crypto`/`NodeCrypto`로 id를 생성한다
 - 파일 시스템: `sources.ts`가 프로젝트의 `.agents/workflow-rules.json`(`projectWorkflowRulesPath`)을 워크플로 규칙 소스로 읽는다. 이 항목은 export 이름으로만 확인했고 본문은 읽지 않았다
 

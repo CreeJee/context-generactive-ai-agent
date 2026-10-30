@@ -1,4 +1,6 @@
-import { Deferred, Effect, Fiber, Layer, Schema } from "effect";
+import { NodeServices } from "@effect/platform-node";
+import { DatabaseSync } from "node:sqlite";
+import { Clock, Context, Deferred, Effect, Fiber, FileSystem, Layer, Path, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 import { expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
@@ -77,6 +79,44 @@ it.effect("reports a deferred COMMIT failure, rolls back and permits the next tr
     );
     expect(yield* sql`SELECT COUNT(*) AS count FROM child_fixture`).toEqual([{ count: 1 }]);
   }).pipe(provideFixture(Database.layer(":memory:"))),
+);
+
+it.live("waits out another connection's write lock while the event loop keeps running", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const file = path.join(yield* fs.makeTempDirectoryScoped(), "agent.db");
+    const database = yield* Layer.build(Database.layer(file));
+    const sql = Context.get(database, SqlClient.SqlClient);
+    yield* sql`CREATE TABLE lock_fixture(id INTEGER PRIMARY KEY)`;
+    // Another connection, as the import worker's, holds the write lock.
+    const other = yield* Effect.acquireRelease(
+      Effect.sync(() => new DatabaseSync(file)),
+      (other) => Effect.sync(() => other.close()),
+    );
+    other.exec("BEGIN IMMEDIATE");
+    other.exec("INSERT INTO lock_fixture VALUES (1)");
+    const statement = yield* Effect.forkChild(sql`INSERT INTO lock_fixture VALUES (2)`);
+    const transaction = yield* Effect.forkChild(
+      sql.withTransaction(sql`INSERT INTO lock_fixture VALUES (3)`),
+    );
+
+    // Waiting inside SQLite would hold this thread until its busy timeout, then fail.
+    const before = yield* Clock.currentTimeMillis;
+    yield* Effect.sleep("300 millis");
+    expect((yield* Clock.currentTimeMillis) - before).toBeLessThan(2_000);
+    expect(statement.pollUnsafe()).toBeUndefined();
+    expect(transaction.pollUnsafe()).toBeUndefined();
+
+    other.exec("COMMIT");
+    yield* Fiber.join(statement);
+    yield* Fiber.join(transaction);
+    expect(yield* sql`SELECT id FROM lock_fixture ORDER BY id`).toEqual([
+      { id: 1 },
+      { id: 2 },
+      { id: 3 },
+    ]);
+  }).pipe(Effect.scoped, provideFixture(NodeServices.layer)),
 );
 
 function provideFixture<R, E2>(layer: Layer.Layer<R, E2>) {

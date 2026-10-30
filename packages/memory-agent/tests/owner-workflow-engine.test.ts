@@ -1,11 +1,16 @@
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { it } from "@effect/vitest";
-import { Context, Effect, FileSystem, Layer, MutableRef, Path, Schema } from "effect";
+import { Context, Effect, Exit, FileSystem, Layer, MutableRef, Path, Schema, Tracer } from "effect";
 import { SqlClient } from "effect/sql";
-import { Activity, Workflow, WorkflowEngine } from "effect/workflow";
+import { TestClock } from "effect/testing";
+import { Activity, DurableDeferred, Workflow, WorkflowEngine } from "effect/workflow";
 import { describe, expect } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
-import { ownerWorkflowEngineLayer, workflowName } from "../src/workflow/owner-workflow-engine.ts";
+import {
+  ownerWorkflowEngineLayer,
+  suspendedRetrySchedule,
+  workflowName,
+} from "../src/workflow/owner-workflow-engine.ts";
 import {
   OwnerWorkflowAdmission,
   OwnerWorkflowAdmissionResult,
@@ -55,6 +60,39 @@ const withEngine = <A, E, R>(
       return yield* Effect.provideContext(use, Context.merge(database, context));
     }),
   );
+
+/** Lets forked engine fibers run up to their next wait on the test clock. */
+const settle = Effect.repeat(Effect.yieldNow, { times: 100 });
+
+/** A workflow whose body counts its passes and then waits for its gate. */
+const gated = (name: string) => {
+  const workflow = Workflow.make(name, {
+    payload: { value: Schema.String },
+    idempotencyKey: ({ value }) => value,
+    suspendedRetrySchedule,
+  });
+  const gate = DurableDeferred.make(`${name}/Gate`);
+  const passes = MutableRef.make(0);
+  const register = Effect.gen(function* () {
+    const engine = yield* WorkflowEngine.WorkflowEngine;
+    yield* engine.register(workflow, () =>
+      Effect.sync(() => MutableRef.increment(passes)).pipe(
+        Effect.andThen(DurableDeferred.await(gate)),
+      ),
+    );
+  });
+  // `execute` hands the engine the workflow's retry schedule, as the app's callers do.
+  const run = (value: string) => workflow.execute({ value });
+  const start = (value: string) => workflow.execute({ value }, { discard: true });
+  const open = Effect.fnUntraced(function* (value: string) {
+    const executionId = yield* workflow.executionId({ value });
+    yield* DurableDeferred.succeed(gate, {
+      token: DurableDeferred.tokenFromExecutionId(gate, { workflow, executionId }),
+      value: undefined,
+    });
+  });
+  return { passes, register, run, start, open };
+};
 
 describe("owner workflow engine", () => {
   it.live("preserves activity services and typed failures across durable replay", () =>
@@ -240,6 +278,149 @@ describe("owner workflow engine", () => {
           }),
         );
         expect(MutableRef.get(finalized)).toBe(1);
+      }),
+    ),
+  );
+
+  it.effect("stamps when an execution was admitted and when it last changed", () =>
+    withDatabase(() =>
+      withEngine(
+        Effect.gen(function* () {
+          const engine = yield* WorkflowEngine.WorkflowEngine;
+          const workflow = Workflow.make("OwnerWorkflowTimes", {
+            payload: { value: Schema.String },
+            idempotencyKey: ({ value }) => value,
+          });
+          const gate = DurableDeferred.make("OwnerWorkflowTimes/Gate");
+          yield* engine.register(workflow, () => DurableDeferred.await(gate));
+          const reaches = (status: string) =>
+            Effect.yieldNow.pipe(
+              Effect.andThen(
+                sqlAll("SELECT status, created_at, updated_at FROM owner_workflow_executions"),
+              ),
+              Effect.repeat({ until: (rows) => rows[0]?.status === status }),
+            );
+          yield* TestClock.setTime(1_000);
+          yield* engine.execute(workflow, {
+            executionId: "stamped-execution",
+            payload: { value: "stamped" },
+            discard: true,
+          });
+          yield* reaches("suspended");
+          yield* TestClock.setTime(5_000);
+          yield* DurableDeferred.succeed(gate, {
+            token: DurableDeferred.tokenFromExecutionId(gate, {
+              workflow,
+              executionId: "stamped-execution",
+            }),
+            value: undefined,
+          });
+          expect(yield* reaches("completed")).toEqual([
+            { status: "completed", created_at: 1_000, updated_at: 5_000 },
+          ]);
+        }),
+      ),
+    ),
+  );
+
+  it.effect("wakes a waiting caller as soon as its execution completes", () =>
+    withDatabase(() =>
+      withEngine(
+        Effect.gen(function* () {
+          const { register, run, open } = gated("OwnerWorkflowWake");
+          yield* register;
+          const caller = yield* Effect.forkChild(run("woken"));
+          yield* settle;
+          yield* open("woken");
+          yield* settle;
+          // The test clock never moved, so no retry schedule step woke the caller.
+          expect(caller.pollUnsafe()?._tag).toBe("Success");
+        }),
+      ),
+    ),
+  );
+
+  it.effect(
+    "replays a waiting execution only at the steps of its retry schedule",
+    () =>
+      withDatabase(() =>
+        withEngine(
+          Effect.gen(function* () {
+            const { passes, register, run } = gated("OwnerWorkflowReplays");
+            yield* register;
+            yield* Effect.forkChild(run("waiting"));
+            yield* settle;
+            yield* Effect.forEach(
+              Array.from({ length: 600 }),
+              () => Effect.andThen(TestClock.adjust("1 second"), settle),
+              { discard: true },
+            );
+            // The first pass, then one per step: 1, 2, 4 … 256 seconds end by 511s; the next is 300s later.
+            expect(MutableRef.get(passes)).toBe(10);
+          }),
+        ),
+      ),
+    // Ten minutes in one-second steps, each letting the woken caller wait again.
+    { timeout: 30_000 },
+  );
+
+  it.effect("drops a completed execution from memory", () =>
+    withDatabase(() =>
+      withEngine(
+        Effect.gen(function* () {
+          const { register, start, open } = gated("OwnerWorkflowDrops");
+          yield* register;
+          yield* start("first");
+          yield* settle;
+          yield* open("first");
+          yield* settle;
+          const spans: Array<Tracer.NativeSpan> = [];
+          const tracer = Tracer.make({
+            span(options) {
+              const span = new Tracer.NativeSpan(options);
+              spans.push(span);
+              return span;
+            },
+          });
+          yield* start("second").pipe(Effect.withTracer(tracer));
+          const resumed = spans.find((span) => span.name === "OwnerWorkflowEngine.resumeExecution");
+          expect(resumed?.attributes.get("executions")).toBe(0);
+        }),
+      ),
+    ),
+  );
+
+  it.effect("stores a result its codec cannot encode as a defect and does not run it again", () =>
+    withDatabase(() =>
+      Effect.gen(function* () {
+        const workflow = Workflow.make("OwnerWorkflowUnencodable", {
+          payload: { value: Schema.String },
+          success: Schema.Finite,
+          idempotencyKey: ({ value }) => value,
+        });
+        const passes = MutableRef.make(0);
+        const run = withEngine(
+          Effect.gen(function* () {
+            const engine = yield* WorkflowEngine.WorkflowEngine;
+            yield* engine.register(workflow, () =>
+              Effect.sync(() => {
+                MutableRef.increment(passes);
+                return Number.NaN;
+              }),
+            );
+            return yield* engine
+              .execute(workflow, { executionId: "unencodable", payload: { value: "nan" } })
+              .pipe(Effect.exit);
+          }),
+        );
+        const first = yield* run;
+        const replayed = yield* run;
+        expect(Exit.hasDies(first)).toBe(true);
+        expect(Exit.hasDies(replayed)).toBe(true);
+        expect(MutableRef.get(passes)).toBe(1);
+        expect(yield* sqlAll("SELECT status FROM owner_workflow_executions")).toEqual([
+          { status: "completed" },
+        ]);
       }),
     ),
   );

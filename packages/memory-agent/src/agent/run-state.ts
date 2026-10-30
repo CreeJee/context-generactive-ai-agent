@@ -1,7 +1,7 @@
 import type { StoredRunStatus } from "../chat-store/schema.ts";
 import type { LeaseView } from "../sessions/lease-state.ts";
 import type { WorkflowActions } from "../workflow/actions.ts";
-import type { WorkflowState } from "../workflow/workflow.ts";
+import type { WorkflowDisplay, WorkflowState } from "../workflow/workflow.ts";
 import type { WorkflowExecutionState } from "../workflow/execution.ts";
 import type { ProviderRetryView } from "../workflow/provider-retry.ts";
 import type { UncertainRun } from "../workflow/uncertain-runs.ts";
@@ -32,6 +32,8 @@ export interface SessionRunState {
   readonly context: ContextView;
   /** Durable Goal/Plan phase and artifacts for this conversation. */
   readonly workflow: WorkflowState;
+  /** A note beside the workflow that its state alone does not show. */
+  readonly display?: WorkflowDisplay | null;
   readonly execution?: WorkflowExecutionState;
   /** The latest pending wait before resending a provider request that was never sent. */
   readonly providerRetry?: ProviderRetryView | null;
