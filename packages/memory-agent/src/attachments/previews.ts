@@ -1,4 +1,3 @@
-import { errorTag } from "../tools/failure.ts";
 import { Context, Effect, FileSystem, HashSet, Layer, Option, Predicate, Schema } from "effect";
 import { resolveProjectPath } from "../files/paths.ts";
 import { readFileBytesEffect } from "../files/text.ts";
@@ -6,6 +5,7 @@ import type { JsonValue } from "../json.ts";
 import type { Project } from "../projects/projects.ts";
 import type { PreparedCall, RunTool } from "../tools/run-tool.ts";
 import { Attachments } from "./attachments.ts";
+import { failureAnnotations } from "../runtime/logged-failures.ts";
 
 /** File tools whose result names the project file they just wrote. */
 const writingToolNames = HashSet.fromIterable(["write_file", "edit_file"]);
@@ -50,7 +50,7 @@ const make = Effect.gen(function* () {
       // The preview is extra: the tool's own result stands without it.
       Effect.catch((error) =>
         Effect.as(
-          Effect.logDebug("drawing_preview_unavailable", { error: errorTag(error) }),
+          Effect.logDebug("drawing_preview_unavailable", failureAnnotations(error)),
           Option.none<DrawingPreview>(),
         ),
       ),

@@ -56,7 +56,7 @@ import { modelImagesHook } from "../attachments/model-images.ts";
 import { ChatState } from "../chat-state/chat-state.ts";
 import { isEmptyUserText } from "../messages/empty-user.ts";
 import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
-import { GlobalConfig, GlobalConfigFailedReason } from "../config/global-config.ts";
+import { GlobalConfig } from "../config/global-config.ts";
 import { StorageRoot } from "../config/storage-root.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import {
@@ -88,7 +88,6 @@ import { Sessions } from "../sessions/sessions.ts";
 import { ApprovedTools } from "../tools/approved.ts";
 import { CodeTools } from "../tools/code.ts";
 import { gatedToolNames } from "../tools/definitions.ts";
-import { errorTag } from "../tools/failure.ts";
 import { FileTools } from "../tools/files.ts";
 import { DrawingPreviews } from "../attachments/previews.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
@@ -120,7 +119,13 @@ import {
 import { contextUsageHook, contextView, lastContextUsageEffect } from "./context-usage.ts";
 import { ApiUsage, apiUsageHook } from "./api-usage.ts";
 import { TurnSummaries } from "./turn-summaries.ts";
-import { fallbackLogged, logDefect, logFailure } from "../runtime/logged-failures.ts";
+import {
+  failureAnnotations,
+  failureTags,
+  fallbackLogged,
+  logDefect,
+  logFailure,
+} from "../runtime/logged-failures.ts";
 import { promptLayout } from "./prompt-layout.ts";
 import { createLiveRuns } from "./live-runs.ts";
 import { RunCancellations } from "../runtime/run-cancellation.ts";
@@ -477,18 +482,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       toExternalAgents: settings.externalAgentMemory === true,
     })),
     Effect.catchTag("GlobalConfigFailed", (error) =>
-      Effect.as(
-        Effect.logWarning("Settings unreadable; memory stays in the project", {
-          error: errorTag(error),
-          reason: GlobalConfigFailedReason.match(error.reason, {
-            MissingFile: () => "MissingFile",
-            ReadFailed: () => "ReadFailed",
-            WriteFailed: () => "WriteFailed",
-            InvalidSettings: () => "InvalidSettings",
-          }),
-        }),
-        { crossProject: false, toExternalAgents: false },
-      ),
+      Effect.as(logFailure("Settings unreadable; memory stays in the project")(error), {
+        crossProject: false,
+        toExternalAgents: false,
+      }),
     ),
   );
   const imageFeature = yield* ImageFeature;
@@ -894,7 +891,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         Effect.onExit((exit) =>
           Effect.gen(function* () {
             if (Exit.isFailure(exit) && !(yield* Ref.get(ended))) {
-              yield* Effect.logError("Run log delivery failed", { runId: run.runId });
+              yield* Effect.logError("Run log delivery failed", {
+                runId: run.runId,
+                error: failureTags(exit.cause),
+              });
               yield* endedBy(Cause.hasInterruptsOnly(exit.cause));
             }
             yield* log.close;
@@ -1757,9 +1757,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           Effect.uninterruptible,
           // The stream already ended; a settlement that failed leaves the execution fenced.
           Effect.catch((error) =>
-            Effect.logError("Durable Goal execution settlement failed", {
-              error: errorTag(error),
-            }),
+            Effect.logError("Durable Goal execution settlement failed", failureAnnotations(error)),
           ),
           Effect.catchDefect((defect) =>
             logDefect("Durable Goal execution settlement failed")(Cause.die(defect)),
@@ -1933,14 +1931,14 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               const ended = (
                 code: "run_failed" | "run_record_failed",
                 message: string,
-                error: Error,
+                error: { readonly _tag: string },
                 reason: string | null,
               ) =>
                 Stream.fromEffect(
                   Effect.gen(function* () {
                     yield* Effect.logError("Bound run delivery failed", {
                       code,
-                      error: errorTag(error),
+                      ...failureAnnotations(error),
                       reason,
                       chunks: yield* Ref.get(recorded),
                     });
@@ -1952,7 +1950,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                     } satisfies AgUiEvent;
                   }),
                 );
-              const notRecorded = (error: Error, reason: string | null) =>
+              const notRecorded = (error: { readonly _tag: string }, reason: string | null) =>
                 ended(
                   "run_record_failed",
                   "The run's output could not be recorded, so it is no longer delivered.",
@@ -2932,10 +2930,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   yield* Effect.forEach(
     yield* goalExecutions.unsettled.pipe(
       Effect.catch((error) =>
-        Effect.as(
-          Effect.logWarning("Unsettled Goal executions unavailable", { error: errorTag(error) }),
-          [],
-        ),
+        Effect.as(logFailure("Unsettled Goal executions unavailable")(error), []),
       ),
     ),
     (payload) =>

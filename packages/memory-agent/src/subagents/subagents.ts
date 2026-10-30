@@ -40,7 +40,6 @@ import { ApprovalRequester } from "../approvals/relayed-state.ts";
 import { PermissionReviews } from "../permissions/reviews.ts";
 import type { Project } from "../projects/projects.ts";
 import { CodeTools } from "../tools/code.ts";
-import { errorTag } from "../tools/failure.ts";
 import { repeatGuardHook, repeatedToolCallCode } from "../tools/repeat-guard.ts";
 import { type RunTool, runTool } from "../tools/run-tool.ts";
 import {
@@ -58,6 +57,7 @@ import {
 import type { SubagentStatus, SubagentView } from "./subagent-state.ts";
 import { AppEvents } from "../events/app-events.ts";
 import { childRunTools } from "./role.ts";
+import { logFailure } from "../runtime/logged-failures.ts";
 
 export const subagentToolNames = [
   "run_subagent",
@@ -1018,11 +1018,7 @@ const make = Effect.gen(function* () {
                   // A finalizer cannot fail: a store failure is logged by tag, and the waiters
                   // and the page still learn the child settled.
                   yield* finish("cancelled", "", null, row.id).pipe(
-                    Effect.catch((error) =>
-                      Effect.logWarning("subagent_cancel_not_recorded", {
-                        error: errorTag(error),
-                      }),
-                    ),
+                    Effect.catch(logFailure("subagent_cancel_not_recorded")),
                   );
               }).pipe(
                 Effect.ensuring(Deferred.succeed(done, undefined)),
@@ -1030,11 +1026,7 @@ const make = Effect.gen(function* () {
                 Effect.andThen(PubSub.publish(completions, binding.sessionId)),
               ),
             ),
-            Effect.catch((error) =>
-              Effect.logWarning("subagent_settlement_not_recorded", {
-                error: errorTag(error),
-              }),
-            ),
+            Effect.catch(logFailure("subagent_settlement_not_recorded")),
           ),
         ),
       );
@@ -1416,11 +1408,7 @@ const make = Effect.gen(function* () {
 
       /** Retries the run's unfinished children in the background. */
       retry: Effect.forkIn(
-        retryForRun(binding).pipe(
-          Effect.catch((error) =>
-            Effect.logWarning("Subagent retry deferred", { error: errorTag(error) }),
-          ),
-        ),
+        retryForRun(binding).pipe(Effect.catch(logFailure("Subagent retry deferred"))),
         scope,
       ).pipe(Effect.asVoid),
 

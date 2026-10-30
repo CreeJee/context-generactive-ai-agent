@@ -2,7 +2,7 @@
 
 ## Overview
 
-이 디렉터리는 채팅 HTTP API 계약 `ChatApi`와 그 구현을 담는다. 페이지의 Effect 클라이언트와 서버가 이 계약을 함께 쓴다. 계약은 `effect/http-api`로 한 번만 선언한다(`docs/effect-ai-migration.md` step 6). 서버 쪽 `chat-api-live.ts`는 `AgentChat`·`BtwChat` 서비스 위에 핸들러를 구현하고, run의 AG-UI 이벤트를 SSE로 스트리밍한다. 클라이언트 쪽 `chat-session.ts`·`btw-thread.ts`·`chat-view.ts`는 서버 코드를 import하지 않는다. 이 파일들은 세션과 BTW 스레드를 `effect/reactivity` Atom family로 노출하고, 페이지는 이 Atom을 `@effect/atom-react`로 읽는다.
+이 디렉터리는 채팅 HTTP API 계약 `ChatApi`와 그 구현을 담는다. 페이지의 Effect 클라이언트와 서버가 이 계약을 함께 쓴다. 계약은 `effect/http-api`로 한 번만 선언한다(`docs/effect-ai-migration.md` step 6). 서버 쪽 `chat-api-live.ts`는 `AgentChat`·`BtwChat` 서비스 위에 핸들러를 구현하고, run의 AG-UI 이벤트를 SSE로 스트리밍한다. 클라이언트 쪽 `chat-session.ts`·`btw-thread.ts`·`chat-view.ts`는 서버 코드를 import하지 않는다. 이 파일들은 세션과 BTW 스레드의 Atom 묶음을 id별로 노출하고, 페이지는 이 Atom을 `@effect/atom-react`로 읽는다. 묶음은 `keptAtomGroups`가 페이지 수명 동안 강하게 쥔다. `Atom.family`는 만든 값을 약하게만 쥐어서, 아무도 쥐지 않는 묶음은 GC 뒤 새 Atom(빈 화면, 처음부터 다시 읽는 `open`)으로 바뀐다.
 
 ## Interface
 
@@ -20,8 +20,8 @@
 - `ChatApiHandlers` — `AgentChat` 위의 `chat` 그룹 HttpApiBuilder 핸들러 레이어
 - `BtwApiHandlers` — `BtwChat` 위의 `btw` 그룹 HttpApiBuilder 핸들러 레이어
 - `ChatApiClient` — `HttpApiClient.make(ChatApi)` 클라이언트 Context.Service와 `ChatApiClient.layer`
-- `chatSessions` — 세션 id별 Atom family. `state`, `custom`(마지막 CUSTOM 이벤트), `open`, `send`, `answer`, `loadOlder` 제공
-- `btwThreads` — BTW 스레드 id별 Atom family. `view`, `open`, `ask` 제공
+- `chatSessions` — 세션 id별 Atom 묶음(`keptAtomGroups`). `state`, `custom`(마지막 CUSTOM 이벤트), `open`, `send`, `answer`, `loadOlder` 제공
+- `btwThreads` — BTW 스레드 id별 Atom 묶음(`keptAtomGroups`). `view`, `open`, `ask` 제공
 - `pageSize` — 클라이언트가 한 번에 읽는 메시지 수 20
 - `partsOf` — user 메시지 content(문자열 또는 파트 배열)를 표시용 `MessagePart` 배열로 변환
 - `OpenSession` / `Send` / `Answer` / `CustomEvent` / `UserContent` — 클라이언트 세션 상태, 보낼 turn, 승인 답변, CUSTOM 이벤트, user content 타입

@@ -8,6 +8,7 @@ import {
   type CardRef,
   type CardWorktreeFailed,
 } from "./worktree.ts";
+import { logFailure } from "../runtime/logged-failures.ts";
 
 /**
  * Clean-up of card worktrees once their Goal ends (docs/kanban-orchestration.md "worktree 정리").
@@ -62,7 +63,7 @@ const make = Effect.gen(function* () {
   });
   const warned =
     (message: string, at: Readonly<Record<string, string>>) => (failure: CardWorktreeFailed) =>
-      Effect.as(Effect.logWarning(message, { ...at, reason: failure.reason._tag }), false);
+      Effect.as(logFailure(message, at)(failure), false);
 
   /**
    * Whether a stopped Goal ended by its Plan closing or by a new Goal taking over the conversation.
@@ -119,9 +120,7 @@ const make = Effect.gen(function* () {
         removed: removed ? 1 : 0,
       });
     },
-    Effect.catchTag("CardWorktreeFailed", (failure) =>
-      Effect.logWarning("Goal folder was not read", { reason: failure.reason._tag }),
-    ),
+    Effect.catchTag("CardWorktreeFailed", logFailure("Goal folder was not read")),
   );
 
   /** After a delivery's lease closed: a Goal that ended meanwhile left the card's worktree to it. */
@@ -135,8 +134,8 @@ const make = Effect.gen(function* () {
       );
     },
     Effect.catchTags({
-      KanbanStorageFailed: () => Effect.logWarning("Delivered card's Goal was not read"),
-      WorkflowStorageError: () => Effect.logWarning("Delivered card's Goal was not read"),
+      KanbanStorageFailed: logFailure("Delivered card's Goal was not read"),
+      WorkflowStorageError: logFailure("Delivered card's Goal was not read"),
     }),
   );
 

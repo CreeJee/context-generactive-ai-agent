@@ -482,7 +482,7 @@ describe("subscription language model", () => {
         expect.objectContaining({
           level: "ERROR",
           message: "subscription model request failed",
-          annotations: { provider: "openai", code: "SubscriptionStreamFailed" },
+          annotations: { provider: "openai", code: "SubscriptionStreamFailed:ProviderRejected" },
         }),
       );
     }),

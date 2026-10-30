@@ -3,9 +3,11 @@ import { Cause, Function as EffectFunction, type JsonSchema, Predicate } from "e
 import { SqlClient, SqlSchema } from "effect/sql";
 import { sha256 } from "../runtime/synchronous-crypto.ts";
 import {
+  InsufficientScopeError,
   StreamableHTTPClientTransport,
   type Client,
   type Tool as McpTool,
+  type Transport,
 } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import {
@@ -17,6 +19,7 @@ import {
   DateTime,
   Clock,
   Context,
+  Crypto,
   Data,
   Effect,
   Fiber,
@@ -25,6 +28,7 @@ import {
   Match,
   Ref,
   Schema,
+  Semaphore,
   SynchronizedRef,
 } from "effect";
 import { JsonValue } from "../json.ts";
@@ -36,27 +40,40 @@ import {
   inputSchemaOf,
   listTools,
   type JsonObject,
+  McpToolFailed,
   type McpConnectFailed,
-  type McpToolFailed,
 } from "./client.ts";
 import { StorageRoot } from "../config/storage-root.ts";
 import type { Project } from "../projects/projects.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
+import { SecretStore, type SecretName } from "../config/secrets.ts";
 import type {
   ConfigFileFailureCode,
   McpFailureCode,
+  McpLoginFailureCode,
   ShownFailure,
 } from "../runtime/shown-failure.ts";
 import {
   McpScope,
   McpServerConfig,
-  MissingVariable,
-  expandVariables,
+  expandVariablesResult,
   globalMcpFile,
   projectMcpFile,
   readMcpFile,
   type ConfiguredServer,
+  type McpOAuthConfig,
+  type MissingVariable,
 } from "./config.ts";
+import {
+  defaultOAuth,
+  loginBinding,
+  loginSlot,
+  openMcpCredentials,
+  McpLoginOutcome,
+  needsLogin,
+  type McpCredentials,
+  type McpLoginAttempt,
+} from "./oauth.ts";
 
 /** What the settings page shows for one server. Environment and header values are never included. */
 export type McpServerState = Data.TaggedEnum<{
@@ -67,6 +84,13 @@ export type McpServerState = Data.TaggedEnum<{
   trusted: {};
   connected: { readonly tools: readonly string[] };
   failed: { readonly failure: ShownFailure<McpFailureCode> };
+  /**
+   * The server asked for authorization that no stored login answers. `failure` is why the last
+   * login did not finish, if it did not.
+   */
+  needsLogin: { readonly failure: ShownFailure<McpLoginFailureCode> | null };
+  /** A login waits for the person at `authorizationUrl`, in their browser. */
+  loggingIn: { readonly authorizationUrl: string };
 }>;
 export const McpServerState = Data.taggedEnum<McpServerState>();
 
@@ -83,6 +107,8 @@ export interface McpServerView {
   readonly headerNames: readonly string[];
   /** A project server with the same name replaces this global one. */
   readonly shadowed: boolean;
+  /** A person's OAuth login to the server is stored (known once the app used or made it). */
+  readonly signedIn: boolean;
   readonly state: McpServerState;
 }
 
@@ -175,6 +201,8 @@ export const mcpInstructionsForMode: {
 export const maxMcpResultCharacters = 60_000;
 
 const connectTimeoutMs = 20_000;
+/** How long a login waits for the person to finish it in the browser. */
+const loginTimeoutMs = 5 * 60_000;
 
 const TrustRow = Schema.Struct({
   scope: McpScope,
@@ -203,9 +231,15 @@ interface Discovered {
 
 const nothingDiscovered: Discovered = { tools: [], guide: null };
 
+/** A started client, with the login it authenticates with when the server uses OAuth. */
+interface Connected {
+  readonly client: Client;
+  readonly credentials: Option.Option<McpCredentials>;
+}
+
 interface Connection {
   readonly fingerprint: string;
-  readonly client: Fiber.Fiber<Client, Cause.UnknownError | McpConnectFailed>;
+  readonly client: Fiber.Fiber<Connected, Cause.UnknownError | McpConnectFailed | MissingVariable>;
   readonly state: Ref.Ref<McpServerState>;
   /** The discovery in flight, which callers meanwhile share. */
   readonly discovering: SynchronizedRef.SynchronizedRef<Option.Option<Fiber.Fiber<Discovered>>>;
@@ -214,7 +248,7 @@ interface Connection {
 /** Stops a connection's client, whether or not it started. */
 const stopClient = (connection: Connection) =>
   Fiber.join(connection.client).pipe(
-    Effect.flatMap((client) => nativePromise(() => client.close())),
+    Effect.flatMap(({ client }) => nativePromise(() => client.close())),
     // Best-effort: a client that never started or fails to close is dropped.
     Effect.ignore,
   );
@@ -228,8 +262,6 @@ const describeFailure = (error: Error) => {
   const cause = error.cause instanceof Error ? `: ${error.cause.message}` : "";
   return `${error.message}${cause}`;
 };
-
-const isMissingVariable = Schema.is(MissingVariable);
 
 const withTimeout = <A, E>(
   effect: Effect.Effect<A, E>,
@@ -304,17 +336,67 @@ const runToolOf = (tool: ServerTool): RunTool =>
     handler: (args) => tool.call(args).pipe(Effect.withSpan("McpServers.call")),
   });
 
+const expanded = (value: string) => Effect.fromResult(expandVariablesResult(value, process.env));
+
+const expandedRecord = (values: Readonly<Record<string, string>>) =>
+  Effect.map(
+    Effect.forEach(Object.entries(values), ([name, value]) =>
+      Effect.map(expanded(value), (text) => [name, text] as const),
+    ),
+    Object.fromEntries,
+  );
+
+const urlOf = (http: (typeof McpServerConfig.cases.http)["Type"]) =>
+  Effect.flatMap(expanded(http.url), (text) =>
+    Effect.try({ try: () => new URL(text), catch: (error) => new Cause.UnknownError(error) }),
+  );
+
+/**
+ * How an HTTP server is authorized: its `oauth`, or a person's login when it sets no
+ * `Authorization` header of its own. Nothing happens until the server answers 401.
+ */
+const oauthOf = (http: (typeof McpServerConfig.cases.http)["Type"]): McpOAuthConfig | undefined =>
+  http.oauth ??
+  (Object.keys(http.headers).some((name) => name.toLowerCase() === "authorization")
+    ? undefined
+    : defaultOAuth);
+
+/** The transport's 403 `insufficient_scope`, which the SDK leaves to the caller (step-up). */
+const refusedForScope = (
+  error: McpToolFailed | Schema.SchemaError | Cause.UnknownError,
+): error is Cause.UnknownError & { readonly cause: InsufficientScopeError } =>
+  error instanceof Cause.UnknownError && error.cause instanceof InsufficientScopeError;
+
+const loginNeeded = (server: string) =>
+  McpToolFailed.make({
+    message: `The MCP server "${server}" needs the user to log in again (Settings → MCP servers) before this tool works.`,
+  });
+
+/** A login under way, or why the last one failed; a login that succeeded leaves nothing. */
+type LoginState = Data.TaggedEnum<{
+  pending: { readonly attempt: McpLoginAttempt };
+  failed: { readonly failure: ShownFailure<McpLoginFailureCode> };
+}>;
+const LoginState = Data.taggedEnum<LoginState>();
+
 const make = Effect.gen(function* () {
   const storage = yield* StorageRoot;
   const sql = yield* SqlClient.SqlClient;
   const fs = yield* FileSystem.FileSystem;
   const redactor = yield* SecretRedactor;
+  const secrets = yield* SecretStore;
+  const loginServices = yield* Effect.context<SecretStore | Crypto.Crypto>();
   const serviceScope = yield* Effect.scope;
   const connections = yield* SynchronizedRef.make(HashMap.empty<string, Connection>());
+  /** One login per keychain entry, shared by every connection that uses it. */
+  const credentials = yield* SynchronizedRef.make(HashMap.empty<SecretName, McpCredentials>());
+  const logins = yield* Ref.make(HashMap.empty<SecretName, LoginState>());
+  /** Logins start one at a time, so a second click joins the login already waiting. */
+  const loginStarts = yield* Semaphore.make(1);
 
   /** Why discovery failed, with the server's own text as the hidden detail. */
   const failureOf = Match.typeTags<
-    McpStepTimedOut | McpConnectFailed | Cause.UnknownError | Schema.SchemaError,
+    McpStepTimedOut | McpConnectFailed | Cause.UnknownError | Schema.SchemaError | MissingVariable,
     Effect.Effect<ShownFailure<McpFailureCode>>
   >()({
     McpStepTimedOut: (timedOut) =>
@@ -322,13 +404,12 @@ const make = Effect.gen(function* () {
     McpConnectFailed: (failed) =>
       redactor.hideDetail({ code: "start_failed", detail: describeFailure(failed) }),
     UnknownError: ({ cause: error }) =>
-      isMissingVariable(error)
-        ? Effect.succeed({ code: "missing_env", detail: error.variable })
-        : redactor.hideDetail({
-            code: "start_failed",
-            detail: describeFailure(error instanceof Error ? error : new Error(String(error))),
-          }),
+      redactor.hideDetail({
+        code: "start_failed",
+        detail: describeFailure(error instanceof Error ? error : new Error(String(error))),
+      }),
     SchemaError: () => Effect.succeed({ code: "start_failed", detail: null }),
+    MissingVariable: (missing) => Effect.succeed({ code: "missing_env", detail: missing.variable }),
   });
 
   const selectTrust = SqlSchema.findAll({
@@ -341,6 +422,35 @@ const make = Effect.gen(function* () {
 
   const connectionKey = (project: Project, server: ConfiguredServer) =>
     `${project.id}/${server.scope}/${server.name}`;
+
+  const slotOf = (project: Project, server: { readonly scope: McpScope; readonly name: string }) =>
+    loginSlot({ scope: server.scope, projectId: project.id, name: server.name });
+
+  /** The connections that use a server's login: every project's, for a global server. */
+  const usesLogin =
+    (project: Project, server: { readonly scope: McpScope; readonly name: string }) =>
+    (_: Connection, key: string) =>
+      server.scope === "global"
+        ? key.endsWith(`/global/${server.name}`)
+        : key === `${project.id}/project/${server.name}`;
+
+  /** The login for this URL and OAuth setting, made on first use; another setting gets a new one. */
+  const credentialsFor = (slot: SecretName, url: URL, oauth: McpOAuthConfig) => {
+    const binding = loginBinding({ url: url.href, oauth });
+    return SynchronizedRef.modifyEffect(credentials, (current) =>
+      Option.match(
+        Option.filter(HashMap.get(current, slot), (existing) => existing.binding === binding),
+        {
+          onSome: (existing) => Effect.succeed([existing, current] as const),
+          onNone: () =>
+            Effect.map(
+              openMcpCredentials({ slot, url, config: oauth, binding }),
+              (made) => [made, HashMap.set(current, slot, made)] as const,
+            ),
+        },
+      ),
+    ).pipe(Effect.provideContext(loginServices));
+  };
 
   const configured = Effect.fn("mcp.configured")(function* (project: Project) {
     const global = yield* readMcpFile(globalMcpFile(storage.path), "global").pipe(
@@ -399,32 +509,49 @@ const make = Effect.gen(function* () {
       Effect.flatMap((removed) => Effect.forEach(removed, stopInBackground, { discard: true })),
     );
 
-  const transportFor = (project: Project, config: McpServerConfig) =>
-    McpServerConfig.match<StdioClientTransport | StreamableHTTPClientTransport>(config, {
+  /** A missing `${VAR}` fails here, and settings show which one. */
+  const transportFor = (project: Project, server: ConfiguredServer) =>
+    McpServerConfig.match<
+      Effect.Effect<
+        { readonly transport: Transport; readonly credentials: Option.Option<McpCredentials> },
+        MissingVariable | Cause.UnknownError
+      >
+    >(server.config, {
       stdio: (stdio) =>
-        new StdioClientTransport({
-          command: expandVariables(stdio.command, process.env),
-          args: stdio.args.map((arg) => expandVariables(arg, process.env)),
-          // Only what the SDK passes by default (HOME, PATH, USER, …) plus what the file names.
-          env: Object.fromEntries(
-            Object.entries(stdio.env).map(([name, value]) => [
-              name,
-              expandVariables(value, process.env),
-            ]),
-          ),
-          cwd: project.root,
-          stderr: "ignore",
-        }),
+        Effect.map(
+          Effect.all({
+            command: expanded(stdio.command),
+            args: Effect.forEach(stdio.args, expanded),
+            env: expandedRecord(stdio.env),
+          }),
+          ({ command, args, env }) => ({
+            transport: new StdioClientTransport({
+              command,
+              args,
+              // Only what the SDK passes by default (HOME, PATH, USER, …) plus what the file names.
+              env,
+              cwd: project.root,
+              stderr: "ignore",
+            }),
+            credentials: Option.none(),
+          }),
+        ),
       http: (http) =>
-        new StreamableHTTPClientTransport(new URL(expandVariables(http.url, process.env)), {
-          requestInit: {
-            headers: Object.fromEntries(
-              Object.entries(http.headers).map(([name, value]) => [
-                name,
-                expandVariables(value, process.env),
-              ]),
+        Effect.gen(function* () {
+          const url = yield* urlOf(http);
+          const headers = yield* expandedRecord(http.headers);
+          const login = yield* Effect.transposeOption(
+            Option.map(Option.fromUndefinedOr(oauthOf(http)), (oauth) =>
+              credentialsFor(slotOf(project, server), url, oauth),
             ),
-          },
+          );
+          return {
+            transport: new StreamableHTTPClientTransport(url, {
+              requestInit: { headers },
+              ...Option.match(login, { onNone: () => ({}), onSome: (found) => found.transport }),
+            }),
+            credentials: login,
+          };
         }),
     });
 
@@ -436,11 +563,9 @@ const make = Effect.gen(function* () {
         fingerprint: server.fingerprint,
         // Detached: a start that outlives its timeout still gets closed with the connection.
         client: yield* Effect.forkDetach(
-          Effect.try({
-            // A missing `${VAR}` throws here, and settings show which one.
-            try: () => transportFor(project, server.config),
-            catch: (error) => new Cause.UnknownError(error),
-          }).pipe(Effect.flatMap(connectClient)),
+          Effect.flatMap(transportFor(project, server), ({ transport, credentials: login }) =>
+            Effect.map(connectClient(transport), (client) => ({ client, credentials: login })),
+          ),
         ),
         state: yield* Ref.make<McpServerState>(McpServerState.trusted()),
         discovering: yield* SynchronizedRef.make(Option.none<Fiber.Fiber<Discovered>>()),
@@ -498,7 +623,37 @@ const make = Effect.gen(function* () {
     const isCurrent = Effect.map(SynchronizedRef.get(connections), (current) =>
       Option.exists(HashMap.get(current, key), (live) => live === connection),
     );
-    const offered = (client: Client, tools: ReadonlyArray<McpTool>) => {
+    /**
+     * A call with the server's login. A call refused for scope gets a wider token and runs once
+     * more; when that needs the person, or the login no longer works, the call fails saying so.
+     */
+    const authorized = <A>(
+      login: Option.Option<McpCredentials>,
+      call: Effect.Effect<A, McpToolFailed | Schema.SchemaError | Cause.UnknownError>,
+    ): Effect.Effect<A, McpToolFailed | Schema.SchemaError | Cause.UnknownError> =>
+      Option.match(login, {
+        onNone: () => call,
+        onSome: (found) => {
+          const stepped = Effect.catchIf(call, refusedForScope, (refused) =>
+            found.stepUp(refused.cause).pipe(
+              Effect.catchTags({
+                McpLoginRequired: () => Effect.fail(loginNeeded(server.name)),
+                SecretStoreFailed: () =>
+                  Effect.fail(
+                    McpToolFailed.make({ message: "The stored MCP login could not be read." }),
+                  ),
+              }),
+              Effect.andThen(call),
+            ),
+          );
+          return Effect.catchIf(stepped, needsLogin, () =>
+            Ref.set(connection.state, McpServerState.needsLogin({ failure: null })).pipe(
+              Effect.andThen(Effect.fail(loginNeeded(server.name))),
+            ),
+          );
+        },
+      });
+    const offered = ({ client, credentials: login }: Connected, tools: ReadonlyArray<McpTool>) => {
       const guide = client.getInstructions()?.trim() ?? "";
       const discovered: Discovered = {
         tools: tools.map((tool): ServerTool => ({
@@ -507,7 +662,8 @@ const make = Effect.gen(function* () {
           inputSchema: inputSchemaOf(tool),
           outputSchema: tool.outputSchema,
           readOnly: tool.annotations?.readOnlyHint === true,
-          call: (args) => callTool({ client, tool, args }).pipe(Effect.flatMap(limited)),
+          call: (args) =>
+            authorized(login, callTool({ client, tool, args })).pipe(Effect.flatMap(limited)),
         })),
         guide: guide === "" ? null : guide,
       };
@@ -520,26 +676,58 @@ const make = Effect.gen(function* () {
       );
     };
     return Effect.gen(function* () {
-      const client = yield* withTimeout(Fiber.join(connection.client), connectTimeoutMs, "connect");
-      const tools = yield* withTimeout(listTools(client), connectTimeoutMs, "tools/list");
-      return (yield* isCurrent) ? yield* offered(client, tools) : nothingDiscovered;
+      // A server that wants a login is not asked again until a login or logout replaces the connection.
+      if (McpServerState.$is("needsLogin")(yield* Ref.get(connection.state)))
+        return nothingDiscovered;
+      const connected = yield* withTimeout(
+        Fiber.join(connection.client),
+        connectTimeoutMs,
+        "connect",
+      );
+      const tools = yield* withTimeout(listTools(connected.client), connectTimeoutMs, "tools/list");
+      return (yield* isCurrent) ? yield* offered(connected, tools) : nothingDiscovered;
     }).pipe(
       // A server that fails to start or list is remembered as failed and offers no tools.
       Effect.catch((failure) =>
         // Stop whatever did start; the next run starts it again.
         stopInBackground(connection).pipe(
-          Effect.andThen(failureOf(failure)),
-          Effect.flatMap((shown) =>
-            Effect.when(
-              Ref.set(connection.state, McpServerState.failed({ failure: shown })),
-              isCurrent,
-            ),
+          Effect.andThen(
+            needsLogin(failure)
+              ? Effect.succeed<McpServerState>(McpServerState.needsLogin({ failure: null }))
+              : Effect.map(failureOf(failure), (shown): McpServerState =>
+                  McpServerState.failed({ failure: shown }),
+                ),
           ),
+          Effect.flatMap((state) => Effect.when(Ref.set(connection.state, state), isCurrent)),
           Effect.as(nothingDiscovered),
         ),
       ),
     );
   };
+
+  /** A login under way shows over the server's state; a failed one, over its need for a login. */
+  const withLogin = (slot: SecretName) => (state: McpServerState) =>
+    Effect.map(Ref.get(logins), (current) =>
+      Option.match(HashMap.get(current, slot), {
+        onNone: () => state,
+        onSome: LoginState.$match({
+          pending: ({ attempt }) =>
+            McpServerState.loggingIn({ authorizationUrl: attempt.authorizationUrl }),
+          failed: ({ failure }) =>
+            McpServerState.$is("needsLogin")(state)
+              ? McpServerState.needsLogin({ failure })
+              : state,
+        }),
+      }),
+    );
+
+  const signedIn = (slot: SecretName) =>
+    Effect.flatMap(SynchronizedRef.get(credentials), (current) =>
+      Option.match(HashMap.get(current, slot), {
+        onNone: () => Effect.succeed(false),
+        onSome: (found) => found.signedIn,
+      }),
+    );
 
   const stateOf = (
     project: Project,
@@ -563,7 +751,7 @@ const make = Effect.gen(function* () {
               onSome: (connection) => Ref.get(connection.state),
             }),
           ),
-        ),
+        ).pipe(Effect.flatMap(withLogin(slotOf(project, server)))),
       ),
     );
 
@@ -575,9 +763,10 @@ const make = Effect.gen(function* () {
         Effect.all({
           // A command line or URL can carry a key (`--api-key=…`, `?token=…`); the page gets it hidden.
           target: redactor.shownDetail(summary.target),
+          signedIn: signedIn(slotOf(project, entry.server)),
           state: stateOf(project, entry),
         }),
-        ({ target, state }): McpServerView => ({
+        ({ target, signedIn, state }): McpServerView => ({
           scope: entry.server.scope,
           name: entry.server.name,
           transport: summary.transport,
@@ -585,6 +774,7 @@ const make = Effect.gen(function* () {
           envNames: summary.envNames,
           headerNames: summary.headerNames,
           shadowed: entry.shadowed,
+          signedIn,
           state,
         }),
       );
@@ -608,6 +798,128 @@ const make = Effect.gen(function* () {
         { concurrency: "unbounded" },
       );
     });
+
+  /** A trusted, unchanged server of the project that a project server of its name does not replace. */
+  const usableServer = (project: Project, scope: McpScope, name: string) =>
+    Effect.map(configured(project), ({ servers }) =>
+      EffectArray.findFirst(
+        servers,
+        (entry) =>
+          entry.server.scope === scope &&
+          entry.server.name === name &&
+          !entry.shadowed &&
+          entry.trusted === entry.server.fingerprint,
+      ).pipe(Option.map((entry) => entry.server)),
+    );
+
+  /** The login of a server a person logs in to; none for other servers or a missing `${VAR}`. */
+  const personalLogin = (project: Project, server: ConfiguredServer) =>
+    McpServerConfig.match(server.config, {
+      stdio: () => Effect.succeedNone,
+      http: (http) => {
+        const oauth = oauthOf(http);
+        return oauth?._tag === "authorizationCode"
+          ? Effect.asSome(
+              Effect.flatMap(urlOf(http), (url) =>
+                credentialsFor(slotOf(project, server), url, oauth),
+              ),
+            )
+          : Effect.succeedNone;
+      },
+    }).pipe(Effect.catch(() => Effect.succeedNone));
+
+  /** What a finished login leaves: the server connected with it, nothing, or why it failed. */
+  const settleLogin = (project: Project, server: ConfiguredServer, attempt: McpLoginAttempt) => {
+    const slot = slotOf(project, server);
+    /** Only while this attempt is still the one shown; a logout or a later login replaced it. */
+    const settled = (next: Option.Option<LoginState>) =>
+      Ref.update(logins, (current) =>
+        Option.exists(
+          HashMap.get(current, slot),
+          (state) => LoginState.$is("pending")(state) && state.attempt === attempt,
+        )
+          ? Option.match(next, {
+              onNone: () => HashMap.remove(current, slot),
+              onSome: (state) => HashMap.set(current, slot, state),
+            })
+          : current,
+      );
+    return Effect.flatMap(
+      attempt.outcome,
+      McpLoginOutcome.$match({
+        succeeded: () =>
+          settled(Option.none()).pipe(
+            Effect.andThen(closeWhere(usesLogin(project, server))),
+            Effect.andThen(discover(project, server)),
+            Effect.asVoid,
+          ),
+        cancelled: () => settled(Option.none()),
+        failed: ({ failure }) =>
+          Effect.flatMap(redactor.hideDetail(failure), (hidden) =>
+            settled(Option.some(LoginState.failed({ failure: hidden }))),
+          ),
+      }),
+    );
+  };
+
+  const startLogin = (project: Project, server: ConfiguredServer) =>
+    Effect.flatMap(personalLogin(project, server), (login) =>
+      Effect.transposeOption(
+        Option.map(login, (found) =>
+          loginStarts.withPermits(1)(
+            Effect.gen(function* () {
+              const slot = slotOf(project, server);
+              // A login already waiting is the one settings show.
+              if (
+                Option.exists(HashMap.get(yield* Ref.get(logins), slot), LoginState.$is("pending"))
+              )
+                return;
+              yield* found.login({ timeoutMs: loginTimeoutMs }).pipe(
+                Effect.matchEffect({
+                  onFailure: (failed) =>
+                    Effect.flatMap(
+                      redactor.hideDetail({ code: failed.code, detail: failed.detail }),
+                      (failure) =>
+                        Ref.update(
+                          logins,
+                          HashMap.set<SecretName, LoginState>(slot, LoginState.failed({ failure })),
+                        ),
+                    ),
+                  onSuccess: (attempt) =>
+                    Ref.update(
+                      logins,
+                      HashMap.set<SecretName, LoginState>(slot, LoginState.pending({ attempt })),
+                    ).pipe(
+                      Effect.andThen(
+                        Effect.forkIn(settleLogin(project, server, attempt), serviceScope),
+                      ),
+                    ),
+                }),
+              );
+            }),
+          ),
+        ),
+      ),
+    );
+
+  /** Forgets a server's stored login and stops a login under way. */
+  const forgetLogin = (project: Project, scope: McpScope, name: string) => {
+    const slot = slotOf(project, { scope, name });
+    return Effect.gen(function* () {
+      const state = yield* Ref.modify(
+        logins,
+        (current) => [HashMap.get(current, slot), HashMap.remove(current, slot)] as const,
+      );
+      yield* Effect.transposeOption(
+        Option.map(
+          Option.filter(state, LoginState.$is("pending")),
+          ({ attempt }) => attempt.cancel,
+        ),
+      );
+      yield* SynchronizedRef.update(credentials, HashMap.remove(slot));
+      yield* secrets.remove(slot);
+    });
+  };
 
   yield* Effect.addFinalizer(() =>
     Effect.flatMap(SynchronizedRef.get(connections), (current) =>
@@ -637,6 +949,8 @@ const make = Effect.gen(function* () {
           yield* sql`
             DELETE FROM mcp_trust
             WHERE scope = ${scope} AND project_id = ${projectId} AND name = ${name}`;
+          // A server no longer trusted keeps no login either.
+          yield* forgetLogin(project, scope, name);
           // A global server may be running for any project.
           yield* closeWhere((_, key) => key.endsWith(`/${scope}/${name}`));
         });
@@ -656,6 +970,39 @@ const make = Effect.gen(function* () {
             }),
         });
         yield* trusted ? trust : distrust;
+        return yield* overview(project);
+      }),
+
+    /**
+     * Starts a person's OAuth login to a trusted HTTP server; settings show where to log in until
+     * it ends, and the server connects with it. Other servers are ignored.
+     */
+    login: (project: Project, scope: McpScope, name: string) =>
+      Effect.gen(function* () {
+        const server = yield* usableServer(project, scope, name);
+        yield* Effect.transposeOption(Option.map(server, (found) => startLogin(project, found)));
+        return yield* overview(project);
+      }),
+
+    cancelLogin: (project: Project, scope: McpScope, name: string) =>
+      Effect.gen(function* () {
+        const state = HashMap.get(yield* Ref.get(logins), slotOf(project, { scope, name }));
+        yield* Effect.transposeOption(
+          Option.map(
+            Option.filter(state, LoginState.$is("pending")),
+            ({ attempt }) => attempt.cancel,
+          ),
+        );
+        return yield* overview(project);
+      }),
+
+    /** Forgets the stored login; the server, asked again, shows whether it needs one. */
+    logout: (project: Project, scope: McpScope, name: string) =>
+      Effect.gen(function* () {
+        yield* forgetLogin(project, scope, name);
+        yield* closeWhere(usesLogin(project, { scope, name }));
+        const server = yield* usableServer(project, scope, name);
+        yield* Effect.transposeOption(Option.map(server, (found) => discover(project, found)));
         return yield* overview(project);
       }),
 

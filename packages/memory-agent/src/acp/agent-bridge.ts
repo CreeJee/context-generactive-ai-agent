@@ -60,6 +60,7 @@ import {
 } from "../runtime/shown-failure.ts";
 import { Schedule } from "effect";
 import { LoopStep, superviseLoopStep } from "../runtime/loop-health.ts";
+import { logFailure } from "../runtime/logged-failures.ts";
 
 /** How often a bridged session renews its lease; the app drops a lease after 90 seconds. */
 const leaseRenewMs = 20_000;
@@ -667,9 +668,7 @@ const makeAcpAgent = Effect.fnUntraced(function* (options: {
           // The app's cancel stops the run for good; closing the stream alone would not (R10).
           yield* api.cancel(session.id, session.holder).pipe(
             // The turn is already marked cancelled; a failed app cancel is only logged.
-            Effect.catchTag("AppRequestFailed", () =>
-              Effect.logWarning("ACP cancel request failed", { error: "AppRequestFailed" }),
-            ),
+            Effect.catchTag("AppRequestFailed", logFailure("ACP cancel request failed")),
           );
         }),
       ),

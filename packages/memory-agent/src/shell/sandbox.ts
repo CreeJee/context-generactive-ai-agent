@@ -1,17 +1,9 @@
 // Native host boundary: worker threads and a scratch folder for the sandbox runtime's sockets.
 import { NodeWorker } from "@effect/platform-node";
 import { Worker } from "node:worker_threads";
-import {
-  Cause,
-  Duration,
-  Effect,
-  FileSystem,
-  Function as EffectFunction,
-  Layer,
-  Option,
-} from "effect";
+import { Duration, Effect, FileSystem, Function as EffectFunction, Layer, Option } from "effect";
 import { RpcClient } from "effect/rpc";
-import { failureTags } from "../runtime/logged-failures.ts";
+import { failureAnnotations } from "../runtime/logged-failures.ts";
 import { homeDirectory, temporaryDirectory } from "../runtime/host-system.ts";
 import { path } from "../runtime/synchronous-path.ts";
 import { runtimeWorker, runtimeWorkerOptions } from "../runtime/resources.ts";
@@ -169,7 +161,7 @@ function runSandboxedBody<E, R>(
         Effect.catch((error) =>
           Effect.as(
             Effect.logDebug("sandbox_report_unavailable", {
-              error: failureTags(Cause.fail(error)),
+              ...failureAnnotations(error),
             }),
             Option.none<string>(),
           ),

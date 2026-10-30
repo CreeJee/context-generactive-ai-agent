@@ -16,7 +16,7 @@ import {
 } from "effect";
 import type { BtwQuestion, Refusal } from "../api/chat-api.ts";
 import { AuthConnectionState } from "../providers/contracts.ts";
-import { failureTags } from "../runtime/logged-failures.ts";
+import { failureAnnotations } from "../runtime/logged-failures.ts";
 import { withPageTurns } from "../agent/page-turns.ts";
 import { shownRunErrors } from "../agent/run-errors.ts";
 import { repeatGuardHook } from "../tools/repeat-guard.ts";
@@ -185,7 +185,7 @@ const make = Effect.gen(function* () {
         Effect.catch((error) =>
           Effect.as(
             Effect.logDebug("btw_model_capabilities_unavailable", {
-              error: failureTags(Cause.fail(error)),
+              ...failureAnnotations(error),
             }),
             false,
           ),

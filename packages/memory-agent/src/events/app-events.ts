@@ -14,6 +14,7 @@ import {
 } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { aborted } from "../runtime/aborted.ts";
+import { logFailure } from "../runtime/logged-failures.ts";
 
 export type SessionEventTopic = "all" | "run-state" | "queue" | "subagents" | "relayed-approvals";
 export type ProjectEventTopic = "all" | "sessions";
@@ -187,7 +188,7 @@ const liveAppEvents = Effect.gen(function* () {
       Effect.map((row) => Option.getOrNull(Option.map(row, ({ project_id }) => project_id))),
       // A missed hint only delays a page's reload; the change it announces is already stored.
       Effect.catch((error) =>
-        Effect.as(Effect.logWarning("Session event was not published", error), null),
+        Effect.as(logFailure("Session event was not published")(error), null),
       ),
     ),
   );

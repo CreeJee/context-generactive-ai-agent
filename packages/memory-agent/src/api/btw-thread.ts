@@ -3,6 +3,7 @@ import { Atom } from "effect/reactivity";
 import type { ChatMessage } from "./chat-api.ts";
 import { ChatApiClient, partsOf, type UserContent } from "./chat-session.ts";
 import { applyEvent, type ChatView, streamStarted, viewOf } from "./chat-view.ts";
+import { keptAtomGroups } from "./kept-atom-groups.ts";
 
 /**
  * A page's open BTW threads as atoms on `ChatApi`: what the panel shows of each, and the side
@@ -15,7 +16,7 @@ const threadView = (messages: ReadonlyArray<ChatMessage>): ChatView =>
 
 /** The atoms of each BTW thread a page opens, keyed by thread id. */
 export const btwThreads = <E>(runtime: Atom.AtomRuntime<ChatApiClient | Crypto.Crypto, E>) =>
-  Atom.family((thread: string) => {
+  keptAtomGroups((thread: string) => {
     const view = Atom.make<Option.Option<ChatView>>(Option.none()).pipe(Atom.keepAlive);
 
     // Written through the call's own `get`, not the registry: once a newer call replaces this one,

@@ -7,8 +7,9 @@ import {
 } from "../agent/owner-rpc-fingerprint.ts";
 import { JsonValue } from "../json.ts";
 import { readOnlyToolNames } from "../tools/effects.ts";
-import { errorTag, ToolFailed } from "../tools/failure.ts";
+import { ToolFailed } from "../tools/failure.ts";
 import type { PreparedCall, RunTool } from "../tools/run-tool.ts";
+import { failureAnnotations } from "../runtime/logged-failures.ts";
 
 /**
  * The tool ledger of a Goal's bound run (decisions.md "Goal도 owner 프로세스에서 돌고 도구를 병렬로
@@ -133,7 +134,7 @@ export const toolLedger = Effect.gen(function* () {
             fingerprintOf(name, args, call.toolCallId).pipe(
               Effect.flatMap((fingerprint) => reserve({ runId, runKey, fingerprint })),
               Effect.tapError((error) =>
-                Effect.logError("Tool call not recorded", { error: errorTag(error) }),
+                Effect.logError("Tool call not recorded", failureAnnotations(error)),
               ),
               Effect.mapError(() => notRecorded),
             ),

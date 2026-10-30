@@ -12,6 +12,7 @@ import {
   Stream,
 } from "effect";
 import { AiError, LanguageModel, type Prompt, type Response, Tool } from "effect/ai";
+import { failureNameOf } from "../runtime/failure-tag.ts";
 import { sha256 } from "../runtime/synchronous-crypto.ts";
 import {
   NormalizedStreamEvent,
@@ -110,6 +111,28 @@ const toolInput = (serialized: string): ToolArguments =>
 /** Models whose adaptive thinking cannot be turned off and is bound to the request prefix. */
 const anthropicThinkingAlwaysOn = (model: string) =>
   /^claude-(?:opus-5-5|fable-5-1)(?:-\d{8})?(?:\[1m\])?$/.test(model);
+
+/**
+ * Models that think when the request does not ask for it, and by default show none of it: their
+ * thinking blocks stream with empty text unless the request asks for a summary.
+ */
+const anthropicThinkingByDefault = (model: string) =>
+  /^claude-(?:opus-5|sonnet-5(?:-5)?|haiku-5-5|fable-5)(?:-\d{8})?(?:\[1m\])?$/.test(model);
+
+/** The thinking a subscription request asks for, or none to leave the model's own default. */
+const anthropicThinking = (model: string) =>
+  anthropicThinkingAlwaysOn(model)
+    ? {
+        type: "adaptive",
+        // Without an explicit display these models return empty thinking blocks.
+        display: "summarized",
+        // Drop signed thinking whose prefix changed (compaction, model switch,
+        // system or tool changes) instead of rejecting the whole request.
+        block_binding: { prefix_mismatch_behavior: "drop_block" },
+      }
+    : anthropicThinkingByDefault(model)
+      ? { type: "adaptive", display: "summarized" }
+      : undefined;
 
 /** How long the provider keeps the request prefix cached, and the cache key. */
 export const PromptCache = Schema.Struct({
@@ -268,12 +291,19 @@ const streamFailure = (
     Match.exhaustive,
   );
 
-/** The failure's tag, which is all the error log says about it. */
-const streamFailureCode = Match.typeTags<SubscriptionFailure, string>()({
-  SubscriptionStreamFailed: () => "SubscriptionStreamFailed",
-  ProviderFeatureRejectedError: () => "ProviderFeatureRejectedError",
-  ReasoningSummaryProtocolFailed: () => "ReasoningSummaryProtocolFailed",
-});
+/** The class of the status a provider rejected the request with, when that is the failure. */
+const rejectedStatusClass = (failure: SubscriptionFailure) =>
+  Predicate.isTagged(failure, "SubscriptionStreamFailed") &&
+  failure.reason._tag === "ProviderStatusRejected"
+    ? [failure.reason.statusClass]
+    : [];
+
+/**
+ * The failure's name and a rejected status's class, such as
+ * `SubscriptionStreamFailed:ProviderStatusRejected:client_error`: all the error log says about it.
+ */
+const streamFailureCode = (failure: SubscriptionFailure) =>
+  [failureNameOf(failure), ...rejectedStatusClass(failure)].join(":");
 
 /**
  * The provider's events for `body`. When Anthropic rejects the prompt-cache feature before any
@@ -591,16 +621,7 @@ const anthropicBody = (request: SubscriptionRequest) => {
         : tool,
     ),
     tool_choice: tools.length > 0 ? { type: "auto" } : undefined,
-    thinking: anthropicThinkingAlwaysOn(selection.model)
-      ? {
-          type: "adaptive",
-          // Without an explicit display these models return empty thinking blocks.
-          display: "summarized",
-          // Drop signed thinking whose prefix changed (compaction, model switch,
-          // system or tool changes) instead of rejecting the whole request.
-          block_binding: { prefix_mismatch_behavior: "drop_block" },
-        }
-      : undefined,
+    thinking: anthropicThinking(selection.model),
     output_config:
       selection.reasoningEffort === "none" ? undefined : { effort: selection.reasoningEffort },
   });

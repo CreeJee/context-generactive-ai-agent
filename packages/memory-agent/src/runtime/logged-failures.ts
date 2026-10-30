@@ -1,6 +1,14 @@
-import { Cause, Effect, Function as EffectFunction, Match, Option, Schema } from "effect";
+import {
+  Array as EffectArray,
+  Cause,
+  Effect,
+  Function as EffectFunction,
+  Match,
+  Option,
+  Schema,
+} from "effect";
 import { DefectReporter } from "./defect-reporter.ts";
-import { reasonTagOf, tagOf, tagOfUnknown } from "./failure-tag.ts";
+import { causeTagsOf, failureNameOf, failureNameOfUnknown } from "./failure-tag.ts";
 
 /**
  * Helpers for expected failures an owner logs instead of propagating. Each one logs a failure by
@@ -10,9 +18,19 @@ import { reasonTagOf, tagOf, tagOfUnknown } from "./failure-tag.ts";
 
 type Annotations = Readonly<Record<string, string>>;
 
+/**
+ * A failure as log annotations: its name, and the names of what caused it, outermost first, when it
+ * names a cause. A log that annotates a failure itself takes them from here.
+ */
+export const failureAnnotations = <E extends { readonly _tag: string }>(error: E) =>
+  EffectArray.match(causeTagsOf(error), {
+    onEmpty: () => ({ error: failureNameOf(error) }),
+    onNonEmpty: (causes) => ({ error: failureNameOf(error), cause: causes.join(" < ") }),
+  });
+
 const tagged = <E extends { readonly _tag: string }>(annotations: Annotations, error: E) => ({
   ...annotations,
-  error: tagOf(error),
+  ...failureAnnotations(error),
 });
 
 /** The data-first call names the message; the pipeable one gives only the annotations. */
@@ -84,15 +102,7 @@ function logDefectBody(message: string, annotations: Annotations = {}) {
 export const failureTags = (cause: Cause.Cause<unknown>) => {
   const tags = cause.reasons.map(
     Match.valueTags({
-      Fail: ({ error }) =>
-        Option.match(tagOfUnknown(error), {
-          onNone: () => "Failure",
-          onSome: (tag) =>
-            Option.match(reasonTagOf(error), {
-              onNone: () => tag,
-              onSome: (reason) => `${tag}:${reason}`,
-            }),
-        }),
+      Fail: ({ error }) => Option.getOrElse(failureNameOfUnknown(error), () => "Failure"),
       Die: () => "Defect",
       Interrupt: () => "Interrupted",
     }),

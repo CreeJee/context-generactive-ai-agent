@@ -18,7 +18,7 @@
 - `useGoalOrderMutation(projectId)` — `api.moveGoal`로 대화 Goal 순서를 바꾼다. 성공하면 project kanban 캐시에 쓰고, 끝나면 boards를 무효화한다.
 - `AgentChange` / `useExternalAgentMutation(projectId)` — 외부 에이전트 trust와 reconnect용 tagged enum과 그 mutation
 - `SessionLifecycleChange` / `useSessionLifecycleMutation` — 대화 archive·restore·delete. holder는 `() => string` thunk이고 dual arity는 2다.
-- `useMcpTrustMutation` / `useProtectedBranchesMutation` / `usePermissionModeMutation` / `useCrossRecallMutation` / `useHideProjectMutation` / `useCreateSessionMutation` — 프로젝트 단위 설정과 세션 생성 mutation
+- `useMcpMutation` (신뢰·로그인·로그인 취소·로그아웃) / `useProtectedBranchesMutation` / `usePermissionModeMutation` / `useCrossRecallMutation` / `useHideProjectMutation` / `useCreateSessionMutation` — 프로젝트 단위 설정과 세션 생성 mutation
 - `useRestoreProjectMutation` — `api.restoreProject`로 보관한 프로젝트를 목록에 되돌린다. 성공하면 projects 키를 무효화하고, 그 아래의 보관 목록도 함께 다시 읽는다.
 - `KanbanAction` — 칸반 동작 tagged enum: `Start`, `RestartLoop`, `Intent{intent: BoardIntent}`, `SetDependencies{dependsOn}`
 - `useKanbanMutation` — 한 대화의 칸반 시작, intent, 의존성 변경. 끝나면 kanban과 board를 무효화한다(dual arity 3).

@@ -89,6 +89,8 @@ const mcpStatus = McpServerState.$match({
   trusted: () => ({ status: "trusted", code: null }),
   connected: () => ({ status: "connected", code: null }),
   failed: ({ failure }) => ({ status: "failed", code: failure.code }),
+  needsLogin: ({ failure }) => ({ status: "needsLogin", code: failure?.code ?? null }),
+  loggingIn: () => ({ status: "loggingIn", code: null }),
 });
 
 /** An external agent's trust, or its link once trusted, by case name, with any failure code. */

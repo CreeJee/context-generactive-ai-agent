@@ -12,6 +12,7 @@ import {
   type RunInput,
 } from "./chat-api.ts";
 import { applyEvent, caughtUp, type ChatView, streamStarted, viewOf } from "./chat-view.ts";
+import { keptAtomGroups } from "./kept-atom-groups.ts";
 
 /**
  * A page's open sessions as atoms on `ChatApi` (docs/effect-ai-migration.md step 6): what the page
@@ -69,7 +70,7 @@ export const partsOf = (content: UserContent): ReadonlyArray<MessagePart> =>
 
 /** The atoms of each session a page opens, keyed by session id. */
 export const chatSessions = <E>(runtime: Atom.AtomRuntime<ChatApiClient | Crypto.Crypto, E>) =>
-  Atom.family((session: string) => {
+  keptAtomGroups((session: string) => {
     const state = Atom.make<Option.Option<OpenSession>>(Option.none()).pipe(Atom.keepAlive);
     /** The last app event a run sent; the page subscribes to it. */
     const custom = Atom.make<Option.Option<CustomEvent>>(Option.none());

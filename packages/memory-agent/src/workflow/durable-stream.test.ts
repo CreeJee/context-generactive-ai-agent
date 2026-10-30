@@ -53,6 +53,21 @@ const withOwnerLogs = <A, E, R>(program: Effect.Effect<A, E, R>) =>
   );
 /** Lets the forked reader run up to its next wait on the test clock. */
 const settle = Effect.repeat(Effect.yieldNow, { times: 50 });
+/** A tracer over the reader, and how many pages it has read so far. */
+const pageReads = () => {
+  const spans: Array<Tracer.NativeSpan> = [];
+  const tracer = Tracer.make({
+    span(options) {
+      const span = new Tracer.NativeSpan(options);
+      spans.push(span);
+      return span;
+    },
+  });
+  const count = () =>
+    spans.filter((span) => String(span.attributes.get("db.query.text")).includes("cursor >"))
+      .length;
+  return { tracer, count };
+};
 
 describe("central SQLite run log", () => {
   it.live("validates binding, minted offsets, lifecycle runs and close", () =>
@@ -105,19 +120,32 @@ describe("central SQLite run log", () => {
     ),
   );
 
-  it.effect("wakes a reader at the end of the log as soon as its run writes", () =>
-    withOwnerLogs(
-      Effect.gen(function* () {
-        const db = yield* scopedOwner;
-        const log = yield* runLog(db);
-        const tail = yield* Effect.forkChild(Stream.runCollect(Stream.take(log.read("-1"), 1)));
-        yield* settle;
-        yield* log.append(lifecycle("RUN_STARTED"));
-        yield* settle;
-        // The test clock never moved, so the reader did not wait out its fallback.
-        expect(tail.pollUnsafe()?._tag).toBe("Success");
-      }),
-    ),
+  it.effect(
+    "wakes a reader when its run writes, and reads what follows in a frame as one page",
+    () =>
+      withOwnerLogs(
+        Effect.gen(function* () {
+          const db = yield* scopedOwner;
+          const log = yield* runLog(db);
+          const reads = pageReads();
+          const tail = yield* Effect.forkChild(
+            Stream.runCollect(Stream.take(log.read("-1"), 2)).pipe(Effect.withTracer(reads.tracer)),
+          );
+          yield* settle;
+          yield* log.append(lifecycle("RUN_STARTED"));
+          yield* settle;
+          yield* log.append({
+            type: "TEXT_MESSAGE_START",
+            messageId: "message",
+            role: "assistant",
+          });
+          yield* TestClock.adjust("16 millis");
+          yield* settle;
+          // The clock moved a frame, not the fallback second, and both writes came in one page.
+          expect(tail.pollUnsafe()?._tag).toBe("Success");
+          expect(reads.count()).toBe(2);
+        }),
+      ),
   );
 
   it.effect("reads the end of an open log at most once a second while nothing is written", () =>
@@ -125,26 +153,18 @@ describe("central SQLite run log", () => {
       Effect.gen(function* () {
         const db = yield* scopedOwner;
         const log = yield* runLog(db);
-        const spans: Array<Tracer.NativeSpan> = [];
-        const tracer = Tracer.make({
-          span(options) {
-            const span = new Tracer.NativeSpan(options);
-            spans.push(span);
-            return span;
-          },
-        });
-        yield* Effect.forkChild(Stream.runDrain(log.read("-1")).pipe(Effect.withTracer(tracer)));
+        const reads = pageReads();
+        yield* Effect.forkChild(
+          Stream.runDrain(log.read("-1")).pipe(Effect.withTracer(reads.tracer)),
+        );
         yield* settle;
         yield* Effect.forEach(
           Array.from({ length: 10 }),
           () => Effect.andThen(TestClock.adjust("1 second"), settle),
           { discard: true },
         );
-        const pages = spans.filter((span) =>
-          String(span.attributes.get("db.query.text")).includes("cursor >"),
-        );
         // The first read, then one per second.
-        expect(pages.length).toBe(11);
+        expect(reads.count()).toBe(11);
       }),
     ),
   );

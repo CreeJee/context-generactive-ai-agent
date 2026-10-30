@@ -695,48 +695,53 @@ describe.each(["openai", "anthropic"] as const)("%s OAuth validation harness", (
   );
 
   if (provider === "anthropic")
-    it.live("sends effort, and bound summarized thinking only to always-thinking models", () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const fake = yield* fakeProvider(provider);
-          const harness = yield* createSubscriptionOAuthClient({
-            protocol: fake.protocol,
-            store: new MemoryCredentialStore(),
-          });
-          yield* login(harness);
-          yield* Effect.forEach(
-            ["claude-opus-5-5", "claude-opus-5"],
-            (model) =>
-              Stream.runDrain(
-                harness.stream(
-                  subscriptionBody({
-                    provider,
-                    selection: { provider, model, reasoningEffort: "high" },
-                    prompt: toPrompt([{ role: "user", content: "hi" }], []),
-                    tools: [],
-                    promptCache: undefined,
-                  }),
+    it.live(
+      "sends effort, summarized thinking to models that think by default, bound when always on",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const fake = yield* fakeProvider(provider);
+            const harness = yield* createSubscriptionOAuthClient({
+              protocol: fake.protocol,
+              store: new MemoryCredentialStore(),
+            });
+            yield* login(harness);
+            yield* Effect.forEach(
+              ["claude-opus-5-5", "claude-opus-5", "claude-opus-4-8"],
+              (model) =>
+                Stream.runDrain(
+                  harness.stream(
+                    subscriptionBody({
+                      provider,
+                      selection: { provider, model, reasoningEffort: "high" },
+                      prompt: toPrompt([{ role: "user", content: "hi" }], []),
+                      tools: [],
+                      promptCache: undefined,
+                    }),
+                  ),
                 ),
-              ),
-            { discard: true },
-          );
-          const [bound, plain] = fake.modelBodies.map((body) => JSON.parse(body));
-          expect(bound.output_config).toEqual({ effort: "high" });
-          expect(bound.thinking).toEqual({
-            type: "adaptive",
-            display: "summarized",
-            block_binding: { prefix_mismatch_behavior: "drop_block" },
-          });
-          expect(fake.modelHeaders[0]?.["anthropic-beta"]).toContain(
-            "thinking-binding-controls-2026-08-01",
-          );
-          expect(plain.output_config).toEqual({ effort: "high" });
-          expect(plain.thinking).toBeUndefined();
-          expect(fake.modelHeaders[1]?.["anthropic-beta"]).toBe(
-            providerProtocols.anthropic.modelHeaders["anthropic-beta"],
-          );
-        }),
-      ).pipe(withOAuthTestPlatform),
+              { discard: true },
+            );
+            const [bound, shown, plain] = fake.modelBodies.map((body) => JSON.parse(body));
+            expect(bound.output_config).toEqual({ effort: "high" });
+            expect(bound.thinking).toEqual({
+              type: "adaptive",
+              display: "summarized",
+              block_binding: { prefix_mismatch_behavior: "drop_block" },
+            });
+            expect(fake.modelHeaders[0]?.["anthropic-beta"]).toContain(
+              "thinking-binding-controls-2026-08-01",
+            );
+            // Thinks by default, so asking only for the summary changes what is shown, not how it thinks.
+            expect(shown.thinking).toEqual({ type: "adaptive", display: "summarized" });
+            expect(fake.modelHeaders[1]?.["anthropic-beta"]).toBe(
+              providerProtocols.anthropic.modelHeaders["anthropic-beta"],
+            );
+            // Thinks only when asked: the request leaves that to the model's default.
+            expect(plain.output_config).toEqual({ effort: "high" });
+            expect(plain.thinking).toBeUndefined();
+          }),
+        ).pipe(withOAuthTestPlatform),
     );
 
   it.live("fetches the fixed catalog, paginates, and returns no credentials", () =>

@@ -1,15 +1,15 @@
 import { Data, Function as EffectFunction } from "effect";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, type ExternalAgentView, type McpScope } from "../../api";
+import { api, type ExternalAgentView, type McpCommand } from "../../api";
 import { projectQueries } from "../project";
 import { globalQueries } from "../global";
 
-export function useMcpTrustMutation(projectId: string) {
+/** Trust, login and logout of an MCP server; the answer is the page's new overview. */
+export function useMcpMutation(projectId: string) {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: ({ scope, name, trusted }: { scope: McpScope; name: string; trusted: boolean }) =>
-      api.setMcpTrusted(projectId, scope, name, trusted),
-    onSuccess: () => client.invalidateQueries({ queryKey: projectQueries.mcp(projectId).queryKey }),
+    mutationFn: (command: McpCommand) => api.mcpAction(projectId, command),
+    onSuccess: (overview) => client.setQueryData(projectQueries.mcp(projectId).queryKey, overview),
   });
 }
 

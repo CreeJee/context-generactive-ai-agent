@@ -1,7 +1,7 @@
 import { runUiEffect, uiPromise } from "../shared/ui-effect";
 import { Effect, Function as EffectFunction } from "effect";
 import { queryOptions, useQuery, useSuspenseQuery } from "@tanstack/react-query";
-import { AgentTrustState, api } from "../api";
+import { AgentTrustState, McpServerState, api } from "../api";
 import { appQueryKeys } from "./keys";
 
 export const projectQueries = {
@@ -22,6 +22,13 @@ export const projectQueries = {
     queryOptions({
       queryKey: appQueryKeys.project.mcp(projectId),
       queryFn: () => api.mcpServers(projectId),
+      // Follow a login waiting in the browser; otherwise the page only changes when the user acts.
+      refetchInterval: (query) =>
+        query.state.data?.servers.some((server) =>
+          McpServerState.$is("loggingIn")(server.state),
+        ) === true
+          ? 2000
+          : false,
     }),
   agents: (projectId: string) =>
     queryOptions({

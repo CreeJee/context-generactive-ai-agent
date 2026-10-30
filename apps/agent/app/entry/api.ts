@@ -144,6 +144,14 @@ type ExternalAgentCommand = Data.TaggedEnum<{
   reconnect: { readonly name: string };
 }>;
 const ExternalAgentCommand = Data.taggedEnum<ExternalAgentCommand>();
+/** The commands `/api/projects/:project/mcp` reads. */
+export type McpCommand = Data.TaggedEnum<{
+  trust: { readonly scope: McpScope; readonly name: string; readonly trusted: boolean };
+  login: { readonly scope: McpScope; readonly name: string };
+  cancelLogin: { readonly scope: McpScope; readonly name: string };
+  logout: { readonly scope: McpScope; readonly name: string };
+}>;
+export const McpCommand = Data.taggedEnum<McpCommand>();
 
 export { ApprovalRequester, NextDelivery, QueueEdit, QueueItemState };
 
@@ -926,12 +934,8 @@ export const api = {
 
   mcpServers: (projectId: string) =>
     call<McpOverview>("GET", `/api/projects/${encodeURIComponent(projectId)}/mcp`),
-  setMcpTrusted: (projectId: string, scope: McpScope, name: string, trusted: boolean) =>
-    call<McpOverview>("POST", `/api/projects/${encodeURIComponent(projectId)}/mcp`, {
-      scope,
-      name,
-      trusted,
-    }),
+  mcpAction: (projectId: string, command: McpCommand) =>
+    call<McpOverview>("POST", `/api/projects/${encodeURIComponent(projectId)}/mcp`, command),
 
   externalAgents: (projectId: string) =>
     call<ExternalAgentsOverview>("GET", `/api/projects/${encodeURIComponent(projectId)}/agents`),
