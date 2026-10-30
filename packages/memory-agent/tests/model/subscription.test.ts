@@ -6,6 +6,7 @@ import { describe, expect } from "vite-plus/test";
 import {
   subscriptionModel,
   publicReasoningLimits,
+  shownSubscriptionFailure,
   subscriptionFailure,
   SubscriptionStreamFailed,
   SubscriptionStreamFailedReason,
@@ -322,7 +323,12 @@ describe("subscription language model", () => {
         },
       };
       expect(yield* failureOf("anthropic", client)).toEqual(
-        failed(SubscriptionStreamFailedReason.cases.ProviderRejected.make({}), "anthropic"),
+        failed(
+          SubscriptionStreamFailedReason.cases.ProviderRejected.make({
+            error: { type: "overloaded_error", message: "busy" },
+          }),
+          "anthropic",
+        ),
       );
       expect(MutableRef.get(attempts)).toBe(1);
     }),
@@ -455,7 +461,7 @@ describe("subscription language model", () => {
     }),
   );
 
-  it.effect("keeps the provider's error text and the prompt out of errors and logs", () =>
+  it.effect("carries the provider's error text, not the prompt, into errors and logs", () =>
     Effect.gen(function* () {
       const logs: unknown[] = [];
       const capture = Logger.make((options) => {
@@ -475,14 +481,19 @@ describe("subscription language model", () => {
       expect(Option.getOrUndefined(subscriptionFailure(error))).toBeInstanceOf(
         SubscriptionStreamFailed,
       );
-      const written = yield* encodeJson([error, logs]);
-      expect(written).not.toContain("secret");
-      expect(written).not.toContain("private question");
+      expect(shownSubscriptionFailure(error).message).toBe(
+        "OpenAI API error: secret-code: secret-response",
+      );
+      expect(yield* encodeJson([error, logs])).not.toContain("private question");
       expect(logs).toContainEqual(
         expect.objectContaining({
           level: "ERROR",
           message: "subscription model request failed",
-          annotations: { provider: "openai", code: "SubscriptionStreamFailed:ProviderRejected" },
+          annotations: {
+            provider: "openai",
+            code: "SubscriptionStreamFailed:ProviderRejected",
+            detail: "OpenAI API error: secret-code: secret-response",
+          },
         }),
       );
     }),

@@ -21,11 +21,32 @@ export class ProviderFeatureRejectedError extends Schema.TaggedError<
   }
 }
 
+/** At most this much of a provider's error message is kept, as Claude Code cuts its own. */
+export const providerErrorMessageLimit = 1000;
+
+/** The provider's own words for an error: its error type and message. */
+export const ProviderErrorDetail = Schema.Struct({ type: Schema.String, message: Schema.String });
+export type ProviderErrorDetail = typeof ProviderErrorDetail.Type;
+
+/** `detail` with its message cut to `providerErrorMessageLimit`. */
+export const boundedErrorDetail = (detail: ProviderErrorDetail): ProviderErrorDetail => ({
+  type: detail.type,
+  message: Array.from(detail.message).slice(0, providerErrorMessageLimit).join(""),
+});
+
 export const ProviderStreamFailedReason = Schema.TaggedUnion({
   /** Only this reason proves the request never reached the provider (connection, DNS or TLS setup). */
   RequestNotSent: { stage: Schema.Literals(["dns", "connect", "tls"]) },
-  /** The provider answered with an error status; only the status class is kept, never the body. */
-  ProviderStatusRejected: { statusClass: Schema.Literals(["client_error", "server_error"]) },
+  /**
+   * The provider answered with an error status. `error` is the provider's error envelope when the
+   * body was one, and `requestId` the id the provider gave the request; the raw body is not kept.
+   */
+  ProviderStatusRejected: {
+    statusClass: Schema.Literals(["client_error", "server_error"]),
+    status: Schema.Int,
+    error: Schema.NullOr(ProviderErrorDetail),
+    requestId: Schema.NullOr(Schema.String),
+  },
   /** The response or its event stream had started when the connection broke. */
   ResponseInterrupted: {},
   /** The request may have reached the provider; treated as sent. */

@@ -15,7 +15,9 @@ import { AiError, LanguageModel, type Prompt, type Response, Tool } from "effect
 import { failureNameOf } from "../runtime/failure-tag.ts";
 import { sha256 } from "../runtime/synchronous-crypto.ts";
 import {
+  boundedErrorDetail,
   NormalizedStreamEvent,
+  ProviderErrorDetail,
   ProviderFeatureRejectedError,
   ProviderStatusRejected,
   ReasoningSummaryProtocolFailed,
@@ -60,9 +62,15 @@ export const publicReasoningLimits = {
 } as const;
 
 export const SubscriptionStreamFailedReason = Schema.TaggedUnion({
-  ProviderRejected: {},
+  /** The provider sent an error event in the stream. */
+  ProviderRejected: { error: ProviderErrorDetail },
   RequestNotSent: { stage: RequestNotSent.fields.stage },
-  ProviderStatusRejected: { statusClass: ProviderStatusRejected.fields.statusClass },
+  ProviderStatusRejected: {
+    statusClass: ProviderStatusRejected.fields.statusClass,
+    status: ProviderStatusRejected.fields.status,
+    error: ProviderStatusRejected.fields.error,
+    requestId: ProviderStatusRejected.fields.requestId,
+  },
   ResponseInterrupted: {},
   RequestOutcomeUnknown: {},
   InvalidReasoning: {},
@@ -72,6 +80,15 @@ export const SubscriptionStreamFailedReason = Schema.TaggedUnion({
   EncryptedReasoningLimit: {},
 });
 
+const providerNames = {
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+} as const satisfies Record<OAuthProvider, string>;
+
+/** The provider's own words after the app's: `invalid_request_error: messages: …`. */
+const providerWords = (error: ProviderErrorDetail | null) =>
+  error === null ? "" : `: ${error.type}: ${error.message}`;
+
 export class SubscriptionStreamFailed extends Schema.TaggedError<
   SubscriptionStreamFailed,
   { readonly brand: unique symbol }
@@ -79,8 +96,20 @@ export class SubscriptionStreamFailed extends Schema.TaggedError<
   provider: Schema.Literals(["openai", "anthropic"]),
   reason: SubscriptionStreamFailedReason,
 }) {
+  /** What the provider said when it rejected the request, as Claude Code's `API Error` shows it. */
   override get message() {
-    return "Subscription provider stream failed.";
+    const api = `${providerNames[this.provider]} API error`;
+    return SubscriptionStreamFailedReason.matchOrElse(
+      this.reason,
+      {
+        ProviderStatusRejected: ({ status, error, requestId }) =>
+          `${api} ${status}${providerWords(error)}${
+            requestId === null ? "" : ` (request ${requestId})`
+          }`,
+        ProviderRejected: ({ error }) => `${api}${providerWords(error)}`,
+      },
+      () => "Subscription provider stream failed.",
+    );
   }
 }
 
@@ -300,7 +329,7 @@ const rejectedStatusClass = (failure: SubscriptionFailure) =>
 
 /**
  * The failure's name and a rejected status's class, such as
- * `SubscriptionStreamFailed:ProviderStatusRejected:client_error`: all the error log says about it.
+ * `SubscriptionStreamFailed:ProviderStatusRejected:client_error`, for grouping log lines.
  */
 const streamFailureCode = (failure: SubscriptionFailure) =>
   [failureNameOf(failure), ...rejectedStatusClass(failure)].join(":");
@@ -863,8 +892,14 @@ const makeTranslator = (provider: OAuthProvider) => {
             cacheWriteTokens: usage.cacheWriteTokens ?? state.tokens.cacheWriteTokens,
           },
         }),
-      error: () =>
-        Effect.fail(failed(SubscriptionStreamFailedReason.cases.ProviderRejected.make({}))),
+      error: ({ code, message }) =>
+        Effect.fail(
+          failed(
+            SubscriptionStreamFailedReason.cases.ProviderRejected.make({
+              error: boundedErrorDetail({ type: code, message }),
+            }),
+          ),
+        ),
       // Public OpenAI summary parts are reasoning blocks of their own, not Anthropic block ends.
       "reasoning-summary-start": (start) => {
         const summaryId = summaryIdOf(start);
@@ -1241,8 +1276,12 @@ export const subscriptionModel = Effect.fnUntraced(function* (options: Subscript
           Stream.catch((failure: SubscriptionFailure) =>
             Stream.fromEffect(
               Effect.logError("subscription model request failed").pipe(
-                // Native transport/SDK edge: never publish provider-controlled error text.
-                Effect.annotateLogs({ provider, code: streamFailureCode(failure) }),
+                // `detail` is the message the user sees, the provider's own words included.
+                Effect.annotateLogs({
+                  provider,
+                  code: streamFailureCode(failure),
+                  detail: failure.message,
+                }),
                 Effect.andThen(toAiError(failure)),
                 Effect.flatMap(Effect.fail),
               ),

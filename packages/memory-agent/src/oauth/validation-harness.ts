@@ -44,9 +44,11 @@ import {
   type TokenProxyResult,
 } from "./windows-token-proxy.ts";
 import {
+  boundedErrorDetail,
   createOAuthState,
   createPkce,
   decodeProviderEvent,
+  ProviderErrorDetail,
   ProviderFeatureRejectedError,
   ProviderStatusRejected,
   ProviderStreamFailed,
@@ -322,6 +324,13 @@ const requestNotSentStages = {
   DEPTH_ZERO_SELF_SIGNED_CERT: "tls",
   ERR_TLS_CERT_ALTNAME_INVALID: "tls",
 } as const satisfies Record<typeof RequestNotSentCode.Type, typeof RequestNotSent.Type.stage>;
+
+/** A provider's JSON error body: Anthropic's and OpenAI's both carry `error.type` and `error.message`. */
+const ErrorEnvelope = Schema.Struct({
+  error: ProviderErrorDetail,
+  request_id: Schema.optional(Schema.String),
+});
+const decodeErrorEnvelope = Schema.decodeUnknownOption(Schema.fromJsonString(ErrorEnvelope));
 
 const modelRequestFailed = (provider: OAuthProvider, transportCode: string) =>
   ProviderStreamFailed.make({
@@ -1160,26 +1169,32 @@ export const createSubscriptionOAuthClient = Effect.fnUntraced(function* (
 
     const { response } = yield* refreshingOnce(credential, request);
     if (!response.ok) {
+      // An unreadable body is neither a prompt-cache rejection nor an error envelope.
+      const responseText = yield* nativePromise(() => response.text()).pipe(
+        Effect.orElseSucceed(() => ""),
+      );
       if (
         protocol.provider === "anthropic" &&
-        (response.status === 400 || response.status === 422)
-      ) {
-        // Read only to recognise a prompt-cache rejection; an unreadable body is not one.
-        const responseText = yield* nativePromise(() => response.clone().text()).pipe(
-          Effect.orElseSucceed(() => ""),
-        );
-        if (/cache[_ -]?control|prompt[_ -]?cach/i.test(responseText))
-          return yield* ProviderFeatureRejectedError.make({
-            provider: "anthropic",
-            feature: "prompt-cache",
-            status: response.status,
-          });
-      }
-      // Only the status class leaves this boundary; the body may echo the prompt or account data.
+        (response.status === 400 || response.status === 422) &&
+        /cache[_ -]?control|prompt[_ -]?cach/i.test(responseText)
+      )
+        return yield* ProviderFeatureRejectedError.make({
+          provider: "anthropic",
+          feature: "prompt-cache",
+          status: response.status,
+        });
+      // The provider's error type, message and request id go on to the user, as Claude Code shows
+      // them; the rest of the body does not leave this boundary.
+      const envelope = decodeErrorEnvelope(responseText);
       return yield* ProviderStreamFailed.make({
         provider: protocol.provider,
         reason: ProviderStatusRejected.make({
           statusClass: response.status >= 500 ? "server_error" : "client_error",
+          status: response.status,
+          error: Option.getOrNull(Option.map(envelope, ({ error }) => boundedErrorDetail(error))),
+          requestId:
+            response.headers.get("request-id") ??
+            Option.getOrNull(Option.flatMapNullishOr(envelope, (body) => body.request_id)),
         }),
       });
     }

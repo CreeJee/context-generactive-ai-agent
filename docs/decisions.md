@@ -791,6 +791,11 @@
 - 자격 증명 읽기·토큰 갱신 실패처럼 OAuth 클라이언트가 `ProviderStreamFailed`로 표현하지 않는 오류는 `RequestOutcomeUnknown`으로 보수적으로 둔다.
 - 모델 스트림의 HTTP 거절은 더 이상 `OAuthHarnessError`에 provider 오류 문구를 담지 않는다. live 검증 스크립트도 상태 범주만 본다.
 - 이 단계는 재시도를 추가하지 않는다.
+- 수정(2026-10-30): provider가 거절한 이유를 사용자와 로그까지 전한다. 상태 범주만으로는 원인을 알 수 없었다. 예를 들어 assistant로 끝난 요청을 Anthropic이 400으로 거절해도 `client_error`만 남았다. Claude Code(`API Error: …`), jcode, pi는 provider 문구를 그대로 보여 준다.
+  - `ProviderStatusRejected`에 HTTP `status`, 오류 envelope의 `error { type, message }`, `requestId`를 담는다. `requestId`는 `request-id` 헤더 값이고, 헤더가 없으면 body의 `request_id`를 쓴다. envelope이 아닌 body면 `error`는 null이다. 원문 body는 경계 밖으로 내보내지 않는다.
+  - 스트림 중 `error` 이벤트(`ProviderRejected`)도 provider의 `type`·`message`를 담는다.
+  - provider message는 Claude Code처럼 1000자로 자른다. 토큰은 `Authorization` 헤더로만 가고 envelope에 되풀이되지 않는다.
+  - `SubscriptionStreamFailed.message`는 이 값으로 만든다(`Anthropic API error 400: invalid_request_error: … (request req_…)`). 사용자에게 보이는 실패 문구, run 실패 기록, `subscription model request failed` 로그의 `detail`이 이 문구다.
 
 ### Goal full-loop transport: Effect Worker/RPC protocol boundary (2026-10-10)
 

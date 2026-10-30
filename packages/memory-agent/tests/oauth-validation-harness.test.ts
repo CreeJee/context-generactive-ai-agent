@@ -975,7 +975,12 @@ describe("provider wire contracts", () => {
           protocol: providerProtocols.anthropic,
           store,
           fetch: () =>
-            Promise.resolve(new Response('{"error":{"message":"invalid model"}}', { status: 400 })),
+            Promise.resolve(
+              new Response(
+                '{"type":"error","error":{"type":"invalid_request_error","message":"invalid model"},"request_id":"req_body"}',
+                { status: 400, headers: { "request-id": "req_header" } },
+              ),
+            ),
         });
         const drain = (harness: SubscriptionOAuthClient) =>
           Stream.runDrain(harness.stream('{"model":"test","stream":true}'));
@@ -986,11 +991,13 @@ describe("provider wire contracts", () => {
         const unrelatedFailure = yield* Effect.flip(drain(unrelated));
         expect(unrelatedFailure).toBeInstanceOf(ProviderStreamFailed);
         expect(unrelatedFailure).toMatchObject({
-          reason: ProviderStatusRejected.make({ statusClass: "client_error" }),
+          reason: ProviderStatusRejected.make({
+            statusClass: "client_error",
+            status: 400,
+            error: { type: "invalid_request_error", message: "invalid model" },
+            requestId: "req_header",
+          }),
         });
-        expect(
-          yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(unrelatedFailure),
-        ).not.toContain("invalid model");
       }),
     ).pipe(withOAuthTestPlatform),
   );
