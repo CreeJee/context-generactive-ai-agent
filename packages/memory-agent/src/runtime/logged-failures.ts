@@ -79,8 +79,9 @@ function ignoreLoggedBody(message: string, annotations: Annotations = {}) {
 }
 
 /**
- * Logs a defect by the `Defect` tag only and hands it to the defect reporter. Every defect an owner
- * records instead of letting it end the process goes through here.
+ * Logs a defect by its failures' tags only and hands it to the defect reporter: a typed failure the
+ * owner could not answer by its tag and reason, a die as `Defect`. Every defect an owner records
+ * instead of letting it end the process goes through here.
  */
 export const logDefect: {
   (annotations: Annotations): (message: string) => ReturnType<typeof logDefectBody>;
@@ -90,7 +91,7 @@ export const logDefect: {
 function logDefectBody(message: string, annotations: Annotations = {}) {
   return (cause: Cause.Cause<unknown>) =>
     Effect.gen(function* () {
-      yield* Effect.logError(message, { ...annotations, error: "Defect" });
+      yield* Effect.logError(message, { ...annotations, error: failureTags(cause) });
       yield* (yield* DefectReporter).report({ message, annotations, cause });
     });
 }
