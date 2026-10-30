@@ -532,6 +532,22 @@ const anthropicMessages = (prompt: Prompt.Prompt) =>
       ),
   );
 
+/** Whether the conversation ends on an assistant turn, which Anthropic reads as a prefill. */
+const endsOnAssistant = (messages: ReadonlyArray<{ readonly role: string }>) =>
+  Option.exists(
+    Arr.findLast(messages, (message) => message.role !== "system"),
+    (last) => last.role === "assistant",
+  );
+
+/**
+ * Anthropic refuses a request that ends on an assistant message: its models take no prefill. The
+ * app never means one, so such a conversation gets a user turn, as jcode repairs it.
+ */
+const endingOnUser = (messages: ReadonlyArray<AnthropicMessage>) =>
+  endsOnAssistant(messages)
+    ? appendAnthropicMessage(messages, "user", [{ type: "text", text: "Continue." }])
+    : messages;
+
 /**
  * A user or assistant turn as Responses items: the encrypted reasoning it carries, a message of
  * its text and images, then its calls.
@@ -634,7 +650,7 @@ const anthropicBody = (request: SubscriptionRequest) => {
   const system = systemText(prompt);
   const tools = canonicalTools(request.tools);
   const cacheControl = anthropicCacheControlFor(request.promptCache?.retention);
-  const messages = anthropicMessages(prompt);
+  const messages = endingOnUser(anthropicMessages(prompt));
   return JSON.stringify({
     model: selection.model,
     max_tokens: 32_000,
@@ -1246,6 +1262,13 @@ export const subscriptionModel = Effect.fnUntraced(function* (options: Subscript
             tools: request.tools.length,
             ...fingerprints,
           }),
+        );
+        // `endingOnUser` repaired the request; the run that sent it should have ended on a user turn.
+        yield* Effect.when(
+          Effect.logWarning("subscription request ended on an assistant message").pipe(
+            Effect.annotateLogs({ provider, model: selection.model }),
+          ),
+          Effect.succeed(provider === "anthropic" && endsOnAssistant(replayed.prompt.content)),
         );
         const translator = makeTranslator(provider);
         return providerEventsWithPromptCacheFallback({

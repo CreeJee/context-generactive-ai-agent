@@ -117,6 +117,7 @@ import {
   type CompactionSources,
 } from "./compaction.ts";
 import { contextUsageHook, contextView, lastContextUsageEffect } from "./context-usage.ts";
+import { followupTurnHook } from "./followup-turn.ts";
 import { ApiUsage, apiUsageHook } from "./api-usage.ts";
 import { TurnSummaries } from "./turn-summaries.ts";
 import {
@@ -1861,12 +1862,15 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               ...(reportSource !== null ? [] : [workspace]),
               ...(!(reportSource !== null) && isTruthy(workflowPrompt) ? [workflowPrompt] : []),
               ...(isTruthy(parentNotificationPrompt) ? [parentNotificationPrompt] : []),
+              ...(onKanbanBoard ? [kanbanInstructions] : []),
+            ];
+            // Why an automatic run started; it goes to the model as a user turn, not in `prompts`.
+            const followup = [
               ...(InternalFollowup.$is("workflow")(internalFollowup)
                 ? [
                     "This is an automatic continuation of the already approved Plan, not a new user request or approval. Continue the first unfinished step, performing the investigation, preparation, implementation and review yourself. Persist new progress evidence. If all implementation steps are complete, perform verification and persist its result. Do not repeat a promise to work later; record_workflow_blocker only when a confirmed dependency prevents all useful independent work.",
                   ]
                 : []),
-              ...(onKanbanBoard ? [kanbanInstructions] : []),
               ...(kanbanFollowup !== null ? [kanbanAttentionPrompt(kanbanFollowup.reasons)] : []),
               ...(notificationFollowup
                 ? [
@@ -1874,7 +1878,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                   ]
                 : []),
             ];
-            return { prompts, workspace, parentNotifications, onKanbanBoard };
+            return { prompts, followup, workspace, parentNotifications, onKanbanBoard };
           });
 
         /**
@@ -2254,6 +2258,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           // Last to choose the history sent to the model; only retained local images are inlined.
           compacting.hook,
           modelImagesHook(attachments),
+          // After compaction, which never keeps or summarizes this request-only turn.
+          ...(situation.followup.length > 0
+            ? [followupTurnHook(situation.followup, conversation.at(-1))]
+            : []),
           contextUsageHook({
             windowTokens: Effect.sync(window),
             compactionStage: compacting.stage,

@@ -11,6 +11,7 @@ import {
 } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
+import { messageText } from "../../src/agent/compaction.ts";
 import type { JsonValue as Json } from "../../src/json.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
@@ -241,7 +242,7 @@ testAgent({ testProvider: { responder } })("automatic workflow execution", (it) 
       const invocations = session.invocations();
       expect(invocations).toHaveLength(5);
       expect(EffectArray.dedupe(invocations.map((turn) => turn.run.runId))).toHaveLength(3);
-      expect(invocations[1]?.system.join("\n")).toContain(
+      expect(messageText(invocations[1]!.history.at(-1)!)).toContain(
         "automatic continuation of the already approved Plan",
       );
       expect(invocations[3]?.system.join("\n")).toContain("Workflow phase: verify");

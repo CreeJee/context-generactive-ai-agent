@@ -72,7 +72,7 @@ const asyncTurn = Effect.fnUntraced(
         content: "",
       },
     );
-    const internal = invocation.system.some((prompt) => prompt.includes(followUpPrompt));
+    const internal = user.includes(followUpPrompt);
     const last = invocation.history.at(-1);
     const lastTool = last?.role === "tool" ? last.toolCallId : undefined;
     if (!internal && user.startsWith("review-batch ")) {
@@ -179,7 +179,9 @@ const followedUp = Effect.fnUntraced(function* (sessionId: string) {
     provider!.invocations.some(
       (invocation) =>
         invocation.run.threadId === sessionId &&
-        invocation.system.some((prompt) => prompt.includes(followUpPrompt)),
+        invocation.history.some(
+          (message) => message.role === "user" && messageText(message).includes(followUpPrompt),
+        ),
     );
 });
 

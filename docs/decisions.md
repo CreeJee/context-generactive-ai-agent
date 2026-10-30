@@ -2717,6 +2717,16 @@
 - 옛 이름은 기록된 호출을 판정하는 자리에만 남는다(`effects.ts`의 `retiredToolEffects`, 읽기 도구).
 - "서브에이전트 실행 중 메인 작업 지속 (2026-10-04)"의 `wait_subagents` 기본 `timeoutMs` 결정은 이것으로 대체한다.
 
+## 자동 후속 run은 시작 이유를 요청 안의 user 턴으로 보낸다 (2026-10-30)
+
+- 문제: 자동 후속 run(완료 알림, workflow 이어가기, kanban follow-up)은 새 user 턴 없이 시작한다. 그래서 대화가 직전 답(assistant)으로 끝난다. Anthropic은 assistant로 끝나는 요청을 prefill로 보고 400으로 거절한다. 백그라운드 작업이 끝난 뒤 이어가기 run 2건이 이렇게 실패했다.
+- 결정: 시작 이유(후속 안내 문구)를 system prompt에 넣지 않는다. 그 run이 시작한 메시지 바로 뒤에 `<system-reminder>`로 감싼 user 턴으로 넣는다. Claude Code는 `<task-notification>`을 user role로 보내고, pi는 알림을 `custom` 메시지로 두고 모델에는 user로 보낸다. 이 앱도 같은 방식을 따른다.
+  - 이 턴은 모델에 보내는 요청에만 있다(`followupTurnHook`, run hook의 `request`). 대화 기록, 화면, 기억 노드에는 남지 않는다. "내부 후속 실행은 합성 user 턴을 만들지 않는다"는 원칙을 그대로 지킨다.
+  - run의 모든 단계에서 같은 자리에 넣는다. compaction이 그 메시지를 잘랐으면 history 끝에 넣는다.
+  - system prompt가 run마다 바뀌지 않으므로 prompt cache도 덜 깨진다.
+- 안전망: Anthropic 요청 body가 그래도 assistant로 끝나면 user `Continue.` 턴을 붙인다. jcode(issue #600)와 같은 방식이다. 이 경우는 위 경로에서 빠진 실수라서 `subscription request ended on an assistant message` 경고 로그를 남긴다.
+- 버린 안: Claude Agent SDK로 Claude Code를 하네스째 실행하는 t3code 방식. Claude Code 흉내(헤더, `cc_version`)는 사라지지만 루프, 대화 기록, 도구, 승인이 Claude Code 안으로 넘어간다. 앱이 가진 작업으로 깨울 때는 결국 SDK 세션에 user 메시지를 넣어야 해서 이 문제도 남는다. 이 방식이 필요해지면 기존 외부 ACP 에이전트 경로(`claude-code-acp`)로 둔다.
+
 ## Goal도 owner 프로세스에서 돌고 도구를 병렬로 실행한다 (2026-10-26)
 
 - 사용자 결정: 한 모델 턴의 도구 호출은 사용성을 기준으로 병렬로 실행한다. Goal 실행도 일반 채팅과 같다. 읽기는 서로 기다리지 않는다. 쓰기 중 일부만 성공해도 각 결과를 그대로 기록한다.

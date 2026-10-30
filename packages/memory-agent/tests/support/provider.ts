@@ -150,7 +150,7 @@ export const defaultTestResponder = (invocation: ScriptedInvocation): ScriptedTu
 
   // A child's completion notification reaches the parent before its next model step, or in an
   // idle follow-up once the parent's turn ended; the parent retrieves the reports it names.
-  const followUp = instructions.includes("This is an automatic task completion follow-up");
+  const followUp = user.includes("This is an automatic task completion follow-up");
   const reports = tools.find((message) => message.toolCallId === "call-reports");
   if (isTruthy(reports)) {
     const parsed = JSON.parse(toolText(reports));

@@ -7,11 +7,13 @@ import {
   subscriptionModel,
   publicReasoningLimits,
   shownSubscriptionFailure,
+  subscriptionBody,
   subscriptionFailure,
   SubscriptionStreamFailed,
   SubscriptionStreamFailedReason,
   type StreamingOAuthClient,
 } from "../../src/model/subscription.ts";
+import { toPrompt } from "../../src/model/prompt.ts";
 import {
   decodeProviderEvent,
   NormalizedStreamEvent,
@@ -516,6 +518,32 @@ describe("subscription language model", () => {
       );
       expect(parts.map((part) => part.type)).toEqual(["reasoning-start"]);
       expect(yield* Deferred.isDone(ended)).toBe(true);
+    }),
+  );
+});
+
+describe("subscription request body", () => {
+  it.effect("ends an Anthropic conversation that ends on an answer with a user turn", () =>
+    Effect.gen(function* () {
+      const body = subscriptionBody({
+        provider: "anthropic",
+        selection: { provider: "anthropic", model: "claude-opus-5-5", reasoningEffort: "high" },
+        prompt: toPrompt(
+          [
+            { role: "user", content: "Run the tests in the background." },
+            { role: "assistant", content: "Started them." },
+          ],
+          [],
+        ),
+        tools: [],
+        promptCache: undefined,
+      });
+      const { messages } = yield* Schema.decodeEffect(
+        Schema.fromJsonString(
+          Schema.Struct({ messages: Schema.Array(Schema.Struct({ role: Schema.String })) }),
+        ),
+      )(body);
+      expect(messages.map(({ role }) => role)).toEqual(["user", "assistant", "user"]);
     }),
   );
 });
