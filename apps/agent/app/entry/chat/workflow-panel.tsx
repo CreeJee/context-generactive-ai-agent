@@ -182,7 +182,7 @@ export function WorkflowArtifactPanel({
   const execute = actions?.phases.execute;
   const continuingImplementation = execute?.allowed && execute.intent === "continue";
   const outdated = execute && !execute.allowed && execute.reason === "plan_outdated";
-  const completedSteps = plan.steps.filter((step) => step.status === "done").length;
+  const completedStepCounnt = plan.steps.filter((step) => step.status === "done").length + 1;
   const activeStep =
     plan.steps.find((step) => step.status === "in_progress") ??
     plan.steps.find((step) => step.status === "blocked") ??
@@ -229,7 +229,7 @@ export function WorkflowArtifactPanel({
           <CollapsibleTrigger className="group cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring flex w-full items-center gap-2 px-3 py-2 text-left">
             <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground group-data-[panel-open]:rotate-90" />
             <span className="shrink-0 font-medium">
-              단계 {completedSteps}/{plan.steps.length}
+              단계 {completedStepCounnt}/{plan.steps.length}
             </span>
             {activeStep && (
               <span className="min-w-0 truncate text-muted-foreground">
