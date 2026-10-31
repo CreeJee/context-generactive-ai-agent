@@ -1,15 +1,25 @@
-import { NodeHttpServer, NodeSink } from "@effect/platform-node";
+import { NodeHttpPlatform, NodeHttpServer } from "@effect/platform-node";
 import { path } from "memory-agent/synchronous-path";
 import { runNativeEffect } from "memory-agent/native-effect";
-import { nodePlatform } from "memory-agent/node-platform";
+import { nodePlatform, nodePlatformLayer } from "memory-agent/node-platform";
 import { isTruthy } from "../app/truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 
-import { createRequestListener } from "@react-router/node";
-import { Cause, Console, Effect, FileSystem, Fiber, Option, Schema, Stream } from "effect";
-import type { ServerBuild } from "react-router";
+import {
+  Cause,
+  Console,
+  Effect,
+  FileSystem,
+  Layer,
+  ManagedRuntime,
+  Option,
+  Schema,
+  Scope,
+} from "effect";
+import { HttpMiddleware, HttpServerRequest, HttpServerResponse } from "effect/http";
+import { createRequestHandler, type ServerBuild } from "react-router";
 import {
   developmentBuildHeader,
   developmentRequestDecision,
@@ -96,6 +106,42 @@ const clientFile = Effect.fn("serve.clientFile")(function* (
   return Option.isSome(stat) && stat.value.type === "File" ? file : null;
 });
 
+/** What answering a request needs: the client build's files and Node's compression. */
+const answerRuntime = ManagedRuntime.make(Layer.merge(nodePlatformLayer, NodeHttpPlatform.layer));
+
+/**
+ * Answers a request the host and development checks let through: a file of the client build, or
+ * React Router.
+ */
+export const answer = (clientDirectory: string, handle: ReturnType<typeof createRequestHandler>) =>
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const pathname = new URL(request.url, "http://127.0.0.1").pathname;
+    const file =
+      request.method === "GET" || request.method === "HEAD"
+        ? yield* clientFile(clientDirectory, pathname)
+        : null;
+    if (file !== null)
+      return yield* HttpServerResponse.file(file, {
+        headers: {
+          "content-type": contentType(file),
+          "cache-control": pathname.startsWith("/assets/")
+            ? "public, max-age=31536000, immutable"
+            : "no-cache",
+          "x-content-type-options": "nosniff",
+        },
+      });
+    // The request scope closes once the response is sent or the client goes away, so a streamed
+    // answer (SSE) keeps its request alive until then.
+    const signal = yield* Effect.abortSignal;
+    const routed = yield* HttpServerRequest.toWeb(request, { signal });
+    const response = yield* Effect.tryPromise({
+      try: () => handle(routed),
+      catch: (cause) => new Cause.UnknownError(cause),
+    });
+    return HttpServerResponse.fromWeb(response);
+  });
+
 export function openInBrowser(url: string) {
   const [command, args] =
     process.platform === "darwin"
@@ -129,11 +175,19 @@ function listenFor(exposure: Exposure) {
   }
 }
 
-/** Serves the app per its exposure: client files directly, everything else through React Router. */
+/**
+ * Serves the app per its exposure: client files directly, everything else through React Router.
+ * Answers are compressed as the browser accepts (`br`, then `gzip`).
+ */
 export function serve(options: ServeOptions) {
   const listen = listenFor(options.exposure);
-  const clientDirectory = resolve(options.clientDirectory);
-  const handle = createRequestListener({ build: options.build, mode: "production" });
+  const handle = answerRuntime.runSync(
+    NodeHttpServer.makeHandler(
+      answer(resolve(options.clientDirectory), createRequestHandler(options.build, "production")),
+      // Request fibers live as long as the server.
+      { scope: Scope.makeUnsafe(), middleware: HttpMiddleware.compression() },
+    ),
+  );
   const development = isTruthy(options.developmentBuildId)
     ? createDevelopmentBoundary({
         buildId: options.developmentBuildId,
@@ -175,48 +229,7 @@ export function serve(options: ServeOptions) {
         return;
       }
     }
-    const task = nodePlatform.runFork(
-      Effect.gen(function* () {
-        const file =
-          request.method === "GET" || request.method === "HEAD"
-            ? yield* clientFile(clientDirectory, pathname)
-            : null;
-        if (file === null)
-          return yield* Effect.tryPromise({
-            try: () => Promise.resolve(handle(request, response)),
-            catch: (cause) => new Cause.UnknownError(cause),
-          });
-        response.writeHead(200, {
-          "content-type": contentType(file),
-          "cache-control": pathname.startsWith("/assets/")
-            ? "public, max-age=31536000, immutable"
-            : "no-cache",
-          "x-content-type-options": "nosniff",
-        });
-        if (request.method === "HEAD") {
-          response.end();
-          return;
-        }
-        const fs = yield* FileSystem.FileSystem;
-        yield* fs.stream(file).pipe(
-          Stream.run(
-            NodeSink.fromWritable({
-              evaluate: () => response,
-              onError: (cause) => new Cause.UnknownError(cause),
-            }),
-          ),
-        );
-      }).pipe(
-        Effect.catchCause((cause) =>
-          Effect.sync(() => {
-            response.destroy(new Error(Cause.pretty(cause)));
-          }),
-        ),
-      ),
-    );
-    response.once("close", () => {
-      void Effect.runFork(Fiber.interrupt(task));
-    });
+    handle(request, response);
   });
 
   if (development !== null) {

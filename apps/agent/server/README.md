@@ -9,7 +9,8 @@
 ## Interface
 
 - `main.ts` — 실행 파일 엔트리. 쓰는 법은 `context-agent [folder] [--port 5173] [--no-open] [--storage <폴더>] [--broadcast] [--dev-backend]`, `context-agent acp`, `--version`, `--help`이다
-- `serve(options: ServeOptions)` — 노출 범위에 따라 client 정적 파일은 직접 내주고 나머지는 React Router(`#server-build`)로 서빙한다
+- `serve(options: ServeOptions)` — 노출 범위에 따라 client 정적 파일은 직접 내주고 나머지는 React Router(`#server-build`)로 서빙한다. 호스트 검사와 개발 차단은 Node 콜백에서 먼저 하고, 통과한 요청은 `NodeHttpServer.makeHandler`의 `answer`가 답한다. 응답은 `HttpMiddleware.compression`이 브라우저가 받는 대로 `br`, 그다음 `gzip`으로 압축한다. 스트림(SSE)은 chunk마다 flush한다
+- `answer(clientDirectory, handle)` — client 빌드 파일 또는 React Router의 답. React Router에 넘기는 `Request.signal`은 요청 scope에 묶여, 응답을 다 보내거나 클라이언트가 떠나면 abort된다
 - `ServeOptions` / `Exposure` — 서버 옵션(build, port, exposure, clientDirectory, developmentBuildId?, runtimeInstanceId)과 노출 범위 `{kind:"loopback"} | {kind:"broadcast"}`
 - `openInBrowser(url)` — 시스템 브라우저로 페이지를 연다
 - `launchFolder(argument, cwd, storageRoot, executableFolder)` — 실행 인자와 cwd로 열 프로젝트 폴더를 정한다. 결과는 `LaunchFolder`(folder/none/invalid)이고 dual 함수다

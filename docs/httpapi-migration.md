@@ -166,6 +166,14 @@
   - `.server/http.ts`의 `readJson`·`answerDefect`는 쓰는 라우트가 없어 지웠다. `app/routes/api/README.md`는 splat과 첨부 라우트만 다루고, group handler 규칙은 새 `app/.server/api/README.md`로 옮겼다.
   - 실서버 확인 (2026-10-31, 재시작한 dev backend): SSE 네 개, 제보 전송 상태와 evidence(200, `no-store`), 없는 세션 404, 이미지 생성 `approved: false`의 409 `image_approval_required`+`reason: paid_execution`, 빈 prompt와 잘못된 본문의 400, cross-site 403을 확인했다. 진단은 선택한 호환 provider 서버에 연결하지 못해(`UND_ERR_CONNECT_TIMEOUT`) 502 `report_diagnosis_failed`+`reason: model_failed`로 답했다. 실패 경로는 계약대로다. 성공 경로는 provider가 응답할 때 다시 본다.
 
+### 압축
+
+- 결과 (2026-10-31): `server/serve.ts`가 호스트 검사와 개발 차단을 통과한 요청을 `NodeHttpServer.makeHandler`로 답하고, `HttpMiddleware.compression`(기본 `br` → `gzip` → `deflate`, br 품질 4, 1KB 미만 제외)을 건다. client 빌드 파일, 페이지, 앱·채팅 API가 모두 한 곳에서 압축된다. React Router는 `@react-router/node`의 listener 대신 `createRequestHandler`를 `HttpServerRequest.toWeb`/`HttpServerResponse.fromWeb`로 부른다.
+  - SSE는 Node 압축기가 chunk마다 flush하므로 이벤트가 바로 간다. 1-6에서 "앞에 압축을 두면 다시 본다"고 한 부분이다. React Router의 `Request.signal`은 `Effect.abortSignal`로 요청 scope에 묶었다. scope는 응답을 다 보내거나 클라이언트가 떠날 때 닫히므로, 스트림 응답 중에 abort되지 않고 연결이 끊기면 abort된다. `server/serve.test.ts`가 br 압축, 이벤트 flush, 끊김 abort를 본다.
+  - 정적 파일은 요청마다 압축한다. `/assets/`는 1년 immutable이라 첫 로드만 비용을 낸다. 빌드 때 `.br`을 만들면 실행 파일 자산이 커져서 하지 않았다.
+  - loopback에서는 압축 이득이 작다. LAN 노출(`--broadcast`)은 평문 HTTP라 브라우저가 `br` 대신 `gzip`을 고를 수 있다. HTTPS는 정하지 않았다.
+  - `apps/agent`의 코드는 이제 `@react-router/node`를 쓰지 않는다. 의존성 제거는 `package.json`을 다른 작업이 고치고 있어 미뤘다.
+
 ### 2. loader
 
 - `_index.tsx` 서버 loader와 `HydrationBoundary`. 처음 채울 query는 프로젝트 목록, 선택된 프로젝트의 세션 목록, 선택된 세션의 run state다. 채팅 snapshot은 atom이 읽으므로 따로 본다.
