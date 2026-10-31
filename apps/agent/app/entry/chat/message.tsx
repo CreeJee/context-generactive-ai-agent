@@ -7,8 +7,10 @@ import { BotIcon, ChevronRightIcon, Clock3Icon, WrenchIcon } from "lucide-react"
 import type { TraceTaskView } from "memory-agent";
 import { memo, useState } from "react";
 import { Badge } from "~/components/ui/badge";
+import { Bubble, BubbleContent } from "~/components/ui/bubble";
 import { Button } from "~/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "~/components/ui/collapsible";
+import { Message, MessageContent, MessageHeader } from "~/components/ui/message";
 import type { ChatMessage, MessagePart } from "memory-agent/chat-api";
 import { attachmentIdOf, attachmentUrl, type QueuedMessage } from "memory-agent/definitions";
 import { DrawingPicture, UserMessageBody } from "./images";
@@ -558,14 +560,17 @@ const orchestratorSummary = ({ next, ended }: OrchestratorMessage["note"]) =>
 
 /**
  * A message the orchestrator sent to start a run in the user's stead. It sits where the user's
- * messages do, in a color of its own.
+ * messages do, in a color of its own, under the orchestrator's name.
  */
 const OrchestratorMessageView = ({ message }: { readonly message: OrchestratorMessage }) => (
-  <div className="flex justify-end">
-    <p className="max-w-[85%] rounded-2xl bg-secondary px-3.5 py-2 text-sm/relaxed text-secondary-foreground ring-1 ring-border">
-      <span className="font-medium">오케스트레이터:</span> {orchestratorSummary(message.note)}
-    </p>
-  </div>
+  <Message align="end">
+    <MessageContent>
+      <MessageHeader>오케스트레이터</MessageHeader>
+      <Bubble variant="secondary">
+        <BubbleContent>{orchestratorSummary(message.note)}</BubbleContent>
+      </Bubble>
+    </MessageContent>
+  </Message>
 );
 
 /**
@@ -607,8 +612,8 @@ export const MessageView = memo(function MessageView({
   }
 
   return (
-    <div className="flex justify-start">
-      <div className="flex max-w-[85%] flex-col gap-2 text-sm/relaxed">
+    <Message>
+      <MessageContent>
         {message.parts.map((part, index) => {
           if (part.type === "thinking")
             return (
@@ -644,7 +649,7 @@ export const MessageView = memo(function MessageView({
             );
           return null;
         })}
-      </div>
-    </div>
+      </MessageContent>
+    </Message>
   );
 }, sameMessageView);

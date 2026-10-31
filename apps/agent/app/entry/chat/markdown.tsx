@@ -65,7 +65,8 @@ export function Markdown({ text, streaming }: { text: string; streaming: boolean
       animated
       // Links open only after the user confirms the destination.
       linkSafety={linkSafety}
-      className="min-w-0 wrap-break-word"
+      // Streamdown sizes inline code and headings for a text-sm body.
+      className="min-w-0 text-sm/relaxed wrap-break-word"
     >
       {text}
     </Streamdown>

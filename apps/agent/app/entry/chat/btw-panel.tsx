@@ -10,6 +10,7 @@ import {
 import { parseAsString, useQueryState } from "nuqs";
 import { useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
+import { Bubble, BubbleContent } from "~/components/ui/bubble";
 import { Button } from "~/components/ui/button";
 import {
   Dialog,
@@ -21,6 +22,7 @@ import {
   DialogTitle,
 } from "~/components/ui/dialog";
 import { Marker, MarkerContent, MarkerIcon } from "~/components/ui/marker";
+import { Message, MessageContent } from "~/components/ui/message";
 import {
   Sheet,
   SheetContent,
@@ -89,29 +91,40 @@ function BtwMessage({ message, streaming }: { message: ChatMessage; streaming: b
   if (message.role === "user") {
     const text = message.parts.flatMap((part) => (part.type === "text" ? [part.content] : []));
     return (
-      <div className="ml-auto max-w-[85%] rounded-lg bg-muted px-3 py-2 text-sm whitespace-pre-wrap">
-        {text.join("")}
-      </div>
+      <Message align="end">
+        <MessageContent>
+          <Bubble variant="muted">
+            <BubbleContent>
+              <p className="text-sm/relaxed whitespace-pre-wrap">{text.join("")}</p>
+            </BubbleContent>
+          </Bubble>
+        </MessageContent>
+      </Message>
     );
   }
   return (
-    <div className="flex flex-col gap-1.5 text-sm">
-      {message.parts.map((part, index) => {
-        switch (part.type) {
-          case "text":
-            return <Markdown key={index} text={part.content} streaming={streaming} />;
-          case "tool-call":
-            return (
-              <p key={part.id} className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <SearchIcon className="size-3" aria-hidden />
-                {toolLabel(part.name)}
-              </p>
-            );
-          default:
-            return null;
-        }
-      })}
-    </div>
+    <Message>
+      <MessageContent>
+        {message.parts.map((part, index) => {
+          switch (part.type) {
+            case "text":
+              return <Markdown key={index} text={part.content} streaming={streaming} />;
+            case "tool-call":
+              return (
+                <p
+                  key={part.id}
+                  className="flex items-center gap-1.5 text-xs text-muted-foreground"
+                >
+                  <SearchIcon className="size-3" aria-hidden />
+                  {toolLabel(part.name)}
+                </p>
+              );
+            default:
+              return null;
+          }
+        })}
+      </MessageContent>
+    </Message>
   );
 }
 

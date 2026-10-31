@@ -3468,3 +3468,12 @@
 - CLI가 쓴 원본에는 `typeof` 분기와 `as React.CSSProperties` 같은 단언이 흔하다. 이것을 저장소 규칙에 맞추려고 매번 고치면 `shadcn add --diff`가 upstream 변경 대신 우리 수정을 보여 주고, 컴포넌트를 받을 때마다 손이 간다.
 - shadcn lint 규칙(`no-raw-colors`, `no-unknown-classes` 등)과 Effect 언어 서비스 진단은 이 폴더에도 그대로 적용된다.
 - 이미 고친 `sidebar.tsx`·`toggle-group.tsx`의 수정은 되돌리지 않는다. 앱 코드가 그 `CSSProperties` 선언에 기대고, `SidebarSeparator` 수정은 사이드바가 8px 넘치던 버그를 고친 것이다.
+
+## 채팅 메시지를 shadcn Message·Bubble로 그린다 (2026-10-31)
+
+- 사용자 요청으로 채팅 화면에서 손으로 만든 요소를 shadcn 레지스트리의 채팅 컴포넌트로 바꾼다. 첫 단계로 `shadcn add message bubble`을 받았다.
+- 사용자 메시지는 `Message align="end"` 안의 기본(primary) `Bubble`이다. `#N` 이미지 칩과 첨부 이미지는 그대로다.
+- 오케스트레이터 메시지는 `MessageHeader`("오케스트레이터") 아래 `secondary` Bubble이다. 예전 말풍선 앞의 "오케스트레이터:"는 머리줄로 옮겼다.
+- 답변은 `Message`와 `MessageContent`로 감싼다. 예전의 85% 폭 제한이 없어져 답변이 대화 폭을 다 쓴다.
+- BTW 패널의 질문은 `muted` Bubble, 답변은 같은 `Message` 틀이다.
+- 글자 크기: Message와 Bubble은 base-mira 기본인 `text-xs`다. 그런데 Streamdown은 `text-sm` 본문에 맞춰 인라인 코드와 제목 크기를 정한다. 본문만 xs로 줄이면 인라인 코드가 본문보다 커진다. 그래서 답변 Markdown과 사용자·BTW 질문 본문은 전처럼 `text-sm/relaxed`다. 오케스트레이터 알림은 Bubble 기본 크기를 쓴다.

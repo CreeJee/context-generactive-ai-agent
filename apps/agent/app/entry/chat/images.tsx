@@ -13,8 +13,10 @@ import {
   AttachmentTitle,
   AttachmentTrigger,
 } from "~/components/ui/attachment";
+import { Bubble, BubbleContent } from "~/components/ui/bubble";
 import { Dialog, DialogContent, DialogTitle } from "~/components/ui/dialog";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "~/components/ui/hover-card";
+import { Message, MessageContent } from "~/components/ui/message";
 import { Spinner } from "~/components/ui/spinner";
 import { DraftImage } from "./draft-images";
 
@@ -109,61 +111,68 @@ export function UserMessageBody({
 }) {
   const [open, setOpen] = useState<MessageImage | null>(null);
   return (
-    <div className="flex flex-col items-end gap-1.5">
-      {text.length > 0 && (
-        <p className="max-w-[85%] rounded-2xl bg-primary px-3.5 py-2 text-sm/relaxed whitespace-pre-wrap text-primary-foreground">
-          {splitReferences(text, images).map((run, index) =>
-            TextRun.$match(run, {
-              text: (part) => <span key={index}>{part.text}</span>,
-              reference: ({ token, image }) => (
-                <HoverCard key={index}>
-                  <HoverCardTrigger
-                    render={
-                      <button
-                        type="button"
-                        onClick={() => setOpen(image)}
-                        className="mx-0.5 rounded bg-primary-foreground/20 px-1 font-medium underline-offset-2 hover:underline"
-                      />
-                    }
-                  >
-                    {token}
-                  </HoverCardTrigger>
-                  <HoverCardContent className="w-56">
-                    <img
-                      src={image.url}
-                      alt={`첨부 이미지 #${image.number}`}
-                      className="max-h-48 w-full rounded object-contain"
-                    />
-                  </HoverCardContent>
-                </HoverCard>
-              ),
-            }),
-          )}
-        </p>
-      )}
-      {images.length > 0 && (
-        <div className="flex flex-wrap justify-end gap-1.5">
-          {images.map((image) => (
-            <button
-              key={image.number}
-              type="button"
-              onClick={() => setOpen(image)}
-              className="relative overflow-hidden rounded-lg ring-1 ring-foreground/10"
-            >
-              <img
-                src={image.url}
-                alt={`첨부 이미지 #${image.number}`}
-                className="h-28 max-w-48 object-cover"
-              />
-              <span className="absolute top-1 left-1 rounded bg-black/60 px-1 text-3xs text-white">
-                #{image.number}
-              </span>
-            </button>
-          ))}
-        </div>
-      )}
-      <ImageDialog image={open} onClose={() => setOpen(null)} />
-    </div>
+    <Message align="end">
+      <MessageContent>
+        {text.length > 0 && (
+          <Bubble>
+            <BubbleContent>
+              {/* The same reading size as the answers beside it. */}
+              <p className="text-sm/relaxed whitespace-pre-wrap">
+                {splitReferences(text, images).map((run, index) =>
+                  TextRun.$match(run, {
+                    text: (part) => <span key={index}>{part.text}</span>,
+                    reference: ({ token, image }) => (
+                      <HoverCard key={index}>
+                        <HoverCardTrigger
+                          render={
+                            <button
+                              type="button"
+                              onClick={() => setOpen(image)}
+                              className="mx-0.5 rounded bg-primary-foreground/20 px-1 font-medium underline-offset-2 hover:underline"
+                            />
+                          }
+                        >
+                          {token}
+                        </HoverCardTrigger>
+                        <HoverCardContent className="w-56">
+                          <img
+                            src={image.url}
+                            alt={`첨부 이미지 #${image.number}`}
+                            className="max-h-48 w-full rounded object-contain"
+                          />
+                        </HoverCardContent>
+                      </HoverCard>
+                    ),
+                  }),
+                )}
+              </p>
+            </BubbleContent>
+          </Bubble>
+        )}
+        {images.length > 0 && (
+          <div className="flex flex-wrap justify-end gap-1.5">
+            {images.map((image) => (
+              <button
+                key={image.number}
+                type="button"
+                onClick={() => setOpen(image)}
+                className="relative overflow-hidden rounded-lg ring-1 ring-foreground/10"
+              >
+                <img
+                  src={image.url}
+                  alt={`첨부 이미지 #${image.number}`}
+                  className="h-28 max-w-48 object-cover"
+                />
+                <span className="absolute top-1 left-1 rounded bg-black/60 px-1 text-3xs text-white">
+                  #{image.number}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+        <ImageDialog image={open} onClose={() => setOpen(null)} />
+      </MessageContent>
+    </Message>
   );
 }
 
