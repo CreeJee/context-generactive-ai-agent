@@ -540,11 +540,39 @@ const sameMessageView = (previous: MessageViewProps, next: MessageViewProps) =>
         taskForToolCall(previous.tasks, part.id) === taskForToolCall(next.tasks, part.id)),
   );
 
+type OrchestratorMessage = Extract<ChatMessage, { readonly role: "orchestrator" }>;
+
+const nextLabels = {
+  results: "결과 확인",
+  plan: "Plan 이어서 진행",
+  board: "칸반 보드 확인",
+} as const satisfies Record<OrchestratorMessage["note"]["next"], string>;
+
+/** What the orchestrator's message says, in the UI's words. */
+const orchestratorSummary = ({ next, ended }: OrchestratorMessage["note"]) =>
+  [
+    ...(ended.background > 0 ? [`백그라운드 작업 ${ended.background}개 끝남`] : []),
+    ...(ended.subagent > 0 ? [`서브에이전트 ${ended.subagent}개 끝남`] : []),
+    nextLabels[next],
+  ].join(", ");
+
+/**
+ * A message the orchestrator sent to start a run in the user's stead. It sits where the user's
+ * messages do, in a color of its own.
+ */
+const OrchestratorMessageView = ({ message }: { readonly message: OrchestratorMessage }) => (
+  <div className="flex justify-end">
+    <p className="max-w-[85%] rounded-2xl bg-secondary px-3.5 py-2 text-sm/relaxed text-secondary-foreground ring-1 ring-border">
+      <span className="font-medium">오케스트레이터:</span> {orchestratorSummary(message.note)}
+    </p>
+  </div>
+);
+
 /**
  * One chat message. Assistant text renders as Markdown (`streaming` while it is still arriving);
- * user text stays exactly as typed. Tool calls show what was looked up and what came back. A
- * streaming answer renders only itself: the other messages keep their render unless something
- * they show changed.
+ * user text stays exactly as typed, and the orchestrator's message says why it started a run. Tool
+ * calls show what was looked up and what came back. A streaming answer renders only itself: the
+ * other messages keep their render unless something they show changed.
  */
 export const MessageView = memo(function MessageView({
   message,
@@ -557,6 +585,8 @@ export const MessageView = memo(function MessageView({
   onArchiveTask,
   onDeleteTask,
 }: MessageViewProps) {
+  if (message.role === "orchestrator") return <OrchestratorMessageView message={message} />;
+
   const isUser = message.role === "user";
 
   if (isUser) {

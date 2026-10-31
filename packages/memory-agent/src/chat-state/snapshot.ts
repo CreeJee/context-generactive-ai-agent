@@ -91,11 +91,14 @@ export const shownMessage = ({
 }: {
   readonly id: string;
   readonly messages: Arr.NonEmptyReadonlyArray<StoredMessage>;
-}): ChatMessage => ({
-  id,
-  role: messages[0].role === "user" ? "user" : "assistant",
-  parts: messages.reduce(partsAfter, []),
-});
+}): ChatMessage => {
+  const [first] = messages;
+  const parts = messages.reduce(partsAfter, []);
+  if (first.role !== "user") return { id, role: "assistant", parts };
+  return first.orchestrator === undefined
+    ? { id, role: "user", parts }
+    : { id, role: "orchestrator", note: first.orchestrator, parts };
+};
 
 const noMessages: Pick<ChatSnapshot, "messages" | "older"> = { messages: [], older: null };
 

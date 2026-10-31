@@ -281,7 +281,19 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
               messageText(message).includes("Background work completed"),
           ),
         ).toBe(true);
-        expect(messages.filter((message) => message.role === "user")).toHaveLength(2);
+        // The orchestrator's message started the follow-up; no user turn was made up for it.
+        expect(
+          messages.filter(
+            (message) => message.role === "user" && message.orchestrator === undefined,
+          ),
+        ).toHaveLength(2);
+        expect(
+          messages.flatMap((message) =>
+            message.role === "user" && message.orchestrator !== undefined
+              ? [message.orchestrator]
+              : [],
+          ),
+        ).toEqual([{ next: "results", ended: { background: 0, subagent: 1 } }]);
       }),
   );
 

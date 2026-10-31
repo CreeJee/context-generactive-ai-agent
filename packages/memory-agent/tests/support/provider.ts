@@ -160,10 +160,10 @@ export const defaultTestResponder = (invocation: ScriptedInvocation): ScriptedTu
       : toolText(reports);
     return { text: followUp ? `Background work completed. ${parts}` : parts };
   }
-  // In a run: "Notification <id>; task <task>; completed: …". In a follow-up: "Notification <id>;
-  // Task <task> (completed): …".
+  // In a run: "Notification <id>; task <task>; completed: …". In a follow-up, the orchestrator's
+  // message: "Notification <id>; Task <task> (completed): …".
   const notified = [
-    ...instructions.matchAll(
+    ...`${instructions}\n${user}`.matchAll(
       /Notification \S+; [Tt]ask ([^\s;]+)(?:; \w+:| \(\w+\):) Subagent (?:completed|failed); (\{.*\})$/gmu,
     ),
   ].map(([, taskId, payload]) => ({ taskId, attemptId: JSON.parse(payload!).attemptId }));

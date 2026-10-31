@@ -37,6 +37,8 @@ export interface ConversationMessage {
     | undefined;
   readonly toolCalls?: ReadonlyArray<ConversationToolCall> | undefined;
   readonly toolCallId?: string | undefined;
+  /** Present when the orchestrator sent the user message; it is no user turn and has no user node. */
+  readonly orchestrator?: object | undefined;
 }
 
 /** A message compaction sends in place of others: a summary, a marker, a pointer or leads. */
@@ -186,9 +188,11 @@ export type SummaryBlock = typeof SummaryBlock.Type;
 export const StoredSummaries = Schema.Struct({ blocks: Schema.Array(SummaryBlock) });
 const decodeSummaries = Schema.decodeUnknownOption(StoredSummaries);
 
-/** Where each user turn of a conversation starts. */
+/** Where each user turn of a conversation starts; the orchestrator's messages are none. */
 export const userTurns = (messages: ReadonlyArray<ConversationMessage>) =>
-  messages.flatMap((message, index) => (message.role === "user" ? [index] : []));
+  messages.flatMap((message, index) =>
+    message.role === "user" && message.orchestrator === undefined ? [index] : [],
+  );
 
 /**
  * Whether a user message is the turn a node recorded. Memory keeps a turn without a pasted key,

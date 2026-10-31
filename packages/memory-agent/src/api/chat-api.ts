@@ -8,6 +8,7 @@ import {
 } from "effect/http-api";
 import {
   ImagePart,
+  OrchestratorNote,
   StoredInterruptPayload,
   StoredUserMessage,
   TextPart,
@@ -199,12 +200,23 @@ export const MessagePart = Schema.Union([
 ]).pipe(Schema.toTaggedUnion("type"));
 export type MessagePart = typeof MessagePart.Type;
 
-/** A message of the conversation. An assistant message holds one run's text and tool calls. */
-export const ChatMessage = Schema.Struct({
-  id: Schema.String,
-  role: Schema.Literals(["user", "assistant"]),
-  parts: Schema.Array(MessagePart),
-});
+/**
+ * A message of the conversation. An assistant message holds one run's text and tool calls. The
+ * orchestrator's message started a run in the user's stead; its parts are what the model read.
+ */
+export const ChatMessage = Schema.Union([
+  Schema.Struct({
+    id: Schema.String,
+    role: Schema.Literals(["user", "assistant"]),
+    parts: Schema.Array(MessagePart),
+  }),
+  Schema.Struct({
+    id: Schema.String,
+    role: Schema.Literal("orchestrator"),
+    note: OrchestratorNote,
+    parts: Schema.Array(MessagePart),
+  }),
+]);
 export type ChatMessage = typeof ChatMessage.Type;
 
 /** The approvals a run waits for; the next run answers them with `resume`. */
