@@ -14,9 +14,10 @@ shell, no approval, and the user can edit it afterwards.
   charts from given numbers, UI wireframes, icons, logo marks, badges, simple illustrations
   built from shapes.
 - **Cannot:** photographs, painted or rendered illustrations, textures, sprites, anything that
-  needs a generative image model. Say so plainly and offer the nearest drawable thing. Never
-  suggest the user set an API key: this app's shell removes credential-looking variables, so
-  that road is closed.
+  needs a generative image model. When this turn offers image generation, an explicit request
+  for such an image goes there, not into an SVG. Otherwise say plainly that it cannot be drawn
+  and offer the nearest drawable thing. Never suggest the user set an API key: this app's shell
+  removes credential-looking variables, so that road is closed.
 
 ## Rules
 
