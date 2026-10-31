@@ -31,7 +31,7 @@
 - `accounts(provider)`와 `models(provider)` 키는 `accountsRoot`와 `modelsRoot` 아래에 놓인다. 그래서 root 키로 모든 provider를 한꺼번에 무효화할 수 있다. mutation의 `publishModelSelection`은 이 구조에 의존한다.
 - `hiddenProjects` 키는 `projects` 키 아래(`["app","global","projects","hidden"]`)에 놓인다. 그래서 프로젝트 목록을 무효화하면 보관 목록도 함께 다시 읽는다.
 - `sessionQueries.runState` 키에는 `holder`가 들어가지 않는다. 같은 세션의 run-state 캐시는 holder와 관계없이 하나다.
-- 첫 문서에서는 `../../routes/_index.tsx`의 loader가 `global.projects`와 열린 프로젝트의 `project.sessions`를 채운다(`../first-screen.ts`). 채운 값은 같은 키, 같은 `{active, archived}` 모양이다.
+- 첫 문서에서는 `../../routes/_index.tsx`의 loader(`app/.server/first-screen.ts`)가 이 팩토리의 `queryKey`로 캐시를 채운다: global projects·hiddenProjects·imageSettings, project sessions·agents·skills·decisions·boards, session queue·subagents·approvals·trace·kanban. `queryKey`의 data 타입이 채우는 값의 타입과 맞아야 컴파일된다. auth·accounts·accountQuota·models는 공급자·keychain·원격을 부르므로, runState는 page holder에 따라 달라서 채우지 않는다. staleTime 0인 query는 채운 값을 먼저 보이고 마운트할 때 다시 읽는다.
 - staleTime 0을 유지하는 쿼리: project decisions·boards, session runState·board·decisions·kanban. 이 쿼리들은 항상 최신 서버 상태를 다시 읽어야 한다.
 - nullable id 훅(`useProjectSessionsQuery`, `useAgentsQuery`, `useProjectTraceTaskQuery`)은 null이면 키에 빈 문자열을 넣고 `enabled: false`로 둔다. 코드 주석은 '프로젝트는 URL과 프로젝트 목록이 정리되는 동안 없을 수 있다'고 설명한다.
 - `projectQueries.sessions`의 queryFn은 Promise 경계다. 주석: 'Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.' active와 archived 세션은 동시에 읽는다.

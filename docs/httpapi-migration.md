@@ -179,13 +179,19 @@
 - `_index.tsx` 서버 loader와 `HydrationBoundary`. 처음 채울 query는 프로젝트 목록, 선택된 프로젝트의 세션 목록, 선택된 세션의 run state다. 채팅 snapshot은 atom이 읽으므로 따로 본다.
 - 결과 (2026-10-31): `_index.tsx` loader가 프로젝트 목록과 열린 프로젝트의 active·archived 대화 목록을 채운다. 열린 프로젝트는 페이지와 같은 규칙으로 고른다(`?project=`가 목록에 있으면 그것, 아니면 첫 프로젝트).
   - loader(`app/.server/first-screen.ts`)는 `HttpApiClient.make(AppApi)`에 `FetchHttpClient.Fetch`로 `serveApi`를 붙여 프로세스 안에서 부른다. HMR frontend(Vite)는 `/api`를 stable dev backend로 넘기고 agent가 없으므로, `CONTEXT_AGENT_DEV_BACKEND`가 있으면 그 backend에 GET으로 묻는다. 여기서 `serveApi`를 부르면 Vite 프로세스에 같은 저장소를 쓰는 agent가 하나 더 뜬다. `server/runtime-resources-dev.test.ts`가 이 환경에서 세션 페이지를 렌더해도 저장소가 비어 있는지 본다.
-  - loader 값은 `Schema.toCodecJson`으로 encode하고 페이지가 decode한다(`app/entry/first-screen.ts`). 첫 화면 Schema는 지금 모두 plain Struct지만, class나 변환이 생겨도 turbo-stream이 깨뜨리지 않는다. 페이지는 decode한 값을 임시 QueryClient에 넣고 `dehydrate`해 `HydrationBoundary`에 준다. 값에 서버 시각을 붙여, 캐시에 이미 있는 query는 그보다 새 값일 때만 덮는다.
+  - 처음에는 loader 값을 `Schema.toCodecJson`으로 encode하고 페이지가 decode했다. 채우는 query를 늘리면서 바꿨다(아래 "넓힘").
   - run state는 채우지 않는다. 그 응답의 lease는 page holder(브라우저 sessionStorage, `pageIdentity`)에 따라 달라서 서버가 알 수 없다. 페이지도 lease를 claim한 뒤에야 run state를 읽는다. 채팅 snapshot도 그대로 둔다.
   - loader는 500ms까지만 기다린다. warm 서버에서 loader는 약 13ms(HMR frontend 경유 `/_.data`), API 하나는 약 2ms다. 처음 시작한 서버는 첫 요청에서 agent를 build하므로, 그동안 첫 문서를 붙잡지 않고 페이지의 query가 따로 묻는다. build는 `ManagedRuntime`이 따로 fork하므로 기다림을 끊어도 계속된다.
   - `shouldRevalidate`는 false다. nuqs는 `history.pushState`를 직접 부르므로, 뒤로 가기의 popstate에서 React Router가 search 변경으로 loader를 다시 불렀다(`/_.data` 요청, Playwright로 확인). 캐시는 query와 SSE가 최신으로 두므로 loader는 첫 문서만 채운다.
   - 찾은 문제: 대화 목록이 SSR에 그려지면서 제목 없는 대화의 시작 시각(`dayAndTime`, dayjs 로컬 시간대)이 서버 시간대로 나갔다. 브라우저 시간대가 다르면 hydration이 실패하고 React가 트리를 다시 만들었다(Playwright `timezoneId: America/New_York`로 재현). `useHydrated`로 hydration 동안에는 `제목 없는 대화`로 그리고, 그 뒤에 시각을 그린다.
   - `projectQueries.sessions`가 active와 archived를 차례로 읽던 것을 동시에 읽게 바꿨다.
   - 확인 (HMR frontend, Playwright): 첫 요청 묶음에 `/api/projects`와 `/api/sessions`가 없다. `?project=`가 있을 때 SSR HTML에 대화 목록이 그려진다. `Asia/Seoul`·`America/New_York`·`Europe/London`·`Asia/Tokyo`에서 콘솔 오류가 없다. SSE `ready`가 처음 연결의 틈을 메우려고 root를 무효화하므로 두 query는 그 뒤에 한 번 더 읽힌다. 이 재요청은 3단계(ETag)의 측정 대상이다. 프로덕션 경로(in-process `serveApi`)는 stable dev backend를 다시 build한 뒤 확인한다.
+- 넓힘 (2026-10-31): loader가 첫 화면이 마운트할 때 읽는 query를 더 채운다. 서버 QueryClient에 기존 query factory의 `queryKey`로 넣고 `dehydrate`한 상태를 돌려주며, 페이지는 그대로 `HydrationBoundary`에 넣는다.
+  - 채우는 query: global projects·hiddenProjects·imageSettings, 열린 프로젝트의 sessions·agents·skills·decisions·boards, 열린 대화(그 프로젝트 active 목록의 `?session=`, 없으면 첫 대화)의 queue·subagents·approvals·trace·kanban. 열린 대화는 페이지와 같은 규칙으로 고른다.
+  - 채우지 않는 query: auth·accounts는 keychain을 읽고 legacy 계정을 옮기며, accountQuota는 구독 usage를 원격으로 묻고, models는 공급자 카탈로그(호환 endpoint는 `discover`)를 네트워크로 읽는다. loader가 마감에서 끊으면 페이지가 같은 호출을 다시 하므로 원격 호출이 늘어난다. runState는 page holder에 따라 달라서 뺀다. 채팅 snapshot은 query가 아니다.
+  - 값마다 schema로 encode하지 않는다. `fill`이 `queryKey`의 data 타입과 서버 client가 돌려준 값의 타입을 맞추고, 그 타입이 `Plain`(문자열·숫자·불리언·null·undefined와 그 배열·객체)이어야 컴파일된다. `Option`·`DateTime` 같은 interface 값은 이 제약을 통과하지 못한다(scratch 검사로 확인). 응답 계약에는 지금 class 값이 없다.
+  - 가지(프로젝트 목록→열린 프로젝트→열린 대화)는 `mode: "result"`로 따로 실패한다. 하나가 실패하거나 마감에 걸려도 그때까지 채운 query는 넘긴다.
+  - 측정 (HMR frontend): `/_.data`는 40-80ms, 115KB(압축 전)다. skills가 약 60ms로 가장 느리다. hydration 뒤 SSE 연결 전 요청이 22개에서 16개로 줄었다. 남은 것은 채우지 않는 query, staleTime 0인 decisions·boards·kanban(채운 값을 먼저 보이고 마운트할 때 다시 읽는다), 그리고 `useWorkTrace`가 마운트할 때 하는 invalidate와 stream snapshot의 trace 재요청이다. trace 재요청은 `session/work-trace.ts`의 설계라 여기서 바꾸지 않았다.
 
 ### 3. ETag
 

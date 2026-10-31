@@ -1,9 +1,7 @@
 import { HydrationBoundary } from "@tanstack/react-query";
-import { useMemo } from "react";
 import type { ShouldRevalidateFunction } from "react-router";
 import { firstScreen } from "~/.server/first-screen";
 import { App } from "../entry";
-import { firstScreenState } from "../entry/first-screen";
 import type { Route } from "./+types/_index";
 
 export function meta() {
@@ -20,12 +18,8 @@ export const loader = ({ request }: Route.LoaderArgs) => firstScreen(new URL(req
 export const shouldRevalidate: ShouldRevalidateFunction = () => false;
 
 export default function Agent({ loaderData }: Route.ComponentProps) {
-  const state = useMemo(
-    () => (loaderData === null ? undefined : firstScreenState(loaderData)),
-    [loaderData],
-  );
   return (
-    <HydrationBoundary state={state}>
+    <HydrationBoundary state={loaderData}>
       <App />
     </HydrationBoundary>
   );
