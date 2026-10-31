@@ -1,6 +1,6 @@
 import { KanbanSquareIcon } from "lucide-react";
 import { Badge } from "~/components/ui/badge";
-import { Button } from "~/components/ui/button";
+import { SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem } from "~/components/ui/sidebar";
 import { useProjectBoardsQuery } from "../queries/project";
 
 /** Opens the project's kanban board: every conversation's board in one view, running ones first. */
@@ -14,12 +14,14 @@ export function ProjectBoardButton({
   const boards = useProjectBoardsQuery(projectId).data ?? [];
   const running = boards.filter((board) => board.kanbanActive).length;
   return (
-    <Button variant="ghost" size="sm" className="min-w-0 flex-1 justify-start" onClick={onOpen}>
-      <KanbanSquareIcon />
-      칸반 보드
-      <Badge variant={running > 0 ? "default" : "secondary"} className="ml-auto">
-        {boards.length}
-      </Badge>
-    </Button>
+    <SidebarMenuItem>
+      <SidebarMenuButton onClick={onOpen}>
+        <KanbanSquareIcon />
+        <span>칸반 보드</span>
+      </SidebarMenuButton>
+      <SidebarMenuBadge>
+        <Badge variant={running > 0 ? "default" : "secondary"}>{boards.length}</Badge>
+      </SidebarMenuBadge>
+    </SidebarMenuItem>
   );
 }

@@ -9,6 +9,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "~/components/ui/sheet";
+import { SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem } from "~/components/ui/sidebar";
 import { DecisionPrompt } from "../chat/decision-prompt";
 import { useDecisionInboxQuery } from "../queries/project";
 import { koreanLocalTime } from "../shared/local-time";
@@ -29,18 +30,17 @@ export function DecisionInbox({
   const [open, setOpen] = useState(false);
   const items = useDecisionInboxQuery(projectId).data ?? [];
   return (
-    <>
-      <Button
-        variant="ghost"
-        size="sm"
-        className="min-w-0 flex-1 justify-start"
-        onClick={() => setOpen(true)}
-      >
+    <SidebarMenuItem>
+      <SidebarMenuButton onClick={() => setOpen(true)}>
         <InboxIcon />
-        판단 대기
-        {/* Only a waiting decision asks for attention; none is the usual state. */}
-        {items.length > 0 && <Badge className="ml-auto">{items.length}</Badge>}
-      </Button>
+        <span>판단 대기</span>
+      </SidebarMenuButton>
+      {/* Only a waiting decision asks for attention; none is the usual state. */}
+      {items.length > 0 && (
+        <SidebarMenuBadge>
+          <Badge>{items.length}</Badge>
+        </SidebarMenuBadge>
+      )}
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent side="left">
           <SheetHeader>
@@ -88,6 +88,6 @@ export function DecisionInbox({
           </div>
         </SheetContent>
       </Sheet>
-    </>
+    </SidebarMenuItem>
   );
 }

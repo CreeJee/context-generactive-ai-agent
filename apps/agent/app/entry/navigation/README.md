@@ -8,12 +8,12 @@
 
 - `ModelSection` — 모델 Select와, 선택한 모델이 허용하는 추론 강도 Select를 그리는 사이드바 섹션 (sidebar.tsx)
 - `ProjectSection` — 접히는 프로젝트 섹션. 이름으로 찾는 프로젝트 Combobox(보관한 프로젝트는 따로 묶음), 폴더 열기 버튼, 권한 모드(ask/auto/full), 다른 프로젝트 기억 검색 토글(R08), 보관하기를 담는다 (sidebar.tsx)
-- `SessionSection` — 세션·보관 세션 목록. "대화" 머리줄의 위치 필터 메뉴(`sessionPlace`·`placeFilterOf`·`shownIn`)로 나눠 보여 준다. 위치 칩은 모든 위치를 볼 때 worktree 대화에만 붙고, 보관·삭제 버튼은 행 끝 위에 겹쳐 나타난다 (sidebar.tsx, `App`이 렌더)
+- `SessionSection` — 세션·보관 세션 목록. "대화" 머리줄의 위치 필터 메뉴(`sessionPlace`·`placeFilterOf`·`shownIn`)로 나눠 보여 준다. 행은 `SidebarMenuButton`이다. 위치 칩은 모든 위치를 볼 때 worktree 대화에만 붙는다. 보관·원본 삭제는 행에 올리거나 포커스하면 나타나는 `SidebarMenuAction` 메뉴에 있다. 원본 삭제는 `AlertDialog`로 확인받는다. 목록을 불러오는 동안(`loading`)은 Skeleton을 보인다 (sidebar.tsx, `App`이 렌더)
 - `Separator` — sidebar.tsx가 `~/components/ui/separator`에서 다시 내보내는 구분선
 - `SidebarDisclosureTrigger` — `CollapsibleTrigger` 래퍼. `leading` 슬롯, 말줄임 본문, 회전하는 chevron을 그린다
 - `AccountModelPanel` / `accountSummary` — 공급자 인증 상태와 선택 모델을 한 줄로 요약하고 설정을 접어 두는 패널. `accountSummary`는 `{status, model, hasError}`를 돌려주는 dual 함수다
-- `DecisionInbox` — 프로젝트 전체에서 사람의 판단을 기다리는 카드 수를 배지로 보여 준다(0이면 배지 없음). `ProjectBoardButton`과 한 줄에 놓인다. Sheet에서 `DecisionPrompt`로 답하거나 `onOpenCard(sessionId, cardId)`로 보드를 연다
-- `ProjectBoardButton` — 프로젝트 칸반 보드를 여는 버튼. 배지는 보드 수를 보이고 실행 중(`kanbanActive`)인 보드가 있으면 강조된다
+- `DecisionInbox` — 프로젝트 전체에서 사람의 판단을 기다리는 카드 수를 `SidebarMenuBadge`로 보여 준다(0이면 배지 없음). `SidebarMenuItem`을 돌려주므로 `SidebarMenu` 안에 둔다. Sheet에서 `DecisionPrompt`로 답하거나 `onOpenCard(sessionId, cardId)`로 보드를 연다
+- `ProjectBoardButton` — 프로젝트 칸반 보드를 여는 `SidebarMenuItem`. 배지는 보드 수를 보이고 실행 중(`kanbanActive`)인 보드가 있으면 강조된다
 - `providerLabels` — `ProviderId`별 표시 이름(ChatGPT/Claude/OpenAI 호환). `satisfies Record<ProviderId, string>`
 - `effortChoices` / `EffortChoice` — `(selection, model)` dual 함수. 사이드바와 `/effort`가 쓰는 추론 강도 선택지를 만든다
 - `AccountSwitcher` / `AccountSwitcherMenu` — 사이드바 하단의 계정 전환 드롭다운. openai·anthropic 프로필, 한도, 호환 계정을 모아 `onSwitch(AccountTarget)`과 `onManage`를 호출한다
@@ -49,6 +49,7 @@
 - 이미 목록에 있는 폴더를 고르면 다시 등록하지 않고 그 프로젝트를 선택한다(`onSelect`). 다시 등록하면 `already_registered`로 거부되기 때문이다.
 - `ProjectSection`의 `onHide`는 프로젝트를 목록에서만 뺀다(보관). 대화와 기억은 남는다(주석). Combobox에서 보관한 프로젝트를 고르면 `onRestore`로 보관을 푼다.
 - UI의 Effect 실행은 `runUiEffect`/`uiPromise` 경계를 거친다. 도메인 Effect는 호출자 런타임에서 실행된다(주석).
+- `SidebarMenuButton`을 쓰는 `SessionSection`·`DecisionInbox`·`ProjectBoardButton`은 `SidebarProvider` 안에서만 렌더할 수 있다(`useSidebar`가 밖에서는 throw한다). `App`이 왼쪽 패널 전체를 `SidebarProvider`로 감싼다.
 
 ## Side Effects
 

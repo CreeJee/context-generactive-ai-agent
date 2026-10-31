@@ -3431,3 +3431,15 @@
 - 대화 행의 위치 칩은 모든 위치를 볼 때 worktree에서 돈 대화에만 붙인다. 저장소 본체에서 돈 대화는 거의 모두 같은 브랜치(main)라 칩이 제목만 가렸다. 브랜치별로 보려면 필터를 쓴다.
 - 대화 행의 보관·삭제 버튼은 마우스를 올리거나 포커스할 때 행 끝 위에 겹쳐 나타난다. 전에는 보이지 않는 동안에도 모든 행에서 그 폭을 차지해 제목이 일찍 잘렸다.
 - 하단 계정 전환기에서 호환 계정의 "모델 N개"를 뺀다. 모델이 없을 때의 "모델 없음"만 남긴다.
+
+## 왼쪽 패널을 shadcn Sidebar로 옮긴다 (2026-10-31)
+
+- 사용자 요청으로 이미 있던 것 밖의 shadcn 컴포넌트를 들여와 왼쪽 패널에 썼다. shadcn 컴포넌트는 skill이나 CLI(`shadcn add`)로만 추가한다(사용자 지시). 이번에는 `shadcn add sidebar alert-dialog`로 `sidebar`, `alert-dialog`, `skeleton`, `hooks/use-mobile`을 받았다.
+- CLI는 이미 있는 `button`·`input`·`separator`·`tooltip`·`sheet`도 덮어쓴다. `button`의 `ghost-muted`처럼 저장소가 고친 내용이 지워지므로 되돌렸다.
+- CLI가 준 `sidebar.tsx`는 anti-slop lint(`typeof`, 근거 없는 `as`)와 Effect 진단(불필요한 화살표 블록)에 걸린다. 동작은 두고 그 부분만 고쳤다. `SidebarSeparator`는 base-mira 원본에서 `w-auto`가 `Separator`의 `data-horizontal:w-full`에 져서 사이드바 밖으로 8px 넘쳤다. 그래서 `data-horizontal:w-auto`로 고쳤다.
+- 패널은 `SidebarProvider`·`Sidebar`·`SidebarInset` 구조다. ⌘B/Ctrl+B나 가장자리 레일로 접는다. 접혔을 때와 768px 미만 화면에서는 본문 왼쪽 위의 버튼으로 다시 연다. 좁은 화면에서는 전에 18rem 패널이 늘 폭을 차지했는데, 이제 시트로 열린다.
+- 접힘 상태는 새로고침하면 펼친 상태로 돌아간다. 저장해 두면 SSR이 펼친 화면을 그린 뒤 접히는 깜빡임이 생긴다.
+- "판단 대기"와 "칸반 보드"는 `SidebarMenu`의 두 줄로 둔다. 같은 날 앞 결정에서는 한 줄에 나란히 두었는데, 사이드바 메뉴의 표준 모양을 따른다.
+- 대화 행의 보관·삭제는 행 끝에 겹쳐 뜨던 버튼 두 개 대신 `SidebarMenuAction`(…) 메뉴 하나에 둔다. 보관은 한 번 더 눌러야 한다.
+- 대화 원본 삭제는 `window.confirm` 대신 `AlertDialog`로 확인받고, 확인 창에 대화 제목을 보인다. 보관함의 삭제도 같은 확인을 쓴다.
+- 대화 목록을 불러오는 동안에는 "아직 대화가 없어요" 대신 Skeleton을 보인다. `SidebarMenuSkeleton`은 폭을 무작위로 정해 SSR 결과와 hydration이 어긋나므로 고정 폭 `Skeleton`을 쓴다.

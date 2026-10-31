@@ -153,7 +153,7 @@ export function AccountSwitcherMenu({
 }) {
   const current = entries.find((entry) => entry.current);
   return (
-    <div className="flex flex-col gap-1 border-t p-2">
+    <div className="flex flex-col gap-1">
       {error && <p className="px-1 text-2xs text-destructive">{error}</p>}
       <div className="flex items-center gap-1">
         <DropdownMenu>

@@ -7,6 +7,7 @@ import {
   BotIcon,
   ChevronDownIcon,
   ChevronRightIcon,
+  EllipsisIcon,
   FolderOpenIcon,
   GitBranchIcon,
   PlusIcon,
@@ -17,6 +18,16 @@ import { atomWithStorage } from "jotai/utils";
 import { useState } from "react";
 import { Link } from "react-router";
 import { Alert, AlertDescription } from "~/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "~/components/ui/alert-dialog";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "~/components/ui/collapsible";
@@ -53,7 +64,6 @@ import {
 } from "~/components/ui/dropdown-menu";
 import { Field, FieldError, FieldLabel } from "~/components/ui/field";
 import { Input } from "~/components/ui/input";
-import { ScrollArea } from "~/components/ui/scroll-area";
 import {
   Select,
   SelectContent,
@@ -62,10 +72,18 @@ import {
   SelectValue,
 } from "~/components/ui/select";
 import { Separator } from "~/components/ui/separator";
+import {
+  SidebarContent,
+  SidebarGroup,
+  SidebarMenu,
+  SidebarMenuAction,
+  SidebarMenuButton,
+  SidebarMenuItem,
+} from "~/components/ui/sidebar";
+import { Skeleton } from "~/components/ui/skeleton";
 import { Spinner } from "~/components/ui/spinner";
 import { Switch } from "~/components/ui/switch";
 import { dayAndTime } from "~/lib/dates";
-import { cn } from "~/lib/utils";
 import {
   FolderPick,
   type ProviderModel,
@@ -167,9 +185,9 @@ export function ProjectSection({
   onHide,
   onRestore,
 }: {
-  projects: Project[];
+  projects: ReadonlyArray<Project>;
   /** Archived projects; choosing one releases it from the archive. */
-  hiddenProjects: Project[];
+  hiddenProjects: ReadonlyArray<Project>;
   projectId: string | null;
   onSelect: (projectId: string) => void;
   onAdd: (root: string) => Promise<string | null>;
@@ -285,8 +303,8 @@ function ProjectCombobox({
   onSelect,
   onRestore,
 }: {
-  projects: Project[];
-  hiddenProjects: Project[];
+  projects: ReadonlyArray<Project>;
+  hiddenProjects: ReadonlyArray<Project>;
   current: Project | null;
   onSelect: (projectId: string) => void;
   onRestore: (projectId: string) => void;
@@ -349,7 +367,7 @@ function OpenFolderButton({
   onSelect,
   onPickFolder,
 }: {
-  projects: Project[];
+  projects: ReadonlyArray<Project>;
   onAdd: (root: string) => Promise<string | null>;
   onSelect: (projectId: string) => void;
   onPickFolder: () => Promise<FolderPick>;
@@ -536,6 +554,7 @@ const shownIn = (filter: PlaceFilter) => (session: Session) =>
 export function SessionSection({
   sessions,
   archived,
+  loading,
   projectId,
   sessionId,
   archiveError,
@@ -547,6 +566,8 @@ export function SessionSection({
 }: {
   sessions: Session[];
   archived: Session[];
+  /** The list has not arrived yet, so an empty one says nothing. */
+  loading: boolean;
   projectId: string;
   sessionId: string | null;
   /** Why the last archive or restore was refused, if it was. */
@@ -560,6 +581,11 @@ export function SessionSection({
   agents: readonly string[];
 }) {
   const [placeValue, setPlaceValue] = useState(everyPlace);
+  // The asked-about conversation stays while the dialog closes, so its title does not blank out.
+  const [deleteAsk, setDeleteAsk] = useState<{
+    readonly session: Session;
+    readonly open: boolean;
+  } | null>(null);
   const places = [
     ...new Set(sessions.flatMap((session) => sessionPlace(session) ?? [])),
   ].toSorted();
@@ -647,71 +673,76 @@ export function SessionSection({
           <AlertDescription>{archiveError}</AlertDescription>
         </Alert>
       )}
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="flex flex-col gap-0.5 px-2 pb-3">
-          {shown.map((session) => (
-            <div
-              key={session.id}
-              className={cn(
-                "group relative flex items-center rounded-md hover:bg-muted",
-                session.id === sessionId && "bg-muted font-medium",
-              )}
-            >
-              <Link
-                to={`/?project=${encodeURIComponent(projectId)}&session=${encodeURIComponent(session.id)}`}
-                preventScrollReset
-                aria-current={session.id === sessionId ? "page" : undefined}
-                className="flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1.5 text-left text-xs"
-              >
-                <span className="min-w-0 flex-1 truncate">{sessionLabel(session)}</span>
-                {/* Only a separate worktree is worth a chip; a filtered list is all one place. */}
-                {everywhere && session.worktreePath !== null && (
-                  <Badge
-                    variant="outline"
-                    className="max-w-24 shrink-0"
-                    title={session.worktreePath ?? undefined}
+      <SidebarContent>
+        <SidebarGroup>
+          <SidebarMenu>
+            {/* Fixed widths: the server renders this too, and a random one would not hydrate. */}
+            {loading && (
+              <SidebarMenuItem>
+                <div className="flex flex-col gap-4 p-2">
+                  <Skeleton className="h-4 w-3/4" />
+                  <Skeleton className="h-4 w-1/2" />
+                  <Skeleton className="h-4 w-2/3" />
+                </div>
+              </SidebarMenuItem>
+            )}
+            {shown.map((session) => (
+              <SidebarMenuItem key={session.id}>
+                <SidebarMenuButton
+                  isActive={session.id === sessionId}
+                  render={
+                    <Link
+                      to={`/?project=${encodeURIComponent(projectId)}&session=${encodeURIComponent(session.id)}`}
+                      preventScrollReset
+                      aria-current={session.id === sessionId ? "page" : undefined}
+                    />
+                  }
+                >
+                  <span className="min-w-0 flex-1 truncate">{sessionLabel(session)}</span>
+                  {/* Only a separate worktree is worth a chip; a filtered list is all one place. */}
+                  {everywhere && session.worktreePath !== null && (
+                    <Badge
+                      variant="outline"
+                      className="max-w-24 shrink-0"
+                      title={session.worktreePath ?? undefined}
+                    >
+                      <GitBranchIcon /> <span className="truncate">{sessionPlace(session)}</span>
+                    </Badge>
+                  )}
+                  {session.agent && (
+                    <Badge variant="outline" className="shrink-0">
+                      <BotIcon /> {session.agent}
+                    </Badge>
+                  )}
+                </SidebarMenuButton>
+                {/* One menu on hover or focus keeps the row's width for its title. */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    render={
+                      <SidebarMenuAction showOnHover aria-label={`${sessionLabel(session)} 메뉴`} />
+                    }
                   >
-                    <GitBranchIcon /> <span className="truncate">{sessionPlace(session)}</span>
-                  </Badge>
-                )}
-                {session.agent && (
-                  <Badge variant="outline" className="shrink-0">
-                    <BotIcon /> {session.agent}
-                  </Badge>
-                )}
-              </Link>
-              {/* The row shows its action on hover, or while the action has keyboard focus. */}
-              {/* It lies over the row's end instead of keeping that width from every title. */}
-              <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center rounded-r-md bg-muted pr-1 pl-1 opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 has-focus-visible:pointer-events-auto has-focus-visible:opacity-100">
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  onClick={() => onArchive(session.id)}
-                  aria-label="대화 보관"
-                  title="보관하기(실행 중이면 안전하게 중단하고 기억은 남겨요)"
-                >
-                  <ArchiveIcon />
-                </Button>
-                <Button
-                  variant="destructive"
-                  size="icon-xs"
-                  onClick={() => {
-                    if (
-                      window.confirm(
-                        "대화 원본을 삭제할까요? 채택된 project memory와 Work Trace provenance는 유지돼요.",
-                      )
-                    )
-                      onDelete(session.id);
-                  }}
-                  aria-label="대화 삭제"
-                  title="원본 삭제(채택된 project 지식과 provenance는 유지)"
-                >
-                  <Trash2Icon />
-                </Button>
-              </div>
-            </div>
-          ))}
-          {sessions.length === 0 && (
+                    <EllipsisIcon />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent side="right" align="start">
+                    <DropdownMenuItem
+                      onClick={() => onArchive(session.id)}
+                      title="실행 중이면 안전하게 중단하고 기억은 남겨요"
+                    >
+                      <ArchiveIcon /> 보관하기
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      variant="destructive"
+                      onClick={() => setDeleteAsk({ session, open: true })}
+                    >
+                      <Trash2Icon /> 원본 삭제
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </SidebarMenuItem>
+            ))}
+          </SidebarMenu>
+          {!loading && sessions.length === 0 && (
             <p className="px-2 text-xs text-muted-foreground">아직 대화가 없어요.</p>
           )}
           {sessions.length > 0 && shown.length === 0 && (
@@ -746,14 +777,7 @@ export function SessionSection({
                     <Button
                       variant="destructive"
                       size="xs"
-                      onClick={() => {
-                        if (
-                          window.confirm(
-                            "보관된 대화 원본을 삭제할까요? 채택된 project memory와 provenance는 유지돼요.",
-                          )
-                        )
-                          onDelete(session.id);
-                      }}
+                      onClick={() => setDeleteAsk({ session, open: true })}
                     >
                       <Trash2Icon /> 삭제
                     </Button>
@@ -762,8 +786,38 @@ export function SessionSection({
               </CollapsibleContent>
             </Collapsible>
           )}
-        </div>
-      </ScrollArea>
+        </SidebarGroup>
+      </SidebarContent>
+      <AlertDialog
+        open={deleteAsk?.open === true}
+        onOpenChange={(open) =>
+          setDeleteAsk((current) => (current === null ? null : { ...current, open }))
+        }
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>대화 원본을 삭제할까요?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleteAsk === null
+                ? ""
+                : `"${sessionLabel(deleteAsk.session)}" 대화의 원본을 지워요. `}
+              채택된 project memory와 Work Trace provenance는 유지돼요.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>취소</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (deleteAsk !== null) onDelete(deleteAsk.session.id);
+                setDeleteAsk((current) => (current === null ? null : { ...current, open: false }));
+              }}
+            >
+              삭제
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

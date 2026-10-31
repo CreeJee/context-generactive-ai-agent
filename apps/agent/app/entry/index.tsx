@@ -40,7 +40,19 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "~/components/ui/empty";
-import { Separator } from "~/components/ui/separator";
+import {
+  Sidebar,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarProvider,
+  SidebarRail,
+  SidebarSeparator,
+  SidebarTrigger,
+  useSidebar,
+} from "~/components/ui/sidebar";
 import { Button } from "~/components/ui/button";
 import {
   Sheet,
@@ -98,6 +110,16 @@ const leaveProject = {
   card: null,
   board: null,
 } as const;
+
+/** Opens the sidebar again once it is folded away, or on a narrow screen where it is a sheet. */
+function SidebarReopen() {
+  const { open, isMobile } = useSidebar();
+  return open && !isMobile ? null : (
+    <div className="absolute top-2 left-2 z-20">
+      <SidebarTrigger aria-label="사이드바 펼치기" title="사이드바 펼치기 (⌘B)" />
+    </div>
+  );
+}
 
 function Placeholder({
   icon,
@@ -449,23 +471,26 @@ export function App() {
   return (
     <AppEventsProvider>
       <SessionEventsProvider projectId={projectId} sessionId={sessionId}>
-        <div className="flex h-dvh bg-background text-foreground">
-          <aside className="flex min-h-0 w-72 shrink-0 flex-col overflow-hidden border-r">
-            <div className="flex items-center gap-1 py-1 pr-2 pl-3">
-              <span className="min-w-0 flex-1 truncate text-sm font-semibold">Context Agent</span>
-              <ReportLink projectId={projectId} sessionId={sessionId} />
-              <ThemeSelect />
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="설정"
-                title="설정"
-                onClick={openSettings}
-              >
-                <SettingsIcon />
-              </Button>
-            </div>
-            <Separator />
+        <SidebarProvider className="h-dvh" style={{ "--sidebar-width": "18rem" }}>
+          <Sidebar>
+            <SidebarHeader>
+              <div className="flex items-center gap-1 pl-1">
+                <span className="min-w-0 flex-1 truncate text-sm font-semibold">Context Agent</span>
+                <ReportLink projectId={projectId} sessionId={sessionId} />
+                <ThemeSelect />
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="설정"
+                  title="설정"
+                  onClick={openSettings}
+                >
+                  <SettingsIcon />
+                </Button>
+                <SidebarTrigger aria-label="사이드바 접기" title="사이드바 접기 (⌘B)" />
+              </div>
+            </SidebarHeader>
+            <SidebarSeparator />
             <div className="min-h-0 shrink overflow-y-auto overscroll-contain">
               <AccountModelPanel
                 provider={provider}
@@ -522,26 +547,29 @@ export function App() {
                 }}
               />
             </div>
-            <Separator />
+            <SidebarSeparator />
             {projectId && (
-              <div className="flex gap-1 px-2 py-1">
-                <DecisionInbox
-                  projectId={projectId}
-                  holder={pageHolder()}
-                  onOpenCard={(session, card) =>
-                    void setLocation({ ...leaveProjectBoard, session, card }, { history: "push" })
-                  }
-                />
-                <ProjectBoardButton
-                  projectId={projectId}
-                  onOpen={() => void setLocation({ boards: true }, { history: "push" })}
-                />
-              </div>
+              <SidebarGroup>
+                <SidebarMenu>
+                  <DecisionInbox
+                    projectId={projectId}
+                    holder={pageHolder()}
+                    onOpenCard={(session, card) =>
+                      void setLocation({ ...leaveProjectBoard, session, card }, { history: "push" })
+                    }
+                  />
+                  <ProjectBoardButton
+                    projectId={projectId}
+                    onOpen={() => void setLocation({ boards: true }, { history: "push" })}
+                  />
+                </SidebarMenu>
+              </SidebarGroup>
             )}
             {projectId && (
               <SessionSection
                 sessions={sessions}
                 archived={archived}
+                loading={sessionsQuery.isPending}
                 projectId={projectId}
                 sessionId={sessionId}
                 archiveError={archiveError}
@@ -552,7 +580,8 @@ export function App() {
                 agents={slashAgents}
               />
             )}
-            <div className="mt-auto">
+            <SidebarSeparator />
+            <SidebarFooter>
               <AccountSwitcher
                 activeProvider={selection?.provider ?? provider}
                 busy={switchMutation.isPending}
@@ -560,28 +589,32 @@ export function App() {
                 onSwitch={(target) => void switchAccount(target)}
                 onManage={() => setAccountsOpen(true)}
               />
-            </div>
-            <Sheet open={accountsOpen} onOpenChange={setAccountsOpen}>
-              <SheetContent side="left">
-                <SheetHeader>
-                  <SheetTitle>계정 관리</SheetTitle>
-                  <SheetDescription>
-                    계정을 추가하고, 계정마다 이름을 바꾸거나 로그아웃해요. 쓸 계정은 사이드바 아래
-                    계정 전환에서 골라요.
-                  </SheetDescription>
-                </SheetHeader>
-                <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
-                  <AccountManager
-                    auth={{ openai: auth.openai, anthropic: auth.anthropic }}
-                    activeProvider={selection?.provider ?? provider}
-                  >
-                    <CompatibleAccounts activeProvider={selection?.provider ?? provider} />
-                  </AccountManager>
-                </div>
-              </SheetContent>
-            </Sheet>
-          </aside>
-          <main className="min-w-0 flex-1">{main}</main>
+            </SidebarFooter>
+            <SidebarRail aria-label="사이드바 접기·펼치기" title="사이드바 접기·펼치기 (⌘B)" />
+          </Sidebar>
+          <Sheet open={accountsOpen} onOpenChange={setAccountsOpen}>
+            <SheetContent side="left">
+              <SheetHeader>
+                <SheetTitle>계정 관리</SheetTitle>
+                <SheetDescription>
+                  계정을 추가하고, 계정마다 이름을 바꾸거나 로그아웃해요. 쓸 계정은 사이드바 아래
+                  계정 전환에서 골라요.
+                </SheetDescription>
+              </SheetHeader>
+              <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
+                <AccountManager
+                  auth={{ openai: auth.openai, anthropic: auth.anthropic }}
+                  activeProvider={selection?.provider ?? provider}
+                >
+                  <CompatibleAccounts activeProvider={selection?.provider ?? provider} />
+                </AccountManager>
+              </div>
+            </SheetContent>
+          </Sheet>
+          <SidebarInset className="min-w-0">
+            <SidebarReopen />
+            {main}
+          </SidebarInset>
           {projectId && sessionId && selection && (
             <BtwPanel key={sessionId} projectId={projectId} sessionId={sessionId} />
           )}
@@ -606,7 +639,7 @@ export function App() {
               onClose={() => void setLocation({ boards: null, boardCard: null })}
             />
           )}
-        </div>
+        </SidebarProvider>
       </SessionEventsProvider>
     </AppEventsProvider>
   );
