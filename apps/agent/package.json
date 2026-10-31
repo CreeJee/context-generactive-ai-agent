@@ -22,6 +22,7 @@
     "@fontsource-variable/inter": "catalog:",
     "@react-router/fs-routes": "catalog:",
     "@react-router/node": "catalog:",
+    "@shadcn/react": "catalog:",
     "@streamdown/cjk": "catalog:",
     "@streamdown/code": "catalog:",
     "@tanstack/react-query": "catalog:",

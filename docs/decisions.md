@@ -3511,3 +3511,11 @@
 - 답변 Markdown과 도구 블록이 하이라이터 하나를 같이 쓴다. `markdown.tsx`가 `createCodePlugin`으로 만든 `codeHighlighter`를 내보내고, 도구 블록은 그 `highlight()`로 토큰을 받는다. 언어 문법은 한 번만 불러온다.
 - 토큰 색은 `--token-light`·`--token-dark` 사용자 정의 속성으로 넘기고, `app.css`의 `code-token` 유틸리티가 테마에 맞는 쪽을 고른다. 문법을 불러오기 전과 JSON이 아닌 텍스트는 칠하지 않은 글자로 보인다.
 - ui 폴더에서 남은 세 shadcn 규칙까지 켜면 위반이 120개쯤이다(`no-restyle` 77, `no-arbitrary-values` 42, `require-static-classes` 1). 대부분 CLI 원본이고, shadcn lint 문서도 컴포넌트 폴더에서는 `no-restyle`를 끄라고 권한다. 켤지는 따로 정한다.
+
+## 대화 기록 스크롤을 shadcn MessageScroller로 옮긴다 (2026-10-31)
+
+- 채팅 컴포넌트 교체의 다음 단계로 `shadcn add message-scroller`를 받았다. 의존성 `@shadcn/react`가 catalog에 들어갔다.
+- `ChatHistory`가 손으로 하던 스크롤 관리를 지운다. 맨 아래 고정, 내용이 커질 때 따라 내려가기, 이전 페이지를 위에 끼울 때 읽던 자리 지키기를 이제 MessageScroller가 맡는다.
+- 맨 아래에서 120px 안이면 새 내용을 따라간다(`scrollEdgeThreshold`). 예전 `pinnedToBottom`과 같은 거리다. 그보다 멀면 아래로 가는 단추가 나타난다.
+- 이전 페이지는 예전처럼 위쪽 200px 안에 들어오면 불러온다. 감지용 1px 요소는 MessageScroller의 항목이 되지 않도록 `MessageScrollerContent` 밖, viewport 맨 위에 둔다. 불러오기에 실패하면 다시 시도 단추를 목록 위에 띄운다. 목록 안의 첫 자식이 되면 위에 끼운 페이지로 잘못 읽히기 때문이다.
+- `MessageScrollerContent`는 대화 열의 폭·여백·간격을 앱 코드가 정한다. 루트 `vite.config.ts`의 `no-restyle`에 이 컴포넌트만 `spacing`을 허용하는 contract를 더했다. 규칙을 끄지 않는다.

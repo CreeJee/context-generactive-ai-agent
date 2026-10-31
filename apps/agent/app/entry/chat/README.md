@@ -21,12 +21,13 @@
 - `ComposerMode` / `ComposerStatus` / `ComposerShortcuts` — 입력창 상태(idle/generating/editing/approval)와, 그 상태에 맞는 상태줄과 단축키 힌트
 - `ChatComposer` / `ChatComposerHandle` — 입력창 컴포넌트와 그 명령형 핸들(본문은 읽지 않음)
 - `ApprovalCard` — 승인 대기 호출 하나를 보여 주는 카드다. props: `approval`, `disabled`, `requester`, `decision`, `onAnswer`. permission-review이고 `askedBy`가 review일 때만 검토 사유를 보인다
+- `ChatHistory` — 대화 기록 스크롤 영역이다. shadcn `MessageScroller` 위에 있어, 맨 아래에서 120px 안이면 새 내용을 따라 내려가고 아래로 가는 단추를 띄운다. 위쪽 200px 안으로 올라가면 이전 페이지를 불러오고, 위에 끼운 페이지가 읽던 자리를 밀지 않는다. 불러오기에 실패하면 위쪽에 다시 시도 단추를 띄운다. 메시지마다 `MessageScrollerItem`이고 `children`(패널·상태 표시)은 메시지 뒤에 온다
 - `MessageView`(memo) / `DeliveredMessageView` / `ResumeActionResult` / `ArchiveActionResult` / `DeleteActionResult` — 메시지 렌더링과 작업 추적 task 재개·보관·삭제 결과 TaggedEnum
 - `WorkflowBoard` / `mergeStateLabel` / `cardStatusLabels` / `authorLabel` — 채팅 안의 보드 패널이다. 뒤의 두 심볼은 `board/`에서 다시 내보낸다
 - `WorkflowArtifactPanel` / `phaseLabels` / `workflowModeLabel` / `goalStatusLabels` / `planStatusLabels` — Goal/Plan 워크플로 패널과 상태 라벨 표
 - `DecisionPrompt` / `describeDecision` — 결정 요청 프롬프트와 `DecisionKind` 설명
 - `BtwPanel` / `WorkTracePanel` / `QueuePanel` / `SubagentPanel` — BTW 곁질문, 작업 추적, 메시지 대기열, 하위 에이전트 패널
-- 그 밖의 export(본문 미확인): `ChatApprovals`, `ChatHistory`, `ContextMeter`, `Markdown`, `ReadOnlyBar`, `SlashPalette`, `UncertainRuns`, `RunFailureText`/`runFailureOf`, `UserMessageBody`/`DrawingPicture`/`DraftImageTray`/`MessageImage`
+- 그 밖의 export(본문 미확인): `ChatApprovals`, `ContextMeter`, `Markdown`, `ReadOnlyBar`, `SlashPalette`, `UncertainRuns`, `RunFailureText`/`runFailureOf`, `UserMessageBody`/`DrawingPicture`/`DraftImageTray`/`MessageImage`
 - [`board`](./board/README.md) — 한 대화의 Plan 또는 프로젝트의 모든 실행 중 Plan을 7개 상태 열에 보여 주는 칸반 보드 UI
 
 ## Invariants

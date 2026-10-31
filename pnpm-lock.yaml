@@ -233,6 +233,9 @@ catalogs:
     '@shadcn/lint':
       specifier: ^0.2.1
       version: 0.2.1
+    '@shadcn/react':
+      specifier: ^0.3.1
+      version: 0.3.1
     '@streamdown/cjk':
       specifier: ^1.0.4
       version: 1.0.4
@@ -463,6 +466,9 @@ importers:
       '@react-router/node':
         specifier: 'catalog:'
         version: 8.4.0(react-router@8.4.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(typescript@7.0.2)
+      '@shadcn/react':
+        specifier: 'catalog:'
+        version: 0.3.1(@types/react@19.3.0)(react@19.3.1)
       '@streamdown/cjk':
         specifier: 'catalog:'
         version: 1.0.4(@types/mdast@4.0.4)(micromark-util-types@2.0.2)(micromark@4.0.2)(react@19.3.1)(unified@11.0.5)
@@ -2238,6 +2244,17 @@ packages:
       '@typescript-eslint/parser':
         optional: true
       eslint:
+        optional: true
+
+  '@shadcn/react@0.3.1':
+    resolution: {integrity: sha512-2gOR0HDMtWeRsCZfNDaU0YDFdgH3zsDQ6lz67Fv/y/qjY9y+R8kJqAn6q56phqv7/zHi0wqURjntrNO9zL7vnQ==}
+    peerDependencies:
+      '@types/react': '>=19'
+      react: '>=19'
+    peerDependenciesMeta:
+      '@types/react':
+        optional: true
+      react:
         optional: true
 
   '@shadcn/registry@0.2.0':
@@ -6679,6 +6696,11 @@ snapshots:
     optionalDependencies:
       eslint: 10.10.0(jiti@2.7.0)
       oxc-parser: 0.148.0
+
+  '@shadcn/react@0.3.1(@types/react@19.3.0)(react@19.3.1)':
+    optionalDependencies:
+      '@types/react': 19.3.0
+      react: 19.3.1
 
   '@shadcn/registry@0.2.0':
     dependencies:

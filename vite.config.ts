@@ -68,6 +68,8 @@ export default defineConfig({
                 "^(Collapsible(Trigger|Content)?|TooltipTrigger|DropdownMenuTrigger|HoverCardTrigger)$",
               allow: ["layout", "color", "typography", "spacing", "shape", "effects", "motion"],
             },
+            // The scroller's content is the conversation column; each screen sets its padding and gaps.
+            { pattern: "^MessageScrollerContent$", allow: ["layout", "spacing"] },
           ],
         },
       ],

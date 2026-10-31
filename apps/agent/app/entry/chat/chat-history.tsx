@@ -1,7 +1,7 @@
 import { runUiEffect, uiPromise } from "../shared/ui-effect";
 import { Effect } from "effect";
-import { MessageSquareIcon } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { ArrowDownIcon, MessageSquareIcon } from "lucide-react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
 import {
   Empty,
@@ -10,11 +10,24 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "~/components/ui/empty";
-import { ScrollArea } from "~/components/ui/scroll-area";
+import {
+  MessageScroller,
+  MessageScrollerButton,
+  MessageScrollerContent,
+  MessageScrollerItem,
+  MessageScrollerProvider,
+  MessageScrollerViewport,
+} from "~/components/ui/message-scroller";
 import { cn } from "cn";
 import type { ChatMessage } from "memory-agent/chat-api";
 
-/** Owns history paging and scroll position; the caller owns the content of each message. */
+/** How close to the bottom, in pixels, still counts as reading the newest message. */
+const followDistance = 120;
+
+/**
+ * Owns history paging; the message scroller keeps the newest message in view and holds the
+ * reading position when an older page is inserted above it. The caller owns each message.
+ */
 export function ChatHistory({
   messages,
   opened,
@@ -32,89 +45,36 @@ export function ChatHistory({
   children: ReactNode;
 }) {
   const viewport = useRef<HTMLDivElement>(null);
-  const content = useRef<HTMLDivElement>(null);
   const topSentinel = useRef<HTMLDivElement>(null);
-  const pinnedToBottom = useRef(true);
-  const pendingPrepend = useRef<{
-    count: number;
-    scrollTop: number;
-    scrollHeight: number;
-  } | null>(null);
-  const [initialScrollDone, setInitialScrollDone] = useState(false);
+  const loading = useRef(false);
   const [olderLoadFailed, setOlderLoadFailed] = useState(false);
   const loadPreviousMessages = useCallback(
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
     (retry = false) =>
       runUiEffect(
         Effect.gen(function* () {
-          const scroll = viewport.current;
-          if (
-            !(scroll !== null) ||
-            !hasOlderMessages ||
-            pendingPrepend.current !== null ||
-            (olderLoadFailed && !retry)
-          )
-            return;
-          pendingPrepend.current = {
-            count: messages.length,
-            scrollTop: scroll.scrollTop,
-            scrollHeight: scroll.scrollHeight,
-          };
-          pinnedToBottom.current = false;
+          if (!hasOlderMessages || loading.current || (olderLoadFailed && !retry)) return;
+          loading.current = true;
           setOlderLoadFailed(false);
           yield* uiPromise(loadOlderMessages).pipe(
-            Effect.catchTag("UnknownError", () =>
+            Effect.catchTag("UnknownError", () => Effect.sync(() => setOlderLoadFailed(true))),
+            Effect.ensuring(
               Effect.sync(() => {
-                pendingPrepend.current = null;
-                setOlderLoadFailed(true);
+                loading.current = false;
               }),
             ),
           );
         }),
       ),
-    [hasOlderMessages, loadOlderMessages, messages.length, olderLoadFailed],
+    [hasOlderMessages, loadOlderMessages, olderLoadFailed],
   );
 
-  useLayoutEffect(() => {
-    const scroll = viewport.current;
-    if (!(scroll !== null) || messages.length === 0) return;
-    if (!initialScrollDone) {
-      scroll.scrollTop = scroll.scrollHeight;
-      pinnedToBottom.current = true;
-      setInitialScrollDone(true);
-      return;
-    }
-    const prepend = pendingPrepend.current;
-    if (prepend !== null) {
-      if (messages.length > prepend.count) {
-        // Keep the old viewport content in place when a page is inserted above it.
-        scroll.scrollTop = prepend.scrollTop + scroll.scrollHeight - prepend.scrollHeight;
-        pendingPrepend.current = null;
-      } else if (!hasOlderMessages) {
-        pendingPrepend.current = null;
-      }
-      return;
-    }
-    if (pinnedToBottom.current) scroll.scrollTop = scroll.scrollHeight;
-  }, [messages, hasOlderMessages, initialScrollDone]);
-
-  useEffect(() => {
-    const scroll = viewport.current;
-    const target = content.current;
-    if (!(scroll !== null) || !(target !== null)) return;
-    const observer = new ResizeObserver(() => {
-      if (initialScrollDone && pinnedToBottom.current && !(pendingPrepend.current !== null))
-        scroll.scrollTop = scroll.scrollHeight;
-    });
-    observer.observe(target);
-    return () => observer.disconnect();
-  }, [initialScrollDone]);
-
+  // Recreated as messages arrive, so a page that leaves the top still in view asks for the next.
   useEffect(() => {
     const scroll = viewport.current;
     const target = topSentinel.current;
     if (
-      !initialScrollDone ||
+      messages.length === 0 ||
       !hasOlderMessages ||
       olderLoadFailed ||
       !(scroll !== null) ||
@@ -129,50 +89,54 @@ export function ChatHistory({
     );
     observer.observe(target);
     return () => observer.disconnect();
-  }, [hasOlderMessages, initialScrollDone, loadPreviousMessages, olderLoadFailed]);
+  }, [hasOlderMessages, loadPreviousMessages, messages.length, olderLoadFailed]);
 
   return (
-    <ScrollArea
-      className="min-h-0 flex-1"
-      viewportRef={viewport}
-      onViewportScroll={(event) => {
-        const scroll = event.currentTarget;
-        pinnedToBottom.current = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 120;
-      }}
-    >
-      <div
-        ref={content}
-        className={cn(
-          "relative mx-auto flex max-w-3xl flex-col gap-5 px-6 pb-6",
-          messages.length > 0 && "pt-6",
-        )}
-      >
-        {opened && messages.length === 0 && (
-          <Empty className="mt-24">
-            <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <MessageSquareIcon />
-              </EmptyMedia>
-              <EmptyTitle>새 대화</EmptyTitle>
-              <EmptyDescription>
-                이전 세션과 다른 프로젝트에서 나눈 대화도 기억해서 답해요.
-              </EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        )}
+    <MessageScrollerProvider autoScroll scrollEdgeThreshold={followDistance}>
+      <MessageScroller className="flex-1">
+        <MessageScrollerViewport ref={viewport} aria-label="대화">
+          <div ref={topSentinel} aria-hidden className="absolute top-0 h-px w-full" />
+          {/* Every child is a scroller item: the first message must come first, so the
+              scroller can tell an older page was inserted above it. */}
+          <MessageScrollerContent
+            className={cn("mx-auto max-w-3xl gap-5 px-6 pb-6", messages.length > 0 && "pt-6")}
+          >
+            {opened && messages.length === 0 && (
+              <Empty className="mt-24">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <MessageSquareIcon />
+                  </EmptyMedia>
+                  <EmptyTitle>새 대화</EmptyTitle>
+                  <EmptyDescription>
+                    이전 세션과 다른 프로젝트에서 나눈 대화도 기억해서 답해요.
+                  </EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            )}
+            {messages.map((message, index) => (
+              <MessageScrollerItem key={message.id} messageId={message.id}>
+                {renderMessage(message, index)}
+              </MessageScrollerItem>
+            ))}
+            {children}
+          </MessageScrollerContent>
+        </MessageScrollerViewport>
         {olderLoadFailed && (
-          <Button type="button" variant="outline" onClick={() => void loadPreviousMessages(true)}>
+          <Button
+            type="button"
+            variant="outline"
+            className="absolute top-2 left-1/2 -translate-x-1/2"
+            onClick={() => void loadPreviousMessages(true)}
+          >
             이전 메시지를 불러오지 못했어요. 다시 시도
           </Button>
         )}
-        <div ref={topSentinel} aria-hidden className="absolute top-0 h-px w-full" />
-        {messages.map((message, index) => (
-          <div key={message.id} data-chat-message>
-            {renderMessage(message, index)}
-          </div>
-        ))}
-        {children}
-      </div>
-    </ScrollArea>
+        <MessageScrollerButton>
+          <ArrowDownIcon />
+          <span className="sr-only">맨 아래로</span>
+        </MessageScrollerButton>
+      </MessageScroller>
+    </MessageScrollerProvider>
   );
 }
