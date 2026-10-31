@@ -1,8 +1,8 @@
 import { Schema } from "effect";
 
 /**
- * Conversations as the page reads them. This module imports no server code, so the browser bundle
- * can use it; `sessions.ts` keeps them.
+ * Conversations and who holds them, as the page reads them. This module imports no server code,
+ * so the browser bundle can use it; `sessions.ts` and `lease-state.ts` keep them.
  */
 
 export const Session = Schema.Struct({
@@ -22,3 +22,14 @@ export const Session = Schema.Struct({
   branch: Schema.NullOr(Schema.String),
 });
 export type Session = typeof Session.Type;
+
+/** Who may change a session, as seen by one page (holder). */
+export const LeaseView = Schema.Union([
+  /** This page owns the session. */
+  Schema.Struct({ state: Schema.Literal("mine") }),
+  /** Another page is using it; this one is read-only. */
+  Schema.Struct({ state: Schema.Literal("other"), since: Schema.Finite }),
+  /** Nobody is using it: a read-only page may continue, after checking again. */
+  Schema.Struct({ state: Schema.Literal("free") }),
+]);
+export type LeaseView = typeof LeaseView.Type;

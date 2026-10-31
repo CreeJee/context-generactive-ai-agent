@@ -2,7 +2,7 @@
 
 ## Overview
 
-`sessions` 디렉터리는 프로젝트 안의 대화(세션) 레코드를 SQLite `sessions` 테이블에 만들고, 조회하고, 보관(archive)하는 `Sessions` Effect 서비스를 담는다. 어느 브라우저 페이지가 세션을 바꿀 수 있는지 메모리 안에서 정하는 `SessionLeases` 서비스도 함께 둔다. `lease-state.ts`는 브라우저에서도 쓰는 lease 모양 타입과 `X-Session-Holder` 헤더 이름을 두고, `title.ts`는 첫 사용자 메시지로 제목을 만든다. `Sessions`는 `Projects` 서비스와 `SqlClient`에 기대며, 라우터와 워커가 세션 생성, 가져오기(import), 소유권 검사에 쓴다.
+`sessions` 디렉터리는 프로젝트 안의 대화(세션) 레코드를 SQLite `sessions` 테이블에 만들고, 조회하고, 보관(archive)하는 `Sessions` Effect 서비스를 담는다. 어느 브라우저 페이지가 세션을 바꿀 수 있는지 메모리 안에서 정하는 `SessionLeases` 서비스도 함께 둔다. `lease-state.ts`는 브라우저에서도 쓰는 lease 타입과 `X-Session-Holder` 헤더 이름을 두고, `title.ts`는 첫 사용자 메시지로 제목을 만든다. `Sessions`는 `Projects` 서비스와 `SqlClient`에 기대며, 라우터와 워커가 세션 생성, 가져오기(import), 소유권 검사에 쓴다.
 
 ## Interface
 
@@ -20,7 +20,7 @@
 - `makeLeases(ttlMs)` — Ref 기반 lease 저장소 생성; sweepExpired·onExpired·view·claim·release·permits 반환
 - `defaultLeaseTtlMs` — 기본 lease TTL 90_000ms
 - `sessionHolderHeader` — 페이지가 세션 변경 요청마다 보내는 헤더 이름 "X-Session-Holder"
-- `LeaseView` — 한 페이지 기준 소유 상태 union: mine / other(since) / free
+- `LeaseView` — 한 페이지 기준 소유 상태 Schema union: mine / other(since) / free. 세션 실행 상태 응답이 쓰므로 `contracts.ts`에 두고 `lease-state.ts`가 타입을 다시 내보낸다
 - `ClaimResult` — claim 결과 union: { claimed: true } | { claimed: false, heldSince }
 - `firstMessageTitle(text)` — 공백을 접고 60자(code point)를 넘으면 잘라 "…"을 붙이며, 빈 문자열이면 "이미지 대화"
 

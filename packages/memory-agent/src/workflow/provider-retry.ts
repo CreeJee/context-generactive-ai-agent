@@ -17,6 +17,7 @@ import { DurableClock, Workflow, WorkflowEngine } from "effect/workflow";
 import { RequestNotSent } from "../oauth/protocol.ts";
 import { ExecutionAdmission } from "../runtime/execution-admission.ts";
 import { sha256 } from "../runtime/synchronous-crypto.ts";
+import type { ProviderRetryView } from "./contracts.ts";
 import { WorkflowExecution } from "./execution.ts";
 import { ownerWorkflowEngineLayer, suspendedRetrySchedule } from "./owner-workflow-engine.ts";
 import { OwnerWorkflowStorage } from "./owner-workflow-storage.ts";
@@ -33,6 +34,8 @@ export const providerRetryLimits = {
   /** From the request's first failure to the latest retry time; there is no count limit. */
   maxElapsedMs: Duration.toMillis(Duration.hours(24)),
 } as const;
+
+export type { ProviderRetryView } from "./contracts.ts";
 
 const Identifier = Schema.NonEmptyString.pipe(Schema.check(Schema.isTrimmed()));
 const Stage = RequestNotSent.fields.stage;
@@ -111,13 +114,6 @@ export interface ProviderRetryRequest {
   readonly retry: number;
   readonly stage: ProviderRetryStage;
   readonly firstFailedAt: number;
-}
-
-/** A wait still pending, for the session's run state. */
-export interface ProviderRetryView {
-  readonly runId: string;
-  readonly retry: number;
-  readonly retryAt: number;
 }
 
 const make = Effect.gen(function* () {

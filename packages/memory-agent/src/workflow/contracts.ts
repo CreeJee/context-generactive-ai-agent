@@ -367,3 +367,139 @@ export const BoardEditRequested = Schema.TaggedStruct("Requested", { request: Us
 
 /** Answer to a board change: the saved state, or the request stored for an executing card. */
 export type BoardEditResultCases = typeof BoardEditApplied.Type | typeof BoardEditRequested.Type;
+
+const blockerFields = {
+  detail: Schema.NonEmptyString,
+  evidence: Schema.Array(Schema.NonEmptyString).pipe(Schema.check(Schema.isMinLength(1))),
+};
+
+/** Blockers the model may record; dependency stalls are decided only by the server. */
+export const WorkflowBlocker = Schema.Struct({
+  reason: Schema.Literals([
+    "user_decision",
+    "permission",
+    "external_dependency",
+    "repeated_failure",
+  ]),
+  ...blockerFields,
+});
+export type WorkflowBlocker = typeof WorkflowBlocker.Type;
+
+const Progress = Schema.Struct({
+  completedSteps: Schema.Array(Schema.String),
+  evidence: Schema.Array(Schema.String),
+  toolResults: Schema.Array(Schema.String).pipe(
+    Schema.withDecodingDefaultTypeKey(Effect.succeed([])),
+  ),
+});
+const executionFields = {
+  runId: Schema.String,
+  goalVersion: Schema.Int,
+  planVersion: Schema.Int,
+  noProgressRuns: Schema.Int,
+  progress: Progress,
+};
+
+export const WorkflowExecutionState = Schema.TaggedUnion({
+  idle: {},
+  running: executionFields,
+  ready: executionFields,
+  /**
+   * A run cut off by a server restart before it ran any tool. A new run continues the Plan at
+   * `retryAt`: the time of the provider retry it was waiting for, or the restart itself.
+   */
+  retrying: { ...executionFields, retryAt: Schema.Finite },
+  blocked: {
+    runId: Schema.String,
+    reason: Schema.Literals([
+      ...WorkflowBlocker.fields.reason.literals,
+      "dependency_stalled",
+      "server_restarted",
+    ]),
+    ...blockerFields,
+  },
+  stopped: {
+    /** `state_reconciled`: the startup check repaired a Goal no transition makes, or one not running. */
+    reason: Schema.Literals([
+      "user",
+      "run_failed",
+      "workflow_changed",
+      "completed",
+      "state_reconciled",
+    ]),
+  },
+});
+export type WorkflowExecutionState = typeof WorkflowExecutionState.Type;
+
+/** A note the page shows beside the workflow state; see `Workflows.display`. */
+export const WorkflowDisplay = Schema.Literal("card_reclassifying");
+export type WorkflowDisplay = typeof WorkflowDisplay.Type;
+
+export const WorkflowActionReason = Schema.Literals([
+  "session_in_use",
+  "run_in_progress",
+  "goal_missing",
+  "goal_not_active",
+  "goal_not_paused",
+  "goal_terminal",
+  "plan_not_ready",
+  "plan_outdated",
+]);
+export type WorkflowActionReason = typeof WorkflowActionReason.Type;
+
+export const WorkflowActionDecision = Schema.Union([
+  Schema.Struct({
+    allowed: Schema.Literal(true),
+    intent: Schema.optionalKey(Schema.Literals(["start", "continue"])),
+  }),
+  Schema.Struct({ allowed: Schema.Literal(false), reason: WorkflowActionReason }),
+]);
+export type WorkflowActionDecision = typeof WorkflowActionDecision.Type;
+
+/** What the page may ask of the workflow now: each phase and each control, allowed or why not. */
+export const WorkflowActions = Schema.Struct({
+  phases: Schema.Record(WorkflowPhase, WorkflowActionDecision),
+  controls: Schema.Record(WorkflowAction, WorkflowActionDecision),
+});
+export type WorkflowActions = typeof WorkflowActions.Type;
+
+/** A wait still pending before resending a provider request, for the session's run state. */
+export const ProviderRetryView = Schema.Struct({
+  runId: Schema.String,
+  retry: Schema.Finite,
+  retryAt: Schema.Finite,
+});
+export type ProviderRetryView = typeof ProviderRetryView.Type;
+
+/**
+ * How a tool of an ended run left its outcome unknown: its owner operation never settled
+ * (`pending`, `uncertain`, `rejected`), or it succeeded but its result never reached the history a
+ * later run reads (`unrecorded`).
+ */
+export const UncertainToolState = Schema.Literals([
+  "pending",
+  "uncertain",
+  "rejected",
+  "unrecorded",
+]);
+export type UncertainToolState = typeof UncertainToolState.Type;
+
+export const UncertainTool = Schema.Struct({
+  toolCallId: Schema.NullOr(Schema.String),
+  name: Schema.NullOr(Schema.String),
+  /** The recorded call with secrets hidden; null when the run stopped before recording it. */
+  call: Schema.NullOr(Schema.String),
+  state: UncertainToolState,
+});
+export type UncertainTool = typeof UncertainTool.Type;
+
+/** A bound Goal run that keeps later runs from starting until the user decides about it. */
+export const UncertainRun = Schema.Struct({
+  runId: Schema.String,
+  tools: Schema.Array(UncertainTool),
+});
+export type UncertainRun = typeof UncertainRun.Type;
+
+/** The runs the user saw listed, all of which the continue covers. */
+export const UncertainContinueRequest = Schema.Struct({ runIds: Schema.Array(Schema.String) });
+export type UncertainContinueRequest = typeof UncertainContinueRequest.Type;

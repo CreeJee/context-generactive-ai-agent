@@ -22,8 +22,8 @@
 - `SubagentReceipt` — 도구 호출이 부모 모델에게 돌려주는 receipt(status, subagentId, agent, taskId, attemptId, delivery).
 - `SubagentReport` — `get_subagent_reports`가 돌려주는 보고서 union 타입이며 `SubagentReceipt`와 `SubagentStatus`를 기반으로 한다.
 - `childRunTools` (`role.ts`) — `RunTool` 배열에서 부모 전용 도구(`start_new_goal`, `update_goal`, `update_plan`, `close_plan`, `update_workflow_progress`, `record_workflow_blocker`, `promote_memory_candidate`, `use_promoted_memory`, `delegate_to_agent`, `cancel_background_task`, `get_background_result`)를 뺀다.
-- `SubagentStatus` (`subagent-state.ts`) — `"running" | "completed" | "failed" | "cancelled" | "interrupted"`.
-- `SubagentView` (`subagent-state.ts`) — 채팅 화면이 보는 하위 에이전트 상태(id, name(일회성이면 null), status, lastTask, lastAnswer, error, createdAt, updatedAt).
+- `SubagentStatus` (`subagent-state.ts`) — `"running" | "completed" | "failed" | "cancelled" | "interrupted"` Schema.
+- `SubagentView` (`subagent-state.ts`) — 채팅 화면이 보는 하위 에이전트 상태 Schema(id, name(일회성이면 null), status, lastTask, lastAnswer, error, createdAt, updatedAt).
 - 내부 모델 도구 정의(export 아님) — `run_subagent`(task, agent, instructions, ownership, acceptanceCriteria), `resume_subagent`(taskId, expectedAttemptId, confirmUncertain), `get_subagent_reports`(attempts 1~100), `adopt_subagent_reports`(reports, reflectedNotificationIds), `read_subagent_tool_result`(toolCallId, offset).
 - 하위 디렉터리 없음.
 

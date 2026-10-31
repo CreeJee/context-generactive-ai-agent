@@ -14,7 +14,7 @@
 - `answer(sessionId, approvalId, approved)` — `DurableDeferred`에 결정을 기록하고 실행을 재개한다. 다른 세션, 시간 초과, 알 수 없는 승인이면 false를 돌려준다. 같은 값으로 다시 답하면 true다.
 - `RelayedRequest` — `RelayedApprovalView`에서 `id`와 `createdAt`을 뺀 요청 타입
 - `ApprovalRequester` — `Schema.TaggedUnion`이다. `subagent { subagentId, name }` 또는 `external_agent { agent }`를 담는다(`relayed-state.ts`).
-- `RelayedApprovalView` — 페이지가 보는 승인 뷰 인터페이스다. 필드는 `id`, `requester`, `toolName`, `argumentsJson`, `reason`, `askedBy`(`review`|`every_call`|`agent`), `createdAt`이다.
+- `RelayedApprovalView` — 페이지가 보는 승인 뷰 Schema다. 필드는 `id`, `requester`, `toolName`, `argumentsJson`, `reason`, `askedBy`(`review`|`every_call`|`agent`), `createdAt`이다.
 
 ## Invariants
 

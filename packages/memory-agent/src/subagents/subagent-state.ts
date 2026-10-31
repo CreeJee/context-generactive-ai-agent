@@ -1,15 +1,24 @@
 /** Subagent state as the chat page sees it. Safe to import in the browser. */
+import { Schema } from "effect";
 
-export type SubagentStatus = "running" | "completed" | "failed" | "cancelled" | "interrupted";
+export const SubagentStatus = Schema.Literals([
+  "running",
+  "completed",
+  "failed",
+  "cancelled",
+  "interrupted",
+]);
+export type SubagentStatus = typeof SubagentStatus.Type;
 
-export interface SubagentView {
-  readonly id: string;
+export const SubagentView = Schema.Struct({
+  id: Schema.String,
   /** null for a one-off run. */
-  readonly name: string | null;
-  readonly status: SubagentStatus;
-  readonly lastTask: string;
-  readonly lastAnswer: string | null;
-  readonly error: string | null;
-  readonly createdAt: number;
-  readonly updatedAt: number;
-}
+  name: Schema.NullOr(Schema.String),
+  status: SubagentStatus,
+  lastTask: Schema.String,
+  lastAnswer: Schema.NullOr(Schema.String),
+  error: Schema.NullOr(Schema.String),
+  createdAt: Schema.Finite,
+  updatedAt: Schema.Finite,
+});
+export type SubagentView = typeof SubagentView.Type;

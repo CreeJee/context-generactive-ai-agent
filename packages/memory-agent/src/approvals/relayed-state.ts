@@ -8,17 +8,18 @@ export const ApprovalRequester = Schema.TaggedUnion({
 });
 export type ApprovalRequester = typeof ApprovalRequester.Type;
 
-export interface RelayedApprovalView {
-  readonly id: string;
-  readonly requester: ApprovalRequester;
-  readonly toolName: string;
+export const RelayedApprovalView = Schema.Struct({
+  id: Schema.String,
+  requester: ApprovalRequester,
+  toolName: Schema.String,
   /** What the call would do, as JSON. */
-  readonly argumentsJson: string;
-  readonly reason: string;
+  argumentsJson: Schema.String,
+  reason: Schema.String,
   /**
    * `review`: the permission review was unsure. `every_call`: the tool asks on every call.
    * `agent`: an external agent asked through its own permission request.
    */
-  readonly askedBy: "review" | "every_call" | "agent";
-  readonly createdAt: number;
-}
+  askedBy: Schema.Literals(["review", "every_call", "agent"]),
+  createdAt: Schema.Finite,
+});
+export type RelayedApprovalView = typeof RelayedApprovalView.Type;

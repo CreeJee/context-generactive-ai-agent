@@ -7,28 +7,10 @@ import {
   standingOf,
   type Transition,
 } from "./goal-transitions.ts";
+import type { WorkflowActionDecision, WorkflowActionReason, WorkflowActions } from "./contracts.ts";
 import type { WorkflowAction, WorkflowPhase, WorkflowState } from "./workflow.ts";
 
-export const WorkflowActionReason = Schema.Literals([
-  "session_in_use",
-  "run_in_progress",
-  "goal_missing",
-  "goal_not_active",
-  "goal_not_paused",
-  "goal_terminal",
-  "plan_not_ready",
-  "plan_outdated",
-]);
-export type WorkflowActionReason = typeof WorkflowActionReason.Type;
-
-export type WorkflowActionDecision =
-  | { readonly allowed: true; readonly intent?: "start" | "continue" }
-  | { readonly allowed: false; readonly reason: WorkflowActionReason };
-
-export interface WorkflowActions {
-  readonly phases: Record<WorkflowPhase, WorkflowActionDecision>;
-  readonly controls: Record<WorkflowAction, WorkflowActionDecision>;
-}
+export { WorkflowActionDecision, WorkflowActionReason, WorkflowActions } from "./contracts.ts";
 
 export type WorkflowActionRequest = Data.TaggedEnum<{
   phase: { readonly phase: WorkflowPhase };

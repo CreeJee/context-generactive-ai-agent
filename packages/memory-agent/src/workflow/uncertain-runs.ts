@@ -2,31 +2,14 @@ import { Array as EffectArray, Data, DateTime, Effect, HashSet, Match, Schema } 
 import { SqlClient, type SqlError } from "effect/sql";
 import { readOnlyToolNames } from "../tools/effects.ts";
 import { invocationFieldSql, resolvedRunSql, toolOperationSql } from "./run-bindings.ts";
+import type { UncertainRun, UncertainTool, UncertainToolState } from "./contracts.ts";
 
-/**
- * How a tool of an ended run left its outcome unknown: its owner operation never settled
- * (`pending`, `uncertain`, `rejected`), or it succeeded but its result never reached the history a
- * later run reads (`unrecorded`).
- */
-export type UncertainToolState = "pending" | "uncertain" | "rejected" | "unrecorded";
-
-export interface UncertainTool {
-  readonly toolCallId: string | null;
-  readonly name: string | null;
-  /** The recorded call with secrets hidden; null when the run stopped before recording it. */
-  readonly call: string | null;
-  readonly state: UncertainToolState;
-}
-
-/** A bound Goal run that keeps later runs from starting until the user decides about it. */
-export interface UncertainRun {
-  readonly runId: string;
-  readonly tools: readonly UncertainTool[];
-}
-
-/** The runs the user saw listed, all of which the continue covers. */
-export const UncertainContinueRequest = Schema.Struct({ runIds: Schema.Array(Schema.String) });
-export type UncertainContinueRequest = typeof UncertainContinueRequest.Type;
+export {
+  UncertainContinueRequest,
+  UncertainRun,
+  UncertainTool,
+  UncertainToolState,
+} from "./contracts.ts";
 
 export type UncertainContinue = Data.TaggedEnum<{
   acknowledged: {};

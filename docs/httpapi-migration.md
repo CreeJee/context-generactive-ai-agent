@@ -109,6 +109,10 @@
   - 보드 변경은 저장(200 `Applied`)과 실행 중 카드에 대한 요청(202 `Requested`)을 success 두 개로 선언한다. HttpApi는 값에 맞는 첫 success의 상태로 답한다. `kanbanAction`은 한 경로가 명령 여러 개를 받으므로 success가 `KanbanStarted`, `{ restarted }`, `{ dependsOn }`, 보드 변경 결과의 union이다.
   - `request_missing`은 결정(404)과 칸반 동작(409) 둘에 있다. 칸반 동작의 `request_missing`은 오케스트레이터 도구(`settleChangeRequest`)만 내므로 HTTP로는 나오지 않는다. `appRefusalStatus`는 먼저 선언한 404를 찾는다.
   - 계약에 맞지 않는 payload(전에는 `invalid_board_edit`, `invalid_kanban_action`)는 HttpApi의 빈 400이다.
+- 1-4b 응답 Schema (2026-10-31): `AgentChat` 기반 라우트의 응답 타입을 먼저 Schema로 바꿨다.
+  - 세션 실행 상태(`SessionRunState`, `CancelResult`, `CompactResult`, `ContextView`, `RunStatus`)는 `agent/run-state.ts`, 그 안의 workflow 모양(`WorkflowExecutionState`, `WorkflowActions`, `ProviderRetryView`, `UncertainRun`, `WorkflowDisplay`)은 `workflow/contracts.ts`, `LeaseView`는 `sessions/contracts.ts`에 둔다.
+  - 큐(`QueueSnapshot`, `QueueEditRequest`), 하위 에이전트(`SubagentView`), 중계 승인(`RelayedApprovalView`)은 원래 브라우저 안전 모듈(`*-state.ts`)에서 Schema가 됐다. `Data.taggedEnum` 생성자는 그대로 둔다.
+  - `chat-store/schema.ts`의 `StoredRunStatus`는 `RunStatus`를 쓴다. 반대로 `run-state.ts`가 `chat-store/schema.ts`를 import하면 `tools/definitions.ts`를 거쳐 순환이 생긴다.
 - SSE는 `HttpApiSchema.StreamSse`로 옮긴다. 첨부 업로드(`Content-Length`를 본문보다 먼저 검사)와 다운로드(바이트와 immutable 헤더)가 HttpApi로 같게 안 되면 RR 라우트로 남기고 이유를 적는다.
 
 ### 1-7. 정리

@@ -21,12 +21,12 @@
 - `QueueDelivery.toUserMessage(message)` — 큐 메시지를 모델이 받는 user 턴(텍스트, 첨부 이미지 URL 파트)으로 바꾼다.
 - `DeliveryBinding` — `{ projectId, sessionId, runId }` 인터페이스다.
 - `queueDeliveredEvent` — `"memory-agent.queue.delivered"` 문자열이다. 이번 run에서 큐 메시지가 에이전트에 닿았음을 페이지에 알리는 커스텀 스트림 이벤트 이름이며, `delivery.ts`에서도 재export한다.
-- `QueueItemState` — `Data.TaggedEnum`이다: `waiting{steered}`, `editing{draft}`, `held{draft|null}`, `delivered{via, runId}`, `failed{reason}`.
-- `QueuedMessage` — `{ id, seq, text, attachmentIds, state, createdAt }` 인터페이스다.
-- `NextDelivery` — `Data.TaggedEnum`이다: `ready`, `server`, `blocked{messageId, reason: "editing"|"held"}`, `empty`.
-- `QueueSnapshot` — `{ items, nextDelivery }` 인터페이스다.
-- `QueueEdit` — 페이지가 요청하는 변경 `Data.TaggedEnum`이다: `edit{draft}`, `save{text}`, `remove`, `confirm`.
-- `DeliveryVia` — `"tool_boundary" | "steer" | "next_turn"`이다. `steer`는 codex 런타임이 제거되기 전의 옛 행에만 있다.
+- `QueueItemState` — Schema `TaggedUnion`의 타입과 그 `Data.taggedEnum` 생성자다: `waiting{steered}`, `editing{draft}`, `held{draft|null}`, `delivered{via, runId}`, `failed{reason}`.
+- `QueuedMessage` — `{ id, seq, text, attachmentIds, state, createdAt }` Schema다.
+- `NextDelivery` — Schema `TaggedUnion`의 타입과 그 `Data.taggedEnum` 생성자다: `ready`, `server`, `blocked{messageId, reason: "editing"|"held"}`, `empty`.
+- `QueueSnapshot` — `{ items, nextDelivery }` Schema다.
+- `QueueEdit` — 페이지가 요청하는 변경이다: `edit{draft}`, `save{text}`, `remove`, `confirm`. `QueueEdit`은 `Data.taggedEnum` 생성자, `QueueEditRequest`는 요청 본문이 읽는 Schema다.
+- `DeliveryVia` — `"tool_boundary" | "steer" | "next_turn"` Schema다. `steer`는 codex 런타임이 제거되기 전의 옛 행에만 있다.
 
 ## Invariants
 

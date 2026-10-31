@@ -11,7 +11,7 @@
 - `memoryInstructions` / `concurrentCallsInstructions` / `reportAnalysisInstructions` / `attachmentInstructions` — 메모리 사용, 동시 도구 호출, 이슈 리포트 분석 세션, 첨부 이미지 참조에 관한 표준 시스템 프롬프트 문자열이다.
 - `workspaceInstructions` — `EffectFunction.dual`이다. `Project`·`SettingsPlaces`·선택 `now`로 프로젝트 루트, 날짜·타임존, 셸, permissionMode별 승인 규칙, 설정 폴더 안내 프롬프트를 만드는 Effect를 돌려준다.
 - `SettingsPlaces` / `AgentOperationFailed` / `QueueRequest` / `ChatRequest` / `ChatStart` — 설정 위치 타입, 하위 transcript·follow-up 로그 읽기 실패 오류(`load-transcript`|`drain-followup`), 큐 요청 스키마, 채팅 요청 타입, 채팅 시작 `Data.TaggedEnum`이다.
-- `SessionRunState` / `CancelResult` / `CompactResult` / `ContextView` / `CompactionStage` / `RunStatus` — `GET /api/sessions/:session`, cancel, `/compact` 응답과 컨텍스트 뷰의 브라우저 안전 타입이다(`run-state.ts`).
+- `SessionRunState` / `CancelResult` / `CompactResult` / `ContextView` / `CompactionStage` / `RunStatus` — `GET /api/sessions/:session`, cancel, `/compact` 응답과 컨텍스트 뷰의 Schema다(`run-state.ts`). 앱 API 계약과 브라우저 번들이 쓴다.
 - `serverRestartedCode` / `serverRestartedMessage` / `interruptContinuationLostCode` / `contextUsageEvent` — 실행 오류 코드·메시지 상수와 라이브 커스텀 이벤트 이름 `memory-agent.context`이다.
 - `ApiUsage` — SQLite `api_usage_responses` 원장 서비스(`ApiUsage.layer`)이다. `record(response)`는 행 id를 돌려주고 `byRootSession(rootSessionId)`는 `ApiUsageTotals`를 돌려준다.
 - `recordUsage` / `apiUsageHook` / `ApiUsageRejected` / `ApiUsageResponse` / `ApiUsageTotals` — Effect AI 응답 usage를 원장에 기록하는 dual 함수와 `RunHook.usage` 훅, 거부 오류(`attribution-missing`|`invalid-count`|`unknown-cache-mode`|`cache-exceeds-input`), 입출력 타입이다.
@@ -49,7 +49,7 @@
 - `defaultSummaryStartPercent = 25`는 `docs/decisions.md` 2026-10-13 결정이다. 최근 사용자 턴 2개(`recentRawUserTurns`)는 항상 원문으로 보낸다.
 - `handoff-state.ts`는 모델 handoff 루프와 분리되어 있다. 시작 시 TanStack 행 마이그레이션이 루프를 로드하지 않고 상태·fingerprint를 읽기 위해서다. `fingerprint`는 'v2:' 접두와 객체 키 정렬로 UI hydration의 필드 순서 변화에 견딘다. `legacyFingerprint`는 이전 행 비교용으로 남긴다.
 - `HandoffState.handoff.through`는 0보다 큰 정수이다. `context`는 이전 버전 호환용 optional 필드이며 더 이상 전송하지 않는다.
-- `run-state.ts`는 브라우저 안전 타입 전용이며 type-only import만 쓴다.
+- `run-state.ts`는 브라우저 번들이 쓰므로 `effect`와 다른 계약 모듈(`sessions/contracts.ts`, `workflow/contracts.ts`) 밖의 코드를 import하지 않는다. `chat-store/schema.ts`의 `StoredRunStatus`가 이 모듈의 `RunStatus`다.
 - ContextUsage 저장 스키마는 cache-cold 추적 이전에 저장된 행을 위해 `cachedTokens`·`observationId`·`compactionStage`를 decoding default null로 받는다. 저장 형식 하위 호환을 유지해야 한다.
 - `memoryRulesFor`는 실행에 `promote_memory_candidate`/`use_promoted_memory` 도구가 없으면 해당 규칙 줄을 뺀다. `promotionRules` 값은 `memoryInstructions` 줄 접두와 정확히 일치해야 한다.
 - 한 응답의 도구 호출은 동시에 실행되고 순서가 보장되지 않는다(`docs/decisions.md` "도구 호출 사이에 순서를 두지 않는다"). 의존 호출은 다음 응답에서 한다.

@@ -1,15 +1,31 @@
-import type { StoredRunStatus } from "../chat-store/schema.ts";
-import type { LeaseView } from "../sessions/lease-state.ts";
-import type { WorkflowActions } from "../workflow/actions.ts";
-import type { WorkflowDisplay, WorkflowState } from "../workflow/workflow.ts";
-import type { WorkflowExecutionState } from "../workflow/execution.ts";
-import type { ProviderRetryView } from "../workflow/provider-retry.ts";
-import type { UncertainRun } from "../workflow/uncertain-runs.ts";
+import { Schema } from "effect";
+import { LeaseView } from "../sessions/contracts.ts";
+import {
+  ProviderRetryView,
+  UncertainRun,
+  WorkflowActions,
+  WorkflowDisplay,
+  WorkflowExecutionState,
+  WorkflowState,
+} from "../workflow/contracts.ts";
 
-/** Browser-safe shapes of the session run endpoints. */
+/**
+ * Browser-safe shapes of the session run endpoints. This module imports no server code, so the
+ * browser bundle can use it.
+ */
 
-/** How a run stands, as `chat_runs.status` keeps it. */
-export type RunStatus = typeof StoredRunStatus.Type;
+/**
+ * How a run stands, as `chat_runs.status` keeps it. `interrupted` waits for the user; the rest but
+ * `running` are terminal.
+ */
+export const RunStatus = Schema.Literals([
+  "running",
+  "interrupted",
+  "completed",
+  "failed",
+  "aborted",
+]);
+export type RunStatus = typeof RunStatus.Type;
 
 /** Error code on runs that were still producing when the previous server process ended. */
 export const serverRestartedCode = "server_restarted";
@@ -19,74 +35,89 @@ export const serverRestartedMessage = "The server stopped before this answer fin
 /** Error code after the user discards an approval whose continuation can no longer start. */
 export const interruptContinuationLostCode = "interrupt_continuation_lost";
 
-/** `GET /api/sessions/:session`: run state that the transcript does not carry. */
-export interface SessionRunState {
-  readonly running: { readonly runId: string } | null;
-  readonly lastRun: {
-    readonly runId: string;
-    readonly status: RunStatus;
-    readonly error: { readonly message: string; readonly code?: string } | null;
-  } | null;
-  /** Whether the asking page may change the session. */
-  readonly lease: LeaseView;
-  readonly context: ContextView;
-  /** Durable Goal/Plan phase and artifacts for this conversation. */
-  readonly workflow: WorkflowState;
-  /** A note beside the workflow that its state alone does not show. */
-  readonly display?: WorkflowDisplay | null;
-  readonly execution?: WorkflowExecutionState;
-  /** The latest pending wait before resending a provider request that was never sent. */
-  readonly providerRetry?: ProviderRetryView | null;
-  /** Server decisions for this snapshot and requesting page; mutations recheck latest state. */
-  readonly actions: WorkflowActions;
-  /** Ended Goal runs whose tools left their outcome unknown; a new run waits for the user. */
-  readonly uncertainRuns: readonly UncertainRun[];
-}
-
 /** Answer to a cancel: `stopped` is false when the run had not ended by the time we answered. */
-export interface CancelResult {
-  readonly runId: string;
-  readonly stopped: boolean;
-  readonly status: RunStatus | null;
-}
+export const CancelResult = Schema.Struct({
+  runId: Schema.String,
+  stopped: Schema.Boolean,
+  status: Schema.NullOr(RunStatus),
+});
+export type CancelResult = typeof CancelResult.Type;
 
 /**
  * Answer to `/compact`: how many earlier tool outputs the model is no longer sent in full, how
  * many more turns now go as their summary, and the conversation's estimated tokens before and
  * after. `summaryFailed` when the turns could not be summarized; the tool output is cleared anyway.
  */
-export interface CompactResult {
-  readonly cleared: number;
-  readonly summarizedTurns: number;
-  readonly summaryFailed: boolean;
-  readonly tokensBefore: number;
-  readonly tokensAfter: number;
-}
+export const CompactResult = Schema.Struct({
+  cleared: Schema.Finite,
+  summarizedTurns: Schema.Finite,
+  summaryFailed: Schema.Boolean,
+  tokensBefore: Schema.Finite,
+  tokensAfter: Schema.Finite,
+});
+export type CompactResult = typeof CompactResult.Type;
+
+/** The strongest compaction operation applied to a model request. */
+export const CompactionStage = Schema.Literals([
+  "none",
+  "clear-answered",
+  "summarize",
+  "leave-out",
+]);
+export type CompactionStage = typeof CompactionStage.Type;
 
 /**
  * How much of the model's context the conversation takes. Also sent live during a run as the
  * `memory-agent.context` custom event.
  */
-export type CompactionStage = "none" | "clear-answered" | "summarize" | "leave-out";
-
-export type ContextView = {
+export const ContextView = Schema.Struct({
   /**
    * Tokens the model read in its latest request in this conversation: instructions, tools and
    * the conversation. Null before the first.
    */
-  readonly usedTokens: number | null;
+  usedTokens: Schema.NullOr(Schema.Finite),
   /** Prompt tokens served from the provider cache. Null when the provider did not report it. */
-  readonly cachedTokens: number | null;
+  cachedTokens: Schema.NullOr(Schema.Finite),
   /** `cachedTokens / usedTokens`. Null when either value was unavailable or input was empty. */
-  readonly cacheRatio: number | null;
+  cacheRatio: Schema.NullOr(Schema.Finite),
   /** The strongest compaction operation applied to the latest model request. */
-  readonly compactionStage: CompactionStage | null;
+  compactionStage: Schema.NullOr(CompactionStage),
   /** Model-advertised input window, or a fallback used only for compaction. */
-  readonly windowTokens: number;
+  windowTokens: Schema.Finite,
   /** Whether windowTokens came from the selected model's catalog metadata. */
-  readonly windowKnown: boolean;
+  windowKnown: Schema.Boolean,
   /** Estimated conversation size past which earlier parts are compacted. */
-  readonly compactAtTokens: number;
-};
+  compactAtTokens: Schema.Finite,
+});
+export type ContextView = typeof ContextView.Type;
+
+/** `GET /api/sessions/:session`: run state that the transcript does not carry. */
+export const SessionRunState = Schema.Struct({
+  running: Schema.NullOr(Schema.Struct({ runId: Schema.String })),
+  lastRun: Schema.NullOr(
+    Schema.Struct({
+      runId: Schema.String,
+      status: RunStatus,
+      error: Schema.NullOr(
+        Schema.Struct({ message: Schema.String, code: Schema.optionalKey(Schema.String) }),
+      ),
+    }),
+  ),
+  /** Whether the asking page may change the session. */
+  lease: LeaseView,
+  context: ContextView,
+  /** Durable Goal/Plan phase and artifacts for this conversation. */
+  workflow: WorkflowState,
+  /** A note beside the workflow that its state alone does not show. */
+  display: Schema.optionalKey(Schema.NullOr(WorkflowDisplay)),
+  execution: Schema.optionalKey(WorkflowExecutionState),
+  /** The latest pending wait before resending a provider request that was never sent. */
+  providerRetry: Schema.optionalKey(Schema.NullOr(ProviderRetryView)),
+  /** Server decisions for this snapshot and requesting page; mutations recheck latest state. */
+  actions: WorkflowActions,
+  /** Ended Goal runs whose tools left their outcome unknown; a new run waits for the user. */
+  uncertainRuns: Schema.Array(UncertainRun),
+});
+export type SessionRunState = typeof SessionRunState.Type;
 
 export const contextUsageEvent = "memory-agent.context";

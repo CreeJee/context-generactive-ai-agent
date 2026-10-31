@@ -40,6 +40,7 @@ import {
   verificationDefault,
   VerificationStatus,
   WorkflowAction,
+  type WorkflowDisplay,
   WorkflowPhase,
   WorkflowState,
 } from "./contracts.ts";
@@ -65,6 +66,7 @@ export {
   PlanStep,
   VerificationStatus,
   WorkflowAction,
+  WorkflowDisplay,
   WorkflowPhase,
   WorkflowState,
 } from "./contracts.ts";
@@ -96,9 +98,6 @@ const cardStatuses = <S extends typeof PersistedPlanStep.Type>(
     ),
   }));
 };
-
-/** A note the page shows beside the workflow state; see `Workflows.display`. */
-export type WorkflowDisplay = "card_reclassifying";
 
 export const UpdateGoal = Schema.Struct({
   statement: Schema.String,

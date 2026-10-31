@@ -12,7 +12,7 @@
 - `StoredToolCall` — `type: "function"` 도구 호출 Schema. `function.arguments`는 파싱되지 않을 수도 있는 JSON 텍스트
 - `MessageSource` — assistant 메시지를 쓴 호출의 provider·api(선택)·model Schema
 - `StoredHistoryGroup` — `chat_history_groups.messages`. 화면 메시지 하나가 보여 주는 스레드 메시지들의 `NonEmptyArray`
-- `StoredRunStatus` — `chat_runs.status` 리터럴(`running`, `interrupted`, `completed`, `failed`, `aborted`)
+- `StoredRunStatus` — `chat_runs.status` 리터럴(`running`, `interrupted`, `completed`, `failed`, `aborted`). 페이지 응답도 쓰므로 `agent/run-state.ts`의 `RunStatus`를 그대로 쓴다
 - `StoredUsage` — `chat_runs.usage`. AG-UI 1.0 `TokenUsage` 모양의 음이 아닌 정수 토큰 카운트 Schema와 타입
 - `StoredInterruptPayload` — `chat_interrupts.payload`. `reason`(`tool_call` | `permission_review`)으로 판별하는 AG-UI 1.0 `Interrupt` Schema와 타입
 - `StoredInterruptResponse` — `chat_interrupts.response`. `approved: true`(선택 `editedArgs`) 또는 `approved: false` 유니온

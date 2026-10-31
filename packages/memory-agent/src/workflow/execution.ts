@@ -11,70 +11,11 @@ import {
 import { SqlClient, SqlSchema } from "effect/sql";
 import { PlanSchedule, planSchedule, stalledEvidence } from "./plan-schedule.ts";
 import { endedWithKnownEffectsSql } from "./run-bindings.ts";
+import { type WorkflowBlocker, WorkflowExecutionState } from "./contracts.ts";
 import type { WorkflowState } from "./workflow.ts";
 
-const blockerFields = {
-  detail: Schema.NonEmptyString,
-  evidence: Schema.Array(Schema.NonEmptyString).pipe(Schema.check(Schema.isMinLength(1))),
-};
+export { WorkflowBlocker, WorkflowExecutionState } from "./contracts.ts";
 
-/** Blockers the model may record; dependency stalls are decided only by the server. */
-export const WorkflowBlocker = Schema.Struct({
-  reason: Schema.Literals([
-    "user_decision",
-    "permission",
-    "external_dependency",
-    "repeated_failure",
-  ]),
-  ...blockerFields,
-});
-export type WorkflowBlocker = typeof WorkflowBlocker.Type;
-
-const Progress = Schema.Struct({
-  completedSteps: Schema.Array(Schema.String),
-  evidence: Schema.Array(Schema.String),
-  toolResults: Schema.Array(Schema.String).pipe(
-    Schema.withDecodingDefaultTypeKey(Effect.succeed([])),
-  ),
-});
-const executionFields = {
-  runId: Schema.String,
-  goalVersion: Schema.Int,
-  planVersion: Schema.Int,
-  noProgressRuns: Schema.Int,
-  progress: Progress,
-};
-
-export const WorkflowExecutionState = Schema.TaggedUnion({
-  idle: {},
-  running: executionFields,
-  ready: executionFields,
-  /**
-   * A run cut off by a server restart before it ran any tool. A new run continues the Plan at
-   * `retryAt`: the time of the provider retry it was waiting for, or the restart itself.
-   */
-  retrying: { ...executionFields, retryAt: Schema.Finite },
-  blocked: {
-    runId: Schema.String,
-    reason: Schema.Literals([
-      ...WorkflowBlocker.fields.reason.literals,
-      "dependency_stalled",
-      "server_restarted",
-    ]),
-    ...blockerFields,
-  },
-  stopped: {
-    /** `state_reconciled`: the startup check repaired a Goal no transition makes, or one not running. */
-    reason: Schema.Literals([
-      "user",
-      "run_failed",
-      "workflow_changed",
-      "completed",
-      "state_reconciled",
-    ]),
-  },
-});
-export type WorkflowExecutionState = typeof WorkflowExecutionState.Type;
 const { cases } = WorkflowExecutionState;
 const isRunning = WorkflowExecutionState.isAnyOf(["running"]);
 const isRetrying = WorkflowExecutionState.isAnyOf(["retrying"]);
@@ -82,7 +23,7 @@ const isRetrying = WorkflowExecutionState.isAnyOf(["retrying"]);
 const isPending = WorkflowExecutionState.isAnyOf(["ready", "retrying"]);
 const isReconciled = (state: WorkflowExecutionState) =>
   state._tag === "stopped" && state.reason === "state_reconciled";
-const executionKeys = Struct.keys(executionFields);
+const executionKeys = Struct.keys(Struct.omit(cases.running.fields, ["_tag"]));
 
 export class WorkflowExecutionFailed extends Schema.TaggedError<
   WorkflowExecutionFailed,
@@ -97,7 +38,7 @@ const encode = Schema.encodeEffect(Schema.fromJsonString(WorkflowExecutionState)
 const progressOf = (
   state: WorkflowState,
   toolResults: readonly string[] = [],
-): typeof Progress.Type => ({
+): typeof cases.running.fields.progress.Type => ({
   toolResults,
   completedSteps:
     state.plan?.steps.filter((step) => step.status === "done").map((step) => step.id) ?? [],
