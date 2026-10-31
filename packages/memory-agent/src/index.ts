@@ -59,6 +59,9 @@ export {
   maxReportBytes,
 } from "./report/discord-webhook.ts";
 export { bundleLimits, collectReportBundle } from "./report/bundle.ts";
+// The bundle reads these; the app's report handlers name them in their inferred types.
+export { BoardHealth } from "./kanban/board-health.ts";
+export { SecretRedactor } from "./secrets/redactor.ts";
 export { ReportBundle } from "./report/bundle-contract.ts";
 export {
   ReportDeliveryFailure,
