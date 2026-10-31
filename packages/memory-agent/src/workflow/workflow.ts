@@ -26,22 +26,23 @@ import {
   standingOf,
   stepsOf,
 } from "./goal-transitions.ts";
+import { completionEvidence, Derived } from "./completion-evidence.ts";
+import { BoardAuthor, CardStatus, cardContract, StepProgressStatus } from "./card.ts";
 import {
-  completionEvidence,
-  CompletionRequest,
   CompletionSnapshot,
   CriterionMapping,
-  Derived,
-} from "./completion-evidence.ts";
-import {
-  BoardAuthor,
-  CardStatus,
-  cardContract,
-  cardContractFields,
-  cardHoldFields,
-  StepProgressStatus,
-} from "./card.ts";
-import { PlanStatus } from "./contracts.ts";
+  GoalArtifact,
+  GoalQuestion,
+  LedgerEvent,
+  PlanArtifact,
+  PlanStep,
+  planStepFields,
+  verificationDefault,
+  VerificationStatus,
+  WorkflowAction,
+  WorkflowPhase,
+  WorkflowState,
+} from "./contracts.ts";
 import { notStartedStatus, validatePlanDependencies } from "./plan-schedule.ts";
 import {
   BoardEditRefused,
@@ -58,107 +59,21 @@ import {
 import { acknowledgedRunSql, resolvedRunSql } from "./run-bindings.ts";
 import { logFailure } from "../runtime/logged-failures.ts";
 
-export const WorkflowPhase = Schema.Literals([
-  "chat",
-  "goal",
-  "plan",
-  "execute",
-  "verify",
-  "completed",
-]);
-export type WorkflowPhase = typeof WorkflowPhase.Type;
-
-export const WorkflowAction = Schema.Literals(["pause", "resume", "stop"]);
-export type WorkflowAction = typeof WorkflowAction.Type;
-
-const GoalQuestion = Schema.Struct({
-  id: Schema.String,
-  question: Schema.String,
-  blocking: Schema.Boolean,
-});
-
-export const VerificationStatus = Schema.Literals([
-  "not_run",
-  "passed",
-  "failed",
-  "invalid_hypothesis",
-  "invalid_criterion",
-  "inconclusive",
-  "blocked",
-]);
-export type VerificationStatus = typeof VerificationStatus.Type;
-
-const Verification = Schema.Struct({
-  status: VerificationStatus,
-  summary: Schema.String,
-  evidence: Schema.Array(Schema.String),
-  recoveryPhase: Schema.NullOr(Schema.Literals(["goal", "plan"])).pipe(
-    Schema.withDecodingDefaultTypeKey(Effect.succeed(null)),
-  ),
-  updatedAt: Schema.NullOr(Schema.String),
-});
-export type Verification = typeof Verification.Type;
-
-const verificationDefault: Verification = {
-  status: "not_run",
-  summary: "",
-  evidence: [],
-  recoveryPhase: null,
-  updatedAt: null,
-};
-
-const goalFields = {
-  completion: Schema.optionalKey(CompletionSnapshot),
-  completionRequest: Schema.optionalKey(CompletionRequest),
-  version: Schema.Int,
-  statement: Schema.String,
-  outcomes: Schema.Array(Schema.String),
-  constraints: Schema.Array(Schema.String),
-  nonGoals: Schema.Array(Schema.String),
-  assumptions: Schema.Array(Schema.String),
-  openQuestions: Schema.Array(GoalQuestion),
-  evidence: Schema.Array(Schema.String).pipe(Schema.withDecodingDefaultTypeKey(Effect.succeed([]))),
-  verification: Verification.pipe(
-    Schema.withDecodingDefaultTypeKey(Effect.succeed(verificationDefault)),
-  ),
-  updatedAt: Schema.String,
-} as const;
-
-export const GoalArtifact = Schema.Struct({
-  ...goalFields,
-  status: Schema.Literals(["draft", "active", "paused", "completed", "failed"]),
-});
-export type GoalArtifact = typeof GoalArtifact.Type;
-
-const planStepFields = {
-  id: Schema.String,
-  title: Schema.String,
-  description: Schema.String,
-  dependsOn: Schema.Array(Schema.String),
-  acceptanceCriteria: Schema.Array(Schema.String),
-  ruleRefs: Schema.Array(Schema.String),
-} as const;
-
-const recordedEvidence = Schema.Array(Schema.String).pipe(
-  Schema.withDecodingDefaultTypeKey(Effect.succeed([])),
-);
-
-export const PlanStep = Schema.Struct({
-  ...planStepFields,
-  ...cardContractFields,
-  ...cardHoldFields,
-  status: CardStatus,
-  evidence: recordedEvidence,
-});
-export type PlanStep = typeof PlanStep.Type;
+export {
+  GoalArtifact,
+  PlanArtifact,
+  PlanStep,
+  VerificationStatus,
+  WorkflowAction,
+  WorkflowPhase,
+  WorkflowState,
+} from "./contracts.ts";
+export type { Verification } from "./contracts.ts";
 
 // Plans saved before cards hold pending/completed; they are read, never rewritten in place.
 const PersistedPlanStep = Schema.Struct({
-  ...planStepFields,
-  ...cardContractFields,
-  ...cardHoldFields,
+  ...PlanStep.fields,
   status: Schema.Union([CardStatus, StepProgressStatus]),
-  evidence: recordedEvidence,
 });
 
 /** Reads saved step statuses as cards: pending is ready, or backlog until its dependencies are done. */
@@ -181,54 +96,6 @@ const cardStatuses = <S extends typeof PersistedPlanStep.Type>(
     ),
   }));
 };
-
-const planFields = {
-  version: Schema.Int,
-  goalVersion: Schema.Int,
-  summary: Schema.String,
-  steps: Schema.Array(PlanStep),
-  risks: Schema.Array(Schema.String),
-  openQuestions: Schema.Array(Schema.String),
-  evidence: Schema.Array(Schema.String).pipe(Schema.withDecodingDefaultTypeKey(Effect.succeed([]))),
-  verification: Verification.pipe(
-    Schema.withDecodingDefaultTypeKey(Effect.succeed(verificationDefault)),
-  ),
-  updatedAt: Schema.String,
-} as const;
-
-export const PlanArtifact = Schema.Struct({
-  ...planFields,
-  status: PlanStatus,
-});
-export type PlanArtifact = typeof PlanArtifact.Type;
-
-const LedgerEvent = Schema.Struct({
-  sequence: Schema.Int,
-  at: Schema.String,
-  kind: Schema.Literals([
-    "phase_changed",
-    "goal_updated",
-    "plan_updated",
-    "plan_replanned",
-    "progress_updated",
-    "goal_paused",
-    "goal_resumed",
-    "workflow_stopped",
-    "verification_recorded",
-    "verification_invalidated",
-    "board_updated",
-    "plan_closed",
-  ]),
-  detail: Schema.String,
-});
-
-export const WorkflowState = Schema.Struct({
-  phase: WorkflowPhase,
-  goal: Schema.NullOr(GoalArtifact),
-  plan: Schema.NullOr(PlanArtifact),
-  ledger: Schema.Array(LedgerEvent),
-});
-export type WorkflowState = typeof WorkflowState.Type;
 
 /** A note the page shows beside the workflow state; see `Workflows.display`. */
 export type WorkflowDisplay = "card_reclassifying";
@@ -320,7 +187,7 @@ const emptyState = (): WorkflowState => ({ phase: "chat", goal: null, plan: null
 
 // Read workflow rows written before execution state and evidence became durable fields.
 const PersistedGoalArtifact = Schema.Struct({
-  ...goalFields,
+  ...GoalArtifact.fields,
   status: Schema.Literals([
     "draft",
     "ready",
@@ -332,7 +199,7 @@ const PersistedGoalArtifact = Schema.Struct({
   ]),
 });
 const PersistedPlanArtifact = Schema.Struct({
-  ...planFields,
+  ...PlanArtifact.fields,
   steps: Schema.Array(PersistedPlanStep),
   status: Schema.Literals([
     "draft",

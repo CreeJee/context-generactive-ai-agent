@@ -1,95 +1,32 @@
 import { Data, Effect, Match, Schema, Struct } from "effect";
 import { optionalProperty } from "../optional-property.ts";
-import { BoardAuthor, CardRisk, cardContractKeys, type CardStatus } from "./card.ts";
+import { BoardAuthor, cardContractKeys, type CardStatus } from "./card.ts";
+import {
+  BoardEdit,
+  CardPatch,
+  UserChange,
+  type BoardEditResultCases,
+  type PlanArtifact,
+  type PlanStep,
+} from "./contracts.ts";
 import {
   notStartedStatus,
   validatePlanDependencies,
   type PlanDependenciesRejected,
 } from "./plan-schedule.ts";
-import type { PlanArtifact, PlanStep, WorkflowState } from "./workflow.ts";
 
-const CardText = Schema.String.pipe(Schema.check(Schema.isTrimmed(), Schema.isMinLength(1)));
-
-/** A card the user adds; the owner gives it its id and status. */
-export const CardDraft = Schema.Struct({
-  title: CardText,
-  description: Schema.String,
-  dependsOn: Schema.Array(Schema.String),
-  acceptanceCriteria: Schema.Array(Schema.String),
-  outcome: Schema.optionalKey(Schema.String),
-  boundaries: Schema.optionalKey(Schema.Array(Schema.String)),
-  risk: Schema.optionalKey(CardRisk),
-  requiredEvidence: Schema.optionalKey(Schema.Array(Schema.String)),
-  humanDecision: Schema.optionalKey(Schema.String),
-  // A tool that takes several cards states the shape once, as a JSON Schema definition.
-}).annotate({ identifier: "CardDraft" });
-export type CardDraft = typeof CardDraft.Type;
-
-/** Fields the user changes on a card. An absent key keeps the value; null clears a contract field. */
-export const CardPatch = Schema.Struct({
-  title: Schema.optionalKey(CardText),
-  description: Schema.optionalKey(Schema.String),
-  dependsOn: Schema.optionalKey(Schema.Array(Schema.String)),
-  acceptanceCriteria: Schema.optionalKey(Schema.Array(Schema.String)),
-  outcome: Schema.optionalKey(Schema.NullOr(Schema.String)),
-  boundaries: Schema.optionalKey(Schema.NullOr(Schema.Array(Schema.String))),
-  risk: Schema.optionalKey(Schema.NullOr(CardRisk)),
-  requiredEvidence: Schema.optionalKey(Schema.NullOr(Schema.Array(Schema.String))),
-  humanDecision: Schema.optionalKey(Schema.NullOr(Schema.String)),
-});
-export type CardPatch = typeof CardPatch.Type;
-
-const Index = Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0)));
-
-/** A user's board change. `planVersion` is the Plan the user saw; a newer one refuses it. */
-export const BoardEdit = Schema.TaggedUnion({
-  AddCard: {
-    planVersion: Schema.Int,
-    card: CardDraft,
-    index: Schema.optionalKey(Index),
-  },
-  EditCard: {
-    planVersion: Schema.Int,
-    cardId: Schema.String,
-    patch: CardPatch,
-  },
-  MoveCard: { planVersion: Schema.Int, cardId: Schema.String, index: Index },
-  CancelCard: { planVersion: Schema.Int, cardId: Schema.String },
-  /** Ends the Plan without completing it, for work that settled elsewhere or is no longer wanted. */
-  ClosePlan: { planVersion: Schema.Int },
-});
-export type BoardEdit = typeof BoardEdit.Type;
-
-/** What a user asked of an executing card; the orchestrator settles it. */
-export const UserChange = Schema.TaggedUnion({
-  Edit: { patch: CardPatch },
-  Cancel: {},
-});
-export type UserChange = typeof UserChange.Type;
-
-export const UserChangeRequestStatus = Schema.Literals([
-  "pending",
-  "applied",
-  "reassigned",
-  "rejected",
-]);
-
-export const UserChangeRequest = Schema.Struct({
-  id: Schema.Int,
-  cardId: Schema.String,
-  planVersion: Schema.Int,
-  change: UserChange,
-  status: UserChangeRequestStatus,
-  reason: Schema.NullOr(Schema.String),
-  createdAt: Schema.String,
-});
-export type UserChangeRequest = typeof UserChangeRequest.Type;
+export {
+  BoardEdit,
+  BoardIntent,
+  CardDraft,
+  CardPatch,
+  UserChange,
+  UserChangeRequest,
+  UserChangeRequestStatus,
+} from "./contracts.ts";
 
 /** Answer to a board change: the saved state, or the request stored for an executing card. */
-export type BoardEditResult = Data.TaggedEnum<{
-  Applied: { readonly state: WorkflowState };
-  Requested: { readonly request: UserChangeRequest };
-}>;
+export type BoardEditResult = BoardEditResultCases;
 export const BoardEditResult = Data.taggedEnum<BoardEditResult>();
 
 export class BoardEditRefused extends Schema.TaggedError<
@@ -337,25 +274,3 @@ export const planCardHold = Effect.fnUntraced(function* (
     detail: `card ${card.id} ${change.hold ? "held" : "released"}`,
   };
 });
-
-/**
- * What a person means by dragging a card on the board. The board turns a drop into one of these;
- * the owner decides the card's status from it.
- */
-export const BoardIntent = Schema.TaggedUnion({
-  /** Same column: the card takes the place of `at`, which ranks it in its Goal's queue. */
-  Reorder: { cardId: Schema.String, at: Schema.String },
-  /** A blocked card goes back on the queue with a fresh attempt record. */
-  Requeue: { cardId: Schema.String },
-  Hold: { cardId: Schema.String },
-  Release: { cardId: Schema.String },
-  /** A change to an executing card, which the orchestrator settles. */
-  ChangeRequest: { cardId: Schema.String, patch: CardPatch },
-  Cancel: { cardId: Schema.String },
-  /**
-   * The card leaves this Plan for another conversation's Plan of the same project, placed before
-   * `at` there (or last). It keeps its contract, loses its dependencies and starts over there.
-   */
-  Transfer: { cardId: Schema.String, toSessionId: Schema.String, at: Schema.NullOr(Schema.String) },
-});
-export type BoardIntent = typeof BoardIntent.Type;

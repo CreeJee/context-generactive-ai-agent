@@ -4,6 +4,9 @@ import { endedWithKnownEffectsSql } from "../workflow/run-bindings.ts";
 import { UserChange, UserChangeRequestStatus } from "../workflow/board-edit.ts";
 import { CardStatus } from "../workflow/card.ts";
 import { CardFailure, CardHoldReason } from "./failures.ts";
+import { AssignmentHold, KanbanMode } from "./contracts.ts";
+
+export { AssignmentHold, KanbanMode } from "./contracts.ts";
 
 /**
  * Durable kanban execution records on the owner connection: which Goal instances run as a board,
@@ -28,16 +31,6 @@ export const CardAttemptOutcome = Schema.TaggedUnion({
   Stopped: { cardStatus: Schema.NullOr(CardStatus) },
 });
 export type CardAttemptOutcome = typeof CardAttemptOutcome.Type;
-
-/** A Goal instance stopped by the orchestrator until its cards are classified against a new Goal. */
-export const AssignmentHold = Schema.TaggedStruct("GoalChanged", {
-  fromVersion: Schema.Int,
-  toVersion: Schema.Int,
-});
-export type AssignmentHold = typeof AssignmentHold.Type;
-
-export const KanbanMode = Schema.Literals(["worktree", "sequential"]);
-export type KanbanMode = typeof KanbanMode.Type;
 
 export interface KanbanGoal {
   readonly goalInstanceId: string;

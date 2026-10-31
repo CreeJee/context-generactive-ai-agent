@@ -1,9 +1,8 @@
 import { Array as EffectArray, Clock, Context, Effect, Layer, Option, Schema } from "effect";
 import { SqlClient, type SqlError } from "effect/sql";
-import { ProtectedBranches } from "./contracts.ts";
-import { VerdictFailure } from "./failures.ts";
+import { GoalMergeState, ProtectedBranches } from "./contracts.ts";
 
-export { ProtectedBranches };
+export { GoalMergeState, ProtectedBranches };
 
 /**
  * What the project scheduler stores about kanban Goals (docs/kanban-orchestration.md "프로젝트
@@ -14,33 +13,6 @@ export { ProtectedBranches };
 
 /** Branches a project protects when the user has not chosen any. */
 export const defaultProtectedBranches = ["main", "staging"] as const;
-
-/** Where a Goal's merge into its target branch stands. Only metadata, never provider text. */
-export const GoalMergeState = Schema.TaggedUnion({
-  /** The Goal branch at `head` is being checked as a whole. */
-  Verifying: { head: Schema.String },
-  /** The Goal-level check failed at `head`; a new Goal branch commit is checked again. */
-  VerifyFailed: { head: Schema.String, verdict: VerdictFailure },
-  /** The target is checked out with uncommitted changes there; the merge waits for them. */
-  WaitingWorktree: { head: Schema.String, worktree: Schema.String },
-  /** The target kept moving while the merge ran; the next look tries again. */
-  TargetMoving: {},
-  /** A person decides (protected branch or conflict); the request names the wait. */
-  AwaitingDecision: { requestId: Schema.String },
-  Merged: { commit: Schema.String },
-  /** The person merges by hand; the Goal branch stays. */
-  ManualMerge: {},
-  /** The push and pull request ran without a recorded result. Never run again on its own. */
-  PullRequestPending: {},
-  PullRequestCreated: { url: Schema.String },
-  /** The owner stopped while a pull request was being made; a person checks what happened. */
-  PullRequestUncertain: {},
-  PullRequestFailed: { stage: Schema.Literals(["push", "create"]) },
-  Stopped: {
-    reason: Schema.Literals(["no_target", "target_missing", "conflict_stopped", "goal_replaced"]),
-  },
-});
-export type GoalMergeState = typeof GoalMergeState.Type;
 
 const settledMerge = GoalMergeState.match({
   Merged: () => true,

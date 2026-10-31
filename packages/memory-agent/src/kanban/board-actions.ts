@@ -21,12 +21,7 @@ import {
 import { CardStatus, type BoardAuthor } from "../workflow/card.ts";
 import { Workflows, type PlanStep } from "../workflow/workflow.ts";
 import { boardOps } from "./board-ops.ts";
-import {
-  CardAttempts,
-  type AssignmentHold,
-  type KanbanGoal,
-  type KanbanMode,
-} from "./card-attempts.ts";
+import { CardAttempts, type KanbanGoal } from "./card-attempts.ts";
 import { cardQueueName } from "./card-queue.ts";
 import { CardHoldReason } from "./failures.ts";
 import {
@@ -39,10 +34,22 @@ import {
 import { KanbanOrchestrator } from "./orchestrator.ts";
 import { cardWorkspace, CardWorktrees, WorktreeDisposition } from "./worktree.ts";
 import { Sessions } from "../sessions/sessions.ts";
-import { GoalSchedules, type GoalMergeState } from "./goal-schedules.ts";
+import { GoalSchedules } from "./goal-schedules.ts";
 import { ProjectScheduler } from "./scheduler.ts";
 import { BoardHealth } from "./board-health.ts";
-import type { LoopHealth } from "../runtime/loop-health.ts";
+import type {
+  KanbanBoardView,
+  KanbanCardView,
+  KanbanGoalOption,
+  KanbanScheduleView,
+} from "./contracts.ts";
+
+export type {
+  KanbanBoardView,
+  KanbanCardView,
+  KanbanGoalOption,
+  KanbanScheduleView,
+} from "./contracts.ts";
 
 /**
  * What the orchestrator model does on a kanban board (docs/kanban-orchestration.md "수정 권한",
@@ -99,53 +106,6 @@ export const GoalChangeVerdict = Schema.TaggedUnion({
   NeedsDecision: { cardId: Schema.String, question: Schema.NonEmptyString },
 });
 export type GoalChangeVerdict = typeof GoalChangeVerdict.Type;
-
-/** What the loop knows about a card beyond the Plan. */
-export interface KanbanCardView {
-  readonly cardId: string;
-  readonly status: CardStatus;
-  /** Why the loop stopped or delayed the card. */
-  readonly reason: CardHoldReason | null;
-  readonly failures: number;
-  readonly replans: number;
-  /** The card a resolution card re-applies. */
-  readonly resolutionOf: string | null;
-  readonly requeueable: boolean;
-}
-
-/** Another kanban Goal of the project, as a Goal this one can wait for. */
-export interface KanbanGoalOption {
-  readonly goalInstanceId: string;
-  readonly sessionId: string;
-  readonly sessionTitle: string | null;
-  readonly statement: string | null;
-  readonly merge: GoalMergeState | null;
-}
-
-/**
- * How the project scheduler treats the board's Goal. Its place in the priority tree is the
- * project board's business (`GoalOrder`), not the Goal's own.
- */
-export interface KanbanScheduleView {
-  /** The branch the Goal merges into; none when the board started on a detached HEAD. */
-  readonly targetBranch: string | null;
-  readonly dependsOn: readonly string[];
-  /** The Goals it depends on that have not merged yet; while any remain it takes no slots. */
-  readonly waitingOn: readonly string[];
-  readonly merge: GoalMergeState | null;
-  readonly upstreamPending: boolean;
-  readonly otherGoals: readonly KanbanGoalOption[];
-}
-
-export interface KanbanBoardView {
-  readonly goalInstanceId: string;
-  readonly mode: KanbanMode;
-  readonly goalChange: AssignmentHold | null;
-  readonly cards: readonly KanbanCardView[];
-  readonly schedule: KanbanScheduleView | null;
-  /** How the board's loop stands; a stopped one waits for `restartLoop`. */
-  readonly loop: LoopHealth;
-}
 
 /** A card attempt is running or waiting in the queue while the card is in these columns. */
 const running = (card: PlanStep) => card.status === "in_progress" || card.status === "verify";

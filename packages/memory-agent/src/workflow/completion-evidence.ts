@@ -1,55 +1,10 @@
 import { isTruthy } from "../truthy.ts";
 import { Array as Arr, Data, Effect, MutableHashMap, Option, Schema, Stream } from "effect";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
+import type { CompletionSnapshot, CriterionMapping } from "./contracts.ts";
 import type { WorkflowState } from "./workflow.ts";
 
-/** Only the current Plan version is supported; historical Plan mappings are not adopted. */
-export const CriterionMapping = Schema.Struct({
-  outcomeIndex: Schema.Int,
-  outcomeText: Schema.String,
-  stepId: Schema.String,
-  acceptanceIndex: Schema.Int,
-  acceptanceText: Schema.String,
-  runId: Schema.String,
-  evidenceNodeIds: Schema.Array(Schema.String),
-});
-const RunProvenance = Schema.Struct({
-  runId: Schema.String,
-  workflowRevisionId: Schema.Int,
-  dispatchGeneration: Schema.NullOr(Schema.String),
-  // Additive for 0.0.13 snapshots; source-bound runs always populate it.
-  durableExecutionId: Schema.optionalKey(Schema.String),
-});
-export const CompletionSnapshot = Schema.Struct({
-  sessionId: Schema.String,
-  projectId: Schema.String,
-  goalInstanceId: Schema.String,
-  goalVersion: Schema.Int,
-  planVersion: Schema.Int,
-  recorderRunId: Schema.String,
-  recorderRevisionId: Schema.Int,
-  sourceGeneration: Schema.NullOr(Schema.String),
-  manifestHash: Schema.NullOr(Schema.String),
-  nativeRegistration: Schema.NullOr(
-    Schema.Struct({
-      artifactHash: Schema.String,
-      sourceHash: Schema.String,
-      contractVersion: Schema.String,
-    }),
-  ),
-  mappings: Schema.Array(CriterionMapping),
-  runs: Schema.Array(RunProvenance),
-});
-export type CompletionSnapshot = typeof CompletionSnapshot.Type;
-export type CriterionMapping = typeof CriterionMapping.Type;
-
-/** A proposal is never completion evidence; the owner validates it after durable settlement. */
-export const CompletionRequest = Schema.Struct({
-  recorderRunId: Schema.String,
-  goalVersion: Schema.Int,
-  planVersion: Schema.Int,
-  mappings: Schema.Array(CriterionMapping),
-});
+export { CompletionRequest, CompletionSnapshot, CriterionMapping } from "./contracts.ts";
 
 const Binding = Schema.Struct({
   session_id: Schema.String,

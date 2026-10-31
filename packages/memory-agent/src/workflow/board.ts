@@ -1,50 +1,20 @@
 import { Context, Effect, Layer, Option, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { GoalOrder } from "../kanban/goal-order.ts";
-import {
-  planEnded,
-  UserChange,
-  UserChangeRequestStatus,
-  type UserChangeRequest,
-} from "./board-edit.ts";
+import { planEnded, UserChange, UserChangeRequestStatus } from "./board-edit.ts";
 import { BoardAuthor, type CardStatus } from "./card.ts";
-import type { ProjectBoard } from "./contracts.ts";
+import type { BoardCard, BoardRevision, BoardView, ProjectBoard } from "./contracts.ts";
 import {
   decodeWorkflowState,
   PlanStep,
   WorkflowStorageError,
-  type PlanArtifact,
   type WorkflowState,
 } from "./workflow.ts";
-
-/** A card with the author of the latest revision that changed it, when one is recorded. */
-export interface BoardCard {
-  readonly card: PlanStep;
-  readonly lastChange: { readonly author: BoardAuthor | null; readonly at: string } | null;
-}
-
-/** One saved revision that changed cards, newest first in the view. */
-export interface BoardRevision {
-  readonly revisionId: number;
-  readonly at: string;
-  /** Null for revisions saved before authors were recorded, or by phase and lifecycle saves. */
-  readonly author: BoardAuthor | null;
-  readonly detail: string;
-  readonly cardIds: readonly string[];
-}
-
-/** `GET /api/sessions/:session/board`: the Plan as a board and how it got there. */
-export interface BoardView {
-  readonly plan: Pick<PlanArtifact, "version" | "status" | "summary"> | null;
-  readonly cards: readonly BoardCard[];
-  readonly history: readonly BoardRevision[];
-  readonly pendingChanges: readonly UserChangeRequest[];
-}
 
 /** Cards in each column of a board. */
 export type BoardColumnCounts = Readonly<Record<CardStatus, number>>;
 
-export type { ProjectBoard };
+export type { BoardCard, BoardRevision, BoardView, ProjectBoard };
 
 /** Revisions read to attribute cards; one more is the baseline of the oldest. */
 const revisionWindow = 200;
