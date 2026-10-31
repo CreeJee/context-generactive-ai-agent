@@ -109,11 +109,11 @@ const tightestWindow = (quota: Data.TaggedEnum.Value<QuotaStatus, "observed" | "
 
 function QuotaHeadline({ entry }: { entry: AccountEntry }) {
   return AccountEntry.$match(entry, {
-    compatible: ({ account }) => (
-      <span className="shrink-0 text-2xs text-muted-foreground">
-        {account.models.length > 0 ? `모델 ${account.models.length}개` : "모델 없음"}
-      </span>
-    ),
+    // Only a missing model needs saying; the count of registered ones is in the account manager.
+    compatible: ({ account }) =>
+      account.models.length > 0 ? null : (
+        <span className="shrink-0 text-2xs text-muted-foreground">모델 없음</span>
+      ),
     profile: ({ quota }) =>
       quota === undefined
         ? null

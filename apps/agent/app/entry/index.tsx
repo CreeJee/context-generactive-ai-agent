@@ -524,19 +524,19 @@ export function App() {
             </div>
             <Separator />
             {projectId && (
-              <DecisionInbox
-                projectId={projectId}
-                holder={pageHolder()}
-                onOpenCard={(session, card) =>
-                  void setLocation({ ...leaveProjectBoard, session, card }, { history: "push" })
-                }
-              />
-            )}
-            {projectId && (
-              <ProjectBoardButton
-                projectId={projectId}
-                onOpen={() => void setLocation({ boards: true }, { history: "push" })}
-              />
+              <div className="flex gap-1 px-2 py-1">
+                <DecisionInbox
+                  projectId={projectId}
+                  holder={pageHolder()}
+                  onOpenCard={(session, card) =>
+                    void setLocation({ ...leaveProjectBoard, session, card }, { history: "push" })
+                  }
+                />
+                <ProjectBoardButton
+                  projectId={projectId}
+                  onOpen={() => void setLocation({ boards: true }, { history: "push" })}
+                />
+              </div>
             )}
             {projectId && (
               <SessionSection

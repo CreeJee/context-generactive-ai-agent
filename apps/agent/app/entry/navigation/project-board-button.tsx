@@ -14,14 +14,12 @@ export function ProjectBoardButton({
   const boards = useProjectBoardsQuery(projectId).data ?? [];
   const running = boards.filter((board) => board.kanbanActive).length;
   return (
-    <div className="px-2 py-1">
-      <Button variant="ghost" size="sm" className="w-full justify-start" onClick={onOpen}>
-        <KanbanSquareIcon />
-        칸반 보드
-        <Badge variant={running > 0 ? "default" : "secondary"} className="ml-auto">
-          {boards.length}
-        </Badge>
-      </Button>
-    </div>
+    <Button variant="ghost" size="sm" className="min-w-0 flex-1 justify-start" onClick={onOpen}>
+      <KanbanSquareIcon />
+      칸반 보드
+      <Badge variant={running > 0 ? "default" : "secondary"} className="ml-auto">
+        {boards.length}
+      </Badge>
+    </Button>
   );
 }

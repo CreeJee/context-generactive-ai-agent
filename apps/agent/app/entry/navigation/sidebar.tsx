@@ -46,6 +46,8 @@ import {
   DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "~/components/ui/dropdown-menu";
@@ -563,11 +565,52 @@ export function SessionSection({
   ].toSorted();
   const filter = placeFilterOf(placeValue, places);
   const shown = sessions.filter(shownIn(filter));
+  const everywhere = PlaceFilter.$is("all")(filter);
+  const placeLabel = PlaceFilter.$match(filter, {
+    all: () => "모든 작업 위치",
+    checkout: () => "저장소 본체",
+    place: ({ place }) => place,
+  });
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center justify-between px-4 pt-3 pb-2">
         <h2 className="text-2xs font-medium tracking-wide text-muted-foreground uppercase">대화</h2>
-        <div className="flex items-center">
+        <div className="flex min-w-0 items-center">
+          {places.length > 0 && (
+            <DropdownMenu>
+              {/* A filter in use names its place, so a short list is not mistaken for all of it. */}
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    variant={everywhere ? "ghost" : "secondary"}
+                    size={everywhere ? "icon-sm" : "sm"}
+                    aria-label={`작업 위치: ${placeLabel}`}
+                    title={`작업 위치: ${placeLabel}`}
+                  />
+                }
+              >
+                <GitBranchIcon />
+                {!everywhere && <span className="max-w-20 truncate">{placeLabel}</span>}
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-64">
+                <DropdownMenuGroup>
+                  <DropdownMenuLabel>작업 위치</DropdownMenuLabel>
+                  <DropdownMenuRadioGroup
+                    value={placeValue}
+                    onValueChange={(value: string) => setPlaceValue(value)}
+                  >
+                    <DropdownMenuRadioItem value={everyPlace}>모든 작업 위치</DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem value={checkoutPlace}>저장소 본체</DropdownMenuRadioItem>
+                    {places.map((place) => (
+                      <DropdownMenuRadioItem key={place} value={place} title={place}>
+                        <span className="min-w-0 flex-1 truncate">{place}</span>
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
           <Button variant="ghost" size="sm" onClick={() => onCreate()}>
             <PlusIcon /> 새 대화
           </Button>
@@ -599,33 +642,6 @@ export function SessionSection({
           </DropdownMenu>
         </div>
       </div>
-      {places.length > 0 && (
-        <div className="px-2 pb-2">
-          <Select
-            value={placeValue}
-            items={[
-              { value: everyPlace, label: "모든 작업 위치" },
-              { value: checkoutPlace, label: "저장소 본체" },
-              ...places.map((place) => ({ value: place, label: place })),
-            ]}
-            onValueChange={(value) => value && setPlaceValue(value)}
-          >
-            <SelectTrigger className="w-full" size="sm" aria-label="작업 위치">
-              <GitBranchIcon />
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={everyPlace}>모든 작업 위치</SelectItem>
-              <SelectItem value={checkoutPlace}>저장소 본체</SelectItem>
-              {places.map((place) => (
-                <SelectItem key={place} value={place}>
-                  {place}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      )}
       {archiveError && (
         <Alert variant="destructive" className="mx-2 mb-2 w-auto">
           <AlertDescription>{archiveError}</AlertDescription>
@@ -637,7 +653,7 @@ export function SessionSection({
             <div
               key={session.id}
               className={cn(
-                "group flex items-center rounded-md hover:bg-muted",
+                "group relative flex items-center rounded-md hover:bg-muted",
                 session.id === sessionId && "bg-muted font-medium",
               )}
             >
@@ -648,7 +664,8 @@ export function SessionSection({
                 className="flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1.5 text-left text-xs"
               >
                 <span className="min-w-0 flex-1 truncate">{sessionLabel(session)}</span>
-                {sessionPlace(session) !== null && (
+                {/* Only a separate worktree is worth a chip; a filtered list is all one place. */}
+                {everywhere && session.worktreePath !== null && (
                   <Badge
                     variant="outline"
                     className="max-w-24 shrink-0"
@@ -664,7 +681,8 @@ export function SessionSection({
                 )}
               </Link>
               {/* The row shows its action on hover, or while the action has keyboard focus. */}
-              <div className="mr-1 flex opacity-0 group-hover:opacity-100 has-focus-visible:opacity-100">
+              {/* It lies over the row's end instead of keeping that width from every title. */}
+              <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center rounded-r-md bg-muted pr-1 pl-1 opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 has-focus-visible:pointer-events-auto has-focus-visible:opacity-100">
                 <Button
                   variant="ghost"
                   size="icon-xs"

@@ -29,18 +29,17 @@ export function DecisionInbox({
   const [open, setOpen] = useState(false);
   const items = useDecisionInboxQuery(projectId).data ?? [];
   return (
-    <div className="px-2 py-1">
+    <>
       <Button
         variant="ghost"
         size="sm"
-        className="w-full justify-start"
+        className="min-w-0 flex-1 justify-start"
         onClick={() => setOpen(true)}
       >
         <InboxIcon />
         판단 대기
-        <Badge variant={items.length > 0 ? "default" : "secondary"} className="ml-auto">
-          {items.length}
-        </Badge>
+        {/* Only a waiting decision asks for attention; none is the usual state. */}
+        {items.length > 0 && <Badge className="ml-auto">{items.length}</Badge>}
       </Button>
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent side="left">
@@ -89,6 +88,6 @@ export function DecisionInbox({
           </div>
         </SheetContent>
       </Sheet>
-    </div>
+    </>
   );
 }

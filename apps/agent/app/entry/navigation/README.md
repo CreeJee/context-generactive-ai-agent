@@ -8,11 +8,11 @@
 
 - `ModelSection` — 모델 Select와, 선택한 모델이 허용하는 추론 강도 Select를 그리는 사이드바 섹션 (sidebar.tsx)
 - `ProjectSection` — 접히는 프로젝트 섹션. 이름으로 찾는 프로젝트 Combobox(보관한 프로젝트는 따로 묶음), 폴더 열기 버튼, 권한 모드(ask/auto/full), 다른 프로젝트 기억 검색 토글(R08), 보관하기를 담는다 (sidebar.tsx)
-- `SessionSection` — 세션·보관 세션 목록. 위치 필터(`sessionPlace`·`placeFilterOf`·`shownIn`)로 나눠 보여 준다 (sidebar.tsx, `App`이 렌더)
+- `SessionSection` — 세션·보관 세션 목록. "대화" 머리줄의 위치 필터 메뉴(`sessionPlace`·`placeFilterOf`·`shownIn`)로 나눠 보여 준다. 위치 칩은 모든 위치를 볼 때 worktree 대화에만 붙고, 보관·삭제 버튼은 행 끝 위에 겹쳐 나타난다 (sidebar.tsx, `App`이 렌더)
 - `Separator` — sidebar.tsx가 `~/components/ui/separator`에서 다시 내보내는 구분선
 - `SidebarDisclosureTrigger` — `CollapsibleTrigger` 래퍼. `leading` 슬롯, 말줄임 본문, 회전하는 chevron을 그린다
 - `AccountModelPanel` / `accountSummary` — 공급자 인증 상태와 선택 모델을 한 줄로 요약하고 설정을 접어 두는 패널. `accountSummary`는 `{status, model, hasError}`를 돌려주는 dual 함수다
-- `DecisionInbox` — 프로젝트 전체에서 사람의 판단을 기다리는 카드 수를 배지로 보여 준다. Sheet에서 `DecisionPrompt`로 답하거나 `onOpenCard(sessionId, cardId)`로 보드를 연다
+- `DecisionInbox` — 프로젝트 전체에서 사람의 판단을 기다리는 카드 수를 배지로 보여 준다(0이면 배지 없음). `ProjectBoardButton`과 한 줄에 놓인다. Sheet에서 `DecisionPrompt`로 답하거나 `onOpenCard(sessionId, cardId)`로 보드를 연다
 - `ProjectBoardButton` — 프로젝트 칸반 보드를 여는 버튼. 배지는 보드 수를 보이고 실행 중(`kanbanActive`)인 보드가 있으면 강조된다
 - `providerLabels` — `ProviderId`별 표시 이름(ChatGPT/Claude/OpenAI 호환). `satisfies Record<ProviderId, string>`
 - `effortChoices` / `EffortChoice` — `(selection, model)` dual 함수. 사이드바와 `/effort`가 쓰는 추론 강도 선택지를 만든다
