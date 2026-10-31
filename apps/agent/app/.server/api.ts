@@ -11,6 +11,7 @@ import { type AgentChat, BtwApiHandlers, type BtwChat, ChatApiHandlers } from "m
 import { AppApi, NoStore } from "memory-agent/app-api";
 import { ChatApi, SameSite } from "memory-agent/chat-api";
 import { agent } from "./agent.ts";
+import { BtwThreadsApiHandlers } from "./api/btw.ts";
 import { ProjectsApiHandlers } from "./api/projects.ts";
 import { AccountsApiHandlers, AuthApiHandlers, ModelsApiHandlers } from "./api/providers.ts";
 import { SessionsApiHandlers } from "./api/sessions.ts";
@@ -59,6 +60,7 @@ const appApiRoutes = HttpApiBuilder.layer(AppApi).pipe(
       ModelsApiHandlers,
       SessionsApiHandlers,
       TraceApiHandlers,
+      BtwThreadsApiHandlers,
     ),
   ),
   Layer.provide(Layer.merge(SameSiteLive, NoStoreLive)),

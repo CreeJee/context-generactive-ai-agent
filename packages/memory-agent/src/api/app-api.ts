@@ -1,4 +1,5 @@
 import { HttpApi } from "effect/http-api";
+import { BtwThreadsGroup, btwRefusals } from "./app-api/btw.ts";
 import { ProjectsGroup, projectsRefusals } from "./app-api/projects.ts";
 import { AccountsGroup, AuthGroup, ModelsGroup, providersRefusals } from "./app-api/providers.ts";
 import { SessionsGroup, sessionsRefusals } from "./app-api/sessions.ts";
@@ -18,7 +19,8 @@ export class AppApi extends HttpApi.make("app")
   .add(AccountsGroup)
   .add(ModelsGroup)
   .add(SessionsGroup)
-  .add(TraceGroup) {}
+  .add(TraceGroup)
+  .add(BtwThreadsGroup) {}
 
 /**
  * The HTTP status an app API refusal is answered with. A code has one status across the groups, so
@@ -31,6 +33,7 @@ export const appRefusalStatus = refusalStatusIn([
   ...providersRefusals,
   ...sessionsRefusals,
   ...traceRefusals,
+  ...btwRefusals,
 ]);
 
 export {

@@ -8,11 +8,12 @@ import "streamdown/styles.css";
 import { Button } from "~/components/ui/button";
 import { isTruthy } from "../../truthy.ts";
 
-// cjk: bold/italic next to Korean text (`**값**입니다`) renders; plain CommonMark leaves the stars.
-const code = createCodePlugin({
+/** The Shiki highlighter answers use; tool blocks share it so a language loads once. */
+export const codeHighlighter = createCodePlugin({
   themes: ["github-light", "github-dark"],
 });
-const plugins = { code, cjk };
+// cjk: bold/italic next to Korean text (`**값**입니다`) renders; plain CommonMark leaves the stars.
+const plugins = { code: codeHighlighter, cjk };
 const linkSafety = { enabled: true };
 
 /** Markdown images carry a URL string; React also allows a Blob, which never leaves the page. */

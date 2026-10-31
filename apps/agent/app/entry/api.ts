@@ -852,17 +852,11 @@ export const api = {
       (client) => client.sessions.create({ payload: { projectId, agent } }),
       "invalid_session",
     ),
-  btwThreads: (sessionId: string) =>
-    call<BtwThread[]>("GET", `/api/sessions/${encodeURIComponent(sessionId)}/btw`),
+  btwThreads: (session: string) => appCall((client) => client.btw.list({ params: { session } })),
   /** A new BTW thread bound for good to this conversation. */
-  createBtw: (sessionId: string) =>
-    call<BtwThread>("POST", `/api/sessions/${encodeURIComponent(sessionId)}/btw`),
+  createBtw: (session: string) => appCall((client) => client.btw.create({ params: { session } })),
   /** `filesPending`: the rows are gone, some unreferenced image files wait for the next cleanup. */
-  deleteBtw: (threadId: string) =>
-    call<{ deleted: true; filesPending: boolean }>(
-      "DELETE",
-      `/api/btw/${encodeURIComponent(threadId)}`,
-    ),
+  deleteBtw: (thread: string) => appCall((client) => client.btw.remove({ params: { thread } })),
   sessionRunState: (session: string, holder: string) =>
     appCall((client) => client.sessions.status({ params: { session }, query: { holder } })),
   cancelRun: (session: string, holder: string) =>

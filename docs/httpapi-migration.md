@@ -137,6 +137,9 @@
   - 찾은 문제: 페이지의 `ResumeTaskResult.queued`는 서버가 보내지 않는 `jobId`를 요구했다. 그래서 다시 시도를 저장해도 페이지는 디코드에 실패해 `request_failed`로 보였다. 계약의 Schema를 쓰면서 고쳐졌다.
   - 응답이 바뀐 곳: Work Trace 설정을 읽지 못하면 전에는 tree만 500 `settings_unavailable`이고 나머지는 본문 없는 500이었다. 이제 다섯 endpoint가 모두 `settings_unavailable`이다. 태스크 보관·삭제가 끝내다 막힌 202 `blocked`는 전에 페이지가 502로 봤다. 이제 세션 수명주기처럼 결과로 돌려준다. `work_trace_disabled`, `trace_task_not_found`, `invalid_trace_task_action`은 페이지 code 목록에 없어 `request_failed`로 보였다. 목록에 넣었다.
   - 계약에 맞지 않는 payload(전에는 `invalid_trace_task_action`)는 HttpApi의 빈 400이다. facade는 같은 code를 `appCall`의 invalid code로 준다.
+- 1-5 BTW 스레드 결과 (2026-10-31): `sessions.$session.btw`와 `btw.$thread._index`를 앱 API의 `BtwThreadsGroup`(`app-api/btw.ts`, group 이름 `btw`)으로 옮기고 `.server/btw-handlers.ts`를 지웠다. 스레드에 묻기와 메시지 읽기는 그대로 `ChatApi`의 `BtwGroup`이다. 페이지 facade가 `appCall`로 부르므로 목록·생성·삭제는 앱 API에 둔다.
+  - 옛 라우트 handler를 부르던 `server/tests/btw-routes.test.ts`는 지웠다. 그 가운데 상태 코드는 계약이 정하고, 메인 대화를 물을 때마다 다시 읽는 동작만 `tests/btw/threads.test.ts`로 옮겼다.
+  - 응답이 바뀐 곳: 삭제 경로가 DELETE 말고 다른 method에 답하던 405 `method_not_allowed`는 없어졌다.
 - SSE는 `HttpApiSchema.StreamSse`로 옮긴다. 첨부 업로드(`Content-Length`를 본문보다 먼저 검사)와 다운로드(바이트와 immutable 헤더)가 HttpApi로 같게 안 되면 RR 라우트로 남기고 이유를 적는다.
 
 ### 1-7. 정리

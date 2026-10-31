@@ -4,7 +4,12 @@ import { AgentChat } from "../../src/agent/chat.ts";
 import { Attachments } from "../../src/attachments/attachments.ts";
 import { attachmentUrl } from "../../src/attachments/urls.ts";
 import { BtwChat } from "../../src/btw/chat.ts";
-import { BtwError, BtwThreadNotFound, btwToolNames } from "../../src/btw/contracts.ts";
+import {
+  BtwError,
+  BtwParentNotFound,
+  BtwThreadNotFound,
+  btwToolNames,
+} from "../../src/btw/contracts.ts";
 import { AgUiEvent } from "../../src/loop/chunks.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
@@ -129,6 +134,30 @@ testAgent({ testProvider: { responder } })("BTW threads", (it) => {
       expect(yield* count("SELECT count(*) AS count FROM btw_threads WHERE id = ?", kept.id)).toBe(
         0,
       );
+    }),
+  );
+
+  it.effect("answer from the main conversation as it is when asked", () =>
+    Effect.gen(function* () {
+      yield* selectTestModel();
+      const env = yield* TestEnv;
+      const btw = yield* BtwChat;
+      const nodes = yield* Nodes;
+      const sessionId = yield* freshSession;
+      const mainNode = (text: string) =>
+        nodes.append({ projectId: env.project.id, sessionId, kind: "user", text });
+      yield* mainNode("first main message");
+      const orphan = yield* Effect.flip(btw.create("none"));
+      expect(Schema.is(BtwError)(orphan) && orphan.reason).toBeInstanceOf(BtwParentNotFound);
+
+      const thread = yield* btw.create(sessionId);
+      expect(yield* ask(thread.id, "side question one")).toContain("BTW answer");
+      yield* mainNode("second main message, written after the BTW opened");
+      expect(yield* ask(thread.id, "side question two")).toContain("BTW answer");
+      expect(env.provider!.invocations.at(-2)!.system.join("\n")).toContain("second main message");
+      expect(yield* btw.list(sessionId)).toMatchObject([
+        { id: thread.id, title: "side question one" },
+      ]);
     }),
   );
 });
