@@ -1,4 +1,4 @@
-import { DateTime, Effect, Option, Schema } from "effect";
+import { DateTime, Duration, Effect, Option, Schema } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { providerProtocols, type OAuthProvider } from "./protocol.ts";
 import {
@@ -43,10 +43,32 @@ export class SubscriptionUsageCredentialExpired extends Schema.TaggedError<
   { readonly brand: unique symbol }
 >()("SubscriptionUsageCredentialExpired", {}) {}
 
+/** The provider refused the lookup as too frequent (429); `retryAfter` is its `Retry-After` wait. */
+export class SubscriptionUsageRateLimited extends Schema.TaggedError<
+  SubscriptionUsageRateLimited,
+  { readonly brand: unique symbol }
+>()("SubscriptionUsageRateLimited", {
+  retryAfter: Schema.Option(Schema.Duration),
+}) {}
+
+/** `Retry-After` as delay seconds or an HTTP date (RFC 9110); an unreadable value is absent. */
+const retryAfterOf = (header: string | null, now: number) =>
+  Option.fromNullishOr(header).pipe(
+    Option.map((value) => value.trim()),
+    Option.flatMap((value) =>
+      /^\d+$/.test(value)
+        ? Option.some(Duration.seconds(Number(value)))
+        : Option.map(DateTime.make(value), (date) =>
+            Duration.millis(Math.max(0, DateTime.toEpochMillis(date) - now)),
+          ),
+    ),
+  );
+
 /**
  * Sends exactly one usage request with the stored access token and never retries. An expired token
  * is refreshed first only when `refreshExpired` allows it; otherwise the lookup fails without a
- * request so it never races the model path's own refresh of a rotating refresh token.
+ * request so it never races the model path's own refresh of a rotating refresh token. A 429 fails
+ * with the provider's `Retry-After` so the caller can wait it out.
  */
 const requestUsage = Effect.fn("requestSubscriptionUsage")(function* (options: {
   readonly provider: OAuthProvider;
@@ -103,7 +125,12 @@ const requestUsage = Effect.fn("requestSubscriptionUsage")(function* (options: {
   }).pipe(
     Effect.filterOrFail(
       (response) => response.ok,
-      (response) => OAuthHarnessError.fromCode("provider_rejected", response.status, context),
+      (response) =>
+        response.status === 429
+          ? SubscriptionUsageRateLimited.make({
+              retryAfter: retryAfterOf(response.headers.get("retry-after"), now()),
+            })
+          : OAuthHarnessError.fromCode("provider_rejected", response.status, context),
     ),
   );
   const body = yield* Effect.tryPromise(() => response.json()).pipe(

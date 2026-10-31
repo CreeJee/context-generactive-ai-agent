@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest";
-import { DateTime, Effect, MutableRef, Result } from "effect";
+import { DateTime, Duration, Effect, MutableRef, Option, Result } from "effect";
 import { expect } from "vite-plus/test";
 import {
   SubscriptionUsageCredentialExpired,
@@ -96,6 +96,44 @@ it.effect(
       });
       expect(yield* lookup(now)).toEqual(Result.fail(SubscriptionUsageCredentialExpired.make()));
       expect(requests).toEqual([anthropicUsageUrl]);
+    }).pipe(withOAuthTestPlatform),
+);
+
+it.effect.each([
+  { retryAfter: "120", waitMillis: Option.some(120_000) },
+  { retryAfter: "Sat, 31 Oct 2026 06:01:30 GMT", waitMillis: Option.some(90_000) },
+  { retryAfter: null, waitMillis: Option.none() },
+])(
+  "a 429 fails the lookup with the provider's Retry-After ($retryAfter)",
+  ({ retryAfter, waitMillis }) =>
+    Effect.gen(function* () {
+      const now = Date.UTC(2026, 9, 31, 6, 0, 0);
+      const outcome = yield* anthropicSubscriptionUsage({
+        store: {
+          read: () =>
+            Effect.succeed({
+              accessToken: "fixture",
+              refreshToken: "fixture",
+              expiresAt: now + 3600_000,
+            }),
+          write: () => Effect.die("unexpected write"),
+          remove: () => Effect.void,
+        },
+        fetch: () =>
+          Promise.resolve(
+            Response.json(
+              { type: "error", error: { type: "rate_limit_error" } },
+              { status: 429, headers: retryAfter === null ? {} : { "retry-after": retryAfter } },
+            ),
+          ),
+        now: () => now,
+      }).pipe(
+        Effect.catchTag("SubscriptionUsageRateLimited", (error) =>
+          Effect.fail(Option.map(error.retryAfter, Duration.toMillis)),
+        ),
+        Effect.result,
+      );
+      expect(outcome).toEqual(Result.fail(waitMillis));
     }).pipe(withOAuthTestPlatform),
 );
 

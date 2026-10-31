@@ -67,8 +67,8 @@ The user decided to show Anthropic quota from this route despite the credential-
 
 - **Windows:** only `five_hour` (18 000 s) and `seven_day` (604 800 s), each only when `utilization` is a number. `usedPercent` is that `utilization`; `resetsAt` is `resets_at`. Code-named and dollar fields are ignored.
 - **No refresh:** the lookup reads each profile's stored access token and never refreshes it. An expired token fails the lookup without a request, so it never races the model path's refresh of a rotating refresh token.
-- **Rate:** at most one request per account per minute (`Cache` with a 1-minute TTL); concurrent sidebar reads share it, and at most two accounts are looked up at once.
-- **Failure:** a failed lookup returns the last observation as `stale` (with `failedAt`), never zero. With no earlier observation it returns `unavailable` with `credential_expired` (token expired) or `lookup_failed` (any provider, transport or shape failure). Only the error tag is logged.
+- **Rate:** at most one request per account per five minutes (`Cache` with a 5-minute TTL; 1 minute until 2026-10-31); concurrent sidebar reads share it, and at most two accounts are looked up at once. A 429 is not repeated for that account until its `Retry-After` (delay seconds or HTTP date) has passed, and never sooner than five minutes. The cache lives in each backend process, so a newly started backend looks up once right away.
+- **Failure:** a failed lookup returns the last observation as `stale` (with `failedAt`), never zero. With no earlier observation it returns `unavailable` with `credential_expired` (token expired) or `lookup_failed` (any provider, transport, rate-limit or shape failure). Only the error tag is logged, plus the hold in seconds for a 429.
 - The previous `provider_policy_restricted` reason is removed; the route was never in a GitHub release.
 
 ## M5 OpenAI adoption (2026-10-12)

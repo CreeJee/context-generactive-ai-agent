@@ -469,6 +469,7 @@
 - OpenAI 채택(2026-10-12, 사용자 결정): OpenAI 계정 쿼터는 Codex가 쓰는 ChatGPT 백엔드 `/wham/usage`의 `rate_limit.primary_window`·`secondary_window`(`used_percent`, `limit_window_seconds`, `reset_at`)를 `observed`로 보여 준다. Codex 경로는 OpenAI에만 쓰고 Anthropic은 `/api/oauth/usage`를 그대로 둔다. 만료된 토큰은 갱신하지 않고 재시도하지 않는다. `no_permitted_route`는 없앴다.
   - 조회는 저장된 access token만 쓰고 refresh하지 않는다. refresh token이 회전하므로 모델 요청의 refresh와 겹치면 로그인이 깨질 수 있다. 만료됐으면 요청 없이 실패한다.
   - 계정별 조회는 `Cache`로 1분에 한 번까지만 보내고 동시 조회는 2개로 제한한다. 실패하면 마지막 관측값을 `stale`로 돌려주고, 관측값이 없으면 `credential_expired`·`lookup_failed`로 조회 불가를 명시한다.
+- 조회 간격 조정(2026-10-31, 사용자 결정): 계정별 조회 캐시를 1분에서 5분으로 늘린다. 공급자가 429를 돌려주면 그 계정은 `Retry-After`(초 또는 HTTP 날짜)가 지날 때까지, 최소 5분 동안 다시 요청하지 않고 마지막 관측값을 `stale`로 보여 준다. 제한 중에 다시 물으면 제한만 길어질 수 있기 때문이다. 429는 조회 불가 이유로 따로 나누지 않고 `lookup_failed`로 보인다.
 
 ### 공급자 전환과 상태 조회의 대기 경계 (2026-10-15)
 
