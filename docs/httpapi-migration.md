@@ -119,6 +119,12 @@
   - `QueueRequest`는 `queue/queue-state.ts`로 옮겼다. 하위 에이전트 대화 응답은 계약의 `SubagentTranscript`다.
   - 응답이 바뀐 곳: 옛 라우트는 거부한 요청에도 무효화 이벤트를 발행했다. 이제 성공한 변경만 발행한다. `queue_reserved`(전달 중인 메시지)는 서버가 내던 code였지만 페이지 code 목록에 없었다. 계약이 이것을 찾아 목록에 넣었다.
   - 계약에 맞지 않는 payload(전에는 `invalid_queue_request`, `invalid_queue_edit`, `invalid_answer`)는 HttpApi의 빈 400이다.
+- 1-4b run 제어 결과 (2026-10-31): `sessions.$session.{cancel,compact,interrupts.discard,uncertain,lease}`를 `SessionsGroup`의 `cancel`·`compact`·`discardInterrupts`·`continuePastUncertain`·`lease`로 옮겼다. `AgentChat`의 다섯 메서드도 값과 `{ error }` 거부를 돌려준다.
+  - `compact`의 503 `provider_unavailable`은 `provider`를 싣는다. providers group에는 같은 code의 404가 있어서, `providersRefusals`에 503(`SelectedProviderUnavailable`)을 먼저 선언해 `appRefusalStatus`가 둘을 가른다. 세션 상태(GET)도 이것을 쓴다.
+  - uncertain의 답은 옛 모양 그대로 `{ _tag: "acknowledged" }`다(`UncertainAcknowledged`). lease는 holder를 헤더가 아니라 본문으로 받고, 페이지를 닫을 때의 beacon(`application/json` Blob)도 같은 payload로 디코드된다.
+  - 응답이 바뀐 곳: 옛 lease 라우트가 GET에 답하던 405 안내는 없어졌다. cancel과 lease의 `run-state` 발행은 성공한 요청에만 한다.
+  - 테스트가 `cancel(...).status`를 HTTP 상태로 읽던 곳은 `CancelResult.status`(run 상태)와 이름이 겹쳐 타입으로 잡히지 않았다. 성공 여부를 보도록 고쳤다.
+  - 계약에 맞지 않는 payload(전에는 `invalid_uncertain_continue`, `invalid_lease_request`)는 HttpApi의 빈 400이다.
 - SSE는 `HttpApiSchema.StreamSse`로 옮긴다. 첨부 업로드(`Content-Length`를 본문보다 먼저 검사)와 다운로드(바이트와 immutable 헤더)가 HttpApi로 같게 안 되면 RR 라우트로 남기고 이유를 적는다.
 
 ### 1-7. 정리

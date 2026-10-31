@@ -536,7 +536,8 @@ testAgent({ testProvider: { responder } })("automatic workflow execution across 
       const session = yield* executing([{ text: "I will review." }]);
       yield* session.run();
       expect(WorkflowExecutionState.isAnyOf(["ready"])(yield* session.execution)).toBe(true);
-      expect((yield* session.cancel).status).toBe(200);
+      // Nothing runs yet; the cancel still stops the continuation instead of refusing.
+      yield* session.cancel;
       expect(yield* session.execution).toEqual(stopped("user"));
       yield* env.reopen;
       expect(yield* session.readySessions).not.toContain(session.id);

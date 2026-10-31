@@ -4,6 +4,7 @@ import { HttpApiBuilder } from "effect/http-api";
 import { AuthConnectionState } from "../../src/providers/contracts.ts";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { appRefusalStatus } from "../../src/api/app-api.ts";
+import { LeaseRequest } from "../../src/api/app-api/sessions.ts";
 import { ChatApi, SameSite } from "../../src/api/chat-api.ts";
 import { BtwApiHandlers, ChatApiHandlers } from "../../src/api/chat-api-live.ts";
 import { BtwChat } from "../../src/btw/chat.ts";
@@ -17,10 +18,6 @@ import { sdk } from "./agent-env.ts";
 const SessionRequest = Schema.Struct({
   projectId: Schema.String,
   title: Schema.optional(Schema.NullOr(Schema.String)),
-});
-const LeaseRequest = Schema.Struct({
-  holder: Schema.NonEmptyString,
-  action: Schema.Literals(["claim", "release"]),
 });
 const ApprovalRequest = Schema.Struct({ approved: Schema.Boolean });
 
@@ -109,10 +106,10 @@ const route = Effect.fnUntraced(function* (
       return yield* chat.status(sessionId!, url.searchParams.get("holder"));
     case "lease": {
       const lease = yield* Schema.decodeUnknownEffect(LeaseRequest)(yield* body);
-      return yield* chat.lease(sessionId!, lease.holder, lease.action);
+      return yield* answered(chat.lease(sessionId!, lease.holder, lease.action));
     }
     case "cancel":
-      return yield* chat.cancel(sessionId!, holder);
+      return yield* answered(chat.cancel(sessionId!, holder));
     case "approvals": {
       if (approvalId === undefined) return yield* answered(chat.approvals(sessionId!));
       const { approved } = yield* Schema.decodeUnknownEffect(ApprovalRequest)(yield* body);

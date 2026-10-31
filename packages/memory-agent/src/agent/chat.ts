@@ -825,6 +825,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const sessionNotFound = () => Effect.succeed(json(404, { error: "session_not_found" }));
   /** The app API's methods refuse with the code instead. */
   const unknownSession = () => Effect.fail({ error: "session_not_found" } as const);
+  /** The selected model's provider cannot run now. */
+  const unavailableProvider = ({ provider }: { readonly provider: ProviderId }) =>
+    Effect.fail({ error: "provider_unavailable", provider } as const);
+  /** Refuses a change while the session is answering. */
+  const runInProgress = () => Effect.fail({ error: "run_in_progress" } as const);
   const providerUnavailable = (failure: { readonly provider: string }) =>
     Effect.succeed(json(503, { error: "provider_unavailable", provider: failure.provider }));
 
@@ -2413,7 +2418,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
      */
     cancel: (sessionId: string, holder: string | null) =>
       Effect.gen(function* () {
-        if (!(yield* leases.permits(sessionId, holder))) return inUse();
+        yield* refuseOtherHolder(sessionId, holder);
         const pendingExecution = WorkflowExecutionState.isAnyOf(["ready"])(
           yield* execution.get(sessionId),
         );
@@ -2427,8 +2432,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             (yield* background.hasSession(sessionId));
           if (!children)
             return pendingExecution
-              ? json(200, { runId: "", stopped: true, status: "completed" })
-              : json(409, { error: "no_running_run" });
+              ? ({ runId: "", stopped: true, status: "completed" } satisfies CancelResult)
+              : yield* Effect.fail({ error: "no_running_run" } as const);
           yield* workTrace.holdParentNotifications(sessionId);
           const stopped = yield* subagents
             .stopSession(sessionId)
@@ -2438,11 +2443,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               Effect.map(Option.isSome),
             );
           const last = yield* lastRun(sessionId);
-          return json(200, {
+          const result: CancelResult = {
             runId: last?.runId ?? "",
             stopped,
             status: last?.status ?? null,
-          });
+          };
+          return result;
         }
         yield* workTrace.holdParentNotifications(sessionId);
         live.controller.abort(cancelRequested);
@@ -2456,7 +2462,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         ).pipe(Effect.timeoutOption(cancelWaitMs), Effect.map(Option.isSome));
         const run = Option.getOrUndefined(yield* sessionRun(sessionId, live.runId));
         const result: CancelResult = { runId: live.runId, stopped, status: run?.status ?? null };
-        return json(200, result);
+        return result;
       }),
 
     /**
@@ -2470,16 +2476,16 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     ) =>
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
-        if (!(yield* leases.permits(sessionId, holder))) return inUse();
+        yield* refuseOtherHolder(sessionId, holder);
         if (isTruthy(yield* liveRuns.get(sessionId)) || (yield* background.hasSession(sessionId)))
-          return json(409, { error: "run_in_progress" });
+          return yield* runInProgress();
         const result = yield* uncertain.acknowledge(sessionId, input.runIds);
         return yield* UncertainContinue.$match(result, {
-          refused: ({ reason }) => Effect.succeed(json(409, { error: reason })),
+          refused: ({ reason }) => Effect.fail({ error: reason }),
           acknowledged: (acknowledged) =>
-            Effect.as(events.publishSession(sessionId, "run-state"), json(200, acknowledged)),
+            Effect.as(events.publishSession(sessionId, "run-state"), acknowledged),
         });
-      }).pipe(Effect.catchTags({ SessionNotFound: sessionNotFound })),
+      }).pipe(Effect.catchTag("SessionNotFound", unknownSession)),
 
     /**
      * Discards a persisted approval after its continuation has become unusable. The gated tool is
@@ -2487,16 +2493,15 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
      */
     discardInterrupts: (sessionId: string, holder: string | null) =>
       Effect.gen(function* () {
-        if (!(yield* leases.permits(sessionId, holder))) return inUse();
+        yield* refuseOtherHolder(sessionId, holder);
         yield* sessions.get(sessionId);
-        if (isTruthy(yield* liveRuns.get(sessionId)))
-          return json(409, { error: "run_in_progress" });
+        if (isTruthy(yield* liveRuns.get(sessionId))) return yield* runInProgress();
         const discarded = yield* runStore.discardPendingInterrupts(sessionId);
         const workflow = yield* workflows.get(sessionId);
         yield* workflows.finishRun(sessionId, workflow.phase);
         yield* queue.holdWaiting(sessionId, "stopped");
-        return json(200, { discarded });
-      }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
+        return { discarded };
+      }).pipe(Effect.catchTag("SessionNotFound", unknownSession)),
 
     /**
      * `/compact`: stops sending the model the tool output it has already answered from. Refused
@@ -2504,10 +2509,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
      */
     compact: (sessionId: string, holder: string | null) =>
       Effect.gen(function* () {
-        if (!(yield* leases.permits(sessionId, holder))) return inUse();
+        yield* refuseOtherHolder(sessionId, holder);
         yield* sessions.get(sessionId);
-        if (isTruthy(yield* liveRuns.get(sessionId)))
-          return json(409, { error: "run_in_progress" });
+        if (isTruthy(yield* liveRuns.get(sessionId))) return yield* runInProgress();
         const budget = budgetFor((yield* windowFor(yield* active.selected)).tokens);
         const result: CompactResult = yield* compactByHand(
           runStore.chatMetadata,
@@ -2517,11 +2521,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           budget,
           () => summaries.catchUp(sessionId, true),
         );
-        return json(200, result);
+        return result;
       }).pipe(
         Effect.catchTags({
-          SessionNotFound: sessionNotFound,
-          ProviderUnavailable: providerUnavailable,
+          SessionNotFound: unknownSession,
+          ProviderUnavailable: unavailableProvider,
         }),
       ),
 
@@ -2621,22 +2625,23 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     lease: (sessionId: string, holder: string, action: "claim" | "release") =>
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
-        switch (action) {
-          case "claim":
-            yield* leases.claim(sessionId, holder);
-            break;
-          case "release":
-            yield* leases.release(sessionId, holder);
-            // The page is gone: nothing will send its waiting messages as a next turn.
-            if (
-              !isTruthy(yield* liveRuns.get(sessionId)) &&
-              (yield* leases.view(sessionId, null)).state === "free"
-            )
-              yield* queue.holdWaiting(sessionId, "pageLeft");
-            break;
-        }
-        return json(200, yield* leases.view(sessionId, holder));
-      }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
+        yield* Match.value(action).pipe(
+          Match.when("claim", () => leases.claim(sessionId, holder)),
+          Match.when("release", () =>
+            Effect.gen(function* () {
+              yield* leases.release(sessionId, holder);
+              // The page is gone: nothing will send its waiting messages as a next turn.
+              if (
+                !isTruthy(yield* liveRuns.get(sessionId)) &&
+                (yield* leases.view(sessionId, null)).state === "free"
+              )
+                yield* queue.holdWaiting(sessionId, "pageLeft");
+            }),
+          ),
+          Match.exhaustive,
+        );
+        return yield* leases.view(sessionId, holder);
+      }).pipe(Effect.catchTag("SessionNotFound", unknownSession)),
 
     /** Archive/restore a conversation, safely stopping its parent and children first when needed. */
     archive: (

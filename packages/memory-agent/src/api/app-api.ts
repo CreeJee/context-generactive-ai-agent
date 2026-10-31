@@ -20,7 +20,8 @@ export class AppApi extends HttpApi.make("app")
 
 /**
  * The HTTP status an app API refusal is answered with. A code has one status across the groups, so
- * the page reads it from the refusal alone; `auth_failed` alone has two, told apart by its reason.
+ * the page reads it from the refusal alone. `auth_failed` has two, told apart by its reason, and
+ * `provider_unavailable` two, told apart by its `provider`.
  */
 export const appRefusalStatus = refusalStatusIn([
   ...settingsRefusals,

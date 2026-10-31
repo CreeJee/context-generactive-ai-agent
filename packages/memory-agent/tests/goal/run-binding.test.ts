@@ -150,12 +150,10 @@ testAgent({ testProvider: { delayedTurnGate: slowTurn.waitFor } })(
           error: "run_outcome_uncertain",
         });
 
-        const stale = yield* chat.continuePastUncertain(target.session, null, { runIds: [] });
-        expect(yield* sdkCall(() => stale.json())).toEqual({ error: "uncertain_runs_changed" });
-        const continued = yield* chat.continuePastUncertain(target.session, null, {
-          runIds: [reserved],
-        });
-        expect(continued.status).toBe(200);
+        expect(
+          yield* Effect.flip(chat.continuePastUncertain(target.session, null, { runIds: [] })),
+        ).toEqual({ error: "uncertain_runs_changed" });
+        yield* chat.continuePastUncertain(target.session, null, { runIds: [reserved] });
         const { id } = yield* latestRevision(target.session);
         expect(
           Admission.$is("bound")(

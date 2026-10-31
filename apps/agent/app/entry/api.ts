@@ -97,7 +97,6 @@ import {
   ApprovalRequester,
   type RelayedApprovalView,
   type SubagentView,
-  type UncertainContinue,
   type UncertainRun,
   type UncertainTool,
 } from "memory-agent/definitions";
@@ -869,41 +868,38 @@ export const api = {
       "GET",
       `/api/sessions/${encodeURIComponent(sessionId)}?holder=${encodeURIComponent(holder)}`,
     ),
-  cancelRun: (sessionId: string, holder: string) =>
-    call<CancelResult>(
-      "POST",
-      `/api/sessions/${encodeURIComponent(sessionId)}/cancel`,
-      {},
-      { [sessionHolderHeader]: holder },
+  cancelRun: (session: string, holder: string) =>
+    appCall((client) =>
+      client.sessions.cancel({ params: { session }, headers: { "x-session-holder": holder } }),
     ),
-  discardInterrupts: (sessionId: string, holder: string) =>
-    call<{ discarded: number }>(
-      "POST",
-      `/api/sessions/${encodeURIComponent(sessionId)}/interrupts/discard`,
-      {},
-      { [sessionHolderHeader]: holder },
+  discardInterrupts: (session: string, holder: string) =>
+    appCall((client) =>
+      client.sessions.discardInterrupts({
+        params: { session },
+        headers: { "x-session-holder": holder },
+      }),
     ),
   /** Refused with 409 while something runs, or when the listed runs changed since they were shown. */
-  continuePastUncertain: (sessionId: string, holder: string, runIds: readonly string[]) =>
-    call<Data.TaggedEnum.Value<UncertainContinue, "acknowledged">>(
-      "POST",
-      `/api/sessions/${encodeURIComponent(sessionId)}/uncertain`,
-      { runIds },
-      { [sessionHolderHeader]: holder },
+  continuePastUncertain: (session: string, holder: string, runIds: readonly string[]) =>
+    appCall(
+      (client) =>
+        client.sessions.continuePastUncertain({
+          params: { session },
+          headers: { "x-session-holder": holder },
+          payload: { runIds },
+        }),
+      "invalid_uncertain_continue",
     ),
   /** Refused with 409 while the session is answering. */
-  compactSession: (sessionId: string, holder: string) =>
-    call<CompactResult>(
-      "POST",
-      `/api/sessions/${encodeURIComponent(sessionId)}/compact`,
-      {},
-      { [sessionHolderHeader]: holder },
+  compactSession: (session: string, holder: string) =>
+    appCall((client) =>
+      client.sessions.compact({ params: { session }, headers: { "x-session-holder": holder } }),
     ),
-  leaseAction: (sessionId: string, holder: string, action: "claim" | "release") =>
-    call<LeaseView>("POST", `/api/sessions/${encodeURIComponent(sessionId)}/lease`, {
-      holder,
-      action,
-    }),
+  leaseAction: (session: string, holder: string, action: "claim" | "release") =>
+    appCall(
+      (client) => client.sessions.lease({ params: { session }, payload: { holder, action } }),
+      "invalid_lease_request",
+    ),
 
   queue: (session: string) => appCall((client) => client.sessions.queue({ params: { session } })),
   enqueue: (

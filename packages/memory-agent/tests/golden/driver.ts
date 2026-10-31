@@ -242,10 +242,7 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
       ),
     ),
     /** Compact the conversation as the page's `/compact` does. */
-    compact: Effect.gen(function* () {
-      const response = yield* (yield* AgentChat).compact(sessionId, null);
-      yield* Effect.sync(() => expect(response.status).toBe(200));
-    }),
+    compact: Effect.asVoid(Effect.flatMap(AgentChat, (chat) => chat.compact(sessionId, null))),
     /** Send a user message, then cancel the run once the model is answering it. */
     sendAndCancel: (text: string) =>
       sendAnd(
@@ -291,10 +288,9 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
         Effect.gen(function* () {
           const chat = yield* AgentChat;
           const state = yield* decodeRunState(yield* json(yield* chat.status(sessionId, null)));
-          const response = yield* chat.continuePastUncertain(sessionId, null, {
+          yield* chat.continuePastUncertain(sessionId, null, {
             runIds: state.uncertainRuns.map((run) => run.runId),
           });
-          yield* Effect.sync(() => expect(response.status).toBe(200));
         }),
       );
     }),

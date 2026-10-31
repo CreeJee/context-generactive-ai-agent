@@ -30,10 +30,7 @@ testAgent({ testProvider: {} })("session leases", (it) => {
 
         yield* agent.lease(sessionId, "tab-a", "claim");
         // A second tab asks too and is refused.
-        const refused = yield* agent.lease(sessionId, "tab-b", "claim");
-        expect((yield* Schema.decodeUnknownEffect(Lease)(yield* json(refused))).state).toBe(
-          "other",
-        );
+        expect((yield* agent.lease(sessionId, "tab-b", "claim")).state).toBe("other");
         expect(yield* leaseOf("tab-a")).toEqual({ state: "mine" });
 
         const owner = yield* openPage(sessionId, "tab-a");
@@ -48,7 +45,9 @@ testAgent({ testProvider: {} })("session leases", (it) => {
           error: "session_in_use",
         });
         expect(yield* Effect.flip(reader.send("hello"))).toMatchObject({ error: "session_in_use" });
-        expect((yield* agent.cancel(sessionId, "tab-b")).status).toBe(423);
+        expect(yield* Effect.flip(agent.cancel(sessionId, "tab-b"))).toEqual({
+          error: "session_in_use",
+        });
 
         // The owner leaves; the reader is told the session is free and continues after claiming it.
         yield* agent.lease(sessionId, "tab-a", "release");

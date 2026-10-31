@@ -15,15 +15,6 @@ import { call, conversation, nextRequest } from "./fixtures.ts";
 
 const stringifyJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
-const decodeCompact = Schema.decodeUnknownEffect(
-  Schema.Struct({
-    cleared: Schema.Finite,
-    summarizedTurns: Schema.Finite,
-    summaryFailed: Schema.Boolean,
-    tokensBefore: Schema.Finite,
-    tokensAfter: Schema.Finite,
-  }),
-);
 const decodeStatus = Schema.decodeUnknownEffect(
   Schema.Struct({
     context: Schema.Struct({
@@ -68,14 +59,6 @@ const savedConversation = Effect.fnUntraced(function* (
   const recorded = yield* conversation(yield* Nodes, at, answers);
   yield* (yield* RunStore).saveThread(at.sessionId, recorded.messages);
   return recorded;
-});
-
-const compactSession = Effect.fnUntraced(function* (sessionId: string, holder: string | null) {
-  const response = yield* (yield* AgentChat).compact(sessionId, holder);
-  return {
-    status: response.status,
-    body: yield* decodeCompact(yield* call(() => response.json())),
-  };
 });
 
 testAgent({ testProvider: {} })("compaction through AgentChat", (it) => {
@@ -127,21 +110,24 @@ testAgent({ testProvider: {} })("compaction through AgentChat", (it) => {
           "네",
         ]);
         yield* agent.lease(at.sessionId, "tab-a", "claim");
-        expect((yield* agent.compact(at.sessionId, "tab-b")).status).toBe(423);
-        expect((yield* agent.compact(`${at.sessionId}:missing`, "tab-a")).status).toBe(404);
-        const first = yield* compactSession(at.sessionId, "tab-a");
-        expect(first.status).toBe(200);
+        expect(yield* Effect.flip(agent.compact(at.sessionId, "tab-b"))).toEqual({
+          error: "session_in_use",
+        });
+        expect(yield* Effect.flip(agent.compact(`${at.sessionId}:missing`, "tab-a"))).toEqual({
+          error: "session_not_found",
+        });
+        const first = yield* agent.compact(at.sessionId, "tab-a");
         // Explicit /compact is not gated by the old 25%-of-window threshold.
-        expect(first.body.tokensBefore).toBeLessThan(258_400 * 0.25);
+        expect(first.tokensBefore).toBeLessThan(258_400 * 0.25);
         // The latest two stay raw. Answered tool output is already pointerized by automatic compaction.
-        expect(first.body).toMatchObject({ cleared: 0, summarizedTurns: 4, summaryFailed: false });
-        expect(first.body.tokensAfter).toBeLessThan(first.body.tokensBefore);
-        expect((yield* compactSession(at.sessionId, "tab-a")).body).toEqual({
+        expect(first).toMatchObject({ cleared: 0, summarizedTurns: 4, summaryFailed: false });
+        expect(first.tokensAfter).toBeLessThan(first.tokensBefore);
+        expect(yield* agent.compact(at.sessionId, "tab-a")).toEqual({
           cleared: 0,
           summarizedTurns: 0,
           summaryFailed: false,
-          tokensBefore: first.body.tokensAfter,
-          tokensAfter: first.body.tokensAfter,
+          tokensBefore: first.tokensAfter,
+          tokensAfter: first.tokensAfter,
         });
         // The next question gets the summary, however small the conversation.
         const sent = yield* nextRequest(
@@ -182,9 +168,8 @@ testAgent({ testProvider: {} })("compaction through AgentChat", (it) => {
           blocks: [{ end: 4, nextTurnNodeId: userNodes[4]!.id, text: "- 결정 보존" }],
         });
         const before = yield* nextRequest(messages, at.sessionId, budgetFor(200_000));
-        const result = yield* compactSession(at.sessionId, null);
-        expect(result.status).toBe(200);
-        expect(result.body).toMatchObject({ cleared: 0, summarizedTurns: 0, summaryFailed: false });
+        const result = yield* (yield* AgentChat).compact(at.sessionId, null);
+        expect(result).toMatchObject({ cleared: 0, summarizedTurns: 0, summaryFailed: false });
         expect(yield* nextRequest(messages, at.sessionId, budgetFor(200_000))).toEqual(before);
       }),
   );

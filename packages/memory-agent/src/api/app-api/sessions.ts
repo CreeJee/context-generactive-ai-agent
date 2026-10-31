@@ -1,5 +1,6 @@
 import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "effect/http-api";
+import { CancelResult, CompactResult } from "../../agent/run-state.ts";
 import { RelayedApprovalView } from "../../approvals/relayed-state.ts";
 import { StoredMessage } from "../../chat-store/schema.ts";
 import {
@@ -14,7 +15,7 @@ import {
   QueueRequest,
   QueueSnapshot,
 } from "../../queue/queue-state.ts";
-import { Session } from "../../sessions/contracts.ts";
+import { LeaseView, Session } from "../../sessions/contracts.ts";
 import { SubagentView } from "../../subagents/subagent-state.ts";
 import {
   BoardEdit,
@@ -22,10 +23,12 @@ import {
   BoardEditRequested,
   BoardIntent,
   BoardView,
+  UncertainContinueRequest,
 } from "../../workflow/contracts.ts";
 import { PlanDependencyIssue } from "../../workflow/plan-schedule.ts";
 import { sessionHolderHeaders } from "../chat-api.ts";
 import { appRefusalFields, refusalWith, SameSite } from "../refusal.ts";
+import { SelectedProviderUnavailable } from "./providers.ts";
 
 const appRefusal = refusalWith(appRefusalFields);
 
@@ -78,6 +81,19 @@ export const SubagentTranscript = Schema.Struct({
   messages: Schema.Array(StoredMessage),
 });
 export type SubagentTranscript = typeof SubagentTranscript.Type;
+
+/** A page claims (or renews) the right to change the session, or gives it up. */
+export const LeaseRequest = Schema.Struct({
+  holder: Schema.NonEmptyString,
+  action: Schema.Literals(["claim", "release"]),
+});
+export type LeaseRequest = typeof LeaseRequest.Type;
+
+/** How many approvals were discarded. */
+export const InterruptsDiscarded = Schema.Struct({ discarded: Schema.Finite });
+
+/** The user continues past the runs left unknown; none of them is replayed. */
+export const UncertainAcknowledged = Schema.TaggedStruct("acknowledged", {});
 
 /** The project the request names is not registered. */
 const UnknownProject = appRefusal(404, ["project_not_found"]);
@@ -182,6 +198,15 @@ const QueueChangeRefused = appRefusal(409, [
   "queue_reserved",
 ]);
 
+/** The session is answering; the change waits until it ends. */
+const RunInProgress = appRefusal(409, ["run_in_progress"]);
+
+/** Nothing in the session is running to cancel. */
+const NoRunningRun = appRefusal(409, ["no_running_run"]);
+
+/** The runs left unknown changed since the page showed them. */
+const UncertainRunsChanged = appRefusal(409, ["uncertain_runs_changed"]);
+
 /** The session has no such subagent. */
 const UnknownSubagent = appRefusal(404, ["subagent_not_found"]);
 
@@ -215,6 +240,9 @@ export const sessionsRefusals = [
   InvalidQueuedMessage,
   NotRunning,
   QueueChangeRefused,
+  RunInProgress,
+  NoRunningRun,
+  UncertainRunsChanged,
   UnknownSubagent,
   ApprovalNotPending,
   SessionStorageFailed,
@@ -366,6 +394,54 @@ export class SessionsGroup extends HttpApiGroup.make("sessions")
       payload: Schema.Struct({ approved: Schema.Boolean }),
       success: Schema.Array(RelayedApprovalView),
       error: [SessionInUse, ApprovalNotPending],
+    }),
+    /**
+     * Stops the session's running run and its subagents. Closing or reloading the page never does;
+     * this is the only way to end a run early. `stopped` is false when it had not ended in time.
+     */
+    HttpApiEndpoint.post("cancel", "/api/sessions/:session/cancel", {
+      params: session,
+      headers: sessionHolderHeaders,
+      success: CancelResult,
+      error: [SessionInUse, NoRunningRun],
+    }),
+    /**
+     * `/compact`: the model is no longer sent the tool output it has already answered from; each
+     * cleared output keeps a pointer to its memory node.
+     */
+    HttpApiEndpoint.post("compact", "/api/sessions/:session/compact", {
+      params: session,
+      headers: sessionHolderHeaders,
+      success: CompactResult,
+      error: [SessionInUse, UnknownSession, RunInProgress, SelectedProviderUnavailable],
+    }),
+    /** Abandons approvals whose continuation was lost; the gated tools never run. */
+    HttpApiEndpoint.post("discardInterrupts", "/api/sessions/:session/interrupts/discard", {
+      params: session,
+      headers: sessionHolderHeaders,
+      success: InterruptsDiscarded,
+      error: [SessionInUse, UnknownSession, RunInProgress],
+    }),
+    /**
+     * The user saw the Goal runs whose tools left their outcome unknown and continues without
+     * replaying them. Refused while something runs, or when the listed runs changed.
+     */
+    HttpApiEndpoint.post("continuePastUncertain", "/api/sessions/:session/uncertain", {
+      params: session,
+      headers: sessionHolderHeaders,
+      payload: UncertainContinueRequest,
+      success: UncertainAcknowledged,
+      error: [UnknownSession, SessionInUse, RunInProgress, UncertainRunsChanged],
+    }),
+    /**
+     * A page claims (or renews) the session, or gives it up, also as a beacon when it closes. The
+     * answer says who holds the session from that page's point of view.
+     */
+    HttpApiEndpoint.post("lease", "/api/sessions/:session/lease", {
+      params: session,
+      payload: LeaseRequest,
+      success: LeaseView,
+      error: UnknownSession,
     }),
   )
   .middleware(SameSite) {}

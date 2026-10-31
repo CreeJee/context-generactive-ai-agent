@@ -133,24 +133,10 @@ const runArm = Effect.fn("eval.runArm")(function* (variant: "auto" | "auto-plus-
   const started = DateTime.toEpochMillis(DateTime.nowUnsafe());
   /** The manual /compact this arm runs before the final audit; it must change something. */
   const compactManually = Effect.gen(function* () {
-    const response = yield* Effect.provideContext(
+    const manual = yield* Effect.provideContext(
       services.agent.compact(services.sessionId, null),
       servicesContext,
     );
-    if (response.status !== 200) throw new Error(`manual_compact_status_${response.status}`);
-    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-    const manual = EffectFunction.flow(
-      Schema.decodeUnknownResult(
-        Schema.Struct({
-          cleared: Schema.Finite,
-          summarizedTurns: Schema.Finite,
-          summaryFailed: Schema.Boolean,
-          tokensBefore: Schema.Finite,
-          tokensAfter: Schema.Finite,
-        }),
-      ),
-      Result.getOrThrow,
-    )(yield* nativePromise(() => response.json()));
     if (manual.cleared === 0 && manual.summarizedTurns === 0)
       throw new Error("pilot_manual_compact_changed_nothing");
     return manual;

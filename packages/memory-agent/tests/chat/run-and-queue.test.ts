@@ -38,11 +38,6 @@ const Status = Schema.Struct({
     }),
   ),
 });
-const Cancelled = Schema.Struct({
-  runId: Schema.String,
-  stopped: Schema.Boolean,
-  status: Schema.NullOr(Schema.String),
-});
 /** The state's case name, for comparing a queue's order at a glance. */
 const stateName = QueueItemState.$match({
   waiting: () => "waiting",
@@ -147,10 +142,10 @@ testAgent({ testProvider: { responder: gatedResponder } })("chat runs", (it) => 
       const refused = yield* agent.setWorkflowPhase(session.id, null, "plan");
       expect(refused.status).toBe(409);
       expect(yield* json(refused)).toEqual({ error: "run_in_progress" });
-      const cancelled = yield* Schema.decodeUnknownEffect(Cancelled)(
-        yield* json(yield* agent.cancel(session.id, null)),
-      );
-      expect(cancelled).toMatchObject({ stopped: true, status: "aborted" });
+      expect(yield* agent.cancel(session.id, null)).toMatchObject({
+        stopped: true,
+        status: "aborted",
+      });
       yield* Fiber.join(sending);
       expect(session.invocations()).toHaveLength(1);
       expect(page.answer()).not.toContain("done");
@@ -158,7 +153,9 @@ testAgent({ testProvider: { responder: gatedResponder } })("chat runs", (it) => 
       expect(status.running).toBeNull();
       expect(status.lastRun?.status).toBe("aborted");
       // Nothing is running any more, so a second cancel has nothing to stop.
-      expect((yield* agent.cancel(session.id, null)).status).toBe(409);
+      expect(yield* Effect.flip(agent.cancel(session.id, null))).toEqual({
+        error: "no_running_run",
+      });
       // A reload shows exactly the durable text saved before cancellation and does not rerun it.
       const reloaded = yield* openPage(session.id);
       expect(reloaded.view().messages.length).toBeGreaterThan(0);
@@ -177,9 +174,7 @@ testAgent({ testProvider: { responder: gatedResponder } })("chat runs", (it) => 
       const running = yield* statusOf(session.id);
       expect(running.running).not.toBeNull();
       expect(running.actions.phases.plan).toEqual({ allowed: false, reason: "run_in_progress" });
-      const response = yield* agent.cancel(session.id, null);
-      expect(response.status).toBe(200);
-      expect(yield* Schema.decodeUnknownEffect(Cancelled)(yield* json(response))).toMatchObject({
+      expect(yield* agent.cancel(session.id, null)).toMatchObject({
         runId: running.running!.runId,
         stopped: true,
         status: "aborted",

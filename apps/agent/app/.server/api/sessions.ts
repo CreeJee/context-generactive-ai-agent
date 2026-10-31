@@ -246,6 +246,22 @@ export const SessionsApiHandlers = HttpApiBuilder.group(
         refusalsOnly(
           chat.answerApproval(session, headers["x-session-holder"] ?? null, approval, approved),
         ).pipe(Effect.tap(() => events.publishSession(session, "relayed-approvals"))),
+      cancel: ({ params: { session }, headers }) =>
+        refusalsOnly(chat.cancel(session, headers["x-session-holder"] ?? null)).pipe(
+          Effect.tap(() => events.publishSession(session, "run-state")),
+        ),
+      compact: ({ params: { session }, headers }) =>
+        refusalsOnly(chat.compact(session, headers["x-session-holder"] ?? null)),
+      discardInterrupts: ({ params: { session }, headers }) =>
+        refusalsOnly(chat.discardInterrupts(session, headers["x-session-holder"] ?? null)),
+      continuePastUncertain: ({ params: { session }, headers, payload }) =>
+        refusalsOnly(
+          chat.continuePastUncertain(session, headers["x-session-holder"] ?? null, payload),
+        ),
+      lease: ({ params: { session }, payload: { holder, action } }) =>
+        refusalsOnly(chat.lease(session, holder, action)).pipe(
+          Effect.tap(() => events.publishSession(session, "run-state")),
+        ),
     });
   }),
 );

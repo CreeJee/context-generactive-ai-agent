@@ -444,7 +444,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
         ),
         "child approval wait",
       );
-      expect((yield* (yield* AgentChat).cancel(sessionId, null)).status).toBe(200);
+      yield* (yield* AgentChat).cancel(sessionId, null);
       expect((yield* children.list(sessionId))[0]?.status).toBe("cancelled");
       expect(
         yield* count(

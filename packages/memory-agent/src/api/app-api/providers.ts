@@ -78,6 +78,14 @@ export type ModelCatalogView = typeof ModelCatalogView.Type;
 const ProviderUnavailable = appRefusal(404, ["provider_unavailable"]);
 
 /**
+ * The selected model's provider cannot run now; `provider` names it. `ProviderUnavailable` matches
+ * it too, so `providersRefusals` declares it first.
+ */
+export const SelectedProviderUnavailable = refusalWith({ provider: ProviderId })(503, [
+  "provider_unavailable",
+]);
+
+/**
  * The provider's connection could not be read or changed. Reading it timed out after 10 seconds
  * when `reason` is `auth_status_timeout`; that refusal is declared first, since both match it.
  */
@@ -136,6 +144,7 @@ const QuotaUnavailable = appRefusal(503, ["quota_status_unavailable"]);
 
 /** Every refusal of the groups, for `appRefusalStatus`. */
 export const providersRefusals = [
+  SelectedProviderUnavailable,
   ProviderUnavailable,
   ...AuthRefusals,
   LoginRequired,

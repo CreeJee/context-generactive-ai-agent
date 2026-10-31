@@ -161,9 +161,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("approval-gat
     Effect.gen(function* () {
       const { sessionId } = yield* pendingApproval();
       const agent = yield* AgentChat;
-      expect(yield* json(yield* agent.discardInterrupts(sessionId, null))).toEqual({
-        discarded: 1,
-      });
+      expect(yield* agent.discardInterrupts(sessionId, null)).toEqual({ discarded: 1 });
       expect(yield* (yield* RunStore).pendingInterrupts(sessionId)).toEqual([]);
       expect(yield* json(yield* agent.status(sessionId, null))).toMatchObject({
         running: null,

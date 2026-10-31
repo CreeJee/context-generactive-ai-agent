@@ -424,7 +424,7 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })(
             Effect.map(relayed.pending(sessionId), (pending) => pending.length === 1),
             "the child's approval",
           );
-          expect((yield* (yield* AgentChat).cancel(sessionId, null)).status).toBe(200);
+          yield* (yield* AgentChat).cancel(sessionId, null);
           yield* Fiber.join(run);
           yield* until(
             Effect.map(subagents.list(sessionId), (listed) => listed[0]?.status === "cancelled"),
