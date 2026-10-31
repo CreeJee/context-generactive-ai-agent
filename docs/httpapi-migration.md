@@ -70,9 +70,9 @@
 | 단계 | group                         | RR 라우트                                                                                          |
 | ---- | ----------------------------- | -------------------------------------------------------------------------------------------------- |
 | 1-1  | settings 나머지               | `settings.*` 중 1-0에서 남은 것                                                                    |
-| 1-2  | projects                      | `projects.*`(events 제외)                                                                          |
+| 1-2  | projects                      | `projects.*`(events·trace 제외)                                                                    |
 | 1-3  | auth·accounts·models          | `auth`, `accounts`, `accounts.quota`, `models.*`                                                   |
-| 1-4  | sessions                      | `sessions.*`(채팅 API·SSE 제외)                                                                    |
+| 1-4  | sessions                      | `sessions.*`(채팅 API·SSE 제외), `projects.$project.trace*`                                        |
 | 1-5  | reports·media·attachments·btw | `reports.*`, `media.image`, `attachments.*`, `btw.$thread._index`                                  |
 | 1-6  | SSE                           | `events`, `projects.$project.events`, `sessions.$session.events`, `sessions.$session.trace.stream` |
 
@@ -91,6 +91,7 @@
 - 1-2b 결과 (2026-10-31): `projects.$project.{kanban,boards,decisions}`를 옮겼다.
   - 계약 Schema는 `kanban/contracts.ts`(`ProtectedBranches`, `DecisionAnswer`, `DecisionCloseReason`, `DecisionState`, `HumanDecisionRequest`, `DecisionInboxItem`)와 `workflow/contracts.ts`(`PlanStatus`, `PlanSummary`, `ProjectBoard`)에 둔다. 1-4의 세션 결정·보드도 이것을 쓴다.
   - 칸반 실패는 `kanban-failures.ts`의 `kanbanRefusal` 표(tag별 refusal)로 답한다. handler가 낼 수 있는 tag만 `Effect.catchTags`에 넘겨 endpoint마다 선언한 code와 맞춘다. RR 라우트용 `kanbanFailureResponse`는 1-4에서 지운다.
+- 프로젝트 trace(`projects.$project.trace`, `trace.tasks.$task`)는 1-4로 넘긴다 (2026-10-31). `AgentChat`의 trace 메서드가 HTTP `Response`를 직접 만들고, 세션 trace와 같은 메서드·타입(`TraceTreeSnapshot`, `TraceTaskDetail`)을 쓴다. 메서드가 값과 tagged 실패를 돌려주게 바꾸는 일은 두 쪽을 한 번에 한다.
 - SSE는 `HttpApiSchema.StreamSse`로 옮긴다. 첨부 업로드(`Content-Length`를 본문보다 먼저 검사)와 다운로드(바이트와 immutable 헤더)가 HttpApi로 같게 안 되면 RR 라우트로 남기고 이유를 적는다.
 
 ### 1-7. 정리
