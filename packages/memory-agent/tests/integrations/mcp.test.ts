@@ -1,6 +1,11 @@
 import { Effect, FileSystem, Path, Schedule, Schema } from "effect";
 import { expect, vi } from "vite-plus/test";
-import { McpServers, McpServerState, mcpToolName } from "../../src/mcp/servers.ts";
+import {
+  McpServers,
+  McpServerState,
+  maxEagerMcpToolCharacters,
+  mcpToolName,
+} from "../../src/mcp/servers.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { PermissionReviews } from "../../src/permissions/reviews.ts";
 import { Projects } from "../../src/projects/projects.ts";
@@ -141,6 +146,28 @@ testAgent()("MCP servers of a project", (it) => {
         expect((yield* servers.overview(project)).servers).toEqual([]);
         yield* until(() => !processAlive(pid), "the removed MCP server to stop");
         expect((yield* servers.runTools(project)).tools).toEqual([]);
+      }),
+    serverStartTimeout,
+  );
+
+  it.effect(
+    "tools past the eager size are listed by name only until asked for",
+    () =>
+      Effect.gen(function* () {
+        const servers = yield* McpServers;
+        const { project, fake } = yield* freshProject;
+        yield* writeJson(fake.config, {
+          mcpServers: {
+            fake: fake.entry({
+              FAKE_MCP_ECHO_DESCRIPTION: "x".repeat(maxEagerMcpToolCharacters),
+            }),
+          },
+        });
+        yield* servers.setTrusted(project, "project", "fake", true);
+        expect((yield* servers.runTools(project)).tools.map((tool) => tool.lazy)).toEqual([
+          true,
+          true,
+        ]);
       }),
     serverStartTimeout,
   );

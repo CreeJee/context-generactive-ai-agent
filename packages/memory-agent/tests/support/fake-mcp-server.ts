@@ -20,6 +20,9 @@ await Effect.runPromise(
       );
       // A spec 2025 task tool, `later`, which answers once its task ends.
       const tasks = yield* Config.Boolean("FAKE_MCP_TASKS").pipe(Config.withDefault(false));
+      const echoDescription = yield* Config.String("FAKE_MCP_ECHO_DESCRIPTION").pipe(
+        Config.withDefault("Repeats text."),
+      );
       if (isTruthy(startLog))
         yield* fs.writeFileString(startLog, "start " + process.pid + "\n", { flag: "a" });
       const server = new Server(
@@ -58,7 +61,7 @@ await Effect.runPromise(
               tools: [
                 {
                   name: "echo",
-                  description: "Repeats text.",
+                  description: echoDescription,
                   inputSchema: {
                     type: "object",
                     properties: { text: { type: "string" } },

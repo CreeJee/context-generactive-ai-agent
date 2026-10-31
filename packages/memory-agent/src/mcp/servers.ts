@@ -200,6 +200,13 @@ export const mcpInstructionsForMode: {
 /** Longest MCP result text handed to the model. */
 export const maxMcpResultCharacters = 60_000;
 
+/**
+ * Length of all MCP tool definitions past which a run lists them by name only until the model asks
+ * for one: about 20k tokens, a tenth of a 200k context window. A few servers stay well under it;
+ * many large ones would otherwise take that much of every request, a subagent's included.
+ */
+export const maxEagerMcpToolCharacters = 80_000;
+
 const connectTimeoutMs = 20_000;
 /** How long a login waits for the person to finish it in the browser. */
 const loginTimeoutMs = 5 * 60_000;
@@ -218,6 +225,8 @@ interface ServerTool {
   readonly outputSchema: McpTool["outputSchema"];
   /** The server marks it as not changing its environment (`readOnlyHint`), which nothing checks. */
   readonly readOnly: boolean;
+  /** Length of what a request sends for it: name, description and input schema. */
+  readonly characters: number;
   readonly call: (
     args: JsonObject,
   ) => Effect.Effect<unknown, McpToolFailed | Schema.SchemaError | Cause.UnknownError>;
@@ -322,10 +331,11 @@ const limited = <A>(result: A) =>
  * A server's tool for a run. The SDK does not check arguments against a JSON Schema, so its
  * parameters check them against the server's (`jsonSchemaIssues`).
  */
-const runToolOf = (tool: ServerTool): RunTool =>
+const runToolOf = (tool: ServerTool, lazy: boolean): RunTool =>
   runTool({
     name: tool.name,
     description: tool.description,
+    lazy,
     parameters: Schema.Record(Schema.String, JsonValue).check(
       Schema.makeFilter((value) =>
         Option.getOrUndefined(jsonSchemaIssues({ schema: tool.inputSchema, value })),
@@ -653,28 +663,31 @@ const make = Effect.gen(function* () {
           );
         },
       });
-    const offered = ({ client, credentials: login }: Connected, tools: ReadonlyArray<McpTool>) => {
-      const guide = client.getInstructions()?.trim() ?? "";
-      const discovered: Discovered = {
-        tools: tools.map((tool): ServerTool => ({
-          name: mcpToolName(server.name, tool.name),
-          description: `[MCP ${server.name}] ${tool.description ?? ""}`.trim(),
-          inputSchema: inputSchemaOf(tool),
-          outputSchema: tool.outputSchema,
-          readOnly: tool.annotations?.readOnlyHint === true,
-          call: (args) =>
-            authorized(login, callTool({ client, tool, args })).pipe(Effect.flatMap(limited)),
-        })),
-        guide: guide === "" ? null : guide,
-      };
-      return Effect.as(
-        Ref.set(
+    const offered = ({ client, credentials: login }: Connected, tools: ReadonlyArray<McpTool>) =>
+      Effect.gen(function* () {
+        const guide = client.getInstructions()?.trim() ?? "";
+        const serverTools = yield* Effect.forEach(tools, (tool) => {
+          const name = mcpToolName(server.name, tool.name);
+          const description = `[MCP ${server.name}] ${tool.description ?? ""}`.trim();
+          const inputSchema = inputSchemaOf(tool);
+          // A schema the server sent as JSON always encodes back to JSON.
+          return Effect.map(Effect.orDie(encodeJson(inputSchema)), (schema): ServerTool => ({
+            name,
+            description,
+            inputSchema,
+            outputSchema: tool.outputSchema,
+            readOnly: tool.annotations?.readOnlyHint === true,
+            characters: name.length + description.length + schema.length,
+            call: (args) =>
+              authorized(login, callTool({ client, tool, args })).pipe(Effect.flatMap(limited)),
+          }));
+        });
+        yield* Ref.set(
           connection.state,
           McpServerState.connected({ tools: tools.map((tool) => tool.name) }),
-        ),
-        discovered,
-      );
-    };
+        );
+        return { tools: serverTools, guide: guide === "" ? null : guide } satisfies Discovered;
+      });
     return Effect.gen(function* () {
       // A server that wants a login is not asked again until a login or logout replaces the connection.
       if (McpServerState.$is("needsLogin")(yield* Ref.get(connection.state)))
@@ -1029,15 +1042,23 @@ const make = Effect.gen(function* () {
   };
 });
 
-/** A run's tools from what its servers offer, with the guide of each server that offers any. */
+/**
+ * A run's tools from what its servers offer, with the guide of each server that offers any. Past
+ * {@link maxEagerMcpToolCharacters} every one is listed by name only until the model asks for it.
+ */
 const runToolsOf = (
   found: ReadonlyArray<Discovered & { readonly server: string }>,
-): McpRunTools => ({
-  tools: found.flatMap((server) => server.tools).map(runToolOf),
-  guides: found.flatMap(({ server, tools: offered, guide }): McpServerGuide[] =>
-    guide === null || offered.length === 0 ? [] : [{ server, text: guide }],
-  ),
-});
+): McpRunTools => {
+  const tools = found.flatMap((server) => server.tools);
+  const lazy =
+    EffectArray.reduce(tools, 0, (sum, tool) => sum + tool.characters) > maxEagerMcpToolCharacters;
+  return {
+    tools: tools.map((tool) => runToolOf(tool, lazy)),
+    guides: found.flatMap(({ server, tools: offered, guide }): McpServerGuide[] =>
+      guide === null || offered.length === 0 ? [] : [{ server, text: guide }],
+    ),
+  };
+};
 
 /** MCP servers from `<storage>/mcp.json` and `<project>/.mcp.json` (R18). */
 export class McpServers extends Context.Service<McpServers, Effect.Success<typeof make>>()(
