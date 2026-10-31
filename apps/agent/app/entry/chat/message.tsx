@@ -5,7 +5,7 @@ import { SchemaTransformation } from "effect";
 import { Data, DateTime, Option, Schema } from "effect";
 import { BotIcon, BrainIcon, Clock3Icon, WrenchIcon } from "lucide-react";
 import type { TraceTaskView } from "memory-agent";
-import { memo, useState, type ComponentProps } from "react";
+import { memo, useState, type ComponentProps, type ReactNode } from "react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -20,6 +20,15 @@ import {
 import { Badge } from "~/components/ui/badge";
 import { Bubble, BubbleContent } from "~/components/ui/bubble";
 import { Button } from "~/components/ui/button";
+import {
+  CodeBlock,
+  CodeBlockActions,
+  CodeBlockContent,
+  CodeBlockCopyButton,
+  CodeBlockHeader,
+  CodeBlockLine,
+  CodeBlockTitle,
+} from "~/components/ui/code-block";
 import { Message, MessageContent, MessageHeader } from "~/components/ui/message";
 import {
   TraceCollapsible,
@@ -32,6 +41,7 @@ import {
 } from "~/components/ui/trace";
 import type { ChatMessage, MessagePart } from "memory-agent/chat-api";
 import { attachmentIdOf, attachmentUrl, type QueuedMessage } from "memory-agent/definitions";
+import { useHighlightedCode } from "~/hooks/use-highlighted-code";
 import { DrawingPicture, UserMessageBody } from "./images";
 import { Markdown } from "./markdown";
 import { failureLabel } from "../session/attempt-failure";
@@ -82,12 +92,34 @@ function toolLabel(name: string) {
   );
 }
 
+/** Tool text as shown: JSON indented and highlighted as JSON, anything else as it came. */
 function pretty(text: string) {
   try {
-    return JSON.stringify(JSON.parse(text), null, 2);
+    return { value: JSON.stringify(JSON.parse(text), null, 2), language: "json" };
   } catch {
-    return text;
+    return { value: text, language: "text" };
   }
+}
+
+/** A tool call's arguments or result in a code block that can be copied. */
+function ToolCode({ title, text, failed }: { title: ReactNode; text: string; failed: boolean }) {
+  const { value, language } = pretty(text);
+  const lines = useHighlightedCode(value, language);
+  return (
+    <CodeBlock size="sm" variant={failed ? "destructive" : "default"}>
+      <CodeBlockHeader>
+        <CodeBlockTitle>{title}</CodeBlockTitle>
+        <CodeBlockActions>
+          <CodeBlockCopyButton value={value} aria-label="복사" />
+        </CodeBlockActions>
+      </CodeBlockHeader>
+      <CodeBlockContent wrap className="max-h-64">
+        {lines.map((line, index) => (
+          <CodeBlockLine key={index}>{line}</CodeBlockLine>
+        ))}
+      </CodeBlockContent>
+    </CodeBlock>
+  );
 }
 
 /** Where a tool call stands, as the badge shows it. */
@@ -514,21 +546,17 @@ const ToolCallCard = memo(function ToolCallCard({
       </TraceCollapsibleTrigger>
       <TraceCollapsibleContent>
         <div className="flex flex-col gap-2">
-          <div>
-            <div className="mb-1">
-              인자 · <code>{call.name}</code>
-            </div>
-            <pre className="max-h-48 overflow-auto rounded bg-background p-2 whitespace-pre-wrap break-all">
-              {pretty(call.arguments)}
-            </pre>
-          </div>
+          <ToolCode
+            title={
+              <>
+                인자 · <code>{call.name}</code>
+              </>
+            }
+            text={call.arguments}
+            failed={false}
+          />
           {result && (
-            <div>
-              <div className="mb-1">결과</div>
-              <pre className="max-h-72 overflow-auto rounded bg-background p-2 whitespace-pre-wrap break-all">
-                {pretty(result.content)}
-              </pre>
-            </div>
+            <ToolCode title="결과" text={result.content} failed={result.state === "error"} />
           )}
         </div>
       </TraceCollapsibleContent>

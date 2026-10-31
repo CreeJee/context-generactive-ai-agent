@@ -84,16 +84,22 @@ export default defineConfig({
     overrides: [
       {
         // Design-system components own their appearance and may need structural values.
-        files: ["apps/agent/app/components/ui/**"],
+        // The highlighter colors each token from Shiki's inline style.
+        files: ["apps/agent/app/components/ui/**", "apps/agent/app/lib/highlighter.tsx"],
         rules: {
           "shadcn/no-restyle": "off",
           "shadcn/no-arbitrary-values": "off",
           "shadcn/require-static-classes": "off",
+          "shadcn/no-inline-styles": "off",
         },
       },
       {
         // Code the shadcn CLI writes stays as it ships, so `shadcn add --diff` keeps showing upstream changes.
-        files: ["apps/agent/app/components/ui/**", "apps/agent/app/hooks/**"],
+        files: [
+          "apps/agent/app/components/ui/**",
+          "apps/agent/app/hooks/**",
+          "apps/agent/app/lib/highlighter.tsx",
+        ],
         rules: Object.fromEntries(Object.keys(antiSlopRules).map((rule) => [rule, "off"])),
       },
     ],

@@ -3493,3 +3493,12 @@
 - 서브에이전트 작업 카드와 SVG 그림은 행으로 바꾸지 않았다. 작업 카드는 다시 시도·보관·삭제 단추가 있는 조작 화면이고, 그림은 호출의 결과 자체라서 접지 않는다.
 - 연속한 행을 `Trace`로 묶지 않고 각 행을 `MessageContent`에 바로 둔다. 레지스트리 예제는 묶지만, 묶으면 작업 카드와 그림이 끼어 있을 때 묶음을 나누는 코드가 필요하다. 차이는 행 간격 2px이다.
 - BTW 답변의 검색 도구 줄도 `TraceLine`이다.
+
+## 도구 인자와 결과를 shadcn CodeBlock으로 보여 준다 (2026-10-31)
+
+- `shadcn add code-block`으로 `CodeBlock`, `useHighlightedCode` 훅, Shiki 하이라이터(`~/lib/highlighter.tsx`)를 받았다. `shiki`는 이미 Streamdown이 쓰던 4.5.0이고, pnpm `catalogMode: prefer`로 catalog에 들어갔다.
+- 도구 호출 행을 펼치면 "인자 · `도구 이름`"과 "결과"가 작은(sm) CodeBlock으로 보인다. JSON이면 들여 써서 JSON으로 칠하고, 아니면 받은 글자 그대로다. 긴 줄은 접고, 높이는 16rem에서 잘라 스크롤한다. 각 블록에 복사 단추가 있다. 실패한 결과는 destructive 블록이다.
+- 하이라이터는 행을 펼칠 때 처음 불린다. 접힌 행은 Shiki를 불러오지 않는다.
+- CLI 원본을 그대로 두는 범위를 넓혔다. `~/lib/highlighter.tsx`도 anti-slop override에 넣었다. shadcn의 `no-inline-styles`는 ui 폴더와 하이라이터에서 끈다. CodeBlock은 줄 번호 카운터를, 하이라이터는 Shiki 토큰 색을 inline style로 준다.
+- Effect 언어 서비스에는 파일 glob으로 진단을 끄는 설정이 없다. 그래서 `highlighter.tsx` 맨 위에 `// @effect-diagnostics asyncFunction:off` 한 줄만 더했다. 하이라이터는 Shiki를 Promise로 불러온다.
+- Markdown 안의 코드 블록은 그대로 Streamdown의 code 플러그인이 그린다. 스트리밍 중인 답변의 코드 블록과 복사·다운로드 동작을 Streamdown이 이미 맡고 있다.
