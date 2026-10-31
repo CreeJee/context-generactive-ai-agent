@@ -3477,3 +3477,10 @@
 - 답변은 `Message`와 `MessageContent`로 감싼다. 예전의 85% 폭 제한이 없어져 답변이 대화 폭을 다 쓴다.
 - BTW 패널의 질문은 `muted` Bubble, 답변은 같은 `Message` 틀이다.
 - 글자 크기: Message와 Bubble은 base-mira 기본인 `text-xs`다. 그런데 Streamdown은 `text-sm` 본문에 맞춰 인라인 코드와 제목 크기를 정한다. 본문만 xs로 줄이면 인라인 코드가 본문보다 커진다. 그래서 답변 Markdown과 사용자·BTW 질문 본문은 전처럼 `text-sm/relaxed`다. 오케스트레이터 알림은 Bubble 기본 크기를 쓴다.
+
+## 채팅의 남은 window.confirm을 AlertDialog로 바꾼다 (2026-10-31)
+
+- 채팅 화면의 마지막 두 `window.confirm`을 `AlertDialog`로 바꿨다. 이제 앱에 `window.confirm`은 없다.
+- 서브에이전트 작업 카드의 "삭제"는 "이 작업의 기록을 삭제할까요?" 창을 연다. transcript와 locator만 지우고 채택된 project memory와 provenance는 남는다는 설명은 그대로다. 창의 "삭제"를 눌러야 `onDeleteTask`가 불린다.
+- 이미지 생성 의도로 보낸 프롬프트는 바로 생성하지 않고 "이미지를 만들까요?" 창을 연다. 유료 미디어 모델을 부를 수 있다는 설명은 그대로이고, "만들기"를 누르면 생성하고 성공하면 입력창을 비운다. 취소하면 입력창은 그대로 남는다.
+- 입력창 비우기(초안·첨부·이미지 의도·안내 문구)는 `clearComposer` 하나로 모아 보내기, 대기열 넣기, 이미지 생성, 지우기 단추가 같이 쓴다.

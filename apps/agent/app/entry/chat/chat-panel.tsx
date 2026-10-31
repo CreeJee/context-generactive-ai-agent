@@ -11,6 +11,16 @@ import { useAtom } from "jotai";
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 import { useLoading } from "react-simplikit";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "~/components/ui/alert-dialog";
 import { RunFailureText } from "./run-failure";
 import { Marker, MarkerContent, MarkerIcon } from "~/components/ui/marker";
 import { Spinner } from "~/components/ui/spinner";
@@ -294,6 +304,8 @@ function ChatPanel({
   const [dragging, setDragging] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
   const media = useImageGeneration((message) => setNotice(problem(message)));
+  /** The prompt waiting for the user to accept a paid image generation. */
+  const [imagePrompt, setImagePrompt] = useState<string | null>(null);
   // What the run in progress reports; the server's record covers the time before and after it.
   const [liveContext, setLiveContext] = useState<ContextView | null>(null);
   const [placements, setPlacements] = useState<Readonly<Record<string, Placement>>>({});
@@ -740,6 +752,20 @@ function ChatPanel({
    * next tool-call boundary. `steer` (Ctrl/⌘+Shift+Enter) cuts the answer being written, unless it
    * has begun a tool call, and the server sends the message next, even if this page is closed.
    */
+  const clearComposer = () => {
+    setDraft("");
+    draftImages.clear();
+    media.clearIntent();
+    setNotice(null);
+  };
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  const generateImage = (prompt: string) =>
+    runUiEffect(
+      Effect.gen(function* () {
+        setImagePrompt(null);
+        if (yield* uiPromise(() => media.generate(prompt))) clearComposer();
+      }),
+    );
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const submit = (mode: "queue" | "steer") =>
     runUiEffect(
@@ -837,25 +863,15 @@ function ChatPanel({
         if (Option.isNone(message)) return;
         const text = message.value;
         const attachmentIds = ready.map((image) => image.attachment.id);
-        const clearDraft = () => {
-          setDraft("");
-          draftImages.clear();
-          media.clearIntent();
-          setNotice(null);
-        };
         const sendTurn = () => {
-          clearDraft();
+          clearComposer();
           sendMessage(contentOf(text, attachmentIds));
         };
         if (!generating && media.intent) {
           if (attachmentIds.length > 0)
             return setNotice(problem("첫 버전의 이미지 생성은 텍스트 프롬프트만 지원해요."));
-          if (
-            !window.confirm("이미지 생성은 별도 유료 미디어 모델을 호출할 수 있어요. 실행할까요?")
-          )
-            return;
-          if (yield* uiPromise(() => media.generate(text))) clearDraft();
-          return;
+          // A paid media model may run, so the dialog asks before `generateImage` does.
+          return setImagePrompt(text);
         }
         if (!generating) return sendTurn();
         if (media.intent)
@@ -865,7 +881,7 @@ function ChatPanel({
           trackSubmission(queue.add(text, attachmentIds, mode)),
         );
         AddOutcome.$match(outcome, {
-          queued: clearDraft,
+          queued: clearComposer,
           "not-running": sendTurn,
           failed: () => setNotice(problem("메시지를 넣지 못했어요. 다시 시도해 주세요.")),
         });
@@ -1054,15 +1070,35 @@ function ChatPanel({
               onFinishEdit={() => void finishEdit("remove")}
               onPickQueued={pickQueued}
               onCancel={() => void cancel()}
-              onClear={() => {
-                setDraft("");
-                draftImages.clear();
-                media.clearIntent();
-                setNotice(null);
-              }}
+              onClear={clearComposer}
               onWorkflowPhase={(phase) => void changeWorkflowPhase(phase)}
             />
           )}
+          <AlertDialog
+            open={imagePrompt !== null}
+            onOpenChange={(open) => {
+              if (!open) setImagePrompt(null);
+            }}
+          >
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>이미지를 만들까요?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  이미지 생성은 별도 유료 미디어 모델을 호출할 수 있어요.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>취소</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => {
+                    if (imagePrompt !== null) void generateImage(imagePrompt);
+                  }}
+                >
+                  만들기
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
           {context && (
             <div className="flex justify-end px-1 pt-1.5">
               <ContextMeter context={context} />

@@ -6,6 +6,17 @@ import { Data, DateTime, Option, Schema } from "effect";
 import { BotIcon, ChevronRightIcon, Clock3Icon, WrenchIcon } from "lucide-react";
 import type { TraceTaskView } from "memory-agent";
 import { memo, useState } from "react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "~/components/ui/alert-dialog";
 import { Badge } from "~/components/ui/badge";
 import { Bubble, BubbleContent } from "~/components/ui/bubble";
 import { Button } from "~/components/ui/button";
@@ -292,16 +303,12 @@ const TaskSummaryCard = memo(function TaskSummaryCard({
       }),
     );
   const [deleteState, setDeleteState] = useState<"idle" | "requesting" | "failed">("idle");
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const remove = () =>
     runUiEffect(
       Effect.gen(function* () {
-        if (
-          !window.confirm(
-            "이 작업의 transcript·locator를 삭제할까요? 채택된 project memory와 provenance는 유지돼요.",
-          )
-        )
-          return;
+        setConfirmingDelete(false);
         setDeleteState("requesting");
         const result = yield* uiPromise(() => onDelete(task));
         setDeleteState(DeleteActionResult.$is("deleted")(result) ? "idle" : "failed");
@@ -389,19 +396,38 @@ const TaskSummaryCard = memo(function TaskSummaryCard({
           </Button>
         )}
         {task.status !== "deleted" && (
-          <Button
-            type="button"
-            size="xs"
-            variant="destructive"
-            disabled={readOnly || deleteState === "requesting"}
-            onClick={() => void remove()}
-          >
-            {deleteState === "requesting"
-              ? "삭제 중"
-              : deleteState === "failed"
-                ? "삭제 재시도"
-                : "삭제"}
-          </Button>
+          <AlertDialog open={confirmingDelete} onOpenChange={setConfirmingDelete}>
+            <AlertDialogTrigger
+              render={
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="destructive"
+                  disabled={readOnly || deleteState === "requesting"}
+                />
+              }
+            >
+              {deleteState === "requesting"
+                ? "삭제 중"
+                : deleteState === "failed"
+                  ? "삭제 재시도"
+                  : "삭제"}
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>이 작업의 기록을 삭제할까요?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  transcript와 locator를 지워요. 채택된 project memory와 provenance는 유지돼요.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>취소</AlertDialogCancel>
+                <AlertDialogAction variant="destructive" onClick={() => void remove()}>
+                  삭제
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         )}
         <Button type="button" size="xs" variant="ghost" onClick={openTrace}>
           Work Trace에서 보기
