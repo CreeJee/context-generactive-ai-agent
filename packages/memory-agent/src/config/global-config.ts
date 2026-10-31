@@ -18,6 +18,7 @@ import {
   CompatibleAccounts,
   OpenAICompatibleConfiguration,
 } from "../providers/openai-compatible-config.ts";
+import { KanbanConcurrency, SummaryStartPercent } from "./contracts.ts";
 import { StorageRoot } from "./storage-root.ts";
 
 /**
@@ -87,21 +88,6 @@ export const CrossProviderMediaConsentSettings = Schema.Struct({
   pairs: Schema.Record(Schema.String, CrossProviderMediaConsentMode),
 });
 export type CrossProviderMediaConsentSettings = typeof CrossProviderMediaConsentSettings.Type;
-
-/**
- * Percent of the context window a conversation fills before its turns are summarized; 0 summarizes
- * from the start. It stays below the share where the oldest messages are left out (55%), so the
- * summaries are ready before anything has to go.
- */
-export const SummaryStartPercent = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 50 }));
-
-/** The most kanban cards the user may let run at once. */
-export const kanbanConcurrencyLimit = 32;
-
-/** Kanban cards run at once across every Goal. Machines differ, so the user picks it. */
-export const KanbanConcurrency = Schema.Int.check(
-  Schema.isBetween({ minimum: 1, maximum: kanbanConcurrencyLimit }),
-);
 
 /** User-wide settings. Secrets never go here; they belong in the OS keychain. */
 export const Settings = Schema.Struct({

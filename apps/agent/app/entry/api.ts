@@ -1,7 +1,18 @@
 import { browserCrypto } from "./shared/browser-crypto";
 import { runUiEffect, uiPromise } from "./shared/ui-effect";
 import { isTruthy } from "../truthy.ts";
-import { Data, Effect } from "effect";
+import { Cause, Context, Data, Effect, Layer, ManagedRuntime, Match } from "effect";
+import { FetchHttpClient, HttpClientError } from "effect/http";
+import { HttpApiClient } from "effect/http-api";
+import {
+  AppApi,
+  appRefusalStatus,
+  type ConversationSettings,
+  type KagiCommand as KagiCommandCase,
+  type KanbanSettings,
+  type KanbanSettingsCommand as KanbanSettingsCommandCase,
+  type RecallSettings,
+} from "memory-agent/app-api";
 import { ProviderId } from "memory-agent/provider-contracts";
 import type {
   AgentLinkState as AgentLinkStateCase,
@@ -106,12 +117,7 @@ export type DecisionAnswer = DecisionAnswerCase;
 export const DecisionAnswer = Data.taggedEnum<DecisionAnswer>();
 
 /** The commands `/api/settings/kagi` reads. */
-export type KagiCommand = Data.TaggedEnum<{
-  register: { readonly key: string };
-  remove: {};
-  enable: {};
-  disable: {};
-}>;
+export type KagiCommand = KagiCommandCase;
 export const KagiCommand = Data.taggedEnum<KagiCommand>();
 /** The commands `/api/settings/imports` reads. */
 export type ImportCommand = Data.TaggedEnum<{
@@ -406,23 +412,9 @@ export const ApiErrorCode = Schema.Literals([
 ]);
 export type ApiErrorCode = typeof ApiErrorCode.Type;
 
-/** When long conversations start being summarized, as a percent of the context window. */
-export type ConversationSettings = { readonly summaryStartPercent: number };
-/**
- * Kanban cards run at once across every Goal: the user's value, if any, and the one in use; and
- * the projects in the order the scheduler serves them.
- */
-export type KanbanSettings = {
-  readonly configured: number | null;
-  readonly effective: number;
-  readonly projectOrder: readonly string[];
-};
+export type { ConversationSettings, KanbanSettings, RecallSettings };
 /** The commands `/api/settings/kanban` reads. */
-export type KanbanSettingsCommand = Data.TaggedEnum<{
-  SetConcurrency: { readonly concurrency: number | null };
-  /** The project goes in front of `before`, or last. */
-  MoveProject: { readonly projectId: string; readonly before: string | null };
-}>;
+export type KanbanSettingsCommand = KanbanSettingsCommandCase;
 export const KanbanSettingsCommand = Data.taggedEnum<KanbanSettingsCommand>();
 /**
  * Branches a project's Goals never merge into on their own, and the project's Goals (conversations
@@ -439,11 +431,6 @@ export type ProjectKanbanCommand = Data.TaggedEnum<{
   MoveGoal: { readonly sessionId: string; readonly before: string | null };
 }>;
 export const ProjectKanbanCommand = Data.taggedEnum<ProjectKanbanCommand>();
-/** Which memory a run may reach beyond its own project; both start off. */
-export type RecallSettings = {
-  readonly crossProjectRecall: boolean;
-  readonly externalAgentMemory: boolean;
-};
 
 const CrossProviderMediaRunApproval = Schema.Struct({
   runId: Schema.String,
@@ -647,6 +634,71 @@ function call<T>(
     }),
   );
 }
+
+const makeAppApiClient = HttpApiClient.make(AppApi);
+
+/** The app API (`memory-agent/app-api`), called over `appFetch` like the chat API. */
+class AppApiClient extends Context.Service<AppApiClient, Effect.Success<typeof makeAppApiClient>>()(
+  "agent/app/entry/api/AppApiClient",
+) {
+  static readonly layer = Layer.effect(AppApiClient, makeAppApiClient);
+}
+
+const appApiRuntime = ManagedRuntime.make(
+  Layer.mergeAll(
+    AppApiClient.layer.pipe(Layer.provide(FetchHttpClient.layer)),
+    Layer.succeed(FetchHttpClient.Fetch, appFetch),
+  ),
+);
+
+/** What an app API call fails with: a refusal the endpoint declares, or the call itself failing. */
+type AppApiFailure =
+  | { readonly error: ApiErrorCode; readonly reason?: string }
+  | HttpClientError.HttpClientError
+  | Schema.SchemaError;
+
+/**
+ * A call that failed outside the endpoint's refusals. A transport failure keeps its cause, as
+ * `appFetch` rejected with it; a status the endpoint does not declare is read like `call` reads it.
+ */
+const clientFailure = (failure: HttpClientError.HttpClientError) =>
+  failure.reason._tag === "TransportError"
+    ? Effect.fail(new Cause.UnknownError(failure.reason.cause))
+    : Effect.option(
+        Effect.flatMap(Effect.fromNullishOr(failure.response), (response) => response.json),
+      ).pipe(
+        Effect.flatMap((body) =>
+          Effect.fail(
+            apiError(
+              failure.response?.status ?? 502,
+              Option.getOrUndefined(Option.flatMap(body, decodeErrorBody)),
+            ),
+          ),
+        ),
+      );
+
+/** The page's `ApiError` for a failed app API call; a value the page's schema refuses is `invalid`. */
+const appApiFailure = (invalid: ApiErrorCode) =>
+  Match.type<AppApiFailure>().pipe(
+    Match.when(Schema.isSchemaError, () => Effect.fail(apiError(400, { error: invalid }))),
+    Match.when(HttpClientError.isHttpClientError, clientFailure),
+    Match.orElse((refusal) => Effect.fail(apiError(appRefusalStatus(refusal), refusal))),
+  );
+
+/** Calls the app API through the page's client; a failure is an `ApiError` as `call` gives. */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+const appCall = <A, E extends AppApiFailure>(
+  request: (client: AppApiClient["Service"]) => Effect.Effect<A, E>,
+  invalid: ApiErrorCode = "request_failed",
+): Promise<A> =>
+  runUiEffect(
+    Effect.flatMap(appApiRuntime.contextEffect, (context) =>
+      Effect.flatMap(AppApiClient, request).pipe(
+        Effect.catch(appApiFailure(invalid)),
+        Effect.provideContext(context),
+      ),
+    ),
+  );
 
 export const api = {
   auth: (provider: ProviderId) =>
@@ -884,29 +936,50 @@ export const api = {
     });
   },
 
-  kagi: () => call<KagiStatus>("GET", "/api/settings/kagi"),
-  kagiAction: (command: KagiCommand) => call<KagiStatus>("POST", "/api/settings/kagi", command),
+  kagi: () => appCall((client) => client.settings.kagi()),
+  // The client takes a union payload one case at a time.
+  kagiAction: (command: KagiCommand) =>
+    appCall(
+      (client) =>
+        KagiCommand.$match(command, {
+          register: (payload) => client.settings.kagiAction({ payload }),
+          remove: (payload) => client.settings.kagiAction({ payload }),
+          enable: (payload) => client.settings.kagiAction({ payload }),
+          disable: (payload) => client.settings.kagiAction({ payload }),
+        }),
+      "invalid_kagi_action",
+    ),
 
-  conversationSettings: () => call<ConversationSettings>("GET", "/api/settings/conversation"),
-  recallSettings: () => call<RecallSettings>("GET", "/api/settings/recall"),
+  conversationSettings: () => appCall((client) => client.settings.conversation()),
+  recallSettings: () => appCall((client) => client.settings.recall()),
   setRecallSettings: (settings: Partial<RecallSettings>) =>
-    call<RecallSettings>("POST", "/api/settings/recall", settings),
+    appCall(
+      (client) => client.settings.setRecall({ payload: settings }),
+      "invalid_recall_settings",
+    ),
   setConversationSettings: (settings: ConversationSettings) =>
-    call<ConversationSettings>("POST", "/api/settings/conversation", settings),
-  kanbanSettings: () => call<KanbanSettings>("GET", "/api/settings/kanban"),
+    appCall(
+      (client) => client.settings.setConversation({ payload: settings }),
+      "invalid_conversation_settings",
+    ),
+  kanbanSettings: () => appCall((client) => client.settings.kanban()),
   /** null goes back to the machine default. */
   setKanbanConcurrency: (concurrency: number | null) =>
-    call<KanbanSettings>(
-      "POST",
-      "/api/settings/kanban",
-      KanbanSettingsCommand.SetConcurrency({ concurrency }),
+    appCall(
+      (client) =>
+        client.settings.setKanban({
+          payload: KanbanSettingsCommand.SetConcurrency({ concurrency }),
+        }),
+      "invalid_kanban_settings",
     ),
   /** Puts the project in front of `before` (or last) in the scheduler's order of projects. */
   moveProject: (projectId: string, before: string | null) =>
-    call<KanbanSettings>(
-      "POST",
-      "/api/settings/kanban",
-      KanbanSettingsCommand.MoveProject({ projectId, before }),
+    appCall(
+      (client) =>
+        client.settings.setKanban({
+          payload: KanbanSettingsCommand.MoveProject({ projectId, before }),
+        }),
+      "invalid_kanban_settings",
     ),
   projectKanban: (projectId: string) =>
     call<ProjectKanbanSettings>("GET", `/api/projects/${encodeURIComponent(projectId)}/kanban`),

@@ -94,11 +94,7 @@ export {
   Settings,
   type GlobalConfigApi,
 } from "./config/global-config.ts";
-export {
-  KanbanConcurrency,
-  SummaryStartPercent,
-  kanbanConcurrencyLimit,
-} from "./config/contracts.ts";
+export { KanbanConcurrency, SummaryStartPercent } from "./config/contracts.ts";
 export {
   SecretStore,
   SecretStoreFailed,
@@ -113,8 +109,8 @@ export {
   kagiBaseUrl,
   maxExtractUrls,
   type KagiFailureReason,
-  type KagiStatus,
 } from "./kagi/kagi.ts";
+export { KagiStatus } from "./kagi/contracts.ts";
 export { attachmentIdOf, attachmentUrl } from "./attachments/urls.ts";
 export { JsonValue, type JsonValue as Json } from "./json.ts";
 export {
@@ -464,7 +460,6 @@ export {
 export { GoalOrder } from "./kanban/goal-order.ts";
 export { ProjectScheduler } from "./kanban/scheduler.ts";
 export { KanbanSettings, KanbanSettingsRefused } from "./config/kanban-settings.ts";
-export { KanbanConcurrency } from "./config/global-config.ts";
 export { PlanDependenciesRejected, type PlanDependencyIssue } from "./workflow/plan-schedule.ts";
 export {
   RuleSource,

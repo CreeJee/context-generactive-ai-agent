@@ -2,8 +2,10 @@ import { type Context, Effect, Layer } from "effect";
 import { HttpRouter, HttpServer, HttpServerRequest } from "effect/http";
 import { HttpApiBuilder } from "effect/http-api";
 import { type AgentChat, BtwApiHandlers, type BtwChat, ChatApiHandlers } from "memory-agent";
+import { AppApi } from "memory-agent/app-api";
 import { ChatApi, SameSite } from "memory-agent/chat-api";
 import { agent } from "./agent.ts";
+import { SettingsApiHandlers } from "./api/settings.ts";
 import { crossSiteRefusal } from "./http.ts";
 
 /** The page's routes refuse another site's change with `rejectCrossSite`; the API with this. */
@@ -29,14 +31,24 @@ export const chatApiRoutes = <E>(
     Layer.provide(HttpServer.layerServices),
   );
 
+/** The app API's routes (`memory-agent/app-api`), answered by the agent's services. */
+const appApiRoutes = HttpApiBuilder.layer(AppApi).pipe(
+  Layer.provide(SettingsApiHandlers),
+  Layer.provide(SameSiteLive),
+  Layer.provide(Layer.effectContext(agent.contextEffect)),
+  Layer.provide(HttpServer.layerServices),
+);
+
 let built: { readonly handler: (request: Request) => Promise<Response> } | null = null;
 
 /**
- * Answers a request to the chat API (`memory-agent/chat-api`). The handler is built on the first
- * request, because the server configures the agent runtime after this module loads.
+ * Answers a request to the chat API (`memory-agent/chat-api`) or the app API
+ * (`memory-agent/app-api`). The handler is built on the first request, because the server
+ * configures the agent runtime after this module loads.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export const serveChatApi = (request: Request) =>
-  (built ??= HttpRouter.toWebHandler(chatApiRoutes(agent.contextEffect), {
-    disableLogger: true,
-  })).handler(request);
+export const serveApi = (request: Request) =>
+  (built ??= HttpRouter.toWebHandler(
+    Layer.merge(chatApiRoutes(agent.contextEffect), appApiRoutes),
+    { disableLogger: true },
+  )).handler(request);

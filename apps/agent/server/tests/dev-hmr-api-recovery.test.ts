@@ -22,7 +22,7 @@ import {
   testAgent,
   type AgentServices,
 } from "../../../../packages/memory-agent/tests/support/test-env.ts";
-import { chatApiRoutes } from "../../app/.server/chat-api";
+import { chatApiRoutes } from "../../app/.server/api";
 import { developmentApiProxy } from "../../vite.config";
 import { createDevelopmentBoundary, developmentRequestDecision } from "../dev-safety";
 import { sqlAll } from "../../../../packages/memory-agent/tests/support/sql.ts";

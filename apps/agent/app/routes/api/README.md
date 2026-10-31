@@ -6,10 +6,13 @@
 
 모든 핸들러는 `~/.server/agent`의 `agent.runPromise`로 Promise 경계를 넘어 `packages/memory-agent`의 Effect 서비스(Projects, ProviderRegistry, OAuthProfiles, Attachments, AppEvents, ReportDelivery 등)를 호출한다. 태그된 실패는 `{ error, reason? }` JSON과 HTTP 상태 코드로 바꾼다.
 
-계정·인증·모델 선택·첨부 이미지·이미지 생성·프로젝트 설정(에이전트/MCP/스킬/칸반/보드/결정)·보고서 전송·SSE 무효화 이벤트를 브라우저 UI에 노출하는 얇은 HTTP 어댑터 계층이다. 일부 BTW·chat 경로는 `serveChatApi`나 `makeBtwHandlers`에 그대로 위임한다.
+계정·인증·모델 선택·첨부 이미지·이미지 생성·프로젝트 설정(에이전트/MCP/스킬/칸반/보드/결정)·보고서 전송·SSE 무효화 이벤트를 브라우저 UI에 노출하는 얇은 HTTP 어댑터 계층이다.
+
+라우트 파일은 Effect HttpApi로 옮기는 중이다(`docs/httpapi-migration.md`). 파일이 없는 `/api/...` 요청은 `$.tsx`가 받아 `~/.server/api`의 `serveApi`로 넘긴다. 채팅 API(`memory-agent/chat-api`)와 옮긴 앱 API group(`memory-agent/app-api`, 핸들러는 `~/.server/api/<group>.ts`)이 그 web handler에서 답한다. React Router는 정적 경로를 splat보다 먼저 고르므로, 남은 라우트 파일은 그대로 답한다.
 
 ## Interface
 
+- `$.tsx` `loader`/`action` — 라우트 파일이 없는 `/api/*` 요청을 `serveApi`로 넘긴다. 채팅 API(`/api/sessions/:session/messages`, `/api/sessions/:session/runs`, `/api/sessions/:session/runs/:run/events`, `/api/btw/:thread/messages`, `/api/btw/:thread/runs`)와 앱 API settings group(`/api/settings/{conversation,recall,kanban,kagi}`)이 여기서 답한다.
 - `accounts.tsx` `loader`/`action` — GET /api/accounts?provider=: 구독 계정 목록(레거시 OAuth import 후 `SubscriptionView.subscription`), `openai-compatible`는 `compatibleAccounts`로 위임. POST는 intent `add|cancel|select|remove|rename` 또는 `CompatibleAccountCommand`를 처리한다.
 - `accounts.quota.tsx` `loader` — GET /api/accounts/quota?provider=: `SubscriptionQuota.accounts`로 계정별 구독 한도를 돌려주고, `SubscriptionQuotaError`이면 503을 돌려준다.
 - `auth.tsx` `loader`/`action` — GET /api/auth?provider=: 연결 상태(10초 timeout → 504). POST `{ intent: login|cancel|logout, provider }`는 subscription 공급자만 받는다.
@@ -31,13 +34,14 @@
 - `reports.delivery.tsx` `loader`/`action` — webhook 상태와 defectReports 조회. TaggedUnion `send`(보고서+evidence 전송)/`defect_reports`(켜기·끄기) 처리.
 - `reports.diagnosis.tsx` `action` — `ReportDiagnoser.diagnose`로 검토된 초안을 선택 모델로 진단한다.
 - `reports.evidence.tsx` `loader` — `reportBundleResponse` + `collectReportBundle`로 세션 evidence 번들을 돌려준다(redact 후 한도에 맞춰 자른다).
-- `btw.$thread._index.tsx` `action`(= `makeBtwHandlers(agent).remove`), `btw.$thread.messages.tsx` `loader`, `btw.$thread.runs.tsx` `action` — 뒤의 두 핸들러는 `serveChatApi(request)`에 위임한다.
-- (본문 미확인, export만 확인) `sessions._index.tsx`, `sessions.$session._index.tsx`, `sessions.$session.{board,kanban,lease,queue._index,trace.tasks.$task}.tsx` `loader`+`action`; `sessions.$session.{approvals._index,decisions._index,events,messages,runs.$run.events,subagents._index,subagents.$subagent,trace,trace.stream}.tsx` `loader`; `sessions.$session.{approvals.$approval,cancel,compact,decisions.$decision,interrupts.discard,queue.$message,runs._index,uncertain}.tsx`, `reports.sessions.tsx` `action`; `sessions.$session.btw.tsx` `loader`/`action`(= btw handlers list/create).
-- (본문 미확인, export만 확인) `settings.{conversation,embedding,image,imports,improvements,kagi,kanban,recall}.tsx` — 각각 `loader`와 `action`을 export하는 전역 설정 라우트.
+- `btw.$thread._index.tsx` `action`(= `makeBtwHandlers(agent).remove`).
+- (본문 미확인, export만 확인) `sessions._index.tsx`, `sessions.$session._index.tsx`, `sessions.$session.{board,kanban,lease,queue._index,trace.tasks.$task}.tsx` `loader`+`action`; `sessions.$session.{approvals._index,decisions._index,events,subagents._index,subagents.$subagent,trace,trace.stream}.tsx` `loader`; `sessions.$session.{approvals.$approval,cancel,compact,decisions.$decision,interrupts.discard,queue.$message,uncertain}.tsx`, `reports.sessions.tsx` `action`; `sessions.$session.btw.tsx` `loader`/`action`(= btw handlers list/create).
+- (본문 미확인, export만 확인) `settings.{embedding,image,imports,improvements}.tsx` — 각각 `loader`와 `action`을 export하는 전역 설정 라우트.
 - 하위 디렉터리 없음.
 
 ## Invariants
 
+- HttpApi로 옮긴 group은 cross-site 검사를 `SameSite` middleware(`~/.server/api`의 `SameSiteLive`, 같은 `crossSiteRefusal`)로 하고, 본문 검사와 실패 매핑을 계약 Schema와 handler의 `Effect.catchTags`로 한다. 계약에 없는 payload는 HttpApi가 빈 400으로 거절한다. 아래 규칙은 남은 라우트 파일의 것이다.
 - 상태를 바꾸는 모든 `action`은 맨 먼저 `rejectCrossSite(request)`를 호출한다. 결과가 null이 아니면 그 Response를 그대로 돌려준다(same-origin 전용). `attachments.$attachment.tsx` loader도 `Sec-Fetch-Site: cross-site`이면 403을 돌려준다(이미지는 공개 자산이 아니라 대화 evidence).
 - 요청 본문은 `readJson(request, Schema)`로 디코드한다. 실패하면 라우트별 고유 에러 코드(`invalid_account_action`, `invalid_intent`, `invalid_selection`, `invalid_kanban_settings` 등)와 400을 돌려준다.
 - 라우트는 Promise 경계일 뿐이다. 도메인 로직은 `agent.runPromise` 안의 Effect로 실행하고, 실패 태그는 `Effect.catchTag(s)`로 HTTP 상태 JSON에 매핑한다.

@@ -19,7 +19,7 @@ const sdkCall = Effect.fn("devChatBoundaryTest.sdkCall")(function* <A>(
   });
 });
 
-import { chatApiRoutes } from "../../app/.server/chat-api";
+import { chatApiRoutes } from "../../app/.server/api";
 import { sqlAll, sqlGet } from "../../../../packages/memory-agent/tests/support/sql.ts";
 
 /** The app's chat API, as its routes serve it, answered by this test's agent. */

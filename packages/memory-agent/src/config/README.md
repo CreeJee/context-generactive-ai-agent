@@ -14,8 +14,9 @@ memory-agent의 사용자 전역 설정 계층이다. `<storage>/config.json`(`G
 - `GpuCheck` — WebGPU 확인 결과 TaggedUnion(`available`{checkedAt} | `unavailable`{checkedAt, reason})
 - `ModelFeatureFlagSettings` — version 1의 모델 의존 기능 플래그 정책(global/providers/capabilities/models/routes). 항목이 없으면 거부
 - `CrossProviderMediaConsentMode` / `CrossProviderMediaConsentSettings` — provider 쌍별 미디어 전송 동의(`disabled`|`ask`|`always`), version 1
-- `SummaryStartPercent` — 요약 시작 비율 정수 0~50 스키마
-- `KanbanConcurrency` / `kanbanConcurrencyLimit` — 칸반 동시 실행 수 정수 1~32 스키마와 상한 상수 32
+- `SummaryStartPercent` — 요약 시작 비율 정수 0~50 스키마(`contracts.ts`)
+- `KanbanConcurrency` / `kanbanConcurrencyLimit` — 칸반 동시 실행 수 정수 1~32 스키마와 상한 상수 32(`contracts.ts`)
+- `contracts.ts` — 앱 API 계약(`memory-agent/app-api`)이 쓰는 설정 Schema. 서버 코드를 import하지 않아 브라우저 번들이 쓸 수 있다
 - `KanbanSettings` — 칸반 동시 실행 설정 서비스(`concurrency`, `changes` 구독, `setConcurrency(value)`, `resetConcurrency`). `KanbanSettings.layer(cores?)`는 `GlobalConfig`를 요구한다
 - `KanbanSettingsRefused` — 범위 밖 값(`concurrency_out_of_range`) 거부 오류
 - `KanbanConcurrencySetting` — `configured: Option<number>`와 실제 적용값 `effective`

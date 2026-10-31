@@ -1,11 +1,5 @@
-import { Array as Arr, Option, Schema, SchemaAST } from "effect";
-import {
-  HttpApi,
-  HttpApiEndpoint,
-  HttpApiGroup,
-  HttpApiMiddleware,
-  HttpApiSchema,
-} from "effect/http-api";
+import { Schema } from "effect";
+import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "effect/http-api";
 import {
   ImagePart,
   OrchestratorNote,
@@ -16,6 +10,9 @@ import {
 import { JsonValue } from "../json.ts";
 import { AgUiEvent } from "../loop/chunks.ts";
 import type { sessionHolderHeader } from "../sessions/lease-state.ts";
+import { refusalStatusIn, refusalWith, SameSite } from "./refusal.ts";
+
+export { SameSite };
 
 /**
  * The chat API the page's Effect client calls (docs/effect-ai-migration.md step 6), declared once
@@ -33,22 +30,21 @@ const details = {
   route: Schema.optionalKey(Schema.String),
 };
 
-const refusal = <const Codes extends readonly [string, ...Array<string>]>(
-  status: number,
-  codes: Codes,
-) =>
-  Schema.Struct({ error: Schema.Literals(codes), ...details }).pipe(HttpApiSchema.status(status));
+const chatRefusal = refusalWith(details);
 
-const BadRequest = refusal(400, ["empty_message", "unknown_attachment", "invalid_stream_offset"]);
-const Unauthorized = refusal(401, ["login_required"]);
-const Forbidden = refusal(403, ["cross_site_request", "invalid_origin"]);
-const NotFound = refusal(404, [
+const BadRequest = chatRefusal(400, [
+  "empty_message",
+  "unknown_attachment",
+  "invalid_stream_offset",
+]);
+const Unauthorized = chatRefusal(401, ["login_required"]);
+const NotFound = chatRefusal(404, [
   "session_not_found",
   "project_not_found",
   "run_not_found",
   "btw_not_found",
 ]);
-const Conflict = refusal(409, [
+const Conflict = chatRefusal(409, [
   "report_requires_local_model",
   "run_in_progress",
   "external_agent_unavailable",
@@ -66,16 +62,16 @@ const Conflict = refusal(409, [
   "notification_followup_deferred",
   "workflow_followup_deferred",
 ]);
-const PreconditionFailed = refusal(412, ["model_selection_required"]);
-const Unprocessable = refusal(422, [
+const PreconditionFailed = chatRefusal(412, ["model_selection_required"]);
+const Unprocessable = chatRefusal(422, [
   "images_not_supported",
   "provider_image_generation_unavailable",
   "report_image_generation_unavailable",
   "image_route_unavailable",
 ]);
-const Locked = refusal(423, ["session_in_use"]);
-const Internal = refusal(500, ["goal_ledger_unavailable", "goal_workflow_admission_failed"]);
-const Unavailable = refusal(503, [
+const Locked = chatRefusal(423, ["session_in_use"]);
+const Internal = chatRefusal(500, ["goal_ledger_unavailable", "goal_workflow_admission_failed"]);
+const Unavailable = chatRefusal(503, [
   "provider_auth_unavailable",
   "provider_unavailable",
   "goal_workflow_saturated",
@@ -98,20 +94,8 @@ const refusals = [
 export const Refusal = Schema.Union(refusals);
 export type Refusal = typeof Refusal.Type;
 
-const annotatedStatus = SchemaAST.resolveAt<number>("httpApiStatus");
-
 /** The HTTP status a refusal is answered with. */
-export const refusalStatus = (refused: Refusal): number =>
-  Arr.findFirst(refusals, (schema) => Schema.is(schema)(refused)).pipe(
-    Option.flatMapNullishOr((schema) => annotatedStatus(schema.ast)),
-    Option.getOrElse(() => 500),
-  );
-
-/** Refuses a request that changes a session when another site sent it (PRD R14). */
-export class SameSite extends HttpApiMiddleware.Service<SameSite>()(
-  "memory-agent/api/chat-api/SameSite",
-  { error: Forbidden },
-) {}
+export const refusalStatus: (refused: Refusal) => number = refusalStatusIn(refusals);
 
 /** The page's answer to one interrupt of the run it resumes. */
 export const ResumeEntry = Schema.Struct({

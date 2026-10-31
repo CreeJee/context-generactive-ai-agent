@@ -36,6 +36,7 @@
     },
     "./definitions": "./src/tools/definitions.ts",
     "./chat-api": "./src/api/chat-api.ts",
+    "./app-api": "./src/api/app-api.ts",
     "./chat-session": "./src/api/chat-session.ts",
     "./chat-view": "./src/api/chat-view.ts",
     "./btw-thread": "./src/api/btw-thread.ts",

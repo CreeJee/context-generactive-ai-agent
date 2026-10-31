@@ -14,7 +14,8 @@ import {
 } from "effect";
 import { PersistedQueue } from "effect/persistence";
 import { DurableQueue, Workflow } from "effect/workflow";
-import { kanbanConcurrencyLimit, type GlobalConfigFailed } from "../config/global-config.ts";
+import { kanbanConcurrencyLimit } from "../config/contracts.ts";
+import type { GlobalConfigFailed } from "../config/global-config.ts";
 import { KanbanSettings } from "../config/kanban-settings.ts";
 import { Workflows } from "../workflow/workflow.ts";
 import { CardAgent, type CardAgentOutcome } from "./card-agent.ts";

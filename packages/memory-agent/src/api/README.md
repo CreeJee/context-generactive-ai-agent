@@ -2,15 +2,19 @@
 
 ## Overview
 
-이 디렉터리는 채팅 HTTP API 계약 `ChatApi`와 그 구현을 담는다. 페이지의 Effect 클라이언트와 서버가 이 계약을 함께 쓴다. 계약은 `effect/http-api`로 한 번만 선언한다(`docs/effect-ai-migration.md` step 6). 서버 쪽 `chat-api-live.ts`는 `AgentChat`·`BtwChat` 서비스 위에 핸들러를 구현하고, run의 AG-UI 이벤트를 SSE로 스트리밍한다. 클라이언트 쪽 `chat-session.ts`·`btw-thread.ts`·`chat-view.ts`는 서버 코드를 import하지 않는다. 이 파일들은 세션과 BTW 스레드의 Atom 묶음을 id별로 노출하고, 페이지는 이 Atom을 `@effect/atom-react`로 읽는다. 묶음은 `keptAtomGroups`가 페이지 수명 동안 강하게 쥔다. `Atom.family`는 만든 값을 약하게만 쥐어서, 아무도 쥐지 않는 묶음은 GC 뒤 새 Atom(빈 화면, 처음부터 다시 읽는 `open`)으로 바뀐다.
+이 디렉터리는 채팅 HTTP API 계약 `ChatApi`와 그 구현, 그리고 채팅 밖의 앱 API 계약 `AppApi`(`docs/httpapi-migration.md`)를 담는다. 페이지의 Effect 클라이언트와 서버가 이 계약을 함께 쓴다. `AppApi`의 핸들러는 앱(`apps/agent/app/.server/api/`)에 있다. 계약은 `effect/http-api`로 한 번만 선언한다(`docs/effect-ai-migration.md` step 6). 서버 쪽 `chat-api-live.ts`는 `AgentChat`·`BtwChat` 서비스 위에 핸들러를 구현하고, run의 AG-UI 이벤트를 SSE로 스트리밍한다. 클라이언트 쪽 `chat-session.ts`·`btw-thread.ts`·`chat-view.ts`는 서버 코드를 import하지 않는다. 이 파일들은 세션과 BTW 스레드의 Atom 묶음을 id별로 노출하고, 페이지는 이 Atom을 `@effect/atom-react`로 읽는다. 묶음은 `keptAtomGroups`가 페이지 수명 동안 강하게 쥔다. `Atom.family`는 만든 값을 약하게만 쥐어서, 아무도 쥐지 않는 묶음은 GC 뒤 새 Atom(빈 화면, 처음부터 다시 읽는 `open`)으로 바뀐다.
 
 ## Interface
 
 - `ChatApi` — `chat` 그룹과 `btw` 그룹을 묶은 HttpApi 계약(서버·브라우저 공용)
 - `ChatGroup` — `snapshot` GET /api/sessions/:session/messages, `run` POST /api/sessions/:session/runs(SameSite, x-session-holder 헤더), `join` GET /api/sessions/:session/runs/:run/events?after
 - `BtwGroup` — `messages` GET /api/btw/:thread/messages, `ask` POST /api/btw/:thread/runs(SameSite)
-- `SameSite` — 다른 사이트가 보낸 세션 변경 요청을 403(`cross_site_request`/`invalid_origin`)으로 거부하는 HttpApiMiddleware 서비스 태그(PRD R14)
-- `Refusal` / `refusalStatus` — 400~503 상태별 거부 코드 리터럴 union 스키마와, 거부를 `httpApiStatus` 어노테이션의 HTTP 상태로 바꾸는 함수(못 찾으면 500)
+- `SameSite` — 다른 사이트가 보낸 변경 요청을 403(`cross_site_request`/`invalid_origin`)으로 거부하는 HttpApiMiddleware 서비스 태그(PRD R14). `refusal.ts`에 있고 `chat-api.ts`가 다시 내보낸다
+- `refusalWith(fields)(status, codes)` / `refusalStatusIn(refusals)` / `appRefusalFields` — 거부 스키마(`{ error, ...fields }` + `httpApiStatus`)를 만드는 함수, 거부 값에 맞는 스키마의 상태를 찾는 함수(못 찾으면 500), 앱 API 거부가 싣는 `reason?`(`refusal.ts`)
+- `Refusal` / `refusalStatus` — 채팅 API의 400~503 상태별 거부 코드 리터럴 union 스키마와 그 상태 함수
+- `AppApi` — 채팅 밖의 앱 API 계약(`app-api.ts`). group은 `app-api/<group>.ts`에 있다
+- `SettingsGroup` — `conversation`/`setConversation`, `recall`/`setRecall`, `kanban`/`setKanban`, `kagi`/`kagiAction`(GET·POST /api/settings/*, 모두 SameSite). 계약 타입 `ConversationSettings`, `RecallSettings`, `KanbanSettings`, `KanbanSettingsCommand`, `KagiCommand`
+- `appRefusalStatus` — 앱 API 거부 값의 HTTP 상태. 페이지가 `ApiError.status`를 채울 때 쓴다
 - `RunInput` — AG-UI `RunAgentInput` 필드 이름을 쓰는 run 요청(`runId`, `parentRunId`, 새 user `messages`, `resume`, `forwardedProps.queuedNext`/`imageIntent`)
 - `ResumeEntry` — interrupt 하나에 대한 페이지의 답(`resolved`/`cancelled`, payload, metadata)
 - `RunEvent` / `RunEventsLost` — SSE 이벤트(id=run 로그 offset, data=JSON 문자열 `AgUiEvent`)와 로그를 읽지 못했을 때의 `run_events_unavailable` 오류
@@ -26,14 +30,15 @@
 - `partsOf` — user 메시지 content(문자열 또는 파트 배열)를 표시용 `MessagePart` 배열로 변환
 - `OpenSession` / `Send` / `Answer` / `CustomEvent` / `UserContent` — 클라이언트 세션 상태, 보낼 turn, 승인 답변, CUSTOM 이벤트, user content 타입
 - `ChatView` / `RunFailure` / `viewOf` / `caughtUp` / `streamStarted` / `applyEvent` — 스냅샷과 AG-UI 이벤트로 화면 상태를 만드는 순수 리듀서(`caughtUp`·`applyEvent`는 dual)
-- 하위 디렉터리 없음
+- `app-api/` — `AppApi`의 group 모듈(지금은 `settings.ts`)
 
 ## Invariants
 
-- `chat-api.ts`, `chat-session.ts`, `btw-thread.ts`, `chat-view.ts`는 서버 코드를 import하지 않는다. 브라우저 번들이 쓰기 때문이다. `chat-api.ts`는 `sessionHolderHeader`를 `import type`으로만 가져온다.
+- `chat-api.ts`, `app-api.ts`, `app-api/*`, `refusal.ts`, `chat-session.ts`, `btw-thread.ts`, `chat-view.ts`는 서버 코드를 import하지 않는다. 브라우저 번들이 쓰기 때문이다. 계약이 쓰는 도메인 Schema는 각 폴더의 `contracts.ts`(예: `config/contracts.ts`, `kagi/contracts.ts`)에서 가져온다. `chat-api.ts`는 `sessionHolderHeader`를 `import type`으로만 가져온다.
+- 앱 API의 거부 code는 group이 달라도 상태가 하나다. 페이지는 `appRefusalStatus`로 거부 값만 보고 상태를 찾는다. 새 group의 거부 목록은 `app-api.ts`의 `appRefusalStatus`에 더한다.
 - holder 헤더 이름은 `x-session-holder`다. `satisfies Lowercase<typeof sessionHolderHeader>`로 `sessions/lease-state.ts`의 헤더 상수와 맞춘다.
 - 세션을 바꾸는 엔드포인트(`run`, `ask`)에는 `SameSite` 미들웨어를 붙인다. 403 cross-site 거부는 `refusals` 목록이 아니라 `SameSite`의 error에 둔다.
-- 거부 코드와 HTTP 상태는 `refusal(status, codes)`로 묶는다. 이 상태는 `refusalStatus`가 `httpApiStatus` 어노테이션에서 읽고, 어느 스키마에도 맞지 않으면 500을 쓴다.
+- 거부 코드와 HTTP 상태는 `refusalWith(fields)(status, codes)`로 묶는다. 이 상태는 `refusalStatusIn`이 `httpApiStatus` 어노테이션에서 읽고, 어느 스키마에도 맞지 않으면 500을 쓴다.
 - 핸들러에서 어떤 refusal 코드에도 매핑되지 않은 실패는 `orDefect`가 `logDefect("route_defect")`로 남긴다. 그다음 `Effect.die`로 500 defect를 낸다.
 - run SSE 이벤트의 `id`는 run 로그의 offset이다. `join`은 `after` 다음부터 이어 읽고, `after`가 없으면 `"-1"`부터 읽는다. BTW run 이벤트 id는 스트림 시작부터 0,1,2… 인덱스다.
 - run 로그 읽기 오류는 경고 로그를 남긴다. 그 뒤 `{ error: "run_events_unavailable" }`로 바꿔 스트림을 끝낸다.

@@ -1,6 +1,7 @@
 import { Context, Effect, Layer, Option, PubSub, Schema } from "effect";
 import { availableCores } from "../runtime/host-system.ts";
-import { GlobalConfig, KanbanConcurrency } from "./global-config.ts";
+import { KanbanConcurrency } from "./contracts.ts";
+import { GlobalConfig } from "./global-config.ts";
 
 /** Half the cores, at least 1 and at most 4 (docs/kanban-orchestration.md). */
 export const defaultKanbanConcurrency = (cores: number) =>

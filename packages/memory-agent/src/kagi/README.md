@@ -16,7 +16,7 @@
 - `Kagi.extract(urls, signal?)` — POST `/extract`. `{ pages: [{url}], format: "markdown" }`를 보내고 `KagiExtractResponse`로 decode한다
 - `kagiBaseUrl` — 상수 `"https://kagi.com/api/v1"`
 - `maxExtractUrls` — 상수 10. Extract 요청 하나에 넣을 수 있는 최대 URL 수다(Kagi API 문서 기준)
-- `KagiStatus` — `{ keyRegistered: boolean; enabled: boolean }` interface
+- `KagiStatus` — `{ keyRegistered: boolean; enabled: boolean }` Schema(`contracts.ts`, 서버 코드를 import하지 않아 앱 API 계약과 브라우저가 쓴다)
 - `KagiKeyMissing` — `Schema.TaggedError`. 키 없이 활성화를 요청하면 난다
 - `KagiFailed` — `Schema.TaggedError`(`reason: KagiFailureReason`, `status: Int | null`). `message`는 `kagi_<reason>: <설명>` 형식이다
 - `KagiFailureReason` — `Schema.Literals`: not_enabled, invalid_request, unauthorized, forbidden, rate_limited, server_error, unavailable, invalid_response

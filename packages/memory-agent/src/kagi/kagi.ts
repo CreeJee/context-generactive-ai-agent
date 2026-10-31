@@ -4,6 +4,7 @@ import { Context, Effect, Layer, Match, Option, Schema } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import { GlobalConfig } from "../config/global-config.ts";
 import { SecretStore, type SecretStoreFailed } from "../config/secrets.ts";
+import type { KagiStatus } from "./contracts.ts";
 
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
 const stringifyJson = EffectFunction.flow(
@@ -16,12 +17,6 @@ export const kagiBaseUrl = "https://kagi.com/api/v1";
 
 /** Extract takes at most this many URLs per request (Kagi API docs). */
 export const maxExtractUrls = 10;
-
-/** Whether Kagi can be used, as the settings page shows it. The key itself is never returned. */
-export interface KagiStatus {
-  readonly keyRegistered: boolean;
-  readonly enabled: boolean;
-}
 
 export class KagiKeyMissing extends Schema.TaggedError<
   KagiKeyMissing,

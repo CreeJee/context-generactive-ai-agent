@@ -60,6 +60,10 @@
 
 - `src/api/refusal.ts`, 빈 `AppApi`와 subpath, 합친 web handler와 `api.$.tsx` splat, 브라우저 `AppApiClient`와 실패 변환.
 - 첫 group으로 설정(`settings.*`)을 옮긴다. 구조를 끝까지 확인한다.
+- 결과 (2026-10-31): `settings.{conversation,recall,kanban,kagi}`를 옮겼다. 채팅 API로 넘기던 RR 라우트 다섯 개도 splat이 받으므로 이 단계에서 지웠다.
+  - client 메서드 타입은 union payload(`KagiCommand` 등)를 case별 요청으로 나눠 받는다. union 값을 그대로 넘길 수 없어서 facade가 `$match`로 case마다 부른다.
+  - handler는 서비스를 group을 만들 때 꺼낸다(`Effect.fn(function* (handlers) { ... })`). 요청 handler 안에서 꺼내면 그 서비스가 web handler의 요청별 context 요구로 남는다.
+  - export한 다인자 함수는 Effect LSP의 pipeable 경고를 받는다. 거부 스키마는 `refusalWith(fields)(status, codes)`로 만들고, group마다 `const appRefusal = refusalWith(appRefusalFields)`를 둔다.
 
 ### 1-1 ~ 1-6. group 이전
 
@@ -76,7 +80,6 @@
 
 ### 1-7. 정리
 
-- 채팅 API로 넘기던 RR 라우트 다섯 개를 지운다(splat이 받는다).
 - `call<T>`, 손으로 쓴 응답 타입과 `ApiErrorCode` 목록을 지운다. `app/routes/api/README.md`를 계약 기준으로 다시 쓴다.
 
 ### 2. loader
@@ -96,4 +99,6 @@
 
 - 계약 모듈이 서버 코드를 끌어오면 브라우저 build가 깨진다. Schema를 옮길 때마다 browser build(`vp run agent#build`)로 확인한다.
 - 응답을 Schema로 encode하므로, 지금 응답에 interface에 없는 필드가 섞여 있으면 사라진다. group마다 옮기기 전과 후의 응답을 비교한다.
+- 서버 encode가 Schema의 runtime check(`Int`, 범위, `NonEmpty`)에 걸리면 지금은 보이던 화면이 500을 받는다. TS는 이것을 잡지 못한다. 그래서 응답 Schema에는 도메인이 이미 decode에 쓰는 check만 두고 새 check를 더하지 않는다. TS interface는 지우고 타입을 `typeof X.Type`으로 바꿔, 값을 만드는 서버 코드가 모두 Schema 타입으로 검사되게 한다. interface에서 Schema 초안을 만들 때는 `@effect/tsgo` refactor `typeToEffectSchema`를 쓸 수 있다.
+- 브라우저 쪽 실패 변환: 선언한 refusal은 `appRefusalStatus`로 status를 찾는다. 선언하지 않은 status는 `call<T>`처럼 body의 `{ error, reason }`을 읽는다. 브라우저 Schema가 payload를 거절하면 그 endpoint의 `invalid_*` code(400)다. 서버가 payload decode에 실패하면 HttpApi 기본 응답(빈 400)이다.
 - 다른 세션이 같은 checkout에서 `app/entry/*`를 고치고 있다. `api.ts`의 export 이름과 시그니처를 유지해 충돌을 줄인다.
