@@ -10,7 +10,9 @@ import {
   type ConversationSettings,
   type EmbeddingCommand as EmbeddingCommandCase,
   type ExternalAgentCommand as ExternalAgentCommandCase,
+  CrossProviderMediaRunApproval,
   FolderPick,
+  type GeneratedImage,
   type ImageSettings,
   type ImageSettingsCommand as ImageSettingsCommandCase,
   type ImportCommand as ImportCommandCase,
@@ -67,7 +69,6 @@ import type {
   McpScope,
   CrossProviderMediaConsentMode,
   CrossProviderMediaConsentSettings,
-  CrossProviderMediaRunApproval,
   McpServerState as McpServerStateCase,
   McpServerView,
   ModelSelection,
@@ -163,7 +164,7 @@ export const ImportActivity = Data.taggedEnum<ImportActivity>();
 export type WorkflowExecutionState = NonNullable<SessionRunState["execution"]>;
 export const WorkflowExecutionState = Data.taggedEnum<WorkflowExecutionState>();
 
-export type GeneratedImageAsset = ImageMediaAsset & { readonly url: string };
+export type GeneratedImageAsset = GeneratedImage;
 export type ImageSettingsView = ImageSettings;
 
 /** A provider's connection as `/api/auth` sends it; a pending login's URL arrives as `authUrl`. */
@@ -401,12 +402,6 @@ export type { ProjectKanbanSettings };
 export type ProjectKanbanCommand = ProjectKanbanCommandCase;
 export const ProjectKanbanCommand = Data.taggedEnum<ProjectKanbanCommand>();
 
-const CrossProviderMediaRunApproval = Schema.Struct({
-  runId: Schema.String,
-  initiatorChatRouteId: Schema.TemplateLiteral(["chat:", ProviderId, ":", Schema.String]),
-  executorMediaRouteId: Schema.String,
-  capability: Schema.Literal("media.image.generate"),
-});
 export class ApiError extends Schema.TaggedError<ApiError, { readonly brand: unique symbol }>()(
   "ApiError",
   {
@@ -461,46 +456,6 @@ function apiError(
   });
 }
 
-type JsonValue =
-  | string
-  | number
-  | boolean
-  | null
-  | readonly JsonValue[]
-  | Readonly<{ [key: string]: JsonValue | undefined }>;
-type JsonBody = Readonly<{ [key: string]: JsonValue | undefined }>;
-
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-function call<T>(
-  method: "GET" | "POST" | "DELETE",
-  path: string,
-  body?: JsonBody,
-  headers: Readonly<Record<string, string>> = {},
-): Promise<T> {
-  return runUiEffect(
-    Effect.gen(function* () {
-      const response = yield* uiPromise(() =>
-        appFetch(
-          path,
-          method === "POST"
-            ? {
-                method,
-                headers: { ...headers, "Content-Type": "application/json" },
-                body: JSON.stringify(body ?? {}),
-              }
-            : { method, headers },
-        ),
-      );
-      const json: T & ErrorBody = yield* uiPromise(() => response.json());
-      if (!response.ok) {
-        const failure = apiError(response.status, Option.getOrUndefined(decodeErrorBody(json)));
-        return yield* failure;
-      }
-      return json;
-    }),
-  );
-}
-
 const makeAppApiClient = HttpApiClient.make(AppApi);
 
 /** The app API (`memory-agent/app-api`), called over `appFetch` like the chat API. */
@@ -512,13 +467,18 @@ class AppApiClient extends Context.Service<AppApiClient, Effect.Success<typeof m
 
 /** What an app API call fails with: a refusal the endpoint declares, or the call itself failing. */
 type AppApiFailure =
-  | { readonly error: ApiErrorCode; readonly reason?: string }
+  | {
+      readonly error: ApiErrorCode;
+      readonly reason?: string;
+      readonly approval?: CrossProviderMediaRunApproval;
+    }
   | HttpClientError.HttpClientError
   | Schema.SchemaError;
 
 /**
  * A call that failed outside the endpoint's refusals. A transport failure keeps its cause, as
- * `appFetch` rejected with it; a status the endpoint does not declare is read like `call` reads it.
+ * `appFetch` rejected with it; a status the endpoint does not declare is read from its body's
+ * `error` and `reason`, or is `request_failed`.
  */
 const clientFailure = (failure: HttpClientError.HttpClientError) =>
   failure.reason._tag === "TransportError"
@@ -545,7 +505,8 @@ const appApiFailure = (invalid: ApiErrorCode) =>
   );
 
 /**
- * Calls the app API through a client over `fetch`; a failure is an `ApiError` as `call` gives.
+ * Calls the app API through a client over `fetch`; a failure is an `ApiError` with the refusal's
+ * status and code.
  * The page's calls go over `appFetch`.
  */
 const appCallOver = (fetch: typeof globalThis.fetch) => {
@@ -939,21 +900,17 @@ export const api = {
     prompt: string,
     approved: boolean,
     crossProviderApproval?: CrossProviderMediaRunApproval,
-  ) => {
-    if (crossProviderApproval === undefined)
-      return call<GeneratedImageAsset>("POST", "/api/media/image", { prompt, approved });
-    return call<GeneratedImageAsset>("POST", "/api/media/image", {
-      prompt,
-      approved,
-      runId: crossProviderApproval.runId,
-      crossProviderApproval: {
-        runId: crossProviderApproval.runId,
-        initiatorChatRouteId: crossProviderApproval.initiatorChatRouteId,
-        executorMediaRouteId: crossProviderApproval.executorMediaRouteId,
-        capability: crossProviderApproval.capability,
-      },
-    });
-  },
+  ) =>
+    appCall(
+      (client) =>
+        client.media.generateImage({
+          payload:
+            crossProviderApproval === undefined
+              ? { prompt, approved }
+              : { prompt, approved, runId: crossProviderApproval.runId, crossProviderApproval },
+        }),
+      "invalid_image_request",
+    ),
 
   kagi: () => appCall((client) => client.settings.kagi()),
   // The client takes a union payload one case at a time.

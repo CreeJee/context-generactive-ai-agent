@@ -23,11 +23,11 @@
 - `readCompatibleReasoning` / `CompatibleModelPage` — 호환 서버 `/models` 페이지에서 모델의 reasoning 레벨을 읽는 dual 함수
 - `CrossProviderMediaConsent` / `makeCrossProviderMediaConsent` / `decideCrossProviderMediaConsent` / `crossProviderMediaConsentKey` / `CrossProviderMediaConsentStoreFailed` — 교차 공급자 미디어 실행 동의(always|ask|disabled) 판정·저장 서비스
 - `ImageFeature` / `makeImageFeature` / `decideImageContext` / `imageProviderWorkflowPrompt` — 이미지 생성 사용자 설정과 턴 단위 이미지 컨텍스트 게이트. 설정 값 `ImageFeatureStatus`는 `contracts.ts`의 Schema다
-- `openAIImageRouteContracts` / `anthropicImageProviderContract` / `productionImageRouteContracts` / `ImageRouteContract` / `ImageExecutorModel` — 이미지 라우트 계약 정의와 운영용 필터
+- `openAIImageRouteContracts` / `anthropicImageProviderContract` / `productionImageRouteContracts` / `ImageRouteContract` / `ImageExecutorModel` — 이미지 라우트 계약 정의와 운영용 필터. `ImageExecutorModel`의 타입은 `ImageExecutorModelSchema`에서 꺼내고 `Data.taggedEnum` 생성자를 붙인다
 - `ImageRouter` / `makeImageRouter` / `rankImageRoutes` / `ImageRouteDecision` / `ImageRerouteConfirmation` / `ImageRouteScore` — 미디어 라우트 점수화·선택 서비스와 결정/재라우팅 확인 TaggedEnum
 - `ImageRouteFacts` — 라우트별 계정 사실 서비스(`layerFrom`, `unavailableLayer`, `authenticatedRoutesLayer`)
 - `DirectImageExecutor` — OpenAI Images API 직접 실행 서비스(`openAIEnvironmentLayer`, `unavailableLayer`, `layerFrom`)와 `DirectImageExecutionFailed`
-- `ImageMediaWorkflow` / `makeImageMediaWorkflow` / `ImageMediaApprovalRequired` / `ImageMediaUnavailable` / `ImageMediaExecutionFailed` / `CrossProviderMediaRunApproval` — 승인→라우팅→실행→첨부 저장 이미지 워크플로
+- `ImageMediaWorkflow` / `makeImageMediaWorkflow` / `ImageMediaApprovalRequired` / `ImageMediaUnavailable` / `ImageMediaExecutionFailed` / `CrossProviderMediaRunApproval` — 승인→라우팅→실행→첨부 저장 이미지 워크플로. 승인·자산 Schema(`CrossProviderMediaRunApproval`, `ImageApprovalReason`, `ImageMediaAsset`)는 브라우저도 쓰는 `image-media-contracts.ts`에 있다
 - `RouteCatalog` / `makeRouteCatalog` / `ChatRoute` / `MediaRoute` / `RouteCatalogRefreshFailed` / `UnknownCatalogRoute` / `IncompatibleCatalogRoutes` — 채팅·미디어 실행 라우트 카탈로그 서비스(route-catalog.ts; 시그니처만 확인)
 - `ProviderToolPolicy` / `ProviderToolRuntime` / `makeProviderToolPolicy` / `decideProviderToolExposure` / `classifyProviderToolRisk` / `hasRequiredProviderToolAuthority` / `normalizeProviderToolUsage` / `normalizeProviderToolCost` 및 `ProviderTool*` TaggedError 다수 — 공급자 네이티브 도구 노출·승인·샌드박스 정책과 실행 런타임(tool-policy.ts; 시그니처만 확인)
 - `ProviderToolCapabilityRegistry` / `makeProviderToolCapabilityRegistry` / `providerToolDescriptors` / `filterProviderTools` / `ProviderToolId` / `providerTools` — 도구 기술자·모델 메타데이터 레지스트리와 도구 ID 스키마(tool-capabilities.ts, provider-tool-id.ts, provider-tools.ts; 이름만 확인)

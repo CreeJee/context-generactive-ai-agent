@@ -12,7 +12,7 @@ import {
 } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import { optionalProperty } from "../optional-property.ts";
-import { Attachments, type Attachment, type AttachmentsApi } from "../attachments/attachments.ts";
+import { Attachments, type AttachmentsApi } from "../attachments/attachments.ts";
 import {
   CrossProviderMediaConsent,
   type CrossProviderMediaConsentApi,
@@ -24,8 +24,12 @@ import {
   type ImageRouteDecision,
   type ImageRouterApi,
 } from "./image-router.ts";
-import { ProviderId } from "./contracts.ts";
 import { ImageExecutorModel } from "./image-contracts.ts";
+import {
+  CrossProviderMediaRunApproval,
+  ImageApprovalReason,
+  type ImageMediaAsset,
+} from "./image-media-contracts.ts";
 import { RouteCatalog, type RouteCatalogApi } from "./route-catalog.ts";
 
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
@@ -162,13 +166,7 @@ export class DirectImageExecutor extends Context.Service<
   ).pipe(Layer.provide(FetchHttpClient.layer));
 }
 
-const RunApproval = Schema.Struct({
-  runId: Schema.String,
-  initiatorChatRouteId: Schema.TemplateLiteral(["chat:", ProviderId, ":", Schema.String]),
-  executorMediaRouteId: Schema.String,
-  capability: Schema.Literal("media.image.generate"),
-});
-export type CrossProviderMediaRunApproval = typeof RunApproval.Type;
+export type { CrossProviderMediaRunApproval, ImageMediaAsset };
 
 export interface ImageMediaRequest {
   readonly initiatorChatRouteId: CrossProviderMediaRunApproval["initiatorChatRouteId"];
@@ -180,25 +178,12 @@ export interface ImageMediaRequest {
   readonly signal?: AbortSignal;
 }
 
-export interface ImageMediaAsset {
-  readonly attachment: Attachment;
-  readonly initiatorChatModel: string;
-  readonly executorMediaRouteId: string;
-  readonly executorMediaModel: ImageRouteDecision["executorMediaModel"];
-  readonly provider: "openai";
-  readonly accountId: string;
-  readonly executionMode: "direct_adapter";
-  readonly estimatedCostUsd?: number;
-  readonly usage?: Readonly<Record<string, number>>;
-  readonly providerRequestId?: string;
-}
-
 export class ImageMediaApprovalRequired extends Schema.TaggedError<
   ImageMediaApprovalRequired,
   { readonly brand: unique symbol }
 >()("ImageMediaApprovalRequired", {
-  reason: Schema.optionalKey(Schema.Literals(["paid_execution", "cross_provider"])),
-  approval: Schema.optionalKey(RunApproval),
+  reason: Schema.optionalKey(ImageApprovalReason),
+  approval: Schema.optionalKey(CrossProviderMediaRunApproval),
 }) {}
 export class ImageMediaUnavailable extends Schema.TaggedError<
   ImageMediaUnavailable,

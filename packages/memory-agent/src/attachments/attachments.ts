@@ -17,26 +17,12 @@ import { Hex } from "effect/encoding";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { StorageRoot } from "../config/storage-root.ts";
 import { requireRuntime } from "../runtime/resources.ts";
+import { Attachment, AttachmentMimeType } from "./contracts.ts";
 
 /** Largest image accepted for upload. */
 export const maxAttachmentBytes = 20 * 1024 * 1024;
 
-export const AttachmentMimeType = Schema.Literals([
-  "image/png",
-  "image/jpeg",
-  "image/gif",
-  "image/webp",
-]);
-export type AttachmentMimeType = typeof AttachmentMimeType.Type;
-
-export const Attachment = Schema.Struct({
-  /** sha256 of the bytes, hex. */
-  id: Schema.String,
-  mimeType: AttachmentMimeType,
-  bytes: Schema.Finite,
-  createdAt: Schema.String,
-});
-export type Attachment = typeof Attachment.Type;
+export { Attachment, AttachmentMimeType };
 
 export class AttachmentRejected extends Schema.TaggedError<
   AttachmentRejected,

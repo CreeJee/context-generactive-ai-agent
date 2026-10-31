@@ -10,7 +10,7 @@
 
 - `Attachments` — `Context.Service` 클래스. 대화에 올린 이미지를 다룬다. `Attachments.layer`로 제공하고 `make`로 만든다
 - `AttachmentsApi` — `Attachments` 서비스 API 타입. 확인한 멤버는 `get(id)`(없거나 id 형식이 틀리면 null), `forModel(attachment)`(모델용 `ModelImage`), `dataUrl(image)`(base64 data URL), `saveDrawing(svg)`(SVG를 그림 첨부로 저장, `previews.ts`가 사용)이다. 업로드 저장, purge 등 나머지 멤버는 scout가 읽지 않았다
-- `Attachment` — Schema.Struct `{ id(sha256 hex), mimeType, bytes, createdAt }`와 같은 이름의 타입
+- `Attachment` — Schema.Struct `{ id(sha256 hex), mimeType, bytes, createdAt }`와 같은 이름의 타입. `AttachmentMimeType`과 함께 서버 코드를 import하지 않는 `contracts.ts`에 있고, `attachments.ts`가 다시 내보낸다
 - `AttachmentMimeType` — `image/png`·`image/jpeg`·`image/gif`·`image/webp` Schema.Literals
 - `AttachmentRejected` — TaggedError. reason은 `empty` | `too_large` | `unsupported_type`
 - `AttachmentStorageFailed` — TaggedError. operation은 `save` | `purge` | `convert`, cause는 Defect

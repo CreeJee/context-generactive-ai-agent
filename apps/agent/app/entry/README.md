@@ -25,10 +25,10 @@
 - `BoardEdit` / `BoardIntent` / `DecisionAnswer` — memory-agent 타입에서 `Data.taggedEnum`으로 만든 생성자·matcher다. 페이지가 서버로 보낼 때 쓴다
 - `KagiCommand` / `ImportCommand` / `EmbeddingCommand` — `/api/settings/kagi`, `/api/settings/imports`, `/api/settings/embedding` 명령 TaggedEnum이다. 비공개 `ImageSettingsCommand`, `ExternalAgentCommand`, `KanbanCommand`도 같은 방식으로 정의된다
 - `EmbedderRuntime` / `GpuState` / `AgentTrustState` / `AgentLinkState` / `McpServerState` / `AccountLoginState` / `ImportActivity` / `WorkflowExecutionState` — 서버 유니온 타입에 `Data.taggedEnum` 생성자·matcher를 붙여 다시 내보낸 것이다
-- `GeneratedImageAsset` / `ImageSettingsView` / `CrossProviderMediaRunApproval` — 이미지 자산(+url) 타입, 이미지 설정 뷰(+crossProviderMediaConsent) 타입, 교차 공급자 실행 승인 `Schema.Struct`다
+- `GeneratedImageAsset` / `ImageSettingsView` / `CrossProviderMediaRunApproval` — 이미지 자산(+url) 타입(계약의 `GeneratedImage`), 이미지 설정 뷰(+crossProviderMediaConsent) 타입, 교차 공급자 실행 승인 `Schema.Struct`(계약에서 다시 내보낸다)다
 - `ConversationSettings` / `RecallSettings` / `KanbanSettings` / `KanbanSettingsCommand` / `ProjectKanbanSettings` / `ProjectKanbanCommand` — 대화·회상·칸반 설정 뷰와 명령 타입으로, `api.ts`에 정의되어 있다
 - `DeliveredEvent` / `ContextEvent` / `eventDecoders` — 스트림 이벤트(대기열 전달, context) `Schema.Struct`와 그 디코더 표다
-- `ErrorBody` / `JsonValue` / `JsonBody` — 오류 응답 본문 Schema와 요청 본문 JSON 타입이다
+- `ErrorBody` — 계약에 없는 상태로 거절된 응답과 첨부 업로드 거절의 본문 Schema다
 - 재내보내기 — `memory-agent/definitions`의 값 `ApprovalRequester`, `NextDelivery`, `QueueEdit`, `QueueItemState`와, `memory-agent`·definitions의 타입(`Session`, `Project`, `ModelSelection`, `ProviderId`, `QueueSnapshot`, `SessionRunState`, `LeaseView`, `BoardView`, `McpOverview`, `SkillCatalog`, `SubagentView`, `WorkflowPhase` 등)을 `api.ts`에서 다시 내보낸다
 - 하위 디렉터리:
   - [`chat`](./chat/README.md) — 한 세션의 대화 패널, 입력창, 메시지 렌더링, 승인 카드, 대기열·BTW·워크플로·작업 추적·보드 패널
@@ -43,7 +43,7 @@
 
 ## Invariants
 
-- 브라우저는 `memory-agent` 루트에서 타입만 import한다(`import type`). 서버로 보내는 유니온의 생성자는 그 타입에서 `Data.taggedEnum`으로 만든다. 도착한 본문은 서버 라우트가 디코드한다(`api.ts` 97-100행 주석). 런타임 값은 `memory-agent/definitions`와 `memory-agent/provider-contracts`에서만 가져온다
+- 브라우저는 `memory-agent` 루트에서 타입만 import한다(`import type`). 서버로 보내는 유니온의 생성자는 그 타입에서 `Data.taggedEnum`으로 만든다. 도착한 본문은 서버 라우트가 디코드한다(`api.ts` 97-100행 주석). 런타임 값은 `memory-agent/app-api`, `memory-agent/definitions`, `memory-agent/provider-contracts`에서만 가져온다
 - `ApiErrorCode`는 브라우저 API가 이해하는 모든 오류 코드 목록이다. 서버가 새 오류 코드를 보내면 이 리터럴 목록에 추가해야 `ApiError`로 디코드된다
 - 세션 보드에 들어가면 프로젝트 보드(`boards`, `boardCard`)를 닫는다(`leaveProjectBoard`). 두 보드는 URL을 함께 쓰지 않는다. 프로젝트를 바꾸면 이전 프로젝트의 session, card, board를 모두 지운다(`leaveProject`)
 - URL의 project가 프로젝트 목록에 없으면 `projects[0]`로 바꾼다. 이때 project가 바뀌었으면 session을 null로 둔다. URL의 session이 활성 세션 목록에 없으면 `sessions[0]`로 바꾼다
@@ -55,7 +55,7 @@
 
 ## Side Effects
 
-- 네트워크: `api`의 `call(method: GET|POST|DELETE, path, body?)`이 `appFetch`로 같은 origin의 `/api/*` 라우트에 HTTP 요청을 보낸다. 실패 응답은 `ErrorBody`로 디코드해 `ApiError`로 만든다(`apiError`)
+- 네트워크: `api`의 메서드는 `appCall`로 앱 API 계약(`memory-agent/app-api`)의 `HttpApiClient`를 `appFetch` 위에서 부른다. 거부는 `appRefusalStatus`의 상태와 함께 `ApiError`가 된다. 계약에 없는 상태의 응답은 `ErrorBody`로 디코드한다(`apiError`)
 - 네트워크: `uploadAttachment(file)`로 첨부 파일을 업로드한다. `generateImage`로 이미지를 생성 요청한다
 - `workTraceStreamUrl(sessionId, after)`로 work trace SSE 스트림 URL을 만든다(구독은 호출자가 맡는다)
 - `api.ts`는 `browserCrypto`(Web Crypto 기반 Effect Crypto)를 import한다

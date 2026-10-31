@@ -145,6 +145,11 @@
   - bundle 수집은 agent가 내보내는 서비스 여럿을 요청마다 요구한다. handler는 group을 만들 때 `Effect.context`로 꺼낸 값을 `Effect.provideContext`로 넣는다.
   - 응답이 바뀐 곳: 설정을 읽거나 쓰지 못한 전송 endpoint는 503이 아니라 500 `settings_unavailable`이다. 503은 페이지가 `invalid_webhook_url`로 읽던 상태라 둘이 부딪쳤고, 다른 group의 `settings_unavailable`도 500이다. evidence의 `no-store`는 성공에만 붙었지만 이제 거부에도 붙는다.
   - 계약에 맞지 않는 payload·query(전에는 `invalid_report_source`, `invalid_report_delivery`, `invalid_report_diagnosis`, `project_and_session_required`)는 HttpApi의 빈 400이다. 페이지는 전에도 이 상태를 `request_failed`로 봤다.
+- 1-5 media 결과 (2026-10-31): `media.image`를 `app-api/media.ts`의 `MediaGroup`으로 옮겼다. 마지막으로 남은 `call<T>` 사용처라 `call`과 요청 본문 타입 `JsonValue`·`JsonBody`도 지웠다.
+  - 계약 Schema는 새 `providers/image-media-contracts.ts`(`CrossProviderMediaRunApproval`, `ImageApprovalReason`, `ImageMediaAsset`)와 새 `attachments/contracts.ts`(`Attachment`, `AttachmentMimeType`)에 둔다. `ImageExecutorModel`은 `ImageExecutorModelSchema`에서 타입을 꺼내고 `Data.taggedEnum` 생성자는 그대로 둔다. 페이지가 따로 선언하던 승인 Schema는 계약의 것을 쓴다.
+  - 유료 호출은 `request.signal` 대신 `Effect.abortSignal`의 signal을 받는다. 페이지가 요청을 끊으면 web handler가 handler를 interrupt하고, 그 Scope가 signal을 abort한다.
+  - 응답이 바뀐 곳: 502 `image_execution_failed`는 `reroute`를 싣지 않는다. 페이지는 이 필드를 읽지 않았고, 싣자면 계약이 라우터의 결정(`ImageRouteDecision`) 전체를 Schema로 가져야 한다. 계약에 맞지 않는 payload(전에는 `invalid_image_request`)는 HttpApi의 빈 400이고, facade는 같은 code를 `appCall`의 invalid code로 준다.
+- 1-5 첨부는 RR 라우트로 남긴다 (2026-10-31). `attachments._index`(업로드)는 본문을 읽기 전에 `Content-Length`를 `maxAttachmentBytes`와 비교해 413으로 거절한다. HttpApi는 handler보다 먼저 payload를 디코드하므로 큰 본문을 다 읽은 뒤에야 거절할 수 있다. `attachments.$attachment`(다운로드)는 `<img src>`가 부르므로 계약으로 얻는 client가 없고, 바이트·immutable 캐시·cross-site 403을 지금 라우트가 그대로 답한다.
 - SSE는 `HttpApiSchema.StreamSse`로 옮긴다. 첨부 업로드(`Content-Length`를 본문보다 먼저 검사)와 다운로드(바이트와 immutable 헤더)가 HttpApi로 같게 안 되면 RR 라우트로 남기고 이유를 적는다.
 
 ### 1-7. 정리

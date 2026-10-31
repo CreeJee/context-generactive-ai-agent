@@ -1,12 +1,14 @@
-import { OPENAI_IMAGE_MODELS, type OpenAIImageModel } from "./model-catalog.ts";
-import { Data } from "effect";
+import { OPENAI_IMAGE_MODELS, OpenAIImageModel } from "./model-catalog.ts";
+import { Data, Schema } from "effect";
 
 export type ImageExecutionMode = "provider_tool" | "direct_adapter";
 export type ImageRouteVerification = "unverified" | "verified" | "unsupported";
-export type ImageExecutorModel = Data.TaggedEnum<{
-  provider_managed: {};
-  explicit: { readonly model: OpenAIImageModel };
-}>;
+/** The model an image route runs: the provider's own choice, or one named model. */
+export const ImageExecutorModelSchema = Schema.TaggedUnion({
+  provider_managed: {},
+  explicit: { model: OpenAIImageModel },
+});
+export type ImageExecutorModel = typeof ImageExecutorModelSchema.Type;
 export const ImageExecutorModel = Data.taggedEnum<ImageExecutorModel>();
 
 export interface ImageRouteContract {
