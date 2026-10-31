@@ -15,7 +15,7 @@
 - `CardPeek` — 오른쪽 Sheet peek 패널이다. 카드 상세, DecisionPrompt, 보류 사유와 검증 의견, 편집기, 새 카드 폼, 다른 대화로 옮기기 Select, Hold/Release/Requeue 버튼을 보여 준다
 - `Peek` — peek 내용을 나타내는 TaggedEnum이다: `New` 또는 `Card{cardId, editing}`
 - `TransferTarget` — 카드를 옮길 수 있는 같은 프로젝트의 다른 대화 정보(sessionId, label)
-- `CardFace` / `CardSignals` — 보드와 드래그 오버레이가 함께 쓰는 카드 앞면이다. CardSignals는 판단 대기, 변경 요청 대기, 요청 중, 사유, 의존 카드 제목, 그룹을 담는다
+- `CardFace` / `CardSignals` — 보드와 드래그 오버레이가 함께 쓰는 카드 앞면이다. CardSignals는 판단 대기, 변경 요청 대기, 요청 중, 사유, 아직 끝나지 않은 선행 카드 제목, 그룹을 담는다
 - `StatusIcon` / `AuthorAvatar` / `authorLabel` / `riskLabels` — 상태 아이콘, 마지막 변경자(User/Orchestrator) 아바타와 라벨, 위험도 라벨
 - `BoardCard` / `BoardCardRef` / `boardCardKey` / `parseBoardCardKey` — 보드 카드 타입과 (sessionId, cardId) 참조, `${sessionId}:${cardId}` 키 생성과 파싱
 - `BoardItem` / `boardItem` — sessionId와 보드 전체에서 고유한 key를 붙인 카드다. boardItem은 `Function.dual` 생성자다

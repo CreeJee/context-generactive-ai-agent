@@ -59,6 +59,10 @@ export interface SurfaceBoard {
   readonly rank: number | null;
 }
 
+/** What switching an executing Plan to the board changes, for the button's tooltip. */
+export const kanbanSwitchHint =
+  "카드마다 에이전트를 따로 두고 보드가 배정·검증·통합해요. 이 대화의 모델은 카드를 직접 실행하지 않아요.";
+
 export const errorText = (code: ApiErrorCode) => {
   switch (code) {
     case "plan_version_conflict":
@@ -241,6 +245,8 @@ export function BoardSurface({
     cards.find((item) => item.key === boardCardKey(ref)) ?? null;
   const titleIn = (sessionId: string) => (cardId: string) =>
     boardOf(sessionId)?.view.cards.find(({ card }) => card.id === cardId)?.card.title ?? cardId;
+  const doneIn = (sessionId: string, cardId: string) =>
+    boardOf(sessionId)?.view.cards.find(({ card }) => card.id === cardId)?.card.status === "done";
   const loopCard = (ref: BoardCardRef) =>
     boardOf(ref.sessionId)?.loop?.cards.find((card) => card.cardId === ref.cardId) ?? null;
   const decisionsOf = (ref: BoardCardRef) =>
@@ -253,7 +259,9 @@ export function BoardSurface({
     changePending: changePending(refOf(item)),
     requesting: pending?.key === item.key,
     reason: holdText(loopCard(refOf(item))?.reason ?? null),
-    dependsOn: item.card.dependsOn.map(titleIn(item.sessionId)),
+    waitingOn: item.card.dependsOn
+      .filter((cardId) => !doneIn(item.sessionId, cardId))
+      .map(titleIn(item.sessionId)),
     group: boardOf(item.sessionId)?.label ?? null,
   });
   const contextOf = (item: BoardItem): DropContext => {

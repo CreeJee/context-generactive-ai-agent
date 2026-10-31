@@ -29,7 +29,7 @@ import { sessionQueries } from "../../queries/session";
 import { LoopHealthStatus } from "../../shared/loop-health";
 import { planStatusLabels } from "../workflow-panel";
 import { boardColumns, type BoardCardRef } from "./board-moves";
-import { BoardSurface, editErrorText, type SurfaceBoard } from "./board-surface";
+import { BoardSurface, editErrorText, kanbanSwitchHint, type SurfaceBoard } from "./board-surface";
 
 const cardsOf = (row: ProjectBoardRow) =>
   boardColumns.reduce((sum, status) => sum + row.counts[status], 0);
@@ -323,7 +323,7 @@ function ConversationRow({
       ) : (
         <Badge variant="outline">{planStatusLabels[row.plan.status]}</Badge>
       )}
-      {loop !== null && (
+      {loop !== null && loop.loop._tag !== "Healthy" && (
         <LoopHealthStatus
           label="보드 루프"
           health={loop.loop}
@@ -332,19 +332,20 @@ function ConversationRow({
         />
       )}
       <span className="text-muted-foreground">
-        Plan v{row.plan.version} · 완료 {row.counts.done}/{cardsOf(row)}
+        완료 {row.counts.done}/{cardsOf(row)}
       </span>
       {decisions > 0 && <Badge variant="outline">판단 대기 {decisions}</Badge>}
       {pendingChanges > 0 && <Badge variant="outline">변경 요청 대기 {pendingChanges}</Badge>}
       <span className="ml-auto flex flex-wrap items-center gap-1">
-        {loop === null && (
+        {loop === null && row.plan.status === "executing" && (
           <Button
             type="button"
             size="xs"
+            title={kanbanSwitchHint}
             disabled={kanbanAction.isPending}
             onClick={() => act(KanbanAction.Start())}
           >
-            칸반으로 실행
+            칸반으로 전환
           </Button>
         )}
         <Button

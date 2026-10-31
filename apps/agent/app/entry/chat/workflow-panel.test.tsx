@@ -15,6 +15,7 @@ const props = {
   onStop: () => {},
   onRevise: () => {},
   onExecute: () => {},
+  kanbanRunning: false,
 };
 function button(html: string, label: string) {
   const match = html.match(new RegExp(`<button[^>]*>\\s*${label}\\s*</button>`));
@@ -56,7 +57,7 @@ describe("server-authoritative workflow UI", () => {
   test("shows verification only while the plan is executing", () => {
     const state = { ...workflowFixture, phase: "verify" as const };
     const executing = renderToStaticMarkup(<WorkflowArtifactPanel {...props} state={state} />);
-    expect(executing).toContain("Plan v4 · 검증 중");
+    expect(executing).toContain("검증 중");
 
     for (const [status, label] of [
       ["blocked", "막힘"],
@@ -66,9 +67,23 @@ describe("server-authoritative workflow UI", () => {
       const html = renderToStaticMarkup(
         <WorkflowArtifactPanel {...props} state={{ ...state, plan: { ...state.plan!, status } }} />,
       );
-      expect(html).toContain(`Plan v4 · ${label}`);
-      expect(html).not.toContain("Plan v4 · 검증 중");
+      expect(html).toContain(label);
+      expect(html).not.toContain("검증 중");
     }
+  });
+  test("leaves the Plan to a running board's loop instead of offering to continue it", () => {
+    const actions = {
+      ...allowedWorkflowActions,
+      phases: {
+        ...allowedWorkflowActions.phases,
+        execute: { allowed: true as const, intent: "continue" as const },
+      },
+    };
+    const html = renderToStaticMarkup(
+      <WorkflowArtifactPanel {...props} actions={actions} kanbanRunning />,
+    );
+    expect(html).not.toContain("구현 계속");
+    expect(html).toContain("수정 요청");
   });
   test("uses server execute intent instead of inferring it from plan status", () => {
     // An executing artifact used to force the continue label. The server owns the decision.

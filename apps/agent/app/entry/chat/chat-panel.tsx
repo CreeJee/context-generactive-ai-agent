@@ -8,7 +8,6 @@ import { cn } from "cn";
 import type { TraceTaskView } from "memory-agent";
 import { Option } from "effect";
 import { useAtom } from "jotai";
-import { parseAsBoolean, parseAsString, useQueryStates } from "nuqs";
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 import { useLoading } from "react-simplikit";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
@@ -66,6 +65,7 @@ import {
   useDeleteTraceTaskMutation,
   useResumeTraceTaskMutation,
 } from "../queries/mutations/session";
+import { useKanbanQuery } from "../queries/session";
 import { WorkflowBoard } from "./board-panel";
 import {
   WorkflowArtifactPanel,
@@ -261,10 +261,8 @@ function ChatPanel({
   sendingEnabled: boolean;
 }) {
   const projectId = useProjectScope("chat");
-  // The inbox leads here with the card to open the board on. Closing only the card peek
-  // keeps the board, so the summary holding it stays mounted.
-  const [boardLocation] = useQueryStates({ board: parseAsBoolean, card: parseAsString });
-  const boardOpen = boardLocation.board === true || boardLocation.card !== null;
+  // A board's loop runs the cards, so the chat model does not continue the Plan itself.
+  const kanbanRunning = useKanbanQuery(projectId, sessionId).data?.active === true;
   // `mutateAsync` is the same function on every render, so the task actions built on it keep their
   // identity and a message renders again only for a change of its own.
   const { mutateAsync: resumeTrace } = useResumeTraceTaskMutation(projectId, sessionId, holder);
@@ -942,13 +940,12 @@ function ChatPanel({
           onStop={() => void controlGoal("stop")}
           onRevise={() => void revisePlan()}
           onExecute={() => void executePlan()}
-          boardOpen={boardOpen}
-          board={
+          kanbanRunning={kanbanRunning}
+          boardSlot={
             <WorkflowBoard
               projectId={projectId}
               sessionId={sessionId}
               holder={holder}
-              // Board edits need the session lease, not a signed-in model.
               disabled={readOnly || backendRestartRequired}
             />
           }

@@ -46,6 +46,7 @@ import { boardColumns, cardStatusLabels } from "./board/board-moves";
 import {
   BoardSurface,
   editErrorText,
+  kanbanSwitchHint,
   type ActiveKanban,
   type BoardPlan,
 } from "./board/board-surface";
@@ -92,6 +93,14 @@ export function WorkflowBoard({
   const loop = kanban.data?.active === true ? kanban.data : null;
   const total = view.cards.length;
   const done = view.cards.filter(({ card }) => card.status === "done").length;
+  // The progress line already counts the finished cards; empty columns say nothing.
+  const counts = boardColumns
+    .filter((status) => status !== "done")
+    .map((status) => ({
+      status,
+      count: view.cards.filter(({ card }) => card.status === status).length,
+    }))
+    .filter(({ count }) => count > 0);
   const waiting = decisions.length;
   const open = location.board === true || location.card !== null;
   const start = () => {
@@ -110,16 +119,17 @@ export function WorkflowBoard({
   return (
     <div className="min-w-0 space-y-3">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs text-muted-foreground">Plan v{plan.version}</span>
         {loop !== null ? (
           <>
             <Badge variant="secondary">칸반 실행 중</Badge>
-            <LoopHealthStatus
-              label="보드 루프"
-              health={loop.loop}
-              disabled={disabled || kanbanAction.isPending}
-              onRestart={restart}
-            />
+            {loop.loop._tag !== "Healthy" && (
+              <LoopHealthStatus
+                label="보드 루프"
+                health={loop.loop}
+                disabled={disabled || kanbanAction.isPending}
+                onRestart={restart}
+              />
+            )}
           </>
         ) : (
           plan.status === "executing" && (
@@ -127,16 +137,18 @@ export function WorkflowBoard({
               type="button"
               size="sm"
               variant="outline"
+              title={kanbanSwitchHint}
               disabled={disabled || kanbanAction.isPending}
               onClick={start}
             >
-              칸반으로 실행
+              칸반으로 전환
             </Button>
           )
         )}
         <Button
           type="button"
           size="sm"
+          variant="outline"
           className="ml-auto"
           onClick={() => openBoard(location.card)}
         >
@@ -172,17 +184,17 @@ export function WorkflowBoard({
             style={{ "--board-progress": `${total === 0 ? 0 : (done / total) * 100}%` }}
           />
         </div>
-        <ul className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-          {boardColumns.map((status) => (
-            <li key={status} className="flex items-center gap-1">
-              <StatusIcon status={status} />
-              {cardStatusLabels[status]}
-              <span className="font-medium text-foreground">
-                {view.cards.filter(({ card }) => card.status === status).length}
-              </span>
-            </li>
-          ))}
-        </ul>
+        {counts.length > 0 && (
+          <ul className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+            {counts.map(({ status, count }) => (
+              <li key={status} className="flex items-center gap-1">
+                <StatusIcon status={status} />
+                {cardStatusLabels[status]}
+                <span className="font-medium text-foreground">{count}</span>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
       {open && (
         <BoardSheet
@@ -253,6 +265,12 @@ function BoardSheet({
     kanbanAction.mutate(action, { onError: (error) => setActionError(editErrorText(error)) });
   };
   const goalDecisions = decisions.filter((request) => request.cardId === goalDecisionCardId);
+  // The folded panel is named after what it holds, not every part it could hold.
+  const extras = [
+    ...(loop?.schedule != null ? ["Goal 스케줄"] : []),
+    ...(view.pendingChanges.length > 0 ? ["대기 중인 변경"] : []),
+    ...(view.history.length > 0 ? ["변경 이력"] : []),
+  ];
 
   return (
     <Sheet
@@ -268,9 +286,8 @@ function BoardSheet({
           <SheetTitle>칸반 보드</SheetTitle>
           <SheetDescription>
             <span className="flex flex-wrap items-center gap-2">
-              <span>Plan v{plan.version}</span>
               {loop !== null && <Badge variant="secondary">칸반 실행 중</Badge>}
-              {loop !== null && (
+              {loop !== null && loop.loop._tag !== "Healthy" && (
                 <LoopHealthStatus
                   label="보드 루프"
                   health={loop.loop}
@@ -292,10 +309,11 @@ function BoardSheet({
               <Button
                 type="button"
                 size="sm"
+                title={kanbanSwitchHint}
                 disabled={disabled || kanbanAction.isPending}
                 onClick={() => act(KanbanAction.Start())}
               >
-                칸반으로 실행
+                칸반으로 전환
               </Button>
             )}
             <Button
@@ -353,16 +371,14 @@ function BoardSheet({
               </DialogFooter>
             </DialogContent>
           </Dialog>
-          {(loop?.schedule != null ||
-            view.pendingChanges.length > 0 ||
-            view.history.length > 0) && (
+          {extras.length > 0 && (
             <Collapsible
               className="rounded-md border"
               defaultOpen={goalDecisions.length > 0 || view.pendingChanges.length > 0}
             >
               <CollapsibleTrigger className="group flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring">
                 <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground group-data-[panel-open]:rotate-90" />
-                <span className="font-medium">Goal 스케줄 · 대기 중인 변경 · 이력</span>
+                <span className="font-medium">{extras.join(" · ")}</span>
                 {goalDecisions.length > 0 && (
                   <Badge variant="outline">판단 대기 {goalDecisions.length}</Badge>
                 )}

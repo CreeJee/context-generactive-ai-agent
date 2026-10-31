@@ -1,17 +1,10 @@
 import { isTruthy } from "../../truthy.ts";
 import type { ReactNode } from "react";
-import { ChevronRightIcon } from "lucide-react";
 import type { SessionRunState } from "memory-agent/definitions";
 import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
 import { Button } from "../../components/ui/button";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "../../components/ui/collapsible";
 import { WorkflowExecutionState, type WorkflowPhase, type WorkflowState } from "../api";
 import { koreanLocalTime } from "../shared/local-time";
-import { cardStatusLabels } from "./board-panel";
 
 const localTime = (epochMillis: number) => koreanLocalTime(epochMillis);
 
@@ -83,8 +76,8 @@ export function WorkflowArtifactPanel({
   onStop,
   onRevise,
   onExecute,
-  board,
-  boardOpen = false,
+  kanbanRunning,
+  boardSlot,
 }: {
   readonly state: WorkflowState | null;
   readonly display?: SessionRunState["display"];
@@ -99,10 +92,9 @@ export function WorkflowArtifactPanel({
   readonly onStop: () => void;
   readonly onRevise: () => void;
   readonly onExecute: () => void;
-  /** Kanban board of the Plan, opened on demand. */
-  readonly board?: ReactNode;
-  /** Opens the board at first, as when the inbox leads to one of its cards. */
-  readonly boardOpen?: boolean;
+  /** The board's loop runs the cards, so there is no Plan to continue from the chat. */
+  readonly kanbanRunning: boolean;
+  readonly boardSlot?: ReactNode;
 }) {
   if (!(state !== null) || state.phase === "chat") return null;
   if (state.phase === "goal") {
@@ -182,21 +174,9 @@ export function WorkflowArtifactPanel({
   const execute = actions?.phases.execute;
   const continuingImplementation = execute?.allowed && execute.intent === "continue";
   const outdated = execute && !execute.allowed && execute.reason === "plan_outdated";
-  const completedStepCounnt = plan.steps.filter((step) => step.status === "done").length + 1;
-  const activeStep =
-    plan.steps.find((step) => step.status === "in_progress") ??
-    plan.steps.find((step) => step.status === "blocked") ??
-    plan.steps.find((step) => step.status === "ready" || step.status === "backlog");
-  const activeStepLabel =
-    activeStep?.status === "in_progress"
-      ? "현재"
-      : activeStep?.status === "blocked"
-        ? "막힘"
-        : "다음";
   return (
     <Alert>
       <AlertTitle>
-        Plan v{plan.version} ·{" "}
         {state.phase === "verify" && plan.status === "executing"
           ? "검증 중"
           : planStatusLabels[plan.status]}
@@ -225,60 +205,7 @@ export function WorkflowArtifactPanel({
             </p>
           )
         )}
-        <Collapsible className="rounded-md border bg-background/50">
-          <CollapsibleTrigger className="group cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring flex w-full items-center gap-2 px-3 py-2 text-left">
-            <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground group-data-[panel-open]:rotate-90" />
-            <span className="shrink-0 font-medium">
-              단계 {completedStepCounnt}/{plan.steps.length}
-            </span>
-            {activeStep && (
-              <span className="min-w-0 truncate text-muted-foreground">
-                {activeStepLabel}: {activeStep.title}
-              </span>
-            )}
-            <span className="ml-auto shrink-0 text-xs text-muted-foreground">계획 내용</span>
-          </CollapsibleTrigger>
-          <CollapsibleContent className="max-h-80 space-y-3 overflow-y-auto border-t px-3 py-3">
-            <p className="whitespace-pre-wrap">{plan.summary}</p>
-            {plan.steps.length > 0 && (
-              <ol className="list-decimal space-y-1.5 pl-5">
-                {plan.steps.map((step) => (
-                  <li key={step.id}>
-                    {step.title} · {cardStatusLabels[step.status]}
-                    {step.evidence.length > 0 && (
-                      <ul className="list-disc pl-5 text-muted-foreground">
-                        {step.evidence.map((item) => (
-                          <li key={item}>{item}</li>
-                        ))}
-                      </ul>
-                    )}
-                  </li>
-                ))}
-              </ol>
-            )}
-            {plan.verification.status !== "not_run" && (
-              <p>
-                검증 {verificationStatusLabels[plan.verification.status]} ·{" "}
-                {plan.verification.summary}
-              </p>
-            )}
-          </CollapsibleContent>
-        </Collapsible>
-        {isTruthy(board) && (
-          <Collapsible
-            // Remounts when the inbox asks for the board, even while this panel is open.
-            key={String(boardOpen)}
-            className="mt-3 min-w-0 rounded-md border bg-background/50"
-            defaultOpen={boardOpen}
-          >
-            <CollapsibleTrigger className="group cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring flex w-full items-center gap-2 px-3 py-2 text-left">
-              <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground group-data-[panel-open]:rotate-90" />
-              <span className="font-medium">칸반 보드</span>
-              <span className="ml-auto shrink-0 text-xs text-muted-foreground">진행 요약</span>
-            </CollapsibleTrigger>
-            <CollapsibleContent className="min-w-0 border-t px-3 py-3">{board}</CollapsibleContent>
-          </Collapsible>
-        )}
+        {boardSlot}
         {outdated && (
           <p className="mt-3 text-destructive">Goal이 변경되어 이 계획을 다시 확인해야 해요.</p>
         )}
@@ -292,14 +219,16 @@ export function WorkflowArtifactPanel({
           >
             수정 요청
           </Button>
-          <Button
-            type="button"
-            size="sm"
-            disabled={!isTruthy(execute?.allowed) || busy || disabled || controlling}
-            onClick={onExecute}
-          >
-            {isTruthy(continuingImplementation) ? "구현 계속" : "계획 실행"}
-          </Button>
+          {!kanbanRunning && (
+            <Button
+              type="button"
+              size="sm"
+              disabled={!isTruthy(execute?.allowed) || busy || disabled || controlling}
+              onClick={onExecute}
+            >
+              {isTruthy(continuingImplementation) ? "구현 계속" : "계획 실행"}
+            </Button>
+          )}
         </div>
       </AlertDescription>
     </Alert>

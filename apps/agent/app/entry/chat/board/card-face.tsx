@@ -86,8 +86,8 @@ export interface CardSignals {
   /** A request about the card is on its way; the card shows where it is expected to land. */
   readonly requesting: boolean;
   readonly reason: string | null;
-  /** Titles of the cards it depends on. */
-  readonly dependsOn: readonly string[];
+  /** Titles of the cards it depends on that are not done yet. */
+  readonly waitingOn: readonly string[];
   /** The conversation the card belongs to, when the board shows several Plans. */
   readonly group: string | null;
 }
@@ -137,11 +137,10 @@ export function CardFace({
           </Badge>
         )}
         {signals.changePending && <Badge variant="outline">변경 요청 대기</Badge>}
-        {signals.dependsOn.length > 0 && (
-          <span className="inline-flex items-center gap-0.5" title={signals.dependsOn.join(", ")}>
+        {signals.waitingOn.length > 0 && (
+          <span className="inline-flex items-center gap-0.5" title={signals.waitingOn.join(", ")}>
             <LinkIcon aria-hidden className="size-3" />
-            <span className="sr-only">의존:</span>
-            {signals.dependsOn.length}
+            선행 {signals.waitingOn.length}
           </span>
         )}
         <AuthorAvatar change={entry.lastChange} />
