@@ -348,8 +348,9 @@ function ChatPanel({
   const awaitingApproval = approvals.map((approval) => approval.toolCallId);
   // A run rejoined after a reload streams without a local request, so both count as busy.
   const generating = isLoading || sessionGenerating;
-  // Sent, and nothing of the answer has come yet.
-  const submitted = generating && messages.at(-1)?.role === "user";
+  // Sent, by the user or the orchestrator, and nothing of the answer has come yet.
+  const submitted =
+    generating && (messages.at(-1)?.role === "user" || messages.at(-1)?.role === "orchestrator");
   // A turn that was not sent is newer than the failure of the run before it.
   const noAnswer = unsent ?? failure;
   // What the conversation ends with: text means an answer, a tool call means work in between.

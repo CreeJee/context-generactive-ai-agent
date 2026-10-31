@@ -92,9 +92,13 @@ export {
   GpuCheck,
   ModelFeatureFlagSettings,
   Settings,
-  SummaryStartPercent,
   type GlobalConfigApi,
 } from "./config/global-config.ts";
+export {
+  KanbanConcurrency,
+  SummaryStartPercent,
+  kanbanConcurrencyLimit,
+} from "./config/contracts.ts";
 export {
   SecretStore,
   SecretStoreFailed,
