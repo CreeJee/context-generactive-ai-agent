@@ -1,4 +1,4 @@
-import { Effect, MutableRef, Option, Schedule, Schema } from "effect";
+import { Effect, MutableRef, Option, Schedule } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat, attachmentInstructions } from "../../src/agent/chat.ts";
 import { sessionMessages } from "../../src/agent/history.ts";
@@ -20,7 +20,7 @@ import { eventsOf, openPage, streamedText } from "../support/chat-client.ts";
 import { tinyPng } from "../support/images.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
-import { freshSession, invocationsOf, json } from "./tab.ts";
+import { freshSession, invocationsOf } from "./tab.ts";
 import { sqlGet, sqlRun } from "../support/sql.ts";
 
 /** Starts one run on the chat API: its stream of events, or the server's refusal. */
@@ -136,17 +136,14 @@ testAgent({ testProvider: {} })("chat runs", (it) => {
       yield* Effect.acquireRelease(config.update({ workTraceEnabled: false }), () =>
         Effect.orDie(config.update({ workTraceEnabled: true })),
       );
-      const hidden = yield* agent.traceTree(sessionId);
-      expect(hidden.status).toBe(404);
-      expect(yield* json(hidden)).toEqual({ error: "work_trace_disabled" });
+      expect(yield* Effect.flip(agent.traceTree(sessionId))).toEqual({
+        error: "work_trace_disabled",
+      });
       expect(yield* traces()).toEqual({ count: 1 });
 
       yield* config.update({ workTraceEnabled: true });
       const visible = yield* agent.traceTree(sessionId);
-      expect(visible.status).toBe(200);
-      expect(
-        yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(yield* json(visible)),
-      ).toContain(handle.taskId);
+      expect(visible.tasks.map((task) => task.id)).toContain(handle.taskId);
     }),
   );
 

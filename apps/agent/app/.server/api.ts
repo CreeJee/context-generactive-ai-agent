@@ -15,6 +15,7 @@ import { ProjectsApiHandlers } from "./api/projects.ts";
 import { AccountsApiHandlers, AuthApiHandlers, ModelsApiHandlers } from "./api/providers.ts";
 import { SessionsApiHandlers } from "./api/sessions.ts";
 import { SettingsApiHandlers } from "./api/settings.ts";
+import { TraceApiHandlers } from "./api/trace.ts";
 import { crossSiteRefusal } from "./http.ts";
 
 /** The page's routes refuse another site's change with `rejectCrossSite`; the API with this. */
@@ -57,6 +58,7 @@ const appApiRoutes = HttpApiBuilder.layer(AppApi).pipe(
       AccountsApiHandlers,
       ModelsApiHandlers,
       SessionsApiHandlers,
+      TraceApiHandlers,
     ),
   ),
   Layer.provide(Layer.merge(SameSiteLive, NoStoreLive)),

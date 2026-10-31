@@ -27,6 +27,7 @@ import {
   type ProjectSettings,
   type ProviderAuthState as ProviderAuthStateCase,
   type RecallSettings,
+  ResumeTaskResult,
   type ScanCommand as ScanCommandCase,
   Session,
   type SessionChange as SessionChangeCase,
@@ -73,8 +74,6 @@ import type {
   PermissionMode,
   Project,
   SkillCatalog,
-  TraceTaskDetail,
-  TraceTreeSnapshot,
   WorkflowAction,
   WorkflowPhase,
   AccountLoginState as AccountLoginStateCase,
@@ -85,7 +84,6 @@ import type {
 import { Option, Schema } from "effect";
 import { appFetch } from "./shared/backend-restart";
 import {
-  sessionHolderHeader,
   type CancelResult,
   type CompactResult,
   type ContextView,
@@ -318,6 +316,7 @@ export const ApiErrorCode = Schema.Literals([
   "invalid_session_change",
   "invalid_settings",
   "invalid_stream_offset",
+  "invalid_trace_task_action",
   "invalid_uncertain_continue",
   "kagi_key_required",
   "keychain_failed",
@@ -382,12 +381,14 @@ export const ApiErrorCode = Schema.Literals([
   "steps_incomplete",
   "storage_failed",
   "subagent_not_found",
+  "trace_task_not_found",
   "uncertain_runs_changed",
   "unknown_attachment",
   "unknown_step",
   "upload_failed",
   "user_turn_required",
   "verification_required",
+  "work_trace_disabled",
 ]);
 export type ApiErrorCode = typeof ApiErrorCode.Type;
 
@@ -429,16 +430,11 @@ const ErrorBody = Schema.Struct({
 });
 const decodeErrorBody = Schema.decodeUnknownOption(ErrorBody);
 type ErrorBody = typeof ErrorBody.Type;
-export const ResumeTaskResult = Schema.TaggedUnion({
-  queued: { jobId: Schema.String, taskId: Schema.String, expectedAttemptId: Schema.String },
-  blocked: { reason: Schema.String },
-});
-const decodeResumeTaskResult = Schema.decodeUnknownOption(ResumeTaskResult);
-export type ResumeTaskResult = typeof ResumeTaskResult.Type;
+/** A task's retry: queued for the next parent run, or why it cannot be. */
+export { ResumeTaskResult };
 /** A task's or conversation's archive, restore or delete: done, waiting, or blocked. */
 export const ArchiveTaskResult = LifecycleResult;
 export type ArchiveTaskResult = LifecycleResult;
-const decodeArchiveTaskResult = Schema.decodeUnknownOption(ArchiveTaskResult);
 /** A lifecycle change the server has not finished: why it is blocked, or the stop it waits for. */
 export type PendingLifecycle = Exclude<
   ArchiveTaskResult,
@@ -644,6 +640,37 @@ const changeWorkflow = (
       Effect.filterOrFail(Schema.is(WorkflowState), unexpectedAnswer),
     );
   }, "invalid_session_change");
+
+/**
+ * Archives or deletes one task. A change that cannot start (409) or is still waiting (202) comes
+ * back as the result; one that went ahead tells the trace views to reread.
+ */
+const changeTraceTask = (
+  session: string,
+  holder: string,
+  task: string,
+  intent: "archive" | "delete",
+) =>
+  appCall(
+    (client) =>
+      Effect.flatMap(Effect.orDie(browserCrypto.randomUUIDv4()), (idempotencyKey) =>
+        client.trace.changeTask({
+          params: { session, task },
+          headers: { "x-session-holder": holder },
+          payload: { intent, idempotencyKey },
+        }),
+      ).pipe(
+        Effect.catchTag("blocked", Effect.succeed),
+        Effect.filterOrFail(Schema.is(ArchiveTaskResult), unexpectedAnswer),
+        Effect.tap((result) =>
+          Effect.when(
+            Effect.sync(() => window.dispatchEvent(new CustomEvent("work-trace:changed"))),
+            Effect.succeed(!ArchiveTaskResult.guards.blocked(result)),
+          ),
+        ),
+      ),
+    "invalid_trace_task_action",
+  );
 
 /** Changes the project's settings that `payload` names; the others stay as they are. */
 const updateProject = (project: string, payload: ProjectSettings) =>
@@ -1079,127 +1106,40 @@ export const api = {
 
   skills: (project: string) => appCall((client) => client.projects.skills({ params: { project } })),
 
-  projectWorkTrace: (projectId: string) =>
-    call<TraceTreeSnapshot>("GET", `/api/projects/${encodeURIComponent(projectId)}/trace`),
-  projectWorkTraceTask: (projectId: string, taskId: string) =>
-    call<TraceTaskDetail>(
-      "GET",
-      `/api/projects/${encodeURIComponent(projectId)}/trace/tasks/${encodeURIComponent(taskId)}`,
-    ),
-  workTrace: (sessionId: string) =>
-    call<TraceTreeSnapshot>("GET", `/api/sessions/${encodeURIComponent(sessionId)}/trace`),
-  workTraceTask: (sessionId: string, taskId: string) =>
-    call<TraceTaskDetail>(
-      "GET",
-      `/api/sessions/${encodeURIComponent(sessionId)}/trace/tasks/${encodeURIComponent(taskId)}`,
-    ),
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  projectWorkTrace: (project: string) =>
+    appCall((client) => client.trace.projectTree({ params: { project } })),
+  projectWorkTraceTask: (project: string, task: string) =>
+    appCall((client) => client.trace.projectTask({ params: { project, task } })),
+  workTrace: (session: string) =>
+    appCall((client) => client.trace.sessionTree({ params: { session } })),
+  workTraceTask: (session: string, task: string) =>
+    appCall((client) => client.trace.sessionTask({ params: { session, task } })),
   resumeWorkTraceTask: (
-    sessionId: string,
+    session: string,
     holder: string,
-    taskId: string,
+    task: string,
     expectedAttemptId: string,
     confirmUncertain = false,
-  ): Promise<ResumeTaskResult> =>
-    runUiEffect(
-      Effect.gen(function* () {
-        // Native Request/Response adapter preserves host and SDK stream semantics.
-        const response = yield* uiPromise(() =>
-          appFetch(
-            `/api/sessions/${encodeURIComponent(sessionId)}/trace/tasks/${encodeURIComponent(taskId)}`,
-            {
-              method: "POST",
-              headers: { [sessionHolderHeader]: holder, "Content-Type": "application/json" },
-              body: JSON.stringify({ intent: "resume", expectedAttemptId, confirmUncertain }),
-            },
+  ) =>
+    appCall(
+      (client) =>
+        client.trace
+          .changeTask({
+            params: { session, task },
+            headers: { "x-session-holder": holder },
+            payload: { intent: "resume", expectedAttemptId, confirmUncertain },
+          })
+          .pipe(
+            // A safety refusal is an expected action result, not a transport failure.
+            Effect.catchTag("blocked", Effect.succeed),
+            Effect.filterOrFail(Schema.is(ResumeTaskResult), unexpectedAnswer),
           ),
-        );
-        const body: unknown = yield* uiPromise(() => response.json());
-        const result = Option.getOrUndefined(decodeResumeTaskResult(body));
-        // A safety refusal is an expected action result, not a transport failure.
-        if (response.status === 409 && ResumeTaskResult.guards.blocked(result)) return result;
-        if (!response.ok)
-          return yield* apiError(response.status, Option.getOrUndefined(decodeErrorBody(body)));
-        if (!ResumeTaskResult.guards.queued(result)) return yield* apiError(502, undefined);
-        return result;
-      }),
+      "invalid_trace_task_action",
     ),
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  archiveWorkTraceTask: (
-    sessionId: string,
-    holder: string,
-    taskId: string,
-  ): Promise<ArchiveTaskResult> =>
-    runUiEffect(
-      Effect.gen(function* () {
-        const idempotencyKey = yield* browserCrypto.randomUUIDv4();
-        // Native Request/Response adapter preserves host and SDK stream semantics.
-        const response = yield* uiPromise(() =>
-          appFetch(
-            `/api/sessions/${encodeURIComponent(sessionId)}/trace/tasks/${encodeURIComponent(taskId)}`,
-            {
-              method: "POST",
-              headers: { [sessionHolderHeader]: holder, "Content-Type": "application/json" },
-              // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
-              body: JSON.stringify({
-                intent: "archive",
-                idempotencyKey: idempotencyKey,
-              }),
-            },
-          ),
-        );
-        const body: unknown = yield* uiPromise(() => response.json());
-        const result = Option.getOrUndefined(decodeArchiveTaskResult(body));
-        if (response.status === 409 && ArchiveTaskResult.guards.blocked(result)) return result;
-        if (!response.ok)
-          return yield* apiError(response.status, Option.getOrUndefined(decodeErrorBody(body)));
-        if (
-          !isTruthy(result) ||
-          !ArchiveTaskResult.isAnyOf(["completed", "waiting_for_stop"])(result)
-        )
-          return yield* apiError(502, undefined);
-        window.dispatchEvent(new CustomEvent("work-trace:changed"));
-        return result;
-      }),
-    ),
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  deleteWorkTraceTask: (
-    sessionId: string,
-    holder: string,
-    taskId: string,
-  ): Promise<ArchiveTaskResult> =>
-    runUiEffect(
-      Effect.gen(function* () {
-        const idempotencyKey = yield* browserCrypto.randomUUIDv4();
-        // Native Request/Response adapter preserves host and SDK stream semantics.
-        const response = yield* uiPromise(() =>
-          appFetch(
-            `/api/sessions/${encodeURIComponent(sessionId)}/trace/tasks/${encodeURIComponent(taskId)}`,
-            {
-              method: "POST",
-              headers: { [sessionHolderHeader]: holder, "Content-Type": "application/json" },
-              // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
-              body: JSON.stringify({
-                intent: "delete",
-                idempotencyKey: idempotencyKey,
-              }),
-            },
-          ),
-        );
-        const body: unknown = yield* uiPromise(() => response.json());
-        const result = Option.getOrUndefined(decodeArchiveTaskResult(body));
-        if (response.status === 409 && ArchiveTaskResult.guards.blocked(result)) return result;
-        if (!response.ok)
-          return yield* apiError(response.status, Option.getOrUndefined(decodeErrorBody(body)));
-        if (
-          !isTruthy(result) ||
-          !ArchiveTaskResult.isAnyOf(["completed", "waiting_for_stop"])(result)
-        )
-          return yield* apiError(502, undefined);
-        window.dispatchEvent(new CustomEvent("work-trace:changed"));
-        return result;
-      }),
-    ),
+  archiveWorkTraceTask: (session: string, holder: string, task: string) =>
+    changeTraceTask(session, holder, task, "archive"),
+  deleteWorkTraceTask: (session: string, holder: string, task: string) =>
+    changeTraceTask(session, holder, task, "delete"),
   workTraceStreamUrl: (sessionId: string, after = 0) =>
     `/api/sessions/${encodeURIComponent(sessionId)}/trace/stream?after=${after}`,
   subagents: (session: string) =>

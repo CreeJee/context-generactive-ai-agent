@@ -19,20 +19,10 @@ import {
 } from "memory-agent";
 import { AppApi } from "memory-agent/app-api";
 import { kanbanRefusal } from "../kanban-failures.ts";
+import { refusalsOnly } from "./agent-chat-refusals.ts";
 
 /** A person changed the board from the page. */
 const user = BoardAuthor.cases.User.make({});
-
-/**
- * `AgentChat` refuses with what the page reads: a code, or a blocked lifecycle change. Its other
- * failures are errors; they become defects, which the server reports and answers 500.
- */
-const refusalsOnly = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-  Effect.catchIf(
-    effect,
-    (failure): failure is Extract<E, Error> => Predicate.isError(failure),
-    (failure) => Effect.die(failure),
-  );
 
 /** The sessions group of `AppApi` (`/api/sessions/*`). */
 export const SessionsApiHandlers = HttpApiBuilder.group(

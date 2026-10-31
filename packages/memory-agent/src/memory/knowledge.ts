@@ -6,7 +6,9 @@ import { Clock, Context, Crypto, Effect, Layer, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { Nodes } from "./nodes.ts";
 
-export type MemoryDisposition = "saved" | "edited_saved" | "conversation_only" | "rejected";
+import type { MemoryCandidateView, MemoryDisposition, MemoryUsageView } from "./contracts.ts";
+
+export type { MemoryCandidateView, MemoryDisposition, MemoryUsageView } from "./contracts.ts";
 
 export interface PromoteMemoryInput {
   readonly projectId: string;
@@ -18,38 +20,6 @@ export interface PromoteMemoryInput {
   readonly proposedText: string;
   readonly resolvedText: string;
   readonly disposition: "save" | "conversation_only" | "reject";
-}
-
-export interface MemoryCandidateView {
-  readonly id: string;
-  readonly decisionId: string;
-  readonly projectId: string;
-  readonly taskId: string;
-  readonly attemptId: string;
-  readonly claimId: string;
-  readonly originSessionId: string | null;
-  readonly authorizedByUserNodeId: string;
-  readonly proposedText: string;
-  readonly resolvedText: string;
-  readonly disposition: MemoryDisposition;
-  readonly memoryNodeId: string | null;
-  /** Evidence ids a promotion listed before evidence records were dropped; new ones list none. */
-  readonly evidence: readonly {
-    readonly evidenceRefId: string;
-    readonly sourceDeletedAt: number | null;
-  }[];
-  readonly createdAt: number;
-}
-
-export interface MemoryUsageView {
-  readonly id: string;
-  readonly candidateId: string;
-  readonly memoryNodeId: string;
-  readonly originSessionId: string | null;
-  readonly parentRunId: string;
-  readonly parentMessageId: string | null;
-  readonly kind: "retrieved" | "used";
-  readonly createdAt: number;
 }
 
 const ClaimSourceRow = Schema.Struct({

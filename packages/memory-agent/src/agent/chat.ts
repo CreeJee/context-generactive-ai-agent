@@ -184,7 +184,7 @@ import {
   ResumeRequest,
   WorkTraceStore,
 } from "../work-trace/store.ts";
-import { LifecycleResult } from "../work-trace/contracts.ts";
+import { LifecycleResult, type TraceTaskDetail } from "../work-trace/contracts.ts";
 import { BackgroundTasks, type BackgroundBinding } from "../tools/background.ts";
 import { AppEvents } from "../events/app-events.ts";
 import {
@@ -712,7 +712,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     );
   /** The session's newest run, or null before its first. */
   const lastRun = (sessionId: string) => Effect.map(runStore.lastRun(sessionId), Option.getOrNull);
-  const inUse = () => json(423, { error: "session_in_use" });
   /** Refuses a change while another page holds the session. */
   const refuseOtherHolder = (sessionId: string, holder: string | null) =>
     Effect.when(
@@ -720,6 +719,13 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       Effect.map(leases.permits(sessionId, holder), (permitted) => !permitted),
     );
   const workTraceUnavailable = () => json(404, { error: "work_trace_disabled" });
+  /** Refuses while Work Trace is off, or while the settings that say so cannot be read. */
+  const traceShown = workTraceExposed.pipe(
+    Effect.filterOrFail(EffectFunction.identity, () => ({ error: "work_trace_disabled" }) as const),
+    Effect.catchTag("GlobalConfigFailed", () =>
+      Effect.fail({ error: "settings_unavailable" } as const),
+    ),
+  );
   const windowFor = (selection: ModelSelection | null) =>
     selection !== null
       ? Effect.map(active.runtime(selection), (runtime) => ({
@@ -826,6 +832,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const sessionNotFound = () => Effect.succeed(json(404, { error: "session_not_found" }));
   /** The app API's methods refuse with the code instead. */
   const unknownSession = () => Effect.fail({ error: "session_not_found" } as const);
+  const unknownProject = () => Effect.fail({ error: "project_not_found" } as const);
   /** The selected model's provider cannot run now. */
   const unavailableProvider = ({ provider }: { readonly provider: ProviderId }) =>
     Effect.fail({ error: "provider_unavailable", provider } as const);
@@ -839,6 +846,17 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     Effect.flatMap(Effect.orDie(Effect.fromNullishOr(blocker)), (named) =>
       Effect.fail(LifecycleResult.cases.blocked.make({ blocker: named })),
     );
+  /** A task's detail with the memories it proposed and those its runs reached; refused when missing. */
+  const withMemories = (taskId: string, detail: TraceTaskDetail | null) =>
+    detail === null
+      ? Effect.fail({ error: "trace_task_not_found" } as const)
+      : Effect.map(
+          Effect.all({
+            memoryCandidates: knowledge.candidatesForTask(taskId),
+            memoryUsage: knowledge.usageForTask(taskId),
+          }),
+          (memories) => ({ ...detail, ...memories }),
+        );
 
   /**
    * A run's log, to follow after `offset` (docs/effect-ai-migration.md "SSE와 재접속"). A bound
@@ -1156,48 +1174,32 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     /** Persisted Work Trace tree for live and review views. */
     traceTree: (sessionId: string) =>
       Effect.gen(function* () {
-        if (!(yield* workTraceExposed)) return workTraceUnavailable();
+        yield* traceShown;
         yield* sessions.get(sessionId);
-        return json(200, {
+        return {
           cursor: yield* workTrace.latestCursor(sessionId),
           tasks: yield* workTrace.taskTree(sessionId),
-        });
-      }).pipe(
-        Effect.catchTags({
-          SessionNotFound: sessionNotFound,
-          GlobalConfigFailed: () => Effect.succeed(json(500, { error: "settings_unavailable" })),
-        }),
-      ),
+        };
+      }).pipe(Effect.catchTag("SessionNotFound", unknownSession)),
 
     /** Project-owned review tree, including tasks whose origin conversation was deleted. */
     projectTraceTree: (projectId: string) =>
       Effect.gen(function* () {
-        if (!(yield* workTraceExposed)) return workTraceUnavailable();
+        yield* traceShown;
         yield* projects.get(projectId);
-        return json(200, {
+        return {
           cursor: yield* workTrace.projectLatestCursor(projectId),
           tasks: yield* workTrace.projectTaskTree(projectId),
-        });
-      }).pipe(
-        Effect.catchTag("ProjectNotFound", () =>
-          Effect.succeed(json(404, { error: "project_not_found" })),
-        ),
-      ),
+        };
+      }).pipe(Effect.catchTag("ProjectNotFound", unknownProject)),
 
     /** One task with immutable attempt lineage, checkpoints and visible events. */
     traceTask: (sessionId: string, taskId: string) =>
       Effect.gen(function* () {
-        if (!(yield* workTraceExposed)) return workTraceUnavailable();
+        yield* traceShown;
         yield* sessions.get(sessionId);
-        const detail = yield* workTrace.taskDetail(sessionId, taskId);
-        return isTruthy(detail)
-          ? json(200, {
-              ...detail,
-              memoryCandidates: yield* knowledge.candidatesForTask(taskId),
-              memoryUsage: yield* knowledge.usageForTask(taskId),
-            })
-          : json(404, { error: "trace_task_not_found" });
-      }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
+        return yield* withMemories(taskId, yield* workTrace.taskDetail(sessionId, taskId));
+      }).pipe(Effect.catchTag("SessionNotFound", unknownSession)),
 
     /** Archive/delete one task, stopping only its live child before finalizing durable lifecycle. */
     lifecycleTraceTask: (
@@ -1208,26 +1210,23 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       idempotencyKey: string,
     ) =>
       Effect.gen(function* () {
-        if (!(yield* workTraceExposed)) return workTraceUnavailable();
+        yield* traceShown;
         yield* sessions.get(sessionId);
-        if (!(yield* leases.permits(sessionId, holder))) return inUse();
+        yield* refuseOtherHolder(sessionId, holder);
         const requested = yield* workTrace.requestTaskLifecycle({
           sessionId,
           taskId,
           intent,
           idempotencyKey,
         });
-        if (LifecycleRequest.$is("blocked")(requested)) return json(409, requested);
-        if (LifecycleRequest.$is("completed")(requested)) return json(200, requested);
+        if (LifecycleRequest.$is("blocked")(requested)) return yield* lifecycleBlocked(requested);
+        if (LifecycleRequest.$is("completed")(requested)) return requested;
         if (isTruthy(requested.activeAttemptId))
           yield* subagents
             .stopTask(taskId)
             .pipe(Effect.andThen(background.stopTask(taskId)), Effect.timeoutOption(cancelWaitMs));
-        const completed = yield* workTrace.finalizeTaskLifecycle(requested.operationId);
-        return LifecycleOutcome.$is("completed")(completed)
-          ? json(200, completed)
-          : json(202, completed);
-      }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
+        return yield* workTrace.finalizeTaskLifecycle(requested.operationId);
+      }).pipe(Effect.catchTag("SessionNotFound", unknownSession)),
 
     /** Queue a server-owned logical resume; the next valid parent binding executes it. */
     requestTraceResume: (
@@ -1238,36 +1237,27 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       confirmUncertain: boolean,
     ) =>
       Effect.gen(function* () {
-        if (!(yield* workTraceExposed)) return workTraceUnavailable();
+        yield* traceShown;
         yield* sessions.get(sessionId);
-        if (!(yield* leases.permits(sessionId, holder))) return inUse();
+        yield* refuseOtherHolder(sessionId, holder);
         const result = yield* workTrace.requestResume({
           sessionId,
           taskId,
           expectedAttemptId,
           confirmUncertain,
         });
-        return ResumeRequest.$is("queued")(result) ? json(202, result) : json(409, result);
-      }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
+        return yield* ResumeRequest.$is("queued")(result)
+          ? Effect.succeed(result)
+          : Effect.fail(result);
+      }).pipe(Effect.catchTag("SessionNotFound", unknownSession)),
 
     /** Project-owned task detail remains available after its origin conversation is deleted. */
     projectTraceTask: (projectId: string, taskId: string) =>
       Effect.gen(function* () {
-        if (!(yield* workTraceExposed)) return workTraceUnavailable();
+        yield* traceShown;
         yield* projects.get(projectId);
-        const detail = yield* workTrace.projectTaskDetail(projectId, taskId);
-        return isTruthy(detail)
-          ? json(200, {
-              ...detail,
-              memoryCandidates: yield* knowledge.candidatesForTask(taskId),
-              memoryUsage: yield* knowledge.usageForTask(taskId),
-            })
-          : json(404, { error: "trace_task_not_found" });
-      }).pipe(
-        Effect.catchTag("ProjectNotFound", () =>
-          Effect.succeed(json(404, { error: "project_not_found" })),
-        ),
-      ),
+        return yield* withMemories(taskId, yield* workTrace.projectTaskDetail(projectId, taskId));
+      }).pipe(Effect.catchTag("ProjectNotFound", unknownProject)),
 
     /** Persisted cursor replay followed by a live tail. Only wake-up notifications are in memory. */
     traceStream: (request: Request, sessionId: string) =>

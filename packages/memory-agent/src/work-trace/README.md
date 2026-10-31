@@ -16,9 +16,10 @@
 - `WorkTraceRejected` — store가 거부한 쓰기 TaggedError. reason은 `handle_mismatch`, `unsafe_file_path`, `invalid_transition`, `foreign_session`, `attempt_not_found` 등이다. `message`는 모델에 보여도 안전하다
 - `WorkTraceReadFailed` — `latest_cursor`/`snapshot` 읽기 실패 TaggedError
 - `heartbeatIntervalMs` / `heartbeatLostMs` — live attempt는 10_000ms마다 beat한다. 60_000ms 동안 beat가 없으면 lost로 본다
-- store 입력·뷰 타입 — `AttemptHandle`, `StartAttemptInput`, `AppendEventInput`, `RecordArtifactInput`, `TraceTaskView`, `TraceAttemptView`, `TraceHeartbeatView`, `TraceTreeSnapshot`, `TraceTaskDetail`, `TraceFinalAnswerClaimView`, `TraceArtifactView`, `TraceEventView`, `ParentNotificationView`, `ResumeContext`
-- store 요청·결과 union — `ResumeClaim`, `ResumeRequest`, `ResumeBlocker`, `TaskArchive`, `LifecycleIntent`, `LifecycleRequest`, `LifecycleOutcome`, `LifecycleOperationView`, `PendingOperation`
+- store 입력·뷰 타입 — `AttemptHandle`, `StartAttemptInput`, `AppendEventInput`, `RecordArtifactInput`, `ParentNotificationView`, `ResumeContext`
+- store 요청·결과 union — `ResumeClaim`, `ResumeRequest`(타입은 `ResumeTaskResult`), `TaskArchive`, `LifecycleIntent`, `LifecycleRequest`, `LifecycleOutcome`, `LifecycleOperationView`, `PendingOperation`
 - `LifecycleIntent` / `LifecycleResult` — 보관·복원·삭제 의도와, 페이지가 읽는 수명주기 결과(`completed`·`waiting_for_stop`·`blocked` TaggedUnion)의 Schema다(`contracts.ts`). 앱 API 계약과 브라우저 번들이 쓴다.
+- `TraceTaskView` / `TraceAttemptView` / `TraceHeartbeatView` / `TraceTreeSnapshot` / `TraceTaskDetail` / `TraceFinalAnswerClaimView` / `TraceArtifactView` / `TraceEventView` / `ResumeBlocker` / `ResumeTaskResult` — trace 뷰와 재시도 결과의 Schema다(`contracts.ts`). `store.ts`는 같은 이름의 타입을 다시 내보내고, 앱 API 계약과 브라우저 번들이 Schema를 쓴다.
 - `AttemptStatus` / `isActiveAttemptStatus` / `isTerminalAttemptStatus` — 물리 attempt 상태 literal과 판정. active는 queued·running·waiting·blocked이고 terminal은 interrupted·completed·failed·cancelled이다
 - `canTransitionAttempt` — `attemptTransitions` 표로 attempt 상태 전이 허용 여부를 판정한다
 - `TaskStatus` — 모든 attempt를 아우르는 Task의 논리 상태 literal(queued…archived, deleted)

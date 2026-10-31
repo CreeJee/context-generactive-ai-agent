@@ -3,6 +3,7 @@ import { ProjectsGroup, projectsRefusals } from "./app-api/projects.ts";
 import { AccountsGroup, AuthGroup, ModelsGroup, providersRefusals } from "./app-api/providers.ts";
 import { SessionsGroup, sessionsRefusals } from "./app-api/sessions.ts";
 import { SettingsGroup, settingsRefusals } from "./app-api/settings.ts";
+import { TraceGroup, traceRefusals } from "./app-api/trace.ts";
 import { refusalStatusIn } from "./refusal.ts";
 
 /**
@@ -16,7 +17,8 @@ export class AppApi extends HttpApi.make("app")
   .add(AuthGroup)
   .add(AccountsGroup)
   .add(ModelsGroup)
-  .add(SessionsGroup) {}
+  .add(SessionsGroup)
+  .add(TraceGroup) {}
 
 /**
  * The HTTP status an app API refusal is answered with. A code has one status across the groups, so
@@ -28,6 +30,7 @@ export const appRefusalStatus = refusalStatusIn([
   ...projectsRefusals,
   ...providersRefusals,
   ...sessionsRefusals,
+  ...traceRefusals,
 ]);
 
 export {
@@ -66,7 +69,7 @@ export {
   SubagentTranscript,
 } from "./app-api/sessions.ts";
 export { Session } from "../sessions/contracts.ts";
-export { LifecycleResult } from "../work-trace/contracts.ts";
+export { LifecycleResult, ResumeTaskResult } from "../work-trace/contracts.ts";
 export { WorkflowState } from "../workflow/contracts.ts";
 export { FolderPick } from "../projects/contracts.ts";
 export {

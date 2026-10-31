@@ -131,6 +131,12 @@
   - 응답이 바뀐 곳: 옛 라우트는 없는 세션을 잡지 않아 500으로 답했다. 이제 404 `session_not_found`다. workflow 전이·진행 거부 code 가운데 `unknown_step`, `step_evidence_required`, `verification_required`, `steps_incomplete`, `phase_not_executable`, `goal_completion_required`, `completion_evidence_*`, `completion_snapshot_conflict`는 페이지 code 목록에 없어 `request_failed`로 보였다. 계약이 이것을 찾아 목록에 넣었다.
   - 202인데 완료 모양인 답처럼 계약에 맞지 않는 응답은 `appCall`이 디코드 실패로 보고 invalid code(`invalid_session_change`)로 준다. 전에는 502였다. 응답 디코드 실패와 요청 거부를 가를지는 1-7에서 정한다.
   - 계약에 맞지 않는 payload(전에는 `invalid_session_change`)는 HttpApi의 빈 400이다.
+- 1-4c trace 결과 (2026-10-31): `sessions.$session.trace`, `sessions.$session.trace.tasks.$task`, `projects.$project.trace`, `projects.$project.trace.tasks.$task`를 새 `TraceGroup`(`app-api/trace.ts`)으로 옮겼다. 세션과 프로젝트의 trace가 같은 메서드와 타입을 쓰므로 한 group에 둔다. `AgentChat`의 trace 메서드 여섯 개도 값과 거부를 돌려준다. `traceStream`은 SSE와 함께 1-6에서 옮긴다. 그것이 쓰는 `json`·`sessionNotFound`·`workTraceUnavailable`도 그때 지운다.
+  - 응답 Schema는 `work-trace/contracts.ts`(`TraceTreeSnapshot`, `TraceTaskDetail`과 그 안의 view, `ResumeBlocker`, `ResumeTaskResult`)와 새 `memory/contracts.ts`(`MemoryCandidateView`, `MemoryUsageView`, `MemoryDisposition`)에 둔다. `store.ts`와 `knowledge.ts`는 같은 이름의 타입을 다시 내보낸다. `ResumeRequest`의 `Data.taggedEnum` 생성자는 그대로 둔다.
+  - `refusalsOnly`는 `.server/api/agent-chat-refusals.ts`로 옮겨 sessions·trace handler가 같이 쓴다. 막힌 재시도(`{ _tag: "blocked", reason }`)도 `Error`가 아니므로 거부로 답한다.
+  - 찾은 문제: 페이지의 `ResumeTaskResult.queued`는 서버가 보내지 않는 `jobId`를 요구했다. 그래서 다시 시도를 저장해도 페이지는 디코드에 실패해 `request_failed`로 보였다. 계약의 Schema를 쓰면서 고쳐졌다.
+  - 응답이 바뀐 곳: Work Trace 설정을 읽지 못하면 전에는 tree만 500 `settings_unavailable`이고 나머지는 본문 없는 500이었다. 이제 다섯 endpoint가 모두 `settings_unavailable`이다. 태스크 보관·삭제가 끝내다 막힌 202 `blocked`는 전에 페이지가 502로 봤다. 이제 세션 수명주기처럼 결과로 돌려준다. `work_trace_disabled`, `trace_task_not_found`, `invalid_trace_task_action`은 페이지 code 목록에 없어 `request_failed`로 보였다. 목록에 넣었다.
+  - 계약에 맞지 않는 payload(전에는 `invalid_trace_task_action`)는 HttpApi의 빈 400이다. facade는 같은 code를 `appCall`의 invalid code로 준다.
 - SSE는 `HttpApiSchema.StreamSse`로 옮긴다. 첨부 업로드(`Content-Length`를 본문보다 먼저 검사)와 다운로드(바이트와 immutable 헤더)가 HttpApi로 같게 안 되면 RR 라우트로 남기고 이유를 적는다.
 
 ### 1-7. 정리

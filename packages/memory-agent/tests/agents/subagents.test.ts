@@ -150,24 +150,15 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
         ]);
 
         const tree = yield* chat.traceTree(sessionId);
-        expect(tree.status).toBe(200);
-        expect(yield* sdk(() => tree.text())).toContain(trace.task_id);
-        const detailResponse = yield* chat.traceTask(sessionId, trace.task_id);
-        expect(detailResponse.status).toBe(200);
-        const detail = yield* sdk(() => detailResponse.text());
-        expect(detail).toContain(trace.chat_run_id);
-        expect(detail).toContain('"heartbeat":{"state":"idle","step":"Subagent completed"');
-        const terminalResume = yield* chat.requestTraceResume(
-          sessionId,
-          null,
-          trace.task_id,
-          trace.attempt_id,
-          false,
-        );
-        expect(terminalResume.status).toBe(409);
-        expect(yield* sdk(() => terminalResume.json())).toEqual(
-          ResumeRequest.blocked({ reason: "task_terminal" }),
-        );
+        expect(tree.tasks.map((task) => task.id)).toContain(trace.task_id);
+        const detail = yield* chat.traceTask(sessionId, trace.task_id);
+        expect(detail.attempts.map((attempt) => attempt.chatRunId)).toContain(trace.chat_run_id);
+        expect(detail.task.heartbeat).toMatchObject({ state: "idle", step: "Subagent completed" });
+        expect(
+          yield* Effect.flip(
+            chat.requestTraceResume(sessionId, null, trace.task_id, trace.attempt_id, false),
+          ),
+        ).toEqual(ResumeRequest.blocked({ reason: "task_terminal" }));
         yield* sqlTransaction(
           Effect.gen(function* () {
             yield* sqlRun(
@@ -180,15 +171,9 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
             );
           }),
         );
-        const queuedResume = yield* chat.requestTraceResume(
-          sessionId,
-          null,
-          trace.task_id,
-          trace.attempt_id,
-          false,
-        );
-        expect(queuedResume.status).toBe(202);
-        expect(yield* sdk(() => queuedResume.json())).toEqual(
+        expect(
+          yield* chat.requestTraceResume(sessionId, null, trace.task_id, trace.attempt_id, false),
+        ).toEqual(
           ResumeRequest.queued({ taskId: trace.task_id, expectedAttemptId: trace.attempt_id }),
         );
         const stream = yield* chat.traceStream(
@@ -491,14 +476,13 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })(
             );
           yield* send(sessionId, "continue");
           expect(yield* attempts()).toEqual({ attempts: 1, latest_status: "interrupted" });
-          const retry = yield* (yield* env.use(AgentChat)).requestTraceResume(
+          yield* (yield* env.use(AgentChat)).requestTraceResume(
             sessionId,
             null,
             ids.task_id,
             ids.attempt_id,
             false,
           );
-          expect(retry.status).toBe(202);
           yield* send(sessionId, "continue");
           yield* until(
             Effect.map(

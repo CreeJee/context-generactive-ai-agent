@@ -247,7 +247,7 @@ const WorkflowChangeRefused = appRefusal(409, [
 ]);
 
 /** The archive, restore or delete cannot start; `blocker` says why. */
-const LifecycleBlocked = LifecycleResult.cases.blocked.pipe(HttpApiSchema.status(409));
+export const LifecycleBlocked = LifecycleResult.cases.blocked.pipe(HttpApiSchema.status(409));
 
 /** The session has no such subagent. */
 const UnknownSubagent = appRefusal(404, ["subagent_not_found"]);

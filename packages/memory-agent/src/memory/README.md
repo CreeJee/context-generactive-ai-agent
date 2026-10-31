@@ -28,7 +28,7 @@
 - `interpretInstructions` / `normalizeTopic` — 해석 모델의 시스템 지시문, topic 라벨 정규화(한 줄, 앞뒤 공백 제거, 최대 60자)
 - `Recorder` / `makeRecordingHook` / `RunBinding` — 채팅 run을 메모리 노드로 바꾸는 서비스(`Recorder.layer`)와 Effect AI run의 `RunHook`을 만드는 함수(`Nodes`·`PermissionReviews` 필요)
 - `KnowledgePromotions` — 채택된 final-answer claim을 사용자 승인으로 영속 프로젝트 메모리에 승격하는 서비스(`KnowledgePromotions.layer`)
-- `PromoteMemoryInput` / `MemoryCandidateView` / `MemoryUsageView` / `MemoryDisposition` / `MemoryPromotionRejected` / `KnowledgeStoreFailed` — 승격 입력, 후보·사용 기록 뷰, 처리 결과, 승격 거부 오류(reason별 고정 message), 저장소 실패 오류
+- `PromoteMemoryInput` / `MemoryCandidateView` / `MemoryUsageView` / `MemoryDisposition` / `MemoryPromotionRejected` / `KnowledgeStoreFailed` — 승격 입력, 후보·사용 기록 뷰, 처리 결과, 승격 거부 오류(reason별 고정 message), 저장소 실패 오류. 뷰와 처리 결과는 `contracts.ts`의 Schema이고 `knowledge.ts`가 타입을 다시 내보낸다. Work Trace 상세 계약이 이 Schema를 쓴다
 - `MemoryGraphMaintenance` / `MemoryGraphRepairFailed` — 이전 버전이 잘못 쓴 링크를 자동으로 고치는 로컬 수리 서비스(`MemoryGraphMaintenance.layer`)와 그 실패 오류
 - `latestResolver` / `ChainReads` / `LatestEvidence` / `LatestHead` / `BranchHead` / `AppliedChange` / `ChainSource` / `ChangeRelation` — owner 저장소 읽기를 통해 한 발화에 기록된 변경이 어디서 끝나는지 해석한다
 - `createResultPageReader` / `ResultPageReadFailed` — append-only 노드 텍스트를 블록 캐시·텍스트 인덱스로 페이지 단위로 읽는 리더와 그 실패 오류

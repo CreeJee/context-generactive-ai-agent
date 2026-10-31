@@ -2,7 +2,7 @@
 
 ## Overview
 
-`apps/agent`의 React Router v7 리소스 라우트 모음이다. 파일 이름이 곧 `/api/...` 경로이며(예: `sessions.$session.trace.tsx` → `/api/sessions/:session/trace`), 각 파일은 `loader`(GET)와 `action`(POST)만 export한다.
+`apps/agent`의 React Router v7 리소스 라우트 모음이다. 파일 이름이 곧 `/api/...` 경로이며(예: `sessions.$session.events.tsx` → `/api/sessions/:session/events`), 각 파일은 `loader`(GET)와 `action`(POST)만 export한다.
 
 모든 핸들러는 `~/.server/agent`의 `agent.runPromise`로 Promise 경계를 넘어 `packages/memory-agent`의 Effect 서비스(Projects, ProviderRegistry, OAuthProfiles, Attachments, AppEvents, ReportDelivery 등)를 호출한다. 태그된 실패는 `{ error, reason? }` JSON과 HTTP 상태 코드로 바꾼다.
 
@@ -12,17 +12,16 @@
 
 ## Interface
 
-- `$.tsx` `loader`/`action` — 라우트 파일이 없는 `/api/*` 요청을 `serveApi`로 넘긴다. 채팅 API(`/api/sessions/:session/messages`, `/api/sessions/:session/runs`, `/api/sessions/:session/runs/:run/events`, `/api/btw/:thread/messages`, `/api/btw/:thread/runs`), 앱 API settings group(`/api/settings/{conversation,recall,kanban,kagi,embedding,image,imports,improvements}`), projects group(`/api/projects`, `/api/projects/pick`, `/api/projects/:project`, `/api/projects/:project/{agents,mcp,skills,kanban,boards,decisions}`), auth·accounts·models group(`/api/auth`, `/api/accounts`, `/api/accounts/quota`, `/api/models`, `/api/models/:model`), sessions group(`/api/sessions`, `/api/sessions/:session/decisions`, `/api/sessions/:session/decisions/:decision`, `/api/sessions/:session/{board,kanban}`, `/api/sessions/:session/queue`, `/api/sessions/:session/queue/:message`, `/api/sessions/:session/subagents`, `/api/sessions/:session/subagents/:subagent`, `/api/sessions/:session/approvals`, `/api/sessions/:session/approvals/:approval`, `/api/sessions/:session/{cancel,compact,interrupts/discard,uncertain,lease}`, `/api/sessions/:session`)이 여기서 답한다. 옛 lease 라우트가 GET에 답하던 405 안내는 없어졌다.
+- `$.tsx` `loader`/`action` — 라우트 파일이 없는 `/api/*` 요청을 `serveApi`로 넘긴다. 채팅 API(`/api/sessions/:session/messages`, `/api/sessions/:session/runs`, `/api/sessions/:session/runs/:run/events`, `/api/btw/:thread/messages`, `/api/btw/:thread/runs`), 앱 API settings group(`/api/settings/{conversation,recall,kanban,kagi,embedding,image,imports,improvements}`), projects group(`/api/projects`, `/api/projects/pick`, `/api/projects/:project`, `/api/projects/:project/{agents,mcp,skills,kanban,boards,decisions}`), auth·accounts·models group(`/api/auth`, `/api/accounts`, `/api/accounts/quota`, `/api/models`, `/api/models/:model`), sessions group(`/api/sessions`, `/api/sessions/:session/decisions`, `/api/sessions/:session/decisions/:decision`, `/api/sessions/:session/{board,kanban}`, `/api/sessions/:session/queue`, `/api/sessions/:session/queue/:message`, `/api/sessions/:session/subagents`, `/api/sessions/:session/subagents/:subagent`, `/api/sessions/:session/approvals`, `/api/sessions/:session/approvals/:approval`, `/api/sessions/:session/{cancel,compact,interrupts/discard,uncertain,lease}`, `/api/sessions/:session`), trace group(`/api/sessions/:session/trace`, `/api/sessions/:session/trace/tasks/:task`, `/api/projects/:project/trace`, `/api/projects/:project/trace/tasks/:task`)이 여기서 답한다. 옛 lease 라우트가 GET에 답하던 405 안내는 없어졌다.
 - `attachments._index.tsx` `action` — POST /api/attachments: 원시 이미지 바이트를 content hash로 저장하고 201 `{ id, mimeType, bytes }`를 돌려준다(PNG/JPEG/GIF/WebP, 최대 `maxAttachmentBytes`).
 - `attachments.$attachment.tsx` `loader` — GET /api/attachments/:attachment: 저장된 이미지 바이트를 immutable 캐시 헤더로 돌려준다. 실패 태그는 404 `attachment_not_found`, 500 `attachment_unreadable`.
 - `media.image.tsx` `action` — POST /api/media/image: 유료 직접 이미지 생성(`ImageMediaWorkflow.generate`)이다. 승인 필요 시 409, 사용 불가 시 422, 실행 실패 시 502를 돌려준다.
-- `projects.$project.trace.tsx`, `projects.$project.trace.tasks.$task.tsx` `loader` — `AgentChat.projectTraceTree` / `projectTraceTask`.
 - `events.tsx`, `projects.$project.events.tsx` `loader` — `AppEvents.allStream` / `projectStream` 무효화 이벤트 스트림.
 - `reports.delivery.tsx` `loader`/`action` — webhook 상태와 defectReports 조회. TaggedUnion `send`(보고서+evidence 전송)/`defect_reports`(켜기·끄기) 처리.
 - `reports.diagnosis.tsx` `action` — `ReportDiagnoser.diagnose`로 검토된 초안을 선택 모델로 진단한다.
 - `reports.evidence.tsx` `loader` — `reportBundleResponse` + `collectReportBundle`로 세션 evidence 번들을 돌려준다(redact 후 한도에 맞춰 자른다).
 - `btw.$thread._index.tsx` `action`(= `makeBtwHandlers(agent).remove`).
-- (본문 미확인, export만 확인) `sessions.$session.trace.tasks.$task.tsx` `loader`+`action`; `sessions.$session.{events,trace,trace.stream}.tsx` `loader`; `reports.sessions.tsx` `action`; `sessions.$session.btw.tsx` `loader`/`action`(= btw handlers list/create).
+- (본문 미확인, export만 확인) `sessions.$session.{events,trace.stream}.tsx` `loader`; `reports.sessions.tsx` `action`; `sessions.$session.btw.tsx` `loader`/`action`(= btw handlers list/create).
 - 하위 디렉터리 없음.
 
 ## Invariants
@@ -41,6 +40,7 @@
 - models group의 `select`는 공급자 fallback 없이 명시된 provider/model/effort만 저장한다. 이미지 생성은 chat 도구 컨텍스트 밖에서 하며, `initiatorChatRouteId`는 활성 선택에서 `chat:${provider}:${model}` 형태로 만든다.
 - sessions group의 보드·칸반 endpoint도 holder를 확인한다. 보드 변경이 저장되면 멈춘 카드의 결정을 `card_stopped`로 닫고(`CancelCard`), 닫은 Plan의 loop를 깨운다(`ClosePlan`). 보드·칸반 변경 뒤에는 `publishSession(session, "run-state")`를 발행하고, 다른 대화로 옮긴 카드는 받는 대화에도 발행한다. 실패는 `kanbanRefusal`로 답한다.
 - sessions group의 큐·하위 에이전트·중계 승인·run 제어(cancel, compact, interrupts/discard, uncertain, lease)·세션 상태·세션 변경 endpoint는 `AgentChat` 메서드를 부른다. 메서드가 `{ error }` 값이나 `blocked` 수명주기 결과로 낸 거부는 그대로 답하고, 그 밖의 실패(`Error`)는 `refusalsOnly`가 defect로 바꿔 500으로 답한다. 큐를 바꾸면 `publishSession(session, "queue")`, 승인에 답하면 `publishSession(session, "relayed-approvals")`, cancel과 lease 뒤에는 `publishSession(session, "run-state")`를 발행한다. 세션 변경(`/api/sessions/:session` POST)은 보관·복원·삭제 뒤에 `publishProject(project, "sessions")`, workflow 단계·동작 뒤에 `publishSession(session, "run-state")`를 발행한다. 거부된 요청은 handler가 발행하지 않는다. cancel은 거부되기 전에 이미 멈춘 continuation을 `AgentChat` 안에서 발행한다.
+- trace group endpoint도 `AgentChat` 메서드를 부르고 `refusalsOnly`(`~/.server/api/agent-chat-refusals`)로 거부만 답한다. 막힌 재시도와 막힌 태스크 변경은 `blocked` 값으로 답한다. 태스크 변경은 무효화 이벤트를 발행하지 않는다. 페이지가 변경 뒤에 `work-trace:changed`를 낸다.
 - sessions group의 결정 답변은 `SessionLeases.permits`로 holder를 확인하고(423 `session_in_use`), 답한 뒤 `KanbanOrchestrator.poke`로 그 Goal의 loop를 깨운다. 외부 에이전트로 대화를 만들면 `ExternalAgents.available(project)`에 그 에이전트가 있어야 한다(409 `external_agent_unavailable`). 새 대화는 `publishProject(project, "sessions")`를 발행한다.
 - projects group의 프로젝트 하위 endpoint(kanban, boards, decisions)는 서비스 호출 전에 `Projects.get(params.project)`로 존재를 확인하고, 실패는 `~/.server/kanban-failures`의 `kanbanRefusal`로 답한다. kanban `MoveGoal`은 `Sessions.get`으로 `sessionId`와 `before`(null이 아닐 때)를 확인한 뒤 `ProjectScheduler.moveGoal`을 호출한다.
 - 상태를 바꾼 뒤에는 `AppEvents`로 무효화를 발행한다. 프로젝트 변경은 `publishGlobal("projects")`, 인증·계정 변경은 `publishGlobal("auth")`, Goal 이동은 `publishProject(project, "sessions")`다. 분리된 대기 fiber는 끝나는 방식과 상관없이 `Effect.ensuring`으로 `auth`를 발행한다.

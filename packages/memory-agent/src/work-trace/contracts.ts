@@ -1,6 +1,8 @@
 import { HashSet } from "effect";
 import { Function as EffectFunction } from "effect";
 import { Schema } from "effect";
+import { JsonValue } from "../json.ts";
+import { MemoryCandidateView, MemoryUsageView } from "../memory/contracts.ts";
 import { ExternalAgentFailureCode } from "../runtime/shown-failure.ts";
 
 /** Stable identity of a child agent. One-off agents have no reusable name. */
@@ -331,3 +333,150 @@ export const LifecycleResult = Schema.TaggedUnion({
   blocked: { blocker: Schema.String },
 });
 export type LifecycleResult = typeof LifecycleResult.Type;
+
+/** Where an attempt is, as its last heartbeat said. */
+export const TraceHeartbeatView = Schema.Struct({
+  state: HeartbeatState,
+  /** One line about the current step. */
+  step: Schema.NullOr(Schema.String),
+  at: Schema.Finite,
+});
+export type TraceHeartbeatView = typeof TraceHeartbeatView.Type;
+
+/** One task of a trace tree, with its latest attempt. */
+export const TraceTaskView = Schema.Struct({
+  id: Schema.String,
+  projectId: Schema.String,
+  originSessionId: Schema.NullOr(Schema.String),
+  parentTaskId: Schema.NullOr(Schema.String),
+  parentRunId: Schema.String,
+  parentToolCallId: Schema.String,
+  agentId: Schema.NullOr(Schema.String),
+  agentName: Schema.String,
+  status: TaskStatus,
+  title: Schema.String,
+  request: Schema.String,
+  activeAttemptId: Schema.NullOr(Schema.String),
+  latestAttemptId: Schema.NullOr(Schema.String),
+  latestAttemptStatus: Schema.NullOr(AttemptStatus),
+  latestAttemptNumber: Schema.NullOr(Schema.Finite),
+  latestResumedFromAttemptId: Schema.NullOr(Schema.String),
+  /** Where the latest attempt is, as its last heartbeat said. */
+  heartbeat: Schema.NullOr(TraceHeartbeatView),
+  /** Why the latest attempt failed, if it did. */
+  latestFailure: Schema.NullOr(AttemptFailure),
+  archivedAt: Schema.NullOr(Schema.Finite),
+  deleteRequestedAt: Schema.NullOr(Schema.Finite),
+  deletedAt: Schema.NullOr(Schema.Finite),
+  purgeReceiptId: Schema.NullOr(Schema.String),
+  createdAt: Schema.Finite,
+  updatedAt: Schema.Finite,
+});
+export type TraceTaskView = typeof TraceTaskView.Type;
+
+export const TraceAttemptView = Schema.Struct({
+  id: Schema.String,
+  invocationId: Schema.String,
+  attemptNumber: Schema.Finite,
+  chatRunId: Schema.String,
+  threadId: Schema.String,
+  status: AttemptStatus,
+  resumedFromAttemptId: Schema.NullOr(Schema.String),
+  supersededByAttemptId: Schema.NullOr(Schema.String),
+  heartbeat: Schema.NullOr(TraceHeartbeatView),
+  /** Tool calls the attempt started and never settled. */
+  pendingToolCallIds: Schema.Array(Schema.String),
+  failure: Schema.NullOr(AttemptFailure),
+  startedAt: Schema.NullOr(Schema.Finite),
+  finishedAt: Schema.NullOr(Schema.Finite),
+  createdAt: Schema.Finite,
+  updatedAt: Schema.Finite,
+});
+export type TraceAttemptView = typeof TraceAttemptView.Type;
+
+/** A session's or project's tasks, and the trace cursor they were read at. */
+export const TraceTreeSnapshot = Schema.Struct({
+  cursor: Schema.Finite,
+  tasks: Schema.Array(TraceTaskView),
+});
+export type TraceTreeSnapshot = typeof TraceTreeSnapshot.Type;
+
+export const TraceFinalAnswerClaimView = Schema.Struct({
+  id: Schema.String,
+  projectId: Schema.String,
+  originSessionId: Schema.NullOr(Schema.String),
+  parentRunId: Schema.String,
+  parentMessageId: Schema.String,
+  sources: Schema.Array(Schema.Struct({ taskId: Schema.String, attemptId: Schema.String })),
+  notificationIds: Schema.Array(Schema.String),
+  createdAt: Schema.Finite,
+});
+export type TraceFinalAnswerClaimView = typeof TraceFinalAnswerClaimView.Type;
+
+export const TraceArtifactView = Schema.Struct({
+  id: Schema.String,
+  taskId: Schema.String,
+  attemptId: Schema.String,
+  kind: ArtifactKind,
+  /** Null only for source-deleted tombstones. */
+  locator: Schema.NullOr(ArtifactLocator),
+  mediaType: Schema.NullOr(Schema.String),
+  verification: EvidenceVerification,
+  sourceDeletedAt: Schema.NullOr(Schema.Finite),
+  createdAt: Schema.Finite,
+  updatedAt: Schema.Finite,
+});
+export type TraceArtifactView = typeof TraceArtifactView.Type;
+
+/** A trace event the user may see: never an internal or omitted one (`isUserVisibleTrace`). */
+export const TraceEventView = Schema.Struct({
+  cursor: Schema.Finite,
+  id: Schema.String,
+  sessionId: Schema.NullOr(Schema.String),
+  taskId: Schema.String,
+  invocationId: Schema.String,
+  attemptId: Schema.String,
+  attemptSequence: Schema.Finite,
+  kind: RunEventKind,
+  visibility: Schema.Literals(["public", "summary"]),
+  redaction: Schema.Literals(["clear", "redacted"]),
+  summary: Schema.String,
+  payload: JsonValue,
+  occurredAt: Schema.Finite,
+});
+export type TraceEventView = typeof TraceEventView.Type;
+
+/** One task with its attempt lineage, checkpoints and visible events. */
+export const TraceTaskDetail = Schema.Struct({
+  task: TraceTaskView,
+  attempts: Schema.Array(TraceAttemptView),
+  artifacts: Schema.Array(TraceArtifactView),
+  answerClaims: Schema.Array(TraceFinalAnswerClaimView),
+  /** Present on HTTP detail projections; omitted by the lower-level trace store. */
+  memoryCandidates: Schema.optionalKey(Schema.Array(MemoryCandidateView)),
+  /** Retrieval and actual-use events are separate so recall does not imply answer influence. */
+  memoryUsage: Schema.optionalKey(Schema.Array(MemoryUsageView)),
+  events: Schema.Array(TraceEventView),
+});
+export type TraceTaskDetail = typeof TraceTaskDetail.Type;
+
+/** Why a task's retry cannot start. */
+export const ResumeBlocker = Schema.Literals([
+  "task_not_found",
+  "task_archived",
+  "task_deleted",
+  "attempt_alive",
+  "task_terminal",
+  "uncertain_side_effect",
+  "stale_attempt",
+  "origin_deleted",
+  "agent_deleted",
+]);
+export type ResumeBlocker = typeof ResumeBlocker.Type;
+
+/** A user's retry of a task: queued for the next parent run, or why it cannot be. */
+export const ResumeTaskResult = Schema.TaggedUnion({
+  queued: { taskId: Schema.String, expectedAttemptId: Schema.String },
+  blocked: { reason: ResumeBlocker },
+});
+export type ResumeTaskResult = typeof ResumeTaskResult.Type;

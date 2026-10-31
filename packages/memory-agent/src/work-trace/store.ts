@@ -19,7 +19,6 @@ import {
 } from "effect";
 import { SqlClient, type Statement } from "effect/sql";
 import { JsonValue } from "../json.ts";
-import type { MemoryCandidateView, MemoryUsageView } from "../memory/knowledge.ts";
 import {
   ArtifactKind,
   ArtifactLocator,
@@ -32,8 +31,16 @@ import {
   type InvocationKind,
   type LifecycleIntent,
   RedactionState,
+  type ResumeBlocker,
+  type ResumeTaskResult,
   RunEventKind,
   TaskStatus,
+  type TraceArtifactView,
+  type TraceAttemptView,
+  type TraceEventView,
+  type TraceFinalAnswerClaimView,
+  type TraceHeartbeatView,
+  type TraceTaskView,
   TraceVisibility,
   canTransitionAttempt,
   type ArtifactLocator as ArtifactLocatorValue,
@@ -336,121 +343,16 @@ const decodePayload = Schema.decodeUnknownEffect(Schema.fromJsonString(JsonValue
 const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 const encodeArtifactLocator = Schema.encodeEffect(Schema.fromJsonString(ArtifactLocator));
 
-export interface TraceTaskView {
-  readonly id: string;
-  readonly projectId: string;
-  readonly originSessionId: string | null;
-  readonly parentTaskId: string | null;
-  readonly parentRunId: string;
-  readonly parentToolCallId: string;
-  readonly agentId: string | null;
-  readonly agentName: string;
-  readonly status: TaskStatus;
-  readonly title: string;
-  readonly request: string;
-  readonly activeAttemptId: string | null;
-  readonly latestAttemptId: string | null;
-  readonly latestAttemptStatus: AttemptStatus | null;
-  readonly latestAttemptNumber: number | null;
-  readonly latestResumedFromAttemptId: string | null;
-  /** Where the latest attempt is, as its last heartbeat said. */
-  readonly heartbeat: TraceHeartbeatView | null;
-  /** Why the latest attempt failed, if it did. */
-  readonly latestFailure: AttemptFailure | null;
-  readonly archivedAt: number | null;
-  readonly deleteRequestedAt: number | null;
-  readonly deletedAt: number | null;
-  readonly purgeReceiptId: string | null;
-  readonly createdAt: number;
-  readonly updatedAt: number;
-}
-
-export interface TraceAttemptView {
-  readonly id: string;
-  readonly invocationId: string;
-  readonly attemptNumber: number;
-  readonly chatRunId: string;
-  readonly threadId: string;
-  readonly status: AttemptStatus;
-  readonly resumedFromAttemptId: string | null;
-  readonly supersededByAttemptId: string | null;
-  readonly heartbeat: TraceHeartbeatView | null;
-  /** Tool calls the attempt started and never settled. */
-  readonly pendingToolCallIds: readonly string[];
-  readonly failure: AttemptFailure | null;
-  readonly startedAt: number | null;
-  readonly finishedAt: number | null;
-  readonly createdAt: number;
-  readonly updatedAt: number;
-}
-
-export interface TraceHeartbeatView {
-  readonly state: HeartbeatState;
-  /** One line about the current step. */
-  readonly step: string | null;
-  readonly at: number;
-}
-
-export interface TraceTreeSnapshot {
-  readonly cursor: number;
-  readonly tasks: readonly TraceTaskView[];
-}
-
-export interface TraceTaskDetail {
-  readonly task: TraceTaskView;
-  readonly attempts: readonly TraceAttemptView[];
-  readonly artifacts: readonly TraceArtifactView[];
-  readonly answerClaims: readonly TraceFinalAnswerClaimView[];
-  /** Present on HTTP detail projections; omitted by the lower-level trace store. */
-  readonly memoryCandidates?: readonly MemoryCandidateView[];
-  /** Retrieval and actual-use events are separate so recall does not imply answer influence. */
-  readonly memoryUsage?: readonly MemoryUsageView[];
-  readonly events: readonly TraceEventView[];
-}
-
-export interface TraceFinalAnswerClaimView {
-  readonly id: string;
-  readonly projectId: string;
-  readonly originSessionId: string | null;
-  readonly parentRunId: string;
-  readonly parentMessageId: string;
-  readonly sources: readonly {
-    readonly taskId: string;
-    readonly attemptId: string;
-  }[];
-  readonly notificationIds: readonly string[];
-  readonly createdAt: number;
-}
-
-export interface TraceArtifactView {
-  readonly id: string;
-  readonly taskId: string;
-  readonly attemptId: string;
-  readonly kind: ArtifactKind;
-  /** Null only for source-deleted tombstones. */
-  readonly locator: ArtifactLocatorValue | null;
-  readonly mediaType: string | null;
-  readonly verification: EvidenceVerification;
-  readonly sourceDeletedAt: number | null;
-  readonly createdAt: number;
-  readonly updatedAt: number;
-}
-
-export interface TraceEventView {
-  readonly cursor: number;
-  readonly id: string;
-  readonly sessionId: string | null;
-  readonly taskId: string;
-  readonly invocationId: string;
-  readonly attemptId: string;
-  readonly attemptSequence: number;
-  readonly kind: RunEventKind;
-  readonly visibility: Exclude<TraceVisibility, "internal">;
-  readonly redaction: Exclude<RedactionState, "omitted">;
-  readonly summary: string;
-  readonly payload: JsonValue;
-  readonly occurredAt: number;
-}
+export type {
+  TraceArtifactView,
+  TraceAttemptView,
+  TraceEventView,
+  TraceFinalAnswerClaimView,
+  TraceHeartbeatView,
+  TraceTaskDetail,
+  TraceTaskView,
+  TraceTreeSnapshot,
+} from "./contracts.ts";
 
 export interface ParentNotificationView {
   readonly id: string;
@@ -470,17 +372,7 @@ export interface ResumeContext {
   readonly uncertainToolCallIds: readonly string[];
 }
 
-/** Why a task's retry cannot start. */
-export type ResumeBlocker =
-  | "task_not_found"
-  | "task_archived"
-  | "task_deleted"
-  | "attempt_alive"
-  | "task_terminal"
-  | "uncertain_side_effect"
-  | "stale_attempt"
-  | "origin_deleted"
-  | "agent_deleted";
+export type { ResumeBlocker } from "./contracts.ts";
 
 export type ResumeClaim = Data.TaggedEnum<{
   started: {
@@ -493,10 +385,7 @@ export type ResumeClaim = Data.TaggedEnum<{
 export const ResumeClaim = Data.taggedEnum<ResumeClaim>();
 
 /** A user's retry: queued for the next parent run, or why it cannot be. */
-export type ResumeRequest = Data.TaggedEnum<{
-  queued: { readonly taskId: string; readonly expectedAttemptId: string };
-  blocked: { readonly reason: ResumeBlocker };
-}>;
+export type ResumeRequest = ResumeTaskResult;
 export const ResumeRequest = Data.taggedEnum<ResumeRequest>();
 
 /** Archiving one settled task directly, without a lifecycle operation. */
