@@ -21,6 +21,8 @@ import {
   SheetHeader,
   SheetTitle,
 } from "../../../components/ui/sheet";
+import { Toggle } from "../../../components/ui/toggle";
+import { ToggleGroup, ToggleGroupItem } from "../../../components/ui/toggle-group";
 import type { ProjectBoard as ProjectBoardRow } from "memory-agent";
 import { useGoalOrderMutation } from "../../queries/mutations/project";
 import { KanbanAction, useKanbanMutation } from "../../queries/mutations/session";
@@ -101,10 +103,6 @@ export function ProjectBoard({
   const running = rows.filter((row) => row.kanbanActive).length;
   const total = rows.reduce((sum, row) => sum + cardsOf(row), 0);
   const done = rows.reduce((sum, row) => sum + row.counts.done, 0);
-  const toggleShown = (sessionId: string) =>
-    setShown(
-      shown.includes(sessionId) ? shown.filter((id) => id !== sessionId) : [...shown, sessionId],
-    );
   /** Puts the conversation's Goal in front of `before` among the project's Goals. */
   const move = (sessionId: string, before: string | null) => {
     setOrderError(null);
@@ -156,28 +154,30 @@ export function ProjectBoard({
           <Collapsible>
             <div className="mt-1 flex flex-wrap items-center gap-1">
               {rows.length > 1 && (
-                <div role="group" aria-label="보이는 대화" className="flex flex-wrap gap-1">
-                  <Button
-                    type="button"
-                    size="xs"
-                    variant={shown.length === 0 ? "secondary" : "ghost"}
-                    aria-pressed={shown.length === 0}
-                    onClick={() => setShown([])}
+                <div className="flex flex-wrap items-center gap-1">
+                  {/* Pressing it again keeps it pressed: every conversation is the resting state. */}
+                  <Toggle
+                    size="sm"
+                    pressed={shown.length === 0}
+                    onPressedChange={() => setShown([])}
                   >
                     모든 대화
-                  </Button>
-                  {rows.map((row) => (
-                    <Button
-                      key={row.sessionId}
-                      type="button"
-                      size="xs"
-                      variant={shown.includes(row.sessionId) ? "secondary" : "ghost"}
-                      aria-pressed={shown.includes(row.sessionId)}
-                      onClick={() => toggleShown(row.sessionId)}
-                    >
-                      {titleOf(row)}
-                    </Button>
-                  ))}
+                  </Toggle>
+                  <ToggleGroup
+                    aria-label="보이는 대화"
+                    multiple
+                    size="sm"
+                    spacing={1}
+                    value={shown}
+                    onValueChange={setShown}
+                    className="flex-wrap"
+                  >
+                    {rows.map((row) => (
+                      <ToggleGroupItem key={row.sessionId} value={row.sessionId}>
+                        {titleOf(row)}
+                      </ToggleGroupItem>
+                    ))}
+                  </ToggleGroup>
                 </div>
               )}
               <span className="ml-auto flex items-center gap-1">

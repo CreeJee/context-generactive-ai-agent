@@ -1,7 +1,6 @@
 import { isTruthy } from "../../truthy.ts";
 import { ArrowUpIcon, CheckIcon, ImagePlusIcon, SquareIcon, WandSparklesIcon } from "lucide-react";
 import { type Ref, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
-import { Button } from "~/components/ui/button";
 import { Command } from "~/components/ui/command";
 import {
   PromptInput,
@@ -11,6 +10,7 @@ import {
   PromptInputTextarea,
 } from "~/components/ui/prompt-input";
 import { Spinner } from "~/components/ui/spinner";
+import { ToggleGroup, ToggleGroupItem } from "~/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
 import { acceptedImageTypes, useDraftImages } from "./draft-images";
 import { DraftImageTray } from "./images";
@@ -21,6 +21,8 @@ import { suggest, type SlashContext } from "./slash-commands";
 import { phaseLabels } from "./workflow-panel";
 import type { GeneratedImageAsset, ImageFeatureStatus, QueuedMessage, WorkflowPhase } from "../api";
 import type { useRunState } from "../session/use-run-state";
+
+const workflowPhases = ["chat", "goal", "plan"] as const satisfies readonly WorkflowPhase[];
 
 const imageFiles = (files: FileList | null) =>
   Array.from(files ?? []).filter((file) => file.type.startsWith("image/"));
@@ -324,17 +326,22 @@ export function ChatComposer({
               </Tooltip>
             )}
             <ComposerStatus mode={composerMode} />
-            <div
-              className="flex items-center rounded-md border bg-muted/30 p-0.5"
-              role="group"
+            <ToggleGroup
               aria-label="입력 방식"
+              variant="outline"
+              size="sm"
+              spacing={0}
+              value={[run.workflow?.phase ?? "chat"]}
+              onValueChange={(pressed) => {
+                // Pressing the current phase again releases it; the composer always keeps one.
+                const phase = workflowPhases.find((candidate) => pressed.includes(candidate));
+                if (phase !== undefined) onWorkflowPhase(phase);
+              }}
             >
-              {(["chat", "goal", "plan"] as const).map((phase) => (
-                <Button
+              {workflowPhases.map((phase) => (
+                <ToggleGroupItem
                   key={phase}
-                  type="button"
-                  size="xs"
-                  variant={(run.workflow?.phase ?? "chat") === phase ? "secondary" : "ghost"}
+                  value={phase}
                   disabled={
                     !isTruthy(run.actions?.phases[phase].allowed) ||
                     run.controlling ||
@@ -343,7 +350,6 @@ export function ChatComposer({
                     generatingImage ||
                     editingId !== null
                   }
-                  aria-pressed={(run.workflow?.phase ?? "chat") === phase}
                   title={
                     phase === "goal"
                       ? "결과를 맡기면 조사, 수정, 검증까지 진행해요"
@@ -351,12 +357,11 @@ export function ChatComposer({
                         ? "프로젝트를 변경하지 않고 실행 계획을 만들어요"
                         : "일반 대화"
                   }
-                  onClick={() => onWorkflowPhase(phase)}
                 >
                   {phaseLabels[phase]}
-                </Button>
+                </ToggleGroupItem>
               ))}
-            </div>
+            </ToggleGroup>
             <div className="ml-auto flex items-center gap-3">
               <ComposerShortcuts mode={composerMode} />
               {generating && editingId === null && (

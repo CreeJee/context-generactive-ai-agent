@@ -50,10 +50,9 @@ import {
 import { CardFace, StatusIcon, type CardSignals } from "./card-face";
 
 declare module "react" {
-  /** Dynamic values the board's classes read: `w-(--board-progress)`, `transform-(--…)`. */
+  /** Dynamic values the board's classes read: `transform-(--board-card-offset)`. */
   interface CSSProperties {
     readonly "--board-card-offset"?: string;
-    readonly "--board-progress"?: string;
   }
 }
 

@@ -56,7 +56,7 @@
 - 네트워크: `compatibleClient`가 `appFetch`로 `/api/accounts`를 GET/POST한다(list, create, connect, rename, save-model, remove-model, select, remove, test, discover).
 - React Query 조회·변경 훅이 백엔드 API를 호출한다: `useAccountsQuery`, `useAccountQuotaQuery`, `useCompatibleAccountsQuery`, `useDecisionInboxQuery`, `useProjectBoardsQuery`, `useAccountActionMutation`, `useCompatibleAccountMutation`.
 - 브라우저 localStorage: jotai `atomWithStorage("context-agent-project-section-open-v2")`에 프로젝트 섹션이 열려 있는지 저장한다.
-- `window.confirm`: 구독 계정을 로그아웃(`remove`)하기 전에 확인 창을 띄운다.
+- 확인 창: 구독 계정 로그아웃(`remove`), 호환 엔드포인트 삭제, 대화 원본 삭제는 `AlertDialog`로 먼저 확인받는다.
 - 시계 읽기: `DateTime.nowUnsafe()`로 한도 창이 초기화되기까지 남은 시간을 계산한다(account-switcher, account-profiles).
 
 ## Verification

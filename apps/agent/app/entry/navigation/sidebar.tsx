@@ -30,6 +30,7 @@ import {
 } from "~/components/ui/alert-dialog";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
+import { ButtonGroup } from "~/components/ui/button-group";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "~/components/ui/collapsible";
 import {
   Dialog,
@@ -601,7 +602,7 @@ export function SessionSection({
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center justify-between px-4 pt-3 pb-2">
         <h2 className="text-2xs font-medium tracking-wide text-muted-foreground uppercase">대화</h2>
-        <div className="flex min-w-0 items-center">
+        <div className="flex min-w-0 items-center gap-1">
           {places.length > 0 && (
             <DropdownMenu>
               {/* A filter in use names its place, so a short list is not mistaken for all of it. */}
@@ -637,35 +638,37 @@ export function SessionSection({
               </DropdownMenuContent>
             </DropdownMenu>
           )}
-          <Button variant="ghost" size="sm" onClick={() => onCreate()}>
-            <PlusIcon /> 새 대화
-          </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={<Button variant="ghost" size="icon-sm" aria-label="대화 상대 고르기" />}
-            >
-              <ChevronDownIcon />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuGroup>
-                <DropdownMenuLabel>새 대화 상대</DropdownMenuLabel>
-                <DropdownMenuItem onClick={() => onCreate()}>이 앱의 모델</DropdownMenuItem>
-              </DropdownMenuGroup>
-              <DropdownMenuSeparator />
-              <DropdownMenuGroup>
-                <DropdownMenuLabel>외부 에이전트와 직접</DropdownMenuLabel>
-                {agents.length === 0 ? (
-                  <DropdownMenuItem disabled>설정에서 신뢰한 에이전트가 없어요</DropdownMenuItem>
-                ) : (
-                  agents.map((agent) => (
-                    <DropdownMenuItem key={agent} onClick={() => onCreate(agent)}>
-                      <BotIcon /> {agent}
-                    </DropdownMenuItem>
-                  ))
-                )}
-              </DropdownMenuGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <ButtonGroup aria-label="새 대화">
+            <Button variant="outline" size="sm" onClick={() => onCreate()}>
+              <PlusIcon /> 새 대화
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={<Button variant="outline" size="icon-sm" aria-label="대화 상대 고르기" />}
+              >
+                <ChevronDownIcon />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuGroup>
+                  <DropdownMenuLabel>새 대화 상대</DropdownMenuLabel>
+                  <DropdownMenuItem onClick={() => onCreate()}>이 앱의 모델</DropdownMenuItem>
+                </DropdownMenuGroup>
+                <DropdownMenuSeparator />
+                <DropdownMenuGroup>
+                  <DropdownMenuLabel>외부 에이전트와 직접</DropdownMenuLabel>
+                  {agents.length === 0 ? (
+                    <DropdownMenuItem disabled>설정에서 신뢰한 에이전트가 없어요</DropdownMenuItem>
+                  ) : (
+                    agents.map((agent) => (
+                      <DropdownMenuItem key={agent} onClick={() => onCreate(agent)}>
+                        <BotIcon /> {agent}
+                      </DropdownMenuItem>
+                    ))
+                  )}
+                </DropdownMenuGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </ButtonGroup>
         </div>
       </div>
       {archiveError && (

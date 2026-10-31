@@ -3443,3 +3443,13 @@
 - 대화 행의 보관·삭제는 행 끝에 겹쳐 뜨던 버튼 두 개 대신 `SidebarMenuAction`(…) 메뉴 하나에 둔다. 보관은 한 번 더 눌러야 한다.
 - 대화 원본 삭제는 `window.confirm` 대신 `AlertDialog`로 확인받고, 확인 창에 대화 제목을 보인다. 보관함의 삭제도 같은 확인을 쓴다.
 - 대화 목록을 불러오는 동안에는 "아직 대화가 없어요" 대신 Skeleton을 보인다. `SidebarMenuSkeleton`은 폭을 무작위로 정해 SSR 결과와 hydration이 어긋나므로 고정 폭 `Skeleton`을 쓴다.
+
+## 손으로 만든 토글·진행 막대·확인 창을 shadcn 컴포넌트로 바꾼다 (2026-10-31)
+
+- 사용자 요청으로 나머지 화면에서 손으로 만든 요소를 shadcn 컴포넌트로 바꿨다. `shadcn add progress toggle-group button-group`으로 `progress`, `toggle`, `toggle-group`, `button-group`을 받았다.
+- 이번에는 전체 설치(`shadcn add --all`)를 하지 않고, 쓰는 곳이 있는 것만 받았다. 전체 설치를 하면 이미 고친 `button`·`sheet` 등 30여 개 파일을 다시 되돌려야 한다. `chart`·`calendar`·`carousel`·`drawer`·`form`·`sonner` 같은 컴포넌트는 recharts·react-day-picker·embla·vaul·react-hook-form·next-themes 의존성을 끌고 온다. 쓰지 않는 파일마다 anti-slop lint와 Effect 진단도 고쳐야 한다.
+- 입력창의 "대화·Goal·Plan" 선택은 버튼 세 개와 `aria-pressed` 대신 `ToggleGroup`(하나만 눌림)이다. 화살표 키로 옮겨 다닐 수 있다. 눌린 단계를 다시 누르면 아무것도 바꾸지 않는다.
+- 프로젝트 칸반 보드의 "보이는 대화" 칩은 `ToggleGroup multiple`이다. "모든 대화"는 그 앞의 `Toggle`이며, 다시 눌러도 눌린 채로 남는다.
+- Plan 요약의 완료 막대는 손으로 만든 `role="progressbar"` 대신 `Progress`다. 카드가 없으면 `max`를 1로 두어 0으로 나누지 않는다.
+- 사이드바 "대화" 머리줄의 "새 대화"와 대화 상대 메뉴는 `ButtonGroup`으로 묶은 outline 분할 버튼이다.
+- 구독 계정 로그아웃과 호환 엔드포인트 삭제의 `window.confirm`은 `AlertDialog`로 바꿨다. 확인 버튼을 누르면 창을 닫고 동작을 보낸다. 채팅 쪽에 남은 `window.confirm` 두 곳(`message.tsx`, `chat-panel.tsx`)은 다른 작업이 그 파일을 고치는 중이라 이번에 건드리지 않았다.

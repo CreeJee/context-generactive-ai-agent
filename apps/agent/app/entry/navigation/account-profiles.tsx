@@ -14,6 +14,17 @@ import { useEffect, useState } from "react";
 import claudeIcon from "~/assets/providers/claude.svg";
 import codexIcon from "~/assets/providers/codex.svg";
 import { Alert, AlertDescription } from "~/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "~/components/ui/alert-dialog";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "~/components/ui/collapsible";
@@ -167,6 +178,7 @@ function ProfileCard({
   onAction: (action: AccountAction) => void;
 }) {
   const [renaming, setRenaming] = useState(false);
+  const [confirmingLogout, setConfirmingLogout] = useState(false);
   const [label, setLabel] = useState(profile.label);
   const cancelRename = () => {
     setLabel(profile.label);
@@ -233,20 +245,38 @@ function ProfileCard({
           >
             <PencilIcon /> 이름 변경
           </Button>
-          <Button
-            variant="ghost-muted"
-            size="sm"
-            aria-label={`${profile.label} 로그아웃`}
-            disabled={busy}
-            onClick={() => {
-              if (
-                window.confirm(`${profile.label} 계정에서 로그아웃하고 이 앱의 목록에서 지울까요?`)
-              )
-                onAction({ intent: "remove", accountId: profile.id });
-            }}
-          >
-            <LogOutIcon /> 로그아웃
-          </Button>
+          <AlertDialog open={confirmingLogout} onOpenChange={setConfirmingLogout}>
+            <AlertDialogTrigger
+              render={
+                <Button
+                  variant="ghost-muted"
+                  size="sm"
+                  aria-label={`${profile.label} 로그아웃`}
+                  disabled={busy}
+                />
+              }
+            >
+              <LogOutIcon /> 로그아웃
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>{profile.label} 계정에서 로그아웃할까요?</AlertDialogTitle>
+                <AlertDialogDescription>이 앱의 계정 목록에서도 지워요.</AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>취소</AlertDialogCancel>
+                <AlertDialogAction
+                  variant="destructive"
+                  onClick={() => {
+                    setConfirmingLogout(false);
+                    onAction({ intent: "remove", accountId: profile.id });
+                  }}
+                >
+                  로그아웃
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       )}
       {windows !== null && (

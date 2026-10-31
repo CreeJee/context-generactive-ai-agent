@@ -58,7 +58,9 @@ describe("Plan streaming composer", () => {
     const stop = html.match(/<button[^>]*aria-label="중지"[^>]*>/)?.[0];
     expect(stop).toBeDefined();
     expect(stop).not.toContain('disabled=""');
-    const phaseGroup = html.match(/role="group" aria-label="입력 방식"[^>]*>(.*?)<\/div>/)?.[1];
+    const phaseGroup = html.match(
+      /<div(?=[^>]*role="group")(?=[^>]*aria-label="입력 방식")[^>]*>(.*?)<\/div>/,
+    )?.[1];
     expect(phaseGroup).toBeDefined();
     const phaseButtons = phaseGroup?.match(/<button[^>]*>/g);
     expect(phaseButtons).toHaveLength(3);

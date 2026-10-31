@@ -25,6 +25,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "../../components/ui/sheet";
+import { Progress } from "../../components/ui/progress";
 import { Switch } from "../../components/ui/switch";
 import {
   BoardEdit,
@@ -172,19 +173,8 @@ export function WorkflowBoard({
             <Badge variant="outline">변경 요청 대기 {view.pendingChanges.length}</Badge>
           )}
         </div>
-        <div
-          role="progressbar"
-          aria-label="완료한 카드"
-          aria-valuemin={0}
-          aria-valuemax={total}
-          aria-valuenow={done}
-          className="h-1.5 overflow-hidden rounded-full bg-muted"
-        >
-          <div
-            className="h-full w-(--board-progress) rounded-full bg-primary transition-all"
-            style={{ "--board-progress": `${total === 0 ? 0 : (done / total) * 100}%` }}
-          />
-        </div>
+        {/* An empty board has nothing to finish; a zero max would divide by zero. */}
+        <Progress aria-label="완료한 카드" value={done} max={Math.max(total, 1)} />
         {counts.length > 0 && (
           <ul className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
             {counts.map(({ status, count }) => (

@@ -3,6 +3,17 @@ import { cn } from "cn";
 import { CheckIcon, PencilIcon, PlugIcon, PlusIcon, Trash2Icon, XIcon } from "lucide-react";
 import { useId, useState } from "react";
 import { Alert, AlertDescription } from "~/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "~/components/ui/alert-dialog";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { Field, FieldDescription, FieldLabel } from "~/components/ui/field";
@@ -348,6 +359,7 @@ function EndpointCard({
   const [baseUrl, setBaseUrl] = useState(account.baseUrl);
   const [apiKey, setApiKey] = useState("");
   const [removeKey, setRemoveKey] = useState(false);
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const run = (task: () => Promise<void>, done?: string) => {
@@ -431,18 +443,38 @@ function EndpointCard({
           >
             <PlugIcon /> 연결
           </Button>
-          <Button
-            variant="ghost-muted"
-            size="sm"
-            aria-label={`${account.label} 삭제`}
-            disabled={busy}
-            onClick={() => {
-              if (window.confirm(`${account.label} 엔드포인트와 저장한 키를 지울까요?`))
-                void change({ intent: "remove", accountId: account.id });
-            }}
-          >
-            <Trash2Icon /> 삭제
-          </Button>
+          <AlertDialog open={confirmingRemove} onOpenChange={setConfirmingRemove}>
+            <AlertDialogTrigger
+              render={
+                <Button
+                  variant="ghost-muted"
+                  size="sm"
+                  aria-label={`${account.label} 삭제`}
+                  disabled={busy}
+                />
+              }
+            >
+              <Trash2Icon /> 삭제
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>{account.label} 엔드포인트를 지울까요?</AlertDialogTitle>
+                <AlertDialogDescription>저장한 API 키도 함께 지워요.</AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>취소</AlertDialogCancel>
+                <AlertDialogAction
+                  variant="destructive"
+                  onClick={() => {
+                    setConfirmingRemove(false);
+                    void change({ intent: "remove", accountId: account.id });
+                  }}
+                >
+                  삭제
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       )}
       {CardMode.$is("connect")(mode) && (
