@@ -61,6 +61,18 @@ export const QueueSnapshot = Schema.Struct({
 });
 export type QueueSnapshot = typeof QueueSnapshot.Type;
 
+/** A message written while a run answers, as `/api/sessions/:session/queue` reads it. */
+export const QueueRequest = Schema.Struct({
+  text: Schema.String,
+  attachmentIds: Schema.Array(Schema.String),
+  /**
+   * queue: the next tool-call boundary, or the next turn the page sends. steer: also cuts the
+   * answer being written; the server sends it as the next turn, with no page needed.
+   */
+  mode: Schema.Literals(["queue", "steer"]),
+});
+export type QueueRequest = typeof QueueRequest.Type;
+
 /** A change a page asks for on one queued message. */
 const Edit = Schema.TaggedUnion({
   /** Opens (or keeps) the message for editing and stores the unsaved text. */

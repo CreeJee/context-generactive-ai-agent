@@ -43,30 +43,6 @@ const Cancelled = Schema.Struct({
   stopped: Schema.Boolean,
   status: Schema.NullOr(Schema.String),
 });
-const Queued = Schema.Struct({
-  id: Schema.String,
-  text: Schema.String,
-  state: Schema.TaggedUnion({
-    waiting: { steered: Schema.Boolean },
-    editing: { draft: Schema.String },
-    held: { draft: Schema.NullOr(Schema.String) },
-    delivered: {
-      via: Schema.Literals(["tool_boundary", "steer", "next_turn"]),
-      runId: Schema.NullOr(Schema.String),
-    },
-    failed: { reason: Schema.String },
-  }),
-});
-const QueueSnapshot = Schema.Struct({
-  items: Schema.Array(Queued),
-  nextDelivery: Schema.TaggedUnion({
-    ready: {},
-    server: {},
-    blocked: { messageId: Schema.String, reason: Schema.Literals(["editing", "held"]) },
-    empty: {},
-  }),
-});
-const decodeQueued = Schema.decodeUnknownEffect(Queued);
 /** The state's case name, for comparing a queue's order at a glance. */
 const stateName = QueueItemState.$match({
   waiting: () => "waiting",
@@ -91,22 +67,17 @@ const statusOf = (sessionId: string) =>
   );
 
 const queueOf = (sessionId: string) =>
-  Effect.flatMap(agentChat, (agent) => agent.queued(sessionId)).pipe(
-    Effect.flatMap(json),
-    Effect.flatMap(Schema.decodeUnknownEffect(QueueSnapshot)),
-  );
+  Effect.flatMap(agentChat, (agent) => agent.queued(sessionId));
 
-const enqueue = Effect.fnUntraced(function* (
+const enqueue = (
   sessionId: string,
   text: string,
   mode: "queue" | "steer",
   holder: string | null = null,
-) {
-  const response = yield* Effect.flatMap(agentChat, (agent) =>
+) =>
+  Effect.flatMap(agentChat, (agent) =>
     agent.enqueue(sessionId, holder, { text, attachmentIds: [], mode }),
   );
-  return { status: response.status, body: yield* json(response) };
-});
 
 /** Send from the page without waiting: the send settles only once the run's stream ends. */
 const sendInBackground = (page: ChatPage, text: string) =>
@@ -397,10 +368,7 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
       expect(Option.isSome(active)).toBe(true);
 
       const queued = yield* enqueue(session.id, "look in the tests folder", "queue");
-      expect(queued.status).toBe(201);
-      expect((yield* decodeQueued(queued.body)).state).toEqual(
-        QueueItemState.waiting({ steered: false }),
-      );
+      expect(queued.state).toEqual(QueueItemState.waiting({ steered: false }));
       yield* session.release;
 
       yield* Fiber.join(sending);
@@ -439,7 +407,7 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
 
       // Steering takes the message waiting before it along, so the order holds.
       yield* enqueue(session.id, "and the tests", "queue");
-      expect((yield* enqueue(session.id, "shorter please", "steer")).status).toBe(201);
+      yield* enqueue(session.id, "shorter please", "steer");
 
       // The slow answer is never released: the cut ends it, then each message is a turn.
       yield* until(() => session.invocations().length === 3, "both steered turns");
@@ -462,7 +430,9 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
       ]);
 
       // With nothing answering there is nothing to queue for or steer into.
-      expect((yield* enqueue(session.id, "too late", "steer")).status).toBe(409);
+      expect(yield* Effect.flip(enqueue(session.id, "too late", "steer"))).toEqual({
+        error: "not_running",
+      });
     }),
   );
 
@@ -475,9 +445,7 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
       const page = yield* openPage(session.id, "tab");
       const sending = yield* sendInBackground(page, "please be slow");
       yield* until(() => session.invocations().length === 1, "the answer to start");
-      const first = yield* decodeQueued(
-        (yield* enqueue(session.id, "hello again", "queue", "tab")).body,
-      );
+      const first = yield* enqueue(session.id, "hello again", "queue", "tab");
       yield* enqueue(session.id, "and once more", "queue", "tab");
       yield* session.release;
       yield* Fiber.join(sending);
@@ -488,13 +456,12 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
       );
 
       // A snapshot captured `first`, but the server must select the current head after an edit.
-      const edited = yield* agent.editQueued(
+      yield* agent.editQueued(
         session.id,
         "tab",
         first.id,
         QueueEdit.save({ text: "hello, freshly edited" }),
       );
-      expect(edited.status).toBe(200);
       yield* page.send("stale client placeholder", { queuedNext: true });
       expect(page.answer()).toContain("Hello from fast-1");
       expect(
@@ -630,9 +597,7 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
       const [held] = (yield* queueOf(session.id)).items;
       expect(held?.state).toEqual(QueueItemState.held({ draft: null }));
       const confirmed = yield* agent.editQueued(session.id, null, held!.id, QueueEdit.confirm());
-      expect((yield* decodeQueued(yield* json(confirmed))).state).toEqual(
-        QueueItemState.waiting({ steered: false }),
-      );
+      expect(confirmed?.state).toEqual(QueueItemState.waiting({ steered: false }));
     }),
   );
 });

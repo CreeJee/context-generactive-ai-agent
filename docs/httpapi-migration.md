@@ -113,6 +113,12 @@
   - 세션 실행 상태(`SessionRunState`, `CancelResult`, `CompactResult`, `ContextView`, `RunStatus`)는 `agent/run-state.ts`, 그 안의 workflow 모양(`WorkflowExecutionState`, `WorkflowActions`, `ProviderRetryView`, `UncertainRun`, `WorkflowDisplay`)은 `workflow/contracts.ts`, `LeaseView`는 `sessions/contracts.ts`에 둔다.
   - 큐(`QueueSnapshot`, `QueueEditRequest`), 하위 에이전트(`SubagentView`), 중계 승인(`RelayedApprovalView`)은 원래 브라우저 안전 모듈(`*-state.ts`)에서 Schema가 됐다. `Data.taggedEnum` 생성자는 그대로 둔다.
   - `chat-store/schema.ts`의 `StoredRunStatus`는 `RunStatus`를 쓴다. 반대로 `run-state.ts`가 `chat-store/schema.ts`를 import하면 `tools/definitions.ts`를 거쳐 순환이 생긴다.
+- 1-4b 경로 단위 (2026-10-31): React Router는 라우트 파일을 splat보다 먼저 고르므로, 같은 경로의 GET과 POST는 함께 옮긴다. 순서는 큐·하위 에이전트·중계 승인, 그다음 cancel·compact·interrupts.discard·uncertain·lease, 마지막으로 세션 상태(GET)와 수명주기(POST) `/api/sessions/:session`이다.
+- 1-4b 큐·하위 에이전트·중계 승인 결과 (2026-10-31): `sessions.$session.{queue,subagents,approvals}*`를 `SessionsGroup`으로 옮겼다.
+  - `AgentChat`의 해당 메서드는 HTTP `Response` 대신 값을 돌려주고, 페이지가 읽는 거부를 `{ error }` 값으로 실패한다. 다른 실패는 tagged error 그대로다. handler의 `refusalsOnly`가 `_tag` 있는 실패를 defect로 바꿔, 거부만 선언한 error로 남긴다.
+  - `QueueRequest`는 `queue/queue-state.ts`로 옮겼다. 하위 에이전트 대화 응답은 계약의 `SubagentTranscript`다.
+  - 응답이 바뀐 곳: 옛 라우트는 거부한 요청에도 무효화 이벤트를 발행했다. 이제 성공한 변경만 발행한다. `queue_reserved`(전달 중인 메시지)는 서버가 내던 code였지만 페이지 code 목록에 없었다. 계약이 이것을 찾아 목록에 넣었다.
+  - 계약에 맞지 않는 payload(전에는 `invalid_queue_request`, `invalid_queue_edit`, `invalid_answer`)는 HttpApi의 빈 400이다.
 - SSE는 `HttpApiSchema.StreamSse`로 옮긴다. 첨부 업로드(`Content-Length`를 본문보다 먼저 검사)와 다운로드(바이트와 immutable 헤더)가 HttpApi로 같게 안 되면 RR 라우트로 남기고 이유를 적는다.
 
 ### 1-7. 정리

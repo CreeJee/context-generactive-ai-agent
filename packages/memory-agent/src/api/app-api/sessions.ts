@@ -1,12 +1,21 @@
 import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "effect/http-api";
+import { RelayedApprovalView } from "../../approvals/relayed-state.ts";
+import { StoredMessage } from "../../chat-store/schema.ts";
 import {
   DecisionAnswer,
   HumanDecisionRequest,
   KanbanBoardView,
   KanbanStarted,
 } from "../../kanban/contracts.ts";
+import {
+  QueuedMessage,
+  QueueEditRequest,
+  QueueRequest,
+  QueueSnapshot,
+} from "../../queue/queue-state.ts";
 import { Session } from "../../sessions/contracts.ts";
+import { SubagentView } from "../../subagents/subagent-state.ts";
 import {
   BoardEdit,
   BoardEditApplied,
@@ -62,6 +71,13 @@ export const KanbanLoopRestarted = Schema.Struct({ restarted: Schema.Literal(tru
 
 /** The Goals the board's Goal now waits for. */
 export const GoalDependencies = Schema.Struct({ dependsOn: Schema.Array(Schema.String) });
+
+/** One subagent and its saved conversation. */
+export const SubagentTranscript = Schema.Struct({
+  subagent: SubagentView,
+  messages: Schema.Array(StoredMessage),
+});
+export type SubagentTranscript = typeof SubagentTranscript.Type;
 
 /** The project the request names is not registered. */
 const UnknownProject = appRefusal(404, ["project_not_found"]);
@@ -152,6 +168,26 @@ const InvalidKanbanSettings = appRefusal(400, ["invalid_kanban_settings"]);
 /** The dead-lettered card was requeued or settled meanwhile, or its worktree is in use. */
 const KanbanStateChanged = appRefusal(409, ["queue_item_changed", "worktree_in_use"]);
 
+/** An empty message, or one with an attachment the server does not have. */
+const InvalidQueuedMessage = appRefusal(400, ["empty_message", "unknown_attachment"]);
+
+/** Nothing is answering: the page sends the message as a normal turn instead. */
+const NotRunning = appRefusal(409, ["not_running"]);
+
+/** The queued message is gone, delivered or being delivered, or not held when confirmed. */
+const QueueChangeRefused = appRefusal(409, [
+  "queue_not_found",
+  "queue_delivered",
+  "queue_not_held",
+  "queue_reserved",
+]);
+
+/** The session has no such subagent. */
+const UnknownSubagent = appRefusal(404, ["subagent_not_found"]);
+
+/** The approval is unknown, another session's, timed out, or answered the other way. */
+const ApprovalNotPending = appRefusal(404, ["approval_not_pending"]);
+
 /** Reading or writing the session's decisions, board or kanban failed; the cause stays on the server. */
 const SessionStorageFailed = appRefusal(500, [
   "storage_failed",
@@ -176,6 +212,11 @@ export const sessionsRefusals = [
   GoalScheduleRefused,
   InvalidKanbanSettings,
   KanbanStateChanged,
+  InvalidQueuedMessage,
+  NotRunning,
+  QueueChangeRefused,
+  UnknownSubagent,
+  ApprovalNotPending,
   SessionStorageFailed,
 ];
 
@@ -270,6 +311,61 @@ export class SessionsGroup extends HttpApiGroup.make("sessions")
         KanbanStateChanged,
         SessionStorageFailed,
       ],
+    }),
+    /** Messages waiting to reach the agent, and those the latest run delivered. */
+    HttpApiEndpoint.get("queue", "/api/sessions/:session/queue", {
+      params: session,
+      success: QueueSnapshot,
+      error: UnknownSession,
+    }),
+    /**
+     * A message written while a run answers: `queue` goes at the next tool-call boundary, or as
+     * the next turn the page sends; `steer` also cuts the answer being written and the server
+     * sends it next. `not_running` means the page sends a normal turn instead.
+     */
+    HttpApiEndpoint.post("enqueue", "/api/sessions/:session/queue", {
+      params: session,
+      headers: sessionHolderHeaders,
+      payload: QueueRequest,
+      success: QueuedMessage.pipe(HttpApiSchema.status(201)),
+      error: [UnknownSession, SessionInUse, InvalidQueuedMessage, NotRunning],
+    }),
+    /** Edits, saves, removes or confirms one queued message; a removed one answers null. */
+    HttpApiEndpoint.post("editQueued", "/api/sessions/:session/queue/:message", {
+      params: { ...session, message: Schema.String },
+      headers: sessionHolderHeaders,
+      payload: QueueEditRequest,
+      success: Schema.NullOr(QueuedMessage),
+      error: [SessionInUse, QueueChangeRefused],
+    }),
+    /** The session's subagents. */
+    HttpApiEndpoint.get("subagents", "/api/sessions/:session/subagents", {
+      params: session,
+      success: Schema.Array(SubagentView),
+      error: UnknownSession,
+    }),
+    /** One subagent's saved conversation. */
+    HttpApiEndpoint.get("subagentTranscript", "/api/sessions/:session/subagents/:subagent", {
+      params: { ...session, subagent: Schema.String },
+      success: SubagentTranscript,
+      error: UnknownSubagent,
+    }),
+    /**
+     * Calls waiting for the user that could not pause the run: a subagent's, or an external
+     * agent's own permission requests.
+     */
+    HttpApiEndpoint.get("approvals", "/api/sessions/:session/approvals", {
+      params: session,
+      success: Schema.Array(RelayedApprovalView),
+      error: UnknownSession,
+    }),
+    /** Answers a waiting call; the calls still waiting come back. */
+    HttpApiEndpoint.post("answerApproval", "/api/sessions/:session/approvals/:approval", {
+      params: { ...session, approval: Schema.String },
+      headers: sessionHolderHeaders,
+      payload: Schema.Struct({ approved: Schema.Boolean }),
+      success: Schema.Array(RelayedApprovalView),
+      error: [SessionInUse, ApprovalNotPending],
     }),
   )
   .middleware(SameSite) {}

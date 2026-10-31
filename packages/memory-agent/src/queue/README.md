@@ -26,6 +26,7 @@
 - `NextDelivery` — Schema `TaggedUnion`의 타입과 그 `Data.taggedEnum` 생성자다: `ready`, `server`, `blocked{messageId, reason: "editing"|"held"}`, `empty`.
 - `QueueSnapshot` — `{ items, nextDelivery }` Schema다.
 - `QueueEdit` — 페이지가 요청하는 변경이다: `edit{draft}`, `save{text}`, `remove`, `confirm`. `QueueEdit`은 `Data.taggedEnum` 생성자, `QueueEditRequest`는 요청 본문이 읽는 Schema다.
+- `QueueRequest` — 페이지가 run 도중 보내는 메시지 `{ text, attachmentIds, mode: "queue"|"steer" }` Schema다. 앱 API 계약이 쓰므로 `agent/chat.ts`에서 옮겼다.
 - `DeliveryVia` — `"tool_boundary" | "steer" | "next_turn"` Schema다. `steer`는 codex 런타임이 제거되기 전의 옛 행에만 있다.
 
 ## Invariants

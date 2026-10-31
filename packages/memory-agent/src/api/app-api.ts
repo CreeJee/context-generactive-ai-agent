@@ -61,6 +61,7 @@ export {
   DecisionAnswerInput,
   KanbanCommand,
   KanbanView,
+  SubagentTranscript,
 } from "./app-api/sessions.ts";
 export { FolderPick } from "../projects/contracts.ts";
 export {

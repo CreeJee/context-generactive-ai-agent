@@ -1,6 +1,7 @@
 import { Effect, Match, Option, Predicate } from "effect";
 import { HttpApiBuilder } from "effect/http-api";
 import {
+  AgentChat,
   AppEvents,
   BoardAuthor,
   BoardEdit,
@@ -22,6 +23,18 @@ import { kanbanRefusal } from "../kanban-failures.ts";
 /** A person changed the board from the page. */
 const user = BoardAuthor.cases.User.make({});
 
+/**
+ * `AgentChat` refuses with the code the page reads. Its other failures are tagged; they become
+ * defects, which the server reports and answers 500.
+ */
+const refusalsOnly = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.catchIf(
+    effect,
+    (failure): failure is Extract<E, { readonly _tag: string }> =>
+      Predicate.hasProperty(failure, "_tag"),
+    (failure) => Effect.die(failure),
+  );
+
 /** The sessions group of `AppApi` (`/api/sessions/*`). */
 export const SessionsApiHandlers = HttpApiBuilder.group(
   AppApi,
@@ -37,6 +50,7 @@ export const SessionsApiHandlers = HttpApiBuilder.group(
     const boards = yield* Boards;
     const workflows = yield* Workflows;
     const actions = yield* KanbanBoardActions;
+    const chat = yield* AgentChat;
 
     /** Refuses a change while another page holds the session. */
     const checkHolder = (sessionId: string, holder: string | undefined) =>
@@ -213,6 +227,23 @@ export const SessionsApiHandlers = HttpApiBuilder.group(
             SchemaError: kanbanRefusal.SchemaError,
           }),
         ),
+      queue: ({ params: { session } }) => refusalsOnly(chat.queued(session)),
+      enqueue: ({ params: { session }, headers, payload }) =>
+        refusalsOnly(chat.enqueue(session, headers["x-session-holder"] ?? null, payload)).pipe(
+          Effect.tap(() => events.publishSession(session, "queue")),
+        ),
+      editQueued: ({ params: { session, message }, headers, payload }) =>
+        refusalsOnly(
+          chat.editQueued(session, headers["x-session-holder"] ?? null, message, payload),
+        ).pipe(Effect.tap(() => events.publishSession(session, "queue"))),
+      subagents: ({ params: { session } }) => refusalsOnly(chat.subagents(session)),
+      subagentTranscript: ({ params: { session, subagent } }) =>
+        refusalsOnly(chat.subagentTranscript(session, subagent)),
+      approvals: ({ params: { session } }) => refusalsOnly(chat.approvals(session)),
+      answerApproval: ({ params: { session, approval }, headers, payload: { approved } }) =>
+        refusalsOnly(
+          chat.answerApproval(session, headers["x-session-holder"] ?? null, approval, approved),
+        ).pipe(Effect.tap(() => events.publishSession(session, "relayed-approvals"))),
     });
   }),
 );

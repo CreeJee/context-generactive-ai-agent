@@ -19,7 +19,6 @@ export {
 } from "./providers/openai-compatible-config.ts";
 export {
   AgentChat,
-  QueueRequest,
   attachmentInstructions,
   memoryInstructions,
   workspaceInstructions,

@@ -78,7 +78,6 @@ import type {
   AccountLoginState as AccountLoginStateCase,
   OAuthProfile,
   SubscriptionAccountProvider,
-  StoredMessage,
   SubscriptionQuotaReport,
 } from "memory-agent";
 import { Option, Schema } from "effect";
@@ -361,6 +360,7 @@ export const ApiErrorCode = Schema.Literals([
   "reassign_needs_edit",
   "queue_not_found",
   "queue_not_held",
+  "queue_reserved",
   "queued_message_not_next",
   "quota_status_unavailable",
   "request_closed",
@@ -905,23 +905,32 @@ export const api = {
       action,
     }),
 
-  queue: (sessionId: string) =>
-    call<QueueSnapshot>("GET", `/api/sessions/${encodeURIComponent(sessionId)}/queue`),
+  queue: (session: string) => appCall((client) => client.sessions.queue({ params: { session } })),
   enqueue: (
-    sessionId: string,
+    session: string,
     holder: string,
-    message: { text: string; attachmentIds: readonly string[]; mode: "queue" | "steer" },
+    payload: { text: string; attachmentIds: readonly string[]; mode: "queue" | "steer" },
   ) =>
-    call<QueuedMessage>("POST", `/api/sessions/${encodeURIComponent(sessionId)}/queue`, message, {
-      [sessionHolderHeader]: holder,
-    }),
-  editQueued: (sessionId: string, holder: string, id: string, edit: QueueEdit) =>
-    call<QueuedMessage | null>(
-      "POST",
-      `/api/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(id)}`,
-      edit,
-      { [sessionHolderHeader]: holder },
+    appCall(
+      (client) =>
+        client.sessions.enqueue({
+          params: { session },
+          headers: { "x-session-holder": holder },
+          payload,
+        }),
+      "invalid_queue_request",
     ),
+  editQueued: (session: string, holder: string, message: string, edit: QueueEdit) =>
+    appCall((client) => {
+      const request = { params: { session, message }, headers: { "x-session-holder": holder } };
+      // The client takes a union payload one case at a time.
+      return QueueEdit.$match(edit, {
+        edit: (payload) => client.sessions.editQueued({ ...request, payload }),
+        save: (payload) => client.sessions.editQueued({ ...request, payload }),
+        remove: (payload) => client.sessions.editQueued({ ...request, payload }),
+        confirm: (payload) => client.sessions.editQueued({ ...request, payload }),
+      });
+    }, "invalid_queue_edit"),
   imageSettings: () => appCall((client) => client.settings.image()),
   setImageGenerationEnabled: (enabled: boolean) =>
     appCall(
@@ -1227,21 +1236,21 @@ export const api = {
     ),
   workTraceStreamUrl: (sessionId: string, after = 0) =>
     `/api/sessions/${encodeURIComponent(sessionId)}/trace/stream?after=${after}`,
-  subagents: (sessionId: string) =>
-    call<SubagentView[]>("GET", `/api/sessions/${encodeURIComponent(sessionId)}/subagents`),
-  relayedApprovals: (sessionId: string) =>
-    call<RelayedApprovalView[]>("GET", `/api/sessions/${encodeURIComponent(sessionId)}/approvals`),
-  subagentTranscript: (sessionId: string, subagentId: string) =>
-    call<{ subagent: SubagentView; messages: StoredMessage[] }>(
-      "GET",
-      `/api/sessions/${encodeURIComponent(sessionId)}/subagents/${encodeURIComponent(subagentId)}`,
-    ),
-  answerApproval: (sessionId: string, holder: string, approvalId: string, approved: boolean) =>
-    call<RelayedApprovalView[]>(
-      "POST",
-      `/api/sessions/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(approvalId)}`,
-      { approved },
-      { [sessionHolderHeader]: holder },
+  subagents: (session: string) =>
+    appCall((client) => client.sessions.subagents({ params: { session } })),
+  relayedApprovals: (session: string) =>
+    appCall((client) => client.sessions.approvals({ params: { session } })),
+  subagentTranscript: (session: string, subagent: string) =>
+    appCall((client) => client.sessions.subagentTranscript({ params: { session, subagent } })),
+  answerApproval: (session: string, holder: string, approval: string, approved: boolean) =>
+    appCall(
+      (client) =>
+        client.sessions.answerApproval({
+          params: { session, approval },
+          headers: { "x-session-holder": holder },
+          payload: { approved },
+        }),
+      "invalid_answer",
     ),
 
   /** Uploads one image as raw bytes; the server checks what it really is. */

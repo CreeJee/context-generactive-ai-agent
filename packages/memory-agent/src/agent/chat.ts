@@ -106,7 +106,12 @@ import { QueueDelivery } from "../queue/delivery.ts";
 import { steerCuttableModel, type SteerCut } from "./steer-cut.ts";
 import { hostShell } from "../shell/run.ts";
 import { MessageQueue, type QueueChangeRefused } from "../queue/queue.ts";
-import { NextDelivery, QueueEdit, type QueuedMessage } from "../queue/queue-state.ts";
+import {
+  NextDelivery,
+  QueueEdit,
+  type QueuedMessage,
+  type QueueRequest,
+} from "../queue/queue-state.ts";
 import { modelHandoffHistoryEffect } from "./model-handoff.ts";
 import {
   budgetFor,
@@ -333,17 +338,6 @@ const userTurn = (content: (typeof StoredUserMessage.Type)["content"]): UserTurn
             : [],
         ),
       };
-
-export const QueueRequest = Schema.Struct({
-  text: Schema.String,
-  attachmentIds: Schema.Array(Schema.String),
-  /**
-   * queue: the next tool-call boundary, or the next turn the page sends. steer: also cuts the
-   * answer being written; the server sends it as the next turn, with no page needed.
-   */
-  mode: Schema.Literals(["queue", "steer"]),
-});
-export type QueueRequest = typeof QueueRequest.Type;
 
 /**
  * Every answer goes through here. Without the DOM library, `Response.json` is typed with undici's
@@ -718,6 +712,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   /** The session's newest run, or null before its first. */
   const lastRun = (sessionId: string) => Effect.map(runStore.lastRun(sessionId), Option.getOrNull);
   const inUse = () => json(423, { error: "session_in_use" });
+  /** Refuses a change while another page holds the session. */
+  const refuseOtherHolder = (sessionId: string, holder: string | null) =>
+    Effect.when(
+      Effect.fail({ error: "session_in_use" } as const),
+      Effect.map(leases.permits(sessionId, holder), (permitted) => !permitted),
+    );
   const workTraceUnavailable = () => json(404, { error: "work_trace_disabled" });
   const windowFor = (selection: ModelSelection | null) =>
     selection !== null
@@ -823,6 +823,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   };
   /** Every handler that looks a session up answers this when it does not exist. */
   const sessionNotFound = () => Effect.succeed(json(404, { error: "session_not_found" }));
+  /** The app API's methods refuse with the code instead. */
+  const unknownSession = () => Effect.fail({ error: "session_not_found" } as const);
   const providerUnavailable = (failure: { readonly provider: string }) =>
     Effect.succeed(json(503, { error: "provider_unavailable", provider: failure.provider }));
 
@@ -2715,8 +2717,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
         const last = yield* lastRun(sessionId);
-        return json(200, yield* queue.snapshot(sessionId, last?.runId ?? null));
-      }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
+        return yield* queue.snapshot(sessionId, last?.runId ?? null);
+      }).pipe(Effect.catchTag("SessionNotFound", unknownSession)),
 
     /**
      * A message written while a run answers. Both modes deliver it at the next tool-call boundary.
@@ -2728,14 +2730,15 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     enqueue: (sessionId: string, holder: string | null, request: QueueRequest) =>
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
-        if (!(yield* leases.permits(sessionId, holder))) return inUse();
+        yield* refuseOtherHolder(sessionId, holder);
         const { text, attachmentIds, mode } = request;
         if (text.trim().length === 0 && attachmentIds.length === 0)
-          return json(400, { error: "empty_message" });
+          return yield* Effect.fail({ error: "empty_message" } as const);
         const known = yield* Effect.forEach(attachmentIds, attachments.get);
         if (known.some((attachment) => !isTruthy(attachment)))
-          return json(400, { error: "unknown_attachment" });
-        if (!isTruthy(yield* liveRuns.get(sessionId))) return json(409, { error: "not_running" });
+          return yield* Effect.fail({ error: "unknown_attachment" } as const);
+        if (!isTruthy(yield* liveRuns.get(sessionId)))
+          return yield* Effect.fail({ error: "not_running" } as const);
         const message = yield* queue.add(sessionId, text, attachmentIds, mode === "steer");
         // Steering stops the answer where it is, unless it has begun a tool call; the run then
         // completes and the server sends the message as the next turn.
@@ -2745,42 +2748,38 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ),
           Effect.succeed(mode === "steer"),
         );
-        return json(201, message);
-      }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
+        return message;
+      }).pipe(Effect.catchTag("SessionNotFound", unknownSession)),
 
     /** The session's subagents. */
     subagents: (sessionId: string) =>
-      sessions.get(sessionId).pipe(
-        Effect.andThen(subagents.list(sessionId)),
-        Effect.map((list) => json(200, list)),
-        Effect.catchTag("SessionNotFound", sessionNotFound),
-      ),
+      sessions
+        .get(sessionId)
+        .pipe(
+          Effect.andThen(subagents.list(sessionId)),
+          Effect.catchTag("SessionNotFound", unknownSession),
+        ),
 
     /** One subagent's saved conversation. */
     subagentTranscript: (sessionId: string, subagentId: string) =>
-      Effect.gen(function* () {
-        const transcript = yield* subagents
-          .transcript(sessionId, subagentId)
-          .pipe(
-            Effect.mapError((cause) =>
-              AgentOperationFailed.make({ operation: "load-transcript", cause }),
-            ),
-          );
-        return isTruthy(transcript)
-          ? json(200, transcript)
-          : json(404, { error: "subagent_not_found" });
-      }),
+      subagents.transcript(sessionId, subagentId).pipe(
+        Effect.mapError((cause) =>
+          AgentOperationFailed.make({ operation: "load-transcript", cause }),
+        ),
+        Effect.filterOrFail(Predicate.isNotNull, () => ({ error: "subagent_not_found" }) as const),
+      ),
 
     /**
      * Calls waiting for the user that could not pause the run: a subagent's, or an external
      * agent's own permission requests.
      */
     approvals: (sessionId: string) =>
-      sessions.get(sessionId).pipe(
-        Effect.andThen(relayed.pending(sessionId)),
-        Effect.map((pending) => json(200, pending)),
-        Effect.catchTag("SessionNotFound", sessionNotFound),
-      ),
+      sessions
+        .get(sessionId)
+        .pipe(
+          Effect.andThen(relayed.pending(sessionId)),
+          Effect.catchTag("SessionNotFound", unknownSession),
+        ),
 
     /** The page's answer to a relayed approval. Only the page holding the session may answer. */
     answerApproval: (
@@ -2790,23 +2789,20 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       approved: boolean,
     ) =>
       Effect.gen(function* () {
-        if (!(yield* leases.permits(sessionId, holder))) return inUse();
-        return (yield* relayed.answer(sessionId, approvalId, approved))
-          ? json(200, yield* relayed.pending(sessionId))
-          : json(404, { error: "approval_not_pending" });
+        yield* refuseOtherHolder(sessionId, holder);
+        if (!(yield* relayed.answer(sessionId, approvalId, approved)))
+          return yield* Effect.fail({ error: "approval_not_pending" } as const);
+        return yield* relayed.pending(sessionId);
       }),
 
-    /** Edits, removes or confirms one queued message. */
+    /** Edits, removes or confirms one queued message; a removed one answers null. */
     editQueued: (sessionId: string, holder: string | null, id: string, edit: QueueEdit) =>
-      Effect.gen(function* () {
-        if (!(yield* leases.permits(sessionId, holder))) return inUse();
-        return yield* applyEdit(sessionId, id, edit).pipe(
-          Effect.map((message) => json(200, message)),
-          Effect.catchTag("QueueChangeRefused", (refusal) =>
-            Effect.succeed(json(409, { error: `queue_${refusal.reason}` })),
-          ),
-        );
-      }),
+      refuseOtherHolder(sessionId, holder).pipe(
+        Effect.andThen(applyEdit(sessionId, id, edit)),
+        Effect.catchTag("QueueChangeRefused", ({ reason }) =>
+          Effect.fail({ error: `queue_${reason}` } as const),
+        ),
+      ),
   };
 
   // Completion delivery is service-scoped and coalesced per session. The same live-run claim

@@ -142,14 +142,9 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
     });
   /** Queue or steer a message as the page's composer does while a run is going. */
   const enqueue = (text: string, mode: "queue" | "steer") =>
-    Effect.gen(function* () {
-      const response = yield* (yield* AgentChat).enqueue(sessionId, null, {
-        text,
-        attachmentIds: [],
-        mode,
-      });
-      yield* Effect.sync(() => expect(response.status).toBe(201));
-    });
+    Effect.flatMap(AgentChat, (chat) =>
+      Effect.asVoid(chat.enqueue(sessionId, null, { text, attachmentIds: [], mode })),
+    );
   /** Starts a run the page never sends; the run id is fresh unless `turn` names one. */
   const handWritten = Effect.fnUntraced(function* (turn: HandWrittenTurn) {
     const api = yield* chatApi;

@@ -3,6 +3,7 @@ import { HttpRouter, HttpServer } from "effect/http";
 import { HttpApiBuilder } from "effect/http-api";
 import { AuthConnectionState } from "../../src/providers/contracts.ts";
 import { AgentChat } from "../../src/agent/chat.ts";
+import { appRefusalStatus } from "../../src/api/app-api.ts";
 import { ChatApi, SameSite } from "../../src/api/chat-api.ts";
 import { BtwApiHandlers, ChatApiHandlers } from "../../src/api/chat-api-live.ts";
 import { BtwChat } from "../../src/btw/chat.ts";
@@ -46,6 +47,21 @@ const chatApiHandler = Effect.gen(function* () {
     ({ dispose }) => Effect.promise(dispose),
   );
 });
+
+/**
+ * An `AgentChat` answer as the app API's handler gives it: the value, or the refusal with its
+ * status. Any other failure fails the request.
+ */
+const answered = <A, R>(
+  effect: Effect.Effect<A, { readonly error: string } | { readonly _tag: string }, R>,
+) =>
+  Effect.map(effect, (value) => Response.json(value)).pipe(
+    Effect.catch((failure) =>
+      "error" in failure
+        ? Effect.succeed(Response.json(failure, { status: appRefusalStatus(failure) }))
+        : Effect.die(failure),
+    ),
+  );
 
 const route = Effect.fnUntraced(function* (
   chatApi: (request: Request) => Promise<Response>,
@@ -94,9 +110,9 @@ const route = Effect.fnUntraced(function* (
     case "cancel":
       return yield* chat.cancel(sessionId!, holder);
     case "approvals": {
-      if (approvalId === undefined) return yield* chat.approvals(sessionId!);
+      if (approvalId === undefined) return yield* answered(chat.approvals(sessionId!));
       const { approved } = yield* Schema.decodeUnknownEffect(ApprovalRequest)(yield* body);
-      return yield* chat.answerApproval(sessionId!, holder, approvalId, approved);
+      return yield* answered(chat.answerApproval(sessionId!, holder, approvalId, approved));
     }
     default:
       return Response.json({ error: "not_found" }, { status: 404 });
