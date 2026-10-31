@@ -25,11 +25,18 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS as DndCss } from "@dnd-kit/utilities";
-import { ChevronsLeftRightIcon, ChevronsRightLeftIcon, GripVerticalIcon } from "lucide-react";
+import {
+  ChevronsLeftRightIcon,
+  ChevronsRightLeftIcon,
+  GripVerticalIcon,
+  KeyboardIcon,
+} from "lucide-react";
 import { cn } from "cn";
 import { useAtom } from "jotai";
 import { atomWithStorage } from "jotai/utils";
 import { Button } from "../../../components/ui/button";
+import { Kbd } from "../../../components/ui/kbd";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../../../components/ui/tooltip";
 import type { CardStatus } from "../../api";
 import {
   boardColumns,
@@ -358,6 +365,43 @@ export function KanbanBoard({
   );
 }
 
+/** The board's keys, behind a small button so they stay out of the way of the cards. */
+export function BoardShortcuts() {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            aria-label="키보드 단축키"
+            className="hidden sm:inline-flex"
+          />
+        }
+      >
+        <KeyboardIcon />
+      </TooltipTrigger>
+      <TooltipContent side="bottom" align="end">
+        <div className="flex flex-col items-start gap-1">
+          <p>
+            <Kbd>j</Kbd> <Kbd>k</Kbd> <Kbd>h</Kbd> <Kbd>l</Kbd> 또는 화살표: 카드 사이 이동
+          </p>
+          <p>
+            <Kbd>Enter</Kbd>: 카드 열기
+          </p>
+          <p>
+            손잡이에서 <Kbd>Space</Kbd>: 카드 집기, 화살표로 옮기고 <Kbd>Space</Kbd>로 놓기
+          </p>
+          <p>
+            <Kbd>Esc</Kbd>: 옮기기 취소
+          </p>
+        </div>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 function BoardColumn({
   status,
   count,
@@ -419,7 +463,9 @@ function BoardColumn({
       ref={setNodeRef}
       aria-label={`${label} ${count}개`}
       className={cn(
-        "flex min-w-[min(18rem,85vw)] flex-1 basis-0 snap-start flex-col rounded-lg bg-muted/40 transition-opacity sm:min-w-44",
+        "group/column flex snap-start flex-col rounded-lg bg-muted/40 transition-opacity",
+        // An empty column stays a drop target but leaves its width to the columns with cards.
+        count === 0 ? "w-32 flex-none" : "min-w-[min(18rem,85vw)] flex-1 basis-0 sm:min-w-44",
         refused && "opacity-40",
         over && !refused && "ring-2 ring-primary/50",
       )}
@@ -428,16 +474,17 @@ function BoardColumn({
         <StatusIcon status={status} />
         <h3 className="text-xs font-medium">{label}</h3>
         <span className="text-xs text-muted-foreground">{count}</span>
-        <Button
-          type="button"
-          size="icon-xs"
-          variant="ghost"
-          className="ml-auto"
-          aria-label={`${label} 열 접기`}
-          onClick={onToggle}
-        >
-          <ChevronsRightLeftIcon />
-        </Button>
+        <span className="ml-auto opacity-0 group-hover/column:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100">
+          <Button
+            type="button"
+            size="icon-xs"
+            variant="ghost"
+            aria-label={`${label} 열 접기`}
+            onClick={onToggle}
+          >
+            <ChevronsRightLeftIcon />
+          </Button>
+        </span>
       </header>
       {over && hint !== null && (
         <p

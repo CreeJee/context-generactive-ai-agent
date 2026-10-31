@@ -152,7 +152,7 @@ it.live("project board shows the executing Plans in order, moves a Goal and move
 
     // The status panel has a line per executing conversation in the priority tree's order; the
     // arrows move a Goal, and "대화 열기" goes to that conversation.
-    yield* sdkCall(() => screen.getByRole("button", { name: "대화별 상태 · 순서 · 동작" }).click());
+    yield* sdkCall(() => screen.getByRole("button", { name: "대화 순서와 상태" }).click());
     yield* sdkCall(() =>
       expect.element(screen.getByRole("heading", { name: "결제 모듈" })).toBeVisible(),
     );

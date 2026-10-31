@@ -1,7 +1,6 @@
 import { isTruthy } from "../../../truthy.ts";
 import {
   BanIcon,
-  BotIcon,
   CircleCheckIcon,
   CircleDashedIcon,
   CircleDotDashedIcon,
@@ -57,24 +56,20 @@ export function authorLabel(author: BoardAuthor | null): string {
   return Match.valueTags(author, { User: () => "사용자", Orchestrator: () => "오케스트레이터" });
 }
 
-/** Who last changed the card, as a small avatar with the name and time as its label. */
-export function AuthorAvatar({ change }: { readonly change: BoardCard["lastChange"] }) {
-  const label =
-    change === null
-      ? "마지막 변경 기록 없음"
-      : `마지막 변경: ${authorLabel(change.author)} · ${koreanLocalTime(change.at)}`;
-  const Icon = Predicate.isTagged(change?.author, "Orchestrator") ? BotIcon : UserRoundIcon;
+/**
+ * Marks a card the user changed last, with the time as its label. The orchestrator moving cards is
+ * the board's normal course, so its changes are only in the peek.
+ */
+export function UserChangeMark({ at }: { readonly at: string }) {
+  const label = `마지막 변경: 사용자 · ${koreanLocalTime(at)}`;
   return (
     <span
       role="img"
       aria-label={label}
       title={label}
-      className={cn(
-        "ml-auto grid size-5 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground",
-        change === null && "opacity-40",
-      )}
+      className="ml-auto grid size-5 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground"
     >
-      <Icon aria-hidden className="size-3" />
+      <UserRoundIcon aria-hidden className="size-3" />
     </span>
   );
 }
@@ -86,9 +81,9 @@ export interface CardSignals {
   /** A request about the card is on its way; the card shows where it is expected to land. */
   readonly requesting: boolean;
   readonly reason: string | null;
-  /** Titles of the cards it depends on that are not done yet. */
+  /** Titles of the unfinished cards it depends on, while it has not started. */
   readonly waitingOn: readonly string[];
-  /** The conversation the card belongs to, when the board shows several Plans. */
+  /** The conversation the card belongs to, when the board shows cards of several Plans. */
   readonly group: string | null;
 }
 
@@ -100,7 +95,17 @@ export function CardFace({
   readonly entry: BoardCard;
   readonly signals: CardSignals;
 }) {
-  const { card } = entry;
+  const { card, lastChange } = entry;
+  const userChangedAt =
+    lastChange !== null && Predicate.isTagged(lastChange.author, "User") ? lastChange.at : null;
+  const meta =
+    isTruthy(card.risk) ||
+    signals.decisionPending ||
+    card.hold !== undefined ||
+    signals.requesting ||
+    signals.changePending ||
+    signals.waitingOn.length > 0 ||
+    userChangedAt !== null;
   return (
     <>
       <span className="flex items-center gap-1.5 text-2xs text-muted-foreground">
@@ -116,35 +121,37 @@ export function CardFace({
       <span className="mt-1 line-clamp-2 block text-xs font-medium text-foreground">
         {card.title}
       </span>
-      <span className="mt-2 flex flex-wrap items-center gap-1 text-2xs text-muted-foreground">
-        {isTruthy(card.risk) && <Badge variant="outline">{riskLabels[card.risk]}</Badge>}
-        {signals.decisionPending && (
-          <Badge variant="outline">
-            <HourglassIcon data-icon="inline-start" />
-            판단 대기
-          </Badge>
-        )}
-        {card.hold !== undefined && (
-          <Badge variant="secondary">
-            <CirclePauseIcon data-icon="inline-start" />
-            보류
-          </Badge>
-        )}
-        {signals.requesting && (
-          <Badge variant="outline">
-            <Spinner data-icon="inline-start" />
-            요청 중
-          </Badge>
-        )}
-        {signals.changePending && <Badge variant="outline">변경 요청 대기</Badge>}
-        {signals.waitingOn.length > 0 && (
-          <span className="inline-flex items-center gap-0.5" title={signals.waitingOn.join(", ")}>
-            <LinkIcon aria-hidden className="size-3" />
-            선행 {signals.waitingOn.length}
-          </span>
-        )}
-        <AuthorAvatar change={entry.lastChange} />
-      </span>
+      {meta && (
+        <span className="mt-2 flex flex-wrap items-center gap-1 text-2xs text-muted-foreground">
+          {isTruthy(card.risk) && <Badge variant="outline">{riskLabels[card.risk]}</Badge>}
+          {signals.decisionPending && (
+            <Badge variant="outline">
+              <HourglassIcon data-icon="inline-start" />
+              판단 대기
+            </Badge>
+          )}
+          {card.hold !== undefined && (
+            <Badge variant="secondary">
+              <CirclePauseIcon data-icon="inline-start" />
+              보류
+            </Badge>
+          )}
+          {signals.requesting && (
+            <Badge variant="outline">
+              <Spinner data-icon="inline-start" />
+              요청 중
+            </Badge>
+          )}
+          {signals.changePending && <Badge variant="outline">변경 요청 대기</Badge>}
+          {signals.waitingOn.length > 0 && (
+            <span className="inline-flex items-center gap-0.5" title={signals.waitingOn.join(", ")}>
+              <LinkIcon aria-hidden className="size-3" />
+              선행 {signals.waitingOn.length}
+            </span>
+          )}
+          {userChangedAt !== null && <UserChangeMark at={userChangedAt} />}
+        </span>
+      )}
       {signals.reason !== null && (
         <span className="mt-1.5 line-clamp-2 block text-2xs text-muted-foreground">
           {signals.reason}

@@ -30,6 +30,7 @@ import { LoopHealthStatus } from "../../shared/loop-health";
 import { planStatusLabels } from "../workflow-panel";
 import { boardColumns, type BoardCardRef } from "./board-moves";
 import { BoardSurface, editErrorText, kanbanSwitchHint, type SurfaceBoard } from "./board-surface";
+import { BoardShortcuts } from "./kanban-board";
 
 const cardsOf = (row: ProjectBoardRow) =>
   boardColumns.reduce((sum, status) => sum + row.counts[status], 0);
@@ -134,15 +135,11 @@ export function ProjectBoard({
                 완료 {done}/{total}
               </span>
               {inbox.length > 0 && <Badge variant="outline">판단 대기 {inbox.length}</Badge>}
-              <span className="hidden sm:inline">
-                위쪽 대화의 카드부터 시작해요. 대화 순서는 대화별 상태 패널에서 바꾸고, 카드 순서는
-                같은 대화 안에서 바꿔요.
-              </span>
             </span>
           </SheetDescription>
           {waiting.length > 0 && (
             <p role="status" className="flex flex-wrap items-center gap-1 text-xs">
-              <span className="text-muted-foreground">보드 밖 Plan {waiting.length}개:</span>
+              <span className="text-muted-foreground">실행 중이 아닌 계획 {waiting.length}개:</span>
               {waiting.map((row) => (
                 <Button
                   key={row.sessionId}
@@ -156,39 +153,54 @@ export function ProjectBoard({
               ))}
             </p>
           )}
-          {rows.length > 1 && (
-            <div role="group" aria-label="보이는 대화" className="mt-1 flex flex-wrap gap-1">
-              <Button
-                type="button"
-                size="xs"
-                variant={shown.length === 0 ? "secondary" : "ghost"}
-                aria-pressed={shown.length === 0}
-                onClick={() => setShown([])}
-              >
-                모든 대화
-              </Button>
-              {rows.map((row) => (
-                <Button
-                  key={row.sessionId}
-                  type="button"
-                  size="xs"
-                  variant={shown.includes(row.sessionId) ? "secondary" : "ghost"}
-                  aria-pressed={shown.includes(row.sessionId)}
-                  onClick={() => toggleShown(row.sessionId)}
-                >
-                  {titleOf(row)}
-                </Button>
-              ))}
+          <Collapsible>
+            <div className="mt-1 flex flex-wrap items-center gap-1">
+              {rows.length > 1 && (
+                <div role="group" aria-label="보이는 대화" className="flex flex-wrap gap-1">
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant={shown.length === 0 ? "secondary" : "ghost"}
+                    aria-pressed={shown.length === 0}
+                    onClick={() => setShown([])}
+                  >
+                    모든 대화
+                  </Button>
+                  {rows.map((row) => (
+                    <Button
+                      key={row.sessionId}
+                      type="button"
+                      size="xs"
+                      variant={shown.includes(row.sessionId) ? "secondary" : "ghost"}
+                      aria-pressed={shown.includes(row.sessionId)}
+                      onClick={() => toggleShown(row.sessionId)}
+                    >
+                      {titleOf(row)}
+                    </Button>
+                  ))}
+                </div>
+              )}
+              <span className="ml-auto flex items-center gap-1">
+                {rows.length > 0 && (
+                  <CollapsibleTrigger
+                    render={<Button type="button" size="sm" variant="ghost" className="group" />}
+                  >
+                    <ChevronRightIcon
+                      data-icon="inline-start"
+                      className="transition-transform group-data-[panel-open]:rotate-90"
+                    />
+                    대화 순서와 상태
+                  </CollapsibleTrigger>
+                )}
+                {/* Not while loading: the sheet would focus it first and open its tooltip. */}
+                {rows.length > 0 && <BoardShortcuts />}
+              </span>
             </div>
-          )}
-          {rows.length > 0 && (
-            <Collapsible className="rounded-md border">
-              <CollapsibleTrigger className="group flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground group-data-[panel-open]:rotate-90" />
-                <span className="font-medium">대화별 상태 · 순서 · 동작</span>
-                {inbox.length > 0 && <Badge variant="outline">판단 대기 {inbox.length}</Badge>}
-              </CollapsibleTrigger>
-              <CollapsibleContent className="max-h-60 divide-y overflow-y-auto border-t">
+            {rows.length > 0 && (
+              <CollapsibleContent className="mt-2 max-h-60 divide-y overflow-y-auto rounded-md border">
+                <p className="px-3 py-2 text-xs text-muted-foreground">
+                  위쪽 대화의 카드부터 시작해요. 카드 순서는 같은 대화 안에서 바꿔요.
+                </p>
                 {rows.map((row, index) => (
                   <ConversationRow
                     key={row.sessionId}
@@ -218,8 +230,8 @@ export function ProjectBoard({
                   </p>
                 )}
               </CollapsibleContent>
-            </Collapsible>
-          )}
+            )}
+          </Collapsible>
         </SheetHeader>
         {boards.data === undefined && (
           <p className="px-4 text-muted-foreground">보드를 불러오는 중이에요.</p>

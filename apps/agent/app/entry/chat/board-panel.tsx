@@ -52,6 +52,7 @@ import {
 } from "./board/board-surface";
 import { authorLabel, StatusIcon } from "./board/card-face";
 import { verdictText } from "./board/hold-reason";
+import { BoardShortcuts } from "./board/kanban-board";
 
 export { cardStatusLabels } from "./board/board-moves";
 export { authorLabel } from "./board/card-face";
@@ -299,91 +300,95 @@ function BoardSheet({
                 완료 {view.cards.filter(({ card }) => card.status === "done").length}/
                 {view.cards.length}
               </span>
-              <span className="hidden sm:inline">
-                j·k·h·l로 카드 사이를 옮겨 다니고, Enter로 열어요. 손잡이에서 Space로 카드를 집어요.
-              </span>
             </span>
           </SheetDescription>
-          <div className="mt-1 flex flex-wrap items-center gap-2">
-            {loop === null && plan.status === "executing" && (
+          <Collapsible defaultOpen={goalDecisions.length > 0 || view.pendingChanges.length > 0}>
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              {loop === null && plan.status === "executing" && (
+                <Button
+                  type="button"
+                  size="sm"
+                  title={kanbanSwitchHint}
+                  disabled={disabled || kanbanAction.isPending}
+                  onClick={() => act(KanbanAction.Start())}
+                >
+                  칸반으로 전환
+                </Button>
+              )}
               <Button
                 type="button"
                 size="sm"
-                title={kanbanSwitchHint}
-                disabled={disabled || kanbanAction.isPending}
-                onClick={() => act(KanbanAction.Start())}
+                variant="outline"
+                disabled={disabled || closed}
+                onClick={() => setAdding(true)}
               >
-                칸반으로 전환
+                <PlusIcon data-icon="inline-start" />
+                카드 추가
               </Button>
-            )}
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={disabled || closed}
-              onClick={() => setAdding(true)}
-            >
-              <PlusIcon data-icon="inline-start" />
-              카드 추가
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={disabled || closed || edit.isPending}
-              onClick={() => setAskClose(true)}
-            >
-              <CircleSlashIcon data-icon="inline-start" />
-              계획 닫기
-            </Button>
-            {actionError !== null && (
-              <span className="text-destructive" role="alert">
-                {actionError}
-              </span>
-            )}
-          </div>
-          <Dialog open={askClose} onOpenChange={setAskClose}>
-            <DialogContent className="sm:max-w-md">
-              <DialogHeader>
-                <DialogTitle>이 계획을 닫을까요?</DialogTitle>
-                <DialogDescription>
-                  완료되지 않은 카드는 막힘으로 정리되고, 이 계획은 칸반 보드 목록에서 사라져요.
-                  대화 기록과 지금까지 끝낸 카드는 그대로 남아요.
-                </DialogDescription>
-              </DialogHeader>
-              <DialogFooter>
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={edit.isPending}
-                  onClick={() => setAskClose(false)}
-                >
-                  그만두기
-                </Button>
-                <Button
-                  type="button"
-                  variant="destructive"
-                  disabled={edit.isPending}
-                  onClick={closePlan}
-                >
-                  사용자 요청으로 닫기
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-          {extras.length > 0 && (
-            <Collapsible
-              className="rounded-md border"
-              defaultOpen={goalDecisions.length > 0 || view.pendingChanges.length > 0}
-            >
-              <CollapsibleTrigger className="group flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground group-data-[panel-open]:rotate-90" />
-                <span className="font-medium">{extras.join(" · ")}</span>
-                {goalDecisions.length > 0 && (
-                  <Badge variant="outline">판단 대기 {goalDecisions.length}</Badge>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={disabled || closed || edit.isPending}
+                onClick={() => setAskClose(true)}
+              >
+                <CircleSlashIcon data-icon="inline-start" />
+                계획 닫기
+              </Button>
+              {actionError !== null && (
+                <span className="text-destructive" role="alert">
+                  {actionError}
+                </span>
+              )}
+              <span className="ml-auto flex items-center gap-1">
+                {extras.length > 0 && (
+                  <CollapsibleTrigger
+                    render={<Button type="button" size="sm" variant="ghost" className="group" />}
+                  >
+                    <ChevronRightIcon
+                      data-icon="inline-start"
+                      className="transition-transform group-data-[panel-open]:rotate-90"
+                    />
+                    {extras.join(" · ")}
+                    {goalDecisions.length > 0 && (
+                      <Badge variant="outline">판단 대기 {goalDecisions.length}</Badge>
+                    )}
+                  </CollapsibleTrigger>
                 )}
-              </CollapsibleTrigger>
-              <CollapsibleContent className="max-h-72 space-y-3 overflow-y-auto border-t px-3 py-2">
+                <BoardShortcuts />
+              </span>
+            </div>
+            <Dialog open={askClose} onOpenChange={setAskClose}>
+              <DialogContent className="sm:max-w-md">
+                <DialogHeader>
+                  <DialogTitle>이 계획을 닫을까요?</DialogTitle>
+                  <DialogDescription>
+                    완료되지 않은 카드는 막힘으로 정리되고, 이 계획은 칸반 보드 목록에서 사라져요.
+                    대화 기록과 지금까지 끝낸 카드는 그대로 남아요.
+                  </DialogDescription>
+                </DialogHeader>
+                <DialogFooter>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={edit.isPending}
+                    onClick={() => setAskClose(false)}
+                  >
+                    그만두기
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    disabled={edit.isPending}
+                    onClick={closePlan}
+                  >
+                    사용자 요청으로 닫기
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+            {extras.length > 0 && (
+              <CollapsibleContent className="mt-2 max-h-72 space-y-3 overflow-y-auto rounded-md border px-3 py-2">
                 {loop?.schedule != null && (
                   <GoalSchedulePanel
                     schedule={loop.schedule}
@@ -428,8 +433,8 @@ function BoardSheet({
                   </div>
                 )}
               </CollapsibleContent>
-            </Collapsible>
-          )}
+            )}
+          </Collapsible>
         </SheetHeader>
         <BoardSurface
           projectId={projectId}

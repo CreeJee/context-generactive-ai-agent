@@ -229,15 +229,14 @@ export function BoardSurface({
     boards.find((board) => board.sessionId === sessionId) ?? null;
   const closedIn = (board: SurfaceBoard) =>
     board.plan.status === "completed" || board.plan.status === "closed";
+  const visible = boards.filter((board) => shown.length === 0 || shown.includes(board.sessionId));
   const items = inProjectOrder(
-    boards
-      .filter((board) => shown.length === 0 || shown.includes(board.sessionId))
-      .flatMap((board) =>
-        board.view.cards.map((entry) => ({
-          item: boardItem(board.sessionId, entry),
-          rank: board.rank,
-        })),
-      ),
+    visible.flatMap((board) =>
+      board.view.cards.map((entry) => ({
+        item: boardItem(board.sessionId, entry),
+        rank: board.rank,
+      })),
+    ),
   );
   const pending = pendingOf(request, landing, items);
   const cards = withPending(items, pending);
@@ -259,10 +258,15 @@ export function BoardSurface({
     changePending: changePending(refOf(item)),
     requesting: pending?.key === item.key,
     reason: holdText(loopCard(refOf(item))?.reason ?? null),
-    waitingOn: item.card.dependsOn
-      .filter((cardId) => !doneIn(item.sessionId, cardId))
-      .map(titleIn(item.sessionId)),
-    group: boardOf(item.sessionId)?.label ?? null,
+    // Only a card that has not started waits for anything; a started one is past its prerequisites.
+    waitingOn:
+      item.card.status === "backlog" || item.card.status === "ready"
+        ? item.card.dependsOn
+            .filter((cardId) => !doneIn(item.sessionId, cardId))
+            .map(titleIn(item.sessionId))
+        : [],
+    // With one conversation on screen every card would name the same one.
+    group: visible.length > 1 ? (boardOf(item.sessionId)?.label ?? null) : null,
   });
   const contextOf = (item: BoardItem): DropContext => {
     const board = boardOf(item.sessionId);
