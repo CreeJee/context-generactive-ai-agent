@@ -118,6 +118,23 @@ describe("resolveProjectPath", () => {
     }).pipe(withTestPlatform),
   );
 
+  it.live("names where a refused link leads only when a file tool could use that path", () =>
+    Effect.gen(function* () {
+      const { project, outside, fs, path } = yield* layout();
+      yield* fs.symlink(path.join(project, "src"), path.join(project, "current"));
+      yield* fs.symlink(path.join(project, ".git"), path.join(project, "git-link"));
+      yield* fs.symlink(outside, path.join(project, "linked"));
+      const refused = (spelled: string) =>
+        Effect.flip(resolveProjectPath(project, spelled, "file"));
+      expect(yield* refused("current/app.ts")).toMatchObject({
+        reason: "symlink",
+        target: "src/app.ts",
+      });
+      expect(yield* refused("git-link/HEAD")).not.toHaveProperty("target");
+      expect(yield* refused("linked/notes.md")).not.toHaveProperty("target");
+    }).pipe(withTestPlatform),
+  );
+
   it.live("reports kind mismatches", () =>
     Effect.gen(function* () {
       const { project } = yield* layout();

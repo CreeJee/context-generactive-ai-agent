@@ -6,7 +6,7 @@
 
 ## Interface
 
-- `PathRejected` — 경로 거부 TaggedError, reason은 `invalid_path`/`credential`/`git_internal`/`inside_project`/`outside_tool_root`/`symlink`/`hard_link`/`not_found`/`not_file`/`not_directory`
+- `PathRejected` — 경로 거부 TaggedError, reason은 `invalid_path`/`credential`/`git_internal`/`inside_project`/`outside_tool_root`/`symlink`/`hard_link`/`not_found`/`not_file`/`not_directory`. `symlink`일 때 링크가 이끄는 경로를 file tool이 쓸 수 있으면 `target`에 그 프로젝트 상대 경로를 담는다
 - `isCredentialPath` — 자격증명 디렉터리·파일명·`.env`·확장자·secret 단어 세그먼트로 비밀 경로인지 판정하는 이름 기반 가드
 - `pathsOverlap` — 두 절대 경로가 같거나 한쪽이 다른 쪽을 포함하는지 철자로 비교(dual)
 - `canonicalPathEffect` — realPath로 심볼릭 링크를 풀고, 없는 접미부는 가장 가까운 존재 부모를 거쳐 정규 경로를 만듦
@@ -38,7 +38,7 @@
 
 - 자격증명처럼 보이는 경로(`isCredentialPath`)는 어떤 승인으로도 열리지 않는다(R04/R05 주석). 목록에서는 제외하고 개수를 `excluded`로 센다. 해석 시 `credential`로 거부한다.
 - `.git` 세그먼트(대소문자 무시)는 `git_internal`로 거부하고 목록에서도 뺀다. 순회는 `.git`, `node_modules` 디렉터리로 내려가지 않는다.
-- `resolveProjectPath`는 절대 경로, 백슬래시, 제어 문자, 빈·`.`·`..`·앞뒤 공백 세그먼트를 `invalid_path`로 거부한다. 각 세그먼트를 lstat한다. 어느 단계든 SymbolicLink면 `symlink`로 거부한다. file 계열은 nlink가 정확히 1이어야 하며 아니면 `hard_link`이다. 주석상 동시 디렉터리 교체를 막는 OS 샌드박스는 아니다.
+- `resolveProjectPath`는 절대 경로, 백슬래시, 제어 문자, 빈·`.`·`..`·앞뒤 공백 세그먼트를 `invalid_path`로 거부한다. 각 세그먼트를 lstat한다. 어느 단계든 SymbolicLink면 `symlink`로 거부한다. 링크를 따라간 실제 경로가 프로젝트 안이고 `.git`·credential이 아니면 거부에 `target`으로 싣는다. 모델이 실제 경로를 찾아 헤매지 않게 하려는 것이며, 링크는 여전히 따라가지 않는다. file 계열은 nlink가 정확히 1이어야 하며 아니면 `hard_link`이다. 주석상 동시 디렉터리 교체를 막는 OS 샌드박스는 아니다.
 - `resolveOutsidePath`는 철자와 정규 대상 모두에 자격증명 검사를 한다. 프로젝트나 앱 저장소 루트 내부를 가리키면 `inside_project`로 거부한다. fenced 실행은 denied root의 같은 경로·하위·상위를 모두 거부한다. 상위를 목록화하면 거부된 트리가 보이기 때문이다.
 - `canonicalPathEffect`는 NotFound일 때만 부모로 올라가 해석한다. 권한·I/O 실패를 추측 경로로 바꾸면 안 된다.
 - `isSameOrBelow`는 철자가 아닌 dev+inode로 비교한다. 대소문자 무시 볼륨 우회를 막기 위함이다. ino가 없으면 `invalid_path`로 거부한다.

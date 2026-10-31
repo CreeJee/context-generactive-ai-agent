@@ -119,6 +119,13 @@ function toolFailureBody(error: Error, path: string): ToolFailed {
     : Schema.is(TextFileRejected)(error)
       ? textFileRejectedReasonName(error.reason)
       : null;
+  // Where a refused link leads, when the project's file tools could use that path.
+  const target = Schema.is(PathRejected)(error)
+    ? Option.match(Option.fromNullishOr(error.target), {
+        onNone: () => "",
+        onSome: (target) => ` Real path: ${target}`,
+      })
+    : "";
   const ioError = (code: string) =>
     ToolFailed.make({ code: "io_error", tag, detail: `${path} (${code})` });
   // Already what the model reads. Its `code` field would otherwise pass for a system error's.
@@ -128,7 +135,8 @@ function toolFailureBody(error: Error, path: string): ToolFailed {
         ToolFailed.make({
           code,
           tag,
-          detail: `${path}. ${Option.getOrUndefined(HashMap.get(refusalHints, code)) ?? ""}`.trim(),
+          detail:
+            `${path}. ${Option.getOrUndefined(HashMap.get(refusalHints, code)) ?? ""}${target}`.trim(),
         }),
       ),
     ),

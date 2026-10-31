@@ -143,8 +143,13 @@ const cases: ReadonlyArray<Case> = [
     },
     links: { "node_modules/left-pad": ".pnpm/left-pad@1.3.0/node_modules/left-pad" },
     prompt: "node_modules/left-pad/README.md에 적힌 설치 명령을 그대로 알려줘.",
+    // The first read meets the link; its refusal names the real path, so the next read is the last.
     misses: (outcome) =>
-      Effect.succeed([...answerHas(outcome, /--save-exact-7731/), ...failedCalls(outcome)]),
+      Effect.succeed([
+        ...answerHas(outcome, /--save-exact-7731/),
+        ...failedCalls(outcome, ["symlink"]),
+        ...(outcome.calls.length > 3 ? [`${outcome.calls.length} calls`] : []),
+      ]),
   },
   {
     name: "lazy-delete",

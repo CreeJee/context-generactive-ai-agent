@@ -1,5 +1,6 @@
 import { FileSystem } from "effect";
 import { Function as EffectFunction } from "effect";
+import { optionalProperty } from "../optional-property.ts";
 import { path } from "../runtime/synchronous-path.ts";
 import { Array as Arr, Effect, HashSet, Match, Option, Schema, Stream } from "effect";
 import type { PlatformError } from "effect";
@@ -23,6 +24,8 @@ export class PathRejected extends Schema.TaggedError<
   { readonly brand: unique symbol }
 >()("PathRejected", {
   path: Schema.String,
+  /** For `symlink`: the project-relative path the link leads to, when a file tool could use it. */
+  target: Schema.optionalKey(Schema.String),
   reason: Schema.Literals([
     "invalid_path",
     "credential",
@@ -221,6 +224,41 @@ const isSameOrBelow = Effect.fn("Paths.isSameOrBelow")(function* (
   return Option.isSome(reached);
 });
 
+/**
+ * The `symlink` refusal of a project path, naming where the link leads when that stays in the
+ * project and a file tool would take it, so the model asks for the real path instead of searching
+ * for it. A link that leads outside, to a refused path or nowhere names no target.
+ */
+const linkRejected = (root: string, path: string, segments: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const base = yield* canonicalPathEffect(root);
+    const target = yield* canonicalPathEffect(join(root, ...segments));
+    return relative(base, target).split(sep).join("/");
+  }).pipe(
+    Effect.option,
+    Effect.map(
+      Option.filter(
+        (target) =>
+          target !== "" &&
+          target !== segments.join("/") &&
+          target !== ".." &&
+          !target.startsWith("../") &&
+          !isAbsolute(target) &&
+          !target.split("/").some((segment) => segment.toLowerCase() === ".git") &&
+          !isCredentialPath(target),
+      ),
+    ),
+    Effect.flatMap((target) =>
+      Effect.fail(
+        PathRejected.make({
+          path,
+          reason: "symlink",
+          ...optionalProperty("target", Option.getOrUndefined(target)),
+        }),
+      ),
+    ),
+  );
+
 export interface ProjectPath {
   /** Absolute host path below the project root. */
   readonly absolute: string;
@@ -280,7 +318,7 @@ function resolveProjectPathBody(
       ),
       Stream.takeUntil(({ stats }) => stats === undefined),
       Stream.tap(({ stats, last }) =>
-        reject(path, "symlink").pipe(
+        linkRejected(root, path, segments).pipe(
           Effect.when(Effect.succeed(stats?.type === "SymbolicLink")),
           Effect.andThen(
             Effect.when(
