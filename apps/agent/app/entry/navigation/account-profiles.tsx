@@ -545,7 +545,6 @@ const accountErrorMessage = (error: ApiError | null) => {
     case "invalid_account_label":
     case "invalid_oauth_profile":
       return "계정 이름은 1~80자로 입력하세요.";
-    case "account_action_failed":
     case "oauth_profile_in_use":
     case "oauth_profile_removing":
       return "계정 작업을 완료하지 못했어요. 이 계정의 실행이 끝난 뒤 다시 시도하세요.";

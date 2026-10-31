@@ -6,6 +6,7 @@ import { FetchHttpClient, HttpClientError } from "effect/http";
 import { HttpApiClient } from "effect/http-api";
 import {
   AppApi,
+  AppRefusalCode,
   appRefusalStatus,
   type ConversationSettings,
   type EmbeddingCommand as EmbeddingCommandCase,
@@ -229,168 +230,22 @@ export type {
   WorkflowState,
 };
 
-/** Every error code the browser API currently understands, including local fallbacks. */
-export const ApiErrorCode = Schema.Literals([
-  "account_action_failed",
-  "account_list_unavailable",
-  "account_login_failed",
-  "account_not_found",
-  "account_store_unavailable",
-  "answer_conflict",
-  "answer_invalid",
-  "approval_not_pending",
-  "attachment_not_found",
-  "attachment_rejected",
-  "auth_failed",
+/**
+ * Codes the page gives itself: a value the contract refuses before it is sent, a call or upload
+ * that failed otherwise, the development backend asking for a restart, and the attachment upload
+ * route's refusal.
+ */
+const PageErrorCode = Schema.Literals([
+  "invalid_request",
+  "request_failed",
+  "upload_failed",
   "backend_restart_required",
   "backend_restarting",
-  "btw_not_found",
-  "card_finished",
-  "card_has_dependents",
-  "card_held",
-  "card_missing",
-  "card_not_blocked",
-  "card_not_held",
-  "card_not_running",
-  "card_not_waiting",
-  "card_running",
-  "card_status_changed",
-  "card_transition_invalid",
-  "card_waiting",
-  "completion_evidence_invalid",
-  "completion_evidence_required",
-  "completion_snapshot_conflict",
-  "transfer_target_invalid",
-  "cross_site_request",
-  "empty_message",
-  "endpoint_unavailable",
-  "external_agent_unavailable",
-  "facts_changed",
-  "goal_completion_required",
-  "goal_missing",
-  "goal_not_active",
-  "goal_not_paused",
-  "goal_superseded",
-  "goal_terminal",
-  "images_not_supported",
-  "improvement_failed",
-  "image_approval_required",
-  "image_direct_workflow_required",
-  "image_execution_failed",
-  "image_feature_unavailable",
-  "image_route_unavailable",
-  "internal_error",
-  "invalid_account_action",
-  "invalid_account_id",
-  "invalid_account_label",
-  "invalid_agent_change",
-  "invalid_answer",
-  "invalid_board_edit",
-  "invalid_command",
-  "invalid_conversation_settings",
-  "invalid_decision_answer",
-  "invalid_recall_settings",
-  "invalid_embedding_action",
-  "invalid_import_action",
-  "invalid_image_request",
-  "invalid_image_settings_action",
-  "invalid_intent",
-  "invalid_json",
-  "invalid_kagi_action",
-  "invalid_kanban_action",
-  "invalid_kanban_settings",
-  "dependency_cycle",
-  "self_dependency",
-  "other_project",
-  "goal_missing",
-  "not_kanban",
-  "no_goal_change",
-  "invalid_lease_request",
-  "invalid_mcp_change",
-  "invalid_origin",
-  "invalid_project",
-  "invalid_provider",
-  "invalid_queue_edit",
-  "invalid_queue_request",
-  "invalid_selection",
-  "invalid_session",
-  "invalid_session_change",
-  "invalid_settings",
-  "invalid_stream_offset",
-  "invalid_trace_task_action",
-  "invalid_uncertain_continue",
-  "kagi_key_required",
-  "keychain_failed",
-  "login_in_progress",
-  "login_required",
-  "model_list_failed",
-  "model_selection_required",
-  "model_unavailable",
-  "no_running_run",
-  "no_user_turn",
-  "not_running",
-  "oauth_profile_conflicting_credential",
-  "oauth_profile_copy_unverified",
-  "oauth_profile_in_use",
-  "oauth_profile_missing_credential",
-  "oauth_profile_not_found",
-  "oauth_profile_removing",
-  "invalid_oauth_profile",
-  "phase_not_executable",
-  "plan_closed",
-  "plan_dependencies_rejected",
-  "plan_missing",
-  "plan_not_executing",
-  "plan_not_ready",
-  "plan_outdated",
-  "plan_version_conflict",
-  "platform_failed",
-  "project_not_found",
-  "project_rejected",
-  "project_required",
-  "provider_unavailable",
-  "provider_auth_unavailable",
-  "worktree_failed",
-  "worktree_in_use",
-  "worktree_unavailable",
-  "workflow_storage_failed",
-  "kanban_storage_failed",
-  "queue_delivered",
-  "queue_item_changed",
-  "reorder_across_columns",
-  "reassign_needs_edit",
-  "queue_not_found",
-  "queue_not_held",
-  "queue_reserved",
-  "queued_message_not_next",
-  "quota_status_unavailable",
-  "request_closed",
-  "request_failed",
-  "request_mismatch",
-  "request_missing",
-  "request_settled",
-  "run_in_progress",
-  "run_not_found",
-  "session_in_use",
-  "session_not_found",
-  "session_required",
-  "schedule_storage_failed",
-  "settings_failed",
-  "settings_partially_saved",
-  "settings_unavailable",
-  "step_evidence_required",
-  "steps_incomplete",
-  "storage_failed",
-  "subagent_not_found",
-  "trace_task_not_found",
-  "uncertain_runs_changed",
-  "unknown_attachment",
-  "unknown_step",
-  "upload_failed",
-  "user_turn_required",
-  "verification_required",
-  "work_trace_disabled",
+  "attachment_rejected",
 ]);
+
+/** Every error code the browser API understands: the app API's refusals and the page's own. */
+export const ApiErrorCode = Schema.Union([AppRefusalCode, PageErrorCode]);
 export type ApiErrorCode = typeof ApiErrorCode.Type;
 
 export type { ConversationSettings, ImprovementStatus, KanbanSettings, RecallSettings };
@@ -456,7 +311,19 @@ function apiError(
   });
 }
 
-const makeAppApiClient = HttpApiClient.make(AppApi);
+/** The server answered with a value its contract does not allow: the server's fault, not the page's. */
+class UnexpectedAnswer extends Data.TaggedError("UnexpectedAnswer")<{
+  readonly cause?: Schema.SchemaError;
+}> {}
+const unexpectedAnswer = () => new UnexpectedAnswer({});
+
+const makeAppApiClient = HttpApiClient.make(AppApi, {
+  // The client fails with `SchemaError` for a request and for a response alike; a response the
+  // contract refuses is the server's fault, so it is told apart here.
+  transformResponse: Effect.catchIf(Schema.isSchemaError, (cause) =>
+    Effect.fail(new UnexpectedAnswer({ cause })),
+  ),
+});
 
 /** The app API (`memory-agent/app-api`), called over `appFetch` like the chat API. */
 class AppApiClient extends Context.Service<AppApiClient, Effect.Success<typeof makeAppApiClient>>()(
@@ -465,7 +332,10 @@ class AppApiClient extends Context.Service<AppApiClient, Effect.Success<typeof m
   static readonly layer = Layer.effect(AppApiClient, makeAppApiClient);
 }
 
-/** What an app API call fails with: a refusal the endpoint declares, or the call itself failing. */
+/**
+ * What an app API call fails with: a refusal the endpoint declares, the call itself failing, a
+ * request the contract refuses (`SchemaError`), or an answer it refuses (`UnexpectedAnswer`).
+ */
 type AppApiFailure =
   | {
       readonly error: ApiErrorCode;
@@ -473,7 +343,8 @@ type AppApiFailure =
       readonly approval?: CrossProviderMediaRunApproval;
     }
   | HttpClientError.HttpClientError
-  | Schema.SchemaError;
+  | Schema.SchemaError
+  | UnexpectedAnswer;
 
 /**
  * A call that failed outside the endpoint's refusals. A transport failure keeps its cause, as
@@ -496,13 +367,18 @@ const clientFailure = (failure: HttpClientError.HttpClientError) =>
         ),
       );
 
-/** The page's `ApiError` for a failed app API call; a value the page's schema refuses is `invalid`. */
-const appApiFailure = (invalid: ApiErrorCode) =>
-  Match.type<AppApiFailure>().pipe(
-    Match.when(Schema.isSchemaError, () => Effect.fail(apiError(400, { error: invalid }))),
-    Match.when(HttpClientError.isHttpClientError, clientFailure),
-    Match.orElse((refusal) => Effect.fail(apiError(appRefusalStatus(refusal), refusal))),
-  );
+/**
+ * The page's `ApiError` for a failed app API call. A value the contract refuses before it is sent
+ * is 400 `invalid_request`; an answer it refuses is 502 `request_failed`.
+ */
+const appApiFailure = Match.type<AppApiFailure>().pipe(
+  Match.when(Schema.isSchemaError, () => Effect.fail(apiError(400, { error: "invalid_request" }))),
+  Match.when(HttpClientError.isHttpClientError, clientFailure),
+  Match.when({ _tag: "UnexpectedAnswer" }, () =>
+    Effect.fail(apiError(502, { error: "request_failed" })),
+  ),
+  Match.orElse((refusal) => Effect.fail(apiError(appRefusalStatus(refusal), refusal))),
+);
 
 /**
  * Calls the app API through a client over `fetch`; a failure is an `ApiError` with the refusal's
@@ -519,21 +395,17 @@ const appCallOver = (fetch: typeof globalThis.fetch) => {
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   return <A, E extends AppApiFailure>(
     request: (client: AppApiClient["Service"]) => Effect.Effect<A, E>,
-    invalid: ApiErrorCode = "request_failed",
   ): Promise<A> =>
     runUiEffect(
       Effect.flatMap(runtime.contextEffect, (context) =>
         Effect.flatMap(AppApiClient, request).pipe(
-          Effect.catch(appApiFailure(invalid)),
+          Effect.catch(appApiFailure),
           Effect.provideContext(context),
         ),
       ),
     );
 };
 const appCall = appCallOver(appFetch);
-
-/** The server's answer that does not fit the request: the server's fault, not the page's. */
-const unexpectedAnswer = () => ({ error: "request_failed" }) as const;
 
 /**
  * Archives, restores and deletes conversations over `fetch`; `api` uses `appFetch`. A change that
@@ -544,42 +416,38 @@ export function makeSessionLifecycleClient(fetch: typeof globalThis.fetch) {
   return {
     /** Active parent/child runs are checkpointed and stopped before the conversation is archived. */
     setArchived: (session: string, holder: string, archived: boolean) =>
-      call(
-        (client) =>
-          Effect.flatMap(Effect.orDie(browserCrypto.randomUUIDv4()), (idempotencyKey) =>
-            client.sessions.change({
-              params: { session },
-              headers: { "x-session-holder": holder },
-              payload: SessionChange.Archive({ archived, idempotencyKey }),
-            }),
-          ).pipe(
-            Effect.catchTag("blocked", Effect.succeed),
-            Effect.flatMap(
-              (result): Effect.Effect<SessionArchiveResult, ReturnType<typeof unexpectedAnswer>> =>
-                Schema.is(Session)(result) && result.id === session
-                  ? Effect.succeed(SessionArchiveResult.completed({ session: result }))
-                  : ArchiveTaskResult.guards.waiting_for_stop(result) ||
-                      ArchiveTaskResult.guards.blocked(result)
-                    ? Effect.succeed(result)
-                    : Effect.fail(unexpectedAnswer()),
-            ),
+      call((client) =>
+        Effect.flatMap(Effect.orDie(browserCrypto.randomUUIDv4()), (idempotencyKey) =>
+          client.sessions.change({
+            params: { session },
+            headers: { "x-session-holder": holder },
+            payload: SessionChange.Archive({ archived, idempotencyKey }),
+          }),
+        ).pipe(
+          Effect.catchTag("blocked", Effect.succeed),
+          Effect.flatMap(
+            (result): Effect.Effect<SessionArchiveResult, ReturnType<typeof unexpectedAnswer>> =>
+              Schema.is(Session)(result) && result.id === session
+                ? Effect.succeed(SessionArchiveResult.completed({ session: result }))
+                : ArchiveTaskResult.guards.waiting_for_stop(result) ||
+                    ArchiveTaskResult.guards.blocked(result)
+                  ? Effect.succeed(result)
+                  : Effect.fail(unexpectedAnswer()),
           ),
-        "invalid_session_change",
+        ),
       ),
     deleteSession: (session: string, holder: string) =>
-      call(
-        (client) =>
-          Effect.flatMap(Effect.orDie(browserCrypto.randomUUIDv4()), (idempotencyKey) =>
-            client.sessions.change({
-              params: { session },
-              headers: { "x-session-holder": holder },
-              payload: SessionChange.Delete({ idempotencyKey }),
-            }),
-          ).pipe(
-            Effect.catchTag("blocked", Effect.succeed),
-            Effect.filterOrFail(Schema.is(ArchiveTaskResult), unexpectedAnswer),
-          ),
-        "invalid_session_change",
+      call((client) =>
+        Effect.flatMap(Effect.orDie(browserCrypto.randomUUIDv4()), (idempotencyKey) =>
+          client.sessions.change({
+            params: { session },
+            headers: { "x-session-holder": holder },
+            payload: SessionChange.Delete({ idempotencyKey }),
+          }),
+        ).pipe(
+          Effect.catchTag("blocked", Effect.succeed),
+          Effect.filterOrFail(Schema.is(ArchiveTaskResult), unexpectedAnswer),
+        ),
       ),
   };
 }
@@ -600,7 +468,7 @@ const changeWorkflow = (
       Effect.catchTag("blocked", () => Effect.fail(unexpectedAnswer())),
       Effect.filterOrFail(Schema.is(WorkflowState), unexpectedAnswer),
     );
-  }, "invalid_session_change");
+  });
 
 /**
  * Archives or deletes one task. A change that cannot start (409) or is still waiting (202) comes
@@ -612,81 +480,67 @@ const changeTraceTask = (
   task: string,
   intent: "archive" | "delete",
 ) =>
-  appCall(
-    (client) =>
-      Effect.flatMap(Effect.orDie(browserCrypto.randomUUIDv4()), (idempotencyKey) =>
-        client.trace.changeTask({
-          params: { session, task },
-          headers: { "x-session-holder": holder },
-          payload: { intent, idempotencyKey },
-        }),
-      ).pipe(
-        Effect.catchTag("blocked", Effect.succeed),
-        Effect.filterOrFail(Schema.is(ArchiveTaskResult), unexpectedAnswer),
-        Effect.tap((result) =>
-          Effect.when(
-            Effect.sync(() => window.dispatchEvent(new CustomEvent("work-trace:changed"))),
-            Effect.succeed(!ArchiveTaskResult.guards.blocked(result)),
-          ),
+  appCall((client) =>
+    Effect.flatMap(Effect.orDie(browserCrypto.randomUUIDv4()), (idempotencyKey) =>
+      client.trace.changeTask({
+        params: { session, task },
+        headers: { "x-session-holder": holder },
+        payload: { intent, idempotencyKey },
+      }),
+    ).pipe(
+      Effect.catchTag("blocked", Effect.succeed),
+      Effect.filterOrFail(Schema.is(ArchiveTaskResult), unexpectedAnswer),
+      Effect.tap((result) =>
+        Effect.when(
+          Effect.sync(() => window.dispatchEvent(new CustomEvent("work-trace:changed"))),
+          Effect.succeed(!ArchiveTaskResult.guards.blocked(result)),
         ),
       ),
-    "invalid_trace_task_action",
+    ),
   );
 
 /** Changes the project's settings that `payload` names; the others stay as they are. */
 const updateProject = (project: string, payload: ProjectSettings) =>
-  appCall((client) => client.projects.update({ params: { project }, payload }), "invalid_settings");
+  appCall((client) => client.projects.update({ params: { project }, payload }));
 
 /**
  * `/api/accounts` answers a subscription provider with its profiles; another view would be the
  * server's fault.
  */
-const subscriptionView = Effect.filterOrFail(
-  Schema.is(SubscriptionAccountsView),
-  () => ({ error: "request_failed" }) as const,
-);
+const subscriptionView = Effect.filterOrFail(Schema.is(SubscriptionAccountsView), unexpectedAnswer);
 
 export const api = {
-  auth: (provider: ProviderId) =>
-    appCall((client) => client.auth.status({ query: { provider } }), "invalid_provider"),
+  auth: (provider: ProviderId) => appCall((client) => client.auth.status({ query: { provider } })),
   authAction: (intent: "login" | "cancel" | "logout", provider: SubscriptionAccountProvider) =>
-    appCall((client) => client.auth.action({ payload: { intent, provider } }), "invalid_provider"),
+    appCall((client) => client.auth.action({ payload: { intent, provider } })),
 
   accounts: (provider: SubscriptionAccountProvider) =>
-    appCall(
-      (client) => client.accounts.list({ query: { provider } }).pipe(subscriptionView),
-      "invalid_provider",
-    ),
+    appCall((client) => client.accounts.list({ query: { provider } }).pipe(subscriptionView)),
   accountAction: (provider: SubscriptionAccountProvider, action: AccountAction) =>
-    appCall(
-      (client) =>
-        Match.value(action).pipe(
-          Match.discriminatorsExhaustive("intent")({
-            add: (add) => client.accounts.action({ payload: { ...add, provider } }),
-            cancel: (cancel) => client.accounts.action({ payload: { ...cancel, provider } }),
-            select: (select) => client.accounts.action({ payload: { ...select, provider } }),
-            remove: (remove) => client.accounts.action({ payload: { ...remove, provider } }),
-            rename: (rename) => client.accounts.action({ payload: { ...rename, provider } }),
-          }),
-          subscriptionView,
-        ),
-      "invalid_account_action",
+    appCall((client) =>
+      Match.value(action).pipe(
+        Match.discriminatorsExhaustive("intent")({
+          add: (add) => client.accounts.action({ payload: { ...add, provider } }),
+          cancel: (cancel) => client.accounts.action({ payload: { ...cancel, provider } }),
+          select: (select) => client.accounts.action({ payload: { ...select, provider } }),
+          remove: (remove) => client.accounts.action({ payload: { ...remove, provider } }),
+          rename: (rename) => client.accounts.action({ payload: { ...rename, provider } }),
+        }),
+        subscriptionView,
+      ),
     ),
   accountQuota: (provider: SubscriptionAccountProvider) =>
-    appCall((client) => client.accounts.quota({ query: { provider } }), "invalid_provider"),
+    appCall((client) => client.accounts.quota({ query: { provider } })),
 
   models: (provider: ProviderId) =>
-    appCall((client) => client.models.list({ query: { provider } }), "invalid_provider"),
+    appCall((client) => client.models.list({ query: { provider } })),
   selectModel: (model: string, reasoningEffort: string | undefined, provider: ProviderId) =>
-    appCall(
-      (client) =>
-        client.models.select({ params: { model }, payload: { provider, reasoningEffort } }),
-      "invalid_selection",
+    appCall((client) =>
+      client.models.select({ params: { model }, payload: { provider, reasoningEffort } }),
     ),
 
   projects: () => appCall((client) => client.projects.list({ query: {} })),
-  addProject: (root: string) =>
-    appCall((client) => client.projects.add({ payload: { root } }), "invalid_project"),
+  addProject: (root: string) => appCall((client) => client.projects.add({ payload: { root } })),
   setCrossRecallExcluded: (projectId: string, crossRecallExcluded: boolean) =>
     updateProject(projectId, { crossRecallExcluded }),
   setPermissionMode: (projectId: string, permissionMode: PermissionMode) =>
@@ -699,13 +553,9 @@ export const api = {
   /** Opens the folder dialog of the machine running the app; nothing is registered yet. */
   pickFolder: () => appCall((client) => client.projects.pick()),
 
-  sessions: (project: string) =>
-    appCall((client) => client.sessions.list({ query: { project } }), "project_required"),
+  sessions: (project: string) => appCall((client) => client.sessions.list({ query: { project } })),
   archivedSessions: (project: string) =>
-    appCall(
-      (client) => client.sessions.list({ query: { project, archived: "1" } }),
-      "project_required",
-    ),
+    appCall((client) => client.sessions.list({ query: { project, archived: "1" } })),
   ...makeSessionLifecycleClient(appFetch),
   /** Refused while a run is active; execute requires a current Plan that is ready or executing. */
   setWorkflowPhase: (session: string, holder: string, phase: WorkflowPhase) =>
@@ -723,7 +573,7 @@ export const api = {
         CancelCard: (payload) => client.sessions.editBoard({ ...request, payload }),
         ClosePlan: (payload) => client.sessions.editBoard({ ...request, payload }),
       });
-    }, "invalid_board_edit"),
+    }),
   /** The board's cards waiting for a person's decision. */
   decisions: (session: string) =>
     appCall((client) => client.sessions.decisions({ params: { session } })),
@@ -741,32 +591,28 @@ export const api = {
     >,
     answer: DecisionAnswer,
   ) =>
-    appCall(
-      (client) =>
-        client.sessions.answerDecision({
-          params: { session: request.sessionId, decision: request.requestId },
-          headers: { "x-session-holder": holder },
-          payload: {
-            goalInstanceId: request.goalInstanceId,
-            cardId: request.cardId,
-            factsSeq: request.factsSeq,
-            answer,
-          },
-        }),
-      "invalid_decision_answer",
+    appCall((client) =>
+      client.sessions.answerDecision({
+        params: { session: request.sessionId, decision: request.requestId },
+        headers: { "x-session-holder": holder },
+        payload: {
+          goalInstanceId: request.goalInstanceId,
+          cardId: request.cardId,
+          factsSeq: request.factsSeq,
+          answer,
+        },
+      }),
     ),
   kanban: (session: string): Promise<KanbanView> =>
     appCall((client) => client.sessions.kanban({ params: { session } })),
   /** Runs the executing Plan as a kanban board. */
   startKanban: (session: string, holder: string) =>
-    appCall(
-      (client) =>
-        client.sessions.kanbanAction({
-          params: { session },
-          headers: { "x-session-holder": holder },
-          payload: KanbanCommand.Start(),
-        }),
-      "invalid_kanban_action",
+    appCall((client) =>
+      client.sessions.kanbanAction({
+        params: { session },
+        headers: { "x-session-holder": holder },
+        payload: KanbanCommand.Start(),
+      }),
     ),
   /** What a person meant by dragging a card; the server decides the card's status. */
   boardIntent: (session: string, holder: string, intent: BoardIntent) =>
@@ -782,37 +628,30 @@ export const api = {
         Cancel: (payload) => client.sessions.kanbanAction({ ...request, payload }),
         Transfer: (payload) => client.sessions.kanbanAction({ ...request, payload }),
       });
-    }, "invalid_kanban_action"),
+    }),
   /** Runs the board's loop again after it stopped on exhausted retries or a defect. */
   restartKanbanLoop: (session: string, holder: string) =>
-    appCall(
-      (client) =>
-        client.sessions.kanbanAction({
-          params: { session },
-          headers: { "x-session-holder": holder },
-          payload: KanbanCommand.RestartLoop(),
-        }),
-      "invalid_kanban_action",
+    appCall((client) =>
+      client.sessions.kanbanAction({
+        params: { session },
+        headers: { "x-session-holder": holder },
+        payload: KanbanCommand.RestartLoop(),
+      }),
     ),
   /** The Goals this Goal waits for; an empty list lifts the wait. */
   setGoalDependencies: (session: string, holder: string, dependsOn: readonly string[]) =>
-    appCall(
-      (client) =>
-        client.sessions.kanbanAction({
-          params: { session },
-          headers: { "x-session-holder": holder },
-          payload: KanbanCommand.SetDependencies({ dependsOn }),
-        }),
-      "invalid_kanban_action",
+    appCall((client) =>
+      client.sessions.kanbanAction({
+        params: { session },
+        headers: { "x-session-holder": holder },
+        payload: KanbanCommand.SetDependencies({ dependsOn }),
+      }),
     ),
   controlWorkflow: (session: string, holder: string, workflowAction: WorkflowAction) =>
     changeWorkflow(session, holder, SessionChange.Control({ workflowAction })),
   /** `agent`: talk directly to that trusted external ACP agent instead of the app's model. */
   createSession: (projectId: string, agent?: string) =>
-    appCall(
-      (client) => client.sessions.create({ payload: { projectId, agent } }),
-      "invalid_session",
-    ),
+    appCall((client) => client.sessions.create({ payload: { projectId, agent } })),
   btwThreads: (session: string) => appCall((client) => client.btw.list({ params: { session } })),
   /** A new BTW thread bound for good to this conversation. */
   createBtw: (session: string) => appCall((client) => client.btw.create({ params: { session } })),
@@ -833,14 +672,12 @@ export const api = {
     ),
   /** Refused with 409 while something runs, or when the listed runs changed since they were shown. */
   continuePastUncertain: (session: string, holder: string, runIds: readonly string[]) =>
-    appCall(
-      (client) =>
-        client.sessions.continuePastUncertain({
-          params: { session },
-          headers: { "x-session-holder": holder },
-          payload: { runIds },
-        }),
-      "invalid_uncertain_continue",
+    appCall((client) =>
+      client.sessions.continuePastUncertain({
+        params: { session },
+        headers: { "x-session-holder": holder },
+        payload: { runIds },
+      }),
     ),
   /** Refused with 409 while the session is answering. */
   compactSession: (session: string, holder: string) =>
@@ -848,9 +685,8 @@ export const api = {
       client.sessions.compact({ params: { session }, headers: { "x-session-holder": holder } }),
     ),
   leaseAction: (session: string, holder: string, action: "claim" | "release") =>
-    appCall(
-      (client) => client.sessions.lease({ params: { session }, payload: { holder, action } }),
-      "invalid_lease_request",
+    appCall((client) =>
+      client.sessions.lease({ params: { session }, payload: { holder, action } }),
     ),
 
   queue: (session: string) => appCall((client) => client.sessions.queue({ params: { session } })),
@@ -859,14 +695,12 @@ export const api = {
     holder: string,
     payload: { text: string; attachmentIds: readonly string[]; mode: "queue" | "steer" },
   ) =>
-    appCall(
-      (client) =>
-        client.sessions.enqueue({
-          params: { session },
-          headers: { "x-session-holder": holder },
-          payload,
-        }),
-      "invalid_queue_request",
+    appCall((client) =>
+      client.sessions.enqueue({
+        params: { session },
+        headers: { "x-session-holder": holder },
+        payload,
+      }),
     ),
   editQueued: (session: string, holder: string, message: string, edit: QueueEdit) =>
     appCall((client) => {
@@ -878,155 +712,125 @@ export const api = {
         remove: (payload) => client.sessions.editQueued({ ...request, payload }),
         confirm: (payload) => client.sessions.editQueued({ ...request, payload }),
       });
-    }, "invalid_queue_edit"),
+    }),
   imageSettings: () => appCall((client) => client.settings.image()),
   setImageGenerationEnabled: (enabled: boolean) =>
-    appCall(
-      (client) =>
-        client.settings.imageAction({
-          payload: ImageSettingsCommand.image_generation({ enabled }),
-        }),
-      "invalid_image_settings_action",
+    appCall((client) =>
+      client.settings.imageAction({
+        payload: ImageSettingsCommand.image_generation({ enabled }),
+      }),
     ),
   setCrossProviderMediaConsent: (mode: CrossProviderMediaConsentMode) =>
-    appCall(
-      (client) =>
-        client.settings.imageAction({
-          payload: ImageSettingsCommand.cross_provider_media({ mode }),
-        }),
-      "invalid_image_settings_action",
+    appCall((client) =>
+      client.settings.imageAction({
+        payload: ImageSettingsCommand.cross_provider_media({ mode }),
+      }),
     ),
   generateImage: (
     prompt: string,
     approved: boolean,
     crossProviderApproval?: CrossProviderMediaRunApproval,
   ) =>
-    appCall(
-      (client) =>
-        client.media.generateImage({
-          payload:
-            crossProviderApproval === undefined
-              ? { prompt, approved }
-              : { prompt, approved, runId: crossProviderApproval.runId, crossProviderApproval },
-        }),
-      "invalid_image_request",
+    appCall((client) =>
+      client.media.generateImage({
+        payload:
+          crossProviderApproval === undefined
+            ? { prompt, approved }
+            : { prompt, approved, runId: crossProviderApproval.runId, crossProviderApproval },
+      }),
     ),
 
   kagi: () => appCall((client) => client.settings.kagi()),
   // The client takes a union payload one case at a time.
   kagiAction: (command: KagiCommand) =>
-    appCall(
-      (client) =>
-        KagiCommand.$match(command, {
-          register: (payload) => client.settings.kagiAction({ payload }),
-          remove: (payload) => client.settings.kagiAction({ payload }),
-          enable: (payload) => client.settings.kagiAction({ payload }),
-          disable: (payload) => client.settings.kagiAction({ payload }),
-        }),
-      "invalid_kagi_action",
+    appCall((client) =>
+      KagiCommand.$match(command, {
+        register: (payload) => client.settings.kagiAction({ payload }),
+        remove: (payload) => client.settings.kagiAction({ payload }),
+        enable: (payload) => client.settings.kagiAction({ payload }),
+        disable: (payload) => client.settings.kagiAction({ payload }),
+      }),
     ),
 
   conversationSettings: () => appCall((client) => client.settings.conversation()),
   recallSettings: () => appCall((client) => client.settings.recall()),
   setRecallSettings: (settings: Partial<RecallSettings>) =>
-    appCall(
-      (client) => client.settings.setRecall({ payload: settings }),
-      "invalid_recall_settings",
-    ),
+    appCall((client) => client.settings.setRecall({ payload: settings })),
   setConversationSettings: (settings: ConversationSettings) =>
-    appCall(
-      (client) => client.settings.setConversation({ payload: settings }),
-      "invalid_conversation_settings",
-    ),
+    appCall((client) => client.settings.setConversation({ payload: settings })),
   kanbanSettings: () => appCall((client) => client.settings.kanban()),
   /** null goes back to the machine default. */
   setKanbanConcurrency: (concurrency: number | null) =>
-    appCall(
-      (client) =>
-        client.settings.setKanban({
-          payload: KanbanSettingsCommand.SetConcurrency({ concurrency }),
-        }),
-      "invalid_kanban_settings",
+    appCall((client) =>
+      client.settings.setKanban({
+        payload: KanbanSettingsCommand.SetConcurrency({ concurrency }),
+      }),
     ),
   /** Puts the project in front of `before` (or last) in the scheduler's order of projects. */
   moveProject: (projectId: string, before: string | null) =>
-    appCall(
-      (client) =>
-        client.settings.setKanban({
-          payload: KanbanSettingsCommand.MoveProject({ projectId, before }),
-        }),
-      "invalid_kanban_settings",
+    appCall((client) =>
+      client.settings.setKanban({
+        payload: KanbanSettingsCommand.MoveProject({ projectId, before }),
+      }),
     ),
   projectKanban: (project: string) =>
     appCall((client) => client.projects.kanban({ params: { project } })),
   setProtectedBranches: (project: string, protectedBranches: readonly string[]) =>
-    appCall(
-      (client) =>
-        client.projects.kanbanAction({
-          params: { project },
-          payload: ProjectKanbanCommand.SetProtectedBranches({ protectedBranches }),
-        }),
-      "invalid_kanban_settings",
+    appCall((client) =>
+      client.projects.kanbanAction({
+        params: { project },
+        payload: ProjectKanbanCommand.SetProtectedBranches({ protectedBranches }),
+      }),
     ),
   /** Puts the conversation's Goal in front of `before` (or last) among the project's Goals. */
   moveGoal: (project: string, sessionId: string, before: string | null) =>
-    appCall(
-      (client) =>
-        client.projects.kanbanAction({
-          params: { project },
-          payload: ProjectKanbanCommand.MoveGoal({ sessionId, before }),
-        }),
-      "invalid_kanban_settings",
+    appCall((client) =>
+      client.projects.kanbanAction({
+        params: { project },
+        payload: ProjectKanbanCommand.MoveGoal({ sessionId, before }),
+      }),
     ),
 
   imports: () => appCall((client) => client.settings.imports()),
   importAction: (command: ImportCommand) =>
-    appCall(
-      (client) =>
-        ImportCommand.$match(command, {
-          run: (payload) => client.settings.importAction({ payload }),
-          restart_watch: (payload) => client.settings.importAction({ payload }),
-          enable: (payload) => client.settings.importAction({ payload }),
-          disable: (payload) => client.settings.importAction({ payload }),
-          interpret: (payload) => client.settings.importAction({ payload }),
-        }),
-      "invalid_import_action",
+    appCall((client) =>
+      ImportCommand.$match(command, {
+        run: (payload) => client.settings.importAction({ payload }),
+        restart_watch: (payload) => client.settings.importAction({ payload }),
+        enable: (payload) => client.settings.importAction({ payload }),
+        disable: (payload) => client.settings.importAction({ payload }),
+        interpret: (payload) => client.settings.importAction({ payload }),
+      }),
     ),
 
   embedding: () => appCall((client) => client.settings.embedding()),
   embeddingAction: (command: EmbeddingCommand) =>
-    appCall(
-      (client) =>
-        EmbeddingCommand.$match(command, {
-          choose: (payload) => client.settings.embeddingAction({ payload }),
-          check: (payload) => client.settings.embeddingAction({ payload }),
-        }),
-      "invalid_embedding_action",
+    appCall((client) =>
+      EmbeddingCommand.$match(command, {
+        choose: (payload) => client.settings.embeddingAction({ payload }),
+        check: (payload) => client.settings.embeddingAction({ payload }),
+      }),
     ),
 
   improvements: () => appCall((client) => client.settings.improvements()),
   improvementScan: (command: ScanCommand) =>
-    appCall(
-      (client) =>
-        ScanCommand.$match(command, {
-          start: (payload) => client.settings.improvementScan({ payload }),
-          stop: (payload) => client.settings.improvementScan({ payload }),
-        }),
-      "invalid_command",
+    appCall((client) =>
+      ScanCommand.$match(command, {
+        start: (payload) => client.settings.improvementScan({ payload }),
+        stop: (payload) => client.settings.improvementScan({ payload }),
+      }),
     ),
 
   mcpServers: (project: string) =>
     appCall((client) => client.projects.mcp({ params: { project } })),
   mcpAction: (project: string, command: McpCommand) =>
-    appCall(
-      (client) =>
-        McpCommand.$match(command, {
-          trust: (payload) => client.projects.mcpAction({ params: { project }, payload }),
-          login: (payload) => client.projects.mcpAction({ params: { project }, payload }),
-          cancelLogin: (payload) => client.projects.mcpAction({ params: { project }, payload }),
-          logout: (payload) => client.projects.mcpAction({ params: { project }, payload }),
-        }),
-      "invalid_mcp_change",
+    appCall((client) =>
+      McpCommand.$match(command, {
+        trust: (payload) => client.projects.mcpAction({ params: { project }, payload }),
+        login: (payload) => client.projects.mcpAction({ params: { project }, payload }),
+        cancelLogin: (payload) => client.projects.mcpAction({ params: { project }, payload }),
+        logout: (payload) => client.projects.mcpAction({ params: { project }, payload }),
+      }),
     ),
 
   externalAgents: (project: string) =>
@@ -1037,22 +841,18 @@ export const api = {
     name: string,
     trusted: boolean,
   ) =>
-    appCall(
-      (client) =>
-        client.projects.agentAction({
-          params: { project },
-          payload: ExternalAgentCommand.trust({ scope, name, trusted }),
-        }),
-      "invalid_agent_change",
+    appCall((client) =>
+      client.projects.agentAction({
+        params: { project },
+        payload: ExternalAgentCommand.trust({ scope, name, trusted }),
+      }),
     ),
   reconnectExternalAgent: (project: string, name: string) =>
-    appCall(
-      (client) =>
-        client.projects.agentAction({
-          params: { project },
-          payload: ExternalAgentCommand.reconnect({ name }),
-        }),
-      "invalid_agent_change",
+    appCall((client) =>
+      client.projects.agentAction({
+        params: { project },
+        payload: ExternalAgentCommand.reconnect({ name }),
+      }),
     ),
 
   skills: (project: string) => appCall((client) => client.projects.skills({ params: { project } })),
@@ -1072,20 +872,18 @@ export const api = {
     expectedAttemptId: string,
     confirmUncertain = false,
   ) =>
-    appCall(
-      (client) =>
-        client.trace
-          .changeTask({
-            params: { session, task },
-            headers: { "x-session-holder": holder },
-            payload: { intent: "resume", expectedAttemptId, confirmUncertain },
-          })
-          .pipe(
-            // A safety refusal is an expected action result, not a transport failure.
-            Effect.catchTag("blocked", Effect.succeed),
-            Effect.filterOrFail(Schema.is(ResumeTaskResult), unexpectedAnswer),
-          ),
-      "invalid_trace_task_action",
+    appCall((client) =>
+      client.trace
+        .changeTask({
+          params: { session, task },
+          headers: { "x-session-holder": holder },
+          payload: { intent: "resume", expectedAttemptId, confirmUncertain },
+        })
+        .pipe(
+          // A safety refusal is an expected action result, not a transport failure.
+          Effect.catchTag("blocked", Effect.succeed),
+          Effect.filterOrFail(Schema.is(ResumeTaskResult), unexpectedAnswer),
+        ),
     ),
   archiveWorkTraceTask: (session: string, holder: string, task: string) =>
     changeTraceTask(session, holder, task, "archive"),
@@ -1100,14 +898,12 @@ export const api = {
   subagentTranscript: (session: string, subagent: string) =>
     appCall((client) => client.sessions.subagentTranscript({ params: { session, subagent } })),
   answerApproval: (session: string, holder: string, approval: string, approved: boolean) =>
-    appCall(
-      (client) =>
-        client.sessions.answerApproval({
-          params: { session, approval },
-          headers: { "x-session-holder": holder },
-          payload: { approved },
-        }),
-      "invalid_answer",
+    appCall((client) =>
+      client.sessions.answerApproval({
+        params: { session, approval },
+        headers: { "x-session-holder": holder },
+        payload: { approved },
+      }),
     ),
 
   /** Uploads one image as raw bytes; the server checks what it really is. */

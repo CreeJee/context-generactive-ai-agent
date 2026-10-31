@@ -49,7 +49,7 @@ export const ReportDeliveryCommand = Schema.TaggedUnion({
 export type ReportDeliveryCommand = typeof ReportDeliveryCommand.Type;
 
 /** One status per reason, so the page tells the reasons apart without reading a refused body. */
-const deliveryFailureStatus = {
+export const deliveryFailureStatus = {
   not_configured: 409,
   invalid_webhook_url: 503,
   too_large: 413,
@@ -62,7 +62,7 @@ const deliveryFailureStatus = {
 } satisfies Record<ReportDeliveryFailure, number>;
 
 /** One status per reason, so the page tells the reasons apart without reading a refused body. */
-const diagnosisFailureStatus = {
+export const diagnosisFailureStatus = {
   model_unavailable: 503,
   model_failed: 502,
   invalid_answer: 422,

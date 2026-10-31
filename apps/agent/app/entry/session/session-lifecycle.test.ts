@@ -2,7 +2,6 @@ import { it } from "@effect/vitest";
 import { afterEach, beforeEach, describe, expect, vi } from "vite-plus/test";
 import { Cause, Effect, Schema } from "effect";
 import {
-  ApiError,
   ArchiveTaskResult,
   makeSessionLifecycleClient,
   SessionArchiveResult,
@@ -47,6 +46,9 @@ const actions = [
 ];
 
 type LifecycleFixture = Record<string, string | null>;
+
+/** How the client fails when the server's answer does not fit the contract. */
+const unexpectedAnswer = { _tag: "ApiError", status: 502, code: "request_failed" };
 
 function respond(body: LifecycleFixture, status = 200) {
   appFetch.mockResolvedValueOnce(Response.json(body, { status }));
@@ -128,14 +130,15 @@ describe("server-authoritative session lifecycle client", () => {
       (body) =>
         Effect.gen(function* () {
           respond(body, 202);
-          expect((yield* Effect.flip(call(() => invoke()))).cause).toBeInstanceOf(ApiError);
+          expect((yield* Effect.flip(call(() => invoke()))).cause).toMatchObject(unexpectedAnswer);
         }),
     );
 
+    // An answer the contract refuses is the server's fault, not a request the page got wrong.
     it.effect("rejects malformed success responses", () =>
       Effect.gen(function* () {
         respond({});
-        expect((yield* Effect.flip(call(() => invoke()))).cause).toBeInstanceOf(ApiError);
+        expect((yield* Effect.flip(call(() => invoke()))).cause).toMatchObject(unexpectedAnswer);
       }),
     );
   });

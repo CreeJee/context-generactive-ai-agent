@@ -11,7 +11,7 @@
 - `App` — `index.tsx`의 루트 React 컴포넌트다. 인증·모델·프로젝트·세션 쿼리, nuqs `useQueryStates(locationParsers)`로 URL 위치(project, session, card, board, boards, boardCard)를 관리한다. 세션 보관·삭제·복원, 프로젝트 추가, 모델 선택, 설정 열기를 연결한다
 - `api` — `/api/*` 백엔드 호출을 모은 객체 리터럴(`api.ts` 639-1104행)이다. 메서드는 auth/authAction/accounts/accountAction/accountQuota, models/selectModel, projects/hiddenProjects/addProject/hideProject/restoreProject/pickFolder/moveProject/setPermissionMode/setCrossRecallExcluded, sessions/archivedSessions/createSession, board/editBoard/decisions/decisionInbox/answerDecision/projectBoards, kanban/startKanban/boardIntent/restartKanbanLoop/setGoalDependencies/moveGoal/projectKanban/setProtectedBranches, setWorkflowPhase/controlWorkflow, sessionRunState/cancelRun/discardInterrupts/continuePastUncertain/compactSession/leaseAction, queue/enqueue/editQueued, btwThreads/createBtw/deleteBtw, image·kagi·imports·embedding·conversation·recall·kanban 설정, mcpServers/mcpAction, externalAgents/trustExternalAgent/reconnectExternalAgent, skills, work trace 계열(resume/archive/deleteWorkTraceTask, workTraceStreamUrl), subagents/relayedApprovals/subagentTranscript/answerApproval, uploadAttachment(file)이다
 - `ApiError` — `Schema.TaggedError("ApiError")`이다. 코드는 `ApiErrorCode`를 따르고 `CrossProviderMediaRunApproval`을 담을 수 있다. `message` getter를 override한다
-- `ApiErrorCode` — 브라우저 API가 이해하는 모든 오류 코드의 `Schema.Literals`다. 로컬 fallback(`request_failed`, `upload_failed` 등)도 포함한다. 예: `account_*`, `card_*`, `goal_*`, `image_*`, `backend_restart_required`, `cross_site_request`
+- `ApiErrorCode` — 브라우저 API가 이해하는 모든 오류 코드다. 앱 API 계약의 거부 code(`memory-agent/app-api`의 `AppRefusalCode`)와 페이지가 스스로 정하는 code(`invalid_request`, `request_failed`, `upload_failed`, `backend_restart_*`, `attachment_rejected`)의 합이다
 - `refusalOf` / `isApiError` — 실패 값(F)에서 `ApiError | null`을 꺼내는 헬퍼와 그 판별 함수다
 - `archiveErrorMessage` / `projectErrorMessage` / `attachmentErrorMessage` / `compactErrorMessage` — `ApiError | null`을 받아 한국어 거절 문구로 바꾼다. 각각 `ArchiveRejection`/`ProjectRejection`/`AttachmentRejection`/`CompactRejection` 리터럴 표를 쓴다
 - `makeSessionLifecycleClient(appFetch: typeof fetch)` — fetch를 주입받아 세션 수명주기(보관·삭제·복원) 클라이언트를 만든다. `SessionChange`를 보내고 `SessionArchiveResult`를 돌려준다. `api`가 내부에서 호출한다
@@ -44,7 +44,7 @@
 ## Invariants
 
 - 브라우저는 `memory-agent` 루트에서 타입만 import한다(`import type`). 서버로 보내는 유니온의 생성자는 그 타입에서 `Data.taggedEnum`으로 만든다. 도착한 본문은 서버 라우트가 디코드한다(`api.ts` 97-100행 주석). 런타임 값은 `memory-agent/app-api`, `memory-agent/definitions`, `memory-agent/provider-contracts`에서만 가져온다
-- `ApiErrorCode`는 브라우저 API가 이해하는 모든 오류 코드 목록이다. 서버가 새 오류 코드를 보내면 이 리터럴 목록에 추가해야 `ApiError`로 디코드된다
+- `ApiErrorCode`는 계약에서 만든다. 계약에 거부를 선언하면 그 code가 목록에 들어온다. 페이지가 읽는 code가 계약에서 빠지면 타입 검사가 그 비교를 잡는다
 - 세션 보드에 들어가면 프로젝트 보드(`boards`, `boardCard`)를 닫는다(`leaveProjectBoard`). 두 보드는 URL을 함께 쓰지 않는다. 프로젝트를 바꾸면 이전 프로젝트의 session, card, board를 모두 지운다(`leaveProject`)
 - URL의 project가 프로젝트 목록에 없으면 `projects[0]`로 바꾼다. 이때 project가 바뀌었으면 session을 null로 둔다. URL의 session이 활성 세션 목록에 없으면 `sessions[0]`로 바꾼다
 - 세션 보관·삭제·복원의 결과가 `completed`가 아니면 `PendingLifecycle`(waiting_for_stop / blocked, `goal_dependents` 포함)을 문구로만 보여 준다. 이때 선택 세션은 바꾸지 않는다. `completed`일 때만, 현재 세션이 대상이면 남은 첫 세션으로 옮긴다
@@ -55,7 +55,7 @@
 
 ## Side Effects
 
-- 네트워크: `api`의 메서드는 `appCall`로 앱 API 계약(`memory-agent/app-api`)의 `HttpApiClient`를 `appFetch` 위에서 부른다. 거부는 `appRefusalStatus`의 상태와 함께 `ApiError`가 된다. 계약에 없는 상태의 응답은 `ErrorBody`로 디코드한다(`apiError`)
+- 네트워크: `api`의 메서드는 `appCall`로 앱 API 계약(`memory-agent/app-api`)의 `HttpApiClient`를 `appFetch` 위에서 부른다. 거부는 `appRefusalStatus`의 상태와 함께 `ApiError`가 된다. 계약에 없는 상태의 응답은 `ErrorBody`로 디코드한다(`apiError`). 계약이 보내기 전에 거절한 값은 400 `invalid_request`, 계약에 맞지 않는 응답은 서버 잘못이라 502 `request_failed`다(client의 `transformResponse`가 응답 decode 실패를 `UnexpectedAnswer`로 가른다)
 - 네트워크: `uploadAttachment(file)`로 첨부 파일을 업로드한다. `generateImage`로 이미지를 생성 요청한다
 - `workTraceStreamUrl(sessionId, after)`로 work trace SSE 스트림 URL을 만든다(구독은 호출자가 맡는다)
 - `api.ts`는 `browserCrypto`(Web Crypto 기반 Effect Crypto)를 import한다

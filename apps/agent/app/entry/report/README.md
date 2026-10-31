@@ -39,7 +39,7 @@
 ## Invariants
 
 - 거절된 응답은 상태코드만 보관하고 body를 읽지 않는다(`ReportRequestFailed` 주석, delivery·diagnosis 매핑 주석). 서버 라우트가 사유마다 상태코드 하나를 배정한다는 전제를 따른다.
-- 전송 매핑은 409=`not_configured`, 503=`invalid_webhook_url`, 413=`too_large`, 423=`in_progress`, 429=`rate_limited`, 410=`webhook_rejected`, 422=`payload_rejected`, 502=`discord_unavailable`, 504=`uncertain`이다. 진단 매핑은 503=`model_unavailable`, 502=`model_failed`, 422=`invalid_answer`이다. 계약(`app-api/reports.ts`의 `deliveryFailureStatus`·`diagnosisFailureStatus`)과 이 표가 맞아야 한다. 설정을 읽지 못한 전송 상태 조회는 500이라 `request_failed`다.
+- 상태코드에서 reason을 찾는 표는 계약(`memory-agent/app-api`의 `deliveryFailureStatus`·`diagnosisFailureStatus`)의 것을 그대로 쓴다. 페이지가 따로 표를 두지 않는다. 설정을 읽지 못한 전송 상태 조회는 500이라 `request_failed`다.
 - 매핑에 없는 상태코드와 transport·response 실패는 `request_failed`가 된다. `SchemaError`는 진단에서 `invalid_answer`, 전송에서 `request_failed`로 매핑된다.
 - `deliveryFailureText`와 `diagnosisFailureText`는 `satisfies Record<...Failure | "request_failed", string>`로 모든 사유를 빠짐없이 다뤄야 한다.
 - `request`는 `Effect.abortSignal`과 `Effect.scoped`로 fetch에 signal을 넘긴다. 따라서 fiber를 interrupt하면 HTTP 요청도 중단된다.

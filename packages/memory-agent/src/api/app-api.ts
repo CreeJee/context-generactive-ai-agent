@@ -1,3 +1,4 @@
+import { Schema } from "effect";
 import { HttpApi } from "effect/http-api";
 import { BtwThreadsGroup, btwRefusals } from "./app-api/btw.ts";
 import { EventsGroup } from "./app-api/events.ts";
@@ -8,7 +9,7 @@ import { AccountsGroup, AuthGroup, ModelsGroup, providersRefusals } from "./app-
 import { SessionsGroup, sessionsRefusals } from "./app-api/sessions.ts";
 import { SettingsGroup, settingsRefusals } from "./app-api/settings.ts";
 import { TraceGroup, traceRefusals } from "./app-api/trace.ts";
-import { refusalStatusIn } from "./refusal.ts";
+import { refusalStatusIn, SameSiteRefusal } from "./refusal.ts";
 
 /**
  * The app's API besides chat (docs/httpapi-migration.md), declared once for the server and the
@@ -28,12 +29,9 @@ export class AppApi extends HttpApi.make("app")
   .add(MediaGroup)
   .add(EventsGroup) {}
 
-/**
- * The HTTP status an app API refusal is answered with. A code has one status across the groups, so
- * the page reads it from the refusal alone. `auth_failed` has two, told apart by its reason, and
- * `provider_unavailable` two, told apart by its `provider`.
- */
-export const appRefusalStatus = refusalStatusIn([
+/** Every refusal of the app API, `SameSite`'s included. */
+const appRefusals = [
+  SameSiteRefusal,
   ...settingsRefusals,
   ...projectsRefusals,
   ...providersRefusals,
@@ -42,7 +40,18 @@ export const appRefusalStatus = refusalStatusIn([
   ...btwRefusals,
   ...reportsRefusals,
   ...mediaRefusals,
-]);
+];
+
+/**
+ * The HTTP status an app API refusal is answered with. A code has one status across the groups, so
+ * the page reads it from the refusal alone. `auth_failed` has two, told apart by its reason, and
+ * `provider_unavailable` two, told apart by its `provider`.
+ */
+export const appRefusalStatus = refusalStatusIn(appRefusals);
+
+/** Every code an app API refusal carries under `error`. */
+export const AppRefusalCode = Schema.Union(appRefusals.map((refusal) => refusal.fields.error));
+export type AppRefusalCode = typeof AppRefusalCode.Type;
 
 export {
   ConversationSettings,
@@ -79,7 +88,11 @@ export {
   SessionChange,
   SubagentTranscript,
 } from "./app-api/sessions.ts";
-export { ReportDeliveryCommand } from "./app-api/reports.ts";
+export {
+  deliveryFailureStatus,
+  diagnosisFailureStatus,
+  ReportDeliveryCommand,
+} from "./app-api/reports.ts";
 export { GeneratedImage } from "./app-api/media.ts";
 export { CrossProviderMediaRunApproval } from "../providers/image-media-contracts.ts";
 export { AppChangedEvent, AppReadyEvent } from "../events/contracts.ts";

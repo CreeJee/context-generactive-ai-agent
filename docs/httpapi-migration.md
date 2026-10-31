@@ -129,7 +129,7 @@
   - 세션 변경은 `SessionChange` TaggedUnion(`Archive`·`Delete`·`Phase`·`Control`) 하나를 받는다. client는 union payload를 case별로 받으므로 페이지가 `Match.valueTags`로 나눠 부른다.
   - 수명주기 결과는 `work-trace/contracts.ts`의 `LifecycleResult`(`completed`·`waiting_for_stop`·`blocked`)다. 요청부터 막히면 409 `blocked`, 멈춘 뒤 끝내다 막히면 202 `blocked`로 옛 상태와 같다. `blocked`는 `_tag`가 있으므로 `refusalsOnly`는 이제 `Error`인 실패만 defect로 바꾼다.
   - 응답이 바뀐 곳: 옛 라우트는 없는 세션을 잡지 않아 500으로 답했다. 이제 404 `session_not_found`다. workflow 전이·진행 거부 code 가운데 `unknown_step`, `step_evidence_required`, `verification_required`, `steps_incomplete`, `phase_not_executable`, `goal_completion_required`, `completion_evidence_*`, `completion_snapshot_conflict`는 페이지 code 목록에 없어 `request_failed`로 보였다. 계약이 이것을 찾아 목록에 넣었다.
-  - 202인데 완료 모양인 답처럼 계약에 맞지 않는 응답은 `appCall`이 디코드 실패로 보고 invalid code(`invalid_session_change`)로 준다. 전에는 502였다. 응답 디코드 실패와 요청 거부를 가를지는 1-7에서 정한다.
+  - 202인데 완료 모양인 답처럼 계약에 맞지 않는 응답은 `appCall`이 디코드 실패로 보고 invalid code(`invalid_session_change`)로 준다. 전에는 502였다. 응답 디코드 실패와 요청 거부를 가를지는 1-7에서 정한다. → 1-7에서 갈랐다. 이제 502 `request_failed`다.
   - 계약에 맞지 않는 payload(전에는 `invalid_session_change`)는 HttpApi의 빈 400이다.
 - 1-4c trace 결과 (2026-10-31): `sessions.$session.trace`, `sessions.$session.trace.tasks.$task`, `projects.$project.trace`, `projects.$project.trace.tasks.$task`를 새 `TraceGroup`(`app-api/trace.ts`)으로 옮겼다. 세션과 프로젝트의 trace가 같은 메서드와 타입을 쓰므로 한 group에 둔다. `AgentChat`의 trace 메서드 여섯 개도 값과 거부를 돌려준다. `traceStream`은 SSE와 함께 1-6에서 옮긴다. 그것이 쓰는 `json`·`sessionNotFound`·`workTraceUnavailable`도 그때 지운다.
   - 응답 Schema는 `work-trace/contracts.ts`(`TraceTreeSnapshot`, `TraceTaskDetail`과 그 안의 view, `ResumeBlocker`, `ResumeTaskResult`)와 새 `memory/contracts.ts`(`MemoryCandidateView`, `MemoryUsageView`, `MemoryDisposition`)에 둔다. `store.ts`와 `knowledge.ts`는 같은 이름의 타입을 다시 내보낸다. `ResumeRequest`의 `Data.taggedEnum` 생성자는 그대로 둔다.
@@ -158,6 +158,13 @@
 ### 1-7. 정리
 
 - `call<T>`, 손으로 쓴 응답 타입과 `ApiErrorCode` 목록을 지운다. `app/routes/api/README.md`를 계약 기준으로 다시 쓴다.
+- 결과 (2026-10-31): `call<T>`는 1-5에서 지웠고, `api.ts`에 손으로 쓴 응답 타입은 남지 않았다. 계약과 도메인 Schema의 타입을 다시 내보낼 뿐이다. `ErrorBody`는 계약에 없는 상태(개발 backend 재시작, 첨부 업로드)의 본문을 읽는 데만 쓴다.
+  - `ApiErrorCode`는 계약의 `AppRefusalCode`와 페이지 code(`invalid_request`, `request_failed`, `upload_failed`, `backend_restart_*`, `attachment_rejected`)의 합이다. `AppRefusalCode`는 `app-api.ts`의 `appRefusals` 목록(모든 group의 거부와 `SameSiteRefusal`)에서 만들고, `appRefusalStatus`도 같은 목록을 쓴다. 손으로 쓴 160개 목록은 지웠다. 서버가 보내지 않는 `account_action_failed`를 비교하던 계정 문구 분기는 타입 검사가 찾아 지웠다.
+  - 요청과 응답의 decode 실패를 가른다. HttpApiClient는 둘 다 `SchemaError`로 실패하므로, client의 `transformResponse`가 응답 decode의 `SchemaError`를 `UnexpectedAnswer`로 바꾼다. facade는 이것을 서버 잘못으로 보고 502 `request_failed`로 준다. 보내기 전에 계약이 거절한 값은 400 `invalid_request` 하나다. endpoint마다 고르던 invalid code(`invalid_provider` 등 27개)는 페이지가 읽지 않아 없앴다.
+  - 찾은 문제: `appRefusalStatus`가 `SameSite` 거부를 몰라 403 `cross_site_request`를 500으로 봤다. `appRefusals`에 넣어 고쳤다.
+  - 제보 페이지는 상태에서 reason을 찾을 때 계약의 `deliveryFailureStatus`·`diagnosisFailureStatus`를 쓴다. 페이지가 따로 두던 역방향 표는 지웠다.
+  - `.server/http.ts`의 `readJson`·`answerDefect`는 쓰는 라우트가 없어 지웠다. `app/routes/api/README.md`는 splat과 첨부 라우트만 다루고, group handler 규칙은 새 `app/.server/api/README.md`로 옮겼다.
+  - 실서버 확인 (2026-10-31, 재시작한 dev backend): SSE 네 개, 제보 전송 상태와 evidence(200, `no-store`), 없는 세션 404, 이미지 생성 `approved: false`의 409 `image_approval_required`+`reason: paid_execution`, 빈 prompt와 잘못된 본문의 400, cross-site 403을 확인했다. 진단은 선택한 호환 provider 서버에 연결하지 못해(`UND_ERR_CONNECT_TIMEOUT`) 502 `report_diagnosis_failed`+`reason: model_failed`로 답했다. 실패 경로는 계약대로다. 성공 경로는 provider가 응답할 때 다시 본다.
 
 ### 2. loader
 
@@ -177,5 +184,5 @@
 - 계약 모듈이 서버 코드를 끌어오면 브라우저 build가 깨진다. Schema를 옮길 때마다 browser build(`vp run agent#build`)로 확인한다.
 - 응답을 Schema로 encode하므로, 지금 응답에 interface에 없는 필드가 섞여 있으면 사라진다. group마다 옮기기 전과 후의 응답을 비교한다.
 - 서버 encode가 Schema의 runtime check(`Int`, 범위, `NonEmpty`)에 걸리면 지금은 보이던 화면이 500을 받는다. TS는 이것을 잡지 못한다. 그래서 응답 Schema에는 도메인이 이미 decode에 쓰는 check만 두고 새 check를 더하지 않는다. TS interface는 지우고 타입을 `typeof X.Type`으로 바꿔, 값을 만드는 서버 코드가 모두 Schema 타입으로 검사되게 한다. interface에서 Schema 초안을 만들 때는 `@effect/tsgo` refactor `typeToEffectSchema`를 쓸 수 있다.
-- 브라우저 쪽 실패 변환: 선언한 refusal은 `appRefusalStatus`로 status를 찾는다. 선언하지 않은 status는 `call<T>`처럼 body의 `{ error, reason }`을 읽는다. 브라우저 Schema가 payload를 거절하면 그 endpoint의 `invalid_*` code(400)다. 서버가 payload decode에 실패하면 HttpApi 기본 응답(빈 400)이다.
+- 브라우저 쪽 실패 변환: 선언한 refusal은 `appRefusalStatus`로 status를 찾는다. 선언하지 않은 status는 body의 `{ error, reason }`을 읽는다. 브라우저 Schema가 payload를 거절하면 400 `invalid_request`, 응답을 거절하면 502 `request_failed`다(1-7). 서버가 payload decode에 실패하면 HttpApi 기본 응답(빈 400)이다.
 - 다른 세션이 같은 checkout에서 `app/entry/*`를 고치고 있다. `api.ts`의 export 이름과 시그니처를 유지해 충돌을 줄인다.

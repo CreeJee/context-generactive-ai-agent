@@ -27,10 +27,11 @@ export const refusalStatusIn =
       Option.getOrElse(() => 500),
     );
 
-const Forbidden = refusalWith({})(403, ["cross_site_request", "invalid_origin"]);
+/** What `SameSite` refuses another site's request with. */
+export const SameSiteRefusal = refusalWith({})(403, ["cross_site_request", "invalid_origin"]);
 
 /** Refuses a request that changes something when another site sent it (PRD R14). */
 export class SameSite extends HttpApiMiddleware.Service<SameSite>()(
   "memory-agent/api/refusal/SameSite",
-  { error: Forbidden },
+  { error: SameSiteRefusal },
 ) {}
