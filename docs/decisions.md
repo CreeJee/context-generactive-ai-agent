@@ -3453,3 +3453,11 @@
 - Plan 요약의 완료 막대는 손으로 만든 `role="progressbar"` 대신 `Progress`다. 카드가 없으면 `max`를 1로 두어 0으로 나누지 않는다.
 - 사이드바 "대화" 머리줄의 "새 대화"와 대화 상대 메뉴는 `ButtonGroup`으로 묶은 outline 분할 버튼이다.
 - 구독 계정 로그아웃과 호환 엔드포인트 삭제의 `window.confirm`은 `AlertDialog`로 바꿨다. 확인 버튼을 누르면 창을 닫고 동작을 보낸다. 채팅 쪽에 남은 `window.confirm` 두 곳(`message.tsx`, `chat-panel.tsx`)은 다른 작업이 그 파일을 고치는 중이라 이번에 건드리지 않았다.
+
+## ACP 브리지의 로그인 확인은 앱의 현재 provider로 한다 (2026-10-31)
+
+- 문제: ACP 브리지는 `session/new` 전에 `GET /api/auth`를 provider 없이 불렀다. provider가 여럿이 된 뒤 이 경로는 provider를 꼭 받았으므로(400 `invalid_provider`), 실제 앱에서는 에디터로 새 대화를 열 수 없었다. 브리지 테스트는 `/api/auth`를 signed-in 고정 응답으로 바꿔 이것을 가렸다.
+- 결정: `/api/auth`의 `provider`는 선택이다. 없으면 앱의 현재 provider(`ActiveProvider.provider`: 전역 설정의 provider, 없으면 `openai`)로 답한다. 실행이 쓰는 provider이므로 브리지는 그대로 provider 없이 묻는다. 페이지는 지금처럼 provider를 넘긴다.
+- 브리지의 `login_required` 안내는 "앱에서 지금 쓰는 모델 제공자에 로그인하세요."다. ChatGPT만 있던 때의 문구를 바꿨다.
+- 테스트: 브리지 테스트는 고정 응답 대신 테스트 앱의 `/api/auth`(같은 규칙)를 묻는다. 현재 provider가 로그인하지 않았으면 `session/new`가 거절되고 세션이 생기지 않는다.
+- 실제 앱 확인(2026-10-31): 실행 중인 앱은 provider 없는 `/api/auth`에 400 `invalid_provider`로 답했다. `openai`·`anthropic`·`openai-compatible`은 provider를 주면 모두 signed-in이었다. 새 코드는 dev backend를 다시 띄워야 반영된다.

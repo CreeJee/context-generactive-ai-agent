@@ -12,7 +12,10 @@ const ProjectSummary = Schema.Struct({
   name: Schema.String,
 });
 const SessionSummary = Schema.Struct({ id: Schema.String, projectId: Schema.String });
-/** The case of the app's provider connection; the bridge needs only whether it is signed in. */
+/**
+ * The case of the app's current provider connection; the bridge needs only whether it is signed
+ * in. Asked without a provider, `/api/auth` answers for the provider the app's runs use.
+ */
 export const AuthSummary = Schema.TaggedUnion({
   "signed-out": {},
   pending: {},
@@ -68,7 +71,7 @@ export const requestFailure = ({
 
 /**
  * The app's HTTP API as the ACP bridge uses it. The bridge owns no storage: the app process
- * keeps the database, the vector index and the ChatGPT connection, so sessions started from an
+ * keeps the database, the vector index and the providers' connections, so sessions started from an
  * editor are the same sessions the web page shows.
  */
 export const createAppApi: {

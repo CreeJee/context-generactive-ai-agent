@@ -1,6 +1,7 @@
 import { Effect, Match, Struct } from "effect";
 import { HttpApiBuilder } from "effect/http-api";
 import {
+  ActiveProvider,
   AppEvents,
   AuthConnectionState,
   logFailure,
@@ -65,10 +66,12 @@ export const AuthApiHandlers = HttpApiBuilder.group(
     const registry = yield* ProviderRegistry;
     const profiles = yield* OAuthProfiles;
     const events = yield* AppEvents;
+    const active = yield* ActiveProvider;
 
     return handlers.handleAll({
-      status: ({ query: { provider } }) =>
+      status: ({ query }) =>
         Effect.gen(function* () {
+          const provider = query.provider ?? (yield* Effect.orDie(active.provider));
           const configured = yield* registry.get(provider);
           // Migrate when the sidebar first checks this provider.
           yield* Match.valueTags(providerConnection(provider), {

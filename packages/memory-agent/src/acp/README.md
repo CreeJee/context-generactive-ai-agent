@@ -12,7 +12,7 @@
 - `AppRequestFailed` — `status`, `code`, `message`, `reason`을 가진 `Schema.TaggedError`. 앱이 거절했거나 앱에 닿지 못했음을 나타낸다
 - `AppRequestReason` — `TransportFailed` | `RequestRejected` | `InvalidResponse` TaggedUnion
 - `requestFailure` — `{status, code, reason}`으로 `AppRequestFailed`를 만든다. message는 `${code} (${status})`
-- `AuthSummary` — 앱 provider 연결 상태 TaggedUnion: `signed-out` | `pending` | `signed-in` | `error`
+- `AuthSummary` — 앱의 현재 provider 연결 상태 TaggedUnion: `signed-out` | `pending` | `signed-in` | `error`. `GET /api/auth`를 provider 없이 부르면 앱이 지금 쓰는 provider(전역 설정, 없으면 `openai`)로 답한다
 - `defaultAppUrl` — 기본 앱 주소 `http://127.0.0.1:5173`. 주석에 따르면 `CONTEXT_AGENT_URL`로 바꿀 수 있다
 - `ProjectSummary` / `SessionSummary` — 앱 응답 타입. 프로젝트는 `{id, root, name}`, 세션은 `{id, projectId}`
 - `toolView` — 도구 이름을 `{title, kind}`로 바꾼다. 표에 없는 `mcp_<server>__<tool>` 이름은 `MCP server · tool`로, 그 밖의 이름은 원래 이름과 kind `other`로 보여 준다
@@ -24,7 +24,8 @@
 
 ## Invariants
 
-- 브리지는 저장소를 갖지 않는다. DB, 벡터 인덱스, ChatGPT 연결은 앱 프로세스가 갖는다. 브리지는 앱 HTTP API로만 상태를 다룬다(`app-api.ts` 주석)
+- 브리지는 저장소를 갖지 않는다. DB, 벡터 인덱스, 모델 제공자 연결은 앱 프로세스가 갖는다. 브리지는 앱 HTTP API로만 상태를 다룬다(`app-api.ts` 주석)
+- `session/new`는 세션을 만들기 전에 앱의 현재 provider가 로그인했는지 본다. 아니면 `login_required`로 거절하고 세션을 만들지 않는다
 - lease 갱신 주기 `leaseRenewMs = 20_000`은 앱이 lease를 버리는 90초보다 짧아야 한다(주석)
 - 에디터 연결마다 lease holder가 따로 있다(`BridgeSession.holder`, 브라우저 탭과 같은 역할). 쓰기 요청은 holder를 `sessionHolderHeader` 헤더로 보낸다. `sessionState`는 holder를 쿼리로 보낸다
 - 보안: 프로젝트 등록은 file 도구가 닿는 범위를 넓히므로 웹 페이지만 한다. 등록되지 않은 root면 브리지는 `ProjectNotRegistered`로 거절한다

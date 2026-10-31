@@ -8,6 +8,7 @@ import { ChatApi, SameSite } from "../../src/api/chat-api.ts";
 import { BtwApiHandlers, ChatApiHandlers } from "../../src/api/chat-api-live.ts";
 import { BtwChat } from "../../src/btw/chat.ts";
 import { Projects } from "../../src/projects/projects.ts";
+import { ActiveProvider } from "../../src/providers/active-provider.ts";
 import { ProviderRegistry } from "../../src/providers/registry.ts";
 import { sessionHolderHeader } from "../../src/sessions/lease-state.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
@@ -81,8 +82,11 @@ const route = Effect.fnUntraced(function* (
   if (path === "/api/auth") {
     const registry = yield* ProviderRegistry;
     const requested = url.searchParams.get("provider");
-    const provider = registry.providers.find((candidate) => candidate === requested);
-    const configured = yield* registry.get(provider ?? registry.providers[0]!);
+    // Without `provider` the app answers for its current provider, as the bridge asks.
+    const provider =
+      registry.providers.find((candidate) => candidate === requested) ??
+      (yield* (yield* ActiveProvider).provider);
+    const configured = yield* registry.get(provider);
     const state = yield* configured.auth.status;
     return Response.json(
       AuthConnectionState.$is("pending")(state)
@@ -126,7 +130,7 @@ const route = Effect.fnUntraced(function* (
  */
 export const appFetch = Effect.gen(function* () {
   const run = yield* FiberSet.makeRuntimePromise<
-    AgentChat | Projects | ProviderRegistry | Sessions
+    ActiveProvider | AgentChat | Projects | ProviderRegistry | Sessions
   >();
   const { handler } = yield* chatApiHandler;
   const fetcher: typeof fetch = (input, init) => run(route(handler, new Request(input, init)));

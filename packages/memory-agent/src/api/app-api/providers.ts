@@ -150,9 +150,12 @@ export const providersRefusals = [
 /** A model provider's sign-in (`/api/auth`). */
 export class AuthGroup extends HttpApiGroup.make("auth")
   .add(
-    /** The provider's connection; a subscription's legacy login is copied into a profile first. */
+    /**
+     * The provider's connection; a subscription's legacy login is copied into a profile first.
+     * Without `provider`, the app's current provider, the one its runs use (the ACP bridge asks so).
+     */
     HttpApiEndpoint.get("status", "/api/auth", {
-      query: { provider: ProviderId },
+      query: { provider: Schema.optional(ProviderId) },
       success: ProviderAuthState,
       error: [ProviderUnavailable, ...AuthRefusals],
     }),

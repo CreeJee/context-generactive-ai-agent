@@ -1,11 +1,11 @@
 import * as acp from "@agentclientprotocol/sdk";
-import { AuthConnectionState } from "../../src/providers/contracts.ts";
 import type { AnyMessage, SessionNotification } from "@agentclientprotocol/sdk";
 import { Effect, FileSystem } from "effect";
 import { expect } from "vite-plus/test";
 import { createAppApi } from "../../src/acp/app-api.ts";
 import { startAcpAgent } from "../../src/acp/agent-bridge.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
+import { Sessions } from "../../src/sessions/sessions.ts";
 import { sessionScopedResponder } from "../support/chat-client.ts";
 import { selectTestModel, turnGate } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
@@ -36,13 +36,7 @@ const editor = Effect.fnUntraced(function* (answerPermission: "allow" | "reject"
     Effect.map(
       startAcpAgent({
         stream: streams.agent,
-        api: createAppApi("http://app.test", (input, init) =>
-          new URL(input instanceof Request ? input.url : input).pathname === "/api/auth"
-            ? Promise.resolve(
-                Response.json(AuthConnectionState["signed-in"]({ provider: "openai" })),
-              )
-            : fetcher(input, init),
-        ),
+        api: createAppApi("http://app.test", fetcher),
       }),
       (bridge) => {
         const client = acp
@@ -163,6 +157,24 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("ACP agent br
       const replayed = updates.map((notification) => notification.update.sessionUpdate);
       expect(replayed[0]).toBe("user_message_chunk");
       expect(replayed).toContain("agent_message_chunk");
+    }),
+  );
+});
+
+// The bridge asks `/api/auth` without a provider: the app answers for its current provider.
+testAgent({ testProvider: { signedIn: false } })("ACP sign-in", (it) => {
+  it.effect("a new session is refused while the app's current provider is signed out", () =>
+    Effect.gen(function* () {
+      const { project } = yield* TestEnv;
+      const sessions = yield* Sessions;
+      const { agent } = yield* editor();
+      const before = yield* sessions.list(project.id);
+      yield* sdk(() =>
+        expect(
+          agent.request(acp.methods.agent.session.new, { cwd: project.root, mcpServers: [] }),
+        ).rejects.toThrow("지금 쓰는 모델 제공자에 로그인하세요"),
+      );
+      expect(yield* sessions.list(project.id)).toEqual(before);
     }),
   );
 });

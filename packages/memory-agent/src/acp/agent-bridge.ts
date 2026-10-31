@@ -93,7 +93,7 @@ const requestError = (message: string) => acp.RequestError.internalError(undefin
 
 const failureMessages = HashMap.fromIterable([
   ["unreachable", "앱에 연결하지 못했어요. context-generactive-agent 앱을 먼저 실행하세요."],
-  ["login_required", "앱에서 ChatGPT에 로그인하세요."],
+  ["login_required", "앱에서 지금 쓰는 모델 제공자에 로그인하세요."],
   ["model_selection_required", "앱에서 모델을 선택하세요."],
   ["session_in_use", "다른 창에서 쓰고 있는 대화예요."],
   ["session_not_found", "그런 대화가 없어요."],
