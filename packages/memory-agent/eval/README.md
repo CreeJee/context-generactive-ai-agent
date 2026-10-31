@@ -20,7 +20,7 @@
 - `storedOAuthProfiles` — 앱 DB를 read-only로 열어(`readOnlyProfiles` 레이어) provider별 저장된 OAuth 프로필 목록을 읽는다. (`stored-profiles.ts`)
 - `recallSessions` / `recallQueries` / `RecallStatement` / `RecallQuery` — 결정(decisions) recall 평가용 세션 statement 코퍼스와 질의 집합이다. (`recall-corpus.ts`)
 - `technicalSessions` / `technicalQueries` — 기술(technical) recall 평가용 세션 코퍼스와 질의 집합이다. (`recall-technical.ts`)
-- CLI 진입 스크립트(export 없음) — `anthropic-usage-probe.ts`, `compaction-cli.ts`, `live-compaction.ts`, `live-delegation.ts`, `memory-research-lab.ts`(인자: `fake-embed`·`real-embed`·`fts-only`·`morph-only`·`full` 중 1단계), `memory.ts`(시나리오 `only`), `prompt-overhead.ts`(인자 없음: 내장 skill만 있는 임시 프로젝트. 프로젝트 경로: 그 프로젝트의 AGENTS.md·skill·MCP와 사용자 global skill·MCP를 모두 신뢰하고 Kagi를 켠 최악 조건. 둘 다 서브에이전트에 한 번 위임해 부모와 자식의 첫 요청을 출처별 토큰으로 나눈다), `recall.ts`(`printRecall`/`printTerms`), `structured-memory.ts`(`program`·`BenchmarkFailed`).
+- CLI 진입 스크립트(export 없음) — `anthropic-usage-probe.ts`, `compaction-cli.ts`, `live-compaction.ts`, `live-delegation.ts`, `memory-research-lab.ts`(인자: `fake-embed`·`real-embed`·`fts-only`·`morph-only`·`full` 중 1단계), `memory.ts`(시나리오 `only`), `prompt-overhead.ts`(인자 없음: 내장 skill만 있는 임시 프로젝트. 프로젝트 경로: 그 프로젝트의 AGENTS.md·skill·MCP와 사용자 global skill·MCP를 모두 신뢰하고 Kagi를 켠 최악 조건. 둘 다 서브에이전트에 한 번 위임해 부모와 자식의 첫 요청을 출처별 토큰으로 나눈다), `recall.ts`(`printRecall`/`printTerms`), `structured-memory.ts`(`program`·`BenchmarkFailed`), `tool-use.ts`(인자: 케이스 이름들, `--repeat N`. 사용자가 고른 모델로 작은 프로젝트마다 요청 하나를 돌리고, 도구 호출과 답·파일이 케이스의 기대를 지켰는지 본다. 케이스는 실사용 기록의 도구 실패에서 가져온다).
 - 하위 디렉터리 없음.
 
 ## Invariants
@@ -43,6 +43,7 @@
 - Keychain: `OAuthKeychain.keychain`으로 OAuth 자격증명을 읽는다(anthropic-usage-probe, live-delegation).
 - 네트워크(유료): anthropic-usage-probe는 Anthropic 구독 usage 요청을 1회 보낸다. live-compaction과 live-delegation은 OpenAI 구독 모델을 실제 호출한다. structured-memory는 provider 호출 여부를 직접 읽지 않았다. 다만 `ReportedUsage`, `inputLimit`/`outputLimit` 심볼이 있다.
 - 파일 시스템: 기본 storage root의 `config.json`을 읽는다(live-delegation). `makeTempDirectoryScoped`로 임시 디렉터리를 만들고 fixture 소스(`src/checksum.ts`, `main.ts`, `child.ts`)를 쓴다. memory-research-lab은 실제 storage root의 모델 파일(quint8/fp32, Kiwi `cong.mdl`)을 stat하고, `node_modules/.vp-tmp` 아래에 임시 root를 만든다.
+- tool-use는 기본 storage root의 `config.json`을 임시 storage로 복사해 사용자가 고른 provider·모델로 실제 요청을 보낸다. openai-compatible 키는 OS keychain에서 읽기만 한다. 로컬 모델이면 비용이 없고, 구독 모델이면 그 사용량을 쓴다. 케이스마다 임시 프로젝트를 `full` 권한으로 만들고 그 안의 파일만 바꾼다.
 - prompt-overhead에 프로젝트 경로를 주면 기본 storage root의 `mcp.json`을 임시 storage로 복사하고 홈의 `.agents/skills`를 읽는다. 설정된 MCP 서버를 실제로 띄우거나(stdio) 접속해(HTTP) `tools/list`까지 한다. 사용자 storage, keychain, 프로젝트에는 쓰지 않는다(secret은 `SecretStore.memory`).
 - 자식 프로세스: `memory.ts`의 `footprint`는 `runProcess`로 macOS physical footprint(`phys_footprint`, `phys_footprint_peak`)를 조회한다.
 - 환경·프로세스: live-compaction은 `MEMORY_AGENT_ENABLE_PAID_COMPACTION_PILOT`를 읽는다. 여러 스크립트가 `process.argv`로 단계나 시나리오를 고르고, 실패 시 `process.exitCode = 1`을 설정한다. memory-research-lab은 `process.hrtime`으로 embed 시간을 잰다.

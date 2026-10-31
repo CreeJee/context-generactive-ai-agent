@@ -63,6 +63,7 @@
     "eval:structured-memory": "node --no-warnings eval/structured-memory.ts",
     "eval:memory-lab": "node --no-warnings eval/memory-research-lab.ts",
     "eval:prompt-overhead": "node --no-warnings eval/prompt-overhead.ts",
+    "eval:tool-use": "node --no-warnings eval/tool-use.ts",
     "prepublishOnly": "vp run build"
   },
   "dependencies": {
