@@ -9,6 +9,7 @@ import {
   FileSystem,
   Layer,
   Option,
+  Path,
   Schedule,
   Schema,
   Stream,
@@ -20,6 +21,7 @@ import { GlobalConfig } from "../src/config/global-config.ts";
 import { defaultStorageRoot } from "../src/config/storage-root.ts";
 import { memoryAgentLayer } from "../src/layers.ts";
 import { RunStore } from "../src/loop/store.ts";
+import { McpServers } from "../src/mcp/servers.ts";
 import { Projects } from "../src/projects/projects.ts";
 import { AuthConnectionState } from "../src/providers/contracts.ts";
 import { ProviderRegistry } from "../src/providers/registry.ts";
@@ -67,6 +69,8 @@ interface Case {
   readonly files: Readonly<Record<string, string>>;
   /** Symbolic links, by path, to targets relative to the link. */
   readonly links?: Readonly<Record<string, string>>;
+  /** Trusts the eval's MCP servers for the project: `tracker` and `code-index`. */
+  readonly mcp?: boolean;
   readonly prompt: string;
   /** The expectations the outcome misses; none is a pass. */
   readonly misses: (outcome: Outcome) => Effect.Effect<ReadonlyArray<string>>;
@@ -124,6 +128,36 @@ const searchFixture = [
   "}",
   "",
 ].join("\n");
+
+const parseFixture = {
+  "src/config/parse.ts": [
+    "export interface Config {",
+    "  readonly port: number;",
+    "}",
+    "",
+    "export function parseConfig(text: string): Config {",
+    "  return { port: Number(text.trim()) };",
+    "}",
+    "",
+  ].join("\n"),
+  "src/server.ts": [
+    'import { parseConfig } from "./config/parse.ts";',
+    "",
+    "export function startServer(text: string) {",
+    "  const config = parseConfig(text);",
+    "  return config.port;",
+    "}",
+    "",
+  ].join("\n"),
+  "src/cli.ts": [
+    'import { parseConfig } from "./config/parse.ts";',
+    "",
+    "export function main(argv: string[]) {",
+    '  return parseConfig(argv[0] ?? "8080");',
+    "}",
+    "",
+  ].join("\n"),
+};
 
 const cases: ReadonlyArray<Case> = [
   {
@@ -213,6 +247,45 @@ const cases: ReadonlyArray<Case> = [
         ...failedCalls(outcome, ["not_found"]),
       ]),
   },
+  {
+    name: "mcp-issue",
+    why: "An MCP tool the task needs is found and called, whether listed in full or by name only.",
+    files: {},
+    mcp: true,
+    prompt: "트래커에서 ENG-42 이슈 담당자가 누구야?",
+    misses: (outcome) =>
+      Effect.succeed([
+        ...called(outcome, "mcp_tracker__get_issue", /ENG-42/),
+        ...answerHas(outcome, /박서연/),
+        ...failedCalls(outcome),
+      ]),
+  },
+  {
+    name: "mcp-search-comment",
+    why: "Two MCP tools of one server used in turn: find the issue, then change it.",
+    files: {},
+    mcp: true,
+    prompt: "트래커에서 로그인 타임아웃 이슈를 찾아서 '스테이징에서 재현됨' 댓글을 달아줘.",
+    misses: (outcome) =>
+      Effect.succeed([
+        ...called(outcome, "mcp_tracker__search_issues"),
+        ...called(outcome, "mcp_tracker__add_comment", /ENG-42[\s\S]*재현|재현[\s\S]*ENG-42/),
+        ...failedCalls(outcome),
+      ]),
+  },
+  {
+    name: "mcp-guided",
+    why: "codegraph was called 2,235 times because its server guide asks for it before the file tools.",
+    files: parseFixture,
+    mcp: true,
+    prompt: "parseConfig를 호출하는 곳을 알려줘.",
+    misses: (outcome) =>
+      Effect.succeed([
+        ...called(outcome, "mcp_code-index__explore"),
+        ...answerHas(outcome, /server\.ts/, /cli\.ts/),
+        ...failedCalls(outcome),
+      ]),
+  },
 ];
 
 const decodeFailure = Schema.decodeUnknownOption(Schema.fromJsonString(ToolFailureResult));
@@ -274,6 +347,7 @@ const evaluate = Effect.fn("eval.toolUse")(function* () {
   const platform = yield* Layer.build(NodeServices.layer);
   const fs = Context.get(platform, FileSystem.FileSystem);
   const crypto = Context.get(platform, Crypto.Crypto);
+  const paths = Context.get(platform, Path.Path);
   const base = yield* fs.makeTempDirectoryScoped({ prefix: "memory-agent-tool-use-" });
   const storage = join(base, "storage");
   const home = join(base, "home");
@@ -281,6 +355,17 @@ const evaluate = Effect.fn("eval.toolUse")(function* () {
   yield* fs.makeDirectory(home);
   // The user's model selection and compatible accounts; nothing is written back.
   yield* fs.copyFile(join(yield* defaultStorageRoot, "config.json"), join(storage, "config.json"));
+  const server = yield* paths.fromFileUrl(new URL("./tool-use-mcp-server.ts", import.meta.url));
+  const entry = (role: string) => ({
+    command: process.execPath,
+    args: ["--no-warnings", server, role],
+  });
+  yield* fs.writeFileString(
+    join(storage, "mcp.json"),
+    yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
+      mcpServers: { tracker: entry("tracker"), "code-index": entry("code-index") },
+    }),
+  );
   const services = yield* Layer.build(
     memoryAgentLayer(storage, {
       embedder: fakeEmbedderLayer,
@@ -312,6 +397,7 @@ const evaluate = Effect.fn("eval.toolUse")(function* () {
       const results = yield* Effect.forEach(attempts, ({ each, attempt }) =>
         Effect.gen(function* () {
           const root = join(base, `${each.name}-${attempt}`);
+          yield* fs.makeDirectory(root);
           yield* Effect.forEach(Object.entries(each.files), ([relative, text]) =>
             Effect.andThen(
               fs.makeDirectory(dirname(join(root, relative)), { recursive: true }),
@@ -326,6 +412,13 @@ const evaluate = Effect.fn("eval.toolUse")(function* () {
           );
           const added = yield* projects.add(root);
           const project = yield* projects.setPermissionMode(added.id, "full");
+          const mcp = yield* McpServers;
+          yield* Effect.when(
+            Effect.forEach(["tracker", "code-index"], (name) =>
+              mcp.setTrusted(project, "global", name, true),
+            ),
+            Effect.succeed(each.mcp === true),
+          );
           const session = yield* (yield* Sessions).create(project.id);
           const started = DateTime.toEpochMillis(yield* DateTime.now);
           const finished = yield* chat
