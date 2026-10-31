@@ -3385,3 +3385,11 @@
 - 배경: 도구 사용 eval(`eval/tool-use.ts`)의 `symlinked-package`(pnpm `node_modules` 링크 너머 README 읽기)가 GLM-5.3-Flash-NVFP4에서 3번 모두 실패했다. 거부 문장은 "Links are not followed; use the real path."뿐이라 모델이 실제 경로를 몰랐다. 그래서 바깥 도구(`inside_project` 거부), `find_memory`, code skill 저장·실행까지 돌다가 46–192초 걸렸다. 실사용 기록에도 `symlink` 거부가 10번 있다.
 - 결정: 링크는 지금처럼 따라가지 않는다. `symlink` 거부에 링크가 이끄는 프로젝트 상대 경로를 `target`으로 싣고, 모델이 읽는 detail 끝에 `Real path: <경로>`를 붙인다. 링크를 따라간 경로가 프로젝트 밖, `.git`, credential이거나 대상이 없으면 싣지 않는다. 절대 경로와 프로젝트 밖 위치는 대화에 내보내지 않는다.
 - 결과: 같은 케이스가 3/3 통과했고, 거부된 첫 읽기 다음 호출 한두 번으로 4–17초에 끝났다. 케이스의 기대는 `symlink` 실패 1번을 허용하고 호출 3번 이하로 바꿨다.
+
+## 앱 API를 모두 Effect HttpApi 계약으로 옮긴다 (2026-10-31)
+
+- 사용자 결정: React Router 리소스 라우트(`app/routes/api/*`)를 Effect `HttpApi` 계약으로 옮기고, 브라우저는 그 계약에서 만든 `HttpApiClient`로 부른다. 브라우저가 응답 타입을 다시 선언하던 `app/entry/api.ts`의 `call<T>`(검사 없는 캐스팅)를 없애는 것이 목적이다. 계획은 [httpapi-migration.md](httpapi-migration.md)다.
+- "채팅 run과 join을 Effect HttpApi로 연다 (2026-10-27)"의 "다른 API는 지금 route에 남는다"를 대체한다.
+- OpenAPI 스펙에서 client를 생성하지 않는다. 같은 모노레포라 계약에서 client를 바로 만들고, 생성 코드는 brand·TaggedUnion·Schema 변환을 잃는다.
+- 계약은 memory-agent `memory-agent/app-api`(브라우저용, 서버 코드 import 없음)이고, handler는 앱 `app/.server/api/`다. `ChatApi`와 `AppApi`를 web handler 하나로 열고 RR에는 splat 라우트 하나만 남긴다. 응답 JSON 모양과 status, 거절 body(`{ error, reason? }`)는 바꾸지 않는다.
+- 순서: HttpApi 이전(group 단위) → `_index` loader가 react-query 캐시를 미리 채움(react-query가 유일한 캐시) → ETag는 측정 뒤 이득이 있을 때만, `AppEvents` revision 기반으로.

@@ -1,0 +1,99 @@
+# 앱 API를 Effect HttpApi로 옮기는 계획 (2026-10-31)
+
+## 목표
+
+- 브라우저가 서버 응답 타입을 다시 선언하지 않는다. 서버와 브라우저는 Schema로 선언한 계약 하나를 함께 import한다.
+- 첫 화면이 hydration 뒤의 요청 waterfall을 기다리지 않는다. React Router loader가 react-query 캐시를 미리 채운다.
+- 큰 GET 응답은 바뀌지 않았으면 다시 받지 않는다(ETag, 측정한 뒤에 정한다).
+
+## 지금 상태
+
+- `apps/agent/app/routes/api/`에 React Router 리소스 라우트가 약 60개 있다. 각 파일의 `loader`/`action`이 `agent.runPromise`로 Effect를 돌리고 `Response.json`으로 답한다. 요청 본문만 `readJson(request, Schema)`로 검사하고, 응답은 검사하지 않는다.
+- `HttpApi`로 선언한 것은 채팅 API(`memory-agent/chat-api`의 `ChatApi`, 2026-10-27)뿐이다. 앱은 RR 라우트 다섯 개에서 `serveChatApi`(`HttpRouter.toWebHandler`)로 넘긴다. 브라우저는 `HttpApiClient.make(ChatApi)`로 부른다.
+- 브라우저의 `app/entry/api.ts`(약 1200줄)는 응답 타입을 손으로 다시 선언한다(`KanbanSettings`, `RecallSettings`, `SessionSnapshot` 등). `call<T>`는 `response.json()`을 검사 없이 `T`로 캐스팅한다. 오류 코드 목록(`ApiErrorCode`)도 서버와 따로 관리한다.
+- memory-agent의 응답 타입은 일부만 Schema다(`Project`, `Session`, `ProviderModel`, `WorkflowState`, `BtwThread` 등). 나머지는 TS interface다(`BoardView`, `McpOverview`, `EmbeddingOverview`, `SessionRunState`, `QueueSnapshot` 등). 브라우저는 이 타입을 `import type`으로만 쓴다.
+- 페이지 라우트는 `_index.tsx`와 `report.tsx` 둘이다. `_index`는 `App` 전체를 그리고, 프로젝트·세션 선택은 nuqs 쿼리(`?project=&session=`)에 있다. 데이터는 hydration 뒤 react-query가 읽고, `AppEvents` SSE가 무효화한다.
+
+## 정한 방향
+
+### 계약
+
+- 앱 API 계약 `AppApi`는 memory-agent `src/api/app-api.ts`(크면 `src/api/app-api/<group>.ts`)에 두고 subpath `memory-agent/app-api`로 내보낸다. `ChatApi`처럼 서버 코드를 import하지 않아 브라우저가 쓸 수 있다.
+  - memory-agent 테스트 helper(`tests/agents/app-fetch.ts`)와 ACP bridge도 같은 계약을 쓸 수 있다.
+- 응답 타입이 TS interface인 도메인은 Schema로 바꾸고 타입은 `typeof X.Type`으로 만든다. 선언은 한 번만 한다. 도메인 모듈이 서버 코드와 섞여 있으면 Schema를 그 폴더의 `contracts.ts`로 옮긴다(`btw/contracts.ts`, `providers/contracts.ts`가 선례다).
+- 거절은 지금 JSON 모양 그대로 `{ error, reason?, ...details }`와 status다. `chat-api.ts`의 `refusal(status, codes)`를 공용 모듈(`src/api/refusal.ts`)로 옮겨 두 API가 같이 쓴다. endpoint마다 낼 수 있는 code만 선언한다.
+- 세션을 바꾸는 요청의 `x-session-holder`는 endpoint의 `headers` Schema로 선언한다.
+
+### 서버
+
+- handler는 `apps/agent/app/.server/api/<group>.ts`에 `HttpApiBuilder.group(AppApi, ...)`으로 둔다. 지금 라우트가 쓰는 앱 전용 helper(`folder-picker`, `account-failures`, `kanban-failures`, `report-evidence` 등)는 그대로 쓴다.
+- `ChatApi`와 `AppApi`를 web handler 하나로 연다(`app/.server/chat-api.ts`를 `api.ts`로 넓힌다). RR에는 splat 라우트 `app/routes/api/$.tsx` 하나가 `loader`/`action`으로 넘긴다. RR은 정적 경로를 splat보다 먼저 고르므로, group을 옮길 때마다 해당 라우트 파일을 지우면 splat이 이어받는다.
+- `rejectCrossSite`는 `SameSite` middleware로 바꾼다. 상태를 바꾸는 endpoint 전부와, 지금 cross-site 검사를 하는 첨부 GET에 건다.
+- `Cache-Control: no-store`(계정·quota·보고서)는 그 group의 middleware가 붙인다.
+- 개발용 `Server-Timing`은 handler 전체 시간을 재는 middleware 하나로 바꾼다. 지금 `projects._index`·`models._index`에만 있는 service/query 세부 구간은 span으로 이미 볼 수 있으므로 옮기지 않는다.
+
+### 브라우저
+
+- `AppApiClient`(`HttpApiClient.make(AppApi)`)를 `chatRuntime`처럼 `FetchHttpClient.Fetch`=`appFetch`로 만든다. backend 재시작 감지와 build id 헤더는 `appFetch`에 있으므로 그대로 동작한다.
+- `api.ts`의 메서드 이름과 Promise 시그니처는 처음에는 유지하고 안쪽만 `AppApiClient` 호출로 바꾼다. 그래야 화면 코드를 함께 고치지 않고 group 단위로 옮길 수 있다. 타입 있는 실패는 지금의 `ApiError`(`status`, `code`, `reason`)로 바꿔 던진다.
+- 다 옮긴 뒤 `call<T>`, 손으로 쓴 응답 타입, `ApiErrorCode` 목록을 지운다. `ApiErrorCode`는 계약의 refusal code와 브라우저 전용 code(`request_failed`, `upload_failed`, `backend_restart_*`)의 합으로 만든다.
+
+### React Router loader (2단계)
+
+- `_index.tsx`의 loader가 쿼리(`?project=&session=`)를 읽어 첫 화면이 쓰는 query를 채운다. react-query가 계속 유일한 캐시이고, loader는 waterfall만 없앤다. SSE 무효화는 지금처럼 react-query에 건다.
+- 서버 loader는 같은 `AppApiClient`를 네트워크 없이 web handler에 붙여(in-process `HttpClient`) 부르고 `dehydrate`한 상태를 돌려준다. 페이지는 `HydrationBoundary`로 받는다. query 함수와 loader가 같은 client를 쓰므로 key와 데이터 모양이 같다.
+- RR turbo-stream은 Schema class의 prototype을 보존하지 않는다. loader는 계약 Schema로 encode한 값을 넘기고, 받는 쪽이 decode한다.
+- 라우트를 경로로 나누는 일(`/projects/:project/sessions/:session`)은 이 단계에 넣지 않는다. 쿼리 기반 loader로 충분한지 먼저 본다.
+
+### ETag (3단계)
+
+- Effect의 `Etag` 모듈은 파일 전용(`Generator.fromFileInfo`/`fromFileWeb`)이고, 304 처리는 `HttpStaticServer`에만 있다. JSON 응답용은 middleware를 직접 쓴다.
+- 먼저 잰다: 큰 GET(`/messages` snapshot, trace tree, board)의 크기와, 포커스 복귀·interval로 생기는 재요청 빈도. 이득이 작으면 하지 않는다.
+- 한다면 body 해시보다 `AppEvents` topic별 revision을 ETag로 쓴다. handler를 돌리기 전에 304로 끊어 DB 조회까지 아낀다. 응답은 `Cache-Control: no-cache`로 바꿔 브라우저가 `If-None-Match`를 알아서 보내게 한다.
+- `no-store` 응답(계정·quota·보고서)과 content-addressed 첨부는 대상이 아니다.
+
+## 단계
+
+각 단계는 따로 빌드되는 commit 하나 이상이다. group을 옮기는 commit은 그 group의 RR 라우트 삭제, handler, 계약, `api.ts` 안쪽 교체를 함께 담는다.
+
+### 1-0. 기반
+
+- `src/api/refusal.ts`, 빈 `AppApi`와 subpath, 합친 web handler와 `api.$.tsx` splat, 브라우저 `AppApiClient`와 실패 변환.
+- 첫 group으로 설정(`settings.*`)을 옮긴다. 구조를 끝까지 확인한다.
+
+### 1-1 ~ 1-6. group 이전
+
+| 단계 | group                         | RR 라우트                                                                                          |
+| ---- | ----------------------------- | -------------------------------------------------------------------------------------------------- |
+| 1-1  | settings 나머지               | `settings.*` 중 1-0에서 남은 것                                                                    |
+| 1-2  | projects                      | `projects.*`(events 제외)                                                                          |
+| 1-3  | auth·accounts·models          | `auth`, `accounts`, `accounts.quota`, `models.*`                                                   |
+| 1-4  | sessions                      | `sessions.*`(채팅 API·SSE 제외)                                                                    |
+| 1-5  | reports·media·attachments·btw | `reports.*`, `media.image`, `attachments.*`, `btw.$thread._index`                                  |
+| 1-6  | SSE                           | `events`, `projects.$project.events`, `sessions.$session.events`, `sessions.$session.trace.stream` |
+
+- SSE는 `HttpApiSchema.StreamSse`로 옮긴다. 첨부 업로드(`Content-Length`를 본문보다 먼저 검사)와 다운로드(바이트와 immutable 헤더)가 HttpApi로 같게 안 되면 RR 라우트로 남기고 이유를 적는다.
+
+### 1-7. 정리
+
+- 채팅 API로 넘기던 RR 라우트 다섯 개를 지운다(splat이 받는다).
+- `call<T>`, 손으로 쓴 응답 타입과 `ApiErrorCode` 목록을 지운다. `app/routes/api/README.md`를 계약 기준으로 다시 쓴다.
+
+### 2. loader
+
+- `_index.tsx` 서버 loader와 `HydrationBoundary`. 처음 채울 query는 프로젝트 목록, 선택된 프로젝트의 세션 목록, 선택된 세션의 run state다. 채팅 snapshot은 atom이 읽으므로 따로 본다.
+
+### 3. ETag
+
+- 측정, 그리고 이득이 있으면 revision 기반 middleware.
+
+## 하지 않는 것
+
+- OpenAPI 스펙을 거쳐 client를 생성하지 않는다. 같은 모노레포라 `HttpApiClient`가 계약에서 바로 client를 만든다. 생성 코드는 brand, TaggedUnion, Schema 변환을 잃는다. 문서가 필요하면 `OpenApi.fromApi`로 얻는다.
+- 응답 JSON 모양과 status는 바꾸지 않는다. 브라우저 화면 코드는 1단계에서 거의 손대지 않는다.
+
+## 위험
+
+- 계약 모듈이 서버 코드를 끌어오면 브라우저 build가 깨진다. Schema를 옮길 때마다 browser build(`vp run agent#build`)로 확인한다.
+- 응답을 Schema로 encode하므로, 지금 응답에 interface에 없는 필드가 섞여 있으면 사라진다. group마다 옮기기 전과 후의 응답을 비교한다.
+- 다른 세션이 같은 checkout에서 `app/entry/*`를 고치고 있다. `api.ts`의 export 이름과 시그니처를 유지해 충돌을 줄인다.
