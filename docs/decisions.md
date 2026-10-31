@@ -3461,3 +3461,10 @@
 - 브리지의 `login_required` 안내는 "앱에서 지금 쓰는 모델 제공자에 로그인하세요."다. ChatGPT만 있던 때의 문구를 바꿨다.
 - 테스트: 브리지 테스트는 고정 응답 대신 테스트 앱의 `/api/auth`(같은 규칙)를 묻는다. 현재 provider가 로그인하지 않았으면 `session/new`가 거절되고 세션이 생기지 않는다.
 - 실제 앱 확인(2026-10-31): 실행 중인 앱은 provider 없는 `/api/auth`에 400 `invalid_provider`로 답했다. `openai`·`anthropic`·`openai-compatible`은 provider를 주면 모두 signed-in이었다. 새 코드는 dev backend를 다시 띄워야 반영된다.
+
+## shadcn CLI가 쓴 코드는 anti-slop lint에서 뺀다 (2026-10-31)
+
+- 사용자 결정. `apps/agent/app/components/ui/**`와 `apps/agent/app/hooks/**`에는 anti-slop·anti-slop-effect 규칙을 끈다. 루트 `vite.config.ts`는 규칙 목록을 `antiSlopRules` 하나로 두고, 전역 설정과 이 override가 같이 쓴다.
+- CLI가 쓴 원본에는 `typeof` 분기와 `as React.CSSProperties` 같은 단언이 흔하다. 이것을 저장소 규칙에 맞추려고 매번 고치면 `shadcn add --diff`가 upstream 변경 대신 우리 수정을 보여 주고, 컴포넌트를 받을 때마다 손이 간다.
+- shadcn lint 규칙(`no-raw-colors`, `no-unknown-classes` 등)과 Effect 언어 서비스 진단은 이 폴더에도 그대로 적용된다.
+- 이미 고친 `sidebar.tsx`·`toggle-group.tsx`의 수정은 되돌리지 않는다. 앱 코드가 그 `CSSProperties` 선언에 기대고, `SidebarSeparator` 수정은 사이드바가 8px 넘치던 버그를 고친 것이다.

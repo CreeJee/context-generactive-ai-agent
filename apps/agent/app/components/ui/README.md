@@ -53,6 +53,7 @@
 - `sidebar`는 `button`, `input`, `separator`, `sheet`, `skeleton`, `tooltip`, `~/hooks/use-mobile`에 의존하고, `alert-dialog`는 `button`에 의존한다. 두 파일과 `skeleton`, `use-mobile`은 `shadcn add sidebar alert-dialog`로 받았다. 이미 있던 `button`·`input`·`separator`·`tooltip`·`sheet`는 CLI가 덮어쓴 것을 되돌렸다
 - `progress`, `toggle`, `toggle-group`, `button-group`은 `shadcn add progress toggle-group button-group`으로 받았다. CLI가 덮어쓴 `separator`는 되돌렸다. `toggle-group.tsx`는 `--gap`을 `CSSProperties`에 선언해 `as` 단언을 없앤 것만 CLI 원본과 다르다
 - `sidebar.tsx`는 CLI 원본과 다음만 다르다. 저장소 lint를 통과하려고 `--sidebar-width`·`--sidebar-width-icon`·`--skeleton-width`를 `CSSProperties`에 선언해 `as` 단언을 없앴다. `setOpen`은 boolean만 받는다. `SidebarMenuButton`의 `tooltip`은 `ReactNode`다. `SidebarSeparator`는 `data-horizontal:w-auto`를 쓴다. 원본의 `w-auto`는 `Separator`의 `data-horizontal:w-full`에 져서 사이드바 밖으로 8px 넘쳤다
+- 이 폴더와 `~/hooks`는 anti-slop lint 규칙을 받지 않는다(루트 `vite.config.ts`의 override). shadcn CLI가 쓴 코드를 원본 그대로 두기 위해서다. shadcn lint 규칙과 Effect 언어 서비스 진단은 그대로 받는다
 - 클래스 병합은 `cn` 모듈 alias로 하고 variant는 `cva`로 정의한다. 예외로 `data-list.tsx`는 `~/lib/utils`의 `cn`을 쓴다. `field.tsx`, `label.tsx`, `separator.tsx`, `combobox.tsx`는 파일 맨 위에 `"use client"`를 선언한다
 
 ## Side Effects

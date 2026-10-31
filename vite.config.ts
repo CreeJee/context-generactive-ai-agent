@@ -16,6 +16,25 @@ const agentAndVendoredIgnorePatterns = [
   "lint/anti-slop/**",
 ];
 
+const antiSlopRules = {
+  "anti-slop/no-chained-type-assertions": "error",
+  "anti-slop/no-conditional-empty-object-spread": "error",
+  "anti-slop/no-known-value-widening": "error",
+  "anti-slop/no-module-mocking": "error",
+  "anti-slop/no-object-parameters": "error",
+  "anti-slop/no-reflect-apply": "error",
+  "anti-slop/no-reflect-get": "error",
+  "anti-slop/no-runtime-typeof": "error",
+  "anti-slop/no-shape-in-symbol-names": "error",
+  "anti-slop/no-unknown-parameters": "error",
+  "anti-slop/no-unknown-returns": "error",
+  "anti-slop/no-unknown-type-aliases": "error",
+  "anti-slop/no-unsafe-dictionary-type": "error",
+  "anti-slop/no-widen-then-assert": "error",
+  "anti-slop/require-safety-comment-for-type-assertion": "error",
+  "anti-slop-effect/no-service-constructor-imports": "error",
+} as const;
+
 export default defineConfig({
   resolve: {
     tsconfigPaths: true,
@@ -40,22 +59,7 @@ export default defineConfig({
     ],
     rules: {
       "vite-plus/prefer-vite-plus-imports": "error",
-      "anti-slop/no-chained-type-assertions": "error",
-      "anti-slop/no-conditional-empty-object-spread": "error",
-      "anti-slop/no-known-value-widening": "error",
-      "anti-slop/no-module-mocking": "error",
-      "anti-slop/no-object-parameters": "error",
-      "anti-slop/no-reflect-apply": "error",
-      "anti-slop/no-reflect-get": "error",
-      "anti-slop/no-runtime-typeof": "error",
-      "anti-slop/no-shape-in-symbol-names": "error",
-      "anti-slop/no-unknown-parameters": "error",
-      "anti-slop/no-unknown-returns": "error",
-      "anti-slop/no-unknown-type-aliases": "error",
-      "anti-slop/no-unsafe-dictionary-type": "error",
-      "anti-slop/no-widen-then-assert": "error",
-      "anti-slop/require-safety-comment-for-type-assertion": "error",
-      "anti-slop-effect/no-service-constructor-imports": "error",
+      ...antiSlopRules,
       "shadcn/no-restyle": [
         "error",
         {
@@ -86,6 +90,11 @@ export default defineConfig({
           "shadcn/no-arbitrary-values": "off",
           "shadcn/require-static-classes": "off",
         },
+      },
+      {
+        // Code the shadcn CLI writes stays as it ships, so `shadcn add --diff` keeps showing upstream changes.
+        files: ["apps/agent/app/components/ui/**", "apps/agent/app/hooks/**"],
+        rules: Object.fromEntries(Object.keys(antiSlopRules).map((rule) => [rule, "off"])),
       },
     ],
     options: { typeAware: true, typeCheck: true },
