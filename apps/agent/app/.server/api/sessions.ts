@@ -103,8 +103,10 @@ export const SessionsApiHandlers = HttpApiBuilder.group(
           yield* events.publishProject(projectId, "sessions");
           return created;
         }).pipe(
-          Effect.catchTag("ProjectNotFound", kanbanRefusal.ProjectNotFound, (failure) =>
-            Effect.die(failure),
+          Effect.catchTag(
+            "ProjectNotFound",
+            () => Effect.fail({ error: "project_not_found" } as const),
+            (failure) => Effect.die(failure),
           ),
         ),
       decisions: ({ params: { session } }) =>
