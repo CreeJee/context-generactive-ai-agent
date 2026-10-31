@@ -91,13 +91,21 @@ const stringifyJson = Function.flow(
 );
 const requestError = (message: string) => acp.RequestError.internalError(undefined, message);
 
-const failureMessages = HashMap.fromIterable([
-  ["unreachable", "앱에 연결하지 못했어요. context-generactive-agent 앱을 먼저 실행하세요."],
-  ["login_required", "앱에서 지금 쓰는 모델 제공자에 로그인하세요."],
-  ["model_selection_required", "앱에서 모델을 선택하세요."],
-  ["session_in_use", "다른 창에서 쓰고 있는 대화예요."],
-  ["session_not_found", "그런 대화가 없어요."],
+/** App failure codes the editor gets explained; any other code is quoted as is. */
+const ExplainedFailure = Schema.Literals([
+  "unreachable",
+  "login_required",
+  "model_selection_required",
+  "session_in_use",
+  "session_not_found",
 ]);
+const failureMessages = {
+  unreachable: "앱에 연결하지 못했어요. context-generactive-agent 앱을 먼저 실행하세요.",
+  login_required: "앱에서 지금 쓰는 모델 제공자에 로그인하세요.",
+  model_selection_required: "앱에서 모델을 선택하세요.",
+  session_in_use: "다른 창에서 쓰고 있는 대화예요.",
+  session_not_found: "그런 대화가 없어요.",
+} satisfies Record<typeof ExplainedFailure.Type, string>;
 
 /** Why the bridge refused an editor's request itself, before or after asking the app. */
 const EditorRefusal = Schema.TaggedUnion({
@@ -144,8 +152,9 @@ const explain = (
     : Schema.is(AppRequestFailed)(error)
       ? Effect.succeed(
           requestError(
-            Option.getOrUndefined(HashMap.get(failureMessages, error.code)) ??
-              `앱 요청이 실패했어요: ${error.code}`,
+            Schema.is(ExplainedFailure)(error.code)
+              ? failureMessages[error.code]
+              : `앱 요청이 실패했어요: ${error.code}`,
           ),
         )
       : Schema.is(EditorRequestRefused)(error)
