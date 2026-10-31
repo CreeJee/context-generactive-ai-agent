@@ -1,9 +1,11 @@
 import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "effect/http-api";
 import { AgentScope, ExternalAgentsOverview } from "../../external-agents/contracts.ts";
+import { DecisionInboxItem, ProtectedBranches } from "../../kanban/contracts.ts";
 import { McpOverview, McpScope } from "../../mcp/contracts.ts";
 import { FolderPick, PermissionMode, Project } from "../../projects/contracts.ts";
 import { SkillCatalog } from "../../skills/contracts.ts";
+import { ProjectBoard } from "../../workflow/contracts.ts";
 import { appRefusalFields, refusalWith, SameSite } from "../refusal.ts";
 
 const appRefusal = refusalWith(appRefusalFields);
@@ -40,6 +42,28 @@ export const McpCommand = Schema.TaggedUnion({
 });
 export type McpCommand = typeof McpCommand.Type;
 
+/**
+ * Branches the project's Goals never merge into on their own, and the project's Goals
+ * (conversations with workflow state) in the order the scheduler serves them.
+ */
+export const ProjectKanbanSettings = Schema.Struct({
+  protectedBranches: ProtectedBranches,
+  goalOrder: Schema.Array(Schema.String),
+});
+export type ProjectKanbanSettings = typeof ProjectKanbanSettings.Type;
+
+/**
+ * - `SetProtectedBranches`: a finished Goal whose target is one of these asks a person (pull
+ *   request or manual merge) instead of merging; an empty list protects none.
+ * - `MoveGoal`: the conversation's Goal goes in front of `before`, or last, and the project's
+ *   boards look again.
+ */
+export const ProjectKanbanCommand = Schema.TaggedUnion({
+  SetProtectedBranches: { protectedBranches: ProtectedBranches },
+  MoveGoal: { sessionId: Schema.String, before: Schema.NullOr(Schema.String) },
+});
+export type ProjectKanbanCommand = typeof ProjectKanbanCommand.Type;
+
 /** The project the path names is not registered. */
 const UnknownProject = appRefusal(404, ["project_not_found"]);
 
@@ -49,8 +73,37 @@ const UnknownProject = appRefusal(404, ["project_not_found"]);
  */
 const ProjectRejected = appRefusal(422, ["project_rejected"]);
 
+/** A conversation the command names is not there. */
+const UnknownSession = appRefusal(404, ["session_not_found"]);
+
+/** A branch name the scheduler refuses. */
+const InvalidKanbanSettings = appRefusal(400, ["invalid_kanban_settings"]);
+
+/** The Goal order refused the move; the code is the reason. */
+const GoalScheduleRefused = appRefusal(409, [
+  "goal_missing",
+  "self_dependency",
+  "other_project",
+  "dependency_cycle",
+]);
+
+/** Storage failed; the cause stays on the server. */
+const KanbanStorageFailed = appRefusal(500, [
+  "storage_failed",
+  "schedule_storage_failed",
+  "kanban_storage_failed",
+  "workflow_storage_failed",
+]);
+
 /** Every refusal of the group, for `appRefusalStatus`. */
-export const projectsRefusals = [UnknownProject, ProjectRejected];
+export const projectsRefusals = [
+  UnknownProject,
+  ProjectRejected,
+  UnknownSession,
+  InvalidKanbanSettings,
+  GoalScheduleRefused,
+  KanbanStorageFailed,
+];
 
 const project = { project: Schema.String };
 
@@ -128,6 +181,42 @@ export class ProjectsGroup extends HttpApiGroup.make("projects")
       params: project,
       success: SkillCatalog,
       error: UnknownProject,
+    }),
+    HttpApiEndpoint.get("kanban", "/api/projects/:project/kanban", {
+      params: project,
+      success: ProjectKanbanSettings,
+      error: [UnknownProject, KanbanStorageFailed],
+    }),
+    /** Answers the settings as they are after the command. */
+    HttpApiEndpoint.post("kanbanAction", "/api/projects/:project/kanban", {
+      params: project,
+      payload: ProjectKanbanCommand,
+      success: ProjectKanbanSettings,
+      error: [
+        UnknownProject,
+        UnknownSession,
+        InvalidKanbanSettings,
+        GoalScheduleRefused,
+        KanbanStorageFailed,
+      ],
+    }),
+    /**
+     * Every unarchived conversation's Plan as a board, with its column counts; running boards
+     * first, then the most recently changed.
+     */
+    HttpApiEndpoint.get("boards", "/api/projects/:project/boards", {
+      params: project,
+      success: Schema.Array(ProjectBoard),
+      error: [UnknownProject, KanbanStorageFailed],
+    }),
+    /**
+     * The project inbox: every unanswered card decision across its conversations and their
+     * current Goals, oldest first.
+     */
+    HttpApiEndpoint.get("decisions", "/api/projects/:project/decisions", {
+      params: project,
+      success: Schema.Array(DecisionInboxItem),
+      error: [UnknownProject, KanbanStorageFailed],
     }),
   )
   .middleware(SameSite) {}

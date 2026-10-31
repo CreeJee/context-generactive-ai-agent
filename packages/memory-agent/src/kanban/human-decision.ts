@@ -29,12 +29,20 @@ import {
 } from "../workflow/owner-workflow-storage.ts";
 import { Workflows, WorkflowStorageError } from "../workflow/workflow.ts";
 import {
+  DecisionAnswer,
+  DecisionCloseReason,
+  type DecisionInboxItem,
+  type DecisionState as DecisionStateCases,
+  type HumanDecisionRequest,
+} from "./contracts.ts";
+import {
   DecisionKind,
   HumanDecisionPayload,
   humanDecisionWorkflow,
 } from "./human-decision-schema.ts";
 
 export { DecisionKind } from "./human-decision-schema.ts";
+export { DecisionAnswer, DecisionCloseReason, type DecisionInboxItem, type HumanDecisionRequest };
 
 /** The kind's tag, as the card's history and pages name it. */
 export const decisionKindName = DecisionKind.match({
@@ -63,18 +71,6 @@ export const decisionSubject: (kind: DecisionKind) => "card" | "goal" = Decision
   ProtectedBranchMerge: () => "goal" as const,
   MergeConflict: () => "goal" as const,
 });
-
-/** A person's answer; its tag must be the request's kind. */
-export const DecisionAnswer = Schema.TaggedUnion({
-  UncertainSideEffect: { choice: Schema.Literals(["continue", "retry", "stop"]) },
-  IntegrationConflict: { choice: Schema.Literals(["resolved", "rework", "stop"]) },
-  ImpactUnclear: { choice: Schema.Literals(["continue", "replace", "stop"]) },
-  RetryExhausted: { choice: Schema.Literals(["requeue", "stop"]) },
-  ProtectedBranchMerge: { choice: Schema.Literals(["create_pr", "manual_merge"]) },
-  MergeConflict: { choice: Schema.Literals(["resolved", "stop"]) },
-  FileOverlap: { choice: Schema.Literals(["wait", "proceed"]) },
-});
-export type DecisionAnswer = typeof DecisionAnswer.Type;
 
 /** The answer's tag; it names the request kind the answer is for. */
 const decisionAnswerName = DecisionAnswer.match({
@@ -118,41 +114,9 @@ export const answeredCardStatus: (answer: DecisionAnswer) => CardStatus | null =
     FileOverlap: ({ choice }) => decisionChoices.FileOverlap[choice],
   });
 
-/** Why a wait ended without an answer. A close is never an answer, and never a refusal. */
-export const DecisionCloseReason = Schema.Literals([
-  "orchestrator_cancelled",
-  "goal_replaced",
-  "card_stopped",
-]);
-export type DecisionCloseReason = typeof DecisionCloseReason.Type;
-
-export type DecisionState = Data.TaggedEnum<{
-  Pending: {};
-  Answered: { readonly answer: DecisionAnswer };
-  Closed: { readonly reason: DecisionCloseReason | null };
-}>;
+/** Where a request stands (`contracts.ts`). */
+export type DecisionState = DecisionStateCases;
 export const DecisionState = Data.taggedEnum<DecisionState>();
-
-export interface HumanDecisionRequest {
-  readonly requestId: string;
-  readonly sessionId: string;
-  readonly goalInstanceId: string;
-  readonly cardId: string;
-  /** The latest facts the orchestrator saw at the occasion. */
-  readonly kind: DecisionKind;
-  /** Which facts `kind` is, counting from 1; an answer names it. */
-  readonly factsSeq: number;
-  /** The facts changed after the request first asked. */
-  readonly factsChanged: boolean;
-  readonly createdAt: number;
-  readonly state: DecisionState;
-}
-
-/** An unanswered request in a project's inbox, with names to show it by. */
-export interface DecisionInboxItem extends HumanDecisionRequest {
-  readonly sessionTitle: string | null;
-  readonly cardTitle: string;
-}
 
 /**
  * What a request asks about, one case per kind. The same occasion of a card is the same request,

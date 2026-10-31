@@ -41,6 +41,7 @@ import {
   cardHoldFields,
   StepProgressStatus,
 } from "./card.ts";
+import { PlanStatus } from "./contracts.ts";
 import { notStartedStatus, validatePlanDependencies } from "./plan-schedule.ts";
 import {
   BoardEditRefused,
@@ -197,7 +198,7 @@ const planFields = {
 
 export const PlanArtifact = Schema.Struct({
   ...planFields,
-  status: Schema.Literals(["draft", "ready", "executing", "completed", "blocked", "closed"]),
+  status: PlanStatus,
 });
 export type PlanArtifact = typeof PlanArtifact.Type;
 

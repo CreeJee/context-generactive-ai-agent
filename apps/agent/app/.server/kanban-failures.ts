@@ -98,6 +98,26 @@ export const kanbanFailureResponse = (failure: KanbanRouteFailure): Response =>
     UnknownError: () => reply(400, "invalid_json"),
   });
 
+/**
+ * The app API refusal for each expected kanban failure, by tag, as `kanbanFailureResponse` answers
+ * it. A handler passes the entries for the tags it can fail with to `Effect.catchTags`.
+ */
+export const kanbanRefusal = {
+  SessionNotFound: () => Effect.fail({ error: "session_not_found" } as const),
+  ProjectNotFound: () => Effect.fail({ error: "project_not_found" } as const),
+  GoalScheduleRefused: ({ reason }: GoalScheduleRefused) =>
+    Effect.fail(
+      reason === "invalid_branch"
+        ? ({ error: "invalid_kanban_settings" } as const)
+        : { error: reason },
+    ),
+  KanbanStorageFailed: () => Effect.fail({ error: "kanban_storage_failed" } as const),
+  WorkflowStorageError: () => Effect.fail({ error: "workflow_storage_failed" } as const),
+  GoalScheduleStorageFailed: () => Effect.fail({ error: "schedule_storage_failed" } as const),
+  SqlError: () => Effect.fail({ error: "storage_failed" } as const),
+  SchemaError: () => Effect.fail({ error: "storage_failed" } as const),
+};
+
 /** Answers each expected failure of a kanban route; a failure outside the table fails to type. */
 export const answerKanbanFailures = <A, E extends KanbanRouteFailure, R>(
   effect: Effect.Effect<A, E, R>,

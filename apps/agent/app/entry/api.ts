@@ -19,6 +19,8 @@ import {
   type KanbanSettings,
   type KanbanSettingsCommand as KanbanSettingsCommandCase,
   type McpCommand as McpCommandCase,
+  type ProjectKanbanCommand as ProjectKanbanCommandCase,
+  type ProjectKanbanSettings,
   type ProjectSettings,
   type RecallSettings,
   type ScanCommand as ScanCommandCase,
@@ -62,7 +64,6 @@ import type {
   ModelSelection,
   PermissionMode,
   Project,
-  ProjectBoard,
   Session,
   SkillCatalog,
   TraceTaskDetail,
@@ -405,20 +406,9 @@ export type { ConversationSettings, ImprovementStatus, KanbanSettings, RecallSet
 /** The commands `/api/settings/kanban` reads. */
 export type KanbanSettingsCommand = KanbanSettingsCommandCase;
 export const KanbanSettingsCommand = Data.taggedEnum<KanbanSettingsCommand>();
-/**
- * Branches a project's Goals never merge into on their own, and the project's Goals (conversations
- * with workflow state) in the order the scheduler serves them.
- */
-export type ProjectKanbanSettings = {
-  readonly protectedBranches: readonly string[];
-  readonly goalOrder: readonly string[];
-};
+export type { ProjectKanbanSettings };
 /** The commands `/api/projects/:project/kanban` reads. */
-export type ProjectKanbanCommand = Data.TaggedEnum<{
-  SetProtectedBranches: { readonly protectedBranches: readonly string[] };
-  /** The conversation's Goal goes in front of `before`, or last. */
-  MoveGoal: { readonly sessionId: string; readonly before: string | null };
-}>;
+export type ProjectKanbanCommand = ProjectKanbanCommandCase;
 export const ProjectKanbanCommand = Data.taggedEnum<ProjectKanbanCommand>();
 
 const CrossProviderMediaRunApproval = Schema.Struct({
@@ -759,11 +749,11 @@ export const api = {
   decisions: (sessionId: string) =>
     call<HumanDecisionRequest[]>("GET", `/api/sessions/${encodeURIComponent(sessionId)}/decisions`),
   /** Every unanswered card decision of the project, across conversations and Goals. */
-  decisionInbox: (projectId: string) =>
-    call<DecisionInboxItem[]>("GET", `/api/projects/${encodeURIComponent(projectId)}/decisions`),
+  decisionInbox: (project: string) =>
+    appCall((client) => client.projects.decisions({ params: { project } })),
   /** Every conversation's Plan as a board, across the project; running boards first. */
-  projectBoards: (projectId: string) =>
-    call<ProjectBoard[]>("GET", `/api/projects/${encodeURIComponent(projectId)}/boards`),
+  projectBoards: (project: string) =>
+    appCall((client) => client.projects.boards({ params: { project } })),
   answerDecision: (
     holder: string,
     request: Pick<
@@ -975,20 +965,26 @@ export const api = {
         }),
       "invalid_kanban_settings",
     ),
-  projectKanban: (projectId: string) =>
-    call<ProjectKanbanSettings>("GET", `/api/projects/${encodeURIComponent(projectId)}/kanban`),
-  setProtectedBranches: (projectId: string, protectedBranches: readonly string[]) =>
-    call<ProjectKanbanSettings>(
-      "POST",
-      `/api/projects/${encodeURIComponent(projectId)}/kanban`,
-      ProjectKanbanCommand.SetProtectedBranches({ protectedBranches }),
+  projectKanban: (project: string) =>
+    appCall((client) => client.projects.kanban({ params: { project } })),
+  setProtectedBranches: (project: string, protectedBranches: readonly string[]) =>
+    appCall(
+      (client) =>
+        client.projects.kanbanAction({
+          params: { project },
+          payload: ProjectKanbanCommand.SetProtectedBranches({ protectedBranches }),
+        }),
+      "invalid_kanban_settings",
     ),
   /** Puts the conversation's Goal in front of `before` (or last) among the project's Goals. */
-  moveGoal: (projectId: string, sessionId: string, before: string | null) =>
-    call<ProjectKanbanSettings>(
-      "POST",
-      `/api/projects/${encodeURIComponent(projectId)}/kanban`,
-      ProjectKanbanCommand.MoveGoal({ sessionId, before }),
+  moveGoal: (project: string, sessionId: string, before: string | null) =>
+    appCall(
+      (client) =>
+        client.projects.kanbanAction({
+          params: { project },
+          payload: ProjectKanbanCommand.MoveGoal({ sessionId, before }),
+        }),
+      "invalid_kanban_settings",
     ),
 
   imports: () => appCall((client) => client.settings.imports()),

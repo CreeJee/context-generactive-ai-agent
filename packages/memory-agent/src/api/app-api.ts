@@ -29,5 +29,11 @@ export {
   RecallSettings,
   ScanCommand,
 } from "./app-api/settings.ts";
-export { ExternalAgentCommand, McpCommand, ProjectSettings } from "./app-api/projects.ts";
+export {
+  ExternalAgentCommand,
+  McpCommand,
+  ProjectKanbanCommand,
+  ProjectKanbanSettings,
+  ProjectSettings,
+} from "./app-api/projects.ts";
 export { FolderPick } from "../projects/contracts.ts";

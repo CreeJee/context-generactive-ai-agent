@@ -2,7 +2,7 @@
 
 ## Overview
 
-`apps/agent`의 React Router v7 리소스 라우트 모음이다. 파일 이름이 곧 `/api/...` 경로이며(예: `projects.$project.kanban.tsx` → `/api/projects/:project/kanban`), 각 파일은 `loader`(GET)와 `action`(POST)만 export한다.
+`apps/agent`의 React Router v7 리소스 라우트 모음이다. 파일 이름이 곧 `/api/...` 경로이며(예: `sessions.$session.board.tsx` → `/api/sessions/:session/board`), 각 파일은 `loader`(GET)와 `action`(POST)만 export한다.
 
 모든 핸들러는 `~/.server/agent`의 `agent.runPromise`로 Promise 경계를 넘어 `packages/memory-agent`의 Effect 서비스(Projects, ProviderRegistry, OAuthProfiles, Attachments, AppEvents, ReportDelivery 등)를 호출한다. 태그된 실패는 `{ error, reason? }` JSON과 HTTP 상태 코드로 바꾼다.
 
@@ -12,7 +12,7 @@
 
 ## Interface
 
-- `$.tsx` `loader`/`action` — 라우트 파일이 없는 `/api/*` 요청을 `serveApi`로 넘긴다. 채팅 API(`/api/sessions/:session/messages`, `/api/sessions/:session/runs`, `/api/sessions/:session/runs/:run/events`, `/api/btw/:thread/messages`, `/api/btw/:thread/runs`), 앱 API settings group(`/api/settings/{conversation,recall,kanban,kagi,embedding,image,imports,improvements}`), projects group(`/api/projects`, `/api/projects/pick`, `/api/projects/:project`, `/api/projects/:project/{agents,mcp,skills}`)이 여기서 답한다.
+- `$.tsx` `loader`/`action` — 라우트 파일이 없는 `/api/*` 요청을 `serveApi`로 넘긴다. 채팅 API(`/api/sessions/:session/messages`, `/api/sessions/:session/runs`, `/api/sessions/:session/runs/:run/events`, `/api/btw/:thread/messages`, `/api/btw/:thread/runs`), 앱 API settings group(`/api/settings/{conversation,recall,kanban,kagi,embedding,image,imports,improvements}`), projects group(`/api/projects`, `/api/projects/pick`, `/api/projects/:project`, `/api/projects/:project/{agents,mcp,skills,kanban,boards,decisions}`)이 여기서 답한다.
 - `accounts.tsx` `loader`/`action` — GET /api/accounts?provider=: 구독 계정 목록(레거시 OAuth import 후 `SubscriptionView.subscription`), `openai-compatible`는 `compatibleAccounts`로 위임. POST는 intent `add|cancel|select|remove|rename` 또는 `CompatibleAccountCommand`를 처리한다.
 - `accounts.quota.tsx` `loader` — GET /api/accounts/quota?provider=: `SubscriptionQuota.accounts`로 계정별 구독 한도를 돌려주고, `SubscriptionQuotaError`이면 503을 돌려준다.
 - `auth.tsx` `loader`/`action` — GET /api/auth?provider=: 연결 상태(10초 timeout → 504). POST `{ intent: login|cancel|logout, provider }`는 subscription 공급자만 받는다.
@@ -21,8 +21,6 @@
 - `media.image.tsx` `action` — POST /api/media/image: 유료 직접 이미지 생성(`ImageMediaWorkflow.generate`)이다. 승인 필요 시 409, 사용 불가 시 422, 실행 실패 시 502를 돌려준다.
 - `models._index.tsx` `loader` — GET /api/models?provider=: 로그인된 공급자의 모델 카탈로그와 전역 선택을 돌려준다. 로그인되지 않았으면 401 `login_required`.
 - `models.$model.tsx` `action` — POST /api/models/:model `{ provider, reasoningEffort? }`: provider/model/effort 조합을 검증해 저장한다. 공급자 fallback은 없다.
-- `projects.$project.kanban.tsx` `loader`/`action` — protectedBranches와 goalOrder 조회. TaggedUnion `SetProtectedBranches`/`MoveGoal` 처리 후 설정을 다시 돌려준다.
-- `projects.$project.boards.tsx`, `projects.$project.decisions.tsx` `loader` — `Boards.list`(보드 목록)와 `HumanDecisions.inbox`(프로젝트 결정 inbox).
 - `projects.$project.trace.tsx`, `projects.$project.trace.tasks.$task.tsx` `loader` — `AgentChat.projectTraceTree` / `projectTraceTask`.
 - `events.tsx`, `projects.$project.events.tsx` `loader` — `AppEvents.allStream` / `projectStream` 무효화 이벤트 스트림.
 - `reports.delivery.tsx` `loader`/`action` — webhook 상태와 defectReports 조회. TaggedUnion `send`(보고서+evidence 전송)/`defect_reports`(켜기·끄기) 처리.
@@ -46,7 +44,7 @@
 - 계정 label은 trim 후 비어 있지 않고 80자 이하여야 한다(add/rename). accountId는 비어 있지 않고 128자 이하여야 한다(select/remove/rename).
 - 첨부는 content-addressed다. 같은 id는 같은 바이트이므로 `Cache-Control: private, max-age=31536000, immutable`, `X-Content-Type-Options: nosniff`, `Cross-Origin-Resource-Policy: same-origin`을 붙인다. 업로드는 본문을 읽기 전에 `Content-Length`를 `maxAttachmentBytes`와 비교한다(초과 시 413). `AttachmentRejected` reason이 `too_large`이면 413, 그 밖은 422다.
 - `models.$model.tsx`는 공급자 fallback 없이 명시된 provider/model/effort만 저장한다. 이미지 생성은 chat 도구 컨텍스트 밖에서 하며, `initiatorChatRouteId`는 활성 선택에서 `chat:${provider}:${model}` 형태로 만든다.
-- 프로젝트 하위 라우트(kanban, boards, decisions)는 서비스 호출 전에 `Projects.get(params.project)`로 존재를 확인한다. kanban `MoveGoal`은 `Sessions.get`으로 `sessionId`와 `before`(null이 아닐 때)를 확인한 뒤 `ProjectScheduler.moveGoal`을 호출한다.
+- projects group의 프로젝트 하위 endpoint(kanban, boards, decisions)는 서비스 호출 전에 `Projects.get(params.project)`로 존재를 확인하고, 실패는 `~/.server/kanban-failures`의 `kanbanRefusal`로 답한다. kanban `MoveGoal`은 `Sessions.get`으로 `sessionId`와 `before`(null이 아닐 때)를 확인한 뒤 `ProjectScheduler.moveGoal`을 호출한다.
 - 상태를 바꾼 뒤에는 `AppEvents`로 무효화를 발행한다. 프로젝트 변경은 `publishGlobal("projects")`, 인증·계정 변경은 `publishGlobal("auth")`, Goal 이동은 `publishProject(project, "sessions")`다. 분리된 대기 fiber는 끝나는 방식과 상관없이 `Effect.ensuring`으로 `auth`를 발행한다.
 - `Server-Timing` 헤더는 `import.meta.env.DEV || process.argv.includes("--dev-backend")`일 때만 붙인다. stable dev backend는 Vite DEV 플래그가 꺼진 production 번들이기 때문이다. `serveApi`가 답하는 요청은 handler 전체 시간 하나(`handler;dur=`)를 붙인다.
 - `reports.evidence.tsx`의 query 식별자는 권한 근거가 아니다(local-server 전용, read-only). 번들은 redact하고 한도에 맞춰 자른다.
@@ -63,7 +61,6 @@
 - projects group `pick`은 서버 기기에서 폴더 선택 창 프로세스를 띄운다(`ChildProcessSpawner`). 요청이 끊기면 Scope와 함께 창을 닫는다. 고른 경로는 `FileSystem.realPath`로 정규화한다.
 - `ImageMediaWorkflow.generate`로 유료 외부 이미지 생성을 호출한다. `request.signal`을 넘긴다.
 - 모델 선택(`configured.models.select`)을 전역 선택으로 저장하고, 공급자 모델 카탈로그를 네트워크로 조회한다.
-- 프로젝트 칸반 설정을 바꾼다: `GoalSchedules.setProtectedBranches`, `ProjectScheduler.moveGoal`.
 - `ReportDelivery.send`로 서버 설정의 Discord webhook(`DISCORD_WEBHOOK_URL`)에 보고서와 JSON evidence 첨부를 전송한다. `GlobalConfig.update({ defectReports })`로 전역 설정을 쓴다.
 - `ReportDiagnoser.diagnose`로 사용자가 선택한 모델을 호출한다. 보내는 내용은 사용자가 포함한 설명과 evidence뿐이다.
 - `collectReportBundle`로 세션 evidence를 수집한다. `SqlError`를 잡으므로 SQL 저장소를 읽는다.

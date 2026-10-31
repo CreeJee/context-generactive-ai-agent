@@ -8,6 +8,7 @@ import {
   type UserChangeRequest,
 } from "./board-edit.ts";
 import { BoardAuthor, type CardStatus } from "./card.ts";
+import type { ProjectBoard } from "./contracts.ts";
 import {
   decodeWorkflowState,
   PlanStep,
@@ -43,19 +44,7 @@ export interface BoardView {
 /** Cards in each column of a board. */
 export type BoardColumnCounts = Readonly<Record<CardStatus, number>>;
 
-/** `GET /api/projects/:project/boards`: one conversation's Plan as a board, without its cards. */
-export interface ProjectBoard {
-  readonly sessionId: string;
-  readonly sessionTitle: string | null;
-  readonly plan: Pick<PlanArtifact, "version" | "status" | "summary">;
-  readonly counts: BoardColumnCounts;
-  /** Whether the session's current Goal runs as an active kanban board. */
-  readonly kanbanActive: boolean;
-  /** When the Plan was last saved. */
-  readonly updatedAt: string;
-  /** The conversation's place among the project's Goals in the priority tree, from 0. */
-  readonly rank: number;
-}
+export type { ProjectBoard };
 
 /** Revisions read to attribute cards; one more is the baseline of the oldest. */
 const revisionWindow = 200;

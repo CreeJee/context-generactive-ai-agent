@@ -88,6 +88,9 @@
   - 개발용 `Server-Timing`은 `serveApi`의 global `HttpRouter.middleware` 하나(`handler;dur=`)다. `projects._index`의 service/query 구간은 없앴다.
   - 프로젝트를 찾지 못하면 404 `project_not_found`, 그 밖의 실패는 지금처럼 500이다. 두 갈래는 `Effect.catchIf`/`catchTag`의 `orElse`로 나눈다. `catchTag`의 `orElse`에 `Effect.die`를 그대로 넘기면 `unknown` 인자가 에러 타입 추론을 덮어 tag를 찾지 못한다. `(failure) => Effect.die(failure)`로 넘긴다.
   - 응답 배열은 `ReadonlyArray`다. 받는 쪽 prop 타입을 `ReadonlyArray`로 바꾼다.
+- 1-2b 결과 (2026-10-31): `projects.$project.{kanban,boards,decisions}`를 옮겼다.
+  - 계약 Schema는 `kanban/contracts.ts`(`ProtectedBranches`, `DecisionAnswer`, `DecisionCloseReason`, `DecisionState`, `HumanDecisionRequest`, `DecisionInboxItem`)와 `workflow/contracts.ts`(`PlanStatus`, `PlanSummary`, `ProjectBoard`)에 둔다. 1-4의 세션 결정·보드도 이것을 쓴다.
+  - 칸반 실패는 `kanban-failures.ts`의 `kanbanRefusal` 표(tag별 refusal)로 답한다. handler가 낼 수 있는 tag만 `Effect.catchTags`에 넘겨 endpoint마다 선언한 code와 맞춘다. RR 라우트용 `kanbanFailureResponse`는 1-4에서 지운다.
 - SSE는 `HttpApiSchema.StreamSse`로 옮긴다. 첨부 업로드(`Content-Length`를 본문보다 먼저 검사)와 다운로드(바이트와 immutable 헤더)가 HttpApi로 같게 안 되면 RR 라우트로 남기고 이유를 적는다.
 
 ### 1-7. 정리

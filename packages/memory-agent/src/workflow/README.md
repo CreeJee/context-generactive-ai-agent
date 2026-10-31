@@ -17,6 +17,7 @@
 - `evaluateWorkflowAction` / `workflowActions` / `WorkflowActionRequest` / `WorkflowActionReason` — phase 이동·pause/resume/stop 허용 판정(dual API)
 - `CardStatus` / `StepProgressStatus` / `stepProgressStatus` / `CardRisk` / `cardContractFields` / `cardContract` / `BoardAuthor` / `CardHold` / `cardHoldFields` — 칸반 카드 상태와 카드 계약 스키마
 - `Boards` — 프로젝트 보드 뷰 서비스(`BoardView`, `ProjectBoard`, `BoardCard`, `BoardRevision`, `BoardColumnCounts`)
+- `PlanStatus` / `PlanSummary` / `ProjectBoard` — `contracts.ts`의 Schema. Plan 상태, 단계 없는 Plan(version, status, summary), 앱 API projects group `boards`가 돌려주는 프로젝트 보드 행. 이 모듈은 서버 코드를 import하지 않아 브라우저 번들이 쓴다. `PlanArtifact.status`도 `PlanStatus`다
 - `BoardEdit` / `BoardIntent` / `CardDraft` / `CardPatch` / `UserChange` / `UserChangeRequest` / `BoardEditResult` / `BoardEditRefused` / `BoardEditPlan` — 보드 편집 스키마와 결과
 - `planBoardEdit` / `planCardTransition` / `planCardHold` / `cardTransitions` / `planEnded` / `closedPlan` — 보드 편집·카드 전이 계획 함수
 - `WorkflowExecution` — durable 연속 실행 의도 서비스, `WorkflowExecutionState`(idle|running|ready|retrying|blocked|stopped), `WorkflowBlocker`, `WorkflowExecutionFailed`

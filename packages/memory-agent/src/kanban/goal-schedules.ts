@@ -1,6 +1,9 @@
 import { Array as EffectArray, Clock, Context, Effect, Layer, Option, Schema } from "effect";
 import { SqlClient, type SqlError } from "effect/sql";
+import { ProtectedBranches } from "./contracts.ts";
 import { VerdictFailure } from "./failures.ts";
+
+export { ProtectedBranches };
 
 /**
  * What the project scheduler stores about kanban Goals (docs/kanban-orchestration.md "프로젝트
@@ -11,10 +14,6 @@ import { VerdictFailure } from "./failures.ts";
 
 /** Branches a project protects when the user has not chosen any. */
 export const defaultProtectedBranches = ["main", "staging"] as const;
-
-export const ProtectedBranches = Schema.Array(
-  Schema.String.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/)),
-);
 
 /** Where a Goal's merge into its target branch stands. Only metadata, never provider text. */
 export const GoalMergeState = Schema.TaggedUnion({
