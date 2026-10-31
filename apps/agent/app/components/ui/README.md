@@ -18,6 +18,7 @@
 - `ButtonGroup`, `ButtonGroupText`, `ButtonGroupSeparator`, `buttonGroupVariants` — 이웃한 버튼을 `role="group"`으로 묶고 맞닿은 모서리를 지운다. 분할 버튼(동작 + 메뉴)에 쓴다
 - `Message`, `MessageGroup`, `MessageAvatar`, `MessageContent`, `MessageHeader`, `MessageFooter` — 채팅 메시지 한 줄의 틀이다. `align="end"`면 오른쪽에 붙고, `MessageContent` 안의 slot 요소도 오른쪽으로 민다
 - `Bubble`, `BubbleGroup`, `BubbleContent`, `BubbleReactions` — 말풍선이다. variant는 default/secondary/muted/tinted/outline/ghost/destructive이고, 색은 안쪽 `BubbleContent`에 입힌다
+- `Trace`, `TraceLine`, `TraceIcon`, `TraceTitle`, `TraceDescription`, `TraceCollapsible`, `TraceCollapsibleTrigger`, `TraceCollapsibleContent` — 에이전트가 한 일(도구 호출, 추론)을 한 줄씩 보여 준다. `TraceLine`의 `status`는 running(제목에 shimmer)/error/pending이다. 접는 행은 끝에 회전하는 chevron을 붙인다
 - `useIsMobile` (`~/hooks/use-mobile`) — 768px 미만인지 `matchMedia`로 따라가는 훅이다. 첫 렌더는 false다
 - `AnimatedNumber` — `motion/react` spring으로 숫자를 `ko-KR` 형식으로 부드럽게 바꿔 보여 준다. 스크린리더용 sr-only 값을 따로 렌더한다
 - `Attachment`, `AttachmentGroup`, `AttachmentMedia`, `AttachmentContent`, `AttachmentTitle`, `AttachmentDescription`, `AttachmentActions`, `AttachmentAction`, `AttachmentTrigger` — 첨부 파일 카드 묶음이다. `state`는 idle/uploading/processing/error/done이고 size·orientation variant를 둔다
@@ -55,7 +56,7 @@
 - `sidebar`는 `button`, `input`, `separator`, `sheet`, `skeleton`, `tooltip`, `~/hooks/use-mobile`에 의존하고, `alert-dialog`는 `button`에 의존한다. 두 파일과 `skeleton`, `use-mobile`은 `shadcn add sidebar alert-dialog`로 받았다. 이미 있던 `button`·`input`·`separator`·`tooltip`·`sheet`는 CLI가 덮어쓴 것을 되돌렸다
 - `progress`, `toggle`, `toggle-group`, `button-group`은 `shadcn add progress toggle-group button-group`으로 받았다. CLI가 덮어쓴 `separator`는 되돌렸다. `toggle-group.tsx`는 `--gap`을 `CSSProperties`에 선언해 `as` 단언을 없앤 것만 CLI 원본과 다르다
 - `sidebar.tsx`는 CLI 원본과 다음만 다르다. 저장소 lint를 통과하려고 `--sidebar-width`·`--sidebar-width-icon`·`--skeleton-width`를 `CSSProperties`에 선언해 `as` 단언을 없앴다. `setOpen`은 boolean만 받는다. `SidebarMenuButton`의 `tooltip`은 `ReactNode`다. `SidebarSeparator`는 `data-horizontal:w-auto`를 쓴다. 원본의 `w-auto`는 `Separator`의 `data-horizontal:w-full`에 져서 사이드바 밖으로 8px 넘쳤다
-- `message`, `bubble`은 `shadcn add message bubble`로 받은 CLI 원본이다
+- `message`, `bubble`은 `shadcn add message bubble`로, `trace`는 `shadcn add trace`로 받은 CLI 원본이다. `trace`는 `collapsible`에 의존하고, CLI가 덮어쓴 `collapsible`은 되돌렸다
 - 이 폴더와 `~/hooks`는 anti-slop lint 규칙을 받지 않는다(루트 `vite.config.ts`의 override). shadcn CLI가 쓴 코드를 원본 그대로 두기 위해서다. shadcn lint 규칙과 Effect 언어 서비스 진단은 그대로 받는다
 - 클래스 병합은 `cn` 모듈 alias로 하고 variant는 `cva`로 정의한다. 예외로 `data-list.tsx`는 `~/lib/utils`의 `cn`을 쓴다. `field.tsx`, `label.tsx`, `separator.tsx`, `combobox.tsx`는 파일 맨 위에 `"use client"`를 선언한다
 

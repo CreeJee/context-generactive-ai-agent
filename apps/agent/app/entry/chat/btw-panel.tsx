@@ -32,6 +32,7 @@ import {
 } from "~/components/ui/sheet";
 import { Spinner } from "~/components/ui/spinner";
 import { Textarea } from "~/components/ui/textarea";
+import { TraceIcon, TraceLine, TraceTitle } from "~/components/ui/trace";
 import { dayAndTime } from "~/lib/dates";
 import type { ChatMessage } from "memory-agent/chat-api";
 import { api, isApiError, type BtwThread } from "../api";
@@ -111,13 +112,12 @@ function BtwMessage({ message, streaming }: { message: ChatMessage; streaming: b
               return <Markdown key={index} text={part.content} streaming={streaming} />;
             case "tool-call":
               return (
-                <p
-                  key={part.id}
-                  className="flex items-center gap-1.5 text-xs text-muted-foreground"
-                >
-                  <SearchIcon className="size-3" aria-hidden />
-                  {toolLabel(part.name)}
-                </p>
+                <TraceLine key={part.id}>
+                  <TraceIcon>
+                    <SearchIcon />
+                  </TraceIcon>
+                  <TraceTitle>{toolLabel(part.name)}</TraceTitle>
+                </TraceLine>
               );
             default:
               return null;

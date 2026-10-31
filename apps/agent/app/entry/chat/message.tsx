@@ -3,9 +3,9 @@ import { runUiEffect, uiPromise } from "../shared/ui-effect";
 import { isTruthy } from "../../truthy.ts";
 import { SchemaTransformation } from "effect";
 import { Data, DateTime, Option, Schema } from "effect";
-import { BotIcon, ChevronRightIcon, Clock3Icon, WrenchIcon } from "lucide-react";
+import { BotIcon, BrainIcon, Clock3Icon, WrenchIcon } from "lucide-react";
 import type { TraceTaskView } from "memory-agent";
-import { memo, useState } from "react";
+import { memo, useState, type ComponentProps } from "react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -20,8 +20,16 @@ import {
 import { Badge } from "~/components/ui/badge";
 import { Bubble, BubbleContent } from "~/components/ui/bubble";
 import { Button } from "~/components/ui/button";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "~/components/ui/collapsible";
 import { Message, MessageContent, MessageHeader } from "~/components/ui/message";
+import {
+  TraceCollapsible,
+  TraceCollapsibleContent,
+  TraceCollapsibleTrigger,
+  TraceDescription,
+  TraceIcon,
+  TraceLine,
+  TraceTitle,
+} from "~/components/ui/trace";
 import type { ChatMessage, MessagePart } from "memory-agent/chat-api";
 import { attachmentIdOf, attachmentUrl, type QueuedMessage } from "memory-agent/definitions";
 import { DrawingPicture, UserMessageBody } from "./images";
@@ -158,16 +166,20 @@ function callStatus(call: ToolCall, result: ToolResult | undefined, awaitingAppr
   return result.state === "error" ? CallStatus.failed() : CallStatus.completed();
 }
 
-function StatusBadge({ status }: { status: CallStatus }) {
-  return CallStatus.$match(status, {
-    running: () => <Badge variant="outline">실행 중</Badge>,
-    "awaiting-approval": () => <Badge variant="outline">승인 대기</Badge>,
-    completed: () => <Badge variant="secondary">완료</Badge>,
-    failed: () => <Badge variant="destructive">실패</Badge>,
-    denied: () => <Badge variant="destructive">거부됨</Badge>,
-    blocked: () => <Badge variant="destructive">자동 검토로 막힘</Badge>,
-  });
+/** How a call's trace row looks: its line status, and a word unless the call simply finished. */
+interface CallTrace {
+  readonly line: ComponentProps<typeof TraceLine>["status"];
+  readonly label: string | null;
 }
+
+const callTrace = CallStatus.$match({
+  running: (): CallTrace => ({ line: "running", label: "실행 중" }),
+  "awaiting-approval": (): CallTrace => ({ line: undefined, label: "승인 대기" }),
+  completed: (): CallTrace => ({ line: undefined, label: null }),
+  failed: (): CallTrace => ({ line: "error", label: "실패" }),
+  denied: (): CallTrace => ({ line: "error", label: "거부됨" }),
+  blocked: (): CallTrace => ({ line: "error", label: "자동 검토로 막힘" }),
+});
 
 const activeTaskStatuses: readonly TraceTaskView["status"][] = [
   "queued",
@@ -488,39 +500,39 @@ const ToolCallCard = memo(function ToolCallCard({
   result: ToolResult | undefined;
   awaitingApproval: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const { line, label } = callTrace(callStatus(call, result, awaitingApproval));
   return (
-    <Collapsible
-      open={open}
-      onOpenChange={setOpen}
-      className="rounded-md border bg-muted/30 text-xs"
-    >
-      <CollapsibleTrigger className="group cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring flex w-full items-center gap-2 px-2.5 py-1.5 text-left">
-        <ChevronRightIcon className="size-3.5 text-muted-foreground transition-transform group-data-[panel-open]:rotate-90" />
-        <WrenchIcon className="size-3.5 text-muted-foreground" />
-        <span className="font-medium">{toolLabel(call.name)}</span>
-        <code className="text-muted-foreground">{call.name}</code>
-        <span className="ml-auto">
-          <StatusBadge status={callStatus(call, result, awaitingApproval)} />
-        </span>
-      </CollapsibleTrigger>
-      <CollapsibleContent className="space-y-2 border-t px-2.5 py-2">
-        <div>
-          <div className="mb-1 text-muted-foreground">인자</div>
-          <pre className="max-h-48 overflow-auto rounded bg-background p-2 whitespace-pre-wrap break-all">
-            {pretty(call.arguments)}
-          </pre>
-        </div>
-        {result && (
+    <TraceCollapsible>
+      <TraceCollapsibleTrigger>
+        <TraceLine status={line}>
+          <TraceIcon>
+            <WrenchIcon />
+          </TraceIcon>
+          <TraceTitle>{toolLabel(call.name)}</TraceTitle>
+          {label !== null && <TraceDescription>{label}</TraceDescription>}
+        </TraceLine>
+      </TraceCollapsibleTrigger>
+      <TraceCollapsibleContent>
+        <div className="flex flex-col gap-2">
           <div>
-            <div className="mb-1 text-muted-foreground">결과</div>
-            <pre className="max-h-72 overflow-auto rounded bg-background p-2 whitespace-pre-wrap break-all">
-              {pretty(result.content)}
+            <div className="mb-1">
+              인자 · <code>{call.name}</code>
+            </div>
+            <pre className="max-h-48 overflow-auto rounded bg-background p-2 whitespace-pre-wrap break-all">
+              {pretty(call.arguments)}
             </pre>
           </div>
-        )}
-      </CollapsibleContent>
-    </Collapsible>
+          {result && (
+            <div>
+              <div className="mb-1">결과</div>
+              <pre className="max-h-72 overflow-auto rounded bg-background p-2 whitespace-pre-wrap break-all">
+                {pretty(result.content)}
+              </pre>
+            </div>
+          )}
+        </div>
+      </TraceCollapsibleContent>
+    </TraceCollapsible>
   );
 });
 
@@ -641,18 +653,24 @@ export const MessageView = memo(function MessageView({
     <Message>
       <MessageContent>
         {message.parts.map((part, index) => {
-          if (part.type === "thinking")
+          if (part.type === "thinking") {
+            const thinking = streaming && index === message.parts.length - 1;
             return (
-              <Collapsible key={`thinking-${index}`}>
-                <CollapsibleTrigger className="group cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring flex items-center gap-2 text-muted-foreground">
-                  <ChevronRightIcon className="size-4 transition-transform group-data-[panel-open]:rotate-90" />
-                  {streaming && index === message.parts.length - 1 ? "추론 중" : "추론 내용"}
-                </CollapsibleTrigger>
-                <CollapsibleContent className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words text-muted-foreground">
-                  {part.content}
-                </CollapsibleContent>
-              </Collapsible>
+              <TraceCollapsible key={`thinking-${index}`}>
+                <TraceCollapsibleTrigger>
+                  <TraceLine status={thinking ? "running" : undefined}>
+                    <TraceIcon>
+                      <BrainIcon />
+                    </TraceIcon>
+                    <TraceTitle>{thinking ? "추론 중" : "추론 내용"}</TraceTitle>
+                  </TraceLine>
+                </TraceCollapsibleTrigger>
+                <TraceCollapsibleContent>
+                  <p className="max-h-80 overflow-auto whitespace-pre-wrap">{part.content}</p>
+                </TraceCollapsibleContent>
+              </TraceCollapsible>
             );
+          }
           if (part.type === "text")
             return <Markdown key={`text-${index}`} text={part.content} streaming={streaming} />;
           if (part.type === "tool-call")
