@@ -1,17 +1,13 @@
 import { Effect, FileSystem, Path, Schedule, Schema } from "effect";
 import { expect, vi } from "vite-plus/test";
-import {
-  McpServers,
-  McpServerState,
-  maxEagerMcpToolCharacters,
-  mcpToolName,
-} from "../../src/mcp/servers.ts";
+import { McpServers, McpServerState, mcpToolName } from "../../src/mcp/servers.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { PermissionReviews } from "../../src/permissions/reviews.ts";
 import { Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
+import { discoveryToolName } from "../../src/tools/discovery.ts";
 import { openPage, scopedCallId, sessionScopedResponder } from "../support/chat-client.ts";
-import { matchGolden, runToolRequestBodies } from "../support/requests.ts";
+import { matchGolden, toolRequestBodies } from "../support/requests.ts";
 import { fakeOAuthMcpServer } from "../support/fake-oauth-mcp-server.ts";
 import { testHttpClient } from "../support/http.ts";
 import { selectTestModel } from "../support/provider.ts";
@@ -151,18 +147,12 @@ testAgent()("MCP servers of a project", (it) => {
   );
 
   it.effect(
-    "tools past the eager size are listed by name only until asked for",
+    "tools are listed by name only until asked for",
     () =>
       Effect.gen(function* () {
         const servers = yield* McpServers;
         const { project, fake } = yield* freshProject;
-        yield* writeJson(fake.config, {
-          mcpServers: {
-            fake: fake.entry({
-              FAKE_MCP_ECHO_DESCRIPTION: "x".repeat(maxEagerMcpToolCharacters),
-            }),
-          },
-        });
+        yield* writeJson(fake.config, { mcpServers: { fake: fake.entry() } });
         yield* servers.setTrusted(project, "project", "fake", true);
         expect((yield* servers.runTools(project)).tools.map((tool) => tool.lazy)).toEqual([
           true,
@@ -206,8 +196,9 @@ testAgent()("MCP servers of a project", (it) => {
         yield* writeJson(fake.config, { mcpServers: { fake: fake.entry() } });
         yield* servers.setTrusted(project, "project", "fake", true);
         const run = yield* servers.runTools(project);
+        // As offered once the model has discovered them.
         yield* Effect.flatMap(
-          runToolRequestBodies(run.tools),
+          toolRequestBodies(run.tools.map((tool) => tool.tool)),
           matchGolden("./__golden__/mcp.json"),
         );
         const name = mcpToolName("fake", "echo");
@@ -444,7 +435,10 @@ testAgent()("MCP servers behind OAuth", (it) => {
   );
 });
 
-/** A trusted fake server in a fresh project whose permission mode is `mode`, and a chat page. */
+/**
+ * A trusted fake server in a fresh project whose permission mode is `mode`, and a chat page whose
+ * conversation has already discovered the server's `echo`.
+ */
 const mcpChat = Effect.fnUntraced(function* (mode: "ask" | "auto") {
   const { project, fake } = yield* freshProject;
   yield* writeJson(fake.config, { mcpServers: { fake: fake.entry() } });
@@ -453,6 +447,7 @@ const mcpChat = Effect.fnUntraced(function* (mode: "ask" | "auto") {
   yield* (yield* McpServers).setTrusted(project, "project", "fake", true);
   const session = (yield* (yield* Sessions).create(project.id)).id;
   const page = yield* openPage(session);
+  yield* page.send(`call ${discoveryToolName} {"toolNames":["mcp_fake__echo"]}`);
   return { page, session, callId: scopedCallId("call-mcp_fake__echo", session) };
 });
 

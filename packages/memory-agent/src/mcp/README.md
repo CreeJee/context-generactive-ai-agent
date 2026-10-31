@@ -17,7 +17,6 @@
 - `mcpToolPrefix` / `mcpToolName` / `isMcpToolName` — MCP 도구 이름 규칙 `mcp_<server>__<tool>`의 접두어, 생성 함수(dual), 판별 함수
 - `mcpInstructions` / `mcpInstructionsForMode` — MCP 도구 사용 규칙 시스템 프롬프트. 권한 모드 `full`이면 승인 문구를 바꾸고, 서버 guide를 `<server name=...>` 블록으로 덧붙인다
 - `maxMcpGuideCharacters`(8_000) / `maxMcpResultCharacters`(60_000) — 서버 guide와 도구 결과를 모델에 넘길 때의 최대 길이
-- `maxEagerMcpToolCharacters`(80_000) — run의 MCP 도구 정의(이름·설명·input schema) 길이 합이 이것을 넘으면 그 run의 MCP 도구를 모두 lazy로 둔다
 - `McpStepTimedOut` — `connect` 또는 `tools/list` 단계 시간 초과를 나타내는 TaggedError
 - `McpServerConfig` — `Schema.TaggedUnion`이고 `stdio{command,args,env}` 또는 `http{url,headers,oauth?}`이다
 - `McpOAuthConfig` / `McpOAuthClient` / `McpClientAuthentication` — `oauth` 설정. `authorizationCode{client,callbackPort?,scope?}`(사람 로그인) 또는 `clientCredentials{clientId,issuer,authentication,scope?}`(앱 자신). client는 `automatic{metadataUrl?}`(CIMD 또는 동적 등록) 또는 `registered{clientId,issuer?,authentication?}`. 증명은 `secret` 또는 `privateKeyJwt`이고 값은 `${NAME}` 참조만 받는다. 파일에서는 평평한 `{grant?, clientId?, clientSecret?, privateKey?{key,algorithm}, clientMetadataUrl?, issuer?, callbackPort?, scope?}`로 쓰고, 함께 쓸 수 없는 조합은 `invalid_config`다
@@ -54,7 +53,7 @@
 - `plainCall`은 modern 프로토콜에서 `toolDefinition`에 inputSchema만 넘긴다. outputSchema를 넘기면 SDK 출력 검사가 입력 요청을 거부하기 때문이다.
 - SDK가 인자를 JSON Schema로 검사하지 않는다. 그래서 `runToolOf`가 `jsonSchemaIssues`로 서버의 inputSchema에 대해 인자를 검사한다. `RunTool`의 `needsApproval`은 false이고, 승인 규칙은 `mcpInstructions`에 적혀 있다.
 - 도구 결과와 서버 guide는 지시나 승인이 아니다(`mcpInstructions`). 결과는 60_000자, guide는 8_000자를 넘으면 잘라서 넘긴다.
-- MCP 도구는 정의 길이 합이 `maxEagerMcpToolCharacters` 이하이면 모두 eager, 넘으면 모두 lazy다(이름만 discovery 도구 설명에 오르고, 모델이 요청한 뒤에 전체가 간다). 길이는 연결 때 도구마다 한 번 잰다. guide는 lazy여도 system prompt에 그대로 남는다.
+- MCP 도구는 모두 lazy다. 이름만 discovery 도구 설명에 오르고, 모델이 요청한 뒤에 전체가 간다. 대화가 한 번 찾은 도구는 그 대화의 다음 run에도 전체로 간다. guide는 그대로 system prompt에 남는다.
 - connect 시간 제한은 20_000ms이다. `McpStepTimedOut` 단계는 `connect_timed_out` / `tools_list_timed_out` 코드에 대응한다.
 - 진행 중인 discovery는 `SynchronizedRef<Option<Fiber>>`로 호출자들이 함께 쓴다. `runTools`는 시작에 실패한 서버를 건너뛰고(설정 화면에는 failed로 표시) 실행을 계속한다.
 - `McpServers.layer`의 `make`는 `StorageRoot`를 yield한다. `readMcpFile`에는 `FileSystem`을 provide해서 쓴다. `SqlClient`, `SecretRedactor`, `SecretStore`, `Crypto`도 쓴다.

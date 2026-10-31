@@ -3368,6 +3368,7 @@
   - 실사용 기록에서 discovery 호출은 15번이었고, discovery 없이 lazy 도구를 먼저 불러 오류가 난 경우가 6번이었다. 자주 쓰는 MCP 도구(codegraph는 2,235번 호출)를 lazy로 두면 왕복과 오류가 늘 수 있다.
   - description을 250자로 자르면 skill 50개 중 36개가 잘린다.
   - 도구 사용 행동 eval을 먼저 만들고, 그 eval로 회귀가 없음을 확인한 뒤 정한다.
+  - MCP 쪽은 아래 'MCP 도구는 늘 lazy (2026-10-31)'로 정했다.
 
 ## 자동 후속 run은 오케스트레이터가 보내는 메시지로 시작한다 (2026-10-31)
 
@@ -3393,3 +3394,10 @@
 - OpenAPI 스펙에서 client를 생성하지 않는다. 같은 모노레포라 계약에서 client를 바로 만들고, 생성 코드는 brand·TaggedUnion·Schema 변환을 잃는다.
 - 계약은 memory-agent `memory-agent/app-api`(브라우저용, 서버 코드 import 없음)이고, handler는 앱 `app/.server/api/`다. `ChatApi`와 `AppApi`를 web handler 하나로 열고 RR에는 splat 라우트 하나만 남긴다. 응답 JSON 모양과 status, 거절 body(`{ error, reason? }`)는 바꾸지 않는다.
 - 순서: HttpApi 이전(group 단위) → `_index` loader가 react-query 캐시를 미리 채움(react-query가 유일한 캐시) → ETag는 측정 뒤 이득이 있을 때만, `AppEvents` revision 기반으로.
+
+## MCP 도구는 늘 lazy (2026-10-31)
+
+- 사용자 결정: run의 MCP 도구는 크기와 상관없이 모두 lazy로 둔다. 이름만 discovery 도구 설명에 오르고, 모델이 요청한 뒤에 전체 정의가 간다. 대화가 한 번 찾은 도구는 그 대화의 다음 run에도 전체로 간다. 서버 guide는 지금처럼 system prompt에 남는다. 같은 날 정한 '정의 길이 합이 80,000자를 넘을 때만 lazy' 규칙(`maxEagerMcpToolCharacters`)을 대체한다.
+- 근거: 도구 사용 eval에 MCP 케이스 3개를 더했다(이슈 조회, 검색 뒤 댓글, 서버 guide가 먼저 쓰라고 한 코드 인덱스 도구). GLM-5.3-Flash-NVFP4로 3번씩 돌려 eager 9/9, lazy 9/9였다. lazy에서 discovery 전에 MCP 도구를 불러 오류가 난 경우는 없었다. guide가 권한 도구는 3번 모두 discovery 뒤에 그대로 썼다.
+- 비용: 대화마다 discovery 호출이 1번 는다. 서브에이전트는 자기 대화라 다시 찾는다. 검색 뒤 댓글 케이스에서는 lazy일 때만 `find_memory`를 먼저 부르는 호출이 매번 1번 더 있었다.
+- 절감: 이 저장소 설정에서 MCP 도구 정의는 부모·자식 첫 요청마다 3,986 토큰이었다('첫 요청 오버헤드' 항목). 이 몫이 discovery 도구 하나로 바뀐다.
