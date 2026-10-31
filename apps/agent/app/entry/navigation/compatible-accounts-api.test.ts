@@ -1,5 +1,5 @@
 import { NodeCrypto } from "@effect/platform-node";
-import { Cause, Crypto, Effect } from "effect";
+import { Crypto, Effect } from "effect";
 import {
   GlobalConfigFailed,
   makeOpenAICompatibleSettings,
@@ -31,14 +31,9 @@ const run = (
   api: OpenAICompatibleSettingsApi,
   command: Parameters<typeof compatibleAccountAction>[0],
 ) => Effect.provideService(compatibleAccountAction(command), OpenAICompatibleSettings, api);
-const text = (response: Response) =>
-  Effect.tryPromise({
-    try: () => response.text(),
-    catch: (cause) => new Cause.UnknownError(cause),
-  });
 
 layer(NodeCrypto.layer)((it) => {
-  it.effect("returns a safe partial-save response without credential or provider details", () =>
+  it.effect("refuses a partial save without credential or provider details", () =>
     Effect.gen(function* () {
       const api = yield* settingsWith({
         config: {
@@ -53,48 +48,39 @@ layer(NodeCrypto.layer)((it) => {
             ),
         },
       });
-      const response = yield* run(api, {
-        provider: "openai-compatible",
-        intent: "create",
-        baseUrl: "http://localhost:1234/v1",
-        apiKey: "private key value",
-      });
-      expect(response.status).toBe(409);
-      const body = yield* text(response);
-      expect(body).toBe('{"error":"settings_partially_saved"}');
-      expect(body).not.toContain("private");
+      const refused = yield* Effect.flip(
+        run(api, {
+          provider: "openai-compatible",
+          intent: "create",
+          baseUrl: "http://localhost:1234/v1",
+          apiKey: "private key value",
+        }),
+      );
+      expect(refused).toStrictEqual({ error: "settings_partially_saved" });
     }),
   );
 
   it.effect("validates endpoints and isolates provider failures", () =>
     Effect.gen(function* () {
       const api = yield* settingsWith({});
-      const invalid = yield* run(api, {
-        provider: "openai-compatible",
-        intent: "create",
-        baseUrl: "file:///private",
-      });
-      expect(invalid.status).toBe(400);
-      const created = yield* run(api, {
+      const invalid = yield* Effect.flip(
+        run(api, { provider: "openai-compatible", intent: "create", baseUrl: "file:///private" }),
+      );
+      expect(invalid).toStrictEqual({ error: "invalid_settings" });
+      yield* run(api, {
         provider: "openai-compatible",
         intent: "create",
         baseUrl: "http://localhost:1234/v1",
       });
-      expect(created.status).toBe(200);
       const accountId = (yield* api.status).accounts[0]?.id ?? "";
-      const missing = yield* run(api, {
-        provider: "openai-compatible",
-        intent: "select",
-        accountId: "missing",
-      });
-      expect(missing.status).toBe(404);
-      const failed = yield* run(api, {
-        provider: "openai-compatible",
-        intent: "discover",
-        accountId,
-      });
-      expect(failed.status).toBe(502);
-      expect(yield* text(failed)).toBe('{"error":"provider_unavailable"}');
+      const missing = yield* Effect.flip(
+        run(api, { provider: "openai-compatible", intent: "select", accountId: "missing" }),
+      );
+      expect(missing).toStrictEqual({ error: "account_not_found" });
+      const failed = yield* Effect.flip(
+        run(api, { provider: "openai-compatible", intent: "discover", accountId }),
+      );
+      expect(failed).toStrictEqual({ error: "endpoint_unavailable" });
     }),
   );
 });

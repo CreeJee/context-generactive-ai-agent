@@ -22,8 +22,11 @@ import {
   type ProjectKanbanCommand as ProjectKanbanCommandCase,
   type ProjectKanbanSettings,
   type ProjectSettings,
+  type ProviderAuthState as ProviderAuthStateCase,
   type RecallSettings,
   type ScanCommand as ScanCommandCase,
+  type SubscriptionAccountCommand,
+  SubscriptionAccountsView,
 } from "memory-agent/app-api";
 import { ProviderId } from "memory-agent/provider-contracts";
 import type {
@@ -174,35 +177,14 @@ export type GeneratedImageAsset = ImageMediaAsset & { readonly url: string };
 export type ImageSettingsView = ImageSettings;
 
 /** A provider's connection as `/api/auth` sends it; a pending login's URL arrives as `authUrl`. */
-export type ProviderAuthState = Data.TaggedEnum<{
-  "signed-out": { readonly provider: ProviderId };
-  pending: { readonly provider: ProviderId; readonly authUrl: string };
-  "signed-in": { readonly provider: ProviderId; readonly planType?: string };
-  error: {
-    readonly provider: ProviderId;
-    readonly message: string;
-    readonly code?: string;
-    readonly operation?: string;
-    readonly httpStatus?: number;
-    readonly providerCode?: string;
-    readonly credentialStage?: string;
-    readonly transportCode?: string;
-    readonly proxyRoute?: "direct" | "unavailable" | "attempted";
-  };
-}>;
+export type ProviderAuthState = ProviderAuthStateCase;
 export const ProviderAuthState = Data.taggedEnum<ProviderAuthState>();
 
 /** Local OAuth profiles of one provider and its pending account login, without secrets. */
-export type AccountsView = {
-  readonly profiles: readonly OAuthProfile[];
-  readonly login: AccountLoginState;
-};
-export type AccountAction =
-  | { readonly intent: "add"; readonly label: string }
-  | { readonly intent: "cancel" }
-  | { readonly intent: "select"; readonly accountId: string }
-  | { readonly intent: "remove"; readonly accountId: string }
-  | { readonly intent: "rename"; readonly accountId: string; readonly label: string };
+export type AccountsView = SubscriptionAccountsView;
+type WithoutProvider<Command> = Command extends unknown ? Omit<Command, "provider"> : never;
+/** A `/api/accounts` change of the provider the call names. */
+export type AccountAction = WithoutProvider<SubscriptionAccountCommand>;
 
 /** Whether the session's Goal runs as a kanban board, and what its loop knows about the cards. */
 export type KanbanView = { readonly active: false } | ({ readonly active: true } & KanbanBoardView);
@@ -263,6 +245,7 @@ export const ApiErrorCode = Schema.Literals([
   "account_action_failed",
   "account_list_unavailable",
   "account_login_failed",
+  "account_not_found",
   "account_store_unavailable",
   "answer_conflict",
   "answer_invalid",
@@ -288,6 +271,7 @@ export const ApiErrorCode = Schema.Literals([
   "transfer_target_invalid",
   "cross_site_request",
   "empty_message",
+  "endpoint_unavailable",
   "external_agent_unavailable",
   "facts_changed",
   "goal_missing",
@@ -393,6 +377,8 @@ export const ApiErrorCode = Schema.Literals([
   "session_required",
   "schedule_storage_failed",
   "settings_failed",
+  "settings_partially_saved",
+  "settings_unavailable",
   "storage_failed",
   "subagent_not_found",
   "uncertain_runs_changed",
@@ -683,32 +669,52 @@ const appCall = <A, E extends AppApiFailure>(
 const updateProject = (project: string, payload: ProjectSettings) =>
   appCall((client) => client.projects.update({ params: { project }, payload }), "invalid_settings");
 
+/**
+ * `/api/accounts` answers a subscription provider with its profiles; another view would be the
+ * server's fault.
+ */
+const subscriptionView = Effect.filterOrFail(
+  Schema.is(SubscriptionAccountsView),
+  () => ({ error: "request_failed" }) as const,
+);
+
 export const api = {
   auth: (provider: ProviderId) =>
-    call<ProviderAuthState>("GET", `/api/auth?provider=${encodeURIComponent(provider)}`),
-  authAction: (intent: "login" | "cancel" | "logout", provider: ProviderId) =>
-    call<ProviderAuthState>("POST", "/api/auth", { intent, provider }),
+    appCall((client) => client.auth.status({ query: { provider } }), "invalid_provider"),
+  authAction: (intent: "login" | "cancel" | "logout", provider: SubscriptionAccountProvider) =>
+    appCall((client) => client.auth.action({ payload: { intent, provider } }), "invalid_provider"),
 
   accounts: (provider: SubscriptionAccountProvider) =>
-    call<AccountsView>("GET", `/api/accounts?provider=${encodeURIComponent(provider)}`),
-  accountAction: (provider: SubscriptionAccountProvider, action: AccountAction) =>
-    call<AccountsView>("POST", "/api/accounts", { provider, ...action }),
-  accountQuota: (provider: SubscriptionAccountProvider) =>
-    call<SubscriptionQuotaReport>(
-      "GET",
-      `/api/accounts/quota?provider=${encodeURIComponent(provider)}`,
+    appCall(
+      (client) => client.accounts.list({ query: { provider } }).pipe(subscriptionView),
+      "invalid_provider",
     ),
+  accountAction: (provider: SubscriptionAccountProvider, action: AccountAction) =>
+    appCall(
+      (client) =>
+        Match.value(action).pipe(
+          Match.discriminatorsExhaustive("intent")({
+            add: (add) => client.accounts.action({ payload: { ...add, provider } }),
+            cancel: (cancel) => client.accounts.action({ payload: { ...cancel, provider } }),
+            select: (select) => client.accounts.action({ payload: { ...select, provider } }),
+            remove: (remove) => client.accounts.action({ payload: { ...remove, provider } }),
+            rename: (rename) => client.accounts.action({ payload: { ...rename, provider } }),
+          }),
+          subscriptionView,
+        ),
+      "invalid_account_action",
+    ),
+  accountQuota: (provider: SubscriptionAccountProvider) =>
+    appCall((client) => client.accounts.quota({ query: { provider } }), "invalid_provider"),
 
   models: (provider: ProviderId) =>
-    call<{ models: ProviderModel[]; selected: ModelSelection | null }>(
-      "GET",
-      `/api/models?provider=${encodeURIComponent(provider)}`,
-    ),
+    appCall((client) => client.models.list({ query: { provider } }), "invalid_provider"),
   selectModel: (model: string, reasoningEffort: string | undefined, provider: ProviderId) =>
-    call<ModelSelection>("POST", `/api/models/${encodeURIComponent(model)}`, {
-      provider,
-      reasoningEffort,
-    }),
+    appCall(
+      (client) =>
+        client.models.select({ params: { model }, payload: { provider, reasoningEffort } }),
+      "invalid_selection",
+    ),
 
   projects: () => appCall((client) => client.projects.list({ query: {} })),
   addProject: (root: string) =>

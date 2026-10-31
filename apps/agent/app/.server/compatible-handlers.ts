@@ -1,121 +1,61 @@
-import { Effect, Schema } from "effect";
+import { Effect, Match } from "effect";
 import {
   CompatibleAccountsView,
-  CompatibleConnectionInput,
-  CompatibleModelInput,
   OpenAICompatibleSettings,
   type GlobalConfigFailed,
   type OpenAICompatibleFailed,
   type OpenAICompatibleStatus,
 } from "memory-agent";
+import type { CompatibleAccountCommand } from "memory-agent/app-api";
 
-const AccountId = Schema.String.check(Schema.isMaxLength(128));
-const provider = Schema.Literal("openai-compatible");
-/** `/api/accounts` commands for compatible endpoints; shared intents keep the subscription names. */
-export const CompatibleAccountCommand = Schema.Union([
-  Schema.Struct({
-    provider,
-    intent: Schema.Literal("create"),
-    label: Schema.optional(Schema.String),
-    ...CompatibleConnectionInput.fields,
-  }),
-  Schema.Struct({
-    provider,
-    intent: Schema.Literal("connect"),
-    accountId: AccountId,
-    ...CompatibleConnectionInput.fields,
-  }),
-  Schema.Struct({
-    provider,
-    intent: Schema.Literal("rename"),
-    accountId: AccountId,
-    label: Schema.String,
-  }),
-  Schema.Struct({
-    provider,
-    intent: Schema.Literal("save-model"),
-    accountId: AccountId,
-    model: CompatibleModelInput,
-  }),
-  Schema.Struct({
-    provider,
-    intent: Schema.Literals(["remove-model", "test"]),
-    accountId: AccountId,
-    modelId: Schema.String,
-  }),
-  Schema.Struct({
-    provider,
-    intent: Schema.Literals(["select", "remove", "discover"]),
-    accountId: AccountId,
-  }),
-]);
-export type CompatibleAccountCommand = typeof CompatibleAccountCommand.Type;
+/** The refusal for each operation of a compatible endpoint that fails. */
+const operationRefusal = {
+  validation: "invalid_settings",
+  missing: "account_not_found",
+  keychain: "keychain_failed",
+  account_id: "settings_unavailable",
+  partial: "settings_partially_saved",
+  test: "endpoint_unavailable",
+  models: "endpoint_unavailable",
+} as const satisfies Record<OpenAICompatibleFailed["operation"], string>;
 
-const reply = <A>(value: A, status = 200) =>
-  Response.json(value, { status, headers: { "Cache-Control": "no-store" } });
-const view = (status: OpenAICompatibleStatus) => reply(CompatibleAccountsView.make(status));
+const accountsView = (status: OpenAICompatibleStatus) => CompatibleAccountsView.make(status);
 
-const respond = (
-  effect: Effect.Effect<
-    Response,
-    OpenAICompatibleFailed | GlobalConfigFailed,
-    OpenAICompatibleSettings
-  >,
-) =>
-  effect.pipe(
-    Effect.catchTags({
-      GlobalConfigFailed: () => Effect.succeed(reply({ error: "settings_unavailable" }, 500)),
-      OpenAICompatibleFailed: (failure) => {
-        switch (failure.operation) {
-          case "validation":
-            return Effect.succeed(reply({ error: "invalid_settings" }, 400));
-          case "missing":
-            return Effect.succeed(reply({ error: "account_not_found" }, 404));
-          case "keychain":
-            return Effect.succeed(reply({ error: "keychain_failed" }, 500));
-          case "account_id":
-            return Effect.succeed(reply({ error: "settings_unavailable" }, 500));
-          case "partial":
-            return Effect.succeed(reply({ error: "settings_partially_saved" }, 409));
-          case "test":
-          case "models":
-            return Effect.succeed(reply({ error: "provider_unavailable" }, 502));
-        }
-      },
-    }),
-  );
+/** Refuses each expected failure; keychain, config and endpoint causes stay on the server. */
+const refuse = <A, R>(effect: Effect.Effect<A, OpenAICompatibleFailed | GlobalConfigFailed, R>) =>
+  Effect.catchTags(effect, {
+    GlobalConfigFailed: () => Effect.fail({ error: "settings_unavailable" } as const),
+    OpenAICompatibleFailed: ({ operation }) => Effect.fail({ error: operationRefusal[operation] }),
+  });
 
 /** GET `/api/accounts?provider=openai-compatible`: every endpoint and its catalog, no secrets. */
-export const compatibleAccounts = respond(
-  Effect.flatMap(OpenAICompatibleSettings, (settings) => Effect.map(settings.status, view)),
+export const compatibleAccounts = refuse(
+  Effect.flatMap(OpenAICompatibleSettings, (settings) => Effect.map(settings.status, accountsView)),
 );
 
-/** POST `/api/accounts` for a compatible endpoint; the route decodes and checks the request. */
+/** POST `/api/accounts` for a compatible endpoint, as the contract decoded it. */
 export const compatibleAccountAction = (command: CompatibleAccountCommand) =>
-  respond(
-    Effect.gen(function* () {
-      const settings = yield* OpenAICompatibleSettings;
-      switch (command.intent) {
-        case "create":
-          return view(yield* settings.create(command));
-        case "connect":
-          return view(yield* settings.connect(command.accountId, command));
-        case "rename":
-          return view(yield* settings.rename(command.accountId, command.label));
-        case "save-model":
-          return view(yield* settings.saveModel(command.accountId, command.model));
-        case "remove-model":
-          return view(yield* settings.removeModel(command.accountId, command.modelId));
-        case "select":
-          return view(yield* settings.select(command.accountId));
-        case "remove":
-          return view(yield* settings.remove(command.accountId));
-        case "test":
-          return reply(yield* settings.test(command.accountId, command.modelId));
-        case "discover":
-          return reply({
-            models: (yield* settings.discover(command.accountId)).map((id) => ({ id })),
-          });
-      }
-    }),
+  refuse(
+    Effect.flatMap(OpenAICompatibleSettings, (settings) =>
+      Match.value(command).pipe(
+        Match.discriminatorsExhaustive("intent")({
+          create: (create) => Effect.map(settings.create(create), accountsView),
+          connect: (connect) =>
+            Effect.map(settings.connect(connect.accountId, connect), accountsView),
+          rename: ({ accountId, label }) =>
+            Effect.map(settings.rename(accountId, label), accountsView),
+          "save-model": ({ accountId, model }) =>
+            Effect.map(settings.saveModel(accountId, model), accountsView),
+          "remove-model": ({ accountId, modelId }) =>
+            Effect.map(settings.removeModel(accountId, modelId), accountsView),
+          select: ({ accountId }) => Effect.map(settings.select(accountId), accountsView),
+          remove: ({ accountId }) => Effect.map(settings.remove(accountId), accountsView),
+          test: ({ accountId, modelId }) => settings.test(accountId, modelId),
+          discover: ({ accountId }) =>
+            Effect.map(settings.discover(accountId), (ids) => ({
+              models: ids.map((id) => ({ id })),
+            })),
+        }),
+      ),
+    ),
   );

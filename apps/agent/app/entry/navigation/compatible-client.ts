@@ -1,9 +1,10 @@
 import { Effect, Schema } from "effect";
 import {
-  CompatibleAccountsView,
-  CompatibleConnectionInput,
-  CompatibleModelInput,
-} from "memory-agent/compatible-config";
+  CompatibleAccountCommand,
+  CompatibleModelList,
+  CompatibleTestResult,
+} from "memory-agent/app-api";
+import { CompatibleAccountsView } from "memory-agent/compatible-config";
 import { appFetch } from "../shared/backend-restart";
 import { appQueryKeys } from "../queries/keys";
 
@@ -13,48 +14,7 @@ export type {
   CompatibleModelInput,
 } from "memory-agent/compatible-config";
 
-const provider = { provider: Schema.Literal("openai-compatible") };
-const CompatibleAction = Schema.Union([
-  Schema.Struct({
-    ...provider,
-    intent: Schema.Literal("create"),
-    label: Schema.optional(Schema.String),
-    ...CompatibleConnectionInput.fields,
-  }),
-  Schema.Struct({
-    ...provider,
-    intent: Schema.Literal("connect"),
-    accountId: Schema.String,
-    ...CompatibleConnectionInput.fields,
-  }),
-  Schema.Struct({
-    ...provider,
-    intent: Schema.Literal("rename"),
-    accountId: Schema.String,
-    label: Schema.String,
-  }),
-  Schema.Struct({
-    ...provider,
-    intent: Schema.Literal("save-model"),
-    accountId: Schema.String,
-    model: CompatibleModelInput,
-  }),
-  Schema.Struct({
-    ...provider,
-    intent: Schema.Literals(["remove-model", "test"]),
-    accountId: Schema.String,
-    modelId: Schema.String,
-  }),
-  Schema.Struct({
-    ...provider,
-    intent: Schema.Literals(["select", "remove", "discover"]),
-    accountId: Schema.String,
-  }),
-]);
-type CompatibleAction = typeof CompatibleAction.Type;
 export { CompatibleAccountsView };
-const TestResult = Schema.Struct({ ok: Schema.Literal(true) });
-const ModelList = Schema.Struct({ models: Schema.Array(Schema.Struct({ id: Schema.String })) });
 
 /** Why a compatible-endpoint request failed; the rejected body is never read. */
 export const CompatibleRequestFailedReason = Schema.TaggedUnion({
@@ -90,11 +50,11 @@ export class CompatibleRequestFailed extends Schema.TaggedError<
 type WithoutProvider<T> = T extends unknown ? Omit<T, "provider"> : never;
 /** A compatible-endpoint command that changes accounts; each answers with the complete list. */
 export type CompatibleAccountChange = WithoutProvider<
-  Exclude<CompatibleAction, { readonly intent: "test" | "discover" }>
+  Exclude<CompatibleAccountCommand, { readonly intent: "test" | "discover" }>
 >;
 
 export function makeCompatibleClient(fetcher: typeof fetch) {
-  const requestEffect = <A, I>(schema: Schema.Codec<A, I>, body?: CompatibleAction) =>
+  const requestEffect = <A, I>(schema: Schema.Codec<A, I>, body?: CompatibleAccountCommand) =>
     Effect.gen(function* () {
       const operation = body?.intent ?? "list";
       const failed = (reason: CompatibleRequestFailedReason, status: number) =>
@@ -110,7 +70,7 @@ export function makeCompatibleClient(fetcher: typeof fetch) {
       const encoded =
         body === undefined
           ? undefined
-          : yield* Schema.encodeEffect(Schema.fromJsonString(CompatibleAction))(body).pipe(
+          : yield* Schema.encodeEffect(Schema.fromJsonString(CompatibleAccountCommand))(body).pipe(
               Effect.mapError(() => failed(reasons.InvalidResponse.make({}), 0)),
             );
       const response = yield* Effect.tryPromise({
@@ -144,14 +104,18 @@ export function makeCompatibleClient(fetcher: typeof fetch) {
     change: (change: CompatibleAccountChange) =>
       requestEffect(CompatibleAccountsView, { provider: "openai-compatible", ...change }),
     test: (accountId: string, modelId: string) =>
-      requestEffect(TestResult, {
+      requestEffect(CompatibleTestResult, {
         provider: "openai-compatible",
         intent: "test",
         accountId,
         modelId,
       }),
     discover: (accountId: string) =>
-      requestEffect(ModelList, { provider: "openai-compatible", intent: "discover", accountId }),
+      requestEffect(CompatibleModelList, {
+        provider: "openai-compatible",
+        intent: "discover",
+        accountId,
+      }),
   };
   return {
     effects,

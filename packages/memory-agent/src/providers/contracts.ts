@@ -112,27 +112,39 @@ export class ProviderOperationFailed extends Schema.TaggedError<
   operation: Schema.Literals(["auth", "catalog", "model"]),
 }) {}
 
-type AuthConnectionCases = {
-  readonly "signed-out": { readonly provider: ProviderId };
-  readonly pending: { readonly provider: ProviderId; readonly authorizationUrl: string };
-  readonly "signed-in": { readonly provider: ProviderId; readonly planType?: string };
-  readonly error: {
-    readonly provider: ProviderId;
-    readonly message: string;
-    readonly code?: string;
-    readonly operation?: string;
-    readonly httpStatus?: number;
-    readonly providerCode?: string;
-    readonly credentialStage?: string;
-    readonly transportCode?: string;
-    readonly proxyRoute?: "direct" | "unavailable" | "attempted";
-  };
+const signedOut = { provider: ProviderId };
+const signedIn = { provider: ProviderId, planType: Schema.optionalKey(Schema.String) };
+const connectionFailed = {
+  provider: ProviderId,
+  message: Schema.String,
+  code: Schema.optionalKey(Schema.String),
+  operation: Schema.optionalKey(Schema.String),
+  httpStatus: Schema.optionalKey(Schema.Finite),
+  providerCode: Schema.optionalKey(Schema.String),
+  credentialStage: Schema.optionalKey(Schema.String),
+  transportCode: Schema.optionalKey(Schema.String),
+  proxyRoute: Schema.optionalKey(Schema.Literals(["direct", "unavailable", "attempted"])),
 };
+const AuthConnection = Schema.TaggedUnion({
+  "signed-out": signedOut,
+  pending: { provider: ProviderId, authorizationUrl: Schema.String },
+  "signed-in": signedIn,
+  error: connectionFailed,
+});
 /** A provider's account connection, in the case its login is in. */
-export type AuthConnectionState = Data.TaggedEnum<AuthConnectionCases>;
+export type AuthConnectionState = typeof AuthConnection.Type;
 export const AuthConnectionState = Data.taggedEnum<AuthConnectionState>();
 /** The case an `AuthConnectionState` is in. */
-export type AuthStatus = keyof AuthConnectionCases;
+export type AuthStatus = AuthConnectionState["_tag"];
+
+/** An `AuthConnectionState` as the page receives it (`/api/auth`): a pending login's URL is `authUrl`. */
+export const ProviderAuthState = Schema.TaggedUnion({
+  "signed-out": signedOut,
+  pending: { provider: ProviderId, authUrl: Schema.String },
+  "signed-in": signedIn,
+  error: connectionFailed,
+});
+export type ProviderAuthState = typeof ProviderAuthState.Type;
 
 /** Authentication lifecycle only. Deliberately has no token or credential getter. */
 export interface AuthProvider {

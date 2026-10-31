@@ -69,6 +69,7 @@ it.live(
       const selectEntered = yield* Deferred.make<void>();
       const selectRelease = yield* Deferred.make<ModelSelection>();
       vi.spyOn(api, "accountAction").mockResolvedValue({
+        _tag: "subscription",
         profiles: [],
         login: AccountLoginState.idle(),
       });

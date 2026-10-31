@@ -30,14 +30,14 @@
 - `CompatibleRequestFailed` / `CompatibleRequestFailedReason` — `Schema.TaggedError`(operation, status, reason, message)와 사유 TaggedUnion(`TransportFailed`·`PartialWrite`·`RequestRejected`·`InvalidResponse`)
 - `CompatibleAccountChange` — 계정을 바꾸는 호환 명령(create/connect/rename/save-model/remove-model/select/remove). `provider` 필드는 빠지고 `test`·`discover`는 포함되지 않는다
 - `compatibleQueryKey` — `appQueryKeys.global.accounts("openai-compatible")` 쿼리 키
-- 재수출 타입: `CompatibleAccountsView`, `CompatibleAccountStatus`, `CompatibleConnectionInput`, `CompatibleModelInput` (`memory-agent/compatible-config`)
+- 재수출 타입: `CompatibleAccountsView`, `CompatibleAccountStatus`, `CompatibleConnectionInput`, `CompatibleModelInput` (`memory-agent/compatible-config`). 명령과 `test`·`discover`의 답은 앱 API 계약(`memory-agent/app-api`)의 `CompatibleAccountCommand`, `CompatibleTestResult`, `CompatibleModelList`로 encode·decode한다
 
 ## Invariants
 
-- 호환 클라이언트 요청 본문에는 항상 `provider: "openai-compatible"`이 들어간다. 본문이 없으면 GET `/api/accounts?provider=openai-compatible`(operation `list`)이고, 있으면 POST `/api/accounts`에 `CompatibleAction` JSON을 보낸다.
+- 호환 클라이언트 요청 본문에는 항상 `provider: "openai-compatible"`이 들어간다. 본문이 없으면 GET `/api/accounts?provider=openai-compatible`(operation `list`)이고, 있으면 POST `/api/accounts`에 `CompatibleAccountCommand` JSON을 보낸다.
 - 응답 처리 순서는 다음과 같다. HTTP 409는 `PartialWrite`(키·설정이 일부만 저장됐을 수 있으니 목록 새로고침을 안내), 그 밖의 non-ok는 `RequestRejected`, JSON 파싱이나 스키마 디코딩 실패는 `InvalidResponse`, fetch 실패는 status 0의 `TransportFailed`다. 거부된 응답 본문은 읽지 않는다.
 - `compatibleErrorMessage`는 업스트림 본문을 보여 주지 않는다. `CompatibleRequestFailed`가 아니면 일반 문구를 쓰고, `RequestRejected`이면서 상태가 400/404/502일 때만 고정 문구를 쓴다.
-- 계정을 바꾸는 호환 명령(`CompatibleAccountChange`)은 응답으로 전체 `CompatibleAccountsView` 목록을 돌려준다(주석). `test`는 `{ok:true}`, `discover`는 `{models:[{id}]}`로 디코딩한다.
+- 계정을 바꾸는 호환 명령(`CompatibleAccountChange`)은 응답으로 전체 `CompatibleAccountsView` 목록을 돌려준다(주석). `test`는 `{ok:true}`(`CompatibleTestResult`), `discover`는 `{models:[{id}]}`(`CompatibleModelList`)로 디코딩한다.
 - 요청 Effect는 `Effect.abortSignal`을 fetch에 넘기고 `Effect.scoped`로 감싼다.
 - `providerLabels`는 `satisfies Record<ProviderId, string>`이다. `ProviderId`를 추가하면 라벨도 함께 추가해야 한다.
 - `effortChoices`: 노력 목록이 1개 이하인 `openai-compatible` 모델은 선택지를 내지 않는다(서버 기본값만 있음). 호환 모델의 `default`는 '서버 기본값'으로 표시한다.

@@ -1,11 +1,18 @@
 import { type Context, Duration, Effect, Layer } from "effect";
-import { HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http";
+import {
+  HttpEffect,
+  HttpRouter,
+  HttpServer,
+  HttpServerRequest,
+  HttpServerResponse,
+} from "effect/http";
 import { HttpApiBuilder } from "effect/http-api";
 import { type AgentChat, BtwApiHandlers, type BtwChat, ChatApiHandlers } from "memory-agent";
-import { AppApi } from "memory-agent/app-api";
+import { AppApi, NoStore } from "memory-agent/app-api";
 import { ChatApi, SameSite } from "memory-agent/chat-api";
 import { agent } from "./agent.ts";
 import { ProjectsApiHandlers } from "./api/projects.ts";
+import { AccountsApiHandlers, AuthApiHandlers, ModelsApiHandlers } from "./api/providers.ts";
 import { SettingsApiHandlers } from "./api/settings.ts";
 import { crossSiteRefusal } from "./http.ts";
 
@@ -21,6 +28,13 @@ const SameSiteLive = Layer.succeed(SameSite, (httpEffect) =>
   }),
 );
 
+/** Every answer of a `NoStore` group carries `Cache-Control: no-store`, refusals included. */
+const NoStoreLive = Layer.succeed(NoStore, (httpEffect) =>
+  HttpEffect.withPreResponseHandler(httpEffect, (_request, response) =>
+    Effect.succeed(HttpServerResponse.setHeader(response, "Cache-Control", "no-store")),
+  ),
+);
+
 /** The chat API's routes, answered by the agent whose services `services` gives. */
 export const chatApiRoutes = <E>(
   services: Effect.Effect<Context.Context<AgentChat | BtwChat>, E>,
@@ -34,8 +48,16 @@ export const chatApiRoutes = <E>(
 
 /** The app API's routes (`memory-agent/app-api`), answered by the agent's services. */
 const appApiRoutes = HttpApiBuilder.layer(AppApi).pipe(
-  Layer.provide(Layer.mergeAll(SettingsApiHandlers, ProjectsApiHandlers)),
-  Layer.provide(SameSiteLive),
+  Layer.provide(
+    Layer.mergeAll(
+      SettingsApiHandlers,
+      ProjectsApiHandlers,
+      AuthApiHandlers,
+      AccountsApiHandlers,
+      ModelsApiHandlers,
+    ),
+  ),
+  Layer.provide(Layer.merge(SameSiteLive, NoStoreLive)),
   Layer.provide(Layer.effectContext(agent.contextEffect)),
   Layer.provide(HttpServer.layerServices),
 );

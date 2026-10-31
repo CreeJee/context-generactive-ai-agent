@@ -1,5 +1,6 @@
 import { HttpApi } from "effect/http-api";
 import { ProjectsGroup, projectsRefusals } from "./app-api/projects.ts";
+import { AccountsGroup, AuthGroup, ModelsGroup, providersRefusals } from "./app-api/providers.ts";
 import { SettingsGroup, settingsRefusals } from "./app-api/settings.ts";
 import { refusalStatusIn } from "./refusal.ts";
 
@@ -8,13 +9,22 @@ import { refusalStatusIn } from "./refusal.ts";
  * page. Each group is a module of `app-api/`. This module imports no server code, so the browser
  * bundle can use it.
  */
-export class AppApi extends HttpApi.make("app").add(SettingsGroup).add(ProjectsGroup) {}
+export class AppApi extends HttpApi.make("app")
+  .add(SettingsGroup)
+  .add(ProjectsGroup)
+  .add(AuthGroup)
+  .add(AccountsGroup)
+  .add(ModelsGroup) {}
 
 /**
  * The HTTP status an app API refusal is answered with. A code has one status across the groups, so
- * the page reads it from the refusal alone.
+ * the page reads it from the refusal alone; `auth_failed` alone has two, told apart by its reason.
  */
-export const appRefusalStatus = refusalStatusIn([...settingsRefusals, ...projectsRefusals]);
+export const appRefusalStatus = refusalStatusIn([
+  ...settingsRefusals,
+  ...projectsRefusals,
+  ...providersRefusals,
+]);
 
 export {
   ConversationSettings,
@@ -36,4 +46,19 @@ export {
   ProjectKanbanSettings,
   ProjectSettings,
 } from "./app-api/projects.ts";
+export {
+  CompatibleAccountCommand,
+  CompatibleModelList,
+  CompatibleTestResult,
+  ModelCatalogView,
+  SubscriptionAccountCommand,
+} from "./app-api/providers.ts";
 export { FolderPick } from "../projects/contracts.ts";
+export {
+  SubscriptionAccountsView,
+  SubscriptionQuotaReport,
+  type AccountLoginState,
+  type OAuthProfile,
+} from "../oauth/contracts.ts";
+export { ProviderAuthState } from "../providers/contracts.ts";
+export { NoStore } from "./no-store.ts";

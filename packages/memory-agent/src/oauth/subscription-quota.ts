@@ -11,8 +11,13 @@ import {
   Schema,
 } from "effect";
 import { ChildProcessSpawner } from "effect/process";
-import { SubscriptionAccountProvider } from "../providers/contracts.ts";
+import type { SubscriptionAccountProvider } from "../providers/contracts.ts";
 import { OAuthProfiles } from "./accounts.ts";
+import {
+  SubscriptionQuotaStatus,
+  type SubscriptionQuotaReport,
+  type SubscriptionQuotaWindow,
+} from "./contracts.ts";
 import {
   anthropicSubscriptionUsage,
   openAiSubscriptionUsage,
@@ -20,58 +25,13 @@ import {
 } from "./subscription-usage-probe.ts";
 import { OAuthKeychain, type OAuthHarnessError } from "./validation-harness.ts";
 
-/**
- * A provider-reported window. `usedPercent` is the provider's own percentage of this named window,
- * never a count of local responses or tokens.
- */
-export const SubscriptionQuotaWindow = Schema.Struct({
-  name: Schema.String,
-  usedPercent: Schema.Finite,
-  windowSeconds: Schema.NullOr(Schema.Finite),
-  resetsAt: Schema.NullOr(Schema.String),
-});
-export type SubscriptionQuotaWindow = typeof SubscriptionQuotaWindow.Type;
-
-/**
- * Why no quota can be shown. `credential_expired`: the stored token has expired and a quota lookup
- * does not refresh it; a model request with the account renews it. `lookup_failed`: the provider
- * lookup failed and no earlier observation exists.
- */
-export const SubscriptionQuotaUnavailableReason = Schema.Literals([
-  "credential_expired",
-  "lookup_failed",
-]);
-export type SubscriptionQuotaUnavailableReason = typeof SubscriptionQuotaUnavailableReason.Type;
-
-/** `stale` keeps the last observation and when the newer lookup failed; it is never reset to zero. */
-export const SubscriptionQuotaStatus = Schema.TaggedUnion({
-  observed: {
-    windows: Schema.Array(SubscriptionQuotaWindow),
-    observedAt: Schema.String,
-  },
-  stale: {
-    windows: Schema.Array(SubscriptionQuotaWindow),
-    observedAt: Schema.String,
-    failedAt: Schema.String,
-  },
-  unavailable: { reason: SubscriptionQuotaUnavailableReason },
-});
-export type SubscriptionQuotaStatus = typeof SubscriptionQuotaStatus.Type;
-
-export const SubscriptionAccountQuota = Schema.Struct({
-  accountId: Schema.String,
-  label: Schema.String,
-  selected: Schema.Boolean,
-  quota: SubscriptionQuotaStatus,
-});
-export type SubscriptionAccountQuota = typeof SubscriptionAccountQuota.Type;
-
-export const SubscriptionQuotaReport = Schema.Struct({
-  provider: SubscriptionAccountProvider,
-  checkedAt: Schema.String,
-  accounts: Schema.Array(SubscriptionAccountQuota),
-});
-export type SubscriptionQuotaReport = typeof SubscriptionQuotaReport.Type;
+export {
+  SubscriptionAccountQuota,
+  SubscriptionQuotaReport,
+  SubscriptionQuotaStatus,
+  SubscriptionQuotaUnavailableReason,
+  SubscriptionQuotaWindow,
+} from "./contracts.ts";
 
 export class SubscriptionQuotaError extends Schema.TaggedError<
   SubscriptionQuotaError,

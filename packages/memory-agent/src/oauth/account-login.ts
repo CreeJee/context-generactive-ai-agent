@@ -17,6 +17,7 @@ import {
   OAuthProfiles,
   type ProfileCredentialStore,
 } from "./accounts.ts";
+import type { AccountLoginState as AccountLoginStateCases } from "./contracts.ts";
 import { providerProtocols, type OAuthProvider } from "./protocol.ts";
 import {
   createSubscriptionOAuthClient,
@@ -38,13 +39,7 @@ interface Attempt {
   /** Done once the attempt has finished either way. */
   readonly settled: Deferred.Deferred<void>;
 }
-/** Where a provider's add-account login stands, as the account page shows it. */
-export type AccountLoginState = Data.TaggedEnum<{
-  idle: {};
-  completed: {};
-  pending: { readonly authorizationUrl: string };
-  error: { readonly error: "login_failed" | "credential_unavailable" };
-}>;
+export type AccountLoginState = AccountLoginStateCases;
 export const AccountLoginState = Data.taggedEnum<AccountLoginState>();
 
 type LoginEntry = Data.TaggedEnum<{

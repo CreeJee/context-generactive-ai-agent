@@ -19,8 +19,8 @@
 - `PendingLifecycle` / `SessionArchiveResult` — 끝나지 않은 수명주기 변경(`waiting_for_stop`, `blocked{blocker}`)의 타입과, 완료(현재 Session 포함) 또는 pending인 보관·복원 결과의 타입이다
 - `ResumeTaskResult` / `ArchiveTaskResult` / `SessionSnapshot` — work trace 작업 재개·보관 결과와 세션 스냅샷의 `Schema.TaggedUnion`/`Schema.Struct` 디코더다(`decode*`도 함께 있다)
 - `FolderPick` — 폴더 선택 창의 답(`picked{root}` | `cancelled` | `unavailable`) `Schema.TaggedUnion`이다. `memory-agent/app-api`의 계약을 다시 내보낸다
-- `ProviderAuthState` — `/api/auth`의 공급자 연결 상태 TaggedEnum이다. 변형은 `signed-out`, `pending{authUrl}`, `signed-in{planType?}`, `error{message, code?, operation?, httpStatus?, providerCode?, credentialStage?, transportCode?, proxyRoute?}`이다
-- `AccountsView` / `AccountAction` — 한 공급자의 OAuth 프로필 목록과 pending login 타입(비밀값 제외)이다. 계정 동작 유니온은 `intent`가 add, cancel, select, remove, rename 중 하나다
+- `ProviderAuthState` — `/api/auth`의 공급자 연결 상태 TaggedEnum이다. 타입은 계약(`memory-agent/app-api`의 `ProviderAuthState`)에서 꺼내고 `Data.taggedEnum` 생성자를 붙인다. 변형은 `signed-out`, `pending{authUrl}`, `signed-in{planType?}`, `error{message, code?, operation?, httpStatus?, providerCode?, credentialStage?, transportCode?, proxyRoute?}`이다
+- `AccountsView` / `AccountAction` — 한 공급자의 OAuth 프로필 목록과 pending login(비밀값 제외, 계약의 `SubscriptionAccountsView`), 그리고 계약의 `SubscriptionAccountCommand`에서 `provider`를 뺀 계정 동작 유니온이다. `intent`는 add, cancel, select, remove, rename 중 하나다
 - `KanbanView` — `{active:false}` 또는 `{active:true} & KanbanBoardView`인 세션 Goal 칸반 상태다
 - `BoardEdit` / `BoardIntent` / `DecisionAnswer` — memory-agent 타입에서 `Data.taggedEnum`으로 만든 생성자·matcher다. 페이지가 서버로 보낼 때 쓴다
 - `KagiCommand` / `ImportCommand` / `EmbeddingCommand` — `/api/settings/kagi`, `/api/settings/imports`, `/api/settings/embedding` 명령 TaggedEnum이다. 비공개 `ImageSettingsCommand`, `ExternalAgentCommand`, `KanbanCommand`도 같은 방식으로 정의된다

@@ -193,6 +193,7 @@ describe("sidebar disclosures", () => {
                   provider: "openai",
                   auth: ProviderAuthState["signed-in"]({ provider: "openai" }),
                   view: {
+                    _tag: "subscription",
                     profiles: [
                       { id: "a", provider: "openai", label: "개인", selected: true, createdAt: 1 },
                     ],
@@ -217,6 +218,7 @@ describe("sidebar disclosures", () => {
                   provider: "anthropic",
                   auth: ProviderAuthState["signed-in"]({ provider: "anthropic" }),
                   view: {
+                    _tag: "subscription",
                     profiles: [
                       {
                         id: "c",

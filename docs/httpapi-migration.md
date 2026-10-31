@@ -92,6 +92,14 @@
   - 계약 Schema는 `kanban/contracts.ts`(`ProtectedBranches`, `DecisionAnswer`, `DecisionCloseReason`, `DecisionState`, `HumanDecisionRequest`, `DecisionInboxItem`)와 `workflow/contracts.ts`(`PlanStatus`, `PlanSummary`, `ProjectBoard`)에 둔다. 1-4의 세션 결정·보드도 이것을 쓴다.
   - 칸반 실패는 `kanban-failures.ts`의 `kanbanRefusal` 표(tag별 refusal)로 답한다. handler가 낼 수 있는 tag만 `Effect.catchTags`에 넘겨 endpoint마다 선언한 code와 맞춘다. RR 라우트용 `kanbanFailureResponse`는 1-4에서 지운다.
 - 프로젝트 trace(`projects.$project.trace`, `trace.tasks.$task`)는 1-4로 넘긴다 (2026-10-31). `AgentChat`의 trace 메서드가 HTTP `Response`를 직접 만들고, 세션 trace와 같은 메서드·타입(`TraceTreeSnapshot`, `TraceTaskDetail`)을 쓴다. 메서드가 값과 tagged 실패를 돌려주게 바꾸는 일은 두 쪽을 한 번에 한다.
+- 1-3 결과 (2026-10-31): `auth`, `accounts`, `accounts.quota`, `models.*`를 `app-api/providers.ts`의 `AuthGroup`·`AccountsGroup`·`ModelsGroup`으로 옮겼다.
+  - 계약 Schema는 `oauth/contracts.ts`(`OAuthProfile`, `AccountLoginState`, `SubscriptionAccountsView`, 쿼터 Schema)와 `providers/contracts.ts`의 `ProviderAuthState`에 둔다. 서버의 `AuthConnectionState`도 같은 필드의 비공개 TaggedUnion에서 타입을 꺼낸다.
+  - `/api/accounts`는 지금처럼 provider마다 연결 종류로 tag한 view를 답하는 endpoint 하나다. facade는 구독 view만 받는다(`Schema.is(SubscriptionAccountsView)`). 호환 엔드포인트 client(`compatible-client.ts`)는 자체 fetch와 실패 분류를 그대로 쓰고, 명령과 결과 Schema만 계약에서 가져온다.
+  - `no-store`는 `NoStore` middleware다. HttpApi middleware는 거부를 encode하기 전에 돌므로 응답을 map하면 거부에는 붙지 않는다. 그래서 `HttpEffect.withPreResponseHandler`로 붙인다.
+  - 응답이 바뀐 곳: 호환 엔드포인트의 502 `provider_unavailable`은 `endpoint_unavailable`이다. auth·models의 404 `provider_unavailable`과 code 하나에 status 하나라는 규칙이 부딪쳤고, 페이지는 이 본문을 읽지 않는다. models `list`의 401 `auth`는 `/api/auth`처럼 `authUrl`을 쓴다. `auth_failed`는 502와 504(`reason: auth_status_timeout`) 둘이라, reason이 정해진 504를 먼저 선언한다.
+  - 계약에 맞지 않는 query·payload(전에는 `invalid_provider`, `invalid_intent`, `invalid_selection`, `invalid_account_action`)는 HttpApi의 빈 400이다. facade는 같은 code를 `appCall`의 invalid code로 준다.
+  - client 메서드는 union payload를 case별로 받으므로 facade가 `Match.discriminatorsExhaustive("intent")`로 나눠 부른다. 계약의 명령 union은 member마다 intent가 하나다.
+  - 찾은 문제: ACP bridge(`acp/app-api.ts`의 `auth`)는 `/api/auth`를 provider 없이 부른다. 옛 라우트도 400 `invalid_provider`로 답했으므로 실제 앱에서는 `session/new`가 늘 실패한다. 테스트용 앱(`tests/agents/app-fetch.ts`)은 첫 provider로 답해 이것을 가린다. 어느 provider를 볼지 정해야 고칠 수 있어 남겼다.
 - SSE는 `HttpApiSchema.StreamSse`로 옮긴다. 첨부 업로드(`Content-Length`를 본문보다 먼저 검사)와 다운로드(바이트와 immutable 헤더)가 HttpApi로 같게 안 되면 RR 라우트로 남기고 이유를 적는다.
 
 ### 1-7. 정리

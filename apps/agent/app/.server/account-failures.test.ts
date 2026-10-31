@@ -1,45 +1,33 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
 import { OAuthProfileRejected, OAuthProfileStoreFailed } from "memory-agent";
-import { answerAccountFailures } from "./account-failures";
-import { answerDefect } from "./http";
+import { accountRefusal } from "./account-failures";
 
-const answered = (response: Response) =>
-  Effect.map(
-    Effect.promise(() => response.text()),
-    (body) => ({ status: response.status, body }),
-  );
-
-describe("account route failures", () => {
-  it.effect("answers a typed profile rejection by its reason", () =>
+describe("account failures", () => {
+  it.effect("refuses a typed profile rejection with its reason", () =>
     Effect.gen(function* () {
-      const response = yield* Effect.fail(
+      const refused = yield* Effect.fail(
         OAuthProfileRejected.make({ reason: "oauth_profile_in_use" }),
-      ).pipe(Effect.as(Response.json({})), answerAccountFailures);
-      expect(yield* answered(response)).toEqual({
-        status: 409,
-        body: '{"error":"oauth_profile_in_use"}',
-      });
+      ).pipe(
+        Effect.catchTags({ OAuthProfileRejected: accountRefusal.OAuthProfileRejected }),
+        Effect.flip,
+      );
+      expect(refused).toStrictEqual({ error: "oauth_profile_in_use" });
     }),
   );
 
-  it.effect("answers a keychain failure and a defect with fixed codes, never their text", () =>
+  it.effect("refuses a keychain failure with a fixed code, never its text", () =>
     Effect.gen(function* () {
-      const rejected = yield* Effect.fail(
+      const refused = yield* Effect.fail(
         OAuthProfileStoreFailed.make({
           operation: "keychain",
           cause: new Error("keychain item /Users/someone/token"),
         }),
-      ).pipe(Effect.as(Response.json({})), answerAccountFailures);
-      expect(yield* answered(rejected)).toEqual({
-        status: 503,
-        body: '{"error":"account_store_unavailable"}',
-      });
-      const defect = yield* Effect.die(new Error("SQLITE_CORRUPT /Users/someone/agent.db")).pipe(
-        Effect.as(Response.json({})),
-        answerDefect,
+      ).pipe(
+        Effect.catchTags({ OAuthProfileStoreFailed: accountRefusal.OAuthProfileStoreFailed }),
+        Effect.flip,
       );
-      expect(yield* answered(defect)).toEqual({ status: 500, body: '{"error":"internal_error"}' });
+      expect(refused).toStrictEqual({ error: "account_store_unavailable" });
     }),
   );
 });

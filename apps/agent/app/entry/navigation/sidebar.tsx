@@ -110,7 +110,7 @@ export function ModelSection({
   selection,
   onSelect,
 }: {
-  models: ProviderModel[];
+  models: ReadonlyArray<ProviderModel>;
   selection: ModelSelection | null;
   onSelect: (model: string, reasoningEffort?: string) => void;
 }) {

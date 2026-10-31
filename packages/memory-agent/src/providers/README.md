@@ -10,7 +10,8 @@
 - `providerConnection` / `ProviderConnection` / `NativeToolSupport` — 공급자 ID를 `subscription` 또는 `compatible-endpoint` 연결과 네이티브 도구 지원 여부로 한 번에 해석하는 TaggedUnion
 - `ModelSelection` / `SubscriptionModelSelection` / `ProviderModel` / `ModelCapabilities` / `CacheRetention` — 공급자+모델+reasoningEffort 선택, 카탈로그 모델, 입력 모달리티·도구 호출·추론 능력 스키마
 - `ProviderUnavailable` / `ModelUnavailable` / `ProviderOperationFailed` — 공급자 계층 TaggedError(operation: auth|catalog|model)
-- `AuthConnectionState` / `AuthStatus` / `AuthProvider` — signed-out|pending|signed-in|error 로그인 상태 TaggedEnum과 status/connect/cancel/disconnect 인증 수명주기 인터페이스
+- `AuthConnectionState` / `AuthStatus` / `AuthProvider` — signed-out|pending|signed-in|error 로그인 상태 TaggedEnum과 status/connect/cancel/disconnect 인증 수명주기 인터페이스. 타입은 비공개 TaggedUnion Schema에서 꺼낸다
+- `ProviderAuthState` — 브라우저가 받는 `AuthConnectionState` Schema. pending의 `authorizationUrl`이 `authUrl`이다
 - `ModelCatalog` / `AgentModelRuntime` / `RunModel` / `ModelRun` / `ShownFailure` / `ProviderConfiguration` / `ProviderServices` — 모델 목록·선택, 런 단위 Effect AI 모델 생성(Scope 필요), 컨텍스트 창, 사용자 표시용 실패 계약
 - `ActiveProvider` — GlobalConfig와 ProviderRegistry로 저장된 공급자/모델을 resolve하고 models/runtime/auth/authFor를 제공하는 Context.Service(`ActiveProvider.layer`)
 - `ProviderRegistry` / `ProviderRegistryApi` / `providerRegistryFrom` — 공급자별 configuration·runtime 조회 레지스트리 서비스(registry.ts; 시그니처만 확인)

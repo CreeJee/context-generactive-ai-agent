@@ -14,6 +14,7 @@ import {
 import { SqlClient, type SqlError } from "effect/sql";
 import { isTruthy } from "../truthy.ts";
 import { SubscriptionAccountProvider } from "../providers/contracts.ts";
+import type { OAuthProfile } from "./contracts.ts";
 import type { OAuthProvider } from "./protocol.ts";
 import {
   OAuthKeychain,
@@ -24,13 +25,7 @@ import {
   type StoredCredential,
 } from "./validation-harness.ts";
 
-export interface OAuthProfile {
-  readonly id: string;
-  readonly provider: OAuthProvider;
-  readonly label: string;
-  readonly selected: boolean;
-  readonly createdAt: number;
-}
+export { OAuthProfile } from "./contracts.ts";
 
 type ProfileCredentialFailure = OAuthHarnessError | OAuthProfileIdRejected;
 

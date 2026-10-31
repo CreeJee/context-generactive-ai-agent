@@ -21,14 +21,15 @@ memory-agent의 프로바이더/런 계층은 `OAuthProfiles`·`OAuthAccountLogi
 - `OAuthHarnessError` (`fromCode("not_connected"|"cancelled"|"login_in_progress"...)`), `OAuthProfileIdRejected` — OAuth 하네스 오류와 프로필 id 거부 오류
 - `CredentialStore`, `StoredCredential` / `StoredCredentialSchema`, `createKeychainCredentialStore`, `LoginAttempt`, `OAuthConnectionStatus`, `SubscriptionClientFailure` — 자격 증명 저장소 계약과 로그인 시도·연결 상태 타입
 - `OAuthProfiles` — SQLite 기반 프로필 서비스. list/snapshot/committed/publish/select/remove/acquireRun/whileRemoving를 제공한다
-- `OAuthProfile`, `OAuthProfileRejected`(reason 리터럴 7종), `OAuthProfileStoreFailed`(operation: database|keychain) — 프로필 모델과 오류
+- `OAuthProfile`, `OAuthProfileRejected`(reason 리터럴 7종), `OAuthProfileStoreFailed`(operation: database|keychain) — 프로필 모델과 오류. `OAuthProfile` Schema는 `contracts.ts`에 있고 `accounts.ts`가 다시 내보낸다
 - `ProfileCredentialStore` / `createProfileCredentialStore(open)` — 프로필 id별 keychain slot에 read/write/remove를 위임하는 어댑터
 - `OAuthAccountLogins` (+`.layer`, `OAuthProfiles` 필요) / `createOAuthAccountLoginManager` — 계정 페이지의 계정 추가 로그인 관리자. profiles/start/cancel/settled를 제공한다
-- `AccountLoginState` — idle/completed/pending{authorizationUrl}/error{login_failed|credential_unavailable} TaggedEnum
+- `AccountLoginState` — idle/completed/pending{authorizationUrl}/error{login_failed|credential_unavailable} TaggedEnum. 타입은 `contracts.ts`의 Schema에서 꺼내고, `account-login.ts`가 `Data.taggedEnum` 생성자를 붙인다
 - `createAccountBoundSubscriptionClients` / `AccountLoginFailure` — 선택된 계정에 묶인 클라이언트 묶음. catalogKey, forRun(Scope), client{status, modelCatalog, startLogin, disconnect}를 반환한다
 - `createChunkedPasswordEntry` / `PasswordEntry` / `OpenPasswordEntry` / `CredentialFragmentsFailed` / `ChunkedPasswordFailure` — OS vault 크기 제한을 넘는 비밀번호를 조각으로 나눠 저장하는 엔트리
 - `prepareAnthropicValidationBody` — `EffectFunction.dual`(sessionId, serializedBody). Anthropic 요청 본문에 Claude Code billing/identity system 블록과 metadata.user_id를 넣고 필요한 beta 목록을 반환한다
-- `SubscriptionQuota`, `SubscriptionUsage` (Context.Service), `SubscriptionQuotaError`, 스키마 `SubscriptionQuotaReport`/`SubscriptionQuotaStatus`/`SubscriptionQuotaWindow`/`SubscriptionAccountQuota`/`SubscriptionQuotaUnavailableReason` — 구독 쿼터 조회 서비스와 보고 스키마(`subscription-quota.ts`)
+- `SubscriptionQuota`, `SubscriptionUsage` (Context.Service), `SubscriptionQuotaError`, 스키마 `SubscriptionQuotaReport`/`SubscriptionQuotaStatus`/`SubscriptionQuotaWindow`/`SubscriptionAccountQuota`/`SubscriptionQuotaUnavailableReason` — 구독 쿼터 조회 서비스와 보고 스키마. 서비스는 `subscription-quota.ts`, 스키마는 `contracts.ts`에 있고 `subscription-quota.ts`가 다시 내보낸다
+- `contracts.ts` — `/api/accounts`·`/api/accounts/quota`가 브라우저로 보내는 Schema(`OAuthProfile`, `AccountLoginState` 타입, `SubscriptionAccountsView`, 쿼터 스키마). 서버 코드를 import하지 않아 브라우저 번들이 쓴다
 - `anthropicSubscriptionUsage`, `anthropicSubscriptionUsageProbe`, `openAiSubscriptionUsage`, `SubscriptionUsageCredentialExpired`, `SubscriptionUsageProbe`, `SubscriptionUsageWindow` — 프로바이더별 사용량 조회(`subscription-usage-probe.ts`)
 - `parseWindowsProxy`, `classifyWindowsProxyOutput`, `windowsTokenProxy`, `fetchOpenAiTokenViaSystemProxy` — Windows 시스템 프록시를 해석하고 그 프록시로 OpenAI 토큰을 요청한다(`windows-token-proxy.ts`)
 - 하위 디렉터리 없음
