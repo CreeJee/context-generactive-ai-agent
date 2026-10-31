@@ -1,6 +1,6 @@
 ---
 name: "code-skill-writing"
-description: "How to write a good project code skill, ts or sh. Read this before the first save_code_skill call in a conversation, and whenever you are about to add a code skill next to similar ones already listed."
+description: "How to write a project code skill (ts or sh). Read before the first save_code_skill call in a conversation, and before adding one next to similar listed skills."
 ---
 
 # Writing code skills

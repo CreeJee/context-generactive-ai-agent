@@ -1,6 +1,6 @@
 ---
 name: "app-settings"
-description: "Where this app (context-agent) keeps its own settings: external ACP agents, MCP servers, skills, the model and web search. Read before adding or changing any of them, or when the user asks where a setting lives."
+description: "Where this app (context-agent) keeps its settings: external ACP agents, MCP servers, skills, the model, web search. Read before adding or changing one, or when asked where a setting lives."
 ---
 
 # This app's settings

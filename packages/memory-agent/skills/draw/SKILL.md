@@ -1,6 +1,6 @@
 ---
 name: "draw"
-description: "Draw diagrams, charts, wireframes and icons as SVG written straight into the project. Use when the user asks for an architecture or sequence diagram, a flow chart, a bar/line chart, a UI wireframe, an icon or a logo mark, or any figure whose shapes and text are known. Do not use for photographs, illustrations, textures or sprites: those need a generative image model, which this app does not have."
+description: "Draw figures as SVG files in the project: architecture or sequence diagrams, flow charts, bar/line charts, UI wireframes, icons, logo marks, anything whose shapes and text are known. Not for photographs, illustrations, textures or sprites: those need image generation, not SVG."
 ---
 
 # Drawing
