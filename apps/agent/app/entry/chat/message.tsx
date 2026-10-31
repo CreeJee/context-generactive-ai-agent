@@ -5,7 +5,8 @@ import { SchemaTransformation } from "effect";
 import { Data, DateTime, Option, Schema } from "effect";
 import { BotIcon, BrainIcon, Clock3Icon, WrenchIcon } from "lucide-react";
 import type { TraceTaskView } from "memory-agent";
-import { memo, useState, type ComponentProps, type ReactNode } from "react";
+import type { HighlightOptions, HighlightResult } from "@streamdown/code";
+import { memo, useEffect, useState, type ComponentProps, type ReactNode } from "react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -41,9 +42,8 @@ import {
 } from "~/components/ui/trace";
 import type { ChatMessage, MessagePart } from "memory-agent/chat-api";
 import { attachmentIdOf, attachmentUrl, type QueuedMessage } from "memory-agent/definitions";
-import { useHighlightedCode } from "~/hooks/use-highlighted-code";
 import { DrawingPicture, UserMessageBody } from "./images";
-import { Markdown } from "./markdown";
+import { codeHighlighter, Markdown } from "./markdown";
 import { failureLabel } from "../session/attempt-failure";
 import { taskForToolCall, type TraceConnection } from "../session/work-trace";
 
@@ -92,19 +92,55 @@ function toolLabel(name: string) {
   );
 }
 
-/** Tool text as shown: JSON indented and highlighted as JSON, anything else as it came. */
-function pretty(text: string) {
+declare module "react" {
+  interface CSSProperties {
+    /** A highlighted token's colors; the `code-token` utility picks one for the theme. */
+    readonly "--token-light"?: string;
+    readonly "--token-dark"?: string;
+  }
+}
+
+type HighlightLanguage = HighlightOptions["language"];
+
+/** Tool text as shown, and the language it is highlighted as; null leaves it plain. */
+interface ToolText {
+  readonly value: string;
+  readonly language: HighlightLanguage | null;
+}
+
+/** JSON indented and highlighted as JSON, anything else plain as it came. */
+function pretty(text: string): ToolText {
   try {
     return { value: JSON.stringify(JSON.parse(text), null, 2), language: "json" };
   } catch {
-    return { value: text, language: "text" };
+    return { value: text, language: null };
   }
+}
+
+/**
+ * Shiki tokens for `text` from the highlighter answers use. Null for plain text, and until the
+ * language has loaded.
+ */
+function useHighlight(text: string, language: HighlightLanguage | null) {
+  const [highlighted, setHighlighted] = useState<{
+    readonly text: string;
+    readonly result: HighlightResult;
+  } | null>(null);
+  useEffect(() => {
+    if (language === null) return;
+    const ready = codeHighlighter.highlight(
+      { code: text, language, themes: codeHighlighter.getThemes() },
+      (result) => setHighlighted({ text, result }),
+    );
+    if (ready !== null) setHighlighted({ text, result: ready });
+  }, [text, language]);
+  return highlighted?.text === text ? highlighted.result : null;
 }
 
 /** A tool call's arguments or result in a code block that can be copied. */
 function ToolCode({ title, text, failed }: { title: ReactNode; text: string; failed: boolean }) {
   const { value, language } = pretty(text);
-  const lines = useHighlightedCode(value, language);
+  const highlighted = useHighlight(value, language);
   return (
     <CodeBlock size="sm" variant={failed ? "destructive" : "default"}>
       <CodeBlockHeader>
@@ -114,9 +150,28 @@ function ToolCode({ title, text, failed }: { title: ReactNode; text: string; fai
         </CodeBlockActions>
       </CodeBlockHeader>
       <CodeBlockContent wrap className="max-h-64">
-        {lines.map((line, index) => (
-          <CodeBlockLine key={index}>{line}</CodeBlockLine>
-        ))}
+        {highlighted === null
+          ? value
+          : highlighted.tokens.map((line, index) => (
+              <CodeBlockLine key={index}>
+                {line.map((token, at) => {
+                  // Shiki puts the light color in `color` and the dark one in `--shiki-dark`.
+                  const light = token.htmlStyle?.color ?? token.color;
+                  return (
+                    <span
+                      key={at}
+                      className="code-token"
+                      style={{
+                        "--token-light": light,
+                        "--token-dark": token.htmlStyle?.["--shiki-dark"] ?? light,
+                      }}
+                    >
+                      {token.content}
+                    </span>
+                  );
+                })}
+              </CodeBlockLine>
+            ))}
       </CodeBlockContent>
     </CodeBlock>
   );

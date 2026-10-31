@@ -3502,3 +3502,12 @@
 - CLI 원본을 그대로 두는 범위를 넓혔다. `~/lib/highlighter.tsx`도 anti-slop override에 넣었다. shadcn의 `no-inline-styles`는 ui 폴더와 하이라이터에서 끈다. CodeBlock은 줄 번호 카운터를, 하이라이터는 Shiki 토큰 색을 inline style로 준다.
 - Effect 언어 서비스에는 파일 glob으로 진단을 끄는 설정이 없다. 그래서 `highlighter.tsx` 맨 위에 `// @effect-diagnostics asyncFunction:off` 한 줄만 더했다. 하이라이터는 Shiki를 Promise로 불러온다.
 - Markdown 안의 코드 블록은 그대로 Streamdown의 code 플러그인이 그린다. 스트리밍 중인 답변의 코드 블록과 복사·다운로드 동작을 Streamdown이 이미 맡고 있다.
+
+## 도구 블록도 Streamdown의 하이라이터로 칠하고, CLI가 쓴 코드도 lint를 받는다 (2026-10-31)
+
+- 사용자 결정. 위의 "shadcn CLI가 쓴 코드는 anti-slop lint에서 뺀다"를 되돌린다. 폴더 전체에서 규칙을 끄지 않는다. 루트 `vite.config.ts`의 lint 설정은 그 결정 전으로 돌아갔다. ui 폴더 override는 원래 있던 shadcn `no-restyle`·`no-arbitrary-values`·`require-static-classes` 셋만 끈다.
+- CLI로 받은 파일이 규칙에 걸리면 그 파일을 고친다. `code-block.tsx`는 `typeof` 대신 `Predicate.isString`을 쓰고, 줄 번호 시작값을 `CSSProperties`에 선언한 `--code-block-line-start`로 넘긴다. inline `counterReset`이 없어져 `no-inline-styles`를 끄지 않아도 된다.
+- 위의 "도구 인자와 결과를 shadcn CodeBlock으로 보여 준다"에서 하이라이터 부분을 되돌린다. CLI가 함께 준 `~/hooks/use-highlighted-code`·`~/lib/highlighter.tsx`와 직접 의존성 `shiki`를 지웠다. Streamdown이 이미 Shiki 하이라이터(`@streamdown/code`)를 들고 있다.
+- 답변 Markdown과 도구 블록이 하이라이터 하나를 같이 쓴다. `markdown.tsx`가 `createCodePlugin`으로 만든 `codeHighlighter`를 내보내고, 도구 블록은 그 `highlight()`로 토큰을 받는다. 언어 문법은 한 번만 불러온다.
+- 토큰 색은 `--token-light`·`--token-dark` 사용자 정의 속성으로 넘기고, `app.css`의 `code-token` 유틸리티가 테마에 맞는 쪽을 고른다. 문법을 불러오기 전과 JSON이 아닌 텍스트는 칠하지 않은 글자로 보인다.
+- ui 폴더에서 남은 세 shadcn 규칙까지 켜면 위반이 120개쯤이다(`no-restyle` 77, `no-arbitrary-values` 42, `require-static-classes` 1). 대부분 CLI 원본이고, shadcn lint 문서도 컴포넌트 폴더에서는 `no-restyle`를 끄라고 권한다. 켤지는 따로 정한다.

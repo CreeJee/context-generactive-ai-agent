@@ -10,6 +10,14 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* A Shiki token in a tool code block; the highlighter's two colors arrive as properties. */
+@utility code-token {
+  color: var(--token-light);
+  @variant dark {
+    color: var(--token-dark);
+  }
+}
+
 @theme {
   --font-sans:
     "Inter", ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji",

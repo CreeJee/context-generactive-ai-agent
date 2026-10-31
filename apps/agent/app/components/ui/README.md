@@ -19,8 +19,7 @@
 - `Message`, `MessageGroup`, `MessageAvatar`, `MessageContent`, `MessageHeader`, `MessageFooter` — 채팅 메시지 한 줄의 틀이다. `align="end"`면 오른쪽에 붙고, `MessageContent` 안의 slot 요소도 오른쪽으로 민다
 - `Bubble`, `BubbleGroup`, `BubbleContent`, `BubbleReactions` — 말풍선이다. variant는 default/secondary/muted/tinted/outline/ghost/destructive이고, 색은 안쪽 `BubbleContent`에 입힌다
 - `Trace`, `TraceLine`, `TraceIcon`, `TraceTitle`, `TraceDescription`, `TraceCollapsible`, `TraceCollapsibleTrigger`, `TraceCollapsibleContent` — 에이전트가 한 일(도구 호출, 추론)을 한 줄씩 보여 준다. `TraceLine`의 `status`는 running(제목에 shimmer)/error/pending이다. 접는 행은 끝에 회전하는 chevron을 붙인다
-- `CodeBlock`, `CodeBlockHeader`, `CodeBlockTitle`, `CodeBlockActions`, `CodeBlockCopyButton`, `CodeBlockContent`, `CodeBlockLine`, `CodeBlockFooter` — 코드·로그 블록이다. variant는 default/destructive, size는 default/sm이다. `CodeBlockContent`의 `wrap`은 긴 줄을 접고, `lineNumbers`는 줄 번호를 단다
-- `useHighlightedCode(value, language)` (`~/hooks/use-highlighted-code`) — Shiki로 칠한 줄 배열을 돌려준다. 하이라이터를 불러오기 전이나 `~/lib/highlighter`의 표에 없는 언어는 칠하지 않은 줄을 준다. 스트리밍 중에는 새 줄만 다시 칠한다
+- `CodeBlock`, `CodeBlockHeader`, `CodeBlockTitle`, `CodeBlockActions`, `CodeBlockCopyButton`, `CodeBlockContent`, `CodeBlockLine`, `CodeBlockFooter` — 코드·로그 블록이다. variant는 default/destructive, size는 default/sm이다. `CodeBlockContent`의 `wrap`은 긴 줄을 접고, `lineNumbers`는 줄 번호를 단다. 칠하기는 하지 않는다. 채팅의 도구 블록은 Streamdown의 하이라이터(`entry/chat/markdown.tsx`의 `codeHighlighter`)로 칠한 토큰을 `CodeBlockLine`에 넣는다
 - `useIsMobile` (`~/hooks/use-mobile`) — 768px 미만인지 `matchMedia`로 따라가는 훅이다. 첫 렌더는 false다
 - `AnimatedNumber` — `motion/react` spring으로 숫자를 `ko-KR` 형식으로 부드럽게 바꿔 보여 준다. 스크린리더용 sr-only 값을 따로 렌더한다
 - `Attachment`, `AttachmentGroup`, `AttachmentMedia`, `AttachmentContent`, `AttachmentTitle`, `AttachmentDescription`, `AttachmentActions`, `AttachmentAction`, `AttachmentTrigger` — 첨부 파일 카드 묶음이다. `state`는 idle/uploading/processing/error/done이고 size·orientation variant를 둔다
@@ -59,8 +58,8 @@
 - `progress`, `toggle`, `toggle-group`, `button-group`은 `shadcn add progress toggle-group button-group`으로 받았다. CLI가 덮어쓴 `separator`는 되돌렸다. `toggle-group.tsx`는 `--gap`을 `CSSProperties`에 선언해 `as` 단언을 없앤 것만 CLI 원본과 다르다
 - `sidebar.tsx`는 CLI 원본과 다음만 다르다. 저장소 lint를 통과하려고 `--sidebar-width`·`--sidebar-width-icon`·`--skeleton-width`를 `CSSProperties`에 선언해 `as` 단언을 없앴다. `setOpen`은 boolean만 받는다. `SidebarMenuButton`의 `tooltip`은 `ReactNode`다. `SidebarSeparator`는 `data-horizontal:w-auto`를 쓴다. 원본의 `w-auto`는 `Separator`의 `data-horizontal:w-full`에 져서 사이드바 밖으로 8px 넘쳤다
 - `message`, `bubble`은 `shadcn add message bubble`로, `trace`는 `shadcn add trace`로 받은 CLI 원본이다. `trace`는 `collapsible`에 의존하고, CLI가 덮어쓴 `collapsible`은 되돌렸다
-- `code-block`, `~/hooks/use-highlighted-code`, `~/lib/highlighter`는 `shadcn add code-block`으로 받았다. 의존성 `shiki`가 catalog에 들어갔고, CLI가 덮어쓴 `button`은 되돌렸다. `highlighter.tsx`는 맨 위의 `@effect-diagnostics asyncFunction:off` 주석만 CLI 원본과 다르다
-- 이 폴더, `~/hooks`, `~/lib/highlighter.tsx`는 anti-slop lint 규칙을 받지 않는다(루트 `vite.config.ts`의 override). shadcn CLI가 쓴 코드를 원본 그대로 두기 위해서다. 이 폴더와 `highlighter.tsx`는 shadcn의 `no-inline-styles`도 받지 않는다. Effect 언어 서비스 진단은 그대로 받는다
+- `code-block`은 `shadcn add code-block`으로 받았다. CLI가 함께 준 `~/hooks/use-highlighted-code`·`~/lib/highlighter`와 의존성 `shiki`는 지웠고, CLI가 덮어쓴 `button`은 되돌렸다. `code-block.tsx`는 저장소 lint를 통과하려고 `typeof` 대신 `Predicate.isString`을 쓰고, 줄 번호 시작값을 inline `counterReset` 대신 `CSSProperties`에 선언한 `--code-block-line-start`로 넘기는 것만 CLI 원본과 다르다
+- 이 폴더는 shadcn의 `no-restyle`·`no-arbitrary-values`·`require-static-classes`만 받지 않는다(루트 `vite.config.ts`의 override). anti-slop 규칙, 나머지 shadcn 규칙, Effect 언어 서비스 진단은 그대로 받는다. CLI로 받은 파일이 규칙에 걸리면 그 파일을 고치고 CLI 원본과 다른 점을 여기에 적는다
 - 클래스 병합은 `cn` 모듈 alias로 하고 variant는 `cva`로 정의한다. 예외로 `data-list.tsx`는 `~/lib/utils`의 `cn`을 쓴다. `field.tsx`, `label.tsx`, `separator.tsx`, `combobox.tsx`는 파일 맨 위에 `"use client"`를 선언한다
 
 ## Side Effects

@@ -87,7 +87,6 @@ catalog:
   # Checks tool call arguments against the JSON Schema the model was sent, as TanStack did with the
   # same validator (packages/memory-agent/src/tools/input-repair.ts).
   "@cfworker/json-schema": 4.1.1
-  shiki: ^4.5.0
 # Effect comes from pkg.pr.new URLs, and @effect/platform-node pulls them in as subdependencies.
 # pnpm has no per-package allowlist, so this stays off until Effect resolves from the registry.
 blockExoticSubdeps: false

@@ -1,9 +1,17 @@
 import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "cn";
+import { Predicate } from "effect";
 
 import { Button } from "~/components/ui/button";
 import { CheckIcon, CopyIcon } from "lucide-react";
+
+declare module "react" {
+  interface CSSProperties {
+    /** The number the first line's counter starts after. */
+    readonly "--code-block-line-start"?: number;
+  }
+}
 
 const codeBlockVariants = cva(
   "group/code-block relative flex w-full min-w-0 flex-col overflow-hidden rounded-md text-sm has-[>[data-slot=code-block-content]:focus-visible]:ring-2 has-[>[data-slot=code-block-content]:focus-visible]:ring-ring/30 data-[size=sm]:text-xs",
@@ -144,9 +152,9 @@ function CodeBlockContent({
       data-numbered={lineNumbers || undefined}
       dir="ltr"
       tabIndex={0}
-      style={{ counterReset: `line ${startLine - 1}`, ...style }}
+      style={{ "--code-block-line-start": startLine - 1, ...style }}
       className={cn(
-        "min-h-0 min-w-0 scroll-fade-x scrollbar-thin overflow-auto px-3 py-3 text-start font-mono leading-relaxed outline-none group-has-data-[slot=code-block-footer]/code-block:pb-2 group-has-data-[slot=code-block-header]/code-block:pt-2 group-data-[size=sm]/code-block:px-2 group-data-[size=sm]/code-block:py-2 group-data-[size=sm]/code-block:group-has-data-[slot=code-block-header]/code-block:pt-1.5 data-wrap:scroll-fade-y data-wrap:wrap-break-word data-wrap:whitespace-pre-wrap",
+        "[counter-reset:line_var(--code-block-line-start)] min-h-0 min-w-0 scroll-fade-x scrollbar-thin overflow-auto px-3 py-3 text-start font-mono leading-relaxed outline-none group-has-data-[slot=code-block-footer]/code-block:pb-2 group-has-data-[slot=code-block-header]/code-block:pt-2 group-data-[size=sm]/code-block:px-2 group-data-[size=sm]/code-block:py-2 group-data-[size=sm]/code-block:group-has-data-[slot=code-block-header]/code-block:pt-1.5 data-wrap:scroll-fade-y data-wrap:wrap-break-word data-wrap:whitespace-pre-wrap",
         className,
       )}
       {...props}
@@ -155,7 +163,7 @@ function CodeBlockContent({
         data-slot="code-block-code"
         className="grid min-h-lh min-w-max content-start in-data-numbered:grid-cols-[auto_1fr] in-data-wrap:min-w-0"
       >
-        {lineNumbers && typeof children === "string"
+        {lineNumbers && Predicate.isString(children)
           ? children
               .replace(/\n$/, "")
               .split("\n")

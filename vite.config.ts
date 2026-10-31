@@ -16,25 +16,6 @@ const agentAndVendoredIgnorePatterns = [
   "lint/anti-slop/**",
 ];
 
-const antiSlopRules = {
-  "anti-slop/no-chained-type-assertions": "error",
-  "anti-slop/no-conditional-empty-object-spread": "error",
-  "anti-slop/no-known-value-widening": "error",
-  "anti-slop/no-module-mocking": "error",
-  "anti-slop/no-object-parameters": "error",
-  "anti-slop/no-reflect-apply": "error",
-  "anti-slop/no-reflect-get": "error",
-  "anti-slop/no-runtime-typeof": "error",
-  "anti-slop/no-shape-in-symbol-names": "error",
-  "anti-slop/no-unknown-parameters": "error",
-  "anti-slop/no-unknown-returns": "error",
-  "anti-slop/no-unknown-type-aliases": "error",
-  "anti-slop/no-unsafe-dictionary-type": "error",
-  "anti-slop/no-widen-then-assert": "error",
-  "anti-slop/require-safety-comment-for-type-assertion": "error",
-  "anti-slop-effect/no-service-constructor-imports": "error",
-} as const;
-
 export default defineConfig({
   resolve: {
     tsconfigPaths: true,
@@ -59,7 +40,22 @@ export default defineConfig({
     ],
     rules: {
       "vite-plus/prefer-vite-plus-imports": "error",
-      ...antiSlopRules,
+      "anti-slop/no-chained-type-assertions": "error",
+      "anti-slop/no-conditional-empty-object-spread": "error",
+      "anti-slop/no-known-value-widening": "error",
+      "anti-slop/no-module-mocking": "error",
+      "anti-slop/no-object-parameters": "error",
+      "anti-slop/no-reflect-apply": "error",
+      "anti-slop/no-reflect-get": "error",
+      "anti-slop/no-runtime-typeof": "error",
+      "anti-slop/no-shape-in-symbol-names": "error",
+      "anti-slop/no-unknown-parameters": "error",
+      "anti-slop/no-unknown-returns": "error",
+      "anti-slop/no-unknown-type-aliases": "error",
+      "anti-slop/no-unsafe-dictionary-type": "error",
+      "anti-slop/no-widen-then-assert": "error",
+      "anti-slop/require-safety-comment-for-type-assertion": "error",
+      "anti-slop-effect/no-service-constructor-imports": "error",
       "shadcn/no-restyle": [
         "error",
         {
@@ -84,23 +80,12 @@ export default defineConfig({
     overrides: [
       {
         // Design-system components own their appearance and may need structural values.
-        // The highlighter colors each token from Shiki's inline style.
-        files: ["apps/agent/app/components/ui/**", "apps/agent/app/lib/highlighter.tsx"],
+        files: ["apps/agent/app/components/ui/**"],
         rules: {
           "shadcn/no-restyle": "off",
           "shadcn/no-arbitrary-values": "off",
           "shadcn/require-static-classes": "off",
-          "shadcn/no-inline-styles": "off",
         },
-      },
-      {
-        // Code the shadcn CLI writes stays as it ships, so `shadcn add --diff` keeps showing upstream changes.
-        files: [
-          "apps/agent/app/components/ui/**",
-          "apps/agent/app/hooks/**",
-          "apps/agent/app/lib/highlighter.tsx",
-        ],
-        rules: Object.fromEntries(Object.keys(antiSlopRules).map((rule) => [rule, "off"])),
       },
     ],
     options: { typeAware: true, typeCheck: true },
