@@ -56,12 +56,19 @@
 - `DropdownMenuSubContent`는 `DropdownMenuContent`를 재사용하고, 기본값으로 side=right, alignOffset=-3, sideOffset=0을 쓴다. Portal과 Positioner 구조를 같이 공유한다
 - 컴포넌트 사이 의존 방향은 다음과 같다. `command`는 `dialog`, `input-group`에 의존한다. `combobox`는 `button`, `input-group`에 의존한다. `attachment`/`dialog`/`sheet`/`input-group`는 `button`에 의존한다. `field`는 `label`, `separator`에 의존한다. `prompt-input`은 `input-group`에, `input-group`은 `input`, `textarea`에, `item`은 `separator`에 의존한다. 모두 `~/components/ui/*` alias로 가져온다
 - `sidebar`는 `button`, `input`, `separator`, `sheet`, `skeleton`, `tooltip`, `~/hooks/use-mobile`에 의존하고, `alert-dialog`는 `button`에 의존한다. 두 파일과 `skeleton`, `use-mobile`은 `shadcn add sidebar alert-dialog`로 받았다. 이미 있던 `button`·`input`·`separator`·`tooltip`·`sheet`는 CLI가 덮어쓴 것을 되돌렸다
-- `progress`, `toggle`, `toggle-group`, `button-group`은 `shadcn add progress toggle-group button-group`으로 받았다. CLI가 덮어쓴 `separator`는 되돌렸다. `toggle-group.tsx`는 `--gap`을 `CSSProperties`에 선언해 `as` 단언을 없앤 것만 CLI 원본과 다르다
-- `sidebar.tsx`는 CLI 원본과 다음만 다르다. 저장소 lint를 통과하려고 `--sidebar-width`·`--sidebar-width-icon`·`--skeleton-width`를 `CSSProperties`에 선언해 `as` 단언을 없앴다. `setOpen`은 boolean만 받는다. `SidebarMenuButton`의 `tooltip`은 `ReactNode`다. `SidebarSeparator`는 `data-horizontal:w-auto`를 쓴다. 원본의 `w-auto`는 `Separator`의 `data-horizontal:w-full`에 져서 사이드바 밖으로 8px 넘쳤다
-- `message`, `bubble`은 `shadcn add message bubble`로, `trace`는 `shadcn add trace`로 받은 CLI 원본이다. `trace`는 `collapsible`에 의존하고, CLI가 덮어쓴 `collapsible`은 되돌렸다
+- `progress`, `toggle`, `toggle-group`, `button-group`은 `shadcn add progress toggle-group button-group`으로 받았다. CLI가 덮어쓴 `separator`는 되돌렸다. `toggle-group.tsx`는 `--gap`을 `CSSProperties`에 길이(`calc(var(--spacing) * N)`)로 선언해 `as` 단언을 없앴고, `gap-(--gap)`이 그 값을 읽는다
+- `sidebar.tsx`는 아래 임의 값 치환 말고는 CLI 원본과 다음만 다르다. 저장소 lint를 통과하려고 `--sidebar-width`·`--sidebar-width-icon`·`--skeleton-width`를 `CSSProperties`에 선언해 `as` 단언을 없앴다. `setOpen`은 boolean만 받는다. `SidebarMenuButton`의 `tooltip`은 `ReactNode`다. `SidebarSeparator`는 `data-horizontal:w-auto`를 쓴다. 원본의 `w-auto`는 `Separator`의 `data-horizontal:w-full`에 져서 사이드바 밖으로 8px 넘쳤다
+- `message`, `bubble`은 `shadcn add message bubble`로, `trace`는 `shadcn add trace`로 받았다. 아래 임의 값 치환만 CLI 원본과 다르다. `trace`는 `collapsible`에 의존하고, CLI가 덮어쓴 `collapsible`은 되돌렸다
 - `code-block`은 `shadcn add code-block`으로 받았다. CLI가 함께 준 `~/hooks/use-highlighted-code`·`~/lib/highlighter`와 의존성 `shiki`는 지웠고, CLI가 덮어쓴 `button`은 되돌렸다. `code-block.tsx`는 저장소 lint를 통과하려고 `typeof` 대신 `Predicate.isString`을 쓰고, 줄 번호 시작값을 inline `counterReset` 대신 `CSSProperties`에 선언한 `--code-block-line-start`로 넘기는 것만 CLI 원본과 다르다
-- `message-scroller`는 `shadcn add message-scroller`로 받은 CLI 원본이다. 의존성 `@shadcn/react`가 catalog에 들어갔고, CLI가 덮어쓴 `button`은 되돌렸다. 앱 코드는 `MessageScrollerContent`에 여백·간격을 줄 수 있다(루트 `vite.config.ts`의 `no-restyle` contract)
-- 이 폴더는 shadcn의 `no-restyle`·`no-arbitrary-values`·`require-static-classes`만 받지 않는다(루트 `vite.config.ts`의 override). anti-slop 규칙, 나머지 shadcn 규칙, Effect 언어 서비스 진단은 그대로 받는다. CLI로 받은 파일이 규칙에 걸리면 그 파일을 고치고 CLI 원본과 다른 점을 여기에 적는다
+- `message-scroller`는 `shadcn add message-scroller`로 받았고, 아래 임의 값 치환만 CLI 원본과 다르다. 의존성 `@shadcn/react`가 catalog에 들어갔고, CLI가 덮어쓴 `button`은 되돌렸다. 앱 코드는 `MessageScrollerContent`에 여백·간격을 줄 수 있다(루트 `vite.config.ts`의 `no-restyle` contract)
+- 이 폴더는 shadcn의 `no-restyle`만 받지 않는다(루트 `vite.config.ts`의 override). 컴포넌트끼리 클래스로 조합하므로 @shadcn/lint 문서가 컴포넌트 폴더에 권하는 설정이다. anti-slop 규칙, 나머지 shadcn 규칙, Effect 언어 서비스 진단은 그대로 받는다. CLI로 받은 파일이 규칙에 걸리면 그 파일을 고치고 CLI 원본과 다른 점을 여기에 적는다
+- CLI 원본의 임의 값은 테마 값으로 바꿨다(`no-arbitrary-values`). 새로 받은 파일도 같은 표로 바꾼다
+  - 같은 값: `text-[0.625rem]` → `text-3xs`, `ring-[3px]` → `ring-3`, `p-[3px]` → `p-0.75`, `py-[calc(--spacing(1.25))]` → `py-1.25`, `rounded-[2px]` → `rounded-xs`, `rounded-[inherit]` → `rounded-inherit`(`app.css`의 utility)
+  - 가장 가까운 반경 단계: `rounded-[calc(var(--radius-sm)-2px)]` → `rounded-xs`(2.32px → 2px), `rounded-[calc(var(--radius-sm)+2px)]` → `rounded-md`(6.32px → 5.76px). `rounded-[min(var(--radius-md),8px)]`는 지금 반경에서 `rounded-md`와 같아, 이미 `rounded-md`인 base에 맡기고 지웠다
+  - `transition-[…]`: 크기·위치를 움직이는 것은 `transition-all`, 색·그림자·이동·투명도는 `transition`
+  - 색은 `app.css`의 토큰이다. `color-mix(…, var(--foreground) 5%)` hover는 `secondary-hover`·`muted-hover`, `tinted` Bubble의 `oklch(from var(--primary) …)`는 `primary-tint`·`primary-tint-hover`다. 다크 값은 `.dark`의 `--primary-tint`가 맡아 `dark:` 클래스를 지웠다
+  - `shadow-[0_0_0_1px_…]` → `shadow-sidebar-outline`·`shadow-sidebar-outline-hover`, `ease-[cubic-bezier(…)]` → `ease-in-expo`·`ease-out-quint`
+  - `InputGroupButton`은 cva 대신 `data-size` 선택자로 크기를 고른다. 클래스 목록이 정적이어야 `require-static-classes`가 검사할 수 있다
 - 클래스 병합은 `cn` 모듈 alias로 하고 variant는 `cva`로 정의한다. 예외로 `data-list.tsx`는 `~/lib/utils`의 `cn`을 쓴다. `field.tsx`, `label.tsx`, `separator.tsx`, `combobox.tsx`는 파일 맨 위에 `"use client"`를 선언한다
 
 ## Side Effects

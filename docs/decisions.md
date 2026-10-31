@@ -3520,3 +3520,13 @@
 - 맨 아래에서 120px 안이면 새 내용을 따라간다(`scrollEdgeThreshold`). 예전 `pinnedToBottom`과 같은 거리다. 그보다 멀면 아래로 가는 단추가 나타난다.
 - 이전 페이지는 예전처럼 위쪽 200px 안에 들어오면 불러온다. 감지용 1px 요소는 MessageScroller의 항목이 되지 않도록 `MessageScrollerContent` 밖, viewport 맨 위에 둔다. 불러오기에 실패하면 다시 시도 단추를 목록 위에 띄운다. 목록 안의 첫 자식이 되면 위에 끼운 페이지로 잘못 읽히기 때문이다.
 - `MessageScrollerContent`는 대화 열의 폭·여백·간격을 앱 코드가 정한다. 루트 `vite.config.ts`의 `no-restyle`에 이 컴포넌트만 `spacing`을 허용하는 contract를 더했다. 규칙을 끄지 않는다.
+
+## ui 폴더도 shadcn 규칙을 no-restyle 하나만 빼고 받는다 (2026-10-31)
+
+- 사용자 결정. UI 일관성과 간격을 지키려고 `apps/agent/app/components/ui/**`에서 `no-arbitrary-values`·`require-static-classes`를 켠다. `no-restyle`만 끈다. 컴포넌트끼리 클래스로 조합하는 폴더라서, @shadcn/lint 문서도 이 규칙만 끄라고 권한다.
+- CLI 원본의 임의 값 47곳을 테마 값으로 바꿨다. 간격(`p-[3px]` → `p-0.75`, `py-[calc(--spacing(1.25))]` → `py-1.25`)과 글자 크기(`text-[0.625rem]` → `text-3xs`)는 같은 값이다.
+- 반경은 가장 가까운 단계로 맞췄다. `rounded-[calc(var(--radius-sm)-2px)]`는 `rounded-xs`(0.32px 작아짐), 사이드바 메뉴 단추의 `rounded-[calc(var(--radius-sm)+2px)]`는 `rounded-md`(0.56px 작아짐)다.
+- `transition-[…]`는 Tailwind 표준 묶음(`transition-all`, `transition`)으로 바꿨다. 사이드바 메뉴 단추처럼 예전에 크기만 움직이던 곳은 이제 hover 색도 150ms 동안 바뀐다. 다른 단추가 이미 그렇게 움직인다.
+- 색·그림자·easing은 `app.css`에 이름 있는 토큰으로 옮겼다: `secondary-hover`, `muted-hover`, `primary-tint`, `primary-tint-hover`, `shadow-sidebar-outline`, `shadow-sidebar-outline-hover`, `ease-in-expo`, `ease-out-quint`. `rounded-inherit` utility도 더했다. `tinted` Bubble의 다크 색은 `.dark`의 `--primary-tint`가 맡는다.
+- `InputGroupButton`은 cva 결과를 `Button`의 className으로 넘겨 `require-static-classes`에 걸렸다. `data-size` 선택자를 쓰는 정적 클래스 목록으로 바꿨다.
+- 바꾼 표는 ui 폴더 README에 있다. 앞으로 CLI로 받는 파일도 같은 표로 바꾼다.

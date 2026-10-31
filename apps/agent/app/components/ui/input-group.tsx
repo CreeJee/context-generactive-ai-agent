@@ -22,7 +22,7 @@ function InputGroup({ className, ...props }: React.ComponentProps<"div">) {
 }
 
 const inputGroupAddonVariants = cva(
-  "flex h-auto cursor-text items-center justify-center gap-1 py-2 text-xs/relaxed font-medium text-muted-foreground select-none group-data-[disabled=true]/input-group:opacity-50 **:data-[slot=kbd]:rounded-[calc(var(--radius-sm)-2px)] **:data-[slot=kbd]:bg-muted-foreground/10 **:data-[slot=kbd]:px-1 **:data-[slot=kbd]:text-[0.625rem] [&>svg:not([class*='size-'])]:size-3.5",
+  "flex h-auto cursor-text items-center justify-center gap-1 py-2 text-xs/relaxed font-medium text-muted-foreground select-none group-data-[disabled=true]/input-group:opacity-50 **:data-[slot=kbd]:rounded-xs **:data-[slot=kbd]:bg-muted-foreground/10 **:data-[slot=kbd]:px-1 **:data-[slot=kbd]:text-3xs [&>svg:not([class*='size-'])]:size-3.5",
   {
     variants: {
       align: {
@@ -63,39 +63,26 @@ function InputGroupAddon({
   );
 }
 
-const inputGroupButtonVariants = cva(
-  "flex items-center gap-2 rounded-md text-xs/relaxed shadow-none",
-  {
-    variants: {
-      size: {
-        xs: "h-5 gap-1 rounded-[calc(var(--radius-sm)-2px)] px-1 [&>svg:not([class*='size-'])]:size-3",
-        sm: "gap-1",
-        "icon-xs": "size-6 p-0 has-[>svg]:p-0",
-        "icon-sm": "size-7 p-0 has-[>svg]:p-0",
-      },
-    },
-    defaultVariants: {
-      size: "xs",
-    },
-  },
-);
-
 function InputGroupButton({
   className,
   type = "button",
   variant = "ghost",
   size = "xs",
   ...props
-}: Omit<React.ComponentProps<typeof Button>, "size" | "type"> &
-  VariantProps<typeof inputGroupButtonVariants> & {
-    type?: "button" | "submit" | "reset";
-  }) {
+}: Omit<React.ComponentProps<typeof Button>, "size" | "type"> & {
+  size?: "xs" | "sm" | "icon-xs" | "icon-sm";
+  type?: "button" | "submit" | "reset";
+}) {
+  // Sizes select on `data-size` so the class list stays static for shadcn lint.
   return (
     <Button
       type={type}
       data-size={size}
       variant={variant}
-      className={cn(inputGroupButtonVariants({ size }), className)}
+      className={cn(
+        "flex items-center gap-2 rounded-md text-xs/relaxed shadow-none data-[size=icon-sm]:size-7 data-[size=icon-sm]:p-0 data-[size=icon-sm]:has-[>svg]:p-0 data-[size=icon-xs]:size-6 data-[size=icon-xs]:p-0 data-[size=icon-xs]:has-[>svg]:p-0 data-[size=sm]:gap-1 data-[size=xs]:h-5 data-[size=xs]:gap-1 data-[size=xs]:rounded-xs data-[size=xs]:px-1 data-[size=xs]:[&>svg:not([class*='size-'])]:size-3",
+        className,
+      )}
       {...props}
     />
   );

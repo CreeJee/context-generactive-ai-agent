@@ -22,9 +22,18 @@
   --font-sans:
     "Inter", ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji",
     "Segoe UI Symbol", "Noto Color Emoji";
-  /* Below text-xs: section labels and key hints (2xs), image number badges (3xs). */
+  /* Below text-xs: section labels and key hints (2xs); image number badges, keyboard keys and
+     the smallest component sizes (3xs). */
   --text-2xs: 0.6875rem;
   --text-3xs: 0.625rem;
+  /* The message scroller's jump button leaves with the first and comes back with the second. */
+  --ease-in-expo: cubic-bezier(0.7, 0, 0.84, 0);
+  --ease-out-quint: cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+/* A box that takes its parent's corners, such as a scroll viewport inside a rounded frame. */
+@utility rounded-inherit {
+  border-radius: inherit;
 }
 
 html,
@@ -59,6 +68,15 @@ body {
   --color-muted: var(--muted);
   --color-secondary-foreground: var(--secondary-foreground);
   --color-secondary: var(--secondary);
+  /* Hover fills: the surface pulled 5% toward the text color. */
+  --color-secondary-hover: color-mix(in oklch, var(--secondary), var(--foreground) 5%);
+  --color-muted-hover: color-mix(in oklch, var(--muted), var(--foreground) 5%);
+  /* A pale fill in the primary hue, for a tinted bubble. */
+  --color-primary-tint: var(--primary-tint);
+  --color-primary-tint-hover: var(--primary-tint-hover);
+  /* A 1px outline drawn as a shadow, so it adds no size; for the outline sidebar button. */
+  --shadow-sidebar-outline: 0 0 0 1px var(--sidebar-border);
+  --shadow-sidebar-outline-hover: 0 0 0 1px var(--sidebar-accent);
   --color-primary-foreground: var(--primary-foreground);
   --color-primary: var(--primary);
   --color-popover-foreground: var(--popover-foreground);
@@ -85,6 +103,8 @@ body {
   --popover-foreground: oklch(0.141 0.005 285.823);
   --primary: oklch(0.488 0.243 264.376);
   --primary-foreground: oklch(0.97 0.014 254.604);
+  --primary-tint: oklch(from var(--primary) 0.93 calc(c * 0.4) h);
+  --primary-tint-hover: oklch(from var(--primary) 0.88 calc(c * 0.5) h);
   --secondary: oklch(0.967 0.001 286.375);
   --secondary-foreground: oklch(0.21 0.006 285.885);
   --muted: oklch(0.967 0.001 286.375);
@@ -123,6 +143,8 @@ body {
   --popover-foreground: oklch(0.985 0 0);
   --primary: oklch(0.424 0.199 265.638);
   --primary-foreground: oklch(0.97 0.014 254.604);
+  --primary-tint: oklch(from var(--primary) 0.3 calc(c * 0.4) h);
+  --primary-tint-hover: oklch(from var(--primary) 0.35 calc(c * 0.5) h);
   --secondary: oklch(0.274 0.006 286.033);
   --secondary-foreground: oklch(0.985 0 0);
   --muted: oklch(0.274 0.006 286.033);

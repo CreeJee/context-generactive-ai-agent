@@ -9,9 +9,9 @@ import { cn } from "cn";
 import { toggleVariants } from "~/components/ui/toggle";
 
 declare module "react" {
-  /** The group's gap, in spacing units, read by `gap-[--spacing(var(--gap))]`. */
+  /** The group's gap as a length, read by `gap-(--gap)`. */
   interface CSSProperties {
-    readonly "--gap"?: number;
+    readonly "--gap"?: string;
   }
 }
 
@@ -47,9 +47,10 @@ function ToggleGroup({
       data-size={size}
       data-spacing={spacing}
       data-orientation={orientation}
-      style={{ "--gap": spacing }}
+      // `spacing` counts theme spacing units, as `gap-2` does.
+      style={{ "--gap": `calc(var(--spacing) * ${spacing})` }}
       className={cn(
-        "group/toggle-group flex w-fit flex-row items-center gap-[--spacing(var(--gap))] rounded-md data-[size=sm]:rounded-[min(var(--radius-md),8px)] data-vertical:flex-col data-vertical:items-stretch",
+        "group/toggle-group flex w-fit flex-row items-center gap-(--gap) rounded-md data-vertical:flex-col data-vertical:items-stretch",
         className,
       )}
       {...props}

@@ -81,12 +81,11 @@ export default defineConfig({
     },
     overrides: [
       {
-        // Design-system components own their appearance and may need structural values.
+        // Design-system components own their appearance and compose each other with classes,
+        // as @shadcn/lint recommends for the component directory.
         files: ["apps/agent/app/components/ui/**"],
         rules: {
           "shadcn/no-restyle": "off",
-          "shadcn/no-arbitrary-values": "off",
-          "shadcn/require-static-classes": "off",
         },
       },
     ],
