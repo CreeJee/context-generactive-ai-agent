@@ -1,4 +1,4 @@
-import { Cause, Effect, FileSystem, Option, Result, Schedule, Schema } from "effect";
+import { Effect, FileSystem, Option, Result, Schedule } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
@@ -9,9 +9,6 @@ import { SessionNotFound, Sessions } from "../../src/sessions/sessions.ts";
 import { openPage } from "../support/chat-client.ts";
 import { selectTestModel, turnGate } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
-
-const Archived = Schema.Struct({ id: Schema.String, archivedAt: Schema.NullOr(Schema.String) });
-const Running = Schema.Struct({ running: Schema.NullOr(Schema.Struct({ runId: Schema.String })) });
 
 /** Poll an Effect until it holds, failing the test if it does not within six seconds. */
 const until = Effect.fnUntraced(function* <E, R>(
@@ -24,18 +21,6 @@ const until = Effect.fnUntraced(function* <E, R>(
   );
   expect(Option.isSome(ready), what).toBe(true);
 });
-
-const json = (response: Response) =>
-  Effect.tryPromise({
-    try: () => response.json(),
-    catch: (cause) => new Cause.UnknownError(cause),
-  });
-
-const archivedAt = (response: Response) =>
-  Effect.map(
-    Effect.flatMap(json(response), Schema.decodeUnknownEffect(Archived)),
-    (body) => body.archivedAt,
-  );
 
 /** The session's model turns wait for a gate that never opens, so a run stays live until stopped. */
 const gate = turnGate();
@@ -87,26 +72,23 @@ testAgent({ testProvider: { delayedTurnGate: gate.waitFor } })("archived convers
         agent.archive(session, holder, archived);
 
       yield* agent.lease(session, "tab-a", "claim");
-      expect((yield* archive("tab-b")).status).toBe(423);
+      expect(yield* Effect.flip(archive("tab-b"))).toEqual({ error: "session_in_use" });
 
       // Tab A's page sends a turn in a fiber the test owns.
       const page = yield* openPage(session, "tab-a");
       yield* Effect.forkChild(page.send("please be slow"), { startImmediately: true });
-      const running = Effect.flatMap(agent.status(session, "tab-a"), (response) =>
-        Effect.map(
-          Effect.flatMap(json(response), Schema.decodeUnknownEffect(Running)),
-          (status) => status.running !== null,
-        ),
+      const running = Effect.map(
+        agent.status(session, "tab-a"),
+        (status) => status.running !== null,
       );
       yield* until(running, "the run to start");
       const done = yield* archive("tab-a");
-      expect(done.status).toBe(200);
       yield* until(
         Effect.map(running, (value) => !value),
         "the run to stop",
       );
-      expect(yield* archivedAt(done)).not.toBeNull();
-      expect(yield* archivedAt(yield* archive("tab-a", false))).toBeNull();
+      expect(done).toMatchObject({ id: session, archivedAt: expect.any(String) });
+      expect(yield* archive("tab-a", false)).toMatchObject({ id: session, archivedAt: null });
     }),
   );
 });

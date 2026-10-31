@@ -77,7 +77,6 @@ export const send = Effect.fnUntraced(function* (sessionId: string, text: string
 });
 
 const Busy = Schema.Struct({ busy: Schema.Finite });
-const RunState = Schema.fromJsonString(Schema.Struct({ running: Schema.NullOr(Schema.Unknown) }));
 
 /**
  * Waits until the session's delegated work and the follow-ups it started are over: no attempt or
@@ -103,12 +102,7 @@ export const settled = (sessionId: string) =>
         ),
         Schema.decodeUnknownEffect(Busy),
       ),
-      current(
-        Effect.flatMap(AgentChat, (agent) => agent.status(sessionId, null)).pipe(
-          Effect.flatMap((response) => sdk(() => response.text())),
-          Effect.flatMap(Schema.decodeEffect(RunState)),
-        ),
-      ),
+      current(Effect.flatMap(AgentChat, (agent) => agent.status(sessionId, null))),
       ({ busy }, { running }) => busy === 0 && running === null,
     ),
     "delegated work to settle",

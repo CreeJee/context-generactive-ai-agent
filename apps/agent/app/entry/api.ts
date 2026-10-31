@@ -20,6 +20,7 @@ import {
   type KanbanSettings,
   type KanbanSettingsCommand as KanbanSettingsCommandCase,
   type KanbanView,
+  LifecycleResult,
   type McpCommand as McpCommandCase,
   type ProjectKanbanCommand as ProjectKanbanCommandCase,
   type ProjectKanbanSettings,
@@ -27,8 +28,11 @@ import {
   type ProviderAuthState as ProviderAuthStateCase,
   type RecallSettings,
   type ScanCommand as ScanCommandCase,
+  Session,
+  type SessionChange as SessionChangeCase,
   type SubscriptionAccountCommand,
   SubscriptionAccountsView,
+  WorkflowState,
 } from "memory-agent/app-api";
 import { ProviderId } from "memory-agent/provider-contracts";
 import type {
@@ -68,13 +72,11 @@ import type {
   ModelSelection,
   PermissionMode,
   Project,
-  Session,
   SkillCatalog,
   TraceTaskDetail,
   TraceTreeSnapshot,
   WorkflowAction,
   WorkflowPhase,
-  WorkflowState,
   AccountLoginState as AccountLoginStateCase,
   OAuthProfile,
   SubscriptionAccountProvider,
@@ -101,13 +103,8 @@ import {
   type UncertainTool,
 } from "memory-agent/definitions";
 
-/** The session route's bodies, as `/api/sessions/:session` reads them. */
-export type SessionChange = Data.TaggedEnum<{
-  Archive: { readonly archived: boolean; readonly idempotencyKey: string };
-  Delete: { readonly idempotencyKey: string };
-  Phase: { readonly phase: WorkflowPhase };
-  Control: { readonly workflowAction: WorkflowAction };
-}>;
+/** What the page asks of one conversation, as `/api/sessions/:session` reads it. */
+export type SessionChange = SessionChangeCase;
 export const SessionChange = Data.taggedEnum<SessionChange>();
 
 /** The kanban commands besides a `BoardIntent`, as `/api/sessions/:session/kanban` reads them. */
@@ -261,12 +258,16 @@ export const ApiErrorCode = Schema.Literals([
   "card_status_changed",
   "card_transition_invalid",
   "card_waiting",
+  "completion_evidence_invalid",
+  "completion_evidence_required",
+  "completion_snapshot_conflict",
   "transfer_target_invalid",
   "cross_site_request",
   "empty_message",
   "endpoint_unavailable",
   "external_agent_unavailable",
   "facts_changed",
+  "goal_completion_required",
   "goal_missing",
   "goal_not_active",
   "goal_not_paused",
@@ -335,6 +336,7 @@ export const ApiErrorCode = Schema.Literals([
   "oauth_profile_not_found",
   "oauth_profile_removing",
   "invalid_oauth_profile",
+  "phase_not_executable",
   "plan_closed",
   "plan_dependencies_rejected",
   "plan_missing",
@@ -376,12 +378,16 @@ export const ApiErrorCode = Schema.Literals([
   "settings_failed",
   "settings_partially_saved",
   "settings_unavailable",
+  "step_evidence_required",
+  "steps_incomplete",
   "storage_failed",
   "subagent_not_found",
   "uncertain_runs_changed",
   "unknown_attachment",
+  "unknown_step",
   "upload_failed",
   "user_turn_required",
+  "verification_required",
 ]);
 export type ApiErrorCode = typeof ApiErrorCode.Type;
 
@@ -429,31 +435,10 @@ export const ResumeTaskResult = Schema.TaggedUnion({
 });
 const decodeResumeTaskResult = Schema.decodeUnknownOption(ResumeTaskResult);
 export type ResumeTaskResult = typeof ResumeTaskResult.Type;
-export const ArchiveTaskResult = Schema.TaggedUnion({
-  completed: {
-    operationId: Schema.optional(Schema.String),
-    targetId: Schema.String,
-    intent: Schema.optional(Schema.Literals(["archive", "restore", "delete"])),
-    receiptId: Schema.optional(Schema.NullOr(Schema.String)),
-  },
-  blocked: { blocker: Schema.String },
-  waiting_for_stop: { operationId: Schema.String, targetId: Schema.String },
-});
+/** A task's or conversation's archive, restore or delete: done, waiting, or blocked. */
+export const ArchiveTaskResult = LifecycleResult;
+export type ArchiveTaskResult = LifecycleResult;
 const decodeArchiveTaskResult = Schema.decodeUnknownOption(ArchiveTaskResult);
-export type ArchiveTaskResult = typeof ArchiveTaskResult.Type;
-
-const SessionSnapshot = Schema.Struct({
-  id: Schema.String,
-  projectId: Schema.String,
-  title: Schema.NullOr(Schema.String),
-  createdAt: Schema.String,
-  agent: Schema.NullOr(Schema.String),
-  archivedAt: Schema.NullOr(Schema.String),
-  importedFrom: Schema.NullOr(Schema.String),
-  worktreePath: Schema.NullOr(Schema.String),
-  branch: Schema.NullOr(Schema.String),
-});
-const decodeSessionSnapshot = Schema.decodeUnknownOption(SessionSnapshot);
 /** A lifecycle change the server has not finished: why it is blocked, or the stop it waits for. */
 export type PendingLifecycle = Exclude<
   ArchiveTaskResult,
@@ -466,83 +451,6 @@ export type SessionArchiveResult = Data.TaggedEnum<{
   waiting_for_stop: { readonly operationId: string; readonly targetId: string };
 }>;
 export const SessionArchiveResult = Data.taggedEnum<SessionArchiveResult>();
-
-export function makeSessionLifecycleClient(appFetch: typeof fetch) {
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  function changeSessionLifecycle(
-    sessionId: string,
-    holder: string,
-    change: (idempotencyKey: string) => SessionChange,
-  ) {
-    return runUiEffect(
-      Effect.gen(function* () {
-        const idempotencyKey = yield* browserCrypto.randomUUIDv4();
-        const response = yield* uiPromise(() =>
-          appFetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
-            method: "POST",
-            headers: { [sessionHolderHeader]: holder, "Content-Type": "application/json" },
-            // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
-            body: JSON.stringify(change(idempotencyKey)),
-          }),
-        );
-        const body: unknown = yield* uiPromise(() => response.json());
-        const result = Option.getOrUndefined(decodeArchiveTaskResult(body));
-        if (response.status === 409 && ArchiveTaskResult.guards.blocked(result))
-          return { response, body, result };
-        if (!response.ok)
-          return yield* apiError(response.status, Option.getOrUndefined(decodeErrorBody(body)));
-        // Accepted is not completed, even if a malformed response claims otherwise.
-        if (
-          response.status === 202 &&
-          (!isTruthy(result) || ArchiveTaskResult.guards.completed(result))
-        )
-          return yield* apiError(502, undefined);
-        return { response, body, result };
-      }),
-    );
-  }
-
-  return {
-    /** Active parent/child runs are checkpointed and stopped before the conversation is archived. */
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    setArchived: (
-      sessionId: string,
-      holder: string,
-      archived: boolean,
-    ): Promise<SessionArchiveResult> =>
-      runUiEffect(
-        Effect.gen(function* () {
-          const { response, body, result } = yield* uiPromise(() =>
-            changeSessionLifecycle(sessionId, holder, (idempotencyKey) =>
-              SessionChange.Archive({ archived, idempotencyKey }),
-            ),
-          );
-          if (isTruthy(result) && !ArchiveTaskResult.guards.completed(result)) return result;
-          const session = Option.getOrUndefined(decodeSessionSnapshot(body));
-          if (response.status !== 200 || !isTruthy(session) || session.id !== sessionId)
-            return yield* apiError(502, undefined);
-          return SessionArchiveResult.completed({ session });
-        }),
-      ),
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    deleteSession: (sessionId: string, holder: string): Promise<ArchiveTaskResult> =>
-      runUiEffect(
-        Effect.gen(function* () {
-          const { response, result } = yield* uiPromise(() =>
-            changeSessionLifecycle(sessionId, holder, (idempotencyKey) =>
-              SessionChange.Delete({ idempotencyKey }),
-            ),
-          );
-          if (
-            !isTruthy(result) ||
-            (ArchiveTaskResult.guards.completed(result) && response.status !== 200)
-          )
-            return yield* apiError(502, undefined);
-          return result;
-        }),
-      ),
-  };
-}
 
 function apiError(
   status: number,
@@ -606,13 +514,6 @@ class AppApiClient extends Context.Service<AppApiClient, Effect.Success<typeof m
   static readonly layer = Layer.effect(AppApiClient, makeAppApiClient);
 }
 
-const appApiRuntime = ManagedRuntime.make(
-  Layer.mergeAll(
-    AppApiClient.layer.pipe(Layer.provide(FetchHttpClient.layer)),
-    Layer.succeed(FetchHttpClient.Fetch, appFetch),
-  ),
-);
-
 /** What an app API call fails with: a refusal the endpoint declares, or the call itself failing. */
 type AppApiFailure =
   | { readonly error: ApiErrorCode; readonly reason?: string }
@@ -647,20 +548,102 @@ const appApiFailure = (invalid: ApiErrorCode) =>
     Match.orElse((refusal) => Effect.fail(apiError(appRefusalStatus(refusal), refusal))),
   );
 
-/** Calls the app API through the page's client; a failure is an `ApiError` as `call` gives. */
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-const appCall = <A, E extends AppApiFailure>(
-  request: (client: AppApiClient["Service"]) => Effect.Effect<A, E>,
-  invalid: ApiErrorCode = "request_failed",
-): Promise<A> =>
-  runUiEffect(
-    Effect.flatMap(appApiRuntime.contextEffect, (context) =>
-      Effect.flatMap(AppApiClient, request).pipe(
-        Effect.catch(appApiFailure(invalid)),
-        Effect.provideContext(context),
-      ),
+/**
+ * Calls the app API through a client over `fetch`; a failure is an `ApiError` as `call` gives.
+ * The page's calls go over `appFetch`.
+ */
+const appCallOver = (fetch: typeof globalThis.fetch) => {
+  const runtime = ManagedRuntime.make(
+    Layer.mergeAll(
+      AppApiClient.layer.pipe(Layer.provide(FetchHttpClient.layer)),
+      Layer.succeed(FetchHttpClient.Fetch, fetch),
     ),
   );
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  return <A, E extends AppApiFailure>(
+    request: (client: AppApiClient["Service"]) => Effect.Effect<A, E>,
+    invalid: ApiErrorCode = "request_failed",
+  ): Promise<A> =>
+    runUiEffect(
+      Effect.flatMap(runtime.contextEffect, (context) =>
+        Effect.flatMap(AppApiClient, request).pipe(
+          Effect.catch(appApiFailure(invalid)),
+          Effect.provideContext(context),
+        ),
+      ),
+    );
+};
+const appCall = appCallOver(appFetch);
+
+/** The server's answer that does not fit the request: the server's fault, not the page's. */
+const unexpectedAnswer = () => ({ error: "request_failed" }) as const;
+
+/**
+ * Archives, restores and deletes conversations over `fetch`; `api` uses `appFetch`. A change that
+ * cannot start (409) or is still waiting (202) comes back as the result, not as a failure.
+ */
+export function makeSessionLifecycleClient(fetch: typeof globalThis.fetch) {
+  const call = appCallOver(fetch);
+  return {
+    /** Active parent/child runs are checkpointed and stopped before the conversation is archived. */
+    setArchived: (session: string, holder: string, archived: boolean) =>
+      call(
+        (client) =>
+          Effect.flatMap(Effect.orDie(browserCrypto.randomUUIDv4()), (idempotencyKey) =>
+            client.sessions.change({
+              params: { session },
+              headers: { "x-session-holder": holder },
+              payload: SessionChange.Archive({ archived, idempotencyKey }),
+            }),
+          ).pipe(
+            Effect.catchTag("blocked", Effect.succeed),
+            Effect.flatMap(
+              (result): Effect.Effect<SessionArchiveResult, ReturnType<typeof unexpectedAnswer>> =>
+                Schema.is(Session)(result) && result.id === session
+                  ? Effect.succeed(SessionArchiveResult.completed({ session: result }))
+                  : ArchiveTaskResult.guards.waiting_for_stop(result) ||
+                      ArchiveTaskResult.guards.blocked(result)
+                    ? Effect.succeed(result)
+                    : Effect.fail(unexpectedAnswer()),
+            ),
+          ),
+        "invalid_session_change",
+      ),
+    deleteSession: (session: string, holder: string) =>
+      call(
+        (client) =>
+          Effect.flatMap(Effect.orDie(browserCrypto.randomUUIDv4()), (idempotencyKey) =>
+            client.sessions.change({
+              params: { session },
+              headers: { "x-session-holder": holder },
+              payload: SessionChange.Delete({ idempotencyKey }),
+            }),
+          ).pipe(
+            Effect.catchTag("blocked", Effect.succeed),
+            Effect.filterOrFail(Schema.is(ArchiveTaskResult), unexpectedAnswer),
+          ),
+        "invalid_session_change",
+      ),
+  };
+}
+
+/** Moves or pauses the workflow; it answers the workflow, and anything else is the server's fault. */
+const changeWorkflow = (
+  session: string,
+  holder: string,
+  change: Extract<SessionChange, { readonly _tag: "Phase" | "Control" }>,
+) =>
+  appCall((client) => {
+    const request = { params: { session }, headers: { "x-session-holder": holder } };
+    // The client takes a union payload one case at a time.
+    return Match.valueTags(change, {
+      Phase: (payload) => client.sessions.change({ ...request, payload }),
+      Control: (payload) => client.sessions.change({ ...request, payload }),
+    }).pipe(
+      Effect.catchTag("blocked", () => Effect.fail(unexpectedAnswer())),
+      Effect.filterOrFail(Schema.is(WorkflowState), unexpectedAnswer),
+    );
+  }, "invalid_session_change");
 
 /** Changes the project's settings that `payload` names; the others stay as they are. */
 const updateProject = (project: string, payload: ProjectSettings) =>
@@ -737,13 +720,8 @@ export const api = {
     ),
   ...makeSessionLifecycleClient(appFetch),
   /** Refused while a run is active; execute requires a current Plan that is ready or executing. */
-  setWorkflowPhase: (sessionId: string, holder: string, phase: WorkflowPhase) =>
-    call<WorkflowState>(
-      "POST",
-      `/api/sessions/${encodeURIComponent(sessionId)}`,
-      SessionChange.Phase({ phase }),
-      { [sessionHolderHeader]: holder },
-    ),
+  setWorkflowPhase: (session: string, holder: string, phase: WorkflowPhase) =>
+    changeWorkflow(session, holder, SessionChange.Phase({ phase })),
   board: (session: string) => appCall((client) => client.sessions.board({ params: { session } })),
   /** The user's board change; one to an executing card comes back as a stored request. */
   editBoard: (session: string, holder: string, edit: BoardEdit) =>
@@ -839,13 +817,8 @@ export const api = {
         }),
       "invalid_kanban_action",
     ),
-  controlWorkflow: (sessionId: string, holder: string, workflowAction: WorkflowAction) =>
-    call<WorkflowState>(
-      "POST",
-      `/api/sessions/${encodeURIComponent(sessionId)}`,
-      SessionChange.Control({ workflowAction }),
-      { [sessionHolderHeader]: holder },
-    ),
+  controlWorkflow: (session: string, holder: string, workflowAction: WorkflowAction) =>
+    changeWorkflow(session, holder, SessionChange.Control({ workflowAction })),
   /** `agent`: talk directly to that trusted external ACP agent instead of the app's model. */
   createSession: (projectId: string, agent?: string) =>
     appCall(
@@ -863,11 +836,8 @@ export const api = {
       "DELETE",
       `/api/btw/${encodeURIComponent(threadId)}`,
     ),
-  sessionRunState: (sessionId: string, holder: string) =>
-    call<SessionRunState>(
-      "GET",
-      `/api/sessions/${encodeURIComponent(sessionId)}?holder=${encodeURIComponent(holder)}`,
-    ),
+  sessionRunState: (session: string, holder: string) =>
+    appCall((client) => client.sessions.status({ params: { session }, query: { holder } })),
   cancelRun: (session: string, holder: string) =>
     appCall((client) =>
       client.sessions.cancel({ params: { session }, headers: { "x-session-holder": holder } }),

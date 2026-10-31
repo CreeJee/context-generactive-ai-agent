@@ -24,14 +24,13 @@ import { kanbanRefusal } from "../kanban-failures.ts";
 const user = BoardAuthor.cases.User.make({});
 
 /**
- * `AgentChat` refuses with the code the page reads. Its other failures are tagged; they become
- * defects, which the server reports and answers 500.
+ * `AgentChat` refuses with what the page reads: a code, or a blocked lifecycle change. Its other
+ * failures are errors; they become defects, which the server reports and answers 500.
  */
 const refusalsOnly = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.catchIf(
     effect,
-    (failure): failure is Extract<E, { readonly _tag: string }> =>
-      Predicate.hasProperty(failure, "_tag"),
+    (failure): failure is Extract<E, Error> => Predicate.isError(failure),
     (failure) => Effect.die(failure),
   );
 
@@ -246,6 +245,36 @@ export const SessionsApiHandlers = HttpApiBuilder.group(
         refusalsOnly(
           chat.answerApproval(session, headers["x-session-holder"] ?? null, approval, approved),
         ).pipe(Effect.tap(() => events.publishSession(session, "relayed-approvals"))),
+      status: ({ params: { session }, query: { holder } }) =>
+        refusalsOnly(chat.status(session, holder ?? null)),
+      change: ({ params: { session }, headers, payload }) =>
+        Effect.gen(function* () {
+          const holder = headers["x-session-holder"] ?? null;
+          const { projectId } = yield* sessions.get(session);
+          return yield* Match.valueTags(payload, {
+            Archive: ({ archived, idempotencyKey }) =>
+              chat
+                .archive(session, holder, archived, idempotencyKey)
+                .pipe(Effect.tap(() => events.publishProject(projectId, "sessions"))),
+            Delete: ({ idempotencyKey }) =>
+              chat
+                .deleteSession(session, holder, idempotencyKey)
+                .pipe(Effect.tap(() => events.publishProject(projectId, "sessions"))),
+            Phase: ({ phase }) =>
+              chat
+                .setWorkflowPhase(session, holder, phase)
+                .pipe(Effect.tap(() => events.publishSession(session, "run-state"))),
+            Control: ({ workflowAction }) =>
+              chat
+                .controlWorkflow(session, holder, workflowAction)
+                .pipe(Effect.tap(() => events.publishSession(session, "run-state"))),
+          });
+        }).pipe(
+          Effect.catchTag("SessionNotFound", () =>
+            Effect.fail({ error: "session_not_found" } as const),
+          ),
+          refusalsOnly,
+        ),
       cancel: ({ params: { session }, headers }) =>
         refusalsOnly(chat.cancel(session, headers["x-session-holder"] ?? null)).pipe(
           Effect.tap(() => events.publishSession(session, "run-state")),

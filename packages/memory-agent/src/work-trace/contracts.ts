@@ -312,3 +312,22 @@ export const resumeCreatesNewAttempt = (kind: InvocationKind) => kind === "resum
 /** Internal events are durable for diagnostics but are never part of the user trace projection. */
 export const isUserVisibleTrace = (event: Pick<RunEvent, "visibility" | "redaction">) =>
   event.visibility !== "internal" && event.redaction !== "omitted";
+
+export const LifecycleIntent = Schema.Literals(["archive", "restore", "delete"]);
+export type LifecycleIntent = typeof LifecycleIntent.Type;
+
+/**
+ * An archive, restore or delete as the page reads it: done, waiting for a live attempt to stop
+ * (finishing it again completes it), or blocked with why. The store's own views carry more.
+ */
+export const LifecycleResult = Schema.TaggedUnion({
+  completed: {
+    operationId: Schema.optionalKey(Schema.NullOr(Schema.String)),
+    targetId: Schema.String,
+    intent: Schema.optionalKey(LifecycleIntent),
+    receiptId: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  },
+  waiting_for_stop: { operationId: Schema.String, targetId: Schema.String },
+  blocked: { blocker: Schema.String },
+});
+export type LifecycleResult = typeof LifecycleResult.Type;

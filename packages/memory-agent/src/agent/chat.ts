@@ -184,6 +184,7 @@ import {
   ResumeRequest,
   WorkTraceStore,
 } from "../work-trace/store.ts";
+import { LifecycleResult } from "../work-trace/contracts.ts";
 import { BackgroundTasks, type BackgroundBinding } from "../tools/background.ts";
 import { AppEvents } from "../events/app-events.ts";
 import {
@@ -830,8 +831,14 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     Effect.fail({ error: "provider_unavailable", provider } as const);
   /** Refuses a change while the session is answering. */
   const runInProgress = () => Effect.fail({ error: "run_in_progress" } as const);
-  const providerUnavailable = (failure: { readonly provider: string }) =>
-    Effect.succeed(json(503, { error: "provider_unavailable", provider: failure.provider }));
+  /**
+   * Refuses an archive, restore or delete that cannot start. Only a finished operation that was
+   * blocked keeps a row in that state, and it names its blocker; a row without one is a defect.
+   */
+  const lifecycleBlocked = ({ blocker }: { readonly blocker: string | null }) =>
+    Effect.flatMap(Effect.orDie(Effect.fromNullishOr(blocker)), (named) =>
+      Effect.fail(LifecycleResult.cases.blocked.make({ blocker: named })),
+    );
 
   /**
    * A run's log, to follow after `offset` (docs/effect-ai-migration.md "SSE와 재접속"). A bound
@@ -2568,40 +2575,38 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           actions: workflowActions(workflow, { running: Boolean(live), lease }),
           uncertainRuns: isTruthy(live) ? [] : yield* uncertain.list(sessionId),
         };
-        return json(200, state);
+        return state;
       }).pipe(
         Effect.catchTags({
-          SessionNotFound: sessionNotFound,
-          ProviderUnavailable: providerUnavailable,
+          SessionNotFound: unknownSession,
+          ProviderUnavailable: unavailableProvider,
         }),
       ),
 
     /** Changes the durable workflow phase. Execute also records the user's Plan approval. */
     setWorkflowPhase: (sessionId: string, holder: string | null, phase: WorkflowPhase) =>
       Effect.gen(function* () {
-        if (!(yield* leases.permits(sessionId, holder))) return inUse();
+        yield* refuseOtherHolder(sessionId, holder);
         yield* sessions.get(sessionId);
-        if (isTruthy(yield* liveRuns.get(sessionId)))
-          return json(409, { error: "run_in_progress" });
+        if (isTruthy(yield* liveRuns.get(sessionId))) return yield* runInProgress();
         const state = yield* workflows.setPhase(sessionId, phase);
         yield* execution.stop(sessionId);
         yield* cancelProviderRetries(sessionId);
-        return json(200, state);
+        return state;
       }).pipe(
         Effect.catchTags({
-          WorkflowTransitionRefused: (failure) =>
-            Effect.succeed(json(409, { error: failure.reason })),
-          SessionNotFound: sessionNotFound,
+          WorkflowTransitionRefused: ({ reason }) => Effect.fail({ error: reason }),
+          SessionNotFound: unknownSession,
         }),
       ),
 
     /** Pauses, resumes or permanently stops the active Goal and cancels its run when needed. */
     controlWorkflow: (sessionId: string, holder: string | null, action: WorkflowAction) =>
       Effect.gen(function* () {
-        if (!(yield* leases.permits(sessionId, holder))) return inUse();
+        yield* refuseOtherHolder(sessionId, holder);
         yield* sessions.get(sessionId);
         const live = yield* liveRuns.get(sessionId);
-        if (action === "resume" && isTruthy(live)) return json(409, { error: "run_in_progress" });
+        if (action === "resume" && isTruthy(live)) return yield* runInProgress();
         const state = yield* workflows.controlGoal(sessionId, action);
         yield* execution.stop(sessionId);
         yield* cancelProviderRetries(sessionId);
@@ -2609,12 +2614,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           live.controller.abort(cancelRequested);
           yield* live.cancel;
         }
-        return json(200, state);
+        return state;
       }).pipe(
         Effect.catchTags({
-          WorkflowProgressRefused: (failure) =>
-            Effect.succeed(json(409, { error: failure.reason })),
-          SessionNotFound: sessionNotFound,
+          WorkflowProgressRefused: ({ reason }) => Effect.fail({ error: reason }),
+          SessionNotFound: unknownSession,
         }),
       ),
 
@@ -2651,37 +2655,33 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       idempotencyKey?: string,
     ) =>
       Effect.gen(function* () {
-        if (!(yield* leases.permits(sessionId, holder))) return inUse();
+        yield* refuseOtherHolder(sessionId, holder);
         yield* sessions.get(sessionId);
         const requested = yield* workTrace.requestSessionLifecycle({
           sessionId,
           intent: archived ? "archive" : "restore",
           idempotencyKey: idempotencyKey ?? (yield* crypto.randomUUIDv4()),
         });
-        if (LifecycleRequest.$is("blocked")(requested)) return json(409, requested);
-        if (LifecycleRequest.$is("completed")(requested)) {
-          return json(200, yield* sessions.get(sessionId));
-        }
+        if (LifecycleRequest.$is("blocked")(requested)) return yield* lifecycleBlocked(requested);
+        if (LifecycleRequest.$is("completed")(requested)) return yield* sessions.get(sessionId);
         yield* stopSessionRuns(sessionId);
         const completed = yield* workTrace.finalizeSessionLifecycle(requested.operationId);
-        if (!LifecycleOutcome.$is("completed")(completed)) return json(202, completed);
-        return json(200, yield* sessions.get(sessionId));
-      }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
+        if (!LifecycleOutcome.$is("completed")(completed)) return completed;
+        return yield* sessions.get(sessionId);
+      }).pipe(Effect.catchTag("SessionNotFound", unknownSession)),
 
     /** Delete private conversation content while retaining project-owned task/memory provenance. */
     deleteSession: (sessionId: string, holder: string | null, idempotencyKey: string) =>
       Effect.gen(function* () {
-        if (!(yield* leases.permits(sessionId, holder))) return inUse();
+        yield* refuseOtherHolder(sessionId, holder);
         yield* sessions.get(sessionId);
         const requested = yield* workTrace.requestSessionLifecycle({
           sessionId,
           intent: "delete",
           idempotencyKey,
         });
-        if (LifecycleRequest.$is("blocked")(requested)) return json(409, requested);
-        if (LifecycleRequest.$is("completed")(requested)) {
-          return json(200, requested);
-        }
+        if (LifecycleRequest.$is("blocked")(requested)) return yield* lifecycleBlocked(requested);
+        if (LifecycleRequest.$is("completed")(requested)) return requested;
         // A running board would start its cards again after their runs stop.
         yield* kanbanOrchestrator.stopSession(sessionId);
         yield* stopSessionRuns(sessionId);
@@ -2708,14 +2708,14 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           Stream.filter(LifecycleRequest.$is("blocked")),
           Stream.runHead,
         );
-        if (Option.isSome(blockedTask)) return json(409, blockedTask.value);
+        if (Option.isSome(blockedTask)) return yield* lifecycleBlocked(blockedTask.value);
         const completed = yield* workTrace.finalizeSessionLifecycle(requested.operationId);
-        if (LifecycleOutcome.$is("completed")(completed)) {
-          yield* attachments.purgeOrphans;
-          return json(200, completed);
-        }
-        return json(202, completed);
-      }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
+        yield* Effect.when(
+          attachments.purgeOrphans,
+          Effect.succeed(LifecycleOutcome.$is("completed")(completed)),
+        );
+        return completed;
+      }).pipe(Effect.catchTag("SessionNotFound", unknownSession)),
 
     /** The session's queue: messages still to deliver, and those the latest run delivered. */
     queued: (sessionId: string) =>

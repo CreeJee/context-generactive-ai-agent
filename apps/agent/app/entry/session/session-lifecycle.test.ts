@@ -1,6 +1,5 @@
 import { it } from "@effect/vitest";
-import { afterEach, describe, expect, vi } from "vite-plus/test";
-import { sessionHolderHeader } from "memory-agent/definitions";
+import { afterEach, beforeEach, describe, expect, vi } from "vite-plus/test";
 import { Cause, Effect, Schema } from "effect";
 import {
   ApiError,
@@ -53,7 +52,12 @@ function respond(body: LifecycleFixture, status = 200) {
   appFetch.mockResolvedValueOnce(Response.json(body, { status }));
 }
 
-afterEach(() => vi.resetAllMocks());
+// The client resolves the API's paths against the page, as in the browser.
+beforeEach(() => vi.stubGlobal("location", new URL("http://app.test/")));
+afterEach(() => {
+  vi.resetAllMocks();
+  vi.unstubAllGlobals();
+});
 
 const call = <P extends Promise<unknown>>(execute: () => P) =>
   Effect.tryPromise({
@@ -86,15 +90,15 @@ describe("server-authoritative session lifecycle client", () => {
       Effect.gen(function* () {
         respond(waiting, 202);
         expect(yield* call(() => invoke())).toEqual(waiting);
-        expect(appFetch).toHaveBeenCalledWith("/api/sessions/session%2F1", {
+        const [url, init] = appFetch.mock.calls[0] ?? [];
+        expect(new Request(url ?? "").url).toBe("http://app.test/api/sessions/session%2F1");
+        expect(init).toMatchObject({
           method: "POST",
-          headers: { [sessionHolderHeader]: "holder-1", "Content-Type": "application/json" },
-          body: expect.any(String),
+          headers: { "x-session-holder": "holder-1", "content-type": "application/json" },
         });
-        const requestBody = appFetch.mock.calls[0]?.[1]?.body;
-        const body = yield* Schema.decodeUnknownEffect(
-          Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
-        )(requestBody);
+        const body = yield* Schema.decodeEffect(
+          Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json)),
+        )(yield* Effect.promise(() => new Response(init?.body).text()));
         const idempotencyKey = yield* Schema.decodeUnknownEffect(Schema.NonEmptyString)(
           body.idempotencyKey,
         );
@@ -124,10 +128,7 @@ describe("server-authoritative session lifecycle client", () => {
       (body) =>
         Effect.gen(function* () {
           respond(body, 202);
-          expect((yield* Effect.flip(call(() => invoke()))).cause).toMatchObject({
-            status: 502,
-            code: "request_failed",
-          });
+          expect((yield* Effect.flip(call(() => invoke()))).cause).toBeInstanceOf(ApiError);
         }),
     );
 

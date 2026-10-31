@@ -1,4 +1,4 @@
-import { Cause, Effect, Fiber, Schema, Stream } from "effect";
+import { Effect, Fiber, Schema, Stream } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
@@ -20,12 +20,6 @@ const goal = {
   openQuestions: [],
   status: "active" as const,
 };
-
-const sdkCall = <A>(call: () => PromiseLike<A>) =>
-  Effect.tryPromise({
-    try: () => Promise.resolve(call()),
-    catch: (cause) => new Cause.UnknownError(cause),
-  });
 
 /** A fresh session with an active Goal and the test model selected. Run IDs carry the session. */
 const withGoal = Effect.gen(function* () {
@@ -142,8 +136,7 @@ testAgent({ testProvider: { delayedTurnGate: slowTurn.waitFor } })(
         const chat = yield* AgentChat;
         const target = yield* refusedRequest("unresolved-bound-run", yield* withGoal);
         const reserved = `${target.session}:reserved`;
-        const state = yield* chat.status(target.session, null);
-        expect(yield* sdkCall(() => state.json())).toMatchObject({
+        expect(yield* chat.status(target.session, null)).toMatchObject({
           uncertainRuns: [{ runId: reserved, tools: [] }],
         });
         expect(yield* Effect.flip(post(target.session, target.runId))).toEqual({

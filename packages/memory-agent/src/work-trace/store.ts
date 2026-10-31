@@ -30,6 +30,7 @@ import {
   EvidenceVerification,
   HeartbeatState,
   type InvocationKind,
+  type LifecycleIntent,
   RedactionState,
   RunEventKind,
   TaskStatus,
@@ -505,7 +506,7 @@ export type TaskArchive = Data.TaggedEnum<{
 }>;
 export const TaskArchive = Data.taggedEnum<TaskArchive>();
 
-export type LifecycleIntent = "archive" | "restore" | "delete";
+export type { LifecycleIntent } from "./contracts.ts";
 
 /** A lifecycle operation as its row records it. */
 export interface LifecycleOperationView {

@@ -103,7 +103,7 @@ const route = Effect.fnUntraced(function* (
   const [, sessionId, action, approvalId] = session;
   switch (action) {
     case undefined:
-      return yield* chat.status(sessionId!, url.searchParams.get("holder"));
+      return yield* answered(chat.status(sessionId!, url.searchParams.get("holder")));
     case "lease": {
       const lease = yield* Schema.decodeUnknownEffect(LeaseRequest)(yield* body);
       return yield* answered(chat.lease(sessionId!, lease.holder, lease.action));

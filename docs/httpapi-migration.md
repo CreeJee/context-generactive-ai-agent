@@ -125,6 +125,12 @@
   - 응답이 바뀐 곳: 옛 lease 라우트가 GET에 답하던 405 안내는 없어졌다. cancel과 lease의 `run-state` 발행은 성공한 요청에만 한다.
   - 테스트가 `cancel(...).status`를 HTTP 상태로 읽던 곳은 `CancelResult.status`(run 상태)와 이름이 겹쳐 타입으로 잡히지 않았다. 성공 여부를 보도록 고쳤다.
   - 계약에 맞지 않는 payload(전에는 `invalid_uncertain_continue`, `invalid_lease_request`)는 HttpApi의 빈 400이다.
+- 1-4b 세션 상태·수명주기 결과 (2026-10-31): `sessions.$session._index`를 `SessionsGroup`의 `status`(GET)와 `change`(POST)로 옮겼다. `AgentChat`의 `status`·`archive`·`deleteSession`·`setWorkflowPhase`·`controlWorkflow`도 값과 거부를 돌려준다.
+  - 세션 변경은 `SessionChange` TaggedUnion(`Archive`·`Delete`·`Phase`·`Control`) 하나를 받는다. client는 union payload를 case별로 받으므로 페이지가 `Match.valueTags`로 나눠 부른다.
+  - 수명주기 결과는 `work-trace/contracts.ts`의 `LifecycleResult`(`completed`·`waiting_for_stop`·`blocked`)다. 요청부터 막히면 409 `blocked`, 멈춘 뒤 끝내다 막히면 202 `blocked`로 옛 상태와 같다. `blocked`는 `_tag`가 있으므로 `refusalsOnly`는 이제 `Error`인 실패만 defect로 바꾼다.
+  - 응답이 바뀐 곳: 옛 라우트는 없는 세션을 잡지 않아 500으로 답했다. 이제 404 `session_not_found`다. workflow 전이·진행 거부 code 가운데 `unknown_step`, `step_evidence_required`, `verification_required`, `steps_incomplete`, `phase_not_executable`, `goal_completion_required`, `completion_evidence_*`, `completion_snapshot_conflict`는 페이지 code 목록에 없어 `request_failed`로 보였다. 계약이 이것을 찾아 목록에 넣었다.
+  - 202인데 완료 모양인 답처럼 계약에 맞지 않는 응답은 `appCall`이 디코드 실패로 보고 invalid code(`invalid_session_change`)로 준다. 전에는 502였다. 응답 디코드 실패와 요청 거부를 가를지는 1-7에서 정한다.
+  - 계약에 맞지 않는 payload(전에는 `invalid_session_change`)는 HttpApi의 빈 400이다.
 - SSE는 `HttpApiSchema.StreamSse`로 옮긴다. 첨부 업로드(`Content-Length`를 본문보다 먼저 검사)와 다운로드(바이트와 immutable 헤더)가 HttpApi로 같게 안 되면 RR 라우트로 남기고 이유를 적는다.
 
 ### 1-7. 정리

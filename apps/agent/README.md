@@ -108,7 +108,7 @@ UI 컴포넌트는 shadcn으로 추가합니다(`AGENT.md`).
 | `POST /api/projects/:project`                | `crossRecallExcluded`, `permissionMode`(`ask`/`auto`), `hidden`(보관과 해제) 변경    |
 | `GET/POST /api/sessions`                     | 프로젝트별 대화 목록(`archived=1`이면 보관함), 새 대화(`agent`로 외부 에이전트 직접) |
 | `GET /api/sessions/:session?holder=`         | 진행 중인 run, 마지막 run의 끝난 방식, 이 탭의 소유 여부, 컨텍스트 사용량            |
-| `POST /api/sessions/:session`                | `{archived}` 보관과 복원(답변 중 409, 다른 탭 사용 중 423)                           |
+| `POST /api/sessions/:session`                | 보관·복원, 삭제, workflow 단계·동작(답변 중 409, 다른 탭 사용 중 423)                |
 | `POST /api/sessions/:session/lease`          | 탭의 소유권 얻기, 갱신(`claim`), 놓기(`release`)                                     |
 | `POST /api/sessions/:session/cancel`         | 진행 중인 run 취소(소유 탭만), 실제로 멈췄는지 응답                                  |
 | `POST /api/sessions/:session/compact`        | `/compact`: 앞 대화 요약, 이미 답한 도구 출력 비우기(답변 중 409)                    |

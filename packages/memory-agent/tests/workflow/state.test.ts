@@ -2,7 +2,6 @@ import { Deferred, Effect, Fiber, Result, Schema } from "effect";
 import { SqlClient, SqlError } from "effect/sql";
 import { expect, vi } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
-import type { SessionRunState } from "../../src/agent/run-state.ts";
 import { AppEvents } from "../../src/events/app-events.ts";
 import {
   evaluateWorkflowAction,
@@ -830,18 +829,15 @@ testAgent()("server workflow action policy", (it) => {
       yield* Effect.forEach(
         ["owner", "observer"],
         Effect.fnUntraced(function* (holder) {
-          const response = yield* agent.status(id, holder);
-          expect(response.status).toBe(200);
-          // SAFETY: the successful in-process status handler constructs a typed SessionRunState.
-          const snapshot = (yield* Effect.promise(() => response.json())) as SessionRunState;
+          const snapshot = yield* agent.status(id, holder);
           expect(snapshot.actions).toEqual(
             workflowActions(snapshot.workflow, {
               lease: snapshot.lease,
               running: snapshot.running !== null,
             }),
           );
-          const changed = yield* agent.setWorkflowPhase(id, holder, "execute");
-          expect(changed.status).toBe(snapshot.actions.phases.execute.allowed ? 200 : 423);
+          const changed = yield* Effect.result(agent.setWorkflowPhase(id, holder, "execute"));
+          expect(Result.isSuccess(changed)).toBe(snapshot.actions.phases.execute.allowed);
         }),
         { discard: true },
       );

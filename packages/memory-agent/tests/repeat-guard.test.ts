@@ -1,4 +1,4 @@
-import { Cause, Effect, Schema } from "effect";
+import { Effect } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import { AgUiEvent } from "../src/loop/chunks.ts";
@@ -12,19 +12,6 @@ const responder: ScriptedResponder = (invocation) =>
   invocation.index < 10
     ? { toolCalls: [{ id: `call-${invocation.index}`, name: "list_files", arguments: "{}" }] }
     : { text: "the guard did not stop the run" };
-
-const LastRun = Schema.Struct({
-  lastRun: Schema.Struct({
-    status: Schema.String,
-    error: Schema.NullOr(Schema.Struct({ code: Schema.optional(Schema.String) })),
-  }),
-});
-
-const text = (response: Response) =>
-  Effect.tryPromise({
-    try: () => response.text(),
-    catch: (cause) => new Cause.UnknownError(cause),
-  });
 
 testAgent({ testProvider: { responder } })("repeat guard", (it) => {
   it.effect("a call that keeps returning the same result is refused once, then the run stops", () =>
@@ -44,9 +31,7 @@ testAgent({ testProvider: { responder } })("repeat guard", (it) => {
       expect(results).toHaveLength(4);
       expect(results.at(-1)?.content).toEqual(expect.stringContaining("repeated_tool_call"));
       expect(events.find(AgUiEvent.guards.RUN_ERROR)?.code).toBe("repeated_tool_call");
-      const status = yield* Schema.decodeEffect(Schema.fromJsonString(LastRun))(
-        yield* text(yield* (yield* AgentChat).status(session, null)),
-      );
+      const status = yield* (yield* AgentChat).status(session, null);
       expect(status.lastRun).toMatchObject({
         status: "failed",
         error: { code: "repeated_tool_call" },

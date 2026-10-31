@@ -1,17 +1,10 @@
-import { Effect, Schema } from "effect";
+import { Effect } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { testAgent } from "../support/test-env.ts";
 import { openPage } from "../support/chat-client.ts";
-import { freshSession, json } from "./tab.ts";
-
-const Lease = Schema.Union([
-  Schema.Struct({ state: Schema.Literal("mine") }),
-  Schema.Struct({ state: Schema.Literal("other"), since: Schema.Finite }),
-  Schema.Struct({ state: Schema.Literal("free") }),
-]);
-const StatusLease = Schema.Struct({ lease: Lease });
+import { freshSession } from "./tab.ts";
 
 testAgent({ testProvider: {} })("session leases", (it) => {
   it.effect(
@@ -22,11 +15,7 @@ testAgent({ testProvider: {} })("session leases", (it) => {
         const sessionId = yield* freshSession;
         const agent = yield* AgentChat;
         const leaseOf = (holder: string) =>
-          agent.status(sessionId, holder).pipe(
-            Effect.flatMap(json),
-            Effect.flatMap(Schema.decodeUnknownEffect(StatusLease)),
-            Effect.map((status) => status.lease),
-          );
+          Effect.map(agent.status(sessionId, holder), (status) => status.lease);
 
         yield* agent.lease(sessionId, "tab-a", "claim");
         // A second tab asks too and is refused.

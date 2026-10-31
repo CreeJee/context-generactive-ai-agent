@@ -125,7 +125,7 @@ testAgent({ testProvider: { responder } })("BTW threads", (it) => {
         null,
         `delete-${sessionId}`,
       );
-      expect(deleted.status).toBe(200);
+      expect(deleted._tag).toBe("completed");
       expect(yield* count("SELECT count(*) AS count FROM btw_threads WHERE id = ?", kept.id)).toBe(
         0,
       );

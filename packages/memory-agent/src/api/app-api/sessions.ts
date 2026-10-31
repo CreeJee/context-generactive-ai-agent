@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "effect/http-api";
-import { CancelResult, CompactResult } from "../../agent/run-state.ts";
+import { CancelResult, CompactResult, SessionRunState } from "../../agent/run-state.ts";
 import { RelayedApprovalView } from "../../approvals/relayed-state.ts";
 import { StoredMessage } from "../../chat-store/schema.ts";
 import {
@@ -24,7 +24,11 @@ import {
   BoardIntent,
   BoardView,
   UncertainContinueRequest,
+  WorkflowAction,
+  WorkflowPhase,
+  WorkflowState,
 } from "../../workflow/contracts.ts";
+import { LifecycleResult } from "../../work-trace/contracts.ts";
 import { PlanDependencyIssue } from "../../workflow/plan-schedule.ts";
 import { sessionHolderHeaders } from "../chat-api.ts";
 import { appRefusalFields, refusalWith, SameSite } from "../refusal.ts";
@@ -88,6 +92,18 @@ export const LeaseRequest = Schema.Struct({
   action: Schema.Literals(["claim", "release"]),
 });
 export type LeaseRequest = typeof LeaseRequest.Type;
+
+/**
+ * What the page asks of one conversation: archive or restore it, delete it, or move or pause its
+ * workflow. A retried change with the same `idempotencyKey` answers the first one's operation.
+ */
+export const SessionChange = Schema.TaggedUnion({
+  Archive: { archived: Schema.Boolean, idempotencyKey: Schema.optional(Schema.String) },
+  Delete: { idempotencyKey: Schema.String },
+  Phase: { phase: WorkflowPhase },
+  Control: { workflowAction: WorkflowAction },
+});
+export type SessionChange = typeof SessionChange.Type;
 
 /** How many approvals were discarded. */
 export const InterruptsDiscarded = Schema.Struct({ discarded: Schema.Finite });
@@ -207,6 +223,32 @@ const NoRunningRun = appRefusal(409, ["no_running_run"]);
 /** The runs left unknown changed since the page showed them. */
 const UncertainRunsChanged = appRefusal(409, ["uncertain_runs_changed"]);
 
+/**
+ * The workflow cannot move or pause that way now; the code is the reason. A `session_in_use` or
+ * `run_in_progress` reason is answered as `SessionInUse` or `RunInProgress`.
+ */
+const WorkflowChangeRefused = appRefusal(409, [
+  "goal_missing",
+  "goal_not_active",
+  "goal_not_paused",
+  "goal_terminal",
+  "plan_not_ready",
+  "plan_outdated",
+  "plan_missing",
+  "unknown_step",
+  "step_evidence_required",
+  "verification_required",
+  "steps_incomplete",
+  "phase_not_executable",
+  "goal_completion_required",
+  "completion_evidence_required",
+  "completion_evidence_invalid",
+  "completion_snapshot_conflict",
+]);
+
+/** The archive, restore or delete cannot start; `blocker` says why. */
+const LifecycleBlocked = LifecycleResult.cases.blocked.pipe(HttpApiSchema.status(409));
+
 /** The session has no such subagent. */
 const UnknownSubagent = appRefusal(404, ["subagent_not_found"]);
 
@@ -243,6 +285,7 @@ export const sessionsRefusals = [
   RunInProgress,
   NoRunningRun,
   UncertainRunsChanged,
+  WorkflowChangeRefused,
   UnknownSubagent,
   ApprovalNotPending,
   SessionStorageFailed,
@@ -253,6 +296,34 @@ const session = { session: Schema.String };
 /** A project's conversations and what each one runs (`/api/sessions/*`). */
 export class SessionsGroup extends HttpApiGroup.make("sessions")
   .add(
+    /**
+     * Run state the transcript does not carry: whether a run is still producing, how the last one
+     * ended, and whether the asking page (`holder`) holds the session.
+     */
+    HttpApiEndpoint.get("status", "/api/sessions/:session", {
+      params: session,
+      query: { holder: Schema.optional(Schema.String) },
+      success: SessionRunState,
+      error: [UnknownSession, SelectedProviderUnavailable],
+    }),
+    /**
+     * Archives, restores or deletes the conversation, or moves or pauses its workflow. An archive
+     * or restore answers the session; a delete its operation. Either one still waiting for a live
+     * attempt to stop, or blocked on the way, is answered 202; one that cannot start, 409.
+     */
+    HttpApiEndpoint.post("change", "/api/sessions/:session", {
+      params: session,
+      headers: sessionHolderHeaders,
+      payload: SessionChange,
+      success: [
+        Session,
+        WorkflowState,
+        LifecycleResult.cases.completed,
+        LifecycleResult.cases.waiting_for_stop.pipe(HttpApiSchema.status(202)),
+        LifecycleResult.cases.blocked.pipe(HttpApiSchema.status(202)),
+      ],
+      error: [SessionInUse, UnknownSession, RunInProgress, WorkflowChangeRefused, LifecycleBlocked],
+    }),
     /** The project's conversations, newest first; `archived=1` lists only the archived ones. */
     HttpApiEndpoint.get("list", "/api/sessions", {
       query: { project: Schema.NonEmptyString, archived: Schema.optional(Schema.Literal("1")) },

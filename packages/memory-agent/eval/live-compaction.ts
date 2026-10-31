@@ -1,10 +1,10 @@
-import { nativePromise, runNativeEffect } from "../src/runtime/native-effect.ts";
+import { runNativeEffect } from "../src/runtime/native-effect.ts";
 import {
   AuthConnectionState,
   type ModelRun,
   type ModelSelection,
 } from "../src/providers/contracts.ts";
-import { Cause, Config, Console, Result, Function as EffectFunction, Stream } from "effect";
+import { Cause, Config, Console, Result, Stream } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { NodeServices } from "@effect/platform-node";
 import { Context, Crypto, FileSystem } from "effect";
@@ -159,19 +159,10 @@ const runArm = Effect.fn("eval.runArm")(function* (variant: "auto" | "auto-plus-
     const answer = events
       .flatMap(({ data }) => (AgUiEvent.guards.TEXT_MESSAGE_CONTENT(data) ? [data.delta] : []))
       .join("");
-    const statusResponse = yield* Effect.provideContext(
+    const status = yield* Effect.provideContext(
       services.agent.status(services.sessionId, null),
       servicesContext,
     );
-    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-    const status = EffectFunction.flow(
-      Schema.decodeUnknownResult(
-        Schema.Struct({
-          lastRun: Schema.NullOr(Schema.Struct({ status: Schema.String })),
-        }),
-      ),
-      Result.getOrThrow,
-    )(yield* nativePromise(() => statusResponse.json()));
     if (status.lastRun?.status !== "completed")
       throw new Error(`pilot_run_${status.lastRun?.status ?? "missing"}`);
     if (MutableRef.get(calls) >= maxCalls && !last)

@@ -7,7 +7,7 @@ import { Sessions } from "../../src/sessions/sessions.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
-import { json, openPage, sessionScopedResponder } from "../support/chat-client.ts";
+import { openPage, sessionScopedResponder } from "../support/chat-client.ts";
 
 /** A fresh session in the shared `ask`-mode agent, with the test model selected. */
 const freshSession = Effect.gen(function* () {
@@ -163,7 +163,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("approval-gat
       const agent = yield* AgentChat;
       expect(yield* agent.discardInterrupts(sessionId, null)).toEqual({ discarded: 1 });
       expect(yield* (yield* RunStore).pendingInterrupts(sessionId)).toEqual([]);
-      expect(yield* json(yield* agent.status(sessionId, null))).toMatchObject({
+      expect(yield* agent.status(sessionId, null)).toMatchObject({
         running: null,
         lastRun: { status: "failed", error: { code: "interrupt_continuation_lost" } },
       });
@@ -188,7 +188,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })(
         const status = yield* env.use(
           Effect.flatMap(AgentChat, (agent) => agent.status(sessionId, null)),
         );
-        expect(yield* json(status)).toMatchObject({
+        expect(status).toMatchObject({
           running: null,
           lastRun: { status: "failed", error: { code: "server_restarted" } },
         });

@@ -188,14 +188,7 @@ const executing = Effect.fnUntraced(function* (
     }),
   );
   const agent = env.use(AgentChat);
-  const status = Effect.flatMap(agent, (chat) => chat.status(id, null)).pipe(
-    Effect.flatMap((response) =>
-      Effect.tryPromise({
-        try: () => response.json(),
-        catch: (cause) => new Cause.UnknownError(cause),
-      }),
-    ),
-  );
+  const status = Effect.flatMap(agent, (chat) => chat.status(id, null));
   return {
     id,
     invocations: () => env.provider!.invocations.filter((turn) => turn.run.threadId === id),

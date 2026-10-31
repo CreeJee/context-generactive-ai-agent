@@ -16,28 +16,10 @@ import {
   gatedResponder,
   holdDelayedTurns,
   invocationsOf,
-  json,
   until,
   userTexts,
 } from "./tab.ts";
 
-const Decision = Schema.Struct({ allowed: Schema.Boolean, reason: Schema.optional(Schema.String) });
-const Status = Schema.Struct({
-  actions: Schema.Struct({
-    phases: Schema.Record(Schema.String, Decision),
-    controls: Schema.Record(Schema.String, Decision),
-  }),
-  running: Schema.NullOr(Schema.Struct({ runId: Schema.String })),
-  lastRun: Schema.NullOr(
-    Schema.Struct({
-      runId: Schema.String,
-      status: Schema.String,
-      error: Schema.NullOr(
-        Schema.Struct({ message: Schema.String, code: Schema.optional(Schema.String) }),
-      ),
-    }),
-  ),
-});
 /** The state's case name, for comparing a queue's order at a glance. */
 const stateName = QueueItemState.$match({
   waiting: () => "waiting",
@@ -56,10 +38,7 @@ const chatSession = Effect.gen(function* () {
 });
 
 const statusOf = (sessionId: string) =>
-  Effect.flatMap(agentChat, (agent) => agent.status(sessionId, null)).pipe(
-    Effect.flatMap(json),
-    Effect.flatMap(Schema.decodeUnknownEffect(Status)),
-  );
+  Effect.flatMap(agentChat, (agent) => agent.status(sessionId, null));
 
 const queueOf = (sessionId: string) =>
   Effect.flatMap(agentChat, (agent) => agent.queued(sessionId));
@@ -139,9 +118,9 @@ testAgent({ testProvider: { responder: gatedResponder } })("chat runs", (it) => 
         allowed: false,
         reason: "run_in_progress",
       });
-      const refused = yield* agent.setWorkflowPhase(session.id, null, "plan");
-      expect(refused.status).toBe(409);
-      expect(yield* json(refused)).toEqual({ error: "run_in_progress" });
+      expect(yield* Effect.flip(agent.setWorkflowPhase(session.id, null, "plan"))).toEqual({
+        error: "run_in_progress",
+      });
       expect(yield* agent.cancel(session.id, null)).toMatchObject({
         stopped: true,
         status: "aborted",
@@ -168,7 +147,7 @@ testAgent({ testProvider: { responder: gatedResponder } })("chat runs", (it) => 
     Effect.gen(function* () {
       const session = yield* chatSession;
       const agent = yield* agentChat;
-      expect((yield* agent.setWorkflowPhase(session.id, null, "plan")).status).toBe(200);
+      yield* agent.setWorkflowPhase(session.id, null, "plan");
       yield* sendInBackground(yield* openPage(session.id), "please be slow");
       yield* until(() => session.invocations().length === 1, "the Plan run to start");
       const running = yield* statusOf(session.id);

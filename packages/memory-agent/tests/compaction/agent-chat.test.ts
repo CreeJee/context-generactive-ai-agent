@@ -11,24 +11,10 @@ import { Sessions } from "../../src/sessions/sessions.ts";
 import { runTurn } from "../support/chat-client.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
-import { call, conversation, nextRequest } from "./fixtures.ts";
+import { conversation, nextRequest } from "./fixtures.ts";
 
 const stringifyJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
-const decodeStatus = Schema.decodeUnknownEffect(
-  Schema.Struct({
-    context: Schema.Struct({
-      usedTokens: Schema.NullOr(Schema.Finite),
-      cachedTokens: Schema.NullOr(Schema.Finite),
-      cacheRatio: Schema.NullOr(Schema.Finite),
-      compactionStage: Schema.NullOr(
-        Schema.Literals(["none", "clear-answered", "summarize", "leave-out"]),
-      ),
-      windowTokens: Schema.Finite,
-      compactAtTokens: Schema.Finite,
-    }),
-  }),
-);
 const decodeStoredSummaries = Schema.decodeUnknownEffect(
   Schema.Struct({ blocks: Schema.Array(Schema.Unknown) }),
 );
@@ -219,10 +205,9 @@ testAgent({
   it.effect("reports prompt cache usage across consecutive requests and distinguishes zero", () =>
     Effect.gen(function* () {
       const { sessionId } = yield* freshSession;
-      const status = Effect.gen(function* () {
-        const response = yield* (yield* AgentChat).status(sessionId, null);
-        return (yield* decodeStatus(yield* call(() => response.json()))).context;
-      });
+      const status = Effect.flatMap(AgentChat, (agent) => agent.status(sessionId, null)).pipe(
+        Effect.map((state) => state.context),
+      );
       const events = (runId: string) => send(sessionId, runId, "hello");
       expect(yield* status).toEqual({
         usedTokens: null,
@@ -230,6 +215,7 @@ testAgent({
         cacheRatio: null,
         compactionStage: null,
         windowTokens: 200_000,
+        windowKnown: false,
         compactAtTokens: 0,
       });
       expect(

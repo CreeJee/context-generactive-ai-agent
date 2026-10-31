@@ -62,8 +62,12 @@ export {
   DecisionAnswerInput,
   KanbanCommand,
   KanbanView,
+  SessionChange,
   SubagentTranscript,
 } from "./app-api/sessions.ts";
+export { Session } from "../sessions/contracts.ts";
+export { LifecycleResult } from "../work-trace/contracts.ts";
+export { WorkflowState } from "../workflow/contracts.ts";
 export { FolderPick } from "../projects/contracts.ts";
 export {
   SubscriptionAccountsView,

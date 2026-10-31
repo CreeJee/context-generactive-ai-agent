@@ -6,7 +6,7 @@ import { Projects } from "../../src/projects/projects.ts";
 import type { PermissionMode } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { chatApi } from "../support/chat-api.ts";
-import { eventsOf, json, openPage, sdk, wireOf } from "../support/chat-client.ts";
+import { eventsOf, openPage, sdk, wireOf } from "../support/chat-client.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { sqlAll, sqlGet } from "../support/sql.ts";
 import { TestEnv } from "../support/test-env.ts";
@@ -24,12 +24,6 @@ import { migratedRows, normalized, withoutChunkMetadata } from "./rows.ts";
 /** A database read, as conditions the scenarios wait for are. */
 type Query = ReturnType<typeof sqlGet>;
 
-const decodeRunState = Schema.decodeUnknownEffect(
-  Schema.Struct({
-    running: Schema.NullOr(Schema.Json),
-    uncertainRuns: Schema.Array(Schema.Struct({ runId: Schema.String })),
-  }),
-);
 const PendingInterrupt = Schema.Struct({ run_id: Schema.String, interrupt_id: Schema.String });
 const decodePending = Schema.decodeUnknownEffect(PendingInterrupt);
 const decodeAllPending = Schema.decodeUnknownEffect(Schema.NonEmptyArray(PendingInterrupt));
@@ -89,8 +83,7 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
   const idle = Effect.flatMap(TestEnv, (env) =>
     env.use(
       Effect.gen(function* () {
-        const response = yield* (yield* AgentChat).status(sessionId, null);
-        return (yield* decodeRunState(yield* json(response))).running === null;
+        return (yield* (yield* AgentChat).status(sessionId, null)).running === null;
       }),
     ),
   );
@@ -287,7 +280,7 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
       yield* env.use(
         Effect.gen(function* () {
           const chat = yield* AgentChat;
-          const state = yield* decodeRunState(yield* json(yield* chat.status(sessionId, null)));
+          const state = yield* chat.status(sessionId, null);
           yield* chat.continuePastUncertain(sessionId, null, {
             runIds: state.uncertainRuns.map((run) => run.runId),
           });
