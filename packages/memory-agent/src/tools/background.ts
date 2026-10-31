@@ -16,6 +16,7 @@ import {
   Stream,
 } from "effect";
 import { RunStore } from "../loop/store.ts";
+import { optionalProperty } from "../optional-property.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { AttemptFailureReason } from "../work-trace/contracts.ts";
 import { WorkTraceStore } from "../work-trace/store.ts";
@@ -107,6 +108,13 @@ const cancelBackgroundTask = {
     "Stop one background task in this session and await its cleanup. Does not undo effects already performed.",
   parameters: ResultInput,
 } as const;
+
+/**
+ * What a task still running tells the model. The server waits for it: the session's Plan holds
+ * until it ends, and its notification starts the next turn.
+ */
+const awaitedByServer =
+  "Do not poll it or watch its progress: end your turn when nothing else is left, and its completion notification starts your next turn.";
 
 const make = Effect.gen(function* () {
   const trace = yield* WorkTraceStore;
@@ -285,6 +293,8 @@ const make = Effect.gen(function* () {
             binding.runId,
           ),
         );
+        // Before the wakeup, which holds the session's Plan while its background work runs.
+        yield* Ref.update(sessions, HashMap.remove(handle.taskId));
         yield* PubSub.publish(completions, binding.sessionId);
       });
       const job = Effect.gen(function* () {
@@ -325,8 +335,7 @@ const make = Effect.gen(function* () {
         status: "running" as const,
         taskId: handle.taskId,
         attemptId: handle.id,
-        nextAction:
-          "Continue independent work. Retrieve the result with get_background_result after completion.",
+        nextAction: `Continue independent work. ${awaitedByServer} Retrieve the result with get_background_result then.`,
       };
     });
     return yield* dispatch.withPermit(
@@ -358,8 +367,13 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const detail = yield* owned(sessionId, taskId);
         const result = yield* readResult(sessionId, taskId);
+        const running = HashMap.has(yield* Ref.get(sessions), taskId);
         return Option.match(Option.fromNullishOr(result), {
-          onNone: () => ({ taskId, status: detail.attempts.at(-1)?.status ?? "interrupted" }),
+          onNone: () => ({
+            taskId,
+            status: detail.attempts.at(-1)?.status ?? "interrupted",
+            ...optionalProperty("nextAction", running ? awaitedByServer : undefined),
+          }),
           onSome: (found) => {
             const end = Math.min(offset + 4000, found.result.length);
             return {

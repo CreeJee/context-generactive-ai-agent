@@ -1,6 +1,7 @@
 import {
   Array as EffectArray,
   Cause,
+  Deferred,
   Effect,
   FileSystem,
   MutableHashMap,
@@ -15,6 +16,7 @@ import { messageText } from "../../src/agent/compaction.ts";
 import type { JsonValue as Json } from "../../src/json.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
+import { BackgroundTasks } from "../../src/tools/background.ts";
 import type {
   ScriptedResponder,
   ScriptedToolCall,
@@ -402,6 +404,34 @@ testAgent({ testProvider: { responder } })("automatic workflow execution", (it) 
         (yield* Schema.decodeUnknownEffect(LastRunStatus)(yield* session.status)).lastRun.status,
       ).toBe("interrupted");
       expect(session.invocations()).toHaveLength(1);
+    }),
+  );
+
+  it.effect("running background work holds the Plan until its completion wakes the session", () =>
+    Effect.gen(function* () {
+      const session = yield* executing([
+        { text: "The check runs in the background." },
+        ...implementAndVerify,
+      ]);
+      const release = yield* Deferred.make<void>();
+      yield* (yield* BackgroundTasks).start(
+        {
+          sessionId: session.id,
+          runId: `${session.id}:check`,
+          abortSignal: yield* Effect.abortSignal,
+        },
+        `${session.id}:check`,
+        "shell",
+        "check",
+        Effect.as(Deferred.await(release), { report: "Check passed", failure: null }),
+      );
+      yield* session.run();
+      // Longer than the follow-up's delay, after which an unheld Plan would already continue.
+      yield* Effect.sleep("200 millis");
+      expect(session.invocations()).toHaveLength(1);
+      yield* Deferred.succeed(release, undefined);
+      yield* completesGoal(session);
+      expect(session.invocations()).toHaveLength(5);
     }),
   );
 

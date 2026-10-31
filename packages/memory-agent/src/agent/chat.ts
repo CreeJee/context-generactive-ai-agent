@@ -2865,9 +2865,13 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             yield* Ref.update(kanbanAttention, ({ [sessionId]: _taken, ...rest }) => rest);
             return yield* drain(yield* send(followupRunId, InternalFollowup.kanban({ reasons })));
           }
-          const continuing = restarted
-            ? yield* execution.canResume(sessionId, last.runId, workflow)
-            : yield* execution.canContinue(sessionId, last.runId, workflow);
+          // Background work still running holds the Plan: the session waits for it, not the model,
+          // and its end wakes the session again with its notification.
+          const continuing =
+            !(yield* background.hasSession(sessionId)) &&
+            (restarted
+              ? yield* execution.canResume(sessionId, last.runId, workflow)
+              : yield* execution.canContinue(sessionId, last.runId, workflow));
           if (
             !continuing &&
             (restarted || !(yield* workTrace.pendingParentNotificationSessions).includes(sessionId))

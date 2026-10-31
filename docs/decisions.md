@@ -3346,3 +3346,15 @@
 - 증상: 한 세션의 run 시작이 매번 `route_defect { error: 'Defect' }`로만 남았다. `orDefect`는 refusal로 바꾸지 못한 typed 실패를 `Cause.fail`로 넘기는데, `logDefect`가 `error`를 `Defect`로 고정해 실패 태그가 로그에서 사라졌다. 원인은 span(`AgentChat.start` 아래 `sql.execute` 실패)과 `DefectReporter.recent`(`SqlError`)로 따로 찾아야 했다. Mac이 비정상 종료한 뒤 그 세션의 `chat_threads` 행 overflow chain이 끊겨 있었다.
 - 결정: `logDefect`는 `failureTags(cause)`로 남긴다. typed 실패는 `SqlError:UnknownError`처럼 태그와 reason으로, die는 지금처럼 `Defect`로 남는다. 2026-10-18의 기준(로그에는 오류 태그와 reason 태그만)을 따르고, 원문 메시지·SQL은 계속 남기지 않는다.
 - 한계: Effect의 `classifySqliteError`는 SQLite 손상(result code 11)을 `UnknownError`로 분류해, 로그만으로는 손상과 다른 SQLite 오류를 가르지 못한다.
+
+## 백그라운드 작업이 도는 동안 Plan은 자동으로 이어지지 않고 완료 알림을 기다린다 (2026-10-31)
+
+- 증상: Plan을 실행하던 로컬 LLM이 백그라운드 채점 작업을 기다리며 약 4초마다 `get_background_result`와 `run_code`(덤프 행 수 세기)를 불렀다. 답을 끝내면 `canContinue`가 Plan이 ready라는 것만 보고 곧바로 다음 run을 열었다. 그래서 모델이 기다리는 방법은 폴링뿐이었다. `get_background_result`는 반복 감지에서 빠져 있어 폴링이 멈추지 않았고, 그동안 사용자 메시지는 그 run의 도구 경계에서만 끼어들 수 있었다.
+- 사용자 결정: 기다림은 서버 상태로 둔다. 세션에 실행 중인 백그라운드 작업이 있으면(`BackgroundTasks.hasSession`) Plan을 자동으로 이어가지 않는다. 작업이 끝나면 완료 알림이 세션을 깨우고, 그때 Plan 이어가기를 다시 판단한다.
+  - 작업의 종료 기록은 완료 알림을 내기 전에 실행 목록에서 그 작업을 뺀다. 깨운 쪽이 끝난 작업을 아직 실행 중으로 보지 않게 하기 위해서다.
+  - 모델에게는 안내만 한다. 접수 결과와 아직 실행 중인 `get_background_result`의 `nextAction`, Execute 안내에 "폴링하지 말고 답을 끝내라, 완료 알림이 다음 턴을 연다"를 적는다.
+- 버린 안:
+  - 폴링 간격 줄이기: run이 계속 돌아 채팅이 막히는 문제가 남는다.
+  - run 안에서 기다리는 도구(`wait_for_background`): 기다리는 동안 run이 잡혀 채팅을 못 한다. 2026-10-25에 `wait_subagents`를 없앤 이유와 같다.
+  - 모델이 알림을 요청하는 도구(`notify_when_background_done`): 실행 중인 작업이 있다는 것은 서버가 이미 안다. 그것을 모델의 도구 호출에 맡기면, 모델이 부르지 않을 때 다시 폴링으로 돌아간다.
+- 이어서 할 일: 자동 후속 run의 시작 이유는 지금 요청에만 넣는 user 턴이다(2026-10-30). 이것을 오케스트레이터가 보내는 메시지로 바꿔 대화에 남기고 화면에 보이게 한다. 사용자·모델과 다른 세 번째 발신자다.
