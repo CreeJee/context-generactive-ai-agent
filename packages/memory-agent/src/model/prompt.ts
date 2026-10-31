@@ -30,7 +30,7 @@ type ToolMessage = Extract<StoredMessage, { readonly role: "tool" }>;
 export type StoredContent = UserMessage["content"];
 type ContentPart = Exclude<StoredContent, string>[number];
 
-const { id, createdAt } = StoredUserMessage.fields;
+const { id, createdAt, orchestrator } = StoredUserMessage.fields;
 const { model, source, finishReason, stopReason } = StoredAssistantMessage.fields;
 
 /** What a message keeps beside its parts. */
@@ -41,6 +41,7 @@ const MessageOptions = Schema.Struct({
   source,
   finishReason,
   stopReason,
+  orchestrator,
   /** The user content was a string rather than parts. */
   text: Schema.optionalKey(Schema.Literal(true)),
   /** The assistant content was `null` or `""` rather than absent; text becomes a part. */
@@ -251,7 +252,12 @@ const storedUser = (message: Prompt.UserMessage): StoredMessage => {
 };
 
 const storedAssistant = (message: Prompt.AssistantMessage): StoredMessage => {
-  const { text: _text, content: empty, ...kept } = messageOptions(message);
+  const {
+    text: _text,
+    content: empty,
+    orchestrator: _orchestrator,
+    ...kept
+  } = messageOptions(message);
   const thinking = message.content
     .filter((part): part is Prompt.ReasoningPart => part.type === "reasoning")
     .map((part) => {
