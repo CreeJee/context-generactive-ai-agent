@@ -100,6 +100,10 @@
   - 계약에 맞지 않는 query·payload(전에는 `invalid_provider`, `invalid_intent`, `invalid_selection`, `invalid_account_action`)는 HttpApi의 빈 400이다. facade는 같은 code를 `appCall`의 invalid code로 준다.
   - client 메서드는 union payload를 case별로 받으므로 facade가 `Match.discriminatorsExhaustive("intent")`로 나눠 부른다. 계약의 명령 union은 member마다 intent가 하나다.
   - 찾은 문제: ACP bridge(`acp/app-api.ts`의 `auth`)는 `/api/auth`를 provider 없이 부른다. 옛 라우트도 400 `invalid_provider`로 답했으므로 실제 앱에서는 `session/new`가 늘 실패한다. 테스트용 앱(`tests/agents/app-fetch.ts`)은 첫 provider로 답해 이것을 가린다. 어느 provider를 볼지 정해야 고칠 수 있어 남겼다.
+- 1-4a 결과 (2026-10-31): 세션 목록·생성(`sessions._index`)과 세션 결정(`sessions.$session.decisions*`)을 `app-api/sessions.ts`의 `SessionsGroup`으로 옮겼다. 보드·칸반, `AgentChat` 기반 라우트, trace는 남았다.
+  - `Session` Schema는 `sessions/contracts.ts`에 둔다. 세션을 바꾸는 endpoint의 holder 헤더는 `chat-api.ts`의 `sessionHolderHeaders`를 같이 쓰고, client에는 `x-session-holder` 이름 그대로 넘긴다.
+  - 계약에 맞지 않는 query·payload(전에는 `project_required`, `invalid_session`, `invalid_decision_answer`)는 HttpApi의 빈 400이다. facade는 같은 code를 `appCall`의 invalid code로 준다.
+  - 결정 답변의 거부는 `kanbanRefusal.HumanDecisionRefused`로 reason을 code로 답한다. 상태(404·400·409)는 옛 `humanDecisionStatus` 표와 같다.
 - SSE는 `HttpApiSchema.StreamSse`로 옮긴다. 첨부 업로드(`Content-Length`를 본문보다 먼저 검사)와 다운로드(바이트와 immutable 헤더)가 HttpApi로 같게 안 되면 RR 라우트로 남기고 이유를 적는다.
 
 ### 1-7. 정리

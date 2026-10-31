@@ -731,10 +731,13 @@ export const api = {
   /** Opens the folder dialog of the machine running the app; nothing is registered yet. */
   pickFolder: () => appCall((client) => client.projects.pick()),
 
-  sessions: (projectId: string) =>
-    call<Session[]>("GET", `/api/sessions?project=${encodeURIComponent(projectId)}`),
-  archivedSessions: (projectId: string) =>
-    call<Session[]>("GET", `/api/sessions?project=${encodeURIComponent(projectId)}&archived=1`),
+  sessions: (project: string) =>
+    appCall((client) => client.sessions.list({ query: { project } }), "project_required"),
+  archivedSessions: (project: string) =>
+    appCall(
+      (client) => client.sessions.list({ query: { project, archived: "1" } }),
+      "project_required",
+    ),
   ...makeSessionLifecycleClient(appFetch),
   /** Refused while a run is active; execute requires a current Plan that is ready or executing. */
   setWorkflowPhase: (sessionId: string, holder: string, phase: WorkflowPhase) =>
@@ -752,8 +755,8 @@ export const api = {
       [sessionHolderHeader]: holder,
     }),
   /** The board's cards waiting for a person's decision. */
-  decisions: (sessionId: string) =>
-    call<HumanDecisionRequest[]>("GET", `/api/sessions/${encodeURIComponent(sessionId)}/decisions`),
+  decisions: (session: string) =>
+    appCall((client) => client.sessions.decisions({ params: { session } })),
   /** Every unanswered card decision of the project, across conversations and Goals. */
   decisionInbox: (project: string) =>
     appCall((client) => client.projects.decisions({ params: { project } })),
@@ -768,16 +771,19 @@ export const api = {
     >,
     answer: DecisionAnswer,
   ) =>
-    call<HumanDecisionRequest>(
-      "POST",
-      `/api/sessions/${encodeURIComponent(request.sessionId)}/decisions/${encodeURIComponent(request.requestId)}`,
-      {
-        goalInstanceId: request.goalInstanceId,
-        cardId: request.cardId,
-        factsSeq: request.factsSeq,
-        answer,
-      },
-      { [sessionHolderHeader]: holder },
+    appCall(
+      (client) =>
+        client.sessions.answerDecision({
+          params: { session: request.sessionId, decision: request.requestId },
+          headers: { "x-session-holder": holder },
+          payload: {
+            goalInstanceId: request.goalInstanceId,
+            cardId: request.cardId,
+            factsSeq: request.factsSeq,
+            answer,
+          },
+        }),
+      "invalid_decision_answer",
     ),
   kanban: (sessionId: string) =>
     call<KanbanView>("GET", `/api/sessions/${encodeURIComponent(sessionId)}/kanban`),
@@ -819,7 +825,10 @@ export const api = {
     ),
   /** `agent`: talk directly to that trusted external ACP agent instead of the app's model. */
   createSession: (projectId: string, agent?: string) =>
-    call<Session>("POST", "/api/sessions", { projectId, agent }),
+    appCall(
+      (client) => client.sessions.create({ payload: { projectId, agent } }),
+      "invalid_session",
+    ),
   btwThreads: (sessionId: string) =>
     call<BtwThread[]>("GET", `/api/sessions/${encodeURIComponent(sessionId)}/btw`),
   /** A new BTW thread bound for good to this conversation. */

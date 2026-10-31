@@ -6,7 +6,7 @@
 
 ## Interface
 
-- `Session` — 세션 Schema.Struct(id, projectId, title, createdAt, agent, archivedAt, importedFrom, worktreePath, branch)와 같은 이름의 타입
+- `Session` — 세션 Schema.Struct(id, projectId, title, createdAt, agent, archivedAt, importedFrom, worktreePath, branch)와 같은 이름의 타입. 앱 API 계약이 쓰므로 `contracts.ts`에 두고 `sessions.ts`가 다시 내보낸다
 - `SessionOrigin` — 대화가 실행된 worktreePath·branch(둘 다 nullable) 인터페이스
 - `SessionNotFound` — id를 가진 Schema.TaggedError, get·setArchived가 행이 없을 때 실패로 냄
 - `Sessions` — Context.Service("memory-agent/sessions/sessions"); `Sessions.layer`는 NodeCrypto.layer를 제공하고 SqlClient·Projects를 요구
@@ -41,6 +41,7 @@
 - permits는 lease가 없으면 true(holder 없는 테스트·스크립트 허용), 있으면 holder가 일치할 때만 true이다.
 - sweepExpired는 만료 세션마다 등록 순서대로 listener를 차례로 실행한다.
 - sweep 주기는 max(1_000, min(ttlMs, 5_000))ms이다; 읽기 전용 페이지가 빈 세션을 빨리 알게 하기 위함이다.
+- `contracts.ts`는 브라우저 번들이 쓰므로 서버 코드를 import하지 않는다.
 - `lease-state.ts`는 브라우저에서도 import하므로 Node·Effect 의존 없이 타입·상수만 둔다 ("Browser-safe shapes" 주석).
 
 ## Side Effects

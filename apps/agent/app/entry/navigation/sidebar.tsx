@@ -565,8 +565,8 @@ export function SessionSection({
   onRestore,
   agents,
 }: {
-  sessions: Session[];
-  archived: Session[];
+  sessions: ReadonlyArray<Session>;
+  archived: ReadonlyArray<Session>;
   /** The list has not arrived yet, so an empty one says nothing. */
   loading: boolean;
   projectId: string;

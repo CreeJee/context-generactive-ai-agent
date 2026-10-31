@@ -1,6 +1,7 @@
 import { HttpApi } from "effect/http-api";
 import { ProjectsGroup, projectsRefusals } from "./app-api/projects.ts";
 import { AccountsGroup, AuthGroup, ModelsGroup, providersRefusals } from "./app-api/providers.ts";
+import { SessionsGroup, sessionsRefusals } from "./app-api/sessions.ts";
 import { SettingsGroup, settingsRefusals } from "./app-api/settings.ts";
 import { refusalStatusIn } from "./refusal.ts";
 
@@ -14,7 +15,8 @@ export class AppApi extends HttpApi.make("app")
   .add(ProjectsGroup)
   .add(AuthGroup)
   .add(AccountsGroup)
-  .add(ModelsGroup) {}
+  .add(ModelsGroup)
+  .add(SessionsGroup) {}
 
 /**
  * The HTTP status an app API refusal is answered with. A code has one status across the groups, so
@@ -24,6 +26,7 @@ export const appRefusalStatus = refusalStatusIn([
   ...settingsRefusals,
   ...projectsRefusals,
   ...providersRefusals,
+  ...sessionsRefusals,
 ]);
 
 export {
@@ -53,6 +56,7 @@ export {
   ModelCatalogView,
   SubscriptionAccountCommand,
 } from "./app-api/providers.ts";
+export { CreateSession, DecisionAnswerInput } from "./app-api/sessions.ts";
 export { FolderPick } from "../projects/contracts.ts";
 export {
   SubscriptionAccountsView,

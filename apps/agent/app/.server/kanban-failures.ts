@@ -111,6 +111,7 @@ export const kanbanRefusal = {
         ? ({ error: "invalid_kanban_settings" } as const)
         : { error: reason },
     ),
+  HumanDecisionRefused: ({ reason }: HumanDecisionRefused) => Effect.fail({ error: reason }),
   KanbanStorageFailed: () => Effect.fail({ error: "kanban_storage_failed" } as const),
   WorkflowStorageError: () => Effect.fail({ error: "workflow_storage_failed" } as const),
   GoalScheduleStorageFailed: () => Effect.fail({ error: "schedule_storage_failed" } as const),

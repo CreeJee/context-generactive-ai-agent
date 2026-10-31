@@ -231,6 +231,8 @@ const PageSize = Schema.FiniteFromString.pipe(
 
 /** The header a page sends with every change it makes to a session, as the server reads it. */
 const holderHeader = "x-session-holder" satisfies Lowercase<typeof sessionHolderHeader>;
+/** The `headers` of an endpoint that changes a session: the page holding it, when it sent one. */
+export const sessionHolderHeaders = { [holderHeader]: Schema.optional(Schema.String) };
 
 export class ChatGroup extends HttpApiGroup.make("chat").add(
   /** The newest `limit` messages, or those before `before`, with the run and approvals pending. */
@@ -243,7 +245,7 @@ export class ChatGroup extends HttpApiGroup.make("chat").add(
   /** Starts a run and streams its events from the start. */
   HttpApiEndpoint.post("run", "/api/sessions/:session/runs", {
     params: { session: Schema.String },
-    headers: { [holderHeader]: Schema.optional(Schema.String) },
+    headers: sessionHolderHeaders,
     payload: RunInput,
     success: RunEvents,
     error: refusals,

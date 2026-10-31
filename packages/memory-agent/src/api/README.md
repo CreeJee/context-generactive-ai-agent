@@ -18,6 +18,8 @@
 - `AuthGroup` — `status` GET /api/auth?provider(`ProviderAuthState`, 404 `provider_unavailable`, 502 `auth_failed`, 10초가 지나면 504 `auth_failed`+`reason: auth_status_timeout`), `action` POST /api/auth `{ intent: login|cancel|logout, provider }`(구독 공급자만). 모두 SameSite
 - `AccountsGroup` — `list` GET /api/accounts?provider(구독은 `SubscriptionAccountsView`, `openai-compatible`은 `CompatibleAccountsView`; 503 `account_list_unavailable`), `action` POST /api/accounts(`SubscriptionAccountCommand` 또는 `CompatibleAccountCommand`; 답은 그 provider의 계정 view, 호환 `test`는 `CompatibleTestResult`, `discover`는 `CompatibleModelList`), `quota` GET /api/accounts/quota?provider(`SubscriptionQuotaReport`, 503 `quota_status_unavailable`). 모두 SameSite와 `NoStore`
 - `ModelsGroup` — `list` GET /api/models?provider(`ModelCatalogView`, 로그인하지 않았으면 401 `login_required`+`auth`, 404 `provider_unavailable`, 502 `model_list_failed`), `select` POST /api/models/:model `{ provider, reasoningEffort? }`(`ModelSelection`, 404 `model_unavailable`+provider·model·reasoningEffort). 모두 SameSite
+- `SessionsGroup` — `list` GET /api/sessions?project(`?archived=1`은 보관한 대화만), `create` POST /api/sessions `{ projectId, title?, agent? }`(201 `Session`, 404 `project_not_found`, 409 `external_agent_unavailable`), `decisions` GET /api/sessions/:session/decisions(404 `session_not_found`), `answerDecision` POST /api/sessions/:session/decisions/:decision(x-session-holder 헤더, 423 `session_in_use`, 결정 거부 reason을 404·400·409로). 저장소 실패는 500 `storage_failed`·`kanban_storage_failed`·`workflow_storage_failed`. 모두 SameSite. 계약 타입 `CreateSession`, `DecisionAnswerInput`
+- `sessionHolderHeaders` — 세션을 바꾸는 endpoint의 `headers` 스키마(`x-session-holder`, 선택). `chat-api.ts`에 있고 `ChatGroup.run`과 `SessionsGroup`이 같이 쓴다
 - `NoStore` — group의 모든 답(거부 포함)에 `Cache-Control: no-store`를 붙이는 HttpApiMiddleware 서비스 태그(`no-store.ts`). 서버 구현은 pre-response handler로 붙인다
 - `appRefusalStatus` — 앱 API 거부 값의 HTTP 상태. 페이지가 `ApiError.status`를 채울 때 쓴다
 - `RunInput` — AG-UI `RunAgentInput` 필드 이름을 쓰는 run 요청(`runId`, `parentRunId`, 새 user `messages`, `resume`, `forwardedProps.queuedNext`/`imageIntent`)
@@ -35,11 +37,11 @@
 - `partsOf` — user 메시지 content(문자열 또는 파트 배열)를 표시용 `MessagePart` 배열로 변환
 - `OpenSession` / `Send` / `Answer` / `CustomEvent` / `UserContent` — 클라이언트 세션 상태, 보낼 turn, 승인 답변, CUSTOM 이벤트, user content 타입
 - `ChatView` / `RunFailure` / `viewOf` / `caughtUp` / `streamStarted` / `applyEvent` — 스냅샷과 AG-UI 이벤트로 화면 상태를 만드는 순수 리듀서(`caughtUp`·`applyEvent`는 dual)
-- `app-api/` — `AppApi`의 group 모듈(`settings.ts`, `projects.ts`, `providers.ts`: auth·accounts·models)
+- `app-api/` — `AppApi`의 group 모듈(`settings.ts`, `projects.ts`, `providers.ts`: auth·accounts·models, `sessions.ts`)
 
 ## Invariants
 
-- `chat-api.ts`, `app-api.ts`, `app-api/*`, `refusal.ts`, `no-store.ts`, `chat-session.ts`, `btw-thread.ts`, `chat-view.ts`는 서버 코드를 import하지 않는다. 브라우저 번들이 쓰기 때문이다. 계약이 쓰는 도메인 Schema는 각 폴더의 `contracts.ts`(예: `config/contracts.ts`, `kagi/contracts.ts`, `memory/embedding/contracts.ts`, `imports/contracts.ts`, `improve/contracts.ts`, `providers/contracts.ts`, `providers/openai-compatible-config.ts`, `oauth/contracts.ts`, `projects/contracts.ts`, `mcp/contracts.ts`, `external-agents/contracts.ts`, `skills/contracts.ts`, `kanban/contracts.ts`, `workflow/contracts.ts`)에서 가져온다. `chat-api.ts`는 `sessionHolderHeader`를 `import type`으로만 가져온다.
+- `chat-api.ts`, `app-api.ts`, `app-api/*`, `refusal.ts`, `no-store.ts`, `chat-session.ts`, `btw-thread.ts`, `chat-view.ts`는 서버 코드를 import하지 않는다. 브라우저 번들이 쓰기 때문이다. 계약이 쓰는 도메인 Schema는 각 폴더의 `contracts.ts`(예: `config/contracts.ts`, `kagi/contracts.ts`, `memory/embedding/contracts.ts`, `imports/contracts.ts`, `improve/contracts.ts`, `providers/contracts.ts`, `providers/openai-compatible-config.ts`, `oauth/contracts.ts`, `projects/contracts.ts`, `sessions/contracts.ts`, `mcp/contracts.ts`, `external-agents/contracts.ts`, `skills/contracts.ts`, `kanban/contracts.ts`, `workflow/contracts.ts`)에서 가져온다. `chat-api.ts`는 `sessionHolderHeader`를 `import type`으로만 가져온다.
 - 앱 API의 거부 code는 group이 달라도 상태가 하나다. 페이지는 `appRefusalStatus`로 거부 값만 보고 상태를 찾는다. `auth_failed`만 예외로 502와 504(`reason: auth_status_timeout`)가 있고, reason이 정해진 504를 먼저 선언해 둘을 가른다. 새 group의 거부 목록은 `app-api.ts`의 `appRefusalStatus`에 더한다.
 - holder 헤더 이름은 `x-session-holder`다. `satisfies Lowercase<typeof sessionHolderHeader>`로 `sessions/lease-state.ts`의 헤더 상수와 맞춘다.
 - 세션을 바꾸는 엔드포인트(`run`, `ask`)에는 `SameSite` 미들웨어를 붙인다. 403 cross-site 거부는 `refusals` 목록이 아니라 `SameSite`의 error에 둔다.
