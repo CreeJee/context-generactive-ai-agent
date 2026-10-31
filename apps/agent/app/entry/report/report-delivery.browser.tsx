@@ -1,11 +1,11 @@
 import { it } from "@effect/vitest";
 import { Cause, Effect, Schema } from "effect";
 import { render } from "vitest-browser-react";
+import { ReportDeliveryCommand as DeliveryCommand } from "memory-agent/app-api";
 import { ReportDeliveryResult } from "memory-agent/definitions";
 import { describe, expect, vi } from "vite-plus/test";
 import "../../app.css";
 import { ReportDelivery } from "./report-delivery";
-import { DeliveryCommand } from "./report-client";
 
 const DeliveryCommandJson = Schema.fromJsonString(DeliveryCommand);
 import { DiagnosisState, ReportDiagnosisReview } from "./report-diagnosis";

@@ -12,15 +12,12 @@
 
 ## Interface
 
-- `$.tsx` `loader`/`action` — 라우트 파일이 없는 `/api/*` 요청을 `serveApi`로 넘긴다. 채팅 API(`/api/sessions/:session/messages`, `/api/sessions/:session/runs`, `/api/sessions/:session/runs/:run/events`, `/api/btw/:thread/messages`, `/api/btw/:thread/runs`), 앱 API settings group(`/api/settings/{conversation,recall,kanban,kagi,embedding,image,imports,improvements}`), projects group(`/api/projects`, `/api/projects/pick`, `/api/projects/:project`, `/api/projects/:project/{agents,mcp,skills,kanban,boards,decisions}`), auth·accounts·models group(`/api/auth`, `/api/accounts`, `/api/accounts/quota`, `/api/models`, `/api/models/:model`), sessions group(`/api/sessions`, `/api/sessions/:session/decisions`, `/api/sessions/:session/decisions/:decision`, `/api/sessions/:session/{board,kanban}`, `/api/sessions/:session/queue`, `/api/sessions/:session/queue/:message`, `/api/sessions/:session/subagents`, `/api/sessions/:session/subagents/:subagent`, `/api/sessions/:session/approvals`, `/api/sessions/:session/approvals/:approval`, `/api/sessions/:session/{cancel,compact,interrupts/discard,uncertain,lease}`, `/api/sessions/:session`), trace group(`/api/sessions/:session/trace`, `/api/sessions/:session/trace/tasks/:task`, `/api/projects/:project/trace`, `/api/projects/:project/trace/tasks/:task`), BTW 스레드 group(`/api/sessions/:session/btw`, DELETE `/api/btw/:thread`)이 여기서 답한다. 옛 lease 라우트가 GET에 답하던 405 안내는 없어졌다.
+- `$.tsx` `loader`/`action` — 라우트 파일이 없는 `/api/*` 요청을 `serveApi`로 넘긴다. 채팅 API(`/api/sessions/:session/messages`, `/api/sessions/:session/runs`, `/api/sessions/:session/runs/:run/events`, `/api/btw/:thread/messages`, `/api/btw/:thread/runs`), 앱 API settings group(`/api/settings/{conversation,recall,kanban,kagi,embedding,image,imports,improvements}`), projects group(`/api/projects`, `/api/projects/pick`, `/api/projects/:project`, `/api/projects/:project/{agents,mcp,skills,kanban,boards,decisions}`), auth·accounts·models group(`/api/auth`, `/api/accounts`, `/api/accounts/quota`, `/api/models`, `/api/models/:model`), sessions group(`/api/sessions`, `/api/sessions/:session/decisions`, `/api/sessions/:session/decisions/:decision`, `/api/sessions/:session/{board,kanban}`, `/api/sessions/:session/queue`, `/api/sessions/:session/queue/:message`, `/api/sessions/:session/subagents`, `/api/sessions/:session/subagents/:subagent`, `/api/sessions/:session/approvals`, `/api/sessions/:session/approvals/:approval`, `/api/sessions/:session/{cancel,compact,interrupts/discard,uncertain,lease}`, `/api/sessions/:session`), trace group(`/api/sessions/:session/trace`, `/api/sessions/:session/trace/tasks/:task`, `/api/projects/:project/trace`, `/api/projects/:project/trace/tasks/:task`), BTW 스레드 group(`/api/sessions/:session/btw`, DELETE `/api/btw/:thread`), reports group(`/api/reports/sessions`, `/api/reports/evidence`, `/api/reports/diagnosis`, `/api/reports/delivery`)이 여기서 답한다. 옛 lease 라우트가 GET에 답하던 405 안내는 없어졌다.
 - `attachments._index.tsx` `action` — POST /api/attachments: 원시 이미지 바이트를 content hash로 저장하고 201 `{ id, mimeType, bytes }`를 돌려준다(PNG/JPEG/GIF/WebP, 최대 `maxAttachmentBytes`).
 - `attachments.$attachment.tsx` `loader` — GET /api/attachments/:attachment: 저장된 이미지 바이트를 immutable 캐시 헤더로 돌려준다. 실패 태그는 404 `attachment_not_found`, 500 `attachment_unreadable`.
 - `media.image.tsx` `action` — POST /api/media/image: 유료 직접 이미지 생성(`ImageMediaWorkflow.generate`)이다. 승인 필요 시 409, 사용 불가 시 422, 실행 실패 시 502를 돌려준다.
 - `events.tsx`, `projects.$project.events.tsx` `loader` — `AppEvents.allStream` / `projectStream` 무효화 이벤트 스트림.
-- `reports.delivery.tsx` `loader`/`action` — webhook 상태와 defectReports 조회. TaggedUnion `send`(보고서+evidence 전송)/`defect_reports`(켜기·끄기) 처리.
-- `reports.diagnosis.tsx` `action` — `ReportDiagnoser.diagnose`로 검토된 초안을 선택 모델로 진단한다.
-- `reports.evidence.tsx` `loader` — `reportBundleResponse` + `collectReportBundle`로 세션 evidence 번들을 돌려준다(redact 후 한도에 맞춰 자른다).
-- (본문 미확인, export만 확인) `sessions.$session.{events,trace.stream}.tsx` `loader`; `reports.sessions.tsx` `action`.
+- (본문 미확인, export만 확인) `sessions.$session.{events,trace.stream}.tsx` `loader`.
 - 하위 디렉터리 없음.
 
 ## Invariants
@@ -30,7 +27,7 @@
 - 요청 본문은 `readJson(request, Schema)`로 디코드한다. 실패하면 라우트별 고유 에러 코드와 400을 돌려준다.
 - 라우트는 Promise 경계일 뿐이다. 도메인 로직은 `agent.runPromise` 안의 Effect로 실행하고, 실패 태그는 `Effect.catchTag(s)`로 HTTP 상태 JSON에 매핑한다.
 - 브라우저에 keychain·native OAuth 에러나 토큰을 노출하지 않는다. accounts group은 `~/.server/account-failures`의 `accountRefusal` 표와 `~/.server/compatible-handlers`의 operation별 거부로 고정 code만 답하고, 남은 라우트는 `answerDefect`를 쓴다. webhook URL과 토큰은 반환하지 않는다. MCP의 env·header 값과 외부 에이전트의 env 값은 숨긴다.
-- `reports.delivery.tsx`의 `failureStatus`와 `reports.diagnosis.tsx`의 `diagnosisStatus`는 `satisfies Record<…Failure, number>`로 모든 실패 reason에 상태 코드를 하나씩 둔다. 브라우저는 거부된 본문을 읽지 않고 상태 코드로 reason을 복원하므로 이 매핑은 1:1로 유지해야 한다.
+- reports group 계약(`memory-agent/app-api`의 `app-api/reports.ts`)의 `deliveryFailureStatus`와 `diagnosisFailureStatus`는 `satisfies Record<…Failure, number>`로 모든 실패 reason에 상태 코드를 하나씩 둔다. 브라우저는 거부된 본문을 읽지 않고 상태 코드로 reason을 복원하므로 이 매핑은 1:1로 유지해야 한다.
 - 구독 quota는 검증되고 허용된 경로만 숫자를 보고한다. 로컬 토큰 수로 대체하지 않는다.
 - 레거시 OAuth import(`OAuthProfiles.importLegacy`)가 실패하면 로그만 남긴다. 기존 인증은 그대로 쓰고, 다음 요청에서 다시 시도한다.
 - auth group의 `action`은 구독 공급자만 받는다(계약의 payload가 `SubscriptionAccountProvider`). 브라우저 응답에서는 pending 상태의 `authorizationUrl`을 `authUrl`로 바꿔 내보낸다(`browserState`). models `list`의 401 `auth`도 같은 모양이다.
@@ -44,9 +41,9 @@
 - projects group의 프로젝트 하위 endpoint(kanban, boards, decisions)는 서비스 호출 전에 `Projects.get(params.project)`로 존재를 확인하고, 실패는 `~/.server/kanban-failures`의 `kanbanRefusal`로 답한다. kanban `MoveGoal`은 `Sessions.get`으로 `sessionId`와 `before`(null이 아닐 때)를 확인한 뒤 `ProjectScheduler.moveGoal`을 호출한다.
 - 상태를 바꾼 뒤에는 `AppEvents`로 무효화를 발행한다. 프로젝트 변경은 `publishGlobal("projects")`, 인증·계정 변경은 `publishGlobal("auth")`, Goal 이동은 `publishProject(project, "sessions")`다. 분리된 대기 fiber는 끝나는 방식과 상관없이 `Effect.ensuring`으로 `auth`를 발행한다.
 - `Server-Timing` 헤더는 `import.meta.env.DEV || process.argv.includes("--dev-backend")`일 때만 붙인다. stable dev backend는 Vite DEV 플래그가 꺼진 production 번들이기 때문이다. `serveApi`가 답하는 요청은 handler 전체 시간 하나(`handler;dur=`)를 붙인다.
-- `reports.evidence.tsx`의 query 식별자는 권한 근거가 아니다(local-server 전용, read-only). 번들은 redact하고 한도에 맞춰 자른다.
+- reports group `evidence`의 query 식별자는 권한 근거가 아니다(local-server 전용, read-only). handler는 `~/.server/report-evidence`의 `reportSession`으로 세션이 그 프로젝트에 있는지 먼저 확인한다. 번들은 redact하고 한도에 맞춰 자른다. 분석 세션 열기(`openSession`)는 성공한 뒤에만 `publishProject(project, "sessions")`를 발행한다.
 - 프로젝트 등록 경로는 정규화한다. 앱 storage 디렉터리와 겹치면 안 된다(주석 근거, `Projects.add`가 `ProjectRootRejected`로 거부한다).
-- 계정·quota·보고서 응답은 `Cache-Control: no-store`로 돌려준다. accounts group은 `NoStore` middleware(`~/.server/api`의 `NoStoreLive`)가 거부를 포함한 모든 답에 붙인다.
+- 계정·quota·보고서 응답은 `Cache-Control: no-store`로 돌려준다. accounts group과 reports group은 `NoStore` middleware(`~/.server/api`의 `NoStoreLive`)가 거부를 포함한 모든 답에 붙인다.
 - 폴더 선택 창(projects group `pick`, `~/.server/folder-picker`)의 답은 경로일 뿐이다. 등록은 브라우저가 그 경로로 POST /api/projects를 다시 불러 같은 검사를 거친다. 플랫폼별 창(darwin `osascript`, win32 `powershell.exe`, linux `zenity`→`kdialog`) 가운데 처음 시작되는 것이 답한다. 시작되는 창이 없거나 창이 실패하면 `unavailable`이고, 브라우저는 경로 입력 다이얼로그를 연다.
 
 ## Side Effects

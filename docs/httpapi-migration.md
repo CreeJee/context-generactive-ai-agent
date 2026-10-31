@@ -140,6 +140,11 @@
 - 1-5 BTW 스레드 결과 (2026-10-31): `sessions.$session.btw`와 `btw.$thread._index`를 앱 API의 `BtwThreadsGroup`(`app-api/btw.ts`, group 이름 `btw`)으로 옮기고 `.server/btw-handlers.ts`를 지웠다. 스레드에 묻기와 메시지 읽기는 그대로 `ChatApi`의 `BtwGroup`이다. 페이지 facade가 `appCall`로 부르므로 목록·생성·삭제는 앱 API에 둔다.
   - 옛 라우트 handler를 부르던 `server/tests/btw-routes.test.ts`는 지웠다. 그 가운데 상태 코드는 계약이 정하고, 메인 대화를 물을 때마다 다시 읽는 동작만 `tests/btw/threads.test.ts`로 옮겼다.
   - 응답이 바뀐 곳: 삭제 경로가 DELETE 말고 다른 method에 답하던 405 `method_not_allowed`는 없어졌다.
+- 1-5 reports 결과 (2026-10-31): `reports.{sessions,evidence,diagnosis,delivery}`를 `app-api/reports.ts`의 `ReportsGroup`으로 옮겼다. `.server/report-evidence.ts`에는 세션이 그 프로젝트에 있는지 보는 `reportSession`만 남았다.
+  - 제보 페이지의 client(`entry/report/report-client.ts`)는 facade로 옮기지 않았다. 브라우저는 거부 본문을 읽지 않고 상태만 본다(`docs/decisions.md`의 제보 진단 결정). 요청 본문은 계약의 `ReportDeliveryCommand`를 쓰고, 계약은 진단·전송 실패의 reason마다 상태 하나를 `satisfies Record<…Failure, number>` 표로 둔다. reason마다 `Schema.Literal` 스키마를 만들어 `appRefusalStatus`가 상태를 가른다.
+  - bundle 수집은 agent가 내보내는 서비스 여럿을 요청마다 요구한다. handler는 group을 만들 때 `Effect.context`로 꺼낸 값을 `Effect.provideContext`로 넣는다.
+  - 응답이 바뀐 곳: 설정을 읽거나 쓰지 못한 전송 endpoint는 503이 아니라 500 `settings_unavailable`이다. 503은 페이지가 `invalid_webhook_url`로 읽던 상태라 둘이 부딪쳤고, 다른 group의 `settings_unavailable`도 500이다. evidence의 `no-store`는 성공에만 붙었지만 이제 거부에도 붙는다.
+  - 계약에 맞지 않는 payload·query(전에는 `invalid_report_source`, `invalid_report_delivery`, `invalid_report_diagnosis`, `project_and_session_required`)는 HttpApi의 빈 400이다. 페이지는 전에도 이 상태를 `request_failed`로 봤다.
 - SSE는 `HttpApiSchema.StreamSse`로 옮긴다. 첨부 업로드(`Content-Length`를 본문보다 먼저 검사)와 다운로드(바이트와 immutable 헤더)가 HttpApi로 같게 안 되면 RR 라우트로 남기고 이유를 적는다.
 
 ### 1-7. 정리

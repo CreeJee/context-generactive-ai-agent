@@ -13,6 +13,7 @@ import { ChatApi, SameSite } from "memory-agent/chat-api";
 import { agent } from "./agent.ts";
 import { BtwThreadsApiHandlers } from "./api/btw.ts";
 import { ProjectsApiHandlers } from "./api/projects.ts";
+import { ReportsApiHandlers } from "./api/reports.ts";
 import { AccountsApiHandlers, AuthApiHandlers, ModelsApiHandlers } from "./api/providers.ts";
 import { SessionsApiHandlers } from "./api/sessions.ts";
 import { SettingsApiHandlers } from "./api/settings.ts";
@@ -61,6 +62,7 @@ const appApiRoutes = HttpApiBuilder.layer(AppApi).pipe(
       SessionsApiHandlers,
       TraceApiHandlers,
       BtwThreadsApiHandlers,
+      ReportsApiHandlers,
     ),
   ),
   Layer.provide(Layer.merge(SameSiteLive, NoStoreLive)),

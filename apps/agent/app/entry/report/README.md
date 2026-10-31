@@ -2,7 +2,7 @@
 
 ## Overview
 
-`apps/agent` 웹 앱의 `/report` 문제 제보 화면을 이루는 클라이언트 모듈 모음이다. `report-client.ts`는 `appFetch`로 `/api/reports/*` 백엔드 라우트를 Effect와 Schema로 호출한다. 이 라우트는 세션 열기, 증거 묶음 조회, 모델 진단, Discord 웹훅 전송과 결함 자동 전송 설정을 맡는다. 나머지 파일이 맡는 일은 다음과 같다.
+`apps/agent` 웹 앱의 `/report` 문제 제보 화면을 이루는 클라이언트 모듈 모음이다. `report-client.ts`는 `appFetch`로 앱 API의 reports group(`/api/reports/*`)을 Effect와 Schema로 호출한다. 이 라우트는 세션 열기, 증거 묶음 조회, 모델 진단, Discord 웹훅 전송과 결함 자동 전송 설정을 맡는다. 나머지 파일이 맡는 일은 다음과 같다.
 
 - `report-draft`: 사용자 설명 입력과 최종 문안 생성
 - `report-bundle`: 읽기 전용 증거 묶음 미리보기
@@ -19,7 +19,7 @@
 - `openReportSession` / `readReportEvidence` / `requestDiagnosis` — `appFetch`로 바인딩된 클라이언트 함수다. 각각 POST `/api/reports/sessions`, GET `/api/reports/evidence?project&session`, POST `/api/reports/diagnosis`를 호출하고 응답을 Schema로 디코드한다.
 - `readDeliveryStatus` / `sendReport` / `setDefectReports` — `/api/reports/delivery`의 GET 상태 조회, `send` 명령 POST(`sendReport`는 `(report, resend)` dual), `defect_reports` 토글 POST를 맡는다.
 - `ReportRequestFailed` — `Schema.TaggedError`이다. `operation`(session|evidence|diagnosis|delivery), `phase`(transport|status|response), 선택 필드 `httpStatus`를 담는다.
-- `DeliveryCommand` — `Schema.TaggedUnion`이다. `send{text, evidence, resend}`와 `defect_reports{enabled}`로 이루어진 `/api/reports/delivery` 요청 본문이다.
+- `/api/reports/delivery` 요청 본문은 계약의 `ReportDeliveryCommand`(`memory-agent/app-api`, `send{text, evidence, resend}`와 `defect_reports{enabled}`)다.
 - `copyReportText` — 주입된 클립보드 write 함수로 텍스트를 쓰고 `Promise<boolean>`을 돌려준다. dual이며 실패하면 false를 돌려준다.
 - `ReportBundlePreview` — memo된 React 컴포넌트다. 증거 묶음 전체(환경, 연동·루프·결함, 칸반 보드, 타임라인 run, run 없는 항목)를 읽기 전용 접이식 패널로 보여 준다.
 - `bundleGaps` / `cutTexts` — 묶음에서 수집에 실패했거나 상한으로 잘린 섹션의 문구 목록과, 잘린 원문 개수를 계산한다.
@@ -39,7 +39,7 @@
 ## Invariants
 
 - 거절된 응답은 상태코드만 보관하고 body를 읽지 않는다(`ReportRequestFailed` 주석, delivery·diagnosis 매핑 주석). 서버 라우트가 사유마다 상태코드 하나를 배정한다는 전제를 따른다.
-- 전송 매핑은 409=`not_configured`, 503=`invalid_webhook_url`, 413=`too_large`, 423=`in_progress`, 429=`rate_limited`, 410=`webhook_rejected`, 422=`payload_rejected`, 502=`discord_unavailable`, 504=`uncertain`이다. 진단 매핑은 503=`model_unavailable`, 502=`model_failed`, 422=`invalid_answer`이다. 서버 라우트와 이 표가 맞아야 한다.
+- 전송 매핑은 409=`not_configured`, 503=`invalid_webhook_url`, 413=`too_large`, 423=`in_progress`, 429=`rate_limited`, 410=`webhook_rejected`, 422=`payload_rejected`, 502=`discord_unavailable`, 504=`uncertain`이다. 진단 매핑은 503=`model_unavailable`, 502=`model_failed`, 422=`invalid_answer`이다. 계약(`app-api/reports.ts`의 `deliveryFailureStatus`·`diagnosisFailureStatus`)과 이 표가 맞아야 한다. 설정을 읽지 못한 전송 상태 조회는 500이라 `request_failed`다.
 - 매핑에 없는 상태코드와 transport·response 실패는 `request_failed`가 된다. `SchemaError`는 진단에서 `invalid_answer`, 전송에서 `request_failed`로 매핑된다.
 - `deliveryFailureText`와 `diagnosisFailureText`는 `satisfies Record<...Failure | "request_failed", string>`로 모든 사유를 빠짐없이 다뤄야 한다.
 - `request`는 `Effect.abortSignal`과 `Effect.scoped`로 fetch에 signal을 넘긴다. 따라서 fiber를 interrupt하면 HTTP 요청도 중단된다.

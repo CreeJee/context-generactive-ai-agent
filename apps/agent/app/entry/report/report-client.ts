@@ -6,6 +6,7 @@ import {
   ReportDiagnosis,
   ReportDiagnosisInput,
 } from "memory-agent/definitions";
+import { ReportDeliveryCommand } from "memory-agent/app-api";
 import { appFetch } from "../shared/backend-restart";
 
 /** The draft the user reviewed and the evidence bundle they previewed with it. */
@@ -24,16 +25,7 @@ export class ReportRequestFailed extends Schema.TaggedError<
   httpStatus: Schema.optional(Schema.Int),
 }) {}
 
-/** What `/api/reports/delivery` accepts: a reviewed report to send, or the defect-report switch. */
-export const DeliveryCommand = Schema.TaggedUnion({
-  send: {
-    text: Schema.String,
-    evidence: Schema.NullOr(ReportBundle),
-    resend: Schema.Boolean,
-  },
-  defect_reports: { enabled: Schema.Boolean },
-});
-const encodeDeliveryCommand = Schema.encodeEffect(Schema.fromJsonString(DeliveryCommand));
+const encodeDeliveryCommand = Schema.encodeEffect(Schema.fromJsonString(ReportDeliveryCommand));
 
 export function makeReportClient(fetcher: typeof fetch) {
   const request = <S extends Schema.Constraint>(input: {
@@ -98,7 +90,7 @@ export function makeReportClient(fetcher: typeof fetch) {
     });
   });
 
-  const deliver = <S extends Schema.Constraint>(schema: S, command: typeof DeliveryCommand.Type) =>
+  const deliver = <S extends Schema.Constraint>(schema: S, command: ReportDeliveryCommand) =>
     Effect.flatMap(encodeDeliveryCommand(command), (body) =>
       request({
         schema,
@@ -114,7 +106,7 @@ export function makeReportClient(fetcher: typeof fetch) {
     init: { cache: "no-store" },
   });
   const sendReportBody = (report: ReviewedReport, resend: boolean) =>
-    deliver(ReportDeliveryResult, DeliveryCommand.cases.send.make({ ...report, resend }));
+    deliver(ReportDeliveryResult, ReportDeliveryCommand.cases.send.make({ ...report, resend }));
   /** Sends the reviewed draft, with the evidence bundle the user previewed as its attachment. */
   const sendReport: {
     (resend: boolean): (report: ReviewedReport) => ReturnType<typeof sendReportBody>;
@@ -122,7 +114,7 @@ export function makeReportClient(fetcher: typeof fetch) {
 
   /** Turns sending defects to the developer webhook on or off; answers the new status. */
   const setDefectReports = (enabled: boolean) =>
-    deliver(ReportDeliveryStatus, DeliveryCommand.cases.defect_reports.make({ enabled }));
+    deliver(ReportDeliveryStatus, ReportDeliveryCommand.cases.defect_reports.make({ enabled }));
 
   return {
     setDefectReports,
