@@ -1,15 +1,7 @@
 import { Effect, FileSystem, Match, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { FolderPick } from "memory-agent";
 import { platform } from "node:os";
-
-/** What the host's folder dialog answered. */
-export const FolderPick = Schema.TaggedUnion({
-  picked: { root: Schema.String },
-  cancelled: {},
-  /** No dialog on this host (no GUI tool, or it failed to start): the path is typed instead. */
-  unavailable: {},
-});
-export type FolderPick = typeof FolderPick.Type;
 
 const prompt = "프로젝트로 열 폴더를 고르세요";
 

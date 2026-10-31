@@ -12,14 +12,14 @@
 - `agentCommandInvocation` — `Effect.fn("ExternalAgent.commandInvocation")`. win32가 아니면 command/args를 그대로 돌려줌. win32면 PATHEXT/PATH, shebang, cross-spawn과 같은 cmd 이스케이프 규칙으로 실행 파일을 해석함(FileSystem, Path 필요)
 - `maxConsecutiveFailures` — 연속 연결 실패 한도(2). 한도에 닿으면 재연결은 사용자의 수동 조작을 기다림
 - `ExternalAgentInitializeTimedOut` — 프로세스가 시간 안에 `initialize`에 답하지 않을 때 나는 `Schema.TaggedError`
-- `AgentLinkState` — 링크 상태 TaggedEnum: idle / connecting{failures} / connected{agent, loadSession} / retrying{failures, failure} / stopped{failures, failure}
-- `AgentTrustState` — 신뢰 상태 TaggedEnum: untrusted / changed / trusted{link}
-- `ExternalAgentView` — 설정 화면용 에이전트 뷰(scope, name, 비밀을 가린 target, envNames, shadowed, state)
-- `ExternalAgentsOverview` — 설정 파일별 경로·오류 목록과 에이전트 뷰 목록
+- `AgentLinkState` — 링크 상태 TaggedEnum: idle / connecting{failures} / connected{agent, loadSession} / retrying{failures, failure} / stopped{failures, failure}. 타입은 `contracts.ts`에서 오고, `agents.ts`가 `Data.taggedEnum` 생성자를 둔다
+- `AgentTrustState` — 신뢰 상태 TaggedEnum: untrusted / changed / trusted{link}. 타입과 생성자는 `AgentLinkState`와 같은 방식이다
+- `ExternalAgentView` — 설정 화면용 에이전트 뷰(scope, name, 비밀을 가린 target, envNames, shadowed, state). `contracts.ts`의 Schema
+- `ExternalAgentsOverview` — 설정 파일별 경로·오류 목록과 에이전트 뷰 목록. `contracts.ts`의 Schema이고 앱 API projects group(`agents`/`agentAction`)이 돌려준다
 - `ExternalPromptOutcome` — 프롬프트 결과 TaggedEnum: completed / cancelled / disconnected / failed / unavailable
 - `ReportedToolCall` — 외부 에이전트가 보고한 도구 호출(title, kind, status)
 - `PromptHooks` — 호출자 훅: `onUpdate`(모든 SessionUpdate), `askPermission(request, signal)`(`Effect<boolean>`, 명시적 승인일 때만 true)
-- `AgentScope` — `"global" | "project"` `Schema.Literals` (`config.ts`)
+- `AgentScope` — `"global" | "project"` `Schema.Literals` (`contracts.ts`). `contracts.ts`는 서버 코드를 import하지 않아 브라우저 번들이 쓴다
 - `AgentCommand` — `{ command: NonEmptyString, args: string[] = [], env: Record<string,string> = {} }` 스키마 (`config.ts`)
 - `ConfiguredAgent` — scope, name, command, fingerprint를 가진 읽힌 에이전트 (`config.ts`)
 - `AgentsFileRead` — 파일 하나를 읽은 결과(path, agents, `ShownFailure<ConfigFileFailureCode>|null` error) (`config.ts`)

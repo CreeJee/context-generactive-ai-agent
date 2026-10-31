@@ -15,21 +15,16 @@ import {
   FileSystem,
   Crypto,
   Layer,
-  Schema,
 } from "effect";
 import type { Project } from "../projects/projects.ts";
 import { homeDirectory } from "../runtime/host-system.ts";
 import { runtimeRequire, runtimeRoot } from "../runtime/resources.ts";
+import { SkillScope, type Skill, type SkillCatalog, type SkillProblem } from "./contracts.ts";
+
+export { SkillScope, type Skill, type SkillCatalog, type SkillProblem };
 
 // Path operations remain synchronous at these public host boundaries.
 const { dirname, join } = path;
-
-/**
- * Where a skill comes from. `builtin` ships with this app; the user's own (`global`) and the
- * project's replace a built-in skill of the same name, so any of them can be overridden.
- */
-export const SkillScope = Schema.Literals(["builtin", "global", "project"]);
-export type SkillScope = typeof SkillScope.Type;
 
 /**
  * The skills this app ships: `skills/` in this package, which the executable unpacks next to its
@@ -61,28 +56,6 @@ export const maxSkillBytes = maxSkillCharacters * 3;
 export const maxDescriptionCharacters = 1_024;
 /** How many skills the instructions list at most. */
 export const maxListedSkills = 100;
-
-export interface Skill {
-  readonly scope: SkillScope;
-  readonly name: string;
-  readonly description: string;
-  readonly directory: string;
-  /** SHA-256 of the exact SKILL.md used to discover this skill. */
-  readonly contentHash: string;
-}
-
-export interface SkillProblem {
-  readonly scope: SkillScope;
-  readonly directory: string;
-  readonly problem: "no_description" | "too_large" | "unreadable";
-}
-
-export interface SkillCatalog {
-  readonly directories: ReadonlyArray<{ scope: SkillScope; path: string }>;
-  /** Project skills replace global ones with the same name. */
-  readonly skills: readonly Skill[];
-  readonly problems: readonly SkillProblem[];
-}
 
 export interface SkillDocument extends Skill {
   /** SKILL.md without its front matter. */

@@ -52,6 +52,7 @@
 - `reports.evidence.tsx`의 query 식별자는 권한 근거가 아니다(local-server 전용, read-only). 번들은 redact하고 한도에 맞춰 자른다.
 - 프로젝트 등록 경로는 정규화한다. 앱 storage 디렉터리와 겹치면 안 된다(주석 근거, `Projects.add`가 `ProjectRootRejected`로 거부한다).
 - 계정·quota·보고서 응답은 `Cache-Control: no-store`로 돌려준다.
+- 폴더 선택 창(projects group `pick`, `~/.server/folder-picker`)의 답은 경로일 뿐이다. 등록은 브라우저가 그 경로로 POST /api/projects를 다시 불러 같은 검사를 거친다. 플랫폼별 창(darwin `osascript`, win32 `powershell.exe`, linux `zenity`→`kdialog`) 가운데 처음 시작되는 것이 답한다. 시작되는 창이 없거나 창이 실패하면 `unavailable`이고, 브라우저는 경로 입력 다이얼로그를 연다.
 
 ## Side Effects
 
@@ -59,6 +60,7 @@
 - OAuth 계정을 바꾼다: `OAuthProfiles.importLegacy`(OS keychain에서 import)와 `remove`/`rename`/`select`, `OAuthAccountLogins.start`/`cancel`(로그인은 다른 탭에서 끝난다). `ProviderRegistry` 공급자의 `auth.connect`/`disconnect`/`cancel`도 여기에 속한다.
 - `Effect.forkDetach`로 백그라운드 fiber를 띄운다. 계정 add는 `manager.settled`를 기다린다. auth pending은 `Effect.sleep("250 millis")` 간격으로 상태를 polling하고, 끝나면 `publishGlobal("auth")`를 발행한다.
 - 첨부 파일을 저장소에 쓰고 읽는다(`Attachments.save`, `Attachments.read`).
+- projects group `pick`은 서버 기기에서 폴더 선택 창 프로세스를 띄운다(`ChildProcessSpawner`). 요청이 끊기면 Scope와 함께 창을 닫는다. 고른 경로는 `FileSystem.realPath`로 정규화한다.
 - `ImageMediaWorkflow.generate`로 유료 외부 이미지 생성을 호출한다. `request.signal`을 넘긴다.
 - 모델 선택(`configured.models.select`)을 전역 선택으로 저장하고, 공급자 모델 카탈로그를 네트워크로 조회한다.
 - 프로젝트 칸반 설정을 바꾼다: `GoalSchedules.setProtectedBranches`, `ProjectScheduler.moveGoal`.

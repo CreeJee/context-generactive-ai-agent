@@ -9,8 +9,9 @@
 - `Projects` — `Context.Service` 태그(`"memory-agent/projects/projects"`). 메서드는 `list`, `listAll`, `get(id)`, `add(requestedRoot)`, `setHidden(id, hidden)`, `setCrossRecallExcluded(id, excluded)`, `setPermissionMode(id, mode)`
 - `Projects.layerNoDeps` — `Layer.effect(Projects, make)`. 필요한 의존성은 `FileSystem`, `Path`, `Crypto`, `SqlClient.SqlClient`, `StorageRoot`
 - `Projects.layer` — `layerNoDeps`에 `NodeCrypto.layer`, `NodeFileSystem.layer`, `NodePath.layer`를 제공한 layer. `SqlClient`와 `StorageRoot`는 여전히 바깥에서 제공해야 함
-- `Project` — 도메인 Schema(`id`, `root`, `name`, `crossRecallExcluded`, `permissionMode`, `createdAt`, `hiddenAt`)와 같은 이름의 타입
-- `PermissionMode` — `Schema.Literals(["ask","auto","full"])`와 타입. ask는 매 호출을 사용자가 승인, auto는 분류기가 허용·질문·차단, full은 승인 없이 즉시 실행
+- `Project` — 도메인 Schema(`id`, `root`, `name`, `crossRecallExcluded`, `permissionMode`, `createdAt`, `hiddenAt`)와 같은 이름의 타입. `contracts.ts`에 있고 `projects.ts`가 다시 내보낸다
+- `PermissionMode` — `Schema.Literals(["ask","auto","full"])`와 타입(`contracts.ts`). ask는 매 호출을 사용자가 승인, auto는 분류기가 허용·질문·차단, full은 승인 없이 즉시 실행
+- `FolderPick` — 폴더 선택 창의 답 `picked{root}` | `cancelled` | `unavailable`(`contracts.ts`). 앱의 `folder-picker`가 만들고 앱 API projects group `pick`이 돌려준다. `contracts.ts`는 서버 코드를 import하지 않아 브라우저 번들이 쓴다
 - `ProjectRootRejected` — TaggedError. `reason`은 `not_found` | `not_directory` | `overlaps_storage` | `already_registered`
 - `ProjectNotFound` — TaggedError(`id`). id로 조회하거나 바꿀 때 행이 없으면 실패
 - `ProjectHostFailed` — TaggedError(`root`, `reason: ProjectHostReason`). 호스트 파일시스템이나 암호 API가 실패할 때 쓰임

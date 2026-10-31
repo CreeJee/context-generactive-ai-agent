@@ -50,9 +50,9 @@ import {
   McpClientAuthentication,
   McpOAuthClient,
   McpOAuthConfig,
-  type McpScope,
   type MissingVariable,
 } from "./config.ts";
+import type { McpScope } from "./contracts.ts";
 
 /**
  * MCP authorization (spec 2025-06-18 and later) for HTTP servers, on the SDK's `auth()`: discovery

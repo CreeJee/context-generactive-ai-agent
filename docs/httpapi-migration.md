@@ -82,6 +82,12 @@
   - 숫자는 `Schema.Finite`다. Effect LSP가 `Schema.Number`를 막고, JSON은 NaN·Infinity를 싣지 못하므로 응답은 같다.
   - 일부 서비스 메서드는 호출마다 서비스를 요구한다(`Importer`의 start·overview·restartWatch·setEnabled는 `SqlClient`, `EmbeddingSetup`의 choose·recheck는 `Path`). handler는 group을 만들 때 꺼낸 값을 `Effect.provideService`로 넣는다.
   - 거부를 선언하지 않았던 embedding·image·imports의 실패는 `Effect.orDie`로 지금처럼 500이다. `HttpEffect`가 cause를 보고하므로 로그도 남는다.
+- 1-2a 결과 (2026-10-31): `projects`(목록·추가·폴더 선택·설정)와 `projects.$project.{agents,mcp,skills}`를 옮겼다. 칸반·보드·결정(1-2b)과 trace(1-2c)는 남았다.
+  - 계약 Schema는 `projects/contracts.ts`(`Project`, `PermissionMode`, 앱에서 옮긴 `FolderPick`), `mcp/contracts.ts`, `external-agents/contracts.ts`, `skills/contracts.ts`에 둔다. 도메인 모듈은 이름을 다시 내보내거나 타입을 계약에서 꺼내므로 import하는 쪽은 그대로다.
+  - `ShownFailure`의 Schema는 `shownFailure(code)`(`runtime/shown-failure.ts`)로 만든다.
+  - 개발용 `Server-Timing`은 `serveApi`의 global `HttpRouter.middleware` 하나(`handler;dur=`)다. `projects._index`의 service/query 구간은 없앴다.
+  - 프로젝트를 찾지 못하면 404 `project_not_found`, 그 밖의 실패는 지금처럼 500이다. 두 갈래는 `Effect.catchIf`/`catchTag`의 `orElse`로 나눈다. `catchTag`의 `orElse`에 `Effect.die`를 그대로 넘기면 `unknown` 인자가 에러 타입 추론을 덮어 tag를 찾지 못한다. `(failure) => Effect.die(failure)`로 넘긴다.
+  - 응답 배열은 `ReadonlyArray`다. 받는 쪽 prop 타입을 `ReadonlyArray`로 바꾼다.
 - SSE는 `HttpApiSchema.StreamSse`로 옮긴다. 첨부 업로드(`Content-Length`를 본문보다 먼저 검사)와 다운로드(바이트와 immutable 헤더)가 HttpApi로 같게 안 되면 RR 라우트로 남기고 이유를 적는다.
 
 ### 1-7. 정리

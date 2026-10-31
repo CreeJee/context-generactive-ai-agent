@@ -1,10 +1,11 @@
-import { type Context, Effect, Layer } from "effect";
-import { HttpRouter, HttpServer, HttpServerRequest } from "effect/http";
+import { type Context, Duration, Effect, Layer } from "effect";
+import { HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { HttpApiBuilder } from "effect/http-api";
 import { type AgentChat, BtwApiHandlers, type BtwChat, ChatApiHandlers } from "memory-agent";
 import { AppApi } from "memory-agent/app-api";
 import { ChatApi, SameSite } from "memory-agent/chat-api";
 import { agent } from "./agent.ts";
+import { ProjectsApiHandlers } from "./api/projects.ts";
 import { SettingsApiHandlers } from "./api/settings.ts";
 import { crossSiteRefusal } from "./http.ts";
 
@@ -33,11 +34,27 @@ export const chatApiRoutes = <E>(
 
 /** The app API's routes (`memory-agent/app-api`), answered by the agent's services. */
 const appApiRoutes = HttpApiBuilder.layer(AppApi).pipe(
-  Layer.provide(SettingsApiHandlers),
+  Layer.provide(Layer.mergeAll(SettingsApiHandlers, ProjectsApiHandlers)),
   Layer.provide(SameSiteLive),
   Layer.provide(Layer.effectContext(agent.contextEffect)),
   Layer.provide(HttpServer.layerServices),
 );
+
+/** Every API answer says how long its handler took (`Server-Timing`). */
+const serverTiming = HttpRouter.middleware(
+  (httpEffect) =>
+    Effect.map(Effect.timed(httpEffect), ([took, response]) =>
+      HttpServerResponse.setHeader(
+        response,
+        "Server-Timing",
+        `handler;dur=${Duration.toMillis(took).toFixed(3)}`,
+      ),
+    ),
+  { global: true },
+);
+
+// Native CLI boundary: the stable dev backend is bundled with Vite's DEV flag off.
+const developmentTiming = import.meta.env.DEV || process.argv.includes("--dev-backend");
 
 let built: { readonly handler: (request: Request) => Promise<Response> } | null = null;
 
@@ -49,6 +66,10 @@ let built: { readonly handler: (request: Request) => Promise<Response> } | null 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 export const serveApi = (request: Request) =>
   (built ??= HttpRouter.toWebHandler(
-    Layer.merge(chatApiRoutes(agent.contextEffect), appApiRoutes),
+    Layer.mergeAll(
+      chatApiRoutes(agent.contextEffect),
+      appApiRoutes,
+      developmentTiming ? serverTiming : Layer.empty,
+    ),
     { disableLogger: true },
   )).handler(request);

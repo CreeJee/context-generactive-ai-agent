@@ -1,4 +1,5 @@
 import { HttpApi } from "effect/http-api";
+import { ProjectsGroup, projectsRefusals } from "./app-api/projects.ts";
 import { SettingsGroup, settingsRefusals } from "./app-api/settings.ts";
 import { refusalStatusIn } from "./refusal.ts";
 
@@ -7,13 +8,13 @@ import { refusalStatusIn } from "./refusal.ts";
  * page. Each group is a module of `app-api/`. This module imports no server code, so the browser
  * bundle can use it.
  */
-export class AppApi extends HttpApi.make("app").add(SettingsGroup) {}
+export class AppApi extends HttpApi.make("app").add(SettingsGroup).add(ProjectsGroup) {}
 
 /**
  * The HTTP status an app API refusal is answered with. A code has one status across the groups, so
  * the page reads it from the refusal alone.
  */
-export const appRefusalStatus = refusalStatusIn([...settingsRefusals]);
+export const appRefusalStatus = refusalStatusIn([...settingsRefusals, ...projectsRefusals]);
 
 export {
   ConversationSettings,
@@ -28,3 +29,5 @@ export {
   RecallSettings,
   ScanCommand,
 } from "./app-api/settings.ts";
+export { ExternalAgentCommand, McpCommand, ProjectSettings } from "./app-api/projects.ts";
+export { FolderPick } from "../projects/contracts.ts";

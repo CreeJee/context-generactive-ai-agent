@@ -12,11 +12,11 @@
 - `Skills.catalog` — 프로젝트의 `SkillCatalog`(directories는 global/project만, skills, problems)를 돌려준다
 - `Skills.read` — 이름으로 `SkillDocument`(front matter를 뺀 body, 한 단계 파일 목록)를 돌려준다. 없으면 `null`
 - `SkillsOptions` — 테스트용 `home`과 `builtin` 경로를 덮어쓰는 옵션
-- `SkillScope` — `Schema.Literals(["builtin","global","project"])`와 같은 이름의 타입
+- `SkillScope` — `Schema.Literals(["builtin","global","project"])`와 같은 이름의 타입. `contracts.ts`에 있고 `skills.ts`가 다시 내보낸다
 - `builtinSkillsDirectory` — Effect. `runtimeRoot`가 있으면 그것을, 없으면 `memory-agent/package.json` 위치를 써서 `skills/` 경로를 정한다
 - `globalSkillsDirectory(home)` / `projectSkillsDirectory(projectRoot)` — `<base>/.agents/skills` 경로
 - `maxSkillCharacters`(32_000자) / `maxSkillBytes`(`maxSkillCharacters * 3`, UTF-8 최대 3바이트/UTF-16 단위) / `maxDescriptionCharacters`(1024) / `maxListedSkills`(100) — 스킬 크기와 목록 한도 상수
-- `Skill` / `SkillProblem` / `SkillCatalog` / `SkillDocument` — 스킬 메타(scope, name, description, directory, contentHash), 문제(no_description, too_large, unreadable), 카탈로그와 문서 인터페이스
+- `Skill` / `SkillProblem` / `SkillCatalog` / `SkillDocument` — 스킬 메타(scope, name, description, directory, contentHash), 문제(no_description, too_large, unreadable), 카탈로그와 문서. 앞의 셋은 `contracts.ts`의 Schema 타입이고(앱 API projects group `skills`가 돌려준다), `SkillDocument`는 `skills.ts`의 인터페이스다
 - `parseFrontMatter(text)` / `FrontMatter` — SKILL.md front matter의 작은 YAML 부분집합을 `MutableHashMap` 필드와 body로 파싱한다. 지원 형식은 `key: value`, 따옴표 값, `>`, `|`, `>-`, `|-` 블록이다
 - `CodeSkills` — 코드 스킬 `Context.Service`이고 `CodeSkills.layer`를 가진다. 구현 `make`는 프로젝트 파일 생성, 읽기, 교체, 삭제와 SKILL.md 생성을 다룬다
 - `CodeSkillRejected` — `Schema.TaggedError`. reason은 builtin_overlap, not_code_skill, network_line, input_line, input_schema, not_found, not_approved, ts_skill 중 하나다. 필드는 `detail`이다

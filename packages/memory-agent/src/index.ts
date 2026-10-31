@@ -368,6 +368,7 @@ export {
   ProjectRootRejected,
   Projects,
 } from "./projects/projects.ts";
+export { FolderPick } from "./projects/contracts.ts";
 export { Session, SessionNotFound, Sessions } from "./sessions/sessions.ts";
 export { BtwChat } from "./btw/chat.ts";
 export { BtwThread, btwToolNames } from "./btw/contracts.ts";
@@ -586,8 +587,8 @@ export {
 export { walkLimit, type FileListing } from "./files/listing.ts";
 export { MemoryTools, memoryToolNames } from "./tools/memory.ts";
 export { readOnlyToolNames } from "./tools/effects.ts";
+export { McpOverview, McpScope, McpServerView } from "./mcp/contracts.ts";
 export {
-  McpScope,
   McpServerConfig,
   McpServerName,
   expandVariables,
@@ -605,9 +606,7 @@ export {
   mcpInstructions,
   mcpToolName,
   mcpToolPrefix,
-  type McpOverview,
   McpServerState,
-  type McpServerView,
 } from "./mcp/servers.ts";
 export {
   SkillScope,
@@ -631,8 +630,12 @@ export {
   type DelegateToolset,
 } from "./tools/delegate.ts";
 export {
-  AgentCommand,
   AgentScope,
+  ExternalAgentsOverview,
+  ExternalAgentView,
+} from "./external-agents/contracts.ts";
+export {
+  AgentCommand,
   agentFingerprint,
   globalAgentsFile,
   projectAgentsFile,
@@ -645,8 +648,6 @@ export {
   maxConsecutiveFailures,
   AgentLinkState,
   AgentTrustState,
-  type ExternalAgentView,
-  type ExternalAgentsOverview,
   type ExternalPromptOutcome,
   type PromptHooks,
   type ReportedToolCall,

@@ -9,10 +9,7 @@ import { path as platformPath } from "../runtime/synchronous-path.ts";
 const { join } = platformPath;
 import { Array as Arr, Effect, FileSystem, Option, Result, Schema } from "effect";
 import type { ConfigFileFailureCode, ShownFailure } from "../runtime/shown-failure.ts";
-
-/** Where MCP servers are configured: user-wide in the storage root, or in a project. */
-export const McpScope = Schema.Literals(["global", "project"]);
-export type McpScope = typeof McpScope.Type;
+import type { McpScope } from "./contracts.ts";
 
 export const globalMcpFile = (storageRoot: string) => join(storageRoot, "mcp.json");
 /** The same file name Claude Code and other agents read, so a project's servers are shared. */

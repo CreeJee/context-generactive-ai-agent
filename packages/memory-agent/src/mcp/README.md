@@ -6,13 +6,13 @@
 
 `config.ts`는 설정 파일 schema 파싱, 지문(fingerprint), `${NAME}` 환경변수 치환을 맡는다. `oauth.ts`는 HTTP 서버의 OAuth 인가(SDK `auth()` 위의 키체인 저장, 401 처리, 루프백 브라우저 로그인)를 맡는다. `client.ts`는 `@tanstack/ai-mcp`를 대신하는 공식 SDK 기반 클라이언트로, 연결·도구 목록·호출과 spec 2025 task 폴링을 맡는다. `servers.ts`는 Effect 서비스 `McpServers`로 설정 화면용 overview, 신뢰 지정, 실행용 도구(`RunTool`)와 서버 안내문(guide)을 제공한다.
 
-이 서비스는 `packages/memory-agent/src/layers.ts`, `packages/memory-agent/src/agent/chat.ts`, `packages/memory-agent/src/report/bundle.ts`, 그리고 `apps/agent`의 `/api/projects/$project/mcp` 라우트에서 쓰인다.
+이 서비스는 `packages/memory-agent/src/layers.ts`, `packages/memory-agent/src/agent/chat.ts`, `packages/memory-agent/src/report/bundle.ts`, 그리고 `apps/agent`의 앱 API projects group(`mcp`/`mcpAction`, `/api/projects/:project/mcp`)에서 쓰인다. 설정 화면이 받는 모양은 `contracts.ts`의 Schema다. 이 모듈은 서버 코드를 import하지 않아 브라우저 번들이 쓴다.
 
 ## Interface
 
 - `McpServers` — `Context.Service`(`memory-agent/mcp/servers/McpServers`)이고 `McpServers.layer = Layer.effect(McpServers, make)`이다. 메서드: `overview(project)`, `setTrusted`, `login`/`cancelLogin`/`logout`(모두 실행 후 overview 반환), `runTools(project)`, `readOnlyRunTools(project)`
-- `McpServerState` — `Data.TaggedEnum`이고 상태는 `untrusted`/`changed`/`trusted`/`connected{tools}`/`failed{failure}`/`needsLogin{failure}`/`loggingIn{authorizationUrl}`이다. 설정 화면이 서버마다 표시한다
-- `McpServerView` / `McpOverview` — 설정 화면용 서버 뷰(scope, name, transport, 비밀을 가린 target, envNames, headerNames, shadowed, signedIn, state)와 파일별 오류 목록
+- `McpServerState` — 상태 `untrusted`/`changed`/`trusted`/`connected{tools}`/`failed{failure}`/`needsLogin{failure}`/`loggingIn{authorizationUrl}`. 타입은 `contracts.ts`에서 오고, `servers.ts`가 같은 이름의 `Data.taggedEnum` 생성자를 둔다. 설정 화면이 서버마다 표시한다
+- `McpScope` / `McpServerView` / `McpOverview` — `contracts.ts`의 Schema. 설정 위치(global/project), 설정 화면용 서버 뷰(scope, name, transport, 비밀을 가린 target, envNames, headerNames, shadowed, signedIn, state)와 파일별 오류 목록
 - `McpServerGuide` / `McpRunTools` — 서버가 연결 때 보낸 사용 안내문, 그리고 실행에 쓸 `RunTool[]`과 guides 묶음
 - `mcpToolPrefix` / `mcpToolName` / `isMcpToolName` — MCP 도구 이름 규칙 `mcp_<server>__<tool>`의 접두어, 생성 함수(dual), 판별 함수
 - `mcpInstructions` / `mcpInstructionsForMode` — MCP 도구 사용 규칙 시스템 프롬프트. 권한 모드 `full`이면 승인 문구를 바꾸고, 서버 guide를 `<server name=...>` 블록으로 덧붙인다

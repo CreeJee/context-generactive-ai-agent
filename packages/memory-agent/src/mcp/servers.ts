@@ -48,13 +48,17 @@ import type { Project } from "../projects/projects.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { SecretStore, type SecretName } from "../config/secrets.ts";
 import type {
-  ConfigFileFailureCode,
   McpFailureCode,
   McpLoginFailureCode,
   ShownFailure,
 } from "../runtime/shown-failure.ts";
 import {
+  type McpOverview,
   McpScope,
+  type McpServerState as McpServerStateCases,
+  type McpServerView,
+} from "./contracts.ts";
+import {
   McpServerConfig,
   expandVariablesResult,
   globalMcpFile,
@@ -75,51 +79,9 @@ import {
   type McpLoginAttempt,
 } from "./oauth.ts";
 
-/** What the settings page shows for one server. Environment and header values are never included. */
-export type McpServerState = Data.TaggedEnum<{
-  untrusted: {};
-  /** Trusted once, but the configuration has changed since. */
-  changed: {};
-  /** Trusted, not started yet (it starts with the next run). */
-  trusted: {};
-  connected: { readonly tools: readonly string[] };
-  failed: { readonly failure: ShownFailure<McpFailureCode> };
-  /**
-   * The server asked for authorization that no stored login answers. `failure` is why the last
-   * login did not finish, if it did not.
-   */
-  needsLogin: { readonly failure: ShownFailure<McpLoginFailureCode> | null };
-  /** A login waits for the person at `authorizationUrl`, in their browser. */
-  loggingIn: { readonly authorizationUrl: string };
-}>;
+/** What the settings page shows for one server (`contracts.ts`). */
+export type McpServerState = McpServerStateCases;
 export const McpServerState = Data.taggedEnum<McpServerState>();
-
-export interface McpServerView {
-  readonly scope: McpScope;
-  readonly name: string;
-  readonly transport: keyof typeof McpServerConfig.cases;
-  /**
-   * `command args…` or the URL, as configured (variables not expanded), with secrets hidden;
-   * `null` when they could not be checked.
-   */
-  readonly target: string | null;
-  readonly envNames: readonly string[];
-  readonly headerNames: readonly string[];
-  /** A project server with the same name replaces this global one. */
-  readonly shadowed: boolean;
-  /** A person's OAuth login to the server is stored (known once the app used or made it). */
-  readonly signedIn: boolean;
-  readonly state: McpServerState;
-}
-
-export interface McpOverview {
-  readonly files: ReadonlyArray<{
-    scope: McpScope;
-    path: string;
-    error: ShownFailure<ConfigFileFailureCode> | null;
-  }>;
-  readonly servers: readonly McpServerView[];
-}
 
 /**
  * Prefix of every MCP tool name, so gates and the UI can tell them apart. Not `mcp__`, which is

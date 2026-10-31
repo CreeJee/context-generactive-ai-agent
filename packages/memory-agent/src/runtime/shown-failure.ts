@@ -10,6 +10,10 @@ export interface ShownFailure<Code extends string> {
   readonly detail: string | null;
 }
 
+/** The Schema of a `ShownFailure` whose code `code` decodes. */
+export const shownFailure = <Code extends Schema.Top>(code: Code) =>
+  Schema.Struct({ code, detail: Schema.NullOr(Schema.String) });
+
 /** Why an external agent did not connect or answer. */
 export const ExternalAgentFailureCode = Schema.Literals([
   /** A `${NAME}` the command or its environment uses is not set. */

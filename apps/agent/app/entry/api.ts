@@ -9,6 +9,8 @@ import {
   appRefusalStatus,
   type ConversationSettings,
   type EmbeddingCommand as EmbeddingCommandCase,
+  type ExternalAgentCommand as ExternalAgentCommandCase,
+  FolderPick,
   type ImageSettings,
   type ImageSettingsCommand as ImageSettingsCommandCase,
   type ImportCommand as ImportCommandCase,
@@ -16,6 +18,8 @@ import {
   type KagiCommand as KagiCommandCase,
   type KanbanSettings,
   type KanbanSettingsCommand as KanbanSettingsCommandCase,
+  type McpCommand as McpCommandCase,
+  type ProjectSettings,
   type RecallSettings,
   type ScanCommand as ScanCommandCase,
 } from "memory-agent/app-api";
@@ -138,22 +142,10 @@ const ImageSettingsCommand = Data.taggedEnum<ImageSettingsCommand>();
 export type ScanCommand = ScanCommandCase;
 export const ScanCommand = Data.taggedEnum<ScanCommand>();
 /** The commands `/api/projects/:project/agents` reads. */
-type ExternalAgentCommand = Data.TaggedEnum<{
-  trust: {
-    readonly scope: ExternalAgentView["scope"];
-    readonly name: string;
-    readonly trusted: boolean;
-  };
-  reconnect: { readonly name: string };
-}>;
+type ExternalAgentCommand = ExternalAgentCommandCase;
 const ExternalAgentCommand = Data.taggedEnum<ExternalAgentCommand>();
 /** The commands `/api/projects/:project/mcp` reads. */
-export type McpCommand = Data.TaggedEnum<{
-  trust: { readonly scope: McpScope; readonly name: string; readonly trusted: boolean };
-  login: { readonly scope: McpScope; readonly name: string };
-  cancelLogin: { readonly scope: McpScope; readonly name: string };
-  logout: { readonly scope: McpScope; readonly name: string };
-}>;
+export type McpCommand = McpCommandCase;
 export const McpCommand = Data.taggedEnum<McpCommand>();
 
 export { ApprovalRequester, NextDelivery, QueueEdit, QueueItemState };
@@ -697,6 +689,10 @@ const appCall = <A, E extends AppApiFailure>(
     ),
   );
 
+/** Changes the project's settings that `payload` names; the others stay as they are. */
+const updateProject = (project: string, payload: ProjectSettings) =>
+  appCall((client) => client.projects.update({ params: { project }, payload }), "invalid_settings");
+
 export const api = {
   auth: (provider: ProviderId) =>
     call<ProviderAuthState>("GET", `/api/auth?provider=${encodeURIComponent(provider)}`),
@@ -724,23 +720,20 @@ export const api = {
       reasoningEffort,
     }),
 
-  projects: () => call<Project[]>("GET", "/api/projects"),
-  addProject: (root: string) => call<Project>("POST", "/api/projects", { root }),
+  projects: () => appCall((client) => client.projects.list({ query: {} })),
+  addProject: (root: string) =>
+    appCall((client) => client.projects.add({ payload: { root } }), "invalid_project"),
   setCrossRecallExcluded: (projectId: string, crossRecallExcluded: boolean) =>
-    call<Project>("POST", `/api/projects/${encodeURIComponent(projectId)}`, {
-      crossRecallExcluded,
-    }),
+    updateProject(projectId, { crossRecallExcluded }),
   setPermissionMode: (projectId: string, permissionMode: PermissionMode) =>
-    call<Project>("POST", `/api/projects/${encodeURIComponent(projectId)}`, { permissionMode }),
+    updateProject(projectId, { permissionMode }),
   /** Archives a project: out of the sidebar list. Its conversations and memory stay. */
-  hideProject: (projectId: string) =>
-    call<Project>("POST", `/api/projects/${encodeURIComponent(projectId)}`, { hidden: true }),
+  hideProject: (projectId: string) => updateProject(projectId, { hidden: true }),
   /** Puts an archived project back in the sidebar list. */
-  restoreProject: (projectId: string) =>
-    call<Project>("POST", `/api/projects/${encodeURIComponent(projectId)}`, { hidden: false }),
-  hiddenProjects: () => call<Project[]>("GET", "/api/projects?hidden=1"),
+  restoreProject: (projectId: string) => updateProject(projectId, { hidden: false }),
+  hiddenProjects: () => appCall((client) => client.projects.list({ query: { hidden: "1" } })),
   /** Opens the folder dialog of the machine running the app; nothing is registered yet. */
-  pickFolder: () => call<FolderPick>("POST", "/api/projects/pick"),
+  pickFolder: () => appCall((client) => client.projects.pick()),
 
   sessions: (projectId: string) =>
     call<Session[]>("GET", `/api/sessions?project=${encodeURIComponent(projectId)}`),
@@ -1034,33 +1027,47 @@ export const api = {
       "invalid_command",
     ),
 
-  mcpServers: (projectId: string) =>
-    call<McpOverview>("GET", `/api/projects/${encodeURIComponent(projectId)}/mcp`),
-  mcpAction: (projectId: string, command: McpCommand) =>
-    call<McpOverview>("POST", `/api/projects/${encodeURIComponent(projectId)}/mcp`, command),
+  mcpServers: (project: string) =>
+    appCall((client) => client.projects.mcp({ params: { project } })),
+  mcpAction: (project: string, command: McpCommand) =>
+    appCall(
+      (client) =>
+        McpCommand.$match(command, {
+          trust: (payload) => client.projects.mcpAction({ params: { project }, payload }),
+          login: (payload) => client.projects.mcpAction({ params: { project }, payload }),
+          cancelLogin: (payload) => client.projects.mcpAction({ params: { project }, payload }),
+          logout: (payload) => client.projects.mcpAction({ params: { project }, payload }),
+        }),
+      "invalid_mcp_change",
+    ),
 
-  externalAgents: (projectId: string) =>
-    call<ExternalAgentsOverview>("GET", `/api/projects/${encodeURIComponent(projectId)}/agents`),
+  externalAgents: (project: string) =>
+    appCall((client) => client.projects.agents({ params: { project } })),
   trustExternalAgent: (
-    projectId: string,
+    project: string,
     scope: ExternalAgentView["scope"],
     name: string,
     trusted: boolean,
   ) =>
-    call<ExternalAgentsOverview>(
-      "POST",
-      `/api/projects/${encodeURIComponent(projectId)}/agents`,
-      ExternalAgentCommand.trust({ scope, name, trusted }),
+    appCall(
+      (client) =>
+        client.projects.agentAction({
+          params: { project },
+          payload: ExternalAgentCommand.trust({ scope, name, trusted }),
+        }),
+      "invalid_agent_change",
     ),
-  reconnectExternalAgent: (projectId: string, name: string) =>
-    call<ExternalAgentsOverview>(
-      "POST",
-      `/api/projects/${encodeURIComponent(projectId)}/agents`,
-      ExternalAgentCommand.reconnect({ name }),
+  reconnectExternalAgent: (project: string, name: string) =>
+    appCall(
+      (client) =>
+        client.projects.agentAction({
+          params: { project },
+          payload: ExternalAgentCommand.reconnect({ name }),
+        }),
+      "invalid_agent_change",
     ),
 
-  skills: (projectId: string) =>
-    call<SkillCatalog>("GET", `/api/projects/${encodeURIComponent(projectId)}/skills`),
+  skills: (project: string) => appCall((client) => client.projects.skills({ params: { project } })),
 
   projectWorkTrace: (projectId: string) =>
     call<TraceTreeSnapshot>("GET", `/api/projects/${encodeURIComponent(projectId)}/trace`),
@@ -1242,12 +1249,7 @@ export function attachmentErrorMessage(error: ApiError | null) {
 }
 
 /** The folder dialog's answer (POST /api/projects/pick). */
-export const FolderPick = Schema.TaggedUnion({
-  picked: { root: Schema.String },
-  cancelled: {},
-  unavailable: {},
-});
-export type FolderPick = typeof FolderPick.Type;
+export { FolderPick };
 
 const ProjectRejection = Schema.Literals([
   "not_found",

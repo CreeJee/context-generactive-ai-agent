@@ -42,14 +42,16 @@ import { StorageRoot } from "../config/storage-root.ts";
 import { isPlatformError, type PlatformError } from "effect/PlatformError";
 import { MissingVariable, expandVariablesResult } from "../mcp/config.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
-import type {
-  ConfigFileFailureCode,
-  ExternalAgentFailureCode,
-  ShownFailure,
-} from "../runtime/shown-failure.ts";
+import type { ExternalAgentFailureCode, ShownFailure } from "../runtime/shown-failure.ts";
 import type { Project } from "../projects/projects.ts";
 import {
+  type AgentLinkState as AgentLinkStateCases,
   AgentScope,
+  type AgentTrustState as AgentTrustStateCases,
+  type ExternalAgentsOverview,
+  type ExternalAgentView,
+} from "./contracts.ts";
+import {
   globalAgentsFile,
   projectAgentsFile,
   readAgentsFile,
@@ -71,49 +73,12 @@ export class ExternalAgentInitializeTimedOut extends Schema.TaggedError<
 const connectTimeoutMs = 30_000;
 const retryDelayMs = 100;
 
-/** Connection state of one external agent, as settings show it. */
-export type AgentLinkState = Data.TaggedEnum<{
-  idle: {};
-  connecting: { readonly failures: number };
-  connected: { readonly agent: string | null; readonly loadSession: boolean };
-  /** The last attempt failed; the next use (or the automatic reconnect) tries again. */
-  retrying: {
-    readonly failures: number;
-    readonly failure: ShownFailure<ExternalAgentFailureCode>;
-  };
-  /** Gave up after consecutive failures; only a manual reconnect tries again. */
-  stopped: {
-    readonly failures: number;
-    readonly failure: ShownFailure<ExternalAgentFailureCode>;
-  };
-}>;
+/** Connection state of one external agent, as settings show it (`contracts.ts`). */
+export type AgentLinkState = AgentLinkStateCases;
 export const AgentLinkState = Data.taggedEnum<AgentLinkState>();
 
-export type AgentTrustState = Data.TaggedEnum<{
-  untrusted: {};
-  changed: {};
-  trusted: { readonly link: AgentLinkState };
-}>;
+export type AgentTrustState = AgentTrustStateCases;
 export const AgentTrustState = Data.taggedEnum<AgentTrustState>();
-
-export interface ExternalAgentView {
-  readonly scope: AgentScope;
-  readonly name: string;
-  /** `command args…` as configured, with secrets hidden; `null` when they could not be checked. */
-  readonly target: string | null;
-  readonly envNames: readonly string[];
-  readonly shadowed: boolean;
-  readonly state: AgentTrustState;
-}
-
-export interface ExternalAgentsOverview {
-  readonly files: ReadonlyArray<{
-    scope: AgentScope;
-    path: string;
-    error: ShownFailure<ConfigFileFailureCode> | null;
-  }>;
-  readonly agents: readonly ExternalAgentView[];
-}
 
 /** One tool call the external agent reported, as far as it said. */
 export interface ReportedToolCall {

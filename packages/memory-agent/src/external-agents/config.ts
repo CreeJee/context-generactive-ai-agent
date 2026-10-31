@@ -8,9 +8,7 @@ const { join } = platformPath;
 import { Result, Schema } from "effect";
 import type { ConfigFileFailureCode, ShownFailure } from "../runtime/shown-failure.ts";
 import { McpServerName } from "../mcp/config.ts";
-
-export const AgentScope = Schema.Literals(["global", "project"]);
-export type AgentScope = typeof AgentScope.Type;
+import type { AgentScope } from "./contracts.ts";
 
 export const globalAgentsFile = (storageRoot: string) => join(storageRoot, "agents.json");
 export const projectAgentsFile = (projectRoot: string) =>

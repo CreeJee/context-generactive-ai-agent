@@ -15,26 +15,9 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
 import { StorageRoot } from "../config/storage-root.ts";
+import { PermissionMode, Project } from "./contracts.ts";
 
-/**
- * How approval-gated tools (shell, writes outside the project) are allowed.
- * `ask`: the user answers every call. `auto`: a classifier allows, asks or blocks each call first.
- * `full`: approval-gated calls run immediately under the app's path and credential restrictions.
- */
-export const PermissionMode = Schema.Literals(["ask", "auto", "full"]);
-export type PermissionMode = typeof PermissionMode.Type;
-
-export const Project = Schema.Struct({
-  id: Schema.String,
-  root: Schema.String,
-  name: Schema.String,
-  crossRecallExcluded: Schema.Boolean,
-  permissionMode: PermissionMode,
-  createdAt: Schema.String,
-  /** When it was taken out of the sidebar; its memory is still there and still searched. */
-  hiddenAt: Schema.NullOr(Schema.String),
-});
-export type Project = typeof Project.Type;
+export { PermissionMode, Project };
 
 const ProjectRow = Schema.Struct({
   id: Schema.String,
