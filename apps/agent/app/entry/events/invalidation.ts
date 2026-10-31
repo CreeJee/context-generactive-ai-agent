@@ -1,5 +1,5 @@
 import { Function as EffectFunction } from "effect";
-import type { AppChangedEvent } from "./contracts";
+import type { AppChangedEvent } from "memory-agent/app-api";
 import { invalidationKeys } from "./query-keys";
 
 export type QueryKey = readonly unknown[];

@@ -1,4 +1,4 @@
-import type { AppChangedEvent } from "./contracts";
+import type { AppChangedEvent } from "memory-agent/app-api";
 
 import { appQueryKeys, type AppQueryKey } from "../queries/keys";
 export { appQueryKeys, type AppQueryKey } from "../queries/keys";

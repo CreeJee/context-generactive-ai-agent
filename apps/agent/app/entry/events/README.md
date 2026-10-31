@@ -2,14 +2,10 @@
 
 ## Overview
 
-`apps/agent/app/entry/events`는 웹 앱 프런트엔드가 서버의 SSE 스트림(`/api/events`)을 구독해 TanStack Query 캐시를 무효화하는 계층이다. `contracts.ts`가 `changed`·`ready`·heartbeat 이벤트의 Effect Schema 계약을 정의한다. `event-source.ts`는 네이티브 `EventSource`를 감싸 페이로드를 동기 디코드한다. `invalidation.ts`·`query-keys.ts`는 revision 기준으로 이벤트를 `apps/agent/app/entry/queries/keys`의 쿼리 키 목록으로 바꾼다. `providers.tsx`·`context.ts`는 React Provider와 Context로 연결 상태와 세션 스코프(projectId/sessionId)를 하위 컴포넌트에 노출한다.
+`apps/agent/app/entry/events`는 웹 앱 프런트엔드가 서버의 SSE 스트림(`/api/events`)을 구독해 TanStack Query 캐시를 무효화하는 계층이다. `changed`·`ready` 이벤트의 Schema는 앱 API 계약(`memory-agent/app-api`의 `AppChangedEvent`, `AppReadyEvent`)을 쓴다. `event-source.ts`는 네이티브 `EventSource`를 감싸 페이로드를 동기 디코드한다. `invalidation.ts`·`query-keys.ts`는 revision 기준으로 이벤트를 `apps/agent/app/entry/queries/keys`의 쿼리 키 목록으로 바꾼다. `providers.tsx`·`context.ts`는 React Provider와 Context로 연결 상태와 세션 스코프(projectId/sessionId)를 하위 컴포넌트에 노출한다.
 
 ## Interface
 
-- `AppChangedEvent` — scope(`session`/`project`/`global`)로 구분한 변경 이벤트 Schema 유니온이다. topic과 0 이상 정수 revision을 가진다.
-- `AppReadyEvent` — 연결 직후 서버 현재 revision(0 이상 정수)을 알리는 Schema이다.
-- `AppHeartbeatEvent` — `at`(0 이상 정수) 필드를 가진 heartbeat Schema이다.
-- `SessionEventTopic` / `ProjectEventTopic` / `GlobalEventTopic` — scope별 topic 리터럴 Schema와 타입이다. 각각 `all`,`run-state`,`queue`,`subagents`,`relayed-approvals` / `all`,`sessions` / `all`,`auth`,`imports`,`embedding`,`projects`,`kanban`이다.
 - `connectAppEvents(options)` — `EventSource`를 열고 `ready`·`changed` 이벤트를 디코드해 콜백으로 넘긴다. 반환값은 멱등 close 함수이다. `createSource` 주입과 `AbortSignal`을 지원한다.
 - `ConnectAppEventsOptions` — `url`, `signal`, `createSource`, `onChanged`, `onReady`, `onStatus`, `onDecodeError` 옵션 인터페이스이다.
 - `EventConnectionState` — `"connecting" | "live" | "reconnecting"` 연결 상태 타입이다.

@@ -14,6 +14,8 @@ export const TraceApiHandlers = HttpApiBuilder.group(
 
     return handlers.handleAll({
       sessionTree: ({ params: { session } }) => refusalsOnly(chat.traceTree(session)),
+      sessionStream: ({ params: { session }, query, headers }) =>
+        refusalsOnly(chat.traceStream(session, query.after ?? headers["last-event-id"] ?? 0)),
       sessionTask: ({ params: { session, task } }) => refusalsOnly(chat.traceTask(session, task)),
       changeTask: ({ params: { session, task }, headers, payload }) =>
         Effect.gen(function* () {

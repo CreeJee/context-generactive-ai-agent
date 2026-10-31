@@ -4,6 +4,8 @@ import {
   LifecycleIntent,
   LifecycleResult,
   ResumeTaskResult,
+  TraceEventsLost,
+  TraceStreamEvent,
   TraceTaskDetail,
   TraceTreeSnapshot,
 } from "../../work-trace/contracts.ts";
@@ -64,6 +66,11 @@ export const traceRefusals = [
 
 const task = { task: Schema.String };
 
+/** A trace cursor: the events after it are sent. */
+const TraceCursor = Schema.FiniteFromString.pipe(
+  Schema.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
+);
+
 /**
  * What subagents did, kept after their conversation ends (`/api/sessions/:session/trace*`), and
  * the project's own copy, kept after the conversation is deleted (`/api/projects/:project/trace*`).
@@ -74,6 +81,17 @@ export class TraceGroup extends HttpApiGroup.make("trace")
     HttpApiEndpoint.get("sessionTree", "/api/sessions/:session/trace", {
       params: { session: Schema.String },
       success: TraceTreeSnapshot,
+      error: [WorkTraceDisabled, SettingsUnavailable, UnknownSession],
+    }),
+    /**
+     * The session's trace events after `after`, or after `Last-Event-ID` when the browser
+     * reconnects without one, then each new one; `progress` asks the page to reread the tree.
+     */
+    HttpApiEndpoint.get("sessionStream", "/api/sessions/:session/trace/stream", {
+      params: { session: Schema.String },
+      query: { after: Schema.optional(TraceCursor) },
+      headers: { "last-event-id": Schema.optional(TraceCursor) },
+      success: HttpApiSchema.StreamSse({ events: TraceStreamEvent, error: TraceEventsLost }),
       error: [WorkTraceDisabled, SettingsUnavailable, UnknownSession],
     }),
     /** One task's attempts, checkpoints, visible events and the memories it proposed or used. */

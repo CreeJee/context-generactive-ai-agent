@@ -446,6 +446,45 @@ export const TraceEventView = Schema.Struct({
 });
 export type TraceEventView = typeof TraceEventView.Type;
 
+/** The trace events after a cursor, and the cursor to continue after. */
+export const TraceEventPage = Schema.Struct({
+  cursor: Schema.Finite,
+  events: Schema.Array(TraceEventView),
+});
+export type TraceEventPage = typeof TraceEventPage.Type;
+
+/**
+ * One SSE event of a conversation's trace stream: `snapshot` first, then each written event as
+ * `trace`. The `id` is the cursor the page continues after.
+ */
+export const TraceStreamEvent = Schema.Union([
+  Schema.Struct({
+    id: Schema.String,
+    event: Schema.Literal("snapshot"),
+    data: Schema.fromJsonString(TraceEventPage),
+  }),
+  Schema.Struct({
+    id: Schema.String,
+    event: Schema.Literal("trace"),
+    data: Schema.fromJsonString(TraceEventView),
+  }),
+  /** A child's beat or current step changed: no event was written, the page rereads the tree. */
+  Schema.Struct({
+    event: Schema.Literal("progress"),
+    data: Schema.fromJsonString(Schema.Struct({})),
+  }),
+  /** Nothing changed for a while; keeps the connection open. */
+  Schema.Struct({
+    event: Schema.Literal("heartbeat"),
+    data: Schema.fromJsonString(Schema.Struct({ cursor: Schema.Finite })),
+  }),
+]);
+export type TraceStreamEvent = typeof TraceStreamEvent.Type;
+
+/** The trace could not be read, so its stream ended; the page connects again. */
+export const TraceEventsLost = Schema.Struct({ error: Schema.Literal("trace_events_unavailable") });
+export type TraceEventsLost = typeof TraceEventsLost.Type;
+
 /** One task with its attempt lineage, checkpoints and visible events. */
 export const TraceTaskDetail = Schema.Struct({
   task: TraceTaskView,

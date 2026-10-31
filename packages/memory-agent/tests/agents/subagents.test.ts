@@ -1,4 +1,4 @@
-import { Effect, Fiber, FileSystem, Path, Schema } from "effect";
+import { Effect, Fiber, FileSystem, Option, Path, Schema, Stream } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { RelayedApprovals } from "../../src/approvals/relayed.ts";
@@ -16,7 +16,6 @@ import {
   freshProject,
   heldDefaultTurn,
   heldTurns,
-  sdk,
   send,
   settled,
   until,
@@ -176,22 +175,8 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
         ).toEqual(
           ResumeRequest.queued({ taskId: trace.task_id, expectedAttemptId: trace.attempt_id }),
         );
-        const stream = yield* chat.traceStream(
-          new Request("http://local/trace/stream?after=0"),
-          sessionId,
-        );
-        expect(stream.headers.get("content-type")).toContain("text/event-stream");
-        const reader = yield* Effect.acquireRelease(
-          Effect.sync(() => stream.body!.getReader()),
-          (reader) => Effect.promise(() => reader.cancel()),
-        );
-        const first = yield* sdk(() => reader.read());
-        expect(new TextDecoder().decode(first.value)).toContain("event: snapshot");
-        const invalidCursor = yield* chat.traceStream(
-          new Request("http://local/trace/stream?after=nope"),
-          sessionId,
-        );
-        expect(invalidCursor.status).toBe(400);
+        const first = yield* Stream.runHead(yield* chat.traceStream(sessionId, 0));
+        expect(Option.map(first, ({ event }) => event)).toEqual(Option.some("snapshot"));
       }),
   );
 

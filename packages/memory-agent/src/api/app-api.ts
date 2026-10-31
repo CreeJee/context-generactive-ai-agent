@@ -1,5 +1,6 @@
 import { HttpApi } from "effect/http-api";
 import { BtwThreadsGroup, btwRefusals } from "./app-api/btw.ts";
+import { EventsGroup } from "./app-api/events.ts";
 import { MediaGroup, mediaRefusals } from "./app-api/media.ts";
 import { ProjectsGroup, projectsRefusals } from "./app-api/projects.ts";
 import { ReportsGroup, reportsRefusals } from "./app-api/reports.ts";
@@ -24,7 +25,8 @@ export class AppApi extends HttpApi.make("app")
   .add(TraceGroup)
   .add(BtwThreadsGroup)
   .add(ReportsGroup)
-  .add(MediaGroup) {}
+  .add(MediaGroup)
+  .add(EventsGroup) {}
 
 /**
  * The HTTP status an app API refusal is answered with. A code has one status across the groups, so
@@ -80,6 +82,7 @@ export {
 export { ReportDeliveryCommand } from "./app-api/reports.ts";
 export { GeneratedImage } from "./app-api/media.ts";
 export { CrossProviderMediaRunApproval } from "../providers/image-media-contracts.ts";
+export { AppChangedEvent, AppReadyEvent } from "../events/contracts.ts";
 export { Session } from "../sessions/contracts.ts";
 export { LifecycleResult, ResumeTaskResult } from "../work-trace/contracts.ts";
 export { WorkflowState } from "../workflow/contracts.ts";

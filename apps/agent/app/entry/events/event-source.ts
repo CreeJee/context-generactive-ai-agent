@@ -1,6 +1,6 @@
 import { Result } from "effect";
 import { Schema } from "effect";
-import { AppChangedEvent, AppReadyEvent } from "./contracts";
+import { AppChangedEvent, AppReadyEvent } from "memory-agent/app-api";
 
 export type EventConnectionState = "connecting" | "live" | "reconnecting";
 

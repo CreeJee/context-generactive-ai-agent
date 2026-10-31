@@ -12,6 +12,7 @@ import { AppApi, NoStore } from "memory-agent/app-api";
 import { ChatApi, SameSite } from "memory-agent/chat-api";
 import { agent } from "./agent.ts";
 import { BtwThreadsApiHandlers } from "./api/btw.ts";
+import { EventsApiHandlers } from "./api/events.ts";
 import { MediaApiHandlers } from "./api/media.ts";
 import { ProjectsApiHandlers } from "./api/projects.ts";
 import { ReportsApiHandlers } from "./api/reports.ts";
@@ -65,6 +66,7 @@ const appApiRoutes = HttpApiBuilder.layer(AppApi).pipe(
       BtwThreadsApiHandlers,
       ReportsApiHandlers,
       MediaApiHandlers,
+      EventsApiHandlers,
     ),
   ),
   Layer.provide(Layer.merge(SameSiteLive, NoStoreLive)),

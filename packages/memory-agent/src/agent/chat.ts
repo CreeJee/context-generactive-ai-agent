@@ -184,7 +184,12 @@ import {
   ResumeRequest,
   WorkTraceStore,
 } from "../work-trace/store.ts";
-import { LifecycleResult, type TraceTaskDetail } from "../work-trace/contracts.ts";
+import {
+  LifecycleResult,
+  type TraceEventsLost,
+  type TraceStreamEvent,
+  type TraceTaskDetail,
+} from "../work-trace/contracts.ts";
 import { BackgroundTasks, type BackgroundBinding } from "../tools/background.ts";
 import { AppEvents } from "../events/app-events.ts";
 import {
@@ -339,23 +344,6 @@ const userTurn = (content: (typeof StoredUserMessage.Type)["content"]): UserTurn
             : [],
         ),
       };
-
-/**
- * Every answer goes through here. Without the DOM library, `Response.json` is typed with undici's
- * own `Response`, which this package cannot name; the global `Response` keeps the service's
- * inferred type portable.
- */
-const json = <T>(status: number, body: T): Response => Response.json(body, { status });
-
-/** A server-sent event stream answer, typed with the global `Response` for the same reason. */
-const eventStream = (body: ReadableStream<Uint8Array>): Response =>
-  new Response(body, {
-    headers: {
-      "Cache-Control": "no-cache, no-transform",
-      Connection: "keep-alive",
-      "Content-Type": "text/event-stream; charset=utf-8",
-    },
-  });
 
 /** How long a cancel request waits for the run to actually stop before answering. */
 const cancelWaitMs = 5_000;
@@ -718,7 +706,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       Effect.fail({ error: "session_in_use" } as const),
       Effect.map(leases.permits(sessionId, holder), (permitted) => !permitted),
     );
-  const workTraceUnavailable = () => json(404, { error: "work_trace_disabled" });
   /** Refuses while Work Trace is off, or while the settings that say so cannot be read. */
   const traceShown = workTraceExposed.pipe(
     Effect.filterOrFail(EffectFunction.identity, () => ({ error: "work_trace_disabled" }) as const),
@@ -829,7 +816,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     };
   };
   /** Every handler that looks a session up answers this when it does not exist. */
-  const sessionNotFound = () => Effect.succeed(json(404, { error: "session_not_found" }));
   /** The app API's methods refuse with the code instead. */
   const unknownSession = () => Effect.fail({ error: "session_not_found" } as const);
   const unknownProject = () => Effect.fail({ error: "project_not_found" } as const);
@@ -1141,15 +1127,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     ended: () => Effect.asVoid(Effect.forkDetach(indexAfterRun)),
   };
 
-  const traceCursor = (request: Request) => {
-    const raw =
-      new URL(request.url).searchParams.get("after") ?? request.headers.get("Last-Event-ID") ?? "0";
-    const cursor = Number(raw);
-    return Number.isSafeInteger(cursor) && cursor >= 0 ? cursor : null;
-  };
-  const traceFrame = (event: string, dataJson: string, cursor?: number) =>
-    `${cursor === undefined ? "" : `id: ${cursor}\n`}event: ${event}\ndata: ${dataJson}\n\n`;
-
   const stopSessionRuns = (sessionId: string) =>
     Effect.gen(function* () {
       yield* execution.stop(sessionId);
@@ -1259,22 +1236,19 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         return yield* withMemories(taskId, yield* workTrace.projectTaskDetail(projectId, taskId));
       }).pipe(Effect.catchTag("ProjectNotFound", unknownProject)),
 
-    /** Persisted cursor replay followed by a live tail. Only wake-up notifications are in memory. */
-    traceStream: (request: Request, sessionId: string) =>
+    /**
+     * The conversation's trace events after `after`, then a live tail; only wake-up notifications
+     * are in memory. The service owner's shutdown ends the stream, and so does its reader stopping.
+     */
+    traceStream: (sessionId: string, after: number) =>
       Effect.gen(function* () {
-        if (!(yield* workTraceExposed)) return workTraceUnavailable();
+        yield* traceShown;
         yield* sessions.get(sessionId);
-        const requestedCursor = traceCursor(request);
-        if (requestedCursor === null) return json(400, { error: "invalid_trace_cursor" });
-        const encoder = new TextEncoder();
-        const encodeTrace = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+        const continueAfter = (cursor: number, events: ReadonlyArray<TraceStreamEvent>) =>
+          [events, Option.some(cursor)] as const;
         const frames = Stream.unwrap(
           Effect.gen(function* () {
-            const initial = yield* workTrace.snapshotEffect({
-              sessionId,
-              afterCursor: requestedCursor,
-            });
-            const initialJSON = yield* encodeTrace(initial);
+            const initial = yield* workTrace.snapshotEffect({ sessionId, afterCursor: after });
             const tail = Stream.paginate(initial.cursor, (cursor) =>
               Effect.gen(function* () {
                 const change = yield* workTrace.waitForChangeEffect({
@@ -1282,52 +1256,38 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                   afterCursor: cursor,
                 });
                 if (change === "heartbeat")
-                  return [[`: heartbeat ${cursor}\n\n`], Option.some(cursor)] as const;
+                  return continueAfter(cursor, [{ event: "heartbeat", data: { cursor } }]);
                 // A child's beat or current step changed: no event was written, the page rereads
                 // the task tree.
                 if (change === "progress")
-                  return [[traceFrame("progress", "{}")], Option.some(cursor)] as const;
+                  return continueAfter(cursor, [{ event: "progress", data: {} }]);
                 const next = yield* workTrace.snapshotEffect({ sessionId, afterCursor: cursor });
-                const events = yield* Effect.forEach(next.events, (event) =>
-                  encodeTrace(event).pipe(
-                    Effect.map((json) => traceFrame("trace", json, event.cursor)),
-                  ),
+                return continueAfter(
+                  next.cursor,
+                  next.events.map((event) => ({
+                    id: `${event.cursor}`,
+                    event: "trace" as const,
+                    data: event,
+                  })),
                 );
-                return [events, Option.some(next.cursor)] as const;
               }),
             );
             return Stream.concat(
-              Stream.succeed(traceFrame("snapshot", initialJSON, initial.cursor)),
+              Stream.succeed<TraceStreamEvent>({
+                id: `${initial.cursor}`,
+                event: "snapshot",
+                data: initial,
+              }),
               tail,
             );
           }),
         );
-        // The body outlives the HTTP handler. Its own consumer, request signal and service owner
-        // terminate the producer; closing the handler's Scope must not terminate a live response.
-        const stopped = Effect.callback<void>((resume) => {
-          const stop = () => resume(Effect.void);
-          request.signal.addEventListener("abort", stop, { once: true });
-          ownerSignal.addEventListener("abort", stop, { once: true });
-          if (request.signal.aborted || ownerSignal.aborted) stop();
-          return Effect.sync(() => {
-            request.signal.removeEventListener("abort", stop);
-            ownerSignal.removeEventListener("abort", stop);
-          });
-        });
-        const body = Stream.toReadableStreamWith(
-          frames.pipe(
-            Stream.interruptWhen(stopped),
-            Stream.map((frame) => encoder.encode(frame)),
-          ),
-          context,
+        return frames.pipe(
+          Stream.interruptWhen(aborted(ownerSignal)),
+          Stream.tapError(logFailure("The work trace stream ended")),
+          Stream.mapError((): TraceEventsLost => ({ error: "trace_events_unavailable" })),
         );
-        return eventStream(body);
-      }).pipe(
-        Effect.catchTags({
-          SessionNotFound: sessionNotFound,
-          GlobalConfigFailed: () => Effect.succeed(json(500, { error: "settings_unavailable" })),
-        }),
-      ),
+      }).pipe(Effect.catchTag("SessionNotFound", unknownSession)),
 
     /**
      * Starts one chat run in a session. Stores the user turn, runs the model with memory tools,

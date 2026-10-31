@@ -15,30 +15,21 @@ import {
 import { SqlClient, SqlSchema } from "effect/sql";
 import { aborted } from "../runtime/aborted.ts";
 import { logFailure } from "../runtime/logged-failures.ts";
+import type {
+  AppChangedEvent,
+  AppEventFrame,
+  GlobalEventTopic,
+  ProjectEventTopic,
+  SessionEventTopic,
+} from "./contracts.ts";
 
-export type SessionEventTopic = "all" | "run-state" | "queue" | "subagents" | "relayed-approvals";
-export type ProjectEventTopic = "all" | "sessions";
-export type GlobalEventTopic = "all" | "auth" | "imports" | "embedding" | "projects" | "kanban";
-
-export type AppChangedEvent =
-  | {
-      readonly scope: "session";
-      readonly projectId: string;
-      readonly sessionId: string;
-      readonly topic: SessionEventTopic;
-      readonly revision: number;
-    }
-  | {
-      readonly scope: "project";
-      readonly projectId: string;
-      readonly topic: ProjectEventTopic;
-      readonly revision: number;
-    }
-  | {
-      readonly scope: "global";
-      readonly topic: GlobalEventTopic;
-      readonly revision: number;
-    };
+export type {
+  AppChangedEvent,
+  AppEventFrame,
+  GlobalEventTopic,
+  ProjectEventTopic,
+  SessionEventTopic,
+};
 
 export type AppEventInput =
   | Omit<Extract<AppChangedEvent, { scope: "session" }>, "revision">
@@ -58,19 +49,17 @@ export interface AppEventsApi {
   ) => Effect.Effect<AppChangedEvent>;
   readonly publishGlobal: (topic: GlobalEventTopic) => Effect.Effect<AppChangedEvent>;
   readonly revision: Effect.Effect<number>;
-  readonly sessionStream: (request: Request, sessionId: string) => Effect.Effect<Response>;
-  readonly projectStream: (request: Request, projectId: string) => Effect.Effect<Response>;
-  readonly globalStream: (request: Request) => Effect.Effect<Response>;
-  readonly allStream: (request: Request) => Effect.Effect<Response>;
+  /**
+   * A stream of the events in its scope, subscribed when the effect runs. It ends when the service
+   * owner closes; whoever reads it ends it earlier by stopping.
+   */
+  readonly sessionStream: (sessionId: string) => Effect.Effect<Stream.Stream<AppEventFrame>>;
+  readonly projectStream: (projectId: string) => Effect.Effect<Stream.Stream<AppEventFrame>>;
+  readonly globalStream: Effect.Effect<Stream.Stream<AppEventFrame>>;
+  readonly allStream: Effect.Effect<Stream.Stream<AppEventFrame>>;
 }
 
-type SsePayload = AppChangedEvent | { readonly revision: number } | { readonly at: number };
-
-const encoder = new TextEncoder();
 const heartbeatMs = 15_000;
-
-const frame = (event: string, payload: SsePayload, id?: number) =>
-  `${id === undefined ? "" : `id: ${id}\n`}event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
 
 const make = Effect.fnUntraced(function* (options: {
   readonly projectForSession: (sessionId: string) => Effect.Effect<string | null>;
@@ -92,17 +81,11 @@ const make = Effect.fnUntraced(function* (options: {
       return Effect.as(PubSub.publish(changes, event), [event, nextRevision] as const);
     });
 
-  const closed = (request: Request) =>
-    Effect.raceFirst(
-      aborted(request.signal),
-      options.ownerSignal === undefined ? Effect.never : aborted(options.ownerSignal),
-    );
+  const ownerClosed =
+    options.ownerSignal === undefined ? Effect.never : aborted(options.ownerSignal);
 
-  const stream = Effect.fnUntraced(function* (
-    request: Request,
-    accepts: (event: AppChangedEvent) => boolean,
-  ) {
-    // Subscribed before the response is returned, so an event published right after it is not
+  const stream = Effect.fnUntraced(function* (accepts: (event: AppChangedEvent) => boolean) {
+    // Subscribed before the stream is handed over, so an event published right after it is not
     // lost; subscribing and reading the revision the page starts from take the publishing lock.
     const subscribed = yield* Scope.make();
     const [subscription, current] = yield* SynchronizedRef.modifyEffect(revision, (current) =>
@@ -114,33 +97,29 @@ const make = Effect.fnUntraced(function* (options: {
     const heartbeats = Stream.fromEffectRepeat(
       Effect.sleep(heartbeatMs).pipe(
         Effect.andThen(DateTime.now),
-        Effect.map((now) => frame("heartbeat", { at: DateTime.toEpochMillis(now) })),
+        Effect.map((now): AppEventFrame => ({
+          event: "heartbeat",
+          data: { at: DateTime.toEpochMillis(now) },
+        })),
       ),
     );
-    const frames = Stream.make(frame("ready", { revision: current })).pipe(
+    return Stream.succeed<AppEventFrame>({ event: "ready", data: { revision: current } }).pipe(
       Stream.concat(
         Stream.merge(
           Stream.fromSubscription(subscription).pipe(
             Stream.filter(accepts),
-            Stream.map((event) => frame("changed", event, event.revision)),
+            Stream.map((event): AppEventFrame => ({
+              id: `${event.revision}`,
+              event: "changed",
+              data: event,
+            })),
           ),
           heartbeats,
         ),
       ),
-      Stream.interruptWhen(closed(request)),
+      Stream.interruptWhen(ownerClosed),
       Stream.ensuring(Scope.close(subscribed, Exit.void)),
     );
-    const body = yield* Stream.toReadableStreamEffect(
-      frames.pipe(Stream.map((value) => encoder.encode(value))),
-    );
-    return new Response(body, {
-      headers: {
-        "Cache-Control": "no-cache, no-transform",
-        Connection: "keep-alive",
-        "Content-Type": "text/event-stream",
-        "X-Accel-Buffering": "no",
-      },
-    });
   });
 
   return {
@@ -155,12 +134,12 @@ const make = Effect.fnUntraced(function* (options: {
       publish({ scope: "project", projectId, topic }),
     publishGlobal: (topic: GlobalEventTopic) => publish({ scope: "global", topic }),
     revision: SynchronizedRef.get(revision),
-    sessionStream: (request: Request, sessionId: string) =>
-      stream(request, (event) => event.scope === "session" && event.sessionId === sessionId),
-    projectStream: (request: Request, projectId: string) =>
-      stream(request, (event) => event.scope === "project" && event.projectId === projectId),
-    globalStream: (request: Request) => stream(request, (event) => event.scope === "global"),
-    allStream: (request: Request) => stream(request, () => true),
+    sessionStream: (sessionId: string) =>
+      stream((event) => event.scope === "session" && event.sessionId === sessionId),
+    projectStream: (projectId: string) =>
+      stream((event) => event.scope === "project" && event.projectId === projectId),
+    globalStream: stream((event) => event.scope === "global"),
+    allStream: stream(() => true),
   } satisfies AppEventsApi;
 });
 
