@@ -1,12 +1,10 @@
 import { Function as EffectFunction } from "effect";
 import { Context, Effect, Layer, Schema } from "effect";
-import {
-  GlobalConfig,
-  GlobalConfigFailed,
-  type CrossProviderMediaConsentMode,
-  type CrossProviderMediaConsentSettings,
-  type GlobalConfigApi,
-} from "../config/global-config.ts";
+import type {
+  CrossProviderMediaConsentMode,
+  CrossProviderMediaConsentSettings,
+} from "../config/contracts.ts";
+import { GlobalConfig, GlobalConfigFailed, type GlobalConfigApi } from "../config/global-config.ts";
 import type { ProviderId } from "./contracts.ts";
 
 export interface CrossProviderMediaConsentPair {

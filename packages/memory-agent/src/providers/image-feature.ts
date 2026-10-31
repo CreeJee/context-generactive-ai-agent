@@ -5,11 +5,8 @@ import {
   type GlobalConfigFailed,
   type GlobalConfigApi,
 } from "../config/global-config.ts";
+import type { ImageFeatureStatus } from "./contracts.ts";
 import type { ImageRouteDecision } from "./image-router.ts";
-
-export interface ImageFeatureStatus {
-  readonly imageGenerationEnabled: boolean;
-}
 
 export interface ImageTurnIntent {
   readonly kind: "none" | "generate_image";

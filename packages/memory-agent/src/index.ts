@@ -84,17 +84,20 @@ export {
 
 export { StorageRoot, defaultStorageRoot } from "./config/storage-root.ts";
 export {
-  CrossProviderMediaConsentMode,
-  CrossProviderMediaConsentSettings,
-  EmbeddingChoice,
   GlobalConfig,
   GlobalConfigFailed,
-  GpuCheck,
   ModelFeatureFlagSettings,
   Settings,
   type GlobalConfigApi,
 } from "./config/global-config.ts";
-export { KanbanConcurrency, SummaryStartPercent } from "./config/contracts.ts";
+export {
+  CrossProviderMediaConsentMode,
+  CrossProviderMediaConsentSettings,
+  EmbeddingChoice,
+  GpuCheck,
+  KanbanConcurrency,
+  SummaryStartPercent,
+} from "./config/contracts.ts";
 export {
   SecretStore,
   SecretStoreFailed,
@@ -311,9 +314,9 @@ export {
   type ImageContextGateDecision,
   type ImageContextGateInput,
   type ImageFeatureApi,
-  type ImageFeatureStatus,
   type ImageTurnIntent,
 } from "./providers/image-feature.ts";
+export { ImageFeatureStatus } from "./providers/contracts.ts";
 export {
   DirectImageExecutionFailed,
   DirectImageExecutor,
@@ -479,14 +482,8 @@ export {
   type StructuredRuleOrigin,
   type RuleSourceProblem,
 } from "./workflow/sources.ts";
-export {
-  Importer,
-  ImportWorkerFailed,
-  ImportActivity,
-  type ImportFailure,
-  type ImportOverview,
-  type UnplacedFolder,
-} from "./imports/importer.ts";
+export { Importer, ImportWorkerFailed, ImportActivity } from "./imports/importer.ts";
+export { ImportFailure, ImportOverview, UnplacedFolder } from "./imports/contracts.ts";
 export { ImportSourceName } from "./imports/items.ts";
 export { TurnSummaries } from "./agent/turn-summaries.ts";
 export { SessionLeases, defaultLeaseTtlMs, makeLeases } from "./sessions/leases.ts";
@@ -527,11 +524,10 @@ export {
   localModel,
   type EmbedderApi,
   EmbedderRuntime,
-  type EmbeddingDevice,
-  type EmbeddingMode,
 } from "./memory/embedding/embedder.ts";
+export { EmbeddingDevice, EmbeddingMode, EmbeddingOverview } from "./memory/embedding/contracts.ts";
 export { Indexer } from "./memory/embedding/indexer.ts";
-export { EmbeddingSetup, GpuState, type EmbeddingOverview } from "./memory/embedding/setup.ts";
+export { EmbeddingSetup, GpuState } from "./memory/embedding/setup.ts";
 export {
   MorphAnalysisFailed,
   MorphAnalyzer,

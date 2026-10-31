@@ -8,9 +8,9 @@ memory-agent의 임베딩 계층이다. 로컬 granite 임베딩 모델을 워�
 
 - `Embedder` — `Context.Service<Embedder, EmbedderApi>`. `Embedder.local`은 GlobalConfig 설정과 메모리로 모드를 골라 `<storage>/models`의 로컬 모델 Layer를 만들고, `Embedder.localVariant(variant)`는 모델 파일 평가용 Layer다
 - `EmbedderApi` — `identity`(비교 불가 벡터가 되면 바뀜), `dimensions`, `embed`(L2 정규화 벡터), 선택적 `chunks`, `runtime()`
-- `EmbedderRuntime` — `Data.TaggedEnum`. `local{mode, device}` 또는 `other`(테스트·평가용)
+- `EmbedderRuntime` — `EmbeddingOverview["running"]`의 `Data.taggedEnum` 생성자. `local{mode, device}` 또는 `other`(테스트·평가용)
 - `EmbeddingError` — 임베더 실패를 나타내는 TaggedError(`cause: Defect`)
-- `EmbeddingMode` / `ModelVariant` / `modelFile(variant)` — cpu/gpu 모드, fp32/quint8 변형, 모델 캐시 안의 `onnx/<file>.onnx` 경로
+- `EmbeddingMode` / `ModelVariant` / `modelFile(variant)` — cpu/gpu 모드 Schema(`contracts.ts`), fp32/quint8 변형, 모델 캐시 안의 `onnx/<file>.onnx` 경로
 - `localModel` — `ibm-granite/granite-embedding-97m-multilingual-r2`, 384차원, maxTokens 2048, batchSize 16, batchCost 2048²
 - `normalize` — Float32Array를 L2 정규화한다
 - `planBatches` — dual 함수. 토큰 수 오름차순으로 크기·비용 제한 안에서 배치 인덱스를 묶는다
@@ -19,7 +19,7 @@ memory-agent의 임베딩 계층이다. 로컬 granite 임베딩 모델을 워�
 - `modelWorker(cacheDir, setup, connect?)` — 첫 요청 때 워커를 띄워 `ScopedRef`에 유지하는 세션 관리자. 테스트는 `connect`로 세션을 주입한다
 - `checkGpu(storageRoot)` — 전정밀도 모델이 WebGPU에서 로드·실행되는지 별도 워커로 확인한다. `setup.ts`가 호출
 - `EmbeddingRpcs` (`Load`, `CountTokens`, `Embed`, `Chunk`) — 호스트와 embed-worker 사이의 RpcGroup 프로토콜
-- `EmbeddingWorkerData` / `EmbeddingDevice` / `EmbeddingWorkerFailed` — 워커 시작 데이터 스키마, `cpu`/`webgpu` 장치, `stage: load|run|lost` 실패 타입
+- `EmbeddingWorkerData` / `EmbeddingDevice` / `EmbeddingWorkerFailed` — 워커 시작 데이터 스키마, `cpu`/`webgpu` 장치(`contracts.ts`), `stage: load|run|lost` 실패 타입
 - `embed-worker.ts` — 워커 스레드 진입점. `runtimeWorker("embed-worker")`로 실행되고 `RpcServer.layer(EmbeddingRpcs, { concurrency: 1 })`을 띄운다
 - `ChunkSpan` / `chunkPolicy` / `chunkVectorIdFloor` / `ChunkingFailed` / `chunkText` — UTF-16 offset span 스키마, 512토큰·128 overlap 정책(version 1), chunk vector id 하한 2^52, 청킹 실패, 이분 탐색 청킹
 - `VectorIndex` / `VectorIndex.layer` — 네이티브 벡터 색인 서비스. NodeCrypto·NodePath를 공급하고 `makeNativeVectorIndex`를 Scope에서 획득한다
@@ -28,7 +28,8 @@ memory-agent의 임베딩 계층이다. 로컬 granite 임베딩 모델을 워�
 - `Indexer` / `Indexer.layer` — nodes 테이블과 벡터 색인을 맞춘다. `pending`, `indexBatch`, `analyzeBatch`, `analyzeAll`, `indexAll`, budget 제한 색인 메서드를 제공한다
 - `IndexingError` — `reason: read-failed | revalidation-failed | mapping-commit-failed`
 - `embeddedKinds` / `embeddedKindFilter` — 임베딩 대상 kind(`user`, `assistant`, `topic`)와 별칭 `n` 기준 SQL 필터 문자열
-- `EmbeddingSetup` / `EmbeddingSetup.layer` / `EmbeddingOverview` / `GpuState` — 설정 화면용 서비스와 개요 타입(choice, running, next, memoryBytes, gpuMemoryThreshold, gpu, unindexed, maintenance). `apps/agent`의 `settings.embedding.tsx` loader/action이 사용한다(그래프로만 확인)
+- `EmbeddingSetup` / `EmbeddingSetup.layer` / `GpuState` — 설정 화면용 서비스와 `EmbeddingOverview["gpu"]`의 `Data.taggedEnum` 생성자. 앱 API settings group(`apps/agent/app/.server/api/settings.ts`)이 사용한다
+- `EmbeddingOverview` — 설정 화면 개요 Schema(choice, running, next, memoryBytes, gpuMemoryThreshold, gpu, unindexed, maintenance)(`contracts.ts`). 서버 코드를 import하지 않아 앱 API 계약과 브라우저가 쓴다
 - 하위 디렉터리 없음
 
 ## Invariants

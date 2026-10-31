@@ -37,7 +37,8 @@ import { Indexer } from "../memory/embedding/indexer.ts";
 import { Projects } from "../projects/projects.ts";
 import { runtimeWorker, runtimeWorkerOptions } from "../runtime/resources.ts";
 import { ImportSourceName } from "./items.ts";
-import type { PassProgress, TranscriptCounts } from "./pass.ts";
+import type { ImportOverview, PassProgress } from "./contracts.ts";
+import type { TranscriptCounts } from "./pass.ts";
 import { importSources } from "./sources.ts";
 import {
   ImportRpcs,
@@ -53,60 +54,9 @@ const pollEvery = "5 minutes";
 /** How many unreadable transcripts settings lists by name. */
 const listedFailures = 20;
 
-/**
- * A working directory whose transcripts could not be migrated. Folders are registered as projects
- * on their own, so what is left here is what registering could not do: `not_found` (the folder is
- * gone), `not_directory`, `overlaps_storage` (inside this app's own storage).
- */
-export interface UnplacedFolder {
-  readonly cwd: string;
-  readonly reason: string;
-  readonly transcripts: number;
-}
-
-/** A transcript whose latest pass failed. It is tried again on the next pass. */
-export interface ImportFailure {
-  readonly source: ImportSourceName;
-  readonly path: string;
-  readonly reason: string;
-}
-
-/** The pass running now, or the latest one this server ran. */
-export type ImportActivity = Data.TaggedEnum<{
-  running: PassProgress & { readonly startedAt: string };
-  finished: PassProgress & { readonly startedAt: string; readonly finishedAt: string };
-  /** The worker itself failed (not one transcript): nothing after that point was read. */
-  crashed: {
-    readonly startedAt: string;
-    readonly finishedAt: string;
-    readonly reason: ImportWorkerFailed["reason"];
-  };
-}>;
+/** The pass running now, or the latest one this server ran (`contracts.ts`). */
+export type ImportActivity = NonNullable<ImportOverview["activity"]>;
 export const ImportActivity = Data.taggedEnum<ImportActivity>();
-
-export interface ImportOverview {
-  readonly enabled: boolean;
-  readonly interpret: boolean;
-  readonly sources: readonly {
-    readonly name: ImportSourceName;
-    readonly root: string;
-    readonly transcripts: number;
-    readonly migrated: number;
-    readonly nodes: number;
-    /** Transcripts whose latest pass failed. */
-    readonly failed: number;
-  }[];
-  /** Folders whose transcripts could not be placed, with why. */
-  readonly unplaced: readonly UnplacedFolder[];
-  /** Some of the transcripts that could not be read, with why. */
-  readonly failures: readonly ImportFailure[];
-  /** Nodes still waiting for the embedding backlog; migrated ones join the queue like any other. */
-  readonly unindexed: number;
-  /** Null until this server has started a pass. */
-  readonly activity: ImportActivity | null;
-  /** How the watcher that runs a pass every few minutes stands; null when this server has none. */
-  readonly watch: LoopHealth | null;
-}
 
 const progressOf = (reply: PassProgress): PassProgress => ({
   checked: reply.checked,

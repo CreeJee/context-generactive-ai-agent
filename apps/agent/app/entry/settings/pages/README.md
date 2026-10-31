@@ -35,7 +35,7 @@
 ## Side Effects
 
 - 페이지들은 React Query 훅(`../../queries/global`, `../../queries/project`, `../../queries/mutations/*`)으로 백엔드 HTTP API를 읽고 쓴다. 바꾸는 대상은 에이전트 신뢰·재연결, 요약 시점, 임베딩 방식·GPU 확인, 이미지 설정, 가져오기 명령, 칸반 설정, 프로젝트 순서, 보호 브랜치, 회상 설정, Kagi 설정이다. SQLite나 파일 시스템을 직접 만지지 않는다.
-- `ImprovementSettings`의 `request`는 `appFetch("/api/settings/improvements")`로 GET하거나, `ScanCommand`(start/stop) JSON body로 POST한다. 스캔이 running인 동안 2000ms 간격으로 폴링한다.
+- `ImprovementSettings`는 `api.improvements`로 상태를 읽고 `api.improvementScan(ScanCommand.start()/stop())`으로 명령을 보낸다(앱 API). 스캔이 running인 동안 2000ms 간격으로 폴링한다. 404는 서버가 프로젝트 개선을 모른다는 뜻으로 읽고, `reason`이 `report`인 거부는 문서 실패 문구로 보여 준다.
 - `ImprovementSettings`의 `Report`는 `navigator.clipboard.writeText(report.markdown)`로 클립보드에 쓴다.
 - `KagiSettings` 문서 주석에 따르면 Kagi 키는 keychain에 저장되며, 저장은 백엔드 mutation이 수행한다.
 

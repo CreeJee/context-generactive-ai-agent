@@ -21,7 +21,7 @@
 - `CompatibleAccount` / `CompatibleAccounts` / `OpenAICompatibleConfiguration` / `CompatibleReasoning` / `compatibleAccountsOf` / `compatibleEndpointModel` / `compatibleToolCalling` / `OPENAI_COMPATIBLE_DEFAULT_CONTEXT_WINDOW` — 호환 엔드포인트 설정 스키마와 헬퍼(openai-compatible-config.ts; 이름·시그니처만 확인)
 - `readCompatibleReasoning` / `CompatibleModelPage` — 호환 서버 `/models` 페이지에서 모델의 reasoning 레벨을 읽는 dual 함수
 - `CrossProviderMediaConsent` / `makeCrossProviderMediaConsent` / `decideCrossProviderMediaConsent` / `crossProviderMediaConsentKey` / `CrossProviderMediaConsentStoreFailed` — 교차 공급자 미디어 실행 동의(always|ask|disabled) 판정·저장 서비스
-- `ImageFeature` / `makeImageFeature` / `decideImageContext` / `imageProviderWorkflowPrompt` — 이미지 생성 사용자 설정과 턴 단위 이미지 컨텍스트 게이트
+- `ImageFeature` / `makeImageFeature` / `decideImageContext` / `imageProviderWorkflowPrompt` — 이미지 생성 사용자 설정과 턴 단위 이미지 컨텍스트 게이트. 설정 값 `ImageFeatureStatus`는 `contracts.ts`의 Schema다
 - `openAIImageRouteContracts` / `anthropicImageProviderContract` / `productionImageRouteContracts` / `ImageRouteContract` / `ImageExecutorModel` — 이미지 라우트 계약 정의와 운영용 필터
 - `ImageRouter` / `makeImageRouter` / `rankImageRoutes` / `ImageRouteDecision` / `ImageRerouteConfirmation` / `ImageRouteScore` — 미디어 라우트 점수화·선택 서비스와 결정/재라우팅 확인 TaggedEnum
 - `ImageRouteFacts` — 라우트별 계정 사실 서비스(`layerFrom`, `unavailableLayer`, `authenticatedRoutesLayer`)

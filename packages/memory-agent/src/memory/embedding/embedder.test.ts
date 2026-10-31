@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { GpuCheck } from "../../config/global-config.ts";
+import { GpuCheck } from "../../config/contracts.ts";
 import { embeddingModeFor, gpuMemoryThreshold, planBatches } from "./embedder.ts";
 
 describe("how the model runs", () => {

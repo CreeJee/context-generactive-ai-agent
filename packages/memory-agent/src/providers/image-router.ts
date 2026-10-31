@@ -16,7 +16,7 @@ import {
   type MediaRoute,
   type RouteCatalogApi,
 } from "./route-catalog.ts";
-import type { CrossProviderMediaConsentMode } from "../config/global-config.ts";
+import type { CrossProviderMediaConsentMode } from "../config/contracts.ts";
 import {
   CrossProviderMediaConsent,
   type CrossProviderMediaConsentApi,

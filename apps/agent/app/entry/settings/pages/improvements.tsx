@@ -1,27 +1,21 @@
-import { runUiEffect, uiPromise } from "../../shared/ui-effect";
-import { Data, Effect, Match, Option, Schema } from "effect";
+import { Match, Option, Schema } from "effect";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRightIcon } from "lucide-react";
-import type { ImprovementReport, ImprovementScan } from "memory-agent";
+import type { ImprovementReport } from "memory-agent";
 import { reportedTitle, type ScanFailure, ScanState, sourceLabels } from "memory-agent/definitions";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { FieldDescription, FieldGroup } from "~/components/ui/field";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "~/components/ui/collapsible";
-import { appFetch } from "../../shared/backend-restart";
+import { api, type ImprovementStatus, refusalOf, ScanCommand } from "../../api";
 import { koreanLocalTime } from "../../shared/local-time";
 import { PageError, PageHeader, shortPath } from "../shared";
 
-class ImprovementRequestFailed extends Schema.TaggedError<
-  ImprovementRequestFailed,
-  { readonly brand: unique symbol }
->()("ImprovementRequestFailed", { message: Schema.String }) {}
-
 const queryKey = ["settings", "improvements"];
 
-/** Why a request or a scan failed, as the server names it. */
-const FailureBody = Schema.Struct({ reason: Schema.Literals(["report"]) });
+/** Why a request failed, as the server names it. */
+const FailureReason = Schema.Literals(["report"]);
 const failures: Record<ScanFailure, string> = {
   storage: "프로젝트 사용 기록을 읽지 못했어요.",
   report: "개선 문서를 쓰거나 읽지 못했어요.",
@@ -32,11 +26,6 @@ const failures: Record<ScanFailure, string> = {
     "모델 서버가 응답하지 않아 찾기를 멈췄어요. 모델 서버 연결을 확인한 뒤 다시 시도하세요.",
   internal: "개선 항목을 찾는 중 오류가 났어요. 다시 시도하세요.",
 };
-
-interface Status {
-  readonly state: ScanState;
-  readonly scan: ImprovementScan | null;
-}
 
 /** One line on where the scan stands; nothing while idle. */
 const stateLine = ScanState.match({
@@ -57,47 +46,15 @@ const itemRule = (item: ReportedItem) =>
   });
 
 /** What a failed request says: this page's own wording, never a browser or transport message. */
-const requestFailure = (failure: Error) =>
-  Schema.is(ImprovementRequestFailed)(failure) ? failure.message : "요청을 처리하지 못했어요.";
-
-/** The commands `/api/settings/improvements` reads. */
-type ScanCommand = Data.TaggedEnum<{ start: {}; stop: {} }>;
-const ScanCommand = Data.taggedEnum<ScanCommand>();
-
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-function request<A>(command?: ScanCommand): Promise<A> {
-  return runUiEffect(
-    Effect.gen(function* () {
-      const response = yield* uiPromise(() =>
-        appFetch(
-          "/api/settings/improvements",
-          command === undefined
-            ? undefined
-            : {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(command),
-              },
-        ),
-      );
-      if (!response.ok) {
-        if (response.status === 404)
-          return yield* ImprovementRequestFailed.make({
-            message:
-              "실행 중인 서버가 프로젝트 개선을 지원하지 않아요. 앱 서버를 재시작한 뒤 다시 시도하세요.",
-          });
-        const body: unknown = yield* uiPromise(() => response.json());
-        return yield* ImprovementRequestFailed.make({
-          message: Option.match(Schema.decodeUnknownOption(FailureBody)(body), {
-            onNone: () => "요청을 처리하지 못했어요.",
-            onSome: ({ reason }) => failures[reason],
-          }),
-        });
-      }
-      return yield* uiPromise<A>(() => response.json());
-    }),
-  );
-}
+const requestFailure = (failure: Error) => {
+  const refusal = refusalOf(failure);
+  if (refusal?.status === 404)
+    return "실행 중인 서버가 프로젝트 개선을 지원하지 않아요. 앱 서버를 재시작한 뒤 다시 시도하세요.";
+  return Option.match(Schema.decodeUnknownOption(FailureReason)(refusal?.reason), {
+    onNone: () => "요청을 처리하지 못했어요.",
+    onSome: (reason) => failures[reason],
+  });
+};
 
 function Report({ report }: { report: ImprovementReport }) {
   const [copied, setCopied] = useState(false);
@@ -165,7 +122,7 @@ export function ImprovementSettings() {
   const [error, setError] = useState<string | null>(null);
   const { data, error: queryError } = useQuery({
     queryKey,
-    queryFn: () => request<Status>(),
+    queryFn: api.improvements,
     // Follow a running scan; otherwise the page only changes when the user acts.
     refetchInterval: (query) =>
       query.state.data !== undefined && ScanState.guards.running(query.state.data.state)
@@ -174,10 +131,10 @@ export function ImprovementSettings() {
     retry: false,
   });
   const command = useMutation({
-    mutationFn: (scan: ScanCommand) => request<Pick<Status, "state">>(scan),
+    mutationFn: api.improvementScan,
     onSuccess: ({ state }) => {
       setError(null);
-      cache.setQueryData<Status>(queryKey, (current) =>
+      cache.setQueryData<ImprovementStatus>(queryKey, (current) =>
         current === undefined ? current : { ...current, state },
       );
     },

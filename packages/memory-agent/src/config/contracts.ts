@@ -19,3 +19,26 @@ export const kanbanConcurrencyLimit = 32;
 export const KanbanConcurrency = Schema.Int.check(
   Schema.isBetween({ minimum: 1, maximum: kanbanConcurrencyLimit }),
 );
+
+/**
+ * How the embedding model runs. `auto` picks `gpu` on a machine with enough memory where WebGPU
+ * was found to work, and `cpu` otherwise.
+ */
+export const EmbeddingChoice = Schema.Literals(["auto", "cpu", "gpu"]);
+export type EmbeddingChoice = typeof EmbeddingChoice.Type;
+
+/** Whether the full-precision model ran on WebGPU when this machine was last checked. */
+export const GpuCheck = Schema.TaggedUnion({
+  available: { checkedAt: Schema.String },
+  unavailable: { checkedAt: Schema.String, reason: Schema.String },
+});
+export type GpuCheck = typeof GpuCheck.Type;
+
+export const CrossProviderMediaConsentMode = Schema.Literals(["disabled", "ask", "always"]);
+export type CrossProviderMediaConsentMode = typeof CrossProviderMediaConsentMode.Type;
+/** Explicit provider-pair consent. Login or entitlement never creates an entry automatically. */
+export const CrossProviderMediaConsentSettings = Schema.Struct({
+  version: Schema.Literal(1),
+  pairs: Schema.Record(Schema.String, CrossProviderMediaConsentMode),
+});
+export type CrossProviderMediaConsentSettings = typeof CrossProviderMediaConsentSettings.Type;

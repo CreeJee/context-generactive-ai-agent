@@ -86,6 +86,10 @@ export const ProviderModel = Schema.Struct({
 });
 export type ProviderModel = typeof ProviderModel.Type;
 
+/** The user's image-generation preference (`image-feature.ts`). */
+export const ImageFeatureStatus = Schema.Struct({ imageGenerationEnabled: Schema.Boolean });
+export type ImageFeatureStatus = typeof ImageFeatureStatus.Type;
+
 export class ProviderUnavailable extends Schema.TaggedError<
   ProviderUnavailable,
   { readonly brand: unique symbol }

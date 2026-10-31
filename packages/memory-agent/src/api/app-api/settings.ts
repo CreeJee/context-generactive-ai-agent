@@ -1,7 +1,17 @@
 import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup } from "effect/http-api";
-import { KanbanConcurrency, SummaryStartPercent } from "../../config/contracts.ts";
+import {
+  CrossProviderMediaConsentMode,
+  CrossProviderMediaConsentSettings,
+  EmbeddingChoice,
+  KanbanConcurrency,
+  SummaryStartPercent,
+} from "../../config/contracts.ts";
+import { ImportOverview } from "../../imports/contracts.ts";
+import { ImprovementScan, ScanState } from "../../improve/contracts.ts";
 import { KagiStatus } from "../../kagi/contracts.ts";
+import { EmbeddingOverview } from "../../memory/embedding/contracts.ts";
+import { ImageFeatureStatus } from "../../providers/contracts.ts";
 import { appRefusalFields, refusalWith, SameSite } from "../refusal.ts";
 
 const appRefusal = refusalWith(appRefusalFields);
@@ -49,6 +59,55 @@ export const KagiCommand = Schema.TaggedUnion({
 });
 export type KagiCommand = typeof KagiCommand.Type;
 
+/**
+ * - `choose` { choice }: `auto`, `cpu` or `gpu`; takes effect when the app next starts.
+ * - `check`: checks WebGPU again, in the background.
+ */
+export const EmbeddingCommand = Schema.TaggedUnion({
+  choose: { choice: EmbeddingChoice },
+  check: {},
+});
+export type EmbeddingCommand = typeof EmbeddingCommand.Type;
+
+/** The image-generation preference and the user's consent to send media to another provider. */
+export const ImageSettings = Schema.Struct({
+  ...ImageFeatureStatus.fields,
+  crossProviderMediaConsent: CrossProviderMediaConsentSettings,
+});
+export type ImageSettings = typeof ImageSettings.Type;
+
+export const ImageSettingsCommand = Schema.TaggedUnion({
+  image_generation: { enabled: Schema.Boolean },
+  cross_provider_media: { mode: CrossProviderMediaConsentMode },
+});
+export type ImageSettingsCommand = typeof ImageSettingsCommand.Type;
+
+/**
+ * - `enable` / `disable`: keep following the transcripts. Enabling starts reading what is there now.
+ * - `run`: start reading once, without changing the setting.
+ * Both answer before the pass ends; `activity` in the overview reports how far it got.
+ * - `restart_watch`: start the watcher again after it stopped; `watch` in the overview shows it.
+ * - `interpret` { interpret }: whether migrated statements are interpreted like statements said here.
+ */
+export const ImportCommand = Schema.TaggedUnion({
+  run: {},
+  restart_watch: {},
+  enable: {},
+  disable: {},
+  interpret: { interpret: Schema.Boolean },
+});
+export type ImportCommand = typeof ImportCommand.Type;
+
+/** Where the background scan stands and the last recorded scan, or null before the first. */
+export const ImprovementStatus = Schema.Struct({
+  state: ScanState,
+  scan: Schema.NullOr(ImprovementScan),
+});
+export type ImprovementStatus = typeof ImprovementStatus.Type;
+
+export const ScanCommand = Schema.TaggedUnion({ start: {}, stop: {} });
+export type ScanCommand = typeof ScanCommand.Type;
+
 /** Reading or writing the settings file failed. */
 const SettingsFailed = appRefusal(500, ["settings_failed"]);
 
@@ -69,8 +128,16 @@ const KagiRefusals = [
   appRefusal(500, ["keychain_failed", "settings_failed"]),
 ] as const;
 
+/** `reason` is `storage` or `report`, as the scan names it. */
+const ImprovementFailed = appRefusal(500, ["improvement_failed"]);
+
 /** Every refusal of the group, for `appRefusalStatus`. */
-export const settingsRefusals = [SettingsFailed, ...KanbanRefusals, ...KagiRefusals];
+export const settingsRefusals = [
+  SettingsFailed,
+  ...KanbanRefusals,
+  ...KagiRefusals,
+  ImprovementFailed,
+];
 
 /** User-wide settings (`/api/settings/*`). */
 export class SettingsGroup extends HttpApiGroup.make("settings")
@@ -126,6 +193,41 @@ export class SettingsGroup extends HttpApiGroup.make("settings")
       payload: KagiCommand,
       success: KagiStatus,
       error: KagiRefusals,
+    }),
+    /**
+     * How the embedding model runs now and from the next start, the machine's memory, whether
+     * WebGPU works, and how many nodes wait to be embedded.
+     */
+    HttpApiEndpoint.get("embedding", "/api/settings/embedding", { success: EmbeddingOverview }),
+    HttpApiEndpoint.post("embeddingAction", "/api/settings/embedding", {
+      payload: EmbeddingCommand,
+      success: EmbeddingOverview,
+    }),
+    HttpApiEndpoint.get("image", "/api/settings/image", { success: ImageSettings }),
+    /** Updates an image-generation preference without restarting the app. */
+    HttpApiEndpoint.post("imageAction", "/api/settings/image", {
+      payload: ImageSettingsCommand,
+      success: ImageSettings,
+    }),
+    /**
+     * What can be migrated from other coding agents' local transcripts: per source, how many
+     * conversations were read, and which working directories are not projects here yet. File
+     * paths are shown; transcript contents are not.
+     */
+    HttpApiEndpoint.get("imports", "/api/settings/imports", { success: ImportOverview }),
+    HttpApiEndpoint.post("importAction", "/api/settings/imports", {
+      payload: ImportCommand,
+      success: ImportOverview,
+    }),
+    /** Where the background scan of the open projects stands, and its last recorded result. */
+    HttpApiEndpoint.get("improvements", "/api/settings/improvements", {
+      success: ImprovementStatus,
+      error: ImprovementFailed,
+    }),
+    /** Starts or stops the scan; answers where it stands. */
+    HttpApiEndpoint.post("improvementScan", "/api/settings/improvements", {
+      payload: ScanCommand,
+      success: Schema.Struct({ state: ScanState }),
     }),
   )
   .middleware(SameSite) {}

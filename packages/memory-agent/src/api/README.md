@@ -13,7 +13,7 @@
 - `refusalWith(fields)(status, codes)` / `refusalStatusIn(refusals)` / `appRefusalFields` — 거부 스키마(`{ error, ...fields }` + `httpApiStatus`)를 만드는 함수, 거부 값에 맞는 스키마의 상태를 찾는 함수(못 찾으면 500), 앱 API 거부가 싣는 `reason?`(`refusal.ts`)
 - `Refusal` / `refusalStatus` — 채팅 API의 400~503 상태별 거부 코드 리터럴 union 스키마와 그 상태 함수
 - `AppApi` — 채팅 밖의 앱 API 계약(`app-api.ts`). group은 `app-api/<group>.ts`에 있다
-- `SettingsGroup` — `conversation`/`setConversation`, `recall`/`setRecall`, `kanban`/`setKanban`, `kagi`/`kagiAction`(GET·POST /api/settings/*, 모두 SameSite). 계약 타입 `ConversationSettings`, `RecallSettings`, `KanbanSettings`, `KanbanSettingsCommand`, `KagiCommand`
+- `SettingsGroup` — `conversation`/`setConversation`, `recall`/`setRecall`, `kanban`/`setKanban`, `kagi`/`kagiAction`, `embedding`/`embeddingAction`, `image`/`imageAction`, `imports`/`importAction`, `improvements`/`improvementScan`(GET·POST /api/settings/*, 모두 SameSite). 계약 타입 `ConversationSettings`, `RecallSettings`, `KanbanSettings`, `KanbanSettingsCommand`, `KagiCommand`, `EmbeddingCommand`, `ImageSettings`, `ImageSettingsCommand`, `ImportCommand`, `ImprovementStatus`, `ScanCommand`. 거부를 선언하지 않은 embedding·image·imports의 실패는 지금처럼 500이다
 - `appRefusalStatus` — 앱 API 거부 값의 HTTP 상태. 페이지가 `ApiError.status`를 채울 때 쓴다
 - `RunInput` — AG-UI `RunAgentInput` 필드 이름을 쓰는 run 요청(`runId`, `parentRunId`, 새 user `messages`, `resume`, `forwardedProps.queuedNext`/`imageIntent`)
 - `ResumeEntry` — interrupt 하나에 대한 페이지의 답(`resolved`/`cancelled`, payload, metadata)
@@ -34,7 +34,7 @@
 
 ## Invariants
 
-- `chat-api.ts`, `app-api.ts`, `app-api/*`, `refusal.ts`, `chat-session.ts`, `btw-thread.ts`, `chat-view.ts`는 서버 코드를 import하지 않는다. 브라우저 번들이 쓰기 때문이다. 계약이 쓰는 도메인 Schema는 각 폴더의 `contracts.ts`(예: `config/contracts.ts`, `kagi/contracts.ts`)에서 가져온다. `chat-api.ts`는 `sessionHolderHeader`를 `import type`으로만 가져온다.
+- `chat-api.ts`, `app-api.ts`, `app-api/*`, `refusal.ts`, `chat-session.ts`, `btw-thread.ts`, `chat-view.ts`는 서버 코드를 import하지 않는다. 브라우저 번들이 쓰기 때문이다. 계약이 쓰는 도메인 Schema는 각 폴더의 `contracts.ts`(예: `config/contracts.ts`, `kagi/contracts.ts`, `memory/embedding/contracts.ts`, `imports/contracts.ts`, `improve/contracts.ts`, `providers/contracts.ts`)에서 가져온다. `chat-api.ts`는 `sessionHolderHeader`를 `import type`으로만 가져온다.
 - 앱 API의 거부 code는 group이 달라도 상태가 하나다. 페이지는 `appRefusalStatus`로 거부 값만 보고 상태를 찾는다. 새 group의 거부 목록은 `app-api.ts`의 `appRefusalStatus`에 더한다.
 - holder 헤더 이름은 `x-session-holder`다. `satisfies Lowercase<typeof sessionHolderHeader>`로 `sessions/lease-state.ts`의 헤더 상수와 맞춘다.
 - 세션을 바꾸는 엔드포인트(`run`, `ask`)에는 `SameSite` 미들웨어를 붙인다. 403 cross-site 거부는 `refusals` 목록이 아니라 `SameSite`의 error에 둔다.

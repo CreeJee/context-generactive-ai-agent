@@ -1,5 +1,6 @@
 import { Schema } from "effect";
 import { Rpc, RpcGroup } from "effect/rpc";
+import { ImportWorkerFailureReason, PassProgress } from "./contracts.ts";
 import { ImportSourceName } from "./items.ts";
 
 /** Effect RPC between the server and the import worker (`worker.ts`). */
@@ -16,30 +17,16 @@ export type ImportWorkerSetup = typeof ImportWorkerSetup.Type;
 export class ImportWorkerFailed extends Schema.TaggedError<
   ImportWorkerFailed,
   { readonly brand: unique symbol }
->()("ImportWorkerFailed", {
-  /**
-   * `start`: the worker could not be started. `count` and `pass`: the worker could not count the
-   * transcripts or finish a pass; it stays, and the cause stays in its log. `lost`: the worker or
-   * its channel is gone; the next request starts a new one.
-   */
-  reason: Schema.Literals(["start", "count", "pass", "lost"]),
-}) {}
+>()("ImportWorkerFailed", { reason: ImportWorkerFailureReason }) {}
 
 const TranscriptCounts = Schema.Array(
   Schema.Struct({ source: ImportSourceName, transcripts: Schema.Finite }),
 );
 
-const progressFields = {
-  checked: Schema.Finite,
-  total: Schema.Finite,
-  written: Schema.Finite,
-  failed: Schema.Finite,
-};
-
 /** What a pass streams: any number of `Progress` events, then one `Finished`. */
 export const PassEvent = Schema.TaggedUnion({
-  Progress: progressFields,
-  Finished: { ...progressFields, counts: TranscriptCounts },
+  Progress: PassProgress.fields,
+  Finished: { ...PassProgress.fields, counts: TranscriptCounts },
 });
 export type PassEvent = typeof PassEvent.Type;
 

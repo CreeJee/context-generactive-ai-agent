@@ -17,8 +17,14 @@ export const appRefusalStatus = refusalStatusIn([...settingsRefusals]);
 
 export {
   ConversationSettings,
+  EmbeddingCommand,
+  ImageSettings,
+  ImageSettingsCommand,
+  ImportCommand,
+  ImprovementStatus,
   KagiCommand,
   KanbanSettings,
   KanbanSettingsCommand,
   RecallSettings,
+  ScanCommand,
 } from "./app-api/settings.ts";

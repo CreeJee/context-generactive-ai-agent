@@ -1,11 +1,17 @@
-import { Effect, Match, Option } from "effect";
+import { Effect, Match, Option, Path } from "effect";
 import { HttpApiBuilder } from "effect/http-api";
+import { SqlClient } from "effect/sql";
 import {
   AppEvents,
+  CrossProviderMediaConsent,
+  EmbeddingSetup,
   GlobalConfig,
   GoalOrder,
+  ImageFeature,
+  Importer,
   Kagi,
   KanbanSettings,
+  ProjectImprovement,
   ProjectScheduler,
   Projects,
   TurnSummaries,
@@ -40,6 +46,14 @@ export const SettingsApiHandlers = HttpApiBuilder.group(
     const scheduler = yield* ProjectScheduler;
     const events = yield* AppEvents;
     const kagi = yield* Kagi;
+    const embedding = yield* EmbeddingSetup;
+    const image = yield* ImageFeature;
+    const mediaConsent = yield* CrossProviderMediaConsent;
+    const importer = yield* Importer;
+    const improvement = yield* ProjectImprovement;
+    // The importer's and the embedding setup's methods still ask for these per call.
+    const path = yield* Path.Path;
+    const sql = yield* SqlClient.SqlClient;
 
     const kanbanSettings = Effect.gen(function* () {
       const concurrency = yield* kanban.concurrency;
@@ -48,6 +62,13 @@ export const SettingsApiHandlers = HttpApiBuilder.group(
         configured: Option.getOrNull(concurrency.configured),
         effective: concurrency.effective,
         projectOrder,
+      };
+    });
+
+    const imageSettings = Effect.gen(function* () {
+      return {
+        ...(yield* image.status),
+        crossProviderMediaConsent: yield* mediaConsent.read,
       };
     });
 
@@ -122,6 +143,54 @@ export const SettingsApiHandlers = HttpApiBuilder.group(
             KagiKeyMissing: () => Effect.fail({ error: "kagi_key_required" } as const),
           }),
         ),
+      // These routes declared no refusals; a failure stays a 500, as before.
+      embedding: () => Effect.orDie(embedding.overview),
+      embeddingAction: ({ payload }) =>
+        Match.valueTags(payload, {
+          choose: ({ choice }) => embedding.choose(choice),
+          check: () => embedding.recheck,
+        }).pipe(Effect.orDie, Effect.provideService(Path.Path, path)),
+      image: () => Effect.orDie(imageSettings),
+      imageAction: ({ payload }) =>
+        Match.valueTags(payload, {
+          image_generation: ({ enabled }) => image.setImageGenerationEnabled(enabled),
+          cross_provider_media: ({ mode }) =>
+            mediaConsent.set(
+              {
+                initiatorProvider: "anthropic",
+                executorProvider: "openai",
+                capability: "media.image.generate",
+              },
+              mode,
+            ),
+        }).pipe(Effect.andThen(imageSettings), Effect.orDie),
+      imports: () =>
+        importer.overview.pipe(Effect.orDie, Effect.provideService(SqlClient.SqlClient, sql)),
+      importAction: ({ payload }) =>
+        Match.valueTags(payload, {
+          // Answered at once; the page follows the pass through `activity`.
+          run: () => importer.start,
+          restart_watch: () => importer.restartWatch,
+          enable: () => importer.setEnabled(true),
+          disable: () => importer.setEnabled(false),
+          interpret: ({ interpret }) => importer.setInterpret(interpret),
+        }).pipe(
+          Effect.andThen(importer.overview),
+          Effect.orDie,
+          Effect.provideService(SqlClient.SqlClient, sql),
+        ),
+      improvements: () =>
+        improvement.status.pipe(
+          Effect.map(({ state, scan }) => ({ state, scan: Option.getOrNull(scan) })),
+          Effect.catchTag("DiscoveryFailed", ({ reason }) =>
+            Effect.fail({ error: "improvement_failed", reason } as const),
+          ),
+        ),
+      improvementScan: ({ payload }) =>
+        Match.valueTags(payload, {
+          start: () => improvement.start,
+          stop: () => improvement.stop,
+        }).pipe(Effect.map((state) => ({ state }))),
     });
   }),
 );

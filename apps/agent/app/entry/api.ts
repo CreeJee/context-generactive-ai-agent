@@ -8,10 +8,16 @@ import {
   AppApi,
   appRefusalStatus,
   type ConversationSettings,
+  type EmbeddingCommand as EmbeddingCommandCase,
+  type ImageSettings,
+  type ImageSettingsCommand as ImageSettingsCommandCase,
+  type ImportCommand as ImportCommandCase,
+  type ImprovementStatus,
   type KagiCommand as KagiCommandCase,
   type KanbanSettings,
   type KanbanSettingsCommand as KanbanSettingsCommandCase,
   type RecallSettings,
+  type ScanCommand as ScanCommandCase,
 } from "memory-agent/app-api";
 import { ProviderId } from "memory-agent/provider-contracts";
 import type {
@@ -120,26 +126,17 @@ export const DecisionAnswer = Data.taggedEnum<DecisionAnswer>();
 export type KagiCommand = KagiCommandCase;
 export const KagiCommand = Data.taggedEnum<KagiCommand>();
 /** The commands `/api/settings/imports` reads. */
-export type ImportCommand = Data.TaggedEnum<{
-  run: {};
-  restart_watch: {};
-  enable: {};
-  disable: {};
-  interpret: { readonly interpret: boolean };
-}>;
+export type ImportCommand = ImportCommandCase;
 export const ImportCommand = Data.taggedEnum<ImportCommand>();
 /** The commands `/api/settings/embedding` reads. */
-export type EmbeddingCommand = Data.TaggedEnum<{
-  choose: { readonly choice: EmbeddingChoice };
-  check: {};
-}>;
+export type EmbeddingCommand = EmbeddingCommandCase;
 export const EmbeddingCommand = Data.taggedEnum<EmbeddingCommand>();
 /** The commands `/api/settings/image` reads. */
-type ImageSettingsCommand = Data.TaggedEnum<{
-  image_generation: { readonly enabled: boolean };
-  cross_provider_media: { readonly mode: CrossProviderMediaConsentMode };
-}>;
+type ImageSettingsCommand = ImageSettingsCommandCase;
 const ImageSettingsCommand = Data.taggedEnum<ImageSettingsCommand>();
+/** The commands `/api/settings/improvements` reads. */
+export type ScanCommand = ScanCommandCase;
+export const ScanCommand = Data.taggedEnum<ScanCommand>();
 /** The commands `/api/projects/:project/agents` reads. */
 type ExternalAgentCommand = Data.TaggedEnum<{
   trust: {
@@ -181,9 +178,7 @@ export type WorkflowExecutionState = NonNullable<SessionRunState["execution"]>;
 export const WorkflowExecutionState = Data.taggedEnum<WorkflowExecutionState>();
 
 export type GeneratedImageAsset = ImageMediaAsset & { readonly url: string };
-export type ImageSettingsView = ImageFeatureStatus & {
-  readonly crossProviderMediaConsent: CrossProviderMediaConsentSettings;
-};
+export type ImageSettingsView = ImageSettings;
 
 /** A provider's connection as `/api/auth` sends it; a pending login's URL arrives as `authUrl`. */
 export type ProviderAuthState = Data.TaggedEnum<{
@@ -308,6 +303,7 @@ export const ApiErrorCode = Schema.Literals([
   "goal_superseded",
   "goal_terminal",
   "images_not_supported",
+  "improvement_failed",
   "image_approval_required",
   "image_direct_workflow_required",
   "image_execution_failed",
@@ -320,6 +316,7 @@ export const ApiErrorCode = Schema.Literals([
   "invalid_agent_change",
   "invalid_answer",
   "invalid_board_edit",
+  "invalid_command",
   "invalid_conversation_settings",
   "invalid_decision_answer",
   "invalid_recall_settings",
@@ -412,7 +409,7 @@ export const ApiErrorCode = Schema.Literals([
 ]);
 export type ApiErrorCode = typeof ApiErrorCode.Type;
 
-export type { ConversationSettings, KanbanSettings, RecallSettings };
+export type { ConversationSettings, ImprovementStatus, KanbanSettings, RecallSettings };
 /** The commands `/api/settings/kanban` reads. */
 export type KanbanSettingsCommand = KanbanSettingsCommandCase;
 export const KanbanSettingsCommand = Data.taggedEnum<KanbanSettingsCommand>();
@@ -903,18 +900,22 @@ export const api = {
       edit,
       { [sessionHolderHeader]: holder },
     ),
-  imageSettings: () => call<ImageSettingsView>("GET", "/api/settings/image"),
+  imageSettings: () => appCall((client) => client.settings.image()),
   setImageGenerationEnabled: (enabled: boolean) =>
-    call<ImageSettingsView>(
-      "POST",
-      "/api/settings/image",
-      ImageSettingsCommand.image_generation({ enabled }),
+    appCall(
+      (client) =>
+        client.settings.imageAction({
+          payload: ImageSettingsCommand.image_generation({ enabled }),
+        }),
+      "invalid_image_settings_action",
     ),
   setCrossProviderMediaConsent: (mode: CrossProviderMediaConsentMode) =>
-    call<ImageSettingsView>(
-      "POST",
-      "/api/settings/image",
-      ImageSettingsCommand.cross_provider_media({ mode }),
+    appCall(
+      (client) =>
+        client.settings.imageAction({
+          payload: ImageSettingsCommand.cross_provider_media({ mode }),
+        }),
+      "invalid_image_settings_action",
     ),
   generateImage: (
     prompt: string,
@@ -997,13 +998,41 @@ export const api = {
       ProjectKanbanCommand.MoveGoal({ sessionId, before }),
     ),
 
-  imports: () => call<ImportOverview>("GET", "/api/settings/imports"),
+  imports: () => appCall((client) => client.settings.imports()),
   importAction: (command: ImportCommand) =>
-    call<ImportOverview>("POST", "/api/settings/imports", command),
+    appCall(
+      (client) =>
+        ImportCommand.$match(command, {
+          run: (payload) => client.settings.importAction({ payload }),
+          restart_watch: (payload) => client.settings.importAction({ payload }),
+          enable: (payload) => client.settings.importAction({ payload }),
+          disable: (payload) => client.settings.importAction({ payload }),
+          interpret: (payload) => client.settings.importAction({ payload }),
+        }),
+      "invalid_import_action",
+    ),
 
-  embedding: () => call<EmbeddingOverview>("GET", "/api/settings/embedding"),
+  embedding: () => appCall((client) => client.settings.embedding()),
   embeddingAction: (command: EmbeddingCommand) =>
-    call<EmbeddingOverview>("POST", "/api/settings/embedding", command),
+    appCall(
+      (client) =>
+        EmbeddingCommand.$match(command, {
+          choose: (payload) => client.settings.embeddingAction({ payload }),
+          check: (payload) => client.settings.embeddingAction({ payload }),
+        }),
+      "invalid_embedding_action",
+    ),
+
+  improvements: () => appCall((client) => client.settings.improvements()),
+  improvementScan: (command: ScanCommand) =>
+    appCall(
+      (client) =>
+        ScanCommand.$match(command, {
+          start: (payload) => client.settings.improvementScan({ payload }),
+          stop: (payload) => client.settings.improvementScan({ payload }),
+        }),
+      "invalid_command",
+    ),
 
   mcpServers: (projectId: string) =>
     call<McpOverview>("GET", `/api/projects/${encodeURIComponent(projectId)}/mcp`),

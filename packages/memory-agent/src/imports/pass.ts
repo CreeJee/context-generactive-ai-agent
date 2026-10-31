@@ -30,6 +30,7 @@ import { Sessions } from "../sessions/sessions.ts";
 import { BulkNodes } from "./bulk.ts";
 import { TranscriptItem, type ImportSourceName, type TranscriptStart } from "./items.ts";
 import { Checkouts, type Placement } from "./checkouts.ts";
+import type { PassProgress } from "./contracts.ts";
 import { readLinesFrom } from "./lines.ts";
 import { findTranscripts, importSources, type Transcript } from "./sources.ts";
 import { WriteTurns } from "./write-turns.ts";
@@ -71,14 +72,6 @@ const writePiece = Sink.reduceWhile(
     text: piece.text + indexedText(item),
   }),
 );
-
-/** Where a pass stands: transcripts looked at of those found, nodes written, transcripts failed. */
-export interface PassProgress {
-  readonly checked: number;
-  readonly total: number;
-  readonly written: number;
-  readonly failed: number;
-}
 
 /** How many transcripts each source has on disk. */
 export type TranscriptCounts = ReadonlyArray<{

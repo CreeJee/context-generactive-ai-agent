@@ -3,11 +3,11 @@ import { it } from "@effect/vitest";
 import { assertInstanceOf, assertTrue, strictEqual } from "@effect/vitest/utils";
 import { Context, Effect, FileSystem, Layer } from "effect";
 import { expect } from "vite-plus/test";
+import { GpuCheck } from "../src/config/contracts.ts";
 import {
   GlobalConfig,
   GlobalConfigFailed,
   GlobalConfigFailedReason,
-  GpuCheck,
 } from "../src/config/global-config.ts";
 import { StorageRoot } from "../src/config/storage-root.ts";
 

@@ -12,7 +12,7 @@
 
 ## Interface
 
-- `$.tsx` `loader`/`action` — 라우트 파일이 없는 `/api/*` 요청을 `serveApi`로 넘긴다. 채팅 API(`/api/sessions/:session/messages`, `/api/sessions/:session/runs`, `/api/sessions/:session/runs/:run/events`, `/api/btw/:thread/messages`, `/api/btw/:thread/runs`)와 앱 API settings group(`/api/settings/{conversation,recall,kanban,kagi}`)이 여기서 답한다.
+- `$.tsx` `loader`/`action` — 라우트 파일이 없는 `/api/*` 요청을 `serveApi`로 넘긴다. 채팅 API(`/api/sessions/:session/messages`, `/api/sessions/:session/runs`, `/api/sessions/:session/runs/:run/events`, `/api/btw/:thread/messages`, `/api/btw/:thread/runs`)와 앱 API settings group(`/api/settings/{conversation,recall,kanban,kagi,embedding,image,imports,improvements}`)이 여기서 답한다.
 - `accounts.tsx` `loader`/`action` — GET /api/accounts?provider=: 구독 계정 목록(레거시 OAuth import 후 `SubscriptionView.subscription`), `openai-compatible`는 `compatibleAccounts`로 위임. POST는 intent `add|cancel|select|remove|rename` 또는 `CompatibleAccountCommand`를 처리한다.
 - `accounts.quota.tsx` `loader` — GET /api/accounts/quota?provider=: `SubscriptionQuota.accounts`로 계정별 구독 한도를 돌려주고, `SubscriptionQuotaError`이면 503을 돌려준다.
 - `auth.tsx` `loader`/`action` — GET /api/auth?provider=: 연결 상태(10초 timeout → 504). POST `{ intent: login|cancel|logout, provider }`는 subscription 공급자만 받는다.
@@ -36,7 +36,6 @@
 - `reports.evidence.tsx` `loader` — `reportBundleResponse` + `collectReportBundle`로 세션 evidence 번들을 돌려준다(redact 후 한도에 맞춰 자른다).
 - `btw.$thread._index.tsx` `action`(= `makeBtwHandlers(agent).remove`).
 - (본문 미확인, export만 확인) `sessions._index.tsx`, `sessions.$session._index.tsx`, `sessions.$session.{board,kanban,lease,queue._index,trace.tasks.$task}.tsx` `loader`+`action`; `sessions.$session.{approvals._index,decisions._index,events,subagents._index,subagents.$subagent,trace,trace.stream}.tsx` `loader`; `sessions.$session.{approvals.$approval,cancel,compact,decisions.$decision,interrupts.discard,queue.$message,uncertain}.tsx`, `reports.sessions.tsx` `action`; `sessions.$session.btw.tsx` `loader`/`action`(= btw handlers list/create).
-- (본문 미확인, export만 확인) `settings.{embedding,image,imports,improvements}.tsx` — 각각 `loader`와 `action`을 export하는 전역 설정 라우트.
 - 하위 디렉터리 없음.
 
 ## Invariants

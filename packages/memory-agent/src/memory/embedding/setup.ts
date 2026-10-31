@@ -1,46 +1,25 @@
 import { isTruthy } from "../../truthy.ts";
 import { Context, Data, Effect, Layer, Match, Ref } from "effect";
 import { logFailure } from "../../runtime/logged-failures.ts";
-import { GlobalConfig, type EmbeddingChoice, type Settings } from "../../config/global-config.ts";
+import type { EmbeddingChoice } from "../../config/contracts.ts";
+import { GlobalConfig, type Settings } from "../../config/global-config.ts";
 import { StorageRoot } from "../../config/storage-root.ts";
 import { totalMemory } from "../../runtime/host-system.ts";
 import { AppEvents } from "../../events/app-events.ts";
+import type { EmbeddingOverview } from "./contracts.ts";
 import {
   checkGpu,
   Embedder,
   embeddingModeFor,
   gpuMemoryThreshold,
   EmbedderRuntime,
-  type EmbeddingMode,
 } from "./embedder.ts";
 import { MemoryGraphMaintenance } from "../maintenance.ts";
 import { Indexer } from "./indexer.ts";
 
-/**
- * Whether WebGPU was found to work here, or is being checked now. The first two cases are the
- * stored `GpuCheck`.
- */
-export type GpuState = Data.TaggedEnum<{
-  available: { readonly checkedAt: string };
-  unavailable: { readonly checkedAt: string; readonly reason: string };
-  unchecked: {};
-  checking: {};
-}>;
+/** Whether WebGPU was found to work here, or is being checked now (`contracts.ts`). */
+export type GpuState = EmbeddingOverview["gpu"];
 export const GpuState = Data.taggedEnum<GpuState>();
-
-export interface EmbeddingOverview {
-  readonly choice: EmbeddingChoice;
-  /** How the model runs in this process. */
-  readonly running: EmbedderRuntime;
-  /** How it will run from the next start, with the settings as they are now. */
-  readonly next: EmbeddingMode;
-  readonly memoryBytes: number;
-  readonly gpuMemoryThreshold: number;
-  readonly gpu: GpuState;
-  /** Nodes the running embedder has not embedded yet. */
-  readonly unindexed: number;
-  readonly maintenance: Effect.Success<MemoryGraphMaintenance["Service"]["overview"]>;
-}
 
 /**
  * `auto` needs to know whether WebGPU works before it can pick the GPU, and so does a user who asks

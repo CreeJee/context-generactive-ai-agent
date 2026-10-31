@@ -2,10 +2,7 @@ import { Schema } from "effect";
 import { Rpc, RpcGroup } from "effect/rpc";
 import { Transferable } from "effect/workers";
 import { ChunkSpan } from "./chunks.ts";
-
-/** Where the model runs. */
-export const EmbeddingDevice = Schema.Literals(["cpu", "webgpu"]);
-export type EmbeddingDevice = typeof EmbeddingDevice.Type;
+import { EmbeddingDevice } from "./contracts.ts";
 
 /** What the embedding worker is started with; the host owns every field. */
 export const EmbeddingWorkerData = Schema.Struct({

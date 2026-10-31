@@ -19,18 +19,15 @@ import {
   Semaphore,
 } from "effect";
 import { RpcClient, type RpcClientError } from "effect/rpc";
-import { GlobalConfig, GpuCheck, type Settings } from "../../config/global-config.ts";
+import { GpuCheck } from "../../config/contracts.ts";
+import { GlobalConfig, type Settings } from "../../config/global-config.ts";
 import { StorageRoot } from "../../config/storage-root.ts";
 import { totalMemory } from "../../runtime/host-system.ts";
 import { runtimeWorker, runtimeWorkerOptions } from "../../runtime/resources.ts";
 import { ignoreLogged } from "../../runtime/logged-failures.ts";
 import { type ChunkSpan, chunkPolicy } from "./chunks.ts";
-import {
-  type EmbeddingDevice,
-  EmbeddingRpcs,
-  type EmbeddingWorkerData,
-  EmbeddingWorkerFailed,
-} from "./embedding-rpc.ts";
+import type { EmbeddingDevice, EmbeddingMode, EmbeddingOverview } from "./contracts.ts";
+import { EmbeddingRpcs, type EmbeddingWorkerData, EmbeddingWorkerFailed } from "./embedding-rpc.ts";
 
 export class EmbeddingError extends Schema.TaggedError<
   EmbeddingError,
@@ -39,26 +36,8 @@ export class EmbeddingError extends Schema.TaggedError<
   cause: Schema.Defect(),
 }) {}
 
-export { EmbeddingDevice } from "./embedding-rpc.ts";
-
-/**
- * How the local model runs; chosen when the app starts.
- * - `cpu`: the quantized file on the CPU. The least memory; it takes several cores while it works.
- * - `gpu`: the full-precision file on WebGPU. A fraction of the CPU for about 1–1.6 GB more memory,
- *   and full-precision vectors. Where WebGPU is missing the same file runs on the CPU: the vectors
- *   are the same (measured cosine 1.0), only slower.
- */
-export type EmbeddingMode = "cpu" | "gpu";
-
-/** How an embedder runs, for settings. Test and evaluation embedders are `other`. */
-export type EmbedderRuntime = Data.TaggedEnum<{
-  local: {
-    readonly mode: EmbeddingMode;
-    /** Null until the model has loaded. */
-    readonly device: EmbeddingDevice | null;
-  };
-  other: {};
-}>;
+/** How an embedder runs, for settings (`contracts.ts`). Test and evaluation embedders are `other`. */
+export type EmbedderRuntime = EmbeddingOverview["running"];
 export const EmbedderRuntime = Data.taggedEnum<EmbedderRuntime>();
 
 export interface EmbedderApi {

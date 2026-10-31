@@ -2,19 +2,20 @@
 
 ## Overview
 
-`packages/memory-agent/src/imports`는 가져오기(import) 계층이다. 다른 코딩 에이전트(Claude Code `~/.claude/projects`, Codex CLI `~/.codex/sessions`)의 로컬 transcript를 읽어 이 앱의 메모리 노드·엣지로 옮긴다. 서버 쪽 `Importer` 서비스는 별도 worker thread(`worker.ts`)를 Effect RPC(`ImportRpcs`: `Count`, `Run`, `WriteTurns`, `Turn`)로 띄우고 5분마다 pass를 돌린다. worker 안에서는 `TranscriptPass`가 transcript를 줄 단위로 읽는다. 소스별 리더(`readClaudeCodeLine`, `codexReader`)가 `TranscriptItem`을 만든다. `Checkouts`(git 기반 worktree→본 checkout 배치)가 프로젝트를 정하고, `BulkNodes`가 SQLite에 한꺼번에 기록한다. 진행 상황은 settings 화면(`apps/agent/app/routes/api/settings.imports.tsx`)과 report bundle이 `Importer`로 읽는다.
+`packages/memory-agent/src/imports`는 가져오기(import) 계층이다. 다른 코딩 에이전트(Claude Code `~/.claude/projects`, Codex CLI `~/.codex/sessions`)의 로컬 transcript를 읽어 이 앱의 메모리 노드·엣지로 옮긴다. 서버 쪽 `Importer` 서비스는 별도 worker thread(`worker.ts`)를 Effect RPC(`ImportRpcs`: `Count`, `Run`, `WriteTurns`, `Turn`)로 띄우고 5분마다 pass를 돌린다. worker 안에서는 `TranscriptPass`가 transcript를 줄 단위로 읽는다. 소스별 리더(`readClaudeCodeLine`, `codexReader`)가 `TranscriptItem`을 만든다. `Checkouts`(git 기반 worktree→본 checkout 배치)가 프로젝트를 정하고, `BulkNodes`가 SQLite에 한꺼번에 기록한다. 진행 상황은 settings 화면(앱 API `settings.imports`, `apps/agent/app/.server/api/settings.ts`)과 report bundle이 `Importer`로 읽는다.
 
 ## Interface
 
-- `Importer` — 다른 에이전트 transcript를 가져오고 계속 따라가는 Effect 서비스. `Importer.layer(watching = true, home?)`이고 settings.imports 라우트와 `collectReportBundle`이 사용한다
-- `ImportOverview` / `ImportActivity`(`running`·`finished`·`crashed` TaggedEnum) / `ImportFailure` / `UnplacedFolder` — settings에 보여 줄 가져오기 현황 타입(소스별 transcript·migrated·nodes·failed, unplaced 폴더, 실패 목록, unindexed, watch `LoopHealth`)
-- `ImportWorkerFailed` — worker 실패 TaggedError. reason은 `start`·`count`·`pass`·`lost`이고 `importer.ts`에서 re-export한다
+- `Importer` — 다른 에이전트 transcript를 가져오고 계속 따라가는 Effect 서비스. `Importer.layer(watching = true, home?)`이고 앱 API settings group과 `collectReportBundle`이 사용한다
+- `ImportOverview` / `ImportFailure` / `UnplacedFolder` / `PassProgress` / `ImportWorkerFailureReason` — settings에 보여 줄 가져오기 현황 Schema(소스별 transcript·migrated·nodes·failed, unplaced 폴더, 실패 목록, unindexed, activity, watch `LoopHealth`)와 그 부품(`contracts.ts`). 서버 코드를 import하지 않아 앱 API 계약과 브라우저가 쓴다
+- `ImportActivity` — `ImportOverview["activity"]`(`running`·`finished`·`crashed`)의 `Data.taggedEnum` 생성자(`importer.ts`)
+- `ImportWorkerFailed` — worker 실패 TaggedError. reason은 `ImportWorkerFailureReason`(`start`·`count`·`pass`·`lost`)이고 `importer.ts`에서 re-export한다
 - `ImportRpcs` / `Count` / `Run` / `WriteTurns` / `Turn` — 서버와 import worker 사이의 Effect RPC 그룹. `Count`는 소스별 transcript 수를, `Run`은 `PassEvent` stream을 돌려준다. `WriteTurns`는 차례를 청하는 조각마다 이벤트 하나를 보내고, 서버는 각각 `Turn`으로 답한다
 - `WriteTurns`(`write-turns.ts`) — worker 쪽 쓰기 차례 대기열. `writing(effect)`는 서버가 차례를 줄 때까지 기다렸다 `effect`를 돌리고, `grant`는 가장 오래 기다린 조각을 쓰게 한 뒤 다 쓸 때까지 돌아오지 않는다. `asked`는 차례를 청한 조각마다 이벤트를 하나 낸다
 - `PassEvent` — `Progress`(checked·total·written·failed)와 `Finished`(+`counts`)로 된 TaggedUnion
 - `ImportWorkerSetup` — worker 시작 인자 스키마(`storageRoot`, `home`)
 - `TranscriptPass` — worker가 돌리는 transcript 1회 pass 서비스. `TranscriptPass.layer(home)`이고 `pass.ts` 본문은 바이트 상한 때문에 읽지 않았다
-- `PassProgress` / `TranscriptCounts` / `Cursor` / `ImportStoreFailed` / `ImportStoreReason` — `pass.ts`의 진행·cursor·저장 실패 타입(그래프 심볼 목록 기준)
+- `TranscriptCounts` / `Cursor` / `ImportStoreFailed` / `ImportStoreReason` — `pass.ts`의 transcript 수·cursor·저장 실패 타입(그래프 심볼 목록 기준)
 - `BulkNodes` — 옮긴 대화를 node 테이블에 바로 쓰는 서비스. `write(migration)`을 제공하고 `BulkNodes.layer`가 `NodeCrypto.layer`를 포함한다
 - `Migration` / `MigrationCount` / `BulkWriteFailed` — bulk 쓰기의 입력(source, projectId, sessionId, items, interpret), 결과(written, repeated), 실패 오류
 - `Checkouts` — 기록된 작업 폴더가 어느 저장소의 어느 checkout에 속하는지 git에 묻는 서비스. `Checkouts.layer`가 있고 `improve/discovery.ts`, `pass.ts`, `worker.ts`가 사용한다

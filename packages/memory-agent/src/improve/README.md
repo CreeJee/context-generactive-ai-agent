@@ -4,7 +4,7 @@
 
 `improve`는 열린 프로젝트들이 속한 저장소별로 최근 90일 사용 기록을 SQLite에서 모아 개선 항목으로 묶는다. 사용 기록은 사용자 정정, 반복된 도구 실패, 실패하거나 다시 계획된 칸반 카드다. 사용자가 고른 모델이 항목마다 문제·규칙·변경·수용 기준을 해석한다. 결과는 저장소마다 Markdown 작업 명세 보고서로 StorageRoot 아래 `improvements/`에 쓴다.
 
-작업 단위는 백그라운드 스캔이다. `ProjectImprovement` 서비스가 이 스캔을 소유하고 진행 상태를 `ScanState`로 알린다. `packages/memory-agent/src/layers.ts`의 `memoryAgentLayerBody`가 이 서비스를 조립한다. `apps/agent/app/routes/api/settings.improvements.tsx`의 `loader`/`action`이 설정 페이지에서 이를 쓴다.
+작업 단위는 백그라운드 스캔이다. `ProjectImprovement` 서비스가 이 스캔을 소유하고 진행 상태를 `ScanState`로 알린다. `packages/memory-agent/src/layers.ts`의 `memoryAgentLayerBody`가 이 서비스를 조립한다. 앱 API settings group의 `improvements`/`improvementScan`(`apps/agent/app/.server/api/settings.ts`)이 설정 페이지에서 이를 쓴다.
 
 ## Interface
 
