@@ -90,7 +90,7 @@
   - 응답 배열은 `ReadonlyArray`다. 받는 쪽 prop 타입을 `ReadonlyArray`로 바꾼다.
 - 1-2b 결과 (2026-10-31): `projects.$project.{kanban,boards,decisions}`를 옮겼다.
   - 계약 Schema는 `kanban/contracts.ts`(`ProtectedBranches`, `DecisionAnswer`, `DecisionCloseReason`, `DecisionState`, `HumanDecisionRequest`, `DecisionInboxItem`)와 `workflow/contracts.ts`(`PlanStatus`, `PlanSummary`, `ProjectBoard`)에 둔다. 1-4의 세션 결정·보드도 이것을 쓴다.
-  - 칸반 실패는 `kanban-failures.ts`의 `kanbanRefusal` 표(tag별 refusal)로 답한다. handler가 낼 수 있는 tag만 `Effect.catchTags`에 넘겨 endpoint마다 선언한 code와 맞춘다. RR 라우트용 `kanbanFailureResponse`는 1-4에서 지운다.
+  - 칸반 실패는 `kanban-failures.ts`의 `kanbanRefusal` 표(tag별 refusal)로 답한다. handler가 낼 수 있는 tag만 `Effect.catchTags`에 넘겨 endpoint마다 선언한 code와 맞춘다. RR 라우트용 `kanbanFailureResponse`는 1-4에서 지웠다.
 - 프로젝트 trace(`projects.$project.trace`, `trace.tasks.$task`)는 1-4로 넘긴다 (2026-10-31). `AgentChat`의 trace 메서드가 HTTP `Response`를 직접 만들고, 세션 trace와 같은 메서드·타입(`TraceTreeSnapshot`, `TraceTaskDetail`)을 쓴다. 메서드가 값과 tagged 실패를 돌려주게 바꾸는 일은 두 쪽을 한 번에 한다.
 - 1-3 결과 (2026-10-31): `auth`, `accounts`, `accounts.quota`, `models.*`를 `app-api/providers.ts`의 `AuthGroup`·`AccountsGroup`·`ModelsGroup`으로 옮겼다.
   - 계약 Schema는 `oauth/contracts.ts`(`OAuthProfile`, `AccountLoginState`, `SubscriptionAccountsView`, 쿼터 Schema)와 `providers/contracts.ts`의 `ProviderAuthState`에 둔다. 서버의 `AuthConnectionState`도 같은 필드의 비공개 TaggedUnion에서 타입을 꺼낸다.
@@ -104,6 +104,11 @@
   - `Session` Schema는 `sessions/contracts.ts`에 둔다. 세션을 바꾸는 endpoint의 holder 헤더는 `chat-api.ts`의 `sessionHolderHeaders`를 같이 쓰고, client에는 `x-session-holder` 이름 그대로 넘긴다.
   - 계약에 맞지 않는 query·payload(전에는 `project_required`, `invalid_session`, `invalid_decision_answer`)는 HttpApi의 빈 400이다. facade는 같은 code를 `appCall`의 invalid code로 준다.
   - 결정 답변의 거부는 `kanbanRefusal.HumanDecisionRefused`로 reason을 code로 답한다. 상태(404·400·409)는 옛 `humanDecisionStatus` 표와 같다.
+- 1-4a 보드·칸반 결과 (2026-10-31): `sessions.$session.{board,kanban}`을 `SessionsGroup`의 `board`·`editBoard`·`kanban`·`kanbanAction`으로 옮겼다. RR 라우트용 `kanbanFailureResponse`·`answerKanbanFailures`는 지웠다.
+  - 응답 Schema는 `workflow/contracts.ts`(`WorkflowState`와 Goal·Plan·카드·완료 근거, 보드 편집 명령, `BoardView`, `BoardEditApplied`·`BoardEditRequested`)와 `kanban/contracts.ts`(`KanbanBoardView`와 그 안의 view, `AssignmentHold`, `KanbanMode`, `GoalMergeState`, `KanbanStarted`)에 둔다. 서버 코드가 없는 `kanban/failures.ts`, `runtime/loop-health.ts`, `workflow/plan-schedule.ts`의 Schema는 그대로 가져온다.
+  - 보드 변경은 저장(200 `Applied`)과 실행 중 카드에 대한 요청(202 `Requested`)을 success 두 개로 선언한다. HttpApi는 값에 맞는 첫 success의 상태로 답한다. `kanbanAction`은 한 경로가 명령 여러 개를 받으므로 success가 `KanbanStarted`, `{ restarted }`, `{ dependsOn }`, 보드 변경 결과의 union이다.
+  - `request_missing`은 결정(404)과 칸반 동작(409) 둘에 있다. 칸반 동작의 `request_missing`은 오케스트레이터 도구(`settleChangeRequest`)만 내므로 HTTP로는 나오지 않는다. `appRefusalStatus`는 먼저 선언한 404를 찾는다.
+  - 계약에 맞지 않는 payload(전에는 `invalid_board_edit`, `invalid_kanban_action`)는 HttpApi의 빈 400이다.
 - SSE는 `HttpApiSchema.StreamSse`로 옮긴다. 첨부 업로드(`Content-Length`를 본문보다 먼저 검사)와 다운로드(바이트와 immutable 헤더)가 HttpApi로 같게 안 되면 RR 라우트로 남기고 이유를 적는다.
 
 ### 1-7. 정리

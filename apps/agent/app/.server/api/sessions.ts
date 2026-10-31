@@ -1,16 +1,26 @@
-import { Effect, Option } from "effect";
+import { Effect, Match, Option, Predicate } from "effect";
 import { HttpApiBuilder } from "effect/http-api";
 import {
   AppEvents,
+  BoardAuthor,
+  BoardEdit,
+  type BoardIntent,
+  Boards,
+  DecisionCloseScope,
   ExternalAgents,
   HumanDecisions,
+  KanbanBoardActions,
   KanbanOrchestrator,
   Projects,
   SessionLeases,
   Sessions,
+  Workflows,
 } from "memory-agent";
 import { AppApi } from "memory-agent/app-api";
 import { kanbanRefusal } from "../kanban-failures.ts";
+
+/** A person changed the board from the page. */
+const user = BoardAuthor.cases.User.make({});
 
 /** The sessions group of `AppApi` (`/api/sessions/*`). */
 export const SessionsApiHandlers = HttpApiBuilder.group(
@@ -24,6 +34,9 @@ export const SessionsApiHandlers = HttpApiBuilder.group(
     const decisions = yield* HumanDecisions;
     const orchestrator = yield* KanbanOrchestrator;
     const leases = yield* SessionLeases;
+    const boards = yield* Boards;
+    const workflows = yield* Workflows;
+    const actions = yield* KanbanBoardActions;
 
     /** Refuses a change while another page holds the session. */
     const checkHolder = (sessionId: string, holder: string | undefined) =>
@@ -41,6 +54,27 @@ export const SessionsApiHandlers = HttpApiBuilder.group(
           () => ({ error: "external_agent_unavailable" }) as const,
         ),
       );
+
+    /** Closes a stopped card's decision, or wakes the loop of a closed Plan's board. */
+    const followEdit = (session: string, edit: BoardEdit) =>
+      Effect.gen(function* () {
+        const goalInstanceId = yield* workflows.goalInstanceId(session);
+        if (goalInstanceId === null) return;
+        // A stopped card's decision is closed, not answered: nobody refused it.
+        if (BoardEdit.guards.CancelCard(edit))
+          yield* decisions.close(
+            DecisionCloseScope.Card({ sessionId: session, goalInstanceId, cardId: edit.cardId }),
+            "card_stopped",
+          );
+        // A closed Plan's board loop stops its cards and itself on its next look; wake it now.
+        if (BoardEdit.guards.ClosePlan(edit)) yield* orchestrator.poke(goalInstanceId);
+      });
+
+    /** Carries out what a person meant by dragging a card; the board is told it changed. */
+    const applyIntent = (session: string, intent: BoardIntent) =>
+      actions
+        .applyIntent(session, intent, user)
+        .pipe(Effect.tap(() => events.publishSession(session, "run-state")));
 
     return handlers.handleAll({
       list: ({ query: { project, archived } }) =>
@@ -79,6 +113,104 @@ export const SessionsApiHandlers = HttpApiBuilder.group(
             HumanDecisionRefused: kanbanRefusal.HumanDecisionRefused,
             KanbanStorageFailed: kanbanRefusal.KanbanStorageFailed,
             WorkflowStorageError: kanbanRefusal.WorkflowStorageError,
+          }),
+        ),
+      board: ({ params: { session } }) =>
+        sessions.get(session).pipe(
+          Effect.andThen(boards.view(session)),
+          Effect.catchTags({
+            SessionNotFound: kanbanRefusal.SessionNotFound,
+            WorkflowStorageError: kanbanRefusal.WorkflowStorageError,
+            SqlError: kanbanRefusal.SqlError,
+            SchemaError: kanbanRefusal.SchemaError,
+          }),
+        ),
+      editBoard: ({ params: { session }, headers, payload }) =>
+        Effect.gen(function* () {
+          yield* checkHolder(session, headers["x-session-holder"]);
+          yield* sessions.get(session);
+          const result = yield* workflows.editBoard(session, payload, user);
+          yield* Effect.when(
+            followEdit(session, payload),
+            Effect.succeed(Predicate.isTagged(result, "Applied")),
+          );
+          yield* events.publishSession(session, "run-state");
+          return result;
+        }).pipe(
+          Effect.catchTags({
+            SessionNotFound: kanbanRefusal.SessionNotFound,
+            BoardEditRefused: kanbanRefusal.BoardEditRefused,
+            PlanDependenciesRejected: kanbanRefusal.PlanDependenciesRejected,
+            KanbanStorageFailed: kanbanRefusal.KanbanStorageFailed,
+            WorkflowStorageError: kanbanRefusal.WorkflowStorageError,
+            PlatformError: kanbanRefusal.PlatformError,
+            SqlError: kanbanRefusal.SqlError,
+            SchemaError: kanbanRefusal.SchemaError,
+          }),
+        ),
+      kanban: ({ params: { session } }) =>
+        sessions.get(session).pipe(
+          Effect.andThen(actions.view(session)),
+          Effect.map(
+            Option.match({
+              onNone: () => ({ active: false }) as const,
+              onSome: (board) => ({ active: true, ...board }) as const,
+            }),
+          ),
+          Effect.catchTags({
+            SessionNotFound: kanbanRefusal.SessionNotFound,
+            KanbanStorageFailed: kanbanRefusal.KanbanStorageFailed,
+            WorkflowStorageError: kanbanRefusal.WorkflowStorageError,
+            GoalScheduleStorageFailed: kanbanRefusal.GoalScheduleStorageFailed,
+            SqlError: kanbanRefusal.SqlError,
+            SchemaError: kanbanRefusal.SchemaError,
+          }),
+        ),
+      kanbanAction: ({ params: { session }, headers, payload }) =>
+        checkHolder(session, headers["x-session-holder"]).pipe(
+          Effect.andThen(sessions.get(session)),
+          Effect.andThen(
+            Match.valueTags(payload, {
+              Start: () =>
+                orchestrator
+                  .start(session)
+                  .pipe(Effect.tap(() => events.publishSession(session, "run-state"))),
+              RestartLoop: () =>
+                Effect.as(actions.restartLoop(session), { restarted: true } as const),
+              SetDependencies: ({ dependsOn }) =>
+                actions.setDependencies(session, dependsOn).pipe(
+                  Effect.tap(() => events.publishSession(session, "run-state")),
+                  Effect.map((dependsOn) => ({ dependsOn })),
+                ),
+              Reorder: (intent) => applyIntent(session, intent),
+              Requeue: (intent) => applyIntent(session, intent),
+              Hold: (intent) => applyIntent(session, intent),
+              Release: (intent) => applyIntent(session, intent),
+              ChangeRequest: (intent) => applyIntent(session, intent),
+              Cancel: (intent) => applyIntent(session, intent),
+              // The card lands on another conversation's board, so that board is told too.
+              Transfer: (intent) =>
+                applyIntent(session, intent).pipe(
+                  Effect.tap(() => events.publishSession(intent.toSessionId, "run-state")),
+                ),
+            }),
+          ),
+          Effect.catchTags({
+            ProjectNotFound: kanbanRefusal.ProjectNotFound,
+            SessionNotFound: kanbanRefusal.SessionNotFound,
+            BoardEditRefused: kanbanRefusal.BoardEditRefused,
+            PlanDependenciesRejected: kanbanRefusal.PlanDependenciesRejected,
+            KanbanActionRefused: kanbanRefusal.KanbanActionRefused,
+            KanbanStartRefused: kanbanRefusal.KanbanStartRefused,
+            GoalScheduleRefused: kanbanRefusal.GoalScheduleRefused,
+            PersistedQueueItemsFailed: kanbanRefusal.PersistedQueueItemsFailed,
+            CardWorktreeFailed: kanbanRefusal.CardWorktreeFailed,
+            KanbanStorageFailed: kanbanRefusal.KanbanStorageFailed,
+            WorkflowStorageError: kanbanRefusal.WorkflowStorageError,
+            GoalScheduleStorageFailed: kanbanRefusal.GoalScheduleStorageFailed,
+            PlatformError: kanbanRefusal.PlatformError,
+            SqlError: kanbanRefusal.SqlError,
+            SchemaError: kanbanRefusal.SchemaError,
           }),
         ),
     });

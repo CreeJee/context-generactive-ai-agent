@@ -16,8 +16,10 @@ import {
   type ImportCommand as ImportCommandCase,
   type ImprovementStatus,
   type KagiCommand as KagiCommandCase,
+  type KanbanCommand as KanbanCommandCase,
   type KanbanSettings,
   type KanbanSettingsCommand as KanbanSettingsCommandCase,
+  type KanbanView,
   type McpCommand as McpCommandCase,
   type ProjectKanbanCommand as ProjectKanbanCommandCase,
   type ProjectKanbanSettings,
@@ -43,7 +45,6 @@ import type {
   DecisionInboxItem,
   DecisionKind,
   HumanDecisionRequest,
-  KanbanBoardView,
   KanbanScheduleView,
   GoalMergeState,
   ProviderModel,
@@ -111,12 +112,8 @@ export type SessionChange = Data.TaggedEnum<{
 }>;
 export const SessionChange = Data.taggedEnum<SessionChange>();
 
-/** The kanban route's commands besides a `BoardIntent`, as `/api/sessions/:session/kanban` reads them. */
-type KanbanCommand = Data.TaggedEnum<{
-  Start: {};
-  RestartLoop: {};
-  SetDependencies: { readonly dependsOn: readonly string[] };
-}>;
+/** The kanban commands besides a `BoardIntent`, as `/api/sessions/:session/kanban` reads them. */
+type KanbanCommand = KanbanCommandCase;
 const KanbanCommand = Data.taggedEnum<KanbanCommand>();
 
 /*
@@ -186,13 +183,11 @@ type WithoutProvider<Command> = Command extends unknown ? Omit<Command, "provide
 /** A `/api/accounts` change of the provider the call names. */
 export type AccountAction = WithoutProvider<SubscriptionAccountCommand>;
 
-/** Whether the session's Goal runs as a kanban board, and what its loop knows about the cards. */
-export type KanbanView = { readonly active: false } | ({ readonly active: true } & KanbanBoardView);
-
 export type {
   BoardEditResult,
   BoardView,
   CardStatus,
+  KanbanView,
   KanbanScheduleView,
   GoalMergeState,
   DecisionInboxItem,
@@ -311,6 +306,7 @@ export const ApiErrorCode = Schema.Literals([
   "other_project",
   "goal_missing",
   "not_kanban",
+  "no_goal_change",
   "invalid_lease_request",
   "invalid_mcp_change",
   "invalid_origin",
@@ -362,6 +358,7 @@ export const ApiErrorCode = Schema.Literals([
   "queue_delivered",
   "queue_item_changed",
   "reorder_across_columns",
+  "reassign_needs_edit",
   "queue_not_found",
   "queue_not_held",
   "queued_message_not_next",
@@ -370,6 +367,7 @@ export const ApiErrorCode = Schema.Literals([
   "request_failed",
   "request_mismatch",
   "request_missing",
+  "request_settled",
   "run_in_progress",
   "run_not_found",
   "session_in_use",
@@ -747,13 +745,20 @@ export const api = {
       SessionChange.Phase({ phase }),
       { [sessionHolderHeader]: holder },
     ),
-  board: (sessionId: string) =>
-    call<BoardView>("GET", `/api/sessions/${encodeURIComponent(sessionId)}/board`),
+  board: (session: string) => appCall((client) => client.sessions.board({ params: { session } })),
   /** The user's board change; one to an executing card comes back as a stored request. */
-  editBoard: (sessionId: string, holder: string, edit: BoardEdit) =>
-    call<BoardEditResult>("POST", `/api/sessions/${encodeURIComponent(sessionId)}/board`, edit, {
-      [sessionHolderHeader]: holder,
-    }),
+  editBoard: (session: string, holder: string, edit: BoardEdit) =>
+    appCall((client) => {
+      const request = { params: { session }, headers: { "x-session-holder": holder } };
+      // The client takes a union payload one case at a time.
+      return BoardEdit.$match(edit, {
+        AddCard: (payload) => client.sessions.editBoard({ ...request, payload }),
+        EditCard: (payload) => client.sessions.editBoard({ ...request, payload }),
+        MoveCard: (payload) => client.sessions.editBoard({ ...request, payload }),
+        CancelCard: (payload) => client.sessions.editBoard({ ...request, payload }),
+        ClosePlan: (payload) => client.sessions.editBoard({ ...request, payload }),
+      });
+    }, "invalid_board_edit"),
   /** The board's cards waiting for a person's decision. */
   decisions: (session: string) =>
     appCall((client) => client.sessions.decisions({ params: { session } })),
@@ -785,36 +790,55 @@ export const api = {
         }),
       "invalid_decision_answer",
     ),
-  kanban: (sessionId: string) =>
-    call<KanbanView>("GET", `/api/sessions/${encodeURIComponent(sessionId)}/kanban`),
+  kanban: (session: string): Promise<KanbanView> =>
+    appCall((client) => client.sessions.kanban({ params: { session } })),
   /** Runs the executing Plan as a kanban board. */
-  startKanban: (sessionId: string, holder: string) =>
-    call<unknown>(
-      "POST",
-      `/api/sessions/${encodeURIComponent(sessionId)}/kanban`,
-      KanbanCommand.Start(),
-      { [sessionHolderHeader]: holder },
+  startKanban: (session: string, holder: string) =>
+    appCall(
+      (client) =>
+        client.sessions.kanbanAction({
+          params: { session },
+          headers: { "x-session-holder": holder },
+          payload: KanbanCommand.Start(),
+        }),
+      "invalid_kanban_action",
     ),
   /** What a person meant by dragging a card; the server decides the card's status. */
-  boardIntent: (sessionId: string, holder: string, intent: BoardIntent) =>
-    call<BoardEditResult>("POST", `/api/sessions/${encodeURIComponent(sessionId)}/kanban`, intent, {
-      [sessionHolderHeader]: holder,
-    }),
+  boardIntent: (session: string, holder: string, intent: BoardIntent) =>
+    appCall((client) => {
+      const request = { params: { session }, headers: { "x-session-holder": holder } };
+      // The client takes a union payload one case at a time.
+      return BoardIntent.$match(intent, {
+        Reorder: (payload) => client.sessions.kanbanAction({ ...request, payload }),
+        Requeue: (payload) => client.sessions.kanbanAction({ ...request, payload }),
+        Hold: (payload) => client.sessions.kanbanAction({ ...request, payload }),
+        Release: (payload) => client.sessions.kanbanAction({ ...request, payload }),
+        ChangeRequest: (payload) => client.sessions.kanbanAction({ ...request, payload }),
+        Cancel: (payload) => client.sessions.kanbanAction({ ...request, payload }),
+        Transfer: (payload) => client.sessions.kanbanAction({ ...request, payload }),
+      });
+    }, "invalid_kanban_action"),
   /** Runs the board's loop again after it stopped on exhausted retries or a defect. */
-  restartKanbanLoop: (sessionId: string, holder: string) =>
-    call<{ readonly restarted: true }>(
-      "POST",
-      `/api/sessions/${encodeURIComponent(sessionId)}/kanban`,
-      KanbanCommand.RestartLoop(),
-      { [sessionHolderHeader]: holder },
+  restartKanbanLoop: (session: string, holder: string) =>
+    appCall(
+      (client) =>
+        client.sessions.kanbanAction({
+          params: { session },
+          headers: { "x-session-holder": holder },
+          payload: KanbanCommand.RestartLoop(),
+        }),
+      "invalid_kanban_action",
     ),
   /** The Goals this Goal waits for; an empty list lifts the wait. */
-  setGoalDependencies: (sessionId: string, holder: string, dependsOn: readonly string[]) =>
-    call<{ readonly dependsOn: readonly string[] }>(
-      "POST",
-      `/api/sessions/${encodeURIComponent(sessionId)}/kanban`,
-      KanbanCommand.SetDependencies({ dependsOn }),
-      { [sessionHolderHeader]: holder },
+  setGoalDependencies: (session: string, holder: string, dependsOn: readonly string[]) =>
+    appCall(
+      (client) =>
+        client.sessions.kanbanAction({
+          params: { session },
+          headers: { "x-session-holder": holder },
+          payload: KanbanCommand.SetDependencies({ dependsOn }),
+        }),
+      "invalid_kanban_action",
     ),
   controlWorkflow: (sessionId: string, holder: string, workflowAction: WorkflowAction) =>
     call<WorkflowState>(

@@ -56,7 +56,12 @@ export {
   ModelCatalogView,
   SubscriptionAccountCommand,
 } from "./app-api/providers.ts";
-export { CreateSession, DecisionAnswerInput } from "./app-api/sessions.ts";
+export {
+  CreateSession,
+  DecisionAnswerInput,
+  KanbanCommand,
+  KanbanView,
+} from "./app-api/sessions.ts";
 export { FolderPick } from "../projects/contracts.ts";
 export {
   SubscriptionAccountsView,
