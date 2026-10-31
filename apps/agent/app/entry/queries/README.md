@@ -9,7 +9,7 @@
 - `appQueryKeys` — 모든 React Query 키의 단일 정의. `root`(`["app"]`), `global.*`(auth, accountsRoot/accounts(provider), accountQuota(provider), imports, embedding, imageSettings, kagi, conversation, recall, kanban, modelsRoot/models(provider), projects, hiddenProjects), `project.*`(root, sessions, mcp, agents, skills, trace, decisions, boards, kanban, traceTask), `session.*`(root, runState, queue, subagents, approvals, trace, btw, board, decisions, kanban)
 - `AppQueryKey` — 쿼리 키 타입 `readonly unknown[]`
 - `globalQueries` — global 범위 `queryOptions` 팩토리: auth(60초 `refetchInterval`), accounts, compatibleAccounts(`compatibleQueryKey`+`compatibleClient.list`), accountQuota, projects, hiddenProjects, imports, embedding, imageSettings, kagi, conversation, recall, kanban, models
-- `projectQueries` — project 범위 `queryOptions` 팩토리: sessions(active와 archived를 `runUiEffect`+`Effect.gen`으로 묶어 `{active, archived}` 반환), mcp, agents, skills, trace, decisions, boards, traceTask, kanban
+- `projectQueries` — project 범위 `queryOptions` 팩토리: sessions(active와 archived를 `Effect.all`로 함께 읽어 `{active, archived}` 반환), mcp, agents, skills, trace, decisions, boards, traceTask, kanban
 - `sessionQueries` — session 범위 `queryOptions` 팩토리: runState(holder 인자), queue, subagents, approvals, trace, board, decisions, kanban, btw
 - `useAuthQuery` / `useCompatibleAccountsQuery` / `useProjectsQuery` / `useHiddenProjectsQuery` / `useImageSettingsQuery` — global 범위의 일반 `useQuery` 훅
 - `useAccountsQuery` / `useAccountQuotaQuery` / `useModelsQuery` — `(provider, enabled)` 형태의 global 훅. `Function.dual(2, ...)`로 data-last `(enabled)(provider)` 호출도 지원한다
@@ -31,9 +31,10 @@
 - `accounts(provider)`와 `models(provider)` 키는 `accountsRoot`와 `modelsRoot` 아래에 놓인다. 그래서 root 키로 모든 provider를 한꺼번에 무효화할 수 있다. mutation의 `publishModelSelection`은 이 구조에 의존한다.
 - `hiddenProjects` 키는 `projects` 키 아래(`["app","global","projects","hidden"]`)에 놓인다. 그래서 프로젝트 목록을 무효화하면 보관 목록도 함께 다시 읽는다.
 - `sessionQueries.runState` 키에는 `holder`가 들어가지 않는다. 같은 세션의 run-state 캐시는 holder와 관계없이 하나다.
+- 첫 문서에서는 `../../routes/_index.tsx`의 loader가 `global.projects`와 열린 프로젝트의 `project.sessions`를 채운다(`../first-screen.ts`). 채운 값은 같은 키, 같은 `{active, archived}` 모양이다.
 - staleTime 0을 유지하는 쿼리: project decisions·boards, session runState·board·decisions·kanban. 이 쿼리들은 항상 최신 서버 상태를 다시 읽어야 한다.
 - nullable id 훅(`useProjectSessionsQuery`, `useAgentsQuery`, `useProjectTraceTaskQuery`)은 null이면 키에 빈 문자열을 넣고 `enabled: false`로 둔다. 코드 주석은 '프로젝트는 URL과 프로젝트 목록이 정리되는 동안 없을 수 있다'고 설명한다.
-- `projectQueries.sessions`의 queryFn은 Promise 경계다. 주석: 'Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.' active와 archived 세션은 순차로 읽는다.
+- `projectQueries.sessions`의 queryFn은 Promise 경계다. 주석: 'Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.' active와 archived 세션은 동시에 읽는다.
 - dual 훅의 data-last 형태에서 마지막에 받는 인자는 항상 첫 인자(provider 또는 projectId)다. arity(2·3·4)는 body 함수의 인자 수와 맞아야 한다.
 - Suspense 훅(`useSuspense*`, `useImportsQuery` 등)은 `QuerySection` 같은 Suspense와 에러 바운더리 안에서만 렌더해야 한다.
 

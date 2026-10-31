@@ -11,11 +11,13 @@ export const projectQueries = {
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
       queryFn: () =>
         runUiEffect(
-          Effect.gen(function* () {
-            const active = yield* uiPromise(() => api.sessions(projectId));
-            const archived = yield* uiPromise(() => api.archivedSessions(projectId));
-            return { active, archived };
-          }),
+          Effect.all(
+            {
+              active: uiPromise(() => api.sessions(projectId)),
+              archived: uiPromise(() => api.archivedSessions(projectId)),
+            },
+            { concurrency: "unbounded" },
+          ),
         ),
     }),
   mcp: (projectId: string) =>

@@ -2,7 +2,7 @@ import { it } from "@effect/vitest";
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { Cause, Effect, FileSystem, Layer, Path, Schema } from "effect";
 import { createServer } from "vite-plus";
-import { expect } from "vite-plus/test";
+import { expect, vi } from "vite-plus/test";
 
 const sdkCall = Effect.fn("RuntimeResourcesDev.sdkCall")(<A>(call: () => A | PromiseLike<A>) =>
   Effect.tryPromise({
@@ -50,6 +50,12 @@ export const result = exportResult;
 `,
           );
           yield* Effect.addFinalizer(() => fs.remove(probe, { force: true }).pipe(Effect.orDie));
+          // The HMR frontend's environment: its loader asks the dev backend, here one that is not
+          // running. Config reads the environment once, when the Vite config first reads it.
+          yield* Effect.acquireRelease(
+            Effect.sync(() => vi.stubEnv("CONTEXT_AGENT_DEV_BACKEND", "http://127.0.0.1:9")),
+            () => Effect.sync(() => vi.unstubAllEnvs()),
+          );
           const server = yield* Effect.acquireRelease(
             sdkCall(() =>
               createServer({
@@ -77,6 +83,7 @@ export const result = exportResult;
           expect(result.status).toBe(200);
           expect(result.html).toContain("<!DOCTYPE html>");
           expect(result.html).toContain("<html");
+          // The page renders without the backend, and never starts an agent of its own.
           expect(yield* fs.readDirectory(storage)).toEqual([]);
         }),
         services,

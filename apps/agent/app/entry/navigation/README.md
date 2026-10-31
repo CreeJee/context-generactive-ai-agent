@@ -8,7 +8,7 @@
 
 - `ModelSection` — 모델 Select와, 선택한 모델이 허용하는 추론 강도 Select를 그리는 사이드바 섹션 (sidebar.tsx)
 - `ProjectSection` — 접히는 프로젝트 섹션. 이름으로 찾는 프로젝트 Combobox(보관한 프로젝트는 따로 묶음), 폴더 열기 버튼, 권한 모드(ask/auto/full), 다른 프로젝트 기억 검색 토글(R08), 보관하기를 담는다 (sidebar.tsx)
-- `SessionSection` — 세션·보관 세션 목록. "대화" 머리줄의 위치 필터 메뉴(`sessionPlace`·`placeFilterOf`·`shownIn`)로 나눠 보여 준다. 행은 `SidebarMenuButton`이다. 위치 칩은 모든 위치를 볼 때 worktree 대화에만 붙는다. 보관·원본 삭제는 행에 올리거나 포커스하면 나타나는 `SidebarMenuAction` 메뉴에 있다. 원본 삭제는 `AlertDialog`로 확인받는다. 목록을 불러오는 동안(`loading`)은 Skeleton을 보인다 (sidebar.tsx, `App`이 렌더)
+- `SessionSection` — 세션·보관 세션 목록. "대화" 머리줄의 위치 필터 메뉴(`sessionPlace`·`placeFilterOf`·`shownIn`)로 나눠 보여 준다. 행은 `SidebarMenuButton`이다. 위치 칩은 모든 위치를 볼 때 worktree 대화에만 붙는다. 보관·원본 삭제는 행에 올리거나 포커스하면 나타나는 `SidebarMenuAction` 메뉴에 있다. 원본 삭제는 `AlertDialog`로 확인받는다. 목록을 불러오는 동안(`loading`)은 Skeleton을 보인다. 제목 없는 대화는 시작 시각(`dayAndTime`, 브라우저 시간대)으로 부르고, 서버 HTML과 hydration 동안에는 `제목 없는 대화`로 부른다 (sidebar.tsx, `App`이 렌더)
 - `Separator` — sidebar.tsx가 `~/components/ui/separator`에서 다시 내보내는 구분선
 - `SidebarDisclosureTrigger` — `CollapsibleTrigger` 래퍼. `leading` 슬롯, 말줄임 본문, 회전하는 chevron을 그린다
 - `AccountModelPanel` / `accountSummary` — 공급자 인증 상태와 선택 모델을 한 줄로 요약하고 설정을 접어 두는 패널. `accountSummary`는 `{status, model, hasError}`를 돌려주는 dual 함수다

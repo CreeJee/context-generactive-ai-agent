@@ -2,11 +2,13 @@
 
 ## Overview
 
-`apps/agent`의 React Router v7 페이지 라우트 디렉터리다. `_index.tsx`는 루트 경로에서 메인 채팅 앱(`../entry`의 `App`)을 그대로 렌더링한다. `report.tsx`는 문제 제보 페이지다. 제보 페이지는 증상 입력, 세션 증거 묶음 수집, AI 진단, 복사/파일 저장, 선택적인 Discord 웹훅 전송을 한 화면에서 묶는다. 실제 네트워크 호출과 문안 생성은 `apps/agent/app/entry/report` 모듈이 맡고, HTTP 리소스 라우트는 하위 `api/`에 있다.
+`apps/agent`의 React Router v7 페이지 라우트 디렉터리다. `_index.tsx`는 루트 경로에서 메인 채팅 앱(`../entry`의 `App`)을 렌더링하고, 서버 loader로 첫 화면의 query 캐시를 채운다. `report.tsx`는 문제 제보 페이지다. 제보 페이지는 증상 입력, 세션 증거 묶음 수집, AI 진단, 복사/파일 저장, 선택적인 Discord 웹훅 전송을 한 화면에서 묶는다. 실제 네트워크 호출과 문안 생성은 `apps/agent/app/entry/report` 모듈이 맡고, HTTP 리소스 라우트는 하위 `api/`에 있다.
 
 ## Interface
 
-- `_index.tsx` `default Agent` — 루트 페이지 컴포넌트다. `../entry`의 `<App />`만 렌더링한다.
+- `_index.tsx` `loader` — `~/.server/first-screen`의 `firstScreen`으로 프로젝트 목록과 열린 프로젝트(`?project=`, 없거나 목록에 없으면 첫 프로젝트)의 active·archived 대화 목록을 읽는다. 계약 Schema의 JSON 형태(`FirstScreenJson`)로 돌려주고, 답하지 못하면 null이다.
+- `_index.tsx` `shouldRevalidate` — 언제나 false다. loader는 첫 문서만 채운다.
+- `_index.tsx` `default Agent` — 루트 페이지 컴포넌트다. loader 값을 `firstScreenState`로 decode해 `HydrationBoundary`에 넘기고 `<App />`을 렌더링한다.
 - `_index.tsx` `meta` — 제목 `Agent`, description `Run!` 메타를 돌려준다.
 - `report.tsx` `default ReportPage` — 문제 제보 페이지다. 쿼리 `?project=&session=`가 모두 있으면 분석 세션을 열고 증거 묶음을 수집한다. 없으면 증상 설명만으로 제보한다.
 - `report.tsx` `meta` — 제목 `문제 제보 · Context Agent`를 돌려준다.
@@ -16,6 +18,10 @@
 
 ## Invariants
 
+- `_index.tsx` loader는 앱 API를 `serveApi`로 프로세스 안에서 부른다. HMR frontend(`CONTEXT_AGENT_DEV_BACKEND`가 있는 Vite 프로세스)에서는 그 dev backend에 GET으로 묻는다. 이 프로세스에 agent를 띄우지 않는다(`server/runtime-resources-dev.test.ts`).
+- loader는 500ms까지만 기다린다. 처음 시작한 서버는 agent를 build하는 동안 첫 화면 없이 렌더링하고, 페이지의 query가 따로 묻는다. 실패도 null로 넘기고, 실패는 페이지 query가 보여 준다.
+- loader 값은 서버 시각 `at`을 갖는다. `HydrationBoundary`는 캐시에 이미 있는 query를 그보다 새 값일 때만 덮는다.
+- `shouldRevalidate`가 false라서 nuqs의 `?project=`/`?session=` 변경을 뒤로 가기로 되돌려도 loader 요청(`/_.data`)이 없다. 그 뒤로는 query와 SSE가 캐시를 최신으로 둔다.
 - 분석 세션 열기와 증거 수집은 URL 쿼리에 `project`와 `session`이 모두 truthy일 때만 실행된다(`isTruthy`로 검사).
 - `Effect.runFork`로 띄운 fiber마다 effect cleanup이나 unmount에서 `Fiber.interrupt`로 중단한다. `sessionRetry`, `evidenceRetry` 값이 바뀌면 이전 작업을 중단하고 다시 실행한다.
 - 새 진단을 요청하면 먼저 실행 중인 진단 fiber(`diagnosisTask` ref)를 중단한다. unmount 때도 그 fiber를 중단한다.
@@ -28,6 +34,7 @@
 
 ## Side Effects
 
+- 네트워크(서버): `_index.tsx` loader가 `GET /api/projects`, `GET /api/sessions?project=`(active, archived)를 부른다. 프로덕션 서버에서는 같은 프로세스의 `serveApi`가 답하고, 첫 요청이면 agent runtime을 build한다.
 - 네트워크: `openReportSession`이 원본 세션을 기준으로 별도 분석 세션을 연다. 서버 상태가 바뀐다.
 - 네트워크: `readReportEvidence`가 세션 증거 묶음을 읽고, `requestDiagnosis`가 AI 진단을 요청한다.
 - 네트워크(하위 컴포넌트): `ReportDelivery`가 사용자가 직접 누를 때 Discord 웹훅으로 보낸다.

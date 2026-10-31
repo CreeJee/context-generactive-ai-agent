@@ -99,7 +99,7 @@ export { AppChangedEvent, AppReadyEvent } from "../events/contracts.ts";
 export { Session } from "../sessions/contracts.ts";
 export { LifecycleResult, ResumeTaskResult } from "../work-trace/contracts.ts";
 export { WorkflowState } from "../workflow/contracts.ts";
-export { FolderPick } from "../projects/contracts.ts";
+export { FolderPick, Project } from "../projects/contracts.ts";
 export {
   SubscriptionAccountsView,
   SubscriptionQuotaReport,

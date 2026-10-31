@@ -85,6 +85,7 @@ import { Skeleton } from "~/components/ui/skeleton";
 import { Spinner } from "~/components/ui/spinner";
 import { Switch } from "~/components/ui/switch";
 import { dayAndTime } from "~/lib/dates";
+import { useHydrated } from "../shared/use-hydrated";
 import {
   FolderPick,
   type ProviderModel,
@@ -515,7 +516,12 @@ function AddProjectDialog({
   );
 }
 
-const sessionLabel = (session: Session) => session.title ?? dayAndTime(session.createdAt);
+/**
+ * A conversation's title. One without a title yet reads as when it started, in the browser's time
+ * zone, so the server's HTML and its hydration name it in words instead.
+ */
+const sessionLabel = (hydrated: boolean) => (session: Session) =>
+  session.title ?? (hydrated ? dayAndTime(session.createdAt) : "제목 없는 대화");
 
 /** Where in the repository a conversation ran: its branch, or else its worktree folder's name. */
 const sessionPlace = (session: Session) =>
@@ -581,6 +587,7 @@ export function SessionSection({
   /** Trusted external agents a conversation can talk to directly. */
   agents: readonly string[];
 }) {
+  const label = sessionLabel(useHydrated());
   const [placeValue, setPlaceValue] = useState(everyPlace);
   // The asked-about conversation stays while the dialog closes, so its title does not blank out.
   const [deleteAsk, setDeleteAsk] = useState<{
@@ -701,7 +708,7 @@ export function SessionSection({
                     />
                   }
                 >
-                  <span className="min-w-0 flex-1 truncate">{sessionLabel(session)}</span>
+                  <span className="min-w-0 flex-1 truncate">{label(session)}</span>
                   {/* Only a separate worktree is worth a chip; a filtered list is all one place. */}
                   {everywhere && session.worktreePath !== null && (
                     <Badge
@@ -721,9 +728,7 @@ export function SessionSection({
                 {/* One menu on hover or focus keeps the row's width for its title. */}
                 <DropdownMenu>
                   <DropdownMenuTrigger
-                    render={
-                      <SidebarMenuAction showOnHover aria-label={`${sessionLabel(session)} 메뉴`} />
-                    }
+                    render={<SidebarMenuAction showOnHover aria-label={`${label(session)} 메뉴`} />}
                   >
                     <EllipsisIcon />
                   </DropdownMenuTrigger>
@@ -773,7 +778,7 @@ export function SessionSection({
                     key={session.id}
                     className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground"
                   >
-                    <span className="min-w-0 flex-1 truncate">{sessionLabel(session)}</span>
+                    <span className="min-w-0 flex-1 truncate">{label(session)}</span>
                     <Button variant="ghost" size="xs" onClick={() => onRestore(session.id)}>
                       <ArchiveRestoreIcon /> 복원
                     </Button>
@@ -801,9 +806,7 @@ export function SessionSection({
           <AlertDialogHeader>
             <AlertDialogTitle>대화 원본을 삭제할까요?</AlertDialogTitle>
             <AlertDialogDescription>
-              {deleteAsk === null
-                ? ""
-                : `"${sessionLabel(deleteAsk.session)}" 대화의 원본을 지워요. `}
+              {deleteAsk === null ? "" : `"${label(deleteAsk.session)}" 대화의 원본을 지워요. `}
               채택된 project memory와 Work Trace provenance는 유지돼요.
             </AlertDialogDescription>
           </AlertDialogHeader>

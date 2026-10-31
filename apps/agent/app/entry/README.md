@@ -29,6 +29,7 @@
 - `ConversationSettings` / `RecallSettings` / `KanbanSettings` / `KanbanSettingsCommand` / `ProjectKanbanSettings` / `ProjectKanbanCommand` — 대화·회상·칸반 설정 뷰와 명령 타입으로, `api.ts`에 정의되어 있다
 - `DeliveredEvent` / `ContextEvent` / `eventDecoders` — 스트림 이벤트(대기열 전달, context) `Schema.Struct`와 그 디코더 표다
 - `ErrorBody` — 계약에 없는 상태로 거절된 응답과 첨부 업로드 거절의 본문 Schema다
+- `FirstScreenJson` / `firstScreenState` — `first-screen.ts`. index loader가 첫 화면으로 넘기는 값(서버 시각 `at`, 프로젝트 목록, 열린 프로젝트의 active·archived 대화)의 JSON codec과, 그 값을 decode해 `global.projects`·`project.sessions` 키의 `HydrationBoundary` 상태로 만드는 함수다. 값은 계약의 `Project`·`Session` Schema로 encode해 React Router가 class 없이 나른다
 - 재내보내기 — `memory-agent/definitions`의 값 `ApprovalRequester`, `NextDelivery`, `QueueEdit`, `QueueItemState`와, `memory-agent`·definitions의 타입(`Session`, `Project`, `ModelSelection`, `ProviderId`, `QueueSnapshot`, `SessionRunState`, `LeaseView`, `BoardView`, `McpOverview`, `SkillCatalog`, `SubagentView`, `WorkflowPhase` 등)을 `api.ts`에서 다시 내보낸다
 - 하위 디렉터리:
   - [`chat`](./chat/README.md) — 한 세션의 대화 패널, 입력창, 메시지 렌더링, 승인 카드, 대기열·BTW·워크플로·작업 추적·보드 패널

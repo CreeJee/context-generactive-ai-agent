@@ -12,6 +12,7 @@
 - `subscribeBackendRestart` — 재시작 필요 알림 리스너를 등록하고 해제 함수를 돌려준다
 - `backendRestartSnapshot` — 모듈 전역 `restartRequired` 값을 돌려준다
 - `useBackendRestartRequired` — `useSyncExternalStore`로 재시작 필요 상태를 구독하는 React 훅(서버 스냅샷은 `false`)
+- `useHydrated` — 서버 HTML을 hydrate하는 동안 false, 그 뒤와 브라우저에서 시작한 렌더에서는 true인 React 훅(`use-hydrated.ts`)
 - `uiPromise` — Promise 작업을 `Cause.UnknownError`로 실패하는 Effect로 감싼다
 - `runUiEffect` — Effect를 Promise로 실행하고 실패 시 `UnknownError`를 벗겨 원래 API/브라우저 에러 identity로 reject한다
 - `browserCrypto` — Web Crypto(`crypto.getRandomValues`, `crypto.subtle.digest`)로 만든 Effect `Crypto` 서비스 구현. digest 실패는 `PlatformError.systemError`로 바꾼다
@@ -33,6 +34,7 @@
 - `sdkHttpTransport`는 native `ReadableStream`이 아닌 본문(문자열 등)을 스트림이 아닌 raw/bytes 본문으로 보낸다. 브라우저 스트리밍 업로드는 HTTP/2가 필요해 HTTP/1.1 dev 프록시에서 JSON POST가 깨지기 때문이다. Request/FormData 본문은 인코딩·multipart boundary를 보존하려고 `arrayBuffer`로 읽는다
 - `sdkHttpTransport`의 요청 Scope는 abort 시, 실패 시, 본문 없는 응답(HEAD, 204/205/304)일 때 즉시, 그 밖에는 응답 스트림이 끝날 때 닫혀야 하며 닫을 때 abort 리스너를 제거한다. TransportError는 원래 `cause`로 풀어 reject한다
 - `runUiEffect`는 `Cause.UnknownError`를 벗겨 API·브라우저 에러 identity를 보존해야 한다(React/React Query 콜백이 소비)
+- 브라우저 시간대처럼 서버와 다를 수 있는 값으로 만든 글자는 `useHydrated`가 true일 때만 그린다. 서버가 그린 HTML과 hydration의 첫 렌더가 같아야 React가 트리를 버리지 않는다
 - `use-backend-restart.ts`는 React 바인딩만 두고 비-React 저장소(`backend-restart.ts`)와 분리해 둔다(주석 근거)
 - 테마 저장 키 `context-agent-theme`는 `theme.tsx`와 `themeScript`에서 같아야 하며, localStorage 접근 실패 시에도 시스템 테마로 동작해야 한다
 - `FailureDetails`의 문구는 실패 코드에서 오고, `detail` 원문은 조사용 보조 정보일 뿐이다(주석 근거)
