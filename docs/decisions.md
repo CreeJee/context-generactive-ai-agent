@@ -3340,3 +3340,9 @@
 - 원인: `AgentChat.start`는 user turn을 메모리 node로 먼저 쓰고(`persistUserTurn`), run과 대화 기록은 그 뒤에 만든다. `start`가 HTTP 요청 fiber에서 돌아서, 페이지가 그 사이에 요청을 끊으면(세션 Atom 묶음 교체, 세션 이동, 탭 닫기) turn은 메모리에만 남고 run은 생기지 않았다. span에서 이 시작 단계는 0.6–14초 걸렸고 세 번 interrupted로 끝났다.
 - 결정: `start`는 서비스 scope에 fork하고 호출자는 그 fiber를 join한다(`Effect.forkIn(scope)` + `Fiber.join`). 호출자가 끊겨도 run 시작까지 마치고, 이미 시작된 run처럼 서버에서 계속 돈다. 서비스가 닫힐 때만 중단된다. 내부 follow-up도 이미 서비스 scope에서 `start`를 부르므로 동작이 같다.
 - 버린 안: 시작 구간을 `Effect.uninterruptible`로 묶기. 서비스 종료도 그 구간이 끝날 때까지 기다리게 된다. 요청 핸들러 layer의 scope에 fork하기. `toWebHandler` 수명이라 서버 종료 때 닫히지 않는다.
+
+## 결함 로그는 실패 태그를 남긴다 (2026-10-31)
+
+- 증상: 한 세션의 run 시작이 매번 `route_defect { error: 'Defect' }`로만 남았다. `orDefect`는 refusal로 바꾸지 못한 typed 실패를 `Cause.fail`로 넘기는데, `logDefect`가 `error`를 `Defect`로 고정해 실패 태그가 로그에서 사라졌다. 원인은 span(`AgentChat.start` 아래 `sql.execute` 실패)과 `DefectReporter.recent`(`SqlError`)로 따로 찾아야 했다. Mac이 비정상 종료한 뒤 그 세션의 `chat_threads` 행 overflow chain이 끊겨 있었다.
+- 결정: `logDefect`는 `failureTags(cause)`로 남긴다. typed 실패는 `SqlError:UnknownError`처럼 태그와 reason으로, die는 지금처럼 `Defect`로 남는다. 2026-10-18의 기준(로그에는 오류 태그와 reason 태그만)을 따르고, 원문 메시지·SQL은 계속 남기지 않는다.
+- 한계: Effect의 `classifySqliteError`는 SQLite 손상(result code 11)을 `UnknownError`로 분류해, 로그만으로는 손상과 다른 SQLite 오류를 가르지 못한다.
