@@ -69,7 +69,7 @@ import { Interpretations } from "./memory/interpretations.ts";
 import { KnowledgePromotions } from "./memory/knowledge.ts";
 import { Nodes } from "./memory/nodes.ts";
 import { Recorder } from "./memory/record.ts";
-import { MemorySearch } from "./memory/search.ts";
+import { MemorySearch, type SearchTuning } from "./memory/search.ts";
 import { PermissionClassifier } from "./permissions/classifier.ts";
 import { SecretRedactor } from "./secrets/redactor.ts";
 import { SecretSweep } from "./secrets/sweep.ts";
@@ -179,6 +179,8 @@ export interface MemoryAgentLayerOptions {
    */
   readonly importsHome?: string;
   readonly importsWatching?: boolean;
+  /** Search fusion settings override; defaults to {@link searchTuning}. Evaluations vary it. */
+  readonly searchTuning?: Partial<SearchTuning>;
   /**
    * Sweep secrets out of text stored before they were hidden on the way in, in the background at
    * start. Default true; tests run the sweep themselves.
@@ -361,7 +363,9 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
   );
   const retrieval = Layer.mergeAll(
     Indexer.layer,
-    MemorySearch.layer,
+    options.searchTuning === undefined
+      ? MemorySearch.layer
+      : MemorySearch.tuned(options.searchTuning),
     PermissionClassifier.layer,
     WorkflowRules.layer,
     QueueDelivery.layer,

@@ -19,7 +19,7 @@
 - `OwnerReply` — owner 응답 TaggedUnion(`ack`, `removed`, `vector-hits`, `controlled-result`, `memory-result`)이다.
 - `NativeOwnerFailed` — Schema.TaggedError다. `reason` 리터럴 13종(`invalid-input`, `queue-full`, `input-budget`, `worker-exit`, `worker-error`, `startup-timeout`, `request-timeout`, `closed`, `epoch-mismatch`, `index-failed`, `lease-unavailable`, `read-failed`, `native-incompatible`)과 프로세스 내부에만 남는 `cause`를 가진다.
 - `OwnerReady` / `Open` / `Execute` / `NativeOwnerRpcs` — 준비 보고 Schema와 Effect RPC 정의다. `Open`은 setup 결과를, `Execute`는 `OwnerCommand`를 `OwnerReply`로 처리한다.
-- `NativeReadInput` / `NativeReadOutput` — native memory read의 입출력 Schema다. budget 0~2000ms, bytes ≤ 1 MiB, `vectorK ≤ maxVectorK` 범위를 검사한다.
+- `NativeReadInput` / `NativeReadOutput` — native memory read의 입출력 Schema다. budget 0~2000ms, bytes ≤ 1 MiB, `vectorK ≤ maxVectorK` 범위를 검사한다. 채널별 검색어 수 상한(trigram 24, 두 글자 8, morph 24; 넘으면 이름 같은 것·긴 것을 먼저 남긴다 — 2026-10-30)은 호스트가 적용하고, 응답은 단계 시간과 등록→claim 대기 `queueMs`를 함께 돌려준다.
 - `nativeReadInputLogicalBytes` — 복사 전 경계에서 입력의 논리 바이트를 계산한다. 한도를 넘으면 `inputBudgetBytes + 1`을 반환한다.
 - `TransferredVector` / `maxVectorK`(48) / `ReadStage` — 버퍼를 전송(transfer)하는 Float32Array Schema, 벡터 k 상한, 읽기 단계 순서 리터럴(candidate→vector→mapping→text→morph→coverage)이다.
 - `NativeSearchRequest` / `NativeSearchOutcome` — 상위 검색 요청 계약과 결과 TaggedEnum(`success`, `degraded`, `cancelled`, `budget-exceeded`, `stale-generation`, `error`)이다.
@@ -44,6 +44,7 @@
 - worker는 `command.epoch !== setup.epoch`이면 `epoch-mismatch`로 거부한다.
 - IPC로는 `reason`만 넘는다. native 예외 메시지와 cache 경로는 worker 안에 남는다. worker의 `reported`는 `epoch-mismatch`, `invalid-input`, `read-failed`, `native-incompatible`, `lease-unavailable` 외 사유를 모두 `index-failed`로 바꾼다.
 - 동기 native 호출과 파일시스템 호출은 owning worker 안에서만 한다. `NativeSearchClient` 구현은 무거운 동기 native search를 호출자 스레드에서 실행하면 안 된다.
+- memory read에서 text 단계만 자기 몫(남은 예산 600ms 여유)을 넘으면 그 결과만 버리고 `textUnavailable=true`로 표시해 읽기를 계속한다. `success`에 벡터·morph·coverage가 함께 온다. `FindResult.degraded`의 `"text"`로 모델에 전달된다(`docs/decisions.md` 2026-10-30).
 - setup 검증: `dimensions`는 0보다 큰 8의 배수이면서 4294967295 이하다. `bits`는 1, 2, 4, 8 중 하나다. id는 canonical 10진 u64 문자열이다(20자 이하, 18446744073709551615 이하).
 - add는 `vectors.length === ids.length * dimensions`이고 모든 값이 finite여야 한다. vector-search 계열은 `query.length === dimensions`이고 `0 < k ≤ 4294967295`여야 한다. memory read의 `vectorK`는 `maxVectorK`(48) 이하여야 하며, 넘으면 read 전체가 실패한다.
 - 저장된 인덱스의 dimensions/bits가 setup과 다를 때 `recover !== true`이면 `index-failed`다. 재구축은 명시적 호스트 recovery로만 한다. 조용히 빈 owner로 바꾸지 않는다(`needsReset` 보고).

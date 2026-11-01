@@ -66,6 +66,7 @@ pub(crate) struct RequestState {
     cancelled: AtomicBool,
     claimed: AtomicBool,
     snapshot_pinned: AtomicBool,
+    registered: Instant,
     deadline: Instant,
     owner_key: String,
     epoch: String,
@@ -77,6 +78,10 @@ impl RequestState {
     }
     pub(crate) fn mark_snapshot_pinned(&self) {
         self.snapshot_pinned.store(true, Ordering::Release);
+    }
+    /// Time since the host registered the request, which starts its budget.
+    pub(crate) fn since_registered(&self) -> Duration {
+        self.registered.elapsed()
     }
     pub(crate) fn remaining(&self) -> Duration {
         self.deadline.saturating_duration_since(Instant::now())
@@ -164,12 +169,14 @@ fn register(
         .map_err(|_| "Control token exhausted")?;
     let seed = token;
     let token = format!("{seed}:{serial}");
+    let registered = Instant::now();
     let state = Arc::new(RequestState {
         token: token.clone(),
         cancelled: AtomicBool::new(false),
         claimed: AtomicBool::new(false),
         snapshot_pinned: AtomicBool::new(false),
-        deadline: Instant::now() + Duration::from_secs_f64(remaining_ms / 1000.0),
+        registered,
+        deadline: registered + Duration::from_secs_f64(remaining_ms / 1000.0),
         owner_key,
         epoch,
         request_id,

@@ -68,7 +68,7 @@ const UsePromotedMemoryInput = Schema.Struct({
 const findMemory = {
   name: "find_memory",
   description:
-    "Search earlier conversations and promoted memory across allowed projects. supersededBy marks corrections/retractions; latest names where those chains end (read the head before relying on it; heads are interpretations, not user confirmation; branched is an anomaly: read every head and ask the user unless the originals show they cover different facts); ask about unconfirmedChallenges and unconfirmedAfter.",
+    "Search earlier conversations and promoted memory across allowed projects. supersededBy marks corrections/retractions; latest names where those chains end (read the head before relying on it; heads are interpretations, not user confirmation; branched is an anomaly: read every head and ask the user unless the originals show they cover different facts); ask about unconfirmedChallenges and unconfirmedAfter. degraded names search paths that were skipped (text: exact-word matching ran out of time); search again with fewer, more specific words when the answer depends on them.",
   parameters: findMemoryInput,
 } as const;
 

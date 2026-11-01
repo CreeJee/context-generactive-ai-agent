@@ -64,10 +64,10 @@ export interface FindResult {
   /** False when more matches exist beyond `limit` or graph expansion stopped at its budget. */
   readonly complete: boolean;
   /**
-   * Search paths that failed and were skipped, e.g. vector search without the model, or the other
-   * projects when reading them ran out of time.
+   * Search paths that failed and were skipped, e.g. vector search without the model, text matching
+   * that ran past its share of the time, or the other projects when reading them ran out of time.
    */
-  readonly degraded: readonly ("vector" | "morph" | "other-projects")[];
+  readonly degraded: readonly ("vector" | "text" | "morph" | "other-projects")[];
   /** Why the other projects were skipped, when `degraded` names them. */
   readonly otherProjectsSkipped?: SkippedRead;
   /**
@@ -145,6 +145,12 @@ const alternate = (lists: readonly (readonly string[])[]) =>
     lists.flatMap((list) => list.slice(rank, rank + 1)),
   ).flat();
 
+/** How per-project rank lists join into one: alternating, own first, or appended per project. */
+const mergeRanks = (
+  lists: readonly (readonly string[])[],
+  merge: SearchTuning["otherProjectMerge"],
+) => (merge === "append" ? lists.flat() : alternate(lists));
+
 /**
  * Whether a query names something exactly: an error code, a path or file name, an identifier, a
  * version, a hash, a port. Such a query is answered by the text match, not by meaning.
@@ -173,14 +179,48 @@ const ChainSource = Schema.Struct({
   created_at: Schema.String,
 });
 
+/**
+ * How many terms of each kind one search sends. A recall question joins recent turns (up to 6000
+ * characters) into hundreds of terms; each short term is checked on every node walked and each
+ * trigram or morph term widens the FTS OR, so long questions ran out of the 2 s budget
+ * (docs/memory-search-measurements.md). Real find_memory questions have at most 8 of each.
+ */
+export const maxSearchTerms = { trigram: 24, short: 8, morph: 24 } as const;
+
+/** Looks like a name: code, a path, a version, an issue number, or a Latin-script acronym. */
+const nameLike = /[0-9_./#@:-]|[a-z][A-Z]|^[A-Z]{2,}$/u;
+
+/**
+ * The terms worth searching first: names before words, then longer before shorter (rarer, so
+ * they discriminate more), then in question order.
+ */
+export const keepTerms = (terms: readonly string[], max: number) =>
+  terms.length <= max
+    ? [...terms]
+    : terms
+        .map((term, index) => ({ term, index, name: nameLike.test(term) }))
+        .sort(
+          (a, b) =>
+            Number(b.name) - Number(a.name) || b.term.length - a.term.length || a.index - b.index,
+        )
+        .slice(0, max)
+        .sort((a, b) => a.index - b.index)
+        .map(({ term }) => term);
+
 /** Splits a question into search terms; trigram FTS needs 3+ characters, shorter terms use LIKE. */
 export function searchTerms(query: string) {
   const terms = EffectArray.dedupe(
     query.split(/[\s,.;:!?()[\]{}"'`]+/u).filter((term) => term.length >= 2),
   );
   return {
-    trigram: terms.filter((term) => term.length >= 3),
-    short: terms.filter((term) => term.length === 2),
+    trigram: keepTerms(
+      terms.filter((term) => term.length >= 3),
+      maxSearchTerms.trigram,
+    ),
+    short: keepTerms(
+      terms.filter((term) => term.length === 2),
+      maxSearchTerms.short,
+    ),
   };
 }
 
@@ -194,12 +234,36 @@ export interface SearchTuning {
    */
   readonly exactFirst: boolean;
   readonly exactTextWeight: number;
+  /**
+   * Drop vector hits scoring more than this below the best vector hit (cosine gap). The vector
+   * list is always full, related or not; a cut trims the tail the other channels must outvote.
+   * 0 keeps every hit.
+   */
+  readonly vectorCut: number;
+  /** RRF weights of the channels in the ordinary (not exact-first) fusion. */
+  readonly vectorWeight: number;
+  readonly textWeight: number;
+  readonly morphWeight: number;
+  /** How the other projects' text and morph ranks join the own project's: alternating, own first. */
+  readonly otherProjectMerge: "alternate" | "append";
 }
 
+/**
+ * The app's tuning, measured against the real-use relevance set and eval:recall
+ * (docs/memory-search-measurements.md S8, 2026-10-30): a heavier vector channel revived
+ * related nodes the other channels pushed out of the top ranks; the appended merge of the
+ * other projects' ranks passed alone but lost MRR when combined with the heavier vector
+ * channel, so it stays alternating.
+ */
 export const searchTuning: SearchTuning = {
   text: true,
   exactFirst: true,
   exactTextWeight: 2,
+  vectorCut: 0,
+  vectorWeight: 2,
+  textWeight: 1,
+  morphWeight: 1,
+  otherProjectMerge: "alternate",
 };
 
 const make = (tuning: SearchTuning) =>
@@ -316,6 +380,15 @@ const make = (tuning: SearchTuning) =>
         textMs: result.textMs,
         morphMs: result.morphMs,
         coverageMs: result.coverageMs,
+        // Inside the text stage: the trigram query, then the short terms that finished. A text
+        // failure spent the rest of textMs on the short term it stopped in.
+        ...optionalProperty("trigramMs", result.trigramMs ?? undefined),
+        shortTermMs: result.shortTermMs,
+        shortTermMaxMs: result.shortTermMaxMs,
+        shortTermsDone: result.shortTermsDone,
+        // Waiting before the worker claimed the read; it already counts against the budget.
+        queueMs: result.queueMs,
+        textUnavailable: result.textUnavailable,
       });
       return yield* Match.value(result.kind).pipe(
         Match.when("cancelled", () => Effect.interrupt),
@@ -343,6 +416,7 @@ const make = (tuning: SearchTuning) =>
                 text: result.textIds,
                 morph: result.morphIds,
                 vectorUnavailable: result.vectorUnavailable,
+                textUnavailable: result.textUnavailable,
                 spans,
                 coverage: {
                   unindexed: result.unindexed,
@@ -387,7 +461,10 @@ const make = (tuning: SearchTuning) =>
           return yield* MorphAnalysisFailed.make({ reason: "not_ready" });
         }
         const [tokens = []] = yield* analyzer.terms([input.query]);
-        return EffectArray.dedupe(tokens).filter((term) => term.length > 0);
+        return keepTerms(
+          EffectArray.dedupe(tokens).filter((term) => term.length > 0),
+          maxSearchTerms.morph,
+        );
       }).pipe(Effect.option);
       const terms = Option.getOrElse(analyzed, (): ReadonlyArray<string> => []);
       const grouped = searchTerms(input.query);
@@ -439,18 +516,29 @@ const make = (tuning: SearchTuning) =>
         ...(Option.isNone(embedded) || scopes.some((scope) => scope.vectorUnavailable)
           ? ["vector" as const]
           : []),
+        ...(scopes.some((scope) => scope.textUnavailable) ? ["text" as const] : []),
         ...(Option.isNone(analyzed) && analyzer.identity !== "none" ? ["morph" as const] : []),
         ...(Result.isFailure(otherSeeds) ? ["other-projects" as const] : []),
       ];
       // The projects' matches are disjoint. Cosine scores compare across reads, so vectors merge
-      // by score; text and morph lists carry only ranks, so their ranks alternate, own first.
+      // by score; text and morph lists carry only ranks, so their ranks alternate, own first
+      // (S8: append passed alone but lost MRR combined with the heavier vector channel).
+      const vectorHits = scopes
+        .flatMap((scope) => scope.vector)
+        .sort((left, right) => right.score - left.score);
+      const bestVector = vectorHits[0]?.score ?? 0;
       return {
-        byVector: scopes
-          .flatMap((scope) => scope.vector)
-          .sort((left, right) => right.score - left.score)
+        byVector: vectorHits
+          .filter((hit) => tuning.vectorCut <= 0 || hit.score >= bestVector - tuning.vectorCut)
           .map((hit) => hit.id),
-        byText: alternate(scopes.map((scope) => scope.text)),
-        byMorph: alternate(scopes.map((scope) => scope.morph)),
+        byText: mergeRanks(
+          scopes.map((scope) => scope.text),
+          tuning.otherProjectMerge,
+        ),
+        byMorph: mergeRanks(
+          scopes.map((scope) => scope.morph),
+          tuning.otherProjectMerge,
+        ),
         spans: MutableHashMap.fromIterable(scopes.flatMap((scope) => [...scope.spans])),
         coverage: {
           // A count over every project, the same in each read.
@@ -477,7 +565,14 @@ const make = (tuning: SearchTuning) =>
                 lists: [byText, ...morph, byVector],
                 weights: [tuning.exactTextWeight, ...morph.map(() => 1), 1],
               })
-            : fuseRanks({ lists: [byVector, byText, ...morph] });
+            : fuseRanks({
+                lists: [byVector, byText, ...morph],
+                weights: [
+                  tuning.vectorWeight,
+                  tuning.textWeight,
+                  ...morph.map(() => tuning.morphWeight),
+                ],
+              });
         const vectorIds = HashSet.fromIterable(byVector);
 
         const walk = yield* graph.traverse(seeds, {

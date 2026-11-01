@@ -209,6 +209,24 @@ it(
             expect(small).toMatchObject({
               result: { kind: "budget-exceeded", vectorIds: [], textIds: [], morphIds: [] },
             });
+            // The text stage alone past its share of the budget drops only the text matches: the
+            // read goes on with the vector and morph channels and coverage, marked textUnavailable,
+            // instead of failing the whole search.
+            const dropped = yield* search("text-overrun", { remainingMs: 600 });
+            expect(OwnerReply.guards["memory-result"](dropped)).toBe(true);
+            expect(dropped).toMatchObject({
+              result: {
+                kind: "success",
+                vectorUnavailable: false,
+                textUnavailable: true,
+                textIds: [],
+              },
+            });
+            if (!OwnerReply.guards["memory-result"](dropped))
+              return yield* NativeOwnerFailed.make({ reason: "invalid-input" });
+            expect(dropped.result.vectorIds.length).toBeGreaterThan(0);
+            expect(dropped.result.morphIds.length).toBeGreaterThan(0);
+            expect(dropped.result.unindexed).toBe(legacy.unindexed);
           }),
         ),
       ),

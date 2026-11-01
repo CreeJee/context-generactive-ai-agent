@@ -6,6 +6,7 @@ import { isTruthy } from "../src/truthy.ts";
 //   vp run eval:recall                    all configurations, both sets
 //   vp run eval:recall "trigram + kiwi"   one configuration
 //   vp run eval:recall --terms            Kiwi terms of the decision corpus and queries
+//   --models-root <dir>                   read the models from <dir>/models instead (a copy)
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { NodeServices } from "@effect/platform-node";
 import { Context, FileSystem } from "effect";
@@ -13,7 +14,7 @@ import { nodePlatform } from "../src/runtime/node-platform.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { path } from "../src/runtime/synchronous-path.ts";
 const { join } = path;
-import { Clock, Console, Duration, Effect, Layer, MutableHashMap, Option } from "effect";
+import { Clock, Console, Duration, Effect, Layer, MutableHashMap, Option, Schema } from "effect";
 import { SecretStore } from "../src/config/secrets.ts";
 import { StorageRoot, defaultStorageRoot } from "../src/config/storage-root.ts";
 import { memoryAgentLayer } from "../src/layers.ts";
@@ -26,8 +27,9 @@ import {
 } from "../src/memory/embedding/embedder.ts";
 import { Indexer } from "../src/memory/embedding/indexer.ts";
 import { MorphAnalyzer, kiwiModel } from "../src/memory/morph/analyzer.ts";
+import { optionalProperty } from "../src/optional-property.ts";
 import { Nodes } from "../src/memory/nodes.ts";
-import { MemorySearch } from "../src/memory/search.ts";
+import { MemorySearch, searchTuning, type SearchTuning } from "../src/memory/search.ts";
 import { Projects } from "../src/projects/projects.ts";
 import { Sessions } from "../src/sessions/sessions.ts";
 import {
@@ -38,7 +40,33 @@ import {
 } from "./recall-corpus.ts";
 import { technicalQueries, technicalSessions } from "./recall-technical.ts";
 
-const home = await Effect.runPromise(defaultStorageRoot);
+const modelsRootAt = process.argv.indexOf("--models-root");
+const modelsRoot = modelsRootAt === -1 ? undefined : process.argv.splice(modelsRootAt, 2)[1];
+const tuningAt = process.argv.indexOf("--tuning");
+const TuningOverride = Schema.Struct({
+  vectorCut: Schema.optional(Schema.Finite),
+  vectorWeight: Schema.optional(Schema.Finite),
+  textWeight: Schema.optional(Schema.Finite),
+  morphWeight: Schema.optional(Schema.Finite),
+  exactTextWeight: Schema.optional(Schema.Finite),
+  otherProjectMerge: Schema.optional(Schema.Literals(["alternate", "append"])),
+});
+// The evaluation's tuning override exists only when --tuning was given
+// (exactOptionalPropertyTypes), so the value is built whole from the app defaults.
+const tuning: SearchTuning | undefined =
+  tuningAt === -1
+    ? undefined
+    : {
+        ...searchTuning,
+        ...Object.fromEntries(
+          Object.entries(
+            Schema.decodeUnknownSync(TuningOverride)(
+              JSON.parse(process.argv.splice(tuningAt, 2)[1] ?? "{}"),
+            ),
+          ).filter(([, value]) => value !== undefined),
+        ),
+      };
+const home = modelsRoot ?? (await Effect.runPromise(defaultStorageRoot));
 const embeddingModel = join(home, "models", localModel.id, modelFile("quint8"));
 const kiwiFile = join(home, "models", `kiwi-${kiwiModel.version}`, kiwiModel.directory, "cong.mdl");
 const missingModel = await nodePlatform.runPromise(
@@ -117,6 +145,7 @@ const evaluate = Effect.fn("eval.evaluate")(function* (
       interpretAutomatically: false,
       secrets: SecretStore.memory,
       skillsHome: join(base, "home"),
+      ...optionalProperty("searchTuning", tuning),
     }),
   );
   return yield* Effect.provideContext(
@@ -241,7 +270,17 @@ const printRecall = (only: string | undefined) =>
     { discard: true },
   );
 
-const only = process.argv[2];
+// The configuration name is the first argument that is not a flag or a flag's value; --terms
+// itself selects the term printing.
+const arguments_ = process.argv.slice(2);
+const only = arguments_.includes("--terms")
+  ? "--terms"
+  : arguments_.find(
+      (argument, index) =>
+        !argument.startsWith("--") &&
+        arguments_[index - 1] !== "--models-root" &&
+        arguments_[index - 1] !== "--tuning",
+    );
 if (only === "--terms") {
   await runNativeEffect(printTerms);
   process.exit(0);

@@ -8,12 +8,21 @@ use napi_derive::napi;
 use rusqlite::{params_from_iter, types::Value, Connection, OpenFlags};
 use std::{
     collections::{HashMap, HashSet},
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 const MAX_BYTES: usize = 1_048_576;
+/// What the text stage leaves of the read's budget for morph and coverage. Past that point the
+/// text matches are dropped (`text_unavailable`) and the read goes on, instead of the whole read
+/// failing on a slow text query (docs/decisions.md, 2026-10-30).
+const TEXT_RESERVE: Duration = Duration::from_millis(600);
 // Same terms as the `nodes_embeddable` partial index; spelled differently, SQLite would not use it.
 const EMBEDDED_KINDS: &str = "n.kind IN ('user', 'assistant', 'topic')";
 const MEANINGFUL: &str ="length(trim(n.text, char(9,10,11,12,13,32,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279))) > 0 AND NOT EXISTS (SELECT 1 FROM memory_graph_suppressed_nodes s WHERE s.node_seq = n.seq)";
+// For the text and morph queries. A node one of their terms matched is never blank: the terms hold no
+// whitespace (the host splits on it, and \s is the set trimmed above), so checking that again would
+// only read every matched node's whole text, overflow pages and all.
+const NOT_SUPPRESSED: &str = "NOT EXISTS (SELECT 1 FROM memory_graph_suppressed_nodes s WHERE s.node_seq = n.seq)";
 #[napi(object)]
 pub struct NativeReadInput {
     pub allowed_projects: Vec<String>,
@@ -39,6 +48,9 @@ pub struct NativeReadOutput {
     pub vector_scores: Vec<f64>,
     /// Only vector engine failure degrades this channel; control/SQLite failures remain atomic.
     pub vector_unavailable: bool,
+    /// The text stage ran past its share of the budget; its matches were dropped and the read
+    /// went on. `text_ms` is how long it ran.
+    pub text_unavailable: bool,
     pub text_ids: Vec<String>,
     pub morph_ids: Vec<String>,
     pub unindexed: f64,
@@ -52,6 +64,15 @@ pub struct NativeReadOutput {
     pub mapping_ms: f64,
     /// The unindexed and uninterpreted counts.
     pub coverage_ms: f64,
+    /// From the host registering the request (which starts its deadline) to this worker claiming it.
+    pub queue_ms: f64,
+    /// The trigram query inside the text stage; none when it did not run or did not finish.
+    pub trigram_ms: Option<f64>,
+    /// The finished short-term queries inside the text stage: their total, slowest and count.
+    /// On a failure in the text stage, the query that was running is the rest of `text_ms`.
+    pub short_term_ms: f64,
+    pub short_term_max_ms: f64,
+    pub short_terms_done: u32,
     /// The stage a failed read stopped in; none when it succeeded or failed before reading.
     pub failed_stage: Option<String>,
     pub input_logical_bytes: u32,
@@ -87,6 +108,7 @@ impl NativeReadOutput {
             vector_seqs: vec![],
             vector_scores: vec![],
             vector_unavailable: false,
+            text_unavailable: false,
             text_ids: vec![],
             morph_ids: vec![],
             unindexed: 0.,
@@ -99,6 +121,11 @@ impl NativeReadOutput {
             morph_ms: 0.,
             mapping_ms: 0.,
             coverage_ms: 0.,
+            queue_ms: 0.,
+            trigram_ms: None,
+            short_term_ms: 0.,
+            short_term_max_ms: 0.,
+            short_terms_done: 0,
             failed_stage: None,
             input_logical_bytes: 0,
             output_logical_bytes: 0,
@@ -127,6 +154,11 @@ impl NativeReadOutput {
             morph_ms: self.morph_ms,
             mapping_ms: self.mapping_ms,
             coverage_ms: self.coverage_ms,
+            queue_ms: self.queue_ms,
+            trigram_ms: self.trigram_ms,
+            short_term_ms: self.short_term_ms,
+            short_term_max_ms: self.short_term_max_ms,
+            short_terms_done: self.short_terms_done,
             failed_stage: Some(running.0.name().into()),
             ..Self::empty()
         };
@@ -173,6 +205,56 @@ fn scope(projects: &[String]) -> String {
     } else {
         vec!["?"; projects.len()].join(",")
     }
+}
+/// Walks `sql` (rows of id and text, newest first) once and keeps, for each term, the ids of its
+/// newest `k` rows that contain it. Stops when every term has `k`.
+fn short_term_hits(
+    connection: &Connection,
+    sql: &str,
+    params: Vec<Value>,
+    terms: &[String],
+    k: usize,
+    id_budget: usize,
+    check: &dyn Fn() -> std::result::Result<(), Outcome>,
+) -> std::result::Result<Vec<Vec<String>>, Outcome> {
+    let mut statement = connection.prepare(sql).map_err(|_| Outcome::ReadFailed)?;
+    let mut rows = statement
+        .query(params_from_iter(params))
+        .map_err(|_| Outcome::ReadFailed)?;
+    let mut hits: Vec<Vec<String>> = vec![Vec::new(); terms.len()];
+    let mut open = if k == 0 { 0 } else { terms.len() };
+    while open > 0 {
+        let Some(row) = rows.next().map_err(|_| Outcome::ReadFailed)? else {
+            break;
+        };
+        check()?;
+        let text = row
+            .get_ref(1)
+            .map_err(|_| Outcome::ReadFailed)?
+            .as_str()
+            .map_err(|_| Outcome::ReadFailed)?;
+        let mut id: Option<String> = None;
+        for (term, found) in terms.iter().zip(hits.iter_mut()) {
+            if found.len() < k && text.contains(term.as_str()) {
+                if id.is_none() {
+                    let value = row
+                        .get_ref(0)
+                        .map_err(|_| Outcome::ReadFailed)?
+                        .as_str()
+                        .map_err(|_| Outcome::ReadFailed)?;
+                    if value.len() > id_budget {
+                        return Err(Outcome::BudgetExceeded);
+                    }
+                    id = Some(value.to_owned());
+                }
+                found.push(id.clone().unwrap_or_default());
+                if found.len() == k {
+                    open -= 1;
+                }
+            }
+        }
+    }
+    Ok(hits)
 }
 // Explicit completion is required; Drop is only an unwinding fallback.
 struct ReadGuard<'a> {
@@ -224,6 +306,12 @@ impl MemoryReadSession {
         connection
             .execute_batch("PRAGMA query_only=ON")
             .map_err(|_| Error::from_reason("Read session unavailable"))?;
+        // The default page cache is ~2MB; reads sweep GB-scale databases, so a larger cache keeps
+        // repeated cold reads off disk. mmap avoids page copies for the text scans. Bounded so a
+        // shared worker's resident set stays known.
+        connection
+            .execute_batch("PRAGMA cache_size=-262144; PRAGMA mmap_size=1073741824;")
+            .map_err(|_| Error::from_reason("Read session unavailable"))?;
         Ok(Self {
             connection: Some(connection),
             poisoned: std::cell::Cell::new(false),
@@ -252,6 +340,7 @@ impl MemoryReadSession {
                 return out;
             }
         };
+        out.queue_ms = cell.since_registered().as_secs_f64() * 1000.;
         let Ok(inner) = index.index() else {
             out.kind = Outcome::IndexFailed.tag().into();
             return out;
@@ -322,7 +411,20 @@ impl MemoryReadSession {
             finished: false,
         };
         let progress_state = cell.clone();
-        connection.progress_handler(1000, Some(move || progress_state.check().is_err()));
+        // Set only while the text stage runs: interrupting its slow statement at its own deadline.
+        let text_until: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
+        let progress_text = text_until.clone();
+        connection.progress_handler(
+            1000,
+            Some(move || {
+                progress_state.check().is_err()
+                    || progress_text
+                        .lock()
+                        .ok()
+                        .and_then(|until| *until)
+                        .is_some_and(|until| Instant::now() >= until)
+            }),
+        );
         let mut running = (Stage::Candidate, Instant::now());
         let result = (|| -> std::result::Result<(), Outcome> {
             check()?;
@@ -486,11 +588,13 @@ impl MemoryReadSession {
             }
             out.mapping_ms = ms(running.1);
             running = (Stage::Text, Instant::now());
+            let mut short_executions = 0u32;
             let mut rank = |sql: String,
                             first: String,
                             k: u32,
                             target: &mut Vec<String>,
-                            dedupe: bool|
+                            dedupe: bool,
+                            check: &dyn Fn() -> std::result::Result<(), Outcome>|
              -> std::result::Result<(), Outcome> {
                 check()?;
                 let mut values = vec![Value::Text(first)];
@@ -521,16 +625,84 @@ impl MemoryReadSession {
                 }
                 Ok(())
             };
-            if input.text_enabled && !input.allowed_projects.is_empty() {
-                if !input.trigram_terms.is_empty() {
-                    rank(format!("SELECT n.id FROM nodes_fts f JOIN nodes n ON n.seq=f.rowid WHERE {MEANINGFUL} AND nodes_fts MATCH ? AND n.project_id IN ({projects}) ORDER BY f.rank LIMIT ?"), quoted(&input.trigram_terms), input.text_k, &mut out.text_ids, false)?;
+            let text_deadline = Instant::now() + cell.remaining().saturating_sub(TEXT_RESERVE);
+            if let Ok(mut until) = text_until.lock() {
+                *until = Some(text_deadline);
+            }
+            let text_over = || Instant::now() >= text_deadline;
+            let text_check = || {
+                check()?;
+                if text_over() {
+                    Err(Outcome::BudgetExceeded)
+                } else {
+                    Ok(())
                 }
-                for term in &input.short_terms {
-                    // `+` keeps SQLite off the project index: walking every project's nodes and
-                    // sorting all matches never stops early, while the newest-first rowid scan
-                    // stops at the LIMIT.
-                    rank(format!("SELECT n.id FROM nodes n WHERE {MEANINGFUL} AND instr(n.text,?)>0 AND +n.project_id IN ({projects}) ORDER BY n.seq DESC LIMIT ?"), term.clone(), input.text_k, &mut out.text_ids, true)?;
+            };
+            let mut text_ids: Vec<String> = Vec::new();
+            let mut trigram_ms: Option<f64> = None;
+            let (mut short_term_ms, mut short_term_max_ms, mut short_terms_done) = (0., 0., 0u32);
+            let text = (|| -> std::result::Result<(), Outcome> {
+                if input.text_enabled && !input.allowed_projects.is_empty() {
+                    if !input.trigram_terms.is_empty() {
+                        let started = Instant::now();
+                        rank(format!("SELECT n.id FROM nodes_fts f JOIN nodes n ON n.seq=f.rowid WHERE {NOT_SUPPRESSED} AND nodes_fts MATCH ? AND n.project_id IN ({projects}) ORDER BY f.rank LIMIT ?"), quoted(&input.trigram_terms), input.text_k, &mut text_ids, false, &text_check)?;
+                        trigram_ms = Some(ms(started));
+                    }
+                    if !input.short_terms.is_empty() {
+                        let started = Instant::now();
+                        // One newest-first walk for every short term, instead of one walk per term: a
+                        // rare term walked the whole table, and a Korean question has several. Each
+                        // term keeps its newest `text_k` matches, appended in term order as before.
+                        // One project walks its own rows through nodes_project(project_id, seq). For
+                        // several, `+` keeps SQLite on the rowid scan, which stops early, instead of
+                        // reading every listed project's rows to sort them.
+                        let filter = if input.allowed_projects.len() == 1 {
+                            format!("n.project_id IN ({projects})")
+                        } else {
+                            format!("+n.project_id IN ({projects})")
+                        };
+                        let hits = short_term_hits(
+                            connection,
+                            &format!("SELECT n.id, n.text FROM nodes n WHERE {filter} AND {NOT_SUPPRESSED} ORDER BY n.seq DESC"),
+                            project_values(),
+                            &input.short_terms,
+                            input.text_k as usize,
+                            input.output_budget_bytes as usize,
+                            &text_check,
+                        )?;
+                        short_executions += 1;
+                        let mut seen: HashSet<String> = text_ids.iter().cloned().collect();
+                        let mut logical_bytes: usize = text_ids.iter().map(String::len).sum();
+                        for id in hits.into_iter().flatten() {
+                            if seen.insert(id.clone()) {
+                                logical_bytes += id.len();
+                                text_ids.push(id);
+                            }
+                            if logical_bytes > input.output_budget_bytes as usize {
+                                return Err(Outcome::BudgetExceeded);
+                            }
+                        }
+                        let took = ms(started);
+                        short_term_ms = took;
+                        short_term_max_ms = took;
+                        short_terms_done = input.short_terms.len() as u32;
+                    }
                 }
+                Ok(())
+            })();
+            if let Ok(mut until) = text_until.lock() {
+                *until = None;
+            }
+            out.trigram_ms = trigram_ms;
+            out.short_term_ms = short_term_ms;
+            out.short_term_max_ms = short_term_max_ms;
+            out.short_terms_done = short_terms_done;
+            match text {
+                Ok(()) => out.text_ids = text_ids,
+                // Past the text deadline any error is the interrupt or the deadline check; the
+                // read itself still has its reserve, so the other channels go on without text.
+                Err(_) if text_over() && check().is_ok() => out.text_unavailable = true,
+                Err(reason) => return Err(reason),
             }
             out.text_ms = ms(running.1);
             running = (Stage::Morph, Instant::now());
@@ -538,9 +710,10 @@ impl MemoryReadSession {
                 && !input.morph_terms.is_empty()
                 && !input.allowed_projects.is_empty()
             {
-                rank(format!("SELECT n.id FROM nodes_morph f JOIN nodes n ON n.seq=f.rowid WHERE {MEANINGFUL} AND nodes_morph MATCH ? AND n.project_id IN ({projects}) ORDER BY f.rank LIMIT ?"), quoted(&input.morph_terms), input.morph_k, &mut out.morph_ids, false)?;
+                rank(format!("SELECT n.id FROM nodes_morph f JOIN nodes n ON n.seq=f.rowid WHERE {NOT_SUPPRESSED} AND nodes_morph MATCH ? AND n.project_id IN ({projects}) ORDER BY f.rank LIMIT ?"), quoted(&input.morph_terms), input.morph_k, &mut out.morph_ids, false, &check)?;
             }
             out.morph_ms = ms(running.1);
+            out.sqlite_executions += short_executions;
             running = (Stage::Coverage, Instant::now());
             out.unindexed = connection.query_row(&format!("SELECT count(*) FROM nodes n LEFT JOIN node_vectors v ON v.node_seq=n.seq AND v.embedder=? WHERE v.node_seq IS NULL AND {MEANINGFUL} AND {EMBEDDED_KINDS}"), [&input.embedder], |r| r.get::<_,i64>(0)).map_err(|_| Outcome::ReadFailed)? as f64;
             out.sqlite_executions += 1;
@@ -606,6 +779,10 @@ mod tests {
         out.candidate_count = 3;
         out.candidate_ms = 5.;
         out.vector_ms = 6.;
+        out.queue_ms = 2.;
+        out.trigram_ms = Some(3.);
+        out.short_term_ms = 4.;
+        out.short_terms_done = 1;
         let started = Instant::now() - Duration::from_millis(40);
         let failed = out.failure(Outcome::BudgetExceeded, (Stage::Mapping, started));
         assert_eq!(failed.kind, Outcome::BudgetExceeded.tag());
@@ -613,6 +790,10 @@ mod tests {
         assert_eq!(failed.unindexed, 0.);
         assert_eq!(failed.candidate_count, 3);
         assert_eq!((failed.candidate_ms, failed.vector_ms), (5., 6.));
+        assert_eq!(
+            (failed.queue_ms, failed.trigram_ms, failed.short_term_ms, failed.short_terms_done),
+            (2., Some(3.), 4., 1)
+        );
         assert!(failed.mapping_ms >= 40.);
         assert_eq!(failed.text_ms, 0.);
         assert_eq!(failed.failed_stage.as_deref(), Some("mapping"));
@@ -745,6 +926,61 @@ mod tests {
         drop(reader);
         drop(writer);
         std::fs::remove_file(path).unwrap();
+    }
+    #[test]
+    #[cfg(feature = "test-sqlite")]
+    fn one_short_term_walk_matches_a_query_per_term() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch("CREATE TABLE nodes(seq INTEGER PRIMARY KEY,id TEXT,text TEXT,project_id TEXT); CREATE INDEX nodes_project ON nodes(project_id, seq); CREATE TABLE memory_graph_suppressed_nodes(node_seq INTEGER); INSERT INTO memory_graph_suppressed_nodes VALUES(5);").unwrap();
+        let texts = ["오늘 PR", "어제 작업", "PR 오늘 어제", "UI", "오늘 숨김", "작업 오늘", "다른", "PR PR", "오늘"];
+        for (i, text) in texts.iter().enumerate() {
+            let project = if i == 6 { "q" } else { "p" };
+            c.execute("INSERT INTO nodes VALUES(?,?,?,?)", rusqlite::params![i as i64 + 1, format!("n{}", i + 1), text, project]).unwrap();
+        }
+        let terms: Vec<String> = ["오늘", "PR", "작업", "없음", "다른"].iter().map(|t| t.to_string()).collect();
+        for k in [1usize, 2, 3, 10] {
+            let walked = short_term_hits(
+                &c,
+                &format!("SELECT n.id, n.text FROM nodes n WHERE n.project_id IN (?) AND {NOT_SUPPRESSED} ORDER BY n.seq DESC"),
+                vec![Value::Text("p".into())],
+                &terms,
+                k,
+                1024,
+                &|| Ok(()),
+            )
+            .unwrap();
+            let per_term: Vec<Vec<String>> = terms
+                .iter()
+                .map(|term| {
+                    c.prepare(&format!("SELECT n.id FROM nodes n WHERE {MEANINGFUL} AND instr(n.text,?)>0 AND +n.project_id IN (?) ORDER BY n.seq DESC LIMIT ?"))
+                        .unwrap()
+                        .query_map(rusqlite::params![term, "p", k as i64], |r| r.get::<_, String>(0))
+                        .unwrap()
+                        .collect::<rusqlite::Result<Vec<_>>>()
+                        .unwrap()
+                })
+                .collect();
+            assert_eq!(walked, per_term, "k={k}");
+        }
+    }
+    #[test]
+    #[cfg(feature = "test-sqlite")]
+    fn interrupted_text_query_keeps_the_read_transaction() {
+        // The text deadline interrupts a SELECT through the progress handler; the read goes on in
+        // the same snapshot for morph and coverage, so the interrupt must not end the transaction.
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch("CREATE TABLE nodes(seq INTEGER PRIMARY KEY, text TEXT); WITH RECURSIVE r(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM r WHERE i<20000) INSERT INTO nodes SELECT i, 'x' || i FROM r; BEGIN DEFERRED;").unwrap();
+        let interrupt = Arc::new(Mutex::new(Some(Instant::now())));
+        let flag = interrupt.clone();
+        c.progress_handler(100, Some(move || flag.lock().unwrap().is_some()));
+        let error = c
+            .query_row("SELECT count(*) FROM nodes a JOIN nodes b ON instr(a.text, b.text) > 0", [], |r| r.get::<_, i64>(0))
+            .unwrap_err();
+        assert!(matches!(error, rusqlite::Error::SqliteFailure(ref code, _) if code.code == rusqlite::ErrorCode::OperationInterrupted));
+        *interrupt.lock().unwrap() = None;
+        assert!(!c.is_autocommit());
+        assert_eq!(c.query_row("SELECT count(*) FROM nodes", [], |r| r.get::<_, i64>(0)).unwrap(), 20000);
+        c.execute_batch("ROLLBACK").unwrap();
     }
     #[test]
     #[cfg(feature = "test-sqlite")]

@@ -13,7 +13,7 @@
 - `ControlledSearchResult` — napi 객체 `{ kind, ids, scores, nativeWindow, nativeMs }`. `kind`는 Outcome 태그 문자열이다
 - `MemoryReadSession` — napi 클래스. `new(databasePath)`는 읽기 전용 SQLite 연결을 연다. `close()`, `search(index, input, token, ownerKey, epoch, requestId) -> NativeReadOutput`을 제공한다
 - `NativeReadInput` — napi 객체. `allowedProjects`, `embedder`, `query?`, `trigramTerms`, `shortTerms`, `morphTerms`, `vectorK`/`textK`/`morphK`, `textEnabled`, `morphEnabled`, `remainingMs`, `input`/`outputBudgetBytes` 필드를 가진다
-- `NativeReadOutput` — napi 객체. `kind`, `vectorIds`/`vectorSeqs`/`vectorScores`, `vectorUnavailable`, `textIds`, `morphIds`, `unindexed`, `uninterpreted`, `candidateCount`, `sqliteExecutions`, 단계별 `*Ms`, `failedStage?`, `input`/`outputLogicalBytes` 필드를 가진다
+- `NativeReadOutput` — napi 객체. `kind`, `vectorIds`/`vectorSeqs`/`vectorScores`, `vectorUnavailable`, `textUnavailable`, `textIds`, `morphIds`, `unindexed`, `uninterpreted`, `candidateCount`, `sqliteExecutions`, 단계별 `*Ms`(`queueMs`, text 단계 안의 `trigramMs`, `shortTermMs`/`shortTermMaxMs`/`shortTermsDone` 포함), `failedStage?`, `input`/`outputLogicalBytes` 필드를 가진다
 - `sqlite3_turbovec_init` — `#[no_mangle] extern "C"` SQLite 확장 진입점(`node-sqlite` feature). 호스트 SQLite의 API 테이블을 한 번만 초기화한다
 - `sqlite_bridge::ensure_initialized` — crate 내부 함수. 브리지가 `SQLITE_OK_LOAD_PERMANENTLY`로 초기화되지 않았으면 "Node SQLite bridge is not initialized" 오류를 낸다. `test-sqlite` 빌드에서는 항상 Ok를 돌려준다
 - `search_control::{Outcome, claim, admitted, search, outcome}` — crate 내부 제어 API. Outcome 태그는 `success`/`cancelled`/`budget-exceeded`/`invalid-input`/`index-failed`/`read-failed`이다. `claim`은 토큰을 일회성으로 획득하고, `admitted`는 측정 시간 기반으로 진입을 허용한다
@@ -27,13 +27,14 @@
 - `search`의 `allowedIds`가 생략되면 전체 인덱스를 검색하고, 빈 배열이면 결과 없이 반환한다. query 길이는 인덱스 차원과 같아야 한다
 - SQLite는 호스트 Node 프로세스의 것만 쓴다. 두 번째 SQLite를 링크하면 살아 있는 WAL SHM 매핑이 잘릴 수 있다. `node-sqlite`와 `test-sqlite` feature는 함께 켤 수 없고, `test-sqlite`는 Rust 단위 테스트 실행 파일에서만 허용된다(`compile_error`로 강제)
 - `sqlite3_turbovec_init`는 SQL 함수나 DB 효과를 등록하지 않는다. 확장 코드와 API 테이블은 프로세스 수명 동안 상주한다
-- `MemoryReadSession` 경로는 빈 문자열, `":memory:"`, `"file:"`로 시작하는 값을 받지 않는다. 연결은 `READ_ONLY|NO_MUTEX`로 열고 `PRAGMA query_only=ON`을 건다. 권한 확인과 인덱스 게시 직렬화는 호스트가 맡는다
+- `MemoryReadSession` 경로는 빈 문자열, `":memory:"`, `"file:"`로 시작하는 값을 받지 않는다. 연결은 `READ_ONLY|NO_MUTEX`로 열고 `PRAGMA query_only=ON`과 `PRAGMA cache_size=-262144`(256MiB), `PRAGMA mmap_size=1073741824`(1GiB 상한)를 건다. 권한 확인과 인덱스 게시 직렬화는 호스트가 맡는다
 - worker teardown 전에 `MemoryReadSession.close()`로 SQLite를 닫아야 한다. 나중의 N-API GC가 WAL 매핑을 붙잡으면 안 되기 때문이다
 - `EMBEDDED_KINDS`(`n.kind IN ('user', 'assistant', 'topic')`)는 `nodes_embeddable` 부분 인덱스의 조건과 글자까지 같아야 한다. 다르게 쓰면 SQLite가 그 인덱스를 쓰지 않는다
+- text·morph·short 질의의 의미 검사는 숨김 검사(`memory_graph_suppressed_nodes`)만 한다. 일치 행마다 원문 전체를 읽던 `length(trim(text))` 검사는 2026-10-30에 뺐다. 공백만 있는 원문은 검색어 trigram을 가질 수 없어 결과가 같다(docs/memory-search-measurements.md S4). 후보·coverage 쿼리는 `nodes_embeddable` 부분 색인과 맞추려고 이 검사를 유지한다
 - `ReadGuard`는 명시적 `finish`로 끝내야 하고, Drop은 unwinding 대비책일 뿐이다. `finish`는 progress handler를 지우고 ROLLBACK한다. autocommit으로 돌아오지 못하면 세션을 poisoned로 표시하고, 이 표시는 이후에도 유지된다
 - snapshot pinned 표시(`mark_snapshot_pinned`)는 `BEGIN DEFERRED`와 실제 읽기가 성공해 SQLite 스냅샷을 고정한 뒤에만 게시한다
 - `snapshotWasPinned`는 요청 로컬의 단조 이벤트일 뿐 스냅샷이 아직 살아 있다는 증거가 아니다. 실제 완료·취소와 owner 순서는 호스트가 따로 관찰해야 한다
-- 읽기 결과에서 vector 엔진 실패만 vector 채널을 degrade한다(`vectorUnavailable=true`). 제어 실패와 SQLite 실패는 원자적으로 실패한다. 호출자는 제어 상태를 먼저 확인해야 한다
+- 읽기 결과에서 vector 엔진 실패만 vector 채널을 degrade한다(`vectorUnavailable=true`). text 단계가 자기 몫의 시간(남은 예산에서 600ms를 남긴 시점)을 넘으면 그때까지의 text 결과를 버리고 `textUnavailable=true`로 mark해 읽기를 계속한다(`read_session.rs`의 `TEXT_RESERVE`). 제어 실패와 SQLite 실패는 원자적으로 실패한다. 호출자는 제어 상태를 먼저 확인해야 한다
 - 실패한 읽기 출력에는 히트나 coverage가 없다. 끝난 단계의 시간, 지금까지 잰 실행 중 단계의 시간, 그리고 `failedStage`만 담는다
 - 읽기 입력 검증 조건: input/output 예산은 1~1,048,576바이트이다. query는 차원이 일치하고 유한하며 |x|<1e16이어야 하고, 그때 `vectorK`>0이어야 한다. text/morph가 켜져 있으면 해당 k>0이어야 한다. 문자열은 비어 있지 않고 65536바이트 이하여야 한다. 어긴 입력은 `invalid-input`이 된다
 - `SearchControl` 등록 조건: token/ownerKey/epoch/requestId는 비어 있지 않고 256바이트 이하여야 한다. `remainingMs`는 유한하고 0~86,400,000 범위여야 한다. 동시 등록은 최대 4096개이고, 같은 seed는 중복 등록할 수 없다

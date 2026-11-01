@@ -97,6 +97,8 @@ export interface NativeReadOutput {
   vectorScores: number[];
   /** Vector engine alone failed; text/morph/coverage remain from the same clean snapshot. */
   vectorUnavailable: boolean;
+  /** Text stage results were dropped mid-read to keep the read alive; vector/morph/coverage remain. */
+  textUnavailable: boolean;
   textIds: string[];
   morphIds: string[];
   unindexed: number;
@@ -110,6 +112,14 @@ export interface NativeReadOutput {
   mappingMs: number;
   /** The unindexed and uninterpreted counts. */
   coverageMs: number;
+  /** From the host registering the request (which starts its deadline) to the worker claiming it. */
+  queueMs: number;
+  /** The trigram query inside the text stage; none when it did not run or did not finish. */
+  trigramMs?: number | null;
+  /** The finished short-term queries inside the text stage: total, slowest and count. */
+  shortTermMs: number;
+  shortTermMaxMs: number;
+  shortTermsDone: number;
   /** The stage a failed read stopped in; none when it succeeded or failed before reading. */
   failedStage?: "candidate" | "vector" | "mapping" | "text" | "morph" | "coverage" | null;
   inputLogicalBytes: number;
