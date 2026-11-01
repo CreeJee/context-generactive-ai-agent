@@ -2001,6 +2001,14 @@
 - 프로젝트 추가 버튼은 `폴더 열기`다. 서버(`POST /api/projects/pick`)가 실행 중인 기기의 폴더 대화상자(macOS `osascript choose folder`, Windows `FolderBrowserDialog`, Linux `zenity`·`kdialog`)를 띄우고 고른 경로만 돌려준다. 등록은 기존 `POST /api/projects`와 경로 검사를 그대로 거친다. 로컬 앱이라 서버 기기가 사용자 기기다.
 - 이미 목록에 있는 폴더를 고르면 그 프로젝트를 선택한다. 대화상자가 없는 호스트이거나 고른 폴더가 거부되면 경로 입력 대화상자를 연다(거부 사유와 고른 경로를 채워서). 취소하면 아무것도 하지 않는다.
 
+### 실행 중인 백그라운드 작업을 상태줄 팝오버로 표시 (2026-10-30)
+
+- 현재 세션에서 아직 돌고 있는 백그라운드 작업(`background_shell`, `background_external_agent`)은 입력창 아래 상태줄 왼쪽, 컨텍스트 표시(`ContextMeter`)의 반대편에 `백그라운드 N개`(`BackgroundTaskIndicator`)로 보인다. 누르면 shadcn Popover로 목록이 열린다. Work Trace 패널을 열지 않아도, 입력창 위 공간을 차지하지 않고 무엇이 돌고 있는지 알 수 있게 하기 위해서다. 처음에는 입력창 위에 목록을 늘어놓았으나 자리를 많이 차지해 상태줄로 옮겼다.
+- 상태가 queued·running·waiting·resuming이고 보관·삭제 요청이 없는 작업만 센다. 남은 작업이 없으면 표시를 그리지 않고, 컨텍스트 값이 아직 없는 대화라도 돌고 있는 작업이 있으면 상태줄을 그린다. 팝오버 항목은 종류(셸 명령/외부 에이전트), 제목(없으면 요청), 지난 시간, 마지막 heartbeat 단계를 보이고, 누르면 `work-trace:open`으로 Work Trace 상세를 연다.
+- 새 API나 구독 없이 `chat-panel`이 이미 쓰는 `useWorkTrace(sessionId)`의 작업 목록을 거른다. 갱신은 그 SSE를 따른다.
+- 우선 목록만 둔다. 중지·재시도 버튼은 목록을 써 본 뒤 정한다(사람이 쓰는 취소 API는 아직 없고 모델 도구 `cancel_background_task`만 있다).
+- Work Trace 패널은 그대로 둔다. 메시지 안 작업 카드와 이 팝오버가 상세 화면으로 쓰고 있어서, 정리 여부는 사용해 본 뒤 따로 정한다.
+
 ## 배포·개발 환경·성능
 
 ### 배포: 실행 파일 (2026-09-15)

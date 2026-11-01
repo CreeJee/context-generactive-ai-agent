@@ -1,5 +1,6 @@
 import type { TraceTaskView } from "memory-agent";
 import { describe, expect, test } from "vite-plus/test";
+import { backgroundKindLabel, runningBackgroundTasks } from "./background-tasks";
 import { taskForToolCall } from "./work-trace";
 
 const task = (id: string, parentToolCallId: string): TraceTaskView => ({
@@ -44,5 +45,32 @@ describe("Work Trace task-card placement", () => {
       latestAttemptId: "attempt-second",
     });
     expect(taskForToolCall(tasks, "tool-call-a")).not.toBe(taskForToolCall(tasks, "tool-call-b"));
+  });
+});
+
+describe("running background tasks", () => {
+  test("keeps only unfinished background_* tasks and labels their kind", () => {
+    const background = (
+      id: string,
+      agentName: string,
+      status: TraceTaskView["status"],
+      extra: Partial<TraceTaskView> = {},
+    ): TraceTaskView => ({ ...task(id, `call-${id}`), agentId: null, agentName, status, ...extra });
+    const tasks = [
+      background("shell", "background_shell", "running"),
+      background("agent", "background_external_agent", "queued"),
+      background("done", "background_shell", "completed"),
+      background("failed", "background_shell", "failed"),
+      background("cancelled", "background_shell", "cancelled"),
+      background("interrupted", "background_shell", "interrupted"),
+      background("archived", "background_shell", "running", { archivedAt: 3 }),
+      background("deleting", "background_shell", "running", { deleteRequestedAt: 3 }),
+      task("subagent", "call-subagent"),
+    ];
+
+    const running = runningBackgroundTasks(tasks);
+
+    expect(running.map(({ id }) => id)).toEqual(["shell", "agent"]);
+    expect(running.map(backgroundKindLabel)).toEqual(["셸 명령", "외부 에이전트"]);
   });
 });

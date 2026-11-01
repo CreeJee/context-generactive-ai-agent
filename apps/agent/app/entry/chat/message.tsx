@@ -276,7 +276,8 @@ const activeTaskStatuses: readonly TraceTaskView["status"][] = [
   "resuming",
 ];
 
-function elapsed(task: TraceTaskView) {
+/** How long a task has run, or ran, in short Korean units. */
+export function elapsed(task: TraceTaskView) {
   const milliseconds = Math.max(
     0,
     (activeTaskStatuses.includes(task.status)

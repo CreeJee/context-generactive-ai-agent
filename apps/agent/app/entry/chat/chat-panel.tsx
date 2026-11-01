@@ -91,6 +91,8 @@ import {
   SlashParse,
   type SlashContext,
 } from "./slash-commands";
+import { BackgroundTaskIndicator } from "./background-task-panel";
+import { runningBackgroundTasks } from "../session/background-tasks";
 
 /** Slash commands: what they can offer, and how the app runs the ones outside this panel. */
 export interface SlashSupport {
@@ -1099,9 +1101,14 @@ function ChatPanel({
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
-          {context && (
-            <div className="flex justify-end px-1 pt-1.5">
-              <ContextMeter context={context} />
+          {(context || runningBackgroundTasks(workTrace.tasks).length > 0) && (
+            <div className="flex items-center gap-2 px-1 pt-1.5">
+              <BackgroundTaskIndicator tasks={workTrace.tasks} />
+              {context && (
+                <div className="ml-auto">
+                  <ContextMeter context={context} />
+                </div>
+              )}
             </div>
           )}
         </div>
