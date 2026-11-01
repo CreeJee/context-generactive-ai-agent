@@ -390,8 +390,8 @@ const verificationToolNames = HashSet.fromIterable(["save_code_skill", "run_skil
 type InternalFollowup = Data.TaggedEnum<{
   notification: {};
   workflow: { readonly afterRunId: string };
-  /** The next turn is the steered message at the head of the queue, sent with no page needed. */
-  steered: {};
+  /** The next turn is the message at the head of the queue, sent with no page needed. */
+  queued: {};
   /** The kanban loop needs the model's judgement on the board. */
   kanban: { readonly reasons: readonly KanbanAttentionReason[] };
 }>;
@@ -679,19 +679,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     ),
     Effect.forkScoped,
   );
-  // An owner that vanished without releasing: like a release, nothing will send its waiting
-  // messages, and read-only pages hear the session is free so one can take over.
-  yield* leases.onExpired((sessionId) =>
-    Effect.gen(function* () {
-      if (!isTruthy(yield* liveRuns.get(sessionId)))
-        yield* queue.holdWaiting(sessionId, "pageLeft");
-      yield* events.publishSession(sessionId, "queue");
-      yield* events.publishSession(sessionId, "run-state");
-    }).pipe(
-      // No caller waits on the sweep; a failed hold is reported, and the next sweep goes on.
-      Effect.catch(logFailure("Queued messages were not held")),
-    ),
-  );
+  // An owner that vanished without releasing: read-only pages hear the session is free so one can
+  // take over.
+  yield* leases.onExpired((sessionId) => events.publishSession(sessionId, "run-state"));
   /** The run's record, when it belongs to the session. */
   const sessionRun = (sessionId: string, runId: string) =>
     Effect.map(
@@ -950,14 +940,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     switch (run?.status) {
       case "completed":
         yield* settleNewGoal(sessionId, runId);
-        if ((yield* leases.view(sessionId, null)).state === "free")
-          yield* queue.holdWaiting(sessionId, "pageLeft");
         return;
       case "failed":
       case "aborted":
       case undefined:
         yield* settleNewGoal(sessionId, runId);
-        yield* queue.holdWaiting(sessionId, "stopped");
+        yield* queue.holdWaiting(sessionId);
         return;
       case "interrupted":
       case "running":
@@ -978,7 +966,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     yield* settleQueueAfter(sessionId, runId).pipe(
       Effect.catch((error) =>
         logFailure("Queue settlement failed")(error).pipe(
-          Effect.andThen(queue.holdWaiting(sessionId, "stopped")),
+          Effect.andThen(queue.holdWaiting(sessionId)),
         ),
       ),
       Effect.catch((error) =>
@@ -1431,28 +1419,24 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         if (previousRun?.status === "aborted")
           return ChatStart.Following({ log: runLogs.of(runId), after: "-1" });
         // Internal completion turns carry operational context only, never a synthetic user turn.
-        // Resolve at request time, not from the page's stale queue snapshot. Ignore the client's
-        // placeholder turn altogether, including its text and attachments.
-        const queuedNext =
-          InternalFollowup.$is("steered")(internalFollowup) || forwardedProps?.queuedNext === true;
+        // The queued next turn is the head of the queue as it is now.
+        const queuedNext = InternalFollowup.$is("queued")(internalFollowup);
         const next = queuedNext ? yield* queue.claimNext(sessionId) : null;
         if (queuedNext && !isTruthy(next)) return refused({ error: "queued_message_not_next" });
         yield* Ref.set(claimedNext, next?.id ?? null);
         const queuedId = next?.id;
-        const nextMessage = isTruthy(next) ? [yield* delivery.toUserMessage(next)] : [];
         // The thread already holds the conversation, so an internal follow-up brings only the
-        // steered message. A queued next turn takes the place of the page's placeholder turn.
+        // queued message.
         const messages =
           internalFollowup !== null
-            ? nextMessage
-            : [
-                ...(isTruthy(next) ? incomingMessages.slice(0, -1) : incomingMessages),
-                ...nextMessage,
-              ];
+            ? isTruthy(next)
+              ? [yield* delivery.toUserMessage(next)]
+              : []
+            : incomingMessages;
 
         // A new user turn ends the list; a continuation (tool result, approval) does not.
         const turn =
-          internalFollowup !== null && !InternalFollowup.$is("steered")(internalFollowup)
+          internalFollowup !== null && !InternalFollowup.$is("queued")(internalFollowup)
             ? null
             : Option.getOrNull(
                 Option.map(EffectArray.last(messages), ({ content }) => userTurn(content)),
@@ -2456,7 +2440,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const discarded = yield* runStore.discardPendingInterrupts(sessionId);
         const workflow = yield* workflows.get(sessionId);
         yield* workflows.finishRun(sessionId, workflow.phase);
-        yield* queue.holdWaiting(sessionId, "stopped");
+        yield* queue.holdWaiting(sessionId);
         return { discarded };
       }).pipe(Effect.catchTag("SessionNotFound", unknownSession)),
 
@@ -2581,17 +2565,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         yield* sessions.get(sessionId);
         yield* Match.value(action).pipe(
           Match.when("claim", () => leases.claim(sessionId, holder)),
-          Match.when("release", () =>
-            Effect.gen(function* () {
-              yield* leases.release(sessionId, holder);
-              // The page is gone: nothing will send its waiting messages as a next turn.
-              if (
-                !isTruthy(yield* liveRuns.get(sessionId)) &&
-                (yield* leases.view(sessionId, null)).state === "free"
-              )
-                yield* queue.holdWaiting(sessionId, "pageLeft");
-            }),
-          ),
+          Match.when("release", () => leases.release(sessionId, holder)),
           Match.exhaustive,
         );
         return yield* leases.view(sessionId, holder);
@@ -2750,10 +2724,16 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         return yield* relayed.pending(sessionId);
       }),
 
-    /** Edits, removes or confirms one queued message; a removed one answers null. */
+    /**
+     * Edits, removes or confirms one queued message; a removed one answers null. Anything but an
+     * unsaved draft may free the head, which the server then sends if nothing runs.
+     */
     editQueued: (sessionId: string, holder: string | null, id: string, edit: QueueEdit) =>
       refuseOtherHolder(sessionId, holder).pipe(
         Effect.andThen(applyEdit(sessionId, id, edit)),
+        Effect.tap(() =>
+          Effect.when(wakeNotifications(sessionId), Effect.succeed(!QueueEdit.$is("edit")(edit))),
+        ),
         Effect.catchTag("QueueChangeRefused", ({ reason }) =>
           Effect.fail({ error: `queue_${reason}` } as const),
         ),
@@ -2799,15 +2779,15 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         if (session.archivedAt !== null) return;
         const last = yield* lastRun(sessionId);
         if (!isTruthy(last)) return;
-        // A steered message reaches the model whether or not a page is open: after a normal finish
-        // the server sends it as the next turn. If that cannot start, the user confirms it instead.
+        // A queued message reaches the model whether or not a page is open: once nothing runs the
+        // server sends it as the next turn. If that cannot start, the user confirms it instead.
         const unsent = queue
-          .holdWaiting(sessionId, "stopped")
+          .holdWaiting(sessionId)
           .pipe(
             Effect.andThen(events.publishSession(sessionId, "queue")),
-            Effect.catch(logFailure("Unsent steered message was not held")),
+            Effect.catch(logFailure("Unsent queued message was not held")),
           );
-        const steered = send(followupRunId, InternalFollowup.steered()).pipe(
+        const queued = send(followupRunId, InternalFollowup.queued()).pipe(
           Effect.onError(() => unsent),
           Effect.tap((started) => Effect.when(unsent, Effect.succeed(Result.isFailure(started)))),
           Effect.flatMap(drain),
@@ -2875,12 +2855,14 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           }
           yield* drain(started);
         });
+        // A run waiting for approvals goes on with their answers first. After a cancel or a failure
+        // waiting messages are held, so one waiting now was confirmed by the user since.
         yield* Effect.when(
-          steered,
+          queued,
           Effect.map(
             queue.snapshot(sessionId),
             (snapshot) =>
-              last.status === "completed" && NextDelivery.$is("server")(snapshot.nextDelivery),
+              last.status !== "interrupted" && NextDelivery.$is("server")(snapshot.nextDelivery),
           ),
         ).pipe(
           Effect.flatMap(Option.match({ onSome: () => Effect.void, onNone: () => automatic })),

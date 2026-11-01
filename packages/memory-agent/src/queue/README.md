@@ -8,7 +8,7 @@
 
 - `MessageQueue` — `Context.Service`(`queue.ts`)이며 `MessageQueue.layer`로 제공한다. `SqlClient.SqlClient`, `Crypto.Crypto`가 필요하다. run이 답하는 동안 보낸 후속 메시지를 에이전트에 닿을 때까지 순서대로 보관한다.
 - `MessageQueue.list(sessionId, recentRunId)` — 아직 전달되지 않은 메시지와 `recentRunId`로 전달된 메시지를 `seq` 순으로 돌려준다.
-- `MessageQueue.snapshot(sessionId, recentRunId?)` — `QueueSnapshot`(items와 `nextDelivery`)을 만든다. 첫 비종결 항목으로 ready/server/blocked/empty를 판단하는 참고용 뷰다.
+- `MessageQueue.snapshot(sessionId, recentRunId?)` — `QueueSnapshot`(items와 `nextDelivery`)을 만든다. 첫 비종결 항목으로 server/blocked/empty를 판단하는 참고용 뷰다. 첫 항목이 waiting이면 steered 여부와 상관없이 `server`다. 아무것도 돌지 않으면 서버가 그 메시지를 다음 턴으로 보낸다(2026-11-02).
 - `MessageQueue.add(sessionId, text, attachmentIds, steered)` — 끝에 waiting 메시지를 추가한다. steered이면 앞선 waiting 메시지도 모두 steered로 바꾼다(트랜잭션).
 - `MessageQueue.get(sessionId, id)` — 단건 조회이며, 없으면 `null`이다.
 - `MessageQueue.edit` / `save` / `remove` / `confirm` — 편집 초안 저장, 편집 저장, 삭제, held·failed 메시지 재전송 확인을 한다. 거부하면 `QueueChangeRefused`로 실패한다.
@@ -23,7 +23,7 @@
 - `queueDeliveredEvent` — `"memory-agent.queue.delivered"` 문자열이다. 이번 run에서 큐 메시지가 에이전트에 닿았음을 페이지에 알리는 커스텀 스트림 이벤트 이름이며, `delivery.ts`에서도 재export한다.
 - `QueueItemState` — Schema `TaggedUnion`의 타입과 그 `Data.taggedEnum` 생성자다: `waiting{steered}`, `editing{draft}`, `held{draft|null}`, `delivered{via, runId}`, `failed{reason}`.
 - `QueuedMessage` — `{ id, seq, text, attachmentIds, state, createdAt }` Schema다.
-- `NextDelivery` — Schema `TaggedUnion`의 타입과 그 `Data.taggedEnum` 생성자다: `ready`, `server`, `blocked{messageId, reason: "editing"|"held"}`, `empty`.
+- `NextDelivery` — Schema `TaggedUnion`의 타입과 그 `Data.taggedEnum` 생성자다: `server`, `blocked{messageId, reason: "editing"|"held"}`, `empty`.
 - `QueueSnapshot` — `{ items, nextDelivery }` Schema다.
 - `QueueEdit` — 페이지가 요청하는 변경이다: `edit{draft}`, `save{text}`, `remove`, `confirm`. `QueueEdit`은 `Data.taggedEnum` 생성자, `QueueEditRequest`는 요청 본문이 읽는 Schema다.
 - `QueueRequest` — 페이지가 run 도중 보내는 메시지 `{ text, attachmentIds, mode: "queue"|"steer" }` Schema다. 앱 API 계약이 쓰므로 `agent/chat.ts`에서 옮겼다.
@@ -38,6 +38,7 @@
 - `change`는 `pending` 검사, 변경 적용, 재조회를 하나의 `sql.withTransaction`에서 수행한다. `remove`도 `pending` 검사와 DELETE를 한 트랜잭션에서 수행한다.
 - `pending`은 없는 메시지(`not_found`), 그 세션에 예약된 메시지(`reserved`), 이미 delivered인 메시지(`delivered`)를 거부한다. delivered 메시지는 다시 바꿀 수 없다.
 - `confirm`은 held·failed에서만 waiting으로 바꾼다. waiting·editing·delivered에서는 `not_held`로 거부한다.
+- `holdWaiting(sessionId)`는 취소·실패·정리 실패·다음 턴 시작 실패 뒤에 waiting 행을 모두 held로 바꾼다. 예약 중인 head는 release될 때 held가 된다. 페이지가 떠난 것만으로는 보류하지 않는다.
 - `edit`에서 held는 held로 남고, 그 밖의 상태는 editing이 된다. `save`에서 held는 held로 남고, 그 밖의 상태는 waiting으로 돌아간다. 두 경우 모두 자리(`seq`)를 유지한다.
 - `MessageQueue` 레이어를 만들 때(새 프로세스) waiting·editing 행을 모두 `held`, `steered = 0`으로 바꾼다. 재시작 뒤에는 사용자가 확인하기 전까지 아무 메시지도 보내지 않는다.
 - 다음 턴 예약은 메모리의 `Ref<HashMap<sessionId, {id, holdOnRelease}>>`에 둔다. 확인과 변경을 하나의 `Ref.modify`에서 하므로 두 fiber가 같은 예약을 잡지 못한다. 세션당 예약은 하나이며, 이 상태는 DB에 저장하지 않는다.

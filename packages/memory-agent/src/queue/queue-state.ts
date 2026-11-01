@@ -45,8 +45,7 @@ export type QueuedMessage = typeof QueuedMessage.Type;
 
 /** Where the next delivery happens, as `QueueSnapshot.nextDelivery` names it. */
 const Delivery = Schema.TaggedUnion({
-  ready: {},
-  /** The head is steered: the server sends it when the run completes, not the page. */
+  /** The head waits: the server sends it as the next turn once nothing runs (2026-11-02). */
   server: {},
   blocked: { messageId: Schema.String, reason: Schema.Literals(["editing", "held"]) },
   empty: {},

@@ -64,11 +64,11 @@ describe("queue snapshot from server", () => {
       NextDelivery.blocked({ messageId: item.id, reason: "held" }),
     );
 
-    const ready = readSnapshot({
+    const waiting = readSnapshot({
       items: [item],
-      nextDelivery: NextDelivery.ready(),
+      nextDelivery: NextDelivery.server(),
     });
-    expect(ready.nextDelivery).toEqual(NextDelivery.ready());
+    expect(waiting.nextDelivery).toEqual(NextDelivery.server());
   });
 
   it.live("a queue edit fetches the latest complete server snapshot", () =>
@@ -81,7 +81,7 @@ describe("queue snapshot from server", () => {
       vi.spyOn(api, "queue").mockResolvedValue(updated);
       const queue = readSnapshot({
         items: [item],
-        nextDelivery: NextDelivery.ready(),
+        nextDelivery: NextDelivery.server(),
       });
       expect(
         yield* sdkCall(() => queue.change(item.id, QueueEdit.edit({ draft: item.text }))),

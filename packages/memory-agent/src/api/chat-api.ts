@@ -126,8 +126,6 @@ export const RunInput = Schema.Struct({
   resume: Schema.optionalKey(Schema.Array(ResumeEntry)),
   forwardedProps: Schema.optionalKey(
     Schema.Struct({
-      /** The turn is the queued message at the head of the queue, not the page's text. */
-      queuedNext: Schema.optionalKey(Schema.Literal(true)),
       imageIntent: Schema.optionalKey(Schema.Literal("generate_image")),
     }),
   ),

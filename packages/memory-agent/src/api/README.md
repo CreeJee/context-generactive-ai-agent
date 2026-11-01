@@ -28,7 +28,7 @@
 - `NoStore` — group의 모든 답(거부 포함)에 `Cache-Control: no-store`를 붙이는 HttpApiMiddleware 서비스 태그(`no-store.ts`). 서버 구현은 pre-response handler로 붙인다
 - `appRefusalStatus` — 앱 API 거부 값의 HTTP 상태. 페이지가 `ApiError.status`를 채울 때 쓴다
 - `AppRefusalCode` — 앱 API 거부가 `error`에 싣는 모든 code의 Schema(`SameSite`의 것 포함). 페이지의 `ApiErrorCode`가 이것과 페이지 자신의 code로 만들어진다
-- `RunInput` — AG-UI `RunAgentInput` 필드 이름을 쓰는 run 요청(`runId`, `parentRunId`, 새 user `messages`, `resume`, `forwardedProps.queuedNext`/`imageIntent`)
+- `RunInput` — AG-UI `RunAgentInput` 필드 이름을 쓰는 run 요청(`runId`, `parentRunId`, 새 user `messages`, `resume`, `forwardedProps.imageIntent`)
 - `ResumeEntry` — interrupt 하나에 대한 페이지의 답(`resolved`/`cancelled`, payload, metadata)
 - `RunEvent` / `RunEventsLost` — SSE 이벤트(id=run 로그 offset, data=JSON 문자열 `AgUiEvent`)와 로그를 읽지 못했을 때의 `run_events_unavailable` 오류
 - `ChatSnapshot` / `ChatMessage` / `MessagePart` / `PendingInterrupts` — 세션 페이지 스냅샷(messages, older 커서, activeRun, interrupts)과 메시지 파트 tagged union(text/thinking/image/tool-call/tool-result)

@@ -1,7 +1,6 @@
-import { Effect, Fiber, Option, Schedule, Schema } from "effect";
+import { Effect, Fiber, Option, Schedule } from "effect";
 import { SqlError } from "effect/sql";
 import { expect, vi } from "vite-plus/test";
-import { ChatMessage } from "../../src/api/chat-api.ts";
 import { RunStore } from "../../src/loop/store.ts";
 import { MessageQueue } from "../../src/queue/queue.ts";
 import { NextDelivery, QueueEdit, QueueItemState } from "../../src/queue/queue-state.ts";
@@ -19,15 +18,6 @@ import {
   until,
   userTexts,
 } from "./tab.ts";
-
-/** The state's case name, for comparing a queue's order at a glance. */
-const stateName = QueueItemState.$match({
-  waiting: () => "waiting",
-  editing: () => "editing",
-  held: () => "held",
-  delivered: () => "delivered",
-  failed: () => "failed",
-});
 
 /** A fresh session with a chosen model whose delayed model turns wait for `release`. */
 const chatSession = Effect.gen(function* () {
@@ -231,7 +221,7 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
         expect(yield* queue.claimNext(sessionId)).toBeNull();
         expect(yield* queue.deliverable(sessionId)).toEqual([]);
         yield* queue.remove(sessionId, barrier.id);
-        expect((yield* queue.snapshot(sessionId)).nextDelivery).toEqual(NextDelivery.ready());
+        expect((yield* queue.snapshot(sessionId)).nextDelivery).toEqual(NextDelivery.server());
         expect((yield* queue.deliverable(sessionId)).map((message) => message.id)).toEqual([
           next.id,
         ]);
@@ -251,7 +241,7 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
       const second = yield* queue.add(sessionId, "second", [], false);
       const barrier = yield* queue.add(sessionId, "held", [], false);
       const behind = yield* queue.add(sessionId, "behind", [], false);
-      yield* queue.holdWaiting(sessionId, "stopped");
+      yield* queue.holdWaiting(sessionId);
       yield* queue.confirm(sessionId, first.id);
       yield* queue.confirm(sessionId, second.id);
       expect((yield* queue.deliverable(sessionId)).map((item) => item.id)).toEqual([
@@ -277,7 +267,7 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
       const queue = yield* MessageQueue;
       const item = yield* queue.add(sessionId, "first", [], false);
       expect((yield* queue.claimNext(sessionId))?.id).toBe(item.id);
-      yield* queue.holdWaiting(sessionId, "stopped");
+      yield* queue.holdWaiting(sessionId);
       expect((yield* queue.get(sessionId, item.id))?.state).toEqual(
         QueueItemState.waiting({ steered: false }),
       );
@@ -304,7 +294,7 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
       const second = yield* queue.add(sessionId, "second", [], false);
       expect(yield* queueOf(sessionId)).toMatchObject({
         items: [{ id: first.id }, { id: second.id }],
-        nextDelivery: NextDelivery.ready(),
+        nextDelivery: NextDelivery.server(),
       });
       yield* queue.edit(sessionId, first.id, "draft");
       expect((yield* queueOf(sessionId)).nextDelivery).toEqual(
@@ -410,129 +400,61 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
     }),
   );
 
-  it.effect("after a normal finish the page sends the next queued message as a turn", () =>
+  it.effect("after a normal finish the server sends each queued message as a turn", () =>
     Effect.gen(function* () {
       const session = yield* chatSession;
       const agent = yield* agentChat;
-      // The page holds the session, so waiting messages are left for it to send.
-      yield* agent.lease(session.id, "tab", "claim");
-      const page = yield* openPage(session.id, "tab");
+      const page = yield* openPage(session.id);
       const sending = yield* sendInBackground(page, "please be slow");
       yield* until(() => session.invocations().length === 1, "the answer to start");
-      const first = yield* enqueue(session.id, "hello again", "queue", "tab");
-      yield* enqueue(session.id, "and once more", "queue", "tab");
-      yield* session.release;
-      yield* Fiber.join(sending);
-      expect(page.answer()).toContain("done");
-      // No tool call happened, so both are still waiting for the page.
-      expect((yield* queueOf(session.id)).items.map((message) => stateName(message.state))).toEqual(
-        ["waiting", "waiting"],
-      );
-
-      // A snapshot captured `first`, but the server must select the current head after an edit.
+      const first = yield* enqueue(session.id, "hello again", "queue");
+      yield* enqueue(session.id, "and once more", "queue");
+      // The server sends the head as it is when the run ends, not as it was queued.
       yield* agent.editQueued(
         session.id,
-        "tab",
+        null,
         first.id,
         QueueEdit.save({ text: "hello, freshly edited" }),
       );
-      yield* page.send("stale client placeholder", { queuedNext: true });
-      expect(page.answer()).toContain("Hello from fast-1");
-      expect(
-        (yield* queueOf(session.id)).items.map((message) => [
-          message.text,
-          stateName(message.state),
-        ]),
-      ).toEqual([
-        ["hello, freshly edited", "delivered"],
-        ["and once more", "waiting"],
+      yield* session.release;
+      yield* Fiber.join(sending);
+      expect(page.answer()).toContain("done");
+
+      // No tool call happened, so each waiting message is a turn of its own, in order.
+      yield* until(() => session.invocations().length === 3, "both queued turns");
+      expect(session.invocations().map((invocation) => invocation.history.at(-1))).toMatchObject([
+        { role: "user", content: "please be slow" },
+        { role: "user", content: "hello, freshly edited" },
+        { role: "user", content: "and once more" },
       ]);
-      expect(yield* userTexts(session.id)).toEqual(["please be slow", "hello, freshly edited"]);
-      expect(
-        session
-          .invocations()[1]
-          ?.history.some(
-            (message) => message.role === "user" && message.content === "hello, freshly edited",
-          ),
-      ).toBe(true);
-    }),
-  );
-
-  it.effect.each([{ head: "empty" }, { head: "editing" }] as const)(
-    "queuedNext with a $head head is refused before POST without recording the placeholder",
-    ({ head }) =>
-      Effect.gen(function* () {
-        const session = yield* chatSession;
-        const queue = yield* MessageQueue;
-        const blocked = Effect.gen(function* () {
-          switch (head) {
-            case "empty":
-              return null;
-            case "editing": {
-              // The page saw a ready head, then the user started editing it.
-              const item = yield* queue.add(session.id, "previously ready", [], false);
-              expect((yield* queue.snapshot(session.id)).nextDelivery).toEqual(
-                NextDelivery.ready(),
-              );
-              yield* queue.edit(session.id, item.id, "unsaved draft");
-              return item.id;
-            }
-          }
-        });
-        const item = yield* blocked;
-        const page = yield* openPage(session.id);
-        expect(
-          yield* Effect.flip(page.send("stale client placeholder", { queuedNext: true })),
-        ).toEqual({ error: "queued_message_not_next" });
-        if (item !== null)
-          expect((yield* queue.get(session.id, item))?.state).toEqual(
-            QueueItemState.editing({ draft: "unsaved draft" }),
-          );
-        expect(yield* userTexts(session.id)).toEqual([]);
-      }),
-  );
-
-  it.effect("queuedNext selects the latest queue head and ignores stale client text", () =>
-    Effect.gen(function* () {
-      const session = yield* chatSession;
-      const queue = yield* MessageQueue;
-      const stale = yield* queue.add(session.id, "original", [], false);
-      yield* queue.add(session.id, "second", [], false);
-      yield* queue.save(session.id, stale.id, "edited on server");
-      const page = yield* openPage(session.id);
-      yield* page.send([], { queuedNext: true });
-      const staleState = (yield* queue.get(session.id, stale.id))?.state;
-      expect(
-        staleState !== undefined && QueueItemState.$is("delivered")(staleState) && staleState.via,
-      ).toBe("next_turn");
-      expect(yield* userTexts(session.id)).toEqual(["edited on server"]);
-      expect(
-        session
-          .invocations()[0]
-          ?.history.some(
-            (message) => message.role === "user" && message.content === "edited on server",
-          ),
-      ).toBe(true);
-      // The stored conversation keeps the queued message as the server sent it.
-      const stored = page.view().messages;
-      expect(stored.find((message) => message.role === "user")?.id).toBe(stale.id);
-      expect(page.texts("user")).toEqual(["edited on server"]);
-      expect(
-        yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Array(ChatMessage)))(stored),
-      ).not.toContain("original");
+      yield* statusOf(session.id).pipe(
+        Effect.repeat({
+          until: (status) => status.running === null && status.lastRun?.status === "completed",
+          schedule: Schedule.spaced(20),
+        }),
+      );
+      expect((yield* queueOf(session.id)).nextDelivery).toEqual(NextDelivery.empty());
+      // The stored conversation keeps the queued message under its queue id.
+      const reloaded = yield* openPage(session.id);
+      expect(reloaded.texts("user")).toEqual([
+        "please be slow",
+        "hello, freshly edited",
+        "and once more",
+      ]);
+      expect(reloaded.view().messages.filter((message) => message.role === "user")[1]?.id).toBe(
+        first.id,
+      );
     }),
   );
 
   it.effect("a failed queue settlement holds what was waiting until the user confirms it", () =>
     Effect.gen(function* () {
       const session = yield* chatSession;
-      const agent = yield* agentChat;
       const runStore = yield* RunStore;
-      // The page holds the session, so a settled finish would leave the message waiting for it.
-      yield* agent.lease(session.id, "tab", "claim");
-      const sending = yield* sendInBackground(yield* openPage(session.id, "tab"), "please be slow");
+      // A settled finish would have the server send the message next.
+      const sending = yield* sendInBackground(yield* openPage(session.id), "please be slow");
       yield* until(() => session.invocations().length === 1, "the answer to start");
-      yield* enqueue(session.id, "and the tests", "queue", "tab");
+      yield* enqueue(session.id, "and the tests", "queue");
       const runId = (yield* statusOf(session.id)).running!.runId;
       const original = runStore.run;
       const lookup = vi.spyOn(runStore, "run").mockImplementation((id) =>
@@ -557,7 +479,7 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
     }),
   );
 
-  it.effect("a cancel holds what was waiting until the user confirms it", () =>
+  it.effect("a cancel holds what was waiting until the user confirms it, then it is sent", () =>
     Effect.gen(function* () {
       const session = yield* chatSession;
       const agent = yield* agentChat;
@@ -572,6 +494,12 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
       expect(held?.state).toEqual(QueueItemState.held({ draft: null }));
       const confirmed = yield* agent.editQueued(session.id, null, held!.id, QueueEdit.confirm());
       expect(confirmed?.state).toEqual(QueueItemState.waiting({ steered: false }));
+      // Confirming is the user's go: with nothing running, the server sends it as the next turn.
+      yield* until(() => session.invocations().length === 2, "the confirmed turn");
+      expect(session.invocations()[1]?.history.at(-1)).toMatchObject({
+        role: "user",
+        content: "never mind",
+      });
     }),
   );
 });
@@ -593,11 +521,11 @@ testAgent({ testProvider: { responder: gatedResponder } })("chat across restarts
         );
 
         expect(yield* texts).toEqual(["first", "second", "third"]);
-        expect((yield* queue.snapshot(sessionId)).nextDelivery).toEqual(NextDelivery.ready());
+        expect((yield* queue.snapshot(sessionId)).nextDelivery).toEqual(NextDelivery.server());
         yield* queue.edit(sessionId, b!.id, "second, half typed");
         // The edited message and everything after it wait; unsaved text is not the message.
         expect(yield* texts).toEqual(["first"]);
-        expect((yield* queue.snapshot(sessionId)).nextDelivery).toEqual(NextDelivery.ready());
+        expect((yield* queue.snapshot(sessionId)).nextDelivery).toEqual(NextDelivery.server());
         // A snapshot is advisory: delivery reselects after each edit.
         yield* queue.edit(sessionId, a!.id, "first draft");
         expect((yield* queue.snapshot(sessionId)).nextDelivery).toEqual(

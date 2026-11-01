@@ -199,14 +199,13 @@ const make = Effect.gen(function* () {
     /** Advisory snapshot; the delivery path always selects again from current queue state. */
     snapshot: (sessionId: string, recentRunId: string | null = null) =>
       Effect.map(listMessages(sessionId, recentRunId), (items): QueueSnapshot => {
-        // Only the first nonterminal entry determines whether the page may request the next turn.
+        // Only the first nonterminal entry determines whether the server sends the next turn.
         // Batch selection for a tool boundary happens separately against the latest queue state.
         const first = Arr.findFirst(items, (item) =>
           QueueItemState.$match(item.state, {
             failed: () => Option.none(),
             delivered: () => Option.none(),
-            waiting: ({ steered }) =>
-              Option.some(steered ? NextDelivery.server() : NextDelivery.ready()),
+            waiting: () => Option.some(NextDelivery.server()),
             editing: () =>
               Option.some(NextDelivery.blocked({ messageId: item.id, reason: "editing" })),
             held: () => Option.some(NextDelivery.blocked({ messageId: item.id, reason: "held" })),
@@ -346,11 +345,9 @@ const make = Effect.gen(function* () {
 
     /**
      * After a cancel or a failed run, waiting messages are not sent on their own any more: they
-     * wait for the user to confirm them. When only the page left (`pageLeft`), steered messages
-     * keep waiting, since the server sends those itself. Steering takes along every waiting message
-     * before it, so the ones held here never stand in front of a steered one.
+     * wait for the user to confirm them.
      */
-    holdWaiting: (sessionId: string, cause: "stopped" | "pageLeft") =>
+    holdWaiting: (sessionId: string) =>
       Effect.gen(function* () {
         // A selected next turn is locked until committed or released. Holding it here would allow
         // a different state to be delivered from the content already selected for this request.
@@ -367,8 +364,7 @@ const make = Effect.gen(function* () {
         });
         yield* sql`
           UPDATE queued_messages SET state = 'held', steered = 0, updated_at = ${yield* now}
-          WHERE session_id = ${sessionId} AND state = 'waiting' AND id != ${reservedId}
-            AND (${cause === "stopped" ? 1 : 0} OR steered = 0)`;
+          WHERE session_id = ${sessionId} AND state = 'waiting' AND id != ${reservedId}`;
       }),
   };
 });

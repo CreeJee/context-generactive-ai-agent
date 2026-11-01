@@ -34,11 +34,9 @@ import {
   eventDecoders,
   type CompactResult,
   type ContextView,
-  NextDelivery,
   QueueEdit,
   QueueItemState,
   type QueuedMessage,
-  type QueueSnapshot,
   ResumeTaskResult,
   type WorkflowPhase,
   type WorkflowState,
@@ -612,42 +610,15 @@ function ChatPanel({
     !waitingForApproval &&
     !mutationBlocked;
 
-  const pendingQueuedStart = useRef(false);
-  /** The snapshot only hints when to start; the server selects the current queued turn. */
-  const sendNextQueued = (snapshot: QueueSnapshot) => {
-    if (!NextDelivery.$is("ready")(snapshot.nextDelivery)) return;
-    if (mutationBlocked) {
-      pendingQueuedStart.current = true;
-      return;
-    }
-    pendingQueuedStart.current = false;
-    // A content-less placeholder is replaced by the server's current queued turn.
-    sendMessage(contentOf("", []), { queuedNext: true });
-  };
-
-  // When this page's run stops, with the messages it took in already read again: after a normal
-  // finish, send what is waiting as the next turn (R03). Not after a cancel or failure.
+  // When this page's run stops, with the messages it took in already read again, read the queue
+  // and the run state again. What waits next the server sends itself (2026-11-02).
   const wasGenerating = useRef(generating);
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const handleRunSettled = useEffectEvent(() =>
     runUiEffect(
-      Effect.gen(function* () {
-        const [snapshot, state] = yield* uiPromise(() =>
-          Promise.all([queue.refresh(), run.refresh()]),
-        );
-        if (
-          !isTruthy(snapshot) ||
-          !isTruthy(state) ||
-          isTruthy(state.running) ||
-          state.lastRun?.status === "interrupted"
-        )
-          return;
-        if (
-          state.lastRun?.status === "completed" &&
-          NextDelivery.$is("ready")(snapshot.nextDelivery)
-        )
-          sendNextQueued(snapshot);
-      }).pipe(Effect.ensuring(Effect.sync(() => setPlacements({})))),
+      uiPromise(() => Promise.all([queue.refresh(), run.refresh()])).pipe(
+        Effect.ensuring(Effect.sync(() => setPlacements({}))),
+      ),
     ),
   );
   useEffect(() => {
@@ -656,13 +627,6 @@ function ChatPanel({
     if (!settled || readOnly) return;
     void handleRunSettled();
   }, [generating, readOnly]);
-  useEffect(() => {
-    if (!pendingQueuedStart.current || mutationBlocked || generating || waitingForApproval) return;
-    pendingQueuedStart.current = false;
-    // Read current server run/queue state again; do not dispatch an old snapshot
-    // when provider readiness or ownership returns after the run finished.
-    void handleRunSettled();
-  }, [mutationBlocked, generating, waitingForApproval]);
 
   // Unsaved edit text is stored as it is typed, so a restart restores it as a draft.
   const saveEditDraft = useEffectEvent((id: string, text: string) =>
@@ -699,25 +663,18 @@ function ChatPanel({
         if (!(editing !== null)) return;
         setComposer(Composer.compose());
         const text = draft.trim();
-        const snapshot = yield* uiPromise(() =>
+        yield* uiPromise(() =>
           queue.change(
             editing.id,
             outcome === "save" && text.length > 0 ? QueueEdit.save({ text }) : QueueEdit.remove(),
           ),
         );
-        // Saved while nothing runs: the queue may be free to go now.
-        if (isTruthy(snapshot) && !generating && !waitingForApproval) sendNextQueued(snapshot);
       }),
     );
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const confirmQueued = (message: QueuedMessage) =>
-    runUiEffect(
-      Effect.gen(function* () {
-        const snapshot = yield* uiPromise(() => queue.change(message.id, QueueEdit.confirm()));
-        if (isTruthy(snapshot) && !generating && !waitingForApproval) sendNextQueued(snapshot);
-      }),
-    );
+    runUiEffect(uiPromise(() => queue.change(message.id, QueueEdit.confirm())));
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const removeQueued = (message: QueuedMessage) =>
