@@ -99,7 +99,7 @@ export function ChatHistory({
           {/* Every child is a scroller item: the first message must come first, so the
               scroller can tell an older page was inserted above it. */}
           <MessageScrollerContent
-            className={cn("mx-auto max-w-3xl gap-5 px-6 pb-6", messages.length > 0 && "pt-6")}
+            className={cn("mx-auto max-w-3xl gap-5 px-4 pb-6", messages.length > 0 && "pt-6")}
           >
             {opened && messages.length === 0 && (
               <Empty className="mt-24">

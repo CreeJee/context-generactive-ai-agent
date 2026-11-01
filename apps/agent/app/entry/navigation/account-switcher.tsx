@@ -1,6 +1,6 @@
 import { cn } from "cn";
 import { Data, DateTime } from "effect";
-import { CheckIcon, ChevronsUpDownIcon, Settings2Icon } from "lucide-react";
+import { CheckIcon, ChevronsUpDownIcon, Settings2Icon, UserIcon } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -232,7 +232,7 @@ export function AccountSwitcherMenu({
           title="계정 추가·수정·로그아웃"
           onClick={onManage}
         >
-          <Settings2Icon />
+          <UserIcon />
         </Button>
       </div>
     </div>
