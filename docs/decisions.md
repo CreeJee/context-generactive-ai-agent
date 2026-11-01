@@ -1900,6 +1900,12 @@
 - 버린 안: 노드는 두고 접힌 프로젝트를 소유 프로젝트의 alias로 조회 때 해석하는 방식. 검색·회상·임베딩 후보(`nodes_embeddable`)·지식 등 `nodes.project_id`로 범위를 정하는 모든 조회가 alias를 알아야 해서, 하나라도 빠지면 접은 대화가 검색에서 사라진다. permit은 한 곳만 바꾸고 10/17 결정("검색 범위는 `nodes.project_id`로 정해져서 벡터는 그대로 둔다")과 그대로 맞는다.
 - `ImportStoreFailed`에 실패 단계 reason(`WorktreeParents`·`Fold`·`Mapping`·`Cursor`·`Title`·`FailureRecord`)을 단다. worker 로그는 `failure`에 `ImportStoreFailed:Fold`처럼 태그와 reason만 따로 남긴다. SQL과 경로는 reason에 넣지 않는다.
 
+### DeltaDB·tryboxi 도입하지 않음 (2026-10-30)
+
+- DeltaDB(delta.dev)와 tryboxi(tryboxi.xyz)를 조사했고, 둘 다 도입하지 않는다.
+  - DeltaDB: 편집과 대화를 CRDT delta로 기록하고 클라우드 sync 서버로 공유하는 Zed의 beta 제품이다. 저장소가 클라우드이고 공유가 핵심이라 로컬 `agent.db`에 기억을 쌓는 이 앱의 방향과 맞지 않는다. CLI 플러그인 계약도 beta라 바뀔 수 있다.
+  - tryboxi: 에이전트용 로컬 microVM 샌드박스(MIT)다. 셸 스킬 샌드박스(#22)의 읽기·`.env`·캐시 노출 한계를 줄일 수 있지만, macOS Apple Silicon에서만 동작하고 Go·Docker로 직접 빌드해야 하며 1인 프로젝트다. 셸 스킬은 계속 srt로 실행한다.
+
 ## UI·클라이언트
 
 ### UI (2026-09-14)
