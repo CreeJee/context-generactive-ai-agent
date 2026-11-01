@@ -62,27 +62,38 @@ export const draftsIn = ({
   readonly storage: LazyArg<DraftStorage>;
   /** Ticks when the tab shows again. */
   readonly shown: Atom.Atom<number>;
-}) =>
-  Atom.family((sessionId: string) => {
-    // Nothing is read before the page mounts, so the server's render and the first one match.
-    const draft = Atom.make<Draft>({ text: "", edited: false });
-    return {
-      /** The text; setting it stores it. */
-      text: Atom.writable(
-        (get) => get(draft).text,
-        (ctx, text: string) => {
-          store(storage, sessionId, text);
-          ctx.set(draft, { text, edited: text.length > 0 });
-        },
-      ),
-      /** Mounted by the page: reads the stored text now and each time the tab shows again. */
-      follow: Atom.make((get) => {
-        get(shown);
-        if (!get.once(draft).edited)
-          get.set(draft, { text: stored(storage, sessionId), edited: false });
-      }),
-    };
+}) => {
+  // One atom per family, not one object holding them: `Atom.family` keeps only a weak reference,
+  // and the registry holds a mounted atom but nothing holds a group. A collected group became new
+  // atoms on the next render, with the draft read again from storage, which replaced the text being
+  // typed and broke the IME composition under the caret.
+  // Nothing is read before the page mounts, so the server's render and the first one match.
+  const draft = Atom.family<string, Atom.Writable<Draft>>(() =>
+    Atom.make<Draft>({ text: "", edited: false }),
+  );
+  const text = Atom.family((sessionId: string) =>
+    Atom.writable(
+      (get) => get(draft(sessionId)).text,
+      (ctx, next: string) => {
+        store(storage, sessionId, next);
+        ctx.set(draft(sessionId), { text: next, edited: next.length > 0 });
+      },
+    ),
+  );
+  const follow = Atom.family((sessionId: string) =>
+    Atom.make((get) => {
+      get(shown);
+      if (!get.once(draft(sessionId)).edited)
+        get.set(draft(sessionId), { text: stored(storage, sessionId), edited: false });
+    }),
+  );
+  return (sessionId: string) => ({
+    /** The text; setting it stores it. */
+    text: text(sessionId),
+    /** Mounted by the page: reads the stored text now and each time the tab shows again. */
+    follow: follow(sessionId),
   });
+};
 
 /** The page's drafts in `localStorage`, read again when the tab becomes visible. */
 export const sessionDrafts = draftsIn({

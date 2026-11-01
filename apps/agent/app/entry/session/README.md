@@ -38,6 +38,7 @@
 - `pageIdentity`가 끝나기 전(`identified === false`)에는 claim하지 않는다
 - 관찰 모드(`lease.state !== "checking" && !owning`)에서만 `useObservedRunStateQuery`를 켠다. 관찰 결과가 `free`면 claim을 시도하고, 경쟁하는 페이지 중 하나만 서버가 승인한다
 - draft는 세션마다 키가 따로라서 탭은 자기가 쓰는 세션의 키만 쓴다. 탭끼리 입력을 따라가지 않는다. 같은 세션은 마지막에 입력한 탭의 값이 남는다(2026-11-02)
+- `draft`·`text`·`follow`는 각각 `Atom.family`로 만든다. family는 만든 값을 약하게만 쥐므로, atom 묶음 객체를 family 값으로 두면 GC 뒤 새 atom이 생겨 입력 중인 값이 빈 값으로 깜빡이고 IME 조합이 깨진다. 마운트된 atom은 registry가 쥔다
 - 마운트 전에는 draft를 읽지 않는다. 서버 렌더와 첫 클라이언트 렌더가 같은 빈 값이어야 하기 때문이다
 - 탭이 다시 보일 때는 이 탭이 그 뒤로 입력하지 않은 draft만 저장값으로 바꾼다. 빈 draft는 입력하지 않은 것으로 본다. 그래서 다른 탭이 보낸 글은 사라지고, 보내고 비운 탭은 다른 탭이 쓴 글을 받는다
 - 예전 키 `context-agent-session-drafts`(세션별 Record)는 읽을 때 세션별 키로 옮기고 지운다. 세션별 키에 이미 값이 있으면 덮지 않는다
