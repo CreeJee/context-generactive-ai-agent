@@ -4,7 +4,7 @@ import { runUiEffect, uiPromise } from "../shared/ui-effect";
 import { isTruthy } from "../../truthy.ts";
 import { useEffect, useState } from "react";
 import { loopRetrySchedule } from "memory-agent/definitions";
-import { api, type LeaseView, type SessionRunState } from "../api";
+import { api, type LeaseView } from "../api";
 import { useProjectScope } from "../events/context";
 import { useObservedRunStateQuery } from "../queries/session";
 
@@ -77,20 +77,16 @@ export function pageIdentity() {
 
 export type PageLease = { readonly state: "checking" } | LeaseView;
 
-/** What a read-only page has seen of the session's runs; a change means there is more to show. */
-const runRevision = (state: SessionRunState) =>
-  [state.running?.runId, state.lastRun?.runId, state.lastRun?.status].join("|");
-
 /**
  * Session ownership: owner renewal remains a heartbeat; read-only observation follows SSE. A
- * read-only page takes the session over as soon as it is free.
+ * read-only page takes the session over as soon as it is free. The conversation itself follows
+ * every run, whoever started it (`useAgentChat`).
  */
 export function useSessionLease(sessionId: string) {
   const projectId = useProjectScope("session_lease");
   const [holder, setHolder] = useState(pageHolder);
   const [identified, setIdentified] = useState(false);
   const [lease, setLease] = useState<PageLease>({ state: "checking" });
-  const [revision, setRevision] = useState("");
   const [refused, setRefused] = useState(false);
 
   useEffect(() => {
@@ -136,7 +132,6 @@ export function useSessionLease(sessionId: string) {
   useEffect(() => {
     if (!isTruthy(observed.data) || owning) return;
     setLease(observed.data.lease);
-    setRevision(runRevision(observed.data));
     if (observed.data.lease.state !== "free") return;
     // The owner left or stopped renewing. Pages racing for it ask the server; one wins.
     let current = true;
@@ -184,5 +179,5 @@ export function useSessionLease(sessionId: string) {
       }),
     );
 
-  return { holder, lease, revision, refused, continueHere };
+  return { holder, lease, refused, continueHere };
 }

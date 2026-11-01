@@ -37,7 +37,8 @@
 - `ChatApiHandlers` — `AgentChat` 위의 `chat` 그룹 HttpApiBuilder 핸들러 레이어
 - `BtwApiHandlers` — `BtwChat` 위의 `btw` 그룹 HttpApiBuilder 핸들러 레이어
 - `ChatApiClient` — `HttpApiClient.make(ChatApi)` 클라이언트 Context.Service와 `ChatApiClient.layer`
-- `chatSessions` — 세션 id별 Atom 묶음(`keptAtomGroups`). `state`, `custom`(마지막 CUSTOM 이벤트), `open`, `send`, `answer`, `loadOlder` 제공
+- `chatSessions` — 세션 id별 Atom 묶음(`keptAtomGroups`). `state`, `custom`(마지막 CUSTOM 이벤트), `open`, `send`, `answer`, `loadOlder`, `latest`(페이지가 알려 주는 서버의 최신 run id), `follow`(마운트된 동안 다른 탭이나 서버가 시작한 run을 따라 읽는다) 제공
+- `followRuns(read, sight)` / `RunSight` / `ReadRuns` (`follow-runs.ts`) — 페이지가 시작하지 않은 run을 읽을지 정하는 순수 함수. 처음 본 최신 run은 첫 읽기가 덮은 것으로 두고, 그 뒤 읽지 않은 run이 보이면 페이지가 자기 run을 읽거나 보내는 중이 아닐 때 대화를 한 번 다시 열게 한다
 - `btwThreads` — BTW 스레드 id별 Atom 묶음(`keptAtomGroups`). `view`, `open`, `ask` 제공
 - `pageSize` — 클라이언트가 한 번에 읽는 메시지 수 20
 - `partsOf` — user 메시지 content(문자열 또는 파트 배열)를 표시용 `MessagePart` 배열로 변환
@@ -47,7 +48,7 @@
 
 ## Invariants
 
-- `chat-api.ts`, `app-api.ts`, `app-api/*`, `refusal.ts`, `no-store.ts`, `chat-session.ts`, `btw-thread.ts`, `chat-view.ts`는 서버 코드를 import하지 않는다. 브라우저 번들이 쓰기 때문이다. 계약이 쓰는 도메인 Schema는 각 폴더의 `contracts.ts`(예: `config/contracts.ts`, `kagi/contracts.ts`, `memory/embedding/contracts.ts`, `imports/contracts.ts`, `improve/contracts.ts`, `providers/contracts.ts`, `providers/openai-compatible-config.ts`, `oauth/contracts.ts`, `projects/contracts.ts`, `sessions/contracts.ts`, `mcp/contracts.ts`, `external-agents/contracts.ts`, `skills/contracts.ts`, `kanban/contracts.ts`, `workflow/contracts.ts`, `attachments/contracts.ts`, `providers/image-media-contracts.ts`, `events/contracts.ts`)에서 가져온다. `chat-api.ts`는 `sessionHolderHeader`를 `import type`으로만 가져온다.
+- `chat-api.ts`, `app-api.ts`, `app-api/*`, `refusal.ts`, `no-store.ts`, `chat-session.ts`, `follow-runs.ts`, `btw-thread.ts`, `chat-view.ts`는 서버 코드를 import하지 않는다. 브라우저 번들이 쓰기 때문이다. 계약이 쓰는 도메인 Schema는 각 폴더의 `contracts.ts`(예: `config/contracts.ts`, `kagi/contracts.ts`, `memory/embedding/contracts.ts`, `imports/contracts.ts`, `improve/contracts.ts`, `providers/contracts.ts`, `providers/openai-compatible-config.ts`, `oauth/contracts.ts`, `projects/contracts.ts`, `sessions/contracts.ts`, `mcp/contracts.ts`, `external-agents/contracts.ts`, `skills/contracts.ts`, `kanban/contracts.ts`, `workflow/contracts.ts`, `attachments/contracts.ts`, `providers/image-media-contracts.ts`, `events/contracts.ts`)에서 가져온다. `chat-api.ts`는 `sessionHolderHeader`를 `import type`으로만 가져온다.
 - 앱 API의 거부 code는 group이 달라도 상태가 하나다. 페이지는 `appRefusalStatus`로 거부 값만 보고 상태를 찾는다. 제보의 `report_delivery_failed`·`report_diagnosis_failed`는 `reason` 리터럴마다 스키마가 하나라 상태가 reason을 따른다. 예외는 둘이다. `auth_failed`는 502와 504(`reason: auth_status_timeout`)가 있고, reason이 정해진 504를 먼저 선언해 둘을 가른다. `provider_unavailable`은 설정에 없는 provider의 404와, 선택한 모델의 provider를 지금 쓸 수 없는 503(`provider`를 싣는다, `SelectedProviderUnavailable`)이 있고, `providersRefusals`가 503을 먼저 선언해 둘을 가른다. 새 group의 거부 목록은 `app-api.ts`의 `appRefusals`에 더한다. `appRefusalStatus`와 `AppRefusalCode`가 둘 다 이 목록에서 나온다.
 - holder 헤더 이름은 `x-session-holder`다. `satisfies Lowercase<typeof sessionHolderHeader>`로 `sessions/lease-state.ts`의 헤더 상수와 맞춘다.
 - 세션을 바꾸는 엔드포인트(`run`, `ask`)에는 `SameSite` 미들웨어를 붙인다. 403 cross-site 거부는 `refusals` 목록이 아니라 `SameSite`의 error에 둔다.
@@ -60,6 +61,7 @@
 - Atom 상태는 레지스트리가 아니라 호출 자신의 `get.set`으로 쓴다. 새 호출이 이전 호출을 대체하면 이전 호출의 늦은 쓰기가 버려져, 새 run의 view를 덮어쓰지 않는다.
 - `following`은 스트림이 끝나면 최신 페이지 snapshot을 다시 읽어 `caughtUp`을 적용한다. 그 페이지가 들어올 때까지 `reading`을 유지해 run 메시지가 깜빡이지 않게 한다. `Effect.ensuring`으로 `reading`을 항상 null로 되돌린다.
 - 보낸 user 메시지는 낙관적으로 먼저 표시한다. run 요청이 거부되면(`tapError`) 그 메시지를 view에서 지운다.
+- `follow`는 읽은 run 목록을 `Stream.runFoldEffect`의 누적값으로만 들고, 다시 읽을 때는 `open`을 부른다. 같은 run은 한 번만 다시 연다. 이어 붙지 못한 run은 페이지의 `detached` 안내에 맡긴다. 페이지가 보내거나 답하는 중(`send`·`answer` 대기)이면 그 호출이 자기 run을 읽으므로 끼어들지 않는다.
 - `ChatView.streamed`에 이번 스트림이 처음 이름을 부르는 assistant 메시지가 없으면 그 메시지를 빈 파트부터 다시 쓴다. 재접속 스트림은 run을 처음부터 다시 읽기 때문이다. 새 스트림을 시작할 때 `streamStarted`로 이 집합을 비운다.
 - `caughtUp`은 새 snapshot의 첫 메시지보다 앞서 읽은 오래된 메시지를 유지한다. 단, 새 페이지가 그 메시지에 더는 닿지 않으면 버린다. `failure`도 유지한다.
 - `TOOL_CALL_RESULT`는 해당 tool-call을 `complete`로 바꾼다. 같은 `toolCallId`의 이전 tool-result는 하나로 교체한다. 알 수 없는 call에 대한 이벤트는 view를 바꾸지 않는다.

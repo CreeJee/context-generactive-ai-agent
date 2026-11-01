@@ -6,7 +6,7 @@
 
 ## Interface
 
-- `useSessionLease(sessionId)` — 세션 소유권 훅. claim, 20초 갱신, pagehide 때 release beacon, 관찰 모드에서 free가 되면 재claim을 맡고 `{ holder, lease, revision, refused, continueHere }`를 돌려준다
+- `useSessionLease(sessionId)` — 세션 소유권 훅. claim, 20초 갱신, pagehide 때 release beacon, 관찰 모드에서 free가 되면 재claim을 맡고 `{ holder, lease, refused, continueHere }`를 돌려준다
 - `pageHolder()` — sessionStorage `context-agent:page-holder`에 저장된 이 페이지의 holder 토큰을 읽고, 없으면 새 UUIDv4를 만든다
 - `pageIdentity()` — Web Locks로 다른 열린 페이지와 겹치지 않는 holder를 확정하는 모듈 단위 memoized Promise
 - `PageLease` — `{ state: "checking" } | LeaseView` 타입

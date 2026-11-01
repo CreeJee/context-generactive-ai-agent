@@ -1,6 +1,6 @@
 import { Context, Crypto, Effect, Layer, Option, Schema, Stream } from "effect";
 import { HttpApiClient } from "effect/http-api";
-import { Atom } from "effect/reactivity";
+import { AsyncResult, Atom } from "effect/reactivity";
 import { AgUiEvent } from "../loop/chunks.ts";
 import { optionalProperty } from "../optional-property.ts";
 import {
@@ -12,6 +12,7 @@ import {
   type RunInput,
 } from "./chat-api.ts";
 import { applyEvent, caughtUp, type ChatView, streamStarted, viewOf } from "./chat-view.ts";
+import { followRuns, type ReadRuns, type RunSight } from "./follow-runs.ts";
 import { keptAtomGroups } from "./kept-atom-groups.ts";
 
 /**
@@ -63,6 +64,13 @@ export interface Answer {
 
 const isCustom = AgUiEvent.guards.CUSTOM;
 const isText = Schema.is(Schema.String);
+
+/** Two sights that would decide the same. */
+const sameSight = (a: RunSight, b: RunSight) =>
+  a.latest === b.latest &&
+  a.opened === b.opened &&
+  a.reading === b.reading &&
+  a.sending === b.sending;
 
 /** A user message's content as the page shows it. */
 export const partsOf = (content: UserContent): ReadonlyArray<MessagePart> =>
@@ -221,5 +229,40 @@ export const chatSessions = <E>(runtime: Atom.AtomRuntime<ChatApiClient | Crypto
       }),
     );
 
-    return { state, custom, open, send, answer, loadOlder };
+    /** The server's newest run of the session as the page last heard of it (`RunSight.latest`). */
+    const latest = Atom.make<string | null | undefined>(undefined);
+
+    const sight = Atom.make((get): RunSight => ({
+      latest: get(latest),
+      opened: Option.isSome(get(state)),
+      reading: Option.getOrNull(
+        Option.flatMapNullishOr(get(state), ({ reading }) => reading?.runId),
+      ),
+      sending: AsyncResult.isWaiting(get(send)) || AsyncResult.isWaiting(get(answer)),
+    }));
+
+    /**
+     * While the page shows the session, reads the runs another tab or the server itself starts: a
+     * run `followRuns` picks is read by opening the conversation again.
+     */
+    const follow = runtime.fn((_: void, get) =>
+      get.stream(sight).pipe(
+        Stream.changesWith(sameSight),
+        Stream.runFoldEffect(
+          (): ReadRuns => null,
+          (read, seen) => {
+            const next = followRuns(read, seen);
+            return Effect.as(
+              Effect.when(
+                Effect.sync(() => get.set(open, undefined)),
+                Effect.succeed(next.open),
+              ),
+              next.read,
+            );
+          },
+        ),
+      ),
+    );
+
+    return { state, custom, open, send, answer, loadOlder, latest, follow };
   });

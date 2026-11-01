@@ -214,8 +214,8 @@ const isEditable = (message: QueuedMessage) =>
   });
 
 /**
- * One session: follows who may change it, and remounts the conversation of a read-only page when
- * the owning page starts or finishes a run, so the reader sees it live.
+ * One session: follows who may change it. The conversation reads every run as it comes, whichever
+ * page or the server started it (`useAgentChat`), so it is not remounted for one.
  */
 export function SessionView({
   sessionId,
@@ -228,12 +228,12 @@ export function SessionView({
   slash: SlashSupport;
   sendingEnabled: boolean;
 }) {
-  const { holder, lease, revision, refused, continueHere } = useSessionLease(sessionId);
+  const { holder, lease, refused, continueHere } = useSessionLease(sessionId);
   const [syncRevision, setSyncRevision] = useState(0);
   const reading = lease.state === "other" || lease.state === "free";
   return (
     <ChatPanel
-      key={`${reading ? `read:${revision}` : "write"}:sync:${syncRevision}`}
+      key={`${reading ? "read" : "write"}:sync:${syncRevision}`}
       sessionId={sessionId}
       holder={holder}
       lease={lease}

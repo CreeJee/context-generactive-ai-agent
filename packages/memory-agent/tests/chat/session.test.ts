@@ -1,5 +1,5 @@
 import { NodeCrypto } from "@effect/platform-node";
-import { Effect, Layer, Option } from "effect";
+import { Effect, Layer, Option, Stream } from "effect";
 import { HttpServer } from "effect/http";
 import { HttpApiTest } from "effect/http-api";
 import { type AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
@@ -57,5 +57,42 @@ testAgent({ testProvider: {} })("chat session atoms", (it) => {
       expect(yield* Effect.flip(done(atoms.send))).toMatchObject({ error: "session_in_use" });
       expect(yield* shown).toEqual(answered);
     }).pipe(Effect.provideService(AtomRegistry.AtomRegistry, AtomRegistry.make())),
+  );
+
+  it.effect("a page reads a run another page started, once it hears of it", () =>
+    Effect.gen(function* () {
+      yield* selectTestModel();
+      const session = yield* freshSession;
+      const starting = (yield* pageSessions)(session);
+      const reading = (yield* pageSessions)(session);
+      const onReader = Effect.provideService(AtomRegistry.AtomRegistry, AtomRegistry.make());
+      yield* onReader(
+        Effect.gen(function* () {
+          yield* Atom.set(reading.open, undefined);
+          yield* done(reading.open);
+          yield* Atom.set(reading.latest, null);
+          yield* Atom.mount(reading.follow);
+          yield* Atom.set(reading.follow, undefined);
+        }),
+      );
+
+      yield* Atom.set(starting.send, { holder: "tab-a", content: "hi" });
+      yield* done(starting.send);
+      const started = yield* (yield* agentChat).status(session, null);
+      yield* onReader(Atom.set(reading.latest, started.lastRun?.runId ?? null));
+
+      const roles = Atom.toStream(reading.state).pipe(
+        Stream.map(
+          Option.match({
+            onNone: () => [],
+            onSome: ({ view }) => view.messages.map(({ role }) => role),
+          }),
+        ),
+        Stream.filter((shown) => shown.length === 2),
+        Stream.runHead,
+        Effect.timeout("5 seconds"),
+      );
+      expect(yield* onReader(roles)).toEqual(Option.some(["user", "assistant"]));
+    }).pipe(Effect.provideService(AtomRegistry.AtomRegistry, AtomRegistry.make()), Effect.scoped),
   );
 });

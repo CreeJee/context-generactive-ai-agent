@@ -5,6 +5,8 @@ import { AsyncResult, Atom } from "effect/reactivity";
 import { type ChatMessage, Refusal, type ResumeEntry } from "memory-agent/chat-api";
 import { chatSessions, type CustomEvent, type Send } from "memory-agent/chat-session";
 import { useEffect } from "react";
+import { useProjectScope } from "../events/context";
+import { useRunStateQuery } from "../queries/session";
 import { chatRuntime } from "./chat-runtime";
 
 /** The page's sessions on the chat API. */
@@ -35,7 +37,9 @@ export type AnswerProblem = "unsent" | "refused" | "lost";
 
 /**
  * One session's conversation on the chat API. It opens the session's newest messages and rejoins
- * a run still going; `onCustomEvent` gets the app events runs send.
+ * a run still going, and reads the runs another tab or the server itself starts later as they come
+ * (`follow`, told of the newest run by the run state); `onCustomEvent` gets the app events runs
+ * send.
  */
 export function useAgentChat({
   sessionId,
@@ -57,6 +61,13 @@ export function useAgentChat({
   const loadOlder = useAtomSet(atoms.loadOlder, { mode: "promise" });
   useAtomSubscribe(atoms.custom, (event) => Option.map(event, onCustomEvent));
   useEffect(() => open(undefined), [open]);
+
+  const follow = useAtomSet(atoms.follow);
+  useEffect(() => follow(undefined), [follow]);
+  const setLatest = useAtomSet(atoms.latest);
+  const runs = useRunStateQuery(useProjectScope("chat"), sessionId, holder).data;
+  const latest = runs === undefined ? undefined : ((runs.running ?? runs.lastRun)?.runId ?? null);
+  useEffect(() => setLatest(latest), [setLatest, latest]);
 
   const view = Option.map(state, (current) => current.view);
   const interrupts = Option.getOrNull(
