@@ -26,7 +26,8 @@
 - `taskForToolCall` (dual: `(tasks, toolCallId)`) — `parentToolCallId`가 같은 마지막 durable task를 찾는다
 - `TraceConnection` — `"connecting" | "live" | "reconnecting"` 타입
 - `useProjectTraceConnection` (dual: `(projectId, sessionId, live)`) — 라이브 패널이 보일 때 work-trace SSE로 프로젝트 trace 쿼리를 무효화하고 연결 상태를 돌려준다
-- `sessionDraftsAtom` — localStorage 키 `context-agent-session-drafts`에 세션별 미전송 텍스트를 담는 jotai `atomWithStorage`
+- `sessionDrafts(sessionId)` — 세션의 미전송 텍스트 Effect atom 묶음 `{ text, follow }`. `text`를 쓰면 localStorage 키 `context-agent-session-draft:<sessionId>`에 저장하고, 빈 문자열이면 키를 지운다. 페이지가 `follow`를 마운트하면 저장된 값을 읽고, 탭이 다시 보일 때(`visibilitychange`)마다 다시 읽는다
+- `draftsIn({ storage, shown })` — `sessionDrafts`를 만드는 함수. 테스트가 storage와 다시 보임 신호를 바꿔 끼운다
 
 ## Invariants
 
@@ -36,6 +37,10 @@
 - holder는 sessionStorage에 두어 새로고침해도 같은 페이지로 취급한다. 복제된 탭은 Web Lock `context-agent:holder:${holder}`가 이미 잡혀 있으면 새 holder로 바꾼다. 이 lock은 페이지가 사라질 때만 풀린다(`Effect.never`)
 - `pageIdentity`가 끝나기 전(`identified === false`)에는 claim하지 않는다
 - 관찰 모드(`lease.state !== "checking" && !owning`)에서만 `useObservedRunStateQuery`를 켠다. 관찰 결과가 `free`면 claim을 시도하고, 경쟁하는 페이지 중 하나만 서버가 승인한다
+- draft는 세션마다 키가 따로라서 탭은 자기가 쓰는 세션의 키만 쓴다. 탭끼리 입력을 따라가지 않는다. 같은 세션은 마지막에 입력한 탭의 값이 남는다(2026-11-02)
+- 마운트 전에는 draft를 읽지 않는다. 서버 렌더와 첫 클라이언트 렌더가 같은 빈 값이어야 하기 때문이다
+- 탭이 다시 보일 때는 이 탭이 그 뒤로 입력하지 않은 draft만 저장값으로 바꾼다. 빈 draft는 입력하지 않은 것으로 본다. 그래서 다른 탭이 보낸 글은 사라지고, 보내고 비운 탭은 다른 탭이 쓴 글을 받는다
+- 예전 키 `context-agent-session-drafts`(세션별 Record)는 읽을 때 세션별 키로 옮기고 지운다. 세션별 키에 이미 값이 있으면 덮지 않는다
 - `noticeOf`에서 `serverRestartedCode` 오류 검사를 `lastRun.status` switch보다 먼저 한다. restart는 오류로 기록되고 status는 나중에 바뀔 수 있기 때문이다
 - `useRunState.notice`의 우선순위는 `cancelPending`, `generating`(null), `noticeOf(state, page)` 순서다
 - `failureLabel`의 reason 매핑은 `Match.tagsExhaustive`로, stage 매핑은 `Record<AttemptFailureStage, string>`로 둔다. memory-agent에 새 태그나 stage가 생기면 여기도 바꿔야 한다
@@ -47,7 +52,7 @@
 ## Side Effects
 
 - sessionStorage 읽기/쓰기: 키 `context-agent:page-holder` (`pageHolder`, `newHolder`)
-- localStorage: jotai `atomWithStorage` 키 `context-agent-session-drafts`
+- localStorage: 키 `context-agent-session-draft:<sessionId>` 읽기/쓰기/삭제, 예전 키 `context-agent-session-drafts` 읽기·삭제. 접근이 막히면 읽기는 빈 값, 쓰기는 무시한다
 - Web Locks API: `navigator.locks.request("context-agent:holder:<holder>", { ifAvailable: true })`. 페이지가 살아 있는 동안 계속 잡고 있다
 - 네트워크: `api.leaseAction(sessionId, holder, "claim" | "release")` 호출. pagehide 때는 `navigator.sendBeacon("/api/sessions/<id>/lease", { holder, action: "release" })`를 보낸다
 - 타이머: lease 갱신 fiber (`Schedule.spaced(20_000)`, `Effect.delay`, `loopRetrySchedule` 재시도)

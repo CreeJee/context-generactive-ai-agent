@@ -7,7 +7,7 @@ import { attachmentUrl, contextUsageEvent, queueDeliveredEvent } from "memory-ag
 import { cn } from "cn";
 import type { TraceTaskView } from "memory-agent";
 import { Option } from "effect";
-import { useAtom } from "jotai";
+import { useAtomMount, useAtomSet, useAtomValue } from "@effect/atom-react";
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 import { useLoading } from "react-simplikit";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
@@ -60,7 +60,7 @@ import { ReadOnlyBar } from "./read-only-bar";
 import { approvalAnswer, toPendingApproval } from "./pending-approval";
 import { useAgentChat } from "./use-agent-chat";
 import { RunNoticeView } from "../session/run-state";
-import { sessionDraftsAtom } from "../session/session-drafts";
+import { sessionDrafts } from "../session/session-drafts";
 import { useSessionLease, type PageLease } from "../session/session-lease";
 import { useWorkTrace } from "../session/work-trace";
 import { useBackendRestartRequired } from "../shared/use-backend-restart";
@@ -284,8 +284,10 @@ function ChatPanel({
   const mutationBlocked = readOnly || backendRestartRequired || !sendingEnabled;
   const workTrace = useWorkTrace(sessionId);
   const [composer, setComposer] = useState<Composer>(Composer.compose());
-  const [sessionDrafts, setSessionDrafts] = useAtom(sessionDraftsAtom);
-  const composeDraft = sessionDrafts[sessionId] ?? "";
+  const drafts = sessionDrafts(sessionId);
+  useAtomMount(drafts.follow);
+  const composeDraft = useAtomValue(drafts.text);
+  const storeDraft = useAtomSet(drafts.text);
   const draft = Composer.$is("editing")(composer) ? composer.draft : composeDraft;
   const setDraft = (next: string) => {
     if (Composer.$is("editing")(composer)) {
@@ -294,12 +296,7 @@ function ChatPanel({
       );
       return;
     }
-    setSessionDrafts((current) => {
-      if (next.length > 0) return { ...current, [sessionId]: next };
-      const remaining = { ...current };
-      delete remaining[sessionId];
-      return remaining;
-    });
+    storeDraft(next);
   };
   const [dragging, setDragging] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
