@@ -1,4 +1,5 @@
-import { Effect, FileSystem, Layer, Option, Path, Schedule, type Scope } from "effect";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { Context, Effect, FileSystem, Layer, Option, Path, Schedule, type Scope } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { SqlClient } from "effect/sql";
 import { GlobalConfig } from "../config/global-config.ts";
@@ -62,27 +63,61 @@ export const git = (cwd: string, ...args: ReadonlyArray<string>) =>
     spawner.string(ChildProcess.make("git", args, { cwd })),
   ).pipe(Effect.map((text) => text.trim()));
 
-/** A temporary home with a git project holding one commit, and where the owner keeps its data. */
+/**
+ * What every fixture of a test file starts from, made once for the file: a git project holding one
+ * commit and an owner database with every migration applied. Each case copies them: making them
+ * again took seven git processes and every migration, about 0.2 s a case.
+ */
+export class KanbanTemplate extends Context.Service<
+  KanbanTemplate,
+  { readonly project: string; readonly database: string }
+>()("memory-agent/testing/kanban/KanbanTemplate") {
+  static readonly layer = Layer.effect(
+    KanbanTemplate,
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const home = yield* fs.makeTempDirectoryScoped();
+      const project = path.join(home, "project");
+      const database = path.join(home, "agent.db");
+      yield* fs.makeDirectory(project);
+      yield* git(project, "init", "--quiet", "--initial-branch=main");
+      yield* git(project, "config", "user.name", "Card Test");
+      yield* git(project, "config", "user.email", "card@test.invalid");
+      yield* git(project, "config", "commit.gpgsign", "false");
+      yield* fs.writeFileString(path.join(project, "a.txt"), "one\n");
+      yield* git(project, "add", "a.txt");
+      yield* git(project, "commit", "--quiet", "-m", "start");
+      // Closing the connection folds the write-ahead log into the file, so the file is all of it.
+      yield* Effect.scoped(Layer.build(Database.layer(database)));
+      return KanbanTemplate.of({ project, database });
+    }),
+  );
+}
+
+/** The services a kanban test file shares between its cases: Node's and the fixture template. */
+export const kanbanTestLayer = KanbanTemplate.layer.pipe(Layer.provideMerge(NodeServices.layer));
+
+/**
+ * A temporary home with a git project holding one commit, and where the owner keeps its data; both
+ * are copies of the file's `KanbanTemplate`.
+ */
 export const kanbanFixture = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const template = yield* KanbanTemplate;
   const home = yield* canonicalPathEffect(yield* fs.makeTempDirectoryScoped());
   const project = path.join(home, "project");
   const storage = path.join(home, "storage");
-  yield* fs.makeDirectory(project);
+  const database = path.join(storage, "agent.db");
+  yield* fs.copy(template.project, project);
   yield* fs.makeDirectory(storage);
-  yield* git(project, "init", "--quiet", "--initial-branch=main");
-  yield* git(project, "config", "user.name", "Card Test");
-  yield* git(project, "config", "user.email", "card@test.invalid");
-  yield* git(project, "config", "commit.gpgsign", "false");
-  yield* fs.writeFileString(path.join(project, "a.txt"), "one\n");
-  yield* git(project, "add", "a.txt");
-  yield* git(project, "commit", "--quiet", "-m", "start");
+  yield* fs.copyFile(template.database, database);
   return {
     home,
     project,
     storage,
-    database: path.join(storage, "agent.db"),
+    database,
     worktrees: path.join(home, "worktrees"),
   };
 });

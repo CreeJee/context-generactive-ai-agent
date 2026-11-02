@@ -1,7 +1,6 @@
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Deferred, Effect, Layer, Queue, Ref, Scope } from "effect";
 import { expect } from "vite-plus/test";
-import { it } from "@effect/vitest";
+import { layer } from "@effect/vitest";
 import { KanbanSettings } from "../config/kanban-settings.ts";
 import {
   assignCard,
@@ -9,6 +8,7 @@ import {
   card,
   executingBoard,
   kanbanFixture,
+  kanbanTestLayer,
   kanbanOwner,
   replaceGoal,
   scriptedAgent,
@@ -35,117 +35,113 @@ const openOwner = (
 
 const finished: CardAgentOutcome = CardAgentOutcome.Finished({ report: "done" });
 
-/** Node services for a test, built in its scope. */
-const withNode = <A, E, R>(program: Effect.Effect<A, E, R>) =>
-  Effect.flatMap(Layer.build(NodeServices.layer), (context) =>
-    Effect.provideContext(program, context),
-  ).pipe(Effect.scoped);
+layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
+  it.effect(
+    "runs no more cards at once than the concurrency setting, and a resize applies at once",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* kanbanFixture;
+        const started = yield* Queue.unbounded<string>();
+        const release = yield* Deferred.make<void>();
+        const running = yield* Ref.make(0);
+        const peak = yield* Ref.make(0);
+        const run = yield* openOwner(
+          fixture,
+          (agent) =>
+            Effect.gen(function* () {
+              const now = yield* Ref.updateAndGet(running, (count) => count + 1);
+              yield* Ref.update(peak, (max) => Math.max(max, now));
+              yield* Queue.offer(started, agent.card.id);
+              yield* Deferred.await(release);
+              yield* Ref.update(running, (count) => count - 1);
+              return finished;
+            }),
+          yield* Effect.scope,
+        );
+        yield* run(
+          Effect.gen(function* () {
+            // Two cores: the default is one card at a time.
+            const board = yield* executingBoard(fixture, [card("a"), card("b")]);
+            const a = yield* assignCard(board, "a");
+            const b = yield* assignCard(board, "b");
+            const first = yield* Queue.take(started);
+            expect(yield* Ref.get(peak)).toBe(1);
 
-it.live(
-  "runs no more cards at once than the concurrency setting, and a resize applies at once",
-  () =>
+            // Saving the setting resizes the gate; nobody calls reconfigure. The second card takes
+            // the new permit while the first still holds its own.
+            yield* (yield* KanbanSettings).setConcurrency(2);
+            const second = yield* Queue.take(started);
+            expect([first, second].toSorted()).toEqual(["a", "b"]);
+            expect(yield* Ref.get(peak)).toBe(2);
+
+            yield* Deferred.succeed(release, undefined);
+            expect(CardAttemptOutcome.guards.Completed(yield* attemptOutcome(a))).toBe(true);
+            expect(CardAttemptOutcome.guards.Completed(yield* attemptOutcome(b))).toBe(true);
+          }),
+        );
+      }),
+  );
+
+  it.effect("does not continue past an earlier run with an uncertain tool", () =>
     Effect.gen(function* () {
       const fixture = yield* kanbanFixture;
-      const started = yield* Queue.unbounded<string>();
+      const calls = yield* Ref.make(0);
+      const run = yield* openOwner(
+        fixture,
+        () =>
+          Effect.as(
+            Ref.update(calls, (count) => count + 1),
+            finished,
+          ),
+        yield* Effect.scope,
+      );
+      const outcome = yield* run(
+        Effect.gen(function* () {
+          const board = yield* executingBoard(fixture, [card("a")]);
+          yield* uncertainCardRun(board, "a", "run-0");
+          return yield* attemptOutcome(yield* assignCard(board, "a"));
+        }),
+      );
+      expect(outcome).toEqual(CardAttemptOutcome.cases.Fenced.make({ runId: "run-0" }));
+      expect(yield* Ref.get(calls)).toBe(0);
+    }),
+  );
+
+  it.effect("completes an earlier Goal instance's card as Superseded without running it", () =>
+    Effect.gen(function* () {
+      const fixture = yield* kanbanFixture;
+      const elsewhere = yield* kanbanFixture;
+      const ran = yield* Ref.make<ReadonlyArray<string>>([]);
+      const holding = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
-      const running = yield* Ref.make(0);
-      const peak = yield* Ref.make(0);
       const run = yield* openOwner(
         fixture,
         (agent) =>
           Effect.gen(function* () {
-            const now = yield* Ref.updateAndGet(running, (count) => count + 1);
-            yield* Ref.update(peak, (max) => Math.max(max, now));
-            yield* Queue.offer(started, agent.card.id);
-            yield* Deferred.await(release);
-            yield* Ref.update(running, (count) => count - 1);
+            yield* Ref.update(ran, (ids) => [...ids, agent.card.id]);
+            if (agent.card.id === "a") {
+              yield* Deferred.succeed(holding, undefined);
+              yield* Deferred.await(release);
+            }
             return finished;
           }),
         yield* Effect.scope,
       );
-      yield* run(
+      const outcome = yield* run(
         Effect.gen(function* () {
-          // Two cores: the default is one card at a time.
-          const board = yield* executingBoard(fixture, [card("a"), card("b")]);
-          const a = yield* assignCard(board, "a");
+          const board = yield* executingBoard(fixture, [card("b")]);
+          yield* assignCard(yield* executingBoard(elsewhere, [card("a")]), "a");
+          // Another board's card a holds the only permit, so b waits in the queue while its own
+          // session, with nothing running, starts a new Goal.
+          yield* Deferred.await(holding);
           const b = yield* assignCard(board, "b");
-          const first = yield* Queue.take(started);
-          expect(yield* Ref.get(peak)).toBe(1);
-
-          // Saving the setting resizes the gate; nobody calls reconfigure. The second card takes
-          // the new permit while the first still holds its own.
-          yield* (yield* KanbanSettings).setConcurrency(2);
-          const second = yield* Queue.take(started);
-          expect([first, second].toSorted()).toEqual(["a", "b"]);
-          expect(yield* Ref.get(peak)).toBe(2);
-
+          yield* replaceGoal(board.sessionId);
           yield* Deferred.succeed(release, undefined);
-          expect(CardAttemptOutcome.guards.Completed(yield* attemptOutcome(a))).toBe(true);
-          expect(CardAttemptOutcome.guards.Completed(yield* attemptOutcome(b))).toBe(true);
+          return yield* attemptOutcome(b);
         }),
       );
-    }).pipe(withNode),
-);
-
-it.live("does not continue past an earlier run with an uncertain tool", () =>
-  Effect.gen(function* () {
-    const fixture = yield* kanbanFixture;
-    const calls = yield* Ref.make(0);
-    const run = yield* openOwner(
-      fixture,
-      () =>
-        Effect.as(
-          Ref.update(calls, (count) => count + 1),
-          finished,
-        ),
-      yield* Effect.scope,
-    );
-    const outcome = yield* run(
-      Effect.gen(function* () {
-        const board = yield* executingBoard(fixture, [card("a")]);
-        yield* uncertainCardRun(board, "a", "run-0");
-        return yield* attemptOutcome(yield* assignCard(board, "a"));
-      }),
-    );
-    expect(outcome).toEqual(CardAttemptOutcome.cases.Fenced.make({ runId: "run-0" }));
-    expect(yield* Ref.get(calls)).toBe(0);
-  }).pipe(withNode),
-);
-
-it.live("completes an earlier Goal instance's card as Superseded without running it", () =>
-  Effect.gen(function* () {
-    const fixture = yield* kanbanFixture;
-    const elsewhere = yield* kanbanFixture;
-    const ran = yield* Ref.make<ReadonlyArray<string>>([]);
-    const holding = yield* Deferred.make<void>();
-    const release = yield* Deferred.make<void>();
-    const run = yield* openOwner(
-      fixture,
-      (agent) =>
-        Effect.gen(function* () {
-          yield* Ref.update(ran, (ids) => [...ids, agent.card.id]);
-          if (agent.card.id === "a") {
-            yield* Deferred.succeed(holding, undefined);
-            yield* Deferred.await(release);
-          }
-          return finished;
-        }),
-      yield* Effect.scope,
-    );
-    const outcome = yield* run(
-      Effect.gen(function* () {
-        const board = yield* executingBoard(fixture, [card("b")]);
-        yield* assignCard(yield* executingBoard(elsewhere, [card("a")]), "a");
-        // Another board's card a holds the only permit, so b waits in the queue while its own
-        // session, with nothing running, starts a new Goal.
-        yield* Deferred.await(holding);
-        const b = yield* assignCard(board, "b");
-        yield* replaceGoal(board.sessionId);
-        yield* Deferred.succeed(release, undefined);
-        return yield* attemptOutcome(b);
-      }),
-    );
-    expect(outcome).toEqual(CardAttemptOutcome.cases.Superseded.make({}));
-    expect(yield* Ref.get(ran)).toEqual(["a"]);
-  }).pipe(withNode),
-);
+      expect(outcome).toEqual(CardAttemptOutcome.cases.Superseded.make({}));
+      expect(yield* Ref.get(ran)).toEqual(["a"]);
+    }),
+  );
+});
