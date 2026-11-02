@@ -1,9 +1,8 @@
 // Scoped to the test child. Native addons use real CJS require, never a stub.
 import { createRequire, registerHooks, stripTypeScriptTypes } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { Schema } from "effect";
-
-const isBytes = Schema.is(Schema.Uint8Array);
+// Node's own guard: importing `effect` here would load its whole entry in every bundled child.
+import { isUint8Array as isBytes } from "node:util/types";
 
 // Node 26 strips types but cannot erase runtime parameter properties; only those modules are
 // transformed. The hooks run in each thread (workers inherit this `--import`), so worker startup
