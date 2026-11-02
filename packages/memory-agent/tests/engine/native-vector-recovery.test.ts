@@ -3,11 +3,11 @@ import { Crypto, Effect, FileSystem, Layer, Path } from "effect";
 import { NodeServices, NodeCrypto } from "@effect/platform-node";
 import { layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
-import { StorageRoot } from "../src/config/storage-root.ts";
-import { Database } from "../src/db/database.ts";
-import { EmbedderRuntime, Embedder } from "../src/memory/embedding/embedder.ts";
-import { VectorIndex } from "../src/memory/embedding/vector-index.ts";
-import { requireRuntime } from "../src/runtime/resources.ts";
+import { StorageRoot } from "../../src/config/storage-root.ts";
+import { Database } from "../../src/db/database.ts";
+import { EmbedderRuntime, Embedder } from "../../src/memory/embedding/embedder.ts";
+import { VectorIndex } from "../../src/memory/embedding/vector-index.ts";
+import { requireRuntime } from "../../src/runtime/resources.ts";
 
 layer(Layer.merge(NodeServices.layer, NodeCrypto.layer))((it) => {
   it.effect.each(["missing", "layout-mismatch", "unrecorded-ahead"] as const)(

@@ -18,59 +18,19 @@ import { expect } from "vite-plus/test";
 import type { JsonValue } from "../../src/json.ts";
 import { sessionMessages } from "../../src/agent/history.ts";
 import { ImportActivity, Importer } from "../../src/imports/importer.ts";
-import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { type AgentServices, TestEnv, testAgent } from "../support/test-env.ts";
 import { sqlAll, sqlGet } from "../support/sql.ts";
-
-type TranscriptLine = { readonly [key: string]: JsonValue };
-const serialize = Effect.fn("imports.serialize")((lines: readonly TranscriptLine[]) =>
-  Effect.forEach(lines, (line) =>
-    Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(line),
-  ).pipe(Effect.map((encoded) => `${encoded.join("\n")}\n`)),
-);
-
-/** A Claude Code conversation in one project folder, with one tool call and its result. */
-function claudeLines(cwd: string): TranscriptLine[] {
-  return [
-    { type: "cost-state", sessionId: "cc-1", totalCostUSD: 0.1 },
-    {
-      type: "user",
-      uuid: "u-1",
-      timestamp: "2026-03-01T09:00:00.000Z",
-      cwd,
-      sessionId: "cc-1",
-      message: { role: "user", content: "회상 기준을 정하자" },
-    },
-    {
-      type: "assistant",
-      uuid: "a-1",
-      timestamp: "2026-03-01T09:00:10.000Z",
-      cwd,
-      sessionId: "cc-1",
-      message: {
-        role: "assistant",
-        content: [
-          { type: "text", text: "노트를 읽겠습니다" },
-          { type: "tool_use", id: "call-1", name: "Read", input: { file_path: "notes.md" } },
-        ],
-      },
-    },
-    {
-      type: "user",
-      uuid: "u-2",
-      timestamp: "2026-03-01T09:00:12.000Z",
-      cwd,
-      sessionId: "cc-1",
-      message: {
-        role: "user",
-        content: [{ type: "tool_result", tool_use_id: "call-1", content: "기준 초안" }],
-      },
-    },
-  ];
-}
+import {
+  type TranscriptLine,
+  claudeLines,
+  claudePath,
+  serialize,
+  writeClaude,
+  writeTranscript,
+} from "../support/transcripts.ts";
 
 function codexLines(cwd: string): TranscriptLine[] {
   return [
@@ -95,15 +55,6 @@ function codexLines(cwd: string): TranscriptLine[] {
   ];
 }
 
-const claudePath = Effect.fnUntraced(function* (name = "cc-1.jsonl") {
-  const { home } = yield* TestEnv;
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const directory = path.join(home, ".claude", "projects", "encoded-cwd");
-  yield* fs.makeDirectory(directory, { recursive: true });
-  return path.join(directory, name);
-});
-
 const codexRollout = (home: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -112,21 +63,6 @@ const codexRollout = (home: string) =>
     yield* fs.makeDirectory(directory, { recursive: true });
     return path.join(directory, "rollout-2026-04-02T02-00-00-cx-1.jsonl");
   });
-
-/** Write `lines` as a transcript the importer will find; returns its path. */
-const writeTranscript = Effect.fnUntraced(function* (
-  path: string,
-  lines: readonly TranscriptLine[],
-) {
-  yield* (yield* FileSystem.FileSystem).writeFileString(path, yield* serialize(lines));
-  return path;
-});
-
-/** The standard Claude Code conversation, run in the test's project folder. */
-const writeClaude = Effect.gen(function* () {
-  const { project } = yield* TestEnv;
-  return yield* writeTranscript(yield* claudePath(), claudeLines(project.root));
-});
 
 const appendTranscript = Effect.fnUntraced(function* (
   path: string,
@@ -150,9 +86,6 @@ const decodeEdges = Schema.decodeUnknownEffect(
   Schema.Array(Schema.Struct({ kind: Schema.String, from_kind: Schema.String })),
 );
 const decodeCount = Schema.decodeUnknownEffect(Schema.Struct({ count: Schema.Finite }));
-const decodeIndexed = Schema.decodeUnknownEffect(
-  Schema.Array(Schema.Struct({ text: Schema.String })),
-);
 
 /** The project's session migrated from `source`. */
 const migrated = Effect.fnUntraced(function* (source: "claude-code" | "codex") {
@@ -447,28 +380,6 @@ alone("never reads this app's own storage", () =>
       codexLines(project.root),
     );
     expect(yield* runOnce).toBe(0);
-  }),
-);
-
-alone("indexes what was said today before a migrated backlog", () =>
-  Effect.gen(function* () {
-    const { project, session } = yield* TestEnv;
-    yield* writeClaude;
-    // The transcript is from March; this is now. Its rows land last but it must index first.
-    const today = yield* (yield* Nodes).append({
-      projectId: project.id,
-      sessionId: session.id,
-      kind: "user",
-      text: "오늘 한 말",
-    });
-    yield* runOnce;
-    yield* (yield* Indexer).indexUpTo(1);
-    const indexed = yield* decodeIndexed(
-      yield* sqlAll(
-        "SELECT n.text FROM node_vectors v JOIN nodes n ON n.seq = v.node_seq ORDER BY n.seq",
-      ),
-    );
-    expect(indexed.map((row) => row.text)).toEqual([today.text]);
   }),
 );
 

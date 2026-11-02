@@ -2256,6 +2256,22 @@
 - 테스트 안에서 `Effect.provide(layer)`, `Layer.build`, `ManagedRuntime`, `Effect.runPromise`로 런타임을 직접 다루지 않는다. 다른 Layer 구성이 필요하면 `@effect/vitest`의 `layer(...)` 블록을 진입점으로 둔다. 이전 Promise 기반 `testRuntime()`은 모든 사용처를 옮긴 뒤 제거했다(2026-10-12).
 - 버그 수정마다 회귀 테스트 파일을 새로 만들지 않는다. 해당 기능 슬라이스에 계약 단위로 추가하고, 같은 계약을 중복 검증하거나 타입으로 이미 보장되는 테스트는 합치거나 지운다.
 
+### 테스트로 두지 않는 것과 메모리 엔진 테스트 분리 (2026-11-03)
+
+- 다음만 확인하는 테스트는 두지 않는다.
+  - 타입이 이미 보장하는 것: 오류 class가 시그니처에 있는 `mapError` 라벨, 상수 표 되읽기.
+  - Effect가 보장하는 동작: Scope·`acquireRelease` 해제, 인터럽트 전파, Deferred·Queue·Semaphore, timeout·Schedule, Layer override가 받은 값을 돌려주는 것, 사용자 변환이 없는 Schema decode, `Function.dual` 형태.
+  - 고정 prompt 문구와 로그 문구의 일치.
+  - 다른 테스트와 같은 계약.
+  - 테스트용 fake·fixture·eval 자체의 동작.
+  - 제품 코드가 부르지 않는 경로.
+- 우리 코드가 그 위에 얹은 논리는 남긴다. 사용자 변환, 우리 서비스 사이의 순서, 고친 회귀가 그 예다. 출시한 릴리스(0.0.12부터)의 schema나 dump에서 시작하는 마이그레이션 테스트도 남긴다.
+- memory-agent에 Vitest `engine` 프로젝트를 둔다. 대상은 메모리 엔진 내부다: native search owner·worker, vector index와 복구, 임베딩 모델, 순위 상수, SQLite lock.
+  - 파일 위치: `src/memory/native-search/**`, `src/memory/embedding/**`, `src/memory/search.test.ts`와 `tests/engine/**`.
+  - 기본 `test` task는 `unit`·`feature`만 돌리고, 엔진은 `vp run memory-agent#test:engine`으로 따로 돌린다.
+  - 앱이 메모리를 쓰는 동작(무엇을 기록하고 검색·도구가 모델에 무엇을 돌려주는지)은 `feature`에 남긴다.
+- 결과: memory-agent 214파일·1,274테스트(96.7초)가 unit 180 + feature 938 테스트와 engine 73 테스트로 바뀌었다.
+
 ## BTW 별도 질문 채팅 (2026-10-12)
 
 - BTW는 메인 세션에 영구히 묶인 별도 스레드(`btw_threads`)다. 일반 `sessions` 행이 아니므로 모드 전환 API가 없고, 부모 세션·생성 시각은 트리거로 불변이다. 부모 세션을 삭제하면 BTW도 FK cascade로 함께 지워진다.

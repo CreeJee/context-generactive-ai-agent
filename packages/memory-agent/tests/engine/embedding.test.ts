@@ -26,7 +26,6 @@ import {
   localModel,
   modelFile,
 } from "../../src/memory/embedding/embedder.ts";
-import { EmbeddingSetup, GpuState } from "../../src/memory/embedding/setup.ts";
 import { Indexer, IndexingError } from "../../src/memory/embedding/indexer.ts";
 import { VectorIndex } from "../../src/memory/embedding/vector-index.ts";
 import { MorphAnalyzer } from "../../src/memory/morph/analyzer.ts";
@@ -107,23 +106,6 @@ testAgent()("Indexer + VectorIndex", (it) => {
       expect(yield* indexer.pending).toBe(3);
       yield* indexer.indexAll();
       expect(yield* indexer.pending).toBe(0);
-    }),
-  );
-
-  it.effect("settings show the choice and what it resolves to, and keep a new choice", () =>
-    Effect.gen(function* () {
-      const setup = yield* EmbeddingSetup;
-      const first = yield* setup.overview;
-      const chosen = yield* setup.choose("gpu");
-      // The test embedder is not the local model, so nothing is checked.
-      expect(first).toMatchObject({
-        choice: "auto",
-        running: EmbedderRuntime.other(),
-        next: "cpu",
-      });
-      expect(first.gpu).toEqual(GpuState.unchecked());
-      expect(chosen).toMatchObject({ choice: "gpu", next: "gpu", gpu: GpuState.unchecked() });
-      expect((yield* (yield* GlobalConfig).read).embeddingDevice).toBe("gpu");
     }),
   );
 });
@@ -211,7 +193,7 @@ testAgent()("an index an older build filled with tool nodes", (it) => {
 
 /** What a second app server reports when it opens the first one's storage. */
 class SecondServer extends Context.Service<SecondServer, { readonly opened: string }>()(
-  "memory-agent/tests/memory/embedding.test/SecondServer",
+  "memory-agent/tests/engine/embedding.test/SecondServer",
 ) {}
 
 // Layers memoize by reference, so the second server gets its own memo map; otherwise it would reuse
@@ -515,7 +497,7 @@ describe.skipIf(!cachedModels.cpu)("the local model (downloaded, quint8 on the C
 
 /** The full-precision model on the CPU, to compare the gpu mode against. */
 class Reference extends Context.Service<Reference, Embedder["Service"]>()(
-  "memory-agent/tests/memory/embedding.test/Reference",
+  "memory-agent/tests/engine/embedding.test/Reference",
 ) {}
 
 // The user's own settings stay out of it: this block chooses the GPU itself.

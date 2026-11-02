@@ -1,46 +1,12 @@
-import { DateTime, Effect, FileSystem, MutableHashMap, Option, Path } from "effect";
+import { DateTime, Effect, FileSystem, MutableHashMap, Path } from "effect";
 import { expect } from "vite-plus/test";
 import { Graph } from "../../src/memory/graph.ts";
 import { evidencePageLength, Nodes } from "../../src/memory/nodes.ts";
 import { Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
+import { conversation } from "../support/memory-graph.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { sqlRun } from "../support/sql.ts";
-
-/** In a fresh session: user -> assistant -> tool_call -> tool_result, then a later user correction. */
-const conversation = Effect.gen(function* () {
-  const { project } = yield* TestEnv;
-  const session = yield* (yield* Sessions).create(project.id);
-  const nodes = yield* Nodes;
-  const at = { projectId: project.id, sessionId: session.id };
-  const runId = `${session.id}:run`;
-
-  const user = yield* nodes.append({ ...at, kind: "user", text: "저장소는 SQLite로 하자" });
-  const assistant = yield* nodes.append({
-    ...at,
-    runId,
-    kind: "assistant",
-    text: "스키마 파일을 확인할게요.",
-    links: [{ kind: "reply", nodeId: user.id }],
-  });
-  const call = yield* nodes.append({
-    ...at,
-    runId,
-    kind: "tool_call",
-    text: 'read_file {"path":"schema.sql"}',
-    links: [{ kind: "calls", nodeId: assistant.id }],
-    refs: ["schema.sql"],
-  });
-  const result = yield* nodes.append({
-    ...at,
-    runId,
-    kind: "tool_result",
-    text: "CREATE TABLE nodes (...)",
-    links: [{ kind: "returns", nodeId: call.id }],
-  });
-  const correction = yield* nodes.append({ ...at, kind: "user", text: "아니 Postgres로 바꾸자" });
-  return { project, session, nodes, user, assistant, call, result, correction };
-});
 
 const addLlmEdge = Effect.fnUntraced(function* (
   fromId: string,
@@ -124,32 +90,6 @@ testAgent()("memory graph", (it) => {
           user.id,
         ]);
       }),
-  );
-
-  it.effect("expands from a seed with decaying utility and explains each path", () =>
-    Effect.gen(function* () {
-      const { project, user, assistant, call, result } = yield* conversation;
-      const { visits, complete } = yield* (yield* Graph).traverse(
-        MutableHashMap.fromIterable([[result.id, 1]]),
-        { budget: 10, minUtility: 0.5, projectIds: [project.id] },
-      );
-      expect(complete).toBe(true);
-      const byId = MutableHashMap.fromIterable(visits.map((visit) => [visit.node.id, visit]));
-      const visit = (id: string) => Option.getOrUndefined(MutableHashMap.get(byId, id));
-      expect(visit(result.id)).toMatchObject({ utility: 1, path: [] });
-      expect(visit(call.id)?.utility).toBeCloseTo(0.95);
-      expect(visit(assistant.id)?.utility).toBeCloseTo(0.95 * 0.95);
-      expect(visit(user.id)?.utility).toBeCloseTo(0.95 * 0.95 * 0.9);
-      expect(visit(user.id)?.path).toEqual([
-        { nodeId: call.id, kind: "returns", direction: "in" },
-        { nodeId: assistant.id, kind: "calls", direction: "in" },
-        { nodeId: user.id, kind: "reply", direction: "out" },
-      ]);
-      // Visits come out strongest first.
-      expect(visits.map((visit) => visit.utility)).toEqual(
-        visits.map((visit) => visit.utility).toSorted((a, b) => b - a),
-      );
-    }),
   );
 
   it.effect("never visits nodes of projects outside the allowed set", () =>

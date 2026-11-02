@@ -1,13 +1,38 @@
-import { defineConfig } from "vite-plus";
+import { defaultExclude, defineConfig } from "vite-plus";
+
+// The memory engine's internals: native search owner and worker, vector index, embedding model,
+// ranking plumbing and SQLite locking. They run only through `test:engine`.
+const engine = [
+  "src/memory/native-search/**/*.test.ts",
+  "src/memory/embedding/**/*.test.ts",
+  "src/memory/search.test.ts",
+  "tests/engine/**/*.test.ts",
+];
 
 export default defineConfig({
   test: {
     clearMocks: true,
     // unit: one module's logic beside its source, without a running agent.
     // feature: slices under tests/ that prepare a real agent (TestEnv) or other real resources.
+    // engine: the memory engine's internals, kept out of `test`.
     projects: [
-      { extends: true, test: { name: "unit", include: ["src/**/*.test.ts"] } },
-      { extends: true, test: { name: "feature", include: ["tests/**/*.test.ts"] } },
+      {
+        extends: true,
+        test: {
+          name: "unit",
+          include: ["src/**/*.test.ts"],
+          exclude: [...defaultExclude, ...engine],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: "feature",
+          include: ["tests/**/*.test.ts"],
+          exclude: [...defaultExclude, ...engine],
+        },
+      },
+      { extends: true, test: { name: "engine", include: engine } },
     ],
   },
   pack: {
@@ -37,7 +62,11 @@ export default defineConfig({
         dependsOn: [{ task: "build", from: "dependencies" }],
       },
       test: {
-        command: "vp test --maxWorkers=4",
+        command: "vp test --project unit --project feature --maxWorkers=4",
+        dependsOn: [{ task: "build", from: "dependencies" }],
+      },
+      "test:engine": {
+        command: "vp test --project engine --maxWorkers=4",
         dependsOn: [{ task: "build", from: "dependencies" }],
       },
       "test:unit": {

@@ -2,10 +2,10 @@ import { Effect, FileSystem, Layer, Path } from "effect";
 import { NodeServices } from "@effect/platform-node";
 import { layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
-import { StorageRoot } from "../src/config/storage-root.ts";
-import { Database } from "../src/db/database.ts";
-import { EmbedderRuntime, Embedder } from "../src/memory/embedding/embedder.ts";
-import { VectorIndex } from "../src/memory/embedding/vector-index.ts";
+import { StorageRoot } from "../../src/config/storage-root.ts";
+import { Database } from "../../src/db/database.ts";
+import { EmbedderRuntime, Embedder } from "../../src/memory/embedding/embedder.ts";
+import { VectorIndex } from "../../src/memory/embedding/vector-index.ts";
 
 layer(NodeServices.layer)((it) => {
   it.effect(
