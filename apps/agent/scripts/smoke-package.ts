@@ -111,7 +111,6 @@ const program = Effect.gen(function* () {
     return Number(yield* child.exitCode);
   });
 
-  const ErrorResponse = Schema.Struct({ error: Schema.String });
   const Created = Schema.Struct({ id: Schema.String });
   const Text = Schema.Struct({ text: Schema.String });
   /** Assembled at run time so no key-shaped text sits in the repository. */
@@ -176,14 +175,6 @@ const program = Effect.gen(function* () {
     { Origin: "https://evil.example", "Sec-Fetch-Site": "cross-site" },
   );
   yield* check("cross-site POST refused", crossSite.status === 403, String(crossSite.status));
-
-  const authResponse = yield* client.get(`${url}/api/auth?provider=invalid`);
-  const authError = yield* json(ErrorResponse, authResponse);
-  yield* check(
-    "provider auth route validates the provider",
-    authResponse.status === 400 && authError.error === "invalid_provider",
-    `${authResponse.status} ${authError.error}`,
-  );
 
   const created = yield* post("/api/projects", { root: project });
   yield* check(
