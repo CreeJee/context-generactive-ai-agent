@@ -1,4 +1,4 @@
-import { NodeFileSystem } from "@effect/platform-node";
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import { Cause, Config, Effect, FileSystem, Layer, Schema } from "effect";
 import { isTruthy } from "../../src/truthy.ts";
 // A small stdio MCP server for tests. Records each start in $FAKE_MCP_LOG when set.

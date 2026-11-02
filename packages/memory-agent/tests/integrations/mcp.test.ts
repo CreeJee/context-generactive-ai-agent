@@ -1,9 +1,12 @@
-import { Effect, FileSystem, Path, Schedule, Schema } from "effect";
+import { NodePath } from "@effect/platform-node";
+import { Context, Effect, FileSystem, Layer, Path, Schedule, Schema } from "effect";
+import { build } from "vite/rolldown";
 import { expect, vi } from "vite-plus/test";
 import { McpServers, McpServerState, mcpToolName } from "../../src/mcp/servers.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { PermissionReviews } from "../../src/permissions/reviews.ts";
 import { Projects } from "../../src/projects/projects.ts";
+import { nativePromise } from "../../src/runtime/native-effect.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { discoveryToolName } from "../../src/tools/discovery.ts";
 import { openPage, scopedCallId, sessionScopedResponder } from "../support/chat-client.ts";
@@ -57,12 +60,33 @@ const lines = Effect.fnUntraced(function* (file: string) {
 });
 
 /**
+ * The fake stdio MCP server as one module, bundled once for this file. Run from its source, every
+ * start loaded its imports one by one, most of a second, and a connection starts it twice.
+ */
+const fakeServerBundle = await Effect.runPromise(
+  Effect.scoped(
+    Effect.gen(function* () {
+      const path = Context.get(yield* Layer.build(NodePath.layer), Path.Path);
+      const input = yield* path.fromFileUrl(
+        new URL("../support/fake-mcp-server.ts", import.meta.url),
+      );
+      const { output } = yield* nativePromise(() =>
+        build({ input, platform: "node", write: false, output: { codeSplitting: false } }),
+      );
+      return output[0].code;
+    }),
+  ),
+);
+
+/**
  * The fake stdio MCP server for one project. Each start is logged in the project, so tests sharing
  * an agent count only their own starts.
  */
 const fakeServer = Effect.fnUntraced(function* (root: string) {
+  const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const script = yield* path.fromFileUrl(new URL("../support/fake-mcp-server.ts", import.meta.url));
+  const script = path.join(root, "fake-mcp-server.mjs");
+  yield* fs.writeFileString(script, fakeServerBundle);
   const log = path.join(root, "mcp-starts.log");
   return {
     script,
@@ -253,7 +277,8 @@ testAgent()("MCP servers of a project", (it) => {
 });
 
 // The global `mcp.json` and its trust are shared by every project, so these tests own an agent.
-testAgent()("MCP trust of the global and project configuration", (it) => {
+// Each writes the global file whole before it reads it.
+testAgent()("MCP global and project configuration", (it) => {
   it.effect(
     "configured servers start only after the user trusts that exact configuration",
     () =>
@@ -326,9 +351,7 @@ testAgent()("MCP trust of the global and project configuration", (it) => {
       }),
     serverStartTimeout,
   );
-});
 
-testAgent()("MCP configuration errors", (it) => {
   it.effect("invalid files and names are reported by code", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
