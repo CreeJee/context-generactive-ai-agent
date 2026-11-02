@@ -1,4 +1,4 @@
-import { type JsonSchema, Option } from "effect";
+import { type JsonSchema, Option, Schema } from "effect";
 import { Tool } from "effect/ai";
 import { optionalProperty } from "../optional-property.ts";
 import { toolParametersJsonSchema } from "../tools/schema.ts";
@@ -15,12 +15,21 @@ export const toolParameters = (tool: Tool.Any): JsonSchema.JsonSchema =>
     Option.getOrElse(() => fromSchema(tool)),
   );
 
+/** Effect writes an empty `Schema.Struct({})` as "any value but null", which has no `type`. */
+const isAnyNonNull = Schema.is(
+  Schema.Struct({ not: Schema.Struct({ type: Schema.Literal("null") }) }),
+);
+
 const fromSchema = (tool: Tool.Any): JsonSchema.JsonSchema => {
   const { $schema: _, ...written } = toolParametersJsonSchema(tool.parametersSchema);
+  // Anthropic refuses a tool whose input_schema has no `type` (`input_schema.type: Field required`).
+  const { not: __, ...withoutNot } = written;
   const typed =
-    "properties" in written && written["type"] === undefined
-      ? { ...written, type: "object" }
-      : written;
+    written["type"] === undefined && isAnyNonNull(written)
+      ? { ...withoutNot, type: "object", additionalProperties: false }
+      : "properties" in written && written["type"] === undefined
+        ? { ...written, type: "object" }
+        : written;
   const object = typed["type"] === "object";
   return {
     ...typed,

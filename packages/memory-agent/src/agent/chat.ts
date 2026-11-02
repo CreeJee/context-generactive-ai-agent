@@ -2470,6 +2470,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         }),
       ),
 
+    /** The sessions, of every project, whose run is producing an answer now. */
+    runningSessions: liveRuns.sessionIds,
+
     /**
      * What a page needs beyond the transcript: whether a run is producing, how the last one ended,
      * and whether this page (`holder`) may change the session.

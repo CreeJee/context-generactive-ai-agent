@@ -67,7 +67,7 @@ export function DecisionInbox({
                   </div>
                   <Button
                     type="button"
-                    size="xs"
+                    size="sm"
                     variant="outline"
                     onClick={() => {
                       setOpen(false);

@@ -59,7 +59,11 @@ describe("hierarchical app query keys", () => {
   test("maps project and global resources without crossing scopes", () => {
     expect(
       invalidationKeys({ scope: "project", projectId: "p1", topic: "sessions", revision: 1 }),
-    ).toEqual([appQueryKeys.project.sessions("p1"), appQueryKeys.project.boards("p1")]);
+    ).toEqual([
+      appQueryKeys.project.sessions("p1"),
+      appQueryKeys.project.boards("p1"),
+      appQueryKeys.project.running("p1"),
+    ]);
     expect(invalidationKeys({ scope: "global", topic: "embedding", revision: 1 })).toEqual([
       appQueryKeys.global.embedding,
     ]);

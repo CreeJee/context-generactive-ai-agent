@@ -68,7 +68,6 @@ export function ConversationSettings() {
             />
             <Button
               type="submit"
-              variant="outline"
               disabled={busy || percent === null || percent === settings.summaryStartPercent}
             >
               {busy && <Spinner />} 저장

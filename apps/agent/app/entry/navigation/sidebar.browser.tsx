@@ -417,6 +417,7 @@ describe("sidebar disclosures", () => {
             contextWindow: 32768,
             outputBudget: null,
             toolCalling: true,
+            imageInput: false,
           },
         },
         { intent: "create", baseUrl: "https://api.example.com/v1" },

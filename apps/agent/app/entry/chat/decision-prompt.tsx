@@ -165,7 +165,7 @@ export function DecisionPrompt({
           <Button
             key={option.answer.choice}
             type="button"
-            size="xs"
+            size="sm"
             variant="outline"
             disabled={disabled || answer.isPending}
             onClick={() => {

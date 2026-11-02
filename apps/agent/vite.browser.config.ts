@@ -12,6 +12,7 @@ export default defineConfig({
   },
   test: {
     include: [
+      "apps/agent/app/components/ui/*.browser.tsx",
       "apps/agent/app/entry/navigation/*.browser.tsx",
       "apps/agent/app/entry/chat/message.browser.tsx",
       "apps/agent/app/entry/report/*.browser.tsx",

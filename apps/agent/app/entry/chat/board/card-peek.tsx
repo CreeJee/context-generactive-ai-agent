@@ -2,6 +2,17 @@ import { isTruthy } from "../../../truthy.ts";
 import { useState, type ReactNode } from "react";
 import { Data, type Types } from "effect";
 import type { CardDraft, CardRisk } from "memory-agent";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "../../../components/ui/alert-dialog";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { DataList, DataListItem } from "../../../components/ui/data-list";
@@ -207,7 +218,7 @@ export function CardPeek({
                 />
               ))}
               {(hold !== null || changePending) && (
-                <div className="space-y-2 rounded-md border border-dashed px-3 py-2" role="status">
+                <div className="space-y-2 rounded-md border px-3 py-2" role="status">
                   {hold !== null && <p>사유: {holdReasonText(hold)}</p>}
                   {holdNote !== null && (
                     <p className="whitespace-pre-wrap text-muted-foreground">
@@ -246,7 +257,7 @@ export function CardPeek({
                 <CardDetails card={card} titleOf={titleOf} lastChange={lastChange} />
               )}
               {!editing && transferTargets.length > 0 && canTransfer(card) && (
-                <div className="rounded-md border border-dashed px-3 py-2">
+                <div className="rounded-md border px-3 py-2">
                   <Field>
                     <FieldLabel htmlFor="card-transfer">다른 대화로 옮기기</FieldLabel>
                     <span className="flex flex-wrap items-center gap-2">
@@ -277,7 +288,6 @@ export function CardPeek({
                       <Button
                         type="button"
                         size="sm"
-                        variant="outline"
                         disabled={transferTo === null || disabled || closed || intentPending}
                         onClick={() => {
                           if (transferTo !== null) onTransfer(card.id, transferTo);
@@ -580,16 +590,40 @@ function CardEditor({
       </div>
       <div className="flex flex-wrap justify-end gap-2 border-t pt-3">
         {card !== null && (
-          <Button
-            type="button"
-            size="sm"
-            variant="destructive"
-            className="mr-auto"
-            disabled={pending}
-            onClick={() => submit(BoardEdit.CancelCard({ planVersion, cardId: card.id }))}
-          >
-            카드 취소
-          </Button>
+          <AlertDialog>
+            <AlertDialogTrigger
+              render={
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="destructive"
+                  className="mr-auto"
+                  disabled={pending}
+                />
+              }
+            >
+              카드 취소
+            </AlertDialogTrigger>
+            <AlertDialogContent size="sm">
+              <AlertDialogHeader>
+                <AlertDialogTitle>이 카드를 취소할까요?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  {executing
+                    ? "실행 중인 계획이라 오케스트레이터가 확인한 뒤 취소돼요."
+                    : "취소한 카드는 실행되지 않아요."}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>그만두기</AlertDialogCancel>
+                <AlertDialogAction
+                  variant="destructive"
+                  onClick={() => submit(BoardEdit.CancelCard({ planVersion, cardId: card.id }))}
+                >
+                  카드 취소
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         )}
         <Button type="button" size="sm" variant="outline" onClick={onCancel}>
           닫기

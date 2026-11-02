@@ -1,6 +1,7 @@
 import { ProviderOperationFailed } from "./contracts.ts";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
+import { optionalProperty } from "../optional-property.ts";
 import {
   Array as Arr,
   Config,
@@ -33,6 +34,7 @@ import {
   compatibleAccountsOf,
   compatibleEndpointModel,
   compatibleHostLabel,
+  compatibleImageInput,
   CompatibleConnectionInput,
   CompatibleModelInput,
   LEGACY_COMPATIBLE_CREDENTIAL_ENTRY,
@@ -45,7 +47,11 @@ import {
   type OpenAICompatibleConfiguration,
   type OpenAICompatibleStatus,
 } from "./openai-compatible-config.ts";
-import { CompatibleModelPage, readCompatibleReasoning } from "./compatible-model-discovery.ts";
+import {
+  CompatibleModelPage,
+  readCompatibleImageInput,
+  readCompatibleReasoning,
+} from "./compatible-model-discovery.ts";
 import {
   CompatibleRunRequestFailed,
   CompatibleRunRequestFailedReason,
@@ -384,7 +390,15 @@ function makeOpenAICompatibleSettingsBody(
       Effect.gen(function* () {
         const value = yield* validateCompatibleModel(input);
         const existing = account.models.find((model) => model.id === value.id);
-        const saved: CompatibleModel = { ...value, reasoning: existing?.reasoning };
+        const saved: CompatibleModel = {
+          ...value,
+          reasoning: existing?.reasoning,
+          // A model the user saved keeps the choice; the next model list read never overwrites it.
+          // A save without the image input keeps the user's earlier choice, if any.
+          ...(value.imageInput === undefined
+            ? optionalProperty("imageInputSource", existing?.imageInputSource)
+            : { imageInputSource: "user" as const }),
+        };
         const isFirst = account.models.length === 0;
         yield* writeAccounts(
           replaceAccount(all, {
@@ -529,6 +543,25 @@ function makeOpenAICompatibleSettingsBody(
                           },
                         ),
                       );
+                      // The list's suggestion fills models whose image input no user has set;
+                      // a user's own choice, on or off, stays (decisions.md 2026-11-02).
+                      const suggested = readCompatibleImageInput(page);
+                      const withImages =
+                        suggested === undefined
+                          ? models
+                          : models.map((model) => {
+                              const current = account.models.find((entry) => entry.id === model.id);
+                              return current?.imageInputSource === "user"
+                                ? model
+                                : Option.match(Option.fromNullishOr(suggested(model.id)), {
+                                    onNone: () => model,
+                                    onSome: (imageInput) => ({
+                                      ...model,
+                                      imageInput,
+                                      imageInputSource: "models" as const,
+                                    }),
+                                  });
+                            });
                       // Before capability discovery, none meant to omit the wire parameter.
                       const legacyDefault =
                         all.selected === id &&
@@ -538,10 +571,10 @@ function makeOpenAICompatibleSettingsBody(
                           undefined;
                       return Effect.when(
                         writeAccounts(
-                          replaceAccount(all, { ...account, models }),
+                          replaceAccount(all, { ...account, models: withImages }),
                           legacyDefault ? { reasoningEffort: "default" } : {},
                         ),
-                        Effect.succeed(!Equal.equals(models, account.models)),
+                        Effect.succeed(!Equal.equals(withImages, account.models)),
                       );
                     }),
                   ),
@@ -595,7 +628,7 @@ function makeOpenAICompatibleSettingsBody(
     supportedReasoningEfforts: ["default", ...(publishedReasoning(settings) ?? [])],
     contextWindow: settings.contextWindow,
     capabilities: {
-      inputModalities: ["text"],
+      inputModalities: settings.imageInput === true ? ["text", "image"] : ["text"],
       toolCalling: settings.toolCalling,
       reasoning: publishedReasoning(settings) !== null,
     },
@@ -676,7 +709,10 @@ function makeOpenAICompatibleSettingsBody(
           Option.getOrNull,
         ),
       ),
-      acceptsImages: () => Effect.succeed(false),
+      acceptsImages: (model: string) =>
+        Effect.map(config.read, (settings) => compatibleImageInput(settings, model)).pipe(
+          Effect.mapError(() => ProviderOperationFailed.make({ provider, operation: "model" })),
+        ),
       cheapestEffort: (selection) => Effect.succeed({ ...selection, reasoningEffort: "default" }),
       select: (id: string, effort = "default") =>
         updates.withPermit(

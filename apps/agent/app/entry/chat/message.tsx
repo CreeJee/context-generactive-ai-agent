@@ -6,7 +6,7 @@ import { Data, DateTime, Option, Schema } from "effect";
 import { BotIcon, BrainIcon, Clock3Icon, WrenchIcon } from "lucide-react";
 import type { TraceTaskView } from "memory-agent";
 import type { HighlightOptions, HighlightResult } from "@streamdown/code";
-import { memo, useEffect, useState, type ComponentProps, type ReactNode } from "react";
+import { Fragment, memo, useEffect, useState, type ComponentProps, type ReactNode } from "react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -32,6 +32,7 @@ import {
 } from "~/components/ui/code-block";
 import { Message, MessageContent, MessageHeader } from "~/components/ui/message";
 import {
+  Trace,
   TraceCollapsible,
   TraceCollapsibleContent,
   TraceCollapsibleTrigger,
@@ -418,7 +419,7 @@ const TaskSummaryCard = memo(function TaskSummaryCard({
     window.dispatchEvent(new CustomEvent("work-trace:open", { detail: { taskId: task.id } }));
   return (
     <section
-      className="min-w-72 rounded-lg border bg-muted/30 px-3 py-2.5"
+      className="min-w-72 rounded-lg border bg-muted/30 p-3"
       aria-label={`서브에이전트 작업: ${task.title}`}
     >
       <div className="flex items-center gap-2">
@@ -428,7 +429,7 @@ const TaskSummaryCard = memo(function TaskSummaryCard({
           {status.label}
         </Badge>
       </div>
-      <p className="mt-1.5 line-clamp-2 text-sm">{task.request}</p>
+      <p className="mt-2 line-clamp-2 text-sm">{task.request}</p>
       <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
         <Clock3Icon className="size-3.5" aria-hidden />
         <span>{elapsed(task)}</span>
@@ -466,7 +467,7 @@ const TaskSummaryCard = memo(function TaskSummaryCard({
           task.latestAttemptId && (
             <Button
               type="button"
-              size="xs"
+              size="sm"
               variant={resumeState === "confirm-uncertain" ? "destructive" : "outline"}
               disabled={readOnly || resumeState === "requesting" || resumeState === "queued"}
               onClick={() => void resume(resumeState === "confirm-uncertain")}
@@ -483,8 +484,8 @@ const TaskSummaryCard = memo(function TaskSummaryCard({
         {archivableTaskStatuses.includes(task.status) && (
           <Button
             type="button"
-            size="xs"
-            variant="ghost"
+            size="sm"
+            variant="ghost-muted"
             disabled={readOnly || archiveState === "requesting"}
             onClick={() => void archive()}
           >
@@ -501,8 +502,8 @@ const TaskSummaryCard = memo(function TaskSummaryCard({
               render={
                 <Button
                   type="button"
-                  size="xs"
-                  variant="destructive"
+                  size="sm"
+                  variant="ghost-muted"
                   disabled={readOnly || deleteState === "requesting"}
                 />
               }
@@ -529,7 +530,7 @@ const TaskSummaryCard = memo(function TaskSummaryCard({
             </AlertDialogContent>
           </AlertDialog>
         )}
-        <Button type="button" size="xs" variant="ghost" onClick={openTrace}>
+        <Button type="button" size="sm" variant="ghost-muted" onClick={openTrace}>
           Work Trace에서 보기
         </Button>
       </div>
@@ -733,50 +734,80 @@ export const MessageView = memo(function MessageView({
     return <UserMessageBody text={text} images={images} />;
   }
 
+  /**
+   * Thinking and tool calls in a row form one trace block, its lines close together; text and a
+   * subagent's task card stand apart from it at the message's own gap.
+   */
+  const blocks = message.parts.reduce<Array<{ trace: boolean; indexes: number[] }>>(
+    (groups, part, index) => {
+      const trace =
+        part.type === "thinking" ||
+        (part.type === "tool-call" && taskForToolCall(tasks, part.id) === undefined);
+      const last = groups.at(-1);
+      if (trace && last?.trace === true) last.indexes.push(index);
+      else groups.push({ trace, indexes: [index] });
+      return groups;
+    },
+    [],
+  );
+  const renderPart = (part: (typeof message.parts)[number], index: number): ReactNode => {
+    if (part.type === "thinking") {
+      const thinking = streaming && index === message.parts.length - 1;
+      return (
+        <TraceCollapsible key={`thinking-${index}`}>
+          <TraceCollapsibleTrigger>
+            <TraceLine status={thinking ? "running" : undefined}>
+              <TraceIcon>
+                <BrainIcon />
+              </TraceIcon>
+              <TraceTitle>{thinking ? "추론 중" : "추론 내용"}</TraceTitle>
+            </TraceLine>
+          </TraceCollapsibleTrigger>
+          <TraceCollapsibleContent>
+            <p className="max-h-80 overflow-auto whitespace-pre-wrap">{part.content}</p>
+          </TraceCollapsibleContent>
+        </TraceCollapsible>
+      );
+    }
+    if (part.type === "text")
+      return <Markdown key={`text-${index}`} text={part.content} streaming={streaming} />;
+    if (part.type === "tool-call")
+      return (
+        <ToolCallView
+          key={`tool-${part.id}`}
+          call={part}
+          result={message.parts.findLast(
+            (result): result is ToolResult =>
+              result.type === "tool-result" && result.toolCallId === part.id,
+          )}
+          awaitingApproval={awaitingApproval.includes(part.id)}
+          task={taskForToolCall(tasks, part.id)}
+          traceConnection={traceConnection}
+          readOnly={readOnly}
+          onResumeTask={onResumeTask}
+          onArchiveTask={onArchiveTask}
+          onDeleteTask={onDeleteTask}
+        />
+      );
+    return null;
+  };
+
   return (
     <Message>
       <MessageContent>
-        {message.parts.map((part, index) => {
-          if (part.type === "thinking") {
-            const thinking = streaming && index === message.parts.length - 1;
-            return (
-              <TraceCollapsible key={`thinking-${index}`}>
-                <TraceCollapsibleTrigger>
-                  <TraceLine status={thinking ? "running" : undefined}>
-                    <TraceIcon>
-                      <BrainIcon />
-                    </TraceIcon>
-                    <TraceTitle>{thinking ? "추론 중" : "추론 내용"}</TraceTitle>
-                  </TraceLine>
-                </TraceCollapsibleTrigger>
-                <TraceCollapsibleContent>
-                  <p className="max-h-80 overflow-auto whitespace-pre-wrap">{part.content}</p>
-                </TraceCollapsibleContent>
-              </TraceCollapsible>
+        <div className="flex min-w-0 flex-col gap-3">
+          {blocks.map(({ trace, indexes }) => {
+            const parts = indexes.flatMap((index) => {
+              const part = message.parts[index];
+              return part === undefined ? [] : [renderPart(part, index)];
+            });
+            return trace ? (
+              <Trace key={`trace-${indexes[0]}`}>{parts}</Trace>
+            ) : (
+              <Fragment key={`part-${indexes[0]}`}>{parts}</Fragment>
             );
-          }
-          if (part.type === "text")
-            return <Markdown key={`text-${index}`} text={part.content} streaming={streaming} />;
-          if (part.type === "tool-call")
-            return (
-              <ToolCallView
-                key={`tool-${part.id}`}
-                call={part}
-                result={message.parts.findLast(
-                  (result): result is ToolResult =>
-                    result.type === "tool-result" && result.toolCallId === part.id,
-                )}
-                awaitingApproval={awaitingApproval.includes(part.id)}
-                task={taskForToolCall(tasks, part.id)}
-                traceConnection={traceConnection}
-                readOnly={readOnly}
-                onResumeTask={onResumeTask}
-                onArchiveTask={onArchiveTask}
-                onDeleteTask={onDeleteTask}
-              />
-            );
-          return null;
-        })}
+          })}
+        </div>
       </MessageContent>
     </Message>
   );

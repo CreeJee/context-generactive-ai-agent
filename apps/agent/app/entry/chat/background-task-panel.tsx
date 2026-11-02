@@ -47,7 +47,7 @@ export function BackgroundTaskIndicator({ tasks }: { tasks: readonly TraceTaskVi
           {running.map((task) => (
             <Item
               key={task.id}
-              variant="muted"
+              variant="outline"
               size="sm"
               render={<button type="button" className="text-left" />}
               onClick={() => openInWorkTrace(task.id)}

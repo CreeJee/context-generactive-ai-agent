@@ -14,6 +14,12 @@ export const CompatibleModelPage = Schema.Struct({
       owned_by: Schema.optional(Schema.Unknown),
       supported_parameters: Schema.optional(Schema.Unknown),
       capabilities: Schema.optional(Schema.Unknown),
+      /** The input kinds the endpoint advertises, as llama.cpp and OpenRouter publish them. */
+      architecture: Schema.optional(
+        Schema.Struct({
+          input_modalities: Schema.optional(Schema.Array(Schema.String)),
+        }),
+      ),
     }),
   ),
 });
@@ -82,3 +88,18 @@ function readCompatibleReasoningBody(
     Option.getOrUndefined,
   );
 }
+
+/**
+ * Whether the model list advertises image input for the model: `architecture.input_modalities`
+ * containing `"image"` (llama.cpp, OpenRouter). A list without the field reports nothing.
+ */
+export const readCompatibleImageInput =
+  (page: typeof CompatibleModelPage.Type) =>
+  (model: string): boolean | undefined =>
+    Option.fromNullishOr(page.data.find((candidate) => candidate.id === model)).pipe(
+      Option.flatMap((entry) => Option.fromNullishOr(entry.architecture?.input_modalities)),
+      Option.map((modalities: ReadonlyArray<string>) =>
+        modalities.some((modality) => modality === "image" || modality === "vision"),
+      ),
+      Option.getOrUndefined,
+    );

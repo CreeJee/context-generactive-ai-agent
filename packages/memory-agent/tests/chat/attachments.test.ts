@@ -123,12 +123,12 @@ testAgent({ testProvider: {} })("attachments", (it) => {
   );
 
   it.effect(
-    "eagerly starts a bounded model WebP and keeps GIFs as uploaded",
+    "eagerly starts a bounded model JPEG and keeps GIFs as uploaded",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const sharp = yield* requireRuntime("sharp");
-        // A wide screenshot of text, where a lossless WebP is smaller than the PNG upload.
+        // A wide screenshot of text, where a lossy JPEG copy is smaller than the PNG upload.
         const lines = Array.from(
           { length: 28 },
           (_, line) =>
@@ -150,8 +150,8 @@ testAgent({ testProvider: {} })("attachments", (it) => {
         const png = yield* attachments.save(screenshot);
         const animated = yield* attachments.save(gif);
         const image = yield* attachments.forModel(png);
-        expect(image.mimeType).toBe("image/webp");
-        expect(image.path.endsWith(`${png.id}.model.webp`)).toBe(true);
+        expect(image.mimeType).toBe("image/jpeg");
+        expect(image.path.endsWith(`${png.id}.model.jpg`)).toBe(true);
         expect(yield* attachments.forModel(png)).toEqual(image);
         const size = yield* sdk(() => sharp(image.path).metadata());
         expect([size.width, size.height]).toEqual([
@@ -161,7 +161,7 @@ testAgent({ testProvider: {} })("attachments", (it) => {
         const bytes = Number((yield* fs.stat(image.path)).size);
         expect(bytes).toBeLessThanOrEqual(maxModelImageBytes);
         expect(bytes).toBeLessThan(png.bytes);
-        expect((yield* attachments.dataUrl(image)).startsWith("data:image/webp;base64,")).toBe(
+        expect((yield* attachments.dataUrl(image)).startsWith("data:image/jpeg;base64,")).toBe(
           true,
         );
         expect(yield* attachments.forModel(animated)).toEqual({
@@ -174,7 +174,7 @@ testAgent({ testProvider: {} })("attachments", (it) => {
   );
 
   it.effect(
-    "keeps the upload when a WebP copy would not be smaller",
+    "keeps the upload when a JPEG copy would not be smaller",
     () =>
       Effect.gen(function* () {
         // A repeating pattern PNG compresses better than lossless WebP does.
@@ -408,7 +408,8 @@ testAgent()("attachments across closing the agent", (it) => {
       yield* env.reopen;
       const directory = path.join(env.storage, "attachments");
       expect(
-        (yield* fs.exists(path.join(directory, `${attachment.id}.model.webp`))) ||
+        (yield* fs.exists(path.join(directory, `${attachment.id}.model.jpg`))) ||
+          (yield* fs.exists(path.join(directory, `${attachment.id}.model.webp`))) ||
           (yield* fs.exists(path.join(directory, `${attachment.id}.model-original`))),
       ).toBe(true);
     }),

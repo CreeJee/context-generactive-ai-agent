@@ -2,6 +2,17 @@ import { isTruthy } from "../../truthy.ts";
 import type { ReactNode } from "react";
 import type { SessionRunState } from "memory-agent/definitions";
 import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "../../components/ui/alert-dialog";
 import { Button } from "../../components/ui/button";
 import { WorkflowExecutionState, type WorkflowPhase, type WorkflowState } from "../api";
 import { koreanLocalTime } from "../shared/local-time";
@@ -143,15 +154,34 @@ export function WorkflowArtifactPanel({
             >
               일시 중지
             </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="destructive"
-              disabled={!isTruthy(actions?.controls.stop.allowed) || disabled || controlling}
-              onClick={onStop}
-            >
-              중단
-            </Button>
+            <AlertDialog>
+              <AlertDialogTrigger
+                render={
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="destructive"
+                    disabled={!isTruthy(actions?.controls.stop.allowed) || disabled || controlling}
+                  />
+                }
+              >
+                중단
+              </AlertDialogTrigger>
+              <AlertDialogContent size="sm">
+                <AlertDialogHeader>
+                  <AlertDialogTitle>이 Goal을 중단할까요?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    중단한 Goal은 다시 계속할 수 없어요. 잠시 멈추려면 일시 중지를 쓰세요.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>그만두기</AlertDialogCancel>
+                  <AlertDialogAction variant="destructive" onClick={onStop}>
+                    중단
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </div>
         </AlertDescription>
       </Alert>

@@ -64,7 +64,13 @@ export type CompatibleAccountCommand = typeof CompatibleAccountCommand.Type;
 export const CompatibleTestResult = Schema.Struct({ ok: Schema.Literal(true) });
 /** The model ids the endpoint lists, for suggestions when registering a model. */
 export const CompatibleModelList = Schema.Struct({
-  models: Schema.Array(Schema.Struct({ id: Schema.String })),
+  models: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      /** Whether the endpoint advertises image input for the model, when it says. */
+      imageInput: Schema.optional(Schema.Boolean),
+    }),
+  ),
 });
 
 /** A provider's catalog and the global selection, or null before one is made. */

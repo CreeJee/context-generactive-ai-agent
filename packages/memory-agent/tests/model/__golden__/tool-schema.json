@@ -63,9 +63,10 @@
           "name": "list_tasks",
           "description": "List tasks.",
           "input_schema": {
-            "not": {
-              "type": "null"
-            }
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {},
+            "required": []
           }
         },
         {
@@ -306,9 +307,10 @@
           "name": "list_tasks",
           "description": "List tasks.",
           "parameters": {
-            "not": {
-              "type": "null"
-            }
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {},
+            "required": []
           }
         },
         {
@@ -730,9 +732,10 @@
           "name": "list_tasks",
           "description": "List tasks.",
           "parameters": {
-            "not": {
-              "type": "null"
-            }
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {},
+            "required": []
           },
           "strict": false
         }

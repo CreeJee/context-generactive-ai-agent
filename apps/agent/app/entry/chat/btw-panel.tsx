@@ -229,7 +229,7 @@ function DeleteBtwDialog({
     <Dialog open={open} onOpenChange={setOpen}>
       <Button
         type="button"
-        variant="ghost"
+        variant="ghost-muted"
         size="icon-sm"
         aria-label="BTW 삭제"
         title="BTW 삭제"
@@ -246,7 +246,7 @@ function DeleteBtwDialog({
           <div className="text-sm text-destructive">{btwErrorMessage(remove.error)}</div>
         )}
         <DialogFooter>
-          <DialogClose render={<Button type="button" variant="ghost" />}>취소</DialogClose>
+          <DialogClose render={<Button type="button" variant="outline" />}>취소</DialogClose>
           <Button
             type="button"
             variant="destructive"
@@ -308,7 +308,7 @@ export function BtwPanel({ projectId, sessionId }: { projectId: string; sessionI
           <SheetHeader>
             <SheetTitle>
               <span className="flex items-center gap-2">
-                <MessageCircleQuestionIcon className="size-4" aria-hidden />
+                <MessageCircleQuestionIcon aria-hidden />
                 {selected !== null ? threadLabel(selected) : "BTW 별도 질문"}
               </span>
             </SheetTitle>

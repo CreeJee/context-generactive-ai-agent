@@ -144,16 +144,16 @@ export function CardFace({
           )}
           {signals.changePending && <Badge variant="outline">변경 요청 대기</Badge>}
           {signals.waitingOn.length > 0 && (
-            <span className="inline-flex items-center gap-0.5" title={signals.waitingOn.join(", ")}>
-              <LinkIcon aria-hidden className="size-3" />
+            <Badge variant="outline" title={signals.waitingOn.join(", ")}>
+              <LinkIcon data-icon="inline-start" />
               선행 {signals.waitingOn.length}
-            </span>
+            </Badge>
           )}
           {userChangedAt !== null && <UserChangeMark at={userChangedAt} />}
         </span>
       )}
       {signals.reason !== null && (
-        <span className="mt-1.5 line-clamp-2 block text-2xs text-muted-foreground">
+        <span className="mt-2 line-clamp-2 block text-2xs text-muted-foreground">
           {signals.reason}
         </span>
       )}

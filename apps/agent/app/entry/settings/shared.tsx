@@ -250,7 +250,12 @@ export function TrustButton({
   onClick: () => void;
 }) {
   return (
-    <Button size="sm" variant={active ? "ghost" : "outline"} disabled={busy} onClick={onClick}>
+    <Button
+      size="sm"
+      variant={active ? "ghost-muted" : "outline"}
+      disabled={busy}
+      onClick={onClick}
+    >
       {active ? "사용 중지" : changed ? "다시 신뢰하기" : "신뢰하기"}
     </Button>
   );

@@ -62,11 +62,12 @@ export type CompatibleHandlers = {
   readonly onDiscover: (accountId: string) => Promise<readonly string[]>;
 };
 
-const newModel = (id = ""): CompatibleModelInput => ({
+const newModel = (id = "", imageInput = false): CompatibleModelInput => ({
   id,
   contextWindow: 32768,
   outputBudget: null,
   toolCalling: true,
+  imageInput,
 });
 
 /** The limit a turned-on output limit starts from. */
@@ -151,7 +152,7 @@ function AddEndpointForm({
   return (
     <form
       aria-label="새 OpenAI 호환 엔드포인트"
-      className="flex flex-col gap-3 rounded-lg border border-dashed px-3 py-3"
+      className="flex flex-col gap-3 rounded-lg border px-3 py-3"
       onSubmit={(event) => {
         event.preventDefault();
         void onCreate({
@@ -183,10 +184,10 @@ function AddEndpointForm({
         onRemoveKey={() => {}}
       />
       <div className="flex justify-end gap-1">
-        <Button type="button" variant="ghost-muted" onClick={onClose}>
+        <Button type="button" variant="outline" onClick={onClose}>
           취소
         </Button>
-        <Button type="submit" variant="outline" disabled={busy || baseUrl.trim() === ""}>
+        <Button type="submit" disabled={busy || baseUrl.trim() === ""}>
           추가
         </Button>
       </div>
@@ -230,7 +231,7 @@ function ModelForm({
   return (
     <form
       aria-label="모델 등록"
-      className="flex flex-col gap-3 rounded-md border border-dashed p-3"
+      className="flex flex-col gap-3 rounded-md border p-3"
       onSubmit={(event) => {
         event.preventDefault();
         onSave({ ...model, id: model.id.trim() });
@@ -323,11 +324,22 @@ function ModelForm({
         />
         <FieldLabel htmlFor={`${idPrefix}-tools`}>도구 호출 지원</FieldLabel>
       </div>
+      <div className="flex items-center gap-2">
+        <Switch
+          id={`${idPrefix}-image-input`}
+          checked={model.imageInput}
+          onCheckedChange={(imageInput) => setModel({ ...model, imageInput })}
+        />
+        <FieldLabel htmlFor={`${idPrefix}-image-input`}>이미지 입력 지원</FieldLabel>
+        <FieldDescription>
+          끄면 이미지를 보낼 수 없고, 이미지가 있던 대화는 글 메모로 이어 보내요.
+        </FieldDescription>
+      </div>
       <div className="flex justify-end gap-1">
-        <Button type="button" variant="ghost-muted" onClick={onClose}>
+        <Button type="button" variant="outline" onClick={onClose}>
           취소
         </Button>
-        <Button type="submit" variant="outline" disabled={busy || model.id.trim() === ""}>
+        <Button type="submit" disabled={busy || model.id.trim() === ""}>
           모델 저장
         </Button>
       </div>
@@ -400,7 +412,7 @@ function EndpointCard({
             onKeyDown={(event) => event.key === "Escape" && setMode(CardMode.view())}
             autoFocus
           />
-          <Button type="submit" variant="ghost" size="icon" aria-label="이름 저장">
+          <Button type="submit" variant="ghost-muted" size="icon" aria-label="이름 저장">
             <CheckIcon />
           </Button>
           <Button
@@ -480,7 +492,7 @@ function EndpointCard({
       {CardMode.$is("connect")(mode) && (
         <form
           aria-label={`${account.label} 연결`}
-          className="flex flex-col gap-3 rounded-md border border-dashed p-3"
+          className="flex flex-col gap-3 rounded-md border p-3"
           onSubmit={(event) => {
             event.preventDefault();
             void change(
@@ -507,10 +519,10 @@ function EndpointCard({
             onRemoveKey={setRemoveKey}
           />
           <div className="flex justify-end gap-1">
-            <Button type="button" variant="ghost-muted" onClick={() => setMode(CardMode.view())}>
+            <Button type="button" variant="outline" onClick={() => setMode(CardMode.view())}>
               취소
             </Button>
-            <Button type="submit" variant="outline" disabled={busy}>
+            <Button type="submit" disabled={busy}>
               연결 저장
             </Button>
           </div>
@@ -526,6 +538,7 @@ function EndpointCard({
                 · {model.contextWindow.toLocaleString()} / 출력{" "}
                 {model.outputBudget === null ? "제한 없음" : model.outputBudget.toLocaleString()} ·
                 도구 {model.toolCalling ? "켬" : "끔"}
+                {model.imageInput === true && " · 이미지"}
               </span>
             </span>
             <Button
@@ -546,8 +559,10 @@ function EndpointCard({
               size="icon-sm"
               aria-label={`${model.id} 수정`}
               onClick={() => {
-                const { reasoning: _reasoning, ...input } = model;
-                setMode(CardMode.model({ initial: input }));
+                const { reasoning: _reasoning, imageInputSource: _source, ...input } = model;
+                setMode(
+                  CardMode.model({ initial: { ...input, imageInput: input.imageInput === true } }),
+                );
               }}
             >
               <PencilIcon />

@@ -46,7 +46,9 @@ export function chooseCrossProviderApproval(approval: CrossProviderMediaRunAppro
             <Button variant="outline" onClick={() => choose(ApprovalChoice.once({ approval }))}>
               이번만 허용
             </Button>
-            <Button onClick={() => choose(ApprovalChoice.always())}>항상 허용</Button>
+            <Button variant="outline" onClick={() => choose(ApprovalChoice.always())}>
+              항상 허용
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

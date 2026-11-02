@@ -2,6 +2,7 @@ import { Effect, FileSystem, Match, Option, Schema } from "effect";
 import { HttpApiBuilder } from "effect/http-api";
 import { ChildProcessSpawner } from "effect/process";
 import {
+  AgentChat,
   AppEvents,
   Boards,
   ExternalAgents,
@@ -38,6 +39,7 @@ export const ProjectsApiHandlers = HttpApiBuilder.group(
     const sessions = yield* Sessions;
     const boards = yield* Boards;
     const decisions = yield* HumanDecisions;
+    const chat = yield* AgentChat;
     // The folder dialog runs a process and reads the chosen path.
     const pickerServices = yield* Effect.context<
       ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
@@ -168,6 +170,14 @@ export const ProjectsApiHandlers = HttpApiBuilder.group(
             WorkflowStorageError: kanbanRefusal.WorkflowStorageError,
             SqlError: kanbanRefusal.SqlError,
             SchemaError: kanbanRefusal.SchemaError,
+          }),
+        ),
+      running: ({ params }) =>
+        withProject(params.project, () =>
+          Effect.gen(function* () {
+            const running = new Set(yield* chat.runningSessions);
+            const listed = yield* Effect.orDie(sessions.list(params.project));
+            return listed.filter((session) => running.has(session.id)).map((session) => session.id);
           }),
         ),
       decisions: ({ params }) =>

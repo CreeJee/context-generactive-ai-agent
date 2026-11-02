@@ -210,6 +210,15 @@ export class ProjectsGroup extends HttpApiGroup.make("projects")
       error: [UnknownProject, KanbanStorageFailed],
     }),
     /**
+     * The project's unarchived conversations whose run is producing an answer now. A run's start
+     * and end are published as the session's `run-state`.
+     */
+    HttpApiEndpoint.get("running", "/api/projects/:project/running", {
+      params: project,
+      success: Schema.Array(Schema.String),
+      error: [UnknownProject],
+    }),
+    /**
      * The project inbox: every unanswered card decision across its conversations and their
      * current Goals, oldest first.
      */

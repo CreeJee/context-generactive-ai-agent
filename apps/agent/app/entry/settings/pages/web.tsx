@@ -90,7 +90,7 @@ export function KagiSettings() {
               </FieldDescription>
             </FieldContent>
             <Button
-              variant="ghost"
+              variant="ghost-muted"
               size="sm"
               disabled={busy}
               onClick={() => void apply(KagiCommand.remove())}
@@ -117,7 +117,7 @@ export function KagiSettings() {
                 onChange={(event) => setKey(event.target.value)}
                 placeholder="kagi.com/api/keys에서 발급한 키"
               />
-              <Button type="submit" variant="outline" disabled={busy || !isTruthy(key.trim())}>
+              <Button type="submit" disabled={busy || !isTruthy(key.trim())}>
                 {busy ? <Spinner /> : <KeyRoundIcon />} 저장
               </Button>
             </div>

@@ -30,6 +30,7 @@ export const appQueryKeys = {
     trace: (projectId: string) => ["app", "project", projectId, "trace"] as const,
     decisions: (projectId: string) => ["app", "project", projectId, "decisions"] as const,
     boards: (projectId: string) => ["app", "project", projectId, "boards"] as const,
+    running: (projectId: string) => ["app", "project", projectId, "running"] as const,
     kanban: (projectId: string) => ["app", "project", projectId, "kanban"] as const,
     traceTask: (projectId: string, taskId: string) =>
       ["app", "project", projectId, "trace", "task", taskId] as const,

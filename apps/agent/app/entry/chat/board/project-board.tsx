@@ -125,12 +125,25 @@ export function ProjectBoard({
         <SheetHeader>
           <SheetTitle>프로젝트 칸반 보드</SheetTitle>
           <SheetDescription>
-            <span className="flex flex-wrap items-center gap-2">
+            {/* Muted labels, numbers in the foreground colour: the counts read at a glance
+                without boxing every figure in a badge. The badge stays for "판단 대기" alone,
+                the one figure that asks for action. */}
+            <span className="flex flex-wrap items-center gap-x-4 gap-y-1">
               <span>
-                실행 중인 대화 {rows.length}개{running > 0 && ` · 칸반 ${running}`}
+                실행 중인 대화{" "}
+                <span className="font-medium text-foreground tabular-nums">{rows.length}</span>
               </span>
+              {running > 0 && (
+                <span>
+                  칸반 실행{" "}
+                  <span className="font-medium text-foreground tabular-nums">{running}</span>
+                </span>
+              )}
               <span>
-                완료 {done}/{total}
+                완료{" "}
+                <span className="font-medium text-foreground tabular-nums">
+                  {done}/{total}
+                </span>
               </span>
               {inbox.length > 0 && <Badge variant="outline">판단 대기 {inbox.length}</Badge>}
             </span>
@@ -180,10 +193,20 @@ export function ProjectBoard({
                   </ToggleGroup>
                 </div>
               )}
-              <span className="ml-auto flex items-center gap-1">
+              {/* Right after the filters, not pushed to the far edge: on a wide sheet a
+                  justify-between row leaves these alone across an empty strip. Without filters
+                  the ghost button's padding is pulled back so its chevron lines up with the title. */}
+              <span className="flex items-center gap-1">
                 {rows.length > 0 && (
                   <CollapsibleTrigger
-                    render={<Button type="button" size="sm" variant="ghost" className="group" />}
+                    render={
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className={rows.length > 1 ? "group" : "group -ml-2"}
+                      />
+                    }
                   >
                     <ChevronRightIcon
                       data-icon="inline-start"
@@ -192,8 +215,6 @@ export function ProjectBoard({
                     대화 순서와 상태
                   </CollapsibleTrigger>
                 )}
-                {/* Not while loading: the sheet would focus it first and open its tooltip. */}
-                {rows.length > 0 && <BoardShortcuts />}
               </span>
             </div>
             {rows.length > 0 && (
@@ -232,6 +253,15 @@ export function ProjectBoard({
               </CollapsibleContent>
             )}
           </Collapsible>
+          {/* Drawn on the title row beside the sheet's close button (top-2 right-2, 24px wide):
+              the keys belong to the whole board, not to the conversation filters. Last in the
+              header so the sheet does not focus it first and open its tooltip; for the same
+              reason it is left out while loading, when it would be the only control. */}
+          {rows.length > 0 && (
+            <span className="absolute top-2 right-9">
+              <BoardShortcuts />
+            </span>
+          )}
         </SheetHeader>
         {boards.data === undefined && (
           <p className="px-4 text-muted-foreground">보드를 불러오는 중이에요.</p>
@@ -310,8 +340,8 @@ function ConversationRow({
       <span className="flex items-center">
         <Button
           type="button"
-          size="icon-xs"
-          variant="ghost"
+          size="icon-sm"
+          variant="ghost-muted"
           aria-label={`${title} 위로`}
           disabled={moving || onMoveUp === null}
           onClick={() => onMoveUp?.()}
@@ -320,8 +350,8 @@ function ConversationRow({
         </Button>
         <Button
           type="button"
-          size="icon-xs"
-          variant="ghost"
+          size="icon-sm"
+          variant="ghost-muted"
           aria-label={`${title} 아래로`}
           disabled={moving || onMoveDown === null}
           onClick={() => onMoveDown?.()}
@@ -352,7 +382,8 @@ function ConversationRow({
         {loop === null && row.plan.status === "executing" && (
           <Button
             type="button"
-            size="xs"
+            variant="outline"
+            size="sm"
             title={kanbanSwitchHint}
             disabled={kanbanAction.isPending}
             onClick={() => act(KanbanAction.Start())}
@@ -362,7 +393,7 @@ function ConversationRow({
         )}
         <Button
           type="button"
-          size="xs"
+          size="sm"
           variant="outline"
           disabled={surface === null}
           onClick={onAdd}
@@ -370,7 +401,7 @@ function ConversationRow({
           <PlusIcon data-icon="inline-start" />
           카드 추가
         </Button>
-        <Button type="button" size="xs" variant="outline" onClick={onOpenSession}>
+        <Button type="button" size="sm" variant="outline" onClick={onOpenSession}>
           <MessageSquareTextIcon data-icon="inline-start" />
           대화 열기
         </Button>

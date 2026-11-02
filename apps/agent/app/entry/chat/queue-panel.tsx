@@ -71,7 +71,7 @@ function RowAction({
         render={
           <Button
             size="icon-xs"
-            variant="ghost"
+            variant="ghost-muted"
             disabled={disabled}
             aria-label={label}
             onClick={onClick}
@@ -152,7 +152,7 @@ export function QueuePanel({
               )}
               {(failed || QueueItemState.$is("held")(message.state)) && (
                 <Button
-                  size="xs"
+                  size="sm"
                   variant="outline"
                   disabled={busy}
                   onClick={() => onConfirm(message)}

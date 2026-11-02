@@ -20,6 +20,7 @@ import { Result, Function as EffectFunction } from "effect";
 import { testHttpServer, HttpServerRequest, HttpServerResponse } from "./support/http.ts";
 import { webCrypto } from "./support/platform.ts";
 import { Cause, Deferred, Effect, Fiber, Layer, MutableRef, Schema, Stream } from "effect";
+import { optionalProperty } from "../src/optional-property.ts";
 import { Tool, Toolkit } from "effect/ai";
 import { GlobalConfig } from "../src/config/global-config.ts";
 import { ActiveProvider } from "../src/providers/active-provider.ts";
@@ -78,7 +79,17 @@ function singleEndpointSettings(options: {
           ? ((yield* api.create(connection)).accounts.at(-1)?.id ?? "")
           : existing.id;
       if (existing !== null) yield* api.connect(id, connection);
-      yield* api.saveModel(id, { id: model, ...limits });
+      yield* api.saveModel(id, {
+        id: model,
+        contextWindow: limits.contextWindow,
+        outputBudget: limits.outputBudget,
+        toolCalling: limits.toolCalling === true,
+        // An unset image input leaves the model without the setting, so discovery can suggest it.
+        ...optionalProperty(
+          "imageInput",
+          limits.imageInput === undefined ? undefined : limits.imageInput === true,
+        ),
+      });
       yield* Effect.forEach(
         (existing?.models ?? []).filter((other) => other.id !== model),
         (other) => api.removeModel(id, other.id),
@@ -103,10 +114,28 @@ const endpointOf = (settings: Settings) => {
     ? undefined
     : (compatibleEndpointModel(account, model.id) ?? undefined);
 };
-const validateCompatibleConfiguration = ({ baseUrl, model, ...limits }: SingleEndpointUpdate) =>
+/** The stored model fields, with the source that `compatibleEndpointModel` drops. */
+const storedEndpointOf = (settings: Settings) => {
+  const account = selectedCompatibleAccount(compatibleAccountsOf(settings));
+  return account?.models[0];
+};
+const validateCompatibleConfiguration = ({
+  baseUrl,
+  model,
+  contextWindow,
+  outputBudget,
+  toolCalling,
+  imageInput,
+}: SingleEndpointUpdate) =>
   Effect.all([
     validateCompatibleConnection({ baseUrl }),
-    validateCompatibleModel({ id: model, ...limits }),
+    validateCompatibleModel({
+      id: model,
+      contextWindow,
+      outputBudget,
+      toolCalling: toolCalling === true,
+      ...optionalProperty("imageInput", imageInput === undefined ? undefined : imageInput === true),
+    }),
   ]);
 
 /** Native fetch fixture: interruption comes from the Effect running model discovery. */
@@ -343,6 +372,70 @@ describe("OpenAI compatible settings", () => {
       expect(model?.supportedReasoningEfforts).toEqual(["default"]);
       expect(paths).toEqual(["/v1/models"]);
     }),
+  );
+  effectTest.live("lets the model list suggest image input and keeps the user's own choice", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const listing = (input: boolean) =>
+          Response.json({
+            data: [
+              {
+                id: configuration.model,
+                architecture: { input_modalities: input ? ["text", "image"] : ["text"] },
+              },
+            ],
+          });
+        const f = fixture(nativeFetch(() => Effect.sync(() => listing(true))));
+        yield* f.api.update(configuration);
+        const [model] = yield* f.api.services.models.list;
+        expect(model?.capabilities.inputModalities).toEqual(["text", "image"]);
+        expect(storedEndpointOf(f.saved())?.imageInput).toBe(true);
+        expect(storedEndpointOf(f.saved())?.imageInputSource).toBe("models");
+
+        // A later list that withdraws the suggestion updates the list-derived setting.
+        const f2 = fixture(
+          nativeFetch(() => Effect.sync(() => listing(false))),
+          {
+            provider: "openai-compatible",
+            model: configuration.model,
+            reasoningEffort: "default",
+            openaiCompatible: { ...configuration, imageInput: true, imageInputSource: "models" },
+          },
+        );
+        yield* f2.api.services.models.list;
+        expect(storedEndpointOf(f2.saved())?.imageInput).toBe(false);
+
+        // A user's own choice survives discovery, on or off.
+        const user = fixture(
+          nativeFetch(() => Effect.sync(() => listing(true))),
+          {
+            provider: "openai-compatible",
+            model: configuration.model,
+            reasoningEffort: "default",
+            openaiCompatible: { ...configuration, imageInput: false, imageInputSource: "user" },
+          },
+        );
+        yield* user.api.services.models.list;
+        expect(storedEndpointOf(user.saved())?.imageInput).toBe(false);
+        expect(storedEndpointOf(user.saved())?.imageInputSource).toBe("user");
+      }),
+    ),
+  );
+  effectTest.effect(
+    "keeps models without the image input setting off for a list without the field",
+    () =>
+      Effect.gen(function* () {
+        const f = fixture(
+          nativeFetch(() =>
+            Effect.sync(() => Response.json({ data: [{ id: configuration.model }] })),
+          ),
+        );
+        yield* f.api.update(configuration);
+        const [model] = yield* f.api.services.models.list;
+        expect(model?.capabilities.inputModalities).toEqual(["text"]);
+        expect(storedEndpointOf(f.saved())?.imageInput).toBeUndefined();
+        expect(storedEndpointOf(f.saved())?.imageInputSource).toBeUndefined();
+      }),
   );
   effectTest.effect.each(["vllm", "organization_owner", "unknown"])(
     "only reads /models for owner %s without capabilities",
@@ -1142,6 +1235,7 @@ describe("OpenAI compatible settings", () => {
           contextWindow: 16384,
           outputBudget: 1024,
           toolCalling: false,
+          imageInput: true,
         };
         yield* api.saveModel(id, second);
         yield* api.saveModel(id, { ...second, id: configuration.model });

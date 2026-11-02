@@ -1,6 +1,7 @@
 import type { ContextView } from "memory-agent/definitions";
 import { motion } from "motion/react";
 import { AnimatedNumber } from "~/components/ui/animated-number";
+import { Button } from "~/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
 import { cn } from "~/lib/utils";
 
@@ -23,17 +24,7 @@ export function ContextMeter({ context }: { context: ContextView }) {
   const crowded = comparable && share >= crowdedShare;
   return (
     <Tooltip>
-      <TooltipTrigger
-        render={
-          <span
-            tabIndex={0}
-            className={cn(
-              "flex items-center gap-2 rounded-sm text-2xs text-muted-foreground",
-              crowded && "text-warning",
-            )}
-          />
-        }
-      >
+      <TooltipTrigger render={<Button variant={crowded ? "warning" : "ghost-muted"} size="xs" />}>
         {comparable && (
           <span className="h-1 w-16 overflow-hidden rounded-full bg-muted">
             <motion.span

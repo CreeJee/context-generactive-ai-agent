@@ -63,6 +63,7 @@ const endpoint = {
   contextWindow: 10_000_000,
   outputBudget: 4096,
   toolCalling: true,
+  imageInput: true,
 };
 
 // `OpenAiClient` sends the payload with its stream fields set again, which keeps their place.

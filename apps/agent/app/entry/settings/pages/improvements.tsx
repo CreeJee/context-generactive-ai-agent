@@ -160,6 +160,7 @@ export function ImprovementSettings() {
             </Button>
           ) : (
             <Button
+              variant="outline"
               size="sm"
               disabled={command.isPending || data === undefined}
               onClick={() => command.mutate(ScanCommand.start())}

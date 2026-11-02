@@ -583,6 +583,9 @@ export const api = {
   /** Every conversation's Plan as a board, across the project; running boards first. */
   projectBoards: (project: string) =>
     appCall((client) => client.projects.boards({ params: { project } })),
+  /** The project's conversations whose run is producing an answer now. */
+  runningSessions: (project: string) =>
+    appCall((client) => client.projects.running({ params: { project } })),
   answerDecision: (
     holder: string,
     request: Pick<

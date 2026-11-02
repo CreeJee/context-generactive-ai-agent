@@ -297,6 +297,7 @@ function BoardSheet({
               {loop === null && plan.status === "executing" && (
                 <Button
                   type="button"
+                  variant="outline"
                   size="sm"
                   title={kanbanSwitchHint}
                   disabled={disabled || kanbanAction.isPending}

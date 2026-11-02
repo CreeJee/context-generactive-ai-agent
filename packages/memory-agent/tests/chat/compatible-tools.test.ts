@@ -87,6 +87,7 @@ testAgent({
         contextWindow: 200_000,
         outputBudget: 512,
         toolCalling: true,
+        imageInput: false,
       });
       yield* compatible.services.models.select("manual");
       const sessionId = yield* freshSession;

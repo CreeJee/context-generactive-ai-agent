@@ -46,9 +46,10 @@
 - 턴이 segment로 나뉘면 메시지 id가 `${turnId}-segment-`로 시작한다. 이런 경우 결과가 오기 전까지 call을 열어 둔다.
 - 정제는 메시지 텍스트와 tool call arguments의 lone surrogate만 지운다. thinking은 서명된 그대로 둔다. 바뀔 것이 없는 arguments는 원래 바이트를 유지한다.
 - `toPrompt`/`fromPrompt`는 손실 없이 왕복해야 한다. `Prompt`에 없는 정보(reasoning signature·redacted, 원본 arguments 문자열, tool error, image url/untyped, 메시지 메타)는 `options[optionsKey]`("memory-agent")에 둔다. 이미지 data는 저장된 문자열 그대로 유지한다.
+- compatible 요청의 이미지 입력 설정(`endpoint.imageInput`)이 끄면, 이전 턴의 이미지 part는 `[image from an earlier message]` 글로 보내고 새 이미지는 `AgentChat`이 `images_not_supported`로 거절한다(decisions.md 2026-11-02). 컨텍스트 가드는 이미지 part를 base64 글자 수 대신 한 장당 `tokensPerImage`(1,000)로 센다. 창을 넘으면 가드는 가장 최근 이미지가 든 메시지보다 오래된 이미지를 한 번의 감축으로 같은 글로 바꾸고, 그래도 넘칠 때만 `ContextLimitExceeded`로 거절한다(decisions.md 2026-11-02).
 - compatible tool call id 재명명은 TanStack의 `hashToolCallId` 규칙을 따른다. 결합 id는 40자 이하일 때만 쓰고, 넘으면 31자 + `_` + 해시 8자로 만든다.
 - compatible 요청 본문은 TanStack이 같은 히스토리로 만들던 본문과 같아야 한다. stream 필드도 이미 제자리에 둬서 키 순서를 유지한다. 도구는 `strict: false`로 보낸다.
-- 빈 user 메시지(빈 텍스트이거나 part가 없음)는 `InvalidRequestError`로 거절한다. 그렇지 않으면 입력 없이 유료 요청이 나간다. 컨텍스트 한도를 넘는 요청은 보내기 전에 `ContextLimitExceeded`로 거절한다.
+- 빈 user 메시지(빈 텍스트이거나 part가 없음)는 `InvalidRequestError`로 거절한다. 그렇지 않으면 입력 없이 유료 요청이 나간다. 컨텍스트 한도를 넘는 요청은 감축으로 줄일 수 없을 때 보내기 전에 `ContextLimitExceeded`로 거절한다.
 - `CompatibleRunRequestFailed`의 message는 URL·헤더·페이로드가 없는 고정 텍스트다. 외부 에이전트 `detail`은 비밀이 이미 가려진 에이전트 텍스트이고, 오류 상세에서만 보인다.
 - 외부 에이전트는 JSON `responseFormat` 요청을 보내기 전에 거절한다. 한 step에서는 memory preamble 뒤에 사용자의 마지막 텍스트만 보낸다. 보고된 tool call은 답 텍스트 끝에 붙인다.
 - run별 모델 옵션은 모든 step에서 고정된다. compatible은 endpoint·effort·key, 구독은 selection·promptCache, 외부 에이전트는 agent와 session이다.

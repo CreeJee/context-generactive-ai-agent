@@ -91,16 +91,12 @@ function ConcurrencyField() {
             onChange={(event) => setDraft(event.target.value)}
             className="w-24"
           />
-          <Button
-            type="submit"
-            variant="outline"
-            disabled={busy || value === null || value === settings.configured}
-          >
+          <Button type="submit" disabled={busy || value === null || value === settings.configured}>
             {busy && <Spinner />} 저장
           </Button>
           <Button
             type="button"
-            variant="ghost"
+            variant="outline"
             disabled={busy || settings.configured === null}
             onClick={() => void save(null)}
           >
@@ -154,8 +150,8 @@ function ProjectOrderField() {
             <span className="min-w-0 flex-1 truncate">{project.name}</span>
             <Button
               type="button"
-              size="icon-xs"
-              variant="ghost"
+              size="icon-sm"
+              variant="ghost-muted"
               aria-label={`${project.name} 위로`}
               disabled={mutation.isPending || index === 0}
               onClick={() => move(project.id, ordered[index - 1]?.id ?? null)}
@@ -164,8 +160,8 @@ function ProjectOrderField() {
             </Button>
             <Button
               type="button"
-              size="icon-xs"
-              variant="ghost"
+              size="icon-sm"
+              variant="ghost-muted"
               aria-label={`${project.name} 아래로`}
               disabled={mutation.isPending || index === ordered.length - 1}
               onClick={() => move(project.id, ordered[index + 2]?.id ?? null)}
@@ -225,7 +221,7 @@ function ProtectedBranchesField({ project }: { project: Project }) {
             placeholder="main, staging"
             onChange={(event) => setDraft(event.target.value)}
           />
-          <Button type="submit" variant="outline" disabled={busy || unchanged}>
+          <Button type="submit" disabled={busy || unchanged}>
             {busy && <Spinner />} 저장
           </Button>
         </div>

@@ -65,12 +65,12 @@ export function ThemeSelect() {
       <SelectTrigger
         size="sm"
         variant="ghost"
-        className="h-8 min-w-9 justify-center [&_[data-slot=select-value]]:flex-none"
+        className="min-w-6 justify-center [&_[data-slot=select-value]]:flex-none"
         aria-label={`화면 테마: ${current.label}`}
         title={`화면 테마: ${current.label}`}
       >
         <SelectValue>
-          <Icon aria-hidden="true" className="size-4" />
+          <Icon aria-hidden="true" className="size-3.5" />
         </SelectValue>
       </SelectTrigger>
       <SelectContent>

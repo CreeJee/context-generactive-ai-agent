@@ -53,7 +53,7 @@ export function SubagentPanel({
       {running.length > 0 && (
         <ItemGroup>
           {running.map((child) => (
-            <Item key={child.id} variant="muted" size="sm">
+            <Item key={child.id} variant="outline" size="sm">
               <ItemMedia variant="icon">
                 <BotIcon />
               </ItemMedia>

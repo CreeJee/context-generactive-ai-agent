@@ -178,7 +178,7 @@ function LoginActions({
     return (
       <>
         <a
-          className={buttonVariants({ size: "sm" })}
+          className={buttonVariants({ variant: "outline", size: "sm" })}
           href={server.state.authorizationUrl}
           target="_blank"
           rel="noopener noreferrer"
@@ -187,7 +187,7 @@ function LoginActions({
         </a>
         <Button
           size="sm"
-          variant="ghost"
+          variant="ghost-muted"
           disabled={busy}
           onClick={() => void run(McpCommand.cancelLogin(target))}
         >
@@ -200,7 +200,7 @@ function LoginActions({
       {(McpServerState.$is("needsLogin")(server.state) || server.signedIn) && (
         <Button
           size="sm"
-          variant={server.signedIn ? "ghost" : "default"}
+          variant={server.signedIn ? "ghost-muted" : "outline"}
           disabled={busy}
           onClick={() => void run(McpCommand.login(target))}
         >
@@ -210,7 +210,7 @@ function LoginActions({
       {server.signedIn && (
         <Button
           size="sm"
-          variant="ghost"
+          variant="ghost-muted"
           disabled={busy}
           onClick={() => void run(McpCommand.logout(target))}
         >

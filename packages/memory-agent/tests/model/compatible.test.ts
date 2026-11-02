@@ -10,8 +10,13 @@ import {
   CompatibleRunRequestFailed,
   CompatibleRunRequestFailedReason,
   compatibleModel,
+  compatibleRequest,
+  compatibleTarget,
   type CompatibleModelOptions,
 } from "../../src/model/compatible.ts";
+import { providerPrompt } from "../../src/model/history.ts";
+import { toPrompt } from "../../src/model/prompt.ts";
+import type { StoredMessage } from "../../src/chat-store/schema.ts";
 
 /**
  * The compatible model's contract (docs/effect-ai-migration.md step 2): what it sends and where,
@@ -25,12 +30,15 @@ const endpoint = {
   contextWindow: 8192,
   outputBudget: 512,
   toolCalling: true,
+  imageInput: true,
 };
 
 const prompt = Prompt.make([
   { role: "system", content: "Follow the rules." },
   { role: "user", content: "private question" },
 ]);
+
+const systemPrompt = "Follow the rules.";
 
 const chunk = (delta: JsonValue, finishReason: string | null = null) => ({
   id: "chunk-1",
@@ -108,6 +116,10 @@ const failed = (reason: CompatibleRunRequestFailed["reason"]) =>
 const parseBody = (sent: Sent | undefined): JsonValue => JSON.parse(sent?.body ?? "null");
 
 const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+
+/** The request's body as the model sends it: `OpenAiClient` sets the stream fields again. */
+const wireBodyOf = (payload: { readonly stream?: unknown; readonly stream_options?: unknown }) =>
+  JSON.stringify({ ...payload, stream: true, stream_options: { include_usage: true } });
 
 const tools = [
   Tool.dynamic("lookup", {
@@ -274,6 +286,158 @@ describe("compatible language model", () => {
         failed(CompatibleRunRequestFailedReason.cases.ContextLimitExceeded.make({})),
       );
       expect(sent).toEqual([]);
+    }),
+  );
+
+  it.effect("replays earlier images as notes when only then the request fits", () =>
+    Effect.gen(function* () {
+      const image: StoredMessage = {
+        role: "user",
+        content: [
+          { type: "text", content: "look" },
+          { type: "image", source: { type: "data", value: "AAAA", mimeType: "image/png" } },
+        ],
+      };
+      const request = (messages: ReadonlyArray<StoredMessage>) =>
+        compatibleRequest({
+          endpoint: { ...endpoint, contextWindow: 2_000 },
+          reasoningEffort: "default",
+          prompt: providerPrompt(
+            toPrompt([...messages, { role: "user", content: "next" }], [systemPrompt]),
+            compatibleTarget(endpoint.model),
+          ),
+          tools: [],
+        }).pipe(Effect.map(wireBodyOf));
+      // The request with both images does not fit at this window; the newest one stays and the
+      // earlier one leaves as the note.
+      const sent = yield* request([image, image]);
+      expect(JSON.parse(sent)).toMatchObject({
+        messages: [
+          { role: "system" },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "look" },
+              { type: "text", text: "[image from an earlier message]" },
+            ],
+          },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "look" },
+              { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
+            ],
+          },
+          { role: "user", content: "next" },
+        ],
+      });
+      // A window the last image alone cannot fit, even after the pass: still refused.
+      yield* Effect.flip(
+        compatibleRequest({
+          endpoint: { ...endpoint, contextWindow: 24, outputBudget: null },
+          reasoningEffort: "default",
+          prompt: providerPrompt(
+            toPrompt([image, { role: "user", content: "next" }], [systemPrompt]),
+            compatibleTarget(endpoint.model),
+          ),
+          tools: [],
+        }),
+      );
+    }),
+  );
+
+  it.effect("counts images at a fixed token budget, not their base64 characters", () =>
+    Effect.gen(function* () {
+      // An image whose base64 characters alone would count over a small window.
+      const data = "A".repeat(20_000);
+      const image: StoredMessage = {
+        role: "user",
+        content: [
+          { type: "text", content: "look" },
+          { type: "image", source: { type: "data", value: data, mimeType: "image/png" } },
+        ],
+      };
+      const request = (messages: ReadonlyArray<StoredMessage>) =>
+        compatibleRequest({
+          endpoint: { ...endpoint, contextWindow: 10_000, outputBudget: 512 },
+          reasoningEffort: "default",
+          prompt: providerPrompt(
+            toPrompt(messages, [systemPrompt]),
+            compatibleTarget(endpoint.model),
+          ),
+          tools: [],
+        }).pipe(Effect.map(wireBodyOf));
+      // One image at `tokensPerImage` plus the text fits the window and keeps the image part.
+      const sent = yield* request([{ role: "user", content: "next" }, image]);
+      expect(JSON.parse(sent)).toMatchObject({
+        messages: [
+          { role: "system" },
+          { role: "user", content: "next" },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "look" },
+              { type: "image_url", image_url: { url: `data:image/png;base64,${data}` } },
+            ],
+          },
+        ],
+      });
+      // Ten of them, at the fixed budget, leave every image but the newest message's as the note.
+      const slimmed = yield* request(Array.from({ length: 10 }, () => image));
+      // SAFETY: `wireBodyOf` returns the JSON text of the typed payload, whose messages hold
+      // `role` and string or array content only.
+      const body = JSON.parse(slimmed) as {
+        readonly messages: ReadonlyArray<{
+          readonly role: string;
+          readonly content: string | ReadonlyArray<{ readonly type: string }> | null;
+        }>;
+      };
+      // The newest image message is this turn's, so the newest image stays with it.
+      expect(body.messages.filter((message) => message.role === "user")).toHaveLength(10);
+      expect(
+        body.messages.filter(
+          (message) =>
+            Array.isArray(message.content) &&
+            message.content.some((part) => part.type === "image_url"),
+        ),
+      ).toEqual([body.messages.at(-1)]);
+    }),
+  );
+
+  it.effect("replays an earlier image as a note to a model without image input", () =>
+    Effect.gen(function* () {
+      const body = yield* compatibleBody({
+        endpoint: { ...endpoint, imageInput: false },
+        reasoningEffort: "default",
+        prompt: providerPrompt(
+          toPrompt(
+            [
+              {
+                role: "user",
+                content: [
+                  { type: "text", content: "look" },
+                  { type: "image", source: { type: "data", value: "AAAA", mimeType: "image/png" } },
+                ],
+              },
+              { role: "user", content: "what was it?" },
+            ],
+            [systemPrompt],
+          ),
+          compatibleTarget(endpoint.model),
+        ),
+        tools: [],
+      });
+      expect(body.messages).toEqual([
+        { role: "system", content: "Follow the rules." },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "look" },
+            { type: "text", text: "[image from an earlier message]" },
+          ],
+        },
+        { role: "user", content: "what was it?" },
+      ]);
     }),
   );
 

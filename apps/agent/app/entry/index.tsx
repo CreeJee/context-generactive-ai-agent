@@ -27,6 +27,7 @@ import {
   useAgentsQuery,
   useProjectSessionsQuery,
   useSkillsQuery,
+  useWorkingSessions,
   usableAgents,
 } from "./queries/project";
 import { FolderIcon, LogInIcon, SettingsIcon } from "lucide-react";
@@ -183,6 +184,7 @@ export function App() {
   const sessionsQuery = useProjectSessionsQuery(projectId);
   const sessions = sessionsQuery.data?.active ?? [];
   const archived = sessionsQuery.data?.archived ?? [];
+  const working = useWorkingSessions(projectId);
   const [archiveError, setArchiveError] = useState<string | null>(null);
   const agentsQuery = useAgentsQuery(projectId);
   const skillsQuery = useSkillsQuery(projectId ?? "", projectId !== null);
@@ -511,7 +513,7 @@ export function App() {
                     onSelect={(model, effort) => void selectModel(model, effort)}
                   />
                 ) : (
-                  <div className="flex flex-col gap-2 p-3 text-xs text-muted-foreground">
+                  <div className="flex flex-col gap-2 px-4 py-3 text-xs text-muted-foreground">
                     {providerLabels[provider]} 계정을 연결하면 모델을 고를 수 있어요.
                     <Button variant="outline" size="sm" onClick={() => setAccountsOpen(true)}>
                       계정 연결
@@ -569,6 +571,8 @@ export function App() {
               <SessionSection
                 sessions={sessions}
                 archived={archived}
+                answering={working.answering}
+                boardRunning={working.boardRunning}
                 loading={sessionsQuery.isPending}
                 projectId={projectId}
                 sessionId={sessionId}

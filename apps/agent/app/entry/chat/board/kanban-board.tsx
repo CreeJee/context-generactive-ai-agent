@@ -350,7 +350,7 @@ export function KanbanBoard({
       </div>
       <DragOverlay dropAnimation={null}>
         {active !== null && (
-          <div className="w-64 rotate-1 rounded-md border bg-card p-2.5 shadow-lg ring-1 ring-foreground/10">
+          <div className="w-64 rotate-1 rounded-md border bg-card p-3 shadow-lg">
             <CardFace entry={active} signals={signalsOf(active)} />
             {overRefused && (
               <p className="mt-2 rounded-sm bg-destructive/10 px-2 py-1 text-2xs text-destructive">
@@ -373,7 +373,7 @@ export function BoardShortcuts() {
           <Button
             type="button"
             size="icon-sm"
-            variant="ghost"
+            variant="ghost-muted"
             aria-label="키보드 단축키"
             className="hidden sm:inline-flex"
           />
@@ -446,7 +446,7 @@ function BoardColumn({
         <Button
           type="button"
           size="icon-sm"
-          variant="ghost"
+          variant="ghost-muted"
           aria-label={`${label} 열 펼치기`}
           onClick={onToggle}
         >
@@ -462,22 +462,22 @@ function BoardColumn({
       ref={setNodeRef}
       aria-label={`${label} ${count}개`}
       className={cn(
-        "group/column flex snap-start flex-col rounded-lg bg-muted/40 transition-opacity",
-        // An empty column stays a drop target but leaves its width to the columns with cards.
-        count === 0 ? "w-32 flex-none" : "min-w-[min(18rem,85vw)] flex-1 basis-0 sm:min-w-44",
+        // Every open column takes the same share, empty or not; folding is how a column gives
+        // its width away.
+        "group/column flex min-w-[min(18rem,85vw)] flex-1 basis-0 snap-start flex-col rounded-lg bg-muted/40 transition-opacity sm:min-w-44",
         refused && "opacity-40",
         over && !refused && "ring-2 ring-primary/50",
       )}
     >
-      <header className="flex items-center gap-1.5 px-2.5 pt-2 pb-1.5">
+      <header className="flex h-9 items-center gap-1.5 px-3">
         <StatusIcon status={status} />
         <h3 className="text-xs font-medium">{label}</h3>
         <span className="text-xs text-muted-foreground">{count}</span>
         <span className="ml-auto opacity-0 group-hover/column:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100">
           <Button
             type="button"
-            size="icon-xs"
-            variant="ghost"
+            size="icon-sm"
+            variant="ghost-muted"
             aria-label={`${label} 열 접기`}
             onClick={onToggle}
           >
@@ -488,14 +488,14 @@ function BoardColumn({
       {over && hint !== null && (
         <p
           className={cn(
-            "mx-2 mb-1.5 rounded-md px-2 py-1 text-2xs",
+            "mx-2 mb-2 rounded-md px-2 py-1 text-2xs",
             refused ? "bg-destructive/10 text-destructive" : "bg-primary/10 text-primary",
           )}
         >
           {hint}
         </p>
       )}
-      <div className="flex min-h-16 flex-1 flex-col gap-1.5 overflow-y-auto px-2 pb-2">
+      <div className="flex min-h-16 flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2">
         {children}
       </div>
     </section>
@@ -532,7 +532,7 @@ function SortableCard({
       style={{ "--board-card-offset": DndCss.Translate.toString(transform) ?? "none" }}
       {...listeners}
       className={cn(
-        "group/board-card relative flex transform-(--board-card-offset) touch-manipulation items-start gap-1 rounded-md border bg-card p-2.5 transition-colors hover:border-foreground/20 hover:bg-accent/40",
+        "group/board-card relative flex transform-(--board-card-offset) touch-manipulation items-start gap-1 rounded-md border bg-card p-3 transition-colors hover:border-foreground/20 hover:bg-accent/40",
         isDragging && "opacity-40",
         isTruthy(transition) && "transition-transform duration-200 ease-out",
       )}

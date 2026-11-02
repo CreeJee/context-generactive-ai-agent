@@ -16,13 +16,16 @@ export function invalidationKeys(event: AppChangedEvent): readonly AppQueryKey[]
     return [
       appQueryKeys.project.sessions(event.projectId),
       appQueryKeys.project.boards(event.projectId),
+      appQueryKeys.project.running(event.projectId),
     ];
   }
   if (event.topic === "all") return [appQueryKeys.session.root(event.projectId, event.sessionId)];
   // Board changes are saved Plan changes, so they arrive as run-state too. Card decisions move
   // cards, so the board's and the project inbox's decisions follow them, as does the board list.
+  // A run's start and end are run-state too, so the sidebar's answering list follows them.
   if (event.topic === "run-state")
     return [
+      appQueryKeys.project.running(event.projectId),
       appQueryKeys.session.runState(event.projectId, event.sessionId),
       appQueryKeys.session.board(event.projectId, event.sessionId),
       appQueryKeys.session.decisions(event.projectId, event.sessionId),

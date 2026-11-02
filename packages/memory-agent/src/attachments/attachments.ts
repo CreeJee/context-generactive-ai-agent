@@ -195,7 +195,9 @@ const make = Effect.gen(function* () {
   ): Effect.fn.Return<ModelImage> {
     const upload: ModelImage = { path: fileOf(attachment), mimeType: attachment.mimeType };
     if (attachment.mimeType === "image/gif") return upload;
-    const copy = path.join(directory, `${attachment.id}.model.webp`);
+    // JPEG, not WebP: llama.cpp-based local servers read images with stb_image, which has no
+    // WebP decoder (decisions.md 2026-11-02).
+    const copy = path.join(directory, `${attachment.id}.model.jpg`);
     const noCopy = path.join(directory, `${attachment.id}.model-original`);
     return yield* Effect.gen(function* () {
       // A missing or unreadable file is treated as absent, as before.
@@ -203,7 +205,7 @@ const make = Effect.gen(function* () {
         .stat(copy)
         .pipe(Effect.catchTag("PlatformError", () => Effect.void));
       if (existingCopy !== undefined && Number(existingCopy.size) <= maxModelImageBytes)
-        return { path: copy, mimeType: "image/webp" as const };
+        return { path: copy, mimeType: "image/jpeg" as const };
       if (existingCopy !== undefined) yield* fileIo("convert", fs.remove(copy, { force: true }));
       const original = yield* fs
         .stat(noCopy)
@@ -229,7 +231,7 @@ const make = Effect.gen(function* () {
                 fit: "inside",
                 withoutEnlargement: true,
               })
-              .webp({ quality: attempt.quality, smartSubsample: true })
+              .jpeg({ quality: attempt.quality })
               .toBuffer(),
           );
         // A smaller attempt runs only while the previous one is still too large.
@@ -246,7 +248,7 @@ const make = Effect.gen(function* () {
         return upload;
       }
       yield* publish("convert", copy, encoded);
-      return { path: copy, mimeType: "image/webp" as const };
+      return { path: copy, mimeType: "image/jpeg" as const };
     }).pipe(
       // Any conversion failure sends the original; the tag is logged, never paths or Sharp's text.
       Effect.catchTag("AttachmentStorageFailed", (error) =>
@@ -415,6 +417,8 @@ const make = Effect.gen(function* () {
           Effect.forEach(
             [
               fileOf(attachment),
+              path.join(directory, `${attachment.id}.model.jpg`),
+              // The WebP copy older releases wrote, removed with the rest.
               path.join(directory, `${attachment.id}.model.webp`),
               path.join(directory, `${attachment.id}.model-original`),
             ],

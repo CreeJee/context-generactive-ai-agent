@@ -17,6 +17,11 @@ export const createLiveRuns = Effect.gen(function* () {
     get: (sessionId: string): Effect.Effect<LiveRun | null> =>
       Effect.map(Ref.get(bySession), (runs) => Option.getOrNull(HashMap.get(runs, sessionId))),
 
+    /** The sessions whose run is producing now. */
+    sessionIds: Effect.map(Ref.get(bySession), (runs): readonly string[] => [
+      ...HashMap.keys(runs),
+    ]),
+
     /** Claims a session until the returned stream finishes. */
     claim: Effect.fnUntraced(function* (options: {
       readonly sessionId: string;

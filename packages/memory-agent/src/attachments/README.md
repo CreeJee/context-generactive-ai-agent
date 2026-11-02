@@ -2,7 +2,7 @@
 
 ## Overview
 
-`packages/memory-agent/src/attachments`는 대화에 올린 이미지 첨부를 다룬다. 첨부는 바이트의 sha256 주소로 저장하고, 메타데이터는 SQLite `attachments` 표에 둔다. 모델에 보낼 축소 WebP 사본도 만든다.
+`packages/memory-agent/src/attachments`는 대화에 올린 이미지 첨부를 다룬다. 첨부는 바이트의 sha256 주소로 저장하고, 메타데이터는 SQLite `attachments` 표에 둔다. 모델에 보낼 축소 JPEG 사본도 만든다.
 
 `model-images.ts`는 `RunHook`을 제공한다. 이 hook은 모델 요청 직전에 저장된 transcript의 `/api/attachments/<id>` 이미지 URL을 inline base64 데이터로 바꾼다. `previews.ts`는 `DrawingPreviews` 서비스를 제공한다. `write_file`/`edit_file` 도구가 SVG를 쓰면 이 서비스가 그 그림을 첨부로 저장하고 결과에 `preview`를 덧붙인다. `urls.ts`는 브라우저와 서버가 공유하는 첨부 URL 규약이다.
 
@@ -32,7 +32,7 @@
 - 첨부 id는 바이트의 sha256 hex(64자)다. `isAttachmentId`를 통과하지 못한 id는 파일시스템과 DB에 닿지 않는다. `get`은 바로 null을 돌려준다
 - 선언된 MIME 타입은 믿지 않는다. 실제 타입은 `sniffImageType`의 시그니처 판별로 정한다. WebP는 offset 0의 RIFF와 offset 8의 WEBP가 모두 맞아야 한다
 - 고아 첨부 삭제(`deleteOrphans`)는 판단과 삭제를 한 SQL 문(`DELETE ... WHERE NOT EXISTS node_attachments AND NOT EXISTS btw_attachments RETURNING *`)으로 한다. 그 사이에 추가된 링크의 blob이 지워지지 않게 하기 위해서다. 첨부를 참조하는 표는 `node_attachments`와 `btw_attachments` 두 곳이다
-- 모델용 사본 파일 경로는 `<id>.model.webp`다. 변환해도 이득이 없었다는 marker는 `<id>.model-original` 빈 파일이다. GIF는 애니메이션 보존을 위해 변환하지 않고 원본을 쓴다
+- 모델용 사본 파일 경로는 `<id>.model.jpg`다(JPEG; llama.cpp 계열 로컬 서버가 stb_image로 읽어 WebP를 못 읽을 수 있어서, decisions.md 2026-11-02). 변환해도 이득이 없었다는 marker는 `<id>.model-original` 빈 파일이다. 이전 릴리스가 남긴 `<id>.model.webp` 사본은 purge에서 함께 지운다. GIF는 애니메이션 보존을 위해 변환하지 않고 원본을 쓴다
 - 변환 결과가 원본 바이트 이상이면 marker를 남기고 원본을 보낸다. 기존 사본이 `maxModelImageBytes`보다 크면 지우고 다시 만든다
 - 적응형 인코딩은 2048/q86, 1600/q78, 1280/q70, 1024/q64 순서로 시도한다. 작은 시도는 앞 결과가 아직 `maxModelImageBytes`를 넘을 때만 실행한다
 - Sharp 변환은 프로세스 공용 Semaphore(`maxConcurrentImageConversions` = 2)로 동시성을 제한한다

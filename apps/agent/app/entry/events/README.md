@@ -25,7 +25,7 @@
 
 - 무효화기는 revision 단조성을 지킨다. `changed`에서 `event.revision <= 마지막 revision`이면 무시한다. 첫 `ready`이거나 `ready` revision이 기억한 값과 다르면 root 키 전체를 무효화한다. 근거는 "ready repairs missed events" 주석이다.
 - 첫 `ready`는 초기 쿼리와 구독 사이의 공백을 메우려고 반드시 root를 무효화한다. revision이 `null`인 동안의 `changed`는 항상 적용된다.
-- `invalidationKeys`의 키 연쇄는 주석에 근거한다. global `auth`는 `auth`와 `accountsRoot`를 함께 무효화한다. project `sessions`는 `sessions`와 `boards`를 함께 무효화한다. session `run-state`는 runState·board·session decisions·project decisions·project boards·kanban을 함께 무효화한다. 근거는 "Board changes are saved Plan changes"와 "Card decisions move cards" 주석이다. topic을 추가하면 이 매핑도 함께 바꿔야 한다.
+- `invalidationKeys`의 키 연쇄는 주석에 근거한다. global `auth`는 `auth`와 `accountsRoot`를 함께 무효화한다. project `sessions`는 `sessions`·`boards`·`running`을 함께 무효화한다. session `run-state`는 project running·runState·board·session decisions·project decisions·project boards·kanban을 함께 무효화한다. 근거는 "Board changes are saved Plan changes"와 "Card decisions move cards" 주석이다. topic을 추가하면 이 매핑도 함께 바꿔야 한다.
 - session scope의 마지막 분기는 `relayed-approvals`를 암묵적으로 `approvals`로 매핑한다. `SessionEventTopic`에 새 값을 넣으면 이 fallthrough가 잘못 매핑할 수 있다.
 - 디코드는 네이티브 EventSource 경계에서 동기(`Schema.decodeUnknownResult` + `Schema.fromJsonString`)로 한다. 실패는 throw하지 않고 `onDecodeError` 콜백으로만 전달한다.
 - `connectAppEvents`의 close는 멱등이다. 이미 abort된 signal을 받으면 즉시 close한다.

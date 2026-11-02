@@ -213,7 +213,7 @@ function ProfileCard({
             onKeyDown={(event) => event.key === "Escape" && cancelRename()}
             autoFocus
           />
-          <Button type="submit" variant="ghost" size="icon" aria-label="이름 저장">
+          <Button type="submit" variant="ghost-muted" size="icon" aria-label="이름 저장">
             <CheckIcon />
           </Button>
           <Button
@@ -370,7 +370,7 @@ function LoginStatus({
   if (view === undefined) return null;
   return AccountLoginState.$match(view.login, {
     pending: ({ authorizationUrl }) => (
-      <div className="flex items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-xs">
+      <div className="flex items-center gap-2 rounded-lg border px-3 py-2 text-xs">
         <Spinner />
         <span className="min-w-0 flex-1">
           브라우저에서 {providerLabels[provider]} 로그인을 완료하세요
@@ -412,7 +412,7 @@ function AddAccountForm({
   return (
     <form
       aria-label={`새 ${providerLabels[provider]} 계정`}
-      className="flex items-center gap-1 rounded-lg border border-dashed px-3 py-2"
+      className="flex items-center gap-1 rounded-lg border px-3 py-2"
       onSubmit={(event) => {
         event.preventDefault();
         if (label.trim() === "") return;
@@ -429,10 +429,10 @@ function AddAccountForm({
         onKeyDown={(event) => event.key === "Escape" && onClose()}
         autoFocus
       />
-      <Button type="submit" variant="outline" disabled={busy || label.trim() === ""}>
+      <Button type="submit" disabled={busy || label.trim() === ""}>
         로그인
       </Button>
-      <Button type="button" variant="ghost-muted" onClick={onClose}>
+      <Button type="button" variant="outline" onClick={onClose}>
         취소
       </Button>
     </form>

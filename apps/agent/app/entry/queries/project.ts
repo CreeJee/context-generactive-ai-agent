@@ -59,6 +59,12 @@ export const projectQueries = {
       queryFn: () => api.projectBoards(projectId),
       staleTime: 0,
     }),
+  running: (projectId: string) =>
+    queryOptions({
+      queryKey: appQueryKeys.project.running(projectId),
+      queryFn: () => api.runningSessions(projectId),
+      staleTime: 0,
+    }),
   traceTask: (projectId: string, taskId: string) =>
     queryOptions({
       queryKey: appQueryKeys.project.traceTask(projectId, taskId),
@@ -77,6 +83,19 @@ export function useProjectSessionsQuery(projectId: string | null) {
     ...projectQueries.sessions(projectId ?? ""),
     enabled: projectId !== null,
   });
+}
+
+/** Conversations at work now: answering, or running their board. They lead the sidebar's list. */
+export function useWorkingSessions(projectId: string | null) {
+  const enabled = projectId !== null;
+  const answering = useQuery({ ...projectQueries.running(projectId ?? ""), enabled });
+  const boards = useQuery({ ...projectQueries.boards(projectId ?? ""), enabled });
+  return {
+    answering: new Set(answering.data ?? []),
+    boardRunning: new Set(
+      (boards.data ?? []).filter((board) => board.kanbanActive).map((board) => board.sessionId),
+    ),
+  };
 }
 
 export const useAgentsQuery = (projectId: string | null) =>

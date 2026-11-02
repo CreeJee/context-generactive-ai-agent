@@ -76,6 +76,7 @@ import { Separator } from "~/components/ui/separator";
 import {
   SidebarContent,
   SidebarGroup,
+  SidebarGroupLabel,
   SidebarMenu,
   SidebarMenuAction,
   SidebarMenuButton,
@@ -100,7 +101,7 @@ import { effortChoices } from "./providers";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section aria-label={title} className="px-3 py-2 not-last:border-b">
+    <section aria-label={title} className="px-4 py-2 not-last:border-b">
       <DataList className="grid-cols-[3.5rem_minmax(0,1fr)]">{children}</DataList>
     </section>
   );
@@ -219,7 +220,7 @@ export function ProjectSection({
             <span className="font-medium">프로젝트 선택</span>
           )}
         </SidebarDisclosureTrigger>
-        <CollapsibleContent className="px-3 pb-2">
+        <CollapsibleContent className="px-4 pb-2">
           <DataList className="grid-cols-[3.5rem_minmax(0,1fr)]">
             <DataListItem term="프로젝트">
               <div className="flex min-w-0 items-center gap-2">
@@ -425,7 +426,7 @@ function OpenFolderButton({
     <>
       <Button
         variant="outline"
-        size="icon"
+        size="icon-sm"
         aria-label="폴더 열기"
         title="폴더 열기"
         disabled={picking}
@@ -505,7 +506,7 @@ function AddProjectDialog({
             {error && <FieldError>{error}</FieldError>}
           </Field>
           <DialogFooter>
-            <DialogClose render={<Button type="button" variant="ghost" />}>취소</DialogClose>
+            <DialogClose render={<Button type="button" variant="outline" />}>취소</DialogClose>
             <Button type="submit" disabled={adding || !isTruthy(root.trim())}>
               {adding && <Spinner />} 추가
             </Button>
@@ -558,9 +559,41 @@ const shownIn = (filter: PlaceFilter) => (session: Session) =>
     place: ({ place }) => sessionPlace(session) === place,
   });
 
+/** One section of the conversation list: a heading that folds it, with how many it holds. */
+function SessionGroup({
+  title,
+  count,
+  defaultOpen = false,
+  children,
+}: {
+  title: string;
+  count: number;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  // The heading sticks to the top of the scrolling list while its section is in view; the next
+  // section's heading pushes it out, since a sticky element stays inside its own section.
+  return (
+    <SidebarGroup>
+      <Collapsible defaultOpen={defaultOpen}>
+        <CollapsibleTrigger className="group sticky top-0 z-10 flex h-8 w-full items-center gap-1 rounded-md bg-sidebar px-2 text-2xs font-medium tracking-wide text-muted-foreground uppercase outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring">
+          <ChevronRightIcon className="size-3.5 shrink-0 transition-transform group-data-[panel-open]:rotate-90" />
+          <span className="min-w-0 flex-1 truncate text-left">{title}</span>
+          <span className="tabular-nums" aria-label={`${count}개`}>
+            {count}
+          </span>
+        </CollapsibleTrigger>
+        <CollapsibleContent className="flex flex-col gap-0.5">{children}</CollapsibleContent>
+      </Collapsible>
+    </SidebarGroup>
+  );
+}
+
 export function SessionSection({
   sessions,
   archived,
+  answering,
+  boardRunning,
   loading,
   projectId,
   sessionId,
@@ -573,6 +606,10 @@ export function SessionSection({
 }: {
   sessions: ReadonlyArray<Session>;
   archived: ReadonlyArray<Session>;
+  /** Conversations whose run is producing an answer now. */
+  answering: ReadonlySet<string>;
+  /** Conversations whose kanban board is running. */
+  boardRunning: ReadonlySet<string>;
   /** The list has not arrived yet, so an empty one says nothing. */
   loading: boolean;
   projectId: string;
@@ -599,54 +636,86 @@ export function SessionSection({
   ].toSorted();
   const filter = placeFilterOf(placeValue, places);
   const shown = sessions.filter(shownIn(filter));
+  // Conversations at work lead the list, in the list's own order; the rest follow under them.
+  const working = (session: Session) => answering.has(session.id) || boardRunning.has(session.id);
+  const atWork = shown.filter(working);
+  const rest = shown.filter((session) => !working(session));
   const everywhere = PlaceFilter.$is("all")(filter);
   const placeLabel = PlaceFilter.$match(filter, {
     all: () => "모든 작업 위치",
     checkout: () => "저장소 본체",
     place: ({ place }) => place,
   });
+  const row = (session: Session) => (
+    <SidebarMenuItem key={session.id}>
+      <SidebarMenuButton
+        isActive={session.id === sessionId}
+        render={
+          <Link
+            to={`/?project=${encodeURIComponent(projectId)}&session=${encodeURIComponent(session.id)}`}
+            preventScrollReset
+            aria-current={session.id === sessionId ? "page" : undefined}
+          />
+        }
+      >
+        <span className="min-w-0 flex-1 truncate">{label(session)}</span>
+        {/* Only a separate worktree is worth a chip; a filtered list is all one place. */}
+        {everywhere && session.worktreePath !== null && (
+          <Badge
+            variant="outline"
+            className="max-w-24 shrink-0"
+            title={session.worktreePath ?? undefined}
+          >
+            <GitBranchIcon /> <span className="truncate">{sessionPlace(session)}</span>
+          </Badge>
+        )}
+        {session.agent && (
+          <Badge variant="outline" className="shrink-0">
+            <BotIcon /> {session.agent}
+          </Badge>
+        )}
+        {working(session) && (
+          <span className="flex shrink-0 text-muted-foreground">
+            <Spinner aria-label={answering.has(session.id) ? "답변 중" : "보드 실행 중"} />
+          </span>
+        )}
+      </SidebarMenuButton>
+      {/* One menu on hover or focus keeps the row's width for its title. */}
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={<SidebarMenuAction showOnHover aria-label={`${label(session)} 메뉴`} />}
+        >
+          <EllipsisIcon />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent side="right" align="start">
+          <DropdownMenuItem
+            onClick={() => onArchive(session.id)}
+            title="실행 중이면 안전하게 중단하고 기억은 남겨요"
+          >
+            <ArchiveIcon /> 보관하기
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            variant="destructive"
+            onClick={() => setDeleteAsk({ session, open: true })}
+          >
+            <Trash2Icon /> 원본 삭제
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </SidebarMenuItem>
+  );
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center justify-between px-4 pt-3 pb-2">
-        <h2 className="text-2xs font-medium tracking-wide text-muted-foreground uppercase">대화</h2>
-        <div className="flex min-w-0 items-center gap-1">
-          {places.length > 0 && (
-            <DropdownMenu>
-              {/* A filter in use names its place, so a short list is not mistaken for all of it. */}
-              <DropdownMenuTrigger
-                render={
-                  <Button
-                    variant={everywhere ? "ghost" : "secondary"}
-                    size={everywhere ? "icon-sm" : "sm"}
-                    aria-label={`작업 위치: ${placeLabel}`}
-                    title={`작업 위치: ${placeLabel}`}
-                  />
-                }
-              >
-                <GitBranchIcon />
-                {!everywhere && <span className="max-w-20 truncate">{placeLabel}</span>}
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-64">
-                <DropdownMenuGroup>
-                  <DropdownMenuLabel>작업 위치</DropdownMenuLabel>
-                  <DropdownMenuRadioGroup
-                    value={placeValue}
-                    onValueChange={(value: string) => setPlaceValue(value)}
-                  >
-                    <DropdownMenuRadioItem value={everyPlace}>모든 작업 위치</DropdownMenuRadioItem>
-                    <DropdownMenuRadioItem value={checkoutPlace}>저장소 본체</DropdownMenuRadioItem>
-                    {places.map((place) => (
-                      <DropdownMenuRadioItem key={place} value={place} title={place}>
-                        <span className="min-w-0 flex-1 truncate">{place}</span>
-                      </DropdownMenuRadioItem>
-                    ))}
-                  </DropdownMenuRadioGroup>
-                </DropdownMenuGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
-          <ButtonGroup aria-label="새 대화">
-            <Button variant="outline" size="sm" onClick={() => onCreate()}>
+      {/* The list's actions come first, then its sections; no title row competes with them. */}
+      <div className="flex px-2 pt-3 pb-1">
+        <div className="flex min-w-0 flex-1">
+          <ButtonGroup aria-label="새 대화" className="w-full">
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1 justify-start"
+              onClick={() => onCreate()}
+            >
               <PlusIcon /> 새 대화
             </Button>
             <DropdownMenu>
@@ -678,123 +747,119 @@ export function SessionSection({
           </ButtonGroup>
         </div>
       </div>
+      {/* The place filter sits on its own row under the header, away from the new-conversation
+          action, and reads as a select: it always names the place shown, with a chevron. */}
+      {places.length > 0 && (
+        <div className="px-2 pb-1">
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant={everywhere ? "ghost-muted" : "secondary"}
+                  size="sm"
+                  className="w-full justify-start"
+                  aria-label={`작업 위치: ${placeLabel}`}
+                  title={`작업 위치: ${placeLabel}`}
+                />
+              }
+            >
+              <GitBranchIcon />
+              <span className="min-w-0 flex-1 truncate text-left">{placeLabel}</span>
+              <ChevronDownIcon className="text-muted-foreground" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-64">
+              <DropdownMenuGroup>
+                <DropdownMenuLabel>작업 위치</DropdownMenuLabel>
+                <DropdownMenuRadioGroup
+                  value={placeValue}
+                  onValueChange={(value: string) => setPlaceValue(value)}
+                >
+                  <DropdownMenuRadioItem value={everyPlace}>모든 작업 위치</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value={checkoutPlace}>저장소 본체</DropdownMenuRadioItem>
+                  {places.map((place) => (
+                    <DropdownMenuRadioItem key={place} value={place} title={place}>
+                      <span className="min-w-0 flex-1 truncate">{place}</span>
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      )}
       {archiveError && (
         <Alert variant="destructive" className="mx-2 mb-2 w-auto">
           <AlertDescription>{archiveError}</AlertDescription>
         </Alert>
       )}
       <SidebarContent>
-        <SidebarGroup>
-          <SidebarMenu>
-            {/* Fixed widths: the server renders this too, and a random one would not hydrate. */}
-            {loading && (
-              <SidebarMenuItem>
-                <div className="flex flex-col gap-4 p-2">
-                  <Skeleton className="h-4 w-3/4" />
-                  <Skeleton className="h-4 w-1/2" />
-                  <Skeleton className="h-4 w-2/3" />
-                </div>
-              </SidebarMenuItem>
-            )}
-            {shown.map((session) => (
-              <SidebarMenuItem key={session.id}>
-                <SidebarMenuButton
-                  isActive={session.id === sessionId}
-                  render={
-                    <Link
-                      to={`/?project=${encodeURIComponent(projectId)}&session=${encodeURIComponent(session.id)}`}
-                      preventScrollReset
-                      aria-current={session.id === sessionId ? "page" : undefined}
-                    />
-                  }
-                >
-                  <span className="min-w-0 flex-1 truncate">{label(session)}</span>
-                  {/* Only a separate worktree is worth a chip; a filtered list is all one place. */}
-                  {everywhere && session.worktreePath !== null && (
-                    <Badge
-                      variant="outline"
-                      className="max-w-24 shrink-0"
-                      title={session.worktreePath ?? undefined}
+        {/* Fixed widths: the server renders this too, and a random one would not hydrate. */}
+        {loading && (
+          <div className="flex flex-col gap-4 p-4">
+            <Skeleton className="h-4 w-3/4" />
+            <Skeleton className="h-4 w-1/2" />
+            <Skeleton className="h-4 w-2/3" />
+          </div>
+        )}
+        {!loading && sessions.length === 0 && (
+          <p className="px-4 py-2 text-xs text-muted-foreground">아직 대화가 없어요.</p>
+        )}
+        {sessions.length > 0 && shown.length === 0 && (
+          <p className="px-4 py-2 text-xs text-muted-foreground">이 작업 위치의 대화가 없어요.</p>
+        )}
+        {/* Three sections of one rank: same heading, same rows, one after another. */}
+        {sessions.length > 0 && shown.length > 0 && (
+          <>
+            <SessionGroup title="진행 중" count={atWork.length} defaultOpen>
+              {atWork.length === 0 ? (
+                <p className="px-2 py-1 text-xs text-muted-foreground">진행 중인 대화가 없어요.</p>
+              ) : (
+                <SidebarMenu>{atWork.map(row)}</SidebarMenu>
+              )}
+            </SessionGroup>
+            <SessionGroup title="대화" count={rest.length} defaultOpen>
+              {rest.length === 0 ? (
+                <p className="px-2 py-1 text-xs text-muted-foreground">다른 대화가 없어요.</p>
+              ) : (
+                <SidebarMenu>{rest.map(row)}</SidebarMenu>
+              )}
+            </SessionGroup>
+          </>
+        )}
+        {archived.length > 0 && (
+          <SessionGroup title="보관함" count={archived.length}>
+            <SidebarMenu>
+              {archived.map((session) => (
+                <SidebarMenuItem key={session.id}>
+                  {/* An archived conversation is out of the list, so its row opens its actions. */}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      render={
+                        <SidebarMenuButton
+                          title="목록에서만 뺀 대화예요. 기억 검색에는 계속 나와요."
+                          aria-label={`${label(session)} 메뉴`}
+                        />
+                      }
                     >
-                      <GitBranchIcon /> <span className="truncate">{sessionPlace(session)}</span>
-                    </Badge>
-                  )}
-                  {session.agent && (
-                    <Badge variant="outline" className="shrink-0">
-                      <BotIcon /> {session.agent}
-                    </Badge>
-                  )}
-                </SidebarMenuButton>
-                {/* One menu on hover or focus keeps the row's width for its title. */}
-                <DropdownMenu>
-                  <DropdownMenuTrigger
-                    render={<SidebarMenuAction showOnHover aria-label={`${label(session)} 메뉴`} />}
-                  >
-                    <EllipsisIcon />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent side="right" align="start">
-                    <DropdownMenuItem
-                      onClick={() => onArchive(session.id)}
-                      title="실행 중이면 안전하게 중단하고 기억은 남겨요"
-                    >
-                      <ArchiveIcon /> 보관하기
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      variant="destructive"
-                      onClick={() => setDeleteAsk({ session, open: true })}
-                    >
-                      <Trash2Icon /> 원본 삭제
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </SidebarMenuItem>
-            ))}
-          </SidebarMenu>
-          {!loading && sessions.length === 0 && (
-            <p className="px-2 text-xs text-muted-foreground">아직 대화가 없어요.</p>
-          )}
-          {sessions.length > 0 && shown.length === 0 && (
-            <p className="px-2 text-xs text-muted-foreground">이 작업 위치의 대화가 없어요.</p>
-          )}
-          {archived.length > 0 && (
-            <Collapsible className="mt-2">
-              <CollapsibleTrigger
-                render={
-                  <Button variant="ghost-muted" size="sm" className="group w-full justify-start" />
-                }
-              >
-                <ChevronRightIcon className="transition-transform group-data-[panel-open]:rotate-90" />
-                <ArchiveIcon /> 보관함
-                <Badge variant="secondary" className="ml-auto" aria-label={`${archived.length}개`}>
-                  {archived.length}
-                </Badge>
-              </CollapsibleTrigger>
-              <CollapsibleContent className="flex flex-col gap-0.5">
-                <p className="px-2 py-1 text-xs text-muted-foreground">
-                  목록에서만 뺀 대화예요. 기억 검색에는 계속 나와요.
-                </p>
-                {archived.map((session) => (
-                  <div
-                    key={session.id}
-                    className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground"
-                  >
-                    <span className="min-w-0 flex-1 truncate">{label(session)}</span>
-                    <Button variant="ghost" size="xs" onClick={() => onRestore(session.id)}>
-                      <ArchiveRestoreIcon /> 복원
-                    </Button>
-                    <Button
-                      variant="destructive"
-                      size="xs"
-                      onClick={() => setDeleteAsk({ session, open: true })}
-                    >
-                      <Trash2Icon /> 삭제
-                    </Button>
-                  </div>
-                ))}
-              </CollapsibleContent>
-            </Collapsible>
-          )}
-        </SidebarGroup>
+                      <span className="min-w-0 flex-1 truncate">{label(session)}</span>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent side="right" align="start">
+                      <DropdownMenuItem onClick={() => onRestore(session.id)}>
+                        <ArchiveRestoreIcon /> 복원
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        variant="destructive"
+                        onClick={() => setDeleteAsk({ session, open: true })}
+                      >
+                        <Trash2Icon /> 원본 삭제
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </SessionGroup>
+        )}
       </SidebarContent>
       <AlertDialog
         open={deleteAsk?.open === true}

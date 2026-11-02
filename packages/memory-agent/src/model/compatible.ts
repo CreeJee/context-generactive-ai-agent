@@ -217,7 +217,23 @@ const toolImages = (content: StoredContent): Array<ChatContentPart> =>
 const callArguments = (part: Prompt.ToolCallPart) =>
   partOptions(part).arguments ?? JSON.stringify(part.params);
 
-const userMessage = (message: Prompt.UserMessage): Effect.Effect<ChatMessage, AiError.AiError> =>
+/**
+ * What a part an image-blind model reads instead of an image: an earlier turn's image becomes a
+ * note, so a conversation can continue on the model without pretending it saw anything
+ * (decisions.md 2026-11-02). A new turn's image is refused before a run starts (`AgentChat`).
+ */
+const imagePlaceholder: ChatContentPart = { type: "text", text: "[image from an earlier message]" };
+
+/** A part as the model reads it: text and images when it reads images, otherwise text only. */
+const asImagePart =
+  (readsImages: boolean) =>
+  (part: ChatContentPart): ChatContentPart =>
+    readsImages || part.type !== "image_url" ? part : imagePlaceholder;
+
+const userMessage = (
+  message: Prompt.UserMessage,
+  readsImages: boolean,
+): Effect.Effect<ChatMessage, AiError.AiError> =>
   Option.match(
     Option.filter(
       Arr.head(message.content),
@@ -251,7 +267,7 @@ const userMessage = (message: Prompt.UserMessage): Effect.Effect<ChatMessage, Ai
               Match.value(part).pipe(
                 Match.discriminatorsExhaustive("type")({
                   text: (text): ChatContentPart => ({ type: "text", text: text.text }),
-                  file: (file) => imageUrlPart(imageSource(file)),
+                  file: (file) => asImagePart(readsImages)(imageUrlPart(imageSource(file))),
                 }),
               ),
             ),
@@ -290,15 +306,23 @@ type Sending = readonly [
 
 /**
  * The Chat Completions messages for a prompt that is already the provider prompt: the system
- * prompts joined first, and each tool result's images in a user message after the results.
+ * prompts joined first, and each tool result's images in a user message after the results. An
+ * image-blind model reads placeholders instead of the images.
  */
-const chatMessages = (prompt: Prompt.Prompt) => {
+const chatMessages = (prompt: Prompt.Prompt, readsImages: boolean) => {
   const system = prompt.content.flatMap((message) =>
     message.role === "system" ? [message.content] : [],
   );
   /** The images waiting for a message that is not a tool result, as a user message. */
   const imagesMessage = (images: ReadonlyArray<ChatContentPart>) =>
-    images.length > 0 ? [Effect.succeed<ChatMessage>({ role: "user", content: [...images] })] : [];
+    images.length > 0
+      ? [
+          Effect.succeed<ChatMessage>({
+            role: "user",
+            content: images.map(asImagePart(readsImages)),
+          }),
+        ]
+      : [];
   const [waiting, sent] = Arr.mapAccum(
     prompt.content,
     Arr.empty<ChatContentPart>(),
@@ -306,7 +330,7 @@ const chatMessages = (prompt: Prompt.Prompt) => {
       Match.value(message).pipe(
         Match.discriminatorsExhaustive("role")({
           system: (): Sending => [images, []],
-          user: (user): Sending => [[], [...imagesMessage(images), userMessage(user)]],
+          user: (user): Sending => [[], [...imagesMessage(images), userMessage(user, readsImages)]],
           assistant: (assistant): Sending => [
             [],
             [...imagesMessage(images), Effect.succeed(assistantMessage(assistant))],
@@ -370,7 +394,7 @@ export const compatibleBody = Effect.fnUntraced(function* (request: CompatibleRe
   return {
     ...optionalProperty("max_tokens", endpoint.outputBudget ?? undefined),
     model: endpoint.model,
-    messages: yield* chatMessages(request.prompt),
+    messages: yield* chatMessages(request.prompt, endpoint.imageInput === true),
     ...optionalProperty("tools", tools.length > 0 ? tools : undefined),
     stream: true,
     stream_options: { include_usage: true },
@@ -382,17 +406,61 @@ export const compatibleBody = Effect.fnUntraced(function* (request: CompatibleRe
 });
 
 /**
- * The local context guard: a quarter token per ASCII character of the body, one per other
- * character. It also counts the tool schemas, as the request carries them.
+ * The tokens one image part counts for in the local context guard, as other chat apps budget
+ * images instead of counting their base64 characters (decisions.md 2026-11-02).
  */
-const exceedsContext = (payload: CompatiblePayload, endpoint: OpenAICompatibleConfiguration) => {
-  const body = JSON.stringify(payload);
-  // Characters are code points, as `for...of` reads them.
-  const ascii = body.replace(/\P{ASCII}+/gu, "").length;
-  const other = Array.from(body.replace(/\p{ASCII}+/gu, "")).length;
-  return (
-    Math.ceil(ascii * 0.25 + other) + reservedOutput(endpoint.outputBudget) > endpoint.contextWindow
-  );
+export const tokensPerImage = 1_000;
+
+/**
+ * The image parts of a Chat Completions message, in user content and in tool results' trailing
+ * user messages.
+ */
+const imagesIn = (message: ChatMessage): number =>
+  Array.isArray(message.content)
+    ? message.content.filter((part) => part.type === "image_url").length
+    : 0;
+
+/**
+ * The local context guard: a quarter token per ASCII character of the body, one per other
+ * character, and a fixed budget per image part instead of their base64 characters. It also counts
+ * the tool schemas, as the request carries them.
+ *
+ * When the request would not fit, the images older than the newest one leave in one generous pass,
+ * each as the placeholder an image-blind model reads, so a conversation can continue instead of
+ * ending at the guard; the newest image is what the turn turns on and never leaves. A request that
+ * still does not fit is refused (`ContextLimitExceeded`), as one without images is.
+ */
+const withinContext = (
+  payload: CompatiblePayload,
+  endpoint: OpenAICompatibleConfiguration,
+): Option.Option<CompatiblePayload> => {
+  const measure = (messages: ReadonlyArray<ChatMessage>) => {
+    const body = JSON.stringify({ ...payload, messages });
+    // Characters are code points, as `for...of` reads them.
+    const ascii = body.replace(/\P{ASCII}+/gu, "").length;
+    const other = Array.from(body.replace(/\p{ASCII}+/gu, "")).length;
+    const images = messages.reduce((count, message) => count + imagesIn(message), 0);
+    return Math.ceil(ascii * 0.25 + other) + images * tokensPerImage;
+  };
+  const budget = endpoint.contextWindow - reservedOutput(endpoint.outputBudget);
+  if (measure(payload.messages) <= budget) return Option.some(payload);
+  // Without an image to trade away the request is refused, as it was before the guard slimmed one.
+  const newest = Arr.findLastIndex(payload.messages, (message) => imagesIn(message) > 0);
+  if (Option.isNone(newest)) return Option.none();
+  const slimmed: CompatiblePayload = {
+    ...payload,
+    messages: payload.messages.map((message, index) =>
+      index < newest.value && message.role === "user" && Array.isArray(message.content)
+        ? {
+            role: "user" as const,
+            content: message.content.map((part) =>
+              part.type === "image_url" ? imagePlaceholder : part,
+            ),
+          }
+        : message,
+    ),
+  };
+  return measure(slimmed.messages) <= budget ? Option.some(slimmed) : Option.none();
 };
 
 /**
@@ -930,14 +998,16 @@ const failWith = (failure: CompatibleRunRequestFailed) =>
 /** The request the model sends, or the context guard's refusal before anything is sent. */
 export const compatibleRequest = (request: CompatibleRequest) =>
   compatibleBody(request).pipe(
-    Effect.filterOrElse(
-      (payload) => !exceedsContext(payload, request.endpoint),
-      () =>
-        failWith(
-          CompatibleRunRequestFailed.make({
-            reason: CompatibleRunRequestFailedReason.cases.ContextLimitExceeded.make({}),
-          }),
-        ),
+    Effect.flatMap((payload) =>
+      Option.match(withinContext(payload, request.endpoint), {
+        onSome: Effect.succeed,
+        onNone: () =>
+          failWith(
+            CompatibleRunRequestFailed.make({
+              reason: CompatibleRunRequestFailedReason.cases.ContextLimitExceeded.make({}),
+            }),
+          ),
+      }),
     ),
   );
 

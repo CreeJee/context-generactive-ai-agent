@@ -39,12 +39,22 @@ const connectionFields = {
   outputBudget: CompatibleOutputBudget,
   toolCalling: Schema.Boolean,
 };
+
+/** How a model's image input setting was set: the server's model list, or the user. */
+export const CompatibleImageInputSource = Schema.Literals(["models", "user"]);
+const imageInputFields = {
+  /** The model accepts image parts. The server's model list suggested it or the user turned it on. */
+  imageInput: Schema.optionalKey(Schema.Boolean),
+  /** Where the stored `imageInput` came from; a list-derived one is updated by the next list read. */
+  imageInputSource: Schema.optionalKey(CompatibleImageInputSource),
+};
 /**
  * One endpoint and one of its models, as a run or test uses them. Also the shape of
  * the single endpoint stored before compatible accounts.
  */
 export const OpenAICompatibleConfiguration = Schema.Struct({
   ...connectionFields,
+  ...imageInputFields,
   reasoning: Schema.optional(CompatibleReasoning),
 });
 export type OpenAICompatibleConfiguration = typeof OpenAICompatibleConfiguration.Type;
@@ -55,6 +65,7 @@ export const CompatibleModel = Schema.Struct({
   contextWindow: OpenAICompatibleContextWindow,
   outputBudget: CompatibleOutputBudget,
   toolCalling: Schema.Boolean,
+  ...imageInputFields,
   /** Reasoning efforts the endpoint's model list published, or its known server accepts, for this model. */
   reasoning: Schema.optional(CompatibleReasoning),
 });
@@ -64,6 +75,9 @@ export const CompatibleModelInput = Schema.Struct({
   contextWindow: Schema.Int,
   outputBudget: CompatibleOutputBudget,
   toolCalling: Schema.Boolean,
+  // Absent leaves the choice unset, so the model list may still suggest it; the UI always
+  // sends it when the user touched the setting.
+  imageInput: Schema.optionalKey(Schema.Boolean),
 });
 export type CompatibleModelInput = typeof CompatibleModelInput.Type;
 
@@ -144,6 +158,24 @@ function compatibleToolCallingBody(
   );
 }
 
+/**
+ * Whether the selected endpoint's registered model accepts image parts. Absent settings read as
+ * off, as every model written before the setting did (decisions.md 2026-11-02).
+ */
+export const compatibleImageInput: {
+  (modelId: string): (settings: Parameters<typeof compatibleAccountsOf>[0]) => boolean;
+} & typeof compatibleImageInputBody = EffectFunction.dual(2, compatibleImageInputBody);
+function compatibleImageInputBody(
+  settings: Parameters<typeof compatibleAccountsOf>[0],
+  modelId: string,
+) {
+  return (
+    selectedCompatibleAccount(compatibleAccountsOf(settings))?.models.find(
+      (model) => model.id === modelId,
+    )?.imageInput === true
+  );
+}
+
 /** An endpoint's model joined with its connection, or null when it is not registered there. */
 export const compatibleEndpointModel: {
   (modelId: string): (account: CompatibleAccount) => OpenAICompatibleConfiguration | null;
@@ -155,7 +187,11 @@ function compatibleEndpointModelBody(
   return Option.getOrNull(
     Option.map(
       EffectArray.findFirst(account.models, (model) => model.id === modelId),
-      ({ id, ...limits }) => ({ ...limits, baseUrl: account.baseUrl, model: id }),
+      ({ id, imageInputSource: _source, ...limits }) => ({
+        ...limits,
+        baseUrl: account.baseUrl,
+        model: id,
+      }),
     ),
   );
 }

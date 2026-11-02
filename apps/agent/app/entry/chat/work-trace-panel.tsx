@@ -341,14 +341,14 @@ function PanelBody({
         aria-label="Work Trace 보기 모드"
       >
         <Button
-          size="xs"
+          size="sm"
           variant={mode === "live" ? "secondary" : "ghost"}
           onClick={() => setMode("live")}
         >
           Live
         </Button>
         <Button
-          size="xs"
+          size="sm"
           variant={mode === "review" ? "secondary" : "ghost"}
           onClick={() => setMode("review")}
         >
@@ -431,7 +431,7 @@ export function WorkTracePanel({
           <SheetHeader>
             <SheetTitle>
               <span className="flex items-center gap-2">
-                <NetworkIcon className="size-4" aria-hidden /> Work Trace
+                <NetworkIcon aria-hidden /> Work Trace
               </span>
             </SheetTitle>
             <SheetDescription>저장된 작업 계층과 실행 근거를 확인해요.</SheetDescription>

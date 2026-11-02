@@ -1,6 +1,6 @@
 import { cn } from "cn";
 import { Data, DateTime } from "effect";
-import { CheckIcon, ChevronsUpDownIcon, Settings2Icon, UserIcon } from "lucide-react";
+import { CheckIcon, ChevronsUpDownIcon, UserIcon } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -183,11 +183,11 @@ export function AccountSwitcherMenu({
               </>
             )}
             {busy ? (
-              <Spinner className="size-3.5 shrink-0" />
+              <Spinner className="size-4 shrink-0" />
             ) : (
               <ChevronsUpDownIcon
                 aria-hidden="true"
-                className="size-3.5 shrink-0 text-muted-foreground"
+                className="size-4 shrink-0 text-muted-foreground"
               />
             )}
           </DropdownMenuTrigger>
