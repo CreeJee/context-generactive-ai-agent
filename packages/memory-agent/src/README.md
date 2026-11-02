@@ -7,7 +7,7 @@
 ## Interface
 
 - `memoryAgentLayer` — `EffectFunction.dual`이며 `(storageRoot)`, `(storageRoot, options)`, `(options)(storageRoot)` 형태를 받는다. 첫 인자가 문자열(`Schema.is(Schema.String)`)이면 data-first로 판별한다. 저장 디렉터리 하나 위에 모든 memory-agent 서비스를 조립하는 composition root다
-- `MemoryAgentLayerOptions` — `memoryAgentLayer`의 선택 옵션이다. 레이어 교체용 옵션은 `compatibleSettings`, `embedder`, `morphAnalyzer`, `providerRegistry`, `providerToolRegistry`, `modelFeatureFlags`, `crossProviderMediaConsent`, `providerToolPolicy`, `providerToolRuntime`, `routeCatalog`, `imageRouteFacts`, `imageRouter`, `imageFeature`, `directImageExecutor`, `imageMediaWorkflow`, `secrets`다. 값 옵션은 `executionAdmission`, `openDatabase`, `leaseTtlMs`, `interpretAutomatically`, `summarizeAutomatically`, `kagiBaseUrl`, `skillsHome`, `skillsBuiltin`, `importsHome`, `importsWatching`, `sweepSecrets`, `kanbanWorktreesBase`다
+- `MemoryAgentLayerOptions` — `memoryAgentLayer`의 선택 옵션이다. 레이어 교체용 옵션은 `compatibleSettings`, `embedder`, `morphAnalyzer`, `providerRegistry`, `providerToolRegistry`, `modelFeatureFlags`, `crossProviderMediaConsent`, `providerToolPolicy`, `providerToolRuntime`, `routeCatalog`, `imageRouteFacts`, `imageRouter`, `imageFeature`, `directImageExecutor`, `imageMediaWorkflow`, `secrets`다. 값 옵션은 `openDatabase`, `leaseTtlMs`, `interpretAutomatically`, `summarizeAutomatically`, `kagiBaseUrl`, `skillsHome`, `skillsBuiltin`, `importsHome`, `importsWatching`, `sweepSecrets`, `kanbanWorktreesBase`다
 - `JsonValue` — 손실 없이 JSON으로 표현되는 값 타입이자 `Schema.Codec<JsonValue>`이다(`json.ts`). `Schema.suspend` 재귀 Union으로 String, Finite, Boolean, Null, Array, Record를 받는다. `index.ts`는 이를 `JsonValue`와 타입 별칭 `Json`으로 다시 내보낸다
 - `optionalProperty` — `EffectFunction.dual(2)`이며 `(key, value)`와 `(value)(key)`를 지원한다. value가 `undefined`가 아니면 `{ [key]: value }`를, `undefined`면 `{}`를 돌려준다(`optional-property.ts`)
 - `isTruthy` — JavaScript truthiness를 그대로 쓰면서 `Exclude<NonNullable<T>, false | 0 | 0n | "">`로 좁히는 타입 가드다(`truthy.ts`)
@@ -71,7 +71,7 @@
 ## Invariants
 
 - `layers.ts` 주석은 "Each tier only depends on the tiers below it."라고 적는다. 레이어 조립은 아래 계층만 의존하는 계층 순서를 지켜야 한다
-- foundation 계층의 조립 순서는 다음과 같다. `OAuthProfiles.layer`에 `OAuthKeychain.keychain`, `defectReports`, `GlobalConfig.layer`를 차례로 `provideMerge`한다. `GlobalConfig.layer`에는 `StorageRoot.layer(storageRoot)`, `Database.layer(join(storageRoot, "agent.db"), options.openDatabase)`, `ExecutionAdmission.layer(options.executionAdmission)`를 merge하고 `nodePlatformLayer`를 provideMerge한다. DB 파일 위치는 항상 `<storageRoot>/agent.db`다
+- foundation 계층의 조립 순서는 다음과 같다. `OAuthProfiles.layer`에 `OAuthKeychain.keychain`, `defectReports`, `GlobalConfig.layer`를 차례로 `provideMerge`한다. `GlobalConfig.layer`에는 `StorageRoot.layer(storageRoot)`, `Database.layer(join(storageRoot, "agent.db"), options.openDatabase)`, `ExecutionAdmission.layer()`를 merge하고 `nodePlatformLayer`를 provideMerge한다. DB 파일 위치는 항상 `<storageRoot>/agent.db`다
 - 위 계층 어디의 defect든, 설정되어 있으면 report 페이지가 쓰는 webhook으로 보고된다. `defectReportsLayer`에는 `ReportDelivery.layer()`와 `SecretRedactor.layer`를 제공한다
 - 주석 "One store per owner: the cleanup schedule shares it with the card queue."에 따라 `persistedQueueStoreLayer()`는 한 번만 만든다. `persistedQueueCleanupLayer()`와 kanban 묶음은 같은 store 인스턴스를 공유해야 한다
 - 기본 `providerRegistry`는 `AccountSubscriptionProviderRegistry` 목록 끝에 OpenAI 호환 provider를 덧붙인다. compatible provider id의 `get`은 `settings.services`를 돌려준다. `runtime` 실패는 `ProviderUnavailable.make({ provider })`로 매핑한다

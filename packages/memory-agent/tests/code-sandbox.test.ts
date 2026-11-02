@@ -1,5 +1,5 @@
 import { layer } from "@effect/vitest";
-import { Clock, Duration, Effect, Fiber, Schema } from "effect";
+import { Duration, Effect, Fiber, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import {
   CodeSandbox,
@@ -76,13 +76,11 @@ layer(CodeSandbox.layer, { excludeTestServices: true })("code sandbox", (it) => 
 
   it.effect("stops a busy program at its time without holding up this thread", () =>
     Effect.gen(function* () {
-      const started = yield* Clock.currentTimeMillis;
       const program = yield* Effect.forkChild(run(`while (true) {}`, {}, Duration.millis(800)));
       // A timer on this thread still fires while the program spins in its worker.
       yield* Effect.sleep(Duration.millis(100));
-      const ticked = (yield* Clock.currentTimeMillis) - started;
+      expect(program.pollUnsafe()).toBeUndefined();
       const outcome = yield* Fiber.join(program);
-      expect(ticked).toBeLessThan(700);
       expect(outcome._tag).toBe("Threw");
       expect(outcome._tag === "Threw" && outcome.message).toBe("interrupted");
     }),

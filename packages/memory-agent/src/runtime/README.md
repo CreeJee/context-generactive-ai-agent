@@ -12,7 +12,6 @@
 - `ArchiveHost` — 주입 가능한 호스트 I/O 서비스(download/checksum/stage/write/list/extract/publish/cleanup)
 - `ArchiveInstallFailed` / `ArchiveInstallFailedReason`(DownloadFailed, HttpStatus, ChecksumMismatch, UnsafeEntry, HostOperationFailed) / `PinnedArchive` / `ArchiveStaging` — 아카이브 설치 오류 TaggedUnion과 고정 아카이브 계약
 - `archiveHostLayer` / `archiveInstallerLayer` — Node 호스트 구현 Layer(FetchHttpClient, NodeChildProcessSpawner, NodeCrypto, NodeFileSystem, NodePath 제공)
-- `npmIntegrity` / `ArchiveIntegrityRejected` — npm `sha512-<base64>` integrity를 hex digest의 `PinnedArchive`로 바꿈. 다른 알고리즘이면 throw함
 - `DefectReporter` — Context.Reference. `report(DefectEvent)`와 `recent`를 가지며 기본값은 no-op임. 앱이 Discord reporter(`report/defect-reports.ts`)를 제공함. 타입 `DefectEvent`, `RecentDefect`
 - `tagOf` / `tagOfUnknown` / `reasonTagOf` / `failureNameOf` / `failureNameOfUnknown` / `causeTagsOf` — 실패의 `_tag`(와 `reason._tag`)를 읽는 유일한 지점. 실패의 이름은 태그에 태그 붙은 reason을 붙인 것임(예: `SqlError:LockTimeoutError`). `causeTagsOf`는 실패 자신의 reason 다음부터 `cause` 사슬을 따라 이름을 모으고, 태그 없는 cause에서 멈춤
 - `logFailure` / `fallbackLogged` / `ignoreLogged` / `logDefect` / `failureAnnotations` / `failureTags` — 예상 실패를 태그로만 로그하고 fallback하거나 무시하는 헬퍼, defect 기록, 실패를 로그 주석(`error`, `cause`)으로 바꾸는 함수, Cause를 태그 문자열로 요약하는 함수
@@ -30,7 +29,7 @@
 - `ShownFailure` / `RunFailureCode` / `runFailureCodeOf` / `runFailureText` / `externalAgentFailureText` / `ExternalAgentFailureCode` / `McpFailureCode` / `ConfigFileFailureCode` / `decodeRunFailureCode` — 사용자에게 보여 줄 실패 코드 리터럴과 문구. 그래프 시그니처만 확인함
 - `runProcess` / `CommandOptions` / `runTrace` / `onRun` / `RunTrace` — 프로세스 실행 함수와 실행 trace 헬퍼. 그래프 시그니처만 확인함
 - `nodePlatformLayer` / `nodePlatform` / `NodePlatform` / `initializeNodeSqlite(addonPath)` — Node 플랫폼 Layer와 node sqlite addon 초기화. 그래프 시그니처만 확인함
-- `referenceIds<Key>()` / `sha256` (synchronous-crypto) / `posix`·`win32`·`path` (synchronous-path) — 참조 id 헬퍼, 동기 sha256, 동기 path 모듈. 그래프 시그니처만 확인함
+- `sha256` (synchronous-crypto) / `posix`·`win32`·`path` (synchronous-path) — 동기 sha256, 동기 path 모듈. 그래프 시그니처만 확인함
 - 하위 디렉터리 없음
 
 ## Invariants
@@ -44,7 +43,6 @@
 - 아카이브 목록에 `/`로 시작하거나 `..` 세그먼트를 가진 항목이 있으면 extract 전에 `UnsafeEntry`로 거부함
 - tar 명령 scope는 stdout/stderr를 모두 drain하고 프로세스 종료를 기다린 뒤 staging을 놓음. 출력 상한은 list 64MiB, extract 1MiB임. 0이 아닌 종료 코드는 HostOperationFailed임
 - Node 파일시스템 호출(remove, writeFile, rename)은 abort할 수 없어 `Effect.uninterruptible`로 끝까지 실행함. remove는 EBUSY/ENOTEMPTY/EPERM/EMFILE/ENFILE에서 최대 10회 재시도함. rename은 win32에서 EPERM/EACCES/EBUSY일 때만 500ms 간격으로 19회 재시도함
-- `npmIntegrity`는 `sha512`만 허용함. 다른 알고리즘이면 `ArchiveIntegrityRejected`를 동기 throw함
 - Windows의 tar는 PATH가 아니라 System32의 bsdtar를 경로로 지정해야 함. PATH 앞쪽의 GNU tar는 `C:\…`를 원격 `host:path`로 해석함
 - `findExecutable`은 PATH의 절대 경로 항목만 봄. 상대 경로(프로젝트 폴더)가 실행 파일을 가로채지 못하게 하기 위함임
 - `helperEnvironment`는 시스템 시작에 필요한 변수와 고정 검색 경로만 넘김. 사용자의 다른 환경변수는 절대 넘기지 않음(R14)

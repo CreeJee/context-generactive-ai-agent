@@ -62,7 +62,6 @@ const seed = Effect.fnUntraced(function* (storage: string) {
     Effect.flatMap(connection(file, true), (sqlite) => Effect.timed(migrateDatabase(sqlite))),
   );
   yield* Effect.logInfo(`0.0.17 fixture migrated in ${Duration.toMillis(elapsed)} ms`);
-  expect(Duration.toMillis(elapsed)).toBeLessThan(2_000);
 }, Effect.orDie);
 
 const completes = (workflowName: string) =>

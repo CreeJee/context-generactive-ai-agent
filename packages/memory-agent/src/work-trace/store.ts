@@ -659,28 +659,6 @@ const make = Effect.gen(function* () {
       return yield* artifactView(yield* decodeArtifactRow(inserted));
     }).pipe(sql.withTransaction);
 
-  const setArtifactVerification = (
-    artifactId: string,
-    verification: Exclude<EvidenceVerification, "source_deleted">,
-  ) =>
-    Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
-      const row = yield* first(sql`UPDATE work_artifacts SET verification = ${verification},
-          source_deleted_at = NULL, updated_at = ${now}
-        WHERE id = ${artifactId} AND locator IS NOT NULL RETURNING *`);
-      return isTruthy(row) ? yield* artifactView(yield* decodeArtifactRow(row)) : null;
-    }).pipe(sql.withTransaction);
-
-  const markArtifactSourceDeleted = (artifactId: string) =>
-    Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
-      const row = yield* first(sql`UPDATE work_artifacts
-        SET locator = NULL, media_type = NULL, verification = 'source_deleted',
-            source_deleted_at = ${now}, updated_at = ${now}
-        WHERE id = ${artifactId} RETURNING *`);
-      return isTruthy(row) ? yield* artifactView(yield* decodeArtifactRow(row)) : null;
-    }).pipe(sql.withTransaction);
-
   /** Tool calls an attempt started and never settled. A retry must not repeat them unasked. */
   const pendingToolsOf = (attemptId: string) =>
     first(sql`SELECT pending_tool_call_ids FROM agent_run_attempts WHERE id = ${attemptId}`).pipe(
@@ -2267,8 +2245,6 @@ const make = Effect.gen(function* () {
     toolSettled,
     keepAlive,
     recordArtifact,
-    setArtifactVerification,
-    markArtifactSourceDeleted,
     artifactsForTask,
     finalizeAnswerClaim,
     taskTree,

@@ -11,7 +11,7 @@
 - `WorkTraceStore` heartbeat·도구 메서드 — `beat`, `toolStarted`, `toolSettled`, `keepAlive`
 - `WorkTraceStore` 이벤트·조회 메서드 — `appendEvent`, `events`, `snapshot`, `snapshotEffect`, `latestCursor`, `projectLatestCursor`, `waitForChangeEffect`, `taskTree`, `projectTaskTree`, `taskDetail`, `projectTaskDetail`
 - `WorkTraceStore` 부모 알림 메서드 — `notifyParent`, `consumeParentNotifications`, `holdParentNotifications`, `resumeParentNotifications`, `parentNotificationsHeld`, `pendingParentNotificationSessions`, `releaseParentNotifications`
-- `WorkTraceStore` 산출물·최종 답변 메서드 — `recordArtifact`, `setArtifactVerification`, `markArtifactSourceDeleted`, `artifactsForTask`, `finalizeAnswerClaim`
+- `WorkTraceStore` 산출물·최종 답변 메서드 — `recordArtifact`, `artifactsForTask`, `finalizeAnswerClaim`
 - `WorkTraceStore` resume·lifecycle 메서드 — `claimResume`, `requestResume`, `requestSessionLifecycle`, `finalizeSessionLifecycle`, `requestTaskLifecycle`, `finalizeTaskLifecycle`, `pendingSessionDeletes`, `recoverLifecycleOperations`, `archiveTask`
 - `WorkTraceRejected` — store가 거부한 쓰기 TaggedError. reason은 `handle_mismatch`, `unsafe_file_path`, `invalid_transition`, `foreign_session`, `attempt_not_found` 등이다. `message`는 모델에 보여도 안전하다
 - `WorkTraceReadFailed` — `latest_cursor`/`snapshot` 읽기 실패 TaggedError

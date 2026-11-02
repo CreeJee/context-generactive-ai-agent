@@ -2,11 +2,10 @@ import { testHttpServer, HttpServerRequest, HttpServerResponse } from "../suppor
 import { withTestPlatform } from "../support/platform.ts";
 import { optionalProperty } from "../../src/optional-property.ts";
 import type { LanguageModel } from "effect/ai";
-// Native subprocess signals, IPC, environment and SDK AsyncGenerator are the fixture owner boundary.
+// Native subprocess environment and SDK AsyncGenerator are the fixture owner boundary.
 import {
   Cause,
   Console,
-  Deferred,
   Effect,
   FileSystem,
   Layer,
@@ -100,7 +99,6 @@ await Effect.runPromise(
       );
       yield* sdkCall(() => provider.select(runtime));
       const services = yield* runtime.contextEffect;
-      const runNative = Effect.runPromiseWith(services);
       const { sql, workflows } = yield* Effect.provideContext(
         Effect.all({ sql: SqlClient.SqlClient, workflows: Workflows }),
         services,
@@ -175,19 +173,8 @@ await Effect.runPromise(
         "OWNER_READY " +
           (yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({ port, sessionId })),
       );
-      const stopping = yield* Deferred.make<void>();
-      const stop = () => {
-        void runNative(Deferred.succeed(stopping, undefined));
-      };
-      process.on("SIGTERM", stop);
-      process.on("disconnect", stop);
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          process.off("SIGTERM", stop);
-          process.off("disconnect", stop);
-        }),
-      );
-      yield* Deferred.await(stopping).pipe(Effect.timeoutOption("45 seconds"));
+      // The test ends this owner with SIGKILL; the bound only keeps an abandoned owner from lingering.
+      yield* Effect.sleep("45 seconds");
     }).pipe(withTestPlatform),
   ),
 );

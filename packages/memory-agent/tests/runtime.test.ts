@@ -8,7 +8,6 @@ import { afterEach, describe, expect, vi } from "vite-plus/test";
 import {
   ArchiveInstaller,
   archiveInstallerLayer,
-  npmIntegrity,
   type PinnedArchive,
 } from "../src/runtime/archive.ts";
 import { ArchiveInstallFailedReason } from "../src/runtime/archive-install.ts";
@@ -157,19 +156,5 @@ describe("archive installer", () => {
         expect(yield* fs.readDirectory(dir)).toEqual([]);
         expect(yield* fs.exists(path.join(dir, "..", "outside"))).toBe(false);
       }).pipe(withCrypto, withTestPlatform),
-  );
-
-  it.live("reads npm lockfile integrity as a sha512 pin", () =>
-    Effect.gen(function* () {
-      const bytes = Buffer.from("tarball");
-      const crypto = yield* Crypto.Crypto;
-      const digest = Buffer.from(yield* crypto.digest("SHA-512", bytes));
-      const integrity = `sha512-${digest.toString("base64")}`;
-      expect(npmIntegrity("https://registry.example/x.tgz", integrity)).toEqual({
-        url: "https://registry.example/x.tgz",
-        algorithm: "sha512",
-        digest: digest.toString("hex"),
-      });
-    }).pipe(withCrypto, withTestPlatform),
   );
 });

@@ -1,4 +1,4 @@
-import { Data, Function as EffectFunction, Match, Option, Predicate, Result, Schema } from "effect";
+import { Data, Function as EffectFunction, Match, Predicate, Schema } from "effect";
 import { sha256 } from "../runtime/synchronous-crypto.ts";
 import type { JsonValue } from "../json.ts";
 
@@ -15,7 +15,6 @@ const Compact = Schema.TaggedStruct("OwnerRpcFingerprintV1", {
   // The Goal worker kept the hook of a middleware call too large to keep whole.
   inputKind: Schema.Literals(["complete", "middleware-hook", "omitted"]),
 });
-const Descriptor = Schema.Struct({ operation: Schema.String, input: Schema.Json });
 type Evidence = Data.TaggedEnum<{
   complete: { readonly input: OwnerRpcJson };
   omitted: { readonly input: null };
@@ -28,12 +27,12 @@ const evidenceKind = Evidence.$match({
 // Covers a bounded 32-report read request as well as ordinary call arguments.
 const evidenceLimit = 16384;
 
-/** A request value that has no canonical JSON form, or a legacy fingerprint no longer readable. */
+/** A request value that has no canonical JSON form. */
 export class OwnerRpcFingerprintFailed extends Schema.TaggedError<
   OwnerRpcFingerprintFailed,
   { readonly brand: unique symbol }
 >()("OwnerRpcFingerprintFailed", {
-  reason: Schema.Literals(["non_finite", "non_json", "unsupported_legacy"]),
+  reason: Schema.Literals(["non_finite", "non_json"]),
 }) {}
 // Fingerprints are computed synchronously inside the ledger's SQLite boundary.
 const fail = (reason: OwnerRpcFingerprintFailed["reason"]): never => {
@@ -108,30 +107,3 @@ function fingerprintBody(operation: string, input: OwnerRpcJson): string {
 export const ownerRpcFingerprint: {
   (input: OwnerRpcJson): (operation: string) => string;
 } & typeof fingerprintBody = EffectFunction.dual(2, fingerprintBody);
-
-/** Explicit offline conversion, never an automatic startup backfill. */
-export function compactLegacyOwnerRpcFingerprint(fingerprint: string): string {
-  if (fingerprint.length <= evidenceLimit + 1024) {
-    const compact = Schema.decodeOption(Schema.fromJsonString(Compact))(fingerprint);
-    if (Option.isSome(compact)) return fingerprint;
-  }
-  if (fingerprint.length <= evidenceLimit) {
-    const descriptor = Result.getOrThrow(
-      Schema.decodeResult(Schema.fromJsonString(Descriptor))(fingerprint),
-    );
-    return encodeFingerprint(
-      descriptor.operation,
-      fingerprint,
-      Evidence.complete({ input: descriptor.input }),
-    );
-  }
-  // Legacy production bytes sort input before operation. Extract only the suffix,
-  // avoiding a second 100+ MiB JSON tree when converting historical context snapshots.
-  const suffix = /,"operation":("(?:[^"\\]|\\.)*")\}$/u.exec(fingerprint.slice(-evidenceLimit));
-  if (!fingerprint.startsWith('{"input":') || suffix?.[1] === undefined)
-    return fail("unsupported_legacy");
-  const operation = Result.getOrThrow(
-    Schema.decodeResult(Schema.fromJsonString(Schema.String))(suffix[1]),
-  );
-  return encodeFingerprint(operation, fingerprint, Evidence.omitted({ input: null }));
-}

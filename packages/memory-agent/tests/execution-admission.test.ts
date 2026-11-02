@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { Config, Deferred, Effect, Fiber, Latch, Layer } from "effect";
+import { Config, ConfigProvider, Deferred, Effect, Fiber, Latch, Layer } from "effect";
 import { TestClock } from "effect/testing";
 import {
   AdmissionWait,
@@ -117,17 +117,15 @@ describe("ExecutionAdmission", () => {
     }),
   );
 
-  it.effect("fails layer construction for invalid limit overrides", () =>
+  it.effect("fails layer construction for an invalid limit setting", () =>
     Effect.gen(function* () {
-      const failure = yield* Effect.flip(
-        Layer.build(
-          ExecutionAdmission.layer({
-            ...limits,
-            tool: { active: 0, queued: 1 },
-          }),
-        ),
-      );
+      const failure = yield* Effect.flip(Layer.build(ExecutionAdmission.layer()));
       assert.instanceOf(failure, Config.ConfigError);
-    }),
+    }).pipe(
+      Effect.provideService(
+        ConfigProvider.ConfigProvider,
+        ConfigProvider.fromEnv({ env: { CONTEXT_AGENT_TOOL_CONCURRENCY: "0" } }),
+      ),
+    ),
   );
 });

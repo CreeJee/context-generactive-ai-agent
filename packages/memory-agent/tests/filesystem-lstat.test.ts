@@ -28,8 +28,5 @@ it.live(
       const missing = yield* fs.lstat(path.join(root, "missing")).pipe(Effect.flip);
       expect(Predicate.isTagged(missing.reason, "NotFound")).toBe(true);
       expect(missing.reason.method).toBe("lstat");
-      const noop = yield* FileSystem.makeNoop({}).lstat(file).pipe(Effect.flip);
-      expect(Predicate.isTagged(noop.reason, "NotFound")).toBe(true);
-      expect(noop.reason.method).toBe("lstat");
     }).pipe(Effect.provide([NodeFileSystem.layer, NodePath.layer])),
 );

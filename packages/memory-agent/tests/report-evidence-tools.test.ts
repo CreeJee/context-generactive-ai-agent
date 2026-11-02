@@ -1,8 +1,7 @@
 import { it } from "@effect/vitest";
-import { Effect, Option, Schema } from "effect";
-import { DatabaseSync } from "node:sqlite";
+import { Effect, Layer, Option, Schema } from "effect";
 import { describe, expect } from "vite-plus/test";
-import { connectionContext } from "../src/db/database.ts";
+import { Database } from "../src/db/database.ts";
 import { SqlClient } from "effect/sql";
 import type { JsonValue } from "../src/json.ts";
 import {
@@ -11,37 +10,29 @@ import {
   reportRunToolsForSession,
 } from "../src/tools/report-evidence.ts";
 import { callTool } from "./support/run-tools.ts";
+import { sqlExec } from "./support/sql.ts";
 
 const redactSecret = (text: string) => Effect.succeed(text.replaceAll("SECRET", "[redacted]"));
 const keep = (text: string) => Effect.succeed(text);
 
-/** Run a report Effect over `db`, as the owner composition root supplies its SqlClient. */
-const over =
-  (db: DatabaseSync) =>
-  <A, E>(effect: Effect.Effect<A, E, SqlClient.SqlClient>) =>
-    Effect.flatMap(connectionContext(db), (context) => Effect.provideContext(effect, context));
-
 const fixture = Effect.gen(function* () {
-  const db = yield* Effect.acquireRelease(
-    Effect.sync(() => new DatabaseSync(":memory:")),
-    (db) => Effect.sync(() => db.close()),
+  const database = yield* Layer.build(Database.layer(":memory:"));
+  /** Run a report Effect over the migrated database, as the owner supplies its SqlClient. */
+  const over = <A, E>(effect: Effect.Effect<A, E, SqlClient.SqlClient>) =>
+    Effect.provideContext(effect, database);
+  yield* over(
+    sqlExec(`INSERT INTO projects (id, root, name, created_at) VALUES ('p','/p','p','2026-01-01'),('q','/q','q','2026-01-01');
+    INSERT INTO sessions (id, project_id, created_at) VALUES ('source','p','2026-01-01'),('report','p','2026-01-01'),('other','p','2026-01-01'),('foreign','q','2026-01-01'),('bad-report','q','2026-01-01');
+    INSERT INTO report_sessions (report_session_id, source_session_id, project_id, created_at) VALUES ('report','source','p','2026-01-01'),('bad-report','foreign','p','2026-01-01');
+    INSERT INTO chat_runs (run_id, thread_id, status, started_at, error) VALUES ('run','source','failed',10,'SECRET failure'),('other-run','other','failed',11,'private');
+    INSERT INTO permission_reviews (id, session_id, tool_call_id, tool_name, input, decision, decided_by, reason, created_at) VALUES (1,'source','call-1','write_file','{"path":"SECRET"}','denied','user','SECRET reason','2026-01-01'),(2,'other','call-2','write_file','{}','denied','user','private','2026-01-02');
+    INSERT INTO nodes (id, session_id, project_id, kind, created_at, text, detail) VALUES ('call','source','p','tool_call','2026-01-01','SECRET invocation','{"toolCallId":"call-1"}'),
+      ('result','source','p','tool_result','2026-01-02','SECRET result','{"toolCallId":"call-1","ok":false,"untrusted":"SECRET"}'),
+      ('long','source','p','assistant','2026-01-03','${"x".repeat(9000)}','{}'),
+      ('other-node','other','p','tool_result','2026-01-04','private','{}'),
+      ('foreign-node','source','q','tool_result','2026-01-05','private','{}');`),
   );
-  db.exec(`CREATE TABLE sessions(id TEXT PRIMARY KEY, project_id TEXT NOT NULL);
-    CREATE TABLE report_sessions(report_session_id TEXT PRIMARY KEY, source_session_id TEXT, project_id TEXT);
-    CREATE TABLE chat_runs(run_id TEXT PRIMARY KEY, thread_id TEXT, status TEXT, started_at INTEGER, error TEXT);
-    CREATE TABLE permission_reviews(id INTEGER PRIMARY KEY, session_id TEXT, decision TEXT, created_at TEXT, reason TEXT, tool_name TEXT, input TEXT, tool_call_id TEXT);
-    CREATE TABLE nodes(id TEXT PRIMARY KEY, seq INTEGER, session_id TEXT, project_id TEXT, kind TEXT, created_at TEXT, text TEXT, detail TEXT);
-    INSERT INTO sessions VALUES ('source','p'),('report','p'),('other','p'),('foreign','q'),('bad-report','q');
-    INSERT INTO report_sessions VALUES ('report','source','p'),('bad-report','source','p');
-    INSERT INTO chat_runs VALUES ('run','source','failed',10,'SECRET failure'),('other-run','other','failed',11,'private');
-    INSERT INTO permission_reviews VALUES (1,'source','denied','2026-01-01','SECRET reason','write_file','{"path":"SECRET"}','call-1'),(2,'other','denied','2026-01-02','private','write_file','{}','call-2');
-    INSERT INTO nodes VALUES ('call',1,'source','p','tool_call','2026-01-01','SECRET invocation','{"toolCallId":"call-1"}'),
-      ('result',2,'source','p','tool_result','2026-01-02','SECRET result','{"toolCallId":"call-1","untrusted":"SECRET"}'),
-      ('long',3,'source','p','assistant','2026-01-03','${"x".repeat(9000)}','{}'),
-      ('other-node',4,'other','p','tool_result','2026-01-04','private','{}'),
-      ('foreign-node',5,'source','q','tool_result','2026-01-05','private','{}');
-    ALTER TABLE nodes ADD COLUMN run_id TEXT;`);
-  const tools = yield* over(db)(
+  const tools = yield* over(
     reportRunToolsForSession(
       "report",
       "p",
@@ -71,7 +62,7 @@ const fixture = Effect.gen(function* () {
     ),
   );
   const invoke = (name: string, input: JsonValue) => callTool(tools, name, input);
-  return { db, tools, invoke };
+  return { over, tools, invoke };
 });
 
 describe("report evidence tools", () => {
@@ -87,8 +78,7 @@ describe("report evidence tools", () => {
 
   it.effect("binding validates both session projects and refuses forged bindings", () =>
     Effect.gen(function* () {
-      const { db } = yield* fixture;
-      const read = over(db);
+      const { over: read } = yield* fixture;
       expect(yield* read(reportBinding("report", "p"))).toEqual(
         Option.some({ sourceSessionId: "source", reportSessionId: "report", projectId: "p" }),
       );
@@ -129,21 +119,12 @@ describe("report evidence tools", () => {
     "initial context contains bounded source calls/results, gaps, and redacted provenance",
     () =>
       Effect.gen(function* () {
-        const { db } = yield* fixture;
-        db.prepare(
-          'UPDATE nodes SET detail = \'{"toolCallId":"call-1","ok":false}\' WHERE id = \'result\'',
-        ).run();
-        Array.from({ length: 15 }, (_, i) => i).forEach((i) =>
-          db
-            .prepare(
-              "INSERT INTO nodes(id,seq,session_id,project_id,kind,created_at,text,detail) VALUES (?,?, 'source','p','tool_result','2026-01-06','recent success','{\"ok\":true}')",
-            )
-            .run(`success-${i}`, 10 + i),
+        const { over } = yield* fixture;
+        yield* over(
+          sqlExec(`INSERT INTO nodes (id, session_id, project_id, kind, created_at, text, detail) VALUES ('failed','source','p','tool_result','2026-01-01','old failed output','{"ok":false}'),
+            ${Array.from({ length: 15 }, (_, i) => `('success-${i}','source','p','tool_result','2026-01-06','recent success','{"ok":true}')`).join(",")};`),
         );
-        db.prepare(
-          "INSERT INTO nodes(id,seq,session_id,project_id,kind,created_at,text,detail) VALUES ('failed',0,'source','p','tool_result','2026-01-01','old failed output','{\"ok\":false}')",
-        ).run();
-        const context = yield* over(db)(
+        const context = yield* over(
           initialReportEvidence(
             "report",
             "p",
@@ -181,19 +162,19 @@ describe("report evidence tools", () => {
         expect(context).not.toContain("SECRET");
         expect(context).not.toContain("private");
         expect(context.length).toBeLessThanOrEqual(20_100);
-        db.exec("DROP TABLE permission_reviews");
-        const missing = yield* over(db)(
-          initialReportEvidence("report", "p", keep, Effect.succeed([])),
-        );
+        yield* over(sqlExec("DROP TABLE permission_reviews"));
+        const missing = yield* over(initialReportEvidence("report", "p", keep, Effect.succeed([])));
         expect(missing).toContain("approvals: failed");
       }),
   );
 
   it.effect("revoking or rebinding the source invalidates an already issued tool", () =>
     Effect.gen(function* () {
-      const { db, invoke } = yield* fixture;
-      db.exec(
-        "UPDATE report_sessions SET source_session_id = 'other' WHERE report_session_id = 'report'",
+      const { over, invoke } = yield* fixture;
+      yield* over(
+        sqlExec(
+          "UPDATE report_sessions SET source_session_id = 'other' WHERE report_session_id = 'report'",
+        ),
       );
       expect(yield* invoke("read_report_item", { section: "node", id: "call" })).toEqual({
         error: "not_found",

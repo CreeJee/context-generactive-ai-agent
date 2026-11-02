@@ -41,7 +41,7 @@
 
 원본 전체의 zstd 백업은 1,492,469,023 bytes(약 1.39GiB)다. 원본과 전체 해제 스트림의 SHA-256은 모두 `b613c912c51962d0d42a130ffee9f94bf9237a3f5f1a95e868ef0e1a6edbf907`이다. 실제 백업 경로는 `/Users/creejee/.context-generactive-agent/backups/agent-before-owner-rpc-fingerprint-v1-20261011T1132Z.db.zst`이며 같은 prefix의 `.manifest.json`과 `.verification.json`에 복구 안내와 전후 검증값을 보관했다. 백업이나 이전 복구 자료를 영구 삭제하지 않았다.
 
-실행·검증 기록은 `/tmp/cga-owner-rpc-migration.log`, `/tmp/cga-owner-rpc-migration-result.json`, `/tmp/cga-owner-rpc-cold-reopen-summary.json`이다. 명시적 maintenance 실행기는 `/tmp/cga-owner-rpc-maintenance.ts`, 재사용하는 변환 코어는 `src/agent/owner-rpc-fingerprint-migration.ts`다.
+실행·검증 기록은 `/tmp/cga-owner-rpc-migration.log`, `/tmp/cga-owner-rpc-migration-result.json`, `/tmp/cga-owner-rpc-cold-reopen-summary.json`이다. 명시적 maintenance 실행기는 `/tmp/cga-owner-rpc-maintenance.ts`, 재사용하는 변환 코어는 `src/agent/owner-rpc-fingerprint-migration.ts`다. 실행 진입점이 저장소에 없고 이 유지보수는 끝났으므로, 변환 코어와 `compactLegacyOwnerRpcFingerprint`는 2026-11-03에 지웠다.
 
 후속 검증: 새 fingerprint 5개 테스트와 ledger/recovery/run binding 테스트가 통과했다. 이전 timeout 대상 3개 파일은 무거운 DB 작업 종료 후 1 worker에서 41개(27.34초), cold reopen 종료 뒤 2 workers에서 41개(16.88초) 모두 통과했다. 최초 2 workers 실행(16.77초, 41개 통과)은 cold reopen과 일부 겹쳤으므로 독립 부하 검증과 구분한다. 최신 Windows 수정과 fingerprint 코드를 포함한 bundle 5 task도 통과했다. 입력 고정 해시는 `/tmp/cga-owner-rpc-fixed-input-hashes.txt`다.
 

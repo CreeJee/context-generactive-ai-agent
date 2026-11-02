@@ -5,7 +5,7 @@ import { it } from "@effect/vitest";
 import { Database } from "../src/db/database.ts";
 import { ArtifactLocator } from "../src/work-trace/contracts.ts";
 import { WorkTraceRejected, WorkTraceStore } from "../src/work-trace/store.ts";
-import { sqlAll, sqlGet, sqlRun } from "./support/sql.ts";
+import { sqlAll, sqlRun } from "./support/sql.ts";
 
 const stringifyJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
@@ -73,37 +73,6 @@ describe("Work Trace artifact provenance", () => {
     ),
   );
 
-  it.effect("uses explicit states and clears locator metadata in source-deleted tombstones", () =>
-    run(
-      Effect.gen(function* () {
-        const trace = yield* WorkTraceStore;
-        yield* seed();
-        const handle = yield* start(trace);
-        const artifact = yield* trace.recordArtifact({
-          handle,
-          kind: "external",
-          locator: ArtifactLocator.cases.external.make({ reference: "private-object-17" }),
-          mediaType: "application/json",
-        });
-        expect(
-          (yield* trace.setArtifactVerification(artifact.id, "unavailable"))?.verification,
-        ).toBe("unavailable");
-        expect(yield* trace.markArtifactSourceDeleted(artifact.id)).toEqual(
-          expect.objectContaining({
-            locator: null,
-            mediaType: null,
-            verification: "source_deleted",
-          }),
-        );
-        const raw = yield* stringifyJson(
-          yield* sqlGet("SELECT * FROM work_artifacts WHERE id = ?", artifact.id),
-        );
-        expect(raw).not.toContain("private-object-17");
-        expect(raw).not.toContain("application/json");
-      }),
-    ),
-  );
-
   it.effect("keeps project provenance after origin deletion and rejects unsafe file locators", () =>
     run(
       Effect.gen(function* () {
@@ -112,8 +81,11 @@ describe("Work Trace artifact provenance", () => {
         const handle = yield* start(trace);
         yield* trace.recordArtifact({
           handle,
-          kind: "generated",
-          locator: ArtifactLocator.cases.generated.make({ reference: "artifact-store:item-1" }),
+          kind: "file",
+          locator: ArtifactLocator.cases.file.make({
+            path: "reports/result.md",
+            sha256: "a".repeat(64),
+          }),
         });
         expect(
           yield* Effect.flip(

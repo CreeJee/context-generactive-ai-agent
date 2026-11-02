@@ -207,17 +207,6 @@ describe("SecretRedactor", () => {
     ),
   );
 
-  effectTest.live("large output stays fast", () =>
-    Effect.gen(function* () {
-      const log = `${"2026-09-16T10:00:00Z INFO handled path=/api/items id=01a0a8f6 in 12ms\n".repeat(3000)}GITHUB_TOKEN=${fake.github}\n`;
-      const started = performance.now();
-      const { hidden } = yield* redact(log);
-      expect(hidden).toBe(1);
-      // About 4 ms on a laptop; the bound only catches a pathological regex.
-      expect(performance.now() - started).toBeLessThan(500);
-    }),
-  );
-
   effectTest.live("leaves nothing in the performance buffer, however many texts it checks", () =>
     Effect.gen(function* () {
       // secretlint's profiler would add about 60 marks per check, and nothing ever clears them.

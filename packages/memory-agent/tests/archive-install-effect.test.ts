@@ -7,11 +7,7 @@ import {
   ArchiveInstallFailedReason,
   type PinnedArchive,
 } from "../src/runtime/archive-install.ts";
-import {
-  archiveHostLayer,
-  ArchiveIntegrityRejected,
-  npmIntegrity,
-} from "../src/runtime/archive.ts";
+import { archiveHostLayer } from "../src/runtime/archive.ts";
 import { TestClock } from "effect/testing";
 import { tgz } from "./support/tgz.ts";
 
@@ -155,7 +151,6 @@ it.live("native adapter installs real tar contents and keeps an existing target 
       { discard: true },
     );
     expect(yield* fs.exists(path.join(directory, "outside"))).toBe(false);
-    expect(() => npmIntegrity(pin.url, "sha256-abc")).toThrow(ArchiveIntegrityRejected);
   }),
 );
 

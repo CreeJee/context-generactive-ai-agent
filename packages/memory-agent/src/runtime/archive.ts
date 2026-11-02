@@ -3,7 +3,6 @@ import {
   Duration,
   Effect,
   FileSystem,
-  Function as EffectFunction,
   Layer,
   Path,
   Schedule,
@@ -21,7 +20,6 @@ import {
   ArchiveInstaller,
   ArchiveInstallFailed,
   ArchiveInstallFailedReason,
-  type PinnedArchive,
   type ArchiveStaging,
 } from "./archive-install.ts";
 import { tarExecutable } from "./host.ts";
@@ -32,32 +30,6 @@ export {
   ArchiveInstallFailed,
   type PinnedArchive,
 } from "./archive-install.ts";
-
-const UnsupportedAlgorithm = Schema.TaggedStruct("UnsupportedAlgorithm", {
-  algorithm: Schema.String,
-});
-
-export class ArchiveIntegrityRejected extends Schema.TaggedError<
-  ArchiveIntegrityRejected,
-  { readonly brand: unique symbol }
->()("ArchiveIntegrityRejected", { reason: UnsupportedAlgorithm }) {
-  override get message() {
-    return `unsupported integrity algorithm: ${this.reason.algorithm}`;
-  }
-}
-
-export const npmIntegrity: {
-  (integrity: string): (url: string) => ReturnType<typeof npmIntegrityBody>;
-} & typeof npmIntegrityBody = EffectFunction.dual(2, npmIntegrityBody);
-function npmIntegrityBody(url: string, integrity: string): PinnedArchive {
-  const [algorithm, base64 = ""] = integrity.split("-", 2);
-  if (algorithm !== "sha512") {
-    throw ArchiveIntegrityRejected.make({
-      reason: UnsupportedAlgorithm.make({ algorithm: algorithm ?? "" }),
-    });
-  }
-  return { url, algorithm, digest: Buffer.from(base64, "base64").toString("hex") };
-}
 
 const HostOperationFailed = ArchiveInstallFailedReason.cases.HostOperationFailed;
 

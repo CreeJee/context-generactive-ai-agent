@@ -117,13 +117,9 @@ import { providerRetryLayer } from "./workflow/provider-retry.ts";
 import { WorkflowTools } from "./workflow/tools.ts";
 import { WorkflowRules } from "./workflow/rules.ts";
 import { OpenAICompatibleSettings } from "./providers/openai-compatible.ts";
-import {
-  ExecutionAdmission,
-  type ExecutionAdmissionLimits,
-} from "./runtime/execution-admission.ts";
+import { ExecutionAdmission } from "./runtime/execution-admission.ts";
 
 export interface MemoryAgentLayerOptions {
-  readonly executionAdmission?: ExecutionAdmissionLimits;
   readonly openDatabase?: Parameters<typeof Database.layer>[1];
   /** Isolated evaluation transport; production uses its endpoint-bound keyring. */
   readonly compatibleSettings?: Layer.Layer<OpenAICompatibleSettings, never, GlobalConfig>;
@@ -214,7 +210,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
           Layer.mergeAll(
             StorageRoot.layer(storageRoot),
             Database.layer(join(storageRoot, "agent.db"), options.openDatabase),
-            ExecutionAdmission.layer(options.executionAdmission),
+            ExecutionAdmission.layer(),
           ),
         ),
         Layer.provideMerge(nodePlatformLayer),
