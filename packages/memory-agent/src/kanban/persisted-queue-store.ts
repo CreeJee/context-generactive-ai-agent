@@ -42,24 +42,9 @@ const StateRow = Schema.Struct({
   last_failure: Schema.NullOr(Schema.String),
   updated_at: Schema.Finite,
 });
-const DeadLetterRow = Schema.Struct({
-  id: Schema.String,
-  attempts: Schema.Finite,
-  last_failure: Schema.NullOr(Schema.String),
-  updated_at: Schema.Finite,
-});
 const JsonElement = Schema.fromJsonString(Schema.Unknown);
 
 export type PersistedQueueItemState = (typeof StateRow.Type)["state"];
-
-/** A dead-lettered element: its attempts ran out or its payload could not be decoded. */
-export interface DeadLetteredItem {
-  readonly id: string;
-  readonly attempts: number;
-  /** Error tags of the last failure only, never provider bodies or prompts. */
-  readonly lastFailure: string | null;
-  readonly failedAt: number;
-}
 
 export interface PersistedQueueItemStatus {
   readonly state: PersistedQueueItemState;
@@ -80,7 +65,7 @@ export class PersistedQueueItemsFailed extends Schema.TaggedError<
   PersistedQueueItemsFailed,
   { readonly brand: unique symbol }
 >()("PersistedQueueItemsFailed", {
-  operation: Schema.Literals(["status", "dead_letters", "requeue"]),
+  operation: Schema.Literals(["status", "requeue"]),
   reason: PersistedQueueItemsReason,
   cause: Schema.optional(Schema.Defect()),
 }) {}
@@ -377,22 +362,6 @@ const make = Effect.fnUntraced(function* (options?: {
 
   const items = {
     status,
-
-    /** The dead-letter record of one queue, oldest failure first. */
-    deadLetters: (name: string) =>
-      sql`SELECT id, attempts, last_failure, updated_at FROM persisted_queue_items
-          WHERE queue_name = ${name} AND state = 'failed' ORDER BY updated_at, sequence`.pipe(
-        Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(DeadLetterRow))),
-        Effect.map((rows) =>
-          rows.map((row): DeadLetteredItem => ({
-            id: row.id,
-            attempts: row.attempts,
-            lastFailure: row.last_failure,
-            failedAt: row.updated_at,
-          })),
-        ),
-        Effect.mapError(itemsError("dead_letters")),
-      ),
 
     /**
      * Puts a dead-lettered element back with a fresh attempt budget, keeping its id so offer

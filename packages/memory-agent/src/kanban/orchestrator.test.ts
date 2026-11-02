@@ -18,14 +18,15 @@ import { it } from "@effect/vitest";
 import { sqlGet, sqlRun } from "../../tests/support/sql.ts";
 import { Database } from "../db/database.ts";
 import {
+  attemptOutcome,
   card,
   executingPlan,
   git,
   goalInput,
   kanbanBoardOwner,
   kanbanFixture,
+  replaceGoal,
   scriptedAgent,
-  switchGoalInstance,
   uncertainCardRun,
   waitForCards,
   type KanbanFixture,
@@ -745,7 +746,7 @@ it.live(
             .pipe(Effect.repeat({ until: Option.exists((goal) => goal.hold !== null) }));
           // a finishes against the earlier Goal; it waits for the verdicts, and nothing else starts.
           yield* Deferred.succeed(releaseA, undefined);
-          yield* attempts.awaitOutcome({
+          yield* attemptOutcome({
             goalInstanceId: board.goalInstanceId,
             cardId: "a",
             attemptNo: 1,
@@ -879,10 +880,10 @@ it.live(
           expect(late).toBeInstanceOf(HumanDecisionRefused);
           expect(late).toMatchObject({ reason: "request_closed" });
 
-          // A new Goal takes over the session: the loop stops and closes c's wait.
+          // Back in Plan, a new Goal takes over the session: the loop stops and closes c's wait.
           const worktrees = yield* CardWorktrees;
           expect((yield* worktrees.goalFolder(board.goalInstanceId)).cardIds).toContain("b");
-          yield* switchGoalInstance(board.sessionId);
+          yield* replaceGoal(board.sessionId);
           yield* (yield* KanbanOrchestrator).poke(board.goalInstanceId);
           const c = yield* eventually(
             requestOf("c"),

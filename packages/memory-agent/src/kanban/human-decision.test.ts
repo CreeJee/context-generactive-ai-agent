@@ -2,8 +2,9 @@ import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { Effect, FileSystem, Option, Path, Result, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { freshSession, TestEnv, testAgent } from "../../tests/support/test-env.ts";
-import { sqlAll, sqlGet, sqlRun } from "../../tests/support/sql.ts";
+import { sqlAll, sqlGet } from "../../tests/support/sql.ts";
 import { Projects } from "../projects/projects.ts";
+import { replaceGoal } from "../testing/kanban.ts";
 import { Sessions } from "../sessions/sessions.ts";
 import { Boards } from "../workflow/board.ts";
 import { BoardAuthor } from "../workflow/card.ts";
@@ -258,14 +259,7 @@ testAgent()("human decisions", (it) => {
         kind: DecisionKind.cases.ImpactUnclear.make({ fromGoalVersion: 1, toGoalVersion: 2 }),
         author: orchestrator,
       });
-      yield* sqlRun(
-        "INSERT INTO workflow_goal_instances VALUES ('next-goal', ?, 'now')",
-        sessionId,
-      );
-      yield* sqlRun(
-        "UPDATE workflow_goal_identities SET goal_instance_id = 'next-goal', created_at = 'now' WHERE session_id = ?",
-        sessionId,
-      );
+      yield* replaceGoal(sessionId);
 
       expect(yield* decisions.pending(sessionId)).toEqual([]);
       const refused = yield* Effect.flip(

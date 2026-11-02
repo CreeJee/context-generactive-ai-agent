@@ -5,17 +5,18 @@ import { it } from "@effect/vitest";
 import { KanbanSettings } from "../config/kanban-settings.ts";
 import {
   assignCard,
+  attemptOutcome,
   card,
   executingBoard,
   kanbanFixture,
   kanbanOwner,
+  replaceGoal,
   scriptedAgent,
-  switchGoalInstance,
   uncertainCardRun,
   type KanbanFixture,
 } from "../testing/kanban.ts";
 import { CardAgentOutcome, type CardAgentRun } from "./card-agent.ts";
-import { CardAttemptOutcome, CardAttempts } from "./card-attempts.ts";
+import { CardAttemptOutcome } from "./card-attempts.ts";
 
 type Owner = Layer.Success<ReturnType<typeof kanbanOwner>>;
 
@@ -79,9 +80,8 @@ it.live(
           expect(yield* Ref.get(peak)).toBe(2);
 
           yield* Deferred.succeed(release, undefined);
-          const attempts = yield* CardAttempts;
-          expect(CardAttemptOutcome.guards.Completed(yield* attempts.awaitOutcome(a))).toBe(true);
-          expect(CardAttemptOutcome.guards.Completed(yield* attempts.awaitOutcome(b))).toBe(true);
+          expect(CardAttemptOutcome.guards.Completed(yield* attemptOutcome(a))).toBe(true);
+          expect(CardAttemptOutcome.guards.Completed(yield* attemptOutcome(b))).toBe(true);
         }),
       );
     }).pipe(withNode),
@@ -104,7 +104,7 @@ it.live("does not continue past an earlier run with an uncertain tool", () =>
       Effect.gen(function* () {
         const board = yield* executingBoard(fixture, [card("a")]);
         yield* uncertainCardRun(board, "a", "run-0");
-        return yield* (yield* CardAttempts).awaitOutcome(yield* assignCard(board, "a"));
+        return yield* attemptOutcome(yield* assignCard(board, "a"));
       }),
     );
     expect(outcome).toEqual(CardAttemptOutcome.cases.Fenced.make({ runId: "run-0" }));
@@ -115,6 +115,7 @@ it.live("does not continue past an earlier run with an uncertain tool", () =>
 it.live("completes an earlier Goal instance's card as Superseded without running it", () =>
   Effect.gen(function* () {
     const fixture = yield* kanbanFixture;
+    const elsewhere = yield* kanbanFixture;
     const ran = yield* Ref.make<ReadonlyArray<string>>([]);
     const holding = yield* Deferred.make<void>();
     const release = yield* Deferred.make<void>();
@@ -133,14 +134,15 @@ it.live("completes an earlier Goal instance's card as Superseded without running
     );
     const outcome = yield* run(
       Effect.gen(function* () {
-        const board = yield* executingBoard(fixture, [card("a"), card("b")]);
-        yield* assignCard(board, "a");
-        // The only permit is held by card a, so b waits in the queue while the Goal changes.
+        const board = yield* executingBoard(fixture, [card("b")]);
+        yield* assignCard(yield* executingBoard(elsewhere, [card("a")]), "a");
+        // Another board's card a holds the only permit, so b waits in the queue while its own
+        // session, with nothing running, starts a new Goal.
         yield* Deferred.await(holding);
         const b = yield* assignCard(board, "b");
-        yield* switchGoalInstance(board.sessionId);
+        yield* replaceGoal(board.sessionId);
         yield* Deferred.succeed(release, undefined);
-        return yield* (yield* CardAttempts).awaitOutcome(b);
+        return yield* attemptOutcome(b);
       }),
     );
     expect(outcome).toEqual(CardAttemptOutcome.cases.Superseded.make({}));

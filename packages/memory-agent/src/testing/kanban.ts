@@ -1,4 +1,4 @@
-import { DateTime, Effect, FileSystem, Layer, Option, Path, Schedule, type Scope } from "effect";
+import { Effect, FileSystem, Layer, Option, Path, Schedule, type Scope } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { SqlClient } from "effect/sql";
 import { GlobalConfig } from "../config/global-config.ts";
@@ -23,7 +23,7 @@ import { GoalSchedules } from "../kanban/goal-schedules.ts";
 import { BoardHealth } from "../kanban/board-health.ts";
 import { GoalMerges } from "../kanban/merge-queue.ts";
 import { ProjectScheduler } from "../kanban/scheduler.ts";
-import { CardAttempts } from "../kanban/card-attempts.ts";
+import { CardAttempts, type CardAttemptKey } from "../kanban/card-attempts.ts";
 import { HumanDecisions } from "../kanban/human-decision.ts";
 import {
   cardAttemptExecutionLayer,
@@ -42,7 +42,12 @@ import { Sessions } from "../sessions/sessions.ts";
 import { ownerWorkflowEngineLayer } from "../workflow/owner-workflow-engine.ts";
 import { workflowRunBindings } from "../workflow/run-bindings.ts";
 import { BoardAuthor } from "../workflow/card.ts";
-import { Workflows, type PlanStep, type UpdatePlan } from "../workflow/workflow.ts";
+import {
+  NewGoalSettlement,
+  Workflows,
+  type PlanStep,
+  type UpdatePlan,
+} from "../workflow/workflow.ts";
 import { KanbanBoardActions } from "../kanban/board-actions.ts";
 import { KanbanOrchestrator } from "../kanban/orchestrator.ts";
 import { boardOps } from "../kanban/board-ops.ts";
@@ -215,6 +220,19 @@ export const waitForCards = Effect.fn("waitForCards")(function* (
   );
 });
 
+/** Waits until the attempt's outcome is stored, checking as the test's own fiber. */
+export const attemptOutcome = Effect.fn("attemptOutcome")(function* (key: CardAttemptKey) {
+  const attempts = yield* CardAttempts;
+  const outcome = yield* attempts
+    .attempt(key)
+    .pipe(
+      Effect.map(Option.flatMapNullishOr((attempt) => attempt.outcome)),
+      Effect.repeat({ until: Option.isSome, schedule: Schedule.spaced("20 millis") }),
+      Effect.timeout("15 seconds"),
+    );
+  return Option.getOrThrow(outcome);
+});
+
 /** One owner process: base services, the card queue workers and the attempt workflow. */
 export const kanbanOwner = (owner: {
   readonly fixture: KanbanFixture;
@@ -341,15 +359,32 @@ export const assignCard = Effect.fn("assignCard")(function* (
   return payload;
 });
 
-/** Points the session at a new Goal instance the way an applied new Goal does. */
-export const switchGoalInstance = Effect.fn("switchGoalInstance")(function* (sessionId: string) {
+/**
+ * Takes the session back to Plan and replaces its Goal the way a chat run does: the bound run asks
+ * for a new Goal, and the owner applies it once the run completed. Nothing else of the session may
+ * be running. Returns the new Goal instance.
+ */
+export const replaceGoal = Effect.fn("replaceGoal")(function* (sessionId: string) {
   const sql = yield* SqlClient.SqlClient;
-  const now = DateTime.formatIso(yield* DateTime.now);
-  const id = `goal-${sessionId}-next`;
-  yield* sql`INSERT INTO workflow_goal_instances VALUES (${id}, ${sessionId}, ${now})`;
-  yield* sql`UPDATE workflow_goal_identities SET goal_instance_id = ${id}, created_at = ${now}
-    WHERE session_id = ${sessionId}`;
-  return id;
+  const workflows = yield* Workflows;
+  const runId = `${sessionId}:new-goal`;
+  yield* workflows.setPhase(sessionId, "plan");
+  const [revision] = yield* sql<{ readonly id: number | null }>`SELECT MAX(id) AS id
+    FROM workflow_state_revisions WHERE session_id = ${sessionId}`;
+  yield* (yield* workflowRunBindings).bind(sessionId, runId, Number(revision?.id));
+  yield* sql`INSERT INTO chat_runs (run_id, thread_id, status, started_at)
+    VALUES (${runId}, ${sessionId}, 'running', 0)`;
+  yield* workflows.requestNewGoal(sessionId, runId, {
+    action: "new_independent_goal",
+    previousGoalInstanceId: yield* workflows.goalInstanceId(sessionId),
+    reason: "Another task",
+    goal: { ...goalInput, statement: "Run other cards" },
+  });
+  yield* sql`UPDATE chat_runs SET status = 'completed' WHERE run_id = ${runId}`;
+  const settled = yield* workflows.settleNewGoalRequest(sessionId, runId);
+  if (!NewGoalSettlement.$is("applied")(settled))
+    return yield* Effect.die(`the new Goal was not applied: ${settled._tag}`);
+  return settled.goalInstanceId;
 });
 
 /** Records an agent run row the way a chat run of the card would leave it. */

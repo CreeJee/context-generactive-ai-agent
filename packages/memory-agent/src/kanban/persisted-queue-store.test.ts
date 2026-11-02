@@ -13,7 +13,6 @@ import {
 } from "effect";
 import { Exit, Scope } from "effect";
 import { PersistedQueue } from "effect/persistence";
-import { SqlClient } from "effect/sql";
 import { expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
 import { Database } from "../db/database.ts";
@@ -47,11 +46,7 @@ const openOwner = (file: string, scope: Scope.Scope) =>
   ).pipe(
     Effect.map((context) => ({
       run: <A, E>(
-        effect: Effect.Effect<
-          A,
-          E,
-          PersistedQueue.PersistedQueueFactory | PersistedQueueItems | SqlClient.SqlClient
-        >,
+        effect: Effect.Effect<A, E, PersistedQueue.PersistedQueueFactory | PersistedQueueItems>,
       ) => Effect.provideContext(effect, context),
     })),
   );
@@ -106,22 +101,28 @@ it.live("redelivers a card whose owner crashed before acknowledging it", () =>
   }).pipe(Effect.scoped),
 );
 
-it.live("dead-letters an undecodable payload and delivers the next card as itself", () =>
+it.live("dead-letters a payload of another shape and delivers the next card as itself", () =>
   Effect.gen(function* () {
     const owner = yield* openOwner(yield* databaseFile, yield* Effect.scope);
+    // An earlier release stored its cards in another shape under the same queue name.
+    const earlier = PersistedQueue.make({
+      ...queueOptions,
+      schema: Schema.Struct({ cardId: Schema.Finite }),
+    });
     yield* owner.run(
       Effect.gen(function* () {
-        const queue = yield* cards;
-        yield* queue.offer({ cardId: "x" }, { id: "g:x:1" });
-        const sql = yield* SqlClient.SqlClient;
-        yield* sql`UPDATE persisted_queue_items SET element_json = 'not json' WHERE id = 'g:x:1'`;
-        yield* queue.offer({ cardId: "y" }, { id: "g:y:1" });
+        yield* (yield* earlier).offer({ cardId: 1 }, { id: "g:x:1" });
+        yield* (yield* cards).offer({ cardId: "y" }, { id: "g:y:1" });
       }),
     );
     const delivered = yield* owner.run(
       Effect.flatMap(cards, (queue) => queue.take((card, meta) => Effect.succeed({ card, meta }))),
     );
     expect(delivered).toEqual({ card: { cardId: "y" }, meta: { id: "g:y:1", attempts: 1 } });
+    const status = yield* owner.run(
+      PersistedQueueItems.use((queue) => queue.status("cards", "g:x:1")),
+    );
+    expect(Option.map(status, ({ state }) => state)).toEqual(Option.some("failed"));
   }).pipe(Effect.scoped),
 );
 
@@ -145,15 +146,17 @@ it.live("dead-letters a card after its attempts, keeps it across restart and req
     yield* Scope.close(firstScope, Exit.void);
 
     const second = yield* openOwner(file, yield* Effect.scope);
-    const deadLetters = yield* second.run(
-      PersistedQueueItems.use((queue) => queue.deadLetters("cards")),
+    const failed = Option.some({ state: "failed", attempts: 2, lastFailure: "CardRunFailed" });
+    const statuses = yield* second.run(
+      PersistedQueueItems.use((queue) =>
+        Effect.forEach(["g:b:1", "g:c:1"], (id) => queue.status("cards", id)),
+      ),
     );
     expect(
-      deadLetters.map(({ id, attempts, lastFailure }) => ({ id, attempts, lastFailure })),
-    ).toEqual([
-      { id: "g:b:1", attempts: 2, lastFailure: "CardRunFailed" },
-      { id: "g:c:1", attempts: 2, lastFailure: "CardRunFailed" },
-    ]);
+      statuses.map(
+        Option.map(({ state, attempts, lastFailure }) => ({ state, attempts, lastFailure })),
+      ),
+    ).toEqual([failed, failed]);
 
     yield* second.run(PersistedQueueItems.use((queue) => queue.requeue("cards", "g:c:1")));
     const requeued = yield* second.run(
