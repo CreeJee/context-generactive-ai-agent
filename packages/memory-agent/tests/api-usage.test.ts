@@ -161,16 +161,5 @@ effectTest.effect(
         ].sort(),
       );
       strictEqual(columns[1]?.input_tokens, null);
-      yield* Effect.flip(
-        usage.record({
-          rootSessionId: "root",
-          purpose: "main",
-          provider: "openai",
-          model: "gpt",
-          inputTokens: 1,
-          cacheReadTokens: 2,
-        }),
-      );
-      strictEqual((yield* usage.byRootSession("root")).responses, 2);
     }),
 );

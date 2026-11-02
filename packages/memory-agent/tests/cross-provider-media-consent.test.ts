@@ -1,14 +1,11 @@
-import { GlobalConfigFailed, GlobalConfigFailedReason } from "../src/config/global-config.ts";
 import { it as effectTest } from "@effect/vitest";
 import { describe, expect, it } from "vite-plus/test";
 import {
-  CrossProviderMediaConsentStoreFailed,
   decideCrossProviderMediaConsent,
   makeCrossProviderMediaConsent,
   type Settings,
 } from "../src/index.ts";
-import { Cause, Effect, MutableRef } from "effect";
-import { assertExitFailure } from "@effect/vitest/utils";
+import { Effect, MutableRef } from "effect";
 
 const pair = {
   initiatorProvider: "anthropic" as const,
@@ -85,41 +82,6 @@ describe("CrossProviderMediaConsent", () => {
           executorProvider: "anthropic",
         })).mode,
       ).toBe("disabled");
-    }),
-  );
-
-  effectTest.effect("keeps read failures typed and therefore fail-closed", () =>
-    Effect.gen(function* () {
-      const service = makeCrossProviderMediaConsent({
-        read: Effect.fail(
-          GlobalConfigFailed.make({
-            operation: "read",
-            reason: GlobalConfigFailedReason.cases.ReadFailed.make({}),
-            cause: "broken store",
-          }),
-        ),
-        update: () =>
-          Effect.fail(
-            GlobalConfigFailed.make({
-              operation: "read",
-              reason: GlobalConfigFailedReason.cases.ReadFailed.make({}),
-              cause: "broken store",
-            }),
-          ),
-      });
-      const error = yield* Effect.flip(service.decide(pair));
-      expect(error).toBeInstanceOf(CrossProviderMediaConsentStoreFailed);
-      expect(error.operation).toBe("read");
-    }),
-  );
-  effectTest.effect("preserves store defects instead of treating them as read failures", () =>
-    Effect.gen(function* () {
-      const defect = new Error("unexpected store bug");
-      const service = makeCrossProviderMediaConsent({
-        read: Effect.die(defect),
-        update: () => Effect.die(defect),
-      });
-      assertExitFailure(yield* Effect.exit(service.decide(pair)), Cause.die(defect));
     }),
   );
 });

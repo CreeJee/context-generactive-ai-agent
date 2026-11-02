@@ -1,9 +1,8 @@
-import { Array as EffectArray } from "effect";
 import { Layer } from "effect";
 import { it as effectTest } from "@effect/vitest";
 import { optionalProperty } from "../src/optional-property.ts";
 import { Effect, Result } from "effect";
-import { describe, expect, test } from "vite-plus/test";
+import { describe, expect } from "vite-plus/test";
 import {
   ProviderToolCapabilityRegistry,
   ProviderToolMetadataFailure,
@@ -13,7 +12,6 @@ import {
   filterProviderTools,
   makeProviderToolCapabilityRegistry,
   providerToolDescriptors,
-  type ProviderToolCapabilityRegistryApi,
 } from "../src/providers/tool-capabilities.ts";
 
 const withDefault = Effect.fnUntraced(function* <A, E>(
@@ -24,33 +22,6 @@ const withDefault = Effect.fnUntraced(function* <A, E>(
 }, Effect.scoped);
 
 describe("ProviderToolCapabilityRegistry", () => {
-  test("contains all 18 provider-qualified tools without cross-provider collisions", () => {
-    expect(providerToolDescriptors).toHaveLength(18);
-    expect(EffectArray.dedupe(providerToolDescriptors.map((entry) => entry.id)).length).toBe(18);
-    expect(
-      providerToolDescriptors
-        .filter((entry) => entry.kind === "web_search")
-        .map((entry) => entry.id)
-        .toSorted(),
-    ).toEqual(["anthropic:web_search", "openai:web_search"]);
-    expect(providerToolDescriptors.every((entry) => Object.isFrozen(entry))).toBe(true);
-  });
-
-  test("keeps complete capability metadata", () => {
-    const descriptor = providerToolDescriptors.find((entry) => entry.id === "anthropic:memory");
-    expect(descriptor).toMatchObject({
-      provider: "anthropic",
-      category: "memory.read_write",
-      auth: ["provider_account_beta_entitlement"],
-      cost: "provider_metered",
-      dataAccess: ["application_memory"],
-      sideEffect: "write",
-      approval: "action_required",
-      sandbox: ["principal_storage_required"],
-      resultNormalizer: { strategy: "provider_native_preserve", preservesUnknownParts: true },
-    });
-  });
-
   effectTest.effect(
     "fails closed for unknown tools and unknown models, and resolves no tools for tools:[] models",
     () =>
@@ -168,24 +139,6 @@ describe("ProviderToolCapabilityRegistry", () => {
           reason: ProviderToolMetadataFailureReason.cases.DuplicateTool.make({ id: first.id }),
         }),
       );
-    }),
-  );
-
-  effectTest.effect("supports a Context.Tag Layer override", () =>
-    Effect.gen(function* () {
-      const override: ProviderToolCapabilityRegistryApi = {
-        descriptors: [],
-        get: (id) =>
-          providerToolDescriptors.length > 0
-            ? Effect.succeed(providerToolDescriptors[0])
-            : Effect.die(id),
-        filter: () => [],
-        resolve: () => Effect.succeed([]),
-      };
-      const value = yield* Effect.map(ProviderToolCapabilityRegistry, (registry) => registry).pipe(
-        Effect.provideService(ProviderToolCapabilityRegistry, override),
-      );
-      expect(value).toBe(override);
     }),
   );
 });

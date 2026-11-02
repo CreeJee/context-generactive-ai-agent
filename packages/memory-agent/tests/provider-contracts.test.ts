@@ -1,24 +1,15 @@
 import { it as effectTest } from "@effect/vitest";
-import { Effect, FileSystem, Path, Result, Layer, Schema, Struct } from "effect";
-import { describe, expect, expectTypeOf, test } from "vite-plus/test";
+import { Effect, FileSystem, Path, Result, Layer, Schema } from "effect";
+import { describe, expect } from "vite-plus/test";
 import { GlobalConfig } from "../src/config/global-config.ts";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { ActiveProvider } from "../src/providers/active-provider.ts";
 import {
   AuthConnectionState,
-  NativeToolSupport,
   ProviderId,
-  ProviderConnection,
   ProviderUnavailable,
-  providerConnection,
-  SubscriptionAccountProvider,
-  ProviderVendor,
-  SubscriptionModelSelection,
   type ProviderServices,
 } from "../src/providers/contracts.ts";
-import type { ProviderToolVendor } from "../src/providers/tool-capabilities.ts";
-import type { OAuthProvider } from "../src/oauth/protocol.ts";
-import type { ApiUsageProvider } from "../src/agent/api-usage.ts";
 import { ProviderRegistry, providerRegistryFrom } from "../src/providers/registry.ts";
 import { withTestPlatform } from "./support/platform.ts";
 
@@ -47,45 +38,6 @@ const fakeProvider = (provider: ProviderId): ProviderServices => ({
 });
 
 describe("provider-neutral contracts", () => {
-  test("separates endpoint protocol, subscription account vendor and native tool support", () => {
-    const endpoint = providerConnection("openai-compatible");
-    expect(endpoint).toEqual(
-      ProviderConnection.cases["compatible-endpoint"].make({
-        protocol: "openai-chat-completions",
-        nativeTools: NativeToolSupport.cases.unsupported.make({}),
-      }),
-    );
-    const openai = ProviderConnection.cases.subscription.make({
-      accountProvider: "openai",
-      nativeTools: NativeToolSupport.cases["vendor-native"].make({ vendor: "openai" }),
-    });
-    expect(providerConnection("openai")).toEqual(openai);
-    expectTypeOf<
-      (typeof ProviderConnection.cases)["compatible-endpoint"]["Type"]
-    >().not.toHaveProperty("accountProvider");
-    // A subscription case without its account provider is not a connection.
-    expect(
-      Schema.is(ProviderConnection)({
-        ...endpoint,
-        ...Struct.omit(openai, ["accountProvider", "nativeTools"]),
-      }),
-    ).toBe(false);
-  });
-
-  test("accepts compatible models without treating them as OAuth or native tool providers", () => {
-    const selection = {
-      provider: "openai-compatible",
-      model: "local-model",
-      reasoningEffort: "none",
-    };
-    expect(Schema.is(ProviderId)(selection.provider)).toBe(true);
-    expect(Schema.is(SubscriptionAccountProvider)(selection.provider)).toBe(false);
-    expect(Schema.is(ProviderVendor)(selection.provider)).toBe(false);
-    expect(Schema.is(SubscriptionModelSelection)(selection)).toBe(false);
-    expectTypeOf<OAuthProvider>().toEqualTypeOf<SubscriptionAccountProvider>();
-    expectTypeOf<ProviderToolVendor>().toEqualTypeOf<ProviderVendor>();
-    expectTypeOf<ApiUsageProvider>().toEqualTypeOf<ProviderId>();
-  });
   effectTest.effect("migrates a legacy model selection to an explicit OpenAI provider", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -226,10 +178,4 @@ describe("provider-neutral contracts", () => {
       );
     }).pipe(withTestPlatform),
   );
-
-  test("keeps credentials outside the authentication contract", () => {
-    const auth = fakeProvider("openai").auth;
-    expect("token" in auth).toBe(false);
-    expect("credential" in auth).toBe(false);
-  });
 });

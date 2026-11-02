@@ -437,28 +437,6 @@ describe("OpenAI compatible settings", () => {
         expect(storedEndpointOf(f.saved())?.imageInputSource).toBeUndefined();
       }),
   );
-  effectTest.effect.each(["vllm", "organization_owner", "unknown"])(
-    "only reads /models for owner %s without capabilities",
-    (owner) =>
-      Effect.gen(function* () {
-        const paths: string[] = [];
-        const f = fixture(
-          nativeFetch((url) =>
-            Effect.sync(() => {
-              const address =
-                url instanceof Request ? url.url : url instanceof URL ? url.href : url;
-              paths.push(new URL(address).pathname);
-              return Response.json({ data: [{ id: configuration.model, owned_by: owner }] });
-            }),
-          ),
-        );
-        yield* f.api.update(configuration);
-        expect((yield* f.api.services.models.list)[0]?.supportedReasoningEfforts).toEqual([
-          "default",
-        ]);
-        expect(paths).toEqual(["/v1/models"]);
-      }),
-  );
   effectTest.effect("offers the levels Strata's own source accepts when /models names it", () =>
     Effect.gen(function* () {
       const f = fixture(

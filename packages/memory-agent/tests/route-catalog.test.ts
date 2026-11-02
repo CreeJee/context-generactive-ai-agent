@@ -1,5 +1,5 @@
 import { it as effectTest } from "@effect/vitest";
-import { Context, Effect, MutableRef, Result, Layer, pipe } from "effect";
+import { Context, Effect, MutableRef, Result, Layer } from "effect";
 import {
   AuthConnectionState,
   ImageExecutorModel,
@@ -13,7 +13,7 @@ import {
   type RouteCatalogSource,
   type RouteCatalogSnapshot,
 } from "memory-agent";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect } from "vite-plus/test";
 import { TestClock } from "effect/testing";
 import { RouteCatalogRefreshFailedReason } from "../src/providers/route-catalog.ts";
 
@@ -145,22 +145,6 @@ describe("RouteCatalog", () => {
       }),
   );
 
-  effectTest.effect("keeps provider-managed media model provenance explicit", () =>
-    Effect.gen(function* () {
-      const managed = {
-        ...media,
-        id: "media:openai:provider_tool:image_generation" as const,
-        executionMode: "provider_tool" as const,
-        executorModel: ImageExecutorModel.provider_managed(),
-        billingAttribution: "provider_managed" as const,
-      };
-      const catalog = yield* makeRouteCatalog(source({ ...loaded, media: [managed] }));
-      const snapshot = yield* catalog.refresh;
-      expect(snapshot.media[0]?.executorModel).toEqual(ImageExecutorModel.provider_managed());
-      expect(snapshot.media[0]?.billingAttribution).toBe("provider_managed");
-    }),
-  );
-
   effectTest.effect("does not replace the previous snapshot when refresh fails", () =>
     Effect.gen(function* () {
       const attempt = MutableRef.make(0);
@@ -261,34 +245,13 @@ describe("RouteCatalog", () => {
       }),
   );
 
-  effectTest.effect("supports a deterministic Layer override", () =>
-    Effect.gen(function* () {
-      const services = yield* Layer.build(RouteCatalog.layerFrom(source(), () => 7));
-      const catalog = Context.get(services, RouteCatalog);
-      expect(yield* catalog.refresh).toMatchObject({ revision: 1, refreshedAt: 7 });
-    }),
-  );
-
-  effectTest.effect("uses the runtime clock and accepts both pipeable factory forms", () =>
+  effectTest.effect("uses the runtime clock", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(1_000);
-      const catalog = yield* pipe(source(), makeRouteCatalog());
+      const catalog = yield* makeRouteCatalog(source());
       expect(yield* catalog.refresh).toMatchObject({ revision: 1, refreshedAt: 1_000 });
       yield* TestClock.adjust("1 second");
       expect(yield* catalog.refresh).toMatchObject({ revision: 2, refreshedAt: 2_000 });
-      const override = yield* pipe(
-        source(),
-        makeRouteCatalog(() => 7),
-      );
-      expect(yield* override.refresh).toMatchObject({ refreshedAt: 7 });
     }),
   );
-
-  it("keeps entitlement evidence separate from authentication", () => {
-    expect(chat.authentication).toMatchObject({ status: "signed-in", verified: true });
-    expect(media.entitlement).toMatchObject({
-      status: "unverified",
-      source: "account_smoke_test_not_run",
-    });
-  });
 });

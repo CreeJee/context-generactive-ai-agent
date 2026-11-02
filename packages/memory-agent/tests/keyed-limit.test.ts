@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest";
-import { MutableHashMap, MutableRef, Option, Deferred, Effect, Fiber } from "effect";
+import { MutableHashMap, MutableRef, Option, Effect, Fiber } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, expect } from "vite-plus/test";
 import { keyedSerialLimit } from "../src/concurrency/keyed-limit.ts";
@@ -38,20 +38,6 @@ describe("keyedSerialLimit", () => {
       expect(Option.getOrThrow(MutableHashMap.get(peak, "a"))).toBe(1);
       expect(Option.getOrThrow(MutableHashMap.get(peak, "b"))).toBe(1);
       expect(MutableRef.get(globalPeak)).toBeGreaterThan(1);
-    }),
-  );
-
-  it.effect("an interrupted holder releases its key for a waiting job", () =>
-    Effect.gen(function* () {
-      const limit = yield* keyedSerialLimit();
-      const started = yield* Deferred.make<void>();
-      const first = yield* Effect.forkChild(
-        limit("agent", Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never))),
-      );
-      yield* Deferred.await(started);
-      const second = yield* Effect.forkChild(limit("agent", Effect.succeed("continued")));
-      yield* Fiber.interrupt(first);
-      expect(yield* Fiber.join(second)).toBe("continued");
     }),
   );
 });

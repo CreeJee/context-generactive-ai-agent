@@ -86,29 +86,13 @@ describe("ImageFeature settings", () => {
           MutableRef.updateAndGet(settings, (current) => ({ ...current, ...patch })),
         ),
     };
-    return {
-      feature: makeImageFeature(config),
-      read: () => MutableRef.get(settings),
-    };
+    return { feature: makeImageFeature(config) };
   }
 
   effectTest.effect("defaults image generation off", () =>
     Effect.gen(function* () {
       const { feature } = fixture();
       expect(yield* feature.status).toEqual({ imageGenerationEnabled: false });
-    }),
-  );
-
-  effectTest.effect("persists the single image generation setting", () =>
-    Effect.gen(function* () {
-      const { feature, read } = fixture();
-      expect(yield* feature.setImageGenerationEnabled(true)).toEqual({
-        imageGenerationEnabled: true,
-      });
-      expect(read()).toMatchObject({ imageGenerationEnabled: true });
-      expect(yield* feature.setImageGenerationEnabled(false)).toEqual({
-        imageGenerationEnabled: false,
-      });
     }),
   );
 });

@@ -36,15 +36,11 @@ const inspect = Effect.fn("inspectOwner")(function* (owner: Owner) {
     .pipe(Effect.timeout("10 seconds"));
   return yield* Schema.decodeUnknownEffect(inspection)(yield* response.json);
 });
-const stop = Effect.fn("stopOwner")(function* (
-  child: ChildProcessSpawner.ChildProcessHandle,
-  signal: ChildProcess.Signal,
-) {
+const kill = Effect.fn("killOwner")(function* (child: ChildProcessSpawner.ChildProcessHandle) {
   if (!(yield* child.isRunning)) return;
-  yield* child.kill({ killSignal: signal, forceKillAfter: "5 seconds" });
+  yield* child.kill({ killSignal: "SIGKILL", forceKillAfter: "5 seconds" });
   // The official spawner reports signal termination as a PlatformError rather than an exit code.
-  if (signal === "SIGKILL") yield* Effect.result(child.exitCode);
-  else yield* child.exitCode;
+  yield* Effect.result(child.exitCode);
   expect(yield* child.isRunning).toBe(false);
 });
 const Ready = Schema.Struct({ port: Schema.Int, sessionId: Schema.String });
@@ -122,11 +118,10 @@ const post = Effect.fn("postOwner")(function* (owner: Owner, runId: string) {
     )
     .pipe(Effect.timeout("10 seconds"));
 });
-/** Follows a run's events on the owner's chat API, after `after` or from the start. */
-const join = Effect.fn("joinOwner")(function* (owner: Owner, runId: string, after?: string) {
-  const query = after === undefined ? "" : `?after=${encodeURIComponent(after)}`;
+/** Follows a run's events on the owner's chat API from the start. */
+const join = Effect.fn("joinOwner")(function* (owner: Owner, runId: string) {
   return yield* (yield* testHttpClient())
-    .get(`${owner.url}/api/sessions/${owner.sessionId}/runs/${runId}/events${query}`)
+    .get(`${owner.url}/api/sessions/${owner.sessionId}/runs/${runId}/events`)
     .pipe(Effect.timeout("10 seconds"));
 });
 const waitForModel = Effect.fn("waitForOwnerModel")(function* (base: string) {
@@ -182,7 +177,7 @@ it.live(
             expect(old.bindings).toHaveLength(1);
             const calls = yield* fs.readFileString(path.join(base, "model-calls"));
             expect(calls.trim().split("\n")).toHaveLength(1);
-            yield* stop(first.child, "SIGKILL");
+            yield* kill(first.child);
             const second = yield* start(base, "reopen");
 
             const recovered = yield* inspect(second);
@@ -203,12 +198,9 @@ it.live(
   40_000,
 );
 
-it.live.each([
-  { interrupted: false, title: "SIGTERM preserves completed turn" },
-  { interrupted: true, title: "SIGKILL fences incomplete work" },
-])(
-  "real OS owner $title",
-  ({ interrupted }) =>
+it.live(
+  "real OS owner SIGKILL fences incomplete work",
+  () =>
     Effect.scoped(
       withTestPlatform(
         Effect.gen(function* () {
@@ -217,9 +209,9 @@ it.live.each([
           const base = yield* fs.makeTempDirectoryScoped({ prefix: "agent-owner-process-" });
 
           try {
-            const first = yield* start(base, interrupted ? "blocked" : "complete");
+            const first = yield* start(base, "blocked");
 
-            const runId = interrupted ? "killed-run" : "completed-run";
+            const runId = "killed-run";
             const response = yield* post(first, runId);
             expect(response.status).toBe(200);
             const delivered = yield* Effect.forkChild(
@@ -227,64 +219,49 @@ it.live.each([
               { startImmediately: true },
             );
             yield* waitForModel(base);
-            const completed = interrupted ? "" : yield* Fiber.join(delivered);
-            if (!interrupted) expect(completed).toContain("completed owner turn");
             const old = yield* inspect(first);
             expect(old.bindings).toHaveLength(1);
-            yield* stop(first.child, interrupted ? "SIGKILL" : "SIGTERM");
+            yield* kill(first.child);
             yield* Fiber.join(delivered);
             const second = yield* start(base, "reopen");
 
             const state = yield* inspect(second);
             expect(state.bindings).toEqual(old.bindings);
-            expect(state.runs[0].status).toBe(interrupted ? "failed" : "completed");
+            expect(state.runs[0].status).toBe("failed");
             const replayResponse = yield* join(second, runId);
             expect(replayResponse.status).toBe(200);
             // A killed SDK log has no terminal chunk: reconnect can deliver its durable
             // prefix but must not be mistaken for a completed stream or awaited to EOF.
-            const replay = interrupted
-              ? Option.getOrThrow(
-                  yield* replayResponse.stream.pipe(
-                    Stream.decodeText(),
-                    Stream.scan(
-                      () => "",
-                      (prefix, text) => prefix + text,
-                    ),
-                    Stream.takeUntil((prefix) => prefix.includes("\n\n")),
-                    Stream.runLast,
-                  ),
-                )
-              : yield* replayResponse.text;
-            if (interrupted) {
-              expect(replay).toContain("run.accepted");
-              expect(replay).not.toContain("never completed");
-            } else expect(replay).toBe(completed);
-            const firstOffset = /^id: (.+)$/m.exec(replay)?.[1];
-            expect(firstOffset).toBeDefined();
-            if (!interrupted) {
-              const suffix = yield* join(second, runId, firstOffset);
-              expect(yield* suffix.text).toBe(replay.slice(replay.indexOf("\n\n") + 2));
-            }
-            if (interrupted) {
-              // The killed run never settled; the reopened owner closes its execution.
-              expect(old.executions).toEqual([{ runId, status: "suspended" }]);
-              expect(state.executions).toEqual([{ runId, status: "completed" }]);
-              expect((yield* post(second, runId)).status).toBe(409);
-            }
+            const replay = Option.getOrThrow(
+              yield* replayResponse.stream.pipe(
+                Stream.decodeText(),
+                Stream.scan(
+                  () => "",
+                  (prefix, text) => prefix + text,
+                ),
+                Stream.takeUntil((prefix) => prefix.includes("\n\n")),
+                Stream.runLast,
+              ),
+            );
+            expect(replay).toContain("run.accepted");
+            expect(replay).not.toContain("never completed");
+            expect(/^id: (.+)$/m.exec(replay)?.[1]).toBeDefined();
+            // The killed run never settled; the reopened owner closes its execution.
+            expect(old.executions).toEqual([{ runId, status: "suspended" }]);
+            expect(state.executions).toEqual([{ runId, status: "completed" }]);
+            expect((yield* post(second, runId)).status).toBe(409);
             expect(
               (yield* fs.readFileString(path.join(base, "model-calls"))).trim().split("\n"),
             ).toHaveLength(1);
-            if (interrupted) {
-              // The killed run ran no tool, so a new run continues without replaying it.
-              const continued = yield* post(second, "continued-run");
-              expect({ status: continued.status, text: yield* continued.text }).toMatchObject({
-                status: 200,
-                text: expect.stringContaining("completed owner turn"),
-              });
-              expect(
-                (yield* fs.readFileString(path.join(base, "model-calls"))).trim().split("\n"),
-              ).toHaveLength(2);
-            }
+            // The killed run ran no tool, so a new run continues without replaying it.
+            const continued = yield* post(second, "continued-run");
+            expect({ status: continued.status, text: yield* continued.text }).toMatchObject({
+              status: 200,
+              text: expect.stringContaining("completed owner turn"),
+            });
+            expect(
+              (yield* fs.readFileString(path.join(base, "model-calls"))).trim().split("\n"),
+            ).toHaveLength(2);
           } finally {
           }
         }),

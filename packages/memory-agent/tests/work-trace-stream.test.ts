@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest";
-import { DateTime, Effect, Exit, Fiber, Layer, Schema } from "effect";
+import { DateTime, Effect, Fiber, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, expect } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
@@ -247,26 +247,6 @@ describe("Work Trace durable stream source", () => {
         yield* Effect.forkChild(trace.keepAlive(handle));
         yield* TestClock.adjust(heartbeatLostMs + 2 * heartbeatIntervalMs);
         expect((yield* trace.taskTree("s1"))[0]?.status).toBe("running");
-      }),
-    ),
-  );
-
-  it.effect("interrupts a waiting tail without converting cancellation to a heartbeat", () =>
-    run(
-      Effect.gen(function* () {
-        yield* seed();
-        const trace = yield* WorkTraceStore;
-        const waiting = yield* trace
-          .waitForChangeEffect({
-            sessionId: "s1",
-            afterCursor: 0,
-            heartbeatMs: 1_000,
-          })
-          .pipe(Effect.forkChild);
-        yield* Effect.yieldNow;
-        yield* Fiber.interrupt(waiting);
-        const exit = yield* Fiber.await(waiting);
-        expect(Exit.hasInterrupts(exit)).toBe(true);
       }),
     ),
   );

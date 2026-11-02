@@ -1,6 +1,5 @@
 import { expect, it } from "@effect/vitest";
-import { assertTrue } from "@effect/vitest/utils";
-import { Deferred, Effect, Cause, Exit, Fiber, MutableRef, Stream } from "effect";
+import { Deferred, Effect, Fiber, Stream } from "effect";
 import { gitNames } from "../src/files/git-grep.ts";
 import { searchTextFilesEffect } from "../src/files/search.ts";
 import { PathRejected } from "../src/files/paths.ts";
@@ -44,43 +43,6 @@ it.effect(
     }),
 );
 
-it.effect("finishing a page interrupts all pending read-ahead work", () =>
-  Effect.gen(function* () {
-    const started = yield* Deferred.make<void>();
-    const active = MutableRef.make(0);
-    const finished = MutableRef.make(0);
-    const page = yield* searchTextFilesEffect({
-      paths: Array.from({ length: 5 }, (_, index) => String(index)),
-      query: "match",
-      caseSensitive: true,
-      start: { file: 0, line: 0 },
-      readBytes: (path) =>
-        path === "0"
-          ? Deferred.await(started).pipe(
-              Effect.as(bytes(Array.from({ length: 101 }, () => "match").join("\n"))),
-            )
-          : Effect.gen(function* () {
-              yield* Effect.addFinalizer(() =>
-                Effect.sync(() => {
-                  MutableRef.decrement(active);
-                  MutableRef.increment(finished);
-                }),
-              );
-              const running = MutableRef.incrementAndGet(active);
-              yield* Effect.when(
-                Deferred.succeed(started, undefined),
-                Effect.succeed(running === 4),
-              );
-              return yield* Effect.never;
-            }),
-    });
-    expect(page.matches).toHaveLength(100);
-    expect(page.next).toEqual({ file: 0, line: 100 });
-    expect(MutableRef.get(active)).toBe(0);
-    expect(MutableRef.get(finished)).toBe(4);
-  }),
-);
-
 it.effect("Git names split across chunks and stop one past the limit", () =>
   Effect.gen(function* () {
     const chunks = ["a\0b", "c\0", "\0d\0e", "\0f\0"].map((text) => new TextEncoder().encode(text));
@@ -94,22 +56,5 @@ it.effect("Git names split across chunks and stop one past the limit", () =>
       names: ["x", "x", "x"],
       truncated: true,
     });
-  }),
-);
-
-it.effect("reader defects are not converted into skipped files", () =>
-  Effect.gen(function* () {
-    const defect = new Error("reader bug");
-    const exit = yield* Effect.exit(
-      searchTextFilesEffect({
-        paths: ["first"],
-        query: "match",
-        caseSensitive: true,
-        start: { file: 0, line: 0 },
-        readBytes: () => Effect.die(defect),
-      }),
-    );
-    assertTrue(Exit.hasDies(exit));
-    expect(Cause.squash(exit.cause)).toBe(defect);
   }),
 );

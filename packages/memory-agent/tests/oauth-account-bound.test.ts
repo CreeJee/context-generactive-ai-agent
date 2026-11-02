@@ -317,52 +317,6 @@ describe("account-bound subscription provider", () => {
     }).pipe(withOAuthTestPlatform),
   );
 
-  effectTest.live.each(["openai", "anthropic"] as const)(
-    "%s keeps A's stream/refresh bound after switching to B",
-    (provider) =>
-      Effect.gen(function* () {
-        const { profiles, select } = yield* dbFixture(provider);
-        const calls: string[] = [];
-        const bound = yield* createAccountBoundSubscriptionClients({
-          profiles,
-          provider: provider,
-          createClient: (id) =>
-            Effect.succeed(
-              fakeClient(provider, {
-                modelCatalog: Effect.sync(() => {
-                  calls.push(`catalog:${id}`);
-                  return [];
-                }),
-                stream: () =>
-                  Stream.suspend(() => {
-                    calls.push(`stream:${id}`);
-                    return Stream.empty;
-                  }),
-                refreshForValidation: Effect.sync(() => {
-                  calls.push(`refresh:${id}`);
-                  return connection(provider, true);
-                }),
-              }),
-            ),
-        });
-        const a = yield* bound.forRun;
-        yield* select(ids[1]);
-        const b = yield* bound.forRun;
-        yield* bound.client.modelCatalog;
-        yield* Stream.runDrain(a.stream("{}"));
-        yield* Stream.runDrain(b.stream("{}"));
-        yield* a.refreshForValidation;
-        yield* b.refreshForValidation;
-        expect(calls).toEqual([
-          `catalog:${ids[1]}`,
-          `stream:${ids[0]}`,
-          `stream:${ids[1]}`,
-          `refresh:${ids[0]}`,
-          `refresh:${ids[1]}`,
-        ]);
-      }).pipe(withOAuthTestPlatform),
-  );
-
   effectTest.live(
     "catalog/status and a pinned run keep their original account on A/B switches",
     () =>

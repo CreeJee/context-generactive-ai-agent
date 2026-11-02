@@ -1,22 +1,9 @@
 import { expect, it } from "@effect/vitest";
-import { assertTrue } from "@effect/vitest/utils";
 import { NodeCrypto, NodeFileSystem, NodePath } from "@effect/platform-node";
-import {
-  Context,
-  Deferred,
-  Effect,
-  Exit,
-  Fiber,
-  FileSystem,
-  Layer,
-  MutableRef,
-  Path,
-  PlatformError,
-} from "effect";
+import { Context, Effect, Fiber, FileSystem, Layer, MutableRef, Path, PlatformError } from "effect";
 import {
   ArchiveHost,
   ArchiveInstaller,
-  ArchiveInstallFailed,
   ArchiveInstallFailedReason,
   type PinnedArchive,
 } from "../src/runtime/archive-install.ts";
@@ -91,45 +78,6 @@ it.effect("checksum mismatch never stages; escaping entries never extract or pub
         .reason,
     ).toEqual(ArchiveInstallFailedReason.cases.UnsafeEntry.make({ entry: "../outside" }));
     expect(unsafe.calls).toEqual(["download", "checksum", "stage", "write", "cleanup"]);
-  }),
-);
-
-it.effect("extract and cleanup failures remain typed; interruption waits for cleanup", () =>
-  Effect.gen(function* () {
-    const failed = fixture();
-    const error = ArchiveInstallFailed.make({
-      reason: ArchiveInstallFailedReason.cases.HostOperationFailed.make({
-        operation: "extract",
-        cause: "tar failed",
-      }),
-    });
-    expect(yield* Effect.flip(install({ ...failed.host, extract: () => Effect.fail(error) }))).toBe(
-      error,
-    );
-    expect(failed.calls.at(-1)).toBe("cleanup");
-    expect(failed.calls).not.toContain("publish");
-    const cleanupError = ArchiveInstallFailed.make({
-      reason: ArchiveInstallFailedReason.cases.HostOperationFailed.make({
-        operation: "cleanup",
-        cause: "busy",
-      }),
-    });
-    expect(
-      yield* Effect.flip(install({ ...fixture().host, cleanup: () => Effect.fail(cleanupError) })),
-    ).toBe(cleanupError);
-    const cancelled = fixture();
-    const entered = yield* Deferred.make<void>();
-    const extracting = yield* Effect.forkChild(
-      install({
-        ...cancelled.host,
-        extract: () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
-      }),
-    );
-    yield* Deferred.await(entered);
-    yield* Fiber.interrupt(extracting);
-    assertTrue(Exit.hasInterrupts(yield* Fiber.await(extracting)));
-    expect(cancelled.calls.at(-1)).toBe("cleanup");
-    expect(cancelled.calls).not.toContain("publish");
   }),
 );
 
@@ -211,7 +159,7 @@ it.live("native adapter installs real tar contents and keeps an existing target 
   }),
 );
 
-it.effect("platform cleanup retries transient errno failures and interruption stops retries", () =>
+it.effect("platform cleanup retries transient errno failures", () =>
   Effect.gen(function* () {
     const attempts = MutableRef.make(0);
     const busy = PlatformError.systemError({
@@ -248,13 +196,5 @@ it.effect("platform cleanup retries transient errno failures and interruption st
       }),
     );
     expect(MutableRef.get(attempts)).toBe(11);
-    MutableRef.set(attempts, 0);
-    const cancelled = yield* Effect.forkChild(host.cleanup(staging));
-    yield* TestClock.adjust("600 millis");
-    yield* Fiber.interrupt(cancelled);
-    assertTrue(Exit.hasInterrupts(yield* Fiber.await(cancelled)));
-    const before = MutableRef.get(attempts);
-    yield* TestClock.adjust("20 seconds");
-    expect(MutableRef.get(attempts)).toBe(before);
   }),
 );

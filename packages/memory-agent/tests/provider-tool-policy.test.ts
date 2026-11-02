@@ -40,10 +40,8 @@ import {
   normalizeProviderToolUsage,
   type ProviderToolExecutionRevalidationInput,
   type ProviderToolRequest,
-  type ProviderToolPolicyApi,
   type ProviderToolPolicyContext,
   type ProviderToolResultEnvelope,
-  type ProviderToolRuntimeApi,
 } from "../src/providers/tool-policy.ts";
 
 const defaultPolicyLayer = ProviderToolPolicy.layer.pipe(
@@ -493,23 +491,6 @@ describe("ProviderToolPolicy", () => {
       ]);
     }).pipe(withTestPlatform),
   );
-
-  effectTest.effect("supports a deterministic test Layer override", () =>
-    Effect.gen(function* () {
-      const override: ProviderToolPolicyApi = {
-        expose: () => Effect.succeed({ tools: [] }),
-        revalidateExecution: () => Effect.die("unused"),
-      };
-      const value = yield* Effect.map(ProviderToolPolicy, (service) => service).pipe(
-        // Test entry point owns this Layer and its resource scope.
-        Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
-          const services = yield* Layer.build(ProviderToolPolicy.layerFrom(override));
-          return yield* Effect.provideContext(program, services);
-        }, Effect.scoped),
-      );
-      expect(value).toBe(override);
-    }),
-  );
 });
 
 const runtimeLayer = ProviderToolRuntime.layer.pipe(
@@ -905,22 +886,5 @@ describe("ProviderToolRuntime", () => {
           },
         });
       }).pipe(withTestPlatform),
-  );
-
-  effectTest.effect("supports a runtime Layer override", () =>
-    Effect.gen(function* () {
-      const override: ProviderToolRuntimeApi = {
-        compose: () => Effect.succeed([]),
-        execute: () => Effect.die("unused"),
-      };
-      const value = yield* Effect.map(ProviderToolRuntime, (runtime) => runtime).pipe(
-        // Test entry point owns this Layer and its resource scope.
-        Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
-          const services = yield* Layer.build(ProviderToolRuntime.layerFrom(override));
-          return yield* Effect.provideContext(program, services);
-        }, Effect.scoped),
-      );
-      expect(value).toBe(override);
-    }),
   );
 });

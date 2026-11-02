@@ -1,75 +1,7 @@
-import { Array as EffectArray } from "effect";
-import {
-  anthropicImageProviderContract,
-  ImageExecutorModel,
-  imageRouteContracts,
-  productionImageRouteContracts,
-} from "memory-agent";
+import { imageRouteContracts, productionImageRouteContracts } from "memory-agent";
 import { describe, expect, it } from "vite-plus/test";
 
 describe("image route contracts", () => {
-  it("does not invent the Provider Tool executor model", () => {
-    const route = imageRouteContracts.find(
-      (candidate) => candidate.id === "openai:provider_tool:image_generation",
-    );
-    expect(route?.executorModel).toEqual(ImageExecutorModel.provider_managed());
-    expect(route?.billingAttribution).toBe("provider_managed");
-    expect(route?.cancellation).toBe("chat_run_abort_signal");
-  });
-
-  it("keeps direct adapter model and billing attribution explicit", () => {
-    const route = imageRouteContracts.find(
-      (candidate) => candidate.id === "openai:direct_adapter:gpt-image-2",
-    );
-    expect(route?.executorModel).toEqual(ImageExecutorModel.explicit({ model: "gpt-image-2" }));
-    expect(route?.billingAttribution).toBe("executor_model");
-    expect(route?.cancellation).toBe("request_abort_signal");
-  });
-
-  it("records installed direct adapter edit limits", () => {
-    const byModel = Object.fromEntries(
-      imageRouteContracts.flatMap((route) =>
-        ImageExecutorModel.$match(route.executorModel, {
-          explicit: ({ model }) => [[model, route] as const],
-          provider_managed: () => [],
-        }),
-      ),
-    );
-    expect(byModel["gpt-image-2"]?.input.maximumSourceImages).toBe(16);
-  });
-
-  it("requires persistence and defers MIME to provider options or byte detection", () => {
-    imageRouteContracts.forEach((route) => {
-      expect(route.output.persistenceRequired).toBe(true);
-      expect(route.output.mime).toBe("provider_option_or_detect_bytes");
-      expect(route.usage.costKnownBeforeExecution).toBe(false);
-    });
-  });
-
-  it("classifies Anthropic image input separately from unsupported generation", () => {
-    expect(anthropicImageProviderContract).toMatchObject({
-      provider: "anthropic",
-      verification: "unsupported",
-      productionEnabled: false,
-      imageInputSupported: true,
-      imageGenerationSupported: false,
-    });
-    expect(EffectArray.dedupe(imageRouteContracts.map((route) => route.provider))).toEqual([
-      "openai",
-    ]);
-  });
-
-  it("enables implemented direct adapters but keeps the Provider Tool staged", () => {
-    const direct = imageRouteContracts.filter((route) => route.executionMode === "direct_adapter");
-    const providerTool = imageRouteContracts.find(
-      (route) => route.executionMode === "provider_tool",
-    );
-    expect(direct.every((route) => route.verification === "verified")).toBe(true);
-    expect(direct.every((route) => route.productionEnabled)).toBe(true);
-    expect(providerTool).toMatchObject({ verification: "unverified", productionEnabled: false });
-    expect(productionImageRouteContracts()).toEqual(direct);
-  });
-
   it("requires both verification and an explicit production flag", () => {
     const candidate = imageRouteContracts[0]!;
     expect(

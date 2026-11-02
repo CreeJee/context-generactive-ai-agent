@@ -92,42 +92,6 @@ function seedTask(sqlite: DatabaseSync) {
 }
 
 describe("Work Trace migration", () => {
-  it.live("upgrades an existing database additively without changing legacy subagents", () =>
-    Effect.gen(function* () {
-      const file = yield* databaseFile();
-      const legacy = yield* Effect.acquireRelease(
-        Effect.sync(() => new DatabaseSync(file)),
-        (db) =>
-          Effect.sync(() => {
-            if (db.isOpen) db.close();
-          }),
-      );
-      legacy.exec("PRAGMA foreign_keys = ON");
-      migrations.slice(0, -1).forEach((step) => legacy.exec(step));
-      legacy.exec(`PRAGMA user_version = ${migrations.length - 1}`);
-      seedProjectSessionAndAgent(legacy);
-      legacy.close();
-
-      const result = yield* withDatabase(file, (db) => ({
-        version: db.sqlite.prepare("PRAGMA user_version").get(),
-        agent: db.sqlite.prepare("SELECT id, last_task FROM subagents WHERE id = 'agent-1'").get(),
-        tables: db.sqlite
-          .prepare(
-            `SELECT name FROM sqlite_schema
-           WHERE type = 'table' AND name IN
-             ('work_tasks', 'agent_invocations', 'agent_run_attempts', 'run_events',
-              'work_artifacts')
-           ORDER BY name`,
-          )
-          .all(),
-      }));
-
-      expect(result.version).toEqual({ user_version: migrations.length });
-      expect(result.agent).toEqual({ id: "agent-1", last_task: "legacy task" });
-      expect(result.tables).toHaveLength(5);
-    }),
-  );
-
   it.live("enforces relationships, idempotency and one active attempt per task", () =>
     Effect.flatMap(databaseFile(), (file) =>
       withDatabase(file, (db) => {

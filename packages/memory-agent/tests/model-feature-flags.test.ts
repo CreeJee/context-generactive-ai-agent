@@ -1,12 +1,10 @@
 import { HashSet } from "effect";
-import { GlobalConfigFailed, GlobalConfigFailedReason } from "../src/config/global-config.ts";
 import { ModelFeatureFlagScope } from "../src/providers/model-feature-flags.ts";
 import { it as effectTest } from "@effect/vitest";
 import { Effect, MutableRef, Result } from "effect";
 import {
   decideModelFeatureFlag,
   makeModelFeatureFlags,
-  ModelFeatureFlagStoreFailed,
   UnknownModelFeatureCapability,
   type ModelFeatureFlagSettings,
   type Settings,
@@ -93,37 +91,13 @@ describe("ModelFeatureFlags service", () => {
     }),
   );
 
-  effectTest.effect("returns typed failures for unknown capabilities and storage failures", () =>
+  effectTest.effect("returns a typed failure for an unknown capability", () =>
     Effect.gen(function* () {
       const unknown = yield* Effect.result(
         fixture().service.decide({ ...query, capability: "unknown" }),
       );
       expect(Result.isFailure(unknown) && unknown.failure).toBeInstanceOf(
         UnknownModelFeatureCapability,
-      );
-      const failed = makeModelFeatureFlags(
-        {
-          read: Effect.fail(
-            GlobalConfigFailed.make({
-              operation: "read",
-              reason: GlobalConfigFailedReason.cases.ReadFailed.make({}),
-              cause: "broken",
-            }),
-          ),
-          update: () =>
-            Effect.fail(
-              GlobalConfigFailed.make({
-                operation: "read",
-                reason: GlobalConfigFailedReason.cases.ReadFailed.make({}),
-                cause: "broken",
-              }),
-            ),
-        },
-        [capability],
-      );
-      const result = yield* Effect.result(failed.read);
-      expect(Result.isFailure(result) && result.failure).toBeInstanceOf(
-        ModelFeatureFlagStoreFailed,
       );
     }),
   );

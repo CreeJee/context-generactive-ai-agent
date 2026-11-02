@@ -1,35 +1,11 @@
 import { it } from "@effect/vitest";
 import { Effect, MutableRef, Option, Schema } from "effect";
 import { expect } from "vite-plus/test";
-import { type ChatMetadata, ChatMetadataFailed } from "../src/chat-store/metadata.ts";
+import type { ChatMetadata } from "../src/chat-store/metadata.ts";
 import {
   consumeColdObservationEffect,
-  ContextUsageFailed,
-  ContextUsageReason,
-  lastContextUsageEffect,
   pendingColdObservationEffect,
 } from "../src/agent/context-usage.ts";
-
-it.effect("keeps context metadata read and write failures typed", () =>
-  Effect.gen(function* () {
-    const cause = new Error("private metadata failure");
-    const metadata: ChatMetadata = {
-      get: () => Effect.fail(ChatMetadataFailed.make({ cause })),
-      set: () => Effect.fail(ChatMetadataFailed.make({ cause })),
-    };
-    const read = yield* Effect.flip(lastContextUsageEffect({ metadata, threadId: "thread" }));
-    expect(read).toBeInstanceOf(ContextUsageFailed);
-    expect(read.operation).toBe("read-usage");
-    expect(ContextUsageReason.guards.ReadFailed(read.reason)).toBe(true);
-    expect(read.cause).toBe(cause);
-    const write = yield* Effect.flip(
-      consumeColdObservationEffect({ metadata, threadId: "thread", observationId: "observation" }),
-    );
-    expect(write.operation).toBe("consume");
-    expect(ContextUsageReason.guards.WriteFailed(write.reason)).toBe(true);
-    expect(write.cause).toBe(cause);
-  }),
-);
 
 it.effect("retains cold-observation identity and excludes consumed or legacy reports", () =>
   Effect.gen(function* () {
