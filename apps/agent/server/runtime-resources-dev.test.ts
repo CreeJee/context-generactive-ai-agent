@@ -22,9 +22,6 @@ it.live(
           const path = yield* Path.Path;
           const root = yield* path.fromFileUrl(new URL("..", import.meta.url));
           const storage = yield* fs.makeTempDirectoryScoped({ prefix: "runtime-export-ssr-" });
-          const encodedStorage = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.String))(
-            storage,
-          );
           const probe = path.join(root, "server", ".runtime-export-probe.ts");
           yield* fs.writeFileString(
             probe,
@@ -33,7 +30,6 @@ import * as build from "virtual:react-router/server-build";
 import { createRequestHandler } from "react-router";
 import { Effect } from "effect";
 import { runtimeRoot, runtimeWorkerOptions } from "memory-agent/runtime-resources";
-build.entry.module.configureAgentBackend({ storageRoot: ${encodedStorage}, runtimeRoot: null, buildConfig: {}, release: "0.0.0-dev" });
 const exportResult = { status: 0, html: "", root: null, workerRoot: null, marker: "" };
 try {
   const response = await createRequestHandler(build, "development")(
@@ -51,9 +47,14 @@ export const result = exportResult;
           );
           yield* Effect.addFinalizer(() => fs.remove(probe, { force: true }).pipe(Effect.orDie));
           // The HMR frontend's environment: its loader asks the dev backend, here one that is not
-          // running. Config reads the environment once, when the Vite config first reads it.
+          // running. Config reads the environment once, when the Vite config first reads it. The
+          // frontend never configures an agent backend, so an agent it started would use
+          // CONTEXT_AGENT_HOME.
           yield* Effect.acquireRelease(
-            Effect.sync(() => vi.stubEnv("CONTEXT_AGENT_DEV_BACKEND", "http://127.0.0.1:9")),
+            Effect.sync(() => {
+              vi.stubEnv("CONTEXT_AGENT_DEV_BACKEND", "http://127.0.0.1:9");
+              vi.stubEnv("CONTEXT_AGENT_HOME", storage);
+            }),
             () => Effect.sync(() => vi.unstubAllEnvs()),
           );
           const server = yield* Effect.acquireRelease(

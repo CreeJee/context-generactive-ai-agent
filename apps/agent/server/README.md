@@ -17,7 +17,7 @@
 - `isThisApp(baseUrl)` / `openProject` / `openProjectEffect` / `runLaunchRequest` — 이미 떠 있는 앱을 `/api/projects`로 확인한다. 같은 API로 폴더를 프로젝트로 등록하거나 찾고(`OpenedProject`), FetchHttpClient ManagedRuntime으로 실행한다
 - `acquireStorageLock(storageRoot, port, instanceId)` — `<storage>/backend.lock`으로 저장소 루트당 백엔드 하나를 확보하고 멱등 release 함수를 돌려준다
 - `createDevelopmentBoundary` / `DevelopmentBoundary` / `developmentRequestDecision` / `DevelopmentRequestDecision` — 개발 백엔드의 drain 상태와 `/api/health` 응답을 맡는다. buildId가 다른 변경 요청은 409로, drain 중인 변경 요청은 503으로 거절한다
-- `developmentBuildId(appRoot)` / `developmentBackendWatchPaths` / `affectsDevelopmentBackend` / `developmentBuildHeader`(`x-context-agent-build-id`) — no-HMR 백엔드 경계 소스의 SHA-256 지문(24 hex)과 감시 경로, 영향 판정, 헤더 이름
+- `developmentBuildId(appRoot)` / `developmentBackendWatchPaths` / `developmentBuildHeader`(`x-context-agent-build-id`) — no-HMR 백엔드 경계 소스의 SHA-256 지문(24 hex)과 감시 경로, 헤더 이름
 - `parseCommandLine(name, config, usage, args)` — Effect CLI built-in 플래그 없이 인자를 해석한다. 도움말과 오류는 stderr로 보낸다
 - `readBuildConfig` / `BuildConfigInvalid` — SEA 자산의 빌드 설정을 `BuildServerConfig`로 디코드한다. 소스 번들이면 `{}`를 쓴다
 - `readReleaseInfo()` / `ReleaseInfo` / `releaseInfoAsset` — SEA 자산 `release/info.json`의 버전·채널·대상을 읽는다. SEA가 아니면 `0.0.0-dev`/prerelease를 쓴다
@@ -41,7 +41,7 @@
 - `--dev-backend`일 때는 dev 스크립트가 stdin을 열어 둔다. stdin이 끝나거나 읽기가 실패하면 백엔드도 종료한다. 이때 프로젝트 폴더는 열지 않는다(`kind: none`)
 - `configureAgentBackend`는 `unpackRuntime`과 `readBuildConfig`가 끝난 뒤, `serve` 전에 호출한다. 단계가 실패하면 `closeBackend`를 먼저 실행하고 오류를 다시 던진다
 - 개발 경계 규칙: `/api/` 아래의 변경 메서드(GET/HEAD/OPTIONS 외)는 drain 중이면 503 `backend_restarting`으로 거절한다. 제시된 buildId가 다르면 409 `backend_restart_required`로 거절한다. `/api/health`는 항상 200이다. OAuth 콜백은 별도 loopback listener를 쓰므로 이 규칙에 포함되지 않는다
-- 개발 빌드 지문 대상(`developmentBackendWatchPaths`)과 `affectsDevelopmentBackend` 경로 목록은 서로 맞아야 한다. 지문에서 `.test.` 파일과 심볼릭 링크는 제외한다
+- 개발 빌드 지문 대상은 `developmentBackendWatchPaths`가 정한다. 지문에서 `.test.` 파일과 심볼릭 링크는 제외한다
 - 런타임 unpack은 `.staging-<pid>`에 쓰고 `.complete` 마커를 만든 뒤 rename으로 승격한다. 마커가 있으면 다시 풀지 않는다. 다른 16 hex 해시 폴더는 지운다
 - 릴리스 서명은 canonicalJson(키 정렬) 바이트에 대한 Ed25519 서명이다. trustedKeys에 없는 keyId는 거절한다. 매니페스트 `schemaVersion`은 1로 고정한다
 - 업데이트 정책: prerelease 채널은 `allowPrerelease`가 있어야 받는다. `allowDowngrade`가 없으면 현재 버전보다 엄격히 새 버전만 받는다. updater 버전은 `minUpdaterVersion` 이상이어야 한다. asset 이름은 `releaseAssetName(version, target)`과 같아야 한다

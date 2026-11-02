@@ -16,18 +16,14 @@ class FakeSource {
 }
 
 describe("connectAppEvents", () => {
-  test("decodes events, survives malformed payloads, and closes on abort", () => {
+  test("decodes events, survives malformed payloads, and closes the source", () => {
     const source = new FakeSource();
     const changed = vi.fn();
-    const malformed = vi.fn();
-    const controller = new AbortController();
-    connectAppEvents({
+    const close = connectAppEvents({
       url: () => "/events",
-      signal: controller.signal,
       createSource: () => source,
       onReady: vi.fn(),
       onChanged: changed,
-      onDecodeError: malformed,
     });
     source.emit("changed", "not-json");
     source.emit(
@@ -40,9 +36,9 @@ describe("connectAppEvents", () => {
         revision: 1,
       }),
     );
-    expect(malformed).toHaveBeenCalledOnce();
+    expect(changed).toHaveBeenCalledOnce();
     expect(changed).toHaveBeenCalledWith(expect.objectContaining({ topic: "queue" }));
-    controller.abort();
+    close();
     expect(source.close).toHaveBeenCalledOnce();
   });
 });

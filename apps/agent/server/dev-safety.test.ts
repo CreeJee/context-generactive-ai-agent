@@ -4,7 +4,6 @@ import { Effect, FileSystem, Layer, Path } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import {
   acquireStorageLock,
-  affectsDevelopmentBackend,
   developmentBuildId,
   developmentRequestDecision,
   createDevelopmentBoundary,
@@ -19,12 +18,6 @@ const fixture = Effect.fn("devSafety.fixture")(function* (prefix: string) {
 });
 
 describe("stable development backend safety", () => {
-  test("invalidates HMR only for code that belongs to the backend boundary", () => {
-    expect(affectsDevelopmentBackend("/repo/packages/memory-agent/src/index.ts")).toBe(true);
-    expect(affectsDevelopmentBackend("/repo/apps/agent/app/routes/api/chat.tsx")).toBe(true);
-    expect(affectsDevelopmentBackend("/repo/apps/agent/app/entry/chat-panel.tsx")).toBe(false);
-  });
-
   it.live("fingerprints backend sources but ignores UI-only changes", () =>
     Effect.gen(function* () {
       const { root, fs, path } = yield* fixture("context-agent-dev-fingerprint-");

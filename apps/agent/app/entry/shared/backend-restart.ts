@@ -42,8 +42,6 @@ const requiresRestart = (response: Response) =>
           SchemaError: () => Effect.succeed(false),
         }),
       );
-export const responseRequiresBackendRestart = (response: Response) =>
-  Effect.runPromise(requiresRestart(response));
 
 const observeBackendRestart = (response: Response) =>
   requiresRestart(response).pipe(
@@ -89,14 +87,7 @@ function backendFetchBody(buildId: string, origin: string, transport: typeof fet
 const transportRuntime = ManagedRuntime.make(FetchHttpClient.layer);
 /** The SDK consumes native Response bodies, while HttpClient owns the request and cancellation. */
 const sdkHttpTransport: typeof fetch = (input, init) => {
-  const baseUrl =
-    typeof document !== "undefined"
-      ? document.baseURI
-      : typeof location !== "undefined"
-        ? location.href
-        : typeof window !== "undefined"
-          ? window.location.href
-          : undefined;
+  const baseUrl = typeof document !== "undefined" ? document.baseURI : undefined;
   const request = new Request(
     input instanceof Request ? input : new URL(String(input), baseUrl),
     init,

@@ -8,7 +8,6 @@
 
 - `appFetch` — 앱 전역 fetch(dual). 브라우저에서는 `backendFetch`(빌드 ID `VITE_CONTEXT_AGENT_BUILD_ID`, `window.location.origin`)로 감싼 `sdkHttpTransport`, SSR/비브라우저에서는 `sdkHttpTransport`를 직접 쓴다. 직접 백엔드 탐색과 채팅 SSE 전송에 쓰인다
 - `backendFetch` — `(buildId, origin, transport)` dual. 같은 origin의 `/api/` 요청에 `x-context-agent-build-id` 헤더를 붙이고, 응답을 보고 재시작 필요 상태를 기록하는 fetch를 만든다
-- `responseRequiresBackendRestart` — 실패 응답 본문이 `{ error: "backend_restart_required" | "backend_restarting" }`인지 `Promise<boolean>`으로 판정한다
 - `subscribeBackendRestart` — 재시작 필요 알림 리스너를 등록하고 해제 함수를 돌려준다
 - `backendRestartSnapshot` — 모듈 전역 `restartRequired` 값을 돌려준다
 - `useBackendRestartRequired` — `useSyncExternalStore`로 재시작 필요 상태를 구독하는 React 훅(서버 스냅샷은 `false`)
@@ -44,7 +43,7 @@
 
 - `backend-restart.ts`: 모듈 전역 가변 상태(`restartRequired`, `listeners` MutableHashSet)를 바꾸고 리스너를 동기 호출한다
 - `backend-restart.ts`: `FetchHttpClient.layer`로 모듈 로드 시 `ManagedRuntime`(`transportRuntime`)을 만들고 `globalThis.fetch`로 네트워크 요청을 보낸다. 요청 signal에 abort 리스너를 붙였다 뗀다
-- `backend-restart.ts`: `import.meta.env.VITE_CONTEXT_AGENT_BUILD_ID`, `window.location`, `document.baseURI`, `location.href`를 읽는다
+- `backend-restart.ts`: `import.meta.env.VITE_CONTEXT_AGENT_BUILD_ID`, `window.location`, `document.baseURI`를 읽는다
 - `browser-crypto.ts`: `crypto.getRandomValues`, `crypto.subtle.digest`를 호출한다
 - `theme.tsx`: localStorage `context-agent-theme` 읽기·쓰기, `document.documentElement` `dark` 클래스 토글, `matchMedia("(prefers-color-scheme: dark)")` change 리스너 등록·해제
 - `theme-script.ts`: 실행 시 localStorage를 읽고 `document.documentElement` `dark` 클래스를 토글한다(문자열로만 내보냄)

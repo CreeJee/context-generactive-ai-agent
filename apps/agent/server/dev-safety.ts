@@ -91,17 +91,6 @@ const fingerprint = Effect.fn("dev.fingerprint")(function* (appRoot: string) {
 export const developmentBuildId = (appRoot: string) =>
   nodePlatform.runPromise(fingerprint(appRoot));
 
-export const affectsDevelopmentBackend = (file: string) => {
-  const path = file.replaceAll("\\\\", "/");
-  return (
-    path.includes("/packages/memory-agent/") ||
-    path.includes("/apps/agent/app/routes/api/") ||
-    path.includes("/apps/agent/app/.server/") ||
-    path.endsWith("/apps/agent/app/entry/api.ts") ||
-    path.includes("/apps/agent/server/")
-  );
-};
-
 const LockRecord = Schema.Struct({
   pid: Schema.Finite,
   /** The owner process's start time; tells this process apart from an earlier one given the same pid. */

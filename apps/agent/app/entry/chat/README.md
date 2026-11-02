@@ -41,7 +41,7 @@
 - `approvalAnswer`는 `{ interruptId, status: "resolved", payload: { approved } }` 모양의 `ResumeEntry`를 만든다.
 - `toPendingApproval`은 `Match.discriminatorsExhaustive("reason")`으로 `tool_call`과 `permission_review`를 모두 처리해야 한다. 새 reason이 생기면 타입 오류가 난다. `askedBy`가 없으면 기본값은 `"review"`다.
 - `answerProblem`의 `"lost"`는 답 전송은 성공했지만 run이 실패했고 interrupts가 아직 남은 경우다.
-- `missingDeliveredMessages`는 먼저 queue id로 transcript와 맞춘다. queue id 없이 저장된 옛 turn은 텍스트와 `attachmentIds` 순서가 정확히 같을 때만 맞춘다. 이 대조는 첫 assistant turn 뒤의 user 메시지에만 하고, 각 옛 turn은 한 번만 소비한다. 첫 user 요청이 내용이 같은 follow-up을 소비하면 안 된다.
+- `missingDeliveredMessages`는 queue id로만 transcript와 맞춘다. 전달된 user turn은 0.0.11부터 queue id를 담는다.
 - draft 이미지의 `#N` 번호는 draft를 보내거나 비울 때까지 바뀌지 않는다. 보낼 때 `renumberReferences`로 실제 보낸 이미지의 순서에 맞춰 번호를 다시 매긴다.
 - object URL은 이미지가 draft에서 빠질 때 revoke한다. remove, clear, 언마운트가 모두 해당한다. `clear`는 번호를 1로 되돌린다.
 - png/jpeg/gif/webp가 아닌 이미지는 업로드하지 않고 바로 failed가 된다.

@@ -1,7 +1,7 @@
 import { it } from "@effect/vitest";
 import { Cause, Effect } from "effect";
 import { describe, expect, vi } from "vite-plus/test";
-import { appFetch, backendFetch, responseRequiresBackendRestart } from "./backend-restart.ts";
+import { appFetch, backendFetch } from "./backend-restart.ts";
 import {
   createDevelopmentBoundary,
   developmentRequestDecision,
@@ -9,6 +9,11 @@ import {
 
 const call = <A>(execute: () => Promise<A>) =>
   Effect.tryPromise({ try: execute, catch: (cause) => new Cause.UnknownError(cause) });
+
+// The restart flag never resets within one module instance, so each case loads its own.
+const freshRestartStore = Effect.sync(() => vi.resetModules()).pipe(
+  Effect.andThen(() => call(() => import("./backend-restart.ts"))),
+);
 
 describe("development backend restart detection", () => {
   it.effect("direct backend requests carry the client build ID and preserve session headers", () =>
@@ -57,34 +62,51 @@ describe("development backend restart detection", () => {
     }),
   );
 
-  it.effect("recognizes both stable-backend rejection responses without consuming the body", () =>
-    Effect.gen(function* () {
-      for (const error of ["backend_restart_required", "backend_restarting"] as const) {
-        const response = Response.json(
-          { error },
-          { status: error === "backend_restarting" ? 503 : 409 },
-        );
-
-        expect(yield* call(() => responseRequiresBackendRestart(response))).toBe(true);
-        expect(yield* call(() => response.json())).toEqual({ error });
-      }
-    }),
+  it.effect(
+    "notifies restart listeners on both stable-backend rejections without consuming the body",
+    () =>
+      Effect.forEach(
+        ["backend_restart_required", "backend_restarting"] as const,
+        (error) =>
+          Effect.gen(function* () {
+            const store = yield* freshRestartStore;
+            const listener = vi.fn<() => void>();
+            store.subscribeBackendRestart(listener);
+            const request = store.backendFetch("build-a", "http://localhost:5180", () =>
+              Promise.resolve(
+                Response.json({ error }, { status: error === "backend_restarting" ? 503 : 409 }),
+              ),
+            );
+            const response = yield* call(() => request("/api/chat", { method: "POST" }));
+            expect(listener).toHaveBeenCalledOnce();
+            expect(store.backendRestartSnapshot()).toBe(true);
+            expect(yield* call(() => response.json())).toEqual({ error });
+          }),
+        { discard: true },
+      ),
   );
 
-  it.effect("ignores unrelated and successful responses", () =>
+  it.effect("leaves the restart state alone for unrelated and successful responses", () =>
     Effect.gen(function* () {
-      expect(
-        yield* call(() =>
-          responseRequiresBackendRestart(
-            Response.json({ error: "run_in_progress" }, { status: 409 }),
+      const store = yield* freshRestartStore;
+      const listener = vi.fn<() => void>();
+      store.subscribeBackendRestart(listener);
+      yield* Effect.forEach(
+        [
+          Response.json({ error: "run_in_progress" }, { status: 409 }),
+          Response.json({ error: "backend_restart_required" }),
+        ],
+        (response) =>
+          call(() =>
+            store.backendFetch("build-a", "http://localhost:5180", () => Promise.resolve(response))(
+              "/api/chat",
+              { method: "POST" },
+            ),
           ),
-        ),
-      ).toBe(false);
-      expect(
-        yield* call(() =>
-          responseRequiresBackendRestart(Response.json({ error: "backend_restart_required" })),
-        ),
-      ).toBe(false);
+        { discard: true },
+      );
+      expect(listener).not.toHaveBeenCalled();
+      expect(store.backendRestartSnapshot()).toBe(false);
     }),
   );
 });
@@ -180,7 +202,7 @@ describe("official HTTP client SDK transport", () => {
 
   it.live("keeps JSON lease uploads buffered over HTTP/1.1, including keepalive", () =>
     Effect.gen(function* () {
-      vi.stubGlobal("location", new URL("http://localhost:5173/?session=target"));
+      vi.stubGlobal("document", { baseURI: "http://localhost:5173/?session=target" });
       const transport = vi.fn<typeof fetch>((input, init) => {
         expect(input instanceof Request ? input.url : String(input)).toBe(
           "http://localhost:5173/api/sessions/target/lease",
@@ -290,7 +312,7 @@ it.live(
   "resolves relative SDK requests against the document location and preserves native transport failures",
   () =>
     Effect.gen(function* () {
-      vi.stubGlobal("location", new URL("https://example.test/projects/current"));
+      vi.stubGlobal("document", { baseURI: "https://example.test/projects/current" });
       const transport = vi.fn<typeof fetch>((input) => {
         expect(input instanceof URL ? input.href : input).toBe(
           "https://example.test/projects/api/chat",

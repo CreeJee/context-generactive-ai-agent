@@ -8,11 +8,6 @@ const user = (id: string, text: string): ChatMessage => ({
   role: "user",
   parts: [{ type: "text", content: text }],
 });
-const assistant = (id: string): ChatMessage => ({
-  id,
-  role: "assistant",
-  parts: [{ type: "text", content: "answer" }],
-});
 const delivered = (id: string, text: string): QueuedMessage => ({
   id,
   seq: 1,
@@ -27,32 +22,5 @@ describe("delivered message reconciliation", () => {
     const item = delivered("queued", "follow-up");
     expect(missingDeliveredMessages([item], [user("queued", "follow-up")])).toEqual([]);
     expect(missingDeliveredMessages([item], [user("other", "original")])).toEqual([item]);
-  });
-
-  test("reconciles older transcripts that lacked the queue id", () => {
-    const item = delivered("queued", "follow-up");
-    expect(
-      missingDeliveredMessages(
-        [item],
-        [user("original", "question"), assistant("answer"), user("stored", "follow-up")],
-      ),
-    ).toEqual([]);
-    expect(missingDeliveredMessages([item], [user("original", "follow-up")])).toEqual([item]);
-  });
-
-  test("does not use an id-matched turn to hide another identical message", () => {
-    const first = delivered("one", "same");
-    const second = delivered("two", "same");
-    expect(
-      missingDeliveredMessages([first, second], [assistant("a"), user("one", "same")]),
-    ).toEqual([second]);
-  });
-
-  test("only consumes one old transcript turn for each delivered message", () => {
-    const first = delivered("one", "same");
-    const second = delivered("two", "same");
-    expect(
-      missingDeliveredMessages([first, second], [assistant("a"), user("old", "same")]),
-    ).toEqual([second]);
   });
 });
