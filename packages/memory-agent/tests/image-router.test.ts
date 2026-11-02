@@ -2,13 +2,11 @@ import { Layer } from "effect";
 import { it as effectTest } from "@effect/vitest";
 import { Effect, MutableRef, Result } from "effect";
 import {
-  FixedImageRouteRejected,
   ImageExecutorModel,
   ImageRerouteConfirmation,
   ImageRouteDecision,
   ImageRouteFacts,
   ImageRouteUnavailable,
-  ImageRoutingInvalidRequest,
   makeImageRouter,
   makeRouteCatalog,
   rankImageRoutes,
@@ -122,7 +120,7 @@ const router = Effect.fnUntraced(function* (
   const source: RouteCatalogSource = {
     load: Effect.succeed({ chat: [chat], media: routes, execution: [] }),
   };
-  const catalog = yield* makeRouteCatalog(source, () => 1);
+  const catalog = yield* makeRouteCatalog(source);
   yield* catalog.refresh;
   return makeImageRouter({
     catalog: catalog,
@@ -156,7 +154,7 @@ describe("image router", () => {
         const request = {
           initiatorChatRouteId: chat.id,
           intent,
-          policy: { mode: "auto" as const },
+          policy: {},
         };
         expect(Result.isFailure(yield* Effect.result(service.select(request)))).toBe(true);
         MutableRef.set(mode, "ask");
@@ -175,80 +173,15 @@ describe("image router", () => {
       }),
   );
 
-  effectTest.effect("is deterministic and defaults to balanced", () =>
-    Effect.gen(function* () {
-      const service = yield* router();
-      const request = { initiatorChatRouteId: chat.id, intent, policy: { mode: "auto" as const } };
-      const first = yield* service.select(request);
-      const second = yield* service.select(request);
-      expect(first).toEqual(second);
-      expect(first.preference).toBe("balanced");
-      expect(first.executorMediaRouteId).toBe(quality.id);
-      expect(first.initiatorChatModel).toBe("claude-test");
-      expect(first.executorMediaModel).toEqual(
-        ImageExecutorModel.explicit({ model: "gpt-image-2" }),
-      );
-    }),
-  );
-
-  effectTest.effect("changes route according to explicit quality, speed and cost preferences", () =>
-    Effect.gen(function* () {
-      const service = yield* router();
-      const select = (preference: "quality" | "speed" | "cost") =>
-        service.select({
-          initiatorChatRouteId: chat.id,
-          intent,
-          policy: { mode: "auto", preference },
-        });
-      expect((yield* select("quality")).executorMediaRouteId).toBe(quality.id);
-      expect((yield* select("speed")).executorMediaRouteId).toBe(fast.id);
-      expect((yield* select("cost")).executorMediaRouteId).toBe(cheap.id);
-    }),
-  );
-
-  effectTest.effect("supports fixed override without bypassing route policy", () =>
-    Effect.gen(function* () {
-      const service = yield* router();
-      const selected = yield* service.select({
-        initiatorChatRouteId: chat.id,
-        intent,
-        policy: { mode: "fixed", fixedRouteId: quality.id },
-      });
-      expect(selected.executorMediaRouteId).toBe(quality.id);
-      const rejected = yield* Effect.result(
-        service.select({
-          initiatorChatRouteId: chat.id,
-          intent: { operation: "edit", sourceImageCount: 1, requiresMask: true },
-          policy: { mode: "fixed", fixedRouteId: fast.id },
-        }),
-      );
-      expect(Result.isFailure(rejected) && rejected.failure).toBeInstanceOf(
-        FixedImageRouteRejected,
-      );
-    }),
-  );
-
-  effectTest.effect("excludes unknown cost under a strict ceiling unless explicitly allowed", () =>
+  effectTest.effect("excludes unknown cost under a strict ceiling", () =>
     Effect.gen(function* () {
       const strict = yield* rankImageRoutes({
         routes,
         facts,
         intent,
-        policy: { mode: "auto", preference: "speed", maximumEstimatedCostUsd: 1 },
+        policy: { maximumEstimatedCostUsd: 1 },
       });
       expect(strict.find((score) => score.routeId === fast.id)).toMatchObject({ eligible: false });
-      const allowed = yield* rankImageRoutes({
-        routes,
-        facts,
-        intent,
-        policy: {
-          mode: "auto",
-          preference: "speed",
-          maximumEstimatedCostUsd: 1,
-          allowUnknownCost: true,
-        },
-      });
-      expect(allowed.find((score) => score.routeId === fast.id)).toMatchObject({ eligible: true });
     }),
   );
 
@@ -280,7 +213,7 @@ describe("image router", () => {
         routes: [{ ...quality, entitlement: { ...quality.entitlement, status: "unverified" } }],
         facts: [facts[0]!],
         intent,
-        policy: { mode: "auto" },
+        policy: {},
       });
       expect(score?.eligible).toBe(true);
     }),
@@ -297,7 +230,7 @@ describe("image router", () => {
         ],
         facts: facts.map((fact) => ({ ...fact, available: false })),
         intent,
-        policy: { mode: "auto" },
+        policy: {},
       });
       expect(ranking.every((score) => !score.eligible)).toBe(true);
     }),
@@ -307,7 +240,7 @@ describe("image router", () => {
     Effect.gen(function* () {
       const service = yield* router(facts.map((fact) => ({ ...fact, available: false })));
       const result = yield* Effect.result(
-        service.select({ initiatorChatRouteId: chat.id, intent, policy: { mode: "auto" } }),
+        service.select({ initiatorChatRouteId: chat.id, intent, policy: {} }),
       );
       expect(Result.isFailure(result) && result.failure).toBeInstanceOf(ImageRouteUnavailable);
     }),
@@ -318,11 +251,7 @@ describe("image router", () => {
     () =>
       Effect.gen(function* () {
         const service = yield* router();
-        const request = {
-          initiatorChatRouteId: chat.id,
-          intent,
-          policy: { mode: "auto" as const },
-        };
+        const request = { initiatorChatRouteId: chat.id, intent, policy: {} };
         const decision = yield* service.select(request);
         const reroute = yield* service.rerouteAfterFailure(
           decision,
@@ -334,32 +263,5 @@ describe("image router", () => {
         expect(reroute.alternatives.length).toBeGreaterThan(0);
         expect(reroute.alternatives.every(ImageRouteDecision.$is("selected"))).toBe(true);
       }),
-  );
-
-  effectTest.effect("rejects malformed intent and scoring facts", () =>
-    Effect.gen(function* () {
-      const invalidIntent = yield* Effect.result(
-        rankImageRoutes({
-          routes,
-          facts,
-          intent: { ...intent, sourceImageCount: -1 },
-          policy: { mode: "auto" },
-        }),
-      );
-      expect(Result.isFailure(invalidIntent) && invalidIntent.failure).toBeInstanceOf(
-        ImageRoutingInvalidRequest,
-      );
-      const invalidFact = yield* Effect.result(
-        rankImageRoutes({
-          routes,
-          facts: [{ ...facts[0]!, quality: 2 }],
-          intent,
-          policy: { mode: "auto" },
-        }),
-      );
-      expect(Result.isFailure(invalidFact) && invalidFact.failure).toBeInstanceOf(
-        ImageRoutingInvalidRequest,
-      );
-    }),
   );
 });

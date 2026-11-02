@@ -1624,7 +1624,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                       sourceImageCount: attached.length,
                       requiresMask: false,
                     },
-                    policy: { mode: "auto", preference: "balanced" },
+                    policy: {},
                   })
                   .pipe(Effect.asSome, fallbackLogged("Image route unavailable", Option.none)),
               )

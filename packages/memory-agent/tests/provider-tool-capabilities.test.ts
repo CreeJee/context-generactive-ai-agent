@@ -118,7 +118,6 @@ describe("ProviderToolCapabilityRegistry", () => {
             const resolved = yield* registry.resolve({
               provider: "anthropic",
               model: "claude-opus-4-6",
-              categories: ["network.search", "network.fetch", "execution.shell"],
               accountToolKinds: ["bash", "web_fetch"],
             });
             return resolved.map((entry) => entry.id);

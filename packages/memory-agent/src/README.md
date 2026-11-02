@@ -25,7 +25,7 @@
 - `ProviderId` / `ModelSelection` / `ProviderModel` / `providerConnection` / `ProviderUnavailable` / `AuthConnectionState` 등 provider 계약, `ActiveProvider`, `ProviderRegistry` / `providerRegistryFrom` — providers 디렉터리에서 다시 내보낸다
 - `CrossProviderMediaConsent` / `decideCrossProviderMediaConsent` / `makeCrossProviderMediaConsent`, `ModelFeatureFlags` / `decideModelFeatureFlag` / `makeModelFeatureFlags` — 교차 provider 미디어 동의와 모델 기능 플래그를 다시 내보낸다
 - `ProviderToolCapabilityRegistry` / `providerToolDescriptors` / `filterProviderTools`, `ProviderToolPolicy` / `ProviderToolRuntime` / `makeProviderToolPolicy` / `makeProviderToolRuntime` / `classifyProviderToolRisk` / `decideProviderToolExposure`와 다수의 ProviderTool* 오류·타입 — provider 네이티브 도구의 기능, 정책, 런타임을 다시 내보낸다
-- `imageRouteContracts` / `productionImageRouteContracts` / `RouteCatalog` / `makeRouteCatalog` / `ImageRouter` / `makeImageRouter` / `rankImageRoutes` / `ImageRouteFacts` 등 — 이미지 라우트 계약, 카탈로그, 라우터를 다시 내보낸다. `index.ts` 301줄 이후의 export는 scout가 줄 상한 때문에 읽지 않았다
+- `imageRouteContracts` / `RouteCatalog` / `makeRouteCatalog` / `ImageRouter` / `makeImageRouter` / `rankImageRoutes` / `ImageRouteFacts` 등 — 이미지 라우트 계약, 카탈로그, 라우터를 다시 내보낸다. `index.ts` 301줄 이후의 export는 scout가 줄 상한 때문에 읽지 않았다
 - 하위 디렉터리:
   - [`acp`](./acp/README.md) — 에디터용 ACP 에이전트 브리지
   - [`agent`](./agent/README.md) — 대화 에이전트 핵심 계층(`AgentChat`)

@@ -204,9 +204,7 @@ const replaceAccount = (
   accounts: all.accounts.map((item) => (item.id === account.id ? account : item)),
 });
 const publishedReasoning = (settings: OpenAICompatibleConfiguration) =>
-  settings.reasoning?.source === "models" && settings.reasoning.model === settings.model
-    ? settings.reasoning.options
-    : null;
+  settings.reasoning?.model === settings.model ? settings.reasoning.options : null;
 function makeOpenAICompatibleSettingsBody(
   config: GlobalConfigApi,
   keys: CompatibleKeychain,

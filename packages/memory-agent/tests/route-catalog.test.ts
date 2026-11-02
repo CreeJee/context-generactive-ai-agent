@@ -3,19 +3,21 @@ import { Context, Effect, MutableRef, Result, Layer } from "effect";
 import {
   AuthConnectionState,
   ImageExecutorModel,
+  ProviderOperationFailed,
   ProviderRegistry,
   ProviderToolCapabilityRegistry,
   RouteCatalog,
   RouteCatalogRefreshFailed,
   UnknownCatalogRoute,
   makeRouteCatalog,
+  type ModelCatalog,
   type ProviderConfiguration,
+  type ProviderId,
   type RouteCatalogSource,
   type RouteCatalogSnapshot,
 } from "memory-agent";
 import { describe, expect } from "vite-plus/test";
 import { TestClock } from "effect/testing";
-import { RouteCatalogRefreshFailedReason } from "../src/providers/route-catalog.ts";
 
 const chat = {
   type: "chat" as const,
@@ -113,60 +115,82 @@ const loaded: Omit<RouteCatalogSnapshot, "revision" | "refreshedAt"> = {
 };
 const source = (value = loaded): RouteCatalogSource => ({ load: Effect.succeed(value) });
 
+const model = (providerId: ProviderId, id: string) => ({
+  provider: providerId,
+  id,
+  displayName: "Future model",
+  isDefault: true,
+  defaultReasoningEffort: "medium",
+  supportedReasoningEfforts: ["medium"],
+  capabilities: { inputModalities: ["text" as const], toolCalling: true, reasoning: true },
+});
+
+const provider = (providerId: ProviderId, list: ModelCatalog["list"]): ProviderConfiguration => ({
+  provider: providerId,
+  auth: {
+    provider: providerId,
+    status: Effect.succeed(AuthConnectionState["signed-in"]({ provider: providerId })),
+    connect: Effect.succeed(AuthConnectionState["signed-in"]({ provider: providerId })),
+    cancel: Effect.succeed(AuthConnectionState["signed-out"]({ provider: providerId })),
+    disconnect: Effect.succeed(AuthConnectionState["signed-out"]({ provider: providerId })),
+  },
+  models: {
+    provider: providerId,
+    list,
+    selected: Effect.succeed(null),
+    acceptsImages: () => Effect.succeed(false),
+    cheapestEffort: (selection) => Effect.succeed(selection),
+    select: (selected) =>
+      Effect.succeed({ provider: providerId, model: selected, reasoningEffort: "medium" }),
+  },
+});
+
+/** The catalog the app builds from its provider registry. */
+const catalogOf = Effect.fnUntraced(function* (configuration: ProviderConfiguration) {
+  const services = yield* Layer.build(
+    RouteCatalog.layer.pipe(
+      Layer.provide(ProviderRegistry.layer([configuration])),
+      Layer.provide(ProviderToolCapabilityRegistry.layer),
+    ),
+  );
+  return Context.get(services, RouteCatalog);
+});
+
 describe("RouteCatalog", () => {
   effectTest.effect("refreshes an immutable and deterministically sorted snapshot", () =>
     Effect.gen(function* () {
-      const catalog = yield* makeRouteCatalog(source(), () => 123);
+      yield* TestClock.setTime(123);
+      const catalog = yield* catalogOf(
+        provider("openai", Effect.succeed([model("openai", "gpt-b"), model("openai", "gpt-a")])),
+      );
       const first = yield* catalog.refresh;
       const second = yield* catalog.refresh;
       expect(first).toMatchObject({ revision: 1, refreshedAt: 123 });
       expect(second.revision).toBe(2);
+      expect(second.chat.map((route) => route.model)).toEqual(["gpt-a", "gpt-b"]);
       expect(Object.isFrozen(second)).toBe(true);
       expect(Object.isFrozen(second.chat)).toBe(true);
     }),
   );
 
-  effectTest.effect(
-    "represents a cross-provider chat and media pairing without changing either model",
-    () =>
-      Effect.gen(function* () {
-        const catalog = yield* makeRouteCatalog(source());
-        yield* catalog.refresh;
-        const pair = yield* catalog.pairChatWithMedia(chat.id, media.id);
-        expect(pair).toEqual({
-          initiatorChatRouteId: chat.id,
-          executorMediaRouteId: media.id,
-          initiatorChatProvider: "anthropic",
-          executorMediaProvider: "openai",
-          crossProvider: true,
-        });
-        expect(chat.model).toBe("claude-test");
-        expect(media.executorModel).toEqual(ImageExecutorModel.explicit({ model: "gpt-image-2" }));
-      }),
-  );
-
   effectTest.effect("does not replace the previous snapshot when refresh fails", () =>
     Effect.gen(function* () {
       const attempt = MutableRef.make(0);
-      const changing: RouteCatalogSource = {
-        load: Effect.suspend(() =>
-          MutableRef.incrementAndGet(attempt) === 1
-            ? Effect.succeed(loaded)
-            : Effect.fail(
-                RouteCatalogRefreshFailed.make({
-                  operation: "models",
-                  reason: RouteCatalogRefreshFailedReason.cases.Failed.make({}),
-                  cause: new Error("unavailable"),
-                }),
-              ),
+      const catalog = yield* catalogOf(
+        provider(
+          "openai",
+          Effect.suspend(() =>
+            MutableRef.incrementAndGet(attempt) === 1
+              ? Effect.succeed([model("openai", "gpt-a")])
+              : Effect.fail(
+                  ProviderOperationFailed.make({ provider: "openai", operation: "catalog" }),
+                ),
+          ),
         ),
-      };
-      const catalog = yield* makeRouteCatalog(changing, () => MutableRef.get(attempt));
-      const first = yield* catalog.refresh;
-      const failure = yield* Effect.result(catalog.refresh);
-      expect(Result.isFailure(failure) && failure.failure).toBeInstanceOf(
-        RouteCatalogRefreshFailed,
       );
+      const first = yield* catalog.refresh;
+      const failure = yield* Effect.flip(catalog.refresh);
+      expect(failure).toBeInstanceOf(RouteCatalogRefreshFailed);
       expect(yield* catalog.snapshot).toBe(first);
     }),
   );
@@ -196,41 +220,9 @@ describe("RouteCatalog", () => {
     "keeps $providerId models as chat without inventing native tools",
     ({ providerId, modelId, mechanism }) =>
       Effect.gen(function* () {
-        const provider: ProviderConfiguration = {
-          provider: providerId,
-          auth: {
-            provider: providerId,
-            status: Effect.succeed(AuthConnectionState["signed-in"]({ provider: providerId })),
-            connect: Effect.succeed(AuthConnectionState["signed-in"]({ provider: providerId })),
-            cancel: Effect.succeed(AuthConnectionState["signed-out"]({ provider: providerId })),
-            disconnect: Effect.succeed(AuthConnectionState["signed-out"]({ provider: providerId })),
-          },
-          models: {
-            provider: providerId,
-            list: Effect.succeed([
-              {
-                provider: providerId,
-                id: modelId,
-                displayName: "Future model",
-                isDefault: true,
-                defaultReasoningEffort: "medium",
-                supportedReasoningEfforts: ["medium"],
-                capabilities: { inputModalities: ["text"], toolCalling: true, reasoning: true },
-              },
-            ]),
-            selected: Effect.succeed(null),
-            acceptsImages: () => Effect.succeed(false),
-            cheapestEffort: (selection) => Effect.succeed(selection),
-            select: (model) =>
-              Effect.succeed({ provider: providerId, model, reasoningEffort: "medium" }),
-          },
-        };
-        const layer = RouteCatalog.layer.pipe(
-          Layer.provide(ProviderRegistry.layer([provider])),
-          Layer.provide(ProviderToolCapabilityRegistry.layer),
+        const catalog = yield* catalogOf(
+          provider(providerId, Effect.succeed([model(providerId, modelId)])),
         );
-        const services = yield* Layer.build(layer);
-        const catalog = Context.get(services, RouteCatalog);
         const snapshot = yield* catalog.refresh;
         expect(snapshot.chat.map((route) => route.model)).toEqual([modelId]);
         expect(snapshot.chat[0]?.authentication).toMatchObject({

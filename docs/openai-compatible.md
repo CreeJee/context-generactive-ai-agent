@@ -63,4 +63,4 @@ LM Studio와 vLLM은 동일한 `openai-compatible` provider로 연결한다. 제
 
 `/models` 응답을 먼저 확인하며, 비표준 확장 `capabilities.reasoning.allowed_options`가 있으면 알려진 Chat Completions 강도를 직접 사용한다. [OpenRouter처럼 `supported_parameters`를 제공하는 서버](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties)는 추론 지원 여부만 확인하고, 그 필드만으로 레벨이나 요청 파라미터 변환을 만들어내지 않는다.
 
-모델별 강도 정보가 없으면 `reasoning_effort`를 보내지 않고 서버 기본 동작을 따른다. 강도를 선택할 수 없을 때 UI의 강도 선택기를 숨긴다. 서버 종류를 URL·포트·소유자 필드로 추측하거나 LM Studio `/api/v1/models`를 자동 조회하지 않는다. 이전 전용 조회에서 저장된 강도 정보도 사용하지 않으며, 다음 모델 목록 조회 성공 시 정리한다.
+모델별 강도 정보가 없으면 `reasoning_effort`를 보내지 않고 서버 기본 동작을 따른다. 강도를 선택할 수 없을 때 UI의 강도 선택기를 숨긴다. 서버 종류를 URL·포트·소유자 필드로 추측하거나 LM Studio `/api/v1/models`를 자동 조회하지 않는다. 전용 조회는 릴리스되기 전에 제거되었으므로 그 출처의 저장된 강도 정보는 없다.

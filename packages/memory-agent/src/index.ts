@@ -259,23 +259,18 @@ export {
   type ProviderToolTrustedAuthority,
 } from "./providers/tool-policy.ts";
 export {
-  anthropicImageProviderContract,
   imageRouteContracts,
   openAIImageRouteContracts,
-  productionImageRouteContracts,
   type ImageExecutionMode,
   ImageExecutorModel,
   type ImageRouteContract,
   type ImageRouteVerification,
-  type UnsupportedImageProviderContract,
 } from "./providers/image-contracts.ts";
 export {
-  IncompatibleCatalogRoutes,
   RouteCatalog,
   RouteCatalogRefreshFailed,
   UnknownCatalogRoute,
   makeRouteCatalog,
-  type ChatMediaRoutePair,
   type ChatRoute,
   type ExecutionRoute,
   type MediaRoute,
@@ -287,7 +282,6 @@ export {
   type RouteEvidenceStatus,
 } from "./providers/route-catalog.ts";
 export {
-  FixedImageRouteRejected,
   ImageRouteFacts,
   ImageRouteFactsFailed,
   ImageRouteUnavailable,
@@ -303,9 +297,7 @@ export {
   type ImageRouterApi,
   type ImageRouterRequest,
   type ImageRoutingIntent,
-  type ImageRoutingMode,
   type ImageRoutingPolicy,
-  type ImageRoutingPreference,
   type RankImageRoutesInput,
 } from "./providers/image-router.ts";
 export {

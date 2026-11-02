@@ -10,8 +10,6 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 
 const directRoute: ImageRouteDecision = ImageRouteDecision.selected({
-  mode: "auto",
-  preference: "balanced",
   initiatorChatRouteId: "chat:anthropic:claude-test",
   initiatorChatModel: "claude-test",
   executorMediaRouteId: "media:openai:direct_adapter:gpt-image-2",
@@ -62,17 +60,6 @@ describe("image context gate", () => {
       injectProviderTool: false,
       injectWorkflowPrompt: false,
     });
-  });
-
-  it("uses the same image setting for a selected Provider Tool route", () => {
-    expect(decideImageContext({ status: enabled, intent, route: providerToolRoute })).toMatchObject(
-      {
-        providerToolAllowed: true,
-        injectProviderTool: true,
-        injectWorkflowPrompt: true,
-        directWorkflowAllowed: false,
-      },
-    );
   });
 });
 

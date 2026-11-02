@@ -17,8 +17,6 @@ import {
 import { describe, expect } from "vite-plus/test";
 
 const decision: ImageRouteDecision = ImageRouteDecision.selected({
-  mode: "auto",
-  preference: "balanced",
   initiatorChatRouteId: "chat:anthropic:claude-test",
   initiatorChatModel: "claude-test",
   executorMediaRouteId: "media:openai:direct_adapter:gpt-image-2",

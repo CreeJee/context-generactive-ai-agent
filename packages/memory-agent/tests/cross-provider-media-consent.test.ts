@@ -67,21 +67,4 @@ describe("CrossProviderMediaConsent", () => {
       });
     }),
   );
-
-  effectTest.effect("does not broaden consent to another capability or provider pair", () =>
-    Effect.gen(function* () {
-      const service = makeCrossProviderMediaConsent(config().api);
-      yield* service.set(pair, "always");
-      expect((yield* service.decide({ ...pair, capability: "media.video.generate" })).mode).toBe(
-        "disabled",
-      );
-      expect(
-        (yield* service.decide({
-          ...pair,
-          initiatorProvider: "openai",
-          executorProvider: "anthropic",
-        })).mode,
-      ).toBe("disabled");
-    }),
-  );
 });

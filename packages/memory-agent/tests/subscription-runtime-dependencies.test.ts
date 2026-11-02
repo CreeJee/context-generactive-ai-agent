@@ -1,38 +1,16 @@
-import {
-  ProviderUnavailable,
-  SubscriptionAccountProvider,
-  type AgentModelRuntime,
-} from "../src/providers/contracts.ts";
-import {
-  Clock,
-  Context,
-  type Crypto,
-  Effect,
-  Exit,
-  FileSystem,
-  Layer,
-  Result,
-  Schema,
-  Scope,
-} from "effect";
-import type { ChildProcessSpawner } from "effect/process";
+import type { AgentModelRuntime } from "../src/providers/contracts.ts";
+import { Clock, Context, Effect, Exit, FileSystem, Layer, Scope } from "effect";
 import { SqlClient } from "effect/sql";
 import { it } from "@effect/vitest";
-import { expect } from "vite-plus/test";
+import { expect, vi } from "vite-plus/test";
 import { GlobalConfig } from "../src/config/global-config.ts";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { Database } from "../src/db/database.ts";
-import { createAccountBoundSubscriptionClients } from "../src/oauth/account-bound.ts";
-import { providerProtocols } from "../src/oauth/protocol.ts";
 import { OAuthProfiles } from "../src/oauth/accounts.ts";
-import { createSubscriptionOAuthClient } from "../src/oauth/subscription-oauth.ts";
+import { OAuthKeychain } from "../src/oauth/validation-harness.ts";
 import { ProviderRegistry } from "../src/providers/registry.ts";
-import { createSubscriptionProvider } from "../src/providers/subscription-provider.ts";
-import { SubscriptionProviderRegistry } from "../src/providers/subscriptions.ts";
-import {
-  createSubscriptionRuntime,
-  createSubscriptionRuntimeImplementation,
-} from "../src/providers/subscription-runtime.ts";
+import { AccountSubscriptionProviderRegistry } from "../src/providers/subscriptions.ts";
+import { createSubscriptionRuntimeImplementation } from "../src/providers/subscription-runtime.ts";
 import { withOAuthTestPlatform, withTestPlatform } from "./support/platform.ts";
 
 const selection = { provider: "openai", model: "gpt-5", reasoningEffort: "low" } as const;
@@ -47,6 +25,11 @@ const pinned = Effect.fnUntraced(function* (runtime: AgentModelRuntime, runId: s
   );
   return { model, release };
 });
+/** Two signed-in local accounts; each one's access token is its name. */
+const accounts = {
+  first: "00000000-0000-4000-8000-000000000001",
+  second: "00000000-0000-4000-8000-000000000002",
+} as const;
 const temporary = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   return yield* fs.makeTempDirectoryScoped({ prefix: "subscription-dependencies-" });
@@ -57,201 +40,102 @@ it.live(
   () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const platform = yield* Effect.context<
-          Crypto.Crypto | ChildProcessSpawner.ChildProcessSpawner
-        >();
+        const requests: string[] = [];
+        /** The provider's servers: each account's catalog window, and one streamed reply. */
+        const fetch: typeof globalThis.fetch = (url, init) => {
+          const authorization = new Headers(init?.headers).get("authorization")!;
+          requests.push(authorization);
+          return Promise.resolve(
+            (url instanceof Request ? url.url : url.toString()).includes("/models")
+              ? Response.json({
+                  models: [
+                    { slug: "gpt-5", context_window: authorization === "Bearer first" ? 111 : 222 },
+                  ],
+                })
+              : new Response(
+                  'data: {"type":"response.output_text.delta","delta":"reply"}\n\ndata: {"type":"response.completed"}\n\n',
+                  { headers: { "content-type": "text/event-stream" } },
+                ),
+          );
+        };
+        yield* Effect.acquireRelease(
+          Effect.sync(() => vi.stubGlobal("fetch", fetch)),
+          () => Effect.sync(() => vi.unstubAllGlobals()),
+        );
+        const memory = yield* OAuthKeychain;
+        const now = yield* Clock.currentTimeMillis;
+        yield* Effect.forEach(
+          Object.entries(accounts),
+          ([name, id]) =>
+            Effect.flatMap(memory.profileStore(id), (store) =>
+              store.write("openai", {
+                accessToken: name,
+                refreshToken: "fixture",
+                expiresAt: now + 60_000,
+              }),
+            ),
+          { discard: true },
+        );
+        const opened: string[] = [];
+        const keychain = OAuthKeychain.of({
+          store: memory.store,
+          profileStore: (id) =>
+            Effect.andThen(
+              Effect.sync(() => opened.push(id)),
+              memory.profileStore(id),
+            ),
+        });
 
         const storage = yield* temporary;
         const database = yield* Layer.build(Database.layer(":memory:"));
         const sql = Context.get(database, SqlClient.SqlClient);
         yield* sql`INSERT INTO oauth_profiles(id, provider, label, selected, created_at)
-          VALUES ('first', 'openai', 'first', 1, 0), ('second', 'openai', 'second', 0, 1)`;
-        const profiles = Context.get(
-          yield* Layer.build(
-            OAuthProfiles.layer.pipe(Layer.provide(Layer.succeedContext(database))),
+          VALUES (${accounts.first}, 'openai', 'first', 1, 0),
+            (${accounts.second}, 'openai', 'second', 0, 1)`;
+        const services = yield* Layer.build(
+          AccountSubscriptionProviderRegistry.pipe(
+            Layer.provideMerge(OAuthProfiles.layer),
+            Layer.provide(Layer.succeedContext(database)),
+            Layer.provide(GlobalConfig.layer.pipe(Layer.provide(StorageRoot.layer(storage)))),
+            Layer.provide(Layer.succeed(OAuthKeychain, keychain)),
           ),
-          OAuthProfiles,
         );
-        const requests: string[] = [];
-        const created: string[] = [];
-        const clients = yield* createAccountBoundSubscriptionClients({
-          profiles,
-          provider: "openai",
-          createClient: (id) =>
-            Effect.suspend(() => {
-              created.push(id!);
-              return createSubscriptionOAuthClient({
-                protocol: providerProtocols.openai,
-                store: {
-                  read: () =>
-                    Effect.map(Clock.currentTimeMillis, (now) => ({
-                      accessToken: id!,
-                      refreshToken: "fixture",
-                      expiresAt: now + 60_000,
-                    })),
-                  write: () => Effect.die("unexpected refresh"),
-                  remove: () => Effect.die("unexpected removal"),
-                },
-                fetch: (url, init) => {
-                  requests.push(new Headers(init?.headers).get("authorization")!);
-                  return Promise.resolve(
-                    (url instanceof Request ? url.url : url.toString()).includes("/models")
-                      ? Response.json({
-                          models: [{ slug: "gpt-5", context_window: id === "first" ? 111 : 222 }],
-                        })
-                      : new Response(
-                          'data: {"type":"response.output_text.delta","delta":"reply"}\n\ndata: {"type":"response.completed"}\n\n',
-                          { headers: { "content-type": "text/event-stream" } },
-                        ),
-                  );
-                },
-              }).pipe(Effect.provideContext(platform));
-            }),
-          accounts: {
-            read: () => Effect.succeed(null),
-            write: () => Effect.die("unexpected profile write"),
-            remove: () => Effect.die("unexpected profile removal"),
-          },
-        });
-        const program = Effect.gen(function* () {
-          const config = yield* GlobalConfig;
-          const provider = yield* createSubscriptionProvider({
-            protocol: providerProtocols.openai,
-            config,
-            client: clients.client,
-            catalogKey: clients.catalogKey,
-          });
-          const compatibility = createSubscriptionRuntime(
-            "openai",
-            clients.forRun,
-            provider.contextWindow,
-          );
-          const resolver = () =>
-            Effect.succeed({ client: clients.forRun, catalogWindow: provider.contextWindow });
-          const verification = Effect.gen(function* () {
-            const registry = yield* ProviderRegistry;
-            expect(yield* registry.runtime("openai")).toBe(compatibility);
-            const dependencies = yield* registry.subscriptionDependencies!("openai");
-            expect(dependencies.client).toBe(clients.forRun);
-            expect(dependencies.catalogWindow).toBe(provider.contextWindow);
-            expect(created).toEqual([]);
-            const implementation = createSubscriptionRuntimeImplementation("openai");
-            yield* provider.models.list;
-            const oldRuntime = implementation.bind(dependencies);
-            expect(oldRuntime.contextWindow("gpt-5")).toBe(111);
-            const first = yield* pinned(oldRuntime, "run-0");
-            yield* profiles.select("openai", "second", {
-              read: () =>
-                Effect.succeed({ accessToken: "second", refreshToken: "fixture", expiresAt: 0 }),
-              write: () => Effect.die("unexpected profile write"),
-              remove: () => Effect.die("unexpected profile removal"),
-            });
-            expect(oldRuntime.contextWindowKnown?.("gpt-5")).toBe(false);
-            yield* provider.models.list;
-            const fresh = implementation.bind(yield* registry.subscriptionDependencies!("openai"));
-            expect(fresh.contextWindow("gpt-5")).toBe(222);
-            const second = yield* pinned(fresh, "run-1");
-            const legacy = yield* pinned(compatibility, "run-2");
-            requests.length = 0;
-            yield* Effect.forEach(
-              [first, second, legacy],
-              ({ model }) =>
-                Effect.map(model.generateText({ prompt: "hello" }), (reply) =>
-                  expect(reply.text).toBe("reply"),
-                ),
-              { discard: true },
-            );
-            expect(requests).toEqual(["Bearer first", "Bearer second", "Bearer second"]);
-            expect(created).toEqual(["first", "second"]);
-            expect(yield* profiles.inUse("openai", "first")).toBe(true);
-            expect(yield* profiles.inUse("openai", "second")).toBe(true);
-            yield* first.release;
-            yield* second.release;
-            expect(yield* profiles.inUse("openai", "first")).toBe(false);
-            expect(yield* profiles.inUse("openai", "second")).toBe(true);
-            yield* legacy.release;
-            expect(yield* profiles.inUse("openai", "second")).toBe(false);
-            const missing = yield* Effect.result(registry.subscriptionDependencies!("anthropic"));
-            expect(Result.isFailure(missing) && missing.failure).toEqual(
-              ProviderUnavailable.make({ provider: "anthropic" }),
-            );
-          });
-          yield* verification.pipe(
-            // Test entry point owns this Layer and its resource scope.
-            Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
-              const services = yield* Layer.build(
-                ProviderRegistry.layer([provider], [compatibility], resolver),
-              );
-              return yield* Effect.provideContext(program, services);
-            }, Effect.scoped),
-          );
-        });
-        yield* program.pipe(
-          // Test entry point owns this Layer and its resource scope.
-          Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
-            const services = yield* Layer.build(
-              GlobalConfig.layer.pipe(Layer.provide(StorageRoot.layer(storage))),
-            );
-            return yield* Effect.provideContext(program, services);
-          }, Effect.scoped),
-        );
-      }),
-    ).pipe(withOAuthTestPlatform),
-);
+        const registry = Context.get(services, ProviderRegistry);
+        const profiles = Context.get(services, OAuthProfiles);
 
-it.live(
-  "default layer stays unavailable and native subscription layer exports without auth IO",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const unavailable = Effect.gen(function* () {
-          const registry = yield* ProviderRegistry;
-          expect(registry.providers).toEqual([]);
-          yield* Effect.forEach(
-            ["openai", "anthropic"] as const,
-            (provider) =>
-              Effect.map(Effect.result(registry.subscriptionDependencies!(provider)), (missing) =>
-                expect(Result.isFailure(missing) && missing.failure).toEqual(
-                  ProviderUnavailable.make({ provider }),
-                ),
-              ),
-            { discard: true },
-          );
-        });
-        // Test entry point owns this Layer and its resource scope.
-        yield* unavailable.pipe(
-          Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
-            const services = yield* Layer.build(ProviderRegistry.layer([]));
-            return yield* Effect.provideContext(program, services);
-          }, Effect.scoped),
+        const dependencies = yield* registry.subscriptionDependencies!("openai");
+        expect(opened).toEqual([]);
+        const provider = yield* registry.get("openai");
+        const implementation = createSubscriptionRuntimeImplementation("openai");
+        yield* provider.models.list;
+        const oldRuntime = implementation.bind(dependencies);
+        expect(oldRuntime.contextWindow("gpt-5")).toBe(111);
+        const first = yield* pinned(oldRuntime, "run-0");
+        yield* profiles.select("openai", accounts.second);
+        expect(oldRuntime.contextWindowKnown?.("gpt-5")).toBe(false);
+        yield* provider.models.list;
+        const fresh = implementation.bind(yield* registry.subscriptionDependencies!("openai"));
+        expect(fresh.contextWindow("gpt-5")).toBe(222);
+        const second = yield* pinned(fresh, "run-1");
+        const legacy = yield* pinned(yield* registry.runtime("openai"), "run-2");
+        requests.length = 0;
+        yield* Effect.forEach(
+          [first, second, legacy],
+          ({ model }) =>
+            Effect.map(model.generateText({ prompt: "hello" }), (reply) =>
+              expect(reply.text).toBe("reply"),
+            ),
+          { discard: true },
         );
-        const storage = yield* temporary;
-        yield* Effect.gen(function* () {
-          const registry = yield* ProviderRegistry;
-          yield* Effect.forEach(
-            registry.providers.filter(Schema.is(SubscriptionAccountProvider)),
-            Effect.fnUntraced(function* (provider) {
-              const dependencies = yield* registry.subscriptionDependencies!(provider);
-              const runtime = yield* registry.runtime(provider);
-              expect(
-                createSubscriptionRuntimeImplementation(provider)
-                  .bind(dependencies)
-                  .contextWindow("unknown"),
-              ).toBe(runtime.contextWindow("unknown"));
-            }),
-            { discard: true },
-          );
-        }).pipe(
-          // Test entry point owns this Layer and its resource scope.
-          Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
-            const services = yield* Layer.build(
-              SubscriptionProviderRegistry.pipe(
-                Layer.provide(GlobalConfig.layer.pipe(Layer.provide(StorageRoot.layer(storage)))),
-              ),
-            );
-            return yield* Effect.provideContext(program, services);
-          }, Effect.scoped),
-        );
+        expect(requests).toEqual(["Bearer first", "Bearer second", "Bearer second"]);
+        expect(yield* profiles.inUse("openai", accounts.first)).toBe(true);
+        expect(yield* profiles.inUse("openai", accounts.second)).toBe(true);
+        yield* first.release;
+        yield* second.release;
+        expect(yield* profiles.inUse("openai", accounts.first)).toBe(false);
+        expect(yield* profiles.inUse("openai", accounts.second)).toBe(true);
+        yield* legacy.release;
+        expect(yield* profiles.inUse("openai", accounts.second)).toBe(false);
       }),
     ).pipe(withOAuthTestPlatform),
 );

@@ -239,38 +239,6 @@ describe("OpenAI compatible settings", () => {
         yield* Effect.scoped((yield* f.api.runtime).model(selection!, run));
       }),
   );
-  effectTest.live("ignores and clears cached capabilities from the removed LM Studio probe", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const f = fixture(
-          nativeFetch((url) =>
-            Effect.sync(() => {
-              const address =
-                url instanceof Request ? url.url : url instanceof URL ? url.href : url;
-              expect(new URL(address).pathname).toBe("/v1/models");
-              return Response.json({ data: [{ id: configuration.model }] });
-            }),
-          ),
-          {
-            provider: "openai-compatible",
-            model: configuration.model,
-            reasoningEffort: "xhigh",
-            openaiCompatible: {
-              ...configuration,
-              reasoning: { source: "lm-studio", model: configuration.model, options: ["xhigh"] },
-            },
-          },
-        );
-        expect((yield* f.api.services.models.selected)?.reasoningEffort).toBe("default");
-        const model = (yield* f.api.services.models.list)[0];
-        expect(model?.supportedReasoningEfforts).toEqual(["default"]);
-        expect(endpointOf(f.saved())?.reasoning).toBeUndefined();
-        expect(
-          yield* Effect.flip(f.api.services.models.select(configuration.model, "xhigh")),
-        ).toBeInstanceOf(Error);
-      }),
-    ),
-  );
   effectTest.live("does not apply an old server's model metadata after an endpoint change", () =>
     Effect.scoped(
       Effect.gen(function* () {

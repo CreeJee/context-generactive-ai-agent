@@ -284,13 +284,9 @@ function makeImageMediaWorkflowBody(
         const policy =
           request.maximumEstimatedCostUsd === undefined
             ? {
-                mode: "auto" as const,
-                preference: "balanced" as const,
                 allowedExecutionModes: ["direct_adapter"] as const,
               }
             : {
-                mode: "auto" as const,
-                preference: "balanced" as const,
                 allowedExecutionModes: ["direct_adapter"] as const,
                 maximumEstimatedCostUsd: request.maximumEstimatedCostUsd,
               };
@@ -374,7 +370,7 @@ function makeImageMediaWorkflowBody(
             .rerouteAfterFailure(decision, reason, {
               initiatorChatRouteId: request.initiatorChatRouteId,
               intent: { operation: "generate", sourceImageCount: 0, requiresMask: false },
-              policy: { mode: "auto", preference: "balanced" },
+              policy: {},
             })
             .pipe(
               Effect.mapError((cause) =>

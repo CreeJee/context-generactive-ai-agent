@@ -23,12 +23,12 @@
 - `readCompatibleReasoning` / `CompatibleModelPage` — 호환 서버 `/models` 페이지에서 모델의 reasoning 레벨을 읽는 dual 함수
 - `CrossProviderMediaConsent` / `makeCrossProviderMediaConsent` / `decideCrossProviderMediaConsent` / `crossProviderMediaConsentKey` / `CrossProviderMediaConsentStoreFailed` — 교차 공급자 미디어 실행 동의(always|ask|disabled) 판정·저장 서비스
 - `ImageFeature` / `makeImageFeature` / `decideImageContext` / `imageProviderWorkflowPrompt` — 이미지 생성 사용자 설정과 턴 단위 이미지 컨텍스트 게이트. 설정 값 `ImageFeatureStatus`는 `contracts.ts`의 Schema다
-- `openAIImageRouteContracts` / `anthropicImageProviderContract` / `productionImageRouteContracts` / `ImageRouteContract` / `ImageExecutorModel` — 이미지 라우트 계약 정의와 운영용 필터. `ImageExecutorModel`의 타입은 `ImageExecutorModelSchema`에서 꺼내고 `Data.taggedEnum` 생성자를 붙인다
+- `openAIImageRouteContracts` / `ImageRouteContract` / `ImageExecutorModel` — 이미지 라우트 계약 정의. `ImageExecutorModel`의 타입은 `ImageExecutorModelSchema`에서 꺼내고 `Data.taggedEnum` 생성자를 붙인다
 - `ImageRouter` / `makeImageRouter` / `rankImageRoutes` / `ImageRouteDecision` / `ImageRerouteConfirmation` / `ImageRouteScore` — 미디어 라우트 점수화·선택 서비스와 결정/재라우팅 확인 TaggedEnum
 - `ImageRouteFacts` — 라우트별 계정 사실 서비스(`layerFrom`, `unavailableLayer`, `authenticatedRoutesLayer`)
 - `DirectImageExecutor` — OpenAI Images API 직접 실행 서비스(`openAIEnvironmentLayer`, `unavailableLayer`, `layerFrom`)와 `DirectImageExecutionFailed`
 - `ImageMediaWorkflow` / `makeImageMediaWorkflow` / `ImageMediaApprovalRequired` / `ImageMediaUnavailable` / `ImageMediaExecutionFailed` / `CrossProviderMediaRunApproval` — 승인→라우팅→실행→첨부 저장 이미지 워크플로. 승인·자산 Schema(`CrossProviderMediaRunApproval`, `ImageApprovalReason`, `ImageMediaAsset`)는 브라우저도 쓰는 `image-media-contracts.ts`에 있다
-- `RouteCatalog` / `makeRouteCatalog` / `ChatRoute` / `MediaRoute` / `RouteCatalogRefreshFailed` / `UnknownCatalogRoute` / `IncompatibleCatalogRoutes` — 채팅·미디어 실행 라우트 카탈로그 서비스(route-catalog.ts; 시그니처만 확인)
+- `RouteCatalog` / `makeRouteCatalog` / `ChatRoute` / `MediaRoute` / `RouteCatalogRefreshFailed` / `UnknownCatalogRoute` — 채팅·미디어 실행 라우트 카탈로그 서비스(route-catalog.ts; 시그니처만 확인)
 - `ProviderToolPolicy` / `ProviderToolRuntime` / `makeProviderToolPolicy` / `decideProviderToolExposure` / `classifyProviderToolRisk` / `hasRequiredProviderToolAuthority` / `normalizeProviderToolUsage` / `normalizeProviderToolCost` 및 `ProviderTool*` TaggedError 다수 — 공급자 네이티브 도구 노출·승인·샌드박스 정책과 실행 런타임(tool-policy.ts; 시그니처만 확인)
 - `ProviderToolCapabilityRegistry` / `makeProviderToolCapabilityRegistry` / `providerToolDescriptors` / `filterProviderTools` / `ProviderToolId` / `providerTools` — 도구 기술자·모델 메타데이터 레지스트리와 도구 ID 스키마(tool-capabilities.ts, provider-tool-id.ts, provider-tools.ts; 이름만 확인)
 - `ModelFeatureFlags` / `decideModelFeatureFlag` / `OPENAI_CHAT_MODELS` / `ANTHROPIC_MODELS` / `OPENAI_IMAGE_MODELS` / `openAIModelToolCapabilities` / `anthropicModelToolCapabilities` / `failedReasons` — 모델별 기능 플래그 서비스, 정적 모델 카탈로그·도구 능력 표, 실패 이유 수집 헬퍼
@@ -49,7 +49,7 @@
 - 교차 공급자 동의 키 형식은 `${initiatorProvider}->${executorProvider}:${capability}`이다. 같은 공급자면 항상 허용한다. 저장된 쌍이 없으면 기본값은 `disabled`이다. 설정 version은 1이다.
 - `ImageMediaWorkflow.generate`는 `approved`가 false면 먼저 `ImageMediaApprovalRequired(paid_execution)`로 실패한다. 그 다음 trim한 prompt가 비면 `prompt_empty`로 실패하고, catalog가 있으면 refresh를 먼저 한다.
 - `DirectImageExecutor.openAIEnvironmentLayer`는 환경의 `OPENAI_API_KEY`가 필요하다(없으면 `not_configured`). executorMediaModel이 `explicit`이어야 하고, 2xx가 아니면 `provider_rejected`(status 포함)다. 호출자 AbortSignal은 fetch init signal과 `AbortSignal.any`로 합친다.
-- 이미지 라우팅 입력 검증: `sourceImageCount`는 0 이상 정수, 비용 상한은 유한한 0 이상이다. 라우트 fact의 quality·speed는 0..1 유한값이어야 한다. 잘못된 비용은 보고된 그대로 두어 라우트를 부적격으로 만들고 점수가 NaN일 수 있다. 엄격한 비용 상한에서 비용을 모르면 `allowUnknownCost`가 없을 때 부적격이다.
+- 이미지 라우팅 입력 검증: `sourceImageCount`는 0 이상 정수, 비용 상한은 유한한 0 이상이다. 라우트 fact의 quality·speed는 0..1 유한값이어야 한다. 잘못된 비용은 보고된 그대로 두어 라우트를 부적격으로 만들고 점수가 NaN일 수 있다. 엄격한 비용 상한에서 비용을 모르면 부적격이다.
 - `ImageRouteFacts.authenticatedRoutesLayer`는 `direct_adapter`이면서 `authentication.verified`인 라우트만 available로 본다. 실제 계정 이미지 접근은 실행 시점에 검증한다.
 - 호환 엔드포인트 reasoning 레벨은 모델 목록의 명시 확장(`capabilities.reasoning`), 알려진 서버(`owned_by` = `strata`)의 고정 레벨, `supported_parameters`(빈 options) 순서로만 정한다. 파라미터 지원만으로 유효 레벨이나 wire 매핑을 정하지 않는다(`docs/decisions.md` 2026-10-25).
 - `failedReasons`는 체크 목록 순서를 유지한다.

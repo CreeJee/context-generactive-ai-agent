@@ -1,67 +1,14 @@
 import { it } from "@effect/vitest";
-import { DateTime, Duration, Effect, MutableRef, Option, Result } from "effect";
+import { DateTime, Duration, Effect, Option, Result } from "effect";
 import { expect } from "vite-plus/test";
 import {
   SubscriptionUsageCredentialExpired,
   anthropicSubscriptionUsage,
-  anthropicSubscriptionUsageProbe,
   anthropicUsageUrl,
   openAiSubscriptionUsage,
   openAiUsageUrl,
 } from "../src/oauth/subscription-usage-probe.ts";
-import type { StoredCredential } from "../src/oauth/validation-harness.ts";
 import { withOAuthTestPlatform } from "./support/platform.ts";
-
-it.effect.each([
-  { status: 200, expected: "probe" },
-  { status: 401, expected: "rejected" },
-] as const)("sends one usage request without refresh or retry ($status)", ({ status, expected }) =>
-  Effect.gen(function* () {
-    const credential: StoredCredential = {
-      accessToken: "fixture",
-      refreshToken: "fixture",
-      expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 3600_000,
-    };
-    const writes = MutableRef.make(0);
-    const requests: Parameters<typeof fetch>[0][] = [];
-    const outcome = yield* anthropicSubscriptionUsageProbe({
-      store: {
-        read: () => Effect.succeed(credential),
-        write: () =>
-          Effect.sync(() => {
-            MutableRef.increment(writes);
-          }),
-        remove: () => Effect.void,
-      },
-      fetch: (url) => {
-        requests.push(url);
-        return Promise.resolve(
-          Response.json(
-            { five_hour: { utilization: 12, resets_at: "fixture" }, extra_usage: null },
-            { status },
-          ),
-        );
-      },
-    }).pipe(Effect.result);
-    expect(requests).toEqual([anthropicUsageUrl]);
-    expect(MutableRef.get(writes)).toBe(0);
-    switch (expected) {
-      case "probe":
-        return expect(outcome).toMatchObject({
-          success: {
-            refreshed: false,
-            status: 200,
-            fieldNames: ["five_hour", "extra_usage"],
-            windows: [{ name: "five_hour", fieldNames: ["utilization", "resets_at"] }],
-          },
-        });
-      case "rejected":
-        return expect(outcome).toMatchObject({
-          failure: { code: "provider_rejected", status: 401, operation: "subscription_usage" },
-        });
-    }
-  }).pipe(withOAuthTestPlatform),
-);
 
 it.effect(
   "quota lookup reads only numbered named windows and never refreshes an expired token",

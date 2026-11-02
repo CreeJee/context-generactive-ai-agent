@@ -22,9 +22,6 @@ import {
   type CrossProviderMediaConsentApi,
 } from "./cross-provider-media-consent.ts";
 
-export type ImageRoutingPreference = "balanced" | "quality" | "speed" | "cost";
-export type ImageRoutingMode = "auto" | "fixed";
-
 export interface ImageRoutingIntent {
   readonly operation: "generate" | "edit";
   readonly sourceImageCount: number;
@@ -32,13 +29,9 @@ export interface ImageRoutingIntent {
 }
 
 export interface ImageRoutingPolicy {
-  readonly mode: ImageRoutingMode;
-  readonly fixedRouteId?: MediaRoute["id"];
-  readonly preference?: ImageRoutingPreference;
   readonly allowedProviders?: readonly MediaRoute["provider"][];
   readonly allowedExecutionModes?: readonly MediaRoute["executionMode"][];
   readonly maximumEstimatedCostUsd?: number;
-  readonly allowUnknownCost?: boolean;
 }
 
 export interface ImageRouteFact {
@@ -70,8 +63,6 @@ export type ImageRouteScore = typeof ImageRouteScore.Type;
 /** The route chosen for one image request. */
 export type ImageRouteDecision = Data.TaggedEnum<{
   selected: {
-    readonly mode: ImageRoutingMode;
-    readonly preference: ImageRoutingPreference;
     readonly initiatorChatRouteId: ChatRoute["id"];
     readonly initiatorChatModel: string;
     readonly executorMediaRouteId: MediaRoute["id"];
@@ -127,22 +118,6 @@ export class ImageRouteUnavailable extends Schema.TaggedError<
   ImageRouteUnavailable,
   { readonly brand: unique symbol }
 >()("ImageRouteUnavailable", { ranking: Schema.Array(ImageRouteScore) }) {}
-
-export const FixedImageRouteRejectedReason = Schema.TaggedUnion({
-  /** Fixed mode was asked for without naming a route. */
-  RouteIdMissing: {},
-  RouteAbsent: {},
-  /** The route is in the catalog but its score is not eligible; `reasons` are the score's. */
-  Ineligible: { reasons: Schema.Array(Schema.String) },
-});
-
-export class FixedImageRouteRejected extends Schema.TaggedError<
-  FixedImageRouteRejected,
-  { readonly brand: unique symbol }
->()("FixedImageRouteRejected", {
-  routeId: Schema.optionalKey(Schema.String),
-  reason: FixedImageRouteRejectedReason,
-}) {}
 
 export interface ImageRouteFactsApi {
   readonly forRoutes: (
@@ -226,15 +201,7 @@ function validateInput(input: RankImageRoutesInput): Option.Option<ImageRoutingI
   );
 }
 
-const weights: Record<
-  ImageRoutingPreference,
-  Readonly<{ quality: number; speed: number; affordability: number }>
-> = {
-  balanced: { quality: 0.4, speed: 0.3, affordability: 0.3 },
-  quality: { quality: 0.7, speed: 0.15, affordability: 0.15 },
-  speed: { quality: 0.15, speed: 0.7, affordability: 0.15 },
-  cost: { quality: 0.15, speed: 0.15, affordability: 0.7 },
-};
+const weight = { quality: 0.4, speed: 0.3, affordability: 0.3 } as const;
 
 function scoreRoute(
   route: MediaRoute,
@@ -270,10 +237,7 @@ function scoreRoute(
     [fact === undefined, "account route facts are unavailable"],
     [fact !== undefined && !fact.available, "route is unavailable for the account"],
     [cost !== undefined && (!Number.isFinite(cost) || cost < 0), "estimated cost is invalid"],
-    [
-      ceiling !== undefined && cost === undefined && policy.allowUnknownCost !== true,
-      "cost is unknown under a strict cost ceiling",
-    ],
+    [ceiling !== undefined && cost === undefined, "cost is unknown under a strict cost ceiling"],
     [
       ceiling !== undefined && cost !== undefined && cost > ceiling,
       "estimated cost exceeds the cost ceiling",
@@ -286,8 +250,6 @@ function scoreRoute(
       : policy.maximumEstimatedCostUsd !== undefined && policy.maximumEstimatedCostUsd > 0
         ? Math.max(0, 1 - cost / policy.maximumEstimatedCostUsd)
         : 1 / (1 + cost);
-  const preference = policy.preference ?? "balanced";
-  const weight = weights[preference];
   const score =
     fact === undefined
       ? 0
@@ -341,10 +303,7 @@ export interface ImageRouterApi {
     request: ImageRouterRequest,
   ) => Effect.Effect<
     ImageRouteDecision,
-    | ImageRouteFactsFailed
-    | ImageRoutingInvalidRequest
-    | ImageRouteUnavailable
-    | FixedImageRouteRejected
+    ImageRouteFactsFailed | ImageRoutingInvalidRequest | ImageRouteUnavailable
   >;
   readonly rerouteAfterFailure: (
     decision: ImageRouteDecision,
@@ -352,10 +311,7 @@ export interface ImageRouterApi {
     request: ImageRouterRequest,
   ) => Effect.Effect<
     ImageRerouteConfirmation,
-    | ImageRouteFactsFailed
-    | ImageRoutingInvalidRequest
-    | ImageRouteUnavailable
-    | FixedImageRouteRejected
+    ImageRouteFactsFailed | ImageRoutingInvalidRequest | ImageRouteUnavailable
   >;
 }
 
@@ -426,38 +382,14 @@ function makeImageRouterBody(
   const select = (request: ImageRouterRequest) =>
     Effect.gen(function* () {
       const result = yield* decisions(request);
-      const selectedScore =
-        request.policy.mode === "fixed"
-          ? result.ranking.find((score) => score.routeId === request.policy.fixedRouteId)
-          : result.ranking.find((score) => score.eligible);
-      if (request.policy.mode === "fixed") {
-        if (request.policy.fixedRouteId === undefined)
-          return yield* FixedImageRouteRejected.make({
-            reason: FixedImageRouteRejectedReason.cases.RouteIdMissing.make({}),
-          });
-        if (selectedScore === undefined)
-          return yield* FixedImageRouteRejected.make({
-            routeId: request.policy.fixedRouteId,
-            reason: FixedImageRouteRejectedReason.cases.RouteAbsent.make({}),
-          });
-        if (!selectedScore.eligible)
-          return yield* FixedImageRouteRejected.make({
-            routeId: request.policy.fixedRouteId,
-            reason: FixedImageRouteRejectedReason.cases.Ineligible.make({
-              reasons: selectedScore.reasons,
-            }),
-          });
-      }
-      const selected = yield* Effect.fromOption(Option.fromUndefinedOr(selectedScore), () =>
-        ImageRouteUnavailable.make({ ranking: result.ranking }),
+      const selected = yield* Effect.fromOption(
+        EffectArray.findFirst(result.ranking, (score) => score.eligible),
+        () => ImageRouteUnavailable.make({ ranking: result.ranking }),
       );
       const route = Option.getOrUndefined(MutableHashMap.get(result.routeById, selected.routeId))!;
       const fact = Option.getOrUndefined(MutableHashMap.get(result.factById, selected.routeId))!;
-      const preference = request.policy.preference ?? "balanced";
       return Object.freeze(
         ImageRouteDecision.selected({
-          mode: request.policy.mode,
-          preference,
           initiatorChatRouteId: result.chat.id,
           initiatorChatModel: result.chat.model,
           executorMediaRouteId: route.id,
@@ -476,7 +408,7 @@ function makeImageRouterBody(
           ...optionalProperty("estimatedCostUsd", selected.estimatedCostUsd),
           score: selected.score,
           reasons: Object.freeze([
-            `${preference} preference selected the highest eligible deterministic score`,
+            "balanced preference selected the highest eligible deterministic score",
             ...fact.evidence,
           ]),
           ranking: result.ranking,
@@ -488,10 +420,7 @@ function makeImageRouterBody(
     select,
     rerouteAfterFailure: (decision, reason, request) =>
       Effect.gen(function* () {
-        const result = yield* decisions({
-          ...request,
-          policy: { ...request.policy, mode: "auto" },
-        });
+        const result = yield* decisions(request);
         const alternatives = result.ranking
           .filter(
             (candidate) =>
@@ -506,7 +435,6 @@ function makeImageRouterBody(
             )!;
             return Object.freeze({
               ...decision,
-              mode: "auto",
               executorMediaRouteId: route.id,
               executorMediaModel: route.executorModel,
               provider: route.provider,

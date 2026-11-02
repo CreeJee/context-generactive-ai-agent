@@ -368,7 +368,6 @@ export interface ProviderToolModelMetadata {
 }
 export interface ProviderToolFilter {
   readonly provider?: ProviderToolVendor;
-  readonly categories?: readonly ProviderToolCategory[];
   readonly ids?: readonly ProviderToolId[];
 }
 export interface ProviderToolCapabilityQuery extends ProviderToolFilter {
@@ -401,14 +400,11 @@ function filterProviderToolsBody(
   descriptors: readonly AnyProviderToolDescriptor[],
   filter: ProviderToolFilter = {},
 ): readonly AnyProviderToolDescriptor[] {
-  const categories =
-    filter.categories === undefined ? null : HashSet.fromIterable(filter.categories);
   const ids = filter.ids === undefined ? null : HashSet.fromIterable(filter.ids);
   return descriptors
     .filter(
       (entry) =>
         (filter.provider === undefined || entry.provider === filter.provider) &&
-        (categories === null || HashSet.has(categories, entry.category)) &&
         (ids === null || HashSet.has(ids, entry.id)),
     )
     .toSorted(compareDescriptor);

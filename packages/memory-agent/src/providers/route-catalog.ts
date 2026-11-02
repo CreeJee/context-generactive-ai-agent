@@ -1,8 +1,6 @@
 import { providerConnection, type ProviderVendor } from "./contracts.ts";
 import {
   Clock,
-  Function as EffectFunction,
-  Predicate,
   Array as EffectArray,
   HashMap,
   ConfigProvider,
@@ -92,14 +90,6 @@ export interface ExecutionRoute {
   readonly cost: ProviderToolCost;
 }
 
-export interface ChatMediaRoutePair {
-  readonly initiatorChatRouteId: ChatRoute["id"];
-  readonly executorMediaRouteId: MediaRoute["id"];
-  readonly initiatorChatProvider: ProviderId;
-  readonly executorMediaProvider: "openai";
-  readonly crossProvider: boolean;
-}
-
 export interface RouteCatalogSnapshot {
   readonly revision: number;
   readonly refreshedAt: number;
@@ -133,15 +123,6 @@ export class UnknownCatalogRoute extends Schema.TaggedError<
   id: Schema.String,
 }) {}
 
-export class IncompatibleCatalogRoutes extends Schema.TaggedError<
-  IncompatibleCatalogRoutes,
-  { readonly brand: unique symbol }
->()("IncompatibleCatalogRoutes", {
-  chatRouteId: Schema.String,
-  mediaRouteId: Schema.String,
-  reason: Schema.Literals(["media_generation_unsupported"]),
-}) {}
-
 export interface RouteCatalogApi {
   readonly snapshot: Effect.Effect<RouteCatalogSnapshot>;
   readonly refresh: Effect.Effect<RouteCatalogSnapshot, RouteCatalogRefreshFailed>;
@@ -150,10 +131,6 @@ export interface RouteCatalogApi {
   readonly execution: (
     id: ExecutionRoute["id"],
   ) => Effect.Effect<ExecutionRoute, UnknownCatalogRoute>;
-  readonly pairChatWithMedia: (
-    chatRouteId: ChatRoute["id"],
-    mediaRouteId: MediaRoute["id"],
-  ) => Effect.Effect<ChatMediaRoutePair, UnknownCatalogRoute | IncompatibleCatalogRoutes>;
 }
 
 export interface RouteCatalogSource {
@@ -382,24 +359,14 @@ const sourceFromServices = Effect.gen(function* () {
   } satisfies RouteCatalogSource;
 });
 
-export const makeRouteCatalog: {
-  (source: RouteCatalogSource, now?: () => number): Effect.Effect<RouteCatalogApi>;
-  (now?: () => number): (source: RouteCatalogSource) => Effect.Effect<RouteCatalogApi>;
-} = EffectFunction.dual(
-  (args) => args.length > 1 || (args[0] !== undefined && !Predicate.isFunction(args[0])),
-  makeRouteCatalogBody,
-);
-function makeRouteCatalogBody(
-  source: RouteCatalogSource,
-  now?: () => number,
-): Effect.Effect<RouteCatalogApi> {
+export function makeRouteCatalog(source: RouteCatalogSource): Effect.Effect<RouteCatalogApi> {
   return Effect.gen(function* () {
     const state = yield* Ref.make<RouteCatalogSnapshot>(
       freezeSnapshot({ revision: 0, refreshedAt: 0, chat: [], media: [], execution: [] }),
     );
     const refresh = Effect.gen(function* () {
       const loaded = yield* source.load;
-      const refreshedAt = now === undefined ? yield* Clock.currentTimeMillis : now();
+      const refreshedAt = yield* Clock.currentTimeMillis;
       return yield* Ref.updateAndGet(state, (previous) =>
         freezeSnapshot({ ...loaded, revision: previous.revision + 1, refreshedAt }),
       );
@@ -421,29 +388,6 @@ function makeRouteCatalogBody(
         Effect.flatMap(Ref.get(state), (snapshot) => find("media", snapshot.media, id)),
       execution: (id) =>
         Effect.flatMap(Ref.get(state), (snapshot) => find("execution", snapshot.execution, id)),
-      pairChatWithMedia: (chatRouteId, mediaRouteId) =>
-        Effect.gen(function* () {
-          const snapshot = yield* Ref.get(state);
-          const chatRoute = yield* find("chat", snapshot.chat, chatRouteId);
-          const mediaRoute = yield* find("media", snapshot.media, mediaRouteId).pipe(
-            Effect.filterOrFail(
-              (route) => route.operations.includes("generate"),
-              () =>
-                IncompatibleCatalogRoutes.make({
-                  chatRouteId,
-                  mediaRouteId,
-                  reason: "media_generation_unsupported",
-                }),
-            ),
-          );
-          return Object.freeze({
-            initiatorChatRouteId: chatRoute.id,
-            executorMediaRouteId: mediaRoute.id,
-            initiatorChatProvider: chatRoute.provider,
-            executorMediaProvider: mediaRoute.provider,
-            crossProvider: chatRoute.provider !== mediaRoute.provider,
-          });
-        }),
     };
   });
 }
@@ -453,8 +397,6 @@ export class RouteCatalog extends Context.Service<RouteCatalog, RouteCatalogApi>
 ) {
   static readonly layer = Layer.effect(
     RouteCatalog,
-    Effect.flatMap(sourceFromServices, (source) => makeRouteCatalog(source)),
+    Effect.flatMap(sourceFromServices, makeRouteCatalog),
   );
-  static readonly layerFrom = (source: RouteCatalogSource, now?: () => number) =>
-    Layer.effect(RouteCatalog, makeRouteCatalog(source, now));
 }

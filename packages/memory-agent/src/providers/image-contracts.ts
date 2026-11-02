@@ -43,15 +43,6 @@ export interface ImageRouteContract {
   readonly evidence: readonly string[];
 }
 
-export interface UnsupportedImageProviderContract {
-  readonly provider: "anthropic";
-  readonly verification: "unsupported";
-  readonly productionEnabled: false;
-  readonly imageInputSupported: true;
-  readonly imageGenerationSupported: false;
-  readonly evidence: readonly string[];
-}
-
 interface DirectImageModelCapability {
   readonly images: boolean;
   readonly maximumSourceImages: number;
@@ -144,24 +135,4 @@ export const openAIImageRouteContracts: readonly ImageRouteContract[] = Object.f
   }),
 ]);
 
-export const anthropicImageProviderContract: UnsupportedImageProviderContract = Object.freeze({
-  provider: "anthropic",
-  verification: "unsupported",
-  productionEnabled: false,
-  imageInputSupported: true,
-  imageGenerationSupported: false,
-  evidence: [
-    "providers/provider-tools.ts has no Anthropic image generation Provider Tool",
-    "Anthropic Messages API: image generation is unsupported",
-  ],
-});
-
 export const imageRouteContracts = openAIImageRouteContracts;
-
-export function productionImageRouteContracts(
-  contracts: readonly ImageRouteContract[] = imageRouteContracts,
-): readonly ImageRouteContract[] {
-  return contracts.filter(
-    (contract) => contract.productionEnabled && contract.verification === "verified",
-  );
-}
