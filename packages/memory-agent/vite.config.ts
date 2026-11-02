@@ -15,6 +15,9 @@ export default defineConfig({
     // unit: one module's logic beside its source, without a running agent.
     // feature: slices under tests/ that prepare a real agent (TestEnv) or other real resources.
     // engine: the memory engine's internals, kept out of `test`.
+    // unit and feature share one module graph per worker (`isolate: false`): importing it again
+    // for every file took about a third of the run. Their spies restore themselves; engine
+    // replaces a module export for a whole file, so it stays isolated.
     projects: [
       {
         extends: true,
@@ -22,6 +25,7 @@ export default defineConfig({
           name: "unit",
           include: ["src/**/*.test.ts"],
           exclude: [...defaultExclude, ...engine],
+          isolate: false,
         },
       },
       {
@@ -30,6 +34,7 @@ export default defineConfig({
           name: "feature",
           include: ["tests/**/*.test.ts"],
           exclude: [...defaultExclude, ...engine],
+          isolate: false,
         },
       },
       { extends: true, test: { name: "engine", include: engine } },

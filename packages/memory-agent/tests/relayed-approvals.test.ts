@@ -97,8 +97,16 @@ describe("durable relayed approvals", () => {
         Effect.gen(function* () {
           const { controller } = yield* runCancellation;
           const first = yield* relay.ask("s", "run-1", request, controller.signal);
-          const second = yield* relay.ask("s", "run-2", request, controller.signal);
-          const [a, b] = yield* pending(relay, "s", 2);
+          const second = yield* relay.ask(
+            "s",
+            "run-2",
+            { ...request, reason: "Approve the second write" },
+            controller.signal,
+          );
+          // Both can share a millisecond, so createdAt does not order them.
+          const approvals = yield* pending(relay, "s", 2);
+          const a = approvals.find((approval) => approval.reason === request.reason);
+          const b = approvals.find((approval) => approval.reason !== request.reason);
           expect(yield* relay.answer("other", b!.id, true)).toBe(false);
           expect(yield* relay.answer("s", b!.id, true)).toBe(true);
           expect(yield* relay.answer("s", b!.id, true)).toBe(true);
