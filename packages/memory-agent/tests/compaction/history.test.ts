@@ -41,7 +41,7 @@ const metadataStore = Effect.map(RunStore, (store) => store.chatMetadata);
 
 testAgent()("compaction over recorded history", (it) => {
   it.effect(
-    "tool result lookup returns the first recorded node without materializing the session",
+    "tool result lookup keeps the first recorded node per call and omits calls without one",
     () =>
       Effect.gen(function* () {
         const at = yield* freshSession;
@@ -58,8 +58,9 @@ testAgent()("compaction over recorded history", (it) => {
           text: "second",
           detail: { toolCallId: "same-call" },
         });
-        expect(yield* nodes.toolResultId(at.sessionId, "same-call")).toBe(first.id);
-        expect(yield* nodes.toolResultId(at.sessionId, "missing")).toBeNull();
+        expect(yield* nodes.toolResultIds(at.sessionId, ["same-call", "missing"])).toEqual(
+          new Map([["same-call", first.id]]),
+        );
       }),
   );
 

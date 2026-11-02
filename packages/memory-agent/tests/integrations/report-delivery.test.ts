@@ -1,12 +1,13 @@
 import { describe, expect, it } from "@effect/vitest";
 import { ConfigProvider, Deferred, Effect, Fiber, Layer, Ref } from "effect";
+import { FetchHttpClient } from "effect/http";
 import {
   ReportDelivery,
   parseWebhookUrl,
   webhookConfigKey,
+  type ReportSend,
 } from "../../src/report/discord-webhook.ts";
 import { ReportDeliveryResult } from "../../src/report/delivery-contract.ts";
-import { HttpServerRequest, HttpServerResponse, testHttpServer } from "../support/http.ts";
 
 interface Reply {
   readonly status: number;
@@ -14,52 +15,57 @@ interface Reply {
 }
 
 const token = "tok_abcdefghijklmnopqrstuvwxyz0123";
+const webhookUrl = `https://discord.com/api/webhooks/123456789012345678/${token}`;
 const message = (id: string): Reply => ({ status: 200, body: `{"id":"${id}"}` });
 const report = (text: string) => ({ text, evidence: null });
 
 /** Builds the service with `DISCORD_WEBHOOK_URL` set (or not) in server configuration. */
 const deliveryWith = (config: Record<string, string>) =>
   Layer.build(
-    ReportDelivery.layer({ allowLoopback: true }).pipe(
+    ReportDelivery.layer().pipe(
       Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown(config))),
     ),
   ).pipe(Effect.flatMap((services) => Effect.provideContext(ReportDelivery, services)));
 
-/** A local stand-in for Discord's execute-webhook route; nothing leaves the machine. */
+/** Discord's execute-webhook route, answered at the fetch boundary; nothing leaves the machine. */
 const fakeDiscord = Effect.fnUntraced(function* (replies: readonly Reply[]) {
   const queue = yield* Ref.make(replies);
   const received = yield* Ref.make<readonly { url: string; body: string }[]>([]);
   const arrived = yield* Deferred.make<void>();
   const release = yield* Ref.make<Deferred.Deferred<void> | null>(null);
-  const { url } = yield* testHttpServer(
-    Effect.gen(function* () {
-      const request = yield* HttpServerRequest.HttpServerRequest;
-      const body = yield* request.text;
-      yield* Ref.update(received, (all) => [...all, { url: request.url, body }]);
-      yield* Deferred.succeed(arrived, undefined);
-      const gate = yield* Ref.get(release);
-      if (gate !== null) yield* Deferred.await(gate);
-      const reply = yield* Ref.modify(queue, ([next, ...rest]) => [next ?? message("x"), rest]);
-      return HttpServerResponse.text(reply.body, {
-        status: reply.status,
-        contentType: "application/json",
-      });
-    }),
-  );
-  const delivery = yield* deliveryWith({
-    [webhookConfigKey]: `${url}/api/webhooks/123456789012345678/${token}`,
-  });
+  const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
+  const fetch: typeof globalThis.fetch = (input, init) => {
+    const request = new Request(input, init);
+    return runPromise(
+      Effect.gen(function* () {
+        const body = yield* Effect.promise(() => request.text());
+        yield* Ref.update(received, (all) => [...all, { url: request.url, body }]);
+        yield* Deferred.succeed(arrived, undefined);
+        const gate = yield* Ref.get(release);
+        if (gate !== null) yield* Deferred.await(gate);
+        const reply = yield* Ref.modify(queue, ([next, ...rest]) => [next ?? message("x"), rest]);
+        return new Response(reply.body, {
+          status: reply.status,
+          headers: { "content-type": "application/json" },
+        });
+      }),
+    );
+  };
+  const configured = yield* deliveryWith({ [webhookConfigKey]: webhookUrl });
+  const delivery = {
+    send: (report: ReportSend, resend: boolean) =>
+      configured.send(report, resend).pipe(Effect.provideService(FetchHttpClient.Fetch, fetch)),
+  };
   return { delivery, received, arrived, release };
 });
 
 describe("report delivery to a Discord webhook", () => {
-  it("accepts only execute-webhook URLs on Discord outside tests", () => {
-    const valid = `https://discord.com/api/webhooks/123456789012345678/${token}`;
-    expect(parseWebhookUrl(valid, false)?.id).toBe("123456789012345678");
-    expect(parseWebhookUrl(valid.replace("https:", "http:"), false)).toBeNull();
-    expect(parseWebhookUrl(valid.replace("discord.com", "example.com"), false)).toBeNull();
+  it("accepts only execute-webhook URLs on Discord", () => {
+    expect(parseWebhookUrl(webhookUrl)?.id).toBe("123456789012345678");
+    expect(parseWebhookUrl(webhookUrl.replace("https:", "http:"))).toBeNull();
+    expect(parseWebhookUrl(webhookUrl.replace("discord.com", "example.com"))).toBeNull();
     expect(
-      parseWebhookUrl(`http://127.0.0.1:1/api/webhooks/123456789012345678/${token}`, false),
+      parseWebhookUrl(`http://127.0.0.1:1/api/webhooks/123456789012345678/${token}`),
     ).toBeNull();
   });
 
@@ -74,9 +80,7 @@ describe("report delivery to a Discord webhook", () => {
       expect(yield* Effect.flip(invalid.send(report("a"), false))).toMatchObject({
         reason: "invalid_webhook_url",
       });
-      const configured = yield* deliveryWith({
-        [webhookConfigKey]: `https://discord.com/api/webhooks/123456789012345678/${token}`,
-      });
+      const configured = yield* deliveryWith({ [webhookConfigKey]: webhookUrl });
       expect(yield* configured.status).toEqual({ configured: true, webhookIdSuffix: "5678" });
     }).pipe(Effect.scoped),
   );

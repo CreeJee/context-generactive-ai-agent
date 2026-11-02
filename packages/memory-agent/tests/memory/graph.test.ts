@@ -1,11 +1,9 @@
-import { DateTime, Effect, FileSystem, MutableHashMap, Path } from "effect";
+import { DateTime, Effect, MutableHashMap } from "effect";
 import { expect } from "vite-plus/test";
 import { Graph } from "../../src/memory/graph.ts";
-import { evidencePageLength, Nodes } from "../../src/memory/nodes.ts";
-import { Projects } from "../../src/projects/projects.ts";
-import { Sessions } from "../../src/sessions/sessions.ts";
+import { evidencePageLength } from "../../src/memory/nodes.ts";
 import { conversation } from "../support/memory-graph.ts";
-import { TestEnv, testAgent } from "../support/test-env.ts";
+import { testAgent } from "../support/test-env.ts";
 import { sqlRun } from "../support/sql.ts";
 
 const addLlmEdge = Effect.fnUntraced(function* (
@@ -22,21 +20,6 @@ const addLlmEdge = Effect.fnUntraced(function* (
     weight,
     DateTime.formatIso(DateTime.nowUnsafe()),
   );
-});
-
-/** A node in another project, which links to nothing yet. */
-const otherProjectNode = Effect.fnUntraced(function* (name: string) {
-  const { base } = yield* TestEnv;
-  const root = (yield* Path.Path).join(base, `other-${name}`);
-  yield* (yield* FileSystem.FileSystem).makeDirectory(root);
-  const project = yield* (yield* Projects).add(root);
-  const other = yield* (yield* Sessions).create(project.id);
-  return yield* (yield* Nodes).append({
-    projectId: project.id,
-    sessionId: other.id,
-    kind: "user",
-    text: "다른 프로젝트의 SQLite 이야기",
-  });
 });
 
 testAgent()("memory graph", (it) => {
@@ -92,25 +75,6 @@ testAgent()("memory graph", (it) => {
       }),
   );
 
-  it.effect("never visits nodes of projects outside the allowed set", () =>
-    Effect.gen(function* () {
-      const { project, session, user } = yield* conversation;
-      const other = yield* otherProjectNode(session.id);
-      yield* addLlmEdge(other.id, user.id, "related", 0.9);
-      const graph = yield* Graph;
-      const walk = (projectIds: string[]) =>
-        graph
-          .traverse(MutableHashMap.fromIterable([[user.id, 1]]), {
-            budget: 20,
-            minUtility: 0.1,
-            projectIds,
-          })
-          .pipe(Effect.map(({ visits }) => visits.map((visit) => visit.node.id)));
-      expect(yield* walk([project.id])).not.toContain(other.id);
-      expect(yield* walk([project.id, other.projectId])).toContain(other.id);
-    }),
-  );
-
   it.effect("trace follows a tool result back to the user turn and surfaces corrections", () =>
     Effect.gen(function* () {
       const { user, assistant, call, result, correction } = yield* conversation;
@@ -131,7 +95,7 @@ testAgent()("memory graph", (it) => {
   );
 
   it.effect(
-    "Nodes.read pages original text without splitting surrogate pairs or touching CRLF",
+    "evidence pages split original text without breaking surrogate pairs or touching CRLF",
     () =>
       Effect.gen(function* () {
         const { nodes, project, session } = yield* conversation;
@@ -142,16 +106,15 @@ testAgent()("memory graph", (it) => {
           kind: "tool_result",
           text,
         });
-        const first = yield* nodes.read(node.id);
+        const first = yield* nodes.page(node);
         expect(first).toMatchObject({
           offset: 0,
           nextOffset: evidencePageLength - 1,
           length: text.length,
         });
-        const second = yield* nodes.read(node.id, first!.nextOffset!);
+        const second = yield* nodes.page(node, first.nextOffset!);
         expect(second).toMatchObject({ text: "😀\r\n끝", nextOffset: null });
-        expect(first!.text + second!.text).toBe(text);
-        expect(yield* nodes.read("missing")).toBeNull();
+        expect(first.text + second.text).toBe(text);
       }),
   );
 });

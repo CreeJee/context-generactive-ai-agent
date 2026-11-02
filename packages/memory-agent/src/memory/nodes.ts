@@ -233,14 +233,6 @@ const make = Effect.gen(function* () {
       SELECT r.node_id AS id FROM node_refs r JOIN nodes n ON n.id = r.node_id
       WHERE r.ref = ${ref} AND n.project_id = ${projectId} ORDER BY n.seq DESC LIMIT 1`,
   });
-  const toolResultIdOf = SqlSchema.findOneOption({
-    Request: Schema.Struct({ sessionId: Schema.String, toolCallId: Schema.String }),
-    Result: IdRow,
-    execute: ({ sessionId, toolCallId }) => sql`SELECT id FROM nodes
-      WHERE session_id = ${sessionId} AND kind = 'tool_result'
-        AND json_extract(detail, '$.toolCallId') = ${toolCallId}
-      ORDER BY seq LIMIT 1`,
-  });
   const encodeDetail = Schema.encodeEffect(Schema.fromJsonString(NodeDetail));
   const firstResults = SqlSchema.findAll({
     Request: Schema.Struct({ sessionId: Schema.String, toolCallIds: Schema.Array(Schema.String) }),
@@ -367,15 +359,10 @@ const make = Effect.gen(function* () {
     toolNode: (sessionId: string, kind: "tool_call" | "tool_result", toolCallId: string) =>
       toolNodeOf({ sessionId, kind, toolCallId }).pipe(found, stored),
 
-    /** The first recorded result for this call, without loading every result in the session. */
-    toolResultId: (sessionId: string, toolCallId: string) =>
-      stored(
-        toolResultIdOf({ sessionId, toolCallId }).pipe(
-          Effect.map((row) => Option.getOrNull(idOf(row))),
-        ),
-      ),
-
-    /** {@link toolResultId} for several calls at once; calls without a result are absent. */
+    /**
+     * The first recorded result for each call, without loading every result in the session; calls
+     * without a result are absent.
+     */
     toolResultIds: (sessionId: string, toolCallIds: readonly string[]) =>
       toolCallIds.length === 0
         ? Effect.succeed(new Map<string, string>())
@@ -413,20 +400,7 @@ const make = Effect.gen(function* () {
 
     edgesOf: (id: string) => stored(edgesOf(id).pipe(Effect.map((rows) => rows.map(edgeOfRow)))),
 
-    /** Reads original text in pages without splitting a surrogate pair. */
-    read: (id: string, offset = 0) =>
-      stored(
-        one(id).pipe(
-          Effect.flatMap(
-            Option.match({
-              onNone: () => Effect.succeed(null),
-              onSome: (row) => page(nodeOfRow(row), offset),
-            }),
-          ),
-        ),
-      ),
-
-    /** The same page for a node the caller already loaded, without reading its row again. */
+    /** Reads original text of a loaded node in pages without splitting a surrogate pair. */
     page,
   };
 });

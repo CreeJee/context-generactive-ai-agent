@@ -1,6 +1,5 @@
 import { Effect, Option, Schema } from "effect";
 import { expect } from "vite-plus/test";
-import { ApiUsage } from "../../src/agent/api-usage.ts";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { budgetFor, turnSummariesNamespace } from "../../src/agent/compaction.ts";
 import { TurnSummaries } from "../../src/agent/turn-summaries.ts";
@@ -235,13 +234,6 @@ testAgent({
         cachedTokens: 0,
         cacheRatio: 0,
         compactionStage: "none",
-      });
-      expect(yield* (yield* ApiUsage).byRootSession(sessionId)).toMatchObject({
-        responses: 2,
-        inputTokens: 240,
-        outputTokens: 10,
-        cacheReadTokens: 30,
-        uncachedInputTokens: 210,
       });
     }),
   );

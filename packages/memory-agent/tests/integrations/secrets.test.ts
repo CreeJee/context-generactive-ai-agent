@@ -4,6 +4,7 @@ import { Importer } from "../../src/imports/importer.ts";
 import type { JsonValue } from "../../src/json.ts";
 import { embeddedKindFilter, Indexer } from "../../src/memory/embedding/indexer.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
+import { PermissionReviews } from "../../src/permissions/reviews.ts";
 import { SecretSweep } from "../../src/secrets/sweep.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { runTurn, toolResults, wireOf } from "../support/chat-client.ts";
@@ -217,39 +218,30 @@ testAgent({ testProvider: {} })("secrets on their way in", (it) => {
 
   it.effect("the sweep catches what arrives after a finished pass, on the next one", () =>
     Effect.gen(function* () {
-      const { project } = yield* TestEnv;
       const session = yield* freshSession;
       const sweep = yield* SecretSweep;
-      // Nothing of this session to sweep yet: both passes reach the end and remember it.
-      yield* sqlRun("INSERT INTO chat_threads VALUES (?, '[]', 0)", session);
       yield* sweep.run;
 
-      // Text that skipped the way in: an older build wrote this node, and the conversation grew
-      // inside its one row.
-      yield* (yield* Nodes).append({
-        projectId: project.id,
+      // A review keeps the arguments as the model wrote them, so a key it wrote arrives as is.
+      yield* (yield* PermissionReviews).record({
         sessionId: session,
-        kind: "tool_result",
-        text: `GITHUB_TOKEN=${githubToken}`,
+        toolCallId: "c-1",
+        toolName: "run_shell",
+        input: yield* stringifyJson({ command: `GITHUB_TOKEN=${githubToken} gh pr list` }),
+        decision: "ask",
+        decidedBy: "classifier",
+        reason: "uses a credential",
       });
-      yield* sqlRun(
-        "UPDATE chat_threads SET messages = ? WHERE thread_id = ?",
-        yield* stringifyJson([{ role: "user", content: githubToken }]),
-        session,
-      );
 
-      expect(yield* sweep.run).toBe(1);
-      expect(
-        yield* value(
-          "SELECT text AS value FROM nodes WHERE session_id = ? ORDER BY seq DESC LIMIT 1",
-          session,
-        ),
-      ).toBe("GITHUB_TOKEN=[redacted:github]");
+      yield* sweep.run;
       expect(
         yield* parseJson(
-          yield* value("SELECT messages AS value FROM chat_threads WHERE thread_id = ?", session),
+          yield* value(
+            "SELECT input AS value FROM permission_reviews WHERE session_id = ?",
+            session,
+          ),
         ),
-      ).toEqual([{ role: "user", content: "[redacted:github]" }]);
+      ).toEqual({ command: "GITHUB_TOKEN=[redacted:github] gh pr list" });
     }),
   );
 });

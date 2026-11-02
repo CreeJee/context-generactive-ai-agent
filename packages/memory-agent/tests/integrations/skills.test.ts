@@ -1,6 +1,5 @@
 import { Effect, FileSystem, Path } from "effect";
 import { expect } from "vite-plus/test";
-import { FileReadPlatform } from "../../src/files/text.ts";
 import { Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import {
@@ -45,33 +44,26 @@ const globalSkills = Effect.gen(function* () {
   return path.join((yield* TestEnv).home, ".agents", "skills");
 });
 
-const platforms =
-  process.platform === "win32" ? (["windows"] as const) : (["posix", "windows"] as const);
-
 testAgent()("linked skill files", (it) => {
-  it.effect.each(platforms)(
-    "%s: rejects linked skill files while preserving ordinary hard-linked files",
-    (platform) =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const { project, skills: root } = yield* freshProject;
-        const outside = yield* writeSkill(project.root, "outside", "description: Shared rules.");
-        const source = path.join(outside, "SKILL.md");
-        yield* Effect.forEach(
-          ["symbolic", "hard"],
-          (name) => fs.makeDirectory(path.join(root, name), { recursive: true }),
-          { discard: true },
-        );
-        yield* fs.symlink(source, path.join(root, "symbolic", "SKILL.md"));
-        yield* fs.link(source, path.join(root, "hard", "SKILL.md"));
-        const skills = yield* Skills;
-        expect((yield* skills.catalog(project)).skills.map((skill) => skill.name)).toEqual([
-          "hard",
-        ]);
-        expect(yield* skills.read(project, "symbolic")).toBeNull();
-        expect(yield* skills.read(project, "hard")).toMatchObject({ body: "Do it well." });
-      }).pipe(Effect.provideService(FileReadPlatform, platform)),
+  it.effect("rejects linked skill files while preserving ordinary hard-linked files", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { project, skills: root } = yield* freshProject;
+      const outside = yield* writeSkill(project.root, "outside", "description: Shared rules.");
+      const source = path.join(outside, "SKILL.md");
+      yield* Effect.forEach(
+        ["symbolic", "hard"],
+        (name) => fs.makeDirectory(path.join(root, name), { recursive: true }),
+        { discard: true },
+      );
+      yield* fs.symlink(source, path.join(root, "symbolic", "SKILL.md"));
+      yield* fs.link(source, path.join(root, "hard", "SKILL.md"));
+      const skills = yield* Skills;
+      expect((yield* skills.catalog(project)).skills.map((skill) => skill.name)).toEqual(["hard"]);
+      expect(yield* skills.read(project, "symbolic")).toBeNull();
+      expect(yield* skills.read(project, "hard")).toMatchObject({ body: "Do it well." });
+    }),
   );
 });
 

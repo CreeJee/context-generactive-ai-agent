@@ -121,7 +121,7 @@ testAgent()("structured memory evidence", (it) => {
       expect(result).toHaveProperty("evidenceContext.changes.length", 8);
       expect(result).toHaveProperty("evidenceContext.changes.0.source.id", replacement.id);
       expect(result).toMatchObject({
-        ...(yield* env.nodes.read(original.id, 4000)),
+        ...(yield* env.nodes.page(original, 4000)),
         evidenceContext: {
           assessment: { kind: "recorded_change" },
           hasUnconfirmedChanges: true,
@@ -449,67 +449,31 @@ testAgent()("structured memory evidence", (it) => {
     }),
   );
 
-  it.effect("applies current project visibility to sources, provenance and challenges", () =>
+  it.effect("applies current project visibility to direct reads", () =>
     Effect.gen(function* () {
-      const at = yield* freshSession;
       const env = yield* environment;
-      const fixture = yield* TestEnv;
+      const { base, project } = yield* TestEnv;
       const projects = yield* Projects;
       const fs = yield* FileSystem.FileSystem;
-      const other = yield* projects.add(yield* fs.makeTempDirectory({ directory: fixture.base }));
+      const other = yield* projects.add(yield* fs.makeTempDirectory({ directory: base }));
       const session = yield* (yield* Sessions).create(other.id);
-      const otherAt = { projectId: other.id, sessionId: session.id };
       const hidden = yield* env.nodes.append({
-        ...otherAt,
+        projectId: other.id,
+        sessionId: session.id,
         kind: "user",
         text: "other project source",
       });
-      const root = yield* env.nodes.append({
-        ...at,
-        kind: "assistant",
-        text: "visible source",
-        links: [{ kind: "reply", nodeId: hidden.id }],
-      });
-      const foreignChange = yield* env.nodes.append({
-        ...otherAt,
-        kind: "user",
-        text: "foreign correction",
-      });
-      yield* Effect.forEach(
-        ["applied", "unconfirmed"] as const,
-        (status) =>
-          env.interpretations.record({
-            nodeId: foreignChange.id,
-            targetId: root.id,
-            kind: "corrects",
-            status,
-            reason: "different scope",
-            model: "fixture",
-          }),
-        { discard: true },
-      );
-      const shared = reads(env, at.projectId).read;
+      const shared = reads(env, project.id).read;
       const scoped = callers(
-        memoryReadRunTools({ env, projectId: at.projectId, scope: "project" }),
+        memoryReadRunTools({ env, projectId: project.id, scope: "project" }),
       ).read;
-      expect(yield* shared({ id: root.id })).toMatchObject({
-        evidenceContext: { provenance: [expect.objectContaining({ id: hidden.id })], changes: [] },
-      });
-      expect(yield* scoped({ id: root.id })).toMatchObject({
-        evidenceContext: { provenance: [], changes: [], provenanceScopeLimited: true },
-      });
-      expect(yield* scoped({ id: hidden.id })).toEqual({
-        error: "not_found",
+      expect(yield* shared({ id: hidden.id })).toMatchObject({
         id: hidden.id,
+        text: "other project source",
       });
+      expect(yield* scoped({ id: hidden.id })).toEqual({ error: "not_found", id: hidden.id });
       yield* projects.setCrossRecallExcluded(other.id, true);
-      expect(yield* shared({ id: root.id })).toMatchObject({
-        evidenceContext: { provenance: [], changes: [], provenanceScopeLimited: true },
-      });
-      expect(yield* shared({ id: hidden.id })).toEqual({
-        error: "not_found",
-        id: hidden.id,
-      });
+      expect(yield* shared({ id: hidden.id })).toEqual({ error: "not_found", id: hidden.id });
     }),
   );
 

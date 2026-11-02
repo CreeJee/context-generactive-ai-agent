@@ -19,10 +19,10 @@
 - `parseDiagnosis(answer, evidenceIds)` — 모델 JSON 답을 디코드하고 인용 없는 observation을 hypotheses로 옮긴다
 - `diagnosisInstructions` — 진단 모델 system 프롬프트 문자열
 - `ReportDiagnosisError` — `Schema.TaggedError`(reason: `ReportDiagnosisFailure`, cause optional)
-- `ReportDelivery` — `Context.Service`(`status`, `send`, `sendNotice`), `ReportDelivery.layer(options?: ReportDeliveryOptions)`로 제공; Discord webhook 전송
+- `ReportDelivery` — `Context.Service`(`status`, `send`, `sendNotice`), `ReportDelivery.layer()`로 제공(호출마다 따로 만들어진다); Discord webhook 전송
 - `ReportDeliveryError` — `Schema.TaggedError`(reason, httpStatus?, retryAfterSeconds?); URL·토큰·응답 본문을 담지 않는다
-- `parseWebhookUrl` — dual 함수; Discord execute-webhook URL만 허용(loopback은 테스트용 옵션), 실패 시 `null`
-- `webhookConfigKey` / `maxReportBytes` / `maxEvidenceBytes` / `ReportSend` / `ReportDeliveryOptions` — 설정 키 `DISCORD_WEBHOOK_URL`, 리포트 1_000_000B·증거 4_000_000B 한도, 전송 입력(text, evidence) 타입, 레이어 옵션(`allowLoopback`)
+- `parseWebhookUrl(input)` — Discord execute-webhook URL만 허용, 실패 시 `null`
+- `webhookConfigKey` / `maxReportBytes` / `maxEvidenceBytes` / `ReportSend` — 설정 키 `DISCORD_WEBHOOK_URL`, 리포트 1_000_000B·증거 4_000_000B 한도, 전송 입력(text, evidence) 타입
 - `defectReportsLayer` — `Layer.effect(DefectReporter, make)`; 결함을 Discord로 보내고 최근 결함 목록을 유지한다
 - `admitDefect` / `noDefectsSent` / `AdmissionState` / `fingerprintWindow` / `messagesPerMinute` — 결함 알림 rate-limit 순수 로직(dual)과 상태, 10분 fingerprint 창, 분당 5건
 
@@ -37,7 +37,7 @@
 - 진단은 선택된 provider의 auth가 `signed-in`일 때만 하고, 아니면 `model_unavailable`로 실패한다. 모델 호출은 120_000ms 제한이다. 진단 실패는 일반 리포트를 막지 않는다.
 - API 사용량은 `sourceSessionId`가 비어 있지 않을 때만 `purpose: "report-diagnosis"`로 기록한다.
 - webhook URL의 토큰은 비밀이다. `Redacted`로 감싸고, 오류에 넣지 않고, 요청은 `redirect: "error"`와 `HttpClient.TracerDisabledWhen`으로 리다이렉트와 span 기록을 막는다.
-- webhook URL은 https와 Discord 호스트(`discord.com`, `discordapp.com`, `ptb.discord.com`, `canary.discord.com`)와 `/api(/vN)/webhooks/{id}/{token}` 경로만 허용한다. 사용자명·비밀번호가 있으면 거부한다. loopback http는 `allowLoopback`(테스트)일 때만 허용한다.
+- webhook URL은 https와 Discord 호스트(`discord.com`, `discordapp.com`, `ptb.discord.com`, `canary.discord.com`)와 `/api(/vN)/webhooks/{id}/{token}` 경로만 허용한다. 사용자명·비밀번호가 있으면 거부한다.
 - webhook 설정은 레이어 생성 시 한 번만 읽고 브라우저로 보내지 않는다. status에는 webhook id 끝 4자리만 노출한다. Config 읽기 오류는 invalid로 취급한다.
 - Discord 메시지 content는 2000자 제한이다. 리포트 전문은 항상 `context-agent-report.txt` 첨부로, 증거 번들은 `context-agent-evidence.json` 두 번째 첨부로 보낸다. `allowed_mentions: { parse: [] }`로 멘션을 막는다.
 - 같은 텍스트의 전송 시도는 텍스트 SHA-256을 키로 서버 프로세스 메모리에 기억한다(재시작 전까지). 이미 보낸 텍스트는 `duplicate`, 도달 여부가 불확실한 시도는 `uncertain_duplicate`로 돌려준다.
