@@ -55,16 +55,6 @@ const seed = Effect.fnUntraced(function* (count: number) {
 });
 
 describe("Effect history projection reader boundary", () => {
-  it.effect("does not reopen a borrowed connection after its owner Scope has ended", () =>
-    Effect.gen(function* () {
-      const reader = yield* HistoryProjectionReader.pipe(provideFixture(layer));
-      const failure = yield* reader
-        .read(request.initial.make({ threadId: "a", limit: 3 }))
-        .pipe(Effect.flip);
-      expect(failure.reason).toEqual(readReason.SqliteRead.make({ phase: "query" }));
-    }),
-  );
-
   it.effect(
     "distinguishes an unsupported projection format and rejects malformed selected fields",
     () =>

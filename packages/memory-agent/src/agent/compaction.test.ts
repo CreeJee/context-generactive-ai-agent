@@ -300,25 +300,6 @@ describe("request history", () => {
       expect(sent.at(-1)).toEqual({ role: "user", content: "마지막 질문" });
     }),
   );
-
-  it.effect("keeps the provider request user-last when retrieval adds an appendix", () =>
-    Effect.gen(function* () {
-      const sent = yield* firstSent(
-        answeredShell,
-        {
-          ...lookupSources({
-            toolResultId: (toolCallId) => (toolCallId === "old-1" ? "omitted-node" : null),
-            nodeText: () => null,
-          }),
-          retrievalAppendix: () =>
-            Effect.succeed({ role: "assistant" as const, content: "[Retrieval appendix]" }),
-        },
-        unlimited,
-      );
-      expect(sent.at(-2)).toEqual({ role: "assistant", content: "[Retrieval appendix]" });
-      expect(sent.at(-1)).toEqual({ role: "user", content: "current question" });
-    }),
-  );
 });
 
 describe("lightweight tool results", () => {

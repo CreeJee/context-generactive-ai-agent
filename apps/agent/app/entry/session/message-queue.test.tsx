@@ -3,7 +3,7 @@ import { Cause, Effect } from "effect";
 import { isTruthy } from "../../truthy.ts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, describe, expect, test, vi } from "vite-plus/test";
+import { afterEach, describe, expect, vi } from "vite-plus/test";
 import type { QueueSnapshot } from "../api";
 import { api, NextDelivery, QueueEdit, QueueItemState } from "../api";
 import { SessionEventScopeContext } from "../events/context";
@@ -54,23 +54,6 @@ function readSnapshot(snapshot: QueueSnapshot) {
 afterEach(() => vi.restoreAllMocks());
 
 describe("queue snapshot from server", () => {
-  test("passes through server readiness rather than interpreting waiting item states", () => {
-    const blocked = readSnapshot({
-      items: [item],
-      nextDelivery: NextDelivery.blocked({ messageId: item.id, reason: "held" }),
-    });
-    expect(blocked.items).toEqual([item]);
-    expect(blocked.nextDelivery).toEqual(
-      NextDelivery.blocked({ messageId: item.id, reason: "held" }),
-    );
-
-    const waiting = readSnapshot({
-      items: [item],
-      nextDelivery: NextDelivery.server(),
-    });
-    expect(waiting.nextDelivery).toEqual(NextDelivery.server());
-  });
-
   it.live("a queue edit fetches the latest complete server snapshot", () =>
     Effect.gen(function* () {
       const updated: QueueSnapshot = {

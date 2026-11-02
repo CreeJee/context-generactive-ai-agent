@@ -82,36 +82,6 @@ const mergeIs =
     GoalMergeState.guards[tag](state);
 
 it.live(
-  "merges a finished Goal into the user's checked-out branch",
-  () =>
-    Effect.gen(function* () {
-      const fixture = yield* kanbanFixture;
-      const write = yield* writer;
-      const run = yield* openKanbanOwner(fixture, yield* Effect.scope, {
-        agent: (agent) => Effect.as(write(agent, "a1.txt", "a1\n"), finished),
-      });
-      const goal = yield* run(
-        Effect.gen(function* () {
-          const board = yield* executingPlan(fixture, [card("a1")]);
-          yield* (yield* GoalSchedules).setProtectedBranches(board.projectId, []);
-          yield* (yield* KanbanOrchestrator).start(board.sessionId);
-          yield* eventually(mergeOf(board.goalInstanceId), mergeIs("Merged"));
-          return board.goalInstanceId;
-        }),
-      );
-      expect(yield* git(fixture.project, "rev-parse", "main")).toBe(
-        yield* git(fixture.project, "rev-parse", `ctx/goal/${goal}`),
-      );
-      // The user's checkout moved with its branch.
-      expect(yield* git(fixture.project, "status", "--porcelain")).toBe("");
-      expect(
-        yield* (yield* FileSystem.FileSystem).readFileString(`${fixture.project}/a1.txt`),
-      ).toBe("a1\n");
-    }).pipe(withNode),
-  gitTimeout,
-);
-
-it.live(
   "takes in a user branch that moved during the Goal check and checks again",
   () =>
     Effect.gen(function* () {

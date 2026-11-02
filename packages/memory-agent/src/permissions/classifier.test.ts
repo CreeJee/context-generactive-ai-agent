@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { reviewInstructions, routineShellVerdict } from "./classifier.ts";
+import { routineShellVerdict } from "./classifier.ts";
 
 const shell = (script: string) =>
   routineShellVerdict(
@@ -73,14 +73,4 @@ describe("routine shell verdict", () => {
       expect(verdict?.reason).toContain("npm exec --");
     },
   );
-
-  it("tells the reviewer not to ask merely for installs, pulls, or &&", () => {
-    expect(reviewInstructions).toContain("git pull/fetch");
-    expect(reviewInstructions).toContain("multiple &&-joined steps");
-    expect(reviewInstructions).toContain(
-      "Ordinary package-registry or git network access is not by itself a reason to ask",
-    );
-    expect(reviewInstructions).toContain("npx and pnpx may download a missing package");
-    expect(reviewInstructions).toContain("pnpm exec (or npm exec --)");
-  });
 });

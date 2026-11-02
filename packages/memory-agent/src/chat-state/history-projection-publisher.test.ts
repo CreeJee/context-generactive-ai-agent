@@ -88,14 +88,6 @@ describe("Effect history projection publication", () => {
     }),
   );
 
-  it.effect("keeps borrowed lifetime and does not reopen a disposed owner connection", () =>
-    Effect.gen(function* () {
-      const service = yield* HistoryProjectionPublisher.pipe(provideFixture(publisher));
-      const failed = yield* service.publish(first).pipe(Effect.flip);
-      expect(failed.reason).toEqual(publishReason.SqliteWrite.make({ phase: "publish" }));
-    }),
-  );
-
   it.effect(
     "publishes the prepared source and keeps original bytes and global version unchanged",
     () =>

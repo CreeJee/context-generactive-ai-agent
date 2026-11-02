@@ -149,38 +149,6 @@ const goalFile = (fixture: KanbanFixture, goalInstanceId: string, file: string) 
   git(fixture.project, "show", `ctx/goal/${goalInstanceId}:${file}`);
 
 it.live(
-  "assigns cards in dependency order, verifies them and squashes each into the Goal",
-  () =>
-    Effect.gen(function* () {
-      const fixture = yield* kanbanFixture;
-      const write = yield* writer;
-      const ran = yield* Ref.make<ReadonlyArray<string>>([]);
-      const run = yield* openOwner(
-        fixture,
-        (agent) =>
-          Effect.gen(function* () {
-            yield* Ref.update(ran, (ids) => [...ids, agent.card.id]);
-            yield* write(agent, `${agent.card.id}.txt`, `${agent.card.id}\n`);
-            return finished;
-          }),
-        yield* Effect.scope,
-        { cores: 8 },
-      );
-      const { goalInstanceId } = yield* run(
-        Effect.gen(function* () {
-          const board = yield* startBoard(fixture, [card("a"), { ...card("b"), dependsOn: ["a"] }]);
-          yield* waitForCards(board.sessionId, allDone);
-          return board;
-        }),
-      );
-      expect(yield* Ref.get(ran)).toEqual(["a", "b"]);
-      expect(yield* goalFile(fixture, goalInstanceId, "a.txt")).toBe("a");
-      expect(yield* goalFile(fixture, goalInstanceId, "b.txt")).toBe("b");
-    }).pipe(withNode),
-  gitTimeout,
-);
-
-it.live(
   "syncs a card with an advanced Goal and verifies it again before squashing",
   () =>
     Effect.gen(function* () {

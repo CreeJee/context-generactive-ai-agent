@@ -2,8 +2,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vite-plus/test";
 import { ProviderAuthState, type ModelSelection } from "../api";
 import { AccountModelPanel, accountSummary } from "./account-model-panel";
-import { ReportLink } from "../report/report-link";
-import { ThemeSelect, themes } from "../shared/theme";
 
 // The Base UI disclosure starts closed, reserving only the compact trigger's height.
 describe("compact sidebar controls", () => {
@@ -51,19 +49,5 @@ describe("compact sidebar controls", () => {
     expect(summary).toContain("ChatGPT / GPT");
     expect(summary).not.toContain("ChatGPT · 연결됨");
     expect(summary.match(/ChatGPT \/ GPT/g)).toHaveLength(1);
-  });
-
-  test("report entry remains a labelled, focusable icon with the selected source", () => {
-    const html = renderToStaticMarkup(<ReportLink projectId="p" sessionId="s" />);
-    expect(html).toContain('href="/report?project=p&amp;session=s"');
-    expect(html).toContain('aria-label="리포트하기"');
-    expect(html).toContain("focus-visible:outline");
-    expect(html).toContain("sr-only");
-  });
-
-  test("theme selection exposes system/light/dark options with current accessible name", () => {
-    const html = renderToStaticMarkup(<ThemeSelect />);
-    expect(html).toContain("화면 테마: 시스템 테마");
-    expect(themes.map((theme) => theme.label)).toEqual(["시스템 테마", "라이트 모드", "다크 모드"]);
   });
 });

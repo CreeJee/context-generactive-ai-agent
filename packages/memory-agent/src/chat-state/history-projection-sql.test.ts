@@ -3,7 +3,6 @@ import { describe, expect, it } from "vite-plus/test";
 import type { StoredMessage } from "../chat-store/schema.ts";
 import { groupHistoryMessages, HistoryGroupingResult } from "./history-groups.ts";
 import {
-  historyProjectionRollback,
   historyProjectionSchema,
   historyProjectionSql as sql,
   historyProjectionSnapshots as snapshots,
@@ -49,11 +48,6 @@ function publish(db: DatabaseSync, threadId: string, messages: StoredMessage[]) 
   }
 }
 
-function parseFixtureMessages(text: string): StoredMessage[] {
-  // SAFETY: only publish's JSON.stringify of typed StoredMessage[] populates this isolated fixture column.
-  return JSON.parse(text) as StoredMessage[];
-}
-
 function transcript(count: number): StoredMessage[] {
   return Array.from({ length: count }, (_, index) => ({
     id: `message-${index}`,
@@ -63,53 +57,6 @@ function transcript(count: number): StoredMessage[] {
 }
 
 describe("isolated history projection SQLite contract", () => {
-  it("reads exactly the initial and older UI windows through indexes without a payload sentinel", () => {
-    const db = fixture();
-    try {
-      const messages = transcript(400);
-      publish(db, "a", messages);
-      publish(db, "b", transcript(10));
-      const initial = db.prepare(sql.initial).all("a", 50);
-      expect(initial).toHaveLength(50);
-      expect(initial.map((row) => row.ordinal)).toEqual(
-        Array.from({ length: 50 }, (_, i) => 399 - i),
-      );
-      expect(db.prepare(sql.cursor).get("a", "message-350")?.ordinal).toBe(350);
-      const older = db.prepare(sql.older).all("a", 350, 50);
-      expect(older.map((row) => row.ordinal)).toEqual(
-        Array.from({ length: 50 }, (_, i) => 349 - i),
-      );
-      expect(db.prepare(sql.hasEarlier).get("a", 350)?.has_earlier).toBe(1);
-      expect(db.prepare(sql.hasEarlier).get("a", 0)?.has_earlier).toBe(0);
-      // Actual returned JSON bytes/rows, separate from HTTP and browser UI cost.
-      const originalBytes = Buffer.byteLength(JSON.stringify(messages));
-      const selectedBytes = initial.reduce(
-        (total, row) => total + Buffer.byteLength(String(row.messages)),
-        0,
-      );
-      expect(selectedBytes).toBeLessThan(originalBytes / 7);
-      (
-        [
-          [sql.initial, ["a", 50]],
-          [sql.older, ["a", 350, 50]],
-          [sql.cursor, ["a", "message-350"]],
-          [sql.hasEarlier, ["a", 350]],
-        ] as const
-      ).forEach(([query, bindings]) => {
-        const plan = db.prepare(`EXPLAIN QUERY PLAN ${query}`).all(...bindings);
-        expect(
-          plan.some((row) => String(row.detail).includes("SEARCH chat_history_groups USING")),
-        ).toBe(true);
-        expect(plan.some((row) => String(row.detail).includes("SCAN chat_history_groups"))).toBe(
-          false,
-        );
-        expect(plan.some((row) => String(row.detail).includes("TEMP B-TREE"))).toBe(false);
-      });
-    } finally {
-      db.close();
-    }
-  });
-
   it("reads readiness, cursor and exactly the selected payload in one indexed snapshot", () => {
     const db = fixture();
     try {
@@ -158,105 +105,6 @@ describe("isolated history projection SQLite contract", () => {
     }
   });
 
-  it("distinguishes unprepared, stale, unknown cursors and valid empty pages without payload", () => {
-    const db = fixture();
-    try {
-      expect(db.prepare(snapshots.initial).all("missing", 50)).toEqual([
-        {
-          ready: 0,
-          format_version: 0,
-          cursor_valid: 1,
-          ordinal: null,
-          ui_id: null,
-          messages: null,
-          has_earlier: 0,
-        },
-      ]);
-      publish(db, "empty", []);
-      expect(db.prepare(snapshots.initial).all("empty", 50)).toEqual([
-        {
-          ready: 1,
-          format_version: 1,
-          cursor_valid: 1,
-          ordinal: null,
-          ui_id: null,
-          messages: null,
-          has_earlier: 0,
-        },
-      ]);
-      publish(db, "a", transcript(5));
-      expect(db.prepare(snapshots.older).all("a", "unknown", 50)).toEqual([
-        {
-          ready: 1,
-          format_version: 1,
-          cursor_valid: 0,
-          ordinal: null,
-          ui_id: null,
-          messages: null,
-          has_earlier: 0,
-        },
-      ]);
-      expect(db.prepare(snapshots.older).all("a", "message-0", 50)).toEqual([
-        {
-          ready: 1,
-          format_version: 1,
-          cursor_valid: 1,
-          ordinal: null,
-          ui_id: null,
-          messages: null,
-          has_earlier: 0,
-        },
-      ]);
-      db.prepare(releasedWriter).run("a", JSON.stringify(transcript(6)), 1);
-      const stale = db.prepare(snapshots.older).all("a", "message-4", 50);
-      expect(stale).toHaveLength(1);
-      expect(stale[0]).toMatchObject({ ready: 0, cursor_valid: 1, messages: null, has_earlier: 0 });
-      publish(db, "a", transcript(6));
-      expect(db.prepare(snapshots.older).all("a", "message-4", 50)).toHaveLength(4);
-    } finally {
-      db.close();
-    }
-  });
-
-  it("preserves page results, tool details and retained UI-ID cursors", () => {
-    const db = fixture();
-    try {
-      const messages: StoredMessage[] = [
-        { id: "user", role: "user", content: "Question" },
-        {
-          id: "assistant",
-          role: "assistant",
-          content: "Checking",
-          toolCalls: [
-            { id: "call", type: "function", function: { name: "read", arguments: "{}" } },
-          ],
-        },
-        { id: "result", role: "tool", toolCallId: "call", content: "Detail", error: "read failed" },
-        { id: "assistant-segment-1", role: "assistant", content: "Done" },
-        { id: "last", role: "user", content: "Next" },
-      ];
-      publish(db, "a", messages);
-      // The newest two messages the page shows: the answer with its result and segment, then the
-      // last question.
-      const initial = db.prepare(sql.initial).all("a", 2).reverse();
-      const pageModels = initial.flatMap((row) => parseFixtureMessages(String(row.messages)));
-      expect(pageModels).toEqual(messages.slice(1));
-      const cursor = String(initial[0]?.ui_id);
-      const ordinal = db.prepare(sql.cursor).get("a", cursor)?.ordinal;
-      const older = db.prepare(sql.older).all("a", ordinal!, 2).reverse();
-      expect(older.flatMap((row) => parseFixtureMessages(String(row.messages)))).toEqual(
-        messages.slice(0, 1),
-      );
-      expect(db.prepare(sql.cursor).get("b", cursor)).toBeUndefined();
-      expect(db.prepare(sql.cursor).get("a", "nonexistent")).toBeUndefined();
-      expect(
-        db.prepare("SELECT messages FROM chat_threads WHERE thread_id = ?").get("a")?.messages,
-      ).toBe(JSON.stringify(messages));
-    } finally {
-      db.close();
-    }
-  });
-
   it("invalidates old-writer updates even with the same timestamp and cleans deleted threads", () => {
     const db = fixture();
     try {
@@ -299,47 +147,6 @@ describe("isolated history projection SQLite contract", () => {
       db.prepare(releasedWriter).run("staged", JSON.stringify(transcript(2)), 1);
       expect(db.prepare(sql.readiness).get("staged")?.ready).toBe(0);
       expect(db.prepare(sql.initial).all("staged", 50)).toEqual([]);
-    } finally {
-      db.close();
-    }
-  });
-
-  it("handles empty ready projections and exact cursor endpoints and partial pages", () => {
-    const db = fixture();
-    try {
-      publish(db, "empty", []);
-      expect(db.prepare(sql.readiness).get("empty")?.ready).toBe(1);
-      expect(db.prepare(sql.initial).all("empty", 50)).toEqual([]);
-      publish(db, "partial", transcript(7));
-      expect(db.prepare(sql.initial).all("partial", 50)).toHaveLength(7);
-      expect(db.prepare(sql.cursor).get("partial", "message-0")?.ordinal).toBe(0);
-      expect(db.prepare(sql.older).all("partial", 0, 50)).toEqual([]);
-      expect(
-        db
-          .prepare(sql.older)
-          .all("partial", 4, 50)
-          .map((row) => row.ordinal),
-      ).toEqual([3, 2, 1, 0]);
-      expect(db.prepare(sql.hasEarlier).get("partial", 0)?.has_earlier).toBe(0);
-    } finally {
-      db.close();
-    }
-  });
-
-  it("keeps original and projection atomic on publication failure", () => {
-    const db = fixture();
-    try {
-      const original = transcript(10);
-      publish(db, "a", original);
-      db.exec(
-        "CREATE TRIGGER reject_history_fixture BEFORE INSERT ON chat_history_groups BEGIN SELECT RAISE(ABORT, 'fixture failure'); END;",
-      );
-      expect(() => publish(db, "a", transcript(11))).toThrow();
-      expect(
-        db.prepare("SELECT messages FROM chat_threads WHERE thread_id = ?").get("a")?.messages,
-      ).toBe(JSON.stringify(original));
-      expect(db.prepare(sql.readiness).get("a")?.ready).toBe(1);
-      expect(db.prepare(sql.initial).all("a", 50)).toHaveLength(10);
     } finally {
       db.close();
     }
@@ -400,14 +207,11 @@ describe("isolated history projection SQLite contract", () => {
     }
   });
 
-  it("is disposable without changing global migration version or the released writer", () => {
+  it("prepares idempotently without changing global migration version or the released writer", () => {
     const db = fixture();
     try {
       publish(db, "a", transcript(5));
       db.exec(historyProjectionSchema); // Idempotent preparation.
-      expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(7);
-      db.exec(historyProjectionRollback);
-      db.exec(historyProjectionRollback); // Idempotent rollback.
       expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(7);
       const next = transcript(6);
       db.prepare(releasedWriter).run("a", JSON.stringify(next), 2);

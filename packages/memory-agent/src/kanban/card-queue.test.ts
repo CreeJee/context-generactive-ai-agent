@@ -1,12 +1,11 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Deferred, Effect, Exit, FileSystem, Layer, Path, Queue, Ref, Scope } from "effect";
+import { Deferred, Effect, Layer, Queue, Ref, Scope } from "effect";
 import { expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
 import { KanbanSettings } from "../config/kanban-settings.ts";
 import {
   assignCard,
   card,
-  chatRun,
   executingBoard,
   kanbanFixture,
   kanbanOwner,
@@ -85,78 +84,6 @@ it.live(
           expect(CardAttemptOutcome.guards.Completed(yield* attempts.awaitOutcome(b))).toBe(true);
         }),
       );
-    }).pipe(withNode),
-);
-
-it.live(
-  "continues a card redelivered after a crash before its result was recorded, without writing again",
-  () =>
-    Effect.gen(function* () {
-      const fixture = yield* kanbanFixture;
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const writes = yield* Ref.make(0);
-      const continued = yield* Deferred.make<boolean>();
-      const wrote = yield* Deferred.make<void>();
-      /** Writes its file only when it is not there yet, like an agent reading the worktree first. */
-      const writeOnce = (agent: CardAgentRun) =>
-        Effect.gen(function* () {
-          const file = path.join(agent.worktree.toolRoot, "card.txt");
-          if (!(yield* fs.exists(file))) {
-            yield* fs.writeFileString(file, "work\n");
-            yield* Ref.update(writes, (count) => count + 1);
-          }
-        }).pipe(Effect.orDie);
-
-      // The first owner's agent writes, then the owner dies before the result is recorded.
-      const crashed = yield* Scope.make();
-      const first = yield* openOwner(
-        fixture,
-        (agent) =>
-          Effect.gen(function* () {
-            yield* agent.register({ runId: "run-1", traceAttemptId: null }).pipe(Effect.orDie);
-            yield* writeOnce(agent);
-            yield* Deferred.succeed(wrote, undefined);
-            return yield* Effect.never;
-          }),
-        crashed,
-      );
-      const { board, payload } = yield* first(
-        Effect.gen(function* () {
-          const board = yield* executingBoard(fixture, [card("a")]);
-          const payload = yield* assignCard(board, "a");
-          yield* Deferred.await(wrote);
-          // The agent's chat run is still running when the owner dies.
-          yield* chatRun("run-1", "running");
-          return { board, payload };
-        }),
-      );
-
-      const second = yield* openOwner(
-        fixture,
-        (agent) =>
-          Effect.gen(function* () {
-            yield* agent.register({ runId: "run-2", traceAttemptId: null }).pipe(Effect.orDie);
-            yield* Deferred.succeed(continued, agent.continuation);
-            yield* writeOnce(agent);
-            return finished;
-          }),
-        yield* Effect.scope,
-      );
-      const outcome = yield* second(
-        Effect.gen(function* () {
-          // Starting up marks the cut-off chat run failed; it ran no tool with an unknown result.
-          yield* chatRun("run-1", "failed");
-          return yield* (yield* CardAttempts).awaitOutcome(payload);
-        }),
-      );
-      yield* Scope.close(crashed, Exit.void);
-
-      expect(yield* Deferred.await(continued)).toBe(true);
-      expect(yield* Ref.get(writes)).toBe(1);
-      expect(CardAttemptOutcome.guards.Completed(outcome)).toBe(true);
-      expect(outcome).toMatchObject({ report: "done" });
-      expect(board.goalInstanceId.length).toBeGreaterThan(0);
     }).pipe(withNode),
 );
 

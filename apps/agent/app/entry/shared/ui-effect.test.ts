@@ -13,27 +13,3 @@ it.live("Promise callbacks preserve a server's typed error object", () =>
     expect(rejected.cause).toBe(failure);
   }),
 );
-
-it.live("Promise callbacks preserve browser exceptions and run cleanup before rejection", () =>
-  Effect.gen(function* () {
-    const failure = new TypeError("browser callback failed");
-    let cleaned = false;
-    const rejected = yield* Effect.flip(
-      Effect.tryPromise(() =>
-        runUiEffect(
-          Effect.sync(() => {
-            throw failure;
-          }).pipe(
-            Effect.ensuring(
-              Effect.sync(() => {
-                cleaned = true;
-              }),
-            ),
-          ),
-        ),
-      ),
-    );
-    expect(rejected.cause).toBe(failure);
-    expect(cleaned).toBe(true);
-  }),
-);

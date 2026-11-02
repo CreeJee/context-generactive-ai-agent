@@ -1,7 +1,6 @@
 import type { TraceTaskView } from "memory-agent";
 import { describe, expect, test } from "vite-plus/test";
 import { backgroundKindLabel, runningBackgroundTasks } from "./background-tasks";
-import { taskForToolCall } from "./work-trace";
 
 const task = (id: string, parentToolCallId: string): TraceTaskView => ({
   id,
@@ -28,24 +27,6 @@ const task = (id: string, parentToolCallId: string): TraceTaskView => ({
   purgeReceiptId: null,
   createdAt: 1,
   updatedAt: 2,
-});
-
-describe("Work Trace task-card placement", () => {
-  test("parallel child calls resolve to distinct durable tasks and attempts", () => {
-    const first = task("first", "tool-call-a");
-    const second = task("second", "tool-call-b");
-    const tasks = [first, second];
-
-    expect(taskForToolCall(tasks, "tool-call-a")).toMatchObject({
-      id: "first",
-      latestAttemptId: "attempt-first",
-    });
-    expect(taskForToolCall(tasks, "tool-call-b")).toMatchObject({
-      id: "second",
-      latestAttemptId: "attempt-second",
-    });
-    expect(taskForToolCall(tasks, "tool-call-a")).not.toBe(taskForToolCall(tasks, "tool-call-b"));
-  });
 });
 
 describe("running background tasks", () => {

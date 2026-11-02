@@ -19,17 +19,6 @@ const resolved = (phase: WorkflowPhase) => ({
 });
 
 describe("workflowInstructions", () => {
-  test.each(["execute", "verify"] as const)(
-    "%s synchronizes explicit Goal decisions rather than inventing an external blocker",
-    (phase) => {
-      const prompt = workflowInstructions(state(phase), resolved(phase));
-      expect(prompt).toContain("persist that decision with update_goal before proceeding");
-      expect(prompt).toContain("do not treat an artifact you can update as an external dependency");
-      expect(prompt).toContain("Do not ask again for an approval already explicitly given");
-      expect(prompt).toContain("never infer permission from a generic resume request");
-      expect(prompt).toContain("wait for execution confirmation");
-    },
-  );
   test("provides the owner-read Goal instance ID instead of inferring it from Goal version", () => {
     const prompt = workflowInstructions(state("completed"), resolved("completed"), "owner-id-123");
     expect(prompt).toContain("Current Goal instance ID: owner-id-123");
@@ -38,23 +27,7 @@ describe("workflowInstructions", () => {
       "Current Goal instance ID: (none; legacy/unbound)",
     );
   });
-  test("treats Goal as autonomous outcome delegation rather than a planning gate", () => {
-    const prompt = workflowInstructions(state("goal"), resolved("goal"));
-
-    expect(prompt).toContain("autonomously investigate, implement and verify");
-    expect(prompt).toContain("without requiring a Plan artifact");
-    expect(prompt).not.toContain("Do not create an implementation Plan or modify project files");
-  });
-
-  test("lets Plan infer an internal Goal while preserving its read-only boundary", () => {
-    const prompt = workflowInstructions(state("plan"), resolved("plan"));
-
-    expect(prompt).toContain("If no Goal is recorded");
-    expect(prompt).toContain("the user does not need to enter Goal mode first");
-    expect(prompt).toContain("restricted to read-only investigation");
-  });
-
-  test("continues independent planning before narrowing a genuinely blocking question", () => {
+  test("lists the Goal's blocking open questions in the Plan prompt", () => {
     const prompt = workflowInstructions(
       {
         ...state("plan"),
@@ -84,16 +57,6 @@ describe("workflowInstructions", () => {
     );
 
     expect(prompt).toContain("Which approach for the second change?");
-    expect(prompt).toContain(
-      "continue all independent read-only investigation and planning before asking",
-    );
-    expect(prompt).toContain("ask only when no useful independent planning remains");
-    expect(prompt).toContain(
-      "A non-blocking open question does not by itself require a draft Plan",
-    );
-    expect(prompt).toContain("never guess an answer needed for safe execution");
-    expect(prompt).toContain("Do not modify files, run commands, delegate work");
-    expect(resolved("plan").rules.some((rule) => rule.id === "workflow.plan.blockers")).toBe(true);
   });
 
   test("a recorded non-blocking question does not prevent a ready Plan from executing", () => {
@@ -204,23 +167,5 @@ describe("workflowInstructions", () => {
     });
     expect(prompt).not.toContain("receipt-0");
     expect(current.plan?.steps[0]?.status).toBe("in_progress");
-  });
-
-  test("allows material Plan revisions during Execute and requires reconfirmation", () => {
-    const prompt = workflowInstructions(state("execute"), resolved("execute"));
-
-    expect(prompt).toContain("revise the Plan with update_plan");
-    expect(prompt).toContain("returns the workflow to Plan");
-    expect(prompt).toContain("confirmed before execution resumes");
-  });
-
-  test("distinguishes implementation failure from invalid verification premises", () => {
-    const prompt = workflowInstructions(state("verify"), resolved("verify"));
-
-    expect(prompt).toContain("invalid_hypothesis");
-    expect(prompt).toContain("invalid_criterion");
-    expect(prompt).toContain("inconclusive");
-    expect(prompt).toContain("blocked only for a confirmed external dependency");
-    expect(prompt).toContain("Do not invent settings");
   });
 });

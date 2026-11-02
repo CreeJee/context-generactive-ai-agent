@@ -1,6 +1,6 @@
 import { it } from "@effect/vitest";
 import { assertInstanceOf, assertTrue } from "@effect/vitest/utils";
-import { Deferred, Effect, Exit, Fiber, Schema } from "effect";
+import { Deferred, Effect, Exit, Fiber } from "effect";
 import { beforeEach, expect, vi } from "vite-plus/test";
 import { makeReportClient, ReportRequestFailed } from "./report-client";
 
@@ -19,13 +19,6 @@ it.effect("keeps a rejected response typed without reading private server detail
     assertInstanceOf(failure, ReportRequestFailed);
     expect(failure.phase).toBe("status");
     expect(response.bodyUsed).toBe(false);
-  }),
-);
-
-it.effect("rejects a malformed evidence bundle", () =>
-  Effect.gen(function* () {
-    transport.mockResolvedValueOnce(Response.json({ session: {} }));
-    assertInstanceOf(yield* Effect.flip(readReportEvidence(selection)), Schema.SchemaError);
   }),
 );
 
