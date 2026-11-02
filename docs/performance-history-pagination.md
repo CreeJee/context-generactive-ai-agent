@@ -2,6 +2,8 @@
 
 Status: storage pagination and reduced first delivery are implemented and verified across actual SDK, released-source opener/rollback, live HTTP, and cold-scale fixtures. Storage processing, response/transmission and UI costs are measured separately. Remaining general API/write blocking and independent UI-cost work belong to their later Plan steps; do not interpret the results below as completing those steps. The sections below record earlier baselines and incremental implementation; this update supersedes their older “not connected” status.
 
+Removed 2026-11-03: `HistoryProjectionPublisher`, the projection-only rollback SQL (`historyProjectionRollback`), the standalone `historyProjectionSql` reads (`readiness`, `cursor`, `initial`, `older`, `hasEarlier`) and writes (`removeGroups`, `insertGroup`, `publish`), and the fractional-ordinal repair (`removeInvalidOrdinals`). None had a production caller, and every released writer since 0.0.14 stores integer ordinals. Pages are read through `historyProjectionSnapshots` and prepared by `history-projection-native.ts`; the sections below that describe the removed pieces are history.
+
 ## Production connection update (2026-10-07)
 
 - `ChatState` now constructs `ownedSqliteChatPersistence` on its existing `Database` owner. Hinted loads use the indexed projection snapshot and return SDK `MessagePage`; unhinted/model-context loads still return the complete authoritative original. The raw-SQLite factory remains for the existing standalone interop contract, not the production hydration path.

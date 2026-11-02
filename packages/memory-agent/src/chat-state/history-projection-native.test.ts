@@ -227,44 +227,6 @@ it.effect("writes only changed derived groups rather than rewriting the unchange
   }).pipe(fixture),
 );
 
-it.effect(
-  "repairs fractional disposable ordinals without rejecting saves or startup preparation",
-  () =>
-    Effect.gen(function* () {
-      const store = yield* RunStore;
-      const original: StoredMessage[] = [
-        { id: "first", role: "user", content: "One" },
-        { id: "second", role: "user", content: "Two" },
-      ];
-      yield* store.saveThread("a", original);
-      yield* sqlRun(
-        "UPDATE chat_history_groups SET ordinal=0.5 WHERE thread_id=? AND ordinal=0",
-        "a",
-      );
-      const updated: StoredMessage[] = [
-        ...original,
-        { id: "third", role: "assistant", content: "Appended" },
-      ];
-      yield* store.saveThread("a", updated);
-      expect(yield* store.thread("a")).toEqual(updated);
-      const ids = { ids: ["first", "second", "third"], older: null };
-      expect(yield* page("a", 20)).toEqual(ids);
-      yield* sqlRun(
-        "UPDATE chat_history_groups SET ordinal=0.5 WHERE thread_id=? AND ordinal=0",
-        "a",
-      );
-      yield* sqlRun("UPDATE chat_threads SET messages=messages WHERE thread_id=?", "a");
-      yield* restart;
-      expect(yield* page("a", 20)).toEqual(ids);
-      expect(
-        yield* sqlAll(
-          "SELECT ordinal FROM chat_history_groups WHERE thread_id=? ORDER BY ordinal",
-          "a",
-        ),
-      ).toEqual([{ ordinal: 0 }, { ordinal: 1 }, { ordinal: 2 }]);
-    }).pipe(fixture),
-);
-
 it.effect("handles moved UI IDs without unique-index collisions or stale tail rows", () =>
   Effect.gen(function* () {
     const store = yield* RunStore;

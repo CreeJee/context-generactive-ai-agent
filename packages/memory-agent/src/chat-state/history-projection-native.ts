@@ -34,12 +34,6 @@ export interface HistorySnapshot {
 export const historyProjection = Effect.fn("HistoryProjection.make")(function* () {
   const client = yield* SqlClient.SqlClient;
   yield* client.withTransaction(client.unsafe(historyProjectionSchema).unprepared);
-  // Before the ordinal repair, only the retained IDs are read: a fractional ordinal is still there.
-  const retainedIds = SqlSchema.findAll({
-    Request: Schema.String,
-    Result: Schema.Struct({ ui_id: Schema.String }),
-    execute: (threadId) => client.unsafe(sql.groupIdentities, [threadId]),
-  });
   const identities = SqlSchema.findAll({
     Request: Schema.String,
     Result: Identity,
@@ -72,7 +66,7 @@ export const historyProjection = Effect.fn("HistoryProjection.make")(function* (
       (yield* decodeStored(snapshot.sourceJSON).pipe(
         Effect.mapError(() => HistoryPageUnavailable.make({ reason: "invalid-transcript" })),
       ));
-    const retained = yield* retainedIds(snapshot.threadId);
+    const retained = yield* identities(snapshot.threadId);
     const normalized = historyProjectionMessages(
       snapshot.threadId,
       stored,
@@ -95,9 +89,6 @@ export const historyProjection = Effect.fn("HistoryProjection.make")(function* (
         const groups = yield* prepared(snapshot);
         const { threadId } = snapshot;
         yield* client.unsafe(sql.markUnready, [threadId]);
-        // Disposable non-STRICT SQLite rows can contain fractional ordinals.
-        // Repair them before decoding metadata, and discard out-of-window values.
-        yield* client.unsafe(sql.removeInvalidOrdinals, [threadId]);
         yield* client.unsafe(sql.removeTail, [threadId, groups.length]);
         const existing = yield* identities(threadId);
         // Delete only changed identities before upserting, so moved/swapped IDs

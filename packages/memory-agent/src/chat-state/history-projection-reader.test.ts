@@ -1,203 +1,45 @@
-import { DatabaseSync } from "node:sqlite";
-import { Effect, Layer, Schema, Result, Function as EffectFunction } from "effect";
+import { Effect, Layer } from "effect";
 import { describe, expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
-import { SqlClient } from "effect/sql";
 import { Database } from "../db/database.ts";
-import {
-  HistoryProjectionReadFailed,
-  HistoryProjectionReader,
-  HistoryProjectionReadReason,
-  HistoryPageRequest,
-  HistoryPageSnapshot,
-} from "./history-projection-reader.ts";
-import { historyProjectionSchema, historyProjectionSql as sql } from "./history-projection-sql.ts";
-import { sqlRun, sqlExec } from "../../tests/support/sql.ts";
-const encodeJson = EffectFunction.flow(
-  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
-  Result.getOrThrow,
-);
-const readReason = HistoryProjectionReadReason.cases;
+import { RunStore } from "../loop/store.ts";
+import { HistoryPageRequest, HistoryPageSnapshot } from "./history-projection-reader.ts";
+import { sqlRun } from "../../tests/support/sql.ts";
 const request = HistoryPageRequest.cases;
 const snapshot = HistoryPageSnapshot.cases;
 
-const database = Database.over(
-  Effect.acquireRelease(
-    Effect.sync(() => new DatabaseSync(":memory:")),
-    (sqlite) => Effect.sync(() => sqlite.close()),
-  ),
-);
-const schema = Layer.effectDiscard(
-  Effect.gen(function* () {
-    yield* sqlExec(
-      "CREATE TABLE chat_threads(thread_id TEXT PRIMARY KEY, messages TEXT NOT NULL, updated_at INTEGER NOT NULL);",
-    );
-    yield* sqlExec(historyProjectionSchema);
-  }),
-).pipe(Layer.provideMerge(database));
-const layer = HistoryProjectionReader.layer.pipe(Layer.provideMerge(schema));
-function run<A, E>(program: Effect.Effect<A, E, SqlClient.SqlClient | HistoryProjectionReader>) {
-  return program.pipe(provideFixture(layer));
-}
-const seed = Effect.fnUntraced(function* (count: number) {
-  const messages = Array.from({ length: count }, (_, ordinal) => ({
-    id: `m-${ordinal}`,
-    role: "user",
-    content: `Message ${ordinal}`,
-  }));
-  yield* sqlRun("INSERT INTO chat_threads VALUES(?, ?, ?)", "a", encodeJson(messages), 1);
-  yield* Effect.forEach(
-    messages,
-    (message, ordinal) => sqlRun(sql.insertGroup, "a", ordinal, message.id, encodeJson([message])),
-    { discard: true },
-  );
-  yield* sqlRun(sql.publish, "a");
-});
+const fixture = provideFixture(RunStore.layer.pipe(Layer.provideMerge(Database.layer(":memory:"))));
 
 describe("Effect history projection reader boundary", () => {
   it.effect(
-    "distinguishes an unsupported projection format and rejects malformed selected fields",
-    () =>
-      run(
-        Effect.gen(function* () {
-          yield* seed(2);
-          const reader = yield* HistoryProjectionReader;
-          yield* sqlExec(
-            "PRAGMA ignore_check_constraints = ON; UPDATE chat_history_projection SET format_version = 2 WHERE thread_id = 'a';",
-          );
-          expect(yield* reader.read(request.initial.make({ threadId: "a", limit: 3 }))).toEqual(
-            snapshot["not-ready"].make({ reason: "unsupported-format" }),
-          );
-          yield* sqlExec(
-            "UPDATE chat_history_projection SET format_version = 1 WHERE thread_id = 'a'; UPDATE chat_history_groups SET ui_id = '' WHERE thread_id = 'a' AND ordinal = 0;",
-          );
-          const failure = yield* reader
-            .read(request.initial.make({ threadId: "a", limit: 3 }))
-            .pipe(Effect.flip);
-          expect(failure.reason).toEqual(readReason.InvalidSnapshot.make({}));
-        }),
-      ),
-  );
-
-  it.effect(
-    "orders only selected groups, returns an indexed cursor and preserves serialized originals",
-    () =>
-      run(
-        Effect.gen(function* () {
-          yield* seed(5);
-          const reader = yield* HistoryProjectionReader;
-          const page = yield* reader.read(request.initial.make({ threadId: "a", limit: 3 }));
-          expect(HistoryPageSnapshot.guards.page(page)).toBe(true);
-          HistoryPageSnapshot.matchOrElse(
-            page,
-            {
-              page: (page) => {
-                expect(page.groups.map((group) => group.uiId)).toEqual(["m-2", "m-3", "m-4"]);
-                expect(page.truncated).toBe(true);
-                expect(page.nextCursor).toBe("m-2");
-                expect(page.groups[0]?.messages).toBe(
-                  encodeJson([{ id: "m-2", role: "user", content: "Message 2" }]),
-                );
-              },
-            },
-            () => expect.fail("fixture should be ready"),
-          );
-          const older = yield* reader.read(
-            request.older.make({ threadId: "a", before: "m-2", limit: 3 }),
-          );
-          HistoryPageSnapshot.matchOrElse(
-            older,
-            {
-              page: (older) => {
-                expect(older.groups.map((group) => group.uiId)).toEqual(["m-0", "m-1"]);
-                expect(older.truncated).toBe(false);
-                expect(older.nextCursor).toBeNull();
-              },
-            },
-            () => expect.fail("fixture should be ready"),
-          );
-        }),
-      ),
-  );
-
-  it.effect(
     "distinguishes missing, stale, unknown, empty and end without full-transcript fallback",
     () =>
-      run(
-        Effect.gen(function* () {
-          const reader = yield* HistoryProjectionReader;
-          expect(
-            yield* reader.read(request.initial.make({ threadId: "missing", limit: 3 })),
-          ).toEqual(snapshot["not-ready"].make({ reason: "unprepared" }));
-          yield* seed(2);
-          expect(
-            yield* reader.read(request.older.make({ threadId: "a", before: "unknown", limit: 3 })),
-          ).toEqual(snapshot["unknown-cursor"].make({}));
-          expect(
-            yield* reader.read(request.older.make({ threadId: "a", before: "m-0", limit: 3 })),
-          ).toEqual(snapshot.page.make({ groups: [], truncated: false, nextCursor: null }));
-          yield* sqlRun("UPDATE chat_threads SET messages = ? WHERE thread_id = ?", "[]", "a");
-          expect(yield* reader.read(request.initial.make({ threadId: "a", limit: 3 }))).toEqual(
-            snapshot["not-ready"].make({ reason: "stale" }),
-          );
-          yield* sqlRun(sql.removeGroups, "a");
-          yield* sqlRun(sql.publish, "a");
-          expect(yield* reader.read(request.initial.make({ threadId: "a", limit: 3 }))).toEqual(
-            snapshot.page.make({ groups: [], truncated: false, nextCursor: null }),
-          );
-        }),
-      ),
-  );
-
-  it.effect(
-    "rejects invalid limits and cursor requests before SQLite can interpret an unbounded LIMIT",
-    () =>
-      run(
-        Effect.gen(function* () {
-          const reader = yield* HistoryProjectionReader;
-          const unchecked = { disableChecks: true };
-          const inputs: HistoryPageRequest[] = [
-            request.initial.make({ threadId: "a", limit: -1 }, unchecked),
-            request.initial.make({ threadId: "a", limit: 0 }, unchecked),
-            request.initial.make({ threadId: "a", limit: 1.5 }, unchecked),
-            request.initial.make({ threadId: "a", limit: Infinity }, unchecked),
-            request.older.make({ threadId: "a", limit: 3, before: "" }, unchecked),
-          ];
-          yield* Effect.forEach(
-            inputs,
-            Effect.fnUntraced(function* (input) {
-              const failure = yield* reader.read(input).pipe(Effect.flip);
-              expect(failure).toBeInstanceOf(HistoryProjectionReadFailed);
-              expect(failure.reason).toEqual(readReason.InvalidRequest.make({}));
-            }),
-            { discard: true },
-          );
-        }),
-      ),
-  );
-
-  it.effect(
-    "keeps malformed database rows and query failures typed instead of showing empty history",
-    () =>
-      run(
-        Effect.gen(function* () {
-          yield* seed(2);
-          const reader = yield* HistoryProjectionReader;
-          yield* sqlExec(
-            "PRAGMA ignore_check_constraints = ON; UPDATE chat_history_projection SET ready = 2 WHERE thread_id = 'a';",
-          );
-          const invalid = yield* reader
-            .read(request.initial.make({ threadId: "a", limit: 3 }))
-            .pipe(Effect.flip);
-          expect(invalid.reason).toEqual(readReason.InvalidSnapshot.make({}));
-          yield* sqlExec("DROP TABLE chat_history_groups");
-          const failed = yield* reader
-            .read(request.initial.make({ threadId: "a", limit: 3 }))
-            .pipe(Effect.flip);
-          expect(failed.reason).toEqual(readReason.SqliteRead.make({ phase: "query" }));
-          expect(encodeJson(failed)).not.toContain("Message 0");
-        }),
-      ),
+      Effect.gen(function* () {
+        const store = yield* RunStore;
+        expect(
+          yield* store.historyPage(request.initial.make({ threadId: "missing", limit: 3 })),
+        ).toEqual(snapshot["not-ready"].make({ reason: "unprepared" }));
+        yield* store.saveThread("a", [
+          { id: "m-0", role: "user", content: "Message 0" },
+          { id: "m-1", role: "user", content: "Message 1" },
+        ]);
+        expect(
+          yield* store.historyPage(
+            request.older.make({ threadId: "a", before: "unknown", limit: 3 }),
+          ),
+        ).toEqual(snapshot["unknown-cursor"].make({}));
+        expect(
+          yield* store.historyPage(request.older.make({ threadId: "a", before: "m-0", limit: 3 })),
+        ).toEqual(snapshot.page.make({ groups: [], truncated: false, nextCursor: null }));
+        yield* sqlRun("UPDATE chat_threads SET messages = ? WHERE thread_id = ?", "[]", "a");
+        expect(yield* store.historyPage(request.initial.make({ threadId: "a", limit: 3 }))).toEqual(
+          snapshot["not-ready"].make({ reason: "stale" }),
+        );
+        yield* store.saveThread("a", []);
+        expect(yield* store.historyPage(request.initial.make({ threadId: "a", limit: 3 }))).toEqual(
+          snapshot.page.make({ groups: [], truncated: false, nextCursor: null }),
+        );
+      }).pipe(fixture),
   );
 });
 

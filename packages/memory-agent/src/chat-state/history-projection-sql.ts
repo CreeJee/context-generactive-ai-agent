@@ -36,44 +36,17 @@ BEGIN
 END;
 `;
 
-export const historyProjectionRollback = `
-DROP TRIGGER IF EXISTS chat_history_invalidate_update;
-DROP TRIGGER IF EXISTS chat_history_invalidate_insert;
-DROP TRIGGER IF EXISTS chat_history_invalidate_delete;
-DROP TABLE IF EXISTS chat_history_groups;
-DROP TABLE IF EXISTS chat_history_projection;
-`;
-
 export const historyProjectionSql = {
-  // Readiness is a prerequisite, never a reason to parse the complete transcript here.
-  readiness: "SELECT ready, format_version FROM chat_history_projection WHERE thread_id = ?",
-  cursor: "SELECT ordinal FROM chat_history_groups WHERE thread_id = ? AND ui_id = ?",
-  initial:
-    "SELECT ordinal, ui_id, messages FROM chat_history_groups WHERE thread_id = ?1 AND (SELECT ready FROM chat_history_projection WHERE thread_id = ?1 AND format_version = 1) = 1 ORDER BY ordinal DESC LIMIT ?2",
-  older:
-    "SELECT ordinal, ui_id, messages FROM chat_history_groups WHERE thread_id = ?1 AND ordinal < ?2 AND (SELECT ready FROM chat_history_projection WHERE thread_id = ?1 AND format_version = 1) = 1 ORDER BY ordinal DESC LIMIT ?3",
-  // Separate metadata-only probe: do not fetch a potentially huge sentinel group's JSON.
-  hasEarlier:
-    "SELECT EXISTS (SELECT 1 FROM chat_history_groups WHERE thread_id = ? AND ordinal < ?) AS has_earlier",
   // Preparation-only: stage invalidation, row replacement and conditional publish
   // inside one savepoint; rollback all of it when publishIfCurrent.changes is 0.
   markUnready: "UPDATE chat_history_projection SET ready = 0 WHERE thread_id = ?",
   publishIfCurrent:
     "INSERT INTO chat_history_projection (thread_id, format_version, ready) SELECT thread_id, 1, 1 FROM chat_threads WHERE thread_id = ? AND messages = ? ON CONFLICT(thread_id) DO UPDATE SET format_version = 1, ready = 1",
-  removeGroups: "DELETE FROM chat_history_groups WHERE thread_id = ?",
-  insertGroup:
-    "INSERT INTO chat_history_groups (thread_id, ordinal, ui_id, messages) VALUES (?, ?, ?, ?)",
   groupIdentities: "SELECT ordinal, ui_id FROM chat_history_groups WHERE thread_id = ?",
-  removeInvalidOrdinals:
-    "DELETE FROM chat_history_groups WHERE thread_id = ? AND (typeof(ordinal)<>'integer' OR ordinal<0)",
   removeOrdinal: "DELETE FROM chat_history_groups WHERE thread_id = ? AND ordinal = ?",
   removeTail: "DELETE FROM chat_history_groups WHERE thread_id = ? AND ordinal >= ?",
   updateGroup:
     "INSERT INTO chat_history_groups (thread_id, ordinal, ui_id, messages) SELECT ?1, ?2, ?3, ?4 WHERE NOT EXISTS(SELECT 1 FROM chat_history_groups WHERE thread_id=?1 AND ordinal=?2 AND ui_id=?3 AND messages=?4) ON CONFLICT(thread_id, ordinal) DO UPDATE SET ui_id=excluded.ui_id, messages=excluded.messages",
-  // Modern writer only: replace the authoritative transcript and these groups
-  // in the same savepoint. Backfill must use publishIfCurrent instead.
-  publish:
-    "INSERT INTO chat_history_projection (thread_id, format_version, ready) VALUES (?, 1, 1) ON CONFLICT(thread_id) DO UPDATE SET format_version = 1, ready = 1",
 } as const;
 
 // One statement owns the read snapshot. The materialized page contains only the

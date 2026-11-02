@@ -1,6 +1,6 @@
 import { NodeServices } from "@effect/platform-node";
 import { DatabaseSync } from "node:sqlite";
-import { Clock, Context, Deferred, Effect, Fiber, FileSystem, Layer, Path, Schema } from "effect";
+import { Context, Deferred, Effect, Fiber, FileSystem, Layer, Path, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 import { expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
@@ -89,6 +89,8 @@ it.live("waits out another connection's write lock while the event loop keeps ru
     const database = yield* Layer.build(Database.layer(file));
     const sql = Context.get(database, SqlClient.SqlClient);
     yield* sql`CREATE TABLE lock_fixture(id INTEGER PRIMARY KEY)`;
+    // Waiting inside SQLite would hold this thread until its busy timeout, then fail.
+    expect(yield* sql`PRAGMA busy_timeout`).toEqual([{ timeout: 0 }]);
     // Another connection, as the import worker's, holds the write lock.
     const other = yield* Effect.acquireRelease(
       Effect.sync(() => new DatabaseSync(file)),
@@ -101,10 +103,7 @@ it.live("waits out another connection's write lock while the event loop keeps ru
       sql.withTransaction(sql`INSERT INTO lock_fixture VALUES (3)`),
     );
 
-    // Waiting inside SQLite would hold this thread until its busy timeout, then fail.
-    const before = yield* Clock.currentTimeMillis;
     yield* Effect.sleep("300 millis");
-    expect((yield* Clock.currentTimeMillis) - before).toBeLessThan(2_000);
     expect(statement.pollUnsafe()).toBeUndefined();
     expect(transaction.pollUnsafe()).toBeUndefined();
 
