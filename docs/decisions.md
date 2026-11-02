@@ -2185,6 +2185,13 @@
 - 작업 공간 지침에 도구 고르는 순서를 둔다. 설명이 맞는 skill이나 MCP 도구를 일반 파일 검색·읽기보다 먼저 쓰고, `search_files`는 정확한 문자열에, `read_file`은 아는 파일과 범위에 쓴다. 맞는 도구가 빗나가면 받은 이름으로 좁혀 다시 묻는다. `run_code`는 한 번 할 호출을 묶는 수단이라 도구를 바꿀 이유가 되지 않는다고 적고, `run_code` 설명도 같은 뜻으로 고친다.
 - 루트 AGENTS.md의 코드 탐색 지침을 이 앱의 도구 이름(`search_files`, `read_file`, `mcp_…`)으로도 적고 질의 요령을 더한다.
 
+### 테스트 없이 지정한 태그로 릴리스하는 수동 워크플로 (2026-11-03)
+
+- 기존 `Release binaries`(릴리스 발행 → `vp run package` → `vp run smoke-package` → 업로드)는 그대로 둔다.
+- 테스트를 거치지 않고 올릴 때는 `Release binaries without checks`(`release-without-checks.yml`)를 쓴다. `workflow_dispatch`로만 돌고, 받은 `tag`를 checkout해 darwin-arm64·win32-x64 실행 파일을 빌드한 뒤 smoke 없이 그 태그의 릴리스에 같은 이름의 압축을 `--clobber`로 올린다. 릴리스가 없는 태그는 빌드 전에 멈추고, pre-release면 prerelease 채널로 빌드한다.
+- 배경: 0.1.0 발행 때 smoke의 낡은 기대값 하나가 두 플랫폼 업로드를 모두 막았다.
+- 빌드·압축 단계는 두 파일에 같은 내용으로 둔다. 한쪽을 고치면 다른 쪽도 맞춘다.
+
 ## 테스트
 
 ### 테스트의 고정 대기 줄이기 (2026-09-29)

@@ -1,0 +1,101 @@
+# Releases without the smoke test: builds the executable of a given release tag on each supported
+# platform and attaches the archives to that release. Runs only by hand (Actions → Release binaries
+# without checks → Run workflow). The checked release path is release.yml; keep the build and
+# archive steps of the two in step. See docs/building.md.
+name: Release binaries without checks
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag of a published release (e.g. 0.1.0)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: darwin-arm64
+          - os: windows-latest
+            target: win32-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    permissions:
+      # Only for attaching the archives to the release.
+      contents: write
+    env:
+      # The build embeds the release tag as its version.
+      LABEL: ${{ inputs.tag }}
+      CONTEXT_AGENT_VERSION: ${{ inputs.tag }}
+    steps:
+      # Fails before the build when the tag has no release to attach to. A pre-release builds on the
+      # prerelease channel.
+      - name: Release channel
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prerelease=$(gh release view "$LABEL" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq .isPrerelease)
+          if [ "$prerelease" = "true" ]; then channel=prerelease; else channel=stable; fi
+          echo "CONTEXT_AGENT_RELEASE_CHANNEL=$channel" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+
+      # Node comes from .node-version (26.12.1, the 2026-10-21 security release), pnpm from package.json devEngines.
+      - uses: voidzero-dev/setup-vp@9fd26ff49f9b5e6276c2b493da4454ad4527f7f4 # v1.20.0
+        with:
+          node-version-file: .node-version
+          cache: true
+          run-install: true
+
+      # turbovec's native addon is built with cargo; the runner images ship rustup.
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+
+      # The developer's report webhook is embedded in the executable (docs/reporting.md). Only this
+      # step sees the secret; an unset secret builds an app without report delivery.
+      - name: Build the executable
+        working-directory: apps/agent
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: vp run package
+
+      # Archived so the executable keeps its permissions (a bare download loses the executable bit).
+      - name: Archive (macOS)
+        if: runner.os == 'macOS'
+        working-directory: apps/agent/dist
+        run: |
+          archive="context-agent-${LABEL}-${{ matrix.target }}.tar.gz"
+          tar -czf "$archive" -C "context-agent-${{ matrix.target }}" context-agent context-agent.sha256
+          shasum -a 256 "$archive" > "$archive.sha256"
+          echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
+
+      - name: Archive (Windows)
+        if: runner.os == 'Windows'
+        working-directory: apps/agent/dist
+        shell: pwsh
+        run: |
+          $archive = "context-agent-$env:LABEL-${{ matrix.target }}.zip"
+          Compress-Archive -Path "context-agent-${{ matrix.target }}/*" -DestinationPath $archive
+          $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLower()
+          "$hash  $archive" | Out-File -Encoding ascii "$archive.sha256"
+          "ARCHIVE=$archive" | Out-File -Encoding utf8 -Append $env:GITHUB_ENV
+
+      - name: Attach to the release
+        working-directory: apps/agent/dist
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$LABEL" "$ARCHIVE" "$ARCHIVE.sha256" --clobber --repo "$GITHUB_REPOSITORY"
