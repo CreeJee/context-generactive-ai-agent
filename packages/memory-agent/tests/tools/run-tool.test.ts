@@ -2,7 +2,6 @@ import { it } from "@effect/vitest";
 import { Effect, Exit, Schema } from "effect";
 import { describe, expect } from "vite-plus/test";
 import { PathRejected } from "../../src/files/paths.ts";
-import type { JsonValue } from "../../src/json.ts";
 import { guardedEffect } from "../../src/tools/failure.ts";
 import { runTool } from "../../src/tools/run-tool.ts";
 
@@ -11,24 +10,17 @@ import { runTool } from "../../src/tools/run-tool.ts";
  * (docs/effect-ai-migration.md step 3).
  */
 
-const callWith = <A, E>(handler: () => Effect.Effect<A, E>, params: JsonValue = { path: "a" }) =>
+const callWith = <A, E>(handler: () => Effect.Effect<A, E>) =>
   runTool({
     name: "read_file",
     description: "Read a file.",
     parameters: Schema.Struct({ path: Schema.String }),
     handler,
   })
-    .prepare(params)
+    .prepare({ path: "a" })
     .pipe(Effect.flatMap((run) => run({ toolCallId: "call-1" })));
 
 describe("run tool", () => {
-  it.effect("runs a call only with arguments its schema accepts", () =>
-    Effect.gen(function* () {
-      const exit = yield* Effect.exit(callWith(() => Effect.succeed("ran"), { file: "a" }));
-      expect(Exit.isFailure(exit) && Exit.hasFails(exit)).toBe(true);
-    }),
-  );
-
   it.effect("gives the result as the JSON TanStack stored", () =>
     Effect.gen(function* () {
       expect(

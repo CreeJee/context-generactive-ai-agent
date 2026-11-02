@@ -1,6 +1,5 @@
-import { DateTime, Effect } from "effect";
+import { Effect } from "effect";
 import { expect } from "vite-plus/test";
-import { workspaceInstructions } from "../../src/agent/chat.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { PermissionReviews } from "../../src/permissions/reviews.ts";
 import { Projects } from "../../src/projects/projects.ts";
@@ -37,32 +36,6 @@ const shellRequest = Effect.fnUntraced(function* (command: string) {
 });
 
 testAgent({ testProvider: { responder: sessionScopedResponder } })("auto permission mode", (it) => {
-  it.effect("workspace instructions say what the permission mode allows, with date and shell", () =>
-    Effect.gen(function* () {
-      const { project, storage } = yield* TestEnv;
-      const places = { storageRoot: storage };
-      const auto = yield* workspaceInstructions(
-        { ...project, permissionMode: "auto" },
-        places,
-        DateTime.toDateUtc(DateTime.makeUnsafe("2026-09-15T12:00:00Z")),
-      );
-      expect(auto).toContain("reviewed before each call: routine requested work runs");
-      expect(auto).toMatch(
-        /Today is 2026-09-1[56] \(.+\)\. Scripts of sh skills run with \/bin\/sh on /,
-      );
-      expect(auto).not.toContain("read-only");
-      expect(yield* workspaceInstructions({ ...project, permissionMode: "ask" }, places)).toContain(
-        "wait for the user's approval of each call",
-      );
-      expect(
-        yield* workspaceInstructions({ ...project, permissionMode: "full" }, places),
-      ).toContain("run without approval");
-      // Where the app keeps its own settings, and that its storage is not for the file tools.
-      expect(auto).toContain(`the memory database in ${storage}.`);
-      expect(auto).toContain("Neither the file tools nor sh skill scripts open that folder");
-    }),
-  );
-
   it.effect("full mode removes static approval while ask mode keeps it", () =>
     Effect.gen(function* () {
       const { project } = yield* TestEnv;

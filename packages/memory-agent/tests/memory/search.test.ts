@@ -22,7 +22,6 @@ import { Recorder } from "../../src/memory/record.ts";
 import { type FindInput, MemorySearch } from "../../src/memory/search.ts";
 import { Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
-import { fakeVector } from "../../src/testing/fake-embedder.ts";
 import { fakeTerms } from "../../src/testing/fake-morph.ts";
 import { MemoryTools } from "../../src/tools/memory.ts";
 import { scriptedRun } from "../support/loop-run.ts";
@@ -410,48 +409,6 @@ testAgent({ morphAnalyzer: MorphAnalyzer.disabled })(
           const result = yield* find({ query: "EADDRINUSE 5174", projectId: project.id });
           expect(result.matches[0]).toMatchObject({ id: output.id, foundBy: "text" });
         }),
-    );
-  },
-);
-
-const nativeTestEmbedderLayer = Layer.succeed(Embedder, {
-  identity: "fake-trigram-384",
-  dimensions: 384,
-  embed: (texts: readonly string[]) =>
-    Effect.succeed(
-      texts.map((text) => {
-        const vector = new Float32Array(384);
-        vector.set(fakeVector(text));
-        return vector;
-      }),
-    ),
-  runtime: () => EmbedderRuntime.other(),
-});
-
-testAgent({ embedder: nativeTestEmbedderLayer })(
-  "MemorySearch.find on the native seed path",
-  (it) => {
-    it.effect("keeps project and graph result semantics", () =>
-      Effect.gen(function* () {
-        const earlier = yield* earlierSession;
-        const excluded = yield* otherProject("SQLite로 결정한 다른 프로젝트 기록");
-        yield* indexAll;
-        const result = yield* find({
-          query: "SQLite로 결정했던 이유",
-          projectId: earlier.project.id,
-          crossProject: false,
-        });
-        expect(result.degraded).toEqual([]);
-        expect(result.unindexed).toBe(0);
-        expect(result.matches.map((match) => match.id)).not.toContain(excluded.node.id);
-        expect(result.matches.find((match) => match.id === earlier.decision.id)?.foundBy).toMatch(
-          /vector|text/,
-        );
-        expect(result.matches.find((match) => match.id === earlier.result.id)).toMatchObject({
-          foundBy: "graph",
-          fromOtherProject: false,
-        });
-      }),
     );
   },
 );

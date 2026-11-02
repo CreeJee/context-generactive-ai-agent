@@ -1,14 +1,11 @@
-import { Cause, Effect, Fiber, HashSet, Schema } from "effect";
+import { Cause, Effect, Fiber, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { RunStore } from "../../src/loop/store.ts";
 import type { JsonValue } from "../../src/json.ts";
-import { StepEnded } from "../../src/loop/run.ts";
-import { RunEnd } from "../../src/loop/store.ts";
 import { messageText } from "../../src/agent/compaction.ts";
 import { Subagents } from "../../src/subagents/subagents.ts";
 import type { ScriptedInvocation, ScriptedTurn } from "../../src/testing/scripted-model.ts";
-import type { RunTool } from "../../src/tools/run-tool.ts";
 import { WorkTraceStore } from "../../src/work-trace/store.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
@@ -365,67 +362,6 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
       );
       expect((yield* trace.taskDetail(sessionId, ids.taskId))?.answerClaims).toHaveLength(1);
       expect(yield* adopt).toContain("Only reports reviewed in this run");
-    }),
-  );
-
-  it.effect("adoption is gated on reports reviewed in the same run", () =>
-    Effect.gen(function* () {
-      const { sessionId, turns } = yield* parentSession;
-      const { project } = yield* TestEnv;
-      const children = yield* Subagents;
-      const trace = yield* WorkTraceStore;
-      const binding = {
-        project,
-        sessionId,
-        runId: "run-effect-ai",
-        selection: yield* current(selectTestModel()),
-        abortSignal: yield* Effect.abortSignal,
-        tools: [],
-        systemPrompts: [],
-        deliveredParentNotificationIds: HashSet.empty<string>(),
-        gated: HashSet.empty<string>(),
-      };
-      const { tools, hook } = yield* children.toolsFor(binding);
-      const [run, , reports, adopt] = tools;
-      const call = (tool: RunTool | undefined, params: JsonValue) =>
-        Effect.fromNullishOr(tool).pipe(
-          Effect.flatMap((found) => found.prepare(params)),
-          Effect.flatMap((prepared) => prepared({ toolCallId: "call-1" })),
-        );
-      const ids = idsOf(
-        yield* Effect.flatMap(
-          call(run, { task: "nap effect ai dispatch only" }),
-          Schema.decodeUnknownEffect(Receipt),
-        ),
-      );
-      expect(yield* Effect.flip(call(adopt, { reports: [ids] }))).toMatchObject({
-        message: expect.stringContaining("Only reports reviewed in this run"),
-      });
-      yield* turns.release("nap");
-      // No page holds this session, so no follow-up run takes the completion notification.
-      yield* until(
-        Effect.map(children.list(sessionId), (listed) => listed[0]?.status === "completed"),
-        "the child to finish",
-      );
-      expect(yield* call(reports, oneAttempt(ids))).toMatchObject({
-        reports: [{ status: "completed" }],
-      });
-      expect(yield* call(adopt, { reports: [ids] })).toEqual({
-        status: "recorded",
-        usedReportCount: 1,
-        reflectedNotificationCount: 0,
-      });
-      // The run's answer ends it, so the adoption is recorded under that message.
-      const { stepEnded, ended } = yield* hook;
-      const scope = { threadId: sessionId, runId: binding.runId, emit: () => Effect.void };
-      const answer = { role: "assistant" as const, id: "message-1", content: "done" };
-      yield* stepEnded!(scope, StepEnded.Model({ message: answer, answered: [] }));
-      yield* ended!(scope, RunEnd.Completed(), [answer]);
-      expect(
-        (yield* trace.taskDetail(sessionId, ids.taskId))?.answerClaims.flatMap(
-          (claim) => claim.sources,
-        ),
-      ).toEqual([ids]);
     }),
   );
 

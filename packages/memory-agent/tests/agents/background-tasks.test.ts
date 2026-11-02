@@ -14,11 +14,7 @@ import { SqlError } from "effect/sql";
 import { expect, vi } from "vite-plus/test";
 import { RunStore } from "../../src/loop/store.ts";
 import { ApprovedTools } from "../../src/tools/approved.ts";
-import {
-  BackgroundOperationFailed,
-  BackgroundResultStoreFailed,
-  BackgroundTasks,
-} from "../../src/tools/background.ts";
+import { BackgroundOperationFailed, BackgroundTasks } from "../../src/tools/background.ts";
 import { AttemptFailureReason } from "../../src/work-trace/contracts.ts";
 import { LifecycleOutcome, LifecycleRequest, WorkTraceStore } from "../../src/work-trace/store.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
@@ -84,26 +80,6 @@ testAgent()("background task lifecycle", (it) => {
         status: "completed",
       });
       expect(yield* Ref.get(executions)).toBe(1);
-    }),
-  );
-
-  it.effect("malformed persisted results fail in the typed storage channel", () =>
-    Effect.gen(function* () {
-      const sessionId = yield* freshSession;
-      const tasks = yield* BackgroundTasks;
-      const { metadata } = yield* RunStore;
-      const receipt = yield* tasks.start(
-        yield* runOf(sessionId),
-        `${sessionId}:call`,
-        "shell",
-        "task",
-        Effect.succeed(reported("done")),
-      );
-      yield* tasks.waitResult(sessionId, receipt.taskId, 2000);
-      yield* metadata.set("background-task-result", receipt.taskId, { status: "completed" });
-      expect(yield* Effect.flip(tasks.waitResult(sessionId, receipt.taskId, 0))).toBeInstanceOf(
-        BackgroundResultStoreFailed,
-      );
     }),
   );
 

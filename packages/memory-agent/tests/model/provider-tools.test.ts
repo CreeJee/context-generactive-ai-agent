@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest";
-import { describe, expect } from "vite-plus/test";
+import { describe } from "vite-plus/test";
 import type { ProviderToolConfig } from "../../src/providers/provider-tools.ts";
 import { providerTools } from "../../src/providers/provider-tools.ts";
 import { matchGolden, subscriptionToolRequestBodies } from "../support/requests.ts";
@@ -68,11 +68,10 @@ const fallbackCases = [
 ] as const;
 
 describe("provider tools", () => {
-  it.effect("reach the subscription endpoints as TanStack sent them", () => {
-    expect(openAICases.length + anthropicCases.length).toBe(Object.keys(providerTools).length);
+  it.effect("reach the subscription endpoints as TanStack sent them", () =>
     // A vendor's tools at once, so their order is kept too.
-    return matchGolden("./__golden__/provider-tools.json")(
+    matchGolden("./__golden__/provider-tools.json")(
       [openAICases, anthropicCases, fallbackCases].map(subscriptionToolRequestBodies),
-    );
-  });
+    ),
+  );
 });

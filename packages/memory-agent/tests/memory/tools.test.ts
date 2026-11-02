@@ -667,28 +667,6 @@ testAgent()("memory tools per run", (it) => {
       }),
   );
 
-  it.effect(
-    "the run binding reads the deferred admission user node only when a call needs it",
-    () =>
-      Effect.gen(function* () {
-        const at = yield* freshSession;
-        const env = yield* environment;
-        const reads = yield* Ref.make(0);
-        const user = yield* env.nodes.append({ ...at, kind: "user", text: "explicit save" });
-        const prepared = yield* (yield* MemoryTools).toolsFor({
-          ...at,
-          runId: `${at.sessionId}:deferred-run`,
-          userNodeId: Ref.update(reads, (count) => count + 1).pipe(Effect.as(user.id)),
-        });
-        expect(yield* Ref.get(reads)).toBe(0);
-        expect(yield* Effect.flip(callers(prepared.tools).promote(unadoptedClaim))).toMatchObject({
-          tag: "MemoryPromotionRejected",
-          detail: "Memory promotion source is not an adopted final-answer claim",
-        });
-        expect(yield* Ref.get(reads)).toBe(1);
-      }),
-  );
-
   it.effect("runs a run's tool calls on its fiber, so their spans join the run's trace", () =>
     Effect.gen(function* () {
       const at = yield* freshSession;

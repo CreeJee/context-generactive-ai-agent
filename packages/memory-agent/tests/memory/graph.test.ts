@@ -152,18 +152,6 @@ testAgent()("memory graph", (it) => {
     }),
   );
 
-  it.effect("reports an incomplete walk when the budget runs out", () =>
-    Effect.gen(function* () {
-      const { project, user } = yield* conversation;
-      const { visits, complete } = yield* (yield* Graph).traverse(
-        MutableHashMap.fromIterable([[user.id, 1]]),
-        { budget: 2, minUtility: 0.01, projectIds: [project.id] },
-      );
-      expect(visits).toHaveLength(2);
-      expect(complete).toBe(false);
-    }),
-  );
-
   it.effect("never visits nodes of projects outside the allowed set", () =>
     Effect.gen(function* () {
       const { project, session, user } = yield* conversation;

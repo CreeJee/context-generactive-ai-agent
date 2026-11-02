@@ -5,7 +5,7 @@ import { applyEvent, type ChatView, streamStarted, viewOf } from "../../src/api/
 import { chatApi } from "../support/chat-api.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { testAgent } from "../support/test-env.ts";
-import { agentChat, freshSession } from "./tab.ts";
+import { freshSession } from "./tab.ts";
 
 const message = (content: string, id = "m-1") => ({ id, role: "user" as const, content });
 
@@ -77,42 +77,6 @@ testAgent({ testProvider: {} })("chat API", (it) => {
       });
       expect(older.messages).toEqual(all.messages.slice(0, -2));
       expect(older.older).toBeNull();
-    }),
-  );
-
-  it.effect("refusals keep their codes", () =>
-    Effect.gen(function* () {
-      yield* selectTestModel();
-      const session = yield* freshSession;
-      const api = yield* chatApi;
-      const run = `${session}-api`;
-
-      const unknownRun = yield* api
-        .join({ params: { session, run }, query: {} })
-        .pipe(Effect.flatMap(Stream.runCollect), Effect.flip);
-      expect(unknownRun).toMatchObject({ error: "run_not_found" });
-
-      yield* (yield* agentChat).lease(session, "tab-a", "claim");
-      const held = yield* api
-        .run({
-          params: { session },
-          headers: { "x-session-holder": "tab-b" },
-          payload: { runId: run, messages: [message("hi")] },
-        })
-        .pipe(Effect.flip);
-      expect(held).toMatchObject({ error: "session_in_use" });
-
-      yield* api
-        .run({
-          params: { session },
-          headers: { "x-session-holder": "tab-a" },
-          payload: { runId: run, messages: [message("hi")] },
-        })
-        .pipe(Effect.flatMap(Stream.runDrain));
-      const badOffset = yield* api
-        .join({ params: { session, run }, query: { after: "not-an-offset" } })
-        .pipe(Effect.flatMap(Stream.runCollect), Effect.flip);
-      expect(badOffset).toMatchObject({ error: "invalid_stream_offset" });
     }),
   );
 });

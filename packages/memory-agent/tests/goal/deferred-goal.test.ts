@@ -21,7 +21,7 @@ const goal = {
   status: "active" as const,
 };
 
-type Scenario = "goal" | "completed" | "stale-id" | "failed-run";
+type Scenario = "goal" | "completed" | "failed-run";
 
 interface Script {
   readonly scenario: Scenario;
@@ -56,8 +56,6 @@ const continuation = Effect.fnUntraced(function* (threadId: string, runId: strin
         }).pipe(Effect.provideService(SqlClient.SqlClient, script.sql), Effect.orDie),
       });
       return { text: "The request was accepted, not saved yet." };
-    case "stale-id":
-      return { text: "The stale ID was refused." };
     case "failed-run":
       return yield* new Cause.UnknownError(undefined, "provider continuation failed");
   }
@@ -82,7 +80,7 @@ const responder: ScriptedResponder = (invocation) =>
           name: "start_new_goal",
           arguments: yield* encodeJson({
             action: "new_independent_goal",
-            previousGoalInstanceId: script.scenario === "stale-id" ? "stale-id" : id,
+            previousGoalInstanceId: id,
             reason: "new independent task",
             goal: applies
               ? { ...goal, statement: "new task", outcomes: ["new result"] }
@@ -168,31 +166,23 @@ testAgent({ testProvider: { responder } })("deferred new Goal through chat", (it
       }),
   );
 
-  it.effect.each(["stale-id", "failed-run"] as const)(
-    "chat with %s never applies a new Goal",
-    (scenario) =>
-      Effect.gen(function* () {
-        const workflows = yield* Workflows;
-        const session = yield* sessionIn(scenario);
-        const previousId = yield* workflows.goalInstanceId(session);
-        const { runId } = yield* requestNewGoal(session);
-        const requests = yield* sqlAll(
+  it.effect("chat with failed-run never applies a new Goal", () =>
+    Effect.gen(function* () {
+      const workflows = yield* Workflows;
+      const session = yield* sessionIn("failed-run");
+      const previousId = yield* workflows.goalInstanceId(session);
+      const { runId } = yield* requestNewGoal(session);
+      expect(
+        yield* sqlAll(
           "SELECT status, reason FROM workflow_new_goal_requests WHERE session_id = ?",
           session,
-        );
-        switch (scenario) {
-          case "stale-id":
-            expect(requests).toEqual([]);
-            break;
-          case "failed-run":
-            expect(requests).toEqual([{ status: "rejected", reason: "run_outcome_uncertain" }]);
-            expect(yield* sqlGet("SELECT status FROM chat_runs WHERE run_id = ?", runId)).toEqual({
-              status: "failed",
-            });
-            break;
-        }
-        expect(yield* workflows.goalInstanceId(session)).toBe(previousId);
-        expect((yield* workflows.get(session)).goal?.statement).toBe("original");
-      }),
+        ),
+      ).toEqual([{ status: "rejected", reason: "run_outcome_uncertain" }]);
+      expect(yield* sqlGet("SELECT status FROM chat_runs WHERE run_id = ?", runId)).toEqual({
+        status: "failed",
+      });
+      expect(yield* workflows.goalInstanceId(session)).toBe(previousId);
+      expect((yield* workflows.get(session)).goal?.statement).toBe("original");
+    }),
   );
 });

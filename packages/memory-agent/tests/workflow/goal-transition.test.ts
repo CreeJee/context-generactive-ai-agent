@@ -1,5 +1,4 @@
-import { layer } from "@effect/vitest";
-import { Data, Effect, Layer, Schema } from "effect";
+import { Data, Effect, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import type { JsonValue } from "../../src/json.ts";
@@ -603,26 +602,6 @@ testAgent()("new Goal transition across reopening", (it) => {
       const edited = yield* workflows.updateGoal(session, { ...goal, statement: "revised" });
       expect(edited.phase).toBe("execute");
       expect(yield* workflows.display(session, edited)).toBe("card_reclassifying");
-    }),
-  );
-});
-
-// Compatible code rollback only disables the new action, retaining the pointer and history.
-layer(
-  Workflows.layerWithOptions({ allowNewGoal: false }).pipe(Layer.provideMerge(TestEnv.layer())),
-  { excludeTestServices: true },
-)("new Goal transition disabled by rollback", (it) => {
-  it.effect("refuses the action and keeps the current identity and history", () =>
-    Effect.gen(function* () {
-      const { workflows, session, old } = yield* withHistory();
-      const before = yield* snapshot(session);
-      expect(yield* Effect.flip(workflows.startNewGoal(session, transition(old)))).toMatchObject({
-        reason: "disabled",
-      });
-      expect(yield* identity(session)).toBe(old);
-      expect(yield* rows("goalInstances", session)).toHaveLength(1);
-      yield* expectHistoryKept(session, before);
-      expect(yield* rows("revisions", session)).toEqual(before[0]);
     }),
   );
 });

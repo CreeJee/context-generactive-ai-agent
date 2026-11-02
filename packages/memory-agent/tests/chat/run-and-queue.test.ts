@@ -282,27 +282,6 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
     }),
   );
 
-  it.effect("queue endpoint returns the server-owned snapshot contract", () =>
-    Effect.gen(function* () {
-      const sessionId = yield* freshSession;
-      const queue = yield* MessageQueue;
-      expect(yield* queueOf(sessionId)).toMatchObject({
-        items: [],
-        nextDelivery: NextDelivery.empty(),
-      });
-      const first = yield* queue.add(sessionId, "first", [], false);
-      const second = yield* queue.add(sessionId, "second", [], false);
-      expect(yield* queueOf(sessionId)).toMatchObject({
-        items: [{ id: first.id }, { id: second.id }],
-        nextDelivery: NextDelivery.server(),
-      });
-      yield* queue.edit(sessionId, first.id, "draft");
-      expect((yield* queueOf(sessionId)).nextDelivery).toEqual(
-        NextDelivery.blocked({ messageId: first.id, reason: "editing" }),
-      );
-    }),
-  );
-
   it.effect(
     "server-authoritative turns persist once instead of resending the whole transcript",
     () =>

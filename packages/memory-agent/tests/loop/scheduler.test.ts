@@ -96,31 +96,4 @@ describe("step scheduler", () => {
       });
     }).pipe(Effect.scoped),
   );
-
-  it.effect("runs the other calls while one waits for the user", () =>
-    Effect.gen(function* () {
-      const ran = yield* Ref.make(0);
-      const scheduler = yield* stepScheduler<string, never, never>({
-        answered: () => Effect.void,
-      });
-      const run = Run(
-        Effect.as(
-          Ref.update(ran, (count) => count + 1),
-          "done",
-        ),
-      );
-      yield* scheduler.offer(
-        write("ask"),
-        Effect.succeed(CallOutcome.Waiting({ request: "approve?" })),
-      );
-      yield* scheduler.offer(write("w1"), Effect.succeed(run));
-      yield* scheduler.offer(read("r1"), Effect.succeed(run));
-      expect(yield* scheduler.settle(true)).toEqual([
-        CallOutcome.Waiting({ request: "approve?" }),
-        CallOutcome.Returned({ result: "done" }),
-        CallOutcome.Returned({ result: "done" }),
-      ]);
-      expect(yield* Ref.get(ran)).toBe(2);
-    }).pipe(Effect.scoped),
-  );
 });

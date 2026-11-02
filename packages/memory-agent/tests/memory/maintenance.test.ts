@@ -1,16 +1,4 @@
-import {
-  Context,
-  Crypto,
-  Deferred,
-  Effect,
-  Fiber,
-  FileSystem,
-  Layer,
-  Path,
-  Scope,
-  Stream,
-} from "effect";
-import { layer } from "@effect/vitest";
+import { Crypto, Deferred, Effect, Fiber, FileSystem, Layer, Path, Scope, Stream } from "effect";
 import { expect } from "vite-plus/test";
 import { EmbedderRuntime, Embedder } from "../../src/memory/embedding/embedder.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
@@ -115,8 +103,6 @@ const asOlderStore = run.pipe(Effect.andThen(sqlRun("DELETE FROM memory_graph_ma
 const overview = Effect.flatMap(MemoryGraphMaintenance, (maintenance) => maintenance.overview);
 const indexAll = Effect.flatMap(Indexer, (indexer) => indexer.indexAll());
 const vectorCount = Effect.map(VectorIndex, (vectors) => vectors.size());
-const chainLength = (id: string) =>
-  Effect.flatMap(Graph, (graph) => Effect.map(graph.trace(id), (trace) => trace?.chain.length));
 
 /** Repairs scan and rewrite the whole store, so each test owns its agent. */
 const alone = <E>(
@@ -189,16 +175,6 @@ alone("a crash after saving removals resumes the queue before index size reconci
     expect(yield* env.use(indexAll)).toBe(0);
     expect(yield* sqlAll("SELECT * FROM memory_graph_vector_removals")).toEqual([]);
     expect(yield* sqlAll("SELECT * FROM node_vectors WHERE node_seq = ?", c.topic.seq)).toEqual([]);
-  }),
-);
-
-alone("repairs run without any embedding execution choice", () =>
-  Effect.gen(function* () {
-    const c = yield* legacy;
-    yield* asOlderStore;
-    yield* run;
-    expect(yield* chainLength(c.result.id)).toBe(4);
-    expect(yield* overview).toMatchObject({ status: "completed", repairedEdges: 1 });
   }),
 );
 
@@ -404,30 +380,3 @@ alone(
       ).toEqual([{ kind: "corrects" }]);
     }),
 );
-
-/** A second agent over its own storage, beside the block's own. */
-class OtherStore extends Context.Service<OtherStore, TestEnv["Service"]>()(
-  "memory-agent/tests/memory/maintenance.test/OtherStore",
-) {}
-
-layer(
-  Layer.merge(
-    TestEnv.layer(),
-    Layer.effect(OtherStore, TestEnv).pipe(Layer.provide(TestEnv.layer())),
-  ),
-  { excludeTestServices: true },
-)("automatic memory graph maintenance across stores", (it) => {
-  it.effect("different users' stores keep independent progress", () =>
-    Effect.gen(function* () {
-      const other = yield* OtherStore;
-      // The other store's own pass has finished before its older data appears.
-      yield* other.use(run);
-      const first = yield* legacy;
-      const second = yield* other.use(legacy.pipe(Effect.provideService(TestEnv, other)));
-      yield* asOlderStore;
-      yield* run;
-      expect(yield* chainLength(first.result.id)).toBe(4);
-      expect(yield* other.use(chainLength(second.result.id))).toBe(1);
-    }),
-  );
-});

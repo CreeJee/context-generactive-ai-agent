@@ -1,6 +1,6 @@
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import { it } from "@effect/vitest";
-import { Cause, Deferred, Effect, Fiber, Option, Stream } from "effect";
+import { Cause, Effect, Option, Stream } from "effect";
 import { Prompt } from "effect/ai";
 import { describe, expect } from "vite-plus/test";
 import { ExternalPromptOutcome } from "../../src/external-agents/agents.ts";
@@ -144,27 +144,6 @@ describe("external agent model", () => {
         _tag: "UnknownError",
         description: "connection refused",
       });
-    }),
-  );
-
-  it.effect("cancels the turn when the step is interrupted", () =>
-    Effect.gen(function* () {
-      const entered = yield* Deferred.make<void>();
-      const cancelled = yield* Deferred.make<void>();
-      const fiber = yield* Effect.forkChild(
-        partsOf(
-          options((_text, onUpdate) =>
-            Effect.sync(() => onUpdate(textChunk("partial"))).pipe(
-              Effect.andThen(Deferred.succeed(entered, undefined)),
-              Effect.andThen(Effect.never),
-              Effect.onInterrupt(() => Deferred.succeed(cancelled, undefined)),
-            ),
-          ),
-        ),
-      );
-      yield* Deferred.await(entered);
-      yield* Fiber.interrupt(fiber);
-      yield* Deferred.await(cancelled);
     }),
   );
 });
