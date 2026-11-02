@@ -375,13 +375,18 @@ const decodeToolArguments = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
 );
 
-/** Partial historical calls cannot be replayed; keep the stored transcript intact. */
+/**
+ * Partial historical calls cannot be replayed; keep the stored transcript intact. Empty arguments
+ * are a call without parameters (Anthropic streams none for `{}`), as `history.ts` replays them.
+ */
 export function replayableToolHistory<M extends ConversationMessage>(
   messages: ReadonlyArray<M>,
 ): ReadonlyArray<M> {
   const replayable = messages.map((message) => {
-    const toolCalls = (message.toolCalls ?? []).filter((call) =>
-      Option.isSome(decodeToolArguments(call.function.arguments)),
+    const toolCalls = (message.toolCalls ?? []).filter(
+      (call) =>
+        call.function.arguments.trim() === "" ||
+        Option.isSome(decodeToolArguments(call.function.arguments)),
     );
     return toolCalls.length === (message.toolCalls ?? []).length
       ? message

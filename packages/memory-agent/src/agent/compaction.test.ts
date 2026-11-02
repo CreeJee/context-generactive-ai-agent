@@ -188,6 +188,35 @@ describe("compact", () => {
       }),
   );
 
+  // Anthropic streams no arguments for a call without parameters; dropping it hid the result from
+  // the model, which then called the tool again on every step.
+  it.effect("keeps a call stored with empty arguments and its result", () =>
+    Effect.gen(function* () {
+      const messages: StoredMessage[] = [
+        { role: "user", content: "board?" },
+        {
+          role: "assistant",
+          content: null,
+          toolCalls: [
+            {
+              id: "board",
+              type: "function",
+              function: { name: "read_kanban_board", arguments: "" },
+            },
+          ],
+        },
+        { role: "tool", toolCallId: "board", content: "board result" },
+      ];
+      const result = yield* compactEffect({
+        messages,
+        state: fresh,
+        sources: noSources,
+        budget: unlimited,
+      });
+      expect(result.messages).toEqual(messages);
+    }),
+  );
+
   // Retrieval cannot fail: its type has no error, so the request always goes.
   it.effect("adds bounded retrieval only after compaction omitted content", () =>
     Effect.gen(function* () {
