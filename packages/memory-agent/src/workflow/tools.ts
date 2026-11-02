@@ -16,7 +16,6 @@ import {
 import { runTool, type RunTool } from "../tools/run-tool.ts";
 import { RuleSource, type ResolvedRules } from "./rules.ts";
 import { WorkflowBlocker, WorkflowExecution } from "./execution.ts";
-import { HumanDecisions } from "../kanban/human-decision.ts";
 import { BoardAuthor, stepProgressStatus } from "./card.ts";
 import {
   PlanDependencyIssue,
@@ -107,13 +106,12 @@ const phaseTools = {
 
 const make = Effect.gen(function* () {
   const events = yield* AppEvents;
-  const runtime = yield* Effect.context<Workflows | WorkflowExecution | HumanDecisions>();
+  const runtime = yield* Effect.context<Workflows | WorkflowExecution>();
 
-  /** The tools' calls in `sessionId` from the run `runId`, or from no run when it is empty. */
+  /** The tools' calls in `sessionId` from the run `runId`. */
   const callsFor = (sessionId: string, runId: string) => {
     // A run's own Plan and progress saves are board changes made by that run.
-    const author: BoardAuthor | undefined =
-      runId.length > 0 ? BoardAuthor.cases.Orchestrator.make({ runId }) : undefined;
+    const author = BoardAuthor.cases.Orchestrator.make({ runId });
     const published = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       Effect.tap(effect, () => events.publishSession(sessionId, "run-state"));
     return {
@@ -124,29 +122,17 @@ const make = Effect.gen(function* () {
           return result;
         }).pipe(Effect.provideContext(runtime)),
 
+      // A run only asks; the owner applies it once the run completes.
       startNewGoal: (input: StartNewGoal) =>
-        Effect.gen(function* () {
-          const workflows = yield* Workflows;
-          const decisions = yield* HumanDecisions;
-          // A run only asks; the owner applies it once the run completes.
-          const requested = Effect.map(
-            workflows.requestNewGoal(sessionId, runId, input),
-            (request) => ({
-              ...request,
-              applied: false as const,
-              message:
-                "Request accepted; the new Goal is not saved. It will be applied only after this run completes and owner safety checks pass.",
-            }),
-          );
-          const started = Effect.gen(function* () {
-            const state = yield* workflows.startNewGoal(sessionId, input);
-            // The replaced Goal's waits for people end with it.
-            yield* decisions.closeSuperseded(sessionId);
-            const goalInstanceId = yield* workflows.goalInstanceId(sessionId);
-            return { phase: state.phase, goal: state.goal, plan: state.plan, goalInstanceId };
-          });
-          return yield* runId.length > 0 ? requested : started;
-        }).pipe(
+        Effect.flatMap(Workflows, (workflows) =>
+          workflows.requestNewGoal(sessionId, runId, input),
+        ).pipe(
+          Effect.map((request) => ({
+            ...request,
+            applied: false as const,
+            message:
+              "Request accepted; the new Goal is not saved. It will be applied only after this run completes and owner safety checks pass.",
+          })),
           published,
           Effect.catchTag("NewGoalTransitionRefused", (failure) =>
             Effect.succeed({
@@ -217,7 +203,7 @@ const make = Effect.gen(function* () {
 
   return {
     /** The tools run on the loop's fiber, so their spans join the run's trace. */
-    toolsFor: (sessionId: string, phase: WorkflowPhase, runId = ""): RunTool[] => {
+    toolsFor: (sessionId: string, phase: WorkflowPhase, runId: string): RunTool[] => {
       const calls = callsFor(sessionId, runId);
       const tools = {
         recordBlocker: runTool({ ...recordBlocker, handler: calls.recordBlocker }),
@@ -280,10 +266,6 @@ const ruleSource = (rule: ResolvedRules["rules"][number]) =>
     builtin: ({ name }) => `builtin:${name}`,
     project: ({ path, contentHash }) => `project:${path}#${contentHash.slice(0, 12)}`,
     skill: ({ scope, name, contentHash }) => `skill:${scope}/${name}#${contentHash.slice(0, 12)}`,
-    "mcp-resource": ({ serverId, name, contentHash }) =>
-      `mcp-resource:${serverId}/${name}#${contentHash.slice(0, 12)}`,
-    "mcp-prompt": ({ serverId, name, contentHash }) =>
-      `mcp-prompt:${serverId}/${name}#${contentHash.slice(0, 12)}`,
   });
 
 export const workflowInstructions: {

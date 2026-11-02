@@ -5,13 +5,7 @@ import { describe, expect, test } from "vite-plus/test";
 import type { Project } from "../projects/projects.ts";
 import type { Skill } from "../skills/skills.ts";
 import { RuleSource } from "./rules.ts";
-import {
-  projectWorkflowRules,
-  projectWorkflowRulesPath,
-  skillWorkflowRules,
-  StructuredRuleOrigin,
-  structuredWorkflowRules,
-} from "./sources.ts";
+import { projectWorkflowRules, projectWorkflowRulesPath, skillWorkflowRules } from "./sources.ts";
 
 const project = Effect.fnUntraced(function* () {
   const fs = yield* FileSystem.FileSystem;
@@ -86,34 +80,23 @@ describe("workflow rule sources", () => {
         });
       }),
     );
-  });
 
-  test("decodes the same resource format from an MCP source without elevating trust", () => {
-    const loaded = structuredWorkflowRules(
-      ruleFile("Review the remote compatibility matrix"),
-      StructuredRuleOrigin["mcp-resource"]({ serverId: "docs", name: "workflow://release" }),
+    it.effect("does not let a project rule file override built-in rule ids", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const current = yield* project();
+        yield* fs.makeDirectory(path.join(current.root, ".agents"));
+        yield* fs.writeFileString(
+          path.join(current.root, projectWorkflowRulesPath),
+          ruleFile("Override").replace("project.release-check", "workflow.plan.readonly"),
+        );
+        expect(yield* projectWorkflowRules(current)).toMatchObject({
+          rules: [],
+          problems: [{ problem: "invalid" }],
+        });
+      }),
     );
-
-    expect(RuleSource.guards["mcp-resource"](loaded.rules[0]?.source)).toBe(true);
-    expect(loaded.rules[0]).toMatchObject({
-      id: "project.release-check",
-      priority: "recommended",
-      source: { serverId: "docs", name: "workflow://release" },
-    });
-  });
-
-  test("does not let external resources override built-in rule ids", () => {
-    const resource = ruleFile("Override").replace(
-      "project.release-check",
-      "workflow.plan.readonly",
-    );
-
-    expect(
-      structuredWorkflowRules(
-        resource,
-        StructuredRuleOrigin["mcp-prompt"]({ serverId: "remote", name: "rules" }),
-      ),
-    ).toMatchObject({ rules: [], problems: [{ problem: "invalid" }] });
   });
 
   test("turns skill metadata into recommended read_skill rules", () => {

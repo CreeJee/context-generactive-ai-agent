@@ -36,33 +36,22 @@ export interface LoadedRuleSources {
   readonly problems: readonly RuleSourceProblem[];
 }
 
-type McpRuleOrigin = { readonly serverId: string; readonly name: string };
-
 export type StructuredRuleOrigin = Data.TaggedEnum<{
   project: { readonly path: string };
-  "mcp-resource": McpRuleOrigin;
-  "mcp-prompt": McpRuleOrigin;
 }>;
 export const StructuredRuleOrigin = Data.taggedEnum<StructuredRuleOrigin>();
 
 const digest = (text: string) => sha256(text);
 const ruleName = (value: string) => value.toLocaleLowerCase().replace(/[^a-z0-9._-]+/g, "-");
-const mcpSourceName = ({ serverId, name }: McpRuleOrigin) => `${serverId}/${name}`;
 const sourceName = StructuredRuleOrigin.$match({
   project: ({ path }) => path,
-  "mcp-resource": mcpSourceName,
-  "mcp-prompt": mcpSourceName,
 });
 const ruleSource = (origin: StructuredRuleOrigin, contentHash: string): RuleSource =>
   StructuredRuleOrigin.$match(origin, {
     project: ({ path }) => RuleSource.cases.project.make({ path, contentHash }),
-    "mcp-resource": ({ serverId, name }) =>
-      RuleSource.cases["mcp-resource"].make({ serverId, name, contentHash }),
-    "mcp-prompt": ({ serverId, name }) =>
-      RuleSource.cases["mcp-prompt"].make({ serverId, name, contentHash }),
   });
 
-/** Decode the structured rule resource format shared by project files and selected MCP content. */
+/** Decode the structured rule resource format of project rule files. */
 export const structuredWorkflowRules: {
   (origin: StructuredRuleOrigin): (text: string) => ReturnType<typeof structuredWorkflowRulesBody>;
 } & typeof structuredWorkflowRulesBody = EffectFunction.dual(2, structuredWorkflowRulesBody);
@@ -81,14 +70,7 @@ function structuredWorkflowRulesBody(
       return { rules: [], problems: [{ source: sourceName(origin), problem: "invalid" }] };
     const contentHash = digest(text);
     return {
-      rules: decoded.rules.map((rule) => ({
-        ...rule,
-        // Remote content can guide retrieval but cannot declare itself mandatory.
-        priority: StructuredRuleOrigin.$is("project")(origin)
-          ? rule.priority
-          : ("recommended" as const),
-        source: ruleSource(origin, contentHash),
-      })),
+      rules: decoded.rules.map((rule) => ({ ...rule, source: ruleSource(origin, contentHash) })),
       problems: [],
     };
   } catch {

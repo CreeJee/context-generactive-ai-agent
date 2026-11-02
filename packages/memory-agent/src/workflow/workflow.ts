@@ -184,35 +184,14 @@ export type UpdateWorkflowProgress = typeof UpdateWorkflowProgress.Type;
 
 const emptyState = (): WorkflowState => ({ phase: "chat", goal: null, plan: null, ledger: [] });
 
-// Read workflow rows written before execution state and evidence became durable fields.
-const PersistedGoalArtifact = Schema.Struct({
-  ...GoalArtifact.fields,
-  status: Schema.Literals([
-    "draft",
-    "ready",
-    "confirmed",
-    "active",
-    "paused",
-    "completed",
-    "failed",
-  ]),
-});
+// A saved Plan's steps may still hold the statuses written before cards.
 const PersistedPlanArtifact = Schema.Struct({
   ...PlanArtifact.fields,
   steps: Schema.Array(PersistedPlanStep),
-  status: Schema.Literals([
-    "draft",
-    "ready",
-    "approved",
-    "executing",
-    "completed",
-    "blocked",
-    "closed",
-  ]),
 });
 const PersistedWorkflowState = Schema.Struct({
   phase: WorkflowPhase,
-  goal: Schema.NullOr(PersistedGoalArtifact),
+  goal: Schema.NullOr(GoalArtifact),
   plan: Schema.NullOr(PersistedPlanArtifact),
   ledger: Schema.Array(LedgerEvent),
 });
@@ -220,24 +199,7 @@ export const decodeWorkflowState = (json: string) =>
   Schema.decodeEffect(Schema.fromJsonString(PersistedWorkflowState))(json).pipe(
     Effect.map((state): WorkflowState => ({
       ...state,
-      goal:
-        state.goal === null
-          ? null
-          : {
-              ...state.goal,
-              status:
-                state.goal.status === "ready" || state.goal.status === "confirmed"
-                  ? "active"
-                  : state.goal.status,
-            },
-      plan:
-        state.plan === null
-          ? null
-          : {
-              ...state.plan,
-              steps: cardStatuses(state.plan.steps),
-              status: state.plan.status === "approved" ? "executing" : state.plan.status,
-            },
+      plan: state.plan === null ? null : { ...state.plan, steps: cardStatuses(state.plan.steps) },
     })),
   );
 const encodeState = Schema.encodeEffect(Schema.fromJsonString(WorkflowState));
@@ -573,7 +535,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
               WHERE session_id = ${sessionId}`,
           )
         : insertGoalIdentity(sessionId, newId, now);
-      const state = yield* save(sessionId, {
+      yield* save(sessionId, {
         phase: standing.phase,
         goal: {
           ...input.goal,
@@ -593,7 +555,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
           ),
         ],
       });
-      return { state, newId };
+      return newId;
     });
     /**
      * Idempotent owner settlement of a run's new Goal request. A run `waiting` may still finish, so
@@ -632,7 +594,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
             return yield* reject("workflow_changed");
           const input = yield* decodeRequest(row.payload_json);
           return yield* commitNewGoal(sessionId, input).pipe(
-            Effect.flatMap(({ newId }) =>
+            Effect.flatMap((newId) =>
               nowIso.pipe(
                 Effect.flatMap(
                   (now) => sql`UPDATE workflow_new_goal_requests
@@ -855,15 +817,6 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                 event(current, "phase_changed", `${current.phase} -> ${next.phase}${cause}`, now),
               ],
             };
-          }),
-        ),
-
-      /** Direct owner transition requires a fully quiescent session. */
-      startNewGoal: (sessionId: string, input: StartNewGoal) =>
-        transacted(
-          Effect.gen(function* () {
-            if (yield* pendingNewGoal(sessionId)) return yield* refuseNewGoal("transition_pending");
-            return (yield* commitNewGoal(sessionId, input)).state;
           }),
         ),
 

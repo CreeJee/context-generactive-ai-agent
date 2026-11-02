@@ -15,12 +15,6 @@ import {
 import { Embedder, type EmbeddingError } from "../memory/embedding/embedder.ts";
 import { WorkflowPhase } from "./workflow.ts";
 
-const mcpRuleSourceFields = {
-  serverId: Schema.String,
-  name: Schema.String,
-  contentHash: Schema.String,
-};
-
 export const RuleSource = Schema.TaggedUnion({
   builtin: { name: Schema.String },
   project: { path: Schema.String, contentHash: Schema.String },
@@ -29,8 +23,6 @@ export const RuleSource = Schema.TaggedUnion({
     scope: Schema.Literals(["builtin", "global", "project"]),
     contentHash: Schema.String,
   },
-  "mcp-resource": mcpRuleSourceFields,
-  "mcp-prompt": mcpRuleSourceFields,
 });
 export type RuleSource = typeof RuleSource.Type;
 
@@ -50,7 +42,7 @@ export type WorkflowRule = typeof WorkflowRule.Type;
 export interface RuleQuery {
   readonly phase: WorkflowPhase;
   readonly text: string;
-  /** Additional project, skill or MCP rules. Built-in ids cannot be overridden. */
+  /** Additional project or skill rules. Built-in ids cannot be overridden. */
   readonly rules?: readonly WorkflowRule[];
   readonly limit?: number;
 }

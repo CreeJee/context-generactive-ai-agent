@@ -69,13 +69,24 @@ const verifying = Effect.fnUntraced(function* (sessionId: string) {
   return yield* workflows.finishRun(sessionId, "execute");
 });
 
-/** The workflow tool `name` of `phase`, called as the model would. */
+/** The session's run, still running as the owner records it; every tool of a test comes from it. */
+const startRun = Effect.fnUntraced(function* (sessionId: string) {
+  const runId = `${sessionId}:run`;
+  yield* sqlRun(
+    "INSERT OR IGNORE INTO chat_runs (run_id, thread_id, status, started_at) VALUES (?, ?, 'running', 1)",
+    runId,
+    sessionId,
+  );
+  return runId;
+});
+
+/** The workflow tool `name` of `phase`, called as the model would from the session's run. */
 const workflowTool = Effect.fnUntraced(function* (
   sessionId: string,
   phase: WorkflowState["phase"],
   name: string,
 ) {
-  const tools = (yield* WorkflowTools).toolsFor(sessionId, phase);
+  const tools = (yield* WorkflowTools).toolsFor(sessionId, phase, yield* startRun(sessionId));
   return (input: JsonValue) => callTool(tools, name, input);
 });
 
@@ -202,55 +213,6 @@ testAgent()("Workflows", (it) => {
     }),
   );
 
-  it.effect("upgrades persisted legacy statuses and missing evidence fields", () =>
-    Effect.gen(function* () {
-      const id = yield* freshSession;
-      const legacy = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
-        phase: "execute",
-        goal: {
-          version: 1,
-          statement: goal.statement,
-          outcomes: goal.outcomes,
-          constraints: goal.constraints,
-          nonGoals: goal.nonGoals,
-          assumptions: goal.assumptions,
-          openQuestions: [],
-          status: "confirmed",
-          updatedAt: "2026-01-01T00:00:00.000Z",
-        },
-        plan: {
-          version: 1,
-          goalVersion: 1,
-          summary: plan.summary,
-          steps: [{ ...plan.steps[0], status: "pending" }],
-          risks: [],
-          openQuestions: [],
-          status: "approved",
-          updatedAt: "2026-01-01T00:00:00.000Z",
-        },
-        ledger: [],
-      });
-      yield* sqlRun(
-        "INSERT INTO session_workflows (session_id, state_json, updated_at) VALUES (?, ?, ?)",
-        id,
-        legacy,
-        "2026-01-01T00:00:00.000Z",
-      );
-      const state = yield* (yield* Workflows).get(id);
-      expect(state.goal).toMatchObject({
-        status: "active",
-        evidence: [],
-        verification: { status: "not_run" },
-      });
-      expect(state.plan).toMatchObject({
-        status: "executing",
-        evidence: [],
-        verification: { status: "not_run" },
-        steps: [{ status: "ready", evidence: [] }],
-      });
-    }),
-  );
-
   it.effect("does not lose versions under concurrent updates", () =>
     Effect.gen(function* () {
       const id = yield* freshSession;
@@ -347,36 +309,50 @@ testAgent()("Workflows", (it) => {
       const id = yield* freshSession;
       const workflows = yield* Workflows;
       yield* executing(id);
-      yield* workflows.updateProgress(id, {
-        ...noProgress,
-        steps: [{ id: "store", status: "completed", evidence: ["workflow.test.ts passed"] }],
-        planEvidence: ["State persisted after reload"],
-        detail: "Completed the storage step",
-      });
-      const state = yield* workflows.updateProgress(id, {
-        ...noProgress,
-        goalStatus: "completed",
-        planStatus: "completed",
-        goalEvidence: ["The requested workflow is available"],
-        verification: {
-          status: "passed",
-          summary: "The workflow persists and reloads",
-          evidence: ["24 workflow assertions passed"],
+      const run = yield* startRun(id);
+      yield* workflows.updateProgress(
+        id,
+        {
+          ...noProgress,
+          steps: [{ id: "store", status: "completed", evidence: ["workflow.test.ts passed"] }],
+          planEvidence: ["State persisted after reload"],
+          detail: "Completed the storage step",
         },
-        detail: "Verification passed",
+        run,
+      );
+      const staged = yield* workflows.updateProgress(
+        id,
+        {
+          ...noProgress,
+          goalStatus: "completed",
+          planStatus: "completed",
+          goalEvidence: ["The requested workflow is available"],
+          verification: {
+            status: "passed",
+            summary: "The workflow persists and reloads",
+            evidence: ["24 workflow assertions passed"],
+          },
+          detail: "Verification passed",
+        },
+        run,
+      );
+      // The running run's completion waits until the run ends.
+      expect(staged).toMatchObject({
+        phase: "execute",
+        goal: { status: "active" },
+        plan: { status: "executing" },
       });
+      yield* sqlRun("UPDATE chat_runs SET status = 'completed' WHERE run_id = ?", run);
+      yield* workflows.finishRun(id, "execute");
+      const state = yield* workflows.finishRun(id, "verify");
       expect(state.goal).toMatchObject({ status: "completed", verification: { status: "passed" } });
       expect(state.plan).toMatchObject({
         status: "completed",
         verification: { status: "passed" },
         steps: [{ id: "store", status: "done", evidence: ["workflow.test.ts passed"] }],
       });
-      // Completing the Goal with its Plan leaves Execute, so 0.0.17's stuck phase cannot recur.
+      // The finished runs take the completed Plan out of Execute, so 0.0.17's stuck phase cannot recur.
       expect(state.phase).toBe("completed");
-      expect(state.ledger.slice(-2).map((event) => event.kind)).toEqual([
-        "verification_recorded",
-        "phase_changed",
-      ]);
     }),
   );
 

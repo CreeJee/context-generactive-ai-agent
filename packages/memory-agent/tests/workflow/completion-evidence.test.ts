@@ -57,14 +57,18 @@ const noMappings: UpdateWorkflowProgress = {
 type Registration = "native" | "legacy";
 
 /**
- * A fresh session whose Goal is executing and bound to its own completed run with one successful
- * proof node. Every row is keyed by the session, so tests share the agent without colliding.
+ * A fresh session whose Goal is executing, with two bound runs: an earlier Goal worker run that
+ * completed with one successful proof node, and the owner-loop run that records completion, still
+ * running. Every row is keyed by the session, so tests share the agent without colliding.
  */
 const fixture = Effect.fnUntraced(function* (registration: Registration) {
   const { project } = yield* TestEnv;
   const workflows = yield* Workflows;
+  const goals = yield* GoalExecutions;
+  const bindings = yield* workflowRunBindings;
   const sessionId = (yield* (yield* Sessions).create(project.id)).id;
   const run = `run-${sessionId}`;
+  const recorder = `recorder-${sessionId}`;
   const proof = `proof-${sessionId}`;
   const source = `source-${sessionId}`;
   yield* workflows.updateGoal(sessionId, goal);
@@ -72,58 +76,71 @@ const fixture = Effect.fnUntraced(function* (registration: Registration) {
   yield* workflows.setPhase(sessionId, "execute");
   const goalId = yield* workflows.goalInstanceId(sessionId);
   if (goalId === null) return yield* Effect.die("Expected Goal identity");
-  const revision = Number(
-    (yield* sqlGet(
-      "SELECT max(id) AS id FROM workflow_state_revisions WHERE session_id = ?",
-      sessionId,
-    ))!.id,
-  );
-  const bind = (yield* workflowRunBindings).bind(sessionId, run, revision);
-  switch (registration) {
-    case "native": {
-      yield* sqlRun(
-        "INSERT INTO workflow_goal_native_artifacts VALUES (?, ?, ?, ?, ?, ?)",
-        goalId,
-        "file:///owner/native.mjs",
-        "a".repeat(64),
-        "native-v1",
-        "b".repeat(64),
-        "2026-10-07T00:00:00.000Z",
-      );
-      yield* sqlRun(
-        "INSERT INTO workflow_goal_worker_generations VALUES (?, ?, ?, ?, ?)",
-        goalId,
-        source,
-        "c".repeat(64),
-        "file:///owner/worker.mjs",
-        "2026-10-07T00:00:00.000Z",
-      );
-      const goals = yield* GoalExecutions;
-      const payload = GoalExecutionPayload.make({
-        identity: {
-          owner: { ownerId: project.id, generation: "test-owner-generation" },
-          sessionId,
-          runId: run,
-          goalInstanceId: goalId,
-          workflowRevisionId: revision,
-        },
-      });
-      expect(
-        OwnerWorkflowAdmissionResult.$is("admitted")(yield* goals.admitAndStart(payload, bind)),
-      ).toBe(true);
-      yield* goals.succeed(payload);
-      yield* GoalExecution.execute(payload);
-      break;
-    }
-    case "legacy":
-      expect(Admission.$is("bound")(yield* bind)).toBe(true);
-      break;
+  if (registration === "native") {
+    yield* sqlRun(
+      "INSERT INTO workflow_goal_native_artifacts VALUES (?, ?, ?, ?, ?, ?)",
+      goalId,
+      "file:///owner/native.mjs",
+      "a".repeat(64),
+      "native-v1",
+      "b".repeat(64),
+      "2026-10-07T00:00:00.000Z",
+    );
+    yield* sqlRun(
+      "INSERT INTO workflow_goal_worker_generations VALUES (?, ?, ?, ?, ?)",
+      goalId,
+      source,
+      "c".repeat(64),
+      "file:///owner/worker.mjs",
+      "2026-10-07T00:00:00.000Z",
+    );
   }
-  yield* sqlRun(
-    "INSERT INTO chat_runs (run_id, thread_id, status, started_at) VALUES (?, ?, 'completed', 1)",
-    run,
-    sessionId,
-  );
+  /**
+   * Starts `runId` as the owner does: bound to the latest revision, with a native Goal's durable
+   * execution admitted beside it. `complete` is how the owner settles the run once it completes.
+   */
+  const start = Effect.fnUntraced(function* (runId: string) {
+    const revision = Number(
+      (yield* sqlGet(
+        "SELECT max(id) AS id FROM workflow_state_revisions WHERE session_id = ?",
+        sessionId,
+      ))!.id,
+    );
+    const bind = bindings.bind(sessionId, runId, revision);
+    const payload = GoalExecutionPayload.make({
+      identity: {
+        owner: { ownerId: project.id, generation: "test-owner-generation" },
+        sessionId,
+        runId,
+        goalInstanceId: goalId,
+        workflowRevisionId: revision,
+      },
+    });
+    switch (registration) {
+      case "native":
+        expect(
+          OwnerWorkflowAdmissionResult.$is("admitted")(yield* goals.admitAndStart(payload, bind)),
+        ).toBe(true);
+        break;
+      case "legacy":
+        expect(Admission.$is("bound")(yield* bind)).toBe(true);
+        break;
+    }
+    yield* sqlRun(
+      "INSERT INTO chat_runs (run_id, thread_id, status, started_at) VALUES (?, ?, 'running', 1)",
+      runId,
+      sessionId,
+    );
+    return {
+      complete: Effect.andThen(
+        sqlRun("UPDATE chat_runs SET status = 'completed' WHERE run_id = ?", runId),
+        registration === "native"
+          ? Effect.andThen(goals.succeed(payload), GoalExecution.execute(payload))
+          : Effect.void,
+      ),
+    };
+  });
+  const { complete: completeRun } = yield* start(run);
   yield* sqlRun(
     "INSERT INTO workflow_worker_dispatches VALUES (?, ?, ?)",
     run,
@@ -131,6 +148,8 @@ const fixture = Effect.fnUntraced(function* (registration: Registration) {
     "2026-10-07T00:00:00.000Z",
   );
   yield* insertNode({ id: proof, projectId: project.id, sessionId, run, ok: true });
+  yield* completeRun;
+  const { complete: completeRecorder } = yield* start(recorder);
   const mapping = (outcomeIndex: number) => ({
     outcomeIndex,
     outcomeText: goal.outcomes[outcomeIndex]!,
@@ -149,14 +168,25 @@ const fixture = Effect.fnUntraced(function* (registration: Registration) {
     sessionId,
     goalId,
     run,
+    recorder,
     proof,
     source,
     mapping,
     complete,
+    start,
+    completeRecorder,
   };
 });
 
 type Fixture = Effect.Success<ReturnType<typeof fixture>>;
+
+/** The recorder's run completes; the owner finishes it in Execute, then the next run in Verify. */
+const finishRuns = Effect.fnUntraced(function* (fx: Fixture) {
+  const workflows = yield* Workflows;
+  yield* fx.completeRecorder;
+  yield* workflows.finishRun(fx.sessionId, "execute");
+  return yield* workflows.finishRun(fx.sessionId, "verify");
+});
 
 const insertNode = (node: {
   id: string;
@@ -179,7 +209,7 @@ const insertNode = (node: {
 const refused = Effect.fnUntraced(function* (
   fx: Fixture,
   input: UpdateWorkflowProgress,
-  recorder: string = fx.run,
+  recorder: string = fx.recorder,
 ) {
   const workflows = yield* Workflows;
   const before = yield* workflows.get(fx.sessionId);
@@ -196,7 +226,6 @@ const refusals = [
   "failed result",
   "interrupted run",
   // Criterion mapping shape.
-  "missing mappings",
   "incomplete mappings",
   "foreign run node",
   "stale outcome text",
@@ -213,7 +242,7 @@ const refusals = [
 ] as const;
 type Refusal = (typeof refusals)[number];
 
-const ownExecution = "json_extract(payload_json, '$.identity.sessionId') = ?";
+const proofExecution = "json_extract(payload_json, '$.identity.runId') = ?";
 
 /** Breaks one link of the completion proof and returns the progress update to attempt. */
 const breakProof = Effect.fnUntraced(function* (fx: Fixture, failure: Refusal) {
@@ -222,9 +251,9 @@ const breakProof = Effect.fnUntraced(function* (fx: Fixture, failure: Refusal) {
       ...fx.complete,
       criterionMappings: [fx.mapping(0), { ...fx.mapping(1), ...override }],
     },
-    recorder: fx.run,
+    recorder: fx.recorder,
   });
-  const unchanged = { input: fx.complete, recorder: fx.run };
+  const unchanged = { input: fx.complete, recorder: fx.recorder };
   const badNode = `${fx.run}-bad`;
   const operation = (sideEffect: 0 | 1, reply: string, status: string) =>
     sqlRun(
@@ -260,12 +289,10 @@ const breakProof = Effect.fnUntraced(function* (fx: Fixture, failure: Refusal) {
     case "interrupted run":
       yield* sqlRun("UPDATE chat_runs SET status = 'interrupted' WHERE run_id = ?", fx.run);
       return unchanged;
-    case "missing mappings":
-      return { input: noMappings, recorder: fx.run };
     case "incomplete mappings":
       return {
         input: { ...fx.complete, criterionMappings: [fx.mapping(0)] },
-        recorder: fx.run,
+        recorder: fx.recorder,
       };
     case "foreign run node": {
       const foreign = `${fx.run}-foreign`;
@@ -283,18 +310,18 @@ const breakProof = Effect.fnUntraced(function* (fx: Fixture, failure: Refusal) {
     case "wrong run":
       return withSecondMapping({ runId: "other" });
     case "missing execution":
-      yield* sqlRun(`DELETE FROM owner_workflow_executions WHERE ${ownExecution}`, fx.sessionId);
+      yield* sqlRun(`DELETE FROM owner_workflow_executions WHERE ${proofExecution}`, fx.run);
       return unchanged;
     case "suspended execution":
       yield* sqlRun(
-        `UPDATE owner_workflow_executions SET status = 'suspended', result_json = '{"_tag":"Suspended"}' WHERE ${ownExecution}`,
-        fx.sessionId,
+        `UPDATE owner_workflow_executions SET status = 'suspended', result_json = '{"_tag":"Suspended"}' WHERE ${proofExecution}`,
+        fx.run,
       );
       return unchanged;
     case "failed execution":
       yield* sqlRun(
-        `UPDATE owner_workflow_executions SET status = 'completed', result_json = '{"_tag":"Complete","exit":{"_tag":"Failure"}}' WHERE ${ownExecution}`,
-        fx.sessionId,
+        `UPDATE owner_workflow_executions SET status = 'completed', result_json = '{"_tag":"Complete","exit":{"_tag":"Failure"}}' WHERE ${proofExecution}`,
+        fx.run,
       );
       return unchanged;
     case "pending operation":
@@ -319,24 +346,23 @@ testAgent()("criterion-linked Goal completion", (it) => {
     Effect.gen(function* () {
       const fx = yield* fixture("native");
       const workflows = yield* Workflows;
-      yield* sqlRun("UPDATE chat_runs SET status = 'running' WHERE run_id = ?", fx.run);
       yield* sqlRun(
         `INSERT INTO owner_rpc_operations
         (run_id, run_key, operation_id, fingerprint, side_effect, reply_json, status)
         VALUES (?, '{}', 1, '{}', 1, '{"type":"pending","operationId":1}', 'pending')`,
-        fx.run,
+        fx.recorder,
       );
-      const staged = yield* workflows.updateProgress(fx.sessionId, fx.complete, fx.run);
+      const staged = yield* workflows.updateProgress(fx.sessionId, fx.complete, fx.recorder);
       expect(staged.goal?.status).toBe("active");
       expect(staged.goal?.completion).toBeUndefined();
-      expect(staged.goal?.completionRequest?.recorderRunId).toBe(fx.run);
+      expect(staged.goal?.completionRequest?.recorderRunId).toBe(fx.recorder);
       yield* workflows.finishRun(fx.sessionId, "execute");
       const pending = yield* workflows.finishRun(fx.sessionId, "verify");
       expect(pending.goal?.completion).toBeUndefined();
-      yield* sqlRun("UPDATE chat_runs SET status = 'completed' WHERE run_id = ?", fx.run);
+      yield* fx.completeRecorder;
       yield* sqlRun(
         "UPDATE owner_rpc_operations SET status = 'succeeded' WHERE run_id = ?",
-        fx.run,
+        fx.recorder,
       );
       const settled = yield* workflows.finishRun(fx.sessionId, "verify");
       expect(settled.goal?.status).toBe("completed");
@@ -348,11 +374,13 @@ testAgent()("criterion-linked Goal completion", (it) => {
     Effect.gen(function* () {
       const fx = yield* fixture("native");
       const result = yield* callTool(
-        (yield* WorkflowTools).toolsFor(fx.sessionId, "execute", fx.run),
+        (yield* WorkflowTools).toolsFor(fx.sessionId, "execute", fx.recorder),
         "update_workflow_progress",
         { ...fx.complete, recorderRunId: "spoofed" },
       );
-      expect(result).toMatchObject({ goal: { completion: { recorderRunId: fx.run } } });
+      expect(result).toMatchObject({
+        goal: { completionRequest: { recorderRunId: fx.recorder } },
+      });
     }),
   );
 
@@ -367,14 +395,20 @@ testAgent()("criterion-linked Goal completion", (it) => {
   it.effect("a run on the owner loop completes a Goal a worker ran before", () =>
     Effect.gen(function* () {
       const fx = yield* fixture("native");
-      yield* sqlRun("DELETE FROM workflow_worker_dispatches WHERE run_id = ?", fx.run);
-      const state = yield* (yield* Workflows).updateProgress(fx.sessionId, fx.complete, fx.run);
+      yield* (yield* Workflows).updateProgress(fx.sessionId, fx.complete, fx.recorder);
+      const state = yield* finishRuns(fx);
       expect(state.goal?.status).toBe("completed");
       expect(state.goal?.completion?.runs).toEqual([
         {
-          runId: fx.run,
+          runId: fx.recorder,
           workflowRevisionId: expect.any(Number),
           dispatchGeneration: null,
+          durableExecutionId: expect.any(String),
+        },
+        {
+          runId: fx.run,
+          workflowRevisionId: expect.any(Number),
+          dispatchGeneration: "dispatch",
           durableExecutionId: expect.any(String),
         },
       ]);
@@ -384,11 +418,8 @@ testAgent()("criterion-linked Goal completion", (it) => {
   it.effect("registration alone and finishRun never prove outcomes", () =>
     Effect.gen(function* () {
       const fx = yield* fixture("native");
-      const workflows = yield* Workflows;
-      yield* refused(fx, noMappings);
-      yield* workflows.updateProgress(fx.sessionId, verifiedProgress);
-      yield* workflows.finishRun(fx.sessionId, "execute");
-      const state = yield* workflows.finishRun(fx.sessionId, "verify");
+      yield* (yield* Workflows).updateProgress(fx.sessionId, noMappings, fx.recorder);
+      const state = yield* finishRuns(fx);
       expect(state.goal?.status).toBe("active");
       expect(state.goal?.completion).toBeUndefined();
     }),
@@ -411,8 +442,18 @@ testAgent()("criterion-linked Goal completion", (it) => {
   it.effect("contradictory frozen snapshot is refused", () =>
     Effect.gen(function* () {
       const fx = yield* fixture("native");
-      yield* (yield* Workflows).updateProgress(fx.sessionId, fx.complete, fx.run);
-      yield* refused(fx, { ...fx.complete, criterionMappings: [fx.mapping(1), fx.mapping(0)] });
+      const workflows = yield* Workflows;
+      yield* workflows.updateProgress(fx.sessionId, fx.complete, fx.recorder);
+      expect((yield* finishRuns(fx)).goal?.completion).toBeDefined();
+      // A later Verify run cannot record another snapshot over the frozen one.
+      yield* workflows.setPhase(fx.sessionId, "verify");
+      const later = `later-${fx.sessionId}`;
+      yield* fx.start(later);
+      yield* refused(
+        fx,
+        { ...fx.complete, criterionMappings: [fx.mapping(1), fx.mapping(0)] },
+        later,
+      );
     }),
   );
 
@@ -420,7 +461,8 @@ testAgent()("criterion-linked Goal completion", (it) => {
     Effect.gen(function* () {
       const workflows = yield* Workflows;
       const legacy = yield* fixture("legacy");
-      const state = yield* workflows.updateProgress(legacy.sessionId, noMappings);
+      yield* workflows.updateProgress(legacy.sessionId, noMappings, legacy.recorder);
+      const state = yield* finishRuns(legacy);
       expect(state.goal?.status).toBe("completed");
       expect(state.goal?.completion).toBeUndefined();
       const native = yield* fixture("native");
@@ -440,26 +482,24 @@ testAgent()("criterion-linked Goal completion across reopen", (it) => {
         const env = yield* TestEnv;
         const fx = yield* fixture("native");
         const workflows = yield* Workflows;
-        const state = yield* workflows.updateProgress(fx.sessionId, fx.complete, fx.run);
+        const staged = yield* workflows.updateProgress(fx.sessionId, fx.complete, fx.recorder);
+        const retry = yield* workflows.updateProgress(fx.sessionId, fx.complete, fx.recorder);
+        expect(retry.goal?.completionRequest).toEqual(staged.goal?.completionRequest);
+        const state = yield* finishRuns(fx);
         expect(state.goal?.status).toBe("completed");
         expect(state.goal?.completion).toMatchObject({
           goalInstanceId: fx.goalId,
           goalVersion: 1,
           planVersion: 1,
           projectId: fx.projectId,
-          recorderRunId: fx.run,
+          recorderRunId: fx.recorder,
           sourceGeneration: fx.source,
           nativeRegistration: { artifactHash: "a".repeat(64) },
           runs: [
-            {
-              runId: fx.run,
-              dispatchGeneration: "dispatch",
-              durableExecutionId: expect.any(String),
-            },
+            { runId: fx.recorder, dispatchGeneration: null },
+            { runId: fx.run, dispatchGeneration: "dispatch" },
           ],
         });
-        const retry = yield* workflows.updateProgress(fx.sessionId, fx.complete, fx.run);
-        expect(retry.goal?.completion).toEqual(state.goal?.completion);
         yield* env.reopen;
         const reopened = yield* env.use(
           Effect.gen(function* () {

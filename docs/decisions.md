@@ -947,7 +947,7 @@
 - Upstream 반영: Goal이 merge되면 같은 대상 브랜치의 진행 중인 다른 Goal에 `upstream_pending`을 표시한다. 그 Goal의 루프가 대상을 Goal 브랜치에 합치고, 바뀐 파일과 `boundaries`가 겹치는 done 카드만 다시 검증한다. `boundaries`가 없는 done 카드는 영향받은 것으로 본다. 다시 검증에 실패하면 `upstream_regressed` attention이다. 합치기가 충돌하면 지금 묻지 않고 그 Goal의 merge 때 `MergeConflict`로 다룬다.
 - 파일 겹침: 카드를 배정하기 전에 `boundaries`를 다른 Goal의 카드와 비교한다. 다른 Goal에서 실행·검증 중인 카드와 겹치면 그 카드가 먼저다. 이 카드는 미루고, 두 보드에 알림을 남긴다. 아직 merge되지 않은 다른 Goal의 done 카드와 겹치면 순서를 정할 수 없으므로 `FileOverlap`(선택지 wait·proceed, 둘 다 카드를 ready로)을 묻는다. key는 `file_overlap:<otherGoal>`다.
 - 모든 카드가 끝났을 때의 채팅 알림은 "merge queue에 넘겼다"는 내용으로 바꿨다. 모델이 직접 merge하지 않는다.
-- `closeSuperseded`: 채팅 도구의 직접 `startNewGoal` 경로에서도 부른다. 새 Goal 요청 승인 경로, 루프가 pointer 변경을 발견하는 경로와 함께, Goal pointer가 새 instance로 바뀌는 모든 경로에서 이전 Goal의 대기 판단을 닫는다.
+- `closeSuperseded`: 새 Goal 요청 승인 경로와 루프가 pointer 변경을 발견하는 경로에서 부른다. Goal pointer가 새 instance로 바뀌는 모든 경로에서 이전 Goal의 대기 판단을 닫는다. 채팅 도구의 직접 `startNewGoal` 경로는 2026-11-03에 지웠다. 도구는 요청(`requestNewGoal`)만 남기고, owner가 실행이 끝난 뒤 적용한다.
 - 설정: `GET/POST /api/settings/kanban`(동시 실행 수 1~32, null이면 기기 기본값), `GET/POST /api/projects/:project/kanban`(보호 브랜치 목록, 빈 목록이면 모든 브랜치에 자동 merge). 우선순위·의존은 세션 칸반 API의 `SetPriority`·`SetDependencies` 액션이다. 설정 화면은 "실행 › 칸반 실행", 보드는 Goal 스케줄 패널에서 바꾼다.
 - 칸반이 아닌 Goal은 스케줄러·merge queue에 등록하지 않으므로 동작이 그대로다.
 
@@ -2275,6 +2275,15 @@
 - `unit`·`feature`는 `isolate: false`로 워커마다 모듈 그래프 하나를 함께 쓴다. 파일마다 다시 import하는 데 실행 시간의 약 3분의 1이 들었다(85.5초 → 56.0초).
   - 이 두 프로젝트의 테스트는 바꾼 spy·env를 그 테스트 안에서 되돌린다. 테스트 사이에 남는 모듈 상태에 기대지 않는다.
   - `engine`은 파일 전체에서 모듈 export를 바꾸는 테스트가 있어 격리를 유지한다.
+- 테스트만 부르던 제품 코드는 테스트와 함께 지운다. 동작이 실제로 일어나면 테스트를 제품 경로로 옮긴다. 손으로 쓴 SQL이나 테스트 전용 옵션으로 만든 상태는 쓰지 않는다. 2026-11-03에 지운 경로는 다음과 같다.
+  - 채팅 도구의 직접 `startNewGoal`. 제품의 도구 호출은 늘 run id를 넘겨 요청 경로로 간다.
+  - 이미지 라우터의 fixed 모드, 품질·속도·비용 선호와 `allowUnknownCost`. 라우터는 늘 balanced 가중치로 고른다.
+  - 연결된 적 없는 `HistoryProjectionPublisher`와 projection rollback SQL, 0.0.14 이후 나올 수 없는 소수 ordinal 복구.
+  - 0.0.12 이전에만 있던 Goal `ready`·`confirmed`, Plan `approved` 상태 읽기.
+  - MCP 규칙 출처. 제품이 만든 적 없고 저장하지 않는다.
+  - 0.0.11부터 queue id가 있으므로 id 없는 옛 turn을 텍스트로 맞추던 경로.
+  - `ReportDelivery`의 `allowLoopback`, `executionAdmission` 레이어 옵션, legacy owner RPC fingerprint 변환, `PersistedQueueItems.deadLetters`, `CardAttempts.awaitOutcome`.
+- 시작 sweep의 `report` 모드는 테스트만 쓰지만 남긴다. 판정이 틀렸을 때 되돌리는 스위치로 둔 결정(2026-10-29)을 따른다.
 
 ## BTW 별도 질문 채팅 (2026-10-12)
 

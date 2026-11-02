@@ -146,9 +146,10 @@ const withHistory = Effect.fnUntraced(function* () {
   return { workflows, session, historical, old: yield* identity(session) };
 });
 
-/** `withHistory`, plus the bound run that asks for the new Goal and is still running. */
-const withInvokingRun = Effect.fnUntraced(function* () {
-  const f = yield* withHistory();
+/** `f`, plus the run that asks for the new Goal: bound to the latest revision and still running. */
+const invokingRun = Effect.fnUntraced(function* (
+  f: Effect.Success<ReturnType<typeof withHistory>>,
+) {
   const invoking = `${f.session}:invoking`;
   yield* bindRun(f.session, invoking);
   yield* startRun(f.session, invoking, "running");
@@ -158,7 +159,12 @@ const withInvokingRun = Effect.fnUntraced(function* () {
   return { ...f, invoking, request, settle };
 });
 
-/** What `startNewGoal` does in a case: apply the new Goal, or refuse it for `reason`. */
+/** `withHistory`, plus the bound run that asks for the new Goal and is still running. */
+const withInvokingRun = Effect.fnUntraced(function* () {
+  return yield* invokingRun(yield* withHistory());
+});
+
+/** What a run's new Goal request does in a case: apply the new Goal, or refuse it for `reason`. */
 type Expected = Data.TaggedEnum<{ applied: {}; refused: { readonly reason: string } }>;
 const Expected = Data.taggedEnum<Expected>();
 
@@ -230,22 +236,24 @@ const transitionCases: ReadonlyArray<{
   })),
 ];
 
-/** The session's start_new_goal, called as the model would. */
-const goalTool = Effect.fnUntraced(function* (session: string) {
-  const tools = (yield* WorkflowTools).toolsFor(session, "goal");
+/** The session's start_new_goal, called as the model would from the run `runId`. */
+const goalTool = Effect.fnUntraced(function* (session: string, runId: string) {
+  const tools = (yield* WorkflowTools).toolsFor(session, "goal", runId);
   return (input: JsonValue) => callTool(tools, "start_new_goal", input);
 });
 
 testAgent()("explicit new Goal transition", (it) => {
-  it.effect.each(transitionCases)("startNewGoal from $name", (c) =>
+  it.effect.each(transitionCases)("a run's new Goal request from $name", (c) =>
     Effect.gen(function* () {
-      const { workflows, session, historical, old } = yield* withHistory();
+      const history = yield* withHistory();
+      const { workflows, session, historical, old } = history;
       if (c.closed) {
         yield* workflows.setPhase(session, "verify");
         yield* workflows.updateProgress(session, closingProgress);
         if (c.phase === "completed") yield* workflows.finishRun(session, "verify");
       } else if (c.phase !== "goal") yield* workflows.setPhase(session, c.phase);
       expect((yield* workflows.get(session)).phase).toBe(c.phase);
+      const { invoking, settle } = yield* invokingRun(history);
       switch (c.historicalRun) {
         case "completed":
           break;
@@ -272,11 +280,15 @@ testAgent()("explicit new Goal transition", (it) => {
             return null;
         }
       })();
+      const request = workflows.requestNewGoal(session, invoking, transition(previous));
       const before = yield* rows("revisions", session);
       yield* Expected.$match(c.admission, {
         applied: () =>
           Effect.gen(function* () {
-            expect(yield* workflows.startNewGoal(session, transition(previous))).toMatchObject({
+            expect(yield* request).toEqual({ status: "accepted", runId: invoking });
+            yield* setRun(invoking, "completed");
+            expect(NewGoalSettlement.$is("applied")(yield* settle())).toBe(true);
+            expect(yield* workflows.get(session)).toMatchObject({
               goal: { version: 1 },
               plan: null,
             });
@@ -284,9 +296,7 @@ testAgent()("explicit new Goal transition", (it) => {
           }),
         refused: ({ reason }) =>
           Effect.gen(function* () {
-            expect(
-              yield* Effect.flip(workflows.startNewGoal(session, transition(previous))),
-            ).toMatchObject({ reason });
+            expect(yield* Effect.flip(request)).toMatchObject({ reason });
             expect(yield* identity(session)).toBe(old);
             expect(yield* rows("revisions", session)).toEqual(before);
           }),
@@ -296,22 +306,31 @@ testAgent()("explicit new Goal transition", (it) => {
 
   it.effect("owner tool is exposed at potential source phases and checks latest state", () =>
     Effect.gen(function* () {
-      const { workflows, session, old } = yield* withHistory();
+      const f = yield* withInvokingRun();
       const tools = yield* WorkflowTools;
       const exposed = (phase: WorkflowState["phase"]) =>
-        tools.toolsFor(session, phase).some(({ tool }) => tool.name === "start_new_goal");
+        tools
+          .toolsFor(f.session, phase, f.invoking)
+          .some(({ tool }) => tool.name === "start_new_goal");
       (["chat", "execute"] as const).forEach((phase) => expect(exposed(phase)).toBe(false));
       (["goal", "plan", "verify", "completed"] as const).forEach((phase) =>
         expect(exposed(phase)).toBe(true),
       );
-      const execute = yield* goalTool(session);
-      yield* workflows.setPhase(session, "execute");
-      expect(yield* execute(transition(old))).toMatchObject({
+      const call = yield* goalTool(f.session, f.invoking);
+      // The owner checks the session at call time: a run started since then refuses it.
+      const other = `${f.session}:other`;
+      yield* startRun(f.session, other, "running");
+      expect(yield* call(transition(f.old))).toMatchObject({
         error: "new_goal_transition_refused",
-        reason: "phase_not_authorized",
+        reason: "run_outcome_uncertain",
       });
-      yield* workflows.setPhase(session, "plan");
-      expect(yield* execute(transition(old))).toMatchObject({ goal: { version: 1 }, plan: null });
+      yield* setRun(other, "completed");
+      expect(yield* call(transition(f.old))).toMatchObject({
+        status: "accepted",
+        runId: f.invoking,
+        applied: false,
+      });
+      expect(yield* identity(f.session)).toBe(f.old);
     }),
   );
 
@@ -344,10 +363,19 @@ testAgent()("explicit new Goal transition", (it) => {
         }),
         session,
       );
-      const before = yield* rows("revisions", session);
-      expect(yield* workflows.startNewGoal(session, transition(null))).toMatchObject({
-        goal: { version: 1, evidence: [] },
+      // A legacy Goal binds no run, so the run asking for the new Goal is unbound.
+      const invoking = `${session}:invoking`;
+      yield* startRun(session, invoking, "running");
+      expect(yield* workflows.requestNewGoal(session, invoking, transition(null))).toEqual({
+        status: "accepted",
+        runId: invoking,
       });
+      const before = yield* rows("revisions", session);
+      yield* setRun(invoking, "completed");
+      expect(
+        NewGoalSettlement.$is("applied")(yield* workflows.settleNewGoalRequest(session, invoking)),
+      ).toBe(true);
+      expect(yield* workflows.get(session)).toMatchObject({ goal: { version: 1, evidence: [] } });
       expect((yield* rows("revisions", session)).slice(0, before.length)).toEqual(before);
       expect(yield* rows("goalInstances", session)).toHaveLength(1);
     }),
@@ -416,9 +444,6 @@ testAgent()("deferred new Goal request", (it) => {
       expect(yield* Effect.flip(f.request(competing))).toMatchObject({
         reason: "transition_pending",
       });
-      expect(
-        yield* Effect.flip(f.workflows.startNewGoal(f.session, transition(f.old))),
-      ).toMatchObject({ reason: "transition_pending" });
       expect(yield* rows("requests", f.session)).toHaveLength(1);
       expect(yield* identity(f.session)).toBe(f.old);
       expect(yield* rows("revisions", f.session)).toEqual(before);
@@ -454,14 +479,18 @@ testAgent()("new Goal transition across reopening", (it) => {
     () =>
       Effect.gen(function* () {
         const env = yield* TestEnv;
-        const { workflows, session, old } = yield* env.use(withHistory());
+        const history = yield* env.use(withHistory());
+        const { workflows, session, old } = history;
         yield* workflows.updateProgress(session, closingProgress);
         yield* workflows.setPhase(session, "verify");
+        const { invoking, request, settle } = yield* env.use(invokingRun(history));
         const before = yield* snapshot(session);
-        const next = yield* workflows.startNewGoal(session, transition(old));
+        yield* request();
+        yield* setRun(invoking, "completed");
+        yield* settle();
         const newId = yield* identity(session);
         expect(newId).not.toBe(old);
-        expect(next).toMatchObject({
+        expect(yield* workflows.get(session)).toMatchObject({
           phase: "goal",
           plan: null,
           goal: { version: 1, evidence: [], verification: { status: "not_run", evidence: [] } },
@@ -595,9 +624,11 @@ testAgent()("new Goal transition across reopening", (it) => {
       yield* sqlRun(
         `INSERT INTO kanban_goals (goal_instance_id, session_id, project_id, project_root, mode,
            goal_version, status, created_at, updated_at)
-         VALUES (?, ?, 'p1', '/tmp/p1', 'sequential', 1, 'active', 1, 1)`,
+         VALUES (?, ?, ?, ?, 'sequential', 1, 'active', 1, 1)`,
         old,
         session,
+        env.project.id,
+        env.project.root,
       );
       const edited = yield* workflows.updateGoal(session, { ...goal, statement: "revised" });
       expect(edited.phase).toBe("execute");
