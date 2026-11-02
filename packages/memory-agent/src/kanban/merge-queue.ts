@@ -8,6 +8,7 @@ import {
   Match,
   Option,
   Predicate,
+  Schema,
   Stream,
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -31,6 +32,7 @@ import {
 import { overlappingBoundaries, ProjectScheduler } from "./scheduler.ts";
 import { CardWorktrees, type GoalRef } from "./worktree.ts";
 import { BoardHealth } from "./board-health.ts";
+import { LoopStep } from "../runtime/loop-health.ts";
 
 /**
  * The merge queue of the project scheduler (docs/kanban-orchestration.md "브랜치 흐름" 5,
@@ -53,6 +55,18 @@ const queueAuthor = (goalInstanceId: string): BoardAuthor =>
 const mergeRounds = 3;
 
 const merge = GoalMergeState.cases;
+
+/** What a step can change about a Goal's schedule. */
+const sameSchedule = Schema.toEquivalence(
+  Schema.Option(
+    Schema.Struct({
+      targetBranch: Schema.NullOr(Schema.String),
+      upstreamPending: Schema.Boolean,
+      merge: Schema.NullOr(GoalMergeState),
+      verifiedHead: Schema.NullOr(Schema.String),
+    }),
+  ),
+);
 
 const make = Effect.gen(function* () {
   const schedules = yield* GoalSchedules;
@@ -408,7 +422,12 @@ const make = Effect.gen(function* () {
     yield* events.publishSession(goal.sessionId, "run-state");
   });
 
-  /** Runs `work` for the Goal beside its loop, once at a time per Goal and per target. */
+  /**
+   * Runs `work` for the Goal beside its loop, once at a time per Goal and per target. The board's
+   * look is woken when the step changed the Goal's schedule or stopped. A step that changed nothing
+   * (a decision still unanswered, a busy checkout, a failed head not moved) is not: the look would
+   * offer the same step again at once. An answer, a card or the poll wakes it instead.
+   */
   const runFor = <E extends { readonly _tag: string }>(
     goal: KanbanGoal,
     name: string,
@@ -420,12 +439,26 @@ const make = Effect.gen(function* () {
       `${name}:${goal.goalInstanceId}`,
       serially(
         `target:${goal.projectRoot}:${target ?? ""}`,
-        serially(`goal:${goal.goalInstanceId}`, work),
+        serially(
+          `goal:${goal.goalInstanceId}`,
+          Effect.gen(function* () {
+            const before = yield* schedules.get(goal.goalInstanceId);
+            yield* work;
+            return !sameSchedule(before, yield* schedules.get(goal.goalInstanceId));
+          }),
+        ),
       ).pipe(
         // The stored merge state stays. A failure is retried; one that outlasts the retries stops
         // the board, and the look after a restart runs the step again.
         health.supervise(goal, "Kanban merge queue step stopped", { name }),
-        Effect.ensuring(scheduler.poke(goal.goalInstanceId)),
+        Effect.flatMap((step) =>
+          Effect.when(
+            scheduler.poke(goal.goalInstanceId),
+            Effect.succeed(
+              LoopStep.$match(step, { Continued: ({ value }) => value, Stopped: () => true }),
+            ),
+          ),
+        ),
       ),
       { onlyIfMissing: true },
     );

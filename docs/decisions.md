@@ -3703,3 +3703,10 @@
 - 답변 중인지는 서버가 정한다. `GET /api/projects/:project/running`이 그 프로젝트의 보관 안 된 대화 중 run이 실행 중인 id를 돌려준다(`AgentChat.runningSessions`, 프로세스 안 live run 레지스트리). run 시작·끝은 이미 세션 `run-state` 이벤트로 나가므로, 그 이벤트가 이 목록도 다시 읽게 한다. 보드 실행 여부는 기존 `/boards`의 `kanbanActive`를 쓴다.
 - 세 섹션은 같은 급이다. 보관함도 구분선이나 맨 아래 밀어내기 없이 "대화" 바로 다음에 오고, 행도 다른 대화와 같은 `SidebarMenuButton`이다. 보관된 행을 누르면 복원·원본 삭제 메뉴가 열린다. 섹션이 비어도 머리말은 남기고(보관함은 하나도 없을 때만 숨김) 안에 "없어요" 한 줄을 둔다.
 - 섹션 머리말은 목록을 스크롤할 때 위에 붙어 있다(sticky). 자기 섹션이 보이는 동안만 붙고, 다음 섹션 머리말이 올라오면 밀려 나간다.
+
+## merge queue 단계는 일정이 바뀌었을 때만 보드를 깨운다 (2026-11-03)
+
+- `GoalMerges`의 단계(`runFor`)는 끝날 때마다 그 Goal의 보드를 poke했다. 보드는 다시 보며 같은 단계를 `offer`하고, 단계는 또 poke했다. 판단 대기(`AwaitingDecision`), 사용자 checkout 변경 대기(`WaitingWorktree`), head가 그대로인 검증 실패(`VerifyFailed`)에서는 이 고리가 쉬지 않고 돌았다. 칸반 테스트에서 500ms에 보드가 247번 깨어났다.
+- 이제 단계 앞뒤의 Goal 일정(대상 브랜치, `upstream_pending`, merge 상태, 검증한 head)을 비교해, 바뀌었거나 단계가 재시도를 넘겨 멈췄을 때만 poke한다. 아무것도 바꾸지 않은 단계를 바로 다시 돌려도 결과가 같기 때문이다.
+- 기다리는 상태는 다른 신호로 이어진다. 사람의 답은 답 API가 poke하고, 카드 변화는 카드 이벤트가, 사용자 checkout 정리는 보드 poll(5초)이 깨운다. 그래서 `WaitingWorktree`는 checkout을 정리한 뒤 다음 poll까지 최대 한 주기를 기다린다.
+- interruption으로 끝난 단계는 poke하지 않는다.
