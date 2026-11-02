@@ -182,11 +182,13 @@ const followedUp = Effect.fnUntraced(function* (sessionId: string) {
     );
 });
 
+// The restart tests replace the block's agent, so every test reads services through `current`
+// instead of the block's layer, and all of them share one agent.
 testAgent({ testProvider })("asynchronous subagents", (it) => {
   it.effect("batch retrieval reviews each attempt for adoption in the same run", () =>
     Effect.gen(function* () {
       const { sessionId, turns } = yield* parentSession;
-      const trace = yield* WorkTraceStore;
+      const trace = yield* current(WorkTraceStore);
       const first = yield* receiptFrom(
         yield* send(sessionId, 'call run_subagent {"task":"nap first dispatch only"}'),
       );
@@ -219,7 +221,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
       Effect.gen(function* () {
         const { provider } = yield* TestEnv;
         const { sessionId, turns } = yield* parentSession;
-        const children = yield* Subagents;
+        const children = yield* current(Subagents);
         expect(yield* send(sessionId, "delegate and keep working")).toBe(
           "Independent parent work finished.",
         );
@@ -251,8 +253,8 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
     () =>
       Effect.gen(function* () {
         const { sessionId, turns } = yield* parentSession;
-        const children = yield* Subagents;
-        const trace = yield* WorkTraceStore;
+        const children = yield* current(Subagents);
+        const trace = yield* current(WorkTraceStore);
         const receipt = yield* receiptFrom(yield* send(sessionId, "dispatch only"));
         expect((yield* children.list(sessionId))[0]?.status).toBe("running");
         expect((yield* trace.taskDetail(sessionId, receipt.taskId))?.answerClaims).toEqual([]);
@@ -270,7 +272,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
         expect(yield* deliveredCompletions(sessionId)).toBe(1);
         expect(yield* userNodes(sessionId)).toBe(2);
         expect((yield* trace.taskDetail(sessionId, receipt.taskId))?.answerClaims).toEqual([]);
-        const messages = yield* (yield* RunStore).thread(sessionId);
+        const messages = yield* (yield* current(RunStore)).thread(sessionId);
         expect(
           messages.some(
             (message) =>
@@ -297,7 +299,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
   it.effect("concurrent children cannot cause overlapping parent turns", () =>
     Effect.gen(function* () {
       const { sessionId, turns } = yield* parentSession;
-      const children = yield* Subagents;
+      const children = yield* current(Subagents);
       const answer = yield* send(sessionId, "delegate twice dispatch only");
       expect(answer.match(/"status":"running"/g)).toHaveLength(2);
       expect((yield* children.list(sessionId)).map((child) => child.status)).toEqual([
@@ -344,7 +346,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
   it.effect("adoption requires retrieval in the same run", () =>
     Effect.gen(function* () {
       const { sessionId, turns } = yield* parentSession;
-      const trace = yield* WorkTraceStore;
+      const trace = yield* current(WorkTraceStore);
       const ids = idsOf(yield* receiptFrom(yield* send(sessionId, "dispatch only")));
       expect(yield* callTool(sessionId, "get_subagent_reports", oneAttempt(ids))).toContain(
         '"status":"running"',
@@ -368,8 +370,8 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
   it.effect("cancel reaches an approval-waiting child after its parent ended", () =>
     Effect.gen(function* () {
       const { sessionId } = yield* parentSession;
-      const children = yield* Subagents;
-      const trace = yield* WorkTraceStore;
+      const children = yield* current(Subagents);
+      const trace = yield* current(WorkTraceStore);
       const receipt = yield* receiptFrom(
         yield* send(sessionId, 'call run_subagent {"task":"shell: printf dispatch only"}'),
       );
@@ -380,7 +382,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
         ),
         "child approval wait",
       );
-      const agent = yield* AgentChat;
+      const agent = yield* current(AgentChat);
       yield* agent.cancel(sessionId, null);
       expect((yield* children.list(sessionId))[0]?.status).toBe("cancelled");
       expect((yield* trace.taskDetail(sessionId, receipt.taskId))?.attempts[0]?.status).toBe(
@@ -405,8 +407,8 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
   it.effect("queued named attempts cancel separately and reports use exact attempts", () =>
     Effect.gen(function* () {
       const { sessionId, turns } = yield* parentSession;
-      const children = yield* Subagents;
-      const trace = yield* WorkTraceStore;
+      const children = yield* current(Subagents);
+      const trace = yield* current(WorkTraceStore);
       const first = yield* receiptFrom(
         yield* send(
           sessionId,
@@ -445,7 +447,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
   it.effect("resume returns a new running attempt receipt without awaiting its report", () =>
     Effect.gen(function* () {
       const { sessionId, turns } = yield* parentSession;
-      const children = yield* Subagents;
+      const children = yield* current(Subagents);
       const first = yield* receiptFrom(yield* send(sessionId, "dispatch only"));
       yield* turns.release("nap");
       yield* settled(sessionId);
@@ -470,16 +472,12 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
       yield* settled(sessionId);
     }),
   );
-});
 
-// Reopening replaces the block's agent, so each restart test has a block of its own and reads
-// services through `env.use` once it has reopened.
-testAgent({ testProvider })("subagent reports across restart", (it) => {
   it.effect("reports survive restart and incomplete notification deliveries are replayable", () =>
     Effect.gen(function* () {
       const env = yield* TestEnv;
       const { sessionId, turns } = yield* parentSession;
-      const trace = yield* WorkTraceStore;
+      const trace = yield* current(WorkTraceStore);
       const receipt = yield* receiptFrom(yield* send(sessionId, "dispatch only"));
       yield* turns.release("nap");
       yield* settled(sessionId);
@@ -510,14 +508,12 @@ testAgent({ testProvider })("subagent reports across restart", (it) => {
       ).toEqual(before);
     }),
   );
-});
 
-testAgent({ testProvider })("held parent notifications across restart", (it) => {
   it.effect("a held parent notification stays out of automatic follow-up after restart", () =>
     Effect.gen(function* () {
       const env = yield* TestEnv;
       const { sessionId } = yield* parentSession;
-      const trace = yield* WorkTraceStore;
+      const trace = yield* current(WorkTraceStore);
       const receipt = yield* receiptFrom(yield* send(sessionId, "dispatch only"));
       yield* trace.holdParentNotifications(sessionId);
       const notificationId = yield* trace.notifyParent({
@@ -536,9 +532,7 @@ testAgent({ testProvider })("held parent notifications across restart", (it) => 
       expect(yield* reopened.pendingParentNotificationSessions).toContain(sessionId);
     }),
   );
-});
 
-testAgent({ testProvider })("background children when the agent closes", (it) => {
   it.effect("service disposal aborts background children and records them cancelled", () =>
     Effect.gen(function* () {
       const env = yield* TestEnv;

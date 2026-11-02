@@ -225,9 +225,12 @@ const blocks = Effect.fnUntraced(function* (session: Session) {
   expect(yield* session.execution).toMatchObject({ reason: "repeated_failure" });
 });
 
+// Reopening replaces the agent behind every service, so these tests read through `env.use` only,
+// and the reopening tests share one agent with the rest.
 testAgent({ testProvider: { responder } })("automatic workflow execution", (it) => {
   it.effect("continues a promise-only turn without a browser and verifies the completed Plan", () =>
     Effect.gen(function* () {
+      const env = yield* TestEnv;
       const session = yield* executing([
         { text: "I will review this next." },
         ...implementAndVerify,
@@ -242,7 +245,7 @@ testAgent({ testProvider: { responder } })("automatic workflow execution", (it) 
       );
       expect(invocations[3]?.system.join("\n")).toContain("Workflow phase: verify");
       expect(
-        (yield* (yield* Nodes).session(session.id)).filter((node) => node.kind === "user"),
+        (yield* (yield* env.use(Nodes)).session(session.id)).filter((node) => node.kind === "user"),
       ).toHaveLength(1);
       expect(yield* session.execution).toEqual(stopped("completed"));
     }),
@@ -402,12 +405,13 @@ testAgent({ testProvider: { responder } })("automatic workflow execution", (it) 
 
   it.effect("running background work holds the Plan until its completion wakes the session", () =>
     Effect.gen(function* () {
+      const env = yield* TestEnv;
       const session = yield* executing([
         { text: "The check runs in the background." },
         ...implementAndVerify,
       ]);
       const release = yield* Deferred.make<void>();
-      yield* (yield* BackgroundTasks).start(
+      yield* (yield* env.use(BackgroundTasks)).start(
         {
           sessionId: session.id,
           runId: `${session.id}:check`,
@@ -430,12 +434,13 @@ testAgent({ testProvider: { responder } })("automatic workflow execution", (it) 
 
   it.effect("a material Plan revision stops automatic execution for confirmation", () =>
     Effect.gen(function* () {
+      const env = yield* TestEnv;
       const session = yield* executing([
         call("replan", "update_plan", { ...plan, summary: "Different acceptance criteria" }),
         { text: "Review the revised Plan." },
       ]);
       yield* session.run();
-      expect((yield* (yield* Workflows).get(session.id)).phase).toBe("plan");
+      expect((yield* (yield* env.use(Workflows)).get(session.id)).phase).toBe("plan");
       expect(yield* session.execution).toEqual(stopped("workflow_changed"));
       expect(session.invocations()).toHaveLength(2);
     }),
@@ -503,10 +508,7 @@ testAgent({ testProvider: { responder } })("automatic workflow execution", (it) 
       expect(session.invocations()).toHaveLength(1);
     }),
   );
-});
 
-// Reopening replaces the agent behind every service, so these tests read through `env.use` only.
-testAgent({ testProvider: { responder } })("automatic workflow execution across reopen", (it) => {
   it.effect("stops after two turns without progress and persists the reason across reopen", () =>
     Effect.gen(function* () {
       const env = yield* TestEnv;

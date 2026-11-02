@@ -154,9 +154,17 @@ const scripts = {
     { text: "after restart done" },
   ],
   // The skill ends after its sibling writes, and one write fails: notes.txt exists, and replacing it
-  // needs the sha256 from read_file.
+  // needs the sha256 from read_file. The skill waits for the file the other write makes, at most
+  // about a second.
   "goal-parallel": [
-    { toolCalls: [saveSkill("goal-slow", "sleep 1; printf slow")] },
+    {
+      toolCalls: [
+        saveSkill(
+          "goal-slow",
+          "for _ in $(seq 100); do [ -e parallel.txt ] && break; sleep 0.01; done; printf slow",
+        ),
+      ],
+    },
     {
       toolCalls: [
         call("goal-slow-run", "run_skill", { name: "goal-slow", yieldMs: 10_000 }),
