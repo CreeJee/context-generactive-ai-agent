@@ -24,7 +24,6 @@ import { GlobalConfig, type Settings } from "../../config/global-config.ts";
 import { StorageRoot } from "../../config/storage-root.ts";
 import { totalMemory } from "../../runtime/host-system.ts";
 import { runtimeWorker, runtimeWorkerOptions } from "../../runtime/resources.ts";
-import { ignoreLogged } from "../../runtime/logged-failures.ts";
 import { type ChunkSpan, chunkPolicy } from "./chunks.ts";
 import type { EmbeddingDevice, EmbeddingMode, EmbeddingOverview } from "./contracts.ts";
 import { EmbeddingRpcs, type EmbeddingWorkerData, EmbeddingWorkerFailed } from "./embedding-rpc.ts";
@@ -175,8 +174,6 @@ export interface ModelSession {
   readonly chunk: (
     texts: readonly string[],
   ) => Effect.Effect<readonly (readonly ChunkSpan[])[], EmbeddingWorkerFailed>;
-  /** Stops in-flight native work now: ONNX inference cannot be interrupted in place. */
-  readonly terminate: Effect.Effect<void>;
   /** Keeps the process alive while `work` runs; an idle worker must not. */
   readonly busy: <A, E, R>(work: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
 }
@@ -209,9 +206,6 @@ const rpcSession = (data: EmbeddingWorkerData) =>
       countTokens: (texts) => call(client.CountTokens({ texts })),
       embed: (texts) => call(client.Embed({ texts })),
       chunk: (texts) => call(client.Chunk({ texts })),
-      terminate: Effect.tryPromise(() => worker.terminate()).pipe(
-        ignoreLogged("embedding_worker_terminate_failed"),
-      ),
       busy: (work) =>
         Effect.acquireUseRelease(
           Effect.sync(() => worker.ref()),
@@ -233,7 +227,7 @@ const rpcSession = (data: EmbeddingWorkerData) =>
  * the allocator (quint8: ~40 MB back) and each reload grows the footprint a little.
  *
  * The session lives in a `ScopedRef` owned by the caller's Scope: replacing it (after a lost
- * worker or an interrupted request) and closing the Scope both stop the worker and await its exit.
+ * worker or a failed load) and closing the Scope both stop the worker and await its exit.
  */
 export const modelWorker = Effect.fnUntraced(function* (
   cacheDir: string,
@@ -278,10 +272,11 @@ export const modelWorker = Effect.fnUntraced(function* (
   } as const satisfies Record<EmbeddingWorkerFailed["stage"], boolean>;
   const request = <A>(call: (current: ModelSession) => Effect.Effect<A, EmbeddingWorkerFailed>) =>
     Effect.flatMap(live, (current) =>
-      current.busy(call(current)).pipe(
-        // Only one request owns this worker: terminate it and await its exit before handing
-        // the permit to another agent.
-        Effect.onInterrupt(() => current.terminate.pipe(Effect.andThen(discard))),
+      // ONNX inference cannot be interrupted in place, and terminating the thread during a
+      // session call aborts the whole process: onnxruntime-node cannot throw into a stopping
+      // worker. An interrupted request holds the permit until its call ends, one batch at most,
+      // and leaves the worker and its loaded model to the next request.
+      Effect.uninterruptible(current.busy(call(current))).pipe(
         Effect.tapError((error) => (keepsSession[error.stage] ? Effect.void : discard)),
       ),
     ).pipe(

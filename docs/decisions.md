@@ -3717,3 +3717,9 @@
 - 채팅 패널이 draft atom을 직접 읽어서, 글자 하나마다 패널 전체(대화 기록, 작업 패널, 승인, 컨텍스트 표시와 그 훅)가 다시 렌더됐다. 대화가 길고 패널이 많을수록 키 입력이 느려졌다.
 - 이제 입력창(`DraftComposer`)만 글을 구독한다. 패널은 draft를 쓰기만 하고, 보낼 때와 편집을 저장할 때 입력창이 넘긴 글을 받는다. 대기열 메시지를 편집하는 글도 편집 상태가 가진 atom에 두고, 패널이 편집이 끝날 때까지 마운트해 입력창이 잠시 사라져도 글이 남는다.
 - 측정(dev 빌드, 메시지 20개인 실제 세션): 키 하나의 처리 시간 중앙값이 5.5ms에서 2.9ms로 줄었다. 남은 비용은 입력창 자체이고 대화 길이와 상관없다. `chat-panel.browser.tsx`가 키 입력 중 패널 렌더가 0인지 확인한다.
+
+## 중단된 임베딩 요청은 worker를 끄지 않고 진행 중인 호출을 기다린다 (2026-11-03)
+
+- 임베딩 요청이 interrupt되면 호스트가 worker를 바로 `terminate()`하고 다음 요청에서 모델을 새로 올렸다. ONNX 세션 호출 도중 스레드가 멈추면 onnxruntime-node가 멈추는 worker에 JS 예외를 던지지 못해 C++ 예외로 `std::terminate`가 불리고, 백엔드 프로세스 전체가 SIGABRT로 죽었다(2026-11-03 12:14 크래시 리포트, `Napi::Error::ThrowAsJavaScriptException`).
+- 이제 worker 호출은 interrupt 없이 끝까지 돌고, 중단된 요청은 호출이 끝난 뒤(최대 한 배치) permit을 놓는다. worker와 올라간 모델은 다음 요청이 그대로 쓴다. native 검색 worker가 중단된 호출의 슬롯을 실제 완료 전까지 놓지 않는 것과 같은 방식이다.
+- worker 교체는 load 실패·worker 유실 때만 하고, 종료는 Scope의 `NodeWorker` 정상 종료(5초 뒤 강제 종료)가 맡는다. 그래서 `ModelSession.terminate`를 지운다.
