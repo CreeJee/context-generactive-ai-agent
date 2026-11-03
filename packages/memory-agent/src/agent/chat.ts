@@ -105,6 +105,7 @@ import { OutsideTools } from "../tools/outside.ts";
 import { QueueDelivery } from "../queue/delivery.ts";
 import { steerCuttableModel, type SteerCut } from "./steer-cut.ts";
 import { hostShell } from "../shell/run.ts";
+import { runSpanAttribute } from "../runtime/failed-spans.ts";
 import { MessageQueue, type QueueChangeRefused } from "../queue/queue.ts";
 import {
   NextDelivery,
@@ -1350,6 +1351,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           resume,
           forwardedProps,
         } = request.input;
+        // Links this trace to the run, so a report finds the run's failed spans.
+        yield* Effect.annotateCurrentSpan(runSpanAttribute, runId);
         // Match the submitted IDs to an owner-persisted interrupt batch. The loop still validates
         // response schemas and approval arguments before executing any tool.
         const pendingResume =

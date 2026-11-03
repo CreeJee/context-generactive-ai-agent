@@ -17,9 +17,11 @@ import { Hex } from "effect/encoding";
 import { GlobalConfig } from "../config/global-config.ts";
 import { hostPlatform } from "../runtime/host-system.ts";
 import { DefectReporter, type DefectEvent, type RecentDefect } from "../runtime/defect-reporter.ts";
+import { FailedSpans } from "../runtime/failed-spans.ts";
 import { tagOfUnknown } from "../runtime/failure-tag.ts";
 import { logFailure } from "../runtime/logged-failures.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
+import { spanLine } from "./bundle-digest.ts";
 import { ReportDelivery } from "./discord-webhook.ts";
 
 /** The same defect is sent at most once per this window; the next message counts the rest. */
@@ -27,6 +29,8 @@ export const fingerprintWindow = Duration.minutes(10);
 /** At most this many defect messages leave the process per minute, whatever their fingerprint. */
 export const messagesPerMinute = 5;
 const stackLines = 5;
+/** Failed spans of the defect's trace a message lists, the newest ones. */
+const maxSpanLines = 6;
 /** Distinct defects a user's report can list. */
 const maxRecentDefects = 20;
 const summaryLength = 300;
@@ -101,6 +105,8 @@ interface Outgoing {
   readonly facts: DefectFacts;
   readonly count: number;
   readonly ids: readonly string[];
+  /** The failed spans of the defect's trace, newest last. */
+  readonly spans: readonly string[];
 }
 
 /** Whether a defect goes out now, counting what its fingerprint held back. */
@@ -145,6 +151,7 @@ const make = Effect.gen(function* () {
     Effect.catchTag("ConfigError", () => Effect.succeed("unknown")),
   );
   const platform = yield* hostPlatform;
+  const failedSpans = yield* FailedSpans;
   const configured = (yield* delivery.status).configured;
   const state = yield* Ref.make(noDefectsSent);
   // Kept whether or not a webhook is set: a user's report carries them (newest first).
@@ -172,6 +179,10 @@ const make = Effect.gen(function* () {
       `버전 ${release} · ${platform}`,
       ...item.ids,
       summary === "" ? "" : `요약: ${summary}`,
+      // Before the stack: the message is cut at its end, and these name what failed first.
+      item.spans.length === 0
+        ? ""
+        : `실패 span:\n${item.spans.map((line) => `- ${line}`).join("\n")}`,
       stack === "" ? "" : `\`\`\`\n${stack}\n\`\`\``,
     ].filter((line) => line !== "");
     return lines.join("\n").slice(0, contentLimit);
@@ -211,11 +222,11 @@ const make = Effect.gen(function* () {
 
   const report = (event: DefectEvent) =>
     Effect.gen(function* () {
-      const span = yield* Effect.currentSpan.pipe(
-        Effect.map((current) => current.name),
-        Effect.option,
+      const current = yield* Effect.option(Effect.currentSpan);
+      const facts = factsOf(
+        event,
+        Option.map(current, (span) => span.name),
       );
-      const facts = factsOf(event, span);
       const now = yield* Clock.currentTimeMillis;
       yield* remember(facts, now);
       if (!configured) return;
@@ -231,7 +242,16 @@ const make = Effect.gen(function* () {
         }),
         ({ key, value }) => Effect.map(hash(value), (hashed) => `${key} #${hashed}`),
       );
-      yield* Queue.offer(outgoing, { facts, count: count.value, ids });
+      const spans = Option.isNone(current) ? [] : yield* failedSpans.ofTrace(current.value.traceId);
+      yield* Queue.offer(outgoing, {
+        facts,
+        count: count.value,
+        ids,
+        // FailedSpan's fields are a BundleSpan's, with epoch milliseconds for `endedAt`.
+        spans: spans
+          .slice(-maxSpanLines)
+          .map((span) => spanLine({ ...span, endedAt: String(span.endedAt) })),
+      });
     }).pipe(Effect.asVoid);
 
   return { report, recent: Ref.get(recent) };

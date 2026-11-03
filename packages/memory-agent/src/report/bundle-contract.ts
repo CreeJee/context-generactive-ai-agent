@@ -65,6 +65,20 @@ export const BundleEvent = Schema.TaggedUnion({
 });
 export type BundleEvent = typeof BundleEvent.Type;
 
+/**
+ * A span of the run that ended with a failure (decided 2026-11-03). Only span names the app's code
+ * gives, the failure tag, timing and numeric or boolean attributes: never a string attribute.
+ */
+export const BundleSpan = Schema.Struct({
+  /** Names of the spans it ran under, outermost first, ending with its own name. */
+  path: Schema.Array(Schema.String),
+  failure: Schema.String,
+  endedAt: Schema.String,
+  durationMs: Schema.Finite,
+  attributes: Schema.Record(Schema.String, Schema.Union([Schema.Finite, Schema.Boolean])),
+});
+export type BundleSpan = typeof BundleSpan.Type;
+
 export const BundleRun = Schema.Struct({
   /** Order of the run in the session, from 1 for its first run. */
   seq: Schema.Int,
@@ -76,6 +90,11 @@ export const BundleRun = Schema.Struct({
   events: Schema.Array(BundleEvent),
   /** Earlier events of the run were left out. */
   eventsCut: Schema.Boolean,
+  /**
+   * The run's failed spans this process still holds in memory, oldest first: none after a restart
+   * or once they are older than the recorder keeps them.
+   */
+  failedSpans: Schema.Array(BundleSpan),
 });
 export type BundleRun = typeof BundleRun.Type;
 
@@ -111,7 +130,8 @@ export const BundleDefect = Schema.Struct({
 });
 
 export const ReportBundle = Schema.Struct({
-  version: Schema.Literal(1),
+  /** 2 since runs carry their failed spans (2026-11-03). */
+  version: Schema.Literal(2),
   collectedAt: Schema.String,
   /** The limits the bundle was cut to, so a reader knows what may be missing. */
   limits: Schema.Struct({

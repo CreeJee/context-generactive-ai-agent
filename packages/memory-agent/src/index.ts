@@ -51,6 +51,7 @@ export {
 } from "./oauth/account-login.ts";
 export { OAuthHarnessError, OAuthKeychain } from "./oauth/validation-harness.ts";
 export { logDefect, logFailure } from "./runtime/logged-failures.ts";
+export { failedSpansLayer } from "./runtime/failed-spans.ts";
 export { ReportDiagnoser, ReportDiagnosisError } from "./report/diagnosis.ts";
 export {
   ReportDelivery,

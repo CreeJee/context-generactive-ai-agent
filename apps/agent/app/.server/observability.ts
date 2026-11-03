@@ -2,6 +2,7 @@ import { Config, Effect, Layer, Option } from "effect";
 import { DevTools } from "effect/devtools";
 import { FetchHttpClient } from "effect/http";
 import { OtlpMetrics, OtlpSerialization, OtlpTracer } from "effect/observability";
+import { failedSpansLayer } from "memory-agent";
 
 const resource = { serviceName: "context-agent" };
 
@@ -25,4 +26,11 @@ const devtools = Layer.unwrap(
   ),
 );
 
-export const observabilityLayer = devtools.pipe(Layer.provideMerge(otlp));
+/**
+ * Always on: failed spans are kept in memory for defect notices and user reports. It wraps the OTLP
+ * tracer, so exporting is unchanged; the devtools tracer wraps it in turn.
+ */
+export const observabilityLayer = devtools.pipe(
+  Layer.provideMerge(failedSpansLayer),
+  Layer.provideMerge(otlp),
+);

@@ -26,7 +26,7 @@ export {
   type BundleRun,
   type BundleText,
 } from "../report/bundle-contract.ts";
-export { runHasFailure, runPlace } from "../report/bundle-digest.ts";
+export { runHasFailure, runPlace, spanLine } from "../report/bundle-digest.ts";
 export {
   ReportDeliveryFailure,
   ReportDeliveryResult,

@@ -9,6 +9,7 @@ import { McpServers, McpServerState } from "../mcp/servers.ts";
 import type { Project } from "../projects/projects.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import { DefectReporter } from "../runtime/defect-reporter.ts";
+import { FailedSpans } from "../runtime/failed-spans.ts";
 import { hostPlatform } from "../runtime/host-system.ts";
 import { fallbackLogged } from "../runtime/logged-failures.ts";
 import { LoopHealth } from "../runtime/loop-health.ts";
@@ -31,6 +32,8 @@ export const bundleLimits = {
   /** A failed tool result or run error keeps more: the cause is usually in it. */
   failureChars: 6_000,
   unlinked: 20,
+  /** The newest failed spans a run keeps (2026-11-03). */
+  failedSpansPerRun: 20,
 } as const;
 
 /** Local ids leave the machine only as this much of their SHA-256. */
@@ -415,6 +418,7 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
       const approvals = yield* approvalRows(runIds).pipe(
         fallbackLogged("report_bundle_approvals_failed", () => []),
       );
+      const spansOfRun = yield* (yield* FailedSpans).ofRuns(runIds);
       const tasks = yield* (yield* WorkTraceStore)
         .taskTree(session.id)
         .pipe(fallbackLogged("report_bundle_trace_failed", () => []));
@@ -478,6 +482,15 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
                     },
               events: kept,
               eventsCut: kept.length < timed.length || total > own.length,
+              failedSpans: (spansOfRun.get(run.run_id) ?? [])
+                .slice(-bundleLimits.failedSpansPerRun)
+                .map((span) => ({
+                  path: span.path,
+                  failure: span.failure,
+                  endedAt: iso(span.endedAt),
+                  durationMs: span.durationMs,
+                  attributes: span.attributes,
+                })),
             } satisfies BundleRun;
           }),
         ),
@@ -515,7 +528,7 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
     { concurrency: 1 },
   );
   return {
-    version: 1,
+    version: 2,
     collectedAt: DateTime.formatIso(yield* DateTime.now),
     limits: {
       runs: bundleLimits.runs,

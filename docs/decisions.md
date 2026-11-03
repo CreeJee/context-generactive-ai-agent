@@ -3723,3 +3723,17 @@
 - 임베딩 요청이 interrupt되면 호스트가 worker를 바로 `terminate()`하고 다음 요청에서 모델을 새로 올렸다. ONNX 세션 호출 도중 스레드가 멈추면 onnxruntime-node가 멈추는 worker에 JS 예외를 던지지 못해 C++ 예외로 `std::terminate`가 불리고, 백엔드 프로세스 전체가 SIGABRT로 죽었다(2026-11-03 12:14 크래시 리포트, `Napi::Error::ThrowAsJavaScriptException`).
 - 이제 worker 호출은 interrupt 없이 끝까지 돌고, 중단된 요청은 호출이 끝난 뒤(최대 한 배치) permit을 놓는다. worker와 올라간 모델은 다음 요청이 그대로 쓴다. native 검색 worker가 중단된 호출의 슬롯을 실제 완료 전까지 놓지 않는 것과 같은 방식이다.
 - worker 교체는 load 실패·worker 유실 때만 하고, 종료는 Scope의 `NodeWorker` 정상 종료(5초 뒤 강제 종료)가 맡는다. 그래서 `ModelSession.terminate`를 지운다.
+
+## 모델 실패 문구에 HTTP 상태와 오류 종류를 붙인다 (2026-11-03)
+
+- 2026-11-03 리포트(openai-compatible, run 6개 모두 실패)에는 "The provider rejected the request."만 남아 원인을 가를 수 없었다. 이 문구는 `InvalidRequestError`로, 호환 클라이언트가 HTTP 400·404·409·422를 모두 이것으로 바꾸고, 앱이 보내기 전에 거절하는 빈 user 메시지·structured output 요청도 같다. 로그도 reason 태그만 남겨 상태를 몰랐다.
+- 이제 `shownReason`이 응답 상태와 공급자 오류 본문의 `type`·`code`를 덧붙인다: `The provider rejected the request. (HTTP 400, exceed_context_size_error)`. `type`·`code`는 64자 이하 식별자(`[A-Za-z0-9_.-]`)일 때만 쓰고, 상태와 같은 code(llama.cpp)는 뺀다. 공급자 message·URL·본문은 여전히 넣지 않는다. 이 문구가 run 행의 오류 상세이고 리포트 번들의 `error.detail`이 된다.
+- 리포트 페이지에서 OTel 정보를 함께 보내는 안은 이번에 하지 않았다. 아래 "실패한 span만 메모리에 모은다"로 이어졌다.
+
+## 실패한 span만 메모리에 모아 결함 알림과 리포트에 붙인다 (2026-11-03)
+
+- 리포트로 실제 대응하려니 span·trace 없이는 근거가 부족했다. 목적은 크래시·결함 때 Discord webhook으로 근거를 보내는 것이다.
+- `failedSpansLayer`(`runtime/failed-spans.ts`)가 설치본에서도 항상 켜진 tracer로 OTLP(또는 기본) tracer를 감싼다. 성공한 span은 끝나는 즉시 버리고, 실패로 끝난 span만 **메모리에만** 모은다. 디스크에는 남기지 않으므로 재시작하면 사라진다. OTLP·devtools로 내보내는 동작은 그대로다.
+- 남기는 것: 부모 span 이름 경로(최대 8단계), 실패 태그(`failure-tag.ts`의 이름, 예: `AiError:InvalidRequestError`), 끝난 시각, 걸린 시간, 숫자·불리언 속성(최대 16개). 문자열 속성(SQL 원문, URL, 공급자 텍스트)과 오류 메시지·stack은 남기지 않는다. 같은 실패가 부모 span으로 올라가며 반복되면 시작된 span에서 한 번만 남긴다.
+- 상한: span 200개, 30분. run과 trace의 짝은 run 500개까지 기억한다. run span은 `context_agent.run_id` 속성으로 run id를 알리고, 이 속성은 내보내는 tracer에 전달하지 않는다.
+- 결함 알림(Discord webhook)에는 결함이 난 trace의 실패 span을 최근 6개까지 stack 앞에 `실패 span:` 줄로 붙인다. 사용자 리포트 번들은 version 2로 올리고 run마다 `failedSpans`(최근 20개)를 담는다. 미리보기와 진단 요약에도 보이고, 실패 span이 있는 run은 실패한 run으로 친다.

@@ -3,6 +3,7 @@ import {
   BundleEvent,
   runHasFailure,
   runPlace,
+  spanLine,
   type BundleRun,
   type BundleText,
   type ReportBundle,
@@ -149,6 +150,16 @@ function Run({ run }: { run: BundleRun }) {
             run 오류 {run.error.code ?? "(코드 없음)"}
           </p>
           <Text value={run.error.detail} />
+        </div>
+      )}
+      {run.failedSpans.length > 0 && (
+        <div className="space-y-1">
+          <p className="text-xs font-medium text-destructive">실패한 span</p>
+          <ul className="space-y-0.5 font-mono text-xs break-all">
+            {run.failedSpans.map((span, index) => (
+              <li key={index}>{spanLine(span)}</li>
+            ))}
+          </ul>
         </div>
       )}
       {run.eventsCut && <p className="text-xs text-muted-foreground">앞부분 이벤트는 빠졌어요.</p>}

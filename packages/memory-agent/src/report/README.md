@@ -6,7 +6,7 @@
 
 ## Interface
 
-- `ReportBundle` / `BundleEvent` / `BundleRun` / `BundleText` / `BundleSectionStatus` / `BundleIntegration` / `BundleBoard` / `BundleDefect` — 증거 번들 Schema(`version: 1`, 섹션별 status/items/truncated, TaggedUnion 이벤트 Message·ToolCall·Approval·Trace)
+- `ReportBundle` / `BundleEvent` / `BundleRun` / `BundleText` / `BundleSectionStatus` / `BundleIntegration` / `BundleBoard` / `BundleDefect` — 증거 번들 Schema(`version: 2`, 섹션별 status/items/truncated, TaggedUnion 이벤트 Message·ToolCall·Approval·Trace, run마다 메모리에 남은 실패 span `BundleSpan`)
 - `ReportDeliveryFailure` / `ReportDeliveryResult` / `ReportDeliveryStatus` — 전송 실패 사유 리터럴, 결과 TaggedUnion(`delivered`·`duplicate`·`uncertain_duplicate`), 웹훅 설정 상태 Schema
 - `ReportDiagnosisInput` / `ReportDiagnosis` / `ReportDiagnosisFailure` — 진단 입력(symptom ≤4000자 등, bundle nullable), 진단 결과(summary·observations·hypotheses), 실패 사유 Schema
 - `collectReportBundle(project, session)` — `Effect.fn("ReportBundle.collect")`; 한 세션의 증거 번들을 수집한다

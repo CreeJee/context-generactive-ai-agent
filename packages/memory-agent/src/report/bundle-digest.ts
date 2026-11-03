@@ -2,6 +2,7 @@ import { Match } from "effect";
 import {
   BundleEvent,
   type BundleRun,
+  type BundleSpan,
   type BundleText,
   type ReportBundle,
 } from "./bundle-contract.ts";
@@ -54,9 +55,18 @@ const eventLine = BundleEvent.match({
 const runHead = (run: BundleRun) =>
   `${runPlace(run)} ${run.status} ${run.startedAt}${run.error === null ? "" : ` error=${run.error.code ?? "unknown"}`}`;
 
+/** One line for a failed span: its path, failure, time and numeric attributes. */
+export const spanLine = (span: BundleSpan) => {
+  const attributes = Object.entries(span.attributes).map(([key, value]) => `${key}=${value}`);
+  return `${span.path.join(" › ")}: ${span.failure} ${Math.round(span.durationMs)}ms${
+    attributes.length === 0 ? "" : ` (${attributes.join(", ")})`
+  }`;
+};
+
 /** A run failed, or something in it did. */
 export const runHasFailure = (run: BundleRun) =>
   run.error !== null ||
+  run.failedSpans.length > 0 ||
   run.events.some(
     BundleEvent.match({
       ToolCall: (event) => event.result?.ok === false,
@@ -98,6 +108,7 @@ const failureText = (run: BundleRun) => {
     runHead(run),
     ...(run.error === null ? [] : [`error detail: ${shown(run.error.detail)}`]),
     ...(lastAsk === undefined ? [] : [`user asked: ${shown(lastAsk.text)}`]),
+    ...run.failedSpans.map((span) => `failed span: ${spanLine(span)}`),
     ...run.events.flatMap(
       BundleEvent.match({
         ToolCall: (event): string[] =>
