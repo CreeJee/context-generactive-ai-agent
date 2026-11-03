@@ -32,7 +32,7 @@
 - `toPrompt` / `fromPrompt` — 저장 메시지와 system 프롬프트를 Effect `Prompt`로 바꾸는 dual 함수와 그 역변환.
 - `optionsKey` / `PartOptions` / `partOptions` / `toolResultContent` / `StoredContent` — `Prompt`에 필드가 없는 앱 정보를 `options["memory-agent"]`에 담고 읽는 키·스키마·헬퍼.
 - `collectResponse` — 스트림만 하는 모델의 `generateText`용으로, part 스트림을 전체 응답 `Array<Response.PartEncoded>`로 모은다.
-- `shownReason` — `AiError` reason을 기본 `ShownFailure`로 바꾼다.
+- `shownReason` — `AiError` reason을 기본 `ShownFailure`로 바꾼다. 응답 HTTP 상태와 공급자 오류 본문의 `type`·`code`(짧은 식별자일 때만)를 괄호로 덧붙이고, 공급자의 문장·URL은 넣지 않는다.
 - `singleAnswer` / `singleAnswerParts` / `SingleCall` — system 프롬프트 하나 아래에서 질문 하나를 보내는 단발 호출(권한 리뷰, 보고서 진단, 해석, 턴 요약). 전체 답과 usage를 돌려주거나 part 스트림을 돌려준다.
 - `unsentRetried` / `UnsentRetry` — Goal run 모델 래퍼. 공급자가 요청을 받지 못했을 때만 `wait` 뒤에 다시 보낸다. `toolParameters`(`tool-schema.ts`)는 도구 파라미터의 provider용 JSON Schema를 만든다.
 - 하위 디렉터리 없음.

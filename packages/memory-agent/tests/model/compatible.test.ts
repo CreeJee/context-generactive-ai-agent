@@ -12,6 +12,7 @@ import {
   compatibleModel,
   compatibleRequest,
   compatibleTarget,
+  shownCompatibleFailure,
   type CompatibleModelOptions,
 } from "../../src/model/compatible.ts";
 import { providerPrompt } from "../../src/model/history.ts";
@@ -475,6 +476,30 @@ describe("compatible language model", () => {
         "model=local-model, toolDefinitions=0, userContent=[text:16:plain]",
       );
       expect(error.message).not.toContain("private question");
+    }),
+  );
+
+  it.effect("shows a rejection's status and error type, never the provider's text", () =>
+    Effect.gen(function* () {
+      const { error } = yield* failureOf(
+        options(
+          endpointOf(() =>
+            Response.json(
+              {
+                error: {
+                  code: 400,
+                  message: "request (9000 tokens) exceeds the available context size (8192 tokens)",
+                  type: "exceed_context_size_error",
+                },
+              },
+              { status: 400 },
+            ),
+          ),
+        ),
+      );
+      expect(shownCompatibleFailure(error)).toEqual({
+        message: "The provider rejected the request. (HTTP 400, exceed_context_size_error)",
+      });
     }),
   );
 
