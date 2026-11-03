@@ -106,13 +106,23 @@ const make = Effect.gen(function* () {
       VALUES (${chunk.seq},${embedder.identity},${chunk.ordinal},${chunk.start},${chunk.end})
       RETURNING vector_id`,
   });
+  // The unanalyzed nodes are found on a covering index of `nodes` first, and only their text is
+  // read. Joined in one scan, SQLite trimmed every node's text before looking at node_morphs: the
+  // whole table (hundreds of MB) was read on the event loop after every run and import, even with
+  // nothing left to analyze. MATERIALIZED keeps the planner from folding the two steps back.
   const selectUnanalyzed = SqlSchema.findAll({
     Request: Schema.Finite,
     Result: Pending,
     execute: (limit) => sql`
-      SELECT n.seq, n.text FROM nodes n
-      LEFT JOIN node_morphs m ON m.node_seq = n.seq AND m.analyzer = ${analyzer.identity}
-      WHERE m.node_seq IS NULL AND ${sql.literal(meaningfulNodeFilter)}
+      WITH unanalyzed AS MATERIALIZED (
+        SELECT n.seq FROM nodes n
+        WHERE NOT EXISTS (
+          SELECT 1 FROM node_morphs m
+          WHERE m.node_seq = n.seq AND m.analyzer = ${analyzer.identity}
+        )
+      )
+      SELECT n.seq, n.text FROM unanalyzed u JOIN nodes n ON n.seq = u.seq
+      WHERE ${sql.literal(meaningfulNodeFilter)}
       ORDER BY n.created_at DESC, n.seq DESC LIMIT ${limit}`,
   });
   const oneMorphBatchAtATime = yield* Semaphore.make(1);
