@@ -7,8 +7,16 @@ import { attachmentUrl, contextUsageEvent, queueDeliveredEvent } from "memory-ag
 import { cn } from "cn";
 import type { TraceTaskView } from "memory-agent";
 import { Option } from "effect";
-import { useAtomMount, useAtomSet, useAtomValue } from "@effect/atom-react";
-import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
+import { useAtom, useAtomMount, useAtomSet } from "@effect/atom-react";
+import { Atom } from "effect/reactivity";
+import {
+  type ComponentProps,
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useState,
+} from "react";
 import { useLoading } from "react-simplikit";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import {
@@ -106,10 +114,13 @@ export interface SlashSupport {
 const imageFiles = (files: FileList | null) =>
   Array.from(files ?? []).filter((file) => file.type.startsWith("image/"));
 
-/** The input box either writes a new message or edits one that is waiting in the queue. */
+/**
+ * The input box either writes a new message or edits one that is waiting in the queue. The text
+ * being edited is an atom, like the draft, so only the input box reads it as it is typed.
+ */
 type Composer = Data.TaggedEnum<{
   compose: {};
-  editing: { readonly id: string; readonly draft: string };
+  editing: { readonly id: string; readonly text: Atom.Writable<string> };
 }>;
 const Composer = Data.taggedEnum<Composer>();
 
@@ -212,6 +223,49 @@ const isEditable = (message: QueuedMessage) =>
   });
 
 /**
+ * The input box with the text it writes: the session's draft, or the queued message being edited.
+ * Only this reads the text, so a keystroke renders the input box and not the conversation.
+ */
+function DraftComposer({
+  textAtom,
+  canSend,
+  onSubmit,
+  onEditDraft,
+  ...composer
+}: Omit<ComponentProps<typeof ChatComposer>, "draft" | "onDraftChange" | "canSend" | "onSubmit"> & {
+  readonly textAtom: Atom.Writable<string>;
+  readonly canSend: (text: string) => boolean;
+  readonly onSubmit: (mode: "queue" | "steer", text: string) => void;
+  /** Stores the unsaved text of the queued message being edited. */
+  readonly onEditDraft: (id: string, text: string) => void;
+}) {
+  const [text, setText] = useAtom(textAtom);
+  const { editingId } = composer;
+  // Unsaved edit text is stored as it is typed, so a restart restores it as a draft.
+  const saveEditDraft = useEffectEvent(onEditDraft);
+  useEffect(() => {
+    if (editingId === null) return;
+    const task = Effect.runFork(
+      Effect.sleep(editDraftSaveMs).pipe(
+        Effect.andThen(Effect.sync(() => saveEditDraft(editingId, text))),
+      ),
+    );
+    return () => {
+      void Effect.runFork(Fiber.interrupt(task));
+    };
+  }, [text, editingId]);
+  return (
+    <ChatComposer
+      {...composer}
+      draft={text}
+      onDraftChange={setText}
+      canSend={canSend(text)}
+      onSubmit={(mode) => onSubmit(mode, text)}
+    />
+  );
+}
+
+/**
  * One session: follows who may change it. The conversation reads every run as it comes, whichever
  * page or the server started it (`useAgentChat`), so it is not remounted for one.
  */
@@ -286,18 +340,11 @@ function ChatPanel({
   const [composer, setComposer] = useState<Composer>(Composer.compose());
   const drafts = sessionDrafts(sessionId);
   useAtomMount(drafts.follow);
-  const composeDraft = useAtomValue(drafts.text);
-  const storeDraft = useAtomSet(drafts.text);
-  const draft = Composer.$is("editing")(composer) ? composer.draft : composeDraft;
-  const setDraft = (next: string) => {
-    if (Composer.$is("editing")(composer)) {
-      setComposer((current) =>
-        Composer.$is("editing")(current) ? Composer.editing({ ...current, draft: next }) : current,
-      );
-      return;
-    }
-    storeDraft(next);
-  };
+  // Only the input box reads the draft: the panel reading it rendered the whole conversation again
+  // on every keystroke. Setting it here keeps it mounted for the panel's life.
+  const setDraft = useAtomSet(drafts.text);
+  // The text being edited lasts as long as the edit, also while the input box is not shown.
+  useAtomMount(Composer.$is("editing")(composer) ? composer.text : drafts.text);
   const [dragging, setDragging] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
   const media = useImageGeneration((message) => setNotice(problem(message)));
@@ -599,8 +646,9 @@ function ChatPanel({
         : generating
           ? ComposerMode.generating()
           : ComposerMode.idle();
-  const canSend =
-    (draft.trim().length > 0 || ready.length > 0) &&
+  /** Whether the typed text, with the images ready, can go now. */
+  const canSend = (text: string) =>
+    (text.trim().length > 0 || ready.length > 0) &&
     !uploading &&
     !failed &&
     !submitting &&
@@ -625,22 +673,6 @@ function ChatPanel({
     void handleRunSettled();
   }, [generating, readOnly]);
 
-  // Unsaved edit text is stored as it is typed, so a restart restores it as a draft.
-  const saveEditDraft = useEffectEvent((id: string, text: string) =>
-    queue.change(id, QueueEdit.edit({ draft: text })),
-  );
-  useEffect(() => {
-    if (!(editing !== null)) return;
-    const task = Effect.runFork(
-      Effect.sleep(editDraftSaveMs).pipe(
-        Effect.andThen(Effect.sync(() => void saveEditDraft(editing.id, draft))),
-      ),
-    );
-    return () => {
-      void Effect.runFork(Fiber.interrupt(task));
-    };
-  }, [draft, editing?.id]);
-
   const startEdit = (message: QueuedMessage) => {
     if (editing !== null || readOnly) return;
     const text = Match.value(message.state).pipe(
@@ -648,18 +680,18 @@ function ChatPanel({
       Match.tag("held", ({ draft }) => draft ?? message.text),
       Match.orElse(() => message.text),
     );
-    setComposer(Composer.editing({ id: message.id, draft: text }));
+    setComposer(Composer.editing({ id: message.id, text: Atom.make(text) }));
     setNotice(null);
     void queue.change(message.id, QueueEdit.edit({ draft: text }));
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const finishEdit = (outcome: "save" | "remove") =>
+  const finishEdit = (outcome: "save" | "remove", typed = "") =>
     runUiEffect(
       Effect.gen(function* () {
         if (!(editing !== null)) return;
         setComposer(Composer.compose());
-        const text = draft.trim();
+        const text = typed.trim();
         yield* uiPromise(() =>
           queue.change(
             editing.id,
@@ -723,17 +755,17 @@ function ChatPanel({
       }),
     );
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const submit = (mode: "queue" | "steer") =>
+  const submit = (mode: "queue" | "steer", typed: string) =>
     runUiEffect(
       Effect.gen(function* () {
         if (editing !== null) {
           if (mode === "steer") setNotice(problem("편집을 끝낸 뒤 스티어링할 수 있어요."));
-          else yield* uiPromise(() => finishEdit("save"));
+          else yield* uiPromise(() => finishEdit("save", typed));
           return;
         }
-        if (!canSend) return;
+        if (!canSend(typed)) return;
         const written = renumberReferences(
-          draft.trim(),
+          typed.trim(),
           ready.map((image) => image.number),
         );
         const outsidePanel = (command: Parameters<SlashSupport["run"]>[0]) =>
@@ -998,10 +1030,10 @@ function ChatPanel({
           {lease.state === "other" || lease.state === "free" ? (
             <ReadOnlyBar lease={lease} refused={refused} onContinue={onContinue} />
           ) : (
-            <ChatComposer
+            <DraftComposer
               ref={composerInput}
-              draft={draft}
-              onDraftChange={setDraft}
+              textAtom={editing?.text ?? drafts.text}
+              onEditDraft={(id, text) => void queue.change(id, QueueEdit.edit({ draft: text }))}
               editingId={editing?.id ?? null}
               slashContext={slash.context}
               draftImages={draftImages}
@@ -1018,7 +1050,7 @@ function ChatPanel({
               canSend={canSend}
               composerMode={composerMode}
               run={run}
-              onSubmit={(mode) => void submit(mode)}
+              onSubmit={(mode, text) => void submit(mode, text)}
               onAttach={attach}
               onEditQueued={startEdit}
               onRemoveQueued={(message) => void removeQueued(message)}

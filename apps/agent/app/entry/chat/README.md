@@ -48,7 +48,8 @@
 - 슬래시 명령: 같은 이름의 command가 skill보다 우선한다. 그 skill은 `/skill`로 여전히 부를 수 있다. 모르는 `/word`는 일반 메시지(`not_command`)로 둔다(예: 경로).
 - `/mode` 값은 ask와 auto만 허용한다. 모델에 effort 선택지가 없으면 `/effort`는 `incomplete`를 돌려준다.
 - 슬래시 오류 문구는 명령마다 완전한 문장으로 쓴다(조사 유지).
-- compose draft는 `sessionDrafts(sessionId)`의 `text` atom에 둔다. 빈 문자열이 되면 그 세션의 키를 지운다. ChatPanel은 `follow`를 마운트해 마운트할 때와 탭이 다시 보일 때 저장값을 읽는다. 대기열 메시지 편집 중에는 draft를 `Composer.editing` 상태에 둔다.
+- compose draft는 `sessionDrafts(sessionId)`의 `text` atom에 둔다. 빈 문자열이 되면 그 세션의 키를 지운다. ChatPanel은 `follow`를 마운트해 마운트할 때와 탭이 다시 보일 때 저장값을 읽는다. 대기열 메시지를 편집하는 동안의 글은 `Composer.editing`이 가진 atom에 둔다.
+- 입력 중인 글(compose draft와 편집 글)은 입력창(`DraftComposer`)만 구독한다. ChatPanel은 draft를 쓰기만 하고, 보낼 때 입력창이 넘긴 글을 받는다. 그래서 글자를 칠 때 대화 기록과 패널은 다시 렌더되지 않는다(`chat-panel.browser.tsx`).
 - 대기열 항목은 waiting/editing/held 상태만 편집할 수 있다. delivered와 failed는 편집할 수 없다.
 - task 액션은 `mutateAsync`의 동일성에 기대어 만든다. 그래서 메시지는 자기 변경이 있을 때만 다시 렌더된다(주석 근거).
 - `ApprovalCard`의 승인은 그 호출을 정확히 한 번 실행한다. 읽기 전용 페이지(disabled)는 승인 요청을 보여만 주고 답할 수 없다.
