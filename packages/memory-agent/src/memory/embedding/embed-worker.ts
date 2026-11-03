@@ -1,6 +1,7 @@
 import * as NodeWorkerRunner from "@effect/platform-node/NodeWorkerRunner";
 import { Array as Arr, Cause, Effect, Layer, Option, Result, Schema, Scope, Stream } from "effect";
 import { RpcServer } from "effect/rpc";
+import { workerFailedSpansLayer } from "../../runtime/failed-spans.ts";
 import { nativeFailure, nativePromise, runNativeEffect } from "../../runtime/native-effect.ts";
 import { ignoreLogged } from "../../runtime/logged-failures.ts";
 import { ChunkingFailed, chunkText } from "./chunks.ts";
@@ -144,4 +145,6 @@ const server = RpcServer.layer(EmbeddingRpcs, { concurrency: 1 }).pipe(
   Layer.provide(protocol),
 );
 
-await runNativeEffect(Layer.launch(server));
+// The worker's failed spans go to the owner thread, which puts them in defect notices and
+// reports under the run that caused them.
+await runNativeEffect(Effect.provide(Layer.launch(server), workerFailedSpansLayer));

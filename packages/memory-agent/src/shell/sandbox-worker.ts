@@ -8,6 +8,7 @@ import * as NodeWorkerRunner from "@effect/platform-node/NodeWorkerRunner";
 import { workerData } from "node:worker_threads";
 import { Effect, Layer, Schema } from "effect";
 import { RpcServer } from "effect/rpc";
+import { workerFailedSpansLayer } from "../runtime/failed-spans.ts";
 import { runNativeEffect } from "../runtime/native-effect.ts";
 import { requireRuntime } from "../runtime/resources.ts";
 import {
@@ -107,4 +108,6 @@ const server = RpcServer.layer(SandboxRpcs, { concurrency: 1 }).pipe(
   Layer.provide(protocol),
 );
 
-await runNativeEffect(Layer.launch(server));
+// The worker's failed spans go to the owner thread, which puts them in defect notices and
+// reports under the run that caused them.
+await runNativeEffect(Effect.provide(Layer.launch(server), workerFailedSpansLayer));

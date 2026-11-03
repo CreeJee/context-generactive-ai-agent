@@ -26,6 +26,7 @@
 - `LoopHealth` / `healthyLoop` / `loopStopped` / `loopRetrySchedule` / `maxLoopRetries` / `superviseLoopStep` / `LoopStep` / `LoopSupervision` / `sameLoopHealth` — 반복 루프 상태 TaggedUnion과 감독·재시도 정책. 그래프 시그니처만 확인함
 - `requireRuntime` / `configureRuntimeRoot` / `runtimeRoot` / `runtimeWorker` / `runtimeWorkerOptions` / `RuntimePackages` / `WorkerRuntime` — 런타임 패키지(네이티브 addon 등) 루트 설정, require, worker 로딩. 그래프 시그니처만 확인함
 - `nativePromise` / `nativeFailure` / `NativeRejection` / `runNativeEffect` — 네이티브 Promise를 Effect로 감싸고 Effect를 Promise로 실행하는 경계. 그래프 시그니처만 확인함
+- `failedSpansLayer` / `workerFailedSpansLayer` / `FailedSpans` / `FailedSpan` / `failedSpanLimits` / `runSpanAttribute` — 실패로 끝난 span만 메모리에 모으는 tracer(결함 알림·리포트 근거용). owner용 layer는 worker가 보낸 span도 받고, worker용 layer는 `BroadcastChannel("context-agent/failed-spans")`로 보내기만 함
 - `ShownFailure` / `RunFailureCode` / `runFailureCodeOf` / `runFailureText` / `externalAgentFailureText` / `ExternalAgentFailureCode` / `McpFailureCode` / `ConfigFileFailureCode` / `decodeRunFailureCode` — 사용자에게 보여 줄 실패 코드 리터럴과 문구. 그래프 시그니처만 확인함
 - `runProcess` / `CommandOptions` / `runTrace` / `onRun` / `RunTrace` — 프로세스 실행 함수와 실행 trace 헬퍼. 그래프 시그니처만 확인함
 - `nodePlatformLayer` / `nodePlatform` / `NodePlatform` / `initializeNodeSqlite(addonPath)` — Node 플랫폼 Layer와 node sqlite addon 초기화. 그래프 시그니처만 확인함

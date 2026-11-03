@@ -32,6 +32,7 @@ import {
   Stream,
 } from "effect";
 import { RpcServer } from "effect/rpc";
+import { workerFailedSpansLayer } from "../runtime/failed-spans.ts";
 import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
 import {
   CallReply,
@@ -365,4 +366,6 @@ const handlers = CodeRpcs.toLayer(
 const protocol = RpcServer.layerProtocolWorkerRunner.pipe(Layer.provide(NodeWorkerRunner.layer));
 const server = RpcServer.layer(CodeRpcs).pipe(Layer.provide(handlers), Layer.provide(protocol));
 
-await runNativeEffect(Layer.launch(server));
+// The worker's failed spans go to the owner thread, which puts them in defect notices and
+// reports under the run that caused them.
+await runNativeEffect(Effect.provide(Layer.launch(server), workerFailedSpansLayer));

@@ -3743,3 +3743,11 @@
 - 2026-11-03 GLM 서버(LiteLLM→vLLM) 세션의 run이 "The provider's answer could not be read."로 반복해 죽었다. 같은 순간 다른 요청은 `ECONNRESET`·`ETIMEDOUT`으로 끊겼다. 답을 받는 중 소켓이 끊기면 effect http가 body 읽기 실패를 `DecodeError`로 만들고, 호환 클라이언트가 이를 `InvalidOutputError`로 바꿔 연결 문제가 읽을 수 없는 답으로 보였다. transport 코드도 로그에 남지 않았다.
 - 이제 응답 body를 읽다 transport 코드와 함께 끊기면 그 코드를 로그에 남기고(`Compatible API connection closed before the answer finished: UND_ERR_SOCKET`) body를 그 자리에서 끝낸다. 스트림이 finish_reason(또는 usage 꼬리)도 `[DONE]`도 없이 끝나면 `CompatibleRunRequestFailed`의 `Disconnected`로 실패하고, 화면과 run 행에는 코드 없이 같은 문장이 남는다. `[DONE]`까지 왔는데 finish_reason이 없으면 서버가 끝낸 답이라 이전처럼 `InvalidOutputError`다.
 - 채팅 run의 자동 재시도는 이번에 하지 않았다. 재시도한다면 3회로 하자는 안과 타임아웃을 늘리는 안을 고민 중이다.
+
+## worker 스레드의 실패 span도 같은 trace로 owner에 모은다 (2026-11-03)
+
+- 임베딩·형태소·네이티브 검색·코드·imports·sandbox worker 안의 실패는 owner의 recorder에 남지 않아, 리포트에서 run과 이어 보지 못했다.
+- trace는 이미 이어져 있었다. Effect RPC 클라이언트가 요청마다 `traceId`·`spanId`·`sampled`를 실어 보내고, worker의 RPC 서버가 `Tracer.externalSpan`으로 그 부모를 이어 받는다. 빠진 것은 worker 메모리에 쌓인 실패 span을 owner로 가져오는 길뿐이었다.
+- `workerFailedSpansLayer`를 worker 진입점 6개의 프로그램 전체에 제공한다(`Effect.provide(Layer.launch(server), …)`). owner와 같은 recorder지만, 실패 span을 자기 메모리에 두지 않고 `BroadcastChannel("context-agent/failed-spans")`로 보낸다. 같은 프로세스의 스레드 사이라 새 전송 수단이나 RPC 프로토콜 변경이 없다. 채널은 `unref()`하고 layer가 끝날 때 닫는다.
+- owner의 `failedSpansLayer`만 채널을 받는다(worker는 받지 않아 메아리가 없다). 받은 span도 같은 상한(200개·30분)을 쓰고, trace 안에서는 끝난 시각 순으로 정렬해 worker span이 owner span 사이 제자리에 놓인다. 채널로 온 값은 스키마로 검사해 모양이 다르면 버린다.
+- 한계: worker가 보내기 전에 죽으면 그 span은 없다. 전달은 비동기라, 실패 직후 바로 만든 리포트에는 worker span이 아직 안 들어 있을 수 있다.

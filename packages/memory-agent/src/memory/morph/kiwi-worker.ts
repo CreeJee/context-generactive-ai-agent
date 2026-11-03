@@ -13,6 +13,7 @@ import {
   Schema,
 } from "effect";
 import { RpcServer } from "effect/rpc";
+import { workerFailedSpansLayer } from "../../runtime/failed-spans.ts";
 import { nativeFailure, nativePromise, runNativeEffect } from "../../runtime/native-effect.ts";
 import { KiwiRpcs, KiwiWorkerData, KiwiWorkerFailed } from "./kiwi-rpc.ts";
 // Kiwi (Korean morphological analyzer) in a worker thread: the WASM model needs ~850 MB, so it
@@ -141,4 +142,6 @@ const server = RpcServer.layer(KiwiRpcs, { concurrency: 1 }).pipe(
   Layer.provide(protocol),
 );
 
-await runNativeEffect(Layer.launch(server));
+// The worker's failed spans go to the owner thread, which puts them in defect notices and
+// reports under the run that caused them.
+await runNativeEffect(Effect.provide(Layer.launch(server), workerFailedSpansLayer));
