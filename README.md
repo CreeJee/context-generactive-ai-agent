@@ -219,7 +219,7 @@ pnpm 워크스페이스 모노레포이고, Vite+(`vp`)로 설치·검사·테�
 ## Subdirectories & System Boundaries
 
 - apps: [`./apps/README.md`](./apps/README.md) - 실행 가능한 앱 패키지. 메인 에이전트 웹 앱 `agent`(React Router SSR, API 라우트, UI, 단일 실행 파일 패키징)를 둡니다.
-- packages: [`./packages/README.md`](./packages/README.md) - 앱이 가져다 쓰는 워크스페이스 패키지. 에이전트 서버 로직 `memory-agent`, 네이티브 벡터 인덱스 바인딩 `turbovec`, 스타터 라이브러리 `utils`를 둡니다.
+- packages: [`./packages/README.md`](./packages/README.md) - 앱이 가져다 쓰는 워크스페이스 패키지. 에이전트 서버 로직 `memory-agent`, 네이티브 벡터 인덱스 바인딩 `turbovec`을 둡니다.
 - tools: [`./tools/README.md`](./tools/README.md) - 개발 도구. 세션 이동 검증 스크립트, 채팅 저장소 마이그레이션 검사 CLI, 프로파일 요약 CLI를 둡니다.
 - lint: [`./lint/README.md`](./lint/README.md) - 저장소 전용 lint 규칙. oxlint JS 플러그인 `anti-slop`과 하위 플러그인 `anti-slop-effect`를 둡니다. 가져온 코드라 lint·fmt 대상에서 빠집니다.
 - `docs/` - 설계 문서, 성능·평가 기록, 확정 결정(`docs/decisions.md`). 코드가 없어 계약 문서를 두지 않습니다.
