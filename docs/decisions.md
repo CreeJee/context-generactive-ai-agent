@@ -3737,3 +3737,9 @@
 - 남기는 것: 부모 span 이름 경로(최대 8단계), 실패 태그(`failure-tag.ts`의 이름, 예: `AiError:InvalidRequestError`), 끝난 시각, 걸린 시간, 숫자·불리언 속성(최대 16개). 문자열 속성(SQL 원문, URL, 공급자 텍스트)과 오류 메시지·stack은 남기지 않는다. 같은 실패가 부모 span으로 올라가며 반복되면 시작된 span에서 한 번만 남긴다.
 - 상한: span 200개, 30분. run과 trace의 짝은 run 500개까지 기억한다. run span은 `context_agent.run_id` 속성으로 run id를 알리고, 이 속성은 내보내는 tracer에 전달하지 않는다.
 - 결함 알림(Discord webhook)에는 결함이 난 trace의 실패 span을 최근 6개까지 stack 앞에 `실패 span:` 줄로 붙인다. 사용자 리포트 번들은 version 2로 올리고 run마다 `failedSpans`(최근 20개)를 담는다. 미리보기와 진단 요약에도 보이고, 실패 span이 있는 run은 실패한 run으로 친다.
+
+## 답 도중 끊긴 호환 연결은 `Disconnected`로 실패한다 (2026-11-03)
+
+- 2026-11-03 GLM 서버(LiteLLM→vLLM) 세션의 run이 "The provider's answer could not be read."로 반복해 죽었다. 같은 순간 다른 요청은 `ECONNRESET`·`ETIMEDOUT`으로 끊겼다. 답을 받는 중 소켓이 끊기면 effect http가 body 읽기 실패를 `DecodeError`로 만들고, 호환 클라이언트가 이를 `InvalidOutputError`로 바꿔 연결 문제가 읽을 수 없는 답으로 보였다. transport 코드도 로그에 남지 않았다.
+- 이제 응답 body를 읽다 transport 코드와 함께 끊기면 그 코드를 로그에 남기고(`Compatible API connection closed before the answer finished: UND_ERR_SOCKET`) body를 그 자리에서 끝낸다. 스트림이 finish_reason(또는 usage 꼬리)도 `[DONE]`도 없이 끝나면 `CompatibleRunRequestFailed`의 `Disconnected`로 실패하고, 화면과 run 행에는 코드 없이 같은 문장이 남는다. `[DONE]`까지 왔는데 finish_reason이 없으면 서버가 끝낸 답이라 이전처럼 `InvalidOutputError`다.
+- 채팅 run의 자동 재시도는 이번에 하지 않았다. 재시도한다면 3회로 하자는 안과 타임아웃을 늘리는 안을 고민 중이다.

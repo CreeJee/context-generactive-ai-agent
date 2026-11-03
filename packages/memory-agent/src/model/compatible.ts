@@ -15,7 +15,12 @@ import {
   String as Str,
 } from "effect";
 import { AiError, LanguageModel, type Prompt, type Response, Tool } from "effect/ai";
-import { FetchHttpClient, HttpClient, type HttpClientError } from "effect/http";
+import {
+  FetchHttpClient,
+  HttpClient,
+  type HttpClientError,
+  type HttpClientResponse,
+} from "effect/http";
 import { JsonValue } from "../json.ts";
 import { optionalProperty } from "../optional-property.ts";
 import type { ShownFailure } from "../providers/contracts.ts";
@@ -49,6 +54,11 @@ export const CompatibleRunRequestFailedReason = Schema.TaggedUnion({
   ToolCallingDisabled: {},
   /** fetch failed; `codes` are the Node/undici transport codes along its cause chain. */
   Transport: { codes: Schema.Array(Schema.String) },
+  /**
+   * The answer stopped before it finished and before `[DONE]`: the connection closed or dropped.
+   * `codes` are the transport codes of a dropped body read, which only its log line knows.
+   */
+  Disconnected: { codes: Schema.Array(Schema.String) },
 });
 export class CompatibleRunRequestFailed extends Schema.TaggedError<
   CompatibleRunRequestFailed,
@@ -66,6 +76,10 @@ export class CompatibleRunRequestFailed extends Schema.TaggedError<
       Transport: (reason) =>
         `Compatible API request failed: ${
           reason.codes.length > 0 ? reason.codes.join(" <- ") : "transport failure"
+        }`,
+      Disconnected: (reason) =>
+        `Compatible API connection closed before the answer finished${
+          reason.codes.length > 0 ? `: ${reason.codes.join(" <- ")}` : ""
         }`,
     });
   }
@@ -681,6 +695,8 @@ interface Translation {
   /** Whether the last chunk carried usage and no choice. */
   readonly endsWithUsage: boolean;
   readonly finishReason: Option.Option<string>;
+  /** Whether the server sent `[DONE]`: an unfinished stream that ends before it was cut. */
+  readonly doneReceived: boolean;
   readonly endedCalls: number;
   /** The open calls, in the order their slots came. */
   readonly calls: ReadonlyArray<StreamingCall>;
@@ -699,6 +715,7 @@ const initialTranslation: Translation = {
   usage: Option.none(),
   endsWithUsage: false,
   finishReason: Option.none(),
+  doneReceived: false,
   endedCalls: 0,
   calls: [],
   latest: Option.none(),
@@ -919,7 +936,7 @@ const translateEvent = (
   event: OpenAiClient.ChatCompletionStreamEvent,
 ): Translating =>
   Match.value(event).pipe(
-    Match.when("[DONE]", () => emit(state)),
+    Match.when("[DONE]", () => emit({ ...state, doneReceived: true })),
     // Servers vary: whatever parsed is read for the fields TanStack read.
     Match.when({ _tag: "UnknownChatCompletionEvent" }, (unknown) =>
       translateChunk(toolCalling, state, decodeChunk(unknown.data)),
@@ -939,13 +956,22 @@ const turnFinishReason = (state: Translation): FinishReason => {
   );
 };
 
-/** The end of the stream: what is open closes and the turn finishes, unless the stream was cut. */
+/**
+ * The end of the stream: what is open closes and the turn finishes. An unfinished stream fails as
+ * cut (`Disconnected`) when it ended before `[DONE]`, and as unreadable when the server ended it.
+ */
 const finished: Step = (state) =>
   translateAll(state, [endCalls, closeText, closeReasoning]).pipe(
     Result.filterOrFail(
       ([done]) => done.chunks > 0 && (Option.isSome(done.finishReason) || done.endsWithUsage),
-      () =>
-        invalidOutput("Chat Completions stream ended without a finish_reason or usage-only tail"),
+      ([done]): AiError.AiError | CompatibleRunRequestFailed =>
+        done.doneReceived
+          ? invalidOutput(
+              "Chat Completions stream ended without a finish_reason or usage-only tail",
+            )
+          : CompatibleRunRequestFailed.make({
+              reason: CompatibleRunRequestFailedReason.cases.Disconnected.make({ codes: [] }),
+            }),
     ),
     Result.flatMap(([done, ended]) =>
       Option.match(
@@ -1075,8 +1101,11 @@ const failureCode = (error: AiError.AiError) =>
 /** Node/undici transport codes (`ECONNRESET`, `ETIMEDOUT`, ...) surfaced from fetch failures. */
 const isTransportErrorCode = Schema.is(Schema.String.check(Schema.isPattern(/^[A-Z0-9_]+$/)));
 
-/** The transport codes along a failed fetch's cause chain; never URLs, headers or payloads. */
-const transportCodes = (reason: HttpClientError.TransportError) =>
+/**
+ * The transport codes along the cause chain of a failed fetch or body read; never URLs, headers or
+ * payloads.
+ */
+const transportCodes = (reason: HttpClientError.TransportError | HttpClientError.DecodeError) =>
   // The errors along the chain, each once and at most eight.
   Arr.unfold({ current: reason.cause, seen: Arr.empty<Error>() }, ({ current, seen }) =>
     Option.liftPredicate(current, Predicate.isError).pipe(
@@ -1090,6 +1119,37 @@ const transportCodes = (reason: HttpClientError.TransportError) =>
       ? [failure.code]
       : [],
   );
+
+/**
+ * The response with a body that ends where its connection dropped, after logging the drop's
+ * transport codes. Left as it was, the drop reaches the client as a `DecodeError`, which it words as
+ * an unreadable answer; ended, the stream stops before `[DONE]` and fails as `Disconnected`. A body
+ * read failure without transport codes stays as it was.
+ */
+const endingAtDrop = (
+  response: HttpClientResponse.HttpClientResponse,
+): HttpClientResponse.HttpClientResponse =>
+  // SAFETY: the copy reads every other member from `response` through its prototype, and its
+  // `stream` has the same element and error types as the one it replaces.
+  Object.create(response, {
+    stream: {
+      value: response.stream.pipe(
+        Stream.catch((error) =>
+          Arr.match(error.reason._tag === "DecodeError" ? transportCodes(error.reason) : [], {
+            onEmpty: () => Stream.fail(error),
+            onNonEmpty: (codes) =>
+              Stream.fromEffect(
+                Effect.logError(
+                  CompatibleRunRequestFailed.make({
+                    reason: CompatibleRunRequestFailedReason.cases.Disconnected.make({ codes }),
+                  }).message,
+                ),
+              ).pipe(Stream.drain),
+          }),
+        ),
+      ),
+    },
+  }) as HttpClientResponse.HttpClientResponse;
 
 /** One run's compatible model: its endpoint, effort and key stay fixed for every step. */
 export interface CompatibleModelOptions {
@@ -1109,21 +1169,25 @@ export const compatibleModel = Effect.fnUntraced(function* (options: CompatibleM
   const client = yield* OpenAiClient.make({
     apiUrl: endpoint.baseUrl,
     apiKey: isTruthy(options.key) ? Redacted.make(options.key) : undefined,
-    transformClient: HttpClient.tapError((error) =>
-      Match.value(error.reason).pipe(
-        Match.tag("TransportError", (reason) =>
-          // Do not log URLs, headers or payloads: the transport codes say what failed.
-          Effect.logError(
-            CompatibleRunRequestFailed.make({
-              reason: CompatibleRunRequestFailedReason.cases.Transport.make({
-                codes: transportCodes(reason),
-              }),
-            }).message,
+    transformClient: (base) =>
+      base.pipe(
+        HttpClient.tapError((error) =>
+          Match.value(error.reason).pipe(
+            Match.tag("TransportError", (reason) =>
+              // Do not log URLs, headers or payloads: the transport codes say what failed.
+              Effect.logError(
+                CompatibleRunRequestFailed.make({
+                  reason: CompatibleRunRequestFailedReason.cases.Transport.make({
+                    codes: transportCodes(reason),
+                  }),
+                }).message,
+              ),
+            ),
+            Match.orElse(() => Effect.void),
           ),
         ),
-        Match.orElse(() => Effect.void),
+        HttpClient.transformResponse(Effect.map(endingAtDrop)),
       ),
-    ),
   }).pipe(Effect.provideService(HttpClient.HttpClient, http));
 
   const streamText = (request: LanguageModel.ProviderOptions) =>

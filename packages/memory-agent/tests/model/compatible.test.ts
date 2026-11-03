@@ -521,6 +521,52 @@ describe("compatible language model", () => {
     }),
   );
 
+  it.effect("fails an answer whose connection dropped as disconnected, logging its codes", () =>
+    Effect.gen(function* () {
+      const logs: unknown[] = [];
+      const capture = Logger.make((log) => {
+        logs.push(Logger.formatStructured.log(log));
+      });
+      // The first chunk arrives, then the socket closes as undici reports it.
+      const reads = [
+        new TextEncoder().encode(`data: ${yield* encodeJson(chunk({ content: "Half" }))}\n\n`),
+      ];
+      const dropped = new TypeError("terminated", {
+        cause: Object.assign(new Error("other side closed"), { code: "UND_ERR_SOCKET" }),
+      });
+      const { error, failure } = yield* failureOf(
+        options(
+          endpointOf(
+            () =>
+              new Response(
+                new ReadableStream<Uint8Array>({
+                  pull: (controller) => {
+                    const next = reads.shift();
+                    return next === undefined
+                      ? controller.error(dropped)
+                      : controller.enqueue(next);
+                  },
+                }),
+                { headers: { "Content-Type": "text/event-stream" } },
+              ),
+          ),
+        ),
+      ).pipe(
+        Effect.provideService(Logger.CurrentLoggers, new Set([capture])),
+        Effect.provideService(References.MinimumLogLevel, "Trace"),
+      );
+      expect(failure).toEqual(
+        failed(CompatibleRunRequestFailedReason.cases.Disconnected.make({ codes: [] })),
+      );
+      expect(shownCompatibleFailure(error)).toEqual({
+        message: "Compatible API connection closed before the answer finished",
+      });
+      expect(yield* encodeJson(logs)).toContain(
+        "Compatible API connection closed before the answer finished: UND_ERR_SOCKET",
+      );
+    }),
+  );
+
   it.effect("logs a failed fetch by its transport codes only", () =>
     Effect.gen(function* () {
       const logs: unknown[] = [];
