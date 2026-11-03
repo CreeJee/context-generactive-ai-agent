@@ -2283,6 +2283,7 @@
   - MCP 규칙 출처. 제품이 만든 적 없고 저장하지 않는다.
   - 0.0.11부터 queue id가 있으므로 id 없는 옛 turn을 텍스트로 맞추던 경로.
   - `ReportDelivery`의 `allowLoopback`, `executionAdmission` 레이어 옵션, legacy owner RPC fingerprint 변환, `PersistedQueueItems.deadLetters`, `CardAttempts.awaitOutcome`.
+  - `ProviderToolRuntime.execute`와 `ProviderToolPolicy.revalidateExecution`. provider 도구는 provider가 실행하고, 앱은 노출(`expose`)과 모델 도구 만들기(`compose`)만 한다. 실행 전 재검증이 쓰던 승인 상태, 작업 공간 경로·환경 변수·자원 한도 검사, 사용량·비용 정규화와 그 오류들도 함께 지웠다. 신뢰 sandbox 설정은 노출을 정하는 `isolatedCompute`·`isolatedDesktop`만 남긴다.
 - 시작 sweep의 `report` 모드는 테스트만 쓰지만 남긴다. 판정이 틀렸을 때 되돌리는 스위치로 둔 결정(2026-10-29)을 따른다.
 
 ## BTW 별도 질문 채팅 (2026-10-12)

@@ -29,7 +29,7 @@
 - `DirectImageExecutor` — OpenAI Images API 직접 실행 서비스(`openAIEnvironmentLayer`, `unavailableLayer`, `layerFrom`)와 `DirectImageExecutionFailed`
 - `ImageMediaWorkflow` / `makeImageMediaWorkflow` / `ImageMediaApprovalRequired` / `ImageMediaUnavailable` / `ImageMediaExecutionFailed` / `CrossProviderMediaRunApproval` — 승인→라우팅→실행→첨부 저장 이미지 워크플로. 승인·자산 Schema(`CrossProviderMediaRunApproval`, `ImageApprovalReason`, `ImageMediaAsset`)는 브라우저도 쓰는 `image-media-contracts.ts`에 있다
 - `RouteCatalog` / `makeRouteCatalog` / `ChatRoute` / `MediaRoute` / `RouteCatalogRefreshFailed` / `UnknownCatalogRoute` — 채팅·미디어 실행 라우트 카탈로그 서비스(route-catalog.ts; 시그니처만 확인)
-- `ProviderToolPolicy` / `ProviderToolRuntime` / `makeProviderToolPolicy` / `decideProviderToolExposure` / `classifyProviderToolRisk` / `hasRequiredProviderToolAuthority` / `normalizeProviderToolUsage` / `normalizeProviderToolCost` 및 `ProviderTool*` TaggedError 다수 — 공급자 네이티브 도구 노출·승인·샌드박스 정책과 실행 런타임(tool-policy.ts; 시그니처만 확인)
+- `ProviderToolPolicy` / `ProviderToolRuntime` / `makeProviderToolPolicy` / `decideProviderToolExposure` / `classifyProviderToolRisk` / `hasRequiredProviderToolAuthority` 및 `ProviderTool*` TaggedError — 공급자 네이티브 도구를 모델에 노출할지 정하는 정책(앱·사용자 설정, 위험도, 신뢰 권한, 기능 플래그)과, 노출된 도구를 모델 도구로 만드는 `compose`(tool-policy.ts). 실행은 provider가 하고 이 모듈은 실행하지 않는다
 - `ProviderToolCapabilityRegistry` / `makeProviderToolCapabilityRegistry` / `providerToolDescriptors` / `filterProviderTools` / `ProviderToolId` / `providerTools` — 도구 기술자·모델 메타데이터 레지스트리와 도구 ID 스키마(tool-capabilities.ts, provider-tool-id.ts, provider-tools.ts; 이름만 확인)
 - `ModelFeatureFlags` / `decideModelFeatureFlag` / `OPENAI_CHAT_MODELS` / `ANTHROPIC_MODELS` / `OPENAI_IMAGE_MODELS` / `openAIModelToolCapabilities` / `anthropicModelToolCapabilities` / `failedReasons` — 모델별 기능 플래그 서비스, 정적 모델 카탈로그·도구 능력 표, 실패 이유 수집 헬퍼
 - 하위 디렉터리 없음
@@ -62,7 +62,7 @@
 - 환경 변수: `OPENAI_API_KEY`를 `ConfigProvider.fromEnv()`로 읽는다
 - 첨부 저장: `ImageMediaWorkflow`가 생성 이미지를 `Attachments.save`로 영속화한다
 - Crypto: `ImageMediaWorkflow`와 `makeOpenAICompatibleSettings`가 `Crypto.Crypto`를 받는다(run id 등)
-- 파일시스템/키체인: openai-compatible.ts의 `keychain`/`CompatibleKeyring`이 `FileSystem`·`Path` 컨텍스트로 자격증명을 저장한다(시그니처만 확인). `makeProviderToolPolicy`가 신뢰 작업 공간과 경로 검사에 `FileSystem`을 쓴다
+- 파일시스템/키체인: openai-compatible.ts의 `keychain`/`CompatibleKeyring`이 `FileSystem`·`Path` 컨텍스트로 자격증명을 저장한다(시그니처만 확인).
 
 ## Verification
 
