@@ -2589,7 +2589,7 @@
 ## compatible 어댑터의 run id와 bound run 전달 실패 (2026-10-21)
 
 - `@tanstack/openai-base`의 chat-completions 어댑터는 `options.runId`를 무시하고 자기 id(`openai-compatible-…`)로 `RUN_STARTED`·`RUN_FINISHED`를 냈다. Goal에 묶인 run의 durable 전달 로그는 다른 run id의 lifecycle 이벤트를 `run_mismatch`로 거부하므로, compatible 모델로 Goal을 실행하면 첫 이벤트에서 전달이 끊겼다. responses 어댑터·Anthropic 어댑터처럼 `options.runId ?? generateId(...)`를 쓰도록 `patches/@tanstack__openai-base@0.11.1.patch`로 고친다.
-- bound run의 출력 기록(`workflow_run_events`)이나 실행 스트림이 실패하면 메시지 없는 태그드 오류를 SDK로 던지지 않는다. 서버가 실패를 태그·사유로 로그에 남기고 `run_record_failed`(기록 실패) 또는 `run_failed`(실행 스트림 실패) 코드의 `RUN_ERROR`로 전달을 끝낸다. 던지면 SDK가 "Unknown error occurred"로만 기록한다.
+- (2026-11-04 수정: receipt를 없앴으므로 `run_record_failed`는 더 생기지 않는다. "Goal run의 출력은 delivery 로그에만 둔다" 참고.) bound run의 출력 기록(`workflow_run_events`)이나 실행 스트림이 실패하면 메시지 없는 태그드 오류를 SDK로 던지지 않는다. 서버가 실패를 태그·사유로 로그에 남기고 `run_record_failed`(기록 실패) 또는 `run_failed`(실행 스트림 실패) 코드의 `RUN_ERROR`로 전달을 끝낸다. 던지면 SDK가 "Unknown error occurred"로만 기록한다.
 
 ## 칸반 보드 목록 접근 경로 (2026-10-21)
 
@@ -3857,3 +3857,22 @@
   - 8코어 기계에서 16개를 함께 띄우면 1.1~1.5초였다. 전체 테스트는 vitest worker 4개가 저마다 embed·Kiwi·native worker를 띄우므로, 2초를 넘는다.
   - 모듈 하나가 원인이 아니다. `database.ts`를 빼도 56ms만 준다.
 - 한도는 15초로 늘린다. 이 한도가 막는 것은 답하지 않는 worker뿐이다. 다른 worker(embed, Kiwi, sandbox)에는 시작 한도가 아예 없다. 명령별 reply 기한(2초)은 그대로 둔다. 명령은 모듈 로딩을 포함하지 않는다.
+
+## Goal run의 출력은 delivery 로그에만 둔다 (2026-11-04)
+
+- 계기: 정규화 안 된 표 목록 1번(같은 날). `workflow_run_events`는 표 866MB와 인덱스 356MB, 327만 행이었다(로컬 DB 사본).
+- 원인: Goal run의 chunk를 두 번 썼다.
+  - receipt(`chunk:N`, `boundRunRecorded`)로 한 번, page가 읽는 delivery 로그(`sdk-stream:v1:chunk:N`, `sqliteRunLog`)로 한 번, 같은 표에 썼다. 둘의 payload는 같았다(각 163만 행, 267MB).
+  - receipt를 읽는 코드는 없었다. `workflowRunEvents.replay`는 테스트만 불렀다.
+  - 두 쪽 다 지우지 않았다. 행마다 run id(36자)와 ISO 시각, kind를 품은 `event_key`가 반복됐다.
+- 결정:
+  - receipt를 없앤다. 출력은 delivery 로그에만 한 번 쓴다. 로그도 page가 읽기 전에 commit하므로, receipt가 맡던 "전달 전에 기록" 계약은 그대로다.
+  - 로그를 전용 표로 옮긴다. `workflow_run_log_entries(cursor, run_id, event_json)`가 항목이고, `workflow_run_log_closures(run_id, closed_at)`가 끝 표시다. 재개 토큰 `sdk-stream:v1:{runId}:{cursor}`의 모양은 그대로다.
+  - 보존: 메모리 run 로그와 같은 5분(`finishedLogTtl`)이다. 닫힌 지 5분이 지난 로그는 읽으면 `unknown_run`이다(메모리 로그가 sweep된 뒤와 같다). 항목은 다음 close나 시작 때 지운다. closure는 남긴다. 그래야 그 로그가 열린 로그로 보여 reader가 끝없이 기다리지 않는다.
+  - 근거 가치(2026-10-29 "durable 행 보존 기준"): chunk는 transcript와 memory node에 있는 내용의 delta다. 에이전트도 사람도 이 행을 근거로 읽지 않는다. 그래서 운영에 필요한 동안만 둔다.
+  - 재시작이 끊은 로그는 시작 때(`ChatState`) 그 시각으로 닫는다. owner가 SIGKILL로 죽은 뒤 다시 붙은 page는 transcript에 없던 부분 출력을 5분 동안 끝까지 읽고 끝난다. 전에는 이 로그가 끝내 닫히지 않아 reader가 1초마다 계속 읽었다.
+  - 운영자 read recovery 취소 영수증(`operator:read-recovery:revoke:{receiptId}`)은 `owner_read_recovery_revocations(receipt_id)`로 옮긴다. 지금은 쓰는 코드가 없고, 릴리즈가 쓴 행만 admission 판정에 남는다.
+- 2026-10-21 "compatible 어댑터의 run id와 bound run 전달 실패"의 `run_record_failed`는 더 생기지 않는다. 기록 실패는 일반 run과 같이 delivery 로그 실패(`Run log delivery failed`, `run_failed`)로 끝난다. 저장된 옛 run의 코드 문구는 남긴다.
+- 마이그레이션: 모든 binding에 `closed_at = 0`인 closure를 넣고, 옛 chunk는 옮기지 않는다. 마이그레이션은 재시작 때 돌고 그때 열린 run은 없다. 그래서 옛 로그는 모두 오래전에 닫힌 것으로 둔다. 취소 영수증은 receipt와 맞는 것만 옮긴다. 그다음 `workflow_run_events`를 지운다.
+  - 지운 공간은 파일에 빈 페이지로 남는다. 파일 크기를 줄이려면 `VACUUM`이 필요하다.
+  - 사본 측정(327만 행): 이 단계는 0.88초, WAL 1.3MB였다. 1.28GB(313,369페이지)가 빈 페이지가 됐다.

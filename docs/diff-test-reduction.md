@@ -27,70 +27,70 @@ Full assertion bodies of new tests and actual diffs of tracked tests were review
 
 Memory-agent names below are relative to `packages/memory-agent/tests/`, except the explicitly identified source-adjacent stream test.
 
-| Test                                   | Disposition         | Unique risk / precise substitute                                                            |
-| -------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------- |
-| native-artifact-build                  | REDUCE              | Host dependency allowlist, eager acquisition, factory binding; removed logging              |
-| native-artifact-capability-lifetime    | REDUCE              | Exact permission refusal and session authorization; removed redundant counter               |
-| native-artifact-cold-execution         | KEEP                | Fresh process executes A/B/A after source deletion; independent durable DB read             |
-| native-artifact-cold-reopen            | KEEP                | Second process preserves old run/thread evidence and starts explicit fresh turn             |
-| native-artifact-loader                 | KEEP                | Untrusted/corrupt/noncanonical evaluation and stage integrity                               |
-| native-artifact-memory-lifetime        | KEEP                | Bundled memory implementation and populated state isolation                                 |
-| native-artifact-source-lifetime        | DELETE              | Stronger cold-execution A/B/A replacement                                                   |
-| goal-native-capabilities               | KEEP                | Deferred attribution, central authorization and no raw-handle/factory bypass                |
-| goal-native-implementation             | KEEP                | Goal identity, fresh client release and owner-reference retention                           |
-| goal-worker-assets                     | KEEP                | Source/SDK pin, leases, capture race, adoption integrity and path validation                |
-| goal-worker-generation-store           | KEEP                | Immutable provenance/reopen; no invented historical execution pin                           |
-| agent-chat-native-factory              | KEEP                | Model release, successful persistence and missing-vs-failed registry behavior               |
-| agent-chat-native-generation-isolation | KEEP                | Simultaneous changed-source Goals and V1 restart cannot adopt V2                            |
-| agent-chat-native-registration         | KEEP                | Actual default entry registration/linkage/revalidation                                      |
-| owner-native-artifacts                 | KEEP                | Registration races, tampering, interruption and uncertain-commit lease safety               |
-| memory-tool-factory                    | KEEP                | Owner injection, deferred node getter and populated usage-state isolation                   |
-| permission-gate-factory                | KEEP                | Session Context and exact tool/name/argument approval binding                               |
-| recording-factory                      | KEEP                | Concurrent attribution, secret redaction and retained owner                                 |
-| subscription-runtime-factory           | KEEP                | Account pin, abort, fresh adapter/client and release                                        |
-| subscription-runtime-dependencies      | KEEP                | Real account dependency, catalog invalidation and lease release                             |
-| agent-chat-goal-boundary               | KEEP                | Legacy live admission, session boundaries and durable node/replay behavior                  |
-| agent-chat-goal-run-binding            | KEEP                | Finalizer failures, invalid admission and persisted SDK cursors                             |
-| agent-chat-owner-process-recovery      | KEEP                | Actual OS SIGKILL partial recovery and completed SIGTERM replay                             |
-| agent-chat-worker-cancellation         | KEEP                | Pending model pull, failed terminal and uncertain receipts after reopen                     |
-| agent-chat-worker-failure              | KEEP                | Failure before vs after committed tool effect                                               |
-| agent-chat-worker-inventory-preflight  | KEEP                | Invalid inventories rejected before creating execution evidence                             |
-| agent-chat-worker-oauth-owner          | KEEP                | Worker death cannot transfer/cancel central OAuth/PKCE owner                                |
-| agent-chat-worker-owner-services       | KEEP                | Single central DB/embedder and persistent vector reuse                                      |
-| agent-chat-worker-rollback             | KEEP                | Byte-equivalent history and no uncertainty bypass with worker opt-out                       |
-| agent-chat-worker-source-generation    | KEEP                | Pin across revision/reopen; absent vs tampered source rejection                             |
-| agent-chat-worker-uncertain-admission  | KEEP                | Completed run cannot hide pending effect; valid control still admitted                      |
-| chat-execution                         | KEEP                | Untyped turn cannot override capabilities; actual in-process SDK and cancel                 |
-| full-loop-admission-preflight          | REDUCE (first pass) | Retained portable transport boundary; removed uncalled historical validator                 |
-| full-loop-capabilities                 | KEEP                | Codec tags, owner identity, hooks/cleanup and continuation rejection                        |
-| full-loop-execution                    | REDUCE              | Duplicate consumer return merged; listener, lease and hostile worker checks retained        |
-| full-loop-resources                    | KEEP                | Second native port closes even when first close throws                                      |
-| full-loop-worker-events                | KEEP                | Queue/listener disposal, abort/pending pull and malformed envelopes                         |
-| goal-worker-authority                  | KEEP                | Immutable capability, revocation, finalization-only and persistent generation fence         |
-| owner-rpc-ledger                       | KEEP                | Standalone durability, pending/uncertain reopen, cross-run and forged-key fences            |
-| owner-rpc-transport                    | KEEP                | Real MessagePort cleanup, secrecy/correlation, interruption and late settlement             |
-| owner-rpc                              | REDUCE              | Removed unused allocator; retained typed native core and protocol trust checks              |
-| owner-tool-grants                      | KEEP                | Tampering and one-use grants rejected before false uncertain reservation                    |
-| database                               | REDUCE              | Synthetic history merged into real release-prefix upgrade; FK/transaction rollback retained |
-| goal-history-migration                 | KEEP                | FK retarget, old reader/reopen and corrupt-reference rollback                               |
-| workflow-completion-evidence           | KEEP                | Criterion/node ownership, stale mapping and immutable completion/reopen                     |
-| workflow-execution                     | KEEP                | Distinct live read/write/refusal/failure progress paths                                     |
-| workflow-explicit-goal-transition      | KEEP                | Phase authorization, uncertain effects and compatible rollback                              |
-| workflow-instructions                  | KEEP                | Independent planning, nonblocking questions and cross-turn rules                            |
-| workflow-run-bindings                  | KEEP                | Immutable tuple, stale revision, uncertainty and cross-session rejection                    |
-| workflow-run-events                    | KEEP                | Receipt content-conflict/idempotency, distinct from stream cursor replay                    |
-| workflow-tool-progress                 | KEEP                | No-op/refusal/failure and normalized fingerprint                                            |
-| workflow                               | KEEP                | Full evidence revisions, method-only identity and atomic rollback                           |
-| oauth-account-bound                    | KEEP                | Selection pin, caching, catalog, removal and admission races                                |
-| oauth-account-login                    | KEEP                | Actual callback exchange, isolated publication and pending cancellation                     |
-| oauth-accounts                         | KEEP                | Secret isolation, legacy import, scoped selection and conflicting slots                     |
-| oauth-validation-harness               | KEEP                | Timeout/cancel before write vs during write are different races                             |
-| report-evidence-tools                  | KEEP                | Bounded bound inventory, foreign refs, revocation and redaction                             |
-| agent-chat                             | KEEP                | Actual completion/early model mismatch resource release                                     |
-| external-agents                        | KEEP                | Maintained TS subprocess fixture, not a throwaway mock                                      |
-| mcp                                    | KEEP                | Actual trust/approval and process lifecycle with TS fixture                                 |
-| shell                                  | KEEP                | Detached-child held-stdio cleanup, needs its fixture                                        |
-| src/workflow/durable-stream.test.ts    | KEEP                | Atomic append/cursor namespace/snapshots; HTTP resume keeps producerCalls at one            |
+| Test                                   | Disposition         | Unique risk / precise substitute                                                                       |
+| -------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------ |
+| native-artifact-build                  | REDUCE              | Host dependency allowlist, eager acquisition, factory binding; removed logging                         |
+| native-artifact-capability-lifetime    | REDUCE              | Exact permission refusal and session authorization; removed redundant counter                          |
+| native-artifact-cold-execution         | KEEP                | Fresh process executes A/B/A after source deletion; independent durable DB read                        |
+| native-artifact-cold-reopen            | KEEP                | Second process preserves old run/thread evidence and starts explicit fresh turn                        |
+| native-artifact-loader                 | KEEP                | Untrusted/corrupt/noncanonical evaluation and stage integrity                                          |
+| native-artifact-memory-lifetime        | KEEP                | Bundled memory implementation and populated state isolation                                            |
+| native-artifact-source-lifetime        | DELETE              | Stronger cold-execution A/B/A replacement                                                              |
+| goal-native-capabilities               | KEEP                | Deferred attribution, central authorization and no raw-handle/factory bypass                           |
+| goal-native-implementation             | KEEP                | Goal identity, fresh client release and owner-reference retention                                      |
+| goal-worker-assets                     | KEEP                | Source/SDK pin, leases, capture race, adoption integrity and path validation                           |
+| goal-worker-generation-store           | KEEP                | Immutable provenance/reopen; no invented historical execution pin                                      |
+| agent-chat-native-factory              | KEEP                | Model release, successful persistence and missing-vs-failed registry behavior                          |
+| agent-chat-native-generation-isolation | KEEP                | Simultaneous changed-source Goals and V1 restart cannot adopt V2                                       |
+| agent-chat-native-registration         | KEEP                | Actual default entry registration/linkage/revalidation                                                 |
+| owner-native-artifacts                 | KEEP                | Registration races, tampering, interruption and uncertain-commit lease safety                          |
+| memory-tool-factory                    | KEEP                | Owner injection, deferred node getter and populated usage-state isolation                              |
+| permission-gate-factory                | KEEP                | Session Context and exact tool/name/argument approval binding                                          |
+| recording-factory                      | KEEP                | Concurrent attribution, secret redaction and retained owner                                            |
+| subscription-runtime-factory           | KEEP                | Account pin, abort, fresh adapter/client and release                                                   |
+| subscription-runtime-dependencies      | KEEP                | Real account dependency, catalog invalidation and lease release                                        |
+| agent-chat-goal-boundary               | KEEP                | Legacy live admission, session boundaries and durable node/replay behavior                             |
+| agent-chat-goal-run-binding            | KEEP                | Finalizer failures, invalid admission and persisted SDK cursors                                        |
+| agent-chat-owner-process-recovery      | KEEP                | Actual OS SIGKILL partial recovery and completed SIGTERM replay                                        |
+| agent-chat-worker-cancellation         | KEEP                | Pending model pull, failed terminal and uncertain receipts after reopen                                |
+| agent-chat-worker-failure              | KEEP                | Failure before vs after committed tool effect                                                          |
+| agent-chat-worker-inventory-preflight  | KEEP                | Invalid inventories rejected before creating execution evidence                                        |
+| agent-chat-worker-oauth-owner          | KEEP                | Worker death cannot transfer/cancel central OAuth/PKCE owner                                           |
+| agent-chat-worker-owner-services       | KEEP                | Single central DB/embedder and persistent vector reuse                                                 |
+| agent-chat-worker-rollback             | KEEP                | Byte-equivalent history and no uncertainty bypass with worker opt-out                                  |
+| agent-chat-worker-source-generation    | KEEP                | Pin across revision/reopen; absent vs tampered source rejection                                        |
+| agent-chat-worker-uncertain-admission  | KEEP                | Completed run cannot hide pending effect; valid control still admitted                                 |
+| chat-execution                         | KEEP                | Untyped turn cannot override capabilities; actual in-process SDK and cancel                            |
+| full-loop-admission-preflight          | REDUCE (first pass) | Retained portable transport boundary; removed uncalled historical validator                            |
+| full-loop-capabilities                 | KEEP                | Codec tags, owner identity, hooks/cleanup and continuation rejection                                   |
+| full-loop-execution                    | REDUCE              | Duplicate consumer return merged; listener, lease and hostile worker checks retained                   |
+| full-loop-resources                    | KEEP                | Second native port closes even when first close throws                                                 |
+| full-loop-worker-events                | KEEP                | Queue/listener disposal, abort/pending pull and malformed envelopes                                    |
+| goal-worker-authority                  | KEEP                | Immutable capability, revocation, finalization-only and persistent generation fence                    |
+| owner-rpc-ledger                       | KEEP                | Standalone durability, pending/uncertain reopen, cross-run and forged-key fences                       |
+| owner-rpc-transport                    | KEEP                | Real MessagePort cleanup, secrecy/correlation, interruption and late settlement                        |
+| owner-rpc                              | REDUCE              | Removed unused allocator; retained typed native core and protocol trust checks                         |
+| owner-tool-grants                      | KEEP                | Tampering and one-use grants rejected before false uncertain reservation                               |
+| database                               | REDUCE              | Synthetic history merged into real release-prefix upgrade; FK/transaction rollback retained            |
+| goal-history-migration                 | KEEP                | FK retarget, old reader/reopen and corrupt-reference rollback                                          |
+| workflow-completion-evidence           | KEEP                | Criterion/node ownership, stale mapping and immutable completion/reopen                                |
+| workflow-execution                     | KEEP                | Distinct live read/write/refusal/failure progress paths                                                |
+| workflow-explicit-goal-transition      | KEEP                | Phase authorization, uncertain effects and compatible rollback                                         |
+| workflow-instructions                  | KEEP                | Independent planning, nonblocking questions and cross-turn rules                                       |
+| workflow-run-bindings                  | KEEP                | Immutable tuple, stale revision, uncertainty and cross-session rejection                               |
+| workflow-run-events                    | DELETE              | Receipts dropped with `workflow_run_events` (decisions.md 2026-11-04); the run log test covers restart |
+| workflow-tool-progress                 | KEEP                | No-op/refusal/failure and normalized fingerprint                                                       |
+| workflow                               | KEEP                | Full evidence revisions, method-only identity and atomic rollback                                      |
+| oauth-account-bound                    | KEEP                | Selection pin, caching, catalog, removal and admission races                                           |
+| oauth-account-login                    | KEEP                | Actual callback exchange, isolated publication and pending cancellation                                |
+| oauth-accounts                         | KEEP                | Secret isolation, legacy import, scoped selection and conflicting slots                                |
+| oauth-validation-harness               | KEEP                | Timeout/cancel before write vs during write are different races                                        |
+| report-evidence-tools                  | KEEP                | Bounded bound inventory, foreign refs, revocation and redaction                                        |
+| agent-chat                             | KEEP                | Actual completion/early model mismatch resource release                                                |
+| external-agents                        | KEEP                | Maintained TS subprocess fixture, not a throwaway mock                                                 |
+| mcp                                    | KEEP                | Actual trust/approval and process lifecycle with TS fixture                                            |
+| shell                                  | KEEP                | Detached-child held-stdio cleanup, needs its fixture                                                   |
+| src/workflow/durable-stream.test.ts    | KEEP                | Atomic append/cursor namespace/snapshots; HTTP resume keeps producerCalls at one                       |
 
 App names are relative to `apps/agent/`.
 

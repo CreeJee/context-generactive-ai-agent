@@ -26,10 +26,16 @@ function oldDatabase(file: string) {
   `);
   return db;
 }
-const snapshot = (db: DatabaseSync) =>
-  goalHistoryMigration.preservedTables.map((table) =>
-    db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all(),
-  );
+const snapshot = (
+  db: DatabaseSync,
+  tables: ReadonlyArray<string> = goalHistoryMigration.preservedTables,
+) => tables.map((table) => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all());
+/** The preserved tables a later step keeps: the run log step drops the run event receipts. */
+const stillKept = goalHistoryMigration.preservedTables.filter(
+  (table) => table !== "workflow_run_events",
+);
+const keptOf = <A>(rows: ReadonlyArray<A>) =>
+  rows.filter((_, index) => goalHistoryMigration.preservedTables[index] !== "workflow_run_events");
 
 const scopedDatabase = Effect.fn("scopedDatabase")((open: () => DatabaseSync) =>
   Effect.acquireRelease(Effect.sync(open), (db) =>
@@ -40,7 +46,7 @@ const scopedDatabase = Effect.fn("scopedDatabase")((open: () => DatabaseSync) =>
 );
 
 it.live(
-  "startup FK retarget preserves every revision, event cursor, dispatch, RPC and old reader through reopen",
+  "startup FK retarget preserves every revision, dispatch, RPC and old reader through reopen",
   () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -50,10 +56,14 @@ it.live(
       const db = yield* scopedDatabase(() => oldDatabase(file));
       const before = snapshot(db);
       yield* migrateDatabase(db);
-      // Later steps only add the nullable board author; every preserved value stays as it was.
+      // Later steps only add the nullable board author and drop the run event receipts, ending
+      // the run's delivery log instead; every other preserved value stays as it was.
       expect(
-        snapshot(db).map((rows) => rows.map(({ author_json: _author, ...row }) => row)),
-      ).toEqual(before);
+        snapshot(db, stillKept).map((rows) => rows.map(({ author_json: _author, ...row }) => row)),
+      ).toEqual(keptOf(before));
+      expect(db.prepare("SELECT run_id FROM workflow_run_log_closures").all()).toEqual([
+        { run_id: "run" },
+      ]);
       expect(db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
       expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(
@@ -66,9 +76,6 @@ it.live(
         "immutable",
       );
       expect(() => db.exec("UPDATE workflow_worker_dispatches SET generation = 'new'")).toThrow(
-        "immutable",
-      );
-      expect(() => db.exec("UPDATE workflow_run_events SET payload_json = '{}' ")).toThrow(
         "immutable",
       );
       expect(() => db.exec("UPDATE workflow_state_revisions SET state_json = '{}' ")).toThrow();
@@ -95,7 +102,7 @@ it.live(
       expect(
         reopened.prepare("SELECT * FROM workflow_goal_instances ORDER BY created_at").all(),
       ).toHaveLength(2);
-      expect(reopened.prepare("SELECT * FROM workflow_run_events").all()).toEqual(before[4]);
+      expect(reopened.prepare("SELECT * FROM workflow_run_log_entries").all()).toEqual([]);
       expect(reopened.prepare("SELECT * FROM owner_rpc_operations").all()).toEqual(before[6]);
     }).pipe(withTestPlatform),
 );

@@ -55,7 +55,7 @@ export interface RunLog {
 export const runAcceptedEvent = "run.accepted";
 
 /** How long a finished run's log stays readable, for a page that reconnects late. */
-const finishedLogTtl = Duration.minutes(5);
+export const finishedLogTtl = Duration.minutes(5);
 /** At most this many logs are kept; the oldest finished ones go first. Running logs always stay. */
 const maxLogs = 1024;
 

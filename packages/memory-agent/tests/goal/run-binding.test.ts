@@ -3,7 +3,6 @@ import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { Admission, workflowRunBindings } from "../../src/workflow/run-bindings.ts";
-import { workflowRunEvents } from "../../src/workflow/run-events.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
 import { chatApi } from "../support/chat-api.ts";
 import { eventsOf, streamedText } from "../support/chat-client.ts";
@@ -244,17 +243,6 @@ testAgent({ testProvider: {} })("Goal chat run binding across reopen", (it) => {
         const kinds = (yield* nodes.session(session)).map((node) => node.kind);
         expect(kinds.filter((kind) => kind === "user")).toHaveLength(1);
         expect(kinds.filter((kind) => kind === "assistant")).toHaveLength(1);
-        const events = yield* env.use(workflowRunEvents);
-        const receipts = yield* events.replay(session, runId);
-        expect(receipts.length).toBeGreaterThan(0);
-        expect(
-          yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(
-            receipts.map((event) => event.payload),
-          ),
-        ).toContain("Hello from fast-1");
-        expect(yield* events.replay(session, runId, receipts[0]!.cursor)).toEqual(
-          receipts.slice(1),
-        );
         expect(
           yield* sqlGet(
             "SELECT session_id, goal_instance_id, goal_version, workflow_revision_id FROM workflow_run_bindings WHERE run_id = ?",
@@ -272,7 +260,10 @@ testAgent({ testProvider: {} })("Goal chat run binding across reopen", (it) => {
           error: "run_already_completed",
         });
         expect(yield* count("nodes WHERE session_id = ?", session)).toEqual(before);
-        expect(yield* events.replay(session, runId)).toEqual(receipts);
+        // The refused turn leaves the run's log as it was.
+        expect(yield* Stream.runCollect(yield* join(session, runId, firstOffset))).toEqual(
+          delivered.slice(1),
+        );
         // Simulate restart recovery classifying an in-flight run as failed. The same ID must
         // not re-enter the model after an uncertain tool-side effect.
         yield* sqlRun("UPDATE chat_runs SET status = 'failed' WHERE run_id = ?", runId);

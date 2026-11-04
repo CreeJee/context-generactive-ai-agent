@@ -24,8 +24,8 @@ export const recoveredReadRunSql = (run: "r" | "recovery_run") => `EXISTS (
     AND rb.workflow_revision_id = rr.workflow_revision_id
     AND re.workflow_name = 'GoalExecution' AND re.status = 'completed'
     AND re.result_json = rr.execution_result_json AND re.payload_json = rr.execution_payload_json
-    AND NOT EXISTS (SELECT 1 FROM workflow_run_events revoked
-      WHERE revoked.run_id=rr.run_id AND revoked.event_key='operator:read-recovery:revoke:' || rr.receipt_id)
+    AND NOT EXISTS (SELECT 1 FROM owner_read_recovery_revocations revoked
+      WHERE revoked.receipt_id = rr.receipt_id)
     AND NOT EXISTS (SELECT 1 FROM owner_rpc_operations later
       WHERE later.run_id = rr.run_id AND later.operation_id > rr.operation_id)
     AND NOT EXISTS (SELECT 1 FROM owner_rpc_operations other

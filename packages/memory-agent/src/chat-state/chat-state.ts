@@ -6,6 +6,7 @@ import { threadMessages } from "../chat-store/thread-messages.ts";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { Nodes } from "../memory/nodes.ts";
 import { serverRestartedCode, serverRestartedMessage } from "../agent/run-state.ts";
+import { endCutRunLogs } from "../workflow/durable-stream.ts";
 import { displayMessages } from "./display-messages.ts";
 
 const MissingThread = Schema.Struct({ id: Schema.String });
@@ -85,21 +86,26 @@ const make = Effect.gen(function* () {
   // process after a restart. The provider continuation they depended on is gone: leaving their
   // interrupts pending makes a reloaded page offer an approval that can only fail. Retire the
   // interrupts and runs together, then let the user decide whether to send the request again (R10).
+  // The delivery logs those runs left open end with them.
   const restartedAt = yield* Clock.currentTimeMillis;
   yield* sql.withTransaction(
-    Effect.andThen(
-      sql`
+    Effect.all(
+      [
+        sql`
         UPDATE chat_interrupts
         SET status = 'cancelled', resolved_at = ${restartedAt}
         WHERE status = 'pending' AND run_id IN (
           SELECT run_id FROM chat_runs WHERE status IN ('running', 'interrupted')
         )`,
-      sql`
+        sql`
         UPDATE chat_runs
         SET status = 'failed', finished_at = ${restartedAt},
             error = ${serverRestartedMessage},
             error_code = ${serverRestartedCode}
         WHERE status IN ('running', 'interrupted')`,
+        endCutRunLogs,
+      ],
+      { discard: true },
     ),
   );
 

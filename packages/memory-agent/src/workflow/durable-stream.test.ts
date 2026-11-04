@@ -7,7 +7,7 @@ import { isTruthy } from "../truthy.ts";
 import { describe, expect } from "vite-plus/test";
 import { DatabaseSync } from "node:sqlite";
 import type { AgUiEvent } from "../loop/chunks.ts";
-import { RunLogSignals, sqliteRunLog } from "./durable-stream.ts";
+import { endCutRunLogs, RunLogSignals, sqliteRunLog } from "./durable-stream.ts";
 import { connectionContext } from "../db/database.ts";
 import { migrations } from "../db/migrations.ts";
 
@@ -165,6 +165,64 @@ describe("central SQLite run log", () => {
         );
         // The first read, then one per second.
         expect(reads.count()).toBe(11);
+      }),
+    ),
+  );
+
+  it.effect("reads a log past its time as gone, and drops its entries at the next close", () =>
+    withOwnerLogs(
+      Effect.gen(function* () {
+        const db = yield* scopedOwner;
+        db.exec(
+          "INSERT INTO workflow_run_bindings VALUES ('next', 'session', 'goal', 1, NULL, 1, 'now')",
+        );
+        const entries = () =>
+          db
+            .prepare("SELECT run_id, count(*) AS n FROM workflow_run_log_entries GROUP BY run_id")
+            .all();
+        const log = yield* runLog(db);
+        yield* log.append(lifecycle("RUN_STARTED"));
+        yield* log.close;
+        yield* TestClock.adjust("5 minutes");
+        expect(yield* Stream.runCollect(log.read("-1"))).toHaveLength(1);
+        yield* TestClock.adjust("1 millis");
+        expect(yield* Effect.flip(Stream.runCollect(log.read("-1")))).toMatchObject({
+          reason: "unknown_run",
+        });
+        expect(entries()).toEqual([{ run_id: "run", n: 1 }]);
+        yield* (yield* runLog(db, { ...binding, runId: "next" })).close;
+        expect(entries()).toEqual([]);
+        expect(yield* Effect.flip(log.append(lifecycle("RUN_FINISHED")))).toMatchObject({
+          reason: "closed",
+        });
+      }),
+    ),
+  );
+
+  it.effect("ends the logs a restart cut, still read to their end until their time is up", () =>
+    withOwnerLogs(
+      Effect.gen(function* () {
+        const db = yield* scopedOwner;
+        const log = yield* runLog(db);
+        yield* log.append(lifecycle("RUN_STARTED"));
+        const endCut = Effect.flatMap(connectionContext(db), (context) =>
+          Effect.provideContext(endCutRunLogs, context),
+        );
+        yield* endCut;
+        // Closed, the reader ends at the partial output instead of waiting for more.
+        const partial = yield* Stream.runCollect(log.read("-1"));
+        expect(partial.map(({ event }) => event.type)).toEqual(["RUN_STARTED"]);
+        expect(yield* Effect.flip(log.append(lifecycle("RUN_FINISHED")))).toMatchObject({
+          reason: "closed",
+        });
+        yield* TestClock.adjust("6 minutes");
+        yield* endCut;
+        expect(db.prepare("SELECT count(*) AS n FROM workflow_run_log_entries").get()).toEqual({
+          n: 0,
+        });
+        expect(yield* Effect.flip(Stream.runCollect(log.read("-1")))).toMatchObject({
+          reason: "unknown_run",
+        });
       }),
     ),
   );

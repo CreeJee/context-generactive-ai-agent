@@ -47,7 +47,7 @@ const closingProgress = {
 const sessionRows = {
   revisions: "SELECT * FROM workflow_state_revisions WHERE session_id = ? ORDER BY id",
   bindings: "SELECT * FROM workflow_run_bindings WHERE session_id = ? ORDER BY rowid",
-  events: `SELECT * FROM workflow_run_events WHERE run_id IN
+  events: `SELECT * FROM workflow_run_log_entries WHERE run_id IN
     (SELECT run_id FROM workflow_run_bindings WHERE session_id = ?) ORDER BY cursor`,
   dispatches: `SELECT * FROM workflow_worker_dispatches WHERE run_id IN
     (SELECT run_id FROM workflow_run_bindings WHERE session_id = ?) ORDER BY rowid`,
@@ -131,8 +131,12 @@ const withHistory = Effect.fnUntraced(function* () {
   yield* bindRun(session, historical);
   yield* startRun(session, historical, "completed");
   yield* sqlRun(
-    `INSERT INTO workflow_run_events (run_id, event_key, kind, payload_json, created_at)
-        VALUES (?, 'done', 'run_completed', '{"bytes":"old\\r\\n"}', 'old')`,
+    `INSERT INTO workflow_run_log_entries (run_id, event_json) VALUES (?, '{"bytes":"old\\r\\n"}')`,
+    historical,
+  );
+  // The completed run closed its log just now, so a reopen within its time keeps the entries.
+  yield* sqlRun(
+    `INSERT INTO workflow_run_log_closures VALUES (?, CAST(unixepoch('subsec') * 1000 AS INTEGER))`,
     historical,
   );
   yield* sqlRun(

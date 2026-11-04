@@ -320,7 +320,7 @@ describe("Database", () => {
       }).pipe(withTestPlatform),
   );
 
-  it.live("upgrades valid earlier bindings and keeps their run receipts byte-for-byte", () =>
+  it.live("upgrades valid earlier bindings and ends their delivery logs", () =>
     Effect.gen(function* () {
       const file = yield* databaseFile();
       yield* withPreBindingCheckDatabase(file, (db) => {
@@ -358,12 +358,15 @@ describe("Database", () => {
         bindings: db.sqlite
           .prepare("SELECT run_id, session_id, goal_version FROM workflow_run_bindings")
           .all(),
-        receipts: db.sqlite.prepare("SELECT run_id, payload_json FROM workflow_run_events").all(),
+        // The run log step drops the receipts and ends the run's delivery log.
+        closures: db.sqlite.prepare("SELECT run_id FROM workflow_run_log_closures").all(),
+        entries: db.sqlite.prepare("SELECT run_id FROM workflow_run_log_entries").all(),
       }));
       expect(reopened).toEqual({
         version: { user_version: migrations.length },
         bindings: [{ run_id: "old-run", session_id: "s1", goal_version: 1 }],
-        receipts: [{ run_id: "old-run", payload_json: '{"text":"kept"}' }],
+        closures: [{ run_id: "old-run" }],
+        entries: [],
       });
     }).pipe(withTestPlatform),
   );

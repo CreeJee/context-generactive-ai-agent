@@ -226,7 +226,7 @@ const conversationRows = Effect.fnUntraced(function* (sessionId: string) {
       sessionId,
     ),
     events: yield* rows(
-      `SELECT run_id, event_key, kind, payload_json FROM workflow_run_events
+      `SELECT run_id, event_json FROM workflow_run_log_entries
        WHERE run_id IN ${inList(runList.length)} ORDER BY cursor`,
       ...runList,
     ),
@@ -324,6 +324,6 @@ export const migratedRows = Effect.fnUntraced(function* (sessionId: string) {
   );
   return {
     ...migrated,
-    events: migrateColumn(migrated.events, "payload_json", withoutChunkMetadata),
+    events: migrateColumn(migrated.events, "event_json", withoutChunkMetadata),
   };
 });

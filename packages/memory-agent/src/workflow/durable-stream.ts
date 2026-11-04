@@ -1,8 +1,9 @@
 import {
   Array as EffectArray,
   Cause,
+  Clock,
   Context,
-  DateTime,
+  Duration,
   Effect,
   Layer,
   Option,
@@ -14,10 +15,10 @@ import {
 } from "effect";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
 import { AgUiEvent } from "../loop/chunks.ts";
-import { RunLogFailed, type RunLog, type RunLogEntry } from "../loop/run-log.ts";
+import { finishedLogTtl, RunLogFailed, type RunLog, type RunLogEntry } from "../loop/run-log.ts";
 
+/** The offsets this log mints: `sdk-stream:v1:{runId}:{cursor}`, which pages already hold. */
 const namespace = "sdk-stream:v1:";
-const closedKey = `${namespace}closed`;
 /**
  * How long a reader at the end of an open log waits for its run's signal before it reads again,
  * so a write that sends no signal still reaches it.
@@ -58,15 +59,38 @@ const rejected = (reason: Rejection) => RunLogFailed.make({ reason });
 const stored = (cause: SqlError.SqlError | Schema.SchemaError | Cause.NoSuchElementError) =>
   RunLogFailed.make({ reason: "storage", cause });
 
-const Entry = Schema.Struct({ cursor: Schema.Finite, payload_json: Schema.String });
-const Cursor = Schema.Struct({ cursor: Schema.Finite });
+const Entry = Schema.Struct({ cursor: Schema.Finite, event_json: Schema.String });
+const Closure = Schema.Struct({ closed_at: Schema.Finite });
 const encodeEvent = Schema.encodeEffect(Schema.fromJsonString(AgUiEvent));
 const decodeEvent = Schema.decodeResult(Schema.fromJsonString(AgUiEvent));
 
-/** Owner-only delivery log. Receipt cursors are NOT log offsets: only this
- * namespace's persisted chunks mint resumable tokens. Authentication belongs to
- * the HTTP route; this log additionally checks the immutable session/run binding.
- * Use the central DB's SqlClient, never a worker-local database.
+/** Whether a log that closed at `closedAt` is past the time a late page may still read it. */
+const expired = (closedAt: number, now: number) =>
+  now - closedAt > Duration.toMillis(finishedLogTtl);
+
+/** Drops the entries of every log past its time; their closures stay, so they still read as ended. */
+const pruneExpired = (sql: SqlClient.SqlClient, now: number) =>
+  sql`DELETE FROM workflow_run_log_entries WHERE run_id IN (
+    SELECT run_id FROM workflow_run_log_closures
+    WHERE closed_at < ${now - Duration.toMillis(finishedLogTtl)})`;
+
+/**
+ * Ends the logs a restart cut, at startup: no run outlives a restart (`ChatState`). A page that
+ * reconnects to one still reads the partial output the transcript never got, as after any close,
+ * until the log's time is up. The entries of logs already past their time go.
+ */
+export const endCutRunLogs = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const now = yield* Clock.currentTimeMillis;
+  yield* sql`INSERT INTO workflow_run_log_closures (run_id, closed_at)
+    SELECT run_id, ${now} FROM workflow_run_bindings
+    WHERE run_id NOT IN (SELECT run_id FROM workflow_run_log_closures)`;
+  yield* pruneExpired(sql, now);
+});
+
+/** Owner-only delivery log. Offsets are entry cursors, minted only for this run's entries.
+ * Authentication belongs to the HTTP route; this log additionally checks the immutable
+ * session/run binding. Use the central DB's SqlClient, never a worker-local database.
  */
 export const sqliteRunLog = Effect.fn("sqliteRunLog")(function* (input: {
   readonly sessionId: string;
@@ -87,42 +111,28 @@ export const sqliteRunLog = Effect.fn("sqliteRunLog")(function* (input: {
       () => rejected("binding_denied"),
     ),
   );
-  const closed = sql`SELECT cursor FROM workflow_run_events
-    WHERE run_id = ${runId} AND event_key = ${closedKey}`.pipe(
-    Effect.map((rows) => rows.length > 0),
-    Effect.mapError(stored),
+  const closure = SqlSchema.findOneOption({
+    Request: Schema.Void,
+    Result: Closure,
+    execute: () => sql`SELECT closed_at FROM workflow_run_log_closures WHERE run_id = ${runId}`,
+  })().pipe(Effect.mapError(stored));
+  const closed = Effect.map(closure, Option.isSome);
+  /** A log past its time reads as gone, as an in-memory log does once it is swept. */
+  const readable = Effect.all([closure, Clock.currentTimeMillis]).pipe(
+    Effect.filterOrFail(
+      ([ended, now]) =>
+        Option.match(ended, {
+          onNone: () => true,
+          onSome: ({ closed_at }) => !expired(closed_at, now),
+        }),
+      () => rejected("unknown_run"),
+    ),
   );
-  const chunkRows = SqlSchema.findAll({
+  const entries = SqlSchema.findAll({
     Request: Schema.Finite,
     Result: Entry,
-    execute: (after) => sql`SELECT cursor, payload_json FROM workflow_run_events
-      WHERE run_id = ${runId} AND kind = 'chunk' AND event_key LIKE 'sdk-stream:v1:chunk:%'
-      AND cursor > ${after} ORDER BY cursor`,
-  });
-  const lastCursor = SqlSchema.findOne({
-    Request: Schema.Void,
-    Result: Cursor,
-    execute: () => sql`SELECT COALESCE(MAX(cursor), 0) AS cursor
-      FROM workflow_run_events WHERE run_id = ${runId}`,
-  });
-  const insert = SqlSchema.findOne({
-    Request: Schema.Struct({
-      event_key: Schema.String,
-      kind: Schema.String,
-      payload_json: Schema.String,
-    }),
-    Result: Cursor,
-    execute: (event) =>
-      DateTime.now.pipe(
-        Effect.flatMap(
-          (now) =>
-            sql`INSERT INTO workflow_run_events ${sql.insert({
-              run_id: runId,
-              ...event,
-              created_at: DateTime.formatIso(now),
-            })} RETURNING cursor`,
-        ),
-      ),
+    execute: (after) => sql`SELECT cursor, event_json FROM workflow_run_log_entries
+      WHERE run_id = ${runId} AND cursor > ${after} ORDER BY cursor`,
   });
   const token = (cursor: number) => `${namespace}${encodeURIComponent(runId)}:${cursor}`;
   const minted = (offset: string): Option.Option<number> => {
@@ -139,8 +149,8 @@ export const sqliteRunLog = Effect.fn("sqliteRunLog")(function* (input: {
       : Option.match(minted(offset), {
           onNone: () => Effect.fail(rejected("invalid_offset")),
           onSome: (cursor) =>
-            sql`SELECT cursor FROM workflow_run_events WHERE run_id = ${runId}
-              AND cursor = ${cursor} AND kind = 'chunk' AND event_key LIKE 'sdk-stream:v1:chunk:%'`.pipe(
+            sql`SELECT cursor FROM workflow_run_log_entries
+              WHERE run_id = ${runId} AND cursor = ${cursor}`.pipe(
               Effect.mapError(stored),
               Effect.filterOrFail(
                 (rows) => rows.length > 0,
@@ -152,7 +162,7 @@ export const sqliteRunLog = Effect.fn("sqliteRunLog")(function* (input: {
   /** What the log holds after `after`, and whether it is closed, read at one moment. */
   const page = (after: number) =>
     check.pipe(
-      Effect.andThen(Effect.all({ rows: Effect.mapError(chunkRows(after), stored), closed })),
+      Effect.andThen(Effect.all({ rows: Effect.mapError(entries(after), stored), closed })),
       sql.withTransaction,
       Effect.catchTag("SqlError", (cause) => Effect.fail(stored(cause))),
     );
@@ -195,8 +205,6 @@ export const sqliteRunLog = Effect.fn("sqliteRunLog")(function* (input: {
       AgUiEvent.isAnyOf(["RUN_STARTED", "RUN_FINISHED"])(event) ? named(event) : Effect.void,
       Effect.mapError(encodeEvent(event), stored),
     );
-  const record = (event_key: string, kind: string, payload_json: string) =>
-    insert({ event_key, kind, payload_json }).pipe(Effect.mapError(stored));
   yield* check;
   yield* Option.match(Option.fromNullishOr(input.resumeOffset), {
     onNone: () => Effect.void,
@@ -208,29 +216,28 @@ export const sqliteRunLog = Effect.fn("sqliteRunLog")(function* (input: {
         yield* check;
         if (yield* closed) return yield* rejected("closed");
         const json = yield* payload(event);
-        const { cursor } = yield* Effect.mapError(lastCursor(), stored);
-        yield* record(`${namespace}chunk:${cursor + 1}`, "chunk", json);
+        yield* sql`INSERT INTO workflow_run_log_entries ${sql.insert({ run_id: runId, event_json: json })}`;
       }).pipe(
         sql.withTransaction,
         Effect.catchTag("SqlError", (cause) => Effect.fail(stored(cause))),
         Effect.andThen(signals.written(runId)),
       ),
-    close: check.pipe(
-      Effect.andThen(closed),
-      Effect.flatMap((done) =>
-        done
-          ? Effect.void
-          : record(closedKey, "run_completed", JSON.stringify({ deliveryClosed: true })),
-      ),
-      Effect.asVoid,
+    // A close also drops the entries of the logs past their time; this one's go in a later one.
+    close: Effect.gen(function* () {
+      yield* check;
+      const now = yield* Clock.currentTimeMillis;
+      yield* sql`INSERT INTO workflow_run_log_closures (run_id, closed_at)
+        VALUES (${runId}, ${now}) ON CONFLICT (run_id) DO NOTHING`;
+      yield* pruneExpired(sql, now);
+    }).pipe(
       sql.withTransaction,
       Effect.catchTag("SqlError", (cause) => Effect.fail(stored(cause))),
       Effect.andThen(signals.written(runId)),
     ),
-    // Entries written before the log held only AG-UI events, which no page reads, are left out.
     read: (offset) =>
       Stream.unwrap(
         check.pipe(
+          Effect.andThen(readable),
           Effect.andThen(parse(offset)),
           Effect.map((start) =>
             Stream.paginate(start, (after) =>
@@ -254,7 +261,7 @@ export const sqliteRunLog = Effect.fn("sqliteRunLog")(function* (input: {
         ),
       ).pipe(
         Stream.filterMap((row) =>
-          Result.map(decodeEvent(row.payload_json), (event): RunLogEntry => ({
+          Result.map(decodeEvent(row.event_json), (event): RunLogEntry => ({
             offset: token(row.cursor),
             event,
           })),

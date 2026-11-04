@@ -205,6 +205,49 @@ export const threadDisplayMessagesMigration = `
 `;
 
 /**
+ * The step that keeps a bound run's output once, in a delivery log that empties after the run,
+ * and drops `workflow_run_events`.
+ */
+export const runLogMigration = `
+  -- A bound run's delivery log (decisions.md "Goal run의 출력은 delivery 로그에만 둔다
+  -- (2026-11-04)"). workflow_run_events held every chunk twice, as a receipt nothing read and as
+  -- the log a page reads, and kept both forever: 3.3 million rows and 1.2 GB. The log keeps one row
+  -- per event; its closure marks its end, and the entries go five minutes after it, as an
+  -- in-memory run log's do.
+  CREATE TABLE workflow_run_log_entries (
+    cursor INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL REFERENCES workflow_run_bindings(run_id) ON DELETE CASCADE,
+    event_json TEXT NOT NULL CHECK (json_valid(event_json))
+  );
+  CREATE INDEX workflow_run_log_entries_run ON workflow_run_log_entries(run_id, cursor);
+  CREATE TABLE workflow_run_log_closures (
+    run_id TEXT PRIMARY KEY REFERENCES workflow_run_bindings(run_id) ON DELETE CASCADE,
+    closed_at INTEGER NOT NULL
+  ) WITHOUT ROWID;
+  -- No run outlives a restart, and a page that rejoins after one reads the saved transcript, so
+  -- every earlier log ends here long expired and none of its entries is kept.
+  INSERT INTO workflow_run_log_closures (run_id, closed_at)
+    SELECT run_id, 0 FROM workflow_run_bindings;
+  -- An operator's revocation of a read recovery receipt was a workflow_run_events row. None is
+  -- written any more; the ones a released version wrote still keep their receipt from admission.
+  CREATE TABLE owner_read_recovery_revocations (
+    receipt_id TEXT PRIMARY KEY REFERENCES owner_read_recoveries(receipt_id),
+    revoked_at TEXT NOT NULL
+  ) WITHOUT ROWID;
+  INSERT INTO owner_read_recovery_revocations (receipt_id, revoked_at)
+    SELECT rr.receipt_id, e.created_at FROM owner_read_recoveries rr
+    JOIN workflow_run_events e ON e.run_id = rr.run_id
+      AND e.event_key = 'operator:read-recovery:revoke:' || rr.receipt_id;
+  CREATE TRIGGER owner_read_recovery_revocations_no_update
+  BEFORE UPDATE ON owner_read_recovery_revocations
+    BEGIN SELECT RAISE(ABORT, 'read recovery revocation is immutable'); END;
+  CREATE TRIGGER owner_read_recovery_revocations_no_delete
+  BEFORE DELETE ON owner_read_recovery_revocations
+    BEGIN SELECT RAISE(ABORT, 'read recovery revocation is retained'); END;
+  DROP TABLE workflow_run_events;
+`;
+
+/**
  * Ordered schema steps. `PRAGMA user_version` records how many have been applied.
  * Append new steps; never edit an applied one.
  */
@@ -2219,6 +2262,7 @@ export const migrations: readonly string[] = [
   `,
   threadMessagesMigration,
   threadDisplayMessagesMigration,
+  runLogMigration,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

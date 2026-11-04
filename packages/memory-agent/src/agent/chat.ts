@@ -163,7 +163,6 @@ import {
   type WorkflowAction,
   type WorkflowPhase,
 } from "../workflow/workflow.ts";
-import { workflowRunEvents } from "../workflow/run-events.ts";
 import { WorkflowTools, workflowInstructions } from "../workflow/tools.ts";
 import { WorkflowExecution, WorkflowExecutionState } from "../workflow/execution.ts";
 import { GoalExecutions } from "../workflow/goal-execution.ts";
@@ -480,7 +479,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const runBindings = yield* workflowRunBindings;
   const goalLedger = yield* toolLedger;
   const uncertain = yield* uncertainRuns;
-  const runEvents = yield* workflowRunEvents;
   const sql = yield* SqlClient.SqlClient;
   const withSql = Effect.provideService(SqlClient.SqlClient, sql);
   const runLogSignals = yield* RunLogSignals;
@@ -1898,63 +1896,27 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               );
           });
         /**
-         * A bound run's output, each chunk committed before it is delivered. A failure ends the
-         * delivery with a coded RUN_ERROR: thrown, the SDK words it "Unknown error occurred".
+         * A bound run's output. A failure ends the delivery with a coded RUN_ERROR: thrown, the
+         * SDK words it "Unknown error occurred". Its log commits each event before a page reads it.
          */
-        const boundRunRecorded = (chunks: Stream.Stream<AgUiEvent, Cause.UnknownError>) =>
-          Stream.unwrap(
-            Effect.map(Ref.make(0), (recorded) => {
-              const ended = (
-                code: "run_failed" | "run_record_failed",
-                message: string,
-                error: { readonly _tag: string },
-                reason: string | null,
-              ) =>
-                Stream.fromEffect(
-                  Effect.gen(function* () {
-                    yield* Effect.logError("Bound run delivery failed", {
-                      code,
-                      ...failureAnnotations(error),
-                      reason,
-                      chunks: yield* Ref.get(recorded),
-                    });
-                    return {
-                      type: "RUN_ERROR",
-                      timestamp: yield* Clock.currentTimeMillis,
-                      code,
-                      message,
-                    } satisfies AgUiEvent;
-                  }),
-                );
-              const notRecorded = (error: { readonly _tag: string }, reason: string | null) =>
-                ended(
-                  "run_record_failed",
-                  "The run's output could not be recorded, so it is no longer delivered.",
-                  error,
-                  reason,
-                );
-              return chunks.pipe(
-                Stream.tap((chunk) =>
-                  Effect.flatMap(
-                    Ref.getAndUpdate(recorded, (count) => count + 1),
-                    (sequence) =>
-                      runEvents.append(sessionId, runId, `chunk:${sequence}`, "chunk", chunk),
-                  ),
-                ),
-                Stream.catchTags({
-                  UnknownError: (error) =>
-                    ended(
-                      "run_failed",
-                      "The run's output stream failed before the run ended.",
-                      error,
-                      null,
-                    ),
-                  RunEventRejected: (error) => notRecorded(error, error.reason),
-                  SchemaError: (error) => notRecorded(error, null),
-                  SqlError: (error) => notRecorded(error, null),
+        const boundRunDelivered = (chunks: Stream.Stream<AgUiEvent, Cause.UnknownError>) =>
+          chunks.pipe(
+            Stream.catch((error) =>
+              Stream.fromEffect(
+                Effect.gen(function* () {
+                  yield* Effect.logError("Bound run delivery failed", {
+                    code: "run_failed",
+                    ...failureAnnotations(error),
+                  });
+                  return {
+                    type: "RUN_ERROR",
+                    timestamp: yield* Clock.currentTimeMillis,
+                    code: "run_failed",
+                    message: "The run's output stream failed before the run ended.",
+                  } satisfies AgUiEvent;
                 }),
-              );
-            }),
+              ),
+            ),
           );
 
         // Only the Effect AI loop keeps a Goal's ledger.
@@ -2311,7 +2273,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         yield* Ref.set(stopSteeringOnExit, stopSteering(sessionId, cuttable.steer));
         yield* runStarted;
         const chunks = yield* cancellation.publish(
-          goalRun ? boundRunRecorded(loopEvents) : loopEvents,
+          goalRun ? boundRunDelivered(loopEvents) : loopEvents,
         );
         const delivered = claim
           .track(chunks)

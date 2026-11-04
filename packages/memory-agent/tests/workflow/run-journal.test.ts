@@ -1,10 +1,9 @@
-import { SqlClient } from "effect/sql";
-import { DateTime, Effect, Schema } from "effect";
+import { DateTime, Effect, Schema, Stream } from "effect";
 import { expect } from "vite-plus/test";
 import { ownerRpcFingerprint, ownerRpcFrame } from "../../src/agent/owner-rpc-fingerprint.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { Admission, workflowRunBindings } from "../../src/workflow/run-bindings.ts";
-import { RunEventRejected, workflowRunEvents } from "../../src/workflow/run-events.ts";
+import { sqliteRunLog } from "../../src/workflow/durable-stream.ts";
 import {
   UncertainContinue,
   UncertainRunsFailed,
@@ -273,51 +272,22 @@ testAgent()("workflow run bindings", (it) => {
   );
 });
 
-// Reopening replaces the agent, so the journal gets its own and reads services through `env.use`.
-testAgent()("workflow run event journal", (it) => {
-  it.effect(
-    "the owner journals bound output with idempotent keys and replays it after reopening",
-    () =>
-      Effect.gen(function* () {
-        const env = yield* TestEnv;
-        const session = yield* withGoal(["Replay output"]);
-        const other = yield* freshSession;
-        const run = `${session}:journaled`;
-        expect(Admission.$is("bound")(yield* bindLatest(session, run))).toBe(true);
-        const events = yield* workflowRunEvents;
-        expect(
-          yield* events
-            .append(other, run, "chunk:0", "chunk", { text: "stolen" })
-            .pipe(Effect.flip),
-        ).toEqual(RunEventRejected.make({ reason: "unbound" }));
-        const first = yield* events.append(session, run, "chunk:0", "chunk", {
-          text: "before restart",
-        });
-        expect(
-          yield* events.append(session, run, "chunk:0", "chunk", { text: "before restart" }),
-        ).toEqual(first);
-        expect(
-          yield* events
-            .append(session, run, "chunk:0", "chunk", { text: "different" })
-            .pipe(Effect.flip),
-        ).toEqual(RunEventRejected.make({ reason: "key-reused" }));
-        const second = yield* events.append(session, run, "chunk:1", "chunk", {
-          text: "after first",
-        });
-        expect(second.cursor).toBeGreaterThan(first.cursor);
-        expect(yield* events.replay(other, run)).toEqual([]);
-        expect(yield* events.replay(session, run, first.cursor)).toEqual([second]);
-        expect(
-          yield* sqlGet("SELECT count(*) AS n FROM workflow_run_events WHERE run_id = ?", run),
-        ).toEqual({ n: 2 });
-        yield* env.reopen;
-        const replay = yield* workflowRunEvents.pipe(
-          Effect.provideService(SqlClient.SqlClient, yield* env.use(SqlClient.SqlClient)),
-        );
-        expect(yield* replay.replay(session, run)).toEqual([first, second]);
-        expect(yield* replay.replay(session, run, -1).pipe(Effect.flip)).toMatchObject({
-          reason: "invalid-cursor",
-        });
-      }),
+// Reopening replaces the agent, so the log reads services through `env.use`.
+testAgent()("workflow run log across a restart", (it) => {
+  it.effect("a restart ends the log of a bound run it cut, still read to its partial end", () =>
+    Effect.gen(function* () {
+      const env = yield* TestEnv;
+      const session = yield* withGoal(["Replay output"]);
+      const run = `${session}:cut`;
+      expect(Admission.$is("bound")(yield* bindLatest(session, run))).toBe(true);
+      const started = { type: "RUN_STARTED", runId: run, threadId: session, timestamp: 1 } as const;
+      const logOf = env.use(sqliteRunLog({ sessionId: session, runId: run }));
+      yield* (yield* logOf).append(started);
+      yield* env.reopen;
+      const reopened = yield* logOf;
+      const partial = yield* Stream.runCollect(reopened.read("-1"));
+      expect(partial.map(({ event }) => event)).toEqual([started]);
+      expect(yield* Effect.flip(reopened.append(started))).toMatchObject({ reason: "closed" });
+    }),
   );
 });
