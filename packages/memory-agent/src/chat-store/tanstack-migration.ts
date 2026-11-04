@@ -16,7 +16,6 @@ import {
   modelHandoffNamespace,
   type SavedHandoff,
 } from "../agent/handoff-state.ts";
-import { historyProjectionSchema } from "../chat-state/history-projection-sql.ts";
 import { JsonValue } from "../json.ts";
 import { optionalProperty } from "../optional-property.ts";
 
@@ -218,6 +217,44 @@ const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 const decodeHandoff = Schema.decodeEffect(Schema.fromJsonString(HandoffState));
 const encodeHandoff = Schema.encodeEffect(Schema.fromJsonString(HandoffState));
 
+/**
+ * The history projection's tables as this step made them in the releases that shipped it (0.0.18
+ * to 0.1.1). A released step keeps doing what it did, so the step carries its own copy instead of
+ * the projection's current DDL, which later steps change; the projection adds what came after when
+ * it installs.
+ */
+const releasedProjectionSchema = `
+CREATE TABLE IF NOT EXISTS chat_history_projection (
+  thread_id TEXT PRIMARY KEY,
+  format_version INTEGER NOT NULL CHECK (format_version = 1),
+  ready INTEGER NOT NULL CHECK (ready IN (0, 1))
+);
+CREATE TABLE IF NOT EXISTS chat_history_groups (
+  thread_id TEXT NOT NULL,
+  ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+  ui_id TEXT NOT NULL,
+  messages TEXT NOT NULL CHECK (json_valid(messages) AND json_type(messages) = 'array'),
+  PRIMARY KEY (thread_id, ordinal),
+  UNIQUE (thread_id, ui_id)
+);
+CREATE TRIGGER IF NOT EXISTS chat_history_invalidate_update
+AFTER UPDATE OF messages ON chat_threads
+BEGIN
+  UPDATE chat_history_projection SET ready = 0 WHERE thread_id = NEW.thread_id;
+END;
+CREATE TRIGGER IF NOT EXISTS chat_history_invalidate_insert
+AFTER INSERT ON chat_threads
+BEGIN
+  UPDATE chat_history_projection SET ready = 0 WHERE thread_id = NEW.thread_id;
+END;
+CREATE TRIGGER IF NOT EXISTS chat_history_invalidate_delete
+AFTER DELETE ON chat_threads
+BEGIN
+  DELETE FROM chat_history_groups WHERE thread_id = OLD.thread_id;
+  DELETE FROM chat_history_projection WHERE thread_id = OLD.thread_id;
+END;
+`;
+
 const ThreadId = Schema.Struct({ thread_id: Schema.String });
 const ThreadRow = Schema.Struct({
   messages: Schema.String,
@@ -358,8 +395,8 @@ export const migrateTanStackRows = Effect.fn("ChatStore.migrateTanStackRows")(fu
 
   yield* sql.withTransaction(
     Effect.gen(function* () {
-      // The projection's tables, created as the projection creates them, so every thread joins.
-      yield* sql.unsafe(historyProjectionSchema).unprepared;
+      // The projection's tables, created as the projection created them, so every thread joins.
+      yield* sql.unsafe(releasedProjectionSchema).unprepared;
       yield* Effect.forEach(yield* threadIds(), ({ thread_id }) => migrateThread(thread_id), {
         discard: true,
       });
