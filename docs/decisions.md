@@ -4045,3 +4045,4 @@
   - 실패 span의 `failure`: `AiError:NetworkError (UND_ERR_CONNECT_TIMEOUT)`처럼 이름 뒤에 코드를 붙인다. 결함 알림과 리포트가 같은 값을 쓴다.
   - 모델 실패의 사용자 문장(`shownReason`): HTTP 상태처럼 괄호에 붙인다(`The provider could not be reached. (ECONNREFUSED)`). run 오류로 DB에 남으므로 재시작해서 실패 span이 사라져도 리포트에 남는다.
 - compatible 클라이언트의 전송 코드 로그도 같은 함수를 쓴다.
+- 같은 날 다른 기기에서 "Compatible API connection closed before the answer finished"가 다시 났다. 답 도중 끊긴 연결의 코드도 로그에만 있었다. 이제 요청마다 둔 Ref에 body가 끊긴 코드를 적고, `Disconnected` 실패가 그 코드를 담는다(`…finished: UND_ERR_SOCKET`). 제보는 그 기기의 로그를 볼 수 없으므로 run 오류에 남아야 한다.

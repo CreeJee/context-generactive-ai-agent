@@ -50,7 +50,7 @@
 - compatible tool call id 재명명은 TanStack의 `hashToolCallId` 규칙을 따른다. 결합 id는 40자 이하일 때만 쓰고, 넘으면 31자 + `_` + 해시 8자로 만든다.
 - compatible 요청 본문은 TanStack이 같은 히스토리로 만들던 본문과 같아야 한다. stream 필드도 이미 제자리에 둬서 키 순서를 유지한다. 도구는 `strict: false`로 보낸다.
 - 빈 user 메시지(빈 텍스트이거나 part가 없음)는 `InvalidRequestError`로 거절한다. 그렇지 않으면 입력 없이 유료 요청이 나간다. 컨텍스트 한도를 넘는 요청은 감축으로 줄일 수 없을 때 보내기 전에 `ContextLimitExceeded`로 거절한다.
-- compatible 답이 finish_reason(또는 usage 꼬리) 없이 `[DONE]` 전에 끝나면 `Disconnected`로 실패한다. 응답 body를 읽다 연결이 transport 코드(`ECONNRESET`, `UND_ERR_SOCKET` 등)와 함께 끊기면 그 코드를 로그에 남기고 body를 그 자리에서 끝내므로 같은 `Disconnected`가 된다. `[DONE]`까지 왔는데 finish_reason이 없으면 `InvalidOutputError`다.
+- compatible 답이 finish_reason(또는 usage 꼬리) 없이 `[DONE]` 전에 끝나면 `Disconnected`로 실패한다. 응답 body를 읽다 연결이 transport 코드(`ECONNRESET`, `UND_ERR_SOCKET` 등)와 함께 끊기면 그 코드를 로그에 남기고 body를 그 자리에서 끝내므로 같은 `Disconnected`가 된다. 요청마다 둔 `DroppedCodes` Ref로 그 코드가 `Disconnected.codes`에 실려 run 오류 문장(`…finished: UND_ERR_SOCKET`)에도 남는다. `[DONE]`까지 왔는데 finish_reason이 없으면 `InvalidOutputError`다.
 - `CompatibleRunRequestFailed`의 message는 URL·헤더·페이로드가 없는 고정 텍스트다. 외부 에이전트 `detail`은 비밀이 이미 가려진 에이전트 텍스트이고, 오류 상세에서만 보인다.
 - 외부 에이전트는 JSON `responseFormat` 요청을 보내기 전에 거절한다. 한 step에서는 memory preamble 뒤에 사용자의 마지막 텍스트만 보낸다. 보고된 tool call은 답 텍스트 끝에 붙인다.
 - run별 모델 옵션은 모든 step에서 고정된다. compatible은 endpoint·effort·key, 구독은 selection·promptCache, 외부 에이전트는 agent와 session이다.

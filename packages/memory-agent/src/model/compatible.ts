@@ -9,6 +9,7 @@ import {
   Option,
   Predicate,
   Redacted,
+  Ref,
   Result,
   Schema,
   Stream,
@@ -1120,13 +1121,24 @@ const transportCodes = (reason: HttpClientError.TransportError | HttpClientError
   errorCodesOf(reason.cause);
 
 /**
+ * Where a streamed request's body puts the transport codes of its dropped connection, so the turn's
+ * `Disconnected` failure carries them to the run's error and a report. Each streamed request
+ * provides its own; without one the codes are only logged.
+ */
+const DroppedCodes = Context.Reference<Option.Option<Ref.Ref<readonly string[]>>>(
+  "memory-agent/model/compatible/DroppedCodes",
+  { defaultValue: () => Option.none() },
+);
+
+/**
  * The response with a body that ends where its connection dropped, after logging the drop's
- * transport codes. Left as it was, the drop reaches the client as a `DecodeError`, which it words as
- * an unreadable answer; ended, the stream stops before `[DONE]` and fails as `Disconnected`. A body
- * read failure without transport codes stays as it was.
+ * transport codes and putting them in `dropped`. Left as it was, the drop reaches the client as a
+ * `DecodeError`, which it words as an unreadable answer; ended, the stream stops before `[DONE]`
+ * and fails as `Disconnected`. A body read failure without transport codes stays as it was.
  */
 const endingAtDrop = (
   response: HttpClientResponse.HttpClientResponse,
+  dropped: Option.Option<Ref.Ref<readonly string[]>>,
 ): HttpClientResponse.HttpClientResponse =>
   // SAFETY: the copy reads every other member from `response` through its prototype, and its
   // `stream` has the same element and error types as the one it replaces.
@@ -1142,6 +1154,10 @@ const endingAtDrop = (
                   CompatibleRunRequestFailed.make({
                     reason: CompatibleRunRequestFailedReason.cases.Disconnected.make({ codes }),
                   }).message,
+                ).pipe(
+                  Effect.andThen(
+                    Effect.transposeOption(Option.map(dropped, (ref) => Ref.set(ref, codes))),
+                  ),
                 ),
               ).pipe(Stream.drain),
           }),
@@ -1149,6 +1165,14 @@ const endingAtDrop = (
       ),
     },
   }) as HttpClientResponse.HttpClientResponse;
+
+/** A `Disconnected` failure with the transport codes its dropped body recorded. */
+const withDroppedCodes = (failure: CompatibleRunRequestFailed, codes: readonly string[]) =>
+  failure.reason._tag === "Disconnected" && failure.reason.codes.length === 0 && codes.length > 0
+    ? CompatibleRunRequestFailed.make({
+        reason: CompatibleRunRequestFailedReason.cases.Disconnected.make({ codes }),
+      })
+    : failure;
 
 /** One run's compatible model: its endpoint, effort and key stay fixed for every step. */
 export interface CompatibleModelOptions {
@@ -1185,7 +1209,11 @@ export const compatibleModel = Effect.fnUntraced(function* (options: CompatibleM
             Match.orElse(() => Effect.void),
           ),
         ),
-        HttpClient.transformResponse(Effect.map(endingAtDrop)),
+        HttpClient.transformResponse((response) =>
+          Effect.gen(function* () {
+            return endingAtDrop(yield* response, yield* DroppedCodes);
+          }),
+        ),
       ),
   }).pipe(Effect.provideService(HttpClient.HttpClient, http));
 
@@ -1210,9 +1238,11 @@ export const compatibleModel = Effect.fnUntraced(function* (options: CompatibleM
             tools: payload.tools?.length ?? 0,
           }),
         );
-        const [, events] = yield* client
-          .createResponseStream(payload)
-          .pipe(Effect.mapError((error) => withDiagnostic(error, diagnostic)));
+        const dropped = yield* Ref.make<readonly string[]>([]);
+        const [, events] = yield* client.createResponseStream(payload).pipe(
+          Effect.provideService(DroppedCodes, Option.some(dropped)),
+          Effect.mapError((error) => withDiagnostic(error, diagnostic)),
+        );
         return events.pipe(
           // None marks the end of the stream, where the turn finishes.
           Stream.map(Option.some),
@@ -1240,7 +1270,11 @@ export const compatibleModel = Effect.fnUntraced(function* (options: CompatibleM
               }),
           ),
           Stream.catchTag("CompatibleRunRequestFailed", (failure) =>
-            Stream.fromEffect(failWith(failure)),
+            Stream.fromEffect(
+              Effect.flatMap(Ref.get(dropped), (codes) =>
+                failWith(withDroppedCodes(failure, codes)),
+              ),
+            ),
           ),
           Stream.mapError((error) => withDiagnostic(error, diagnostic)),
         );

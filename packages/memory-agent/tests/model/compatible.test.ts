@@ -562,11 +562,14 @@ describe("compatible language model", () => {
         Effect.provideService(Logger.CurrentLoggers, new Set([capture])),
         Effect.provideService(References.MinimumLogLevel, "Trace"),
       );
+      // The run's error carries the codes too: a report from another device has no logs.
       expect(failure).toEqual(
-        failed(CompatibleRunRequestFailedReason.cases.Disconnected.make({ codes: [] })),
+        failed(
+          CompatibleRunRequestFailedReason.cases.Disconnected.make({ codes: ["UND_ERR_SOCKET"] }),
+        ),
       );
       expect(shownCompatibleFailure(error)).toEqual({
-        message: "Compatible API connection closed before the answer finished",
+        message: "Compatible API connection closed before the answer finished: UND_ERR_SOCKET",
       });
       expect(yield* encodeJson(logs)).toContain(
         "Compatible API connection closed before the answer finished: UND_ERR_SOCKET",
