@@ -244,6 +244,63 @@ testAgent({ testProvider: {} })("secrets on their way in", (it) => {
       ).toEqual({ command: "GITHUB_TOKEN=[redacted:github] gh pr list" });
     }),
   );
+
+  it.effect("the sweep reads a conversation again only after it was written", () =>
+    Effect.gen(function* () {
+      const session = yield* freshSession;
+      const sweep = yield* SecretSweep;
+      /** Whether the conversation waits for the next sweep. */
+      const marked = Effect.flatMap(
+        sqlGet(
+          `SELECT count(*) AS count FROM secret_sweep_changes WHERE target = 'chat_threads'
+            AND row_key = (SELECT rowid FROM chat_threads WHERE thread_id = ?)`,
+          session,
+        ),
+        (row) => Effect.map(decodeCount(row), ({ count }) => count > 0),
+      );
+      const messages = (content: string) => stringifyJson([{ role: "user", content, id: "u-1" }]);
+      yield* sqlRun("INSERT INTO chat_threads VALUES (?, ?, 0)", session, yield* messages("plain"));
+      expect(yield* marked).toBe(true);
+      yield* sweep.run;
+      expect(yield* marked).toBe(false);
+
+      // A conversation grows inside its one row.
+      yield* sqlRun(
+        "UPDATE chat_threads SET messages = ? WHERE thread_id = ?",
+        yield* messages(`token: ${githubToken}`),
+        session,
+      );
+      expect(yield* marked).toBe(true);
+      yield* sweep.run;
+      expect(yield* marked).toBe(false);
+      expect(
+        yield* parseJson(
+          yield* value("SELECT messages AS value FROM chat_threads WHERE thread_id = ?", session),
+        ),
+      ).toEqual([{ role: "user", content: "token: [redacted:github]", id: "u-1" }]);
+    }),
+  );
+
+  it.effect("a detector that has not swept a table reads all of it", () =>
+    Effect.gen(function* () {
+      const session = yield* freshSession;
+      const sweep = yield* SecretSweep;
+      yield* sqlRun(
+        "INSERT INTO chat_threads VALUES (?, ?, 0)",
+        session,
+        yield* stringifyJson([{ role: "user", content: `token: ${githubToken}`, id: "u-1" }]),
+      );
+      // As a database from before rows were marked: none is, and the table has no progress.
+      yield* sqlRun("DELETE FROM secret_sweep_changes WHERE target = 'chat_threads'");
+      yield* sqlRun("DELETE FROM secret_sweeps WHERE target = 'chat_threads'");
+      yield* sweep.run;
+      expect(
+        yield* parseJson(
+          yield* value("SELECT messages AS value FROM chat_threads WHERE thread_id = ?", session),
+        ),
+      ).toEqual([{ role: "user", content: "token: [redacted:github]", id: "u-1" }]);
+    }),
+  );
 });
 
 // The search indexes are counted across the whole database, so this sweep owns an agent.

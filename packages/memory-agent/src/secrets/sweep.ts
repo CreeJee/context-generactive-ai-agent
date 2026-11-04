@@ -100,13 +100,25 @@ const Progress = Schema.Struct({
 const decodeColumnRows = Schema.decodeUnknownEffect(
   Schema.Array(Schema.Record(Schema.String, Schema.Unknown)),
 );
-const decodeRowKey = Schema.decodeUnknownEffect(Schema.Finite);
+/** Which row a mark is for and how many writes it counts; the row's columns are left out. */
+const decodeMark = Schema.decodeUnknownEffect(
+  Schema.Struct({ row_key: Schema.Finite, writes: Schema.Finite }),
+);
 const decodeCell = Schema.decodeUnknownEffect(Schema.NullOr(Schema.String));
 
 /** A column value after sweeping; `null` stays `null`. */
 interface SweptCell {
   readonly text: string | null;
   readonly hidden: number;
+}
+
+/** A row of a table rewritten in place, as the sweep read it, and what it hid in it. */
+interface SweptRow {
+  readonly rowid: number;
+  /** How many writes the row had had since the sweep last read it, when this sweep read it. */
+  readonly writes: number;
+  /** The row's columns with their secrets hidden; none when it held no secret. */
+  readonly values: Option.Option<Record<string, string | null>>;
 }
 
 export { RedactionFailed } from "./redact-protocol.ts";
@@ -211,12 +223,20 @@ const make = (running: boolean) =>
             done = excluded.done, hidden = excluded.hidden, updated_at = excluded.updated_at`,
       );
 
+    /** A target's progress by this detector; a sweep by an older one counts as none. */
+    const currentProgress = (target: Target) =>
+      Effect.map(
+        readProgress(targetName(target)),
+        Option.filter((row) => row.version === sweepVersion),
+      );
+
+    const notStarted = { after: 0, done: 0, hidden: 0 };
+
     /** Where a target's sweep stands; a sweep by an older detector counts as not started. */
     const progressOf = (target: Target) =>
-      Effect.map(readProgress(targetName(target)), (row) =>
-        Option.isSome(row) && row.value.version === sweepVersion
-          ? row.value
-          : { after: 0, done: 0, hidden: 0 },
+      Effect.map(
+        currentProgress(target),
+        Option.getOrElse(() => notStarted),
       );
 
     // Nodes: the text changes under a permit, and what was derived from the old text goes with it.
@@ -307,18 +327,61 @@ const make = (running: boolean) =>
         return { rows: rows.length, last: rows.at(-1)?.row_key ?? after, hidden: changed.length };
       });
 
+    /**
+     * Readies a table rewritten in place for its sweep. A detector that has not swept it yet reads
+     * every row, so all are marked; marks of rows deleted since are dropped.
+     */
+    const markColumns = (table: ColumnTable, swept: boolean) =>
+      Effect.andThen(
+        Effect.when(
+          sql`INSERT INTO secret_sweep_changes (target, row_key, writes)
+            SELECT ${table}, rowid, 1 FROM ${sql.literal(table)} WHERE true
+            ON CONFLICT DO UPDATE SET writes = writes + 1`,
+          Effect.succeed(!swept),
+        ),
+        sql`DELETE FROM secret_sweep_changes WHERE target = ${table}
+          AND row_key NOT IN (SELECT rowid FROM ${sql.literal(table)})`,
+      );
+
+    /**
+     * Forgets a row the sweep read, and writes what it hid, only while nothing wrote the row since
+     * the read. A newer write is kept as it is and swept on the next start. Returns whether the
+     * row's secrets were hidden.
+     */
+    const settle = (table: ColumnTable) => (row: SweptRow) =>
+      Effect.flatMap(
+        sql`DELETE FROM secret_sweep_changes
+          WHERE target = ${table} AND row_key = ${row.rowid} AND writes = ${row.writes}
+          RETURNING row_key`,
+        (forgotten) =>
+          Option.match(
+            Option.filter(row.values, () => forgotten.length > 0),
+            {
+              onNone: () => Effect.succeed(false),
+              onSome: (values) =>
+                sql`UPDATE ${sql.literal(table)} SET ${sql.update(values)} WHERE rowid = ${row.rowid}`.pipe(
+                  // The sweep's own write marks the row again.
+                  Effect.andThen(
+                    sql`DELETE FROM secret_sweep_changes WHERE target = ${table} AND row_key = ${row.rowid}`,
+                  ),
+                  Effect.as(true),
+                ),
+            },
+          ),
+      );
+
     const sweepColumns = (redact: Redact, table: ColumnTable, after: number) =>
       Effect.gen(function* () {
         const columns: readonly Column[] = columnTables[table];
-        const names = columns.map((column) => column.name);
-        // Aliased: a table with an INTEGER PRIMARY KEY returns `rowid` under that column's name.
+        const names = columns.map((column) => `t.${column.name} AS ${column.name}`);
+        // Only the rows written since the sweep last read them.
         const rows = yield* stored(
-          sql`SELECT rowid AS row_key, ${sql.literal(names.join(", "))} FROM ${sql.literal(table)}
-            WHERE rowid > ${after} ORDER BY rowid LIMIT ${batchSize}`.pipe(
-            Effect.flatMap(decodeColumnRows),
-          ),
+          sql`SELECT c.row_key, c.writes, ${sql.literal(names.join(", "))}
+            FROM secret_sweep_changes AS c JOIN ${sql.literal(table)} AS t ON t.rowid = c.row_key
+            WHERE c.target = ${table} AND c.row_key > ${after}
+            ORDER BY c.row_key LIMIT ${batchSize}`.pipe(Effect.flatMap(decodeColumnRows)),
         );
-        const rowKeys = yield* stored(Effect.forEach(rows, (row) => decodeRowKey(row.row_key)));
+        const marks = yield* stored(Effect.forEach(rows, (row) => decodeMark(row)));
         const cells = yield* stored(
           Effect.forEach(rows, (row) =>
             Effect.forEach(columns, (column) => decodeCell(row[column.name])),
@@ -332,27 +395,26 @@ const make = (running: boolean) =>
             cells.map((row) => row[index] ?? null),
           ),
         );
-        const updates = rowKeys.flatMap((rowid, rowIndex) => {
-          const values = swept.map((column) => column[rowIndex] ?? { text: null, hidden: 0 });
-          if (values.every((cell) => cell.hidden === 0)) return [];
-          return [
-            {
-              rowid,
-              values: Object.fromEntries(
-                columns.map((column, index) => [column.name, values[index]?.text ?? null]),
+        const read = marks.map((mark, rowIndex): SweptRow => ({
+          rowid: mark.row_key,
+          writes: mark.writes,
+          values: Option.map(
+            Option.liftPredicate(
+              swept.map((column) => column[rowIndex] ?? { text: null, hidden: 0 }),
+              (cells) => cells.some((cell) => cell.hidden > 0),
+            ),
+            (cells) =>
+              Object.fromEntries(
+                columns.map((column, index) => [column.name, cells[index]?.text ?? null]),
               ),
-            },
-          ];
-        });
-        yield* stored(
-          Effect.forEach(
-            updates,
-            ({ rowid, values }) =>
-              sql`UPDATE ${sql.literal(table)} SET ${sql.update(values)} WHERE rowid = ${rowid}`,
-            { discard: true },
-          ).pipe(sql.withTransaction),
-        );
-        return { rows: rows.length, last: rowKeys.at(-1) ?? after, hidden: updates.length };
+          ),
+        }));
+        const hidden = yield* stored(Effect.forEach(read, settle(table)).pipe(sql.withTransaction));
+        return {
+          rows: rows.length,
+          last: marks.at(-1)?.row_key ?? after,
+          hidden: hidden.filter(isTruthy).length,
+        };
       });
 
     const batchOf = (redact: Redact, target: Target, after: number) =>
@@ -370,8 +432,8 @@ const make = (running: boolean) =>
      * written by an older build of this app is still caught.
      *
      * The other tables are rewritten in place (a conversation grows inside its one row) and are not
-     * all hidden on the way in, so a position means nothing for them: they are read in full on every
-     * start. They are small next to the nodes.
+     * all hidden on the way in, so a position means nothing for them. Their triggers mark each row
+     * written since the sweep last read it, and every start reads the marked rows from the first.
      */
     const resumesFrom = (target: Target, saved: number) =>
       Target.$match(target, {
@@ -383,7 +445,15 @@ const make = (running: boolean) =>
     /** Sweeps one table to the end, recording where it got after every batch. */
     const sweep = (redact: Redact, target: Target) =>
       Effect.gen(function* () {
-        const start = yield* stored(progressOf(target));
+        const current = yield* stored(currentProgress(target));
+        const start = Option.getOrElse(current, () => notStarted);
+        yield* stored(
+          Target.$match(target, {
+            nodes: () => Effect.void,
+            refs: () => Effect.void,
+            columns: ({ table }) => markColumns(table, Option.isSome(current)),
+          }),
+        );
         // A short batch is the table's last.
         const { sweptNow } = yield* Stream.paginate(resumesFrom(target, start.after), (after) =>
           Effect.map(

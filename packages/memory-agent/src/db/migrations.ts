@@ -1976,6 +1976,75 @@ export const migrations: readonly string[] = [
   ALTER TABLE owner_workflow_executions ADD COLUMN updated_at INTEGER;
   `,
   humanDecisionFactsMigration,
+  `
+  -- The secret sweep reads only the rows of the tables rewritten in place that were written since
+  -- it last read them (decisions.md "비밀 정리는 쓰인 행만 다시 읽는다 (2026-11-04)"). It read
+  -- those tables in full on every start, and conversations outgrew that: 846 of them held 560 MB,
+  -- checked one string at a time. writes counts a row's writes since the sweep last read it; the
+  -- sweep forgets the row only while the count is still what it read, so a write in between is
+  -- swept on the next start. Their progress is dropped, so the next sweep marks every row once.
+  CREATE TABLE secret_sweep_changes (
+    target TEXT NOT NULL,
+    row_key INTEGER NOT NULL,
+    writes INTEGER NOT NULL,
+    PRIMARY KEY (target, row_key)
+  ) WITHOUT ROWID;
+  CREATE TRIGGER secret_sweep_chat_threads_insert AFTER INSERT ON chat_threads BEGIN
+    INSERT INTO secret_sweep_changes VALUES ('chat_threads', NEW.rowid, 1)
+      ON CONFLICT DO UPDATE SET writes = writes + 1;
+  END;
+  CREATE TRIGGER secret_sweep_chat_threads_update AFTER UPDATE OF messages ON chat_threads BEGIN
+    INSERT INTO secret_sweep_changes VALUES ('chat_threads', NEW.rowid, 1)
+      ON CONFLICT DO UPDATE SET writes = writes + 1;
+  END;
+  CREATE TRIGGER secret_sweep_chat_interrupts_insert AFTER INSERT ON chat_interrupts BEGIN
+    INSERT INTO secret_sweep_changes VALUES ('chat_interrupts', NEW.rowid, 1)
+      ON CONFLICT DO UPDATE SET writes = writes + 1;
+  END;
+  CREATE TRIGGER secret_sweep_chat_interrupts_update
+  AFTER UPDATE OF payload, response ON chat_interrupts BEGIN
+    INSERT INTO secret_sweep_changes VALUES ('chat_interrupts', NEW.rowid, 1)
+      ON CONFLICT DO UPDATE SET writes = writes + 1;
+  END;
+  CREATE TRIGGER secret_sweep_permission_reviews_insert AFTER INSERT ON permission_reviews BEGIN
+    INSERT INTO secret_sweep_changes VALUES ('permission_reviews', NEW.rowid, 1)
+      ON CONFLICT DO UPDATE SET writes = writes + 1;
+  END;
+  CREATE TRIGGER secret_sweep_permission_reviews_update
+  AFTER UPDATE OF input ON permission_reviews BEGIN
+    INSERT INTO secret_sweep_changes VALUES ('permission_reviews', NEW.rowid, 1)
+      ON CONFLICT DO UPDATE SET writes = writes + 1;
+  END;
+  CREATE TRIGGER secret_sweep_queued_messages_insert AFTER INSERT ON queued_messages BEGIN
+    INSERT INTO secret_sweep_changes VALUES ('queued_messages', NEW.rowid, 1)
+      ON CONFLICT DO UPDATE SET writes = writes + 1;
+  END;
+  CREATE TRIGGER secret_sweep_queued_messages_update
+  AFTER UPDATE OF text, draft ON queued_messages BEGIN
+    INSERT INTO secret_sweep_changes VALUES ('queued_messages', NEW.rowid, 1)
+      ON CONFLICT DO UPDATE SET writes = writes + 1;
+  END;
+  CREATE TRIGGER secret_sweep_subagents_insert AFTER INSERT ON subagents BEGIN
+    INSERT INTO secret_sweep_changes VALUES ('subagents', NEW.rowid, 1)
+      ON CONFLICT DO UPDATE SET writes = writes + 1;
+  END;
+  CREATE TRIGGER secret_sweep_subagents_update
+  AFTER UPDATE OF last_task, last_answer ON subagents BEGIN
+    INSERT INTO secret_sweep_changes VALUES ('subagents', NEW.rowid, 1)
+      ON CONFLICT DO UPDATE SET writes = writes + 1;
+  END;
+  CREATE TRIGGER secret_sweep_interpretations_insert AFTER INSERT ON interpretations BEGIN
+    INSERT INTO secret_sweep_changes VALUES ('interpretations', NEW.rowid, 1)
+      ON CONFLICT DO UPDATE SET writes = writes + 1;
+  END;
+  CREATE TRIGGER secret_sweep_interpretations_update
+  AFTER UPDATE OF reason ON interpretations BEGIN
+    INSERT INTO secret_sweep_changes VALUES ('interpretations', NEW.rowid, 1)
+      ON CONFLICT DO UPDATE SET writes = writes + 1;
+  END;
+  DELETE FROM secret_sweeps WHERE target IN ('chat_threads', 'chat_interrupts',
+    'permission_reviews', 'queued_messages', 'subagents', 'interpretations');
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

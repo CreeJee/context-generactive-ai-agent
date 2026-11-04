@@ -45,12 +45,15 @@
 - redaction은 트랜잭션 전에 실행해 DB를 잠깐만 잡는다(`batchSize = 200`). sweep pass는 `Semaphore.make(1)`로 한 번에 하나만 돈다.
 - `node_refs`는 `UPDATE OR REPLACE`로 갱신한다. 이미 가려진 같은 ref와 충돌하면 그 행을 남긴다.
 - JSON 컬럼의 텍스트가 JSON이 아니면 건너뛰지 않고 일반 텍스트로 가린다(`hideJson`).
+- `nodes`와 `node_refs`는 추가만 되므로 저장한 위치부터 이어서 훑는다. 행 안에서 다시 쓰이는 컬럼 테이블은 트리거가 `secret_sweep_changes`에 쓰인 행과 쓰기 횟수(`writes`)를 남기고, sweep은 표시된 행만 읽는다.
+- sweep은 읽은 행을 쓰기 횟수가 읽을 때와 같을 때만 잊고 가린 값을 쓴다(`settle`). 사이에 쓰인 행은 덮어쓰지 않고 표시가 남아 다음 시작에 다시 읽는다. sweep 자신의 UPDATE가 남긴 표시는 같은 트랜잭션에서 지운다.
+- 이 탐지기 버전의 진행 기록이 없는 컬럼 테이블은 sweep 전에 모든 행을 표시한다(`markColumns`). 지워진 행의 표시도 이때 지운다.
 
 ## Side Effects
 
 - `node:worker_threads` `Worker`로 `redact-worker` thread를 띄운다. thread는 sweep 하나 동안만 살아 있고 sweep이 끝나면 멈춘다.
-- SQLite 읽기: `secret_sweeps`, `nodes`, `node_refs`, `chat_threads`, `chat_interrupts`, `permission_reviews`, `queued_messages`, `subagents`, `interpretations` 컬럼.
-- SQLite 쓰기: `secret_sweeps` upsert(`updated_at`는 `DateTime.now`), `nodes` update, `nodes_fts` delete/insert, `secret_sweep_permits` insert/delete, `nodes_morph`/`node_morphs`/`node_vectors` delete, `node_refs` `UPDATE OR REPLACE`, 컬럼 테이블 update.
+- SQLite 읽기: `secret_sweeps`, `secret_sweep_changes`, `nodes`, `node_refs`, 그리고 `chat_threads`, `chat_interrupts`, `permission_reviews`, `queued_messages`, `subagents`, `interpretations` 중 표시된 행의 컬럼.
+- SQLite 쓰기: `secret_sweeps` upsert(`updated_at`는 `DateTime.now`), `nodes` update, `nodes_fts` delete/insert, `secret_sweep_permits` insert/delete, `nodes_morph`/`node_morphs`/`node_vectors` delete, `node_refs` `UPDATE OR REPLACE`, 컬럼 테이블 update, `secret_sweep_changes` insert/delete.
 - `VectorIndex.remove`와 `vectors.save`로 벡터 인덱스를 바꾸고 파일에 저장한다. `Nodes.invalidateResultPages`를 호출한다.
 - `secretLintProfiler.setEnabled(false)`로 secretlint의 전역 profiler 상태를 바꾼다.
 - `fallbackLogged`/`ignoreLogged`로 실패를 로그에 남긴다.
