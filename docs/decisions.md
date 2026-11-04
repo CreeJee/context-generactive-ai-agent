@@ -4018,3 +4018,12 @@
   - `createImported`가 transcript(`source`, `externalId`)를 받아 세션과 매핑을 한 transaction에 쓴다.
   - `nodes.detail.importedFrom`은 둔다. 노드는 바뀌지 않는 증거이고, 이 값은 노드마다 다르다. 사본에서 가져온 세션의 노드 78개는 앱에서 이어 쓴 것이라 값이 없다. 도구 호출에 붙인 빈 assistant 대역 노드 1,563개는 transcript 줄이 없어 `imported_nodes` 행이 없다. `imported_nodes`는 같은 줄을 두 번 쓰지 않게 하는 키다.
 - 마이그레이션: 세션마다 매핑을 하나만 남기고 UNIQUE를 만든 뒤 열을 지운다. 매핑이 둘인 세션은 생길 수 없지만, 깨진 파일 때문에 업그레이드가 멈추지 않게 첫 매핑만 남긴다. 매핑 없이 가져온 표시만 있던 세션은 앱 대화로 읽힌다. 그 transcript는 이미 다른 세션으로 다시 가져와졌다. 사본 측정: 세션 585개 중 가져온 446개의 출처가 같게 읽혔고, 5ms였다.
+
+## 메모리 승격 결정은 후보 행 하나로 둔다 (2026-11-04)
+
+- 계기: 정규화 안 된 표 목록 13번(같은 날). 승격 하나가 `knowledge_decisions`와 `memory_candidates`에 한 행씩 남았다. 두 행은 `decision_id UNIQUE`로 1:1이었다. 결정의 `text`·`status`는 후보의 `resolved_text`·`disposition`을 베꼈다. 같은 승격을 다시 요청했는지는 결정 쪽에서, 보여 줄 값은 후보 쪽에서 읽었다.
+- 결정:
+  - `knowledge_decisions`를 지우고, task·attempt·claim·대화·승인한 사용자 턴을 `memory_candidates`에 둔다. 같은 승격인지는 (claim, 승인 턴, `resolved_text`, `disposition`)의 UNIQUE로 본다. 전과 같은 키다.
+  - 후보 id는 그대로다. 저장된 메모리 노드의 `detail.memoryCandidateId`, `memory_candidate_evidence`, `memory_usage_events`가 이 id를 가리킨다.
+  - `MemoryCandidateView.decisionId`를 지운다. 화면과 다른 코드는 읽지 않았다.
+- 마이그레이션: 결정과 후보를 짝지어 한 행으로 옮긴다. 승격은 두 행을 한 transaction에 썼으므로 짝이 없는 후보는 깨진 파일에서만 나온다. 그런 후보는 옮기지 않고, 그 근거와 사용 기록도 지운다. 사본에는 승격 행이 없었다.

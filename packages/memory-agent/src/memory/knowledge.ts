@@ -30,7 +30,6 @@ const ClaimSourceRow = Schema.Struct({
 const ExistingRow = Schema.Struct({ id: Schema.String });
 const CandidateRow = Schema.Struct({
   id: Schema.String,
-  decision_id: Schema.String,
   project_id: Schema.String,
   task_id: Schema.String,
   attempt_id: Schema.String,
@@ -126,9 +125,9 @@ const make = Effect.gen(function* () {
     }),
     Result: ExistingRow,
     execute: ({ claimId, userNodeId, text, status }) => sql`
-      SELECT d.id FROM knowledge_decisions d
-      WHERE d.claim_id = ${claimId} AND d.authorized_by_user_node_id = ${userNodeId}
-        AND d.text = ${text} AND d.status = ${status}`,
+      SELECT id FROM memory_candidates
+      WHERE claim_id = ${claimId} AND authorized_by_user_node_id = ${userNodeId}
+        AND resolved_text = ${text} AND disposition = ${status}`,
   });
   const evidenceFor = SqlSchema.findAll({
     Request: Schema.String,
@@ -138,20 +137,19 @@ const make = Effect.gen(function* () {
       FROM memory_candidate_evidence ce
       WHERE ce.candidate_id = ${candidateId} ORDER BY ce.evidence_ref_id_snapshot`,
   });
-  const candidateRows = (column: "d.id" | "d.task_id") =>
+  const candidateRows = (column: "id" | "task_id") =>
     SqlSchema.findAll({
       Request: Schema.String,
       Result: CandidateRow,
       execute: (value) => sql`
-        SELECT c.id, c.decision_id, c.project_id, d.task_id, d.attempt_id, d.claim_id,
-               d.origin_session_id,
-               d.authorized_by_user_node_id_snapshot AS authorized_by_user_node_id,
-               c.proposed_text, c.resolved_text, c.disposition, c.memory_node_id, c.created_at
-        FROM memory_candidates c JOIN knowledge_decisions d ON d.id = c.decision_id
-        WHERE ${sql.literal(column)} = ${value} ORDER BY c.created_at, c.id`,
+        SELECT id, project_id, task_id, attempt_id, claim_id, origin_session_id,
+               authorized_by_user_node_id_snapshot AS authorized_by_user_node_id,
+               proposed_text, resolved_text, disposition, memory_node_id, created_at
+        FROM memory_candidates
+        WHERE ${sql.literal(column)} = ${value} ORDER BY created_at, id`,
     });
-  const candidatesOfDecision = candidateRows("d.id");
-  const candidatesOfTask = candidateRows("d.task_id");
+  const candidatesWithId = candidateRows("id");
+  const candidatesOfTask = candidateRows("task_id");
   const retrievable = SqlSchema.findAll({
     Request: Schema.Struct({
       projectId: Schema.String,
@@ -182,7 +180,7 @@ const make = Effect.gen(function* () {
       SELECT u.id, u.candidate_id, u.memory_node_id, u.origin_session_id, u.parent_run_id,
              u.parent_message_id, u.kind, u.created_at
       FROM memory_usage_events u JOIN memory_candidates c ON c.id = u.candidate_id
-      JOIN knowledge_decisions d ON d.id = c.decision_id WHERE d.task_id = ${taskId}
+      WHERE c.task_id = ${taskId}
       ORDER BY u.created_at, CASE u.kind WHEN 'retrieved' THEN 0 ELSE 1 END, u.id`,
   });
 
@@ -201,7 +199,6 @@ const make = Effect.gen(function* () {
   const toView = (row: typeof CandidateRow.Type) =>
     Effect.map(evidenceFor(row.id), (evidence): MemoryCandidateView => ({
       id: row.id,
-      decisionId: row.decision_id,
       projectId: row.project_id,
       taskId: row.task_id,
       attemptId: row.attempt_id,
@@ -218,9 +215,9 @@ const make = Effect.gen(function* () {
       })),
       createdAt: row.created_at,
     }));
-  // A decision written in this transaction always has its candidate.
-  const candidateByDecision = (decisionId: string) =>
-    candidatesOfDecision(decisionId).pipe(
+  // A candidate written in this transaction is there to read.
+  const candidateById = (candidateId: string) =>
+    candidatesWithId(candidateId).pipe(
       Effect.map(EffectArray.head),
       Effect.flatMap(Effect.fromOption),
       Effect.flatMap(toView),
@@ -269,8 +266,7 @@ const make = Effect.gen(function* () {
             text: resolvedText,
             status,
           });
-          if (Option.isSome(found)) return yield* candidateByDecision(found.value.id);
-          const decisionId = yield* crypto.uuidV4();
+          if (Option.isSome(found)) return yield* candidateById(found.value.id);
           const candidateId = yield* crypto.uuidV4();
           const createdAt = yield* nowMillis;
           const memoryNode =
@@ -283,8 +279,8 @@ const make = Effect.gen(function* () {
                   detail: { memoryCandidateId: candidateId, authorizedByUserNodeId: userNode.id },
                 })
               : null;
-          yield* sql`INSERT INTO knowledge_decisions ${sql.insert({
-            id: decisionId,
+          yield* sql`INSERT INTO memory_candidates ${sql.insert({
+            id: candidateId,
             project_id: input.projectId,
             task_id: input.taskId,
             attempt_id: input.attemptId,
@@ -292,21 +288,13 @@ const make = Effect.gen(function* () {
             origin_session_id: claim.origin_session_id,
             authorized_by_user_node_id: userNode.id,
             authorized_by_user_node_id_snapshot: userNode.id,
-            text: resolvedText,
-            status,
-            created_at: createdAt,
-          })}`;
-          yield* sql`INSERT INTO memory_candidates ${sql.insert({
-            id: candidateId,
-            decision_id: decisionId,
-            project_id: input.projectId,
             proposed_text: proposedText,
             resolved_text: resolvedText,
             disposition: status,
             memory_node_id: memoryNode?.id ?? null,
             created_at: createdAt,
           })}`;
-          return yield* candidateByDecision(decisionId);
+          return yield* candidateById(candidateId);
         }).pipe(sql.withTransaction);
       }),
     );

@@ -59,9 +59,9 @@
 
 ## Side Effects
 
-- SQLite 읽기: `nodes`, `edges`, `memory_graph_suppressed_nodes`, `interpretations`, `interpret_jobs`, `final_answer_claims`, `final_answer_sources`, `knowledge_decisions`, `memory_candidates`, `memory_candidate_evidence`
+- SQLite 읽기: `nodes`, `edges`, `memory_graph_suppressed_nodes`, `interpretations`, `interpret_jobs`, `final_answer_claims`, `final_answer_sources`, `memory_candidates`, `memory_candidate_evidence`
 - SQLite 쓰기: `interpretations` INSERT와 applied 결론의 `edges` INSERT(llm origin), `interpret_jobs` 상태 갱신(running/done/failed/pending)과 시작 시 정리(UPDATE·DELETE), topic 노드 append(`nodes.append`)
-- SQLite 쓰기: `Nodes`의 append-only 노드와 구조 edge 기록, `Recorder`의 채팅 run 기록, `MemoryGraphMaintenance`의 링크 수리, `KnowledgePromotions`의 승격 결정·후보·사용 기록
+- SQLite 쓰기: `Nodes`의 append-only 노드와 구조 edge 기록, `Recorder`의 채팅 run 기록, `MemoryGraphMaintenance`의 링크 수리, `KnowledgePromotions`의 승격 후보(결정 포함 한 행)·사용 기록
 - 네트워크: `Interpreter`가 `ActiveProvider`가 고른 provider의 가장 싼 effort 모델을 `singleAnswer`로 부르고, `recordUsage`로 API 사용량 ledger에 기록한다
 - 네이티브 검색: `MemorySearch`는 native-search owner worker를 거쳐 벡터·controlled 읽기를 하고, 실패한 읽기를 `SkippedRead`로 남긴다
 - 난수: `Interpreter`는 모델 호출 threadId에 `uuidV4`를 쓰고, `KnowledgePromotions`도 `SecureRandom.SecureRandom`으로 id를 만든다

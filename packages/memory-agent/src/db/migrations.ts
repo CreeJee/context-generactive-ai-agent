@@ -645,6 +645,51 @@ export const importedSessionSourceMigration = `
   ALTER TABLE sessions DROP COLUMN imported_from;
 `;
 
+/** The step that keeps a promotion's decision and its candidate as one row. */
+export const memoryCandidateDecisionsMigration = `
+  -- A memory promotion is one row (decisions.md "메모리 승격 결정은 후보 행 하나로 둔다
+  -- (2026-11-04)"). knowledge_decisions held the task, claim and authorizing turn; its text and
+  -- status were copies of the candidate's resolved text and disposition. Promotion wrote both in
+  -- one transaction, so a candidate without its decision, or one repeating another's decision,
+  -- comes only from a damaged file: it is not kept, and its evidence and usage go with it.
+  CREATE TABLE memory_candidates_v2 (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    task_id TEXT NOT NULL REFERENCES work_tasks(id) ON DELETE CASCADE,
+    attempt_id TEXT NOT NULL REFERENCES agent_run_attempts(id) ON DELETE CASCADE,
+    claim_id TEXT NOT NULL REFERENCES final_answer_claims(id) ON DELETE CASCADE,
+    origin_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+    authorized_by_user_node_id TEXT REFERENCES nodes(id) ON DELETE SET NULL,
+    authorized_by_user_node_id_snapshot TEXT NOT NULL,
+    proposed_text TEXT NOT NULL CHECK (length(trim(proposed_text)) > 0),
+    resolved_text TEXT NOT NULL CHECK (length(trim(resolved_text)) > 0),
+    disposition TEXT NOT NULL
+      CHECK (disposition IN ('saved', 'edited_saved', 'conversation_only', 'rejected')),
+    memory_node_id TEXT REFERENCES nodes(id),
+    created_at INTEGER NOT NULL,
+    UNIQUE (claim_id, authorized_by_user_node_id, resolved_text, disposition),
+    FOREIGN KEY (attempt_id, task_id) REFERENCES agent_run_attempts(id, task_id) ON DELETE CASCADE,
+    CHECK ((disposition IN ('saved', 'edited_saved')) = (memory_node_id IS NOT NULL))
+  );
+  INSERT OR IGNORE INTO memory_candidates_v2
+    (id, project_id, task_id, attempt_id, claim_id, origin_session_id, authorized_by_user_node_id,
+     authorized_by_user_node_id_snapshot, proposed_text, resolved_text, disposition,
+     memory_node_id, created_at)
+    SELECT c.id, c.project_id, d.task_id, d.attempt_id, d.claim_id, d.origin_session_id,
+      d.authorized_by_user_node_id, d.authorized_by_user_node_id_snapshot, c.proposed_text,
+      c.resolved_text, c.disposition, c.memory_node_id, c.created_at
+    FROM memory_candidates c JOIN knowledge_decisions d ON d.id = c.decision_id
+    ORDER BY c.rowid;
+  DROP TABLE memory_candidates;
+  DROP TABLE knowledge_decisions;
+  ALTER TABLE memory_candidates_v2 RENAME TO memory_candidates;
+  CREATE INDEX memory_candidates_project ON memory_candidates(project_id, created_at, id);
+  CREATE INDEX memory_candidates_task ON memory_candidates(task_id, created_at, id);
+  DELETE FROM memory_candidate_evidence
+    WHERE candidate_id NOT IN (SELECT id FROM memory_candidates);
+  DELETE FROM memory_usage_events WHERE candidate_id NOT IN (SELECT id FROM memory_candidates);
+`;
+
 /**
  * Ordered schema steps. `PRAGMA user_version` records how many have been applied.
  * Append new steps; never edit an applied one.
@@ -2670,6 +2715,7 @@ export const migrations: readonly string[] = [
   btwThreadMessagesMigration,
   kanbanGoalOwnersMigration,
   importedSessionSourceMigration,
+  memoryCandidateDecisionsMigration,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

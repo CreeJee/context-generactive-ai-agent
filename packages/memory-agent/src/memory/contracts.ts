@@ -12,7 +12,6 @@ export type MemoryDisposition = typeof MemoryDisposition.Type;
 /** A memory a task's answer proposed, as the user resolved it. */
 export const MemoryCandidateView = Schema.Struct({
   id: Schema.String,
-  decisionId: Schema.String,
   projectId: Schema.String,
   taskId: Schema.String,
   attemptId: Schema.String,
