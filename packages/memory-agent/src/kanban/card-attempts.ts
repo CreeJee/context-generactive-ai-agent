@@ -396,8 +396,8 @@ const make = Effect.gen(function* () {
           WHERE k.goal_instance_id = ${goalInstanceId} AND k.card_id = ${cardId}
             AND k.acknowledged_at IS NULL AND r.status <> 'completed'
             AND (NOT ${sql.literal(endedWithKnownEffectsSql("r"))}
-              OR EXISTS (SELECT 1 FROM agent_run_attempts a
-                WHERE a.id = k.trace_attempt_id AND a.pending_tool_call_ids <> '[]'))
+              OR EXISTS (SELECT 1 FROM attempt_pending_tool_calls p
+                WHERE p.attempt_id = k.trace_attempt_id))
           ORDER BY k.created_at LIMIT 1`.pipe(
         rows(RunRow),
         Effect.map((found) => Option.map(Option.fromUndefinedOr(found[0]), (row) => row.run_id)),

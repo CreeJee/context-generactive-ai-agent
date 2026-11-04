@@ -41,7 +41,7 @@
 - `RunEventKind`에는 lifecycle 변화만 담는다. attempt의 현재 위치는 이벤트가 아니라 heartbeat에 둔다.
 - Artifact 메타데이터는 결과를 가리키기만 한다. generated 내용은 그 내용을 소유한 store에 남는다. file locator에는 `path`와 `sha256`이 필요하다. store는 이를 어기면 `unsafe_file_path`, `missing_file_digest`, `artifact_kind_mismatch`로 거부한다.
 - retry가 안전한지는 attempt status가 아니라 run event로 판단한다(`AttemptStatus` 주석).
-- DB row는 snake_case 컬럼을 Schema로 decode한다. `failure`는 `Schema.fromJsonString(AttemptFailure)` JSON 문자열이다. `locator`와 `payload`는 JSON 문자열이고 `pending_tool_call_ids`는 JSON 문자열 배열이다. 저장 형식을 바꾸면 decode와 호환되어야 한다.
+- DB row는 snake_case 컬럼을 Schema로 decode한다. `failure`는 `Schema.fromJsonString(AttemptFailure)` JSON 문자열이다. `locator`와 `payload`는 JSON 문자열이다. 시도의 미결 도구 호출은 `attempt_pending_tool_calls` 행이고, 화면용 목록은 rowid 순서로 모은다. 저장 형식을 바꾸면 decode와 호환되어야 한다.
 - lifecycle operation row에는 target_kind(task/session), intent(archive/restore/delete), status(requested…failed), `idempotency_key`가 있다.
 - `WorkTraceRejected.message`는 모델에 보여도 안전한 문구여야 한다.
 - `WorkTraceStore.layer`는 `NodeCrypto.layer`를 내부에서 제공한다. `SqlClient`는 외부 layer가 제공해야 한다(`store.ts`가 `effect/sql`의 `SqlClient`를 import한다).

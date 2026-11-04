@@ -384,8 +384,9 @@ describe("Work Trace migration", () => {
         expect(
           db.sqlite
             .prepare(
-              `SELECT pending_tool_call_ids, failure, heartbeat_state
-               FROM agent_run_attempts WHERE id = 'attempt-1'`,
+              `SELECT (SELECT json_group_array(tool_call_id) FROM attempt_pending_tool_calls
+                 WHERE attempt_id = a.id) AS pending_tool_call_ids, failure, heartbeat_state
+               FROM agent_run_attempts a WHERE id = 'attempt-1'`,
             )
             .get(),
         ).toEqual({

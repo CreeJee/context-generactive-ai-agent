@@ -409,6 +409,23 @@ export const executionSubjectsMigration = `
   CREATE UNIQUE INDEX kanban_card_attempts_queue_item ON kanban_card_attempts(queue_item_id);
 `;
 
+/** The step that keeps an attempt's unsettled tool calls as rows instead of a JSON array. */
+export const attemptPendingToolCallsMigration = `
+  -- An attempt's unsettled tool calls as rows (decisions.md "시도의 미결 도구 호출은 행으로 둔다
+  -- (2026-11-04)"). The JSON array was edited in place with json_insert and a json_each filter on
+  -- every tool start and end. A row's rowid keeps the order calls started in; an id that is not a
+  -- string was never one a tool call wrote.
+  CREATE TABLE attempt_pending_tool_calls (
+    attempt_id TEXT NOT NULL REFERENCES agent_run_attempts(id) ON DELETE CASCADE,
+    tool_call_id TEXT NOT NULL,
+    PRIMARY KEY (attempt_id, tool_call_id)
+  );
+  INSERT OR IGNORE INTO attempt_pending_tool_calls (attempt_id, tool_call_id)
+    SELECT a.id, p.value FROM agent_run_attempts a, json_each(a.pending_tool_call_ids) p
+    WHERE p.type = 'text' ORDER BY a.rowid, p.key;
+  ALTER TABLE agent_run_attempts DROP COLUMN pending_tool_call_ids;
+`;
+
 /**
  * Ordered schema steps. `PRAGMA user_version` records how many have been applied.
  * Append new steps; never edit an applied one.
@@ -2428,6 +2445,7 @@ export const migrations: readonly string[] = [
   workflowLedgerMigration,
   ownerRpcLedgerMigration,
   executionSubjectsMigration,
+  attemptPendingToolCallsMigration,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

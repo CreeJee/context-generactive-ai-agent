@@ -262,11 +262,12 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
         Effect.fnUntraced(function* (child) {
           expect(
             yield* sqlGet(
-              `SELECT a.pending_tool_call_ids FROM agent_run_attempts a
+              `SELECT count(*) AS pending FROM attempt_pending_tool_calls p
+               JOIN agent_run_attempts a ON a.id = p.attempt_id
                JOIN work_tasks t ON t.id = a.task_id WHERE t.agent_id = ?`,
               child.id,
             ),
-          ).toEqual({ pending_tool_call_ids: "[]" });
+          ).toEqual({ pending: 0 });
         }),
         { discard: true },
       );
@@ -347,8 +348,11 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagent blocked re
       yield* sqlTransaction(
         Effect.gen(function* () {
           yield* sqlRun(
-            `UPDATE agent_run_attempts SET status = 'running', finished_at = NULL,
-               pending_tool_call_ids = '["non-idempotent-write"]' WHERE id = ?`,
+            "UPDATE agent_run_attempts SET status = 'running', finished_at = NULL WHERE id = ?",
+            ids.attempt_id,
+          );
+          yield* sqlRun(
+            "INSERT INTO attempt_pending_tool_calls VALUES (?, 'non-idempotent-write')",
             ids.attempt_id,
           );
           yield* sqlRun(

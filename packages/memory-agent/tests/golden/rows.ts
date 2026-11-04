@@ -190,7 +190,9 @@ const conversationRows = Effect.fnUntraced(function* (sessionId: string) {
     ),
     attempts: yield* rows(
       `SELECT a.task_id, a.attempt_number, a.chat_run_id, a.thread_id, a.status, a.resume_reason,
-         a.resumability, a.pending_tool_call_ids, a.failure
+         a.resumability, (SELECT json_group_array(p.tool_call_id ORDER BY p.rowid)
+           FROM attempt_pending_tool_calls p WHERE p.attempt_id = a.id) AS pending_tool_call_ids,
+         a.failure
        FROM agent_run_attempts a JOIN work_tasks t ON t.id = a.task_id
        WHERE t.origin_session_id = ? ORDER BY a.rowid`,
       sessionId,

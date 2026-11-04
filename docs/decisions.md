@@ -3933,3 +3933,13 @@
   - Goal 실행의 run은 identity가 그 run의 binding과 같을 때만 적는다. 완료 근거가 맞춰 보던 조건이 이것이다.
   - 카드 시도의 항목 id는 같은 Goal·카드·시도 번호를 담은 card queue 항목에서 채운다. JSON이 아닌 항목은 건너뛴다.
   - 사본 측정: 이 단계는 10ms였다. 실행 300개의 session, binding과 맞는 Goal 실행 172쌍, 큐 항목 101개의 시도가 모두 옛 JSON 조회와 같았다.
+
+## 시도의 미결 도구 호출은 행으로 둔다 (2026-11-04)
+
+- 계기: 정규화 안 된 표 목록 5번(같은 날). `agent_run_attempts.pending_tool_call_ids`는 id 목록 JSON 배열이었다. 도구가 시작하고 끝날 때마다 `json_insert`와 `json_each` 필터로 그 자리에서 고쳤고, 조회는 `<> '[]'`로 했다.
+- 결정:
+  - `attempt_pending_tool_calls(attempt_id, tool_call_id)`에 한 호출을 한 행으로 둔다. attempt가 지워지면 같이 지워진다.
+  - 시작은 행을 넣고, 끝은 행을 지운다. 둘 다 attempt가 살아 있을 때만 하고, heartbeat 갱신과 한 transaction에서 한다.
+  - 화면의 `pendingToolCallIds`는 rowid 순서, 곧 시작한 순서로 모은다. 같은 호출이 두 번 시작해도 한 번만 남는다. 전에도 끝나면 둘 다 지워졌다.
+  - 없는 attempt의 미결 호출을 물으면 오류 대신 빈 목록이다. 부르는 곳은 모두 있는 attempt를 묻는다.
+- 마이그레이션: 배열의 문자열 원소를 순서대로 옮기고 열을 지운다. 문자열이 아닌 원소는 도구 호출이 쓴 적이 없어 버린다. 전에는 읽을 때 decode 오류였다. 사본 측정: 시도 4,568개 중 5개가 미결 호출을 가졌고, 모두 같은 목록으로 옮겨졌다. 10ms였다.

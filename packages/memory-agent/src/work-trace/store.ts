@@ -105,7 +105,12 @@ const RecoveryRow = Schema.Struct({
   agent_id: Schema.NullOr(Schema.String),
   parent_run_id: Schema.String,
 });
-const PendingToolsRow = Schema.Struct({ pending_tool_call_ids: Schema.String });
+const PendingToolsRow = Schema.Array(Schema.Struct({ tool_call_id: Schema.String }));
+
+/** An attempt's started and unsettled tool calls, as the JSON array of their ids in start order. */
+const pendingToolCallIdsSql = (attempt: string) =>
+  `(SELECT json_group_array(p.tool_call_id ORDER BY p.rowid) FROM attempt_pending_tool_calls p
+    WHERE p.attempt_id = ${attempt}.id)`;
 const RetryRow = Schema.Struct({
   id: Schema.String,
   previous_attempt_id: Schema.String,
@@ -661,9 +666,10 @@ const make = Effect.gen(function* () {
 
   /** Tool calls an attempt started and never settled. A retry must not repeat them unasked. */
   const pendingToolsOf = (attemptId: string) =>
-    first(sql`SELECT pending_tool_call_ids FROM agent_run_attempts WHERE id = ${attemptId}`).pipe(
+    sql`SELECT tool_call_id FROM attempt_pending_tool_calls WHERE attempt_id = ${attemptId}
+      ORDER BY rowid`.pipe(
       Effect.flatMap(decodePendingTools),
-      Effect.flatMap((row) => decodeStringArray(row.pending_tool_call_ids)),
+      Effect.map((rows) => rows.map((row) => row.tool_call_id)),
     );
   const heartbeatView = (
     state: HeartbeatState | null,
@@ -674,19 +680,20 @@ const make = Effect.gen(function* () {
     failure === null ? Effect.succeed(null) : decodeFailure(failure);
   /** Where an attempt was, read from its heartbeat, for a failure its caller cannot place. */
   const stageOf = Effect.fnUntraced(function* (attemptId: string) {
-    const row = yield* first(sql`SELECT heartbeat_state, status, pending_tool_call_ids
-      FROM agent_run_attempts WHERE id = ${attemptId}`);
+    const row = yield* first(sql`SELECT heartbeat_state, status,
+        EXISTS (SELECT 1 FROM attempt_pending_tool_calls p WHERE p.attempt_id = a.id) AS pending
+      FROM agent_run_attempts a WHERE id = ${attemptId}`);
     const live = yield* Schema.decodeUnknownEffect(
       Schema.Struct({
         heartbeat_state: Schema.NullOr(HeartbeatState),
         status: AttemptStatus,
-        pending_tool_call_ids: Schema.String,
+        pending: Schema.Finite,
       }),
     )(row);
     const stage: AttemptFailureStage =
       live.status === "queued"
         ? "start"
-        : (yield* decodeStringArray(live.pending_tool_call_ids)).length > 0
+        : live.pending === 1
           ? "tool"
           : live.heartbeat_state === "waiting"
             ? "approval"
@@ -800,11 +807,17 @@ const make = Effect.gen(function* () {
     toolCall: { readonly id: string; readonly name: string },
   ) =>
     Effect.flatMap(Clock.currentTimeMillis, (now) =>
-      run(sql`UPDATE agent_run_attempts
-      SET pending_tool_call_ids = json_insert(pending_tool_call_ids, '$[#]', ${toolCall.id}),
-          heartbeat_state = 'working', heartbeat_step = ${`Running ${toolCall.name}`},
-          heartbeat_at = ${now}
-      WHERE id = ${handle.id} AND status IN ${liveStatuses}`),
+      run(sql`INSERT OR IGNORE INTO attempt_pending_tool_calls (attempt_id, tool_call_id)
+        SELECT id, ${toolCall.id} FROM agent_run_attempts
+        WHERE id = ${handle.id} AND status IN ${liveStatuses}`).pipe(
+        Effect.andThen(
+          run(sql`UPDATE agent_run_attempts
+          SET heartbeat_state = 'working', heartbeat_step = ${`Running ${toolCall.name}`},
+              heartbeat_at = ${now}
+          WHERE id = ${handle.id} AND status IN ${liveStatuses}`),
+        ),
+        sql.withTransaction,
+      ),
     ).pipe(Effect.andThen(announceProgress(sessionId)));
 
   const toolSettled = (
@@ -813,12 +826,17 @@ const make = Effect.gen(function* () {
     toolCall: { readonly id: string; readonly name: string },
   ) =>
     Effect.flatMap(Clock.currentTimeMillis, (now) =>
-      run(sql`UPDATE agent_run_attempts
-      SET pending_tool_call_ids = (SELECT json_group_array(value)
-            FROM json_each(pending_tool_call_ids) WHERE value <> ${toolCall.id}),
-          heartbeat_state = 'working', heartbeat_step = ${`Finished ${toolCall.name}`},
-          heartbeat_at = ${now}
-      WHERE id = ${handle.id} AND status IN ${liveStatuses}`),
+      run(sql`DELETE FROM attempt_pending_tool_calls
+        WHERE attempt_id = ${handle.id} AND tool_call_id = ${toolCall.id} AND attempt_id IN
+          (SELECT id FROM agent_run_attempts WHERE id = ${handle.id} AND status IN ${liveStatuses})`).pipe(
+        Effect.andThen(
+          run(sql`UPDATE agent_run_attempts
+          SET heartbeat_state = 'working', heartbeat_step = ${`Finished ${toolCall.name}`},
+              heartbeat_at = ${now}
+          WHERE id = ${handle.id} AND status IN ${liveStatuses}`),
+        ),
+        sql.withTransaction,
+      ),
     ).pipe(Effect.andThen(announceProgress(sessionId)));
 
   /**
@@ -1296,9 +1314,9 @@ const make = Effect.gen(function* () {
     const rows = yield* decodeAttemptViewRows(
       yield* sql`SELECT id, invocation_id, attempt_number, chat_run_id, thread_id, status,
           resumed_from_attempt_id, superseded_by_attempt_id, heartbeat_state, heartbeat_step,
-          heartbeat_at, pending_tool_call_ids, failure,
+          heartbeat_at, ${sql.literal(pendingToolCallIdsSql("a"))} AS pending_tool_call_ids, failure,
           started_at, finished_at, created_at, updated_at
-        FROM agent_run_attempts WHERE task_id = ${taskId} ORDER BY attempt_number`,
+        FROM agent_run_attempts a WHERE task_id = ${taskId} ORDER BY attempt_number`,
     );
     return yield* Effect.forEach(rows, (row) =>
       Effect.gen(function* () {
