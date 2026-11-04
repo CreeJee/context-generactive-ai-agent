@@ -2,7 +2,7 @@
 
 ## Overview
 
-`apps/agent` 프론트엔드 엔트리(`app/entry`)들이 함께 쓰는 공용 모듈 모음이다. 백엔드 API 호출용 fetch 래퍼(빌드 ID 헤더 고정, 백엔드 재시작 필요 응답 감지)와 그 재시작 상태 저장소·React 훅, React/React Query용 Effect 실행 도우미, 브라우저 Web Crypto 기반 Effect `Crypto` 구현을 제공한다. UI 쪽으로는 한국어 로컬 시각 포맷, 테마 선택 컴포넌트와 페인트 전 테마 스크립트, 백그라운드 루프 상태 배지, 실패 상세 접힘 컴포넌트를 담는다.
+`apps/agent` 프론트엔드 엔트리(`app/entry`)들이 함께 쓰는 공용 모듈 모음이다. 백엔드 API 호출용 fetch 래퍼(빌드 ID 헤더 고정, 백엔드 재시작 필요 응답 감지)와 그 재시작 상태 저장소·React 훅, React/React Query용 Effect 실행 도우미, 브라우저 Web Crypto 기반 Effect `SecureRandom` 구현을 제공한다. UI 쪽으로는 한국어 로컬 시각 포맷, 테마 선택 컴포넌트와 페인트 전 테마 스크립트, 백그라운드 루프 상태 배지, 실패 상세 접힘 컴포넌트를 담는다.
 
 ## Interface
 
@@ -14,7 +14,7 @@
 - `useHydrated` — 서버 HTML을 hydrate하는 동안 false, 그 뒤와 브라우저에서 시작한 렌더에서는 true인 React 훅(`use-hydrated.ts`)
 - `uiPromise` — Promise 작업을 `Cause.UnknownError`로 실패하는 Effect로 감싼다
 - `runUiEffect` — Effect를 Promise로 실행하고 실패 시 `UnknownError`를 벗겨 원래 API/브라우저 에러 identity로 reject한다
-- `browserCrypto` — Web Crypto(`crypto.getRandomValues`, `crypto.subtle.digest`)로 만든 Effect `Crypto` 서비스 구현. digest 실패는 `PlatformError.systemError`로 바꾼다
+- `browserCrypto` — Web Crypto `crypto.getRandomValues`로 만든 Effect `SecureRandom`(`SecureRandom.make`) 서비스 구현. digest 실패는 `PlatformError.systemError`로 바꾼다
 - `koreanLocalTime` / `koreanTimeOfDayOf` / `koreanShortTime` — 서버 타임스탬프를 ko-KR 로컬 날짜·시각 / 시각 / 월·일·분으로 포맷한다. 파싱 불가 시 `Invalid Date`
 - `timeUntil` — `(timestamp, now)` dual. 남은 시간을 `3d 8h 7m` 형태로 돌려주고, 지났거나 파싱 불가면 `null`
 - `themes` — 테마 선택지 상수(`system`/`light`/`dark`와 한국어 라벨)

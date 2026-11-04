@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { Effect, Result, Schema, Stream } from "effect";
 import { Reactivity } from "effect/reactivity";
 import { SqlClient, SqlConnection, SqlError, Statement } from "effect/sql";
+import { sqliteDriver } from "./sql-client.ts";
 
 const Parameters = Schema.Array(
   Schema.Union([Schema.String, Schema.Finite, Schema.BigInt, Schema.Null, Schema.Uint8Array]),
@@ -40,6 +41,7 @@ export const migrationClient = Effect.fn("migrationClient")(function* (sqlite: D
   const reactivity = yield* Reactivity.make;
   return yield* SqlClient.make({
     acquirer: Effect.succeed(connection),
+    driver: sqliteDriver,
     compiler: Statement.makeCompilerSqlite(),
     spanAttributes: [["db.system", "sqlite"]],
     // The owning startup transaction already holds BEGIN IMMEDIATE before any metadata read.

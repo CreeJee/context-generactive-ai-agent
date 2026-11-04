@@ -1,7 +1,6 @@
 import {
   Cache,
   Context,
-  Crypto,
   DateTime,
   Duration,
   Effect,
@@ -12,6 +11,7 @@ import {
   Result,
   Schema,
 } from "effect";
+import { Digest, SecureRandom } from "effect/crypto";
 import { ChildProcessSpawner } from "effect/process";
 import type { SubscriptionAccountProvider } from "../providers/contracts.ts";
 import { OAuthProfiles } from "./accounts.ts";
@@ -68,7 +68,7 @@ export class SubscriptionUsage extends Context.Service<
     Effect.gen(function* () {
       const vault = yield* OAuthKeychain;
       const platform = yield* Effect.context<
-        Crypto.Crypto | ChildProcessSpawner.ChildProcessSpawner
+        SecureRandom.SecureRandom | Digest.Digest | ChildProcessSpawner.ChildProcessSpawner
       >();
       return SubscriptionUsage.of({
         read: (provider, accountId) =>

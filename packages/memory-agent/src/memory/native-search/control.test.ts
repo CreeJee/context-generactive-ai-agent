@@ -1,6 +1,7 @@
 import { gatedTransport } from "../../../tests/support/native-owner.ts";
 import { withTestPlatform } from "../../../tests/support/platform.ts";
-import { Crypto, Deferred, Effect, Fiber, FileSystem } from "effect";
+import { Deferred, Effect, Fiber, FileSystem } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { expect, it } from "vite-plus/test";
 import { makeNativeOwner, OwnerInspection, type OwnerTransport } from "./client.ts";
 import { OwnerCommand } from "./worker-protocol.ts";
@@ -11,7 +12,7 @@ it("binds one-shot native control, rejects snapshot duplicates, and never recycl
     Effect.scoped(
       withTestPlatform(
         Effect.gen(function* () {
-          const crypto = yield* Crypto.Crypto;
+          const crypto = yield* SecureRandom.SecureRandom;
           const { SearchControl, VectorIndex } = loadTurbovec();
           const baseline = SearchControl.count();
           const index = new VectorIndex(384, 4);
@@ -22,8 +23,8 @@ it("binds one-shot native control, rejects snapshot duplicates, and never recycl
           expect(() => index.validateIds(["1", "1"])).toThrow();
           expect(() => index.validateIds(["01", "2"])).toThrow();
           index.validateIds(["2", "1"]);
-          const seed = yield* crypto.randomUUIDv4();
-          const owner = yield* crypto.randomUUIDv4();
+          const seed = yield* crypto.uuidV4();
+          const owner = yield* crypto.uuidV4();
           const control = new SearchControl(seed, owner, "epoch", "request", 2_000);
           const token = control.token();
           const query = vectors.slice(0, 384);

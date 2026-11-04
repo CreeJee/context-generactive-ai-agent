@@ -6,7 +6,7 @@
 
 ## Interface
 
-- `MessageQueue` — `Context.Service`(`queue.ts`)이며 `MessageQueue.layer`로 제공한다. `SqlClient.SqlClient`, `Crypto.Crypto`가 필요하다. run이 답하는 동안 보낸 후속 메시지를 에이전트에 닿을 때까지 순서대로 보관한다.
+- `MessageQueue` — `Context.Service`(`queue.ts`)이며 `MessageQueue.layer`로 제공한다. `SqlClient.SqlClient`, `SecureRandom.SecureRandom`이 필요하다. run이 답하는 동안 보낸 후속 메시지를 에이전트에 닿을 때까지 순서대로 보관한다.
 - `MessageQueue.list(sessionId, recentRunId)` — 아직 전달되지 않은 메시지와 `recentRunId`로 전달된 메시지를 `seq` 순으로 돌려준다.
 - `MessageQueue.snapshot(sessionId, recentRunId?)` — `QueueSnapshot`(items와 `nextDelivery`)을 만든다. 첫 비종결 항목으로 server/blocked/empty를 판단하는 참고용 뷰다. 첫 항목이 waiting이면 steered 여부와 상관없이 `server`다. 아무것도 돌지 않으면 서버가 그 메시지를 다음 턴으로 보낸다(2026-11-02).
 - `MessageQueue.add(sessionId, text, attachmentIds, steered)` — 끝에 waiting 메시지를 추가한다. steered이면 앞선 waiting 메시지도 모두 steered로 바꾼다(트랜잭션).
@@ -58,7 +58,7 @@
 - SQLite `queued_messages`를 UPDATE한다: 상태·text·draft·failure·steered·updated_at 변경(`setState`), steered 일괄 설정(`add`).
 - SQLite `queued_messages`에서 DELETE한다(`remove`).
 - 레이어 생성 시 SQLite UPDATE를 한 번 수행해 waiting·editing을 held로 바꾼다.
-- `Crypto.randomUUIDv4`로 메시지 id를 만든다.
+- `SecureRandom.uuidV4`로 메시지 id를 만든다.
 - `Clock.currentTimeMillis`로 `created_at`, `updated_at`을 기록한다.
 - 프로세스 메모리의 `Ref` 예약 맵(HashMap)을 변경한다(`claimNext` 등).
 - `QueueDelivery`가 `Nodes.append`로 memory node(kind `user`)를 기록한다.

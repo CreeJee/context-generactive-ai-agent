@@ -3,7 +3,6 @@ import {
   Array as Arr,
   Clock,
   Context,
-  Crypto,
   Effect,
   Layer,
   HashMap,
@@ -12,6 +11,7 @@ import {
   Ref,
   Schema,
 } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { SqlClient, SqlError, SqlSchema } from "effect/sql";
 import {
   type DeliveryVia,
@@ -76,7 +76,7 @@ type Reservations = HashMap.HashMap<
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
   const now = Clock.currentTimeMillis;
   // Reservations are checked and changed in one Ref.modify, so no two fibres claim one.
   const reservations = yield* Ref.make<Reservations>(HashMap.empty());
@@ -220,7 +220,7 @@ const make = Effect.gen(function* () {
      */
     add: (sessionId: string, text: string, attachmentIds: readonly string[], steered: boolean) =>
       Effect.gen(function* () {
-        const id = yield* crypto.randomUUIDv4();
+        const id = yield* crypto.uuidV4();
         const at = yield* now;
         yield* Effect.when(
           sql`

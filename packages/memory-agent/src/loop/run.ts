@@ -2,7 +2,6 @@ import {
   Array as Arr,
   Cause,
   Clock,
-  Crypto,
   Data,
   DateTime,
   Effect,
@@ -20,6 +19,7 @@ import {
   Stream,
   SynchronizedRef,
 } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { AiError, type LanguageModel, Prompt, type Response, type Tool, Toolkit } from "effect/ai";
 import type {
   MessageSource,
@@ -504,7 +504,7 @@ const runAccepted = Effect.fnUntraced(function* <R>(
   resumed: ReadonlyArray<Resumed>,
 ) {
   const store = yield* RunStore;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
   const { threadId, runId } = input;
   const run = { threadId, runId };
   const scope: RunScope = { threadId, runId, emit };
@@ -620,7 +620,7 @@ const runAccepted = Effect.fnUntraced(function* <R>(
         const message = yield* toolMessage(answeredCall);
         yield* emit({
           type: "TOOL_CALL_RESULT",
-          messageId: yield* crypto.randomUUIDv7(),
+          messageId: yield* crypto.uuidV7(),
           toolCallId: message.toolCallId,
           content: message.content,
           role: "tool",
@@ -693,7 +693,7 @@ const runAccepted = Effect.fnUntraced(function* <R>(
         (sent, hook) => hook(scope, sent),
       );
       const offeredTools = yield* tools.offered;
-      const messageId = yield* crypto.randomUUIDv7();
+      const messageId = yield* crypto.uuidV7();
       const createdAt = DateTime.formatIso(yield* DateTime.now);
       const scheduler = yield* stepScheduler<StoredInterruptPayload, RunFailed, R>({ answered });
       const streamed = yield* SynchronizedRef.make(nothingStreamed);
@@ -1023,17 +1023,19 @@ const runAccepted = Effect.fnUntraced(function* <R>(
 export const runChat: {
   (
     input: RunInput,
-  ): <R>(spec: RunSpec<R>) => Stream.Stream<AgUiEvent, never, R | RunStore | Crypto.Crypto>;
+  ): <R>(
+    spec: RunSpec<R>,
+  ) => Stream.Stream<AgUiEvent, never, R | RunStore | SecureRandom.SecureRandom>;
   <R>(
     spec: RunSpec<R>,
     input: RunInput,
-  ): Stream.Stream<AgUiEvent, never, R | RunStore | Crypto.Crypto>;
+  ): Stream.Stream<AgUiEvent, never, R | RunStore | SecureRandom.SecureRandom>;
 } = EffectFunction.dual(2, runChatBody);
 function runChatBody<R>(
   spec: RunSpec<R>,
   input: RunInput,
-): Stream.Stream<AgUiEvent, never, R | RunStore | Crypto.Crypto> {
-  return Stream.callback<AgUiEvent, never, R | RunStore | Crypto.Crypto>((queue) => {
+): Stream.Stream<AgUiEvent, never, R | RunStore | SecureRandom.SecureRandom> {
+  return Stream.callback<AgUiEvent, never, R | RunStore | SecureRandom.SecureRandom>((queue) => {
     // Every event says when it was sent, as AG-UI's `timestamp` allows.
     const emit = (event: AgUiEvent) =>
       Effect.flatMap(Clock.currentTimeMillis, (timestamp) =>

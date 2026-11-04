@@ -1,5 +1,6 @@
 import { Hex } from "effect/encoding";
-import { Crypto, Effect, FileSystem, Layer, Path } from "effect";
+import { Effect, FileSystem, Layer, Path } from "effect";
+import { Digest } from "effect/crypto";
 import { NodeServices, NodeCrypto } from "@effect/platform-node";
 import { layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
@@ -16,13 +17,13 @@ layer(Layer.merge(NodeServices.layer, NodeCrypto.layer))((it) => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const crypto = yield* Crypto.Crypto;
+        const crypto = yield* Digest.Digest;
         const directory = yield* fs.makeTempDirectoryScoped({ prefix: "native-vector-recovery-" });
         const identity = "native-recovery-fixture";
         const cache = path.join(
           directory,
           "vectors",
-          Hex.encode(yield* crypto.digest("SHA-256", new TextEncoder().encode(identity))).slice(
+          Hex.encode(yield* crypto.digest(Digest.sha256, new TextEncoder().encode(identity))).slice(
             0,
             16,
           ),

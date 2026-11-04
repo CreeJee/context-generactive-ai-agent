@@ -1,5 +1,6 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import { Context, Crypto, Effect, HashSet, Layer, Match, Option, Ref, Schema } from "effect";
+import { Context, Effect, HashSet, Layer, Match, Option, Ref, Schema } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import { Projects } from "../projects/projects.ts";
 import { Sessions } from "../sessions/sessions.ts";
@@ -118,7 +119,7 @@ const make = Effect.gen(function* () {
   const fileTools = yield* FileTools;
   const outsideTools = yield* OutsideTools;
   const approvedTools = yield* ApprovedTools;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
 
   /** The session's project as the card's tools see it, and the model the session uses. */
   const cardSetting = Effect.fnUntraced(function* (
@@ -217,7 +218,7 @@ const make = Effect.gen(function* () {
       readonly message: string;
       readonly instructions: string;
     }) {
-      const runId = `${input.runPrefix}:${yield* crypto.randomUUIDv7()}`;
+      const runId = `${input.runPrefix}:${yield* crypto.uuidV7()}`;
       const { project, selection } = yield* cardSetting(
         input.sessionId,
         input.projectId,

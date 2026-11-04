@@ -12,7 +12,8 @@ import {
   Match,
   SynchronizedRef,
 } from "effect";
-import { Crypto, Option, Predicate, Schema, Scope } from "effect";
+import { Option, Predicate, Schema, Scope } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { PersistedQueue } from "effect/persistence";
 import { SqlClient, type SqlError } from "effect/sql";
 import { tagOfUnknown } from "../runtime/failure-tag.ts";
@@ -129,7 +130,7 @@ const make = Effect.fnUntraced(function* (options?: {
     Duration.toMillis(Duration.fromInputUnsafe(options?.pollInterval ?? Duration.seconds(5))),
   );
   // Names this owner process on the rows it claims; v7 sorts by start time in the table.
-  const worker = yield* Crypto.Crypto.use((crypto) => crypto.randomUUIDv7()).pipe(
+  const worker = yield* SecureRandom.SecureRandom.use((crypto) => crypto.uuidV7()).pipe(
     Effect.mapError((cause) =>
       PersistedQueue.PersistedQueueError.make({
         message: "Failed to name the queue owner",

@@ -6,7 +6,6 @@ import {
   Array as Arr,
   Config,
   Context,
-  Crypto,
   Effect,
   Equal,
   FileSystem,
@@ -16,6 +15,7 @@ import {
   Schema,
   Semaphore,
 } from "effect";
+import { Digest, SecureRandom } from "effect/crypto";
 import {
   GlobalConfig,
   type GlobalConfigApi,
@@ -71,16 +71,7 @@ export class OpenAICompatibleFailed extends Schema.TaggedError<
   OpenAICompatibleFailed,
   { readonly brand: unique symbol }
 >()("OpenAICompatibleFailed", {
-  operation: Schema.Literals([
-    "validation",
-    "missing",
-    "keychain",
-    "partial",
-    "test",
-    "models",
-    /** Naming a new account failed. */
-    "account_id",
-  ]),
+  operation: Schema.Literals(["validation", "missing", "keychain", "partial", "test", "models"]),
 }) {}
 export interface CompatibleKeyStore {
   readonly get: Effect.Effect<string | null, KeyringOpenFailure>;
@@ -186,13 +177,15 @@ export const validateCompatibleLabel = (
 export function makeOpenAICompatibleSettings(options: {
   readonly config: GlobalConfigApi;
   readonly keys: CompatibleKeychain;
-  readonly crypto: Crypto.Crypto;
+  readonly random: SecureRandom.SecureRandom["Service"];
+  readonly digest: Digest.Digest["Service"];
   readonly fetcher?: typeof fetch | undefined;
 }) {
   return makeOpenAICompatibleSettingsBody(
     options.config,
     options.keys,
-    options.crypto,
+    options.random,
+    options.digest,
     options.fetcher,
   );
 }
@@ -208,7 +201,8 @@ const publishedReasoning = (settings: OpenAICompatibleConfiguration) =>
 function makeOpenAICompatibleSettingsBody(
   config: GlobalConfigApi,
   keys: CompatibleKeychain,
-  crypto: Crypto.Crypto,
+  random: SecureRandom.SecureRandom["Service"],
+  digest: Digest.Digest["Service"],
   fetcher: typeof fetch = fetch,
 ) {
   const updates = Semaphore.makeUnsafe(1);
@@ -327,9 +321,7 @@ function makeOpenAICompatibleSettingsBody(
         const label = isTruthy(input.label)
           ? yield* validateCompatibleLabel(input.label ?? "")
           : compatibleHostLabel(baseUrl);
-        const id = yield* crypto
-          .randomUUIDv4()
-          .pipe(Effect.mapError(() => OpenAICompatibleFailed.make({ operation: "account_id" })));
+        const id = yield* random.uuidV4();
         const account: CompatibleAccount = {
           id,
           label,
@@ -771,9 +763,7 @@ function makeOpenAICompatibleSettingsBody(
           Effect.orElseSucceed(Option.none),
         );
         const historyKey = Buffer.from(
-          yield* crypto
-            .digest("SHA-256", new TextEncoder().encode(settings.baseUrl))
-            .pipe(Effect.orDie),
+          yield* digest.digest(Digest.sha256, new TextEncoder().encode(settings.baseUrl)),
         ).toString("hex");
         return {
           model: yield* Option.match(key, {
@@ -837,7 +827,8 @@ export class OpenAICompatibleSettings extends Context.Service<
         return makeOpenAICompatibleSettings({
           config: config,
           keys: yield* CompatibleKeyring,
-          crypto: yield* Crypto.Crypto,
+          random: yield* SecureRandom.SecureRandom,
+          digest: yield* Digest.Digest,
           fetcher: yield* CompatibleFetch,
         });
       }),
@@ -848,7 +839,8 @@ export class OpenAICompatibleSettings extends Context.Service<
       return makeOpenAICompatibleSettings({
         config: yield* GlobalConfig,
         keys: yield* keychain,
-        crypto: yield* Crypto.Crypto,
+        random: yield* SecureRandom.SecureRandom,
+        digest: yield* Digest.Digest,
         fetcher: fetch,
       });
     }),

@@ -60,7 +60,7 @@ export function useDraftImages() {
     for (const file of files) {
       const base: DraftImageBase = {
         // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
-        key: Effect.runSync(browserCrypto.randomUUIDv4()),
+        key: Effect.runSync(browserCrypto.uuidV4()),
         number: nextNumber.current++,
         previewUrl: URL.createObjectURL(file),
         name: file.name,

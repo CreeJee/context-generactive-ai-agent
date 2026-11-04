@@ -1,4 +1,5 @@
-import { Context, Crypto, Effect, Layer, Option, Schema, Stream } from "effect";
+import { Context, Effect, Layer, Option, Schema, Stream } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { HttpApiClient } from "effect/http-api";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { AgUiEvent } from "../loop/chunks.ts";
@@ -77,7 +78,9 @@ export const partsOf = (content: UserContent): ReadonlyArray<MessagePart> =>
   isText(content) ? [{ type: "text", content }] : content;
 
 /** The atoms of each session a page opens, keyed by session id. */
-export const chatSessions = <E>(runtime: Atom.AtomRuntime<ChatApiClient | Crypto.Crypto, E>) =>
+export const chatSessions = <E>(
+  runtime: Atom.AtomRuntime<ChatApiClient | SecureRandom.SecureRandom, E>,
+) =>
   keptAtomGroups((session: string) => {
     const state = Atom.make<Option.Option<OpenSession>>(Option.none()).pipe(Atom.keepAlive);
     /** The last app event a run sent; the page subscribes to it. */
@@ -147,10 +150,10 @@ export const chatSessions = <E>(runtime: Atom.AtomRuntime<ChatApiClient | Crypto
     const send = runtime.fn((input: Send, get) =>
       Effect.gen(function* () {
         const { chat } = yield* ChatApiClient;
-        const crypto = yield* Crypto.Crypto;
-        const runId = yield* crypto.randomUUIDv7();
+        const crypto = yield* SecureRandom.SecureRandom;
+        const runId = yield* crypto.uuidV7();
         const message: ChatMessage = {
-          id: yield* crypto.randomUUIDv7(),
+          id: yield* crypto.uuidV7(),
           role: "user",
           parts: partsOf(input.content),
         };
@@ -190,7 +193,7 @@ export const chatSessions = <E>(runtime: Atom.AtomRuntime<ChatApiClient | Crypto
     const answer = runtime.fn((input: Answer, get) =>
       Effect.gen(function* () {
         const { chat } = yield* ChatApiClient;
-        const runId = yield* Effect.flatMap(Crypto.Crypto, (crypto) => crypto.randomUUIDv7());
+        const runId = yield* Effect.flatMap(SecureRandom.SecureRandom, (crypto) => crypto.uuidV7());
         const events = yield* chat.run({
           params: { session },
           headers: { "x-session-holder": input.holder },

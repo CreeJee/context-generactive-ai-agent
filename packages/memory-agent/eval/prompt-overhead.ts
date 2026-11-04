@@ -1,10 +1,9 @@
-import { NodeServices } from "@effect/platform-node";
+import { NodeCrypto, NodeServices } from "@effect/platform-node";
 import {
   Array as Arr,
   Cause,
   Console,
   Context,
-  Crypto,
   Effect,
   FileSystem,
   Layer,
@@ -14,6 +13,7 @@ import {
   Schedule,
   Stream,
 } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { LanguageModel, Prompt, type Response, type Tool } from "effect/ai";
 import { GlobalConfig } from "../src/config/global-config.ts";
 import { SecretStore } from "../src/config/secrets.ts";
@@ -183,9 +183,9 @@ const enableEverything = Effect.fnUntraced(function* (project: Project) {
 });
 
 const firstRequests = Effect.fn("eval.promptOverhead")(function* () {
-  const platform = yield* Layer.build(NodeServices.layer);
+  const platform = yield* Layer.build(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer));
   const fs = Context.get(platform, FileSystem.FileSystem);
-  const crypto = Context.get(platform, Crypto.Crypto);
+  const crypto = Context.get(platform, SecureRandom.SecureRandom);
   const base = yield* fs.makeTempDirectoryScoped({ prefix: "memory-agent-prompt-overhead-" });
   const storage = join(base, "storage");
   const home = join(base, "home");
@@ -232,8 +232,8 @@ const firstRequests = Effect.fn("eval.promptOverhead")(function* () {
           params: { session: session.id },
           headers: {},
           payload: {
-            runId: yield* crypto.randomUUIDv4(),
-            messages: [{ id: yield* crypto.randomUUIDv4(), role: "user", content: "hi" }],
+            runId: yield* crypto.uuidV4(),
+            messages: [{ id: yield* crypto.uuidV4(), role: "user", content: "hi" }],
           },
         }),
       );

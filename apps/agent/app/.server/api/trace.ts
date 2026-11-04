@@ -1,4 +1,5 @@
-import { Crypto, Effect } from "effect";
+import { Effect } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { HttpApiBuilder } from "effect/http-api";
 import { AgentChat } from "memory-agent";
 import { AppApi } from "memory-agent/app-api";
@@ -10,7 +11,7 @@ export const TraceApiHandlers = HttpApiBuilder.group(
   "trace",
   Effect.fn(function* (handlers) {
     const chat = yield* AgentChat;
-    const crypto = yield* Crypto.Crypto;
+    const crypto = yield* SecureRandom.SecureRandom;
 
     return handlers.handleAll({
       sessionTree: ({ params: { session } }) => refusalsOnly(chat.traceTree(session)),
@@ -34,7 +35,7 @@ export const TraceApiHandlers = HttpApiBuilder.group(
             task,
             payload.intent,
             // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
-            payload.idempotencyKey ?? (yield* crypto.randomUUIDv4()),
+            payload.idempotencyKey ?? (yield* crypto.uuidV4()),
           );
         }).pipe(refusalsOnly),
       projectTree: ({ params: { project } }) => refusalsOnly(chat.projectTraceTree(project)),

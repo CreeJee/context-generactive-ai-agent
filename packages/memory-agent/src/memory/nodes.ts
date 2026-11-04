@@ -3,7 +3,6 @@ import { isTruthy } from "../truthy.ts";
 import { NodeCrypto } from "@effect/platform-node";
 import {
   DateTime,
-  Crypto,
   Context,
   Effect,
   Layer,
@@ -12,6 +11,7 @@ import {
   HashSet,
   Array as EffectArray,
 } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { createResultPageReader } from "./result-pages.ts";
 import { hasStatementText } from "./quality.ts";
@@ -176,7 +176,7 @@ export const evidencePageLength = 4000;
 const interpretedKinds = HashSet.fromIterable<NodeKind>(["user"]);
 
 const make = Effect.gen(function* () {
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
   const sql = yield* SqlClient.SqlClient;
   const resultPages = yield* createResultPageReader;
   const supersedeEarlierReads = yield* createSupersededReads;
@@ -265,7 +265,7 @@ const make = Effect.gen(function* () {
           ? idOf(yield* lastInSession(input.sessionId))
           : Option.none();
         const [inserted] = yield* sql`INSERT INTO nodes ${sql.insert({
-          id: yield* crypto.randomUUIDv4(),
+          id: yield* crypto.uuidV4(),
           project_id: input.projectId,
           session_id: input.sessionId,
           run_id: input.runId ?? null,

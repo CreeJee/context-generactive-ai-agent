@@ -1,4 +1,5 @@
-import { Array as Arr, Crypto, Data, Exit, Fiber, HashMap, HashSet, Predicate } from "effect";
+import { Array as Arr, Data, Exit, Fiber, HashMap, HashSet, Predicate } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
 import { Function as EffectFunction } from "effect";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -470,7 +471,7 @@ const make = Effect.gen(function* () {
   const trace = yield* WorkTraceStore;
   const codeTools = yield* CodeTools;
   const runStore = yield* RunStore;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
 
   // A child cut off by a restart is not rerun on its own (R18).
   yield* sql`UPDATE subagents SET status = 'interrupted', updated_at = ${yield* Clock.currentTimeMillis}
@@ -488,7 +489,7 @@ const make = Effect.gen(function* () {
     readonly parentRunId: string;
     readonly task: string;
   }) {
-    const id = yield* stored(crypto.randomUUIDv4());
+    const id = yield* stored(crypto.uuidV4());
     const now = yield* Clock.currentTimeMillis;
     return yield* returned(
       sql`INSERT INTO subagents ${sql.insert({
@@ -817,7 +818,7 @@ const make = Effect.gen(function* () {
       ).pipe(
         Stream.runForEach((event) => Ref.update(progress, (run) => childRunStep(run, event))),
         Effect.provideService(RunStore, runStore),
-        Effect.provideService(Crypto.Crypto, crypto),
+        Effect.provideService(SecureRandom.SecureRandom, crypto),
       );
     }).pipe(Effect.scoped);
 

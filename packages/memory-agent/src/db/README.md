@@ -15,6 +15,7 @@
 - `DatabaseSchemaRejected` / `DatabaseSchemaRejectedReason` — TaggedError와 TaggedUnion. 사유는 InsideTransaction, NewerThanBuild{actual,supported}, MigrationPending{actual,supported}, MetadataMismatch, PreservedRowsChanged, InvalidForeignKeys
 - `sqlClientOver(sqlite, semaphore)` — 앱의 단일 연결 위 런타임 `SqlClient`. prepared statement Cache, `makeSqliteAcquirers`, `BEGIN IMMEDIATE`, `RELEASE SAVEPOINT`를 쓴다
 - `migrationClient(sqlite)` — 시작 마이그레이션 전용 `SqlClient` 어댑터. 트랜잭션은 `SAVEPOINT effect_migrate`로 연다
+- `sqliteDriver` — 두 어댑터의 `SqlClient.driver`(`"memory-agent-sqlite"`). 공식 `@effect/sql-sqlite-node`(`"sqlite-node"`)와 방언은 같지만 잠금을 SQLite 밖에서 기다리므로 이름을 따로 둔다
 - `migrations` — `readonly string[]` 순서형 스키마 SQL 단계. projects, sessions, nodes, edges, nodes_fts, chat_threads, chat_runs, queued_messages, subagents, mcp_trust, agent_trust 등을 정의한다
 - `goalHistoryMigration` — `{ version: 42, kind: "goal-history-binding-fk-rebuild", preservedTables }`. FK 검사를 멈춘 채 참조되는 테이블을 재구성할 수 있는 유일한 단계
 - `tanStackRowsMigration` — SQL 주석뿐인 단계. 시작 시 이 단계와 함께 `migrateTanStackRows`가 실행된다

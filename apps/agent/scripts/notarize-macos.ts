@@ -13,8 +13,10 @@
 // A bare Mach-O executable cannot hold a stapled ticket — only a container can — which is why the
 // deliverable is a .dmg. Notarizing a .zip of the executable also works and needs no container, but
 // then every first launch has to reach Apple's server, and an offline Mac shows the warning anyway.
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Config, Crypto, Effect, FileSystem, Layer, Path, Stream, Schema } from "effect";
+import { Config, Effect, FileSystem, Layer, Path, Stream, Schema } from "effect";
+import { Digest } from "effect/crypto";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { Hex } from "effect/encoding";
 
@@ -32,10 +34,10 @@ class PackagePreflightFailed extends Schema.TaggedError<
 >()("PackagePreflightFailed", { message: Schema.String }) {}
 
 const program = Effect.gen(function* () {
-  const services = yield* Layer.build(NodeServices.layer);
+  const services = yield* Layer.build(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer));
   const fs = yield* Effect.provideContext(FileSystem.FileSystem, services);
   const path = yield* Effect.provideContext(Path.Path, services);
-  const crypto = yield* Effect.provideContext(Crypto.Crypto, services);
+  const crypto = yield* Effect.provideContext(Digest.Digest, services);
   const spawner = yield* Effect.provideContext(ChildProcessSpawner.ChildProcessSpawner, services);
   const { basename, join, relative } = path;
   const app = yield* path.fromFileUrl(new URL("..", import.meta.url));
@@ -135,7 +137,7 @@ const program = Effect.gen(function* () {
     image,
   ]);
 
-  const digest = Hex.encode(yield* crypto.digest("SHA-256", yield* fs.readFile(image)));
+  const digest = Hex.encode(yield* crypto.digest(Digest.sha256, yield* fs.readFile(image)));
   yield* fs.writeFileString(`${image}.sha256`, `${digest}  ${basename(image)}\n`);
   yield* Effect.logInfo(`${relative(app, image)}: notarized and stapled`);
 });

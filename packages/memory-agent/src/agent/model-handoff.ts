@@ -267,7 +267,7 @@ export const modelHandoffHistoryEffect = <M extends ConversationMessage, E>(
         Option.filter(saved, (state) => state.target === options.target),
         {
           onSome: (current) =>
-            HandoffState.match<Effect.Effect<HandoffState, ModelHandoffFailed>>(current, {
+            HandoffState.match(current, {
               baseline: (baseline) => Effect.succeed(baseline),
               handoff: migrate,
             }),
@@ -282,9 +282,7 @@ export const modelHandoffHistoryEffect = <M extends ConversationMessage, E>(
     ): Effect.Effect<ReadonlyArray<M | CompactionMessage> | null, ModelHandoffFailed> =>
       Effect.gen(function* () {
         const state = yield* prepared;
-        return yield* HandoffState.match<
-          Effect.Effect<ReadonlyArray<M | CompactionMessage> | null, ModelHandoffFailed>
-        >(state, {
+        return yield* HandoffState.match(state, {
           baseline: () => Effect.succeed(null),
           handoff: (handoff) =>
             options.toolResultIds(answeredToolCalls(messages)).pipe(

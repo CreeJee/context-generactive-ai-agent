@@ -1,4 +1,5 @@
-import { Array as EffectArray, Crypto, Effect, Equivalence, Option, Ref, Schema } from "effect";
+import { Array as EffectArray, Effect, Equivalence, Option, Ref, Schema } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { StoredMessage } from "../chat-store/schema.ts";
 import {
@@ -67,7 +68,7 @@ const storedAsIs = (published: Option.Option<HistoryGroup>, group: HistoryGroup)
 /** The UI history projection beside the authoritative transcript, on the app's SqlClient. */
 export const historyProjection = Effect.fn("HistoryProjection.make")(function* () {
   const client = yield* SqlClient.SqlClient;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
   yield* client.withTransaction(
     Effect.gen(function* () {
       yield* client.unsafe(historyProjectionSchema).unprepared;
@@ -188,10 +189,7 @@ export const historyProjection = Effect.fn("HistoryProjection.make")(function* (
             ),
           { discard: true },
         );
-        // Without an id the publish cannot be told from an earlier one, so it is not made.
-        const publication = yield* crypto
-          .randomUUIDv4()
-          .pipe(Effect.mapError(() => HistoryPageUnavailable.make({ reason: "not-ready" })));
+        const publication = yield* crypto.uuidV4();
         const published = yield* client.unsafe(`${sql.publishIfCurrent} RETURNING thread_id`, [
           threadId,
           snapshot.sourceJSON,

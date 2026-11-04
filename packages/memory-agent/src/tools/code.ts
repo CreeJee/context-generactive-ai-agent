@@ -121,20 +121,20 @@ const resultOf = (outcome: ProgramOutcome) => {
     outcome.dropped === 0
       ? outcome.logs
       : [...outcome.logs, `(${outcome.dropped} more lines were not kept)`];
-  return ProgramOutcome.match<Effect.Effect<RunCodeResult>>(outcome, {
-    Returned: ({ value }) =>
+  return ProgramOutcome.match(outcome, {
+    Returned: ({ value }): Effect.Effect<RunCodeResult> =>
       decodeValue(value ?? "null").pipe(
         // QuickJS's own JSON.stringify wrote it.
         Effect.orDie,
         Effect.map((decoded) => ({ status: "returned", value: decoded, logs })),
       ),
-    Threw: ({ name, message, line }) =>
+    Threw: ({ name, message, line }): Effect.Effect<RunCodeResult> =>
       Effect.succeed({
         status: "threw",
         error: line === undefined ? `${name}: ${message}` : `${name}: ${message} (line ${line})`,
         logs,
       }),
-    TimedOut: () => Effect.succeed({ status: "timed_out", logs }),
+    TimedOut: (): Effect.Effect<RunCodeResult> => Effect.succeed({ status: "timed_out", logs }),
   });
 };
 

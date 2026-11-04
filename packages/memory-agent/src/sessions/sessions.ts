@@ -1,5 +1,6 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import { Clock, Context, Crypto, DateTime, Effect, Layer, Option, Schema } from "effect";
+import { Clock, Context, DateTime, Effect, Layer, Option, Schema } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { SqlClient, SqlError, SqlSchema } from "effect/sql";
 import { firstMessageTitle } from "./title.ts";
 import { Projects } from "../projects/projects.ts";
@@ -58,7 +59,7 @@ const NewSession = Schema.Struct({
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
   const projects = yield* Projects;
   const isoNow = Effect.map(Clock.currentTimeMillis, (millis) =>
     DateTime.formatIso(DateTime.makeUnsafe(millis)),
@@ -129,7 +130,7 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         yield* projects.get(projectId);
         const row = yield* insert({
-          id: yield* crypto.randomUUIDv4(),
+          id: yield* crypto.uuidV4(),
           projectId,
           title,
           createdAt: yield* isoNow,
@@ -154,7 +155,7 @@ const make = Effect.gen(function* () {
     ) =>
       Effect.gen(function* () {
         const row = yield* insert({
-          id: yield* crypto.randomUUIDv4(),
+          id: yield* crypto.uuidV4(),
           projectId,
           title,
           createdAt,

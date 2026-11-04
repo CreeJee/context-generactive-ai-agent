@@ -180,19 +180,16 @@ const authenticationEntry = (
 ): Pick<OAuthEntry, "clientSecret" | "privateKey"> =>
   authentication === undefined
     ? {}
-    : McpClientAuthentication.match<Pick<OAuthEntry, "clientSecret" | "privateKey">>(
-        authentication,
-        {
-          secret: ({ secret }) => ({ clientSecret: secret }),
-          privateKeyJwt: ({ privateKey, algorithm }) => ({
-            privateKey: { key: privateKey, algorithm },
-          }),
-        },
-      );
+    : McpClientAuthentication.match(authentication, {
+        secret: ({ secret }) => ({ clientSecret: secret }),
+        privateKeyJwt: ({ privateKey, algorithm }) => ({
+          privateKey: { key: privateKey, algorithm },
+        }),
+      });
 
-const oauthEntryOf = McpOAuthConfig.match<OAuthEntry>({
-  authorizationCode: (config) => ({
-    ...McpOAuthClient.match<OAuthEntry>(config.client, {
+const oauthEntryOf = McpOAuthConfig.match({
+  authorizationCode: (config): OAuthEntry => ({
+    ...McpOAuthClient.match(config.client, {
       automatic: (client) => optionalProperty("clientMetadataUrl", client.metadataUrl),
       registered: (client) => ({
         clientId: client.clientId,
@@ -203,7 +200,7 @@ const oauthEntryOf = McpOAuthConfig.match<OAuthEntry>({
     ...optionalProperty("callbackPort", config.callbackPort),
     ...optionalProperty("scope", config.scope),
   }),
-  clientCredentials: (config) => ({
+  clientCredentials: (config): OAuthEntry => ({
     grant: "client_credentials",
     clientId: config.clientId,
     issuer: config.issuer,

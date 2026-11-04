@@ -10,7 +10,6 @@ import {
   Array as Arr,
   Cause,
   Context,
-  Crypto,
   Deferred,
   Fiber,
   Effect,
@@ -28,6 +27,7 @@ import {
   Scope,
   Exit,
 } from "effect";
+import { Digest, SecureRandom } from "effect/crypto";
 import { NetAddress } from "effect/net";
 import { JsonValue } from "../json.ts";
 import { type KeyringFailure, openKeyringEntry } from "../runtime/keyring.ts";
@@ -152,7 +152,11 @@ export const createKeychainCredentialStore = <E>(
 });
 
 type KeychainEntryFailure = OAuthHarnessError | KeyringFailure;
-type KeychainPlatform = FileSystem.FileSystem | Path.Path | Crypto.Crypto;
+type KeychainPlatform =
+  | FileSystem.FileSystem
+  | Path.Path
+  | SecureRandom.SecureRandom
+  | Digest.Digest;
 
 /** The OS vault entry of a provider's account; on Windows a long credential is kept in fragments. */
 const keychainEntry =
@@ -626,16 +630,17 @@ export const createSubscriptionOAuthClient = Effect.fnUntraced(function* (
 ): Effect.fn.Return<
   SubscriptionOAuthClient,
   never,
-  Crypto.Crypto | ChildProcessSpawner.ChildProcessSpawner
+  SecureRandom.SecureRandom | Digest.Digest | ChildProcessSpawner.ChildProcessSpawner
 > {
   const { protocol, store } = options;
   const fetcher = options.fetch ?? fetch;
   const now = options.now ?? Date.now;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const withCrypto = Effect.provideService(Crypto.Crypto, crypto);
-  // A failed random source is a defect: nothing here could recover from it.
-  const requestId = Effect.orDie(crypto.randomUUIDv4());
+  const withCrypto = Effect.provideContext(
+    yield* Effect.context<SecureRandom.SecureRandom | Digest.Digest>(),
+  );
+  const requestId = crypto.uuidV4();
   const anthropicSessionId = yield* requestId;
   const proxyFetch =
     options.tokenProxyFetch ??
@@ -677,11 +682,9 @@ export const createSubscriptionOAuthClient = Effect.fnUntraced(function* (
   const startLogin = Effect.fn("OAuth.startLogin")(function* (
     loginOptions: { readonly timeoutMs?: number } = {},
   ): Effect.fn.Return<LoginAttempt, OAuthHarnessError> {
-    const pkce = yield* Effect.orDie(withCrypto(createPkce));
+    const pkce = yield* withCrypto(createPkce);
     const state =
-      protocol.provider === "anthropic"
-        ? pkce.verifier
-        : yield* Effect.orDie(withCrypto(createOAuthState));
+      protocol.provider === "anthropic" ? pkce.verifier : yield* withCrypto(createOAuthState);
     yield* Effect.when(
       Effect.fail(OAuthHarnessError.fromCode("login_in_progress")),
       Ref.getAndSet(loginActive, true),

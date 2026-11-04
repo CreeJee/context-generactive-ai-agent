@@ -1,6 +1,5 @@
 import {
   Context,
-  Crypto,
   Data,
   Deferred,
   Effect,
@@ -10,6 +9,7 @@ import {
   Ref,
   SynchronizedRef,
 } from "effect";
+import { Digest, SecureRandom } from "effect/crypto";
 import { ChildProcessSpawner } from "effect/process";
 import {
   createProfileCredentialStore,
@@ -56,8 +56,10 @@ export const createOAuthAccountLoginManager = Effect.fnUntraced(function* (optio
 }) {
   const store = options.profiles;
   const vault = yield* OAuthKeychain;
-  const crypto = yield* Crypto.Crypto;
-  const platform = yield* Effect.context<Crypto.Crypto | ChildProcessSpawner.ChildProcessSpawner>();
+  const crypto = yield* SecureRandom.SecureRandom;
+  const platform = yield* Effect.context<
+    SecureRandom.SecureRandom | Digest.Digest | ChildProcessSpawner.ChildProcessSpawner
+  >();
   const accounts = options.accounts ?? createProfileCredentialStore(vault.profileStore);
   const startLogin: LoginStarter =
     options.startLogin ??
@@ -183,7 +185,7 @@ export const createOAuthAccountLoginManager = Effect.fnUntraced(function* (optio
     if (label.trim().length === 0 || label.length > 80)
       return yield* OAuthProfileRejected.make({ reason: "invalid_oauth_profile" });
     const attempt: Attempt = {
-      id: yield* Effect.orDie(crypto.randomUUIDv4()),
+      id: yield* crypto.uuidV4(),
       label: label.trim(),
       cancelled: yield* Ref.make(false),
       login: yield* Ref.make(Option.none<LoginAttempt>()),

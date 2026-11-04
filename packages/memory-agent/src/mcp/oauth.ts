@@ -22,7 +22,6 @@ import {
 } from "@modelcontextprotocol/client";
 import {
   Cause,
-  Crypto,
   Data,
   Deferred,
   Effect,
@@ -37,6 +36,7 @@ import {
   Semaphore,
   SynchronizedRef,
 } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { NetAddress } from "effect/net";
 import { SecretStore, type SecretName, type SecretStoreFailed } from "../config/secrets.ts";
@@ -238,7 +238,7 @@ const registeredClient = (
     });
   return authentication === undefined
     ? Effect.succeed({ registered: client(undefined), addClientAuthentication: undefined })
-    : McpClientAuthentication.match<Registration>(authentication, {
+    : McpClientAuthentication.match(authentication, {
         secret: ({ secret }) =>
           Effect.map(expand(secret), (value) => ({
             registered: client(value),
@@ -259,9 +259,9 @@ const registeredClient = (
 
 type Setup = Effect.Effect<ClientSetup, MissingVariable>;
 
-const setupOf = McpOAuthConfig.match<Setup>({
-  authorizationCode: (login) =>
-    McpOAuthClient.match<Setup>(login.client, {
+const setupOf = McpOAuthConfig.match({
+  authorizationCode: (login): Setup =>
+    McpOAuthClient.match(login.client, {
       automatic: (client) =>
         Effect.succeed({
           interactive: true,
@@ -283,7 +283,7 @@ const setupOf = McpOAuthConfig.match<Setup>({
           }),
         ),
     }),
-  clientCredentials: (machine) =>
+  clientCredentials: (machine): Setup =>
     Effect.map(
       registeredClient(machine.clientId, machine.issuer, machine.authentication),
       (registered) => ({
@@ -367,9 +367,9 @@ export const openMcpCredentials = Effect.fnUntraced(function* (options: {
   readonly url: URL;
   readonly config: McpOAuthConfig;
   readonly binding: string;
-}): Effect.fn.Return<McpCredentials, MissingVariable, SecretStore | Crypto.Crypto> {
+}): Effect.fn.Return<McpCredentials, MissingVariable, SecretStore | SecureRandom.SecureRandom> {
   const secrets = yield* SecretStore;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
   const setup = yield* setupOf(options.config);
   const empty: StoredLogin = { binding: options.binding };
   /** The stored login, read from the keychain on first use; `None` until then. */
@@ -695,9 +695,7 @@ export const openMcpCredentials = Effect.fnUntraced(function* (options: {
         : failWith({ code: "callback_port_unavailable", detail: null });
       const authority = `${loopbackHost}:${port}`;
       const redirectUrl = `http://${authority}${callbackPath}`;
-      const state = yield* crypto
-        .randomUUIDv4()
-        .pipe(Effect.mapError(loginFailureOf), Effect.catch(failWith));
+      const state = yield* crypto.uuidV4();
       const authorizationUrl = yield* Deferred.make<URL>();
       const provider = providerFor(Flow.login({ redirectUrl, state, authorizationUrl }));
       const { challenge } = yield* current.pipe(

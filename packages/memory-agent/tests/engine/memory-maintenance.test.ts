@@ -1,4 +1,5 @@
-import { Crypto, Deferred, Effect, Fiber, FileSystem, Layer, Path, Scope, Stream } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Layer, Path, Scope, Stream } from "effect";
+import { Digest } from "effect/crypto";
 import { expect } from "vite-plus/test";
 import { EmbedderRuntime, Embedder } from "../../src/memory/embedding/embedder.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
@@ -103,8 +104,8 @@ alone("a failed index save resumes targeted removals without rebuilding valid ve
     yield* indexAll;
     const before = yield* vectorCount;
     const embedder = yield* Embedder;
-    const digest = yield* (yield* Crypto.Crypto).digest(
-      "SHA-256",
+    const digest = yield* (yield* Digest.Digest).digest(
+      Digest.sha256,
       new TextEncoder().encode(embedder.identity),
     );
     const directory = Buffer.from(digest).toString("hex").slice(0, 16);

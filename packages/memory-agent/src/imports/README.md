@@ -64,7 +64,7 @@
 - 파일 시스템: `Checkouts`가 `readDirectory`·`stat`·`exists`·canonical path를 읽는다. `sources.ts`와 `lines.ts`(읽지 않음)는 그래프 심볼 기준으로 home 아래 transcript 파일을 찾고, offset부터 읽고, zstd를 푼다.
 - 이벤트: `Importer`가 진행 상태가 바뀔 때 `AppEvents.publishGlobal("imports")`를 발행한다.
 - 타이머: `Importer`의 watcher는 `pollEvery = "5 minutes"` 간격으로 pass를 돌린다. `worker.ts`에는 `progressEveryMs` 상수가 있다.
-- Crypto: `BulkNodes`가 node id를 `Crypto.randomUUIDv4`로 만든다.
+- 난수: `BulkNodes`가 node id를 `SecureRandom.uuidV4`로 만든다.
 - 환경/홈: `Importer.layer`는 home을 주지 않으면 `homeDirectory`를 쓰고, worker 시작 인자로 `storageRoot`와 `home`을 넘긴다.
 
 ## Verification

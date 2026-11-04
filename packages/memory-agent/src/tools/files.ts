@@ -9,7 +9,6 @@ import {
   Option,
   Ref,
   Context,
-  Crypto,
   Effect,
   Fiber,
   FileSystem,
@@ -17,6 +16,7 @@ import {
   Layer,
   Schema,
 } from "effect";
+import { Digest, SecureRandom } from "effect/crypto";
 import { gitGrepFilesEffect } from "../files/git-grep.ts";
 import {
   listProjectFilesEffect,
@@ -223,7 +223,9 @@ const replaced = (edit: {
 const make = Effect.gen(function* () {
   const redactor = yield* SecretRedactor;
   const snapshots = yield* createSnapshots();
-  const platform = yield* Effect.context<FileSystem.FileSystem | Crypto.Crypto>();
+  const platform = yield* Effect.context<
+    FileSystem.FileSystem | SecureRandom.SecureRandom | Digest.Digest
+  >();
   const unexpired = <E, R>(lookup: Effect.Effect<Snapshot | undefined, E, R>, expired: string) =>
     Effect.flatMap(lookup, (found) =>
       Effect.fromOption(

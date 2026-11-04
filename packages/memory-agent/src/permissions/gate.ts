@@ -1,4 +1,5 @@
-import { Context, Crypto, Effect, HashSet, Layer, Match, Option } from "effect";
+import { Context, Effect, HashSet, Layer, Match, Option } from "effect";
+import { SecureRandom } from "effect/crypto";
 import type { StoredInterruptPayload } from "../chat-store/schema.ts";
 import type { JsonValue } from "../json.ts";
 import { asRunFailed, type RunHook } from "../loop/run.ts";
@@ -154,7 +155,7 @@ const gateFor = Effect.fnUntraced(function* (binding: GateBinding) {
 /** The interrupt that asks the user about a gated call. */
 const askUser = (call: GatedCall, { reason, askedBy }: Asking) =>
   Effect.map(
-    Effect.flatMap(Crypto.Crypto, (crypto) => crypto.randomUUIDv7()),
+    Effect.flatMap(SecureRandom.SecureRandom, (crypto) => crypto.uuidV7()),
     (id): Admission<StoredInterruptPayload> =>
       CallOutcome.Waiting({
         request: {
@@ -181,7 +182,11 @@ const askUser = (call: GatedCall, { reason, askedBy }: Asking) =>
  */
 export const makePermissionGateHook = Effect.fnUntraced(function* (
   binding: GateBinding,
-): Effect.fn.Return<RunHook<Crypto.Crypto>, never, PermissionClassifier | PermissionReviews> {
+): Effect.fn.Return<
+  RunHook<SecureRandom.SecureRandom>,
+  never,
+  PermissionClassifier | PermissionReviews
+> {
   const gate = yield* gateFor(binding);
   return {
     // A cancelled question counts as the user's refusal.

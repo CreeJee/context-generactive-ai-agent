@@ -2,7 +2,8 @@ import { Array as EffectArray, Option, Predicate } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { NodeCrypto } from "@effect/platform-node";
-import { Clock, Context, Crypto, Effect, Layer, Schema } from "effect";
+import { Clock, Context, Effect, Layer, Schema } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { Nodes } from "./nodes.ts";
 
@@ -97,7 +98,7 @@ const stored = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   );
 
 const make = Effect.gen(function* () {
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
   const sql = yield* SqlClient.SqlClient;
   const nodes = yield* Nodes;
   const nowMillis = Clock.currentTimeMillis;
@@ -269,8 +270,8 @@ const make = Effect.gen(function* () {
             status,
           });
           if (Option.isSome(found)) return yield* candidateByDecision(found.value.id);
-          const decisionId = yield* crypto.randomUUIDv4();
-          const candidateId = yield* crypto.randomUUIDv4();
+          const decisionId = yield* crypto.uuidV4();
+          const candidateId = yield* crypto.uuidV4();
           const createdAt = yield* nowMillis;
           const memoryNode =
             status === "saved" || status === "edited_saved"
@@ -320,7 +321,7 @@ const make = Effect.gen(function* () {
       candidates,
       Effect.fnUntraced(function* (candidate) {
         yield* sql`INSERT OR IGNORE INTO memory_usage_events ${sql.insert({
-          id: yield* crypto.randomUUIDv4(),
+          id: yield* crypto.uuidV4(),
           project_id: input.projectId,
           candidate_id: candidate.id,
           memory_node_id: candidate.memory_node_id,

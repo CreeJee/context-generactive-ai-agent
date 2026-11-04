@@ -1,4 +1,5 @@
-import { Crypto, DateTime, Effect, Option, Schema } from "effect";
+import { DateTime, Effect, Option, Schema } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { SqlClient, SqlSchema } from "effect/sql";
 
 export interface ReportSessionBinding {
@@ -15,7 +16,7 @@ export const openReportSession = Effect.fn("openReportSession")(function* (
   sourceSessionId: string,
 ) {
   const sql = yield* SqlClient.SqlClient;
-  const id = yield* (yield* Crypto.Crypto).randomUUIDv4();
+  const id = yield* (yield* SecureRandom.SecureRandom).uuidV4();
   const createdAt = DateTime.formatIso(yield* DateTime.now);
   const source = SqlSchema.findOneOption({
     Request: Source,

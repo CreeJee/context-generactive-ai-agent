@@ -69,7 +69,7 @@
 - 파일시스템(키링): 비밀 파일 `<hash>.secret` 읽기·쓰기·삭제, 키 파일 읽기, 임시 파일 rename
 - 파일시스템(호스트): `findExecutable`과 `shellInvocation`이 후보 경로를 `fs.stat`으로 확인함
 - OS 키체인: `@napi-rs/keyring` `AsyncEntry`의 getPassword/setPassword/deletePassword/deleteCredential
-- 암호화: Web Crypto AES-GCM importKey/encrypt/decrypt, `crypto.getRandomValues`로 IV 생성, Effect `Crypto.digest`로 SHA-256/SHA-512 계산
+- 암호화: Web Crypto AES-GCM importKey/encrypt/decrypt, `crypto.getRandomValues`로 IV 생성, Effect `Digest.digestHex`로 SHA-256/SHA-512 계산
 - node:os 읽기: homedir, tmpdir, totalmem, availableParallelism, platform, arch
 - AbortSignal에 `abort` 리스너를 등록함(`aborted`는 해제 시 제거, `abortControllerFor`는 once). 새 AbortController를 만듦
 - 재시도 타이머: 포화 재시도(50ms 지수, 최대 2초, jitter), 삭제 재시도(200ms×(n+1), 최대 10회), win32 rename 재시도(500ms, 19회)

@@ -1,4 +1,5 @@
-import { Crypto, Effect, HashSet, Ref, Schema } from "effect";
+import { Effect, HashSet, Ref, Schema } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { expect } from "vite-plus/test";
 import type { RunHook } from "../../src/loop/run.ts";
 import { PermissionClassifier } from "../../src/permissions/classifier.ts";
@@ -56,12 +57,12 @@ const countedTool = Effect.fnUntraced(function* (name: string) {
 
 /** One model turn that calls `tool` with `id` and `argumentsJson`, through the gate. */
 const gatedRun = Effect.fnUntraced(function* (
-  gate: RunHook<Crypto.Crypto>,
+  gate: RunHook<SecureRandom.SecureRandom>,
   tool: RunTool,
   id: string,
   argumentsJson: string,
 ) {
-  const runId = yield* Effect.flatMap(Crypto.Crypto, (crypto) => crypto.randomUUIDv7());
+  const runId = yield* Effect.flatMap(SecureRandom.SecureRandom, (crypto) => crypto.uuidV7());
   yield* scriptedRun({
     turns: [
       { toolCalls: [{ id, name: tool.tool.name, arguments: argumentsJson }] },

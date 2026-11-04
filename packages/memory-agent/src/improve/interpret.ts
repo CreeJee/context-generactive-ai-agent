@@ -1,5 +1,6 @@
 import { AuthConnectionState } from "../providers/contracts.ts";
-import { Context, Crypto, Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
+import { Context, Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { singleAnswerParts } from "../model/single-call.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import { type ImprovementItem, ItemInterpretation } from "./contracts.ts";
@@ -96,7 +97,7 @@ export const parseInterpretation = (answer: string) =>
 
 const make = Effect.gen(function* () {
   const active = yield* ActiveProvider;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
   const unavailable = (cause: unknown) =>
     InterpretationUnavailable.make({ reason: "model_unavailable", cause });
 
@@ -149,7 +150,7 @@ const make = Effect.gen(function* () {
     ) {
       const failed = (reason: "model_failed" | "invalid_answer") =>
         Option.some<ItemInterpretation>(ItemInterpretation.cases.failed.make({ reason }));
-      return yield* crypto.randomUUIDv4().pipe(
+      return yield* crypto.uuidV4().pipe(
         Effect.flatMap((threadId) => answer(item, threadId)),
         Effect.matchEffect({
           onFailure: (cause) =>

@@ -1,17 +1,8 @@
 import { isTruthy } from "../truthy.ts";
 import { Semaphore } from "effect";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import {
-  Array as Arr,
-  Cause,
-  Context,
-  Crypto,
-  Effect,
-  Layer,
-  Option,
-  Schema,
-  Stream,
-} from "effect";
+import { Array as Arr, Cause, Context, Effect, Layer, Option, Schema, Stream } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { singleAnswer } from "../model/single-call.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import { AuthConnectionState, type ModelSelection } from "../providers/contracts.ts";
@@ -89,7 +80,7 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
   const runStore = yield* RunStore;
   const active = yield* ActiveProvider;
   const usageLedger = yield* ApiUsage;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
   const config = yield* GlobalConfig;
   const oneAtATime = yield* Semaphore.make(1);
   const startPercent = Effect.map(
@@ -109,7 +100,7 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
       .map(nodeLine)
       .join("\n\n")
       .slice(0, inputCharacters);
-    const threadId = yield* crypto.randomUUIDv4();
+    const threadId = yield* crypto.uuidV4();
     const answer = yield* singleAnswer({
       runtime: services.runtime,
       selection: cheap,

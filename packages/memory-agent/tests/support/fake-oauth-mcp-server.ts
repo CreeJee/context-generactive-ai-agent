@@ -1,5 +1,6 @@
 import { createMcpHandler, Server } from "@modelcontextprotocol/server";
-import { Crypto, Effect, HashSet, Option, Ref, Schema } from "effect";
+import { Effect, HashSet, Option, Ref, Schema } from "effect";
+import { Digest } from "effect/crypto";
 import { Base64Url } from "effect/encoding";
 import { UrlParams } from "effect/http";
 import { JsonValue } from "../../src/json.ts";
@@ -14,7 +15,7 @@ import { HttpServerRequest, HttpServerResponse, testHttpServer } from "./http.ts
 const decodeMetadata = Schema.decodeUnknownEffect(Schema.Record(Schema.String, JsonValue));
 
 export const fakeOAuthMcpServer = Effect.gen(function* () {
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* Digest.Digest;
   /** Access tokens the server accepts. */
   const valid = yield* Ref.make(HashSet.empty<string>());
   const issued = yield* Ref.make(0);
@@ -105,7 +106,10 @@ export const fakeOAuthMcpServer = Effect.gen(function* () {
           return yield* issue;
         }
         const verified = Base64Url.encode(
-          yield* crypto.digest("SHA-256", new TextEncoder().encode(field("code_verifier") ?? "")),
+          yield* crypto.digest(
+            Digest.sha256,
+            new TextEncoder().encode(field("code_verifier") ?? ""),
+          ),
         );
         return field("code") === "fake-code" && Option.contains(yield* Ref.get(challenge), verified)
           ? yield* issue

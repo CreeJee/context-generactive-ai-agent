@@ -24,7 +24,6 @@ import { optionalProperty } from "../src/optional-property.ts";
 import { Tool, Toolkit } from "effect/ai";
 import { GlobalConfig } from "../src/config/global-config.ts";
 import { ActiveProvider } from "../src/providers/active-provider.ts";
-import { ModelUnavailable } from "../src/providers/contracts.ts";
 import { ProviderRegistry } from "../src/providers/registry.ts";
 import { describe, expect } from "vite-plus/test";
 import type { Settings } from "../src/config/global-config.ts";
@@ -51,7 +50,7 @@ function singleEndpointSettings(options: {
   const api = makeOpenAICompatibleSettings({
     config: options.config,
     keys: () => options.keys,
-    crypto: webCrypto,
+    ...webCrypto,
     fetcher: options.fetcher,
   });
   // Read from the config so locating the endpoint never touches a gated keychain.
@@ -870,14 +869,22 @@ describe("OpenAI compatible settings", () => {
           { startImmediately: true },
         );
         yield* Deferred.await(writing);
-        const selection = yield* Effect.forkChild(
-          Effect.flip(api.services.models.select(configuration.model)),
-          { startImmediately: true },
-        );
+        const selection = yield* Effect.forkChild(api.services.models.select(configuration.model), {
+          startImmediately: true,
+        });
+        // The key write holds the permit, so the selection waits for it.
+        expect(selection.pollUnsafe()).toBeUndefined();
         yield* Deferred.succeed(gate, undefined);
         yield* Fiber.join(changing);
-        expect(yield* Fiber.join(selection)).toBeInstanceOf(ModelUnavailable);
-        expect(yield* api.services.models.selected).toBeNull();
+        // Permits go in order: the selection runs after the connection step and before the model
+        // steps queued behind it, so it still finds the old model. Removing that model then moves
+        // the selection to the one that replaced it.
+        expect((yield* Fiber.join(selection)).model).toBe(configuration.model);
+        expect(yield* api.services.models.selected).toEqual({
+          provider: "openai-compatible",
+          model: "new-model",
+          reasoningEffort: "default",
+        });
         expect((yield* api.services.models.list)[0]?.id).toBe("new-model");
       }),
     ),
@@ -1146,7 +1153,7 @@ describe("OpenAI compatible settings", () => {
                 () => void (value === null ? stored.delete(entry) : stored.set(entry, value)),
               ),
           }),
-          crypto: webCrypto,
+          ...webCrypto,
         });
         const legacy = (yield* api.status).accounts;
         expect(legacy).toMatchObject([

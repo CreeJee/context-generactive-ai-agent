@@ -2,8 +2,9 @@ import { runNativeEffect } from "../src/runtime/native-effect.ts";
 import { Console, Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../src/truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { NodeServices } from "@effect/platform-node";
-import { Context, Crypto, FileSystem, MutableRef } from "effect";
+import { NodeCrypto, NodeServices } from "@effect/platform-node";
+import { Context, FileSystem, MutableRef } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { nodePlatform, nodePlatformLayer } from "../src/runtime/node-platform.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { path } from "../src/runtime/synchronous-path.ts";
@@ -106,9 +107,9 @@ const estimatedInputTokens = MutableRef.make(0);
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "optimized-guidance") {
-  const platform = yield* Layer.build(NodeServices.layer);
+  const platform = yield* Layer.build(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer));
   const fs = Context.get(platform, FileSystem.FileSystem);
-  const crypto = Context.get(platform, Crypto.Crypto);
+  const crypto = Context.get(platform, SecureRandom.SecureRandom);
   const base = yield* fs.makeTempDirectoryScoped({ prefix: "delegation-live-eval-" });
   const projectRoot = join(base, "project");
   const home = join(base, "home");
@@ -231,8 +232,8 @@ const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "opt
         params: { session: services.session.id },
         headers: {},
         payload: {
-          runId: yield* crypto.randomUUIDv4(),
-          messages: [{ id: yield* crypto.randomUUIDv4(), role: "user", content: prompt }],
+          runId: yield* crypto.uuidV4(),
+          messages: [{ id: yield* crypto.uuidV4(), role: "user", content: prompt }],
         },
       })
       .pipe(Effect.flatMap(Stream.runCollect)),

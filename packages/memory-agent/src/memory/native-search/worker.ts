@@ -140,7 +140,7 @@ const owner = Effect.gen(function* () {
       });
     const ids = (values: readonly string[]) =>
       decodeIds(values).pipe(Effect.mapError(() => fail("invalid-input")));
-    return yield* OwnerCommand.match<Effect.Effect<OwnerReply, NativeOwnerFailed>>(command, {
+    return yield* OwnerCommand.match(command, {
       add: (command) =>
         Effect.gen(function* () {
           yield* ids(command.ids);

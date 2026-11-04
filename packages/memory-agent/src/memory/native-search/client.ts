@@ -5,7 +5,6 @@ import { ignoreLogged } from "../../runtime/logged-failures.ts";
 import {
   Cause,
   Context,
-  Crypto,
   Data,
   Deferred,
   Duration,
@@ -23,6 +22,7 @@ import {
   Scope,
   Semaphore,
 } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { RpcClient } from "effect/rpc";
 import {
   NativeOwnerFailed,
@@ -183,10 +183,8 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
   const validated = yield* Schema.decodeEffect(OwnerSetup)(setup).pipe(
     Effect.mapError(() => NativeOwnerFailed.make({ reason: "invalid-input" })),
   );
-  const crypto = yield* Crypto.Crypto;
-  const ownerKey = yield* crypto
-    .randomUUIDv4()
-    .pipe(Effect.mapError(() => NativeOwnerFailed.make({ reason: "worker-error" })));
+  const crypto = yield* SecureRandom.SecureRandom;
+  const ownerKey = yield* crypto.uuidV4();
   const transport = yield* connect({ setup: { ...validated, ownerKey }, workerFile });
   const state = yield* Ref.make<State>(State.open({ jobs: HashMap.empty() }));
   const slot = yield* Semaphore.make(1);
@@ -250,7 +248,7 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
         ? Option.map(HashMap.get(current.jobs, job.command.requestId), (entry) => entry.phase)
         : Option.none(),
     );
-  const sizeOf = OwnerReply.match<Option.Option<number>>({
+  const sizeOf = OwnerReply.match({
     ack: (reply) => Option.some(reply.size),
     removed: (reply) => Option.some(reply.size),
     "vector-hits": (reply) => Option.some(reply.size),
@@ -335,7 +333,7 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
       return yield* NativeOwnerFailed.make({ reason: "input-budget" });
     const result = yield* Deferred.make<OwnerReply, NativeOwnerFailed>();
     // Owned copies: the transport transfers their buffers to the worker.
-    const owned = OwnerCommand.match<OwnerCommand>(input, {
+    const owned = OwnerCommand.match(input, {
       add: (input) => ({
         ...input,
         vectors: new Float32Array(input.vectors),
@@ -451,9 +449,7 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
     command: OwnerCommand,
     admission?: Deferred.Deferred<ReadAdmission, NativeOwnerFailed>,
   ) {
-    const token = yield* crypto
-      .randomUUIDv4()
-      .pipe(Effect.mapError(() => NativeOwnerFailed.make({ reason: "worker-error" })));
+    const token = yield* crypto.uuidV4();
     const controlled = (budget: number) =>
       requireRuntime("turbovec").pipe(
         Effect.mapError(() => NativeOwnerFailed.make({ reason: "invalid-input" })),
@@ -491,7 +487,7 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
         ),
       );
     return yield* Effect.acquireUseRelease(
-      OwnerCommand.match<Effect.Effect<Option.Option<RequestControl>, NativeOwnerFailed>>(command, {
+      OwnerCommand.match(command, {
         "memory-search": (command) => controlled(command.input.remainingMs),
         "vector-search-controlled": (command) => controlled(command.budgetMs),
         add: () => Effect.succeedNone,

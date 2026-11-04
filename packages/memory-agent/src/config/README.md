@@ -21,7 +21,7 @@ memory-agent의 사용자 전역 설정 계층이다. `<storage>/config.json`(`G
 - `KanbanSettingsRefused` — 범위 밖 값(`concurrency_out_of_range`) 거부 오류
 - `KanbanConcurrencySetting` — `configured: Option<number>`와 실제 적용값 `effective`
 - `defaultKanbanConcurrency(cores)` — 코어 절반, 최소 1·최대 4
-- `SecretStore` — 비밀값 get/set/remove 서비스. `SecretStore.keychain`(OS 키체인, FileSystem·Path·Crypto 요구)과 `SecretStore.memory`(테스트용 메모리) 레이어
+- `SecretStore` — 비밀값 get/set/remove 서비스. `SecretStore.keychain`(OS 키체인, FileSystem·Path·SecureRandom·Digest 요구)과 `SecretStore.memory`(테스트용 메모리) 레이어
 - `SecretStoreApi` / `SecretStoreFailed` / `SecretName` — 비밀 저장소 API 타입, operation(`read`|`write`|`delete`) 실패 오류, 비밀 이름(`kagi-api-key`, MCP 서버 로그인 `mcp-oauth:<scope>:<프로젝트 id>:<서버 이름>`)
 - `keychainService` — 키체인 서비스 이름 상수 `context-generactive-agent`
 - `StorageRoot` — DB·벡터 인덱스·모델·설정을 담는 디렉터리 경로 서비스. `StorageRoot.layer(path)`와 `StorageRoot.home` 레이어

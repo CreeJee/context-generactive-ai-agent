@@ -33,7 +33,7 @@
 - `setArchived`는 메시지·메모리·검색을 건드리지 않고 archived_at만 바꾼다; 보관된 세션도 메모리의 일부로 남는다.
 - `list`는 archived 여부로 서로 배타적인 집합을 돌려준다: 기본은 보관 안 된 것만, archived=true면 보관된 것만.
 - `create`는 `projects.get`으로 프로젝트 등록 여부를 먼저 확인한다; `createImported`는 확인하지 않는다.
-- 세션 id는 `Crypto.randomUUIDv4`로 만들고 시각은 `Clock.currentTimeMillis`에서 ISO 문자열로 만든다 (`Date.now` 직접 사용 없음).
+- 세션 id는 `SecureRandom.uuidV4`로 만들고 시각은 `Clock.currentTimeMillis`에서 ISO 문자열로 만든다 (`Date.now` 직접 사용 없음).
 - lease는 메모리(`Ref<HashMap>`)에만 있다; 재시작 뒤에는 세션을 연 페이지가 다음 갱신 때 다시 claim한다.
 - claim은 `Ref.modify` 한 번으로 원자적으로 판정한다: 다른 holder의 live lease가 있으면 거절되어 동시에 두 페이지가 이길 수 없다.
 - lease는 now - renewedAt < ttlMs일 때만 live이다; 만료 lease는 `live()` 조회 때 지워진다.

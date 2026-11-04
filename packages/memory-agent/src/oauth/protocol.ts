@@ -1,4 +1,5 @@
-import { Crypto, Data, Effect, Function as EffectFunction } from "effect";
+import { Data, Effect, Function as EffectFunction } from "effect";
+import { Digest, SecureRandom } from "effect/crypto";
 import { optionalProperty } from "../optional-property.ts";
 import { Option, Schema } from "effect";
 import { JsonValue } from "../json.ts";
@@ -158,17 +159,18 @@ export interface Pkce {
 const base64Url = (value: Uint8Array) => Buffer.from(value).toString("base64url");
 
 export const createPkce = Effect.gen(function* () {
-  const crypto = yield* Crypto.Crypto;
-  const verifier = base64Url(yield* crypto.randomBytes(48));
+  const random = yield* SecureRandom.SecureRandom;
+  const digest = yield* Digest.Digest;
+  const verifier = base64Url(yield* random.randomBytes(48));
   const pkce: Pkce = {
     verifier,
-    challenge: base64Url(yield* crypto.digest("SHA-256", new TextEncoder().encode(verifier))),
+    challenge: base64Url(yield* digest.digest(Digest.sha256, new TextEncoder().encode(verifier))),
   };
   return pkce;
 });
 
 export const createOAuthState = Effect.map(
-  Effect.flatMap(Effect.service(Crypto.Crypto), (crypto) => crypto.randomBytes(32)),
+  Effect.flatMap(Effect.service(SecureRandom.SecureRandom), (random) => random.randomBytes(32)),
   base64Url,
 );
 

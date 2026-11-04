@@ -4,7 +4,6 @@ import { waitUntil } from "./support/wait-until.ts";
 import {
   Clock,
   Context,
-  type Crypto,
   Deferred,
   Effect,
   Fiber,
@@ -13,6 +12,7 @@ import {
   MutableRef,
   Option,
 } from "effect";
+import type { Digest, SecureRandom } from "effect/crypto";
 import type { ChildProcessSpawner } from "effect/process";
 import { describe, expect, vi } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
@@ -108,7 +108,7 @@ describe("multi-account OAuth login manager", () => {
       Effect.gen(function* () {
         const { profiles, accounts, slot, slots } = yield* fixture();
         const platform = yield* Effect.context<
-          Crypto.Crypto | ChildProcessSpawner.ChildProcessSpawner
+          SecureRandom.SecureRandom | Digest.Digest | ChildProcessSpawner.ChildProcessSpawner
         >();
         const gate = yield* Deferred.make<void>();
         const exchanging = yield* Deferred.make<void>();

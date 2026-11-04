@@ -1,4 +1,5 @@
-import { Crypto, Layer } from "effect";
+import { Layer } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { FetchHttpClient } from "effect/http";
 import { Atom } from "effect/reactivity";
 import { ChatApiClient } from "memory-agent/chat-session";
@@ -14,6 +15,6 @@ export const chatRuntime = Atom.runtime(
   Layer.mergeAll(
     ChatApiClient.layer.pipe(Layer.provide(FetchHttpClient.layer)),
     Layer.succeed(FetchHttpClient.Fetch, appFetch),
-    Layer.succeed(Crypto.Crypto, browserCrypto),
+    Layer.succeed(SecureRandom.SecureRandom, browserCrypto),
   ),
 );

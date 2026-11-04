@@ -25,6 +25,12 @@ const sqlError = (cause: unknown) =>
 const beginTransaction = "BEGIN IMMEDIATE";
 
 /**
+ * `SqlClient.driver` of the app's clients. They are not `@effect/sql-sqlite-node` (`"sqlite-node"`):
+ * they share its dialect but wait out locks outside SQLite, so they carry a name of their own.
+ */
+export const sqliteDriver = "memory-agent-sqlite";
+
+/**
  * Another connection's lock is waited out between attempts, never inside SQLite, whose wait
  * (`busy_timeout`, 0 here) blocks the thread. A failed attempt only looks at the lock, so it asks
  * often: at most every 30ms with jitter, for up to half a minute. The import worker's long writes
@@ -143,6 +149,7 @@ export const sqlClientOver = Effect.fn("sqlClientOver")(function* (
     acquirer,
     transactionAcquirer,
     onCommitFailure,
+    driver: sqliteDriver,
     compiler: Statement.makeCompilerSqlite(),
     spanAttributes: [["db.system", "sqlite"]],
     beginTransaction,

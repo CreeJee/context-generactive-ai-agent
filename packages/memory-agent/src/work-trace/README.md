@@ -50,7 +50,7 @@
 
 - SQLite 읽기·쓰기(`effect/sql` `SqlClient`): task, invocation, attempt, run event, heartbeat, artifact, 부모 알림, final answer claim, lifecycle operation을 다룬다.
 - in-memory `PubSub.unbounded<TraceChange>()`: 새 이벤트(sessionId, cursor)와 heartbeat progress(sessionId)를 publish한다. `waitForChangeEffect`가 이를 기다린다.
-- `Crypto`와 `NodeCrypto.layer`로 id를 만든다.
+- `SecureRandom`과 `NodeCrypto.layer`로 id를 만든다.
 - `Clock`과 `DateTime`으로 현재 시각을 읽는다.
 - `logFailure`로 실패를 로그에 남긴다.
 

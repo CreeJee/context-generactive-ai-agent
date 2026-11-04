@@ -21,7 +21,7 @@ const renewMs = 20_000;
 
 const newHolder = () => {
   // Browser boundary: session ownership requires a cryptographic token.
-  const created = Effect.runSync(browserCrypto.randomUUIDv4());
+  const created = Effect.runSync(browserCrypto.uuidV4());
   try {
     sessionStorage.setItem(holderKey, created);
   } catch {}

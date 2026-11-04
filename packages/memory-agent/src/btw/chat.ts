@@ -2,7 +2,6 @@ import {
   Array as Arr,
   Cause,
   Context,
-  Crypto,
   Effect,
   Exit,
   Layer,
@@ -14,6 +13,7 @@ import {
   Scope,
   Stream,
 } from "effect";
+import { SecureRandom } from "effect/crypto";
 import type { BtwQuestion, Refusal } from "../api/chat-api.ts";
 import { AuthConnectionState } from "../providers/contracts.ts";
 import { failureAnnotations } from "../runtime/logged-failures.ts";
@@ -122,7 +122,7 @@ const make = Effect.gen(function* () {
   const config = yield* GlobalConfig;
   const redactor = yield* SecretRedactor;
   const runStore = yield* RunStore;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
   const memory = yield* Effect.all({
     search: MemorySearch,
     nodes: Nodes,
@@ -249,7 +249,7 @@ const make = Effect.gen(function* () {
     ).pipe(
       shownRunErrors(redactor),
       Stream.provideService(RunStore, btwStore),
-      Stream.provideService(Crypto.Crypto, crypto),
+      Stream.provideService(SecureRandom.SecureRandom, crypto),
     );
     // The panel reads the events while it is open; closing it leaves the answer running.
     const read = yield* Queue.unbounded<AgUiEvent, Cause.Done>();

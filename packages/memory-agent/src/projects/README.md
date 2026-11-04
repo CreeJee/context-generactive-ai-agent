@@ -7,15 +7,15 @@
 ## Interface
 
 - `Projects` — `Context.Service` 태그(`"memory-agent/projects/projects"`). 메서드는 `list`, `listAll`, `get(id)`, `add(requestedRoot)`, `setHidden(id, hidden)`, `setCrossRecallExcluded(id, excluded)`, `setPermissionMode(id, mode)`
-- `Projects.layerNoDeps` — `Layer.effect(Projects, make)`. 필요한 의존성은 `FileSystem`, `Path`, `Crypto`, `SqlClient.SqlClient`, `StorageRoot`
+- `Projects.layerNoDeps` — `Layer.effect(Projects, make)`. 필요한 의존성은 `FileSystem`, `Path`, `SecureRandom`, `SqlClient.SqlClient`, `StorageRoot`
 - `Projects.layer` — `layerNoDeps`에 `NodeCrypto.layer`, `NodeFileSystem.layer`, `NodePath.layer`를 제공한 layer. `SqlClient`와 `StorageRoot`는 여전히 바깥에서 제공해야 함
 - `Project` — 도메인 Schema(`id`, `root`, `name`, `crossRecallExcluded`, `permissionMode`, `createdAt`, `hiddenAt`)와 같은 이름의 타입. `contracts.ts`에 있고 `projects.ts`가 다시 내보낸다
 - `PermissionMode` — `Schema.Literals(["ask","auto","full"])`와 타입(`contracts.ts`). ask는 매 호출을 사용자가 승인, auto는 분류기가 허용·질문·차단, full은 승인 없이 즉시 실행
 - `FolderPick` — 폴더 선택 창의 답 `picked{root}` | `cancelled` | `unavailable`(`contracts.ts`). 앱의 `folder-picker`가 만들고 앱 API projects group `pick`이 돌려준다. `contracts.ts`는 서버 코드를 import하지 않아 브라우저 번들이 쓴다
 - `ProjectRootRejected` — TaggedError. `reason`은 `not_found` | `not_directory` | `overlaps_storage` | `already_registered`
 - `ProjectNotFound` — TaggedError(`id`). id로 조회하거나 바꿀 때 행이 없으면 실패
-- `ProjectHostFailed` — TaggedError(`root`, `reason: ProjectHostReason`). 호스트 파일시스템이나 암호 API가 실패할 때 쓰임
-- `ProjectHostReason` — `Schema.TaggedUnion`(`RealPathFailed` | `StatFailed` | `IdentityFailed`, 각각 `cause: Schema.Defect()`)
+- `ProjectHostFailed` — TaggedError(`root`, `reason: ProjectHostReason`). 호스트 파일시스템이 실패할 때 쓰임
+- `ProjectHostReason` — `Schema.TaggedUnion`(`RealPathFailed` | `StatFailed`, 각각 `cause: Schema.Defect()`)
 - 하위 디렉터리 없음
 
 ## Invariants
@@ -28,7 +28,7 @@
 - `projects.root`에는 UNIQUE 충돌 대상이 있어야 한다. INSERT가 `ON CONFLICT(root)`에 의존하기 때문이다. 숨긴 프로젝트를 다시 add하면 `hidden_at`만 NULL로 되돌린다(un-hide). 숨기지 않은 기존 루트를 add하면 RETURNING이 비어 `already_registered`로 실패한다.
 - 숨기거나 cross-recall에서 제외한 프로젝트도 메모리를 그대로 가진다. 숨긴 프로젝트는 계속 검색되고, 제외한 프로젝트는 다른 프로젝트에서 검색되지 않는다(R08). `list`는 `hidden_at IS NULL`인 행만, `listAll`은 숨긴 행까지 돌려준다. importer와 앱의 보관한 프로젝트 목록(GET /api/projects?hidden=1)이 쓴다.
 - 목록은 `ORDER BY created_at, id` 순서로 정렬된다.
-- `id`는 `Crypto.randomUUIDv4`, 시각은 `Clock.currentTimeMillis`를 `DateTime.formatIso`로 바꾼 ISO 문자열이다.
+- `id`는 `SecureRandom.uuidV4`, 시각은 `Clock.currentTimeMillis`를 `DateTime.formatIso`로 바꾼 ISO 문자열이다.
 - 새 프로젝트의 기본값은 `permissionMode: "ask"`, `crossRecallExcluded: false`이고, `name`은 루트의 basename이다(비어 있으면 root 전체).
 
 ## Side Effects
@@ -36,7 +36,7 @@
 - SQLite `projects` 표 읽기: `SELECT * FROM projects`(id 조회, 전체 목록, 숨기지 않은 목록)
 - SQLite `projects` 표 쓰기: `INSERT ... ON CONFLICT(root) DO UPDATE SET hidden_at = NULL ... RETURNING *`, `UPDATE`로 `hidden_at`, `cross_recall_excluded`, `permission_mode`/`permission_full` 변경
 - 파일시스템 읽기: `fs.realPath`(layer 생성 때 저장소 루트를 정규화하고, add 때 요청 루트를 정규화), `fs.stat`(디렉터리 여부 확인)
-- `Crypto.randomUUIDv4`로 프로젝트 id 생성
+- `SecureRandom.uuidV4`로 프로젝트 id 생성
 - `Clock.currentTimeMillis`로 `created_at`, `hidden_at` 시각을 읽음
 
 ## Verification

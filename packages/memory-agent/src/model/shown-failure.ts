@@ -15,6 +15,7 @@ const reasonText = {
   InternalProviderError: "The provider failed to answer.",
   NetworkError: "The provider could not be reached.",
   InvalidOutputError: "The provider's answer could not be read.",
+  InvalidResponseError: "The provider's answer could not be read.",
   StructuredOutputError: "The provider's answer could not be read.",
   UnsupportedSchemaError: "The provider does not accept a tool's schema.",
   UnknownError: "The model request failed.",
@@ -36,7 +37,7 @@ const ErrorKind = Schema.Struct({
 /**
  * What of a reason names the failure without the provider's text: the response status, and the
  * error type and code the provider's error body gave. OpenAI-compatible clients keep them in the
- * metadata itself or under `openai`.
+ * metadata itself or under `openai-compat`.
  */
 const decodeProviderFacts = Schema.decodeUnknownOption(
   Schema.Struct({
@@ -44,7 +45,10 @@ const decodeProviderFacts = Schema.decodeUnknownOption(
       Schema.Struct({ response: Schema.optionalKey(Schema.Struct({ status: Schema.Int })) }),
     ),
     metadata: Schema.optionalKey(
-      Schema.Struct({ openai: Schema.optionalKey(Schema.NullOr(ErrorKind)), ...ErrorKind.fields }),
+      Schema.Struct({
+        "openai-compat": Schema.optionalKey(Schema.NullOr(ErrorKind)),
+        ...ErrorKind.fields,
+      }),
     ),
   }),
 );
@@ -58,7 +62,7 @@ const providerFacts = (reason: AiError.AiErrorReason) =>
   Option.match(decodeProviderFacts(reason), {
     onNone: () => [],
     onSome: ({ http, metadata }) => {
-      const kinds = [metadata?.openai, metadata].flatMap((kind) =>
+      const kinds = [metadata?.["openai-compat"], metadata].flatMap((kind) =>
         kind === null || kind === undefined ? [] : [kind.errorType, kind.errorCode],
       );
       const status = http?.response?.status;

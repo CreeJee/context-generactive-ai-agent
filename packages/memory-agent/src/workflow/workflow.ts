@@ -3,7 +3,6 @@ import { NodeCrypto } from "@effect/platform-node";
 import {
   DateTime,
   Context,
-  Crypto,
   Data,
   Effect,
   Layer,
@@ -13,6 +12,7 @@ import {
   Result,
   Schema,
 } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
 import { optionalProperty } from "../optional-property.ts";
 import { WorkflowActionReason } from "./actions.ts";
@@ -266,7 +266,7 @@ const unchanged = (next: WorkflowState, current: WorkflowState) =>
 
 const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
   Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto;
+    const crypto = yield* SecureRandom.SecureRandom;
     const sql = yield* SqlClient.SqlClient;
     const completion = yield* completionEvidence;
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -526,7 +526,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
         GoalEvent.NewGoalStarted({ status: input.goal.status }),
       );
       const now = yield* nowIso;
-      const newId = yield* crypto.randomUUIDv4();
+      const newId = yield* crypto.uuidV4();
       // An unbound legacy Goal never receives a fabricated historical identity.
       yield* Option.isSome(identity)
         ? Effect.andThen(
@@ -892,7 +892,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
             // Only the first Goal in a new session is unambiguously new. A legacy Goal
             // without a recorded identity stays unbound; guessing it from text is unsafe.
             yield* Effect.when(
-              Effect.flatMap(crypto.randomUUIDv4(), (goalInstanceId) =>
+              Effect.flatMap(crypto.uuidV4(), (goalInstanceId) =>
                 insertGoalIdentity(sessionId, goalInstanceId, now),
               ),
               Effect.succeed(current.goal === null),
@@ -1242,7 +1242,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
         transacted(
           Effect.gen(function* () {
             const current = yield* get(sessionId);
-            const cardId = `card-${(yield* crypto.randomUUIDv4()).slice(0, 8)}`;
+            const cardId = `card-${(yield* crypto.uuidV4()).slice(0, 8)}`;
             const planned = yield* planBoardEdit(current.plan, edit, author, cardId);
             const now = yield* nowIso;
             return yield* Match.valueTags(planned, {

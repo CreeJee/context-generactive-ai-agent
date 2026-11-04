@@ -1,6 +1,6 @@
-import { NodeServices } from "@effect/platform-node";
+import { NodeCrypto, NodeServices } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
-import { Effect, FileSystem, Path } from "effect";
+import { Effect, FileSystem, Layer, Path } from "effect";
 import { PathRejected } from "../src/files/paths.ts";
 import {
   createTextFileEffect,
@@ -14,7 +14,7 @@ import {
   TextFileRejectedReason,
 } from "../src/files/text.ts";
 
-layer(NodeServices.layer)((it) => {
+layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))((it) => {
   it.effect("Windows native boundary reads, replaces and deletes ordinary files", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

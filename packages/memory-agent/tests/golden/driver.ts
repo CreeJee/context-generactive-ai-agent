@@ -1,4 +1,5 @@
-import { Crypto, Effect, Fiber, FileSystem, MutableRef, Path, Schema, Stream } from "effect";
+import { Effect, Fiber, FileSystem, MutableRef, Path, Schema, Stream } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { Refusal, refusalStatus, type RunEvent } from "../../src/api/chat-api.ts";
@@ -169,9 +170,9 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
       ),
       decodeAllPending,
     );
-    const crypto = yield* Crypto.Crypto;
+    const crypto = yield* SecureRandom.SecureRandom;
     const answer = yield* handWritten({
-      runId: yield* crypto.randomUUIDv4(),
+      runId: yield* crypto.uuidV4(),
       parentRunId: pending[0].run_id,
       resume: pending.map(({ interrupt_id }) => ({
         interruptId: interrupt_id,

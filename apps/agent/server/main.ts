@@ -1,7 +1,8 @@
 import { nodePlatform } from "memory-agent/node-platform";
 import { Option, Schema, Stdio } from "effect";
 import { path as nodePath } from "memory-agent/synchronous-path";
-import { Config, Console, Crypto, Effect, Match } from "effect";
+import { Config, Console, Effect, Match } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { Argument, Flag } from "effect/cli";
 import { runNativeEffect } from "memory-agent/native-effect";
 // The app's production entry: `context-agent [folder]` serves the web app, runs the agent in this
@@ -186,7 +187,7 @@ if (folderArgument === "acp") {
     await Effect.runPromise(Config.option(Config.String("CONTEXT_AGENT_BUILD_ID"))),
   );
   const runtimeInstanceId = await nodePlatform.runPromise(
-    Effect.flatMap(Crypto.Crypto, (crypto) => crypto.randomUUIDv4()),
+    Effect.flatMap(SecureRandom.SecureRandom, (crypto) => crypto.uuidV4()),
   );
   const releaseStorageLock = await acquireStorageLock(storageRoot, port, runtimeInstanceId);
   const backendScope = Scope.makeUnsafe();

@@ -10,7 +10,7 @@
 
 ## Interface
 
-- `Subagents` — `Context.Service`이며 `Subagents.layer`가 `make`(Effect.gen)로 만든다. 하위 에이전트 도구 묶음과 실행 관리를 제공하고, 의존 서비스는 SqlClient, AppEvents, ActiveProvider, ApiUsage, PermissionClassifier, PermissionReviews, RelayedApprovals, WorkTraceStore, CodeTools, RunStore, Crypto.Crypto이다.
+- `Subagents` — `Context.Service`이며 `Subagents.layer`가 `make`(Effect.gen)로 만든다. 하위 에이전트 도구 묶음과 실행 관리를 제공하고, 의존 서비스는 SqlClient, AppEvents, ActiveProvider, ApiUsage, PermissionClassifier, PermissionReviews, RelayedApprovals, WorkTraceStore, CodeTools, RunStore, SecureRandom.SecureRandom이다.
 - `subagentToolNames` — 부모 쪽 도구 이름 상수 `["run_subagent", "resume_subagent", "get_subagent_reports"] as const`.
 - `subagentInstructions` — 부모 모델에게 위임 규칙(백그라운드 실행, polling 금지, 보고서는 사용자 승인이 아님 등)을 알리는 시스템 프롬프트 문자열.
 - `childInstructions` — `EffectFunction.dual(2)`로 만든 함수. `(name, instructions)`를 받아 자식 에이전트의 자기소개 프롬프트를 만든다.
@@ -49,7 +49,7 @@
 - 자식 모델 run은 `runChat`과 `ActiveProvider`를 통해 LLM provider를 호출한다(네트워크). `ApiUsage` hook으로 사용량 ledger를 기록한다.
 - 자식 tool 호출은 `runTool`과 `CodeTools`를 통해 공유 workspace의 파일을 읽고 쓸 수 있다. 권한은 `PermissionClassifier`, `PermissionReviews`, `RelayedApprovals`(`ApprovalRequester`)를 거친다.
 - 동시성 자원으로 `FiberMap`(activeChildren)을 쓰고, 자식 fiber를 `Effect.forkScoped`/`Effect.forkIn`으로 백그라운드 실행하며 `Deferred`로 결과를 기다린다. `PubSub.unbounded` completions 채널에는 sessionId로 완료 알림을 publish한다. 취소 경로에는 `AbortSignal`과 `Effect.interrupt`가 있다.
-- `Clock.currentTimeMillis`로 시각을 읽고, `Crypto.Crypto`로 id를 생성한다.
+- `Clock.currentTimeMillis`로 시각을 읽고, `SecureRandom.SecureRandom`으로 id를 생성한다.
 
 ## Verification
 

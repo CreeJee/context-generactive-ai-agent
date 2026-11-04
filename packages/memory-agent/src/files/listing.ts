@@ -10,7 +10,6 @@ import { path as hostPath } from "../runtime/synchronous-path.ts";
 import {
   Context,
   FileSystem,
-  Crypto,
   Layer,
   Stream,
   Option,
@@ -20,6 +19,7 @@ import {
   Chunk,
   Array as EffectArray,
 } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { findExecutable } from "../runtime/host.ts";
 import { gitEnvironment, gitNames } from "./git-grep.ts";
 import { isCredentialPath } from "./paths.ts";
@@ -269,7 +269,7 @@ export interface Snapshot extends FileListing {
 export const createSnapshots = (capacity = 32) =>
   Effect.gen(function* () {
     const services = yield* Effect.scoped(Layer.build(NodeCrypto.layer));
-    const crypto = Context.get(services, Crypto.Crypto);
+    const crypto = Context.get(services, SecureRandom.SecureRandom);
     /** Oldest first; the snapshot just added is the newest. */
     const entries = yield* Ref.make<ReadonlyArray<Snapshot>>([]);
     return {
@@ -280,7 +280,7 @@ export const createSnapshots = (capacity = 32) =>
         listing: FileListing,
       ) {
         const snapshot: Snapshot = {
-          id: yield* crypto.randomUUIDv4(),
+          id: yield* crypto.uuidV4(),
           root,
           directory,
           glob,

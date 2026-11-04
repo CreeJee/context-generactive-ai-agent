@@ -29,7 +29,7 @@
 ## Invariants
 
 - 번들의 모든 텍스트는 `SecretRedactor`를 거치고 한도로 잘린다. `BundleText.cut`은 원문이 잘렸는지 표시한다. 일괄 가림 결과가 개수와 맞지 않으면 한 텍스트씩 다시 가리고, 그것도 실패하면 `[비밀정보 확인 실패로 숨김]`으로 대체한다.
-- 로컬 id(goal_instance_id, sessionId, goalInstanceId 등)는 SHA-256 hex 앞 12자로만 밖에 나간다. 해시 실패 시 `unhashed`를 쓴다.
+- 로컬 id(goal_instance_id, sessionId, goalInstanceId 등)는 SHA-256 hex 앞 12자로만 밖에 나간다.
 - 한 섹션 소스가 실패하면 그 섹션만 `status: "failed"`가 되고 번들은 계속 만들어진다(`guarded` + `fallbackLogged("report_bundle_section_failed")`).
 - `ReportBundle.version`은 `Schema.Literal(1)`이다. environment에는 provider·model 종류만 담고 자격증명·endpoint는 담지 않는다.
 - place id 형식(`run-N`, `run-N/call-M`, `environment`, `timeline`)은 `bundle-digest.ts`, `diagnosisInstructions`, `parseDiagnosis`가 공유한다. 바꾸면 세 곳을 함께 바꿔야 한다.
@@ -46,7 +46,7 @@
 - 결함 알림에는 tag·위치·버전·플랫폼·해시된 id·횟수·가린 요약(300자)·스택 상위 5줄만 담고 2000자로 자른다. 프롬프트·모델 답·자격증명은 보내지 않는다.
 - 결함 전송은 결함을 낸 쪽을 막지 않는다. `Queue.dropping(64)`이 가득 차면 새 항목을 버린다. 전송 실패는 `defect_report_failed`로 로그만 남긴다.
 - webhook이 설정되지 않아도 최근 결함 목록(최신순, 최대 20개, tag+location으로 합산)은 유지해 사용자 리포트에 싣는다. 실제 전송은 시작 시 webhook이 configured이고 전송 시점 설정 `defectReports !== false`일 때만 한다.
-- `collectReportBundle`은 `SqlClient`, `SecretRedactor`, `Crypto`, `ActiveProvider`, `GlobalConfig`, `McpServers`, `ExternalAgents`, `Importer`, `DefectReporter`, `BoardHealth` 서비스를 요구한다(`WorkTraceStore`도 import한다). `defectReportsLayer`는 `ReportDelivery`, `GlobalConfig`, `SecretRedactor`, `Crypto`를 요구한다. `ReportDiagnoser.layer`는 `ActiveProvider`, `ApiUsage`, `Crypto`를 요구한다.
+- `collectReportBundle`은 `SqlClient`, `SecretRedactor`, `Digest`, `ActiveProvider`, `GlobalConfig`, `McpServers`, `ExternalAgents`, `Importer`, `DefectReporter`, `BoardHealth` 서비스를 요구한다(`WorkTraceStore`도 import한다). `defectReportsLayer`는 `ReportDelivery`, `GlobalConfig`, `SecretRedactor`, `Digest`를 요구한다. `ReportDiagnoser.layer`는 `ActiveProvider`, `ApiUsage`, `SecureRandom`을 요구한다.
 
 ## Side Effects
 
@@ -57,7 +57,7 @@
 - 프로세스 메모리 상태: `ReportDelivery`의 전송 시도 `Ref<Map<hash, Attempt>>`, `defectReportsLayer`의 rate-limit `Ref<AdmissionState>`와 최근 결함 `Ref<RecentDefect[]>`.
 - 백그라운드 fiber: `defectReportsLayer`가 `Queue.dropping(64)`을 소비하는 Stream을 `Effect.forkScoped`로 띄운다(동시성 2).
 - 로깅: `fallbackLogged`(`report_bundle_section_failed`, `report_bundle_model_unknown`, `report_bundle_settings_unknown`), `logFailure("defect_report_failed")`.
-- 시계·암호: `Clock.currentTimeMillis`, `DateTime.now`, `Crypto.digest(SHA-256)`, `crypto.randomUUIDv4`(진단 threadId).
+- 시계·암호: `Clock.currentTimeMillis`, `DateTime.now`, `Digest.digest(Digest.sha256)`, `crypto.uuidV4`(진단 threadId).
 
 ## Verification
 

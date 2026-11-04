@@ -1,9 +1,8 @@
-import { NodeServices } from "@effect/platform-node";
+import { NodeCrypto, NodeServices } from "@effect/platform-node";
 import {
   Array as Arr,
   Console,
   Context,
-  Crypto,
   DateTime,
   Effect,
   FileSystem,
@@ -14,6 +13,7 @@ import {
   Schema,
   Stream,
 } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { SqlClient } from "effect/sql";
 import { messageText } from "../src/agent/compaction.ts";
 import type { StoredMessage } from "../src/chat-store/schema.ts";
@@ -344,9 +344,9 @@ const named = process.argv
 const chosen = named.length === 0 ? cases : cases.filter((each) => named.includes(each.name));
 
 const evaluate = Effect.fn("eval.toolUse")(function* () {
-  const platform = yield* Layer.build(NodeServices.layer);
+  const platform = yield* Layer.build(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer));
   const fs = Context.get(platform, FileSystem.FileSystem);
-  const crypto = Context.get(platform, Crypto.Crypto);
+  const crypto = Context.get(platform, SecureRandom.SecureRandom);
   const paths = Context.get(platform, Path.Path);
   const base = yield* fs.makeTempDirectoryScoped({ prefix: "memory-agent-tool-use-" });
   const storage = join(base, "storage");
@@ -426,10 +426,8 @@ const evaluate = Effect.fn("eval.toolUse")(function* () {
               params: { session: session.id },
               headers: {},
               payload: {
-                runId: yield* crypto.randomUUIDv4(),
-                messages: [
-                  { id: yield* crypto.randomUUIDv4(), role: "user", content: each.prompt },
-                ],
+                runId: yield* crypto.uuidV4(),
+                messages: [{ id: yield* crypto.uuidV4(), role: "user", content: each.prompt }],
               },
             })
             .pipe(

@@ -58,7 +58,7 @@
 - 네트워크: `api`의 메서드는 `appCall`로 앱 API 계약(`memory-agent/app-api`)의 `HttpApiClient`를 `appFetch` 위에서 부른다. 거부는 `appRefusalStatus`의 상태와 함께 `ApiError`가 된다. 계약에 없는 상태의 응답은 `ErrorBody`로 디코드한다(`apiError`). 계약이 보내기 전에 거절한 값은 400 `invalid_request`, 계약에 맞지 않는 응답은 서버 잘못이라 502 `request_failed`다(client의 `transformResponse`가 응답 decode 실패를 `UnexpectedAnswer`로 가른다)
 - 네트워크: `uploadAttachment(file)`로 첨부 파일을 업로드한다. `generateImage`로 이미지를 생성 요청한다
 - `workTraceStreamUrl(sessionId, after)`로 work trace SSE 스트림 URL을 만든다(구독은 호출자가 맡는다)
-- `api.ts`는 `browserCrypto`(Web Crypto 기반 Effect Crypto)를 import한다
+- `api.ts`는 `browserCrypto`(Web Crypto 기반 Effect `SecureRandom`)를 import한다
 - URL 상태: `App`이 nuqs `setLocation`으로 브라우저 쿼리스트링을 바꾼다. 프로젝트 선택·추가 때는 `history: "push"`를 쓴다
 - React Query mutation(프로젝트 추가, 모델 선택, 계정 전환, 권한 모드, cross recall, 프로젝트 숨김, 세션 생성, 세션 수명주기)으로 서버 상태를 바꾼다
 - `openSettingsOverlay`로 overlay-kit 설정 대화상자를 연다

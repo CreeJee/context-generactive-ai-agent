@@ -1,15 +1,6 @@
 import { Result, Function as EffectFunction } from "effect";
-import {
-  Config,
-  ConfigProvider,
-  Crypto,
-  HashSet,
-  Option,
-  Context,
-  Effect,
-  Layer,
-  Schema,
-} from "effect";
+import { Config, ConfigProvider, HashSet, Option, Context, Effect, Layer, Schema } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import { optionalProperty } from "../optional-property.ts";
 import { Attachments, type AttachmentsApi } from "../attachments/attachments.ts";
@@ -199,8 +190,6 @@ export class ImageMediaUnavailable extends Schema.TaggedError<
     "consent_service_unavailable",
     "consent_read_failed",
     "consent_disabled",
-    /** Naming the run for a cross-provider approval failed. */
-    "run_id_failed",
     "reroute_unavailable",
     "attachment_persistence_failed",
   ]),
@@ -232,7 +221,7 @@ export function makeImageMediaWorkflow(options: {
   readonly router: ImageRouterApi;
   readonly executor: DirectImageExecutorApi;
   readonly attachments: Pick<AttachmentsApi, "save">;
-  readonly crypto: Crypto.Crypto;
+  readonly crypto: SecureRandom.SecureRandom["Service"];
   readonly catalog?: Pick<RouteCatalogApi, "refresh"> | undefined;
   readonly crossProviderConsent?: CrossProviderMediaConsentApi | undefined;
 }) {
@@ -251,7 +240,7 @@ function makeImageMediaWorkflowBody(
   router: ImageRouterApi,
   executor: DirectImageExecutorApi,
   attachments: Pick<AttachmentsApi, "save">,
-  crypto: Crypto.Crypto,
+  crypto: SecureRandom.SecureRandom["Service"],
   catalog?: Pick<RouteCatalogApi, "refresh">,
   crossProviderConsent?: CrossProviderMediaConsentApi,
 ): ImageMediaWorkflowApi {
@@ -331,15 +320,7 @@ function makeImageMediaWorkflowBody(
             Effect.succeed(consent.mode === "disabled"),
           );
           if (consent.mode === "always") return;
-          const runId =
-            request.runId ??
-            (yield* crypto
-              .randomUUIDv4()
-              .pipe(
-                Effect.mapError((cause) =>
-                  ImageMediaUnavailable.make({ reason: "run_id_failed", cause }),
-                ),
-              ));
+          const runId = request.runId ?? (yield* crypto.uuidV4());
           const expected: CrossProviderMediaRunApproval = {
             runId,
             initiatorChatRouteId: decision.initiatorChatRouteId,
@@ -438,7 +419,7 @@ export class ImageMediaWorkflow extends Context.Service<
         router: yield* ImageRouter,
         executor: yield* DirectImageExecutor,
         attachments: yield* Attachments,
-        crypto: yield* Crypto.Crypto,
+        crypto: yield* SecureRandom.SecureRandom,
         catalog: yield* RouteCatalog,
         crossProviderConsent: yield* CrossProviderMediaConsent,
       });

@@ -1,6 +1,7 @@
 import { NodeCrypto } from "@effect/platform-node";
 import { SqlClient } from "effect/sql";
-import { Crypto, DateTime, Effect, Layer } from "effect";
+import { DateTime, Effect, Layer } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { describe, expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
 import { Database } from "../src/db/database.ts";
@@ -20,7 +21,7 @@ const run = Effect.fnUntraced(function* <A, E>(
   program: Effect.Effect<
     A,
     E,
-    SqlClient.SqlClient | Nodes | WorkTraceStore | KnowledgePromotions | Crypto.Crypto
+    SqlClient.SqlClient | Nodes | WorkTraceStore | KnowledgePromotions | SecureRandom.SecureRandom
   >,
 ) {
   const services = yield* Layer.build(Layer.merge(testLayer(), NodeCrypto.layer));

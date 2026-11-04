@@ -1,6 +1,7 @@
 import { Schema } from "effect";
 import { it as effectTest } from "@effect/vitest";
-import { Crypto, Effect, MutableRef, Result } from "effect";
+import { Effect, MutableRef, Result } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { withTestPlatform } from "./support/platform.ts";
 import {
   ImageExecutorModel,
@@ -78,7 +79,7 @@ describe("ImageMediaWorkflow", () => {
           },
         },
         attachments: attachmentStore([]),
-        crypto: yield* Crypto.Crypto,
+        crypto: yield* SecureRandom.SecureRandom,
       });
       const result = yield* Effect.result(workflow.generate({ ...request, approved: false }));
       expect(Result.isFailure(result) && result.failure).toBeInstanceOf(ImageMediaApprovalRequired);
@@ -105,7 +106,7 @@ describe("ImageMediaWorkflow", () => {
               }),
           },
           attachments: attachmentStore(saved),
-          crypto: yield* Crypto.Crypto,
+          crypto: yield* SecureRandom.SecureRandom,
         });
         const asset = yield* workflow.generate(request);
         expect(saved).toEqual([bytes]);
@@ -147,7 +148,7 @@ describe("ImageMediaWorkflow", () => {
             },
           },
           attachments: attachmentStore([]),
-          crypto: yield* Crypto.Crypto,
+          crypto: yield* SecureRandom.SecureRandom,
           catalog: undefined,
           crossProviderConsent: {
             read: Effect.succeed({ version: 1, pairs: {} }),
@@ -205,7 +206,7 @@ describe("ImageMediaWorkflow", () => {
             Effect.fail(DirectImageExecutionFailed.make({ reason: "provider_rejected" })),
         },
         attachments: attachmentStore([]),
-        crypto: yield* Crypto.Crypto,
+        crypto: yield* SecureRandom.SecureRandom,
       });
       const result = yield* Effect.result(workflow.generate(request));
       const failed = Result.isFailure(result) && result.failure;

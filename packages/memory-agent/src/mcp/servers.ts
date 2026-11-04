@@ -19,7 +19,6 @@ import {
   DateTime,
   Clock,
   Context,
-  Crypto,
   Data,
   Effect,
   Fiber,
@@ -31,6 +30,7 @@ import {
   Semaphore,
   SynchronizedRef,
 } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { JsonValue } from "../json.ts";
 import { jsonSchemaIssues } from "../tools/input-repair.ts";
 import { runTool, type RunTool } from "../tools/run-tool.ts";
@@ -250,14 +250,14 @@ interface ConfigSummary {
   readonly envNames: readonly string[];
   readonly headerNames: readonly string[];
 }
-const summarize = McpServerConfig.match<ConfigSummary>({
-  stdio: (stdio) => ({
+const summarize = McpServerConfig.match({
+  stdio: (stdio): ConfigSummary => ({
     transport: "stdio",
     target: [stdio.command, ...stdio.args].join(" "),
     envNames: Object.keys(stdio.env),
     headerNames: [],
   }),
-  http: (http) => ({
+  http: (http): ConfigSummary => ({
     transport: "http",
     target: http.url,
     envNames: [],
@@ -348,7 +348,7 @@ const make = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const redactor = yield* SecretRedactor;
   const secrets = yield* SecretStore;
-  const loginServices = yield* Effect.context<SecretStore | Crypto.Crypto>();
+  const loginServices = yield* Effect.context<SecretStore | SecureRandom.SecureRandom>();
   const serviceScope = yield* Effect.scope;
   const connections = yield* SynchronizedRef.make(HashMap.empty<string, Connection>());
   /** One login per keychain entry, shared by every connection that uses it. */
@@ -473,13 +473,14 @@ const make = Effect.gen(function* () {
     );
 
   /** A missing `${VAR}` fails here, and settings show which one. */
-  const transportFor = (project: Project, server: ConfiguredServer) =>
-    McpServerConfig.match<
-      Effect.Effect<
-        { readonly transport: Transport; readonly credentials: Option.Option<McpCredentials> },
-        MissingVariable | Cause.UnknownError
-      >
-    >(server.config, {
+  const transportFor = (
+    project: Project,
+    server: ConfiguredServer,
+  ): Effect.Effect<
+    { readonly transport: Transport; readonly credentials: Option.Option<McpCredentials> },
+    MissingVariable | Cause.UnknownError
+  > =>
+    McpServerConfig.match(server.config, {
       stdio: (stdio) =>
         Effect.map(
           Effect.all({

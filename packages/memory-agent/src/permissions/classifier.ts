@@ -2,7 +2,8 @@ import { Function as EffectFunction } from "effect";
 import { failureTags } from "../runtime/logged-failures.ts";
 import { isTruthy } from "../truthy.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import { Cause, Context, Crypto, Effect, Layer, Option, Schema } from "effect";
+import { Cause, Context, Effect, Layer, Option, Schema } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import { ApiUsage, recordUsage } from "../agent/api-usage.ts";
 import { singleAnswer } from "../model/single-call.ts";
@@ -121,7 +122,7 @@ const make = Effect.gen(function* () {
   const active = yield* ActiveProvider;
   const usageLedger = yield* ApiUsage;
   const nodes = yield* Nodes;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
 
   const prompt = Effect.fnUntraced(function* (request: ReviewRequest) {
     const turns = (yield* nodes.recentOfKind(request.sessionId, "user", userTurns))
@@ -146,7 +147,7 @@ const make = Effect.gen(function* () {
       if (isTruthy(routine)) return routine;
       const { services } = yield* active.resolve(request.selection);
       const cheap = yield* services.models.cheapestEffort(request.selection);
-      const threadId = yield* crypto.randomUUIDv4();
+      const threadId = yield* crypto.uuidV4();
       const answer = yield* singleAnswer({
         runtime: services.runtime,
         selection: cheap,

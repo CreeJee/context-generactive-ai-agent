@@ -10,12 +10,12 @@
 - `BtwChat.ask(threadId, question: BtwQuestion)` — 거부 사유(`Refusal`) 또는 `Stream<AgUiEvent>`를 `Result`로 돌려준다. 거부 사유: `run_in_progress`, `provider_auth_unavailable`, `login_required`, `model_selection_required`, `empty_message`, `unknown_attachment`, `images_not_supported`
 - `BtwChat.messages(threadId)` — 저장된 메시지를 패널 표시 단위로 묶어 오래된 순으로 `shownMessage` 형태로 돌려준다. id가 없으면 `btw:${threadId}:${index}`를 쓴다
 - `BtwChat.remove(threadId)` — 실행 중인 답변을 취소하고 종료를 기다린다. 그래도 남아 있으면 `BtwRunInProgress`로 실패하고, 아니면 스레드를 삭제한다
-- `BtwThreads` — Effect `Context.Service`(`memory-agent/btw/store/BtwThreads`)이며 `BtwThreads.layer = Layer.effect(BtwThreads, make)`이다. 요구 서비스: `SqlClient`, `Sessions`, `Attachments`, `Crypto`
+- `BtwThreads` — Effect `Context.Service`(`memory-agent/btw/store/BtwThreads`)이며 `BtwThreads.layer = Layer.effect(BtwThreads, make)`이다. 요구 서비스: `SqlClient`, `Sessions`, `Attachments`, `SecureRandom`
 - `BtwThreads.get/messages/saveMessages/create/list/link/remove` — 스레드 조회, 메시지 읽기·저장, 생성, 부모 세션별 목록(최신순), 첨부 연결, 삭제와 고아 첨부 정리
 - `btwToolNames` / `BtwToolName` — 허용 도구 이름 `["find_memory", "read_evidence", "trace_evidence"]`과 그 `Schema.Literals`
 - `BtwThread` — 스레드 스키마 `{ id, parentSessionId, projectId, title: string|null, createdAt: string, updatedAt: epoch ms }`
 - `BtwError` — `reason` 유니온(`BtwThreadNotFound`, `BtwParentNotFound`, `BtwRunInProgress`, `BtwStorageFailed`)을 감싼 TaggedError
-- `BtwThreadNotFound` / `BtwParentNotFound` / `BtwRunInProgress` / `BtwStorageFailed` — 개별 TaggedError. `BtwStorageFailed.operation`은 `purge_attachments` | `create_thread` | `read_transcript`이다
+- `BtwThreadNotFound` / `BtwParentNotFound` / `BtwRunInProgress` / `BtwStorageFailed` — 개별 TaggedError. `BtwStorageFailed.operation`은 `purge_attachments` | `read_transcript`이다
 - `btwEvidenceRunTools({ env, projectId })` — `memoryReadRunTools`를 `scope: "project"`로 감싼 읽기 전용 도구 목록이다. 런 바인딩이 없다
 - `btwToolGuardHook` — 서버 측 허용 목록 `RunHook`이다. 허용되지 않은 도구 호출은 실행하지 않고 `{ error: "btw_tool_not_allowed", tool }`를 결과로 돌려준다
 - `btwInstructions` — BTW 시스템 프롬프트 문자열(읽기 전용, 메모리는 단서, 메인 대화에 추가되지 않음 등)
@@ -45,7 +45,7 @@
 ## Side Effects
 
 - SQLite 읽기: `btw_threads` JOIN `sessions`로 스레드 조회·목록(`created_at DESC, id`), `btw_threads.messages` 조회
-- SQLite 쓰기: `INSERT INTO btw_threads`(id는 `Crypto.randomUUIDv4`, created_at ISO, updated_at epoch ms), `UPDATE btw_threads SET messages, updated_at`, `INSERT OR IGNORE INTO btw_attachments`, `DELETE FROM btw_threads ... RETURNING id`
+- SQLite 쓰기: `INSERT INTO btw_threads`(id는 `SecureRandom.uuidV4`, created_at ISO, updated_at epoch ms), `UPDATE btw_threads SET messages, updated_at`, `INSERT OR IGNORE INTO btw_attachments`, `DELETE FROM btw_threads ... RETURNING id`
 - 첨부 파일 시스템: `attachments.purgeOrphans`로 참조 없는 이미지 blob 삭제, `attachments.get`으로 첨부 조회
 - 네트워크: `active.runtime(selection).model(...)`와 `runChat`로 LLM 공급자 호출, `active.models(...).acceptsImages`로 모델 능력 조회
 - 백그라운드 fiber: 서비스 scope에 `Stream.runIntoQueue` fork, unbounded `Queue`로 이벤트 전달

@@ -1,4 +1,5 @@
-import { Crypto, Effect, Option, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
+import { Digest, SecureRandom } from "effect/crypto";
 import type { PlatformError } from "effect/PlatformError";
 
 /** One OS vault entry, failing with `E`. */
@@ -69,11 +70,19 @@ const fragmentIndexes = (value: Manifest) =>
 export function createChunkedPasswordEntry<E>(options: {
   readonly open: OpenPasswordEntry<E>;
   readonly account: string;
-}): Effect.Effect<PasswordEntry<E | ChunkedPasswordFailure>, never, Crypto.Crypto> {
+}): Effect.Effect<
+  PasswordEntry<E | ChunkedPasswordFailure>,
+  never,
+  SecureRandom.SecureRandom | Digest.Digest
+> {
   const { open, account } = options;
-  return Effect.map(Effect.service(Crypto.Crypto), (crypto) => {
+  const services = Effect.all([
+    Effect.service(SecureRandom.SecureRandom),
+    Effect.service(Digest.Digest),
+  ]);
+  return Effect.map(services, ([random, digester]) => {
     const digest = (value: string) =>
-      Effect.map(crypto.digest("SHA-256", new TextEncoder().encode(value)), (bytes) =>
+      Effect.map(digester.digest(Digest.sha256, new TextEncoder().encode(value)), (bytes) =>
         Buffer.from(bytes).toString("hex"),
       );
     const rootPassword = Effect.flatMap(open(account), (root) => root.getPassword);
@@ -131,7 +140,7 @@ export function createChunkedPasswordEntry<E>(options: {
     const writeFragments = Effect.fn("CredentialFragments.write")(function* (password: string) {
       const encoded = Buffer.from(password).toString("base64");
       const next: Manifest = {
-        generation: yield* crypto.randomUUIDv4(),
+        generation: yield* random.uuidV4(),
         count: Math.ceil(encoded.length / passwordLimit),
         digest: yield* digest(password),
       };

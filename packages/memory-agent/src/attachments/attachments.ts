@@ -12,7 +12,8 @@ import {
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
-import { Context, Crypto, Effect, FileSystem, Layer, Path, Schema } from "effect";
+import { Context, Effect, FileSystem, Layer, Path, Schema } from "effect";
+import { Digest, SecureRandom } from "effect/crypto";
 import { Hex } from "effect/encoding";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { StorageRoot } from "../config/storage-root.ts";
@@ -112,7 +113,8 @@ const make = Effect.gen(function* () {
   const storage = yield* StorageRoot;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
+  const digest = yield* Digest.Digest;
   const directory = path.join(storage.path, "attachments");
   yield* fs
     .makeDirectory(directory, { recursive: true, mode: 0o700 })
@@ -179,7 +181,7 @@ const make = Effect.gen(function* () {
     destination: string,
     bytes: Uint8Array,
   ) {
-    const temporary = `${destination}.${yield* fileIo(operation, crypto.randomUUIDv4())}.tmp`;
+    const temporary = `${destination}.${yield* random.uuidV4()}.tmp`;
     return yield* Effect.acquireUseRelease(
       Effect.succeed(temporary),
       (temp) =>
@@ -310,7 +312,7 @@ const make = Effect.gen(function* () {
       );
 
       const attachment: Attachment = {
-        id: Hex.encode(yield* fileIo("save", crypto.digest("SHA-256", bytes))),
+        id: Hex.encode(yield* digest.digest(Digest.sha256, bytes)),
         mimeType,
         bytes: bytes.length,
         createdAt: DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis)),
@@ -389,17 +391,19 @@ const make = Effect.gen(function* () {
 
     /** Records the images a message carried, in order. */
     link: (nodeId: string, attachments: readonly Attachment[]) =>
-      attachments.length === 0
-        ? Effect.void
-        : Effect.asVoid(sql`
+      EffectArray.match(attachments, {
+        onEmpty: () => Effect.void,
+        onNonEmpty: (carried) =>
+          Effect.asVoid(sql`
             INSERT INTO node_attachments ${sql.insert(
-              attachments.map((attachment, position) => ({
+              EffectArray.map(carried, (attachment, position) => ({
                 node_id: nodeId,
                 position,
                 attachment_id: attachment.id,
               })),
             )}
             ON CONFLICT DO NOTHING`),
+      }),
 
     forNode: (nodeId: string) =>
       Effect.map(selectForNode(nodeId), (rows) => rows.map(toAttachment)),

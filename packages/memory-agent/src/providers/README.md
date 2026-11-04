@@ -61,7 +61,7 @@
 - 네트워크: `DirectImageExecutor.openAIEnvironmentLayer`가 `https://api.openai.com/v1/images/generations`로 POST(FetchHttpClient). 구독 OAuth·호환 엔드포인트 모델 조회도 네트워크를 쓴다(subscription-provider.ts, openai-compatible.ts; 본문 미확인)
 - 환경 변수: `OPENAI_API_KEY`를 `ConfigProvider.fromEnv()`로 읽는다
 - 첨부 저장: `ImageMediaWorkflow`가 생성 이미지를 `Attachments.save`로 영속화한다
-- Crypto: `ImageMediaWorkflow`와 `makeOpenAICompatibleSettings`가 `Crypto.Crypto`를 받는다(run id 등)
+- 난수·해시: `ImageMediaWorkflow`는 `SecureRandom` 서비스를 받는다(run id). `makeOpenAICompatibleSettings`는 `random`(`SecureRandom`, 계정 id)과 `digest`(`Digest`, endpoint별 기록 키)를 받는다
 - 파일시스템/키체인: openai-compatible.ts의 `keychain`/`CompatibleKeyring`이 `FileSystem`·`Path` 컨텍스트로 자격증명을 저장한다(시그니처만 확인).
 
 ## Verification

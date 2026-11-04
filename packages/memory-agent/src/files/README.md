@@ -59,7 +59,7 @@
 - 자식 프로세스: `findExecutable("git")`으로 찾은 git을 `ChildProcessSpawner`로 실행한다(`grep`, `ls-files`). cwd는 프로젝트 root, `extendEnv: false`, stderr는 ignore이다. 환경은 `gitEnvironment`이며 grep에는 `LANG=C`, `GIT_PAGER=cat`이 추가된다.
 - 파일 시스템 읽기: lstat, realPath, openDirectory 순회, 위치 지정 read(64 KiB 청크), stat이 일어난다. NodeFileSystem 레이어를 내부에서 `Layer.build`한다.
 - 파일 시스템 쓰기: `makeDirectory`(recursive)로 부모 디렉터리를 만든다. `wx` 플래그로 새 파일을 쓰고 sync한다. 같은 디렉터리에 `.<name>.<uuid>.tmp` 임시 파일을 쓰고 rename한 뒤 임시 파일을 remove한다. 삭제 도구는 파일을 제거한다.
-- 난수: `Crypto.randomUUIDv4`로 스냅샷 id와 임시 파일 이름을 만든다(NodeCrypto 레이어).
+- 난수: `SecureRandom.uuidV4`로 스냅샷 id와 임시 파일 이름을 만든다(NodeCrypto 레이어).
 - 인메모리 상태: `createSnapshots`가 Ref에 최근 스냅샷 목록을 보관한다. `createTextPageReader`는 최근 파일 8개의 줄 색인을 Ref에 보관한다. 검색은 `Stream.mapEffect`(동시성 `readAhead + 1`)로 다음 파일들을 미리 읽고 `Stream.scanEffect`로 순서대로 모으며, 페이지가 차면 멈춘다.
 - 환경 읽기: `process.platform`으로 기본 `FileReadPlatform`을 정한다. glob 대소문자 구분 여부도 이것으로 정한다(darwin, win32는 nocase).
 

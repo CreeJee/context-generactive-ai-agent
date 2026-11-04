@@ -62,7 +62,7 @@
 - stdio: `acp` 모드에서 stdin/stdout으로 ndJSON ACP를 주고받는다. dev-backend 모드에서는 stdin이 끝날 때까지 drain한다. 사용자 메시지는 stdout과 stderr로 출력한다
 - 환경 변수: `CONTEXT_AGENT_BUILD_ID`를 읽는다. `process.execPath`, `process.cwd()`, `process.platform`/`arch`, 홈 디렉터리도 읽는다
 - 에이전트 백엔드: `build.entry.module.configureAgentBackend`로 storageRoot·runtimeRoot·buildConfig·release를 설정하고, 종료 때 `disposeAgent`를 호출한다
-- 암호: WebCrypto Ed25519 키 import·서명·검증, SHA-256 digest, `Crypto.randomUUIDv4`로 runtimeInstanceId를 만든다
+- 암호: WebCrypto Ed25519 키 import·서명·검증, SHA-256 digest, `SecureRandom.uuidV4`로 runtimeInstanceId를 만든다
 
 ## Verification
 

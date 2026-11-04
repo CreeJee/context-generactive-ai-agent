@@ -11,7 +11,7 @@ memory-agent의 프로바이더/런 계층은 `OAuthProfiles`·`OAuthAccountLogi
 - `providerProtocols` / `ProviderProtocol` — openai·anthropic별 clientId, authorize/token/model/catalog URL, 콜백 경로·포트, tokenEncoding(form|json), refreshStatuses, 모델 요청 헤더를 담은 정적 표
 - `claudeCodeVersion` — 구독 요청이 자신을 밝히는 Claude Code 버전 문자열(`"2.1.296"`). User-Agent와 Anthropic billing 헤더에 쓰인다
 - `OAuthProvider` — `SubscriptionAccountProvider`(openai|anthropic)의 별칭 타입
-- `createPkce` / `createOAuthState` — `Crypto.Crypto`로 PKCE verifier/challenge(SHA-256, base64url)와 OAuth state를 만드는 Effect
+- `createPkce` / `createOAuthState` — `SecureRandom.SecureRandom`과 `Digest.Digest`(PKCE challenge)로 PKCE verifier/challenge(SHA-256, base64url)와 OAuth state를 만드는 Effect
 - `NormalizedStreamEvent` — 두 프로바이더의 SSE 이벤트를 디코드해 담는 프로바이더 중립 TaggedEnum(text, tool-call*, reasoning*, usage, error). `Stream*Event` 타입 별칭들이 함께 있다
 - `ProviderStreamFailed` / `ProviderStreamFailedReason` (`RequestNotSent`, `ProviderStatusRejected`, `ResponseInterrupted`, `RequestOutcomeUnknown`) — 모델 스트림 실패와 그 이유의 TaggedUnion
 - `ProviderFeatureRejectedError`, `ReasoningSummaryProtocolFailed`(+`ReasoningSummaryProtocolFailedReason`) — prompt-cache 기능 거부, reasoning summary 프로토콜 위반 오류
@@ -44,7 +44,7 @@ memory-agent의 프로바이더/런 계층은 `OAuthProfiles`·`OAuthAccountLogi
 - run 상태 맵은 로컬 서버 프로세스 메모리에만 있고 토큰이나 계정 라벨을 담지 않는다. 영속 프로필의 원본은 SQLite다.
 - 레거시(계정 기능 이전) 클라이언트는 구성된 프로필이 0개이고 `oauth_legacy_removed`에 해당 provider가 없을 때만 쓴다. 계정이 하나라도 구성되면 캐시에서 legacy client를 지운다. 삭제된 계정의 client도 캐시에서 지운다.
 - `forRun`은 adapter를 만들 때 한 번만 선택을 읽어 고정한다. 그 뒤 전역 선택이 바뀌어도 진행 중인 run의 계정은 바뀌지 않는다.
-- 계정 추가 로그인은 항상 `crypto.randomUUIDv4()`로 만든 새 keychain slot을 쓴다. legacy provider client로는 계정을 추가하지 않는다.
+- 계정 추가 로그인은 항상 `crypto.uuidV4()`로 만든 새 keychain slot을 쓴다. legacy provider client로는 계정을 추가하지 않는다.
 - provider당 실행 중인 add-account 로그인은 하나다. 진행 중에 `start`를 부르면 `login_in_progress`로 실패한다. `settle`은 자기 attempt의 running entry만 settled로 바꾸고 더 새로운 로그인의 상태는 건드리지 않는다.
 - 로그인 완료 처리는 `Effect.forkDetach`로 HTTP 요청 수명과 분리된다. 명시적 cancel만 이를 멈춘다. publish 전에 cancelled 플래그와 `connection.connected`를 확인한다.
 - 실패 정리는 best-effort다. 이미 게시된 계정은 select 실패나 늦은 취소가 있어도 남는다. 게시되지 않은 slot만 제거한다. 정리 실패는 tag 이름만 경고 로그로 남기고, 원래 실패 결과를 그대로 둔다.
@@ -53,7 +53,7 @@ memory-agent의 프로바이더/런 계층은 `OAuthProfiles`·`OAuthAccountLogi
 - `claudeCodeVersion`은 모델이 최소 버전을 검사하는 값이다. Anthropic 모델 헤더(User-Agent)와 billing system 블록이 이 값을 함께 쓴다.
 - `prepareAnthropicValidationBody`는 원래 system 앞에 billing 헤더와 Claude Agent SDK identity 텍스트를 붙인다. `thinking.block_binding`이 있을 때만 `thinking-binding-controls-2026-08-01` beta를 추가한다. 디코드할 수 없는 본문이면 `Error("invalid_anthropic_request")`를 throw한다.
 - 조각 저장(`createChunkedPasswordEntry`): Windows `CRED_MAX_CREDENTIAL_BLOB_SIZE` 2,560바이트와 UTF-16 인코딩 때문에 한 조각은 1,280자로 제한한다. manifest는 `context-agent:chunked-password:v1:` 접두에 generation(UUIDv4)·count(1..256)·SHA-256 digest를 담는다. 새 generation은 모든 조각 쓰기가 성공한 뒤에만 공개한다. 조각 삭제는 모두 시도하고 첫 실패를 결과로 삼는다. 읽는 중 manifest가 바뀌면 한 번 더 읽는다.
-- Effect 요구사항: `createAccountBoundSubscriptionClients`와 `createOAuthAccountLoginManager`는 `OAuthKeychain`, `Crypto.Crypto`, `ChildProcessSpawner`가 필요하다. `OAuthProfiles` 생성에는 `SqlClient`와 `OAuthKeychain`, `OAuthAccountLogins.layer`에는 `OAuthProfiles`가 필요하다. `createChunkedPasswordEntry`는 `Crypto.Crypto`가 필요하다.
+- Effect 요구사항: `createAccountBoundSubscriptionClients`와 `createOAuthAccountLoginManager`는 `OAuthKeychain`, `SecureRandom.SecureRandom`, `Digest.Digest`, `ChildProcessSpawner`가 필요하다. `OAuthProfiles` 생성에는 `SqlClient`와 `OAuthKeychain`, `OAuthAccountLogins.layer`에는 `OAuthProfiles`가 필요하다. `createChunkedPasswordEntry`는 `SecureRandom.SecureRandom`과 `Digest.Digest`가 필요하다.
 
 ## Side Effects
 
@@ -64,7 +64,7 @@ memory-agent의 프로바이더/런 계층은 `OAuthProfiles`·`OAuthAccountLogi
 - 자식 프로세스: `ChildProcessSpawner`로 Windows 시스템 프록시를 조회하고(`windowsTokenProxy`), 그 프록시로 OpenAI 토큰을 요청한다(`fetchOpenAiTokenViaSystemProxy`).
 - 분리된 fiber: 로그인 완료와 계정 게시를 `Effect.forkDetach`로 백그라운드에서 실행한다.
 - 프로세스 메모리 상태: `SynchronizedRef`에 계정별 클라이언트 캐시, provider별 로그인 entry, 프로필 run/removing 게이트를 둔다. `Ref`에 커밋된 프로필 snapshot을 둔다.
-- 난수·시각: `Crypto.randomBytes`/`randomUUIDv4`/`digest`(SHA-256)를 쓰고, `DateTime.now`로 프로필 `created_at`을 기록한다.
+- 난수·시각: `SecureRandom`의 `randomBytes`/`uuidV4`와 `Digest.digest`(SHA-256)를 쓰고, `DateTime.now`로 프로필 `created_at`을 기록한다.
 - 로그: 정리 실패 시 `Effect.logWarning`(`"OAuth login cleanup failed"`, `"OAuth login slot cleanup failed"`, `"Credential fragment cleanup failed"`)을 남긴다.
 
 ## Verification

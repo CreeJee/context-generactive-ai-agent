@@ -91,18 +91,17 @@ const run = Effect.fn("CodeSandbox.run")(function* (
     });
 
   /** A `Call` is answered and leaves nothing on the stream; `Finished` is the outcome. */
-  const handle = (event: RunEvent) =>
-    RunEvent.match<Effect.Effect<Result.Result<Outcome, void>, RpcClientError.RpcClientError>>(
-      event,
-      {
-        Call: ({ id, name, args }) =>
-          replyTo(name, args).pipe(
-            Effect.flatMap((reply) => client.Reply({ id, reply })),
-            Effect.as(Result.failVoid),
-          ),
-        Finished: ({ outcome }) => Effect.succeed(Result.succeed(outcome)),
-      },
-    );
+  const handle = (
+    event: RunEvent,
+  ): Effect.Effect<Result.Result<Outcome, void>, RpcClientError.RpcClientError> =>
+    RunEvent.match(event, {
+      Call: ({ id, name, args }) =>
+        replyTo(name, args).pipe(
+          Effect.flatMap((reply) => client.Reply({ id, reply })),
+          Effect.as(Result.failVoid),
+        ),
+      Finished: ({ outcome }) => Effect.succeed(Result.succeed(outcome)),
+    });
 
   return yield* client
     .Run({

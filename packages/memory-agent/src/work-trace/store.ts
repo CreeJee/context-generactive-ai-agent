@@ -8,7 +8,6 @@ import {
   DateTime,
   Clock,
   Context,
-  Crypto,
   Data,
   Effect,
   Layer,
@@ -17,6 +16,7 @@ import {
   PubSub,
   Schema,
 } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { SqlClient, type Statement } from "effect/sql";
 import { JsonValue } from "../json.ts";
 import {
@@ -547,7 +547,7 @@ const notificationForAttempt = {
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
   /** The first row a query returns, if any. */
   const first = <A, E>(rows: Effect.Effect<ReadonlyArray<A>, E>) =>
     Effect.map(rows, (found) => found.at(0));
@@ -652,7 +652,7 @@ const make = Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
       const inserted = yield* first(sql`INSERT INTO work_artifacts
         (id, task_id, attempt_id, kind, locator, media_type, verification, created_at, updated_at)
-        VALUES (${yield* crypto.randomUUIDv4()}, ${input.handle.taskId}, ${input.handle.id},
+        VALUES (${yield* crypto.uuidV4()}, ${input.handle.taskId}, ${input.handle.id},
           ${input.kind}, ${encoded}, ${input.mediaType ?? null},
           ${input.verification ?? "unverified"}, ${now}, ${now})
         RETURNING *`);
@@ -732,7 +732,7 @@ const make = Effect.gen(function* () {
           yield* run(sql`INSERT INTO parent_notifications
             (id, project_id, task_id, origin_session_id, parent_run_id, kind, summary, payload,
              idempotency_key, created_at)
-            VALUES (${yield* crypto.randomUUIDv4()}, ${row.project_id}, ${row.task_id},
+            VALUES (${yield* crypto.uuidV4()}, ${row.project_id}, ${row.task_id},
               ${row.origin_session_id}, ${row.parent_run_id}, 'interrupted', ${summary},
               ${yield* encodeJson({ attemptId: row.id, failure })},
               ${`recovery:${row.id}:interrupted`}, ${now})
@@ -751,7 +751,7 @@ const make = Effect.gen(function* () {
           FROM run_events WHERE attempt_id = ${input.handle.id}`),
       );
       const occurredAt = input.occurredAt ?? (yield* Clock.currentTimeMillis);
-      const id = yield* crypto.randomUUIDv4();
+      const id = yield* crypto.uuidV4();
       const payload = yield* encodeJson(input.payload ?? {});
       const row = yield* decodeCursor(
         yield* first(sql`INSERT INTO run_events
@@ -862,7 +862,7 @@ const make = Effect.gen(function* () {
           WHERE id = ${input.taskId}`),
       );
       const now = yield* Clock.currentTimeMillis;
-      const id = yield* crypto.randomUUIDv4();
+      const id = yield* crypto.uuidV4();
       const payload = yield* encodeJson(input.payload ?? {});
       const deliveredToRunId =
         input.deliveredImmediately === true ? (input.deliveredToRunId ?? task.parent_run_id) : null;
@@ -916,10 +916,10 @@ const make = Effect.gen(function* () {
   const startAttempt = (input: StartAttemptInput) =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
-      const taskId = yield* crypto.randomUUIDv4();
-      const invocationId = yield* crypto.randomUUIDv4();
-      const attemptId = yield* crypto.randomUUIDv4();
-      const chatRunId = yield* crypto.randomUUIDv4();
+      const taskId = yield* crypto.uuidV4();
+      const invocationId = yield* crypto.uuidV4();
+      const attemptId = yield* crypto.uuidV4();
+      const chatRunId = yield* crypto.uuidV4();
       const previousAttempt = isTruthy(input.resumedFromAttemptId)
         ? yield* first(sql`SELECT attempt_number FROM agent_run_attempts
             WHERE id = ${input.resumedFromAttemptId}`)
@@ -983,7 +983,7 @@ const make = Effect.gen(function* () {
     readonly message: string;
   }) =>
     Effect.gen(function* () {
-      const id = yield* crypto.randomUUIDv4();
+      const id = yield* crypto.uuidV4();
       const now = yield* Clock.currentTimeMillis;
       yield* run(sql`INSERT INTO agent_invocations
         (id, task_id, parent_run_id, parent_tool_call_id, kind, status, message,
@@ -1186,7 +1186,7 @@ const make = Effect.gen(function* () {
           ),
         ),
       );
-      const claimId = yield* crypto.randomUUIDv4();
+      const claimId = yield* crypto.uuidV4();
       const claimedAt = yield* Clock.currentTimeMillis;
       yield* run(sql`INSERT INTO final_answer_claims
         (id, project_id, origin_session_id, parent_run_id, parent_message_id, created_at)
@@ -1195,7 +1195,7 @@ const make = Effect.gen(function* () {
       yield* Effect.forEach(
         reports,
         (report) =>
-          Effect.flatMap(crypto.randomUUIDv4(), (id) =>
+          Effect.flatMap(crypto.uuidV4(), (id) =>
             run(sql`INSERT INTO final_answer_sources (id, claim_id, task_id, attempt_id)
               VALUES (${id}, ${claimId}, ${report.taskId}, ${report.attemptId})`),
           ),
@@ -1400,9 +1400,9 @@ const make = Effect.gen(function* () {
         return resumeBlocked("uncertain_side_effect");
 
       const now = yield* Clock.currentTimeMillis;
-      const invocationId = yield* crypto.randomUUIDv4();
-      const attemptId = yield* crypto.randomUUIDv4();
-      const chatRunId = yield* crypto.randomUUIDv4();
+      const invocationId = yield* crypto.uuidV4();
+      const attemptId = yield* crypto.uuidV4();
+      const chatRunId = yield* crypto.uuidV4();
       const attemptNumber = task.previous_attempt_number + 1;
       const resumeReason =
         task.previous_status === "interrupted" ? "server_restarted" : "provider_failed";
@@ -1500,7 +1500,7 @@ const make = Effect.gen(function* () {
       if (input.intent === "archive" && session.archived_at !== null)
         return LifecycleRequest.completed({ targetId: input.sessionId, intent: input.intent });
       const now = yield* Clock.currentTimeMillis;
-      const operationId = yield* crypto.randomUUIDv4();
+      const operationId = yield* crypto.uuidV4();
       yield* run(sql`INSERT INTO lifecycle_operations
         (id, project_id, origin_session_id, target_kind, target_id, intent, status,
          idempotency_key, requested_at, updated_at)
@@ -1624,7 +1624,7 @@ const make = Effect.gen(function* () {
     yield* run(sql`INSERT INTO purge_receipts
       (id, operation_id, project_id, target_kind, target_id, policy_version,
        purged_counts, retained_kinds, completed_at)
-      VALUES (${yield* crypto.randomUUIDv4()}, ${operation.id}, ${operation.project_id}, 'session',
+      VALUES (${yield* crypto.uuidV4()}, ${operation.id}, ${operation.project_id}, 'session',
         ${sessionId}, 1, ${purgedCounts}, ${retainedKinds}, ${now})`);
   });
 
@@ -1744,7 +1744,7 @@ const make = Effect.gen(function* () {
           operationId: null,
         });
       const now = yield* Clock.currentTimeMillis;
-      const id = yield* crypto.randomUUIDv4();
+      const id = yield* crypto.uuidV4();
       const status = task.active_attempt_id === null ? "requested" : "cancelling";
       yield* run(sql`INSERT INTO lifecycle_operations
         (id, project_id, origin_session_id, target_kind, target_id, intent, status,
@@ -1813,7 +1813,7 @@ const make = Effect.gen(function* () {
     yield* run(sql`UPDATE parent_notifications
       SET summary = 'Deleted task lifecycle notification', payload = '{}'
       WHERE task_id = ${taskId}`);
-    const receiptId = yield* crypto.randomUUIDv4();
+    const receiptId = yield* crypto.uuidV4();
     const purgedCounts = yield* encodeJson({ artifacts, events });
     const retainedKinds = yield* encodeJson([
       "task_tombstone",

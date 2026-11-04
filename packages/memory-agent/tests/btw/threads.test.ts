@@ -1,4 +1,5 @@
-import { Crypto, Effect, FileSystem, Schema, Stream } from "effect";
+import { Effect, FileSystem, Schema, Stream } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { Attachments } from "../../src/attachments/attachments.ts";
@@ -21,11 +22,11 @@ import { freshSession, TestEnv, testAgent } from "../support/test-env.ts";
 import { sqlGet } from "../support/sql.ts";
 
 const question = Effect.fnUntraced(function* (text: string, imageIds: readonly string[]) {
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
   return {
-    runId: `run-${yield* crypto.randomUUIDv4()}`,
+    runId: `run-${yield* crypto.uuidV4()}`,
     message: {
-      id: yield* crypto.randomUUIDv4(),
+      id: yield* crypto.uuidV4(),
       role: "user" as const,
       content: [
         { type: "text" as const, content: text },

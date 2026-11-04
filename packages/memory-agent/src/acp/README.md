@@ -47,7 +47,7 @@
 - 타이머/fiber: 세션마다 lease 갱신 fiber(`renew`, 20초 주기)가 있다. prompt 중에는 서브에이전트·외부 에이전트 승인을 1.5초 주기(`relayPollMs`)로 확인한다
 - 메모리 상태: `Ref<HashMap<string, BridgeSession>>`에 세션 목록을 둔다. turn마다 `args`, `cancelled`, `failure` Ref가 있다
 - 파일 시스템: `FileSystem.FileSystem`(`NodeFileSystem`)으로 에디터 cwd 폴더가 있는지 확인한다(`FolderNotFound` 거절)
-- 암호: `Crypto.Crypto`(`NodeCrypto`)로 holder ID 같은 난수 ID를 만든다
+- 암호: `SecureRandom.SecureRandom`(`NodeCrypto`)로 holder ID 같은 난수 ID를 만든다
 - 스트림: `SdkStreams`가 Effect `Stream`을 `ReadableStream`으로, Effect `Sink`를 `WritableStream`으로 바꾸고 각 write를 `Effect.runPromiseWith`로 실행한다
 
 ## Verification

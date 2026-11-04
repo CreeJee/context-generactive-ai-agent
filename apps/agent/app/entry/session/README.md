@@ -62,7 +62,7 @@
 - DOM 이벤트 리스너: `window` `pagehide`, `work-trace:changed`, `document` `visibilitychange`
 - TanStack Query 캐시: `invalidateQueries`로 세션 trace와 프로젝트 trace를 무효화하고, `getQueryData`로 cursor를 읽는다
 - `window.location.reload()`: `RunNoticeView`의 detached 상태 다시 연결 버튼
-- 암호 난수: `browserCrypto.randomUUIDv4()`로 holder 토큰을 만든다
+- 암호 난수: `browserCrypto.uuidV4()`로 holder 토큰을 만든다
 
 ## Verification
 

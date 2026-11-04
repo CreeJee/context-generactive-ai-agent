@@ -1,14 +1,5 @@
-import {
-  Crypto,
-  Duration,
-  Effect,
-  FileSystem,
-  Layer,
-  Path,
-  Schedule,
-  Schema,
-  Stream,
-} from "effect";
+import { Duration, Effect, FileSystem, Layer, Path, Schedule, Schema, Stream } from "effect";
+import { Digest } from "effect/crypto";
 import * as NodeChildProcessSpawner from "@effect/platform-node/NodeChildProcessSpawner";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
@@ -104,7 +95,7 @@ export const archiveHostLayer = Layer.effect(
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const crypto = yield* Crypto.Crypto;
+    const crypto = yield* Digest.Digest;
     const client = yield* HttpClient.HttpClient;
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     // Node filesystem calls cannot abort; settle each call before staging is released.
@@ -139,9 +130,9 @@ export const archiveHostLayer = Layer.effect(
         );
       }),
       checksum: (options) =>
-        crypto.digest(options.algorithm === "sha256" ? "SHA-256" : "SHA-512", options.bytes).pipe(
-          Effect.map((digest) => Buffer.from(digest).toString("hex")),
-          Effect.mapError(hostFailure("checksum")),
+        crypto.digestHex(
+          options.algorithm === "sha256" ? Digest.sha256 : Digest.sha512,
+          options.bytes,
         ),
       stage: Effect.fn("ArchiveHost.stage")(
         function* (target: string) {

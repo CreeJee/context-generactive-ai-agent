@@ -13,7 +13,6 @@ const operationRefusal = {
   validation: "invalid_settings",
   missing: "account_not_found",
   keychain: "keychain_failed",
-  account_id: "settings_unavailable",
   partial: "settings_partially_saved",
   test: "endpoint_unavailable",
   models: "endpoint_unavailable",

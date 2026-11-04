@@ -1,15 +1,5 @@
-import {
-  HashMap,
-  Option,
-  Context,
-  Crypto,
-  Effect,
-  FileSystem,
-  Layer,
-  Path,
-  Ref,
-  Schema,
-} from "effect";
+import { HashMap, Option, Context, Effect, FileSystem, Layer, Path, Ref, Schema } from "effect";
+import { Digest, SecureRandom } from "effect/crypto";
 import {
   type ChunkedPasswordFailure,
   createChunkedPasswordEntry,
@@ -42,7 +32,7 @@ export interface SecretStoreApi {
 }
 
 const keychain = Effect.map(
-  Effect.context<FileSystem.FileSystem | Path.Path | Crypto.Crypto>(),
+  Effect.context<FileSystem.FileSystem | Path.Path | SecureRandom.SecureRandom | Digest.Digest>(),
   (platform): SecretStoreApi => {
     const open = (account: string) =>
       openKeyringEntry(keychainService, account).pipe(Effect.provideContext(platform));

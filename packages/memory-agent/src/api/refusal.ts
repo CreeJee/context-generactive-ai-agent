@@ -16,14 +16,23 @@ export const refusalWith =
 /** What an app API refusal carries beside its code: for some codes a reason the page shows. */
 export const appRefusalFields = { reason: Schema.optionalKey(Schema.String) };
 
-const annotatedStatus = SchemaAST.resolveAt<number>("httpApiStatus");
+const ownStatus = SchemaAST.resolveAt<number>("httpApiStatus");
+
+/**
+ * The status `HttpApiSchema.status` gave a schema. It is kept as a key annotation unless the
+ * schema already has an ordinary `httpApiStatus`, which then comes first, as the server reads it.
+ */
+const annotatedStatus = (schema: Schema.Top) =>
+  Option.fromNullishOr(ownStatus(schema.ast)).pipe(
+    Option.orElse(() => Option.fromNullishOr(Schema.resolveAnnotationsKey(schema)?.httpApiStatus)),
+  );
 
 /** The HTTP status a refusal of `refusals` is answered with, or 500 when none matches. */
 export const refusalStatusIn =
   (refusals: ReadonlyArray<Schema.Top>) =>
   (refused: { readonly error: string }): number =>
     Arr.findFirst(refusals, (schema) => Schema.is(schema)(refused)).pipe(
-      Option.flatMapNullishOr((schema) => annotatedStatus(schema.ast)),
+      Option.flatMap(annotatedStatus),
       Option.getOrElse(() => 500),
     );
 

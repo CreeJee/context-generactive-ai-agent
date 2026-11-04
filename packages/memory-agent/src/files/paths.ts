@@ -350,7 +350,7 @@ function resolveProjectPathBody(
           Effect.andThen(
             Effect.when(
               reject(path, "hard_link"),
-              Effect.succeed(!Option.contains(stats.nlink, 1)),
+              Effect.succeed(!Option.contains(stats.nlink, 1n)),
             ),
           ),
         ),
@@ -406,7 +406,7 @@ function resolveOutsidePathBody(
       if (stats.type !== "Directory") return yield* reject(path, "not_directory");
     } else {
       if (stats.type !== "File") return yield* reject(path, "not_file");
-      if (!Option.contains(stats.nlink, 1)) return yield* reject(path, "hard_link");
+      if (!Option.contains(stats.nlink, 1n)) return yield* reject(path, "hard_link");
     }
     return { absolute: canonical, stats };
   });

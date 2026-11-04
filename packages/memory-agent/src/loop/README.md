@@ -8,7 +8,7 @@ run·thread·interrupt 행은 TanStack 영속화와 같은 테이블·컬럼(`ch
 
 ## Interface
 
-- `runChat` — `RunSpec<R>`와 `RunInput`으로 run 하나를 돌린다. 진행하면서 행을 저장하는 `Stream<AgUiEvent, never, R | RunStore | Crypto.Crypto>`를 돌려준다(본체는 `runChatBody`)
+- `runChat` — `RunSpec<R>`와 `RunInput`으로 run 하나를 돌린다. 진행하면서 행을 저장하는 `Stream<AgUiEvent, never, R | RunStore | SecureRandom.SecureRandom>`를 돌려준다(본체는 `runChatBody`)
 - `RunSpec` — run 설정: `model`(LanguageModel), `source`, `system`, `tools`(`RunTool[]`), `providerTools?`, `hooks`, `modelFailure`
 - `RunInput` — run 입력: `threadId`, `runId`, 호출자가 합친 `conversation`, `resume`(`ResumeEntry[]`), 사용자 취소 시 완료되는 `cancel`
 - `RunHook` — 앱이 run에 붙이는 선택적 훅들. 나열 순서대로 실행된다: `started`, `joining`, `request`, `admit`(gate), `answered`, `usage`, `stepEnded`, `continues`, `ended`
@@ -44,7 +44,7 @@ run·thread·interrupt 행은 TanStack 영속화와 같은 테이블·컬럼(`ch
 - run 로그 offset 형식은 `memory:v1:<encodeURIComponent(runId)>:<seq>`(seq ≥ 1)이다. `-1`은 처음부터, `now`는 현재 끝부터 읽는다. 닫힌 로그는 append를 `closed`로 거부하고, 두 번째 close는 아무것도 하지 않는다
 - 메모리 run 로그는 종료 후 5분(`finishedLogTtl`)까지만 유지되고 최대 1024개(`maxLogs`)다. 초과하면 오래된 종료 로그부터 지운다. 실행 중인 로그는 지우지 않는다. 로그는 프로세스와 함께 사라지며, 재시작 후 재접속한 페이지는 저장된 transcript를 읽는다
 - `AgUiEvent`는 TanStack 필드 없이 표준 AG-UI 1.0 형태만 쓴다. 클라이언트도 같은 Schema로 디코드하므로, 형태를 바꾸면 양쪽이 함께 바뀐다
-- 시각은 `Clock.currentTimeMillis`로 읽는다(`Date.now` 직접 호출 안 함). `runChat`에는 `RunStore`와 `Crypto.Crypto` 서비스가 필요하다
+- 시각은 `Clock.currentTimeMillis`로 읽는다(`Date.now` 직접 호출 안 함). `runChat`에는 `RunStore`와 `SecureRandom.SecureRandom` 서비스가 필요하다
 
 ## Side Effects
 
@@ -56,7 +56,7 @@ run·thread·interrupt 행은 TanStack 영속화와 같은 테이블·컬럼(`ch
 - 도구 실행: `stepScheduler`가 호출마다 fiber를 run Scope에 fork한다. Scope를 닫으면 실행 중인 호출이 interrupt된다
 - LanguageModel 호출(외부 provider 네트워크)이 run step마다 일어난다(`RunSpec.model`)
 - 프로세스 메모리 상태: `memoryRunLogs`의 SynchronizedRef/SubscriptionRef 맵. 새 로그를 만들 때 오래된 로그를 정리한다
-- id 생성에 `Crypto` 서비스를 쓰고, 시각을 `Clock`으로 읽는다
+- id 생성에 `SecureRandom` 서비스를 쓰고, 시각을 `Clock`으로 읽는다
 
 ## Verification
 

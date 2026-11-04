@@ -52,7 +52,7 @@
 - 앱 API의 거부 code는 group이 달라도 상태가 하나다. 페이지는 `appRefusalStatus`로 거부 값만 보고 상태를 찾는다. 제보의 `report_delivery_failed`·`report_diagnosis_failed`는 `reason` 리터럴마다 스키마가 하나라 상태가 reason을 따른다. 예외는 둘이다. `auth_failed`는 502와 504(`reason: auth_status_timeout`)가 있고, reason이 정해진 504를 먼저 선언해 둘을 가른다. `provider_unavailable`은 설정에 없는 provider의 404와, 선택한 모델의 provider를 지금 쓸 수 없는 503(`provider`를 싣는다, `SelectedProviderUnavailable`)이 있고, `providersRefusals`가 503을 먼저 선언해 둘을 가른다. 새 group의 거부 목록은 `app-api.ts`의 `appRefusals`에 더한다. `appRefusalStatus`와 `AppRefusalCode`가 둘 다 이 목록에서 나온다.
 - holder 헤더 이름은 `x-session-holder`다. `satisfies Lowercase<typeof sessionHolderHeader>`로 `sessions/lease-state.ts`의 헤더 상수와 맞춘다.
 - 세션을 바꾸는 엔드포인트(`run`, `ask`)에는 `SameSite` 미들웨어를 붙인다. 403 cross-site 거부는 `refusals` 목록이 아니라 `SameSite`의 error에 둔다.
-- 거부 코드와 HTTP 상태는 `refusalWith(fields)(status, codes)`로 묶는다. 이 상태는 `refusalStatusIn`이 `httpApiStatus` 어노테이션에서 읽고, 어느 스키마에도 맞지 않으면 500을 쓴다.
+- 거부 코드와 HTTP 상태는 `refusalWith(fields)(status, codes)`로 묶는다. 이 상태는 `refusalStatusIn`이 `httpApiStatus` 어노테이션에서 읽고(4.1.2의 `HttpApiSchema.status`는 키 어노테이션에 둔다), 어느 스키마에도 맞지 않으면 500을 쓴다.
 - 핸들러에서 어떤 refusal 코드에도 매핑되지 않은 실패는 `orDefect`가 `logDefect("route_defect")`로 남긴다. 그다음 `Effect.die`로 500 defect를 낸다.
 - run SSE 이벤트의 `id`는 run 로그의 offset이다. `join`은 `after` 다음부터 이어 읽고, `after`가 없으면 `"-1"`부터 읽는다. BTW run 이벤트 id는 스트림 시작부터 0,1,2… 인덱스다.
 - run 로그 읽기 오류는 경고 로그를 남긴다. 그 뒤 `{ error: "run_events_unavailable" }`로 바꿔 스트림을 끝낸다.
@@ -66,7 +66,7 @@
 - `caughtUp`은 새 snapshot의 첫 메시지보다 앞서 읽은 오래된 메시지를 유지한다. 단, 새 페이지가 그 메시지에 더는 닿지 않으면 버린다. `failure`도 유지한다.
 - `TOOL_CALL_RESULT`는 해당 tool-call을 `complete`로 바꾼다. 같은 `toolCallId`의 이전 tool-result는 하나로 교체한다. 알 수 없는 call에 대한 이벤트는 view를 바꾸지 않는다.
 - `limit` 쿼리는 1..`maxPageSize`(500) 범위의 정수여야 한다.
-- run id와 메시지 id는 `Crypto.randomUUIDv7`로 만든다.
+- run id와 메시지 id는 `SecureRandom.uuidV7`로 만든다.
 
 ## Side Effects
 
@@ -74,7 +74,7 @@
 - `chat-api-live.ts`: `RunLog.read(after)`로 run 로그를 스트림으로 읽는다. 로그를 읽지 못하면 `Effect.logWarning`을 남긴다.
 - `chat-api-live.ts`: 매핑되지 않은 실패를 `logDefect("route_defect")`로 로그에 남긴다.
 - `chat-session.ts`, `btw-thread.ts`: `HttpApiClient`로 `/api/sessions/...`와 `/api/btw/...`에 네트워크 요청을 보낸다. SSE 스트림 구독도 포함한다.
-- `chat-session.ts`, `btw-thread.ts`: `Crypto.randomUUIDv7`로 무작위 id를 만든다.
+- `chat-session.ts`, `btw-thread.ts`: `SecureRandom.uuidV7`로 무작위 id를 만든다.
 - `chat-session.ts`, `btw-thread.ts`: `effect/reactivity` Atom 상태(`state`, `custom`, `view`)를 바꾼다. 이 Atom들은 `Atom.keepAlive`로 유지된다.
 
 ## Verification

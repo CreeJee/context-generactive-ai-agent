@@ -1,7 +1,8 @@
 import { DatabaseSync } from "node:sqlite";
 import { NodeCrypto } from "@effect/platform-node";
 import { it } from "@effect/vitest";
-import { Context, type Crypto, Deferred, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect";
+import { Context, Deferred, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect";
+import type { SecureRandom } from "effect/crypto";
 import { SqlClient } from "effect/sql";
 import { describe, expect } from "vite-plus/test";
 import type { StoredMessage } from "../../src/chat-store/schema.ts";
@@ -33,7 +34,7 @@ const database = Effect.acquireRelease(
 
 /** `body` on a fresh database. */
 const withRows = <A, E>(
-  body: Effect.Effect<A, E, RunStore | SqlClient.SqlClient | Crypto.Crypto>,
+  body: Effect.Effect<A, E, RunStore | SqlClient.SqlClient | SecureRandom.SecureRandom>,
 ) =>
   Effect.gen(function* () {
     const sql = yield* connectionContext(yield* database);
@@ -95,7 +96,7 @@ const harness = Effect.fnUntraced(function* (
       readonly resume?: ReadonlyArray<ResumeEntry>;
       readonly cancel?: Effect.Effect<void>;
     } = {},
-  ): Effect.Effect<ReadonlyArray<AgUiEvent>, never, RunStore | Crypto.Crypto> =>
+  ): Effect.Effect<ReadonlyArray<AgUiEvent>, never, RunStore | SecureRandom.SecureRandom> =>
     Stream.runCollect(
       runChat(spec, {
         threadId: "thread",

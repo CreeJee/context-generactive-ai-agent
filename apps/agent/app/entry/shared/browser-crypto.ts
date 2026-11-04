@@ -1,15 +1,6 @@
-import { Crypto, Effect, PlatformError } from "effect";
+import { SecureRandom } from "effect/crypto";
 
-/** Web Crypto is the browser platform implementation of the Effect Crypto service. */
-export const browserCrypto = Crypto.make({
-  randomBytes: (size) => crypto.getRandomValues(new Uint8Array(size)),
-  digest: (algorithm, data) =>
-    Effect.tryPromise({
-      try: () =>
-        crypto.subtle
-          .digest(algorithm, Uint8Array.from(data))
-          .then((buffer) => new Uint8Array(buffer)),
-      catch: (cause) =>
-        PlatformError.systemError({ _tag: "Unknown", module: "Crypto", method: "digest", cause }),
-    }),
-});
+/** Web Crypto's random bytes as the browser's Effect `SecureRandom` service. */
+export const browserCrypto = SecureRandom.make((size) =>
+  crypto.getRandomValues(new Uint8Array(size)),
+);

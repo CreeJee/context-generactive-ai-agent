@@ -1,4 +1,5 @@
-import { Crypto, Effect, FileSystem, Path } from "effect";
+import { Effect, FileSystem, Path } from "effect";
+import { Digest } from "effect/crypto";
 import { Function as EffectFunction } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { Hex } from "effect/encoding";
@@ -64,7 +65,7 @@ const fingerprintFiles = Effect.fn("dev.fingerprintFiles")(function* (
 const fingerprint = Effect.fn("dev.fingerprint")(function* (appRoot: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* Digest.Digest;
   const files = (yield* Effect.forEach(
     developmentBackendWatchPaths(appRoot),
     fingerprintFiles,
@@ -84,7 +85,7 @@ const fingerprint = Effect.fn("dev.fingerprint")(function* (appRoot: string) {
   const offsets = Arr.scan(chunks, 0, (offset, chunk) => offset + chunk.byteLength);
   const input = new Uint8Array(Arr.lastNonEmpty(offsets));
   Arr.zip(chunks, offsets).forEach(([chunk, offset]) => input.set(chunk, offset));
-  return Hex.encode(yield* crypto.digest("SHA-256", input)).slice(0, 24);
+  return Hex.encode(yield* crypto.digest(Digest.sha256, input)).slice(0, 24);
 });
 
 /** Stable fingerprint of every source file owned by the no-HMR backend boundary. */

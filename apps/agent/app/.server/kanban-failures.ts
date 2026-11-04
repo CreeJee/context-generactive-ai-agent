@@ -51,5 +51,4 @@ export const kanbanRefusal = {
   GoalScheduleStorageFailed: () => Effect.fail({ error: "schedule_storage_failed" } as const),
   SqlError: () => Effect.fail({ error: "storage_failed" } as const),
   SchemaError: () => Effect.fail({ error: "storage_failed" } as const),
-  PlatformError: () => Effect.fail({ error: "platform_failed" } as const),
 };

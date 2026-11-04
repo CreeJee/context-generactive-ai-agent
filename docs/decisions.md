@@ -1004,7 +1004,6 @@
 | `GoalScheduleStorageFailed`                                          | 500         | `schedule_storage_failed`                 |
 | `GlobalConfigFailed`                                                 | 500         | `settings_failed`                         |
 | `SqlError`·`SchemaError`(세션·프로젝트 조회)                         | 500         | `storage_failed`                          |
-| `PlatformError`(카드 id 생성)                                        | 500         | `platform_failed`                         |
 
 - 보드·판단·설정 화면은 응답 코드(`ApiError.code`)로 문구를 고르고, 오류를 문자열로 바꿔 보이지 않는다.
 
@@ -3778,3 +3777,23 @@
 - 컬럼 테이블 6개의 INSERT와 해당 컬럼 UPDATE 트리거가 `secret_sweep_changes`에 행과 쓰기 횟수를 남긴다. sweep은 표시된 행만 읽고, 쓰기 횟수가 읽을 때와 같을 때만 그 행을 잊고 가린 값을 쓴다. 읽은 뒤 저장된 대화를 sweep이 옛 내용으로 덮어쓰던 경쟁도 이걸로 막힌다. 사이에 쓰인 행은 표시가 남아 다음 시작에 읽는다.
 - 이 탐지기 버전의 진행 기록이 없는 테이블은 sweep 전에 모든 행을 표시한다. 마이그레이션이 컬럼 테이블의 진행 기록을 지우므로 업그레이드 뒤 첫 시작은 한 번 전부 읽고, 그다음부터는 지난 시작 뒤 쓰인 행만 읽는다. `sweepVersion`을 올릴 때도 같다.
 - secretlint 호출을 여러 문자열로 묶는 안은 하지 않았다. 묶은 문자열 경계를 넘는 탐지(개인 키 블록 등)를 나눠야 하고, 읽는 양이 줄면 고정 비용도 같이 준다.
+
+## Effect를 npm 4.1.2로 올리고 crypto 서비스를 `effect/crypto`로 옮긴다 (2026-11-04)
+
+- 사용자 결정: 버전업은 확정이다. Effect 패키지(catalog 6개)를 pkg.pr.new preview(4.0.3, `844a77b`)에서 npm 4.1.2로 올린다. 2026-10-11 "공식 Effect preview" 결정의 pkg.pr.new 고정을 대체한다. registry에서 받게 되었으므로 2026-10-17에 저장한 `blockExoticSubdeps: false`를 지운다. `@effect/tsgo`는 0.53.3에 둔다.
+- pnpm patch를 4.1.2로 옮긴다. 4.1.2에 들어온 `FileSystem.lstat`과 겹치는 부분은 지운다. `openDirectory`, `statDescriptor`, `File.Info.mtimeNs`·`ctimeNs`, `ChildProcess`의 `windowsVerbatimArguments`·`exitStatus`, `NodeHttpServer.createServer`는 남긴다. 4.1.2의 `File.Info`는 `dev`가 bigint이고 `ino`·`nlink`가 `Option<bigint>`이라, hard link 검사는 `1n`과 비교한다.
+- `effect`의 `Crypto` 서비스가 없어지고 `effect/crypto`의 `SecureRandom`(난수·UUID)과 `Digest`(해시)로 나뉘었다. id만 만드는 곳은 `SecureRandom`, 해시만 쓰는 곳은 `Digest`를 요구한다. 둘 다 쓰는 곳(PKCE, 키체인 조각, 첨부, 파일 쓰기)은 둘을 요구한다. `NodeServices.layer`에는 이제 crypto가 없다. 앱 런타임(`nodePlatformLayer`)은 이미 `NodeCrypto.layer`를 넣는다. `NodeServices.layer`만 쓰던 테스트·eval·패키징 스크립트에는 `NodeCrypto.layer`를 더한다. 브라우저는 `SecureRandom.make`로 Web Crypto 난수를 감싼다.
+- 새 `uuidV4`·`uuidV7`·`randomBytes`·`digest`는 실패하지 않는다. 그래서 이 호출에 붙어 있던 `orDie`·`mapError`·`catchTag("PlatformError")`를 지운다. `mapError`를 남기면 일어날 수 없는 오류가 타입에 남는다. 그 실패만 나타내던 이유도 지운다.
+  - `ProjectHostReason.IdentityFailed`
+  - `ImageMediaUnavailable`의 `run_id_failed`
+  - `OpenAICompatibleFailed`의 `account_id`
+  - `BtwStorageFailed`의 `create_thread`
+  - 칸반 route의 `PlatformError`(카드 id 생성)와 응답 코드 `platform_failed`
+  - 리포트 id 해시의 `unhashed`
+- `Schema.TaggedUnion`의 `match`는 결과 타입 인자를 받지 않는다. 첫 타입 인자가 handler 객체다. `match<R>(…)` 호출은 타입 인자를 빼고, 결과 타입이 필요한 곳은 handler나 함수의 반환 타입에 적는다.
+- `SqlClient.make`에 `driver`가 필수가 되었다. 앱의 두 어댑터는 공식 `@effect/sql-sqlite-node`가 아니므로 `"memory-agent-sqlite"`(`sqliteDriver`)라는 이름을 쓴다. `sql.insert`는 빈 배열을 받지 않는다. 그래서 여러 행을 넣는 곳은 `Array.match`로 빈 경우를 먼저 가른다.
+- AiError에 `InvalidResponseError`(공급자 응답 형식 불일치)가 생겨 실패 문구 표에 넣는다. `@effect/ai-openai-compat`는 오류 종류·코드를 `metadata["openai-compat"]`에 둔다(전에는 `openai`). 실패 문구가 그 키를 읽는다.
+- `HttpApiSchema.status`는 상태를 키 어노테이션에 둔다. `refusalStatusIn`은 일반 어노테이션이 없으면 `Schema.resolveAnnotationsKey`에서 읽는다. 그러지 않으면 모든 거부가 500이 된다.
+- `Semaphore`는 이제 순서를 지킨다. 기다리는 fiber가 있으면 permit을 막 놓은 fiber도 그 뒤에 선다. 호환 설정의 "갱신 중 모델 선택" 테스트는 이 차이에 기대고 있었다. 갱신 helper는 연결·모델 저장·모델 삭제 세 번의 permit이고, 선택은 연결과 모델 저장 사이에 돈다. 2026-10-04의 계약("동시 갱신·모델 선택은 한 permit에서 직렬화")은 그대로라, 테스트는 키 쓰기 중에 선택이 끝나지 않는 것과 그 뒤의 결과를 본다.
+- 2026-10-18의 "`@effect/sql-sqlite-node`는 `effect ^4.0.5`를 요구하므로 쓰지 않는다"는 이유는 이번 상향으로 없어진다. 2026-10-18 남은 `node:*` 목록의 "별도 네이티브 패키지라 SEA 제약과 맞지 않는다"도 지금은 맞지 않는다. 공식 드라이버는 4.0.2부터 `node:sqlite`를 쓰고 의존성이 없다. 공식 드라이버로 바꿀지는 따로 정한다.
+- `vp run typecheck`의 오류·경고는 상향 전 main과 같은 목록이다(오류 43개).

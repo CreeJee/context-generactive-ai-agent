@@ -1,6 +1,7 @@
 import { Cause } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { Context, Crypto, Effect, FileSystem, Layer, Option, Schema } from "effect";
+import { Context, Effect, FileSystem, Layer, Option, Schema } from "effect";
+import { Digest, SecureRandom } from "effect/crypto";
 import { StorageRoot } from "../config/storage-root.ts";
 import { listOutsideFilesEffect, createSnapshots, type Snapshot } from "../files/listing.ts";
 import { resolveFencedOutsidePath, type Fenced } from "../files/paths.ts";
@@ -78,7 +79,9 @@ const make = Effect.gen(function* () {
   const storage = yield* StorageRoot;
   const snapshots = yield* createSnapshots();
   const readPage = yield* createTextPageReader;
-  const platform = yield* Effect.context<FileSystem.FileSystem | Crypto.Crypto>();
+  const platform = yield* Effect.context<
+    FileSystem.FileSystem | SecureRandom.SecureRandom | Digest.Digest
+  >();
 
   /** The listing `lookup` finds, failing with `expired` when its snapshot is gone. */
   const unexpired = <E, R>(lookup: Effect.Effect<Snapshot | undefined, E, R>, expired: string) =>

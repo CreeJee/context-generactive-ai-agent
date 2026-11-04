@@ -3,7 +3,6 @@ import {
   Cause,
   Clock,
   Context,
-  Crypto,
   Effect,
   Exit,
   FiberMap,
@@ -15,6 +14,7 @@ import {
   Semaphore,
   Stream,
 } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { RunStore } from "../loop/store.ts";
 import { optionalProperty } from "../optional-property.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
@@ -118,7 +118,7 @@ const awaitedByServer =
 
 const make = Effect.gen(function* () {
   const trace = yield* WorkTraceStore;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
   const sql = yield* SqlClient.SqlClient;
   const priorDispatch = SqlSchema.findOneOption({
     Request: Schema.Struct({
@@ -217,7 +217,7 @@ const make = Effect.gen(function* () {
           title: hiddenRequest.text.replace(/\s+/gu, " ").slice(0, 80),
           request: hiddenRequest.text,
           kind: "start",
-          threadId: `background-${yield* traceEffect(crypto.randomUUIDv4())}`,
+          threadId: `background-${yield* traceEffect(crypto.uuidV4())}`,
         }),
       );
       yield* Ref.update(sessions, HashMap.set(handle.taskId, binding.sessionId));

@@ -1,4 +1,5 @@
-import { Config, Crypto, DateTime, Effect, Match, Option, Schema } from "effect";
+import { Config, DateTime, Effect, Match, Option, Schema } from "effect";
+import { Digest } from "effect/crypto";
 import { Hex } from "effect/encoding";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { GlobalConfig } from "../config/global-config.ts";
@@ -159,13 +160,12 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
 ) {
   const sql = yield* SqlClient.SqlClient;
   const redactor = yield* SecretRedactor;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* Digest.Digest;
 
   const ref = (id: string) =>
-    crypto.digest("SHA-256", new TextEncoder().encode(id)).pipe(
-      Effect.map((digest) => Hex.encode(digest).slice(0, refLength)),
-      Effect.catchTag("PlatformError", () => Effect.succeed("unhashed")),
-    );
+    crypto
+      .digest(Digest.sha256, new TextEncoder().encode(id))
+      .pipe(Effect.map((digest) => Hex.encode(digest).slice(0, refLength)));
 
   /**
    * Redacts many texts in one pass of the detectors, which is what costs; a pass that does not

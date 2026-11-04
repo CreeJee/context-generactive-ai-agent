@@ -40,7 +40,7 @@
 - 파일 publish는 고유 임시 파일(`<dest>.<uuidv4>.tmp`, flag `wx`, mode 0o600)에 쓴 뒤 rename으로 원자적으로 바꾼다. 임시 파일은 release에서 지운다. 이 과정 전체가 uninterruptible이다
 - 변환 실패 시에는 원본을 보낸다. 로그에는 `attachment_conversion_failed`와 operation 태그만 남긴다. 경로나 Sharp 메시지는 로그에 남기지 않는다
 - 첨부 디렉터리는 `<StorageRoot>/attachments`(mode 0o700)이고 파일은 mode 0o600이다
-- `make`에는 `Scope.Scope`, `SqlClient`, `StorageRoot`, `FileSystem`, `Path`, `Crypto`가 필요하다
+- `make`에는 `Scope.Scope`, `SqlClient`, `StorageRoot`, `FileSystem`, `Path`, `SecureRandom`, `Digest`가 필요하다
 - `DrawingPreviews`는 SVG를 도구와 같은 `resolveProjectPath`/`readFileBytesEffect({checkLeaf: true})` 검사로 다시 읽는다. 그래서 나중에 바꿔 끼운 링크는 거부된다
 - preview는 부가 정보다. 실패하면 `drawing_preview_unavailable` debug 로그만 남긴다. 도구 원래 결과의 다른 필드는 바꾸지 않고 `preview`만 덧붙인다
 - preview는 쓴 시점의 스냅샷이다. 노드가 불변이므로 파일이 나중에 수정되거나 삭제되어도 그림은 바뀌지 않는다
@@ -55,7 +55,7 @@
 - 파일시스템: 도구가 쓴 프로젝트 SVG 파일 읽기(previews)
 - 네이티브 모듈: `requireRuntime("sharp")`로 Sharp를 불러 이미지 회전·리사이즈·WebP 인코딩
 - 동시성: Semaphore(2) 허가, 서비스 Scope에 변환 fiber fork, SynchronizedRef 상태
-- 암호: `Crypto.randomUUIDv4`로 임시 파일 이름 생성
+- 암호: `SecureRandom.uuidV4`로 임시 파일 이름 생성
 - 로그: `attachment_conversion_failed`(warning), `drawing_preview_unavailable`(debug)
 
 ## Verification

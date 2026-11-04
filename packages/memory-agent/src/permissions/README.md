@@ -12,7 +12,7 @@
 - `reviewInstructions` — 검토 모델에 주는 system 지시문 문자열이다. JSON `{decision, reason}` 한 객체로 답하고, reason은 한국어 한 문장으로 쓰게 한다.
 - `routineShellVerdict` — `EffectFunction.dual(2)` 순수 함수. `save_code_skill`의 sh 스크립트가 루틴 pnpm/npm/yarn/bun·git 명령뿐이면 allow, 줄이 전부 npx/pnpx면 ask를 반환한다. 그 밖에는 undefined를 반환해 모델 검토로 넘긴다.
 - `PermissionGate` — Effect 서비스. `hookFor(GateBinding)`가 한 run의 권한 RunHook을 만든다. 요구사항 `PermissionClassifier | PermissionReviews`를 layer 생성 시 캡처한다.
-- `makePermissionGateHook` — `GateBinding`으로 `RunHook<Crypto.Crypto>`를 만든다. `started`는 재개된 interrupt 답을 기록하고, `admit`은 gated 호출을 허용·거부하거나 사용자에게 묻는다.
+- `makePermissionGateHook` — `GateBinding`으로 `RunHook<SecureRandom.SecureRandom>`를 만든다. `started`는 재개된 interrupt 답을 기록하고, `admit`은 gated 호출을 허용·거부하거나 사용자에게 묻는다.
 - `GateBinding` — gate 설정(project, sessionId, selection, `gated: HashSet<string>`, `decider: classifier|user`)
 - `PermissionReviews` — `permission_reviews` 표 Effect 서비스. `record(NewPermissionReview)`와 `latest(sessionId, toolCallId)`를 제공한다.
 - `PermissionReview` / `NewPermissionReview` — 검토 기록 Schema와 타입. `NewPermissionReview`는 createdAt을 뺀 형태다.
@@ -31,7 +31,7 @@
 - decider가 `user`면 기존 리뷰가 없을 때 classifier를 부르지 않고 매 호출 사용자에게 묻는다(askedBy `every_call`). classifier verdict가 `ask`면 askedBy `review`로 묻는다.
 - 재개된 run에서 취소된(Cancelled) permission_review interrupt는 사용자 거부(`denied`)로 기록한다.
 - gate는 gated 호출을 각각 따로 결정한다. 사용자를 기다리는 호출이 다른 호출을 막지 않는다.
-- interrupt id는 `interrupt-` + `Crypto.randomUUIDv7()`이고, reason은 `permission_review`, responseSchema는 `{approved: boolean}`(required, additionalProperties false)이다. 재개 시 `payload.metadata.payload`의 toolCallId/toolName/arguments로 call을 복원한다.
+- interrupt id는 `interrupt-` + `SecureRandom.uuidV7()`이고, reason은 `permission_review`, responseSchema는 `{approved: boolean}`(required, additionalProperties false)이다. 재개 시 `payload.metadata.payload`의 toolCallId/toolName/arguments로 call을 복원한다.
 
 ## Side Effects
 
@@ -40,7 +40,7 @@
 - 네트워크: `ActiveProvider`로 고른 provider의 cheapest-effort 모델에 `singleAnswer` 한 번 호출
 - API 사용량 기록: `recordUsage`(ApiUsage ledger, purpose `permission-classification`)
 - Clock 읽기: `Clock.currentTimeMillis`로 createdAt ISO 문자열을 만든다.
-- Crypto: classifier threadId는 `randomUUIDv4`, interrupt id는 `randomUUIDv7`로 만든다.
+- 난수: classifier threadId는 `uuidV4`, interrupt id는 `uuidV7`로 만든다.
 - 타이머: classify에 60초 `Effect.timeoutOrElse`
 - 로그: 분류 실패 시 `Effect.logWarning("permission_classification_failed")`
 - run 중단: 사용자 확인이 필요하면 `CallOutcome.Waiting` interrupt를 만들어 사용자에게 묻는다.

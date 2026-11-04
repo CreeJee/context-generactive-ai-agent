@@ -1,15 +1,5 @@
-import {
-  DateTime,
-  Clock,
-  Context,
-  Crypto,
-  Effect,
-  FileSystem,
-  Layer,
-  Option,
-  Path,
-  Schema,
-} from "effect";
+import { DateTime, Clock, Context, Effect, FileSystem, Layer, Option, Path, Schema } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { SqlClient, SqlError, SqlSchema } from "effect/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
@@ -59,7 +49,6 @@ export class ProjectNotFound extends Schema.TaggedError<
 export const ProjectHostReason = Schema.TaggedUnion({
   RealPathFailed: { cause: Schema.Defect() },
   StatFailed: { cause: Schema.Defect() },
-  IdentityFailed: { cause: Schema.Defect() },
 });
 const hostFailure = ProjectHostReason.cases;
 
@@ -71,7 +60,7 @@ export class ProjectHostFailed extends Schema.TaggedError<
 const make = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
   const canonical = Effect.fnUntraced(function* (
     requested: string,
   ): Effect.fn.Return<string, ProjectHostFailed> {
@@ -238,14 +227,7 @@ const make = Effect.gen(function* () {
           return yield* ProjectRootRejected.make({ root, reason: "overlaps_storage" });
 
         const project: Project = {
-          id: yield* crypto.randomUUIDv4().pipe(
-            Effect.mapError((cause) =>
-              ProjectHostFailed.make({
-                root,
-                reason: hostFailure.IdentityFailed.make({ cause }),
-              }),
-            ),
-          ),
+          id: yield* crypto.uuidV4(),
           root,
           name: path.basename(root) || root,
           crossRecallExcluded: false,

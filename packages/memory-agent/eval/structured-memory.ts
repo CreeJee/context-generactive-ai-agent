@@ -1,4 +1,4 @@
-import { NodeServices } from "@effect/platform-node";
+import { NodeCrypto, NodeServices } from "@effect/platform-node";
 import {
   Clock,
   Config,
@@ -435,6 +435,8 @@ const program = Effect.gen(function* () {
 });
 
 const runtime = ManagedRuntime.make(
-  OAuthKeychain.keychain.pipe(Layer.provideMerge(NodeServices.layer)),
+  OAuthKeychain.keychain.pipe(
+    Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+  ),
 );
 await runtime.runPromise(Effect.scoped(program)).finally(() => runtime.dispose());

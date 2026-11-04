@@ -31,7 +31,6 @@ import dayjs from "dayjs";
 import {
   Clock,
   Context,
-  Crypto,
   Data,
   Effect,
   Exit,
@@ -45,6 +44,7 @@ import {
   Schema,
   Stream,
 } from "effect";
+import { SecureRandom } from "effect/crypto";
 import type { SqlError } from "effect/sql";
 import { CardAttempts } from "../kanban/card-attempts.ts";
 import { HumanDecisions } from "../kanban/human-decision.ts";
@@ -642,11 +642,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const liveRuns = yield* createLiveRuns;
   const cancellations = yield* RunCancellations;
   const runStore = yield* RunStore;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
   const scope = yield* Effect.scope;
   // One owner-process fence for durable workflow admission: a restarted owner cannot create a
   // second workflow execution for a run.
-  const goalExecutionOwnerGeneration = yield* crypto.randomUUIDv4();
+  const goalExecutionOwnerGeneration = yield* crypto.uuidV4();
   /** The answer a steered message may cut, per session, while an app-run model answers. */
   const steerCuts = yield* Ref.make(HashMap.empty<string, SteerCut>());
   /** Lets go of a run's cut, unless a later run of the session already holds its own. */
@@ -1552,7 +1552,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ).pipe(
             shownRunErrors(redactor),
             Stream.provideService(RunStore, runStore),
-            Stream.provideService(Crypto.Crypto, crypto),
+            Stream.provideService(SecureRandom.SecureRandom, crypto),
           );
           const claim = yield* liveRuns.claim({
             sessionId,
@@ -1803,7 +1803,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               followup.length === 0
                 ? null
                 : yield* orchestratorMessage(
-                    yield* crypto.randomUUIDv7(),
+                    yield* crypto.uuidV7(),
                     {
                       next: InternalFollowup.$is("workflow")(internalFollowup)
                         ? "plan"
@@ -2213,7 +2213,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           budget: budgetFor(window()),
           restore,
         });
-        const hooks: ReadonlyArray<RunHook<RunStore | Crypto.Crypto>> = [
+        const hooks: ReadonlyArray<RunHook<RunStore | SecureRandom.SecureRandom>> = [
           delivery.hookFor({ projectId, sessionId, runId }),
           ...(reportSource !== null
             ? []
@@ -2283,7 +2283,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         ).pipe(
           shownRunErrors(redactor),
           Stream.provideService(RunStore, runStore),
-          Stream.provideService(Crypto.Crypto, crypto),
+          Stream.provideService(SecureRandom.SecureRandom, crypto),
         );
         const claim = yield* liveRuns.claim({
           sessionId,
@@ -2590,7 +2590,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const requested = yield* workTrace.requestSessionLifecycle({
           sessionId,
           intent: archived ? "archive" : "restore",
-          idempotencyKey: idempotencyKey ?? (yield* crypto.randomUUIDv4()),
+          idempotencyKey: idempotencyKey ?? (yield* crypto.uuidV4()),
         });
         if (LifecycleRequest.$is("blocked")(requested)) return yield* lifecycleBlocked(requested);
         if (LifecycleRequest.$is("completed")(requested)) return yield* sessions.get(sessionId);
@@ -2884,7 +2884,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           }),
         ),
       );
-    return Effect.flatMap(crypto.randomUUIDv4(), run).pipe(
+    return Effect.flatMap(crypto.uuidV4(), run).pipe(
       // A later wakeup tries again; the loop that forked this follow-up never stops for it.
       Effect.catch(logFailure("Subagent notification follow-up deferred")),
       Effect.catchDefect((defect) =>

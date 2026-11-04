@@ -19,7 +19,7 @@ it.live(
       const info = yield* fs.lstat(file);
       expect(info.type).toBe("File");
       expect(info.size).toBe(5n);
-      expect(Option.getOrUndefined(info.nlink)).toBe(1);
+      expect(Option.getOrUndefined(info.nlink)).toBe(1n);
       expect(info.ino).toEqual((yield* fs.stat(file)).ino);
       expect((yield* fs.lstat(root)).type).toBe("Directory");
       expect((yield* fs.lstat(link)).type).toBe("SymbolicLink");

@@ -5,7 +5,6 @@ import {
   Result,
   HashMap,
   HashSet,
-  Crypto,
   Effect,
   Fiber,
   FileSystem,
@@ -14,6 +13,7 @@ import {
   Ref,
   Stream,
 } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { FetchHttpClient } from "effect/http";
 import { HttpApiClient } from "effect/http-api";
 import { isTruthy } from "../truthy.ts";
@@ -289,7 +289,7 @@ const makeAcpAgent = Effect.fnUntraced(function* (options: {
 }) {
   const { api } = options;
   const redactor = yield* SecretRedactor;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
   const fileSystem = yield* FileSystem.FileSystem;
   const editorError = toEditorError(redactor);
   const sessions = yield* Ref.make(HashMap.empty<string, BridgeSession>());
@@ -375,7 +375,7 @@ const makeAcpAgent = Effect.fnUntraced(function* (options: {
       const events = yield* chat.run({
         params: { session: session.id },
         headers: { "x-session-holder": session.holder },
-        payload: { runId: yield* crypto.randomUUIDv7(), ...input },
+        payload: { runId: yield* crypto.uuidV7(), ...input },
       });
       return yield* events.pipe(
         Stream.map(({ data }) => data),
@@ -423,7 +423,7 @@ const makeAcpAgent = Effect.fnUntraced(function* (options: {
     );
 
   const open = Effect.fn("AcpAgent.open")(function* (sessionId: string, project: ProjectSummary) {
-    const holder = `acp-${yield* crypto.randomUUIDv4()}`;
+    const holder = `acp-${yield* crypto.uuidV4()}`;
     const lease = yield* api.lease(sessionId, holder, "claim");
     if (lease.state !== "mine")
       return yield* AppRequestFailed.make({
@@ -634,7 +634,7 @@ const makeAcpAgent = Effect.fnUntraced(function* (options: {
             yield* runOnce(session, turn, {
               messages: [
                 {
-                  id: yield* crypto.randomUUIDv7(),
+                  id: yield* crypto.uuidV7(),
                   role: "user",
                   content: promptText(ctx.params.prompt),
                 },

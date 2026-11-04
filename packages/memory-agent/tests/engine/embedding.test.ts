@@ -1,19 +1,8 @@
 import { layer } from "@effect/vitest";
 import { SqlClient } from "effect/sql";
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
-import {
-  Cause,
-  Config,
-  Context,
-  Crypto,
-  Effect,
-  Exit,
-  FileSystem,
-  Layer,
-  Path,
-  Ref,
-  Scope,
-} from "effect";
+import { Cause, Config, Context, Effect, Exit, FileSystem, Layer, Path, Ref, Scope } from "effect";
+import { Digest } from "effect/crypto";
 import { Hex } from "effect/encoding";
 import { describe, expect } from "vite-plus/test";
 import { StorageRoot, defaultStorageRoot } from "../../src/config/storage-root.ts";
@@ -323,7 +312,7 @@ testAgent()("vector publication", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const crypto = yield* Crypto.Crypto;
+      const crypto = yield* Digest.Digest;
       const vectors = yield* VectorIndex;
       const storage = yield* StorageRoot;
       const embedder = yield* Embedder;
@@ -336,7 +325,7 @@ testAgent()("vector publication", (it) => {
         storage.path,
         "vectors",
         Hex.encode(
-          yield* crypto.digest("SHA-256", new TextEncoder().encode(embedder.identity)),
+          yield* crypto.digest(Digest.sha256, new TextEncoder().encode(embedder.identity)),
         ).slice(0, 16),
         "index.tvim",
       );

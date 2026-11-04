@@ -1,7 +1,6 @@
 import {
   Clock,
   Config,
-  Crypto,
   Duration,
   Effect,
   Function as EffectFunction,
@@ -13,6 +12,7 @@ import {
   Schema,
   Stream,
 } from "effect";
+import { Digest } from "effect/crypto";
 import { Hex } from "effect/encoding";
 import { GlobalConfig } from "../config/global-config.ts";
 import { hostPlatform } from "../runtime/host-system.ts";
@@ -145,7 +145,7 @@ const make = Effect.gen(function* () {
   const delivery = yield* ReportDelivery;
   const config = yield* GlobalConfig;
   const redactor = yield* SecretRedactor;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* Digest.Digest;
   const release = yield* Config.String("CONTEXT_AGENT_RELEASE").pipe(
     Config.withDefault("0.0.0-dev"),
     Effect.catchTag("ConfigError", () => Effect.succeed("unknown")),
@@ -160,10 +160,9 @@ const make = Effect.gen(function* () {
   const outgoing = yield* Queue.dropping<Outgoing>(64);
 
   const hash = (id: string) =>
-    crypto.digest("SHA-256", new TextEncoder().encode(id)).pipe(
-      Effect.map((digest) => Hex.encode(digest).slice(0, hashLength)),
-      Effect.catchTag("PlatformError", () => Effect.succeed("unhashed")),
-    );
+    crypto
+      .digest(Digest.sha256, new TextEncoder().encode(id))
+      .pipe(Effect.map((digest) => Hex.encode(digest).slice(0, hashLength)));
   const redacted = (text: string) =>
     redactor.redactText(text).pipe(
       Effect.map((redaction) => redaction.text),

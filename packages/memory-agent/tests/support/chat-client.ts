@@ -1,6 +1,5 @@
 import {
   Cause,
-  Crypto,
   Effect,
   Function as EffectFunction,
   MutableRef,
@@ -8,6 +7,7 @@ import {
   Schema,
   Stream,
 } from "effect";
+import { SecureRandom } from "effect/crypto";
 import {
   type ChatMessage,
   maxPageSize,
@@ -73,7 +73,7 @@ export const openPage = Effect.fnUntraced(function* (
   holder: string | null = null,
 ) {
   const api = yield* chatApi;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
   const headers = holder === null ? {} : { "x-session-holder": holder };
   const newest = api.snapshot({ params: { session }, query: { limit: maxPageSize } });
   const opened = yield* newest;
@@ -114,7 +114,7 @@ export const openPage = Effect.fnUntraced(function* (
       content: UserContent,
       forwardedProps?: RunInput["forwardedProps"],
     ) {
-      const id = yield* crypto.randomUUIDv7();
+      const id = yield* crypto.uuidV7();
       yield* changed((current) => ({
         ...current,
         messages: [...current.messages, { id, role: "user", parts: partsOf(content) }],
@@ -124,7 +124,7 @@ export const openPage = Effect.fnUntraced(function* (
           params: { session },
           headers,
           payload: {
-            runId: yield* crypto.randomUUIDv7(),
+            runId: yield* crypto.uuidV7(),
             messages: [{ id, role: "user", content }],
             ...optionalProperty("forwardedProps", forwardedProps),
           },
@@ -146,7 +146,7 @@ export const openPage = Effect.fnUntraced(function* (
         params: { session },
         headers,
         payload: {
-          runId: yield* crypto.randomUUIDv7(),
+          runId: yield* crypto.uuidV7(),
           parentRunId: waiting.runId,
           messages: [],
           resume: waiting.pending.map((pending) => ({

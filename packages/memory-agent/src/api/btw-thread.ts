@@ -1,4 +1,5 @@
-import { Crypto, Effect, Option, Stream } from "effect";
+import { Effect, Option, Stream } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { Atom } from "effect/reactivity";
 import type { ChatMessage } from "./chat-api.ts";
 import { ChatApiClient, partsOf, type UserContent } from "./chat-session.ts";
@@ -15,7 +16,9 @@ const threadView = (messages: ReadonlyArray<ChatMessage>): ChatView =>
   viewOf({ messages, older: null, activeRun: null, interrupts: null });
 
 /** The atoms of each BTW thread a page opens, keyed by thread id. */
-export const btwThreads = <E>(runtime: Atom.AtomRuntime<ChatApiClient | Crypto.Crypto, E>) =>
+export const btwThreads = <E>(
+  runtime: Atom.AtomRuntime<ChatApiClient | SecureRandom.SecureRandom, E>,
+) =>
   keptAtomGroups((thread: string) => {
     const view = Atom.make<Option.Option<ChatView>>(Option.none()).pipe(Atom.keepAlive);
 
@@ -39,10 +42,10 @@ export const btwThreads = <E>(runtime: Atom.AtomRuntime<ChatApiClient | Crypto.C
     const ask = runtime.fn((content: UserContent, get) =>
       Effect.gen(function* () {
         const { btw } = yield* ChatApiClient;
-        const crypto = yield* Crypto.Crypto;
-        const runId = yield* crypto.randomUUIDv7();
+        const crypto = yield* SecureRandom.SecureRandom;
+        const runId = yield* crypto.uuidV7();
         const message: ChatMessage = {
-          id: yield* crypto.randomUUIDv7(),
+          id: yield* crypto.uuidV7(),
           role: "user",
           parts: partsOf(content),
         };

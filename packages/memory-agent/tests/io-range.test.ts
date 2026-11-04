@@ -1,6 +1,6 @@
 // Real native handles and SQLite rows exercise the host boundary without module mocks.
 import { DatabaseSync } from "node:sqlite";
-import { NodeServices } from "@effect/platform-node";
+import { NodeCrypto, NodeServices } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import {
   Array as Arr,
@@ -68,7 +68,7 @@ const opened = (absolute: string) =>
     Effect.repeat({ until: (handles) => handles > 0 }),
   );
 
-layer(NodeServices.layer)((it) => {
+layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))((it) => {
   it.effect(
     "saved results page UTF-16 offsets across UTF-8 blocks, NULs and surrogate boundaries",
     () =>

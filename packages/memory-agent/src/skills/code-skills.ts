@@ -3,7 +3,6 @@ import {
   Array as EffectArray,
   Clock,
   Context,
-  Crypto,
   Data,
   DateTime,
   Effect,
@@ -16,6 +15,7 @@ import {
   Predicate,
   Schema,
 } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { SqlClient } from "effect/sql";
 import { resolveProjectPath } from "../files/paths.ts";
 import {
@@ -347,7 +347,7 @@ export const SavedProgram = Data.taggedEnum<SavedProgram>();
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  const platform = yield* Effect.context<FileSystem.FileSystem | Crypto.Crypto>();
+  const platform = yield* Effect.context<FileSystem.FileSystem | SecureRandom.SecureRandom>();
   // The table keeps its name from when every saved skill was a shell script.
   const approved = (projectId: string, name: string, sha256: string) =>
     Effect.map(

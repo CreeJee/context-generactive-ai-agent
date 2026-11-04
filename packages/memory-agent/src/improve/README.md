@@ -66,7 +66,7 @@
 - `Projects.listAll`/`Projects.list` 조회와 `Checkouts.forRoots`/`resolve`로 프로젝트 루트의 체크아웃 위치를 해석한다.
 - `Embedder.embed`로 정정 텍스트를 임베딩한다(임베딩 모델 호출).
 - 네트워크/모델 호출: `ActiveProvider`의 selected/auth/resolve, `singleAnswerParts` 스트리밍 호출. 사용자 채팅과 같은 제공자를 쓴다.
-- `Crypto.randomUUIDv4`로 모델 호출마다 threadId를 만든다.
+- `SecureRandom.uuidV4`로 모델 호출마다 threadId를 만든다.
 - `DateTime.now`(Clock)로 조회 시작 시각, generatedAt, 상태 시각을 읽는다.
 - 인메모리 상태: `Ref<ScanState>`, 스캔당 연속 실패 `Ref`, 서비스 Scope에 묶인 `FiberHandle` 백그라운드 fiber.
 - defect가 나면 `Effect.logError("Project improvement scan failed", cause)`로 로그를 남긴다.

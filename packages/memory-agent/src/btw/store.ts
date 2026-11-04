@@ -1,14 +1,5 @@
-import {
-  Array as Arr,
-  Clock,
-  Context,
-  Crypto,
-  DateTime,
-  Effect,
-  Layer,
-  Option,
-  Schema,
-} from "effect";
+import { Array as Arr, Clock, Context, DateTime, Effect, Layer, Option, Schema } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { Attachments } from "../attachments/attachments.ts";
 import { StoredMessage, StoredUserMessage, TextPart } from "../chat-store/schema.ts";
@@ -70,7 +61,7 @@ const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const sessions = yield* Sessions;
   const attachments = yield* Attachments;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
 
   const selectThread = sql.literal(`SELECT t.*, s.project_id FROM btw_threads t
     JOIN sessions s ON s.id = t.parent_session_id`);
@@ -137,13 +128,7 @@ const make = Effect.gen(function* () {
               ),
             ),
           );
-        const id = yield* crypto
-          .randomUUIDv4()
-          .pipe(
-            Effect.mapError(() =>
-              BtwError.make({ reason: BtwStorageFailed.make({ operation: "create_thread" }) }),
-            ),
-          );
+        const id = yield* crypto.uuidV4();
         const createdAt = yield* Clock.currentTimeMillis;
         yield* sql`
           INSERT INTO btw_threads (id, parent_session_id, created_at, updated_at)
@@ -158,15 +143,17 @@ const make = Effect.gen(function* () {
 
     /** Keeps the images a BTW message carried until the thread is deleted. */
     link: (threadId: string, attachmentIds: readonly string[]) =>
-      attachmentIds.length === 0
-        ? Effect.void
-        : Effect.asVoid(sql`
+      Arr.match(attachmentIds, {
+        onEmpty: () => Effect.void,
+        onNonEmpty: (carried) =>
+          Effect.asVoid(sql`
             INSERT OR IGNORE INTO btw_attachments ${sql.insert(
-              attachmentIds.map((attachmentId) => ({
+              Arr.map(carried, (attachmentId) => ({
                 thread_id: threadId,
                 attachment_id: attachmentId,
               })),
             )}`),
+      }),
 
     /**
      * Removes the thread with its messages, tool calls and results and attachment links in one

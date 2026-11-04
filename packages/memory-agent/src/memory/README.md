@@ -55,7 +55,7 @@
 - 해석 프롬프트는 발화 안의 텍스트를 데이터로 다루고, 그 안의 지시를 따르지 않는다. corrects·retracts는 user 발화만 할 수 있다
 - API 사용량(`memory-interpretation`)은 세션이 있는 발화에 대해서만 기록한다
 - `MemoryPromotionRejected`의 message는 reason별로 고정되어 있고 요청 텍스트를 담지 않는다. 승격 거부는 그대로 전달되고, 그 밖의 저장소·코덱 실패만 `KnowledgeStoreFailed`로 감싼다
-- Layer 요구: `Graph`와 `Interpretations`에는 `SqlClient`가 필요하다. `Interpreter`에는 `SqlClient`, `Nodes`, `MemorySearch`, `Interpretations`, `ActiveProvider`, `ApiUsage`, `Crypto.Crypto`가 필요하다. `KnowledgePromotions`에는 `Crypto.Crypto`, `SqlClient`, `Nodes`가 필요하다. 증거 함수에는 `Nodes`, `Graph`, `Interpretations`, `MemorySearch`가 필요하다
+- Layer 요구: `Graph`와 `Interpretations`에는 `SqlClient`가 필요하다. `Interpreter`에는 `SqlClient`, `Nodes`, `MemorySearch`, `Interpretations`, `ActiveProvider`, `ApiUsage`, `SecureRandom.SecureRandom`이 필요하다. `KnowledgePromotions`에는 `SecureRandom.SecureRandom`, `SqlClient`, `Nodes`가 필요하다. 증거 함수에는 `Nodes`, `Graph`, `Interpretations`, `MemorySearch`가 필요하다
 
 ## Side Effects
 
@@ -64,7 +64,7 @@
 - SQLite 쓰기: `Nodes`의 append-only 노드와 구조 edge 기록, `Recorder`의 채팅 run 기록, `MemoryGraphMaintenance`의 링크 수리, `KnowledgePromotions`의 승격 결정·후보·사용 기록
 - 네트워크: `Interpreter`가 `ActiveProvider`가 고른 provider의 가장 싼 effort 모델을 `singleAnswer`로 부르고, `recordUsage`로 API 사용량 ledger에 기록한다
 - 네이티브 검색: `MemorySearch`는 native-search owner worker를 거쳐 벡터·controlled 읽기를 하고, 실패한 읽기를 `SkippedRead`로 남긴다
-- Crypto: `Interpreter`는 모델 호출 threadId에 `randomUUIDv4`를 쓰고, `KnowledgePromotions`도 `Crypto.Crypto`로 id를 만든다
+- 난수: `Interpreter`는 모델 호출 threadId에 `uuidV4`를 쓰고, `KnowledgePromotions`도 `SecureRandom.SecureRandom`으로 id를 만든다
 - 시계: `DateTime.now`·`Clock.currentTimeMillis`로 `created_at`·`updated_at`을 기록한다
 - 로그: 해석 후보 검색이 실패하면 `interpret_candidates_unavailable`를 debug 로그로 남긴다
 

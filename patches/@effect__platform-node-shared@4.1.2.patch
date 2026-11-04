@@ -1,8 +1,8 @@
 diff --git a/dist/NodeChildProcessSpawner.js b/dist/NodeChildProcessSpawner.js
-index d9af021ccc6bfa8e3e504f18dfed032bb5b96c07..b9c00ee583858468df5598b5741f7e0d7f695b5a 100644
+index 08d50b16dfe564551f1bffc7cae2d3b53805e172..b3b1982445bde2a4cc309b2d13436aaaeeaf1a71 100644
 --- a/dist/NodeChildProcessSpawner.js
 +++ b/dist/NodeChildProcessSpawner.js
-@@ -457,10 +457,18 @@ const make = /*#__PURE__*/Effect.gen(function* () {
+@@ -554,10 +554,18 @@ const make = /*#__PURE__*/Effect.gen(function* () {
              const error = new globalThis.Error(`Process interrupted due to receipt of signal: '${signal}'`);
              return Effect.fail(toPlatformError("exitCode", error, cmd));
            });
@@ -21,7 +21,7 @@ index d9af021ccc6bfa8e3e504f18dfed032bb5b96c07..b9c00ee583858468df5598b5741f7e0d
              isRunning,
              kill,
              stdin,
-@@ -541,6 +549,7 @@ const make = /*#__PURE__*/Effect.gen(function* () {
+@@ -643,6 +651,7 @@ const make = /*#__PURE__*/Effect.gen(function* () {
            return makeHandle({
              pid: handle.pid,
              exitCode: handle.exitCode,
@@ -30,15 +30,14 @@ index d9af021ccc6bfa8e3e504f18dfed032bb5b96c07..b9c00ee583858468df5598b5741f7e0d
              kill,
              stdin: handles[0].stdin,
 diff --git a/dist/NodeFileSystem.js b/dist/NodeFileSystem.js
-index b39db35c748e2fedfc938badcb36554f88043381..113d6faf45623f664806c686f1a5af7cd405d53b 100644
+index ed12351cfd92719173e5c7829809df84c744b6cc..47479421cdf989894517330791b6f3fa3c38cec8 100644
 --- a/dist/NodeFileSystem.js
 +++ b/dist/NodeFileSystem.js
-@@ -357,6 +357,27 @@ const readDirectory = (path, options) => Effect.tryPromise({
-   try: () => NFS.promises.readdir(path, options),
-   catch: err => handleErrnoException("FileSystem", "readDirectory")(err, [path])
- });
+@@ -364,6 +364,26 @@ const readDirectoryEntries = path => Effect.tryPromise({
+   name: entry.name,
+   type: fileType(entry)
+ }))));
 +// == openDirectory
-+const direntType = entry => entry.isFile() ? "File" : entry.isDirectory() ? "Directory" : entry.isSymbolicLink() ? "SymbolicLink" : entry.isBlockDevice() ? "BlockDevice" : entry.isCharacterDevice() ? "CharacterDevice" : entry.isFIFO() ? "FIFO" : entry.isSocket() ? "Socket" : "Unknown";
 +const openDirectory = path => {
 +  const fail = handleErrnoException("FileSystem", "openDirectory");
 +  return Effect.map(Effect.acquireRelease(Effect.tryPromise({
@@ -54,61 +53,40 @@ index b39db35c748e2fedfc938badcb36554f88043381..113d6faf45623f664806c686f1a5af7c
 +      catch: err => fail(err, [path])
 +    }), entry => entry === null ? Option.none() : Option.some({
 +      name: entry.name,
-+      type: direntType(entry)
++      type: fileType(entry)
 +    })))
 +  }));
 +};
  // == readFile
  const readFile = path => Effect.callback((resume, signal) => {
    try {
-@@ -389,12 +410,14 @@ const rename = /*#__PURE__*/(() => {
-   return (oldPath, newPath) => nodeRename(oldPath, newPath);
- })();
- // == stat
--const makeFileInfo = stat => Effect.try({
-+const makeFileInfo = (stat, method = "stat") => Effect.try({
-   try: () => ({
-     type: stat.isFile() ? "File" : stat.isDirectory() ? "Directory" : stat.isSymbolicLink() ? "SymbolicLink" : stat.isBlockDevice() ? "BlockDevice" : stat.isCharacterDevice() ? "CharacterDevice" : stat.isFIFO() ? "FIFO" : stat.isSocket() ? "Socket" : "Unknown",
+@@ -403,6 +423,8 @@ const makeFileInfo = (stat, method = "stat") => Effect.try({
      mtime: Option.fromNullishOr(stat.mtime),
      atime: Option.fromNullishOr(stat.atime),
      birthtime: Option.fromNullishOr(stat.birthtime),
 +    mtimeNs: Option.fromNullishOr(stat.mtimeNs),
 +    ctimeNs: Option.fromNullishOr(stat.ctimeNs),
-     dev: bigintToNumber(stat.dev, "dev"),
-     rdev: bigintToNumberOption(stat.rdev),
-     ino: bigintToNumberOption(stat.ino),
-@@ -406,7 +429,7 @@ const makeFileInfo = stat => Effect.try({
-     blksize: stat.blksize !== undefined ? Option.some(ByteSize.bytes(stat.blksize)) : Option.none(),
-     blocks: bigintToNumberOption(stat.blocks)
-   }),
--  catch: handleBadArgument("stat")
-+  catch: handleBadArgument(method)
- });
- const stat = /*#__PURE__*/(() => {
-   const nodeStat = /*#__PURE__*/effectify(NFS.stat, /*#__PURE__*/handleErrnoException("FileSystem", "stat"), /*#__PURE__*/handleBadArgument("stat"));
-@@ -414,6 +437,18 @@ const stat = /*#__PURE__*/(() => {
-     bigint: true
-   }), makeFileInfo);
- })();
+     dev: toUint64(stat.dev),
+     rdev: toUint64Option(stat.rdev),
+     ino: toUint64Option(stat.ino),
+@@ -424,6 +446,13 @@ const statFactory = (method, nodeStatFn) => {
+ };
+ const stat = /*#__PURE__*/statFactory("stat", NFS.stat);
+ const lstat = /*#__PURE__*/statFactory("lstat", NFS.lstat);
 +// == statDescriptor
-+const statDescriptor = /* @__PURE__ */(() => {
-+  const nodeFstat = effectify(NFS.fstat, handleErrnoException("FileSystem", "statDescriptor"), handleBadArgument("statDescriptor"));
++const statDescriptor = /*#__PURE__*/(() => {
++  const nodeFstat = /*#__PURE__*/effectify(NFS.fstat, /*#__PURE__*/handleErrnoException("FileSystem", "statDescriptor"), /*#__PURE__*/handleBadArgument("statDescriptor"));
 +  return fd => Effect.flatMap(nodeFstat(fd, {
 +    bigint: true
 +  }), info => makeFileInfo(info, "statDescriptor"));
 +})();
-+// == lstat
-+const lstat = /* @__PURE__ */(() => {
-+  const nodeLstat = effectify(NFS.lstat, handleErrnoException("FileSystem", "lstat"), handleBadArgument("lstat"));
-+  return path => Effect.flatMap(nodeLstat(path, { bigint: true }), info => makeFileInfo(info, "lstat"));
-+})();
  // == symlink
  const symlink = /*#__PURE__*/(() => {
    const nodeSymlink = /*#__PURE__*/effectify(NFS.symlink, /*#__PURE__*/handleErrnoException("FileSystem", "symlink"), /*#__PURE__*/handleBadArgument("symlink"));
-@@ -509,12 +544,15 @@ const makeFileSystem = /*#__PURE__*/Effect.map(/*#__PURE__*/Effect.serviceOption
-   makeTempFileScoped,
+@@ -520,12 +549,14 @@ const makeFileSystem = /*#__PURE__*/Effect.map(/*#__PURE__*/Effect.serviceOption
    open,
    readDirectory,
+   readDirectoryEntries,
 +  openDirectory,
    readFile,
    readLink,
@@ -117,7 +95,6 @@ index b39db35c748e2fedfc938badcb36554f88043381..113d6faf45623f664806c686f1a5af7c
    rename,
    stat,
 +  statDescriptor,
-+  lstat,
    symlink,
    truncate,
    utimes,
@@ -137,10 +114,10 @@ index 5da1d9acd81276fd3b7136e28c186b8efced89d2..7e810ade2605ad27cff54635217a9cb6
  //# sourceMappingURL=nodeChildProcessSpawner.js.map
 \ No newline at end of file
 diff --git a/src/NodeChildProcessSpawner.ts b/src/NodeChildProcessSpawner.ts
-index 20c21a8ad06b91d84a29b34a7df054c899594e10..8e53327329ee09364d87520c783a600b5af98155 100644
+index a3ead25b72db5b07e95cabe056c644b242be3393..0970fbe72a77cda5321711ec2d3c63ac49678e89 100644
 --- a/src/NodeChildProcessSpawner.ts
 +++ b/src/NodeChildProcessSpawner.ts
-@@ -42,6 +42,7 @@ import type { ChildProcessHandle } from "effect/process/ChildProcessSpawner"
+@@ -46,6 +46,7 @@ import type { ChildProcessHandle } from "effect/process/ChildProcessSpawner"
  import {
    ChildProcessSpawner,
    ExitCode,
@@ -148,10 +125,10 @@ index 20c21a8ad06b91d84a29b34a7df054c899594e10..8e53327329ee09364d87520c783a600b
    make as makeSpawner,
    makeHandle,
    ProcessId
-@@ -605,12 +606,20 @@ const make = Effect.gen(function*() {
-           const error = new globalThis.Error(`Process interrupted due to receipt of signal: '${signal}'`)
-           return Effect.fail(toPlatformError("exitCode", error, cmd))
-         })
+@@ -745,12 +746,20 @@ const make = Effect.gen(function*() {
+             return Effect.fail(toPlatformError("exitCode", error, cmd))
+           }
+         )
 +        const exitStatus = Effect.map(
 +          Deferred.await(exitSignal),
 +          ([code, signal]): ExitStatus =>
@@ -169,7 +146,7 @@ index 20c21a8ad06b91d84a29b34a7df054c899594e10..8e53327329ee09364d87520c783a600b
            isRunning,
            kill,
            stdin,
-@@ -690,6 +699,7 @@ const make = Effect.gen(function*() {
+@@ -834,6 +843,7 @@ const make = Effect.gen(function*() {
          return makeHandle({
            pid: handle.pid,
            exitCode: handle.exitCode,
@@ -178,31 +155,14 @@ index 20c21a8ad06b91d84a29b34a7df054c899594e10..8e53327329ee09364d87520c783a600b
            kill,
            stdin: handles[0].stdin,
 diff --git a/src/NodeFileSystem.ts b/src/NodeFileSystem.ts
-index d26dcd8929a26ed5a833e0412d5d6acacc919985..2c1b6806d5bd9f808ec666d5467498eb8e1b4d9f 100644
+index a69ceb6728b7ea5a8264d12e71a821213dc48f69..9bcb7afa35d6ad00261045ccfe6d7054ab670325 100644
 --- a/src/NodeFileSystem.ts
 +++ b/src/NodeFileSystem.ts
-@@ -519,6 +519,53 @@ const readDirectory: FileSystem.FileSystem["readDirectory"] = (path, options) =>
-     catch: (err) => handleErrnoException("FileSystem", "readDirectory")(err as any, [path])
-   })
+@@ -521,6 +521,36 @@ const readDirectoryEntries = (path: string) =>
+     )
+   )
  
 +// == openDirectory
-+
-+const direntType = (entry: NFS.Dirent): FileSystem.File.Type =>
-+  entry.isFile() ?
-+    "File" :
-+    entry.isDirectory() ?
-+    "Directory" :
-+    entry.isSymbolicLink() ?
-+    "SymbolicLink" :
-+    entry.isBlockDevice() ?
-+    "BlockDevice" :
-+    entry.isCharacterDevice() ?
-+    "CharacterDevice" :
-+    entry.isFIFO() ?
-+    "FIFO" :
-+    entry.isSocket() ?
-+    "Socket" :
-+    "Unknown"
 +
 +const openDirectory: FileSystem.FileSystem["openDirectory"] = (path) => {
 +  const fail = handleErrnoException("FileSystem", "openDirectory")
@@ -226,7 +186,7 @@ index d26dcd8929a26ed5a833e0412d5d6acacc919985..2c1b6806d5bd9f808ec666d5467498eb
 +          catch: (err) => fail(err as any, [path])
 +        }),
 +        (entry) =>
-+          entry === null ? Option.none() : Option.some({ name: entry.name, type: direntType(entry) })
++          entry === null ? Option.none() : Option.some({ name: entry.name, type: fileType(entry) })
 +      ))
 +    })
 +  )
@@ -235,39 +195,18 @@ index d26dcd8929a26ed5a833e0412d5d6acacc919985..2c1b6806d5bd9f808ec666d5467498eb
  // == readFile
  
  const readFile = (path: string) =>
-@@ -571,7 +618,10 @@ const rename = (() => {
- 
- // == stat
- 
--const makeFileInfo = (stat: NFS.BigIntStats): Effect.Effect<FileSystem.File.Info, Error.PlatformError> =>
-+const makeFileInfo = (
-+  stat: NFS.BigIntStats,
-+  method: "stat" | "lstat" | "statDescriptor" = "stat"
-+): Effect.Effect<FileSystem.File.Info, Error.PlatformError> =>
-   Effect.try({
-     try: (): FileSystem.File.Info => ({
-       type: stat.isFile() ?
-@@ -592,6 +642,8 @@ const makeFileInfo = (stat: NFS.BigIntStats): Effect.Effect<FileSystem.File.Info
+@@ -600,6 +630,8 @@ const makeFileInfo = (
        mtime: Option.fromNullishOr(stat.mtime),
        atime: Option.fromNullishOr(stat.atime),
        birthtime: Option.fromNullishOr(stat.birthtime),
 +      mtimeNs: Option.fromNullishOr(stat.mtimeNs),
 +      ctimeNs: Option.fromNullishOr(stat.ctimeNs),
-       dev: bigintToNumber(stat.dev, "dev"),
-       rdev: bigintToNumberOption(stat.rdev),
-       ino: bigintToNumberOption(stat.ino),
-@@ -603,7 +655,7 @@ const makeFileInfo = (stat: NFS.BigIntStats): Effect.Effect<FileSystem.File.Info
-       blksize: stat.blksize !== undefined ? Option.some(ByteSize.bytes(stat.blksize)) : Option.none(),
-       blocks: bigintToNumberOption(stat.blocks)
-     }),
--    catch: handleBadArgument("stat")
-+    catch: handleBadArgument(method)
-   })
- const stat = (() => {
-   const nodeStat = effectify(
-@@ -614,6 +666,29 @@ const stat = (() => {
-   return (path: string) => Effect.flatMap(nodeStat(path, { bigint: true }), makeFileInfo)
- })()
+       dev: toUint64(stat.dev),
+       rdev: toUint64Option(stat.rdev),
+       ino: toUint64Option(stat.ino),
+@@ -624,6 +656,18 @@ const statFactory = (method: string, nodeStatFn: typeof NFS.stat) => {
+ const stat = statFactory("stat", NFS.stat)
+ const lstat = statFactory("lstat", NFS.lstat)
  
 +// == statDescriptor
 +
@@ -281,24 +220,13 @@ index d26dcd8929a26ed5a833e0412d5d6acacc919985..2c1b6806d5bd9f808ec666d5467498eb
 +    Effect.flatMap(nodeFstat(fd, { bigint: true }), (info) => makeFileInfo(info, "statDescriptor"))
 +})()
 +
-+// == lstat
-+
-+const lstat = (() => {
-+  const nodeLstat = effectify(
-+    NFS.lstat,
-+    handleErrnoException("FileSystem", "lstat"),
-+    handleBadArgument("lstat")
-+  )
-+  return (path: string) => Effect.flatMap(nodeLstat(path, { bigint: true }), (info) => makeFileInfo(info, "lstat"))
-+})()
-+
  // == symlink
  
  const symlink = (() => {
-@@ -747,12 +822,15 @@ const makeFileSystem = Effect.map(Effect.serviceOption(FileSystem.WatchBackend),
-     makeTempFileScoped,
+@@ -758,12 +802,14 @@ const makeFileSystem = Effect.map(Effect.serviceOption(FileSystem.WatchBackend),
      open,
      readDirectory,
+     readDirectoryEntries,
 +    openDirectory,
      readFile,
      readLink,
@@ -307,7 +235,6 @@ index d26dcd8929a26ed5a833e0412d5d6acacc919985..2c1b6806d5bd9f808ec666d5467498eb
      rename,
      stat,
 +    statDescriptor,
-+    lstat,
      symlink,
      truncate,
      utimes,

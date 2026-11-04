@@ -1,5 +1,6 @@
 import { NodeCrypto } from "@effect/platform-node";
-import { Crypto, Effect } from "effect";
+import { Effect } from "effect";
+import { Digest, SecureRandom } from "effect/crypto";
 import {
   GlobalConfigFailed,
   makeOpenAICompatibleSettings,
@@ -22,7 +23,8 @@ const settingsWith = Effect.fnUntraced(function* (
       update: (patch) => Effect.sync(() => (saved = { ...saved, ...patch })),
     },
     keys,
-    crypto: yield* Crypto.Crypto,
+    random: yield* SecureRandom.SecureRandom,
+    digest: yield* Digest.Digest,
     fetcher: () => Promise.resolve(new Response("private upstream diagnostic", { status: 503 })),
     ...overrides,
   });

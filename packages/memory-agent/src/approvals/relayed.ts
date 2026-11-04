@@ -2,7 +2,6 @@ import {
   Cause,
   Clock,
   Context,
-  Crypto,
   Duration,
   Effect,
   type Fiber,
@@ -11,6 +10,7 @@ import {
   Result,
   Schema,
 } from "effect";
+import { SecureRandom } from "effect/crypto";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { DurableClock, DurableDeferred, Workflow, WorkflowEngine } from "effect/workflow";
 import {
@@ -85,7 +85,7 @@ const payloadView = (payload: RelayedApprovalPayload): RelayedApprovalView => ({
 const make = (timeoutMs: number) =>
   Effect.gen(function* () {
     const engine = yield* WorkflowEngine.WorkflowEngine;
-    const crypto = yield* Crypto.Crypto;
+    const crypto = yield* SecureRandom.SecureRandom;
     const storage = yield* OwnerWorkflowStorage;
     const scope = yield* Effect.scope;
     const provideEngine = <A, E>(effect: Effect.Effect<A, E, WorkflowEngine.WorkflowEngine>) =>
@@ -124,8 +124,7 @@ const make = (timeoutMs: number) =>
             : Effect.gen(function* () {
                 const payload: RelayedApprovalPayload = {
                   ...request,
-                  // NodeCrypto draws ids synchronously; a failure here is a defect, not an answer.
-                  approvalId: yield* crypto.randomUUIDv4().pipe(Effect.orDie),
+                  approvalId: yield* crypto.uuidV4(),
                   sessionId,
                   runId,
                   createdAt: yield* Clock.currentTimeMillis,

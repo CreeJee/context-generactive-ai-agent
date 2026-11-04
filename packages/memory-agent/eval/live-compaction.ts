@@ -6,8 +6,9 @@ import {
 } from "../src/providers/contracts.ts";
 import { Cause, Config, Console, Result, Stream } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { NodeServices } from "@effect/platform-node";
-import { Context, Crypto, FileSystem } from "effect";
+import { NodeCrypto, NodeServices } from "@effect/platform-node";
+import { Context, FileSystem } from "effect";
+import { SecureRandom } from "effect/crypto";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { path } from "../src/runtime/synchronous-path.ts";
 const { join } = path;
@@ -88,9 +89,9 @@ const fixture =
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 const runArm = Effect.fn("eval.runArm")(function* (variant: "auto" | "auto-plus-manual") {
-  const platform = yield* Layer.build(NodeServices.layer);
+  const platform = yield* Layer.build(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer));
   const fs = Context.get(platform, FileSystem.FileSystem);
-  const crypto = Context.get(platform, Crypto.Crypto);
+  const crypto = Context.get(platform, SecureRandom.SecureRandom);
   const base = yield* fs.makeTempDirectoryScoped({ prefix: "memory-agent-paid-ab-" });
   const projectRoot = join(base, "project");
   const home = join(base, "home");
@@ -149,8 +150,8 @@ const runArm = Effect.fn("eval.runArm")(function* (variant: "auto" | "auto-plus-
           params: { session: services.sessionId },
           headers: {},
           payload: {
-            runId: yield* crypto.randomUUIDv4(),
-            messages: [{ id: yield* crypto.randomUUIDv4(), role: "user", content: text }],
+            runId: yield* crypto.uuidV4(),
+            messages: [{ id: yield* crypto.uuidV4(), role: "user", content: text }],
           },
         })
         .pipe(Effect.flatMap(Stream.runCollect), Effect.timeout("45 seconds")),

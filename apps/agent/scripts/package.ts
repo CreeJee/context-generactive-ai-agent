@@ -6,12 +6,12 @@ import { BuildServerConfig, buildConfigAsset } from "../app/.server/build-config
 // Run with `vp run package`, which builds the app and its workspace dependencies first. Other platforms are built on
 // their own machines (turbovec and the optional platform packages exist only for the host).
 // The runtime manifest is hashed incrementally because staged native assets can be large.
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   Array as Arr,
   Config,
   Context,
-  Crypto,
   Effect,
   FileSystem,
   Layer,
@@ -21,6 +21,7 @@ import {
   Option,
   Redacted,
 } from "effect";
+import { Digest } from "effect/crypto";
 import type { PlatformError } from "effect/PlatformError";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { Hex } from "effect/encoding";
@@ -40,10 +41,10 @@ class PackagePreflightFailed extends Schema.TaggedError<
 >()("PackagePreflightFailed", { message: Schema.String }) {}
 
 const program = Effect.gen(function* () {
-  const services = yield* Layer.build(NodeServices.layer);
+  const services = yield* Layer.build(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer));
   const fs = Context.get(services, FileSystem.FileSystem);
   const path = Context.get(services, Path.Path);
-  const crypto = Context.get(services, Crypto.Crypto);
+  const crypto = Context.get(services, Digest.Digest);
   const spawner = Context.get(services, ChildProcessSpawner.ChildProcessSpawner);
   const { basename, dirname, join, relative, sep } = path;
   const app = yield* path.fromFileUrl(new URL("..", import.meta.url));
@@ -449,7 +450,7 @@ const program = Effect.gen(function* () {
     files,
     Effect.fnUntraced(function* (file) {
       const content = yield* fs.readFile(join(stage, file));
-      const digest = Hex.encode(yield* crypto.digest("SHA-256", content));
+      const digest = Hex.encode(yield* crypto.digest(Digest.sha256, content));
       return { entry: `${file}\0${digest}`, size: content.length };
     }),
   );
@@ -459,7 +460,7 @@ const program = Effect.gen(function* () {
     files.map((file) => [`runtime/files/${file}`, join(stage, file)]),
   );
   const hash = Hex.encode(
-    yield* crypto.digest("SHA-256", new TextEncoder().encode(entries.join("\n"))),
+    yield* crypto.digest(Digest.sha256, new TextEncoder().encode(entries.join("\n"))),
   );
   const manifestFile = join(work, "runtime-manifest.json");
   yield* fs.writeFileString(
@@ -525,7 +526,7 @@ const program = Effect.gen(function* () {
     process.platform === "win32" ? "context-agent.exe" : "context-agent",
   );
   if (process.platform === "darwin") yield* signMacos(executable);
-  const digest = Hex.encode(yield* crypto.digest("SHA-256", yield* fs.readFile(executable)));
+  const digest = Hex.encode(yield* crypto.digest(Digest.sha256, yield* fs.readFile(executable)));
   yield* fs.writeFileString(`${executable}.sha256`, `${digest}  ${basename(executable)}\n`);
   yield* Effect.logInfo(
     `${relative(app, executable)}: ${(Number((yield* fs.stat(executable)).size) / 1e6).toFixed(1)} MB`,

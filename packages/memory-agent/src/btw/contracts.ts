@@ -43,7 +43,7 @@ export class BtwStorageFailed extends Schema.TaggedError<
   BtwStorageFailed,
   { readonly brand: unique symbol }
 >()("BtwStorageFailed", {
-  operation: Schema.Literals(["purge_attachments", "create_thread", "read_transcript"]),
+  operation: Schema.Literals(["purge_attachments", "read_transcript"]),
 }) {}
 
 export class BtwError extends Schema.TaggedError<BtwError, { readonly brand: unique symbol }>()(

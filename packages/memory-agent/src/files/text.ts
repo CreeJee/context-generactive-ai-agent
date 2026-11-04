@@ -1,6 +1,7 @@
 import { sha256 } from "../runtime/synchronous-crypto.ts";
 import { Hex } from "effect/encoding";
-import { Context, Crypto, FileSystem } from "effect";
+import { Context, FileSystem } from "effect";
+import { Digest, SecureRandom } from "effect/crypto";
 import { Function as EffectFunction } from "effect";
 import { path } from "../runtime/synchronous-path.ts";
 import { Array as Arr, Effect, Exit, Match, Option, Ref, Schema, Scope, Stream } from "effect";
@@ -141,7 +142,7 @@ const readOpenedFile = Effect.fnUntraced(function* (
   const stats = yield* fileIo(path, "stat", handle.stat);
   if (checkLeaf && stats.type !== "File")
     return yield* PathRejected.make({ path, reason: "not_file" });
-  if (checkLeaf && Option.getOrUndefined(stats.nlink) !== 1)
+  if (checkLeaf && Option.getOrUndefined(stats.nlink) !== 1n)
     return yield* PathRejected.make({ path, reason: "hard_link" });
   yield* Effect.when(tooLarge(path), Effect.succeed(stats.size > BigInt(maxTextBytes)));
   // Each page is the chunk read at the size read so far, until the end of the file.
@@ -282,7 +283,7 @@ export const replaceTextFileEffect = Effect.fn("replaceTextFile")(function* (opt
   const bytes = Buffer.from(text, "utf8");
   const temporary = join(
     dirname(absolute),
-    `.${basename(absolute)}.${yield* (yield* Crypto.Crypto).randomUUIDv4()}.tmp`,
+    `.${basename(absolute)}.${yield* (yield* SecureRandom.SecureRandom).uuidV4()}.tmp`,
   );
   const noFollow = (yield* FileReadPlatform) === "posix";
   // The temporary file's handle lives in its own scope, so it closes before the swap and the
@@ -413,9 +414,9 @@ const indexOpenedFile = Effect.fnUntraced(function* (
   options: { readonly path: string; readonly stamp: string; readonly size: number },
 ) {
   const { path, stamp, size } = options;
-  const crypto = yield* Crypto.Crypto;
+  const digester = yield* Digest.Digest;
   const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
-  // At most maxTextBytes: the whole content stays in memory for one Crypto.digest.
+  // At most maxTextBytes: the whole content stays in memory for one digest.
   const contents = Buffer.alloc(size);
   /** Reads and checks the chunk at `position`; its page is the line starts inside it. */
   const indexChunk = Effect.fnUntraced(function* (position: number) {
@@ -456,8 +457,7 @@ const indexOpenedFile = Effect.fnUntraced(function* (
     try: () => utf8.decode(),
     catch: () => TextFileRejected.make({ path, reason: rejection.invalid_utf8.make({}) }),
   });
-  // NodeCrypto digest only fails as a defect, as createHash did.
-  const digest = yield* Effect.orDie(crypto.digest("SHA-256", contents));
+  const digest = yield* digester.digest(Digest.sha256, contents);
   return {
     stamp,
     size,
@@ -491,7 +491,7 @@ export const createTextPageReader = Effect.gen(function* () {
           Effect.fail(PathRejected.make({ path, reason: "not_file" })),
           Effect.succeed(stats.type !== "File"),
         );
-        if (checkLeaf && Option.getOrUndefined(stats.nlink) !== 1)
+        if (checkLeaf && Option.getOrUndefined(stats.nlink) !== 1n)
           return yield* PathRejected.make({ path, reason: "hard_link" });
         yield* Effect.when(tooLarge(path), Effect.succeed(stats.size > BigInt(maxTextBytes)));
         const stampOf = (stat: FileSystem.File.Info) =>

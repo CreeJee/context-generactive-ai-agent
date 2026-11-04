@@ -8,7 +8,7 @@
 
 ## Interface
 
-- `makeNativeOwner` — `(setup: OwnerSetup, workerFile, connect = rpcTransport)`로 scoped native owner를 만드는 Effect.fn이다. `Crypto.Crypto`와 `Scope`가 필요하다. 반환 객체는 `NativeOwner` 서비스의 형태가 된다(주석상 `startRead`, `inspect` 등 포함).
+- `makeNativeOwner` — `(setup: OwnerSetup, workerFile, connect = rpcTransport)`로 scoped native owner를 만드는 Effect.fn이다. `SecureRandom.SecureRandom`과 `Scope`가 필요하다. 반환 객체는 `NativeOwner` 서비스의 형태가 된다(주석상 `startRead`, `inspect` 등 포함).
 - `NativeOwner` — `Context.Service` 클래스(`"memory-agent/memory/native-search/client/NativeOwner"`)다. `static layer(setup, workerFile)`이 `Layer.effect(makeNativeOwner)`에 `NodeCrypto.layer`를 제공한다. 컴포지션 루트용 Layer다.
 - `rpcTransport` — 기본 `OwnerConnect`다. `node:worker_threads` Worker와 `RpcClient.layerProtocolWorker({ size: 1, concurrency: 1 })`로 worker를 띄우고 `Open`으로 준비를 기다린다(2초 startup-timeout).
 - `OwnerTransport` / `OwnerConnect` / `OwnerWorker` — 시작된 owner worker를 호스트가 다루는 인터페이스(`ready`, `send`, `exited`, `terminate`)와 연결 함수 타입이다. 테스트가 transport를 감쌀 때 쓴다.
@@ -40,7 +40,7 @@
 - reply 기한: `memory-search`는 `input.remainingMs`+2초, `vector-search-controlled`는 `budgetMs`+2초, 나머지 명령은 2초다. 이 기한 덕에 typed `budget-exceeded`가 `request-timeout`보다 먼저 도착한다.
 - `index-failed`, `read-failed`, `native-incompatible`, `worker-exit`, `worker-error`는 `fatal`이다. 주석상 이후 아무것도 신뢰할 수 없다. worker 종료나 Scope 종료 시 `failAll`이 모든 대기 작업을 실패시키고 control을 닫는다.
 - `controlToken`은 호스트 dispatch만 설정한다. 사용자 값은 채택하지 않는다. controlled 명령에 control이 없거나, worker에 `controlToken`/`ownerKey`가 없으면 `invalid-input`이다.
-- `ownerKey`는 호스트가 `Crypto.randomUUIDv4`로 만드는 private binding이다. `databasePath`는 호스트 소유의 신뢰된 경로이며, 검색 요청에서 오지 않는다. 공개 검색은 후보 allowlist를 보내지 않는다.
+- `ownerKey`는 호스트가 `SecureRandom.uuidV4`로 만드는 private binding이다. `databasePath`는 호스트 소유의 신뢰된 경로이며, 검색 요청에서 오지 않는다. 공개 검색은 후보 allowlist를 보내지 않는다.
 - worker는 `command.epoch !== setup.epoch`이면 `epoch-mismatch`로 거부한다.
 - IPC로는 `reason`만 넘는다. native 예외 메시지와 cache 경로는 worker 안에 남는다. worker의 `reported`는 `epoch-mismatch`, `invalid-input`, `read-failed`, `native-incompatible`, `lease-unavailable` 외 사유를 모두 `index-failed`로 바꾼다.
 - 동기 native 호출과 파일시스템 호출은 owning worker 안에서만 한다. `NativeSearchClient` 구현은 무거운 동기 native search를 호출자 스레드에서 실행하면 안 된다.
@@ -66,7 +66,7 @@
 - `process.threadCpuUsage`와 `process.hrtime.bigint`로 worker CPU와 native 호출 구간을 측정한다.
 - 호스트 인메모리 상태: `Ref`(job 원장, `cachedSize`, `PublicationState`), `FiberMap`, `Semaphore`. scoped fiber 하나가 worker 종료를 감시한다.
 - 타이머: startup 2초 타임아웃과 명령별 reply 기한(2초 또는 budget+2초).
-- `Crypto.randomUUIDv4`로 `ownerKey`를 생성한다.
+- `SecureRandom.uuidV4`로 `ownerKey`를 생성한다.
 
 ## Verification
 

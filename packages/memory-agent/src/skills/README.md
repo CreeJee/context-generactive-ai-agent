@@ -48,9 +48,9 @@
 ## Side Effects
 
 - `Skills`: FileSystem의 `exists`, `stat`, `lstat`, `readDirectory`와 `readFileBytesEffect`로 builtin, `~/.agents/skills`, `<project>/.agents/skills`를 읽는다. 쓰기는 하지 않는다
-- `Skills`: `Crypto.digest("SHA-256")`으로 해시를 계산한다. `homeDirectory`, `runtimeRoot`, `runtimeRequire`(require.resolve)로 호스트 경로를 확인한다
+- `Skills`: `Digest.digest(Digest.sha256)`으로 해시를 계산한다. `homeDirectory`, `runtimeRoot`, `runtimeRequire`(require.resolve)로 호스트 경로를 확인한다
 - `CodeSkills`: `resolveProjectPath`를 거쳐 프로젝트 안 `.agents/skills/<name>/` 아래 SKILL.md와 `scripts/run.*`에 `createTextFileEffect`, `readTextFileEffect`, `replaceTextFileEffect`, `deleteTextFileEffect`를 실행한다(생성, 읽기, 교체, 삭제)
-- `code-skills.ts`는 `SqlClient`(effect/sql), `Clock`, `DateTime`, `Crypto`를 import한다
+- `code-skills.ts`는 `SqlClient`(effect/sql), `Clock`, `DateTime`, `effect/crypto`를 import한다
 
 ## Verification
 

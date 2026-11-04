@@ -1,7 +1,8 @@
 import { Array as EffectArray, HashSet, Option } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { NodeCrypto } from "@effect/platform-node";
-import { Context, Crypto, Effect, Layer, Match, Ref, Schema } from "effect";
+import { Context, Effect, Layer, Match, Ref, Schema } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { edgeWeights, type EdgeKind } from "../memory/edges.ts";
 import { hasStatementText } from "../memory/quality.ts";
@@ -41,7 +42,7 @@ const encodeDetail = Schema.encodeEffect(Schema.fromJsonString(NodeDetail));
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
   const idOf = Effect.map(
     Option.match({ onNone: () => null, onSome: (row: typeof IdRow.Type) => row.id }),
   );
@@ -125,7 +126,7 @@ const make = Effect.gen(function* () {
         externalId: string | null,
         detail: NodeDetail,
       ) {
-        const id = yield* crypto.randomUUIDv4();
+        const id = yield* crypto.uuidV4();
         // A user turn opens its own run, and what answers it joins that run. `history.ts` groups a
         // transcript by run id, so this is what makes a migrated conversation render as turns.
         const runId =

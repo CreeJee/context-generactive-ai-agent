@@ -1,4 +1,5 @@
-import { Crypto, Function as EffectFunction } from "effect";
+import { Function as EffectFunction } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { isTruthy } from "../truthy.ts";
 import { Effect } from "effect";
 import type { ChatMetadata, ChatMetadataFailed } from "../chat-store/metadata.ts";
@@ -138,17 +139,17 @@ export const contextUsageHook = (options: {
   readonly windowTokens: Effect.Effect<number>;
   readonly compactionStage: Effect.Effect<CompactionStage>;
   readonly windowKnown: Effect.Effect<boolean>;
-}): RunHook<RunStore | Crypto.Crypto> => ({
+}): RunHook<RunStore | SecureRandom.SecureRandom> => ({
   usage: ({ threadId, emit }, { inputTokens }) =>
     Effect.transposeOption(
       Option.map(Option.fromNullishOr(inputTokens.total), (usedTokens) =>
         Effect.gen(function* () {
           const store = yield* RunStore;
-          const crypto = yield* Crypto.Crypto;
+          const crypto = yield* SecureRandom.SecureRandom;
           const stored: StoredContextUsage = {
             inputTokens: usedTokens,
             cachedTokens: inputTokens.cacheRead ?? null,
-            observationId: yield* crypto.randomUUIDv4(),
+            observationId: yield* crypto.uuidV4(),
             compactionStage: yield* options.compactionStage,
           };
           yield* store.metadata.set(contextUsageNamespace, threadId, stored);

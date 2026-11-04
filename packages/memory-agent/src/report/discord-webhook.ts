@@ -2,7 +2,6 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
   Config,
   Context,
-  Crypto,
   Data,
   DateTime,
   Duration,
@@ -14,6 +13,7 @@ import {
   Ref,
   Schema,
 } from "effect";
+import { Digest } from "effect/crypto";
 import { Hex } from "effect/encoding";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import { ReportDeliveryFailure, ReportDeliveryResult } from "./delivery-contract.ts";
@@ -146,11 +146,11 @@ const noticeBody = (text: string) => {
 
 const make = Effect.gen(function* () {
   const client = yield* HttpClient.HttpClient;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* Digest.Digest;
   // Node's SHA-256 cannot fail for an in-memory buffer; a failure would be a defect.
   const reportHash = (text: string) =>
     crypto
-      .digest("SHA-256", new TextEncoder().encode(text))
+      .digest(Digest.sha256, new TextEncoder().encode(text))
       .pipe(Effect.map(Hex.encode), Effect.orDie);
   // Per server process: repeated clicks and retries of the same text are recognised until restart.
   const attempts = yield* Ref.make<ReadonlyMap<string, Attempt>>(new Map());

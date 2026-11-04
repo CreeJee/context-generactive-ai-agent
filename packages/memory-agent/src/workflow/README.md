@@ -74,7 +74,7 @@
 - SQLite 쓰기: `run-bindings.ts`는 `workflow_run_bindings`에, `run-events.ts`·`durable-stream.ts`는 `workflow_run_events`에, `tool-ledger.ts`는 `owner_rpc_operations`에 INSERT/UPDATE, `uncertain-runs.ts`는 `workflow_uncertain_acknowledgements`에 INSERT, `execution.ts`는 `chat_metadata`에 INSERT
 - SQLite 읽기: `board.ts`, `completion-evidence.ts`, `read-recoveries.ts`가 `kanban_goals`, `sessions`, `nodes`, `chat_runs`, `chat_interrupts`, `owner_read_recoveries`, `workflow_goal_native_artifacts`, `workflow_goal_worker_generations`, `workflow_worker_dispatches` 등을 조회
 - 타이머: `sqliteRunLog`는 열린 로그 끝에 도달한 reader가 자기 run의 `RunLogSignals` 신호를 기다리고, 신호가 없으면 1초 뒤 다시 읽는다. append와 close는 transaction이 commit된 뒤 신호를 보낸다. owner workflow engine은 `Clock`·`FiberMap`으로 durable clock을 예약하고 발화하며 실행 fiber를 관리한다. 대기 중인 호출자는 workflow 정의의 `suspendedRetrySchedule` 간격으로 실행을 다시 돈다
-- 암호화: `goalExecutionIdempotencyKey`가 `sha256`을 쓰고, `workflow.ts`는 `Crypto`/`NodeCrypto`로 id를 생성한다
+- 암호화: `goalExecutionIdempotencyKey`가 `sha256`을 쓰고, `workflow.ts`는 `SecureRandom`/`NodeCrypto`로 id를 생성한다
 - 파일 시스템: `sources.ts`가 프로젝트의 `.agents/workflow-rules.json`(`projectWorkflowRulesPath`)을 워크플로 규칙 소스로 읽는다. 이 항목은 export 이름으로만 확인했고 본문은 읽지 않았다
 
 ## Verification

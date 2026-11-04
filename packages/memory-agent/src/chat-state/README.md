@@ -7,7 +7,7 @@
 ## Interface
 
 - `ChatState` — Context.Service(`memory-agent/chat-state/chat-state/ChatState`), `ChatState.layer`. 시작 시 마이그레이션·투영 준비·재시작 정리를 하고 `prepare(sessionId)`를 제공한다. SqlClient, Nodes, Attachments가 필요하다. 레이어가 `NodeCrypto`를 제공한다.
-- `historyProjection` — `Effect.fn("HistoryProjection.make")`. 스키마를 설치하고 `{ prepare(threadId?), replace(snapshot) }`를 돌려준다. `replace`는 호출자 트랜잭션에 합류하거나 새 트랜잭션을 연다. SqlClient와 `Crypto`가 필요하다.
+- `historyProjection` — `Effect.fn("HistoryProjection.make")`. 스키마를 설치하고 `{ prepare(threadId?), replace(snapshot) }`를 돌려준다. `replace`는 호출자 트랜잭션에 합류하거나 새 트랜잭션을 연다. SqlClient와 `SecureRandom`이 필요하다.
 - `HistorySnapshot` — 투영할 transcript 스냅샷 인터페이스(`threadId`, `sourceJSON`, 선택 `messages`).
 - `HistoryPageUnavailable` — Schema.TaggedError. reason은 `not-ready` | `id-collision` | `invalid-transcript`.
 - `HistoryProjectionReader` — Context.Service, `.layer`. `read(HistoryPageRequest)`가 `HistoryPageSnapshot`을 돌려주거나 `HistoryProjectionReadFailed`로 실패한다. 파생 데이터만 읽는다.
@@ -52,7 +52,7 @@
 - SQLite DDL: `historyProjection()`이 생성 시 `chat_history_projection`, `chat_history_groups` 테이블과 `chat_threads` 트리거 3개를 `CREATE ... IF NOT EXISTS`로 설치한다.
 - SQLite 쓰기: `replace`가 `chat_history_groups`를 삭제·삽입·업서트하고 `chat_history_projection`의 ready/format_version/publication을 갱신한다.
 - SQLite DDL: `chat_history_projection`에 `publication` 열이 없으면 `ALTER TABLE`로 더한다.
-- `Crypto.randomUUIDv4`로 퍼블리시 id를 만든다.
+- `SecureRandom.uuidV4`로 퍼블리시 id를 만든다.
 - 프로세스 메모리: `historyProjection()` 인스턴스가 `Ref`에 최근 스레드 4개의 퍼블리시 그룹을 들고 있다.
 - SQLite 읽기: `sessions`, `chat_threads`, `chat_history_*`를 읽는다. Nodes 서비스로 세션 노드를, Attachments 서비스로 노드별 첨부를 읽는다.
 - `Clock.currentTimeMillis`로 updated_at, resolved_at, finished_at 시각을 읽는다.

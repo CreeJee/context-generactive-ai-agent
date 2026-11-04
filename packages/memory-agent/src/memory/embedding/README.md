@@ -60,7 +60,7 @@ memory-agent의 임베딩 계층이다. 로컬 granite 임베딩 모델을 워�
 - 네이티브 벡터 소유자: `runtimeWorker("native-search-worker")`로 `makeNativeOwner` 워커를 연다. lease를 잡고 `<storage>/vectors/<hash>` 디렉터리에 색인을 저장한다(save/remove/add 명령)
 - SQLite 읽기·쓰기 대상 테이블: `nodes`, `node_vectors`, `node_vector_chunks`, `memory_graph_vector_removals`, `memory_chunk_vector_removals`, `nodes_morph`, `node_morphs`. `PRAGMA database_list`를 조회하고 `sql.withTransaction`을 쓴다
 - AppEvents: 색인이 하나 이상 커밋되면 `publishGlobal("embedding")`과 `publishGlobal("imports")`를 발행한다
-- Crypto: `randomUUIDv4`로 owner epoch과 명령별 requestId를 만든다
+- 난수: `uuidV4`로 owner epoch과 명령별 requestId를 만든다
 - 설정·호스트 정보: `GlobalConfig` 설정(`embeddingDevice`, `gpuCheck`)과 `totalMemory`(host-system)를 읽는다. `setup.ts`가 설정을 갱신하는지는 읽지 않아 확인하지 못했다
 
 ## Verification

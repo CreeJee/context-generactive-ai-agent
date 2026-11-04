@@ -2,7 +2,8 @@ import { NodeCrypto } from "@effect/platform-node";
 import { testHttpServer, HttpServerRequest, HttpServerResponse } from "./support/http.ts";
 import { Scope, Exit } from "effect";
 import { it } from "@effect/vitest";
-import { Context, Crypto, Effect, FileSystem, Layer, Path, Schema } from "effect";
+import { Context, Effect, FileSystem, Layer, Path, Schema } from "effect";
+import { Digest } from "effect/crypto";
 import { withTestPlatform } from "./support/platform.ts";
 import { afterEach, describe, expect, vi } from "vite-plus/test";
 import {
@@ -49,11 +50,11 @@ const archiveServer = Effect.fn("runtimeTest.archiveServer")(function* (
   return (path: string) => url + path;
 });
 const pinned = Effect.fn("runtimeTest.pinned")(function* (url: string, bytes: Uint8Array) {
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* Digest.Digest;
   const pin: PinnedArchive = {
     url,
     algorithm: "sha256",
-    digest: Buffer.from(yield* crypto.digest("SHA-256", bytes)).toString("hex"),
+    digest: Buffer.from(yield* crypto.digest(Digest.sha256, bytes)).toString("hex"),
   };
   return pin;
 });

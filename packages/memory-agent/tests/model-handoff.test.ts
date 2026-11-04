@@ -1,5 +1,6 @@
 import { NodeCrypto } from "@effect/platform-node";
-import { Crypto, Effect, Layer, MutableHashMap, MutableRef, Option, Schema } from "effect";
+import { Effect, Layer, MutableHashMap, MutableRef, Option, Schema } from "effect";
+import { Digest } from "effect/crypto";
 import { expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
 import { modelHandoffNamespace } from "../src/agent/handoff-state.ts";
@@ -213,11 +214,11 @@ it.effect("migrates a verified legacy boundary before replaying the stored histo
     const legacyBoundary = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(
       stored.at(-1),
     );
-    const crypto = yield* Crypto.Crypto.pipe(
+    const crypto = yield* Digest.Digest.pipe(
       Effect.provideContext(yield* Layer.build(NodeCrypto.layer)),
     );
     const legacyAnchor = Buffer.from(
-      yield* crypto.digest("SHA-256", new TextEncoder().encode(legacyBoundary)),
+      yield* crypto.digest(Digest.sha256, new TextEncoder().encode(legacyBoundary)),
     ).toString("hex");
     yield* f.metadata.set(modelHandoffNamespace, "session", {
       _tag: "handoff",

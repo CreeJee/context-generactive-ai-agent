@@ -1,4 +1,5 @@
-import { Crypto, Effect, Fiber, HashMap, Option, Ref, Scope, SynchronizedRef } from "effect";
+import { Effect, Fiber, HashMap, Option, Ref, Scope, SynchronizedRef } from "effect";
+import { Digest, SecureRandom } from "effect/crypto";
 import { ChildProcessSpawner } from "effect/process";
 import {
   createProfileCredentialStore,
@@ -52,8 +53,10 @@ export const createAccountBoundSubscriptionClients = Effect.fnUntraced(function*
 }) {
   const { profiles, provider, legacy } = options;
   const vault = yield* OAuthKeychain;
-  const crypto = yield* Crypto.Crypto;
-  const platform = yield* Effect.context<Crypto.Crypto | ChildProcessSpawner.ChildProcessSpawner>();
+  const crypto = yield* SecureRandom.SecureRandom;
+  const platform = yield* Effect.context<
+    SecureRandom.SecureRandom | Digest.Digest | ChildProcessSpawner.ChildProcessSpawner
+  >();
   const protocol = providerProtocols[provider];
   const createClient =
     options.createClient ??
@@ -96,7 +99,7 @@ export const createAccountBoundSubscriptionClients = Effect.fnUntraced(function*
 
   /** Explicit login always creates a fresh slot, including after legacy account removal. */
   const startLogin = Effect.gen(function* () {
-    const id = yield* Effect.orDie(crypto.randomUUIDv4());
+    const id = yield* crypto.uuidV4();
     const attempt = yield* Effect.flatMap(clientFor(id), (client) => client.startLogin()).pipe(
       Effect.onError(() => forget(id)),
     );

@@ -1,5 +1,6 @@
 import { withTestPlatform } from "../../../tests/support/platform.ts";
-import { Crypto, Effect, FileSystem, Path } from "effect";
+import { Effect, FileSystem, Path } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { expect, it } from "vite-plus/test";
 import { addonPath, loadTurbovec, type NativeReadInput } from "../../../../turbovec/index.js";
 import { initializeNodeSqlite } from "../../runtime/node-sqlite-bridge.ts";
@@ -10,7 +11,7 @@ it("publishes only the claimed read's actual SQLite pin, never registration or p
     Effect.scoped(
       withTestPlatform(
         Effect.gen(function* () {
-          const crypto = yield* Crypto.Crypto;
+          const crypto = yield* SecureRandom.SecureRandom;
           const fs = yield* FileSystem.FileSystem;
           const paths = yield* Path.Path;
           const directory = yield* fs.makeTempDirectoryScoped({ prefix: "native-pin-" });
@@ -20,7 +21,7 @@ it("publishes only the claimed read's actual SQLite pin, never registration or p
           initializeNodeSqlite(addonPath);
           const reader = new MemoryReadSession(path);
           const index = new VectorIndex(384, 4);
-          const owner = yield* crypto.randomUUIDv4();
+          const owner = yield* crypto.uuidV4();
           const input: NativeReadInput = {
             allowedProjects: ["allowed"],
             embedder: "fixture",
@@ -40,7 +41,7 @@ it("publishes only the claimed read's actual SQLite pin, never registration or p
           try {
             for (const mode of ["read", "expired", "invalid", "cancelled"] as const) {
               const control = new SearchControl(
-                yield* crypto.randomUUIDv4(),
+                yield* crypto.uuidV4(),
                 owner,
                 "pin-epoch",
                 mode,

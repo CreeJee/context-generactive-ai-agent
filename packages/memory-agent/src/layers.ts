@@ -1,4 +1,5 @@
-import { type Crypto, Function as EffectFunction, Schema } from "effect";
+import { Function as EffectFunction, Schema } from "effect";
+import type { Digest, SecureRandom } from "effect/crypto";
 import type { ChildProcessSpawner } from "effect/process";
 import { nodePlatformLayer } from "./runtime/node-platform.ts";
 import { path } from "./runtime/synchronous-path.ts";
@@ -131,7 +132,11 @@ export interface MemoryAgentLayerOptions {
   readonly providerRegistry?: Layer.Layer<
     ProviderRegistry,
     never,
-    GlobalConfig | OAuthKeychain | Crypto.Crypto | ChildProcessSpawner.ChildProcessSpawner
+    | GlobalConfig
+    | OAuthKeychain
+    | SecureRandom.SecureRandom
+    | Digest.Digest
+    | ChildProcessSpawner.ChildProcessSpawner
   >;
   /** Provider Tool capability metadata override; it never executes tools or enforces policy. */
   readonly providerToolRegistry?: Layer.Layer<ProviderToolCapabilityRegistry>;

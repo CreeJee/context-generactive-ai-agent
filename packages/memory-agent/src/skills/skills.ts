@@ -13,9 +13,9 @@ import {
   Data,
   Effect,
   FileSystem,
-  Crypto,
   Layer,
 } from "effect";
+import { Digest } from "effect/crypto";
 import type { Project } from "../projects/projects.ts";
 import { homeDirectory } from "../runtime/host-system.ts";
 import { runtimeRequire, runtimeRoot } from "../runtime/resources.ts";
@@ -123,7 +123,7 @@ export interface SkillsOptions {
 const make = (options: SkillsOptions) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const crypto = yield* Crypto.Crypto;
+    const crypto = yield* Digest.Digest;
     const home = options.home ?? (yield* homeDirectory);
     const builtinRoot = options.builtin ?? (yield* builtinSkillsDirectory);
 
@@ -164,7 +164,7 @@ const make = (options: SkillsOptions) =>
             description: description.slice(0, maxDescriptionCharacters),
             directory,
             contentHash: Hex.encode(
-              yield* crypto.digest("SHA-256", new TextEncoder().encode(text)),
+              yield* crypto.digest(Digest.sha256, new TextEncoder().encode(text)),
             ),
           },
         });

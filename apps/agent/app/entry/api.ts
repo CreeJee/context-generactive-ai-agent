@@ -417,7 +417,7 @@ export function makeSessionLifecycleClient(fetch: typeof globalThis.fetch) {
     /** Active parent/child runs are checkpointed and stopped before the conversation is archived. */
     setArchived: (session: string, holder: string, archived: boolean) =>
       call((client) =>
-        Effect.flatMap(Effect.orDie(browserCrypto.randomUUIDv4()), (idempotencyKey) =>
+        Effect.flatMap(browserCrypto.uuidV4(), (idempotencyKey) =>
           client.sessions.change({
             params: { session },
             headers: { "x-session-holder": holder },
@@ -438,7 +438,7 @@ export function makeSessionLifecycleClient(fetch: typeof globalThis.fetch) {
       ),
     deleteSession: (session: string, holder: string) =>
       call((client) =>
-        Effect.flatMap(Effect.orDie(browserCrypto.randomUUIDv4()), (idempotencyKey) =>
+        Effect.flatMap(browserCrypto.uuidV4(), (idempotencyKey) =>
           client.sessions.change({
             params: { session },
             headers: { "x-session-holder": holder },
@@ -481,7 +481,7 @@ const changeTraceTask = (
   intent: "archive" | "delete",
 ) =>
   appCall((client) =>
-    Effect.flatMap(Effect.orDie(browserCrypto.randomUUIDv4()), (idempotencyKey) =>
+    Effect.flatMap(browserCrypto.uuidV4(), (idempotencyKey) =>
       client.trace.changeTask({
         params: { session, task },
         headers: { "x-session-holder": holder },

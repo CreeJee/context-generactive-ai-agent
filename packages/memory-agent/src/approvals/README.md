@@ -28,8 +28,8 @@
 - interrupt 원인은 승인 거절(false)로 바뀐다(`Effect.catchCauseIf(Cause.hasInterrupts, ...)`). 시간 초과도 false다.
 - `answer`는 이미 저장된 deferred 결과가 있으면 새로 쓰지 않고 같은 값인지만 비교한다. 실행 상태가 `completed`나 `interrupted`면 false를 돌려준다.
 - `DurableClock.sleep`은 `inMemoryThreshold: Duration.zero`를 쓴다. 따라서 시간 초과는 항상 durable clock으로 저장된다.
-- `approvalId`는 `crypto.randomUUIDv4()`로 만든다. 실패하면 답이 아닌 defect로 처리한다(`Effect.orDie`).
-- 서비스는 `WorkflowEngine.WorkflowEngine`, `Crypto.Crypto`, `OwnerWorkflowStorage`, `Scope`를 요구한다. `layerWith`가 엔진·저장소 레이어와 `NodeCrypto`를 함께 묶는다.
+- `approvalId`는 `crypto.uuidV4()`로 만든다. 이 id 생성은 실패하지 않는다.
+- 서비스는 `WorkflowEngine.WorkflowEngine`, `SecureRandom.SecureRandom`, `OwnerWorkflowStorage`, `Scope`를 요구한다. `layerWith`가 엔진·저장소 레이어와 `NodeCrypto`를 함께 묶는다.
 
 ## Side Effects
 

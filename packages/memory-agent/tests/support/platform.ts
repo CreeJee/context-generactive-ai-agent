@@ -1,5 +1,6 @@
 import { NodeCrypto, NodeFileSystem, NodePath } from "@effect/platform-node";
-import { Crypto, Effect, Layer } from "effect";
+import { Context, Effect, Layer } from "effect";
+import { Digest, SecureRandom } from "effect/crypto";
 import { OAuthKeychain } from "../../src/oauth/validation-harness.ts";
 import { nodePlatformLayer } from "../../src/runtime/node-platform.ts";
 
@@ -23,11 +24,14 @@ export const withOAuthTestPlatform = Effect.fn("withOAuthTestPlatform")(function
   return yield* Effect.provideContext(program, services);
 });
 
-/** Web Crypto as a Crypto service, for constructors that synchronous fixtures call. */
-export const webCrypto = Crypto.make({
-  randomBytes: (size) => globalThis.crypto.getRandomValues(new Uint8Array(size)),
-  digest: (algorithm, data) =>
-    Effect.promise(() => globalThis.crypto.subtle.digest(algorithm, Uint8Array.from(data))).pipe(
-      Effect.map((digest) => new Uint8Array(digest)),
+/** Web Crypto as the Effect crypto services, for constructors that synchronous fixtures call. */
+export const webCrypto = {
+  random: SecureRandom.make((size) => globalThis.crypto.getRandomValues(new Uint8Array(size))),
+  digest: Effect.runSync(
+    Effect.scoped(
+      Effect.map(Layer.build(Digest.layerWebCrypto), (services) =>
+        Context.get(services, Digest.Digest),
+      ),
     ),
-});
+  ),
+};

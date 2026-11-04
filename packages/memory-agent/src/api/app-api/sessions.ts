@@ -262,7 +262,6 @@ const SessionStorageFailed = appRefusal(500, [
   "workflow_storage_failed",
   "schedule_storage_failed",
   "worktree_failed",
-  "platform_failed",
 ]);
 
 /** Every refusal of the group, for `appRefusalStatus`. */

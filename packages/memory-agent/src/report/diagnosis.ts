@@ -1,5 +1,6 @@
 import { AuthConnectionState } from "../providers/contracts.ts";
-import { Context, Crypto, Effect, Layer, Option, Schema } from "effect";
+import { Context, Effect, Layer, Option, Schema } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { ApiUsage, recordUsage } from "../agent/api-usage.ts";
 import { singleAnswer } from "../model/single-call.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
@@ -103,7 +104,7 @@ export class ReportDiagnoser extends Context.Service<
     Effect.gen(function* () {
       const active = yield* ActiveProvider;
       const usage = yield* ApiUsage;
-      const crypto = yield* Crypto.Crypto;
+      const crypto = yield* SecureRandom.SecureRandom;
       const unavailable = (cause: unknown) =>
         ReportDiagnosisError.make({ reason: "model_unavailable", cause });
 
@@ -122,7 +123,7 @@ export class ReportDiagnoser extends Context.Service<
           Effect.succeed(!AuthConnectionState.$is("signed-in")(auth)),
         );
         const { services } = yield* active.resolve(selection).pipe(Effect.mapError(unavailable));
-        const threadId = yield* crypto.randomUUIDv4().pipe(Effect.mapError(unavailable));
+        const threadId = yield* crypto.uuidV4();
         const answer = yield* singleAnswer({
           runtime: services.runtime,
           selection,

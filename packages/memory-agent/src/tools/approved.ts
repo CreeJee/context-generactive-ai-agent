@@ -1,7 +1,8 @@
 import { Function as EffectFunction } from "effect";
 import { path } from "../runtime/synchronous-path.ts";
 const { isAbsolute, relative, sep } = path;
-import { Context, Crypto, Effect, FileSystem, Layer, Match, Option, Schema } from "effect";
+import { Context, Effect, FileSystem, Layer, Match, Option, Schema } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { ChildProcessSpawner } from "effect/process";
 import { AttemptFailureReason } from "../work-trace/contracts.ts";
 import {
@@ -132,7 +133,7 @@ const make = Effect.gen(function* () {
   const codeSkills = yield* CodeSkills;
   const fileSystem = yield* FileSystem.FileSystem;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const platform = yield* Effect.context<FileSystem.FileSystem | Crypto.Crypto>();
+  const platform = yield* Effect.context<FileSystem.FileSystem | SecureRandom.SecureRandom>();
 
   /** The approved tools' calls for `project`, each failing with what the model reads. */
   const callsFor = (project: Fenced<Project>, binding?: BackgroundBinding) => ({
