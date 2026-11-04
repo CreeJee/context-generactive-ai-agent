@@ -233,6 +233,9 @@ const make = Effect.fn("Database.make")(function* (
     Effect.tap((sqlite) =>
       Effect.try({
         try: () => {
+          // A new file returns its free pages a little at a time (`FreePages`). This only takes
+          // effect before the first table, and before WAL is set; an existing file keeps its mode.
+          sqlite.exec("PRAGMA auto_vacuum = INCREMENTAL");
           sqlite.exec("PRAGMA journal_mode = WAL");
           sqlite.exec("PRAGMA foreign_keys = ON");
           // For the migrations below, before anything serves; the client then waits out locks

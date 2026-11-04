@@ -4027,3 +4027,13 @@
   - 후보 id는 그대로다. 저장된 메모리 노드의 `detail.memoryCandidateId`, `memory_candidate_evidence`, `memory_usage_events`가 이 id를 가리킨다.
   - `MemoryCandidateView.decisionId`를 지운다. 화면과 다른 코드는 읽지 않았다.
 - 마이그레이션: 결정과 후보를 짝지어 한 행으로 옮긴다. 승격은 두 행을 한 transaction에 썼으므로 짝이 없는 후보는 깨진 파일에서만 나온다. 그런 후보는 옮기지 않고, 그 근거와 사용 기록도 지운다. 사본에는 승격 행이 없었다.
+
+## 새 DB는 빈 페이지를 조금씩 돌려준다 (2026-11-04)
+
+- 계기: 정규화 마이그레이션(같은 날)을 앱 DB 사본에 돌렸다. 업그레이드 뒤 5,886 MB 중 2,410 MB(41%)가 빈 페이지였다. SQLite는 지운 공간을 파일에 빈 페이지로 남기고, 이후 쓰기가 그 페이지를 다시 쓴다. 파일을 줄이려면 `VACUUM`이 필요하다. 그러나 이 앱의 연결은 동기 `DatabaseSync`라 `VACUUM`이 이벤트 루프를 멈춘다. 사본에서는 55초 걸렸다. 그동안 쓰기 잠금을 쥐고 DB 크기의 약 두 배 디스크 여유를 쓴다. 연결을 따로 둬도 SQLite의 쓰기는 파일마다 하나라서 앱 쓰기가 같은 시간 동안 막힌다.
+- 결정:
+  - 전체 `VACUUM`은 앱이 돌리지 않는다. 기존 DB(`auto_vacuum` 0)의 빈 페이지는 이후 쓰기가 다시 쓴다.
+  - 새 DB는 `PRAGMA auto_vacuum = INCREMENTAL`로 만든다. 이 설정은 첫 표 전, `journal_mode = WAL` 전에 걸어야 적용된다.
+  - `FreePages.layer`가 10분마다 빈 페이지를 본다. 1,024개(4 MiB) 이상이면 `PRAGMA incremental_vacuum(256)`을 1,024개 아래로 내려갈 때까지 100ms씩 쉬어 가며 돌린다. 한 번은 1 MiB이고 1ms가 안 걸렸다. 앱의 연결 semaphore 줄에 서므로 앱 쓰기와 번갈아 돈다.
+  - 별도 vacuum 연결은 두지 않는다. 잠금을 두고 앱 연결과 다투기만 한다.
+- 남긴 것: 기존 DB를 incremental로 바꾸려면 전체 `VACUUM`이 한 번 필요하다. 필요해지면 사용자가 직접 실행하는 설정 동작으로 둔다.

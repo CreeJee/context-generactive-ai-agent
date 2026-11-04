@@ -16,6 +16,7 @@
 - `sqlClientOver(sqlite, semaphore)` — 앱의 단일 연결 위 런타임 `SqlClient`. prepared statement Cache, `makeSqliteAcquirers`, `BEGIN IMMEDIATE`, `RELEASE SAVEPOINT`를 쓴다
 - `migrationClient(sqlite)` — 시작 마이그레이션 전용 `SqlClient` 어댑터. 트랜잭션은 `SAVEPOINT effect_migrate`로 연다
 - `sqliteDriver` — 두 어댑터의 `SqlClient.driver`(`"memory-agent-sqlite"`). 공식 `@effect/sql-sqlite-node`(`"sqlite-node"`)와 방언은 같지만 잠금을 SQLite 밖에서 기다리므로 이름을 따로 둔다
+- `FreePages.layer` — incremental auto_vacuum으로 만든 파일이면 10분마다 빈 페이지를 확인하는 fiber를 scope에 띄운다. 그렇지 않은 파일에서는 아무것도 하지 않는다. `reclaimFreePages()`는 빈 페이지가 1,024개 아래로 내려갈 때까지 `PRAGMA incremental_vacuum(256)`을 100ms씩 쉬어 가며 실행한다
 - `migrations` — `readonly string[]` 순서형 스키마 SQL 단계. projects, sessions, nodes, edges, nodes_fts, chat_threads, chat_thread_messages, chat_runs, queued_messages, subagents, mcp_trust, agent_trust 등을 정의한다
 - `goalHistoryMigration` — `{ version: 42, kind: "goal-history-binding-fk-rebuild", preservedTables }`. FK 검사를 멈춘 채 참조되는 테이블을 재구성할 수 있는 유일한 단계
 - `tanStackRowsMigration` — SQL 주석뿐인 단계. 시작 시 이 단계와 함께 `migrateTanStackRows`가 실행된다
@@ -44,19 +45,21 @@
 - 바인딩 파라미터는 string, finite number, bigint, null, Uint8Array만 허용한다(Schema 디코드). BigInt 읽기 모드는 fiber의 `SqlClient.SafeIntegers` 값을 따른다.
 - prepared statement 캐시는 용량 200이다. 성공한 prepare만 10분 동안 캐시하고, 실패한 prepare는 즉시 만료한다.
 - `nodes`는 불변이다(`nodes_immutable` 트리거가 UPDATE를 막는다). `nodes.seq`는 turbovec 벡터 id로도 쓰인다. nodes_fts(trigram)는 INSERT 트리거로 채워진다.
-- 연결 PRAGMA는 `journal_mode = WAL`, `foreign_keys = ON`, `busy_timeout = 5000`, `cache_size = -65536`(64 MiB, `docs/decisions.md` 근거)이다. `busy_timeout = 5000`은 열 때의 마이그레이션에만 쓰고, `sqlClientOver`가 0으로 둔다.
+- 연결 PRAGMA는 `auto_vacuum = INCREMENTAL`, `journal_mode = WAL`, `foreign_keys = ON`, `busy_timeout = 5000`, `cache_size = -65536`(64 MiB, `docs/decisions.md` 근거)이다. `busy_timeout = 5000`은 열 때의 마이그레이션에만 쓰고, `sqlClientOver`가 0으로 둔다. `auto_vacuum`은 첫 표를 만들기 전, WAL보다 먼저 걸 때만 적용된다. 그래서 새 파일만 incremental이 되고, 기존 파일은 0(NONE)으로 남는다.
+- 전체 `VACUUM`은 돌리지 않는다. 동기 `DatabaseSync`라 이벤트 루프를 멈추고, 그동안 쓰기 잠금을 쥔다. 빈 페이지는 같은 연결의 semaphore 줄에 서서 1 MiB씩 돌려준다.
 - DB 디렉터리는 `:memory:`가 아닐 때 mode `0o700`으로 recursive 생성한다.
 
 ## Side Effects
 
 - `fs.makeDirectory(path.dirname(file), { recursive: true, mode: 0o700 })`로 DB 디렉터리를 만든다.
 - `new DatabaseSync(file)`로 SQLite 파일을 연다. Layer scope가 끝나면 `sqlite.close()`로 닫는다.
-- 연결에 PRAGMA를 쓴다(journal_mode WAL, foreign_keys, busy_timeout, cache_size, user_version).
+- 연결에 PRAGMA를 쓴다(auto_vacuum, journal_mode WAL, foreign_keys, busy_timeout, cache_size, user_version).
 - 마이그레이션 DDL과 DML을 실행한다. 테이블, 인덱스, 트리거, FTS를 생성하고 대화 메시지 정리·이동 등을 한다.
 - `effect_sql_migrations` 테이블을 만들고 INSERT OR IGNORE로 기록한다(Migrator 메타데이터).
 - `tanStackRowsMigration` 단계에서 `migrateTanStackRows()`를 실행해 TanStack이 쓴 chat 행을 Effect AI 형태로 다시 쓴다.
 - `humanDecisionFactsMigration` 단계에서 `migrateHumanDecisionRows()`를 실행해 0.0.17이 payload에 넣은 사람 결정의 사실과 시각을 `human_decision_facts` 첫 행과 `created_at`으로 옮기고 payload를 다시 encode한다. 읽지 못하는 행은 그대로 둔다.
 - `BEGIN IMMEDIATE`, `COMMIT`, `ROLLBACK`, SAVEPOINT로 트랜잭션을 제어하고 SQLite 쓰기 잠금을 잡는다.
+- `FreePages.layer`가 `PRAGMA incremental_vacuum`으로 빈 페이지를 파일 시스템에 돌려준다. 실패는 태그만 경고로 남기고 다음 확인을 기다린다.
 - 런타임 `SqlClient`로 모든 SQLite 읽기·쓰기를 실행한다. Semaphore 임대와 prepared statement Cache를 쓴다.
 
 ## Verification
