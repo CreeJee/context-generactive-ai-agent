@@ -3,6 +3,7 @@ import { SecureRandom } from "effect/crypto";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { Attachments } from "../attachments/attachments.ts";
 import { StoredMessage, StoredUserMessage, TextPart } from "../chat-store/schema.ts";
+import { firstChange } from "../chat-store/thread-messages.ts";
 import { isEmptyUserText } from "../messages/empty-user.ts";
 import { Sessions } from "../sessions/sessions.ts";
 import { firstMessageTitle } from "../sessions/title.ts";
@@ -14,8 +15,12 @@ import {
   type BtwThread,
 } from "./contracts.ts";
 
-/** `btw_threads.messages`: the thread's messages as the run loop stores a conversation. */
+/** A thread's `btw_thread_messages` rows joined in order: its messages as the run loop stores them. */
 const Messages = Schema.fromJsonString(Schema.Array(StoredMessage));
+const encodeMessage = Schema.encodeEffect(Schema.fromJsonString(StoredMessage));
+/** The JSON array of the messages of thread `t`. */
+const messagesOf = `'[' || coalesce((SELECT group_concat(m.message, ',' ORDER BY m.seq)
+  FROM btw_thread_messages m WHERE m.thread_id = t.id), '') || ']'`;
 
 const ThreadRow = Schema.Struct({
   id: Schema.String,
@@ -63,8 +68,9 @@ const make = Effect.gen(function* () {
   const attachments = yield* Attachments;
   const crypto = yield* SecureRandom.SecureRandom;
 
-  const selectThread = sql.literal(`SELECT t.*, s.project_id FROM btw_threads t
-    JOIN sessions s ON s.id = t.parent_session_id`);
+  const selectThread = sql.literal(`SELECT t.id, t.parent_session_id, t.created_at, t.updated_at,
+      s.project_id, ${messagesOf} AS messages
+    FROM btw_threads t JOIN sessions s ON s.id = t.parent_session_id`);
   const getRow = SqlSchema.findOneOption({
     Request: Schema.String,
     Result: ThreadRow,
@@ -80,7 +86,8 @@ const make = Effect.gen(function* () {
   const selectMessages = SqlSchema.findOneOption({
     Request: Schema.String,
     Result: Schema.Struct({ messages: Messages }),
-    execute: (threadId) => sql`SELECT messages FROM btw_threads WHERE id = ${threadId}`,
+    execute: (threadId) =>
+      sql`SELECT ${sql.literal(messagesOf)} AS messages FROM btw_threads t WHERE t.id = ${threadId}`,
   });
 
   const get = (threadId: string) =>
@@ -102,18 +109,42 @@ const make = Effect.gen(function* () {
         Option.match({ onNone: () => [], onSome: (row) => row.messages }),
       ),
 
-    /** Saves the thread's messages. An answer still finishing never brings a deleted thread back. */
+    /**
+     * Saves the thread's messages, rewriting them from the first that changed. An answer still
+     * finishing never brings a deleted thread back.
+     */
     saveMessages: Effect.fn("BtwThreads.saveMessages")(function* (
       threadId: string,
       messages: ReadonlyArray<StoredMessage>,
     ) {
-      const text = yield* Schema.encodeEffect(Messages)(
-        messages.filter((message) => !isEmptyUserText(message)),
-      );
+      const next = messages.filter((message) => !isEmptyUserText(message));
       const updatedAt = yield* Clock.currentTimeMillis;
-      yield* sql`
-        UPDATE btw_threads SET messages = ${text}, updated_at = ${updatedAt}
-        WHERE id = ${threadId}`;
+      const write = (stored: ReadonlyArray<StoredMessage>) => {
+        const from = firstChange(stored, next);
+        return sql`DELETE FROM btw_thread_messages WHERE thread_id = ${threadId} AND seq >= ${from}`.pipe(
+          Effect.andThen(
+            Effect.forEach(
+              next.slice(from),
+              (message, index) =>
+                Effect.flatMap(
+                  encodeMessage(message),
+                  (text) => sql`INSERT INTO btw_thread_messages (thread_id, seq, message)
+                    VALUES (${threadId}, ${from + index}, ${text})`,
+                ),
+              { discard: true },
+            ),
+          ),
+          Effect.andThen(
+            sql`UPDATE btw_threads SET updated_at = ${updatedAt} WHERE id = ${threadId}`,
+          ),
+        );
+      };
+      yield* sql.withTransaction(
+        Effect.flatMap(
+          selectMessages(threadId),
+          Option.match({ onNone: () => Effect.void, onSome: (row) => write(row.messages) }),
+        ),
+      );
     }),
 
     /** Opens a BTW thread under an existing main conversation. Its binding never changes. */

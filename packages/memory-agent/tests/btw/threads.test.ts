@@ -202,7 +202,9 @@ testAgent({ testProvider: { responder } })("BTW non-collection", (it) => {
               ),
               pending: yield* (yield* Indexer).pending,
               stored: yield* count(
-                "SELECT count(*) AS count FROM btw_threads WHERE id = ? AND messages LIKE '%btw-question-only-here%' AND messages LIKE '%find_memory%'",
+                `SELECT count(*) AS count FROM (SELECT group_concat(message) AS messages
+                  FROM btw_thread_messages WHERE thread_id = ?)
+                WHERE messages LIKE '%btw-question-only-here%' AND messages LIKE '%find_memory%'`,
                 thread.id,
               ),
             };

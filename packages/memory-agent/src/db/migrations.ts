@@ -578,6 +578,28 @@ export const queuedMessageAttachmentsMigration = `
   ALTER TABLE queued_messages DROP COLUMN in_transcript;
 `;
 
+/** The step that keeps a BTW thread's transcript as one row per message. */
+export const btwThreadMessagesMigration = `
+  -- A BTW thread's transcript is one row per message, as a conversation's is in
+  -- chat_thread_messages (decisions.md "BTW 대화는 메시지 행으로 둔다 (2026-11-04)"). A save
+  -- rewrote the whole array. Each element moves as its JSON text; a value that was not an array
+  -- failed every read and now reads as no messages.
+  CREATE TABLE btw_thread_messages (
+    thread_id TEXT NOT NULL REFERENCES btw_threads(id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL CHECK (seq >= 0),
+    message TEXT NOT NULL CHECK (json_valid(message)),
+    PRIMARY KEY (thread_id, seq)
+  );
+  INSERT INTO btw_thread_messages (thread_id, seq, message)
+    SELECT t.id, m.key,
+      CASE WHEN m.type IN ('object', 'array') THEN m.value
+        WHEN m.type IN ('true', 'false') THEN m.type
+        ELSE json_quote(m.value) END
+    FROM btw_threads AS t,
+      json_each(CASE WHEN json_type(t.messages) = 'array' THEN t.messages END) AS m;
+  ALTER TABLE btw_threads DROP COLUMN messages;
+`;
+
 /**
  * Ordered schema steps. `PRAGMA user_version` records how many have been applied.
  * Append new steps; never edit an applied one.
@@ -2600,6 +2622,7 @@ export const migrations: readonly string[] = [
   attemptPendingToolCallsMigration,
   sessionStateTablesMigration,
   queuedMessageAttachmentsMigration,
+  btwThreadMessagesMigration,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.
