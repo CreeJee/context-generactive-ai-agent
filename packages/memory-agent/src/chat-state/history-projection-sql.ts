@@ -8,7 +8,8 @@ export const historyProjectionSchema = `
 CREATE TABLE IF NOT EXISTS chat_history_projection (
   thread_id TEXT PRIMARY KEY,
   format_version INTEGER NOT NULL CHECK (format_version = 1),
-  ready INTEGER NOT NULL CHECK (ready IN (0, 1))
+  ready INTEGER NOT NULL CHECK (ready IN (0, 1)),
+  publication TEXT
 );
 CREATE TABLE IF NOT EXISTS chat_history_groups (
   thread_id TEXT NOT NULL,
@@ -40,8 +41,14 @@ export const historyProjectionSql = {
   // Preparation-only: stage invalidation, row replacement and conditional publish
   // inside one savepoint; rollback all of it when publishIfCurrent.changes is 0.
   markUnready: "UPDATE chat_history_projection SET ready = 0 WHERE thread_id = ?",
+  // Tables made before publishes were recorded get the column when the projection installs.
+  hasPublication:
+    "SELECT 1 AS present FROM pragma_table_info('chat_history_projection') WHERE name = 'publication'",
+  addPublication: "ALTER TABLE chat_history_projection ADD COLUMN publication TEXT",
+  /** The id of the thread's latest committed publish; a rolled-back one leaves the earlier id. */
+  publication: "SELECT publication FROM chat_history_projection WHERE thread_id = ?",
   publishIfCurrent:
-    "INSERT INTO chat_history_projection (thread_id, format_version, ready) SELECT thread_id, 1, 1 FROM chat_threads WHERE thread_id = ? AND messages = ? ON CONFLICT(thread_id) DO UPDATE SET format_version = 1, ready = 1",
+    "INSERT INTO chat_history_projection (thread_id, format_version, ready, publication) SELECT thread_id, 1, 1, ?3 FROM chat_threads WHERE thread_id = ?1 AND messages = ?2 ON CONFLICT(thread_id) DO UPDATE SET format_version = 1, ready = 1, publication = excluded.publication",
   groupIdentities: "SELECT ordinal, ui_id FROM chat_history_groups WHERE thread_id = ?",
   removeOrdinal: "DELETE FROM chat_history_groups WHERE thread_id = ? AND ordinal = ?",
   removeTail: "DELETE FROM chat_history_groups WHERE thread_id = ? AND ordinal >= ?",

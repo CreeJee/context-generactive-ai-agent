@@ -18,7 +18,7 @@ run·thread·interrupt 행은 TanStack 영속화와 같은 테이블·컬럼(`ch
 - `StepEnded` / `StepRequest` / `AnsweredCall` — step 종료(`Model` | `Resume`), step 요청(system, history), 호출과 그 응답의 쌍
 - `stepScheduler` / `StepScheduler` — 한 model step의 도구 호출을 Scope 안에서 fork 실행한다. `offer(call, admission)`, `settle(complete)`
 - `CallOutcome` / `CallAnswer` / `Admission` / `Run` / `StepCall` — 호출 결과 TaggedEnum(`Returned`/`Failed`/`Refused`/`Waiting`), gate 결정(`Run` 또는 결과), 호출 형태
-- `RunStore` — `Context.Service`. `RunStore.layer`는 `make`와 `HistoryProjectionReader.layer`로 구성된다. thread·run·interrupt 행과 history projection을 다룬다(thread, threadSaved, activeRun, saveThread, startRun, endRun, run, lastRun, pendingInterrupts, createInterrupts 등)
+- `RunStore` — `Context.Service`. `RunStore.layer`는 `make`와 `HistoryProjectionReader.layer`, `NodeCrypto.layer`로 구성된다. thread·run·interrupt 행과 history projection을 다룬다(thread, threadSaved, activeRun, saveThread, startRun, endRun, run, lastRun, pendingInterrupts, createInterrupts 등)
 - `RunEnd` / `finishedRun` — run 종료 상태 TaggedEnum(`Completed`/`Interrupted`/`Failed`/`Aborted`). `finishedRun`은 Completed 또는 Interrupted일 때 true
 - `InterruptAnswer` / `PendingInterrupt` / `InterruptCommitRejected` / `StoredRun` — interrupt 응답(`Resolved`/`Cancelled`), 대기 interrupt, batch commit 거부 에러(`duplicate-interrupt`/`missing-interrupt`/`interrupt-not-pending`), run 레코드
 - `resumeAnswers` / `ResumeEntry` / `ResumeRejected` / `Resumed` — resume batch를 대기 interrupt에 맞춰 검증하고 응답 목록을 만든다. 거부 시 `ResumeRejected`(code: `stale`/`conflict`/`unknown-interrupt`/`invalid-payload`)

@@ -1,6 +1,7 @@
 import { Clock, Effect, Layer, Schema } from "effect";
 import { describe, expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { StoredMessage } from "../chat-store/schema.ts";
 import { Database } from "../db/database.ts";
 import { migrations } from "../db/migrations.ts";
@@ -17,7 +18,12 @@ const releasedWriter =
 /** The thread's text as `RunStore` saves it. */
 const encodeThread = Schema.encodeEffect(Schema.fromJsonString(Schema.Array(StoredMessage)));
 
-const fixture = provideFixture(RunStore.layer.pipe(Layer.provideMerge(Database.layer(":memory:"))));
+// `historyProjection` itself needs Crypto where a test makes one.
+const fixture = provideFixture(
+  RunStore.layer.pipe(
+    Layer.provideMerge(Layer.merge(Database.layer(":memory:"), NodeCrypto.layer)),
+  ),
+);
 
 /** The ids of the messages a page shows, and the cursor of the page before it. */
 const page = (threadId: string, limit: number, before?: string) =>

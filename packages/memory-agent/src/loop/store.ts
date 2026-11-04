@@ -1,5 +1,6 @@
 import { Clock, Context, Data, Effect, HashSet, Layer, Option, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { type ChatMetadata, ChatMetadataFailed } from "../chat-store/metadata.ts";
 import { interruptContinuationLostCode, type RunStatus } from "../agent/run-state.ts";
 import {
@@ -431,6 +432,6 @@ export class RunStore extends Context.Service<RunStore, Effect.Success<typeof ma
   "memory-agent/loop/store/RunStore",
 ) {
   static readonly layer = Layer.effect(RunStore, make).pipe(
-    Layer.provide(HistoryProjectionReader.layer),
+    Layer.provide(Layer.merge(HistoryProjectionReader.layer, NodeCrypto.layer)),
   );
 }

@@ -1,8 +1,9 @@
-import { Effect, Schema } from "effect";
+import { Array as EffectArray, Crypto, Effect, Equivalence, Option, Ref, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { StoredMessage } from "../chat-store/schema.ts";
 import {
   groupHistoryMessages,
+  type HistoryGroup,
   HistoryGroupingResult,
   HistoryMessagesResult,
   historyProjectionMessages,
@@ -22,6 +23,7 @@ const Messages = Schema.fromJsonString(Schema.Array(StoredMessage));
 const decodeStored = Schema.decodeEffect(Messages);
 const encodeGroup = Schema.encodeEffect(Messages);
 const Identity = Schema.Struct({ ordinal: Schema.Natural, ui_id: Schema.String });
+const Publication = Schema.Struct({ publication: Schema.NullOr(Schema.String) });
 
 /** A transcript snapshot to project; a writer that has its `messages` supplies them. */
 export interface HistorySnapshot {
@@ -30,10 +32,55 @@ export interface HistorySnapshot {
   readonly messages?: ReadonlyArray<StoredMessage>;
 }
 
+/**
+ * A thread's groups as a publish of this writer stored them. While the thread's stored publication
+ * is still `publication`, its rows are these groups: one process owns the database, and a publish
+ * that rolled back leaves the earlier publication in place.
+ */
+interface Published {
+  readonly threadId: string;
+  readonly publication: string;
+  readonly groups: ReadonlyArray<HistoryGroup>;
+}
+
+/** How many threads' publishes a writer remembers: the most recently saved ones. */
+const rememberedThreads = 4;
+
+/**
+ * Messages that hold the very same values, field by field. A message saved without an id is
+ * published as a fresh copy that carries its id, so the copies of one message are told apart
+ * from a changed message by their fields, not by the object.
+ */
+const sameMessages = EffectArray.makeEquivalence(Equivalence.Record(Equivalence.strictEqual()));
+
+/**
+ * Whether `group` is stored as is: the group published at its ordinal had its id and the very same
+ * messages. A run saves its conversation again after each step with the earlier messages
+ * unchanged, so only the groups its new messages touch are encoded and written.
+ */
+const storedAsIs = (published: Option.Option<HistoryGroup>, group: HistoryGroup) =>
+  Option.exists(
+    published,
+    (stored) => stored.id === group.id && sameMessages(stored.messages, group.messages),
+  );
+
 /** The UI history projection beside the authoritative transcript, on the app's SqlClient. */
 export const historyProjection = Effect.fn("HistoryProjection.make")(function* () {
   const client = yield* SqlClient.SqlClient;
-  yield* client.withTransaction(client.unsafe(historyProjectionSchema).unprepared);
+  const crypto = yield* Crypto.Crypto;
+  yield* client.withTransaction(
+    Effect.gen(function* () {
+      yield* client.unsafe(historyProjectionSchema).unprepared;
+      const recorded = yield* client.unsafe(sql.hasPublication);
+      yield* Effect.when(client.unsafe(sql.addPublication), Effect.succeed(recorded.length === 0));
+    }),
+  );
+  const remembered = yield* Ref.make<ReadonlyArray<Published>>([]);
+  const storedPublication = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Publication,
+    execute: (threadId) => client.unsafe(sql.publication, [threadId]),
+  });
   const identities = SqlSchema.findAll({
     Request: Schema.String,
     Result: Identity,
@@ -58,7 +105,10 @@ export const historyProjection = Effect.fn("HistoryProjection.make")(function* (
       client`SELECT thread_id, messages FROM chat_threads WHERE thread_id = ${threadId}`,
   });
 
-  const prepared = Effect.fnUntraced(function* (snapshot: HistorySnapshot) {
+  const prepared = Effect.fnUntraced(function* (
+    snapshot: HistorySnapshot,
+    retained: ReadonlyArray<typeof Identity.Type>,
+  ) {
     // Startup/import still validates and decodes stored JSON. Avoid reparsing the writer's
     // freshly serialized snapshot.
     const stored =
@@ -66,7 +116,6 @@ export const historyProjection = Effect.fn("HistoryProjection.make")(function* (
       (yield* decodeStored(snapshot.sourceJSON).pipe(
         Effect.mapError(() => HistoryPageUnavailable.make({ reason: "invalid-transcript" })),
       ));
-    const retained = yield* identities(snapshot.threadId);
     const normalized = historyProjectionMessages(
       snapshot.threadId,
       stored,
@@ -82,15 +131,43 @@ export const historyProjection = Effect.fn("HistoryProjection.make")(function* (
     });
   });
 
-  /** Replaces a thread's groups; joins the caller's transaction, or opens one. */
-  const replace = (snapshot: HistorySnapshot) =>
+  /** This writer's latest publish of the thread, while it is still the stored one. */
+  const storedPublish = (threadId: string) =>
+    Effect.gen(function* () {
+      const stored = Option.flatMap(yield* storedPublication(threadId), (row) =>
+        Option.fromNullishOr(row.publication),
+      );
+      return EffectArray.findFirst(
+        yield* Ref.get(remembered),
+        (publish) => publish.threadId === threadId && Option.contains(stored, publish.publication),
+      );
+    });
+
+  /** Remembers the publish, forgetting the least recently saved thread past the limit. */
+  const remember = (publish: Published) =>
+    Ref.update(remembered, (publishes) =>
+      EffectArray.takeRight(
+        [...publishes.filter((other) => other.threadId !== publish.threadId), publish],
+        rememberedThreads,
+      ),
+    );
+
+  /** Writes a thread's groups and publishes them, in the caller's transaction or its own. */
+  const publish = (snapshot: HistorySnapshot) =>
     client.withTransaction(
       Effect.gen(function* () {
-        const groups = yield* prepared(snapshot);
         const { threadId } = snapshot;
+        const known = yield* storedPublish(threadId);
+        const before = Option.match(known, { onNone: () => [], onSome: (last) => last.groups });
+        // The rows of this writer's stored publish need no read.
+        const existing = yield* Option.match(known, {
+          onNone: () => identities(threadId),
+          onSome: (last) =>
+            Effect.succeed(last.groups.map((group, ordinal) => ({ ordinal, ui_id: group.id }))),
+        });
+        const groups = yield* prepared(snapshot, existing);
         yield* client.unsafe(sql.markUnready, [threadId]);
         yield* client.unsafe(sql.removeTail, [threadId, groups.length]);
-        const existing = yield* identities(threadId);
         // Delete only changed identities before upserting, so moved/swapped IDs
         // cannot collide with the unique cursor index. Unchanged JSON is not rewritten.
         yield* Effect.forEach(
@@ -103,29 +180,46 @@ export const historyProjection = Effect.fn("HistoryProjection.make")(function* (
         yield* Effect.forEach(
           groups,
           (group, ordinal) =>
-            Effect.flatMap(encodeGroup(group.messages), (encoded) =>
-              client.unsafe(sql.updateGroup, [threadId, ordinal, group.id, encoded]),
+            Effect.when(
+              Effect.flatMap(encodeGroup(group.messages), (encoded) =>
+                client.unsafe(sql.updateGroup, [threadId, ordinal, group.id, encoded]),
+              ),
+              Effect.succeed(!storedAsIs(EffectArray.get(before, ordinal), group)),
             ),
           { discard: true },
         );
+        // Without an id the publish cannot be told from an earlier one, so it is not made.
+        const publication = yield* crypto
+          .randomUUIDv4()
+          .pipe(Effect.mapError(() => HistoryPageUnavailable.make({ reason: "not-ready" })));
         const published = yield* client.unsafe(`${sql.publishIfCurrent} RETURNING thread_id`, [
           threadId,
           snapshot.sourceJSON,
+          publication,
         ]);
         yield* Effect.when(unavailable("not-ready"), Effect.succeed(published.length === 0));
+        return { threadId, publication, groups };
       }),
     );
+
+  /**
+   * Replaces a thread's groups; joins the caller's transaction, or opens one. Only the groups that
+   * changed since this writer's stored publish are encoded and written.
+   */
+  const replace = (snapshot: HistorySnapshot) => Effect.flatMap(publish(snapshot), remember);
 
   return {
     // Explicit startup/import preparation, never a page-read fallback. Read one
     // unprepared original at a time, preserving the released authoritative table.
+    // A prepared thread is not remembered: its messages were decoded here, so no writer saves
+    // the same objects again.
     prepare: (threadId?: string) =>
       Effect.flatMap(pendingThreads(threadId ?? null), (ids) =>
         Effect.forEach(
           ids,
           ({ thread_id }) =>
             Effect.flatMap(storedThread(thread_id), (stored) =>
-              replace({ threadId: stored.thread_id, sourceJSON: stored.messages }),
+              publish({ threadId: stored.thread_id, sourceJSON: stored.messages }),
             ).pipe(
               // A corrupt/ambiguous UI projection must not stop unrelated sessions.
               // Its original stays authoritative and reads report not-ready explicitly.

@@ -1,6 +1,8 @@
 import { Effect, Layer, Schema, Result, Function as EffectFunction } from "effect";
+import { SqlClient } from "effect/sql";
 import { expect, vi } from "vite-plus/test";
 import { it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { StoredMessage } from "../chat-store/schema.ts";
 import { Database } from "../db/database.ts";
 import { RunStore } from "../loop/store.ts";
@@ -14,7 +16,12 @@ const encodeJson = EffectFunction.flow(
 /** The thread's text as `RunStore` saves it. */
 const encodeThread = Schema.encodeEffect(Schema.fromJsonString(Schema.Array(StoredMessage)));
 
-const fixture = provideFixture(RunStore.layer.pipe(Layer.provideMerge(Database.layer(":memory:"))));
+// `historyProjection` itself needs Crypto where a test makes one.
+const fixture = provideFixture(
+  RunStore.layer.pipe(
+    Layer.provideMerge(Layer.merge(Database.layer(":memory:"), NodeCrypto.layer)),
+  ),
+);
 
 /** What `ChatState` does at startup: the pages of every thread that has none ready. */
 const restart = Effect.flatMap(historyProjection(), (projection) => projection.prepare());
@@ -256,6 +263,62 @@ it.effect("rolls back original and page together on projection SQL failure", () 
     );
     expect(yield* store.thread("a")).toEqual(original);
     expect(yield* page("a", 20)).toEqual({ ids: ["u"], older: null });
+  }).pipe(fixture),
+);
+
+// A 15k-message thread rewrote its 7k groups on every save of a run, holding the connection for
+// about 0.4 s each time.
+it.effect("a run's next save encodes only the groups its new messages make", () =>
+  Effect.gen(function* () {
+    const store = yield* RunStore;
+    // Tool results are saved without ids, so each save publishes fresh copies of them.
+    const messages = Array.from({ length: 10 }, (_, turn): StoredMessage[] => [
+      { id: `u-${turn}`, role: "user", content: `${turn}` },
+      {
+        id: `a-${turn}`,
+        role: "assistant",
+        content: "Checking",
+        toolCalls: [
+          { id: `call-${turn}`, type: "function", function: { name: "read", arguments: "{}" } },
+        ],
+      },
+      { role: "tool", toolCallId: `call-${turn}`, content: `Result ${turn}` },
+    ]).flat();
+    yield* store.saveThread("a", messages);
+    const next = [...messages, { id: "u-10", role: "user" as const, content: "Appended" }];
+    const encodedGroups = yield* Effect.acquireUseRelease(
+      Effect.sync(() => vi.spyOn(JSON, "stringify")),
+      (stringify) =>
+        Effect.map(store.saveThread("a", next), () =>
+          // The thread itself is encoded whole; every other array is a group.
+          stringify.mock.calls.flatMap(([value]) =>
+            Array.isArray(value) && value.length < next.length ? [value] : [],
+          ),
+        ),
+      (stringify) => Effect.sync(() => stringify.mockRestore()),
+    );
+    expect(encodedGroups).toEqual([[next[30]]]);
+    expect((yield* page("a", 2)).ids).toEqual(["a-9", "u-10"]);
+  }).pipe(fixture),
+);
+
+it.effect("does not trust a remembered publish whose transaction rolled back", () =>
+  Effect.gen(function* () {
+    const store = yield* RunStore;
+    const sql = yield* SqlClient.SqlClient;
+    const projection = yield* historyProjection();
+    const original: StoredMessage[] = [{ id: "u", role: "user", content: "Kept" }];
+    yield* store.saveThread("a", original);
+    const next = [...original, { id: "n", role: "assistant" as const, content: "Answer" }];
+    const sourceJSON = yield* encodeThread(next);
+    /** The thread saved as `next`, as `RunStore` saves it. */
+    const save = sql`UPDATE chat_threads SET messages = ${sourceJSON} WHERE thread_id = 'a'`.pipe(
+      Effect.andThen(projection.replace({ threadId: "a", sourceJSON, messages: next })),
+    );
+    // The writer's transaction fails after the pages were published, and rolls them back.
+    yield* Effect.flip(sql.withTransaction(Effect.andThen(save, Effect.fail("after publish"))));
+    yield* sql.withTransaction(save);
+    expect(yield* page("a", 20)).toEqual({ ids: ["u", "n"], older: null });
   }).pipe(fixture),
 );
 

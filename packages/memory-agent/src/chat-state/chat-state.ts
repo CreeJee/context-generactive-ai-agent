@@ -4,6 +4,7 @@ import { sessionMessages } from "../agent/history.ts";
 import { Attachments } from "../attachments/attachments.ts";
 import { StoredMessage } from "../chat-store/schema.ts";
 import { SqlClient, SqlSchema } from "effect/sql";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { Nodes } from "../memory/nodes.ts";
 import { serverRestartedCode, serverRestartedMessage } from "../agent/run-state.ts";
 import { historyProjection } from "./history-projection-native.ts";
@@ -134,5 +135,5 @@ const make = Effect.gen(function* () {
 export class ChatState extends Context.Service<ChatState, Effect.Success<typeof make>>()(
   "memory-agent/chat-state/chat-state/ChatState",
 ) {
-  static readonly layer = Layer.effect(ChatState, make);
+  static readonly layer = Layer.effect(ChatState, make).pipe(Layer.provide(NodeCrypto.layer));
 }
