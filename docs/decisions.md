@@ -3980,3 +3980,12 @@
   - `error`는 attempt 실패 이유에서 만든 코드다. `status`의 `interrupted`는 재시작이 따로 정한다.
   - `work_tasks.status`에는 attempt에 없는 `resumable`·`resuming`·`archived`가 있다. 최신 attempt와 1건이 달랐다(`blocked`와 `interrupted`). invocation 상태에는 `accepted`·`steered`가 있다. 각자 다른 생애를 기록한다.
   - `work_tasks.agent_name`은 하위 에이전트 task에서 이름(271개) 또는 `subagent`(165개)와 같다. 그러나 하위 에이전트가 지워지면 `agent_id`가 NULL이 되고, 이 이름만 남는다. 다른 task 4,131개는 `background_shell` 같은 종류 이름이라 참조할 행이 없다.
+
+## run의 사용량은 chat_runs에 둔다 (2026-11-04)
+
+- 계기: 정규화 안 된 표 목록 9번(같은 날). `chat_runs.usage`는 run이 끝날 때 센 토큰 JSON이고, `api_usage_responses`는 provider 응답 한 번마다 한 행이다. 앞의 것을 뒤의 것 위의 view로 바꿀 수 있는지 봤다.
+- 결정: 바꾸지 않는다.
+  - 사본에서 사용량이 있는 run 1,753개 중 584개는 응답 장부가 생기기 전 run이라 장부 행이 없다. view로 바꾸면 이 사용량이 사라진다.
+  - `reasoningTokens`는 장부에 열이 없다. 252개 run이 0보다 큰 값을 가졌다.
+  - 장부 행을 run에서 만들어 채우면 "실제 응답 한 번에 한 행"이라는 장부의 뜻이 깨진다.
+  - 둘 다 가진 1,169개 run은 입력 토큰(캐시 포함으로 맞춘 값)과 출력 토큰 합이 모두 같았다. 새 run은 두 곳에 같은 응답을 센다.
