@@ -13,11 +13,10 @@ import { StoredMessage } from "../../src/chat-store/schema.ts";
 import {
   migrateInterruptPayload,
   migrateMessage,
-  migrateTanStackRows,
   migrateUsage,
 } from "../../src/chat-store/tanstack-migration.ts";
 import { JsonValue } from "../../src/json.ts";
-import { sqlAll, withOpenSql } from "../support/sql.ts";
+import { sqlAll } from "../support/sql.ts";
 
 /**
  * The rows one conversation leaves in the database, in a form that does not depend on ids or
@@ -129,6 +128,11 @@ const threadsOf = (sessionId: string) =>
 const runOrder = (alias: string) =>
   `(SELECT r.rowid FROM chat_runs r WHERE r.run_id = ${alias}.run_id)`;
 
+/** The messages of the thread in `alias` as one JSON array text, as they were kept in one column. */
+const transcript = (alias: string) => `'[' || COALESCE((
+  SELECT group_concat(message, ',' ORDER BY seq) FROM chat_thread_messages m
+  WHERE m.thread_id = ${alias}.thread_id), '') || ']'`;
+
 const inList = (count: number) =>
   `(${Array.from({ length: Math.max(count, 1) }, () => "?").join(", ")})`;
 
@@ -145,8 +149,8 @@ const conversationRows = Effect.fnUntraced(function* (sessionId: string) {
   const runList = runIds.length === 0 ? [""] : runIds;
   return {
     threads: yield* rows(
-      `SELECT thread_id, messages FROM chat_threads WHERE thread_id IN ${inList(ids.length)}
-       ORDER BY thread_id = ? DESC, thread_id`,
+      `SELECT thread_id, ${transcript("t")} AS messages FROM chat_threads t
+       WHERE thread_id IN ${inList(ids.length)} ORDER BY thread_id = ? DESC, thread_id`,
       ...ids,
       sessionId,
     ),
@@ -289,25 +293,23 @@ const HandoffRow = Schema.Struct({
 const decodeHandoffRow = Schema.decodeUnknownEffect(HandoffRow);
 
 /**
- * The conversation's rows after the TanStack migration (src/chat-store/tanstack-migration.ts). Its
- * transforms give the rows they should become; the migration then runs on the database and must
- * leave those rows, with a saved model handoff that still finds its boundary.
+ * The conversation's rows, which hold nothing the TanStack migration (src/chat-store/tanstack-migration.ts)
+ * would still move: its transforms leave them as they are, and a saved model handoff finds its
+ * boundary.
  */
 export const migratedRows = Effect.fnUntraced(function* (sessionId: string) {
-  const stored = yield* conversationRows(sessionId);
-  const expected = {
-    ...stored,
-    threads: migrateColumn(stored.threads, "messages", migrateMessages),
-    history: migrateColumn(stored.history, "messages", migrateMessages),
-    runs: migrateColumn(stored.runs, "usage", migrateUsage(false)),
-    interrupts: migrateColumn(stored.interrupts, "payload", migrateInterruptPayload),
-  };
-  yield* withOpenSql(migrateTanStackRows());
   const migrated = yield* conversationRows(sessionId);
+  const expected = {
+    ...migrated,
+    threads: migrateColumn(migrated.threads, "messages", migrateMessages),
+    history: migrateColumn(migrated.history, "messages", migrateMessages),
+    runs: migrateColumn(migrated.runs, "usage", migrateUsage(false)),
+    interrupts: migrateColumn(migrated.interrupts, "payload", migrateInterruptPayload),
+  };
   // Handoff anchors are fingerprints, which normalizing hides; the replay below checks them.
   expect(normalized(migrated, [])).toEqual(normalized(expected, []));
   const handoffs = yield* sqlAll(
-    `SELECT t.messages, m.value FROM chat_threads t
+    `SELECT ${transcript("t")} AS messages, m.value FROM chat_threads t
      JOIN chat_metadata m ON m.namespace = ? AND m.key = t.thread_id WHERE t.thread_id = ?`,
     modelHandoffNamespace,
     sessionId,

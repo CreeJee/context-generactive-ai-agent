@@ -3804,3 +3804,18 @@
 - `chat_threads.revision`을 둔다. transcript를 바꾸는 쓰기(행 INSERT, `UPDATE OF messages`)마다 트리거가 새 값을 준다. 투영은 그룹을 만든 transcript의 revision을 받고, thread가 아직 그 revision일 때만 퍼블리시한다. writer(`RunStore.saveThread`)는 upsert 뒤 같은 트랜잭션에서 revision을 읽어 넘기고, 시작·임포트 준비는 revision과 transcript를 한 문장으로 읽는다.
 - revision은 thread마다 세지 않고 모든 thread가 함께 쓰는 카운터(`chat_revision_counter`의 한 행, `last_revision`)에서 받는다. thread별 `+1`이면 지운 뒤 다시 저장된 같은 id의 thread가 예전 revision을 다시 가질 수 있다. 그러면 그 revision으로 만든 옛 그룹이나 기억한 배열을 새 transcript의 것으로 믿게 된다. 카운터 하나에서 받으면 thread id와 revision이 늘 한 transcript를 가리킨다. 이 단계 전에 쓰인 thread는 0이고, 카운터는 1부터 준다.
 - 0.0.13 writer(`INSERT INTO chat_threads VALUES (?, ?, ?)`)가 깨지지 않게 `chat_threads`를 3열로 두던 제약(2026-10-07)은 끝낸다. 릴리즈 빌드는 자기보다 새 `user_version`을 열지 않으므로(`NewerThanBuild`, 0.0.13도 같다) 옛 writer가 이 DB에 쓸 길이 없다. 테스트의 "released writer"는 투영을 바꾸지 않는 다른 writer(`tests/support/chat-thread.ts`의 `writeThread`)로 바꾼다.
+
+## 대화 transcript를 메시지 행에 저장한다 (2026-11-04)
+
+- `chat_threads.messages`는 대화 하나의 메시지 전체를 JSON 배열 하나로 담았다. 저장마다 배열 전체를 인코딩해 다시 썼고, 42MB 대화의 저장 한 번이 약 491ms, WAL 45MB였다. 저장 한 번이 붙이는 메시지는 대개 1~10개다(사본 측정: 42MB 대화의 run 114개, 저장당 새 메시지 p50 2, p90 9.3).
+- 메시지 한 개를 한 행으로 둔다: `chat_thread_messages(thread_id, seq, message)`. `seq`는 대화 안 순번(0부터)이다. `chat_threads.messages` 열은 지운다. 남겨 두면 옛 SQL이 남았을 때 조용히 빈 값을 읽고, 지우면 오류로 드러난다.
+- 이름은 사용자와 정했다. 표 이름은 행 하나가 무엇인지를 복수로 쓴다(`chat_threads`, `chat_thread_messages`). 한 대화에 딸린 표는 `chat_thread_`로 시작한다. 행이 늘 하나뿐인 표는 단수다(`chat_revision_counter`). 열은 값 하나면 단수, 목록이면 복수다. `order`는 SQL 예약어라 쓰지 않고, 이 DB가 같은 뜻으로 쓰는 `seq`(`queued_messages.seq`)를 쓴다.
+- 메시지 안은 JSON으로 둔다. 역할마다 모양이 다르고 안에 배열이 겹친다(content 파트, `toolCalls`, `thinking`). 메시지를 읽는 곳(모델 요청, 화면, handoff)은 모두 메시지를 통째로 쓴다. 열로 풀면 자식 표가 생기고 읽을 때마다 JOIN으로 조립해야 하며, `StoredMessage`에 필드가 생길 때마다 마이그레이션이 필요하다. 바이트는 `json_valid`가, 모양은 디코드할 때 Schema가 검사한다.
+- `RunStore.saveThread(threadId, messages)`의 인터페이스는 그대로다. 한 트랜잭션 안에서 저장본을 읽어 디코드하고, 메시지마다 `Schema.toEquivalence(StoredMessage)`로 비교한다. 처음 달라진 순번부터 행을 지우고 그 뒤 메시지를 500행씩 넣는다. 다른 writer(비밀 정리)가 바꾼 행도 이 비교에서 달라져 run의 내용으로 다시 쓰이고, INSERT 트리거로 다음 sweep에 다시 가려진다(전체를 다시 쓰던 때와 결과가 같다). 이 단계에서는 저장마다 저장본 전체를 읽고 디코드한다(42MB 대화에서 약 180ms). 정확성을 먼저 두고, 읽은 배열을 기억해 비교를 줄이는 일은 다음 단계에서 한다. WAL은 저장마다 수십 KB로 준다.
+- 읽기는 순번 순서로 `group_concat`해 만든 JSON 배열 하나를 이전처럼 디코드한다.
+- revision: 메시지 행의 INSERT·UPDATE·DELETE 트리거가 카운터에서 thread의 새 revision을 받는다. thread 행 INSERT 트리거는 그대로 둔다. 투영은 `chat_threads`의 `UPDATE OF revision` 트리거로 무효화한다(런타임 DDL).
+- 비밀 정리 대상은 `chat_thread_messages.message`가 된다. 한 batch는 대화 200개(최대 53MB씩)가 아니라 메시지 200개다. 아직 읽지 않은 대화의 표시는 그 대화의 메시지 행 표시로, 진행 기록은 새 이름으로 옮긴다.
+- 대화를 지우면 메시지 행은 FK cascade로 지워진다. `INSERT OR REPLACE INTO chat_threads`는 쓰지 않는다. REPLACE는 부모 행을 지워 메시지 행을 모두 cascade로 지운다.
+- 마이그레이션은 `json_each`로 옮긴다. 원소마다 JSON 텍스트가 들어가고(객체·배열은 SQLite가 공백 없이 쓴다), 순번대로 이어 붙이면 원래 배열이 된다. 사본(대화 846개)에서 모든 대화가 원문과 바이트까지 같았다. 시간은 약 8초, WAL 633MB, 파일 +684MB였다. 비는 약 594MB는 freelist로 남아 나중에 다시 쓰인다. 투영 무효화 트리거를 데이터를 옮기기 전에 지우고, 옮기는 일은 revision을 주지 않으므로 준비된 페이지는 그대로 준비된 상태다. 배열이 아닌 transcript는 옮기지 않는다(쓴 writer가 없다).
+- TanStack 단계(`migrateTanStackRows`)는 그 단계에서만 돈다. golden 테스트가 지금 DB에 그 단계를 다시 돌리던 것은, 변환 함수가 지금 행을 바꾸지 않는지 보는 것으로 바꾼다. `tools/chat-store-check`는 이 단계 전의 DB(릴리즈 0.1.1 이하) 사본에만 쓴다.
+- 이전 빌드는 새 `user_version`을 열지 않으므로 코드만 되돌려서는 롤백할 수 없다. dev는 첫 시작 전에 DB를 백업하고, 필요하면 백업으로 되돌린다. 릴리즈 뒤에 되돌린다면, 메시지를 이어 붙여 열을 다시 채우는 단계를 하나 더 둔다.

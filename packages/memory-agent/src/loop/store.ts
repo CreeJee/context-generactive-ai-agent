@@ -10,6 +10,7 @@ import {
   StoredRunStatus,
   StoredUsage,
 } from "../chat-store/schema.ts";
+import { firstChange, threadMessages } from "../chat-store/thread-messages.ts";
 import { historyProjection } from "../chat-state/history-projection-native.ts";
 import { HistoryProjectionReader } from "../chat-state/history-projection-reader.ts";
 import { JsonValue } from "../json.ts";
@@ -17,10 +18,9 @@ import { isEmptyUserText } from "../messages/empty-user.ts";
 import { optionalProperty } from "../optional-property.ts";
 
 /**
- * A run's chat rows on the app's SqlClient (docs/effect-ai-migration.md step 4): the thread, the
- * run record, its interrupts and the chat metadata, in the tables and columns TanStack's
- * persistence used, with the stored shapes of `chat-store/schema.ts`. The history projection is
- * replaced with each saved thread, as before.
+ * A run's chat rows on the app's SqlClient (docs/effect-ai-migration.md step 4): the thread and its
+ * messages, the run record, its interrupts and the chat metadata, with the stored shapes of
+ * `chat-store/schema.ts`. The history projection is replaced with each saved thread.
  */
 
 const Thread = Schema.fromJsonString(Schema.Array(StoredMessage));
@@ -106,12 +106,8 @@ const InterruptStatus = Schema.Struct({
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const projection = yield* historyProjection();
-
-  const storedThread = SqlSchema.findOneOption({
-    Request: Schema.String,
-    Result: Schema.Struct({ messages: Thread }),
-    execute: (threadId) => sql`SELECT messages FROM chat_threads WHERE thread_id = ${threadId}`,
-  });
+  const rows = yield* threadMessages;
+  const decodeThread = Schema.decodeEffect(Thread);
 
   /**
    * The thread's messages; a thread never saved is empty. `ChatState` writes the threads of
@@ -119,9 +115,12 @@ const make = Effect.gen(function* () {
    * it from nodes would repeat the user node `AgentChat` records just before a first run.
    */
   const thread = (threadId: string) =>
-    Effect.map(
-      storedThread(threadId),
-      Option.match({ onNone: () => [], onSome: (row) => row.messages }),
+    Effect.flatMap(
+      rows.stored(threadId),
+      Option.match({
+        onNone: () => Effect.succeed<ReadonlyArray<StoredMessage>>([]),
+        onSome: (stored) => decodeThread(stored.messages),
+      }),
     );
 
   const threadRow = SqlSchema.findOne({
@@ -160,29 +159,35 @@ const make = Effect.gen(function* () {
     execute: (threadId) => sql`SELECT revision FROM chat_threads WHERE thread_id = ${threadId}`,
   });
 
-  /** Replaces the thread and its history groups together. Empty user text is never kept. */
+  /**
+   * Replaces the thread and its history groups together. Empty user text is never kept. Only the
+   * messages from the first one that differs from the stored thread are written again: a run saves
+   * its conversation after each step with the earlier messages unchanged.
+   */
   const saveThread = Effect.fn("RunStore.saveThread")(function* (
     threadId: string,
     messages: ReadonlyArray<StoredMessage>,
   ) {
     const kept = messages.filter((message) => !isEmptyUserText(message));
-    const sourceJSON = yield* Schema.encodeEffect(Thread)(kept);
     const updatedAt = yield* Clock.currentTimeMillis;
     yield* sql.withTransaction(
-      sql`
-        INSERT INTO chat_threads (thread_id, messages, updated_at)
-        VALUES (${threadId}, ${sourceJSON}, ${updatedAt})
-        ON CONFLICT(thread_id) DO UPDATE
-        SET messages = excluded.messages, updated_at = excluded.updated_at`.pipe(
-        Effect.andThen(threadRevision(threadId)),
-        Effect.flatMap(({ revision }) =>
-          projection.replace({ threadId, revision, messages: kept }),
-        ),
-        // Valid messages survive a UI-only id collision; reads of the stale pages fail instead.
-        Effect.catchTag("HistoryPageUnavailable", (failure) =>
-          failure.reason === "id-collision" ? Effect.void : Effect.fail(failure),
-        ),
-      ),
+      Effect.gen(function* () {
+        yield* sql`
+          INSERT INTO chat_threads (thread_id, updated_at) VALUES (${threadId}, ${updatedAt})
+          ON CONFLICT(thread_id) DO UPDATE SET updated_at = excluded.updated_at`;
+        // Compared with the thread as stored, which other writers also change.
+        const stored = yield* thread(threadId);
+        const from = firstChange(stored, kept);
+        yield* Effect.when(rows.removeFrom(threadId, from), Effect.succeed(from < stored.length));
+        yield* rows.insertFrom(threadId, from, kept.slice(from));
+        const { revision } = yield* threadRevision(threadId);
+        yield* projection.replace({ threadId, revision, messages: kept }).pipe(
+          // Valid messages survive a UI-only id collision; reads of the stale pages fail instead.
+          Effect.catchTag("HistoryPageUnavailable", (failure) =>
+            failure.reason === "id-collision" ? Effect.void : Effect.fail(failure),
+          ),
+        );
+      }),
     );
   });
 

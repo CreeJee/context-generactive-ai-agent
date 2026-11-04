@@ -2,7 +2,7 @@ import { Clock, Context, Effect, Layer, MutableHashMap, Option, Schema } from "e
 import type { Attachment } from "../attachments/attachments.ts";
 import { sessionMessages } from "../agent/history.ts";
 import { Attachments } from "../attachments/attachments.ts";
-import { StoredMessage } from "../chat-store/schema.ts";
+import { threadMessages } from "../chat-store/thread-messages.ts";
 import { SqlClient, SqlSchema } from "effect/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { Nodes } from "../memory/nodes.ts";
@@ -10,16 +10,12 @@ import { serverRestartedCode, serverRestartedMessage } from "../agent/run-state.
 import { historyProjection } from "./history-projection-native.ts";
 
 const MissingThread = Schema.Struct({ id: Schema.String });
-const NewThread = Schema.Struct({
-  threadId: Schema.String,
-  messages: Schema.fromJsonString(Schema.Array(StoredMessage)),
-  updatedAt: Schema.Finite,
-});
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const nodes = yield* Nodes;
   const attachments = yield* Attachments;
+  const rows = yield* threadMessages;
 
   // Sessions recorded before chat state existed are migrated once from their durable evidence.
   // This keeps provider migration independent of any provider-side conversation state.
@@ -59,16 +55,16 @@ const make = Effect.gen(function* () {
       LEFT JOIN chat_threads ON chat_threads.thread_id = sessions.id
       WHERE sessions.id = ${id} AND chat_threads.thread_id IS NULL`,
   });
-  const insertThread = SqlSchema.void({
-    Request: NewThread,
-    execute: (thread) => sql`
-      INSERT OR IGNORE INTO chat_threads (thread_id, messages, updated_at)
-      VALUES (${thread.threadId}, ${thread.messages}, ${thread.updatedAt})`,
-  });
-  /** Writes the session's thread as its nodes recorded it. */
+  /** Writes the session's thread as its nodes recorded it, unless the thread exists. */
   const materialize = (threadId: string, updatedAt: number) =>
     Effect.flatMap(fallbackThread(threadId), (messages) =>
-      insertThread({ threadId, messages, updatedAt }),
+      sql`
+        INSERT OR IGNORE INTO chat_threads (thread_id, updated_at) VALUES (${threadId}, ${updatedAt})
+        RETURNING thread_id`.pipe(
+        Effect.flatMap((created) =>
+          Effect.when(rows.insertFrom(threadId, 0, messages), Effect.succeed(created.length > 0)),
+        ),
+      ),
     );
 
   // Existing chat threads are authoritative and are never overwritten. The session id remains the

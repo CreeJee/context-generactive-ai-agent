@@ -49,7 +49,9 @@ it.effect("opening a database moves the chat rows TanStack wrote, BTW threads in
     yield* migrateDatabase(db);
     const messages = (sql: string) => decodeJson(db.prepare(sql).get()?.messages);
     expect(
-      yield* messages("SELECT messages FROM chat_threads WHERE thread_id = 'session'"),
+      yield* messages(
+        "SELECT '[' || group_concat(message, ',' ORDER BY seq) || ']' AS messages FROM chat_thread_messages WHERE thread_id = 'session'",
+      ),
     ).toEqual([moved]);
     expect(yield* messages("SELECT messages FROM btw_threads WHERE id = 'btw'")).toEqual([moved]);
     expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: migrations.length });

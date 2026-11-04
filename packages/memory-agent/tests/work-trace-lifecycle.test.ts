@@ -367,8 +367,10 @@ describe("Work Trace task lifecycle", () => {
             `INSERT INTO imported_nodes (source, external_id, node_id)
          VALUES ('codex', 'line-1', 'user-1'), ('codex', 'line-2', 'other-1')`,
           );
+          yield* sqlRun("INSERT INTO chat_threads (thread_id, updated_at) VALUES ('s1', 1)");
           yield* sqlRun(
-            "INSERT INTO chat_threads (thread_id, messages, updated_at) VALUES ('s1', '[]', 1)",
+            `INSERT INTO chat_thread_messages (thread_id, seq, message)
+         VALUES ('s1', 0, '{"role":"user","content":"private thread text"}')`,
           );
           yield* sqlRun(
             `INSERT INTO queued_messages
@@ -414,6 +416,11 @@ describe("Work Trace task lifecycle", () => {
           ).toEqual({ count: 0 });
           expect(
             yield* sqlGet("SELECT count(*) AS count FROM chat_threads WHERE thread_id = 's1'"),
+          ).toEqual({ count: 0 });
+          expect(
+            yield* sqlGet(
+              "SELECT count(*) AS count FROM chat_thread_messages WHERE thread_id = 's1'",
+            ),
           ).toEqual({ count: 0 });
           expect(
             yield* sqlGet("SELECT origin_session_id FROM work_tasks WHERE id = ?", handle.taskId),

@@ -44,7 +44,7 @@ interface Column {
  * arguments reviewed for them, queued messages, and subagent tasks and answers.
  */
 const ColumnTable = Schema.Literals([
-  "chat_threads",
+  "chat_thread_messages",
   "chat_interrupts",
   "permission_reviews",
   "queued_messages",
@@ -54,7 +54,7 @@ const ColumnTable = Schema.Literals([
 type ColumnTable = typeof ColumnTable.Type;
 
 const columnTables = {
-  chat_threads: [{ name: "messages", json: true }],
+  chat_thread_messages: [{ name: "message", json: true }],
   chat_interrupts: [
     { name: "payload", json: true },
     { name: "response", json: true },
@@ -431,8 +431,8 @@ const make = (running: boolean) =>
      * their sweep carries on from where it stopped — including rows added since, which is how text
      * written by an older build of this app is still caught.
      *
-     * The other tables are rewritten in place (a conversation grows inside its one row) and are not
-     * all hidden on the way in, so a position means nothing for them. Their triggers mark each row
+     * The other tables are rewritten in place (a run rewrites the message it is writing) and are
+     * not all hidden on the way in, so a position means nothing for them. Their triggers mark each row
      * written since the sweep last read it, and every start reads the marked rows from the first.
      */
     const resumesFrom = (target: Target, saved: number) =>

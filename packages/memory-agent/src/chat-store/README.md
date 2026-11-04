@@ -2,11 +2,14 @@
 
 ## Overview
 
-`chat-store`는 앱이 SQLite에 저장하는 채팅 행(`chat_threads.messages`, `chat_history_groups.messages`, `chat_runs.status`/`usage`, `chat_interrupts.payload`/`response`)의 Effect `Schema` 모양과 `chat_metadata` 접근 인터페이스를 정의한다. `tanstack-migration.ts`는 Effect AI 전환(`docs/effect-ai-migration.md` 1단계)을 위한 일회성 마이그레이션이다. TanStack이 쓴 행에서 `metadata.tanstack` 등을 걷어내고 `schema.ts` 모양으로 옮긴다. 이 마이그레이션은 `packages/memory-agent/src/db/database.ts`의 `migrateInTransaction`과 `tools/chat-store-check/main.ts`에서 호출된다.
+`chat-store`는 앱이 SQLite에 저장하는 채팅 행(`chat_thread_messages.message`, `chat_history_groups.messages`, `chat_runs.status`/`usage`, `chat_interrupts.payload`/`response`)의 Effect `Schema` 모양과 `chat_metadata` 접근 인터페이스를 정의한다. `tanstack-migration.ts`는 Effect AI 전환(`docs/effect-ai-migration.md` 1단계)을 위한 일회성 마이그레이션이다. TanStack이 쓴 행에서 `metadata.tanstack` 등을 걷어내고 `schema.ts` 모양으로 옮긴다. 이 마이그레이션은 `packages/memory-agent/src/db/database.ts`의 `migrateInTransaction`과 `tools/chat-store-check/main.ts`에서 호출된다.
 
 ## Interface
 
-- `StoredMessage` — `chat_threads.messages`·`chat_history_groups.messages`의 메시지 하나. user/assistant/tool 메시지의 `role` 판별 유니온(Schema와 타입)
+- `StoredMessage` — `chat_thread_messages.message`, `chat_history_groups.messages`의 메시지 하나. user/assistant/tool 메시지의 `role` 판별 유니온(Schema와 타입)
+- `threadMessages` — `Effect` (SqlClient 필요). `chat_thread_messages`를 읽고 쓴다: `stored(threadId)`(revision과 순번 순서로 이어 붙인 메시지 JSON 배열 텍스트를 한 문장으로, 저장된 적 없으면 None), `removeFrom(threadId, seq)`, `insertFrom(threadId, seq, messages)`(메시지마다 인코딩해 500행씩 삽입).
+- `firstChange` — dual 함수 `(stored, next)`. `next`가 `stored`와 처음 달라지는 순번. 참조가 같으면 바로 넘어가고, 다르면 `Schema.toEquivalence(StoredMessage)`로 구조를 비교한다. `stored`가 `next`를 모두 앞에 담고 있으면 `next.length`다.
+- `releasedProjectionSchema` — TanStack 단계가 0.0.18~0.1.1에서 만든 history 투영 DDL 사본. 그 단계와 테스트가 쓴다.
 - `StoredUserMessage` / `StoredAssistantMessage` / `StoredToolMessage` — 역할별 메시지 Schema. assistant에는 `toolCalls`, `thinking`, `model`, `source`, `finishReason`, `stopReason`이 선택 키로 있다
 - `TextPart` / `ImagePart` — 메시지 content 배열의 텍스트·이미지(`data`/`url` source) 파트 Schema
 - `StoredToolCall` — `type: "function"` 도구 호출 Schema. `function.arguments`는 파싱되지 않을 수도 있는 JSON 텍스트

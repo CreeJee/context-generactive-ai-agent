@@ -262,7 +262,7 @@ it.effect("rolls back original and page together on projection SQL failure", () 
 
 // A 15k-message thread rewrote its 7k groups on every save of a run, holding the connection for
 // about 0.4 s each time.
-it.effect("a run's next save encodes only the groups its new messages make", () =>
+it.effect("a run's next save encodes only its new messages and the groups they make", () =>
   Effect.gen(function* () {
     const store = yield* RunStore;
     // Tool results are saved without ids, so each save publishes fresh copies of them.
@@ -280,18 +280,17 @@ it.effect("a run's next save encodes only the groups its new messages make", () 
     ]).flat();
     yield* store.saveThread("a", messages);
     const next = [...messages, { id: "u-10", role: "user" as const, content: "Appended" }];
-    const encodedGroups = yield* Effect.acquireUseRelease(
+    const encoded = yield* Effect.acquireUseRelease(
       Effect.sync(() => vi.spyOn(JSON, "stringify")),
       (stringify) =>
         Effect.map(store.saveThread("a", next), () =>
-          // The thread itself is encoded whole; every other array is a group.
-          stringify.mock.calls.flatMap(([value]) =>
-            Array.isArray(value) && value.length < next.length ? [value] : [],
-          ),
+          // Each message is encoded on its own; an array is a group.
+          stringify.mock.calls.map(([value]) => value),
         ),
       (stringify) => Effect.sync(() => stringify.mockRestore()),
     );
-    expect(encodedGroups).toEqual([[next[30]]]);
+    // Only the new message is written, and only the group it makes.
+    expect(encoded).toEqual([next[30], [next[30]]]);
     expect((yield* page("a", 2)).ids).toEqual(["a-9", "u-10"]);
   }).pipe(fixture),
 );

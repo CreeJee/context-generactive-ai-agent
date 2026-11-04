@@ -96,7 +96,7 @@ export const StoredToolMessage = Schema.Struct({
   error: Schema.optionalKey(Schema.String),
 });
 
-/** One message of `chat_threads.messages` and `chat_history_groups.messages`. */
+/** `chat_thread_messages.message`, and one message of `chat_history_groups.messages`. */
 export const StoredMessage = Schema.Union([
   StoredUserMessage,
   StoredAssistantMessage,

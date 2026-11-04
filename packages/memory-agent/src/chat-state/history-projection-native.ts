@@ -2,6 +2,7 @@ import { Array as EffectArray, Effect, Equivalence, Option, Ref, Schema } from "
 import { SecureRandom } from "effect/crypto";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { StoredMessage } from "../chat-store/schema.ts";
+import { threadMessages } from "../chat-store/thread-messages.ts";
 import {
   groupHistoryMessages,
   type HistoryGroup,
@@ -99,20 +100,19 @@ export const historyProjection = Effect.fn("HistoryProjection.make")(function* (
         [threadId],
       ),
   });
-  // The revision and the transcript in one statement, so the transcript is the one at the revision.
-  const storedThread = SqlSchema.findOne({
-    Request: Schema.String,
-    Result: Schema.Struct({ revision: Schema.Int, messages: Schema.String }),
-    execute: (threadId) =>
-      client`SELECT revision, messages FROM chat_threads WHERE thread_id = ${threadId}`,
-  });
-  /** The stored thread to prepare; startup/import validates and decodes the stored JSON. */
-  const storedSnapshot = (threadId: string) =>
-    Effect.flatMap(storedThread(threadId), ({ revision, messages }) =>
-      decodeStored(messages).pipe(
-        Effect.mapError(() => HistoryPageUnavailable.make({ reason: "invalid-transcript" })),
-        Effect.map((decoded): HistorySnapshot => ({ threadId, revision, messages: decoded })),
-      ),
+  const rows = yield* threadMessages;
+  /** A stored thread to prepare; startup/import validates and decodes the stored messages. */
+  const storedSnapshot = (
+    threadId: string,
+    stored: { readonly revision: number; readonly messages: string },
+  ) =>
+    decodeStored(stored.messages).pipe(
+      Effect.mapError(() => HistoryPageUnavailable.make({ reason: "invalid-transcript" })),
+      Effect.map((messages): HistorySnapshot => ({
+        threadId,
+        revision: stored.revision,
+        messages,
+      })),
     );
 
   const prepared = Effect.fnUntraced(function* (
@@ -218,7 +218,15 @@ export const historyProjection = Effect.fn("HistoryProjection.make")(function* (
         Effect.forEach(
           ids,
           ({ thread_id }) =>
-            Effect.flatMap(storedSnapshot(thread_id), publish).pipe(
+            rows.stored(thread_id).pipe(
+              Effect.flatMap(
+                Option.match({
+                  // Deleted since it was listed: nothing to prepare.
+                  onNone: () => Effect.void,
+                  onSome: (stored) =>
+                    Effect.asVoid(Effect.flatMap(storedSnapshot(thread_id, stored), publish)),
+                }),
+              ),
               // A corrupt/ambiguous UI projection must not stop unrelated sessions.
               // Its original stays authoritative and reads report not-ready explicitly.
               Effect.catchTag("HistoryPageUnavailable", () => Effect.void),

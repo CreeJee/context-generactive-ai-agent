@@ -223,7 +223,7 @@ const encodeHandoff = Schema.encodeEffect(Schema.fromJsonString(HandoffState));
  * the projection's current DDL, which later steps change; the projection adds what came after when
  * it installs.
  */
-const releasedProjectionSchema = `
+export const releasedProjectionSchema = `
 CREATE TABLE IF NOT EXISTS chat_history_projection (
   thread_id TEXT PRIMARY KEY,
   format_version INTEGER NOT NULL CHECK (format_version = 1),

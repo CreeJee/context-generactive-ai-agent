@@ -16,10 +16,11 @@
 - `sqlClientOver(sqlite, semaphore)` — 앱의 단일 연결 위 런타임 `SqlClient`. prepared statement Cache, `makeSqliteAcquirers`, `BEGIN IMMEDIATE`, `RELEASE SAVEPOINT`를 쓴다
 - `migrationClient(sqlite)` — 시작 마이그레이션 전용 `SqlClient` 어댑터. 트랜잭션은 `SAVEPOINT effect_migrate`로 연다
 - `sqliteDriver` — 두 어댑터의 `SqlClient.driver`(`"memory-agent-sqlite"`). 공식 `@effect/sql-sqlite-node`(`"sqlite-node"`)와 방언은 같지만 잠금을 SQLite 밖에서 기다리므로 이름을 따로 둔다
-- `migrations` — `readonly string[]` 순서형 스키마 SQL 단계. projects, sessions, nodes, edges, nodes_fts, chat_threads, chat_runs, queued_messages, subagents, mcp_trust, agent_trust 등을 정의한다
+- `migrations` — `readonly string[]` 순서형 스키마 SQL 단계. projects, sessions, nodes, edges, nodes_fts, chat_threads, chat_thread_messages, chat_runs, queued_messages, subagents, mcp_trust, agent_trust 등을 정의한다
 - `goalHistoryMigration` — `{ version: 42, kind: "goal-history-binding-fk-rebuild", preservedTables }`. FK 검사를 멈춘 채 참조되는 테이블을 재구성할 수 있는 유일한 단계
 - `tanStackRowsMigration` — SQL 주석뿐인 단계. 시작 시 이 단계와 함께 `migrateTanStackRows`가 실행된다
-- `emptyUserMessageMigration` — chat_threads.messages에서 빈 user ModelMessage만 제거하는 SQL 단계
+- `emptyUserMessageMigration` — chat_threads.messages에서 빈 user ModelMessage만 제거하는 SQL 단계(대화를 메시지 행으로 옮기기 전의 옛 단계)
+- `threadMessagesMigration` — 대화마다 JSON 배열 하나(`chat_threads.messages`)이던 transcript를 메시지 한 개당 한 행(`chat_thread_messages`, `seq`는 0부터의 순번)으로 옮기는 SQL 단계. sweep 표시와 진행 기록도 옮기고, 그 열을 지운다
 - `humanDecisionFactsMigration` — `human_decision_facts` 테이블을 만드는 단계. 시작 시 이 단계와 함께 `migrateHumanDecisionRows`가 실행된다
 - 하위 디렉터리 없음
 
@@ -50,7 +51,7 @@
 - `fs.makeDirectory(path.dirname(file), { recursive: true, mode: 0o700 })`로 DB 디렉터리를 만든다.
 - `new DatabaseSync(file)`로 SQLite 파일을 연다. Layer scope가 끝나면 `sqlite.close()`로 닫는다.
 - 연결에 PRAGMA를 쓴다(journal_mode WAL, foreign_keys, busy_timeout, cache_size, user_version).
-- 마이그레이션 DDL과 DML을 실행한다. 테이블, 인덱스, 트리거, FTS를 생성하고 chat_threads 메시지 정리 등을 한다.
+- 마이그레이션 DDL과 DML을 실행한다. 테이블, 인덱스, 트리거, FTS를 생성하고 대화 메시지 정리·이동 등을 한다.
 - `effect_sql_migrations` 테이블을 만들고 INSERT OR IGNORE로 기록한다(Migrator 메타데이터).
 - `tanStackRowsMigration` 단계에서 `migrateTanStackRows()`를 실행해 TanStack이 쓴 chat 행을 Effect AI 형태로 다시 쓴다.
 - `humanDecisionFactsMigration` 단계에서 `migrateHumanDecisionRows()`를 실행해 0.0.17이 payload에 넣은 사람 결정의 사실과 시각을 `human_decision_facts` 첫 행과 `created_at`으로 옮기고 payload를 다시 encode한다. 읽지 못하는 행은 그대로 둔다.

@@ -57,6 +57,73 @@ export const humanDecisionFactsMigration = `
 `;
 
 /**
+ * The step that moves each thread's transcript from the JSON array in `chat_threads.messages` to
+ * one row per message, so a save rewrites only the messages that changed.
+ */
+export const threadMessagesMigration = `
+  -- A thread's transcript is one row per message; seq numbers its messages in order from 0
+  -- (decisions.md "대화 transcript를 메시지 행에 저장한다 (2026-11-04)"). A save rewrote the whole
+  -- array, 42 MB for the largest conversation, while it adds a few messages. Every writer stored an
+  -- array of objects; each element moves as its JSON text, which joined in order gives the array
+  -- again.
+  CREATE TABLE chat_thread_messages (
+    thread_id TEXT NOT NULL REFERENCES chat_threads(thread_id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL CHECK (seq >= 0),
+    message TEXT NOT NULL CHECK (json_valid(message)),
+    PRIMARY KEY (thread_id, seq)
+  );
+  INSERT INTO chat_thread_messages (thread_id, seq, message)
+    SELECT t.thread_id, m.key,
+      CASE WHEN m.type IN ('object', 'array') THEN m.value
+        WHEN m.type IN ('true', 'false') THEN m.type
+        ELSE json_quote(m.value) END
+    FROM chat_threads AS t, json_each(t.messages) AS m
+    WHERE json_type(t.messages) = 'array';
+  -- A thread the secret sweep has yet to read: each of its messages is, under the new target.
+  INSERT INTO secret_sweep_changes (target, row_key, writes)
+    SELECT 'chat_thread_messages', m.rowid, 1 FROM secret_sweep_changes AS c
+    JOIN chat_threads AS t ON t.rowid = c.row_key
+    JOIN chat_thread_messages AS m ON m.thread_id = t.thread_id
+    WHERE c.target = 'chat_threads';
+  DELETE FROM secret_sweep_changes WHERE target = 'chat_threads';
+  UPDATE secret_sweeps SET target = 'chat_thread_messages' WHERE target = 'chat_threads';
+  DROP TRIGGER secret_sweep_chat_threads_insert;
+  DROP TRIGGER secret_sweep_chat_threads_update;
+  DROP TRIGGER chat_threads_revision_update;
+  -- The history projection's triggers on the column, which the projection made: it now watches
+  -- the revision. They go before the column, and the moved rows took no new revision, so the
+  -- pages ready before this step stay ready.
+  DROP TRIGGER IF EXISTS chat_history_invalidate_update;
+  DROP TRIGGER IF EXISTS chat_history_invalidate_insert;
+  ALTER TABLE chat_threads DROP COLUMN messages;
+  CREATE TRIGGER chat_thread_messages_revision_insert AFTER INSERT ON chat_thread_messages BEGIN
+    UPDATE chat_revision_counter SET last_revision = last_revision + 1;
+    UPDATE chat_threads SET revision = (SELECT last_revision FROM chat_revision_counter)
+      WHERE thread_id = NEW.thread_id;
+  END;
+  CREATE TRIGGER chat_thread_messages_revision_update AFTER UPDATE ON chat_thread_messages BEGIN
+    UPDATE chat_revision_counter SET last_revision = last_revision + 1;
+    UPDATE chat_threads SET revision = (SELECT last_revision FROM chat_revision_counter)
+      WHERE thread_id = NEW.thread_id;
+  END;
+  CREATE TRIGGER chat_thread_messages_revision_delete AFTER DELETE ON chat_thread_messages BEGIN
+    UPDATE chat_revision_counter SET last_revision = last_revision + 1;
+    UPDATE chat_threads SET revision = (SELECT last_revision FROM chat_revision_counter)
+      WHERE thread_id = OLD.thread_id;
+  END;
+  CREATE TRIGGER secret_sweep_chat_thread_messages_insert AFTER INSERT ON chat_thread_messages
+  BEGIN
+    INSERT INTO secret_sweep_changes VALUES ('chat_thread_messages', NEW.rowid, 1)
+      ON CONFLICT DO UPDATE SET writes = writes + 1;
+  END;
+  CREATE TRIGGER secret_sweep_chat_thread_messages_update
+  AFTER UPDATE OF message ON chat_thread_messages BEGIN
+    INSERT INTO secret_sweep_changes VALUES ('chat_thread_messages', NEW.rowid, 1)
+      ON CONFLICT DO UPDATE SET writes = writes + 1;
+  END;
+`;
+
+/**
  * Ordered schema steps. `PRAGMA user_version` records how many have been applied.
  * Append new steps; never edit an applied one.
  */
@@ -2069,6 +2136,7 @@ export const migrations: readonly string[] = [
       WHERE rowid = NEW.rowid;
   END;
   `,
+  threadMessagesMigration,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

@@ -52,7 +52,7 @@
 ## Side Effects
 
 - `node:worker_threads` `Worker`로 `redact-worker` thread를 띄운다. thread는 sweep 하나 동안만 살아 있고 sweep이 끝나면 멈춘다.
-- SQLite 읽기: `secret_sweeps`, `secret_sweep_changes`, `nodes`, `node_refs`, 그리고 `chat_threads`, `chat_interrupts`, `permission_reviews`, `queued_messages`, `subagents`, `interpretations` 중 표시된 행의 컬럼.
+- SQLite 읽기: `secret_sweeps`, `secret_sweep_changes`, `nodes`, `node_refs`, 그리고 `chat_thread_messages`, `chat_interrupts`, `permission_reviews`, `queued_messages`, `subagents`, `interpretations` 중 표시된 행의 컬럼.
 - SQLite 쓰기: `secret_sweeps` upsert(`updated_at`는 `DateTime.now`), `nodes` update, `nodes_fts` delete/insert, `secret_sweep_permits` insert/delete, `nodes_morph`/`node_morphs`/`node_vectors` delete, `node_refs` `UPDATE OR REPLACE`, 컬럼 테이블 update, `secret_sweep_changes` insert/delete.
 - `VectorIndex.remove`와 `vectors.save`로 벡터 인덱스를 바꾸고 파일에 저장한다. `Nodes.invalidateResultPages`를 호출한다.
 - `secretLintProfiler.setEnabled(false)`로 secretlint의 전역 profiler 상태를 바꾼다.

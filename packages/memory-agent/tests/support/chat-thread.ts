@@ -2,8 +2,8 @@ import { Effect, Schema } from "effect";
 import { sqlGet, sqlRun } from "./sql.ts";
 
 /**
- * Stores a thread's transcript, given as its JSON text, the way a writer other than `RunStore`
- * does: the thread's rows only, without its history pages.
+ * Stores a thread's transcript, given as its JSON array text, the way a writer other than
+ * `RunStore` does: the thread's rows only, every message written again, without its history pages.
  */
 export const writeThread = ({
   threadId,
@@ -15,20 +15,32 @@ export const writeThread = ({
   readonly updatedAt?: number;
 }) =>
   sqlRun(
-    `INSERT INTO chat_threads (thread_id, messages, updated_at) VALUES (?, ?, ?)
-      ON CONFLICT(thread_id) DO UPDATE
-      SET messages = excluded.messages, updated_at = excluded.updated_at`,
+    `INSERT INTO chat_threads (thread_id, updated_at) VALUES (?, ?)
+      ON CONFLICT(thread_id) DO UPDATE SET updated_at = excluded.updated_at`,
     threadId,
-    messages,
     updatedAt,
+  ).pipe(
+    Effect.andThen(sqlRun("DELETE FROM chat_thread_messages WHERE thread_id = ?", threadId)),
+    Effect.andThen(
+      sqlRun(
+        `INSERT INTO chat_thread_messages (thread_id, seq, message)
+          SELECT ?, key, value FROM json_each(?)`,
+        threadId,
+        messages,
+      ),
+    ),
   );
 
 const decodeText = Schema.decodeUnknownEffect(Schema.Struct({ messages: Schema.String }));
 const decodeRevision = Schema.decodeUnknownEffect(Schema.Struct({ revision: Schema.Int }));
 
-/** The thread's stored transcript as JSON text. */
+/** The thread's stored transcript as one JSON array text, its messages in order. */
 export const threadText = (threadId: string) =>
-  sqlGet("SELECT messages FROM chat_threads WHERE thread_id = ?", threadId).pipe(
+  sqlGet(
+    `SELECT '[' || COALESCE(group_concat(message, ',' ORDER BY seq), '') || ']' AS messages
+      FROM chat_thread_messages WHERE thread_id = ?`,
+    threadId,
+  ).pipe(
     Effect.flatMap(decodeText),
     Effect.map(({ messages }) => messages),
     Effect.orDie,

@@ -1,8 +1,8 @@
 /**
  * Disposable history projection. Does not alter chat_threads or user_version.
- * Install/backfill/rollback and SDK adapter wiring are separate rollout steps.
- * SQL is kept here so the bounded read and invalidation contracts are testable
- * without opening or changing an application's live database.
+ * Every change to a thread's messages gives the thread a new revision (`db/migrations.ts`), and a
+ * new revision marks its pages stale. SQL is kept here so the bounded read and invalidation
+ * contracts are testable without opening an application's live database.
  */
 export const historyProjectionSchema = `
 CREATE TABLE IF NOT EXISTS chat_history_projection (
@@ -19,13 +19,8 @@ CREATE TABLE IF NOT EXISTS chat_history_groups (
   PRIMARY KEY (thread_id, ordinal),
   UNIQUE (thread_id, ui_id)
 );
-CREATE TRIGGER IF NOT EXISTS chat_history_invalidate_update
-AFTER UPDATE OF messages ON chat_threads
-BEGIN
-  UPDATE chat_history_projection SET ready = 0 WHERE thread_id = NEW.thread_id;
-END;
-CREATE TRIGGER IF NOT EXISTS chat_history_invalidate_insert
-AFTER INSERT ON chat_threads
+CREATE TRIGGER IF NOT EXISTS chat_history_invalidate_revision
+AFTER UPDATE OF revision ON chat_threads
 BEGIN
   UPDATE chat_history_projection SET ready = 0 WHERE thread_id = NEW.thread_id;
 END;

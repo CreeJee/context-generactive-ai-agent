@@ -251,8 +251,8 @@ testAgent({ testProvider: {} })("secrets on their way in", (it) => {
       /** Whether the conversation waits for the next sweep. */
       const marked = Effect.flatMap(
         sqlGet(
-          `SELECT count(*) AS count FROM secret_sweep_changes WHERE target = 'chat_threads'
-            AND row_key = (SELECT rowid FROM chat_threads WHERE thread_id = ?)`,
+          `SELECT count(*) AS count FROM secret_sweep_changes WHERE target = 'chat_thread_messages'
+            AND row_key IN (SELECT rowid FROM chat_thread_messages WHERE thread_id = ?)`,
           session,
         ),
         (row) => Effect.map(decodeCount(row), ({ count }) => count > 0),
@@ -263,7 +263,7 @@ testAgent({ testProvider: {} })("secrets on their way in", (it) => {
       yield* sweep.run;
       expect(yield* marked).toBe(false);
 
-      // A conversation grows inside its one row.
+      // The message is written again with what the run added to it.
       yield* writeThread({
         threadId: session,
         messages: yield* messages(`token: ${githubToken}`),
@@ -290,8 +290,8 @@ testAgent({ testProvider: {} })("secrets on their way in", (it) => {
         updatedAt: 0,
       });
       // As a database from before rows were marked: none is, and the table has no progress.
-      yield* sqlRun("DELETE FROM secret_sweep_changes WHERE target = 'chat_threads'");
-      yield* sqlRun("DELETE FROM secret_sweeps WHERE target = 'chat_threads'");
+      yield* sqlRun("DELETE FROM secret_sweep_changes WHERE target = 'chat_thread_messages'");
+      yield* sqlRun("DELETE FROM secret_sweeps WHERE target = 'chat_thread_messages'");
       yield* sweep.run;
       expect(yield* parseJson(yield* threadText(session))).toEqual([
         { role: "user", content: "token: [redacted:github]", id: "u-1" },

@@ -514,6 +514,19 @@ const main = Command.make(
     yield* Effect.scoped(
       Effect.gen(function* () {
         const sql = yield* migrationClient(yield* open(migrated, false));
+        // The migration reads and writes the column a later step moved to `chat_thread_messages`.
+        yield* sql<{
+          readonly name: string;
+        }>`SELECT name FROM pragma_table_info('chat_threads')`.pipe(
+          Effect.filterOrFail(
+            (columns) => columns.some((column) => column.name === "messages"),
+            () =>
+              CheckFailed.make({
+                message:
+                  "--source keeps its transcripts in chat_thread_messages; check a database of release 0.1.1 or older",
+              }),
+          ),
+        );
         const migrate = migrateTanStackRows().pipe(Effect.provideService(SqlClient.SqlClient, sql));
         const started = yield* Clock.currentTimeMillis;
         yield* migrate;

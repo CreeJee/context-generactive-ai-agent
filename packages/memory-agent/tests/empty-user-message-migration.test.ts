@@ -45,29 +45,32 @@ it.effect("migration removes only empty user text, preserving payloads, order an
     insert.run("untouched", untouched, 789);
 
     yield* migrateDatabase(db);
-    expect(
-      yield* decodeJson(
-        db.prepare("SELECT messages FROM chat_threads WHERE thread_id = 'affected'").get()
-          ?.messages,
-      ),
-    ).toEqual(retained);
-    expect(
-      db
-        .prepare("SELECT messages, updated_at FROM chat_threads WHERE thread_id = 'only-empty'")
-        .get(),
-    ).toEqual({ messages: "[]", updated_at: 456 });
-    expect(
-      db
-        .prepare("SELECT messages, updated_at FROM chat_threads WHERE thread_id = 'untouched'")
-        .get(),
-    ).toEqual({ messages: untouched, updated_at: 789 });
-    expect(
-      db.prepare("SELECT updated_at FROM chat_threads WHERE thread_id = 'affected'").get(),
-    ).toEqual({ updated_at: 123 });
+    /** The thread's messages after the migrations, which moved them to their own rows. */
+    const transcript = (threadId: string) =>
+      decodeJson(
+        db
+          .prepare(
+            `SELECT '[' || COALESCE(group_concat(message, ',' ORDER BY seq), '') || ']' AS messages
+              FROM chat_thread_messages WHERE thread_id = ?`,
+          )
+          .get(threadId)?.messages,
+      );
+    const updatedAt = (threadId: string) =>
+      db.prepare("SELECT updated_at FROM chat_threads WHERE thread_id = ?").get(threadId);
+    expect(yield* transcript("affected")).toEqual(retained);
+    expect(yield* transcript("only-empty")).toEqual([]);
+    expect(updatedAt("only-empty")).toEqual({ updated_at: 456 });
+    // The text moves message by message, so its layout is not kept; the values are.
+    expect(yield* transcript("untouched")).toEqual(yield* decodeJson(untouched));
+    expect(updatedAt("untouched")).toEqual({ updated_at: 789 });
+    expect(updatedAt("affected")).toEqual({ updated_at: 123 });
     expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: migrations.length });
-    const before = db.prepare("SELECT * FROM chat_threads ORDER BY thread_id").all();
-    db.exec(emptyUserMessageMigration);
+    const rows = () => [
+      db.prepare("SELECT * FROM chat_threads ORDER BY thread_id").all(),
+      db.prepare("SELECT * FROM chat_thread_messages ORDER BY thread_id, seq").all(),
+    ];
+    const before = rows();
     yield* migrateDatabase(db);
-    expect(db.prepare("SELECT * FROM chat_threads ORDER BY thread_id").all()).toEqual(before);
+    expect(rows()).toEqual(before);
   }),
 );

@@ -4,7 +4,7 @@
 
 `packages/memory-agent/src/loop`는 Effect AI(`effect/ai`) 위에서 채팅 run 하나를 돌리는 에이전트 루프다. 모델 step을 반복하고, step마다 도구 호출을 스케줄러로 실행하고, 승인이 필요한 호출은 interrupt로 사용자에게 묻는다. 이벤트는 AG-UI 1.0 이벤트 Stream으로 내보낸다.
 
-run·thread·interrupt 행은 TanStack 영속화와 같은 테이블·컬럼(`chat_threads`, `chat_runs`, `chat_interrupts`)에 `RunStore`(SqlClient)로 저장한다. resume run의 interrupt 응답 검증(`resume.ts`)과 SSE 재접속용 메모리 run 로그(`run-log.ts`)도 이 디렉터리에 있다. 앱 고유 기능(대기 메시지, 권한 검토, 메모리 기록, 압축 등)은 `RunHook`으로 주입한다.
+run·thread·interrupt 행은 `RunStore`(SqlClient)가 `chat_threads`, `chat_thread_messages`(메시지 한 개당 한 행), `chat_runs`, `chat_interrupts`에 저장한다. resume run의 interrupt 응답 검증(`resume.ts`)과 SSE 재접속용 메모리 run 로그(`run-log.ts`)도 이 디렉터리에 있다. 앱 고유 기능(대기 메시지, 권한 검토, 메모리 기록, 압축 등)은 `RunHook`으로 주입한다.
 
 ## Interface
 
@@ -37,7 +37,7 @@ run·thread·interrupt 행은 TanStack 영속화와 같은 테이블·컬럼(`ch
 - cancelled 응답에는 payload가 없어야 한다. `tool_call` 승인 응답은 boolean이거나 `{approved}` 봉투이며 interrupt의 `responseSchema`로 검사한다. invalid-payload 문제는 interruptId 순으로 나열한다
 - `InterruptCommitRejected`가 나면 그 batch는 하나도 기록하지 않는다. 기록 전에 모든 응답에 대해 pending 여부를 먼저 확인한다(`checkPending`)
 - `RunError.message`와 `RunSpec.modelFailure` 결과에는 provider의 텍스트를 절대 담지 않는다(사용자에게 보이는 값)
-- `saveThread`는 thread 행과 history projection을 한 트랜잭션에서 함께 교체하고, 빈 user 텍스트 메시지는 저장하지 않는다. `HistoryPageUnavailable` 중 `id-collision`만 무시한다
+- `saveThread`는 thread 행과 history projection을 한 트랜잭션에서 함께 교체하고, 빈 user 텍스트 메시지는 저장하지 않는다. 저장된 메시지 행을 읽어 구조로 비교하고(`firstChange`), 처음 달라진 순번부터만 지우고 다시 쓴다. 다른 writer(비밀 정리 등)가 바꾼 행도 이 비교로 덮어쓴다. `HistoryPageUnavailable` 중 `id-collision`만 무시한다
 - 저장된 적 없는 thread는 빈 메시지 목록으로 본다. node에서 다시 만들지 않는다. 다시 만들면 `AgentChat`이 첫 run 직전에 기록한 user node가 중복된다
 - `startRun`은 `ON CONFLICT(run_id) DO NOTHING`으로 기존 run을 이어 받고, 이미 집계된 usage를 돌려준다. `Interrupted` 종료는 terminal이 아니므로 `finished_at`을 쓰지 않는다
 - run id는 thread 사이에서도 고유하다는 전제를 둔다(`run(runId)` 조회)
@@ -48,8 +48,8 @@ run·thread·interrupt 행은 TanStack 영속화와 같은 테이블·컬럼(`ch
 
 ## Side Effects
 
-- SQLite(SqlClient) 읽기: `chat_threads`(messages, 존재 여부), `chat_runs`(status·usage·error, running run, 최신 run), `chat_interrupts`(pending 목록, status)
-- SQLite 쓰기: `chat_threads` upsert(updated_at 포함)와 history projection `replace`를 한 트랜잭션에서 수행
+- SQLite(SqlClient) 읽기: `chat_threads`(revision, 존재 여부), `chat_thread_messages`(순번 순서로 이어 붙인 메시지), `chat_runs`(status·usage·error, running run, 최신 run), `chat_interrupts`(pending 목록, status)
+- SQLite 쓰기: `chat_threads` upsert(updated_at), 저장본과 처음 달라진 메시지부터의 `chat_thread_messages` 삭제·삽입(500행씩), history projection `replace`를 한 트랜잭션에서 수행
 - SQLite 쓰기: `chat_runs` INSERT(status `running`, started_at)와 종료 시 UPDATE(status, finished_at, detached_since, error, error_code, usage)
 - SQLite 쓰기: `chat_interrupts`에 pending 행 INSERT(`ON CONFLICT DO NOTHING`)와 resume 시 응답 commit
 - `store.ts`는 `ChatMetadata`를 import한다. 확인한 300줄 범위 안에서는 chat 메타데이터를 쓰는 코드를 보지 못했다

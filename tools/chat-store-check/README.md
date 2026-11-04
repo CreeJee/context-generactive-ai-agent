@@ -26,6 +26,7 @@
 ## Invariants
 
 - DB 복사본에는 사용자 대화가 들어 있습니다. 복사본은 저장소 밖에 둡니다.
+- 검사할 DB는 대화를 메시지 행으로 옮기는 단계 전이어야 합니다(릴리즈 0.1.1 이하의 DB). 마이그레이션이 `chat_threads.messages`를 읽고 쓰는데, 그 단계가 이 열을 `chat_thread_messages`로 옮기고 지웠습니다. 열이 없으면 `CheckFailed`로 멈춥니다.
 - 보고서에는 횟수, id, Schema 경로, JSON 경로만 남기고 행 내용은 절대 남기지 않습니다. 그래서 `differingPaths`와 `issuePaths`는 값과 Schema 메시지를 일부러 뺍니다.
 - `@effect/platform-node`는 서브모듈(`NodeRuntime`, `NodeServices`)로만 import합니다. 패키지 엔트리는 NodeRedis와 그 클라이언트까지 로드하기 때문입니다.
 - 원본 DB는 `readOnly`로 엽니다. 복사는 파일 복사가 아니라 SQLite `VACUUM INTO`로 해서 WAL까지 포함한 일관된 사본을 만듭니다.
