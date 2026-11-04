@@ -1,8 +1,7 @@
 import { it } from "@effect/vitest";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
-import { Effect, Exit, FileSystem, Layer, Scope } from "effect";
-import { HttpMiddleware, HttpServer } from "effect/http";
-import { NetAddress } from "effect/net";
+import { Effect, Exit, FileSystem, Layer, Option, Scope, Stream } from "effect";
+import { HttpClient, HttpMiddleware, HttpServer } from "effect/http";
 import { describe, expect } from "vite-plus/test";
 import { answer } from "./serve";
 
@@ -15,7 +14,6 @@ describe("serving the app", () => {
     () =>
       Effect.gen(function* () {
         const services = yield* Layer.build(Layer.fresh(NodeHttpServer.layerTest));
-        const server = yield* Effect.provideContext(HttpServer.HttpServer, services);
         const fs = yield* Effect.provideContext(FileSystem.FileSystem, services);
         const client = yield* fs.makeTempDirectoryScoped();
         yield* fs.makeDirectory(`${client}/assets`);
@@ -36,29 +34,23 @@ describe("serving the app", () => {
           HttpServer.serveEffect(answer(client, route), HttpMiddleware.compression()),
           services,
         );
-        const address = server.address;
-        if (NetAddress.isUnixPathAddress(address))
-          return yield* Effect.die(new Error("HTTP fixture requires TCP"));
-        const base = `http://127.0.0.1:${address.port}`;
+        const http = yield* Effect.provideContext(HttpClient.HttpClient, services);
         const brotli = { "accept-encoding": "br" };
 
-        const file = yield* Effect.promise(() =>
-          fetch(`${base}/assets/app.js`, { headers: brotli }),
-        );
-        expect(file.headers.get("content-encoding")).toBe("br");
-        expect(yield* Effect.promise(() => file.text())).toBe(script);
+        const file = yield* http.get("/assets/app.js", { headers: brotli });
+        expect(file.headers["content-encoding"]).toBe("br");
+        expect(yield* file.text).toBe(script);
 
         // Each event is flushed through the compressor, so it arrives while the stream stays open.
         const visit = yield* Scope.make();
-        const signal = yield* Effect.abortSignal.pipe(Scope.provide(visit));
-        const events = yield* Effect.promise(() =>
-          fetch(`${base}/api/events`, { headers: brotli, signal }),
+        const events = yield* HttpClient.withScope(http)
+          .get("/api/events", { headers: brotli })
+          .pipe(Scope.provide(visit));
+        expect(events.headers["content-encoding"]).toBe("br");
+        const first = yield* Stream.runHead(events.stream).pipe(Effect.timeout("2 seconds"));
+        expect(Option.map(first, (chunk) => new TextDecoder().decode(chunk))).toEqual(
+          Option.some(ready),
         );
-        expect(events.headers.get("content-encoding")).toBe("br");
-        const reader = events.body?.getReader();
-        if (reader === undefined) return yield* Effect.die(new Error("The stream has no body"));
-        const first = yield* Effect.promise(() => reader.read()).pipe(Effect.timeout("2 seconds"));
-        expect(new TextDecoder().decode(first.value)).toBe(ready);
         yield* Scope.close(visit, Exit.void);
         yield* Effect.promise(() => left.promise).pipe(Effect.timeout("2 seconds"));
       }),

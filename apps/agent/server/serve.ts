@@ -113,34 +113,36 @@ const answerRuntime = ManagedRuntime.make(Layer.merge(nodePlatformLayer, NodeHtt
  * Answers a request the host and development checks let through: a file of the client build, or
  * React Router.
  */
-export const answer = (clientDirectory: string, handle: ReturnType<typeof createRequestHandler>) =>
-  Effect.gen(function* () {
-    const request = yield* HttpServerRequest.HttpServerRequest;
-    const pathname = new URL(request.url, "http://127.0.0.1").pathname;
-    const file =
-      request.method === "GET" || request.method === "HEAD"
-        ? yield* clientFile(clientDirectory, pathname)
-        : null;
-    if (file !== null)
-      return yield* HttpServerResponse.file(file, {
-        headers: {
-          "content-type": contentType(file),
-          "cache-control": pathname.startsWith("/assets/")
-            ? "public, max-age=31536000, immutable"
-            : "no-cache",
-          "x-content-type-options": "nosniff",
-        },
-      });
-    // The request scope closes once the response is sent or the client goes away, so a streamed
-    // answer (SSE) keeps its request alive until then.
-    const signal = yield* Effect.abortSignal;
-    const routed = yield* HttpServerRequest.toWeb(request, { signal });
-    const response = yield* Effect.tryPromise({
-      try: () => handle(routed),
-      catch: (cause) => new Cause.UnknownError(cause),
+export const answer = Effect.fnUntraced(function* (
+  clientDirectory: string,
+  handle: ReturnType<typeof createRequestHandler>,
+) {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  const pathname = new URL(request.url, "http://127.0.0.1").pathname;
+  const file =
+    request.method === "GET" || request.method === "HEAD"
+      ? yield* clientFile(clientDirectory, pathname)
+      : null;
+  if (file !== null)
+    return yield* HttpServerResponse.file(file, {
+      headers: {
+        "content-type": contentType(file),
+        "cache-control": pathname.startsWith("/assets/")
+          ? "public, max-age=31536000, immutable"
+          : "no-cache",
+        "x-content-type-options": "nosniff",
+      },
     });
-    return HttpServerResponse.fromWeb(response);
+  // The request scope closes once the response is sent or the client goes away, so a streamed
+  // answer (SSE) keeps its request alive until then.
+  const signal = yield* Effect.abortSignal;
+  const routed = yield* HttpServerRequest.toWeb(request, { signal });
+  const response = yield* Effect.tryPromise({
+    try: () => handle(routed),
+    catch: (cause) => new Cause.UnknownError(cause),
   });
+  return HttpServerResponse.fromWeb(response);
+});
 
 export function openInBrowser(url: string) {
   const [command, args] =

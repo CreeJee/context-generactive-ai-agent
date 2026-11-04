@@ -149,7 +149,7 @@ const make = (role: "owner" | "worker") =>
     };
     // Only the owner takes spans in; workers just send theirs, so nothing echoes back and forth.
     if (role === "owner")
-      channel.onmessage = (event: MessageEvent) => {
+      channel.onmessage = (event) => {
         Option.map(decodeMessage(event.data), keep);
       };
 

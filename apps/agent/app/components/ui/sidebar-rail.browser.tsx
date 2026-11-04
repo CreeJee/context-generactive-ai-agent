@@ -48,25 +48,21 @@ it.live("a plain click toggles and a drag's closing click does not", () =>
 
     // A drag past the threshold resizes; the click that ends it must not also toggle. Pointer
     // events are dispatched at the element and window, mirroring the browser's own order.
-    yield* sdkCall(() =>
-      Promise.resolve(
-        (async () => {
-          // SAFETY: the rail renders exactly one <button>, so its handle is that button.
-          const target = rail.element() as HTMLElement;
-          const point = (type: string, x: number) =>
-            target.dispatchEvent(
-              type === "pointermove" || type === "pointerup"
-                ? new PointerEvent(type, { bubbles: true, clientX: x })
-                : new PointerEvent(type, { bubbles: true, button: 0, clientX: x }),
-            );
-          const rect = target.getBoundingClientRect();
-          point("pointerdown", rect.left);
-          window.dispatchEvent(new PointerEvent("pointermove", { clientX: rect.left + 24 }));
-          window.dispatchEvent(new PointerEvent("pointerup"));
-          target.click();
-        })(),
-      ),
-    );
+    yield* Effect.sync(() => {
+      // SAFETY: the rail renders exactly one <button>, so its handle is that button.
+      const target = rail.element() as HTMLElement;
+      const point = (type: string, x: number) =>
+        target.dispatchEvent(
+          type === "pointermove" || type === "pointerup"
+            ? new PointerEvent(type, { bubbles: true, clientX: x })
+            : new PointerEvent(type, { bubbles: true, button: 0, clientX: x }),
+        );
+      const rect = target.getBoundingClientRect();
+      point("pointerdown", rect.left);
+      window.dispatchEvent(new PointerEvent("pointermove", { clientX: rect.left + 24 }));
+      window.dispatchEvent(new PointerEvent("pointerup"));
+      target.click();
+    });
     yield* sdkCall(() => expect.poll(() => changes.length).toBe(2));
     yield* sdkCall(() => expect.element(screen.getByText("expanded")).toBeVisible());
   }),

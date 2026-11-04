@@ -1,7 +1,7 @@
 import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "cn";
-import { Predicate } from "effect";
+import { Effect, Fiber, Predicate } from "effect";
 
 import { Button } from "~/components/ui/button";
 import { CheckIcon, CopyIcon } from "lucide-react";
@@ -101,8 +101,12 @@ function CodeBlockCopyButton({
       return;
     }
 
-    const timeout = setTimeout(() => setCopied(false), 2000);
-    return () => clearTimeout(timeout);
+    const task = Effect.runFork(
+      Effect.sleep("2 seconds").pipe(Effect.andThen(Effect.sync(() => setCopied(false)))),
+    );
+    return () => {
+      void Effect.runFork(Fiber.interrupt(task));
+    };
   }, [copied]);
 
   return (

@@ -3,6 +3,8 @@ import { mergeProps } from "@base-ui/react/merge-props";
 import { useRender } from "@base-ui/react/use-render";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "cn";
+import { Effect, Random } from "effect";
+import { isTruthy } from "../../truthy.ts";
 
 import { useIsMobile } from "~/hooks/use-mobile";
 import { Button } from "~/components/ui/button";
@@ -62,7 +64,7 @@ const SidebarContext = React.createContext<SidebarContextProps | null>(null);
 
 function useSidebar() {
   const context = React.useContext(SidebarContext);
-  if (!context) {
+  if (context === null) {
     throw new Error("useSidebar must be used within a SidebarProvider.");
   }
 
@@ -113,7 +115,7 @@ function SidebarProvider({
   const open = openProp ?? _open;
   const setOpen = React.useCallback(
     (openState: boolean) => {
-      if (setOpenProp) {
+      if (setOpenProp !== undefined) {
         setOpenProp(openState);
       } else {
         _setOpen(openState);
@@ -611,7 +613,7 @@ function SidebarMenuButton({
       },
       props,
     ),
-    render: !tooltip ? render : <TooltipTrigger render={render} />,
+    render: isTruthy(tooltip) ? <TooltipTrigger render={render} /> : render,
     state: {
       slot: "sidebar-menu-button",
       sidebar: "menu-button",
@@ -620,7 +622,7 @@ function SidebarMenuButton({
     },
   });
 
-  if (!tooltip) {
+  if (!isTruthy(tooltip)) {
     return comp;
   }
 
@@ -686,7 +688,9 @@ function SidebarMenuSkeleton({
   showIcon?: boolean;
 }) {
   // Random width between 50 to 90%.
-  const [width] = React.useState(() => `${Math.floor(Math.random() * 40) + 50}%`);
+  const [width] = React.useState(
+    () => `${Effect.runSync(Random.nextIntBetween(50, 90, { halfOpen: true }))}%`,
+  );
 
   return (
     <div
