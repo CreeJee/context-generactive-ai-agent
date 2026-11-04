@@ -11,7 +11,6 @@ import {
   Schema,
 } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { type ChatMetadata, ChatMetadataFailed } from "../chat-store/metadata.ts";
 import { interruptContinuationLostCode, type RunStatus } from "../agent/run-state.ts";
 import {
@@ -22,8 +21,8 @@ import {
   StoredUsage,
 } from "../chat-store/schema.ts";
 import { firstChange, threadMessages } from "../chat-store/thread-messages.ts";
-import { historyProjection } from "../chat-state/history-projection-native.ts";
-import { HistoryProjectionReader } from "../chat-state/history-projection-reader.ts";
+import { displayMessages } from "../chat-state/display-messages.ts";
+import { HistoryPageReader } from "../chat-state/history-pages.ts";
 import { JsonValue } from "../json.ts";
 import { isEmptyUserText } from "../messages/empty-user.ts";
 import { optionalProperty } from "../optional-property.ts";
@@ -31,7 +30,7 @@ import { optionalProperty } from "../optional-property.ts";
 /**
  * A run's chat rows on the app's SqlClient (docs/effect-ai-migration.md step 4): the thread and its
  * messages, the run record, its interrupts and the chat metadata, with the stored shapes of
- * `chat-store/schema.ts`. The history projection is replaced with each saved thread.
+ * `chat-store/schema.ts`. Each save rewrites the thread's shown messages from its first change on.
  */
 
 const Thread = Schema.fromJsonString(Schema.Array(StoredMessage));
@@ -126,7 +125,7 @@ const InterruptStatus = Schema.Struct({
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  const projection = yield* historyProjection();
+  const display = yield* displayMessages;
   const rows = yield* threadMessages;
   const decodeThread = Schema.decodeEffect(Thread);
   const decodeMessage = Schema.decodeEffect(Schema.fromJsonString(StoredMessage));
@@ -234,13 +233,14 @@ const make = Effect.gen(function* () {
       Option.map((row) => row.run_id),
     );
 
-  /** A page of the history projection: one group of messages per message the page shows. */
-  const history = yield* HistoryProjectionReader;
+  /** A page of the thread's shown messages. */
+  const history = yield* HistoryPageReader;
 
   /**
-   * Replaces the thread and its history groups together. Empty user text is never kept. Only the
-   * messages from the first one that differs from the stored thread are written again: a run saves
-   * its conversation after each step with the earlier messages unchanged.
+   * Replaces the thread and its shown messages together. Empty user text is never kept. Only the
+   * messages from the first one that differs from the stored thread are written again, and the
+   * shown messages from the one that holds it: a run saves its conversation after each step with
+   * the earlier messages unchanged.
    */
   const saveThread = Effect.fn("RunStore.saveThread")(function* (
     threadId: string,
@@ -255,6 +255,7 @@ const make = Effect.gen(function* () {
           ON CONFLICT(thread_id) DO UPDATE SET updated_at = excluded.updated_at`;
         // Compared with the thread as stored, which other writers also change.
         const stored = yield* thread(threadId);
+        const shownCurrent = yield* display.isCurrent(threadId);
         const from = firstChange(stored, kept);
         yield* Effect.when(rows.removeFrom(threadId, from), Effect.succeed(from < stored.length));
         const written = yield* rows.insertFrom(threadId, from, kept.slice(from));
@@ -269,11 +270,10 @@ const make = Effect.gen(function* () {
             ...(yield* Effect.forEach(written, (text) => decodeMessage(text))),
           ],
         });
-        yield* projection.replace({ threadId, revision, messages: kept }).pipe(
-          // Valid messages survive a UI-only id collision; reads of the stale pages fail instead.
-          Effect.catchTag("HistoryPageUnavailable", (failure) =>
-            failure.reason === "id-collision" ? Effect.void : Effect.fail(failure),
-          ),
+        // Shown messages another writer left behind are made again from the first message.
+        yield* Effect.when(
+          display.rewrite(threadId, kept, shownCurrent ? from : 0),
+          Effect.succeed(!shownCurrent || from < Math.max(stored.length, kept.length)),
         );
       }),
     );
@@ -535,7 +535,5 @@ const make = Effect.gen(function* () {
 export class RunStore extends Context.Service<RunStore, Effect.Success<typeof make>>()(
   "memory-agent/loop/store/RunStore",
 ) {
-  static readonly layer = Layer.effect(RunStore, make).pipe(
-    Layer.provide(Layer.merge(HistoryProjectionReader.layer, NodeCrypto.layer)),
-  );
+  static readonly layer = Layer.effect(RunStore, make).pipe(Layer.provide(HistoryPageReader.layer));
 }

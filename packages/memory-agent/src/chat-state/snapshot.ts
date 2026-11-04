@@ -2,7 +2,7 @@ import { Array as Arr, Effect, Match, Option, Schema } from "effect";
 import { type ChatMessage, type ChatSnapshot, MessagePart } from "../api/chat-api.ts";
 import {
   type StoredAssistantMessage,
-  StoredHistoryGroup,
+  StoredShownMessages,
   type StoredMessage,
   type StoredToolCall,
   type StoredToolMessage,
@@ -10,16 +10,20 @@ import {
   TextPart,
 } from "../chat-store/schema.ts";
 import { RunStore } from "../loop/store.ts";
-import { HistoryPageUnavailable } from "./history-projection-native.ts";
-import { HistoryPageRequest, HistoryPageSnapshot } from "./history-projection-reader.ts";
+import {
+  HistoryPageRequest,
+  HistoryPageSnapshot,
+  HistoryPageUnavailable,
+} from "./history-pages.ts";
 
 /**
- * The chat API's `snapshot` (docs/effect-ai-migration.md step 7): a page of the history projection,
- * each group shown as one message the way TanStack's `modelMessagesToUIMessages` showed it, with the
- * run still going and the approvals the thread waits for.
+ * The chat API's `snapshot` (docs/effect-ai-migration.md step 7): a page of the thread's shown
+ * messages, each run of transcript messages shown as one message the way TanStack's
+ * `modelMessagesToUIMessages` showed it, with the run still going and the approvals the thread
+ * waits for.
  */
 
-const decodeGroup = Schema.decodeEffect(Schema.fromJsonString(StoredHistoryGroup));
+const decodeShown = Schema.decodeEffect(Schema.fromJsonString(StoredShownMessages));
 const isText = Schema.is(Schema.String);
 const isTextPart = Schema.is(TextPart);
 const isCall = MessagePart.guards["tool-call"];
@@ -84,7 +88,7 @@ const partsAfter = (parts: ReadonlyArray<MessagePart>, message: StoredMessage) =
     }),
   );
 
-/** One group as the page shows it; a result without its call is the assistant's. */
+/** One shown message as the page shows it; a result without its call is the assistant's. */
 export const shownMessage = ({
   id,
   messages,
@@ -125,10 +129,12 @@ export const chatSnapshot = Effect.fn("chatSnapshot")(function* (
         Effect.as(noMessages),
       ),
     "unknown-cursor": () => Effect.succeed(noMessages),
-    page: ({ groups, nextCursor }) =>
+    page: ({ shown, nextCursor }) =>
       Effect.map(
-        Effect.forEach(groups, ({ uiId, messages }) =>
-          Effect.map(decodeGroup(messages), (group) => shownMessage({ id: uiId, messages: group })),
+        Effect.forEach(shown, ({ displayId, messages }) =>
+          Effect.map(decodeShown(messages), (run) =>
+            shownMessage({ id: displayId, messages: run }),
+          ),
         ),
         (messages) => ({ messages, older: nextCursor }),
       ),

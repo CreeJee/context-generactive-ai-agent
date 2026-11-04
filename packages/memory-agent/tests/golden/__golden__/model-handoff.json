@@ -4,119 +4,6 @@
   "attempts": [],
   "bindings": [],
   "events": [],
-  "history": [
-    {
-      "format_version": 1,
-      "messages": [
-        {
-          "content": "before the switch",
-          "createdAt": "<time>",
-          "id": "<id-1>",
-          "role": "user"
-        }
-      ],
-      "ordinal": 0,
-      "ready": 1,
-      "thread_id": "<session>",
-      "ui_id": "<id-1>"
-    },
-    {
-      "format_version": 1,
-      "messages": [
-        {
-          "content": "Hello from fast-1",
-          "createdAt": "<time>",
-          "finishReason": "stop",
-          "id": "<id-2>",
-          "model": "scripted-1",
-          "role": "assistant",
-          "source": {
-            "api": "text",
-            "model": "scripted-1",
-            "provider": "scripted"
-          }
-        }
-      ],
-      "ordinal": 1,
-      "ready": 1,
-      "thread_id": "<session>",
-      "ui_id": "<id-2>"
-    },
-    {
-      "format_version": 1,
-      "messages": [
-        {
-          "content": "after the switch",
-          "createdAt": "<time>",
-          "id": "<id-3>",
-          "role": "user"
-        }
-      ],
-      "ordinal": 2,
-      "ready": 1,
-      "thread_id": "<session>",
-      "ui_id": "<id-3>"
-    },
-    {
-      "format_version": 1,
-      "messages": [
-        {
-          "content": "Hello from fast-1",
-          "createdAt": "<time>",
-          "finishReason": "stop",
-          "id": "<id-4>",
-          "model": "scripted-1",
-          "role": "assistant",
-          "source": {
-            "api": "text",
-            "model": "scripted-1",
-            "provider": "scripted"
-          }
-        }
-      ],
-      "ordinal": 3,
-      "ready": 1,
-      "thread_id": "<session>",
-      "ui_id": "<id-4>"
-    },
-    {
-      "format_version": 1,
-      "messages": [
-        {
-          "content": "still the new model",
-          "createdAt": "<time>",
-          "id": "<id-5>",
-          "role": "user"
-        }
-      ],
-      "ordinal": 4,
-      "ready": 1,
-      "thread_id": "<session>",
-      "ui_id": "<id-5>"
-    },
-    {
-      "format_version": 1,
-      "messages": [
-        {
-          "content": "Hello from fast-1",
-          "createdAt": "<time>",
-          "finishReason": "stop",
-          "id": "<id-6>",
-          "model": "scripted-1",
-          "role": "assistant",
-          "source": {
-            "api": "text",
-            "model": "scripted-1",
-            "provider": "scripted"
-          }
-        }
-      ],
-      "ordinal": 5,
-      "ready": 1,
-      "thread_id": "<session>",
-      "ui_id": "<id-6>"
-    }
-  ],
   "interrupts": [],
   "ledger": [],
   "metadata": [
@@ -199,6 +86,56 @@
       "status": "completed",
       "thread_id": "<session>",
       "usage": null
+    }
+  ],
+  "shown": [
+    {
+      "current": 1,
+      "display_format": 1,
+      "display_id": "<id-1>",
+      "first_message_seq": 0,
+      "seq": 0,
+      "thread_id": "<session>"
+    },
+    {
+      "current": 1,
+      "display_format": 1,
+      "display_id": "<id-2>",
+      "first_message_seq": 1,
+      "seq": 1,
+      "thread_id": "<session>"
+    },
+    {
+      "current": 1,
+      "display_format": 1,
+      "display_id": "<id-3>",
+      "first_message_seq": 2,
+      "seq": 2,
+      "thread_id": "<session>"
+    },
+    {
+      "current": 1,
+      "display_format": 1,
+      "display_id": "<id-4>",
+      "first_message_seq": 3,
+      "seq": 3,
+      "thread_id": "<session>"
+    },
+    {
+      "current": 1,
+      "display_format": 1,
+      "display_id": "<id-5>",
+      "first_message_seq": 4,
+      "seq": 4,
+      "thread_id": "<session>"
+    },
+    {
+      "current": 1,
+      "display_format": 1,
+      "display_id": "<id-6>",
+      "first_message_seq": 5,
+      "seq": 5,
+      "thread_id": "<session>"
     }
   ],
   "subagents": [],

@@ -3,7 +3,6 @@ import { it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { releasedProjectionSchema } from "../src/chat-store/tanstack-migration.ts";
-import { migrateDatabase } from "../src/db/database.ts";
 import { migrations, threadMessagesMigration } from "../src/db/migrations.ts";
 import { JsonValue } from "../src/json.ts";
 
@@ -47,7 +46,8 @@ it.effect("moving transcripts to message rows keeps their text, sweep marks and 
     const revisions = db.prepare("SELECT thread_id, revision FROM chat_threads ORDER BY thread_id");
     const before = revisions.all();
 
-    yield* migrateDatabase(db);
+    // This step alone: the next one replaces the pages.
+    db.exec(threadMessagesMigration);
     const transcript = db.prepare(
       `SELECT '[' || COALESCE(group_concat(message, ',' ORDER BY seq), '') || ']' AS messages
           FROM chat_thread_messages WHERE thread_id = ?`,

@@ -96,7 +96,7 @@ export const StoredToolMessage = Schema.Struct({
   error: Schema.optionalKey(Schema.String),
 });
 
-/** `chat_thread_messages.message`, and one message of `chat_history_groups.messages`. */
+/** `chat_thread_messages.message`. */
 export const StoredMessage = Schema.Union([
   StoredUserMessage,
   StoredAssistantMessage,
@@ -104,8 +104,8 @@ export const StoredMessage = Schema.Union([
 ]);
 export type StoredMessage = typeof StoredMessage.Type;
 
-/** `chat_history_groups.messages`: the thread's messages one screen message shows, in order. */
-export const StoredHistoryGroup = Schema.NonEmptyArray(StoredMessage);
+/** The thread's messages one shown message holds, in order, as a page reads them. */
+export const StoredShownMessages = Schema.NonEmptyArray(StoredMessage);
 
 /** `chat_runs.status`. */
 export const StoredRunStatus = RunStatus;

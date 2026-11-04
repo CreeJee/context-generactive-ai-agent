@@ -28,7 +28,7 @@ import {
   type SavedHandoff,
 } from "../../packages/memory-agent/src/agent/handoff-state.ts";
 import {
-  StoredHistoryGroup,
+  StoredShownMessages,
   StoredInterruptPayload,
   StoredInterruptResponse,
   StoredMessage,
@@ -142,7 +142,7 @@ const anchored = (saved: SavedHandoff, messages: readonly JsonValue[]) => {
 const exact = { onExcessProperty: "error" } as const;
 const decodeMessage = Schema.decodeUnknownEffect(StoredMessage);
 const decodeHistory = Schema.decodeUnknownOption(Schema.Array(StoredMessage));
-const decodeGroup = Schema.decodeUnknownEffect(StoredHistoryGroup);
+const decodeGroup = Schema.decodeUnknownEffect(StoredShownMessages);
 const decodeUsage = Schema.decodeUnknownEffect(StoredUsage);
 const decodePayload = Schema.decodeUnknownEffect(StoredInterruptPayload);
 const decodeResponse = Schema.decodeUnknownEffect(StoredInterruptResponse);

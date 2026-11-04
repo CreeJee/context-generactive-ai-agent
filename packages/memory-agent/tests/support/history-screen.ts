@@ -1,10 +1,10 @@
 import { Option, Schema } from "effect";
 import { shownMessage } from "../../src/chat-state/snapshot.ts";
-import { StoredHistoryGroup } from "../../src/chat-store/schema.ts";
+import { StoredShownMessages } from "../../src/chat-store/schema.ts";
 import type { JsonValue } from "../../src/json.ts";
 
 /** A group's messages; a row TanStack wrote keeps its other fields, which the page never read. */
-const decodeGroup = Schema.decodeUnknownOption(Schema.fromJsonString(StoredHistoryGroup));
+const decodeGroup = Schema.decodeUnknownOption(Schema.fromJsonString(StoredShownMessages));
 
 /**
  * The messages the history page shows for a thread's history groups, one per group as the chat

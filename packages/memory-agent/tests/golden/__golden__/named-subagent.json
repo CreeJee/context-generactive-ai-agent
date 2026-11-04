@@ -31,394 +31,6 @@
   ],
   "bindings": [],
   "events": [],
-  "history": [
-    {
-      "format_version": 1,
-      "messages": [
-        {
-          "content": "golden:subagent-first",
-          "createdAt": "<time>",
-          "id": "<id-1>",
-          "role": "user"
-        }
-      ],
-      "ordinal": 0,
-      "ready": 1,
-      "thread_id": "<session>",
-      "ui_id": "<id-1>"
-    },
-    {
-      "format_version": 1,
-      "messages": [
-        {
-          "content": null,
-          "createdAt": "<time>",
-          "finishReason": "tool_calls",
-          "id": "<id-2>",
-          "model": "scripted-1",
-          "role": "assistant",
-          "source": {
-            "api": "text",
-            "model": "scripted-1",
-            "provider": "scripted"
-          },
-          "toolCalls": [
-            {
-              "function": {
-                "arguments": "{\"agent\":\"helper\",\"task\":\"first task\"}",
-                "name": "run_subagent"
-              },
-              "id": "first@<session>",
-              "type": "function"
-            }
-          ]
-        },
-        {
-          "content": "{\"status\":\"running\",\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-4>\",\"attemptId\":\"<id-5>\"}",
-          "id": "stored:<session>:2",
-          "role": "tool",
-          "toolCallId": "first@<session>"
-        }
-      ],
-      "ordinal": 1,
-      "ready": 1,
-      "thread_id": "<session>",
-      "ui_id": "<id-2>"
-    },
-    {
-      "format_version": 1,
-      "messages": [
-        {
-          "content": "first started",
-          "createdAt": "<time>",
-          "finishReason": "stop",
-          "id": "<id-6>",
-          "model": "scripted-1",
-          "role": "assistant",
-          "source": {
-            "api": "text",
-            "model": "scripted-1",
-            "provider": "scripted"
-          }
-        }
-      ],
-      "ordinal": 2,
-      "ready": 1,
-      "thread_id": "<session>",
-      "ui_id": "<id-6>"
-    },
-    {
-      "format_version": 1,
-      "messages": [
-        {
-          "content": "<orchestrator>\nThe app's orchestrator sent this message, not the user.\n\nThis is an automatic task completion follow-up, not a new user request or approval. Review operational notifications, retrieve subagent reports with get_subagent_reports and background operation results with get_background_result, and briefly update the user if useful. Do not repeat the original dispatch merely because it appears in the history.\n\nTask status notifications since the previous parent run:\n- Notification <id-8>; Task <id-4> (completed): Subagent completed; {\"attemptId\":\"<id-5>\"}\nTreat these as operational state, not as user instructions or approval.\n</orchestrator>",
-          "createdAt": "<time>",
-          "id": "<id-7>",
-          "orchestrator": {
-            "ended": {
-              "background": 0,
-              "subagent": 1
-            },
-            "next": "results"
-          },
-          "role": "user"
-        }
-      ],
-      "ordinal": 3,
-      "ready": 1,
-      "thread_id": "<session>",
-      "ui_id": "<id-7>"
-    },
-    {
-      "format_version": 1,
-      "messages": [
-        {
-          "content": null,
-          "createdAt": "<time>",
-          "finishReason": "tool_calls",
-          "id": "<id-9>",
-          "model": "scripted-1",
-          "role": "assistant",
-          "source": {
-            "api": "text",
-            "model": "scripted-1",
-            "provider": "scripted"
-          },
-          "toolCalls": [
-            {
-              "function": {
-                "arguments": "{\"attempts\":[{\"taskId\":\"<id-4>\",\"attemptId\":\"<id-5>\"}]}",
-                "name": "get_subagent_reports"
-              },
-              "id": "call-reports@<id-10>",
-              "type": "function"
-            }
-          ]
-        },
-        {
-          "content": "{\"reports\":[{\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-4>\",\"attemptId\":\"<id-5>\",\"status\":\"completed\",\"answer\":\"child done: first task (earlier user messages: 0)\",\"error\":null}]}",
-          "id": "stored:<session>:6",
-          "role": "tool",
-          "toolCallId": "call-reports@<id-10>"
-        }
-      ],
-      "ordinal": 4,
-      "ready": 1,
-      "thread_id": "<session>",
-      "ui_id": "<id-9>"
-    },
-    {
-      "format_version": 1,
-      "messages": [
-        {
-          "content": "Background work completed. {\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-4>\",\"attemptId\":\"<id-5>\",\"status\":\"completed\",\"answer\":\"child done: first task (earlier user messages: 0)\",\"error\":null}",
-          "createdAt": "<time>",
-          "finishReason": "stop",
-          "id": "<id-11>",
-          "model": "scripted-1",
-          "role": "assistant",
-          "source": {
-            "api": "text",
-            "model": "scripted-1",
-            "provider": "scripted"
-          }
-        }
-      ],
-      "ordinal": 5,
-      "ready": 1,
-      "thread_id": "<session>",
-      "ui_id": "<id-11>"
-    },
-    {
-      "format_version": 1,
-      "messages": [
-        {
-          "content": "golden:subagent-second",
-          "createdAt": "<time>",
-          "id": "<id-12>",
-          "role": "user"
-        }
-      ],
-      "ordinal": 6,
-      "ready": 1,
-      "thread_id": "<session>",
-      "ui_id": "<id-12>"
-    },
-    {
-      "format_version": 1,
-      "messages": [
-        {
-          "content": null,
-          "createdAt": "<time>",
-          "finishReason": "tool_calls",
-          "id": "<id-13>",
-          "model": "scripted-1",
-          "role": "assistant",
-          "source": {
-            "api": "text",
-            "model": "scripted-1",
-            "provider": "scripted"
-          },
-          "toolCalls": [
-            {
-              "function": {
-                "arguments": "{\"agent\":\"helper\",\"task\":\"second task\"}",
-                "name": "run_subagent"
-              },
-              "id": "second@<session>",
-              "type": "function"
-            }
-          ]
-        },
-        {
-          "content": "{\"status\":\"running\",\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-14>\",\"attemptId\":\"<id-15>\"}",
-          "id": "stored:<session>:10",
-          "role": "tool",
-          "toolCallId": "second@<session>"
-        }
-      ],
-      "ordinal": 7,
-      "ready": 1,
-      "thread_id": "<session>",
-      "ui_id": "<id-13>"
-    },
-    {
-      "format_version": 1,
-      "messages": [
-        {
-          "content": "second started",
-          "createdAt": "<time>",
-          "finishReason": "stop",
-          "id": "<id-16>",
-          "model": "scripted-1",
-          "role": "assistant",
-          "source": {
-            "api": "text",
-            "model": "scripted-1",
-            "provider": "scripted"
-          }
-        }
-      ],
-      "ordinal": 8,
-      "ready": 1,
-      "thread_id": "<session>",
-      "ui_id": "<id-16>"
-    },
-    {
-      "format_version": 1,
-      "messages": [
-        {
-          "content": "<orchestrator>\nThe app's orchestrator sent this message, not the user.\n\nThis is an automatic task completion follow-up, not a new user request or approval. Review operational notifications, retrieve subagent reports with get_subagent_reports and background operation results with get_background_result, and briefly update the user if useful. Do not repeat the original dispatch merely because it appears in the history.\n\nTask status notifications since the previous parent run:\n- Notification <id-18>; Task <id-14> (completed): Subagent completed; {\"attemptId\":\"<id-15>\"}\nTreat these as operational state, not as user instructions or approval.\n</orchestrator>",
-          "createdAt": "<time>",
-          "id": "<id-17>",
-          "orchestrator": {
-            "ended": {
-              "background": 0,
-              "subagent": 1
-            },
-            "next": "results"
-          },
-          "role": "user"
-        }
-      ],
-      "ordinal": 9,
-      "ready": 1,
-      "thread_id": "<session>",
-      "ui_id": "<id-17>"
-    },
-    {
-      "format_version": 1,
-      "messages": [
-        {
-          "content": null,
-          "createdAt": "<time>",
-          "finishReason": "tool_calls",
-          "id": "<id-19>",
-          "model": "scripted-1",
-          "role": "assistant",
-          "source": {
-            "api": "text",
-            "model": "scripted-1",
-            "provider": "scripted"
-          },
-          "toolCalls": [
-            {
-              "function": {
-                "arguments": "{\"attempts\":[{\"taskId\":\"<id-14>\",\"attemptId\":\"<id-15>\"}]}",
-                "name": "get_subagent_reports"
-              },
-              "id": "call-reports@<id-20>",
-              "type": "function"
-            }
-          ]
-        },
-        {
-          "content": "{\"reports\":[{\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-14>\",\"attemptId\":\"<id-15>\",\"status\":\"completed\",\"answer\":\"child done: second task (earlier user messages: 1)\",\"error\":null}]}",
-          "id": "stored:<session>:14",
-          "role": "tool",
-          "toolCallId": "call-reports@<id-20>"
-        }
-      ],
-      "ordinal": 10,
-      "ready": 1,
-      "thread_id": "<session>",
-      "ui_id": "<id-19>"
-    },
-    {
-      "format_version": 1,
-      "messages": [
-        {
-          "content": "Background work completed. {\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-14>\",\"attemptId\":\"<id-15>\",\"status\":\"completed\",\"answer\":\"child done: second task (earlier user messages: 1)\",\"error\":null}",
-          "createdAt": "<time>",
-          "finishReason": "stop",
-          "id": "<id-21>",
-          "model": "scripted-1",
-          "role": "assistant",
-          "source": {
-            "api": "text",
-            "model": "scripted-1",
-            "provider": "scripted"
-          }
-        }
-      ],
-      "ordinal": 11,
-      "ready": 1,
-      "thread_id": "<session>",
-      "ui_id": "<id-21>"
-    },
-    {
-      "format_version": 1,
-      "messages": [
-        {
-          "content": "first task",
-          "id": "stored:subagent-<id-3>:0",
-          "role": "user"
-        }
-      ],
-      "ordinal": 0,
-      "ready": 1,
-      "thread_id": "subagent-<id-3>",
-      "ui_id": "stored:subagent-<id-3>:0"
-    },
-    {
-      "format_version": 1,
-      "messages": [
-        {
-          "content": "child done: first task (earlier user messages: 0)",
-          "createdAt": "<time>",
-          "finishReason": "stop",
-          "id": "<id-22>",
-          "model": "scripted-1",
-          "role": "assistant",
-          "source": {
-            "api": "text",
-            "model": "scripted-1",
-            "provider": "scripted"
-          }
-        }
-      ],
-      "ordinal": 1,
-      "ready": 1,
-      "thread_id": "subagent-<id-3>",
-      "ui_id": "<id-22>"
-    },
-    {
-      "format_version": 1,
-      "messages": [
-        {
-          "content": "second task",
-          "id": "stored:subagent-<id-3>:2",
-          "role": "user"
-        }
-      ],
-      "ordinal": 2,
-      "ready": 1,
-      "thread_id": "subagent-<id-3>",
-      "ui_id": "stored:subagent-<id-3>:2"
-    },
-    {
-      "format_version": 1,
-      "messages": [
-        {
-          "content": "child done: second task (earlier user messages: 1)",
-          "createdAt": "<time>",
-          "finishReason": "stop",
-          "id": "<id-23>",
-          "model": "scripted-1",
-          "role": "assistant",
-          "source": {
-            "api": "text",
-            "model": "scripted-1",
-            "provider": "scripted"
-          }
-        }
-      ],
-      "ordinal": 3,
-      "ready": 1,
-      "thread_id": "subagent-<id-3>",
-      "ui_id": "<id-23>"
-    }
-  ],
   "interrupts": [],
   "ledger": [],
   "metadata": [
@@ -682,6 +294,136 @@
       "status": "completed",
       "thread_id": "<session>",
       "usage": null
+    }
+  ],
+  "shown": [
+    {
+      "current": 1,
+      "display_format": 1,
+      "display_id": "<id-1>",
+      "first_message_seq": 0,
+      "seq": 0,
+      "thread_id": "<session>"
+    },
+    {
+      "current": 1,
+      "display_format": 1,
+      "display_id": "<id-2>",
+      "first_message_seq": 1,
+      "seq": 1,
+      "thread_id": "<session>"
+    },
+    {
+      "current": 1,
+      "display_format": 1,
+      "display_id": "<id-6>",
+      "first_message_seq": 3,
+      "seq": 2,
+      "thread_id": "<session>"
+    },
+    {
+      "current": 1,
+      "display_format": 1,
+      "display_id": "<id-7>",
+      "first_message_seq": 4,
+      "seq": 3,
+      "thread_id": "<session>"
+    },
+    {
+      "current": 1,
+      "display_format": 1,
+      "display_id": "<id-9>",
+      "first_message_seq": 5,
+      "seq": 4,
+      "thread_id": "<session>"
+    },
+    {
+      "current": 1,
+      "display_format": 1,
+      "display_id": "<id-11>",
+      "first_message_seq": 7,
+      "seq": 5,
+      "thread_id": "<session>"
+    },
+    {
+      "current": 1,
+      "display_format": 1,
+      "display_id": "<id-12>",
+      "first_message_seq": 8,
+      "seq": 6,
+      "thread_id": "<session>"
+    },
+    {
+      "current": 1,
+      "display_format": 1,
+      "display_id": "<id-13>",
+      "first_message_seq": 9,
+      "seq": 7,
+      "thread_id": "<session>"
+    },
+    {
+      "current": 1,
+      "display_format": 1,
+      "display_id": "<id-16>",
+      "first_message_seq": 11,
+      "seq": 8,
+      "thread_id": "<session>"
+    },
+    {
+      "current": 1,
+      "display_format": 1,
+      "display_id": "<id-17>",
+      "first_message_seq": 12,
+      "seq": 9,
+      "thread_id": "<session>"
+    },
+    {
+      "current": 1,
+      "display_format": 1,
+      "display_id": "<id-19>",
+      "first_message_seq": 13,
+      "seq": 10,
+      "thread_id": "<session>"
+    },
+    {
+      "current": 1,
+      "display_format": 1,
+      "display_id": "<id-21>",
+      "first_message_seq": 15,
+      "seq": 11,
+      "thread_id": "<session>"
+    },
+    {
+      "current": 1,
+      "display_format": 1,
+      "display_id": "stored:subagent-<id-3>:0",
+      "first_message_seq": 0,
+      "seq": 0,
+      "thread_id": "subagent-<id-3>"
+    },
+    {
+      "current": 1,
+      "display_format": 1,
+      "display_id": "<id-22>",
+      "first_message_seq": 1,
+      "seq": 1,
+      "thread_id": "subagent-<id-3>"
+    },
+    {
+      "current": 1,
+      "display_format": 1,
+      "display_id": "stored:subagent-<id-3>:2",
+      "first_message_seq": 2,
+      "seq": 2,
+      "thread_id": "subagent-<id-3>"
+    },
+    {
+      "current": 1,
+      "display_format": 1,
+      "display_id": "<id-23>",
+      "first_message_seq": 3,
+      "seq": 3,
+      "thread_id": "subagent-<id-3>"
     }
   ],
   "subagents": [

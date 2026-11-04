@@ -21,6 +21,7 @@
 - `tanStackRowsMigration` — SQL 주석뿐인 단계. 시작 시 이 단계와 함께 `migrateTanStackRows`가 실행된다
 - `emptyUserMessageMigration` — chat_threads.messages에서 빈 user ModelMessage만 제거하는 SQL 단계(대화를 메시지 행으로 옮기기 전의 옛 단계)
 - `threadMessagesMigration` — 대화마다 JSON 배열 하나(`chat_threads.messages`)이던 transcript를 메시지 한 개당 한 행(`chat_thread_messages`, `seq`는 0부터의 순번)으로 옮기는 SQL 단계. sweep 표시와 진행 기록도 옮기고, 그 열을 지운다
+- `threadDisplayMessagesMigration` — history 투영(`chat_history_projection`, `chat_history_groups`)을 화면 메시지 행(`chat_thread_display_messages`: `seq`, `display_id`, `first_message_seq`)과 `chat_threads.display_revision`·`display_format`으로 바꾸는 SQL 단계. 준비된 페이지는 id를 그대로 옮기고, 그룹이 메시지를 정확히 덮지 않는 thread는 시작할 때 다시 만든다. 메시지 행 UPDATE 트리거가 role·id를 그대로 둔 변경에는 화면 메시지를 최신으로 남긴다
 - `humanDecisionFactsMigration` — `human_decision_facts` 테이블을 만드는 단계. 시작 시 이 단계와 함께 `migrateHumanDecisionRows`가 실행된다
 - 하위 디렉터리 없음
 

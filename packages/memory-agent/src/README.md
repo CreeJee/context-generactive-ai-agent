@@ -33,7 +33,7 @@
   - [`approvals`](./approvals/README.md) — 하위·외부 에이전트 승인 중계(`RelayedApprovals`)
   - [`attachments`](./attachments/README.md) — 이미지 첨부 저장과 모델용 변환
   - [`btw`](./btw/README.md) — BTW 곁질문 스레드
-  - [`chat-state`](./chat-state/README.md) — 채팅 상태 준비와 히스토리 투영
+  - [`chat-state`](./chat-state/README.md) — 채팅 상태 준비와 화면 메시지 페이지
   - [`chat-store`](./chat-store/README.md) — 저장 채팅 행 스키마
   - [`code`](./code/README.md) — QuickJS 코드 샌드박스
   - [`concurrency`](./concurrency/README.md) — 키 단위 직렬화 유틸리티

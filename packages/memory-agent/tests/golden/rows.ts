@@ -154,10 +154,11 @@ const conversationRows = Effect.fnUntraced(function* (sessionId: string) {
       ...ids,
       sessionId,
     ),
-    history: yield* rows(
-      `SELECT g.thread_id, g.ordinal, g.ui_id, g.messages, p.format_version, p.ready
-       FROM chat_history_groups g LEFT JOIN chat_history_projection p USING (thread_id)
-       WHERE g.thread_id IN ${inList(ids.length)} ORDER BY g.thread_id = ? DESC, g.thread_id, g.ordinal`,
+    shown: yield* rows(
+      `SELECT d.thread_id, d.seq, d.display_id, d.first_message_seq, t.display_format,
+         t.display_revision = t.revision AS current
+       FROM chat_thread_display_messages d JOIN chat_threads t USING (thread_id)
+       WHERE d.thread_id IN ${inList(ids.length)} ORDER BY d.thread_id = ? DESC, d.thread_id, d.seq`,
       ...ids,
       sessionId,
     ),
@@ -302,7 +303,6 @@ export const migratedRows = Effect.fnUntraced(function* (sessionId: string) {
   const expected = {
     ...migrated,
     threads: migrateColumn(migrated.threads, "messages", migrateMessages),
-    history: migrateColumn(migrated.history, "messages", migrateMessages),
     runs: migrateColumn(migrated.runs, "usage", migrateUsage(false)),
     interrupts: migrateColumn(migrated.interrupts, "payload", migrateInterruptPayload),
   };

@@ -4,23 +4,6 @@
   "attempts": [],
   "bindings": [],
   "events": [],
-  "history": [
-    {
-      "format_version": 1,
-      "messages": [
-        {
-          "content": "golden:fail",
-          "createdAt": "<time>",
-          "id": "<id-1>",
-          "role": "user"
-        }
-      ],
-      "ordinal": 0,
-      "ready": 1,
-      "thread_id": "<session>",
-      "ui_id": "<id-1>"
-    }
-  ],
   "interrupts": [],
   "ledger": [],
   "metadata": [
@@ -52,6 +35,16 @@
       "status": "failed",
       "thread_id": "<session>",
       "usage": null
+    }
+  ],
+  "shown": [
+    {
+      "current": 1,
+      "display_format": 1,
+      "display_id": "<id-1>",
+      "first_message_seq": 0,
+      "seq": 0,
+      "thread_id": "<session>"
     }
   ],
   "subagents": [],

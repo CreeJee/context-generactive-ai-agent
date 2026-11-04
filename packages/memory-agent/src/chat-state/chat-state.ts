@@ -4,10 +4,9 @@ import { sessionMessages } from "../agent/history.ts";
 import { Attachments } from "../attachments/attachments.ts";
 import { threadMessages } from "../chat-store/thread-messages.ts";
 import { SqlClient, SqlSchema } from "effect/sql";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { Nodes } from "../memory/nodes.ts";
 import { serverRestartedCode, serverRestartedMessage } from "../agent/run-state.ts";
-import { historyProjection } from "./history-projection-native.ts";
+import { displayMessages } from "./display-messages.ts";
 
 const MissingThread = Schema.Struct({ id: Schema.String });
 
@@ -79,8 +78,8 @@ const make = Effect.gen(function* () {
       });
     }),
   );
-  const projection = yield* historyProjection();
-  yield* projection.prepare();
+  const display = yield* displayMessages;
+  yield* display.prepare();
 
   // One process owns the database, so running and approval-interrupted runs belonged to the old
   // process after a restart. The provider continuation they depended on is gone: leaving their
@@ -112,7 +111,7 @@ const make = Effect.gen(function* () {
         onNone: () => Effect.void,
         onSome: ({ id }) =>
           Effect.flatMap(Clock.currentTimeMillis, (updatedAt) => materialize(id, updatedAt)).pipe(
-            Effect.andThen(projection.prepare(id)),
+            Effect.andThen(display.prepare(id)),
           ),
       }),
     );
@@ -131,5 +130,5 @@ const make = Effect.gen(function* () {
 export class ChatState extends Context.Service<ChatState, Effect.Success<typeof make>>()(
   "memory-agent/chat-state/chat-state/ChatState",
 ) {
-  static readonly layer = Layer.effect(ChatState, make).pipe(Layer.provide(NodeCrypto.layer));
+  static readonly layer = Layer.effect(ChatState, make);
 }

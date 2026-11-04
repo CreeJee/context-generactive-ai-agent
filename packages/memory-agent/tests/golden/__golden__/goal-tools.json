@@ -414,111 +414,6 @@
       "run_id": "<id-5>"
     }
   ],
-  "history": [
-    {
-      "format_version": 1,
-      "messages": [
-        {
-          "content": "golden:goal-tools",
-          "createdAt": "<time>",
-          "id": "<id-1>",
-          "role": "user"
-        }
-      ],
-      "ordinal": 0,
-      "ready": 1,
-      "thread_id": "<session>",
-      "ui_id": "<id-1>"
-    },
-    {
-      "format_version": 1,
-      "messages": [
-        {
-          "content": null,
-          "createdAt": "<time>",
-          "finishReason": "tool_calls",
-          "id": "<id-2>",
-          "model": "scripted-1",
-          "role": "assistant",
-          "source": {
-            "api": "text",
-            "model": "scripted-1",
-            "provider": "scripted"
-          },
-          "toolCalls": [
-            {
-              "function": {
-                "arguments": "{\"path\":\"notes.txt\"}",
-                "name": "read_file"
-              },
-              "id": "goal-read@<session>",
-              "type": "function"
-            },
-            {
-              "function": {
-                "arguments": "{\"glob\":\"notes*\"}",
-                "name": "list_files"
-              },
-              "id": "goal-list@<session>",
-              "type": "function"
-            },
-            {
-              "function": {
-                "arguments": "{\"path\":\"goal.txt\",\"content\":\"goal output\\n\"}",
-                "name": "write_file"
-              },
-              "id": "goal-write@<session>",
-              "type": "function"
-            }
-          ]
-        },
-        {
-          "content": "{\"path\":\"notes.txt\",\"sha256\":\"c2097f55f01fc297fc7f4acf21438123e06e4d409a818524428534e850642f4f\",\"content\":\"first line\\nsecond line\\n\",\"startLine\":1,\"endLine\":2,\"totalLines\":2,\"nextStartLine\":null,\"lineTruncated\":false}",
-          "id": "stored:<session>:2",
-          "role": "tool",
-          "toolCallId": "goal-read@<session>"
-        },
-        {
-          "content": "{\"snapshot\":\"<id-3>\",\"directory\":\".\",\"glob\":\"notes*\",\"source\":\"walk\",\"total\":1,\"excludedCredentialFiles\":0,\"truncated\":false,\"paths\":[\"notes.txt\"],\"nextOffset\":null}",
-          "id": "stored:<session>:3",
-          "role": "tool",
-          "toolCallId": "goal-list@<session>"
-        },
-        {
-          "content": "{\"path\":\"goal.txt\",\"created\":true,\"sha256\":\"d0f96aa0315173a8a9a79bb8a81c681436facca9d13fddfba8d675d2eb49a0d7\",\"bytes\":12}",
-          "id": "stored:<session>:4",
-          "role": "tool",
-          "toolCallId": "goal-write@<session>"
-        }
-      ],
-      "ordinal": 1,
-      "ready": 1,
-      "thread_id": "<session>",
-      "ui_id": "<id-2>"
-    },
-    {
-      "format_version": 1,
-      "messages": [
-        {
-          "content": "goal tools done",
-          "createdAt": "<time>",
-          "finishReason": "stop",
-          "id": "<id-4>",
-          "model": "scripted-1",
-          "role": "assistant",
-          "source": {
-            "api": "text",
-            "model": "scripted-1",
-            "provider": "scripted"
-          }
-        }
-      ],
-      "ordinal": 2,
-      "ready": 1,
-      "thread_id": "<session>",
-      "ui_id": "<id-4>"
-    }
-  ],
   "interrupts": [],
   "ledger": [
     {
@@ -779,6 +674,32 @@
       "status": "completed",
       "thread_id": "<session>",
       "usage": null
+    }
+  ],
+  "shown": [
+    {
+      "current": 1,
+      "display_format": 1,
+      "display_id": "<id-1>",
+      "first_message_seq": 0,
+      "seq": 0,
+      "thread_id": "<session>"
+    },
+    {
+      "current": 1,
+      "display_format": 1,
+      "display_id": "<id-2>",
+      "first_message_seq": 1,
+      "seq": 1,
+      "thread_id": "<session>"
+    },
+    {
+      "current": 1,
+      "display_format": 1,
+      "display_id": "<id-4>",
+      "first_message_seq": 5,
+      "seq": 2,
+      "thread_id": "<session>"
     }
   ],
   "subagents": [],

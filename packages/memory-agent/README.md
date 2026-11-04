@@ -38,7 +38,7 @@ src/
   agent/        채팅 run(`AgentChat`: 실행, 복원, 취소), 노드에서 예전 대화 다시 만들기
   api/          채팅 API(Effect `HttpApi`) 정의와 페이지가 세션을 읽는 방법
   loop/         Effect AI 모델 위의 run loop: 도구 실행, 승인 interrupt, 대화·run 저장(`RunStore`)
-  chat-state/   저장된 대화의 화면 projection(페이지 읽기)과 시작할 때 run·interrupt 정리
+  chat-state/   저장된 대화의 화면 메시지(페이지 읽기)와 시작할 때 run·interrupt 정리
   testing/      테스트용 어댑터·임베더
   layers.ts     모든 서비스를 저장 루트 하나로 조립하는 Effect Layer
 bin/

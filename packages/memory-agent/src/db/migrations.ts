@@ -124,6 +124,87 @@ export const threadMessagesMigration = `
 `;
 
 /**
+ * The step that replaces the history projection, a copy of every message in groups, with rows
+ * that name where each shown message begins in the transcript.
+ */
+export const threadDisplayMessagesMigration = `
+  -- What the screen shows of a thread: one row per shown message, each the run of transcript
+  -- messages from its first_message_seq up to the next one's (decisions.md "화면 메시지는 transcript
+  -- 구간으로 저장한다 (2026-11-04)"). The projection copied every message into its groups, 636 MB
+  -- for 846 threads, and wrote the growing last group again with each save. display_revision is
+  -- the thread's revision the rows were made at; they are current while it is the thread's.
+  ALTER TABLE chat_threads ADD COLUMN display_revision INTEGER;
+  ALTER TABLE chat_threads ADD COLUMN display_format INTEGER;
+  CREATE TABLE chat_thread_display_messages (
+    thread_id TEXT NOT NULL REFERENCES chat_threads(thread_id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL CHECK (seq >= 0),
+    display_id TEXT NOT NULL CHECK (display_id <> ''),
+    first_message_seq INTEGER NOT NULL CHECK (first_message_seq >= 0),
+    PRIMARY KEY (thread_id, seq),
+    UNIQUE (thread_id, display_id)
+  );
+  -- The projection's tables, which the app made as it started; a database that never served has
+  -- none, and gets them empty here.
+  CREATE TABLE IF NOT EXISTS chat_history_projection (
+    thread_id TEXT PRIMARY KEY,
+    format_version INTEGER NOT NULL,
+    ready INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS chat_history_groups (
+    thread_id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    ui_id TEXT NOT NULL,
+    messages TEXT NOT NULL,
+    PRIMARY KEY (thread_id, ordinal)
+  );
+  -- Ready pages move with their ids, so the cursors open pages hold stay valid. They move only
+  -- where the groups hold the thread's messages exactly, in order; the others are built again at
+  -- startup.
+  CREATE TEMP TABLE moved_groups AS
+    SELECT g.thread_id, g.ordinal, g.ui_id, json_array_length(g.messages) AS length
+    FROM chat_history_groups AS g JOIN chat_history_projection AS p USING (thread_id)
+    WHERE p.ready = 1 AND p.format_version = 1;
+  CREATE TEMP TABLE moved_threads AS
+    SELECT g.thread_id FROM moved_groups AS g GROUP BY g.thread_id
+    HAVING MIN(g.ordinal) = 0 AND MAX(g.ordinal) + 1 = COUNT(*)
+      AND COUNT(g.length) = COUNT(*) AND MIN(g.length) > 0 AND MIN(g.ui_id <> '') = 1
+      AND SUM(g.length) = (SELECT COUNT(*) FROM chat_thread_messages AS m
+                           WHERE m.thread_id = g.thread_id);
+  INSERT INTO chat_thread_display_messages (thread_id, seq, display_id, first_message_seq)
+    SELECT thread_id, ordinal, ui_id, COALESCE(SUM(length) OVER (
+      PARTITION BY thread_id ORDER BY ordinal ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0)
+    FROM moved_groups WHERE thread_id IN (SELECT thread_id FROM moved_threads);
+  -- A thread without messages shows nothing, which is current whatever its pages were.
+  UPDATE chat_threads SET display_revision = revision, display_format = 1
+    WHERE thread_id IN (SELECT thread_id FROM moved_threads) OR NOT EXISTS (
+      SELECT 1 FROM chat_thread_messages AS m WHERE m.thread_id = chat_threads.thread_id);
+  DROP TABLE moved_groups;
+  DROP TABLE moved_threads;
+  DROP TRIGGER IF EXISTS chat_history_invalidate_revision;
+  DROP TRIGGER IF EXISTS chat_history_invalidate_delete;
+  DROP TABLE chat_history_groups;
+  DROP TABLE chat_history_projection;
+  -- A change that keeps each message's role and id keeps what the screen shows: the secret sweep
+  -- hides text in place, and pages read the hidden text from the row. The shown messages of such a
+  -- thread stay current at its new revision.
+  DROP TRIGGER chat_thread_messages_revision_update;
+  CREATE TRIGGER chat_thread_messages_revision_update AFTER UPDATE ON chat_thread_messages BEGIN
+    UPDATE chat_revision_counter SET last_revision = last_revision + 1;
+    UPDATE chat_threads SET
+      revision = (SELECT last_revision FROM chat_revision_counter),
+      display_revision = CASE
+        WHEN display_revision = revision AND NEW.thread_id = OLD.thread_id AND NEW.seq = OLD.seq
+          AND json_extract(NEW.message, '$.role') IS json_extract(OLD.message, '$.role')
+          AND json_extract(NEW.message, '$.id') IS json_extract(OLD.message, '$.id')
+        THEN (SELECT last_revision FROM chat_revision_counter)
+        ELSE display_revision END
+      WHERE thread_id = NEW.thread_id;
+    UPDATE chat_threads SET revision = (SELECT last_revision FROM chat_revision_counter)
+      WHERE thread_id = OLD.thread_id AND OLD.thread_id IS NOT NEW.thread_id;
+  END;
+`;
+
+/**
  * Ordered schema steps. `PRAGMA user_version` records how many have been applied.
  * Append new steps; never edit an applied one.
  */
@@ -2137,6 +2218,7 @@ export const migrations: readonly string[] = [
   END;
   `,
   threadMessagesMigration,
+  threadDisplayMessagesMigration,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

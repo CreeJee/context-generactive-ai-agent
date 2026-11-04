@@ -18,7 +18,7 @@ run·thread·interrupt 행은 `RunStore`(SqlClient)가 `chat_threads`, `chat_thr
 - `StepEnded` / `StepRequest` / `AnsweredCall` — step 종료(`Model` | `Resume`), step 요청(system, history), 호출과 그 응답의 쌍
 - `stepScheduler` / `StepScheduler` — 한 model step의 도구 호출을 Scope 안에서 fork 실행한다. `offer(call, admission)`, `settle(complete)`
 - `CallOutcome` / `CallAnswer` / `Admission` / `Run` / `StepCall` — 호출 결과 TaggedEnum(`Returned`/`Failed`/`Refused`/`Waiting`), gate 결정(`Run` 또는 결과), 호출 형태
-- `RunStore` — `Context.Service`. `RunStore.layer`는 `make`와 `HistoryProjectionReader.layer`, `NodeCrypto.layer`로 구성된다. thread·run·interrupt 행과 history projection을 다룬다(thread, threadSaved, activeRun, saveThread, startRun, endRun, run, lastRun, pendingInterrupts, createInterrupts 등)
+- `RunStore` — `Context.Service`. `RunStore.layer`는 `make`와 `HistoryPageReader.layer`로 구성된다. thread·run·interrupt 행과 화면 메시지 행을 다룬다(thread, threadSaved, activeRun, saveThread, startRun, endRun, run, lastRun, pendingInterrupts, createInterrupts 등)
 - `RunEnd` / `finishedRun` — run 종료 상태 TaggedEnum(`Completed`/`Interrupted`/`Failed`/`Aborted`). `finishedRun`은 Completed 또는 Interrupted일 때 true
 - `InterruptAnswer` / `PendingInterrupt` / `InterruptCommitRejected` / `StoredRun` — interrupt 응답(`Resolved`/`Cancelled`), 대기 interrupt, batch commit 거부 에러(`duplicate-interrupt`/`missing-interrupt`/`interrupt-not-pending`), run 레코드
 - `resumeAnswers` / `ResumeEntry` / `ResumeRejected` / `Resumed` — resume batch를 대기 interrupt에 맞춰 검증하고 응답 목록을 만든다. 거부 시 `ResumeRejected`(code: `stale`/`conflict`/`unknown-interrupt`/`invalid-payload`)
@@ -37,7 +37,7 @@ run·thread·interrupt 행은 `RunStore`(SqlClient)가 `chat_threads`, `chat_thr
 - cancelled 응답에는 payload가 없어야 한다. `tool_call` 승인 응답은 boolean이거나 `{approved}` 봉투이며 interrupt의 `responseSchema`로 검사한다. invalid-payload 문제는 interruptId 순으로 나열한다
 - `InterruptCommitRejected`가 나면 그 batch는 하나도 기록하지 않는다. 기록 전에 모든 응답에 대해 pending 여부를 먼저 확인한다(`checkPending`)
 - `RunError.message`와 `RunSpec.modelFailure` 결과에는 provider의 텍스트를 절대 담지 않는다(사용자에게 보이는 값)
-- `saveThread`는 thread 행과 history projection을 한 트랜잭션에서 함께 교체하고, 빈 user 텍스트 메시지는 저장하지 않는다. 저장본과 구조로 비교하고(`firstChange`), 처음 달라진 순번부터만 지우고 다시 쓴다. 다른 writer(비밀 정리 등)가 바꾼 행도 이 비교로 덮어쓴다. `HistoryPageUnavailable` 중 `id-collision`만 무시한다
+- `saveThread`는 thread 행과 화면 메시지 행을 한 트랜잭션에서 함께 바꾸고, 빈 user 텍스트 메시지는 저장하지 않는다. 저장본과 구조로 비교하고(`firstChange`), 처음 달라진 순번부터만 지우고 다시 쓴다. 다른 writer(비밀 정리 등)가 바꾼 행도 이 비교로 덮어쓴다. 화면 메시지는 그 순번이 든 화면 메시지부터 다시 쓴다(`displayMessages.rewrite`). 저장 전에 화면 메시지가 최신이 아니었으면 처음부터 다시 만든다. 아무것도 바뀌지 않은 저장은 화면 메시지를 건드리지 않는다
 - `RunStore`는 최근에 읽거나 저장한 thread 4개(`rememberedThreads`)의 메시지를 revision과 함께 기억한다. `thread()`와 `saveThread`의 저장본은 thread가 아직 그 revision이면 기억한 배열이고, 아니면 행을 읽어 디코드한다. 기억은 트랜잭션이 커밋된 뒤에만 남긴다(`sql.afterCommit`). 롤백된 revision 번호는 다음 변경이 다시 받기 때문이다. 저장이 남기는 기억은 읽기가 디코드할 값이다(새 메시지는 쓴 JSON 텍스트를 디코드한다). 같은 revision 이상을 이미 기억했으면 덮지 않는다
 - 저장된 적 없는 thread는 빈 메시지 목록으로 본다. node에서 다시 만들지 않는다. 다시 만들면 `AgentChat`이 첫 run 직전에 기록한 user node가 중복된다
 - `startRun`은 `ON CONFLICT(run_id) DO NOTHING`으로 기존 run을 이어 받고, 이미 집계된 usage를 돌려준다. `Interrupted` 종료는 terminal이 아니므로 `finished_at`을 쓰지 않는다
@@ -50,7 +50,7 @@ run·thread·interrupt 행은 `RunStore`(SqlClient)가 `chat_threads`, `chat_thr
 ## Side Effects
 
 - SQLite(SqlClient) 읽기: `chat_threads`(revision, 존재 여부), `chat_thread_messages`(순번 순서로 이어 붙인 메시지, 기억한 revision이 아닐 때만), `chat_runs`(status·usage·error, running run, 최신 run), `chat_interrupts`(pending 목록, status)
-- SQLite 쓰기: `chat_threads` upsert(updated_at), 저장본과 처음 달라진 메시지부터의 `chat_thread_messages` 삭제·삽입(500행씩), history projection `replace`를 한 트랜잭션에서 수행
+- SQLite 쓰기: `chat_threads` upsert(updated_at), 저장본과 처음 달라진 메시지부터의 `chat_thread_messages` 삭제·삽입(500행씩), `chat_thread_display_messages` 꼬리 재작성과 `chat_threads.display_revision` 갱신을 한 트랜잭션에서 수행
 - SQLite 쓰기: `chat_runs` INSERT(status `running`, started_at)와 종료 시 UPDATE(status, finished_at, detached_since, error, error_code, usage)
 - SQLite 쓰기: `chat_interrupts`에 pending 행 INSERT(`ON CONFLICT DO NOTHING`)와 resume 시 응답 commit
 - `store.ts`는 `ChatMetadata`를 import한다. 확인한 300줄 범위 안에서는 chat 메타데이터를 쓰는 코드를 보지 못했다

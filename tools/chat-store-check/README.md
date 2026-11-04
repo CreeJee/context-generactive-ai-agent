@@ -19,7 +19,7 @@
 - `anchored` — 저장된 handoff(`SavedHandoff`)가 `messages`에서 경계를 다시 찾는지 검사합니다. 경계는 `anchorId`가 있으면 그 id로, 없으면 `through`로 찾습니다. 앵커가 `v2:`로 시작하면 `fingerprint`, 아니면 `legacyFingerprint`로 비교합니다.
 - `issuePaths` — `Schema.SchemaError`에서 실패 경로만 뽑습니다. 메시지는 빼고, 경로가 비면 `(root)`를 씁니다.
 - `liftedFields` — 마이그레이션이 `metadata.tanstack`에서 끌어올리는 필드입니다: `createdAt`, `model`, `source`, `finishReason`, `stopReason`.
-- `decodeMessage`/`decodeHistory`/`decodeGroup`/`decodeUsage`/`decodePayload`/`decodeResponse`/`decodeHandoff` — `StoredMessage`, `StoredHistoryGroup`, `StoredUsage`, `StoredInterruptPayload`, `StoredInterruptResponse`, `Schema.fromJsonString(HandoffState)`의 디코더입니다. `exact`(`onExcessProperty: "error"`)는 메시지 디코드에 쓰입니다.
+- `decodeMessage`/`decodeHistory`/`decodeGroup`/`decodeUsage`/`decodePayload`/`decodeResponse`/`decodeHandoff` — `StoredMessage`, `StoredShownMessages`, `StoredUsage`, `StoredInterruptPayload`, `StoredInterruptResponse`, `Schema.fromJsonString(HandoffState)`의 디코더입니다. `exact`(`onExcessProperty: "error"`)는 메시지 디코드에 쓰입니다.
 - `ThreadPair`/`GroupPair`/`RunPair`/`InterruptRow`/`HandoffPair` — SQL 결과 행 Schema입니다. 각각 스레드 before/after, 그룹 ordinal·before(null 가능)·after, run_id·before·after·anthropic·after_fix(0/1), interrupt_id·payload·response, handoff key·before·after·before_messages·after_messages를 담습니다.
 - `anthropicInputFix` — `1_792_904_536_000`. Anthropic 어댑터가 cache read를 input으로 세도록 바꾼 커밋 456191fe의 시각입니다.
 
