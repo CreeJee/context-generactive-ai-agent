@@ -408,7 +408,8 @@ const make = Effect.gen(function* () {
         ),
         Stream.runSum,
       );
-    }).pipe(oneRunAtATime.withPermits(1)),
+      // Named so a report tells its model calls, made under the run that just ended, from the run's.
+    }).pipe(oneRunAtATime.withPermits(1), Effect.withSpan("Interpreter.runPending")),
   };
 });
 
