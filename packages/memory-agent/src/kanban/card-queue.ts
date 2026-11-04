@@ -13,7 +13,7 @@ import {
   Semaphore,
 } from "effect";
 import { PersistedQueue } from "effect/persistence";
-import { DurableQueue, Workflow } from "effect/workflow";
+import { Activity, DurableQueue, Workflow } from "effect/workflow";
 import { kanbanConcurrencyLimit } from "../config/contracts.ts";
 import type { GlobalConfigFailed } from "../config/global-config.ts";
 import { KanbanSettings } from "../config/kanban-settings.ts";
@@ -286,7 +286,16 @@ export const cardQueueWorkerLayer = DurableQueue.worker(CardQueue, handleCardRun
   concurrency: kanbanConcurrencyLimit,
 });
 
-/** Registers the card attempt workflow: offer the item and wait for its result. */
+/**
+ * Registers the card attempt workflow: name the item on the attempt, offer the item and wait for
+ * its result. The item's id is the one `DurableQueue.process` gives it in this execution, so the
+ * attempt names its item before the item exists.
+ */
 export const cardAttemptExecutionLayer = CardAttemptExecution.toLayer((payload) =>
-  DurableQueue.process(CardQueue, payload),
+  Effect.gen(function* () {
+    const attempts = yield* CardAttempts;
+    const itemId = yield* Activity.idempotencyKey(`${cardQueueName}/${cardAttemptKey(payload)}`);
+    yield* attempts.recordQueueItem(payload, itemId);
+    return yield* DurableQueue.process(CardQueue, payload);
+  }),
 );

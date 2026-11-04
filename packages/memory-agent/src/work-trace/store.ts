@@ -1528,9 +1528,8 @@ const make = Effect.gen(function* () {
   const purgeGoalHistory = Effect.fnUntraced(function* (sessionId: string) {
     const goals = sql`SELECT goal_instance_id FROM workflow_goal_instances
       WHERE session_id = ${sessionId}`;
-    const executions = sql`SELECT execution_id FROM owner_workflow_executions
-      WHERE coalesce(json_extract(payload_json, '$.sessionId'),
-        json_extract(payload_json, '$.identity.sessionId')) = ${sessionId}`;
+    const executions = sql`SELECT execution_id FROM workflow_execution_subjects
+      WHERE session_id = ${sessionId}`;
     yield* run(sql`INSERT INTO goal_history_purges (session_id) VALUES (${sessionId})`);
     yield* run(sql`DELETE FROM owner_read_recoveries WHERE session_id = ${sessionId}`);
     yield* run(sql`DELETE FROM owner_rpc_operations WHERE run_id IN
@@ -1544,6 +1543,8 @@ const make = Effect.gen(function* () {
       sql`DELETE FROM workflow_goal_native_artifacts WHERE goal_instance_id IN (${goals})`,
     );
     yield* run(sql`DELETE FROM kanban_cards WHERE goal_instance_id IN (${goals})`);
+    yield* run(sql`DELETE FROM persisted_queue_items WHERE id IN
+      (SELECT queue_item_id FROM kanban_card_attempts WHERE goal_instance_id IN (${goals}))`);
     yield* run(sql`DELETE FROM kanban_card_attempts WHERE goal_instance_id IN (${goals})`);
     yield* run(sql`DELETE FROM kanban_card_runs WHERE goal_instance_id IN (${goals})`);
     yield* run(sql`DELETE FROM kanban_decision_followups WHERE goal_instance_id IN (${goals})`);
@@ -1551,10 +1552,9 @@ const make = Effect.gen(function* () {
     yield* run(sql`DELETE FROM kanban_goal_dependencies
       WHERE goal_instance_id IN (${goals}) OR depends_on IN (${goals})`);
     yield* run(sql`DELETE FROM kanban_goal_ranks WHERE session_id = ${sessionId}`);
-    yield* run(sql`DELETE FROM persisted_queue_items WHERE CASE WHEN json_valid(element_json)
-      THEN json_extract(element_json, '$.payload.sessionId') END = ${sessionId}`);
     yield* run(sql`DELETE FROM human_decision_closures WHERE execution_id IN (${executions})`);
     yield* run(sql`DELETE FROM owner_workflow_executions WHERE execution_id IN (${executions})`);
+    yield* run(sql`DELETE FROM workflow_execution_subjects WHERE session_id = ${sessionId}`);
     const purged = (yield* run(sql`DELETE FROM workflow_goal_instances
       WHERE session_id = ${sessionId}`)).changes;
     yield* run(sql`DELETE FROM goal_history_purges WHERE session_id = ${sessionId}`);

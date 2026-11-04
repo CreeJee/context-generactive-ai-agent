@@ -144,9 +144,9 @@ const RunRow = Schema.Struct({ run_id: Schema.String });
 const RequestRow = Schema.Struct({ request_id: Schema.String });
 const DeadRow = Schema.Struct({
   id: Schema.String,
-  goal_instance_id: Schema.NullOr(Schema.String),
-  card_id: Schema.NullOr(Schema.String),
-  attempt_no: Schema.NullOr(Schema.Int),
+  goal_instance_id: Schema.String,
+  card_id: Schema.String,
+  attempt_no: Schema.Int,
 });
 const encodeOutcome = Schema.encodeEffect(Schema.fromJsonString(CardAttemptOutcome));
 const encodeHold = Schema.encodeEffect(Schema.fromJsonString(AssignmentHold));
@@ -503,28 +503,29 @@ const make = Effect.gen(function* () {
       return settled.length > 0;
     }),
 
-    /** Dead-lettered items of a queue, named by the attempt their payload carries. */
+    /** Names the queue item that carries an attempt; its workflow does before offering it. */
+    recordQueueItem: (attempt: CardAttemptKey, itemId: string) =>
+      sql`UPDATE kanban_card_attempts SET queue_item_id = ${itemId}
+          WHERE goal_instance_id = ${attempt.goalInstanceId} AND card_id = ${attempt.cardId}
+            AND attempt_no = ${attempt.attemptNo}`.pipe(
+        Effect.asVoid,
+        Effect.mapError(failed("attempt")),
+      ),
+
+    /** Dead-lettered items of a queue, named by the attempt that names them. */
     deadLettered: (queueName: string) =>
-      sql`SELECT id,
-            json_extract(element_json, '$.payload.goalInstanceId') AS goal_instance_id,
-            json_extract(element_json, '$.payload.cardId') AS card_id,
-            json_extract(element_json, '$.payload.attemptNo') AS attempt_no
-          FROM persisted_queue_items WHERE queue_name = ${queueName} AND state = 'failed'
-          ORDER BY updated_at, sequence`.pipe(
+      sql`SELECT q.id, a.goal_instance_id, a.card_id, a.attempt_no
+          FROM persisted_queue_items q JOIN kanban_card_attempts a ON a.queue_item_id = q.id
+          WHERE q.queue_name = ${queueName} AND q.state = 'failed'
+          ORDER BY q.updated_at, q.sequence`.pipe(
         rows(DeadRow),
         Effect.map((found) =>
-          found.flatMap((row): DeadLetteredAttempt[] =>
-            row.goal_instance_id === null || row.card_id === null || row.attempt_no === null
-              ? []
-              : [
-                  {
-                    itemId: row.id,
-                    goalInstanceId: row.goal_instance_id,
-                    cardId: row.card_id,
-                    attemptNo: row.attempt_no,
-                  },
-                ],
-          ),
+          found.map((row): DeadLetteredAttempt => ({
+            itemId: row.id,
+            goalInstanceId: row.goal_instance_id,
+            cardId: row.card_id,
+            attemptNo: row.attempt_no,
+          })),
         ),
         Effect.mapError(failed("dead_letters")),
       ),

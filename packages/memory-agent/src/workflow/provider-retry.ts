@@ -20,6 +20,7 @@ import { sha256 } from "../runtime/synchronous-crypto.ts";
 import type { ProviderRetryView } from "./contracts.ts";
 import { WorkflowExecution } from "./execution.ts";
 import { ownerWorkflowEngineLayer, suspendedRetrySchedule } from "./owner-workflow-engine.ts";
+import { executionSubjects } from "./execution-subjects.ts";
 import { OwnerWorkflowStorage } from "./owner-workflow-storage.ts";
 
 /**
@@ -121,6 +122,7 @@ const make = Effect.gen(function* () {
   const storage = yield* OwnerWorkflowStorage;
   const admission = yield* ExecutionAdmission;
   const execution = yield* WorkflowExecution;
+  const subjects = yield* executionSubjects;
   const provideEngine = <A, E>(effect: Effect.Effect<A, E, WorkflowEngine.WorkflowEngine>) =>
     Effect.provideService(effect, WorkflowEngine.WorkflowEngine, engine);
 
@@ -195,6 +197,10 @@ const make = Effect.gen(function* () {
           firstFailedAt: request.firstFailedAt,
           retryAt,
         };
+        yield* subjects.record(yield* ProviderRetryWait.executionId(payload), {
+          sessionId: payload.sessionId,
+          runId: null,
+        });
         yield* admission.run(
           "workflow",
           provideEngine(ProviderRetryWait.execute(payload, { discard: true })),

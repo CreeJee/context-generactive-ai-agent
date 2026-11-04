@@ -21,6 +21,7 @@ import {
   ownerWorkflowEngineLayer,
   suspendedRetrySchedule,
 } from "../workflow/owner-workflow-engine.ts";
+import { executionSubjects } from "../workflow/execution-subjects.ts";
 import {
   OwnerWorkflowAdmission,
   OwnerWorkflowAdmissionResult,
@@ -303,6 +304,7 @@ const make = Effect.gen(function* () {
   const admission = yield* OwnerWorkflowAdmission;
   const workflows = yield* Workflows;
   const sql = yield* SqlClient.SqlClient;
+  const subjects = yield* executionSubjects;
   // Requests ride on board changes, so pages refresh them with the board.
   const events = yield* AppEvents;
   const provideEngine = <A, E>(effect: Effect.Effect<A, E, WorkflowEngine.WorkflowEngine>) =>
@@ -607,7 +609,11 @@ const make = Effect.gen(function* () {
         const admitted = yield* stored(
           admission.admit(
             { workflowName: humanDecisionWorkflow, executionId: requestId, payload },
-            insertFacts(requestId, 1, json),
+            insertFacts(requestId, 1, json).pipe(
+              Effect.andThen(
+                subjects.record(requestId, { sessionId: payload.sessionId, runId: null }),
+              ),
+            ),
           ),
         );
         // A concurrent request for the same occasion admitted first; these facts join it.

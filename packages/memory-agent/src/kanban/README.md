@@ -19,7 +19,7 @@
 - `CardAttemptOutcome` / `AssignmentHold` / `KanbanMode` / `KanbanGoal` / `CardAttempt` / `CardAttemptKey` / `CardLadder` / `DeadLetteredAttempt` — 시도 결과 tagged union(Completed/Failed/Fenced/Superseded/Stopped), Goal 변경 hold, `worktree`·`sequential` 모드, 카드 실패 사다리를 정의합니다.
 - `KanbanStorageFailed` / `KanbanStorageReason` — 칸반 저장소 오류입니다. operation은 goal/attempt/run/card/dead_letters/change_request/decision이고, reason은 Storage/Encode/Missing입니다.
 - `CardQueue` / `CardRunPayload` / `cardQueueName` / `cardAttemptKey` / `cardDeliveryLimit` — 카드 시도 DurableQueue, 그 payload, 큐 이름, 시도 키, dead-letter 전 최대 delivery 수(3)입니다.
-- `CardAttemptExecution` / `cardAttemptExecutionLayer` — 카드 시도 하나를 기다리는 durable workflow(`KanbanCardAttempt`)와 그 등록 레이어입니다. 큐 항목을 offer하고 결과를 기다립니다.
+- `CardAttemptExecution` / `cardAttemptExecutionLayer` — 카드 시도 하나를 기다리는 durable workflow(`KanbanCardAttempt`)와 그 등록 레이어입니다. 시도에 큐 항목 id(`queue_item_id`)를 적고, 항목을 offer하고, 결과를 기다립니다. dead letter는 이 id로 시도를 찾습니다.
 - `cardQueueWorkerLayer` / `cardQueueFactoryLayer` — 카드 큐 worker(`handleCardRun`) 레이어입니다. owner용 `PersistedQueueFactory`는 카드 큐에 delivery 한도와 gate를 적용합니다.
 - `CardQueueGate` / `CardRuns` — `CardQueueGate`는 모든 Goal에 걸쳐 동시에 실행할 카드 수를 정하는 Semaphore로, `KanbanSettings`에서 값을 읽습니다. `CardRuns`는 실행 중인 카드 에이전트의 `FiberMap`이며 항목을 건드리지 않고 run을 멈출 때 씁니다.
 - `CardFailure` / `CardHoldReason` / `VerdictFailure` / `AgentFailureCode` / `WorktreeFailureReason` — 카드 실패와 hold 사유를 정한 닫힌 태그 집합입니다(`failures.ts`). 변환 헬퍼로 `failureCode`와 `worktreeFailure`가 있습니다.

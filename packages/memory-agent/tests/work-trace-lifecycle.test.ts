@@ -91,6 +91,12 @@ const goalHistory = Effect.fnUntraced(function* (sessionId: string, goalId: stri
     sessionId,
   );
   yield* sqlRun(
+    "INSERT INTO workflow_execution_subjects VALUES (?, ?, ?)",
+    executionId,
+    sessionId,
+    runId,
+  );
+  yield* sqlRun(
     "INSERT INTO owner_rpc_operations (run_id, operation_id, side_effect, status) VALUES (?, 1, 1, 'succeeded')",
     runId,
   );
@@ -138,6 +144,14 @@ const goalHistory = Effect.fnUntraced(function* (sessionId: string, goalId: stri
        'completed', 0, 0, 0)`,
     `item-${goalId}`,
     sessionId,
+  );
+  yield* sqlRun(
+    `INSERT INTO kanban_card_attempts (goal_instance_id, card_id, attempt_no, session_id,
+       goal_version, plan_version, created_at, updated_at, queue_item_id)
+     VALUES (?, 'card-1', 1, ?, 1, 1, 0, 0, ?)`,
+    goalId,
+    sessionId,
+    `item-${goalId}`,
   );
 });
 
@@ -488,7 +502,9 @@ describe("Work Trace task lifecycle", () => {
             (SELECT count(*) FROM workflow_goal_worker_generations) AS generations,
             (SELECT count(*) FROM workflow_goal_native_artifacts) AS natives,
             (SELECT count(*) FROM owner_workflow_executions) AS executions,
+            (SELECT count(*) FROM workflow_execution_subjects) AS subjects,
             (SELECT count(*) FROM kanban_goals) AS boards,
+            (SELECT count(*) FROM kanban_card_attempts) AS attempts,
             (SELECT count(*) FROM kanban_cards) AS cards,
             (SELECT count(*) FROM kanban_goal_dependencies) AS dependencies,
             (SELECT count(*) FROM persisted_queue_items) AS items,
@@ -501,7 +517,9 @@ describe("Work Trace task lifecycle", () => {
           generations: 1,
           natives: 1,
           executions: 1,
+          subjects: 1,
           boards: 1,
+          attempts: 1,
           cards: 1,
           dependencies: 0,
           items: 1,

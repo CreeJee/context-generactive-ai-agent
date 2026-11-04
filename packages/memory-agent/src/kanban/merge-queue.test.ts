@@ -158,9 +158,11 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
                 files: ["a.txt"],
               }),
             });
-            expect(
-              GoalMergeState.guards.AwaitingDecision(yield* mergeOf(board.goalInstanceId)),
-            ).toBe(true);
+            // The merge records its wait once the request returns, after the request shows.
+            yield* eventually(
+              mergeOf(board.goalInstanceId),
+              GoalMergeState.guards.AwaitingDecision,
+            );
             expect(yield* git(fixture.project, "rev-parse", "main")).toBe(user);
           }),
         );

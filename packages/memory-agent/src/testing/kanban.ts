@@ -25,6 +25,7 @@ import { BoardHealth } from "../kanban/board-health.ts";
 import { GoalMerges } from "../kanban/merge-queue.ts";
 import { ProjectScheduler } from "../kanban/scheduler.ts";
 import { CardAttempts, type CardAttemptKey } from "../kanban/card-attempts.ts";
+import { executionSubjects } from "../workflow/execution-subjects.ts";
 import { HumanDecisions } from "../kanban/human-decision.ts";
 import {
   cardAttemptExecutionLayer,
@@ -390,6 +391,11 @@ export const assignCard = Effect.fn("assignCard")(function* (
     notes,
   };
   yield* attempts.open(payload);
+  const subjects = yield* executionSubjects;
+  yield* subjects.record(yield* CardAttemptExecution.executionId(payload), {
+    sessionId: board.sessionId,
+    runId: null,
+  });
   yield* CardAttemptExecution.execute(payload, { discard: true });
   return payload;
 });

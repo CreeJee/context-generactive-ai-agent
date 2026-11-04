@@ -24,9 +24,12 @@ import type { BoardEditRefused } from "../workflow/board-edit.ts";
 import { BoardAuthor, type CardStatus } from "../workflow/card.ts";
 import { Workflows, type PlanStep, type WorkflowState } from "../workflow/workflow.ts";
 import { CardVerifier } from "./card-agent.ts";
+import { executionSubjects } from "../workflow/execution-subjects.ts";
 import {
   AssignmentHold,
   CardAttempts,
+  KanbanStorageFailed,
+  KanbanStorageReason,
   type CardAttempt,
   type CardAttemptOutcome,
   type CardLadder,
@@ -158,6 +161,7 @@ const make = (options: KanbanOrchestratorOptions) =>
     const sessions = yield* Sessions;
     const projects = yield* Projects;
     const engine = yield* WorkflowEngine.WorkflowEngine;
+    const subjects = yield* executionSubjects;
     const events = yield* AppEvents;
     const decisions = yield* HumanDecisions;
     const scheduler = yield* ProjectScheduler;
@@ -303,7 +307,18 @@ const make = (options: KanbanOrchestratorOptions) =>
 
     /** Starts an opened attempt's workflow; one already started is not offered again. */
     const start = (payload: CardRunPayload) =>
-      CardAttemptExecution.execute(payload, { discard: true }).pipe(
+      CardAttemptExecution.executionId(payload).pipe(
+        Effect.flatMap((executionId) =>
+          subjects.record(executionId, { sessionId: payload.sessionId, runId: null }),
+        ),
+        Effect.mapError((cause) =>
+          KanbanStorageFailed.make({
+            operation: "attempt",
+            reason: KanbanStorageReason.cases.Storage.make({}),
+            cause,
+          }),
+        ),
+        Effect.andThen(CardAttemptExecution.execute(payload, { discard: true })),
         Effect.provideService(WorkflowEngine.WorkflowEngine, engine),
       );
 

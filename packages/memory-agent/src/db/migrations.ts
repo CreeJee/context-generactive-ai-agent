@@ -369,6 +369,47 @@ export const ownerRpcLedgerMigration = `
 `;
 
 /**
+ * The step that keeps whom an owner workflow execution and a card queue item belong to in app
+ * tables, so app queries stop reading the engine's payloads.
+ */
+export const executionSubjectsMigration = `
+  -- Whom an execution belongs to (decisions.md "엔진 실행의 주인은 앱 표에 둔다 (2026-11-04)").
+  -- App queries found executions by session, and a Goal execution by its run, through paths into
+  -- the engine's payload JSON that differ by workflow, with no index. The session is in every
+  -- payload: at the top, or in a Goal execution's identity. The run is kept only for a Goal
+  -- execution whose identity is its run's binding, the only one evidence ever matched.
+  CREATE TABLE workflow_execution_subjects (
+    execution_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    run_id TEXT
+  ) WITHOUT ROWID;
+  CREATE INDEX workflow_execution_subjects_session ON workflow_execution_subjects(session_id);
+  CREATE INDEX workflow_execution_subjects_run ON workflow_execution_subjects(run_id);
+  INSERT INTO workflow_execution_subjects (execution_id, session_id, run_id)
+    SELECT e.execution_id,
+      coalesce(e.payload_json ->> '$.sessionId', e.payload_json ->> '$.identity.sessionId'),
+      (SELECT b.run_id FROM workflow_run_bindings b
+        WHERE e.workflow_name = 'GoalExecution'
+          AND b.run_id = e.payload_json ->> '$.identity.runId'
+          AND b.session_id = e.payload_json ->> '$.identity.sessionId'
+          AND b.goal_instance_id = e.payload_json ->> '$.identity.goalInstanceId'
+          AND b.workflow_revision_id = e.payload_json ->> '$.identity.workflowRevisionId')
+    FROM owner_workflow_executions e
+    WHERE coalesce(e.payload_json ->> '$.sessionId', e.payload_json ->> '$.identity.sessionId')
+      IS NOT NULL;
+  -- A card attempt names the queue item that carries it; the item's payload named the attempt.
+  ALTER TABLE kanban_card_attempts ADD COLUMN queue_item_id TEXT;
+  WITH items AS (
+    SELECT id, CASE WHEN json_valid(element_json) THEN element_json END AS element
+    FROM persisted_queue_items WHERE queue_name = 'DurableQueue/KanbanCard')
+  UPDATE kanban_card_attempts SET queue_item_id = (SELECT min(i.id) FROM items i
+    WHERE i.element ->> '$.payload.goalInstanceId' = kanban_card_attempts.goal_instance_id
+      AND i.element ->> '$.payload.cardId' = kanban_card_attempts.card_id
+      AND i.element ->> '$.payload.attemptNo' = kanban_card_attempts.attempt_no);
+  CREATE UNIQUE INDEX kanban_card_attempts_queue_item ON kanban_card_attempts(queue_item_id);
+`;
+
+/**
  * Ordered schema steps. `PRAGMA user_version` records how many have been applied.
  * Append new steps; never edit an applied one.
  */
@@ -2386,6 +2427,7 @@ export const migrations: readonly string[] = [
   runLogMigration,
   workflowLedgerMigration,
   ownerRpcLedgerMigration,
+  executionSubjectsMigration,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

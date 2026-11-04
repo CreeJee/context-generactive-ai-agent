@@ -108,18 +108,18 @@ export const completionEvidence = Effect.gen(function* () {
       revisionId: Schema.Finite,
     }),
     Result: Schema.Struct({ execution_id: Schema.String }),
-    execute: ({ sessionId, runId, goalId, revisionId }) => sql`SELECT execution_id
-      FROM owner_workflow_executions
-      WHERE workflow_name = 'GoalExecution' AND status = 'completed'
-        AND json_extract(payload_json, '$.identity.sessionId') = ${sessionId}
-        AND json_extract(payload_json, '$.identity.runId') = ${runId}
-        AND json_extract(payload_json, '$.identity.goalInstanceId') = ${goalId}
-        AND json_extract(payload_json, '$.identity.workflowRevisionId') = ${revisionId}
+    execute: ({ sessionId, runId, goalId, revisionId }) => sql`SELECT e.execution_id
+      FROM owner_workflow_executions e
+      JOIN workflow_execution_subjects s ON s.execution_id = e.execution_id
+      JOIN workflow_run_bindings b ON b.run_id = s.run_id
+      WHERE e.workflow_name = 'GoalExecution' AND e.status = 'completed'
+        AND s.session_id = ${sessionId} AND s.run_id = ${runId}
+        AND b.goal_instance_id = ${goalId} AND b.workflow_revision_id = ${revisionId}
         AND json_extract(result_json, '$._tag') = 'Complete'
         AND json_extract(result_json, '$.exit._tag') = 'Success'
         AND json_extract(result_json, '$.exit.value._tag') = 'GoalExecutionSuccess'
         AND json_extract(result_json, '$.exit.value.runId') = ${runId}
-        AND json_extract(result_json, '$.exit.value.executionId') = execution_id`,
+        AND json_extract(result_json, '$.exit.value.executionId') = e.execution_id`,
   });
   const registrationOf = SqlSchema.findOneOption({
     Request: Schema.String,

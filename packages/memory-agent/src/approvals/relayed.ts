@@ -17,6 +17,7 @@ import {
   ownerWorkflowEngineLayer,
   suspendedRetrySchedule,
 } from "../workflow/owner-workflow-engine.ts";
+import { executionSubjects } from "../workflow/execution-subjects.ts";
 import { OwnerWorkflowStorage } from "../workflow/owner-workflow-storage.ts";
 import { ApprovalRequester, type RelayedApprovalView } from "./relayed-state.ts";
 
@@ -87,6 +88,7 @@ const make = (timeoutMs: number) =>
     const engine = yield* WorkflowEngine.WorkflowEngine;
     const crypto = yield* SecureRandom.SecureRandom;
     const storage = yield* OwnerWorkflowStorage;
+    const subjects = yield* executionSubjects;
     const scope = yield* Effect.scope;
     const provideEngine = <A, E>(effect: Effect.Effect<A, E, WorkflowEngine.WorkflowEngine>) =>
       Effect.provideService(effect, WorkflowEngine.WorkflowEngine, engine);
@@ -131,6 +133,8 @@ const make = (timeoutMs: number) =>
                   timeoutMs,
                 };
                 const executionId = yield* RelayedApprovalExecution.executionId(payload);
+                // Like the engine's own storage, a subject that cannot be written is a defect.
+                yield* Effect.orDie(subjects.record(executionId, { sessionId, runId: null }));
                 const execute = provideEngine(RelayedApprovalExecution.execute(payload)).pipe(
                   Effect.map(
                     RelayedApprovalOutcome.match({

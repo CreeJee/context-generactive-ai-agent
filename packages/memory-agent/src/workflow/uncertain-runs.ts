@@ -80,9 +80,10 @@ export const uncertainRuns = Effect.gen(function* () {
     ORDER BY o.operation_id`;
   const producing = (sessionId: string) => sql`
     SELECT 1 FROM chat_runs WHERE thread_id = ${sessionId} AND status = 'running'
-    UNION ALL SELECT 1 FROM owner_workflow_executions
-    WHERE workflow_name = 'GoalExecution' AND status IN ('running', 'suspended')
-      AND json_extract(payload_json, '$.identity.sessionId') = ${sessionId}
+    UNION ALL SELECT 1 FROM owner_workflow_executions e
+    JOIN workflow_execution_subjects s ON s.execution_id = e.execution_id
+    WHERE e.workflow_name = 'GoalExecution' AND e.status IN ('running', 'suspended')
+      AND s.session_id = ${sessionId}
     LIMIT 1`;
   const read = <A>(effect: Effect.Effect<A, SqlError.SqlError>) =>
     Effect.mapError(effect, (cause) =>

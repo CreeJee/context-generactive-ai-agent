@@ -3918,3 +3918,18 @@
   - 다른 기기 DB도 같은 단계를 거친다. 그래서 테스트는 옛 형식 입력, 맞는 영수증, 어긋난 영수증을 담은 DB를 올려 본다.
   - `owner_read_recoveries`가 이 표를 참조하므로 다시 만들지 않고 `ALTER TABLE`로 바꾼다.
   - 사본 측정: 이 단계는 0.75초였다. 16,439행 모두 옛 reader 식과 값이 같았다. 표는 VACUUM 뒤 3.3MB였다.
+
+## 엔진 실행의 주인은 앱 표에 둔다 (2026-11-04)
+
+- 계기: 정규화 안 된 표 목록 4번(같은 날). 앱 SQL이 엔진 JSON 안의 식별자를 `json_extract`로 찾았다. 실행은 `payload_json`의 `$.sessionId`·`$.identity.*`, 카드 큐 항목은 `element_json`의 `$.payload.*`였다. workflow마다 경로가 달라 `coalesce`로 두 경로를 봤고, 인덱스가 없었다. "Workflow 엔진 교체를 목표로 두고, admission과 조회를 먼저 엔진에서 뗀다 (2026-10-28)"에서 앱 소유 표로 옮기기로 한 부채다.
+- 결정:
+  - `workflow_execution_subjects(execution_id, session_id, run_id)`에 실행이 속한 session을 둔다. `run_id`는 Goal 실행이 모는 bound run일 때만 둔다. Goal의 다른 식별자(Goal instance, revision)는 run의 binding에서 읽는다.
+  - 실행을 시작하는 곳이 엔진보다 먼저, 또는 같은 transaction에서 subject를 쓴다(`execution-subjects.ts`). Goal 실행과 사람 결정은 admission transaction 안에서, relayed approval·provider retry·카드 시도는 execute 앞에서 쓴다.
+  - 카드 시도는 자기를 실어 나르는 큐 항목 id(`kanban_card_attempts.queue_item_id`)를 갖는다. `KanbanCardAttempt` workflow가 항목을 offer하기 전에 적는다. 항목 id는 `DurableQueue.process`가 같은 실행에서 만드는 값이다(`Activity.idempotencyKey`). 이 계산이 엔진과 어긋나면 dead letter 테스트(`orchestrator.test.ts`)가 깨진다.
+  - 완료 근거, `uncertainRuns`의 진행 중 확인, 대화 삭제(`purgeGoalHistory`), dead letter 조회가 이 표를 읽는다. 결과 JSON(`result_json`) 검사는 엔진 결과를 확인하는 것이라 그대로 둔다.
+  - relayed approval·provider retry·사람 결정 목록은 아직 `OwnerWorkflowStorage`의 payload를 TS에서 decode해 찾는다. 이 일은 2026-10-28 항목의 앱 소유 조회 표 단계에서 한다.
+- 마이그레이션:
+  - subject는 옛 조회와 같은 JSON 경로로 채운다. session이 없는 payload는 subject가 없다. 전에도 어떤 session 조회에도 걸리지 않았다.
+  - Goal 실행의 run은 identity가 그 run의 binding과 같을 때만 적는다. 완료 근거가 맞춰 보던 조건이 이것이다.
+  - 카드 시도의 항목 id는 같은 Goal·카드·시도 번호를 담은 card queue 항목에서 채운다. JSON이 아닌 항목은 건너뛴다.
+  - 사본 측정: 이 단계는 10ms였다. 실행 300개의 session, binding과 맞는 Goal 실행 172쌍, 큐 항목 101개의 시도가 모두 옛 JSON 조회와 같았다.

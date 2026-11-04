@@ -5,6 +5,7 @@ import {
   ExecutionAdmission,
   type ExecutionSaturated,
 } from "../runtime/execution-admission.ts";
+import { executionSubjects } from "./execution-subjects.ts";
 import { Admission, type RunBinding } from "./run-bindings.ts";
 import {
   GoalExecutionError,
@@ -63,6 +64,7 @@ const make = Effect.gen(function* () {
   const admission = yield* OwnerWorkflowAdmission;
   const storage = yield* OwnerWorkflowStorage;
   const executionAdmission = yield* ExecutionAdmission;
+  const subjects = yield* executionSubjects;
   const provideEngine = <A, E>(effect: Effect.Effect<A, E, WorkflowEngine.WorkflowEngine>) =>
     Effect.provideService(effect, WorkflowEngine.WorkflowEngine, engine);
 
@@ -109,7 +111,23 @@ const make = Effect.gen(function* () {
               Effect.flatMap(
                 bind,
                 Admission.$match({
-                  bound: ({ binding }) => Effect.succeed(binding),
+                  // The subject is written with the binding and the execution, in one transaction.
+                  bound: ({ binding }) =>
+                    subjects
+                      .record(executionId, {
+                        sessionId: payload.identity.sessionId,
+                        runId: payload.identity.runId,
+                      })
+                      .pipe(
+                        Effect.mapError((cause) =>
+                          OwnerWorkflowStorageError.make({
+                            operation: "execution.subject",
+                            reason: "database",
+                            cause,
+                          }),
+                        ),
+                        Effect.as(binding),
+                      ),
                   refused: ({ reason }) =>
                     Effect.fail(GoalExecutionAdmissionRefused.make({ reason })),
                 }),
