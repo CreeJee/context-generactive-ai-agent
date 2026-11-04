@@ -489,21 +489,123 @@ const keptFrom = (messages: ReadonlyArray<ConversationMessage>, keep: number) =>
       );
 };
 
-/** Past `leaveOutAt`, the oldest messages give way to a marker and the latest half is kept. */
-const leftOutPast =
-  (leaveOutAt: number) =>
-  <M extends ConversationMessage>(sending: Sending<M>): Sending<M> => {
-    const cut =
-      estimateConversation(sending.sent) > leaveOutAt
-        ? keptFrom(sending.sent, Math.floor(leaveOutAt / 2))
-        : 0;
-    return cut > 0
-      ? {
-          sent: [{ role: "user", content: droppedMarker(cut) }, ...sending.sent.slice(cut)],
-          stage: "leave-out",
-        }
-      : sending;
+/**
+ * Where the run in progress starts: its latest user message, or past the end when there is none.
+ * Leaving the run out cost the model its own instruction and what it had just read; it read them
+ * again, which pushed them out again, and a run went on for an hour without getting anywhere.
+ */
+const runStart = (messages: ReadonlyArray<ConversationMessage>) =>
+  Option.getOrElse(
+    EffectArray.findLastIndex(messages, (message) => message.role === "user"),
+    () => messages.length,
+  );
+
+/** Where the latest step starts. Its results are what the model asked for to go on. */
+const latestStep = (messages: ReadonlyArray<ConversationMessage>) =>
+  Option.getOrElse(
+    EffectArray.findLastIndex(messages, (message) => message.role === "assistant"),
+    () => 0,
+  );
+
+/** A tool output that its pointer makes smaller, and by how many tokens. */
+interface Clearable {
+  readonly index: number;
+  readonly pointer: string;
+  readonly saved: number;
+}
+
+/**
+ * The tool outputs of `messages` from `from` up to `to` that a pointer to their memory node makes
+ * smaller. The pointer is the one clearing the answered output makes after the run, so each result
+ * still changes only once and the request prefix before it stays cacheable.
+ */
+const clearable = (
+  messages: ReadonlyArray<ConversationMessage>,
+  toolResultId: (toolCallId: string) => string | null,
+  [from, to]: readonly [number, number],
+): ReadonlyArray<Clearable> =>
+  EffectArray.getSomes(
+    messages.map((message, index) =>
+      Option.gen(function* () {
+        const toolCallId = yield* Option.liftPredicate(
+          message.role === "tool" && index >= from && index < to ? message.toolCallId : undefined,
+          isTruthy,
+        );
+        const pointer = clearedOutput(toolResultId(toolCallId));
+        const saved = estimateTokens(message) - estimateTokens({ role: "tool", content: pointer });
+        return yield* Option.liftPredicate({ index, pointer, saved }, (output) => output.saved > 0);
+      }),
+    ),
+  );
+
+/** `messages` with the oldest of `outputs` given way to their pointers until they save `over`. */
+const clearedOldest = <M extends ConversationMessage>(
+  messages: ReadonlyArray<M | CompactionMessage>,
+  outputs: ReadonlyArray<Clearable>,
+  over: number,
+) => {
+  const needed = EffectArray.takeWhile(
+    EffectArray.scan(outputs, 0, (freed, output) => freed + output.saved),
+    (freed) => freed < over,
+  ).length;
+  const pointers = HashMap.fromIterable(
+    EffectArray.take(outputs, needed).map((output) => [output.index, output.pointer] as const),
+  );
+  return {
+    cleared: HashMap.size(pointers),
+    messages: messages.map((message, index) =>
+      Option.match(HashMap.get(pointers, index), {
+        onNone: () => message,
+        onSome: (content) => ({ ...message, content }),
+      }),
+    ),
   };
+};
+
+/**
+ * What is sent brought down to `keep` tokens. Tool outputs give way before messages do, as
+ * compaction was asked to work (2026-09-17): first the outputs before the run in progress, then
+ * the oldest messages before the run, behind a marker, then the run's own oldest outputs. The run
+ * is never left out and the latest step's results stay whole.
+ */
+const broughtDown = <M extends ConversationMessage>(
+  sending: Sending<M>,
+  keep: number,
+  toolResultId: (toolCallId: string) => string | null,
+): Sending<M> => {
+  const over = (messages: ReadonlyArray<ConversationMessage>) =>
+    estimateConversation(messages) - keep;
+  const start = runStart(sending.sent);
+  const before = clearedOldest(
+    sending.sent,
+    clearable(sending.sent, toolResultId, [0, Math.min(start, latestStep(sending.sent))]),
+    over(sending.sent),
+  );
+  const cut = over(before.messages) > 0 ? Math.min(keptFrom(before.messages, keep), start) : 0;
+  const kept = before.messages.slice(cut);
+  const inRun = clearedOldest(
+    kept,
+    clearable(kept, toolResultId, [start - cut, latestStep(kept)]),
+    over(kept),
+  );
+  return before.cleared + cut + inRun.cleared > 0
+    ? {
+        sent:
+          cut > 0
+            ? [{ role: "user", content: droppedMarker(cut) }, ...inRun.messages]
+            : inRun.messages,
+        stage: "leave-out",
+      }
+    : sending;
+};
+
+/** Past `leaveOutAt`, what is sent is brought down to its latest half (see {@link broughtDown}). */
+const leftOutPast =
+  (leaveOutAt: number, toolResultId: (toolCallId: string) => string | null) =>
+  <M extends ConversationMessage>(sending: Sending<M>): Sending<M> =>
+    estimateConversation(sending.sent) > leaveOutAt
+      ? broughtDown(sending, Math.floor(leaveOutAt / 2), toolResultId)
+      : sending;
 
 /**
  * Do not perturb an intact prefix with retrieval. Once this request did omit original content, an
@@ -541,7 +643,8 @@ const withAppendix = <M extends ConversationMessage>(
 /**
  * The conversation as the model is sent it. Answered tool outputs become pointers after a run,
  * and validated older summary blocks replace raw turns regardless of conversation size. Past
- * `leaveOutAt` the oldest messages are left out. The saved conversation is never changed.
+ * `leaveOutAt` tool outputs give way before messages do, and the run in progress is never left out.
+ * The saved conversation is never changed.
  */
 export const compactEffect = Effect.fnUntraced(function* <M extends ConversationMessage>(options: {
   readonly messages: ReadonlyArray<M>;
@@ -585,7 +688,7 @@ export const compactEffect = Effect.fnUntraced(function* <M extends Conversation
         : undefined,
     ),
     paired,
-    leftOutPast(budget.leaveOutAt),
+    leftOutPast(budget.leaveOutAt, toolResultId),
   );
   // Leaving out the oldest messages can split a call from its result.
   const { sent, stage } = paired(yield* withAppendix(sources, prepared));

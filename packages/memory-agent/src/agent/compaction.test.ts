@@ -4,6 +4,7 @@ import type { ChatMetadata } from "../chat-store/metadata.ts";
 import type { StoredMessage } from "../chat-store/schema.ts";
 import {
   budgetFor,
+  clearedOutput,
   compactEffect,
   estimateTokens,
   lightweightToolResults,
@@ -298,6 +299,73 @@ describe("request history", () => {
       expect(sent.length).toBeLessThan(messages.length);
       expect(sent[0]?.content).toContain("find_memory");
       expect(sent.at(-1)).toEqual({ role: "user", content: "마지막 질문" });
+    }),
+  );
+
+  // A 100k-window model lost its instruction and what it had just read inside one run, read them
+  // again, and went on for an hour without writing anything.
+  it.effect("never leaves out the run in progress; its oldest outputs give way to pointers", () =>
+    Effect.gen(function* () {
+      const long = "배포 절차를 설명해요. ".repeat(100);
+      const earlier: StoredMessage[] = Array.from({ length: 4 }, (_, index) => [
+        { role: "user" as const, content: `질문 ${index}: ${long}` },
+        { role: "assistant" as const, content: `답 ${index}: ${long}` },
+      ]).flat();
+      const steps: StoredMessage[] = Array.from({ length: 6 }, (_, index) => [
+        {
+          role: "assistant" as const,
+          content: null,
+          toolCalls: [
+            {
+              id: `read-${index}`,
+              type: "function" as const,
+              function: { name: "read_file", arguments: `{"path":"page-${index}.ts"}` },
+            },
+          ],
+        },
+        { role: "tool" as const, toolCallId: `read-${index}`, content: "스키마 줄 ".repeat(400) },
+      ]).flat();
+      const instruction: StoredMessage = { role: "user", content: "S8 작업 이어서 진행해줘" };
+      const sent = yield* firstSent(
+        [...earlier, instruction, ...steps],
+        lookupSources({ toolResultId: (id) => `node-${id}`, nodeText: () => null }),
+        { compactAt: 0, leaveOutAt: 6_000 },
+      );
+      expect(sent[0]?.content).toContain("left out to save context");
+      expect(sent[1]).toEqual(instruction);
+      // Every call of the run is still sent, so the model knows what it already did.
+      expect(sent.filter((message) => message.role === "assistant")).toHaveLength(6);
+      const results = sent.filter((message) => message.role === "tool");
+      expect(results[0]?.content).toBe(clearedOutput("node-read-0"));
+      expect(results.at(-1)).toEqual(steps.at(-1));
+    }),
+  );
+
+  it.effect("clears outputs before the run before it leaves out older messages", () =>
+    Effect.gen(function* () {
+      const messages: StoredMessage[] = [
+        { role: "user", content: "스키마 읽어줘" },
+        {
+          role: "assistant",
+          content: null,
+          toolCalls: [
+            { id: "schema", type: "function", function: { name: "read_file", arguments: "{}" } },
+          ],
+        },
+        { role: "tool", toolCallId: "schema", content: "스키마 줄 ".repeat(400) },
+        { role: "assistant", content: "읽었어요" },
+        { role: "user", content: "이어서 해줘" },
+      ];
+      const sent = yield* firstSent(
+        messages,
+        lookupSources({ toolResultId: (id) => `node-${id}`, nodeText: () => null }),
+        { compactAt: 0, leaveOutAt: 1_000 },
+      );
+      expect(sent).toEqual([
+        ...messages.slice(0, 2),
+        { role: "tool", toolCallId: "schema", content: clearedOutput("node-schema") },
+        ...messages.slice(3),
+      ]);
     }),
   );
 });
