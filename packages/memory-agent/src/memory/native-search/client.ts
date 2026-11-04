@@ -78,6 +78,13 @@ const capacity = 32;
 const replyTimeout = Duration.seconds(2);
 
 /**
+ * How long a new worker may take to answer Open. Most of a start is loading the worker's modules
+ * (in a checkout Node compiles them from TypeScript: about 0.3 s alone), which a busy machine
+ * stretches several times, so this only bounds a worker that never answers.
+ */
+const startupTimeout = Duration.seconds(15);
+
+/**
  * A budgeted search answers `budget-exceeded` itself once its budget runs out, but an engine call
  * already admitted runs to its end. The host waits that long past the budget, so the typed native
  * outcome reaches the caller instead of a `request-timeout`.
@@ -133,7 +140,7 @@ export const rpcTransport: OwnerConnect = Effect.fn("NativeOwner.rpcTransport")(
     const ready = yield* client.Open().pipe(
       Effect.catchTag("RpcClientError", () => lost),
       Effect.timeoutOrElse({
-        duration: "2 seconds",
+        duration: startupTimeout,
         orElse: () => Effect.fail(NativeOwnerFailed.make({ reason: "startup-timeout" })),
       }),
     );

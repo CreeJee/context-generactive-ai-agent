@@ -10,7 +10,7 @@
 
 - `makeNativeOwner` — `(setup: OwnerSetup, workerFile, connect = rpcTransport)`로 scoped native owner를 만드는 Effect.fn이다. `SecureRandom.SecureRandom`과 `Scope`가 필요하다. 반환 객체는 `NativeOwner` 서비스의 형태가 된다(주석상 `startRead`, `inspect` 등 포함).
 - `NativeOwner` — `Context.Service` 클래스(`"memory-agent/memory/native-search/client/NativeOwner"`)다. `static layer(setup, workerFile)`이 `Layer.effect(makeNativeOwner)`에 `NodeCrypto.layer`를 제공한다. 컴포지션 루트용 Layer다.
-- `rpcTransport` — 기본 `OwnerConnect`다. `node:worker_threads` Worker와 `RpcClient.layerProtocolWorker({ size: 1, concurrency: 1 })`로 worker를 띄우고 `Open`으로 준비를 기다린다(2초 startup-timeout).
+- `rpcTransport` — 기본 `OwnerConnect`다. `node:worker_threads` Worker와 `RpcClient.layerProtocolWorker({ size: 1, concurrency: 1 })`로 worker를 띄우고 `Open`으로 준비를 기다린다(15초 startup-timeout).
 - `OwnerTransport` / `OwnerConnect` / `OwnerWorker` — 시작된 owner worker를 호스트가 다루는 인터페이스(`ready`, `send`, `exited`, `terminate`)와 연결 함수 타입이다. 테스트가 transport를 감쌀 때 쓴다.
 - `ReadAdmission` — 읽기 진입 결과 TaggedEnum(`pinned` | `completed{reply}`)이다.
 - `OwnerInspection` — `inspect` 결과 TaggedEnum(`open{queued, active}` | `failed{reason}`)이다.
@@ -65,7 +65,7 @@
 - native `VectorIndex`의 add/remove/search/searchControlled/validateIds/save/close를 동기 호출한다. 인메모리 인덱스 상태가 바뀐다.
 - `process.threadCpuUsage`와 `process.hrtime.bigint`로 worker CPU와 native 호출 구간을 측정한다.
 - 호스트 인메모리 상태: `Ref`(job 원장, `cachedSize`, `PublicationState`), `FiberMap`, `Semaphore`. scoped fiber 하나가 worker 종료를 감시한다.
-- 타이머: startup 2초 타임아웃과 명령별 reply 기한(2초 또는 budget+2초).
+- 타이머: startup 15초 타임아웃과 명령별 reply 기한(2초 또는 budget+2초).
 - `SecureRandom.uuidV4`로 `ownerKey`를 생성한다.
 
 ## Verification
