@@ -156,7 +156,7 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
           "chat_runs",
           "workflow_run_bindings",
           "owner_rpc_operations",
-          "workflow_run_events",
+          "workflow_run_log_entries",
           "session_workflows",
           "workflow_state_revisions",
           "workflow_goal_identities",
@@ -233,7 +233,7 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
           "chat_runs",
           "workflow_run_bindings",
           "owner_rpc_operations",
-          "workflow_run_events",
+          "workflow_run_log_entries",
         ];
         const snapshot = Effect.forEach(tables, (table) =>
           sqlAll(`SELECT * FROM ${table} ORDER BY rowid`),
