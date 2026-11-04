@@ -12,13 +12,13 @@
  * from the project's newest user texts. Nothing it reads is printed but counts and scores.
  */
 import { DatabaseSync } from "node:sqlite";
-import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { Console, Effect, Layer, Schema } from "effect";
+import { NodeFileSystem } from "@effect/platform-node";
+import { Console, Effect, FileSystem, Layer, Schema } from "effect";
 import { loadTurbovec } from "../../turbovec/index.js";
 import { runNativeEffect } from "../src/runtime/native-effect.ts";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { Embedder, type ModelVariant } from "../src/memory/embedding/embedder.ts";
+import { path } from "../src/runtime/synchronous-path.ts";
 
 const argv = process.argv.slice(2);
 const flag = (name: string) => {
@@ -30,71 +30,84 @@ const queryCount = Number(flag("--queries") ?? "40");
 const jsonOut = flag("--json");
 const storage = argv[0];
 if (storage === undefined) {
-  console.error(
-    "usage: quantization-loss.ts <storage copy> [--nodes 2000] [--queries 40] [--json <file>]",
+  await Effect.runPromise(
+    Console.error(
+      "usage: quantization-loss.ts <storage copy> [--nodes 2000] [--queries 40] [--json <file>]",
+    ),
   );
   process.exit(2);
 }
 
-const db = new DatabaseSync(join(storage, "agent.db"), { readOnly: true });
-const top = Schema.decodeUnknownSync(
-  Schema.Array(Schema.Struct({ embedder: Schema.String, n: Schema.Number })),
-)(
-  db
-    .prepare(
-      "SELECT embedder, count(*) AS n FROM node_vectors GROUP BY embedder ORDER BY n DESC LIMIT 1",
-    )
-    .all(),
+const db = new DatabaseSync(path.join(storage, "agent.db"), { readOnly: true });
+const top = (
+  await Effect.runPromise(
+    Schema.decodeUnknownEffect(
+      Schema.Array(Schema.Struct({ embedder: Schema.String, n: Schema.Finite })),
+    )(
+      db
+        .prepare(
+          "SELECT embedder, count(*) AS n FROM node_vectors GROUP BY embedder ORDER BY n DESC LIMIT 1",
+        )
+        .all(),
+    ),
+  )
 )[0];
 if (top === undefined) throw new Error("no vectors in the copy");
 // The variant that made the copy's vectors, read from the identity's variant segment: the app
 // re-embeds with the same weights, so the exact ranking is over production's own vectors.
 const variant: ModelVariant = top.embedder.includes("@fp32/") ? "fp32" : "quint8";
-const project = Schema.decodeUnknownSync(
-  Schema.Array(Schema.Struct({ project_id: Schema.String })),
-)(
-  db
-    .prepare(
-      "SELECT project_id, count(*) AS n FROM nodes GROUP BY project_id ORDER BY n DESC LIMIT 1",
-    )
-    .all(),
+const project = (
+  await Effect.runPromise(
+    Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ project_id: Schema.String })))(
+      db
+        .prepare(
+          "SELECT project_id, count(*) AS n FROM nodes GROUP BY project_id ORDER BY n DESC LIMIT 1",
+        )
+        .all(),
+    ),
+  )
 )[0]!.project_id;
-const texts = Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ text: Schema.String })))(
-  db
-    .prepare(
-      // substr keeps a whole-node sample within the model's token window: the production indexer
-      // would chunk longer texts, and a truncated re-embedding would not be its ground truth.
-      "SELECT substr(text, 1, 4000) AS text FROM nodes WHERE project_id = ? AND length(trim(text)) > 0 ORDER BY seq DESC LIMIT ?",
-    )
-    .all(project, nodeCount),
+const texts = (
+  await Effect.runPromise(
+    Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ text: Schema.String })))(
+      db
+        .prepare(
+          // substr keeps a whole-node sample within the model's token window: the production indexer
+          // would chunk longer texts, and a truncated re-embedding would not be its ground truth.
+          "SELECT substr(text, 1, 4000) AS text FROM nodes WHERE project_id = ? AND length(trim(text)) > 0 ORDER BY seq DESC LIMIT ?",
+        )
+        .all(project, nodeCount),
+    ),
+  )
 ).map((row) => row.text);
 
 const QueryItem = Schema.Struct({
   group: Schema.Literals(["find", "recall"]),
   query: Schema.String,
 });
-let queries: string[] = [];
-try {
-  const items = readFileSync(join(storage, "relevance.jsonl"), "utf8")
-    .split("\n")
-    .filter((line) => line.trim().length > 0)
-    .map((line) => Schema.decodeUnknownSync(QueryItem)(JSON.parse(line)));
-  queries = items.map((item) => item.query);
-} catch {
-  // No relevance set in this copy: user texts stand in.
-}
-if (queries.length < queryCount)
-  queries.push(
-    ...Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ text: Schema.String })))(
+// The project's newest user texts, which stand in for queries the relevance set does not have.
+const userTexts = (
+  await Effect.runPromise(
+    Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ text: Schema.String })))(
       db
         .prepare(
           "SELECT text FROM nodes WHERE project_id = ? AND kind = 'user' AND length(trim(text)) > 0 ORDER BY seq DESC LIMIT ?",
         )
-        .all(project, queryCount - queries.length),
-    ).map((row) => row.text),
-  );
-queries = queries.slice(0, queryCount);
+        .all(project, queryCount),
+    ),
+  )
+).map((row) => row.text);
 db.close();
+
+/** The relevance set's queries, or none when this copy has no set (or a line of it is not one). */
+const relevanceQueries = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const decodeItem = Schema.decodeUnknownEffect(Schema.fromJsonString(QueryItem));
+  const lines = (yield* fs.readFileString(path.join(storage, "relevance.jsonl")))
+    .split("\n")
+    .filter((line) => line.trim().length > 0);
+  return (yield* Effect.forEach(lines, (line) => decodeItem(line))).map((item) => item.query);
+}).pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
 
 interface QueryRow {
   readonly overlap5: number;
@@ -110,8 +123,12 @@ const rows: QueryRow[] = [];
 
 const program = Effect.gen(function* () {
   const embedder = yield* Embedder;
+  const fs = yield* FileSystem.FileSystem;
   if (embedder.identity !== top.embedder)
-    yield* Effect.die(`embedder ${embedder.identity} does not match the copy (${top.embedder})`);
+    return yield* Effect.die(
+      `embedder ${embedder.identity} does not match the copy (${top.embedder})`,
+    );
+  const queries = [...(yield* relevanceQueries), ...userTexts].slice(0, queryCount);
   const vectors = yield* embedder.embed(texts);
   const queryVectors = yield* embedder.embed(queries);
   // The production quantization, applied to the same vectors the exact ranking uses.
@@ -177,10 +194,17 @@ const program = Effect.gen(function* () {
     ].join("\n"),
   );
   if (jsonOut !== undefined)
-    writeFileSync(jsonOut, rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
+    yield* fs.writeFileString(jsonOut, rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
   index.close();
 }).pipe(
-  Effect.provide(Embedder.localVariant(variant).pipe(Layer.provide(StorageRoot.layer(storage)))),
+  // The script's entry point: the one place its services are provided.
+  // @effect-diagnostics-next-line strictEffectProvide:off
+  Effect.provide(
+    Layer.merge(
+      Embedder.localVariant(variant).pipe(Layer.provide(StorageRoot.layer(storage))),
+      NodeFileSystem.layer,
+    ),
+  ),
 );
 
 await runNativeEffect(program);

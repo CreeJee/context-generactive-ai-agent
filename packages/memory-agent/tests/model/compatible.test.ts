@@ -107,6 +107,20 @@ const failed = (reason: CompatibleRunRequestFailed["reason"]) =>
 const parseBody = (sent: Sent | undefined): JsonValue => JSON.parse(sent?.body ?? "null");
 
 const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+const decodeJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
+
+/** What a test reads of a sent body: each message's role and content parts' types. */
+const SentMessages = Schema.Struct({
+  messages: Schema.Array(
+    Schema.Struct({
+      role: Schema.String,
+      content: Schema.NullOr(
+        Schema.Union([Schema.String, Schema.Array(Schema.Struct({ type: Schema.String }))]),
+      ),
+    }),
+  ),
+});
+const decodeSentMessages = Schema.decodeUnknownEffect(Schema.fromJsonString(SentMessages));
 
 /** The request's body as the model sends it: `OpenAiClient` sets the stream fields again. */
 const wireBodyOf = (payload: { readonly stream?: unknown; readonly stream_options?: unknown }) =>
@@ -302,7 +316,7 @@ describe("compatible language model", () => {
       // The request with both images does not fit at this window; the newest one stays and the
       // earlier one leaves as the note.
       const sent = yield* request([image, image]);
-      expect(JSON.parse(sent)).toMatchObject({
+      expect(yield* decodeJson(sent)).toMatchObject({
         messages: [
           { role: "system" },
           {
@@ -360,7 +374,7 @@ describe("compatible language model", () => {
         }).pipe(Effect.map(wireBodyOf));
       // One image at `tokensPerImage` plus the text fits the window and keeps the image part.
       const sent = yield* request([{ role: "user", content: "next" }, image]);
-      expect(JSON.parse(sent)).toMatchObject({
+      expect(yield* decodeJson(sent)).toMatchObject({
         messages: [
           { role: "system" },
           { role: "user", content: "next" },
@@ -375,14 +389,7 @@ describe("compatible language model", () => {
       });
       // Ten of them, at the fixed budget, leave every image but the newest message's as the note.
       const slimmed = yield* request(Array.from({ length: 10 }, () => image));
-      // SAFETY: `wireBodyOf` returns the JSON text of the typed payload, whose messages hold
-      // `role` and string or array content only.
-      const body = JSON.parse(slimmed) as {
-        readonly messages: ReadonlyArray<{
-          readonly role: string;
-          readonly content: string | ReadonlyArray<{ readonly type: string }> | null;
-        }>;
-      };
+      const body = yield* decodeSentMessages(slimmed);
       // The newest image message is this turn's, so the newest image stays with it.
       expect(body.messages.filter((message) => message.role === "user")).toHaveLength(10);
       expect(

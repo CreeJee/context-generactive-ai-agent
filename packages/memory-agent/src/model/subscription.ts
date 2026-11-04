@@ -650,7 +650,7 @@ const anthropicBody = (request: SubscriptionRequest) => {
   const system = systemText(prompt);
   const tools = canonicalTools(request.tools);
   const cacheControl = anthropicCacheControlFor(request.promptCache?.retention);
-  const messages = endingOnUser(anthropicMessages(prompt));
+  const messages = prompt.pipe(anthropicMessages, endingOnUser);
   return JSON.stringify({
     model: selection.model,
     max_tokens: 32_000,

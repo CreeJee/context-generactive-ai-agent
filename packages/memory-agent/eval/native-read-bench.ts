@@ -21,13 +21,14 @@
  * Nothing it reads is printed: only counts and times. `--json` writes per-read rows (no text).
  */
 import { DatabaseSync } from "node:sqlite";
-import { Schema } from "effect";
-import { readFileSync, writeFileSync } from "node:fs";
-import { createHash, randomUUID } from "node:crypto";
-import { dirname, join } from "node:path";
+import { Array as Arr, Console, Effect, FileSystem, Option, Random, Schema } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { addonPath, loadTurbovec, type NativeReadOutput } from "../../turbovec/index.js";
 import { initializeNodeSqlite } from "../src/runtime/node-sqlite-bridge.ts";
 import { searchTerms } from "../src/memory/search.ts";
+import { nodePlatform } from "../src/runtime/node-platform.ts";
+import { sha256 } from "../src/runtime/synchronous-crypto.ts";
+import { path } from "../src/runtime/synchronous-path.ts";
 
 interface BenchQuery {
   readonly group: string;
@@ -35,6 +36,9 @@ interface BenchQuery {
   readonly projectId: string;
   readonly limit: number;
 }
+
+/** Prints one line of the report. */
+const print = (line: string) => Effect.runPromise(Console.log(line));
 
 const argv = process.argv.slice(2);
 const flag = (name: string) => {
@@ -52,69 +56,87 @@ const sharedSession = sharedAt !== -1;
 if (sharedSession) argv.splice(sharedAt, 1);
 const [dbPath, indexArgument] = argv;
 if (dbPath === undefined) {
-  console.error("usage: native-read-bench.ts <db copy> [index.tvim copy] [--project <id>]");
+  await Effect.runPromise(
+    Console.error("usage: native-read-bench.ts <db copy> [index.tvim copy] [--project <id>]"),
+  );
   process.exit(2);
 }
 
 const db = new DatabaseSync(dbPath, { readOnly: true });
 const select = (sql: string, ...params: (string | number)[]) => db.prepare(sql).all(...params);
-const Count = Schema.Array(Schema.Struct({ n: Schema.Number }));
+const Count = Schema.Array(Schema.Struct({ n: Schema.Finite }));
 const count = (sql: string, ...params: (string | number)[]) =>
-  Schema.decodeUnknownSync(Count)(select(sql, ...params))[0]!.n;
+  Effect.runPromise(Schema.decodeUnknownEffect(Count)(select(sql, ...params))).then(
+    (rows) => rows[0]!.n,
+  );
 const QueryRecord = Schema.Struct({
   group: Schema.String,
   query: Schema.String,
   projectId: Schema.String,
-  limit: Schema.Number,
+  limit: Schema.Finite,
 });
 
 const embedder =
-  Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ embedder: Schema.String })))(
-    select("SELECT embedder FROM node_vectors GROUP BY embedder ORDER BY count(*) DESC LIMIT 1"),
+  (
+    await Effect.runPromise(
+      Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ embedder: Schema.String })))(
+        select(
+          "SELECT embedder FROM node_vectors GROUP BY embedder ORDER BY count(*) DESC LIMIT 1",
+        ),
+      ),
+    )
   )[0]?.embedder ?? "none";
 // "auto": the app's own index file for that embedder, beside the database copy.
 const indexPath =
   indexArgument === "auto"
-    ? join(
-        dirname(dbPath),
-        "vectors",
-        createHash("sha256").update(embedder).digest("hex").slice(0, 16),
-        "index.tvim",
-      )
+    ? path.join(path.dirname(dbPath), "vectors", sha256(embedder).slice(0, 16), "index.tvim")
     : indexArgument;
 const ownProject =
   projectFlag ??
-  Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ project_id: Schema.String })))(
-    select("SELECT project_id FROM nodes WHERE kind = 'user' ORDER BY seq DESC LIMIT 1"),
+  (
+    await Effect.runPromise(
+      Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ project_id: Schema.String })))(
+        select("SELECT project_id FROM nodes WHERE kind = 'user' ORDER BY seq DESC LIMIT 1"),
+      ),
+    )
   )[0]!.project_id;
 
 const quotedString = /"query"\s*:\s*"((?:[^"\\]|\\.)*)"/u;
-const recordedFinds = Schema.decodeUnknownSync(
-  Schema.Array(Schema.Struct({ text: Schema.String, project_id: Schema.String })),
-)(
-  select(
-    "SELECT text, project_id FROM nodes WHERE kind = 'tool_call' AND json_extract(detail, '$.toolName') = 'find_memory' ORDER BY seq DESC LIMIT 2000",
-  ),
+const decodeQuoted = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.String));
+const recordedFinds = (
+  await Effect.runPromise(
+    Schema.decodeUnknownEffect(
+      Schema.Array(Schema.Struct({ text: Schema.String, project_id: Schema.String })),
+    )(
+      select(
+        "SELECT text, project_id FROM nodes WHERE kind = 'tool_call' AND json_extract(detail, '$.toolName') = 'find_memory' ORDER BY seq DESC LIMIT 2000",
+      ),
+    ),
+  )
 ).flatMap((row): BenchQuery[] => {
   const match = quotedString.exec(row.text);
   if (match === null) return [];
-  const query = Schema.decodeUnknownSync(Schema.String)(JSON.parse(`"${match[1]}"`));
-  return query.trim().length === 0
-    ? []
-    : [{ group: "find", query, projectId: row.project_id, limit: 12 }];
+  // A quoted value whose escapes are not JSON's is not a query the bench can replay.
+  return Option.toArray(decodeQuoted(`"${match[1]}"`)).flatMap((query) =>
+    query.trim().length === 0
+      ? []
+      : [{ group: "find", query, projectId: row.project_id, limit: 12 }],
+  );
 });
-console.log(
+await print(
   `recorded find_memory calls: ${recordedFinds.length}, own project ${recordedFinds.filter((q) => q.projectId === ownProject).length}`,
 );
 const finds = [...new Map(recordedFinds.map((q) => [`${q.projectId}\u0000${q.query}`, q])).values()]
   // Each replayed in the project it was asked in, as its own project.
   .slice(0, 60);
-const users = Schema.decodeUnknownSync(
-  Schema.Array(Schema.Struct({ text: Schema.String, session_id: Schema.NullOr(Schema.String) })),
-)(
-  select(
-    "SELECT text, session_id FROM nodes WHERE kind = 'user' AND project_id = ? AND length(text) > 20 ORDER BY seq DESC LIMIT 600",
-    ownProject,
+const users = await Effect.runPromise(
+  Schema.decodeUnknownEffect(
+    Schema.Array(Schema.Struct({ text: Schema.String, session_id: Schema.NullOr(Schema.String) })),
+  )(
+    select(
+      "SELECT text, session_id FROM nodes WHERE kind = 'user' AND project_id = ? AND length(text) > 20 ORDER BY seq DESC LIMIT 600",
+      ownProject,
+    ),
   ),
 );
 const interprets = users.slice(0, 40).map((row) => ({
@@ -140,20 +162,30 @@ const recalls = users
   .filter((_, index) => index % 3 === 0)
   .slice(0, 30)
   .map((query) => ({ group: "recall", query, projectId: ownProject, limit: 16 }));
-const extra: BenchQuery[] =
+const decodeQueryRecord = Schema.decodeUnknownEffect(Schema.fromJsonString(QueryRecord));
+const extra: ReadonlyArray<BenchQuery> =
   queriesFile === undefined
     ? []
-    : readFileSync(queriesFile, "utf8")
-        .split("\n")
-        .filter((line) => line.trim().length > 0)
-        .map((line): BenchQuery => Schema.decodeUnknownSync(QueryRecord)(JSON.parse(line)));
+    : await nodePlatform.runPromise(
+        Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFileString(queriesFile)).pipe(
+          Effect.flatMap((text) =>
+            Effect.forEach(
+              text.split("\n").filter((line) => line.trim().length > 0),
+              (line) => decodeQueryRecord(line),
+            ),
+          ),
+        ),
+      );
 const queries = [...extra, ...finds, ...interprets, ...recalls];
 
 const { VectorIndex, MemoryReadSession, SearchControl } = loadTurbovec();
 initializeNodeSqlite(addonPath);
 const index = indexPath === undefined ? new VectorIndex(384, 4) : VectorIndex.load(indexPath);
 const randomUnit = () => {
-  const values = Float32Array.from({ length: 384 }, () => Math.random() - 0.5);
+  const values = Float32Array.from(
+    Effect.runSync(Effect.forEach(Arr.range(1, 384), () => Random.next)),
+    (value) => value - 0.5,
+  );
   const norm = Math.hypot(...values);
   return values.map((value) => value / norm);
 };
@@ -168,11 +200,11 @@ interface Row {
   readonly wallMs: number;
 }
 const rows: Row[] = [];
-const owner = randomUUID();
+const owner = SecureRandom.uuidV4Unsafe();
 const readOnce = (reader: InstanceType<typeof MemoryReadSession>, q: BenchQuery) => {
   const terms = searchTerms(q.query);
-  const requestId = randomUUID();
-  const control = new SearchControl(randomUUID(), owner, "bench", requestId, 2_000);
+  const requestId = SecureRandom.uuidV4Unsafe();
+  const control = new SearchControl(SecureRandom.uuidV4Unsafe(), owner, "bench", requestId, 2_000);
   const started = performance.now();
   try {
     const out = reader.search(
@@ -239,16 +271,21 @@ const fmt = (value: number) => (Number.isNaN(value) ? "-" : value.toFixed(1));
 const stat = (values: readonly number[]) =>
   `${fmt(quantile(values, 0.5))}/${fmt(quantile(values, 0.95))}`;
 
-console.log(
+await print(
   `session ${sharedSession ? "shared" : "per query"}; rss growth ${rssGrowthMb.toFixed(0)} MB`,
 );
-console.log(
-  `db rows: ${count("SELECT count(*) AS n FROM nodes")} nodes, own project ${count("SELECT count(*) AS n FROM nodes WHERE project_id = ?", ownProject)} nodes; index ${indexPath === undefined ? "none" : index.size()} vectors; queries find ${finds.length} interpret ${interprets.length} recall ${recalls.length} extra ${extra.length}; rounds ${rounds}`,
+const nodeCount = await count("SELECT count(*) AS n FROM nodes");
+const ownNodeCount = await count(
+  "SELECT count(*) AS n FROM nodes WHERE project_id = ?",
+  ownProject,
 );
-console.log(
+await print(
+  `db rows: ${nodeCount} nodes, own project ${ownNodeCount} nodes; index ${indexPath === undefined ? "none" : index.size()} vectors; queries find ${finds.length} interpret ${interprets.length} recall ${recalls.length} extra ${extra.length}; rounds ${rounds}`,
+);
+await print(
   "| group | pass | n | fail (stage) | wall p50/p95 | text p50/p95 | trigram p50/p95 | short sum p50/p95 | short max p95 | short terms p50/max | trigram terms p50/max | candidate+vector p50/p95 | coverage p50/p95 |",
 );
-console.log("|---|---|---|---|---|---|---|---|---|---|---|---|---|");
+await print("|---|---|---|---|---|---|---|---|---|---|---|---|---|");
 const groups = [...new Set(rows.map((row) => row.group))];
 for (const group of groups)
   for (const pass of ["cold", "warm"] as const) {
@@ -257,7 +294,7 @@ for (const group of groups)
     const stages = [
       ...new Set(failed.map((row) => `${row.out.kind}@${row.out.failedStage ?? "-"}`)),
     ];
-    console.log(
+    await print(
       `| ${group} | ${pass} | ${selected.length} | ${failed.length} ${stages.join(",")} | ${stat(selected.map((r) => r.wallMs))} | ${stat(selected.map((r) => r.out.textMs))} | ${stat(selected.flatMap((r) => (r.out.trigramMs == null ? [] : [r.out.trigramMs])))} | ${stat(selected.map((r) => r.out.shortTermMs))} | ${fmt(
         quantile(
           selected.map((r) => r.out.shortTermMaxMs),
@@ -276,9 +313,8 @@ for (const group of groups)
       )}/${Math.max(0, ...selected.map((r) => r.trigramTerms))} | ${stat(selected.map((r) => r.out.candidateMs + r.out.vectorMs))} | ${stat(selected.map((r) => r.out.coverageMs))} |`,
     );
   }
-if (jsonOut !== undefined)
-  writeFileSync(
-    jsonOut,
+if (jsonOut !== undefined) {
+  const report =
     rows
       .map((row) =>
         JSON.stringify({
@@ -302,7 +338,10 @@ if (jsonOut !== undefined)
           coverageMs: row.out.coverageMs,
         }),
       )
-      .join("\n") + "\n",
+      .join("\n") + "\n";
+  await nodePlatform.runPromise(
+    Effect.flatMap(FileSystem.FileSystem, (fs) => fs.writeFileString(jsonOut, report)),
   );
+}
 index.close();
 db.close();

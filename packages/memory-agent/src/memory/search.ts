@@ -2,6 +2,7 @@ import {
   MutableHashMap,
   HashSet,
   Array as EffectArray,
+  Function as EffectFunction,
   Option,
   Context,
   Effect,
@@ -194,8 +195,11 @@ const nameLike = /[0-9_./#@:-]|[a-z][A-Z]|^[A-Z]{2,}$/u;
  * The terms worth searching first: names before words, then longer before shorter (rarer, so
  * they discriminate more), then in question order.
  */
-export const keepTerms = (terms: readonly string[], max: number) =>
-  terms.length <= max
+export const keepTerms: {
+  (max: number): (terms: readonly string[]) => string[];
+} & typeof keepTermsBody = EffectFunction.dual(2, keepTermsBody);
+function keepTermsBody(terms: readonly string[], max: number): string[] {
+  return terms.length <= max
     ? [...terms]
     : terms
         .map((term, index) => ({ term, index, name: nameLike.test(term) }))
@@ -206,6 +210,7 @@ export const keepTerms = (terms: readonly string[], max: number) =>
         .slice(0, max)
         .sort((a, b) => a.index - b.index)
         .map(({ term }) => term);
+}
 
 /** Splits a question into search terms; trigram FTS needs 3+ characters, shorter terms use LIKE. */
 export function searchTerms(query: string) {

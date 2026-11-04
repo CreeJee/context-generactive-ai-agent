@@ -215,9 +215,9 @@ describe("history pages", () => {
         CREATE TRIGGER display_delete AFTER DELETE ON chat_thread_display_messages
         BEGIN INSERT INTO display_writes VALUES ('delete', OLD.seq, OLD.display_id); END;
       `);
-      const writes = Effect.flatMap(
+      const writes = Effect.tap(
         sqlAll("SELECT operation, seq, display_id FROM display_writes ORDER BY rowid"),
-        (rows) => Effect.as(sqlRun("DELETE FROM display_writes"), rows),
+        () => sqlRun("DELETE FROM display_writes"),
       );
       const result: StoredMessage = { role: "tool", toolCallId: "call", content: "Result" };
       // Unchanged, or a result the answer holds: nothing shown begins or ends.

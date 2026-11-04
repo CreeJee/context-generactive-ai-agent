@@ -60,8 +60,10 @@ const tuning: SearchTuning | undefined =
         ...searchTuning,
         ...Object.fromEntries(
           Object.entries(
-            Schema.decodeUnknownSync(TuningOverride)(
-              JSON.parse(process.argv.splice(tuningAt, 2)[1] ?? "{}"),
+            await Effect.runPromise(
+              Schema.decodeEffect(Schema.fromJsonString(TuningOverride))(
+                process.argv.splice(tuningAt, 2)[1] ?? "{}",
+              ),
             ),
           ).filter(([, value]) => value !== undefined),
         ),

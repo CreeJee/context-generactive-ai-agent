@@ -18,23 +18,24 @@
  * the same relevant nodes, with limit 16.
  */
 import { DatabaseSync } from "node:sqlite";
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { createHash } from "node:crypto";
-import { join } from "node:path";
-import { Console, Effect, Layer, Option, Schema } from "effect";
+import { NodeFileSystem } from "@effect/platform-node";
+import { Array as Arr, Console, Effect, FileSystem, Layer, Option, Schema } from "effect";
 import { SecretStore } from "../src/config/secrets.ts";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { Embedder, EmbedderRuntime } from "../src/memory/embedding/embedder.ts";
 import { memoryAgentLayer } from "../src/layers.ts";
 import { MemorySearch, searchTuning, type SearchTuning } from "../src/memory/search.ts";
 import { runNativeEffect } from "../src/runtime/native-effect.ts";
+import { nodePlatform } from "../src/runtime/node-platform.ts";
+import { sha256 } from "../src/runtime/synchronous-crypto.ts";
+import { path } from "../src/runtime/synchronous-path.ts";
 
 const Item = Schema.Struct({
   group: Schema.Literals(["find", "recall"]),
   query: Schema.String,
   projectId: Schema.String,
   crossProject: Schema.Boolean,
-  limit: Schema.Number,
+  limit: Schema.Finite,
   relevant: Schema.Array(Schema.String),
 });
 type Item = typeof Item.Type;
@@ -66,44 +67,62 @@ const tuning: SearchTuning | undefined =
       {
         ...searchTuning,
         ...Object.fromEntries(
-          Object.entries(Schema.decodeUnknownSync(TuningOverride)(JSON.parse(tuningJson))).filter(
-            ([, value]) => value !== undefined,
-          ),
+          Object.entries(
+            await Effect.runPromise(
+              Schema.decodeEffect(Schema.fromJsonString(TuningOverride))(tuningJson),
+            ),
+          ).filter(([, value]) => value !== undefined),
         ),
       };
 const resume = argv.includes("--resume");
 const [mode, storage] = argv;
 if ((mode !== "build" && mode !== "score") || storage === undefined) {
-  console.error(
-    "usage: relevance.ts build|score <storage copy> [--label <name>] [--group <g>] " +
-      "[--tuning <json>] [--dump <file> [--resume]]",
+  await Effect.runPromise(
+    Console.error(
+      "usage: relevance.ts build|score <storage copy> [--label <name>] [--group <g>] " +
+        "[--tuning <json>] [--dump <file> [--resume]]",
+    ),
   );
   process.exit(2);
 }
-const setFile = join(storage, "relevance.jsonl");
+const setFile = path.join(storage, "relevance.jsonl");
+
+/** Runs a file operation outside the scoring program, on the process's platform services. */
+const onFiles = <A, E>(operation: (fs: FileSystem.FileSystem) => Effect.Effect<A, E>) =>
+  nodePlatform.runPromise(Effect.flatMap(FileSystem.FileSystem, operation));
+
+/** The lines of `text` that decode as `schema`: blank lines and a torn final line are skipped. */
+const decodedLines = <S extends Schema.Top & { readonly DecodingServices: never }>(
+  schema: S,
+  text: string,
+) => {
+  const decode = Schema.decodeUnknownEffect(Schema.fromJsonString(schema));
+  return Effect.map(
+    Effect.forEach(text.split("\n"), (line) => Effect.option(decode(line))),
+    Arr.getSomes,
+  );
+};
 
 // Query embeddings reused across scoring runs, keyed by the exact query text; the file lives in
 // the copy. A torn final line from an interrupted append fails to decode and is skipped.
 const CachedLine = Schema.Struct({ text: Schema.String, vector: Schema.String });
-const embedCacheFile = join(storage, "embed-cache.jsonl");
+const embedCacheFile = path.join(storage, "embed-cache.jsonl");
 /** Query text -> base64 vector; the whole `{text, vector}` line is appended on a cache miss. */
-const embedCache = new Map<string, string>();
-try {
-  for (const line of readFileSync(embedCacheFile, "utf8").split("\n"))
-    if (line.trim().length > 0)
-      try {
-        const entry = Schema.decodeUnknownSync(CachedLine)(JSON.parse(line));
-        embedCache.set(entry.text, entry.vector);
-      } catch {
-        // Torn final line.
-      }
-} catch {
-  // First run: no cache yet.
-}
+const embedCache = new Map(
+  (
+    await onFiles((fs) =>
+      fs.readFileString(embedCacheFile).pipe(
+        // First run: no cache yet.
+        Effect.orElseSucceed(() => ""),
+        Effect.flatMap((text) => decodedLines(CachedLine, text)),
+      ),
+    )
+  ).map((entry) => [entry.text, entry.vector] as const),
+);
 
 const Call = Schema.Struct({
   id: Schema.String,
-  seq: Schema.Number,
+  seq: Schema.Finite,
   run_id: Schema.NullOr(Schema.String),
   session_id: Schema.String,
   project_id: Schema.String,
@@ -120,8 +139,10 @@ const ResultIds = Schema.Struct({ matches: Schema.Array(Schema.Struct({ id: Sche
 const UserText = Schema.Array(Schema.Struct({ text: Schema.String }));
 const uuid = /"id"\s*:\s*"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"/gu;
 
+const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+
 /** Identifies a dumped row's query without carrying its text: memory text stays in the copy. */
-const querySha = (query: string) => createHash("sha256").update(query).digest("hex").slice(0, 12);
+const querySha = (query: string) => sha256(query).slice(0, 12);
 
 /** The JSON object after the tool name, or none when the recorded text is not one. */
 const argumentsOf = <S extends Schema.Top & { readonly DecodingServices: never }>(
@@ -148,9 +169,10 @@ const resultIds = (text: string) => {
   }
 };
 
-const build = () => {
-  const db = new DatabaseSync(join(storage, "agent.db"), { readOnly: true });
-  const calls = Schema.decodeUnknownSync(Schema.Array(Call))(
+const build = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const db = new DatabaseSync(path.join(storage, "agent.db"), { readOnly: true });
+  const calls = yield* Schema.decodeUnknownEffect(Schema.Array(Call))(
     db
       .prepare(
         `SELECT c.id, c.seq, c.run_id, c.session_id, c.project_id, c.text,
@@ -170,64 +192,72 @@ const build = () => {
   );
   const items: Item[] = [];
   const seen = { run: 0, result: 0, parsed: 0, listed: 0, opened: 0 };
-  calls.forEach((call, index) => {
-    if (call.tool !== "find_memory") return;
-    if (call.run_id === null) return;
-    seen.run++;
-    if (call.result === null) return;
-    seen.result++;
-    const input = argumentsOf(FindArguments, call.text);
-    if (Option.isNone(input) || input.value.query.trim().length === 0) return;
-    seen.parsed++;
-    const listed = new Set(resultIds(call.result));
-    if (listed.size > 0) seen.listed++;
-    const opened = new Set<string>();
-    for (const later of calls.slice(index + 1)) {
-      if (later.run_id !== call.run_id) continue;
-      if (later.tool === "find_memory") break;
-      Option.map(argumentsOf(OpenArguments, later.text), ({ id }) => opened.add(id));
-    }
-    if (opened.size > 0) seen.opened++;
-    const relevant = [...opened].filter((id) => listed.has(id) && exists.get(id) !== undefined);
-    if (relevant.length === 0) return;
-    const crossProject = input.value.crossProject ?? true;
-    items.push({
-      group: "find",
-      query: input.value.query,
-      projectId: call.project_id,
-      crossProject,
-      limit: 12,
-      relevant,
-    });
-    const users = Schema.decodeUnknownSync(UserText)(usersBefore.all(call.session_id, call.seq));
-    if (users.length > 0)
-      items.push({
-        group: "recall",
-        query: users
-          .map((user) => user.text)
-          .reverse()
-          .join("\n")
-          .slice(0, 6_000),
-        projectId: call.project_id,
-        crossProject: true,
-        limit: 16,
-        relevant,
-      });
-  });
+  yield* Effect.forEach(
+    calls,
+    (call, index) =>
+      Effect.gen(function* () {
+        if (call.tool !== "find_memory") return;
+        if (call.run_id === null) return;
+        seen.run++;
+        if (call.result === null) return;
+        seen.result++;
+        const input = argumentsOf(FindArguments, call.text);
+        if (Option.isNone(input) || input.value.query.trim().length === 0) return;
+        seen.parsed++;
+        const listed = new Set(resultIds(call.result));
+        if (listed.size > 0) seen.listed++;
+        const opened = new Set<string>();
+        for (const later of calls.slice(index + 1)) {
+          if (later.run_id !== call.run_id) continue;
+          if (later.tool === "find_memory") break;
+          Option.map(argumentsOf(OpenArguments, later.text), ({ id }) => opened.add(id));
+        }
+        if (opened.size > 0) seen.opened++;
+        const relevant = [...opened].filter((id) => listed.has(id) && exists.get(id) !== undefined);
+        if (relevant.length === 0) return;
+        const crossProject = input.value.crossProject ?? true;
+        items.push({
+          group: "find",
+          query: input.value.query,
+          projectId: call.project_id,
+          crossProject,
+          limit: 12,
+          relevant,
+        });
+        const users = yield* Schema.decodeUnknownEffect(UserText)(
+          usersBefore.all(call.session_id, call.seq),
+        );
+        if (users.length > 0)
+          items.push({
+            group: "recall",
+            query: users
+              .map((user) => user.text)
+              .reverse()
+              .join("\n")
+              .slice(0, 6_000),
+            projectId: call.project_id,
+            crossProject: true,
+            limit: 16,
+            relevant,
+          });
+      }),
+    { discard: true },
+  );
   // One item per distinct query and project; the later call's opened nodes win.
   const unique = [
     ...new Map(
       items.map((item) => [`${item.group}\u0000${item.projectId}\u0000${item.query}`, item]),
     ).values(),
   ];
-  writeFileSync(setFile, unique.map((item) => JSON.stringify(item)).join("\n") + "\n");
+  const lines = yield* Effect.forEach(unique, (item) => encodeJson(item));
+  yield* fs.writeFileString(setFile, lines.join("\n") + "\n");
   const count = (group: string) => unique.filter((item) => item.group === group).length;
-  console.log(JSON.stringify(seen));
-  console.log(
+  yield* Console.log(yield* encodeJson(seen));
+  yield* Console.log(
     `find_memory calls ${calls.filter((call) => call.tool === "find_memory").length}; items find ${count("find")} recall ${count("recall")}; relevant per item ${(unique.reduce((sum, item) => sum + item.relevant.length, 0) / Math.max(1, unique.length)).toFixed(2)}`,
   );
   db.close();
-};
+});
 
 /** One scored item's row: the query's hash and its scores; memory text stays out. */
 interface DumpRow {
@@ -255,45 +285,44 @@ const DumpedRow = Schema.Struct({
   query: Schema.String,
   failed: Schema.Boolean,
   degraded: Schema.Array(Schema.String),
-  reciprocal: Schema.Number,
-  at5: Schema.Number,
-  at12: Schema.Number,
-  at16: Schema.Number,
+  reciprocal: Schema.Finite,
+  at5: Schema.Finite,
+  at12: Schema.Finite,
+  at16: Schema.Finite,
 });
 
+/** A dump line: the run's label and the row, no memory text. */
+const dumpLine = (row: DumpRow) => JSON.stringify({ label, ...row }) + "\n";
+
 const score = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
   // A killed run's dump rows are kept: --resume skips the items the dump already holds and
   // appends after them; without it the dump starts over.
   const DumpedKey = Schema.Struct({ group: Schema.String, query: Schema.String });
-  const doneKeys = new Set<string>();
-  if (resume && dumpFile !== undefined) {
-    try {
-      for (const line of readFileSync(dumpFile, "utf8").split("\n")) {
-        if (line.trim().length === 0) continue;
-        try {
-          const row = Schema.decodeUnknownSync(DumpedKey)(JSON.parse(line));
-          doneKeys.add(`${row.group}|${row.query}`);
-        } catch {
-          // Torn final line from a killed append.
-        }
-      }
-    } catch {
-      // Nothing dumped yet.
-    }
-  }
-  const items = readFileSync(setFile, "utf8")
-    .split("\n")
-    .filter((line) => line.trim().length > 0)
-    .map((line) => Schema.decodeUnknownSync(Item)(JSON.parse(line)))
+  const dumped =
+    resume && dumpFile !== undefined
+      ? yield* fs.readFileString(dumpFile).pipe(
+          // Nothing dumped yet.
+          Effect.orElseSucceed(() => ""),
+          Effect.flatMap((text) => decodedLines(DumpedKey, text)),
+        )
+      : [];
+  const doneKeys = new Set(dumped.map((row) => `${row.group}|${row.query}`));
+  const decodeItem = Schema.decodeUnknownEffect(Schema.fromJsonString(Item));
+  const items = (yield* Effect.forEach(
+    (yield* fs.readFileString(setFile)).split("\n").filter((line) => line.trim().length > 0),
+    (line) => decodeItem(line),
+  ))
     .filter((item) => onlyGroup === undefined || item.group === onlyGroup)
     .filter((item) => !doneKeys.has(`${item.group}|${querySha(item.query)}`));
   const search = yield* MemorySearch;
   // Rows land in the dump as they finish: a long run shows progress, and a killed run keeps
   // the rows it already scored. Memory text stays out: ids and scores only.
-  const dump = (row: DumpRow) => {
-    if (dumpFile !== undefined) appendFileSync(dumpFile, JSON.stringify({ label, ...row }) + "\n");
-  };
-  if (dumpFile !== undefined && !resume) writeFileSync(dumpFile, "");
+  const dump = (row: DumpRow) =>
+    dumpFile === undefined
+      ? Effect.void
+      : fs.writeFileString(dumpFile, dumpLine(row), { flag: "a" });
+  if (dumpFile !== undefined && !resume) yield* fs.writeFileString(dumpFile, "");
   const rows = yield* Effect.forEach(
     items,
     (item) =>
@@ -338,7 +367,7 @@ const score = Effect.gen(function* () {
             }),
           ),
           // Append each row as it settles, success or failure.
-          Effect.tap((row) => Effect.sync(() => dump(row))),
+          Effect.tap(dump),
         ),
     { concurrency },
   );
@@ -346,20 +375,12 @@ const score = Effect.gen(function* () {
     (values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length)).toFixed(3);
   // A resumed run scored only its remaining items; the table reads the whole dump instead (the
   // last row per query wins, a torn final line is skipped), so it stays the set's score.
-  const summaryRows = new Map<string, ScoredRow>();
-  if (dumpFile === undefined) {
-    for (const row of rows) summaryRows.set(`${row.group}|${row.query}`, row);
-  } else {
-    for (const line of readFileSync(dumpFile, "utf8").split("\n")) {
-      if (line.trim().length === 0) continue;
-      try {
-        const row = Schema.decodeUnknownSync(DumpedRow)(JSON.parse(line));
-        summaryRows.set(`${row.group}|${row.query}`, row);
-      } catch {
-        // Torn final line from a killed append.
-      }
-    }
-  }
+  const summaryRows = new Map<string, ScoredRow>(
+    (dumpFile === undefined
+      ? rows
+      : yield* decodedLines(DumpedRow, yield* fs.readFileString(dumpFile))
+    ).map((row) => [`${row.group}|${row.query}`, row] as const),
+  );
   for (const group of new Set([...summaryRows.values()].map((row) => row.group))) {
     const selected = [...summaryRows.values()].filter((row) => row.group === group);
     yield* Console.log(
@@ -373,24 +394,28 @@ const score = Effect.gen(function* () {
  * as a non-local runtime: the app then starts no background backfill or GPU check, which would
  * write to the copy and, failing there, block searches.
  */
-const searchEmbedder = () => {
-  const db = new DatabaseSync(join(storage, "agent.db"), { readOnly: true });
-  const top = Schema.decodeUnknownSync(
-    Schema.Array(Schema.Struct({ embedder: Schema.String, n: Schema.Number })),
+const searchEmbedder = Effect.gen(function* () {
+  const db = new DatabaseSync(path.join(storage, "agent.db"), { readOnly: true });
+  const [top] = yield* Schema.decodeUnknownEffect(
+    Schema.NonEmptyArray(Schema.Struct({ embedder: Schema.String, n: Schema.Finite })),
   )(
     db
       .prepare(
         "SELECT embedder, count(*) AS n FROM node_vectors GROUP BY embedder ORDER BY n DESC LIMIT 1",
       )
       .all(),
-  )[0]!;
-  db.close();
+  ).pipe(
+    Effect.ensuring(Effect.sync(() => db.close())),
+    // A copy without vectors cannot be scored.
+    Effect.orDie,
+  );
   const variant = top.embedder.includes("@fp32/") ? "fp32" : "quint8";
-  console.log(`embedder ${top.embedder} (${top.n} vectors) -> ${variant}`);
+  yield* Console.log(`embedder ${top.embedder} (${top.n} vectors) -> ${variant}`);
   return Layer.effect(
     Embedder,
     Effect.gen(function* () {
       const embedder = yield* Embedder;
+      const fs = yield* FileSystem.FileSystem;
       if (embedder.identity !== top.embedder)
         return yield* Effect.die(`embedder ${embedder.identity} does not match the copy`);
       const vectorBytes = embedder.dimensions * 4;
@@ -423,9 +448,13 @@ const searchEmbedder = () => {
                 computed[index]!.byteLength,
               ).toString("base64"),
             }));
-            appendFileSync(
-              embedCacheFile,
-              entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n",
+            // The cache is the copy's; failing to write it is the run's failure, as a thrown append was.
+            yield* Effect.orDie(
+              fs.writeFileString(
+                embedCacheFile,
+                entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n",
+                { flag: "a" },
+              ),
             );
             entries.forEach((entry) => embedCache.set(entry.text, entry.vector));
             const computedByText = new Map(
@@ -439,18 +468,21 @@ const searchEmbedder = () => {
           }),
       };
     }),
-  ).pipe(Layer.provide(Embedder.localVariant(variant)), Layer.provide(StorageRoot.layer(storage)));
-};
+  ).pipe(
+    Layer.provide([Embedder.localVariant(variant), NodeFileSystem.layer]),
+    Layer.provide(StorageRoot.layer(storage)),
+  );
+}).pipe(Layer.unwrap);
 
-if (mode === "build") build();
+if (mode === "build") await nodePlatform.runPromise(build);
 else {
   // Inside the copy: the sandbox may refuse the system temp folder.
-  const home = join(storage, "eval-home");
-  mkdirSync(home, { recursive: true });
+  const home = path.join(storage, "eval-home");
+  await onFiles((fs) => fs.makeDirectory(home, { recursive: true }));
   // The evaluation's tuning override is only present when --tuning was given
   // (exactOptionalPropertyTypes), so the two shapes are built whole.
   const baseOptions: import("../src/layers.ts").MemoryAgentLayerOptions = {
-    embedder: searchEmbedder(),
+    embedder: searchEmbedder,
     interpretAutomatically: false,
     summarizeAutomatically: false,
     importsWatching: false,
@@ -463,16 +495,18 @@ else {
     tuning === undefined ? baseOptions : { ...baseOptions, searchTuning: tuning };
   await runNativeEffect(
     Effect.scoped(
-      Effect.flatMap(Layer.build(memoryAgentLayer(storage, layerOptions)), (services) =>
-        Effect.provideContext(
-          Effect.andThen(
-            Console.log(
-              "| label | group | n | failed | degraded | MRR | Recall@5 | Recall@12 | Recall@16 |\n|---|---|---|---|---|---|---|---|---|",
+      Effect.flatMap(
+        Layer.build(Layer.merge(memoryAgentLayer(storage, layerOptions), NodeFileSystem.layer)),
+        (services) =>
+          Effect.provideContext(
+            Effect.andThen(
+              Console.log(
+                "| label | group | n | failed | degraded | MRR | Recall@5 | Recall@12 | Recall@16 |\n|---|---|---|---|---|---|---|---|---|",
+              ),
+              score,
             ),
-            score,
+            services,
           ),
-          services,
-        ),
       ),
     ),
   );

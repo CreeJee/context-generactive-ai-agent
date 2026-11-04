@@ -1,4 +1,4 @@
-import { DateTime, Effect, HashSet } from "effect";
+import { DateTime, Effect, Function as EffectFunction, HashSet } from "effect";
 import type { OrchestratorNote, StoredUserMessage } from "../chat-store/schema.ts";
 import type { ParentNotificationView } from "../work-trace/store.ts";
 
@@ -22,12 +22,14 @@ export const endedTasks = (
  * reads it as a user turn, so the conversation never ends on the last answer, which Anthropic
  * refuses as a prefill. It is never a user node, so it authorizes nothing the user must.
  */
-export const orchestratorMessage = (
-  id: string,
-  note: OrchestratorNote,
-  texts: ReadonlyArray<string>,
-) =>
-  Effect.map(DateTime.now, (now): typeof StoredUserMessage.Type => ({
+export const orchestratorMessage: {
+  (
+    note: OrchestratorNote,
+    texts: ReadonlyArray<string>,
+  ): (id: string) => ReturnType<typeof orchestratorMessageBody>;
+} & typeof orchestratorMessageBody = EffectFunction.dual(3, orchestratorMessageBody);
+function orchestratorMessageBody(id: string, note: OrchestratorNote, texts: ReadonlyArray<string>) {
+  return Effect.map(DateTime.now, (now): typeof StoredUserMessage.Type => ({
     role: "user",
     id,
     createdAt: DateTime.formatIso(now),
@@ -37,3 +39,4 @@ export const orchestratorMessage = (
     ].join("\n\n")}\n</orchestrator>`,
     orchestrator: note,
   }));
+}

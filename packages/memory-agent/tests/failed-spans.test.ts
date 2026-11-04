@@ -1,5 +1,5 @@
-import { describe, expect, it } from "@effect/vitest";
-import { Data, Effect } from "effect";
+import { expect, layer } from "@effect/vitest";
+import { Data, Deferred, Effect, Layer, Schedule } from "effect";
 import {
   FailedSpans,
   failedSpansLayer,
@@ -9,7 +9,8 @@ import {
 
 class ProviderRejected extends Data.TaggedError("ProviderRejected")<{}> {}
 
-describe("failed span recorder", () => {
+// Live services: a worker's spans reach the owner through a real channel, a tick later.
+layer(failedSpansLayer, { excludeTestServices: true })("failed span recorder", (it) => {
   it.effect(
     "keeps a failure once where it began, linked to its run, without string attributes",
     () =>
@@ -17,7 +18,7 @@ describe("failed span recorder", () => {
         const run = Effect.gen(function* () {
           yield* Effect.annotateCurrentSpan(runSpanAttribute, "run-1");
           yield* Effect.void.pipe(Effect.withSpan("Memory.search"));
-          yield* Effect.fail(new ProviderRejected()).pipe(
+          return yield* Effect.fail(new ProviderRejected()).pipe(
             Effect.withSpan("LanguageModel.streamText", {
               attributes: { "http.status": 400, url: "http://secret/x", streamed: false },
             }),
@@ -35,40 +36,37 @@ describe("failed span recorder", () => {
             attributes: { "http.status": 400, streamed: false },
           },
         ]);
-      }).pipe(Effect.provide(failedSpansLayer)),
+      }),
   );
 
-  it.live("takes in what a worker thread's recorder sends, under the trace it ran in", () =>
+  it.effect("takes in what a worker thread's recorder sends, under the trace it ran in", () =>
     Effect.gen(function* () {
       const owner = yield* FailedSpans;
-      let traceId = "";
+      const worker = yield* Layer.build(workerFailedSpansLayer);
+      const trace = yield* Deferred.make<string>();
       // What a worker does: its own recorder keeps nothing for the report, it sends instead.
       yield* Effect.currentSpan.pipe(
-        Effect.tap((span) =>
-          Effect.sync(() => {
-            traceId = span.traceId;
-          }),
-        ),
+        Effect.tap((span) => Deferred.succeed(trace, span.traceId)),
         Effect.andThen(Effect.fail(new ProviderRejected())),
         Effect.withSpan("Embedder.embed", { attributes: { texts: 8 } }),
         Effect.exit,
-        Effect.provide(workerFailedSpansLayer),
+        Effect.provide(worker),
       );
 
+      const traceId = yield* Deferred.await(trace);
       // The channel delivers between threads, so the owner sees it a tick later.
-      const arrived = yield* Effect.gen(function* () {
-        for (let attempt = 0; attempt < 100; attempt += 1) {
-          const spans = yield* owner.ofTrace(traceId);
-          if (spans.length > 0) return spans;
-          yield* Effect.sleep("10 millis");
-        }
-        return [];
-      });
+      const arrived = yield* owner.ofTrace(traceId).pipe(
+        Effect.repeat({
+          until: (spans) => spans.length > 0,
+          times: 99,
+          schedule: Schedule.spaced("10 millis"),
+        }),
+      );
       expect(
         arrived.map(({ path, failure, attributes }) => ({ path, failure, attributes })),
       ).toEqual([
         { path: ["Embedder.embed"], failure: "ProviderRejected", attributes: { texts: 8 } },
       ]);
-    }).pipe(Effect.provide(failedSpansLayer)),
+    }),
   );
 });

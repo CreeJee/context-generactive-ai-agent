@@ -144,4 +144,4 @@ const server = RpcServer.layer(KiwiRpcs, { concurrency: 1 }).pipe(
 
 // The worker's failed spans go to the owner thread, which puts them in defect notices and
 // reports under the run that caused them.
-await runNativeEffect(Effect.provide(Layer.launch(server), workerFailedSpansLayer));
+await runNativeEffect(Layer.launch(Layer.provide(server, workerFailedSpansLayer)));
