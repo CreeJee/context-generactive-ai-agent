@@ -49,6 +49,7 @@
 ## Side Effects
 
 - SQLite 읽기·쓰기(`effect/sql` `SqlClient`): task, invocation, attempt, run event, heartbeat, artifact, 부모 알림, final answer claim, lifecycle operation을 다룬다.
+- 대화 삭제는 그 대화의 thread별 `chat_metadata`, `workflow_executions`(목록 포함), `turn_summary_blocks`, 작업의 `background_task_results`를 지운다. 작업 삭제는 그 작업의 `background_task_results`를 지운다.
 - in-memory `PubSub.unbounded<TraceChange>()`: 새 이벤트(sessionId, cursor)와 heartbeat progress(sessionId)를 publish한다. `waitForChangeEffect`가 이를 기다린다.
 - `SecureRandom`과 `NodeCrypto.layer`로 id를 만든다.
 - `Clock`과 `DateTime`으로 현재 시각을 읽는다.

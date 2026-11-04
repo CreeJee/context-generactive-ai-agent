@@ -11,7 +11,7 @@ import {
   Schema,
 } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
-import { type ChatMetadata, ChatMetadataFailed } from "../chat-store/metadata.ts";
+import { type ChatMetadata, ChatMetadataFailed, SummaryBlock } from "../chat-store/metadata.ts";
 import { interruptContinuationLostCode, type RunStatus } from "../agent/run-state.ts";
 import {
   StoredInterruptPayload,
@@ -499,17 +499,40 @@ const make = Effect.gen(function* () {
       Effect.asVoid(sql`DELETE FROM chat_metadata WHERE namespace = ${namespace} AND key = ${key}`),
   };
 
+  const summaryRows = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: SummaryBlock,
+    execute: (sessionId) => sql`SELECT turn_end AS end, next_turn_node_id AS nextTurnNodeId, text
+      FROM turn_summary_blocks WHERE session_id = ${sessionId} ORDER BY position`,
+  });
+  const metadataFailed = (cause: unknown) => ChatMetadataFailed.make({ cause });
+
   /** The same rows as compaction, model handoff and context usage use them. */
   const chatMetadata: ChatMetadata = {
     get: (namespace, key) =>
-      metadata.get(namespace, key).pipe(
-        Effect.map(Option.getOrUndefined),
-        Effect.mapError((cause) => ChatMetadataFailed.make({ cause })),
-      ),
+      metadata
+        .get(namespace, key)
+        .pipe(Effect.map(Option.getOrUndefined), Effect.mapError(metadataFailed)),
     set: (namespace, key, value) =>
-      Effect.mapError(metadata.set(namespace, key, value), (cause) =>
-        ChatMetadataFailed.make({ cause }),
-      ),
+      Effect.mapError(metadata.set(namespace, key, value), metadataFailed),
+    summaries: (sessionId) => Effect.mapError(summaryRows(sessionId), metadataFailed),
+    replaceSummaries: (sessionId, from, blocks) =>
+      sql
+        .withTransaction(
+          Effect.andThen(
+            sql`DELETE FROM turn_summary_blocks
+              WHERE session_id = ${sessionId} AND position >= ${from}`,
+            Effect.forEach(
+              blocks,
+              (block, index) => sql`INSERT INTO turn_summary_blocks
+                  (session_id, position, turn_end, next_turn_node_id, text)
+                VALUES (${sessionId}, ${from + index}, ${block.end}, ${block.nextTurnNodeId},
+                  ${block.text})`,
+              { discard: true },
+            ),
+          ),
+        )
+        .pipe(Effect.mapError(metadataFailed)),
   };
 
   return {

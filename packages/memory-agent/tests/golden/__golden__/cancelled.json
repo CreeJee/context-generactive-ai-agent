@@ -2,8 +2,22 @@
   "acknowledgements": [],
   "artifacts": [],
   "attempts": [],
+  "backgroundResults": [],
   "bindings": [],
   "events": [],
+  "execution": [
+    {
+      "detail": null,
+      "entries": [],
+      "goal_version": null,
+      "no_progress_runs": null,
+      "plan_version": null,
+      "reason": "user",
+      "retry_at": null,
+      "run_id": null,
+      "state": "stopped"
+    }
+  ],
   "interrupts": [],
   "ledger": [],
   "metadata": [
@@ -13,14 +27,6 @@
       "value": {
         "_tag": "baseline",
         "target": "[\"openai\",\"fast-1\",null]"
-      }
-    },
-    {
-      "key": "<session>",
-      "namespace": "memory-agent/workflow-execution",
-      "value": {
-        "_tag": "stopped",
-        "reason": "user"
       }
     }
   ],
@@ -56,6 +62,7 @@
     }
   ],
   "subagents": [],
+  "summaries": [],
   "tasks": [],
   "threads": [
     {

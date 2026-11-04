@@ -20,7 +20,12 @@ const noSources = lookupSources({ toolResultId: () => null, nodeText: () => null
 const fresh = { manual: { clearedThrough: 0, summarizedTurns: 0 }, blocks: [] };
 
 /** A session with nothing stored about compacting it. */
-const noMetadata: ChatMetadata = { get: () => Effect.undefined, set: () => Effect.void };
+const noMetadata: ChatMetadata = {
+  get: () => Effect.undefined,
+  set: () => Effect.void,
+  summaries: () => Effect.succeed([]),
+  replaceSummaries: () => Effect.void,
+};
 
 /** What the model is sent on a request over `messages` of a session with nothing stored. */
 const firstSent = (

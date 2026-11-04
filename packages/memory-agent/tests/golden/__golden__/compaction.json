@@ -2,8 +2,10 @@
   "acknowledgements": [],
   "artifacts": [],
   "attempts": [],
+  "backgroundResults": [],
   "bindings": [],
   "events": [],
+  "execution": [],
   "interrupts": [],
   "ledger": [],
   "metadata": [
@@ -21,19 +23,6 @@
       "value": {
         "_tag": "baseline",
         "target": "[\"openai\",\"fast-1\",null]"
-      }
-    },
-    {
-      "key": "<session>",
-      "namespace": "memory-agent/turn-summaries",
-      "value": {
-        "blocks": [
-          {
-            "end": 2,
-            "nextTurnNodeId": "<id-16>",
-            "text": "- 사용자 턴 2개 (node <id-17>)"
-          }
-        ]
       }
     }
   ],
@@ -231,6 +220,13 @@
     }
   ],
   "subagents": [],
+  "summaries": [
+    {
+      "next_turn_node_id": "<id-16>",
+      "text": "- 사용자 턴 2개 (node <id-17>)",
+      "turn_end": 2
+    }
+  ],
   "tasks": [],
   "threads": [
     {

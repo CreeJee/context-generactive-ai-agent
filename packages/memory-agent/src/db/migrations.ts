@@ -426,6 +426,133 @@ export const attemptPendingToolCallsMigration = `
   ALTER TABLE agent_run_attempts DROP COLUMN pending_tool_call_ids;
 `;
 
+/** The step that moves what tasks and sessions kept in chat_metadata to tables of their own. */
+export const sessionStateTablesMigration = `
+  -- What a background task, a session's workflow execution and its turn summaries keep, each in
+  -- its own table (decisions.md "세션 곁 상태는 제 표에 둔다 (2026-11-04)"). They were JSON
+  -- documents in chat_metadata, which no deletion followed: a value whose owner is gone is not
+  -- moved, and the store reads an absent one as nothing kept.
+
+  -- What get_background_result returns for a task. A value that does not decode failed every
+  -- read; it is not moved, and the task reads as one without a saved result.
+  CREATE TABLE background_task_results (
+    task_id TEXT PRIMARY KEY REFERENCES work_tasks(id) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK (status IN ('completed', 'failed', 'cancelled')),
+    result TEXT NOT NULL
+  );
+  INSERT INTO background_task_results (task_id, status, result)
+    SELECT m.key, json_extract(m.value, '$.status'), json_extract(m.value, '$.result')
+    FROM chat_metadata m JOIN work_tasks t ON t.id = m.key
+    WHERE m.namespace = 'background-task-result'
+      AND json_type(m.value, '$.status') = 'text'
+      AND json_extract(m.value, '$.status') IN ('completed', 'failed', 'cancelled')
+      AND json_type(m.value, '$.result') = 'text';
+
+  -- A session's automatic continuation: its case, and the fields that case has. A value whose
+  -- case misses one of them failed every read; it is not moved, and the session reads as idle.
+  CREATE TABLE workflow_executions (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    state TEXT NOT NULL
+      CHECK (state IN ('idle', 'running', 'ready', 'retrying', 'blocked', 'stopped')),
+    run_id TEXT CHECK ((run_id IS NOT NULL) = (state IN ('running', 'ready', 'retrying', 'blocked'))),
+    goal_version INTEGER
+      CHECK ((goal_version IS NOT NULL) = (state IN ('running', 'ready', 'retrying'))),
+    plan_version INTEGER
+      CHECK ((plan_version IS NOT NULL) = (state IN ('running', 'ready', 'retrying'))),
+    no_progress_runs INTEGER
+      CHECK ((no_progress_runs IS NOT NULL) = (state IN ('running', 'ready', 'retrying'))),
+    retry_at REAL CHECK ((retry_at IS NOT NULL) = (state = 'retrying')),
+    reason TEXT CHECK ((reason IS NOT NULL) = (state IN ('blocked', 'stopped'))),
+    detail TEXT CHECK ((detail IS NOT NULL) = (state = 'blocked'))
+  );
+  CREATE INDEX workflow_executions_state ON workflow_executions(state);
+  -- The lists of a continuing execution's progress, or a blocked one's evidence, in order.
+  CREATE TABLE workflow_execution_entries (
+    session_id TEXT NOT NULL REFERENCES workflow_executions(session_id) ON DELETE CASCADE,
+    list TEXT NOT NULL
+      CHECK (list IN ('completed_step', 'progress_evidence', 'tool_result', 'blocker_evidence')),
+    position INTEGER NOT NULL,
+    value TEXT NOT NULL,
+    PRIMARY KEY (session_id, list, position)
+  );
+  -- A field of its case with the wrong type is left out, so the CHECKs skip the value; a field
+  -- of another case was never read.
+  WITH stored AS (
+    SELECT m.key, m.value, json_extract(m.value, '$._tag') AS tag
+    FROM chat_metadata m JOIN sessions s ON s.id = m.key
+    WHERE m.namespace = 'memory-agent/workflow-execution' AND json_type(m.value, '$._tag') = 'text'
+  )
+  INSERT OR IGNORE INTO workflow_executions
+    (session_id, state, run_id, goal_version, plan_version, no_progress_runs, retry_at, reason,
+     detail)
+    SELECT key, tag,
+      CASE WHEN tag IN ('running', 'ready', 'retrying', 'blocked')
+        AND json_type(value, '$.runId') = 'text' THEN json_extract(value, '$.runId') END,
+      CASE WHEN tag IN ('running', 'ready', 'retrying')
+        AND json_type(value, '$.goalVersion') = 'integer'
+        THEN json_extract(value, '$.goalVersion') END,
+      CASE WHEN tag IN ('running', 'ready', 'retrying')
+        AND json_type(value, '$.planVersion') = 'integer'
+        THEN json_extract(value, '$.planVersion') END,
+      CASE WHEN tag IN ('running', 'ready', 'retrying')
+        AND json_type(value, '$.noProgressRuns') = 'integer'
+        THEN json_extract(value, '$.noProgressRuns') END,
+      CASE WHEN tag = 'retrying' AND json_type(value, '$.retryAt') IN ('integer', 'real')
+        THEN json_extract(value, '$.retryAt') END,
+      CASE WHEN tag IN ('blocked', 'stopped') AND json_type(value, '$.reason') = 'text'
+        THEN json_extract(value, '$.reason') END,
+      CASE WHEN tag = 'blocked' AND json_type(value, '$.detail') = 'text'
+        THEN json_extract(value, '$.detail') END
+    FROM stored;
+  INSERT INTO workflow_execution_entries (session_id, list, position, value)
+    SELECT e.session_id, l.list, i.key, i.value
+    FROM workflow_executions e
+    JOIN chat_metadata m ON m.namespace = 'memory-agent/workflow-execution' AND m.key = e.session_id
+    JOIN (SELECT 'completed_step' AS list, '$.progress.completedSteps' AS path, 0 AS blocked
+      UNION ALL SELECT 'progress_evidence', '$.progress.evidence', 0
+      UNION ALL SELECT 'tool_result', '$.progress.toolResults', 0
+      UNION ALL SELECT 'blocker_evidence', '$.evidence', 1) l
+      ON l.blocked = (e.state = 'blocked') AND json_type(m.value, l.path) = 'array'
+    JOIN json_each(m.value, l.path) i
+    WHERE e.state NOT IN ('idle', 'stopped') AND i.type = 'text';
+
+  -- A session's turn summaries, in the order compaction lines them up. A value that does not
+  -- decode read as none; a block whose end is not a whole turn ended the ones that line up.
+  CREATE TABLE turn_summary_blocks (
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    turn_end INTEGER NOT NULL,
+    next_turn_node_id TEXT NOT NULL,
+    text TEXT NOT NULL,
+    PRIMARY KEY (session_id, position)
+  );
+  WITH stored AS (
+    SELECT m.key AS session_id, b.key AS position, m.value, b.fullkey AS path
+    FROM chat_metadata m JOIN sessions s ON s.id = m.key,
+      json_each(CASE WHEN json_type(m.value, '$.blocks') = 'array' THEN m.value END, '$.blocks') b
+    WHERE m.namespace = 'memory-agent/turn-summaries'
+  )
+  INSERT INTO turn_summary_blocks (session_id, position, turn_end, next_turn_node_id, text)
+    SELECT session_id, position, json_extract(value, path || '.end'),
+      json_extract(value, path || '.nextTurnNodeId'), json_extract(value, path || '.text')
+    FROM stored s
+    WHERE NOT EXISTS (SELECT 1 FROM stored w WHERE w.session_id = s.session_id
+        AND (coalesce(json_type(w.value, w.path || '.end'), '') NOT IN ('integer', 'real')
+          OR json_type(w.value, w.path || '.nextTurnNodeId') IS NOT 'text'
+          OR json_type(w.value, w.path || '.text') IS NOT 'text'))
+      AND NOT EXISTS (SELECT 1 FROM stored w WHERE w.session_id = s.session_id
+        AND w.position <= s.position AND json_type(w.value, w.path || '.end') <> 'integer');
+
+  DELETE FROM chat_metadata WHERE namespace IN
+    ('background-task-result', 'memory-agent/workflow-execution', 'memory-agent/turn-summaries');
+  -- The thread state of conversations whose deletion left it behind.
+  DELETE FROM chat_metadata
+    WHERE namespace IN ('memory-agent/context-usage', 'memory-agent/consumed-cold-usage',
+        'memory-agent/manual-compaction', 'memory-agent/model-handoff')
+      AND key NOT IN (SELECT thread_id FROM chat_threads)
+      AND key NOT IN (SELECT id FROM sessions);
+`;
+
 /**
  * Ordered schema steps. `PRAGMA user_version` records how many have been applied.
  * Append new steps; never edit an applied one.
@@ -2446,6 +2573,7 @@ export const migrations: readonly string[] = [
   ownerRpcLedgerMigration,
   executionSubjectsMigration,
   attemptPendingToolCallsMigration,
+  sessionStateTablesMigration,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

@@ -2,8 +2,10 @@
   "acknowledgements": [],
   "artifacts": [],
   "attempts": [],
+  "backgroundResults": [],
   "bindings": [],
   "events": [],
+  "execution": [],
   "interrupts": [
     {
       "interrupt_id": "approval_mixed-skill@<session>",
@@ -329,6 +331,7 @@
     }
   ],
   "subagents": [],
+  "summaries": [],
   "tasks": [],
   "threads": [
     {

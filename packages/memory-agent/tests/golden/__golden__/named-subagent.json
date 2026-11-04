@@ -29,8 +29,10 @@
       "thread_id": "subagent-<id-3>"
     }
   ],
+  "backgroundResults": [],
   "bindings": [],
   "events": [],
+  "execution": [],
   "interrupts": [],
   "ledger": [],
   "metadata": [
@@ -438,6 +440,7 @@
       "status": "completed"
     }
   ],
+  "summaries": [],
   "tasks": [
     {
       "agent_id": "<id-3>",

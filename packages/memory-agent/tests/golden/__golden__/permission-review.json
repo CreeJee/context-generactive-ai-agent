@@ -2,8 +2,10 @@
   "acknowledgements": [],
   "artifacts": [],
   "attempts": [],
+  "backgroundResults": [],
   "bindings": [],
   "events": [],
+  "execution": [],
   "interrupts": [
     {
       "interrupt_id": "interrupt-<id-8>",
@@ -160,6 +162,7 @@
     }
   ],
   "subagents": [],
+  "summaries": [],
   "tasks": [],
   "threads": [
     {

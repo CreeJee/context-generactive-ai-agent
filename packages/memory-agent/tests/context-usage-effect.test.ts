@@ -30,6 +30,8 @@ it.effect("retains cold-observation identity and excludes consumed or legacy rep
             Option.getOrNull(Schema.decodeUnknownOption(Schema.String)(value)),
           );
         }),
+      summaries: () => Effect.succeed([]),
+      replaceSummaries: () => Effect.void,
     };
     const input = { metadata, threadId: "thread" };
     expect(yield* pendingColdObservationEffect(input)).toBe("observation");

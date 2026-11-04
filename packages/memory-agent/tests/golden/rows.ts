@@ -174,6 +174,23 @@ const conversationRows = Effect.fnUntraced(function* (sessionId: string) {
        ORDER BY namespace, key`,
       ...ids,
     ),
+    execution: yield* rows(
+      `SELECT state, run_id, goal_version, plan_version, no_progress_runs, retry_at, reason, detail,
+         (SELECT json_group_array(json_array(x.list, x.value) ORDER BY x.list, x.position)
+           FROM workflow_execution_entries x WHERE x.session_id = e.session_id) AS entries
+       FROM workflow_executions e WHERE e.session_id = ?`,
+      sessionId,
+    ),
+    summaries: yield* rows(
+      `SELECT turn_end, next_turn_node_id, text FROM turn_summary_blocks WHERE session_id = ?
+       ORDER BY position`,
+      sessionId,
+    ),
+    backgroundResults: yield* rows(
+      `SELECT r.task_id, r.status, r.result FROM background_task_results r
+       JOIN work_tasks t ON t.id = r.task_id WHERE t.origin_session_id = ? ORDER BY t.rowid`,
+      sessionId,
+    ),
     nodes: yield* rows(
       "SELECT kind, run_id, text, detail FROM nodes WHERE session_id = ? ORDER BY seq",
       sessionId,

@@ -20,7 +20,8 @@
 - `StoredInterruptPayload` — `chat_interrupts.payload`. `reason`(`tool_call` | `permission_review`)으로 판별하는 AG-UI 1.0 `Interrupt` Schema와 타입
 - `StoredInterruptResponse` — `chat_interrupts.response`. `approved: true`(선택 `editedArgs`) 또는 `approved: false` 유니온
 - `ChatMetadataFailed` — chat metadata 읽기·쓰기 실패 `Schema.TaggedError`(`cause`는 Defect)
-- `ChatMetadata` — `get(namespace, key)`/`set(namespace, key, value: JsonValue)` 인터페이스. `get`은 디코딩하지 않은 `unknown`을 돌려주고, 없으면 absent. `RunStore`가 이 행을 보관
+- `ChatMetadata` — `get(namespace, key)`/`set(namespace, key, value: JsonValue)`와 세션 턴 요약의 `summaries(sessionId)`/`replaceSummaries(sessionId, from, blocks)` 인터페이스. `get`은 디코딩하지 않은 `unknown`을 돌려주고, 없으면 absent. `RunStore`가 `chat_metadata`와 `turn_summary_blocks` 행을 보관
+- `SummaryBlock` — 연속한 사용자 턴의 요약 한 블록(`end`, `nextTurnNodeId`, `text`) Schema
 - `migrateMessage` — 메시지의 `metadata.tanstack` 중 `createdAt`·`model`·`source`·`finishReason`·`stopReason`을 최상위로 올리고 TanStack 키와 toolCall metadata를 제거하는 순수 변환
 - `migrateUsage` — TanStack `TokenUsage`를 AG-UI 1.0 usage로 바꾸는 dual 함수. `inputExcludesCache`면 캐시 읽기·쓰기를 입력에 더하고 total을 다시 계산
 - `migrateInterruptPayload` — interrupt payload의 `tanstack:interruptPayload`를 `metadata.payload`로 옮기고 `tanstack:interruptBinding`을 제거

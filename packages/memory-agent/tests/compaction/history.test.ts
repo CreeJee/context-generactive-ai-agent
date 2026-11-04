@@ -5,7 +5,6 @@ import {
   clearedOutput,
   compactionHook,
   estimateConversation,
-  turnSummariesNamespace,
   type Budget,
 } from "../../src/agent/compaction.ts";
 import {
@@ -284,13 +283,11 @@ testAgent()("compaction over recorded history", (it) => {
           long,
         ]);
         const summaries = (blocks: readonly { end: number; text: string }[]) =>
-          metadata.set(turnSummariesNamespace, at.sessionId, {
-            blocks: blocks.map(({ end, text }) => ({
-              end,
-              nextTurnNodeId: userNodes[end]!.id,
-              text,
-            })),
-          });
+          metadata.replaceSummaries(
+            at.sessionId,
+            0,
+            blocks.map(({ end, text }) => ({ end, nextTurnNodeId: userNodes[end]!.id, text })),
+          );
         const sent = (budget: Budget, conversation: ReadonlyArray<StoredMessage>) =>
           nextRequest(conversation, at.sessionId, budget);
         const overBudget: Budget = { compactAt: 1_000, leaveOutAt: noLimit };

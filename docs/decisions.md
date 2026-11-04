@@ -3943,3 +3943,20 @@
   - 화면의 `pendingToolCallIds`는 rowid 순서, 곧 시작한 순서로 모은다. 같은 호출이 두 번 시작해도 한 번만 남는다. 전에도 끝나면 둘 다 지워졌다.
   - 없는 attempt의 미결 호출을 물으면 오류 대신 빈 목록이다. 부르는 곳은 모두 있는 attempt를 묻는다.
 - 마이그레이션: 배열의 문자열 원소를 순서대로 옮기고 열을 지운다. 문자열이 아닌 원소는 도구 호출이 쓴 적이 없어 버린다. 전에는 읽을 때 decode 오류였다. 사본 측정: 시도 4,568개 중 5개가 미결 호출을 가졌고, 모두 같은 목록으로 옮겨졌다. 10ms였다.
+
+## 세션 곁 상태는 제 표에 둔다 (2026-11-04)
+
+- 계기: 정규화 안 된 표 목록 6번(같은 날). `chat_metadata`는 namespace·key·JSON 값의 범용 표였다. 백그라운드 작업 결과, 세션의 workflow 실행 상태, 턴 요약도 여기 있었다. 실행 상태는 `json_extract(value, '$._tag')`로 찾았고, 턴 요약은 블록이 늘 때마다 배열 전체를 다시 썼다. 주인을 가리키는 FK가 없어서 대화를 지워도 행이 남았다. 사본에서 실행 상태 151개 중 31개, 요약 31개 중 2개가 지워진 대화의 것이었다.
+- 결정:
+  - `background_task_results(task_id, status, result)`: 작업 한 개당 한 행이다. 작업 행이 지워지면 같이 지워진다. 저장한 status는 attempt의 끝과 다를 수 있어 그대로 둔다. 사본에서 341개가 그랬다.
+  - `workflow_executions(session_id, state, ...)`: 실행 상태의 case를 `state` 열에, 각 case의 필드를 열로 둔다. CHECK가 case마다 채울 열과 비울 열을 정한다. 진행 목록(완료 단계, 근거, 도구 결과)과 blocker 근거는 `workflow_execution_entries(session_id, list, position, value)`에 둔다. 저장은 실행 행을 upsert하고 목록을 지운 뒤 다시 넣는다. 읽기는 행을 case로 decode하므로, 형식이 틀린 행은 전처럼 읽기 오류다.
+  - `turn_summary_blocks(session_id, position, turn_end, next_turn_node_id, text)`: 블록 한 개당 한 행이다. 새 블록은 맞는 요약 뒤에 붙고, 그 뒤에 있던 맞지 않는 블록은 지운다. 전의 배열 전체 쓰기와 결과가 같다. `ChatMetadata`에 `summaries`/`replaceSummaries`를 더했다. `SummaryBlock`은 `chat-store/metadata.ts`로 옮겼다.
+  - 실행 상태와 요약은 세션이 지워지면 같이 지워진다. 대화 삭제도 이 표들을 직접 지운다.
+  - 나머지 thread 상태(context usage, cold 관측 소비, 수동 compaction, model handoff)는 thread마다 작은 문서 하나라 `chat_metadata`에 둔다. 대신 대화 삭제가 그 대화 thread의 `chat_metadata` 행을 지운다. 전에는 지우지 않았다.
+- 마이그레이션:
+  - 주인이 없는 값은 옮기지 않는다. 지워진 작업·대화의 것이라 읽는 곳이 없다.
+  - decode되지 않던 값도 옮기지 않는다. 전에는 읽을 때마다 오류였다. 이제는 결과가 없는 작업, idle 세션, 요약 없는 세션으로 읽힌다.
+  - 요약은 전처럼 맞는 앞부분만 쓰인다. 블록 하나라도 decode되지 않으면 전처럼 요약이 없다. 끝이 정수가 아닌 블록부터는 옮기지 않는다. 그 블록부터는 맞는 요약으로 쓰인 적이 없다.
+  - 실행 상태에서 다른 case의 필드는 전에도 읽지 않았으므로 버린다.
+  - 옮긴 namespace를 지우고, 지워진 대화가 남긴 나머지 thread 상태도 지운다.
+  - 사본 측정: 결과 3,247개, 실행 상태 120개, 요약 29개 세션(블록 154개)이 모두 같은 값으로 읽혔다. 37ms였다.

@@ -74,8 +74,10 @@
     "acknowledgements": [],
     "artifacts": [],
     "attempts": [],
+    "backgroundResults": [],
     "bindings": [],
     "events": [],
+    "execution": [],
     "interrupts": [
       {
         "interrupt_id": "approval_hand-written@<session>",
@@ -337,6 +339,7 @@
       }
     ],
     "subagents": [],
+    "summaries": [],
     "tasks": [],
     "threads": [
       {
@@ -427,8 +430,10 @@
     "acknowledgements": [],
     "artifacts": [],
     "attempts": [],
+    "backgroundResults": [],
     "bindings": [],
     "events": [],
+    "execution": [],
     "interrupts": [],
     "ledger": [],
     "metadata": [
@@ -487,6 +492,7 @@
       }
     ],
     "subagents": [],
+    "summaries": [],
     "tasks": [],
     "threads": [
       {

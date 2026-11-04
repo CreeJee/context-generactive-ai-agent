@@ -24,12 +24,11 @@ import {
   linedUp,
   memoryLookups,
   sameTurn,
-  turnSummariesNamespace,
   userTurns,
   type CompactionSources,
-  type SummaryBlock,
   type SummaryOutcome,
 } from "./compaction.ts";
+import type { SummaryBlock } from "../chat-store/metadata.ts";
 
 /** Standing instructions for summarizing turns. The summary points back to memory, it never replaces it. */
 export const summaryInstructions = `You summarize part of a conversation between a user and a coding assistant, so the assistant can carry on without rereading it.
@@ -213,16 +212,14 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
       ).pipe(
         Stream.runFoldEffect(
           () => blocks,
-          (kept, block) => {
-            const all = Arr.append(kept, block);
-            return Effect.as(
+          (kept, block) =>
+            Effect.as(
               Effect.mapError(
-                runStore.chatMetadata.set(turnSummariesNamespace, sessionId, { blocks: all }),
+                runStore.chatMetadata.replaceSummaries(sessionId, kept.length, [block]),
                 summaryFailed("persist"),
               ),
-              all,
-            );
-          },
+              Arr.append(kept, block),
+            ),
         ),
       );
       return "done" as const;

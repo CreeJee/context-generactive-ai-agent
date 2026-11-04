@@ -13,8 +13,8 @@ import {
   lookupSources,
   messageText,
   type CompactionState,
-  type SummaryBlock,
 } from "../src/agent/compaction.ts";
+import type { SummaryBlock } from "../src/chat-store/metadata.ts";
 
 const legacyBlockTurns = 10;
 const legacyRecentTurns = 4;

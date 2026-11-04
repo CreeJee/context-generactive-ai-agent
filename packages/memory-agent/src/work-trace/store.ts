@@ -1604,8 +1604,8 @@ const make = Effect.gen(function* () {
     yield* run(sql`DELETE FROM nodes_morph WHERE rowid IN (${seqs})`);
     yield* run(sql`DELETE FROM memory_graph_suppressed_nodes WHERE node_seq IN (${seqs})`);
     const nodes = (yield* run(sql`DELETE FROM nodes WHERE session_id = ${sessionId}`)).changes;
-    yield* run(sql`DELETE FROM chat_metadata WHERE namespace = 'background-task-result'
-      AND key IN (SELECT id FROM work_tasks WHERE origin_session_id = ${sessionId})`);
+    yield* run(sql`DELETE FROM background_task_results
+      WHERE task_id IN (SELECT id FROM work_tasks WHERE origin_session_id = ${sessionId})`);
     const threadIds = [sessionId, ...subagentRows.map((row) => `subagent-${row.id}`)];
     yield* Effect.forEach(
       threadIds,
@@ -1621,6 +1621,7 @@ const make = Effect.gen(function* () {
           );
           yield* run(sql`DELETE FROM chat_interrupts WHERE thread_id = ${threadId}`);
           yield* run(sql`DELETE FROM chat_runs WHERE thread_id = ${threadId}`);
+          yield* run(sql`DELETE FROM chat_metadata WHERE key = ${threadId}`);
           yield* run(sql`DELETE FROM chat_threads WHERE thread_id = ${threadId}`);
         }),
       { discard: true },
@@ -1630,6 +1631,9 @@ const make = Effect.gen(function* () {
     yield* run(sql`DELETE FROM imported_sessions WHERE session_id = ${sessionId}`);
     const goals = yield* purgeGoalHistory(sessionId);
     yield* run(sql`DELETE FROM session_workflows WHERE session_id = ${sessionId}`);
+    yield* run(sql`DELETE FROM workflow_execution_entries WHERE session_id = ${sessionId}`);
+    yield* run(sql`DELETE FROM workflow_executions WHERE session_id = ${sessionId}`);
+    yield* run(sql`DELETE FROM turn_summary_blocks WHERE session_id = ${sessionId}`);
     yield* run(sql`DELETE FROM subagents WHERE session_id = ${sessionId}`);
     yield* run(sql`DELETE FROM sessions WHERE id = ${sessionId}`);
     const purgedCounts = yield* encodeJson({ nodes, subagents: subagentRows.length, goals });
@@ -1824,8 +1828,7 @@ const make = Effect.gen(function* () {
     const artifacts = (yield* run(sql`UPDATE work_artifacts SET locator = NULL, media_type = NULL,
         verification = 'source_deleted', source_deleted_at = ${now}, updated_at = ${now}
       WHERE task_id = ${taskId}`)).changes;
-    yield* run(sql`DELETE FROM chat_metadata
-      WHERE namespace = 'background-task-result' AND key = ${taskId}`);
+    yield* run(sql`DELETE FROM background_task_results WHERE task_id = ${taskId}`);
     const events = (yield* run(sql`DELETE FROM run_events WHERE task_id = ${taskId}`)).changes;
     yield* run(sql`UPDATE agent_invocations SET message = '' WHERE task_id = ${taskId}`);
     yield* run(sql`UPDATE parent_notifications

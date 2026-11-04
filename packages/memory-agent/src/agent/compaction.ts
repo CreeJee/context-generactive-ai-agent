@@ -1,7 +1,7 @@
 import { Function as EffectFunction, pipe } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { Array as EffectArray, HashMap, HashSet, Effect, Option, Ref, Schema } from "effect";
-import type { ChatMetadata, ChatMetadataFailed } from "../chat-store/metadata.ts";
+import type { ChatMetadata, ChatMetadataFailed, SummaryBlock } from "../chat-store/metadata.ts";
 import type { StoredMessage } from "../chat-store/schema.ts";
 import { asRunFailed, type RunHook } from "../loop/run.ts";
 import { RunStore } from "../loop/store.ts";
@@ -171,23 +171,6 @@ const changed = (
   after: ReadonlyArray<ConversationMessage>,
 ) => after.length !== before.length || after.some((message, index) => message !== before[index]);
 
-/** Where `turnSummaries` keeps a session's summaries. */
-export const turnSummariesNamespace = "memory-agent/turn-summaries";
-
-/**
- * A summary of consecutive user turns, from where the previous one ended up to `end` (exclusive,
- * counted from 0). `nextTurnNodeId` is the user node of turn `end`: a conversation whose turn
- * there says something else is not the one summarized, and the summary is not used for it.
- */
-export const SummaryBlock = Schema.Struct({
-  end: Schema.Finite,
-  nextTurnNodeId: Schema.String,
-  text: Schema.String,
-});
-export type SummaryBlock = typeof SummaryBlock.Type;
-export const StoredSummaries = Schema.Struct({ blocks: Schema.Array(SummaryBlock) });
-const decodeSummaries = Schema.decodeUnknownOption(StoredSummaries);
-
 /** Where each user turn of a conversation starts; the orchestrator's messages are none. */
 export const userTurns = (messages: ReadonlyArray<ConversationMessage>) =>
   messages.flatMap((message, index) =>
@@ -277,19 +260,13 @@ export const compactionStateEffect = Effect.fnUntraced(function* (options: {
   readonly threadId: string;
 }) {
   const { metadata, threadId } = options;
-  const [manual, summaries] = yield* Effect.all(
-    [
-      metadata.get(manualCompactionNamespace, threadId),
-      metadata.get(turnSummariesNamespace, threadId),
-    ],
+  const [manual, blocks] = yield* Effect.all(
+    [metadata.get(manualCompactionNamespace, threadId), metadata.summaries(threadId)],
     { concurrency: "unbounded" },
   ).pipe(Effect.mapError(metadataFailed("read-state")));
   return {
     manual: Option.getOrElse(decodeManualCompaction(manual), () => noManualCompaction),
-    blocks: Option.match(decodeSummaries(summaries), {
-      onNone: () => [],
-      onSome: (stored) => stored.blocks,
-    }),
+    blocks,
   };
 });
 

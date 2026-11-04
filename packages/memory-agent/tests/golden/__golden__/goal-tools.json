@@ -2,6 +2,7 @@
   "acknowledgements": [],
   "artifacts": [],
   "attempts": [],
+  "backgroundResults": [],
   "bindings": [
     {
       "goal_version": 1,
@@ -178,6 +179,7 @@
       "run_id": "<id-5>"
     }
   ],
+  "execution": [],
   "interrupts": [],
   "ledger": [
     {
@@ -364,6 +366,7 @@
     }
   ],
   "subagents": [],
+  "summaries": [],
   "tasks": [],
   "threads": [
     {

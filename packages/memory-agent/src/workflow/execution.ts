@@ -33,8 +33,88 @@ export class WorkflowExecutionFailed extends Schema.TaggedError<
   cause: Schema.Defect(),
 }) {}
 
-const namespace = "memory-agent/workflow-execution";
-const encode = Schema.encodeEffect(Schema.fromJsonString(WorkflowExecutionState));
+/** The lists of an execution, by the `workflow_execution_entries` list that keeps them. */
+type EntryList = "completed_step" | "progress_evidence" | "tool_result" | "blocker_evidence";
+const Entries = Schema.fromJsonString(Schema.Array(Schema.String));
+const encodeEntries = Schema.encodeEffect(Entries);
+const ExecutionRow = Schema.Struct({
+  state: Schema.String,
+  run_id: Schema.NullOr(Schema.String),
+  goal_version: Schema.NullOr(Schema.Finite),
+  plan_version: Schema.NullOr(Schema.Finite),
+  no_progress_runs: Schema.NullOr(Schema.Finite),
+  retry_at: Schema.NullOr(Schema.Finite),
+  reason: Schema.NullOr(Schema.String),
+  detail: Schema.NullOr(Schema.String),
+  completed_step: Entries,
+  progress_evidence: Entries,
+  tool_result: Entries,
+  blocker_evidence: Entries,
+});
+/** A stored execution as its case: a field of another case is not read. */
+const stateOf = (row: typeof ExecutionRow.Type) =>
+  Schema.decodeUnknownEffect(WorkflowExecutionState)({
+    _tag: row.state,
+    runId: row.run_id,
+    goalVersion: row.goal_version,
+    planVersion: row.plan_version,
+    noProgressRuns: row.no_progress_runs,
+    progress: {
+      completedSteps: row.completed_step,
+      evidence: row.progress_evidence,
+      toolResults: row.tool_result,
+    },
+    retryAt: row.retry_at,
+    reason: row.reason,
+    detail: row.detail,
+    evidence: row.blocker_evidence,
+  });
+
+/** The columns a case fills; the table's CHECKs keep the others empty. */
+const noColumns = {
+  run_id: null,
+  goal_version: null,
+  plan_version: null,
+  no_progress_runs: null,
+  retry_at: null,
+  reason: null,
+  detail: null,
+};
+/** The fields every case of a continuing execution has. */
+type Execution = Omit<typeof cases.running.Type, "_tag">;
+const executionColumns = (state: Execution) => ({
+  ...noColumns,
+  run_id: state.runId,
+  goal_version: state.goalVersion,
+  plan_version: state.planVersion,
+  no_progress_runs: state.noProgressRuns,
+});
+type Lists = ReadonlyArray<readonly [EntryList, readonly string[]]>;
+const progressLists = (state: Execution): Lists => [
+  ["completed_step", state.progress.completedSteps],
+  ["progress_evidence", state.progress.evidence],
+  ["tool_result", state.progress.toolResults],
+];
+const rowOf = (state: WorkflowExecutionState) =>
+  WorkflowExecutionState.match(state, {
+    idle: () => ({ columns: noColumns, lists: [] }),
+    running: (running) => ({ columns: executionColumns(running), lists: progressLists(running) }),
+    ready: (ready) => ({ columns: executionColumns(ready), lists: progressLists(ready) }),
+    retrying: (retrying) => ({
+      columns: { ...executionColumns(retrying), retry_at: retrying.retryAt },
+      lists: progressLists(retrying),
+    }),
+    blocked: (blocked) => ({
+      columns: {
+        ...noColumns,
+        run_id: blocked.runId,
+        reason: blocked.reason,
+        detail: blocked.detail,
+      },
+      lists: [["blocker_evidence", blocked.evidence]] satisfies Lists,
+    }),
+    stopped: (stopped) => ({ columns: { ...noColumns, reason: stopped.reason }, lists: [] }),
+  });
 const progressOf = (
   state: WorkflowState,
   toolResults: readonly string[] = [],
@@ -64,17 +144,22 @@ const make = Effect.gen(function* () {
   const reading = <A, E>(effect: Effect.Effect<A, E>) => Effect.mapError(effect, failed("read"));
   const writing = <A, E>(effect: Effect.Effect<A, E>) =>
     Effect.mapError(sql.withTransaction(effect), failed("write"));
+  const entries = (list: EntryList) =>
+    sql.literal(`(SELECT json_group_array(x.value ORDER BY x.position)
+      FROM workflow_execution_entries x
+      WHERE x.session_id = e.session_id AND x.list = '${list}') AS ${list}`);
   const select = SqlSchema.findOneOption({
     Request: Schema.String,
-    Result: Schema.Struct({ value: Schema.fromJsonString(WorkflowExecutionState) }),
-    execute: (sessionId) =>
-      sql`SELECT value FROM chat_metadata WHERE namespace = ${namespace} AND key = ${sessionId}`,
+    Result: ExecutionRow,
+    execute: (sessionId) => sql`SELECT e.state, e.run_id, e.goal_version, e.plan_version,
+        e.no_progress_runs, e.retry_at, e.reason, e.detail, ${entries("completed_step")},
+        ${entries("progress_evidence")}, ${entries("tool_result")}, ${entries("blocker_evidence")}
+      FROM workflow_executions e WHERE e.session_id = ${sessionId}`,
   });
   const sessionsOf = SqlSchema.findAll({
     Request: Schema.String,
-    Result: Schema.Struct({ key: Schema.String }),
-    execute: (kind) => sql`SELECT key FROM chat_metadata
-      WHERE namespace = ${namespace} AND json_extract(value, '$._tag') = ${kind}`,
+    Result: Schema.Struct({ session_id: Schema.String }),
+    execute: (kind) => sql`SELECT session_id FROM workflow_executions WHERE state = ${kind}`,
   });
   const endedWithKnownEffects = (runId: string) =>
     sql`SELECT 1 AS ended FROM chat_runs r
@@ -83,21 +168,43 @@ const make = Effect.gen(function* () {
     );
   const read = (sessionId: string) =>
     select(sessionId).pipe(
-      Effect.map(
+      Effect.flatMap(
         Option.match({
-          onNone: (): WorkflowExecutionState => cases.idle.make({}),
-          onSome: (row) => row.value,
+          onNone: () => Effect.succeed<WorkflowExecutionState>(cases.idle.make({})),
+          onSome: stateOf,
         }),
       ),
     );
+  /** Replaces the session's execution and its lists; callers run it inside `writing`. */
   const save = Effect.fnUntraced(function* (sessionId: string, state: WorkflowExecutionState) {
-    const value = yield* encode(state);
-    yield* sql`INSERT INTO chat_metadata (namespace, key, value) VALUES (${namespace}, ${sessionId}, ${value})
-      ON CONFLICT(namespace, key) DO UPDATE SET value = excluded.value`;
+    const { columns, lists } = rowOf(state);
+    yield* sql`INSERT INTO workflow_executions
+        (session_id, state, run_id, goal_version, plan_version, no_progress_runs, retry_at, reason,
+         detail)
+      VALUES (${sessionId}, ${state._tag}, ${columns.run_id}, ${columns.goal_version},
+        ${columns.plan_version}, ${columns.no_progress_runs}, ${columns.retry_at}, ${columns.reason},
+        ${columns.detail})
+      ON CONFLICT (session_id) DO UPDATE SET state = excluded.state, run_id = excluded.run_id,
+        goal_version = excluded.goal_version, plan_version = excluded.plan_version,
+        no_progress_runs = excluded.no_progress_runs, retry_at = excluded.retry_at,
+        reason = excluded.reason, detail = excluded.detail`;
+    yield* sql`DELETE FROM workflow_execution_entries WHERE session_id = ${sessionId}`;
+    yield* Effect.forEach(
+      lists,
+      ([list, values]) =>
+        Effect.flatMap(
+          encodeEntries(values),
+          (
+            encoded,
+          ) => sql`INSERT INTO workflow_execution_entries (session_id, list, position, value)
+            SELECT ${sessionId}, ${list}, key, value FROM json_each(${encoded})`,
+        ),
+      { discard: true },
+    );
     return state;
   });
   const sessionsIn = (kind: keyof typeof cases) =>
-    sessionsOf(kind).pipe(Effect.map((rows) => rows.map((row) => row.key)));
+    sessionsOf(kind).pipe(Effect.map((rows) => rows.map((row) => row.session_id)));
   const current = Effect.fnUntraced(function* (
     sessionId: string,
     runId: string,

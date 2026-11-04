@@ -116,7 +116,7 @@ MCP 도구는 실행 중에 생기므로 브라우저가 정의를 모릅니다.
 ## 대화 상태와 새로고침
 
 - 대화 threadId는 항상 세션 id입니다(클라이언트가 보낸 값은 무시).
-- `RunStore`(`loop/store.ts`)가 run마다 대화(`StoredMessage`), run 상태, interrupt, metadata를 SQLite(`chat_threads`, 메시지 한 개당 한 행인 `chat_thread_messages`, `chat_runs`, `chat_interrupts`, `chat_metadata`)에 저장합니다.
+- `RunStore`(`loop/store.ts`)가 run마다 대화(`StoredMessage`), run 상태, interrupt, metadata, 턴 요약을 SQLite(`chat_threads`, 메시지 한 개당 한 행인 `chat_thread_messages`, `chat_runs`, `chat_interrupts`, `chat_metadata`, `turn_summary_blocks`)에 저장합니다.
 - 새로고침한 페이지는 `GET /api/sessions/:session/messages`(채팅 API의 `snapshot`)로 최근 대화 페이지와 진행 중인 run, 대기 중인 승인을 되살립니다. 다른 세션의 thread는 읽을 수 없습니다.
 - 이 저장소는 화면 복원용이고 기억의 원본은 여전히 `nodes`입니다. chat state가 없는 예전 세션은 노드에서 대화를 다시 만들어 엽니다.
 - 테스트는 `tests/loop/store.test.ts`, `tests/chat/history.test.ts`.

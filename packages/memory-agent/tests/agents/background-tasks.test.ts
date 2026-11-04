@@ -1,18 +1,5 @@
-import {
-  Deferred,
-  Effect,
-  Fiber,
-  FileSystem,
-  MutableRef,
-  Option,
-  Path,
-  Ref,
-  Schema,
-  Stream,
-} from "effect";
-import { SqlError } from "effect/sql";
-import { expect, vi } from "vite-plus/test";
-import { RunStore } from "../../src/loop/store.ts";
+import { Deferred, Effect, Fiber, FileSystem, Path, Ref, Schema, Stream } from "effect";
+import { expect } from "vite-plus/test";
 import { ApprovedTools } from "../../src/tools/approved.ts";
 import { BackgroundOperationFailed, BackgroundTasks } from "../../src/tools/background.ts";
 import { AttemptFailureReason } from "../../src/work-trace/contracts.ts";
@@ -176,7 +163,6 @@ testAgent()("background task lifecycle", (it) => {
       const sessionId = yield* freshSession;
       const tasks = yield* BackgroundTasks;
       const trace = yield* WorkTraceStore;
-      const { metadata } = yield* RunStore;
       const receipt = yield* tasks.start(
         yield* runOf(sessionId),
         `${sessionId}:call`,
@@ -206,7 +192,12 @@ testAgent()("background task lifecycle", (it) => {
             yield* trace.finalizeTaskLifecycle(requested.operationId),
           ),
         ).toBe(true);
-      expect(yield* metadata.get("background-task-result", receipt.taskId)).toEqual(Option.none());
+      expect(
+        yield* sqlGet(
+          "SELECT count(*) AS n FROM background_task_results WHERE task_id = ?",
+          receipt.taskId,
+        ),
+      ).toEqual({ n: 0 });
       expect(yield* Effect.flip(readResult(sessionId, { taskId: receipt.taskId }))).toMatchObject({
         message: expect.stringContaining("not found"),
       });
@@ -222,22 +213,18 @@ testAgent()("background result storage failure", (it) => {
       Effect.gen(function* () {
         const { session } = yield* TestEnv;
         const tasks = yield* BackgroundTasks;
-        const { metadata } = yield* RunStore;
-        const original = metadata.set;
-        const resultWrites = MutableRef.make(0);
+        // Each write is counted, then fails; FAIL keeps the count its statement wrote.
         yield* Effect.acquireRelease(
-          Effect.sync(() =>
-            vi.spyOn(metadata, "set").mockImplementation((namespace, key, value) => {
-              if (namespace !== "background-task-result") return original(namespace, key, value);
-              MutableRef.increment(resultWrites);
-              return Effect.fail(
-                SqlError.SqlError.make({
-                  reason: SqlError.classifySqliteError(new Error("storage offline")),
-                }),
-              );
-            }),
-          ),
-          (spy) => Effect.sync(() => spy.mockRestore()),
+          sqlExec(`CREATE TEMP TABLE result_writes (n INTEGER);
+            CREATE TEMP TRIGGER result_write_fails BEFORE INSERT ON main.background_task_results
+            BEGIN
+              INSERT INTO result_writes VALUES (1);
+              SELECT RAISE(FAIL, 'storage offline');
+            END;`),
+          () =>
+            Effect.orDie(
+              sqlExec("DROP TRIGGER temp.result_write_fails; DROP TABLE temp.result_writes;"),
+            ),
         );
         const notified = yield* Stream.take(tasks.completions, 1).pipe(
           Stream.runCollect,
@@ -259,7 +246,7 @@ testAgent()("background result storage failure", (it) => {
         expect(yield* readResult(session.id, { taskId: receipt.taskId })).toMatchObject({
           status: "failed",
         });
-        expect(MutableRef.get(resultWrites)).toBe(1);
+        expect(yield* sqlGet("SELECT count(*) AS n FROM result_writes")).toEqual({ n: 1 });
         expect(yield* Fiber.join(notified)).toEqual([session.id]);
         expect(yield* tasks.hasSession(session.id)).toBe(false);
       }),
@@ -374,7 +361,7 @@ testAgent()("background cancellation across restart", (it) => {
         status: "cancelled",
       });
       // Simulate a process dying after dispatch with no durable result.
-      yield* (yield* RunStore).metadata.delete("background-task-result", receipt.taskId);
+      yield* sqlRun("DELETE FROM background_task_results WHERE task_id = ?", receipt.taskId);
       yield* sqlRun("UPDATE agent_run_attempts SET status='running' WHERE id=?", receipt.attemptId);
       yield* sqlRun(
         "UPDATE work_tasks SET active_attempt_id=?,status='running' WHERE id=?",

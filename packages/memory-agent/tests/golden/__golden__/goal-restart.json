@@ -20,6 +20,13 @@
       "thread_id": "background-<id-12>"
     }
   ],
+  "backgroundResults": [
+    {
+      "result": "Operation stopped. Inspect its effects before retrying.",
+      "status": "cancelled",
+      "task_id": "<id-10>"
+    }
+  ],
   "bindings": [
     {
       "goal_version": 1,
@@ -255,6 +262,7 @@
       "run_id": "<id-9>"
     }
   ],
+  "execution": [],
   "interrupts": [],
   "ledger": [
     {
@@ -464,6 +472,7 @@
     }
   ],
   "subagents": [],
+  "summaries": [],
   "tasks": [
     {
       "agent_id": null,

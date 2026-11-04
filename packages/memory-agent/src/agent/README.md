@@ -19,7 +19,7 @@
 - `compactEffect` / `requestHistory` / `compactionHook` / `compactByHand` — 모델에 보낼 대화를 압축하는 본체, 요청 단위 히스토리와 적용 stage, Effect AI 루프용 compaction 훅, 수동 `/compact`이다.
 - `ConversationMessage` / `ConversationToolCall` / `CompactionMessage` / `CompactionFailed` / `CompactionReason` — compaction이 읽는 메시지 형태, 대체 메시지, 실패 오류(operation·reason·cause)이다.
 - `budgetFor` / `Budget` / `leaveOutAtShare` / `estimateTokens` / `estimateConversation` / `messageText` / `clearedOutput` — 컨텍스트 예산(leaveOutAt = window*0.55), 토큰 추정, 메시지 텍스트, 비운 도구 출력 문구이다.
-- `SummaryBlock` / `StoredSummaries` / `turnSummariesNamespace` / `manualCompactionNamespace` / `compactionStateEffect` / `CompactionState` / `CompactionSources` / `linedUp` / `sameTurn` / `userTurns` / `answeredToolCalls` / `memoryLookups` / `lookupSources` / `replayableToolHistory` / `lightweightToolResults` / `SummaryOutcome` / `Compacted` — 턴 요약 블록 저장 형식, 세션 compaction 상태 읽기, 요약-대화 정렬 보조 함수이다.
+- `manualCompactionNamespace` / `compactionStateEffect` / `CompactionState` / `CompactionSources` / `linedUp` / `sameTurn` / `userTurns` / `answeredToolCalls` / `memoryLookups` / `lookupSources` / `replayableToolHistory` / `lightweightToolResults` / `SummaryOutcome` / `Compacted` — 턴 요약 블록 저장 형식, 세션 compaction 상태 읽기, 요약-대화 정렬 보조 함수이다.
 - `summaryBlockTurns` / `defaultSummaryStartPercent` / `recentRawUserTurns` / `retrievalLeadLimit` / `retrievalTokenLimit` — compaction 정책 상수(4, 25, 2, 5, 600)이다(`compaction-policy.ts`).
 - `contextView` / `contextUsageHook` / `lastContextUsageEffect` / `pendingColdObservationEffect` / `consumeColdObservationEffect` / `coldObservationId` / `ContextUsageFailed` / `ContextUsageReason` / `StoredContextUsage` / `contextUsageNamespace` / `consumedColdUsageNamespace` — 요청별 컨텍스트 사용량 저장·라이브 전송과 cache-cold 관측 처리이다.
 - `TurnSummaries` — 이전 턴 요약을 만드는 `Context.Service`이다. `TurnSummaries.layer(automatic = true)`와 `layerNoDeps(automatic = true)`를 제공하고, 관련 `summaryInstructions`·`TurnSummaryFailed`가 있다.
@@ -62,7 +62,7 @@
 ## Side Effects
 
 - SQLite `api_usage_responses` 테이블: `ApiUsage.record`가 INSERT ... RETURNING id를 실행하고 `byRootSession`이 집계 SELECT를 실행한다. created_at은 `Clock.currentTimeMillis`로 채운다.
-- ChatMetadata 읽기·쓰기(네임스페이스 `memory-agent/turn-summaries`, `memory-agent/manual-compaction`, `memory-agent/context-usage`, `memory-agent/consumed-cold-usage`, `memory-agent/model-handoff`): compaction 상태·요약, 컨텍스트 사용량·cold 관측 소비, handoff 상태를 저장한다.
+- ChatMetadata 읽기·쓰기(네임스페이스 `memory-agent/manual-compaction`, `memory-agent/context-usage`, `memory-agent/consumed-cold-usage`, `memory-agent/model-handoff`): compaction 상태, 컨텍스트 사용량·cold 관측 소비, handoff 상태를 저장한다. 턴 요약은 `ChatMetadata.summaries`/`replaceSummaries`로 `turn_summary_blocks`에 블록 한 개당 한 행으로 둔다. `turn-summaries.ts`는 맞는 요약 뒤에 새 블록을 하나씩 붙인다.
 - `contextUsageHook`은 `RunScope.emit`으로 실행 중 `memory-agent.context` 라이브 이벤트를 페이지에 보낸다.
 - compaction의 `memoryLookups`/`CompactionSources`는 메모리 노드 저장소에서 tool_result 노드 id와 노드 텍스트를 읽는다(`NodeStoreFailed`).
 - `fingerprint`/`legacyFingerprint`는 동기 sha256(`packages/memory-agent/src/runtime/synchronous-crypto.ts`)을 계산한다.

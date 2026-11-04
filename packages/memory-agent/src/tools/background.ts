@@ -15,7 +15,6 @@ import {
   Stream,
 } from "effect";
 import { SecureRandom } from "effect/crypto";
-import { RunStore } from "../loop/store.ts";
 import { optionalProperty } from "../optional-property.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { AttemptFailureReason } from "../work-trace/contracts.ts";
@@ -87,7 +86,6 @@ const SavedResult = Schema.Struct({
   status: Schema.Literals(["completed", "failed", "cancelled"]),
   result: Schema.String,
 });
-const namespace = "background-task-result";
 /** The trace event an attempt's terminal status records. */
 const attemptEvent = {
   completed: "attempt_completed",
@@ -138,28 +136,26 @@ const make = Effect.gen(function* () {
       WHERE i.idempotency_key = ${request.idempotencyKey}
         AND t.origin_session_id = ${request.sessionId} AND t.agent_name = ${request.agentName}`,
   });
-  const runStore = yield* RunStore;
   const redactor = yield* SecretRedactor;
   const fibers = yield* FiberMap.make<string>();
   const dispatch = yield* Semaphore.make(1);
   /** Each running task's session, by task id. */
   const sessions = yield* Ref.make(HashMap.empty<string, string>());
   const completions = yield* PubSub.unbounded<string>();
-  const loadResult = Effect.fn("BackgroundTasks.loadResult")(function* (taskId: string) {
-    const saved = yield* Effect.mapError(runStore.metadata.get(namespace, taskId), (cause) =>
-      BackgroundResultStoreFailed.make({ operation: "read", cause }),
-    );
-    return yield* Option.match(saved, {
-      onNone: () => Effect.succeedNone,
-      onSome: (value) =>
-        Schema.decodeUnknownEffect(SavedResult)(value).pipe(
-          Effect.asSome,
-          Effect.mapError((cause) =>
-            BackgroundResultStoreFailed.make({ operation: "decode", cause }),
-          ),
-        ),
-    });
+  const selectResult = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: SavedResult,
+    execute: (taskId) =>
+      sql`SELECT status, result FROM background_task_results WHERE task_id = ${taskId}`,
   });
+  const loadResult = Effect.fn("BackgroundTasks.loadResult")((taskId: string) =>
+    Effect.mapError(selectResult(taskId), (cause) =>
+      BackgroundResultStoreFailed.make({
+        operation: cause._tag === "SchemaError" ? "decode" : "read",
+        cause,
+      }),
+    ),
+  );
   const traceEffect = <A, E>(effect: Effect.Effect<A, E>) =>
     Effect.mapError(effect, (cause) => BackgroundTraceFailed.make({ cause }));
 
@@ -227,7 +223,9 @@ const make = Effect.gen(function* () {
       ) {
         const hidden = yield* redactor.redactText(result);
         yield* Effect.mapError(
-          runStore.metadata.set(namespace, handle.taskId, { status, result: hidden.text }),
+          sql`INSERT INTO background_task_results (task_id, status, result)
+            VALUES (${handle.taskId}, ${status}, ${hidden.text})
+            ON CONFLICT (task_id) DO UPDATE SET status = excluded.status, result = excluded.result`,
           (cause) => BackgroundResultStoreFailed.make({ operation: "write", cause }),
         );
       });

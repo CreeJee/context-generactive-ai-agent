@@ -2,6 +2,7 @@
   "acknowledgements": [],
   "artifacts": [],
   "attempts": [],
+  "backgroundResults": [],
   "bindings": [
     {
       "goal_version": 1,
@@ -314,6 +315,7 @@
       "run_id": "<id-7>"
     }
   ],
+  "execution": [],
   "interrupts": [
     {
       "interrupt_id": "approval_goal-approval@<session>",
@@ -586,6 +588,7 @@
     }
   ],
   "subagents": [],
+  "summaries": [],
   "tasks": [],
   "threads": [
     {

@@ -1,7 +1,7 @@
-import { Effect, Option, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
-import { budgetFor, turnSummariesNamespace } from "../../src/agent/compaction.ts";
+import { budgetFor } from "../../src/agent/compaction.ts";
 import { TurnSummaries } from "../../src/agent/turn-summaries.ts";
 import { AgUiEvent } from "../../src/loop/chunks.ts";
 import { RunStore } from "../../src/loop/store.ts";
@@ -13,10 +13,6 @@ import { TestEnv, testAgent } from "../support/test-env.ts";
 import { conversation, nextRequest } from "./fixtures.ts";
 
 const stringifyJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
-
-const decodeStoredSummaries = Schema.decodeUnknownEffect(
-  Schema.Struct({ blocks: Schema.Array(Schema.Unknown) }),
-);
 
 /** A fresh session in the shared agent, with the default test model selected. */
 const freshSession = Effect.gen(function* () {
@@ -149,9 +145,9 @@ testAgent({ testProvider: {} })("compaction through AgentChat", (it) => {
         ]);
         // The pilot forces automatic catch-up before B's manual call: four older user turns
         // are already summarized and the two most recent user turns must stay raw.
-        yield* (yield* RunStore).metadata.set(turnSummariesNamespace, at.sessionId, {
-          blocks: [{ end: 4, nextTurnNodeId: userNodes[4]!.id, text: "- 결정 보존" }],
-        });
+        yield* (yield* RunStore).chatMetadata.replaceSummaries(at.sessionId, 0, [
+          { end: 4, nextTurnNodeId: userNodes[4]!.id, text: "- 결정 보존" },
+        ]);
         const before = yield* nextRequest(messages, at.sessionId, budgetFor(200_000));
         const result = yield* (yield* AgentChat).compact(at.sessionId, null);
         expect(result).toMatchObject({ cleared: 0, summarizedTurns: 0, summaryFailed: false });
@@ -164,15 +160,7 @@ testAgent({ testProvider: {} })("compaction through AgentChat", (it) => {
       const at = yield* freshSession;
       yield* savedConversation(at, ["네", "네", "네", "네", "네"]);
       const summaries = yield* TurnSummaries;
-      const { metadata } = yield* RunStore;
-      const blocks = metadata.get(turnSummariesNamespace, at.sessionId).pipe(
-        Effect.flatMap(
-          Option.match({
-            onNone: () => Effect.succeed([]),
-            onSome: (stored) => Effect.map(decodeStoredSummaries(stored), (found) => found.blocks),
-          }),
-        ),
-      );
+      const blocks = (yield* RunStore).chatMetadata.summaries(at.sessionId);
 
       expect(yield* summaries.startPercent).toBe(25);
       expect(yield* summaries.catchUp(at.sessionId, false)).toBe("done");

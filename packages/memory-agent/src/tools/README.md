@@ -61,7 +61,7 @@
 - 파일 시스템: `write_outside_file`/`delete_outside_file`이 프로젝트 밖 텍스트 파일을 생성·교체·삭제한다(`createTextFileEffect`, `replaceTextFileEffect`, `deleteTextFileEffect`). 작업 디렉터리 해석 때 `/tmp`와 호스트 임시 디렉터리의 canonical 경로를 읽는다.
 - 파일 시스템: `save_code_skill`이 `CodeSkills.save`로 `.agents/skills/<name>/`(SKILL.md, scripts/run.ts 또는 run.sh)에 스킬을 저장한다.
 - 프로젝트 파일 도구(`FileTools`)가 `write_file`/`edit_file`/`delete_file`로 프로젝트 파일을 바꾼다. 목록·검색은 파일 시스템 페이징/스냅샷 캐시만 쓴다(`effects.ts` 주석 근거).
-- 백그라운드 작업: `BackgroundTasks.start`/`waitResult`가 세션 단위 백그라운드 작업을 시작하고 결과를 기다린다. 결과 저장소·trace 실패 오류 타입이 따로 있다.
+- 백그라운드 작업: `BackgroundTasks.start`/`waitResult`가 세션 단위 백그라운드 작업을 시작하고 결과를 기다린다. 마스킹한 결과는 `background_task_results`에 작업 한 개당 한 행으로 upsert한다. 결과 저장소·trace 실패 오류 타입이 따로 있다.
 - 영속 기록: `find_memory`는 승격된 매치를 가져올 때 `memory_usage_events`를 기록한다. `memoryRunTools`는 run 단위 검색·사용 귀속을 영속 기록한다. 리포트 증거 도구는 범위가 정해진 SELECT만 한다(`effects.ts` 주석 근거).
 - 네트워크: `kagi_search`/`kagi_extract`가 원격 Kagi API를 호출한다. 응답이 실패해도 요금이 나올 수 있다(`effects.ts` 주석 근거).
 - 상태: `repeatGuardHook`이 반복 호출 감지 상태를 `Ref`로 보관한다.

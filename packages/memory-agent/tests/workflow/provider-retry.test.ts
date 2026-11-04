@@ -80,18 +80,16 @@ const settle = Effect.repeat(Effect.yieldNow, { times: 50 });
 /** A running Goal execution whose run the previous process left failed. */
 const runningGoal = Effect.fnUntraced(function* (runId: string) {
   yield* sqlRun(
-    "INSERT OR REPLACE INTO chat_metadata (namespace, key, value) VALUES (?, ?, ?)",
-    "memory-agent/workflow-execution",
-    "s",
-    yield* Schema.encodeEffect(Schema.fromJsonString(WorkflowExecutionState))(
-      WorkflowExecutionState.cases.running.make({
-        runId,
-        goalVersion: 1,
-        planVersion: 1,
-        noProgressRuns: 0,
-        progress: { completedSteps: [], evidence: [], toolResults: [] },
-      }),
-    ),
+    "INSERT OR IGNORE INTO projects (id, root, name, created_at) VALUES ('p', '/test', 'test', 'old')",
+  );
+  yield* sqlRun(
+    "INSERT OR IGNORE INTO sessions (id, project_id, created_at) VALUES ('s', 'p', 'old')",
+  );
+  yield* sqlRun(
+    `INSERT OR REPLACE INTO workflow_executions
+      (session_id, state, run_id, goal_version, plan_version, no_progress_runs)
+      VALUES ('s', 'running', ?, 1, 1, 0)`,
+    runId,
   );
   yield* sqlRun(
     "INSERT INTO chat_runs (run_id, thread_id, status, started_at) VALUES (?, 's', 'failed', 1)",
