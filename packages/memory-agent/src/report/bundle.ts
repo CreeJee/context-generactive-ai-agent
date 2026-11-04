@@ -1,4 +1,4 @@
-import { Config, DateTime, Effect, Match, Option, Schema } from "effect";
+import { Array as Arr, Config, DateTime, Effect, Match, Option, Schema } from "effect";
 import { Digest } from "effect/crypto";
 import { Hex } from "effect/encoding";
 import { SqlClient, SqlSchema } from "effect/sql";
@@ -96,14 +96,15 @@ const CardRow = Schema.Struct({
 
 const iso = (millis: number) => DateTime.formatIso(DateTime.makeUnsafe(millis));
 
-/** A run's longest span totals; cut when the recorder dropped spans or the bundle leaves some out. */
-const runSpanTotals = (recorded: RunSpanTotals | undefined) => ({
-  spanTotals: (recorded?.totals ?? [])
-    .slice(0, bundleLimits.spanTotalsPerRun)
-    .map((total) => ({ ...total, firstStartedAt: iso(total.firstStartedAt) })),
-  spanTotalsCut:
-    recorded !== undefined &&
-    (recorded.dropped > 0 || recorded.totals.length > bundleLimits.spanTotalsPerRun),
+/** A run's longest span totals; cut when the recorder dropped spans or the bundle left some out. */
+const runSpanTotals = Option.match({
+  onNone: () => ({ spanTotals: [], spanTotalsCut: false }),
+  onSome: (recorded: RunSpanTotals) => ({
+    spanTotals: recorded.totals
+      .slice(0, bundleLimits.spanTotalsPerRun)
+      .map((total) => ({ ...total, firstStartedAt: iso(total.firstStartedAt) })),
+    spanTotalsCut: recorded.dropped > 0 || recorded.totals.length > bundleLimits.spanTotalsPerRun,
+  }),
 });
 
 /** An MCP server's state by its case name, with the failure code when it failed. */
@@ -336,13 +337,13 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
       ) ORDER BY seq DESC LIMIT ${bundleLimits.runs}`,
   });
 
-  /** A run's start (epoch milliseconds in `column`) as nodes write their times, to compare as text. */
+  /** A run's start (epoch milliseconds in `column`) as nodes write times, to compare as text. */
   const runStartIso = (column: string) =>
     sql`strftime('%Y-%m-%dT%H:%M:%fZ', ${sql.literal(column)} / 1000.0, 'unixepoch')`;
 
   /**
-   * Nodes of the given runs, at most `perRun` of the newest of each. For `null`, the nodes of no run,
-   * leaving out the messages that asked for a run (`promptRows`).
+   * Nodes of the given runs, at most `perRun` of the newest of each. For `null`, the nodes of no
+   * run, leaving out the messages that asked for a run (`promptRows`).
    */
   const nodeRows = (runIds: readonly string[] | null, perRun: number) =>
     SqlSchema.findAll({
@@ -479,8 +480,14 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
       const prompts = yield* promptRows(runIds).pipe(
         fallbackLogged("report_bundle_prompts_failed", () => []),
       );
-      const promptTexts = yield* hideAll(
-        prompts.map((prompt) => ({ text: prompt.excerpt, length: prompt.len })),
+      // Each message as its run's event, with the text the redactor gave back for it.
+      const asks = Arr.zipWith(
+        prompts,
+        yield* hideAll(prompts.map((prompt) => ({ text: prompt.excerpt, length: prompt.len }))),
+        (prompt, text) => ({
+          runId: prompt.run_id,
+          event: BundleEvent.cases.Message.make({ role: "user", at: prompt.created_at, text }),
+        }),
       );
       const recorder = yield* FailedSpans;
       const spansOfRun = yield* recorder.ofRuns(runIds);
@@ -533,18 +540,9 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
             );
             const total = own[0]?.node.run_total ?? 0;
             // What asked for the run comes first and stays when its other events are cut.
-            const asked = prompts
-              .flatMap((prompt, index) =>
-                prompt.run_id === run.run_id
-                  ? [
-                      BundleEvent.cases.Message.make({
-                        role: "user",
-                        at: prompt.created_at,
-                        text: promptTexts[index] ?? { text: "", cut: false },
-                      }),
-                    ]
-                  : [],
-              )
+            const asked = asks
+              .filter((ask) => ask.runId === run.run_id)
+              .map((ask) => ask.event)
               .slice(-bundleLimits.promptsPerRun);
             const room = bundleLimits.eventsPerRun - asked.length;
             const kept = [...asked, ...timed.slice(-room)];
@@ -572,7 +570,7 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
                   durationMs: span.durationMs,
                   attributes: span.attributes,
                 })),
-              ...runSpanTotals(totalsOfRun.get(run.run_id)),
+              ...runSpanTotals(Option.fromNullishOr(totalsOfRun.get(run.run_id))),
             } satisfies BundleRun;
           }),
         ),

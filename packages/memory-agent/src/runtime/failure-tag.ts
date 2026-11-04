@@ -53,35 +53,36 @@ const causeAfter = <A>(failure: A) =>
       : Option.some(caused),
   );
 
-/** A system error code such as `ECONNRESET` or undici's `UND_ERR_CONNECT_TIMEOUT`; never free text. */
+/** A system error code such as `ECONNRESET` or undici's `UND_ERR_CONNECT_TIMEOUT`; never text. */
 const ErrorCode = Schema.String.check(Schema.isPattern(/^[A-Z][A-Z0-9_]{1,63}$/));
 const decodeErrorCode = Schema.decodeUnknownOption(Schema.Struct({ code: ErrorCode }));
 
-/**
- * The system error codes down a failure's `cause` chain, outermost first, such as a fetch that
- * could not connect: `["UND_ERR_CONNECT_TIMEOUT"]`. A tag says only that a request failed; the code
- * says how. Each value is looked at once, at most eight.
- */
-export const errorCodesOf = <A>(failure: A) =>
+/** A failure and what caused it, down its `cause` chain: each value once, at most eight. */
+const causeChain = <A>(failure: A) =>
   EffectArray.unfold(
     { current: Option.some<unknown>(failure), seen: EffectArray.empty<unknown>() },
-    (state) =>
-      Option.filter(
-        state.current,
-        (value) => !state.seen.includes(value) && state.seen.length < 8,
-      ).pipe(
+    ({ current, seen }) =>
+      Option.filter(current, (value) => !seen.includes(value) && seen.length < 8).pipe(
         Option.map(
           (value) =>
             [
               value,
-              {
-                current: Option.map(causeOf(value), ({ cause }) => cause),
-                seen: [...state.seen, value],
-              },
+              { current: Option.map(causeOf(value), ({ cause }) => cause), seen: [...seen, value] },
             ] as const,
         ),
       ),
-  ).flatMap((value) => Option.toArray(Option.map(decodeErrorCode(value), ({ code }) => code)));
+  );
+
+/**
+ * The system error codes down a failure's `cause` chain, outermost first, such as a fetch that
+ * could not connect: `["UND_ERR_CONNECT_TIMEOUT"]`. A tag says only that a request failed; the code
+ * says how.
+ */
+export const errorCodesOf = <A>(failure: A) =>
+  // The decoder's second parameter is its options: `map` would pass the index there.
+  EffectArray.getSomes(causeChain(failure).map((value) => decodeErrorCode(value))).map(
+    ({ code }) => code,
+  );
 
 /**
  * A failure's name with the error codes down its cause chain, when there are any:

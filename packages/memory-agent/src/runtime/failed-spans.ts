@@ -5,9 +5,12 @@ import {
   Context,
   Effect,
   Exit,
+  HashMap,
   Layer,
   Match,
+  MutableRef,
   Option,
+  Order,
   Schema,
   Tracer,
 } from "effect";
@@ -108,15 +111,15 @@ const failureOf = (cause: Cause.Cause<unknown>) =>
     cause.reasons.flatMap(
       Match.valueTags({
         Fail: ({ error }) => [
-          withErrorCodes(
-            Option.getOrElse(failureNameOfUnknown(error), () => "UnknownError"),
-            error,
+          failureNameOfUnknown(error).pipe(
+            Option.getOrElse(() => "UnknownError"),
+            withErrorCodes(error),
           ),
         ],
         Die: ({ defect }) => [
-          withErrorCodes(
-            Option.getOrElse(tagOfUnknown(defect), () => "Defect"),
-            defect,
+          tagOfUnknown(defect).pipe(
+            Option.getOrElse(() => "Defect"),
+            withErrorCodes(defect),
           ),
         ],
         Interrupt: (): string[] => [],
@@ -124,15 +127,61 @@ const failureOf = (cause: Cause.Cause<unknown>) =>
     ),
   );
 
-const pathOf = (span: Tracer.Span) => {
-  const names = [span.name];
-  let parent = Option.getOrUndefined(span.parent);
-  while (parent?._tag === "Span" && names.length < failedSpanLimits.pathDepth) {
-    names.push(parent.name);
-    parent = Option.getOrUndefined(parent.parent);
-  }
-  return names.toReversed();
+/** Names of the span and the spans it ran under, outermost first, at most `pathDepth` of them. */
+const pathOf = (span: Tracer.Span) =>
+  Arr.unfold(Option.some<Tracer.AnySpan>(span), (current) =>
+    Option.flatMap(current, (each) =>
+      each._tag === "Span" ? Option.some([each.name, each.parent] as const) : Option.none(),
+    ),
+  )
+    .slice(0, failedSpanLimits.pathDepth)
+    .toReversed();
+
+/** A run's span totals while the recorder holds them: by path, with the spans left uncounted. */
+interface TraceTotals {
+  readonly paths: HashMap.HashMap<string, SpanTotal>;
+  readonly dropped: number;
+}
+const noTotals: TraceTotals = { paths: HashMap.empty(), dropped: 0 };
+
+/** One ended span as a total of its own. */
+const spanTotalOf = (span: Tracer.Span, endTime: bigint, failed: boolean): SpanTotal => {
+  const durationMs = Number(endTime - span.status.startTime) / 1_000_000;
+  return {
+    path: pathOf(span),
+    count: 1,
+    failed: failed ? 1 : 0,
+    totalMs: durationMs,
+    maxMs: durationMs,
+    firstStartedAt: Number(span.status.startTime / 1_000_000n),
+  };
 };
+
+const combinedTotal = (before: SpanTotal, next: SpanTotal): SpanTotal => ({
+  path: before.path,
+  count: before.count + next.count,
+  failed: before.failed + next.failed,
+  totalMs: before.totalMs + next.totalMs,
+  maxMs: Math.max(before.maxMs, next.maxMs),
+  firstStartedAt: Math.min(before.firstStartedAt, next.firstStartedAt),
+});
+
+/** The totals with one more span on its path; a new path past `pathsPerRun` is only counted. */
+const withSpanTotal = (totals: TraceTotals, next: SpanTotal): TraceTotals => {
+  const key = next.path.join("\n");
+  return Option.match(HashMap.get(totals.paths, key), {
+    onSome: (before) => ({
+      ...totals,
+      paths: HashMap.set(totals.paths, key, combinedTotal(before, next)),
+    }),
+    onNone: () =>
+      HashMap.size(totals.paths) < failedSpanLimits.pathsPerRun
+        ? { ...totals, paths: HashMap.set(totals.paths, key, next) }
+        : { ...totals, dropped: totals.dropped + 1 },
+  });
+};
+
+const longestFirst = Order.flip(Order.mapInput(Order.Number, (total: SpanTotal) => total.totalMs));
 
 /**
  * The in-process channel worker threads put their failed spans on, for the owner thread to keep
@@ -169,55 +218,29 @@ const plainAttributes = (attributes: ReadonlyMap<string, unknown>) =>
   );
 
 /** Keeps a map within `limit` entries by dropping the oldest. */
-const bounded = <K, V>(map: Map<K, V>, limit: number) => {
-  for (const key of map.keys()) {
-    if (map.size <= limit) return;
-    map.delete(key);
-  }
-};
+const bounded = <K, V>(map: Map<K, V>, limit: number) =>
+  Arr.take(Arr.fromIterable(map.keys()), map.size - limit).forEach((key) => map.delete(key));
 
 const make = (role: "owner" | "worker") =>
   Effect.gen(function* () {
     const inner = yield* Effect.tracer;
     // The tracer interface is synchronous, so the recorder's state is plain mutable data that never
     // leaves this closure; reads copy it.
-    let spans: readonly FailedSpan[] = [];
+    const spans = MutableRef.make<readonly FailedSpan[]>([]);
     const traceOfRun = new Map<string, string>();
     /** Running spans below which a failure was already recorded, with that failure. */
     const failedBelow = new Map<string, string>();
-    /** Span totals of the traces runs named, by path; spans that ended before are not in them. */
-    const totalsOfTrace = new Map<string, { paths: Map<string, SpanTotal>; dropped: number }>();
-
-    const addToTotals = (span: Tracer.Span, endTime: bigint, failed: boolean) => {
-      const totals = totalsOfTrace.get(span.traceId);
-      if (totals === undefined) return;
-      const path = pathOf(span);
-      const key = path.join("\n");
-      const before = totals.paths.get(key);
-      if (before === undefined && totals.paths.size >= failedSpanLimits.pathsPerRun) {
-        totals.dropped += 1;
-        return;
-      }
-      const durationMs = Number(endTime - span.status.startTime) / 1_000_000;
-      const startedAt = Number(span.status.startTime / 1_000_000n);
-      totals.paths.set(key, {
-        path,
-        count: (before?.count ?? 0) + 1,
-        failed: (before?.failed ?? 0) + (failed ? 1 : 0),
-        totalMs: (before?.totalMs ?? 0) + durationMs,
-        maxMs: Math.max(before?.maxMs ?? 0, durationMs),
-        firstStartedAt: Math.min(before?.firstStartedAt ?? startedAt, startedAt),
-      });
-    };
+    /** Span totals of the traces runs named, from when they named them. */
+    const totalsOfTrace = new Map<string, TraceTotals>();
+    const totalsOf = (traceId: string) => Option.fromNullishOr(totalsOfTrace.get(traceId));
 
     const channel = new BroadcastChannel(failedSpanChannel);
     // The channel must never be the reason a thread stays alive.
     channel.unref();
     yield* Effect.addFinalizer(() => Effect.sync(() => channel.close()));
 
-    const keep = (span: FailedSpan) => {
-      spans = [...spans.slice(-(failedSpanLimits.spans - 1)), span];
-    };
+    const keep = (span: FailedSpan) =>
+      MutableRef.update(spans, (kept) => [...kept.slice(-(failedSpanLimits.spans - 1)), span]);
     // Only the owner takes spans in; workers just send theirs, so nothing echoes back and forth.
     if (role === "owner")
       channel.onmessage = (event) => {
@@ -227,8 +250,16 @@ const make = (role: "owner" | "worker") =>
     const record = (span: Tracer.Span, endTime: bigint, exit: Exit.Exit<unknown, unknown>) => {
       const below = failedBelow.get(span.spanId);
       failedBelow.delete(span.spanId);
-      const failure = Exit.isSuccess(exit) ? Option.none<string>() : failureOf(exit.cause);
-      addToTotals(span, endTime, Option.isSome(failure));
+      const failure = Exit.match(exit, {
+        onSuccess: () => Option.none<string>(),
+        onFailure: failureOf,
+      });
+      Option.map(totalsOf(span.traceId), (totals) =>
+        totalsOfTrace.set(
+          span.traceId,
+          withSpanTotal(totals, spanTotalOf(span, endTime, Option.isSome(failure))),
+        ),
+      );
       if (Option.isNone(failure)) return;
       const parent = Option.getOrUndefined(span.parent);
       if (parent !== undefined) {
@@ -265,8 +296,11 @@ const make = (role: "owner" | "worker") =>
           Option.map(decodeRunId(value), (runId) => {
             traceOfRun.set(runId, span.traceId);
             bounded(traceOfRun, failedSpanLimits.runs);
-            if (totalsOfTrace.has(span.traceId)) return;
-            totalsOfTrace.set(span.traceId, { paths: new Map(), dropped: 0 });
+            // A trace named again keeps what it counted.
+            totalsOfTrace.set(
+              span.traceId,
+              Option.getOrElse(totalsOf(span.traceId), () => noTotals),
+            );
             bounded(totalsOfTrace, failedSpanLimits.runs);
           });
         };
@@ -276,7 +310,7 @@ const make = (role: "owner" | "worker") =>
     });
 
     const recent = Effect.map(Clock.currentTimeMillis, (now) =>
-      spans
+      MutableRef.get(spans)
         .filter((span) => now - span.endedAt <= failedSpanLimits.maxAgeMs)
         // Worker spans arrive after the owner's own, so a trace reads in the order it happened.
         .toSorted((left, right) => left.endedAt - right.endedAt),
@@ -300,22 +334,24 @@ const make = (role: "owner" | "worker") =>
         Effect.sync(
           (): ReadonlyMap<string, RunSpanTotals> =>
             new Map(
-              runIds.flatMap((runId) => {
-                const totals = totalsOfTrace.get(traceOfRun.get(runId) ?? "");
-                return totals === undefined || totals.paths.size === 0
-                  ? []
-                  : [
-                      [
-                        runId,
-                        {
-                          totals: [...totals.paths.values()].toSorted(
-                            (left, right) => right.totalMs - left.totalMs,
-                          ),
-                          dropped: totals.dropped,
-                        },
-                      ] as const,
-                    ];
-              }),
+              Arr.getSomes(
+                runIds.map((runId) =>
+                  Option.fromNullishOr(traceOfRun.get(runId)).pipe(
+                    Option.flatMap(totalsOf),
+                    Option.filter((totals) => HashMap.size(totals.paths) > 0),
+                    Option.map(
+                      (totals) =>
+                        [
+                          runId,
+                          {
+                            totals: Arr.sort(HashMap.toValues(totals.paths), longestFirst),
+                            dropped: totals.dropped,
+                          },
+                        ] as const,
+                    ),
+                  ),
+                ),
+              ),
             ),
         ),
     };

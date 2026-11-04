@@ -973,44 +973,49 @@ const turnFinishReason = (state: Translation): FinishReason => {
 
 /**
  * The end of the stream: what is open closes and the turn finishes. An unfinished stream fails as
- * cut (`Disconnected`) when it ended before `[DONE]`, and as unreadable when the server ended it.
+ * cut (`Disconnected`, with the transport codes its body `dropped` with) when it ended before
+ * `[DONE]`, and as unreadable when the server ended it.
  */
-const finished: Step = (state) =>
-  translateAll(state, [endCalls, closeText, closeReasoning]).pipe(
-    Result.filterOrFail(
-      ([done]) => done.chunks > 0 && (Option.isSome(done.finishReason) || done.endsWithUsage),
-      ([done]): AiError.AiError | CompatibleRunRequestFailed =>
-        done.doneReceived
-          ? invalidOutput(
-              "Chat Completions stream ended without a finish_reason or usage-only tail",
-            )
-          : CompatibleRunRequestFailed.make({
-              reason: CompatibleRunRequestFailedReason.cases.Disconnected.make({ codes: [] }),
-            }),
-    ),
-    Result.flatMap(([done, ended]) =>
-      Option.match(
-        Option.filter(done.finishReason, (reason) => !isFinishReason(reason)),
-        {
-          onSome: (reason) => Result.fail(invalidOutput(`Provider finish_reason: ${reason}`)),
-          onNone: () =>
-            emit(done, [
-              ...ended,
-              {
-                type: "response-metadata",
-                ...optionalProperty("id", Option.getOrUndefined(done.responseId)),
-                ...optionalProperty("modelId", Option.getOrUndefined(done.modelId)),
-              },
-              {
-                type: "finish",
-                reason: finishReasons[turnFinishReason(done)],
-                usage: finishUsage(done.usage),
-              },
-            ]),
-        },
+const finished =
+  (dropped: readonly string[]): Step =>
+  (state) =>
+    translateAll(state, [endCalls, closeText, closeReasoning]).pipe(
+      Result.filterOrFail(
+        ([done]) => done.chunks > 0 && (Option.isSome(done.finishReason) || done.endsWithUsage),
+        ([done]): AiError.AiError | CompatibleRunRequestFailed =>
+          done.doneReceived
+            ? invalidOutput(
+                "Chat Completions stream ended without a finish_reason or usage-only tail",
+              )
+            : CompatibleRunRequestFailed.make({
+                reason: CompatibleRunRequestFailedReason.cases.Disconnected.make({
+                  codes: dropped,
+                }),
+              }),
       ),
-    ),
-  );
+      Result.flatMap(([done, ended]) =>
+        Option.match(
+          Option.filter(done.finishReason, (reason) => !isFinishReason(reason)),
+          {
+            onSome: (reason) => Result.fail(invalidOutput(`Provider finish_reason: ${reason}`)),
+            onNone: () =>
+              emit(done, [
+                ...ended,
+                {
+                  type: "response-metadata",
+                  ...optionalProperty("id", Option.getOrUndefined(done.responseId)),
+                  ...optionalProperty("modelId", Option.getOrUndefined(done.modelId)),
+                },
+                {
+                  type: "finish",
+                  reason: finishReasons[turnFinishReason(done)],
+                  usage: finishUsage(done.usage),
+                },
+              ]),
+          },
+        ),
+      ),
+    );
 
 // ---------------------------------------------------------------------------------------------
 // Language model
@@ -1149,30 +1154,24 @@ const endingAtDrop = (
           Arr.match(error.reason._tag === "DecodeError" ? transportCodes(error.reason) : [], {
             onEmpty: () => Stream.fail(error),
             onNonEmpty: (codes) =>
-              Stream.fromEffect(
-                Effect.logError(
-                  CompatibleRunRequestFailed.make({
-                    reason: CompatibleRunRequestFailedReason.cases.Disconnected.make({ codes }),
-                  }).message,
-                ).pipe(
-                  Effect.andThen(
-                    Effect.transposeOption(Option.map(dropped, (ref) => Ref.set(ref, codes))),
-                  ),
-                ),
-              ).pipe(Stream.drain),
+              Stream.fromEffectDrain(
+                Effect.gen(function* () {
+                  yield* Effect.logError(
+                    CompatibleRunRequestFailed.make({
+                      reason: CompatibleRunRequestFailedReason.cases.Disconnected.make({ codes }),
+                    }).message,
+                  );
+                  yield* Option.match(dropped, {
+                    onNone: () => Effect.void,
+                    onSome: (ref) => Ref.set(ref, codes),
+                  });
+                }),
+              ),
           }),
         ),
       ),
     },
   }) as HttpClientResponse.HttpClientResponse;
-
-/** A `Disconnected` failure with the transport codes its dropped body recorded. */
-const withDroppedCodes = (failure: CompatibleRunRequestFailed, codes: readonly string[]) =>
-  failure.reason._tag === "Disconnected" && failure.reason.codes.length === 0 && codes.length > 0
-    ? CompatibleRunRequestFailed.make({
-        reason: CompatibleRunRequestFailedReason.cases.Disconnected.make({ codes }),
-      })
-    : failure;
 
 /** One run's compatible model: its endpoint, effort and key stay fixed for every step. */
 export interface CompatibleModelOptions {
@@ -1257,7 +1256,8 @@ export const compatibleModel = Effect.fnUntraced(function* (options: CompatibleM
                 onSome: (received) =>
                   Effect.fromResult(translateEvent(endpoint.toolCalling, state, received)),
                 onNone: () =>
-                  Effect.fromResult(finished(state)).pipe(
+                  Ref.get(dropped).pipe(
+                    Effect.flatMap((codes) => Effect.fromResult(finished(codes)(state))),
                     Effect.tap(([done]) =>
                       // One provider turn's outcome as counts only: no prompt, reply, model, endpoint or key.
                       Effect.logInfo("Compatible model turn finished", {
@@ -1270,11 +1270,7 @@ export const compatibleModel = Effect.fnUntraced(function* (options: CompatibleM
               }),
           ),
           Stream.catchTag("CompatibleRunRequestFailed", (failure) =>
-            Stream.fromEffect(
-              Effect.flatMap(Ref.get(dropped), (codes) =>
-                failWith(withDroppedCodes(failure, codes)),
-              ),
-            ),
+            Stream.fromEffect(failWith(failure)),
           ),
           Stream.mapError((error) => withDiagnostic(error, diagnostic)),
         );
