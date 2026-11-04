@@ -227,8 +227,10 @@ const conversationRows = Effect.fnUntraced(function* (sessionId: string) {
     ),
     // `seq` counts across conversations, so only its order is compared.
     queue: yield* rows(
-      `SELECT text, state, delivered_via, run_id, in_transcript, steered, failure
-       FROM queued_messages WHERE session_id = ? ORDER BY seq`,
+      `SELECT text, state, delivered_via, run_id, steered, failure,
+         (SELECT json_group_array(a.attachment_id ORDER BY a.position)
+           FROM queued_message_attachments a WHERE a.message_id = q.id) AS attachment_ids
+       FROM queued_messages q WHERE session_id = ? ORDER BY seq`,
       sessionId,
     ),
     workflow: yield* rows(

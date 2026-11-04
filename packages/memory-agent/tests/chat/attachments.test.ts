@@ -13,6 +13,7 @@ import {
 import { DrawingPreviews } from "../../src/attachments/previews.ts";
 import type { JsonValue } from "../../src/json.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
+import { MessageQueue } from "../../src/queue/queue.ts";
 import { requireRuntime } from "../../src/runtime/resources.ts";
 import { FileTools } from "../../src/tools/files.ts";
 import { runTurn, toolResults } from "../support/chat-client.ts";
@@ -412,6 +413,29 @@ testAgent()("attachments across closing the agent", (it) => {
           (yield* fs.exists(path.join(directory, `${attachment.id}.model.webp`))) ||
           (yield* fs.exists(path.join(directory, `${attachment.id}.model-original`))),
       ).toBe(true);
+    }),
+  );
+
+  it.effect("a message still queued keeps its image when the agent reopens", () =>
+    Effect.gen(function* () {
+      const env = yield* TestEnv;
+      const sessionId = yield* freshSession;
+      const attachment = yield* current(
+        Effect.gen(function* () {
+          const saved = yield* (yield* Attachments).save(tinyPng);
+          yield* (yield* MessageQueue).add(sessionId, "look", [saved.id], false);
+          return saved;
+        }),
+      );
+      yield* env.reopen;
+      expect(
+        yield* current(Effect.flatMap(Attachments, (stored) => stored.get(attachment.id))),
+      ).toMatchObject({ id: attachment.id });
+      expect(
+        (yield* current(Effect.flatMap(MessageQueue, (queue) => queue.list(sessionId, null)))).map(
+          (message) => message.attachmentIds,
+        ),
+      ).toEqual([[attachment.id]]);
     }),
   );
 });

@@ -31,7 +31,7 @@
 
 - 첨부 id는 바이트의 sha256 hex(64자)다. `isAttachmentId`를 통과하지 못한 id는 파일시스템과 DB에 닿지 않는다. `get`은 바로 null을 돌려준다
 - 선언된 MIME 타입은 믿지 않는다. 실제 타입은 `sniffImageType`의 시그니처 판별로 정한다. WebP는 offset 0의 RIFF와 offset 8의 WEBP가 모두 맞아야 한다
-- 고아 첨부 삭제(`deleteOrphans`)는 판단과 삭제를 한 SQL 문(`DELETE ... WHERE NOT EXISTS node_attachments AND NOT EXISTS btw_attachments RETURNING *`)으로 한다. 그 사이에 추가된 링크의 blob이 지워지지 않게 하기 위해서다. 첨부를 참조하는 표는 `node_attachments`와 `btw_attachments` 두 곳이다
+- 고아 첨부 삭제(`deleteOrphans`)는 판단과 삭제를 한 SQL 문(`DELETE ... WHERE NOT EXISTS node_attachments AND NOT EXISTS btw_attachments AND NOT EXISTS queued_message_attachments RETURNING *`)으로 한다. 그 사이에 추가된 링크의 blob이 지워지지 않게 하기 위해서다. 첨부를 참조하는 표는 `node_attachments`, `btw_attachments`, `queued_message_attachments` 세 곳이다. 아직 전달되지 않은 대기 메시지의 이미지도 지우지 않는다
 - 모델용 사본 파일 경로는 `<id>.model.jpg`다(JPEG; llama.cpp 계열 로컬 서버가 stb_image로 읽어 WebP를 못 읽을 수 있어서, decisions.md 2026-11-02). 변환해도 이득이 없었다는 marker는 `<id>.model-original` 빈 파일이다. 이전 릴리스가 남긴 `<id>.model.webp` 사본은 purge에서 함께 지운다. GIF는 애니메이션 보존을 위해 변환하지 않고 원본을 쓴다
 - 변환 결과가 원본 바이트 이상이면 marker를 남기고 원본을 보낸다. 기존 사본이 `maxModelImageBytes`보다 크면 지우고 다시 만든다
 - 적응형 인코딩은 2048/q86, 1600/q78, 1280/q70, 1024/q64 순서로 시도한다. 작은 시도는 앞 결과가 아직 `maxModelImageBytes`를 넘을 때만 실행한다

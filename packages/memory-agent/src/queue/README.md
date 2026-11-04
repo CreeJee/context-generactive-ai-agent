@@ -53,10 +53,10 @@
 
 ## Side Effects
 
-- SQLite `queued_messages` 테이블을 SELECT한다(`findOne`, `list`, `deliverable`, `head`).
-- SQLite `queued_messages`에 INSERT ... RETURNING을 한다(`add`).
+- SQLite `queued_messages` 테이블을 SELECT한다(`findOne`, `list`, `deliverable`, `head`). 메시지의 이미지 id는 `queued_message_attachments`에서 위치 순으로 모은다.
+- SQLite `queued_messages`와 메시지 이미지 한 개당 한 행인 `queued_message_attachments`에 INSERT한 뒤 다시 읽는다(`add`).
 - SQLite `queued_messages`를 UPDATE한다: 상태·text·draft·failure·steered·updated_at 변경(`setState`), steered 일괄 설정(`add`).
-- SQLite `queued_messages`에서 DELETE한다(`remove`).
+- SQLite `queued_messages`에서 DELETE한다(`remove`). 그 메시지의 `queued_message_attachments` 행은 FK cascade로 같이 지워진다.
 - 레이어 생성 시 SQLite UPDATE를 한 번 수행해 waiting·editing을 held로 바꾼다.
 - `SecureRandom.uuidV4`로 메시지 id를 만든다.
 - `Clock.currentTimeMillis`로 `created_at`, `updated_at`을 기록한다.

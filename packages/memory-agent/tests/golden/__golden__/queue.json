@@ -75,9 +75,9 @@
   "notifications": [],
   "queue": [
     {
+      "attachment_ids": [],
       "delivered_via": "tool_boundary",
       "failure": null,
-      "in_transcript": 0,
       "run_id": "<id-5>",
       "state": "delivered",
       "steered": 0,

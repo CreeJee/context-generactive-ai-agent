@@ -80,11 +80,16 @@ const make = Effect.gen(function* () {
   const now = Clock.currentTimeMillis;
   // Reservations are checked and changed in one Ref.modify, so no two fibres claim one.
   const reservations = yield* Ref.make<Reservations>(HashMap.empty());
+  /** A message's columns, with the images it carries in order as `attachment_ids`. */
+  const columns = sql.literal(`q.id, q.seq, q.text, q.state, q.draft, q.delivered_via, q.run_id,
+    q.failure, q.steered, q.created_at,
+    (SELECT json_group_array(a.attachment_id ORDER BY a.position)
+      FROM queued_message_attachments a WHERE a.message_id = q.id) AS attachment_ids`);
   const findOne = SqlSchema.findOneOption({
     Request: SessionMessage,
     Result: Row,
     execute: ({ sessionId, id }) =>
-      sql`SELECT * FROM queued_messages WHERE session_id = ${sessionId} AND id = ${id}`,
+      sql`SELECT ${columns} FROM queued_messages q WHERE q.session_id = ${sessionId} AND q.id = ${id}`,
   });
   const get = (sessionId: string, id: string) =>
     findOne({ sessionId, id }).pipe(
@@ -137,47 +142,58 @@ const make = Effect.gen(function* () {
     Request: Schema.Struct({ sessionId: Schema.String, recentRunId: Schema.NullOr(Schema.String) }),
     Result: Row,
     execute: ({ sessionId, recentRunId }) => sql`
-      SELECT * FROM queued_messages
-      WHERE session_id = ${sessionId} AND (state != 'delivered' OR run_id = ${recentRunId})
-      ORDER BY seq`,
+      SELECT ${columns} FROM queued_messages q
+      WHERE q.session_id = ${sessionId} AND (q.state != 'delivered' OR q.run_id = ${recentRunId})
+      ORDER BY q.seq`,
   });
   // The waiting prefix: waiting rows before the first message being edited or held.
   const deliverable = SqlSchema.findAll({
     Request: Schema.String,
     Result: Row,
     execute: (sessionId) => sql`
-      SELECT * FROM queued_messages
-      WHERE session_id = ${sessionId} AND state = 'waiting' AND seq < coalesce(
+      SELECT ${columns} FROM queued_messages q
+      WHERE q.session_id = ${sessionId} AND q.state = 'waiting' AND q.seq < coalesce(
         (SELECT min(seq) FROM queued_messages
          WHERE session_id = ${sessionId} AND state IN ('editing', 'held')),
         9007199254740991)
-      ORDER BY seq`,
+      ORDER BY q.seq`,
   });
   // Only one row is needed for a next turn; do not materialize the whole waiting prefix.
   const head = SqlSchema.findOneOption({
     Request: Schema.String,
     Result: Row,
     execute: (sessionId) => sql`
-      SELECT * FROM queued_messages
-      WHERE session_id = ${sessionId} AND state IN ('waiting', 'editing', 'held')
-      ORDER BY seq LIMIT 1`,
+      SELECT ${columns} FROM queued_messages q
+      WHERE q.session_id = ${sessionId} AND q.state IN ('waiting', 'editing', 'held')
+      ORDER BY q.seq LIMIT 1`,
   });
   const insert = SqlSchema.findOne({
     Request: Schema.Struct({
       id: Schema.String,
       sessionId: Schema.String,
       text: Schema.String,
-      attachmentIds: Schema.fromJsonString(Schema.Array(Schema.String)),
+      attachmentIds: Schema.Array(Schema.String),
       steered: Schema.Literals([0, 1]),
       at: Schema.Finite,
     }),
     Result: Row,
-    execute: (row) => sql`
-      INSERT INTO queued_messages (id, session_id, seq, text, attachment_ids, state, steered, created_at, updated_at)
+    execute: (row) =>
+      sql`
+      INSERT INTO queued_messages (id, session_id, seq, text, state, steered, created_at, updated_at)
       VALUES (${row.id}, ${row.sessionId},
         (SELECT coalesce(max(seq), 0) + 1 FROM queued_messages WHERE session_id = ${row.sessionId}),
-        ${row.text}, ${row.attachmentIds}, 'waiting', ${row.steered}, ${row.at}, ${row.at})
-      RETURNING *`,
+        ${row.text}, 'waiting', ${row.steered}, ${row.at}, ${row.at})`.pipe(
+        Effect.andThen(
+          Effect.forEach(
+            row.attachmentIds,
+            (attachmentId, position) => sql`
+              INSERT INTO queued_message_attachments (message_id, position, attachment_id)
+              VALUES (${row.id}, ${position}, ${attachmentId})`,
+            { discard: true },
+          ),
+        ),
+        Effect.andThen(sql`SELECT ${columns} FROM queued_messages q WHERE q.id = ${row.id}`),
+      ),
   });
 
   // A new process has no page editing and no run to deliver into: what was still on its way is

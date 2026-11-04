@@ -53,18 +53,18 @@
   "notifications": [],
   "queue": [
     {
+      "attachment_ids": [],
       "delivered_via": "next_turn",
       "failure": null,
-      "in_transcript": 0,
       "run_id": "<id-7>",
       "state": "delivered",
       "steered": 1,
       "text": "and the notes"
     },
     {
+      "attachment_ids": [],
       "delivered_via": "next_turn",
       "failure": null,
-      "in_transcript": 0,
       "run_id": "<id-8>",
       "state": "delivered",
       "steered": 1,

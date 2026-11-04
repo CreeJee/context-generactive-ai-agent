@@ -1627,6 +1627,8 @@ const make = Effect.gen(function* () {
       { discard: true },
     );
     yield* run(sql`DELETE FROM permission_reviews WHERE session_id = ${sessionId}`);
+    yield* run(sql`DELETE FROM queued_message_attachments
+      WHERE message_id IN (SELECT id FROM queued_messages WHERE session_id = ${sessionId})`);
     yield* run(sql`DELETE FROM queued_messages WHERE session_id = ${sessionId}`);
     yield* run(sql`DELETE FROM imported_sessions WHERE session_id = ${sessionId}`);
     const goals = yield* purgeGoalHistory(sessionId);

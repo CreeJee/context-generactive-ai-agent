@@ -553,6 +553,31 @@ export const sessionStateTablesMigration = `
       AND key NOT IN (SELECT id FROM sessions);
 `;
 
+/** The step that keeps a queued message's images as rows instead of a JSON array. */
+export const queuedMessageAttachmentsMigration = `
+  -- Which images a queued message carries, in order (decisions.md "대기 메시지의 이미지는 행으로
+  -- 둔다 (2026-11-04)"). The JSON array named them without a reference, so removing unused
+  -- images could delete one a message still waited to send. Delivery left out an image that was
+  -- gone and an id that was not a string never named one, so neither is moved.
+  CREATE TABLE queued_message_attachments (
+    message_id TEXT NOT NULL REFERENCES queued_messages(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL CHECK (position >= 0),
+    attachment_id TEXT NOT NULL REFERENCES attachments(id),
+    PRIMARY KEY (message_id, position)
+  );
+  CREATE INDEX queued_message_attachments_attachment
+    ON queued_message_attachments(attachment_id);
+  INSERT INTO queued_message_attachments (message_id, position, attachment_id)
+    SELECT q.id, i.key, i.value
+    FROM queued_messages q,
+      json_each(CASE WHEN json_type(q.attachment_ids) = 'array' THEN q.attachment_ids END) i
+    JOIN attachments a ON a.id = i.value
+    WHERE i.type = 'text';
+  ALTER TABLE queued_messages DROP COLUMN attachment_ids;
+  -- Whether a delivered message reached the transcript; nothing has read it.
+  ALTER TABLE queued_messages DROP COLUMN in_transcript;
+`;
+
 /**
  * Ordered schema steps. `PRAGMA user_version` records how many have been applied.
  * Append new steps; never edit an applied one.
@@ -2574,6 +2599,7 @@ export const migrations: readonly string[] = [
   executionSubjectsMigration,
   attemptPendingToolCallsMigration,
   sessionStateTablesMigration,
+  queuedMessageAttachmentsMigration,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.
