@@ -4,6 +4,7 @@ import {
   runHasFailure,
   runPlace,
   spanLine,
+  spanTotalLine,
   type BundleRun,
   type BundleText,
   type ReportBundle,
@@ -160,6 +161,19 @@ function Run({ run }: { run: BundleRun }) {
               <li key={index}>{spanLine(span)}</li>
             ))}
           </ul>
+        </div>
+      )}
+      {run.spanTotals.length > 0 && (
+        <div className="space-y-1">
+          <p className="text-xs font-medium">시간을 쓴 곳 (span 합계)</p>
+          <ul className="space-y-0.5 font-mono text-xs break-all">
+            {run.spanTotals.map((total) => (
+              <li key={total.path.join("\n")}>{spanTotalLine(total)}</li>
+            ))}
+          </ul>
+          {run.spanTotalsCut && (
+            <p className="text-xs text-muted-foreground">짧게 걸린 span 경로는 빠졌어요.</p>
+          )}
         </div>
       )}
       {run.eventsCut && <p className="text-xs text-muted-foreground">앞부분 이벤트는 빠졌어요.</p>}

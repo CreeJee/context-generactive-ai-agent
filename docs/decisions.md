@@ -4046,3 +4046,10 @@
   - 모델 실패의 사용자 문장(`shownReason`): HTTP 상태처럼 괄호에 붙인다(`The provider could not be reached. (ECONNREFUSED)`). run 오류로 DB에 남으므로 재시작해서 실패 span이 사라져도 리포트에 남는다.
 - compatible 클라이언트의 전송 코드 로그도 같은 함수를 쓴다.
 - 같은 날 다른 기기에서 "Compatible API connection closed before the answer finished"가 다시 났다. 답 도중 끊긴 연결의 코드도 로그에만 있었다. 이제 요청마다 둔 Ref에 body가 끊긴 코드를 적고, `Disconnected` 실패가 그 코드를 담는다(`…finished: UND_ERR_SOCKET`). 제보는 그 기기의 로그를 볼 수 없으므로 run 오류에 남아야 한다.
+
+## 리포트에 run별 span 합계를 담는다 (2026-11-04)
+
+- 같은 제보에서 run-1은 사용자 메시지부터 첫 모델 요청까지 약 17초가 비었다. 실패 span만으로는 그 시간을 무엇이 썼는지 알 수 없었다. 2026-11-03 결정은 성공한 span을 끝나는 즉시 버렸다.
+- 이제 recorder가 run이 `context_agent.run_id`로 이름을 단 trace의 span을 성공·실패 모두 경로별로 더한다. 남기는 것은 경로(span 이름), 횟수, 실패 수, 합계·최대 시간, 첫 시작 시각뿐이다. span 하나하나와 속성은 남기지 않는다. 문자열이 없으므로 로그 원문을 담지 않는 원칙은 그대로다.
+- 상한: run당 경로 64개(넘는 새 경로는 개수만 센다), run 500개. 메모리에만 두므로 재시작하면 사라진다. worker 스레드의 성공 span은 합계에 없다.
+- 리포트 번들은 version 3으로 올리고 run마다 합계 상위 20개(`spanTotals`)와 잘림 표시(`spanTotalsCut`)를 담는다. 미리보기에 "시간을 쓴 곳"으로 보이고, 진단 입력의 실패 run 텍스트 끝에 상위 10개를 붙인다.

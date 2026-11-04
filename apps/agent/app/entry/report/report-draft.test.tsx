@@ -52,7 +52,7 @@ describe("independent report entry", () => {
   test("summarises the bundle's failures in the draft and carries the whole bundle when shared", () => {
     const text = (value: string) => ({ text: value, cut: false });
     const bundle: ReportBundle = {
-      version: 2,
+      version: 3,
       collectedAt: "2026-10-18T00:00:00Z",
       limits: { runs: 30, eventsPerRun: 60, textChars: 1_500, failureChars: 6_000 },
       environment: {
@@ -82,6 +82,8 @@ describe("independent report entry", () => {
             error: null,
             eventsCut: false,
             failedSpans: [],
+            spanTotals: [],
+            spanTotalsCut: false,
             events: [
               BundleEvent.cases.ToolCall.make({
                 seq: 2,

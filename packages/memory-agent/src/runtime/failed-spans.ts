@@ -38,21 +38,47 @@ export interface FailedSpan {
   readonly attributes: Readonly<Record<string, number | boolean>>;
 }
 
+/**
+ * The time a run's trace spent under one span path: every span that ended there, failed or not
+ * (decided 2026-11-04). Names and numbers only.
+ */
+export interface SpanTotal {
+  /** Names of the spans it ran under, outermost first, ending with its own name. */
+  readonly path: readonly string[];
+  readonly count: number;
+  /** How many of them ended with a failure. */
+  readonly failed: number;
+  readonly totalMs: number;
+  readonly maxMs: number;
+  /** Epoch milliseconds the first of them started. */
+  readonly firstStartedAt: number;
+}
+
+/** A run's span totals, longest total first. */
+export interface RunSpanTotals {
+  readonly totals: readonly SpanTotal[];
+  /** Spans left uncounted because the run already had `pathsPerRun` paths. */
+  readonly dropped: number;
+}
+
 /** How much the recorder keeps (decided 2026-11-03). */
 export const failedSpanLimits = {
   spans: 200,
-  /** Runs whose trace the recorder remembers. */
+  /** Runs whose trace the recorder remembers, with their span totals. */
   runs: 500,
   /** Spans still running that a failed child marked; parents that never end are dropped oldest first. */
   marks: 2_000,
   pathDepth: 8,
   attributes: 16,
   maxAgeMs: 30 * 60_000,
+  /** Span paths summed per run; a span on a new path past this is only counted as dropped. */
+  pathsPerRun: 64,
 } as const;
 
 /**
- * Failed spans of this process, kept in memory for defect notices and user reports. Successful
- * spans are never kept. Without the recorder layer (tests, workers) nothing is recorded.
+ * Failed spans of this process, kept in memory for defect notices and user reports, and where each
+ * run's time went. Successful spans are never kept one by one: a run's trace only adds them to its
+ * totals. Without the recorder layer (tests, workers) nothing is recorded.
  */
 export const FailedSpans = Context.Reference<{
   /** Failed spans of one trace, oldest first. */
@@ -61,10 +87,15 @@ export const FailedSpans = Context.Reference<{
   readonly ofRuns: (
     runIds: readonly string[],
   ) => Effect.Effect<ReadonlyMap<string, readonly FailedSpan[]>>;
+  /** Span totals of each given run's trace, from when the run named its trace. */
+  readonly totalsOfRuns: (
+    runIds: readonly string[],
+  ) => Effect.Effect<ReadonlyMap<string, RunSpanTotals>>;
 }>("memory-agent/runtime/failed-spans/FailedSpans", {
   defaultValue: () => ({
     ofTrace: () => Effect.succeed([]),
     ofRuns: () => Effect.succeed(new Map()),
+    totalsOfRuns: () => Effect.succeed(new Map()),
   }),
 });
 
@@ -154,6 +185,30 @@ const make = (role: "owner" | "worker") =>
     const traceOfRun = new Map<string, string>();
     /** Running spans below which a failure was already recorded, with that failure. */
     const failedBelow = new Map<string, string>();
+    /** Span totals of the traces runs named, by path; spans that ended before are not in them. */
+    const totalsOfTrace = new Map<string, { paths: Map<string, SpanTotal>; dropped: number }>();
+
+    const addToTotals = (span: Tracer.Span, endTime: bigint, failed: boolean) => {
+      const totals = totalsOfTrace.get(span.traceId);
+      if (totals === undefined) return;
+      const path = pathOf(span);
+      const key = path.join("\n");
+      const before = totals.paths.get(key);
+      if (before === undefined && totals.paths.size >= failedSpanLimits.pathsPerRun) {
+        totals.dropped += 1;
+        return;
+      }
+      const durationMs = Number(endTime - span.status.startTime) / 1_000_000;
+      const startedAt = Number(span.status.startTime / 1_000_000n);
+      totals.paths.set(key, {
+        path,
+        count: (before?.count ?? 0) + 1,
+        failed: (before?.failed ?? 0) + (failed ? 1 : 0),
+        totalMs: (before?.totalMs ?? 0) + durationMs,
+        maxMs: Math.max(before?.maxMs ?? 0, durationMs),
+        firstStartedAt: Math.min(before?.firstStartedAt ?? startedAt, startedAt),
+      });
+    };
 
     const channel = new BroadcastChannel(failedSpanChannel);
     // The channel must never be the reason a thread stays alive.
@@ -172,8 +227,8 @@ const make = (role: "owner" | "worker") =>
     const record = (span: Tracer.Span, endTime: bigint, exit: Exit.Exit<unknown, unknown>) => {
       const below = failedBelow.get(span.spanId);
       failedBelow.delete(span.spanId);
-      if (Exit.isSuccess(exit)) return;
-      const failure = failureOf(exit.cause);
+      const failure = Exit.isSuccess(exit) ? Option.none<string>() : failureOf(exit.cause);
+      addToTotals(span, endTime, Option.isSome(failure));
       if (Option.isNone(failure)) return;
       const parent = Option.getOrUndefined(span.parent);
       if (parent !== undefined) {
@@ -210,6 +265,9 @@ const make = (role: "owner" | "worker") =>
           Option.map(decodeRunId(value), (runId) => {
             traceOfRun.set(runId, span.traceId);
             bounded(traceOfRun, failedSpanLimits.runs);
+            if (totalsOfTrace.has(span.traceId)) return;
+            totalsOfTrace.set(span.traceId, { paths: new Map(), dropped: 0 });
+            bounded(totalsOfTrace, failedSpanLimits.runs);
           });
         };
         return span;
@@ -238,15 +296,38 @@ const make = (role: "owner" | "worker") =>
               }),
             ),
         ),
+      totalsOfRuns: (runIds: readonly string[]) =>
+        Effect.sync(
+          (): ReadonlyMap<string, RunSpanTotals> =>
+            new Map(
+              runIds.flatMap((runId) => {
+                const totals = totalsOfTrace.get(traceOfRun.get(runId) ?? "");
+                return totals === undefined || totals.paths.size === 0
+                  ? []
+                  : [
+                      [
+                        runId,
+                        {
+                          totals: [...totals.paths.values()].toSorted(
+                            (left, right) => right.totalMs - left.totalMs,
+                          ),
+                          dropped: totals.dropped,
+                        },
+                      ] as const,
+                    ];
+              }),
+            ),
+        ),
     };
     return Context.make(Tracer.Tracer, tracer).pipe(Context.add(FailedSpans, store));
   });
 
 /**
  * Wraps the tracer below it (OTLP or the default one) to keep the spans that failed, in memory
- * only (decided 2026-11-03). Spans that succeed are dropped as they end; a failure that passes up
- * through its parents is kept once, at the span it began in. Provide it above the exporters and
- * below every service whose spans it should see.
+ * only (decided 2026-11-03). Spans that succeed are dropped as they end, after a run's trace adds
+ * them to its totals (2026-11-04); a failure that passes up through its parents is kept once, at
+ * the span it began in. Provide it above the exporters and below every service whose spans it
+ * should see. A worker thread's spans are not in the totals; its failed ones still arrive.
  *
  * This is the owner thread's recorder: besides its own spans it keeps what the workers send.
  */

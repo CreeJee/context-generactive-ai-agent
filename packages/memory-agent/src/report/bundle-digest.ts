@@ -3,6 +3,7 @@ import {
   BundleEvent,
   type BundleRun,
   type BundleSpan,
+  type BundleSpanTotal,
   type BundleText,
   type ReportBundle,
 } from "./bundle-contract.ts";
@@ -63,6 +64,12 @@ export const spanLine = (span: BundleSpan) => {
   }`;
 };
 
+/** One line for a span path's total: how often it ran, how long in all and at most, from when. */
+export const spanTotalLine = (total: BundleSpanTotal) =>
+  `${total.path.join(" › ")} ×${total.count}${total.failed > 0 ? ` (${total.failed} failed)` : ""}: ${Math.round(
+    total.totalMs,
+  )}ms, max ${Math.round(total.maxMs)}ms, first ${total.firstStartedAt}`;
+
 /** A run failed, or something in it did. */
 export const runHasFailure = (run: BundleRun) =>
   run.error !== null ||
@@ -99,7 +106,13 @@ const environmentText = (bundle: ReportBundle) => {
   ].join("\n");
 };
 
-/** A failing run's error, the message that asked for it, and each failed call or refusal. */
+/** Span totals the failure text ends with, so a long text loses them first. */
+const failureTotals = 10;
+
+/**
+ * A failing run's error, the message that asked for it, each failed call or refusal, and where its
+ * time went.
+ */
 const failureText = (run: BundleRun) => {
   const lastAsk = run.events
     .filter(BundleEvent.guards.Message)
@@ -123,6 +136,7 @@ const failureText = (run: BundleRun) => {
         Trace: () => [],
       }),
     ),
+    ...run.spanTotals.slice(0, failureTotals).map((total) => `time: ${spanTotalLine(total)}`),
   ];
   return parts.join("\n");
 };

@@ -6,15 +6,15 @@
 
 ## Interface
 
-- `ReportBundle` / `BundleEvent` / `BundleRun` / `BundleText` / `BundleSectionStatus` / `BundleIntegration` / `BundleBoard` / `BundleDefect` — 증거 번들 Schema(`version: 2`, 섹션별 status/items/truncated, TaggedUnion 이벤트 Message·ToolCall·Approval·Trace, run마다 메모리에 남은 실패 span `BundleSpan`)
+- `ReportBundle` / `BundleEvent` / `BundleRun` / `BundleText` / `BundleSectionStatus` / `BundleIntegration` / `BundleBoard` / `BundleDefect` — 증거 번들 Schema(`version: 3`, 섹션별 status/items/truncated, TaggedUnion 이벤트 Message·ToolCall·Approval·Trace, run마다 메모리에 남은 실패 span `BundleSpan`과 span 경로별 합계 `BundleSpanTotal`)
 - `ReportDeliveryFailure` / `ReportDeliveryResult` / `ReportDeliveryStatus` — 전송 실패 사유 리터럴, 결과 TaggedUnion(`delivered`·`duplicate`·`uncertain_duplicate`), 웹훅 설정 상태 Schema
 - `ReportDiagnosisInput` / `ReportDiagnosis` / `ReportDiagnosisFailure` — 진단 입력(symptom ≤4000자 등, bundle nullable), 진단 결과(summary·observations·hypotheses), 실패 사유 Schema
 - `collectReportBundle(project, session)` — `Effect.fn("ReportBundle.collect")`; 한 세션의 증거 번들을 수집한다
-- `bundleLimits` — 번들 한도 상수(runs 30, eventsPerRun 60, textChars 1500, failureChars 6000, unlinked 20)
+- `bundleLimits` — 번들 한도 상수(runs 30, eventsPerRun 60, textChars 1500, failureChars 6000, unlinked 20, failedSpansPerRun 20, spanTotalsPerRun 20)
 - `loopHealthText` — `LoopHealth`를 텍스트(`Healthy`, `Retrying a/b`, `Exhausted (e)`, `Defected`)로 변환한다
 - `diagnosisDigest(bundle)` — 진단 모델에 줄 `DigestItem[]`(environment, timeline 개요, 최신 실패 run 최대 10개)를 만든다
 - `bundlePlaces(bundle)` — observation이 인용할 수 있는 place id 집합(`environment`, `timeline`, `run-N`, `run-N/call-M`)
-- `runPlace` / `runHasFailure` / `digestLimits` / `DigestItem` — run place 이름, 실패 run 판정, digest 한도, digest 항목 타입
+- `runPlace` / `runHasFailure` / `spanLine` / `spanTotalLine` / `digestLimits` / `DigestItem` — run place 이름, 실패 run 판정, 실패 span·span 합계 한 줄, digest 한도, digest 항목 타입
 - `ReportDiagnoser` — `Context.Service`(`diagnose(input)`), `ReportDiagnoser.layer`로 제공; 선택된 모델로 리포트 초안을 진단한다
 - `parseDiagnosis(answer, evidenceIds)` — 모델 JSON 답을 디코드하고 인용 없는 observation을 hypotheses로 옮긴다
 - `diagnosisInstructions` — 진단 모델 system 프롬프트 문자열

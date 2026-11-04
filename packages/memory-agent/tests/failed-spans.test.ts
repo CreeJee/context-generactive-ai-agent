@@ -62,6 +62,36 @@ layer(failedSpansLayer, { excludeTestServices: true })("failed span recorder", (
     }),
   );
 
+  it.effect("sums every span of a run's trace by its path, and nothing of other traces", () =>
+    Effect.gen(function* () {
+      const run = Effect.gen(function* () {
+        yield* Effect.annotateCurrentSpan(runSpanAttribute, "run-4");
+        yield* Effect.void.pipe(Effect.withSpan("Memory.search"));
+        yield* Effect.void.pipe(Effect.withSpan("Memory.search"));
+        return yield* Effect.fail(new ProviderRejected()).pipe(
+          Effect.withSpan("LanguageModel.streamText"),
+        );
+      }).pipe(Effect.withSpan("AgentChat.start"));
+      yield* Effect.exit(run);
+      // A trace no run named, such as a page's request, is not summed.
+      yield* Effect.void.pipe(Effect.withSpan("Sessions.list"));
+
+      const recorded = (yield* (yield* FailedSpans).totalsOfRuns(["run-4", "run-5"])).get("run-4");
+      expect(recorded?.dropped).toBe(0);
+      expect(
+        recorded?.totals
+          .map(({ path, count, failed }) => ({ path, count, failed }))
+          .toSorted((left, right) => left.path.join().localeCompare(right.path.join())),
+      ).toEqual([
+        { path: ["AgentChat.start"], count: 1, failed: 1 },
+        { path: ["AgentChat.start", "LanguageModel.streamText"], count: 1, failed: 1 },
+        { path: ["AgentChat.start", "Memory.search"], count: 2, failed: 0 },
+      ]);
+      // Longest first: the run's own span holds the others.
+      expect(recorded?.totals[0]?.path).toEqual(["AgentChat.start"]);
+    }),
+  );
+
   it.effect("takes in what a worker thread's recorder sends, under the trace it ran in", () =>
     Effect.gen(function* () {
       const owner = yield* FailedSpans;

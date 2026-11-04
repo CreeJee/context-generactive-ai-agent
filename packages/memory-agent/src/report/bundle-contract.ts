@@ -80,6 +80,22 @@ export const BundleSpan = Schema.Struct({
 });
 export type BundleSpan = typeof BundleSpan.Type;
 
+/**
+ * Where a run's time went (decided 2026-11-04): every span of its trace that ended, failed or not,
+ * summed by its path. Only span names and numbers.
+ */
+export const BundleSpanTotal = Schema.Struct({
+  /** Names of the spans it ran under, outermost first, ending with its own name. */
+  path: Schema.Array(Schema.String),
+  count: Schema.Int,
+  failed: Schema.Int,
+  totalMs: Schema.Finite,
+  maxMs: Schema.Finite,
+  /** When the first of them started. */
+  firstStartedAt: Schema.String,
+});
+export type BundleSpanTotal = typeof BundleSpanTotal.Type;
+
 export const BundleRun = Schema.Struct({
   /** Order of the run in the session, from 1 for its first run. */
   seq: Schema.Int,
@@ -96,6 +112,13 @@ export const BundleRun = Schema.Struct({
    * or once they are older than the recorder keeps them.
    */
   failedSpans: Schema.Array(BundleSpan),
+  /**
+   * The run's span totals this process holds in memory, longest total first: none after a restart
+   * or for a run older than the recorder remembers.
+   */
+  spanTotals: Schema.Array(BundleSpanTotal),
+  /** More span paths than the bundle or the recorder keeps; the shortest were left out. */
+  spanTotalsCut: Schema.Boolean,
 });
 export type BundleRun = typeof BundleRun.Type;
 
@@ -131,8 +154,8 @@ export const BundleDefect = Schema.Struct({
 });
 
 export const ReportBundle = Schema.Struct({
-  /** 2 since runs carry their failed spans (2026-11-03). */
-  version: Schema.Literal(2),
+  /** 2 since runs carry their failed spans (2026-11-03); 3 since they carry span totals (2026-11-04). */
+  version: Schema.Literal(3),
   collectedAt: Schema.String,
   /** The limits the bundle was cut to, so a reader knows what may be missing. */
   limits: Schema.Struct({

@@ -20,6 +20,8 @@ const run = (seq: number, failed: boolean): BundleRun => ({
   error: null,
   eventsCut: false,
   failedSpans: [],
+  spanTotals: [],
+  spanTotalsCut: false,
   events: [
     BundleEvent.cases.Message.make({ role: "user", at: "t", text: text(`ask ${seq}`) }),
     BundleEvent.cases.ToolCall.make({
@@ -33,7 +35,7 @@ const run = (seq: number, failed: boolean): BundleRun => ({
 });
 
 const bundleOf = (runs: readonly BundleRun[]): ReportBundle => ({
-  version: 2,
+  version: 3,
   collectedAt: "2026-10-18T00:00:00Z",
   limits: { runs: 30, eventsPerRun: 60, textChars: 1_500, failureChars: 6_000 },
   environment: {

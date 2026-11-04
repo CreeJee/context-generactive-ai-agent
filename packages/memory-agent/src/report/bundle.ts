@@ -10,7 +10,7 @@ import { McpServers, McpServerState } from "../mcp/servers.ts";
 import type { Project } from "../projects/projects.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import { DefectReporter } from "../runtime/defect-reporter.ts";
-import { FailedSpans } from "../runtime/failed-spans.ts";
+import { FailedSpans, type RunSpanTotals } from "../runtime/failed-spans.ts";
 import { hostPlatform } from "../runtime/host-system.ts";
 import { fallbackLogged } from "../runtime/logged-failures.ts";
 import { LoopHealth } from "../runtime/loop-health.ts";
@@ -35,6 +35,8 @@ export const bundleLimits = {
   unlinked: 20,
   /** The newest failed spans a run keeps (2026-11-03). */
   failedSpansPerRun: 20,
+  /** The longest span totals a run keeps (2026-11-04). */
+  spanTotalsPerRun: 20,
 } as const;
 
 /** Local ids leave the machine only as this much of their SHA-256. */
@@ -85,6 +87,16 @@ const CardRow = Schema.Struct({
 });
 
 const iso = (millis: number) => DateTime.formatIso(DateTime.makeUnsafe(millis));
+
+/** A run's longest span totals; cut when the recorder dropped spans or the bundle leaves some out. */
+const runSpanTotals = (recorded: RunSpanTotals | undefined) => ({
+  spanTotals: (recorded?.totals ?? [])
+    .slice(0, bundleLimits.spanTotalsPerRun)
+    .map((total) => ({ ...total, firstStartedAt: iso(total.firstStartedAt) })),
+  spanTotalsCut:
+    recorded !== undefined &&
+    (recorded.dropped > 0 || recorded.totals.length > bundleLimits.spanTotalsPerRun),
+});
 
 /** An MCP server's state by its case name, with the failure code when it failed. */
 const mcpStatus = McpServerState.$match({
@@ -420,7 +432,9 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
       const approvals = yield* approvalRows(runIds).pipe(
         fallbackLogged("report_bundle_approvals_failed", () => []),
       );
-      const spansOfRun = yield* (yield* FailedSpans).ofRuns(runIds);
+      const recorder = yield* FailedSpans;
+      const spansOfRun = yield* recorder.ofRuns(runIds);
+      const totalsOfRun = yield* recorder.totalsOfRuns(runIds);
       const tasks = yield* (yield* WorkTraceStore)
         .taskTree(session.id)
         .pipe(fallbackLogged("report_bundle_trace_failed", () => []));
@@ -493,6 +507,7 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
                   durationMs: span.durationMs,
                   attributes: span.attributes,
                 })),
+              ...runSpanTotals(totalsOfRun.get(run.run_id)),
             } satisfies BundleRun;
           }),
         ),
@@ -530,7 +545,7 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
     { concurrency: 1 },
   );
   return {
-    version: 2,
+    version: 3,
     collectedAt: DateTime.formatIso(yield* DateTime.now),
     limits: {
       runs: bundleLimits.runs,
