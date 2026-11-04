@@ -7,7 +7,7 @@ import { Database } from "../db/database.ts";
 import { RunStore } from "../loop/store.ts";
 import { StoredMessage } from "./schema.ts";
 import { sqlAll, sqlExec, sqlRun } from "../../tests/support/sql.ts";
-import { threadText } from "../../tests/support/chat-thread.ts";
+import { threadRevision, threadText, writeThread } from "../../tests/support/chat-thread.ts";
 
 const fixture = <A, E>(program: Effect.Effect<A, E, RunStore | SqlClient.SqlClient>) =>
   Effect.scoped(
@@ -22,6 +22,7 @@ const fixture = <A, E>(program: Effect.Effect<A, E, RunStore | SqlClient.SqlClie
   );
 
 const encodeThread = Schema.encodeEffect(Schema.fromJsonString(Schema.Array(StoredMessage)));
+const encodeMessage = Schema.encodeEffect(Schema.fromJsonString(StoredMessage));
 
 const user = (id: string, content: string): StoredMessage => ({ id, role: "user", content });
 const answer = (content: string): StoredMessage => ({ id: "answer", role: "assistant", content });
@@ -92,13 +93,12 @@ it.effect("a save compares with the thread as stored, not as its writer last sav
     const sql = yield* SqlClient.SqlClient;
     const messages = [user("q", "token: secret"), answer("Done")];
     yield* store.saveThread("a", messages);
-    // The secret sweep hides the first message in place.
+    // The secret sweep hides the first message in place, and a read gives what it left.
     yield* sqlRun(
       "UPDATE chat_thread_messages SET message = ? WHERE thread_id = 'a' AND seq = 0",
-      yield* Schema.encodeEffect(Schema.fromJsonString(StoredMessage))(
-        user("q", "token: [redacted]"),
-      ),
+      yield* encodeMessage(user("q", "token: [redacted]")),
     );
+    expect(yield* store.thread("a")).toEqual([user("q", "token: [redacted]"), answer("Done")]);
     // The run still holds the text it had and saves it with its next message.
     const next = [...messages, user("n", "Next")];
     yield* store.saveThread("a", next);
@@ -114,5 +114,66 @@ it.effect("a save compares with the thread as stored, not as its writer last sav
     yield* store.saveThread("a", after);
     expect(yield* store.thread("a")).toEqual(after);
     expect(yield* threadText("a")).toBe(yield* encodeThread(after));
+  }).pipe(fixture),
+);
+
+it.effect(
+  "a thread is given as remembered while it stays at the revision it was read or saved at",
+  () =>
+    Effect.gen(function* () {
+      const store = yield* RunStore;
+      const question = user("q", "Question");
+      // Another writer's thread is read once, then given as that read decoded it.
+      yield* writeThread({
+        threadId: "a",
+        messages: yield* encodeThread([question, answer("Done")]),
+      });
+      const read = yield* store.thread("a");
+      expect(yield* store.thread("a")).toBe(read);
+
+      // A save builds on the remembered messages and is remembered as a read would decode it,
+      // without a field the stored shape leaves out.
+      const drafted = { ...user("n", "Next"), draft: true };
+      yield* store.saveThread("a", [...read, drafted]);
+      const saved = yield* store.thread("a");
+      expect(saved).toEqual([question, answer("Done"), user("n", "Next")]);
+      expect(saved[0]).toBe(read[0]);
+      expect(yield* store.thread("a")).toBe(saved);
+
+      // Only the threads saved or read last are remembered.
+      yield* Effect.forEach(
+        ["b", "c", "d", "e"],
+        (threadId) => store.saveThread(threadId, [question]),
+        {
+          discard: true,
+        },
+      );
+      const again = yield* store.thread("a");
+      expect(again).not.toBe(saved);
+      expect(again).toEqual(saved);
+    }).pipe(fixture),
+);
+
+it.effect("a rolled-back save is not remembered, though the next change gets its revision", () =>
+  Effect.gen(function* () {
+    const store = yield* RunStore;
+    const sql = yield* SqlClient.SqlClient;
+    const question = user("q", "Question");
+    yield* store.saveThread("a", [question]);
+    const rolledBack = yield* sql
+      .withTransaction(
+        store.saveThread("a", [question, user("r", "Rolled back")]).pipe(
+          Effect.andThen(threadRevision("a")),
+          Effect.flatMap((revision) => Effect.fail(revision)),
+        ),
+      )
+      .pipe(Effect.flip);
+
+    yield* sqlRun(
+      "INSERT INTO chat_thread_messages (thread_id, seq, message) VALUES ('a', 1, ?)",
+      yield* encodeMessage(user("o", "Other")),
+    );
+    expect(yield* threadRevision("a")).toBe(rolledBack);
+    expect(yield* store.thread("a")).toEqual([question, user("o", "Other")]);
   }).pipe(fixture),
 );

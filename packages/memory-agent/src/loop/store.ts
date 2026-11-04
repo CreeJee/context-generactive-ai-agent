@@ -1,4 +1,15 @@
-import { Clock, Context, Data, Effect, HashSet, Layer, Option, Schema } from "effect";
+import {
+  Array as Arr,
+  Clock,
+  Context,
+  Data,
+  Effect,
+  HashSet,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+} from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { type ChatMetadata, ChatMetadataFailed } from "../chat-store/metadata.ts";
@@ -28,6 +39,16 @@ const Usage = Schema.fromJsonString(StoredUsage);
 const Payload = Schema.fromJsonString(StoredInterruptPayload);
 const Response = Schema.fromJsonString(StoredInterruptResponse);
 const Value = Schema.fromJsonString(JsonValue);
+
+/** Threads a store remembers the messages of at once: the ones running and the ones just read. */
+const rememberedThreads = 4;
+
+/** A thread's messages at one revision. The revision names them, so they hold while it does. */
+interface RememberedThread {
+  readonly threadId: string;
+  readonly revision: number;
+  readonly messages: ReadonlyArray<StoredMessage>;
+}
 
 /** How a run ended, or that it waits for the user. */
 export type RunEnd = Data.TaggedEnum<{
@@ -108,19 +129,83 @@ const make = Effect.gen(function* () {
   const projection = yield* historyProjection();
   const rows = yield* threadMessages;
   const decodeThread = Schema.decodeEffect(Thread);
+  const decodeMessage = Schema.decodeEffect(Schema.fromJsonString(StoredMessage));
+  const remembered = yield* Ref.make<ReadonlyArray<RememberedThread>>([]);
+
+  /**
+   * Remembers the thread's messages at a revision once the transaction that read or wrote them
+   * commits. A rolled-back transaction leaves nothing: its revision is given again to the next
+   * change. A revision remembered at or after this one stays, so messages already handed out keep
+   * matching by reference.
+   */
+  const remember = (entry: RememberedThread) =>
+    sql.afterCommit(
+      Ref.update(remembered, (entries) =>
+        Arr.some(
+          entries,
+          (other) => other.threadId === entry.threadId && other.revision >= entry.revision,
+        )
+          ? entries
+          : Arr.take(
+              Arr.prepend(
+                Arr.filter(entries, (other) => other.threadId !== entry.threadId),
+                entry,
+              ),
+              rememberedThreads,
+            ),
+      ),
+    );
+
+  const revisionOf = (threadId: string) =>
+    sql`SELECT revision FROM chat_threads WHERE thread_id = ${threadId}`;
+  const RevisionRow = Schema.Struct({ revision: Schema.Int });
+
+  /** The revision the thread's last change gave it. */
+  const threadRevision = SqlSchema.findOne({
+    Request: Schema.String,
+    Result: RevisionRow,
+    execute: revisionOf,
+  });
+  const savedRevision = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: RevisionRow,
+    execute: revisionOf,
+  });
+
+  /** The thread's messages as its rows hold them, remembered at the revision they were read at. */
+  const readThread = (threadId: string) =>
+    Effect.flatMap(
+      rows.stored(threadId),
+      Option.match({
+        onNone: () => Effect.succeed<ReadonlyArray<StoredMessage>>([]),
+        onSome: (stored) =>
+          Effect.tap(decodeThread(stored.messages), (messages) =>
+            remember({ threadId, revision: stored.revision, messages }),
+          ),
+      }),
+    );
 
   /**
    * The thread's messages; a thread never saved is empty. `ChatState` writes the threads of
    * sessions recorded before chat state at startup, so a missing thread is a new one: rebuilding
    * it from nodes would repeat the user node `AgentChat` records just before a first run.
+   * Remembered messages are given while the thread is still at their revision; otherwise its rows
+   * are read.
    */
   const thread = (threadId: string) =>
-    Effect.flatMap(
-      rows.stored(threadId),
-      Option.match({
-        onNone: () => Effect.succeed<ReadonlyArray<StoredMessage>>([]),
-        onSome: (stored) => decodeThread(stored.messages),
-      }),
+    Effect.flatMap(Effect.zip(savedRevision(threadId), Ref.get(remembered)), ([saved, entries]) =>
+      Option.match(
+        Option.flatMap(saved, ({ revision }) =>
+          Arr.findFirst(
+            entries,
+            (entry) => entry.threadId === threadId && entry.revision === revision,
+          ),
+        ),
+        {
+          onNone: () => readThread(threadId),
+          onSome: (entry) => Effect.succeed(entry.messages),
+        },
+      ),
     );
 
   const threadRow = SqlSchema.findOne({
@@ -152,13 +237,6 @@ const make = Effect.gen(function* () {
   /** A page of the history projection: one group of messages per message the page shows. */
   const history = yield* HistoryProjectionReader;
 
-  /** The revision the thread's last change gave it. */
-  const threadRevision = SqlSchema.findOne({
-    Request: Schema.String,
-    Result: Schema.Struct({ revision: Schema.Int }),
-    execute: (threadId) => sql`SELECT revision FROM chat_threads WHERE thread_id = ${threadId}`,
-  });
-
   /**
    * Replaces the thread and its history groups together. Empty user text is never kept. Only the
    * messages from the first one that differs from the stored thread are written again: a run saves
@@ -179,8 +257,18 @@ const make = Effect.gen(function* () {
         const stored = yield* thread(threadId);
         const from = firstChange(stored, kept);
         yield* Effect.when(rows.removeFrom(threadId, from), Effect.succeed(from < stored.length));
-        yield* rows.insertFrom(threadId, from, kept.slice(from));
+        const written = yield* rows.insertFrom(threadId, from, kept.slice(from));
         const { revision } = yield* threadRevision(threadId);
+        // Remembered as a read decodes them: the earlier messages as stored, the new ones from the
+        // text written for them.
+        yield* remember({
+          threadId,
+          revision,
+          messages: [
+            ...stored.slice(0, from),
+            ...(yield* Effect.forEach(written, (text) => decodeMessage(text))),
+          ],
+        });
         yield* projection.replace({ threadId, revision, messages: kept }).pipe(
           // Valid messages survive a UI-only id collision; reads of the stale pages fail instead.
           Effect.catchTag("HistoryPageUnavailable", (failure) =>

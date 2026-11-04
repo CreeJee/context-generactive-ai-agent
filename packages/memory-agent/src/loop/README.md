@@ -37,7 +37,8 @@ run·thread·interrupt 행은 `RunStore`(SqlClient)가 `chat_threads`, `chat_thr
 - cancelled 응답에는 payload가 없어야 한다. `tool_call` 승인 응답은 boolean이거나 `{approved}` 봉투이며 interrupt의 `responseSchema`로 검사한다. invalid-payload 문제는 interruptId 순으로 나열한다
 - `InterruptCommitRejected`가 나면 그 batch는 하나도 기록하지 않는다. 기록 전에 모든 응답에 대해 pending 여부를 먼저 확인한다(`checkPending`)
 - `RunError.message`와 `RunSpec.modelFailure` 결과에는 provider의 텍스트를 절대 담지 않는다(사용자에게 보이는 값)
-- `saveThread`는 thread 행과 history projection을 한 트랜잭션에서 함께 교체하고, 빈 user 텍스트 메시지는 저장하지 않는다. 저장된 메시지 행을 읽어 구조로 비교하고(`firstChange`), 처음 달라진 순번부터만 지우고 다시 쓴다. 다른 writer(비밀 정리 등)가 바꾼 행도 이 비교로 덮어쓴다. `HistoryPageUnavailable` 중 `id-collision`만 무시한다
+- `saveThread`는 thread 행과 history projection을 한 트랜잭션에서 함께 교체하고, 빈 user 텍스트 메시지는 저장하지 않는다. 저장본과 구조로 비교하고(`firstChange`), 처음 달라진 순번부터만 지우고 다시 쓴다. 다른 writer(비밀 정리 등)가 바꾼 행도 이 비교로 덮어쓴다. `HistoryPageUnavailable` 중 `id-collision`만 무시한다
+- `RunStore`는 최근에 읽거나 저장한 thread 4개(`rememberedThreads`)의 메시지를 revision과 함께 기억한다. `thread()`와 `saveThread`의 저장본은 thread가 아직 그 revision이면 기억한 배열이고, 아니면 행을 읽어 디코드한다. 기억은 트랜잭션이 커밋된 뒤에만 남긴다(`sql.afterCommit`). 롤백된 revision 번호는 다음 변경이 다시 받기 때문이다. 저장이 남기는 기억은 읽기가 디코드할 값이다(새 메시지는 쓴 JSON 텍스트를 디코드한다). 같은 revision 이상을 이미 기억했으면 덮지 않는다
 - 저장된 적 없는 thread는 빈 메시지 목록으로 본다. node에서 다시 만들지 않는다. 다시 만들면 `AgentChat`이 첫 run 직전에 기록한 user node가 중복된다
 - `startRun`은 `ON CONFLICT(run_id) DO NOTHING`으로 기존 run을 이어 받고, 이미 집계된 usage를 돌려준다. `Interrupted` 종료는 terminal이 아니므로 `finished_at`을 쓰지 않는다
 - run id는 thread 사이에서도 고유하다는 전제를 둔다(`run(runId)` 조회)
@@ -48,7 +49,7 @@ run·thread·interrupt 행은 `RunStore`(SqlClient)가 `chat_threads`, `chat_thr
 
 ## Side Effects
 
-- SQLite(SqlClient) 읽기: `chat_threads`(revision, 존재 여부), `chat_thread_messages`(순번 순서로 이어 붙인 메시지), `chat_runs`(status·usage·error, running run, 최신 run), `chat_interrupts`(pending 목록, status)
+- SQLite(SqlClient) 읽기: `chat_threads`(revision, 존재 여부), `chat_thread_messages`(순번 순서로 이어 붙인 메시지, 기억한 revision이 아닐 때만), `chat_runs`(status·usage·error, running run, 최신 run), `chat_interrupts`(pending 목록, status)
 - SQLite 쓰기: `chat_threads` upsert(updated_at), 저장본과 처음 달라진 메시지부터의 `chat_thread_messages` 삭제·삽입(500행씩), history projection `replace`를 한 트랜잭션에서 수행
 - SQLite 쓰기: `chat_runs` INSERT(status `running`, started_at)와 종료 시 UPDATE(status, finished_at, detached_since, error, error_code, usage)
 - SQLite 쓰기: `chat_interrupts`에 pending 행 INSERT(`ON CONFLICT DO NOTHING`)와 resume 시 응답 commit

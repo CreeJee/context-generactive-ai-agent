@@ -60,18 +60,18 @@ export const threadMessages = Effect.gen(function* () {
       Effect.asVoid(
         sql`DELETE FROM chat_thread_messages WHERE thread_id = ${threadId} AND seq >= ${seq}`,
       ),
-    /** Writes `messages` as the thread's messages from `seq` on, where it has none. */
+    /**
+     * Writes `messages` as the thread's messages from `seq` on, where it has none. Gives the JSON
+     * texts it wrote, in order.
+     */
     insertFrom: (threadId: string, seq: number, messages: ReadonlyArray<StoredMessage>) =>
-      Effect.forEach(messages, (message, index) =>
-        Effect.map(encodeMessage(message), (text) => ({
-          thread_id: threadId,
-          seq: seq + index,
-          message: text,
-        })),
-      ).pipe(
-        Effect.flatMap((rows) =>
+      Effect.forEach(messages, (message) => encodeMessage(message)).pipe(
+        Effect.tap((texts) =>
           Effect.forEach(
-            Arr.chunksOf(rows, rowsPerInsert),
+            Arr.chunksOf(
+              texts.map((message, index) => ({ thread_id: threadId, seq: seq + index, message })),
+              rowsPerInsert,
+            ),
             (chunk) => sql`INSERT INTO chat_thread_messages ${sql.insert(chunk)}`,
             { discard: true },
           ),
