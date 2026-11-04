@@ -58,6 +58,7 @@
 ## Side Effects
 
 - SQLite 쓰기(`bulk.ts`): `nodes`, `edges`(`ON CONFLICT DO NOTHING`), `node_refs`, `interpret_jobs`(`pending`), `imported_nodes`에 INSERT한다. 대화 조각마다 transaction 하나를 쓴다.
+- SQLite 쓰기(`pass.ts`): 처음 읽는 transcript는 `Sessions.createImported`로 세션과 매핑(`imported_sessions`)을 한 transaction에 쓴다. 다시 읽을 때는 매핑으로 그 세션을 찾는다.
 - SQLite 읽기: `bulk.ts`는 `nodes`, `node_refs`, `imported_nodes`를 읽고, `importer.ts`는 `import_cursors`에서 소스별 집계, skipped 폴더, 실패 transcript를 `LIMIT 20`으로 읽는다. `pass.ts`의 `Cursor`·`ImportStoreFailed` 저장 동작은 읽지 않았다.
 - worker thread: `importer.ts`가 `runtimeWorker("import-worker")` 파일로 `node:worker_threads` `Worker`를 `NodeWorker.layer`로 띄우고 `ref`/`unref`를 조절한다. layer Scope가 닫히면 멈춘다.
 - child process: `Checkouts`가 `ChildProcessSpawner`로 `git rev-parse`, `git config --get remote.origin.url`, `git worktree list --porcelain`, `git cat-file -e`를 실행한다.

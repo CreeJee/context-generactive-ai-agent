@@ -4009,3 +4009,12 @@
   - `kanban_goals.goal_version`은 보드가 마지막으로 분류한 Goal 버전이라 남긴다. 현재 Goal 버전과 다르면 새 배정을 멈춘다. attempt의 `goal_version`·`plan_version`도 배정할 때 고정한 값이라 남긴다.
   - plan step과 `kanban_cards` 사이에 FK를 두지 않는다. plan step은 바뀌지 않는 revision JSON 안에 있고, 카드의 실패 횟수·재계획 횟수는 revision이 바뀌어도 이어진다.
 - 마이그레이션: Goal instance가 있는 보드만 새 표로 옮긴다. instance가 없는 보드는 세션을 찾을 수 없다. 사본 측정: 보드 2개, 일정 2개, attempt 101개가 전과 같은 세션·프로젝트로 읽혔고, 13ms였다.
+
+## 가져온 대화의 출처는 transcript 매핑에서 읽는다 (2026-11-04)
+
+- 계기: 정규화 안 된 표 목록 12번(같은 날). 가져온 대화의 출처가 두 곳에 있었다. `sessions.imported_from`과 `imported_sessions(source, external_id, session_id)`의 `source`다. 노드 쪽도 `nodes.detail.importedFrom`과 `imported_nodes(source, external_id, node_id)`가 겹쳐 보였다. 세션과 매핑은 `createImported`와 매핑 INSERT가 서로 다른 transaction이었다. 그 사이에 멈추면 매핑 없는 가져온 세션이 남고, 다음 pass가 같은 transcript로 세션을 또 만들었다.
+- 결정:
+  - `sessions.imported_from`을 지운다. `Session.importedFrom`은 `imported_sessions.source`를 읽는다. `imported_sessions.session_id`에 UNIQUE를 둔다. 가져오기는 transcript 하나에 세션 하나를 만든다.
+  - `createImported`가 transcript(`source`, `externalId`)를 받아 세션과 매핑을 한 transaction에 쓴다.
+  - `nodes.detail.importedFrom`은 둔다. 노드는 바뀌지 않는 증거이고, 이 값은 노드마다 다르다. 사본에서 가져온 세션의 노드 78개는 앱에서 이어 쓴 것이라 값이 없다. 도구 호출에 붙인 빈 assistant 대역 노드 1,563개는 transcript 줄이 없어 `imported_nodes` 행이 없다. `imported_nodes`는 같은 줄을 두 번 쓰지 않게 하는 키다.
+- 마이그레이션: 세션마다 매핑을 하나만 남기고 UNIQUE를 만든 뒤 열을 지운다. 매핑이 둘인 세션은 생길 수 없지만, 깨진 파일 때문에 업그레이드가 멈추지 않게 첫 매핑만 남긴다. 매핑 없이 가져온 표시만 있던 세션은 앱 대화로 읽힌다. 그 transcript는 이미 다른 세션으로 다시 가져와졌다. 사본 측정: 세션 585개 중 가져온 446개의 출처가 같게 읽혔고, 5ms였다.

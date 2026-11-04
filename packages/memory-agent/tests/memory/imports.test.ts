@@ -528,7 +528,7 @@ testAgent()("migrating other agents' transcripts", (it) => {
         split.id,
         null,
         "2026-04-02T02:00:00.000Z",
-        "codex",
+        { source: "codex", externalId: "split" },
         { worktreePath: null, branch: null },
       );
       // Nodes are immutable evidence, but folding moves them along with their session.

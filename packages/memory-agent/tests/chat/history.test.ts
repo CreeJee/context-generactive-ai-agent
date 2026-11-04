@@ -23,10 +23,13 @@ const sessionWithMessage = Effect.fnUntraced(function* (
         return sessions.create(project.id, "직접 지정");
       case "imported":
         return Effect.flatMap(DateTime.now, (now) =>
-          sessions.createImported(project.id, null, DateTime.formatIso(now), "codex", {
-            worktreePath: null,
-            branch: null,
-          }),
+          sessions.createImported(
+            project.id,
+            null,
+            DateTime.formatIso(now),
+            { source: "codex", externalId: "imported" },
+            { worktreePath: null, branch: null },
+          ),
         );
     }
   })();

@@ -632,6 +632,19 @@ export const kanbanGoalOwnersMigration = `
   ALTER TABLE kanban_card_attempts DROP COLUMN session_id;
 `;
 
+/** The step that reads where a conversation was imported from out of its transcript mapping. */
+export const importedSessionSourceMigration = `
+  -- A session's import source is its transcript mapping's (decisions.md "가져온 대화의 출처는
+  -- transcript 매핑에서 읽는다 (2026-11-04)"). An import makes one session per transcript, so a
+  -- session has one mapping at most; a second would only come from a damaged file and is dropped
+  -- rather than stop the upgrade. A session marked imported without a mapping lost its transcript
+  -- before the mapping was written; the transcript was imported again into another session.
+  DELETE FROM imported_sessions WHERE rowid NOT IN
+    (SELECT min(rowid) FROM imported_sessions GROUP BY session_id);
+  CREATE UNIQUE INDEX imported_sessions_session ON imported_sessions(session_id);
+  ALTER TABLE sessions DROP COLUMN imported_from;
+`;
+
 /**
  * Ordered schema steps. `PRAGMA user_version` records how many have been applied.
  * Append new steps; never edit an applied one.
@@ -2656,6 +2669,7 @@ export const migrations: readonly string[] = [
   queuedMessageAttachmentsMigration,
   btwThreadMessagesMigration,
   kanbanGoalOwnersMigration,
+  importedSessionSourceMigration,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

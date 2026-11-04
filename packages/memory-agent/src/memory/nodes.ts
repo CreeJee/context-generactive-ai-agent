@@ -285,7 +285,8 @@ const make = Effect.gen(function* () {
           const label = firstMessageTitle(input.text) || "이미지 대화";
           yield* sql`
             UPDATE sessions SET title = ${label}
-            WHERE id = ${input.sessionId} AND title IS NULL AND imported_from IS NULL
+            WHERE id = ${input.sessionId} AND title IS NULL
+              AND NOT EXISTS (SELECT 1 FROM imported_sessions WHERE session_id = ${input.sessionId})
               AND NOT EXISTS (SELECT 1 FROM nodes
                 WHERE session_id = ${input.sessionId} AND kind = 'user' AND seq < ${node.seq})`;
         }

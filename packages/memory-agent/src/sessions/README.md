@@ -8,11 +8,12 @@
 
 - `Session` — 세션 Schema.Struct(id, projectId, title, createdAt, agent, archivedAt, importedFrom, worktreePath, branch)와 같은 이름의 타입. 앱 API 계약이 쓰므로 `contracts.ts`에 두고 `sessions.ts`가 다시 내보낸다
 - `SessionOrigin` — 대화가 실행된 worktreePath·branch(둘 다 nullable) 인터페이스
+- `ImportedTranscript` — 대화를 옮겨 온 다른 도구 transcript의 source·externalId 인터페이스
 - `SessionNotFound` — id를 가진 Schema.TaggedError, get·setArchived가 행이 없을 때 실패로 냄
 - `Sessions` — Context.Service("memory-agent/sessions/sessions"); `Sessions.layer`는 NodeCrypto.layer를 제공하고 SqlClient·Projects를 요구
 - `Sessions.get(id)` — id로 세션 조회, 없으면 SessionNotFound, 제목 없으면 첫 메시지로 채움
 - `Sessions.create(projectId, title?, agent?)` — 프로젝트 존재 확인(ProjectNotFound) 뒤 UUIDv4 id·현재 ISO 시각으로 INSERT
-- `Sessions.createImported(projectId, title, createdAt, source, origin)` — 다른 도구 transcript에서 옮긴 대화를 원래 시작 시각과 importedFrom으로 INSERT (프로젝트 확인 없음)
+- `Sessions.createImported(projectId, title, createdAt, transcript, origin)` — 다른 도구 transcript에서 옮긴 대화를 원래 시작 시각으로 INSERT하고, 같은 transaction에서 transcript 매핑(`imported_sessions`)을 쓴다 (프로젝트 확인 없음)
 - `Sessions.recordOrigin(id, origin)` — worktree_path·branch를 coalesce로 비어 있을 때만 채움
 - `Sessions.list(projectId, archived = false)` — created_at DESC, id 순; archived=true면 보관된 것만
 - `Sessions.setArchived(id, archived)` — archived_at을 현재 시각 또는 null로 바꾸고 세션 반환
@@ -29,6 +30,7 @@
 - 제목은 이미 redact된 저장 메시지 텍스트로만 만들고 새 모델 요청을 하지 않는다 (`title.ts` 주석).
 - 제목 보정(`withTitle`)은 title이 null이고 importedFrom도 null인 세션에만 한다; 가져온 세션은 첫 메시지로 제목을 채우지 않는다.
 - `createImported`는 원 도구가 시작한 createdAt을 그대로 쓴다; 목록이 created_at DESC로 정렬되므로 실제 일어난 자리에 놓이게 하기 위함이다.
+- `importedFrom`은 세션 열이 아니라 그 세션의 transcript 매핑(`imported_sessions.source`)에서 읽는다. 세션 하나에 매핑은 많아야 하나다.
 - `recordOrigin`은 이미 기록된 worktree_path·branch를 덮어쓰지 않는다 (coalesce).
 - `setArchived`는 메시지·메모리·검색을 건드리지 않고 archived_at만 바꾼다; 보관된 세션도 메모리의 일부로 남는다.
 - `list`는 archived 여부로 서로 배타적인 집합을 돌려준다: 기본은 보관 안 된 것만, archived=true면 보관된 것만.
@@ -46,9 +48,9 @@
 
 ## Side Effects
 
-- SQLite `sessions` 테이블 INSERT (create, createImported; RETURNING *)
+- SQLite `sessions` 테이블 INSERT (create, createImported; RETURNING), `imported_sessions` INSERT (createImported)
 - SQLite `sessions` 테이블 UPDATE: archived_at (setArchived), worktree_path·branch coalesce (recordOrigin)
-- SQLite `sessions` SELECT (get, list) 및 `nodes` 테이블에서 kind='user' 첫 메시지 SELECT (제목 보정)
+- SQLite `sessions`·`imported_sessions` SELECT (get, list) 및 `nodes` 테이블에서 kind='user' 첫 메시지 SELECT (제목 보정)
 - `Projects.get` 호출로 프로젝트 조회
 - NodeCrypto로 UUIDv4 난수 생성
 - `Clock.currentTimeMillis`로 현재 시각 읽기

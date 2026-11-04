@@ -278,7 +278,8 @@ const make = (home: string) =>
       Request: Schema.String,
       Result: Schema.Struct({ count: Schema.Finite }),
       execute: (projectId) => sql`SELECT
-        (SELECT count(*) FROM sessions WHERE project_id = ${projectId} AND imported_from IS NULL)
+        (SELECT count(*) FROM sessions s WHERE s.project_id = ${projectId}
+          AND NOT EXISTS (SELECT 1 FROM imported_sessions i WHERE i.session_id = s.id))
         + (SELECT count(*) FROM nodes WHERE project_id = ${projectId} AND session_id IS NULL)
         AS count`,
     });
@@ -358,13 +359,8 @@ const make = (home: string) =>
           project.id,
           null,
           start.startedAt,
-          transcript.source,
+          { source: transcript.source, externalId: transcript.externalId },
           origin,
-        );
-        yield* stored(
-          "Mapping",
-          sql`INSERT INTO imported_sessions (source, external_id, session_id)
-            VALUES (${transcript.source}, ${transcript.externalId}, ${session.id})`,
         );
         return { sessionId: session.id, skipped: null };
       });

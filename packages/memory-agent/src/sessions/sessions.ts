@@ -8,6 +8,12 @@ import { Session } from "./contracts.ts";
 
 export { Session } from "./contracts.ts";
 
+/** The other tool's transcript a conversation was imported from. */
+export interface ImportedTranscript {
+  readonly source: string;
+  readonly externalId: string;
+}
+
 /** Where in its repository a conversation ran, when that was a worktree or a known branch. */
 export interface SessionOrigin {
   readonly worktreePath: string | null;
@@ -52,7 +58,6 @@ const NewSession = Schema.Struct({
   title: Schema.NullOr(Schema.String),
   createdAt: Schema.String,
   agent: Schema.NullOr(Schema.String),
-  importedFrom: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
   branch: Schema.NullOr(Schema.String),
 });
@@ -93,25 +98,30 @@ const make = Effect.gen(function* () {
         onNone: () => Effect.fail(SessionNotFound.make({ id })),
         onSome: withTitle,
       });
+  /** A session row with the source its transcript mapping names, if it was imported. */
+  const columns = sql`sessions.id, sessions.project_id, sessions.title, sessions.created_at,
+    sessions.agent, sessions.archived_at,
+    (SELECT i.source FROM imported_sessions i WHERE i.session_id = sessions.id) AS imported_from,
+    sessions.worktree_path, sessions.branch`;
   const byId = SqlSchema.findOneOption({
     Request: Schema.String,
     Result: SessionRow,
-    execute: (id) => sql`SELECT * FROM sessions WHERE id = ${id}`,
+    execute: (id) => sql`SELECT ${columns} FROM sessions WHERE id = ${id}`,
   });
   const insert = SqlSchema.findOne({
     Request: NewSession,
     Result: SessionRow,
     execute: (row) => sql`
-      INSERT INTO sessions (id, project_id, title, created_at, agent, imported_from, worktree_path, branch)
+      INSERT INTO sessions (id, project_id, title, created_at, agent, worktree_path, branch)
       VALUES (${row.id}, ${row.projectId}, ${row.title}, ${row.createdAt}, ${row.agent},
-        ${row.importedFrom}, ${row.worktreePath}, ${row.branch})
-      RETURNING *`,
+        ${row.worktreePath}, ${row.branch})
+      RETURNING ${columns}`,
   });
   const list = SqlSchema.findAll({
     Request: Schema.Struct({ projectId: Schema.String, archived: Schema.Boolean }),
     Result: SessionRow,
     execute: ({ projectId, archived }) => sql`
-      SELECT * FROM sessions
+      SELECT ${columns} FROM sessions
       WHERE project_id = ${projectId} AND archived_at IS ${sql.literal(archived ? "NOT NULL" : "NULL")}
       ORDER BY created_at DESC, id`,
   });
@@ -119,7 +129,7 @@ const make = Effect.gen(function* () {
     Request: Schema.Struct({ id: Schema.String, archivedAt: Schema.NullOr(Schema.String) }),
     Result: SessionRow,
     execute: ({ id, archivedAt }) =>
-      sql`UPDATE sessions SET archived_at = ${archivedAt} WHERE id = ${id} RETURNING *`,
+      sql`UPDATE sessions SET archived_at = ${archivedAt} WHERE id = ${id} RETURNING ${columns}`,
   });
 
   return {
@@ -135,7 +145,6 @@ const make = Effect.gen(function* () {
           title,
           createdAt: yield* isoNow,
           agent,
-          importedFrom: null,
           worktreePath: null,
           branch: null,
         });
@@ -144,13 +153,14 @@ const make = Effect.gen(function* () {
 
     /**
      * A conversation migrated from another tool's transcript. It keeps the time that tool started
-     * it, so the session list (newest first) puts it where it actually happened.
+     * it, so the session list (newest first) puts it where it actually happened. The transcript's
+     * mapping is written with it, so a rescan finds this session instead of starting another.
      */
     createImported: (
       projectId: string,
       title: string | null,
       createdAt: string,
-      source: string,
+      transcript: ImportedTranscript,
       origin: SessionOrigin,
     ) =>
       Effect.gen(function* () {
@@ -160,12 +170,13 @@ const make = Effect.gen(function* () {
           title,
           createdAt,
           agent: null,
-          importedFrom: source,
           worktreePath: origin.worktreePath,
           branch: origin.branch,
         });
-        return toSession(row);
-      }),
+        yield* sql`INSERT INTO imported_sessions (source, external_id, session_id)
+          VALUES (${transcript.source}, ${transcript.externalId}, ${row.id})`;
+        return toSession({ ...row, imported_from: transcript.source });
+      }).pipe(sql.withTransaction),
 
     /** Fills in where a conversation ran once that is known; what is recorded already stays. */
     recordOrigin: (id: string, origin: SessionOrigin) =>
