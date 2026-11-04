@@ -1,6 +1,7 @@
 import { Array as Arr, Option, Schema } from "effect";
 import type { AiError } from "effect/ai";
 import type { ShownFailure } from "../providers/contracts.ts";
+import { errorCodesOf } from "../runtime/failure-tag.ts";
 
 /**
  * A failed model call that carries no failure of the app's own, as the user sees it: the kind of
@@ -74,8 +75,13 @@ const providerFacts = (reason: AiError.AiErrorReason) =>
     },
   });
 
+/**
+ * A failed model call as the user sees it, with the facts that tell apart failures that read the
+ * same: the provider's status and error kind, or how the connection failed
+ * (`The provider could not be reached. (UND_ERR_CONNECT_TIMEOUT)`).
+ */
 export const shownReason = (error: AiError.AiError): ShownFailure => {
-  const facts = providerFacts(error.reason);
+  const facts = [...providerFacts(error.reason), ...errorCodesOf(error.reason)];
   const text = reasonText[error.reason._tag];
   return { message: facts.length === 0 ? text : `${text} (${facts.join(", ")})` };
 };

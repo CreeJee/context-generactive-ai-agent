@@ -12,7 +12,7 @@ import {
   Tracer,
 } from "effect";
 import { BroadcastChannel } from "node:worker_threads";
-import { failureNameOfUnknown, tagOfUnknown } from "./failure-tag.ts";
+import { failureNameOfUnknown, tagOfUnknown, withErrorCodes } from "./failure-tag.ts";
 
 /**
  * The span attribute a chat run puts its run id in. The recorder takes it to link the run's trace
@@ -26,7 +26,10 @@ export interface FailedSpan {
   readonly spanId: string;
   /** Names of the spans it ran under, outermost first, ending with its own name. */
   readonly path: readonly string[];
-  /** The failure's tag with its tagged reason, such as `AiError:InvalidRequestError`. */
+  /**
+   * The failure's tag with its tagged reason and the error codes down its cause chain, such as
+   * `AiError:InvalidRequestError` or `AiError:NetworkError (UND_ERR_CONNECT_TIMEOUT)`.
+   */
   readonly failure: string;
   /** Epoch milliseconds. */
   readonly endedAt: number;
@@ -65,13 +68,26 @@ export const FailedSpans = Context.Reference<{
   }),
 });
 
-/** The first failure of a cause by its tag; `None` when it was only interrupted. */
+/**
+ * The first failure of a cause by its tag, with the error codes that say how it failed; `None` when
+ * it was only interrupted.
+ */
 const failureOf = (cause: Cause.Cause<unknown>) =>
   Arr.head(
     cause.reasons.flatMap(
       Match.valueTags({
-        Fail: ({ error }) => [Option.getOrElse(failureNameOfUnknown(error), () => "UnknownError")],
-        Die: ({ defect }) => [Option.getOrElse(tagOfUnknown(defect), () => "Defect")],
+        Fail: ({ error }) => [
+          withErrorCodes(
+            Option.getOrElse(failureNameOfUnknown(error), () => "UnknownError"),
+            error,
+          ),
+        ],
+        Die: ({ defect }) => [
+          withErrorCodes(
+            Option.getOrElse(tagOfUnknown(defect), () => "Defect"),
+            defect,
+          ),
+        ],
         Interrupt: (): string[] => [],
       }),
     ),

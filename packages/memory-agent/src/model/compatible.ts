@@ -28,6 +28,7 @@ import {
   reservedOutput,
   type OpenAICompatibleConfiguration,
 } from "../providers/openai-compatible-config.ts";
+import { errorCodesOf } from "../runtime/failure-tag.ts";
 import { isTruthy } from "../truthy.ts";
 import { providerPrompt, type ReplayTarget } from "./history.ts";
 import { optionsKey, partOptions, toolResultContent, type StoredContent } from "./prompt.ts";
@@ -1111,27 +1112,12 @@ const failureCode = (error: AiError.AiError) =>
     onSome: (failure) => failure.reason._tag,
   });
 
-/** Node/undici transport codes (`ECONNRESET`, `ETIMEDOUT`, ...) surfaced from fetch failures. */
-const isTransportErrorCode = Schema.is(Schema.String.check(Schema.isPattern(/^[A-Z0-9_]+$/)));
-
 /**
- * The transport codes along the cause chain of a failed fetch or body read; never URLs, headers or
- * payloads.
+ * The Node/undici transport codes (`ECONNRESET`, `ETIMEDOUT`, ...) along the cause chain of a
+ * failed fetch or body read; never URLs, headers or payloads.
  */
 const transportCodes = (reason: HttpClientError.TransportError | HttpClientError.DecodeError) =>
-  // The errors along the chain, each once and at most eight.
-  Arr.unfold({ current: reason.cause, seen: Arr.empty<Error>() }, ({ current, seen }) =>
-    Option.liftPredicate(current, Predicate.isError).pipe(
-      Option.filter((failure) => !seen.includes(failure) && seen.length < 8),
-      Option.map(
-        (failure) => [failure, { current: failure.cause, seen: [...seen, failure] }] as const,
-      ),
-    ),
-  ).flatMap((failure) =>
-    Predicate.hasProperty(failure, "code") && isTransportErrorCode(failure.code)
-      ? [failure.code]
-      : [],
-  );
+  errorCodesOf(reason.cause);
 
 /**
  * The response with a body that ends where its connection dropped, after logging the drop's

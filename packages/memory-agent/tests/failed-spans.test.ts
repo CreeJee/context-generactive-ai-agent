@@ -8,6 +8,9 @@ import {
 } from "../src/runtime/failed-spans.ts";
 
 class ProviderRejected extends Data.TaggedError("ProviderRejected")<{}> {}
+class ProviderUnreachable extends Data.TaggedError("ProviderUnreachable")<{
+  readonly cause: unknown;
+}> {}
 
 // Live services: a worker's spans reach the owner through a real channel, a tick later.
 layer(failedSpansLayer, { excludeTestServices: true })("failed span recorder", (it) => {
@@ -37,6 +40,26 @@ layer(failedSpansLayer, { excludeTestServices: true })("failed span recorder", (
           },
         ]);
       }),
+  );
+
+  it.effect("names how a request failed by the error codes down its cause", () =>
+    Effect.gen(function* () {
+      const unreachable = new ProviderUnreachable({
+        cause: new TypeError("fetch failed", {
+          cause: Object.assign(new Error("connect ECONNREFUSED 10.0.0.9:80"), {
+            code: "ECONNREFUSED",
+          }),
+        }),
+      });
+      const run = Effect.gen(function* () {
+        yield* Effect.annotateCurrentSpan(runSpanAttribute, "run-3");
+        return yield* Effect.fail(unreachable).pipe(Effect.withSpan("POST"));
+      }).pipe(Effect.withSpan("AgentChat.start"));
+      yield* Effect.exit(run);
+
+      const spans = (yield* (yield* FailedSpans).ofRuns(["run-3"])).get("run-3");
+      expect(spans?.map((span) => span.failure)).toEqual(["ProviderUnreachable (ECONNREFUSED)"]);
+    }),
   );
 
   it.effect("takes in what a worker thread's recorder sends, under the trace it ran in", () =>

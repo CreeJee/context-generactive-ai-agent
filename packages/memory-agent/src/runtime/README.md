@@ -14,6 +14,7 @@
 - `archiveHostLayer` / `archiveInstallerLayer` — Node 호스트 구현 Layer(FetchHttpClient, NodeChildProcessSpawner, NodeCrypto, NodeFileSystem, NodePath 제공)
 - `DefectReporter` — Context.Reference. `report(DefectEvent)`와 `recent`를 가지며 기본값은 no-op임. 앱이 Discord reporter(`report/defect-reports.ts`)를 제공함. 타입 `DefectEvent`, `RecentDefect`
 - `tagOf` / `tagOfUnknown` / `reasonTagOf` / `failureNameOf` / `failureNameOfUnknown` / `causeTagsOf` — 실패의 `_tag`(와 `reason._tag`)를 읽는 유일한 지점. 실패의 이름은 태그에 태그 붙은 reason을 붙인 것임(예: `SqlError:LockTimeoutError`). `causeTagsOf`는 실패 자신의 reason 다음부터 `cause` 사슬을 따라 이름을 모으고, 태그 없는 cause에서 멈춤
+- `errorCodesOf` / `withErrorCodes` — 실패의 `cause` 사슬에서 시스템 오류 코드(`ECONNREFUSED`, `UND_ERR_CONNECT_TIMEOUT`처럼 대문자·숫자·`_`로만 된 `code`)를 바깥부터 모음(최대 8단계). 태그는 요청이 실패했다는 것만 말하고, 코드는 어떻게 실패했는지 말함. `withErrorCodes`는 이름 뒤에 `(코드 <- 코드)`를 붙임
 - `logFailure` / `fallbackLogged` / `ignoreLogged` / `logDefect` / `failureAnnotations` / `failureTags` — 예상 실패를 태그로만 로그하고 fallback하거나 무시하는 헬퍼, defect 기록, 실패를 로그 주석(`error`, `cause`)으로 바꾸는 함수, Cause를 태그 문자열로 요약하는 함수
 - `homeDirectory` / `temporaryDirectory` / `totalMemory` / `availableCores` / `hostPlatform` — node:os 정보를 `Effect.sync`로 감싼 값
 - `findExecutable` — PATH의 절대 경로 항목에서만 실행 파일을 찾음(Windows는 PATHEXT 포함). 결과는 Effect<string | null>

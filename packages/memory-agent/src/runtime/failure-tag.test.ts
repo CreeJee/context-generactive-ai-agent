@@ -3,7 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { CardWorktreeFailed, CardWorktreeFailedReason } from "../kanban/worktree.ts";
 import { IndexingError } from "../memory/embedding/indexer.ts";
 import { VectorIndexError } from "../memory/embedding/vector-index.ts";
-import { causeTagsOf, failureNameOf } from "./failure-tag.ts";
+import { causeTagsOf, errorCodesOf, failureNameOf, withErrorCodes } from "./failure-tag.ts";
 
 const locked = SqlError.SqlError.make({
   reason: SqlError.LockTimeoutError.make({ cause: new Error("database is locked") }),
@@ -29,5 +29,27 @@ describe("causeTagsOf", () => {
     });
     expect(failureNameOf(failed)).toBe("CardWorktreeFailed:GitFailed");
     expect(causeTagsOf(failed)).toEqual(["SqlError:LockTimeoutError"]);
+  });
+});
+
+describe("errorCodesOf", () => {
+  it("reads the system codes down the cause chain, never the errors' text", () => {
+    // A fetch that could not connect, as undici reports it.
+    const fetchFailed = new TypeError("fetch failed", {
+      cause: Object.assign(new Error("Connect Timeout Error (attempted address: 10.0.0.9:80)"), {
+        code: "UND_ERR_CONNECT_TIMEOUT",
+      }),
+    });
+    const failed = VectorIndexError.make({ operation: "search", cause: fetchFailed });
+    expect(errorCodesOf(failed)).toEqual(["UND_ERR_CONNECT_TIMEOUT"]);
+    expect(withErrorCodes("VectorIndexError", failed)).toBe(
+      "VectorIndexError (UND_ERR_CONNECT_TIMEOUT)",
+    );
+  });
+
+  it("leaves out codes that are words, and a name without codes stays as it was", () => {
+    const worded = Object.assign(new Error("rejected"), { code: "invalid api key for this url" });
+    expect(errorCodesOf(worded)).toEqual([]);
+    expect(withErrorCodes("ProviderRejected", worded)).toBe("ProviderRejected");
   });
 });

@@ -67,7 +67,8 @@ export type BundleEvent = typeof BundleEvent.Type;
 
 /**
  * A span of the run that ended with a failure (decided 2026-11-03). Only span names the app's code
- * gives, the failure tag, timing and numeric or boolean attributes: never a string attribute.
+ * gives, the failure tag with its system error codes, timing and numeric or boolean attributes:
+ * never a string attribute.
  */
 export const BundleSpan = Schema.Struct({
   /** Names of the spans it ran under, outermost first, ending with its own name. */

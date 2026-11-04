@@ -574,7 +574,7 @@ describe("compatible language model", () => {
     }),
   );
 
-  it.effect("logs a failed fetch by its transport codes only", () =>
+  it.effect("logs and shows a failed fetch by its transport codes only", () =>
     Effect.gen(function* () {
       const logs: unknown[] = [];
       const capture = Logger.make((log) => {
@@ -593,6 +593,11 @@ describe("compatible language model", () => {
         Effect.provideService(References.MinimumLogLevel, "Trace"),
       );
       expect(error.reason._tag).toBe("NetworkError");
+      // The run's error says how the connection failed, so a report tells a refused connection
+      // from one that timed out.
+      expect(shownCompatibleFailure(error)).toEqual({
+        message: "The provider could not be reached. (ECONNREFUSED)",
+      });
       expect(logs).not.toHaveLength(0);
       const written = yield* encodeJson(logs);
       expect(written).not.toContain("127.0.0.1");

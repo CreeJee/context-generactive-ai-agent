@@ -4037,3 +4037,11 @@
   - `FreePages.layer`가 10분마다 빈 페이지를 본다. 1,024개(4 MiB) 이상이면 `PRAGMA incremental_vacuum(256)`을 1,024개 아래로 내려갈 때까지 100ms씩 쉬어 가며 돌린다. 한 번은 1 MiB이고 1ms가 안 걸렸다. 앱의 연결 semaphore 줄에 서므로 앱 쓰기와 번갈아 돈다.
   - 별도 vacuum 연결은 두지 않는다. 잠금을 두고 앱 연결과 다투기만 한다.
 - 남긴 것: 기존 DB를 incremental로 바꾸려면 전체 `VACUUM`이 한 번 필요하다. 필요해지면 사용자가 직접 실행하는 설정 동작으로 둔다.
+
+## 실패 이름에 전송 오류 코드를 붙인다 (2026-11-04)
+
+- 2026-11-04 제보: 두 run이 "The provider could not be reached."로 실패했다. 실패 span은 `HttpClientError:TransportError`와 `AiError:NetworkError`뿐이었다. 연결 거부·연결 시간 초과·끊김 중 무엇인지 알 수 없었다. 전송 코드는 백엔드 로그(`Compatible API request failed: …`)에만 있었고, 제보에는 로그가 들어가지 않는다.
+- 이제 `errorCodesOf`(`runtime/failure-tag.ts`)가 실패의 `cause` 사슬에서 시스템 오류 코드를 모은다. 대문자·숫자·`_`로만 된 `code`만 받는다. 문장이나 주소는 받지 않는다.
+  - 실패 span의 `failure`: `AiError:NetworkError (UND_ERR_CONNECT_TIMEOUT)`처럼 이름 뒤에 코드를 붙인다. 결함 알림과 리포트가 같은 값을 쓴다.
+  - 모델 실패의 사용자 문장(`shownReason`): HTTP 상태처럼 괄호에 붙인다(`The provider could not be reached. (ECONNREFUSED)`). run 오류로 DB에 남으므로 재시작해서 실패 span이 사라져도 리포트에 남는다.
+- compatible 클라이언트의 전송 코드 로그도 같은 함수를 쓴다.

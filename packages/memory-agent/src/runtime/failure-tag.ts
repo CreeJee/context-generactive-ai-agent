@@ -53,6 +53,50 @@ const causeAfter = <A>(failure: A) =>
       : Option.some(caused),
   );
 
+/** A system error code such as `ECONNRESET` or undici's `UND_ERR_CONNECT_TIMEOUT`; never free text. */
+const ErrorCode = Schema.String.check(Schema.isPattern(/^[A-Z][A-Z0-9_]{1,63}$/));
+const decodeErrorCode = Schema.decodeUnknownOption(Schema.Struct({ code: ErrorCode }));
+
+/**
+ * The system error codes down a failure's `cause` chain, outermost first, such as a fetch that
+ * could not connect: `["UND_ERR_CONNECT_TIMEOUT"]`. A tag says only that a request failed; the code
+ * says how. Each value is looked at once, at most eight.
+ */
+export const errorCodesOf = <A>(failure: A) =>
+  EffectArray.unfold(
+    { current: Option.some<unknown>(failure), seen: EffectArray.empty<unknown>() },
+    (state) =>
+      Option.filter(
+        state.current,
+        (value) => !state.seen.includes(value) && state.seen.length < 8,
+      ).pipe(
+        Option.map(
+          (value) =>
+            [
+              value,
+              {
+                current: Option.map(causeOf(value), ({ cause }) => cause),
+                seen: [...state.seen, value],
+              },
+            ] as const,
+        ),
+      ),
+  ).flatMap((value) => Option.toArray(Option.map(decodeErrorCode(value), ({ code }) => code)));
+
+/**
+ * A failure's name with the error codes down its cause chain, when there are any:
+ * `AiError:NetworkError (UND_ERR_CONNECT_TIMEOUT)`.
+ */
+export const withErrorCodes: {
+  <A>(failure: A): (name: string) => string;
+  <A>(name: string, failure: A): string;
+} = EffectFunction.dual(2, <A>(name: string, failure: A) =>
+  EffectArray.match(errorCodesOf(failure), {
+    onEmpty: () => name,
+    onNonEmpty: (codes) => `${name} (${codes.join(" <- ")})`,
+  }),
+);
+
 /**
  * The tags down a failure's `cause` chain, each with its tagged `reason`, such as
  * `["VectorIndexError", "SqlError:LockTimeoutError"]`. The failure's own reason is in its name, so
