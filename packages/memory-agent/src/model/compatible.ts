@@ -434,6 +434,17 @@ const imagesIn = (message: ChatMessage): number =>
     ? message.content.filter((part) => part.type === "image_url").length
     : 0;
 
+/** A message as the guard measures it: its image parts without their URLs, which `tokensPerImage` counts instead. */
+const withoutImageData = (message: ChatMessage): ChatMessage =>
+  message.role === "user" && Array.isArray(message.content)
+    ? {
+        ...message,
+        content: message.content.map((part) =>
+          part.type === "image_url" ? { ...part, image_url: { ...part.image_url, url: "" } } : part,
+        ),
+      }
+    : message;
+
 /**
  * The local context guard: a quarter token per ASCII character of the body, one per other
  * character, and a fixed budget per image part instead of their base64 characters. It also counts
@@ -449,7 +460,9 @@ const withinContext = (
   endpoint: OpenAICompatibleConfiguration,
 ): Option.Option<CompatiblePayload> => {
   const measure = (messages: ReadonlyArray<ChatMessage>) => {
-    const body = JSON.stringify({ ...payload, messages });
+    // A data URL is several hundred thousand characters for one photo; counted as text, one image
+    // would fill a 64k window.
+    const body = JSON.stringify({ ...payload, messages: messages.map(withoutImageData) });
     // Characters are code points, as `for...of` reads them.
     const ascii = body.replace(/\P{ASCII}+/gu, "").length;
     const other = Array.from(body.replace(/\p{ASCII}+/gu, "")).length;

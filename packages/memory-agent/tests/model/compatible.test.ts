@@ -353,8 +353,8 @@ describe("compatible language model", () => {
 
   it.effect("counts images at a fixed token budget, not their base64 characters", () =>
     Effect.gen(function* () {
-      // An image whose base64 characters alone would count over a small window.
-      const data = "A".repeat(20_000);
+      // An image whose base64 characters alone, at a quarter token each, would count over the window.
+      const data = "A".repeat(80_000);
       const image: StoredMessage = {
         role: "user",
         content: [
