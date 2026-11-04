@@ -2045,6 +2045,30 @@ export const migrations: readonly string[] = [
   DELETE FROM secret_sweeps WHERE target IN ('chat_threads', 'chat_interrupts',
     'permission_reviews', 'queued_messages', 'subagents', 'interpretations');
   `,
+  `
+  -- Every change to a thread's transcript takes a new revision, and the history projection tells
+  -- its groups current by the revision instead of comparing the whole transcript (decisions.md
+  -- "대화 transcript는 revision으로 최신 여부를 가린다 (2026-11-04)"). Every thread takes its
+  -- revisions from one counter, so a thread deleted and saved again never repeats one: a thread id
+  -- with a revision always names one transcript. Threads written before this step keep 0, which
+  -- the counter never gives.
+  CREATE TABLE chat_revision_counter (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    last_revision INTEGER NOT NULL
+  );
+  INSERT INTO chat_revision_counter VALUES (1, 0);
+  ALTER TABLE chat_threads ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+  CREATE TRIGGER chat_threads_revision_insert AFTER INSERT ON chat_threads BEGIN
+    UPDATE chat_revision_counter SET last_revision = last_revision + 1;
+    UPDATE chat_threads SET revision = (SELECT last_revision FROM chat_revision_counter)
+      WHERE rowid = NEW.rowid;
+  END;
+  CREATE TRIGGER chat_threads_revision_update AFTER UPDATE OF messages ON chat_threads BEGIN
+    UPDATE chat_revision_counter SET last_revision = last_revision + 1;
+    UPDATE chat_threads SET revision = (SELECT last_revision FROM chat_revision_counter)
+      WHERE rowid = NEW.rowid;
+  END;
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

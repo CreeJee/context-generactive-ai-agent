@@ -26,11 +26,11 @@ const encodeGroup = Schema.encodeEffect(Messages);
 const Identity = Schema.Struct({ ordinal: Schema.Natural, ui_id: Schema.String });
 const Publication = Schema.Struct({ publication: Schema.NullOr(Schema.String) });
 
-/** A transcript snapshot to project; a writer that has its `messages` supplies them. */
+/** A thread's transcript to project, and the revision of the thread it was read or saved at. */
 export interface HistorySnapshot {
   readonly threadId: string;
-  readonly sourceJSON: string;
-  readonly messages?: ReadonlyArray<StoredMessage>;
+  readonly revision: number;
+  readonly messages: ReadonlyArray<StoredMessage>;
 }
 
 /**
@@ -99,27 +99,29 @@ export const historyProjection = Effect.fn("HistoryProjection.make")(function* (
         [threadId],
       ),
   });
+  // The revision and the transcript in one statement, so the transcript is the one at the revision.
   const storedThread = SqlSchema.findOne({
     Request: Schema.String,
-    Result: Schema.Struct({ thread_id: Schema.String, messages: Schema.String }),
+    Result: Schema.Struct({ revision: Schema.Int, messages: Schema.String }),
     execute: (threadId) =>
-      client`SELECT thread_id, messages FROM chat_threads WHERE thread_id = ${threadId}`,
+      client`SELECT revision, messages FROM chat_threads WHERE thread_id = ${threadId}`,
   });
+  /** The stored thread to prepare; startup/import validates and decodes the stored JSON. */
+  const storedSnapshot = (threadId: string) =>
+    Effect.flatMap(storedThread(threadId), ({ revision, messages }) =>
+      decodeStored(messages).pipe(
+        Effect.mapError(() => HistoryPageUnavailable.make({ reason: "invalid-transcript" })),
+        Effect.map((decoded): HistorySnapshot => ({ threadId, revision, messages: decoded })),
+      ),
+    );
 
   const prepared = Effect.fnUntraced(function* (
     snapshot: HistorySnapshot,
     retained: ReadonlyArray<typeof Identity.Type>,
   ) {
-    // Startup/import still validates and decodes stored JSON. Avoid reparsing the writer's
-    // freshly serialized snapshot.
-    const stored =
-      snapshot.messages ??
-      (yield* decodeStored(snapshot.sourceJSON).pipe(
-        Effect.mapError(() => HistoryPageUnavailable.make({ reason: "invalid-transcript" })),
-      ));
     const normalized = historyProjectionMessages(
       snapshot.threadId,
-      stored,
+      snapshot.messages,
       retained.map((row) => row.ui_id),
     );
     const messages = yield* HistoryMessagesResult.$match(normalized, {
@@ -192,7 +194,7 @@ export const historyProjection = Effect.fn("HistoryProjection.make")(function* (
         const publication = yield* crypto.uuidV4();
         const published = yield* client.unsafe(`${sql.publishIfCurrent} RETURNING thread_id`, [
           threadId,
-          snapshot.sourceJSON,
+          snapshot.revision,
           publication,
         ]);
         yield* Effect.when(unavailable("not-ready"), Effect.succeed(published.length === 0));
@@ -216,9 +218,7 @@ export const historyProjection = Effect.fn("HistoryProjection.make")(function* (
         Effect.forEach(
           ids,
           ({ thread_id }) =>
-            Effect.flatMap(storedThread(thread_id), (stored) =>
-              publish({ threadId: stored.thread_id, sourceJSON: stored.messages }),
-            ).pipe(
+            Effect.flatMap(storedSnapshot(thread_id), publish).pipe(
               // A corrupt/ambiguous UI projection must not stop unrelated sessions.
               // Its original stays authoritative and reads report not-ready explicitly.
               Effect.catchTag("HistoryPageUnavailable", () => Effect.void),

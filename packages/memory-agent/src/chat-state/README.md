@@ -8,7 +8,7 @@
 
 - `ChatState` — Context.Service(`memory-agent/chat-state/chat-state/ChatState`), `ChatState.layer`. 시작 시 마이그레이션·투영 준비·재시작 정리를 하고 `prepare(sessionId)`를 제공한다. SqlClient, Nodes, Attachments가 필요하다. 레이어가 `NodeCrypto`를 제공한다.
 - `historyProjection` — `Effect.fn("HistoryProjection.make")`. 스키마를 설치하고 `{ prepare(threadId?), replace(snapshot) }`를 돌려준다. `replace`는 호출자 트랜잭션에 합류하거나 새 트랜잭션을 연다. SqlClient와 `SecureRandom`이 필요하다.
-- `HistorySnapshot` — 투영할 transcript 스냅샷 인터페이스(`threadId`, `sourceJSON`, 선택 `messages`).
+- `HistorySnapshot` — 투영할 transcript 스냅샷 인터페이스(`threadId`, 읽거나 저장한 시점의 `revision`, `messages`).
 - `HistoryPageUnavailable` — Schema.TaggedError. reason은 `not-ready` | `id-collision` | `invalid-transcript`.
 - `HistoryProjectionReader` — Context.Service, `.layer`. `read(HistoryPageRequest)`가 `HistoryPageSnapshot`을 돌려주거나 `HistoryProjectionReadFailed`로 실패한다. 파생 데이터만 읽는다.
 - `HistoryPageRequest` — TaggedUnion `initial{threadId, limit}` | `older{threadId, limit, before}`. limit은 양의 정수다.
@@ -30,7 +30,8 @@
 - 투영 SQL은 `chat_threads`나 `user_version`을 바꾸지 않는다. 투영 테이블은 버려도 되고 언제든 재생성할 수 있는 파생 데이터다.
 - 단일 프로세스가 DB를 소유한다고 가정한다. 시작 시 `running`/`interrupted` run은 `failed`(serverRestartedCode)로 바꾸고, 그 run의 pending 인터럽트는 같은 트랜잭션에서 `cancelled`로 바꾼다.
 - `chat_threads`의 messages가 UPDATE되거나 행이 INSERT되면 트리거가 `ready=0`으로 무효화한다. 행이 DELETE되면 트리거가 그룹과 투영 행을 지운다.
-- 퍼블리시는 `publishIfCurrent`가 하나 이상의 행을 반환할 때만 성공한다. 이 조건은 현재 `chat_threads.messages`가 `sourceJSON`과 같아야 한다는 뜻이다. 0행이면 트랜잭션 전체를 롤백하고 `not-ready`로 실패한다.
+- 퍼블리시는 `publishIfCurrent`가 하나 이상의 행을 반환할 때만 성공한다. 이 조건은 thread가 아직 그룹을 만든 transcript의 `revision`이어야 한다는 뜻이다. 0행이면 트랜잭션 전체를 롤백하고 `not-ready`로 실패한다. revision은 모든 thread가 함께 쓰는 카운터(`chat_revision_counter`)에서 받으므로, 지운 뒤 다시 저장된 thread도 예전 revision을 다시 갖지 않는다.
+- `prepare`는 revision과 transcript를 한 문장으로 읽는다. writer는 upsert 뒤 같은 트랜잭션에서 revision을 읽어 넘긴다.
 - `replace`는 원본 writer의 트랜잭션 안에서 authoritative upsert 직후에 호출해야 한다. 그래야 실패 시 원본과 투영이 함께 롤백된다.
 - `prepare`는 시작·임포트 때만 명시적으로 부른다. 페이지 읽기의 fallback으로 쓰지 않는다. 한 스레드가 `HistoryPageUnavailable`로 실패해도 다른 세션 준비는 막지 않는다.
 - `replace`는 바뀐 identity만 먼저 지운 뒤 upsert한다. 그래서 `UNIQUE(thread_id, ui_id)` 충돌이 나지 않는다. JSON이 같으면 다시 쓰지 않는다.

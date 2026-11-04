@@ -8,7 +8,8 @@ import { Database } from "../db/database.ts";
 import { RunStore } from "../loop/store.ts";
 import { historyProjection, HistoryPageUnavailable } from "./history-projection-native.ts";
 import { chatSnapshot } from "./snapshot.ts";
-import { sqlAll, sqlGet, sqlRun, sqlExec } from "../../tests/support/sql.ts";
+import { sqlAll, sqlGet, sqlExec } from "../../tests/support/sql.ts";
+import { threadRevision, threadText, writeThread } from "../../tests/support/chat-thread.ts";
 const encodeJson = EffectFunction.flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
   Result.getOrThrow,
@@ -71,12 +72,10 @@ it.effect("prepares released threads at startup and keeps legacy hydration IDs",
       { role: "user", content: "Old" },
       { role: "assistant", content: "Reply" },
     ]);
-    yield* sqlRun("INSERT INTO chat_threads VALUES(?,?,?)", "a", original, 1);
+    yield* writeThread({ threadId: "a", messages: original });
     yield* restart;
     expect(yield* page("a", 1)).toEqual({ ids: ["stored:a:1"], older: "stored:a:1" });
-    expect(yield* sqlGet("SELECT messages FROM chat_threads WHERE thread_id=?", "a")).toEqual({
-      messages: original,
-    });
+    expect(yield* threadText("a")).toBe(original);
   }).pipe(fixture),
 );
 
@@ -90,7 +89,7 @@ it.effect("prepares repeated assistant IDs for initial and older pages without c
       { id: "answer", role: "assistant", content: "Done" },
       { id: "next", role: "user", content: "Follow-up" },
     ];
-    yield* sqlRun("INSERT INTO chat_threads VALUES(?,?,?)", "a", encodeJson(messages), 1);
+    yield* writeThread({ threadId: "a", messages: encodeJson(messages) });
     yield* restart;
     expect(yield* page("a", 1)).toEqual({ ids: ["next"], older: "next" });
     const older = yield* page("a", 1, "next");
@@ -112,13 +111,11 @@ it.effect("prepares fallback ID collisions as separate answers with stable page 
       { id: "user", role: "user", content: "Next question" },
       { id: "stored:a:0", role: "assistant", content: "Unrelated answer" },
     ];
-    yield* sqlRun("INSERT INTO chat_threads VALUES(?,?,?)", "a", encodeJson(messages), 1);
-    yield* sqlRun(
-      "INSERT INTO chat_threads VALUES(?,?,?)",
-      "b",
-      encodeJson([{ id: "normal", role: "user", content: "Normal" }]),
-      1,
-    );
+    yield* writeThread({ threadId: "a", messages: encodeJson(messages) });
+    yield* writeThread({
+      threadId: "b",
+      messages: encodeJson([{ id: "normal", role: "user", content: "Normal" }]),
+    });
     yield* restart;
     expect(yield* page("a", 1)).toEqual({ ids: ["stored:a:0"], older: "stored:a:0" });
     const previous = yield* page("a", 2, "stored:a:0");
@@ -159,11 +156,11 @@ it.effect(
         { id: "stored:a:1", role: "tool", toolCallId: "other-call", content: "Standalone result" },
       ];
       const original = encodeJson(messages);
-      yield* sqlRun("INSERT INTO chat_threads VALUES(?,?,?)", "a", original, 1);
+      yield* writeThread({ threadId: "a", messages: original });
       yield* restart;
       yield* store.saveThread("a", messages);
       // Preparation must also recover the unchanged original after an external invalidation.
-      yield* sqlRun("UPDATE chat_threads SET messages=? WHERE thread_id=?", original, "a");
+      yield* writeThread({ threadId: "a", messages: original });
       yield* prepareThread("a");
       const newest = yield* page("a", 1);
       expect(newest).toEqual({ ids: ["stored:a:1"], older: "stored:a:1" });
@@ -171,9 +168,7 @@ it.effect(
       expect(yield* page("a", 1, "user")).toEqual({ ids: ["answer"], older: null });
       expect(yield* page("a", 1)).toEqual(newest);
       expect(yield* store.thread("a")).toEqual(messages);
-      expect(yield* sqlGet("SELECT messages FROM chat_threads WHERE thread_id=?", "a")).toEqual({
-        messages: original,
-      });
+      expect(yield* threadText("a")).toBe(original);
     }).pipe(fixture),
 );
 
@@ -182,11 +177,10 @@ it.effect("keeps a newly empty thread valid and does not full-load a stale trans
     const store = yield* RunStore;
     expect(yield* page("new", 20)).toEqual({ ids: [], older: null });
     yield* store.saveThread("a", [{ id: "u", role: "user", content: "Original" }]);
-    yield* sqlRun(
-      "UPDATE chat_threads SET messages=? WHERE thread_id=?",
-      encodeJson([{ id: "u", role: "user", content: "Old writer changed" }]),
-      "a",
-    );
+    yield* writeThread({
+      threadId: "a",
+      messages: encodeJson([{ id: "u", role: "user", content: "Old writer changed" }]),
+    });
     expect(yield* Effect.flip(page("a", 20))).toBeInstanceOf(HistoryPageUnavailable);
     yield* prepareThread("a");
     expect((yield* chatSnapshot("a", 20, undefined)).messages).toEqual([
@@ -310,10 +304,10 @@ it.effect("does not trust a remembered publish whose transaction rolled back", (
     const original: StoredMessage[] = [{ id: "u", role: "user", content: "Kept" }];
     yield* store.saveThread("a", original);
     const next = [...original, { id: "n", role: "assistant" as const, content: "Answer" }];
-    const sourceJSON = yield* encodeThread(next);
     /** The thread saved as `next`, as `RunStore` saves it. */
-    const save = sql`UPDATE chat_threads SET messages = ${sourceJSON} WHERE thread_id = 'a'`.pipe(
-      Effect.andThen(projection.replace({ threadId: "a", sourceJSON, messages: next })),
+    const save = writeThread({ threadId: "a", messages: yield* encodeThread(next) }).pipe(
+      Effect.andThen(threadRevision("a")),
+      Effect.flatMap((revision) => projection.replace({ threadId: "a", revision, messages: next })),
     );
     // The writer's transaction fails after the pages were published, and rolls them back.
     yield* Effect.flip(sql.withTransaction(Effect.andThen(save, Effect.fail("after publish"))));

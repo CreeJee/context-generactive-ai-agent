@@ -47,8 +47,9 @@ export const historyProjectionSql = {
   addPublication: "ALTER TABLE chat_history_projection ADD COLUMN publication TEXT",
   /** The id of the thread's latest committed publish; a rolled-back one leaves the earlier id. */
   publication: "SELECT publication FROM chat_history_projection WHERE thread_id = ?",
+  /** Publishes only while the thread is at the revision its groups were made from. */
   publishIfCurrent:
-    "INSERT INTO chat_history_projection (thread_id, format_version, ready, publication) SELECT thread_id, 1, 1, ?3 FROM chat_threads WHERE thread_id = ?1 AND messages = ?2 ON CONFLICT(thread_id) DO UPDATE SET format_version = 1, ready = 1, publication = excluded.publication",
+    "INSERT INTO chat_history_projection (thread_id, format_version, ready, publication) SELECT thread_id, 1, 1, ?3 FROM chat_threads WHERE thread_id = ?1 AND revision = ?2 ON CONFLICT(thread_id) DO UPDATE SET format_version = 1, ready = 1, publication = excluded.publication",
   groupIdentities: "SELECT ordinal, ui_id FROM chat_history_groups WHERE thread_id = ?",
   removeOrdinal: "DELETE FROM chat_history_groups WHERE thread_id = ? AND ordinal = ?",
   removeTail: "DELETE FROM chat_history_groups WHERE thread_id = ? AND ordinal >= ?",

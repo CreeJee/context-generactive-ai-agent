@@ -11,6 +11,7 @@ import { runTurn, toolResults, wireOf } from "../support/chat-client.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, freshSession, testAgent } from "../support/test-env.ts";
 import { sqlAll, sqlGet, sqlRun } from "../support/sql.ts";
+import { threadText, writeThread } from "../support/chat-thread.ts";
 
 const stringifyJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 const parseJson = Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown));
@@ -170,13 +171,13 @@ testAgent({ testProvider: {} })("secrets on their way in", (it) => {
           text: "fetch",
           refs: [`https://api.example.com/?token=${githubToken}`],
         });
-        yield* sqlRun(
-          "INSERT INTO chat_threads VALUES (?, ?, 0)",
-          session,
-          yield* stringifyJson([
+        yield* writeThread({
+          threadId: session,
+          messages: yield* stringifyJson([
             { role: "tool", content: `token: ${githubToken}`, toolCallId: "c-1" },
           ]),
-        );
+          updatedAt: 0,
+        });
         yield* sqlRun(
           "INSERT INTO permission_reviews (session_id, tool_call_id, tool_name, input, decision, decided_by, reason, created_at) VALUES (?, 'c-2', 'run_shell', ?, 'ask', 'user', 'x', '2026')",
           session,
@@ -197,11 +198,9 @@ testAgent({ testProvider: {} })("secrets on their way in", (it) => {
         expect(yield* value("SELECT ref AS value FROM node_refs WHERE node_id = ?", call.id)).toBe(
           "https://api.example.com/?token=[redacted:github]",
         );
-        expect(
-          yield* parseJson(
-            yield* value("SELECT messages AS value FROM chat_threads WHERE thread_id = ?", session),
-          ),
-        ).toEqual([{ role: "tool", content: "token: [redacted:github]", toolCallId: "c-1" }]);
+        expect(yield* parseJson(yield* threadText(session))).toEqual([
+          { role: "tool", content: "token: [redacted:github]", toolCallId: "c-1" },
+        ]);
         expect(
           yield* parseJson(
             yield* value(
@@ -259,25 +258,23 @@ testAgent({ testProvider: {} })("secrets on their way in", (it) => {
         (row) => Effect.map(decodeCount(row), ({ count }) => count > 0),
       );
       const messages = (content: string) => stringifyJson([{ role: "user", content, id: "u-1" }]);
-      yield* sqlRun("INSERT INTO chat_threads VALUES (?, ?, 0)", session, yield* messages("plain"));
+      yield* writeThread({ threadId: session, messages: yield* messages("plain"), updatedAt: 0 });
       expect(yield* marked).toBe(true);
       yield* sweep.run;
       expect(yield* marked).toBe(false);
 
       // A conversation grows inside its one row.
-      yield* sqlRun(
-        "UPDATE chat_threads SET messages = ? WHERE thread_id = ?",
-        yield* messages(`token: ${githubToken}`),
-        session,
-      );
+      yield* writeThread({
+        threadId: session,
+        messages: yield* messages(`token: ${githubToken}`),
+        updatedAt: 0,
+      });
       expect(yield* marked).toBe(true);
       yield* sweep.run;
       expect(yield* marked).toBe(false);
-      expect(
-        yield* parseJson(
-          yield* value("SELECT messages AS value FROM chat_threads WHERE thread_id = ?", session),
-        ),
-      ).toEqual([{ role: "user", content: "token: [redacted:github]", id: "u-1" }]);
+      expect(yield* parseJson(yield* threadText(session))).toEqual([
+        { role: "user", content: "token: [redacted:github]", id: "u-1" },
+      ]);
     }),
   );
 
@@ -285,20 +282,20 @@ testAgent({ testProvider: {} })("secrets on their way in", (it) => {
     Effect.gen(function* () {
       const session = yield* freshSession;
       const sweep = yield* SecretSweep;
-      yield* sqlRun(
-        "INSERT INTO chat_threads VALUES (?, ?, 0)",
-        session,
-        yield* stringifyJson([{ role: "user", content: `token: ${githubToken}`, id: "u-1" }]),
-      );
+      yield* writeThread({
+        threadId: session,
+        messages: yield* stringifyJson([
+          { role: "user", content: `token: ${githubToken}`, id: "u-1" },
+        ]),
+        updatedAt: 0,
+      });
       // As a database from before rows were marked: none is, and the table has no progress.
       yield* sqlRun("DELETE FROM secret_sweep_changes WHERE target = 'chat_threads'");
       yield* sqlRun("DELETE FROM secret_sweeps WHERE target = 'chat_threads'");
       yield* sweep.run;
-      expect(
-        yield* parseJson(
-          yield* value("SELECT messages AS value FROM chat_threads WHERE thread_id = ?", session),
-        ),
-      ).toEqual([{ role: "user", content: "token: [redacted:github]", id: "u-1" }]);
+      expect(yield* parseJson(yield* threadText(session))).toEqual([
+        { role: "user", content: "token: [redacted:github]", id: "u-1" },
+      ]);
     }),
   );
 });

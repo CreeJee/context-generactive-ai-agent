@@ -4,7 +4,7 @@ import { it } from "@effect/vitest";
 import { Database } from "../db/database.ts";
 import { RunStore } from "../loop/store.ts";
 import { HistoryPageRequest, HistoryPageSnapshot } from "./history-projection-reader.ts";
-import { sqlRun } from "../../tests/support/sql.ts";
+import { writeThread } from "../../tests/support/chat-thread.ts";
 const request = HistoryPageRequest.cases;
 const snapshot = HistoryPageSnapshot.cases;
 
@@ -31,7 +31,7 @@ describe("Effect history projection reader boundary", () => {
         expect(
           yield* store.historyPage(request.older.make({ threadId: "a", before: "m-0", limit: 3 })),
         ).toEqual(snapshot.page.make({ groups: [], truncated: false, nextCursor: null }));
-        yield* sqlRun("UPDATE chat_threads SET messages = ? WHERE thread_id = ?", "[]", "a");
+        yield* writeThread({ threadId: "a", messages: "[]" });
         expect(yield* store.historyPage(request.initial.make({ threadId: "a", limit: 3 }))).toEqual(
           snapshot["not-ready"].make({ reason: "stale" }),
         );

@@ -10,11 +10,7 @@ import { historyProjection, HistoryPageUnavailable } from "./history-projection-
 import { historyProjectionSnapshots as snapshots } from "./history-projection-sql.ts";
 import { chatSnapshot } from "./snapshot.ts";
 import { sqlAll, sqlGet, sqlRun } from "../../tests/support/sql.ts";
-
-// Copied from release 0.0.13 persistence.ts 176–178: a writer that saves the thread without
-// replacing its projection.
-const releasedWriter =
-  "INSERT INTO chat_threads VALUES (?, ?, ?) ON CONFLICT(thread_id) DO UPDATE SET messages = excluded.messages, updated_at = excluded.updated_at";
+import { threadRevision, threadText, writeThread } from "../../tests/support/chat-thread.ts";
 /** The thread's text as `RunStore` saves it. */
 const encodeThread = Schema.encodeEffect(Schema.fromJsonString(Schema.Array(StoredMessage)));
 
@@ -87,14 +83,18 @@ describe("history projection SQLite contract", () => {
   );
 
   it.effect(
-    "invalidates old-writer updates even with the same timestamp and cleans deleted threads",
+    "invalidates other writers' saves even with the same timestamp and cleans deleted threads",
     () =>
       Effect.gen(function* () {
         const store = yield* RunStore;
         yield* store.saveThread("a", transcript(10));
-        // The time `saveThread` wrote; the old writer reuses it.
+        // The time `saveThread` wrote; the other writer reuses it.
         const updatedAt = yield* Clock.currentTimeMillis;
-        yield* sqlRun(releasedWriter, "a", yield* encodeThread(transcript(11)), updatedAt);
+        yield* writeThread({
+          threadId: "a",
+          messages: yield* encodeThread(transcript(11)),
+          updatedAt,
+        });
         expect(yield* Effect.flip(page("a", 50))).toBeInstanceOf(HistoryPageUnavailable);
         // Saved again after an append; an existing UI-ID cursor still points at the same prefix.
         yield* store.saveThread("a", transcript(11));
@@ -106,7 +106,11 @@ describe("history projection SQLite contract", () => {
         expect(yield* page("a", 50)).toEqual({ ids: [], older: null });
         expect(yield* groupCount("a")).toEqual({ count: 0 });
         // Written again without its projection, the thread has no stale ready pages.
-        yield* sqlRun(releasedWriter, "a", yield* encodeThread(transcript(2)), updatedAt);
+        yield* writeThread({
+          threadId: "a",
+          messages: yield* encodeThread(transcript(2)),
+          updatedAt,
+        });
         expect(yield* Effect.flip(page("a", 50))).toBeInstanceOf(HistoryPageUnavailable);
       }).pipe(fixture),
   );
@@ -119,39 +123,54 @@ describe("history projection SQLite contract", () => {
       yield* store.saveThread("a", original);
       // What `prepare` read before the thread was saved again: replacing the pages from it fails
       // and keeps the newer pages.
-      const source = yield* encodeThread(original);
+      const source = { threadId: "a", revision: yield* threadRevision("a"), messages: original };
       yield* store.saveThread("a", transcript(6));
-      expect(
-        yield* Effect.flip(projection.replace({ threadId: "a", sourceJSON: source })),
-      ).toMatchObject({ reason: "not-ready" });
+      expect(yield* Effect.flip(projection.replace(source))).toMatchObject({ reason: "not-ready" });
       expect((yield* page("a", 50)).ids).toHaveLength(6);
 
       // A source removed during preparation must not be resurrected by it.
       yield* sqlRun("DELETE FROM chat_threads WHERE thread_id = ?", "a");
-      yield* Effect.flip(projection.replace({ threadId: "a", sourceJSON: source }));
+      yield* Effect.flip(projection.replace(source));
       expect(yield* groupCount("a")).toEqual({ count: 0 });
       expect(yield* page("a", 50)).toEqual({ ids: [], older: null });
     }).pipe(fixture),
   );
 
+  it.effect("never gives a thread a revision an earlier transcript of it had", () =>
+    Effect.gen(function* () {
+      const store = yield* RunStore;
+      const projection = yield* historyProjection();
+      yield* store.saveThread("a", transcript(1));
+      const first = yield* threadRevision("a");
+      // The writers that do not replace the pages change it too.
+      yield* writeThread({ threadId: "a", messages: yield* encodeThread(transcript(2)) });
+      const second = yield* threadRevision("a");
+      yield* sqlRun("DELETE FROM chat_threads WHERE thread_id = ?", "a");
+      yield* store.saveThread("a", transcript(1));
+      const third = yield* threadRevision("a");
+      expect(new Set([first, second, third]).size).toBe(3);
+      // The first transcript's pages are not published over the thread saved again.
+      expect(
+        yield* Effect.flip(
+          projection.replace({ threadId: "a", revision: first, messages: transcript(1) }),
+        ),
+      ).toMatchObject({ reason: "not-ready" });
+    }).pipe(fixture),
+  );
+
   it.effect(
-    "prepares idempotently without changing global migration version or the released writer",
+    "prepares idempotently without changing the migration version or the thread table",
     () =>
       Effect.gen(function* () {
         const store = yield* RunStore;
         yield* store.saveThread("a", transcript(5));
+        const columns = yield* sqlAll("PRAGMA table_info(chat_threads)");
         yield* historyProjection(); // Idempotent preparation.
         expect(yield* sqlGet("PRAGMA user_version")).toEqual({ user_version: migrations.length });
+        expect(yield* sqlAll("PRAGMA table_info(chat_threads)")).toEqual(columns);
         const next = yield* encodeThread(transcript(6));
-        yield* sqlRun(releasedWriter, "a", next, 2);
-        expect(yield* sqlGet("SELECT messages FROM chat_threads WHERE thread_id = ?", "a")).toEqual(
-          { messages: next },
-        );
-        expect((yield* sqlAll("PRAGMA table_info(chat_threads)")).map((row) => row.name)).toEqual([
-          "thread_id",
-          "messages",
-          "updated_at",
-        ]);
+        yield* writeThread({ threadId: "a", messages: next, updatedAt: 2 });
+        expect(yield* threadText("a")).toBe(next);
       }).pipe(fixture),
   );
 });

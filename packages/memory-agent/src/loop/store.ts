@@ -153,6 +153,13 @@ const make = Effect.gen(function* () {
   /** A page of the history projection: one group of messages per message the page shows. */
   const history = yield* HistoryProjectionReader;
 
+  /** The revision the thread's last change gave it. */
+  const threadRevision = SqlSchema.findOne({
+    Request: Schema.String,
+    Result: Schema.Struct({ revision: Schema.Int }),
+    execute: (threadId) => sql`SELECT revision FROM chat_threads WHERE thread_id = ${threadId}`,
+  });
+
   /** Replaces the thread and its history groups together. Empty user text is never kept. */
   const saveThread = Effect.fn("RunStore.saveThread")(function* (
     threadId: string,
@@ -163,10 +170,14 @@ const make = Effect.gen(function* () {
     const updatedAt = yield* Clock.currentTimeMillis;
     yield* sql.withTransaction(
       sql`
-        INSERT INTO chat_threads VALUES (${threadId}, ${sourceJSON}, ${updatedAt})
+        INSERT INTO chat_threads (thread_id, messages, updated_at)
+        VALUES (${threadId}, ${sourceJSON}, ${updatedAt})
         ON CONFLICT(thread_id) DO UPDATE
         SET messages = excluded.messages, updated_at = excluded.updated_at`.pipe(
-        Effect.andThen(projection.replace({ threadId, sourceJSON, messages: kept })),
+        Effect.andThen(threadRevision(threadId)),
+        Effect.flatMap(({ revision }) =>
+          projection.replace({ threadId, revision, messages: kept }),
+        ),
         // Valid messages survive a UI-only id collision; reads of the stale pages fail instead.
         Effect.catchTag("HistoryPageUnavailable", (failure) =>
           failure.reason === "id-collision" ? Effect.void : Effect.fail(failure),

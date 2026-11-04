@@ -3797,3 +3797,10 @@
 - `Semaphore`는 이제 순서를 지킨다. 기다리는 fiber가 있으면 permit을 막 놓은 fiber도 그 뒤에 선다. 호환 설정의 "갱신 중 모델 선택" 테스트는 이 차이에 기대고 있었다. 갱신 helper는 연결·모델 저장·모델 삭제 세 번의 permit이고, 선택은 연결과 모델 저장 사이에 돈다. 2026-10-04의 계약("동시 갱신·모델 선택은 한 permit에서 직렬화")은 그대로라, 테스트는 키 쓰기 중에 선택이 끝나지 않는 것과 그 뒤의 결과를 본다.
 - 2026-10-18의 "`@effect/sql-sqlite-node`는 `effect ^4.0.5`를 요구하므로 쓰지 않는다"는 이유는 이번 상향으로 없어진다. 2026-10-18 남은 `node:*` 목록의 "별도 네이티브 패키지라 SEA 제약과 맞지 않는다"도 지금은 맞지 않는다. 공식 드라이버는 4.0.2부터 `node:sqlite`를 쓰고 의존성이 없다. 공식 드라이버로 바꿀지는 따로 정한다.
 - `vp run typecheck`의 오류·경고는 상향 전 main과 같은 목록이다(오류 43개).
+
+## 대화 transcript는 revision으로 최신 여부를 가린다 (2026-11-04)
+
+- history 투영의 `publishIfCurrent`는 `chat_threads.messages`를 퍼블리시할 원문 문자열과 통째로 비교했다. 42MB 대화에서 저장마다 약 12ms였고, writer는 이 비교만을 위해 원문 문자열을 넘겨야 했다. transcript를 메시지 행으로 옮기면(다음 단계) 비교할 원문 문자열 자체가 없다.
+- `chat_threads.revision`을 둔다. transcript를 바꾸는 쓰기(행 INSERT, `UPDATE OF messages`)마다 트리거가 새 값을 준다. 투영은 그룹을 만든 transcript의 revision을 받고, thread가 아직 그 revision일 때만 퍼블리시한다. writer(`RunStore.saveThread`)는 upsert 뒤 같은 트랜잭션에서 revision을 읽어 넘기고, 시작·임포트 준비는 revision과 transcript를 한 문장으로 읽는다.
+- revision은 thread마다 세지 않고 모든 thread가 함께 쓰는 카운터(`chat_revision_counter`의 한 행, `last_revision`)에서 받는다. thread별 `+1`이면 지운 뒤 다시 저장된 같은 id의 thread가 예전 revision을 다시 가질 수 있다. 그러면 그 revision으로 만든 옛 그룹이나 기억한 배열을 새 transcript의 것으로 믿게 된다. 카운터 하나에서 받으면 thread id와 revision이 늘 한 transcript를 가리킨다. 이 단계 전에 쓰인 thread는 0이고, 카운터는 1부터 준다.
+- 0.0.13 writer(`INSERT INTO chat_threads VALUES (?, ?, ?)`)가 깨지지 않게 `chat_threads`를 3열로 두던 제약(2026-10-07)은 끝낸다. 릴리즈 빌드는 자기보다 새 `user_version`을 열지 않으므로(`NewerThanBuild`, 0.0.13도 같다) 옛 writer가 이 DB에 쓸 길이 없다. 테스트의 "released writer"는 투영을 바꾸지 않는 다른 writer(`tests/support/chat-thread.ts`의 `writeThread`)로 바꾼다.
