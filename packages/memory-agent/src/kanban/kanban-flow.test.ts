@@ -296,7 +296,6 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
             const goalW = yield* executingSession(goalU.projectId, [card("w")]);
             yield* (yield* GoalSchedules).register({
               goalInstanceId: goalW.goalInstanceId,
-              projectId: goalW.projectId,
               targetBranch: "main",
             });
             yield* scheduler.setDependencies(goalW.goalInstanceId, [goalM.goalInstanceId]);
@@ -491,7 +490,6 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
               notes: ["A person found the earlier work missing."],
             }));
             yield* attempts.open({
-              sessionId: board.sessionId,
               goalInstanceId: board.goalInstanceId,
               cardId: "a",
               attemptNo: 1,

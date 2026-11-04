@@ -147,7 +147,6 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
             Effect.fnUntraced(function* (goal) {
               yield* schedules.register({
                 goalInstanceId: goal.goalInstanceId,
-                projectId: goal.projectId,
                 targetBranch: "main",
               });
               yield* scheduler.setDependencies(goal.goalInstanceId, [goalA.goalInstanceId]);

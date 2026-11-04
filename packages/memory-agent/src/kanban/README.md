@@ -57,6 +57,7 @@
 - 카드를 retire할 때는 열린 사람 결정 대기를 `card_stopped`로 닫습니다. 닫기는 답이 아니므로 카드를 옮기지 않습니다. 그다음 worktree를 `Cancelled`로 settle합니다.
 - 대화가 다른 Goal instance로 교체한 Goal은 이 Goal이 기다릴 대상 목록에서 뺍니다. 기준은 `workflows.goalInstanceId(sessionId)`와 같은지입니다.
 - `BoardHealth`는 메모리에만 있습니다. 한 번 멈춘 보드는 `restart` 전까지 그 상태를 유지하고, 이후 들어오는 step 보고가 멈춘 이유를 덮지 않습니다. owner를 재시작하면 모든 보드가 healthy로 다시 시작합니다.
+- 보드(`kanban_goals`), Goal 일정, 카드 시도는 세션과 프로젝트를 따로 저장하지 않습니다. Goal instance(`workflow_goal_instances`)와 그 세션에 조인해 찾습니다. `project_root`는 보드가 worktree를 만든 저장소 위치라 보드에 남깁니다.
 - 시각은 `Clock.currentTimeMillis`로 읽습니다. `CardLadder.notBefore`는 Clock 기준 밀리초입니다. `CardAttemptOutcome`, `AssignmentHold`, `CardHoldReason`, notes는 JSON 문자열 컬럼에 Schema로 encode·decode하므로, 바꿀 때는 저장된 행과의 호환성을 지켜야 합니다.
 - 카드 시도 하나는 delivery를 `cardDeliveryLimit`(3)번 넘기면 dead-letter로 갑니다.
 - 카드 검증은 최대 3라운드입니다. 라운드마다 카드의 현재 상태를 검증하고, 움직인 Goal 브랜치와 sync하면 다음 라운드가 필요합니다. 3라운드 안에 끝나지 않으면 카드는 `GoalBranchKeptMoving`으로 실패합니다.

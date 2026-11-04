@@ -207,10 +207,17 @@ const make = Effect.gen(function* () {
     <E, R>(query: Effect.Effect<ReadonlyArray<unknown>, E, R>) =>
       Effect.flatMap(query, Schema.decodeUnknownEffect(Schema.Array(schema)));
 
+  /** Boards `k` with their Goal instance's session and its project. */
+  const boards = sql`SELECT k.*, g.session_id, s.project_id FROM kanban_goals k
+    JOIN workflow_goal_instances g ON g.goal_instance_id = k.goal_instance_id
+    JOIN sessions s ON s.id = g.session_id`;
+  /** Attempts `a` with their Goal instance's session. */
+  const attempts = sql`SELECT a.*, g.session_id FROM kanban_card_attempts a
+    JOIN workflow_goal_instances g ON g.goal_instance_id = a.goal_instance_id`;
   const goals = (where: "active" | "one", goalInstanceId = "") =>
     (where === "active"
-      ? sql`SELECT * FROM kanban_goals WHERE status = 'active' ORDER BY created_at`
-      : sql`SELECT * FROM kanban_goals WHERE goal_instance_id = ${goalInstanceId}`
+      ? sql`${boards} WHERE k.status = 'active' ORDER BY k.created_at`
+      : sql`${boards} WHERE k.goal_instance_id = ${goalInstanceId}`
     ).pipe(
       rows(GoalRow),
       Effect.map((found) => found.map(toGoal)),
@@ -218,8 +225,8 @@ const make = Effect.gen(function* () {
     );
 
   const attempt = (key: CardAttemptKey) =>
-    sql`SELECT * FROM kanban_card_attempts WHERE goal_instance_id = ${key.goalInstanceId}
-        AND card_id = ${key.cardId} AND attempt_no = ${key.attemptNo}`.pipe(
+    sql`${attempts} WHERE a.goal_instance_id = ${key.goalInstanceId}
+        AND a.card_id = ${key.cardId} AND a.attempt_no = ${key.attemptNo}`.pipe(
       rows(AttemptRow),
       Effect.map((found) => Option.map(Option.fromUndefinedOr(found[0]), toAttempt)),
       Effect.mapError(failed("attempt")),
@@ -255,14 +262,14 @@ const make = Effect.gen(function* () {
 
     /** Starts (or restarts) running a Goal instance as a board; an existing row keeps its state. */
     registerGoal: Effect.fn("CardAttempts.registerGoal")(function* (
-      goal: Omit<KanbanGoal, "hold" | "active">,
+      goal: Omit<KanbanGoal, "hold" | "active" | "sessionId" | "projectId">,
     ) {
       const at = yield* now;
       yield* sql`INSERT INTO kanban_goals
-          (goal_instance_id, session_id, project_id, project_root, mode, goal_version, hold_json,
-           status, created_at, updated_at)
-          VALUES (${goal.goalInstanceId}, ${goal.sessionId}, ${goal.projectId}, ${goal.projectRoot},
-            ${goal.mode}, ${goal.goalVersion}, NULL, 'active', ${at}, ${at})
+          (goal_instance_id, project_root, mode, goal_version, hold_json, status, created_at,
+           updated_at)
+          VALUES (${goal.goalInstanceId}, ${goal.projectRoot}, ${goal.mode}, ${goal.goalVersion},
+            NULL, 'active', ${at}, ${at})
           ON CONFLICT(goal_instance_id) DO UPDATE SET status = 'active', updated_at = ${at}`.pipe(
         Effect.mapError(failed("goal")),
       );
@@ -300,15 +307,16 @@ const make = Effect.gen(function* () {
 
     /** Stores an attempt before its queue item is offered; offering the same key again is a no-op. */
     open: Effect.fn("CardAttempts.open")(function* (
-      attempt: Omit<CardAttempt, "outcome" | "handled">,
+      attempt: Omit<CardAttempt, "outcome" | "handled" | "sessionId">,
     ) {
       const at = yield* now;
       yield* sql`INSERT OR IGNORE INTO kanban_card_attempts
-          (goal_instance_id, card_id, attempt_no, session_id, goal_version, plan_version,
-           outcome_json, handled, created_at, updated_at)
+          (goal_instance_id, card_id, attempt_no, goal_version, plan_version, outcome_json,
+           handled, created_at, updated_at)
           VALUES (${attempt.goalInstanceId}, ${attempt.cardId}, ${attempt.attemptNo},
-            ${attempt.sessionId}, ${attempt.goalVersion}, ${attempt.planVersion}, NULL, 0,
-            ${at}, ${at})`.pipe(Effect.mapError(failed("attempt")));
+            ${attempt.goalVersion}, ${attempt.planVersion}, NULL, 0, ${at}, ${at})`.pipe(
+        Effect.mapError(failed("attempt")),
+      );
     }),
 
     attempt,
@@ -322,8 +330,8 @@ const make = Effect.gen(function* () {
 
     /** Attempts the orchestrator has not taken up yet: running ones and finished ones. */
     pending: (goalInstanceId: string) =>
-      sql`SELECT * FROM kanban_card_attempts WHERE goal_instance_id = ${goalInstanceId}
-          AND handled = 0 ORDER BY created_at, card_id`.pipe(
+      sql`${attempts} WHERE a.goal_instance_id = ${goalInstanceId}
+          AND a.handled = 0 ORDER BY a.created_at, a.card_id`.pipe(
         rows(AttemptRow),
         Effect.map((found) => found.map(toAttempt)),
         Effect.mapError(failed("attempt")),

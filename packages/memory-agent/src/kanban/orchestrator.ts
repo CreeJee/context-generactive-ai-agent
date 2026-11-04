@@ -1142,11 +1142,9 @@ const make = (options: KanbanOrchestratorOptions) =>
                   ),
               )
             : null;
-        yield* schedules.register({ goalInstanceId, projectId: project.id, targetBranch });
+        yield* schedules.register({ goalInstanceId, targetBranch });
         yield* attempts.registerGoal({
           goalInstanceId,
-          sessionId,
-          projectId: project.id,
           projectRoot: project.root,
           mode,
           goalVersion: state.goal.version,

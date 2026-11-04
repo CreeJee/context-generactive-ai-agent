@@ -627,12 +627,10 @@ testAgent()("new Goal transition across reopening", (it) => {
       const { workflows, session, old } = yield* env.use(withHistory());
       yield* workflows.setPhase(session, "execute");
       yield* sqlRun(
-        `INSERT INTO kanban_goals (goal_instance_id, session_id, project_id, project_root, mode,
-           goal_version, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, 'sequential', 1, 'active', 1, 1)`,
+        `INSERT INTO kanban_goals (goal_instance_id, project_root, mode, goal_version, status,
+           created_at, updated_at)
+         VALUES (?, ?, 'sequential', 1, 'active', 1, 1)`,
         old,
-        session,
-        env.project.id,
         env.project.root,
       );
       const edited = yield* workflows.updateGoal(session, { ...goal, statement: "revised" });

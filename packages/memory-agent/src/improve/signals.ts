@@ -137,14 +137,16 @@ export const collectSignals = Effect.fn("Improve.collectSignals")(function* (
           AND project_id IN ${sql.in(projectIds)} AND created_at >= ${since}
         ORDER BY seq`),
       // Attempt times are epoch milliseconds.
-      rows(CardRow)(sql`SELECT g.project_id, c.goal_instance_id, c.card_id, c.failure_streak,
+      rows(CardRow)(sql`SELECT s.project_id, c.goal_instance_id, c.card_id, c.failure_streak,
           c.replans, c.reason,
           strftime('%Y-%m-%dT%H:%M:%fZ', MAX(a.updated_at) / 1000.0, 'unixepoch') AS latest_at
         FROM kanban_cards c
-        JOIN kanban_goals g ON g.goal_instance_id = c.goal_instance_id
+        JOIN kanban_goals k ON k.goal_instance_id = c.goal_instance_id
+        JOIN workflow_goal_instances g ON g.goal_instance_id = c.goal_instance_id
+        JOIN sessions s ON s.id = g.session_id
         JOIN kanban_card_attempts a
           ON a.goal_instance_id = c.goal_instance_id AND a.card_id = c.card_id
-        WHERE (c.failure_streak > 0 OR c.replans > 0) AND g.project_id IN ${sql.in(projectIds)}
+        WHERE (c.failure_streak > 0 OR c.replans > 0) AND s.project_id IN ${sql.in(projectIds)}
         GROUP BY c.goal_instance_id, c.card_id
         HAVING MAX(a.updated_at) >= ${Date.parse(since)}`),
     ],

@@ -353,18 +353,14 @@ export const executingBoard = Effect.fn("executingBoard")(function* (
   steps: UpdatePlan["steps"],
 ) {
   const { sessionId, projectId, goalInstanceId } = yield* executingPlan(fixture, steps);
-  const session = { id: sessionId };
-  const project = { id: projectId };
   yield* (yield* CardWorktrees).prepareGoal({ projectRoot: fixture.project, goalInstanceId });
   yield* (yield* CardAttempts).registerGoal({
     goalInstanceId,
-    sessionId: session.id,
-    projectId: project.id,
     projectRoot: fixture.project,
     mode: "worktree",
     goalVersion: 1,
   });
-  return { sessionId: session.id, projectId: project.id, goalInstanceId };
+  return { sessionId, projectId, goalInstanceId };
 });
 
 /** Moves a card to in_progress and offers its next attempt, as the orchestrator does. */

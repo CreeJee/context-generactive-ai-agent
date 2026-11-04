@@ -600,6 +600,38 @@ export const btwThreadMessagesMigration = `
   ALTER TABLE btw_threads DROP COLUMN messages;
 `;
 
+/** The step that finds a board's session and project through its Goal instance. */
+export const kanbanGoalOwnersMigration = `
+  -- A board, its schedule and its card attempts name their session and project through the Goal
+  -- instance (decisions.md "칸반 보드의 세션과 프로젝트는 Goal instance에서 찾는다 (2026-11-04)").
+  -- Nothing kept the copies equal to the session's own. A board whose Goal instance is gone
+  -- belongs to no session and is not kept; deleting the instance now removes its board.
+  -- project_root stays: it is where the board's worktrees were made.
+  CREATE TABLE kanban_goals_v2 (
+    goal_instance_id TEXT PRIMARY KEY
+      REFERENCES workflow_goal_instances(goal_instance_id) ON DELETE CASCADE,
+    project_root TEXT NOT NULL,
+    mode TEXT NOT NULL CHECK (mode IN ('worktree', 'sequential')),
+    goal_version INTEGER NOT NULL,
+    hold_json TEXT CHECK (hold_json IS NULL OR json_valid(hold_json)),
+    status TEXT NOT NULL CHECK (status IN ('active', 'stopped')),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  INSERT INTO kanban_goals_v2
+    (goal_instance_id, project_root, mode, goal_version, hold_json, status, created_at,
+     updated_at)
+    SELECT k.goal_instance_id, k.project_root, k.mode, k.goal_version, k.hold_json, k.status,
+      k.created_at, k.updated_at
+    FROM kanban_goals k JOIN workflow_goal_instances g ON g.goal_instance_id = k.goal_instance_id
+    ORDER BY k.rowid;
+  DROP TABLE kanban_goals;
+  ALTER TABLE kanban_goals_v2 RENAME TO kanban_goals;
+  DROP INDEX kanban_goal_schedules_project;
+  ALTER TABLE kanban_goal_schedules DROP COLUMN project_id;
+  ALTER TABLE kanban_card_attempts DROP COLUMN session_id;
+`;
+
 /**
  * Ordered schema steps. `PRAGMA user_version` records how many have been applied.
  * Append new steps; never edit an applied one.
@@ -2623,6 +2655,7 @@ export const migrations: readonly string[] = [
   sessionStateTablesMigration,
   queuedMessageAttachmentsMigration,
   btwThreadMessagesMigration,
+  kanbanGoalOwnersMigration,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

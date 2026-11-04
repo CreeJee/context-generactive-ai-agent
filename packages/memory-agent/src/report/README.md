@@ -50,7 +50,7 @@
 
 ## Side Effects
 
-- SQLite 읽기: `collectReportBundle`이 `kanban_goals`, `kanban_cards`(JOIN)를 session_id로 조회한다. run·node·approval 행(`RunRow`, `NodeRow`, `ApprovalRow`)도 조회한다.
+- SQLite 읽기: `collectReportBundle`이 `kanban_goals`, `kanban_cards`를 `workflow_goal_instances`에 JOIN해 session_id로 조회한다. run·node·approval 행(`RunRow`, `NodeRow`, `ApprovalRow`)도 조회한다.
 - 환경·설정 읽기: `CONTEXT_AGENT_RELEASE`(기본 `0.0.0-dev`, 오류 시 `unknown`), `DISCORD_WEBHOOK_URL`(Redacted), `GlobalConfig.read`(kanbanConcurrency, defectReports), `process.versions.node`, `hostPlatform`.
 - 네트워크: `ReportDelivery`가 Discord webhook URL로 `?wait=true` multipart POST를 보낸다(리포트 `send`, 서버 알림 `sendNotice`).
 - LLM 호출: `ReportDiagnoser.diagnose`가 `singleAnswer`로 선택된 모델을 호출하고 `recordUsage`로 API 사용량을 기록한다.

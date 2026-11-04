@@ -259,15 +259,17 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
         Request: Schema.String,
         Result: BoardRow,
         execute: (id) =>
-          sql`SELECT goal_instance_id, status FROM kanban_goals WHERE session_id = ${id}
-            ORDER BY created_at`,
+          sql`SELECT k.goal_instance_id, k.status FROM kanban_goals k
+            JOIN workflow_goal_instances g ON g.goal_instance_id = k.goal_instance_id
+            WHERE g.session_id = ${id} ORDER BY k.created_at`,
       })(session.id);
       const cards = yield* SqlSchema.findAll({
         Request: Schema.String,
         Result: CardRow,
         execute: (id) =>
           sql`SELECT c.goal_instance_id, c.card_id, c.failure_streak, c.replans, c.reason
-            FROM kanban_cards c JOIN kanban_goals g ON g.goal_instance_id = c.goal_instance_id
+            FROM kanban_cards c JOIN kanban_goals k ON k.goal_instance_id = c.goal_instance_id
+            JOIN workflow_goal_instances g ON g.goal_instance_id = c.goal_instance_id
             WHERE g.session_id = ${id} ORDER BY c.card_id`,
       })(session.id);
       const reasons = yield* hideAll(

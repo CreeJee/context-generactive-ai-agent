@@ -3999,3 +3999,13 @@
   - 읽기는 행을 `seq` 순으로 이어 전과 같은 배열을 decode한다. 메시지 하나라도 형식이 틀리면 전처럼 읽기 오류다.
   - BTW는 secret sweep 대상이 아니었고, 그대로다.
 - 마이그레이션: 배열의 원소를 JSON 글 그대로 순서대로 옮기고 열을 지운다. 배열이 아니던 값은 전에 읽을 때마다 오류였고, 이제 메시지가 없는 스레드로 읽힌다. 사본 측정: 스레드 2개의 메시지 31개가 같은 배열로 읽혔고, 5ms였다.
+
+## 칸반 보드의 세션과 프로젝트는 Goal instance에서 찾는다 (2026-11-04)
+
+- 계기: 정규화 안 된 표 목록 11번(같은 날). `kanban_goals.session_id`·`project_id`, `kanban_goal_schedules.project_id`, `kanban_card_attempts.session_id`는 Goal instance(`workflow_goal_instances`)의 세션과 그 세션의 프로젝트를 베낀 값이었다. 세션의 프로젝트를 바꾸는 곳은 가져오기의 `foldWorktreeProjects`뿐이다. 이 함수는 가져온 세션만 있는 프로젝트를 접으므로, 보드가 있는 세션은 지금 옮기지 않는다. 그래도 사본이 세션과 같다는 것을 지키는 장치는 없었다. 사본에서는 모두 같았다.
+- 결정:
+  - 세 열을 지우고 읽을 때 `workflow_goal_instances`와 `sessions`에 조인한다. `kanban_goals`는 Goal instance를 참조하고, instance가 지워지면 같이 지워진다. 전에는 세션을 참조했다.
+  - `project_root`는 남긴다. 보드를 시작할 때 `mode`, 대상 브랜치와 함께 정한 git 위치이고, worktree가 그 아래 있다. 프로젝트가 접힌 뒤에도 보드는 원래 저장소에서 일해야 한다.
+  - `kanban_goals.goal_version`은 보드가 마지막으로 분류한 Goal 버전이라 남긴다. 현재 Goal 버전과 다르면 새 배정을 멈춘다. attempt의 `goal_version`·`plan_version`도 배정할 때 고정한 값이라 남긴다.
+  - plan step과 `kanban_cards` 사이에 FK를 두지 않는다. plan step은 바뀌지 않는 revision JSON 안에 있고, 카드의 실패 횟수·재계획 횟수는 revision이 바뀌어도 이어진다.
+- 마이그레이션: Goal instance가 있는 보드만 새 표로 옮긴다. instance가 없는 보드는 세션을 찾을 수 없다. 사본 측정: 보드 2개, 일정 2개, attempt 101개가 전과 같은 세션·프로젝트로 읽혔고, 13ms였다.

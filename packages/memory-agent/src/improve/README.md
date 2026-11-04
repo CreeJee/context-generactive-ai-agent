@@ -60,7 +60,7 @@
 
 ## Side Effects
 
-- SQLite 읽기(쓰기 없음): `worktree_parents` 테이블, `nodes`/`edges` 테이블(kind='corrects' 정정, kind='tool_result' 실패, `json_extract(detail, ...)`), `kanban_cards`·`kanban_goals`·`kanban_card_attempts` 테이블 집계.
+- SQLite 읽기(쓰기 없음): `worktree_parents` 테이블, `nodes`/`edges` 테이블(kind='corrects' 정정, kind='tool_result' 실패, `json_extract(detail, ...)`), `kanban_cards`·`kanban_goals`·`kanban_card_attempts` 테이블 집계(프로젝트는 `workflow_goal_instances`·`sessions` JOIN).
 - 파일 시스템: 각 폴더에서 위로 `.git` 존재 확인을 하고, `StorageRoot/improvements` 디렉터리를 만든다.
 - 파일 시스템: 저장소별 `.md` 보고서와 `index.json`을 `.partial`에 쓴 뒤 rename한다. 이어서 `index.json`을 읽고, 디렉터리 목록을 읽어 오래된 `.md`를 삭제한다.
 - `Projects.listAll`/`Projects.list` 조회와 `Checkouts.forRoots`/`resolve`로 프로젝트 루트의 체크아웃 위치를 해석한다.

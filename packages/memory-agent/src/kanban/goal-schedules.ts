@@ -147,25 +147,29 @@ const make = Effect.gen(function* () {
       Effect.map((found) => found.map(toSchedule)),
       Effect.mapError(failed),
     );
-  const columns = sql`goal_instance_id, project_id, target_branch, upstream_pending, merge_json,
-    verified_head`;
+  /** Schedules `s` with the project of their Goal instance's session, as `ss.project_id`. */
+  const scheduled = sql`kanban_goal_schedules s
+    JOIN workflow_goal_instances g ON g.goal_instance_id = s.goal_instance_id
+    JOIN sessions ss ON ss.id = g.session_id`;
+  const columns = sql`s.goal_instance_id, ss.project_id, s.target_branch, s.upstream_pending,
+    s.merge_json, s.verified_head`;
   const get = (goalInstanceId: string) =>
     Effect.map(
       schedules(
-        sql`SELECT ${columns} FROM kanban_goal_schedules WHERE goal_instance_id = ${goalInstanceId}`,
+        sql`SELECT ${columns} FROM ${scheduled} WHERE s.goal_instance_id = ${goalInstanceId}`,
       ),
       (found) => Option.fromUndefinedOr(found[0]),
     );
   const forProject = (projectId: string) =>
     schedules(
-      sql`SELECT ${columns} FROM kanban_goal_schedules WHERE project_id = ${projectId}
-          ORDER BY created_at`,
+      sql`SELECT ${columns} FROM ${scheduled} WHERE ss.project_id = ${projectId}
+          ORDER BY s.created_at`,
     );
   /** Dependency edges among the project's Goals. */
   const edges = (projectId: string) =>
-    sql`SELECT d.goal_instance_id, d.depends_on FROM kanban_goal_dependencies d
-        JOIN kanban_goal_schedules s ON s.goal_instance_id = d.goal_instance_id
-        WHERE s.project_id = ${projectId} ORDER BY d.created_at, d.depends_on`.pipe(
+    sql`SELECT d.goal_instance_id, d.depends_on FROM ${scheduled}
+        JOIN kanban_goal_dependencies d ON d.goal_instance_id = s.goal_instance_id
+        WHERE ss.project_id = ${projectId} ORDER BY d.created_at, d.depends_on`.pipe(
       rows(DependencyRow),
       Effect.map(
         (found): ReadonlyMap<string, readonly string[]> =>
@@ -185,15 +189,15 @@ const make = Effect.gen(function* () {
     /** Records a Goal when its board starts; a restarted board keeps what was recorded. */
     register: Effect.fn("GoalSchedules.register")(function* (goal: {
       readonly goalInstanceId: string;
-      readonly projectId: string;
       readonly targetBranch: string | null;
     }) {
       const at = yield* now;
       yield* sql`INSERT OR IGNORE INTO kanban_goal_schedules
-          (goal_instance_id, project_id, target_branch, upstream_pending, merge_json,
-           verified_head, created_at, updated_at)
-          VALUES (${goal.goalInstanceId}, ${goal.projectId}, ${goal.targetBranch}, 0,
-            NULL, NULL, ${at}, ${at})`.pipe(Effect.mapError(failed));
+          (goal_instance_id, target_branch, upstream_pending, merge_json, verified_head,
+           created_at, updated_at)
+          VALUES (${goal.goalInstanceId}, ${goal.targetBranch}, 0, NULL, NULL, ${at}, ${at})`.pipe(
+        Effect.mapError(failed),
+      );
     }),
 
     get,
@@ -201,7 +205,7 @@ const make = Effect.gen(function* () {
     edges,
 
     /** Every scheduled Goal, oldest first. */
-    all: schedules(sql`SELECT ${columns} FROM kanban_goal_schedules ORDER BY created_at`),
+    all: schedules(sql`SELECT ${columns} FROM ${scheduled} ORDER BY s.created_at`),
 
     /**
      * Replaces the Goals this Goal waits for. They must be other Goals of the same project, and no

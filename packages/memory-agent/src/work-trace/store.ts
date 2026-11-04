@@ -1489,7 +1489,9 @@ const make = Effect.gen(function* () {
       first(sql`SELECT 1 AS found FROM kanban_goal_dependencies d
         JOIN workflow_goal_instances g ON g.goal_instance_id = d.depends_on
         JOIN kanban_goals k ON k.goal_instance_id = d.goal_instance_id
-        WHERE g.session_id = ${sessionId} AND k.session_id <> ${sessionId} AND k.status = 'active'
+        JOIN workflow_goal_instances waiting ON waiting.goal_instance_id = d.goal_instance_id
+        WHERE g.session_id = ${sessionId} AND waiting.session_id <> ${sessionId}
+          AND k.status = 'active'
         LIMIT 1`),
       isTruthy,
     );

@@ -127,11 +127,10 @@ const goalHistory = Effect.fnUntraced(function* (sessionId: string, goalId: stri
     goalId,
   );
   yield* sqlRun(
-    `INSERT INTO kanban_goals (goal_instance_id, session_id, project_id, project_root, mode,
-       goal_version, status, created_at, updated_at)
-     VALUES (?, ?, 'p1', '/tmp/p1', 'sequential', 1, 'stopped', 1, 1)`,
+    `INSERT INTO kanban_goals (goal_instance_id, project_root, mode, goal_version, status,
+       created_at, updated_at)
+     VALUES (?, '/tmp/p1', 'sequential', 1, 'stopped', 1, 1)`,
     goalId,
-    sessionId,
   );
   yield* sqlRun(
     "INSERT INTO kanban_cards (goal_instance_id, card_id) VALUES (?, 'card-1')",
@@ -146,11 +145,10 @@ const goalHistory = Effect.fnUntraced(function* (sessionId: string, goalId: stri
     sessionId,
   );
   yield* sqlRun(
-    `INSERT INTO kanban_card_attempts (goal_instance_id, card_id, attempt_no, session_id,
-       goal_version, plan_version, created_at, updated_at, queue_item_id)
-     VALUES (?, 'card-1', 1, ?, 1, 1, 0, 0, ?)`,
+    `INSERT INTO kanban_card_attempts (goal_instance_id, card_id, attempt_no, goal_version,
+       plan_version, created_at, updated_at, queue_item_id)
+     VALUES (?, 'card-1', 1, 1, 1, 0, 0, ?)`,
     goalId,
-    sessionId,
     `item-${goalId}`,
   );
 });
@@ -570,9 +568,9 @@ describe("Work Trace task lifecycle", () => {
           );
           yield* sqlRun("INSERT INTO workflow_goal_identities VALUES ('s1', 'goal-1', 'now')");
           yield* sqlRun("INSERT INTO workflow_goal_identities VALUES ('s2', 'goal-2', 'now')");
-          yield* sqlRun(`INSERT INTO kanban_goals (goal_instance_id, session_id, project_id,
-            project_root, mode, goal_version, status, created_at, updated_at)
-          VALUES ('goal-2', 's2', 'p1', '/tmp/p1', 'sequential', 1, 'active', 1, 1)`);
+          yield* sqlRun(`INSERT INTO kanban_goals (goal_instance_id, project_root, mode,
+            goal_version, status, created_at, updated_at)
+          VALUES ('goal-2', '/tmp/p1', 'sequential', 1, 'active', 1, 1)`);
           yield* sqlRun(`INSERT INTO kanban_goal_dependencies (goal_instance_id, depends_on, created_at)
           VALUES ('goal-2', 'goal-1', 1)`);
 
