@@ -37,6 +37,8 @@ export const bundleLimits = {
   failedSpansPerRun: 20,
   /** The longest span totals a run keeps (2026-11-04). */
   spanTotalsPerRun: 20,
+  /** The newest messages that asked for a run, kept ahead of its other events (2026-11-04). */
+  promptsPerRun: 3,
 } as const;
 
 /** Local ids leave the machine only as this much of their SHA-256. */
@@ -69,6 +71,12 @@ const NodeRow = Schema.Struct({
   back: Schema.Finite,
 });
 type NodeRow = typeof NodeRow.Type;
+const PromptRow = Schema.Struct({
+  run_id: Schema.String,
+  created_at: Schema.String,
+  excerpt: Schema.String,
+  len: Schema.Finite,
+});
 const ApprovalRow = Schema.Struct({
   run_id: Schema.String,
   status: Schema.String,
@@ -328,7 +336,14 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
       ) ORDER BY seq DESC LIMIT ${bundleLimits.runs}`,
   });
 
-  /** Nodes of the given runs (or of none, for `null`), at most `perRun` of the newest of each. */
+  /** A run's start (epoch milliseconds in `column`) as nodes write their times, to compare as text. */
+  const runStartIso = (column: string) =>
+    sql`strftime('%Y-%m-%dT%H:%M:%fZ', ${sql.literal(column)} / 1000.0, 'unixepoch')`;
+
+  /**
+   * Nodes of the given runs, at most `perRun` of the newest of each. For `null`, the nodes of no run,
+   * leaving out the messages that asked for a run (`promptRows`).
+   */
   const nodeRows = (runIds: readonly string[] | null, perRun: number) =>
     SqlSchema.findAll({
       Request: Schema.String,
@@ -347,8 +362,37 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
           FROM nodes
           WHERE session_id = ${id} AND project_id = ${project.id}
             AND kind IN ('user', 'assistant', 'tool_call', 'tool_result')
-            AND ${runIds === null ? sql`run_id IS NULL` : sql`run_id IN ${sql.in(runIds)}`}
+            AND ${
+              runIds === null
+                ? sql`run_id IS NULL AND NOT (kind = 'user' AND EXISTS (
+                    SELECT 1 FROM chat_runs r WHERE r.thread_id = ${id}
+                      AND ${runStartIso("r.started_at")} >= nodes.created_at))`
+                : sql`run_id IN ${sql.in(runIds)}`
+            }
         ) WHERE back <= ${perRun} ORDER BY seq`,
+    })(session.id);
+
+  /**
+   * The messages that asked for each given run. A user's message is saved before its run starts and
+   * names no run, so it belongs to the first run that started after it.
+   */
+  const promptRows = (runIds: readonly string[]) =>
+    SqlSchema.findAll({
+      Request: Schema.String,
+      Result: PromptRow,
+      execute: (id) => sql`
+        SELECT r.run_id, n.created_at, substr(n.text, 1, ${bundleLimits.textChars}) AS excerpt,
+          length(n.text) AS len
+        FROM (
+          SELECT run_id, ${runStartIso("started_at")} AS started,
+            ${runStartIso("LAG(started_at) OVER (ORDER BY started_at, run_id)")} AS previous
+          FROM chat_runs WHERE thread_id = ${id}
+        ) r
+        JOIN nodes n ON n.session_id = ${id} AND n.project_id = ${project.id}
+          AND n.kind = 'user' AND n.run_id IS NULL
+          AND n.created_at <= r.started AND (r.previous IS NULL OR n.created_at > r.previous)
+        WHERE r.run_id IN ${sql.in(runIds)}
+        ORDER BY n.seq`,
     })(session.id);
 
   const approvalRows = (runIds: readonly string[]) =>
@@ -432,6 +476,12 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
       const approvals = yield* approvalRows(runIds).pipe(
         fallbackLogged("report_bundle_approvals_failed", () => []),
       );
+      const prompts = yield* promptRows(runIds).pipe(
+        fallbackLogged("report_bundle_prompts_failed", () => []),
+      );
+      const promptTexts = yield* hideAll(
+        prompts.map((prompt) => ({ text: prompt.excerpt, length: prompt.len })),
+      );
       const recorder = yield* FailedSpans;
       const spansOfRun = yield* recorder.ofRuns(runIds);
       const totalsOfRun = yield* recorder.totalsOfRuns(runIds);
@@ -482,7 +532,22 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
               timeOf(a).localeCompare(timeOf(b)),
             );
             const total = own[0]?.node.run_total ?? 0;
-            const kept = timed.slice(-bundleLimits.eventsPerRun);
+            // What asked for the run comes first and stays when its other events are cut.
+            const asked = prompts
+              .flatMap((prompt, index) =>
+                prompt.run_id === run.run_id
+                  ? [
+                      BundleEvent.cases.Message.make({
+                        role: "user",
+                        at: prompt.created_at,
+                        text: promptTexts[index] ?? { text: "", cut: false },
+                      }),
+                    ]
+                  : [],
+              )
+              .slice(-bundleLimits.promptsPerRun);
+            const room = bundleLimits.eventsPerRun - asked.length;
+            const kept = [...asked, ...timed.slice(-room)];
             return {
               seq: run.seq,
               ref: yield* ref(run.run_id),
@@ -497,7 +562,7 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
                       detail: errors[runIndex] ?? { text: "", cut: false },
                     },
               events: kept,
-              eventsCut: kept.length < timed.length || total > own.length,
+              eventsCut: timed.length > room || total > own.length,
               failedSpans: (spansOfRun.get(run.run_id) ?? [])
                 .slice(-bundleLimits.failedSpansPerRun)
                 .map((span) => ({

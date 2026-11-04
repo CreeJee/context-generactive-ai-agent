@@ -9,8 +9,8 @@
 - `ReportBundle` / `BundleEvent` / `BundleRun` / `BundleText` / `BundleSectionStatus` / `BundleIntegration` / `BundleBoard` / `BundleDefect` — 증거 번들 Schema(`version: 3`, 섹션별 status/items/truncated, TaggedUnion 이벤트 Message·ToolCall·Approval·Trace, run마다 메모리에 남은 실패 span `BundleSpan`과 span 경로별 합계 `BundleSpanTotal`)
 - `ReportDeliveryFailure` / `ReportDeliveryResult` / `ReportDeliveryStatus` — 전송 실패 사유 리터럴, 결과 TaggedUnion(`delivered`·`duplicate`·`uncertain_duplicate`), 웹훅 설정 상태 Schema
 - `ReportDiagnosisInput` / `ReportDiagnosis` / `ReportDiagnosisFailure` — 진단 입력(symptom ≤4000자 등, bundle nullable), 진단 결과(summary·observations·hypotheses), 실패 사유 Schema
-- `collectReportBundle(project, session)` — `Effect.fn("ReportBundle.collect")`; 한 세션의 증거 번들을 수집한다
-- `bundleLimits` — 번들 한도 상수(runs 30, eventsPerRun 60, textChars 1500, failureChars 6000, unlinked 20, failedSpansPerRun 20, spanTotalsPerRun 20)
+- `collectReportBundle(project, session)` — `Effect.fn("ReportBundle.collect")`; 한 세션의 증거 번들을 수집한다. run을 이름에 달지 않은 사용자 메시지는 그 뒤 처음 시작한 run의 첫 이벤트로 넣고(run당 최근 3개, 이벤트 상한에서 빠지지 않음), 뒤따른 run이 없는 것만 `unlinked`에 둔다
+- `bundleLimits` — 번들 한도 상수(runs 30, eventsPerRun 60, textChars 1500, failureChars 6000, unlinked 20, failedSpansPerRun 20, spanTotalsPerRun 20, promptsPerRun 3)
 - `loopHealthText` — `LoopHealth`를 텍스트(`Healthy`, `Retrying a/b`, `Exhausted (e)`, `Defected`)로 변환한다
 - `diagnosisDigest(bundle)` — 진단 모델에 줄 `DigestItem[]`(environment, timeline 개요, 최신 실패 run 최대 10개)를 만든다
 - `bundlePlaces(bundle)` — observation이 인용할 수 있는 place id 집합(`environment`, `timeline`, `run-N`, `run-N/call-M`)
@@ -50,7 +50,7 @@
 
 ## Side Effects
 
-- SQLite 읽기: `collectReportBundle`이 `kanban_goals`, `kanban_cards`를 `workflow_goal_instances`에 JOIN해 session_id로 조회한다. run·node·approval 행(`RunRow`, `NodeRow`, `ApprovalRow`)도 조회한다.
+- SQLite 읽기: `collectReportBundle`이 `kanban_goals`, `kanban_cards`를 `workflow_goal_instances`에 JOIN해 session_id로 조회한다. run·node·approval 행(`RunRow`, `NodeRow`, `ApprovalRow`)과 run을 연 사용자 메시지(`PromptRow`, 직전 run 시작 뒤·이 run 시작 전)도 조회한다.
 - 환경·설정 읽기: `CONTEXT_AGENT_RELEASE`(기본 `0.0.0-dev`, 오류 시 `unknown`), `DISCORD_WEBHOOK_URL`(Redacted), `GlobalConfig.read`(kanbanConcurrency, defectReports), `process.versions.node`, `hostPlatform`.
 - 네트워크: `ReportDelivery`가 Discord webhook URL로 `?wait=true` multipart POST를 보낸다(리포트 `send`, 서버 알림 `sendNotice`).
 - LLM 호출: `ReportDiagnoser.diagnose`가 `singleAnswer`로 선택된 모델을 호출하고 `recordUsage`로 API 사용량을 기록한다.

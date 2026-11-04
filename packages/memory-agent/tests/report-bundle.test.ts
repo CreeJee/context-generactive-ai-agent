@@ -106,4 +106,35 @@ testAgent()("report evidence bundle", (it) => {
       expect(bundle.unlinked.status).toBe("empty");
     }),
   );
+
+  it.effect("puts the message that asked for a run in it, and keeps a later one unlinked", () =>
+    Effect.gen(function* () {
+      const { project } = yield* TestEnv;
+      const sql = yield* SqlClient.SqlClient;
+      const session = yield* (yield* Sessions).create(project.id);
+      // A user's message is saved before its run starts and names no run.
+      const ask = (id: string, text: string, at: number) =>
+        sql`INSERT INTO nodes (id, project_id, session_id, kind, text, detail, created_at)
+        VALUES (${id}, ${project.id}, ${session.id}, 'user', ${text}, '{}',
+          ${DateTime.formatIso(DateTime.makeUnsafe(at))})`;
+      const run = (id: string, startedAt: number) =>
+        sql`INSERT INTO chat_runs (run_id, thread_id, status, started_at, finished_at, error)
+        VALUES (${id}, ${session.id}, 'failed', ${startedAt}, ${startedAt + 500},
+          'The provider could not be reached.')`;
+      yield* ask("ask-1", "go on", 1_762_260_907_956);
+      yield* run("run-1", 1_762_260_918_385);
+      yield* ask("ask-2", "go on again", 1_762_260_960_228);
+      yield* run("run-2", 1_762_260_960_370);
+      yield* ask("ask-3", "still there?", 1_762_261_000_000);
+
+      const bundle = yield* collectReportBundle(project, { id: session.id, title: null });
+      const said = (events: readonly BundleEvent[]) =>
+        events.filter(BundleEvent.guards.Message).map((event) => event.text.text);
+      expect(bundle.timeline.items.map((item) => said(item.events))).toEqual([
+        ["go on"],
+        ["go on again"],
+      ]);
+      expect(said(bundle.unlinked.items)).toEqual(["still there?"]);
+    }),
+  );
 });
