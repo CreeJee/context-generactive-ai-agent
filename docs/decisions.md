@@ -3969,3 +3969,14 @@
   - 고아 첨부 삭제는 대기 메시지가 쓰는 이미지도 남긴다. 전달된 메시지의 행도 메시지가 남아 있는 동안 남는다. 그 이미지는 사용자 노드도 참조한다.
   - `queued_messages.in_transcript`는 읽는 곳이 없어 지운다.
 - 마이그레이션: 배열에서 있는 첨부를 가리키는 문자열 원소만 원래 위치로 옮기고, 두 열을 지운다. 없는 첨부와 문자열이 아닌 원소는 전달할 때도 빠졌다. 사본 측정: 메시지 221개 중 이미지가 있는 것은 없었고, 8ms였다.
+
+## 작업·하위 에이전트의 상태 열은 그대로 둔다 (2026-11-04)
+
+- 계기: 정규화 안 된 표 목록 8번(같은 날). `work_tasks.status`, `agent_invocations.status`, `subagents.status`·`last_task`·`last_answer`·`error`, `work_tasks.agent_name`이 서로의 사본처럼 보였다. 목록은 `subagents`의 마지막 실행 열을 최신 task를 조인하는 view로 바꾸자고 했다.
+- 결정: 바꾸지 않는다. 사본에서 확인하니 어느 것도 다른 표에서 그대로 계산되지 않는다.
+  - `subagents` 261개 중 19개(2026-09-15~20)는 work trace보다 먼저 생겨 task가 없다. view로 바꾸면 이들의 상태·요청·답이 사라진다.
+  - `last_answer`는 하위 에이전트 답의 유일한 글 사본이다. 다른 곳에는 transcript 메시지 id만 남는다. 254개가 답을 가졌다.
+  - `last_task`는 실행을 시작한 글이다. 이어 하기는 그 메시지, 재개는 원래 요청을 쓴다. task의 `request`와 242개 중 240개, 최신 invocation의 `message`와 240개만 같다.
+  - `error`는 attempt 실패 이유에서 만든 코드다. `status`의 `interrupted`는 재시작이 따로 정한다.
+  - `work_tasks.status`에는 attempt에 없는 `resumable`·`resuming`·`archived`가 있다. 최신 attempt와 1건이 달랐다(`blocked`와 `interrupted`). invocation 상태에는 `accepted`·`steered`가 있다. 각자 다른 생애를 기록한다.
+  - `work_tasks.agent_name`은 하위 에이전트 task에서 이름(271개) 또는 `subagent`(165개)와 같다. 그러나 하위 에이전트가 지워지면 `agent_id`가 NULL이 되고, 이 이름만 남는다. 다른 task 4,131개는 `background_shell` 같은 종류 이름이라 참조할 행이 없다.
