@@ -1,6 +1,5 @@
 import { Effect } from "effect";
 import { expect } from "vite-plus/test";
-import { invocationFieldSql } from "../../src/workflow/run-bindings.ts";
 import { conversation } from "../golden/driver.ts";
 import { goldenAgent } from "../golden/scenarios.ts";
 import { sqlAll } from "../support/sql.ts";
@@ -29,8 +28,7 @@ goldenAgent()("parallel tools in a Goal run", (it) => {
           yield* sqlAll("SELECT status FROM chat_runs WHERE thread_id = ?", chat.sessionId),
         ).toEqual([{ status: "completed" }]);
         const ledger = yield* sqlAll(
-          `SELECT ${invocationFieldSql("o", "toolCallId")} AS call,
-             o.status || ' ' || json_extract(o.reply_json, '$.output') AS outcome
+          `SELECT o.tool_call_id AS call, o.status || ' ' || o.outcome AS outcome
            FROM owner_rpc_operations o JOIN workflow_run_bindings b ON b.run_id = o.run_id
            WHERE b.session_id = ?`,
           chat.sessionId,

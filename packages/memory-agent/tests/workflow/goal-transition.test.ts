@@ -147,7 +147,7 @@ const withHistory = Effect.fnUntraced(function* () {
     historical,
   );
   yield* sqlRun(
-    `INSERT INTO owner_rpc_operations VALUES (?, 'key', 1, 'fingerprint', 1, '{"status":"old"}', 'succeeded')`,
+    "INSERT INTO owner_rpc_operations (run_id, operation_id, side_effect, status) VALUES (?, 1, 1, 'succeeded')",
     historical,
   );
   return { workflows, session, historical, old: yield* identity(session) };

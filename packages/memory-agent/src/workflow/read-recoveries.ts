@@ -5,7 +5,9 @@ const policy = "background-result-read-v1";
  * Whether a run's uncertain read was recovered by an operator receipt (decisions.md "검증된
  * background 읽기 실패의 명시적 복구 (2026-10-11)"). Receipts are no longer written; ones a released
  * version wrote still resolve admission. A receipt never makes the original failed run usable for
- * replay or completion evidence. SQL aliases are internal constants, never request input.
+ * replay or completion evidence. The fingerprints and run key a receipt names matched its two
+ * operations' when those went as columns, or the receipt was revoked then (decisions.md "owner
+ * 장부 행은 열로 둔다 (2026-11-04)"). SQL aliases are internal constants, never request input.
  */
 export const recoveredReadRunSql = (run: "r" | "recovery_run") => `EXISTS (
   SELECT 1 FROM owner_read_recoveries rr
@@ -17,9 +19,7 @@ export const recoveredReadRunSql = (run: "r" | "recovery_run") => `EXISTS (
     AND ${run}.status = 'failed' AND ${run}.error_code = 'worker_execution_failed'
     AND ${run}.finished_at = rr.finished_at
     AND rr.policy = '${policy}' AND ro.status = 'uncertain' AND ro.side_effect = 1
-    AND ro.fingerprint = rr.operation_fingerprint AND ro.run_key = rr.run_key
-    AND ra.status = 'succeeded' AND ra.side_effect = 1 AND ra.run_key = rr.run_key
-    AND ra.fingerprint = rr.authorization_fingerprint
+    AND ra.status = 'succeeded' AND ra.side_effect = 1
     AND rb.session_id = rr.session_id AND rb.goal_instance_id = rr.goal_instance_id
     AND rb.workflow_revision_id = rr.workflow_revision_id
     AND re.workflow_name = 'GoalExecution' AND re.status = 'completed'

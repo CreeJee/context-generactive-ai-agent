@@ -38,9 +38,26 @@ const snapshot = (
 ) => tables.map((table) => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all());
 /**
  * The preserved tables a later step keeps as they were: the run log step drops the run event
- * receipts, and the ledger step keeps the workflow states as rows.
+ * receipts, the ledger step keeps the workflow states as rows, and the owner ledger step keeps an
+ * operation's kind and tool as columns.
  */
-const rewritten = new Set(["workflow_run_events", "workflow_state_revisions", "session_workflows"]);
+const rewritten = new Set([
+  "workflow_run_events",
+  "workflow_state_revisions",
+  "session_workflows",
+  "owner_rpc_operations",
+]);
+/** The fixture's operation once its fingerprint, which is not JSON, went: it names nothing. */
+const operation = {
+  run_id: "run",
+  operation_id: 1,
+  operation: null,
+  tool_name: null,
+  tool_call_id: null,
+  side_effect: 1,
+  status: "uncertain",
+  outcome: null,
+};
 const stillKept = goalHistoryMigration.preservedTables.filter((table) => !rewritten.has(table));
 const keptOf = <A>(rows: ReadonlyArray<A>) =>
   rows.filter((_, index) => !rewritten.has(goalHistoryMigration.preservedTables[index] ?? ""));
@@ -71,8 +88,10 @@ it.live(
       const before = snapshot(db);
       yield* migrateDatabase(db);
       // Later steps drop the run event receipts, ending the run's delivery log instead, and keep
-      // the workflow states as rows; every other preserved value stays as it was.
+      // the workflow states and owner operations as rows and columns; every other preserved value
+      // stays as it was.
       expect(snapshot(db, stillKept)).toEqual(keptOf(before));
+      expect(db.prepare("SELECT * FROM owner_rpc_operations").all()).toEqual([operation]);
       // The current state no revision held becomes the latest, which the session points at.
       expect(states(db)).toEqual([
         { id: 1, provenance: "recorded", state: recorded },
@@ -126,7 +145,7 @@ it.live(
         reopened.prepare("SELECT * FROM workflow_goal_instances ORDER BY created_at").all(),
       ).toHaveLength(2);
       expect(reopened.prepare("SELECT * FROM workflow_run_log_entries").all()).toEqual([]);
-      expect(reopened.prepare("SELECT * FROM owner_rpc_operations").all()).toEqual(before[6]);
+      expect(reopened.prepare("SELECT * FROM owner_rpc_operations").all()).toEqual([operation]);
     }).pipe(withTestPlatform),
 );
 

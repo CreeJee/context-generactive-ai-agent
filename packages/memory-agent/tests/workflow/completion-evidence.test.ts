@@ -256,14 +256,11 @@ const breakProof = Effect.fnUntraced(function* (fx: Fixture, failure: Refusal) {
   });
   const unchanged = { input: fx.complete, recorder: fx.recorder };
   const badNode = `${fx.run}-bad`;
-  const operation = (sideEffect: 0 | 1, reply: string, status: string) =>
+  const operation = (sideEffect: 0 | 1, status: string) =>
     sqlRun(
-      `INSERT INTO owner_rpc_operations
-         (run_id, run_key, operation_id, fingerprint, side_effect, reply_json, status)
-         VALUES (?, '{}', 1, '{}', ?, ?, ?)`,
+      "INSERT INTO owner_rpc_operations (run_id, operation_id, side_effect, status) VALUES (?, 1, ?, ?)",
       fx.run,
       sideEffect,
-      reply,
       status,
     );
   switch (failure) {
@@ -326,10 +323,10 @@ const breakProof = Effect.fnUntraced(function* (fx: Fixture, failure: Refusal) {
       );
       return unchanged;
     case "pending operation":
-      yield* operation(0, '{"type":"pending","operationId":1}', "pending");
+      yield* operation(0, "pending");
       return unchanged;
     case "uncertain effect":
-      yield* operation(1, '{"type":"uncertain","operationId":1}', "uncertain");
+      yield* operation(1, "uncertain");
       return unchanged;
   }
 });
@@ -348,9 +345,7 @@ testAgent()("criterion-linked Goal completion", (it) => {
       const fx = yield* fixture("native");
       const workflows = yield* Workflows;
       yield* sqlRun(
-        `INSERT INTO owner_rpc_operations
-        (run_id, run_key, operation_id, fingerprint, side_effect, reply_json, status)
-        VALUES (?, '{}', 1, '{}', 1, '{"type":"pending","operationId":1}', 'pending')`,
+        "INSERT INTO owner_rpc_operations (run_id, operation_id, side_effect, status) VALUES (?, 1, 1, 'pending')",
         fx.recorder,
       );
       const staged = yield* workflows.updateProgress(fx.sessionId, fx.complete, fx.recorder);

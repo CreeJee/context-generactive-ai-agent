@@ -32,7 +32,7 @@
 - `sqliteRunLog` — session/run 바인딩을 확인하는 owner 전용 AG-UI 이벤트 전달 로그(`RunLog` 구현)
 - `endCutRunLogs` — 시작 때 재시작이 끊은 run 로그를 닫고, 보존 시간이 지난 로그의 항목을 지운다
 - `RunLogSignals` — 로그에 쓴 run id를 알려 로그 끝의 reader를 깨우는 서비스
-- `workflowRunBindings` / `RunBinding` / `Admission` / `toolOperationSql` / `endedWithKnownEffectsSql` / `acknowledgedRunSql` / `resolvedRunSql` / `invocationFieldSql` / `recoveredReadRunSql` — run 바인딩 admission과 공유 SQL 조각
+- `workflowRunBindings` / `RunBinding` / `Admission` / `toolOperationSql` / `endedWithKnownEffectsSql` / `acknowledgedRunSql` / `resolvedRunSql` / `recoveredReadRunSql` — run 바인딩 admission과 공유 SQL 조각
 - `revisionStateSql` / `currentStatesSql` — revision 행에서 워크플로 상태 JSON을 만드는 SQL 조각과, 세션의 현재 revision을 붙인 표(`state-rows.ts`)
 - `toolLedger` / `toolProgressFingerprint` / `uncertainRuns` / `UncertainContinue` / `UncertainRunsFailed` — tool 부수효과 ledger와 결과 불확실 run 처리
 - `completionEvidence` / `CompletionSnapshot` / `CompletionRequest` / `CriterionMapping` / `Derived` — Goal 완료 근거 계산
@@ -64,7 +64,7 @@
 - 턴을 끝내는 모델 텍스트로는 Plan이 완료되지 않는다(`WorkflowExecution` doc).
 - hold된 카드는 의존성이 끝나도 backlog에 남고 루프가 배정하지 않는다. 카드 계약 필드(`cardContractKeys`)와 `hold`는 모델이 같은 step id로 replan해도 유지된다.
 - `StartNewGoal`은 별도의 독립 성공 기준이다. `updateGoal`을 암묵적으로 해석해 만들어서는 안 된다.
-- `toolOperationSql`은 `side_effect = 1`인 작업을 tool로 센다. fingerprint에 operation이 없어도 tool로 센다. 단, `middleware`와 `routedPersistence` operation은 owner bookkeeping이라 제외한다.
+- `toolOperationSql`은 `side_effect = 1`인 작업을 tool로 센다. operation이 없는 옛 행도 tool로 센다. 단, `middleware`와 `routedPersistence` operation은 owner bookkeeping이라 제외한다.
 - 발화한 clock은 자신의 deferred를 void 성공으로 완료하고, 그 결과는 엔진이 인코딩하는 Exit 형태로 저장한다. workflow payload는 레코드 필드를 인코딩한 JSON 객체로 저장한다.
 - 끝난 owner 실행을 기다리는 호출자는 retry schedule을 기다리지 않는다. 엔진은 실행이 완료되거나 interrupt되면 그 id를 `PubSub`에 발행하고, `awaitComplete` hook이 그 id를 받으면 돌아온다. 호출자를 기다리게 하는 workflow 정의는 `suspendedRetrySchedule`(1초에서 2배씩, 상한 5분, 끝나지 않음)을 둔다. schedule은 hook이 놓친 깨움을 되살리는 안전망이고, 끝나면 호출자가 결함으로 죽으므로 끝나지 않아야 한다.
 - 엔진 메모리에는 pass가 있는 실행만 남는다. 실행이 완료되거나 interrupt되면 표에서 지운다. pass마다 `WorkflowInstance`와 scope를 새로 만들고 엔진 scope에 묶지 않는다. 완료된 pass의 scope는 `Workflow.intoResult`가 닫고, 대기로 끝난 pass의 scope는 instance와 함께 사라진다.

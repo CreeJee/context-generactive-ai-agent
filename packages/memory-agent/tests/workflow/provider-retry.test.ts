@@ -16,7 +16,6 @@ import { DatabaseSync } from "node:sqlite";
 import { SqlClient } from "effect/sql";
 import { TestClock } from "effect/testing";
 import { describe, expect } from "vite-plus/test";
-import { ownerRpcFingerprint, ownerRpcFrame } from "../../src/agent/owner-rpc-fingerprint.ts";
 import { Database } from "../../src/db/database.ts";
 import { migrations } from "../../src/db/migrations.ts";
 import { NodeDetail } from "../../src/memory/nodes.ts";
@@ -200,12 +199,10 @@ describe("durable provider retry", () => {
           const shellRun = Effect.fnUntraced(function* (runId: string) {
             yield* runningGoal(runId);
             yield* sqlRun(
-              "INSERT INTO owner_rpc_operations VALUES (?, 'key', 1, ?, 1, '{}', 'succeeded')",
+              `INSERT INTO owner_rpc_operations
+                 (run_id, operation_id, operation, tool_name, tool_call_id, side_effect, status)
+               VALUES (?1, 1, 'tool', 'run_shell', ?1 || '-call', 1, 'succeeded')`,
               runId,
-              ownerRpcFingerprint(
-                "tool",
-                ownerRpcFrame({ name: "run_shell", toolCallId: `${runId}-call`, args: {} }),
-              ),
             );
           });
           // A succeeded shell call the session history does not hold may be repeated unknowingly.

@@ -1,7 +1,7 @@
 import { Array as EffectArray, Data, DateTime, Effect, HashSet, Match, Schema } from "effect";
 import { SqlClient, type SqlError } from "effect/sql";
 import { readOnlyToolNames } from "../tools/effects.ts";
-import { invocationFieldSql, resolvedRunSql, toolOperationSql } from "./run-bindings.ts";
+import { resolvedRunSql, toolOperationSql } from "./run-bindings.ts";
 import type { UncertainRun, UncertainTool, UncertainToolState } from "./contracts.ts";
 
 export {
@@ -68,17 +68,13 @@ export const uncertainRuns = Effect.gen(function* () {
       AND (coalesce(r.status, '') <> 'completed' OR EXISTS (SELECT 1 FROM owner_rpc_operations o
         WHERE o.run_id = b.run_id AND (o.status = 'pending' OR (o.side_effect = 1 AND o.status <> 'succeeded'))))
     ORDER BY b.created_at, b.run_id`;
-  // A fingerprint that is not JSON names no tool; it still counts, with no name to show.
-  const field = (name: "name" | "toolCallId") =>
-    `CASE WHEN json_valid(o.fingerprint) THEN ${invocationFieldSql("o", name)} END`;
+  // An operation recorded without a tool still counts, with no name to show.
   const operations = (runId: string) => sql`
-    SELECT o.status,
-      CASE WHEN json_valid(o.fingerprint) THEN json_extract(o.fingerprint, '$.operation') END AS operation,
-      ${sql.literal(field("name"))} AS name, ${sql.literal(field("toolCallId"))} AS toolCallId,
+    SELECT o.status, o.operation, o.tool_name AS name, o.tool_call_id AS toolCallId,
       (SELECT n.text FROM nodes n WHERE n.session_id = b.session_id AND n.kind = 'tool_call'
-        AND json_extract(n.detail, '$.toolCallId') = ${sql.literal(field("toolCallId"))} ORDER BY n.seq LIMIT 1) AS call,
+        AND json_extract(n.detail, '$.toolCallId') = o.tool_call_id ORDER BY n.seq LIMIT 1) AS call,
       EXISTS (SELECT 1 FROM nodes n WHERE n.session_id = b.session_id AND n.kind = 'tool_result'
-        AND json_extract(n.detail, '$.toolCallId') = ${sql.literal(field("toolCallId"))}) AS recorded
+        AND json_extract(n.detail, '$.toolCallId') = o.tool_call_id) AS recorded
     FROM owner_rpc_operations o JOIN workflow_run_bindings b ON b.run_id = o.run_id
     WHERE o.run_id = ${runId} AND ${sql.literal(toolOperationSql("o"))}
     ORDER BY o.operation_id`;

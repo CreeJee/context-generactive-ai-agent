@@ -91,9 +91,7 @@ const goalHistory = Effect.fnUntraced(function* (sessionId: string, goalId: stri
     sessionId,
   );
   yield* sqlRun(
-    `INSERT INTO owner_rpc_operations
-       (run_id, run_key, operation_id, fingerprint, side_effect, reply_json, status)
-     VALUES (?, 'key', 1, '{}', 1, '{}', 'succeeded')`,
+    "INSERT INTO owner_rpc_operations (run_id, operation_id, side_effect, status) VALUES (?, 1, 1, 'succeeded')",
     runId,
   );
   yield* sqlRun(

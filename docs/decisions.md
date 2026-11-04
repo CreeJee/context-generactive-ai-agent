@@ -3898,3 +3898,23 @@
   - revision에 열을 더해 채우고 `state_json`을 지운다. `session_workflows`는 포인터 표로 바꾼다.
   - revision 표는 `workflow_run_bindings`와 `workflow_new_goal_requests`가 참조한다. 그래서 다시 만들지 않고 `ALTER TABLE`로 바꾼다.
   - 사본 측정: 이 단계는 0.9초였다. revision 924개의 상태가 모두 원래 JSON과 바이트까지 같게 읽혔고, 현재 상태 61개도 같았다. 세 표는 VACUUM 뒤 21.1MB였다.
+
+## owner 장부 행은 열로 둔다 (2026-11-04)
+
+- 계기: 정규화 안 된 표 목록 3번(같은 날). 로컬 DB 사본에서 `owner_rpc_operations`는 16,439행, 23.4MB였다.
+- 원인: 행의 뜻이 JSON 안에 있었다.
+  - `fingerprint`는 작업 종류와 owner가 인코딩한 호출(이름·인자·call id)을 담았다. reader는 `json_each`로 도구 이름과 call id를 꺼냈다.
+  - `reply_json`은 호출이 어떻게 끝났는지를 담았다. `status`가 이미 그 경우를 나타냈고, 이 값을 읽는 코드는 없었다.
+  - `run_key`는 run의 binding(`workflow_run_bindings`)을 한 번 더 적었다.
+  - digest를 비교하던 Goal worker는 없어졌다. 인자와 결과는 세션의 `tool_call`·`tool_result` 노드에 있다.
+- 결정:
+  - 행은 `operation`, `tool_name`, `tool_call_id`, `outcome`(`returned`|`failed`|`cancelled`|`refused`) 열을 갖는다. `run_key`, `fingerprint`, `reply_json`은 지운다.
+  - 도구 장부(`tool-ledger.ts`)는 이 열을 쓴다. 입장 검사, `uncertainRuns`, read recovery는 이 열을 읽는다.
+  - `agent/owner-rpc-fingerprint.ts`는 쓰는 곳이 없어져 지운다.
+  - 종류를 모르는 옛 행(`operation`이 NULL)은 전처럼 도구로 센다.
+- 마이그레이션:
+  - 열을 더하고 옛 reader와 같은 식으로 채운다. JSON이 아닌 fingerprint, 객체가 아닌 입력은 NULL을 남긴다. 옛 식은 이런 입력에서 오류를 낼 수 있었다.
+  - read recovery 영수증은 두 작업을 fingerprint와 run key로 가리켰다. 이 값들은 한 번 쓰면 바뀌지 않는다. 그래서 지금 맞지 않는 영수증은 앞으로도 run을 풀지 못한다. 이런 영수증은 마이그레이션 때 revoke한다. 그러면 열이 없어진 뒤에도 입장 검사가 전과 같게 읽는다.
+  - 다른 기기 DB도 같은 단계를 거친다. 그래서 테스트는 옛 형식 입력, 맞는 영수증, 어긋난 영수증을 담은 DB를 올려 본다.
+  - `owner_read_recoveries`가 이 표를 참조하므로 다시 만들지 않고 `ALTER TABLE`로 바꾼다.
+  - 사본 측정: 이 단계는 0.75초였다. 16,439행 모두 옛 reader 식과 값이 같았다. 표는 VACUUM 뒤 3.3MB였다.

@@ -444,9 +444,8 @@ export const uncertainCardRun = Effect.fn("uncertainCardRun")(function* (
     FROM workflow_state_revisions WHERE session_id = ${board.sessionId}`;
   yield* (yield* workflowRunBindings).bind(board.sessionId, runId, Number(revision?.id));
   yield* chatRun(runId, "failed");
-  yield* sql`INSERT INTO owner_rpc_operations
-      (run_id, run_key, operation_id, fingerprint, side_effect, reply_json, status)
-    VALUES (${runId}, 'k', 1, '{"operation":"tool"}', 1, '{}', 'uncertain')`;
+  yield* sql`INSERT INTO owner_rpc_operations (run_id, operation_id, operation, side_effect, status)
+    VALUES (${runId}, 1, 'tool', 1, 'uncertain')`;
   yield* (yield* CardAttempts).registerRun(
     { goalInstanceId: board.goalInstanceId, cardId, attemptNo: 1 },
     { runId, traceAttemptId: null },

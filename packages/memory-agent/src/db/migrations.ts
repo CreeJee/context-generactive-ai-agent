@@ -325,6 +325,50 @@ export const runLogMigration = `
 `;
 
 /**
+ * The step that keeps an owner operation's kind, tool and ending as columns and drops the JSON
+ * they were read out of.
+ */
+export const ownerRpcLedgerMigration = `
+  -- An owner operation as columns (decisions.md "owner 장부 행은 열로 둔다 (2026-11-04)"). Its
+  -- fingerprint held the operation and the owner-encoded call with its arguments, and readers
+  -- picked the tool's name and call id out of it; reply_json held how the call ended, and run_key
+  -- the run's binding again. Nothing compares a digest since the Goal worker went, the arguments
+  -- and results are the session's tool_call and tool_result nodes, and the binding is
+  -- workflow_run_bindings.
+  ALTER TABLE owner_rpc_operations ADD COLUMN operation TEXT;
+  ALTER TABLE owner_rpc_operations ADD COLUMN tool_name TEXT;
+  ALTER TABLE owner_rpc_operations ADD COLUMN tool_call_id TEXT;
+  ALTER TABLE owner_rpc_operations ADD COLUMN outcome TEXT
+    CHECK (outcome IN ('returned', 'failed', 'cancelled', 'refused'));
+  -- A fingerprint that is not JSON names nothing; its row still counts as a tool.
+  UPDATE owner_rpc_operations SET
+    operation = CASE WHEN json_valid(fingerprint) THEN fingerprint ->> 'operation' END,
+    tool_name = (SELECT f.value ->> '$[1][1]'
+      FROM json_each(CASE WHEN json_valid(fingerprint) THEN fingerprint END, '$.input[1]') f
+      WHERE f.type = 'array' AND f.value ->> '$[0]' = 'name'),
+    tool_call_id = (SELECT f.value ->> '$[1][1]'
+      FROM json_each(CASE WHEN json_valid(fingerprint) THEN fingerprint END, '$.input[1]') f
+      WHERE f.type = 'array' AND f.value ->> '$[0]' = 'toolCallId'),
+    outcome = CASE WHEN reply_json ->> 'output' IN ('returned', 'failed', 'cancelled', 'refused')
+      THEN reply_json ->> 'output' END;
+  -- A read recovery receipt names its two operations by their fingerprints and the run key, which
+  -- never change once written. A receipt they do not match never resolved its run; it is revoked
+  -- now, so admission keeps reading it the same once they are gone.
+  INSERT INTO owner_read_recovery_revocations (receipt_id, revoked_at)
+    SELECT rr.receipt_id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now') FROM owner_read_recoveries rr
+    WHERE rr.receipt_id NOT IN (SELECT receipt_id FROM owner_read_recovery_revocations)
+      AND NOT EXISTS (SELECT 1 FROM owner_rpc_operations ro
+        JOIN owner_rpc_operations ra ON ra.run_id = ro.run_id
+          AND ra.operation_id = ro.operation_id - 1
+        WHERE ro.run_id = rr.run_id AND ro.operation_id = rr.operation_id
+          AND ro.fingerprint = rr.operation_fingerprint AND ro.run_key = rr.run_key
+          AND ra.fingerprint = rr.authorization_fingerprint AND ra.run_key = rr.run_key);
+  ALTER TABLE owner_rpc_operations DROP COLUMN run_key;
+  ALTER TABLE owner_rpc_operations DROP COLUMN fingerprint;
+  ALTER TABLE owner_rpc_operations DROP COLUMN reply_json;
+`;
+
+/**
  * Ordered schema steps. `PRAGMA user_version` records how many have been applied.
  * Append new steps; never edit an applied one.
  */
@@ -2341,6 +2385,7 @@ export const migrations: readonly string[] = [
   threadDisplayMessagesMigration,
   runLogMigration,
   workflowLedgerMigration,
+  ownerRpcLedgerMigration,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

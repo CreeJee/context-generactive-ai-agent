@@ -26,24 +26,11 @@ export const Admission = Data.taggedEnum<Admission>();
 
 /**
  * An owner operation that may have run a tool. Middleware hooks and routed persistence are owner
- * bookkeeping and repeat nothing outside; a fingerprint that does not name its operation counts as
- * a tool.
+ * bookkeeping and repeat nothing outside; an operation a released version recorded without a kind
+ * counts as a tool.
  */
 export const toolOperationSql = (operation: string) => `(${operation}.side_effect = 1
-  AND coalesce(CASE WHEN json_valid(${operation}.fingerprint)
-    THEN json_extract(${operation}.fingerprint, '$.operation') END, '')
-    NOT IN ('middleware', 'routedPersistence'))`;
-
-/** A string field of the owner-encoded tool invocation in a tool operation's fingerprint. */
-export const invocationFieldSql: {
-  (field: "name" | "toolCallId"): (operation: string) => string;
-  (operation: string, field: "name" | "toolCallId"): string;
-} = EffectFunction.dual(
-  2,
-  (operation: string, field: "name" | "toolCallId") =>
-    `(SELECT json_extract(f.value, '$[1][1]') FROM json_each(${operation}.fingerprint, '$.input[1]') f
-    WHERE json_extract(f.value, '$[0]') = '${field}')`,
-);
+  AND coalesce(${operation}.operation, '') NOT IN ('middleware', 'routedPersistence'))`;
 
 // Built-in names are fixed constants, never request input.
 const readOnlyToolsSql = [...readOnlyToolNames].map((name) => `'${name}'`).join(", ");
@@ -62,13 +49,11 @@ export const endedWithKnownEffectsSql = (
 ) => `(coalesce(${run}.status IN ('failed', 'aborted'), 0)
   AND NOT EXISTS (SELECT 1 FROM owner_rpc_operations eo
     WHERE eo.run_id = ${run}.run_id AND ${toolOperationSql("eo")} AND (eo.status <> 'succeeded'
-      OR NOT json_valid(eo.fingerprint)
-      OR coalesce(json_extract(eo.fingerprint, '$.operation'), '') NOT IN ('tool', 'toolAuthorize')
-      OR json_extract(eo.fingerprint, '$.operation') = 'tool'
-        AND coalesce(${invocationFieldSql("eo", "name")}, '') NOT IN (${readOnlyToolsSql})
+      OR coalesce(eo.operation, '') NOT IN ('tool', 'toolAuthorize')
+      OR eo.operation = 'tool' AND coalesce(eo.tool_name, '') NOT IN (${readOnlyToolsSql})
         AND NOT EXISTS (SELECT 1 FROM nodes n
           WHERE n.session_id = ${run}.thread_id AND n.kind = 'tool_result'
-            AND json_extract(n.detail, '$.toolCallId') = ${invocationFieldSql("eo", "toolCallId")}))))`;
+            AND json_extract(n.detail, '$.toolCallId') = eo.tool_call_id))))`;
 
 /**
  * A bound run whose unknown outcome the user saw and chose to continue past. `binding` names a

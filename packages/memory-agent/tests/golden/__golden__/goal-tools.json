@@ -181,137 +181,34 @@
   "interrupts": [],
   "ledger": [
     {
-      "input": [
-        "object",
-        [
-          [
-            "name",
-            [
-              "string",
-              "read_file"
-            ]
-          ],
-          [
-            "args",
-            [
-              "object",
-              [
-                [
-                  "path",
-                  [
-                    "string",
-                    "notes.txt"
-                  ]
-                ]
-              ]
-            ]
-          ],
-          [
-            "toolCallId",
-            [
-              "string",
-              "goal-read@<session>"
-            ]
-          ]
-        ]
-      ],
-      "input_kind": "complete",
       "operation": "tool",
       "operation_id": 1,
+      "outcome": "returned",
       "run_id": "<id-5>",
       "side_effect": 1,
-      "status": "succeeded"
+      "status": "succeeded",
+      "tool_call_id": "goal-read@<session>",
+      "tool_name": "read_file"
     },
     {
-      "input": [
-        "object",
-        [
-          [
-            "name",
-            [
-              "string",
-              "list_files"
-            ]
-          ],
-          [
-            "args",
-            [
-              "object",
-              [
-                [
-                  "glob",
-                  [
-                    "string",
-                    "notes*"
-                  ]
-                ]
-              ]
-            ]
-          ],
-          [
-            "toolCallId",
-            [
-              "string",
-              "goal-list@<session>"
-            ]
-          ]
-        ]
-      ],
-      "input_kind": "complete",
       "operation": "tool",
       "operation_id": 2,
+      "outcome": "returned",
       "run_id": "<id-5>",
       "side_effect": 1,
-      "status": "succeeded"
+      "status": "succeeded",
+      "tool_call_id": "goal-list@<session>",
+      "tool_name": "list_files"
     },
     {
-      "input": [
-        "object",
-        [
-          [
-            "name",
-            [
-              "string",
-              "write_file"
-            ]
-          ],
-          [
-            "args",
-            [
-              "object",
-              [
-                [
-                  "path",
-                  [
-                    "string",
-                    "goal.txt"
-                  ]
-                ],
-                [
-                  "content",
-                  [
-                    "string",
-                    "goal output\n"
-                  ]
-                ]
-              ]
-            ]
-          ],
-          [
-            "toolCallId",
-            [
-              "string",
-              "goal-write@<session>"
-            ]
-          ]
-        ]
-      ],
-      "input_kind": "complete",
       "operation": "tool",
       "operation_id": 3,
+      "outcome": "returned",
       "run_id": "<id-5>",
       "side_effect": 1,
-      "status": "succeeded"
+      "status": "succeeded",
+      "tool_call_id": "goal-write@<session>",
+      "tool_name": "write_file"
     }
   ],
   "metadata": [

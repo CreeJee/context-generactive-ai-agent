@@ -1,6 +1,5 @@
 import { DateTime, Effect, Schema, Stream } from "effect";
 import { expect } from "vite-plus/test";
-import { ownerRpcFingerprint, ownerRpcFrame } from "../../src/agent/owner-rpc-fingerprint.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { Admission, workflowRunBindings } from "../../src/workflow/run-bindings.ts";
 import { sqliteRunLog } from "../../src/workflow/durable-stream.ts";
@@ -77,12 +76,10 @@ testAgent()("workflow run bindings", (it) => {
       boundRun(yield* bindLatest(session, runId));
       yield* finishRun(session, runId, "failed");
       yield* sqlRun(
-        "INSERT INTO owner_rpc_operations VALUES (?, 'key', 1, ?, 1, '{}', 'uncertain')",
+        `INSERT INTO owner_rpc_operations
+           (run_id, operation_id, operation, tool_name, tool_call_id, side_effect, status)
+         VALUES (?, 1, 'tool', 'run_shell', 'call', 1, 'uncertain')`,
         runId,
-        ownerRpcFingerprint(
-          "tool",
-          ownerRpcFrame({ name: "run_shell", toolCallId: "call", args: {} }),
-        ),
       );
       const owner = yield* uncertainRuns;
       expect(yield* owner.list(session)).toEqual([
@@ -167,23 +164,19 @@ testAgent()("workflow run bindings", (it) => {
           Admission.refused({ reason: "run_id_conflict" }),
         );
         yield* finishRun(session, shared, "failed");
-        const operation = (id: number, fingerprint: string, status: string) =>
+        const operation = (id: number, kind: string, name: string | null, status: string) =>
           sqlRun(
-            "INSERT INTO owner_rpc_operations VALUES (?, 'key', ?, ?, 1, '{}', ?)",
+            `INSERT INTO owner_rpc_operations
+               (run_id, operation_id, operation, tool_name, tool_call_id, side_effect, status)
+             VALUES (?1, ?2, ?3, ?4, ?4 || '-call', 1, ?5)`,
             shared,
             id,
-            fingerprint,
+            kind,
+            name,
             status,
           );
         const step = (id: number, kind: "tool" | "toolAuthorize", name: string, status: string) =>
-          operation(
-            id,
-            ownerRpcFingerprint(
-              kind,
-              ownerRpcFrame({ name, toolCallId: `${name}-call`, args: {} }),
-            ),
-            status,
-          );
+          operation(id, kind, name, status);
         const bindings = yield* workflowRunBindings;
         const admits = () =>
           Effect.map(
@@ -191,7 +184,7 @@ testAgent()("workflow run bindings", (it) => {
             Admission.$is("bound"),
           );
         // Owner bookkeeping, an authorization and a read the next run cannot know of repeat nothing.
-        yield* operation(1, '{"operation":"middleware"}', "succeeded");
+        yield* operation(1, "middleware", null, "succeeded");
         yield* step(2, "toolAuthorize", "run_shell", "succeeded");
         yield* step(3, "tool", "read_file", "succeeded");
         expect(yield* admits()).toBe(true);
@@ -255,7 +248,7 @@ testAgent()("workflow run bindings", (it) => {
         boundRun(yield* bindLatest(session, old));
         yield* finishRun(session, old, "completed");
         yield* sqlRun(
-          "INSERT INTO owner_rpc_operations VALUES (?, 'key', 1, 'effect', ?, '{}', ?)",
+          "INSERT INTO owner_rpc_operations (run_id, operation_id, side_effect, status) VALUES (?, 1, ?, ?)",
           old,
           sideEffect ? 1 : 0,
           status,

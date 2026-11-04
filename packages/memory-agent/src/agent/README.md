@@ -2,7 +2,7 @@
 
 ## Overview
 
-`packages/memory-agent/src/agent`는 memory-agent의 대화 에이전트 핵심 계층이다. `chat.ts`의 `AgentChat` 서비스는 프로바이더·도구·메모리·워크플로·칸반·큐 서비스를 묶어 세션 채팅을 실행한다. 이 서비스는 시스템 프롬프트(memory/workspace/attachment 지침)와 프롬프트 배치 규칙도 정의한다. 주변 파일은 실행 루프(`RunHook`)에 끼우는 훅이다. 이 훅들은 대화 압축(compaction, 턴 요약), 컨텍스트 사용량 기록, API 사용량 원장, 모델 handoff, steer 중단, 오류 표시 정리, owner RPC fingerprint를 맡는다. `run-state.ts`는 세션 실행 API의 브라우저 안전 응답 타입을 앱(`apps/agent`)과 공유한다.
+`packages/memory-agent/src/agent`는 memory-agent의 대화 에이전트 핵심 계층이다. `chat.ts`의 `AgentChat` 서비스는 프로바이더·도구·메모리·워크플로·칸반·큐 서비스를 묶어 세션 채팅을 실행한다. 이 서비스는 시스템 프롬프트(memory/workspace/attachment 지침)와 프롬프트 배치 규칙도 정의한다. 주변 파일은 실행 루프(`RunHook`)에 끼우는 훅이다. 이 훅들은 대화 압축(compaction, 턴 요약), 컨텍스트 사용량 기록, API 사용량 원장, 모델 handoff, steer 중단, 오류 표시 정리를 맡는다. `run-state.ts`는 세션 실행 API의 브라우저 안전 응답 타입을 앱(`apps/agent`)과 공유한다.
 
 ## Interface
 
@@ -31,7 +31,6 @@
 - `steerCuttableModel` / `SteerCut` — steer된 메시지가 현재 응답을 끊도록 `LanguageModel`을 감싼다. 연 블록을 닫고 실행을 완료한다.
 - `createLiveRuns` / `LiveRun` / `LiveRuns` — `AgentChat` 서비스당 하나 있는 실행 중 run 레지스트리이다.
 - `shownRunErrors` / `pageTurns` / `withPageTurns` — `RUN_ERROR` 메시지를 자르고 비밀을 가리는 스트림 변환, 페이지 사용자 턴을 저장 thread에 보충하는 함수이다.
-- `ownerRpcFingerprint` / `ownerRpcCanonicalJson` / `ownerRpcFrame` / `OwnerRpcFingerprintFailed` — Goal worker owner RPC 입력의 정규 JSON·fingerprint이다.
 
 ## Invariants
 

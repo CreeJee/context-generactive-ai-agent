@@ -258,173 +258,34 @@
   "interrupts": [],
   "ledger": [
     {
-      "input": [
-        "object",
-        [
-          [
-            "name",
-            [
-              "string",
-              "save_code_skill"
-            ]
-          ],
-          [
-            "args",
-            [
-              "object",
-              [
-                [
-                  "name",
-                  [
-                    "string",
-                    "goal-sleeper"
-                  ]
-                ],
-                [
-                  "description",
-                  [
-                    "string",
-                    "Print a line"
-                  ]
-                ],
-                [
-                  "program",
-                  [
-                    "object",
-                    [
-                      [
-                        "runtime",
-                        [
-                          "string",
-                          "sh"
-                        ]
-                      ],
-                      [
-                        "script",
-                        [
-                          "string",
-                          "sleep 3; printf slept"
-                        ]
-                      ]
-                    ]
-                  ]
-                ],
-                [
-                  "reason",
-                  [
-                    "string",
-                    "golden scenario"
-                  ]
-                ]
-              ]
-            ]
-          ],
-          [
-            "toolCallId",
-            [
-              "string",
-              "goal-sleeper@<session>"
-            ]
-          ]
-        ]
-      ],
-      "input_kind": "complete",
       "operation": "tool",
       "operation_id": 1,
+      "outcome": "returned",
       "run_id": "<id-8>",
       "side_effect": 1,
-      "status": "succeeded"
+      "status": "succeeded",
+      "tool_call_id": "goal-sleeper@<session>",
+      "tool_name": "save_code_skill"
     },
     {
-      "input": [
-        "object",
-        [
-          [
-            "name",
-            [
-              "string",
-              "run_skill"
-            ]
-          ],
-          [
-            "args",
-            [
-              "object",
-              [
-                [
-                  "name",
-                  [
-                    "string",
-                    "goal-sleeper"
-                  ]
-                ]
-              ]
-            ]
-          ],
-          [
-            "toolCallId",
-            [
-              "string",
-              "goal-run@<session>"
-            ]
-          ]
-        ]
-      ],
-      "input_kind": "complete",
       "operation": "tool",
       "operation_id": 2,
+      "outcome": null,
       "run_id": "<id-8>",
       "side_effect": 1,
-      "status": "uncertain"
+      "status": "uncertain",
+      "tool_call_id": "goal-run@<session>",
+      "tool_name": "run_skill"
     },
     {
-      "input": [
-        "object",
-        [
-          [
-            "name",
-            [
-              "string",
-              "write_file"
-            ]
-          ],
-          [
-            "args",
-            [
-              "object",
-              [
-                [
-                  "path",
-                  [
-                    "string",
-                    "after-restart.txt"
-                  ]
-                ],
-                [
-                  "content",
-                  [
-                    "string",
-                    "after\n"
-                  ]
-                ]
-              ]
-            ]
-          ],
-          [
-            "toolCallId",
-            [
-              "string",
-              "goal-after@<session>"
-            ]
-          ]
-        ]
-      ],
-      "input_kind": "complete",
       "operation": "tool",
       "operation_id": 1,
+      "outcome": "returned",
       "run_id": "<id-9>",
       "side_effect": 1,
-      "status": "succeeded"
+      "status": "succeeded",
+      "tool_call_id": "goal-after@<session>",
+      "tool_name": "write_file"
     }
   ],
   "metadata": [

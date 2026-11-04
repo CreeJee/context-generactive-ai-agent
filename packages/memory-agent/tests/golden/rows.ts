@@ -232,14 +232,9 @@ const conversationRows = Effect.fnUntraced(function* (sessionId: string) {
        WHERE run_id IN ${inList(runList.length)} ORDER BY cursor`,
       ...runList,
     ),
-    // The fingerprint's digest and the inputs of model, middleware and strategy calls hash and
-    // carry whole requests; the migration keeps only tool rows, so only their input is compared.
     ledger: yield* rows(
-      `SELECT o.run_id, o.operation_id, o.side_effect, o.status,
-         json_extract(o.fingerprint, '$.operation') AS operation,
-         json_extract(o.fingerprint, '$.inputKind') AS input_kind,
-         CASE WHEN json_extract(o.fingerprint, '$.operation') IN ('tool', 'toolAuthorize')
-           THEN json_extract(o.fingerprint, '$.input') END AS input
+      `SELECT o.run_id, o.operation_id, o.side_effect, o.status, o.operation, o.tool_name,
+         o.tool_call_id, o.outcome
        FROM owner_rpc_operations o
        WHERE o.run_id IN ${inList(runList.length)} ORDER BY ${runOrder("o")}, o.operation_id`,
       ...runList,

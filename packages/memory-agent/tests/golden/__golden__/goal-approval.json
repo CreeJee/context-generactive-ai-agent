@@ -463,82 +463,14 @@
   ],
   "ledger": [
     {
-      "input": [
-        "object",
-        [
-          [
-            "name",
-            [
-              "string",
-              "save_code_skill"
-            ]
-          ],
-          [
-            "args",
-            [
-              "object",
-              [
-                [
-                  "name",
-                  [
-                    "string",
-                    "goal-approval"
-                  ]
-                ],
-                [
-                  "description",
-                  [
-                    "string",
-                    "Print a line"
-                  ]
-                ],
-                [
-                  "program",
-                  [
-                    "object",
-                    [
-                      [
-                        "runtime",
-                        [
-                          "string",
-                          "sh"
-                        ]
-                      ],
-                      [
-                        "script",
-                        [
-                          "string",
-                          "printf goal-approved"
-                        ]
-                      ]
-                    ]
-                  ]
-                ],
-                [
-                  "reason",
-                  [
-                    "string",
-                    "golden scenario"
-                  ]
-                ]
-              ]
-            ]
-          ],
-          [
-            "toolCallId",
-            [
-              "string",
-              "goal-approval@<session>"
-            ]
-          ]
-        ]
-      ],
-      "input_kind": "complete",
       "operation": "tool",
       "operation_id": 1,
+      "outcome": "returned",
       "run_id": "<id-7>",
       "side_effect": 1,
-      "status": "succeeded"
+      "status": "succeeded",
+      "tool_call_id": "goal-approval@<session>",
+      "tool_name": "save_code_skill"
     }
   ],
   "metadata": [
