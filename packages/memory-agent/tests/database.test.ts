@@ -9,6 +9,7 @@ import {
   assertDatabaseSchema,
 } from "../src/db/database.ts";
 import { migrations } from "../src/db/migrations.ts";
+import { currentStatesSql, revisionStateSql } from "../src/workflow/state-rows.ts";
 import { SqlError } from "effect/sql";
 import { withTestPlatform } from "./support/platform.ts";
 
@@ -206,7 +207,8 @@ describe("Database", () => {
           recursive: true,
         });
         const old = new DatabaseSync(file);
-        const state = '{"goal":{"version":4},"plan":{"version":7}}';
+        const state =
+          '{"phase":"plan","goal":{"version":4},"plan":{"version":7},"ledger":[{"sequence":1,"at":"released","kind":"goal_updated","detail":"kept\\r\\n"}]}';
         try {
           old.exec("PRAGMA foreign_keys = ON");
           migrations.slice(0, releasedVersion).forEach((step) => old.exec(step));
@@ -220,10 +222,12 @@ describe("Database", () => {
           withDatabase(file, (db) => ({
             version: db.sqlite.prepare("PRAGMA user_version").get(),
             nodes: db.sqlite.prepare("SELECT seq, id, text FROM nodes ORDER BY seq").all(),
-            state: db.sqlite.prepare("SELECT state_json FROM session_workflows").get(),
+            state: db.sqlite
+              .prepare(`SELECT ${revisionStateSql("r")} AS state FROM ${currentStatesSql}`)
+              .get(),
             revisions: db.sqlite
               .prepare(
-                "SELECT state_json, goal_version, plan_version, provenance, goal_instance_id FROM workflow_state_revisions",
+                "SELECT goal_version, plan_version, provenance, goal_instance_id FROM workflow_state_revisions",
               )
               .all(),
             executionPins: db.sqlite
@@ -238,10 +242,10 @@ describe("Database", () => {
             { seq: 1, id: "n1", text: "저장소는 SQLite로 결정했다\r\n" },
             { seq: 2, id: "n2", text: '{"path":"README.md"}' },
           ],
-          state: { state_json: state },
+          // The state reads back as the released version wrote it, byte for byte.
+          state: { state },
           revisions: [
             {
-              state_json: state,
               goal_version: 4,
               plan_version: 7,
               provenance: "legacy_current",
@@ -275,7 +279,7 @@ describe("Database", () => {
             .prepare(`
           INSERT INTO workflow_state_revisions
             (session_id, state_json, goal_version, plan_version, provenance, created_at, goal_instance_id)
-          VALUES ('s1', '{}', 1, NULL, 'recorded', ?, 'goal-s1')
+          VALUES ('s1', '{"phase":"goal","goal":null,"plan":null,"ledger":[]}', 1, NULL, 'recorded', ?, 'goal-s1')
         `)
             .run(now).lastInsertRowid;
           // Simulate a database written by the previous schema, which had no tuple check.
@@ -333,7 +337,7 @@ describe("Database", () => {
           .prepare(`
           INSERT INTO workflow_state_revisions
             (session_id, state_json, goal_version, plan_version, provenance, created_at, goal_instance_id)
-          VALUES ('s1', '{}', 1, NULL, 'recorded', ?, 'goal-s1')
+          VALUES ('s1', '{"phase":"goal","goal":null,"plan":null,"ledger":[]}', 1, NULL, 'recorded', ?, 'goal-s1')
         `)
           .run(now).lastInsertRowid;
         db.sqlite.exec(`

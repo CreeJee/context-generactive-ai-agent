@@ -21,8 +21,8 @@ function owner(path: string) {
       INSERT INTO sessions (id, project_id, created_at) VALUES ('session', 'project', 'now');
       INSERT INTO workflow_goal_identities VALUES ('session', 'goal', 'now');
       INSERT INTO workflow_state_revisions
-        (session_id, state_json, goal_version, plan_version, provenance, created_at, goal_instance_id)
-        VALUES ('session', '{}', 1, NULL, 'recorded', 'now', 'goal');
+        (session_id, goal_version, plan_version, provenance, created_at, goal_instance_id)
+        VALUES ('session', 1, NULL, 'recorded', 'now', 'goal');
       INSERT INTO workflow_run_bindings VALUES ('run', 'session', 'goal', 1, NULL, 1, 'now');
     `);
   }

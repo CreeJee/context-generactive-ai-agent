@@ -16,6 +16,7 @@ import {
   migrateUsage,
 } from "../../src/chat-store/tanstack-migration.ts";
 import { JsonValue } from "../../src/json.ts";
+import { currentStatesSql, revisionStateSql } from "../../src/workflow/state-rows.ts";
 import { sqlAll } from "../support/sql.ts";
 
 /**
@@ -212,7 +213,8 @@ const conversationRows = Effect.fnUntraced(function* (sessionId: string) {
       sessionId,
     ),
     workflow: yield* rows(
-      "SELECT state_json FROM session_workflows WHERE session_id = ?",
+      `SELECT ${revisionStateSql("r")} AS state_json FROM ${currentStatesSql}
+       WHERE w.session_id = ?`,
       sessionId,
     ),
     bindings: yield* rows(

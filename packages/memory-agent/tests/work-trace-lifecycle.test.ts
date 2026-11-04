@@ -72,8 +72,8 @@ const goalHistory = Effect.fnUntraced(function* (sessionId: string, goalId: stri
   yield* sqlRun("INSERT INTO workflow_goal_identities VALUES (?, ?, 'now')", sessionId, goalId);
   const { lastInsertRowid: revision } = yield* sqlRun(
     `INSERT INTO workflow_state_revisions
-       (session_id, state_json, goal_version, provenance, created_at, goal_instance_id)
-     VALUES (?, '{}', 1, 'recorded', 'now', ?)`,
+       (session_id, goal_version, provenance, created_at, goal_instance_id)
+     VALUES (?, 1, 'recorded', 'now', ?)`,
     sessionId,
     goalId,
   );

@@ -33,6 +33,7 @@ import { runTurn } from "../support/chat-client.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { sqlGet } from "../support/sql.ts";
+import { revisionStateSql } from "../../src/workflow/state-rows.ts";
 
 const goal = {
   statement: "Finish the approved work",
@@ -115,7 +116,8 @@ const citeProof = Effect.fnUntraced(function* (sessionId: string, toolCall: Scri
   if (input.verification?.status !== "passed") return toolCall;
   const { state_json: state } = yield* Schema.decodeUnknownEffect(LatestRevision)(
     yield* sqlGet(
-      "SELECT state_json FROM workflow_state_revisions WHERE session_id = ? ORDER BY id DESC LIMIT 1",
+      `SELECT ${revisionStateSql("r")} AS state_json FROM workflow_state_revisions r
+       WHERE r.session_id = ? ORDER BY r.id DESC LIMIT 1`,
       sessionId,
     ),
   );

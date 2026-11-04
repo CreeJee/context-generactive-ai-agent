@@ -15,6 +15,7 @@ import {
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { callTool } from "../support/run-tools.ts";
 import { sqlGet, sqlRun } from "../support/sql.ts";
+import { revisionStateSql } from "../../src/workflow/state-rows.ts";
 
 const goal = {
   statement: "Verified Goal",
@@ -508,8 +509,9 @@ testAgent()("criterion-linked Goal completion across reopen", (it) => {
             yield* workflows.updateGoal(fx.sessionId, { ...goal, statement: "Revised" });
             const revised = (yield* workflows.get(fx.sessionId)).goal?.completion;
             const history = yield* sqlGet(
-              `SELECT state_json FROM workflow_state_revisions WHERE session_id = ?
-                AND json_extract(state_json, '$.goal.status') = 'completed' ORDER BY id LIMIT 1`,
+              `SELECT ${revisionStateSql("r")} AS state_json FROM workflow_state_revisions r
+               WHERE r.session_id = ? AND r.goal_json ->> 'status' = 'completed'
+               ORDER BY r.id LIMIT 1`,
               fx.sessionId,
             );
             const completed = yield* Schema.decodeEffect(Schema.fromJsonString(WorkflowState))(

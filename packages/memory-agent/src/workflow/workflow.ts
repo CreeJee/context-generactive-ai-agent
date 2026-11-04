@@ -1,6 +1,7 @@
 import { isTruthy } from "../truthy.ts";
 import { NodeCrypto } from "@effect/platform-node";
 import {
+  Array as Arr,
   DateTime,
   Context,
   Data,
@@ -27,6 +28,7 @@ import {
   stepsOf,
 } from "./goal-transitions.ts";
 import { completionEvidence, Derived } from "./completion-evidence.ts";
+import { currentStatesSql, revisionStateSql } from "./state-rows.ts";
 import { BoardAuthor, CardStatus, cardContract, StepProgressStatus } from "./card.ts";
 import {
   CompletionSnapshot,
@@ -202,7 +204,8 @@ export const decodeWorkflowState = (json: string) =>
       plan: state.plan === null ? null : { ...state.plan, steps: cardStatuses(state.plan.steps) },
     })),
   );
-const encodeState = Schema.encodeEffect(Schema.fromJsonString(WorkflowState));
+const encodeGoal = Schema.encodeEffect(Schema.fromJsonString(GoalArtifact));
+const encodePlan = Schema.encodeEffect(Schema.fromJsonString(PlanArtifact));
 const encodeAuthor = Schema.encodeEffect(Schema.fromJsonString(BoardAuthor));
 const encodeChange = Schema.encodeEffect(Schema.fromJsonString(UserChange));
 
@@ -277,11 +280,19 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
      */
     const transacted = <A, E>(effect: Effect.Effect<A, E>) =>
       persisted(sql.withTransaction(effect));
+    const stateJson = sql.literal(revisionStateSql("r"));
+    const currentStates = sql.literal(currentStatesSql);
     const selectState = SqlSchema.findOneOption({
       Request: Schema.String,
       Result: Schema.Struct({ state_json: Schema.String }),
       execute: (sessionId) =>
-        sql`SELECT state_json FROM session_workflows WHERE session_id = ${sessionId}`,
+        sql`SELECT ${stateJson} AS state_json FROM ${currentStates} WHERE w.session_id = ${sessionId}`,
+    });
+    const lastLedgerEvent = SqlSchema.findOneOption({
+      Request: Schema.String,
+      Result: Schema.Struct({ sequence: Schema.Finite }),
+      execute: (sessionId) => sql`SELECT sequence FROM workflow_ledger_events
+        WHERE session_id = ${sessionId} ORDER BY sequence DESC LIMIT 1`,
     });
     const goalIdentity = SqlSchema.findOneOption({
       Request: Schema.String,
@@ -354,18 +365,42 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
       author?: BoardAuthor,
     ) {
       const now = yield* nowIso;
-      const json = yield* encodeState(state);
+      const goalJson = state.goal === null ? null : yield* encodeGoal(state.goal);
+      const planJson = state.plan === null ? null : yield* encodePlan(state.plan);
       const authorJson = author === undefined ? null : yield* encodeAuthor(author);
-      yield* sql`INSERT INTO session_workflows (session_id, state_json, updated_at)
-        VALUES (${sessionId}, ${json}, ${now})
-        ON CONFLICT(session_id) DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at`;
+      // The ledger only grows: the events past the stored ones are this change's.
+      const stored = Option.match(yield* lastLedgerEvent(sessionId), {
+        onNone: () => 0,
+        onSome: ({ sequence }) => sequence,
+      });
+      yield* Arr.match(
+        state.ledger.filter((event) => event.sequence > stored),
+        {
+          onEmpty: () => Effect.void,
+          onNonEmpty: (added) =>
+            sql`INSERT INTO workflow_ledger_events ${sql.insert(
+              Arr.map(added, ({ sequence, at, kind, detail }) => ({
+                session_id: sessionId,
+                sequence,
+                at,
+                kind,
+                detail,
+              })),
+            )}`,
+        },
+      );
       yield* sql`INSERT INTO workflow_state_revisions
-        (session_id, state_json, goal_version, plan_version, provenance, created_at, goal_instance_id,
-         author_json)
-        VALUES (${sessionId}, ${json}, ${state.goal?.version ?? null}, ${state.plan?.version ?? null},
-          'recorded', ${now},
+        (session_id, phase, goal_json, plan_json, ledger_length, goal_version, plan_version,
+         provenance, created_at, goal_instance_id, author_json)
+        VALUES (${sessionId}, ${state.phase}, ${goalJson}, ${planJson}, ${state.ledger.length},
+          ${state.goal?.version ?? null}, ${state.plan?.version ?? null}, 'recorded', ${now},
           (SELECT goal_instance_id FROM workflow_goal_identities WHERE session_id = ${sessionId}),
           ${authorJson})`;
+      // The revision just inserted on this connection.
+      yield* sql`INSERT INTO session_workflows (session_id, revision_id, updated_at)
+        VALUES (${sessionId}, last_insert_rowid(), ${now})
+        ON CONFLICT(session_id) DO UPDATE SET revision_id = excluded.revision_id,
+          updated_at = excluded.updated_at`;
       return state;
     });
     const change = <E>(
@@ -611,7 +646,8 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
     const storedStates = SqlSchema.findAll({
       Request: Schema.Void,
       Result: Schema.Struct({ session_id: Schema.String, state_json: Schema.String }),
-      execute: () => sql`SELECT session_id, state_json FROM session_workflows ORDER BY session_id`,
+      execute: () => sql`SELECT w.session_id, ${stateJson} AS state_json FROM ${currentStates}
+        ORDER BY w.session_id`,
     });
     const acceptedRequests = SqlSchema.findAll({
       Request: Schema.Void,

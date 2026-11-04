@@ -205,6 +205,83 @@ export const threadDisplayMessagesMigration = `
 `;
 
 /**
+ * The step that keeps a session's workflow ledger once, as rows, and makes its current state the
+ * latest revision instead of a copy of it.
+ */
+export const workflowLedgerMigration = `
+  -- A workflow's ledger as rows (decisions.md "Workflow ledger는 행으로, 현재 상태는 최신 revision을
+  -- 가리킨다 (2026-11-04)"). Every revision held the whole ledger, which only grows (99 events on
+  -- average, half of the revisions' 30 MB), and session_workflows held the latest revision again.
+  -- A revision now holds its phase, Goal and Plan and how many of the session's events it has.
+  --
+  -- A current state its latest revision does not hold is recorded as one first, so none is lost.
+  INSERT INTO workflow_state_revisions
+    (session_id, state_json, goal_version, plan_version, provenance, created_at, goal_instance_id)
+    SELECT w.session_id, w.state_json, json_extract(w.state_json, '$.goal.version'),
+      json_extract(w.state_json, '$.plan.version'), 'legacy_current', w.updated_at,
+      (SELECT goal_instance_id FROM workflow_goal_identities g WHERE g.session_id = w.session_id)
+    FROM session_workflows w
+    WHERE w.state_json IS NOT (SELECT r.state_json FROM workflow_state_revisions r
+      WHERE r.session_id = w.session_id ORDER BY r.id DESC LIMIT 1);
+  CREATE TABLE workflow_ledger_events (
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    sequence INTEGER NOT NULL CHECK (sequence > 0),
+    at TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    detail TEXT NOT NULL,
+    PRIMARY KEY (session_id, sequence)
+  ) WITHOUT ROWID;
+  INSERT INTO workflow_ledger_events (session_id, sequence, at, kind, detail)
+    SELECT r.session_id, e.value ->> 'sequence', e.value ->> 'at', e.value ->> 'kind',
+      e.value ->> 'detail'
+    FROM workflow_state_revisions r, json_each(r.state_json, '$.ledger') e
+    WHERE r.id = (SELECT max(id) FROM workflow_state_revisions x WHERE x.session_id = r.session_id);
+  CREATE TRIGGER workflow_ledger_events_no_update BEFORE UPDATE ON workflow_ledger_events
+    BEGIN SELECT RAISE(ABORT, 'workflow ledger events are immutable'); END;
+  -- The ledger only grows, so every revision's is the start of its session's latest. One that is
+  -- not, or whose sequence is not its place, stops the migration and leaves the DB as it was.
+  CREATE TEMP TABLE workflow_ledger_check (valid INTEGER NOT NULL CHECK (valid = 1));
+  INSERT INTO workflow_ledger_check (valid)
+    SELECT 0 FROM workflow_state_revisions r, json_each(r.state_json, '$.ledger') e
+    WHERE e.value ->> 'sequence' IS NOT e.key + 1 OR NOT EXISTS (
+      SELECT 1 FROM workflow_ledger_events l
+      WHERE l.session_id = r.session_id AND l.sequence = e.key + 1
+        AND l.at = e.value ->> 'at' AND l.kind = e.value ->> 'kind'
+        AND l.detail = e.value ->> 'detail')
+    LIMIT 1;
+  DROP TABLE workflow_ledger_check;
+  DROP TRIGGER workflow_state_revisions_no_update;
+  ALTER TABLE workflow_state_revisions ADD COLUMN phase TEXT NOT NULL DEFAULT 'chat';
+  ALTER TABLE workflow_state_revisions ADD COLUMN goal_json TEXT
+    CHECK (goal_json IS NULL OR json_valid(goal_json));
+  ALTER TABLE workflow_state_revisions ADD COLUMN plan_json TEXT
+    CHECK (plan_json IS NULL OR json_valid(plan_json));
+  ALTER TABLE workflow_state_revisions ADD COLUMN ledger_length INTEGER NOT NULL DEFAULT 0
+    CHECK (ledger_length >= 0);
+  UPDATE workflow_state_revisions SET
+    phase = state_json ->> 'phase',
+    goal_json = NULLIF(state_json -> '$.goal', 'null'),
+    plan_json = NULLIF(state_json -> '$.plan', 'null'),
+    ledger_length = json_array_length(state_json, '$.ledger');
+  ALTER TABLE workflow_state_revisions DROP COLUMN state_json;
+  CREATE TRIGGER workflow_state_revisions_no_update BEFORE UPDATE ON workflow_state_revisions
+    BEGIN SELECT RAISE(ABORT, 'workflow revisions are immutable'); END;
+  -- The current state is the session's latest revision.
+  CREATE TABLE session_workflows_current (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    revision_id INTEGER NOT NULL REFERENCES workflow_state_revisions(id) ON DELETE CASCADE,
+    updated_at TEXT NOT NULL
+  );
+  INSERT INTO session_workflows_current (session_id, revision_id, updated_at)
+    SELECT w.session_id,
+      (SELECT max(id) FROM workflow_state_revisions r WHERE r.session_id = w.session_id),
+      w.updated_at
+    FROM session_workflows w;
+  DROP TABLE session_workflows;
+  ALTER TABLE session_workflows_current RENAME TO session_workflows;
+`;
+
+/**
  * The step that keeps a bound run's output once, in a delivery log that empties after the run,
  * and drops `workflow_run_events`.
  */
@@ -2263,6 +2340,7 @@ export const migrations: readonly string[] = [
   threadMessagesMigration,
   threadDisplayMessagesMigration,
   runLogMigration,
+  workflowLedgerMigration,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

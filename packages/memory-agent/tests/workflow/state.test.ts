@@ -19,6 +19,8 @@ import type { JsonValue } from "../../src/json.ts";
 import { TestEnv, freshSession, testAgent } from "../support/test-env.ts";
 import { callTool } from "../support/run-tools.ts";
 import { sqlAll, sqlRun, sqlExec } from "../support/sql.ts";
+import { storeWorkflowState } from "../support/workflow-state.ts";
+import { revisionStateSql } from "../../src/workflow/state-rows.ts";
 
 const goal = {
   statement: "Ship a durable planning workflow",
@@ -261,7 +263,11 @@ testAgent()("Workflows", (it) => {
       const id = yield* freshSession;
       const workflows = yield* Workflows;
       const revisions = () =>
-        sqlAll("SELECT * FROM workflow_state_revisions WHERE session_id = ? ORDER BY id", id);
+        sqlAll(
+          `SELECT r.*, ${revisionStateSql("r")} AS state_json FROM workflow_state_revisions r
+           WHERE r.session_id = ? ORDER BY r.id`,
+          id,
+        );
       yield* workflows.updateGoal(id, goal);
       yield* workflows.updatePlan(id, plan);
       const original = yield* revisions();
@@ -298,9 +304,13 @@ testAgent()("Workflows", (it) => {
       expect(latest.goal).toMatchObject({ version: 2, outcomes: ["New outcome"], evidence: [] });
       expect(latest.plan).toMatchObject({ version: 3, goalVersion: 2 });
       const rewrite = yield* Effect.flip(
-        sqlRun("UPDATE workflow_state_revisions SET state_json = '{}' WHERE id = ?", rows[0]!.id),
+        sqlRun("UPDATE workflow_state_revisions SET phase = 'plan' WHERE id = ?", rows[0]!.id),
       );
       expect(String(rewrite.reason.cause)).toContain("workflow revisions are immutable");
+      const reworded = yield* Effect.flip(
+        sqlRun("UPDATE workflow_ledger_events SET detail = '' WHERE session_id = ?", id),
+      );
+      expect(String(reworded.reason.cause)).toContain("workflow ledger events are immutable");
     }),
   );
 
@@ -718,24 +728,24 @@ testAgent()("server workflow action policy", (it) => {
           { ...state, phase: "plan", plan: { ...state.plan!, status: "executing" } },
           { ...state, phase: "verify", plan: { ...state.plan!, status: "executing" } },
         ];
+        // The ledger goes on from the stored one, as a saved state's does.
         const reset = (current: WorkflowState) =>
-          sqlRun(
-            "UPDATE session_workflows SET state_json = ? WHERE session_id = ?",
-            JSON.stringify(current),
-            id,
-          );
+          Effect.flatMap(workflows.get(id), ({ ledger }) => {
+            const stored = { ...current, ledger };
+            return Effect.as(storeWorkflowState(id, JSON.stringify(stored)), stored);
+          });
         // Each advertised decision must match what the server does with the same persisted state.
         const matches = Effect.fnUntraced(function* <A, E>(
           current: WorkflowState,
           decision: ReturnType<typeof workflowActions>["phases"]["chat"],
           attempt: Effect.Effect<A, E>,
         ) {
-          yield* reset(current);
+          const stored = yield* reset(current);
           const result = yield* Effect.result(attempt);
           expect(Result.isSuccess(result)).toBe(decision.allowed);
           if (!decision.allowed && Result.isFailure(result))
             expect(result.failure).toMatchObject({ reason: decision.reason });
-          if (!decision.allowed) expect(yield* workflows.get(id)).toEqual(current);
+          if (!decision.allowed) expect(yield* workflows.get(id)).toEqual(stored);
         });
         yield* Effect.forEach(
           states,

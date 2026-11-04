@@ -1,5 +1,6 @@
 import { Context, Effect, Layer, Option, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
+import { currentStatesSql, revisionStateSql } from "./state-rows.ts";
 import { GoalOrder } from "../kanban/goal-order.ts";
 import { planEnded, UserChange, UserChangeRequestStatus } from "./board-edit.ts";
 import { BoardAuthor, type CardStatus } from "./card.ts";
@@ -85,18 +86,21 @@ export class Boards extends Context.Service<
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       const goalOrder = yield* GoalOrder;
+      const stateJson = sql.literal(revisionStateSql("r"));
+      const currentStates = sql.literal(currentStatesSql);
       const current = SqlSchema.findOneOption({
         Request: Schema.String,
         Result: Schema.Struct({ state_json: Schema.String }),
         execute: (sessionId) =>
-          sql`SELECT state_json FROM session_workflows WHERE session_id = ${sessionId}`,
+          sql`SELECT ${stateJson} AS state_json FROM ${currentStates}
+            WHERE w.session_id = ${sessionId}`,
       });
       const revisions = SqlSchema.findAll({
         Request: Schema.String,
         Result: RevisionRow,
-        execute: (sessionId) => sql`SELECT id, state_json, author_json, created_at
-          FROM workflow_state_revisions
-          WHERE session_id = ${sessionId} ORDER BY id DESC LIMIT ${revisionWindow + 1}`,
+        execute: (sessionId) => sql`SELECT r.id, ${stateJson} AS state_json, r.author_json,
+          r.created_at FROM workflow_state_revisions r
+          WHERE r.session_id = ${sessionId} ORDER BY r.id DESC LIMIT ${revisionWindow + 1}`,
       });
       const pending = SqlSchema.findAll({
         Request: Schema.String,
@@ -109,11 +113,12 @@ export class Boards extends Context.Service<
       const projectBoards = SqlSchema.findAll({
         Request: Schema.String,
         Result: ProjectBoardRow,
-        execute: (projectId) => sql`SELECT w.session_id, s.title, w.state_json, w.updated_at,
+        execute: (projectId) => sql`SELECT w.session_id, s.title, ${stateJson} AS state_json,
+          w.updated_at,
           EXISTS(SELECT 1 FROM kanban_goals k JOIN workflow_goal_identities g
             ON g.goal_instance_id = k.goal_instance_id
             WHERE g.session_id = w.session_id AND k.status = 'active') AS kanban_active
-          FROM session_workflows w JOIN sessions s ON s.id = w.session_id
+          FROM ${currentStates} JOIN sessions s ON s.id = w.session_id
           WHERE s.project_id = ${projectId} AND s.archived_at IS NULL
           ORDER BY kanban_active DESC, w.updated_at DESC`,
       });

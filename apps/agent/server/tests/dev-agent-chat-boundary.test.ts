@@ -159,6 +159,7 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
           "workflow_run_log_entries",
           "session_workflows",
           "workflow_state_revisions",
+          "workflow_ledger_events",
           "workflow_goal_identities",
         ];
         const snapshot = Effect.forEach(tables, (table) =>

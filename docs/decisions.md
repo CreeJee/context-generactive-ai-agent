@@ -3876,3 +3876,25 @@
 - 마이그레이션: 모든 binding에 `closed_at = 0`인 closure를 넣고, 옛 chunk는 옮기지 않는다. 마이그레이션은 재시작 때 돌고 그때 열린 run은 없다. 그래서 옛 로그는 모두 오래전에 닫힌 것으로 둔다. 취소 영수증은 receipt와 맞는 것만 옮긴다. 그다음 `workflow_run_events`를 지운다.
   - 지운 공간은 파일에 빈 페이지로 남는다. 파일 크기를 줄이려면 `VACUUM`이 필요하다.
   - 사본 측정(327만 행): 이 단계는 0.88초, WAL 1.3MB였다. 1.28GB(313,369페이지)가 빈 페이지가 됐다.
+
+## Workflow ledger는 행으로, 현재 상태는 최신 revision을 가리킨다 (2026-11-04)
+
+- 계기: 정규화 안 된 표 목록 2번(같은 날). 로컬 DB 사본에서 `workflow_state_revisions`는 924행, `session_workflows`는 61행이었다. 두 표는 39.4MB를 차지했다.
+- 원인: 상태를 통째로 두 번 저장했다.
+  - revision마다 상태 JSON 전체를 담았다. ledger는 늘기만 하는데, revision마다 그때까지의 ledger 전부를 다시 적었다. 세션의 사건은 1,443개였다.
+  - `session_workflows`는 최신 revision의 상태 JSON을 한 번 더 담았다. 사본에서 둘은 모든 세션에서 같았다.
+- 결정:
+  - ledger 사건은 `workflow_ledger_events(session_id, sequence)`에 한 번씩 쓴다. 고치지 않는다(트리거).
+  - revision은 phase, Goal JSON, Plan JSON, 가진 사건 수(`ledger_length`)를 갖는다. sequence는 1부터 빈틈없이 늘므로, revision의 ledger는 그 세션 사건의 앞 `ledger_length`개다.
+  - `session_workflows`는 상태 대신 최신 revision id(`revision_id`)를 가리킨다.
+  - 읽기는 `state-rows.ts`의 `revisionStateSql`이 행에서 전과 같은 JSON을 만든다. `decodeWorkflowState`와 골든 출력은 그대로다.
+  - 저장은 저장된 사건 뒤의 것만 쓰고, revision을 넣고, 포인터를 옮긴다. 모든 저장은 같은 트랜잭션에서 읽은 상태의 ledger에 사건을 덧붙이므로 ledger가 줄지 않는다.
+- Goal과 Plan은 JSON 스냅샷으로 둔다.
+  - 같은 Plan 버전의 내용이 revision마다 다르다. 카드 상태와 근거는 버전을 올리지 않고 바뀐다. 사본에서 Plan 버전 97개 중 26개가 내용을 여러 개 가졌다. 그래서 `(session, version)`으로 Plan 행을 나누면 같은 버전을 다시 여러 행으로 적게 된다.
+  - Plan step과 `kanban_cards`를 FK로 잇는 일은 목록 11번(칸반 프로젝트·세션 사본)에서 정한다.
+- 마이그레이션:
+  - 먼저, 최신 revision과 다른 현재 상태가 있으면 `legacy_current` revision으로 기록한다. 사본에는 없었다.
+  - 사건은 세션의 최신 revision에서 옮긴다. 그다음 모든 revision의 ledger가 그 사건의 앞부분인지, sequence가 자리와 맞는지 검사한다. 하나라도 어긋나면 마이그레이션이 실패하고 DB는 그대로다.
+  - revision에 열을 더해 채우고 `state_json`을 지운다. `session_workflows`는 포인터 표로 바꾼다.
+  - revision 표는 `workflow_run_bindings`와 `workflow_new_goal_requests`가 참조한다. 그래서 다시 만들지 않고 `ALTER TABLE`로 바꾼다.
+  - 사본 측정: 이 단계는 0.9초였다. revision 924개의 상태가 모두 원래 JSON과 바이트까지 같게 읽혔고, 현재 상태 61개도 같았다. 세 표는 VACUUM 뒤 21.1MB였다.

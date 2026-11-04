@@ -4,7 +4,13 @@ import { Effect, FileSystem, Path } from "effect";
 import { expect } from "vite-plus/test";
 import { DatabaseSchemaRejectedReason, migrateDatabase } from "../src/db/database.ts";
 import { goalHistoryMigration, migrations } from "../src/db/migrations.ts";
+import { revisionStateSql } from "../src/workflow/state-rows.ts";
 import { withTestPlatform } from "./support/platform.ts";
+
+/** The session's first revision, and its current state that no revision held yet. */
+const recorded = '{"phase":"chat","goal":null,"plan":null,"ledger":[]}';
+const current =
+  '{"phase":"goal","goal":null,"plan":null,"ledger":[{"sequence":1,"at":"old","kind":"phase_changed","detail":"bytes\\r\\n"}]}';
 
 function oldDatabase(file: string) {
   const db = new DatabaseSync(file);
@@ -15,9 +21,9 @@ function oldDatabase(file: string) {
     INSERT INTO projects (id, root, name, created_at) VALUES ('p', '/test', 'test', 'old');
     INSERT INTO sessions (id, project_id, created_at) VALUES ('s', 'p', 'old');
     INSERT INTO workflow_goal_identities VALUES ('s', 'old-goal', 'old');
-    INSERT INTO session_workflows VALUES ('s', '{"unchanged":"bytes\\r\\n"}', 'old');
+    INSERT INTO session_workflows VALUES ('s', '${current}', 'old');
     INSERT INTO workflow_state_revisions (id, session_id, state_json, goal_version, plan_version, provenance, created_at, goal_instance_id)
-      VALUES (1, 's', '{"exact":"old"}', 2, 3, 'recorded', 'old', 'old-goal');
+      VALUES (1, 's', '${recorded}', 2, 3, 'recorded', 'old', 'old-goal');
     INSERT INTO workflow_run_bindings VALUES ('run', 's', 'old-goal', 2, 3, 1, 'old');
     INSERT INTO workflow_run_events (cursor, run_id, event_key, kind, payload_json, created_at)
       VALUES (7, 'run', 'event', 'run_completed', '{"exact":"receipt\\r\\n"}', 'old');
@@ -30,12 +36,20 @@ const snapshot = (
   db: DatabaseSync,
   tables: ReadonlyArray<string> = goalHistoryMigration.preservedTables,
 ) => tables.map((table) => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all());
-/** The preserved tables a later step keeps: the run log step drops the run event receipts. */
-const stillKept = goalHistoryMigration.preservedTables.filter(
-  (table) => table !== "workflow_run_events",
-);
+/**
+ * The preserved tables a later step keeps as they were: the run log step drops the run event
+ * receipts, and the ledger step keeps the workflow states as rows.
+ */
+const rewritten = new Set(["workflow_run_events", "workflow_state_revisions", "session_workflows"]);
+const stillKept = goalHistoryMigration.preservedTables.filter((table) => !rewritten.has(table));
 const keptOf = <A>(rows: ReadonlyArray<A>) =>
-  rows.filter((_, index) => goalHistoryMigration.preservedTables[index] !== "workflow_run_events");
+  rows.filter((_, index) => !rewritten.has(goalHistoryMigration.preservedTables[index] ?? ""));
+const states = (db: DatabaseSync) =>
+  db
+    .prepare(
+      `SELECT r.id, r.provenance, ${revisionStateSql("r")} AS state FROM workflow_state_revisions r ORDER BY r.id`,
+    )
+    .all();
 
 const scopedDatabase = Effect.fn("scopedDatabase")((open: () => DatabaseSync) =>
   Effect.acquireRelease(Effect.sync(open), (db) =>
@@ -56,11 +70,17 @@ it.live(
       const db = yield* scopedDatabase(() => oldDatabase(file));
       const before = snapshot(db);
       yield* migrateDatabase(db);
-      // Later steps only add the nullable board author and drop the run event receipts, ending
-      // the run's delivery log instead; every other preserved value stays as it was.
-      expect(
-        snapshot(db, stillKept).map((rows) => rows.map(({ author_json: _author, ...row }) => row)),
-      ).toEqual(keptOf(before));
+      // Later steps drop the run event receipts, ending the run's delivery log instead, and keep
+      // the workflow states as rows; every other preserved value stays as it was.
+      expect(snapshot(db, stillKept)).toEqual(keptOf(before));
+      // The current state no revision held becomes the latest, which the session points at.
+      expect(states(db)).toEqual([
+        { id: 1, provenance: "recorded", state: recorded },
+        { id: 2, provenance: "legacy_current", state: current },
+      ]);
+      expect(db.prepare("SELECT session_id, revision_id FROM session_workflows").all()).toEqual([
+        { session_id: "s", revision_id: 2 },
+      ]);
       expect(db.prepare("SELECT run_id FROM workflow_run_log_closures").all()).toEqual([
         { run_id: "run" },
       ]);
@@ -78,7 +98,10 @@ it.live(
       expect(() => db.exec("UPDATE workflow_worker_dispatches SET generation = 'new'")).toThrow(
         "immutable",
       );
-      expect(() => db.exec("UPDATE workflow_state_revisions SET state_json = '{}' ")).toThrow();
+      expect(() => db.exec("UPDATE workflow_state_revisions SET phase = 'plan'")).toThrow(
+        "immutable",
+      );
+      expect(() => db.exec("UPDATE workflow_ledger_events SET detail = ''")).toThrow("immutable");
       db.exec(
         "INSERT INTO workflow_goal_instances VALUES ('new-goal', 's', 'new'); UPDATE workflow_goal_identities SET goal_instance_id = 'new-goal', created_at = 'new' WHERE session_id = 's'",
       );

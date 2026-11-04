@@ -8,6 +8,8 @@ import { NewGoalSettlement, Workflows, type WorkflowState } from "../../src/work
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { callTool } from "../support/run-tools.ts";
 import { sqlAll, sqlGet, sqlRun } from "../support/sql.ts";
+import { storeWorkflowState } from "../support/workflow-state.ts";
+import { revisionStateSql } from "../../src/workflow/state-rows.ts";
 
 const goal = {
   statement: "first",
@@ -45,7 +47,8 @@ const closingProgress = {
 
 /** Rows a session owns; run-keyed tables are reached through the session's run bindings. */
 const sessionRows = {
-  revisions: "SELECT * FROM workflow_state_revisions WHERE session_id = ? ORDER BY id",
+  revisions: `SELECT r.*, ${revisionStateSql("r")} AS state FROM workflow_state_revisions r
+    WHERE r.session_id = ? ORDER BY r.id`,
   bindings: "SELECT * FROM workflow_run_bindings WHERE session_id = ? ORDER BY rowid",
   events: `SELECT * FROM workflow_run_log_entries WHERE run_id IN
     (SELECT run_id FROM workflow_run_bindings WHERE session_id = ?) ORDER BY cursor`,
@@ -343,10 +346,9 @@ testAgent()("explicit new Goal transition", (it) => {
       const { project } = yield* TestEnv;
       const workflows = yield* Workflows;
       const session = (yield* (yield* Sessions).create(project.id)).id;
-      yield* workflows.setPhase(session, "goal");
       // Represent a real legacy artifact directly, without assigning any historical ID.
-      yield* sqlRun(
-        "UPDATE session_workflows SET state_json = ? WHERE session_id = ?",
+      yield* storeWorkflowState(
+        session,
         yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
           phase: "goal",
           goal: {
@@ -365,7 +367,6 @@ testAgent()("explicit new Goal transition", (it) => {
           plan: null,
           ledger: [],
         }),
-        session,
       );
       // A legacy Goal binds no run, so the run asking for the new Goal is unbound.
       const invoking = `${session}:invoking`;

@@ -12,6 +12,7 @@ import { PlanDependenciesRejected, PlanDependencyIssue } from "../../src/workflo
 import { Workflows } from "../../src/workflow/workflow.ts";
 import { sqlAll, sqlGet, sqlRun } from "../support/sql.ts";
 import { freshSession, testAgent, TestEnv } from "../support/test-env.ts";
+import { storedWorkflowState, storeWorkflowState } from "../support/workflow-state.ts";
 
 const goal = {
   statement: "Run a Goal as a board",
@@ -69,12 +70,7 @@ testAgent()("kanban board", (it) => {
         },
         ledger: [],
       });
-      yield* sqlRun(
-        "INSERT INTO session_workflows (session_id, state_json, updated_at) VALUES (?, ?, ?)",
-        id,
-        legacy,
-        "2026-01-01T00:00:00.000Z",
-      );
+      yield* storeWorkflowState(id, legacy);
 
       const view = yield* (yield* Boards).view(id);
       expect(view.cards.map(({ card }) => [card.id, card.status])).toEqual([
@@ -85,9 +81,13 @@ testAgent()("kanban board", (it) => {
         ["e", "in_progress"],
         ["f", "blocked"],
       ]);
+      expect(yield* storedWorkflowState(id)).toBe(legacy);
       expect(
-        yield* sqlGet("SELECT state_json FROM session_workflows WHERE session_id = ?", id),
-      ).toEqual({ state_json: legacy });
+        yield* sqlGet(
+          "SELECT count(*) AS n FROM workflow_state_revisions WHERE session_id = ?",
+          id,
+        ),
+      ).toEqual({ n: 1 });
     }),
   );
 
