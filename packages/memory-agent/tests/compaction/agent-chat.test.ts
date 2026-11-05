@@ -83,11 +83,13 @@ testAgent({ testProvider: {} })("compaction through AgentChat", (it) => {
       Effect.gen(function* () {
         const at = yield* freshSession;
         const agent = yield* AgentChat;
+        // Answers worth summarizing: the summary's header alone outweighs a one-word answer.
+        const answer = "테스트를 모두 통과했고 실패한 항목은 없어요. ".repeat(10);
         const { userNodes, messages, toolOutput, toolResult } = yield* savedConversation(at, [
-          "모두 통과했어요.",
-          "네",
-          "네",
-          "네",
+          answer,
+          answer,
+          answer,
+          answer,
           "네",
         ]);
         yield* agent.lease(at.sessionId, "tab-a", "claim");

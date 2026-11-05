@@ -4096,3 +4096,9 @@
 - 결정: 호환 `cheapestEffort`도 구독과 같은 규칙을 쓴다. 대화가 `none`이고 모델이 `none`을 공개했으면 `none`, 아니면 `low`를 공개했을 때 `low`다. 공개된 레벨이 없거나 그 레벨이 없으면 지금처럼 `default`다. 요약·기억 해석·권한 분류가 이 값을 쓴다.
 - 공개하지 않은 서버에는 보내지 않는다(2026-10-25 원칙 유지). 같은 날 GLM 서버(vLLM 앞 LiteLLM)에서 잰 값: 요약 크기 요청에서 `low`는 추론 0 토큰·3.9초였지만, `medium`은 10.5k, `none`은 3.5k, `high`는 105 토큰으로 강도와 맞지 않았다. `chat_template_kwargs.enable_thinking=false`는 GLM-5.3에서 무시되고(추론 12.8k) Qwen3.8-Flash-Next에서는 지켜졌다(추론 0). 강도 처리는 모델 template에 달려 있어 이름으로 추측하지 않는다.
 - 사용자는 서버 운영자에게 강도 공개를 요청한다. LiteLLM `/v1/models`는 응답 형식이 고정되어 강도를 싣지 못한다. LiteLLM은 `model_info`의 `supports_reasoning`·`reasoning_effort_levels`를 루트의 `/model_group/info`(`supported_reasoning_efforts`)로만 알린다.
+
+## 비운 도구 출력의 pointer는 다시 읽는 도구와 id만 말한다 (2026-11-05)
+
+- 계기: 서브에이전트 run 하나가 139 step 뒤 `ContextLimitExceeded`로 끝났다(창 60,000). 오래된 출력을 모두 pointer로 바꿔도 run이 약 42.6k 토큰이었고, 그중 pointer 190개가 약 9.1k(개당 48토큰)였다.
+- 결정: pointer는 `[Tool output cleared. Reread: <도구> <id>]`로 줄인다. 대화는 `read_evidence <node id>`, 자식은 `read_subagent_tool_result toolCallId <call id>`다. 개당 약 21~25토큰이다. 기억 노드가 없는 대화 출력은 `find_memory`와 `read_evidence`로 찾으라고 한다.
+- 문구가 바뀌므로 진행 중인 대화의 요청 prefix는 한 번 바뀐다. pointer는 요청에서만 쓰고 저장하지 않는다.

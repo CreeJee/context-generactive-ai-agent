@@ -178,9 +178,7 @@ const childResultPageLength = 4_000;
 const childPointers: LeaveOutPointers = {
   cleared: (toolCallId) =>
     Option.map(Option.liftPredicate(toolCallId, isTruthy), (id) =>
-      clearedNotice(
-        `It is saved in this subagent's transcript: call read_subagent_tool_result with toolCallId ${id} and offset 0 to read it again.`,
-      ),
+      clearedNotice(`Reread: read_subagent_tool_result toolCallId ${id}`),
     ),
   fullResult: (toolCallId) =>
     Option.map(

@@ -138,17 +138,21 @@ export function estimateTokens(message: ConversationMessage): number {
 export const estimateConversation = (messages: ReadonlyArray<ConversationMessage>) =>
   messages.reduce((sum, message) => sum + estimateTokens(message), 0);
 
-const clearedPrefix = "[Tool output cleared to save context.";
+const clearedPrefix = "[Tool output cleared.";
 
-/** What a cleared tool result says instead of its output, ending with where to read it again. */
+/**
+ * What a cleared tool result says instead of its output, ending with where to read it again. A
+ * long run sends one per call; at about 48 tokens each, 190 of them held 9,000 tokens of a 60,000
+ * window, so it says no more than the tool and id that read it.
+ */
 export const clearedNotice = (whereToRead: string) => `${clearedPrefix} ${whereToRead}]`;
 
 /** What a cleared tool result of the conversation says: it is a memory node. */
 export function clearedOutput(nodeId: string | null) {
   return clearedNotice(
     isTruthy(nodeId)
-      ? `It is kept in memory as node ${nodeId}: call read_evidence with that id to read it again.`
-      : "It is kept in memory: find it with find_memory, then read it with read_evidence.",
+      ? `Reread: read_evidence ${nodeId}`
+      : "Find it with find_memory, then read_evidence.",
   );
 }
 

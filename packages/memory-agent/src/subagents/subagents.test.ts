@@ -55,8 +55,9 @@ it.effect("a child's run past the window's budget leaves its oldest results out"
     // The task and every call stay; the oldest results point at the saved transcript.
     expect(sent).toHaveLength(messages.length);
     expect(sent[0]).toEqual(messages[0]);
-    expect(sent[2]?.content).toMatch(/^\[Tool output cleared to save context\./);
-    expect(sent[2]?.content).toContain("read_subagent_tool_result with toolCallId call-0");
+    expect(sent[2]?.content).toBe(
+      "[Tool output cleared. Reread: read_subagent_tool_result toolCallId call-0]",
+    );
     // The latest step's result is what the child asked for to go on: it stays whole.
     expect(sent.at(-1)).toEqual(messages.at(-1));
 
@@ -81,7 +82,7 @@ it.effect(
         { role: "user", content: "third task" },
       ];
       const sent = yield* compacted(messages, messages, 100_000);
-      expect(sent[2]?.content).toContain("read_subagent_tool_result with toolCallId first");
+      expect(sent[2]?.content).toContain("read_subagent_tool_result toolCallId first");
       // The latest answered task stays whole: the next request is usually about what it read.
       expect(sent[6]).toEqual(messages[6]);
     }),
