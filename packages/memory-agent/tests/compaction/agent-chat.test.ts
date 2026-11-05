@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { Cause, Deferred, Effect, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { budgetFor } from "../../src/agent/compaction.ts";
@@ -8,7 +8,7 @@ import { RunStore } from "../../src/loop/store.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { runTurn } from "../support/chat-client.ts";
-import { selectTestModel } from "../support/provider.ts";
+import { defaultTestResponder, selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { conversation, nextRequest } from "./fixtures.ts";
 
@@ -170,6 +170,52 @@ testAgent({ testProvider: {} })("compaction through AgentChat", (it) => {
       yield* Effect.addFinalizer(() => Effect.orDie(summaries.setStartPercent(25)));
       expect(yield* summaries.catchUp(at.sessionId, false)).toBe("done");
       expect(yield* blocks).toHaveLength(1);
+    }),
+  );
+});
+
+// Each summary waits until another has started too, so blocks summarized one at a time never end.
+const summariesStarted: string[] = [];
+const secondSummaryStarted = Deferred.makeUnsafe<void, Cause.UnknownError>();
+testAgent({
+  testProvider: {
+    responder: (invocation) => {
+      const turn = defaultTestResponder(invocation);
+      if (!invocation.system.join("\n").includes("You summarize part of a conversation"))
+        return turn;
+      summariesStarted.push(invocation.run.threadId);
+      if (summariesStarted.length === 2) Deferred.doneUnsafe(secondSummaryStarted, Effect.void);
+      return { ...turn, waitFor: Deferred.await(secondSummaryStarted) };
+    },
+  },
+})("summary blocks", (it) => {
+  it.effect("summarizes the blocks a conversation needs together and keeps them in order", () =>
+    Effect.gen(function* () {
+      const at = yield* freshSession;
+      // Ten user turns: the latest two stay raw, so two blocks of four are due.
+      const { userNodes } = yield* savedConversation(
+        at,
+        Array.from({ length: 9 }, () => "네"),
+      );
+      const summaries = yield* TurnSummaries;
+      yield* summaries.setStartPercent(0);
+      yield* Effect.addFinalizer(() => Effect.orDie(summaries.setStartPercent(25)));
+
+      expect(yield* summaries.catchUp(at.sessionId, false).pipe(Effect.timeout("5 seconds"))).toBe(
+        "done",
+      );
+      expect(yield* (yield* RunStore).chatMetadata.summaries(at.sessionId)).toEqual([
+        {
+          end: 4,
+          nextTurnNodeId: userNodes[4]!.id,
+          text: `- 사용자 턴 4개 (node ${userNodes[0]!.id})`,
+        },
+        {
+          end: 8,
+          nextTurnNodeId: userNodes[8]!.id,
+          text: `- 사용자 턴 4개 (node ${userNodes[4]!.id})`,
+        },
+      ]);
     }),
   );
 });

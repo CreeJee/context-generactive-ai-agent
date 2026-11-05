@@ -70,7 +70,7 @@
 - `workspaceInstructions`는 `process.env`로 호스트 셸을 확인하고(`hostShell`) `process.platform`, `Intl` 타임존, `DateTime.now`를 읽는다.
 - `projectInstructionsHook`은 실행마다 프로젝트 루트의 안내 파일과 경로 카탈로그를 읽는다.
 - `chat.ts`의 `AgentChat`은 import 기준으로 SqlClient(실행·워크플로 바인딩 SQL, `sqliteRunLog` durable 로그), `RunLogSignals`(로그 끝 reader 깨우기), FileSystem/Path, Queue/Fiber/Scope 기반 동시성, SecureRandom/NodeCrypto id 생성, 프로바이더 네트워크 호출(ActiveProvider·ProviderRegistry·subscription runtime), MCP 서버, 외부 에이전트, 백그라운드 작업, AppEvents를 사용한다.
-- `TurnSummaries`는 `summaryInstructions`로 모델에 이전 턴 요약을 요청한다. `layer(automatic = true)` 설정이 있다.
+- `TurnSummaries`는 `summaryInstructions`로 모델에 이전 턴 요약을 요청한다. `layer(automatic = true)` 설정이 있다. 밀린 블록은 최대 3개(`summaryConcurrency`)를 동시에 요청하고, 저장은 블록 순서대로 한다. 앞 블록이 실패하면 이미 끝난 뒤 블록도 저장하지 않고 다음 번에 다시 요약한다.
 
 ## Verification
 
