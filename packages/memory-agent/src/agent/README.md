@@ -19,7 +19,7 @@
 - `compactEffect` / `requestHistory` / `compactionHook` / `compactByHand` — 모델에 보낼 대화를 압축하는 본체, 요청 단위 히스토리와 적용 stage, Effect AI 루프용 compaction 훅, 수동 `/compact`이다.
 - `LeaveOutPointers` / `memoryPointers` / `clearedNotice` — compaction이 뺀 것 자리에 둘 글이다. 비운 도구 출력, 미리보기 머리말의 전체 결과 위치, 뺀 메시지 표시를 정한다. `CompactionSources.pointers`로 받고, 없으면 기억 노드 pointer(`memoryPointers`)를 쓴다. 서브에이전트는 자기 transcript를 가리키는 pointer를 넘긴다. 언제 무엇을 빼는지는 pointer와 상관없이 같다.
 - `ConversationMessage` / `ConversationToolCall` / `CompactionMessage` / `CompactionFailed` / `CompactionReason` — compaction이 읽는 메시지 형태, 대체 메시지, 실패 오류(operation·reason·cause)이다.
-- `budgetFor` / `Budget` / `leaveOutAtShare` / `estimateTokens` / `estimateConversation` / `messageText` / `clearedOutput` — 컨텍스트 예산(leaveOutAt = window*0.55), 토큰 추정, 메시지 텍스트, 비운 도구 출력 문구이다.
+- `budgetFor` / `Budget` / `leaveOutAtShare` / `estimateTokens` / `estimateConversation` / `messageText` / `clearedOutput` — 컨텍스트 예산(leaveOutAt = window*0.55, inputCeiling = window − 답할 자리), 토큰 추정, 메시지 텍스트, 비운 도구 출력 문구이다.
 - `manualCompactionNamespace` / `compactionStateEffect` / `CompactionState` / `CompactionSources` / `linedUp` / `sameTurn` / `userTurns` / `answeredToolCalls` / `memoryLookups` / `lookupSources` / `replayableToolHistory` / `lightweightToolResults` / `SummaryOutcome` / `Compacted` — 턴 요약 블록 저장 형식, 세션 compaction 상태 읽기, 요약-대화 정렬 보조 함수이다.
 - `summaryBlockTurns` / `defaultSummaryStartPercent` / `recentRawUserTurns` / `retrievalLeadLimit` / `retrievalTokenLimit` — compaction 정책 상수(4, 25, 2, 5, 600)이다(`compaction-policy.ts`).
 - `contextView` / `contextUsageHook` / `lastContextUsageEffect` / `pendingColdObservationEffect` / `consumeColdObservationEffect` / `coldObservationId` / `ContextUsageFailed` / `ContextUsageReason` / `StoredContextUsage` / `contextUsageNamespace` / `consumedColdUsageNamespace` — 요청별 컨텍스트 사용량 저장·라이브 전송과 cache-cold 관측 처리이다.
@@ -46,6 +46,7 @@
 - 요약 블록은 불변이다. 블록을 추가해도 이전 메시지를 다시 쓰지 않는다(프로바이더 KV prefix 유지).
 - `SummaryBlock`은 `nextTurnNodeId`의 기록 텍스트가 해당 위치의 사용자 턴과 같을 때만 쓴다(`sameTurn`, `[redacted:` 포함 노드는 어떤 텍스트와도 일치). `linedUp`은 `end`가 엄격히 증가하는 앞쪽 연속 블록만 받는다.
 - `Budget.compactAt`은 deprecated 호환 필드이며 항상 0이다. leave-out 기준은 `Math.floor(contextWindow * 0.55)`이다.
+- `Budget.inputCeiling`은 창에서 답할 자리(16,384와 창의 1/5 중 작은 값)를 뺀 값이다. `compactionHook`은 run의 step 사용량이 오면 provider가 센 입력에서 우리 메시지 추정을 뺀 값(시스템 프롬프트, 도구 정의, 이미지, tokenizer 차이)을 기억한다. 다음 step부터는 `inputCeiling`에서 그 값을 뺀 자리가 `leaveOutAt`보다 작을 때 그 자리를 기준으로 leave-out한다. run의 첫 step과 입력 수를 알리지 않는 provider는 추정만 쓴다.
 - `estimateTokens`는 ASCII 4자당 1토큰, 비ASCII 1자당 1토큰으로 센다(한국어 과소추정 방지).
 - `defaultSummaryStartPercent = 25`는 `docs/decisions.md` 2026-10-13 결정이다. 최근 사용자 턴 2개(`recentRawUserTurns`)는 항상 원문으로 보낸다.
 - `handoff-state.ts`는 모델 handoff 루프와 분리되어 있다. 시작 시 TanStack 행 마이그레이션이 루프를 로드하지 않고 상태·fingerprint를 읽기 위해서다. `fingerprint`는 'v2:' 접두와 객체 키 정렬로 UI hydration의 필드 순서 변화에 견딘다. `legacyFingerprint`는 이전 행 비교용으로 남긴다.

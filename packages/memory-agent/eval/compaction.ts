@@ -157,7 +157,7 @@ const currentRequest = Effect.fnUntraced(function* (messages: readonly StoredMes
       }),
       retrievalAppendix: () => Effect.succeed(retrieval),
     },
-    budget: { compactAt: 1, leaveOutAt: 1_000_000 },
+    budget: { compactAt: 1, leaveOutAt: 1_000_000, inputCeiling: 1_000_000 },
   });
   return [...result.messages];
 });

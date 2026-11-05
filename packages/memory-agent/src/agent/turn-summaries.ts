@@ -168,7 +168,11 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
           messages,
           state: { manual: state.manual, blocks: [] },
           sources,
-          budget: { compactAt: 0, leaveOutAt: Number.POSITIVE_INFINITY },
+          budget: {
+            compactAt: 0,
+            leaveOutAt: Number.POSITIVE_INFINITY,
+            inputCeiling: Number.POSITIVE_INFINITY,
+          },
         });
         if (estimateConversation(unsummarized.messages) <= threshold) return "done" as const;
       }

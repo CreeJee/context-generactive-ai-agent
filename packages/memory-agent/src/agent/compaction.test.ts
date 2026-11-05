@@ -15,7 +15,7 @@ import {
 } from "./compaction.ts";
 
 const noLimit = 1_000_000;
-const unlimited: Budget = { compactAt: noLimit, leaveOutAt: noLimit };
+const unlimited: Budget = { compactAt: noLimit, leaveOutAt: noLimit, inputCeiling: noLimit };
 const noSources = lookupSources({ toolResultId: () => null, nodeText: () => null });
 const fresh = { manual: { clearedThrough: 0, summarizedTurns: 0 }, blocks: [] };
 
@@ -141,7 +141,7 @@ describe("compact", () => {
         messages,
         state: fresh,
         sources: noSources,
-        budget: { compactAt: 0, leaveOutAt: 1_000 },
+        budget: { compactAt: 0, leaveOutAt: 1_000, inputCeiling: noLimit },
       });
       expect(result.stage).toBe("clear-answered");
       expect(result.messages.slice(0, 2)).toEqual(messages.slice(0, 2));
@@ -300,7 +300,11 @@ describe("request history", () => {
         { role: "assistant" as const, content: `답 ${index}: ${long}` },
       ]).flat();
       messages.push({ role: "user", content: "마지막 질문" });
-      const sent = yield* firstSent(messages, noSources, { compactAt: 3_000, leaveOutAt: 3_000 });
+      const sent = yield* firstSent(messages, noSources, {
+        compactAt: 3_000,
+        leaveOutAt: 3_000,
+        inputCeiling: noLimit,
+      });
       expect(sent.length).toBeLessThan(messages.length);
       expect(sent[0]?.content).toContain("find_memory");
       expect(sent.at(-1)).toEqual({ role: "user", content: "마지막 질문" });
@@ -334,7 +338,7 @@ describe("request history", () => {
       const sent = yield* firstSent(
         [...earlier, instruction, ...steps],
         lookupSources({ toolResultId: (id) => `node-${id}`, nodeText: () => null }),
-        { compactAt: 0, leaveOutAt: 6_000 },
+        { compactAt: 0, leaveOutAt: 6_000, inputCeiling: noLimit },
       );
       expect(sent[0]?.content).toContain("left out to save context");
       expect(sent[1]).toEqual(instruction);
@@ -364,7 +368,7 @@ describe("request history", () => {
       const sent = yield* firstSent(
         messages,
         lookupSources({ toolResultId: (id) => `node-${id}`, nodeText: () => null }),
-        { compactAt: 0, leaveOutAt: 1_000 },
+        { compactAt: 0, leaveOutAt: 1_000, inputCeiling: noLimit },
       );
       expect(sent).toEqual([
         ...messages.slice(0, 2),

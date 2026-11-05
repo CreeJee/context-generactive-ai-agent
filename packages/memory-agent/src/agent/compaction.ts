@@ -78,16 +78,38 @@ export class CompactionFailed extends Schema.TaggedError<
 /** Share past which the oldest messages are left out, whatever else was done. */
 export const leaveOutAtShare = 0.55;
 
+/**
+ * Room a request leaves in the window for its answer, reasoning included: pi's default, and at most
+ * a fifth of a small window.
+ */
+const answerRoom = (contextWindow: number) => Math.min(16_384, Math.floor(contextWindow / 5));
+
 /** Estimated leave-out ceiling; compactAt is retained as a zero-valued compatibility field. */
 export interface Budget {
   /** @deprecated Validated summaries and answered tools compact without a minimum threshold. */
   readonly compactAt: number;
   readonly leaveOutAt: number;
+  /**
+   * The most a request may hold in all, as the provider counts it: the window less room for the
+   * answer. What the provider counted beyond the messages lowers `leaveOutAt` to fit under it.
+   */
+  readonly inputCeiling: number;
 }
 
 export const budgetFor = (contextWindow: number): Budget => ({
   compactAt: 0,
   leaveOutAt: Math.floor(contextWindow * leaveOutAtShare),
+  inputCeiling: contextWindow - answerRoom(contextWindow),
+});
+
+/**
+ * `budget` once the provider counted `overhead` tokens beyond our estimate of the messages: the
+ * system prompt, tool definitions, images and its own tokenizer. Messages are left out past the
+ * room that leaves under the ceiling, when that is lower than `leaveOutAt`.
+ */
+const withOverhead = (budget: Budget, overhead: number): Budget => ({
+  ...budget,
+  leaveOutAt: Math.max(1, Math.min(budget.leaveOutAt, budget.inputCeiling - overhead)),
 });
 
 /** The text of a message, without images or other parts. */
@@ -958,6 +980,10 @@ export const requestHistory = Effect.fnUntraced(function* <M extends Conversatio
  * Compaction in the Effect AI loop: what each model step sends of its conversation. Goes last
  * among the hooks that shape the request, before local images are inlined. `stage` is the stage
  * the latest request reached, for its usage record.
+ *
+ * Our estimate counts the messages alone. Once a step's usage comes back, what the provider counted
+ * beyond it holds the later steps of the run under `budget.inputCeiling`; the run's first step has
+ * no count yet and goes by the estimate.
  */
 export const compactionHook = Effect.fnUntraced(function* (options: {
   readonly sources: CompactionSources;
@@ -968,6 +994,10 @@ export const compactionHook = Effect.fnUntraced(function* (options: {
   ) => Effect.Effect<ReadonlyArray<StoredMessage> | null, ModelHandoffFailed>;
 }) {
   const stage = yield* Ref.make<CompactionStage>("none");
+  /** Our estimate of the messages the latest request sent. */
+  const sentEstimate = yield* Ref.make(Option.none<number>());
+  /** What the provider counted of the latest request it reported beyond {@link sentEstimate}. */
+  const overhead = yield* Ref.make(Option.none<number>());
   const hook: RunHook<RunStore> = {
     request: ({ threadId }, request) =>
       Effect.gen(function* () {
@@ -987,11 +1017,27 @@ export const compactionHook = Effect.fnUntraced(function* (options: {
           messages: request.history,
           restored,
           sources: options.sources,
-          budget: options.budget,
+          budget: Option.match(yield* Ref.get(overhead), {
+            onNone: () => options.budget,
+            onSome: (tokens) => withOverhead(options.budget, tokens),
+          }),
         });
         yield* Ref.set(stage, sent.stage);
+        yield* Ref.set(sentEstimate, Option.some(estimateConversation(sent.messages)));
         return { ...request, history: sent.messages };
       }).pipe(Effect.mapError(asRunFailed)),
+    // A response that reported no input count keeps the overhead the one before it measured.
+    usage: (_scope, { inputTokens }) =>
+      Effect.flatMap(Ref.get(sentEstimate), (estimate) =>
+        Option.match(
+          Option.zipWith(
+            Option.fromNullishOr(inputTokens.total),
+            estimate,
+            (measured, sent) => measured - sent,
+          ),
+          { onNone: () => Effect.void, onSome: (tokens) => Ref.set(overhead, Option.some(tokens)) },
+        ),
+      ),
   };
   return { hook, stage: Ref.get(stage) };
 });

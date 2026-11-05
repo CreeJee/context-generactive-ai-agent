@@ -19,6 +19,8 @@ import { RunStore } from "../../src/loop/store.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { MemoryTools } from "../../src/tools/memory.ts";
+import { runTool } from "../../src/tools/run-tool.ts";
+import type { ScriptedTurn } from "../../src/testing/scripted-model.ts";
 import { scriptedRun } from "../support/loop-run.ts";
 import { callTool } from "../support/run-tools.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
@@ -217,7 +219,7 @@ testAgent()("compaction over recorded history", (it) => {
         ];
         // The log (about 4,500 tokens) is over budget; the page read_evidence returns in this run
         // (about 3,000) is not.
-        const budget: Budget = { compactAt: 4_000, leaveOutAt: noLimit };
+        const budget: Budget = { compactAt: 4_000, leaveOutAt: noLimit, inputCeiling: noLimit };
         const compacting = yield* compactionHook({
           sources: sourcesOf(nodes, at.sessionId),
           budget,
@@ -268,6 +270,60 @@ testAgent()("compaction over recorded history", (it) => {
   );
 
   it.effect(
+    "a run leaves earlier messages out once the provider counts more than fits under the ceiling",
+    () =>
+      Effect.gen(function* () {
+        const at = yield* freshSession;
+        const readFile = runTool({
+          name: "read_file",
+          description: "Read a project file",
+          parameters: Schema.Struct({ path: Schema.String }),
+          handler: () => Effect.succeed({ content: "y".repeat(10_000) }),
+        });
+        // An earlier answer of about 4,000 tokens, then the question the run answers.
+        const earlier = "x".repeat(16_000);
+        const conversation: ReadonlyArray<StoredMessage> = [
+          { role: "user", content: "설계를 설명해 줘" },
+          { role: "assistant", content: earlier },
+          { role: "user", content: "파일 읽어 줘" },
+        ];
+        const readCall: ScriptedTurn = {
+          toolCalls: [{ id: "read-1", name: "read_file", arguments: '{"path":"a.ts"}' }],
+        };
+        /** The run's second request, after a first step that reads a file. */
+        const secondRequest = Effect.fnUntraced(function* (name: string, first: ScriptedTurn) {
+          const compacting = yield* compactionHook({
+            sources: sourcesOf(yield* Nodes, at.sessionId),
+            budget: { compactAt: 0, leaveOutAt: noLimit, inputCeiling: 14_000 },
+            restore: () => Effect.succeed(null),
+          });
+          const { invocations } = yield* scriptedRun({
+            turns: [first, { text: "읽었어요." }],
+            runId: `${at.sessionId}:${name}`,
+            threadId: at.sessionId,
+            conversation,
+            tools: [readFile],
+            hooks: [compacting.hook],
+          });
+          return (yield* invocations)[1]?.history ?? [];
+        });
+
+        // The provider counts about 8,000 tokens beyond the messages, which leaves about 6,000
+        // under the ceiling; the second request's 6,600 do not fit, so the earlier answer goes.
+        const counted = yield* secondRequest("counted", {
+          ...readCall,
+          usage: { inputTokens: { uncached: 12_000, total: 12_000 }, outputTokens: { total: 5 } },
+        });
+        expect(counted.some((message) => message.content === earlier)).toBe(false);
+        expect(counted[0]?.content).toContain("earlier");
+        expect(counted.at(-1)?.content).toContain("y".repeat(10_000));
+        // Without a count the estimate alone decides, and the messages fit.
+        const unreported = yield* secondRequest("unreported", readCall);
+        expect(unreported.some((message) => message.content === earlier)).toBe(true);
+      }),
+  );
+
+  it.effect(
     "sends earlier turns as their summaries once clearing is not enough, if they still fit",
     () =>
       Effect.gen(function* () {
@@ -290,7 +346,7 @@ testAgent()("compaction over recorded history", (it) => {
           );
         const sent = (budget: Budget, conversation: ReadonlyArray<StoredMessage>) =>
           nextRequest(conversation, at.sessionId, budget);
-        const overBudget: Budget = { compactAt: 1_000, leaveOutAt: noLimit };
+        const overBudget: Budget = { compactAt: 1_000, leaveOutAt: noLimit, inputCeiling: noLimit };
         yield* summaries([{ end: 2, text: "- 배포 절차를 정했다" }]);
         const firstBlock = yield* sent(overBudget, messages);
         expect(firstBlock[0]).toEqual({
@@ -315,9 +371,9 @@ testAgent()("compaction over recorded history", (it) => {
         expect(lowUsage.compactAt).toBe(0);
         expect(yield* sent(lowUsage, messages)).toEqual(twoBlocks);
         expect(twoBlocks.at(-1)).toEqual({ role: "user", content: "질문 6" });
-        expect(yield* sent({ compactAt: noLimit, leaveOutAt: noLimit }, messages)).toEqual(
-          twoBlocks,
-        );
+        expect(
+          yield* sent({ compactAt: noLimit, leaveOutAt: noLimit, inputCeiling: noLimit }, messages),
+        ).toEqual(twoBlocks);
         // A conversation whose turn 3 is not the one summarized gets no summary.
         const other = messages.map((message) =>
           message.role === "user" && message.content === "질문 3"
