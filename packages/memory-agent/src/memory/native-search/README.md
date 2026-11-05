@@ -38,6 +38,7 @@
 - `forget`은 `result` Deferred가 같은 작업만 지운다. 같은 requestId를 나중 작업이 재사용할 수 있기 때문이다.
 - `cachedSize`의 유일한 writer는 reply ingress다. command waiter를 풀기 전에 갱신된다.
 - reply 기한: `memory-search`는 `input.remainingMs`+2초, `vector-search-controlled`는 `budgetMs`+2초, 나머지 명령은 2초다. 이 기한 덕에 typed `budget-exceeded`가 `request-timeout`보다 먼저 도착한다.
+- 기한은 dispatch 시점부터 잰다. 앞 작업 뒤에서 기다린 시간은 넣지 않는다. 앞 작업도 각자 기한이 있기 때문이다. 슬롯을 쥔 작업이 기한을 넘기면 owner의 `overdue` 신호가 완료되고, 그 작업과 대기 중인 호출이 모두 `request-timeout`으로 끝난다. 그 작업의 reply가 오면 신호를 새로 만든다.
 - `index-failed`, `read-failed`, `native-incompatible`, `worker-exit`, `worker-error`는 `fatal`이다. 주석상 이후 아무것도 신뢰할 수 없다. worker 종료나 Scope 종료 시 `failAll`이 모든 대기 작업을 실패시키고 control을 닫는다.
 - `controlToken`은 호스트 dispatch만 설정한다. 사용자 값은 채택하지 않는다. controlled 명령에 control이 없거나, worker에 `controlToken`/`ownerKey`가 없으면 `invalid-input`이다.
 - `ownerKey`는 호스트가 `SecureRandom.uuidV4`로 만드는 private binding이다. `databasePath`는 호스트 소유의 신뢰된 경로이며, 검색 요청에서 오지 않는다. 공개 검색은 후보 allowlist를 보내지 않는다.

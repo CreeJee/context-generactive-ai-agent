@@ -4108,3 +4108,10 @@
 - 계기: 서브에이전트 run이 `ContextLimitExceeded`로 끝났는데 `get_subagent_reports`는 `ModelRunError`만 보였다. 호환 모델의 실패는 `RUN_ERROR`에 code 없이 문구만 실렸고, 자식 보고서는 `repeated_tool_call` 외의 code를 모두 `ModelRunError`로 봤다.
 - 결정: 호환 모델이 창에 맞지 않아 보내지 않은 요청은 `RUN_ERROR` code `context_limit_exceeded`로 끝난다. 화면은 이 code의 문구(`/compact`나 창 크기 확인 안내)를 보이고, 자식 보고서와 attempt 실패 이유는 `ContextLimitExceeded`가 된다. 부모 지침은 이 보고서를 받으면 남은 일을 작게 나눠 맡기라고 한다.
 - provider가 400으로 거절한 창 초과(`exceed_context_size_error` 등)는 지금처럼 provider 실패로 둔다. 문구가 서버마다 달라 code로 가르지 않는다.
+
+## native owner의 reply 기한은 dispatch부터 잰다 (2026-11-05)
+
+- 계기: dev 백엔드에서 백그라운드 인덱싱의 native `add`가 2초 예산을 넘긴 memory-search 뒤에서 2.1초 기다리다 `request-timeout`으로 끝났다. 기한(2초)을 등록 시점부터 쟀기 때문이다. 이 실패가 publication gate 안에서 났으므로 gate가 poisoned가 되었다. 이후 프로세스를 다시 시작할 때까지 모든 기억 검색 read와 인덱싱이 `PublicationFailed`로 실패했다. 2026-10-30 "read 예산의 시작 시점과 크기는 그대로 둔다"가 다시 보기로 한, 대기가 실패 원인으로 관찰된 경우다.
+- 결정: reply 기한은 작업이 슬롯을 받아 worker에 보낸 때부터 잰다. 앞 작업 뒤에서 기다린 시간은 넣지 않는다. 앞 작업도 각자 기한이 있기 때문이다. 슬롯을 쥔 작업이 기한을 넘기면 owner의 `overdue` 신호가 완료된다. 그러면 그 작업의 호출자와 대기 중인 호출자 모두 `request-timeout`으로 끝난다. worker가 멈췄을 때 대기열이 무한히 기다리지 않게 하려는 것이다. 그 작업의 reply가 오면 신호를 새로 만든다.
+- 바꾸지 않은 것: 기한 크기(memory-search는 `remainingMs`+2초, 나머지는 2초), native 예산의 시작 시점(SearchControl 등록), active 작업이 reply까지 슬롯을 쥐는 규칙, `request-timeout`이 fatal이 아니라는 점.
+- 남은 일: 실패한 mutation이 native 상태를 바꾸지 않았어도(dispatch 전 실패, prepare의 SQL 실패) gate를 poison하는 범위, poisoned gate를 런타임에 복구하는 경로, 인덱싱 실패가 debug 로그로만 남는 경로(import backfill, secret sweep).

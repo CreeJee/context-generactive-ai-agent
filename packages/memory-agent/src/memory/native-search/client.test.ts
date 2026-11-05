@@ -110,13 +110,18 @@ it("times out the caller without pretending an active transport job has terminat
               Deferred.succeed(blocked, undefined).pipe(Effect.andThen(Effect.never)),
             ),
           );
-          const job = yield* Effect.forkScoped(
+          const request = (requestId: string) =>
             owner.execute(
-              OwnerCommand.cases.validate.make({ epoch: "timeout", requestId: "timed", ids: [] }),
-            ),
-          );
+              OwnerCommand.cases.validate.make({ epoch: "timeout", requestId, ids: [] }),
+            );
+          const job = yield* Effect.forkScoped(request("timed"));
           yield* Deferred.await(blocked);
+          // Queued behind the hung job, so its own deadline never starts: the hung job's ends it.
+          const queued = yield* Effect.forkScoped(request("queued"));
           expect(yield* Effect.flip(Fiber.join(job))).toMatchObject({ reason: "request-timeout" });
+          expect(yield* Effect.flip(Fiber.join(queued))).toMatchObject({
+            reason: "request-timeout",
+          });
           expect(yield* owner.inspect).toEqual(OwnerInspection.open({ queued: 0, active: 1 }));
           // The enclosing Scope still owns shutdown and actual native resource cleanup.
         }),
@@ -155,6 +160,65 @@ it("waits past a budgeted search's budget for its own budget-exceeded reply", ()
       ),
     ).pipe(Effect.timeout("8 seconds")),
   ));
+
+it(
+  "starts a queued command's reply deadline at dispatch, not while it waits for the slot",
+  () =>
+    Effect.runPromise(
+      Effect.scoped(
+        withTestPlatform(
+          Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
+            const directory = yield* fs.makeTempDirectoryScoped({ prefix: "native-queued-" });
+            const owner = yield* makeNativeOwner(
+              {
+                kind: "setup",
+                epoch: "queued",
+                dimensions: 384,
+                bits: 4,
+                cacheDirectory: directory,
+              },
+              new URL("./worker.ts", import.meta.url),
+              // The budgeted search holds the slot past the plain 2 s reply timeout.
+              gatedTransport((command, transport) =>
+                command.requestId === "slow"
+                  ? Effect.sleep("2500 millis").pipe(Effect.andThen(transport.send(command)))
+                  : transport.send(command),
+              ),
+            );
+            const slow = yield* Effect.forkScoped(
+              owner.execute(
+                OwnerCommand.cases["vector-search-controlled"].make({
+                  epoch: owner.epoch,
+                  requestId: "slow",
+                  query: new Float32Array(384).fill(1 / Math.sqrt(384)),
+                  k: 1,
+                  allowedIds: [],
+                  budgetMs: 1_000,
+                }),
+              ),
+            );
+            yield* owner.inspect.pipe(
+              Effect.repeat({
+                until: (state) => OwnerInspection.$is("open")(state) && state.active === 1,
+              }),
+            );
+            const added = yield* owner.execute(
+              OwnerCommand.cases.add.make({
+                epoch: owner.epoch,
+                requestId: "queued-add",
+                vectors: new Float32Array(384).fill(1 / Math.sqrt(384)),
+                ids: ["1"],
+              }),
+            );
+            expect(OwnerReply.guards.ack(added)).toBe(true);
+            expect(yield* Fiber.join(slow)).toMatchObject({ outcome: "budget-exceeded" });
+          }),
+        ),
+      ).pipe(Effect.timeout("8 seconds")),
+    ),
+  10_000,
+);
 
 it("bounds admission, removes interrupted queued waits, and settles every waiter on worker exit", () =>
   Effect.runPromise(

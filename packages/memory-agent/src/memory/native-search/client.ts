@@ -74,7 +74,10 @@ const State = Data.taggedEnum<State>();
 /** At most this many requests wait for or hold the owner. */
 const capacity = 32;
 
-/** How long the host waits for a reply before it gives up on a hung worker. */
+/**
+ * How long the host waits for a reply, from the job's dispatch, before it gives up on a hung
+ * worker. Time queued behind another job does not count: that job has its own deadline.
+ */
 const replyTimeout = Duration.seconds(2);
 
 /**
@@ -180,7 +183,8 @@ const fatal = (error: NativeOwnerFailed) =>
  * jobs wait for the owner's one slot (`Semaphore`), and the `Ref` ledger records each job's
  * phase for capacity, duplicates, cancellation and inspection. A caller that leaves stops a
  * queued job before dispatch, but an active job keeps the slot until the worker answers: the
- * native call it started is not over because its caller left.
+ * native call it started is not over because its caller left. The active job past its reply
+ * deadline marks the worker hung, and every caller then waiting gives up with `request-timeout`.
  */
 export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
   setup: OwnerSetup,
@@ -198,6 +202,18 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
   const jobs = yield* FiberMap.make<string>();
   // Sole reply-ingress writer, updated before releasing command waiters.
   const cachedSize = yield* Ref.make(transport.ready.size);
+  /**
+   * Completed once the job holding the slot is past its reply deadline; replaced by a fresh one
+   * when that job's reply comes. Only the slot holder writes it.
+   */
+  const overdue = yield* Ref.make(yield* Deferred.make<void>());
+  const markOverdue = Effect.flatMap(Ref.get(overdue), (signal) =>
+    Deferred.succeed(signal, undefined),
+  );
+  const renewOverdue = Effect.when(
+    Effect.flatMap(Deferred.make<void>(), (fresh) => Ref.set(overdue, fresh)),
+    Effect.flatMap(Ref.get(overdue), Deferred.isDone),
+  );
 
   const failAll = Effect.fnUntraced(function* (error: NativeOwnerFailed) {
     const previous = yield* Ref.getAndUpdate(state, (current): State =>
@@ -269,6 +285,11 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
       .withPermits(1)(
         setPhase(job.command.requestId, "active").pipe(
           Effect.andThen(
+            Effect.forkScoped(
+              Effect.sleep(replyDeadline(job.command)).pipe(Effect.andThen(markOverdue)),
+            ),
+          ),
+          Effect.andThen(
             Effect.suspend(() => {
               const controlled = (command: ControlledCommand) =>
                 Option.match(job.control, {
@@ -287,6 +308,9 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
               });
             }),
           ),
+          // Closing the Scope stops the deadline timer as soon as the worker answers.
+          Effect.scoped,
+          Effect.ensuring(renewOverdue),
           Effect.tap((reply) =>
             Option.match(sizeOf(reply), {
               onNone: () => Effect.void,
@@ -434,10 +458,15 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
                   Option.map(control, (requested) => Effect.sync(() => requested.cancel())),
                 ),
               ),
-              Effect.timeoutOrElse({
-                duration: replyDeadline(input),
-                orElse: () => Effect.fail(NativeOwnerFailed.make({ reason: "request-timeout" })),
-              }),
+              // The deadline runs from dispatch (see `run`). A queued job waits for the jobs
+              // ahead, each bounded by its own deadline, so it gives up only on a hung worker.
+              Effect.raceFirst(
+                Effect.flatMap(Ref.get(overdue), Deferred.await).pipe(
+                  Effect.andThen(
+                    Effect.fail(NativeOwnerFailed.make({ reason: "request-timeout" })),
+                  ),
+                ),
+              ),
               // A queued job its caller left is never dispatched; an active one keeps its slot.
               Effect.ensuring(
                 Effect.flatMap(phaseOf(job), (phase) =>
