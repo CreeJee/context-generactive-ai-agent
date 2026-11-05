@@ -71,7 +71,7 @@ export const migrateDatabase = Effect.fnUntraced(function* (sqlite: DatabaseSync
   // Startup owns this connection. FK suspension permits the historical referenced-table rebuild;
   // every pending step and its version cursor commit together, and FK validity is checked before commit.
   yield* attempt(() => sqlite.exec("PRAGMA foreign_keys = OFF"));
-  yield* Effect.acquireUseRelease(
+  const migrated = yield* Effect.acquireUseRelease(
     attempt(() => sqlite.exec("BEGIN IMMEDIATE")),
     () => migrateInTransaction(sqlite),
     (_, exit) =>
@@ -83,9 +83,19 @@ export const migrateDatabase = Effect.fnUntraced(function* (sqlite: DatabaseSync
       ),
     ),
   );
+  // What the migrations wrote is still in the log. Left there, SQLite copies it into the file on
+  // a later commit, often the import worker's while it holds the app's connection: hundreds of
+  // MB after an upgrade held every query for up to 20 seconds. Copy it now, before anything serves.
+  yield* Effect.when(
+    attempt(() => sqlite.exec("PRAGMA wal_checkpoint(TRUNCATE)")),
+    Effect.succeed(migrated),
+  );
 });
 
-/** Every pending step, its version cursor and the schema check, inside the startup transaction. */
+/**
+ * Every pending step, its version cursor and the schema check, inside the startup transaction.
+ * Returns whether any step was applied.
+ */
 const migrateInTransaction = Effect.fnUntraced(function* (sqlite: DatabaseSync) {
   const { applied, loader } = yield* attempt(() => {
     // Read the authority only after taking the migration lock: another starter may have completed it.
@@ -184,6 +194,7 @@ const migrateInTransaction = Effect.fnUntraced(function* (sqlite: DatabaseSync) 
     assertDatabaseSchema(sqlite);
     sqlite.exec("COMMIT");
   });
+  return applied < migrations.length;
 });
 
 export const databaseSchemaVersion = (sqlite: DatabaseSync) =>

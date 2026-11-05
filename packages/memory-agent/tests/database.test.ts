@@ -196,6 +196,17 @@ describe("Database", () => {
     }).pipe(withTestPlatform),
   );
 
+  it.live("hands over a connection whose log holds none of the migrations it applied", () =>
+    Effect.gen(function* () {
+      const file = yield* databaseFile();
+      // A passive checkpoint reports how many frames the log holds; the migrations wrote many.
+      const log = yield* withDatabase(file, (db) =>
+        db.sqlite.prepare("PRAGMA wal_checkpoint(PASSIVE)").get(),
+      );
+      expect(log).toEqual({ busy: 0, log: 0, checkpointed: 0 });
+    }).pipe(withTestPlatform),
+  );
+
   it.live(
     "upgrades the 0.0.13 released schema without changing evidence or inventing execution pins",
     () =>
