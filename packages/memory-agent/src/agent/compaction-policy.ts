@@ -11,3 +11,7 @@ export const recentRawUserTurns = 2;
 export const retrievalLeadLimit = 5;
 /** Estimated-token ceiling for the variable retrieval appendix. */
 export const retrievalTokenLimit = 600;
+/** Steps of a run summarized into each block while the run goes on. */
+export const stepBlockSteps = 20;
+/** Latest steps of a run always sent in their original form, results cleared or not. */
+export const recentRawSteps = 10;

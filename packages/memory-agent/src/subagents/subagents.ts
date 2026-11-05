@@ -26,6 +26,7 @@ import {
 } from "effect";
 import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
 import { ApiUsage, apiUsageHook } from "../agent/api-usage.ts";
+import { stepSummarizer } from "../agent/step-summaries.ts";
 import {
   budgetFor,
   clearedNotice,
@@ -797,6 +798,11 @@ const make = Effect.gen(function* () {
         sources: childCompactionSources(runStore.thread(threadId)),
         budget: budgetFor(runtime.contextWindow(binding.selection.model)),
         restore: () => Effect.succeed(null),
+        summarizeSteps: stepSummarizer({
+          services: { active, usageLedger, crypto },
+          rootSessionId: binding.sessionId,
+          selection: binding.selection,
+        }),
       });
       const hooks: ReadonlyArray<RunHook<RunStore>> = [
         yield* Effect.provideContext(projectInstructionsHook(binding.project.root), platform),

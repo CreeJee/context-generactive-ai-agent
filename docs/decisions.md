@@ -4115,3 +4115,12 @@
 - 결정: reply 기한은 작업이 슬롯을 받아 worker에 보낸 때부터 잰다. 앞 작업 뒤에서 기다린 시간은 넣지 않는다. 앞 작업도 각자 기한이 있기 때문이다. 슬롯을 쥔 작업이 기한을 넘기면 owner의 `overdue` 신호가 완료된다. 그러면 그 작업의 호출자와 대기 중인 호출자 모두 `request-timeout`으로 끝난다. worker가 멈췄을 때 대기열이 무한히 기다리지 않게 하려는 것이다. 그 작업의 reply가 오면 신호를 새로 만든다.
 - 바꾸지 않은 것: 기한 크기(memory-search는 `remainingMs`+2초, 나머지는 2초), native 예산의 시작 시점(SearchControl 등록), active 작업이 reply까지 슬롯을 쥐는 규칙, `request-timeout`이 fatal이 아니라는 점.
 - 남은 일: 실패한 mutation이 native 상태를 바꾸지 않았어도(dispatch 전 실패, prepare의 SQL 실패) gate를 멈추는 범위, 멈춘 gate를 런타임에 복구하는 경로, 인덱싱 실패가 debug 로그로만 남는 경로(import backfill, secret sweep).
+
+## 긴 run의 앞 step은 run 안에서 요약한다 (2026-11-05)
+
+- 계기: 서브에이전트 run이 139 step 뒤 `ContextLimitExceeded`로 끝났다. 진행 중인 run은 leave-out하지 않으므로, 출력을 모두 pointer로 바꿔도 호출(약 27.7k)과 pointer(약 9.1k)가 남아 창 60,000에 들어가지 않았다. pointer를 줄여도 step 수에 비례하는 부분은 그대로다.
+- 결정: `compactionHook`이 run의 앞 step을 20개씩 블록으로 요약하고, 그 step들(호출과 결과) 자리에 요약 하나를 보낸다. 최근 10 step은 원문이다. 요약하지 않은 step이 `leaveOutAt`의 절반(leave-out이 줄이는 크기)을 넘고 블록 뒤에 10 step이 남을 때 요약할 차례다. 대화와 자식이 같은 기준을 쓴다.
+- 요약은 run의 scope에서 백그라운드로 한 번에 하나씩 만든다. 차례를 찾은 요청은 기다리지 않는다. 요약기는 run 모델을 공개된 가장 낮은 강도로 부르고(`cheapSummary`), 각 출력 옆에 다시 읽을 위치를 적어 요약이 그것을 인용하게 한다. usage는 `step-summary`로 기록한다.
+- 블록은 메모리에만 두고 run이 끝나면 버린다. 저장하지 않으므로 마이그레이션이 없다. 블록은 첫 step과 마지막 step의 첫 call id로 찾아서, run이 자라도 같은 자리에 들어간다. 다시 읽을 곳이 없는 출력이 있는 블록은 기록될 때까지 요약하지 않는다.
+- 요약이 한 번 실패하면 그 run에서는 다시 요청하지 않는다. 실패한 요청을 매 step 되풀이하지 않기 위해서다. 그 run은 전처럼 pointer만 쓴다.
+- 남은 한계: 블록 요약도 run 안에 남으므로 아주 긴 run(블록 수십 개)은 요약만으로도 창을 채울 수 있다. 블록을 다시 합치는 단계는 아직 없다.

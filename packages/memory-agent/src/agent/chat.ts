@@ -125,6 +125,7 @@ import {
 import { contextUsageHook, contextView, lastContextUsageEffect } from "./context-usage.ts";
 import { endedTasks, orchestratorMessage } from "./orchestrator-message.ts";
 import { ApiUsage, apiUsageHook } from "./api-usage.ts";
+import { stepSummarizer } from "./step-summaries.ts";
 import { TurnSummaries } from "./turn-summaries.ts";
 import {
   failureAnnotations,
@@ -2166,6 +2167,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           toolResultIds: (toolCallIds) => nodes.toolResultIds(sessionId, toolCallIds),
         });
         const window = () => runtime.contextWindow(selection.model);
+        // A run's step summaries are made in the background for as long as the run goes on.
         const compacting = yield* compactionHook({
           sources: compactionSources(sessionId, reportSource !== null ? undefined : project, [
             turn?.text ?? "",
@@ -2174,7 +2176,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ]),
           budget: budgetFor(window()),
           restore,
-        });
+          summarizeSteps: stepSummarizer({
+            services: { active, usageLedger, crypto },
+            rootSessionId: sessionId,
+            selection,
+          }),
+        }).pipe(Effect.provideService(Scope.Scope, modelScope));
         const hooks: ReadonlyArray<RunHook<RunStore | SecureRandom.SecureRandom>> = [
           delivery.hookFor({ projectId, sessionId, runId }),
           ...(reportSource !== null

@@ -1,7 +1,17 @@
 import { isTruthy } from "../truthy.ts";
 import { Semaphore } from "effect";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import { Array as Arr, Cause, Context, Effect, Layer, Option, Schema, Stream } from "effect";
+import {
+  Array as Arr,
+  Cause,
+  Context,
+  Effect,
+  Function as EffectFunction,
+  Layer,
+  Option,
+  Schema,
+  Stream,
+} from "effect";
 import { SecureRandom } from "effect/crypto";
 import { singleAnswer } from "../model/single-call.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
@@ -60,7 +70,8 @@ const summaryFailed =
   (operation: TurnSummaryFailed["operation"]) =>
   <E>(cause: E) =>
     TurnSummaryFailed.make({ operation, cause });
-const inputCharacters = 60_000;
+/** How much of what is summarized the summarizer reads. */
+export const inputCharacters = 60_000;
 const summaryCharacters = 6_000;
 /** How much of each node the summarizer reads. */
 const nodeCharacters = {
@@ -72,8 +83,61 @@ const nodeCharacters = {
   topic: 0,
 } satisfies Record<NodeKind, number>;
 
-const shorten = (text: string, limit: number) =>
+const shortenBody = (text: string, limit: number) =>
   text.length > limit ? `${text.slice(0, limit)}… (${text.length - limit} more characters)` : text;
+/** `text` cut to `limit` characters, saying how many were left out. */
+export const shorten: {
+  (limit: number): (text: string) => string;
+} & typeof shortenBody = EffectFunction.dual(2, shortenBody);
+
+/** The services a summary is asked for and recorded with. */
+export interface SummaryServices {
+  readonly active: ActiveProvider["Service"];
+  readonly usageLedger: ApiUsage["Service"];
+  readonly crypto: SecureRandom.SecureRandom["Service"];
+}
+
+/**
+ * One summary from the selected model at its cheapest published effort, recorded as `purpose`
+ * usage of `rootSessionId`, at most `characters` long.
+ */
+export const cheapSummary = Effect.fnUntraced(function* (request: {
+  readonly services: SummaryServices;
+  readonly rootSessionId: string;
+  readonly purpose: string;
+  readonly selection: ModelSelection;
+  readonly system: string;
+  readonly prompt: string;
+  readonly characters: number;
+}) {
+  const { active, usageLedger, crypto } = request.services;
+  const { services } = yield* active.resolve(request.selection);
+  const cheap = yield* services.models.cheapestEffort(request.selection);
+  const threadId = yield* crypto.uuidV4();
+  const answer = yield* singleAnswer({
+    runtime: services.runtime,
+    selection: cheap,
+    threadId,
+    system: request.system,
+    prompt: request.prompt,
+  }).pipe(
+    Effect.tap(({ usage }) =>
+      recordUsage(usageLedger, {
+        rootSessionId: request.rootSessionId,
+        purpose: request.purpose,
+        provider: cheap.provider,
+        model: cheap.model,
+        threadId,
+        usage,
+      }),
+    ),
+    Effect.timeout(summaryTimeoutMs),
+    Effect.mapError((cause) => TurnSummaryFailed.make({ operation: "model", cause })),
+  );
+  const text = answer.text.trim();
+  if (text.length === 0) return yield* TurnSummaryFailed.make({ operation: "empty-answer" });
+  return text.slice(0, request.characters);
+});
 
 const nodeLine = (node: Node) =>
   `[${node.kind} ${node.id}${node.detail.ok === false ? " failed" : ""}]\n${shorten(node.text, nodeCharacters[node.kind])}`;
@@ -97,37 +161,20 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
     part: readonly Node[],
     selection: ModelSelection,
   ) {
-    const { services } = yield* active.resolve(selection);
-    const cheap = yield* services.models.cheapestEffort(selection);
     const input = part
       .filter((node) => nodeCharacters[node.kind] > 0)
       .map(nodeLine)
       .join("\n\n")
       .slice(0, inputCharacters);
-    const threadId = yield* crypto.uuidV4();
-    const answer = yield* singleAnswer({
-      runtime: services.runtime,
-      selection: cheap,
-      threadId,
+    return yield* cheapSummary({
+      services: { active, usageLedger, crypto },
+      rootSessionId: sessionId,
+      purpose: "summary",
+      selection,
       system: summaryInstructions,
       prompt: `Nodes:\n\n${input}`,
-    }).pipe(
-      Effect.tap(({ usage }) =>
-        recordUsage(usageLedger, {
-          rootSessionId: sessionId,
-          purpose: "summary",
-          provider: cheap.provider,
-          model: cheap.model,
-          threadId,
-          usage,
-        }),
-      ),
-      Effect.timeout(summaryTimeoutMs),
-      Effect.mapError((cause) => TurnSummaryFailed.make({ operation: "model", cause })),
-    );
-    const text = answer.text.trim();
-    if (text.length === 0) return yield* TurnSummaryFailed.make({ operation: "empty-answer" });
-    return text.slice(0, summaryCharacters);
+      characters: summaryCharacters,
+    });
   });
 
   /**

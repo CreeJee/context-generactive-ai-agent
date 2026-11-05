@@ -1,12 +1,21 @@
 import { Function as EffectFunction, pipe } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { Array as EffectArray, HashMap, HashSet, Effect, Option, Ref, Schema } from "effect";
+import {
+  Array as EffectArray,
+  FiberHandle,
+  HashMap,
+  HashSet,
+  Effect,
+  Option,
+  Ref,
+  Schema,
+} from "effect";
 import type { ChatMetadata, ChatMetadataFailed, SummaryBlock } from "../chat-store/metadata.ts";
 import type { StoredMessage } from "../chat-store/schema.ts";
 import { asRunFailed, type RunHook } from "../loop/run.ts";
 import { RunStore } from "../loop/store.ts";
 import type { ModelHandoffFailed } from "./model-handoff.ts";
-import { recentRawUserTurns } from "./compaction-policy.ts";
+import { recentRawSteps, recentRawUserTurns, stepBlockSteps } from "./compaction-policy.ts";
 import {
   consumeColdObservationEffect,
   type ContextUsageFailed,
@@ -14,6 +23,7 @@ import {
 } from "./context-usage.ts";
 import type { CompactResult, CompactionStage } from "./run-state.ts";
 import { isEmptyUserText } from "../messages/empty-user.ts";
+import { logFailure } from "../runtime/logged-failures.ts";
 import type { NodeStoreFailed } from "../memory/nodes.ts";
 
 /** A tool call as a message carries it. */
@@ -658,13 +668,181 @@ const broughtDown = <M extends ConversationMessage>(
     : sending;
 };
 
+/** What a request past `leaveOutAt` is brought down to. */
+const keptOf = (leaveOutAt: number) => Math.floor(leaveOutAt / 2);
+
 /** Past `leaveOutAt`, what is sent is brought down to its latest half (see {@link broughtDown}). */
 const leftOutPast =
   (leaveOutAt: number, recall: Recall) =>
   <M extends ConversationMessage>(sending: Sending<M>): Sending<M> =>
     estimateConversation(sending.sent) > leaveOutAt
-      ? broughtDown(sending, Math.floor(leaveOutAt / 2), recall)
+      ? broughtDown(sending, keptOf(leaveOutAt), recall)
       : sending;
+
+/**
+ * A summary of earlier steps of the run in progress, sent in their place. It covers the step whose
+ * first call is `from` through the one whose first call is `through`. Steps are named by call ids,
+ * so a block finds its steps again as the run grows. Blocks live as long as their run.
+ */
+export interface StepBlock {
+  readonly from: string;
+  readonly through: string;
+  readonly text: string;
+}
+
+/** A run's steps a summary is asked for, each output with where to read it again in full. */
+export interface StepsToSummarize {
+  /** What the run was asked to do. */
+  readonly task: string;
+  readonly messages: ReadonlyArray<ConversationMessage>;
+  /** Where each tool call's output can be read again, by call id. */
+  readonly rereads: ReadonlyMap<string, string>;
+}
+
+/** A step of the run in progress: where its message that calls tools is, and its first call. */
+interface Step {
+  readonly index: number;
+  readonly id: string;
+}
+
+const runSteps = (messages: ReadonlyArray<ConversationMessage>): ReadonlyArray<Step> => {
+  const start = runStart(messages);
+  return EffectArray.getSomes(
+    messages.map((message, index) =>
+      Option.map(
+        Option.liftPredicate(
+          index > start && message.role === "assistant" ? message.toolCalls?.[0]?.id : undefined,
+          isTruthy,
+        ),
+        (id) => ({ index, id }),
+      ),
+    ),
+  );
+};
+
+/** A block and the positions of its first and last step among the run's steps. */
+interface PlacedSteps {
+  readonly block: StepBlock;
+  readonly first: number;
+  readonly last: number;
+}
+
+/**
+ * The blocks that line up with the run's steps: the first starts at the run's first step, each
+ * other right after the one before it, and a step is left after the last.
+ */
+const placedSteps = (
+  steps: ReadonlyArray<Step>,
+  blocks: ReadonlyArray<StepBlock>,
+): ReadonlyArray<PlacedSteps> => {
+  const position = (id: string) => steps.findIndex((step) => step.id === id);
+  const placed = blocks.map((block) => ({
+    block,
+    first: position(block.from),
+    last: position(block.through),
+  }));
+  return EffectArray.takeWhile(
+    placed,
+    ({ first, last }, index) =>
+      first === (index === 0 ? 0 : (placed[index - 1]?.last ?? -1) + 1) &&
+      last >= first &&
+      last + 1 < steps.length,
+  );
+};
+
+const stepSummaryMessage = ({ block, first, last }: PlacedSteps): CompactionMessage => ({
+  role: "assistant",
+  content: `[Summary of steps ${first + 1}-${last + 1} of this run, written afterwards. The steps were left out to save context. This summary is a lead, not evidence: reread an output it cites before relying on it.]\n\n${block.text}`,
+});
+
+/**
+ * The run's earlier steps sent as their summaries. A call and its result go together, so no result
+ * is sent without its call. A block that no longer lines up is not sent, nor any after it.
+ */
+const stepsSummarized =
+  (blocks: ReadonlyArray<StepBlock>) =>
+  <M extends ConversationMessage>(sending: Sending<M>): Sending<M> => {
+    const steps = runSteps(sending.sent);
+    const placed = placedSteps(steps, blocks);
+    return Option.match(
+      Option.all({
+        first: EffectArray.head(steps),
+        after: Option.flatMap(EffectArray.last(placed), ({ last }) =>
+          EffectArray.get(steps, last + 1),
+        ),
+      }),
+      {
+        onNone: () => sending,
+        onSome: ({ first, after }) => ({
+          sent: [
+            ...sending.sent.slice(0, first.index),
+            ...placed.map(stepSummaryMessage),
+            ...sending.sent.slice(after.index),
+          ],
+          stage: sending.stage === "leave-out" ? "leave-out" : "summarize",
+        }),
+      },
+    );
+  };
+
+/** The run's steps a summary is due for (see {@link dueSteps}). */
+export interface DueSteps {
+  readonly from: string;
+  readonly through: string;
+  readonly task: string;
+  readonly messages: ReadonlyArray<ConversationMessage>;
+}
+
+/**
+ * The next {@link stepBlockSteps} steps of the run in progress to summarize. They are due once the
+ * steps no block covers hold more than `kept` tokens, the size a request past `leaveOutAt` is
+ * brought down to, and the latest {@link recentRawSteps} would still be sent as they are. Clearing
+ * outputs cannot make a long run small: each step still sends its call and its pointer.
+ */
+export const dueSteps = ({
+  messages,
+  blocks,
+  kept,
+}: {
+  readonly messages: ReadonlyArray<ConversationMessage>;
+  readonly blocks: ReadonlyArray<StepBlock>;
+  readonly kept: number;
+}): Option.Option<DueSteps> =>
+  Option.gen(function* () {
+    const steps = runSteps(messages);
+    const placed = placedSteps(steps, blocks);
+    // Blocks that no longer line up are not built on.
+    yield* Option.liftPredicate(placed, (lined) => lined.length === blocks.length);
+    const next = (placed.at(-1)?.last ?? -1) + 1;
+    const first = yield* EffectArray.get(steps, next);
+    const last = yield* EffectArray.get(steps, next + stepBlockSteps - 1);
+    const after = yield* EffectArray.get(steps, next + stepBlockSteps);
+    yield* EffectArray.get(steps, next + stepBlockSteps + recentRawSteps - 1);
+    yield* Option.liftPredicate(
+      estimateConversation(messages.slice(first.index)),
+      (tokens) => tokens > kept,
+    );
+    return {
+      from: first.id,
+      through: last.id,
+      task: Option.match(EffectArray.get(messages, runStart(messages)), {
+        onNone: () => "",
+        onSome: messageText,
+      }),
+      messages: messages.slice(first.index, after.index),
+    };
+  });
+
+/** Where each tool output of `messages` can be read again, none when one of them cannot. */
+const rereadsOf = (messages: ReadonlyArray<ConversationMessage>, recall: Recall) =>
+  Option.map(
+    Option.all(
+      answeredToolCalls(messages).map((id) =>
+        Option.map(recall.fullResult(id), (where) => [id, where] as const),
+      ),
+    ),
+    (entries): ReadonlyMap<string, string> => new Map(entries),
+  );
 
 /**
  * Do not perturb an intact prefix with retrieval. Once this request did omit original content, an
@@ -711,8 +889,10 @@ export const compactEffect = Effect.fnUntraced(function* <M extends Conversation
   readonly sources: CompactionSources;
   readonly budget: Budget;
   readonly early?: boolean;
+  /** Summaries of the run's earlier steps, sent in their place. */
+  readonly steps?: ReadonlyArray<StepBlock>;
 }): Effect.fn.Return<Compacted<M>, CompactionFailed> {
-  const { messages, state, sources, budget, early = false } = options;
+  const { messages, state, sources, budget, early = false, steps = [] } = options;
   // A record for a longer conversation was made for another one.
   const manual = state.manual.clearedThrough <= messages.length ? state.manual : noManualCompaction;
   const { toolResultId, nodeText } = yield* memoryLookups(sources, messages, state.blocks);
@@ -748,6 +928,7 @@ export const compactEffect = Effect.fnUntraced(function* <M extends Conversation
         : undefined,
       recall.dropped,
     ),
+    stepsSummarized(steps),
     paired,
     leftOutPast(budget.leaveOutAt, recall),
   );
@@ -925,11 +1106,13 @@ export const requestHistory = Effect.fnUntraced(function* <M extends Conversatio
   readonly restored: ReadonlyArray<M | CompactionMessage> | null;
   readonly sources: CompactionSources;
   readonly budget: Budget;
+  /** Summaries of the run's earlier steps (see {@link compactEffect}). */
+  readonly steps?: ReadonlyArray<StepBlock>;
 }): Effect.fn.Return<
   { readonly messages: ReadonlyArray<M | CompactionMessage>; readonly stage: CompactionStage },
   CompactionFailed
 > {
-  const { metadata, threadId, messages, restored, sources, budget } = options;
+  const { metadata, threadId, messages, restored, sources, budget, steps = [] } = options;
   const state = yield* compactionStateEffect({ metadata, threadId });
   const coldId = yield* pendingColdObservationEffect({ metadata, threadId }).pipe(
     Effect.mapError(metadataFailed("read-cold")),
@@ -957,6 +1140,7 @@ export const requestHistory = Effect.fnUntraced(function* <M extends Conversatio
             leaveOutAt: Math.max(1, budget.leaveOutAt - estimateTokens(restoredContext)),
           },
     early: coldId !== null,
+    steps,
   });
   if (coldId !== null)
     yield* consumeColdObservationEffect({ metadata, threadId, observationId: coldId }).pipe(
@@ -988,6 +1172,10 @@ export const requestHistory = Effect.fnUntraced(function* <M extends Conversatio
  * Our estimate counts the messages alone. Once a step's usage comes back, what the provider counted
  * beyond it holds the later steps of the run under `budget.inputCeiling`; the run's first step has
  * no count yet and goes by the estimate.
+ *
+ * A long run's earlier steps are summarized in the background, one block at a time, once they are
+ * due ({@link dueSteps}); the request that finds them due goes on without waiting, and the requests
+ * after the summary send it in their place. The blocks end with the run's scope.
  */
 export const compactionHook = Effect.fnUntraced(function* (options: {
   readonly sources: CompactionSources;
@@ -996,12 +1184,72 @@ export const compactionHook = Effect.fnUntraced(function* (options: {
   readonly restore: (
     messages: ReadonlyArray<StoredMessage>,
   ) => Effect.Effect<ReadonlyArray<StoredMessage> | null, ModelHandoffFailed>;
+  /**
+   * Summarizes a run's earlier steps, none when it could not. Without it, or once it could not, the
+   * run's steps are only cleared.
+   */
+  readonly summarizeSteps?: (steps: StepsToSummarize) => Effect.Effect<Option.Option<string>>;
 }) {
   const stage = yield* Ref.make<CompactionStage>("none");
   /** Our estimate of the messages the latest request sent. */
   const sentEstimate = yield* Ref.make(Option.none<number>());
   /** What the provider counted of the latest request it reported beyond {@link sentEstimate}. */
   const overhead = yield* Ref.make(Option.none<number>());
+  const stepBlocks = yield* Ref.make<ReadonlyArray<StepBlock>>([]);
+  /** Set once a summary could not be made: asking again would likely fail again, every request. */
+  const stepsStopped = yield* Ref.make(false);
+  const summarizing = yield* FiberHandle.make<void, never>();
+
+  /** The block for `due`, once every output in it can be read again. */
+  const stepBlock = (
+    summarize: (steps: StepsToSummarize) => Effect.Effect<Option.Option<string>>,
+    due: DueSteps,
+  ) =>
+    Effect.gen(function* () {
+      const { toolResultId } = yield* memoryLookups(options.sources, due.messages, []);
+      yield* Option.match(rereadsOf(due.messages, recallOf(options.sources, toolResultId)), {
+        // An output nothing can read again is not summarized away; it is due again once it can be.
+        onNone: () => Effect.void,
+        onSome: (rereads) =>
+          Effect.flatMap(
+            summarize({ task: due.task, messages: due.messages, rereads }),
+            Option.match({
+              onNone: () => Ref.set(stepsStopped, true),
+              onSome: (text) =>
+                Ref.update(
+                  stepBlocks,
+                  EffectArray.append({ from: due.from, through: due.through, text }),
+                ),
+            }),
+          ),
+      });
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.andThen(logFailure("Step summaries stopped")(error), Ref.set(stepsStopped, true)),
+      ),
+    );
+
+  /** Starts the block that is due, unless one is being made. */
+  const summarizeDue = (
+    messages: ReadonlyArray<ConversationMessage>,
+    blocks: ReadonlyArray<StepBlock>,
+    budget: Budget,
+  ) =>
+    Option.match(
+      Option.all({
+        summarize: Option.fromNullishOr(options.summarizeSteps),
+        due: dueSteps({ messages, blocks, kept: keptOf(budget.leaveOutAt) }),
+      }),
+      {
+        onNone: () => Effect.void,
+        onSome: ({ summarize, due }) =>
+          Effect.when(
+            FiberHandle.run(summarizing, stepBlock(summarize, due), { onlyIfMissing: true }),
+            Effect.map(Ref.get(stepsStopped), (stopped) => !stopped),
+          ).pipe(Effect.asVoid),
+      },
+    );
+
   const hook: RunHook<RunStore> = {
     request: ({ threadId }, request) =>
       Effect.gen(function* () {
@@ -1015,19 +1263,23 @@ export const compactionHook = Effect.fnUntraced(function* (options: {
             }),
           ),
         );
+        const budget = Option.match(yield* Ref.get(overhead), {
+          onNone: () => options.budget,
+          onSome: (tokens) => withOverhead(options.budget, tokens),
+        });
+        const steps = yield* Ref.get(stepBlocks);
         const sent = yield* requestHistory({
           metadata: store.chatMetadata,
           threadId,
           messages: request.history,
           restored,
           sources: options.sources,
-          budget: Option.match(yield* Ref.get(overhead), {
-            onNone: () => options.budget,
-            onSome: (tokens) => withOverhead(options.budget, tokens),
-          }),
+          budget,
+          steps,
         });
         yield* Ref.set(stage, sent.stage);
         yield* Ref.set(sentEstimate, Option.some(estimateConversation(sent.messages)));
+        yield* summarizeDue(request.history, steps, budget);
         return { ...request, history: sent.messages };
       }).pipe(Effect.mapError(asRunFailed)),
     // A response that reported no input count keeps the overhead the one before it measured.
