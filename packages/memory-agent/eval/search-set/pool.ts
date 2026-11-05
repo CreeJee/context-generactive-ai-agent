@@ -15,14 +15,14 @@ import { nodeSeqs } from "./nodes.ts";
 import { readyAnalyzer } from "./terms.ts";
 
 /** Ids kept per item and run: the judge pools the top 20, scores read the top 20. */
-const keptIds = 30;
+export const keptIds = 30;
 /** What the app search is asked for: more than kept, since later nodes are dropped. */
 const appLimit = 40;
 /** Per-channel depth asked of the native read; the vector channel is capped by the read. */
-const channelDepth = 40;
+export const channelDepth = 40;
 
 /** The lists' ids in turns, own project first: the app's merge of text and morph ranks. */
-const alternate = (lists: ReadonlyArray<ReadonlyArray<string>>) =>
+export const alternate = (lists: ReadonlyArray<ReadonlyArray<string>>) =>
   Arr.makeBy(Math.max(0, ...lists.map((list) => list.length)), (rank) =>
     lists.flatMap((list) => list.slice(rank, rank + 1)),
   ).flat();

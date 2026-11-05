@@ -18,6 +18,7 @@ import { StorageRoot } from "../src/config/storage-root.ts";
 import { MorphAnalyzer } from "../src/memory/morph/analyzer.ts";
 import { searchTuning, type SearchTuning } from "../src/memory/search.ts";
 import { copyDatabase, copyLayer } from "./copy-storage.ts";
+import { ftsRuns } from "./search-set/fts.ts";
 import { agreement, judgeCheck, judgePools } from "./search-set/judge.ts";
 import { EvalModel } from "./search-set/model.ts";
 import { searchRuns } from "./search-set/pool.ts";
@@ -103,6 +104,11 @@ const terms = Command.make("terms", { copy }, ({ copy }) => writeTerms(copy)).pi
   Command.provide(({ copy }) => MorphAnalyzer.kiwi.pipe(Layer.provide(StorageRoot.layer(copy)))),
 );
 
+const fts = Command.make("fts", { copy }, ({ copy }) => ftsRuns(copy)).pipe(
+  Command.withDescription("the native read's FTS5 statements as runs, timed on the app's SQLite"),
+  Command.provide(({ copy }) => copyDatabase(copy)),
+);
+
 const judge = Command.make(
   "judge",
   {
@@ -166,7 +172,7 @@ const score = Command.make(
 
 const searchSet = Command.make("search-set").pipe(
   Command.withDescription("the memory search evaluation set"),
-  Command.withSubcommands([recorded, rounds, pool, appRun, terms, judge, check, agree, score]),
+  Command.withSubcommands([recorded, rounds, pool, appRun, terms, fts, judge, check, agree, score]),
 );
 
 Command.run(searchSet, { version: "1.0.0" }).pipe(

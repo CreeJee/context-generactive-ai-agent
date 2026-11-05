@@ -114,6 +114,7 @@ export const QueryTerms = Schema.Struct({
   morph: Schema.Array(Schema.String),
   morphAll: Schema.Array(Schema.String),
 });
+export type QueryTerms = typeof QueryTerms.Type;
 
 /** A JSON lines file and the schema of its rows. */
 export interface RowFile<
