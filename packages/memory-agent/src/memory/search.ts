@@ -212,6 +212,13 @@ function keepTermsBody(terms: readonly string[], max: number): string[] {
         .map(({ term }) => term);
 }
 
+/** A text's morph search terms from its analyzer tokens: distinct, non-empty, at most the cap. */
+export const morphSearchTerms = (tokens: readonly string[]) =>
+  keepTerms(
+    EffectArray.dedupe(tokens).filter((term) => term.length > 0),
+    maxSearchTerms.morph,
+  );
+
 /** Splits a question into search terms; trigram FTS needs 3+ characters, shorter terms use LIKE. */
 export function searchTerms(query: string) {
   const terms = EffectArray.dedupe(
@@ -373,7 +380,15 @@ const make = (tuning: SearchTuning) =>
       const { result } = yield* vectors.backend.read(input);
       // Where the read's time went, kept on a failed read too: the stage it stopped in is timed
       // up to the failure.
+      // A failed read's outcome and the stage it stopped in, as one flag such as
+      // `failure.budget-exceeded.morph`: span attributes keep only numbers and flags. First, so a
+      // capped attribute list keeps it.
+      const failure =
+        result.kind === "success"
+          ? {}
+          : { [`failure.${result.kind}.${result.failedStage ?? "before-read"}`]: true };
       yield* Effect.annotateCurrentSpan({
+        ...failure,
         kind: result.kind,
         allowedProjects: input.allowedProjects.length,
         shortTerms: input.shortTerms.length,
@@ -466,10 +481,7 @@ const make = (tuning: SearchTuning) =>
           return yield* MorphAnalysisFailed.make({ reason: "not_ready" });
         }
         const [tokens = []] = yield* analyzer.terms([input.query]);
-        return keepTerms(
-          EffectArray.dedupe(tokens).filter((term) => term.length > 0),
-          maxSearchTerms.morph,
-        );
+        return morphSearchTerms(tokens);
       }).pipe(Effect.option);
       const terms = Option.getOrElse(analyzed, (): ReadonlyArray<string> => []);
       const grouped = searchTerms(input.query);
