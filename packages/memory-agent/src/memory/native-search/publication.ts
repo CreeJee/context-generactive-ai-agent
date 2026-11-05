@@ -1,5 +1,33 @@
-import { Data, Effect, Exit, Ref, Schema, Scope, Semaphore } from "effect";
+import {
+  Array as EffectArray,
+  Cause,
+  Data,
+  Effect,
+  Exit,
+  Option,
+  Ref,
+  Schema,
+  Scope,
+  Semaphore,
+} from "effect";
+import { failureAnnotations, failureTags } from "../../runtime/logged-failures.ts";
 import type { ReadAdmission } from "./client.ts";
+
+const isTagged = Schema.is(Schema.Struct({ _tag: Schema.String }));
+
+/**
+ * The failure that poisoned a gate, by tag and cause chain only: causes can hold SQL or paths.
+ * A failure without a tag (a defect, an interruption) is named by the cause's tags.
+ */
+const poisonAnnotations = (cause: Cause.Cause<unknown>) =>
+  EffectArray.findFirst(cause.reasons, Cause.isFailReason).pipe(
+    Option.map((reason) => reason.error),
+    Option.filter(isTagged),
+    Option.match({
+      onSome: failureAnnotations,
+      onNone: () => ({ error: failureTags(cause) }),
+    }),
+  );
 
 export class PublicationFailed extends Schema.TaggedError<
   PublicationFailed,
@@ -61,7 +89,14 @@ export const makePublication = Effect.fn("NativePublication.make")(function* (ep
               Ref.set<PublicationState>(
                 state,
                 PublicationState.poisoned({ generation: before.generation }),
-              ).pipe(Effect.andThen(Effect.failCause(cause))),
+              ).pipe(
+                // Every later read and mutation fails with `poisoned` until the owner is opened
+                // again, so the failure that started it is logged here, once.
+                Effect.andThen(
+                  Effect.logWarning("Vector index publication poisoned", poisonAnnotations(cause)),
+                ),
+                Effect.andThen(Effect.failCause(cause)),
+              ),
             onSuccess: (value) =>
               Ref.set<PublicationState>(
                 state,

@@ -1,4 +1,4 @@
-import { Deferred, Effect, Fiber, Option, Schema } from "effect";
+import { Deferred, Effect, Fiber, Logger, Option, Schema } from "effect";
 import { expect, it } from "vite-plus/test";
 import { makePublication, PublicationFailed, PublicationState } from "./publication.ts";
 import { ReadAdmission } from "./client.ts";
@@ -133,3 +133,34 @@ it("holds mutation until actual snapshot pin ack, advances generation and poison
       }),
     ).pipe(Effect.timeout("2 seconds")),
   ));
+
+class FlushFailed extends Schema.TaggedError<FlushFailed, { readonly brand: unique symbol }>()(
+  "FlushFailed",
+  { cause: Schema.optional(Schema.Defect()) },
+) {}
+
+it("logs the failure that poisons the gate once, by its tag and cause chain", () => {
+  const logs: Array<{ readonly level: string; readonly message: unknown }> = [];
+  const capture = Logger.make((log) => {
+    logs.push(Logger.formatStructured.log(log));
+  });
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      const publication = yield* makePublication("logged");
+      yield* Effect.flip(
+        publication.withMutation(Effect.fail(FlushFailed.make({ cause: SaveFailed.make() }))),
+      );
+      yield* Effect.flip(publication.withMutation(Effect.void));
+      expect(logs).toEqual([
+        {
+          ...logs[0],
+          level: "WARN",
+          message: [
+            "Vector index publication poisoned",
+            { error: "FlushFailed", cause: "SaveFailed" },
+          ],
+        },
+      ]);
+    }).pipe(Effect.provideService(Logger.CurrentLoggers, new Set([capture]))),
+  );
+});

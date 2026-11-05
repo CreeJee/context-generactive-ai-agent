@@ -51,7 +51,7 @@
 - 저장된 인덱스의 dimensions/bits가 setup과 다를 때 `recover !== true`이면 `index-failed`다. 재구축은 명시적 호스트 recovery로만 한다. 조용히 빈 owner로 바꾸지 않는다(`needsReset` 보고).
 - save는 `index.tvim.tmp`에 쓴 뒤 `index.tvim`으로 rename한다. 인덱스는 GC가 아니라 교체될 때나 worker Scope가 닫힐 때 `close`된다. 읽기 세션은 인덱스보다 먼저 닫힌다.
 - `TransferredVector`는 버퍼를 복사하지 않고 transfer한다. 호스트 명령은 소유한 복사본을 실어 보낸다.
-- Publication: 모델/임베딩 작업은 `withMutation` 밖에서 해야 한다. `withMutation`은 gate permit 1개를 잡고 uninterruptible로 돈다. 실패하면 상태가 `poisoned`가 되고, 성공하면 generation이 +1 된다. poisoned 게이트는 명시적 owner recovery가 새 gate/epoch를 만들기 전까지 읽을 수 없다.
+- Publication: 모델/임베딩 작업은 `withMutation` 밖에서 해야 한다. `withMutation`은 gate permit 1개를 잡고 uninterruptible로 돈다. 실패하면 상태가 `poisoned`가 되고, 그 실패를 태그와 cause 사슬로만 warn 로그(`Vector index publication poisoned`)에 한 번 남긴다. 성공하면 generation이 +1 된다. poisoned 게이트는 명시적 owner recovery가 새 gate/epoch를 만들기 전까지 읽을 수 없다.
 - `admitSnapshot`은 native 스냅샷 pin 확인 동안에만 gate를 잡는다. 큐 진입 동안이나 검색 전체 동안은 잡지 않는다. `read`는 handle의 epoch가 publication epoch와 다르면 `owner-mismatch`로 실패한다. `mapAdmissionError`는 게이트 자신의 admission 오류만 바꾼다.
 - `nativeReadInputLogicalBytes`는 문자열을 스캔하기 전에 항목당 고정 오버헤드를 먼저 부과한다. 빈 항목으로 무한 배열을 숨기지 못하게 하려는 것이다.
 - `PublishedGeneration.generation`은 canonical 비음수 10진 문자열이다. 런타임 간 정수 정밀도 손실을 피하기 위해서다.
