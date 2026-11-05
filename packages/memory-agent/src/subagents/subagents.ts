@@ -27,11 +27,12 @@ import {
 import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
 import { ApiUsage, apiUsageHook } from "../agent/api-usage.ts";
 import {
-  type Budget,
   budgetFor,
+  clearedNotice,
+  compactionHook,
+  type CompactionSources,
   type ConversationMessage,
   type LeaveOutPointers,
-  leftOutWithin,
   messageText,
 } from "../agent/compaction.ts";
 import type { JsonValue } from "../json.ts";
@@ -170,78 +171,44 @@ const ChildResultInput = Schema.Struct({
 });
 const childResultPageLength = 4_000;
 
-const isText = Schema.is(Schema.String);
-
-/** Model-only child history reduction; the child's stored transcript remains unchanged. */
-export const compactChildToolResults: {
-  (
-    savedCallIds: HashSet.HashSet<string>,
-  ): <M extends ConversationMessage>(messages: ReadonlyArray<M>) => ReadonlyArray<M>;
-  <M extends ConversationMessage>(
-    messages: ReadonlyArray<M>,
-    savedCallIds: HashSet.HashSet<string>,
-  ): ReadonlyArray<M>;
-} = EffectFunction.dual(2, compactChildToolResultsBody);
-function compactChildToolResultsBody<M extends ConversationMessage>(
-  messages: ReadonlyArray<M>,
-  savedCallIds: HashSet.HashSet<string>,
-): ReadonlyArray<M> {
-  const answered = messages
-    .map((message) => message.role === "assistant" && (message.toolCalls ?? []).length === 0)
-    .lastIndexOf(true);
-  const pointer = (message: M, index: number) =>
-    Option.gen(function* () {
-      const toolCallId = yield* Option.filter(
-        Option.fromNullishOr(message.role === "tool" ? message.toolCallId : undefined),
-        (id) => id.length > 0 && HashSet.has(savedCallIds, id),
-      );
-      const content: string = yield* Option.filter(
-        Option.liftPredicate(message.content, isText),
-        (text) =>
-          text.length > childResultPageLength && !text.startsWith("[Completed child tool result"),
-      );
-      return index < answered
-        ? `[Completed child tool result saved in this subagent's transcript. toolCallId: ${toolCallId}; ${content.length} characters. Call read_subagent_tool_result with this toolCallId and offset 0 for a bounded page.]`
-        : `[Child tool result preview; full result saved in this subagent's transcript. toolCallId: ${toolCallId}; ${content.length} characters. Call read_subagent_tool_result before relying on omitted content.]\n${content.slice(0, 2000)}\n… [omitted] …\n${content.slice(-1000)}`;
-    });
-  return messages.map((message, index) =>
-    Option.match(pointer(message, index), {
-      onNone: () => message,
-      onSome: (content) => ({ ...message, content }),
-    }),
-  );
-}
-
 /**
- * What a child's request leaves out stands in for: a saved result is read again from the child's
- * transcript. One already a pointer stays as it is, and a result not saved yet stays whole.
+ * Where a child's history is kept: its saved transcript, not memory. A saved tool output is read
+ * again by its call id; one not saved yet has nowhere to be read and stays whole.
  */
-const childPointers = (savedCallIds: HashSet.HashSet<string>): LeaveOutPointers => ({
-  toolResult: (toolCallId, text) =>
-    Option.liftPredicate(
-      `[Child tool result left out to save context; saved in this subagent's transcript. toolCallId: ${toolCallId}. Call read_subagent_tool_result with this toolCallId and offset 0 to read it again.]`,
-      () =>
-        HashSet.has(savedCallIds, toolCallId) && !text.startsWith("[Completed child tool result"),
+const childPointers: LeaveOutPointers = {
+  cleared: (toolCallId) =>
+    Option.map(Option.liftPredicate(toolCallId, isTruthy), (id) =>
+      clearedNotice(
+        `It is saved in this subagent's transcript: call read_subagent_tool_result with toolCallId ${id} and offset 0 to read it again.`,
+      ),
+    ),
+  fullResult: (toolCallId) =>
+    Option.map(
+      Option.liftPredicate(toolCallId, isTruthy),
+      (id) => `read_subagent_tool_result toolCallId ${id}, page by offset`,
     ),
   dropped: (count) =>
     `[${count} earlier messages of this subagent's conversation were left out to save context.]`,
-});
+};
 
 /**
- * What a child's request sends: its long saved results shortened, then, past the budget of the
- * model's window, left out as the main conversation's history is. A child runs the same model on
- * the same window as a conversation; shortening alone let 120 tool results in one run outgrow it.
+ * How a child's saved transcript answers compaction, which then works on a child's request as on
+ * the conversation's (decisions.md 2026-11-05). A recorded output's id is its own call id. A child
+ * has no summaries.
  */
-export const childRequestHistory = <M extends ConversationMessage>(options: {
-  readonly messages: ReadonlyArray<M>;
-  readonly savedCallIds: HashSet.HashSet<string>;
-  readonly budget: Budget;
-}) =>
-  leftOutWithin({
-    messages: compactChildToolResults(options.messages, options.savedCallIds),
-    budget: options.budget,
-    pointers: childPointers(options.savedCallIds),
-  });
+export const childCompactionSources = <E extends { readonly _tag: string }>(
+  saved: Effect.Effect<ReadonlyArray<ConversationMessage>, E>,
+): CompactionSources => ({
+  toolResultIds: (toolCallIds) =>
+    Effect.map(saved, (messages) => {
+      const recorded = savedToolCallIds(messages);
+      return new Map(
+        toolCallIds.filter((id) => HashSet.has(recorded, id)).map((id) => [id, id] as const),
+      );
+    }),
+  nodeTexts: () => Effect.succeed(new Map<string, string>()),
+  pointers: childPointers,
+});
 
 const FileArtifactResult = Schema.Struct({ path: Schema.String, sha256: Schema.String });
 /** The tools whose result names the file they wrote. */
@@ -810,27 +777,20 @@ const make = Effect.gen(function* () {
             Effect.map(Ref.get(started), HashSet.has(call.id)),
           ).pipe(Effect.asVoid, Effect.mapError(asRunFailed)),
       };
-      const childContextHook: RunHook = {
-        request: (_scope, request) =>
-          runStore.thread(threadId).pipe(
-            Effect.map((saved) => ({
-              ...request,
-              history: childRequestHistory({
-                messages: request.history,
-                savedCallIds: savedToolCallIds(saved),
-                budget: budgetFor(runtime.contextWindow(binding.selection.model)),
-              }),
-            })),
-            Effect.mapError(asRunFailed),
-          ),
-      };
-      const hooks: ReadonlyArray<RunHook> = [
+      // The conversation's compaction, on the same model's window: only where a left-out output is
+      // read again differs. A child has no model handoff of its own.
+      const compacting = yield* compactionHook({
+        sources: childCompactionSources(runStore.thread(threadId)),
+        budget: budgetFor(runtime.contextWindow(binding.selection.model)),
+        restore: () => Effect.succeed(null),
+      });
+      const hooks: ReadonlyArray<RunHook<RunStore>> = [
         yield* Effect.provideContext(projectInstructionsHook(binding.project.root), platform),
         // Before the gate, so a refused repeat is never reviewed or relayed to the user.
         yield* repeatGuardHook,
         relayGateHook,
         traceHook,
-        childContextHook,
+        compacting.hook,
         apiUsageHook(usageLedger, {
           rootSessionId: binding.sessionId,
           purpose: "subagent",

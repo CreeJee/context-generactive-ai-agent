@@ -118,11 +118,16 @@ export const estimateConversation = (messages: ReadonlyArray<ConversationMessage
 
 const clearedPrefix = "[Tool output cleared to save context.";
 
-/** What a cleared tool result says instead of its output. */
+/** What a cleared tool result says instead of its output, ending with where to read it again. */
+export const clearedNotice = (whereToRead: string) => `${clearedPrefix} ${whereToRead}]`;
+
+/** What a cleared tool result of the conversation says: it is a memory node. */
 export function clearedOutput(nodeId: string | null) {
-  return isTruthy(nodeId)
-    ? `${clearedPrefix} It is kept in memory as node ${nodeId}: call read_evidence with that id to read it again.]`
-    : `${clearedPrefix} It is kept in memory: find it with find_memory, then read it with read_evidence.]`;
+  return clearedNotice(
+    isTruthy(nodeId)
+      ? `It is kept in memory as node ${nodeId}: call read_evidence with that id to read it again.`
+      : "It is kept in memory: find it with find_memory, then read it with read_evidence.",
+  );
 }
 
 /** Tool results the model is sent in full. */
@@ -140,12 +145,12 @@ const wholeToolOutputs = (messages: ReadonlyArray<ConversationMessage>) =>
  * usually about what that run just read, and re-reading it would cost a tool round trip. That
  * turn is cleared once the following run has answered, so each tool result changes exactly once
  * and the request prefix before it stays cacheable. An explicit `/compact` clears everything
- * answered. Each cleared result names its memory node, so the model can read it again. Null when
- * there is nothing to clear.
+ * answered. Each cleared result says where it can be read again (`clearedAs`); one with nowhere
+ * stays whole. Null when there is nothing to clear.
  */
 function clearAnswered<M extends ConversationMessage>(
   messages: ReadonlyArray<M>,
-  toolResultId: (toolCallId: string) => string | null,
+  clearedAs: (toolCallId: string) => Option.Option<string>,
   keepLatestAnswered: boolean,
 ): ReadonlyArray<M> | null {
   const answered = messages.findLastIndex(
@@ -158,7 +163,7 @@ function clearAnswered<M extends ConversationMessage>(
   const next = messages.map((message, index) => {
     const content =
       message.role === "tool" && index < end && isTruthy(message.toolCallId)
-        ? clearedOutput(toolResultId(message.toolCallId))
+        ? Option.getOrElse(clearedAs(message.toolCallId), () => message.content)
         : message.content;
     return content === message.content ? message : { ...message, content };
   });
@@ -270,12 +275,15 @@ export const compactionStateEffect = Effect.fnUntraced(function* (options: {
   };
 });
 
-/** How the session's memory answers what compaction asks. */
+/** How the session's memory, or another place a history is kept, answers what compaction asks. */
 export interface CompactionSources {
-  /** The first recorded tool_result node id of each of these tool calls that has one. */
+  /**
+   * The id each of these tool calls' output is recorded under, for those that have one: the first
+   * tool_result node in memory.
+   */
   readonly toolResultIds: (
     toolCallIds: readonly string[],
-  ) => Effect.Effect<ReadonlyMap<string, string>, NodeStoreFailed>;
+  ) => Effect.Effect<ReadonlyMap<string, string>, NodeStoreFailed | { readonly _tag: string }>;
   /** The recorded text of each of these nodes that exists. */
   readonly nodeTexts: (
     ids: readonly string[],
@@ -287,15 +295,17 @@ export interface CompactionSources {
   readonly retrievalAppendix?: (
     sent: ReadonlyArray<ConversationMessage>,
   ) => Effect.Effect<CompactionMessage | null>;
+  /** What stands in for what a request leaves out; memory's ({@link memoryPointers}) by default. */
+  readonly pointers?: LeaveOutPointers;
 }
 
 /** Sources answered from lookups already in memory, as evaluations and fixtures have them. */
 export const lookupSources = (lookups: {
   readonly toolResultId: (toolCallId: string) => string | null;
   readonly nodeText: (id: string) => string | null;
-}): CompactionSources => {
+}) => {
   const found = (ids: readonly string[], lookup: (id: string) => string | null) =>
-    Effect.succeed(
+    Effect.succeed<ReadonlyMap<string, string>>(
       new Map(
         ids.flatMap((id) => {
           const value = lookup(id);
@@ -303,10 +313,11 @@ export const lookupSources = (lookups: {
         }),
       ),
     );
+  // They never fail, so a model handoff's lookup takes them as well.
   return {
-    toolResultIds: (ids) => found(ids, lookups.toolResultId),
-    nodeTexts: (ids) => found(ids, lookups.nodeText),
-  };
+    toolResultIds: (ids: readonly string[]) => found(ids, lookups.toolResultId),
+    nodeTexts: (ids: readonly string[]) => found(ids, lookups.nodeText),
+  } satisfies CompactionSources;
 };
 
 /** The tool calls these messages answer. */
@@ -349,19 +360,49 @@ const droppedMarker = (count: number) =>
   `[${count} earlier messages of this conversation were left out to save context. They are kept in memory: use find_memory, read_evidence and trace_evidence to recall them.]`;
 
 /**
- * What stands in for what a request leaves out: a tool output (given its call id and text), or
- * none when it has nowhere to be read again; and the messages before the run, by their count.
+ * What compaction puts in place of what it leaves out, saying where to read it again. A tool
+ * output is named by the id `CompactionSources.toolResultIds` gave it, null when it has none.
+ * Only these differ between histories; when and what compaction leaves out is the same.
  */
 export interface LeaveOutPointers {
-  readonly toolResult: (toolCallId: string, text: string) => Option.Option<string>;
+  /** A cleared tool output; none keeps it whole, as nothing could read it again. */
+  readonly cleared: (id: string | null) => Option.Option<string>;
+  /** Where a previewed output's header says its full result is; none sends the output whole. */
+  readonly fullResult: (id: string | null) => Option.Option<string>;
+  /** What stands in for `count` messages left out. */
   readonly dropped: (count: number) => string;
 }
 
-/** The conversation's pointers: its tool outputs and messages are memory nodes. */
-const memoryPointers = (toolResultId: (toolCallId: string) => string | null): LeaveOutPointers => ({
-  toolResult: (toolCallId) => Option.some(clearedOutput(toolResultId(toolCallId))),
+/** A session's: its tool outputs and messages are memory nodes. */
+export const memoryPointers: LeaveOutPointers = {
+  cleared: (nodeId) => Option.some(clearedOutput(nodeId)),
+  // Never promise an ID that has not been recorded.
+  fullResult: (nodeId) =>
+    Option.map(
+      Option.liftPredicate(nodeId, isTruthy),
+      (id) => `read_tool_result ID ${id}, page by offset`,
+    ),
   dropped: droppedMarker,
-});
+};
+
+/** The pointers by tool call, once the ids are read. */
+interface Recall {
+  readonly cleared: (toolCallId: string) => Option.Option<string>;
+  readonly fullResult: (toolCallId: string) => Option.Option<string>;
+  readonly dropped: (count: number) => string;
+}
+
+const recallOf = (
+  sources: CompactionSources,
+  toolResultId: (toolCallId: string) => string | null,
+): Recall => {
+  const pointers = sources.pointers ?? memoryPointers;
+  return {
+    cleared: (toolCallId) => pointers.cleared(toolResultId(toolCallId)),
+    fullResult: (toolCallId) => pointers.fullResult(toolResultId(toolCallId)),
+    dropped: pointers.dropped,
+  };
+};
 
 const decodeToolArguments = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
@@ -429,12 +470,12 @@ const summarized =
  * messages before `firstKept` give way to a pointer back to the saved conversation.
  */
 const leftOutEarly =
-  (firstKept: number | undefined) =>
+  (firstKept: number | undefined, dropped: Recall["dropped"]) =>
   <M>(sending: Sending<M>): Sending<M> =>
     firstKept !== undefined && firstKept > 0
       ? {
           sent: [
-            { role: "assistant", content: droppedMarker(firstKept) },
+            { role: "assistant", content: dropped(firstKept) },
             ...sending.sent.slice(firstKept),
           ],
           stage: "leave-out",
@@ -513,7 +554,7 @@ interface Clearable {
  */
 const clearable = (
   messages: ReadonlyArray<ConversationMessage>,
-  pointers: LeaveOutPointers,
+  recall: Recall,
   [from, to]: readonly [number, number],
 ): ReadonlyArray<Clearable> =>
   EffectArray.getSomes(
@@ -523,7 +564,7 @@ const clearable = (
           message.role === "tool" && index >= from && index < to ? message.toolCallId : undefined,
           isTruthy,
         );
-        const pointer = yield* pointers.toolResult(toolCallId, messageText(message));
+        const pointer = yield* recall.cleared(toolCallId);
         const saved = estimateTokens(message) - estimateTokens({ role: "tool", content: pointer });
         return yield* Option.liftPredicate({ index, pointer, saved }, (output) => output.saved > 0);
       }),
@@ -563,28 +604,28 @@ const clearedOldest = <M extends ConversationMessage>(
 const broughtDown = <M extends ConversationMessage>(
   sending: Sending<M>,
   keep: number,
-  pointers: LeaveOutPointers,
+  recall: Recall,
 ): Sending<M> => {
   const over = (messages: ReadonlyArray<ConversationMessage>) =>
     estimateConversation(messages) - keep;
   const start = runStart(sending.sent);
   const before = clearedOldest(
     sending.sent,
-    clearable(sending.sent, pointers, [0, Math.min(start, latestStep(sending.sent))]),
+    clearable(sending.sent, recall, [0, Math.min(start, latestStep(sending.sent))]),
     over(sending.sent),
   );
   const cut = over(before.messages) > 0 ? Math.min(keptFrom(before.messages, keep), start) : 0;
   const kept = before.messages.slice(cut);
   const inRun = clearedOldest(
     kept,
-    clearable(kept, pointers, [start - cut, latestStep(kept)]),
+    clearable(kept, recall, [start - cut, latestStep(kept)]),
     over(kept),
   );
   return before.cleared + cut + inRun.cleared > 0
     ? {
         sent:
           cut > 0
-            ? [{ role: "user", content: pointers.dropped(cut) }, ...inRun.messages]
+            ? [{ role: "user", content: recall.dropped(cut) }, ...inRun.messages]
             : inRun.messages,
         stage: "leave-out",
       }
@@ -593,27 +634,11 @@ const broughtDown = <M extends ConversationMessage>(
 
 /** Past `leaveOutAt`, what is sent is brought down to its latest half (see {@link broughtDown}). */
 const leftOutPast =
-  (leaveOutAt: number, pointers: LeaveOutPointers) =>
+  (leaveOutAt: number, recall: Recall) =>
   <M extends ConversationMessage>(sending: Sending<M>): Sending<M> =>
     estimateConversation(sending.sent) > leaveOutAt
-      ? broughtDown(sending, Math.floor(leaveOutAt / 2), pointers)
+      ? broughtDown(sending, Math.floor(leaveOutAt / 2), recall)
       : sending;
-
-/**
- * A history whose outputs and messages are not memory nodes, such as a subagent's, left out past
- * `budget.leaveOutAt` as the conversation's is, with `pointers` standing in for what it leaves out.
- */
-export const leftOutWithin = <M extends ConversationMessage>(options: {
-  readonly messages: ReadonlyArray<M>;
-  readonly budget: Budget;
-  readonly pointers: LeaveOutPointers;
-}): ReadonlyArray<M | CompactionMessage> =>
-  pipe(
-    { sent: options.messages, stage: "none" } satisfies Sending<M>,
-    leftOutPast(options.budget.leaveOutAt, options.pointers),
-    // Leaving out the oldest messages can split a call from its result.
-    paired,
-  ).sent;
 
 /**
  * Do not perturb an intact prefix with retrieval. Once this request did omit original content, an
@@ -668,10 +693,11 @@ export const compactEffect = Effect.fnUntraced(function* <M extends Conversation
   const turns = userTurns(messages);
   const summaries = linedUp(messages, state.blocks, nodeText);
   const summarizedTurns = summaries.at(-1)?.end ?? 0;
+  const recall = recallOf(sources, toolResultId);
 
   const clearedByHand = clearAnswered(
     messages.slice(0, manual.clearedThrough),
-    toolResultId,
+    recall.cleared,
     false,
   );
   const byHand =
@@ -681,7 +707,7 @@ export const compactEffect = Effect.fnUntraced(function* <M extends Conversation
   // An answered run's tool payload is cleared once the run after it has answered too. This
   // transition happens once; clearAnswered leaves pointers unchanged and never touches the run
   // still in progress.
-  const cleared = clearAnswered(byHand, toolResultId, true);
+  const cleared = clearAnswered(byHand, recall.cleared, true);
   const answeredCleared: Sending<M> = {
     sent: cleared ?? byHand,
     stage: clearedByHand !== null || cleared !== null ? "clear-answered" : "none",
@@ -694,9 +720,10 @@ export const compactEffect = Effect.fnUntraced(function* <M extends Conversation
       early && summarizedTurns === 0 && turns.length > recentRawUserTurns
         ? turns[turns.length - recentRawUserTurns]
         : undefined,
+      recall.dropped,
     ),
     paired,
-    leftOutPast(budget.leaveOutAt, memoryPointers(toolResultId)),
+    leftOutPast(budget.leaveOutAt, recall),
   );
   // Leaving out the oldest messages can split a call from its result.
   const { sent, stage } = paired(yield* withAppendix(sources, prepared));
@@ -822,6 +849,15 @@ function lightweightToolResultsBody<M extends ConversationMessage>(
   messages: ReadonlyArray<M>,
   toolResultId: (toolCallId: string) => string | null,
 ): ReadonlyArray<M> {
+  return previewedResults(messages, toolResultId, memoryPointers);
+}
+
+/** {@link lightweightToolResults}, each preview naming its full result as `pointers` say. */
+function previewedResults<M extends ConversationMessage>(
+  messages: ReadonlyArray<M>,
+  toolResultId: (toolCallId: string) => string | null,
+  pointers: LeaveOutPointers,
+): ReadonlyArray<M> {
   const names = HashMap.fromIterable(
     messages.flatMap((message) =>
       (message.toolCalls ?? []).map((call) => [call.id, call.function.name] as const),
@@ -835,9 +871,8 @@ function lightweightToolResultsBody<M extends ConversationMessage>(
       const content = yield* Option.liftPredicate(message.content, isText);
       const name = yield* Option.filter(HashMap.get(names, toolCallId), Schema.is(PreviewedTool));
       const serialized = JSON.stringify(yield* previews[name](content));
-      // Never promise an ID that has not been recorded.
-      const nodeId = yield* Option.liftPredicate(toolResultId(toolCallId), isTruthy);
-      const text = `[${name} preview; full result: read_tool_result ID ${nodeId}, page by offset. Check omitted entries before relying on them.]\n${serialized}`;
+      const full = yield* pointers.fullResult(toolResultId(toolCallId));
+      const text = `[${name} preview; full result: ${full}. Check omitted entries before relying on them.]\n${serialized}`;
       return yield* Option.liftPredicate(
         text,
         () => serialized.length < content.length && text.length < content.length,
@@ -912,7 +947,7 @@ export const requestHistory = Effect.fnUntraced(function* <M extends Conversatio
     restoredContext === undefined ? compacted.messages : [restoredContext, ...retained];
   const { toolResultId } = yield* memoryLookups(sources, outgoing, []);
   return {
-    messages: lightweightToolResults(outgoing, toolResultId).filter(
+    messages: previewedResults(outgoing, toolResultId, sources.pointers ?? memoryPointers).filter(
       (message) => !isEmptyUserText(message),
     ),
     stage: restored !== null && compacted.stage === "none" ? "summarize" : compacted.stage,
