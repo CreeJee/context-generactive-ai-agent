@@ -7,8 +7,9 @@
  * Pass `auto` as the index to use the copy's `vectors/<sha256(embedder)[:16]>/index.tvim`.
  * Without an index the reads run without a query vector (no candidate/vector stages): the text
  * stage, which is what fails, does not depend on it. With the index a random unit vector stands
- * in for the embedding; the stages' cost does not depend on which vector it is. Morph terms need
- * the Kiwi model, which the copy does not carry, so the morph stage is off.
+ * in for the embedding; the stages' cost does not depend on which vector it is. The morph stage is
+ * off unless `--morph`, which analyses each query with Kiwi from `<db dir>/models` as the app does
+ * (the model is downloaded there when missing).
  *
  * Query groups, the shapes the app searches with:
  * - find: the find_memory queries recorded in the copy's tool calls (limit 12, own project);
@@ -21,11 +22,13 @@
  * Nothing it reads is printed: only counts and times. `--json` writes per-read rows (no text).
  */
 import { DatabaseSync } from "node:sqlite";
-import { Array as Arr, Console, Effect, FileSystem, Option, Random, Schema } from "effect";
+import { Array as Arr, Console, Effect, FileSystem, Layer, Option, Random, Schema } from "effect";
 import { SecureRandom } from "effect/crypto";
 import { addonPath, loadTurbovec, type NativeReadOutput } from "../../turbovec/index.js";
 import { initializeNodeSqlite } from "../src/runtime/node-sqlite-bridge.ts";
-import { searchTerms } from "../src/memory/search.ts";
+import { StorageRoot } from "../src/config/storage-root.ts";
+import { MorphAnalyzer } from "../src/memory/morph/analyzer.ts";
+import { morphSearchTerms, searchTerms } from "../src/memory/search.ts";
 import { nodePlatform } from "../src/runtime/node-platform.ts";
 import { sha256 } from "../src/runtime/synchronous-crypto.ts";
 import { path } from "../src/runtime/synchronous-path.ts";
@@ -54,6 +57,9 @@ const jsonOut = flag("--json");
 const sharedAt = argv.indexOf("--shared-session");
 const sharedSession = sharedAt !== -1;
 if (sharedSession) argv.splice(sharedAt, 1);
+const morphAt = argv.indexOf("--morph");
+const morph = morphAt !== -1;
+if (morph) argv.splice(morphAt, 1);
 const [dbPath, indexArgument] = argv;
 if (dbPath === undefined) {
   await Effect.runPromise(
@@ -178,6 +184,24 @@ const extra: ReadonlyArray<BenchQuery> =
       );
 const queries = [...extra, ...finds, ...interprets, ...recalls];
 
+/** Each query's morph terms, as the app derives them; none without `--morph`. */
+const morphTermsOf: ReadonlyMap<string, readonly string[]> = morph
+  ? await nodePlatform.runPromise(
+      Effect.gen(function* () {
+        const analyzer = yield* MorphAnalyzer;
+        const texts = [...new Set(queries.map((q) => q.query))];
+        const tokens = yield* analyzer.terms(texts);
+        return new Map(texts.map((text, index) => [text, morphSearchTerms(tokens[index] ?? [])]));
+      }).pipe(
+        // A script entry point: the one place the analyzer is provided.
+        // @effect-diagnostics-next-line strictEffectProvide:off
+        Effect.provide(
+          MorphAnalyzer.kiwi.pipe(Layer.provide(StorageRoot.layer(path.dirname(dbPath)))),
+        ),
+      ),
+    )
+  : new Map();
+
 const { VectorIndex, MemoryReadSession, SearchControl } = loadTurbovec();
 initializeNodeSqlite(addonPath);
 const index = indexPath === undefined ? new VectorIndex(384, 4) : VectorIndex.load(indexPath);
@@ -196,6 +220,7 @@ interface Row {
   readonly chars: number;
   readonly trigramTerms: number;
   readonly shortTerms: number;
+  readonly morphTerms: number;
   readonly out: NativeReadOutput;
   readonly wallMs: number;
 }
@@ -203,6 +228,7 @@ const rows: Row[] = [];
 const owner = SecureRandom.uuidV4Unsafe();
 const readOnce = (reader: InstanceType<typeof MemoryReadSession>, q: BenchQuery) => {
   const terms = searchTerms(q.query);
+  const morphTerms = morphTermsOf.get(q.query) ?? [];
   const requestId = SecureRandom.uuidV4Unsafe();
   const control = new SearchControl(SecureRandom.uuidV4Unsafe(), owner, "bench", requestId, 2_000);
   const started = performance.now();
@@ -215,12 +241,12 @@ const readOnce = (reader: InstanceType<typeof MemoryReadSession>, q: BenchQuery)
         query: indexPath === undefined ? undefined : randomUnit(),
         trigramTerms: terms.trigram,
         shortTerms: terms.short,
-        morphTerms: [],
+        morphTerms: [...morphTerms],
         vectorK: Math.min(q.limit * 4, 48),
         textK: q.limit * 2,
         morphK: q.limit * 2,
         textEnabled: true,
-        morphEnabled: false,
+        morphEnabled: morphTerms.length > 0,
         remainingMs: 2_000,
         inputBudgetBytes: 1_048_576,
         outputBudgetBytes: 1_048_576,
@@ -230,7 +256,7 @@ const readOnce = (reader: InstanceType<typeof MemoryReadSession>, q: BenchQuery)
       "bench",
       requestId,
     );
-    return { out, wallMs: performance.now() - started, terms };
+    return { out, wallMs: performance.now() - started, terms, morphTerms };
   } finally {
     control.close();
   }
@@ -243,13 +269,14 @@ for (let round = 0; round < rounds; round++) {
     const reader = shared ?? new MemoryReadSession(dbPath);
     try {
       for (const pass of ["cold", "warm"] as const) {
-        const { out, wallMs, terms } = readOnce(reader, q);
+        const { out, wallMs, terms, morphTerms } = readOnce(reader, q);
         rows.push({
           group: q.group,
           pass,
           chars: q.query.length,
           trigramTerms: terms.trigram.length,
           shortTerms: terms.short.length,
+          morphTerms: morphTerms.length,
           out,
           wallMs,
         });
@@ -280,12 +307,12 @@ const ownNodeCount = await count(
   ownProject,
 );
 await print(
-  `db rows: ${nodeCount} nodes, own project ${ownNodeCount} nodes; index ${indexPath === undefined ? "none" : index.size()} vectors; queries find ${finds.length} interpret ${interprets.length} recall ${recalls.length} extra ${extra.length}; rounds ${rounds}`,
+  `db rows: ${nodeCount} nodes, own project ${ownNodeCount} nodes; index ${indexPath === undefined ? "none" : index.size()} vectors; morph ${morph ? "on" : "off"}; queries find ${finds.length} interpret ${interprets.length} recall ${recalls.length} extra ${extra.length}; rounds ${rounds}`,
 );
 await print(
-  "| group | pass | n | fail (stage) | wall p50/p95 | text p50/p95 | trigram p50/p95 | short sum p50/p95 | short max p95 | short terms p50/max | trigram terms p50/max | candidate+vector p50/p95 | coverage p50/p95 |",
+  "| group | pass | n | fail (stage) | wall p50/p95 | text p50/p95 | trigram p50/p95 | short sum p50/p95 | short max p95 | short terms p50/max | trigram terms p50/max | candidate+vector p50/p95 | morph p50/p95 | morph terms p50/max | coverage p50/p95 |",
 );
-await print("|---|---|---|---|---|---|---|---|---|---|---|---|---|");
+await print("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
 const groups = [...new Set(rows.map((row) => row.group))];
 for (const group of groups)
   for (const pass of ["cold", "warm"] as const) {
@@ -310,7 +337,12 @@ for (const group of groups)
           selected.map((r) => r.trigramTerms),
           0.5,
         ),
-      )}/${Math.max(0, ...selected.map((r) => r.trigramTerms))} | ${stat(selected.map((r) => r.out.candidateMs + r.out.vectorMs))} | ${stat(selected.map((r) => r.out.coverageMs))} |`,
+      )}/${Math.max(0, ...selected.map((r) => r.trigramTerms))} | ${stat(selected.map((r) => r.out.candidateMs + r.out.vectorMs))} | ${stat(selected.map((r) => r.out.morphMs))} | ${fmt(
+        quantile(
+          selected.map((r) => r.morphTerms),
+          0.5,
+        ),
+      )}/${Math.max(0, ...selected.map((r) => r.morphTerms))} | ${stat(selected.map((r) => r.out.coverageMs))} |`,
     );
   }
 if (jsonOut !== undefined) {
@@ -334,6 +366,9 @@ if (jsonOut !== undefined) {
           shortTermMs: row.out.shortTermMs,
           shortTermMaxMs: row.out.shortTermMaxMs,
           shortTermsDone: row.out.shortTermsDone,
+          morphTerms: row.morphTerms,
+          morphMs: row.out.morphMs,
+          textUnavailable: row.out.textUnavailable,
           queueMs: row.out.queueMs,
           coverageMs: row.out.coverageMs,
         }),

@@ -6,7 +6,7 @@
 
 - 사본: 사용자가 `~/.context-generactive-agent`의 `agent.db`(`.backup`), `vectors/`, `models/`를 `/tmp/cga-bench`에 복사했다. 샌드박스가 `/tmp`에서 SQLite `-shm` 파일을 만들지 못해 `bench-copy-stage` 스킬로 git이 무시하는 `node_modules/.vp-tmp/cga-bench`에 옮겨 쓴다. 사본과 결과 파일(`*.jsonl`)은 커밋하지 않는다. 작업이 끝나면 두 사본을 지운다.
 - 규모: 노드 276,162개, 벡터 63,671개(현재 embedder), 측정 프로젝트(대화 프로젝트) 노드 26,762개, 기기 M1 Pro.
-- 지연: `eval/native-read-bench.ts`(`native-read-bench` 스킬). 네이티브 read 하나를 앱과 같은 입력으로 돌린다. 2초 예산, `textK`=limit×2, `vectorK`=min(limit×4, 48). 벡터는 무작위 단위 벡터(단계 비용은 벡터 값과 무관), morph는 꺼 둔다(Kiwi 없이 재는 도구라서).
+- 지연: `eval/native-read-bench.ts`(`native-read-bench` 스킬). 네이티브 read 하나를 앱과 같은 입력으로 돌린다. 2초 예산, `textK`=limit×2, `vectorK`=min(limit×4, 48). 벡터는 무작위 단위 벡터(단계 비용은 벡터 값과 무관). morph는 기본으로 꺼 두고, `--morph`를 주면 DB 옆 `models/`의 Kiwi로 질의마다 앱과 같은 형태소 검색어를 만들어 켠다(2026-11-05부터).
   - find: 기록된 `find_memory` 질의 60개(최근, 중복 제거), 물은 프로젝트 하나만, limit 12.
   - interpret: 사용자 발언 앞 500자 40개, limit 10.
   - recall: 같은 세션의 사용자 발언 세 개를 이은 6000자 이하 질의 29개, limit 16.
@@ -181,3 +181,24 @@ S3 세트를 같은 방법으로 다시 채점했다(`relevance-eval score --lab
 
 - `relevance-eval score --dump <파일>`이 행이 끝날 때마다 덤프에 덧붙인다(전에는 끝에 한 번 써서 진행을 관찰할 수 없고 죽으면 전부 잃었다). `--resume`은 덤프에 이미 있는 항목을 건너뛰고 이어서 채점한다. 요약 표는 항상 덤프 전체를 읽어 계산한다(마지막 행 우선). 376행 한 번의 채점은 실규모 read로 10분 이상 걸려, 한 번의 run_skill 시간 제한을 넘기면 같은 인자에 `--resume`을 얹어 이어 돌린다.
 - 채점은 저장소의 CacheLease를 독점하므로 동시에 둘 이상 돌리면 두 번째가 lease-unavailable로 즉시 실패한다(확인됨). 후보 채점은 하나씩 순서대로 돌린다.
+
+## 앱 실행 중 예산 초과 조사 (2026-11-05)
+
+계기: dev 앱에서 19:53~19:58(KST) 사이 현재 프로젝트 read 19건이 `budget-exceeded`로 실패했다(그 dev 실행의 read 117건 중). 실패한 read의 단계 시간은 후보 50~622ms, text 0.8~1.4초, morph 0.3~0.9초였다. 실패 단계 이름은 span에 남지 않았다(문자열 속성은 버려진다).
+
+같은 실제 DB를 사본 없이 read-only로 쟀다: `agent.db` 6.3GB, 노드 345,576개, 현재 프로젝트 노드 213,761개, 벡터 70,124개, 기기는 같은 M1 Pro(16GB). 최근 `find_memory` 질의 60개에 실패 구간의 질의가 들어 있다. `native-read-bench <db> auto --morph --shared-session`, 단위 ms, cold p50/p95.
+
+| 조건                      | 묶음      | 실패                          | wall      | text     | 후보+벡터 | morph   | coverage |
+| ------------------------- | --------- | ----------------------------- | --------- | -------- | --------- | ------- | -------- |
+| 평소(load avg 약 10)      | find      | 0/60                          | 183/499   | 71/329   | 7/11      | 56/147  | 27/48    |
+| 평소                      | interpret | 0/40                          | 204/1136  | 70/802   | 32/56     | 47/313  | 28/52    |
+| 평소                      | recall    | 1/29 (coverage)               | 614/1681  | 364/1340 | 32/62     | 139/320 | 28/50    |
+| CPU 8코어 부하(`yes` 8개) | find      | 0/60                          | 246/684   | 98/410   | 11/30     | 70/219  | 29/62    |
+| CPU 8코어 부하            | interpret | 0/40                          | 247/1475  | 87/1359  | 37/70     | 68/360  | 29/57    |
+| CPU 8코어 부하            | recall    | 1/29 cold + 1/29 warm (morph) | 1084/1809 | 721/1325 | 47/247    | 176/430 | 35/130   |
+
+- DB 크기와 질의 모양은 원인이 아니다. 3.8GB 사본의 S7 수치(find wall p95 381ms)와 비슷하고, 앱에서 실패한 질의도 여기서는 성공했다.
+- 앱에서 실패한 read의 단계 시간은 평소 벤치의 3~10배였다. CPU 부하만 걸면 1.3~1.5배라서 그만큼은 설명되지 않는다. 다른 8GB 파일을 읽어 파일 캐시를 밀어내 본 실행은 평소와 같았다.
+- 실패 구간에 같은 기계에서 다른 세션이 `pnpm typecheck`, storybook 브라우저 테스트, i18n 추출을 돌렸다(가져온 기록의 도구 호출). 메모리 16GB 기기에서 부팅 뒤 pageout이 약 187만 번 있었다. 그 시각의 메모리 압박은 확인하지 못했다.
+- 구조상 약점: text 단계만 자기 상한(남은 예산 − 600ms)이 있다. morph와 coverage는 남은 600ms 안에 끝나야 하고, 넘으면 이미 모은 결과까지 버리고 read 전체가 실패한다. recall 모양(형태소 검색어 24개)은 평소에도 morph p95 320ms에 coverage를 더하면 이 600ms에 가깝고, CPU 부하에서는 morph 단계에서 실패했다.
+- 앱 span은 이제 실패한 read에 `failure.<결과>.<단계>` 표시를 남긴다(예: `failure.budget-exceeded.morph`). 다음 실패 때 멈춘 단계를 바로 볼 수 있다.
