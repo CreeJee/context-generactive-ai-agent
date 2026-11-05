@@ -18,14 +18,9 @@
  * the same relevant nodes, with limit 16.
  */
 import { DatabaseSync } from "node:sqlite";
-import { NodeFileSystem } from "@effect/platform-node";
 import { Array as Arr, Console, Effect, FileSystem, Layer, Option, Schema } from "effect";
-import { SecretStore } from "../src/config/secrets.ts";
-import { StorageRoot } from "../src/config/storage-root.ts";
-import { Embedder, EmbedderRuntime } from "../src/memory/embedding/embedder.ts";
-import { memoryAgentLayer } from "../src/layers.ts";
+import { copyLayer } from "./copy-storage.ts";
 import { MemorySearch, searchTuning, type SearchTuning } from "../src/memory/search.ts";
-import { runNativeEffect } from "../src/runtime/native-effect.ts";
 import { nodePlatform } from "../src/runtime/node-platform.ts";
 import { sha256 } from "../src/runtime/synchronous-crypto.ts";
 import { path } from "../src/runtime/synchronous-path.ts";
@@ -87,10 +82,6 @@ if ((mode !== "build" && mode !== "score") || storage === undefined) {
 }
 const setFile = path.join(storage, "relevance.jsonl");
 
-/** Runs a file operation outside the scoring program, on the process's platform services. */
-const onFiles = <A, E>(operation: (fs: FileSystem.FileSystem) => Effect.Effect<A, E>) =>
-  nodePlatform.runPromise(Effect.flatMap(FileSystem.FileSystem, operation));
-
 /** The lines of `text` that decode as `schema`: blank lines and a torn final line are skipped. */
 const decodedLines = <S extends Schema.Top & { readonly DecodingServices: never }>(
   schema: S,
@@ -102,23 +93,6 @@ const decodedLines = <S extends Schema.Top & { readonly DecodingServices: never 
     Arr.getSomes,
   );
 };
-
-// Query embeddings reused across scoring runs, keyed by the exact query text; the file lives in
-// the copy. A torn final line from an interrupted append fails to decode and is skipped.
-const CachedLine = Schema.Struct({ text: Schema.String, vector: Schema.String });
-const embedCacheFile = path.join(storage, "embed-cache.jsonl");
-/** Query text -> base64 vector; the whole `{text, vector}` line is appended on a cache miss. */
-const embedCache = new Map(
-  (
-    await onFiles((fs) =>
-      fs.readFileString(embedCacheFile).pipe(
-        // First run: no cache yet.
-        Effect.orElseSucceed(() => ""),
-        Effect.flatMap((text) => decodedLines(CachedLine, text)),
-      ),
-    )
-  ).map((entry) => [entry.text, entry.vector] as const),
-);
 
 const Call = Schema.Struct({
   id: Schema.String,
@@ -389,114 +363,12 @@ const score = Effect.gen(function* () {
   }
 });
 
-/**
- * The model variant the copy's vectors were made with (the embedder holding the most vectors), run
- * as a non-local runtime: the app then starts no background backfill or GPU check, which would
- * write to the copy and, failing there, block searches.
- */
-const searchEmbedder = Effect.gen(function* () {
-  const db = new DatabaseSync(path.join(storage, "agent.db"), { readOnly: true });
-  const [top] = yield* Schema.decodeUnknownEffect(
-    Schema.NonEmptyArray(Schema.Struct({ embedder: Schema.String, n: Schema.Finite })),
-  )(
-    db
-      .prepare(
-        "SELECT embedder, count(*) AS n FROM node_vectors GROUP BY embedder ORDER BY n DESC LIMIT 1",
-      )
-      .all(),
-  ).pipe(
-    Effect.ensuring(Effect.sync(() => db.close())),
-    // A copy without vectors cannot be scored.
-    Effect.orDie,
-  );
-  const variant = top.embedder.includes("@fp32/") ? "fp32" : "quint8";
-  yield* Console.log(`embedder ${top.embedder} (${top.n} vectors) -> ${variant}`);
-  return Layer.effect(
-    Embedder,
-    Effect.gen(function* () {
-      const embedder = yield* Embedder;
-      const fs = yield* FileSystem.FileSystem;
-      if (embedder.identity !== top.embedder)
-        return yield* Effect.die(`embedder ${embedder.identity} does not match the copy`);
-      const vectorBytes = embedder.dimensions * 4;
-      return {
-        ...embedder,
-        runtime: () => EmbedderRuntime.other(),
-        // Scoring repeats the same queries across tuning candidates; embeddings are cached in the
-        // copy, keyed by the exact text, so later candidate runs skip the model.
-        embed: (texts) =>
-          Effect.gen(function* () {
-            const cached = texts.map((text): Option.Option<Float32Array> => {
-              const vector = embedCache.get(text);
-              if (vector === undefined) return Option.none();
-              const bytes = Buffer.from(vector, "base64");
-              if (bytes.length !== vectorBytes) return Option.none();
-              return Option.some(
-                new Float32Array(
-                  bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
-                ),
-              );
-            });
-            const missing = texts.filter((_, index) => Option.isNone(cached[index]));
-            if (missing.length === 0) return cached.map(Option.getOrThrow);
-            const computed = yield* embedder.embed(missing);
-            const entries = missing.map((text, index) => ({
-              text,
-              vector: Buffer.from(
-                computed[index]!.buffer,
-                computed[index]!.byteOffset,
-                computed[index]!.byteLength,
-              ).toString("base64"),
-            }));
-            // The cache is the copy's; failing to write it is the run's failure, as a thrown append was.
-            yield* Effect.orDie(
-              fs.writeFileString(
-                embedCacheFile,
-                entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n",
-                { flag: "a" },
-              ),
-            );
-            entries.forEach((entry) => embedCache.set(entry.text, entry.vector));
-            const computedByText = new Map(
-              missing.map((text, index) => [text, computed[index]!] as const),
-            );
-            return texts.map((text, index) =>
-              Option.isSome(cached[index])
-                ? Option.getOrThrow(cached[index])
-                : computedByText.get(text)!,
-            );
-          }),
-      };
-    }),
-  ).pipe(
-    Layer.provide([Embedder.localVariant(variant), NodeFileSystem.layer]),
-    Layer.provide(StorageRoot.layer(storage)),
-  );
-}).pipe(Layer.unwrap);
-
 if (mode === "build") await nodePlatform.runPromise(build);
-else {
-  // Inside the copy: the sandbox may refuse the system temp folder.
-  const home = path.join(storage, "eval-home");
-  await onFiles((fs) => fs.makeDirectory(home, { recursive: true }));
-  // The evaluation's tuning override is only present when --tuning was given
-  // (exactOptionalPropertyTypes), so the two shapes are built whole.
-  const baseOptions: import("../src/layers.ts").MemoryAgentLayerOptions = {
-    embedder: searchEmbedder,
-    interpretAutomatically: false,
-    summarizeAutomatically: false,
-    importsWatching: false,
-    importsHome: home,
-    sweepSecrets: false,
-    secrets: SecretStore.memory,
-    skillsHome: home,
-  };
-  const layerOptions: import("../src/layers.ts").MemoryAgentLayerOptions =
-    tuning === undefined ? baseOptions : { ...baseOptions, searchTuning: tuning };
-  await runNativeEffect(
+else
+  await nodePlatform.runPromise(
     Effect.scoped(
       Effect.flatMap(
-        Layer.build(Layer.merge(memoryAgentLayer(storage, layerOptions), NodeFileSystem.layer)),
+        Layer.build(copyLayer({ storage, tuning: Option.fromNullishOr(tuning) })),
         (services) =>
           Effect.provideContext(
             Effect.andThen(
@@ -510,4 +382,3 @@ else {
       ),
     ),
   );
-}

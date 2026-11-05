@@ -20,8 +20,9 @@
 - `storedOAuthProfiles` — 앱 DB를 read-only로 열어(`readOnlyProfiles` 레이어) provider별 저장된 OAuth 프로필 목록을 읽는다. (`stored-profiles.ts`)
 - `recallSessions` / `recallQueries` / `RecallStatement` / `RecallQuery` — 결정(decisions) recall 평가용 세션 statement 코퍼스와 질의 집합이다. (`recall-corpus.ts`)
 - `technicalSessions` / `technicalQueries` — 기술(technical) recall 평가용 세션 코퍼스와 질의 집합이다. (`recall-technical.ts`)
-- CLI 진입 스크립트(export 없음) — `anthropic-usage-probe.ts`, `compaction-cli.ts`, `live-compaction.ts`, `live-delegation.ts`, `memory-research-lab.ts`(인자: `fake-embed`·`real-embed`·`fts-only`·`morph-only`·`full` 중 1단계), `memory.ts`(시나리오 `only`), `prompt-overhead.ts`(인자 없음: 내장 skill만 있는 임시 프로젝트. 프로젝트 경로: 그 프로젝트의 AGENTS.md·skill·MCP와 사용자 global skill·MCP를 모두 신뢰하고 Kagi를 켠 최악 조건. 둘 다 서브에이전트에 한 번 위임해 부모와 자식의 첫 요청을 출처별 토큰으로 나눈다), `recall.ts`(`printRecall`/`printTerms`), `structured-memory.ts`(`program`·`BenchmarkFailed`), `tool-use.ts`(인자: 케이스 이름들, `--repeat N`. 사용자가 고른 모델로 작은 프로젝트마다 요청 하나를 돌리고, 도구 호출과 답·파일이 케이스의 기대를 지켰는지 본다. 케이스는 실사용 기록의 도구 실패에서 가져온다. `mcp` 케이스는 임시 storage의 `mcp.json`에 둔 eval MCP 서버 `tracker`·`code-index`를 그 프로젝트에 신뢰한다), `tool-use-mcp-server.ts`(첫 인자 `tracker`·`code-index`로 고르는 stdio MCP 서버. 답은 케이스의 프로젝트 파일에 맞춘 고정값이다).
-- 하위 디렉터리 없음.
+- `copyLayer` / `copyEmbedder` / `copyDatabase` — 실제 storage 폴더의 사본(agent.db·vectors/·models/) 위에 앱 서비스를 앱과 같은 방식으로 연다. 임베더는 사본 벡터를 만든 변형을 non-local runtime으로 쓰고, 질의 임베딩을 사본의 `embed-cache.jsonl`에 캐시한다. `copyDatabase`는 사본 agent.db를 read-only `SqlClient`로 연다. (`copy-storage.ts`)
+- CLI 진입 스크립트(export 없음) — `anthropic-usage-probe.ts`, `compaction-cli.ts`, `live-compaction.ts`, `live-delegation.ts`, `memory-research-lab.ts`(인자: `fake-embed`·`real-embed`·`fts-only`·`morph-only`·`full` 중 1단계), `memory.ts`(시나리오 `only`), `prompt-overhead.ts`(인자 없음: 내장 skill만 있는 임시 프로젝트. 프로젝트 경로: 그 프로젝트의 AGENTS.md·skill·MCP와 사용자 global skill·MCP를 모두 신뢰하고 Kagi를 켠 최악 조건. 둘 다 서브에이전트에 한 번 위임해 부모와 자식의 첫 요청을 출처별 토큰으로 나눈다), `recall.ts`(`printRecall`/`printTerms`), `relevance.ts`(`build`·`score`. find_memory 결과 중 모델이 연 노드를 정답으로 보는 예전 세트), `search-set.ts`(effect/cli 하위 명령 `recorded`·`rounds`·`pool`·`app-run`·`judge`·`judge-check`·`agreement`·`score`. 아래 search-set/ 참고), `structured-memory.ts`(`program`·`BenchmarkFailed`), `tool-use.ts`(인자: 케이스 이름들, `--repeat N`. 사용자가 고른 모델로 작은 프로젝트마다 요청 하나를 돌리고, 도구 호출과 답·파일이 케이스의 기대를 지켰는지 본다. 케이스는 실사용 기록의 도구 실패에서 가져온다. `mcp` 케이스는 임시 storage의 `mcp.json`에 둔 eval MCP 서버 `tracker`·`code-index`를 그 프로젝트에 신뢰한다), `tool-use-mcp-server.ts`(첫 인자 `tracker`·`code-index`로 고르는 stdio MCP 서버. 답은 케이스의 프로젝트 파일에 맞춘 고정값이다).
+- `search-set/` — 기억 검색 평가 세트. 기록된 find_memory 호출(`recorded.ts`)과 모델이 지난 라운드에서 쓴 질문(`rounds.ts`)이 need(찾던 것)와 item(질의)이 된다. 여러 검색 시스템의 순위(`pool.ts`: 앱 검색, native read의 vector·text·morph 목록)를 모아 모델이 need×node를 0·1·2로 판정한다(`judge.ts`). 이미 판정한 쌍은 다시 묻지 않으므로 새 시스템은 그것만 찾은 노드만 판정하면 된다. `score.ts`는 nDCG@10·Recall@20·MRR·Ans@10·judged@10을 형식·언어·정확 명칭·나이별로 낸다. 기록된 질문은 그 호출 seq 이전에 저장된 노드만 대상으로 한다. 모델은 앱에서 고른 모델(`EvalModel`, `model.ts`)이고 사본 안 `search-set/model-storage`에 따로 띄운다. 파일 형식은 `files.ts`, 노드 조회는 `nodes.ts`.
 
 ## Invariants
 
@@ -35,6 +36,7 @@
 - compaction 평가의 threshold 5개가 모두 통과해야 한다: 입력 토큰 감소, cacheable 비율 개선, evidence 도달, 정정 반영, `retrievalTokens <= retrievalTokenLimit`. 하나라도 실패하면 compaction-cli가 `process.exitCode = 1`로 끝난다.
 - `evidenceNarrative`는 모든 필드와 원문 텍스트를 보존해야 한다. evidence 선택은 바꾸지 않는다. provenance와 changes는 `concurrency: 1`로 반환 순서를 유지한다.
 - memory-research-lab은 `packages/memory-agent`를 cwd로 실행해야 한다. 프로젝트 root는 `process.cwd()`, 임시 root는 `<repo>/node_modules/.vp-tmp`다. 단계마다 별도 임시 storage root를 쓴다. 모델·Kiwi 파일을 읽을 수 없으면 해당 단계는 실패하지 않고 사유와 함께 skip된다.
+- search-set과 relevance는 기억 원문을 출력하지 않는다. 원문이 든 파일(needs·items·judgments·runs)은 사본의 `search-set/` 안(git 밖)에만 둔다. 판정과 질문 작성은 사용자가 앱에서 고른 모델에만 보낸다.
 - Effect 경계 규칙: 도메인 Effect는 호출자 runtime에서 실행한다. eval 스크립트가 native/Promise 경계에서 `runNativeEffect`, `ManagedRuntime`, `Effect.runPromise`로 실행하고, runtime은 `finally`에서 dispose한다.
 
 ## Side Effects
