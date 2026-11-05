@@ -5,14 +5,14 @@
  * question only sees nodes stored before it was asked, so ids at or past its seq are dropped from
  * every list; the searches ask for more than they keep to make up for it.
  */
-import { Array as Arr, Console, Effect, HashMap, Option, Schedule } from "effect";
+import { Array as Arr, Console, Effect, HashMap, Option } from "effect";
 import { Embedder } from "../../src/memory/embedding/embedder.ts";
 import { VectorIndex } from "../../src/memory/embedding/vector-index.ts";
-import { MorphAnalyzer } from "../../src/memory/morph/analyzer.ts";
 import { maxVectorK } from "../../src/memory/native-search/read-protocol.ts";
 import { MemorySearch, morphSearchTerms, searchTerms } from "../../src/memory/search.ts";
 import { appendRows, type Item, type Need, readRows, type RunRow, setFiles } from "./files.ts";
 import { nodeSeqs } from "./nodes.ts";
+import { readyAnalyzer } from "./terms.ts";
 
 /** Ids kept per item and run: the judge pools the top 20, scores read the top 20. */
 const keptIds = 30;
@@ -52,7 +52,7 @@ export const searchRuns = Effect.fn("searchSet.searchRuns")(function* ({
   const search = yield* MemorySearch;
   const embedder = yield* Embedder;
   const vectors = yield* VectorIndex;
-  const analyzer = yield* MorphAnalyzer;
+  const analyzer = yield* readyAnalyzer();
   const runs = [...Option.toArray(app), ...(channels ? ["vector", "text", "morph"] : [])];
   const done = yield* Effect.forEach(runs, (run) =>
     Effect.map(readRows(files.run(run)), (rows) => new Set(rows.map((row) => row.item))),
@@ -64,12 +64,6 @@ export const searchRuns = Effect.fn("searchSet.searchRuns")(function* ({
     done.every((items) => items.has(item.item))
       ? []
       : Option.toArray(HashMap.get(needs, item.need)).map((need) => ({ item, need })),
-  );
-  // Kiwi loads in the background; searching before it is ready would leave morph terms out.
-  analyzer.warm();
-  yield* Effect.sync(() => analyzer.ready()).pipe(
-    Effect.repeat({ until: (ready) => ready, schedule: Schedule.spaced("250 millis") }),
-    Effect.timeoutOption("2 minutes"),
   );
   yield* Console.log(
     `items to search ${items.length}; runs ${runs.join(", ")}; morph analyzer ${analyzer.ready() ? "ready" : "not ready"}`,
