@@ -143,6 +143,8 @@ export const AttemptFailureReason = Schema.TaggedUnion({
   ModelStreamFailed: {},
   /** The model kept repeating a tool call whose result could not change. */
   RepeatedToolCall: {},
+  /** The run's request did not fit the model's context window, even compacted. */
+  ContextLimitExceeded: {},
   /** The child's own runtime died: a defect, or a store write it could not finish. */
   AgentCrashed: {},
   /** The attempt stopped beating without settling. */
@@ -169,6 +171,7 @@ export const attemptFailureCode = AttemptFailureReason.match({
   ModelRunError: () => "ModelRunError",
   ModelStreamFailed: () => "ModelStreamFailed",
   RepeatedToolCall: () => "RepeatedToolCall",
+  ContextLimitExceeded: () => "ContextLimitExceeded",
   AgentCrashed: () => "AgentCrashed",
   HeartbeatLost: () => "HeartbeatLost",
   ServerRestarted: () => "ServerRestarted",

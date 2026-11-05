@@ -64,6 +64,9 @@ export const ConfigFileFailureCode = Schema.Literals([
 ]);
 export type ConfigFileFailureCode = typeof ConfigFileFailureCode.Type;
 
+/** The `RUN_ERROR` code of a request that did not fit the model's context window, compacted. */
+export const contextLimitExceededCode = "context_limit_exceeded";
+
 /**
  * The `code` of a chat run's `RUN_ERROR`. An external agent's turn names its own failure; any
  * other code, including codes saved by older versions, is shown as `run_failed`.
@@ -75,6 +78,7 @@ export const RunFailureCode = Schema.Literals([
   "run_record_failed",
   /** The model kept repeating a tool call whose result could not change. */
   "repeated_tool_call",
+  contextLimitExceededCode,
   "run_failed",
 ]);
 export type RunFailureCode = typeof RunFailureCode.Type;
@@ -107,5 +111,7 @@ export const runFailureText = {
     "응답을 기록하지 못해 이 화면으로 더 보내지 못했어요. 실행은 계속될 수 있으니 보드와 작업 기록을 확인해 주세요.",
   repeated_tool_call:
     "모델이 결과가 바뀌지 않는 같은 도구 호출을 계속 되풀이해서 실행을 멈췄어요. 요청을 바꿔서 다시 보내 주세요.",
+  context_limit_exceeded:
+    "대화를 줄여도 모델의 컨텍스트 창에 들어가지 않아 요청을 보내지 않았어요. /compact로 줄이거나 설정에서 창 크기를 확인해 주세요.",
   run_failed: "응답하는 중에 오류가 났어요.",
 } as const satisfies Record<RunFailureCode, string>;

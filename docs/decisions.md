@@ -4102,3 +4102,9 @@
 - 계기: 서브에이전트 run 하나가 139 step 뒤 `ContextLimitExceeded`로 끝났다(창 60,000). 오래된 출력을 모두 pointer로 바꿔도 run이 약 42.6k 토큰이었고, 그중 pointer 190개가 약 9.1k(개당 48토큰)였다.
 - 결정: pointer는 `[Tool output cleared. Reread: <도구> <id>]`로 줄인다. 대화는 `read_evidence <node id>`, 자식은 `read_subagent_tool_result toolCallId <call id>`다. 개당 약 21~25토큰이다. 기억 노드가 없는 대화 출력은 `find_memory`와 `read_evidence`로 찾으라고 한다.
 - 문구가 바뀌므로 진행 중인 대화의 요청 prefix는 한 번 바뀐다. pointer는 요청에서만 쓰고 저장하지 않는다.
+
+## 컨텍스트 한도로 끝난 실행은 그 이유를 code로 남긴다 (2026-11-05)
+
+- 계기: 서브에이전트 run이 `ContextLimitExceeded`로 끝났는데 `get_subagent_reports`는 `ModelRunError`만 보였다. 호환 모델의 실패는 `RUN_ERROR`에 code 없이 문구만 실렸고, 자식 보고서는 `repeated_tool_call` 외의 code를 모두 `ModelRunError`로 봤다.
+- 결정: 호환 모델이 창에 맞지 않아 보내지 않은 요청은 `RUN_ERROR` code `context_limit_exceeded`로 끝난다. 화면은 이 code의 문구(`/compact`나 창 크기 확인 안내)를 보이고, 자식 보고서와 attempt 실패 이유는 `ContextLimitExceeded`가 된다. 부모 지침은 이 보고서를 받으면 남은 일을 작게 나눠 맡기라고 한다.
+- provider가 400으로 거절한 창 초과(`exceed_context_size_error` 등)는 지금처럼 provider 실패로 둔다. 문구가 서버마다 달라 code로 가르지 않는다.

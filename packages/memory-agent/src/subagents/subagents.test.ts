@@ -8,7 +8,7 @@ import {
   compactEffect,
   estimateConversation,
 } from "../agent/compaction.ts";
-import { childCompactionSources } from "./subagents.ts";
+import { childCompactionSources, childFailureOf } from "./subagents.ts";
 
 const noCompaction: CompactionState = {
   manual: { clearedThrough: 0, summarizedTurns: 0 },
@@ -87,3 +87,11 @@ it.effect(
       expect(sent[6]).toEqual(messages[6]);
     }),
 );
+
+it("a child's report names why its run stopped when the run's code says", () => {
+  expect(childFailureOf("context_limit_exceeded")._tag).toBe("ContextLimitExceeded");
+  expect(childFailureOf("repeated_tool_call")._tag).toBe("RepeatedToolCall");
+  // Any other code, or none, is the model's error: the run's text is never read.
+  expect(childFailureOf("run_failed")._tag).toBe("ModelRunError");
+  expect(childFailureOf(undefined)._tag).toBe("ModelRunError");
+});

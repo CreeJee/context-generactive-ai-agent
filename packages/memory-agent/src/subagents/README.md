@@ -17,6 +17,7 @@
 - `childCompactionSources` — 자식의 저장된 transcript(Effect)를 받아 `CompactionSources`를 만든다. 저장된 도구 결과의 id는 그 call id이고, pointer는 `read_subagent_tool_result`를 가리킨다. 요약 블록은 없다.
 - `SubagentOperationFailed` — `Schema.TaggedError`이며 필드는 `operation: "store"`, `cause: Defect`.
 - `SubagentAdoptionRejected` — `Schema.TaggedError`이며 `reason`은 `NotReviewed` 또는 `NotificationNotDelivered`이고 모델이 읽는 고정 `message`를 가진다. `adopt_subagent_reports`가 이 오류를 던진다.
+- `childFailureOf` — 자식 run의 `RUN_ERROR` code로 보고서의 실패 이유(`AttemptFailureReason`)를 정한다.
 - `subagentThreadId` — `` (subagentId) => `subagent-${subagentId}` ``로 자식 대화 thread id를 만든다.
 - `SubagentBinding` — subagent 도구 호출이 속한 부모 run 정보(project, sessionId, runId, selection, abortSignal, tools, systemPrompts, deliveredParentNotificationIds, gated).
 - `SubagentReceipt` — 도구 호출이 부모 모델에게 돌려주는 receipt(status, subagentId, agent, taskId, attemptId, delivery).
@@ -34,6 +35,7 @@
 - 자식은 부모와 같은 model, project, tools, permissions를 쓴다. 위임으로 권한이 넓어지지 않는다. 부모 에이전트의 task 메시지는 사용자 승인이 아니므로 위험한 동작은 평소대로 approval을 거친다.
 - Adoption 규칙이 있다. 이번 run에서 `get_subagent_reports`로 검토한 completed 보고서만 adopt할 수 있고(`NotReviewed`), 이번 run에 전달된 상태 알림 id만 adopt할 수 있다(`NotificationNotDelivered`). 알림은 검토로 치지 않고, 조회만으로는 adopt되지 않는다.
 - 자식 요청은 메인 대화와 같은 `compactionHook`을 같은 모델 창 예산(`budgetFor`)으로 거친다. 그래서 대화 compaction의 기준이 바뀌면 자식도 같이 바뀐다. 다른 것은 `childCompactionSources`뿐이다. 뺀 도구 결과는 `read_subagent_tool_result`로 다시 읽는 pointer가 되고, 아직 저장되지 않은 결과는 다시 읽을 곳이 없어 빼지 않는다. 자식에게는 모델 handoff가 없다. 요약 블록과 `/compact` 기록도 쌓이지 않으므로 그 단계는 할 일이 없다. 모델 입력만 바꾸고 저장된 자식 transcript는 바꾸지 않는다.
+- 실패한 자식 보고서의 이유는 `RUN_ERROR` code로만 정한다. `repeated_tool_call`은 `RepeatedToolCall`, `context_limit_exceeded`는 `ContextLimitExceeded`, 그 밖의 code는 `ModelRunError`다. run의 텍스트는 provider 본문을 담을 수 있어 읽지 않는다. 부모는 `ContextLimitExceeded`를 보면 남은 일을 작게 나눠 다시 맡긴다(`subagentInstructions`).
 - 입력 제약이 있다. `agent` 이름은 `/^[A-Za-z0-9_-]{1,40}$/`, `attempts`는 1~100개, `offset`은 0 이상 정수이고 기본값은 0이다. named helper의 `instructions`는 이전 값을 대체하고, 생략하면 기존 값을 유지한다.
 - `resume_subagent`는 최신 failed 또는 interrupted attempt(`expectedAttemptId`)만 재시도한다. `confirmUncertain`의 기본값은 false이며, 사용자가 중복 부작용 가능성을 받아들인 뒤에만 true로 둔다. 완료된 tool 호출은 다시 실행하지 않고, 이전 approval은 이어지지 않는다.
 - `SubagentRow` status literal 집합은 `SubagentStatus`와 같아야 한다. 이 행은 `subagents` 표 컬럼(id, session_id, name, instructions, status, last_task, last_answer, error, ...)을 decode한다.

@@ -30,6 +30,7 @@ import {
   type OpenAICompatibleConfiguration,
 } from "../providers/openai-compatible-config.ts";
 import { errorCodesOf } from "../runtime/failure-tag.ts";
+import { contextLimitExceededCode } from "../runtime/shown-failure.ts";
 import { isTruthy } from "../truthy.ts";
 import { providerPrompt, type ReplayTarget } from "./history.ts";
 import { optionsKey, partOptions, toolResultContent, type StoredContent } from "./prompt.ts";
@@ -1093,11 +1094,20 @@ const withDiagnostic = (error: AiError.AiError, diagnostic: string): AiError.AiE
 /**
  * A compatible model's failure as the user sees it. A chat template's refusal keeps its text and
  * the request's role counts after it (decisions.md 2026-10-04); the rest of the provider's
- * description, with the URL in it, is left out.
+ * description, with the URL in it, is left out. A request the guard refused for the context window
+ * says so in its code, so the page and a subagent's report can tell it from other failures.
  */
 export const shownCompatibleFailure = (error: AiError.AiError): ShownFailure =>
   Option.match(compatibleFailure(error), {
-    onSome: (failure) => ({ message: failure.message }),
+    onSome: (failure) => ({
+      message: failure.message,
+      ...optionalProperty(
+        "code",
+        CompatibleRunRequestFailedReason.guards.ContextLimitExceeded(failure.reason)
+          ? contextLimitExceededCode
+          : undefined,
+      ),
+    }),
     onNone: () =>
       error.message.includes(templateError)
         ? { message: `${templateError}\n${Arr.lastNonEmpty(Str.split(error.message, "\n"))}` }

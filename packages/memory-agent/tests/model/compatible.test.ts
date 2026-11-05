@@ -283,7 +283,7 @@ describe("compatible language model", () => {
   it.effect("refuses a request over the context window before sending it", () =>
     Effect.gen(function* () {
       const sent: Array<Sent> = [];
-      const { failure } = yield* failureOf({
+      const { error, failure } = yield* failureOf({
         ...options(endpointOf(streamOf([]), sent)),
         endpoint: { ...endpoint, contextWindow: 1024, outputBudget: 1000 },
       });
@@ -291,6 +291,11 @@ describe("compatible language model", () => {
         failed(CompatibleRunRequestFailedReason.cases.ContextLimitExceeded.make({})),
       );
       expect(sent).toEqual([]);
+      // The run's RUN_ERROR names the reason, so a subagent's report can say why it stopped.
+      expect(shownCompatibleFailure(error)).toEqual({
+        message: "Compatible context limit exceeded",
+        code: "context_limit_exceeded",
+      });
     }),
   );
 
