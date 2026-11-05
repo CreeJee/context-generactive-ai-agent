@@ -52,6 +52,7 @@
 - 이미지 라우팅 입력 검증: `sourceImageCount`는 0 이상 정수, 비용 상한은 유한한 0 이상이다. 라우트 fact의 quality·speed는 0..1 유한값이어야 한다. 잘못된 비용은 보고된 그대로 두어 라우트를 부적격으로 만들고 점수가 NaN일 수 있다. 엄격한 비용 상한에서 비용을 모르면 부적격이다.
 - `ImageRouteFacts.authenticatedRoutesLayer`는 `direct_adapter`이면서 `authentication.verified`인 라우트만 available로 본다. 실제 계정 이미지 접근은 실행 시점에 검증한다.
 - 호환 엔드포인트 reasoning 레벨은 모델 목록의 명시 확장(`capabilities.reasoning`), 알려진 서버(`owned_by` = `strata`)의 고정 레벨, `supported_parameters`(빈 options) 순서로만 정한다. 파라미터 지원만으로 유효 레벨이나 wire 매핑을 정하지 않는다(`docs/decisions.md` 2026-10-25).
+- 호환 `cheapestEffort`(요약·해석·권한 분류 같은 단일 호출)는 모델이 공개한 레벨에서 고른다. 대화가 `none`이고 `none`이 공개됐으면 `none`, 그 외에는 `low`가 공개됐을 때 `low`다. 공개된 레벨이 없거나 해당 레벨이 없으면 `default`(전송 안 함)다. 구독 모델의 `low`/`none`과 같은 규칙이다.
 - `failedReasons`는 체크 목록 순서를 유지한다.
 - Context.Service 키는 `memory-agent/providers/<file>/<Service>` 형식 문자열이다.
 

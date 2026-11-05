@@ -198,6 +198,13 @@ const replaceAccount = (
 });
 const publishedReasoning = (settings: OpenAICompatibleConfiguration) =>
   settings.reasoning?.model === settings.model ? settings.reasoning.options : null;
+/**
+ * The effort a single call uses on a model that published `options`: "low" as on subscription
+ * models, or "none" when the conversation already runs without reasoning. A model that published
+ * neither keeps the server default, as one that published nothing does (decisions.md 2026-10-25).
+ */
+const cheapestPublished = (options: ReadonlyArray<string>, current: string) =>
+  Option.liftPredicate(current === "none" ? "none" : "low", (effort) => options.includes(effort));
 function makeOpenAICompatibleSettingsBody(
   config: GlobalConfigApi,
   keys: CompatibleKeychain,
@@ -703,7 +710,19 @@ function makeOpenAICompatibleSettingsBody(
         Effect.map(config.read, (settings) => compatibleImageInput(settings, model)).pipe(
           Effect.mapError(() => ProviderOperationFailed.make({ provider, operation: "model" })),
         ),
-      cheapestEffort: (selection) => Effect.succeed({ ...selection, reasoningEffort: "default" }),
+      cheapestEffort: (selection) =>
+        read.pipe(
+          Effect.map((account) =>
+            Option.liftPredicate(account, isTruthy).pipe(
+              Option.flatMapNullishOr((found) => compatibleEndpointModel(found, selection.model)),
+              Option.flatMapNullishOr(publishedReasoning),
+              Option.flatMap((options) => cheapestPublished(options, selection.reasoningEffort)),
+              Option.getOrElse(() => "default"),
+            ),
+          ),
+          Effect.orElseSucceed(() => "default"),
+          Effect.map((reasoningEffort) => ({ ...selection, reasoningEffort })),
+        ),
       select: (id: string, effort = "default") =>
         updates.withPermit(
           Effect.gen(function* () {

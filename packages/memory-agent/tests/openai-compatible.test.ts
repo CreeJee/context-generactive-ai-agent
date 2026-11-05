@@ -428,6 +428,31 @@ describe("OpenAI compatible settings", () => {
       yield* f.api.services.models.select(configuration.model, "none");
     }),
   );
+  effectTest.effect(
+    "single calls use the lowest published effort, and the server default where none is published",
+    () =>
+      Effect.gen(function* () {
+        const page = (owner: string) =>
+          Response.json({ data: [{ id: configuration.model, owned_by: owner }] });
+        const f = fixture(nativeFetch(() => Effect.sync(() => page("strata"))));
+        yield* f.api.update(configuration);
+        yield* f.api.services.models.list;
+        const { models } = f.api.services;
+        const cheapest = (effort: string) =>
+          Effect.flatMap(models.select(configuration.model, effort), models.cheapestEffort);
+        expect((yield* cheapest("high")).reasoningEffort).toBe("low");
+        expect((yield* cheapest("none")).reasoningEffort).toBe("none");
+        expect((yield* cheapest("default")).reasoningEffort).toBe("low");
+
+        const unpublished = fixture(nativeFetch(() => Effect.sync(() => page("openai"))));
+        yield* unpublished.api.update(configuration);
+        yield* unpublished.api.services.models.list;
+        const selection = yield* unpublished.api.services.models.select(configuration.model);
+        expect(
+          (yield* unpublished.api.services.models.cheapestEffort(selection)).reasoningEffort,
+        ).toBe("default");
+      }),
+  );
   effectTest.effect("keeps model listing usable when extension fields are unsupported", () =>
     Effect.gen(function* () {
       const f = fixture(
