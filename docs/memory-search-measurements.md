@@ -206,3 +206,62 @@ S3 세트를 같은 방법으로 다시 채점했다(`relevance-eval score --lab
 - 실패 구간에 같은 기계에서 다른 세션이 `pnpm typecheck`, storybook 브라우저 테스트, i18n 추출을 돌렸다(가져온 기록의 도구 호출). 메모리 16GB 기기에서 부팅 뒤 pageout이 약 187만 번 있었다. 그 시각의 메모리 압박은 확인하지 못했다.
 - 구조상 약점: text 단계만 자기 상한(남은 예산 − 600ms)이 있다. morph와 coverage는 남은 600ms 안에 끝나야 하고, 넘으면 이미 모은 결과까지 버리고 read 전체가 실패한다. recall 모양(형태소 검색어 24개)은 평소에도 morph p95 320ms에 coverage를 더하면 이 600ms에 가깝고, CPU 부하에서는 morph 단계에서 실패했다.
 - 앱 span은 이제 실패한 read에 `failure.<결과>.<단계>` 표시를 남긴다(예: `failure.budget-exceeded.morph`). 다음 실패 때 멈춘 단계를 바로 볼 수 있다.
+
+## 검색 재설계: 평가 세트와 Tantivy 벤치 (2026-11-06)
+
+재설계 방향(임베딩 embeddinggemma-2, lexical 엔진 후보 Tantivy, 평가 세트 먼저)에 따라 잰 값이다. 사본은 위와 같은 `node_modules/.vp-tmp/cga-bench`(노드 276,162개, 숨긴 노드를 뺀 색인 대상 272,433개, 프로젝트 72개 중 노드가 있는 프로젝트 70개, `agent.db` 4.3GB, M1 Pro)다.
+
+### 평가 세트
+
+`eval/search-set.ts`(README의 search-set/ 참고). need 1,002개, item 1,159개(기록된 `find_memory` 호출과 지난 라운드에서 모델이 쓴 질문). run 10개를 depth 20까지 모으면 판정할 need×node 쌍이 83,793개다. 판정은 depth 10(43,931쌍)부터 채운다.
+
+판정 모델 일치도: 주 판정 GLM-5.3-Flash-NVFP4와 두 번째 모델 Qwen3.8-Flash-Next-NVFP4가 같은 257쌍을 판정했다. 등급 일치 0.883, 관련 여부 일치 0.922, weighted kappa 0.891. 등급 분포(0/1/2)는 주 판정 0.51/0.28/0.21, 두 번째 0.49/0.34/0.17.
+
+### 검색 시간
+
+1,159 item, 단위 ms. 기록된 질문은 그 호출 이전 노드만 찾고, 다른 프로젝트도 읽는 item은 자기 프로젝트와 다른 프로젝트를 따로 찾아 번갈아 합친다. 앱 FTS5는 평가 세트 `fts` 명령(node SQLite, native read와 같은 cache·mmap)으로 item마다 한 번 쟀고, Tantivy는 `tools/tantivy-bench query --repeat 2`의 두 번째 시간이다(둘 다 OS 파일 캐시는 앞 item들로 데워진 상태). 두 측정은 겹치지 않게 돌렸고, 그동안 판정(모델 서버 호출)이 함께 돌았다.
+
+| 검색                                                                 | p50   | p95   | 최대   | 평균  | 2000ms 넘김 |
+| -------------------------------------------------------------------- | ----- | ----- | ------ | ----- | ----------- |
+| 앱 FTS5 trigram (`fts-trigram`)                                      | 82.2  | 797.1 | 1925.1 | 195.3 | 0           |
+| 앱 FTS5 morph (`fts-morph`)                                          | 103.9 | 379.3 | 786.0  | 136.6 | 0           |
+| Tantivy words (`tv-words`)                                           | 2.4   | 23.2  | 593.2  | 7.4   | 0           |
+| Tantivy morph (`tv-morph`, 앱 상한)                                  | 3.5   | 20.9  | 43.5   | 6.0   | 0           |
+| Tantivy ngram (`tv-ngram`, 3글자 구절)                               | 7.0   | 137.2 | 276.8  | 29.5  | 0           |
+| Tantivy lexical (`tv-lexical`, 단어+형태소 전체, global, Block-WAND) | 7.5   | 54.1  | 1287.1 | 18.6  | 0           |
+| lexical, global, pruning 없음                                        | 2.5   | 8.3   | 39.1   | 3.3   | 0           |
+| lexical, 프로젝트별 색인, Block-WAND                                 | 5.6   | 23.8  | 612.8  | 9.8   | 0           |
+| lexical, 프로젝트별 색인, pruning 없음                               | 4.3   | 10.1  | 101.8  | 5.1   | 0           |
+| lexical, hybrid(자기 프로젝트 색인 + global)                         | 5.5   | 41.9  | 1001.5 | 14.1  | 0           |
+| lexical, prefixed 색인                                               | 14.5  | 82.8  | 4787.0 | 40.2  | 4           |
+
+- 같은 검색어끼리 견주면 `fts-morph`와 `tv-morph`(앱의 상한이 있는 형태소 검색어), `fts-trigram`과 `tv-ngram`(따옴표 친 검색어를 3글자 구절로)이다. p95가 379→21ms, 797→137ms다.
+- lexical 질의는 OR로 묶은 검색어가 많다(단어와 형태소 전체). Block-WAND는 일치 문서 item당 123,562개 중 54,063개를 callback까지 보내 절반도 거르지 못했고, pruning 없이 다 점수 매기는 쪽보다 느렸다. 거른 몫보다 문서마다 다음 후보를 고르는 비용이 큰 것으로 보인다.
+- 프로젝트 필터는 global 색인에서 수집 callback으로 걸었다. MUST 절로 걸면 Block-WAND가 꺼진다.
+- prefixed(단어에 프로젝트 번호를 붙인 색인)는 다른 프로젝트 범위에서 프로젝트 수만큼 검색어가 늘어 가장 느리다.
+
+### 순위 확인
+
+다른 방법의 점수가 `tv-lexical`과 같은지 item마다 견줬다(검색어 수만큼의 f32 ulp 안이면 같음).
+
+| 방법                     | 점수 같고 같은 점수의 다른 문서 | 점수 다름 |
+| ------------------------ | ------------------------------- | --------- |
+| global, pruning 없음     | 293                             | 0         |
+| 프로젝트별, Block-WAND   | 353                             | 1         |
+| 프로젝트별, pruning 없음 | 293                             | 0         |
+| hybrid                   | 234                             | 0         |
+
+- 같은 점수의 다른 문서: 마지막으로 남긴 점수와 같은 점수의 문서가 여럿일 때 Block-WAND는 먼저 본 문서를, 다른 방법은 seq가 작은 문서를 남긴다. 순위 품질 차이가 아니다.
+- 점수가 다른 1건(item `find:ccdd681c0872`, 다른 프로젝트 범위 29위): 프로젝트별 색인에 모든 프로젝트의 통계를 더해 점수를 매기면 Block-WAND가 top k에 들 문서를 건너뛸 수 있다. Tantivy는 block의 상한으로 쓸 (길이, 빈도) 쌍을 segment를 쓸 때 그 segment의 평균 길이로 고른다. 질의 때 평균 길이가 다르면 그 쌍이 최대가 아닐 수 있다. 프로젝트 색인은 평균 길이가 전체와 달라 드러났고, global 색인의 segment는 전체와 비슷해 이번에는 드러나지 않았다. pruning 없는 방법은 정확하다.
+
+### 색인 크기와 만드는 시간
+
+| 색인                                                 | 크기     | 만드는 시간 |
+| ---------------------------------------------------- | -------- | ----------- |
+| FTS5 `nodes_fts`(trigram, 원문은 nodes에서 읽음)     | 1,082 MB | -           |
+| FTS5 `nodes_morph`(색인 129 MB + 형태소 원문 392 MB) | 521 MB   | -           |
+| Tantivy global(words·morph·위치 있는 ngram)          | 1,061 MB | 179 s       |
+| Tantivy 프로젝트별 70개(같은 필드)                   | 1,122 MB | 198 s       |
+| Tantivy prefixed(words·morph만)                      | 132 MB   | 118 s       |
+
+Tantivy는 원문을 저장하지 않는다(seq로 SQLite에서 읽는다). 만드는 시간은 writer thread 2개, 형태소는 `nodes_morph_content`에 이미 있는 Kiwi 결과를 읽은 값이다.
