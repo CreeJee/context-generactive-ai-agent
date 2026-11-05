@@ -259,7 +259,7 @@ fn short_term_hits(
 // Explicit completion is required; Drop is only an unwinding fallback.
 struct ReadGuard<'a> {
     connection: &'a Connection,
-    poisoned: &'a std::cell::Cell<bool>,
+    unusable: &'a std::cell::Cell<bool>,
     finished: bool,
 }
 impl ReadGuard<'_> {
@@ -269,7 +269,7 @@ impl ReadGuard<'_> {
             || self.connection.execute_batch("ROLLBACK").is_ok())
             && self.connection.is_autocommit();
         if !clean {
-            self.poisoned.set(true);
+            self.unusable.set(true);
         }
         self.finished = true;
         clean
@@ -285,7 +285,7 @@ impl Drop for ReadGuard<'_> {
 #[napi]
 pub struct MemoryReadSession {
     connection: Option<Connection>,
-    poisoned: std::cell::Cell<bool>,
+    unusable: std::cell::Cell<bool>,
 }
 #[napi]
 impl MemoryReadSession {
@@ -314,7 +314,7 @@ impl MemoryReadSession {
             .map_err(|_| Error::from_reason("Read session unavailable"))?;
         Ok(Self {
             connection: Some(connection),
-            poisoned: std::cell::Cell::new(false),
+            unusable: std::cell::Cell::new(false),
         })
     }
     /// Close SQLite before worker teardown; a later N-API GC must not retain WAL mappings.
@@ -396,7 +396,7 @@ impl MemoryReadSession {
             out.kind = Outcome::BudgetExceeded.tag().into();
             return out;
         }
-        if self.poisoned.get() {
+        if self.unusable.get() {
             out.kind = Outcome::ReadFailed.tag().into();
             return out;
         }
@@ -407,7 +407,7 @@ impl MemoryReadSession {
         };
         let mut guard = ReadGuard {
             connection,
-            poisoned: &self.poisoned,
+            unusable: &self.unusable,
             finished: false,
         };
         let progress_state = cell.clone();
@@ -800,27 +800,27 @@ mod tests {
     }
     #[test]
     #[cfg(feature = "test-sqlite")]
-    fn failed_explicit_cleanup_poison_is_sticky() {
+    fn failed_explicit_cleanup_is_sticky() {
         let connection = Connection::open_in_memory().unwrap();
         connection.execute_batch("BEGIN DEFERRED").unwrap();
-        let poisoned = std::cell::Cell::new(false);
+        let unusable = std::cell::Cell::new(false);
         connection.authorizer(Some(|_: rusqlite::hooks::AuthContext<'_>| {
             rusqlite::hooks::Authorization::Deny
         }));
         let mut guard = ReadGuard {
             connection: &connection,
-            poisoned: &poisoned,
+            unusable: &unusable,
             finished: false,
         };
         assert!(!guard.finish());
-        assert!(poisoned.get());
+        assert!(unusable.get());
         assert!(!connection.is_autocommit());
         drop(guard);
         connection.authorizer(
             None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>,
         );
         connection.execute_batch("ROLLBACK").unwrap();
-        assert!(poisoned.get());
+        assert!(unusable.get());
     }
     #[test]
     #[cfg(feature = "test-sqlite")]
@@ -843,7 +843,7 @@ mod tests {
         connection.execute_batch("PRAGMA query_only=ON").unwrap();
         let reader = MemoryReadSession {
             connection: Some(connection),
-            poisoned: std::cell::Cell::new(false),
+            unusable: std::cell::Cell::new(false),
         };
         let connection = reader.connection.as_ref().unwrap();
         connection.execute_batch("BEGIN DEFERRED").unwrap();
@@ -887,7 +887,7 @@ mod tests {
         connection.execute_batch("PRAGMA query_only=ON").unwrap();
         let mut reader = MemoryReadSession {
             connection: Some(connection),
-            poisoned: std::cell::Cell::new(false),
+            unusable: std::cell::Cell::new(false),
         };
         let connection = reader.connection.as_ref().unwrap();
         connection.execute_batch("BEGIN DEFERRED").unwrap();
@@ -900,7 +900,7 @@ mod tests {
         {
             let mut guard = ReadGuard {
                 connection,
-                poisoned: &reader.poisoned,
+                unusable: &reader.unusable,
                 finished: false,
             };
             connection.progress_handler(1, Some(|| true));

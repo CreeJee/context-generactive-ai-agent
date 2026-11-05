@@ -31,7 +31,7 @@
 - worker teardown 전에 `MemoryReadSession.close()`로 SQLite를 닫아야 한다. 나중의 N-API GC가 WAL 매핑을 붙잡으면 안 되기 때문이다
 - `EMBEDDED_KINDS`(`n.kind IN ('user', 'assistant', 'topic')`)는 `nodes_embeddable` 부분 인덱스의 조건과 글자까지 같아야 한다. 다르게 쓰면 SQLite가 그 인덱스를 쓰지 않는다
 - text·morph·short 질의의 의미 검사는 숨김 검사(`memory_graph_suppressed_nodes`)만 한다. 일치 행마다 원문 전체를 읽던 `length(trim(text))` 검사는 2026-10-30에 뺐다. 공백만 있는 원문은 검색어 trigram을 가질 수 없어 결과가 같다(docs/memory-search-measurements.md S4). 후보·coverage 쿼리는 `nodes_embeddable` 부분 색인과 맞추려고 이 검사를 유지한다
-- `ReadGuard`는 명시적 `finish`로 끝내야 하고, Drop은 unwinding 대비책일 뿐이다. `finish`는 progress handler를 지우고 ROLLBACK한다. autocommit으로 돌아오지 못하면 세션을 poisoned로 표시하고, 이 표시는 이후에도 유지된다
+- `ReadGuard`는 명시적 `finish`로 끝내야 하고, Drop은 unwinding 대비책일 뿐이다. `finish`는 progress handler를 지우고 ROLLBACK한다. autocommit으로 돌아오지 못하면 세션을 쓸 수 없음(`unusable`)으로 표시하고, 이 표시는 이후에도 유지된다
 - snapshot pinned 표시(`mark_snapshot_pinned`)는 `BEGIN DEFERRED`와 실제 읽기가 성공해 SQLite 스냅샷을 고정한 뒤에만 게시한다
 - `snapshotWasPinned`는 요청 로컬의 단조 이벤트일 뿐 스냅샷이 아직 살아 있다는 증거가 아니다. 실제 완료·취소와 owner 순서는 호스트가 따로 관찰해야 한다
 - 읽기 결과에서 vector 엔진 실패만 vector 채널을 degrade한다(`vectorUnavailable=true`). text 단계가 자기 몫의 시간(남은 예산에서 600ms를 남긴 시점)을 넘으면 그때까지의 text 결과를 버리고 `textUnavailable=true`로 mark해 읽기를 계속한다(`read_session.rs`의 `TEXT_RESERVE`). 제어 실패와 SQLite 실패는 원자적으로 실패한다. 호출자는 제어 상태를 먼저 확인해야 한다

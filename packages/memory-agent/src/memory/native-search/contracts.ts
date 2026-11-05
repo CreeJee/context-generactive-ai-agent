@@ -116,7 +116,7 @@ export type NativeSearchOutcome = Data.TaggedEnum<{
     readonly category: "queue" | "execution" | "input" | "output";
   };
   "stale-generation": Completion & {
-    readonly reason: "epoch" | "generation" | "unpublished" | "poisoned";
+    readonly reason: "epoch" | "generation" | "unpublished" | "stopped";
   };
   error: Completion & { readonly code: NativeSearchFailureCode };
 }>;

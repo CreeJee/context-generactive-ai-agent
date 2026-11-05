@@ -39,7 +39,7 @@ The migration decision does not turn these numbers into an improvement claim: th
 
 ## Step 04-repair: Rust-owned control, current-build paired comparison
 
-Removed JS SAB backing-store atomics, pointer-as-usize SQLite callbacks, brand/intrinsic lookups and Node clock run_script. The host registers Arc<AtomicBool>/Instant control before large input validation/copy/queueing; worker/native conversion uses the same control. Only bounded identity/budget scalar conversion precedes registration. A host-private UUID seed plus never-recycled native serial prevents issued-token reuse without an unbounded tombstone set. Claims are one-shot and owner/epoch/request-bound. Explicit read cleanup confirms rollback/autocommit; failure poisons the connection and terminates its owner.
+Removed JS SAB backing-store atomics, pointer-as-usize SQLite callbacks, brand/intrinsic lookups and Node clock run_script. The host registers Arc<AtomicBool>/Instant control before large input validation/copy/queueing; worker/native conversion uses the same control. Only bounded identity/budget scalar conversion precedes registration. A host-private UUID seed plus never-recycled native serial prevents issued-token reuse without an unbounded tombstone set. Claims are one-shot and owner/epoch/request-bound. Explicit read cleanup confirms rollback/autocommit; failure marks the connection unusable and terminates its owner.
 
 A rebuilt addon reran the exact same one-worker/index, temporary WAL fixture: 10,002 candidates, 384 dimensions/4-bit/k48, 13 alternating pairs. IDs/scores/text/morph/coverage matched in every pair. Twelve warm pairs:
 

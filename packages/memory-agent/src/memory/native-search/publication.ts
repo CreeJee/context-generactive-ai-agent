@@ -16,10 +16,10 @@ import type { ReadAdmission } from "./client.ts";
 const isTagged = Schema.is(Schema.Struct({ _tag: Schema.String }));
 
 /**
- * The failure that poisoned a gate, by tag and cause chain only: causes can hold SQL or paths.
+ * The failure that stopped a gate, by tag and cause chain only: causes can hold SQL or paths.
  * A failure without a tag (a defect, an interruption) is named by the cause's tags.
  */
-const poisonAnnotations = (cause: Cause.Cause<unknown>) =>
+const stoppedBy = (cause: Cause.Cause<unknown>) =>
   EffectArray.findFirst(cause.reasons, Cause.isFailReason).pipe(
     Option.map((reason) => reason.error),
     Option.filter(isTagged),
@@ -33,12 +33,16 @@ export class PublicationFailed extends Schema.TaggedError<
   PublicationFailed,
   { readonly brand: unique symbol }
 >()("PublicationFailed", {
-  reason: Schema.Literals(["poisoned", "owner-mismatch"]),
+  reason: Schema.Literals(["stopped", "owner-mismatch"]),
 }) {}
 
+/**
+ * `stopped`: a mutation failed, so the index may no longer match the database. Reads and
+ * mutations are refused until the owner is opened again, which reconciles the two.
+ */
 export type PublicationState = Data.TaggedEnum<{
   ready: { readonly generation: number };
-  poisoned: { readonly generation: number };
+  stopped: { readonly generation: number };
 }>;
 export const PublicationState = Data.taggedEnum<PublicationState>();
 
@@ -59,7 +63,7 @@ export const makePublication = Effect.fn("NativePublication.make")(function* (ep
     Ref.get(state),
     PublicationState.$match({
       ready: ({ generation }) => Effect.succeed({ epoch, generation }),
-      poisoned: () => Effect.fail(PublicationFailed.make({ reason: "poisoned" })),
+      stopped: () => Effect.fail(PublicationFailed.make({ reason: "stopped" })),
     }),
   );
 
@@ -88,12 +92,12 @@ export const makePublication = Effect.fn("NativePublication.make")(function* (ep
             onFailure: (cause) =>
               Ref.set<PublicationState>(
                 state,
-                PublicationState.poisoned({ generation: before.generation }),
+                PublicationState.stopped({ generation: before.generation }),
               ).pipe(
-                // Every later read and mutation fails with `poisoned` until the owner is opened
+                // Every later read and mutation fails with `stopped` until the owner is opened
                 // again, so the failure that started it is logged here, once.
                 Effect.andThen(
-                  Effect.logWarning("Vector index publication poisoned", poisonAnnotations(cause)),
+                  Effect.logWarning("Vector index stopped after a failed update", stoppedBy(cause)),
                 ),
                 Effect.andThen(Effect.failCause(cause)),
               ),

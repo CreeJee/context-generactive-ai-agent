@@ -88,7 +88,7 @@ testAgent({ embedder, morphAnalyzer: MorphAnalyzer.disabled })(
 testAgent({ embedder, morphAnalyzer: MorphAnalyzer.disabled })(
   "purge during chunk publication",
   (it) => {
-    it.effect("rejects a purged parent at commit without poisoning other agents' searches", () =>
+    it.effect("rejects a purged parent at commit without stopping other agents' searches", () =>
       Effect.gen(function* () {
         const env = yield* TestEnv;
         yield* (yield* Nodes).append({

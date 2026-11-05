@@ -78,7 +78,7 @@ it("releases admission permit before full result and binds owner/generation", ()
     ).pipe(Effect.timeout("2 seconds")),
   ));
 
-it("holds mutation until actual snapshot pin ack, advances generation and poisons failed publication", () =>
+it("holds mutation until actual snapshot pin ack, advances generation and stops after a failed publication", () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -118,12 +118,12 @@ it("holds mutation until actual snapshot pin ack, advances generation and poison
         expect(
           yield* Effect.flip(publication.withMutation(Effect.fail(SaveFailed.make()))),
         ).toBeInstanceOf(SaveFailed);
-        expect(yield* publication.inspect).toEqual(PublicationState.poisoned({ generation: 1 }));
+        expect(yield* publication.inspect).toEqual(PublicationState.stopped({ generation: 1 }));
         expect(yield* Effect.flip(publication.admitSnapshot(Effect.succeed))).toMatchObject({
-          reason: "poisoned",
+          reason: "stopped",
         });
         expect(yield* Effect.flip(publication.withMutation(Effect.void))).toMatchObject({
-          reason: "poisoned",
+          reason: "stopped",
         });
         const recovered = yield* makePublication("owner-two");
         expect(yield* recovered.admitSnapshot(Effect.succeed)).toEqual({
@@ -139,7 +139,7 @@ class FlushFailed extends Schema.TaggedError<FlushFailed, { readonly brand: uniq
   { cause: Schema.optional(Schema.Defect()) },
 ) {}
 
-it("logs the failure that poisons the gate once, by its tag and cause chain", () => {
+it("logs the failure that stops the gate once, by its tag and cause chain", () => {
   const logs: Array<{ readonly level: string; readonly message: unknown }> = [];
   const capture = Logger.make((log) => {
     logs.push(Logger.formatStructured.log(log));
@@ -156,7 +156,7 @@ it("logs the failure that poisons the gate once, by its tag and cause chain", ()
           ...logs[0],
           level: "WARN",
           message: [
-            "Vector index publication poisoned",
+            "Vector index stopped after a failed update",
             { error: "FlushFailed", cause: "SaveFailed" },
           ],
         },
