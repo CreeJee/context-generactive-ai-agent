@@ -26,7 +26,14 @@ import {
 } from "effect";
 import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
 import { ApiUsage, apiUsageHook } from "../agent/api-usage.ts";
-import { type ConversationMessage, messageText } from "../agent/compaction.ts";
+import {
+  type Budget,
+  budgetFor,
+  type ConversationMessage,
+  type LeaveOutPointers,
+  leftOutWithin,
+  messageText,
+} from "../agent/compaction.ts";
 import type { JsonValue } from "../json.ts";
 import type { AgUiEvent } from "../loop/chunks.ts";
 import { asRunFailed, modelFailureOf, type RunHook, runChat, StepEnded } from "../loop/run.ts";
@@ -204,6 +211,37 @@ function compactChildToolResultsBody<M extends ConversationMessage>(
     }),
   );
 }
+
+/**
+ * What a child's request leaves out stands in for: a saved result is read again from the child's
+ * transcript. One already a pointer stays as it is, and a result not saved yet stays whole.
+ */
+const childPointers = (savedCallIds: HashSet.HashSet<string>): LeaveOutPointers => ({
+  toolResult: (toolCallId, text) =>
+    Option.liftPredicate(
+      `[Child tool result left out to save context; saved in this subagent's transcript. toolCallId: ${toolCallId}. Call read_subagent_tool_result with this toolCallId and offset 0 to read it again.]`,
+      () =>
+        HashSet.has(savedCallIds, toolCallId) && !text.startsWith("[Completed child tool result"),
+    ),
+  dropped: (count) =>
+    `[${count} earlier messages of this subagent's conversation were left out to save context.]`,
+});
+
+/**
+ * What a child's request sends: its long saved results shortened, then, past the budget of the
+ * model's window, left out as the main conversation's history is. A child runs the same model on
+ * the same window as a conversation; shortening alone let 120 tool results in one run outgrow it.
+ */
+export const childRequestHistory = <M extends ConversationMessage>(options: {
+  readonly messages: ReadonlyArray<M>;
+  readonly savedCallIds: HashSet.HashSet<string>;
+  readonly budget: Budget;
+}) =>
+  leftOutWithin({
+    messages: compactChildToolResults(options.messages, options.savedCallIds),
+    budget: options.budget,
+    pointers: childPointers(options.savedCallIds),
+  });
 
 const FileArtifactResult = Schema.Struct({ path: Schema.String, sha256: Schema.String });
 /** The tools whose result names the file they wrote. */
@@ -777,7 +815,11 @@ const make = Effect.gen(function* () {
           runStore.thread(threadId).pipe(
             Effect.map((saved) => ({
               ...request,
-              history: compactChildToolResults(request.history, savedToolCallIds(saved)),
+              history: childRequestHistory({
+                messages: request.history,
+                savedCallIds: savedToolCallIds(saved),
+                budget: budgetFor(runtime.contextWindow(binding.selection.model)),
+              }),
             })),
             Effect.mapError(asRunFailed),
           ),

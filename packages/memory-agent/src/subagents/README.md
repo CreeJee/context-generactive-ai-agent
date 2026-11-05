@@ -15,6 +15,7 @@
 - `subagentInstructions` — 부모 모델에게 위임 규칙(백그라운드 실행, polling 금지, 보고서는 사용자 승인이 아님 등)을 알리는 시스템 프롬프트 문자열.
 - `childInstructions` — `EffectFunction.dual(2)`로 만든 함수. `(name, instructions)`를 받아 자식 에이전트의 자기소개 프롬프트를 만든다.
 - `compactChildToolResults` — dual 함수 `(messages, savedCallIds)`. 자식 히스토리에서 저장된 긴 tool 결과를 모델 입력용 pointer나 preview로 줄인다.
+- `childRequestHistory` — `{ messages, savedCallIds, budget }`. 자식 요청이 보내는 히스토리다. `compactChildToolResults`로 줄인 뒤, 모델 창의 예산(`budgetFor`)을 넘으면 메인 대화와 같이 `leftOutWithin`으로 뺀다.
 - `SubagentOperationFailed` — `Schema.TaggedError`이며 필드는 `operation: "store"`, `cause: Defect`.
 - `SubagentAdoptionRejected` — `Schema.TaggedError`이며 `reason`은 `NotReviewed` 또는 `NotificationNotDelivered`이고 모델이 읽는 고정 `message`를 가진다. `adopt_subagent_reports`가 이 오류를 던진다.
 - `subagentThreadId` — `` (subagentId) => `subagent-${subagentId}` ``로 자식 대화 thread id를 만든다.
@@ -34,6 +35,7 @@
 - 자식은 부모와 같은 model, project, tools, permissions를 쓴다. 위임으로 권한이 넓어지지 않는다. 부모 에이전트의 task 메시지는 사용자 승인이 아니므로 위험한 동작은 평소대로 approval을 거친다.
 - Adoption 규칙이 있다. 이번 run에서 `get_subagent_reports`로 검토한 completed 보고서만 adopt할 수 있고(`NotReviewed`), 이번 run에 전달된 상태 알림 id만 adopt할 수 있다(`NotificationNotDelivered`). 알림은 검토로 치지 않고, 조회만으로는 adopt되지 않는다.
 - `compactChildToolResults`는 모델 입력만 줄이고 저장된 자식 transcript는 바꾸지 않는다. 대상은 `savedCallIds`에 있는 toolCallId이면서 길이가 `childResultPageLength`(4000자)를 넘는 tool 결과이고, 이미 "[Completed child tool result"로 시작하는 결과는 건너뛴다. 마지막 최종 assistant 답변보다 앞의 결과는 pointer로, 뒤의 결과는 앞 2000자와 끝 1000자 preview로 바꾼다.
+- 자식 요청은 메인 대화와 같은 모델 창 예산을 쓴다(`childRequestHistory`). 추정치가 창의 55%를 넘으면 절반까지 줄인다. 순서는 run 앞의 도구 결과, run 앞의 오래된 메시지(표시 한 줄로 대체), run 안의 오래된 도구 결과다. 뺀 도구 결과는 `read_subagent_tool_result`로 다시 읽는 pointer가 된다. 아직 저장되지 않은 결과와 이미 "[Completed child tool result" pointer인 결과는 그대로 둔다. 자식의 task, 도구 호출, 최신 step의 결과는 빼지 않는다.
 - 입력 제약이 있다. `agent` 이름은 `/^[A-Za-z0-9_-]{1,40}$/`, `attempts`는 1~100개, `offset`은 0 이상 정수이고 기본값은 0이다. named helper의 `instructions`는 이전 값을 대체하고, 생략하면 기존 값을 유지한다.
 - `resume_subagent`는 최신 failed 또는 interrupted attempt(`expectedAttemptId`)만 재시도한다. `confirmUncertain`의 기본값은 false이며, 사용자가 중복 부작용 가능성을 받아들인 뒤에만 true로 둔다. 완료된 tool 호출은 다시 실행하지 않고, 이전 approval은 이어지지 않는다.
 - `SubagentRow` status literal 집합은 `SubagentStatus`와 같아야 한다. 이 행은 `subagents` 표 컬럼(id, session_id, name, instructions, status, last_task, last_answer, error, ...)을 decode한다.

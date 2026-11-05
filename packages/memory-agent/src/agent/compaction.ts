@@ -348,6 +348,21 @@ export const memoryLookups = Effect.fnUntraced(function* (
 const droppedMarker = (count: number) =>
   `[${count} earlier messages of this conversation were left out to save context. They are kept in memory: use find_memory, read_evidence and trace_evidence to recall them.]`;
 
+/**
+ * What stands in for what a request leaves out: a tool output (given its call id and text), or
+ * none when it has nowhere to be read again; and the messages before the run, by their count.
+ */
+export interface LeaveOutPointers {
+  readonly toolResult: (toolCallId: string, text: string) => Option.Option<string>;
+  readonly dropped: (count: number) => string;
+}
+
+/** The conversation's pointers: its tool outputs and messages are memory nodes. */
+const memoryPointers = (toolResultId: (toolCallId: string) => string | null): LeaveOutPointers => ({
+  toolResult: (toolCallId) => Option.some(clearedOutput(toolResultId(toolCallId))),
+  dropped: droppedMarker,
+});
+
 const decodeToolArguments = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
 );
@@ -492,13 +507,13 @@ interface Clearable {
 }
 
 /**
- * The tool outputs of `messages` from `from` up to `to` that a pointer to their memory node makes
- * smaller. The pointer is the one clearing the answered output makes after the run, so each result
- * still changes only once and the request prefix before it stays cacheable.
+ * The tool outputs of `messages` from `from` up to `to` that their pointer makes smaller. In the
+ * conversation the pointer is the one clearing the answered output makes after the run, so each
+ * result still changes only once and the request prefix before it stays cacheable.
  */
 const clearable = (
   messages: ReadonlyArray<ConversationMessage>,
-  toolResultId: (toolCallId: string) => string | null,
+  pointers: LeaveOutPointers,
   [from, to]: readonly [number, number],
 ): ReadonlyArray<Clearable> =>
   EffectArray.getSomes(
@@ -508,7 +523,7 @@ const clearable = (
           message.role === "tool" && index >= from && index < to ? message.toolCallId : undefined,
           isTruthy,
         );
-        const pointer = clearedOutput(toolResultId(toolCallId));
+        const pointer = yield* pointers.toolResult(toolCallId, messageText(message));
         const saved = estimateTokens(message) - estimateTokens({ role: "tool", content: pointer });
         return yield* Option.liftPredicate({ index, pointer, saved }, (output) => output.saved > 0);
       }),
@@ -548,28 +563,28 @@ const clearedOldest = <M extends ConversationMessage>(
 const broughtDown = <M extends ConversationMessage>(
   sending: Sending<M>,
   keep: number,
-  toolResultId: (toolCallId: string) => string | null,
+  pointers: LeaveOutPointers,
 ): Sending<M> => {
   const over = (messages: ReadonlyArray<ConversationMessage>) =>
     estimateConversation(messages) - keep;
   const start = runStart(sending.sent);
   const before = clearedOldest(
     sending.sent,
-    clearable(sending.sent, toolResultId, [0, Math.min(start, latestStep(sending.sent))]),
+    clearable(sending.sent, pointers, [0, Math.min(start, latestStep(sending.sent))]),
     over(sending.sent),
   );
   const cut = over(before.messages) > 0 ? Math.min(keptFrom(before.messages, keep), start) : 0;
   const kept = before.messages.slice(cut);
   const inRun = clearedOldest(
     kept,
-    clearable(kept, toolResultId, [start - cut, latestStep(kept)]),
+    clearable(kept, pointers, [start - cut, latestStep(kept)]),
     over(kept),
   );
   return before.cleared + cut + inRun.cleared > 0
     ? {
         sent:
           cut > 0
-            ? [{ role: "user", content: droppedMarker(cut) }, ...inRun.messages]
+            ? [{ role: "user", content: pointers.dropped(cut) }, ...inRun.messages]
             : inRun.messages,
         stage: "leave-out",
       }
@@ -578,11 +593,27 @@ const broughtDown = <M extends ConversationMessage>(
 
 /** Past `leaveOutAt`, what is sent is brought down to its latest half (see {@link broughtDown}). */
 const leftOutPast =
-  (leaveOutAt: number, toolResultId: (toolCallId: string) => string | null) =>
+  (leaveOutAt: number, pointers: LeaveOutPointers) =>
   <M extends ConversationMessage>(sending: Sending<M>): Sending<M> =>
     estimateConversation(sending.sent) > leaveOutAt
-      ? broughtDown(sending, Math.floor(leaveOutAt / 2), toolResultId)
+      ? broughtDown(sending, Math.floor(leaveOutAt / 2), pointers)
       : sending;
+
+/**
+ * A history whose outputs and messages are not memory nodes, such as a subagent's, left out past
+ * `budget.leaveOutAt` as the conversation's is, with `pointers` standing in for what it leaves out.
+ */
+export const leftOutWithin = <M extends ConversationMessage>(options: {
+  readonly messages: ReadonlyArray<M>;
+  readonly budget: Budget;
+  readonly pointers: LeaveOutPointers;
+}): ReadonlyArray<M | CompactionMessage> =>
+  pipe(
+    { sent: options.messages, stage: "none" } satisfies Sending<M>,
+    leftOutPast(options.budget.leaveOutAt, options.pointers),
+    // Leaving out the oldest messages can split a call from its result.
+    paired,
+  ).sent;
 
 /**
  * Do not perturb an intact prefix with retrieval. Once this request did omit original content, an
@@ -665,7 +696,7 @@ export const compactEffect = Effect.fnUntraced(function* <M extends Conversation
         : undefined,
     ),
     paired,
-    leftOutPast(budget.leaveOutAt, toolResultId),
+    leftOutPast(budget.leaveOutAt, memoryPointers(toolResultId)),
   );
   // Leaving out the oldest messages can split a call from its result.
   const { sent, stage } = paired(yield* withAppendix(sources, prepared));

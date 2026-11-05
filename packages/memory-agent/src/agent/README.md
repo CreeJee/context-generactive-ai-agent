@@ -17,6 +17,7 @@
 - `ApiUsage` — SQLite `api_usage_responses` 원장 서비스(`ApiUsage.layer`)이다. `record(response)`는 행 id를 돌려주고 `byRootSession(rootSessionId)`는 `ApiUsageTotals`를 돌려준다.
 - `recordUsage` / `apiUsageHook` / `ApiUsageRejected` / `ApiUsageResponse` / `ApiUsageTotals` — Effect AI 응답 usage를 원장에 기록하는 dual 함수와 `RunHook.usage` 훅, 거부 오류(`attribution-missing`|`invalid-count`|`unknown-cache-mode`|`cache-exceeds-input`), 입출력 타입이다.
 - `compactEffect` / `requestHistory` / `compactionHook` / `compactByHand` — 모델에 보낼 대화를 압축하는 본체, 요청 단위 히스토리와 적용 stage, Effect AI 루프용 compaction 훅, 수동 `/compact`이다.
+- `leftOutWithin` / `LeaveOutPointers` — 기억 노드가 아닌 히스토리(서브에이전트)에 대화와 같은 leave-out(`leaveOutAt`을 넘으면 절반까지)을 거는 함수와, 뺀 도구 출력·메시지 자리에 둘 pointer이다. 대화는 기억 노드 pointer(`clearedOutput`, 기억 도구로 다시 읽기)를 쓴다.
 - `ConversationMessage` / `ConversationToolCall` / `CompactionMessage` / `CompactionFailed` / `CompactionReason` — compaction이 읽는 메시지 형태, 대체 메시지, 실패 오류(operation·reason·cause)이다.
 - `budgetFor` / `Budget` / `leaveOutAtShare` / `estimateTokens` / `estimateConversation` / `messageText` / `clearedOutput` — 컨텍스트 예산(leaveOutAt = window*0.55), 토큰 추정, 메시지 텍스트, 비운 도구 출력 문구이다.
 - `manualCompactionNamespace` / `compactionStateEffect` / `CompactionState` / `CompactionSources` / `linedUp` / `sameTurn` / `userTurns` / `answeredToolCalls` / `memoryLookups` / `lookupSources` / `replayableToolHistory` / `lightweightToolResults` / `SummaryOutcome` / `Compacted` — 턴 요약 블록 저장 형식, 세션 compaction 상태 읽기, 요약-대화 정렬 보조 함수이다.

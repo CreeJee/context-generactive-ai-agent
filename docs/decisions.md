@@ -4065,3 +4065,10 @@
 - 계기: 마이그레이션 15개(76~90)가 밀린 로컬 DB(5.6 GB)로 dev를 시작했다. `Database.make`가 73초 걸렸고, 마이그레이션 트랜잭션이 WAL에 790 MB를 남겼다. 이후 2분 넘게 화면 쿼리가 최대 20.8초씩 기다렸다.
 - 원인: SQLite는 WAL이 1,000 페이지를 넘으면 커밋하는 연결에서 자동 checkpoint를 돈다. 그 커밋은 대개 가져오기 worker의 piece였다. native stack에서 worker 스레드가 `COMMIT` 안의 `sqlite3WalCheckpoint`에서 `fsync`·`pwrite`를 하고 있었다. piece는 쓰는 동안 앱 연결을 reserve하므로(`Turn`), 그 커밋이 끝날 때까지 앱의 모든 statement가 줄을 섰다. `Turn` 하나가 최대 20.3초였다.
 - 결정: 마이그레이션을 하나라도 적용한 시작에서만 `migrateDatabase`가 커밋 뒤 `PRAGMA wal_checkpoint(TRUNCATE)`를 돈다. 시작은 이미 마이그레이션으로 막혀 있으므로, 같은 비용을 서빙 전에 치르고 WAL 파일을 0 바이트로 줄인다. 마이그레이션이 없는 시작은 건드리지 않는다.
+
+## 서브에이전트 요청도 대화와 같은 창 예산으로 줄인다 (2026-11-05)
+
+- 계기: 서브에이전트 run 하나가 도구를 120번 부른 뒤 "Compatible context limit exceeded"로 끝났다(GLM-5.3-Flash, 창 100,000). 보내기 전 guard(`withinContext`)가 거절했다. 자식 요청은 4,000자를 넘는 저장된 결과를 3,000자 미리보기로 줄이기만 했고(`compactChildToolResults`, 2026-09-24), 창 예산은 보지 않았다. 대화 compaction을 자식에서 뺀 결정은 기록에 없다. 실패한 thread의 메시지 추정은 118,732 토큰, 줄인 뒤에도 81,064 토큰이었다.
+- 결정: 자식은 대화와 같은 모델, 같은 창을 쓴다. 그래서 대화와 같은 leave-out을 건다. 추정치가 `leaveOutAt`(창의 55%)을 넘으면 절반까지 줄이고, 순서도 같다(run 앞의 도구 결과 → run 앞의 오래된 메시지 → run 안의 오래된 도구 결과). task, 도구 호출, 최신 step의 결과는 빼지 않는다.
+- 다른 점은 pointer뿐이다. 자식의 도구 결과와 메시지는 기억 노드가 아니다. 뺀 결과는 `read_subagent_tool_result`로 다시 읽는 pointer가 되고, 아직 저장되지 않은 결과는 다시 읽을 곳이 없어서 빼지 않는다. 뺀 메시지 자리는 개수만 알린다.
+- 같은 thread에 적용하면 추정치가 27,423 토큰이다.
