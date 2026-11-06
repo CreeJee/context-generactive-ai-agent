@@ -4229,3 +4229,11 @@
   - 내려받아 둔 Kiwi 모델 폴더(`<storage>/models/kiwi-0.24.0`)는 지우지 않는다. 사용자가 지울 수 있다.
   - 지운 테이블이 쓰던 공간은 VACUUM 전까지 파일에 빈 page로 남는다. VACUUM은 큰 DB에서 오래 걸려 자동으로 돌리지 않는다.
   - lexical 색인의 layout 이름(`…lindera-ko-dic-kiwi-rules/v1`)은 바꾸지 않는다. 형태소 규칙이 Kiwi에서 왔다는 뜻이고, 바꾸면 색인을 처음부터 다시 만든다.
+
+## 검색은 한 시점까지의 기억만 읽을 수 있다 (2026-11-06)
+
+- 계기: 평가 세트의 기록된 질문은 그 질문 전에 저장된 노드만 정답이 될 수 있다. pool은 지금 DB를 검색한 뒤 나중 노드를 지웠다. 그래서 app run은 기록된 item 845개 중 652개에서 30개를 못 채웠고(평균 15.3개), 처음부터 seq로 거른 Tantivy·벡터 bench run(평균 약 30개)과 공정하게 비교되지 않았다. interpreter도 같은 문제가 있었다. 지난 발언의 후보를 찾을 때 나중 노드가 검색 자리를 차지한 뒤 걸러졌다.
+- 결정: `FindInput.beforeSeq`를 둔다. 있으면 그 seq 전에 저장된 노드만 찾고 그래프로도 그런 노드에만 닿는다.
+  - native read는 `beforeSeq`로 벡터 후보 SQL에 `n.seq < ?`를 더하고, lexical 수집기는 seq fast field로 거른다. BM25 통계는 색인 전체 기준이다.
+  - 찾은 노드의 정정·철회 표시(`supersededBy`, `latest`)는 지금 기준으로 둔다. 쓰는 곳(interpreter, 평가)은 id만 본다.
+  - interpreter는 발언의 seq를 넘긴다. 평가 pool은 사후 필터를 지우고 `beforeSeq`로 검색한다. 지금까지의 app·vector·text·morph run은 다시 만들어야 한다.

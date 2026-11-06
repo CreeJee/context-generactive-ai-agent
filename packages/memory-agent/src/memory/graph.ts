@@ -27,6 +27,8 @@ export interface TraverseOptions {
   readonly minUtility: number;
   /** Only visit nodes owned by these projects. */
   readonly projectIds: readonly string[];
+  /** Only visit nodes stored before this seq. */
+  readonly beforeSeq?: number;
   /** Keep empty nodes as traversal bridges without returning them as search matches. */
   readonly includeEmpty?: boolean;
 }
@@ -166,7 +168,12 @@ const make = Effect.gen(function* () {
             return { ...rest, complete: Option.some(false) };
 
           const node = yield* nodeById(candidate.nodeId);
-          if (node === null || !HashSet.has(allowed, node.projectId)) return rest;
+          if (
+            node === null ||
+            !HashSet.has(allowed, node.projectId) ||
+            node.seq >= (options.beforeSeq ?? Number.POSITIVE_INFINITY)
+          )
+            return rest;
           const visited = HashSet.add(walk.visited, node.id);
           const expanded = Arr.reduce(
             yield* adjacent(node.id),

@@ -135,6 +135,26 @@ testAgent()("MemorySearch.find", (it) => {
     }),
   );
 
+  it.effect("reads memory as it was before a node was stored, through the graph too", () =>
+    Effect.gen(function* () {
+      const earlier = yield* earlierSession;
+      yield* indexAll;
+      const question = {
+        query: "SQLite로 결정했던 이유",
+        projectId: earlier.project.id,
+        crossProject: false,
+      };
+      const ids = (result: { readonly matches: ReadonlyArray<{ readonly id: string }> }) =>
+        result.matches.map((match) => match.id);
+      // Now the decision leads through the answer and its call to the file it read.
+      expect(ids(yield* find(question))).toContain(earlier.result.id);
+      // Before the answer was stored, the decision was all there was.
+      expect(ids(yield* find({ ...question, beforeSeq: earlier.answer.seq }))).toEqual([
+        earlier.decision.id,
+      ]);
+    }),
+  );
+
   it.effect("keeps the project's matches when reading the other projects fails, and says why", () =>
     Effect.gen(function* () {
       const { project, session } = yield* freshProject;

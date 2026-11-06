@@ -172,6 +172,8 @@ const make = Effect.gen(function* () {
           projectId: statement.projectId,
           crossProject: false,
           limit: candidatesPerStatement,
+          // A statement relates only to what was said before it; later nodes would take the slots.
+          beforeSeq: statement.seq,
         })
         .pipe(
           // Matches are only extra context for the model; without them it sees recent statements.

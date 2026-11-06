@@ -468,12 +468,25 @@ fn seq(value: i64) -> Failed<u64> {
     u64::try_from(value).map_err(|_| "Invalid node seq".to_string())
 }
 
-/// Visits every live matching document of `weight` whose project is one of `projects`, with its
-/// seq and score, checking `check` as it goes.
+/// The documents one read may see: those of the allowed projects, and with `before` only those
+/// stored before that seq (what memory held when a past statement was made).
+pub(crate) struct Scope<'a> {
+    pub(crate) projects: &'a [String],
+    pub(crate) before: Option<u64>,
+}
+
+impl Scope<'_> {
+    fn holds(&self, seq: u64) -> bool {
+        self.before.is_none_or(|before| seq < before)
+    }
+}
+
+/// Visits every live matching document of `weight` in `scope`, with its seq and score, checking
+/// `check` as it goes.
 fn each_match(
     searcher: &Searcher,
     weight: &dyn Weight,
-    projects: &[String],
+    scope: &Scope,
     check: &dyn Fn() -> std::result::Result<(), Outcome>,
     mut visit: impl FnMut(u64, Score),
 ) -> std::result::Result<(), Outcome> {
@@ -484,7 +497,8 @@ fn each_match(
             continue;
         };
         // Each segment numbers its own project strings.
-        let allowed: HashSet<u64> = projects
+        let allowed: HashSet<u64> = scope
+            .projects
             .iter()
             .filter_map(|id| project.dictionary().term_ord(id).ok().flatten())
             .collect();
@@ -505,7 +519,7 @@ fn each_match(
             if alive.is_none_or(|alive| alive.is_alive(doc))
                 && project.ords().first(doc).is_some_and(|ord| allowed.contains(&ord))
             {
-                if let Some(seq) = seqs.first(doc) {
+                if let Some(seq) = seqs.first(doc).filter(|seq| scope.holds(*seq)) {
                     visit(seq, scorer.score());
                 }
             }
@@ -541,14 +555,14 @@ fn ranked(
     searcher: &Searcher,
     query: &dyn Query,
     k: usize,
-    projects: &[String],
+    scope: &Scope,
     check: &dyn Fn() -> std::result::Result<(), Outcome>,
 ) -> std::result::Result<Vec<u64>, Outcome> {
     let weight = query
         .weight(EnableScoring::enabled_from_searcher(searcher))
         .map_err(|_| Outcome::ReadFailed)?;
     let mut best = Best::new(k);
-    each_match(searcher, weight.as_ref(), projects, check, |seq, score| {
+    each_match(searcher, weight.as_ref(), scope, check, |seq, score| {
         best.offer(seq, score)
     })?;
     Ok(best.seqs())
@@ -567,7 +581,7 @@ impl LexicalSearch<'_> {
         &self,
         terms: &[String],
         k: usize,
-        projects: &[String],
+        scope: &Scope,
         check: &dyn Fn() -> std::result::Result<(), Outcome>,
     ) -> std::result::Result<Vec<u64>, Outcome> {
         let mut trigrams = trigram_analyzer();
@@ -580,7 +594,7 @@ impl LexicalSearch<'_> {
         if clauses.is_empty() {
             return Ok(vec![]);
         }
-        ranked(&self.searcher, &should(clauses), k, projects, check)
+        ranked(&self.searcher, &should(clauses), k, scope, check)
     }
 
     /// For each two-character term, the seqs of its newest `k` documents. A gram starts with the
@@ -589,7 +603,7 @@ impl LexicalSearch<'_> {
         &self,
         terms: &[String],
         k: usize,
-        projects: &[String],
+        scope: &Scope,
         check: &dyn Fn() -> std::result::Result<(), Outcome>,
     ) -> std::result::Result<Vec<Vec<u64>>, Outcome> {
         let scoring = EnableScoring::disabled_from_searcher(&self.searcher);
@@ -603,7 +617,7 @@ impl LexicalSearch<'_> {
                 let weight = query.weight(scoring).map_err(|_| Outcome::ReadFailed)?;
                 // Newest first: the heap keeps the highest seqs.
                 let mut newest = BinaryHeap::new();
-                each_match(&self.searcher, weight.as_ref(), projects, check, |seq, _| {
+                each_match(&self.searcher, weight.as_ref(), scope, check, |seq, _| {
                     newest.push(std::cmp::Reverse(seq));
                     if newest.len() > k {
                         newest.pop();
@@ -623,7 +637,7 @@ impl LexicalSearch<'_> {
         &self,
         text: &str,
         k: usize,
-        projects: &[String],
+        scope: &Scope,
         check: &dyn Fn() -> std::result::Result<(), Outcome>,
     ) -> std::result::Result<Vec<u64>, Outcome> {
         let mut words = words_analyzer();
@@ -644,7 +658,7 @@ impl LexicalSearch<'_> {
         if clauses.is_empty() {
             return Ok(vec![]);
         }
-        ranked(&self.searcher, &should(clauses), k, projects, check)
+        ranked(&self.searcher, &should(clauses), k, scope, check)
     }
 }
 
@@ -812,21 +826,36 @@ mod tests {
             .unwrap();
         assert_eq!(size(&lexical), 4);
         let projects = ["p".to_string()];
+        let scope = Scope {
+            projects: &projects,
+            before: None,
+        };
         {
             let search = search(&lexical);
-            assert_eq!(search.morphs("검색엔진", 10, &projects, &ok).unwrap(), [1]);
+            assert_eq!(search.morphs("검색엔진", 10, &scope, &ok).unwrap(), [1]);
             assert_eq!(
                 search
-                    .phrases(&["검색엔진".into()], 10, &projects, &ok)
+                    .phrases(&["검색엔진".into()], 10, &scope, &ok)
                     .unwrap(),
                 [1]
             );
             // Newest first; "오늘" ends the text of node 4.
             assert_eq!(
                 search
-                    .short_terms(&["오늘".into(), "PR".into()], 10, &projects, &ok)
+                    .short_terms(&["오늘".into(), "PR".into()], 10, &scope, &ok)
                     .unwrap(),
                 [vec![4, 2], vec![2]]
+            );
+            // Bounded before node 4: what memory held when it was stored.
+            let earlier = Scope {
+                projects: &projects,
+                before: Some(4),
+            };
+            assert_eq!(
+                search
+                    .short_terms(&["오늘".into()], 10, &earlier, &ok)
+                    .unwrap(),
+                [vec![2]]
             );
         }
         // Node 1's text changed and node 2 went away.
@@ -834,10 +863,10 @@ mod tests {
         assert_eq!(size(&lexical), 3);
         {
             let search = search(&lexical);
-            assert!(search.morphs("검색엔진", 10, &projects, &ok).unwrap().is_empty());
+            assert!(search.morphs("검색엔진", 10, &scope, &ok).unwrap().is_empty());
             assert_eq!(
                 search
-                    .short_terms(&["오늘".into()], 10, &projects, &ok)
+                    .short_terms(&["오늘".into()], 10, &scope, &ok)
                     .unwrap(),
                 [vec![4]]
             );

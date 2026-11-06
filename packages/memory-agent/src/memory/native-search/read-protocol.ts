@@ -24,6 +24,8 @@ export const NativeReadInput = Schema.Struct({
   shortTerms: ids,
   /** The question; the lexical index splits it into morph terms itself. */
   morphQuery: Schema.String,
+  /** Only nodes stored before this seq are read: what memory held when that node was stored. */
+  beforeSeq: Schema.optional(Count),
   vectorK: Count.check(Schema.makeFilter((value) => value <= maxVectorK)),
   textK: Count,
   morphK: Count,

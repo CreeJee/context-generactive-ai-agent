@@ -30,6 +30,11 @@ export interface FindInput {
   /** Also search projects that have not opted out of cross-project recall. Default true. */
   readonly crossProject?: boolean;
   readonly limit?: number;
+  /**
+   * Only nodes stored before this seq are found or reached: what memory held when that node was
+   * stored, as interpreting a past statement needs. The matches' corrections are still today's.
+   */
+  readonly beforeSeq?: number;
 }
 
 export interface Match {
@@ -490,6 +495,7 @@ const make = (tuning: SearchTuning) =>
           shortTerms: grouped.short,
           // The lexical index splits the question into morph terms itself.
           morphQuery: input.query,
+          ...optionalProperty("beforeSeq", input.beforeSeq),
           vectorK: Math.min(limit * 4, maxVectorK),
           textK: limit * 2,
           morphK: limit * 2,
@@ -593,6 +599,7 @@ const make = (tuning: SearchTuning) =>
           minUtility: 0.2,
           projectIds: allowed,
           includeEmpty: false,
+          ...optionalProperty("beforeSeq", input.beforeSeq),
         });
         const { unindexed, textUnindexed, uninterpreted } = coverage;
 

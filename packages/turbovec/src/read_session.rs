@@ -1,6 +1,6 @@
 //! Read-only seed ranking. Host owns authorization and index publication serialization.
 use crate::{
-    lexical::LexicalIndex,
+    lexical::{LexicalIndex, Scope},
     search_control::{admitted, claim, Outcome},
     VectorIndex,
 };
@@ -35,6 +35,8 @@ pub struct NativeReadInput {
     pub short_terms: Vec<String>,
     /// The question, split into morph terms by the lexical index's own analysis.
     pub morph_query: String,
+    /// Only nodes stored before this seq are read: what memory held when that node was stored.
+    pub before_seq: Option<i64>,
     pub vector_k: u32,
     pub text_k: u32,
     pub morph_k: u32,
@@ -362,6 +364,7 @@ impl MemoryReadSession {
             })
             || (input.text_enabled && input.text_k == 0)
             || (input.morph_enabled && (input.morph_k == 0 || input.morph_query.is_empty()))
+            || input.before_seq.is_some_and(|seq| seq < 0)
             || ((input.text_enabled || input.morph_enabled) && lexical.is_none())
             || input.morph_query.len() > 65536
             || input
@@ -441,6 +444,14 @@ impl MemoryReadSession {
                 .transpose()
                 .map_err(|_| Outcome::ReadFailed)?;
             let projects = scope(&input.allowed_projects);
+            let lexical_scope = Scope {
+                projects: &input.allowed_projects,
+                before: input.before_seq.map(|seq| seq as u64),
+            };
+            let (bounded, bound) = match input.before_seq {
+                Some(seq) => (" AND n.seq<?", vec![Value::Integer(seq)]),
+                None => ("", vec![]),
+            };
             let project_values = || {
                 input
                     .allowed_projects
@@ -454,9 +465,10 @@ impl MemoryReadSession {
             if input.query.is_some() && !input.allowed_projects.is_empty() {
                 let mut values = vec![Value::Text(input.embedder.clone())];
                 values.extend(project_values());
+                values.extend(bound);
                 // Every vector of the allowed projects but those waiting to leave the index (a
                 // suppressed or changed node's): the indexer embeds only searchable statements.
-                let sql = format!("SELECT COALESCE(c.vector_id,n.seq),n.seq FROM node_vectors v JOIN nodes n ON n.seq=v.node_seq LEFT JOIN node_vector_chunks c ON c.node_seq=v.node_seq AND c.embedder=v.embedder WHERE v.embedder=? AND n.project_id IN ({projects}) AND NOT EXISTS (SELECT 1 FROM memory_graph_vector_removals r WHERE r.node_seq=v.node_seq AND r.embedder=v.embedder)");
+                let sql = format!("SELECT COALESCE(c.vector_id,n.seq),n.seq FROM node_vectors v JOIN nodes n ON n.seq=v.node_seq LEFT JOIN node_vector_chunks c ON c.node_seq=v.node_seq AND c.embedder=v.embedder WHERE v.embedder=? AND n.project_id IN ({projects}){bounded} AND NOT EXISTS (SELECT 1 FROM memory_graph_vector_removals r WHERE r.node_seq=v.node_seq AND r.embedder=v.embedder)");
                 let mut statement = connection.prepare(&sql).map_err(|_| Outcome::ReadFailed)?;
                 let mut rows = statement
                     .query(params_from_iter(values))
@@ -613,7 +625,7 @@ impl MemoryReadSession {
                 let ranked = search.phrases(
                     &input.trigram_terms,
                     k * LEXICAL_DEPTH,
-                    &input.allowed_projects,
+                    &lexical_scope,
                     &text_check,
                 )?;
                 if !input.trigram_terms.is_empty() {
@@ -624,7 +636,7 @@ impl MemoryReadSession {
                 let newest = search.short_terms(
                     &input.short_terms,
                     k * LEXICAL_DEPTH,
-                    &input.allowed_projects,
+                    &lexical_scope,
                     &text_check,
                 )?;
                 short_term_ms = ms(started);
@@ -683,7 +695,7 @@ impl MemoryReadSession {
                     let ranked = search.morphs(
                         &input.morph_query,
                         k * LEXICAL_DEPTH,
-                        &input.allowed_projects,
+                        &lexical_scope,
                         &check,
                     )?;
                     if !ranked.is_empty() {

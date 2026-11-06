@@ -75,6 +75,8 @@ export interface NativeReadInput {
   shortTerms: readonly string[];
   /** The question; the lexical index splits it into morph terms itself. */
   morphQuery: string;
+  /** Only nodes stored before this seq are read: what memory held when that node was stored. */
+  beforeSeq?: number | null | undefined;
   vectorK: number;
   textK: number;
   morphK: number;

@@ -190,6 +190,16 @@ it(
             expect(removing.result.candidateCount).toBe(1);
             expect(removing.result.vectorIds).toEqual(["alpha"]);
             db.exec("DELETE FROM memory_graph_vector_removals");
+            // Bounded before beta: every channel reads memory as it was then, alpha alone.
+            const earlier = yield* search("earlier", { beforeSeq: 2 });
+            if (!OwnerReply.guards["memory-result"](earlier))
+              return yield* NativeOwnerFailed.make({ reason: "invalid-input" });
+            expect(earlier.result).toMatchObject({
+              candidateCount: 1,
+              vectorIds: ["alpha"],
+              textIds: ["alpha"],
+              morphIds: ["alpha"],
+            });
             const one = yield* search("one", { vectorK: 1 });
             if (!OwnerReply.guards["memory-result"](one))
               return yield* NativeOwnerFailed.make({ reason: "invalid-input" });
