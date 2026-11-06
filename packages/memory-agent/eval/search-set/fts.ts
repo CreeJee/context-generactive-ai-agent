@@ -12,7 +12,7 @@ import { alternate, channelDepth, keptIds } from "./pool.ts";
 
 /** The native read's text stage budget: the 2 s read less the 600 ms it keeps for the rest. */
 const textBudgetMs = 1_400;
-const readBudgetMs = 2_000;
+export const readBudgetMs = 2_000;
 
 const RunName = Schema.Literals(["fts-trigram", "fts-morph"]);
 type RunName = typeof RunName.Type;
@@ -45,7 +45,7 @@ interface Searched {
   readonly ms: Option.Option<number>;
 }
 
-const percentile = (sorted: ReadonlyArray<number>, share: number) =>
+export const percentile = (share: number) => (sorted: ReadonlyArray<number>) =>
   sorted[Math.round((sorted.length - 1) * share)] ?? 0;
 
 export const ftsRuns = Effect.fn("searchSet.fts")(function* (storage: string) {
@@ -148,8 +148,8 @@ export const ftsRuns = Effect.fn("searchSet.fts")(function* (storage: string) {
       const over = (limit: number) => ms.filter((each) => each > limit).length;
       const mean = ms.reduce((sum, each) => sum + each, 0) / Math.max(1, ms.length);
       return Console.log(
-        `${run}: timed ${ms.length}; p50 ${percentile(ms, 0.5).toFixed(1)} ms; ` +
-          `p95 ${percentile(ms, 0.95).toFixed(1)} ms; max ${percentile(ms, 1).toFixed(1)} ms; ` +
+        `${run}: timed ${ms.length}; p50 ${percentile(0.5)(ms).toFixed(1)} ms; ` +
+          `p95 ${percentile(0.95)(ms).toFixed(1)} ms; max ${percentile(1)(ms).toFixed(1)} ms; ` +
           `mean ${mean.toFixed(1)} ms; over ${textBudgetMs} ms ${over(textBudgetMs)}; ` +
           `over ${readBudgetMs} ms ${over(readBudgetMs)}; ` +
           `failed ${results.filter((result) => result.row.failed !== undefined).length}`,

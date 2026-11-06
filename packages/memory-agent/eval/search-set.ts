@@ -9,7 +9,8 @@
  * <copy> is a copy of a storage folder (agent.db, vectors/, models/), such as
  * node_modules/.vp-tmp/cga-bench made by the bench-copy-stage skill. The usual order: recorded,
  * rounds, pool, judge, then score; a new search system writes a run, judge grades what only it
- * returned, and score compares it with the others.
+ * returned, and score compares it with the others. `rerank` reorders other runs' top ids with a
+ * local reranker model as another run.
  */
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Effect, Layer, Option, Schema } from "effect";
@@ -23,6 +24,7 @@ import { agreement, judgeCheck, judgePools } from "./search-set/judge.ts";
 import { EvalModel } from "./search-set/model.ts";
 import { searchRuns } from "./search-set/pool.ts";
 import { buildRecorded } from "./search-set/recorded.ts";
+import { RerankDevice, RerankDtype, rerankRun } from "./search-set/rerank.ts";
 import { writeRounds } from "./search-set/rounds.ts";
 import { scoreRuns } from "./search-set/score.ts";
 import { writeTerms } from "./search-set/terms.ts";
@@ -109,6 +111,35 @@ const fts = Command.make("fts", { copy }, ({ copy }) => ftsRuns(copy)).pipe(
   Command.provide(({ copy }) => copyDatabase(copy)),
 );
 
+const rerank = Command.make(
+  "rerank",
+  {
+    copy,
+    name: Flag.String("name").pipe(Flag.withDescription("the run's name")),
+    model: Flag.String("model").pipe(
+      Flag.withDescription("the reranker's Hugging Face model id, with ONNX weights"),
+    ),
+    candidates: Argument.String("run").pipe(
+      Argument.withDescription("runs whose top ids are reranked"),
+      Argument.variadic({ min: 1 }),
+    ),
+    depth: Flag.Int("depth").pipe(
+      Flag.withDescription("ids taken from each candidate run"),
+      Flag.withDefault(10),
+    ),
+    maxTokens: Flag.Int("max-tokens").pipe(
+      Flag.withDescription("tokens of one query and node text pair"),
+      Flag.withDefault(256),
+    ),
+    dtype: Flag.Literals("dtype", RerankDtype.literals).pipe(Flag.withDefault("fp32")),
+    device: Flag.Literals("device", RerankDevice.literals).pipe(Flag.withDefault("webgpu")),
+  },
+  ({ copy, ...options }) => rerankRun({ storage: copy, ...options }),
+).pipe(
+  Command.withDescription("a local reranker's order of other runs' top ids, as a run"),
+  Command.provide(({ copy }) => copyDatabase(copy)),
+);
+
 const judge = Command.make(
   "judge",
   {
@@ -175,7 +206,19 @@ const score = Command.make(
 
 const searchSet = Command.make("search-set").pipe(
   Command.withDescription("the memory search evaluation set"),
-  Command.withSubcommands([recorded, rounds, pool, appRun, terms, fts, judge, check, agree, score]),
+  Command.withSubcommands([
+    recorded,
+    rounds,
+    pool,
+    appRun,
+    terms,
+    fts,
+    rerank,
+    judge,
+    check,
+    agree,
+    score,
+  ]),
 );
 
 Command.run(searchSet, { version: "1.0.0" }).pipe(
