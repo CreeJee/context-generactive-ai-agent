@@ -167,6 +167,21 @@ const LIGHT_STEMS: [&str; 13] = [
     "하", "되", "있", "없", "않", "같", "이", "아니", "어떻", "어떠", "그렇", "이렇", "저렇",
 ];
 
+/// Lucene Nori's default stop tags (KoreanPartOfSpeechStopFilter.DEFAULT_STOP_TAGS), as ko-dic
+/// writes them: interjections, adverbs, determiners, affixes, spaces and unknowns. Nori also stops
+/// every ending (E*) and particle (J*), and its tokenizer drops punctuation, here the symbol tags.
+const STOP_TAGS: [&str; 13] = [
+    "IC", "MAG", "MAJ", "MM", "SP", "XPN", "XSA", "XSN", "XSV", "UNA", "NA", "VSV", "UNKNOWN",
+];
+const STOP_TAG_PREFIXES: [&str; 2] = ["E", "J"];
+const PUNCTUATION_TAGS: [&str; 6] = ["SF", "SE", "SSO", "SSC", "SC", "SY"];
+
+/// A text after NFKC, and its ko-dic morphemes.
+struct Analyzed {
+    text: String,
+    morphemes: Vec<Morpheme>,
+}
+
 /// One ko-dic morpheme, and whether it follows the one before with no space between.
 struct Morpheme {
     surface: String,
@@ -174,10 +189,10 @@ struct Morpheme {
     joined: bool,
 }
 
-/// Search terms from Lindera's ko-dic morphemes by Kiwi's rules
-/// (packages/memory-agent/src/memory/morph/kiwi-worker.ts), to see whether Lindera can stand in for
-/// Kiwi: kept morphemes except the light stems, a run of nouns written without spaces also as one
-/// term, and Latin words and numbers taken from the text itself, all lowercased after NFKC.
+/// Search terms from Lindera's ko-dic morphemes, to see whether Lindera can stand in for Kiwi. The
+/// text is NFKC-normalized first and every term lowercased. An inflected, compound or pre-analyzed
+/// token is split into its morphemes first: ko-dic gives it one fused tag (`VV+EP`), which a tag
+/// filter cannot sort into stem and ending.
 struct Lindera {
     segmenter: Segmenter,
     latin_or_number: Regex,
@@ -227,11 +242,19 @@ impl Lindera {
         Ok(morphemes)
     }
 
-    fn terms(&self, input: &str) -> Result<Vec<String>> {
+    fn analyze(&self, input: &str) -> Result<Analyzed> {
         let text: String = input.nfkc().collect();
+        let morphemes = self.morphemes(&text)?;
+        Ok(Analyzed { text, morphemes })
+    }
+
+    /// By Kiwi's rules (packages/memory-agent/src/memory/morph/kiwi-worker.ts): its kept tags
+    /// except the light stems, a run of nouns written without spaces also as one term, and Latin
+    /// words and numbers taken from the text itself.
+    fn terms(&self, analyzed: &Analyzed) -> Vec<String> {
         let mut terms = Vec::new();
         let mut run: Vec<String> = Vec::new();
-        for morpheme in self.morphemes(&text)? {
+        for morpheme in &analyzed.morphemes {
             let noun = NOUN_TAGS.contains(&morpheme.tag.as_str());
             // A noun right after the run goes on with it; anything else ends it.
             if !(noun && morpheme.joined && !run.is_empty()) {
@@ -247,7 +270,7 @@ impl Lindera {
                 terms.push(morpheme.surface.clone());
             }
             if noun {
-                run.push(morpheme.surface);
+                run.push(morpheme.surface.clone());
             }
         }
         if run.len() > 1 {
@@ -255,10 +278,28 @@ impl Lindera {
         }
         terms.extend(
             self.latin_or_number
-                .find_iter(&text)
+                .find_iter(&analyzed.text)
                 .map(|found| found.as_str().to_string()),
         );
-        Ok(terms.into_iter().map(|term| term.to_lowercase()).collect())
+        terms.into_iter().map(|term| term.to_lowercase()).collect()
+    }
+
+    /// Every morpheme but those of Nori's default stop tags and punctuation, compounds as their
+    /// parts (Nori's default `discard` decompounding).
+    fn stop_tag_terms(analyzed: &Analyzed) -> Vec<String> {
+        analyzed
+            .morphemes
+            .iter()
+            .filter(|morpheme| {
+                let tag = morpheme.tag.as_str();
+                !STOP_TAGS.contains(&tag)
+                    && !PUNCTUATION_TAGS.contains(&tag)
+                    && !STOP_TAG_PREFIXES
+                        .iter()
+                        .any(|prefix| tag.starts_with(prefix))
+            })
+            .map(|morpheme| morpheme.surface.to_lowercase())
+            .collect()
     }
 }
 
@@ -277,8 +318,8 @@ enum Kind {
     Prefixed,
 }
 
-/// Every index has every field; only the global index fills `lindera`, and the prefixed index leaves
-/// `ngram` empty.
+/// Every index has every field; only the global index fills `lindera` and `lindera_stop`, and the
+/// prefixed index leaves `ngram` empty.
 #[derive(Clone, Copy)]
 struct Fields {
     seq: Field,
@@ -287,6 +328,7 @@ struct Fields {
     morph: Field,
     ngram: Field,
     lindera: Field,
+    lindera_stop: Field,
 }
 
 fn text_field(
@@ -339,6 +381,12 @@ fn schema(kind: Kind) -> (Schema, Fields) {
         words_tokenizer,
         IndexRecordOption::WithFreqs,
     );
+    let lindera_stop = text_field(
+        &mut builder,
+        "lindera_stop",
+        words_tokenizer,
+        IndexRecordOption::WithFreqs,
+    );
     (
         builder.build(),
         Fields {
@@ -348,6 +396,7 @@ fn schema(kind: Kind) -> (Schema, Fields) {
             morph,
             ngram,
             lindera,
+            lindera_stop,
         },
     )
 }
@@ -487,11 +536,18 @@ fn each_node(
     Ok(())
 }
 
+/// A node's Lindera terms for the global index, each list joined by spaces.
+#[derive(Default)]
+struct LinderaText {
+    kiwi_rules: String,
+    stop_tags: String,
+}
+
 fn document(
     kind: Kind,
     fields: Fields,
     node: &Node,
-    lindera: &str,
+    lindera: &LinderaText,
     words: &mut TextAnalyzer,
 ) -> TantivyDocument {
     let mut doc = TantivyDocument::new();
@@ -502,7 +558,8 @@ fn document(
             doc.add_text(fields.words, &node.text);
             doc.add_text(fields.morph, &node.morph);
             doc.add_text(fields.ngram, &node.text);
-            doc.add_text(fields.lindera, lindera);
+            doc.add_text(fields.lindera, &lindera.kiwi_rules);
+            doc.add_text(fields.lindera_stop, &lindera.stop_tags);
         }
         Kind::Prefixed => {
             let mut prefixed = |text: &str| {
@@ -538,25 +595,29 @@ fn build(copy: &Path) -> Result<()> {
         let mut writer: IndexWriter = index.writer_with_num_threads(WRITER_THREADS, WRITER_HEAP)?;
         let mut count = 0u64;
         // Lindera's share of the build: the nodes it analyzed, their characters and its time.
-        let (mut analyzed, mut characters, mut lindera_ms) = (0u64, 0u64, 0f64);
+        let (mut analyzed_nodes, mut characters, mut lindera_ms) = (0u64, 0u64, 0f64);
         each_node(&db, "n.seq", |node| {
             count += 1;
             let terms = if kind == Kind::Global && node.analyzed {
                 let analyzing = Instant::now();
-                let terms = lindera.terms(&node.text)?.join(" ");
+                let analyzed = lindera.analyze(&node.text)?;
+                let terms = LinderaText {
+                    kiwi_rules: lindera.terms(&analyzed).join(" "),
+                    stop_tags: Lindera::stop_tag_terms(&analyzed).join(" "),
+                };
                 lindera_ms += ms_since(analyzing);
-                analyzed += 1;
+                analyzed_nodes += 1;
                 characters += node.text.chars().count() as u64;
                 terms
             } else {
-                String::new()
+                LinderaText::default()
             };
             writer.add_document(document(kind, fields, &node, &terms, &mut words))?;
             Ok(())
         })?;
-        if analyzed > 0 {
+        if analyzed_nodes > 0 {
             println!(
-                "lindera: {analyzed} nodes, {characters} characters in {:.1} s",
+                "lindera: {analyzed_nodes} nodes, {characters} characters in {:.1} s",
                 lindera_ms / 1000.0
             );
         }
@@ -586,7 +647,13 @@ fn build(copy: &Path) -> Result<()> {
             ));
         }
         if let Some((_, writer, fields)) = current.as_mut() {
-            writer.add_document(document(Kind::Project, *fields, &node, "", &mut words))?;
+            writer.add_document(document(
+                Kind::Project,
+                *fields,
+                &node,
+                &LinderaText::default(),
+                &mut words,
+            ))?;
         }
         Ok(())
     })?;
@@ -1001,6 +1068,7 @@ fn query(copy: &Path, repeat: usize) -> Result<()> {
         "tv-morph",
         "tv-morph-all",
         "tv-lindera",
+        "tv-lindera-stop",
         "tv-lexical",
         "tv-ngram",
     ]
@@ -1059,14 +1127,19 @@ fn query(copy: &Path, repeat: usize) -> Result<()> {
                 .iter()
                 .flat_map(|term| tokens(&mut words, term)),
         );
-        // Lindera's terms of the question, as Kiwi's are made in the app (terms.ts) and timed alike.
+        // Lindera's terms of the question, both ways, timed together.
         let analyzing = Instant::now();
-        let lindera_terms = dedupe(
-            lindera
-                .terms(&item.query)?
-                .iter()
-                .flat_map(|term| tokens(&mut words, term)),
-        );
+        let analyzed = lindera.analyze(&item.query)?;
+        let mut split = |terms: Vec<String>| {
+            dedupe(
+                terms
+                    .iter()
+                    .flat_map(|term| tokens(&mut words, term))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let lindera_terms = split(lindera.terms(&analyzed));
+        let stop_tag_terms = split(Lindera::stop_tag_terms(&analyzed));
         timings
             .entry("lindera question terms")
             .or_default()
@@ -1088,12 +1161,17 @@ fn query(copy: &Path, repeat: usize) -> Result<()> {
         };
 
         // The global index, the project filtered while collecting: the runs the set scores.
-        let searches: [(&str, Vec<Box<dyn Query>>); 6] = [
+        let searches: [(&str, Vec<Box<dyn Query>>); 7] = [
             ("tv-words", term_queries(fields.words, &word_terms)),
             ("tv-morph", term_queries(fields.morph, &capped_morph)),
             // Kiwi's and Lindera's terms, each uncapped, on their own fields.
             ("tv-morph-all", term_queries(fields.morph, &all_morph)),
             ("tv-lindera", term_queries(fields.lindera, &lindera_terms)),
+            // Nori's default stop tags in place of Kiwi's rules.
+            (
+                "tv-lindera-stop",
+                term_queries(fields.lindera_stop, &stop_tag_terms),
+            ),
             ("tv-lexical", lexical()),
             (
                 "tv-ngram",
@@ -1330,14 +1408,42 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
+
     use super::Lindera;
+
+    /// ko-dic gives an inflected word as one token whose tag is fused (`VV+EC`), so a filter that
+    /// compares the first tag, as lindera's korean_stop_tags does, neither keeps its stem nor drops
+    /// its ending; the morphemes are in the expression detail.
+    #[test]
+    fn inflected_words_are_one_token_with_a_fused_tag() {
+        let lindera = Lindera::new().unwrap();
+        let mut tokens = lindera
+            .segmenter
+            .segment(Cow::Borrowed("바꿨고 있었다"))
+            .unwrap();
+        let details: Vec<(String, String, String)> = tokens
+            .iter_mut()
+            .map(|token| {
+                let surface = token.surface.to_string();
+                let details = token.details();
+                (surface, details[0].to_string(), details[7].to_string())
+            })
+            .collect();
+        println!("{details:?}");
+        assert!(
+            details.iter().any(|(_, tag, _)| tag.contains('+')),
+            "{details:?}"
+        );
+    }
 
     #[test]
     fn lindera_terms_follow_kiwi_rules() {
         let lindera = Lindera::new().unwrap();
-        let terms = lindera
-            .terms("메모리 검색엔진을 Tantivy로 바꿨고 drizzle-kit도 있었다")
+        let analyzed = lindera
+            .analyze("메모리 검색엔진을 Tantivy로 바꿨고 drizzle-kit도 있었다")
             .unwrap();
+        let terms = lindera.terms(&analyzed);
         println!("{terms:?}");
         for expected in [
             "메모리",
@@ -1355,5 +1461,35 @@ mod tests {
             );
         }
         assert!(!terms.contains(&"있".to_string()));
+    }
+
+    #[test]
+    fn stop_tag_terms_drop_particles_endings_and_punctuation() {
+        let lindera = Lindera::new().unwrap();
+        let analyzed = lindera
+            .analyze("메모리 검색엔진을 Tantivy로 바꿨고 drizzle-kit도 있었다")
+            .unwrap();
+        let terms = Lindera::stop_tag_terms(&analyzed);
+        println!("{terms:?}");
+        for expected in [
+            "메모리",
+            "검색",
+            "엔진",
+            "바꾸",
+            "tantivy",
+            "drizzle",
+            "kit",
+        ] {
+            assert!(
+                terms.contains(&expected.to_string()),
+                "{expected} in {terms:?}"
+            );
+        }
+        for stopped in ["을", "로", "고", "도", "었", "다", "-"] {
+            assert!(
+                !terms.contains(&stopped.to_string()),
+                "{stopped} in {terms:?}"
+            );
+        }
     }
 }

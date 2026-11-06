@@ -6,14 +6,14 @@
 
 색인은 세 가지다. 모두 숨긴(suppressed) 노드를 빼고, 필드 번호가 같은 schema를 쓴다.
 
-- `global` — 필드 `words`(글자·숫자 단어, 소문자, FTS5 unicode61과 비슷), `morph`(FTS5 `nodes_morph`가 담은 Kiwi 형태소, 같은 방식으로 나눔), `ngram`(위치가 있는 소문자 3글자 조각, FTS5 trigram과 같음), `lindera`(Lindera ko-dic 형태소에서 Kiwi와 같은 규칙으로 고른 검색어, Kiwi가 분석한 노드만)를 둔다. 프로젝트는 fast field이고, 결과를 모으는 callback에서 거른다.
+- `global` — 필드 `words`(글자·숫자 단어, 소문자, FTS5 unicode61과 비슷), `morph`(FTS5 `nodes_morph`가 담은 Kiwi 형태소, 같은 방식으로 나눔), `ngram`(위치가 있는 소문자 3글자 조각, FTS5 trigram과 같음), `lindera`(Lindera ko-dic 형태소에서 Kiwi와 같은 규칙으로 고른 검색어), `lindera_stop`(같은 형태소에서 Lucene Nori 기본 stop tags를 뺀 검색어)을 둔다. 두 Lindera 필드는 Kiwi가 분석한 노드만 채운다. 프로젝트는 fast field이고, 결과를 모으는 callback에서 거른다.
 - `project/<번호>` — 프로젝트마다 색인 하나. 필드는 global과 같다.
 - `prefixed` — 단어 앞에 프로젝트 번호를 붙인 색인 하나(`3_word`).
 
 ## Interface
 
 - `tantivy-bench build <copy>` — 세 색인을 새로 만들고 색인마다 노드 수, 걸린 시간, 크기, segment 수를 출력한다. Lindera가 분석한 노드 수, 글자 수, 걸린 시간도 출력한다.
-- `tantivy-bench query <copy> [--repeat N]` — item마다 각 검색을 N번 돌려 마지막 번의 시간을 잰다. global 색인 검색 여섯 가지를 평가 세트의 run `tv-words`·`tv-morph`(앱의 상한이 있는 Kiwi 검색어)·`tv-morph-all`(Kiwi 검색어 전부)·`tv-lindera`(Lindera 검색어 전부)·`tv-lexical`·`tv-ngram`으로 `<copy>/search-set/runs/`에 새로 쓴다. 질문을 Lindera로 나누는 시간도 잰다. `tv-lexical`(단어와 형태소 전체)의 같은 질의는 다른 방법 다섯 가지로도 찾아 시간을 잰다.
+- `tantivy-bench query <copy> [--repeat N]` — item마다 각 검색을 N번 돌려 마지막 번의 시간을 잰다. global 색인 검색 일곱 가지를 평가 세트의 run `tv-words`·`tv-morph`(앱의 상한이 있는 Kiwi 검색어)·`tv-morph-all`(Kiwi 검색어 전부)·`tv-lindera`(Kiwi 규칙의 Lindera 검색어 전부)·`tv-lindera-stop`(Nori stop tags의 Lindera 검색어 전부)·`tv-lexical`·`tv-ngram`으로 `<copy>/search-set/runs/`에 새로 쓴다. 질문을 Lindera로 나누는 시간도 잰다. `tv-lexical`(단어와 형태소 전체)의 같은 질의는 다른 방법 다섯 가지로도 찾아 시간을 잰다.
   - `per-project` — 프로젝트별 색인에서 찾는다. 모든 프로젝트 색인의 통계를 더해 점수를 매긴다.
   - `per-project exhaustive` — 위와 같되 pruning 없이 일치하는 문서를 모두 점수 매긴다.
   - `hybrid` — 자기 프로젝트는 그 프로젝트 색인에서, 다른 프로젝트는 global 색인에서 찾는다.
@@ -31,6 +31,7 @@
 - Block-WAND가 block을 건너뛰는 상한은 그 block에서 가장 좋은 (길이, 빈도) 쌍의 점수다. 이 쌍은 segment를 쓸 때 그 segment의 평균 길이로 고른다. 다른 통계로 점수를 매기면 그 쌍이 가장 좋지 않을 수 있어 상한이 낮아지고, top k에 들어갈 문서를 건너뛸 수 있다. 큰 색인의 segment는 평균 길이가 색인 전체와 비슷하지만 프로젝트 색인은 그렇지 않을 수 있다. pruning 없는 방식은 이 영향을 받지 않는다.
 - 기록된 질문은 그 호출의 seq 이전 노드만 찾는다. callback에서 seq fast field로 거른다.
 - Lindera 검색어는 Kiwi worker(`packages/memory-agent/src/memory/morph/kiwi-worker.ts`)의 규칙을 따른다. NFKC 뒤 형태소를 나누고, 품사 NNG·NNP·NR·VV·VA·XR·SH를 남기되 가벼운 어간(하·되·있 등)과 영문·숫자가 든 형태소는 뺀다. 띄어쓰기 없이 이어진 명사는 합친 것도 더하고, 영문 단어와 숫자는 원문에서 따로 뽑아 모두 소문자로 만든다. 활용·복합·기분석 토큰은 ko-dic의 expression 열(`하/VV/*+았/EP/*`)로 형태소를 나눈다. Kiwi와 Lindera를 같은 조건에서 견주려는 것이다.
+- `lindera_stop`은 Lucene Nori의 기본 stop tags(`KoreanPartOfSpeechStopFilter.DEFAULT_STOP_TAGS`: 어미 E*, 조사 J*, 감탄사, 부사, 관형사, 접사, 공백, 미등록)와 문장부호 태그를 뺀 형태소 전부다. 복합어는 Nori 기본값(`discard`)처럼 부분만 남긴다. ko-dic은 활용형을 합친 태그(`바꿨` = `VV+EP`) 한 토큰으로 내므로, 첫 태그만 견주는 `lindera-tantivy`의 `korean_stop_tags` 필터로는 어간을 얻지 못한다. 그래서 두 필드 모두 expression 열로 형태소를 나눈 뒤 고른다.
 - `tv-ngram`은 검색어 하나를 그 3글자 조각들의 구절로 찾는다. FTS5 trigram이 따옴표 친 검색어를 찾는 방식과 같다. Tantivy 기본 n-gram tokenizer는 모든 조각의 위치를 0으로 두므로 쓰지 않는다.
 - 자기 프로젝트를 먼저 찾고 다른 프로젝트를 찾은 뒤 순위를 번갈아 합친다. 앱의 합치는 방식과 같다.
 - 기억 원문을 출력하지 않는다. 출력은 개수, 크기, 시간뿐이다.
@@ -38,9 +39,9 @@
 ## Side Effects
 
 - `<copy>/tantivy/`를 지우고 다시 쓴다(build).
-- `<copy>/search-set/runs/`의 run 파일 `tv-words`·`tv-morph`·`tv-morph-all`·`tv-lindera`·`tv-lexical`·`tv-ngram` 여섯 개를 덮어쓴다(query).
+- `<copy>/search-set/runs/`의 run 파일 `tv-words`·`tv-morph`·`tv-morph-all`·`tv-lindera`·`tv-lindera-stop`·`tv-lexical`·`tv-ngram` 일곱 개를 덮어쓴다(query).
 - `agent.db`는 읽기만 한다.
 
 ## Verification
 
-- Run: `cargo check`, `cargo test --release` (이 디렉터리, Lindera 검색어 규칙 테스트)
+- Run: `cargo check`, `cargo test --release` (이 디렉터리, Lindera 검색어 규칙과 ko-dic 합친 태그 테스트)
