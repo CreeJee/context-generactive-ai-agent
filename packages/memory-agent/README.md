@@ -26,8 +26,7 @@ src/
   imports/      Claude Code·Codex CLI 기록 이관: 줄 읽기 어댑터, 대량 노드 쓰기, 커서와 따라붙기
   secrets/      비밀 가리기(secretlint)와 저장된 텍스트의 소급 정리(탐지는 worker thread)
   memory/       기억: 노드·구조 edge·그래프 탐색·근거 추적·검색·기록 middleware
-    embedding/  로컬 임베딩 모델(worker thread) + turbovec 벡터 인덱스 + 인덱서(형태소 분석 포함)
-    morph/      Kiwi 한국어 형태소 분석(worker thread, 모델은 처음 쓸 때 내려받음)
+    embedding/  로컬 임베딩 모델(worker thread) + turbovec 벡터 인덱스 + 인덱서(벡터와 lexical 색인)
   oauth/        provider 구독 계정의 OAuth 로그인·토큰 갱신
   providers/    provider별 모델 목록·Effect AI 모델·실행 중 모델 선택
   files/        경로·자격 증명 검사, 텍스트 파일 읽기/쓰기, 목록, 줄 검색
@@ -49,7 +48,7 @@ skills/
 
 앱 기본 skill은 `SKILL.md` 하나로 완결해야 합니다. 실행 파일에서는 저장 루트 아래에 풀리고 파일 도구가 저장 루트를 읽지 않아서, 옆에 둔 파일은 모델이 읽을 수 없습니다. 같은 이름의 공통 및 프로젝트 skill이 기본 skill을 덮어씁니다.
 
-네이티브 패키지(turbovec, `@napi-rs/keyring`, sharp)는 정적 import하지 않고 `runtime/resources.ts`의 `requireRuntime`으로 불러옵니다. 실행 파일(Node SEA)은 디스크 파일을 `import()`하지 못하고, 이 패키지들을 `CONTEXT_AGENT_RUNTIME` 폴더에 풀어 두기 때문입니다. 임베딩 모델(`@huggingface/transformers`)과 Kiwi는 worker thread에서 돌고, worker 스크립트(`embed-worker.ts`, `kiwi-worker.ts`)가 옆의 패키지를 직접 불러옵니다. 가져오기(`imports/worker.ts`)와 비밀 소급 정리의 탐지(`secrets/redact-worker.ts`)도 worker thread에서 돕니다. worker는 TypeScript라 저장소에서는 그대로 돌고, 실행 파일에는 worker마다 한 파일로 묶여 들어갑니다. 임베딩·Kiwi worker는 자기 모듈만 묶고 패키지는 runtime 폴더의 것을 씁니다. 스크립트 위치는 `runtimeWorker`가 정합니다(저장소에서는 package exports, 실행 파일에서는 runtime 폴더).
+네이티브 패키지(turbovec, `@napi-rs/keyring`, sharp)는 정적 import하지 않고 `runtime/resources.ts`의 `requireRuntime`으로 불러옵니다. 실행 파일(Node SEA)은 디스크 파일을 `import()`하지 못하고, 이 패키지들을 `CONTEXT_AGENT_RUNTIME` 폴더에 풀어 두기 때문입니다. 임베딩 모델(`@huggingface/transformers`)은 worker thread에서 돌고, worker 스크립트(`embed-worker.ts`)가 옆의 패키지를 직접 불러옵니다. 가져오기(`imports/worker.ts`)와 비밀 소급 정리의 탐지(`secrets/redact-worker.ts`)도 worker thread에서 돕니다. worker는 TypeScript라 저장소에서는 그대로 돌고, 실행 파일에는 worker마다 한 파일로 묶여 들어갑니다. 임베딩 worker는 자기 모듈만 묶고 패키지는 runtime 폴더의 것을 씁니다. 스크립트 위치는 `runtimeWorker`가 정합니다(저장소에서는 package exports, 실행 파일에서는 runtime 폴더).
 
 서비스는 Effect `Context.Tag` + `Layer`로 만들고, 앱은 `ManagedRuntime` 하나로 씁니다.
 도구 입력 스키마는 Effect Schema이며 provider에는 `tools/schema.ts`가 만든 draft-07 JSON Schema로 보냅니다.
@@ -145,7 +144,7 @@ MCP 도구는 실행 중에 생기므로 브라우저가 정의를 모릅니다.
 
 - 자격 증명으로 보이는 경로(`.ssh`, `.env`, `*.pem`, `~/.codex`, 앱 저장 루트 등)와 `.git` 내부는 어떤 승인으로도 파일 도구가 건드리지 않습니다. 이름 기반 판정이라 일반 파일 안의 비밀은 아래 탐지기가 맡습니다.
 - 출력에 찍힌 비밀은 `SecretRedactor`(`secrets/redactor.ts`, secretlint + 비밀처럼 보이는 이름 옆의 값)가 `[redacted:<종류>]`로 가립니다. 모든 도구 결과와 에러 메시지는 모델, 페이지, 노드에 닿기 전에, assistant 글, 도구 인자, 참조, 사용자 발언, 이관 기록은 기억에 남기 전에 가립니다. 모델은 사용자가 보낸 메시지를 그대로 읽습니다.
-- 이미 저장된 텍스트는 `SecretSweep`(`secrets/sweep.ts`)이 시작할 때마다 백그라운드에서 훑습니다. 노드는 `secret_sweep_permits` 허가가 있을 때만 `text`가 바뀌고(트리거가 나머지 변경은 계속 거부), FTS, 형태소, 벡터도 새 텍스트로 다시 만듭니다. secretlint 검사는 사이사이 이벤트 루프에 차례를 주지 않아서, 탐지는 스윕마다 띄우는 redaction worker가 배치 단위로 하고 DB 읽기와 쓰기와 벡터 정리는 메인에 남습니다. 테스트는 `tests/secret-redactor.test.ts`, `tests/secret-redaction.test.ts`, `tests/secret-sweep.test.ts`.
+- 이미 저장된 텍스트는 `SecretSweep`(`secrets/sweep.ts`)이 시작할 때마다 백그라운드에서 훑습니다. 노드는 `secret_sweep_permits` 허가가 있을 때만 `text`가 바뀌고(트리거가 나머지 변경은 계속 거부), lexical 색인과 벡터도 새 텍스트로 다시 만듭니다. secretlint 검사는 사이사이 이벤트 루프에 차례를 주지 않아서, 탐지는 스윕마다 띄우는 redaction worker가 배치 단위로 하고 DB 읽기와 쓰기와 벡터 정리는 메인에 남습니다. 테스트는 `tests/secret-redactor.test.ts`, `tests/secret-redaction.test.ts`, `tests/secret-sweep.test.ts`.
 - 프로젝트 파일 도구는 경로를 한 칸씩 `lstat`해 symlink, hard link를 거부합니다. 밖 도구는 링크가 가리키는 실제 대상으로 판단합니다. OS 샌드박스는 아닙니다.
 - 셸은 호스트에서 격리 없이 실행됩니다. `TOKEN`, `API_KEY`처럼 비밀로 보이는 환경 변수는 명령에 넘기지 않습니다.
 - provider OAuth 자격 증명은 인증 서비스가 관리하며 파일 도구에 노출하지 않습니다.
@@ -213,7 +212,7 @@ vp check         # 루트에서: 포맷·lint·타입 검사
 - `memory-agent/acp` — `./src/acp/index.ts`. ACP 에이전트 다리 구성 요소를 내보낸다
 - `memory-agent/native-effect` · `node-platform` · `synchronous-path` · `host-system` — `src/runtime/*.ts`의 런타임 플랫폼 모듈을 내보낸다
 - `memory-agent/runtime-resources` — `./src/runtime/resources.ts`. `types`·`development`·`import`·`default` 조건이 모두 같은 파일을 가리킨다. 네이티브 패키지를 부르는 `requireRuntime`가 여기 있다
-- `memory-agent/kiwi-worker` · `embed-worker` · `import-worker` · `redact-worker` · `native-search-worker` · `sandbox-worker` · `code-worker` — worker thread 스크립트 진입점(`src/memory/morph/kiwi-worker.ts`, `src/memory/embedding/embed-worker.ts`, `src/imports/worker.ts`, `src/secrets/redact-worker.ts`, `src/memory/native-search/worker.ts`, `src/shell/sandbox-worker.ts`, `src/code/worker.ts`). `runtimeWorker`가 위치를 정할 수 있게 subpath로 내보낸다
+- `memory-agent/embed-worker` · `import-worker` · `redact-worker` · `native-search-worker` · `sandbox-worker` · `code-worker` — worker thread 스크립트 진입점(`src/memory/embedding/embed-worker.ts`, `src/imports/worker.ts`, `src/secrets/redact-worker.ts`, `src/memory/native-search/worker.ts`, `src/shell/sandbox-worker.ts`, `src/code/worker.ts`). `runtimeWorker`가 위치를 정할 수 있게 subpath로 내보낸다
 - `context-agent-acp` (bin) — `./bin/context-agent-acp.ts`. 에디터가 실행하는 ACP CLI다. 환경 변수 `CONTEXT_AGENT_URL`로 앱 주소를 받는다. 설정 예시는 위 `에디터에서 쓰기 (ACP)` 절 참고
 - `vp run build` / `test` / `test:unit` / `test:feature` / `typecheck` (`vite.config.ts` run tasks) — 각각 `vp pack`, `vp test --maxWorkers=4`, `vp test --project unit`, `vp test --project feature --maxWorkers=4`, `tsc`를 실행한다
 - `unit` / `feature` (Vitest projects) — `unit`은 `src/**/*.test.ts`, `feature`는 `tests/**/*.test.ts`를 포함한다

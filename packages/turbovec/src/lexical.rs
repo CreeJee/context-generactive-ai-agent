@@ -150,9 +150,8 @@ struct Morpheme {
     joined: bool,
 }
 
-/// Search terms from Lindera's ko-dic morphemes, picked by the rules the Kiwi analyzer used
-/// (packages/memory-agent/src/memory/morph/kiwi-worker.ts); measured, they match Kiwi's terms or
-/// do a little better. The text is NFKC-normalized first and every term lowercased.
+/// Search terms from Lindera's ko-dic morphemes, picked by the rules the Kiwi analyzer this index
+/// replaced used (docs/decisions.md); measured, they matched Kiwi's terms or did a little better. The text is NFKC-normalized first and every term lowercased.
 pub(crate) struct Morphology {
     segmenter: Segmenter,
     latin_or_number: Regex,

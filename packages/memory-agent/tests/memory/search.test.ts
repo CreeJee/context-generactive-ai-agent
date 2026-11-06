@@ -238,7 +238,6 @@ testAgent()("MemorySearch.find", (it) => {
       yield* append("회의실 예약은 금요일까지");
       yield* append("디자인 시안은 다음 주에 공유");
       yield* indexAll;
-      yield* (yield* Indexer).analyzeAll();
       // "결제모듈을" never occurs as text, so only the morpheme terms tie the question to it.
       const result = yield* find({
         query: "결제모듈을 어디로 정했지",

@@ -19,7 +19,6 @@ import { compactionStateEffect } from "../src/agent/compaction.ts";
 import { RunStore } from "../src/loop/store.ts";
 import { memoryAgentLayer } from "../src/layers.ts";
 import { fakeEmbedderLayer } from "../src/testing/fake-embedder.ts";
-import { fakeMorphLayer } from "../src/testing/fake-morph.ts";
 import { inProcessChatApi } from "../src/testing/chat-api.ts";
 import { AgUiEvent } from "../src/loop/chunks.ts";
 import { Projects } from "../src/projects/projects.ts";
@@ -102,7 +101,6 @@ const runArm = Effect.fn("eval.runArm")(function* (variant: "auto" | "auto-plus-
     memoryAgentLayer(join(base, "storage"), {
       providerRegistry: guardedRegistry,
       embedder: fakeEmbedderLayer,
-      morphAnalyzer: fakeMorphLayer,
       interpretAutomatically: false,
       summarizeAutomatically: true,
       importsHome: home,

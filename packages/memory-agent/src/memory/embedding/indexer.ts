@@ -1,7 +1,6 @@
 import { Context, Data, Effect, Layer, Option, Schema, Semaphore } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { AppEvents } from "../../events/app-events.ts";
-import { MorphAnalyzer } from "../morph/analyzer.ts";
 import { embeddedKindFilter, meaningfulNodeFilter } from "../quality.ts";
 import type { ChunkSpan } from "./chunks.ts";
 import { Embedder } from "./embedder.ts";
@@ -54,7 +53,6 @@ const make = Effect.gen(function* () {
   const events = yield* AppEvents;
   const embedder = yield* Embedder;
   const vectors = yield* VectorIndex;
-  const analyzer = yield* MorphAnalyzer;
 
   const unindexed = sql.literal(
     `v.node_seq IS NULL AND ${meaningfulNodeFilter} AND ${embeddedKindFilter}`,
@@ -108,26 +106,6 @@ const make = Effect.gen(function* () {
       VALUES (${chunk.seq},${embedder.identity},${chunk.ordinal},${chunk.start},${chunk.end})
       RETURNING vector_id`,
   });
-  // The unanalyzed nodes are found on a covering index of `nodes` first, and only their text is
-  // read. Joined in one scan, SQLite trimmed every node's text before looking at node_morphs: the
-  // whole table (hundreds of MB) was read on the event loop after every run and import, even with
-  // nothing left to analyze. MATERIALIZED keeps the planner from folding the two steps back.
-  const selectUnanalyzed = SqlSchema.findAll({
-    Request: Schema.Finite,
-    Result: Pending,
-    execute: (limit) => sql`
-      WITH unanalyzed AS MATERIALIZED (
-        SELECT n.seq FROM nodes n
-        WHERE NOT EXISTS (
-          SELECT 1 FROM node_morphs m
-          WHERE m.node_seq = n.seq AND m.analyzer = ${analyzer.identity}
-        )
-      )
-      SELECT n.seq, n.text FROM unanalyzed u JOIN nodes n ON n.seq = u.seq
-      WHERE ${sql.literal(meaningfulNodeFilter)}
-      ORDER BY n.created_at DESC, n.seq DESC LIMIT ${limit}`,
-  });
-  const oneMorphBatchAtATime = yield* Semaphore.make(1);
   // Two batches reading the same journal rows would apply them twice, the second after newer ones.
   const oneLexicalBatchAtATime = yield* Semaphore.make(1);
   const selectChanges = SqlSchema.findAll({
@@ -270,34 +248,6 @@ const make = Effect.gen(function* () {
       return published;
     }).pipe(oneBatchAtATime.withPermits(1));
 
-  /** Stores morpheme terms for one batch of nodes the current analyzer has not seen. */
-  const analyzeBatch = (limit: number) =>
-    Effect.gen(function* () {
-      const pending = yield* selectUnanalyzed(limit).pipe(Effect.mapError(failed("read-failed")));
-      if (pending.length === 0) return 0;
-      const terms = yield* analyzer.terms(pending.map((node) => node.text));
-      yield* sql
-        .withTransaction(
-          Effect.forEach(
-            pending,
-            (node, index) =>
-              Effect.all(
-                [
-                  sql`DELETE FROM nodes_morph WHERE rowid = ${node.seq}`,
-                  sql`INSERT INTO nodes_morph (rowid, terms)
-                    VALUES (${node.seq}, ${(terms[index] ?? []).join(" ")})`,
-                  sql`INSERT INTO node_morphs (node_seq, analyzer) VALUES (${node.seq}, ${analyzer.identity})
-                    ON CONFLICT (node_seq) DO UPDATE SET analyzer = excluded.analyzer`,
-                ],
-                { discard: true },
-              ),
-            { discard: true },
-          ),
-        )
-        .pipe(Effect.mapError(failed("mapping-commit-failed")));
-      return pending.length;
-    }).pipe(oneMorphBatchAtATime.withPermits(1));
-
   /**
    * Applies the oldest journaled node changes to the lexical index: at most `limit` of them, cut
    * at about {@link lexicalBatchBytes} of text. A node that is gone, blank or suppressed leaves the
@@ -361,12 +311,6 @@ const make = Effect.gen(function* () {
       Effect.mapError(failed("read-failed")),
     ),
     indexBatch,
-    analyzeBatch,
-    /**
-     * Stores morpheme terms until nothing is pending. Fails when the analyzer is unavailable (no
-     * model, disabled); search then simply works without these terms.
-     */
-    analyzeAll: (batchSize = 256) => drain(analyzeBatch, Number.POSITIVE_INFINITY, batchSize),
     /** Indexes until nothing is pending. */
     indexAll: (batchSize = 64) => drain(indexBatch, Number.POSITIVE_INFINITY, batchSize),
 
@@ -375,7 +319,6 @@ const make = Effect.gen(function* () {
      * first batches; the rest of a migrated backlog waits for the fibre that drains it.
      */
     indexUpTo: (budget: number, batchSize = 64) => drain(indexBatch, budget, batchSize),
-    analyzeUpTo: (budget: number, batchSize = 256) => drain(analyzeBatch, budget, batchSize),
     lexicalBatch,
     /** Applies journaled node changes to the lexical index until none is left. */
     lexicalAll: (batchSize = 512) => drain(lexicalBatch, Number.POSITIVE_INFINITY, batchSize),
@@ -383,12 +326,12 @@ const make = Effect.gen(function* () {
     lexicalUpTo: (budget: number, batchSize = 512) => drain(lexicalBatch, budget, batchSize),
 
     /**
-     * Runs `work` while no batch is embedding or analysing. For changing a node's text: a batch
-     * picks a node, works on its text and records the result, and a change in the middle of that
-     * would leave the index holding the text as it was.
+     * Runs `work` while no batch is embedding. For changing a node's text: a batch picks a node,
+     * embeds its text and records the result, and a change in the middle of that would leave the
+     * index holding the text as it was. The lexical index needs no such guard: the change is
+     * journaled after the batch's rows and applied again.
      */
-    exclusive: <A, E, R>(work: Effect.Effect<A, E, R>) =>
-      work.pipe(oneBatchAtATime.withPermits(1), oneMorphBatchAtATime.withPermits(1)),
+    exclusive: <A, E, R>(work: Effect.Effect<A, E, R>) => work.pipe(oneBatchAtATime.withPermits(1)),
   };
 });
 

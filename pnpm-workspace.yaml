@@ -36,7 +36,6 @@ catalog:
   "@modelcontextprotocol/server": ^2.3.1
   "@napi-rs/keyring": 2.1.1
   cmdk: ^1.1.1
-  kiwi-nlp: 0.24.0
   cross-spawn: 7.0.6
   sharp: 0.35.5
   "@types/cross-spawn": 6.0.6

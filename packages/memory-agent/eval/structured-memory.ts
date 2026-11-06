@@ -23,7 +23,6 @@ import { toPrompt } from "../src/model/prompt.ts";
 import { subscriptionBody } from "../src/model/subscription.ts";
 import { Projects } from "../src/projects/projects.ts";
 import { fakeEmbedderLayer } from "../src/testing/fake-embedder.ts";
-import { fakeMorphLayer } from "../src/testing/fake-morph.ts";
 import { memoryReadRunTools } from "../src/tools/memory.ts";
 import { MemorySearch } from "../src/memory/search.ts";
 import { seedChainCases, seedEvidenceCases } from "./structured-memory-fixtures.ts";
@@ -105,7 +104,6 @@ const program = Effect.gen(function* () {
   const services = yield* Layer.build(
     memoryAgentLayer(path.join(base, "storage"), {
       embedder: fakeEmbedderLayer,
-      morphAnalyzer: fakeMorphLayer,
       interpretAutomatically: false,
       summarizeAutomatically: false,
       importsHome: home,

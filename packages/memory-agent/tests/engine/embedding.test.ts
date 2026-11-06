@@ -17,7 +17,6 @@ import {
 import { localModel, modelFile } from "../../src/memory/embedding/models.ts";
 import { Indexer, IndexingError } from "../../src/memory/embedding/indexer.ts";
 import { VectorIndex } from "../../src/memory/embedding/vector-index.ts";
-import { MorphAnalyzer } from "../../src/memory/morph/analyzer.ts";
 import { Nodes, type NodeKind } from "../../src/memory/nodes.ts";
 import { MemorySearch } from "../../src/memory/search.ts";
 import { readStructuredEvidence } from "../../src/memory/evidence.ts";
@@ -197,10 +196,7 @@ const secondServer = Layer.effect(
       Effect.scoped(
         Effect.gen(function* () {
           const services = yield* Layer.buildWithMemoMap(
-            memoryAgentLayer(storage, {
-              embedder: fakeEmbedderLayer,
-              morphAnalyzer: MorphAnalyzer.disabled,
-            }),
+            memoryAgentLayer(storage, { embedder: fakeEmbedderLayer }),
             yield* Layer.makeMemoMap,
             yield* Scope.Scope,
           );
@@ -398,7 +394,6 @@ const dot = (a: Float32Array, b: Float32Array) =>
 describe.skipIf(!cachedModels.cpu)("real model chunk retrieval", () => {
   testAgent({
     embedder: Embedder.localFile("cpu").pipe(Layer.provide(models)),
-    morphAnalyzer: MorphAnalyzer.disabled,
   })("the cpu file through the native 4-bit index and memory search", (it) => {
     it.effect(
       "ranks the late decision first and reads the original evidence",

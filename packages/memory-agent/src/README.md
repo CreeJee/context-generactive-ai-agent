@@ -7,7 +7,7 @@
 ## Interface
 
 - `memoryAgentLayer` — `EffectFunction.dual`이며 `(storageRoot)`, `(storageRoot, options)`, `(options)(storageRoot)` 형태를 받는다. 첫 인자가 문자열(`Schema.is(Schema.String)`)이면 data-first로 판별한다. 저장 디렉터리 하나 위에 모든 memory-agent 서비스를 조립하는 composition root다
-- `MemoryAgentLayerOptions` — `memoryAgentLayer`의 선택 옵션이다. 레이어 교체용 옵션은 `compatibleSettings`, `embedder`, `morphAnalyzer`, `providerRegistry`, `providerToolRegistry`, `modelFeatureFlags`, `crossProviderMediaConsent`, `providerToolPolicy`, `providerToolRuntime`, `routeCatalog`, `imageRouteFacts`, `imageRouter`, `imageFeature`, `directImageExecutor`, `imageMediaWorkflow`, `secrets`다. 값 옵션은 `openDatabase`, `leaseTtlMs`, `interpretAutomatically`, `summarizeAutomatically`, `kagiBaseUrl`, `skillsHome`, `skillsBuiltin`, `importsHome`, `importsWatching`, `sweepSecrets`, `kanbanWorktreesBase`다
+- `MemoryAgentLayerOptions` — `memoryAgentLayer`의 선택 옵션이다. 레이어 교체용 옵션은 `compatibleSettings`, `embedder`, `providerRegistry`, `providerToolRegistry`, `modelFeatureFlags`, `crossProviderMediaConsent`, `providerToolPolicy`, `providerToolRuntime`, `routeCatalog`, `imageRouteFacts`, `imageRouter`, `imageFeature`, `directImageExecutor`, `imageMediaWorkflow`, `secrets`다. 값 옵션은 `openDatabase`, `leaseTtlMs`, `interpretAutomatically`, `summarizeAutomatically`, `kagiBaseUrl`, `skillsHome`, `skillsBuiltin`, `importsHome`, `importsWatching`, `sweepSecrets`, `kanbanWorktreesBase`다
 - `JsonValue` — 손실 없이 JSON으로 표현되는 값 타입이자 `Schema.Codec<JsonValue>`이다(`json.ts`). `Schema.suspend` 재귀 Union으로 String, Finite, Boolean, Null, Array, Record를 받는다. `index.ts`는 이를 `JsonValue`와 타입 별칭 `Json`으로 다시 내보낸다
 - `optionalProperty` — `EffectFunction.dual(2)`이며 `(key, value)`와 `(value)(key)`를 지원한다. value가 `undefined`가 아니면 `{ [key]: value }`를, `undefined`면 `{}`를 돌려준다(`optional-property.ts`)
 - `isTruthy` — JavaScript truthiness를 그대로 쓰면서 `Exclude<NonNullable<T>, false | 0 | 0n | "">`로 좁히는 타입 가드다(`truthy.ts`)
@@ -77,7 +77,7 @@
 - 기본 `providerRegistry`는 `AccountSubscriptionProviderRegistry` 목록 끝에 OpenAI 호환 provider를 덧붙인다. compatible provider id의 `get`은 `settings.services`를 돌려준다. `runtime` 실패는 `ProviderUnavailable.make({ provider })`로 매핑한다
 - `ModelFeatureFlags.layer`는 `providerToolDescriptors`의 id 목록으로 만든다. 기본 `ProviderToolPolicy.featureFlagLayer`와 `ProviderToolRuntime.layer`는 같은 `providerToolRegistry`와 `modelFeatureFlags`를 공유한다
 - 보안 기본값: `providerToolRegistry`는 도구를 실행하거나 정책을 강제하지 않는다. `providerToolRuntime`은 명시적 입력 없이 도구를 노출하지 않는다. `directImageExecutor`는 production에서 명시적으로 구성하기 전까지 unavailable이다
-- 옵션 기본값: `interpretAutomatically`, `summarizeAutomatically`, `sweepSecrets`는 true다. `secrets`는 OS 키체인을 쓴다. 임포트는 실제 home을 계속 따라간다. `embedder`는 로컬 임베딩 모델을 쓴다. `morphAnalyzer`는 Kiwi를 쓰며 첫 사용 때 모델을 내려받는다
+- 옵션 기본값: `interpretAutomatically`, `summarizeAutomatically`, `sweepSecrets`는 true다. `secrets`는 OS 키체인을 쓴다. 임포트는 실제 home을 계속 따라간다. `embedder`는 로컬 임베딩 모델을 쓴다
 - `Boards.layer`에는 `GoalOrder.layer`를 provide한다
 - `JsonValue` 스키마의 숫자는 `Schema.Finite`만 허용한다. 따라서 NaN과 Infinity는 거부된다
 - `optionalProperty`는 값이 `undefined`이면 키를 넣지 않는다. exact optional property 타입을 보존하려고 이렇게 한다
@@ -89,7 +89,7 @@
 - `defectReportsLayer`는 `ReportDelivery`로 defect를 Discord webhook에 보고한다. webhook이 설정되어 있을 때만 보고한다
 - `gitCardWorktreesLayer(options.kanbanWorktreesBase)`는 칸반 카드용 git worktree 폴더를 사용한다
 - 백그라운드 작업이 있다: run 이후의 해석과 요약, 시작 시 비밀 sweep, 다른 에이전트 transcript(`.claude`, `.codex`) 추적
-- Kagi API 서버(`kagiBaseUrl`)로 네트워크 요청을 보낸다. 형태소 분석기 Kiwi는 첫 사용 때 모델을 내려받는다
+- Kagi API 서버(`kagiBaseUrl`)로 네트워크 요청을 보낸다
 - `json.ts`, `optional-property.ts`, `truthy.ts`는 순수 코드이며 부수 효과가 없다
 
 ## Verification

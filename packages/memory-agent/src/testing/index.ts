@@ -6,4 +6,3 @@ export {
   type ScriptedToolCall,
   type ScriptedTurn,
 } from "./scripted-model.ts";
-export { fakeMorphLayer, fakeTerms } from "./fake-morph.ts";

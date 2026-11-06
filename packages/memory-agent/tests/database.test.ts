@@ -386,19 +386,19 @@ describe("Database", () => {
     }).pipe(withTestPlatform),
   );
 
-  it.live("keeps nodes immutable and indexes them for trigram search", () =>
+  it.live("keeps nodes immutable and journals them for the lexical index", () =>
     Effect.gen(function* () {
       yield* withDatabase(yield* databaseFile(), (db) => {
         seed(db);
         expect(() =>
           db.sqlite.prepare("UPDATE nodes SET text = 'changed' WHERE id = 'n1'").run(),
         ).toThrow("nodes are immutable evidence");
-        const hits = db.sqlite
+        const journaled = db.sqlite
           .prepare(
-            "SELECT n.id FROM nodes_fts f JOIN nodes n ON n.seq = f.rowid WHERE nodes_fts MATCH ?",
+            "SELECT n.id FROM lexical_changes c JOIN nodes n ON n.seq = c.node_seq WHERE n.id = 'n1'",
           )
-          .all('"저장소"');
-        expect(hits).toEqual([{ id: "n1" }]);
+          .all();
+        expect(journaled).toEqual([{ id: "n1" }]);
       });
     }).pipe(withTestPlatform),
   );

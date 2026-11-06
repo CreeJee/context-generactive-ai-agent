@@ -1,12 +1,11 @@
 import { runNativeEffect } from "../src/runtime/native-effect.ts";
 import { isTruthy } from "../src/truthy.ts";
-// Recall evaluation with the real embedding model and Kiwi, on two sets: Korean decisions
-// (recall-corpus.ts) and what coding sessions leave behind (recall-technical.ts).
-// Both models must already be under ~/.context-generactive-agent/models (the app downloads them).
-//   vp run eval:recall                    all configurations, both sets
-//   vp run eval:recall "trigram + kiwi"   one configuration
-//   vp run eval:recall --terms            Kiwi terms of the decision corpus and queries
-//   --models-root <dir>                   read the models from <dir>/models instead (a copy)
+// Recall evaluation with the real embedding model and the lexical index, on two sets: Korean
+// decisions (recall-corpus.ts) and what coding sessions leave behind (recall-technical.ts).
+// The model must already be under ~/.context-generactive-agent/models (the app downloads it).
+//   vp run eval:recall                     all configurations, both sets
+//   vp run eval:recall "trigram + morph"   one configuration
+//   --models-root <dir>                    read the models from <dir>/models instead (a copy)
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { NodeServices } from "@effect/platform-node";
 import { Context, FileSystem } from "effect";
@@ -21,8 +20,6 @@ import { memoryAgentLayer } from "../src/layers.ts";
 import { EmbedderRuntime, Embedder, EmbeddingError } from "../src/memory/embedding/embedder.ts";
 import { localModel, modelFile } from "../src/memory/embedding/models.ts";
 import { Indexer } from "../src/memory/embedding/indexer.ts";
-import { MorphAnalyzer, kiwiModel } from "../src/memory/morph/analyzer.ts";
-import { optionalProperty } from "../src/optional-property.ts";
 import { Nodes } from "../src/memory/nodes.ts";
 import { MemorySearch, searchTuning, type SearchTuning } from "../src/memory/search.ts";
 import { Projects } from "../src/projects/projects.ts";
@@ -65,20 +62,14 @@ const tuning: SearchTuning | undefined =
       };
 const home = modelsRoot ?? (await Effect.runPromise(defaultStorageRoot));
 const embeddingModel = join(home, "models", localModel.id, modelFile("cpu"));
-const kiwiFile = join(home, "models", `kiwi-${kiwiModel.version}`, kiwiModel.directory, "cong.mdl");
-const missingModel = await nodePlatform.runPromise(
-  Effect.flatMap(FileSystem.FileSystem, (fs) =>
-    Effect.findFirst([embeddingModel, kiwiFile], (file) =>
-      Effect.map(fs.exists(file), (exists) => !exists),
-    ),
-  ),
+const modelFound = await nodePlatform.runPromise(
+  Effect.flatMap(FileSystem.FileSystem, (fs) => fs.exists(embeddingModel)),
 );
-if (Option.isSome(missingModel)) throw new Error(`model missing: ${missingModel.value}`);
+if (!modelFound) throw new Error(`model missing: ${embeddingModel}`);
 
 const sharedModels = StorageRoot.layer(home);
 const embedder = Embedder.localFile("gpu").pipe(Layer.provide(sharedModels));
 const quantized = Embedder.localFile("cpu").pipe(Layer.provide(sharedModels));
-const kiwi = MorphAnalyzer.kiwi.pipe(Layer.provide(sharedModels));
 const noEmbedder = Layer.succeed(Embedder, {
   identity: "none",
   dimensions: localModel.dimensions,
@@ -89,27 +80,23 @@ const noEmbedder = Layer.succeed(Embedder, {
 interface Configuration {
   readonly name: string;
   readonly embedder: Layer.Layer<Embedder>;
-  readonly morph: Layer.Layer<MorphAnalyzer>;
   /** Trigram and short substring ranking; "trigram" in the name. */
   readonly text: boolean;
+  /** Morph term ranking; "morph" in the name. */
+  readonly morph: boolean;
 }
 
 const configurations: readonly Configuration[] = [
-  { name: "vector + trigram", embedder, morph: MorphAnalyzer.disabled, text: true },
-  { name: "vector + trigram + kiwi", embedder, morph: kiwi, text: true },
-  { name: "vector", embedder, morph: MorphAnalyzer.disabled, text: false },
-  { name: "vector + kiwi", embedder, morph: kiwi, text: false },
-  {
-    name: "vector(cpu file) + trigram",
-    embedder: quantized,
-    morph: MorphAnalyzer.disabled,
-    text: true,
-  },
-  { name: "vector(cpu file) + trigram + kiwi", embedder: quantized, morph: kiwi, text: true },
-  { name: "vector(cpu file) + kiwi", embedder: quantized, morph: kiwi, text: false },
-  { name: "trigram", embedder: noEmbedder, morph: MorphAnalyzer.disabled, text: true },
-  { name: "trigram + kiwi", embedder: noEmbedder, morph: kiwi, text: true },
-  { name: "kiwi", embedder: noEmbedder, morph: kiwi, text: false },
+  { name: "vector + trigram", embedder, text: true, morph: false },
+  { name: "vector + trigram + morph", embedder, text: true, morph: true },
+  { name: "vector", embedder, text: false, morph: false },
+  { name: "vector + morph", embedder, text: false, morph: true },
+  { name: "vector(cpu file) + trigram", embedder: quantized, text: true, morph: false },
+  { name: "vector(cpu file) + trigram + morph", embedder: quantized, text: true, morph: true },
+  { name: "vector(cpu file) + morph", embedder: quantized, text: false, morph: true },
+  { name: "trigram", embedder: noEmbedder, text: true, morph: false },
+  { name: "trigram + morph", embedder: noEmbedder, text: true, morph: true },
+  { name: "morph", embedder: noEmbedder, text: false, morph: true },
 ];
 
 interface RecallSet {
@@ -138,11 +125,10 @@ const evaluate = Effect.fn("eval.evaluate")(function* (
   const servicesContext = yield* Layer.build(
     memoryAgentLayer(join(base, "storage"), {
       embedder: configuration.embedder,
-      morphAnalyzer: configuration.morph,
       interpretAutomatically: false,
       secrets: SecretStore.memory,
       skillsHome: join(base, "home"),
-      ...optionalProperty("searchTuning", tuning),
+      searchTuning: { ...tuning, text: configuration.text, morph: configuration.morph },
     }),
   );
   return yield* Effect.provideContext(
@@ -170,17 +156,10 @@ const evaluate = Effect.fn("eval.evaluate")(function* (
       const keys = MutableHashMap.fromIterable(recorded.flat());
       const indexer = yield* Indexer;
       const [indexed] = yield* Effect.timed(
-        Effect.ignore(indexer.indexAll()).pipe(Effect.andThen(Effect.ignore(indexer.analyzeAll()))),
+        Effect.ignore(indexer.lexicalAll()).pipe(Effect.andThen(Effect.ignore(indexer.indexAll()))),
       );
       const indexedMs = Math.round(Duration.toMillis(indexed));
-      const search = yield* configuration.text
-        ? MemorySearch
-        : // Evaluation entry point owns this Layer and its resource scope.
-          Effect.scoped(
-            Effect.flatMap(Layer.build(MemorySearch.tuned({ text: false })), (services) =>
-              Effect.provideContext(MemorySearch, services),
-            ),
-          );
+      const search = yield* MemorySearch;
 
       const searchStarted = yield* Clock.currentTimeNanos;
       // Where each query's expected statement ranked; -1 when it was not found.
@@ -231,21 +210,6 @@ const evaluate = Effect.fn("eval.evaluate")(function* (
   );
 }, Effect.scoped);
 
-/** Kiwi terms of the decision corpus and queries, one line each. */
-const printTerms = Effect.gen(function* () {
-  const texts = [
-    ...recallQueries.map((item) => item.query),
-    ...recallSessions.flat().map((statement) => statement.text),
-  ];
-  const services = yield* Layer.build(kiwi);
-  const terms = yield* Effect.provideContext(
-    Effect.flatMap(MorphAnalyzer, (analyzer) => analyzer.terms(texts)),
-    services,
-  );
-  // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-  yield* Console.log(texts.map((text, index) => `${text} | ${terms[index]?.join(" ")}`).join("\n"));
-}).pipe(Effect.scoped);
-
 /** Every configuration on both sets, or only the configuration `only` names. */
 const printRecall = (only: string | undefined) =>
   Effect.forEach(
@@ -267,19 +231,12 @@ const printRecall = (only: string | undefined) =>
     { discard: true },
   );
 
-// The configuration name is the first argument that is not a flag or a flag's value; --terms
-// itself selects the term printing.
+// The configuration name is the first argument that is not a flag or a flag's value.
 const arguments_ = process.argv.slice(2);
-const only = arguments_.includes("--terms")
-  ? "--terms"
-  : arguments_.find(
-      (argument, index) =>
-        !argument.startsWith("--") &&
-        arguments_[index - 1] !== "--models-root" &&
-        arguments_[index - 1] !== "--tuning",
-    );
-if (only === "--terms") {
-  await runNativeEffect(printTerms);
-  process.exit(0);
-}
+const only = arguments_.find(
+  (argument, index) =>
+    !argument.startsWith("--") &&
+    arguments_[index - 1] !== "--models-root" &&
+    arguments_[index - 1] !== "--tuning",
+);
 await runNativeEffect(printRecall(only));

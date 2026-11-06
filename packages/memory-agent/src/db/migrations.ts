@@ -719,6 +719,16 @@ export const lexicalJournalMigration = `
   BEGIN INSERT INTO lexical_changes(node_seq) VALUES (old.node_seq); END;
 `;
 
+/** The step that drops the SQLite text indexes the lexical index replaced. */
+export const textIndexDropMigration = `
+  -- Trigram and morph matching read the lexical index now, so the FTS5 tables and the Kiwi morph
+  -- terms have no reader. The freed pages stay in the file until a VACUUM.
+  DROP TRIGGER nodes_fts_insert;
+  DROP TABLE nodes_fts;
+  DROP TABLE nodes_morph;
+  DROP TABLE node_morphs;
+`;
+
 /**
  * Ordered schema steps. `PRAGMA user_version` records how many have been applied.
  * Append new steps; never edit an applied one.
@@ -2746,6 +2756,7 @@ export const migrations: readonly string[] = [
   importedSessionSourceMigration,
   memoryCandidateDecisionsMigration,
   lexicalJournalMigration,
+  textIndexDropMigration,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

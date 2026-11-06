@@ -52,7 +52,7 @@ ChatGPT 또는 Claude 계정을 연결해 사용할 수 있습니다. 앱과 기
 
 ## 아키텍처
 
-웹 서버와 에이전트는 한 프로세스(`context-agent`)에서 실행됩니다. Effect `Layer`로 서비스를 조립하고 `ManagedRuntime` 하나로 관리합니다. 임베딩과 형태소 분석, 다른 에이전트의 기록 가져오기는 worker thread에서 처리합니다.
+웹 서버와 에이전트는 한 프로세스(`context-agent`)에서 실행됩니다. Effect `Layer`로 서비스를 조립하고 `ManagedRuntime` 하나로 관리합니다. 임베딩, 검색 색인(벡터·글자·형태소), 다른 에이전트의 기록 가져오기는 worker thread에서 처리합니다.
 
 ```mermaid
 flowchart TB
@@ -71,7 +71,7 @@ flowchart TB
     end
 
     subgraph Memory["기억 서비스"]
-      Search["MemorySearch<br/>벡터 · FTS · 형태소 → RRF → 그래프"]
+      Search["MemorySearch<br/>벡터 · 글자 · 형태소 → RRF → 그래프"]
       Indexer["Indexer"]
       Interp["Interpreter<br/>주제 · 정정 · 취소"]
       Importer["Importer"]
@@ -80,13 +80,14 @@ flowchart TB
 
     subgraph Workers["worker threads"]
       Embed["embed-worker<br/>ONNX · CPU 또는 WebGPU"]
-      Kiwi["kiwi-worker<br/>한국어 형태소"]
+      Native["native-search-worker<br/>turbovec 벡터 · Tantivy 글자·형태소"]
       ImportW["import-worker<br/>기록 읽기 · 비밀 가리기 · 대량 쓰기"]
     end
 
     Tools --> Search
+    Search --> Native
     Indexer --> Embed
-    Indexer --> Kiwi
+    Indexer --> Native
     Importer --> ImportW
   end
 
@@ -95,9 +96,9 @@ flowchart TB
   Transcripts["~/.claude · ~/.codex 기록"]
 
   subgraph Storage["~/.context-generactive-agent"]
-    DB[("agent.db (SQLite)<br/>nodes · edges · FTS · chat state")]
-    Vec[("turbovec 벡터 인덱스")]
-    Models[("임베딩 · Kiwi 모델")]
+    DB[("agent.db (SQLite)<br/>nodes · edges · chat state")]
+    Vec[("turbovec 벡터 인덱스<br/>Tantivy 글자·형태소 색인")]
+    Models[("임베딩 모델")]
   end
 
   Chat <--> Codex
@@ -106,11 +107,9 @@ flowchart TB
   ImportW --> Transcripts
   MW --> DB
   Memory --> DB
-  Search --> Vec
-  Indexer --> Vec
+  Native --> Vec
   ImportW --> DB
   Embed --> Models
-  Kiwi --> Models
 ```
 
 ### 대화 루프
@@ -134,7 +133,7 @@ sequenceDiagram
   Chat->>Codex: 턴 시작(도구 정의 및 지침)
   Codex-->>Chat: 도구 호출 find_memory
   Chat->>Tools: 권한 확인 뒤 실행
-  Tools->>Mem: 벡터 / FTS / 형태소 순위 → RRF → 그래프 확장
+  Tools->>Mem: 벡터 / 글자 / 형태소 순위 → RRF → 그래프 확장
   Mem-->>Tools: 근거 노드 / 정정한 발언
   Tools-->>Chat: 결과(비밀 가림)
   Chat->>Mem: 도구 호출 / 결과 노드 저장
@@ -142,7 +141,7 @@ sequenceDiagram
   Codex-->>Chat: 답변 스트림
   Chat-->>UI: SSE(끊겨도 이어 받기)
   Chat->>Mem: 답변 노드 저장
-  Chat-)BG: 인덱싱(embed-worker / kiwi-worker)
+  Chat-)BG: 인덱싱(embed-worker / native-search-worker)
   Chat-)BG: 해석(주제 / 정정 / 취소 edge)
 ```
 
@@ -153,9 +152,9 @@ flowchart LR
   Live["대화 · 도구 결과"] -->|비밀 가리기| Nodes
   Other["Claude Code · Codex CLI 기록"] -->|import-worker<br/>비밀 가리기 · 200개씩 쓰기| Nodes
   Old["예전에 저장된 텍스트"] -->|SecretSweep| Nodes
-  Nodes[("nodes · edges")] -->|트리거| FTS[("FTS trigram")]
+  Nodes[("nodes · edges")] -->|트리거| Journal[("lexical_changes")]
+  Journal -->|Indexer| Lexical[("Tantivy<br/>글자 3-gram · 형태소 BM25")]
   Nodes -->|Indexer · 발언만, 최근 대화부터| Embed["embed-worker"] --> Vec[("turbovec")]
-  Nodes -->|Indexer| Kiwi["kiwi-worker"] --> Morph[("형태소 BM25")]
   Nodes -->|Interpreter| Topics["topic 노드<br/>corrects · retracts · related"]
 ```
 
@@ -235,11 +234,11 @@ pnpm 워크스페이스 모노레포이고, Vite+(`vp`)로 설치·검사·테�
 
 ## Global Side Effects
 
-- 데이터 루트 `~/.context-generactive-agent`: SQLite `agent.db`(nodes, edges, FTS, 채팅 상태), turbovec 벡터 인덱스, 임베딩·Kiwi 모델, `config.json`, `agents.json`.
+- 데이터 루트 `~/.context-generactive-agent`: SQLite `agent.db`(nodes, edges, 채팅 상태), turbovec 벡터 인덱스, Tantivy 글자·형태소 색인, 임베딩 모델, `config.json`, `agents.json`.
 - OS 키체인: OAuth 토큰과 API 키 같은 비밀값을 저장합니다.
 - 네트워크: 모델 공급자 API(OpenAI·Anthropic 구독 OAuth, OpenAI 호환 엔드포인트), MCP 서버, 외부 ACP 에이전트 프로세스, Kagi Search를 사용합니다.
 - 로컬 기록 읽기: Claude Code(`~/.claude/projects`)와 Codex CLI(`~/.codex/sessions`) transcript를 가져옵니다.
-- worker thread: 임베딩, 형태소 분석, 가져오기, 비밀 가리기, 네이티브 검색, 셸 sandbox, 코드 실행.
+- worker thread: 임베딩, 가져오기, 비밀 가리기, 네이티브 검색(벡터·글자·형태소 색인), 셸 sandbox, 코드 실행.
 - 빌드 산출물: `packages/turbovec/memory-turbovec.node`(cargo), `apps/agent/dist` 번들과 실행 파일.
 
 ## System Verification

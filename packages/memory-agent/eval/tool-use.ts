@@ -30,7 +30,6 @@ import { runNativeEffect } from "../src/runtime/native-effect.ts";
 import { path } from "../src/runtime/synchronous-path.ts";
 import { Sessions } from "../src/sessions/sessions.ts";
 import { fakeEmbedderLayer } from "../src/testing/fake-embedder.ts";
-import { fakeMorphLayer } from "../src/testing/fake-morph.ts";
 import { inProcessChatApi } from "../src/testing/chat-api.ts";
 import { ToolFailureResult } from "../src/tools/failure.ts";
 const { dirname, join } = path;
@@ -369,7 +368,6 @@ const evaluate = Effect.fn("eval.toolUse")(function* () {
   const services = yield* Layer.build(
     memoryAgentLayer(storage, {
       embedder: fakeEmbedderLayer,
-      morphAnalyzer: fakeMorphLayer,
       interpretAutomatically: false,
       summarizeAutomatically: false,
       importsHome: home,

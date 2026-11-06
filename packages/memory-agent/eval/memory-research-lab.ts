@@ -4,11 +4,11 @@
 //   node --no-warnings eval/memory-research-lab.ts            all stages, both sets
 //   node --no-warnings eval/memory-research-lab.ts fake-embed  one stage
 // Stages:
-//   fake-embed  deterministic hashed vectors + token terms + trigram → isolates the vector+fusion path
-//   real-embed  the local model (cpu file, else gpu file) + token terms + trigram → model quality vs the fake baseline
-//   fts-only    no embedder + token terms + trigram                  → the text channel alone
-//   morph-only  no embedder + Kiwi                                   → the morpheme channel alone
-//   full        the local model + Kiwi + trigram                     → the production configuration
+//   fake-embed  deterministic hashed vectors + trigram              → isolates the vector+fusion path
+//   real-embed  the local model (cpu file, else gpu file) + trigram → model quality vs the fake baseline
+//   fts-only    no embedder + trigram                               → the text channel alone
+//   morph-only  no embedder + morph terms                           → the morpheme channel alone
+//   full        the local model + morph terms + trigram             → the production configuration
 // Model stages need the model files under the real storage root; where they are unreadable the
 // stage is skipped with the reason instead of failing the whole run.
 import {
@@ -26,7 +26,6 @@ import {
 } from "effect";
 import { nodePlatform } from "../src/runtime/node-platform.ts";
 import { fakeEmbedderLayer } from "../src/testing/fake-embedder.ts";
-import { fakeMorphLayer } from "../src/testing/fake-morph.ts";
 import { path } from "../src/runtime/synchronous-path.ts";
 const { join } = path;
 import { SecretStore } from "../src/config/secrets.ts";
@@ -35,7 +34,6 @@ import { memoryAgentLayer } from "../src/layers.ts";
 import { Embedder, EmbedderRuntime, EmbeddingError } from "../src/memory/embedding/embedder.ts";
 import { type EmbeddingRole, localModel, modelFile } from "../src/memory/embedding/models.ts";
 import { Indexer } from "../src/memory/embedding/indexer.ts";
-import { MorphAnalyzer, kiwiModel } from "../src/memory/morph/analyzer.ts";
 import { Nodes } from "../src/memory/nodes.ts";
 import { MemorySearch } from "../src/memory/search.ts";
 import { Projects } from "../src/projects/projects.ts";
@@ -58,7 +56,6 @@ const labPrefix = "memory-research-lab-";
 const home = await Effect.runPromise(defaultStorageRoot);
 const cpuFile = join(home, "models", localModel.id, modelFile("cpu"));
 const gpuFile = join(home, "models", localModel.id, modelFile("gpu"));
-const kiwiFile = join(home, "models", `kiwi-${kiwiModel.version}`, kiwiModel.directory, "cong.mdl");
 const dimensions = localModel.dimensions;
 
 /** Readable now, or the reason a model-dependent stage has to be skipped. */
@@ -113,9 +110,10 @@ interface Stage {
   readonly name: string;
   readonly detail: string;
   readonly embedder: Layer.Layer<Embedder, never, StorageRoot>;
-  readonly morph: Layer.Layer<MorphAnalyzer, never, StorageRoot>;
-  /** Trigram and short substring ranking on top of the channels above. */
+  /** Trigram and short substring ranking on top of the vector channel. */
   readonly text: boolean;
+  /** Morph term ranking on top of the vector channel. */
+  readonly morph: boolean;
   readonly embedNanos: MutableRef.MutableRef<bigint>;
 }
 
@@ -124,87 +122,73 @@ const embedMode = (await readable(cpuFile))
   : (await readable(gpuFile))
     ? ("gpu" as const)
     : null;
-const kiwiAvailable = await readable(kiwiFile);
 
 const stages: readonly Stage[] = [
   {
     name: "fake-embed",
-    detail: "레포의 가짜 임베더(문자 trigram SHA-256) + 가짜 형태소 + trigram",
+    detail: "레포의 가짜 임베더(문자 trigram SHA-256) + trigram",
     ...(() => {
       const timed = timedEmbedder(fakeEmbedderLayer);
       return { embedder: timed.layer, embedNanos: timed.nanos };
     })(),
-    morph: fakeMorphLayer,
     text: true,
+    morph: false,
   },
   ...(embedMode !== null
     ? [
         {
           name: "real-embed",
-          detail: `로컬 모델(${embedMode} 파일) + 가짜 형태소 + trigram`,
+          detail: `로컬 모델(${embedMode} 파일) + trigram`,
           ...(() => {
             const timed = timedEmbedder(Embedder.localFile(embedMode));
             return { embedder: timed.layer, embedNanos: timed.nanos };
           })(),
-          morph: fakeMorphLayer,
           text: true,
+          morph: false,
         } satisfies Stage,
       ]
     : []),
   {
     name: "fts-only",
-    detail: "임베더 없음 + 가짜 형태소 + trigram",
+    detail: "임베더 없음 + trigram",
     embedder: noEmbedder,
-    morph: fakeMorphLayer,
     text: true,
+    morph: false,
     embedNanos: MutableRef.make(0n),
   },
-  ...(kiwiAvailable
-    ? [
-        {
-          name: "morph-only",
-          detail: "임베더 없음 + Kiwi 형태소",
-          embedder: noEmbedder,
-          morph: MorphAnalyzer.kiwi,
-          text: false,
-          embedNanos: MutableRef.make(0n),
-        } satisfies Stage,
-      ]
-    : []),
-  ...(embedMode !== null && kiwiAvailable
+  {
+    name: "morph-only",
+    detail: "임베더 없음 + 형태소",
+    embedder: noEmbedder,
+    text: false,
+    morph: true,
+    embedNanos: MutableRef.make(0n),
+  },
+  ...(embedMode !== null
     ? [
         {
           name: "full",
-          detail: `로컬 모델(${embedMode} 파일) + Kiwi + trigram`,
+          detail: `로컬 모델(${embedMode} 파일) + 형태소 + trigram`,
           ...(() => {
             const timed = timedEmbedder(Embedder.localFile(embedMode));
             return { embedder: timed.layer, embedNanos: timed.nanos };
           })(),
-          morph: MorphAnalyzer.kiwi,
           text: true,
+          morph: true,
         } satisfies Stage,
       ]
     : []),
 ];
 
-const skipped: readonly { readonly name: string; readonly reason: string }[] = [
-  ...(embedMode !== null
+const skipped: readonly { readonly name: string; readonly reason: string }[] =
+  embedMode !== null
     ? []
     : [
         {
           name: "real-embed / full",
           reason: `로컬 임베딩 모델 파일을 읽을 수 없음 (${cpuFile})`,
         },
-      ]),
-  ...(kiwiAvailable
-    ? []
-    : [
-        {
-          name: "morph-only / full",
-          reason: `Kiwi 모델 파일을 읽을 수 없음 (${kiwiFile})`,
-        },
-      ]),
-];
+      ];
 
 interface RecallSet {
   readonly name: string;
@@ -271,16 +255,9 @@ const runStageEffects = Effect.fn("lab.stage.effects")(function* (stage: Stage) 
   const keys = MutableHashMap.fromIterable(recorded.flat());
   const indexer = yield* Indexer;
   const [indexDuration] = yield* Effect.timed(
-    Effect.ignore(indexer.indexAll()).pipe(Effect.andThen(Effect.ignore(indexer.analyzeAll()))),
+    Effect.ignore(indexer.lexicalAll()).pipe(Effect.andThen(Effect.ignore(indexer.indexAll()))),
   );
-  const search = yield* stage.text
-    ? MemorySearch
-    : // Evaluation entry point owns this Layer and its resource scope.
-      Effect.scoped(
-        Effect.flatMap(Layer.build(MemorySearch.tuned({ text: false })), (services) =>
-          Effect.provideContext(MemorySearch, services),
-        ),
-      );
+  const search = yield* MemorySearch;
 
   // Each set's queries, timed one at a time, with where the expected statement ranked (-1: not found).
   const measured = yield* Effect.forEach(sets, (set) =>
@@ -374,7 +351,7 @@ const evaluateStage = Effect.fn("lab.stage")(function* (stage: Stage) {
       Layer.build(
         memoryAgentLayer(join(base, "storage"), {
           embedder: stage.embedder,
-          morphAnalyzer: stage.morph,
+          searchTuning: { text: stage.text, morph: stage.morph },
           interpretAutomatically: false,
           summarizeAutomatically: false,
           sweepSecrets: false,
@@ -508,14 +485,14 @@ const setVerdict = (set: RecallSet): readonly string[] => {
       Option.filter((morphChannel) => morphChannel < 0.1),
       Option.map(
         (morphChannel) =>
-          `- [${set.name}] Kiwi 형태소 채널 단독 top3 ${Math.round(morphChannel * 100)}% — 용어 추출이 이 코퍼스에서 거의 매치하지 않음`,
+          `- [${set.name}] 형태소 채널 단독 top3 ${Math.round(morphChannel * 100)}% — 용어 추출이 이 코퍼스에서 거의 매치하지 않음`,
       ),
     ),
     gap(top3(full, set.name), realChannel).pipe(
-      Option.map((kiwiDelta) =>
-        kiwiDelta >= 0
-          ? `- [${set.name}] Kiwi 추가가 top3 +${Math.round(kiwiDelta * 100)}%p`
-          : `- [${set.name}] Kiwi 추가가 top3 ${Math.round(kiwiDelta * 100)}%p — 퓨전에서 형태소 용어가 방해할 수 있음`,
+      Option.map((morphDelta) =>
+        morphDelta >= 0
+          ? `- [${set.name}] 형태소 추가가 top3 +${Math.round(morphDelta * 100)}%p`
+          : `- [${set.name}] 형태소 추가가 top3 ${Math.round(morphDelta * 100)}%p — 퓨전에서 형태소 용어가 방해할 수 있음`,
       ),
     ),
   ]);

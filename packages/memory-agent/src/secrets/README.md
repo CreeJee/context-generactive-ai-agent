@@ -40,7 +40,7 @@
 - redaction worker는 한 번에 한 배치만 처리한다(`RpcServer` `concurrency: 1`, client `size: 1, concurrency: 1`). secretlint는 동기로 돌아 이벤트 루프를 막으므로 main thread가 아닌 worker에서 실행한다.
 - `Redact` 응답은 보낸 텍스트 하나에 하나씩, 보낸 순서대로 돌려준다. `redactCells`는 `null` 셀을 보내지 않고 `null`로 남긴다.
 - `redact-worker.ts`는 package index가 아닌 `@effect/platform-node/NodeWorkerRunner` 모듈을 직접 import해야 한다. index는 시작을 느리게 한다.
-- node 재작성 순서는 `secret_sweep_permits` insert, `nodes_fts` delete, `nodes` update, `nodes_fts` insert, permit delete, 그다음 `nodes_morph`/`node_morphs`/`node_vectors` 파생 데이터 삭제이다. 모두 한 `sql.withTransaction` 안에서 실행한다.
+- node 재작성 순서는 `secret_sweep_permits` insert, `nodes` update, permit delete, 그다음 `node_vectors` 삭제이다. 모두 한 `sql.withTransaction` 안에서 실행한다. `nodes` update는 트리거가 `lexical_changes`에 기록하고, sweep 뒤의 `lexicalAll`이 lexical 색인에 새 텍스트를 반영한다.
 - node sweep은 `indexer.exclusive` 아래에서 실행한다. 벡터 제거, `vectors.save`, `nodes.invalidateResultPages`는 DB 커밋 전에 한다. 그 사이에 크래시가 나면 다시 열 때 크기 불일치로 감지해 재구축한다.
 - redaction은 트랜잭션 전에 실행해 DB를 잠깐만 잡는다(`batchSize = 200`). sweep pass는 `Semaphore.make(1)`로 한 번에 하나만 돈다.
 - `node_refs`는 `UPDATE OR REPLACE`로 갱신한다. 이미 가려진 같은 ref와 충돌하면 그 행을 남긴다.
@@ -53,7 +53,7 @@
 
 - `node:worker_threads` `Worker`로 `redact-worker` thread를 띄운다. thread는 sweep 하나 동안만 살아 있고 sweep이 끝나면 멈춘다.
 - SQLite 읽기: `secret_sweeps`, `secret_sweep_changes`, `nodes`, `node_refs`, 그리고 `chat_thread_messages`, `chat_interrupts`, `permission_reviews`, `queued_messages`, `subagents`, `interpretations` 중 표시된 행의 컬럼.
-- SQLite 쓰기: `secret_sweeps` upsert(`updated_at`는 `DateTime.now`), `nodes` update, `nodes_fts` delete/insert, `secret_sweep_permits` insert/delete, `nodes_morph`/`node_morphs`/`node_vectors` delete, `node_refs` `UPDATE OR REPLACE`, 컬럼 테이블 update, `secret_sweep_changes` insert/delete.
+- SQLite 쓰기: `secret_sweeps` upsert(`updated_at`는 `DateTime.now`), `nodes` update(트리거가 `lexical_changes` insert), `secret_sweep_permits` insert/delete, `node_vectors` delete, `node_refs` `UPDATE OR REPLACE`, 컬럼 테이블 update, `secret_sweep_changes` insert/delete.
 - `VectorIndex.remove`와 `vectors.save`로 벡터 인덱스를 바꾸고 파일에 저장한다. `Nodes.invalidateResultPages`를 호출한다.
 - `secretLintProfiler.setEnabled(false)`로 secretlint의 전역 profiler 상태를 바꾼다.
 - `fallbackLogged`/`ignoreLogged`로 실패를 로그에 남긴다.

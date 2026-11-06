@@ -6,7 +6,7 @@
 
 저장된 사용자 발화는 LLM이 사후에 해석해 topic·corrects·retracts·related 관계를 붙인다(`Interpreter`, `Interpretations`). 그 결과를 바탕으로 출처 추적, 증거 읽기, 최신 결정 해석, 사용자 승인을 거친 지식 승격, 그래프 수리를 제공한다.
 
-임베딩·형태소·네이티브 검색 worker는 하위 디렉터리가 맡고, 이 디렉터리는 그 위에서 저장·질의 규칙을 정한다.
+임베딩·네이티브 검색 worker는 하위 디렉터리가 맡고, 이 디렉터리는 그 위에서 저장·질의 규칙을 정한다.
 
 ## Interface
 
@@ -36,7 +36,6 @@
 - `memoryGraphRepairVersion`(3) / `hasStatementText` / `nonBlankTextSql` / `meaningfulNodeFilter` / `embeddedKinds` / `embeddedKindFilter` — 그래프 수리·검색 제외 규칙의 버전, 공백이 아닌 텍스트 판별, SQL 필터(nodes 별칭 `n`), 임베딩 대상 kind(`user`, `assistant`, `topic`)와 그 SQL 필터
 - `refsInArguments` — tool call JSON 인자에서 파일·URL 참조를 뽑는다
 - [`embedding`](./embedding/README.md) — 모델 표(`models.ts`)의 로컬 임베딩 모델(`Embedder`), 토큰 창 청킹, turbovec 위의 `VectorIndex`, nodes와 벡터 색인을 맞추는 `Indexer`
-- [`morph`](./morph/README.md) — Kiwi WASM 기반 한국어 형태소 분석기 `MorphAnalyzer`와 worker RPC 계약
 - [`native-search`](./native-search/README.md) — turbovec 벡터 인덱스와 SQLite 읽기 세션을 전용 worker thread에 가두는 `NativeOwner`
 
 ## Invariants

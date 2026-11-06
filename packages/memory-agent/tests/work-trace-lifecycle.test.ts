@@ -350,13 +350,10 @@ describe("Work Trace task lifecycle", () => {
             "attempt_completed",
             "Completed",
           );
-          yield* sqlRun(
+          const { lastInsertRowid: deletedSeq } = yield* sqlRun(
             `INSERT INTO nodes (id, project_id, session_id, run_id, kind, text, detail, created_at)
          VALUES ('user-1', 'p1', 's1', 'parent-1', 'user', 'private lifecycle phrase', '{}', ?)`,
             DateTime.formatIso(DateTime.makeUnsafe(0)),
-          );
-          yield* sqlRun(
-            "INSERT INTO nodes_morph (rowid, terms) SELECT seq, 'private lifecycle' FROM nodes WHERE id = 'user-1'",
           );
           // Another conversation's node, linked to this one and imported like it, stays.
           yield* sqlRun(
@@ -441,25 +438,17 @@ describe("Work Trace task lifecycle", () => {
           expect(yield* sqlGet("SELECT count(*) AS count FROM purge_receipts")).toEqual({
             count: 2,
           });
+          // The node's insert and its delete are journaled, so the lexical index drops it too.
           expect(
             yield* sqlGet(
-              "SELECT count(*) AS count FROM nodes_fts WHERE nodes_fts MATCH 'lifecycle'",
+              "SELECT count(*) AS count FROM lexical_changes WHERE node_seq = ?",
+              deletedSeq,
             ),
-          ).toEqual({ count: 0 });
-          expect(
-            yield* sqlGet(
-              "SELECT count(*) AS count FROM nodes_morph WHERE nodes_morph MATCH 'lifecycle'",
-            ),
-          ).toEqual({ count: 0 });
+          ).toEqual({ count: 2 });
           expect(yield* sqlGet("SELECT count(*) AS count FROM edges")).toEqual({ count: 0 });
           expect(yield* sqlGet("SELECT group_concat(node_id) AS ids FROM imported_nodes")).toEqual({
             ids: "other-1",
           });
-          expect(
-            yield* sqlGet(
-              "SELECT count(*) AS count FROM nodes_fts WHERE nodes_fts MATCH 'conversation'",
-            ),
-          ).toEqual({ count: 1 });
         }),
       ),
   );

@@ -36,7 +36,7 @@
 - `--no-otel`(spans `off`)일 때 백엔드는 호출자 자신의 `OTEL_*` 변수를 그대로 쓴다.
 - `package.ts`: `vp pack`이 `dist/`를 비우므로 작업물은 `build/package` 아래에서 만들고 패킹 후에야 `dist/`로 게시한다.
 - `package.ts`: 릴리스 버전은 SemVer 패턴을 통과해야 한다(`v` 접두사 제거). 채널은 `CONTEXT_AGENT_RELEASE_CHANNEL`을 따르고, 없으면 공급 버전에 `-`가 없을 때 `stable`, 있을 때 `prerelease`다.
-- `package.ts`: 필수 네이티브 파일(turbovec `memory-turbovec.node`, onnxruntime 바인딩, `@napi-rs`·`@img` `.node`, kiwi wasm)이 하나라도 없으면 패키징을 중단한다.
+- `package.ts`: 필수 네이티브 파일(turbovec `memory-turbovec.node`, onnxruntime 바인딩, `@napi-rs`·`@img` `.node`)이 하나라도 없으면 패키징을 중단한다.
 - `package.ts`: onnxruntime-node 바이너리는 현재 platform/arch만 남긴다. `turbovec`·`@huggingface/transformers`는 지정 파일만 복사하고 지정 의존성은 건너뛴다.
 - macOS 서명은 postject 이후에 hardened runtime과 `entitlements.plist`로 항상 수행한다. `CONTEXT_AGENT_SIGN_IDENTITY`가 없으면 ad-hoc(배포 불가)이고, 있으면 `--timestamp`를 포함한다.
 - `notarize-macos.ts`는 macOS 전용이다. ad-hoc 서명이거나 Team ID가 없거나 notarytool keychain 프로필이 없으면 사전 점검에서 중단한다. 환경에서 비밀을 읽지 않고 keychain 프로필(`CONTEXT_AGENT_NOTARY_PROFILE`, 기본 `context-agent`)만 사용한다.

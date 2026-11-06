@@ -1,4 +1,3 @@
-import { nativePromise } from "../src/runtime/native-effect.ts";
 import { isTruthy } from "../src/truthy.ts";
 // Memory use of the in-process models, one scenario per process so peaks do not mix:
 //   node --expose-gc --no-warnings eval/memory.ts            all scenarios
@@ -9,17 +8,13 @@ import { isTruthy } from "../src/truthy.ts";
 import { runProcess } from "../src/runtime/run-process.ts";
 import { nodePlatform } from "../src/runtime/node-platform.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { Cause, Duration, FileSystem, Option, Schema } from "effect";
+import { Cause, Duration, Option, Schema } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { path } from "../src/runtime/synchronous-path.ts";
-const { dirname, join } = path;
 import { Console, Effect, Layer } from "effect";
-import { KiwiBuilder } from "kiwi-nlp";
 import { StorageRoot, defaultStorageRoot } from "../src/config/storage-root.ts";
 import type { EmbeddingMode } from "../src/memory/embedding/contracts.ts";
 import { Embedder } from "../src/memory/embedding/embedder.ts";
-import { kiwiModel } from "../src/memory/morph/analyzer.ts";
-import { runtimeRequire } from "../src/runtime/resources.ts";
 import { JsonValue } from "../src/json.ts";
 
 const home = await Effect.runPromise(defaultStorageRoot);
@@ -55,30 +50,6 @@ const sentence = "배포는 화요일과 목요일 오후에만 하기로 했고
 /** About `tokens` tokens of Korean text. */
 const textOfTokens = (tokens: number) => sentence.repeat(Math.ceil(tokens / 20));
 
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-const kiwi = Effect.fn("eval.kiwi")(function* (options: {
-  loadMultiDict: boolean;
-  loadTypoDict: boolean;
-}) {
-  const directory = join(home, "models", `kiwi-${kiwiModel.version}`, kiwiModel.directory);
-  const wasm = join(dirname((yield* runtimeRequire).resolve("kiwi-nlp")), "kiwi-wasm.wasm");
-  const builder = yield* nativePromise(() => KiwiBuilder.create(wasm));
-  const fs = yield* FileSystem.FileSystem;
-  const modelFiles = Object.fromEntries(
-    yield* Effect.forEach(
-      yield* fs.readDirectory(directory),
-      Effect.fnUntraced(function* (name) {
-        return [name, yield* fs.readFile(join(directory, name))] as const;
-      }),
-    ),
-  );
-  const instance = yield* nativePromise(() =>
-    builder.build({ modelFiles, modelType: "cong", ...options }),
-  );
-  instance.tokenize(sentence.repeat(50));
-  return {};
-});
-
 /** Embeds through the app's Embedder, then disposes it and reports what memory came back. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 const embed = Effect.fn("eval.embed")(function* (mode: EmbeddingMode, texts: readonly string[]) {
@@ -101,8 +72,6 @@ const short = Array.from({ length: 16 }, () => textOfTokens(60));
 const scenarios = {
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   "node baseline": () => Effect.succeed({}),
-  "kiwi cong (as used)": () => kiwi({ loadMultiDict: true, loadTypoDict: true }),
-  "kiwi without multi/typo dict": () => kiwi({ loadMultiDict: false, loadTypoDict: false }),
   "embedder gpu file, 16 short": () => embed("gpu", short),
   "embedder gpu file, 1 long + 15 short": () => embed("gpu", mixed),
   "embedder cpu file, 16 short": () => embed("cpu", short),

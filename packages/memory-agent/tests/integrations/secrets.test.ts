@@ -2,7 +2,9 @@ import { Effect, FileSystem, Path, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { Importer } from "../../src/imports/importer.ts";
 import type { JsonValue } from "../../src/json.ts";
+import { Embedder } from "../../src/memory/embedding/embedder.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
+import { VectorIndex } from "../../src/memory/embedding/vector-index.ts";
 import { embeddedKindFilter } from "../../src/memory/quality.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { PermissionReviews } from "../../src/permissions/reviews.ts";
@@ -324,39 +326,52 @@ testAgent()("SecretSweep of stored nodes", (it) => {
           kind: "assistant",
           text: "배포가 끝났어요",
         });
+        yield* indexer.lexicalAll();
         yield* indexer.indexAll();
-        yield* indexer.analyzeAll();
 
         const count = Effect.fnUntraced(function* (sql: string, ...values: Array<string | number>) {
           return (yield* decodeCount(yield* sqlGet(sql, ...values))).count;
         });
-        const trigram = (query: string) =>
-          count("SELECT count(*) AS count FROM nodes_fts WHERE nodes_fts MATCH ?", `"${query}"`);
-        // The test analyser splits at `_` and lower-cases, so the token's body is one term.
-        const termHits = count(
-          "SELECT count(*) AS count FROM nodes_morph WHERE nodes_morph MATCH ?",
-          `"${githubToken.slice(4).toLowerCase()}"`,
-        );
-        // Both indexes held the token before the sweep, so the checks below mean something.
-        expect({
-          tokenHits: yield* trigram(githubToken.slice(4, 20)),
-          terms: yield* termHits,
-        }).toEqual({ tokenHits: 1, terms: 1 });
+        // A text-only read of the lexical index: the nodes holding `phrase`, and those sharing a
+        // morph term with `question`.
+        const lexical = Effect.fnUntraced(function* (phrase: string, question: string) {
+          const { result } = yield* (yield* VectorIndex).backend.read({
+            allowedProjects: [project.id],
+            // The read serves only the running embedder; with no query vector it reads no vectors.
+            embedder: (yield* Embedder).identity,
+            trigramTerms: [phrase],
+            shortTerms: [],
+            morphQuery: question,
+            vectorK: 0,
+            textK: 10,
+            morphK: 10,
+            textEnabled: true,
+            morphEnabled: true,
+            remainingMs: 2000,
+            inputBudgetBytes: 1048576,
+            outputBudgetBytes: 1048576,
+          });
+          return { text: result.textIds, morph: result.morphIds };
+        });
+        // Latin runs are morph terms of their own, so the token's body is one term.
+        const tokenHits = lexical(githubToken.slice(4, 20), githubToken.slice(4));
+        // The index held the token before the sweep, so the checks below mean something.
+        expect(yield* tokenHits).toEqual({ text: [leaked.id], morph: [leaked.id] });
 
         expect(yield* (yield* SecretSweep).run).toBe(1);
         const text = (id: string) => value("SELECT text AS value FROM nodes WHERE id = ?", id);
         expect(yield* text(leaked.id)).toBe("GITHUB_TOKEN=[redacted:github]\ndeploy ok");
         expect(yield* text(clean.id)).toBe("배포가 끝났어요");
         // The search index lost the old text and holds the new one.
-        expect(yield* trigram(githubToken.slice(4, 20))).toBe(0);
-        expect(yield* trigram("redacted:github")).toBe(1);
-        expect(yield* termHits).toBe(0);
-        // Re-embedding and re-analysis ran inside the sweep; nothing is left pending.
+        expect(yield* tokenHits).toEqual({ text: [], morph: [] });
+        expect((yield* lexical("redacted:github", "redacted")).text).toEqual([leaked.id]);
+        // Re-embedding and the lexical update ran inside the sweep; nothing is left pending.
         expect(
           yield* count(
             `SELECT count(*) AS count FROM nodes n LEFT JOIN node_vectors v ON v.node_seq = n.seq WHERE v.node_seq IS NULL AND length(n.text) > 0 AND ${embeddedKindFilter}`,
           ),
         ).toBe(0);
+        expect(yield* count("SELECT count(*) AS count FROM lexical_changes")).toBe(0);
       }),
   );
 

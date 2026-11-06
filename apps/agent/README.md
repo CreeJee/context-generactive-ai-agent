@@ -45,7 +45,7 @@ vp run agent#dev:agent --backend-port 15180 --storage /tmp/context-agent-dev --m
 vp run agent#dev:web --web-port 15173 --manifest /tmp/context-agent-dev.json
 ```
 
-데이터는 `~/.context-generactive-agent`에 저장됩니다(SQLite, 벡터 인덱스, 임베딩 모델과 Kiwi 모델, 설정, 실행 파일이 푼 `runtime/`).
+데이터는 `~/.context-generactive-agent`에 저장됩니다(SQLite, 벡터 인덱스, 글자·형태소 검색 색인, 임베딩 모델, 설정, 실행 파일이 푼 `runtime/`).
 
 ### 프로덕션 서버와 실행 파일
 

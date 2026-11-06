@@ -7,7 +7,6 @@ import type { Project } from "../../src/projects/projects.ts";
 import type { Session } from "../../src/sessions/sessions.ts";
 import { SecretStore } from "../../src/config/secrets.ts";
 import { fakeEmbedderLayer } from "../../src/testing/fake-embedder.ts";
-import { fakeMorphLayer } from "../../src/testing/fake-morph.ts";
 import {
   testProvider as makeTestProvider,
   type TestProvider,
@@ -77,7 +76,6 @@ const makeTestEnv = Effect.fnUntraced(function* (overrides: TestEnvOptions) {
   const provider = providerOptions === undefined ? undefined : makeTestProvider(providerOptions);
   const baseOptions: MemoryAgentLayerOptions = {
     embedder: fakeEmbedderLayer,
-    morphAnalyzer: fakeMorphLayer,
     // Interpretation and summaries are model calls; tests that need them run them by hand.
     interpretAutomatically: false,
     summarizeAutomatically: false,

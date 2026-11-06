@@ -1593,8 +1593,6 @@ const make = Effect.gen(function* () {
     // lock for minutes on a long conversation.
     const ids = sql`SELECT id FROM nodes WHERE session_id = ${sessionId}`;
     const seqs = sql`SELECT seq FROM nodes WHERE session_id = ${sessionId}`;
-    yield* run(sql`INSERT INTO nodes_fts(nodes_fts, rowid, text)
-      SELECT 'delete', seq, text FROM nodes WHERE session_id = ${sessionId}`);
     yield* run(sql`DELETE FROM interpretations WHERE node_id IN (${ids}) OR target_id IN (${ids})`);
     yield* run(sql`DELETE FROM edges WHERE from_id IN (${ids}) OR to_id IN (${ids})`);
     yield* run(sql`DELETE FROM node_refs WHERE node_id IN (${ids})`);
@@ -1602,8 +1600,6 @@ const make = Effect.gen(function* () {
     yield* run(sql`DELETE FROM imported_nodes WHERE node_id IN (${ids})`);
     yield* run(sql`DELETE FROM interpret_jobs WHERE node_id IN (${ids})`);
     yield* run(sql`DELETE FROM node_vectors WHERE node_seq IN (${seqs})`);
-    yield* run(sql`DELETE FROM node_morphs WHERE node_seq IN (${seqs})`);
-    yield* run(sql`DELETE FROM nodes_morph WHERE rowid IN (${seqs})`);
     yield* run(sql`DELETE FROM memory_graph_suppressed_nodes WHERE node_seq IN (${seqs})`);
     const nodes = (yield* run(sql`DELETE FROM nodes WHERE session_id = ${sessionId}`)).changes;
     yield* run(sql`DELETE FROM background_task_results

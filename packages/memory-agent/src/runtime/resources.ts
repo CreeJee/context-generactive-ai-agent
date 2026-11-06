@@ -7,7 +7,7 @@ import { path } from "./synchronous-path.ts";
  * Packages this app loads from disk at run time rather than bundling: native addons (vector index,
  * keychain, image encoding). The app server build keeps them external, and the executable cannot hold them
  * (a Node SEA embeds only JS and cannot load a package from disk with `import`). The embedding
- * runtime and Kiwi are loaded the same way, by their worker scripts ({@link runtimeWorker}).
+ * runtime is loaded the same way, by its worker script ({@link runtimeWorker}).
  */
 interface RuntimePackages {
   readonly turbovec: typeof import("turbovec");
@@ -75,12 +75,11 @@ export const requireRuntime = <Name extends keyof RuntimePackages>(name: Name) =
   );
 
 /**
- * Worker scripts. Kiwi and the embedder are plain `.mjs` files that load their runtime package; the
+ * Worker scripts. The embedder is a plain `.mjs` file that loads its runtime package; the
  * import and redaction workers are TypeScript in a checkout and bundled into one `.mjs` each for
  * the executable.
  */
 export type RuntimeWorker =
-  | "kiwi-worker"
   | "embed-worker"
   | "import-worker"
   | "redact-worker"

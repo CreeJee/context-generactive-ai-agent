@@ -13,7 +13,6 @@ import { ActiveProvider } from "../../src/providers/active-provider.ts";
 import { AuthConnectionState } from "../../src/providers/contracts.ts";
 import { path } from "../../src/runtime/synchronous-path.ts";
 import { fakeEmbedderLayer } from "../../src/testing/fake-embedder.ts";
-import { fakeMorphLayer } from "../../src/testing/fake-morph.ts";
 import { setFiles } from "./files.ts";
 
 /** The selected model cannot be asked: no model is selected or its provider is not signed in. */
@@ -44,7 +43,6 @@ const modelServices = Effect.fn("searchSet.modelServices")(function* (storage: s
   return yield* Layer.build(
     memoryAgentLayer(root, {
       embedder: fakeEmbedderLayer,
-      morphAnalyzer: fakeMorphLayer,
       interpretAutomatically: false,
       summarizeAutomatically: false,
       importsHome: home,

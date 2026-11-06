@@ -28,7 +28,7 @@ memory-agent의 임베딩 계층이다. 모델 표(`models.ts`)에서 고른 로
 - `VectorIndex` / `VectorIndex.layer` — 네이티브 벡터 색인 서비스. NodeCrypto·NodePath를 공급하고 `makeNativeVectorIndex`를 Scope에서 획득한다
 - `VectorIndexApi` / `VectorBackend` / `VectorHit` / `VectorIndexError` — add/remove/search/save/flushRemovals/publish, lexical 색인 반영 `applyLexical`과 native read API, 검색 결과(seq, cosine score), operation별 오류(`lexical` 포함)
 - `makeNativeVectorIndex` — 네이티브 소유자 워커를 열고 시작 시 제거 저널과 예약 chunk를 정리하는 유일한 프로덕션 백엔드
-- `Indexer` / `Indexer.layer` — nodes 테이블과 벡터 색인을 맞춘다. `pending`, `indexBatch`, `analyzeBatch`, `analyzeAll`, `indexAll`, lexical 기록 반영 `lexicalBatch`/`lexicalAll`/`lexicalUpTo`, budget 제한 색인 메서드를 제공한다
+- `Indexer` / `Indexer.layer` — nodes 테이블과 벡터 색인을 맞춘다. `pending`, `indexBatch`, `indexAll`, `exclusive`, lexical 기록 반영 `lexicalBatch`/`lexicalAll`/`lexicalUpTo`, budget 제한 색인 메서드를 제공한다
 - `IndexingError` — `reason: read-failed | revalidation-failed | mapping-commit-failed`
 - `EmbeddingSetup` / `EmbeddingSetup.layer` / `GpuState` — 설정 화면용 서비스와 `EmbeddingOverview["gpu"]`의 `Data.taggedEnum` 생성자. 앱 API settings group(`apps/agent/app/.server/api/settings.ts`)이 사용한다. layer를 만들 때 lexical 기록 반영(`lexicalAll`, 임베더와 무관)과 로컬 임베더의 벡터 backfill(`indexAll`)을 layer Scope에 fork한다
 - `EmbeddingOverview` — 설정 화면 개요 Schema(choice, running, next, gpu, unindexed, maintenance)(`contracts.ts`). 서버 코드를 import하지 않아 앱 API 계약과 브라우저가 쓴다
@@ -46,7 +46,7 @@ memory-agent의 임베딩 계층이다. 모델 표(`models.ts`)에서 고른 로
 - chunk vector id는 `chunkVectorIdFloor`(2^52, migration CHECK) 이상이고 node seq는 그 아래에 둔다. 검색 결과 `nodeHits`는 이 경계로 chunk id와 node seq를 구분한다
 - `ChunkSpan`은 원문의 UTF-16 offset이며 surrogate pair를 쪼개지 않는다. span 길이는 special token을 포함해 재고, overlap은 special token 없이 잰다. `EmbeddingModel.maxTokens`(질의 한도)와 `chunkPolicy.tokens`(문서 청크 크기)는 서로 다른 값으로 유지한다
 - `planBatches`는 짧은 텍스트부터 배치에 넣는다. 각 배치는 `batchSize` 이하이고 `(개수) × 최장² ≤ batchCost`를 지킨다
-- `Indexer.indexBatch`는 `oneBatchAtATime` 세마포어로 직렬화한다. 같은 pending 노드가 두 번 색인되지 않게 하기 위해서다. `analyzeBatch`와 `lexicalBatch`도 각자 세마포어로 직렬화한다
+- `Indexer.indexBatch`는 `oneBatchAtATime` 세마포어로 직렬화한다. 같은 pending 노드가 두 번 색인되지 않게 하기 위해서다. `lexicalBatch`도 자기 세마포어로 직렬화한다
 - `lexicalBatch`는 `lexical_changes`를 id 순으로 최대 512개 읽고, 원문이 약 1MiB(`octet_length`)를 넘기 전까지의 앞부분만 반영한다(최소 1개). 비었거나 숨긴 노드, 지운 노드는 색인에서 뺀다. 반영한 마지막 id까지 지우므로 그 사이에 기록된 변경은 남는다
 - native 소유자를 열 때 lexical 색인의 build 이름이 `lexical_index`와 다르거나 없으면 색인을 비우고 새 이름(uuidV7)을 준 뒤, 한 transaction에서 기록을 지우고 모든 노드를 최신순으로 다시 기록하고 이름을 저장한다. lexical 색인 폴더는 `<storage>/lexical/<layout hash 16자>`다
 - 색인 순서는 다음과 같다. chunk 분할과 embed는 publication gate 밖에서 실행한다. 재검증(`selectFresh`), chunk id 예약, 네이티브 add/save, commit은 `vectors.publish` 안에서 실행한다. chunk 예약 INSERT는 한 트랜잭션에서 순차 실행해 RETURNING id가 chunk 순서와 맞게 한다
@@ -63,7 +63,7 @@ memory-agent의 임베딩 계층이다. 모델 표(`models.ts`)에서 고른 로
 - worker_threads: `runtimeWorker("embed-worker")` 파일로 `new Worker`를 띄운다(NodeWorker). `worker.ref()`/`unref()`/`terminate()`를 호출한다. `checkGpu`는 별도 워커를 띄웠다가 끝낸다
 - 네이티브 추론: `@huggingface/transformers`(onnxruntime-node)로 tokenizer와 모델을 로드한다. `env.cacheDir`를 설정하고 WebGPU 또는 CPU 장치를 쓴다. 모델 파일은 `<storage>/models` 캐시에 둔다. 워커가 닫힐 때 모델을 dispose하고, 실패하면 `embedding_model_dispose_failed`로 로그만 남긴다
 - 네이티브 벡터 소유자: `runtimeWorker("native-search-worker")`로 `makeNativeOwner` 워커를 연다. lease를 잡고 `<storage>/vectors/<hash>` 디렉터리에 색인을 저장한다(save/remove/add 명령)
-- SQLite 읽기·쓰기 대상 테이블: `nodes`, `node_vectors`, `node_vector_chunks`, `memory_graph_vector_removals`, `memory_chunk_vector_removals`, `nodes_morph`, `node_morphs`, `lexical_changes`, `lexical_index`. `PRAGMA database_list`를 조회하고 `sql.withTransaction`을 쓴다
+- SQLite 읽기·쓰기 대상 테이블: `nodes`, `node_vectors`, `node_vector_chunks`, `memory_graph_vector_removals`, `memory_chunk_vector_removals`, `lexical_changes`, `lexical_index`. `PRAGMA database_list`를 조회하고 `sql.withTransaction`을 쓴다
 - AppEvents: 색인이 하나 이상 커밋되면 `publishGlobal("embedding")`과 `publishGlobal("imports")`를 발행한다
 - 난수: `uuidV4`로 owner epoch과 명령별 requestId를 만든다
 - 설정: `GlobalConfig` 설정(`embeddingDevice`, `gpuCheck`)을 읽는다. `setup.ts`가 설정을 갱신하는지는 읽지 않아 확인하지 못했다

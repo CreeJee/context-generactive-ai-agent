@@ -7,7 +7,6 @@
  *   search-set/items.jsonl       queries sent to a search; several items can share one need
  *   search-set/judgments.jsonl   one grade per need and node, from the model judge
  *   search-set/runs/<name>.jsonl one ranked list of node ids per item, from one search system
- *   search-set/query-terms.jsonl each item's search terms, for engines benchmarked outside the app
  */
 import { Array as Arr, Effect, FileSystem, Option, Schema } from "effect";
 import { sha256 } from "../../src/runtime/synchronous-crypto.ts";
@@ -103,19 +102,6 @@ export type RunRow = typeof RunRow.Type;
 /** A round the judge found nothing worth asking about, so a later run does not ask again. */
 export const SkippedRound = Schema.Struct({ round: Schema.String });
 
-/**
- * An item's search terms as the app makes them, for engines benchmarked outside the app: the
- * trigram and short terms, Kiwi's terms capped as the app caps them, and every distinct Kiwi term.
- */
-export const QueryTerms = Schema.Struct({
-  item: Schema.String,
-  trigram: Schema.Array(Schema.String),
-  short: Schema.Array(Schema.String),
-  morph: Schema.Array(Schema.String),
-  morphAll: Schema.Array(Schema.String),
-});
-export type QueryTerms = typeof QueryTerms.Type;
-
 /** A JSON lines file and the schema of its rows. */
 export interface RowFile<
   S extends Schema.Top & {
@@ -136,7 +122,6 @@ export const setFiles = (storage: string) => {
     items: { schema: Item, path: path.join(root, "items.jsonl") },
     judgments: { schema: Judgment, path: path.join(root, "judgments.jsonl") },
     skippedRounds: { schema: SkippedRound, path: path.join(root, "skipped-rounds.jsonl") },
-    terms: { schema: QueryTerms, path: path.join(root, "query-terms.jsonl") },
     runs: path.join(root, "runs"),
     run: (name: string) => ({ schema: RunRow, path: path.join(root, "runs", `${name}.jsonl`) }),
     /** A second model's grades of pairs the main judge graded, by the model's name. */

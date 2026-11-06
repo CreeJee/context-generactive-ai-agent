@@ -296,9 +296,6 @@ catalogs:
     js-tiktoken:
       specifier: ^1.0.21
       version: 1.0.21
-    kiwi-nlp:
-      specifier: 0.24.0
-      version: 0.24.0
     lucide-react:
       specifier: ^1.58.0
       version: 1.58.0
@@ -632,9 +629,6 @@ importers:
       js-tiktoken:
         specifier: 'catalog:'
         version: 1.0.21
-      kiwi-nlp:
-        specifier: 'catalog:'
-        version: 0.24.0
       minimatch:
         specifier: 'catalog:'
         version: 10.2.6
@@ -3897,9 +3891,6 @@ packages:
 
   keyv@5.6.0:
     resolution: {integrity: sha512-CYDD3SOtsHtyXeEORYRx2qBtpDJFjRTGXUtmNEMGyzYOKj1TE3tycdlho7kA1Ufx9OYWZzg52QFBGALTirzDSw==}
-
-  kiwi-nlp@0.24.0:
-    resolution: {integrity: sha512-Tzp5prs75tlTZ72DberPnhNUfWPcHuzDGVOYmPxGzYA/AAwdg1TdQcdgmurgLNE/EB/2/ohYh6zHFBXq9fVF6A==}
 
   kleur@3.0.3:
     resolution: {integrity: sha512-eTIzlVOSUR+JxdDFepEYcBMtZ9Qqdef+rnzWdRZuMbOywu5tO2w2N7rqjoANZ5k9vywhL6Br1VRjUIgTQx4E8w==}
@@ -8233,8 +8224,6 @@ snapshots:
     dependencies:
       '@keyv/serialize': 1.1.1
     optional: true
-
-  kiwi-nlp@0.24.0: {}
 
   kleur@3.0.3: {}
 

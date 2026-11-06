@@ -36,7 +36,6 @@ import { createSubscriptionRuntime } from "../src/providers/subscription-runtime
 import { Sessions } from "../src/sessions/sessions.ts";
 import { Subagents } from "../src/subagents/subagents.ts";
 import { fakeEmbedderLayer } from "../src/testing/fake-embedder.ts";
-import { fakeMorphLayer } from "../src/testing/fake-morph.ts";
 import { inProcessChatApi } from "../src/testing/chat-api.ts";
 import { pilotGuarded, pilotStopped, type PilotRequest } from "./pilot-guard.ts";
 import { exceedsRequestTokenBudget } from "./request-token-budget.ts";
@@ -194,7 +193,6 @@ const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "opt
     memoryAgentLayer(join(base, "storage"), {
       providerRegistry: registry,
       embedder: fakeEmbedderLayer,
-      morphAnalyzer: fakeMorphLayer,
       interpretAutomatically: false,
       summarizeAutomatically: false,
       importsWatching: false,

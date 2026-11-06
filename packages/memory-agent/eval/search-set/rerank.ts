@@ -15,9 +15,14 @@ import { Array as Arr, Console, Duration, Effect, HashMap, Option, Order, Schema
 import { nativePromise } from "../../src/runtime/native-effect.ts";
 import { path } from "../../src/runtime/synchronous-path.ts";
 import { appendRows, readRows, type RunRow, setFiles } from "./files.ts";
-import { percentile, readBudgetMs } from "./fts.ts";
 import { nodeRecords } from "./nodes.ts";
 import { alternate, keptIds } from "./pool.ts";
+
+/** The app's whole read budget, which a rerank inside the read would share. */
+const readBudgetMs = 2_000;
+
+const percentile = (share: number) => (sorted: ReadonlyArray<number>) =>
+  sorted[Math.round((sorted.length - 1) * share)] ?? 0;
 
 // The CommonJS build, as the embedding worker loads it.
 const {

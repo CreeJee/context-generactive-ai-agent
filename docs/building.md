@@ -36,7 +36,7 @@ vp run smoke-package   # 저장소 밖에서 실행해 확인(처음 한 번 cod
 ```
 
 - 결과물: `apps/agent/dist/context-agent-<플랫폼>-<아키텍처>/context-agent`(Windows는 `.exe`)와 `.sha256`.
-- `vp run package`는 필요한 네이티브 파일(turbovec, onnxruntime, keyring, sharp, Kiwi WASM)이 하나라도 없으면 무엇을 해야 하는지 알리고 멈춥니다.
+- `vp run package`는 필요한 네이티브 파일(turbovec, onnxruntime, keyring, sharp)이 하나라도 없으면 무엇을 해야 하는지 알리고 멈춥니다.
 - 빌드 결과는 Vite Task가 캐시합니다. 소스를 바꾸지 않았다면 turbovec은 cargo 없이 캐시에서 복원됩니다.
 - 모노레포 전체 빌드만 할 때는 루트에서 `pnpm build`(또는 `vp run build`).
 - 개발 서버는 루트에서 `vp run dev`([apps/agent](../apps/agent/README.md)).
@@ -47,7 +47,7 @@ vp run smoke-package   # 저장소 밖에서 실행해 확인(처음 한 번 cod
 ./context-agent [폴더] [--port 5173] [--no-open] [--storage <폴더>]
 ```
 
-- 데이터와 첫 실행 때 풀리는 파일은 `~/.context-generactive-agent`에 둡니다. 임베딩 모델과 Kiwi 모델과 codex는 처음 필요할 때 받습니다.
+- 데이터와 첫 실행 때 풀리는 파일은 `~/.context-generactive-agent`에 둡니다. 임베딩 모델과 codex는 처음 필요할 때 받습니다.
 - macOS 서명은 아래 "macOS 서명과 공증"을 보세요. 인증서 없이 만든 실행 파일은 ad-hoc 서명을 사용하므로 빌드한 기기에서만 경고 없이 실행됩니다.
   - 받는 쪽에서 "Mac에 손상을 입히거나 … 악성 코드가 없음을 확인할 수 없습니다"가 뜨면 공증되지 않은 파일입니다. 임시로는 Finder에서 우클릭 → 열기, 또는 `xattr -d com.apple.quarantine ./context-agent`.
   - Windows는 SmartScreen이 "추가 정보 → 실행"을 요구할 수 있습니다.
@@ -126,6 +126,5 @@ Linux는 로컬 빌드만 지원하며, 명령은 위 "빌드" 절과 같습니�
 | `sharp/onnxruntime-node/@napi-rs/keyring has no binary for …`    | 이 기기에서 `vp install`을 다시 실행(다른 기기의 `node_modules`를 복사해 오면 생김)                |
 | 실행 파일 첫 실행에서 `Cannot find module …memory-turbovec.node` | turbovec 없이 만든 예전 실행 파일. 다시 `vp run package`                                           |
 | 사이드바에 "codex를 받거나 설치하지 못했어요"                    | 실행한 창의 `codex install failed (<이유>): <상세>` 로그 확인(네트워크, 프록시, 인증서, 압축 풀기) |
-| 시작할 때 `Quantization is not supported for ArchType::none`     | Kiwi WASM의 경고. 결과에 영향 없음                                                                 |
 | 받는 쪽 Mac에서 "악성 코드가 없음을 확인할 수 없습니다"          | 공증되지 않은 파일. 위 "macOS 서명과 공증"의 `.dmg`를 주거나, 임시로 우클릭 → 열기                 |
 | `vp run notarize`가 "signed ad-hoc"로 멈춤                       | `CONTEXT_AGENT_SIGN_IDENTITY`를 주고 `vp run package`를 다시 실행                                  |

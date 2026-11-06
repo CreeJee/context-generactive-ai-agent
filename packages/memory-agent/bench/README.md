@@ -11,11 +11,11 @@
 - `listAll` / `searchAll` / `readAll` (모듈 내부) — `nextOffset`·`nextCursor`·`nextStartLine`을 따라 마지막 페이지까지 도구를 다시 부른다. `readAll`은 2000줄 단위로 읽고 페이지가 10개 미만이면 throw한다
 - `Page` (모듈 내부 Schema.Struct) — 도구 응답에서 페이지 정보(`snapshot`, `nextOffset`, `nextCursor`, `nextStartLine`)만 디코드하는 스키마
 - `Call<E>` (모듈 내부 타입) — 모델처럼 JsonValue 입력으로 도구를 부르는 `(input: JsonValue) => Effect.Effect<JsonValue, E>`
-- 의존 심볼: `memoryAgentLayer`, `Projects.add`, `FileTools.toolsFor`, `ApprovedTools.toolsFor(project, "gate")`, `callTool`(`tests/support/run-tools.ts`), `fakeEmbedderLayer`, `MorphAnalyzer.disabled`, `SecretStore.memory`, `isTruthy`, `optionalProperty`
+- 의존 심볼: `memoryAgentLayer`, `Projects.add`, `FileTools.toolsFor`, `ApprovedTools.toolsFor(project, "gate")`, `callTool`(`tests/support/run-tools.ts`), `fakeEmbedderLayer`, `SecretStore.memory`, `isTruthy`, `optionalProperty`
 
 ## Invariants
 
-- 벤치 레이어는 `memoryAgentLayer`에 `embedder: fakeEmbedderLayer`, `morphAnalyzer: MorphAnalyzer.disabled`, `interpretAutomatically: false`, `secrets: SecretStore.memory`, `skillsHome: join(base, "home")`를 넘긴다. 실제 임베더·형태소 분석·키체인을 쓰지 않는다
+- 벤치 레이어는 `memoryAgentLayer`에 `embedder: fakeEmbedderLayer`, `interpretAutomatically: false`, `secrets: SecretStore.memory`, `skillsHome: join(base, "home")`를 넘긴다. 실제 임베더·키체인을 쓰지 않는다
 - 모든 경로는 `fs.makeTempDirectory` 결과에 `fs.realPath`를 적용한 `base` 아래에 둔다(storage, home, plain, git)
 - git fixture는 `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_SYSTEM=/dev/null`, `stdin: "ignore"`로 실행해 사용자 git 설정을 무시한다. 종료 코드가 0이 아니면 `Cause.UnknownError`로 실패한다
 - `afterAll`의 정리 순서: 에이전트 `runtime.dispose()`, 그다음 `base` 재귀 삭제, 마지막으로 `platformRuntime.dispose()`

@@ -35,7 +35,6 @@ import { runNativeEffect } from "../src/runtime/native-effect.ts";
 import { path } from "../src/runtime/synchronous-path.ts";
 import { Sessions } from "../src/sessions/sessions.ts";
 import { fakeEmbedderLayer } from "../src/testing/fake-embedder.ts";
-import { fakeMorphLayer } from "../src/testing/fake-morph.ts";
 import { inProcessChatApi } from "../src/testing/chat-api.ts";
 import { estimateRequestTokens } from "./request-token-budget.ts";
 const { join, resolve } = path;
@@ -210,7 +209,6 @@ const firstRequests = Effect.fn("eval.promptOverhead")(function* () {
     memoryAgentLayer(storage, {
       providerRegistry: registry(yield* capturingModel(requests)),
       embedder: fakeEmbedderLayer,
-      morphAnalyzer: fakeMorphLayer,
       interpretAutomatically: false,
       summarizeAutomatically: false,
       importsHome: home,

@@ -15,11 +15,8 @@
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Effect, Layer, Option, Schema } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
-import { StorageRoot } from "../src/config/storage-root.ts";
-import { MorphAnalyzer } from "../src/memory/morph/analyzer.ts";
 import { searchTuning, type SearchTuning } from "../src/memory/search.ts";
 import { copyDatabase, copyLayer } from "./copy-storage.ts";
-import { ftsRuns } from "./search-set/fts.ts";
 import { agreement, judgeCheck, judgePools } from "./search-set/judge.ts";
 import { EvalModel } from "./search-set/model.ts";
 import { searchRuns } from "./search-set/pool.ts";
@@ -27,7 +24,6 @@ import { buildRecorded } from "./search-set/recorded.ts";
 import { RerankDevice, RerankDtype, rerankRun } from "./search-set/rerank.ts";
 import { writeRounds } from "./search-set/rounds.ts";
 import { scoreRuns } from "./search-set/score.ts";
-import { writeTerms } from "./search-set/terms.ts";
 
 const copy = Argument.Directory("copy", { mustExist: true }).pipe(
   Argument.withDescription("a copy of a storage folder: agent.db, vectors/, models/"),
@@ -99,16 +95,6 @@ const appRun = Command.make(
 ).pipe(
   Command.withDescription("the app search alone, with a tuning override, as another run"),
   Command.provide(({ copy, tuning }) => copyLayer({ storage: copy, tuning })),
-);
-
-const terms = Command.make("terms", { copy }, ({ copy }) => writeTerms(copy)).pipe(
-  Command.withDescription("every item's search terms, for engines benchmarked outside the app"),
-  Command.provide(({ copy }) => MorphAnalyzer.kiwi.pipe(Layer.provide(StorageRoot.layer(copy)))),
-);
-
-const fts = Command.make("fts", { copy }, ({ copy }) => ftsRuns(copy)).pipe(
-  Command.withDescription("the native read's FTS5 statements as runs, timed on the app's SQLite"),
-  Command.provide(({ copy }) => copyDatabase(copy)),
 );
 
 const rerank = Command.make(
@@ -206,19 +192,7 @@ const score = Command.make(
 
 const searchSet = Command.make("search-set").pipe(
   Command.withDescription("the memory search evaluation set"),
-  Command.withSubcommands([
-    recorded,
-    rounds,
-    pool,
-    appRun,
-    terms,
-    fts,
-    rerank,
-    judge,
-    check,
-    agree,
-    score,
-  ]),
+  Command.withSubcommands([recorded, rounds, pool, appRun, rerank, judge, check, agree, score]),
 );
 
 Command.run(searchSet, { version: "1.0.0" }).pipe(

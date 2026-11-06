@@ -196,10 +196,6 @@ testAgent({ testProvider: { responder } })("BTW non-collection", (it) => {
             return {
               nodes: yield* count("SELECT count(*) AS count FROM nodes"),
               jobs: yield* count("SELECT count(*) AS count FROM interpret_jobs"),
-              fts: yield* count(
-                "SELECT count(*) AS count FROM nodes_fts WHERE nodes_fts MATCH ?",
-                '"btw-question-only-here"',
-              ),
               pending: yield* (yield* Indexer).pending,
               stored: yield* count(
                 `SELECT count(*) AS count FROM (SELECT group_concat(message) AS messages
@@ -210,7 +206,9 @@ testAgent({ testProvider: { responder } })("BTW non-collection", (it) => {
             };
           }),
         );
-        expect(after).toEqual({ ...before, fts: 0, pending: 0, stored: 1 });
+        // Both search indexes are built from nodes alone, so an unchanged node count keeps BTW
+        // text out of them.
+        expect(after).toEqual({ ...before, pending: 0, stored: 1 });
 
         const reopened = yield* (yield* btwApi).messages({ params: { thread: thread.id } });
         expect(reopened[0]).toEqual({

@@ -61,7 +61,6 @@ import { McpServers } from "./mcp/servers.ts";
 import { Skills } from "./skills/skills.ts";
 import { Subagents } from "./subagents/subagents.ts";
 import { Embedder } from "./memory/embedding/embedder.ts";
-import { MorphAnalyzer } from "./memory/morph/analyzer.ts";
 import { Indexer } from "./memory/embedding/indexer.ts";
 import { EmbeddingSetup } from "./memory/embedding/setup.ts";
 import { VectorIndex } from "./memory/embedding/vector-index.ts";
@@ -127,8 +126,6 @@ export interface MemoryAgentLayerOptions {
   readonly compatibleSettings?: Layer.Layer<OpenAICompatibleSettings, never, GlobalConfig>;
   /** Defaults to the local embedding model; tests pass a deterministic one. */
   readonly embedder?: Layer.Layer<Embedder, never, StorageRoot | GlobalConfig>;
-  /** Defaults to Kiwi (model downloaded on first use); tests pass a deterministic one. */
-  readonly morphAnalyzer?: Layer.Layer<MorphAnalyzer, never, StorageRoot>;
   /** Provider-neutral registry override for tests. Production uses subscription providers. */
   readonly providerRegistry?: Layer.Layer<
     ProviderRegistry,
@@ -308,7 +305,6 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     providerToolPolicy,
     providerToolRuntime,
     options.embedder ?? Embedder.local,
-    options.morphAnalyzer ?? MorphAnalyzer.kiwi,
     options.secrets ?? SecretStore.keychain,
   );
   const memory = Layer.mergeAll(

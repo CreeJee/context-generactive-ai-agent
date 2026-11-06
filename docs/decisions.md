@@ -4213,6 +4213,19 @@
   - text는 3글자 이상 검색어의 gram 구절(BM25)과 두 글자 검색어마다 최신 일치를, morph는 질문 원문을 색인의 형태소 규칙으로 나눈 검색어(BM25)를 쓴다. 호스트는 morph 검색어를 만들지 않고 질문(`morphQuery`)을 보낸다.
   - 채널마다 k의 2배를 찾아 같은 SQLite 스냅샷에서 허용 프로젝트이고 `lexical_changes`에 남은 변경이 없는 노드만 k개 남긴다. 비었거나 숨긴 노드는 indexer가 넣지 않고 숨김 추가·해제도 기록되므로, 읽기는 원문이나 숨김을 다시 보지 않는다. 색인과 스냅샷이 어긋난 노드는 반영될 때까지 빠진다.
   - 읽기는 반영 안 된 변경 수(`lexicalPending`)를 돌려주고, `FindResult.textUnindexed`로 모델에 알린다. Kiwi 적재를 기다리던 `"morph"` degraded는 없앴다.
-  - Kiwi 분석기, `nodes_fts`·`nodes_morph` 테이블은 다음 단계에서 지운다(지우는 migration은 사용자 확인 뒤).
+  - Kiwi 분석기와 `nodes_fts`·`nodes_morph`·`node_morphs` 테이블은 아래 결정으로 지웠다.
 - coverage count(미임베딩 발언, lexical 미반영 변경, 미해석 노드)는 native read에서 뺐다. seed 순위 읽기의 일이 아니고, Rust에 `quality.ts` 규칙을 SQL로 베껴 두게 만들었다. native worker가 자기 read-only `node:sqlite` 연결로 `quality.ts` 필터를 써서 읽기 뒤에 센다(`coverage.ts`). 메인 스레드에서 검색마다 세면 약 30ms씩 막히므로 worker에 둔다. 모델에게 주는 힌트라 읽기 스냅샷과 같지 않아도 된다.
 - 벡터 후보 SQL은 kind·공백·숨김 조건(`EMBEDDED_KINDS`·`MEANINGFUL`) 대신 색인을 떠나기를 기다리는 벡터(`memory_graph_vector_removals`)만 뺀다. indexer는 검색할 수 있는 발언만 임베딩하고, 숨긴 topic과 바뀐 노드의 벡터는 그 대기열로 가므로 결과가 같다(bench 사본의 세 프로젝트에서 행 수 일치). 대신 `nodes_embeddable` 부분 색인을 못 써서 `nodes_project`로 프로젝트의 모든 노드를 훑는다. 후보 SQL은 178k 노드 프로젝트에서 40→73ms, 27k 노드 프로젝트에서 4.8→8.5ms로 늘었다(native-read-bench 후보+벡터 p50: find 28→51ms, interpret·recall 3.9→7.5ms). 사용자가 목적에 맞지 않는 SQL을 지우기로 했다.
+
+## Kiwi 형태소 분석과 SQLite FTS5 색인을 지운다 (2026-11-06)
+
+- 계기: 글자·형태소 검색이 lexical 색인으로 옮겨 가서 Kiwi 분석기와 FTS5 테이블을 읽는 곳이 없다. 사용자가 Kiwi를 지우는 방향으로 정했다.
+- 지운 것:
+  - `MorphAnalyzer`, `kiwi-worker`, `kiwi-nlp` 의존성, 실행 파일의 Kiwi worker와 WASM, `memoryAgentLayer`의 `morphAnalyzer` 옵션.
+  - indexer의 형태소 분석 단계(`analyzeAll`·`analyzeUpTo`). 실행 끝, 시작, 가져오기, secret sweep 뒤에는 lexical 반영과 임베딩만 돈다.
+  - schema 단계 하나가 `nodes_fts_insert` trigger와 `nodes_fts`·`nodes_morph`·`node_morphs` 테이블을 지운다. secret sweep과 대화 삭제는 이 테이블을 고치지 않는다. 노드 변경은 `lexical_changes`가 기록한다.
+  - eval의 `search-set terms`·`fts` 명령과 `recall --terms`. eval 구성은 Kiwi layer 대신 `searchTuning`의 `morph`로 형태소 채널을 끄고 켠다.
+- 남긴 것:
+  - 내려받아 둔 Kiwi 모델 폴더(`<storage>/models/kiwi-0.24.0`)는 지우지 않는다. 사용자가 지울 수 있다.
+  - 지운 테이블이 쓰던 공간은 VACUUM 전까지 파일에 빈 page로 남는다. VACUUM은 큰 DB에서 오래 걸려 자동으로 돌리지 않는다.
+  - lexical 색인의 layout 이름(`…lindera-ko-dic-kiwi-rules/v1`)은 바꾸지 않는다. 형태소 규칙이 Kiwi에서 왔다는 뜻이고, 바꾸면 색인을 처음부터 다시 만든다.

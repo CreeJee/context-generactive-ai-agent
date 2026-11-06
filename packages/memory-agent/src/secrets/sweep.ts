@@ -248,16 +248,12 @@ const make = (running: boolean) =>
     });
     const rewriteNode = Effect.fnUntraced(function* (row: {
       readonly seq: number;
-      readonly text: string;
       readonly hidden: string;
     }) {
       yield* sql`INSERT INTO secret_sweep_permits VALUES (${row.seq})`;
-      yield* sql`INSERT INTO nodes_fts (nodes_fts, rowid, text) VALUES ('delete', ${row.seq}, ${row.text})`;
+      // The update is journaled for the lexical index, which takes the hidden text in its place.
       yield* sql`UPDATE nodes SET text = ${row.hidden} WHERE seq = ${row.seq}`;
-      yield* sql`INSERT INTO nodes_fts (rowid, text) VALUES (${row.seq}, ${row.hidden})`;
       yield* sql`DELETE FROM secret_sweep_permits WHERE node_seq = ${row.seq}`;
-      yield* sql`DELETE FROM nodes_morph WHERE rowid = ${row.seq}`;
-      yield* sql`DELETE FROM node_morphs WHERE node_seq = ${row.seq}`;
       yield* sql`DELETE FROM node_vectors WHERE node_seq = ${row.seq}`;
     });
 
@@ -274,7 +270,7 @@ const make = (running: boolean) =>
             ? [{ ...row, hidden: redaction.text }]
             : [];
         });
-        // Under the indexer's permits, so no batch embeds or analyses a node between the vector
+        // Under the indexer's permit, so no batch embeds a node between the vector
         // being dropped here and its text changing.
         yield* indexer.exclusive(
           Effect.gen(function* () {
@@ -496,9 +492,9 @@ const make = (running: boolean) =>
       yield* Effect.when(
         // The hidden text is already stored; nodes left unindexed are indexed by the next pass. The
         // lexical index goes first: until it has the hidden text, reads drop those nodes' matches.
-        Effect.all([indexer.lexicalAll(), indexer.indexAll(), indexer.analyzeAll()], {
-          discard: true,
-        }).pipe(ignoreLogged("secret_sweep_reindex_failed")),
+        Effect.all([indexer.lexicalAll(), indexer.indexAll()], { discard: true }).pipe(
+          ignoreLogged("secret_sweep_reindex_failed"),
+        ),
         Effect.succeed(changedNodes > 0),
       );
       return changedNodes;

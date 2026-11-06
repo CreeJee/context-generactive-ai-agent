@@ -359,13 +359,11 @@ const make = (watching: boolean, home: string) =>
     const runOnce = Effect.flatMap(begin, Deferred.await);
 
     /**
-     * Embeds and analyses what a migration added, taking as long as it takes. The indexer gives up
+     * Indexes and embeds what a migration added, taking as long as it takes. The indexer gives up
      * its permit between batches, so a conversation held meanwhile is still indexed first: its
      * nodes are the newest by time, and that is the order pending nodes come out in.
      */
-    const backfill = Effect.all([indexer.lexicalAll(), indexer.indexAll(), indexer.analyzeAll()], {
-      discard: true,
-    }).pipe(
+    const backfill = Effect.all([indexer.lexicalAll(), indexer.indexAll()], { discard: true }).pipe(
       // Pending nodes stay pending; the next pass or start indexes them.
       ignoreLogged("import_backfill_failed"),
       oneDrainAtATime.withPermits(1),

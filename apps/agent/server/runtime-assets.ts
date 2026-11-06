@@ -19,7 +19,7 @@ const hashFolder = /^[0-9a-f]{16}$/;
 const completeMarker = ".complete";
 
 /**
- * Unpacks the files the executable carries (client build, native packages and Kiwi worker) into
+ * Unpacks the files the executable carries (client build, native packages and workers) into
  * `<storage>/runtime/<hash>`, once per build, and removes folders of other builds.
  * Returns that folder, or null when not running as the executable.
  */

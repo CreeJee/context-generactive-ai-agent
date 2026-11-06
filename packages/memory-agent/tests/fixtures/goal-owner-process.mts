@@ -27,7 +27,6 @@ import { ChatApi, SameSite } from "../../src/api/chat-api.ts";
 import { SqlClient } from "effect/sql";
 import { SecretStore } from "../../src/config/secrets.ts";
 import { fakeEmbedderLayer } from "../../src/testing/fake-embedder.ts";
-import { fakeMorphLayer } from "../../src/testing/fake-morph.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
 import { testProvider, turnGate } from "../support/provider.ts";
 import { sqlAll } from "../support/sql.ts";
@@ -82,7 +81,6 @@ await Effect.runPromise(
           ManagedRuntime.make(
             memoryAgentLayer(path.join(base, "storage"), {
               embedder: fakeEmbedderLayer,
-              morphAnalyzer: fakeMorphLayer,
               interpretAutomatically: false,
               summarizeAutomatically: false,
               secrets: SecretStore.memory,

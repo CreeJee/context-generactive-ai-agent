@@ -9,7 +9,6 @@ import {
 } from "../../src/memory/embedding/embedder.ts";
 import { Indexer, IndexingError } from "../../src/memory/embedding/indexer.ts";
 import { VectorIndex } from "../../src/memory/embedding/vector-index.ts";
-import { MorphAnalyzer } from "../../src/memory/morph/analyzer.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { MemorySearch } from "../../src/memory/search.ts";
 import { readStructuredEvidence } from "../../src/memory/evidence.ts";
@@ -44,7 +43,7 @@ const chunked = Layer.succeed(Embedder, {
   embed: (texts) => Effect.succeed(texts.map(vector)),
 });
 
-testAgent({ embedder: chunked, morphAnalyzer: MorphAnalyzer.disabled })("chunk recovery", (it) => {
+testAgent({ embedder: chunked })("chunk recovery", (it) => {
   it.effect(
     "removes saved but uncommitted chunks on reopen without rebuilding committed nodes",
     () =>
@@ -97,7 +96,7 @@ testAgent({ embedder: chunked, morphAnalyzer: MorphAnalyzer.disabled })("chunk r
   );
 });
 
-testAgent({ embedder: chunked, morphAnalyzer: MorphAnalyzer.disabled })("chunked memory", (it) => {
+testAgent({ embedder: chunked })("chunked memory", (it) => {
   it.effect(
     "retrieves a late original span, preserves it on reopen, and removes every chunk on invalidation",
     () =>
@@ -178,51 +177,48 @@ testAgent({ embedder: chunked, morphAnalyzer: MorphAnalyzer.disabled })("chunked
   );
 });
 
-testAgent({ embedder: chunked, morphAnalyzer: MorphAnalyzer.disabled })(
-  "chunk parent ranking",
-  (it) => {
-    it.effect(
-      "fills the parent candidate budget even when many highest-scoring chunks belong to one node",
-      () =>
-        Effect.gen(function* () {
-          const { project, session, base } = yield* TestEnv;
-          const nodes = yield* Nodes;
-          const long = yield* nodes.append({
-            projectId: project.id,
-            sessionId: session.id,
-            kind: "user",
-            text: "목요일 ".repeat(6000),
-          });
-          const second = yield* nodes.append({
-            projectId: project.id,
-            sessionId: session.id,
-            kind: "user",
-            text: "금요일 대안",
-          });
-          const hiddenRoot = (yield* Path.Path).join(base, "hidden-project");
-          yield* (yield* FileSystem.FileSystem).makeDirectory(hiddenRoot);
-          const hiddenProject = yield* (yield* Projects).add(hiddenRoot);
-          const hiddenSession = yield* (yield* Sessions).create(hiddenProject.id);
-          yield* nodes.append({
-            projectId: hiddenProject.id,
-            sessionId: hiddenSession.id,
-            kind: "user",
-            text: "목요일 ".repeat(3000),
-          });
-          yield* (yield* Indexer).indexAll();
-          const filtered = yield* (yield* VectorIndex).search(vector("release decision"), 2, [
-            long.seq,
-            second.seq,
-          ]);
-          expect(filtered.map((hit) => hit.seq)).toEqual([long.seq, second.seq]);
-          const result = yield* (yield* MemorySearch).find({
-            projectId: project.id,
-            query: "release decision",
-            crossProject: false,
-            limit: 2,
-          });
-          expect(result.matches.map((match) => match.id)).toEqual([long.id, second.id]);
-        }),
-    );
-  },
-);
+testAgent({ embedder: chunked })("chunk parent ranking", (it) => {
+  it.effect(
+    "fills the parent candidate budget even when many highest-scoring chunks belong to one node",
+    () =>
+      Effect.gen(function* () {
+        const { project, session, base } = yield* TestEnv;
+        const nodes = yield* Nodes;
+        const long = yield* nodes.append({
+          projectId: project.id,
+          sessionId: session.id,
+          kind: "user",
+          text: "목요일 ".repeat(6000),
+        });
+        const second = yield* nodes.append({
+          projectId: project.id,
+          sessionId: session.id,
+          kind: "user",
+          text: "금요일 대안",
+        });
+        const hiddenRoot = (yield* Path.Path).join(base, "hidden-project");
+        yield* (yield* FileSystem.FileSystem).makeDirectory(hiddenRoot);
+        const hiddenProject = yield* (yield* Projects).add(hiddenRoot);
+        const hiddenSession = yield* (yield* Sessions).create(hiddenProject.id);
+        yield* nodes.append({
+          projectId: hiddenProject.id,
+          sessionId: hiddenSession.id,
+          kind: "user",
+          text: "목요일 ".repeat(3000),
+        });
+        yield* (yield* Indexer).indexAll();
+        const filtered = yield* (yield* VectorIndex).search(vector("release decision"), 2, [
+          long.seq,
+          second.seq,
+        ]);
+        expect(filtered.map((hit) => hit.seq)).toEqual([long.seq, second.seq]);
+        const result = yield* (yield* MemorySearch).find({
+          projectId: project.id,
+          query: "release decision",
+          crossProject: false,
+          limit: 2,
+        });
+        expect(result.matches.map((match) => match.id)).toEqual([long.id, second.id]);
+      }),
+  );
+});

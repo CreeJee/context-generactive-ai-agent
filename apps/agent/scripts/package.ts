@@ -206,10 +206,9 @@ const program = Effect.gen(function* () {
         "@napi-rs/keyring",
         "@huggingface/transformers",
         "sharp",
-        "kiwi-nlp",
         // Finds its helper binaries (seccomp, Windows helper, JVM proxy agent) next to its own files.
         "@anthropic-ai/sandbox-runtime",
-        // The Kiwi and embedding workers load Effect and its platform services from here.
+        // The embedding worker loads Effect and its platform services from here.
         "effect",
         "@effect/platform-node",
       ],
@@ -277,10 +276,6 @@ const program = Effect.gen(function* () {
       {
         ok: yield* hasNodeAddon("@img"),
         fix: `sharp has no binary for ${target}: run vp install on this machine`,
-      },
-      {
-        ok: yield* fs.exists(underStage("kiwi-nlp/dist/kiwi-wasm.wasm")),
-        fix: "kiwi-nlp wasm missing: run vp install",
       },
     ];
     const missing = checks.filter((check) => !check.ok).map((check) => check.fix);
@@ -389,9 +384,9 @@ const program = Effect.gen(function* () {
   yield* fs.makeDirectory(stage, { recursive: true });
   yield* fs.copy(join(app, "build", "client"), join(stage, "client"));
   // Workers are TypeScript importing sibling modules, so each is bundled into one file; a checkout
-  // runs the source. Most bundle their dependencies too (Effect, secretlint). The Kiwi and
-  // embedding workers load their model packages from the runtime `node_modules`, so only their own
-  // modules are bundled. `runtimeWorker()` looks for every worker next to the runtime files.
+  // runs the source. Most bundle their dependencies too (Effect, secretlint). The embedding worker
+  // loads its model packages from the runtime `node_modules`, so only its own modules are bundled.
+  // `runtimeWorker()` looks for every worker next to the runtime files.
   const bundledWorkers = {
     "import-worker": { source: join(memoryAgent, "src", "imports", "worker.ts"), packages: true },
     "redact-worker": {
@@ -408,10 +403,6 @@ const program = Effect.gen(function* () {
     },
     // QuickJS comes in its single-file build, with its WASM inside the JS.
     "code-worker": { source: join(memoryAgent, "src", "code", "worker.ts"), packages: true },
-    "kiwi-worker": {
-      source: join(memoryAgent, "src", "memory", "morph", "kiwi-worker.ts"),
-      packages: false,
-    },
     "embed-worker": {
       source: join(memoryAgent, "src", "memory", "embedding", "embed-worker.ts"),
       packages: false,

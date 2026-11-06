@@ -7,7 +7,7 @@
  *
  * The storage copy holds agent.db, vectors/ and models/ like ~/.context-generactive-agent. It is
  * opened as the app opens its own: the search under test is MemorySearch.find with the local
- * embedder and Kiwi. The set and anything holding memory text stay inside the copy, which is
+ * embedder and the lexical index. The set and anything holding memory text stay inside the copy, which is
  * outside git; this script prints only counts and scores.
  *
  * Rule: a recorded find_memory call is a query; the nodes of its result that the same run then

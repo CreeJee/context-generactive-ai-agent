@@ -185,12 +185,13 @@ const ChainSource = Schema.Struct({
 });
 
 /**
- * How many terms of each kind one search sends. A recall question joins recent turns (up to 6000
- * characters) into hundreds of terms; each short term is checked on every node walked and each
- * trigram or morph term widens the FTS OR, so long questions ran out of the 2 s budget
- * (docs/memory-search-measurements.md). Real find_memory questions have at most 8 of each.
+ * How many text terms of each kind one search sends. A recall question joins recent turns (up to
+ * 6000 characters) into hundreds of terms, and each one widened the text query, so long questions
+ * ran out of the 2 s budget (docs/memory-search-measurements.md). Real find_memory questions have
+ * at most 8 of each. Morph terms are not capped: the lexical index splits the question itself and
+ * scores them in one pass.
  */
-export const maxSearchTerms = { trigram: 24, short: 8, morph: 24 } as const;
+export const maxSearchTerms = { trigram: 24, short: 8 } as const;
 
 /** Looks like a name: code, a path, a version, an issue number, or a Latin-script acronym. */
 const nameLike = /[0-9_./#@:-]|[a-z][A-Z]|^[A-Z]{2,}$/u;
@@ -216,14 +217,10 @@ function keepTermsBody(terms: readonly string[], max: number): string[] {
         .map(({ term }) => term);
 }
 
-/** A text's morph search terms from its analyzer tokens: distinct, non-empty, at most the cap. */
-export const morphSearchTerms = (tokens: readonly string[]) =>
-  keepTerms(
-    EffectArray.dedupe(tokens).filter((term) => term.length > 0),
-    maxSearchTerms.morph,
-  );
-
-/** Splits a question into search terms; trigram FTS needs 3+ characters, shorter terms use LIKE. */
+/**
+ * Splits a question into text search terms: 3+ characters are searched as trigram phrases, two
+ * characters by the grams that start or end with them.
+ */
 export function searchTerms(query: string) {
   const terms = EffectArray.dedupe(
     query.split(/[\s,.;:!?()[\]{}"'`]+/u).filter((term) => term.length >= 2),

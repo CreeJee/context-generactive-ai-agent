@@ -7,7 +7,6 @@ import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { VectorIndex } from "../../src/memory/embedding/vector-index.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { MemorySearch } from "../../src/memory/search.ts";
-import { MorphAnalyzer } from "../../src/memory/morph/analyzer.ts";
 import { fakeVector } from "../../src/testing/fake-embedder.ts";
 import { LifecycleOutcome, WorkTraceStore } from "../../src/work-trace/store.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
@@ -38,99 +37,89 @@ const embedder = Layer.succeed(Embedder, {
   embed: (texts) => Effect.succeed(texts.map(fakeVector)),
 });
 
-testAgent({ embedder, morphAnalyzer: MorphAnalyzer.disabled })(
-  "concurrent chunk publication",
-  (it) => {
-    it.effect("keeps removal intents created while another agent is saving a removal", () =>
-      Effect.gen(function* () {
-        const env = yield* TestEnv;
-        const nodes = yield* Nodes;
-        const first = yield* nodes.append({
-          projectId: env.project.id,
-          sessionId: env.session.id,
-          kind: "user",
-          text: "first removal",
-        });
-        const second = yield* nodes.append({
-          projectId: env.project.id,
-          sessionId: env.session.id,
-          kind: "user",
-          text: "second removal",
-        });
-        yield* (yield* Indexer).indexAll();
-        const vectors = yield* VectorIndex;
-        const saving = yield* Deferred.make<void>();
-        const release = yield* Deferred.make<void>();
-        yield* Ref.set(
-          beforeSave,
-          Deferred.succeed(saving, undefined).pipe(Effect.andThen(Deferred.await(release))),
-        );
-        yield* sqlRun("DELETE FROM node_vectors WHERE node_seq=?", first.seq);
-        const flush = yield* vectors.flushRemovals.pipe(Effect.forkChild);
-        yield* Deferred.await(saving);
-        yield* sqlRun("DELETE FROM node_vectors WHERE node_seq=?", second.seq);
-        yield* Ref.set(beforeSave, Effect.void);
-        yield* Deferred.succeed(release, undefined);
-        yield* Fiber.join(flush);
-        expect((yield* sqlGet("SELECT count(*) AS n FROM memory_chunk_vector_removals"))!.n).toBe(
-          1,
-        );
-        yield* vectors.flushRemovals;
-        expect(vectors.size()).toBe(0);
-        expect((yield* sqlGet("SELECT count(*) AS n FROM memory_chunk_vector_removals"))!.n).toBe(
-          0,
-        );
-      }),
-    );
-  },
-);
+testAgent({ embedder })("concurrent chunk publication", (it) => {
+  it.effect("keeps removal intents created while another agent is saving a removal", () =>
+    Effect.gen(function* () {
+      const env = yield* TestEnv;
+      const nodes = yield* Nodes;
+      const first = yield* nodes.append({
+        projectId: env.project.id,
+        sessionId: env.session.id,
+        kind: "user",
+        text: "first removal",
+      });
+      const second = yield* nodes.append({
+        projectId: env.project.id,
+        sessionId: env.session.id,
+        kind: "user",
+        text: "second removal",
+      });
+      yield* (yield* Indexer).indexAll();
+      const vectors = yield* VectorIndex;
+      const saving = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      yield* Ref.set(
+        beforeSave,
+        Deferred.succeed(saving, undefined).pipe(Effect.andThen(Deferred.await(release))),
+      );
+      yield* sqlRun("DELETE FROM node_vectors WHERE node_seq=?", first.seq);
+      const flush = yield* vectors.flushRemovals.pipe(Effect.forkChild);
+      yield* Deferred.await(saving);
+      yield* sqlRun("DELETE FROM node_vectors WHERE node_seq=?", second.seq);
+      yield* Ref.set(beforeSave, Effect.void);
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(flush);
+      expect((yield* sqlGet("SELECT count(*) AS n FROM memory_chunk_vector_removals"))!.n).toBe(1);
+      yield* vectors.flushRemovals;
+      expect(vectors.size()).toBe(0);
+      expect((yield* sqlGet("SELECT count(*) AS n FROM memory_chunk_vector_removals"))!.n).toBe(0);
+    }),
+  );
+});
 
-testAgent({ embedder, morphAnalyzer: MorphAnalyzer.disabled })(
-  "purge during chunk publication",
-  (it) => {
-    it.effect("rejects a purged parent at commit without stopping other agents' searches", () =>
-      Effect.gen(function* () {
-        const env = yield* TestEnv;
-        yield* (yield* Nodes).append({
-          projectId: env.project.id,
-          sessionId: env.session.id,
-          kind: "user",
-          text: "purge this while its vectors are saving",
-        });
-        const saving = yield* Deferred.make<void>();
-        const release = yield* Deferred.make<void>();
-        yield* Ref.set(
-          beforeSave,
-          Deferred.succeed(saving, undefined).pipe(Effect.andThen(Deferred.await(release))),
-        );
-        const indexer = yield* Indexer;
-        const indexing = yield* indexer.indexAll().pipe(Effect.forkChild);
-        yield* Deferred.await(saving);
-        const trace = yield* WorkTraceStore;
-        const request = yield* trace.requestSessionLifecycle({
-          sessionId: env.session.id,
-          intent: "delete",
-          idempotencyKey: "purge-during-save",
-        });
-        const { operationId } = yield* Schema.decodeUnknownEffect(
-          Schema.Struct({ operationId: Schema.String }),
-        )(request);
-        expect(
-          LifecycleOutcome.$is("completed")(yield* trace.finalizeSessionLifecycle(operationId)),
-        ).toBe(true);
-        yield* Ref.set(beforeSave, Effect.void);
-        yield* Deferred.succeed(release, undefined);
-        expect(yield* Fiber.join(indexing)).toBe(0);
-        const vectors = yield* VectorIndex;
-        yield* vectors.flushRemovals;
-        expect(vectors.size()).toBe(0);
-        const result = yield* (yield* MemorySearch).find({
-          projectId: env.project.id,
-          query: "purge",
-          crossProject: false,
-        });
-        expect(result.matches).toEqual([]);
-      }),
-    );
-  },
-);
+testAgent({ embedder })("purge during chunk publication", (it) => {
+  it.effect("rejects a purged parent at commit without stopping other agents' searches", () =>
+    Effect.gen(function* () {
+      const env = yield* TestEnv;
+      yield* (yield* Nodes).append({
+        projectId: env.project.id,
+        sessionId: env.session.id,
+        kind: "user",
+        text: "purge this while its vectors are saving",
+      });
+      const saving = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      yield* Ref.set(
+        beforeSave,
+        Deferred.succeed(saving, undefined).pipe(Effect.andThen(Deferred.await(release))),
+      );
+      const indexer = yield* Indexer;
+      const indexing = yield* indexer.indexAll().pipe(Effect.forkChild);
+      yield* Deferred.await(saving);
+      const trace = yield* WorkTraceStore;
+      const request = yield* trace.requestSessionLifecycle({
+        sessionId: env.session.id,
+        intent: "delete",
+        idempotencyKey: "purge-during-save",
+      });
+      const { operationId } = yield* Schema.decodeUnknownEffect(
+        Schema.Struct({ operationId: Schema.String }),
+      )(request);
+      expect(
+        LifecycleOutcome.$is("completed")(yield* trace.finalizeSessionLifecycle(operationId)),
+      ).toBe(true);
+      yield* Ref.set(beforeSave, Effect.void);
+      yield* Deferred.succeed(release, undefined);
+      expect(yield* Fiber.join(indexing)).toBe(0);
+      const vectors = yield* VectorIndex;
+      yield* vectors.flushRemovals;
+      expect(vectors.size()).toBe(0);
+      const result = yield* (yield* MemorySearch).find({
+        projectId: env.project.id,
+        query: "purge",
+        crossProject: false,
+      });
+      expect(result.matches).toEqual([]);
+    }),
+  );
+});
