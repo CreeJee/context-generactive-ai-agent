@@ -1,5 +1,4 @@
-import { isTruthy } from "../../truthy.ts";
-import { Context, Data, Effect, Layer, Match, Ref } from "effect";
+import { Context, Data, Effect, Layer, Match, Option, Ref } from "effect";
 import { logFailure } from "../../runtime/logged-failures.ts";
 import type { EmbeddingChoice } from "../../config/contracts.ts";
 import { GlobalConfig, type Settings } from "../../config/global-config.ts";
@@ -9,6 +8,7 @@ import { AppEvents } from "../../events/app-events.ts";
 import type { EmbeddingOverview } from "./contracts.ts";
 import {
   checkGpu,
+  currentGpuCheck,
   Embedder,
   embeddingModeFor,
   gpuMemoryThreshold,
@@ -24,10 +24,10 @@ export const GpuState = Data.taggedEnum<GpuState>();
 /**
  * `auto` needs to know whether WebGPU works before it can pick the GPU, and so does a user who asks
  * for the GPU. A machine below the memory threshold stays on the CPU under `auto`, so it is not
- * checked unless asked.
+ * checked unless asked. A check of another model file is checked again.
  */
 const wantsCheck = (settings: Settings, memoryBytes: number) =>
-  !isTruthy(settings.gpuCheck) &&
+  Option.isNone(currentGpuCheck(settings)) &&
   Match.value(settings.embeddingDevice ?? "auto").pipe(
     Match.when("cpu", () => false),
     Match.when("gpu", () => true),
@@ -47,8 +47,9 @@ const make = Effect.gen(function* () {
   const checking = yield* Ref.make(false);
 
   /**
-   * Checks WebGPU in the background and remembers the answer. It loads the full-precision model in
-   * a worker of its own (downloading it first if needed), so it is done once, not on every start.
+   * Checks WebGPU in the background and remembers the answer. It loads the gpu mode's model file in
+   * a worker of its own (downloading it first if needed), so it is done once per file, not on every
+   * start.
    */
   const startCheck = Effect.gen(function* () {
     // Tests and evaluations run other embedders; there is no local model to check for them.
@@ -94,7 +95,7 @@ const make = Effect.gen(function* () {
     const settings = yield* config.read;
     const gpu: GpuState = (yield* Ref.get(checking))
       ? GpuState.checking()
-      : (settings.gpuCheck ?? GpuState.unchecked());
+      : Option.getOrElse(currentGpuCheck(settings), () => GpuState.unchecked());
     return {
       choice: settings.embeddingDevice ?? "auto",
       running: embedder.runtime(),

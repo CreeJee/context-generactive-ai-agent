@@ -11,7 +11,7 @@ memory-agent의 사용자 전역 설정 계층이다. `<storage>/config.json`(`G
 - `Settings` — 사용자 전역 설정 `Schema.Struct`(openaiCompatible, compatibleAccounts, provider, model, reasoningEffort, kagiEnabled, importsEnabled, embeddingDevice, gpuCheck, summaryStartPercent, kanbanConcurrency, crossProjectRecall, defectReports 등 전부 optional)
 - `GlobalConfigFailed` / `GlobalConfigFailedReason` — operation(`read`|`write`)과 reason(`MissingFile`|`ReadFailed`|`WriteFailed`|`InvalidSettings`)을 갖는 설정 입출력 오류
 - `EmbeddingChoice` — 임베딩 실행 장치 `auto`|`cpu`|`gpu` 리터럴 스키마(`contracts.ts`)
-- `GpuCheck` — WebGPU 확인 결과 TaggedUnion(`available`{checkedAt} | `unavailable`{checkedAt, reason})(`contracts.ts`)
+- `GpuCheck` — WebGPU 확인 결과 TaggedUnion(`available`{checkedAt, model?} | `unavailable`{checkedAt, reason, model?})(`contracts.ts`). `model`은 확인한 gpu 모드 파일(`<model id>/onnx/<file>.onnx`)이고, 다른 파일이나 `model` 없는 결과는 지금 파일의 확인으로 치지 않는다
 - `ModelFeatureFlagSettings` — version 1의 모델 의존 기능 플래그 정책(global/providers/capabilities/models/routes). 항목이 없으면 거부
 - `CrossProviderMediaConsentMode` / `CrossProviderMediaConsentSettings` — provider 쌍별 미디어 전송 동의(`disabled`|`ask`|`always`), version 1(`contracts.ts`)
 - `SummaryStartPercent` — 요약 시작 비율 정수 0~50 스키마(`contracts.ts`)

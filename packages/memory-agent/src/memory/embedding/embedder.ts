@@ -27,7 +27,7 @@ import { runtimeWorker, runtimeWorkerOptions } from "../../runtime/resources.ts"
 import { type ChunkSpan, chunkPolicy } from "./chunks.ts";
 import { type EmbeddingDevice, EmbeddingMode, type EmbeddingOverview } from "./contracts.ts";
 import { EmbeddingRpcs, type EmbeddingWorkerData, EmbeddingWorkerFailed } from "./embedding-rpc.ts";
-import { type EmbeddingRole, localModel } from "./models.ts";
+import { type EmbeddingRole, localModel, modelFile } from "./models.ts";
 
 export class EmbeddingError extends Schema.TaggedError<
   EmbeddingError,
@@ -122,6 +122,13 @@ export const identityMode = (identity: string) =>
  */
 export const gpuMemoryThreshold = 16 * 1024 ** 3;
 
+/** The gpu mode's model file, as a WebGPU check names it. */
+export const gpuModelFile = `${localModel.id}/${modelFile("gpu")}`;
+
+/** The stored WebGPU check, when it checked the file the gpu mode runs now. */
+export const currentGpuCheck = (settings: Settings) =>
+  Option.filter(Option.fromNullishOr(settings.gpuCheck), (check) => check.model === gpuModelFile);
+
 /** The mode the app runs with, given the settings it starts with. */
 export const embeddingModeFor: {
   (settings: Settings, memoryBytes: number): EmbeddingMode;
@@ -134,8 +141,7 @@ function embeddingModeForBody(settings: Settings, memoryBytes: number): Embeddin
     Match.when("gpu", () => "gpu"),
     Match.when("auto", () =>
       memoryBytes >= gpuMemoryThreshold &&
-      settings.gpuCheck !== undefined &&
-      GpuCheck.guards.available(settings.gpuCheck)
+      Option.exists(currentGpuCheck(settings), GpuCheck.guards.available)
         ? "gpu"
         : "cpu",
     ),
@@ -349,8 +355,9 @@ export const checkGpu = (storageRoot: string) =>
       );
       const checkedAt = DateTime.formatIso(yield* DateTime.now);
       return Option.match(unavailable, {
-        onNone: (): GpuCheck => GpuCheck.cases.available.make({ checkedAt }),
-        onSome: (reason): GpuCheck => GpuCheck.cases.unavailable.make({ checkedAt, reason }),
+        onNone: (): GpuCheck => GpuCheck.cases.available.make({ checkedAt, model: gpuModelFile }),
+        onSome: (reason): GpuCheck =>
+          GpuCheck.cases.unavailable.make({ checkedAt, reason, model: gpuModelFile }),
       });
     }),
   );

@@ -16,7 +16,8 @@ memory-agent의 임베딩 계층이다. 모델 표(`models.ts`)에서 고른 로
 - `EmbeddingOutput` — 워커가 벡터를 읽는 곳. `cls`는 첫 토큰의 hidden state, `sentence-embedding`은 모델 그래프가 직접 pooling한 출력
 - `normalize` — Float32Array를 L2 정규화한다
 - `planBatches` — dual 함수. 토큰 수 오름차순으로 크기·비용 제한 안에서 배치 인덱스를 묶는다
-- `embeddingModeFor` / `gpuMemoryThreshold` — dual 함수로 설정(`embeddingDevice` cpu/gpu/auto)과 메모리에서 모드를 정한다. auto는 16GiB 이상이고 gpuCheck가 available일 때만 gpu
+- `embeddingModeFor` / `gpuMemoryThreshold` — dual 함수로 설정(`embeddingDevice` cpu/gpu/auto)과 메모리에서 모드를 정한다. auto는 16GiB 이상이고 지금 gpu 파일의 gpuCheck가 available일 때만 gpu
+- `gpuModelFile` / `currentGpuCheck(settings)` — WebGPU 확인이 기록하는 gpu 모드 파일 이름, 저장된 확인이 그 파일의 것일 때만 돌려준다. 모델을 바꾸면 다시 확인한다
 - `ModelSession` — 실행 중인 모델 워커 하나의 인터페이스(device, countTokens, embed, chunk, terminate, busy)
 - `modelWorker(cacheDir, setup, connect?)` — 첫 요청 때 워커를 띄워 `ScopedRef`에 유지하는 세션 관리자. 테스트는 `connect`로 세션을 주입한다
 - `checkGpu(storageRoot)` — gpu 모드의 모델 파일이 WebGPU에서 로드·실행되는지 별도 워커로 확인한다. `setup.ts`가 호출

@@ -96,7 +96,7 @@ const gpuUnavailableText = (reason: string) =>
 
 const gpuText = GpuState.$match({
   unchecked: () => "아직 확인하지 않았어요.",
-  checking: () => "확인하는 중이에요. 처음이면 원본 모델(약 390MB)을 내려받아요.",
+  checking: () => "확인하는 중이에요. 처음이면 GPU용 모델(약 570MB)을 내려받아요.",
   available: ({ checkedAt }) => `쓸 수 있어요(${dayAndTime(checkedAt)} 확인).`,
   unavailable: ({ checkedAt, reason }) =>
     `쓸 수 없어요(${dayAndTime(checkedAt)} 확인): ${gpuUnavailableText(reason)}`,
@@ -163,8 +163,8 @@ export function EmbeddingSettings() {
           </SelectContent>
         </Select>
         <FieldDescription>
-          CPU는 메모리를 적게 쓰는 대신 벡터를 만드는 동안 코어를 여럿 써요. GPU는 CPU를 훨씬 덜
-          쓰지만 메모리를 1~1.6GB 더 써요. 자동은 메모리가 {gibibytes(overview.gpuMemoryThreshold)}
+          CPU는 벡터를 만드는 동안 코어를 여럿 써요. GPU는 CPU를 훨씬 덜 쓰고, 다섯 배쯤 빠르고,
+          메모리도 조금 덜 써요. 자동은 메모리가 {gibibytes(overview.gpuMemoryThreshold)}
           GB 이상이고 WebGPU가 되면 GPU를 써요. 이 기기의 메모리는 {gibibytes(overview.memoryBytes)}
           GB예요.
         </FieldDescription>

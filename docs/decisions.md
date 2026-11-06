@@ -4178,3 +4178,9 @@
 - 결정:
   - 정정은 `document` role로 임베딩한다. 그래서 role에서 `clustering`을 뺐다.
   - 임계값은 모델 표 항목의 `sameMeaning`에 둔다. 모델과 함께 바뀌어야 하기 때문이다. granite는 0.85, gemma-2는 고른 구간의 가운데인 0.84다.
+
+## WebGPU 확인은 확인한 모델 파일과 함께 저장한다 (2026-11-06)
+
+- 계기: 설정의 `gpuCheck`는 granite fp32 파일이 WebGPU에서 돌았는지만 기록했다. 모델을 EmbeddingGemma 2(fp16)로 바꾸자 이전 결과를 그대로 썼다. 그 결과로 `auto`가 GPU를 고를 수 있었다. fp16은 GPU의 shader-f16 지원에 기대므로 fp32가 된 기기에서도 안 될 수 있다. 그러면 같은 fp16 파일이 CPU에서 느리게 돈다(512토큰 4개 배치 494 token/s, q8은 864).
+- 결정: `GpuCheck`에 확인한 gpu 모드 파일(`<model id>/onnx/<file>.onnx`)을 `model`로 둔다. 다른 파일의 결과나 `model`이 없는 이전 결과는 확인하지 않은 것으로 본다. `auto`는 GPU를 고르지 않고, 시작할 때 다시 확인한다. 설정 화면도 "아직 확인하지 않았어요"로 보인다.
+- 설정 화면 문구도 고쳤다. GPU 모드는 granite에서 메모리를 1~1.6GB 더 썼다. gemma-2에서는 CPU 모드보다 다섯 배쯤 빠르고 메모리도 조금 덜 쓴다. 확인할 때 내려받는 파일은 약 570MB다.

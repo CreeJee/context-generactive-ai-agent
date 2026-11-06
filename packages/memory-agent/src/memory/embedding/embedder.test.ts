@@ -1,14 +1,18 @@
 import { describe, expect, it } from "vite-plus/test";
 import { GpuCheck } from "../../config/contracts.ts";
-import { embeddingModeFor, gpuMemoryThreshold, planBatches } from "./embedder.ts";
+import { embeddingModeFor, gpuMemoryThreshold, gpuModelFile, planBatches } from "./embedder.ts";
 
 describe("how the model runs", () => {
   const plenty = gpuMemoryThreshold;
   const little = gpuMemoryThreshold - 1;
-  const available = GpuCheck.cases.available.make({ checkedAt: "2026-09-16T00:00:00.000Z" });
+  const available = GpuCheck.cases.available.make({
+    checkedAt: "2026-09-16T00:00:00.000Z",
+    model: gpuModelFile,
+  });
   const unavailable = GpuCheck.cases.unavailable.make({
     checkedAt: "2026-09-16T00:00:00.000Z",
     reason: "no WebGPU device",
+    model: gpuModelFile,
   });
 
   it("auto takes the GPU only with enough memory and a WebGPU that worked", () => {
@@ -16,6 +20,16 @@ describe("how the model runs", () => {
     expect(embeddingModeFor({ gpuCheck: available }, plenty)).toBe("gpu");
     expect(embeddingModeFor({ gpuCheck: available }, little)).toBe("cpu");
     expect(embeddingModeFor({ gpuCheck: unavailable }, plenty)).toBe("cpu");
+  });
+
+  it("auto does not take a WebGPU check of another model file", () => {
+    const otherFile = {
+      ...available,
+      model: "ibm-granite/granite-embedding-97m-multilingual-r2/onnx/model.onnx",
+    };
+    const { model: _, ...unnamed } = available;
+    expect(embeddingModeFor({ gpuCheck: otherFile }, plenty)).toBe("cpu");
+    expect(embeddingModeFor({ gpuCheck: unnamed }, plenty)).toBe("cpu");
   });
 
   it("a choice the user made is kept whatever the machine", () => {

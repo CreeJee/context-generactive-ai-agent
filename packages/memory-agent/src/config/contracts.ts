@@ -27,10 +27,18 @@ export const KanbanConcurrency = Schema.Int.check(
 export const EmbeddingChoice = Schema.Literals(["auto", "cpu", "gpu"]);
 export type EmbeddingChoice = typeof EmbeddingChoice.Type;
 
-/** Whether the full-precision model ran on WebGPU when this machine was last checked. */
+/**
+ * Whether the gpu mode's model file ran on WebGPU when this machine was last checked. `model` is
+ * that file, `<model id>/onnx/<file>.onnx`; a check of another file, or one stored before the field
+ * existed, does not count for the file the app runs now.
+ */
 export const GpuCheck = Schema.TaggedUnion({
-  available: { checkedAt: Schema.String },
-  unavailable: { checkedAt: Schema.String, reason: Schema.String },
+  available: { checkedAt: Schema.String, model: Schema.optional(Schema.String) },
+  unavailable: {
+    checkedAt: Schema.String,
+    reason: Schema.String,
+    model: Schema.optional(Schema.String),
+  },
 });
 export type GpuCheck = typeof GpuCheck.Type;
 

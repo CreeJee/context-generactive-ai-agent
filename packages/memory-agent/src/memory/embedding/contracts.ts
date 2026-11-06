@@ -11,11 +11,12 @@ export const EmbeddingDevice = Schema.Literals(["cpu", "webgpu"]);
 export type EmbeddingDevice = typeof EmbeddingDevice.Type;
 
 /**
- * How the local model runs; chosen when the app starts.
- * - `cpu`: the quantized file on the CPU. The least memory; it takes several cores while it works.
- * - `gpu`: the full-precision file on WebGPU. A fraction of the CPU for about 1–1.6 GB more memory,
- *   and full-precision vectors. Where WebGPU is missing the same file runs on the CPU: the vectors
- *   are the same (measured cosine 1.0), only slower.
+ * How the local model runs; chosen when the app starts. Each mode runs its own file of the model
+ * (`models.ts`).
+ * - `cpu`: the quantized file on the CPU. It takes several cores while it works.
+ * - `gpu`: the GPU file on WebGPU. A fraction of the CPU; for EmbeddingGemma 2 also about five times
+ *   as fast and 0.4 GB less memory. Where WebGPU is missing the same file runs on the CPU: the
+ *   vectors are the same, only slower.
  */
 export const EmbeddingMode = Schema.Literals(["cpu", "gpu"]);
 export type EmbeddingMode = typeof EmbeddingMode.Type;
