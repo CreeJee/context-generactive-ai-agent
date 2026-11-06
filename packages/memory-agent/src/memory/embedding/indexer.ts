@@ -2,21 +2,10 @@ import { Context, Data, Effect, Layer, Option, Schema, Semaphore } from "effect"
 import { SqlClient, SqlSchema } from "effect/sql";
 import { AppEvents } from "../../events/app-events.ts";
 import { MorphAnalyzer } from "../morph/analyzer.ts";
-import { meaningfulNodeFilter } from "../quality.ts";
-import type { NodeKind } from "../nodes.ts";
+import { embeddedKindFilter, meaningfulNodeFilter } from "../quality.ts";
 import type { ChunkSpan } from "./chunks.ts";
 import { Embedder } from "./embedder.ts";
 import { VectorIndex } from "./vector-index.ts";
-
-/**
- * Kinds whose text is embedded: what people and the model said, and topics. Tool calls and results
- * are found by text match and reached from the statements around them; embedding them took most of
- * the indexing time and crowded statements out of the vector ranking (docs/decisions.md).
- */
-export const embeddedKinds = ["user", "assistant", "topic"] as const satisfies readonly NodeKind[];
-
-/** `n.kind` limited to {@link embeddedKinds}, for queries over nodes aliased `n`. */
-export const embeddedKindFilter = `n.kind IN (${embeddedKinds.map((kind) => `'${kind}'`).join(", ")})`;
 
 export class IndexingError extends Schema.TaggedError<
   IndexingError,

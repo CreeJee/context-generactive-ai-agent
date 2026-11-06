@@ -33,7 +33,7 @@
 - `latestResolver` / `ChainReads` / `LatestEvidence` / `LatestHead` / `BranchHead` / `AppliedChange` / `ChainSource` / `ChangeRelation` — owner 저장소 읽기를 통해 한 발화에 기록된 변경이 어디서 끝나는지 해석한다
 - `createResultPageReader` / `ResultPageReadFailed` — append-only 노드 텍스트를 블록 캐시·텍스트 인덱스로 페이지 단위로 읽는 리더와 그 실패 오류
 - `createSupersededReads` / `supersededReadSql` — 뒤의 읽기가 대체한 파일 읽기를 판별하는 SQL과 생성 Effect(`memoryGraphRepairVersion` 사용)
-- `memoryGraphRepairVersion`(3) / `hasStatementText` / `nonBlankTextSql` / `meaningfulNodeFilter` — 그래프 수리·검색 제외 규칙의 버전, 공백이 아닌 텍스트 판별, SQL 필터(nodes 별칭 `n`)
+- `memoryGraphRepairVersion`(3) / `hasStatementText` / `nonBlankTextSql` / `meaningfulNodeFilter` / `embeddedKinds` / `embeddedKindFilter` — 그래프 수리·검색 제외 규칙의 버전, 공백이 아닌 텍스트 판별, SQL 필터(nodes 별칭 `n`), 임베딩 대상 kind(`user`, `assistant`, `topic`)와 그 SQL 필터
 - `refsInArguments` — tool call JSON 인자에서 파일·URL 참조를 뽑는다
 - [`embedding`](./embedding/README.md) — 모델 표(`models.ts`)의 로컬 임베딩 모델(`Embedder`), 토큰 창 청킹, turbovec 위의 `VectorIndex`, nodes와 벡터 색인을 맞추는 `Indexer`
 - [`morph`](./morph/README.md) — Kiwi WASM 기반 한국어 형태소 분석기 `MorphAnalyzer`와 worker RPC 계약

@@ -28,6 +28,7 @@ import { SecureRandom } from "effect/crypto";
 import { addonPath, loadTurbovec, type NativeReadOutput } from "../../turbovec/index.js";
 import { initializeNodeSqlite } from "../src/runtime/node-sqlite-bridge.ts";
 import { lexicalLayout } from "../src/memory/embedding/native-vector-index.ts";
+import { readCoverage, type ReadCoverage } from "../src/memory/native-search/coverage.ts";
 import { searchTerms } from "../src/memory/search.ts";
 import { nodePlatform } from "../src/runtime/node-platform.ts";
 import { sha256 } from "../src/runtime/synchronous-crypto.ts";
@@ -220,6 +221,8 @@ interface Row {
   readonly shortTerms: number;
   readonly morphTerms: number;
   readonly out: NativeReadOutput;
+  readonly coverage: ReadCoverage;
+  readonly coverageMs: number;
   readonly wallMs: number;
 }
 const rows: Row[] = [];
@@ -255,7 +258,14 @@ const readOnce = (reader: InstanceType<typeof MemoryReadSession>, q: BenchQuery)
       "bench",
       requestId,
     );
-    return { out, wallMs: performance.now() - started, terms, morphTerms };
+    // The worker counts coverage on its own connection after the read, as here.
+    const coverageStarted = performance.now();
+    const coverage =
+      out.kind === "success"
+        ? readCoverage(db, embedder, [q.projectId])
+        : { unindexed: 0, lexicalPending: 0, uninterpreted: 0 };
+    const coverageMs = performance.now() - coverageStarted;
+    return { out, coverage, coverageMs, wallMs: performance.now() - started, terms, morphTerms };
   } finally {
     control.close();
   }
@@ -268,7 +278,7 @@ for (let round = 0; round < rounds; round++) {
     const reader = shared ?? new MemoryReadSession(dbPath);
     try {
       for (const pass of ["cold", "warm"] as const) {
-        const { out, wallMs, terms, morphTerms } = readOnce(reader, q);
+        const { out, coverage, coverageMs, wallMs, terms, morphTerms } = readOnce(reader, q);
         rows.push({
           group: q.group,
           pass,
@@ -277,6 +287,8 @@ for (let round = 0; round < rounds; round++) {
           shortTerms: terms.short.length,
           morphTerms: morphTerms.length,
           out,
+          coverage,
+          coverageMs,
           wallMs,
         });
       }
@@ -306,7 +318,7 @@ const ownNodeCount = await count(
   ownProject,
 );
 await print(
-  `db rows: ${nodeCount} nodes, own project ${ownNodeCount} nodes; index ${indexPath === undefined ? "none" : index.size()} vectors; lexical ${lexical === null ? "none" : `${lexical.size()} documents, ${Math.max(0, ...rows.map((row) => row.out.lexicalPending))} changes pending`}; queries find ${finds.length} interpret ${interprets.length} recall ${recalls.length} extra ${extra.length}; rounds ${rounds}`,
+  `db rows: ${nodeCount} nodes, own project ${ownNodeCount} nodes; index ${indexPath === undefined ? "none" : index.size()} vectors; lexical ${lexical === null ? "none" : `${lexical.size()} documents, ${Math.max(0, ...rows.map((row) => row.coverage.lexicalPending))} changes pending`}; queries find ${finds.length} interpret ${interprets.length} recall ${recalls.length} extra ${extra.length}; rounds ${rounds}`,
 );
 await print(
   "| group | pass | n | fail (stage) | wall p50/p95 | text p50/p95 | trigram p50/p95 | short sum p50/p95 | short max p95 | short terms p50/max | trigram terms p50/max | candidate+vector p50/p95 | morph p50/p95 | morph terms p50/max | coverage p50/p95 |",
@@ -341,7 +353,7 @@ for (const group of groups)
           selected.map((r) => r.morphTerms),
           0.5,
         ),
-      )}/${Math.max(0, ...selected.map((r) => r.morphTerms))} | ${stat(selected.map((r) => r.out.coverageMs))} |`,
+      )}/${Math.max(0, ...selected.map((r) => r.morphTerms))} | ${stat(selected.map((r) => r.coverageMs))} |`,
     );
   }
 if (jsonOut !== undefined) {
@@ -369,7 +381,7 @@ if (jsonOut !== undefined) {
           morphMs: row.out.morphMs,
           textUnavailable: row.out.textUnavailable,
           queueMs: row.out.queueMs,
-          coverageMs: row.out.coverageMs,
+          coverageMs: row.coverageMs,
         }),
       )
       .join("\n") + "\n";

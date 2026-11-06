@@ -4214,3 +4214,4 @@
   - 채널마다 k의 2배를 찾아 같은 SQLite 스냅샷에서 허용 프로젝트이고 `lexical_changes`에 남은 변경이 없는 노드만 k개 남긴다. 비었거나 숨긴 노드는 indexer가 넣지 않고 숨김 추가·해제도 기록되므로, 읽기는 원문이나 숨김을 다시 보지 않는다. 색인과 스냅샷이 어긋난 노드는 반영될 때까지 빠진다.
   - 읽기는 반영 안 된 변경 수(`lexicalPending`)를 돌려주고, `FindResult.textUnindexed`로 모델에 알린다. Kiwi 적재를 기다리던 `"morph"` degraded는 없앴다.
   - Kiwi 분석기, `nodes_fts`·`nodes_morph` 테이블은 다음 단계에서 지운다(지우는 migration은 사용자 확인 뒤).
+- coverage count(미임베딩 발언, lexical 미반영 변경, 미해석 노드)는 native read에서 뺐다. seed 순위 읽기의 일이 아니고, Rust에 `quality.ts` 규칙을 SQL로 베껴 두게 만들었다. native worker가 자기 read-only `node:sqlite` 연결로 `quality.ts` 필터를 써서 읽기 뒤에 센다(`coverage.ts`). 메인 스레드에서 검색마다 세면 약 30ms씩 막히므로 worker에 둔다. 모델에게 주는 힌트라 읽기 스냅샷과 같지 않아도 된다.

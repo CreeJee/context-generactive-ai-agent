@@ -13,7 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 const MAX_BYTES: usize = 1_048_576;
-/// What the text stage leaves of the read's budget for morph and coverage. Past that point the
+/// What the text stage leaves of the read's budget for the morph stage. Past that point the
 /// text matches are dropped (`text_unavailable`) and the read goes on, instead of the whole read
 /// failing on a slow text query (docs/decisions.md, 2026-10-30).
 const TEXT_RESERVE: Duration = Duration::from_millis(600);
@@ -60,10 +60,6 @@ pub struct NativeReadOutput {
     pub text_unavailable: bool,
     pub text_ids: Vec<String>,
     pub morph_ids: Vec<String>,
-    pub unindexed: f64,
-    /// Journaled node changes the lexical index has not applied yet, over every project.
-    pub lexical_pending: f64,
-    pub uninterpreted: f64,
     pub candidate_count: u32,
     pub sqlite_executions: u32,
     pub candidate_ms: f64,
@@ -71,8 +67,6 @@ pub struct NativeReadOutput {
     pub text_ms: f64,
     pub morph_ms: f64,
     pub mapping_ms: f64,
-    /// The unindexed and uninterpreted counts.
-    pub coverage_ms: f64,
     /// From the host registering the request (which starts its deadline) to this worker claiming it.
     pub queue_ms: f64,
     /// The trigram query inside the text stage; none when it did not run or did not finish.
@@ -95,7 +89,6 @@ enum Stage {
     Mapping,
     Text,
     Morph,
-    Coverage,
 }
 impl Stage {
     fn name(self) -> &'static str {
@@ -105,7 +98,6 @@ impl Stage {
             Stage::Mapping => "mapping",
             Stage::Text => "text",
             Stage::Morph => "morph",
-            Stage::Coverage => "coverage",
         }
     }
 }
@@ -120,9 +112,6 @@ impl NativeReadOutput {
             text_unavailable: false,
             text_ids: vec![],
             morph_ids: vec![],
-            unindexed: 0.,
-            lexical_pending: 0.,
-            uninterpreted: 0.,
             candidate_count: 0,
             sqlite_executions: 0,
             candidate_ms: 0.,
@@ -130,7 +119,6 @@ impl NativeReadOutput {
             text_ms: 0.,
             morph_ms: 0.,
             mapping_ms: 0.,
-            coverage_ms: 0.,
             queue_ms: 0.,
             trigram_ms: None,
             short_term_ms: 0.,
@@ -148,10 +136,9 @@ impl NativeReadOutput {
             Stage::Mapping => &mut self.mapping_ms,
             Stage::Text => &mut self.text_ms,
             Stage::Morph => &mut self.morph_ms,
-            Stage::Coverage => &mut self.coverage_ms,
         }
     }
-    /// A failed read carries no hits or coverage, only the work it did: the stages that finished
+    /// A failed read carries no hits, only the work it did: the stages that finished
     /// and the one it stopped in, timed up to now.
     fn failure(&self, reason: Outcome, running: (Stage, Instant)) -> Self {
         let mut out = Self {
@@ -163,7 +150,6 @@ impl NativeReadOutput {
             text_ms: self.text_ms,
             morph_ms: self.morph_ms,
             mapping_ms: self.mapping_ms,
-            coverage_ms: self.coverage_ms,
             queue_ms: self.queue_ms,
             trigram_ms: self.trigram_ms,
             short_term_ms: self.short_term_ms,
@@ -711,15 +697,6 @@ impl MemoryReadSession {
                 }
             }
             out.morph_ms = ms(running.1);
-            running = (Stage::Coverage, Instant::now());
-            out.unindexed = connection.query_row(&format!("SELECT count(*) FROM nodes n LEFT JOIN node_vectors v ON v.node_seq=n.seq AND v.embedder=? WHERE v.node_seq IS NULL AND {MEANINGFUL} AND {EMBEDDED_KINDS}"), [&input.embedder], |r| r.get::<_,i64>(0)).map_err(|_| Outcome::ReadFailed)? as f64;
-            out.sqlite_executions += 1;
-            // CROSS JOIN keeps the few open jobs as the outer loop; otherwise SQLite walks every node of the project.
-            out.uninterpreted = connection.query_row(&format!("SELECT count(*) FROM interpret_jobs j CROSS JOIN nodes n ON n.id=j.node_id WHERE j.status!='done' AND {MEANINGFUL} AND n.project_id IN ({projects})"), params_from_iter(project_values()), |r| r.get::<_,i64>(0)).map_err(|_| Outcome::ReadFailed)? as f64;
-            out.sqlite_executions += 1;
-            out.lexical_pending = connection.query_row("SELECT count(*) FROM lexical_changes", [], |r| r.get::<_, i64>(0)).map_err(|_| Outcome::ReadFailed)? as f64;
-            out.sqlite_executions += 1;
-            out.coverage_ms = ms(running.1);
             check()?;
             if out.bytes() > input.output_budget_bytes as usize {
                 return Err(Outcome::BudgetExceeded);
@@ -753,7 +730,6 @@ mod tests {
         let mut out = NativeReadOutput::empty();
         out.text_ids.push("text-hit".into());
         out.morph_ids.push("morph-hit".into());
-        out.unindexed = 7.;
         record_vector_channel(&mut out, Err::<(), _>(()), |_, _| {
             panic!("failed engine must not record hits")
         });
@@ -762,7 +738,6 @@ mod tests {
         assert!(out.vector_ids.is_empty());
         assert_eq!(out.text_ids, ["text-hit"]);
         assert_eq!(out.morph_ids, ["morph-hit"]);
-        assert_eq!(out.unindexed, 7.);
         let mut successful = NativeReadOutput::empty();
         record_vector_channel(&mut successful, Ok::<_, ()>(3), |value, out| {
             out.vector_scores.push(value as f64)
@@ -774,7 +749,6 @@ mod tests {
     fn failure_keeps_stage_times_and_times_the_running_stage() {
         let mut out = NativeReadOutput::empty();
         out.text_ids.push("text-hit".into());
-        out.unindexed = 7.;
         out.candidate_count = 3;
         out.candidate_ms = 5.;
         out.vector_ms = 6.;
@@ -786,7 +760,6 @@ mod tests {
         let failed = out.failure(Outcome::BudgetExceeded, (Stage::Mapping, started));
         assert_eq!(failed.kind, Outcome::BudgetExceeded.tag());
         assert!(failed.text_ids.is_empty());
-        assert_eq!(failed.unindexed, 0.);
         assert_eq!(failed.candidate_count, 3);
         assert_eq!((failed.candidate_ms, failed.vector_ms), (5., 6.));
         assert_eq!(
@@ -946,7 +919,7 @@ mod tests {
     #[cfg(feature = "test-sqlite")]
     fn interrupted_text_query_keeps_the_read_transaction() {
         // The text deadline interrupts a SELECT through the progress handler; the read goes on in
-        // the same snapshot for morph and coverage, so the interrupt must not end the transaction.
+        // the same snapshot for the morph stage, so the interrupt must not end the transaction.
         let c = Connection::open_in_memory().unwrap();
         c.execute_batch("CREATE TABLE nodes(seq INTEGER PRIMARY KEY, text TEXT); WITH RECURSIVE r(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM r WHERE i<20000) INSERT INTO nodes SELECT i, 'x' || i FROM r; BEGIN DEFERRED;").unwrap();
         let interrupt = Arc::new(Mutex::new(Some(Instant::now())));

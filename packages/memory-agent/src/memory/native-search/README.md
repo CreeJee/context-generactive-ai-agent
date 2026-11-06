@@ -20,9 +20,10 @@
 - `LexicalDocument` — lexical 색인이 받는 노드 Schema(`seq`, `project`, `text`)다.
 - `NativeOwnerFailed` — Schema.TaggedError다. `reason` 리터럴 13종(`invalid-input`, `queue-full`, `input-budget`, `worker-exit`, `worker-error`, `startup-timeout`, `request-timeout`, `closed`, `epoch-mismatch`, `index-failed`, `lease-unavailable`, `read-failed`, `native-incompatible`)과 프로세스 내부에만 남는 `cause`를 가진다.
 - `OwnerReady` / `Open` / `Execute` / `NativeOwnerRpcs` — 준비 보고 Schema(lexical 색인이 있으면 그 build 이름 `lexical.instance`)와 Effect RPC 정의다. `Open`은 setup 결과를, `Execute`는 `OwnerCommand`를 `OwnerReply`로 처리한다.
-- `NativeReadInput` / `NativeReadOutput` — native memory read의 입출력 Schema다. budget 0~2000ms, bytes ≤ 1 MiB, `vectorK ≤ maxVectorK` 범위를 검사한다. text 검색어 수 상한(trigram 24, 두 글자 8; 넘으면 이름 같은 것·긴 것을 먼저 남긴다 — 2026-10-30)은 호스트가 적용한다. morph는 질문 원문(`morphQuery`)을 보내고 worker의 lexical 색인이 형태소 검색어로 나눈다. 응답은 단계 시간, 등록→claim 대기 `queueMs`, lexical 색인에 아직 반영하지 않은 변경 수 `lexicalPending`을 함께 돌려준다.
+- `NativeReadInput` / `NativeReadOutput` — native memory read의 입출력 Schema다. budget 0~2000ms, bytes ≤ 1 MiB, `vectorK ≤ maxVectorK` 범위를 검사한다. text 검색어 수 상한(trigram 24, 두 글자 8; 넘으면 이름 같은 것·긴 것을 먼저 남긴다 — 2026-10-30)은 호스트가 적용한다. morph는 질문 원문(`morphQuery`)을 보내고 worker의 lexical 색인이 형태소 검색어로 나눈다. 응답은 단계 시간, 등록→claim 대기 `queueMs`, worker가 읽기 뒤에 센 coverage(`unindexed`, `lexicalPending`, `uninterpreted`, `coverageMs`)를 함께 돌려준다.
 - `nativeReadInputLogicalBytes` — 복사 전 경계에서 입력의 논리 바이트를 계산한다. 한도를 넘으면 `inputBudgetBytes + 1`을 반환한다.
-- `TransferredVector` / `maxVectorK`(48) / `ReadStage` — 버퍼를 전송(transfer)하는 Float32Array Schema, 벡터 k 상한, 읽기 단계 순서 리터럴(candidate→vector→mapping→text→morph→coverage)이다.
+- `TransferredVector` / `maxVectorK`(48) / `ReadStage` — 버퍼를 전송(transfer)하는 Float32Array Schema, 벡터 k 상한, 읽기 단계 순서 리터럴(candidate→vector→mapping→text→morph)이다.
+- `readCoverage` / `ReadCoverage` — worker의 read-only `DatabaseSync`로 세는 coverage(미임베딩 발언 수, lexical 색인 미반영 변경 수, 허용 프로젝트의 미해석 노드 수)다. 필터는 `quality.ts`의 `meaningfulNodeFilter`·`embeddedKindFilter`를 쓴다. 모델에게 주는 힌트라 읽기 스냅샷과 같을 필요가 없다.
 - `NativeSearchRequest` / `NativeSearchOutcome` — 상위 검색 요청 계약과 결과 TaggedEnum(`success`, `degraded`, `cancelled`, `budget-exceeded`, `stale-generation`, `error`)이다.
 - `NativeSearchClient` — 프레임워크 중립 비동기 전송 인터페이스(`search(request, signal) => Promise<NativeSearchOutcome>`, `close`)다.
 - `nativeSearchBounds` — 고정 한도 상수(admittedSearches 32, activeSearches 1, workBudgetMs 2000, queuedAbortMs 50, activeAbortAcknowledgeMs 100, input/output 1 MiB)다.
@@ -63,7 +64,7 @@
 
 - `node:worker_threads` `Worker`를 생성하고 `terminate`한다(`rpcTransport`). worker 쪽은 최상위 `await runNativeEffect(Layer.launch(server))`로 RPC 서버를 실행한다.
 - `requireRuntime("turbovec")`로 native 애드온을 로드하고 `initializeNodeSqlite(addon.addonPath)`를 호출한다(worker). `runtimeWorkerOptions(setup)`로 worker 옵션을 얻는다(호스트).
-- `setup.databasePath`가 있으면 `node:sqlite` `DatabaseSync`를 read-only로 열어 `assertDatabaseSchema`를 실행하고 닫는다. 이어서 `binding.MemoryReadSession`으로 read-only SQLite 세션을 Scope 동안 연다.
+- `setup.databasePath`가 있으면 `node:sqlite` `DatabaseSync`를 read-only로 Scope 동안 열어 둔다. 먼저 `assertDatabaseSchema`를 실행하고, 이후 성공한 memory read마다 coverage를 센다. 이어서 `binding.MemoryReadSession`으로 read-only SQLite 세션을 Scope 동안 연다.
 - 파일시스템: `cacheDirectory`를 `mkdir -p`(mode `0o700`)로 만든다. `index.tvim`의 존재를 확인하고 load한다. save는 `index.tvim.tmp`에 쓴 뒤 rename한다.
 - `setup.lexicalDirectory`가 있으면 `binding.LexicalIndex.open`으로 Tantivy 색인을 Scope 동안 연다(writer lock 포함).
 - `binding.CacheLease`로 `cacheDirectory/writer.lock` 프로세스 간 lease(lock)를 Scope 동안 잡는다. 실패하면 `lease-unavailable`다.

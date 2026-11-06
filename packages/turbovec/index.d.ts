@@ -96,16 +96,12 @@ export interface NativeReadOutput {
   vectorIds: string[];
   vectorSeqs: string[];
   vectorScores: number[];
-  /** Vector engine alone failed; text/morph/coverage remain from the same clean snapshot. */
+  /** Vector engine alone failed; text/morph remain from the same clean snapshot. */
   vectorUnavailable: boolean;
-  /** Text stage results were dropped mid-read to keep the read alive; vector/morph/coverage remain. */
+  /** Text stage results were dropped mid-read to keep the read alive; vector/morph remain. */
   textUnavailable: boolean;
   textIds: string[];
   morphIds: string[];
-  unindexed: number;
-  /** Journaled node changes the lexical index has not applied yet, over every project. */
-  lexicalPending: number;
-  uninterpreted: number;
   candidateCount: number;
   sqliteExecutions: number;
   candidateMs: number;
@@ -113,8 +109,6 @@ export interface NativeReadOutput {
   textMs: number;
   morphMs: number;
   mappingMs: number;
-  /** The unindexed and uninterpreted counts. */
-  coverageMs: number;
   /** From the host registering the request (which starts its deadline) to the worker claiming it. */
   queueMs: number;
   /** The trigram query inside the text stage; none when it did not run or did not finish. */
@@ -124,7 +118,7 @@ export interface NativeReadOutput {
   shortTermMaxMs: number;
   shortTermsDone: number;
   /** The stage a failed read stopped in; none when it succeeded or failed before reading. */
-  failedStage?: "candidate" | "vector" | "mapping" | "text" | "morph" | "coverage" | null;
+  failedStage?: "candidate" | "vector" | "mapping" | "text" | "morph" | null;
   inputLogicalBytes: number;
   outputLogicalBytes: number;
 }

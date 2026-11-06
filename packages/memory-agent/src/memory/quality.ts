@@ -1,3 +1,5 @@
+import type { NodeKind } from "./nodes.ts";
+
 /**
  * Version of the rules that repair the graph and leave nodes out of search. 2 stopped demoting
  * cross-session `corrects`/`retracts` and restores those version 1 demoted. 3 leaves out read
@@ -18,3 +20,13 @@ export const nonBlankTextSql = (column: string) =>
 /** SQL counterpart used with the nodes table aliased as n. */
 export const meaningfulNodeFilter = `${nonBlankTextSql("n.text")}
   AND NOT EXISTS (SELECT 1 FROM memory_graph_suppressed_nodes s WHERE s.node_seq = n.seq)`;
+
+/**
+ * Kinds whose text is embedded: what people and the model said, and topics. Tool calls and results
+ * are found by text match and reached from the statements around them; embedding them took most of
+ * the indexing time and crowded statements out of the vector ranking (docs/decisions.md).
+ */
+export const embeddedKinds = ["user", "assistant", "topic"] as const satisfies readonly NodeKind[];
+
+/** `n.kind` limited to {@link embeddedKinds}, for queries over nodes aliased `n`. */
+export const embeddedKindFilter = `n.kind IN (${embeddedKinds.map((kind) => `'${kind}'`).join(", ")})`;

@@ -60,14 +60,7 @@ export function nativeReadInputLogicalBytes(input: NativeReadInput): number {
 }
 
 /** The stages of a native read, in the order it runs them. */
-export const ReadStage = Schema.Literals([
-  "candidate",
-  "vector",
-  "mapping",
-  "text",
-  "morph",
-  "coverage",
-]);
+export const ReadStage = Schema.Literals(["candidate", "vector", "mapping", "text", "morph"]);
 
 export const NativeReadOutput = Schema.Struct({
   kind: Schema.Literals([
@@ -86,8 +79,8 @@ export const NativeReadOutput = Schema.Struct({
   textUnavailable: Schema.Boolean,
   textIds: ids,
   morphIds: ids,
+  // The coverage counts and their time come from the worker beside the read (`coverage.ts`).
   unindexed: Count,
-  /** Journaled node changes the lexical index has not applied yet, over every project. */
   lexicalPending: Count,
   uninterpreted: Count,
   candidateCount: Count,

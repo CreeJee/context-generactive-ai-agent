@@ -1,4 +1,5 @@
 import {
+  Duration,
   Effect,
   FileSystem,
   Layer,
@@ -21,6 +22,7 @@ import { requireRuntime } from "../../runtime/resources.ts";
 import { initializeNodeSqlite } from "../../runtime/node-sqlite-bridge.ts";
 import { DatabaseSync } from "node:sqlite";
 import { assertDatabaseSchema } from "../../db/database.ts";
+import { readCoverage } from "./coverage.ts";
 import {
   NativeOwnerFailed,
   NativeOwnerRpcs,
@@ -59,16 +61,19 @@ const owner = Effect.gen(function* () {
     ![1, 2, 4, 8].includes(setup.bits)
   )
     return yield* fail("invalid-input");
-  yield* Effect.transposeOption(
+  // The worker's own read-only connection: the schema check before anything else, then the
+  // coverage counts beside each read. Scope closure closes it.
+  const counter = yield* Effect.transposeOption(
     Option.map(Option.fromUndefinedOr(setup.databasePath), (databasePath) =>
-      native(() => {
-        const sqlite = new DatabaseSync(databasePath, { readOnly: true });
-        try {
-          assertDatabaseSchema(sqlite);
-        } finally {
-          sqlite.close();
-        }
-      }, "native-incompatible"),
+      Effect.acquireRelease(
+        native(() => new DatabaseSync(databasePath, { readOnly: true }), "native-incompatible"),
+        (sqlite) => Effect.sync(() => sqlite.close()),
+      ),
+    ),
+  );
+  yield* Effect.transposeOption(
+    Option.map(counter, (sqlite) =>
+      native(() => assertDatabaseSchema(sqlite), "native-incompatible"),
     ),
   );
   yield* files(fs.makeDirectory(setup.cacheDirectory, { recursive: true, mode: 0o700 }));
@@ -267,6 +272,7 @@ const owner = Effect.gen(function* () {
       "memory-search": (command) =>
         Effect.gen(function* () {
           const session = yield* Effect.fromOption(reader, () => fail("read-failed"));
+          const sqlite = yield* Effect.fromOption(counter, () => fail("read-failed"));
           if (command.controlToken === undefined || setup.ownerKey === undefined)
             return yield* fail("invalid-input");
           const beforeCpu = process.threadCpuUsage();
@@ -284,12 +290,25 @@ const owner = Effect.gen(function* () {
             "read-failed",
           );
           if (result.kind === "read-failed") return yield* fail("read-failed");
+          // A failed read reports no coverage, as it reports no hits.
+          const coverage = yield* result.kind === "success"
+            ? Effect.map(
+                Effect.timed(
+                  native(
+                    () =>
+                      readCoverage(sqlite, command.input.embedder, command.input.allowedProjects),
+                    "read-failed",
+                  ),
+                ),
+                ([took, counts]) => ({ ...counts, coverageMs: Duration.toMillis(took) }),
+              )
+            : Effect.succeed({ unindexed: 0, lexicalPending: 0, uninterpreted: 0, coverageMs: 0 });
           const cpu = process.threadCpuUsage(beforeCpu);
           return OwnerReply.cases["memory-result"].make({
             workerCpuUs: cpu.user + cpu.system,
             requestId: command.requestId,
             epoch: setup.epoch,
-            result,
+            result: { ...result, ...coverage },
           });
         }),
       "lexical-apply": (command) =>
