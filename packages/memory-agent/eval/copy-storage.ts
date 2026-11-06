@@ -38,9 +38,14 @@ export const copyDatabase = (storage: string) =>
     ),
   );
 
-// Query embeddings reused across runs, keyed by the exact query text; the file lives in the copy.
-// A torn final line from an interrupted append fails to decode and is skipped.
-const CachedLine = Schema.Struct({ text: Schema.String, vector: Schema.String });
+// Query embeddings reused across runs, keyed by the embedder and the exact query text; the file
+// lives in the copy. A torn final line from an interrupted append fails to decode and is skipped,
+// and so is a line from before the embedder was recorded.
+const CachedLine = Schema.Struct({
+  embedder: Schema.String,
+  text: Schema.String,
+  vector: Schema.String,
+});
 const cacheLine = Schema.fromJsonString(CachedLine);
 
 /** A cached vector, when it decodes to the embedder's size. */
@@ -54,9 +59,10 @@ const vectorOf = (encoded: string, bytes: number) =>
 const encodedOf = (vector: Float32Array) =>
   Base64.encode(new Uint8Array(vector.buffer, vector.byteOffset, vector.byteLength));
 
-/** The cached embeddings of a copy, by text; lines that do not decode are skipped. */
+/** The cached embeddings of `embedder` in a copy, by text; lines that do not decode are skipped. */
 const loadEmbedCache = Effect.fn("copyStorage.loadEmbedCache")(function* (
   file: string,
+  embedder: string,
   bytes: number,
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -66,15 +72,15 @@ const loadEmbedCache = Effect.fn("copyStorage.loadEmbedCache")(function* (
   );
   const decode = Schema.decodeUnknownOption(cacheLine);
   return MutableHashMap.fromIterable(
-    text
-      .split("\n")
-      .flatMap((line) =>
-        Option.toArray(
-          Option.flatMap(decode(line), ({ text, vector }) =>
+    text.split("\n").flatMap((line) =>
+      Option.toArray(
+        Option.flatMap(
+          Option.filter(decode(line), (cached) => cached.embedder === embedder),
+          ({ text, vector }) =>
             Option.map(vectorOf(vector, bytes), (decoded) => [text, decoded] as const),
-          ),
         ),
       ),
+    ),
   );
 });
 
@@ -92,14 +98,14 @@ const cachedEmbedder = Effect.fn("copyStorage.cachedEmbedder")(function* (
   const fs = yield* FileSystem.FileSystem;
   if (embedder.identity !== identity)
     return yield* Effect.die(`embedder ${embedder.identity} does not match the copy`);
-  const cache = yield* loadEmbedCache(cacheFile, embedder.dimensions * 4);
+  const cache = yield* loadEmbedCache(cacheFile, identity, embedder.dimensions * 4);
   const encodeLine = Schema.encodeEffect(cacheLine);
   /** Embeds the texts not cached yet and appends them to the cache file. */
   const fill = (missing: ReadonlyArray<string>) =>
     Effect.gen(function* () {
       const computed = yield* embedder.embed(missing, "query");
       const lines = yield* Effect.forEach(missing, (text, index) =>
-        encodeLine({ text, vector: encodedOf(computed[index]!) }),
+        encodeLine({ embedder: identity, text, vector: encodedOf(computed[index]!) }),
       );
       // The cache is the copy's; failing to write it is the run's failure.
       yield* Effect.orDie(
@@ -125,27 +131,31 @@ const cachedEmbedder = Effect.fn("copyStorage.cachedEmbedder")(function* (
   };
 });
 
-const TopEmbedder = Schema.Struct({ embedder: Schema.String, n: Schema.Finite });
+const EmbedderVectors = Schema.Struct({ embedder: Schema.String, n: Schema.Finite });
 
 /**
- * The model file the copy's vectors were made with: the embedder holding the most vectors.
+ * The model file the copy's vectors were made with: of the embedders the local model is, the one
+ * holding the most vectors. Vectors of an earlier model may stay in the copy; searches skip them.
  */
 export const copyEmbedder = (storage: string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const top = yield* SqlSchema.findOne({
+    const embedders = yield* SqlSchema.findAll({
       Request: Schema.Void,
-      Result: TopEmbedder,
+      Result: EmbedderVectors,
       execute: () =>
-        sql`SELECT embedder, count(*) AS n FROM node_vectors GROUP BY embedder ORDER BY n DESC LIMIT 1`,
-    })(undefined).pipe(
-      // A copy without vectors cannot be searched by meaning.
-      Effect.orDie,
+        sql`SELECT embedder, count(*) AS n FROM node_vectors GROUP BY embedder ORDER BY n DESC`,
+    })(undefined).pipe(Effect.orDie);
+    const [top, mode] = yield* Option.match(
+      Arr.findFirst(embedders, (row) =>
+        Option.map(identityMode(row.embedder), (mode) => [row, mode] as const),
+      ),
+      {
+        // A copy without the local model's vectors cannot be searched by meaning.
+        onNone: () => Effect.die("the copy holds no vectors of the local model"),
+        onSome: Effect.succeed,
+      },
     );
-    const mode = yield* Option.match(identityMode(top.embedder), {
-      onNone: () => Effect.die(`the copy's vectors are not the local model's (${top.embedder})`),
-      onSome: Effect.succeed,
-    });
     yield* Console.log(`embedder ${top.embedder} (${top.n} vectors) -> ${mode}`);
     return Layer.effect(
       Embedder,
