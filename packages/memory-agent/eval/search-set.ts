@@ -166,8 +166,11 @@ const score = Command.make(
       Argument.withDescription("runs to score; the first is the baseline"),
       Argument.variadic({ min: 1 }),
     ),
+    complete: Flag.Boolean("complete").pipe(
+      Flag.withDescription("only items whose top 10 every run has graded"),
+    ),
   },
-  ({ copy, runs }) => scoreRuns({ storage: copy, runs }),
+  ({ copy, runs, complete }) => scoreRuns({ storage: copy, runs, complete }),
 ).pipe(Command.withDescription("the runs' scores, by slice"));
 
 const searchSet = Command.make("search-set").pipe(

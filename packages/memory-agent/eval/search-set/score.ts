@@ -5,7 +5,8 @@
  * as not relevant, so a low judged@10 means the run's scores are a lower bound until `judge` grades
  * that run. Items whose need has no relevant node are left out and counted. With more than one run,
  * the first is the baseline and each other run's nDCG@10 wins and losses against it are counted per
- * item.
+ * item. With `complete`, only items whose top 10 every scored run has graded are counted: until the
+ * judge has graded every run, an ungraded node would count against one run more than another.
  */
 import { Array as Arr, Console, Effect, HashMap, Option, Order } from "effect";
 import { ageBandOf, type Item, type Need, readRows, type RunRow, setFiles } from "./files.ts";
@@ -19,6 +20,8 @@ interface ItemScore {
   readonly reciprocal: number;
   readonly answer: number;
   readonly judged: number;
+  /** Every node of the top 10 is graded. */
+  readonly complete: boolean;
 }
 
 const dcg = (gains: ReadonlyArray<number>) =>
@@ -55,6 +58,7 @@ const scoreItem = (
     reciprocal: first < 0 ? 0 : 1 / (first + 1),
     answer: top10.some((id) => gradeAt(id) === 2) ? 1 : 0,
     judged: top10.filter((id) => HashMap.has(grades, id)).length / Math.max(1, top10.length),
+    complete: top10.every((id) => HashMap.has(grades, id)),
   };
 };
 
@@ -65,9 +69,15 @@ export interface ScoreInput {
   readonly storage: string;
   /** Runs to score; the first is the baseline. */
   readonly runs: ReadonlyArray<string>;
+  /** Only items whose top 10 every run has graded. */
+  readonly complete: boolean;
 }
 
-export const scoreRuns = Effect.fn("searchSet.score")(function* ({ storage, runs }: ScoreInput) {
+export const scoreRuns = Effect.fn("searchSet.score")(function* ({
+  storage,
+  runs,
+  complete,
+}: ScoreInput) {
   const files = setFiles(storage);
   const needs = HashMap.fromIterable(
     (yield* readRows(files.needs)).map((need) => [need.need, need] as const),
@@ -94,7 +104,7 @@ export const scoreRuns = Effect.fn("searchSet.score")(function* ({ storage, runs
   yield* Console.log(
     `items ${items.length}; with a relevant node ${scorable.length}; judgments ${[...HashMap.values(gradesOf)].reduce((sum, grades) => sum + HashMap.size(grades), 0)}`,
   );
-  const scored = yield* Effect.forEach(runs, (run) =>
+  const all = yield* Effect.forEach(runs, (run) =>
     Effect.map(readRows(files.run(run)), (rows) => {
       // A resumed run may hold an item twice; the last row is the one written last.
       const rowOf = HashMap.fromIterable(rows.map((row) => [row.item, row] as const));
@@ -107,6 +117,19 @@ export const scoreRuns = Effect.fn("searchSet.score")(function* ({ storage, runs
         ),
       };
     }),
+  );
+  const completeIn = all.map(({ scores }) =>
+    HashMap.fromIterable(scores.map((score) => [score.item, score.complete] as const)),
+  );
+  const counted = (score: ItemScore) =>
+    !complete ||
+    completeIn.every((run) => Option.getOrElse(HashMap.get(run, score.item), () => false));
+  const scored = all.map(({ run, scores }) => ({ run, scores: scores.filter(counted) }));
+  yield* Effect.when(
+    Console.log(
+      `complete in every run: ${Arr.head(scored).pipe(Option.match({ onNone: () => 0, onSome: ({ scores }) => scores.length }))} items`,
+    ),
+    Effect.succeed(complete),
   );
   const slices = [
     "all",
