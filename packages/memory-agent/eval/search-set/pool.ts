@@ -34,6 +34,8 @@ export interface SearchRunsInput {
   readonly app: Option.Option<string>;
   /** Also write the `vector`, `text` and `morph` runs. */
   readonly channels: boolean;
+  /** The app search reorders its matches with the reranker, as find_memory does. */
+  readonly rerank: boolean;
 }
 
 /** Writes the named runs for every item not yet in all of them, one item at a time. */
@@ -41,6 +43,7 @@ export const searchRuns = Effect.fn("searchSet.searchRuns")(function* ({
   storage,
   app,
   channels,
+  rerank,
 }: SearchRunsInput) {
   const files = setFiles(storage);
   const search = yield* MemorySearch;
@@ -68,6 +71,7 @@ export const searchRuns = Effect.fn("searchSet.searchRuns")(function* ({
         crossProject: need.crossProject,
         limit: keptIds,
         ...optionalProperty("beforeSeq", need.beforeSeq ?? undefined),
+        rerank,
       })
       .pipe(
         Effect.map((result) => ({

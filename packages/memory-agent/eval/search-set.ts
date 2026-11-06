@@ -82,19 +82,31 @@ const rounds = Command.make(
 );
 
 const pool = Command.make("pool", { copy }, ({ copy }) =>
-  searchRuns({ storage: copy, app: Option.some("app"), channels: true }),
+  searchRuns({ storage: copy, app: Option.some("app"), channels: true, rerank: false }),
 ).pipe(
   Command.withDescription("the app search and the native read's vector, text and morph lists"),
-  Command.provide(({ copy }) => copyLayer({ storage: copy, tuning: Option.none() })),
+  Command.provide(({ copy }) =>
+    copyLayer({ storage: copy, tuning: Option.none(), reranker: false }),
+  ),
 );
 
 const appRun = Command.make(
   "app-run",
-  { copy, tuning, name: Flag.String("name").pipe(Flag.withDescription("the run's name")) },
-  ({ copy, name }) => searchRuns({ storage: copy, app: Option.some(name), channels: false }),
+  {
+    copy,
+    tuning,
+    name: Flag.String("name").pipe(Flag.withDescription("the run's name")),
+    rerank: Flag.Boolean("rerank").pipe(
+      Flag.withDescription("reorder the matches with the local reranker, as find_memory does"),
+    ),
+  },
+  ({ copy, name, rerank }) =>
+    searchRuns({ storage: copy, app: Option.some(name), channels: false, rerank }),
 ).pipe(
   Command.withDescription("the app search alone, with a tuning override, as another run"),
-  Command.provide(({ copy, tuning }) => copyLayer({ storage: copy, tuning })),
+  Command.provide(({ copy, tuning, rerank }) =>
+    copyLayer({ storage: copy, tuning, reranker: rerank }),
+  ),
 );
 
 const rerank = Command.make(

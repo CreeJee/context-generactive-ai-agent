@@ -368,7 +368,7 @@ else
   await nodePlatform.runPromise(
     Effect.scoped(
       Effect.flatMap(
-        Layer.build(copyLayer({ storage, tuning: Option.fromNullishOr(tuning) })),
+        Layer.build(copyLayer({ storage, tuning: Option.fromNullishOr(tuning), reranker: false })),
         (services) =>
           Effect.provideContext(
             Effect.andThen(

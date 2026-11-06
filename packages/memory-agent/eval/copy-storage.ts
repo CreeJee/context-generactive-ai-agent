@@ -15,6 +15,7 @@ import {
   MutableHashMap,
   Option,
   Result,
+  Schedule,
   Schema,
 } from "effect";
 import { Base64 } from "effect/encoding";
@@ -26,6 +27,7 @@ import { Embedder, EmbedderRuntime, identityMode } from "../src/memory/embedding
 import { Indexer } from "../src/memory/embedding/indexer.ts";
 import type { EmbeddingRole } from "../src/memory/embedding/models.ts";
 import { memoryAgentLayer, type MemoryAgentLayerOptions } from "../src/layers.ts";
+import { Reranker } from "../src/memory/rerank/reranker.ts";
 import type { SearchTuning } from "../src/memory/search.ts";
 import { path } from "../src/runtime/synchronous-path.ts";
 
@@ -175,6 +177,11 @@ export interface CopyServices {
   readonly storage: string;
   /** Replaces the app's search tuning when given. */
   readonly tuning: Option.Option<SearchTuning>;
+  /**
+   * Runs the local reranker on WebGPU, whose files are downloaded into the copy's `models/`, and
+   * waits until it answers before the first search.
+   */
+  readonly reranker: boolean;
 }
 
 /**
@@ -192,8 +199,31 @@ const lexicalCaughtUp = Layer.effectDiscard(
   }),
 );
 
+/**
+ * Waits until the reranker answers: it loads in the background, and a search before that keeps
+ * the fused order.
+ */
+const rerankerReady = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const reranker = yield* Reranker;
+    yield* reranker.score("준비", ["준비"]).pipe(
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.fail("reranker not ready"),
+          onSome: () => Effect.void,
+        }),
+      ),
+      Effect.retry(Schedule.spaced("1 second")),
+      Effect.timeout("10 minutes"),
+      // An evaluation of the reranker without one measures nothing.
+      Effect.orDie,
+    );
+    yield* Console.log("reranker ready");
+  }),
+);
+
 /** The app's services over the copy, with the copy's embedder and no background work. */
-export const copyLayer = ({ storage, tuning }: CopyServices) =>
+export const copyLayer = ({ storage, tuning, reranker }: CopyServices) =>
   Effect.gen(function* () {
     // Inside the copy: the sandbox may refuse the system temp folder.
     const home = path.join(storage, "eval-home");
@@ -207,10 +237,11 @@ export const copyLayer = ({ storage, tuning }: CopyServices) =>
       sweepSecrets: false,
       secrets: SecretStore.memory,
       skillsHome: home,
+      reranker: reranker ? Reranker.localGpu : Reranker.none,
     };
     // The tuning override is only present when given (exactOptionalPropertyTypes).
     return Layer.provideMerge(
-      lexicalCaughtUp,
+      reranker ? Layer.merge(lexicalCaughtUp, rerankerReady) : lexicalCaughtUp,
       Layer.merge(
         memoryAgentLayer(
           storage,
