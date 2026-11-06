@@ -2,23 +2,18 @@
  * Search runs over the copy for every item. `app` is MemorySearch.find as the app runs it (or with a
  * tuning override, under another name). `vector`, `text` and `morph` are the native read's own
  * lists before fusion, so the pool also holds what one channel finds and fusion drops. A recorded
- * question only sees nodes stored before it was asked, so ids at or past its seq are dropped from
- * every list; the searches ask for more than they keep to make up for it.
+ * question searches only the nodes stored before it was asked (`beforeSeq`), as the memory was then.
  */
 import { Array as Arr, Console, Effect, HashMap, Option } from "effect";
 import { Embedder } from "../../src/memory/embedding/embedder.ts";
 import { VectorIndex } from "../../src/memory/embedding/vector-index.ts";
 import { maxVectorK } from "../../src/memory/native-search/read-protocol.ts";
 import { MemorySearch, searchTerms } from "../../src/memory/search.ts";
+import { optionalProperty } from "../../src/optional-property.ts";
 import { appendRows, type Item, type Need, readRows, type RunRow, setFiles } from "./files.ts";
-import { nodeSeqs } from "./nodes.ts";
 
 /** Ids kept per item and run: the judge pools the top 20, scores read the top 20. */
 export const keptIds = 30;
-/** What the app search is asked for: more than kept, since later nodes are dropped. */
-const appLimit = 40;
-/** Per-channel depth asked of the native read; the vector channel is capped by the read. */
-export const channelDepth = 40;
 
 /** The lists' ids in turns, own project first: the app's merge of text and morph ranks. */
 export const alternate = (lists: ReadonlyArray<ReadonlyArray<string>>) =>
@@ -26,12 +21,12 @@ export const alternate = (lists: ReadonlyArray<ReadonlyArray<string>>) =>
     lists.flatMap((list) => list.slice(rank, rank + 1)),
   ).flat();
 
-/** One item's ranked ids per run, before dropping the nodes stored after the question. */
-type Ranked = ReadonlyArray<{
+/** One item's ranked ids in one run, or why the run could not search it. */
+interface Ranked {
   readonly run: string;
   readonly ids: Option.Option<ReadonlyArray<string>>;
   readonly failed?: string;
-}>;
+}
 
 export interface SearchRunsInput {
   readonly storage: string;
@@ -71,7 +66,8 @@ export const searchRuns = Effect.fn("searchSet.searchRuns")(function* ({
         query: item.query,
         projectId: need.projectId,
         crossProject: need.crossProject,
-        limit: appLimit,
+        limit: keptIds,
+        ...optionalProperty("beforeSeq", need.beforeSeq ?? undefined),
       })
       .pipe(
         Effect.map((result) => ({
@@ -101,9 +97,10 @@ export const searchRuns = Effect.fn("searchSet.searchRuns")(function* ({
             trigramTerms: grouped.trigram,
             shortTerms: grouped.short,
             morphQuery: item.query,
+            ...optionalProperty("beforeSeq", need.beforeSeq ?? undefined),
             vectorK: maxVectorK,
-            textK: channelDepth,
-            morphK: channelDepth,
+            textK: keptIds,
+            morphK: keptIds,
             textEnabled: true,
             morphEnabled: item.query.trim().length > 0,
             remainingMs: 2000,
@@ -123,7 +120,7 @@ export const searchRuns = Effect.fn("searchSet.searchRuns")(function* ({
           read,
         ),
       );
-      const ranked = (run: string, ids: ReadonlyArray<string>) =>
+      const ranked = (run: string, ids: ReadonlyArray<string>): Ranked =>
         Arr.match(scopes, {
           onEmpty: () => ({ run, ids: Option.none(), failed: "read-failed" }),
           onNonEmpty: () => ({ run, ids: Option.some(ids) }),
@@ -144,34 +141,25 @@ export const searchRuns = Effect.fn("searchSet.searchRuns")(function* ({
       ];
     });
 
-  /** The run rows of one item: ids stored after a recorded question are dropped. */
-  const rowsOf = (item: Item, need: Need, ranked: Ranked) =>
-    Effect.map(nodeSeqs(ranked.flatMap(({ ids }) => Option.getOrElse(ids, () => []))), (seqs) =>
-      ranked.map(({ run, ids, failed }) => {
-        const kept = Option.getOrElse(ids, () => []).filter((id) =>
-          Option.match(HashMap.get(seqs, id), {
-            onNone: () => false,
-            onSome: (seq) => need.beforeSeq === null || seq < need.beforeSeq,
-          }),
-        );
-        const row: RunRow =
-          failed === undefined
-            ? { item: item.item, ids: kept.slice(0, keptIds) }
-            : { item: item.item, ids: [], failed };
-        return { run, row };
-      }),
-    );
+  /** One run's row of an item. */
+  const rowOf = (item: Item, { ids, failed }: Ranked): RunRow =>
+    failed === undefined
+      ? { item: item.item, ids: Option.getOrElse(ids, () => []).slice(0, keptIds) }
+      : { item: item.item, ids: [], failed };
 
   const searched = yield* Effect.forEach(items, ({ item, need }) =>
     Effect.gen(function* () {
-      const ranked: Ranked = [
+      const ranked: ReadonlyArray<Ranked> = [
         ...(yield* Effect.forEach(Option.toArray(app), (name) => appRanked(item, need, name))),
         ...(channels ? yield* channelRanked(item, need) : []),
       ];
-      const rows = yield* rowsOf(item, need, ranked);
-      yield* Effect.forEach(rows, ({ run, row }) => appendRows(files.run(run))([row]), {
-        discard: true,
-      });
+      yield* Effect.forEach(
+        ranked,
+        (each) => appendRows(files.run(each.run))([rowOf(item, each)]),
+        {
+          discard: true,
+        },
+      );
     }),
   );
   yield* Console.log(`searched ${searched.length} items`);
