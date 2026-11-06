@@ -1,0 +1,25 @@
+# rerank
+
+## Overview
+
+검색 결과의 순서를 로컬 cross-encoder reranker로 다시 정하는 계층이다. 모델은 `nlpai-lab/KURE-Reranker-nano`(ModernBERT, 한국어·영어)다. 원본은 safetensors만 공개해서 ONNX로 export한 `CreeJee/KURE-Reranker-nano-ONNX`를 쓴다. 모델은 worker thread에서 WebGPU로 돈다(transformers.js, onnxruntime-node). `MemorySearch.find`는 `rerank`가 켜진 검색에서 seed의 순서를 이 reranker에 맡긴다.
+
+## Interface
+
+- `Reranker` — `Context.Service<Reranker, RerankerApi>`(키 `memory-agent/memory/rerank/reranker`).
+  - `Reranker.local`: 로컬 임베더가 gpu 모드일 때 `localGpu`이고, 아니면 `none`이다. CPU를 고른 사용자와 테스트·평가 임베더(runtime `other`)는 reranker가 없다.
+  - `Reranker.localGpu`: 임베더와 상관없이 WebGPU reranker를 띄운다. 평가가 사본 위에서 쓴다.
+  - `Reranker.none`: 언제나 None을 돌려준다.
+- `RerankerApi.score(query, texts)` — text마다 relevance 점수 하나를 순서대로 돌려준다(클수록 관련). 아직 적재 중이거나, 이 기기에서 돌지 않거나, 실패했거나, 예산을 넘기면 None이다.
+- `rerankModel` — 모델 id, 파일(`model_fp16`), 쌍당 token(192).
+- `RerankRpcs` (`Load`, `Score`) / `RerankWorkerData` / `RerankWorkerFailed` — 호스트와 `rerank-worker.ts` 사이의 RpcGroup 프로토콜, 시작 데이터, `stage: load|run|lost` 실패 타입.
+- `rerank-worker.ts` — worker thread 진입점. `runtimeWorker("rerank-worker")`로 실행되고 `RpcServer.layer(RerankRpcs, { concurrency: 1 })`을 띄운다.
+- 하위 디렉터리 없음.
+
+## Invariants
+
+- 모델은 layer를 만들 때 백그라운드로 적재한다. 처음 시작하면 모델(299 MB)을 `<storage>/models`에 내려받는다. 검색은 적재를 기다리지 않고, 그동안은 fused 순서를 쓴다.
+- WebGPU에서만 돈다. CPU에서는 한 검색의 batch가 몇 초씩 걸려 검색이 기다릴 수 있는 시간을 넘는다(docs/memory-search-measurements.md "rerank"). WebGPU에서 적재하지 못하면 앱을 다시 시작할 때까지 rerank를 끈다. worker를 잃어도(`lost`) 마찬가지다. 요청 하나의 실패(`run`)는 그 검색만 fused 순서로 둔다.
+- worker는 한 번에 요청 하나만 처리한다. ONNX 추론은 그 자리에서 중단할 수 없어서 batch는 끝까지 돈다. 검색은 점수를 2초(검색의 native read 예산)까지 기다린다. 넘기면 아직 worker를 기다리던 요청은 버리고, 돌던 batch는 혼자 끝난다.
+- 유휴 worker는 `unref` 상태이고, 작업 중에만 `ref`한다. 모델의 `dispose()`는 worker Scope finalizer에 등록된다.
+- worker는 `env.allowLocalModels = false`로 동작한다. 첫 실행(짧은 쌍 하나)이 성공해야 적재로 본다.

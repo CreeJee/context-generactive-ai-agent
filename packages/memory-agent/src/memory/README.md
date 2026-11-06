@@ -17,8 +17,8 @@
 - `Edge` / `EdgeKind` / `EdgeOrigin` / `edgeWeights` / `NodeLink` — edge Schema, 종류(calls·returns·reply·touches·next·corrects·retracts·about·related)와 출처(structure·llm), 종류별 탐색 신뢰 가중치, writer가 선언할 수 있는 구조 링크
 - `Graph` — 그래프 탐색 서비스(`Graph.layer`, 키 `memory-agent/memory/graph`). `traverse(seeds, options)`는 utility 우선으로 바깥쪽을 탐색하고(`beforeSeq`가 있으면 그 seq 전에 저장된 노드만 방문), `trace(id)`는 원인 사슬과 그 사슬을 정정·철회한 노드(`challengedBy`)를 돌려준다
 - `GraphReadFailed` / `Hop` / `Visit` / `TraverseOptions` / `TraverseResult` / `Provenance` — 그래프 읽기 실패 오류와 탐색·출처 결과 타입
-- `MemorySearch` — 이전 메시지를 찾는 서비스(`MemorySearch.layer`, `MemorySearch.tuned(partial)`). 벡터·텍스트 매치를 시드로 그래프를 탐색한다. `find`, `allowedProjects`를 제공한다
-- `FindInput` / `Match` / `FindResult` / `SkippedRead` / `NativeMemorySearchFailed` — 검색 입력(`beforeSeq`: 그 seq 전에 저장된 노드만 찾고 그래프로 닿는다. 지난 발언을 해석할 때 쓴다. 찾은 노드의 정정 표시는 지금 기준)과 결과, 실패해도 건너뛰고 진행한 읽기의 기록(reason·stage·elapsedMs), 네이티브 검색 실패 오류
+- `MemorySearch` — 이전 메시지를 찾는 서비스(`MemorySearch.layer`, `MemorySearch.tuned(partial)`). 벡터·텍스트 매치를 시드로 그래프를 탐색한다. `rerank`가 켜진 검색은 채널마다 상위 10개를 번갈아 합친 후보를 `Reranker`로 다시 줄 세우고, 그 후보들의 fused 점수를 새 순서대로 다시 나눠 준다(점수 크기는 그대로라 그래프 탐색의 utility 하한이 같은 뜻이다). `find`, `allowedProjects`를 제공한다
+- `FindInput` / `Match` / `FindResult` / `SkippedRead` / `NativeMemorySearchFailed` — 검색 입력(`beforeSeq`: 그 seq 전에 저장된 노드만 찾고 그래프로 닿는다. 지난 발언을 해석할 때 쓴다. 찾은 노드의 정정 표시는 지금 기준. `rerank`: reranker가 돌면 상위 결과를 그 순서로 둔다. find_memory, compaction의 기억 보충, 외부 agent의 기억 단서가 켜고, 해석 후보 검색은 끈다)과 결과, 실패해도 건너뛰고 진행한 읽기의 기록(reason·stage·elapsedMs), 네이티브 검색 실패 오류
 - `fuseRanks` / `searchTerms` / `namesSomethingExactly` / `searchTuning` / `SearchTuning` — RRF 순위 병합, 검색어 분리(3자 이상은 lexical 색인의 trigram 구절, 두 글자는 그 글자로 시작하거나 끝나는 gram), 정확한 이름(에러 코드·경로·식별자·버전·해시·포트)이 든 질의인지 판별, 검색 튜닝 값
 - `readStructuredEvidence` — `Effect.fn("Memory.readStructuredEvidence")`. 노드 원문 페이지에 출처·변경·판정(`evidenceContext`)을 붙여 돌려준다. 노드가 없거나 범위 밖이면 null
 - `traceStructuredEvidence` / `EvidenceReadFailed` — 같은 범위·권한 규칙으로 출처 사슬, 적용된 변경(사유 포함), 미확정 변경을 요약한다. 저장소 읽기 실패는 stage만 담은 `EvidenceReadFailed`가 된다
@@ -37,6 +37,7 @@
 - `refsInArguments` — tool call JSON 인자에서 파일·URL 참조를 뽑는다
 - [`embedding`](./embedding/README.md) — 모델 표(`models.ts`)의 로컬 임베딩 모델(`Embedder`), 토큰 창 청킹, turbovec 위의 `VectorIndex`, nodes와 벡터 색인을 맞추는 `Indexer`
 - [`native-search`](./native-search/README.md) — turbovec 벡터 인덱스와 SQLite 읽기 세션을 전용 worker thread에 가두는 `NativeOwner`
+- [`rerank`](./rerank/README.md) — 검색 결과를 다시 줄 세우는 로컬 cross-encoder `Reranker`(KURE-Reranker-nano, WebGPU worker)
 
 ## Invariants
 
@@ -54,7 +55,7 @@
 - 해석 프롬프트는 발화 안의 텍스트를 데이터로 다루고, 그 안의 지시를 따르지 않는다. corrects·retracts는 user 발화만 할 수 있다
 - API 사용량(`memory-interpretation`)은 세션이 있는 발화에 대해서만 기록한다
 - `MemoryPromotionRejected`의 message는 reason별로 고정되어 있고 요청 텍스트를 담지 않는다. 승격 거부는 그대로 전달되고, 그 밖의 저장소·코덱 실패만 `KnowledgeStoreFailed`로 감싼다
-- Layer 요구: `Graph`와 `Interpretations`에는 `SqlClient`가 필요하다. `Interpreter`에는 `SqlClient`, `Nodes`, `MemorySearch`, `Interpretations`, `ActiveProvider`, `ApiUsage`, `SecureRandom.SecureRandom`이 필요하다. `KnowledgePromotions`에는 `SecureRandom.SecureRandom`, `SqlClient`, `Nodes`가 필요하다. 증거 함수에는 `Nodes`, `Graph`, `Interpretations`, `MemorySearch`가 필요하다
+- Layer 요구: `Graph`와 `Interpretations`에는 `SqlClient`가 필요하다. `Interpreter`에는 `SqlClient`, `Nodes`, `MemorySearch`, `Interpretations`, `ActiveProvider`, `ApiUsage`, `SecureRandom.SecureRandom`이 필요하다. `KnowledgePromotions`에는 `SecureRandom.SecureRandom`, `SqlClient`, `Nodes`가 필요하다. 증거 함수에는 `Nodes`, `Graph`, `Interpretations`, `MemorySearch`가 필요하다. `MemorySearch`에는 `Reranker`가 필요하다
 
 ## Side Effects
 

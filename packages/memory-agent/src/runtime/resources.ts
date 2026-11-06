@@ -75,12 +75,13 @@ export const requireRuntime = <Name extends keyof RuntimePackages>(name: Name) =
   );
 
 /**
- * Worker scripts. The embedder is a plain `.mjs` file that loads its runtime package; the
- * import and redaction workers are TypeScript in a checkout and bundled into one `.mjs` each for
- * the executable.
+ * Worker scripts. The embedder and the reranker are plain `.mjs` files that load their runtime
+ * package; the import and redaction workers are TypeScript in a checkout and bundled into one
+ * `.mjs` each for the executable.
  */
 export type RuntimeWorker =
   | "embed-worker"
+  | "rerank-worker"
   | "import-worker"
   | "redact-worker"
   | "native-search-worker"

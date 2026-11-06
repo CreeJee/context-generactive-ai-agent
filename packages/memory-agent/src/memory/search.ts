@@ -13,6 +13,7 @@ import {
 } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { Embedder } from "./embedding/embedder.ts";
+import { Reranker } from "./rerank/reranker.ts";
 import { VectorIndex } from "./embedding/vector-index.ts";
 import { changeAuthoritySql } from "./changes.ts";
 import { Graph, type Hop } from "./graph.ts";
@@ -35,6 +36,13 @@ export interface FindInput {
    * stored, as interpreting a past statement needs. The matches' corrections are still today's.
    */
   readonly beforeSeq?: number;
+  /**
+   * Orders the top matches by the local reranker when it runs. Measured on find_memory questions
+   * and on recall questions (recent user statements joined, as compaction's retrieval asks).
+   * Interpretation keeps the fused order: its background searches would hold the worker that the
+   * user's searches wait for.
+   */
+  readonly rerank?: boolean;
 }
 
 export interface Match {
@@ -148,6 +156,29 @@ export function fuseRanks(input: {
   const best = weights.reduce((sum, weight) => sum + weight, 0) / (fusionK + 1);
   return MutableHashMap.fromIterable([...scores].map(([id, score]) => [id, score / best]));
 }
+
+/**
+ * The seeds with the fused scores of `ranked` handed out again in its order: the reranker decides
+ * the order among its candidates, and the fusion keeps the scale the graph walk's utility floor
+ * reads.
+ */
+function reorderSeeds(
+  seeds: MutableHashMap.MutableHashMap<string, number>,
+  ranked: readonly string[],
+): MutableHashMap.MutableHashMap<string, number> {
+  const scores = ranked
+    .map((id) => Option.getOrElse(MutableHashMap.get(seeds, id), () => 0))
+    .toSorted((left, right) => right - left);
+  const reordered = MutableHashMap.fromIterable(seeds);
+  ranked.forEach((id, index) => MutableHashMap.set(reordered, id, scores[index]!));
+  return reordered;
+}
+
+/**
+ * Ids the reranker scores from the top of each channel's list, in turns: the setting measured
+ * (docs/memory-search-measurements.md).
+ */
+const rerankDepth = 10;
 
 /** The lists' ids in turns: every list's first, then every list's second, and so on. */
 const alternate = (lists: readonly (readonly string[])[]) =>
@@ -291,6 +322,7 @@ const make = (tuning: SearchTuning) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const embedder = yield* Embedder;
+    const reranker = yield* Reranker;
     const vectors = yield* VectorIndex;
     const graph = yield* Graph;
     const authority = sql.literal(changeAuthoritySql("n", "t"));
@@ -365,6 +397,52 @@ const make = (tuning: SearchTuning) =>
             WHERE embedder = ${embedder.identity} AND vector_id IN ${sql.in(vectorIds)}`.pipe(
             Effect.flatMap(Schema.decodeUnknownEffect(ChunkSpans)),
           );
+    const NodeText = Schema.Struct({ id: Schema.String, text: Schema.String });
+    const nodeTexts = SqlSchema.findAll({
+      Request: Schema.Array(Schema.String),
+      Result: NodeText,
+      execute: (ids) => sql`SELECT id, text FROM nodes WHERE id IN ${sql.in(ids)}`,
+    });
+    /**
+     * The seeds reordered by the reranker over each channel's first ids; the fused order when the
+     * reranker does not answer.
+     */
+    const rerankSeeds = Effect.fn("MemorySearch.rerank")(function* (
+      query: string,
+      seeds: MutableHashMap.MutableHashMap<string, number>,
+      lists: readonly (readonly string[])[],
+    ) {
+      const candidates = EffectArray.dedupe(
+        alternate(lists.map((list) => list.slice(0, rerankDepth))),
+      );
+      if (candidates.length === 0) return seeds;
+      const textOf = new Map(
+        (yield* storageRead(nodeTexts(candidates))).map((row) => [row.id, row.text] as const),
+      );
+      const present = candidates.flatMap((id) =>
+        Option.toArray(Option.map(Option.fromNullishOr(textOf.get(id)), (text) => ({ id, text }))),
+      );
+      const scores = yield* reranker.score(
+        query,
+        present.map((candidate) => candidate.text),
+      );
+      yield* Effect.annotateCurrentSpan({
+        candidates: present.length,
+        reranked: Option.isSome(scores),
+      });
+      return Option.match(scores, {
+        onNone: () => seeds,
+        onSome: (scores) =>
+          reorderSeeds(
+            seeds,
+            present
+              .map(({ id }, index) => ({ id, score: scores[index] ?? Number.NEGATIVE_INFINITY }))
+              .toSorted((left, right) => right.score - left.score)
+              .map(({ id }) => id),
+          ),
+      });
+    });
+
     const projectName = (projectId: string) =>
       storageRead(
         Effect.map(
@@ -578,7 +656,7 @@ const make = (tuning: SearchTuning) =>
         // The vector list is always full, related or not. For a query that names something
         // exactly it would outvote the text match, so the text ranking goes first and counts more.
         const morph = byMorph.length > 0 ? [byMorph] : [];
-        const seeds =
+        const fused =
           tuning.text && tuning.exactFirst && namesSomethingExactly(input.query)
             ? fuseRanks({
                 lists: [byText, ...morph, byVector],
@@ -592,6 +670,10 @@ const make = (tuning: SearchTuning) =>
                   ...morph.map(() => tuning.morphWeight),
                 ],
               });
+        const seeds =
+          input.rerank === true
+            ? yield* rerankSeeds(input.query, fused, [byVector, byMorph, byText])
+            : fused;
         const vectorIds = HashSet.fromIterable(byVector);
 
         const walk = yield* graph.traverse(seeds, {

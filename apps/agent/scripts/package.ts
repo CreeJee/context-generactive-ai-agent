@@ -407,6 +407,10 @@ const program = Effect.gen(function* () {
       source: join(memoryAgent, "src", "memory", "embedding", "embed-worker.ts"),
       packages: false,
     },
+    "rerank-worker": {
+      source: join(memoryAgent, "src", "memory", "rerank", "rerank-worker.ts"),
+      packages: false,
+    },
   } as const;
   yield* Effect.forEach(
     Object.entries(bundledWorkers),

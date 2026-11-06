@@ -314,7 +314,7 @@ Lindera 필드 둘을 더한 색인은 1,120 MB, 만드는 데 196 s(그중 Lind
 
 \* 일부 item이 ONNX export(CPU를 많이 씀)와 겹쳤다.
 
-- 모델: `Horizon-Labs/multilingual-reranker-small`(ModernBERT, hidden 384, ONNX 공개), `nlpai-lab/KURE-Reranker-nano`(ModernBERT, hidden 768, 한국어·영어). KURE는 ONNX가 없어 optimum-onnx로 export하고 fp16으로 바꿨다(298 MB). 둘 다 Apache-2.0, 쌍마다 logit 하나.
+- 모델: `Horizon-Labs/multilingual-reranker-small`(ModernBERT, hidden 384, ONNX 공개), `nlpai-lab/KURE-Reranker-nano`(ModernBERT, hidden 768, 한국어·영어). KURE는 ONNX가 없어 optimum-onnx로 export하고 fp16으로 바꿨다(298 MB). 둘 다 Apache-2.0, 쌍마다 logit 하나. 그 export는 `CreeJee/KURE-Reranker-nano-ONNX`에 올렸고 앱이 거기서 받는다. 허브에서 받은 fp16 파일의 점수는 로컬 export와 같다.
 - rerank는 모든 slice에서 앱보다 낫다. item별 nDCG@10은 KURE fp16 192가 앱보다 490개 낫고 164개 못하다.
 - Horizon은 영어·find에서 KURE와 비슷하지만 한국어와 recall(사용자 문장 세 개를 이은 긴 질문)에서 낮다. KURE를 쓴다.
 - 쌍당 token을 줄이면 빨라지고 품질이 떨어진다(256→192 −0.018, 192→128 −0.033). fp16은 fp32와 점수가 거의 같고(합성 쌍 logit 차 0.03 미만) WebGPU에서 1.5배 빠르다.

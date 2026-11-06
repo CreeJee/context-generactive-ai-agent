@@ -45,6 +45,7 @@
     "./package.json": "./package.json",
     "./acp": "./src/acp/index.ts",
     "./embed-worker": "./src/memory/embedding/embed-worker.ts",
+    "./rerank-worker": "./src/memory/rerank/rerank-worker.ts",
     "./import-worker": "./src/imports/worker.ts",
     "./redact-worker": "./src/secrets/redact-worker.ts",
     "./native-search-worker": "./src/memory/native-search/worker.ts",

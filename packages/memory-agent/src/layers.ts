@@ -61,6 +61,7 @@ import { McpServers } from "./mcp/servers.ts";
 import { Skills } from "./skills/skills.ts";
 import { Subagents } from "./subagents/subagents.ts";
 import { Embedder } from "./memory/embedding/embedder.ts";
+import { Reranker } from "./memory/rerank/reranker.ts";
 import { Indexer } from "./memory/embedding/indexer.ts";
 import { EmbeddingSetup } from "./memory/embedding/setup.ts";
 import { VectorIndex } from "./memory/embedding/vector-index.ts";
@@ -126,6 +127,8 @@ export interface MemoryAgentLayerOptions {
   readonly compatibleSettings?: Layer.Layer<OpenAICompatibleSettings, never, GlobalConfig>;
   /** Defaults to the local embedding model; tests pass a deterministic one. */
   readonly embedder?: Layer.Layer<Embedder, never, StorageRoot | GlobalConfig>;
+  /** Defaults to the local reranker where the local embedder runs on the GPU. */
+  readonly reranker?: Layer.Layer<Reranker, never, Embedder | StorageRoot>;
   /** Provider-neutral registry override for tests. Production uses subscription providers. */
   readonly providerRegistry?: Layer.Layer<
     ProviderRegistry,
@@ -362,9 +365,10 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
   );
   const retrieval = Layer.mergeAll(
     Indexer.layer,
-    options.searchTuning === undefined
+    (options.searchTuning === undefined
       ? MemorySearch.layer
-      : MemorySearch.tuned(options.searchTuning),
+      : MemorySearch.tuned(options.searchTuning)
+    ).pipe(Layer.provideMerge(options.reranker ?? Reranker.local)),
     PermissionClassifier.layer,
     WorkflowRules.layer,
     QueueDelivery.layer,

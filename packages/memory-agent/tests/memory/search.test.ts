@@ -4,6 +4,7 @@ import { EmbedderRuntime, Embedder, EmbeddingError } from "../../src/memory/embe
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { VectorIndex } from "../../src/memory/embedding/vector-index.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
+import { Reranker } from "../../src/memory/rerank/reranker.ts";
 import { Recorder } from "../../src/memory/record.ts";
 import { type FindInput, MemorySearch, searchTuning } from "../../src/memory/search.ts";
 import { Projects } from "../../src/projects/projects.ts";
@@ -434,6 +435,36 @@ testAgent({ embedder: brokenEmbedder })("MemorySearch.find with a failing embedd
       // The two statements; tool calls and results are never embedded.
       expect(result.unindexed).toBe(2);
       expect(result.matches[0]).toMatchObject({ id: earlier.decision.id, foundBy: "text" });
+    }),
+  );
+});
+
+/** Scores a text 1 when it holds the answer's marker, 0 otherwise. */
+const markerReranker = Layer.succeed(Reranker, {
+  score: (_query, texts) =>
+    Effect.succeedSome(texts.map((text) => (text.includes("정답") ? 1 : 0))),
+});
+
+testAgent({ reranker: markerReranker })("MemorySearch.find with a reranker", (it) => {
+  it.effect("reorders the matches by the reranker only when asked, keeping the fused scale", () =>
+    Effect.gen(function* () {
+      const { project, session } = yield* freshProject;
+      const nodes = yield* Nodes;
+      const at = { projectId: project.id, sessionId: session.id, kind: "user" as const };
+      yield* nodes.append({ ...at, text: "검색 설정 이야기를 했다" });
+      yield* nodes.append({ ...at, text: "검색 설정 이야기를 또 했다" });
+      const answer = yield* nodes.append({ ...at, text: "검색 설정의 정답" });
+      yield* indexAll;
+      const query = { query: "검색 설정 이야기", projectId: project.id, crossProject: false };
+      const fused = yield* find(query);
+      // The answer lacks a query word, so the fused order puts another statement first.
+      expect(fused.matches[0]?.id).not.toBe(answer.id);
+      const reranked = yield* find({ ...query, rerank: true });
+      expect(reranked.matches[0]?.id).toBe(answer.id);
+      expect(reranked.matches[0]?.utility).toBe(fused.matches[0]?.utility);
+      expect(reranked.matches.map((match) => match.id).toSorted()).toEqual(
+        fused.matches.map((match) => match.id).toSorted(),
+      );
     }),
   );
 });

@@ -758,6 +758,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             projectId: project.id,
             limit: 16,
             crossProject: (yield* recallScope).crossProject,
+            rerank: true,
           });
           // Hybrid search's order is relevance-first; preserve it inside each session-preference tier.
           const candidates = found.matches
@@ -1003,7 +1004,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     userNodeId: string,
     crossProject: boolean,
   ) =>
-    search.find({ query: text, projectId: project.id, limit: 6, crossProject }).pipe(
+    search.find({ query: text, projectId: project.id, limit: 6, crossProject, rerank: true }).pipe(
       Effect.map((found) => {
         const leads = found.matches
           .filter((match) => match.id !== userNodeId && match.kind !== "topic")

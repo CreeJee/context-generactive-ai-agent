@@ -4237,3 +4237,16 @@
   - native read는 `beforeSeq`로 벡터 후보 SQL에 `n.seq < ?`를 더하고, lexical 수집기는 seq fast field로 거른다. BM25 통계는 색인 전체 기준이다.
   - 찾은 노드의 정정·철회 표시(`supersededBy`, `latest`)는 지금 기준으로 둔다. 쓰는 곳(interpreter, 평가)은 id만 본다.
   - interpreter는 발언의 seq를 넘긴다. 평가 pool은 사후 필터를 지우고 `beforeSeq`로 검색한다. 지금까지의 app·vector·text·morph run은 다시 만들어야 한다.
+
+## 검색 결과를 로컬 reranker로 다시 줄 세운다 (2026-11-06)
+
+- 계기: 평가 세트에서 cross-encoder rerank가 앱 검색의 nDCG@10을 0.400에서 0.581로 올렸다(KURE-Reranker-nano fp16, 쌍당 192 token, WebGPU p50 965 ms·p95 1,152 ms, docs/memory-search-measurements.md "rerank"). find 질문과 recall(사용자 문장 세 개를 이은 질문) 모두 올랐다.
+- 모델: `nlpai-lab/KURE-Reranker-nano`(Apache-2.0)다. 원본은 safetensors만 공개한다. optimum으로 ONNX를 export하고 fp16으로 바꾼 파일을 사용자 계정의 공개 repo `CreeJee/KURE-Reranker-nano-ONNX`에 올렸고, 앱은 거기서 내려받는다.
+  - 런타임은 임베더와 같은 transformers.js·onnxruntime-node WebGPU다. Windows는 D3D12, Linux는 Vulkan, Mac은 Metal로 GPU 회사와 상관없이 돈다. safetensors를 바로 읽는 candle은 GPU backend가 CUDA·Metal뿐이라 Windows의 AMD·Intel GPU에서 CPU로만 돈다. 사용자는 Windows에서 안 되는 것을 받아들이지 않았다.
+  - `KURE-Reranker-base`는 Qwen3 1.7B급(3.4 GB)에 ONNX도 없어 검색 예산에 들지 않는다. `KURE-v3`는 임베딩 모델이다.
+- 동작:
+  - 로컬 임베더가 gpu 모드일 때만 켠다. CPU에서는 batch가 2.5–6 s라 예산을 넘는다. 사용자가 임베더에 CPU를 고르면 reranker도 GPU를 쓰지 않는다.
+  - 모델은 시작할 때 백그라운드로 내려받고 적재한다. 검색은 기다리지 않고, 준비 전에는 fused 순서를 쓴다. WebGPU 적재에 실패하거나 worker를 잃으면 다시 시작할 때까지 끈다.
+  - 후보는 vector·morph·text 채널의 상위 10개를 번갈아 합친 것이다(측정한 설정). reranker 순서대로 그 후보들의 fused 점수를 다시 나눠 주므로 그래프 탐색의 utility 하한은 그대로다.
+  - find_memory, compaction의 기억 보충(`retrievalAppendix`, 최근 사용자 문장으로 찾는다), 외부 agent의 기억 단서(`externalMemoryLeads`)가 켠다. 해석 후보 검색은 끈다. 백그라운드에서 대량으로 돌아 사용자 검색이 기다리는 worker를 차지하고, 발언끼리 견주는 질의는 측정하지 않았다.
+  - 검색은 점수를 2초(native read 예산)까지 기다린다. 넘기면 fused 순서로 간다. ONNX batch는 중단할 수 없어 worker에서 끝까지 돈다.

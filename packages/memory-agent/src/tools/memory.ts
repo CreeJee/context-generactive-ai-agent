@@ -162,7 +162,7 @@ const memoryReads = <E>(
   return {
     findMemory: ({ query }: typeof findMemoryInput.Type) =>
       Effect.flatMap(MemorySearch, (search) =>
-        search.find({ query, projectId, crossProject }),
+        search.find({ query, projectId, crossProject, rerank: true }),
       ).pipe(Effect.tap(found)),
     readEvidence: ({ id, offset }: typeof readEvidenceInput.Type) =>
       Effect.map(
