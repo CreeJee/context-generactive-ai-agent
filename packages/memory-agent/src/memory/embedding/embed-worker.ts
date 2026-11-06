@@ -1,17 +1,34 @@
 import * as NodeWorkerRunner from "@effect/platform-node/NodeWorkerRunner";
-import { Array as Arr, Cause, Effect, Layer, Option, Result, Schema, Scope, Stream } from "effect";
+import {
+  Array as Arr,
+  Cause,
+  Effect,
+  Layer,
+  Option,
+  PubSub,
+  Result,
+  Schema,
+  Scope,
+  Stream,
+} from "effect";
 import { RpcServer } from "effect/rpc";
 import { workerFailedSpansLayer } from "../../runtime/failed-spans.ts";
 import { nativeFailure, nativePromise, runNativeEffect } from "../../runtime/native-effect.ts";
 import { ignoreLogged } from "../../runtime/logged-failures.ts";
 import { ChunkingFailed, chunkText } from "./chunks.ts";
-import { EmbeddingRpcs, EmbeddingWorkerData, EmbeddingWorkerFailed } from "./embedding-rpc.ts";
+import { downloadProgress } from "./download-progress.ts";
+import {
+  EmbeddingRpcs,
+  EmbeddingWorkerData,
+  EmbeddingWorkerFailed,
+  LoadEvent,
+} from "./embedding-rpc.ts";
 import type { EmbeddingOutput } from "./models.ts";
 // The embedding model in a worker thread: onnxruntime-node runs a session synchronously, so on the
 // main thread every batch would hold up the requests the server is answering meanwhile.
 import { createRequire } from "node:module";
 import { workerData } from "node:worker_threads";
-import type { Tensor } from "@huggingface/transformers";
+import type { ProgressCallback, ProgressInfo, Tensor } from "@huggingface/transformers";
 
 // The CommonJS build, resolved next to this file: in the package in a checkout, in the runtime
 // folder in the executable.
@@ -22,11 +39,18 @@ const failure = (stage: EmbeddingWorkerFailed["stage"]) => (cause: unknown) =>
   EmbeddingWorkerFailed.make({ stage, reason: String(nativeFailure(Cause.fail(cause)).cause) });
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-const load = Effect.fn("EmbeddingWorker.load")(function* (setup: EmbeddingWorkerData) {
+const load = Effect.fn("EmbeddingWorker.load")(function* (
+  setup: EmbeddingWorkerData,
+  progress_callback: ProgressCallback,
+) {
   env.cacheDir = setup.cacheDir;
   env.allowLocalModels = false;
-  const tokenizer = yield* nativePromise(() => AutoTokenizer.from_pretrained(setup.modelId));
-  const config = yield* nativePromise(() => AutoConfig.from_pretrained(setup.modelId));
+  const tokenizer = yield* nativePromise(() =>
+    AutoTokenizer.from_pretrained(setup.modelId, { progress_callback }),
+  );
+  const config = yield* nativePromise(() =>
+    AutoConfig.from_pretrained(setup.modelId, { progress_callback }),
+  );
   // A text-only load: without these configs the model loads no vision or audio encoder.
   if (setup.textOnly) Object.assign(config, { vision_config: null, audio_config: null });
   /** The model on `device`, once it has run; one that loaded and then failed is disposed of. */
@@ -38,6 +62,7 @@ const load = Effect.fn("EmbeddingWorker.load")(function* (setup: EmbeddingWorker
         model_file_name: setup.modelFileName,
         device,
         session_options: { enableCpuMemArena: false },
+        progress_callback,
       }),
     ).pipe(
       Effect.flatMap((loaded) =>
@@ -113,8 +138,12 @@ const handlers = EmbeddingRpcs.toLayer(
     // The worker's scope disposes of the model when the host closes the worker, so the
     // onnxruntime session is released before the thread exits rather than left to process exit.
     const scope = yield* Scope.Scope;
+    // transformers.js reports a load's progress synchronously; each report goes on to the `Load`
+    // stream as it is.
+    const reports = yield* PubSub.unbounded<ProgressInfo>();
+    const progress: ProgressCallback = (report) => PubSub.publishUnsafe(reports, report);
     const model = yield* Effect.cached(
-      load(setup).pipe(
+      load(setup, progress).pipe(
         Effect.tap(({ model: loaded, device }) =>
           Scope.addFinalizer(
             scope,
@@ -129,7 +158,17 @@ const handlers = EmbeddingRpcs.toLayer(
     const run = <A, E>(work: (loaded: LoadedModel) => Effect.Effect<A, E>) =>
       Effect.flatMap(model, (loaded) => work(loaded).pipe(Effect.mapError(failure("run"))));
     return EmbeddingRpcs.of({
-      Load: () => Effect.map(model, (loaded) => loaded.device),
+      Load: () =>
+        downloadProgress(Stream.fromPubSub(reports)).pipe(
+          Stream.map((each) => LoadEvent.cases.downloading.make(each)),
+          // Ends when the model has loaded, with its device.
+          Stream.merge(
+            Stream.fromEffect(
+              Effect.map(model, (loaded) => LoadEvent.cases.loaded.make({ device: loaded.device })),
+            ),
+            { haltStrategy: "right" },
+          ),
+        ),
       CountTokens: ({ texts }) =>
         run((loaded) =>
           Effect.try(() =>

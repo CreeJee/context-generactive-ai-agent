@@ -1,15 +1,16 @@
 import * as NodeWorkerRunner from "@effect/platform-node/NodeWorkerRunner";
-import { Cause, Effect, Layer, Schema, Scope } from "effect";
+import { Cause, Effect, Layer, PubSub, Schema, Scope, Stream } from "effect";
 import { RpcServer } from "effect/rpc";
 import { workerFailedSpansLayer } from "../../runtime/failed-spans.ts";
 import { nativeFailure, nativePromise, runNativeEffect } from "../../runtime/native-effect.ts";
 import { ignoreLogged } from "../../runtime/logged-failures.ts";
-import { RerankRpcs, RerankWorkerData, RerankWorkerFailed } from "./rerank-rpc.ts";
+import { downloadProgress } from "../embedding/download-progress.ts";
+import { RerankLoadEvent, RerankRpcs, RerankWorkerData, RerankWorkerFailed } from "./rerank-rpc.ts";
 // The reranker in a worker thread: onnxruntime-node runs a session synchronously, so on the main
 // thread a batch would hold up the requests the server is answering meanwhile.
 import { createRequire } from "node:module";
 import { workerData } from "node:worker_threads";
-import type { Tensor } from "@huggingface/transformers";
+import type { ProgressCallback, ProgressInfo, Tensor } from "@huggingface/transformers";
 
 // The CommonJS build, resolved next to this file: in the package in a checkout, in the runtime
 // folder in the executable.
@@ -53,10 +54,15 @@ const score = Effect.fn("RerankWorker.score")(function* (
 });
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-const load = Effect.fn("RerankWorker.load")(function* (setup: RerankWorkerData) {
+const load = Effect.fn("RerankWorker.load")(function* (
+  setup: RerankWorkerData,
+  progress_callback: ProgressCallback,
+) {
   env.cacheDir = setup.cacheDir;
   env.allowLocalModels = false;
-  const tokenizer = yield* nativePromise(() => AutoTokenizer.from_pretrained(setup.modelId));
+  const tokenizer = yield* nativePromise(() =>
+    AutoTokenizer.from_pretrained(setup.modelId, { progress_callback }),
+  );
   // WebGPU only: on the CPU a read's batch takes seconds, past the time a search can wait.
   const model = yield* nativePromise(() =>
     AutoModelForSequenceClassification.from_pretrained(setup.modelId, {
@@ -64,6 +70,7 @@ const load = Effect.fn("RerankWorker.load")(function* (setup: RerankWorkerData) 
       model_file_name: setup.modelFileName,
       device: "webgpu",
       session_options: { enableCpuMemArena: false },
+      progress_callback,
     }),
   );
   const loaded = { tokenizer, model };
@@ -88,8 +95,12 @@ const handlers = RerankRpcs.toLayer(
     // Loaded once per worker. The worker's scope disposes of the model when the host closes the
     // worker, so the onnxruntime session is released before the thread exits.
     const scope = yield* Scope.Scope;
+    // transformers.js reports a load's progress synchronously; each report goes on to the `Load`
+    // stream as it is.
+    const reports = yield* PubSub.unbounded<ProgressInfo>();
+    const progress: ProgressCallback = (report) => PubSub.publishUnsafe(reports, report);
     const model = yield* Effect.cached(
-      load(setup).pipe(
+      load(setup, progress).pipe(
         Effect.tap(({ model: loaded }) =>
           Scope.addFinalizer(
             scope,
@@ -100,7 +111,14 @@ const handlers = RerankRpcs.toLayer(
       ),
     );
     return RerankRpcs.of({
-      Load: () => Effect.asVoid(model),
+      Load: () =>
+        downloadProgress(Stream.fromPubSub(reports)).pipe(
+          Stream.map((each) => RerankLoadEvent.cases.downloading.make(each)),
+          // Ends when the model has loaded.
+          Stream.merge(Stream.fromEffect(Effect.as(model, RerankLoadEvent.cases.loaded.make({}))), {
+            haltStrategy: "right",
+          }),
+        ),
       Score: ({ query, texts }) =>
         Effect.flatMap(model, (loaded) =>
           score(loaded, query, texts, setup).pipe(Effect.mapError(failure("run"))),

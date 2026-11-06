@@ -21,7 +21,10 @@ memory-agent의 임베딩 계층이다. 모델 표(`models.ts`)에서 고른 로
 - `ModelSession` — 실행 중인 모델 워커 하나의 인터페이스(device, countTokens, embed, chunk, terminate, busy)
 - `modelWorker(cacheDir, setup, connect?)` — 첫 요청 때 워커를 띄워 `ScopedRef`에 유지하는 세션 관리자. 테스트는 `connect`로 세션을 주입한다
 - `checkGpu(storageRoot)` — gpu 모드의 모델 파일이 WebGPU에서 로드·실행되는지 별도 워커로 확인한다. 설정 화면에서 확인을 누를 때 `setup.ts`가 호출한다
-- `EmbeddingRpcs` (`Load`, `CountTokens`, `Embed`, `Chunk`) — 호스트와 embed-worker 사이의 RpcGroup 프로토콜
+- `EmbeddingRpcs` (`Load`, `CountTokens`, `Embed`, `Chunk`) — 호스트와 embed-worker 사이의 RpcGroup 프로토콜. `Load`는 stream이다. 모델 파일을 내려받는 동안 `LoadEvent.downloading{loaded, total}`을 보내고, 적재가 끝나면 `loaded{device}`를 보내고 끝난다
+- `downloadProgress(reports)` — transformers.js progress callback이 받는 `ProgressInfo` stream을 내려받는 파일들의 byte 합으로 바꾼다. 정수 percent가 바뀔 때만 내보낸다. embed-worker와 rerank-worker가 쓴다
+- `ModelDownloads` / `ModelDownloads.layer` / `ModelDownloads.report(purpose, model)` / `DownloadReport` — 로컬 모델 워커가 보고한 다운로드 진행을 모아 두는 서비스. `report`는 서비스가 없으면(테스트·평가) 아무 데도 기록하지 않는 `untrackedDownload`를 준다
+- `DownloadProgress` / `ModelDownload` — 내려받는 byte 합 `{loaded, total}`과, 거기에 용도(`embedding`/`rerank`)와 모델 id를 붙인 Schema(`contracts.ts`)
 - `EmbeddingWorkerData` / `EmbeddingDevice` / `EmbeddingWorkerFailed` — 워커 시작 데이터 스키마(모델 id, 파일, `output`, `textOnly`, maxTokens, 장치 순서), `cpu`/`webgpu` 장치(`contracts.ts`), `stage: load|run|lost` 실패 타입
 - `embed-worker.ts` — 워커 스레드 진입점. `runtimeWorker("embed-worker")`로 실행되고 `RpcServer.layer(EmbeddingRpcs, { concurrency: 1 })`을 띄운다
 - `ChunkSpan` / `chunkPolicy` / `chunkVectorIdFloor` / `ChunkingFailed` / `chunkText` — UTF-16 offset span 스키마, 512토큰·128 overlap 정책(version 1), chunk vector id 하한 2^52, 청킹 실패, 이분 탐색 청킹
@@ -31,7 +34,7 @@ memory-agent의 임베딩 계층이다. 모델 표(`models.ts`)에서 고른 로
 - `Indexer` / `Indexer.layer` — nodes 테이블과 벡터 색인을 맞춘다. `pending`, `indexBatch`, `indexAll`, `exclusive`, lexical 기록 반영 `lexicalBatch`/`lexicalAll`/`lexicalUpTo`, budget 제한 색인 메서드를 제공한다
 - `IndexingError` — `reason: read-failed | revalidation-failed | mapping-commit-failed`
 - `EmbeddingSetup` / `EmbeddingSetup.layer` / `GpuState` — 설정 화면용 서비스와 `EmbeddingOverview["gpu"]`의 `Data.taggedEnum` 생성자. 앱 API settings group(`apps/agent/app/.server/api/settings.ts`)이 사용한다. layer를 만들 때 lexical 기록 반영(`lexicalAll`, 임베더와 무관)과 로컬 임베더의 벡터 backfill(`indexAll`)을 layer Scope에 fork한다
-- `EmbeddingOverview` — 설정 화면 개요 Schema(choice, running, next, gpu, unindexed, maintenance)(`contracts.ts`). 서버 코드를 import하지 않아 앱 API 계약과 브라우저가 쓴다
+- `EmbeddingOverview` — 설정 화면 개요 Schema(choice, running, next, gpu, unindexed, downloads, maintenance)(`contracts.ts`). 서버 코드를 import하지 않아 앱 API 계약과 브라우저가 쓴다
 - 하위 디렉터리 없음
 
 ## Invariants
@@ -56,6 +59,7 @@ memory-agent의 임베딩 계층이다. 모델 표(`models.ts`)에서 고른 로
 - SQLite 변수 한도 때문에 id 목록은 statement당 1000개(`idsPerStatement`)로 나눈다
 - `PRAGMA database_list`의 파일 경로가 비어 있으면 open이 `NativeOwnerFailed{native-incompatible}`로 실패한다. lease를 다른 프로세스가 쥐고 있으면(`lease-unavailable`) `VectorIndexError.message`가 같은 storage root를 쓰는 다른 서버를 멈추라고 안내한다
 - 임베딩 대상은 `user`, `assistant`, `topic` kind뿐이다. tool call과 tool result는 임베딩하지 않는다(`docs/decisions.md`). pending 노드는 `created_at DESC, seq DESC` 순서로 고른다
+- 다운로드 진행은 캐시에서 읽은 파일을 세지 않는다. 캐시에서 읽은 파일은 완료 보고 하나만 보내고, 중간 보고가 온 파일만 내려받는 중으로 본다. 호스트는 `Load` stream이 끝나면(성공·실패 모두) 그 모델을 `ModelDownloads`에서 지운다
 - embed-worker는 `env.allowLocalModels = false`로 동작한다. `devices`를 선호 순서대로 시도하고, 짧은 텍스트 하나를 실제로 실행하는 첫 장치를 쓴다. 실패한 장치의 모델은 dispose한다. gpu 모드는 모델 표의 gpu 파일로 webgpu를 먼저 시도한 뒤 cpu로 넘어가고, cpu 모드는 cpu 파일을 쓴다. `textOnly` 모델은 config의 vision·audio 설정을 비우고 text 모델만 로드한다
 
 ## Side Effects
@@ -64,7 +68,7 @@ memory-agent의 임베딩 계층이다. 모델 표(`models.ts`)에서 고른 로
 - 네이티브 추론: `@huggingface/transformers`(onnxruntime-node)로 tokenizer와 모델을 로드한다. `env.cacheDir`를 설정하고 WebGPU 또는 CPU 장치를 쓴다. 모델 파일은 `<storage>/models` 캐시에 둔다. 워커가 닫힐 때 모델을 dispose하고, 실패하면 `embedding_model_dispose_failed`로 로그만 남긴다
 - 네이티브 벡터 소유자: `runtimeWorker("native-search-worker")`로 `makeNativeOwner` 워커를 연다. lease를 잡고 `<storage>/vectors/<hash>` 디렉터리에 색인을 저장한다(save/remove/add 명령)
 - SQLite 읽기·쓰기 대상 테이블: `nodes`, `node_vectors`, `node_vector_chunks`, `memory_graph_vector_removals`, `memory_chunk_vector_removals`, `lexical_changes`, `lexical_index`. `PRAGMA database_list`를 조회하고 `sql.withTransaction`을 쓴다
-- AppEvents: 색인이 하나 이상 커밋되면 `publishGlobal("embedding")`과 `publishGlobal("imports")`를 발행한다
+- AppEvents: 색인이 하나 이상 커밋되면 `publishGlobal("embedding")`과 `publishGlobal("imports")`를 발행한다. `EmbeddingSetup`은 `ModelDownloads`가 바뀔 때마다 `publishGlobal("embedding")`을 발행한다
 - 난수: `uuidV4`로 owner epoch과 명령별 requestId를 만든다
 - 설정: `GlobalConfig` 설정(`embeddingDevice`, `gpuCheck`)을 읽는다. `setup.ts`가 설정을 갱신하는지는 읽지 않아 확인하지 못했다
 

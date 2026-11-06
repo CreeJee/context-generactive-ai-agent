@@ -1,4 +1,4 @@
-import { Context, Data, Effect, Layer, Option, Ref } from "effect";
+import { Context, Data, Effect, Layer, Option, Ref, Stream } from "effect";
 import { logFailure } from "../../runtime/logged-failures.ts";
 import type { EmbeddingChoice } from "../../config/contracts.ts";
 import { GlobalConfig } from "../../config/global-config.ts";
@@ -13,6 +13,7 @@ import {
   EmbedderRuntime,
 } from "./embedder.ts";
 import { MemoryGraphMaintenance } from "../maintenance.ts";
+import { ModelDownloads } from "./downloads.ts";
 import { Indexer } from "./indexer.ts";
 
 /** Whether WebGPU was found to work here, or is being checked now (`contracts.ts`). */
@@ -26,6 +27,7 @@ const make = Effect.gen(function* () {
   const embedder = yield* Embedder;
   const indexer = yield* Indexer;
   const maintenance = yield* MemoryGraphMaintenance;
+  const downloads = yield* ModelDownloads;
   const layerScope = yield* Effect.scope;
   const checking = yield* Ref.make(false);
 
@@ -52,6 +54,12 @@ const make = Effect.gen(function* () {
       layerScope,
     );
   });
+
+  // The settings page shows a model's download as it goes.
+  yield* Effect.forkIn(
+    Stream.runForEach(downloads.changes, () => events.publishGlobal("embedding")),
+    layerScope,
+  );
 
   // Journaled node changes, a whole rebuild after a new lexical index among them, are applied
   // whatever the embedder; failed batches stay journaled for the next run.
@@ -93,6 +101,7 @@ const make = Effect.gen(function* () {
       next: embeddingModeFor(settings),
       gpu,
       unindexed: yield* indexer.pending,
+      downloads: yield* downloads.current,
       maintenance: yield* maintenance.overview,
     } satisfies EmbeddingOverview;
   });

@@ -2,7 +2,7 @@ import { Schema } from "effect";
 import { Rpc, RpcGroup } from "effect/rpc";
 import { Transferable } from "effect/workers";
 import { ChunkSpan } from "./chunks.ts";
-import { EmbeddingDevice } from "./contracts.ts";
+import { DownloadProgress, EmbeddingDevice } from "./contracts.ts";
 import { EmbeddingOutput } from "./models.ts";
 
 /** What the embedding worker is started with; the host owns every field. */
@@ -32,8 +32,19 @@ export class EmbeddingWorkerFailed extends Schema.TaggedError<
 
 const Texts = Schema.Struct({ texts: Schema.Array(Schema.String) });
 
-/** Loads the model once per worker and reports the device it runs on. */
-export const Load = Rpc.make("Load", { success: EmbeddingDevice, error: EmbeddingWorkerFailed });
+/** What loading the model reports: the files' download as it goes, then the device it runs on. */
+export const LoadEvent = Schema.TaggedUnion({
+  downloading: DownloadProgress.fields,
+  loaded: { device: EmbeddingDevice },
+});
+export type LoadEvent = typeof LoadEvent.Type;
+
+/** Loads the model once per worker; ends with the device it runs on. */
+export const Load = Rpc.make("Load", {
+  success: LoadEvent,
+  error: EmbeddingWorkerFailed,
+  stream: true,
+});
 export const CountTokens = Rpc.make("CountTokens", {
   payload: Texts,
   success: Schema.Array(Schema.Finite),

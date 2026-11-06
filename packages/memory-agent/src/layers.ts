@@ -61,6 +61,7 @@ import { McpServers } from "./mcp/servers.ts";
 import { Skills } from "./skills/skills.ts";
 import { Subagents } from "./subagents/subagents.ts";
 import { Embedder } from "./memory/embedding/embedder.ts";
+import { ModelDownloads } from "./memory/embedding/downloads.ts";
 import { Reranker } from "./memory/rerank/reranker.ts";
 import { Indexer } from "./memory/embedding/indexer.ts";
 import { EmbeddingSetup } from "./memory/embedding/setup.ts";
@@ -217,6 +218,8 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
             StorageRoot.layer(storageRoot),
             Database.layer(join(storageRoot, "agent.db"), options.openDatabase),
             ExecutionAdmission.layer(),
+            // Below the local models' workers, which report their downloads to it.
+            ModelDownloads.layer,
           ),
         ),
         Layer.provideMerge(nodePlatformLayer),

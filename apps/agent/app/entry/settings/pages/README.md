@@ -29,7 +29,7 @@
 - `ImprovementSettings`는 상태가 `ScanState` running일 때만 2000ms 간격으로 refetch하고 `retry: false`다. 명령이 성공하면 `queryKey` 캐시의 `state`만 교체한다. 404 응답이면 '서버가 지원하지 않음' 문구를 쓰고, 다른 실패는 `FailureBody`(`reason: "report"`)를 디코딩해 `failures` 표로 문구를 고른다.
 - `AgentSettings`: shadowed 에이전트는 `shadowedBadge`만 보여 주고 동작 버튼이 없다. '다시 연결' 버튼은 trusted이면서 link가 `stopped`일 때만 보인다. 연결 문제 문구는 `AgentLinkState`가 `retrying` 또는 `stopped`일 때만 만든다.
 - `ImageSettings`: 공급자 간 동의 Select는 이미지 생성이 꺼져 있으면 비활성이다. 키 `anthropic->openai:media.image.generate`의 값이 없으면 `disabled`로 본다. 허용 모드는 `disabled`, `ask`, `always`뿐이다.
-- `EmbeddingSettings`: local runtime의 `mode`가 `overview.next`와 다르면 재시작 안내를 보여 준다. WebGPU 확인 중(`GpuState` checking)이거나 busy일 때는 다시 확인 버튼을 끈다.
+- `EmbeddingSettings`: local runtime의 `mode`가 `overview.next`와 다르면 재시작 안내를 보여 준다. WebGPU 확인 중(`GpuState` checking)이거나 busy일 때는 다시 확인 버튼을 끈다. 로컬 모델(임베딩 모델, 검색 결과 정렬 모델)을 내려받는 동안 `overview.downloads`마다 진행 막대와 MB 수를 보여 준다.
 - `ImportSettings`: 가져오기 실행 중(`ImportActivity` running)이거나 busy일 때 '지금 가져오기' 버튼을 끈다. 감시 상태(`LoopHealthStatus`)는 `enabled`이고 `watch !== null`일 때만 보인다.
 
 ## Side Effects

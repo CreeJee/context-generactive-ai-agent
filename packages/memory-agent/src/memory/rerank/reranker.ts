@@ -15,13 +15,20 @@ import {
   Ref,
   Scope,
   Semaphore,
+  Stream,
 } from "effect";
 import { RpcClient, type RpcClientError } from "effect/rpc";
 import { StorageRoot } from "../../config/storage-root.ts";
 import { logFailure } from "../../runtime/logged-failures.ts";
 import { runtimeWorker, runtimeWorkerOptions } from "../../runtime/resources.ts";
+import { type DownloadReport, ModelDownloads } from "../embedding/downloads.ts";
 import { Embedder, EmbedderRuntime } from "../embedding/embedder.ts";
-import { RerankRpcs, type RerankWorkerData, RerankWorkerFailed } from "./rerank-rpc.ts";
+import {
+  RerankLoadEvent,
+  RerankRpcs,
+  type RerankWorkerData,
+  RerankWorkerFailed,
+} from "./rerank-rpc.ts";
 
 /**
  * The reranker the app runs: nlpai-lab/KURE-Reranker-nano, a Korean and English cross-encoder,
@@ -63,8 +70,11 @@ interface RerankSession {
   readonly busy: <A, E, R>(work: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
 }
 
-/** The worker thread behind the reranker, with its model loaded. Transport failures mean it is gone. */
-const rpcSession = (data: RerankWorkerData) =>
+/**
+ * The worker thread behind the reranker, with its model loaded; the load's download goes to
+ * `report`. Transport failures mean it is gone.
+ */
+const rpcSession = (data: RerankWorkerData, report: DownloadReport) =>
   Effect.gen(function* () {
     const spawned = yield* Deferred.make<Worker>();
     const lost = (cause: unknown) =>
@@ -84,7 +94,15 @@ const rpcSession = (data: RerankWorkerData) =>
     const call = <A>(
       effect: Effect.Effect<A, RerankWorkerFailed | RpcClientError.RpcClientError>,
     ) => effect.pipe(Effect.catchTag("RpcClientError", (error) => Effect.fail(lost(error))));
-    yield* call(client.Load());
+    yield* call(
+      client
+        .Load()
+        .pipe(
+          Stream.runForEach(
+            RerankLoadEvent.match({ downloading: report.progress, loaded: () => Effect.void }),
+          ),
+        ),
+    ).pipe(Effect.ensuring(report.done));
     const worker = yield* Deferred.await(spawned);
     return {
       score: (query, texts) => call(client.Score({ query, texts })),
@@ -124,12 +142,15 @@ const makeLocal = Effect.gen(function* () {
       logFailure("reranker_unavailable", { stage: error.stage })(error),
       Ref.set(state, RerankState.unavailable()),
     );
-  yield* rpcSession({
-    cacheDir: paths.join(storage.path, "models"),
-    modelId: rerankModel.id,
-    modelFileName: rerankModel.file,
-    maxTokens: rerankModel.maxTokens,
-  }).pipe(
+  yield* rpcSession(
+    {
+      cacheDir: paths.join(storage.path, "models"),
+      modelId: rerankModel.id,
+      modelFileName: rerankModel.file,
+      maxTokens: rerankModel.maxTokens,
+    },
+    yield* ModelDownloads.report("rerank", rerankModel.id),
+  ).pipe(
     Effect.flatMap((session) => Ref.set(state, RerankState.ready({ session }))),
     Effect.catch(unavailable),
     Scope.provide(scope),

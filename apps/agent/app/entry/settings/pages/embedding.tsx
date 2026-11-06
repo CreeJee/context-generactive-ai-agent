@@ -22,12 +22,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "~/components/ui/select";
+import { Progress, ProgressLabel, ProgressValue } from "~/components/ui/progress";
 import { Spinner } from "~/components/ui/spinner";
 import { dayAndTime } from "~/lib/dates";
 import {
   EmbedderRuntime,
   EmbeddingCommand,
   type EmbeddingChoice,
+  type EmbeddingOverview,
   GpuState,
   refusalOf,
 } from "../../api";
@@ -58,6 +60,31 @@ function RunningBadge({ running }: { running: EmbedderRuntime }) {
         <Badge variant="outline">GPU 모드, CPU에서 실행 중</Badge>
       ),
   });
+}
+
+type ModelDownload = EmbeddingOverview["downloads"][number];
+
+/** What each local model is for, as the page names it. */
+const downloadNames = {
+  embedding: "임베딩 모델",
+  rerank: "검색 결과 정렬 모델",
+} as const satisfies Record<ModelDownload["purpose"], string>;
+
+const megabytes = (bytes: number) => `${Math.round(bytes / 1_000_000)}MB`;
+
+/** A local model's download as it goes. */
+function DownloadProgress({ download }: { download: ModelDownload }) {
+  return (
+    <Field>
+      <Progress value={Math.floor((download.loaded / download.total) * 100)}>
+        <ProgressLabel>{downloadNames[download.purpose]} 내려받는 중</ProgressLabel>
+        <ProgressValue />
+      </Progress>
+      <FieldDescription>
+        {megabytes(download.loaded)} / {megabytes(download.total)}
+      </FieldDescription>
+    </Field>
+  );
 }
 
 /** What the running model means for the user, in words; nothing when the badge says it all. */
@@ -167,6 +194,9 @@ export function EmbeddingSettings() {
       </Field>
 
       {note && <FieldDescription>{note}</FieldDescription>}
+      {overview.downloads.map((download) => (
+        <DownloadProgress key={download.model} download={download} />
+      ))}
       {restartNeeded && (
         <Alert>
           <AlertDescription>

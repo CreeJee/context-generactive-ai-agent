@@ -16,6 +16,7 @@ import {
   Scope,
   ScopedRef,
   Semaphore,
+  Stream,
 } from "effect";
 import { RpcClient, type RpcClientError } from "effect/rpc";
 import { type EmbeddingChoice, GpuCheck } from "../../config/contracts.ts";
@@ -24,7 +25,13 @@ import { StorageRoot } from "../../config/storage-root.ts";
 import { runtimeWorker, runtimeWorkerOptions } from "../../runtime/resources.ts";
 import { type ChunkSpan, chunkPolicy } from "./chunks.ts";
 import { type EmbeddingDevice, EmbeddingMode, type EmbeddingOverview } from "./contracts.ts";
-import { EmbeddingRpcs, type EmbeddingWorkerData, EmbeddingWorkerFailed } from "./embedding-rpc.ts";
+import { type DownloadReport, ModelDownloads } from "./downloads.ts";
+import {
+  EmbeddingRpcs,
+  type EmbeddingWorkerData,
+  EmbeddingWorkerFailed,
+  LoadEvent,
+} from "./embedding-rpc.ts";
 import { type EmbeddingRole, localModel, modelFile } from "./models.ts";
 
 export class EmbeddingError extends Schema.TaggedError<
@@ -151,8 +158,11 @@ export interface ModelSession {
   readonly busy: <A, E, R>(work: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
 }
 
-/** The worker thread behind a session. Transport failures mean the worker is gone. */
-const rpcSession = (data: EmbeddingWorkerData) =>
+/**
+ * The worker thread behind a session, with its model loaded; the load's download goes to `report`.
+ * Transport failures mean the worker is gone.
+ */
+const rpcSession = (report: DownloadReport) => (data: EmbeddingWorkerData) =>
   Effect.gen(function* () {
     const spawned = yield* Deferred.make<Worker>();
     const lost = (cause: unknown) =>
@@ -172,7 +182,18 @@ const rpcSession = (data: EmbeddingWorkerData) =>
     const call = <A>(
       effect: Effect.Effect<A, EmbeddingWorkerFailed | RpcClientError.RpcClientError>,
     ) => effect.pipe(Effect.catchTag("RpcClientError", (error) => Effect.fail(lost(error))));
-    const device = yield* call(client.Load());
+    const { device } = yield* call(
+      client
+        .Load()
+        .pipe(
+          Stream.tap(LoadEvent.match({ downloading: report.progress, loaded: () => Effect.void })),
+          Stream.filter(LoadEvent.guards.loaded),
+          Stream.runHead,
+        ),
+    ).pipe(
+      Effect.ensuring(report.done),
+      Effect.flatMap(Effect.fromOption(() => lost("the model's load ended without a device"))),
+    );
     const worker = yield* Deferred.await(spawned);
     return {
       device,
@@ -205,10 +226,12 @@ const rpcSession = (data: EmbeddingWorkerData) =>
 export const modelWorker = Effect.fnUntraced(function* (
   cacheDir: string,
   setup: ModelSetup,
-  connect: (
+  connect?: (
     data: EmbeddingWorkerData,
-  ) => Effect.Effect<ModelSession, EmbeddingWorkerFailed, Scope.Scope> = rpcSession,
+  ) => Effect.Effect<ModelSession, EmbeddingWorkerFailed, Scope.Scope>,
 ) {
+  // The worker's download shows on the settings page when the app tracks downloads.
+  const open = connect ?? rpcSession(yield* ModelDownloads.report("embedding", localModel.id));
   const data: EmbeddingWorkerData = {
     cacheDir,
     modelId: localModel.id,
@@ -229,10 +252,7 @@ export const modelWorker = Effect.fnUntraced(function* (
       onSome: Effect.succeed,
       onNone: () =>
         // `set` acquires uninterruptibly; a model load must still stop when the Scope closes.
-        ScopedRef.set(
-          session,
-          Effect.interruptible(connect(data)).pipe(Effect.map(Option.some)),
-        ).pipe(
+        ScopedRef.set(session, Effect.interruptible(open(data)).pipe(Effect.map(Option.some))).pipe(
           Effect.andThen(ScopedRef.get(session)),
           // `set` just stored the session it acquired.
           Effect.map(Option.getOrThrow),

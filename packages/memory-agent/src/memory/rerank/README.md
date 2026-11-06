@@ -12,7 +12,7 @@
   - `Reranker.none`: 언제나 None을 돌려준다.
 - `RerankerApi.score(query, texts)` — text마다 relevance 점수 하나를 순서대로 돌려준다(클수록 관련). 아직 적재 중이거나, 이 기기에서 돌지 않거나, 실패했거나, 예산을 넘기면 None이다.
 - `rerankModel` — 모델 id, 파일(`model_fp16`), 쌍당 token(192).
-- `RerankRpcs` (`Load`, `Score`) / `RerankWorkerData` / `RerankWorkerFailed` — 호스트와 `rerank-worker.ts` 사이의 RpcGroup 프로토콜, 시작 데이터, `stage: load|run|lost` 실패 타입.
+- `RerankRpcs` (`Load`, `Score`) / `RerankWorkerData` / `RerankWorkerFailed` — 호스트와 `rerank-worker.ts` 사이의 RpcGroup 프로토콜, 시작 데이터, `stage: load|run|lost` 실패 타입. `Load`는 stream이다. 모델 파일을 내려받는 동안 `RerankLoadEvent.downloading{loaded, total}`을 보내고, 적재가 끝나면 `loaded`를 보내고 끝난다. 호스트는 진행을 `ModelDownloads`(`../embedding/downloads.ts`)에 `rerank` 용도로 보고한다.
 - `rerank-worker.ts` — worker thread 진입점. `runtimeWorker("rerank-worker")`로 실행되고 `RpcServer.layer(RerankRpcs, { concurrency: 1 })`을 띄운다.
 - 하위 디렉터리 없음.
 
