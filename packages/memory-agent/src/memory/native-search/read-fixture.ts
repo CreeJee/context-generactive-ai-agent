@@ -61,8 +61,7 @@ export const createApplicationReadFixture = Effect.fnUntraced(function* (path: s
   return db;
 });
 
-/**
- * Every fixture row as the lexical index holds it. The suppressed and blank rows are included,
- * which the indexer leaves out: the read must drop them itself.
- */
-export const lexicalDocuments = rows.map(([seq, , , project, text]) => ({ seq, project, text }));
+/** The fixture rows the indexer gives the lexical index: not the suppressed one or the blank one. */
+export const lexicalDocuments = rows
+  .filter(([, id]) => id !== "suppressed" && id !== "whitespace")
+  .map(([seq, , , project, text]) => ({ seq, project, text }));

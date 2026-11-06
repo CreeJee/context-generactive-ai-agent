@@ -20,11 +20,10 @@ const TEXT_RESERVE: Duration = Duration::from_millis(600);
 // Same terms as the `nodes_embeddable` partial index; spelled differently, SQLite would not use it.
 const EMBEDDED_KINDS: &str = "n.kind IN ('user', 'assistant', 'topic')";
 const MEANINGFUL: &str ="length(trim(n.text, char(9,10,11,12,13,32,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279))) > 0 AND NOT EXISTS (SELECT 1 FROM memory_graph_suppressed_nodes s WHERE s.node_seq = n.seq)";
-// For the lexical hits. A node one of their terms matched is never blank: the terms hold no
-// whitespace, so checking that again would only read every matched node's whole text.
-const NOT_SUPPRESSED: &str = "NOT EXISTS (SELECT 1 FROM memory_graph_suppressed_nodes s WHERE s.node_seq = n.seq)";
 // The lexical index holds a node as it was when its last journaled change was applied; a change
 // still pending means the index may hold text, a project or a node this snapshot no longer has.
+// Blank and suppressed nodes need no check here: the indexer leaves them out, and suppressing or
+// restoring a node is journaled like any change.
 const LEXICAL_CURRENT: &str =
     "NOT EXISTS (SELECT 1 FROM lexical_changes c WHERE c.node_seq = n.seq)";
 /// How many lexical hits a channel asks for, per hit it keeps: hits the snapshot drops (a change
@@ -211,7 +210,7 @@ fn scope(projects: &[String]) -> String {
     }
 }
 /// The ids of the `seqs` this snapshot searches as the lexical index holds them: nodes of the
-/// allowed projects, not suppressed, with no journaled change pending.
+/// allowed projects with no journaled change pending.
 fn lexical_ids(
     connection: &Connection,
     seqs: &[u64],
@@ -224,7 +223,7 @@ fn lexical_ids(
         return Ok(ids);
     }
     let sql = format!(
-        "SELECT n.seq, n.id FROM nodes n WHERE n.seq IN ({}) AND n.project_id IN ({}) AND {NOT_SUPPRESSED} AND {LEXICAL_CURRENT}",
+        "SELECT n.seq, n.id FROM nodes n WHERE n.seq IN ({}) AND n.project_id IN ({}) AND {LEXICAL_CURRENT}",
         vec!["?"; seqs.len()].join(","),
         scope(projects)
     );
@@ -931,12 +930,12 @@ mod tests {
     #[cfg(feature = "test-sqlite")]
     fn lexical_hits_keep_only_current_nodes_of_allowed_projects() {
         let c = Connection::open_in_memory().unwrap();
-        c.execute_batch("CREATE TABLE nodes(seq INTEGER PRIMARY KEY,id TEXT,project_id TEXT); CREATE TABLE memory_graph_suppressed_nodes(node_seq INTEGER); CREATE TABLE lexical_changes(id INTEGER PRIMARY KEY,node_seq INTEGER); INSERT INTO nodes VALUES(1,'a','p'),(2,'b','p'),(3,'c','q'),(4,'d','p'),(5,'e','p'); INSERT INTO memory_graph_suppressed_nodes VALUES(2); INSERT INTO lexical_changes(node_seq) VALUES(4);").unwrap();
+        c.execute_batch("CREATE TABLE nodes(seq INTEGER PRIMARY KEY,id TEXT,project_id TEXT); CREATE TABLE lexical_changes(id INTEGER PRIMARY KEY,node_seq INTEGER); INSERT INTO nodes VALUES(1,'a','p'),(2,'b','p'),(3,'c','q'),(4,'d','p'),(5,'e','p'); INSERT INTO lexical_changes(node_seq) VALUES(4);").unwrap();
         let projects = vec!["p".to_string()];
-        // Suppressed (2), another project's (3), changed since the index took it (4), gone (6).
+        // Another project's (3), changed since the index took it (4), gone (6).
         let seqs = [5, 4, 3, 2, 1, 6];
         let ids = lexical_ids(&c, &seqs, &projects, 1024, &|| Ok(())).unwrap();
-        assert_eq!(kept(&seqs, &ids, 10), ["e", "a"]);
+        assert_eq!(kept(&seqs, &ids, 10), ["e", "b", "a"]);
         assert_eq!(kept(&seqs, &ids, 1), ["e"]);
         assert!(matches!(
             lexical_ids(&c, &seqs, &projects, 1, &|| Ok(())),

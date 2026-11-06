@@ -46,7 +46,7 @@
 - worker는 `command.epoch !== setup.epoch`이면 `epoch-mismatch`로 거부한다.
 - IPC로는 `reason`만 넘는다. native 예외 메시지와 cache 경로는 worker 안에 남는다. worker의 `reported`는 `epoch-mismatch`, `invalid-input`, `read-failed`, `native-incompatible`, `lease-unavailable` 외 사유를 모두 `index-failed`로 바꾼다.
 - 동기 native 호출과 파일시스템 호출은 owning worker 안에서만 한다. `NativeSearchClient` 구현은 무거운 동기 native search를 호출자 스레드에서 실행하면 안 된다.
-- memory read의 text·morph 채널은 worker가 연 lexical 색인에서 찾고, 같은 SQLite 스냅샷에서 노드가 허용 프로젝트이고 숨기지 않았고 `lexical_changes`에 남은 변경이 없는지 확인한 뒤에만 남긴다. lexical 색인 없이 text나 morph를 켜면 `invalid-input`이다.
+- memory read의 text·morph 채널은 worker가 연 lexical 색인에서 찾고, 같은 SQLite 스냅샷에서 노드가 허용 프로젝트이고 `lexical_changes`에 남은 변경이 없는지 확인한 뒤에만 남긴다. lexical 색인 없이 text나 morph를 켜면 `invalid-input`이다.
 - memory read에서 text 단계만 자기 몫(남은 예산 600ms 여유)을 넘으면 그 결과만 버리고 `textUnavailable=true`로 표시해 읽기를 계속한다. `success`에 벡터·morph·coverage가 함께 온다. `FindResult.degraded`의 `"text"`로 모델에 전달된다(`docs/decisions.md` 2026-10-30).
 - setup 검증: `dimensions`는 0보다 큰 8의 배수이면서 4294967295 이하다. `bits`는 1, 2, 4, 8 중 하나다. id는 canonical 10진 u64 문자열이다(20자 이하, 18446744073709551615 이하).
 - add는 `vectors.length === ids.length * dimensions`이고 모든 값이 finite여야 한다. vector-search 계열은 `query.length === dimensions`이고 `0 < k ≤ 4294967295`여야 한다. memory read의 `vectorK`는 `maxVectorK`(48) 이하여야 하며, 넘으면 read 전체가 실패한다.
