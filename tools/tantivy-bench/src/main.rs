@@ -10,9 +10,11 @@
 //!
 //! Indexes, suppressed nodes left out of all of them:
 //!   global     fields `words` (letters and digits, lowercased, as FTS5's unicode61), `morph` (the
-//!              Kiwi terms FTS5's nodes_morph holds, split the same way) and `ngram` (lowercased
+//!              Kiwi terms FTS5's nodes_morph holds, split the same way), `ngram` (lowercased
 //!              three-character grams with positions, as FTS5's trigram, so a term is searched as
-//!              the phrase of its grams); the project is a fast field, filtered while collecting
+//!              the phrase of its grams) and `lindera` (terms made by Kiwi's rules from Lindera's
+//!              ko-dic morphemes, for the nodes Kiwi analyzed); the project is a fast field,
+//!              filtered while collecting
 //!   project/N  one index per project
 //!   prefixed   one index whose terms carry the project's number: `3_word`
 //!
@@ -35,6 +37,7 @@
 //! own project on its index and the other projects on the global one; and on the global index with
 //! every match scored.
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::fs;
@@ -42,6 +45,10 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use lindera::dictionary::load_dictionary;
+use lindera::mode::Mode;
+use lindera::segmenter::Segmenter;
+use regex::Regex;
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use tantivy::query::{
@@ -58,6 +65,7 @@ use tantivy::tokenizer::{
 use tantivy::{
     DocId, Index, IndexWriter, ReloadPolicy, Score, Searcher, SegmentReader, TantivyDocument, Term,
 };
+use unicode_normalization::UnicodeNormalization;
 
 type Error = Box<dyn std::error::Error>;
 type Result<T> = std::result::Result<T, Error>;
@@ -151,6 +159,109 @@ fn tokens(analyzer: &mut TextAnalyzer, text: &str) -> Vec<String> {
     out
 }
 
+/// The part-of-speech tags whose morphemes Kiwi keeps as terms, which ko-dic shares, and the nouns.
+const KEPT_TAGS: [&str; 7] = ["NNG", "NNP", "NR", "VV", "VA", "XR", "SH"];
+const NOUN_TAGS: [&str; 2] = ["NNG", "NNP"];
+/// Stems too common to search by, as Kiwi leaves them out.
+const LIGHT_STEMS: [&str; 13] = [
+    "하", "되", "있", "없", "않", "같", "이", "아니", "어떻", "어떠", "그렇", "이렇", "저렇",
+];
+
+/// One ko-dic morpheme, and whether it follows the one before with no space between.
+struct Morpheme {
+    surface: String,
+    tag: String,
+    joined: bool,
+}
+
+/// Search terms from Lindera's ko-dic morphemes by Kiwi's rules
+/// (packages/memory-agent/src/memory/morph/kiwi-worker.ts), to see whether Lindera can stand in for
+/// Kiwi: kept morphemes except the light stems, a run of nouns written without spaces also as one
+/// term, and Latin words and numbers taken from the text itself, all lowercased after NFKC.
+struct Lindera {
+    segmenter: Segmenter,
+    latin_or_number: Regex,
+}
+
+impl Lindera {
+    fn new() -> Result<Self> {
+        Ok(Lindera {
+            segmenter: Segmenter::new(Mode::Normal, load_dictionary("embedded://ko-dic")?, None),
+            latin_or_number: Regex::new(r"[\p{Script=Latin}\p{Nd}]+")?,
+        })
+    }
+
+    /// An inflected, compound or pre-analyzed token lists its morphemes in its expression detail
+    /// (`하/VV/*+았/EP/*`); any other token is one morpheme.
+    fn morphemes(&self, text: &str) -> Result<Vec<Morpheme>> {
+        let mut morphemes = Vec::new();
+        let mut previous_end = None;
+        for mut token in self.segmenter.segment(Cow::Borrowed(text))? {
+            let joined = previous_end == Some(token.byte_start);
+            previous_end = Some(token.byte_end);
+            let surface = token.surface.to_string();
+            let details = token.details();
+            let tag = details.first().copied().unwrap_or("UNK").to_string();
+            let expression = details.get(7).copied().unwrap_or("*");
+            let parts: Vec<(String, String)> = match expression {
+                "*" => vec![(surface, tag)],
+                _ => expression
+                    .split('+')
+                    .filter_map(|part| {
+                        let mut fields = part.split('/');
+                        Some((fields.next()?.to_string(), fields.next()?.to_string()))
+                    })
+                    .collect(),
+            };
+            morphemes.extend(
+                parts
+                    .into_iter()
+                    .enumerate()
+                    .map(|(at, (surface, tag))| Morpheme {
+                        surface,
+                        tag,
+                        joined: at > 0 || joined,
+                    }),
+            );
+        }
+        Ok(morphemes)
+    }
+
+    fn terms(&self, input: &str) -> Result<Vec<String>> {
+        let text: String = input.nfkc().collect();
+        let mut terms = Vec::new();
+        let mut run: Vec<String> = Vec::new();
+        for morpheme in self.morphemes(&text)? {
+            let noun = NOUN_TAGS.contains(&morpheme.tag.as_str());
+            // A noun right after the run goes on with it; anything else ends it.
+            if !(noun && morpheme.joined && !run.is_empty()) {
+                if run.len() > 1 {
+                    terms.push(run.concat());
+                }
+                run.clear();
+            }
+            if KEPT_TAGS.contains(&morpheme.tag.as_str())
+                && !LIGHT_STEMS.contains(&morpheme.surface.as_str())
+                && !self.latin_or_number.is_match(&morpheme.surface)
+            {
+                terms.push(morpheme.surface.clone());
+            }
+            if noun {
+                run.push(morpheme.surface);
+            }
+        }
+        if run.len() > 1 {
+            terms.push(run.concat());
+        }
+        terms.extend(
+            self.latin_or_number
+                .find_iter(&text)
+                .map(|found| found.as_str().to_string()),
+        );
+        Ok(terms.into_iter().map(|term| term.to_lowercase()).collect())
+    }
+}
+
 fn dedupe(values: impl IntoIterator<Item = String>) -> Vec<String> {
     let mut seen = HashSet::new();
     values
@@ -166,7 +277,8 @@ enum Kind {
     Prefixed,
 }
 
-/// Every index has every field; the prefixed index leaves `ngram` empty.
+/// Every index has every field; only the global index fills `lindera`, and the prefixed index leaves
+/// `ngram` empty.
 #[derive(Clone, Copy)]
 struct Fields {
     seq: Field,
@@ -174,6 +286,7 @@ struct Fields {
     words: Field,
     morph: Field,
     ngram: Field,
+    lindera: Field,
 }
 
 fn text_field(
@@ -220,6 +333,12 @@ fn schema(kind: Kind) -> (Schema, Fields) {
         "trigram",
         IndexRecordOption::WithFreqsAndPositions,
     );
+    let lindera = text_field(
+        &mut builder,
+        "lindera",
+        words_tokenizer,
+        IndexRecordOption::WithFreqs,
+    );
     (
         builder.build(),
         Fields {
@@ -228,6 +347,7 @@ fn schema(kind: Kind) -> (Schema, Fields) {
             words,
             morph,
             ngram,
+            lindera,
         },
     )
 }
@@ -327,6 +447,8 @@ struct Node {
     project: u64,
     text: String,
     morph: String,
+    /// Kiwi has analyzed the node.
+    analyzed: bool,
 }
 
 /// Visits every node that is not suppressed, in `order`.
@@ -337,7 +459,7 @@ fn each_node(
 ) -> Result<()> {
     let (numbers, _) = projects(db)?;
     let mut statement = db.prepare(&format!(
-        "SELECT n.seq, n.project_id, n.text, coalesce(m.c0, '') FROM nodes n
+        "SELECT n.seq, n.project_id, n.text, coalesce(m.c0, ''), m.id IS NOT NULL FROM nodes n
          LEFT JOIN nodes_morph_content m ON m.id = n.seq WHERE {NOT_SUPPRESSED} ORDER BY {order}"
     ))?;
     let rows = statement.query_map([], |row| {
@@ -346,10 +468,11 @@ fn each_node(
             row.get::<_, String>(1)?,
             row.get::<_, String>(2)?,
             row.get::<_, String>(3)?,
+            row.get::<_, bool>(4)?,
         ))
     })?;
     for row in rows {
-        let (seq, project, text, morph) = row?;
+        let (seq, project, text, morph, analyzed) = row?;
         let project = *numbers
             .get(&project)
             .ok_or("a node of an unknown project")?;
@@ -358,12 +481,19 @@ fn each_node(
             project,
             text,
             morph,
+            analyzed,
         })?;
     }
     Ok(())
 }
 
-fn document(kind: Kind, fields: Fields, node: &Node, words: &mut TextAnalyzer) -> TantivyDocument {
+fn document(
+    kind: Kind,
+    fields: Fields,
+    node: &Node,
+    lindera: &str,
+    words: &mut TextAnalyzer,
+) -> TantivyDocument {
     let mut doc = TantivyDocument::new();
     doc.add_u64(fields.seq, node.seq);
     doc.add_u64(fields.project, node.project);
@@ -372,6 +502,7 @@ fn document(kind: Kind, fields: Fields, node: &Node, words: &mut TextAnalyzer) -
             doc.add_text(fields.words, &node.text);
             doc.add_text(fields.morph, &node.morph);
             doc.add_text(fields.ngram, &node.text);
+            doc.add_text(fields.lindera, lindera);
         }
         Kind::Prefixed => {
             let mut prefixed = |text: &str| {
@@ -400,16 +531,35 @@ fn build(copy: &Path) -> Result<()> {
     let db = database(copy)?;
     let root = copy.join("tantivy");
     let mut words = words_analyzer();
+    let lindera = Lindera::new()?;
     for (kind, dir) in [(Kind::Global, "global"), (Kind::Prefixed, "prefixed")] {
         let started = Instant::now();
         let (index, fields) = create(&root.join(dir), kind)?;
         let mut writer: IndexWriter = index.writer_with_num_threads(WRITER_THREADS, WRITER_HEAP)?;
         let mut count = 0u64;
+        // Lindera's share of the build: the nodes it analyzed, their characters and its time.
+        let (mut analyzed, mut characters, mut lindera_ms) = (0u64, 0u64, 0f64);
         each_node(&db, "n.seq", |node| {
             count += 1;
-            writer.add_document(document(kind, fields, &node, &mut words))?;
+            let terms = if kind == Kind::Global && node.analyzed {
+                let analyzing = Instant::now();
+                let terms = lindera.terms(&node.text)?.join(" ");
+                lindera_ms += ms_since(analyzing);
+                analyzed += 1;
+                characters += node.text.chars().count() as u64;
+                terms
+            } else {
+                String::new()
+            };
+            writer.add_document(document(kind, fields, &node, &terms, &mut words))?;
             Ok(())
         })?;
+        if analyzed > 0 {
+            println!(
+                "lindera: {analyzed} nodes, {characters} characters in {:.1} s",
+                lindera_ms / 1000.0
+            );
+        }
         writer.commit()?;
         writer.wait_merging_threads()?;
         println!(
@@ -436,7 +586,7 @@ fn build(copy: &Path) -> Result<()> {
             ));
         }
         if let Some((_, writer, fields)) = current.as_mut() {
-            writer.add_document(document(Kind::Project, *fields, &node, &mut words))?;
+            writer.add_document(document(Kind::Project, *fields, &node, "", &mut words))?;
         }
         Ok(())
     })?;
@@ -845,15 +995,23 @@ fn query(copy: &Path, repeat: usize) -> Result<()> {
 
     let mut words = words_analyzer();
     let mut trigrams = trigram_analyzer();
-    let runs: HashMap<&str, fs::File> = ["tv-words", "tv-morph", "tv-lexical", "tv-ngram"]
-        .into_iter()
-        .map(|name| {
-            Ok((
-                name,
-                fs::File::create(set.join("runs").join(format!("{name}.jsonl")))?,
-            ))
-        })
-        .collect::<Result<_>>()?;
+    let lindera = Lindera::new()?;
+    let runs: HashMap<&str, fs::File> = [
+        "tv-words",
+        "tv-morph",
+        "tv-morph-all",
+        "tv-lindera",
+        "tv-lexical",
+        "tv-ngram",
+    ]
+    .into_iter()
+    .map(|name| {
+        Ok((
+            name,
+            fs::File::create(set.join("runs").join(format!("{name}.jsonl")))?,
+        ))
+    })
+    .collect::<Result<_>>()?;
     let mut timings: HashMap<&str, Timing> = HashMap::new();
     let all_projects: Vec<u64> = (0..numbers.len() as u64).collect();
     let everyone = |_: u64| true;
@@ -901,6 +1059,19 @@ fn query(copy: &Path, repeat: usize) -> Result<()> {
                 .iter()
                 .flat_map(|term| tokens(&mut words, term)),
         );
+        // Lindera's terms of the question, as Kiwi's are made in the app (terms.ts) and timed alike.
+        let analyzing = Instant::now();
+        let lindera_terms = dedupe(
+            lindera
+                .terms(&item.query)?
+                .iter()
+                .flat_map(|term| tokens(&mut words, term)),
+        );
+        timings
+            .entry("lindera question terms")
+            .or_default()
+            .ms
+            .push(ms_since(analyzing));
         let grams: Vec<Vec<String>> = item_terms
             .trigram
             .iter()
@@ -917,9 +1088,12 @@ fn query(copy: &Path, repeat: usize) -> Result<()> {
         };
 
         // The global index, the project filtered while collecting: the runs the set scores.
-        let searches: [(&str, Vec<Box<dyn Query>>); 4] = [
+        let searches: [(&str, Vec<Box<dyn Query>>); 6] = [
             ("tv-words", term_queries(fields.words, &word_terms)),
             ("tv-morph", term_queries(fields.morph, &capped_morph)),
+            // Kiwi's and Lindera's terms, each uncapped, on their own fields.
+            ("tv-morph-all", term_queries(fields.morph, &all_morph)),
+            ("tv-lindera", term_queries(fields.lindera, &lindera_terms)),
             ("tv-lexical", lexical()),
             (
                 "tv-ngram",
@@ -1151,5 +1325,35 @@ fn main() -> Result<()> {
         (Some("build"), Some(copy)) => build(&PathBuf::from(copy)),
         (Some("query"), Some(copy)) => query(&PathBuf::from(copy), repeat),
         _ => Err("usage: tantivy-bench build|query <copy> [--repeat N]".into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Lindera;
+
+    #[test]
+    fn lindera_terms_follow_kiwi_rules() {
+        let lindera = Lindera::new().unwrap();
+        let terms = lindera
+            .terms("메모리 검색엔진을 Tantivy로 바꿨고 drizzle-kit도 있었다")
+            .unwrap();
+        println!("{terms:?}");
+        for expected in [
+            "메모리",
+            "검색",
+            "엔진",
+            "검색엔진",
+            "바꾸",
+            "tantivy",
+            "drizzle",
+            "kit",
+        ] {
+            assert!(
+                terms.contains(&expected.to_string()),
+                "{expected} in {terms:?}"
+            );
+        }
+        assert!(!terms.contains(&"있".to_string()));
     }
 }
