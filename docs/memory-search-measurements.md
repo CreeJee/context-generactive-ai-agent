@@ -265,3 +265,57 @@ S3 세트를 같은 방법으로 다시 채점했다(`relevance-eval score --lab
 | Tantivy prefixed(words·morph만)                      | 132 MB   | 118 s       |
 
 Tantivy는 원문을 저장하지 않는다(seq로 SQLite에서 읽는다). 만드는 시간은 writer thread 2개, 형태소는 `nodes_morph_content`에 이미 있는 Kiwi 결과를 읽은 값이다.
+
+### 검색 품질 (lexical)
+
+평가 세트 `score --complete`, 모든 run의 상위 10개가 판정된 655 item(판정 30,818개). 판정은 아직 depth 10을 채우는 중이라 item 수와 값이 조금씩 바뀐다. Tantivy run은 모두 색인 하나에서 일치 문서를 전부 점수 매겼다.
+
+| run                                                 | nDCG@10 | R@20  | MRR   | Ans@10 | 한국어 nDCG@10 (296) | recall nDCG@10 (241) |
+| --------------------------------------------------- | ------- | ----- | ----- | ------ | -------------------- | -------------------- |
+| 앱 검색 (`app`)                                     | 0.400   | 0.304 | 0.836 | 0.747  | 0.396                | 0.388                |
+| native read vector (`vector`)                       | 0.414   | 0.297 | 0.791 | 0.708  | 0.398                | 0.375                |
+| 앱 FTS5 trigram (`fts-trigram`)                     | 0.345   | 0.371 | 0.817 | 0.690  | 0.273                | 0.236                |
+| 앱 FTS5 morph (`fts-morph`)                         | 0.394   | 0.420 | 0.847 | 0.826  | 0.379                | 0.346                |
+| Tantivy Kiwi 형태소 전체 (`tv-morph-all`)           | 0.397   | 0.423 | 0.851 | 0.820  | 0.383                | 0.356                |
+| Tantivy Lindera, Kiwi 규칙 (`tv-lindera`)           | 0.402   | 0.415 | 0.854 | 0.817  | 0.393                | 0.367                |
+| Tantivy Lindera, Nori stop tags (`tv-lindera-stop`) | 0.379   | 0.378 | 0.850 | 0.773  | 0.361                | 0.331                |
+| Tantivy ngram (`tv-ngram`)                          | 0.336   | 0.335 | 0.813 | 0.650  | 0.273                | 0.238                |
+
+- Lindera ko-dic 형태소를 Kiwi와 같은 규칙(품사 NNG·NNP·NR·VV·VA·XR·SH, 가벼운 어간 제외, 붙여 쓴 명사 합침)으로 고르면 Kiwi와 같거나 조금 낫다. Kiwi 모델(104 MB)과 worker 없이 Rust 쪽 색인에서 형태소를 나눌 수 있다.
+- Nori 기본 stop tags(어미·조사·부사·관형사·접사 등을 빼고 나머지를 모두 남김)는 Kiwi 규칙보다 낮다. 남는 형태소(하·되·있 같은 가벼운 어간, 의존명사, 대명사)가 검색어를 흐린다. 품사를 골라 남기는 쪽을 쓴다.
+- Tantivy 형태소 검색은 같은 검색어의 FTS5와 품질이 같다. ngram(3글자 구절)은 FTS5 trigram보다 조금 낮다.
+- 단어(`tv-words`, 0.353)와 단어+형태소(`tv-lexical`, 0.385)는 형태소만 쓴 검색보다 낮아 벤치에서 뺐다(520 item 기준).
+
+색인 하나, 전부 점수 매기기로 줄인 벤치의 검색 시간(1,159 item, `--repeat 2`, ms):
+
+| 검색              | p50 | p95   | 최대  | 평균 |
+| ----------------- | --- | ----- | ----- | ---- |
+| Lindera 질문 분석 | 0.3 | 3.8   | 76.5  | 1.1  |
+| `tv-lindera`      | 2.3 | 7.5   | 76.2  | 3.3  |
+| `tv-lindera-stop` | 3.3 | 10.4  | 111.5 | 4.4  |
+| `tv-morph-all`    | 2.2 | 7.5   | 201.4 | 3.3  |
+| `tv-ngram`        | 8.8 | 165.2 | 677.0 | 37.1 |
+
+Lindera 필드 둘을 더한 색인은 1,120 MB, 만드는 데 196 s(그중 Lindera 분석 152 s, 노드 252,551개, 4억 글자)다.
+
+### rerank
+
+평가 세트 `rerank`: `vector`·`tv-lindera`·`tv-ngram`의 상위 10개씩을 번갈아 합친 후보(item당 평균 24.6개)를 로컬 cross-encoder가 (질문, 노드 원문) 쌍으로 점수 매겨 다시 줄 세운다. transformers.js 4.3.1, M1 Pro. 시간은 item 하나의 batch(tokenizing 포함)이고, 판정이 함께 돌았다. 품질은 모든 run이 판정된 659 item.
+
+같은 후보에서 판정으로 고를 수 있는 가장 좋은 순서(oracle)는 nDCG@10 0.835다(552 item 기준). rerank는 그 상한까지 남은 몫을 줄인다.
+
+| run                     | 모델, dtype, 쌍당 token  | nDCG@10 | R@20  | MRR   | Ans@10 | 한국어 (298) | recall (244) | p50 ms | p95 ms |
+| ----------------------- | ------------------------ | ------- | ----- | ----- | ------ | ------------ | ------------ | ------ | ------ |
+| 앱 검색 (`app`)         | -                        | 0.400   | 0.304 | 0.836 | 0.748  | 0.396        | 0.388        | -      | -      |
+| `rr-horizon-small`      | Horizon small, fp32, 256 | 0.567   | 0.547 | 0.865 | 0.844  | 0.476        | 0.416        | 966    | 2353*  |
+| `rr-kure-nano`          | KURE nano, fp32, 256     | 0.599   | 0.543 | 0.921 | 0.874  | 0.551        | 0.502        | 1916   | 2249   |
+| `rr-kure-nano-fp16-192` | KURE nano, fp16, 192     | 0.581   | 0.535 | 0.917 | 0.874  | 0.535        | 0.484        | 965    | 1152   |
+| `rr-kure-nano-fp16-128` | KURE nano, fp16, 128     | 0.548   | 0.527 | 0.913 | 0.856  | 0.505        | 0.444        | 664    | 865    |
+
+\* 일부 item이 ONNX export(CPU를 많이 씀)와 겹쳤다.
+
+- 모델: `Horizon-Labs/multilingual-reranker-small`(ModernBERT, hidden 384, ONNX 공개), `nlpai-lab/KURE-Reranker-nano`(ModernBERT, hidden 768, 한국어·영어). KURE는 ONNX가 없어 optimum-onnx로 export하고 fp16으로 바꿨다(298 MB). 둘 다 Apache-2.0, 쌍마다 logit 하나.
+- rerank는 모든 slice에서 앱보다 낫다. item별 nDCG@10은 KURE fp16 192가 앱보다 490개 낫고 164개 못하다.
+- Horizon은 영어·find에서 KURE와 비슷하지만 한국어와 recall(사용자 문장 세 개를 이은 긴 질문)에서 낮다. KURE를 쓴다.
+- 쌍당 token을 줄이면 빨라지고 품질이 떨어진다(256→192 −0.018, 192→128 −0.033). fp16은 fp32와 점수가 거의 같고(합성 쌍 logit 차 0.03 미만) WebGPU에서 1.5배 빠르다.
+- 장치(합성 쌍 25개, 같은 길이로 padding): KURE fp16 WebGPU 256/192/128 token 1,280/940/635 ms. Horizon fp32 CPU 256 token 2.5 s, 512 token 6 s, 같은 조건 WebGPU 1.0 s. CPU에서는 예산 안에 들지 않는다. Horizon의 공개 q8(embedding만 int8)은 CPU에서도 빨라지지 않았다.
