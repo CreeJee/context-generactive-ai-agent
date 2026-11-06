@@ -5,6 +5,7 @@ import { NativeOwnerFailed } from "../native-search/worker-protocol.ts";
 // eslint-disable-next-line anti-slop-effect/no-service-constructor-imports
 import { makeNativeVectorIndex } from "./native-vector-index.ts";
 import type { NativeReadInput, NativeReadOutput } from "../native-search/read-protocol.ts";
+import type { LexicalDocument } from "../native-search/worker-protocol.ts";
 
 export interface VectorBackend {
   readonly kind: "native";
@@ -20,6 +21,14 @@ export interface VectorBackend {
 export interface VectorIndexApi {
   readonly backend: VectorBackend;
   readonly size: () => number;
+  /**
+   * Replaces the lexical documents of `removed` and of every document's seq, in one commit the
+   * next read sees.
+   */
+  readonly applyLexical: (
+    documents: readonly LexicalDocument[],
+    removed: readonly number[],
+  ) => Effect.Effect<void, VectorIndexError>;
   readonly flushRemovals: Effect.Effect<void, VectorIndexError>;
   readonly add: (
     seqs: readonly number[],
@@ -50,7 +59,7 @@ export class VectorIndexError extends Schema.TaggedError<
   VectorIndexError,
   { readonly brand: unique symbol }
 >()("VectorIndexError", {
-  operation: Schema.Literals(["open", "add", "remove", "search", "save"]),
+  operation: Schema.Literals(["open", "add", "remove", "search", "save", "lexical"]),
   cause: Schema.Defect(),
 }) {
   /**

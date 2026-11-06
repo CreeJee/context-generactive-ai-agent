@@ -122,7 +122,20 @@ const owner = Effect.gen(function* () {
             (session) => Effect.sync(() => session.close()),
           ),
         );
+  // The vector lease above already keeps a second owner of this storage root out; Tantivy's own
+  // writer lock guards the folder as well. The index is closed before the worker exits.
+  const lexical = yield* Effect.transposeOption(
+    Option.map(Option.fromUndefinedOr(setup.lexicalDirectory), (directory) =>
+      Effect.acquireRelease(
+        native(() => binding.LexicalIndex.open(directory, setup.recover === true)),
+        (index) => Effect.sync(() => index.close()),
+      ),
+    ),
+  );
   const size = yield* native(() => ScopedRef.getUnsafe(indexRef).size());
+  const lexicalReady = yield* Effect.transposeOption(
+    Option.map(lexical, (index) => native(() => ({ instance: index.instance() }))),
+  );
 
   const execute = Effect.fnUntraced(function* (command: OwnerCommand) {
     yield* Effect.when(
@@ -140,6 +153,13 @@ const owner = Effect.gen(function* () {
       });
     const ids = (values: readonly string[]) =>
       decodeIds(values).pipe(Effect.mapError(() => fail("invalid-input")));
+    const lexicalIndex = Effect.fromOption(lexical, () => fail("invalid-input"));
+    const lexicalAck = (size: number) =>
+      OwnerReply.cases["lexical-ack"].make({
+        requestId: command.requestId,
+        epoch: setup.epoch,
+        size,
+      });
     return yield* OwnerCommand.match(command, {
       add: (command) =>
         Effect.gen(function* () {
@@ -271,10 +291,35 @@ const owner = Effect.gen(function* () {
             result,
           });
         }),
+      "lexical-apply": (command) =>
+        Effect.gen(function* () {
+          const index = yield* lexicalIndex;
+          if (
+            !command.documents.every((document) => document.seq >= 0) ||
+            !command.removed.every((seq) => seq >= 0)
+          )
+            return yield* fail("invalid-input");
+          const size = yield* native(() =>
+            index.apply(
+              command.documents.map((document) => ({ ...document })),
+              [...command.removed],
+            ),
+          );
+          return lexicalAck(size);
+        }),
+      "lexical-reset": (command) =>
+        Effect.gen(function* () {
+          const index = yield* lexicalIndex;
+          yield* native(() => index.reset(command.instance));
+          return yield* native(() => lexicalAck(index.size()));
+        }),
     });
   });
 
-  return { ready: { threadId, size, needsReset }, execute };
+  return {
+    ready: { threadId, size, needsReset, lexical: Option.getOrUndefined(lexicalReady) },
+    execute,
+  };
 });
 
 /**

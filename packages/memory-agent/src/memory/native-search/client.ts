@@ -103,6 +103,8 @@ const replyDeadline = OwnerCommand.match({
   save: () => replyTimeout,
   validate: () => replyTimeout,
   "vector-search": () => replyTimeout,
+  "lexical-apply": () => replyTimeout,
+  "lexical-reset": () => replyTimeout,
 });
 
 /** A started native owner worker, as the host drives it. Tests wrap it to gate transport. */
@@ -277,6 +279,7 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
     "vector-hits": (reply) => Option.some(reply.size),
     "controlled-result": (reply) => Option.some(reply.size),
     "memory-result": () => Option.none(),
+    "lexical-ack": () => Option.none(),
   });
 
   /** Holds the slot from dispatch until the worker answers, then settles the caller's wait. */
@@ -305,6 +308,8 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
                 save: transport.send,
                 validate: transport.send,
                 "vector-search": transport.send,
+                "lexical-apply": transport.send,
+                "lexical-reset": transport.send,
               });
             }),
           ),
@@ -393,6 +398,12 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
       }),
       validate: (input) => ({ ...input, ids: [...input.ids] }),
       remove: (input) => ({ ...input, ids: [...input.ids] }),
+      "lexical-apply": (input) => ({
+        ...input,
+        documents: input.documents.map((document) => ({ ...document })),
+        removed: [...input.removed],
+      }),
+      "lexical-reset": (input) => input,
       reset: (input) => ({ ...input }),
       save: (input) => ({ ...input }),
     });
@@ -532,6 +543,8 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
         save: () => Effect.succeedNone,
         validate: () => Effect.succeedNone,
         "vector-search": () => Effect.succeedNone,
+        "lexical-apply": () => Effect.succeedNone,
+        "lexical-reset": () => Effect.succeedNone,
       }),
       (control) => executeRegistered(command, control, admission),
       (control) =>
@@ -577,6 +590,8 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
     // Synchronous legacy API metadata bridge; never invokes native code or mutates state.
     size: () => Ref.getUnsafe(cachedSize),
     initialNeedsReset: transport.ready.needsReset,
+    /** The lexical index's build when the owner started; none without a lexical index. */
+    initialLexical: Option.fromUndefinedOr(transport.ready.lexical),
     inspect: Ref.get(state).pipe(
       Effect.map(
         State.$match({

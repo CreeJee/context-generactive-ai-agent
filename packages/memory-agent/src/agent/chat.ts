@@ -1106,7 +1106,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       Effect.catch(logFailure("Background indexing stopped")),
       Effect.catchDefect((defect) => logDefect("Background indexing stopped")(Cause.die(defect))),
     );
-  const indexAfterRun = quietlyIndexing(indexer.indexUpTo(afterRunBudget)).pipe(
+  // The lexical index first: it needs no model, so the run's words are searchable soonest.
+  const indexAfterRun = quietlyIndexing(indexer.lexicalUpTo(afterRunBudget)).pipe(
+    Effect.andThen(quietlyIndexing(indexer.indexUpTo(afterRunBudget))),
     Effect.andThen(quietlyIndexing(indexer.analyzeUpTo(afterRunBudget))),
     Effect.andThen(interpreter.automatic ? quietlyIndexing(interpreter.runPending) : Effect.void),
   );

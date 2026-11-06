@@ -14,13 +14,15 @@
 - `ControlledSearchResult` — `{ kind: "success"|"cancelled"|"budget-exceeded"|"invalid-input"|"index-failed", ids, scores, nativeWindow: "whole-call", nativeMs }`
 - `SearchControl` — Rust가 소유한 일회성 요청 제어. `new(token, ownerKey, epoch, requestId, remainingMs)`, `token()`(새로 발급한 capability), `snapshotWasPinned()`, `cancel()`, `close()`, static `count()`
 - `CacheLease` — 벡터 캐시 디렉터리에 한 프로세스만 쓰도록 OS 파일 락을 잡는 클래스. `new(path)`, `close()`
+- `LexicalIndex` — 노드 원문의 Tantivy 색인(위치 있는 3글자 `ngram`, Lindera 형태소를 Kiwi 규칙으로 고른 `lindera`). factory `open(dir, recover)`, `instance()`, `reset(instance)`, `apply(documents, removed)`, `size()`, `morphTerms(text)`, `close()`
+- `LexicalDocument` — `{ seq, project, text }`. `LexicalIndex.apply`가 받는 노드
 - `MemoryReadSession` — 읽기 전용 SQLite 세션. `new(databasePath)`, `close()`, `search(index, input, token, ownerKey, epoch, requestId) -> NativeReadOutput`
 - `NativeReadInput` — `allowedProjects`, `embedder`, `query?`, `trigramTerms`/`shortTerms`/`morphTerms`, `vectorK`/`textK`/`morphK`, `textEnabled`/`morphEnabled`, `remainingMs`, `inputBudgetBytes`/`outputBudgetBytes`
 - `NativeReadOutput` — `kind`(success/cancelled/budget-exceeded/invalid-input/read-failed/index-failed), `vectorIds`/`vectorSeqs`/`vectorScores`, `vectorUnavailable`, `textUnavailable`, `textIds`, `morphIds`, `unindexed`, `uninterpreted`, `candidateCount`, `sqliteExecutions`, 단계별 `candidateMs`/`vectorMs`/`textMs`/`morphMs`/`mappingMs`/`coverageMs`(text 단계 안의 `trigramMs`, `shortTermMs`/`shortTermMaxMs`/`shortTermsDone`과 대기 시간 `queueMs` 포함), `failedStage?`, `inputLogicalBytes`/`outputLogicalBytes`
 - `build` (`vite.config.ts` run task) — `node build-turbovec.ts`를 실행한다. 캐시 입력은 `src/**`, `build.rs`, `Cargo.toml`, `Cargo.lock`, `build-turbovec.ts`, 출력은 `memory-turbovec.node`, env는 `CARGO`
 - `build-turbovec.ts` — CLI 스크립트. `cargo build --release --locked`로 크레이트를 빌드하고 결과 라이브러리를 `memory-turbovec.node`로 복사한다. 실패는 `TurbovecBuildFailed`(`reason: "cargo-failed"|"unsupported-host"`, `exitCode?`)
-- `memory-turbovec` (`Cargo.toml`) — cdylib 크레이트. feature `node-sqlite`(기본, `rusqlite/loadable_extension`), `test-sqlite`(`rusqlite/bundled`, Rust 단위 테스트 전용). 의존성 `napi` 3(napi8), `rusqlite =0.37.0`(hooks), git rev 고정 `turbovec`
-- [`src`](./src/README.md) — napi-rs Rust 네이티브 모듈. `VectorIndex`, `SearchControl` 레지스트리, `MemoryReadSession`, `CacheLease` 구현
+- `memory-turbovec` (`Cargo.toml`) — cdylib 크레이트. feature `node-sqlite`(기본, `rusqlite/loadable_extension`), `test-sqlite`(`rusqlite/bundled`, Rust 단위 테스트 전용). 의존성 `napi` 3(napi8), `rusqlite =0.37.0`(hooks), git rev 고정 `turbovec`, `tantivy =0.27.0`, `lindera =6.2.0`(`embed-ko-dic`), `regex`, `unicode-normalization`
+- [`src`](./src/README.md) — napi-rs Rust 네이티브 모듈. `VectorIndex`, `LexicalIndex`, `SearchControl` 레지스트리, `MemoryReadSession`, `CacheLease` 구현
 - [`wasm-check`](./wasm-check/README.md) — 고정된 `turbovec` 크레이트가 wasm 대상으로 빌드되는지 확인하는 컴파일 전용 프로브 크레이트
 
 ## Invariants
@@ -39,6 +41,7 @@
 - 빌드는 이미 실행 중인 서버가 mmap한 라이브러리를 truncate하지 않도록 `memory-turbovec.node.<pid>.tmp`로 복사한 뒤 rename으로 교체해야 한다.
 - 기본 feature `node-sqlite`는 SQLite를 링크하지 않고 호스트 프로세스의 SQLite를 loadable extension으로 빌린다. 자체 SQLite(`test-sqlite`, bundled)는 Rust 단위 테스트 실행 파일에서만 쓴다.
 - cargo 빌드는 `--locked`로 실행하므로 `Cargo.lock`과 맞아야 한다. `turbovec` 의존성은 git rev `ccab9f325e6ce2a270a87daf01ae4e443bcf2d49`로 고정된다.
+- `lindera`의 `embed-ko-dic`은 빌드할 때 mecab-ko-dic(2018-07-20)을 내려받아(md5 확인) 사전을 애드온에 넣는다. 그래서 첫 빌드는 네트워크가 필요하고, 애드온은 약 95MB다.
 - 지원 빌드 호스트는 `darwin`·`linux`·`win32`뿐이며, 그 외 플랫폼은 `unsupported-host`로 실패한다.
 - `target/`과 `*.node`는 git에서 무시된다. 바이너리는 로컬 빌드 산출물이며 배포 대상이 아니다.
 

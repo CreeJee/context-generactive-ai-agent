@@ -690,6 +690,35 @@ export const memoryCandidateDecisionsMigration = `
   DELETE FROM memory_usage_events WHERE candidate_id NOT IN (SELECT id FROM memory_candidates);
 `;
 
+/** The step that journals every change of a node for the lexical index. */
+export const lexicalJournalMigration = `
+  -- The lexical index (Tantivy, in the native search worker) is derived from nodes, like the
+  -- vector index. Every change that alters what it holds for a node is journaled here in the
+  -- change's own transaction; the indexer applies the journal in order and deletes the rows it
+  -- applied. A read drops a hit whose node has a journaled change still pending.
+  CREATE TABLE lexical_changes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    node_seq INTEGER NOT NULL
+  );
+  CREATE INDEX lexical_changes_node ON lexical_changes(node_seq);
+  -- The build of the lexical index the journal leads to. The worker's index names its build; a
+  -- different or missing one is rebuilt from every node.
+  CREATE TABLE lexical_index (
+    one INTEGER PRIMARY KEY CHECK (one = 1),
+    instance TEXT NOT NULL
+  );
+  CREATE TRIGGER nodes_lexical_insert AFTER INSERT ON nodes
+  BEGIN INSERT INTO lexical_changes(node_seq) VALUES (new.seq); END;
+  CREATE TRIGGER nodes_lexical_update AFTER UPDATE OF text, project_id ON nodes
+  BEGIN INSERT INTO lexical_changes(node_seq) VALUES (new.seq); END;
+  CREATE TRIGGER nodes_lexical_delete AFTER DELETE ON nodes
+  BEGIN INSERT INTO lexical_changes(node_seq) VALUES (old.seq); END;
+  CREATE TRIGGER suppressed_lexical_insert AFTER INSERT ON memory_graph_suppressed_nodes
+  BEGIN INSERT INTO lexical_changes(node_seq) VALUES (new.node_seq); END;
+  CREATE TRIGGER suppressed_lexical_delete AFTER DELETE ON memory_graph_suppressed_nodes
+  BEGIN INSERT INTO lexical_changes(node_seq) VALUES (old.node_seq); END;
+`;
+
 /**
  * Ordered schema steps. `PRAGMA user_version` records how many have been applied.
  * Append new steps; never edit an applied one.
@@ -2716,6 +2745,7 @@ export const migrations: readonly string[] = [
   kanbanGoalOwnersMigration,
   importedSessionSourceMigration,
   memoryCandidateDecisionsMigration,
+  lexicalJournalMigration,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

@@ -29,6 +29,19 @@ export class IndexingError extends Schema.TaggedError<
 const Pending = Schema.Struct({ seq: Schema.Finite, text: Schema.String });
 type Pending = typeof Pending.Type;
 
+/**
+ * About how much text one lexical batch sends, in UTF-8 bytes. The worker analyzes it while reads
+ * wait behind it, at a few MB a second, and the batch must answer within the owner's reply time.
+ */
+const lexicalBatchBytes = 1 << 20;
+const LexicalChange = Schema.Struct({ id: Schema.Finite, node_seq: Schema.Finite });
+const NodeBytes = Schema.Struct({ seq: Schema.Finite, bytes: Schema.Finite });
+const LexicalNode = Schema.Struct({
+  seq: Schema.Finite,
+  project_id: Schema.String,
+  text: Schema.String,
+});
+
 /** How one batch is cut before embedding: whole nodes, or the embedder's chunk windows. */
 type Segmentation = Data.TaggedEnum<{
   whole: {};
@@ -126,6 +139,27 @@ const make = Effect.gen(function* () {
       ORDER BY n.created_at DESC, n.seq DESC LIMIT ${limit}`,
   });
   const oneMorphBatchAtATime = yield* Semaphore.make(1);
+  // Two batches reading the same journal rows would apply them twice, the second after newer ones.
+  const oneLexicalBatchAtATime = yield* Semaphore.make(1);
+  const selectChanges = SqlSchema.findAll({
+    Request: Schema.Finite,
+    Result: LexicalChange,
+    execute: (limit) => sql`SELECT id, node_seq FROM lexical_changes ORDER BY id LIMIT ${limit}`,
+  });
+  // octet_length reads a column's size from its record header, not its text.
+  const selectBytes = SqlSchema.findAll({
+    Request: Schema.Array(Schema.Finite),
+    Result: NodeBytes,
+    execute: (seqs) =>
+      sql`SELECT seq, octet_length(text) AS bytes FROM nodes WHERE seq IN ${sql.in(seqs)}`,
+  });
+  const selectSearchable = SqlSchema.findAll({
+    Request: Schema.Array(Schema.Finite),
+    Result: LexicalNode,
+    execute: (seqs) => sql`
+      SELECT n.seq, n.project_id, n.text FROM nodes n
+      WHERE n.seq IN ${sql.in(seqs)} AND ${sql.literal(meaningfulNodeFilter)}`,
+  });
   // Runs end concurrently; two batches picking the same pending nodes would index them twice.
   const oneBatchAtATime = yield* Semaphore.make(1);
 
@@ -275,6 +309,44 @@ const make = Effect.gen(function* () {
       return pending.length;
     }).pipe(oneMorphBatchAtATime.withPermits(1));
 
+  /**
+   * Applies the oldest journaled node changes to the lexical index: at most `limit` of them, cut
+   * at about {@link lexicalBatchBytes} of text. A node that is gone, blank or suppressed leaves the
+   * index. The applied rows are deleted by id, so a change journaled meanwhile stays for the next
+   * batch.
+   */
+  const lexicalBatch = (limit: number) =>
+    Effect.gen(function* () {
+      const changes = yield* selectChanges(limit).pipe(Effect.mapError(failed("read-failed")));
+      if (changes.length === 0) return 0;
+      const sizes = yield* selectBytes([...new Set(changes.map((change) => change.node_seq))]).pipe(
+        Effect.mapError(failed("read-failed")),
+      );
+      const bytesOf = new Map(sizes.map((row) => [row.seq, row.bytes]));
+      // The longest prefix of the journal within the budget, and never less than one change.
+      const taken = changes.reduce<{ readonly count: number; readonly bytes: number }>(
+        (cut, change, index) => {
+          const bytes = cut.bytes + (bytesOf.get(change.node_seq) ?? 0);
+          return cut.count === index && (index === 0 || bytes <= lexicalBatchBytes)
+            ? { count: index + 1, bytes }
+            : cut;
+        },
+        { count: 0, bytes: 0 },
+      ).count;
+      const applied = changes.slice(0, taken);
+      const seqs = [...new Set(applied.map((change) => change.node_seq))];
+      const searchable = yield* selectSearchable(seqs).pipe(Effect.mapError(failed("read-failed")));
+      const kept = new Set(searchable.map((node) => node.seq));
+      yield* vectors.applyLexical(
+        searchable.map((node) => ({ seq: node.seq, project: node.project_id, text: node.text })),
+        seqs.filter((seq) => !kept.has(seq)),
+      );
+      yield* sql`DELETE FROM lexical_changes WHERE id <= ${applied.at(-1)!.id}`.pipe(
+        Effect.mapError(failed("mapping-commit-failed")),
+      );
+      return applied.length;
+    }).pipe(oneLexicalBatchAtATime.withPermits(1));
+
   /** Runs `work` in batches until nothing is pending or `budget` nodes have been done. */
   const drain = <E>(
     work: (limit: number) => Effect.Effect<number, E>,
@@ -315,6 +387,11 @@ const make = Effect.gen(function* () {
      */
     indexUpTo: (budget: number, batchSize = 64) => drain(indexBatch, budget, batchSize),
     analyzeUpTo: (budget: number, batchSize = 256) => drain(analyzeBatch, budget, batchSize),
+    lexicalBatch,
+    /** Applies journaled node changes to the lexical index until none is left. */
+    lexicalAll: (batchSize = 512) => drain(lexicalBatch, Number.POSITIVE_INFINITY, batchSize),
+    /** Applies at most `budget` journaled changes; the rest wait for the fibre that drains them. */
+    lexicalUpTo: (budget: number, batchSize = 512) => drain(lexicalBatch, budget, batchSize),
 
     /**
      * Runs `work` while no batch is embedding or analysing. For changing a node's text: a batch

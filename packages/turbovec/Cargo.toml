@@ -18,6 +18,11 @@ napi = { version = "3", default-features = false, features = ["napi8"] }
 napi-derive = "3"
 rusqlite = { version = "=0.37.0", features = ["hooks"] }
 turbovec = { git = "https://github.com/RyanCodrai/turbovec.git", rev = "ccab9f325e6ce2a270a87daf01ae4e443bcf2d49" }
+tantivy = "=0.27.0"
+# The ko-dic dictionary is downloaded and built into the addon at build time.
+lindera = { version = "=6.2.0", features = ["embed-ko-dic"] }
+regex = "=1.13.1"
+unicode-normalization = "=0.1.26"
 
 [build-dependencies]
 napi-build = "2"

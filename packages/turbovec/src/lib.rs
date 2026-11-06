@@ -1,9 +1,11 @@
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use std::fs::File;
+mod lexical;
 mod read_session;
 mod search_control;
 mod sqlite_bridge;
+pub use lexical::{LexicalDocument, LexicalIndex};
 pub use read_session::{MemoryReadSession, NativeReadInput, NativeReadOutput};
 pub use search_control::{ControlledSearchResult, SearchControl};
 use turbovec::IdMapIndex;

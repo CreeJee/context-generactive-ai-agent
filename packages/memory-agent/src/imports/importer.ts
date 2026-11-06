@@ -363,7 +363,9 @@ const make = (watching: boolean, home: string) =>
      * its permit between batches, so a conversation held meanwhile is still indexed first: its
      * nodes are the newest by time, and that is the order pending nodes come out in.
      */
-    const backfill = Effect.andThen(indexer.indexAll(), indexer.analyzeAll()).pipe(
+    const backfill = Effect.all([indexer.lexicalAll(), indexer.indexAll(), indexer.analyzeAll()], {
+      discard: true,
+    }).pipe(
       // Pending nodes stay pending; the next pass or start indexes them.
       ignoreLogged("import_backfill_failed"),
       oneDrainAtATime.withPermits(1),

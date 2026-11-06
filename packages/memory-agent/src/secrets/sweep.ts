@@ -494,10 +494,11 @@ const make = (running: boolean) =>
         }),
       );
       yield* Effect.when(
-        // The hidden text is already stored; nodes left unindexed are indexed by the next pass.
-        Effect.andThen(indexer.indexAll(), indexer.analyzeAll()).pipe(
-          ignoreLogged("secret_sweep_reindex_failed"),
-        ),
+        // The hidden text is already stored; nodes left unindexed are indexed by the next pass. The
+        // lexical index goes first: until it has the hidden text, reads drop those nodes' matches.
+        Effect.all([indexer.lexicalAll(), indexer.indexAll(), indexer.analyzeAll()], {
+          discard: true,
+        }).pipe(ignoreLogged("secret_sweep_reindex_failed")),
         Effect.succeed(changedNodes > 0),
       );
       return changedNodes;

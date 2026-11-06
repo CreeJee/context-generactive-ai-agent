@@ -19,9 +19,19 @@ export const OwnerSetup = Schema.Struct({
   ownerKey: Schema.optional(Schema.String),
   /** Host-owned, trusted file path; never supplied by a search request. */
   databasePath: Schema.optional(Schema.String),
+  /** Host-owned folder of the lexical index; without it the owner keeps none. */
+  lexicalDirectory: Schema.optional(Schema.String),
   recover: Schema.optional(Schema.Boolean),
 });
 export type OwnerSetup = typeof OwnerSetup.Type;
+
+/** A node as the lexical index holds it: its text, searched in its project. */
+export const LexicalDocument = Schema.Struct({
+  seq: Schema.Int,
+  project: Schema.String,
+  text: Schema.String,
+});
+export type LexicalDocument = typeof LexicalDocument.Type;
 
 export const OwnerCommand = Schema.TaggedUnion({
   add: { ...correlation, vectors: vector, ids },
@@ -51,6 +61,17 @@ export const OwnerCommand = Schema.TaggedUnion({
     /** Set only by host dispatch; user values are never adopted. */
     controlToken: Schema.optional(Schema.String),
   },
+  /**
+   * Replaces the lexical documents of `removed` and of every document's seq with `documents`, in
+   * one commit that the next read sees.
+   */
+  "lexical-apply": {
+    ...correlation,
+    documents: Schema.Array(LexicalDocument),
+    removed: Schema.Array(Schema.Int),
+  },
+  /** Empties the lexical index and names its new build. */
+  "lexical-reset": { ...correlation, instance: Schema.String },
 });
 export type OwnerCommand = typeof OwnerCommand.Type;
 
@@ -90,6 +111,8 @@ export const OwnerReply = Schema.TaggedUnion({
     result: NativeReadOutput,
     workerCpuUs: Schema.optional(Schema.Finite),
   },
+  /** How many documents the lexical index holds after the command. */
+  "lexical-ack": { ...correlation, size: Schema.Int },
 });
 export type OwnerReply = typeof OwnerReply.Type;
 
@@ -127,6 +150,8 @@ export const OwnerReady = Schema.Struct({
   threadId: Schema.Int,
   size: Schema.Int,
   needsReset: Schema.Boolean,
+  /** The lexical index's build, as its last reset named it; none for a new one. */
+  lexical: Schema.optional(Schema.Struct({ instance: Schema.NullOr(Schema.String) })),
 });
 export type OwnerReady = typeof OwnerReady.Type;
 

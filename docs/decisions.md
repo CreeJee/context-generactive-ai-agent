@@ -4195,3 +4195,17 @@
   - cpu와 gpu 파일이 identity를 함께 쓰게 해서 q8로 넘어가는 방법도 있었다. 사용자가 그렇게 바꿀 필요는 없다고 했다.
 - 시작할 때와 모드를 고를 때 돌던 WebGPU 확인은 뺐다. 모드가 그 결과에 기대지 않고, 시작할 때 돌리면 임베더 worker 옆에서 같은 파일을 한 번 더 내려받고 불러오기 때문이다. 확인은 설정 화면의 "다시 확인" 버튼으로만 돈다. 실제로 어디서 도는지는 실행 배지가 보인다.
 - `EmbeddingOverview`에서 `memoryBytes`와 `gpuMemoryThreshold`를 뺐다.
+
+## lexical 색인은 native owner 안의 Tantivy로 두고 노드 변경을 기록해 맞춘다 (2026-11-06)
+
+- 계기: 검색 재설계 벤치(docs/memory-search-measurements.md "검색 재설계")에서 Tantivy 색인 하나에 전부 점수 매기기가 FTS5보다 빠르고 품질이 같거나 나았다. 형태소는 Lindera ko-dic을 Kiwi 규칙으로 골라도 Kiwi와 같거나 조금 나았다. 사용자는 Tantivy를 거의 확정했고, 검색 엔진 전환을 이어서 하자고 했다.
+- 결정: Tantivy 색인을 vector 색인과 같은 native search worker(`turbovec` 애드온의 `LexicalIndex`)에 둔다.
+  - 필드는 `ngram`(위치 있는 3글자, FTS5 trigram과 같음)과 `lindera`(Lindera 형태소를 Kiwi 규칙으로 고른 검색어)다. `seq`와 `project`는 fast field다.
+  - 색인 폴더는 `<storage>/lexical/<layout hash>`다. 스키마나 분석 규칙이 바뀌면 layout 문자열을 바꾼다. 그러면 새 폴더를 처음부터 만든다.
+  - Lindera ko-dic 사전은 빌드할 때 내려받아 애드온에 넣는다. 애드온이 1.5MB에서 95MB가 된다.
+- SQLite가 원본이다. Tantivy는 vector 색인처럼 파생 색인이다.
+  - 노드의 삽입, 원문·프로젝트 변경, 삭제, 숨김 추가·해제는 SQLite trigger가 같은 transaction에서 `lexical_changes`에 기록한다. secret sweep, 프로젝트 합치기, 삭제가 따로 알릴 필요가 없다.
+  - indexer가 기록을 id 순서로 읽어 batch로 반영하고, 반영한 id까지 지운다. 그 사이에 생긴 변경은 더 큰 id라 다음 batch에 남는다. 한 batch는 기록 512개, 원문 약 1MiB까지다. 비었거나 숨긴 노드, 지운 노드는 색인에서 뺀다.
+  - `lexical_index`에 색인 build 이름을 둔다. worker 색인의 이름(Tantivy commit payload)과 다르거나 없으면 색인을 비우고, 모든 노드를 최신순으로 다시 기록한다. 색인을 먼저 비우므로 중간에 멈추면 다음 시작에 다시 만든다.
+  - publication gate(`withMutation`)는 쓰지 않는다. 읽기가 아직 반영하지 않은 변경이 있는 노드의 히트를 버리면 SQLite 스냅샷과 맞기 때문이다(검색 전환 단계).
+- 반영은 실행이 끝난 뒤 vector 색인보다 먼저 돈다. 모델이 필요 없으니 그 실행의 말을 가장 빨리 찾게 하려는 것이다. 시작할 때, 가져오기 뒤, secret sweep 뒤에도 돈다. FTS5는 삽입 trigger로 바로 찾혔지만, 이제 실행 중에 쓴 노드는 실행이 끝나야 글자 검색에 잡힌다.

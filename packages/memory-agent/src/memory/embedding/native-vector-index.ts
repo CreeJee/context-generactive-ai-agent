@@ -1,6 +1,6 @@
 // Native transport/filesystem/SQLite boundaries; the worker is the sole index and lease owner.
 import { sha256 } from "../../runtime/synchronous-crypto.ts";
-import { Array as EffectArray, Effect, Path, Schema } from "effect";
+import { Array as EffectArray, Effect, Option, Path, Schema } from "effect";
 import { SecureRandom } from "effect/crypto";
 import { SqlClient, type SqlError } from "effect/sql";
 import { StorageRoot } from "../../config/storage-root.ts";
@@ -10,12 +10,22 @@ import { makeNativeOwner } from "../native-search/client.ts";
 // eslint-disable-next-line anti-slop-effect/no-service-constructor-imports -- This owner-specific gate must be created alongside, not independently from, its worker.
 import { makePublication } from "../native-search/publication.ts";
 import type { NativeReadInput } from "../native-search/read-protocol.ts";
-import { NativeOwnerFailed, OwnerCommand, OwnerReply } from "../native-search/worker-protocol.ts";
+import {
+  type LexicalDocument,
+  NativeOwnerFailed,
+  OwnerCommand,
+  OwnerReply,
+} from "../native-search/worker-protocol.ts";
 import { chunkVectorIdFloor } from "./chunks.ts";
 import { Embedder } from "./embedder.ts";
 import { VectorIndexError, type VectorHit, type VectorIndexApi } from "./vector-index.ts";
 
 const Seq = Schema.Struct({ seq: Schema.Finite });
+/**
+ * What the lexical index holds and how it splits text: its schema, the trigram and Lindera
+ * analysis. A different layout is a different folder, rebuilt from every node.
+ */
+const lexicalLayout = "tantivy-0.27/ngram3+lindera-ko-dic-kiwi-rules/v1";
 /** SQLite binds at most 32,766 variables per statement; id lists are split well below that. */
 const idsPerStatement = 1000;
 
@@ -72,6 +82,7 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
       bits: 4,
       cacheDirectory: paths.join(storage.path, "vectors", sha256(embedder.identity).slice(0, 16)),
       databasePath: opened.databasePath,
+      lexicalDirectory: paths.join(storage.path, "lexical", sha256(lexicalLayout).slice(0, 16)),
       recover: true,
     },
     opened.worker,
@@ -240,6 +251,42 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
       )
       .pipe(Effect.mapError(failure("open")));
   }
+  // The lexical index is rebuilt from every node when its build is not the one the journal leads
+  // to: a new or replaced folder, or a journal written for another build. The index is emptied
+  // and named first, so a stop before the journal is rewritten only rebuilds again.
+  const recordedLexical = yield* sql`SELECT instance FROM lexical_index`.pipe(
+    Effect.flatMap(
+      Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ instance: Schema.String }))),
+    ),
+    Effect.map((rows) => rows[0]?.instance ?? null),
+    Effect.mapError(failure("open")),
+  );
+  const rebuildLexical = Effect.gen(function* () {
+    const instance = yield* crypto.uuidV7();
+    yield* command(
+      OwnerCommand.cases["lexical-reset"].make({ ...(yield* identity), instance }),
+      "open",
+    );
+    yield* sql
+      .withTransaction(
+        Effect.all([
+          sql`DELETE FROM lexical_changes`,
+          // Newest first, so the latest conversations are searchable soonest.
+          sql`INSERT INTO lexical_changes (node_seq) SELECT seq FROM nodes ORDER BY seq DESC`,
+          sql`INSERT INTO lexical_index (one, instance) VALUES (1, ${instance})
+            ON CONFLICT (one) DO UPDATE SET instance = excluded.instance`,
+        ]),
+      )
+      .pipe(Effect.mapError(failure("open")));
+  });
+  yield* Effect.when(
+    rebuildLexical,
+    Effect.succeed(
+      owner.initialLexical.pipe(
+        Option.exists(({ instance }) => instance === null || instance !== recordedLexical),
+      ),
+    ),
+  );
   const publication = yield* makePublication(owner.epoch);
   const add = Effect.fnUntraced(function* (
     seqs: readonly number[],
@@ -263,6 +310,16 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
     VectorIndexError.make({ operation: "search", cause });
   const api: VectorIndexApi = {
     size: () => owner.size(),
+    applyLexical: (documents: readonly LexicalDocument[], removed: readonly number[]) =>
+      identity.pipe(
+        Effect.flatMap((id) =>
+          command(
+            OwnerCommand.cases["lexical-apply"].make({ ...id, documents, removed }),
+            "lexical",
+          ),
+        ),
+        Effect.asVoid,
+      ),
     flushRemovals: publication.withMutation(flush, publicationError),
     add,
     remove,

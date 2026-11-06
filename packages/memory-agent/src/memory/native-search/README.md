@@ -14,11 +14,12 @@
 - `OwnerTransport` / `OwnerConnect` / `OwnerWorker` — 시작된 owner worker를 호스트가 다루는 인터페이스(`ready`, `send`, `exited`, `terminate`)와 연결 함수 타입이다. 테스트가 transport를 감쌀 때 쓴다.
 - `ReadAdmission` — 읽기 진입 결과 TaggedEnum(`pinned` | `completed{reply}`)이다.
 - `OwnerInspection` — `inspect` 결과 TaggedEnum(`open{queued, active}` | `failed{reason}`)이다.
-- `OwnerSetup` — worker 설정 Schema(`epoch`, `dimensions`, `bits`, `cacheDirectory`, 선택 `ownerKey`/`databasePath`/`recover`)다.
-- `OwnerCommand` — owner 명령 TaggedUnion(`add`, `remove`, `save`, `reset`, `validate`, `vector-search`, `vector-search-controlled`, `memory-search`)이다. 모든 명령에 `requestId`·`epoch`가 붙는다.
-- `OwnerReply` — owner 응답 TaggedUnion(`ack`, `removed`, `vector-hits`, `controlled-result`, `memory-result`)이다.
+- `OwnerSetup` — worker 설정 Schema(`epoch`, `dimensions`, `bits`, `cacheDirectory`, 선택 `ownerKey`/`databasePath`/`lexicalDirectory`/`recover`)다.
+- `OwnerCommand` — owner 명령 TaggedUnion(`add`, `remove`, `save`, `reset`, `validate`, `vector-search`, `vector-search-controlled`, `memory-search`, `lexical-apply`, `lexical-reset`)이다. 모든 명령에 `requestId`·`epoch`가 붙는다.
+- `OwnerReply` — owner 응답 TaggedUnion(`ack`, `removed`, `vector-hits`, `controlled-result`, `memory-result`, `lexical-ack`)이다.
+- `LexicalDocument` — lexical 색인이 받는 노드 Schema(`seq`, `project`, `text`)다.
 - `NativeOwnerFailed` — Schema.TaggedError다. `reason` 리터럴 13종(`invalid-input`, `queue-full`, `input-budget`, `worker-exit`, `worker-error`, `startup-timeout`, `request-timeout`, `closed`, `epoch-mismatch`, `index-failed`, `lease-unavailable`, `read-failed`, `native-incompatible`)과 프로세스 내부에만 남는 `cause`를 가진다.
-- `OwnerReady` / `Open` / `Execute` / `NativeOwnerRpcs` — 준비 보고 Schema와 Effect RPC 정의다. `Open`은 setup 결과를, `Execute`는 `OwnerCommand`를 `OwnerReply`로 처리한다.
+- `OwnerReady` / `Open` / `Execute` / `NativeOwnerRpcs` — 준비 보고 Schema(lexical 색인이 있으면 그 build 이름 `lexical.instance`)와 Effect RPC 정의다. `Open`은 setup 결과를, `Execute`는 `OwnerCommand`를 `OwnerReply`로 처리한다.
 - `NativeReadInput` / `NativeReadOutput` — native memory read의 입출력 Schema다. budget 0~2000ms, bytes ≤ 1 MiB, `vectorK ≤ maxVectorK` 범위를 검사한다. 채널별 검색어 수 상한(trigram 24, 두 글자 8, morph 24; 넘으면 이름 같은 것·긴 것을 먼저 남긴다 — 2026-10-30)은 호스트가 적용하고, 응답은 단계 시간과 등록→claim 대기 `queueMs`를 함께 돌려준다.
 - `nativeReadInputLogicalBytes` — 복사 전 경계에서 입력의 논리 바이트를 계산한다. 한도를 넘으면 `inputBudgetBytes + 1`을 반환한다.
 - `TransferredVector` / `maxVectorK`(48) / `ReadStage` — 버퍼를 전송(transfer)하는 Float32Array Schema, 벡터 k 상한, 읽기 단계 순서 리터럴(candidate→vector→mapping→text→morph→coverage)이다.
@@ -48,6 +49,7 @@
 - memory read에서 text 단계만 자기 몫(남은 예산 600ms 여유)을 넘으면 그 결과만 버리고 `textUnavailable=true`로 표시해 읽기를 계속한다. `success`에 벡터·morph·coverage가 함께 온다. `FindResult.degraded`의 `"text"`로 모델에 전달된다(`docs/decisions.md` 2026-10-30).
 - setup 검증: `dimensions`는 0보다 큰 8의 배수이면서 4294967295 이하다. `bits`는 1, 2, 4, 8 중 하나다. id는 canonical 10진 u64 문자열이다(20자 이하, 18446744073709551615 이하).
 - add는 `vectors.length === ids.length * dimensions`이고 모든 값이 finite여야 한다. vector-search 계열은 `query.length === dimensions`이고 `0 < k ≤ 4294967295`여야 한다. memory read의 `vectorK`는 `maxVectorK`(48) 이하여야 하며, 넘으면 read 전체가 실패한다.
+- lexical 색인은 `lexicalDirectory`가 있을 때만 연다. 없으면 `lexical-apply`/`lexical-reset`은 `invalid-input`이다. `lexical-apply`의 seq가 음수여도 `invalid-input`이다. 두 명령의 reply 기한은 2초이고, native 실패는 다른 명령처럼 `index-failed`(fatal)다.
 - 저장된 인덱스의 dimensions/bits가 setup과 다를 때 `recover !== true`이면 `index-failed`다. 재구축은 명시적 호스트 recovery로만 한다. 조용히 빈 owner로 바꾸지 않는다(`needsReset` 보고).
 - save는 `index.tvim.tmp`에 쓴 뒤 `index.tvim`으로 rename한다. 인덱스는 GC가 아니라 교체될 때나 worker Scope가 닫힐 때 `close`된다. 읽기 세션은 인덱스보다 먼저 닫힌다.
 - `TransferredVector`는 버퍼를 복사하지 않고 transfer한다. 호스트 명령은 소유한 복사본을 실어 보낸다.
@@ -62,6 +64,7 @@
 - `requireRuntime("turbovec")`로 native 애드온을 로드하고 `initializeNodeSqlite(addon.addonPath)`를 호출한다(worker). `runtimeWorkerOptions(setup)`로 worker 옵션을 얻는다(호스트).
 - `setup.databasePath`가 있으면 `node:sqlite` `DatabaseSync`를 read-only로 열어 `assertDatabaseSchema`를 실행하고 닫는다. 이어서 `binding.MemoryReadSession`으로 read-only SQLite 세션을 Scope 동안 연다.
 - 파일시스템: `cacheDirectory`를 `mkdir -p`(mode `0o700`)로 만든다. `index.tvim`의 존재를 확인하고 load한다. save는 `index.tvim.tmp`에 쓴 뒤 rename한다.
+- `setup.lexicalDirectory`가 있으면 `binding.LexicalIndex.open`으로 Tantivy 색인을 Scope 동안 연다(writer lock 포함).
 - `binding.CacheLease`로 `cacheDirectory/writer.lock` 프로세스 간 lease(lock)를 Scope 동안 잡는다. 실패하면 `lease-unavailable`다.
 - native `VectorIndex`의 add/remove/search/searchControlled/validateIds/save/close를 동기 호출한다. 인메모리 인덱스 상태가 바뀐다.
 - `process.threadCpuUsage`와 `process.hrtime.bigint`로 worker CPU와 native 호출 구간을 측정한다.

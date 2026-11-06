@@ -44,7 +44,7 @@
 - `migrationClient`는 바깥 BEGIN IMMEDIATE가 이미 잡혀 있다고 가정한다. 그래서 `SAVEPOINT effect_migrate`, `RELEASE effect_migrate`, `ROLLBACK TO effect_migrate; RELEASE effect_migrate`를 쓰고, 두 번째 DB를 열지 않는다.
 - 바인딩 파라미터는 string, finite number, bigint, null, Uint8Array만 허용한다(Schema 디코드). BigInt 읽기 모드는 fiber의 `SqlClient.SafeIntegers` 값을 따른다.
 - prepared statement 캐시는 용량 200이다. 성공한 prepare만 10분 동안 캐시하고, 실패한 prepare는 즉시 만료한다.
-- `nodes`는 불변이다(`nodes_immutable` 트리거가 UPDATE를 막는다). `nodes.seq`는 turbovec 벡터 id로도 쓰인다. nodes_fts(trigram)는 INSERT 트리거로 채워진다.
+- `nodes`는 불변이다(`nodes_immutable` 트리거가 UPDATE를 막는다). `nodes.seq`는 turbovec 벡터 id로도 쓰인다. nodes_fts(trigram)는 INSERT 트리거로 채워진다. 노드의 삽입, `text`·`project_id` 변경, 삭제와 `memory_graph_suppressed_nodes`의 추가·삭제는 트리거가 `lexical_changes`에 기록한다(lexical 색인의 변경 기록). `lexical_index`는 그 기록이 이어지는 색인 build 이름 한 행이다.
 - 연결 PRAGMA는 `auto_vacuum = INCREMENTAL`, `journal_mode = WAL`, `foreign_keys = ON`, `busy_timeout = 5000`, `cache_size = -65536`(64 MiB, `docs/decisions.md` 근거)이다. `busy_timeout = 5000`은 열 때의 마이그레이션에만 쓰고, `sqlClientOver`가 0으로 둔다. `auto_vacuum`은 첫 표를 만들기 전, WAL보다 먼저 걸 때만 적용된다. 그래서 새 파일만 incremental이 되고, 기존 파일은 0(NONE)으로 남는다.
 - 전체 `VACUUM`은 돌리지 않는다. 동기 `DatabaseSync`라 이벤트 루프를 멈추고, 그동안 쓰기 잠금을 쥔다. 빈 페이지는 같은 연결의 semaphore 줄에 서서 1 MiB씩 돌려준다.
 - 마이그레이션을 하나라도 적용했으면, 연결을 넘기기 전에 `PRAGMA wal_checkpoint(TRUNCATE)`로 WAL을 파일에 옮기고 비운다. 남겨 두면 이후 커밋의 자동 checkpoint가 그 일을 한다. 그 커밋은 흔히 가져오기 worker의 것이고, worker는 그동안 앱 연결을 쥐고 있다.

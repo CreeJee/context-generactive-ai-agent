@@ -61,3 +61,77 @@ it("owns the native index and lease in a real worker, persists, and releases on 
       ),
     ),
   ));
+
+it("keeps a lexical index beside the vectors, naming its build across restarts", () =>
+  Effect.runPromise(
+    Effect.scoped(
+      withTestPlatform(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const directory = yield* fs.makeTempDirectoryScoped({ prefix: "native-owner-" });
+          const setup: OwnerSetup = {
+            kind: "setup",
+            epoch: "test",
+            dimensions: 8,
+            bits: 4,
+            cacheDirectory: directory,
+            lexicalDirectory: `${directory}/lexical`,
+          };
+          const workerFile = new URL("./worker.ts", import.meta.url);
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const owner = yield* rpcTransport({ setup, workerFile });
+              expect(owner.ready.lexical).toEqual({ instance: null });
+              expect(
+                yield* owner.send(
+                  OwnerCommand.cases["lexical-reset"].make({
+                    requestId: "reset",
+                    epoch: "test",
+                    instance: "build-1",
+                  }),
+                ),
+              ).toEqual(
+                OwnerReply.cases["lexical-ack"].make({
+                  requestId: "reset",
+                  epoch: "test",
+                  size: 0,
+                }),
+              );
+              const apply = (
+                requestId: string,
+                documents: readonly { seq: number; project: string; text: string }[],
+                removed: readonly number[],
+              ) =>
+                owner.send(
+                  OwnerCommand.cases["lexical-apply"].make({
+                    requestId,
+                    epoch: "test",
+                    documents,
+                    removed,
+                  }),
+                );
+              expect(
+                yield* apply(
+                  "add",
+                  [
+                    { seq: 1, project: "p", text: "검색엔진을 바꿨다" },
+                    { seq: 2, project: "p", text: "오늘 PR을 열었다" },
+                  ],
+                  [],
+                ),
+              ).toMatchObject({ _tag: "lexical-ack", size: 2 });
+              // Replacing one and removing the other, in one commit.
+              expect(
+                yield* apply("replace", [{ seq: 1, project: "q", text: "[hidden]" }], [2]),
+              ).toMatchObject({ _tag: "lexical-ack", size: 1 });
+              expect(yield* Effect.flip(apply("negative", [], [-1]))).toMatchObject({
+                reason: "invalid-input",
+              });
+            }),
+          );
+          const reopened = yield* rpcTransport({ setup, workerFile });
+          expect(reopened.ready.lexical).toEqual({ instance: "build-1" });
+        }),
+      ),
+    ),
+  ));

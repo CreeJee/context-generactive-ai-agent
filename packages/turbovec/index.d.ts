@@ -125,6 +125,32 @@ export interface NativeReadOutput {
   inputLogicalBytes: number;
   outputLogicalBytes: number;
 }
+/** A node as the lexical index holds it. */
+export interface LexicalDocument {
+  seq: number;
+  project: string;
+  text: string;
+}
+/**
+ * Tantivy index of node text (trigram phrases and Lindera morph terms), derived from SQLite.
+ * Holds the folder's writer lock while open. Synchronous: call it only inside its owning worker.
+ */
+export declare class LexicalIndex {
+  /** Opens or creates the index; `recover` replaces one that cannot be opened with an empty one. */
+  static open(dir: string, recover: boolean): LexicalIndex;
+  /** The build its last reset named; null for a new or replaced index. */
+  instance(): string | null;
+  /** Empties the index and names the new build. */
+  reset(instance: string): void;
+  /** Replaces the documents of `removed` and of each document's seq, in one commit; returns the size. */
+  apply(documents: LexicalDocument[], removed: number[]): number;
+  size(): number;
+  /** The morph terms of a text, for tests and evaluations. */
+  morphTerms(text: string): string[];
+  /** Releases the index and its writer lock now, after any running merge; later calls throw. Idempotent. */
+  close(): void;
+}
+
 /** Read-only SQLite session. Must be owned by the same worker as the borrowed index. */
 export declare class MemoryReadSession {
   constructor(databasePath: string);
@@ -144,6 +170,7 @@ export interface TurbovecAddon {
   CacheLease: typeof CacheLease;
   MemoryReadSession: typeof MemoryReadSession;
   SearchControl: typeof SearchControl;
+  LexicalIndex: typeof LexicalIndex;
 }
 
 export declare const addonPath: string;

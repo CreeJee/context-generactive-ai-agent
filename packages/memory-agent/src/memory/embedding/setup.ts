@@ -53,6 +53,18 @@ const make = Effect.gen(function* () {
     );
   });
 
+  // Journaled node changes, a whole rebuild after a new lexical index among them, are applied
+  // whatever the embedder; failed batches stay journaled for the next run.
+  yield* Effect.forkIn(
+    indexer.lexicalAll().pipe(
+      Effect.catchTags({
+        VectorIndexError: logFailure("memory_lexical_backfill_failed"),
+        IndexingError: (error) =>
+          logFailure("memory_lexical_backfill_failed", { reason: error.reason })(error),
+      }),
+    ),
+    layerScope,
+  );
   // A changed chunk identity must rebuild existing conversations even when no new import or
   // chat arrives. The service Scope owns the drain; failed nodes remain pending for the next run.
   yield* Effect.when(
