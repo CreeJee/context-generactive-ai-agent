@@ -23,7 +23,7 @@
 - `NativeReadInput` / `NativeReadOutput` — native memory read의 입출력 Schema다. budget 0~2000ms, bytes ≤ 1 MiB, `vectorK ≤ maxVectorK` 범위를 검사한다. text 검색어 수 상한(trigram 24, 두 글자 8; 넘으면 이름 같은 것·긴 것을 먼저 남긴다 — 2026-10-30)은 호스트가 적용한다. morph는 질문 원문(`morphQuery`)을 보내고 worker의 lexical 색인이 형태소 검색어로 나눈다. 응답은 단계 시간, 등록→claim 대기 `queueMs`, worker가 읽기 뒤에 센 coverage(`unindexed`, `lexicalPending`, `uninterpreted`, `coverageMs`)를 함께 돌려준다.
 - `nativeReadInputLogicalBytes` — 복사 전 경계에서 입력의 논리 바이트를 계산한다. 한도를 넘으면 `inputBudgetBytes + 1`을 반환한다.
 - `TransferredVector` / `maxVectorK`(48) / `ReadStage` — 버퍼를 전송(transfer)하는 Float32Array Schema, 벡터 k 상한, 읽기 단계 순서 리터럴(candidate→vector→mapping→text→morph)이다.
-- `readCoverage` / `ReadCoverage` — worker의 read-only `DatabaseSync`로 세는 coverage(미임베딩 발언 수, lexical 색인 미반영 변경 수, 허용 프로젝트의 미해석 노드 수)다. 필터는 `quality.ts`의 `meaningfulNodeFilter`·`embeddedKindFilter`를 쓴다. 모델에게 주는 힌트라 읽기 스냅샷과 같을 필요가 없다.
+- `readCoverage` / `ReadCoverage` — worker의 read-only `DatabaseSync`로 세는 coverage(미임베딩 발언 수, lexical 색인 미반영 변경 수, 허용 프로젝트의 미해석 노드 수)다. 필터는 `quality.ts`의 `meaningfulNodeFilter`·`embeddedKindFilter`를 쓴다. 모델에게 주는 힌트라 읽기 스냅샷과 같을 필요가 없다. 읽기 실패는 Effect 오류(`UnknownError`, `SchemaError`)로 돌려주고 worker가 `read-failed`로 바꾼다.
 - `NativeSearchRequest` / `NativeSearchOutcome` — 상위 검색 요청 계약과 결과 TaggedEnum(`success`, `degraded`, `cancelled`, `budget-exceeded`, `stale-generation`, `error`)이다.
 - `NativeSearchClient` — 프레임워크 중립 비동기 전송 인터페이스(`search(request, signal) => Promise<NativeSearchOutcome>`, `close`)다.
 - `nativeSearchBounds` — 고정 한도 상수(admittedSearches 32, activeSearches 1, workBudgetMs 2000, queuedAbortMs 50, activeAbortAcknowledgeMs 100, input/output 1 MiB)다.
