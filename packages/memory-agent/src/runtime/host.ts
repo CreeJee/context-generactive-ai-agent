@@ -82,24 +82,6 @@ const fileExists = Effect.fn("Host.fileExists")(function* (path: string) {
   );
 });
 
-/**
- * The system `tar`. On Windows that is bsdtar in System32 (Windows 10 1803 and later), named by
- * path: a GNU tar earlier on `PATH` (Git for Windows, MSYS) reads `C:\…` as a remote `host:path`.
- */
-export const tarExecutable: {
-  (platform: NodeJS.Platform): (env: NodeJS.ProcessEnv) => string;
-} & typeof tarExecutableBody = EffectFunction.dual(
-  (args) => args.length === 0 || !Schema.is(Schema.String)(args[0]),
-  tarExecutableBody,
-);
-function tarExecutableBody(
-  env: NodeJS.ProcessEnv = process.env,
-  platform: NodeJS.Platform = process.platform,
-) {
-  if (platform !== "win32") return "tar";
-  return win32.join(env.SystemRoot ?? env.SYSTEMROOT ?? "C:\\Windows", "System32", "tar.exe");
-}
-
 /** What Windows programs need to start at all, whatever else they are given. */
 const windowsSystemVariables = [
   "SystemRoot",

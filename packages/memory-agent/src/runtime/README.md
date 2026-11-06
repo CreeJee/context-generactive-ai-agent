@@ -2,23 +2,18 @@
 
 ## Overview
 
-`packages/memory-agent/src/runtime`은 memory-agent 백엔드가 Effect 바깥의 호스트·네이티브 경계와 만나는 곳이다. OS 정보, PATH와 셸, tar, 키체인과 암호화 비밀 파일, 네이티브 addon 로딩, AbortSignal을 다룬다. 실행 동시성 제한(`ExecutionAdmission`), 아카이브 설치(`ArchiveInstaller`/`ArchiveHost`), 실패 태그 로깅과 defect 보고 같은 공통 런타임 기반도 둔다. 다른 계층은 이 파일들을 통해 node:os·keychain·child process 같은 비-Effect API를 Effect·Layer·Context.Service 형태로 쓴다.
+`packages/memory-agent/src/runtime`은 memory-agent 백엔드가 Effect 바깥의 호스트·네이티브 경계와 만나는 곳이다. OS 정보, PATH와 셸, 키체인과 암호화 비밀 파일, 네이티브 addon 로딩, AbortSignal을 다룬다. 실행 동시성 제한(`ExecutionAdmission`), 실패 태그 로깅과 defect 보고 같은 공통 런타임 기반도 둔다. 다른 계층은 이 파일들을 통해 node:os·keychain·child process 같은 비-Effect API를 Effect·Layer·Context.Service 형태로 쓴다.
 
 ## Interface
 
 - `ExecutionAdmission` — Context.Service(`memory-agent/runtime/execution-admission/ExecutionAdmission`). workflow/model/tool마다 active·queued 게이트를 두고 `acquire`, `run`, `snapshot`, `limits`를 제공함. `ExecutionAdmission.layer(limits?)`는 limits가 없으면 env Config에서 한도를 읽음
 - `ExecutionSaturated` / `AdmissionWait`(`forever` | `upTo{duration}`) / `ExecutionAdmissionKind` / `ExecutionAdmissionLimits` / `defaultExecutionAdmissionLimits` / `GateLimits` / `ExecutionAdmissionSnapshot` — 실행 허용 게이트의 오류·대기 정책·한도 스키마와 기본값(workflow 32/64, model 8/16, tool 16/64)
-- `ArchiveInstaller` — Context.Service. `install({archive, target})`이 내려받기, 체크섬 검증, staging, 안전 항목 검사, 압축 해제, publish 순서를 소유함. `ArchiveInstaller.layer`는 `ArchiveHost`가 필요함
-- `ArchiveHost` — 주입 가능한 호스트 I/O 서비스(download/checksum/stage/write/list/extract/publish/cleanup)
-- `ArchiveInstallFailed` / `ArchiveInstallFailedReason`(DownloadFailed, HttpStatus, ChecksumMismatch, UnsafeEntry, HostOperationFailed) / `PinnedArchive` / `ArchiveStaging` — 아카이브 설치 오류 TaggedUnion과 고정 아카이브 계약
-- `archiveHostLayer` / `archiveInstallerLayer` — Node 호스트 구현 Layer(FetchHttpClient, NodeChildProcessSpawner, NodeCrypto, NodeFileSystem, NodePath 제공)
 - `DefectReporter` — Context.Reference. `report(DefectEvent)`와 `recent`를 가지며 기본값은 no-op임. 앱이 Discord reporter(`report/defect-reports.ts`)를 제공함. 타입 `DefectEvent`, `RecentDefect`
 - `tagOf` / `tagOfUnknown` / `reasonTagOf` / `failureNameOf` / `failureNameOfUnknown` / `causeTagsOf` — 실패의 `_tag`(와 `reason._tag`)를 읽는 유일한 지점. 실패의 이름은 태그에 태그 붙은 reason을 붙인 것임(예: `SqlError:LockTimeoutError`). `causeTagsOf`는 실패 자신의 reason 다음부터 `cause` 사슬을 따라 이름을 모으고, 태그 없는 cause에서 멈춤
 - `errorCodesOf` / `withErrorCodes` — 실패의 `cause` 사슬에서 시스템 오류 코드(`ECONNREFUSED`, `UND_ERR_CONNECT_TIMEOUT`처럼 대문자·숫자·`_`로만 된 `code`)를 바깥부터 모음(최대 8단계). 태그는 요청이 실패했다는 것만 말하고, 코드는 어떻게 실패했는지 말함. `withErrorCodes`는 이름 뒤에 `(코드 <- 코드)`를 붙임
 - `logFailure` / `fallbackLogged` / `ignoreLogged` / `logDefect` / `failureAnnotations` / `failureTags` — 예상 실패를 태그로만 로그하고 fallback하거나 무시하는 헬퍼, defect 기록, 실패를 로그 주석(`error`, `cause`)으로 바꾸는 함수, Cause를 태그 문자열로 요약하는 함수
 - `homeDirectory` / `temporaryDirectory` / `totalMemory` / `availableCores` / `hostPlatform` — node:os 정보를 `Effect.sync`로 감싼 값
 - `findExecutable` — PATH의 절대 경로 항목에서만 실행 파일을 찾음(Windows는 PATHEXT 포함). 결과는 Effect<string | null>
-- `tarExecutable` — 시스템 tar 경로. POSIX는 `tar`, Windows는 `%SystemRoot%\System32\tar.exe`
 - `helperEnvironment` — 앱이 띄우는 helper 프로그램용 최소 환경변수. 시스템 변수와 고정 검색 경로만 담고, `user`이면 Windows 사용자 폴더 변수를 더함
 - `shellInvocation` / `ShellInvocation` — 사용자 셸로 명령 한 줄을 실행하는 형태. POSIX는 `$SHELL`|`/bin/sh -c`, Windows는 `cmd.exe /d /s /c "..."`(verbatim)
 - `keyringEntry` / `openKeyringEntry` / `SecretBackend`(`keychain` | `file`) / `KeyringEntry` / `SecretFileStoreFailed` / `KeyringFailure` / `KeyringOpenFailure` — OS 키체인 또는 AES-GCM 암호화 파일 비밀 저장소 항목을 엶
@@ -41,11 +36,6 @@
 - 포화는 작업 자체의 실패가 아님. `saturatedRetry`(50ms 지수, 최대 2초 간격, jitter)로 재시도함. 이미 실행 중인 작업은 `AdmissionWait.forever`를 쓰고, 새 요청은 `upTo`로 기한을 둬 caller가 busy를 듣게 함
 - 포화 metric과 warning 로그는 caller의 대기마다 첫 거절에서만 남김(`reportOnce`)
 - `ExecutionAdmissionLimits` 스키마 범위는 active 1..1024, queued 0..16384임. env Config 경로는 active 최소 1, queued 최소 0, 최대 16384로 검사함. 명시 limits의 디코드 실패는 `Config.ConfigError`로 바뀜
-- ArchiveInstaller 순서는 download, checksum, digest 비교(불일치 시 ChecksumMismatch), stage, write, list, 위험 항목 검사, extract, publish임. staging은 `acquireUseRelease`로 항상 cleanup됨. 호스트 I/O는 주입하고, 순서와 수명은 설치 정책이 소유함
-- 아카이브 목록에 `/`로 시작하거나 `..` 세그먼트를 가진 항목이 있으면 extract 전에 `UnsafeEntry`로 거부함
-- tar 명령 scope는 stdout/stderr를 모두 drain하고 프로세스 종료를 기다린 뒤 staging을 놓음. 출력 상한은 list 64MiB, extract 1MiB임. 0이 아닌 종료 코드는 HostOperationFailed임
-- Node 파일시스템 호출(remove, writeFile, rename)은 abort할 수 없어 `Effect.uninterruptible`로 끝까지 실행함. remove는 EBUSY/ENOTEMPTY/EPERM/EMFILE/ENFILE에서 최대 10회 재시도함. rename은 win32에서 EPERM/EACCES/EBUSY일 때만 500ms 간격으로 19회 재시도함
-- Windows의 tar는 PATH가 아니라 System32의 bsdtar를 경로로 지정해야 함. PATH 앞쪽의 GNU tar는 `C:\…`를 원격 `host:path`로 해석함
 - `findExecutable`은 PATH의 절대 경로 항목만 봄. 상대 경로(프로젝트 폴더)가 실행 파일을 가로채지 못하게 하기 위함임
 - `helperEnvironment`는 시스템 시작에 필요한 변수와 고정 검색 경로만 넘김. 사용자의 다른 환경변수는 절대 넘기지 않음(R14)
 - 로그, 보고, 저장된 요약은 오류를 태그로만 부름. cause와 message에는 경로, SQL, 명령 출력, provider 텍스트가 들어갈 수 있음. 태그 읽기는 `failure-tag.ts`에서만 함
@@ -64,13 +54,11 @@
 - 환경변수 읽기: `CONTEXT_AGENT_WORKFLOW_CONCURRENCY`, `CONTEXT_AGENT_WORKFLOW_QUEUE_CAPACITY`, `CONTEXT_AGENT_MODEL_CONCURRENCY`, `CONTEXT_AGENT_MODEL_QUEUE_CAPACITY`, `CONTEXT_AGENT_TOOL_CONCURRENCY`, `CONTEXT_AGENT_TOOL_QUEUE_CAPACITY`, `CONTEXT_AGENT_SECRET_DIRECTORY`, `CONTEXT_AGENT_SECRET_KEY`, `CONTEXT_AGENT_SECRET_KEY_FILE`
 - `process.env`의 PATH/Path, PATHEXT, SystemRoot, ComSpec, SHELL과 Windows 사용자 변수 읽기, `process.platform` 읽기
 - Metric: gauge `context_agent_execution_active`·`context_agent_execution_queued`, counter `context_agent_execution_saturated_total`(attribute `kind`), span `execution.admission`, warning 로그 `execution admission saturated`
-- 네트워크: `ArchiveHost.download`가 FetchHttpClient로 아카이브 URL을 HTTP GET함
-- child process: `tar -tzf <file>`와 `tar -xzf <file> -C <dir>`를 실행함(stdin ignore). `runProcess`도 프로세스를 실행함(시그니처만 확인)
-- 파일시스템(아카이브): 대상의 부모 디렉터리를 0o700으로 만들고, 임시 디렉터리 `.install-*`를 만든 뒤 `archive.tgz`를 0o600으로 씀. 대상을 재귀 삭제한 뒤 staging 디렉터리를 대상으로 rename하고, staging을 정리함
+- child process: `runProcess`가 프로세스를 실행함(시그니처만 확인)
 - 파일시스템(키링): 비밀 파일 `<hash>.secret` 읽기·쓰기·삭제, 키 파일 읽기, 임시 파일 rename
 - 파일시스템(호스트): `findExecutable`과 `shellInvocation`이 후보 경로를 `fs.stat`으로 확인함
 - OS 키체인: `@napi-rs/keyring` `AsyncEntry`의 getPassword/setPassword/deletePassword/deleteCredential
-- 암호화: Web Crypto AES-GCM importKey/encrypt/decrypt, `crypto.getRandomValues`로 IV 생성, Effect `Digest.digestHex`로 SHA-256/SHA-512 계산
+- 암호화: Web Crypto AES-GCM importKey/encrypt/decrypt, `crypto.getRandomValues`로 IV 생성, 동기 SHA-256(`synchronous-crypto`)으로 비밀 파일 이름 계산
 - node:os 읽기: homedir, tmpdir, totalmem, availableParallelism, platform, arch
 - AbortSignal에 `abort` 리스너를 등록함(`aborted`는 해제 시 제거, `abortControllerFor`는 once). 새 AbortController를 만듦
 - 재시도 타이머: 포화 재시도(50ms 지수, 최대 2초, jitter), 삭제 재시도(200ms×(n+1), 최대 10회), win32 rename 재시도(500ms, 19회)

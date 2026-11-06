@@ -19,8 +19,7 @@ src/
   acp/          ACP 에이전트 다리(에디터 ↔ 실행 중인 앱 HTTP API)
   external-agents/  외부 ACP 에이전트(Codex 등) 설정·신뢰·연결·재연결 정책
   approvals/    run을 멈추지 못하는 승인 요청 중계(서브에이전트·외부 에이전트)
-  runtime/      실행 시점 자원: 네이티브·임베딩 패키지를 require로 불러올 위치(실행 파일이 푼 폴더 또는 이 패키지),
-                고정 해시 tgz 설치(Kiwi 모델)
+  runtime/      실행 시점 자원: 네이티브·임베딩 패키지를 require로 불러올 위치(실행 파일이 푼 폴더 또는 이 패키지)
   projects/     프로젝트 등록·경로 검사·교차 회상 제외·권한 모드(ask/auto)
   sessions/     프로젝트에 속한 대화
   imports/      Claude Code·Codex CLI 기록 이관: 줄 읽기 어댑터, 대량 노드 쓰기, 커서와 따라붙기

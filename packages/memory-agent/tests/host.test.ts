@@ -3,12 +3,7 @@ import { it } from "@effect/vitest";
 import { Effect, FileSystem, Path } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { toolLocations } from "../src/acp/tool-view.ts";
-import {
-  findExecutable,
-  helperEnvironment,
-  shellInvocation,
-  tarExecutable,
-} from "../src/runtime/host.ts";
+import { findExecutable, helperEnvironment, shellInvocation } from "../src/runtime/host.ts";
 import { withTestPlatform } from "./support/platform.ts";
 
 const windowsEnv = {
@@ -93,11 +88,6 @@ describe("host differences", () => {
       ).toBe("D:\\Win\\System32\\cmd.exe");
     }).pipe(withTestPlatform),
   );
-
-  test("archives extract with System32 tar on Windows, whatever tar comes first on PATH", () => {
-    expect(tarExecutable({ PATH: "/usr/bin" }, "darwin")).toBe("tar");
-    expect(tarExecutable(windowsEnv, "win32")).toBe("C:\\Windows\\System32\\tar.exe");
-  });
 
   test("ACP tool locations resolve project-relative paths and normalize them", () => {
     const args = (path: string) => JSON.stringify({ path });
