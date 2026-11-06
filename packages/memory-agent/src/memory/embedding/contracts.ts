@@ -54,8 +54,6 @@ export const EmbeddingOverview = Schema.Struct({
   running: EmbedderRuntime,
   /** How it will run from the next start, with the settings as they are now. */
   next: EmbeddingMode,
-  memoryBytes: Schema.Finite,
-  gpuMemoryThreshold: Schema.Finite,
   gpu: GpuState,
   /** Nodes the running embedder has not embedded yet. */
   unindexed: Schema.Finite,

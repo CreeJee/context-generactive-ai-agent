@@ -37,14 +37,11 @@ import { errorMessage, PageHeader, PageError } from "../shared";
 
 const embeddingChoices = [
   { value: "auto", label: "자동" },
-  { value: "cpu", label: "CPU (메모리 적게)" },
-  { value: "gpu", label: "GPU (CPU 적게)" },
+  { value: "cpu", label: "CPU" },
+  { value: "gpu", label: "GPU (빠르게)" },
 ] as const satisfies ReadonlyArray<{ value: EmbeddingChoice; label: string }>;
 
 const modeNames = { cpu: "CPU", gpu: "GPU" } as const;
-
-/** How often the page asks again while WebGPU is checked or nodes wait to be embedded. */
-const gibibytes = (bytes: number) => Math.round(bytes / 1024 ** 3);
 
 /** What the model runs on in this process, as a badge. */
 function RunningBadge({ running }: { running: EmbedderRuntime }) {
@@ -70,7 +67,7 @@ const runningNote = EmbedderRuntime.$match({
     device === null
       ? "모델은 처음 임베딩할 때 불러와요."
       : mode === "gpu" && device !== "webgpu"
-        ? "WebGPU를 쓸 수 없어 CPU에서 원본 모델을 돌리고 있어요. 벡터는 같지만 더 느려요."
+        ? "WebGPU를 쓸 수 없어 CPU에서 GPU용 모델을 돌리고 있어요. 벡터는 같지만 더 느려요."
         : null,
 });
 
@@ -102,7 +99,7 @@ const gpuText = GpuState.$match({
     `쓸 수 없어요(${dayAndTime(checkedAt)} 확인): ${gpuUnavailableText(reason)}`,
 });
 
-/** How the embedding model runs: on the CPU with little memory, or on the GPU with little CPU. */
+/** How the embedding model runs: on the CPU, or on the GPU (WebGPU, falling back to the CPU). */
 export function EmbeddingSettings() {
   const mutation = useEmbeddingMutation();
   const { data: overview } = useEmbeddingQuery();
@@ -164,9 +161,8 @@ export function EmbeddingSettings() {
         </Select>
         <FieldDescription>
           CPU는 벡터를 만드는 동안 코어를 여럿 써요. GPU는 CPU를 훨씬 덜 쓰고, 다섯 배쯤 빠르고,
-          메모리도 조금 덜 써요. 자동은 메모리가 {gibibytes(overview.gpuMemoryThreshold)}
-          GB 이상이고 WebGPU가 되면 GPU를 써요. 이 기기의 메모리는 {gibibytes(overview.memoryBytes)}
-          GB예요.
+          메모리도 조금 덜 써요. 자동은 GPU와 같아요. WebGPU를 쓸 수 없으면 같은 모델을 CPU에서
+          돌려요.
         </FieldDescription>
       </Field>
 

@@ -11,7 +11,6 @@ import {
   Effect,
   Exit,
   Layer,
-  Match,
   Option,
   Schema,
   Scope,
@@ -19,10 +18,9 @@ import {
   Semaphore,
 } from "effect";
 import { RpcClient, type RpcClientError } from "effect/rpc";
-import { GpuCheck } from "../../config/contracts.ts";
+import { type EmbeddingChoice, GpuCheck } from "../../config/contracts.ts";
 import { GlobalConfig, type Settings } from "../../config/global-config.ts";
 import { StorageRoot } from "../../config/storage-root.ts";
-import { totalMemory } from "../../runtime/host-system.ts";
 import { runtimeWorker, runtimeWorkerOptions } from "../../runtime/resources.ts";
 import { type ChunkSpan, chunkPolicy } from "./chunks.ts";
 import { type EmbeddingDevice, EmbeddingMode, type EmbeddingOverview } from "./contracts.ts";
@@ -113,15 +111,6 @@ export const embedderIdentity = (mode: EmbeddingMode) =>
 export const identityMode = (identity: string) =>
   EffectArray.findFirst(EmbeddingMode.literals, (mode) => embedderIdentity(mode) === identity);
 
-/**
- * From this much memory `auto` runs the model on the GPU (where WebGPU was found to work). Set
- * 2026-09 for granite on Apple Silicon: the full-precision model on WebGPU peaked at 2.9 GB against
- * 1.3 GB for the quantized one on the CPU, and used 0.7–0.8 cores against 3.4–3.7. EmbeddingGemma 2
- * peaks lower on WebGPU than on the CPU (2026-11, a batch of four 512-token texts: fp16 1.5 GB, q8
- * 1.8 GB), so the threshold now only keeps WebGPU off smaller machines.
- */
-export const gpuMemoryThreshold = 16 * 1024 ** 3;
-
 /** The gpu mode's model file, as a WebGPU check names it. */
 export const gpuModelFile = `${localModel.id}/${modelFile("gpu")}`;
 
@@ -129,25 +118,21 @@ export const gpuModelFile = `${localModel.id}/${modelFile("gpu")}`;
 export const currentGpuCheck = (settings: Settings) =>
   Option.filter(Option.fromNullishOr(settings.gpuCheck), (check) => check.model === gpuModelFile);
 
+/**
+ * The mode each choice runs. `auto` is the gpu mode, which falls back to its own file on the CPU
+ * where WebGPU fails (`modes`), so no check is needed first and the vectors never depend on the
+ * machine. EmbeddingGemma 2 on WebGPU is faster and takes less memory than on the CPU
+ * (docs/decisions.md, 2026-11-06).
+ */
+const modeOfChoice = {
+  auto: "gpu",
+  cpu: "cpu",
+  gpu: "gpu",
+} as const satisfies Record<EmbeddingChoice, EmbeddingMode>;
+
 /** The mode the app runs with, given the settings it starts with. */
-export const embeddingModeFor: {
-  (settings: Settings, memoryBytes: number): EmbeddingMode;
-  (memoryBytes: number): (settings: Settings) => EmbeddingMode;
-} = EffectFunction.dual((args) => !Schema.is(Schema.Finite)(args[0]), embeddingModeForBody);
-function embeddingModeForBody(settings: Settings, memoryBytes: number): EmbeddingMode {
-  return Match.value(settings.embeddingDevice ?? "auto").pipe(
-    Match.withReturnType<EmbeddingMode>(),
-    Match.when("cpu", () => "cpu"),
-    Match.when("gpu", () => "gpu"),
-    Match.when("auto", () =>
-      memoryBytes >= gpuMemoryThreshold &&
-      Option.exists(currentGpuCheck(settings), GpuCheck.guards.available)
-        ? "gpu"
-        : "cpu",
-    ),
-    Match.exhaustive,
-  );
-}
+export const embeddingModeFor = (settings: Settings): EmbeddingMode =>
+  modeOfChoice[settings.embeddingDevice ?? "auto"];
 
 /**
  * One running model worker as the host uses it. Production sessions speak Effect RPC to
@@ -369,7 +354,7 @@ export class Embedder extends Context.Service<Embedder, EmbedderApi>()(
   static readonly local = Layer.effect(
     Embedder,
     Effect.gen(function* () {
-      const mode = embeddingModeFor(yield* (yield* GlobalConfig).read, yield* totalMemory);
+      const mode = embeddingModeFor(yield* (yield* GlobalConfig).read);
       return yield* makeLocal(modes[mode], LocalPurpose.app({ mode }));
     }),
   ).pipe(Layer.provide(NodePath.layer));

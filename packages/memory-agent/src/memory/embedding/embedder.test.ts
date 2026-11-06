@@ -1,10 +1,9 @@
+import { Option } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 import { GpuCheck } from "../../config/contracts.ts";
-import { embeddingModeFor, gpuMemoryThreshold, gpuModelFile, planBatches } from "./embedder.ts";
+import { currentGpuCheck, embeddingModeFor, gpuModelFile, planBatches } from "./embedder.ts";
 
 describe("how the model runs", () => {
-  const plenty = gpuMemoryThreshold;
-  const little = gpuMemoryThreshold - 1;
   const available = GpuCheck.cases.available.make({
     checkedAt: "2026-09-16T00:00:00.000Z",
     model: gpuModelFile,
@@ -15,26 +14,25 @@ describe("how the model runs", () => {
     model: gpuModelFile,
   });
 
-  it("auto takes the GPU only with enough memory and a WebGPU that worked", () => {
-    expect(embeddingModeFor({}, plenty)).toBe("cpu");
-    expect(embeddingModeFor({ gpuCheck: available }, plenty)).toBe("gpu");
-    expect(embeddingModeFor({ gpuCheck: available }, little)).toBe("cpu");
-    expect(embeddingModeFor({ gpuCheck: unavailable }, plenty)).toBe("cpu");
+  it("auto runs the gpu mode, which falls back to the CPU by itself, whatever WebGPU did", () => {
+    expect(embeddingModeFor({})).toBe("gpu");
+    expect(embeddingModeFor({ gpuCheck: unavailable })).toBe("gpu");
   });
 
-  it("auto does not take a WebGPU check of another model file", () => {
+  it("a choice the user made is kept whatever WebGPU did", () => {
+    expect(embeddingModeFor({ embeddingDevice: "gpu", gpuCheck: unavailable })).toBe("gpu");
+    expect(embeddingModeFor({ embeddingDevice: "cpu", gpuCheck: available })).toBe("cpu");
+  });
+
+  it("a WebGPU check of another model file is not this file's", () => {
     const otherFile = {
       ...available,
       model: "ibm-granite/granite-embedding-97m-multilingual-r2/onnx/model.onnx",
     };
     const { model: _, ...unnamed } = available;
-    expect(embeddingModeFor({ gpuCheck: otherFile }, plenty)).toBe("cpu");
-    expect(embeddingModeFor({ gpuCheck: unnamed }, plenty)).toBe("cpu");
-  });
-
-  it("a choice the user made is kept whatever the machine", () => {
-    expect(embeddingModeFor({ embeddingDevice: "gpu", gpuCheck: unavailable }, little)).toBe("gpu");
-    expect(embeddingModeFor({ embeddingDevice: "cpu", gpuCheck: available }, plenty)).toBe("cpu");
+    expect(currentGpuCheck({ gpuCheck: available })).toEqual(Option.some(available));
+    expect(currentGpuCheck({ gpuCheck: otherFile })).toEqual(Option.none());
+    expect(currentGpuCheck({ gpuCheck: unnamed })).toEqual(Option.none());
   });
 });
 

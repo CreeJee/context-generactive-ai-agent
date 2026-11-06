@@ -15,7 +15,7 @@ testAgent()("embedding settings", (it) => {
       expect(first).toMatchObject({
         choice: "auto",
         running: EmbedderRuntime.other(),
-        next: "cpu",
+        next: "gpu",
       });
       expect(first.gpu).toEqual(GpuState.unchecked());
       expect(chosen).toMatchObject({ choice: "gpu", next: "gpu", gpu: GpuState.unchecked() });
