@@ -470,7 +470,7 @@ const make = (tuning: SearchTuning) =>
       limit: number,
     ) {
       // Model/network stays in the host, outside the publication admission permit.
-      const embedded = yield* embedder.embed([input.query]).pipe(
+      const embedded = yield* embedder.embed([input.query], "query").pipe(
         Effect.map((values) => values[0]),
         Effect.option,
       );

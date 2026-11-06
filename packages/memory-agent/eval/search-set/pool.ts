@@ -89,7 +89,7 @@ export const searchRuns = Effect.fn("searchSet.searchRuns")(function* ({
 
   const channelRanked = (item: Item, need: Need) =>
     Effect.gen(function* () {
-      const query = yield* embedder.embed([item.query]).pipe(
+      const query = yield* embedder.embed([item.query], "query").pipe(
         Effect.map((values) => Option.fromNullishOr(values[0])),
         Effect.orElseSucceed(() => Option.none<Float32Array>()),
       );

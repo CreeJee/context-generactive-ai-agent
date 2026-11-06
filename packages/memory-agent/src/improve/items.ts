@@ -94,7 +94,10 @@ const correctionItems = Effect.fn("Improve.correctionItems")(function* (
   corrections: readonly Correction[],
 ) {
   const embedder = yield* Embedder;
-  const vectors = yield* embedder.embed(corrections.map((correction) => correction.text));
+  const vectors = yield* embedder.embed(
+    corrections.map((correction) => correction.text),
+    "clustering",
+  );
   return clusterByVector(vectors, grouping.correctionSimilarity)
     .filter((group) => group.length >= grouping.correctionRepeats)
     .map((group): ImprovementItem => {

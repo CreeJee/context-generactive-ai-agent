@@ -8,13 +8,8 @@ import { describe, expect } from "vite-plus/test";
 import { StorageRoot, defaultStorageRoot } from "../../src/config/storage-root.ts";
 import { GlobalConfig, type Settings } from "../../src/config/global-config.ts";
 import { migrations } from "../../src/db/migrations.ts";
-import {
-  EmbedderRuntime,
-  Embedder,
-  EmbeddingError,
-  localModel,
-  modelFile,
-} from "../../src/memory/embedding/embedder.ts";
+import { EmbedderRuntime, Embedder, EmbeddingError } from "../../src/memory/embedding/embedder.ts";
+import { localModel, modelFile } from "../../src/memory/embedding/models.ts";
 import { Indexer, IndexingError } from "../../src/memory/embedding/indexer.ts";
 import { VectorIndex } from "../../src/memory/embedding/vector-index.ts";
 import { MorphAnalyzer } from "../../src/memory/morph/analyzer.ts";
@@ -155,7 +150,7 @@ testAgent()("an index an older build filled with tool nodes", (it) => {
       // What an older build did: embed the tool call too.
       const embedder = yield* Embedder;
       const vectors = yield* VectorIndex;
-      const [first, second] = yield* embedder.embed([statement!.text, call!.text]);
+      const [first, second] = yield* embedder.embed([statement!.text, call!.text], "document");
       yield* vectors.add([statement!.seq, call!.seq], [first!, second!]);
       yield* vectors.save;
       const mark = "INSERT INTO node_vectors VALUES (?, ?)";
@@ -384,8 +379,8 @@ const cachedModels = await Effect.runPromise(
             .pipe(Effect.orElseSucceed(() => false));
         return {
           root,
-          cpu: yield* available(modelFile("quint8")),
-          gpu: yield* available(modelFile("fp32")),
+          cpu: yield* available(modelFile("cpu")),
+          gpu: yield* available(modelFile("gpu")),
         };
       }).pipe(Effect.provideContext(services));
     }),
@@ -397,7 +392,7 @@ const dot = (a: Float32Array, b: Float32Array) =>
 
 describe.skipIf(!cachedModels.cpu)("real model chunk retrieval", () => {
   testAgent({
-    embedder: Embedder.localVariant("quint8").pipe(Layer.provide(models)),
+    embedder: Embedder.localFile("cpu").pipe(Layer.provide(models)),
     morphAnalyzer: MorphAnalyzer.disabled,
   })("quint8 through the native 4-bit index and memory search", (it) => {
     it.effect(
@@ -455,7 +450,7 @@ describe.skipIf(!cachedModels.cpu)("real model chunk retrieval", () => {
 });
 
 describe.skipIf(!cachedModels.cpu)("the local model (downloaded, quint8 on the CPU)", () => {
-  layer(Embedder.localVariant("quint8").pipe(Layer.provide(models)), {
+  layer(Embedder.localFile("cpu").pipe(Layer.provide(models)), {
     excludeTestServices: true,
     timeout: "120 seconds",
   })("quint8", (it) => {
@@ -465,13 +460,16 @@ describe.skipIf(!cachedModels.cpu)("the local model (downloaded, quint8 on the C
         Effect.gen(function* () {
           const embedder = yield* Embedder;
           // A long text between short ones lands in its own batch; vectors still come back in order.
-          const [question, , match, unrelated] = yield* embedder.embed([
-            "데이터베이스는 뭘 쓰기로 했지?",
-            "빌드 로그 ".repeat(2000),
-            "저장소는 SQLite로 결정했다.",
-            "cargo build failed because cargo was not on PATH",
-          ]);
-          const [alone] = yield* embedder.embed(["저장소는 SQLite로 결정했다."]);
+          const [question] = yield* embedder.embed(["데이터베이스는 뭘 쓰기로 했지?"], "query");
+          const [match, , unrelated] = yield* embedder.embed(
+            [
+              "저장소는 SQLite로 결정했다.",
+              "빌드 로그 ".repeat(2000),
+              "cargo build failed because cargo was not on PATH",
+            ],
+            "document",
+          );
+          const [alone] = yield* embedder.embed(["저장소는 SQLite로 결정했다."], "document");
           expect(question).toHaveLength(localModel.dimensions);
           expect(dot(question!, question!)).toBeCloseTo(1, 4);
           expect(dot(question!, match!)).toBeGreaterThan(dot(question!, unrelated!));
@@ -500,7 +498,7 @@ describe.skipIf(!cachedModels.gpu)("the gpu mode (downloaded full-precision mode
     Layer.merge(
       Embedder.local.pipe(Layer.provide(chooseGpu)),
       Layer.effect(Reference, Effect.service(Embedder)).pipe(
-        Layer.provide(Embedder.localVariant("fp32")),
+        Layer.provide(Embedder.localFile("gpu")),
       ),
     ).pipe(Layer.provide(models)),
     { excludeTestServices: true, timeout: "120 seconds" },
@@ -511,9 +509,9 @@ describe.skipIf(!cachedModels.gpu)("the gpu mode (downloaded full-precision mode
         Effect.gen(function* () {
           const embedder = yield* Embedder;
           const sentence = ["저장소는 SQLite로 결정했다."];
-          const [vector] = yield* embedder.embed(sentence);
+          const [vector] = yield* embedder.embed(sentence, "document");
           const runtime = embedder.runtime();
-          const [reference] = yield* (yield* Reference).embed(sentence);
+          const [reference] = yield* (yield* Reference).embed(sentence, "document");
           expect(EmbedderRuntime.$is("local")(runtime) && runtime.mode).toBe("gpu");
           expect(["webgpu", "cpu"]).toContain(
             EmbedderRuntime.$is("local")(runtime) ? runtime.device : null,

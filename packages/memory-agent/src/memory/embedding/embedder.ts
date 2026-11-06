@@ -25,8 +25,9 @@ import { StorageRoot } from "../../config/storage-root.ts";
 import { totalMemory } from "../../runtime/host-system.ts";
 import { runtimeWorker, runtimeWorkerOptions } from "../../runtime/resources.ts";
 import { type ChunkSpan, chunkPolicy } from "./chunks.ts";
-import type { EmbeddingDevice, EmbeddingMode, EmbeddingOverview } from "./contracts.ts";
+import { type EmbeddingDevice, EmbeddingMode, type EmbeddingOverview } from "./contracts.ts";
 import { EmbeddingRpcs, type EmbeddingWorkerData, EmbeddingWorkerFailed } from "./embedding-rpc.ts";
+import { type EmbeddingRole, localModel } from "./models.ts";
 
 export class EmbeddingError extends Schema.TaggedError<
   EmbeddingError,
@@ -43,46 +44,17 @@ export interface EmbedderApi {
   /** Changes whenever vectors from this embedder are not comparable with earlier ones. */
   readonly identity: string;
   readonly dimensions: number;
-  /** L2-normalized vectors, one per text, in order. */
-  readonly embed: (texts: readonly string[]) => Effect.Effect<Float32Array[], EmbeddingError>;
+  /** L2-normalized vectors, one per text, in order, each embedded with the role's prompt. */
+  readonly embed: (
+    texts: readonly string[],
+    role: EmbeddingRole,
+  ) => Effect.Effect<Float32Array[], EmbeddingError>;
   /** Local document windows; custom evaluation embedders may keep one vector per node. */
   readonly chunks?: (
     texts: readonly string[],
   ) => Effect.Effect<readonly (readonly ChunkSpan[])[], EmbeddingError>;
   readonly runtime: () => EmbedderRuntime;
 }
-
-/** Chosen 2026-09: Apache-2.0, 384 dims, 32k context, Korean in its enhanced-support set. */
-export const localModel = {
-  id: "ibm-granite/granite-embedding-97m-multilingual-r2",
-  dimensions: 384,
-  /**
-   * Query/direct-call limit. Indexed documents are first split into chunkPolicy windows, so
-   * their tail is never discarded. Keep this separate from the document chunk size.
-   */
-  maxTokens: 2048,
-  /** Texts per batch at most. */
-  batchSize: 16,
-  /**
-   * A batch is padded to its longest text, so it costs about count × longest² in attention. Batches
-   * stay within the cost of one text of `maxTokens`: sixteen 512-token texts, or one long one.
-   */
-  batchCost: 2048 * 2048,
-} as const;
-
-/**
- * Model files published for the model. On the CPU `quint8` has about 1 GB less memory and is twice
- * as fast as `fp32`, for MRR 0.831 instead of 0.852 on the Korean recall set; the `cpu` mode uses it.
- * The `gpu` mode runs `fp32`, which WebGPU runs as fast as the CPU runs `quint8`.
- */
-export type ModelVariant = "fp32" | "quint8";
-const variantFile = {
-  fp32: "model",
-  quint8: "model_quint8_avx2",
-} satisfies Record<ModelVariant, string>;
-
-/** Where a variant's ONNX file sits in the model cache, relative to the model's folder. */
-export const modelFile = (variant: ModelVariant) => `onnx/${variantFile[variant]}.onnx`;
 
 export function normalize(vector: Float32Array): Float32Array {
   const norm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0));
@@ -122,16 +94,24 @@ function planBatchesBody(
   }, []);
 }
 
-/** Which file to load, and the devices to try it on in order. */
+/** Which mode's file to load, and the devices to try it on in order. */
 interface ModelSetup {
-  readonly variant: ModelVariant;
+  readonly mode: EmbeddingMode;
   readonly devices: readonly EmbeddingDevice[];
 }
 
 const modes = {
-  cpu: { variant: "quint8", devices: ["cpu"] },
-  gpu: { variant: "fp32", devices: ["webgpu", "cpu"] },
+  cpu: { mode: "cpu", devices: ["cpu"] },
+  gpu: { mode: "gpu", devices: ["webgpu", "cpu"] },
 } satisfies Record<EmbeddingMode, ModelSetup>;
+
+/** Changes whenever the vectors of the model's file for `mode` are not comparable with earlier ones. */
+export const embedderIdentity = (mode: EmbeddingMode) =>
+  `${localModel.id}@${localModel.files[mode].tag}/${localModel.output}/${localModel.maxTokens}/chunks-v${chunkPolicy.version}-${chunkPolicy.tokens}-${chunkPolicy.overlap}`;
+
+/** The mode whose file made vectors of `identity`, when the local model made them. */
+export const identityMode = (identity: string) =>
+  EffectArray.findFirst(EmbeddingMode.literals, (mode) => embedderIdentity(mode) === identity);
 
 /**
  * From this much memory `auto` runs the model on the GPU (where WebGPU was found to work). Measured
@@ -239,7 +219,9 @@ export const modelWorker = Effect.fnUntraced(function* (
   const data: EmbeddingWorkerData = {
     cacheDir,
     modelId: localModel.id,
-    modelFileName: variantFile[setup.variant],
+    modelFileName: localModel.files[setup.mode].file,
+    output: localModel.output,
+    textOnly: localModel.textOnly,
     maxTokens: localModel.maxTokens,
     devices: setup.devices,
   };
@@ -288,12 +270,13 @@ export const modelWorker = Effect.fnUntraced(function* (
     device: (): EmbeddingDevice | null =>
       Option.getOrNull(Option.map(ScopedRef.getUnsafe(session), (current) => current.device)),
     chunks: (texts: readonly string[]) => request((current) => current.chunk(texts)),
-    embed: Effect.fnUntraced(function* (texts: readonly string[]) {
+    embed: Effect.fnUntraced(function* (texts: readonly string[], role: EmbeddingRole) {
       if (texts.length === 0) return [];
-      const counts = yield* request((current) => current.countTokens(texts));
+      const prompted = texts.map((text) => localModel.prompts[role] + text);
+      const counts = yield* request((current) => current.countTokens(prompted));
       // One worker serves one request at a time: batches run one after another.
       const embedded = yield* Effect.forEach(planBatches(counts), (batch) =>
-        request((current) => current.embed(batch.map((index) => texts[index]!))).pipe(
+        request((current) => current.embed(batch.map((index) => prompted[index]!))).pipe(
           Effect.map((rows) =>
             batch.map((index, position) => {
               const start = position * localModel.dimensions;
@@ -323,7 +306,7 @@ const makeLocal = (setup: ModelSetup, purpose: LocalPurpose) =>
     const paths = yield* Path.Path;
     const model = yield* modelWorker(paths.join(storage.path, "models"), setup);
     return {
-      identity: `${localModel.id}@${setup.variant}/cls/${localModel.maxTokens}/chunks-v${chunkPolicy.version}-${chunkPolicy.tokens}-${chunkPolicy.overlap}`,
+      identity: embedderIdentity(setup.mode),
       dimensions: localModel.dimensions,
       runtime: () =>
         LocalPurpose.$match(purpose, {
@@ -336,8 +319,8 @@ const makeLocal = (setup: ModelSetup, purpose: LocalPurpose) =>
   });
 
 /**
- * Whether the full-precision model loads and runs on WebGPU here, in a worker of its own that ends
- * afterwards. Downloads that model file first when it is not cached yet.
+ * Whether the `gpu` mode's model file loads and runs on WebGPU here, in a worker of its own that
+ * ends afterwards. Downloads that model file first when it is not cached yet.
  */
 export const checkGpu = (storageRoot: string) =>
   Effect.scoped(
@@ -345,11 +328,11 @@ export const checkGpu = (storageRoot: string) =>
       const paths = yield* Path.Path;
 
       const model = yield* modelWorker(paths.join(storageRoot, "models"), {
-        variant: "fp32",
+        mode: "gpu",
         devices: ["webgpu"],
       });
       /** Why the GPU cannot be used, if it cannot. */
-      const unavailable = yield* model.embed(["준비"]).pipe(
+      const unavailable = yield* model.embed(["준비"], "query").pipe(
         Effect.map(() =>
           model.device() === "webgpu" ? Option.none<string>() : Option.some("no WebGPU device"),
         ),
@@ -373,7 +356,7 @@ export const checkGpu = (storageRoot: string) =>
 export class Embedder extends Context.Service<Embedder, EmbedderApi>()(
   "memory-agent/memory/embedding/embedder",
 ) {
-  /** The local granite model, cached under `<storage>/models`, run the way the settings say. */
+  /** The local model (`models.ts`), cached under `<storage>/models`, run the way the settings say. */
   static readonly local = Layer.effect(
     Embedder,
     Effect.gen(function* () {
@@ -381,10 +364,9 @@ export class Embedder extends Context.Service<Embedder, EmbedderApi>()(
       return yield* makeLocal(modes[mode], LocalPurpose.app({ mode }));
     }),
   ).pipe(Layer.provide(NodePath.layer));
-  /** Another published file on the CPU, to compare quality and memory. */
-  static readonly localVariant = (variant: ModelVariant) =>
-    Layer.effect(
-      Embedder,
-      makeLocal({ variant, devices: ["cpu"] }, LocalPurpose.evaluation()),
-    ).pipe(Layer.provide(NodePath.layer));
+  /** The file a mode runs, on the CPU, to compare files' quality and memory. */
+  static readonly localFile = (mode: EmbeddingMode) =>
+    Layer.effect(Embedder, makeLocal({ mode, devices: ["cpu"] }, LocalPurpose.evaluation())).pipe(
+      Layer.provide(NodePath.layer),
+    );
 }

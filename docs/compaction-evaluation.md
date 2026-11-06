@@ -53,7 +53,7 @@ cacheable-prefix 비율은 provider의 실제 `cachedTokens`가 아니라 wire p
 
 ```bash
 pnpm --filter memory-agent eval:compaction
-pnpm --filter memory-agent eval:recall "vector(quint8) + trigram + kiwi"
+pnpm --filter memory-agent eval:recall "vector(cpu file) + trigram + kiwi"
 pnpm exec vp test packages/memory-agent/tests/compaction-eval.test.ts packages/memory-agent/tests/compaction.test.ts
 ```
 

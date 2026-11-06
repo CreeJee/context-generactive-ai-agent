@@ -179,6 +179,7 @@ const make = Effect.gen(function* () {
       );
       const embedded = yield* embedder.embed(
         inputs.map(({ node, start, end }) => node.text.slice(start, end)),
+        "document",
       );
       // Embedding is an asynchronous external boundary. Revalidation enters the short publication
       // permit with add/save/commit, so a concurrent invalidation cannot create an obsolete mapping.

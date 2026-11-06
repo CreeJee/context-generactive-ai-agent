@@ -189,7 +189,10 @@ const make = Effect.gen(function* () {
   >(
     (rules) =>
       embedder
-        .embed(rules.map((rule) => `${rule.title}\n${rule.terms.join(" ")}\n${rule.instruction}`))
+        .embed(
+          rules.map((rule) => `${rule.title}\n${rule.terms.join(" ")}\n${rule.instruction}`),
+          "document",
+        )
         .pipe(
           Effect.map((embedded) =>
             MutableHashMap.fromIterable(
@@ -226,7 +229,7 @@ const make = Effect.gen(function* () {
 
       return Effect.gen(function* () {
         const semantic = yield* Effect.result(
-          Effect.all([vectors(optional), embedder.embed([text])]).pipe(
+          Effect.all([vectors(optional), embedder.embed([text], "query")]).pipe(
             Effect.map(([byId, [queryVector]]) =>
               isTruthy(queryVector)
                 ? optional

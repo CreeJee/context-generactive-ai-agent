@@ -3,12 +3,15 @@ import { Rpc, RpcGroup } from "effect/rpc";
 import { Transferable } from "effect/workers";
 import { ChunkSpan } from "./chunks.ts";
 import { EmbeddingDevice } from "./contracts.ts";
+import { EmbeddingOutput } from "./models.ts";
 
 /** What the embedding worker is started with; the host owns every field. */
 export const EmbeddingWorkerData = Schema.Struct({
   cacheDir: Schema.String,
   modelId: Schema.String,
   modelFileName: Schema.String,
+  output: EmbeddingOutput,
+  textOnly: Schema.Boolean,
   maxTokens: Schema.Finite,
   /** In order of preference: the first that loads and runs a short text is used. */
   devices: Schema.Array(EmbeddingDevice),
@@ -36,7 +39,7 @@ export const CountTokens = Rpc.make("CountTokens", {
   success: Schema.Array(Schema.Finite),
   error: EmbeddingWorkerFailed,
 });
-/** The batch's CLS rows, not yet normalized; the buffer is transferred, not copied. */
+/** The batch's sentence vectors, not yet normalized; the buffer is transferred, not copied. */
 export const Embed = Rpc.make("Embed", {
   payload: Texts,
   success: Transferable.schema(Schema.instanceOf(Float32Array), (rows) => [rows.buffer]),

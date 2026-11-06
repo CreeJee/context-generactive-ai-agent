@@ -18,13 +18,8 @@ import { Clock, Console, Duration, Effect, Layer, MutableHashMap, Option, Schema
 import { SecretStore } from "../src/config/secrets.ts";
 import { StorageRoot, defaultStorageRoot } from "../src/config/storage-root.ts";
 import { memoryAgentLayer } from "../src/layers.ts";
-import {
-  EmbedderRuntime,
-  Embedder,
-  EmbeddingError,
-  localModel,
-  modelFile,
-} from "../src/memory/embedding/embedder.ts";
+import { EmbedderRuntime, Embedder, EmbeddingError } from "../src/memory/embedding/embedder.ts";
+import { localModel, modelFile } from "../src/memory/embedding/models.ts";
 import { Indexer } from "../src/memory/embedding/indexer.ts";
 import { MorphAnalyzer, kiwiModel } from "../src/memory/morph/analyzer.ts";
 import { optionalProperty } from "../src/optional-property.ts";
@@ -69,7 +64,7 @@ const tuning: SearchTuning | undefined =
         ),
       };
 const home = modelsRoot ?? (await Effect.runPromise(defaultStorageRoot));
-const embeddingModel = join(home, "models", localModel.id, modelFile("quint8"));
+const embeddingModel = join(home, "models", localModel.id, modelFile("cpu"));
 const kiwiFile = join(home, "models", `kiwi-${kiwiModel.version}`, kiwiModel.directory, "cong.mdl");
 const missingModel = await nodePlatform.runPromise(
   Effect.flatMap(FileSystem.FileSystem, (fs) =>
@@ -81,12 +76,12 @@ const missingModel = await nodePlatform.runPromise(
 if (Option.isSome(missingModel)) throw new Error(`model missing: ${missingModel.value}`);
 
 const sharedModels = StorageRoot.layer(home);
-const embedder = Embedder.localVariant("fp32").pipe(Layer.provide(sharedModels));
-const quantized = Embedder.localVariant("quint8").pipe(Layer.provide(sharedModels));
+const embedder = Embedder.localFile("gpu").pipe(Layer.provide(sharedModels));
+const quantized = Embedder.localFile("cpu").pipe(Layer.provide(sharedModels));
 const kiwi = MorphAnalyzer.kiwi.pipe(Layer.provide(sharedModels));
 const noEmbedder = Layer.succeed(Embedder, {
   identity: "none",
-  dimensions: 384,
+  dimensions: localModel.dimensions,
   embed: () => Effect.fail(EmbeddingError.make({ cause: "disabled" })),
   runtime: () => EmbedderRuntime.other(),
 });
@@ -105,13 +100,13 @@ const configurations: readonly Configuration[] = [
   { name: "vector", embedder, morph: MorphAnalyzer.disabled, text: false },
   { name: "vector + kiwi", embedder, morph: kiwi, text: false },
   {
-    name: "vector(quint8) + trigram",
+    name: "vector(cpu file) + trigram",
     embedder: quantized,
     morph: MorphAnalyzer.disabled,
     text: true,
   },
-  { name: "vector(quint8) + trigram + kiwi", embedder: quantized, morph: kiwi, text: true },
-  { name: "vector(quint8) + kiwi", embedder: quantized, morph: kiwi, text: false },
+  { name: "vector(cpu file) + trigram + kiwi", embedder: quantized, morph: kiwi, text: true },
+  { name: "vector(cpu file) + kiwi", embedder: quantized, morph: kiwi, text: false },
   { name: "trigram", embedder: noEmbedder, morph: MorphAnalyzer.disabled, text: true },
   { name: "trigram + kiwi", embedder: noEmbedder, morph: kiwi, text: true },
   { name: "kiwi", embedder: noEmbedder, morph: kiwi, text: false },

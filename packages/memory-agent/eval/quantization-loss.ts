@@ -4,7 +4,7 @@
  *   node --no-warnings eval/quantization-loss.ts <storage copy> [--nodes 2000] [--queries 40]
  *     [--json <file>]
  *
- * Re-embeds sampled node texts with the model variant that made the copy's vectors, adds those
+ * Re-embeds sampled node texts with the model file that made the copy's vectors, adds those
  * vectors to a fresh 4-bit index (the same quantization the production index stores), and compares,
  * per query, the exact inner-product ranking with the 4-bit ranking over the same vectors. Numbers
  * only: the app keeps its quantization (docs/decisions.md 2026-10-18); this records what it costs,
@@ -13,11 +13,11 @@
  */
 import { DatabaseSync } from "node:sqlite";
 import { NodeFileSystem } from "@effect/platform-node";
-import { Console, Effect, FileSystem, Layer, Schema } from "effect";
+import { Console, Effect, FileSystem, Layer, Option, Schema } from "effect";
 import { loadTurbovec } from "../../turbovec/index.js";
 import { runNativeEffect } from "../src/runtime/native-effect.ts";
 import { StorageRoot } from "../src/config/storage-root.ts";
-import { Embedder, type ModelVariant } from "../src/memory/embedding/embedder.ts";
+import { Embedder, identityMode } from "../src/memory/embedding/embedder.ts";
 import { path } from "../src/runtime/synchronous-path.ts";
 
 const argv = process.argv.slice(2);
@@ -53,9 +53,12 @@ const top = (
   )
 )[0];
 if (top === undefined) throw new Error("no vectors in the copy");
-// The variant that made the copy's vectors, read from the identity's variant segment: the app
+// The mode whose file made the copy's vectors, the one whose identity they carry: the app
 // re-embeds with the same weights, so the exact ranking is over production's own vectors.
-const variant: ModelVariant = top.embedder.includes("@fp32/") ? "fp32" : "quint8";
+const mode = Option.getOrThrowWith(
+  identityMode(top.embedder),
+  () => new Error(`the copy's vectors are not the local model's (${top.embedder})`),
+);
 const project = (
   await Effect.runPromise(
     Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ project_id: Schema.String })))(
@@ -129,8 +132,8 @@ const program = Effect.gen(function* () {
       `embedder ${embedder.identity} does not match the copy (${top.embedder})`,
     );
   const queries = [...(yield* relevanceQueries), ...userTexts].slice(0, queryCount);
-  const vectors = yield* embedder.embed(texts);
-  const queryVectors = yield* embedder.embed(queries);
+  const vectors = yield* embedder.embed(texts, "document");
+  const queryVectors = yield* embedder.embed(queries, "query");
   // The production quantization, applied to the same vectors the exact ranking uses.
   const { VectorIndex } = loadTurbovec();
   const index = new VectorIndex(embedder.dimensions, 4);
@@ -189,7 +192,7 @@ const program = Effect.gen(function* () {
   const quantRankValues = rows.map((row) => row.exactTop1QuantRank).filter((rank) => rank > 0);
   yield* Console.log(
     [
-      `nodes ${vectors.length} (project ${project.slice(0, 8)}…), queries ${rows.length}, ${top.embedder} -> ${variant}, fresh index bits 4`,
+      `nodes ${vectors.length} (project ${project.slice(0, 8)}…), queries ${rows.length}, ${top.embedder} -> ${mode}, fresh index bits 4`,
       `| 4-bit vs exact | overlap@5 ${mean(rows.map((row) => row.overlap5)).toFixed(3)} | overlap@12 ${mean(rows.map((row) => row.overlap12)).toFixed(3)} | top1 same ${(mean(rows.map((row) => (row.top1Same ? 1 : 0))) * 100).toFixed(1)}% | exact-top1 quant rank mean ${(quantRankValues.length === 0 ? 0 : mean(quantRankValues)).toFixed(2)} (lost ${rows.length - quantRankValues.length}) | Δscore mean ${mean(rows.map((row) => row.deltaMean)).toExponential(2)} max ${Math.max(0, ...rows.map((row) => row.deltaMax)).toExponential(2)} | 4-bit ${mean(rows.map((row) => row.searchMs)).toFixed(2)} ms | exact ${mean(rows.map((row) => row.exactMs)).toFixed(2)} ms |`,
     ].join("\n"),
   );
@@ -201,7 +204,7 @@ const program = Effect.gen(function* () {
   // @effect-diagnostics-next-line strictEffectProvide:off
   Effect.provide(
     Layer.merge(
-      Embedder.localVariant(variant).pipe(Layer.provide(StorageRoot.layer(storage))),
+      Embedder.localFile(mode).pipe(Layer.provide(StorageRoot.layer(storage))),
       NodeFileSystem.layer,
     ),
   ),

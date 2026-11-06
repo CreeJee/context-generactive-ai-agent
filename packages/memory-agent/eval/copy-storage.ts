@@ -21,7 +21,8 @@ import { SqlClient, SqlSchema } from "effect/sql";
 import { SecretStore } from "../src/config/secrets.ts";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { Database } from "../src/db/database.ts";
-import { Embedder, EmbedderRuntime } from "../src/memory/embedding/embedder.ts";
+import { Embedder, EmbedderRuntime, identityMode } from "../src/memory/embedding/embedder.ts";
+import type { EmbeddingRole } from "../src/memory/embedding/models.ts";
 import { memoryAgentLayer, type MemoryAgentLayerOptions } from "../src/layers.ts";
 import type { SearchTuning } from "../src/memory/search.ts";
 import { path } from "../src/runtime/synchronous-path.ts";
@@ -78,7 +79,8 @@ const loadEmbedCache = Effect.fn("copyStorage.loadEmbedCache")(function* (
 /**
  * The app's embedder for `identity`, as a non-local runtime: the app then starts no background
  * backfill or GPU check, which would write to the copy and, failing there, block searches.
- * Embeddings are cached in the copy, keyed by the exact text, so repeated runs skip the model.
+ * Query embeddings are cached in the copy, keyed by the exact text, so repeated runs skip the
+ * model; a search embeds nothing else, and other roles go to the model.
  */
 const cachedEmbedder = Effect.fn("copyStorage.cachedEmbedder")(function* (
   cacheFile: string,
@@ -93,7 +95,7 @@ const cachedEmbedder = Effect.fn("copyStorage.cachedEmbedder")(function* (
   /** Embeds the texts not cached yet and appends them to the cache file. */
   const fill = (missing: ReadonlyArray<string>) =>
     Effect.gen(function* () {
-      const computed = yield* embedder.embed(missing);
+      const computed = yield* embedder.embed(missing, "query");
       const lines = yield* Effect.forEach(missing, (text, index) =>
         encodeLine({ text, vector: encodedOf(computed[index]!) }),
       );
@@ -106,23 +108,25 @@ const cachedEmbedder = Effect.fn("copyStorage.cachedEmbedder")(function* (
   return {
     ...embedder,
     runtime: () => EmbedderRuntime.other(),
-    embed: (texts: ReadonlyArray<string>) =>
-      Effect.gen(function* () {
-        const missing = Arr.dedupe(texts.filter((text) => !MutableHashMap.has(cache, text)));
-        yield* Effect.when(
-          Effect.orDie(fill(missing)),
-          Effect.succeed(Arr.isReadonlyArrayNonEmpty(missing)),
-        );
-        // Every text is cached now.
-        return texts.map((text) => Option.getOrThrow(MutableHashMap.get(cache, text)));
-      }),
+    embed: (texts: ReadonlyArray<string>, role: EmbeddingRole) =>
+      role !== "query"
+        ? embedder.embed(texts, role)
+        : Effect.gen(function* () {
+            const missing = Arr.dedupe(texts.filter((text) => !MutableHashMap.has(cache, text)));
+            yield* Effect.when(
+              Effect.orDie(fill(missing)),
+              Effect.succeed(Arr.isReadonlyArrayNonEmpty(missing)),
+            );
+            // Every text is cached now.
+            return texts.map((text) => Option.getOrThrow(MutableHashMap.get(cache, text)));
+          }),
   };
 });
 
 const TopEmbedder = Schema.Struct({ embedder: Schema.String, n: Schema.Finite });
 
 /**
- * The model variant the copy's vectors were made with: the embedder holding the most vectors.
+ * The model file the copy's vectors were made with: the embedder holding the most vectors.
  */
 export const copyEmbedder = (storage: string) =>
   Effect.gen(function* () {
@@ -136,13 +140,16 @@ export const copyEmbedder = (storage: string) =>
       // A copy without vectors cannot be searched by meaning.
       Effect.orDie,
     );
-    const variant = top.embedder.includes("@fp32/") ? "fp32" : "quint8";
-    yield* Console.log(`embedder ${top.embedder} (${top.n} vectors) -> ${variant}`);
+    const mode = yield* Option.match(identityMode(top.embedder), {
+      onNone: () => Effect.die(`the copy's vectors are not the local model's (${top.embedder})`),
+      onSome: Effect.succeed,
+    });
+    yield* Console.log(`embedder ${top.embedder} (${top.n} vectors) -> ${mode}`);
     return Layer.effect(
       Embedder,
       cachedEmbedder(path.join(storage, "embed-cache.jsonl"), top.embedder),
     ).pipe(
-      Layer.provide([Embedder.localVariant(variant), NodeFileSystem.layer]),
+      Layer.provide([Embedder.localFile(mode), NodeFileSystem.layer]),
       Layer.provide(StorageRoot.layer(storage)),
     );
   }).pipe(

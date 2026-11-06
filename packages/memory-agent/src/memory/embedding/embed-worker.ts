@@ -6,16 +6,17 @@ import { nativeFailure, nativePromise, runNativeEffect } from "../../runtime/nat
 import { ignoreLogged } from "../../runtime/logged-failures.ts";
 import { ChunkingFailed, chunkText } from "./chunks.ts";
 import { EmbeddingRpcs, EmbeddingWorkerData, EmbeddingWorkerFailed } from "./embedding-rpc.ts";
+import type { EmbeddingOutput } from "./models.ts";
 // The embedding model in a worker thread: onnxruntime-node runs a session synchronously, so on the
 // main thread every batch would hold up the requests the server is answering meanwhile.
 import { createRequire } from "node:module";
 import { workerData } from "node:worker_threads";
+import type { Tensor } from "@huggingface/transformers";
 
 // The CommonJS build, resolved next to this file: in the package in a checkout, in the runtime
 // folder in the executable.
-const { AutoModel, AutoTokenizer, env }: typeof import("@huggingface/transformers") = createRequire(
-  import.meta.url,
-)("@huggingface/transformers");
+const { AutoConfig, AutoModel, AutoTokenizer, env }: typeof import("@huggingface/transformers") =
+  createRequire(import.meta.url)("@huggingface/transformers");
 
 const failure = (stage: EmbeddingWorkerFailed["stage"]) => (cause: unknown) =>
   EmbeddingWorkerFailed.make({ stage, reason: String(nativeFailure(Cause.fail(cause)).cause) });
@@ -25,10 +26,14 @@ const load = Effect.fn("EmbeddingWorker.load")(function* (setup: EmbeddingWorker
   env.cacheDir = setup.cacheDir;
   env.allowLocalModels = false;
   const tokenizer = yield* nativePromise(() => AutoTokenizer.from_pretrained(setup.modelId));
+  const config = yield* nativePromise(() => AutoConfig.from_pretrained(setup.modelId));
+  // A text-only load: without these configs the model loads no vision or audio encoder.
+  if (setup.textOnly) Object.assign(config, { vision_config: null, audio_config: null });
   /** The model on `device`, once it has run; one that loaded and then failed is disposed of. */
   const onDevice = (device: EmbeddingWorkerData["devices"][number]) =>
     nativePromise(() =>
       AutoModel.from_pretrained(setup.modelId, {
+        config,
         dtype: "fp32",
         model_file_name: setup.modelFileName,
         device,
@@ -61,26 +66,42 @@ const load = Effect.fn("EmbeddingWorker.load")(function* (setup: EmbeddingWorker
 });
 type LoadedModel = Effect.Success<ReturnType<typeof load>>;
 
+/**
+ * The outputs the readers below use; a model has the ones its output kind reads. A half-precision
+ * model's are 16-bit floats.
+ */
+interface ModelOutputs {
+  readonly last_hidden_state: Tensor;
+  readonly sentence_embedding: Tensor;
+}
+
+/** One row of the model's dimensions per text, read from the outputs. */
+const vectors = {
+  cls: ({ last_hidden_state: hidden }) => {
+    const [batch, tokens, dimensions] = hidden.dims;
+    const { data } = hidden.to("float32");
+    // CLS pooling: the first token's hidden state is the sentence vector.
+    return Float32Array.from({ length: batch * dimensions }, (_, at) =>
+      Number(data[Math.trunc(at / dimensions) * tokens * dimensions + (at % dimensions)]),
+    );
+  },
+  "sentence-embedding": ({ sentence_embedding: pooled }) =>
+    Float32Array.from(pooled.to("float32").data, Number),
+} satisfies Record<EmbeddingOutput, (outputs: ModelOutputs) => Float32Array>;
+
 /** The batch's sentence vectors, one row per text, not yet normalized. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 const embed = Effect.fn("EmbeddingWorker.embed")(function* (
   { tokenizer, model }: LoadedModel,
   texts: readonly string[],
-  maxTokens: number,
+  { maxTokens, output }: EmbeddingWorkerData,
 ) {
   const inputs = tokenizer([...texts], { padding: true, truncation: true, max_length: maxTokens });
   // An interrupted request still waits for its session run, so the worker never disposes of the
   // model while a run is in flight.
-  const { last_hidden_state: hidden } = yield* Effect.uninterruptible(
-    nativePromise<Awaited<ReturnType<LoadedModel["model"]>>>(() => model(inputs)),
-  );
-  const [batch, tokens, dimensions] = hidden.dims;
-  // CLS pooling: the first token's hidden state is the sentence vector.
-  const rows = new Float32Array(batch * dimensions);
-  Array.from({ length: batch }, (_, row) => row * tokens * dimensions).forEach((start, row) =>
-    rows.set(hidden.data.subarray(start, start + dimensions), row * dimensions),
-  );
-  return rows;
+  const outputs = yield* Effect.uninterruptible(nativePromise<ModelOutputs>(() => model(inputs)));
+  // A model without the output its kind reads fails the request.
+  return yield* Effect.try(() => vectors[output](outputs));
 });
 
 const handlers = EmbeddingRpcs.toLayer(
@@ -120,7 +141,7 @@ const handlers = EmbeddingRpcs.toLayer(
             ),
           ),
         ),
-      Embed: ({ texts }) => run((loaded) => embed(loaded, texts, setup.maxTokens)),
+      Embed: ({ texts }) => run((loaded) => embed(loaded, texts, setup)),
       // The tokenizer is synchronous: one text after another, nothing to overlap.
       Chunk: ({ texts }) =>
         run((loaded) =>

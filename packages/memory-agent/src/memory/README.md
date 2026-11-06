@@ -35,7 +35,7 @@
 - `createSupersededReads` / `supersededReadSql` — 뒤의 읽기가 대체한 파일 읽기를 판별하는 SQL과 생성 Effect(`memoryGraphRepairVersion` 사용)
 - `memoryGraphRepairVersion`(3) / `hasStatementText` / `nonBlankTextSql` / `meaningfulNodeFilter` — 그래프 수리·검색 제외 규칙의 버전, 공백이 아닌 텍스트 판별, SQL 필터(nodes 별칭 `n`)
 - `refsInArguments` — tool call JSON 인자에서 파일·URL 참조를 뽑는다
-- [`embedding`](./embedding/README.md) — 로컬 granite 임베딩 모델(`Embedder`), 토큰 창 청킹, turbovec 위의 `VectorIndex`, nodes와 벡터 색인을 맞추는 `Indexer`
+- [`embedding`](./embedding/README.md) — 모델 표(`models.ts`)의 로컬 임베딩 모델(`Embedder`), 토큰 창 청킹, turbovec 위의 `VectorIndex`, nodes와 벡터 색인을 맞추는 `Indexer`
 - [`morph`](./morph/README.md) — Kiwi WASM 기반 한국어 형태소 분석기 `MorphAnalyzer`와 worker RPC 계약
 - [`native-search`](./native-search/README.md) — turbovec 벡터 인덱스와 SQLite 읽기 세션을 전용 worker thread에 가두는 `NativeOwner`
 

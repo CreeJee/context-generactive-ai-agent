@@ -485,10 +485,10 @@ export { MemorySearch, type FindInput, type FindResult, type Match } from "./mem
 export {
   Embedder,
   EmbeddingError,
-  localModel,
   type EmbedderApi,
   EmbedderRuntime,
 } from "./memory/embedding/embedder.ts";
+export { EmbeddingRole, localModel } from "./memory/embedding/models.ts";
 export { EmbeddingDevice, EmbeddingMode, EmbeddingOverview } from "./memory/embedding/contracts.ts";
 export { Indexer } from "./memory/embedding/indexer.ts";
 export { EmbeddingSetup, GpuState } from "./memory/embedding/setup.ts";

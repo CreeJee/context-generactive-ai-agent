@@ -2,24 +2,26 @@
 
 ## Overview
 
-memory-agent의 임베딩 계층이다. 로컬 granite 임베딩 모델을 워커 스레드(onnxruntime-node, Effect RPC)에서 돌리는 `Embedder`, 문서를 토큰 창으로 자르는 `chunkText`, turbovec 네이티브 소유자 워커 위의 `VectorIndex`, nodes 테이블과 벡터 색인을 맞추는 `Indexer`를 제공한다. `EmbeddingSetup`은 설정 화면(`apps/agent`의 `settings.embedding` 라우트)에 실행 모드와 WebGPU 상태를 알려 준다. 이 디렉터리는 SQLite의 `nodes`/`node_vectors`/`node_vector_chunks` 매핑과 네이티브 벡터 저장소 사이의 게시(publication) 순서를 책임진다.
+memory-agent의 임베딩 계층이다. 모델 표(`models.ts`)에서 고른 로컬 임베딩 모델을 워커 스레드(onnxruntime-node, Effect RPC)에서 돌리는 `Embedder`, 문서를 토큰 창으로 자르는 `chunkText`, turbovec 네이티브 소유자 워커 위의 `VectorIndex`, nodes 테이블과 벡터 색인을 맞추는 `Indexer`를 제공한다. `EmbeddingSetup`은 설정 화면(`apps/agent`의 `settings.embedding` 라우트)에 실행 모드와 WebGPU 상태를 알려 준다. 이 디렉터리는 SQLite의 `nodes`/`node_vectors`/`node_vector_chunks` 매핑과 네이티브 벡터 저장소 사이의 게시(publication) 순서를 책임진다.
 
 ## Interface
 
-- `Embedder` — `Context.Service<Embedder, EmbedderApi>`. `Embedder.local`은 GlobalConfig 설정과 메모리로 모드를 골라 `<storage>/models`의 로컬 모델 Layer를 만들고, `Embedder.localVariant(variant)`는 모델 파일 평가용 Layer다
-- `EmbedderApi` — `identity`(비교 불가 벡터가 되면 바뀜), `dimensions`, `embed`(L2 정규화 벡터), 선택적 `chunks`, `runtime()`
+- `Embedder` — `Context.Service<Embedder, EmbedderApi>`. `Embedder.local`은 GlobalConfig 설정과 메모리로 모드를 골라 `<storage>/models`의 로컬 모델 Layer를 만들고, `Embedder.localFile(mode)`는 그 모드의 파일을 CPU에서 돌리는 평가용 Layer다
+- `EmbedderApi` — `identity`(비교 불가 벡터가 되면 바뀜), `dimensions`, `embed(texts, role)`(role의 prompt를 붙여 임베딩한 L2 정규화 벡터), 선택적 `chunks`, `runtime()`
 - `EmbedderRuntime` — `EmbeddingOverview["running"]`의 `Data.taggedEnum` 생성자. `local{mode, device}` 또는 `other`(테스트·평가용)
 - `EmbeddingError` — 임베더 실패를 나타내는 TaggedError(`cause: Defect`)
-- `EmbeddingMode` / `ModelVariant` / `modelFile(variant)` — cpu/gpu 모드 Schema(`contracts.ts`), fp32/quint8 변형, 모델 캐시 안의 `onnx/<file>.onnx` 경로
-- `localModel` — `ibm-granite/granite-embedding-97m-multilingual-r2`, 384차원, maxTokens 2048, batchSize 16, batchCost 2048²
+- `EmbeddingMode` / `embedderIdentity(mode)` / `identityMode(identity)` — cpu/gpu 모드 Schema(`contracts.ts`), 로컬 모델의 그 모드 파일이 만드는 벡터의 identity(`<id>@<tag>/<output>/<maxTokens>/chunks-v<version>-<tokens>-<overlap>`), identity를 만든 모드(로컬 모델이 아니면 None)
+- `models.ts` — 모델 표. `EmbeddingModelName`(Schema.Literals)마다 `EmbeddingModel`(id, dimensions, `output`, `textOnly`, role별 `prompts`, maxTokens, batchSize, batchCost, 모드별 `files{file, tag}`)을 둔다. `localModel`은 앱이 돌리는 항목(현재 `granite-97m-r2`: 384차원, CLS, prompt 없음, cpu `model_quint8_avx2`·gpu `model`)이고, `modelFile(mode)`는 모델 캐시 안의 `onnx/<file>.onnx` 경로다
+- `EmbeddingRole` — `query`(검색 질의)·`document`(색인하는 노드, 규칙)·`clustering`(서로 견주는 텍스트, 정정 묶기). prompt가 있는 모델은 role마다 다른 prefix를 붙인다
+- `EmbeddingOutput` — 워커가 벡터를 읽는 곳. `cls`는 첫 토큰의 hidden state, `sentence-embedding`은 모델 그래프가 직접 pooling한 출력
 - `normalize` — Float32Array를 L2 정규화한다
 - `planBatches` — dual 함수. 토큰 수 오름차순으로 크기·비용 제한 안에서 배치 인덱스를 묶는다
 - `embeddingModeFor` / `gpuMemoryThreshold` — dual 함수로 설정(`embeddingDevice` cpu/gpu/auto)과 메모리에서 모드를 정한다. auto는 16GiB 이상이고 gpuCheck가 available일 때만 gpu
 - `ModelSession` — 실행 중인 모델 워커 하나의 인터페이스(device, countTokens, embed, chunk, terminate, busy)
 - `modelWorker(cacheDir, setup, connect?)` — 첫 요청 때 워커를 띄워 `ScopedRef`에 유지하는 세션 관리자. 테스트는 `connect`로 세션을 주입한다
-- `checkGpu(storageRoot)` — 전정밀도 모델이 WebGPU에서 로드·실행되는지 별도 워커로 확인한다. `setup.ts`가 호출
+- `checkGpu(storageRoot)` — gpu 모드의 모델 파일이 WebGPU에서 로드·실행되는지 별도 워커로 확인한다. `setup.ts`가 호출
 - `EmbeddingRpcs` (`Load`, `CountTokens`, `Embed`, `Chunk`) — 호스트와 embed-worker 사이의 RpcGroup 프로토콜
-- `EmbeddingWorkerData` / `EmbeddingDevice` / `EmbeddingWorkerFailed` — 워커 시작 데이터 스키마, `cpu`/`webgpu` 장치(`contracts.ts`), `stage: load|run|lost` 실패 타입
+- `EmbeddingWorkerData` / `EmbeddingDevice` / `EmbeddingWorkerFailed` — 워커 시작 데이터 스키마(모델 id, 파일, `output`, `textOnly`, maxTokens, 장치 순서), `cpu`/`webgpu` 장치(`contracts.ts`), `stage: load|run|lost` 실패 타입
 - `embed-worker.ts` — 워커 스레드 진입점. `runtimeWorker("embed-worker")`로 실행되고 `RpcServer.layer(EmbeddingRpcs, { concurrency: 1 })`을 띄운다
 - `ChunkSpan` / `chunkPolicy` / `chunkVectorIdFloor` / `ChunkingFailed` / `chunkText` — UTF-16 offset span 스키마, 512토큰·128 overlap 정책(version 1), chunk vector id 하한 2^52, 청킹 실패, 이분 탐색 청킹
 - `VectorIndex` / `VectorIndex.layer` — 네이티브 벡터 색인 서비스. NodeCrypto·NodePath를 공급하고 `makeNativeVectorIndex`를 Scope에서 획득한다
@@ -38,10 +40,11 @@ memory-agent의 임베딩 계층이다. 로컬 granite 임베딩 모델을 워�
 - `EmbeddingWorkerFailed.stage`가 `run`이면 세션을 유지한다. `load`나 `lost`이면 세션을 버리고 다음 요청이 새 워커를 띄운다(`keepsSession`). 워커는 모델을 `Effect.cached`로 한 번만 로드하며, 실패한 로드는 그 워커에서 계속 실패로 남는다. 로드한 모델의 `dispose()`는 워커 Scope finalizer에 등록되므로, 호스트가 워커를 닫으면 onnxruntime 세션이 스레드 종료 전에 해제된다
 - 세션은 호출자 Scope가 소유한 `ScopedRef`에 있다. 세션을 교체하거나 Scope를 닫으면 워커를 멈추고 종료를 기다린다. `ScopedRef.set`은 uninterruptible로 획득하므로 모델 로드는 `Effect.interruptible`로 감싸야 한다
 - ONNX 추론은 그 자리에서 중단할 수 없다. 진행 중 작업은 `terminate`로만 멈춘다. 워커 안의 `Embed` 실행은 `Effect.uninterruptible`이어서, 중단된 요청도 세션 실행이 끝날 때까지 기다리고 실행 도중에는 모델이 dispose되지 않는다. 유휴 워커는 `unref` 상태여야 하고, 작업 중에만 `busy`로 `ref`한다
-- `EmbedderApi.embed`는 L2 정규화된 벡터를 입력 순서대로 돌려준다. 워커 `Embed` RPC는 정규화 전 CLS 행을 돌려주며 버퍼는 복사하지 않고 transfer한다
+- `EmbedderApi.embed`는 L2 정규화된 벡터를 입력 순서대로 돌려준다. role의 prompt는 호스트가 붙이고, 토큰 수와 배치도 prompt를 붙인 텍스트로 정한다. 워커 `Embed` RPC는 모델의 `output`에서 읽은 정규화 전 행을 32비트 float로 돌려주며 버퍼는 복사하지 않고 transfer한다
+- 모델 표 항목의 벡터를 바꾸는 변경(prompt 포함)은 그 파일의 `tag`도 바꾼다. identity가 바뀌어야 indexer가 모든 노드를 다시 임베딩한다
 - `Embedder.identity`는 이전 벡터와 비교할 수 없게 되면 바뀌어야 한다. 네이티브 캐시 디렉터리는 `<storage>/vectors/<sha256(identity) 앞 16자>`이고, SQL 매핑은 모두 `embedder = identity`로 구분한다
 - chunk vector id는 `chunkVectorIdFloor`(2^52, migration CHECK) 이상이고 node seq는 그 아래에 둔다. 검색 결과 `nodeHits`는 이 경계로 chunk id와 node seq를 구분한다
-- `ChunkSpan`은 원문의 UTF-16 offset이며 surrogate pair를 쪼개지 않는다. span 길이는 special token을 포함해 재고, overlap은 special token 없이 잰다. `localModel.maxTokens`(질의 한도)와 `chunkPolicy.tokens`(문서 청크 크기)는 서로 다른 값으로 유지한다
+- `ChunkSpan`은 원문의 UTF-16 offset이며 surrogate pair를 쪼개지 않는다. span 길이는 special token을 포함해 재고, overlap은 special token 없이 잰다. `EmbeddingModel.maxTokens`(질의 한도)와 `chunkPolicy.tokens`(문서 청크 크기)는 서로 다른 값으로 유지한다
 - `planBatches`는 짧은 텍스트부터 배치에 넣는다. 각 배치는 `batchSize` 이하이고 `(개수) × 최장² ≤ batchCost`를 지킨다
 - `Indexer.indexBatch`는 `oneBatchAtATime` 세마포어로 직렬화한다. 같은 pending 노드가 두 번 색인되지 않게 하기 위해서다. `analyzeBatch`도 자체 세마포어로 직렬화한다
 - 색인 순서는 다음과 같다. chunk 분할과 embed는 publication gate 밖에서 실행한다. 재검증(`selectFresh`), chunk id 예약, 네이티브 add/save, commit은 `vectors.publish` 안에서 실행한다. chunk 예약 INSERT는 한 트랜잭션에서 순차 실행해 RETURNING id가 chunk 순서와 맞게 한다
@@ -51,7 +54,7 @@ memory-agent의 임베딩 계층이다. 로컬 granite 임베딩 모델을 워�
 - SQLite 변수 한도 때문에 id 목록은 statement당 1000개(`idsPerStatement`)로 나눈다
 - `PRAGMA database_list`의 파일 경로가 비어 있으면 open이 `NativeOwnerFailed{native-incompatible}`로 실패한다. lease를 다른 프로세스가 쥐고 있으면(`lease-unavailable`) `VectorIndexError.message`가 같은 storage root를 쓰는 다른 서버를 멈추라고 안내한다
 - 임베딩 대상은 `user`, `assistant`, `topic` kind뿐이다. tool call과 tool result는 임베딩하지 않는다(`docs/decisions.md`). pending 노드는 `created_at DESC, seq DESC` 순서로 고른다
-- embed-worker는 `env.allowLocalModels = false`로 동작한다. `devices`를 선호 순서대로 시도하고, 짧은 텍스트 하나를 실제로 실행하는 첫 장치를 쓴다. 실패한 장치의 모델은 dispose한다. gpu 모드는 fp32 파일로 webgpu를 먼저 시도한 뒤 cpu로 넘어가고, cpu 모드는 quint8 파일을 쓴다
+- embed-worker는 `env.allowLocalModels = false`로 동작한다. `devices`를 선호 순서대로 시도하고, 짧은 텍스트 하나를 실제로 실행하는 첫 장치를 쓴다. 실패한 장치의 모델은 dispose한다. gpu 모드는 모델 표의 gpu 파일로 webgpu를 먼저 시도한 뒤 cpu로 넘어가고, cpu 모드는 cpu 파일을 쓴다. `textOnly` 모델은 config의 vision·audio 설정을 비우고 text 모델만 로드한다
 
 ## Side Effects
 

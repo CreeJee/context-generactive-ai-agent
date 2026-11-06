@@ -5,7 +5,7 @@
 //   node --no-warnings eval/memory-research-lab.ts fake-embed  one stage
 // Stages:
 //   fake-embed  deterministic hashed vectors + token terms + trigram → isolates the vector+fusion path
-//   real-embed  the local model (quint8, else fp32) + token terms + trigram → model quality vs the fake baseline
+//   real-embed  the local model (cpu file, else gpu file) + token terms + trigram → model quality vs the fake baseline
 //   fts-only    no embedder + token terms + trigram                  → the text channel alone
 //   morph-only  no embedder + Kiwi                                   → the morpheme channel alone
 //   full        the local model + Kiwi + trigram                     → the production configuration
@@ -32,13 +32,8 @@ const { join } = path;
 import { SecretStore } from "../src/config/secrets.ts";
 import { StorageRoot, defaultStorageRoot } from "../src/config/storage-root.ts";
 import { memoryAgentLayer } from "../src/layers.ts";
-import {
-  Embedder,
-  EmbedderRuntime,
-  EmbeddingError,
-  localModel,
-  modelFile,
-} from "../src/memory/embedding/embedder.ts";
+import { Embedder, EmbedderRuntime, EmbeddingError } from "../src/memory/embedding/embedder.ts";
+import { type EmbeddingRole, localModel, modelFile } from "../src/memory/embedding/models.ts";
 import { Indexer } from "../src/memory/embedding/indexer.ts";
 import { MorphAnalyzer, kiwiModel } from "../src/memory/morph/analyzer.ts";
 import { Nodes } from "../src/memory/nodes.ts";
@@ -61,8 +56,8 @@ const tmpBase = join(repoRoot, "node_modules", ".vp-tmp");
 const labPrefix = "memory-research-lab-";
 
 const home = await Effect.runPromise(defaultStorageRoot);
-const quint8File = join(home, "models", localModel.id, modelFile("quint8"));
-const fp32File = join(home, "models", localModel.id, modelFile("fp32"));
+const cpuFile = join(home, "models", localModel.id, modelFile("cpu"));
+const gpuFile = join(home, "models", localModel.id, modelFile("gpu"));
 const kiwiFile = join(home, "models", `kiwi-${kiwiModel.version}`, kiwiModel.directory, "cong.mdl");
 const dimensions = localModel.dimensions;
 
@@ -97,10 +92,10 @@ const timedEmbedder = <E, R>(inner: Layer.Layer<Embedder, E, R>): TimedEmbedder<
       Layer.flatMap((context) =>
         Layer.succeed(Embedder, {
           ...Context.get(context, Embedder),
-          embed: (texts: readonly string[]) => {
+          embed: (texts: readonly string[], role: EmbeddingRole) => {
             const startedAt = process.hrtime.bigint();
             return Context.get(context, Embedder)
-              .embed(texts)
+              .embed(texts, role)
               .pipe(
                 Effect.map((vectors) => {
                   MutableRef.update(nanos, (total) => total + process.hrtime.bigint() - startedAt);
@@ -124,10 +119,10 @@ interface Stage {
   readonly embedNanos: MutableRef.MutableRef<bigint>;
 }
 
-const embedVariant = (await readable(quint8File))
-  ? ("quint8" as const)
-  : (await readable(fp32File))
-    ? ("fp32" as const)
+const embedMode = (await readable(cpuFile))
+  ? ("cpu" as const)
+  : (await readable(gpuFile))
+    ? ("gpu" as const)
     : null;
 const kiwiAvailable = await readable(kiwiFile);
 
@@ -142,13 +137,13 @@ const stages: readonly Stage[] = [
     morph: fakeMorphLayer,
     text: true,
   },
-  ...(embedVariant !== null
+  ...(embedMode !== null
     ? [
         {
           name: "real-embed",
-          detail: `로컬 모델(${embedVariant}) + 가짜 형태소 + trigram`,
+          detail: `로컬 모델(${embedMode} 파일) + 가짜 형태소 + trigram`,
           ...(() => {
-            const timed = timedEmbedder(Embedder.localVariant(embedVariant));
+            const timed = timedEmbedder(Embedder.localFile(embedMode));
             return { embedder: timed.layer, embedNanos: timed.nanos };
           })(),
           morph: fakeMorphLayer,
@@ -176,13 +171,13 @@ const stages: readonly Stage[] = [
         } satisfies Stage,
       ]
     : []),
-  ...(embedVariant !== null && kiwiAvailable
+  ...(embedMode !== null && kiwiAvailable
     ? [
         {
           name: "full",
-          detail: `로컬 모델(${embedVariant}) + Kiwi + trigram`,
+          detail: `로컬 모델(${embedMode} 파일) + Kiwi + trigram`,
           ...(() => {
-            const timed = timedEmbedder(Embedder.localVariant(embedVariant));
+            const timed = timedEmbedder(Embedder.localFile(embedMode));
             return { embedder: timed.layer, embedNanos: timed.nanos };
           })(),
           morph: MorphAnalyzer.kiwi,
@@ -193,12 +188,12 @@ const stages: readonly Stage[] = [
 ];
 
 const skipped: readonly { readonly name: string; readonly reason: string }[] = [
-  ...(embedVariant !== null
+  ...(embedMode !== null
     ? []
     : [
         {
           name: "real-embed / full",
-          reason: `로컬 임베딩 모델 파일을 읽을 수 없음 (${quint8File})`,
+          reason: `로컬 임베딩 모델 파일을 읽을 수 없음 (${cpuFile})`,
         },
       ]),
   ...(kiwiAvailable

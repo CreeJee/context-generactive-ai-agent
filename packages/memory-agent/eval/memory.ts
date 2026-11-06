@@ -16,7 +16,8 @@ const { dirname, join } = path;
 import { Console, Effect, Layer } from "effect";
 import { KiwiBuilder } from "kiwi-nlp";
 import { StorageRoot, defaultStorageRoot } from "../src/config/storage-root.ts";
-import { Embedder, type ModelVariant } from "../src/memory/embedding/embedder.ts";
+import type { EmbeddingMode } from "../src/memory/embedding/contracts.ts";
+import { Embedder } from "../src/memory/embedding/embedder.ts";
 import { kiwiModel } from "../src/memory/morph/analyzer.ts";
 import { runtimeRequire } from "../src/runtime/resources.ts";
 import { JsonValue } from "../src/json.ts";
@@ -80,13 +81,13 @@ const kiwi = Effect.fn("eval.kiwi")(function* (options: {
 
 /** Embeds through the app's Embedder, then disposes it and reports what memory came back. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-const embed = Effect.fn("eval.embed")(function* (variant: ModelVariant, texts: readonly string[]) {
+const embed = Effect.fn("eval.embed")(function* (mode: EmbeddingMode, texts: readonly string[]) {
   const afterEmbedMB = yield* Effect.gen(function* () {
     const services = yield* Layer.build(
-      Embedder.localVariant(variant).pipe(Layer.provide(StorageRoot.layer(home))),
+      Embedder.localFile(mode).pipe(Layer.provide(StorageRoot.layer(home))),
     );
     yield* Effect.provideContext(
-      Effect.flatMap(Embedder, (embedder) => embedder.embed(texts)),
+      Effect.flatMap(Embedder, (embedder) => embedder.embed(texts, "document")),
       services,
     );
     return yield* settle();
@@ -102,13 +103,13 @@ const scenarios = {
   "node baseline": () => Effect.succeed({}),
   "kiwi cong (as used)": () => kiwi({ loadMultiDict: true, loadTypoDict: true }),
   "kiwi without multi/typo dict": () => kiwi({ loadMultiDict: false, loadTypoDict: false }),
-  "embedder fp32, 16 short": () => embed("fp32", short),
-  "embedder fp32, 1 long + 15 short": () => embed("fp32", mixed),
-  "embedder quint8, 16 short": () => embed("quint8", short),
-  "embedder quint8, 1 long + 15 short": () => embed("quint8", mixed),
+  "embedder gpu file, 16 short": () => embed("gpu", short),
+  "embedder gpu file, 1 long + 15 short": () => embed("gpu", mixed),
+  "embedder cpu file, 16 short": () => embed("cpu", short),
+  "embedder cpu file, 1 long + 15 short": () => embed("cpu", mixed),
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  "embedder quint8, three reloads": Effect.fn("eval.reloads")(function* () {
-    return { rounds: yield* Effect.replicateEffect(embed("quint8", short), 3) };
+  "embedder cpu file, three reloads": Effect.fn("eval.reloads")(function* () {
+    return { rounds: yield* Effect.replicateEffect(embed("cpu", short), 3) };
   }),
 };
 
