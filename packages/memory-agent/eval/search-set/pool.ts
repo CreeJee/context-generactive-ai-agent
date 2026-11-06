@@ -9,10 +9,9 @@ import { Array as Arr, Console, Effect, HashMap, Option } from "effect";
 import { Embedder } from "../../src/memory/embedding/embedder.ts";
 import { VectorIndex } from "../../src/memory/embedding/vector-index.ts";
 import { maxVectorK } from "../../src/memory/native-search/read-protocol.ts";
-import { MemorySearch, morphSearchTerms, searchTerms } from "../../src/memory/search.ts";
+import { MemorySearch, searchTerms } from "../../src/memory/search.ts";
 import { appendRows, type Item, type Need, readRows, type RunRow, setFiles } from "./files.ts";
 import { nodeSeqs } from "./nodes.ts";
-import { readyAnalyzer } from "./terms.ts";
 
 /** Ids kept per item and run: the judge pools the top 20, scores read the top 20. */
 export const keptIds = 30;
@@ -52,7 +51,6 @@ export const searchRuns = Effect.fn("searchSet.searchRuns")(function* ({
   const search = yield* MemorySearch;
   const embedder = yield* Embedder;
   const vectors = yield* VectorIndex;
-  const analyzer = yield* readyAnalyzer();
   const runs = [...Option.toArray(app), ...(channels ? ["vector", "text", "morph"] : [])];
   const done = yield* Effect.forEach(runs, (run) =>
     Effect.map(readRows(files.run(run)), (rows) => new Set(rows.map((row) => row.item))),
@@ -65,9 +63,7 @@ export const searchRuns = Effect.fn("searchSet.searchRuns")(function* ({
       ? []
       : Option.toArray(HashMap.get(needs, item.need)).map((need) => ({ item, need })),
   );
-  yield* Console.log(
-    `items to search ${items.length}; runs ${runs.join(", ")}; morph analyzer ${analyzer.ready() ? "ready" : "not ready"}`,
-  );
+  yield* Console.log(`items to search ${items.length}; runs ${runs.join(", ")}`);
 
   const appRanked = (item: Item, need: Need, name: string) =>
     search
@@ -93,10 +89,6 @@ export const searchRuns = Effect.fn("searchSet.searchRuns")(function* ({
         Effect.map((values) => Option.fromNullishOr(values[0])),
         Effect.orElseSucceed(() => Option.none<Float32Array>()),
       );
-      const morph = yield* analyzer.terms([item.query]).pipe(
-        Effect.map(([tokens = []]) => morphSearchTerms(tokens)),
-        Effect.orElseSucceed((): string[] => []),
-      );
       const grouped = searchTerms(item.query);
       const allowed = yield* search.allowedProjects(need.projectId, need.crossProject);
       const read = (projects: ReadonlyArray<string>) =>
@@ -108,12 +100,12 @@ export const searchRuns = Effect.fn("searchSet.searchRuns")(function* ({
             query: Option.getOrUndefined(Option.map(query, (vector) => new Float32Array(vector))),
             trigramTerms: grouped.trigram,
             shortTerms: grouped.short,
-            morphTerms: morph,
+            morphQuery: item.query,
             vectorK: maxVectorK,
             textK: channelDepth,
             morphK: channelDepth,
             textEnabled: true,
-            morphEnabled: morph.length > 0,
+            morphEnabled: item.query.trim().length > 0,
             remainingMs: 2000,
             inputBudgetBytes: 1048576,
             outputBudgetBytes: 1048576,

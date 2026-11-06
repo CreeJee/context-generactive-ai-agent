@@ -22,7 +22,8 @@ export const NativeReadInput = Schema.Struct({
   query: Schema.optional(TransferredVector),
   trigramTerms: ids,
   shortTerms: ids,
-  morphTerms: ids,
+  /** The question; the lexical index splits it into morph terms itself. */
+  morphQuery: Schema.String,
   vectorK: Count.check(Schema.makeFilter((value) => value <= maxVectorK)),
   textK: Count,
   morphK: Count,
@@ -40,11 +41,7 @@ export function nativeReadInputLogicalBytes(input: NativeReadInput): number {
   // Charge fixed per-entry overhead before scanning strings; empty entries cannot
   // hide an unbounded array behind a zero-content-byte budget.
   const entries =
-    1 +
-    input.allowedProjects.length +
-    input.trigramTerms.length +
-    input.shortTerms.length +
-    input.morphTerms.length;
+    1 + input.allowedProjects.length + input.trigramTerms.length + input.shortTerms.length;
   let bytes = 64 + (input.query?.byteLength ?? 0) + entries * 8;
   if (bytes > limit) return limit + 1;
   for (const group of [
@@ -52,7 +49,7 @@ export function nativeReadInputLogicalBytes(input: NativeReadInput): number {
     input.allowedProjects,
     input.trigramTerms,
     input.shortTerms,
-    input.morphTerms,
+    [input.morphQuery],
   ]) {
     for (const value of group) {
       if (bytes > limit || value.length > limit - bytes) return limit + 1;
@@ -90,6 +87,8 @@ export const NativeReadOutput = Schema.Struct({
   textIds: ids,
   morphIds: ids,
   unindexed: Count,
+  /** Journaled node changes the lexical index has not applied yet, over every project. */
+  lexicalPending: Count,
   uninterpreted: Count,
   candidateCount: Count,
   sqliteExecutions: Count,

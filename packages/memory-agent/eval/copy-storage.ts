@@ -1,7 +1,8 @@
 /**
  * The app's memory services over a copy of a real storage folder (agent.db, vectors/ and models/
  * like ~/.context-generactive-agent), opened as the app opens its own: MemorySearch with the local
- * embedder and Kiwi. Evaluations run searches on it; nothing they print holds memory text.
+ * embedder and the lexical index. Evaluations run searches on it; nothing they print holds memory
+ * text.
  */
 import { DatabaseSync } from "node:sqlite";
 import { NodeFileSystem } from "@effect/platform-node";
@@ -22,6 +23,7 @@ import { SecretStore } from "../src/config/secrets.ts";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { Database } from "../src/db/database.ts";
 import { Embedder, EmbedderRuntime, identityMode } from "../src/memory/embedding/embedder.ts";
+import { Indexer } from "../src/memory/embedding/indexer.ts";
 import type { EmbeddingRole } from "../src/memory/embedding/models.ts";
 import { memoryAgentLayer, type MemoryAgentLayerOptions } from "../src/layers.ts";
 import type { SearchTuning } from "../src/memory/search.ts";
@@ -165,6 +167,21 @@ export interface CopyServices {
   readonly tuning: Option.Option<SearchTuning>;
 }
 
+/**
+ * Applies every journaled node change to the copy's lexical index before the first search: a
+ * change still pending drops its node from the text and morph lists. The first run on a copy
+ * builds the whole index; later runs apply only what changed.
+ */
+const lexicalCaughtUp = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const applied = yield* Effect.flatMap(Indexer, (indexer) => indexer.lexicalAll()).pipe(
+      // A copy whose lexical index cannot be built cannot be searched as the app searches.
+      Effect.orDie,
+    );
+    yield* Console.log(`lexical changes applied ${applied}`);
+  }),
+);
+
 /** The app's services over the copy, with the copy's embedder and no background work. */
 export const copyLayer = ({ storage, tuning }: CopyServices) =>
   Effect.gen(function* () {
@@ -182,14 +199,17 @@ export const copyLayer = ({ storage, tuning }: CopyServices) =>
       skillsHome: home,
     };
     // The tuning override is only present when given (exactOptionalPropertyTypes).
-    return Layer.merge(
-      memoryAgentLayer(
-        storage,
-        Option.match(tuning, {
-          onNone: () => options,
-          onSome: (searchTuning) => ({ ...options, searchTuning }),
-        }),
+    return Layer.provideMerge(
+      lexicalCaughtUp,
+      Layer.merge(
+        memoryAgentLayer(
+          storage,
+          Option.match(tuning, {
+            onNone: () => options,
+            onSome: (searchTuning) => ({ ...options, searchTuning }),
+          }),
+        ),
+        NodeFileSystem.layer,
       ),
-      NodeFileSystem.layer,
     );
   }).pipe(Layer.unwrap);

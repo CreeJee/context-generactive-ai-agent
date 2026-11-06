@@ -42,7 +42,7 @@ it("settles scoped admission on real pin or terminal result and propagates pre-a
                 embedder: "fixture",
                 trigramTerms: [],
                 shortTerms: [],
-                morphTerms: [],
+                morphQuery: "",
                 vectorK: 1,
                 textK: 1,
                 morphK: 1,

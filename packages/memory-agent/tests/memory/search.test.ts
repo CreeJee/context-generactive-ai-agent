@@ -1,22 +1,11 @@
-import {
-  Effect,
-  FileSystem,
-  Layer,
-  MutableHashMap,
-  MutableRef,
-  Option,
-  Path,
-  Random,
-  Schema,
-} from "effect";
+import { Effect, FileSystem, Layer, MutableHashMap, Option, Path, Random, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { EmbedderRuntime, Embedder, EmbeddingError } from "../../src/memory/embedding/embedder.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { VectorIndex } from "../../src/memory/embedding/vector-index.ts";
-import { MorphAnalyzer } from "../../src/memory/morph/analyzer.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { Recorder } from "../../src/memory/record.ts";
-import { type FindInput, MemorySearch } from "../../src/memory/search.ts";
+import { type FindInput, MemorySearch, searchTuning } from "../../src/memory/search.ts";
 import { Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { MemoryTools } from "../../src/tools/memory.ts";
@@ -87,7 +76,13 @@ const earlierSession = Effect.gen(function* () {
   return { project, session, decision, answer, call, result };
 });
 
-const indexAll = Effect.flatMap(Indexer, (indexer) => indexer.indexAll());
+/** Applies every stored change to the lexical index, as the end of a run does. */
+const lexicalAll = Effect.flatMap(Indexer, (indexer) => indexer.lexicalAll());
+/** Everything stored so far in the lexical index and embedded. */
+const indexAll = Effect.andThen(
+  lexicalAll,
+  Effect.flatMap(Indexer, (indexer) => indexer.indexAll()),
+);
 
 const find = Effect.fnUntraced(function* (input: FindInput) {
   return yield* (yield* MemorySearch).find(input);
@@ -215,7 +210,10 @@ testAgent()("MemorySearch.find", (it) => {
         });
       });
       const found = Effect.map(
-        find({ query: "retries", projectId: project.id, crossProject: false }),
+        Effect.andThen(
+          lexicalAll,
+          find({ query: "retries", projectId: project.id, crossProject: false }),
+        ),
         (result) => result.matches.map((match) => match.id),
       );
       const first = yield* read("retries = 2", "a".repeat(64));
@@ -342,7 +340,7 @@ testAgent()("MemorySearch.find", (it) => {
   );
 });
 
-testAgent({ morphAnalyzer: MorphAnalyzer.disabled })(
+testAgent({ searchTuning: { ...searchTuning, morph: false } })(
   "MemorySearch.find without morphemes",
   (it) => {
     it.effect("ranks vectors inside the allowed project before applying the result limit", () =>
@@ -411,32 +409,12 @@ testAgent({ embedder: brokenEmbedder })("MemorySearch.find with a failing embedd
   it.effect("falls back to text search, and says so", () =>
     Effect.gen(function* () {
       const earlier = yield* earlierSession;
+      yield* lexicalAll;
       const result = yield* find({ query: "Postgres", projectId: earlier.project.id });
       expect(result.degraded).toEqual(["vector"]);
       // The two statements; tool calls and results are never embedded.
       expect(result.unindexed).toBe(2);
       expect(result.matches[0]).toMatchObject({ id: earlier.decision.id, foundBy: "text" });
-    }),
-  );
-});
-
-const warmed = MutableRef.make(0);
-const loadingAnalyzer = Layer.succeed(MorphAnalyzer, {
-  identity: "loading",
-  ready: () => false,
-  warm: () => {
-    MutableRef.increment(warmed);
-  },
-  terms: () => Effect.die("not loaded"),
-});
-
-testAgent({ morphAnalyzer: loadingAnalyzer })("MemorySearch.find while Kiwi loads", (it) => {
-  it.effect("does not wait for the analyzer; it says so and warms it", () =>
-    Effect.gen(function* () {
-      const { project } = yield* TestEnv;
-      const result = yield* find({ query: "아무거나", projectId: project.id });
-      expect(result.degraded).toEqual(["morph"]);
-      expect(MutableRef.get(warmed)).toBe(1);
     }),
   );
 });

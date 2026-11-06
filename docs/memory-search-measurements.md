@@ -6,7 +6,7 @@
 
 - 사본: 사용자가 `~/.context-generactive-agent`의 `agent.db`(`.backup`), `vectors/`, `models/`를 `/tmp/cga-bench`에 복사했다. 샌드박스가 `/tmp`에서 SQLite `-shm` 파일을 만들지 못해 `bench-copy-stage` 스킬로 git이 무시하는 `node_modules/.vp-tmp/cga-bench`에 옮겨 쓴다. 사본과 결과 파일(`*.jsonl`)은 커밋하지 않는다. 작업이 끝나면 두 사본을 지운다.
 - 규모: 노드 276,162개, 벡터 63,671개(현재 embedder), 측정 프로젝트(대화 프로젝트) 노드 26,762개, 기기 M1 Pro.
-- 지연: `eval/native-read-bench.ts`(`native-read-bench` 스킬). 네이티브 read 하나를 앱과 같은 입력으로 돌린다. 2초 예산, `textK`=limit×2, `vectorK`=min(limit×4, 48). 벡터는 무작위 단위 벡터(단계 비용은 벡터 값과 무관). morph는 기본으로 꺼 두고, `--morph`를 주면 DB 옆 `models/`의 Kiwi로 질의마다 앱과 같은 형태소 검색어를 만들어 켠다(2026-11-05부터).
+- 지연: `eval/native-read-bench.ts`(`native-read-bench` 스킬). 네이티브 read 하나를 앱과 같은 입력으로 돌린다. 2초 예산, `textK`=limit×2, `vectorK`=min(limit×4, 48). 벡터는 무작위 단위 벡터(단계 비용은 벡터 값과 무관). morph는 기본으로 꺼 두고, `--morph`를 주면 DB 옆 `models/`의 Kiwi로 질의마다 앱과 같은 형태소 검색어를 만들어 켠다(2026-11-05부터). 2026-11-06부터 text·morph는 `--lexical <폴더|auto>`의 lexical 색인으로 읽고, 주지 않으면 둘 다 끈다(`--morph`는 없앴다). `auto`는 사본 옆 `lexical/`의 앱 색인이고, 사본에서 앱 검색(search-set pool 등)을 한 번 돌리면 만들어진다.
   - find: 기록된 `find_memory` 질의 60개(최근, 중복 제거), 물은 프로젝트 하나만, limit 12.
   - interpret: 사용자 발언 앞 500자 40개, limit 10.
   - recall: 같은 세션의 사용자 발언 세 개를 이은 6000자 이하 질의 29개, limit 16.

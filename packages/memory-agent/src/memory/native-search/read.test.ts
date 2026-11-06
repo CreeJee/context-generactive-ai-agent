@@ -6,7 +6,7 @@ import { NativeOwnerFailed, OwnerCommand, OwnerReply } from "./worker-protocol.t
 import {
   createApplicationReadFixture,
   createReadFixture,
-  legacyFixtureChannels,
+  lexicalDocuments,
 } from "./read-fixture.ts";
 import type { NativeReadInput } from "./read-protocol.ts";
 
@@ -60,7 +60,13 @@ it(
               createApplicationReadFixture(databasePath),
               (connection) => Effect.sync(() => connection.close()),
             );
-            const legacy = legacyFixtureChannels(db);
+            // The allowed project's searchable rows: "sqlite" ranks alpha, then each two-character
+            // term adds its two newest (로그: latest, beta; 포맷: beta, alpha).
+            const text = ["alpha", "latest", "beta"];
+            // No vector: latest (topic) and global-unindexed (assistant, another project).
+            const unindexed = 2;
+            // Open jobs of the allowed project's searchable rows: alpha and latest.
+            const uninterpreted = 2;
             const owner = yield* makeNativeOwner(
               {
                 kind: "setup",
@@ -68,9 +74,25 @@ it(
                 dimensions: 384,
                 bits: 4,
                 cacheDirectory: paths.join(directory, "vector"),
+                lexicalDirectory: paths.join(directory, "lexical"),
                 databasePath,
               },
               new URL("./worker.ts", import.meta.url),
+            );
+            yield* owner.execute(
+              OwnerCommand.cases["lexical-reset"].make({
+                epoch: owner.epoch,
+                requestId: "lexical-reset",
+                instance: "fixture",
+              }),
+            );
+            yield* owner.execute(
+              OwnerCommand.cases["lexical-apply"].make({
+                epoch: owner.epoch,
+                requestId: "lexical-apply",
+                documents: lexicalDocuments,
+                removed: [],
+              }),
             );
             const query = new Float32Array(384);
             query[0] = 1;
@@ -102,7 +124,7 @@ it(
               query,
               trigramTerms: ["sqlite"],
               shortTerms: ["로그", "포맷"],
-              morphTerms: ["로그", "포맷"],
+              morphQuery: "로그 포맷",
               vectorK: 2,
               textK: 2,
               morphK: 2,
@@ -143,11 +165,22 @@ it(
             expect(reply.result.vectorScores).toEqual(oldVectors.scores);
             expect(reply.result.vectorIds).toEqual(["alpha", "beta"]);
             expect(reply.result.candidateCount).toBe(2);
-            expect(reply.result.textIds).toEqual(legacy.text);
+            expect(reply.result.textIds).toEqual(text);
             expect(reply.result.textIds.length).toBeGreaterThan(input.textK);
-            expect(reply.result.morphIds).toEqual(legacy.morph);
-            expect(reply.result.unindexed).toBe(legacy.unindexed);
-            expect(reply.result.uninterpreted).toBe(legacy.uninterpreted);
+            expect(reply.result.morphIds).toEqual(["alpha", "beta"]);
+            expect(reply.result.unindexed).toBe(unindexed);
+            expect(reply.result.uninterpreted).toBe(uninterpreted);
+            expect(reply.result.lexicalPending).toBe(0);
+            // A change not applied yet: the index may hold text or a project the node no longer
+            // has, so the read drops the node until it is applied.
+            db.prepare("INSERT INTO lexical_changes(node_seq) VALUES (2)").run();
+            const pending = yield* search("pending");
+            if (!OwnerReply.guards["memory-result"](pending))
+              return yield* NativeOwnerFailed.make({ reason: "invalid-input" });
+            expect(pending.result.lexicalPending).toBe(1);
+            expect(pending.result.textIds).toEqual(["alpha", "latest"]);
+            expect(pending.result.morphIds).not.toContain("beta");
+            db.exec("DELETE FROM lexical_changes");
             const one = yield* search("one", { vectorK: 1 });
             if (!OwnerReply.guards["memory-result"](one))
               return yield* NativeOwnerFailed.make({ reason: "invalid-input" });
@@ -201,7 +234,7 @@ it(
                 textIds: [],
                 morphIds: [],
                 uninterpreted: 0,
-                unindexed: legacy.unindexed,
+                unindexed,
               },
             });
             const small = yield* search("output", { outputBudgetBytes: 1 });
@@ -226,7 +259,7 @@ it(
               return yield* NativeOwnerFailed.make({ reason: "invalid-input" });
             expect(dropped.result.vectorIds.length).toBeGreaterThan(0);
             expect(dropped.result.morphIds.length).toBeGreaterThan(0);
-            expect(dropped.result.unindexed).toBe(legacy.unindexed);
+            expect(dropped.result.unindexed).toBe(unindexed);
           }),
         ),
       ),

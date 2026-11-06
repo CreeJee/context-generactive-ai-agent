@@ -4209,3 +4209,8 @@
   - `lexical_index`에 색인 build 이름을 둔다. worker 색인의 이름(Tantivy commit payload)과 다르거나 없으면 색인을 비우고, 모든 노드를 최신순으로 다시 기록한다. 색인을 먼저 비우므로 중간에 멈추면 다음 시작에 다시 만든다.
   - publication gate(`withMutation`)는 쓰지 않는다. 읽기가 아직 반영하지 않은 변경이 있는 노드의 히트를 버리면 SQLite 스냅샷과 맞기 때문이다(검색 전환 단계).
 - 반영은 실행이 끝난 뒤 vector 색인보다 먼저 돈다. 모델이 필요 없으니 그 실행의 말을 가장 빨리 찾게 하려는 것이다. 시작할 때, 가져오기 뒤, secret sweep 뒤에도 돈다. FTS5는 삽입 trigger로 바로 찾혔지만, 이제 실행 중에 쓴 노드는 실행이 끝나야 글자 검색에 잡힌다.
+- 읽기 전환: native read의 text·morph 채널은 FTS5(`nodes_fts`·`nodes_morph`) 대신 lexical 색인에서 찾는다.
+  - text는 3글자 이상 검색어의 gram 구절(BM25)과 두 글자 검색어마다 최신 일치를, morph는 질문 원문을 색인의 형태소 규칙으로 나눈 검색어(BM25)를 쓴다. 호스트는 morph 검색어를 만들지 않고 질문(`morphQuery`)을 보낸다.
+  - 채널마다 k의 2배를 찾아 같은 SQLite 스냅샷에서 허용 프로젝트이고 숨기지 않았고 `lexical_changes`에 남은 변경이 없는 노드만 k개 남긴다. 색인과 스냅샷이 어긋난 노드는 반영될 때까지 빠진다.
+  - 읽기는 반영 안 된 변경 수(`lexicalPending`)를 돌려주고, `FindResult.textUnindexed`로 모델에 알린다. Kiwi 적재를 기다리던 `"morph"` degraded는 없앴다.
+  - Kiwi 분석기, `nodes_fts`·`nodes_morph` 테이블은 다음 단계에서 지운다(지우는 migration은 사용자 확인 뒤).

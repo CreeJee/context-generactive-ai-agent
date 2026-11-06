@@ -25,7 +25,7 @@ const Seq = Schema.Struct({ seq: Schema.Finite });
  * What the lexical index holds and how it splits text: its schema, the trigram and Lindera
  * analysis. A different layout is a different folder, rebuilt from every node.
  */
-const lexicalLayout = "tantivy-0.27/ngram3+lindera-ko-dic-kiwi-rules/v1";
+export const lexicalLayout = "tantivy-0.27/ngram3+lindera-ko-dic-kiwi-rules/v1";
 /** SQLite binds at most 32,766 variables per statement; id lists are split well below that. */
 const idsPerStatement = 1000;
 

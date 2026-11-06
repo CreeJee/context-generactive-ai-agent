@@ -34,12 +34,13 @@ if (!isMainThread) {
           try {
             const result = reader.search(
               index,
+              null,
               {
                 allowedProjects: ["allowed"],
                 embedder: "fixture",
                 trigramTerms: [],
                 shortTerms: [],
-                morphTerms: [],
+                morphQuery: "",
                 vectorK: 2,
                 textK: 2,
                 morphK: 2,

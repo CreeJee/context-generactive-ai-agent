@@ -58,7 +58,7 @@ skills/
 
 - 사용자, assistant, tool call, tool result를 모두 원문 그대로 `nodes`에 저장합니다(수정 불가).
 - 저장할 때 구조 edge를 만듭니다: `next`(세션 순서), `reply`, `calls`, `returns`, `touches`(같은 파일/URL).
-- 검색(`find_memory`)은 임베딩 벡터 순위, FTS trigram 순위, Kiwi 형태소(명사와 어간) BM25 순위를 RRF로 합친 뒤 그래프를 탐색해 결과를 확장합니다. Kiwi는 worker thread에서 돌고(쓰기 시작하면 계속 둠, 약 240 MB), 적재 중에는 형태소 순위 없이 검색합니다. 임베딩은 사용자, assistant 발언과 주제 노드만 합니다(`embeddedKinds`). 도구 호출과 결과는 trigram, 형태소 순위로 찾고, 발언에서 `calls`, `returns` edge를 따라 닿습니다. 검색어가 에러 코드, 경로, 식별자처럼 무언가를 정확히 가리키면(`namesSomethingExactly`) trigram 순위를 앞에 두고 두 배로 칩니다. 벡터 순위는 관련이 없어도 늘 차 있어서, 그대로 합치면 정확히 맞은 도구 출력을 가까운 발언이 밀어냅니다.
+- 검색(`find_memory`)은 임베딩 벡터 순위, lexical 색인의 trigram 순위와 형태소(명사와 어간) BM25 순위를 RRF로 합친 뒤 그래프를 탐색해 결과를 확장합니다. lexical 색인은 native 검색 worker 안의 Tantivy 색인이고, 형태소는 Lindera ko-dic 분석에서 Kiwi 규칙으로 고릅니다. 노드 변경은 `lexical_changes`에 기록되고 실행이 끝날 때 반영되므로, 실행 중에 쓴 노드는 그 뒤에 글자·형태소로 찾을 수 있습니다. 임베딩은 사용자, assistant 발언과 주제 노드만 합니다(`embeddedKinds`). 도구 호출과 결과는 trigram, 형태소 순위로 찾고, 발언에서 `calls`, `returns` edge를 따라 닿습니다. 검색어가 에러 코드, 경로, 식별자처럼 무언가를 정확히 가리키면(`namesSomethingExactly`) trigram 순위를 앞에 두고 두 배로 칩니다. 벡터 순위는 관련이 없어도 늘 차 있어서, 그대로 합치면 정확히 맞은 도구 출력을 가까운 발언이 밀어냅니다.
 
   임베딩은 worker thread에서 처리합니다. 모델은 `src/memory/embedding/models.ts`의 모델 표에서 고르며, 지금은 EmbeddingGemma 2입니다. 긴 노드는 512토큰 창으로 나눠 임베딩하고, 토큰 길이에 따라 배치를 나눕니다. CPU 모드는 q8 모델을 CPU에서, GPU 모드는 fp16 모델을 WebGPU에서(안 되면 CPU에서) 돌리고, 자동은 GPU 모드입니다(`EmbeddingSetup`, 설정의 "기억" 탭). onnxruntime-node는 추론을 동기로 돌려서, 메인 스레드에서 돌리면 밀린 노드를 임베딩하는 동안 서버의 모든 요청이 기다립니다. 메모리 측정은 `node --expose-gc --no-warnings eval/memory.ts`. 품질 평가는 `vp run eval:recall`(두 모델이 `~/.context-generactive-agent/models`에 있어야 함).
 

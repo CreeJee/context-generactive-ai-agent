@@ -19,7 +19,7 @@
 - `GraphReadFailed` / `Hop` / `Visit` / `TraverseOptions` / `TraverseResult` / `Provenance` — 그래프 읽기 실패 오류와 탐색·출처 결과 타입
 - `MemorySearch` — 이전 메시지를 찾는 서비스(`MemorySearch.layer`, `MemorySearch.tuned(partial)`). 벡터·텍스트 매치를 시드로 그래프를 탐색한다. `find`, `allowedProjects`를 제공한다
 - `FindInput` / `Match` / `FindResult` / `SkippedRead` / `NativeMemorySearchFailed` — 검색 입력과 결과, 실패해도 건너뛰고 진행한 읽기의 기록(reason·stage·elapsedMs), 네이티브 검색 실패 오류
-- `fuseRanks` / `searchTerms` / `namesSomethingExactly` / `searchTuning` / `SearchTuning` — RRF 순위 병합, 검색어 분리(3자 이상은 trigram FTS, 더 짧으면 LIKE), 정확한 이름(에러 코드·경로·식별자·버전·해시·포트)이 든 질의인지 판별, 검색 튜닝 값
+- `fuseRanks` / `searchTerms` / `namesSomethingExactly` / `searchTuning` / `SearchTuning` — RRF 순위 병합, 검색어 분리(3자 이상은 lexical 색인의 trigram 구절, 두 글자는 그 글자로 시작하거나 끝나는 gram), 정확한 이름(에러 코드·경로·식별자·버전·해시·포트)이 든 질의인지 판별, 검색 튜닝 값
 - `readStructuredEvidence` — `Effect.fn("Memory.readStructuredEvidence")`. 노드 원문 페이지에 출처·변경·판정(`evidenceContext`)을 붙여 돌려준다. 노드가 없거나 범위 밖이면 null
 - `traceStructuredEvidence` / `EvidenceReadFailed` — 같은 범위·권한 규칙으로 출처 사슬, 적용된 변경(사유 포함), 미확정 변경을 요약한다. 저장소 읽기 실패는 stage만 담은 `EvidenceReadFailed`가 된다
 - `isChangeAuthority` / `changeAuthoritySql` / `scopedChain` — 정정·철회 권한 규칙(dual 함수)과 그 SQL 버전, 허용 프로젝트 경계에서 멈추는 출처 사슬

@@ -73,7 +73,8 @@ export interface NativeReadInput {
   query?: Float32Array | null | undefined;
   trigramTerms: readonly string[];
   shortTerms: readonly string[];
-  morphTerms: readonly string[];
+  /** The question; the lexical index splits it into morph terms itself. */
+  morphQuery: string;
   vectorK: number;
   textK: number;
   morphK: number;
@@ -102,6 +103,8 @@ export interface NativeReadOutput {
   textIds: string[];
   morphIds: string[];
   unindexed: number;
+  /** Journaled node changes the lexical index has not applied yet, over every project. */
+  lexicalPending: number;
   uninterpreted: number;
   candidateCount: number;
   sqliteExecutions: number;
@@ -155,8 +158,10 @@ export declare class LexicalIndex {
 export declare class MemoryReadSession {
   constructor(databasePath: string);
   close(): void;
+  /** `lexical` is required while the text or morph channel is on. */
   search(
     index: VectorIndex,
+    lexical: LexicalIndex | null,
     input: NativeReadInput,
     token: string,
     ownerKey: string,

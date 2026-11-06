@@ -27,7 +27,7 @@ it("publishes only the claimed read's actual SQLite pin, never registration or p
             embedder: "fixture",
             trigramTerms: [],
             shortTerms: [],
-            morphTerms: [],
+            morphQuery: "",
             vectorK: 1,
             textK: 1,
             morphK: 1,
@@ -52,6 +52,7 @@ it("publishes only the claimed read's actual SQLite pin, never registration or p
                 if (mode === "cancelled") control.cancel();
                 const result = reader.search(
                   index,
+                  null,
                   mode === "invalid" ? { ...input, embedder: "" } : input,
                   control.token(),
                   owner,
@@ -68,7 +69,7 @@ it("publishes only the claimed read's actual SQLite pin, never registration or p
                 expect(control.snapshotWasPinned()).toBe(mode === "read");
                 // Claiming that token again cannot create another read or pin a fresh control.
                 expect(
-                  reader.search(index, input, control.token(), owner, "pin-epoch", mode).kind,
+                  reader.search(index, null, input, control.token(), owner, "pin-epoch", mode).kind,
                 ).toBe("invalid-input");
                 control.close();
                 expect(control.snapshotWasPinned()).toBe(mode === "read"); // Event is historical, not a live lease.

@@ -1,5 +1,6 @@
 //! Read-only seed ranking. Host owns authorization and index publication serialization.
 use crate::{
+    lexical::LexicalIndex,
     search_control::{admitted, claim, Outcome},
     VectorIndex,
 };
@@ -19,10 +20,16 @@ const TEXT_RESERVE: Duration = Duration::from_millis(600);
 // Same terms as the `nodes_embeddable` partial index; spelled differently, SQLite would not use it.
 const EMBEDDED_KINDS: &str = "n.kind IN ('user', 'assistant', 'topic')";
 const MEANINGFUL: &str ="length(trim(n.text, char(9,10,11,12,13,32,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279))) > 0 AND NOT EXISTS (SELECT 1 FROM memory_graph_suppressed_nodes s WHERE s.node_seq = n.seq)";
-// For the text and morph queries. A node one of their terms matched is never blank: the terms hold no
-// whitespace (the host splits on it, and \s is the set trimmed above), so checking that again would
-// only read every matched node's whole text, overflow pages and all.
+// For the lexical hits. A node one of their terms matched is never blank: the terms hold no
+// whitespace, so checking that again would only read every matched node's whole text.
 const NOT_SUPPRESSED: &str = "NOT EXISTS (SELECT 1 FROM memory_graph_suppressed_nodes s WHERE s.node_seq = n.seq)";
+// The lexical index holds a node as it was when its last journaled change was applied; a change
+// still pending means the index may hold text, a project or a node this snapshot no longer has.
+const LEXICAL_CURRENT: &str =
+    "NOT EXISTS (SELECT 1 FROM lexical_changes c WHERE c.node_seq = n.seq)";
+/// How many lexical hits a channel asks for, per hit it keeps: hits the snapshot drops (a change
+/// not yet applied, a suppressed node) leave room for the next ones.
+const LEXICAL_DEPTH: usize = 2;
 #[napi(object)]
 pub struct NativeReadInput {
     pub allowed_projects: Vec<String>,
@@ -30,7 +37,8 @@ pub struct NativeReadInput {
     pub query: Option<Float32Array>,
     pub trigram_terms: Vec<String>,
     pub short_terms: Vec<String>,
-    pub morph_terms: Vec<String>,
+    /// The question, split into morph terms by the lexical index's own analysis.
+    pub morph_query: String,
     pub vector_k: u32,
     pub text_k: u32,
     pub morph_k: u32,
@@ -54,6 +62,8 @@ pub struct NativeReadOutput {
     pub text_ids: Vec<String>,
     pub morph_ids: Vec<String>,
     pub unindexed: f64,
+    /// Journaled node changes the lexical index has not applied yet, over every project.
+    pub lexical_pending: f64,
     pub uninterpreted: f64,
     pub candidate_count: u32,
     pub sqlite_executions: u32,
@@ -112,6 +122,7 @@ impl NativeReadOutput {
             text_ids: vec![],
             morph_ids: vec![],
             unindexed: 0.,
+            lexical_pending: 0.,
             uninterpreted: 0.,
             candidate_count: 0,
             sqlite_executions: 0,
@@ -192,13 +203,6 @@ fn record_vector_channel<T, E>(
 fn ms(start: Instant) -> f64 {
     start.elapsed().as_secs_f64() * 1000.
 }
-fn quoted(terms: &[String]) -> String {
-    terms
-        .iter()
-        .map(|s| format!("\"{}\"", s.replace('"', "\"\"")))
-        .collect::<Vec<_>>()
-        .join(" OR ")
-}
 fn scope(projects: &[String]) -> String {
     if projects.is_empty() {
         "NULL".into()
@@ -206,55 +210,55 @@ fn scope(projects: &[String]) -> String {
         vec!["?"; projects.len()].join(",")
     }
 }
-/// Walks `sql` (rows of id and text, newest first) once and keeps, for each term, the ids of its
-/// newest `k` rows that contain it. Stops when every term has `k`.
-fn short_term_hits(
+/// The ids of the `seqs` this snapshot searches as the lexical index holds them: nodes of the
+/// allowed projects, not suppressed, with no journaled change pending.
+fn lexical_ids(
     connection: &Connection,
-    sql: &str,
-    params: Vec<Value>,
-    terms: &[String],
-    k: usize,
+    seqs: &[u64],
+    projects: &[String],
     id_budget: usize,
     check: &dyn Fn() -> std::result::Result<(), Outcome>,
-) -> std::result::Result<Vec<Vec<String>>, Outcome> {
-    let mut statement = connection.prepare(sql).map_err(|_| Outcome::ReadFailed)?;
+) -> std::result::Result<HashMap<u64, String>, Outcome> {
+    let mut ids = HashMap::new();
+    if seqs.is_empty() {
+        return Ok(ids);
+    }
+    let sql = format!(
+        "SELECT n.seq, n.id FROM nodes n WHERE n.seq IN ({}) AND n.project_id IN ({}) AND {NOT_SUPPRESSED} AND {LEXICAL_CURRENT}",
+        vec!["?"; seqs.len()].join(","),
+        scope(projects)
+    );
+    let values = seqs
+        .iter()
+        .map(|seq| Value::Integer(*seq as i64))
+        .chain(projects.iter().cloned().map(Value::Text));
+    let mut statement = connection.prepare(&sql).map_err(|_| Outcome::ReadFailed)?;
     let mut rows = statement
-        .query(params_from_iter(params))
+        .query(params_from_iter(values))
         .map_err(|_| Outcome::ReadFailed)?;
-    let mut hits: Vec<Vec<String>> = vec![Vec::new(); terms.len()];
-    let mut open = if k == 0 { 0 } else { terms.len() };
-    while open > 0 {
-        let Some(row) = rows.next().map_err(|_| Outcome::ReadFailed)? else {
-            break;
-        };
+    let mut bytes = 0usize;
+    while let Some(row) = rows.next().map_err(|_| Outcome::ReadFailed)? {
         check()?;
-        let text = row
+        let id = row
             .get_ref(1)
             .map_err(|_| Outcome::ReadFailed)?
             .as_str()
             .map_err(|_| Outcome::ReadFailed)?;
-        let mut id: Option<String> = None;
-        for (term, found) in terms.iter().zip(hits.iter_mut()) {
-            if found.len() < k && text.contains(term.as_str()) {
-                if id.is_none() {
-                    let value = row
-                        .get_ref(0)
-                        .map_err(|_| Outcome::ReadFailed)?
-                        .as_str()
-                        .map_err(|_| Outcome::ReadFailed)?;
-                    if value.len() > id_budget {
-                        return Err(Outcome::BudgetExceeded);
-                    }
-                    id = Some(value.to_owned());
-                }
-                found.push(id.clone().unwrap_or_default());
-                if found.len() == k {
-                    open -= 1;
-                }
-            }
+        bytes = bytes.saturating_add(id.len());
+        if bytes > id_budget {
+            return Err(Outcome::BudgetExceeded);
         }
+        let seq: i64 = row.get(0).map_err(|_| Outcome::ReadFailed)?;
+        ids.insert(seq as u64, id.to_owned());
     }
-    Ok(hits)
+    Ok(ids)
+}
+/// The first `k` of `seqs` the snapshot kept, as ids.
+fn kept(seqs: &[u64], ids: &HashMap<u64, String>, k: usize) -> Vec<String> {
+    seqs.iter()
+        .filter_map(|seq| ids.get(seq).cloned())
+        .take(k)
+        .collect()
 }
 // Explicit completion is required; Drop is only an unwinding fallback.
 struct ReadGuard<'a> {
@@ -326,6 +330,7 @@ impl MemoryReadSession {
     pub fn search(
         &mut self,
         index: ClassInstance<'_, VectorIndex>,
+        lexical: Option<ClassInstance<'_, LexicalIndex>>,
         input: NativeReadInput,
         token: String,
         owner_key: String,
@@ -347,6 +352,7 @@ impl MemoryReadSession {
         };
         let bytes = 40usize
             .saturating_add(input.embedder.len())
+            .saturating_add(input.morph_query.len())
             .saturating_add(
                 input
                     .query
@@ -359,7 +365,6 @@ impl MemoryReadSession {
                     .iter()
                     .chain(&input.trigram_terms)
                     .chain(&input.short_terms)
-                    .chain(&input.morph_terms)
                     .map(String::len)
                     .sum::<usize>(),
             );
@@ -374,13 +379,14 @@ impl MemoryReadSession {
                     || input.vector_k == 0
             })
             || (input.text_enabled && input.text_k == 0)
-            || (input.morph_enabled && input.morph_k == 0)
+            || (input.morph_enabled && (input.morph_k == 0 || input.morph_query.is_empty()))
+            || ((input.text_enabled || input.morph_enabled) && lexical.is_none())
+            || input.morph_query.len() > 65536
             || input
                 .allowed_projects
                 .iter()
                 .chain(&input.trigram_terms)
                 .chain(&input.short_terms)
-                .chain(&input.morph_terms)
                 .any(|s| s.is_empty() || s.len() > 65536)
             || input.embedder.is_empty()
             || input.embedder.len() > 65536
@@ -446,6 +452,12 @@ impl MemoryReadSession {
             // The owning worker still runs this call synchronously: queued index writes
             // cannot overtake the read. Host must track completion separately.
             cell.mark_snapshot_pinned();
+            // The lexical searcher is fixed here too. Its hits are checked against the snapshot.
+            let lexical = lexical
+                .as_ref()
+                .map(|lexical| lexical.search())
+                .transpose()
+                .map_err(|_| Outcome::ReadFailed)?;
             let projects = scope(&input.allowed_projects);
             let project_values = || {
                 input
@@ -588,43 +600,6 @@ impl MemoryReadSession {
             }
             out.mapping_ms = ms(running.1);
             running = (Stage::Text, Instant::now());
-            let mut short_executions = 0u32;
-            let mut rank = |sql: String,
-                            first: String,
-                            k: u32,
-                            target: &mut Vec<String>,
-                            dedupe: bool,
-                            check: &dyn Fn() -> std::result::Result<(), Outcome>|
-             -> std::result::Result<(), Outcome> {
-                check()?;
-                let mut values = vec![Value::Text(first)];
-                values.extend(project_values());
-                values.push(Value::Integer(k as i64));
-                let mut statement = connection.prepare(&sql).map_err(|_| Outcome::ReadFailed)?;
-                let mut rows = statement
-                    .query(params_from_iter(values))
-                    .map_err(|_| Outcome::ReadFailed)?;
-                out.sqlite_executions += 1;
-                let mut seen: HashSet<String> = target.iter().cloned().collect();
-                let mut logical_bytes: usize = target.iter().map(String::len).sum();
-                while let Some(row) = rows.next().map_err(|_| Outcome::ReadFailed)? {
-                    check()?;
-                    let value = row.get_ref(0).map_err(|_| Outcome::ReadFailed)?;
-                    let text = value.as_str().map_err(|_| Outcome::ReadFailed)?;
-                    if text.len() > input.output_budget_bytes as usize {
-                        return Err(Outcome::BudgetExceeded);
-                    }
-                    let id = text.to_owned();
-                    if !dedupe || seen.insert(id.clone()) {
-                        logical_bytes += id.len();
-                        target.push(id);
-                    }
-                    if logical_bytes > input.output_budget_bytes as usize {
-                        return Err(Outcome::BudgetExceeded);
-                    }
-                }
-                Ok(())
-            };
             let text_deadline = Instant::now() + cell.remaining().saturating_sub(TEXT_RESERVE);
             if let Ok(mut until) = text_until.lock() {
                 *until = Some(text_deadline);
@@ -638,64 +613,77 @@ impl MemoryReadSession {
                     Ok(())
                 }
             };
+            let budget = input.output_budget_bytes as usize;
             let mut text_ids: Vec<String> = Vec::new();
             let mut trigram_ms: Option<f64> = None;
-            let (mut short_term_ms, mut short_term_max_ms, mut short_terms_done) = (0., 0., 0u32);
+            let (mut short_term_ms, mut short_terms_done) = (0., 0u32);
+            let mut text_executions = 0u32;
             let text = (|| -> std::result::Result<(), Outcome> {
-                if input.text_enabled && !input.allowed_projects.is_empty() {
-                    if !input.trigram_terms.is_empty() {
-                        let started = Instant::now();
-                        rank(format!("SELECT n.id FROM nodes_fts f JOIN nodes n ON n.seq=f.rowid WHERE {NOT_SUPPRESSED} AND nodes_fts MATCH ? AND n.project_id IN ({projects}) ORDER BY f.rank LIMIT ?"), quoted(&input.trigram_terms), input.text_k, &mut text_ids, false, &text_check)?;
-                        trigram_ms = Some(ms(started));
+                let Some(search) = lexical.as_ref() else {
+                    return Ok(());
+                };
+                if !input.text_enabled || input.allowed_projects.is_empty() {
+                    return Ok(());
+                }
+                let k = input.text_k as usize;
+                let started = Instant::now();
+                let ranked = search.phrases(
+                    &input.trigram_terms,
+                    k * LEXICAL_DEPTH,
+                    &input.allowed_projects,
+                    &text_check,
+                )?;
+                if !input.trigram_terms.is_empty() {
+                    trigram_ms = Some(ms(started));
+                }
+                // Each two-character term keeps its newest matches, appended in term order.
+                let started = Instant::now();
+                let newest = search.short_terms(
+                    &input.short_terms,
+                    k * LEXICAL_DEPTH,
+                    &input.allowed_projects,
+                    &text_check,
+                )?;
+                short_term_ms = ms(started);
+                short_terms_done = input.short_terms.len() as u32;
+                let seqs: Vec<u64> = ranked
+                    .iter()
+                    .chain(newest.iter().flatten())
+                    .copied()
+                    .collect::<HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                if !seqs.is_empty() {
+                    text_executions += 1;
+                }
+                let ids = lexical_ids(
+                    connection,
+                    &seqs,
+                    &input.allowed_projects,
+                    budget,
+                    &text_check,
+                )?;
+                let mut seen = HashSet::new();
+                for id in std::iter::once(kept(&ranked, &ids, k))
+                    .chain(newest.iter().map(|seqs| kept(seqs, &ids, k)))
+                    .flatten()
+                {
+                    if seen.insert(id.clone()) {
+                        text_ids.push(id);
                     }
-                    if !input.short_terms.is_empty() {
-                        let started = Instant::now();
-                        // One newest-first walk for every short term, instead of one walk per term: a
-                        // rare term walked the whole table, and a Korean question has several. Each
-                        // term keeps its newest `text_k` matches, appended in term order as before.
-                        // One project walks its own rows through nodes_project(project_id, seq). For
-                        // several, `+` keeps SQLite on the rowid scan, which stops early, instead of
-                        // reading every listed project's rows to sort them.
-                        let filter = if input.allowed_projects.len() == 1 {
-                            format!("n.project_id IN ({projects})")
-                        } else {
-                            format!("+n.project_id IN ({projects})")
-                        };
-                        let hits = short_term_hits(
-                            connection,
-                            &format!("SELECT n.id, n.text FROM nodes n WHERE {filter} AND {NOT_SUPPRESSED} ORDER BY n.seq DESC"),
-                            project_values(),
-                            &input.short_terms,
-                            input.text_k as usize,
-                            input.output_budget_bytes as usize,
-                            &text_check,
-                        )?;
-                        short_executions += 1;
-                        let mut seen: HashSet<String> = text_ids.iter().cloned().collect();
-                        let mut logical_bytes: usize = text_ids.iter().map(String::len).sum();
-                        for id in hits.into_iter().flatten() {
-                            if seen.insert(id.clone()) {
-                                logical_bytes += id.len();
-                                text_ids.push(id);
-                            }
-                            if logical_bytes > input.output_budget_bytes as usize {
-                                return Err(Outcome::BudgetExceeded);
-                            }
-                        }
-                        let took = ms(started);
-                        short_term_ms = took;
-                        short_term_max_ms = took;
-                        short_terms_done = input.short_terms.len() as u32;
-                    }
+                }
+                if text_ids.iter().map(String::len).sum::<usize>() > budget {
+                    return Err(Outcome::BudgetExceeded);
                 }
                 Ok(())
             })();
             if let Ok(mut until) = text_until.lock() {
                 *until = None;
             }
+            out.sqlite_executions += text_executions;
             out.trigram_ms = trigram_ms;
             out.short_term_ms = short_term_ms;
-            out.short_term_max_ms = short_term_max_ms;
+            out.short_term_max_ms = short_term_ms;
             out.short_terms_done = short_terms_done;
             match text {
                 Ok(()) => out.text_ids = text_ids,
@@ -706,19 +694,31 @@ impl MemoryReadSession {
             }
             out.text_ms = ms(running.1);
             running = (Stage::Morph, Instant::now());
-            if input.morph_enabled
-                && !input.morph_terms.is_empty()
-                && !input.allowed_projects.is_empty()
-            {
-                rank(format!("SELECT n.id FROM nodes_morph f JOIN nodes n ON n.seq=f.rowid WHERE {NOT_SUPPRESSED} AND nodes_morph MATCH ? AND n.project_id IN ({projects}) ORDER BY f.rank LIMIT ?"), quoted(&input.morph_terms), input.morph_k, &mut out.morph_ids, false, &check)?;
+            if let Some(search) = lexical.as_ref() {
+                if input.morph_enabled && !input.allowed_projects.is_empty() {
+                    let k = input.morph_k as usize;
+                    let ranked = search.morphs(
+                        &input.morph_query,
+                        k * LEXICAL_DEPTH,
+                        &input.allowed_projects,
+                        &check,
+                    )?;
+                    if !ranked.is_empty() {
+                        out.sqlite_executions += 1;
+                    }
+                    let ids =
+                        lexical_ids(connection, &ranked, &input.allowed_projects, budget, &check)?;
+                    out.morph_ids = kept(&ranked, &ids, k);
+                }
             }
             out.morph_ms = ms(running.1);
-            out.sqlite_executions += short_executions;
             running = (Stage::Coverage, Instant::now());
             out.unindexed = connection.query_row(&format!("SELECT count(*) FROM nodes n LEFT JOIN node_vectors v ON v.node_seq=n.seq AND v.embedder=? WHERE v.node_seq IS NULL AND {MEANINGFUL} AND {EMBEDDED_KINDS}"), [&input.embedder], |r| r.get::<_,i64>(0)).map_err(|_| Outcome::ReadFailed)? as f64;
             out.sqlite_executions += 1;
             // CROSS JOIN keeps the few open jobs as the outer loop; otherwise SQLite walks every node of the project.
             out.uninterpreted = connection.query_row(&format!("SELECT count(*) FROM interpret_jobs j CROSS JOIN nodes n ON n.id=j.node_id WHERE j.status!='done' AND {MEANINGFUL} AND n.project_id IN ({projects})"), params_from_iter(project_values()), |r| r.get::<_,i64>(0)).map_err(|_| Outcome::ReadFailed)? as f64;
+            out.sqlite_executions += 1;
+            out.lexical_pending = connection.query_row("SELECT count(*) FROM lexical_changes", [], |r| r.get::<_, i64>(0)).map_err(|_| Outcome::ReadFailed)? as f64;
             out.sqlite_executions += 1;
             out.coverage_ms = ms(running.1);
             check()?;
@@ -929,39 +929,19 @@ mod tests {
     }
     #[test]
     #[cfg(feature = "test-sqlite")]
-    fn one_short_term_walk_matches_a_query_per_term() {
+    fn lexical_hits_keep_only_current_nodes_of_allowed_projects() {
         let c = Connection::open_in_memory().unwrap();
-        c.execute_batch("CREATE TABLE nodes(seq INTEGER PRIMARY KEY,id TEXT,text TEXT,project_id TEXT); CREATE INDEX nodes_project ON nodes(project_id, seq); CREATE TABLE memory_graph_suppressed_nodes(node_seq INTEGER); INSERT INTO memory_graph_suppressed_nodes VALUES(5);").unwrap();
-        let texts = ["오늘 PR", "어제 작업", "PR 오늘 어제", "UI", "오늘 숨김", "작업 오늘", "다른", "PR PR", "오늘"];
-        for (i, text) in texts.iter().enumerate() {
-            let project = if i == 6 { "q" } else { "p" };
-            c.execute("INSERT INTO nodes VALUES(?,?,?,?)", rusqlite::params![i as i64 + 1, format!("n{}", i + 1), text, project]).unwrap();
-        }
-        let terms: Vec<String> = ["오늘", "PR", "작업", "없음", "다른"].iter().map(|t| t.to_string()).collect();
-        for k in [1usize, 2, 3, 10] {
-            let walked = short_term_hits(
-                &c,
-                &format!("SELECT n.id, n.text FROM nodes n WHERE n.project_id IN (?) AND {NOT_SUPPRESSED} ORDER BY n.seq DESC"),
-                vec![Value::Text("p".into())],
-                &terms,
-                k,
-                1024,
-                &|| Ok(()),
-            )
-            .unwrap();
-            let per_term: Vec<Vec<String>> = terms
-                .iter()
-                .map(|term| {
-                    c.prepare(&format!("SELECT n.id FROM nodes n WHERE {MEANINGFUL} AND instr(n.text,?)>0 AND +n.project_id IN (?) ORDER BY n.seq DESC LIMIT ?"))
-                        .unwrap()
-                        .query_map(rusqlite::params![term, "p", k as i64], |r| r.get::<_, String>(0))
-                        .unwrap()
-                        .collect::<rusqlite::Result<Vec<_>>>()
-                        .unwrap()
-                })
-                .collect();
-            assert_eq!(walked, per_term, "k={k}");
-        }
+        c.execute_batch("CREATE TABLE nodes(seq INTEGER PRIMARY KEY,id TEXT,project_id TEXT); CREATE TABLE memory_graph_suppressed_nodes(node_seq INTEGER); CREATE TABLE lexical_changes(id INTEGER PRIMARY KEY,node_seq INTEGER); INSERT INTO nodes VALUES(1,'a','p'),(2,'b','p'),(3,'c','q'),(4,'d','p'),(5,'e','p'); INSERT INTO memory_graph_suppressed_nodes VALUES(2); INSERT INTO lexical_changes(node_seq) VALUES(4);").unwrap();
+        let projects = vec!["p".to_string()];
+        // Suppressed (2), another project's (3), changed since the index took it (4), gone (6).
+        let seqs = [5, 4, 3, 2, 1, 6];
+        let ids = lexical_ids(&c, &seqs, &projects, 1024, &|| Ok(())).unwrap();
+        assert_eq!(kept(&seqs, &ids, 10), ["e", "a"]);
+        assert_eq!(kept(&seqs, &ids, 1), ["e"]);
+        assert!(matches!(
+            lexical_ids(&c, &seqs, &projects, 1, &|| Ok(())),
+            Err(Outcome::BudgetExceeded)
+        ));
     }
     #[test]
     #[cfg(feature = "test-sqlite")]
@@ -981,14 +961,5 @@ mod tests {
         assert!(!c.is_autocommit());
         assert_eq!(c.query_row("SELECT count(*) FROM nodes", [], |r| r.get::<_, i64>(0)).unwrap(), 20000);
         c.execute_batch("ROLLBACK").unwrap();
-    }
-    #[test]
-    #[cfg(feature = "test-sqlite")]
-    fn quoting_and_real_trigram_predicate() {
-        assert_eq!(quoted(&["a\"b".into(), "c".into()]), "\"a\"\"b\" OR \"c\"");
-        let c = Connection::open_in_memory().unwrap();
-        c.execute_batch("CREATE TABLE nodes(seq INTEGER PRIMARY KEY,id TEXT,text TEXT,project_id TEXT); CREATE TABLE memory_graph_suppressed_nodes(node_seq INTEGER); CREATE VIRTUAL TABLE nodes_fts USING fts5(text,tokenize='trigram'); INSERT INTO nodes VALUES(1,'a',char(65279,160,9),'p'),(2,'b','hello','p'),(3,'c','hello','p'); INSERT INTO memory_graph_suppressed_nodes VALUES(3); INSERT INTO nodes_fts(rowid,text) SELECT seq,text FROM nodes;").unwrap();
-        let ids = c.prepare(&format!("SELECT n.id FROM nodes_fts f JOIN nodes n ON n.seq=f.rowid WHERE {MEANINGFUL} AND nodes_fts MATCH ? ORDER BY f.rank")).unwrap().query_map(["\"hello\""], |r| r.get::<_,String>(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
-        assert_eq!(ids, ["b"]);
     }
 }

@@ -274,6 +274,7 @@ const owner = Effect.gen(function* () {
             () =>
               session.search(
                 index,
+                Option.getOrNull(lexical),
                 command.input,
                 command.controlToken!,
                 setup.ownerKey!,

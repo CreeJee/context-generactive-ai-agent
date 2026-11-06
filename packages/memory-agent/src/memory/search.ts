@@ -14,7 +14,6 @@ import {
 import { SqlClient, SqlSchema } from "effect/sql";
 import { Embedder } from "./embedding/embedder.ts";
 import { VectorIndex } from "./embedding/vector-index.ts";
-import { MorphAnalysisFailed, MorphAnalyzer } from "./morph/analyzer.ts";
 import { changeAuthoritySql } from "./changes.ts";
 import { Graph, type Hop } from "./graph.ts";
 import { latestResolver, type LatestEvidence } from "./latest.ts";
@@ -68,7 +67,7 @@ export interface FindResult {
    * Search paths that failed and were skipped, e.g. vector search without the model, text matching
    * that ran past its share of the time, or the other projects when reading them ran out of time.
    */
-  readonly degraded: readonly ("vector" | "text" | "morph" | "other-projects")[];
+  readonly degraded: readonly ("vector" | "text" | "other-projects")[];
   /** Why the other projects were skipped, when `degraded` names them. */
   readonly otherProjectsSkipped?: SkippedRead;
   /**
@@ -76,6 +75,11 @@ export interface FindResult {
    * and results always are.
    */
   readonly unindexed: number;
+  /**
+   * Node changes the text index has not taken in yet, over every project: text and morph matching
+   * miss those nodes until it does. After a rebuild of the index this counts every node.
+   */
+  readonly textUnindexed: number;
   /**
    * Statements not interpreted yet (or whose interpretation failed): they have no topics and no
    * correction links, so a missing correction there proves nothing.
@@ -240,6 +244,8 @@ export function searchTerms(query: string) {
 export interface SearchTuning {
   /** Rank by trigram and short substring matches too. */
   readonly text: boolean;
+  /** Rank by the question's morph terms too. */
+  readonly morph: boolean;
   /**
    * Whether a query that names something exactly ({@link namesSomethingExactly}) puts the text
    * ranking first, so it wins ties, weighted by `exactTextWeight` against 1 for the others.
@@ -269,6 +275,7 @@ export interface SearchTuning {
  */
 export const searchTuning: SearchTuning = {
   text: true,
+  morph: true,
   exactFirst: true,
   exactTextWeight: 2,
   vectorCut: 0,
@@ -284,7 +291,6 @@ const make = (tuning: SearchTuning) =>
     const embedder = yield* Embedder;
     const vectors = yield* VectorIndex;
     const graph = yield* Graph;
-    const analyzer = yield* MorphAnalyzer;
     const authority = sql.literal(changeAuthoritySql("n", "t"));
     const supersededBy = SqlSchema.findAll({
       Request: Schema.String,
@@ -440,6 +446,7 @@ const make = (tuning: SearchTuning) =>
                 spans,
                 coverage: {
                   unindexed: result.unindexed,
+                  textUnindexed: result.lexicalPending,
                   uninterpreted: result.uninterpreted,
                 },
               };
@@ -475,15 +482,6 @@ const make = (tuning: SearchTuning) =>
         Effect.option,
       );
       const query = Option.getOrUndefined(embedded);
-      const analyzed = yield* Effect.gen(function* () {
-        if (!analyzer.ready()) {
-          analyzer.warm();
-          return yield* MorphAnalysisFailed.make({ reason: "not_ready" });
-        }
-        const [tokens = []] = yield* analyzer.terms([input.query]);
-        return morphSearchTerms(tokens);
-      }).pipe(Effect.option);
-      const terms = Option.getOrElse(analyzed, (): ReadonlyArray<string> => []);
       const grouped = searchTerms(input.query);
       const readOver = (projects: readonly string[]) =>
         readSeeds({
@@ -493,12 +491,13 @@ const make = (tuning: SearchTuning) =>
           query: limit > 0 && query !== undefined ? new Float32Array(query) : undefined,
           trigramTerms: grouped.trigram,
           shortTerms: grouped.short,
-          morphTerms: terms,
+          // The lexical index splits the question into morph terms itself.
+          morphQuery: input.query,
           vectorK: Math.min(limit * 4, maxVectorK),
           textK: limit * 2,
           morphK: limit * 2,
           textEnabled: tuning.text && limit > 0,
-          morphEnabled: limit > 0 && terms.length > 0,
+          morphEnabled: tuning.morph && limit > 0 && input.query.trim().length > 0,
           remainingMs: 2000,
           inputBudgetBytes: 1048576,
           outputBudgetBytes: 1048576,
@@ -534,7 +533,6 @@ const make = (tuning: SearchTuning) =>
           ? ["vector" as const]
           : []),
         ...(scopes.some((scope) => scope.textUnavailable) ? ["text" as const] : []),
-        ...(Option.isNone(analyzed) && analyzer.identity !== "none" ? ["morph" as const] : []),
         ...(Result.isFailure(otherSeeds) ? ["other-projects" as const] : []),
       ];
       // The projects' matches are disjoint. Cosine scores compare across reads, so vectors merge
@@ -558,8 +556,9 @@ const make = (tuning: SearchTuning) =>
         ),
         spans: MutableHashMap.fromIterable(scopes.flatMap((scope) => [...scope.spans])),
         coverage: {
-          // A count over every project, the same in each read.
+          // Counts over every project, the same in each read.
           unindexed: ownSeeds.coverage.unindexed,
+          textUnindexed: ownSeeds.coverage.textUnindexed,
           uninterpreted: scopes.reduce((sum, scope) => sum + scope.coverage.uninterpreted, 0),
         },
         otherProjectsSkipped: Option.getOrUndefined(Result.getFailure(otherSeeds)),
@@ -598,7 +597,7 @@ const make = (tuning: SearchTuning) =>
           projectIds: allowed,
           includeEmpty: false,
         });
-        const { unindexed, uninterpreted } = coverage;
+        const { unindexed, textUnindexed, uninterpreted } = coverage;
 
         const matches = yield* Effect.forEach(walk.visits.slice(0, limit), (visit) =>
           Effect.all({
@@ -647,6 +646,7 @@ const make = (tuning: SearchTuning) =>
           degraded,
           ...optionalProperty("otherProjectsSkipped", otherProjectsSkipped),
           unindexed,
+          textUnindexed,
           uninterpreted,
         } satisfies FindResult;
       });

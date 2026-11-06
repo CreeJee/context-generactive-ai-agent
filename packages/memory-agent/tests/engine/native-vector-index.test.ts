@@ -47,7 +47,7 @@ layer(NodeServices.layer)((it) => {
               embedder: "native-factory-fixture",
               trigramTerms: [],
               shortTerms: [],
-              morphTerms: [],
+              morphQuery: "",
               vectorK: 1,
               textK: 1,
               morphK: 1,

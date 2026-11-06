@@ -393,7 +393,6 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
           allowedProjects: [...input.input.allowedProjects],
           trigramTerms: [...input.input.trigramTerms],
           shortTerms: [...input.input.shortTerms],
-          morphTerms: [...input.input.morphTerms],
         },
       }),
       validate: (input) => ({ ...input, ids: [...input.ids] }),
