@@ -4215,3 +4215,4 @@
   - 읽기는 반영 안 된 변경 수(`lexicalPending`)를 돌려주고, `FindResult.textUnindexed`로 모델에 알린다. Kiwi 적재를 기다리던 `"morph"` degraded는 없앴다.
   - Kiwi 분석기, `nodes_fts`·`nodes_morph` 테이블은 다음 단계에서 지운다(지우는 migration은 사용자 확인 뒤).
 - coverage count(미임베딩 발언, lexical 미반영 변경, 미해석 노드)는 native read에서 뺐다. seed 순위 읽기의 일이 아니고, Rust에 `quality.ts` 규칙을 SQL로 베껴 두게 만들었다. native worker가 자기 read-only `node:sqlite` 연결로 `quality.ts` 필터를 써서 읽기 뒤에 센다(`coverage.ts`). 메인 스레드에서 검색마다 세면 약 30ms씩 막히므로 worker에 둔다. 모델에게 주는 힌트라 읽기 스냅샷과 같지 않아도 된다.
+- 벡터 후보 SQL은 kind·공백·숨김 조건(`EMBEDDED_KINDS`·`MEANINGFUL`) 대신 색인을 떠나기를 기다리는 벡터(`memory_graph_vector_removals`)만 뺀다. indexer는 검색할 수 있는 발언만 임베딩하고, 숨긴 topic과 바뀐 노드의 벡터는 그 대기열로 가므로 결과가 같다(bench 사본의 세 프로젝트에서 행 수 일치). 대신 `nodes_embeddable` 부분 색인을 못 써서 `nodes_project`로 프로젝트의 모든 노드를 훑는다. 후보 SQL은 178k 노드 프로젝트에서 40→73ms, 27k 노드 프로젝트에서 4.8→8.5ms로 늘었다(native-read-bench 후보+벡터 p50: find 28→51ms, interpret·recall 3.9→7.5ms). 사용자가 목적에 맞지 않는 SQL을 지우기로 했다.

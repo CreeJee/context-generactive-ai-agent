@@ -32,8 +32,8 @@
 - `sqlite3_turbovec_init`는 SQL 함수나 DB 효과를 등록하지 않는다. 확장 코드와 API 테이블은 프로세스 수명 동안 상주한다
 - `MemoryReadSession` 경로는 빈 문자열, `":memory:"`, `"file:"`로 시작하는 값을 받지 않는다. 연결은 `READ_ONLY|NO_MUTEX`로 열고 `PRAGMA query_only=ON`과 `PRAGMA cache_size=-262144`(256MiB), `PRAGMA mmap_size=1073741824`(1GiB 상한)를 건다. 권한 확인과 인덱스 게시 직렬화는 호스트가 맡는다
 - worker teardown 전에 `MemoryReadSession.close()`로 SQLite를 닫아야 한다. 나중의 N-API GC가 WAL 매핑을 붙잡으면 안 되기 때문이다
-- `EMBEDDED_KINDS`(`n.kind IN ('user', 'assistant', 'topic')`)는 `nodes_embeddable` 부분 인덱스의 조건과 글자까지 같아야 한다. 다르게 쓰면 SQLite가 그 인덱스를 쓰지 않는다
-- lexical 색인은 노드를 마지막으로 반영한 변경 때의 모습으로 들고 있다. 그래서 text·morph 채널은 k의 2배(`LEXICAL_DEPTH`)를 찾고, 이 스냅샷에서 허용 프로젝트이고 `lexical_changes`에 남은 변경이 없는 노드만 순서대로 k개 남긴다(`lexical_ids`, SQL 한 번). 비었거나 숨긴 노드는 indexer가 색인에 넣지 않고, 숨김 추가·해제도 변경으로 기록되므로 따로 검사하지 않는다. 후보 쿼리는 `nodes_embeddable` 부분 색인과 맞추려고 이 검사를 유지한다. 미임베딩·미해석·lexical 미반영 수(coverage)는 읽기가 세지 않는다. 호스트 worker가 자기 연결로 센다
+- 벡터 후보는 허용 프로젝트의 `node_vectors` 중 `memory_graph_vector_removals`에서 색인을 떠나기를 기다리지 않는 것 전부다. indexer는 검색할 수 있는 발언만 임베딩하고, 숨기거나 바뀐 노드의 벡터는 그 대기열에 들어가므로 kind·공백·숨김을 다시 보지 않는다
+- lexical 색인은 노드를 마지막으로 반영한 변경 때의 모습으로 들고 있다. 그래서 text·morph 채널은 k의 2배(`LEXICAL_DEPTH`)를 찾고, 이 스냅샷에서 허용 프로젝트이고 `lexical_changes`에 남은 변경이 없는 노드만 순서대로 k개 남긴다(`lexical_ids`, SQL 한 번). 비었거나 숨긴 노드는 indexer가 색인에 넣지 않고, 숨김 추가·해제도 변경으로 기록되므로 따로 검사하지 않는다. 미임베딩·미해석·lexical 미반영 수(coverage)는 읽기가 세지 않는다. 호스트 worker가 자기 연결로 센다
 - `LexicalIndex`의 동기 메서드는 소유 worker 안에서만 호출된다. 열려 있는 동안 Tantivy writer lock을 잡으므로 같은 폴더를 두 번 열면 "Lexical index is locked by another writer"로 실패한다. 모든 commit은 build 이름을 payload로 다시 쓴다(commit마다 payload가 바뀐다). commit 뒤 reader를 바로 reload하므로 다음 검색이 그 commit을 본다
 - `LexicalIndex` 안의 오류는 문자열로 다루고 napi 메서드에서만 JS 오류로 바꾼다. Rust 단위 테스트 실행 파일에는 napi 오류를 만들 Node가 없기 때문이다
 - 두 글자 검색어는 그 두 글자로 시작하거나 끝나는 gram(`(?s:ab.|.ab)`)으로 찾는다. 원문 끝이 아니면 시작하는 gram이 있고, 끝이면 끝나는 gram이 있다. 원문 전체가 두 글자인 노드는 찾지 못한다
@@ -56,7 +56,7 @@
 - `CacheLease`: 경로의 파일을 read/write/create로 연다. truncate하지 않고, unix에서는 0o600 권한이다. close나 drop 전까지 OS 배타 파일 락을 잡고 있다
 - `VectorIndex.save`는 인덱스 파일을 디스크에 쓰고, `VectorIndex.load`는 디스크에서 읽는다
 - `MemoryReadSession`: SQLite 파일을 읽기 전용으로 연다. 요청마다 `BEGIN DEFERRED`/`ROLLBACK`을 실행하고, 1000 VM op마다 취소와 deadline을 확인해 중단하는 progress handler를 건다
-- SQLite에서 읽는 테이블: `nodes`, `node_vectors`, `node_vector_chunks`, `memory_graph_suppressed_nodes`, `lexical_changes`, `sqlite_schema`
+- SQLite에서 읽는 테이블: `nodes`, `node_vectors`, `node_vector_chunks`, `memory_graph_vector_removals`, `lexical_changes`, `sqlite_schema`
 - 프로세스 전역 상태: `REGISTRY`(`OnceLock<Mutex<HashMap<String, Arc<RequestState>>>>`), `NEXT_TOKEN`(`AtomicU64`), `INITIALIZED`(`OnceLock<i32>`)
 - `sqlite3_turbovec_init`: 호스트 SQLite의 `sqlite3_load_extension`이 부르는 C ABI 심볼이다. 확장을 영구 로드(`SQLITE_OK_LOAD_PERMANENTLY`)한다
 - 시간 측정과 deadline에 단조 시계 `Instant::now()`를 쓴다

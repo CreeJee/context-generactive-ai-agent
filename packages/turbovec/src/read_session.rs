@@ -17,9 +17,6 @@ const MAX_BYTES: usize = 1_048_576;
 /// text matches are dropped (`text_unavailable`) and the read goes on, instead of the whole read
 /// failing on a slow text query (docs/decisions.md, 2026-10-30).
 const TEXT_RESERVE: Duration = Duration::from_millis(600);
-// Same terms as the `nodes_embeddable` partial index; spelled differently, SQLite would not use it.
-const EMBEDDED_KINDS: &str = "n.kind IN ('user', 'assistant', 'topic')";
-const MEANINGFUL: &str ="length(trim(n.text, char(9,10,11,12,13,32,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279))) > 0 AND NOT EXISTS (SELECT 1 FROM memory_graph_suppressed_nodes s WHERE s.node_seq = n.seq)";
 // The lexical index holds a node as it was when its last journaled change was applied; a change
 // still pending means the index may hold text, a project or a node this snapshot no longer has.
 // Blank and suppressed nodes need no check here: the indexer leaves them out, and suppressing or
@@ -457,8 +454,9 @@ impl MemoryReadSession {
             if input.query.is_some() && !input.allowed_projects.is_empty() {
                 let mut values = vec![Value::Text(input.embedder.clone())];
                 values.extend(project_values());
-                // The kind terms let SQLite answer from the `nodes_embeddable` index without reading text.
-                let sql = format!("SELECT COALESCE(c.vector_id,n.seq),n.seq FROM node_vectors v JOIN nodes n ON n.seq=v.node_seq LEFT JOIN node_vector_chunks c ON c.node_seq=v.node_seq AND c.embedder=v.embedder WHERE {MEANINGFUL} AND {EMBEDDED_KINDS} AND v.embedder=? AND n.project_id IN ({projects})");
+                // Every vector of the allowed projects but those waiting to leave the index (a
+                // suppressed or changed node's): the indexer embeds only searchable statements.
+                let sql = format!("SELECT COALESCE(c.vector_id,n.seq),n.seq FROM node_vectors v JOIN nodes n ON n.seq=v.node_seq LEFT JOIN node_vector_chunks c ON c.node_seq=v.node_seq AND c.embedder=v.embedder WHERE v.embedder=? AND n.project_id IN ({projects}) AND NOT EXISTS (SELECT 1 FROM memory_graph_vector_removals r WHERE r.node_seq=v.node_seq AND r.embedder=v.embedder)");
                 let mut statement = connection.prepare(&sql).map_err(|_| Outcome::ReadFailed)?;
                 let mut rows = statement
                     .query(params_from_iter(values))

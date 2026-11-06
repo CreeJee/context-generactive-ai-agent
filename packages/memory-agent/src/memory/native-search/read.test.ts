@@ -181,6 +181,15 @@ it(
             expect(pending.result.textIds).toEqual(["alpha", "latest"]);
             expect(pending.result.morphIds).not.toContain("beta");
             db.exec("DELETE FROM lexical_changes");
+            // A vector waiting to leave the index (its node was suppressed or changed) is no
+            // candidate.
+            db.prepare("INSERT INTO memory_graph_vector_removals VALUES (2, 'fixture')").run();
+            const removing = yield* search("removing");
+            if (!OwnerReply.guards["memory-result"](removing))
+              return yield* NativeOwnerFailed.make({ reason: "invalid-input" });
+            expect(removing.result.candidateCount).toBe(1);
+            expect(removing.result.vectorIds).toEqual(["alpha"]);
+            db.exec("DELETE FROM memory_graph_vector_removals");
             const one = yield* search("one", { vectorK: 1 });
             if (!OwnerReply.guards["memory-result"](one))
               return yield* NativeOwnerFailed.make({ reason: "invalid-input" });
