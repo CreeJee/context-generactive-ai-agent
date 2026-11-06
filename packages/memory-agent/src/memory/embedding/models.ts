@@ -3,9 +3,9 @@ import type { EmbeddingMode } from "./contracts.ts";
 
 /**
  * What a text is embedded for. Models trained with prompts embed a search's query and the
- * documents it looks for with different prefixes, and texts compared with each other with a third.
+ * documents it looks for with different prefixes; texts compared with each other are documents.
  */
-export const EmbeddingRole = Schema.Literals(["query", "document", "clustering"]);
+export const EmbeddingRole = Schema.Literals(["query", "document"]);
 export type EmbeddingRole = typeof EmbeddingRole.Type;
 
 /**
@@ -34,6 +34,12 @@ export interface EmbeddingModel {
   readonly textOnly: boolean;
   /** Prefixed to each text of the role. */
   readonly prompts: Readonly<Record<EmbeddingRole, string>>;
+  /**
+   * The cosine from which two document vectors say the same thing, for grouping corrections
+   * (improve/items.ts). Set by hand for granite; calibrated for a new model against the grouping it
+   * replaces, on real corrections.
+   */
+  readonly sameMeaning: number;
   /**
    * Query/direct-call limit. Indexed documents are first split into chunkPolicy windows, so
    * their tail is never discarded. Keep this separate from the document chunk size.
@@ -64,7 +70,9 @@ export const embeddingModels = {
     dimensions: 384,
     output: "cls",
     textOnly: false,
-    prompts: { query: "", document: "", clustering: "" },
+    prompts: { query: "", document: "" },
+    // On real use, 0.75 put 103 of 125 corrections in one group, while 0.85 kept groups to one topic.
+    sameMeaning: 0.85,
     maxTokens: 2048,
     batchSize: 16,
     // Sixteen 512-token texts, or one 2048-token one.
@@ -87,11 +95,11 @@ export const embeddingModels = {
     dimensions: 768,
     output: "sentence-embedding",
     textOnly: true,
-    prompts: {
-      query: "task: search result | query: ",
-      document: "title: none | text: ",
-      clustering: "task: clustering | query: ",
-    },
+    prompts: { query: "task: search result | query: ", document: "title: none | text: " },
+    // 316 real corrections grouped as granite groups them at 0.85: adjusted Rand index 0.77–0.79
+    // from 0.825 to 0.86, the middle taken (granite's own 0.87 against its 0.85: 0.82). The
+    // model's clustering and sentence-similarity prompts agreed less or over a narrower range.
+    sameMeaning: 0.84,
     maxTokens: 2048,
     batchSize: 16,
     // Four 512-token texts, or sixteen of 256.

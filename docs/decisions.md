@@ -4138,9 +4138,8 @@
 - ONNX export에는 vision과 audio encoder 설정도 들어 있다. config의 `vision_config`와 `audio_config`를 비워 text 모델만 로드한다. 출력 `sentence_embedding`은 모델이 pooling과 정규화까지 마친 벡터다.
 - `embed(texts, role)`로 바꿨다. prompt는 모델의 sentence-transformers 설정을 따른다.
   - `query`(검색 질의, 규칙을 고르는 글): `task: search result | query: `
-  - `document`(색인하는 노드, 규칙): `title: none | text: `
-  - `clustering`(정정 묶기): `task: clustering | query: `
-  - granite는 prompt가 없어서 세 role이 같다.
+  - `document`(색인하는 노드, 규칙, 서로 견주는 정정): `title: none | text: `
+  - granite는 prompt가 없어서 두 role이 같다.
 - 측정: Apple Silicon, worker와 같은 방식으로 로드, 512토큰 텍스트, 웜 배치 1회.
 
   | 모델·파일·장치       |       배치 |                     token/s |        최대 footprint |
@@ -4165,6 +4164,17 @@
 - 결과: identity가 `onnx-community/embeddinggemma-2-ONNX@fp16/sentence-embedding/2048/chunks-v1-512-128`(cpu 모드는 `@q8/`)로 바뀐다. 그래서 indexer가 모든 노드를 다시 임베딩한다. 벤치 사본 기준으로 청크는 63,671개, UTF-16 2,840만 자다. 다시 임베딩하는 동안 아직 임베딩하지 않은 노드는 글자 검색과 형태소 검색으로만 찾는다.
   - 모드를 바꾸면 전부 다시 임베딩하는 것은 전과 같다. 두 모드의 identity가 다르기 때문이다.
 - 남은 일:
-  - `improve/items.ts`의 `correctionSimilarity` 0.85는 granite로 정한 값이다. gemma-2 clustering prompt로 다시 정한다.
   - 16 GiB 임계값은 granite에서 WebGPU가 메모리를 더 썼기 때문에 둔 값이다. gemma-2는 반대로 WebGPU가 적게 쓰고 다섯 배 넘게 빠르다. `auto` 정책을 다시 볼지 결정해야 한다.
   - 사본을 다시 임베딩한 뒤 평가 세트로 검색 품질과 재임베딩 시간을 잰다.
+
+## 정정을 묶는 임계값은 임베딩 모델 항목에 둔다 (2026-11-06)
+
+- 계기: 정정 묶기(`improve/items.ts`)의 cosine 임계값 0.85는 granite에서 정한 값이다. 실제 사용에서 0.75는 정정 125개 중 103개를 한 묶음에 넣었고, 0.85는 묶음마다 주제가 하나였다. 모델을 바꾸면 cosine 분포가 바뀌어 이 값이 맞지 않는다.
+- 측정: 벤치 사본의 실제 정정 316개(프로젝트 12개)를 granite 0.85로 묶은 결과를 기준으로 삼았다. gemma-2로 임계값마다 묶은 결과가 그 기준과 얼마나 같은지 adjusted Rand index(ARI)로 쟀다. 기억 원문은 출력하지 않았다.
+  - `document` prompt: 0.825~0.86에서 ARI 0.77~0.79로 고르다.
+  - 문장 유사도 prompt(`task: sentence similarity`): 0.87~0.90에서 최고 0.78이다. 그 아래로는 급히 떨어진다.
+  - 군집 prompt(`task: clustering`): 0.955에서 최고 0.73이다. cosine이 거의 모두 0.7 위에 모인다.
+  - 비교 기준: granite 자신의 0.87과 0.85 사이 ARI가 0.82다.
+- 결정:
+  - 정정은 `document` role로 임베딩한다. 그래서 role에서 `clustering`을 뺐다.
+  - 임계값은 모델 표 항목의 `sameMeaning`에 둔다. 모델과 함께 바뀌어야 하기 때문이다. granite는 0.85, gemma-2는 고른 구간의 가운데인 0.84다.

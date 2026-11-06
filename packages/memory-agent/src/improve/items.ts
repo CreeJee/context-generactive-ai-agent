@@ -1,5 +1,6 @@
 import { Effect, Array as EffectArray, Function as EffectFunction } from "effect";
 import { Embedder } from "../memory/embedding/embedder.ts";
+import { localModel } from "../memory/embedding/models.ts";
 import { sha256 } from "../runtime/synchronous-crypto.ts";
 import { ImprovementItem } from "./contracts.ts";
 import { Signal } from "./signals.ts";
@@ -10,12 +11,8 @@ export const grouping = {
   correctionRepeats: 2,
   /** Failures and replans of one card together; a single replan is ordinary planning. */
   cardRepeats: 2,
-  /**
-   * Cosine similarity of two corrections about the same thing; vectors are L2-normalized. Short
-   * Korean messages sit close together: on real use, 0.75 put 103 of 125 corrections in one group,
-   * while 0.85 kept groups to one topic.
-   */
-  correctionSimilarity: 0.85,
+  /** Cosine similarity of two corrections about the same thing; vectors are L2-normalized. */
+  correctionSimilarity: localModel.sameMeaning,
   evidence: 20,
   excerpts: 5,
   /**
@@ -96,7 +93,7 @@ const correctionItems = Effect.fn("Improve.correctionItems")(function* (
   const embedder = yield* Embedder;
   const vectors = yield* embedder.embed(
     corrections.map((correction) => correction.text),
-    "clustering",
+    "document",
   );
   return clusterByVector(vectors, grouping.correctionSimilarity)
     .filter((group) => group.length >= grouping.correctionRepeats)

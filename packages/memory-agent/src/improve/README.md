@@ -22,7 +22,7 @@
 - `InterpretationUnavailable` — TaggedError, reason `model_unavailable` | `model_unreachable`
 - `interpretationInstructions` / `interpretationPrompt` — 해석용 시스템 지침 문자열과 항목별 프롬프트 생성 함수
 - `parseInterpretation` — 모델 답에서 코드 펜스를 벗기고 skip/improve JSON을 디코드해 `Option<ItemInterpretation>`으로 바꾼다(SchemaError 가능)
-- `grouping` — 반복 임계값(toolFailureRepeats 3, correctionRepeats 2, cardRepeats 2), correctionSimilarity 0.85, evidence 20, excerpts 5, candidatesPerSource 5 상수
+- `grouping` — 반복 임계값(toolFailureRepeats 3, correctionRepeats 2, cardRepeats 2), correctionSimilarity(로컬 임베딩 모델의 `sameMeaning`, 지금 0.84), evidence 20, excerpts 5, candidatesPerSource 5 상수
 - `clusterByVector` — dual 함수, 리더 기반 코사인 유사도 군집(그룹별 인덱스 배열 반환)
 - `improvementItems` — Effect.fn, 한 저장소의 Signal 목록을 개선 항목으로 묶어 count 내림차순으로 반환한다(정정은 Embedder 필요).
 - `improvementReport` — dual 함수, (found{repository, items}, generatedAt) → 저장소 Markdown 보고서 문자열
