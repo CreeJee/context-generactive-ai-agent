@@ -1,8 +1,9 @@
 //! Admission is a measured-time policy, NOT a preemptive deadline guarantee.
 //! The pinned engine includes synchronous mask construction and cold cache warming.
 //! Index and allowlist size are not admission bounds: the engine call costs a few ms
-//! up to 800k vectors (docs/decisions.md, 2026-10-20). A later call in the same
-//! request is admitted only while the remaining budget covers the previous call.
+//! up to 800k vectors (docs/decisions.md, 2026-10-20), at 768 dimensions too (2026-11-06).
+//! A later call in the same request is admitted only while the remaining budget covers the
+//! previous call.
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use std::{
@@ -218,6 +219,10 @@ pub(crate) fn claim(
     Some(state.clone())
 }
 
+/// The most dimensions measured: a full allowlist costs the same at 384 and 768 (its processing
+/// dominates), and the scan alone stays within a few ms up to 800k vectors.
+const MAX_DIMENSIONS: usize = 768;
+
 /// `previous` is the measured span of the request's previous engine call, zero before the first.
 pub(crate) fn admitted(
     dim: usize,
@@ -226,7 +231,10 @@ pub(crate) fn admitted(
     remaining: Duration,
     previous: Duration,
 ) -> bool {
-    dim == 384 && bits == 4 && k <= 48 && remaining >= previous.max(Duration::from_millis(12))
+    dim <= MAX_DIMENSIONS
+        && bits == 4
+        && k <= 48
+        && remaining >= previous.max(Duration::from_millis(12))
 }
 
 pub fn search(
@@ -407,7 +415,8 @@ mod tests {
         assert!(admitted(384, 4, 48, ms(12), Duration::ZERO));
         assert!(!admitted(384, 4, 49, ms(12), Duration::ZERO));
         assert!(!admitted(384, 4, 48, ms(11), Duration::ZERO));
-        assert!(!admitted(383, 4, 48, ms(12), Duration::ZERO));
+        assert!(admitted(768, 4, 48, ms(12), Duration::ZERO));
+        assert!(!admitted(769, 4, 48, ms(12), Duration::ZERO));
         assert!(admitted(384, 4, 48, ms(30), ms(30)));
         assert!(!admitted(384, 4, 48, ms(29), ms(30)));
     }

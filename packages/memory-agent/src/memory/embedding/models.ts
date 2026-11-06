@@ -43,14 +43,14 @@ export interface EmbeddingModel {
   readonly batchSize: number;
   /**
    * A batch is padded to its longest text, so it costs about count × longest² in attention. Batches
-   * stay within this cost: with 2048², sixteen 512-token texts, or one 2048-token one.
+   * stay within this cost; a text over it alone is a batch of its own.
    */
   readonly batchCost: number;
   /** The file each mode runs. */
   readonly files: Readonly<Record<EmbeddingMode, ModelFile>>;
 }
 
-export const EmbeddingModelName = Schema.Literals(["granite-97m-r2"]);
+export const EmbeddingModelName = Schema.Literals(["granite-97m-r2", "embeddinggemma-2"]);
 export type EmbeddingModelName = typeof EmbeddingModelName.Type;
 
 export const embeddingModels = {
@@ -67,16 +67,44 @@ export const embeddingModels = {
     prompts: { query: "", document: "", clustering: "" },
     maxTokens: 2048,
     batchSize: 16,
+    // Sixteen 512-token texts, or one 2048-token one.
     batchCost: 2048 * 2048,
     files: {
       cpu: { file: "model_quint8_avx2", tag: "quint8" },
       gpu: { file: "model", tag: "fp32" },
     },
   },
+  /**
+   * Chosen 2026-11 (docs/decisions.md): Apache-2.0, a 270M text model with 768 dims, 8k context and
+   * 100+ languages, trained with a prompt per task (its sentence-transformers config). The ONNX
+   * export also holds vision and audio encoders; only the text model is loaded. Both files stay
+   * within 0.9998 (fp16) and 0.9997 (q8) cosine of fp32. Measured on Apple Silicon with 512-token
+   * texts: four of them per batch run fastest on both devices, fp16 on WebGPU at about 4,850
+   * tokens/s and q8 on the CPU at about 860.
+   */
+  "embeddinggemma-2": {
+    id: "onnx-community/embeddinggemma-2-ONNX",
+    dimensions: 768,
+    output: "sentence-embedding",
+    textOnly: true,
+    prompts: {
+      query: "task: search result | query: ",
+      document: "title: none | text: ",
+      clustering: "task: clustering | query: ",
+    },
+    maxTokens: 2048,
+    batchSize: 16,
+    // Four 512-token texts, or sixteen of 256.
+    batchCost: 4 * 512 * 512,
+    files: {
+      cpu: { file: "model_quantized", tag: "q8" },
+      gpu: { file: "model_fp16", tag: "fp16" },
+    },
+  },
 } as const satisfies Record<EmbeddingModelName, EmbeddingModel>;
 
 /** The model the app runs. Changing it embeds every node again with the new model. */
-export const localModel: EmbeddingModel = embeddingModels["granite-97m-r2"];
+export const localModel: EmbeddingModel = embeddingModels["embeddinggemma-2"];
 
 /** Where the file a mode runs sits in the model cache, relative to the model's folder. */
 export const modelFile = (mode: EmbeddingMode) => `onnx/${localModel.files[mode].file}.onnx`;

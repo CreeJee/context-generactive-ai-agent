@@ -8,7 +8,12 @@ import { describe, expect } from "vite-plus/test";
 import { StorageRoot, defaultStorageRoot } from "../../src/config/storage-root.ts";
 import { GlobalConfig, type Settings } from "../../src/config/global-config.ts";
 import { migrations } from "../../src/db/migrations.ts";
-import { EmbedderRuntime, Embedder, EmbeddingError } from "../../src/memory/embedding/embedder.ts";
+import {
+  EmbedderRuntime,
+  Embedder,
+  EmbeddingError,
+  embedderIdentity,
+} from "../../src/memory/embedding/embedder.ts";
 import { localModel, modelFile } from "../../src/memory/embedding/models.ts";
 import { Indexer, IndexingError } from "../../src/memory/embedding/indexer.ts";
 import { VectorIndex } from "../../src/memory/embedding/vector-index.ts";
@@ -394,7 +399,7 @@ describe.skipIf(!cachedModels.cpu)("real model chunk retrieval", () => {
   testAgent({
     embedder: Embedder.localFile("cpu").pipe(Layer.provide(models)),
     morphAnalyzer: MorphAnalyzer.disabled,
-  })("quint8 through the native 4-bit index and memory search", (it) => {
+  })("the cpu file through the native 4-bit index and memory search", (it) => {
     it.effect(
       "ranks the late decision first and reads the original evidence",
       () =>
@@ -449,13 +454,13 @@ describe.skipIf(!cachedModels.cpu)("real model chunk retrieval", () => {
   });
 });
 
-describe.skipIf(!cachedModels.cpu)("the local model (downloaded, quint8 on the CPU)", () => {
+describe.skipIf(!cachedModels.cpu)("the local model (downloaded, its cpu file)", () => {
   layer(Embedder.localFile("cpu").pipe(Layer.provide(models)), {
     excludeTestServices: true,
     timeout: "120 seconds",
-  })("quint8", (it) => {
+  })("cpu file", (it) => {
     it.effect(
-      "produces normalized 384-dim vectors that rank a paraphrase above an unrelated text",
+      "produces normalized vectors of the model's dimensions that rank a paraphrase above an unrelated text",
       () =>
         Effect.gen(function* () {
           const embedder = yield* Embedder;
@@ -473,7 +478,7 @@ describe.skipIf(!cachedModels.cpu)("the local model (downloaded, quint8 on the C
           expect(question).toHaveLength(localModel.dimensions);
           expect(dot(question!, question!)).toBeCloseTo(1, 4);
           expect(dot(question!, match!)).toBeGreaterThan(dot(question!, unrelated!));
-          // quint8 quantizes activations per batch, so batch company moves a vector slightly (~0.01).
+          // The cpu file quantizes activations per batch, so batch company moves a vector slightly (~0.01).
           expect(dot(match!, alone!)).toBeGreaterThan(0.95);
           expect(dot(match!, alone!)).toBeGreaterThan(dot(question!, alone!));
         }),
@@ -482,7 +487,7 @@ describe.skipIf(!cachedModels.cpu)("the local model (downloaded, quint8 on the C
   });
 });
 
-/** The full-precision model on the CPU, to compare the gpu mode against. */
+/** The gpu mode's file on the CPU, to compare the gpu mode against. */
 class Reference extends Context.Service<Reference, Embedder["Service"]>()(
   "memory-agent/tests/engine/embedding.test/Reference",
 ) {}
@@ -493,7 +498,7 @@ const chooseGpu = Layer.succeed(GlobalConfig, {
   update: () => Effect.succeed<Settings>({ embeddingDevice: "gpu" }),
 });
 
-describe.skipIf(!cachedModels.gpu)("the gpu mode (downloaded full-precision model)", () => {
+describe.skipIf(!cachedModels.gpu)("the gpu mode (its downloaded file)", () => {
   layer(
     Layer.merge(
       Embedder.local.pipe(Layer.provide(chooseGpu)),
@@ -504,7 +509,7 @@ describe.skipIf(!cachedModels.gpu)("the gpu mode (downloaded full-precision mode
     { excludeTestServices: true, timeout: "120 seconds" },
   )("gpu", (it) => {
     it.effect(
-      "runs on WebGPU or falls back to the CPU, with the full-precision vectors either way",
+      "runs on WebGPU or falls back to the CPU, with the gpu file's vectors either way",
       () =>
         Effect.gen(function* () {
           const embedder = yield* Embedder;
@@ -516,7 +521,7 @@ describe.skipIf(!cachedModels.gpu)("the gpu mode (downloaded full-precision mode
           expect(["webgpu", "cpu"]).toContain(
             EmbedderRuntime.$is("local")(runtime) ? runtime.device : null,
           );
-          expect(embedder.identity).toContain("@fp32/");
+          expect(embedder.identity).toBe(embedderIdentity("gpu"));
           expect(dot(vector!, reference!)).toBeGreaterThan(0.9999);
         }),
       120_000,

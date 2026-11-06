@@ -4124,3 +4124,47 @@
 - 블록은 메모리에만 두고 run이 끝나면 버린다. 저장하지 않으므로 마이그레이션이 없다. 블록은 첫 step과 마지막 step의 첫 call id로 찾아서, run이 자라도 같은 자리에 들어간다. 다시 읽을 곳이 없는 출력이 있는 블록은 기록될 때까지 요약하지 않는다.
 - 요약이 한 번 실패하면 그 run에서는 다시 요청하지 않는다. 실패한 요청을 매 step 되풀이하지 않기 위해서다. 그 run은 전처럼 pointer만 쓴다.
 - 남은 한계: 블록 요약도 run 안에 남으므로 아주 긴 run(블록 수십 개)은 요약만으로도 창을 채울 수 있다. 블록을 다시 합치는 단계는 아직 없다.
+
+## 로컬 임베딩 모델을 EmbeddingGemma 2로 바꾼다 (2026-11-06)
+
+- 계기: 기억 검색 재설계(Tantivy + Lindera, 로컬 reranker)에서 벡터 채널이 rerank 후보를 가장 많이 더하는 채널이었다(`docs/memory-search-measurements.md`의 "rerank"). 그래서 granite-97m-r2(384차원)보다 나은 임베더를 찾았다. 후보는 KURE-v3와 EmbeddingGemma 2였다. 사본 전체를 두 모델로 임베딩하는 벤치가 너무 오래 걸려 중단하고, 공개 자료로 골랐다.
+  - KURE-v3: 1.1B, 2048차원, mean pooling. 공개된 ONNX가 없어 직접 export해야 한다.
+  - EmbeddingGemma 2: Apache-2.0. text 모델 270M, 768차원(MRL 512·256·128), 8k context, 100개 넘는 언어. `onnx-community/embeddinggemma-2-ONNX`에 fp16·q8·q4 파일이 공개되어 있다.
+- 결정: 앱 임베더를 EmbeddingGemma 2로 바꾼다. 둘 다 바꾸기 쉬워야 한다는 조건이 있었다. 그래서 모델을 `packages/memory-agent/src/memory/embedding/models.ts`의 모델 표로 옮겼다. 항목 하나가 다음을 정한다.
+  - 차원, 출력 종류(`cls`, `sentence-embedding`), text 모델만 로드할지 여부
+  - role별 prompt, 배치 한도, 모드별 파일과 identity tag
+  - `localModel`을 다른 항목으로 바꾸면 앱 임베더가 바뀐다. KURE-v3로 바꾸려면 ONNX export와 출력 종류 `mean`이 더 필요하다.
+- gpu 모드는 `model_fp16`을 WebGPU에서, cpu 모드는 `model_quantized`(q8)를 CPU에서 돌린다. fp32 대비 cosine은 fp16이 0.9998, q8이 0.9997이다. 768차원을 그대로 쓴다.
+- ONNX export에는 vision과 audio encoder 설정도 들어 있다. config의 `vision_config`와 `audio_config`를 비워 text 모델만 로드한다. 출력 `sentence_embedding`은 모델이 pooling과 정규화까지 마친 벡터다.
+- `embed(texts, role)`로 바꿨다. prompt는 모델의 sentence-transformers 설정을 따른다.
+  - `query`(검색 질의, 규칙을 고르는 글): `task: search result | query: `
+  - `document`(색인하는 노드, 규칙): `title: none | text: `
+  - `clustering`(정정 묶기): `task: clustering | query: `
+  - granite는 prompt가 없어서 세 role이 같다.
+- 측정: Apple Silicon, worker와 같은 방식으로 로드, 512토큰 텍스트, 웜 배치 1회.
+
+  | 모델·파일·장치       |       배치 |                     token/s |        최대 footprint |
+  | -------------------- | ---------: | --------------------------: | --------------------: |
+  | granite quint8, CPU  |         16 |                       4,919 |               1.96 GB |
+  | granite fp32, WebGPU |         16 |                       8,039 |               3.29 GB |
+  | gemma-2 fp16, WebGPU | 4 / 8 / 16 | 4,852 / 5,034 / 3,756~4,146 | 1.47 / 1.92 / 2.65 GB |
+  | gemma-2 q8, CPU      | 4 / 8 / 16 |         864 / 825 / 710~771 | 1.83 / 2.62 / 3.04 GB |
+  - 두 장치 모두 512토큰 4개 배치가 가장 빠르거나 그에 가깝고, 메모리도 가장 적었다. 그래서 gemma-2의 배치 비용 상한을 `4 × 512²`로 둔다. 512토큰 4개, 또는 256토큰 16개다.
+  - 질의 하나(웜)는 fp16 WebGPU 43 ms, q8 CPU 128 ms다.
+  - cpu 모드 임베딩은 granite보다 약 5.7배 느리다(864 대 4,919 token/s).
+
+- 네이티브 벡터 검색 admission(2026-10-20)은 측정한 384차원만 받았다. 768차원도 같은 방식으로 쟀다(4bit, k=48, 웜 30회 median).
+
+  | 인덱스 크기 | 384차원 allowlist 없음 / 전체 | 768차원 allowlist 없음 / 전체 |
+  | ----------: | ----------------------------: | ----------------------------: |
+  |         64k |                0.66 / 7.69 ms |                0.57 / 7.79 ms |
+  |        200k |               0.78 / 25.60 ms |               1.46 / 25.01 ms |
+  |        800k |              2.43 / 101.86 ms |              5.34 / 104.31 ms |
+  - 비용은 allowlist 처리가 거의 전부다. 그래서 admission을 차원 ≤768로 넓힌다. 4bit, k ≤48, 남은 시간 조건은 그대로다.
+
+- 결과: identity가 `onnx-community/embeddinggemma-2-ONNX@fp16/sentence-embedding/2048/chunks-v1-512-128`(cpu 모드는 `@q8/`)로 바뀐다. 그래서 indexer가 모든 노드를 다시 임베딩한다. 벤치 사본 기준으로 청크는 63,671개, UTF-16 2,840만 자다. 다시 임베딩하는 동안 아직 임베딩하지 않은 노드는 글자 검색과 형태소 검색으로만 찾는다.
+  - 모드를 바꾸면 전부 다시 임베딩하는 것은 전과 같다. 두 모드의 identity가 다르기 때문이다.
+- 남은 일:
+  - `improve/items.ts`의 `correctionSimilarity` 0.85는 granite로 정한 값이다. gemma-2 clustering prompt로 다시 정한다.
+  - 16 GiB 임계값은 granite에서 WebGPU가 메모리를 더 썼기 때문에 둔 값이다. gemma-2는 반대로 WebGPU가 적게 쓰고 다섯 배 넘게 빠르다. `auto` 정책을 다시 볼지 결정해야 한다.
+  - 사본을 다시 임베딩한 뒤 평가 세트로 검색 품질과 재임베딩 시간을 잰다.

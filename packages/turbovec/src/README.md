@@ -40,7 +40,7 @@
 - `SearchControl` 등록 조건: token/ownerKey/epoch/requestId는 비어 있지 않고 256바이트 이하여야 한다. `remainingMs`는 유한하고 0~86,400,000 범위여야 한다. 동시 등록은 최대 4096개이고, 같은 seed는 중복 등록할 수 없다
 - 발급 토큰은 `{seed}:{serial}` 형식이다. serial은 전역 `AtomicU64`로 단조 증가하며 재사용하지 않는다. 고갈되면 "Control token exhausted"를 낸다
 - `claim`은 token·ownerKey·epoch·requestId가 모두 일치할 때 compare_exchange로 한 번만 성공한다. `SearchControl`의 close와 drop은 레지스트리 항목이 같은 Arc일 때만 제거한다
-- 진입 허용은 측정 시간 기반 정책이며, 선점형 deadline 보장이 아니다. `admitted` 조건은 dim==384, bits==4, k<=48, remaining >= max(previous, 12ms)이다. 같은 요청의 다음 호출은 남은 예산이 이전 호출 시간을 덮을 때만 허용된다. 인덱스와 allowlist 크기는 진입 기준이 아니다(`docs/decisions.md` 2026-10-20)
+- 진입 허용은 측정 시간 기반 정책이며, 선점형 deadline 보장이 아니다. `admitted` 조건은 dim<=768, bits==4, k<=48, remaining >= max(previous, 12ms)이다. 같은 요청의 다음 호출은 남은 예산이 이전 호출 시간을 덮을 때만 허용된다. 인덱스와 allowlist 크기는 진입 기준이 아니다(`docs/decisions.md` 2026-10-20)
 - `searchControlled`는 기존의 early-empty 의미(빈 인덱스나 빈 allowlist면 엔진을 호출하지 않음)를 지킨다. 엔진은 정확히 한 번 호출한다. 후보를 자르거나 엔진·인덱스·writer를 바꾸지 않는다(주석 근거)
 
 ## Side Effects

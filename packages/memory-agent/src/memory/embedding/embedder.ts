@@ -114,9 +114,11 @@ export const identityMode = (identity: string) =>
   EffectArray.findFirst(EmbeddingMode.literals, (mode) => embedderIdentity(mode) === identity);
 
 /**
- * From this much memory `auto` runs the model on the GPU (where WebGPU was found to work). Measured
- * 2026-09 on Apple Silicon: the full-precision model on WebGPU peaks at 2.9 GB against 1.3 GB for
- * the quantized one on the CPU, and uses 0.7–0.8 cores against 3.4–3.7.
+ * From this much memory `auto` runs the model on the GPU (where WebGPU was found to work). Set
+ * 2026-09 for granite on Apple Silicon: the full-precision model on WebGPU peaked at 2.9 GB against
+ * 1.3 GB for the quantized one on the CPU, and used 0.7–0.8 cores against 3.4–3.7. EmbeddingGemma 2
+ * peaks lower on WebGPU than on the CPU (2026-11, a batch of four 512-token texts: fp16 1.5 GB, q8
+ * 1.8 GB), so the threshold now only keeps WebGPU off smaller machines.
  */
 export const gpuMemoryThreshold = 16 * 1024 ** 3;
 
@@ -204,7 +206,7 @@ const rpcSession = (data: EmbeddingWorkerData) =>
  * session synchronously, so on the main thread a backlog of batches held up every request the
  * server answered meanwhile: a start with ~1,100 nodes to embed kept settings waiting for over a
  * minute. Releasing the model when idle was measured and dropped: the freed memory mostly stays with
- * the allocator (quint8: ~40 MB back) and each reload grows the footprint a little.
+ * the allocator (granite quint8: ~40 MB back) and each reload grows the footprint a little.
  *
  * The session lives in a `ScopedRef` owned by the caller's Scope: replacing it (after a lost
  * worker or a failed load) and closing the Scope both stop the worker and await its exit.
