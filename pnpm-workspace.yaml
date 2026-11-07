@@ -7,7 +7,7 @@ catalogMode: prefer
 catalog:
   "@base-ui/react": ^1.9.0
   "@fontsource-variable/inter": ^5.3.0
-  "@huggingface/transformers": 4.3.1
+  "@huggingface/transformers": 4.3.2
   "@oxlint/plugins": 1.87.0
   "@react-router/fs-routes": ^8.4.0
   "@streamdown/cjk": ^1.0.4
@@ -96,6 +96,10 @@ overrides:
   "@effect/platform-node": "catalog:"
   "@effect/platform-node-shared": "catalog:"
   "@effect/vitest": "catalog:"
+  # transformers pins onnxruntime-node 1.30.0, whose WebGPU crashes when the embedder and the
+  # reranker run at the same time (microsoft/onnxruntime#31627, fixed in 1.31.1). Remove once a
+  # transformers release depends on 1.31.1 (huggingface/transformers.js#1879).
+  "@huggingface/transformers>onnxruntime-node": 1.31.1
 peerDependencyRules:
   allowAny:
     - vite

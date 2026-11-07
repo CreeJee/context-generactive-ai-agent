@@ -4250,3 +4250,14 @@
   - 후보는 vector·morph·text 채널의 상위 10개를 번갈아 합친 것이다(측정한 설정). reranker 순서대로 그 후보들의 fused 점수를 다시 나눠 주므로 그래프 탐색의 utility 하한은 그대로다.
   - find_memory, compaction의 기억 보충(`retrievalAppendix`, 최근 사용자 문장으로 찾는다), 외부 agent의 기억 단서(`externalMemoryLeads`)가 켠다. 해석 후보 검색은 끈다. 백그라운드에서 대량으로 돌아 사용자 검색이 기다리는 worker를 차지하고, 발언끼리 견주는 질의는 측정하지 않았다.
   - 검색은 점수를 2초(native read 예산)까지 기다린다. 넘기면 fused 순서로 간다. ONNX batch는 중단할 수 없어 worker에서 끝까지 돈다.
+
+## onnxruntime-node를 1.31.1로 올린다 (2026-11-08)
+
+- 계기: 임베더와 reranker가 같은 때 WebGPU에서 돌자 백엔드 프로세스가 죽었다.
+- 원인: onnxruntime의 WebGPU EP는 한 프로세스의 세션이 모두 GPU device 하나를 같이 쓴다. 1.30.0은 두 스레드가 동시에 `Run()`하면 이 device의 command buffer를 같이 건드린다. 그러면 Metal assertion(`commit command buffer with uncommitted encoder`)이나 Dawn 안의 SIGSEGV로 죽는다(microsoft/onnxruntime#31627 macOS, #32561 Linux). #32587에서 고쳐 1.31.1에 들어갔다.
+- 확인: 임베더와 reranker를 worker thread 두 개에서 쉬지 않고 같이 돌렸다. 1.30.0은 몇 초 안에 위 assertion으로 죽었고, 1.31.1은 90초 동안 둘 다 돌고(rerank 63번, 임베딩 51번) 정상 종료했다.
+- 방식: transformers.js를 최신인 4.3.2로 올리고, transformers가 쓰는 onnxruntime-node만 pnpm override로 1.31.1에 맞춘다. 4.3.2와 4.4.0-next.0도 1.30.0을 고정해 버전만 올려서는 안 된다. 1.31.1로 올리는 huggingface/transformers.js#1879가 release되면 override를 지운다.
+- 버린 대안:
+  - 프로세스 전체의 GPU lock: release가 나오면 버릴 코드다.
+  - transformers.js의 `globalThis[Symbol.for("onnxruntime")]`로 1.31.1을 넣는 방법: transformers가 모듈을 불러올 때 1.30.0을 그대로 `require`해서 한 프로세스에 onnxruntime이 두 벌 올라온다. transformers가 만든 `Tensor`와 runtime의 `Tensor`가 다른 class가 되는 문제(huggingface/transformers.js#1840)도 있다.
+- 남은 일: 같이 돌면 GPU를 나눠 쓰므로 각자 느려진다. 1.31.1에서 백필 중 rerank 지연을 다시 재고, 2초 예산을 넘기는 일이 잦으면 우선순위나 쌍 수를 정한다.
