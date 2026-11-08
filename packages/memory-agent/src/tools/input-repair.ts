@@ -402,8 +402,8 @@ const coerceArguments = (value: JsonValue, { schema: root, draft, lookup }: Comp
     const known = new Set([
       ...properties.keys(),
       ...declared
-        .map(([key]) => key)
-        .filter((key) => patterns.some(([expression]) => expression.test(key))),
+        .filter(([key]) => patterns.some(([expression]) => expression.test(key)))
+        .map(([key]) => key),
     ]);
     const fields = Option.match(
       Option.filter(Option.fromUndefinedOr(schema.additionalProperties), isSchemaObject),

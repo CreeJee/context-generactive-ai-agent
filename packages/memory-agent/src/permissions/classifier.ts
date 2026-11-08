@@ -1,4 +1,4 @@
-import { Function as EffectFunction } from "effect";
+import { Array as Arr, Function as EffectFunction, Result } from "effect";
 import { failureTags } from "../runtime/logged-failures.ts";
 import { isTruthy } from "../truthy.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -96,10 +96,10 @@ export const routineShellVerdict: {
 function routineShellVerdictBody(toolName: string, argumentsJson: string): Verdict | undefined {
   if (toolName !== "save_code_skill") return undefined;
   const decoded = Option.getOrUndefined(decodeSkillArguments(argumentsJson))?.program;
-  const lines = (decoded?.script ?? "")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line !== "" && !line.startsWith("#"));
+  const lines = Arr.filterMap((decoded?.script ?? "").split("\n"), (line) => {
+    const trimmed = line.trim();
+    return trimmed !== "" && !trimmed.startsWith("#") ? Result.succeed(trimmed) : Result.failVoid;
+  });
   // Hosts are judged by the reviewer: whether each one fits the job is not a string match.
   if (lines.length === 0 || (decoded?.network ?? []).length > 0) return undefined;
   const kinds = lines.map(lineKind);

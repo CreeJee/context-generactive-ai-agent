@@ -30,9 +30,7 @@ layer(Layer.merge(NodeFileSystem.layer, NodePath.layer))((it) => {
       const fs = yield* FileSystem.FileSystem;
       const root = yield* (yield* Path.Path).fromFileUrl(new URL("../src/", import.meta.url));
       const sources = yield* Effect.forEach(
-        (yield* fs.readDirectory(root, { recursive: true }))
-          .map(String)
-          .filter((path) => path.endsWith(".ts")),
+        (yield* fs.readDirectory(root, { recursive: true })).filter((path) => path.endsWith(".ts")),
         (path) => Effect.map(fs.readFileString(`${root}/${path}`), (source) => ({ path, source })),
       );
       const registered = new Set<string>([

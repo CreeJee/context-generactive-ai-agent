@@ -189,7 +189,9 @@ const program = Effect.gen(function* () {
   );
   const mean = (values: readonly number[]) =>
     values.length === 0 ? 0 : values.reduce((sum, value) => sum + value, 0) / values.length;
-  const quantRankValues = rows.map((row) => row.exactTop1QuantRank).filter((rank) => rank > 0);
+  const quantRankValues = rows
+    .filter((row) => row.exactTop1QuantRank > 0)
+    .map((row) => row.exactTop1QuantRank);
   yield* Console.log(
     [
       `nodes ${vectors.length} (project ${project.slice(0, 8)}…), queries ${rows.length}, ${top.embedder} -> ${mode}, fresh index bits 4`,

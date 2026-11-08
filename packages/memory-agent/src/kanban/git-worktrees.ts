@@ -909,8 +909,8 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
       const { repository, base } = yield* repositoryOf("list", projectRoot);
       return yield* Effect.filter(
         (yield* registered("list", repository))
-          .map((entry) => entry.path)
-          .filter((worktree) => worktree !== base && pathsOverlap(base, worktree)),
+          .filter((entry) => entry.path !== base && pathsOverlap(base, entry.path))
+          .map((entry) => entry.path),
         (worktree) =>
           fs.exists(worktree).pipe(
             Effect.map((present) => !present),

@@ -1,7 +1,16 @@
 import * as NodeChildProcessSpawner from "@effect/platform-node/NodeChildProcessSpawner";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
-import { Array as EffectArray, Context, Effect, FileSystem, Layer, Option, Stream } from "effect";
+import {
+  Array as EffectArray,
+  Context,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Result,
+  Stream,
+} from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { gitEnvironment } from "../files/git-grep.ts";
 import { canonicalPathEffect } from "../files/paths.ts";
@@ -144,7 +153,10 @@ const make = Effect.gen(function* () {
     const others = fs.readDirectory(parent).pipe(
       Effect.flatMap((names) =>
         Effect.filter(
-          names.map((name) => join(parent, name)).filter((path) => !linked.includes(path)),
+          EffectArray.filterMap(names, (name) => {
+            const path = join(parent, name);
+            return linked.includes(path) ? Result.failVoid : Result.succeed(path);
+          }),
           (path) => Effect.map(fs.stat(path), (info) => info.type === "Directory"),
         ),
       ),
@@ -182,9 +194,8 @@ const make = Effect.gen(function* () {
             onNone: () => [],
             onSome: (text) =>
               lines(text)
-                .filter((line) => line.startsWith("worktree "))
-                .map((line) => line.slice("worktree ".length))
-                .filter((path) => path !== real),
+                .filter((line) => line.startsWith("worktree ") && line !== `worktree ${real}`)
+                .map((line) => line.slice("worktree ".length)),
           });
           const seenParents = EffectArray.dedupe(linked.map(dirname));
           return Effect.map(

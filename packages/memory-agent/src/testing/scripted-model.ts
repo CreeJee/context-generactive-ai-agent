@@ -200,8 +200,11 @@ export const scriptedModel = Effect.fnUntraced(function* (
   ): Effect.Effect<ScriptedTurn> => {
     const lazy = lazyToolNames(request);
     const toolNames = (turn.toolCalls ?? [])
-      .map((call) => call.name)
-      .filter((name) => lazy.includes(name) && !request.tools.some((tool) => tool.name === name));
+      .filter(
+        (call) =>
+          lazy.includes(call.name) && !request.tools.some((tool) => tool.name === call.name),
+      )
+      .map((call) => call.name);
     return Arr.isReadonlyArrayNonEmpty(toolNames)
       ? Effect.as(Ref.update(afterDiscovery, HashMap.set(id, turn)), {
           toolCalls: [{ id, name: discoveryToolName, arguments: JSON.stringify({ toolNames }) }],

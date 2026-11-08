@@ -6,6 +6,7 @@ import {
   Iterable as EffectIterable,
   Option,
   Path,
+  Result,
   Schema,
 } from "effect";
 import { SecureRandom } from "effect/crypto";
@@ -136,7 +137,10 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
    */
   const nodeHits = (ids: readonly string[], scores: readonly number[]) =>
     Effect.gen(function* () {
-      const chunkIds = ids.map(Number).filter((id) => id >= chunkVectorIdFloor);
+      const chunkIds = EffectArray.filterMap(ids, (text) => {
+        const id = Number(text);
+        return id >= chunkVectorIdFloor ? Result.succeed(id) : Result.failVoid;
+      });
       const parents = yield* mappings("vector_id", chunkIds);
       const parentOf = new Map(parents.map((row) => [row.vector_id, row.node_seq]));
       return EffectArray.dedupeWith(

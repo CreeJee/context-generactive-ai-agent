@@ -73,7 +73,7 @@ const discoveredIn = (history: ReadonlyArray<StoredMessage>, lazy: ReadonlySet<s
             {
               onNone: () => [],
               onSome: ({ tools }) =>
-                tools.map((tool) => tool.name).filter((name) => lazy.has(name)),
+                tools.filter((tool) => lazy.has(tool.name)).map((tool) => tool.name),
             },
           )
         : [],
@@ -106,7 +106,7 @@ export const lazyToolsFor = Effect.fnUntraced(function* (
   const lazyByName = new Map(lazy.map((tool) => [tool.tool.name, tool] as const));
   const discovered = yield* Ref.make(discoveredIn(history, new Set(lazyByName.keys())));
   const undiscovered = (seen: HashSet.HashSet<string>) =>
-    lazy.map((tool) => tool.tool.name).filter((name) => !HashSet.has(seen, name));
+    lazy.filter((tool) => !HashSet.has(seen, tool.tool.name)).map((tool) => tool.tool.name);
 
   const discovery = runTool({
     name: discoveryToolName,

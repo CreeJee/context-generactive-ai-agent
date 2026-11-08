@@ -5,6 +5,7 @@ import {
   FileSystem,
   Function as EffectFunction,
   Option,
+  Result,
   Schema,
   Stream,
 } from "effect";
@@ -47,9 +48,10 @@ function completeLines(
     const end = bytes.indexOf(newline, start);
     return end === -1 ? Option.none() : Option.some([{ start, end }, end + 1] as const);
   });
-  const lines = spans
-    .map(({ start, end }) => decoder.decode(bytes.subarray(start, end)).trim())
-    .filter((line) => line.length > 0);
+  const lines = Arr.filterMap(spans, ({ start, end }) => {
+    const line = decoder.decode(bytes.subarray(start, end)).trim();
+    return line.length > 0 ? Result.succeed(line) : Result.failVoid;
+  });
   lines.forEach(onLine);
   return {
     offset: Option.match(Arr.last(spans), { onNone: () => 0, onSome: ({ end }) => end + 1 }),

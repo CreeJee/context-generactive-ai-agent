@@ -1,5 +1,6 @@
 import { isTruthy } from "../truthy.ts";
 import {
+  Array as EffectArray,
   Clock,
   Context,
   Data,
@@ -12,6 +13,7 @@ import {
   Match,
   Option,
   Predicate,
+  Result,
   Schema,
 } from "effect";
 import { SecureRandom } from "effect/crypto";
@@ -101,20 +103,23 @@ const setup = HashSet.make("cd", "set", "export", "true", ":", "echo", "printf",
 
 /** The program each step of a script starts with: the first of every `;`/`&&`/`||` step's pipeline. */
 const leadingPrograms = (script: string) =>
-  script
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line !== "" && !line.startsWith("#"))
-    .flatMap((line) => line.split(/;|&&|\|\|/))
-    .map((step) => {
+  EffectArray.filterMap(
+    EffectArray.filterMap(script.split("\n"), (line) => {
+      const trimmed = line.trim();
+      return trimmed !== "" && !trimmed.startsWith("#") ? Result.succeed(trimmed) : Result.failVoid;
+    }).flatMap((line) => line.split(/;|&&|\|\|/)),
+    (step) => {
       const words = (step.split("|")[0] ?? "").trim().split(/\s+/);
-      const program =
+      const first =
         words.find(
           (word) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(word) && !HashSet.has(prefixes, word),
         ) ?? "";
-      return program.split("/").at(-1) ?? "";
-    })
-    .filter((program) => program !== "" && !HashSet.has(setup, program));
+      const program = first.split("/").at(-1) ?? "";
+      return program !== "" && !HashSet.has(setup, program)
+        ? Result.succeed(program)
+        : Result.failVoid;
+    },
+  );
 
 /** Refuses a script that only wraps what built-in tools do. */
 export const builtinOverlap = (script: string): Option.Option<CodeSkillRejected> => {
