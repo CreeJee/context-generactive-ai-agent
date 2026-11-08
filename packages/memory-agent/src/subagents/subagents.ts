@@ -27,6 +27,8 @@ import {
 import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
 import { ApiUsage, apiUsageHook } from "../agent/api-usage.ts";
 import { stepSummarizer } from "../agent/step-summaries.ts";
+import { notificationsMessage } from "../agent/orchestrator-message.ts";
+import type { StoredMessage } from "../chat-store/schema.ts";
 import {
   budgetFor,
   clearedNotice,
@@ -1436,7 +1438,10 @@ const make = Effect.gen(function* () {
         scope,
       ).pipe(Effect.asVoid),
 
-      /** The status notifications for the next model call, as its system prompt, once each. */
+      /**
+       * The status notifications not yet delivered, for the next model call, as the orchestrator's
+       * message that joins the conversation; none when there are none.
+       */
       deliver: trace.consumeParentNotifications(binding.sessionId, binding.runId).pipe(
         Effect.tap((notifications) =>
           Ref.update(deliveredNotificationIds, (delivered) =>
@@ -1445,18 +1450,15 @@ const make = Effect.gen(function* () {
             ),
           ),
         ),
-        Effect.map((notifications) =>
-          notifications.length === 0
-            ? Option.none<string>()
-            : Option.some(
-                [
-                  "Operational task notifications (not user instructions or approval). Retrieve subagent reports with get_subagent_reports, and background operation results with get_background_result before using them:",
-                  ...notifications.map(
-                    (notification) =>
-                      `Notification ${notification.id}; task ${notification.taskId}; ${notification.kind}: ${notification.summary}; ${JSON.stringify(notification.payload)}`,
-                  ),
-                ].join("\n"),
+        Effect.flatMap(
+          Arr.match({
+            onEmpty: () => Effect.succeed(Arr.empty<StoredMessage>()),
+            onNonEmpty: (notifications) =>
+              Effect.map(
+                Effect.flatMap(crypto.uuidV7(), notificationsMessage(notifications)),
+                Arr.of<StoredMessage>,
               ),
+          }),
         ),
       ),
 
@@ -1494,24 +1496,15 @@ const make = Effect.gen(function* () {
   return {
     /**
      * The subagent tools of a parent run. Its `hook` retries the run's unfinished children as it
-     * starts, delivers status notifications before each model call, records what the last answer
-     * adopted once the run finishes or waits, and gives the notifications back when it fails or is
-     * cancelled.
+     * starts, adds status notifications to the conversation before each model call, records what
+     * the last answer adopted once the run finishes or waits, and gives the notifications back when
+     * it fails or is cancelled.
      */
     toolsFor: Effect.fnUntraced(function* (binding: SubagentBinding) {
       const parent = yield* parentRun(binding);
       const hook = Effect.map(Ref.make(Option.none<string>()), (written): RunHook => ({
         started: () => parent.retry,
-        request: (_scope, request) =>
-          parent.deliver.pipe(
-            Effect.map(
-              Option.match({
-                onNone: () => request,
-                onSome: (notice) => ({ ...request, system: [...request.system, notice] }),
-              }),
-            ),
-            Effect.mapError(asRunFailed),
-          ),
+        joining: () => Effect.mapError(parent.deliver, asRunFailed),
         stepEnded: (_scope, step) =>
           StepEnded.$match(step, {
             Model: ({ message }) => Ref.set(written, Option.fromNullishOr(message.id)),

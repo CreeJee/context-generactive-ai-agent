@@ -40,10 +40,14 @@ export const MessageSource = Schema.Struct({
   model: Schema.String,
 });
 
-/** Why the app's orchestrator, not the user, sent a message that starts a run. */
+/** Why the app's orchestrator, not the user, sent a message: to start a run, or into one. */
 export const OrchestratorNote = Schema.Struct({
-  /** What the run goes on with: the ended tasks' results, the approved Plan, or the kanban board. */
-  next: Schema.Literals(["results", "plan", "board"]),
+  /**
+   * What the run goes on with: the ended tasks' results, the approved Plan, or the kanban board,
+   * for a message that starts a run; its own work (`run`), for task notifications that joined the
+   * run in progress.
+   */
+  next: Schema.Literals(["results", "plan", "board", "run"]),
   /** The background tasks and subagents whose end the message reports. */
   ended: Schema.Struct({ background: Schema.Int, subagent: Schema.Int }),
 });
@@ -54,7 +58,7 @@ export const StoredUserMessage = Schema.Struct({
   id: Schema.optionalKey(Schema.String),
   createdAt: Schema.optionalKey(IsoTime),
   content: Content,
-  /** The orchestrator sent it. The model still reads it as a user turn; the page shows who sent it. */
+  /** The orchestrator sent it. The model still reads it as a user message; the page shows who sent it. */
   orchestrator: Schema.optionalKey(OrchestratorNote),
 });
 

@@ -14,7 +14,7 @@ import { type PermissionMode, Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import type { ScriptedInvocation } from "../../src/testing/scripted-model.ts";
 import { runTurn, streamedText } from "../support/chat-client.ts";
-import { defaultTestResponder } from "../support/provider.ts";
+import { defaultTestResponder, joinedNotice } from "../support/provider.ts";
 import { sqlGet } from "../support/sql.ts";
 import { TestEnv } from "../support/test-env.ts";
 import { type WaitCondition, waitUntil } from "../support/wait-until.ts";
@@ -137,7 +137,9 @@ export const heldDefaultTurn = Effect.fnUntraced(function* (invocation: Scripted
   if (turn.delayMs === undefined) return turn;
   const { delayMs: _delayMs, ...ready } = turn;
   const gate = yield* Deferred.make<void>();
-  const user = invocation.history.findLast((message) => message.role === "user");
+  const user = invocation.history.findLast(
+    (message) => message.role === "user" && !joinedNotice(message),
+  );
   delayed.push({ user: user === undefined ? "" : messageText(user), gate });
   return { ...ready, waitFor: Deferred.await(gate) };
 });

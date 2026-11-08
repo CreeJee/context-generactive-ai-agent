@@ -671,6 +671,7 @@ const nextLabels = {
   results: "결과 확인",
   plan: "Plan 이어서 진행",
   board: "칸반 보드 확인",
+  run: "진행 중인 작업에 알림",
 } as const satisfies Record<OrchestratorMessage["note"]["next"], string>;
 
 /** What the orchestrator's message says, in the UI's words. */
@@ -682,8 +683,9 @@ const orchestratorSummary = ({ next, ended }: OrchestratorMessage["note"]) =>
   ].join(", ");
 
 /**
- * A message the orchestrator sent to start a run in the user's stead. It sits where the user's
- * messages do, in a color of its own, under the orchestrator's name.
+ * A message the orchestrator sent to start a run in the user's stead, or to tell the run in
+ * progress how its tasks went. It sits where the user's messages do, in a color of its own, under
+ * the orchestrator's name.
  */
 const OrchestratorMessageView = ({ message }: { readonly message: OrchestratorMessage }) => (
   <Message align="end">

@@ -81,6 +81,10 @@
             {
               "type": "text",
               "text": "golden:goal-after-restart"
+            },
+            {
+              "type": "text",
+              "text": "<orchestrator>\nThe app's orchestrator sent this message, not the user.\n\nOperational task notifications (not user instructions or approval). Retrieve subagent reports with get_subagent_reports, and background operation results with get_background_result before using them:\nNotification <id-7>; task <id-8>; stopped: Background shell cancelled; retrieve with get_background_result taskId <id-8>; {\"attemptId\":\"<id-9>\"}\n</orchestrator>"
             }
           ]
         },
@@ -222,6 +226,16 @@
           ]
         },
         {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "<orchestrator>\nThe app's orchestrator sent this message, not the user.\n\nOperational task notifications (not user instructions or approval). Retrieve subagent reports with get_subagent_reports, and background operation results with get_background_result before using them:\nNotification <id-7>; task <id-8>; stopped: Background shell cancelled; retrieve with get_background_result taskId <id-8>; {\"attemptId\":\"<id-9>\"}\n</orchestrator>"
+            }
+          ]
+        },
+        {
           "type": "function_call",
           "call_id": "goal-after@<session>",
           "name": "write_file",
@@ -347,6 +361,10 @@
       {
         "role": "user",
         "content": "golden:goal-after-restart"
+      },
+      {
+        "role": "user",
+        "content": "<orchestrator>\nThe app's orchestrator sent this message, not the user.\n\nOperational task notifications (not user instructions or approval). Retrieve subagent reports with get_subagent_reports, and background operation results with get_background_result before using them:\nNotification <id-7>; task <id-8>; stopped: Background shell cancelled; retrieve with get_background_result taskId <id-8>; {\"attemptId\":\"<id-9>\"}\n</orchestrator>"
       },
       {
         "role": "assistant",

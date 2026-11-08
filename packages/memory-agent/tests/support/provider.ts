@@ -65,14 +65,22 @@ const messageText = (message: StoredMessage) =>
     : (message.content ?? [])
         .flatMap((part) => (part.type === "text" ? [part.content] : []))
         .join("");
+/** Task notifications the orchestrator added to a run; the scripted model reads past them. */
+export const joinedNotice = (message: StoredMessage) =>
+  message.role === "user" && message.orchestrator?.next === "run";
 const lastUserText = (messages: ReadonlyArray<StoredMessage>) =>
   messageText(
-    messages.findLast((message) => message.role === "user") ?? { role: "user", content: "" },
+    messages.findLast((message) => message.role === "user" && !joinedNotice(message)) ?? {
+      role: "user",
+      content: "",
+    },
   );
-const trailingTools = (messages: ReadonlyArray<StoredMessage>) =>
-  messages
-    .slice(messages.findLastIndex((message) => !isToolMessage(message)) + 1)
+const trailingTools = (messages: ReadonlyArray<StoredMessage>) => {
+  const read = messages.filter((message) => !joinedNotice(message));
+  return read
+    .slice(read.findLastIndex((message) => !isToolMessage(message)) + 1)
     .filter(isToolMessage);
+};
 const toolText = (message: ToolMessage) =>
   Schema.is(Schema.String)(message.content) ? message.content : JSON.stringify(message.content);
 const call = (id: string, name: string, args: Json): ScriptedTurn => ({

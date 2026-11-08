@@ -184,7 +184,8 @@ export type MessagePart = typeof MessagePart.Type;
 
 /**
  * A message of the conversation. An assistant message holds one run's text and tool calls. The
- * orchestrator's message started a run in the user's stead; its parts are what the model read.
+ * orchestrator's message started a run in the user's stead, or told the run in progress how its
+ * tasks went; its parts are what the model read.
  */
 export const ChatMessage = Schema.Union([
   Schema.Struct({

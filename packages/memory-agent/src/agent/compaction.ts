@@ -18,7 +18,7 @@ import {
   Schema,
 } from "effect";
 import type { ChatMetadata, ChatMetadataFailed, SummaryBlock } from "../chat-store/metadata.ts";
-import { StoredMessage } from "../chat-store/schema.ts";
+import { type OrchestratorNote, StoredMessage } from "../chat-store/schema.ts";
 import { firstChange } from "../chat-store/thread-messages.ts";
 import { asRunFailed, type RunHook } from "../loop/run.ts";
 import { RunStore } from "../loop/store.ts";
@@ -51,8 +51,15 @@ export interface ConversationMessage {
   readonly toolCalls?: ReadonlyArray<ConversationToolCall> | undefined;
   readonly toolCallId?: string | undefined;
   /** Present when the orchestrator sent the user message; it is no user turn and has no user node. */
-  readonly orchestrator?: object | undefined;
+  readonly orchestrator?: OrchestratorNote | undefined;
 }
+
+/**
+ * Whether a message starts a run: the user's, or the orchestrator's that starts one. Task
+ * notifications the orchestrator added to the run in progress do not.
+ */
+const startsRun = (message: ConversationMessage) =>
+  message.role === "user" && message.orchestrator?.next !== "run";
 
 /** A message compaction sends in place of others: a summary, a marker, a pointer or leads. */
 export type CompactionMessage =
@@ -206,7 +213,7 @@ function clearAnswered<M extends ConversationMessage>(
   );
   // Without an answer, nothing before it is cleared.
   const end = keepLatestAnswered
-    ? messages.slice(0, answered + 1).findLastIndex((message) => message.role === "user")
+    ? messages.slice(0, answered + 1).findLastIndex(startsRun)
     : answered + 1;
   const next = messages.map((message, index) => {
     const content =
@@ -554,15 +561,13 @@ const keptFrom = (messages: ReadonlyArray<ConversationMessage>, keep: number) =>
 };
 
 /**
- * Where the run in progress starts: its latest user message, or past the end when there is none.
- * Leaving the run out cost the model its own instruction and what it had just read; it read them
- * again, which pushed them out again, and a run went on for an hour without getting anywhere.
+ * Where the run in progress starts: the latest message that started a run, or past the end when
+ * there is none. Leaving the run out cost the model its own instruction and what it had just read;
+ * it read them again, which pushed them out again, and a run went on for an hour without getting
+ * anywhere.
  */
 const runStart = (messages: ReadonlyArray<ConversationMessage>) =>
-  Option.getOrElse(
-    EffectArray.findLastIndex(messages, (message) => message.role === "user"),
-    () => messages.length,
-  );
+  Option.getOrElse(EffectArray.findLastIndex(messages, startsRun), () => messages.length);
 
 /** Where the latest step starts. Its results are what the model asked for to go on. */
 const latestStep = (messages: ReadonlyArray<ConversationMessage>) =>
@@ -841,8 +846,8 @@ const rereadsOf = (messages: ReadonlyArray<ConversationMessage>, recall: Recall)
 
 /**
  * Do not perturb an intact prefix with retrieval. Once this request did omit original content, an
- * optional appendix belongs at its variable tail, immediately before the latest user message, so
- * providers that require user-last requests still accept it.
+ * optional appendix belongs at its variable tail, immediately before the message that started the
+ * run in progress, so providers that require user-last requests still accept it.
  */
 const withAppendix = <M extends ConversationMessage>(
   sources: CompactionSources,
@@ -854,7 +859,7 @@ const withAppendix = <M extends ConversationMessage>(
       onNone: () => Effect.succeed(sending),
       onSome: (retrieve) =>
         Effect.map(retrieve(sending.sent), (appendix) => {
-          const lastUser = sending.sent.findLastIndex((message) => message.role === "user");
+          const lastUser = sending.sent.findLastIndex(startsRun);
           return appendix === null
             ? sending
             : {
@@ -1123,7 +1128,7 @@ const compactedRequest = Effect.fnUntraced(function* <M extends ConversationMess
     steps,
   });
   const question = restored?.findLast(
-    (message) => message.role === "user" && messageText(message).trim(),
+    (message) => startsRun(message) && messageText(message).trim(),
   );
   const retained =
     question !== undefined && !compacted.messages.includes(question)
@@ -1269,10 +1274,10 @@ const unappendable = (
       : Option.none();
 
 /**
- * `added` with search leads before the user turn among them, when the request leaves content out:
- * a new turn may ask about what is no longer sent. Placed among the new messages, the leads leave
- * what was sent before as it was. Leads already sent, as for a message that joins the run, are not
- * sent twice.
+ * `added` with search leads before the message among them that starts a run, when the request
+ * leaves content out: a new turn may ask about what is no longer sent. Placed among the new
+ * messages, the leads leave what was sent before as it was. Leads already sent, as for a message
+ * that joins the run, are not sent twice.
  */
 const withTurnLeads = (
   sources: CompactionSources,
@@ -1285,7 +1290,7 @@ const withTurnLeads = (
         Option.fromNullishOr(sources.retrievalAppendix),
         () => previous.stage !== "none",
       ),
-      turn: EffectArray.findLastIndex(added, (message) => message.role === "user"),
+      turn: EffectArray.findLastIndex(added, startsRun),
     }),
     {
       onNone: () => Effect.succeed<ReadonlyArray<StoredMessage | CompactionMessage>>(added),

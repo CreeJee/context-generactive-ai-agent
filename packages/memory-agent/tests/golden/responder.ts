@@ -7,7 +7,7 @@ import type {
 } from "../../src/testing/scripted-model.ts";
 import type { JsonValue } from "../../src/json.ts";
 import { scopedCallId } from "../support/chat-client.ts";
-import { defaultTestResponder } from "../support/provider.ts";
+import { defaultTestResponder, joinedNotice } from "../support/provider.ts";
 
 /**
  * Golden scenarios script the model per user message `golden:<scenario>`: the n-th model call
@@ -236,7 +236,9 @@ const sharedModel: ScriptedResponder = (invocation) => {
 
 export const goldenResponder: ScriptedResponder = (invocation) => {
   const messages = invocation.history;
-  const lastUser = messages.findLastIndex((message) => message.role === "user");
+  const lastUser = messages.findLastIndex(
+    (message) => message.role === "user" && !joinedNotice(message),
+  );
   const scenario = decodeScenario(/^golden:(\S+)$/.exec(userText(messages[lastUser]))?.[1]);
   if (Option.isNone(scenario)) return sharedModel(invocation);
   const step = messages

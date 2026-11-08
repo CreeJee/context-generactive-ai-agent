@@ -335,13 +335,20 @@ describe("request history", () => {
         { role: "tool" as const, toolCallId: `read-${index}`, content: "스키마 줄 ".repeat(400) },
       ]).flat();
       const instruction: StoredMessage = { role: "user", content: "S8 작업 이어서 진행해줘" };
+      // Task notifications that joined the run do not start another one.
+      const notice: StoredMessage = {
+        role: "user",
+        content: "<orchestrator>\nNotification n-1; completed\n</orchestrator>",
+        orchestrator: { next: "run", ended: { background: 1, subagent: 0 } },
+      };
       const sent = yield* firstSent(
-        [...earlier, instruction, ...steps],
+        [...earlier, instruction, ...steps.slice(0, 6), notice, ...steps.slice(6)],
         lookupSources({ toolResultId: (id) => `node-${id}`, nodeText: () => null }),
         { compactAt: 0, leaveOutAt: 6_000, inputCeiling: noLimit },
       );
       expect(sent[0]?.content).toContain("left out to save context");
       expect(sent[1]).toEqual(instruction);
+      expect(sent).toContainEqual(notice);
       // Every call of the run is still sent, so the model knows what it already did.
       expect(sent.filter((message) => message.role === "assistant")).toHaveLength(6);
       const results = sent.filter((message) => message.role === "tool");

@@ -1,4 +1,4 @@
-import { Cause, Effect, Fiber, Schema } from "effect";
+import { Cause, Deferred, Effect, Fiber, Match, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { RunStore } from "../../src/loop/store.ts";
@@ -7,7 +7,7 @@ import { messageText } from "../../src/agent/compaction.ts";
 import { Subagents } from "../../src/subagents/subagents.ts";
 import type { ScriptedInvocation, ScriptedTurn } from "../../src/testing/scripted-model.ts";
 import { WorkTraceStore } from "../../src/work-trace/store.ts";
-import { selectTestModel } from "../support/provider.ts";
+import { joinedNotice, selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import {
   current,
@@ -60,49 +60,71 @@ const toolCall = (id: string, name: string, args: JsonValue) =>
 
 const followUpPrompt = "This is an automatic task completion follow-up";
 
+/** Holds the parent's second step of "delegate and get told" until the test lets it answer. */
+const toldGate = Deferred.makeUnsafe<void>();
+
 /** The parent's own scripted moves for the asynchronous contract; everything else is default. */
 const asyncTurn = Effect.fnUntraced(
   function* (invocation: ScriptedInvocation) {
+    const read = invocation.history.filter((message) => !joinedNotice(message));
     const user = messageText(
-      invocation.history.findLast((message) => message.role === "user") ?? {
+      read.findLast((message) => message.role === "user") ?? {
         role: "user",
         content: "",
       },
     );
     const internal = user.includes(followUpPrompt);
-    const last = invocation.history.at(-1);
+    const last = read.at(-1);
     const lastTool = last?.role === "tool" ? last.toolCallId : undefined;
-    if (!internal && user.startsWith("review-batch ")) {
-      switch (lastTool) {
-        case "call-review-batch": {
-          const { reports } = yield* Schema.decodeEffect(
-            Schema.fromJsonString(Schema.Struct({ reports: Schema.Array(Report) })),
-          )(messageText(last!));
-          return yield* toolCall("call-adopt-batch", "adopt_subagent_reports", {
-            reports: reports.map(idsOf),
-          });
-        }
-        case "call-adopt-batch":
-          return { text: "Used both reviewed reports." };
-        default:
-          return yield* toolCall("call-review-batch", "get_subagent_reports", {
-            attempts: yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Array(Ids)))(
+    if (!internal && user.startsWith("review-batch "))
+      return yield* Match.value(lastTool).pipe(
+        Match.when("call-review-batch", () =>
+          Effect.flatMap(
+            Schema.decodeEffect(
+              Schema.fromJsonString(Schema.Struct({ reports: Schema.Array(Report) })),
+            )(messageText(last!)),
+            ({ reports }) =>
+              toolCall("call-adopt-batch", "adopt_subagent_reports", {
+                reports: reports.map(idsOf),
+              }),
+          ),
+        ),
+        Match.when("call-adopt-batch", () =>
+          Effect.succeed({ text: "Used both reviewed reports." }),
+        ),
+        Match.orElse(() =>
+          Effect.flatMap(
+            Schema.decodeEffect(Schema.fromJsonString(Schema.Array(Ids)))(
               user.slice("review-batch ".length),
             ),
-          });
-      }
-    }
-    if (!internal && user === "delegate and keep working") {
-      switch (lastTool) {
-        case "call-background":
-          yield* receiptFrom(messageText(last!));
-          return yield* toolCall("call-independent-work", "find_memory", { query: "SQLite 결정" });
-        case "call-independent-work":
-          return { text: "Independent parent work finished." };
-        default:
-          return yield* toolCall("call-background", "run_subagent", { task: "nap background" });
-      }
-    }
+            (attempts) => toolCall("call-review-batch", "get_subagent_reports", { attempts }),
+          ),
+        ),
+      );
+    if (!internal && user === "delegate and keep working")
+      return yield* Match.value(lastTool).pipe(
+        Match.when("call-background", () =>
+          Effect.andThen(
+            receiptFrom(messageText(last!)),
+            toolCall("call-independent-work", "find_memory", { query: "SQLite 결정" }),
+          ),
+        ),
+        Match.when("call-independent-work", () =>
+          Effect.succeed({ text: "Independent parent work finished." }),
+        ),
+        Match.orElse(() => toolCall("call-background", "run_subagent", { task: "nap background" })),
+      );
+    if (!internal && user === "delegate and get told")
+      return yield* Match.value(lastTool).pipe(
+        Match.when("call-told-dispatch", () =>
+          Effect.map(
+            toolCall("call-told-work", "find_memory", { query: "SQLite 결정" }),
+            (turn): ScriptedTurn => ({ ...turn, waitFor: Deferred.await(toldGate) }),
+          ),
+        ),
+        Match.when("call-told-work", () => Effect.succeed({ text: "Told while working." })),
+        Match.orElse(() => toolCall("call-told-dispatch", "run_subagent", { task: "nap told" })),
+      );
     if (!internal && user.startsWith("dispatch only resume ") && lastTool === undefined)
       return {
         toolCalls: [
@@ -117,18 +139,18 @@ const asyncTurn = Effect.fnUntraced(
       const ids = yield* Schema.decodeEffect(Schema.fromJsonString(Ids))(
         user.slice("review-and-adopt ".length),
       );
-      switch (lastTool) {
-        case "call-review-report": {
-          yield* reportFrom(messageText(last!));
-          return yield* toolCall("call-adopt-report", "adopt_subagent_reports", {
-            reports: [ids],
-          });
-        }
-        case "call-adopt-report":
-          return { text: "Used the reviewed report." };
-        default:
-          return yield* toolCall("call-review-report", "get_subagent_reports", oneAttempt(ids));
-      }
+      return yield* Match.value(lastTool).pipe(
+        Match.when("call-review-report", () =>
+          Effect.andThen(
+            reportFrom(messageText(last!)),
+            toolCall("call-adopt-report", "adopt_subagent_reports", { reports: [ids] }),
+          ),
+        ),
+        Match.when("call-adopt-report", () =>
+          Effect.succeed({ text: "Used the reviewed report." }),
+        ),
+        Match.orElse(() => toolCall("call-review-report", "get_subagent_reports", oneAttempt(ids))),
+      );
     }
     return yield* heldDefaultTurn(invocation);
   },
@@ -246,6 +268,41 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
           "child finishes after parent work",
         );
       }),
+  );
+
+  it.effect("a task that ends while the run works is told in a message that joins the run", () =>
+    Effect.gen(function* () {
+      const { provider } = yield* TestEnv;
+      const { sessionId, turns } = yield* parentSession;
+      const children = yield* current(Subagents);
+      const parent = yield* Effect.forkChild(send(sessionId, "delegate and get told"), {
+        startImmediately: true,
+      });
+      yield* turns.release("nap told");
+      yield* until(
+        Effect.zipWith(
+          children.list(sessionId),
+          count(
+            `SELECT count(*) AS count FROM parent_notifications
+             WHERE origin_session_id = ? AND delivered_at IS NULL`,
+            sessionId,
+          ),
+          (listed, pending) => listed[0]?.status === "completed" && pending === 1,
+        ),
+        "the child's end while the parent works",
+      );
+      yield* Deferred.succeed(toldGate, undefined);
+      expect(yield* Fiber.join(parent)).toBe("Told while working.");
+      const notices = (yield* (yield* current(RunStore)).thread(sessionId)).filter(joinedNotice);
+      expect(notices.map((message) => message.role === "user" && message.orchestrator)).toEqual([
+        { next: "run", ended: { background: 0, subagent: 1 } },
+      ]);
+      // Every request of the run kept the same system prompt.
+      const systems = provider!.invocations
+        .filter((invocation) => invocation.run.threadId === sessionId)
+        .map((invocation) => invocation.system.join("\n"));
+      expect(new Set(systems).size).toBe(1);
+    }),
   );
 
   it.effect(
