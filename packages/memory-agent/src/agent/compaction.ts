@@ -14,6 +14,7 @@ import {
   Option,
   Ref,
   Result,
+  Schedule,
   Schema,
 } from "effect";
 import type { ChatMetadata, ChatMetadataFailed, SummaryBlock } from "../chat-store/metadata.ts";
@@ -22,11 +23,6 @@ import { asRunFailed, type RunHook } from "../loop/run.ts";
 import { RunStore } from "../loop/store.ts";
 import type { ModelHandoffFailed } from "./model-handoff.ts";
 import { recentRawSteps, recentRawUserTurns, stepBlockSteps } from "./compaction-policy.ts";
-import {
-  consumeColdObservationEffect,
-  type ContextUsageFailed,
-  pendingColdObservationEffect,
-} from "./context-usage.ts";
 import type { CompactResult, CompactionStage } from "./run-state.ts";
 import { isEmptyUserText } from "../messages/empty-user.ts";
 import { logFailure } from "../runtime/logged-failures.ts";
@@ -83,8 +79,6 @@ export class CompactionFailed extends Schema.TaggedError<
     "persist",
     "prepare-after",
     "history",
-    "read-cold",
-    "consume-cold",
     "read-memory",
   ]),
   reason: CompactionReason,
@@ -295,7 +289,7 @@ export interface CompactionState {
 
 const metadataFailed =
   (operation: CompactionFailed["operation"]) =>
-  ({ cause }: ChatMetadataFailed | ContextUsageFailed) =>
+  ({ cause }: ChatMetadataFailed) =>
     CompactionFailed.make({
       operation,
       reason: CompactionReason.cases.MetadataFailed.make({}),
@@ -504,23 +498,6 @@ const summarized =
       ? {
           sent: [...summaryMessages(summaries), ...sending.sent.slice(firstKept)],
           stage: "summarize",
-        }
-      : sending;
-
-/**
- * Without a ready summary, a one-shot cold hint can still make the next request smaller: the
- * messages before `firstKept` give way to a pointer back to the saved conversation.
- */
-const leftOutEarly =
-  (firstKept: number | undefined, dropped: Recall["dropped"]) =>
-  <M>(sending: Sending<M>): Sending<M> =>
-    firstKept !== undefined && firstKept > 0
-      ? {
-          sent: [
-            { role: "assistant", content: dropped(firstKept) },
-            ...sending.sent.slice(firstKept),
-          ],
-          stage: "leave-out",
         }
       : sending;
 
@@ -894,11 +871,10 @@ export const compactEffect = Effect.fnUntraced(function* <M extends Conversation
   readonly state: CompactionState;
   readonly sources: CompactionSources;
   readonly budget: Budget;
-  readonly early?: boolean;
   /** Summaries of the run's earlier steps, sent in their place. */
   readonly steps?: ReadonlyArray<StepBlock>;
 }): Effect.fn.Return<Compacted<M>, CompactionFailed> {
-  const { messages, state, sources, budget, early = false, steps = [] } = options;
+  const { messages, state, sources, budget, steps = [] } = options;
   // A record for a longer conversation was made for another one.
   const manual = state.manual.clearedThrough <= messages.length ? state.manual : noManualCompaction;
   const { toolResultId, nodeText } = yield* memoryLookups(sources, messages, state.blocks);
@@ -927,13 +903,6 @@ export const compactEffect = Effect.fnUntraced(function* <M extends Conversation
   const prepared = pipe(
     answeredCleared,
     summarized(summaries, turns[summarizedTurns]),
-    // The latest two complete user turns stay intact.
-    leftOutEarly(
-      early && summarizedTurns === 0 && turns.length > recentRawUserTurns
-        ? turns[turns.length - recentRawUserTurns]
-        : undefined,
-      recall.dropped,
-    ),
     stepsSummarized(steps),
     paired,
     leftOutPast(budget.leaveOutAt, recall),
@@ -1102,8 +1071,7 @@ function previewedResults<M extends ConversationMessage>(
 /**
  * What one model request of a session sends of its conversation, and the stage that made it so
  * (see {@link compactEffect}). `restored` is the history a model handoff put in place of
- * `messages`, headed by its notice. A pending cold-cache observation leaves out early once and is
- * used up.
+ * `messages`, headed by its notice.
  */
 export const requestHistory = Effect.fnUntraced(function* <M extends ConversationMessage>(options: {
   readonly metadata: ChatMetadata;
@@ -1120,9 +1088,6 @@ export const requestHistory = Effect.fnUntraced(function* <M extends Conversatio
 > {
   const { metadata, threadId, messages, restored, sources, budget, steps = [] } = options;
   const state = yield* compactionStateEffect({ metadata, threadId });
-  const coldId = yield* pendingColdObservationEffect({ metadata, threadId }).pipe(
-    Effect.mapError(metadataFailed("read-cold")),
-  );
   const removedTurns =
     restored === null ? 0 : userTurns(messages).length - userTurns(restored).length;
   const restoredContext = restored?.[0];
@@ -1145,13 +1110,8 @@ export const requestHistory = Effect.fnUntraced(function* <M extends Conversatio
             ...budget,
             leaveOutAt: Math.max(1, budget.leaveOutAt - estimateTokens(restoredContext)),
           },
-    early: coldId !== null,
     steps,
   });
-  if (coldId !== null)
-    yield* consumeColdObservationEffect({ metadata, threadId, observationId: coldId }).pipe(
-      Effect.mapError(metadataFailed("consume-cold")),
-    );
   const question = restored?.findLast(
     (message) => message.role === "user" && messageText(message).trim(),
   );
@@ -1171,15 +1131,13 @@ export const requestHistory = Effect.fnUntraced(function* <M extends Conversatio
 });
 
 /**
- * Why a request was made from the conversation again rather than from the previous request:
- * none was kept (`no-previous`), the provider read nothing from its cache last time
- * (`cache-cold`), `/compact` ran (`manual-compact`), the conversation is not the previous one with
- * messages after it (`conversation-changed`), or the new messages would pass `leaveOutAt`
- * (`over-budget`).
+ * Why a request was made from the conversation again rather than from the previous request: none
+ * is kept that the provider likely still caches (`no-previous`), `/compact` ran (`manual-compact`),
+ * the conversation is not the previous one with messages after it (`conversation-changed`), or the
+ * new messages would pass `leaveOutAt` (`over-budget`).
  */
 export type RebuildReason =
   | "no-previous"
-  | "cache-cold"
   | "manual-compact"
   | "conversation-changed"
   | "over-budget";
@@ -1203,33 +1161,43 @@ export interface SentRequest {
   readonly manual: ManualCompaction;
 }
 
-/** The longest prompt cache retention the app asks for; an older request is not cached anyway. */
-const lastRequestRetention = Duration.hours(1);
+/** A request kept until the provider likely no longer caches it (epoch milliseconds). */
+interface KeptRequest {
+  readonly sent: SentRequest;
+  readonly until: number;
+}
+
+/** How often requests the provider no longer caches are let go while no request comes. */
+const lastRequestsSweep = Duration.minutes(5);
 
 /** Requests kept in memory: after a restart, the next request is made from the conversation. */
 const makeLastRequests = Effect.gen(function* () {
-  const kept = yield* Ref.make(
-    HashMap.empty<string, { readonly sent: SentRequest; readonly at: number }>(),
-  );
-  const fresh =
+  const kept = yield* Ref.make(HashMap.empty<string, KeptRequest>());
+  const cached =
     (now: number) =>
-    ({ at }: { readonly at: number }) =>
-      now - at < Duration.toMillis(lastRequestRetention);
+    ({ until }: KeptRequest) =>
+      now < until;
   const get = (threadId: string) =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
       return Option.map(
-        Option.filter(HashMap.get(yield* Ref.get(kept), threadId), fresh(now)),
+        Option.filter(HashMap.get(yield* Ref.get(kept), threadId), cached(now)),
         ({ sent }) => sent,
       );
     });
-  const set = (threadId: string, sent: SentRequest) =>
+  const set = (threadId: string, sent: SentRequest, cachedFor: Duration.Duration) =>
     Effect.flatMap(Clock.currentTimeMillis, (now) =>
       Ref.update(kept, (entries) =>
-        HashMap.set(HashMap.filter(entries, fresh(now)), threadId, { sent, at: now }),
+        HashMap.set(HashMap.filter(entries, cached(now)), threadId, {
+          sent,
+          until: now + Duration.toMillis(cachedFor),
+        }),
       ),
     );
-  return { get, set };
+  const sweep = Effect.flatMap(Clock.currentTimeMillis, (now) =>
+    Ref.update(kept, HashMap.filter(cached(now))),
+  );
+  return { get, set, sweep };
 });
 
 /** The latest request of each conversation, while the provider likely still caches it. */
@@ -1237,10 +1205,20 @@ export class LastRequests extends Context.Service<
   LastRequests,
   {
     readonly get: (threadId: string) => Effect.Effect<Option.Option<SentRequest>>;
-    readonly set: (threadId: string, sent: SentRequest) => Effect.Effect<void>;
+    /** Keeps `sent` for as long as the provider likely caches it after it was sent. */
+    readonly set: (
+      threadId: string,
+      sent: SentRequest,
+      cachedFor: Duration.Duration,
+    ) => Effect.Effect<void>;
   }
 >()("memory-agent/agent/compaction/LastRequests") {
-  static readonly layer = Layer.effect(LastRequests, makeLastRequests);
+  static readonly layer = Layer.effect(
+    LastRequests,
+    Effect.tap(makeLastRequests, ({ sweep }) =>
+      Effect.forkScoped(Effect.repeat(sweep, Schedule.spaced(lastRequestsSweep))),
+    ),
+  );
 }
 
 const sameMessage = Schema.toEquivalence(StoredMessage);
@@ -1257,18 +1235,15 @@ const unappendable = (
   now: {
     readonly from: ReadonlyArray<StoredMessage>;
     readonly manual: ManualCompaction;
-    readonly cold: string | null;
   },
 ): Option.Option<RebuildReason> =>
-  now.cold !== null
-    ? Option.some("cache-cold")
-    : previous.manual.clearedThrough !== now.manual.clearedThrough ||
-        previous.manual.summarizedTurns !== now.manual.summarizedTurns
-      ? Option.some("manual-compact")
-      : now.from.length < previous.from.length ||
-          keptMessages(previous.from, now.from) < previous.from.length
-        ? Option.some("conversation-changed")
-        : Option.none();
+  previous.manual.clearedThrough !== now.manual.clearedThrough ||
+  previous.manual.summarizedTurns !== now.manual.summarizedTurns
+    ? Option.some("manual-compact")
+    : now.from.length < previous.from.length ||
+        keptMessages(previous.from, now.from) < previous.from.length
+      ? Option.some("conversation-changed")
+      : Option.none();
 
 /**
  * `added` with search leads before the user turn among them, when the request leaves content out:
@@ -1346,8 +1321,8 @@ export interface NextRequest {
  * prompt cache, where a request that changes earlier messages is written to it anew at twice the
  * input price. While the conversation only grows, a request is `previous` with the new messages
  * after it. The conversation is compacted again ({@link requestHistory}) only when that would pass
- * `leaveOutAt`, after `/compact`, once the cache went cold, or when the conversation changed;
- * answered tool outputs are cleared then too, and new summaries are first sent then.
+ * `leaveOutAt`, after `/compact`, when the conversation changed, or once the provider likely let
+ * `previous` go; answered tool outputs are cleared then too, and new summaries are first sent then.
  */
 export const nextRequestHistory = Effect.fnUntraced(function* (options: {
   readonly metadata: ChatMetadata;
@@ -1362,13 +1337,10 @@ export const nextRequestHistory = Effect.fnUntraced(function* (options: {
   const { metadata, threadId, sources, budget } = options;
   const from = options.restored ?? options.messages;
   const { manual } = yield* compactionStateEffect({ metadata, threadId });
-  const cold = yield* pendingColdObservationEffect({ metadata, threadId }).pipe(
-    Effect.mapError(metadataFailed("read-cold")),
-  );
   const appended = yield* Option.match(options.previous, {
     onNone: () => Effect.succeed(Result.fail<RebuildReason>("no-previous")),
     onSome: (previous) =>
-      Option.match(unappendable(previous, { from, manual, cold }), {
+      Option.match(unappendable(previous, { from, manual }), {
         onSome: (reason) => Effect.succeed(Result.fail(reason)),
         onNone: () => appendedTo(previous, { from, manual, sources, budget }),
       }),
@@ -1434,6 +1406,8 @@ export const compactionHook = Effect.fnUntraced(function* (options: {
   readonly budget: Budget;
   /** Where each conversation's latest request is kept across runs; without it, for this run only. */
   readonly lastRequests?: LastRequests["Service"];
+  /** How long the provider likely caches a request after it was sent: the run model's. */
+  readonly promptCacheFor: Duration.Duration;
   /** The history a model handoff puts in place of the conversation, or null to keep it. */
   readonly restore: (
     messages: ReadonlyArray<StoredMessage>,
@@ -1560,7 +1534,7 @@ export const compactionHook = Effect.fnUntraced(function* (options: {
           steps,
           previous,
         });
-        yield* lastRequests.set(threadId, sent.sent);
+        yield* lastRequests.set(threadId, sent.sent, options.promptCacheFor);
         yield* logRequestBasis(threadId, previous, sent);
         yield* Ref.set(stage, sent.stage);
         yield* Ref.set(sentEstimate, Option.some(estimateConversation(sent.messages)));

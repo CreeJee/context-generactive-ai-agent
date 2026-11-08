@@ -1,4 +1,4 @@
-import { Effect, Layer, Option, Schema } from "effect";
+import { Duration, Effect, Layer, Option, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import {
   compactionHook,
@@ -51,12 +51,14 @@ const run = Effect.fnUntraced(function* (options: {
   readonly turns: readonly [ScriptedTurn, ...Array<ScriptedTurn>];
   readonly leaveOutAt: number;
   readonly lastRequests: LastRequests["Service"];
+  readonly promptCacheFor: Duration.Duration;
 }) {
   const compacting = yield* compactionHook({
     sources,
     budget: { compactAt: 0, leaveOutAt: options.leaveOutAt, inputCeiling: noLimit },
     restore: () => Effect.succeed(null),
     lastRequests: options.lastRequests,
+    promptCacheFor: options.promptCacheFor,
   });
   const { invocations } = yield* scriptedRun({
     turns: options.turns,
@@ -74,6 +76,37 @@ const freshLastRequests = Effect.gen(function* () {
   const services = yield* Layer.build(LastRequests.layer);
   return yield* Effect.provideContext(LastRequests, services);
 });
+
+/**
+ * Three runs of a session that each read a file and answer, with requests kept for `cachedFor`:
+ * the second run's last request, and the third run's first.
+ */
+const threeRuns = Effect.fnUntraced(function* (cachedFor: Duration.Duration) {
+  const { project } = yield* TestEnv;
+  const session = yield* (yield* Sessions).create(project.id);
+  const store = yield* RunStore;
+  const lastRequests = yield* freshLastRequests;
+  const turn = Effect.fnUntraced(function* (index: number) {
+    const saved = yield* store.thread(session.id);
+    return yield* run({
+      name: `turn-${index}`,
+      sessionId: session.id,
+      conversation: [...saved, { role: "user", content: `질문 ${index}` }],
+      turns: [readCall(`read-${index}`), { text: `답 ${index}` }],
+      leaveOutAt: noLimit,
+      lastRequests,
+      promptCacheFor: cachedFor,
+    });
+  });
+  yield* turn(1);
+  const second = yield* turn(2);
+  const third = yield* turn(3);
+  return { second: second.at(-1) ?? [], third: third[0] ?? [] };
+});
+
+/** The content `request` sends for the call `id`. */
+const resultOf = (request: ReadonlyArray<StoredMessage>, id: string) =>
+  request.find((message) => message.role === "tool" && message.toolCallId === id)?.content;
 
 /** Twenty steps that each read a file, then the answer. */
 const longRun: readonly [ScriptedTurn, ...Array<ScriptedTurn>] = [
@@ -95,6 +128,7 @@ testAgent()("requests append to the one before", (it) => {
         turns: longRun,
         leaveOutAt,
         lastRequests: yield* freshLastRequests,
+        promptCacheFor: Duration.hours(1),
       });
       const rewritten = sent.filter(
         (request, index) => index > 0 && !startsWith(request, sent[index - 1] ?? []),
@@ -108,31 +142,18 @@ testAgent()("requests append to the one before", (it) => {
 
   it.effect("a new run's first request appends to the last one, answered outputs and all", () =>
     Effect.gen(function* () {
-      const { project } = yield* TestEnv;
-      const session = yield* (yield* Sessions).create(project.id);
-      const store = yield* RunStore;
-      const lastRequests = yield* freshLastRequests;
-      /** A run that reads one file and answers, after what the session saved. */
-      const turn = Effect.fnUntraced(function* (index: number) {
-        const saved = yield* store.thread(session.id);
-        return yield* run({
-          name: `turn-${index}`,
-          sessionId: session.id,
-          conversation: [...saved, { role: "user", content: `질문 ${index}` }],
-          turns: [readCall(`read-${index}`), { text: `답 ${index}` }],
-          leaveOutAt: noLimit,
-          lastRequests,
-        });
-      });
-      yield* turn(1);
-      const second = yield* turn(2);
-      const [third] = yield* turn(3);
-      expect(startsWith(third ?? [], second.at(-1) ?? [])).toBe(true);
+      const { second, third } = yield* threeRuns(Duration.hours(1));
+      expect(startsWith(third, second)).toBe(true);
       // Compaction would clear the first run's output once a later run answered; appending keeps it.
-      expect(
-        third?.find((message) => message.role === "tool" && message.toolCallId === "read-1")
-          ?.content,
-      ).toContain("y".repeat(4_000));
+      expect(resultOf(third, "read-1")).toContain("y".repeat(4_000));
+    }),
+  );
+
+  it.effect("a run after the provider likely let the last request go is compacted again", () =>
+    Effect.gen(function* () {
+      const { second, third } = yield* threeRuns(Duration.zero);
+      expect(startsWith(third, second)).toBe(false);
+      expect(resultOf(third, "read-1")).not.toContain("y".repeat(4_000));
     }),
   );
 

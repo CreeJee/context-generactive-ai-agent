@@ -1,5 +1,5 @@
 import { ProviderOperationFailed } from "./contracts.ts";
-import { Result, Function as EffectFunction } from "effect";
+import { Duration, Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { optionalProperty } from "../optional-property.ts";
 import {
@@ -803,6 +803,8 @@ function makeOpenAICompatibleSettingsBody(
           source: compatibleTarget(settings.model).source,
           shownFailure: shownCompatibleFailure,
           historyKey,
+          // A compatible server states no cache lifetime; the shortest common one is assumed.
+          promptCacheFor: Duration.minutes(5),
         };
       }),
     contextWindow: (modelId) => {

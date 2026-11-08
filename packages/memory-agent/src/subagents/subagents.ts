@@ -797,6 +797,7 @@ const make = Effect.gen(function* () {
       const compacting = yield* compactionHook({
         sources: childCompactionSources(runStore.thread(threadId)),
         budget: budgetFor(runtime.contextWindow(binding.selection.model)),
+        promptCacheFor: model.promptCacheFor,
         restore: () => Effect.succeed(null),
         summarizeSteps: stepSummarizer({
           services: { active, usageLedger, crypto },

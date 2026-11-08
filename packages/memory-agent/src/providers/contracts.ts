@@ -1,5 +1,5 @@
 import type { GlobalConfigFailed } from "../config/global-config.ts";
-import { Data, Effect, Schema, type Scope } from "effect";
+import { Data, type Duration, Effect, Schema, type Scope } from "effect";
 import type { AiError, LanguageModel } from "effect/ai";
 import type { MessageSource } from "../chat-store/schema.ts";
 
@@ -198,6 +198,11 @@ export interface RunModel {
   readonly shownFailure: (error: AiError.AiError) => ShownFailure;
   /** Pinned connection identity for detecting a server change without retaining credentials. */
   readonly historyKey?: string;
+  /**
+   * How long the provider likely keeps a request's prefix cached after it was last sent. A later
+   * request is made anew rather than appended to one the provider no longer has.
+   */
+  readonly promptCacheFor: Duration.Duration;
 }
 
 export interface AgentModelRuntime {

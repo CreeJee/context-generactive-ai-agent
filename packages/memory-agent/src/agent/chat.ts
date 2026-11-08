@@ -2182,6 +2182,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ]),
           budget: budgetFor(window()),
           lastRequests,
+          promptCacheFor: runModel.promptCacheFor,
           restore,
           summarizeSteps: stepSummarizer({
             services: { active, usageLedger, crypto },

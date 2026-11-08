@@ -1,6 +1,6 @@
 import { it } from "@effect/vitest";
 import { NodeCrypto } from "@effect/platform-node";
-import { Effect, Fiber, FileSystem, Layer, Option, Queue } from "effect";
+import { Duration, Effect, Fiber, FileSystem, Layer, Option, Queue } from "effect";
 import type { LanguageModel } from "effect/ai";
 import { TestClock } from "effect/testing";
 import { expect } from "vite-plus/test";
@@ -56,7 +56,12 @@ const provider = (model: LanguageModel.LanguageModel): ProviderServices => ({
   runtime: {
     provider: "openai",
     model: () =>
-      Effect.succeed({ model, source: scriptedSource, shownFailure: shownScriptedFailure }),
+      Effect.succeed({
+        model,
+        source: scriptedSource,
+        shownFailure: shownScriptedFailure,
+        promptCacheFor: Duration.hours(1),
+      }),
     contextWindow: () => 0,
   },
 });

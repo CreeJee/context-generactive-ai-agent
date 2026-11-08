@@ -1,6 +1,3 @@
-import { Function as EffectFunction } from "effect";
-import { SecureRandom } from "effect/crypto";
-import { isTruthy } from "../truthy.ts";
 import { Effect } from "effect";
 import type { ChatMetadata, ChatMetadataFailed } from "../chat-store/metadata.ts";
 import { asRunFailed, type RunHook } from "../loop/run.ts";
@@ -11,17 +8,11 @@ import { contextUsageEvent, type CompactionStage, type ContextView } from "./run
 
 /** Where a session's latest model request size is kept. */
 export const contextUsageNamespace = "memory-agent/context-usage";
-/** Last provider observation for which a cache-cold compact was attempted. */
-export const consumedColdUsageNamespace = "memory-agent/consumed-cold-usage";
 
 const CompactionStageSchema = Schema.Literals(["none", "clear-answered", "summarize", "leave-out"]);
 const ContextUsage = Schema.Struct({
   inputTokens: Schema.Finite,
   cachedTokens: Schema.NullOr(Schema.Finite).pipe(
-    Schema.withDecodingDefaultTypeKey(Effect.succeed(null)),
-  ),
-  /** Absent on usage persisted before cache-cold tracking was introduced. */
-  observationId: Schema.NullOr(Schema.String).pipe(
     Schema.withDecodingDefaultTypeKey(Effect.succeed(null)),
   ),
   compactionStage: Schema.NullOr(CompactionStageSchema).pipe(
@@ -62,7 +53,7 @@ export class ContextUsageFailed extends Schema.TaggedError<
   ContextUsageFailed,
   { readonly brand: unique symbol }
 >()("ContextUsageFailed", {
-  operation: Schema.Literals(["read-usage", "read-consumed", "write-usage", "consume"]),
+  operation: Schema.Literals(["read-usage", "write-usage"]),
   reason: ContextUsageReason,
   cause: Schema.Defect(),
 }) {}
@@ -73,7 +64,7 @@ const metadataFailed =
     ContextUsageFailed.make({
       operation,
       reason:
-        operation === "read-usage" || operation === "read-consumed"
+        operation === "read-usage"
           ? ContextUsageReason.cases.ReadFailed.make({})
           : ContextUsageReason.cases.WriteFailed.make({}),
       cause,
@@ -89,47 +80,6 @@ export const lastContextUsageEffect = (input: {
     Effect.map((stored) => Option.getOrNull(decodeContextUsage(stored))),
   );
 
-/** A provider-reported zero is distinct from no report; each observation may trigger only once. */
-const coldObservationIdBody = (
-  usage: StoredContextUsage | null,
-  consumedId: string | null,
-): string | null =>
-  usage?.cachedTokens === 0 && isTruthy(usage.observationId) && usage.observationId !== consumedId
-    ? usage.observationId
-    : null;
-export const coldObservationId: {
-  (
-    consumedId: string | null,
-  ): (usage: StoredContextUsage | null) => ReturnType<typeof coldObservationIdBody>;
-} & typeof coldObservationIdBody = EffectFunction.dual(2, coldObservationIdBody);
-
-/** Read the pending observation without treating legacy/unknown usage as a cache miss. */
-export const pendingColdObservationEffect = (input: {
-  readonly metadata: ChatMetadata;
-  readonly threadId: string;
-}) =>
-  Effect.gen(function* () {
-    const [usage, consumed] = yield* Effect.all(
-      [
-        lastContextUsageEffect(input),
-        input.metadata
-          .get(consumedColdUsageNamespace, input.threadId)
-          .pipe(Effect.mapError(metadataFailed("read-consumed"))),
-      ],
-      { concurrency: "unbounded" },
-    );
-    const consumedId = Option.getOrNull(Schema.decodeUnknownOption(Schema.String)(consumed));
-    return coldObservationId(usage, consumedId);
-  });
-/** Consume an observation when the request has attempted its early compact. */
-export const consumeColdObservationEffect = (input: {
-  readonly metadata: ChatMetadata;
-  readonly threadId: string;
-  readonly observationId: string;
-}) =>
-  input.metadata
-    .set(consumedColdUsageNamespace, input.threadId, input.observationId)
-    .pipe(Effect.mapError(metadataFailed("consume")));
 /**
  * Keeps how much each model request of a run read, in the run store's chat metadata, and tells the
  * page as it happens. The window and its provenance are read on each request from the current
@@ -139,17 +89,15 @@ export const contextUsageHook = (options: {
   readonly windowTokens: Effect.Effect<number>;
   readonly compactionStage: Effect.Effect<CompactionStage>;
   readonly windowKnown: Effect.Effect<boolean>;
-}): RunHook<RunStore | SecureRandom.SecureRandom> => ({
+}): RunHook<RunStore> => ({
   usage: ({ threadId, emit }, { inputTokens }) =>
     Effect.transposeOption(
       Option.map(Option.fromNullishOr(inputTokens.total), (usedTokens) =>
         Effect.gen(function* () {
           const store = yield* RunStore;
-          const crypto = yield* SecureRandom.SecureRandom;
           const stored: StoredContextUsage = {
             inputTokens: usedTokens,
             cachedTokens: inputTokens.cacheRead ?? null,
-            observationId: yield* crypto.uuidV4(),
             compactionStage: yield* options.compactionStage,
           };
           yield* store.metadata.set(contextUsageNamespace, threadId, stored);

@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { Duration, Effect, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import {
   budgetFor,
@@ -7,12 +7,6 @@ import {
   estimateConversation,
   type Budget,
 } from "../../src/agent/compaction.ts";
-import {
-  consumeColdObservationEffect,
-  contextUsageNamespace,
-  pendingColdObservationEffect,
-  type StoredContextUsage,
-} from "../../src/agent/context-usage.ts";
 import type { StoredMessage } from "../../src/chat-store/schema.ts";
 import type { JsonValue } from "../../src/json.ts";
 import { RunStore } from "../../src/loop/store.ts";
@@ -34,9 +28,6 @@ const freshSession = Effect.gen(function* () {
   const session = yield* (yield* Sessions).create(project.id);
   return { projectId: project.id, sessionId: session.id };
 });
-
-/** Usage as any release stored it: older ones lack the observation and compaction fields. */
-type LegacyUsage = Partial<StoredContextUsage>;
 
 const metadataStore = Effect.map(RunStore, (store) => store.chatMetadata);
 
@@ -100,55 +91,6 @@ testAgent()("compaction over recorded history", (it) => {
           id: wrongKind.id,
         });
       }),
-  );
-
-  it.effect("cold observation consumption persists while legacy/missing usage keeps behaving", () =>
-    Effect.gen(function* () {
-      const { sessionId: threadId } = yield* freshSession;
-      const metadata = yield* metadataStore;
-      const pending = pendingColdObservationEffect({ metadata, threadId });
-      const usage = (value: LegacyUsage) => metadata.set(contextUsageNamespace, threadId, value);
-      const cold = (observationId: string) =>
-        usage({ inputTokens: 100, cachedTokens: 0, observationId, compactionStage: "none" });
-      expect(yield* pending).toBeNull();
-      yield* usage({ inputTokens: 100, cachedTokens: 0 });
-      expect(yield* pending).toBeNull();
-      yield* cold("first");
-      expect(yield* pending).toBe("first");
-      yield* consumeColdObservationEffect({ metadata, threadId, observationId: "first" });
-      expect(yield* pending).toBeNull();
-      yield* cold("second");
-      expect(yield* pending).toBe("second");
-      yield* usage({ inputTokens: 100 });
-      expect(yield* pending).toBeNull();
-    }),
-  );
-
-  it.effect("cold usage compacts below the normal threshold on the next request only", () =>
-    Effect.gen(function* () {
-      const at = yield* freshSession;
-      const nodes = yield* Nodes;
-      const metadata = yield* metadataStore;
-      const { messages } = yield* conversation(nodes, at, ["one", "two", "three", "four"]);
-      const sent = () => nextRequest(messages, at.sessionId);
-      const usage = (value: LegacyUsage) =>
-        metadata.set(contextUsageNamespace, at.sessionId, value);
-      expect((yield* sent())[0]).toEqual({ role: "user", content: "질문 1" });
-      yield* usage({ inputTokens: 100, cachedTokens: null });
-      expect((yield* sent())[0]).toEqual({ role: "user", content: "질문 1" });
-      yield* usage({ inputTokens: 100, cachedTokens: 0, observationId: "cold-1" });
-      const early = yield* sent();
-      expect(early[0]?.content).toContain("earlier messages of this conversation were left out");
-      expect(early).toContainEqual({ role: "user", content: "질문 4" });
-      expect(early.at(-1)).toEqual({ role: "user", content: "질문 5" });
-      expect(yield* pendingColdObservationEffect({ metadata, threadId: at.sessionId })).toBeNull();
-      // Consumption is durable: the same observation does not trigger again after the first attempt.
-      expect((yield* sent())[0]).toEqual({ role: "user", content: "질문 1" });
-      yield* usage({ inputTokens: 100, cachedTokens: 0, observationId: "cold-2" });
-      expect((yield* sent())[0]?.content).toContain(
-        "earlier messages of this conversation were left out",
-      );
-    }),
   );
 
   it.effect(
@@ -224,6 +166,7 @@ testAgent()("compaction over recorded history", (it) => {
           sources: sourcesOf(nodes, at.sessionId),
           budget,
           restore: () => Effect.succeed(null),
+          promptCacheFor: Duration.hours(1),
         });
         const runId = `${at.sessionId}:run`;
         const { invocations } = yield* scriptedRun({
@@ -296,6 +239,7 @@ testAgent()("compaction over recorded history", (it) => {
             sources: sourcesOf(yield* Nodes, at.sessionId),
             budget: { compactAt: 0, leaveOutAt: noLimit, inputCeiling: 14_000 },
             restore: () => Effect.succeed(null),
+            promptCacheFor: Duration.hours(1),
           });
           const { invocations } = yield* scriptedRun({
             turns: [first, { text: "읽었어요." }],

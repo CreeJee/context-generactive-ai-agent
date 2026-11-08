@@ -1,4 +1,4 @@
-import { Effect, Function as EffectFunction, Schema, type Scope } from "effect";
+import { Duration, Effect, Function as EffectFunction, Schema, type Scope } from "effect";
 import {
   subscriptionModel,
   shownSubscriptionFailure,
@@ -10,12 +10,25 @@ import {
   ModelUnavailable,
   SubscriptionModelSelection,
   type AgentModelRuntime,
+  type CacheRetention,
   type SubscriptionAccountProvider,
 } from "./contracts.ts";
 
 const contextWindows: Readonly<Record<SubscriptionAccountProvider, number>> = {
   openai: 258_400,
   anthropic: 200_000,
+};
+
+/**
+ * How long each provider keeps a request's prefix after it was last sent, by the retention asked
+ * for. Anthropic keeps what `cache_control` asks for. OpenAI caches on its own, documented as 5 to
+ * 10 minutes without use, and this endpoint takes no retention field, so the short end is assumed.
+ */
+const promptCacheFor: Readonly<
+  Record<SubscriptionAccountProvider, Readonly<Record<CacheRetention, Duration.Duration>>>
+> = {
+  openai: { none: Duration.zero, short: Duration.minutes(5), long: Duration.minutes(5) },
+  anthropic: { none: Duration.zero, short: Duration.minutes(5), long: Duration.hours(1) },
 };
 
 export interface SubscriptionRuntimeDependencies {
@@ -62,6 +75,7 @@ export function createSubscriptionRuntimeImplementation(provider: SubscriptionAc
               // As TanStack wrote it: the adapter's name and kind.
               source: { provider, api: "text", model: chosen.model },
               shownFailure: shownSubscriptionFailure,
+              promptCacheFor: promptCacheFor[provider][run.cacheRetention],
             };
           }),
         contextWindow: (model) => catalogWindow(model) ?? fallbackWindow,

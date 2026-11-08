@@ -1,4 +1,4 @@
-import { Effect, Option, Ref, Schema } from "effect";
+import { Duration, Effect, Option, Ref, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import {
   compactionHook,
@@ -56,6 +56,7 @@ const run = Effect.fnUntraced(function* (
     // tokens is compacted again, and sends it.
     budget: { compactAt: 0, leaveOutAt: 40_000, inputCeiling: noLimit },
     restore: () => Effect.succeed(null),
+    promptCacheFor: Duration.hours(1),
     summarizeSteps: (steps) =>
       Effect.as(
         Ref.update(asked, (all) => [...all, steps]),

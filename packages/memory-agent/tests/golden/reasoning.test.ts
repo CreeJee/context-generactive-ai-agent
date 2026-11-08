@@ -1,4 +1,4 @@
-import { Effect, Stream } from "effect";
+import { Duration, Effect, Stream } from "effect";
 import {
   shownSubscriptionFailure,
   subscriptionModel,
@@ -94,6 +94,7 @@ const scriptedClient = (provider: SubscriptionAccountProvider): StreamingOAuthCl
             model,
             source: { provider, api: "text", model: selection.model },
             shownFailure: shownSubscriptionFailure,
+            promptCacheFor: Duration.hours(1),
           }),
         ),
     },

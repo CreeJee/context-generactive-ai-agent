@@ -1,4 +1,4 @@
-import { Effect, MutableRef, Option, Schedule } from "effect";
+import { Duration, Effect, MutableRef, Option, Schedule } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat, attachmentInstructions } from "../../src/agent/chat.ts";
 import { sessionMessages } from "../../src/agent/history.ts";
@@ -277,6 +277,7 @@ testAgent({
           model: yield* scripted.forRun(run),
           source: scriptedSource,
           shownFailure: shownScriptedFailure,
+          promptCacheFor: Duration.hours(1),
         };
       }),
   },

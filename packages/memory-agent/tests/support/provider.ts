@@ -14,6 +14,7 @@ import {
 import {
   Cause,
   Deferred,
+  Duration,
   Function,
   MutableHashMap,
   MutableRef,
@@ -408,6 +409,7 @@ export function testProvider(options: TestProviderOptions = {}): TestProvider {
                   model: options.model?.(model) ?? model,
                   source: scriptedSource,
                   shownFailure: shownScriptedFailure,
+                  promptCacheFor: Duration.hours(1),
                 }))),
             contextWindow: () => 200_000,
           }),

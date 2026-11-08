@@ -15,8 +15,7 @@
       "value": {
         "cachedTokens": 1000,
         "compactionStage": "none",
-        "inputTokens": 1200,
-        "observationId": "<id-5>"
+        "inputTokens": 1200
       }
     },
     {
