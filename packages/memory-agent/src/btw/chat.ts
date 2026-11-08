@@ -199,7 +199,8 @@ const make = Effect.gen(function* () {
       compatibleToolCalling(yield* config.read, selection.model);
     const system = [
       btwInstructions,
-      parentConversationPrompt(yield* nodes.session(thread.parentSessionId)),
+      // Only the messages the prompt shows are read, not the parent's tool calls and results.
+      parentConversationPrompt(yield* nodes.ofKinds(thread.parentSessionId, ["user", "assistant"])),
     ];
     const hooks = [btwToolGuardHook, yield* repeatGuardHook, modelImagesHook(attachments)];
     const conversation = withPageTurns(yield* threads.messages(threadId), [question.message]);

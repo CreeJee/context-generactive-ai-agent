@@ -222,11 +222,11 @@ const make = Effect.gen(function* () {
     Result: NodeRow,
     execute: (sessionId) => sql`SELECT * FROM nodes WHERE session_id = ${sessionId} ORDER BY seq`,
   });
-  const sessionNodesOfKind = SqlSchema.findAll({
-    Request: Schema.Struct({ sessionId: Schema.String, kind: NodeKind }),
+  const sessionNodesOfKinds = SqlSchema.findAll({
+    Request: Schema.Struct({ sessionId: Schema.String, kinds: Schema.Array(NodeKind) }),
     Result: NodeRow,
-    execute: ({ sessionId, kind }) => sql`SELECT * FROM nodes
-      WHERE session_id = ${sessionId} AND kind = ${kind} ORDER BY seq`,
+    execute: ({ sessionId, kinds }) => sql`SELECT * FROM nodes
+      WHERE session_id = ${sessionId} AND kind IN ${sql.in(kinds)} ORDER BY seq`,
   });
   const sessionNodesBetween = SqlSchema.findAll({
     Request: Schema.Struct({
@@ -434,10 +434,10 @@ const make = Effect.gen(function* () {
     session: (sessionId: string) =>
       stored(sessionNodes(sessionId).pipe(Effect.map((rows) => rows.map(nodeOfRow)))),
 
-    /** The session's nodes of one kind, oldest first. */
-    ofKind: (sessionId: string, kind: NodeKind) =>
+    /** The session's nodes of these kinds, oldest first. */
+    ofKinds: (sessionId: string, kinds: EffectArray.NonEmptyReadonlyArray<NodeKind>) =>
       stored(
-        sessionNodesOfKind({ sessionId, kind }).pipe(Effect.map((rows) => rows.map(nodeOfRow))),
+        sessionNodesOfKinds({ sessionId, kinds }).pipe(Effect.map((rows) => rows.map(nodeOfRow))),
       ),
 
     /** The session's nodes from seq `from` up to, but not including, seq `before`, oldest first. */

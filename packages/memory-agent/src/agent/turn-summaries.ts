@@ -209,7 +209,7 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
         if (estimateConversation(unsummarized.messages) <= threshold) return "done" as const;
       }
       const turns = userTurns(messages);
-      const turnNodes = yield* nodes.ofKind(sessionId, "user");
+      const turnNodes = yield* nodes.ofKinds(sessionId, ["user"]);
       const limit = Math.min(turns.length, turnNodes.length) - recentRawUserTurns;
       const lines = (index: number) => {
         const at = turns[index];
