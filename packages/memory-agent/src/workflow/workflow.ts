@@ -197,13 +197,16 @@ const PersistedWorkflowState = Schema.Struct({
   plan: Schema.NullOr(PersistedPlanArtifact),
   ledger: Schema.Array(LedgerEvent),
 });
+const persistedPlan = (plan: typeof PersistedPlanArtifact.Type | null): WorkflowState["plan"] =>
+  plan === null ? null : { ...plan, steps: cardStatuses(plan.steps) };
 export const decodeWorkflowState = (json: string) =>
   Schema.decodeEffect(Schema.fromJsonString(PersistedWorkflowState))(json).pipe(
-    Effect.map((state): WorkflowState => ({
-      ...state,
-      plan: state.plan === null ? null : { ...state.plan, steps: cardStatuses(state.plan.steps) },
-    })),
+    Effect.map((state): WorkflowState => ({ ...state, plan: persistedPlan(state.plan) })),
   );
+const decodePersistedPlan = Schema.decodeEffect(Schema.fromJsonString(PersistedPlanArtifact));
+/** The Plan a revision keeps in `plan_json`; NULL when the revision has none. */
+export const decodeRevisionPlan = (json: string | null) =>
+  json === null ? Effect.succeed(null) : Effect.map(decodePersistedPlan(json), persistedPlan);
 const encodeGoal = Schema.encodeEffect(Schema.fromJsonString(GoalArtifact));
 const encodePlan = Schema.encodeEffect(Schema.fromJsonString(PlanArtifact));
 const encodeAuthor = Schema.encodeEffect(Schema.fromJsonString(BoardAuthor));

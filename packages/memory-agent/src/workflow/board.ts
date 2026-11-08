@@ -1,12 +1,12 @@
 import { Context, Effect, Layer, Option, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
-import { currentStatesSql, revisionStateSql } from "./state-rows.ts";
+import { currentStatesSql } from "./state-rows.ts";
 import { GoalOrder } from "../kanban/goal-order.ts";
 import { planEnded, UserChange, UserChangeRequestStatus } from "./board-edit.ts";
 import { BoardAuthor, type CardStatus } from "./card.ts";
 import type { BoardCard, BoardRevision, BoardView, ProjectBoard } from "./contracts.ts";
 import {
-  decodeWorkflowState,
+  decodeRevisionPlan,
   PlanStep,
   WorkflowStorageError,
   type WorkflowState,
@@ -21,9 +21,11 @@ export type { BoardCard, BoardRevision, BoardView, ProjectBoard };
 const revisionWindow = 200;
 const historyLimit = 30;
 
+/** A revision's Plan and the detail of the last ledger event it covers. */
 const RevisionRow = Schema.Struct({
   id: Schema.Int,
-  state_json: Schema.String,
+  plan_json: Schema.NullOr(Schema.String),
+  detail: Schema.NullOr(Schema.String),
   author_json: Schema.NullOr(Schema.fromJsonString(BoardAuthor)),
   created_at: Schema.String,
 });
@@ -39,7 +41,7 @@ const ChangeRequestRow = Schema.Struct({
 const ProjectBoardRow = Schema.Struct({
   session_id: Schema.String,
   title: Schema.NullOr(Schema.String),
-  state_json: Schema.String,
+  plan_json: Schema.NullOr(Schema.String),
   updated_at: Schema.String,
   kanban_active: Schema.Literals([0, 1]),
 });
@@ -62,9 +64,9 @@ const countedBy = (steps: readonly PlanStep[]): BoardColumnCounts =>
 const encodeCard = Schema.encodeEffect(Schema.fromJsonString(PlanStep));
 
 /** Each card's encoded form, compared between consecutive revisions. */
-const cardsOf = (state: WorkflowState) =>
+const cardsOf = (plan: WorkflowState["plan"]) =>
   Effect.map(
-    Effect.forEach(state.plan?.steps ?? [], (step) =>
+    Effect.forEach(plan?.steps ?? [], (step) =>
       Effect.map(encodeCard(step), (json) => [step.id, json] as const),
     ),
     (entries) => new Map(entries),
@@ -86,20 +88,22 @@ export class Boards extends Context.Service<
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       const goalOrder = yield* GoalOrder;
-      const stateJson = sql.literal(revisionStateSql("r"));
       const currentStates = sql.literal(currentStatesSql);
       const current = SqlSchema.findOneOption({
         Request: Schema.String,
-        Result: Schema.Struct({ state_json: Schema.String }),
+        Result: Schema.Struct({ plan_json: Schema.NullOr(Schema.String) }),
         execute: (sessionId) =>
-          sql`SELECT ${stateJson} AS state_json FROM ${currentStates}
-            WHERE w.session_id = ${sessionId}`,
+          sql`SELECT r.plan_json FROM ${currentStates} WHERE w.session_id = ${sessionId}`,
       });
       const revisions = SqlSchema.findAll({
         Request: Schema.String,
         Result: RevisionRow,
-        execute: (sessionId) => sql`SELECT r.id, ${stateJson} AS state_json, r.author_json,
-          r.created_at FROM workflow_state_revisions r
+        // The ledger events stay in SQLite: the board shows only each revision's last one.
+        execute: (sessionId) => sql`SELECT r.id, r.plan_json,
+          (SELECT e.detail FROM workflow_ledger_events e
+            WHERE e.session_id = r.session_id AND e.sequence <= r.ledger_length
+            ORDER BY e.sequence DESC LIMIT 1) AS detail,
+          r.author_json, r.created_at FROM workflow_state_revisions r
           WHERE r.session_id = ${sessionId} ORDER BY r.id DESC LIMIT ${revisionWindow + 1}`,
       });
       const pending = SqlSchema.findAll({
@@ -113,7 +117,7 @@ export class Boards extends Context.Service<
       const projectBoards = SqlSchema.findAll({
         Request: Schema.String,
         Result: ProjectBoardRow,
-        execute: (projectId) => sql`SELECT w.session_id, s.title, ${stateJson} AS state_json,
+        execute: (projectId) => sql`SELECT w.session_id, s.title, r.plan_json,
           w.updated_at,
           EXISTS(SELECT 1 FROM kanban_goals k JOIN workflow_goal_identities g
             ON g.goal_instance_id = k.goal_instance_id
@@ -131,28 +135,26 @@ export class Boards extends Context.Service<
               (yield* goalOrder.goals(projectId)).map((sessionId, rank) => [sessionId, rank]),
             );
             const boards = yield* Effect.forEach(rows, (row) =>
-              Effect.map(
-                decodeWorkflowState(row.state_json),
-                ({ plan }): readonly ProjectBoard[] =>
-                  // An ended Plan (completed or closed) leaves the project board list; its
-                  // conversation's own board keeps showing it as it ended.
-                  plan === null || planEnded(plan)
-                    ? []
-                    : [
-                        {
-                          sessionId: row.session_id,
-                          sessionTitle: row.title,
-                          plan: {
-                            version: plan.version,
-                            status: plan.status,
-                            summary: plan.summary,
-                          },
-                          counts: countedBy(plan.steps),
-                          kanbanActive: row.kanban_active === 1,
-                          updatedAt: row.updated_at,
-                          rank: rankOf.get(row.session_id) ?? rows.length,
+              Effect.map(decodeRevisionPlan(row.plan_json), (plan): readonly ProjectBoard[] =>
+                // An ended Plan (completed or closed) leaves the project board list; its
+                // conversation's own board keeps showing it as it ended.
+                plan === null || planEnded(plan)
+                  ? []
+                  : [
+                      {
+                        sessionId: row.session_id,
+                        sessionTitle: row.title,
+                        plan: {
+                          version: plan.version,
+                          status: plan.status,
+                          summary: plan.summary,
                         },
-                      ],
+                        counts: countedBy(plan.steps),
+                        kanbanActive: row.kanban_active === 1,
+                        updatedAt: row.updated_at,
+                        rank: rankOf.get(row.session_id) ?? rows.length,
+                      },
+                    ],
               ),
             );
             return boards.flat();
@@ -160,9 +162,7 @@ export class Boards extends Context.Service<
         view: (sessionId) =>
           Effect.gen(function* () {
             const row = yield* current(sessionId);
-            const plan = Option.isNone(row)
-              ? null
-              : (yield* decodeWorkflowState(row.value.state_json)).plan;
+            const plan = Option.isNone(row) ? null : yield* decodeRevisionPlan(row.value.plan_json);
             const window = (yield* revisions(sessionId)).toReversed();
             // The oldest row is only the baseline when the window is full.
             const full = window.length > revisionWindow;
@@ -171,33 +171,31 @@ export class Boards extends Context.Service<
             const before =
               baseline === undefined
                 ? new Map<string, string>()
-                : yield* cardsOf(yield* decodeWorkflowState(baseline.state_json));
+                : yield* cardsOf(yield* decodeRevisionPlan(baseline.plan_json));
             const decoded = yield* Effect.forEach(changes, (revision) =>
-              Effect.gen(function* () {
-                const state = yield* decodeWorkflowState(revision.state_json);
-                return { revision, state, cards: yield* cardsOf(state) };
-              }),
+              Effect.map(
+                Effect.flatMap(decodeRevisionPlan(revision.plan_json), cardsOf),
+                (cards) => ({ revision, cards }),
+              ),
             );
-            const history = decoded.flatMap(
-              ({ revision, state, cards }, index): BoardRevision[] => {
-                const previous = decoded[index - 1]?.cards ?? before;
-                const cardIds = [
-                  ...[...cards].filter(([id, json]) => previous.get(id) !== json).map(([id]) => id),
-                  ...[...previous.keys()].filter((id) => !cards.has(id)),
-                ];
-                return cardIds.length === 0
-                  ? []
-                  : [
-                      {
-                        revisionId: revision.id,
-                        at: revision.created_at,
-                        author: revision.author_json,
-                        detail: state.ledger.at(-1)?.detail ?? "",
-                        cardIds,
-                      },
-                    ];
-              },
-            );
+            const history = decoded.flatMap(({ revision, cards }, index): BoardRevision[] => {
+              const previous = decoded[index - 1]?.cards ?? before;
+              const cardIds = [
+                ...[...cards].filter(([id, json]) => previous.get(id) !== json).map(([id]) => id),
+                ...[...previous.keys()].filter((id) => !cards.has(id)),
+              ];
+              return cardIds.length === 0
+                ? []
+                : [
+                    {
+                      revisionId: revision.id,
+                      at: revision.created_at,
+                      author: revision.author_json,
+                      detail: revision.detail ?? "",
+                      cardIds,
+                    },
+                  ];
+            });
             const lastChange = new Map(
               history.flatMap(({ author, at, cardIds }) =>
                 cardIds.map((id): [string, BoardCard["lastChange"]] => [id, { author, at }]),
