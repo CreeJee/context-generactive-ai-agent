@@ -13,6 +13,7 @@ import { memo, type ReactNode } from "react";
 import { Badge } from "~/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "~/components/ui/collapsible";
 import { koreanLocalTime } from "../shared/local-time";
+import { Array as Arr } from "effect";
 
 const sectionNames = [
   ["integrations", "MCP·외부 에이전트"],
@@ -46,13 +47,16 @@ export function cutTexts(bundle: ReportBundle): number {
       Approval: () => [],
       Trace: () => [],
     });
-  return [
-    ...bundle.timeline.items.flatMap((run) => [
-      ...(run.error === null ? [] : [run.error.detail]),
-      ...run.events.flatMap(texts),
-    ]),
-    ...bundle.unlinked.items.flatMap(texts),
-  ].filter((text) => text.cut).length;
+  return Arr.countBy(
+    [
+      ...bundle.timeline.items.flatMap((run) => [
+        ...(run.error === null ? [] : [run.error.detail]),
+        ...run.events.flatMap(texts),
+      ]),
+      ...bundle.unlinked.items.flatMap(texts),
+    ],
+    (text) => text.cut,
+  );
 }
 
 function Fold({
@@ -195,7 +199,7 @@ export const ReportBundlePreview = memo(function ReportBundlePreview({
 }) {
   const { environment } = bundle;
   const size = new TextEncoder().encode(JSON.stringify(bundle)).byteLength;
-  const failingRuns = bundle.timeline.items.filter(runHasFailure).length;
+  const failingRuns = Arr.countBy(bundle.timeline.items, runHasFailure);
   return (
     <section className="space-y-2" aria-label="보낼 증거 묶음">
       <h2 className="text-sm font-medium">보낼 증거 묶음 (읽기 전용)</h2>

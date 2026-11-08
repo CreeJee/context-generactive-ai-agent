@@ -33,6 +33,7 @@ import { planStatusLabels } from "../workflow-panel";
 import { boardColumns, type BoardCardRef } from "./board-moves";
 import { BoardSurface, editErrorText, kanbanSwitchHint, type SurfaceBoard } from "./board-surface";
 import { BoardShortcuts } from "./kanban-board";
+import { Array as Arr } from "effect";
 
 const cardsOf = (row: ProjectBoardRow) =>
   boardColumns.reduce((sum, status) => sum + row.counts[status], 0);
@@ -100,7 +101,7 @@ export function ProjectBoard({
   });
   const surfaceOf = (sessionId: string) =>
     surfaces.find((surface) => surface.sessionId === sessionId) ?? null;
-  const running = rows.filter((row) => row.kanbanActive).length;
+  const running = Arr.countBy(rows, (row) => row.kanbanActive);
   const total = rows.reduce((sum, row) => sum + cardsOf(row), 0);
   const done = rows.reduce((sum, row) => sum + row.counts.done, 0);
   /** Puts the conversation's Goal in front of `before` among the project's Goals. */
@@ -229,7 +230,7 @@ export function ProjectBoard({
                     holder={holder}
                     row={row}
                     surface={surfaceOf(row.sessionId)}
-                    decisions={inbox.filter((item) => item.sessionId === row.sessionId).length}
+                    decisions={Arr.countBy(inbox, (item) => item.sessionId === row.sessionId)}
                     moving={order.isPending}
                     onMoveUp={
                       index === 0

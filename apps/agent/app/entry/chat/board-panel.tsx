@@ -1,6 +1,6 @@
 import { isTruthy } from "../../truthy.ts";
 import { useState } from "react";
-import { Match } from "effect";
+import { Array as Arr, Match } from "effect";
 import { ChevronRightIcon, CircleSlashIcon, KanbanSquareIcon, PlusIcon } from "lucide-react";
 import { parseAsBoolean, parseAsString, useQueryStates } from "nuqs";
 import { Badge } from "../../components/ui/badge";
@@ -94,13 +94,13 @@ export function WorkflowBoard({
   if (plan === null) return <p className="text-muted-foreground">아직 계획이 없어요.</p>;
   const loop = kanban.data?.active === true ? kanban.data : null;
   const total = view.cards.length;
-  const done = view.cards.filter(({ card }) => card.status === "done").length;
+  const done = Arr.countBy(view.cards, ({ card }) => card.status === "done");
   // The progress line already counts the finished cards; empty columns say nothing.
   const counts = boardColumns
     .filter((status) => status !== "done")
     .map((status) => ({
       status,
-      count: view.cards.filter(({ card }) => card.status === status).length,
+      count: Arr.countBy(view.cards, ({ card }) => card.status === status),
     }))
     .filter(({ count }) => count > 0);
   const waiting = decisions.length;
@@ -287,7 +287,7 @@ function BoardSheet({
                 />
               )}
               <span>
-                완료 {view.cards.filter(({ card }) => card.status === "done").length}/
+                완료 {Arr.countBy(view.cards, ({ card }) => card.status === "done")}/
                 {view.cards.length}
               </span>
             </span>

@@ -84,7 +84,7 @@ const refused = (reason: string): DropOutcome => DropOutcome.Refused({ reason })
 const dependenciesDone = (cards: readonly PlanStep[], card: PlanStep) => {
   const ids = new Set(cards.map((other) => other.id));
   const done = new Set(cards.filter((other) => other.status === "done").map((other) => other.id));
-  return card.dependsOn.filter((id) => id !== card.id && ids.has(id)).every((id) => done.has(id));
+  return card.dependsOn.every((id) => id === card.id || !ids.has(id) || done.has(id));
 };
 
 /** Why a column takes no drop: the orchestrator moves cards there. */

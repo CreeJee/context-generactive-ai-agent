@@ -1,5 +1,5 @@
 import { isTruthy } from "../../truthy.ts";
-import { Data, Schema } from "effect";
+import { Array as Arr, Data, Schema } from "effect";
 import type { HeartbeatState, TraceTaskDetail, TraceTaskView } from "memory-agent";
 import {
   ActivityIcon,
@@ -274,8 +274,8 @@ function TaskDetail({ detail }: { detail: TraceTaskDetail | null }) {
                   )}
                   <p className="mt-1 text-muted-foreground">
                     채택된 evidence {candidate.evidence.length} · 조회{" "}
-                    {usage.filter((item) => item.kind === "retrieved").length} · 답변 사용{" "}
-                    {usage.filter((item) => item.kind === "used").length}
+                    {Arr.countBy(usage, (item) => item.kind === "retrieved")} · 답변 사용{" "}
+                    {Arr.countBy(usage, (item) => item.kind === "used")}
                   </p>
                   {candidate.originSessionId === null && (
                     <p className="mt-1 text-muted-foreground">
