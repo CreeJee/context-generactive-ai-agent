@@ -71,6 +71,22 @@ interface Walk {
 const improves = (best: HashMap.HashMap<string, number>, nodeId: string, utility: number) =>
   utility > Option.getOrElse(HashMap.get(best, nodeId), () => 0);
 
+/**
+ * The candidates, in order, that improve on the best utility known for their node (an earlier one
+ * of them included), and the best utilities after them.
+ */
+const improving = (best: HashMap.HashMap<string, number>, candidates: ReadonlyArray<Candidate>) => {
+  const [after, kept] = Arr.mapAccum(
+    candidates,
+    best,
+    (best, candidate): readonly [HashMap.HashMap<string, number>, Option.Option<Candidate>] =>
+      improves(best, candidate.nodeId, candidate.utility)
+        ? [HashMap.set(best, candidate.nodeId, candidate.utility), Option.some(candidate)]
+        : [best, Option.none()],
+  );
+  return { best: after, added: Arr.getSomes(kept) };
+};
+
 /** Which edge leads one step closer to the cause of a node, by node kind. */
 const causeOf: Partial<Record<Node["kind"], { kind: EdgeKind; direction: Hop["direction"] }>> = {
   tool_result: { kind: "returns", direction: "in" },
@@ -140,17 +156,11 @@ const make = Effect.gen(function* () {
   const traverse = (seeds: Iterable<readonly [string, number]>, options: TraverseOptions) =>
     Effect.gen(function* () {
       const allowed = HashSet.fromIterable(options.projectIds);
-      const queued = Arr.reduce(
-        Arr.fromIterable(seeds),
-        { frontier: Arr.empty<Candidate>(), best: HashMap.empty<string, number>() },
-        (queue, [nodeId, utility]) =>
-          improves(queue.best, nodeId, utility)
-            ? {
-                frontier: Arr.append(queue.frontier, { nodeId, utility, seedId: nodeId, path: [] }),
-                best: HashMap.set(queue.best, nodeId, utility),
-              }
-            : queue,
+      const seeded = improving(
+        HashMap.empty(),
+        Array.from(seeds, ([nodeId, utility]) => ({ nodeId, utility, seedId: nodeId, path: [] })),
       );
+      const queued = { frontier: seeded.added, best: seeded.best };
 
       /** Takes the best candidate left: it is visited and expanded, or dropped. */
       const step = (walk: Walk) =>
@@ -175,16 +185,13 @@ const make = Effect.gen(function* () {
           )
             return rest;
           const visited = HashSet.add(walk.visited, node.id);
-          const expanded = Arr.reduce(
-            yield* adjacent(node.id),
-            { frontier: rest.frontier, best: rest.best },
-            (queue, next) => {
+          const reached = improving(
+            rest.best,
+            (yield* adjacent(node.id)).flatMap((next) => {
               const utility = candidate.utility * next.weight;
-              return !HashSet.has(visited, next.nodeId) &&
-                utility >= options.minUtility &&
-                improves(queue.best, next.nodeId, utility)
-                ? {
-                    frontier: Arr.append(queue.frontier, {
+              return !HashSet.has(visited, next.nodeId) && utility >= options.minUtility
+                ? [
+                    {
                       nodeId: next.nodeId,
                       utility,
                       seedId: candidate.seedId,
@@ -192,12 +199,12 @@ const make = Effect.gen(function* () {
                         ...candidate.path,
                         { nodeId: next.nodeId, kind: next.kind, direction: next.direction },
                       ],
-                    }),
-                    best: HashMap.set(queue.best, next.nodeId, utility),
-                  }
-                : queue;
-            },
+                    },
+                  ]
+                : [];
+            }),
           );
+          const expanded = { frontier: [...rest.frontier, ...reached.added], best: reached.best };
           return {
             ...expanded,
             visited,
