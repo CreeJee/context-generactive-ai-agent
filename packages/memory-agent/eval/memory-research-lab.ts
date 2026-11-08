@@ -290,7 +290,7 @@ const runStageEffects = Effect.fn("lab.stage.effects")(function* (stage: Stage) 
   );
   const metrics = measured.map(({ set, queries }): SetMetrics => {
     const ranks = queries.map(({ rank }) => rank);
-    const within = (limit: number) => ranks.filter((rank) => rank >= 0 && rank < limit).length;
+    const within = (limit: number) => Arr.countBy(ranks, (rank) => rank >= 0 && rank < limit);
     const reciprocal = ranks
       .filter((rank) => rank >= 0)
       .reduce((sum, rank) => sum + 1 / (rank + 1), 0);

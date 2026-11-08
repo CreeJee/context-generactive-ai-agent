@@ -3,6 +3,7 @@ import { Worker } from "node:worker_threads";
 import { requireRuntime, runtimeWorkerOptions } from "../../runtime/resources.ts";
 import { ignoreLogged } from "../../runtime/logged-failures.ts";
 import {
+  Array as Arr,
   Cause,
   Context,
   Data,
@@ -597,8 +598,8 @@ export const makeNativeOwner = Effect.fn("NativeOwner.make")(function* (
           open: (current): OwnerInspection => {
             const phases = [...HashMap.values(current.jobs)].map((job) => job.phase);
             return OwnerInspection.open({
-              queued: phases.filter((phase) => phase === "queued").length,
-              active: phases.filter((phase) => phase === "active").length,
+              queued: Arr.countBy(phases, (phase) => phase === "queued"),
+              active: Arr.countBy(phases, (phase) => phase === "active"),
             });
           },
           failed: (current): OwnerInspection =>

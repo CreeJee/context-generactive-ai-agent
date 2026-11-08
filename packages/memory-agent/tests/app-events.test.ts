@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest";
-import { Deferred, Effect, Exit, Fiber, Layer, Option, Scope, Stream } from "effect";
+import { Array as Arr, Deferred, Effect, Exit, Fiber, Layer, Option, Scope, Stream } from "effect";
 import { identity } from "effect/Function";
 import { HttpRouter, HttpServer } from "effect/http";
 import { HttpApi, HttpApiBuilder } from "effect/http-api";
@@ -20,7 +20,7 @@ const readFrames = (response: Response, count: number) =>
       () => "",
       (text, chunk) => text + chunk,
     ),
-    Stream.takeUntil((text) => text.split("\n\n").filter(Boolean).length >= count),
+    Stream.takeUntil((text) => Arr.countBy(text.split("\n\n"), Boolean) >= count),
     Stream.runLast,
     Effect.map(Option.getOrElse(() => "")),
   );

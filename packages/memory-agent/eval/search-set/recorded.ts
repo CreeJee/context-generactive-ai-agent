@@ -172,9 +172,9 @@ export const buildRecorded = Effect.fn("searchSet.recorded")(function* (storage:
       exact: namesSomethingExactly(query),
     })),
   );
-  const count = (kind: Need["kind"]) => needs.filter(({ need }) => need.kind === kind).length;
+  const count = (kind: Need["kind"]) => Arr.countBy(needs, ({ need }) => need.kind === kind);
   yield* Console.log(
     `find_memory calls ${searches.length}; needs find ${count("find")} recall ${count("recall")}; ` +
-      `added ${added.length}; with known nodes ${needs.filter(({ need }) => need.known.length > 0).length}`,
+      `added ${added.length}; with known nodes ${Arr.countBy(needs, ({ need }) => need.known.length > 0)}`,
   );
 });

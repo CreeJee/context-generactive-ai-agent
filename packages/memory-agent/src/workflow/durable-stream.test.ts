@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest";
-import { Effect, Fiber, FileSystem, Layer, Path, Stream, Tracer } from "effect";
+import { Array as Arr, Effect, Fiber, FileSystem, Layer, Path, Stream, Tracer } from "effect";
 import { TestClock } from "effect/testing";
 import { withTestPlatform } from "../../tests/support/platform.ts";
 // SQLite retains its native synchronous transaction contract.
@@ -64,8 +64,7 @@ const pageReads = () => {
     },
   });
   const count = () =>
-    spans.filter((span) => String(span.attributes.get("db.query.text")).includes("cursor >"))
-      .length;
+    Arr.countBy(spans, (span) => String(span.attributes.get("db.query.text")).includes("cursor >"));
   return { tracer, count };
 };
 

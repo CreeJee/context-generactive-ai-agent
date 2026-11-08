@@ -1,4 +1,4 @@
-import { Effect, Result, Schema } from "effect";
+import { Array as Arr, Effect, Result, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import {
   DecisionKind,
@@ -41,7 +41,7 @@ export const migrateHumanDecisionRows = Effect.fn("HumanDecisions.migrateRows")(
         }),
     }),
   );
-  const skipped = moved.filter((done) => !done).length;
+  const skipped = Arr.countBy(moved, (done) => !done);
   yield* Effect.when(
     Effect.logWarning("Human decision requests left in the 0.0.17 form", { skipped }),
     Effect.succeed(skipped > 0),

@@ -193,8 +193,10 @@ const replayHistory = (
   const start: Replay = {
     used: HashSet.fromIterable(
       history
-        .filter((message): message is AssistantMessage => message.role === "assistant")
-        .filter((message) => !isForeign(message, target) && !isFailed(message))
+        .filter(
+          (message): message is AssistantMessage =>
+            message.role === "assistant" && !isForeign(message, target) && !isFailed(message),
+        )
         .flatMap((message) => (message.toolCalls ?? []).map((call) => call.id)),
     ),
     renamed: HashMap.empty(),

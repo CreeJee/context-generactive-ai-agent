@@ -165,7 +165,7 @@ export const rerankRun = Effect.fn("searchSet.rerank")(function* (options: Reran
     `${options.name}: reranked ${ms.length}; p50 ${percentile(0.5)(ms).toFixed(0)} ms; ` +
       `p95 ${percentile(0.95)(ms).toFixed(0)} ms; max ${percentile(1)(ms).toFixed(0)} ms; ` +
       `mean ${mean(ms).toFixed(0)} ms; over ${readBudgetMs} ms ` +
-      `${ms.filter((each) => each > readBudgetMs).length}; candidates per item ` +
+      `${Arr.countBy(ms, (each) => each > readBudgetMs)}; candidates per item ` +
       `${mean(reranked.map((result) => result.row.ids.length)).toFixed(1)}; padded tokens ` +
       `${mean(batches.map((batch) => batch.tokens)).toFixed(0)}`,
   );

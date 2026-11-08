@@ -1,4 +1,4 @@
-import { Result } from "effect";
+import { Array as Arr, Result } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 import {
   decodeGoalState,
@@ -218,7 +218,7 @@ const stateFor = (standing: Standing): WorkflowState => {
 /** The reviewed list of transitions, grouped by state and event. Lists keep the formatter out. */
 const transitionsDocument = () => {
   const counts = stateTags.map(
-    (tag) => `- \`${tag}\`: ${standings.filter((standing) => tagOf(standing) === tag).length}`,
+    (tag) => `- \`${tag}\`: ${Arr.countBy(standings, (standing) => tagOf(standing) === tag)}`,
   );
   const events = [...new Set(eventsFor(start).map((event) => event._tag))];
   const sections = stateTags.flatMap((tag) => [

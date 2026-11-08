@@ -245,14 +245,14 @@ export const agreement = Effect.fn("searchSet.agreement")(function* ({
   const n = Math.max(1, pairs.length);
   const grades = [0, 1, 2] as const;
   const share = (grade: Grade, side: 0 | 1) =>
-    pairs.filter((pair) => pair[side] === grade).length / n;
+    Arr.countBy(pairs, (pair) => pair[side] === grade) / n;
   const weight = (a: number, b: number) => ((a - b) / 2) ** 2;
   const observed = pairs.reduce((sum, [a, b]) => sum + weight(a, b), 0) / n;
   const expected = grades
     .flatMap((a) => grades.map((b) => weight(a, b) * share(a, 0) * share(b, 1)))
     .reduce((sum, value) => sum + value, 0);
-  const exact = pairs.filter(([a, b]) => a === b).length / n;
-  const binary = pairs.filter(([a, b]) => a > 0 === b > 0).length / n;
+  const exact = Arr.countBy(pairs, ([a, b]) => a === b) / n;
+  const binary = Arr.countBy(pairs, ([a, b]) => a > 0 === b > 0) / n;
   yield* Console.log(
     `pairs ${pairs.length}; exact ${exact.toFixed(3)}; relevant-or-not ${binary.toFixed(3)}; ` +
       `weighted kappa ${(expected === 0 ? 1 : 1 - observed / expected).toFixed(3)}; ` +

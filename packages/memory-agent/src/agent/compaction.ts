@@ -158,7 +158,7 @@ const imageTokens = 4_784;
 const imagesIn = (message: ConversationMessage) =>
   isText(message.content)
     ? 0
-    : (message.content ?? []).filter((part) => part.type === "image").length;
+    : EffectArray.countBy(message.content ?? [], (part) => part.type === "image");
 
 /**
  * Tokens of a message, roughly: English and code take about four characters a token, Korean and
@@ -197,9 +197,10 @@ export function clearedOutput(nodeId: string | null) {
 
 /** Tool results the model is sent in full. */
 const wholeToolOutputs = (messages: ReadonlyArray<ConversationMessage>) =>
-  messages.filter(
+  EffectArray.countBy(
+    messages,
     (message) => message.role === "tool" && !messageText(message).startsWith(clearedPrefix),
-  ).length;
+  );
 
 /**
  * The messages with the output of tool calls the model has already answered from cleared. The

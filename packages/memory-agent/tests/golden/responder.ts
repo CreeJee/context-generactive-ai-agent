@@ -1,4 +1,4 @@
-import { Deferred, Effect, Option, Schema } from "effect";
+import { Array as Arr, Deferred, Effect, Option, Schema } from "effect";
 import type { StoredMessage } from "../../src/chat-store/schema.ts";
 import type {
   ScriptedResponder,
@@ -241,9 +241,7 @@ export const goldenResponder: ScriptedResponder = (invocation) => {
   );
   const scenario = decodeScenario(/^golden:(\S+)$/.exec(userText(messages[lastUser]))?.[1]);
   if (Option.isNone(scenario)) return sharedModel(invocation);
-  const step = messages
-    .slice(lastUser + 1)
-    .filter((message) => message.role === "assistant").length;
+  const step = Arr.countBy(messages.slice(lastUser + 1), (message) => message.role === "assistant");
   // Model calls after the script, such as a follow-up for a child's report, go to the shared model.
   const script: ReadonlyArray<ScriptedTurn> = scripts[scenario.value];
   const turn = script[step];

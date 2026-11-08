@@ -227,7 +227,7 @@ export const writeRounds = Effect.fn("searchSet.rounds")(function* ({
     { concurrency },
   );
   const tally = (outcome: (typeof outcomes)[number]) =>
-    outcomes.filter((each) => each === outcome).length;
+    Arr.countBy(outcomes, (each) => each === outcome);
   yield* Console.log(
     `written ${tally("written")}; skipped ${tally("skipped")}; unanswered ${tally("unanswered")}`,
   );

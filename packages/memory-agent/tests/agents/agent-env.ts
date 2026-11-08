@@ -1,4 +1,5 @@
 import {
+  Array as Arr,
   Cause,
   Deferred,
   Effect,
@@ -152,12 +153,12 @@ export const heldTurns = Effect.acquireRelease(
   Effect.succeed({
     waitFor: (text: string, count = 1) =>
       until(
-        () => delayed.filter((entry) => entry.user.includes(text)).length >= count,
+        () => Arr.countBy(delayed, (entry) => entry.user.includes(text)) >= count,
         `${count} held turn(s) for ${text}`,
       ),
     release: (text: string, count = 1) =>
       until(
-        () => delayed.filter((entry) => entry.user.includes(text)).length >= count,
+        () => Arr.countBy(delayed, (entry) => entry.user.includes(text)) >= count,
         `${count} held turn(s) for ${text}`,
       ).pipe(Effect.andThen(releaseWhere((entry) => entry.user.includes(text)))),
   }),

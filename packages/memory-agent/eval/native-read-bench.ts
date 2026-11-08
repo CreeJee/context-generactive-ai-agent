@@ -131,7 +131,7 @@ const recordedFinds = (
   );
 });
 await print(
-  `recorded find_memory calls: ${recordedFinds.length}, own project ${recordedFinds.filter((q) => q.projectId === ownProject).length}`,
+  `recorded find_memory calls: ${recordedFinds.length}, own project ${Arr.countBy(recordedFinds, (q) => q.projectId === ownProject)}`,
 );
 const finds = [...new Map(recordedFinds.map((q) => [`${q.projectId}\u0000${q.query}`, q])).values()]
   // Each replayed in the project it was asked in, as its own project.

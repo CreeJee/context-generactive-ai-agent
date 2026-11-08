@@ -1,4 +1,5 @@
 import {
+  Array as Arr,
   Chunk,
   Clock,
   Context,
@@ -420,15 +421,12 @@ const make = (options: KanbanOrchestratorOptions) =>
       }));
       const attemptNo = yield* latestAttempt(goal, card.id);
       // A person who answered sends the card on; a conflict after that is a new occasion.
-      const answered = (yield* decisions.forCard(
-        goal.sessionId,
-        goal.goalInstanceId,
-        card.id,
-      )).filter(
+      const answered = Arr.countBy(
+        yield* decisions.forCard(goal.sessionId, goal.goalInstanceId, card.id),
         (request) =>
           Predicate.isTagged(request.kind, "IntegrationConflict") &&
           Predicate.isTagged(request.state, "Answered"),
-      ).length;
+      );
       yield* askPerson(goal, card.id, "verify", {
         occasion: DecisionOccasion.IntegrationConflict({ attemptNo, answered }),
         kind: DecisionKind.cases.IntegrationConflict.make({ files }),

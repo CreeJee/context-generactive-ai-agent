@@ -1,5 +1,6 @@
 import { NodeCrypto, NodeServices } from "@effect/platform-node";
 import {
+  Array as Arr,
   Clock,
   Config,
   Console,
@@ -210,9 +211,7 @@ const program = Effect.gen(function* () {
           const estimate = estimateRequestTokens(body, selection.model);
           if (exceedsRequestTokenBudget(estimate, inputLimit))
             return yield* BenchmarkFailed.make({ reason: "budget" });
-          const included = fixture.support.filter(({ quote }) =>
-            contextText.includes(quote),
-          ).length;
+          const included = Arr.countBy(fixture.support, ({ quote }) => contextText.includes(quote));
           return {
             fixture,
             variant,
@@ -310,13 +309,13 @@ const program = Effect.gen(function* () {
       return {
         variant,
         attempts: selected.length,
-        correct: selected.filter((row) => row.correct).length,
-        fullSupport: selected.filter((row) => row.fullSupport).length,
+        correct: Arr.countBy(selected, (row) => row.correct),
+        fullSupport: Arr.countBy(selected, (row) => row.fullSupport),
         supportIncluded: selected.reduce((sum, row) => sum + row.supportIncluded, 0),
         supportTotal: selected.reduce((sum, row) => sum + row.supportTotal, 0),
         citedSupport: selected.reduce((sum, row) => sum + row.citedSupport, 0),
-        invalidOutputs: selected.filter((row) => !row.validOutput).length,
-        revokedValueUsed: selected.filter((row) => row.revokedValueUsed).length,
+        invalidOutputs: Arr.countBy(selected, (row) => !row.validOutput),
+        revokedValueUsed: Arr.countBy(selected, (row) => row.revokedValueUsed),
       };
     }),
   });
@@ -398,11 +397,11 @@ const program = Effect.gen(function* () {
             (source) => source.id === citation.id && source.text.includes(citation.quote),
           ) && arm.contextText.includes(citation.quote),
       );
-      const citedSupport = arm.fixture.support.filter((required) =>
+      const citedSupport = Arr.countBy(arm.fixture.support, (required) =>
         valid.some(
           (citation) => citation.id === required.id && citation.quote.includes(required.quote),
         ),
-      ).length;
+      );
       rows.push({
         case: arm.fixture.name,
         variant: arm.variant,

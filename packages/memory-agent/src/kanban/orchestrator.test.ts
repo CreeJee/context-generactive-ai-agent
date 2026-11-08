@@ -1,4 +1,5 @@
 import {
+  Array as Arr,
   Deferred,
   Effect,
   Exit,
@@ -779,7 +780,7 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
             );
             const cards = yield* waitForCards(
               board.sessionId,
-              (cards) => cards.filter((step) => step.status === "done").length === 2,
+              (cards) => Arr.countBy(cards, (step) => step.status === "done") === 2,
             );
             expect(cards.map((step) => [step.title, step.status])).toEqual([
               ["Card a", "done"],

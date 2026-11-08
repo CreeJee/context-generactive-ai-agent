@@ -472,7 +472,7 @@ const evaluate = Effect.fn("eval.toolUse")(function* () {
           return {
             case: each.name,
             why: each.why,
-            passed: `${runs.filter((result) => result.passed).length}/${runs.length}`,
+            passed: `${Arr.countBy(runs, (result) => result.passed)}/${runs.length}`,
           };
         }),
       };

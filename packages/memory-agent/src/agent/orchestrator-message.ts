@@ -1,4 +1,4 @@
-import { DateTime, Effect, Function as EffectFunction, HashSet } from "effect";
+import { Array as Arr, DateTime, Effect, Function as EffectFunction, HashSet } from "effect";
 import type { OrchestratorNote, StoredUserMessage } from "../chat-store/schema.ts";
 import type { ParentNotificationView } from "../work-trace/store.ts";
 
@@ -10,9 +10,10 @@ export const endedTasks = (
   notifications: ReadonlyArray<ParentNotificationView>,
 ): OrchestratorNote["ended"] => {
   const ended = notifications.filter(({ kind }) => HashSet.has(endKinds, kind));
-  const background = ended.filter(
+  const background = Arr.countBy(
+    ended,
     ({ agentName }) => agentName?.startsWith("background_") === true,
-  ).length;
+  );
   return { background, subagent: ended.length - background };
 };
 

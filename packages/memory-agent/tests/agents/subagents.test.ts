@@ -110,9 +110,9 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
         expect(childStart?.toolNames).toContain("read_subagent_tool_result");
         // The only child-specific tool reads bounded pages of that child's own persisted results.
         expect(
-          childStart?.toolNames
-            .filter((name) => name !== "read_subagent_tool_result")
-            .every((name) => parentStart?.toolNames.includes(name)),
+          childStart?.toolNames.every(
+            (name) => name === "read_subagent_tool_result" || parentStart?.toolNames.includes(name),
+          ),
         ).toBe(true);
         // The parent's conversation is not copied into the child.
         expect(

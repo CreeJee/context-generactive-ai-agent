@@ -434,7 +434,7 @@ export const tokensPerImage = 1_000;
  */
 const imagesIn = (message: ChatMessage): number =>
   Array.isArray(message.content)
-    ? message.content.filter((part) => part.type === "image_url").length
+    ? Arr.countBy(message.content, (part) => part.type === "image_url")
     : 0;
 
 /** A message as the guard measures it: its image parts without their URLs, which `tokensPerImage` counts instead. */
@@ -500,7 +500,7 @@ const withinContext = (
 const requestDiagnostic = (payload: CompatiblePayload) => {
   const { messages } = payload;
   const count = (role: ChatMessage["role"]) =>
-    messages.filter((message) => message.role === role).length;
+    Arr.countBy(messages, (message) => message.role === role);
   const userContent = messages.flatMap((message) =>
     message.role === "user"
       ? [

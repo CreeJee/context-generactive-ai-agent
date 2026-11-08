@@ -1,4 +1,4 @@
-import { Effect, Array as EffectArray, Schema } from "effect";
+import { Effect, Array as EffectArray, Option, Schema } from "effect";
 import { SqlClient, type SqlError } from "effect/sql";
 
 /**
@@ -58,11 +58,12 @@ const exitLine = /^Exit code \d+$/u;
  * keep the commands.
  */
 export const failureSignature = (text: string) => {
-  const first =
-    text
-      .split("\n")
-      .map((line) => line.trim())
-      .find((line) => line !== "" && !exitLine.test(line)) ?? "";
+  const first = Option.getOrElse(
+    EffectArray.findFirst(text.split("\n"), (line) =>
+      Option.liftPredicate(line.trim(), (trimmed) => trimmed !== "" && !exitLine.test(trimmed)),
+    ),
+    () => "",
+  );
   const denied = deniedCommand.exec(first);
   return denied !== null
     ? `permission denied: ${denied[1]}`

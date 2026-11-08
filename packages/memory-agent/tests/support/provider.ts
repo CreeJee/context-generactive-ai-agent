@@ -12,6 +12,7 @@ import {
   shownScriptedFailure,
 } from "../../src/testing/scripted-model.ts";
 import {
+  Array as Arr,
   Cause,
   Deferred,
   Duration,
@@ -263,7 +264,7 @@ export const defaultTestResponder = (invocation: ScriptedInvocation): ScriptedTu
     return { text: `Saw ${images.length} image(s)` };
   }
   if (instructions.includes("You are a subagent")) {
-    const earlier = invocation.history.filter((message) => message.role === "user").length - 1;
+    const earlier = Arr.countBy(invocation.history, (message) => message.role === "user") - 1;
     return { text: `child done: ${user} (earlier user messages: ${Math.max(0, earlier)})` };
   }
   return { text: "Hello from fast-1" };

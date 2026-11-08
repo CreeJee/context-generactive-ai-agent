@@ -1,5 +1,5 @@
 import { runNativeEffect } from "../src/runtime/native-effect.ts";
-import { Console, Result, Function as EffectFunction } from "effect";
+import { Array as Arr, Console, Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../src/truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { NodeCrypto, NodeServices } from "@effect/platform-node";
@@ -260,7 +260,7 @@ const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "opt
     selection,
     durationMs: DateTime.toEpochMillis(DateTime.nowUnsafe()) - started,
     independentWorkBeforeChildCompletion: independent,
-    reportCalls: calls.filter((call) => call.function.name === "get_subagent_reports").length,
+    reportCalls: Arr.countBy(calls, (call) => call.function.name === "get_subagent_reports"),
     toolCalls: calls.map((call) => call.function.name),
     correctTotals: answer.includes("10") && answer.includes("18"),
     answer,

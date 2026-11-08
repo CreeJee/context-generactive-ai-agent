@@ -168,7 +168,7 @@ const walkFiles = Effect.fn("FileListing.walkFiles")(function* (
         files: Chunk.fromIterable(
           read.filter(({ entry }) => entry.type === "File").map(({ path }) => path),
         ),
-        excluded: directories.filter(credential).length,
+        excluded: EffectArray.countBy(directories, credential),
         truncated: entries.some(({ full }) => full),
       };
       // The last subdirectory read is visited first, as from a stack of pending directories.

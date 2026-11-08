@@ -500,7 +500,7 @@ const make = (home: string) =>
     const countsOf = (found: readonly Transcript[]): TranscriptCounts =>
       importSources.map((source) => ({
         source: source.name,
-        transcripts: found.filter((transcript) => transcript.source === source.name).length,
+        transcripts: EffectArray.countBy(found, (transcript) => transcript.source === source.name),
       }));
 
     return {

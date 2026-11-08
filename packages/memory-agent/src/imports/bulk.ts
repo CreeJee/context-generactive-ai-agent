@@ -241,7 +241,7 @@ const make = Effect.gen(function* () {
       );
       return {
         written: yield* Ref.get(written),
-        repeated: repeats.filter((repeat) => repeat).length,
+        repeated: EffectArray.countBy(repeats, (repeat) => repeat),
       } satisfies MigrationCount;
     }).pipe(
       sql.withTransaction,

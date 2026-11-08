@@ -8,7 +8,7 @@ import { isTruthy } from "../src/truthy.ts";
 //   --models-root <dir>                    read the models from <dir>/models instead (a copy)
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { NodeServices } from "@effect/platform-node";
-import { Context, FileSystem } from "effect";
+import { Array as Arr, Context, FileSystem } from "effect";
 import { nodePlatform } from "../src/runtime/node-platform.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { path } from "../src/runtime/synchronous-path.ts";
@@ -178,7 +178,7 @@ const evaluate = Effect.fn("eval.evaluate")(function* (
         }),
       );
       const ranks = ranked.map(({ rank }) => rank);
-      const within = (limit: number) => ranks.filter((rank) => rank >= 0 && rank < limit).length;
+      const within = (limit: number) => Arr.countBy(ranks, (rank) => rank >= 0 && rank < limit);
       const top1 = within(1);
       const top3 = within(3);
       const top5 = within(5);

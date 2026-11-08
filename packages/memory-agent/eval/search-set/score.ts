@@ -44,7 +44,7 @@ const scoreItem = (
 ): ItemScore => {
   const gradeAt = (id: string) => Option.getOrElse(HashMap.get(grades, id), () => 0);
   const values = [...HashMap.values(grades)];
-  const relevant = values.filter((grade) => grade > 0).length;
+  const relevant = Arr.countBy(values, (grade) => grade > 0);
   const ideal = dcg(Arr.sort(values, Order.flip(Order.Number)).slice(0, 10).map(gainOf));
   const top10 = row.ids.slice(0, 10);
   const top20 = row.ids.slice(0, 20);
@@ -54,10 +54,10 @@ const scoreItem = (
     slices: slicesOf(item, need),
     failed: row.failed !== undefined,
     ndcg: ideal === 0 ? 0 : dcg(top10.map((id) => gainOf(gradeAt(id)))) / ideal,
-    recall: top20.filter((id) => gradeAt(id) > 0).length / Math.max(1, relevant),
+    recall: Arr.countBy(top20, (id) => gradeAt(id) > 0) / Math.max(1, relevant),
     reciprocal: first < 0 ? 0 : 1 / (first + 1),
     answer: top10.some((id) => gradeAt(id) === 2) ? 1 : 0,
-    judged: top10.filter((id) => HashMap.has(grades, id)).length / Math.max(1, top10.length),
+    judged: Arr.countBy(top10, (id) => HashMap.has(grades, id)) / Math.max(1, top10.length),
     complete: top10.every((id) => HashMap.has(grades, id)),
   };
 };
@@ -151,7 +151,7 @@ export const scoreRuns = Effect.fn("searchSet.score")(function* ({
     ),
     ({ slice, run, selected }) =>
       Console.log(
-        `| ${slice} | ${run} | ${selected.length} | ${selected.filter((score) => score.failed).length} | ${mean(selected.map((score) => score.ndcg))} | ${mean(selected.map((score) => score.recall))} | ${mean(selected.map((score) => score.reciprocal))} | ${mean(selected.map((score) => score.answer))} | ${mean(selected.map((score) => score.judged))} |`,
+        `| ${slice} | ${run} | ${selected.length} | ${Arr.countBy(selected, (score) => score.failed)} | ${mean(selected.map((score) => score.ndcg))} | ${mean(selected.map((score) => score.recall))} | ${mean(selected.map((score) => score.reciprocal))} | ${mean(selected.map((score) => score.answer))} | ${mean(selected.map((score) => score.judged))} |`,
       ),
     { discard: true },
   );
@@ -168,7 +168,7 @@ export const scoreRuns = Effect.fn("searchSet.score")(function* ({
             Option.toArray(HashMap.get(baseOf, score.item)).map((base) => score.ndcg - base),
           );
           return Console.log(
-            `${run} vs ${baseline.run}: nDCG@10 wins ${changes.filter((d) => d > 1e-9).length}, losses ${changes.filter((d) => d < -1e-9).length}, ties ${changes.filter((d) => Math.abs(d) <= 1e-9).length}; mean change ${mean(changes)}`,
+            `${run} vs ${baseline.run}: nDCG@10 wins ${Arr.countBy(changes, (d) => d > 1e-9)}, losses ${Arr.countBy(changes, (d) => d < -1e-9)}, ties ${Arr.countBy(changes, (d) => Math.abs(d) <= 1e-9)}; mean change ${mean(changes)}`,
           );
         },
         { discard: true },

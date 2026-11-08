@@ -225,10 +225,10 @@ const build = Effect.gen(function* () {
   ];
   const lines = yield* Effect.forEach(unique, (item) => encodeJson(item));
   yield* fs.writeFileString(setFile, lines.join("\n") + "\n");
-  const count = (group: string) => unique.filter((item) => item.group === group).length;
+  const count = (group: string) => Arr.countBy(unique, (item) => item.group === group);
   yield* Console.log(yield* encodeJson(seen));
   yield* Console.log(
-    `find_memory calls ${calls.filter((call) => call.tool === "find_memory").length}; items find ${count("find")} recall ${count("recall")}; relevant per item ${(unique.reduce((sum, item) => sum + item.relevant.length, 0) / Math.max(1, unique.length)).toFixed(2)}`,
+    `find_memory calls ${Arr.countBy(calls, (call) => call.tool === "find_memory")}; items find ${count("find")} recall ${count("recall")}; relevant per item ${(unique.reduce((sum, item) => sum + item.relevant.length, 0) / Math.max(1, unique.length)).toFixed(2)}`,
   );
   db.close();
 });
@@ -286,9 +286,11 @@ const score = Effect.gen(function* () {
   const items = (yield* Effect.forEach(
     (yield* fs.readFileString(setFile)).split("\n").filter((line) => line.trim().length > 0),
     (line) => decodeItem(line),
-  ))
-    .filter((item) => onlyGroup === undefined || item.group === onlyGroup)
-    .filter((item) => !doneKeys.has(`${item.group}|${querySha(item.query)}`));
+  )).filter(
+    (item) =>
+      (onlyGroup === undefined || item.group === onlyGroup) &&
+      !doneKeys.has(`${item.group}|${querySha(item.query)}`),
+  );
   const search = yield* MemorySearch;
   // Rows land in the dump as they finish: a long run shows progress, and a killed run keeps
   // the rows it already scored. Memory text stays out: ids and scores only.
@@ -312,7 +314,7 @@ const score = Effect.gen(function* () {
             const ids = result.matches.map((match) => match.id);
             const first = ids.findIndex((id) => item.relevant.includes(id));
             const within = (k: number) =>
-              item.relevant.filter((id) => ids.slice(0, k).includes(id)).length /
+              Arr.countBy(item.relevant, (id) => ids.slice(0, k).includes(id)) /
               item.relevant.length;
             return {
               group: item.group,
@@ -358,7 +360,7 @@ const score = Effect.gen(function* () {
   for (const group of new Set([...summaryRows.values()].map((row) => row.group))) {
     const selected = [...summaryRows.values()].filter((row) => row.group === group);
     yield* Console.log(
-      `| ${label} | ${group} | ${selected.length} | ${selected.filter((row) => row.failed).length} | ${selected.filter((row) => row.degraded.length > 0).length} | ${mean(selected.map((row) => row.reciprocal))} | ${mean(selected.map((row) => row.at5))} | ${mean(selected.map((row) => row.at12))} | ${mean(selected.map((row) => row.at16))} |`,
+      `| ${label} | ${group} | ${selected.length} | ${Arr.countBy(selected, (row) => row.failed)} | ${Arr.countBy(selected, (row) => row.degraded.length > 0)} | ${mean(selected.map((row) => row.reciprocal))} | ${mean(selected.map((row) => row.at5))} | ${mean(selected.map((row) => row.at12))} | ${mean(selected.map((row) => row.at16))} |`,
     );
   }
 });

@@ -1,4 +1,4 @@
-import { Context, Data, Effect, Layer, Option } from "effect";
+import { Array as Arr, Context, Data, Effect, Layer, Option } from "effect";
 import { Number as EffectNumber } from "effect";
 import { Workflows } from "../workflow/workflow.ts";
 import { CardAttempts, type KanbanGoal } from "./card-attempts.ts";
@@ -116,7 +116,7 @@ const make = Effect.gen(function* () {
       const removed = yield* removeGoalFolder(goal);
       yield* Effect.annotateCurrentSpan({
         cards: folder.cardIds.length,
-        settled: settled.filter(Boolean).length,
+        settled: Arr.countBy(settled, Boolean),
         removed: removed ? 1 : 0,
       });
     },
@@ -243,11 +243,11 @@ const make = Effect.gen(function* () {
     const cleaned =
       mode === "report"
         ? 0
-        : (yield* Effect.forEach(orphans, clean)).filter(Boolean).length +
+        : Arr.countBy(yield* Effect.forEach(orphans, clean), Boolean) +
           EffectNumber.sumAll(
             yield* Effect.forEach(new Set(stale.values()), (root) =>
               worktrees.prune(root).pipe(
-                Effect.as([...stale.values()].filter((other) => other === root).length),
+                Effect.as(Arr.countBy(stale.values(), (other) => other === root)),
                 Effect.catchTag("CardWorktreeFailed", (failure) =>
                   Effect.as(warned("Registered worktrees were not pruned", { root })(failure), 0),
                 ),

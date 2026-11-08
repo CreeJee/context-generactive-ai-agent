@@ -1,4 +1,4 @@
-import { Deferred, Effect, FileSystem, Option, Path, Ref, Schedule } from "effect";
+import { Array as Arr, Deferred, Effect, FileSystem, Option, Path, Ref, Schedule } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { expect } from "vite-plus/test";
 import { layer } from "@effect/vitest";
@@ -362,7 +362,7 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
             yield* orchestrator.start(goalB.sessionId);
             yield* waitForCards(
               goalB.sessionId,
-              (cards) => cards.filter((step) => step.status === "done").length === 2,
+              (cards) => Arr.countBy(cards, (step) => step.status === "done") === 2,
             );
             yield* Deferred.succeed(gateA, undefined);
             yield* eventually(mergeOf(goalA.goalInstanceId), mergeIs("Merged"));

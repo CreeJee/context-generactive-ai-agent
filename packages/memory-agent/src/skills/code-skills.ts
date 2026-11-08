@@ -1,6 +1,5 @@
 import { isTruthy } from "../truthy.ts";
 import {
-  Array as EffectArray,
   Clock,
   Context,
   Data,
@@ -107,15 +106,14 @@ const leadingPrograms = (script: string) =>
     .map((line) => line.trim())
     .filter((line) => line !== "" && !line.startsWith("#"))
     .flatMap((line) => line.split(/;|&&|\|\|/))
-    .map((step) => (step.split("|")[0] ?? "").trim().split(/\s+/))
-    .map(
-      (words) =>
-        EffectArray.dropWhile(
-          words,
-          (word) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(word) || HashSet.has(prefixes, word),
-        )[0] ?? "",
-    )
-    .map((program) => program.split("/").at(-1) ?? "")
+    .map((step) => {
+      const words = (step.split("|")[0] ?? "").trim().split(/\s+/);
+      const program =
+        words.find(
+          (word) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(word) && !HashSet.has(prefixes, word),
+        ) ?? "";
+      return program.split("/").at(-1) ?? "";
+    })
     .filter((program) => program !== "" && !HashSet.has(setup, program));
 
 /** Refuses a script that only wraps what built-in tools do. */

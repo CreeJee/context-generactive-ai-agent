@@ -1,4 +1,4 @@
-import { Cause } from "effect";
+import { Array as Arr, Cause } from "effect";
 import { logFailure } from "../runtime/logged-failures.ts";
 import { HashSet, Context, Effect, Layer, Option, Schema } from "effect";
 import { Kagi, maxExtractUrls } from "../kagi/kagi.ts";
@@ -115,7 +115,7 @@ const make = Effect.gen(function* () {
               .map((url) => ({ url, code: "missing", message: null })),
           ],
           requested: urls.length,
-          succeeded: pages.filter((page) => page.status === "ok").length,
+          succeeded: Arr.countBy(pages, (page) => page.status === "ok"),
           note: "Markdown is Kagi's conversion of each page, not the original HTML.",
         };
       }),

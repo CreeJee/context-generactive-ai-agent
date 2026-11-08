@@ -409,7 +409,7 @@ const make = (running: boolean) =>
         return {
           rows: rows.length,
           last: marks.at(-1)?.row_key ?? after,
-          hidden: hidden.filter(isTruthy).length,
+          hidden: Arr.countBy(hidden, isTruthy),
         };
       });
 
