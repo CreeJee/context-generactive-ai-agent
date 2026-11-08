@@ -520,3 +520,13 @@ it("counts Korean closer to how models do than characters / 4", () => {
   expect(estimateTokens({ role: "user", content: "가나다abcd" })).toBe(4);
   expect(estimateTokens({ role: "user", content: "abcdefgh" })).toBe(2);
 });
+
+it("counts each image as much as a provider documents one may cost", () => {
+  expect(
+    estimateTokens({
+      role: "tool",
+      toolCallId: "screenshot",
+      content: [{ type: "text", content: "abcd" }, { type: "image" }, { type: "image" }],
+    }),
+  ).toBe(1 + 2 * 4_784);
+});

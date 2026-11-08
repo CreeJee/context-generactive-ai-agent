@@ -114,7 +114,7 @@ export const budgetFor = (contextWindow: number): Budget => ({
 
 /**
  * `budget` once the provider counted `overhead` tokens beyond our estimate of the messages: the
- * system prompt, tool definitions, images and its own tokenizer. Messages are left out past the
+ * system prompt, tool definitions and its own tokenizer. Messages are left out past the
  * room that leaves under the ceiling, when that is lower than `leaveOutAt`.
  */
 const withOverhead = (budget: Budget, overhead: number): Budget => ({
@@ -132,9 +132,20 @@ export const messageText = (message: ConversationMessage) =>
 const isText = Schema.is(Schema.String);
 
 /**
+ * What an image is counted as, its size unread: the most a provider documents one costs, an
+ * Anthropic high-resolution model's image at 2,576 pixels on the long edge.
+ */
+const imageTokens = 4_784;
+
+const imagesIn = (message: ConversationMessage) =>
+  isText(message.content)
+    ? 0
+    : (message.content ?? []).filter((part) => part.type === "image").length;
+
+/**
  * Tokens of a message, roughly: English and code take about four characters a token, Korean and
  * other scripts about one. The default estimate (characters / 4) would let Korean text grow far
- * past the budget before anything is compacted.
+ * past the budget before anything is compacted. Each image counts as {@link imageTokens}.
  */
 export function estimateTokens(message: ConversationMessage): number {
   const calls = isTruthy(message.toolCalls?.length) ? JSON.stringify(message.toolCalls) : "";
@@ -142,7 +153,7 @@ export function estimateTokens(message: ConversationMessage): number {
   const ascii = text.replace(/\P{ASCII}/gu, "").length;
   // Each character outside ASCII is a token; a surrogate pair is one character.
   const other = text.match(/\P{ASCII}/gu)?.length ?? 0;
-  return Math.ceil(ascii / 4) + other;
+  return Math.ceil(ascii / 4) + other + imagesIn(message) * imageTokens;
 }
 
 export const estimateConversation = (messages: ReadonlyArray<ConversationMessage>) =>
