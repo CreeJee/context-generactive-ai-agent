@@ -17,6 +17,7 @@
 - `ApiUsage` — SQLite `api_usage_responses` 원장 서비스(`ApiUsage.layer`)이다. `record(response)`는 행 id를 돌려주고 `byRootSession(rootSessionId)`는 `ApiUsageTotals`를 돌려준다.
 - `recordUsage` / `apiUsageHook` / `ApiUsageRejected` / `ApiUsageResponse` / `ApiUsageTotals` — Effect AI 응답 usage를 원장에 기록하는 dual 함수와 `RunHook.usage` 훅, 거부 오류(`attribution-missing`|`invalid-count`|`unknown-cache-mode`|`cache-exceeds-input`), 입출력 타입이다.
 - `compactEffect` / `requestHistory` / `compactionHook` / `compactByHand` — 모델에 보낼 대화를 압축하는 본체, 요청 단위 히스토리와 적용 stage, Effect AI 루프용 compaction 훅, 수동 `/compact`이다.
+- `nextRequestHistory` / `NextRequest` / `SentRequest` / `RequestBasis` / `RebuildReason` / `LastRequests` — 앞 요청에 새 메시지만 붙여 다음 요청을 만들거나, 붙일 수 없을 때 그 이유와 함께 `requestHistory`로 다시 계산한다. `LastRequests`(`LastRequests.layer`)는 세션마다 마지막 요청을 provider가 캐시하는 동안 메모리에 둔다.
 - `LeaveOutPointers` / `memoryPointers` / `clearedNotice` — compaction이 뺀 것 자리에 둘 글이다. 비운 도구 출력, 미리보기 머리말의 전체 결과 위치, 뺀 메시지 표시를 정한다. `CompactionSources.pointers`로 받고, 없으면 기억 노드 pointer(`memoryPointers`)를 쓴다. 서브에이전트는 자기 transcript를 가리키는 pointer를 넘긴다. 언제 무엇을 빼는지는 pointer와 상관없이 같다.
 - `ConversationMessage` / `ConversationToolCall` / `CompactionMessage` / `CompactionFailed` / `CompactionReason` — compaction이 읽는 메시지 형태, 대체 메시지, 실패 오류(operation·reason·cause)이다.
 - `budgetFor` / `Budget` / `leaveOutAtShare` / `estimateTokens` / `estimateConversation` / `messageText` / `clearedOutput` — 컨텍스트 예산(leaveOutAt = window*0.55, inputCeiling = window − 답할 자리), 토큰 추정, 메시지 텍스트, 비운 도구 출력 문구이다.
@@ -25,7 +26,7 @@
 - `StepBlock` / `StepsToSummarize` / `DueSteps` / `dueSteps` — 진행 중인 run의 앞 step 요약 블록, 요약기에 넘기는 step과 다시 읽을 위치, 요약할 차례가 된 step을 고르는 함수이다.
 - `stepSummarizer` / `stepSummaryInstructions` / `stepSummaryPrompt` (`step-summaries.ts`) — run의 앞 step을 run 모델의 가장 싼 강도로 요약하는 함수와 그 지침·입력이다. 실패하면 로그를 남기고 none을 돌려준다.
 - `cheapSummary` / `SummaryServices` / `shorten` (`turn-summaries.ts`) — 턴 요약과 step 요약이 함께 쓰는 단일 호출(가장 싼 강도, usage 기록, 시간 제한)과 글 자르기이다.
-- `contextView` / `contextUsageHook` / `lastContextUsageEffect` / `pendingColdObservationEffect` / `consumeColdObservationEffect` / `coldObservationId` / `ContextUsageFailed` / `ContextUsageReason` / `StoredContextUsage` / `contextUsageNamespace` / `consumedColdUsageNamespace` — 요청별 컨텍스트 사용량 저장·라이브 전송과 cache-cold 관측 처리이다.
+- `contextView` / `contextUsageHook` / `lastContextUsageEffect` / `ContextUsageFailed` / `ContextUsageReason` / `StoredContextUsage` / `contextUsageNamespace` — 요청별 컨텍스트 사용량 저장과 라이브 전송이다.
 - `TurnSummaries` — 이전 턴 요약을 만드는 `Context.Service`이다. `TurnSummaries.layer(automatic = true)`와 `layerNoDeps(automatic = true)`를 제공하고, 관련 `summaryInstructions`·`TurnSummaryFailed`가 있다.
 - `HandoffState` / `SavedHandoff` / `modelHandoffNamespace` / `fingerprint` / `legacyFingerprint` — 모델 handoff 저장 상태(`baseline`|`handoff` TaggedUnion)와 메시지 fingerprint(v2 정규화 sha256, legacy)이다.
 - `modelHandoffHistoryEffect` / `handoffHistory` / `ModelHandoffOptions` / `ModelHandoffFailed` / `ModelHandoffReason` / `handoffNotice` — 모델이 바뀔 때 이전 턴을 텍스트로 넘기는 히스토리 생성과 오류이다.
@@ -45,18 +46,20 @@
 - Effect AI usage를 기록할 때 Anthropic 행의 inputTokens는 total - cacheRead - cacheWrite(비캐시분)만 저장한다. 카운트를 하나도 보고하지 않은 응답은 행을 남기지 않는다.
 - `apiUsageHook`은 카운트만 기록한다. 프롬프트·메시지·도구 인자는 절대 저장하지 않는다.
 - compaction의 answered 도구 출력 비우기는 마지막 '도구 호출 없는 assistant 답변'까지만 적용한다. 진행 중인 실행의 도구 결과는 그대로 둔다.
-- `keepLatestAnswered`일 때 최신 답변 턴은 다음 실행이 답할 때까지 유지한다. 각 도구 결과는 정확히 한 번만 바뀌어 요청 prefix가 캐시 가능하게 남는다. 비운 결과는 메모리 노드 id를 안내한다.
+- `keepLatestAnswered`일 때 최신 답변 턴은 다음 실행이 답할 때까지 유지한다. 비운 결과는 메모리 노드 id를 안내한다.
+- `compactionHook`의 요청은 앞 요청에 새 메시지만 붙인다(`nextRequestHistory`). 새 메시지는 미리보기와 빈 사용자 글 빼기만 거친다. 다시 계산(`requestHistory`)은 붙이면 `leaveOutAt`을 넘을 때, `/compact` 뒤, 대화가 앞 요청 때와 달라졌을 때, 앞 요청이 없거나 provider가 캐시하는 시간(`RunModel.promptCacheFor`)이 지났을 때만 한다. 답한 도구 출력 비우기, 턴 요약 블록, step 요약 블록은 그 다시 계산하는 요청부터 보낸다. 요청마다 `model request history` 로그에 basis와 유지한 메시지 수, 추정 토큰, stage를 남긴다.
+- retrieval appendix는 찾은 것만 run 동안 기억한다. 이어 붙일 때는 새 사용자 턴 바로 앞에 넣고, 앞 요청에 이미 있는 appendix는 다시 넣지 않는다.
 - 요약 블록은 불변이다. 블록을 추가해도 이전 메시지를 다시 쓰지 않는다(프로바이더 KV prefix 유지).
 - `SummaryBlock`은 `nextTurnNodeId`의 기록 텍스트가 해당 위치의 사용자 턴과 같을 때만 쓴다(`sameTurn`, `[redacted:` 포함 노드는 어떤 텍스트와도 일치). `linedUp`은 `end`가 엄격히 증가하는 앞쪽 연속 블록만 받는다.
 - `Budget.compactAt`은 deprecated 호환 필드이며 항상 0이다. leave-out 기준은 `Math.floor(contextWindow * 0.55)`이다.
-- `Budget.inputCeiling`은 창에서 답할 자리(16,384와 창의 1/5 중 작은 값)를 뺀 값이다. `compactionHook`은 run의 step 사용량이 오면 provider가 센 입력에서 우리 메시지 추정을 뺀 값(시스템 프롬프트, 도구 정의, 이미지, tokenizer 차이)을 기억한다. 다음 step부터는 `inputCeiling`에서 그 값을 뺀 자리가 `leaveOutAt`보다 작을 때 그 자리를 기준으로 leave-out한다. run의 첫 step과 입력 수를 알리지 않는 provider는 추정만 쓴다.
-- 진행 중인 run은 leave-out하지 않으므로, step이 많으면 출력을 pointer로 바꿔도 호출과 pointer만으로 창을 넘을 수 있다. 그래서 `compactionHook`은 run의 앞 step을 블록으로 요약한다. 블록 하나는 20 step(`stepBlockSteps`)이고, 최근 10 step(`recentRawSteps`)은 원문으로 둔다. 요약하지 않은 step이 `leaveOutAt`의 절반을 넘을 때 다음 블록을 요약할 차례다. 요약은 run의 scope에서 백그라운드로 하나씩 만든다. 차례를 찾은 요청은 기다리지 않고, 그 뒤 요청부터 요약을 그 step들 자리에 보낸다. 블록은 첫 step과 마지막 step의 첫 call id로 찾고, run이 끝나면 버린다. 블록 안 출력 중 다시 읽을 곳이 없는 것이 있으면 기록될 때까지 요약하지 않는다. 요약이 한 번 실패하면 그 run에서는 다시 요청하지 않고 pointer만 쓴다.
-- `estimateTokens`는 ASCII 4자당 1토큰, 비ASCII 1자당 1토큰으로 센다(한국어 과소추정 방지).
+- `Budget.inputCeiling`은 창에서 답할 자리(16,384와 창의 1/5 중 작은 값)를 뺀 값이다. `compactionHook`은 run의 step 사용량이 오면 provider가 센 입력에서 우리 메시지 추정을 뺀 값(시스템 프롬프트, 도구 정의, tokenizer 차이)을 기억한다. 다음 step부터는 `inputCeiling`에서 그 값을 뺀 자리가 `leaveOutAt`보다 작을 때 그 자리를 기준으로 leave-out한다. run의 첫 step과 입력 수를 알리지 않는 provider는 추정만 쓴다.
+- 진행 중인 run은 leave-out하지 않으므로, step이 많으면 출력을 pointer로 바꿔도 호출과 pointer만으로 창을 넘을 수 있다. 그래서 `compactionHook`은 run의 앞 step을 블록으로 요약한다. 블록 하나는 20 step(`stepBlockSteps`)이고, 최근 10 step(`recentRawSteps`)은 원문으로 둔다. 요약하지 않은 step이 `leaveOutAt`의 절반을 넘을 때 다음 블록을 요약할 차례다. 그중 방금 보낸 요청에 블록만큼의 step이 더해지면 `leaveOutAt`을 넘을 때 요약을 시작한다. 요약은 run의 scope에서 백그라운드로 하나씩 만든다. 차례를 찾은 요청은 기다리지 않고, 다음 다시 계산하는 요청부터 요약을 그 step들 자리에 보낸다. 블록은 첫 step과 마지막 step의 첫 call id로 찾고, run이 끝나면 버린다. 블록 안 출력 중 다시 읽을 곳이 없는 것이 있으면 기록될 때까지 요약하지 않는다. 요약이 한 번 실패하면 그 run에서는 다시 요청하지 않고 pointer만 쓴다.
+- `estimateTokens`는 ASCII 4자당 1토큰, 비ASCII 1자당 1토큰으로 센다(한국어 과소추정 방지). 이미지는 크기를 읽지 않고 하나에 4,784토큰(Anthropic 고해상도 모델의 문서 최대치)으로 센다.
 - `defaultSummaryStartPercent = 25`는 `docs/decisions.md` 2026-10-13 결정이다. 최근 사용자 턴 2개(`recentRawUserTurns`)는 항상 원문으로 보낸다.
 - `handoff-state.ts`는 모델 handoff 루프와 분리되어 있다. 시작 시 TanStack 행 마이그레이션이 루프를 로드하지 않고 상태·fingerprint를 읽기 위해서다. `fingerprint`는 'v2:' 접두와 객체 키 정렬로 UI hydration의 필드 순서 변화에 견딘다. `legacyFingerprint`는 이전 행 비교용으로 남긴다.
 - `HandoffState.handoff.through`는 0보다 큰 정수이다. `context`는 이전 버전 호환용 optional 필드이며 더 이상 전송하지 않는다.
 - `run-state.ts`는 브라우저 번들이 쓰므로 `effect`와 다른 계약 모듈(`sessions/contracts.ts`, `workflow/contracts.ts`) 밖의 코드를 import하지 않는다. `chat-store/schema.ts`의 `StoredRunStatus`가 이 모듈의 `RunStatus`다.
-- ContextUsage 저장 스키마는 cache-cold 추적 이전에 저장된 행을 위해 `cachedTokens`·`observationId`·`compactionStage`를 decoding default null로 받는다. 저장 형식 하위 호환을 유지해야 한다.
+- ContextUsage 저장 스키마는 예전 행을 위해 `cachedTokens`·`compactionStage`를 decoding default null로 받는다. 예전 행의 `observationId`는 읽지 않는다. 저장 형식 하위 호환을 유지해야 한다.
 - `memoryRulesFor`는 실행에 `promote_memory_candidate`/`use_promoted_memory` 도구가 없으면 해당 규칙 줄을 뺀다. `promotionRules` 값은 `memoryInstructions` 줄 접두와 정확히 일치해야 한다.
 - 한 응답의 도구 호출은 동시에 실행되고 순서가 보장되지 않는다(`docs/decisions.md` "도구 호출 사이에 순서를 두지 않는다"). 의존 호출은 다음 응답에서 한다.
 - `AgentOperationFailed`의 `cause`는 서버에만 남기고 클라이언트에 노출하지 않는다.
@@ -68,7 +71,7 @@
 ## Side Effects
 
 - SQLite `api_usage_responses` 테이블: `ApiUsage.record`가 INSERT ... RETURNING id를 실행하고 `byRootSession`이 집계 SELECT를 실행한다. created_at은 `Clock.currentTimeMillis`로 채운다.
-- ChatMetadata 읽기·쓰기(네임스페이스 `memory-agent/manual-compaction`, `memory-agent/context-usage`, `memory-agent/consumed-cold-usage`, `memory-agent/model-handoff`): compaction 상태, 컨텍스트 사용량·cold 관측 소비, handoff 상태를 저장한다. 턴 요약은 `ChatMetadata.summaries`/`replaceSummaries`로 `turn_summary_blocks`에 블록 한 개당 한 행으로 둔다. `turn-summaries.ts`는 맞는 요약 뒤에 새 블록을 하나씩 붙인다.
+- ChatMetadata 읽기·쓰기(네임스페이스 `memory-agent/manual-compaction`, `memory-agent/context-usage`, `memory-agent/model-handoff`): compaction 상태, 컨텍스트 사용량, handoff 상태를 저장한다. 예전 cold 관측 소비 기록(`memory-agent/consumed-cold-usage`)은 더 읽지 않는다. 턴 요약은 `ChatMetadata.summaries`/`replaceSummaries`로 `turn_summary_blocks`에 블록 한 개당 한 행으로 둔다. `turn-summaries.ts`는 맞는 요약 뒤에 새 블록을 하나씩 붙인다.
 - `contextUsageHook`은 `RunScope.emit`으로 실행 중 `memory-agent.context` 라이브 이벤트를 페이지에 보낸다.
 - compaction의 `memoryLookups`/`CompactionSources`는 메모리 노드 저장소에서 tool_result 노드 id와 노드 텍스트를 읽는다(`NodeStoreFailed`).
 - `fingerprint`/`legacyFingerprint`는 동기 sha256(`packages/memory-agent/src/runtime/synchronous-crypto.ts`)을 계산한다.

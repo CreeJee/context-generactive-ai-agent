@@ -41,6 +41,7 @@
 - `AuthProvider`에는 의도적으로 토큰·자격증명 getter가 없다. 추가하지 말 것.
 - `ShownFailure`는 앱의 문구만 담고 공급자 원문 텍스트를 절대 담지 않는다.
 - `RunModel.historyKey`는 자격증명을 보관하지 않고 연결 ID만 고정한다. `RunModel.source`는 모델이 쓰는 모든 메시지에 기록되고 replay가 비교한다.
+- `RunModel.promptCacheFor`는 provider가 요청 앞부분을 캐시하는 시간이다. compaction은 이 시간이 지난 앞 요청에 이어 붙이지 않는다. Anthropic 구독은 요청한 보존(`long` 1시간, `short` 5분), OpenAI 구독은 자동 캐시의 문서 최소치인 5분, compatible은 서버가 밝히지 않으므로 5분이다.
 - `AgentModelRuntime.model`은 `Scope.Scope`를 요구한다. 런에 고정된 계정 등은 scope가 닫힐 때 해제된다. 루프는 런마다 모델 하나를 만들고 프롬프트 캐시는 thread로 키잉한다.
 - `ActiveProvider`는 다른 공급자로 조용히 대체하지 않는다. 설정에 provider가 없으면 `provider`는 `openai`, `selected`는 null이다. `authFor`는 `ProviderUnavailable`/`ProviderOperationFailed`를 `AuthConnectionState.error`로 바꿔 보고한다.
 - 운영 이미지 라우트는 `productionEnabled && verification === "verified"`인 계약만이다. `openai:provider_tool:image_generation`은 unverified·비활성이고, Anthropic 이미지 생성은 unsupported다.
