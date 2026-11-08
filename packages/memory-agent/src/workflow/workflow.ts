@@ -513,18 +513,26 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
     };
     /** The state of `current`, a conflict 0.0.17 left repaired in memory. */
     const goalState = (current: WorkflowState) => goalStateOf(standingOf(current));
-    /** `current` with a conflict repaired and a stale progress position corrected, saved if changed. */
-    const reconciled = Effect.fnUntraced(function* (sessionId: string, current: WorkflowState) {
+    /** `current` with a conflict repaired and a stale progress position corrected. */
+    const reconciledState = (current: WorkflowState, now: string) => {
       const repaired = goalState(current).standing;
-      const phase = reconciledPhase(repaired);
+      return withStanding(current, { ...repaired, phase: reconciledPhase(repaired) }, now);
+    };
+    /** `current` reconciled, saved if changed. */
+    const reconciled = Effect.fnUntraced(function* (sessionId: string, current: WorkflowState) {
       const now = yield* nowIso;
-      const next = withStanding(current, { ...repaired, phase }, now);
+      const next = reconciledState(current, now);
       if (unchanged(next, current)) return current;
       return yield* save(sessionId, {
         ...next,
         ledger: [
           ...next.ledger,
-          event(current, "phase_changed", `${current.phase} -> ${phase} (state reconciled)`, now),
+          event(
+            current,
+            "phase_changed",
+            `${current.phase} -> ${next.phase} (state reconciled)`,
+            now,
+          ),
         ],
       });
     });
@@ -753,7 +761,15 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
 
       /** Repairs stale persisted phases before a new turn or an idle status response. */
       reconcile: (sessionId: string) =>
-        transacted(Effect.flatMap(get(sessionId), (current) => reconciled(sessionId, current))),
+        // A state that needs no repair is only read. The write transaction, which waits for any
+        // other writer while it holds the app's one connection, is for a repair alone.
+        Effect.flatMap(persisted(get(sessionId)), (current) =>
+          Effect.flatMap(nowIso, (now) =>
+            unchanged(reconciledState(current, now), current)
+              ? Effect.succeed(current)
+              : transacted(Effect.flatMap(get(sessionId), (fresh) => reconciled(sessionId, fresh))),
+          ),
+        ),
 
       /**
        * What the page says beside `state` that the state alone does not show: a kanban Goal edit
