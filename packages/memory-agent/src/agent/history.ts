@@ -2,8 +2,6 @@ import {
   Array as EffectArray,
   DateTime,
   Function as EffectFunction,
-  HashSet,
-  Match,
   Option,
   Schema,
   String as EffectString,
@@ -83,88 +81,58 @@ function userMessage(node: Node, attachments: readonly Attachment[]): StoredMess
   );
 }
 
-/** The run's answer since its last tool result. */
-interface Segment {
-  readonly texts: ReadonlyArray<string>;
-  readonly toolCalls: ReadonlyArray<typeof StoredToolCall.Type>;
-}
-interface RunState {
-  readonly messages: ReadonlyArray<StoredMessage>;
-  readonly segment: Segment;
-  /** The tool calls whose result is in `messages`; a call keeps its first result. */
-  readonly results: HashSet.HashSet<string>;
-}
-const emptySegment: Segment = { texts: [], toolCalls: [] };
+const resultCallId = (node: Node) => node.detail.toolCallId ?? node.id;
 
 function runMessages(run: EffectArray.NonEmptyReadonlyArray<Node>): ReadonlyArray<StoredMessage> {
   // Every part of the answer has the run's first node's id and time.
   const identity = { id: run[0].id, createdAt: createdAt(run[0]) };
-  /** The segment as an assistant message, unless it is empty and not `forced`. */
-  const flushed = (state: RunState, forced: boolean): RunState => {
-    const { texts, toolCalls } = state.segment;
+  /**
+   * The segment (the run's answer between two tool results) as an assistant message, unless it is
+   * empty and not `forced`.
+   */
+  const answer = (segment: ReadonlyArray<Node>, forced: boolean): StoredMessage[] => {
+    const texts = segment
+      .filter((node) => node.kind === "assistant" && node.text.length > 0)
+      .map((node) => node.text);
+    const toolCalls = segment.filter((node) => node.kind === "tool_call").map(toolCall);
     const content = texts.length === 0 ? null : texts.join("");
-    const answer: StoredMessage = {
-      ...identity,
-      role: "assistant",
-      content,
-      ...optionalProperty(
-        "toolCalls",
-        EffectArray.isReadonlyArrayNonEmpty(toolCalls) ? toolCalls : undefined,
-      ),
-    };
-    return {
-      ...state,
-      segment: emptySegment,
-      messages:
-        forced || content !== null || toolCalls.length > 0
-          ? EffectArray.append(state.messages, answer)
-          : state.messages,
-    };
+    return forced || content !== null || toolCalls.length > 0
+      ? [
+          {
+            ...identity,
+            role: "assistant",
+            content,
+            ...optionalProperty(
+              "toolCalls",
+              EffectArray.isReadonlyArrayNonEmpty(toolCalls) ? toolCalls : undefined,
+            ),
+          },
+        ]
+      : [];
   };
-  const step = (state: RunState, node: Node): RunState =>
-    Match.value(node.kind).pipe(
-      Match.withReturnType<RunState>(),
-      Match.when("assistant", () =>
-        node.text.length === 0
-          ? state
-          : {
-              ...state,
-              segment: {
-                ...state.segment,
-                texts: EffectArray.append(state.segment.texts, node.text),
-              },
-            },
-      ),
-      Match.when("tool_call", () => ({
-        ...state,
-        segment: {
-          ...state.segment,
-          toolCalls: EffectArray.append(state.segment.toolCalls, toolCall(node)),
-        },
-      })),
-      // A result ends the segment before it; the run's first result keeps an empty one, so the
-      // answer starts before it.
-      Match.when("tool_result", () => {
-        const before = flushed(state, state.messages.length === 0);
-        const toolCallId = node.detail.toolCallId ?? node.id;
-        return HashSet.has(before.results, toolCallId)
-          ? before
-          : {
-              ...before,
-              messages: EffectArray.append(before.messages, {
-                role: "tool",
-                content: node.text,
-                toolCallId,
-              }),
-              results: HashSet.add(before.results, toolCallId),
-            };
-      }),
-      Match.orElse(() => state),
-    );
-  const { messages } = flushed(
-    run.reduce(step, { messages: [], segment: emptySegment, results: HashSet.empty() }),
-    false,
+  const results = run.flatMap((node, index) =>
+    node.kind === "tool_result" ? [{ node, index }] : [],
   );
+  // A call keeps its first result; a later one still ends the segment before it.
+  const firstResults = new Set(
+    Object.values(
+      EffectArray.groupBy(
+        results.map(({ node }) => node),
+        resultCallId,
+      ),
+    ).map((sameCall) => sameCall[0]),
+  );
+  // A result ends the segment before it; the run's first result keeps an empty one, so the
+  // answer starts before it. The nodes after the last result are the final segment.
+  const messages = [
+    ...results.flatMap(({ node, index }, nth): StoredMessage[] => [
+      ...answer(run.slice((results[nth - 1]?.index ?? -1) + 1, index), nth === 0),
+      ...(firstResults.has(node)
+        ? [{ role: "tool" as const, content: node.text, toolCallId: resultCallId(node) }]
+        : []),
+    ]),
+    ...answer(run.slice((results.at(-1)?.index ?? -1) + 1), false),
+  ];
   // A run that said nothing still answered the user's turn.
   return messages.length === 0 ? [{ ...identity, role: "assistant", content: null }] : messages;
 }
