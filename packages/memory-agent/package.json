@@ -15,7 +15,8 @@
     "url": "git+https://github.com/author/library.git"
   },
   "bin": {
-    "context-agent-acp": "./bin/context-agent-acp.ts"
+    "context-agent-acp": "./bin/context-agent-acp.ts",
+    "context-agent-cli": "./bin/context-agent-cli.ts"
   },
   "files": [
     "dist"
@@ -27,6 +28,7 @@
     "./native-effect": "./src/runtime/native-effect.ts",
     "./node-platform": "./src/runtime/node-platform.ts",
     "./synchronous-path": "./src/runtime/synchronous-path.ts",
+    "./storage-lock": "./src/runtime/storage-lock.ts",
     "./host-system": "./src/runtime/host-system.ts",
     "./runtime-resources": {
       "types": "./src/runtime/resources.ts",
@@ -44,6 +46,7 @@
     "./compatible-config": "./src/providers/openai-compatible-config.ts",
     "./package.json": "./package.json",
     "./acp": "./src/acp/index.ts",
+    "./memory-cli": "./src/cli/commands.ts",
     "./embed-worker": "./src/memory/embedding/embed-worker.ts",
     "./rerank-worker": "./src/memory/rerank/rerank-worker.ts",
     "./import-worker": "./src/imports/worker.ts",

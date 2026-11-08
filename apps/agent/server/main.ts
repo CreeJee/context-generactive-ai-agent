@@ -19,6 +19,7 @@ import { NodeStream, NodeSink, NodeTerminal } from "@effect/platform-node";
 import { ndJsonStream } from "@agentclientprotocol/sdk";
 import { defaultStorageRoot } from "memory-agent";
 import { createAppApi, startAcpAgent } from "memory-agent/acp";
+import { runMemoryCli } from "memory-agent/memory-cli";
 import { SdkStreams } from "memory-agent/acp";
 import { Cause, Context, Exit, Layer, MutableRef, Scope, Stream } from "effect";
 import * as build from "#server-build";
@@ -44,6 +45,10 @@ const usage = `사용법:
       인증이 없으니 믿을 수 있는 네트워크에서만 쓰세요.
   context-agent acp [--port 5173]
       에디터(Zed 등)용 ACP 에이전트(실행 중인 앱에 연결)
+  context-agent memory <명령> [플래그]
+      앱 없이 기억을 읽어요(읽기 전용): find-memory, read-evidence, trace-evidence, projects.
+      자세한 사용법은 context-agent memory --help.
+      acp와 memory는 첫 인자에서 예약어라, 그 이름의 폴더는 ./acp, ./memory로 열어요.
   context-agent --version
       실행 파일의 버전, 릴리스 채널과 대상 플랫폼을 표시해요.`;
 
@@ -60,6 +65,26 @@ const commandLineOptions = {
   help: Flag.Boolean("help").pipe(Flag.withAlias("h"), Flag.withDefault(false)),
   version: Flag.Boolean("version").pipe(Flag.withAlias("v"), Flag.withDefault(false)),
 };
+// `context-agent memory …` is the read-only memory CLI. It brings its own subcommands and flags,
+// which this entry's fixed option set would reject, so it is taken from the raw arguments before
+// the parse below — and before the storage lock and the server, which it does not need.
+const rawArguments = await nodePlatform.runPromise(
+  Effect.flatMap(Stdio.Stdio, (stdio) => stdio.args),
+);
+if (rawArguments[0] === "memory") {
+  await nodePlatform.runPromise(
+    Effect.scoped(
+      Effect.flatMap(Layer.build(NodeTerminal.layer), (terminal) =>
+        runMemoryCli({ name: "memory", args: rawArguments.slice(1) }).pipe(
+          Effect.provideContext(terminal),
+        ),
+      ),
+    ),
+  );
+  // Native host boundary: the exit status the memory CLI left behind (2 for a refusal).
+  process.exit(process.exitCode ?? 0);
+}
+
 // The parse failure already printed the usage and its details. effect/cli runs with a Terminal,
 // which subscribes to stdin; it is built for the parse alone, so the server holds no stdin listener.
 const commandLine = await nodePlatform.runPromise(

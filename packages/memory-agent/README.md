@@ -41,6 +41,7 @@ src/
   layers.ts     모든 서비스를 저장 루트 하나로 조립하는 Effect Layer
 bin/
   context-agent-acp.ts   저장소에서 쓰는 ACP 에이전트(실행 파일에서는 `context-agent acp`)
+  context-agent-cli.ts   앱 없이 기억을 읽는 CLI(find-memory·read-evidence·trace-evidence)
 skills/
   draw/SKILL.md          앱 기본 skill: SVG로 다이어그램·차트·와이어프레임·아이콘 그리기
 ```
@@ -172,6 +173,83 @@ Zed 예시(`settings.json`):
 - 대화는 앱의 대화 목록에도 보이고, 기억, 승인, 취소가 앱과 같습니다. 승인은 에디터의 권한 질문으로 뜹니다.
 - 테스트는 `tests/acp-agent.test.ts`(SDK 클라이언트 ↔ 다리 ↔ 앱 핸들러를 한 프로세스에서 연결).
 
+## 터미널에서 기억 읽기 (CLI)
+
+앱이 떠 있든 아니든 저장소를 **읽기 전용**으로 직접 열어 기억을 읽습니다. 마이그레이션도, 쓰기도, 앱이 쥔 잠금 선점도 하지 않습니다. 진입은 둘이고 명령 정의는 `src/cli/commands.ts` 하나를 같이 씁니다.
+
+```sh
+# 실행 파일에서
+context-agent memory find-memory "메모리 검색 결정" --limit 5
+context-agent memory projects
+
+# 저장소에서 (개발 중)
+node packages/memory-agent/bin/context-agent-cli.ts read-evidence <노드-id> --offset 0
+node packages/memory-agent/bin/context-agent-cli.ts trace-evidence <노드-id>
+```
+
+| 명령             | 하는 일                                   | 대응 도구        |
+| ---------------- | ----------------------------------------- | ---------------- |
+| `find-memory`    | 저장된 기억 검색                          | `find_memory`    |
+| `read-evidence`  | 노드 원문 페이지와 출처·정정 이력         | `read_evidence`  |
+| `trace-evidence` | 발언을 일으킨 사용자 턴까지 거슬러 올라감 | `trace_evidence` |
+| `projects`       | 저장소의 프로젝트 목록(id·이름·root·숨김) | (발견용)         |
+
+### 프로젝트 고르기
+
+다른 에이전트는 프로젝트 id를 모르므로, 이 순서로 해석합니다.
+
+1. `--project-id <id>` — 정확히 그 id
+2. `--project <경로|이름>` — 경로꼴이면 `realPath`로 정규화해 등록된 root와 맞춰 보고, 정확히 같은 root가 없으면 **그 경로를 품는 가장 깊은** 등록 root를 씁니다. 경로꼴이 아니면 이름으로 찾습니다.
+3. 아무것도 없으면 **현재 작업 디렉터리에서 부모로 올라가며** 등록된 root 중 가장 깊은 것
+4. 그래도 없으면 거부합니다: `{"error":{"code":"project_not_found","detail":{"cwd":…,"hint":…}}}`. 전역 검색으로 넘어가지 않습니다. 어떤 프로젝트가 있는지는 `projects`로 봅니다.
+
+숨긴 프로젝트도 해석 대상입니다(기억은 숨겨도 남아 있습니다).
+
+### 플래그와 출력
+
+- `--storage <경로>`: 읽을 저장소 폴더. 없으면 `$CONTEXT_AGENT_HOME`, 그것도 없으면 `~/.context-generactive-agent`.
+- `--this-project-only`: 해석된 프로젝트 안에서만 읽습니다. 기본은 교차 프로젝트(앱의 `find_memory`와 같은 기본값).
+- `--limit`(find-memory), `--offset`(read-evidence).
+- 성공은 stdout에 JSON 한 줄, 종료 코드 0입니다. 거부는 stderr에 `{"error":{"code":…,"detail":…}}` 한 줄과 종료 코드 2이고, 코드는 `storage_not_found`, `storage_schema_unsupported`, `project_not_found`, `node_not_found`, `unexpected`입니다.
+
+`context-agent`의 첫 인자는 열 폴더 경로라서, `acp`와 `memory`는 그 자리에서 예약어입니다. 그 이름의 폴더를 열려면 `./memory`처럼 적으세요.
+
+### 앱과 동시에 읽기
+
+앱이 같은 저장소를 열어 둔 채여도 읽을 수 있습니다. SQLite는 WAL이라 읽기 전용 연결이 동시에 열리고, 벡터 색인은 쓰기 lease 없이 적재합니다. 다만 lexical 색인(Tantivy)은 앱이 writer lock을 쥐고 있어 열 수 없으므로, 그때는 글자·형태소 채널을 끄고 벡터 채널만으로 검색합니다. 임베딩 모델이 없으면 벡터 채널도 빠집니다(기존 `degraded` 계약).
+
+조립은 `src/cli/read-only-storage.ts`, 프로젝트 해석은 `src/cli/project-reference.ts`, 테스트는 `tests/cli/`입니다.
+
+## 터미널에서 대화 가져오기 (CLI import)
+
+앱을 한 번도 안 띄운 사람도 다른 에이전트(Claude Code·Codex)의 대화를 기억으로 가져올 수 있습니다. 조회 명령과 달리 이쪽은 **쓰기**라서, 앱이 쓰는 `<저장소>/backend.lock`을 같이 잡습니다.
+
+```sh
+# 가져오고 색인까지 (저장소가 없으면 만들고 마이그레이션합니다)
+context-agent memory import
+
+# 가져오기만 하고 색인은 나중에
+context-agent memory import --no-index
+
+# 지금까지 뭐가 들어왔는지 (잠금 없이, 앱이 떠 있어도 됩니다)
+context-agent memory import-status
+```
+
+| 명령            | 하는 일                                                   | 잠금            |
+| --------------- | --------------------------------------------------------- | --------------- |
+| `import`        | 트랜스크립트를 기억으로 옮기고, 임베딩·색인까지 돌립니다  | `backend.lock`  |
+| `import-status` | 소스별 트랜스크립트·가져온 수·실패·미색인 백로그를 봅니다 | 없음(읽기 전용) |
+
+- `--interpret`: 가져온 대화를 **해석**(LLM 호출) 대상으로 둡니다. 기본은 꺼져 있습니다 — CLI에는 프로바이더 로그인이 없기 때문입니다. 이 플래그는 이번 실행에만 설정을 바꾸고, 끝나면 원래 값으로 되돌립니다.
+- `--no-index`: 색인을 건너뜁니다. 결과의 `indexed.skipped`가 `true`가 되고, `unindexed`에 남은 수가 보입니다.
+- `--imports-home <경로>`: `.claude`·`.codex`를 찾을 홈 폴더. 기본은 사용자 홈입니다.
+- `--storage <경로>`: 조회 명령과 같습니다(`$CONTEXT_AGENT_HOME` → `~/.context-generactive-agent`).
+- 진행은 stderr에 사람이 읽는 줄로, 결과는 stdout에 JSON 한 줄로 나옵니다: `{"storage":…,"pass":{"checked":…,"total":…,"written":…,"failed":…},"interpret":false,"indexed":{"skipped":false,"reason":null,"unindexed":0},"sources":[…],"unplaced":[…],"failures":[…]}`.
+- 임베딩 모델이 없으면 받아서 색인합니다. 받지 못하면 **가져오기는 이미 끝났으므로** 거부하지 않고 종료 코드 0으로 끝내되, `indexed.reason`과 `unindexed`에 남은 백로그를 적습니다.
+- 거부 코드가 하나 늘었습니다: 앱(또는 다른 CLI)이 저장소를 쥐고 있으면 `storage_locked`(detail에 그쪽 `port`·`instanceId`·`pid`)로 거부하고 종료 코드 2입니다. 저장소를 빼앗지 않습니다. 앱이 켜져 있다면 앱이 알아서 가져오므로, 앱을 닫고 다시 실행하면 됩니다. 그 밖에 `storage_lock_failed`, `storage_open_failed`, `import_failed`가 있습니다.
+
+조립은 `src/cli/writable-storage.ts`(잠금 → 마이그레이션 → 임포트·색인에 필요한 레이어만), 패스 실행은 `src/cli/import-run.ts`, 읽기 전용 현황은 `src/cli/import-status.ts`, 잠금 자체는 `src/runtime/storage-lock.ts`(앱 서버도 같은 것을 씁니다)입니다.
+
 ## 외부 에이전트 부르기 (ACP 클라이언트)
 
 `<프로젝트>/.agents/agents.json`(또는 `~/.context-generactive-agent/agents.json`):
@@ -200,61 +278,3 @@ vp check         # 루트에서: 포맷·lint·타입 검사
 추가 지침은 `AGENT.md`에 있습니다.
 
 ## Interface
-
-패키지 subpath export는 모두 `src`의 TypeScript 원본을 가리킨다. 디렉터리 구조는 위 `구조` 절 참고.
-
-- `memory-agent` (package `.` export) — `./src/index.ts` barrel. 앱의 `.server` 모듈과 API 라우트에서만 가져다 쓰는 Node 전용 진입점이다
-- `memory-agent/definitions` — `./src/tools/definitions.ts`. 브라우저에 필요한 도구 정의만 따로 내보낸다
-- `memory-agent/testing` — `./src/testing/index.ts`. 테스트용 어댑터와 임베더를 내보낸다
-- `memory-agent/chat-api` · `chat-session` · `chat-view` · `btw-thread` — `src/api/*.ts`. 채팅 API(Effect `HttpApi`) 정의, 세션 읽기, 화면 view, btw thread 계약을 내보낸다
-- `memory-agent/provider-contracts` · `compatible-config` — `src/providers/contracts.ts`, `src/providers/openai-compatible-config.ts`를 내보낸다
-- `memory-agent/acp` — `./src/acp/index.ts`. ACP 에이전트 다리 구성 요소를 내보낸다
-- `memory-agent/native-effect` · `node-platform` · `synchronous-path` · `host-system` — `src/runtime/*.ts`의 런타임 플랫폼 모듈을 내보낸다
-- `memory-agent/runtime-resources` — `./src/runtime/resources.ts`. `types`·`development`·`import`·`default` 조건이 모두 같은 파일을 가리킨다. 네이티브 패키지를 부르는 `requireRuntime`가 여기 있다
-- `memory-agent/embed-worker` · `rerank-worker` · `import-worker` · `redact-worker` · `native-search-worker` · `sandbox-worker` · `code-worker` — worker thread 스크립트 진입점(`src/memory/embedding/embed-worker.ts`, `src/memory/rerank/rerank-worker.ts`, `src/imports/worker.ts`, `src/secrets/redact-worker.ts`, `src/memory/native-search/worker.ts`, `src/shell/sandbox-worker.ts`, `src/code/worker.ts`). `runtimeWorker`가 위치를 정할 수 있게 subpath로 내보낸다
-- `context-agent-acp` (bin) — `./bin/context-agent-acp.ts`. 에디터가 실행하는 ACP CLI다. 환경 변수 `CONTEXT_AGENT_URL`로 앱 주소를 받는다. 설정 예시는 위 `에디터에서 쓰기 (ACP)` 절 참고
-- `vp run build` / `test` / `test:unit` / `test:feature` / `typecheck` (`vite.config.ts` run tasks) — 각각 `vp pack`, `vp test --maxWorkers=4`, `vp test --project unit`, `vp test --project feature --maxWorkers=4`, `tsc`를 실행한다
-- `unit` / `feature` (Vitest projects) — `unit`은 `src/**/*.test.ts`, `feature`는 `tests/**/*.test.ts`를 포함한다
-- `eval:recall` · `eval:compaction` · `eval:structured-memory` · `eval:memory-lab` · `eval:prompt-overhead` (package scripts) — `node --no-warnings eval/<script>.ts`를 실행한다
-- `dev` / `check` / `prepare` / `prepublishOnly` (package scripts) — 순서대로 `vp pack --watch`, `vp check`, `effect-tsgo patch --typescript --oxlint`, `vp run build`를 실행한다
-
-하위 디렉터리와 문서:
-
-- [bench](./bench/README.md) — 파일 도구와 코드 스킬 지연 시간을 도구 실행 경계에서 재는 Vitest 벤치마크
-- [bin](./bin/README.md) — ACP CLI 진입점 `context-agent-acp.ts`
-- [eval](./eval/README.md) — 압축·recall·프롬프트 오버헤드·메모리·구조화 기억 평가 스크립트
-- [scripts](./scripts/README.md) — 구독형 OAuth 공급자를 실제 계정으로 검증하는 CLI 스크립트
-- [src](./src/README.md) — 공개 barrel `index.ts`와 composition root `memoryAgentLayer`
-- [AGENTS.md](./AGENTS.md) — 패키지 작업 지침
-- [skills/app-settings](./skills/app-settings/SKILL.md) — 내장 skill
-- [skills/code-skill-writing](./skills/code-skill-writing/SKILL.md) — 내장 skill
-- [skills/draw](./skills/draw/SKILL.md) — 내장 skill
-- `tests/` — 기능 테스트
-
-## Invariants
-
-- `exports`는 `src`의 TypeScript 원본을 가리켜야 한다. 앱이 원본을 import하므로 `pack.dts: false`, `pack.exports: false`를 둔다. 타입 검사는 `vp check`와 `typecheck` task가 맡는다
-- `build`·`test`·`test:unit`·`test:feature`는 `dependsOn: [{ task: "build", from: "dependencies" }]`를 지킨다. 벡터 인덱스와 테스트가 turbovec addon을 불러오므로 addon을 먼저 빌드해야 한다
-- `typecheck` task는 `cache: false`를 유지한다. Vite Task는 TypeScript 7 native tsc가 읽는 파일을 보지 못하므로, 캐시하면 새 오류가 가려진다
-- 전체 테스트와 feature 테스트는 `--maxWorkers=4`로 실행한다
-- `pack.deps.resolveDepSubpath: true`는 tsdown <0.23 호환을 위한 설정이다. 이 줄을 지우면 subpath import가 쓴 그대로 남는다
-- unit 테스트는 소스 옆 `src/**/*.test.ts`에 두고 실행 중인 에이전트 없이 모듈 하나를 검사한다. 실제 에이전트(TestEnv)나 실제 자원을 쓰는 feature 테스트는 `tests/**/*.test.ts`에 둔다
-- tsconfig는 `strict`, `exactOptionalPropertyTypes`, `noUnusedLocals`, `verbatimModuleSyntax`, `isolatedModules`, `noEmit`를 켠다. `@effect/language-service` 진단은 `nodeBuiltinImport`, `processEnvInEffect`, `asyncFunction`, `preferSchemaOverJson`, `globalErrorInEffectFailure`, `leakingRequirements` 등을 error로 둔다. `globalDate`, `globalTimers`, `globalFetch`, `globalRandom`, `processEnv`, `cryptoRandomUUID`는 warning이다
-- lint는 `typeAware: true`, `typeCheck: true`로 실행한다
-- 네이티브 패키지는 `requireRuntime`으로만 불러온다. 이유는 위 `구조` 절 참고
-- 앱 기본 skill은 `SKILL.md` 하나로 완결해야 한다. 이유는 위 `구조` 절 참고
-- `nodes` 원문 불변, 대화 threadId = 세션 id, 파일 도구 경로 제한, `SecretRedactor` 적용, Kagi 키 저장 위치는 위 `기억 모델`·`대화 상태와 새로고침`·`보안 경계` 절의 규칙을 따른다
-- 서비스는 Effect `Context.Tag` + `Layer`로 만들고 도구 입력 스키마는 Effect Schema로 쓴다(위 `구조` 절 참고)
-
-## Side Effects
-
-- `prepare` 스크립트(`effect-tsgo patch --typescript --oxlint`)는 설치된 typescript와 oxlint를 패치한다
-- `build` task(`vp pack`)는 번들 출력을 쓴다. `.gitignore`가 `dist`, `.vitest/`, `*.log`를 무시한다
-- `test` 계열 task는 임시 디렉터리에 실제 SQLite, turbovec, 파일 시스템을 쓴다
-- `eval:*` 스크립트는 `node`로 `eval/` 스크립트를 실행한다. `eval:recall`은 `~/.context-generactive-agent/models`에 모델 두 개가 있어야 한다
-- `vite.config.ts` 자체는 설정 객체만 내보내는 순수 모듈이다
-
-## Verification
-
-- Run: `vp run memory-agent#typecheck`
-- Run: `vp run memory-agent#test`

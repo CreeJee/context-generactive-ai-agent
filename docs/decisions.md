@@ -4270,6 +4270,31 @@
   - transformers.js의 `globalThis[Symbol.for("onnxruntime")]`로 1.31.1을 넣는 방법: transformers가 모듈을 불러올 때 1.30.0을 그대로 `require`해서 한 프로세스에 onnxruntime이 두 벌 올라온다. transformers가 만든 `Tensor`와 runtime의 `Tensor`가 다른 class가 되는 문제(huggingface/transformers.js#1840)도 있다.
 - 남은 일: 같이 돌면 GPU를 나눠 쓰므로 각자 느려진다. 1.31.1에서 백필 중 rerank 지연을 다시 재고, 2초 예산을 넘기는 일이 잦으면 우선순위나 쌍 수를 정한다.
 
+## 기억 계열 CLI를 저장소 직접 읽기로 제공한다 (2026-11-08)
+
+- 사용자 결정: context-agent 고유 기능 중 기억 계열(find_memory·read_evidence·trace_evidence 대응)을 `effect/cli` 기반 별도 CLI 명령으로 외부에 제공한다. v1 명령은 `find-memory`·`read-evidence`·`trace-evidence` 세 개다. workflow·칸반·가져오기 등 다른 고유 기능은 v1에서 제외하고 후속 검토로 남긴다.
+- 접근 경로는 실행 중인 앱의 HTTP API가 아니라 저장소 직접 읽기다. CLI는 앱 실행 여부와 무관하게 동작하고, 저장소를 읽기 전용으로만 접근한다: 마이그레이션·쓰기·잠금 선점을 하지 않는다. 앱 실행 중 동시 읽기 가능 여부는 spike로 확인하고, 불가하면 직렬화 방법을 기록한다.
+- 배포는 별도 진입(`packages/memory-agent/bin/context-agent-cli.ts`, package.json `bin`에 등록)으로 하고 실행 파일 의존성에 포함한다. 기존 `context-agent` 실행 파일에 하위 명령으로 추가하지 않는다.
+- 2026-10-18의 CLI 인자 결정(`CliConfig.builtIns: []`, 기존 옵션 이름·사용법 문구 유지)은 기존 `context-agent` 명령의 옵션 보존 목적이다. 이번 신규 CLI는 그 결정에 묶이지 않고 자체 플래그·도움말을 새로 정의한다.
+- CLI는 기억 읽기에 필요한 레이어만 조립한다. `memoryAgentLayer` 전체는 열면서 마이그레이션을 수행하므로 그대로 쓰지 않는다. 읽기에는 native-search worker thread 하나가 필요하고(벡터·글자·형태소 채널 전담), 임베딩 모델이 없으면 vector 채널을 생략한 degraded 결과를 그대로 쓴다(`FindResult.degraded`). 가져오기·redaction·샌드박스 등 다른 worker는 띄우지 않는다.
+- 저장소 위치는 `--storage` 플래그와 `CONTEXT_AGENT_HOME` 환경 변수(기존 관례)로 지정하고 기본값은 `defaultStorageRoot`다.
+- spike 결과(2026-11-08, 같은 날 측정):
+  - SQLite: WAL 저장소를 두 번째 프로세스가 읽기 전용으로 여는 것은 된다. 쓰는 쪽이 트랜잭션을 연 동안에도 읽기가 성공했고 `busy_timeout`도 필요 없었다.
+  - 벡터 캐시 lease: turbovec `CacheLease`는 `writer.lock`을 `try_lock`으로 잡는 배타 락이다. 동시에 둘이 잡으면 한쪽은 "Vector cache is locked by another scorer"로 실패한다. 그래서 CLI는 native-search worker를 띄우지 않는다. 위의 "worker thread 하나가 필요하다"는 처음 판단을 이 측정으로 바꾼다.
+  - lexical 색인: `LexicalIndex.open`은 Tantivy writer lock을 잡으므로 앱이 열어 둔 동안 CLI는 못 연다.
+- 그래서 CLI의 읽기 경로는 lease 없는 같은 프로세스 읽기다: `VectorIndex.load`(읽기 전용 적재)와 `MemoryReadSession`(읽기 전용 SQLite)을 직접 쓰고, 앱의 writer lease·writer lock은 건드리지 않는다.
+  - lexical을 못 열면 text·morph 채널을 끄고 벡터 채널만 요청한다. 네이티브 읽기는 lexical 없이 text·morph를 켜면 `invalid-input`으로 거부하기 때문이다. 결과는 기존 degraded 계약으로 전달된다.
+  - 벡터 색인 파일을 못 열면 빈 색인으로 대신해 읽기가 후보 없이 이어진다.
+  - 스키마는 `assertDatabaseSchema`로 확인한다. 앱이 새 마이그레이션을 추가한 저장소는 올리지 않고 `storage_schema_unsupported`로 거부한다.
+- 거부는 stderr에 JSON 한 줄(`{"error":{"code":…,"detail":…}}`)과 종료 코드 2다: `storage_not_found`, `storage_schema_unsupported`, `project_not_found`, `node_not_found`, `unexpected`. 성공은 stdout에 JSON 한 줄이고 종료 코드 0이다.
+- 프로젝트 해석은 부르는 에이전트가 id를 모른다는 전제로 정한다(2026-11-08 사용자 지적): `--project-id <id>` → `--project <경로|이름>`(경로꼴이면 realPath로 정규화해 정확한 root, 없으면 그 경로를 품는 가장 깊은 등록 root) → 현재 작업 디렉터리에서 조상으로 올라가며 가장 깊은 등록 root → 그래도 없으면 거부. 숨긴 프로젝트도 대상이라 `listAll`을 쓴다.
+- 해석에 실패하면 전역 검색으로 넘어가지 않고 `project_not_found`로 거부한다(사용자 결정, 2026-11-08). 권한·가시성의 기준이 없으면 무엇을 보여도 되는지 정할 수 없기 때문이다. detail에 cwd와 다음 수단(`projects` 명령)을 담는다.
+- 발견용 `projects` 명령(읽기 전용)을 v1에 넣는다. id를 알 수단이 없으면 나머지 명령을 쓸 수 없다.
+- 검색 범위는 기본이 교차 프로젝트(`search.find`의 기본값)이고 `--this-project-only`로 가둔다.
+- 기억 CLI는 별도 bin과 **실행 파일 양쪽**에서 돈다(사용자 결정, 2026-11-08). 명령 정의는 `packages/memory-agent/src/cli/commands.ts` 하나이고 `memory-agent/memory-cli`로 내보낸다.
+  - `context-agent`의 첫 인자는 열 폴더 경로이고 기존 파서는 `builtIns: []`에 옵션이 고정이라 하위 명령의 인자·플래그를 받지 못한다. 그래서 `apps/agent/server/main.ts`에서 `parseCommandLine` **이전에** 원시 인자 `args[0] === "memory"`를 가로채 기억 CLI에 넘기고 끝낸다(저장소 잠금·서버 기동 전).
+  - 그 대가로 `memory`는 `acp`와 마찬가지로 첫 인자에서 예약어가 된다. 그 이름의 폴더는 `./memory`로 연다. usage에 적었다.
+
 ## 모델 요청은 앞 요청에 새 메시지만 붙여 보낸다 (2026-11-08)
 
 - 계기: 같은 일을 시켜도 이 앱이 Claude Code보다 사용량을 많이 썼다. `api_usage_responses`를 보면 입력 비용의 약 85%가 1시간 캐시 쓰기였다. provider는 요청 앞부분이 앞 요청과 달라진 자리부터 캐시에 다시 쓰고, 그 값은 입력 단가의 2배다. 달라지는 곳은 둘이었다.
@@ -4306,6 +4331,19 @@
   - 이 양은 run 안에서만 기억했다. 그래서 run의 첫 요청은 추정만 보고 보냈다. dev를 다시 켠 뒤 614cf1e5의 첫 요청은 추정이 60,898토큰이었는데 provider는 약 171K로 셌다. 200K 창의 상한(약 184K) 바로 아래였고, 이어 붙인 run 첫 요청은 상한을 넘을 수 있었다.
   - 이제 사용량 저장(`ContextUsage`)에 그 요청의 추정(`estimatedTokens`)을 같이 남긴다. 다음 run은 첫 요청부터 `inputTokens − estimatedTokens`만큼 상한을 낮춰 본다(`measuredOverhead`). 저장한 값이라 앱을 다시 켜도 이어진다.
   - 이 양은 고정값으로 더한다. 실제 차이는 메시지가 늘면 같이 는다. 이 대화는 tokenizer 차이로 추정이 약 2.5배 낮았다. 그래도 run 사이에 느는 것은 앞 run의 답과 새 사용자 턴뿐이라 오차가 작다. 모델을 바꾸면 첫 요청은 이전 모델의 값으로 정하고, 그 요청의 사용량부터 새 값을 쓴다.
+
+## 채팅 임포트를 CLI에서 헤드리스로 실행한다 (2026-11-08)
+
+- 사용자 결정: 앱을 안 쓰고 CLI만 쓰는 사람에게는 임포트가 없으면 기억 검색도 빈 저장소라 쓸모가 없다. 그래서 다른 에이전트 대화 가져오기를 CLI 명령으로 제공하고(`context-agent memory import`), **색인까지** 한다(선택지 B2). 앱 API에 위임하는 방식은 CLI 단독 사용자에게 의미가 없어 버렸다.
+- 임포트는 쓰기라 조회 명령과 규칙이 다르다. 앱이 쓰는 `<저장소>/backend.lock`을 같이 잡고, 이미 잡혀 있으면 **선점하지 않고** `storage_locked`(detail에 그쪽 port·instanceId·pid)로 거부한다. 앱이 켜져 있으면 앱이 알아서 가져오므로 실질 손해가 없다. 앱 API로 위임하는 경로는 넣지 않았고 추후 검토로 남긴다.
+- 그래서 잠금 획득 코드를 `apps/agent/server/dev-safety.ts`에서 `packages/memory-agent/src/runtime/storage-lock.ts`로 옮겼다(`memory-agent/storage-lock`). 잠금 파일 경로·레코드 형식·죽은 잠금 회수 규칙은 그대로고, 앱 서버는 이제 이 모듈 위에서 기존 Promise 계약만 유지한다. CLI 소유자는 서비스하는 포트가 없어 `port: 0`으로 적는다.
+- 조립은 `memoryAgentLayer` 전체가 아니라 임포트·색인에 필요한 것만 세운다(`src/cli/writable-storage.ts`): StorageRoot, Database(여기서 마이그레이션이 돈다), GlobalConfig, AppEvents, Projects, Embedder, ModelDownloads, VectorIndex, Indexer, Importer(watching=false). 칸반·채팅·도구·프로바이더·MCP·스킬·OAuth는 뺐다. 빈 폴더를 가리키면 저장소를 만들고 마이그레이션한 뒤 가져온다 — 앱을 한 번도 안 띄운 사람이 첫 사용자다.
+- 해석(LLM 호출)은 기본으로 끈다(사용자 동의). CLI에는 프로바이더 로그인이 없기 때문이다. `--interpret`을 주면 이번 실행 동안만 `importsInterpret`을 켜고, 끝나면 찾았던 값으로 되돌린다.
+- 색인 실패는 거부가 아니다. 임포트는 이미 성공했으므로 종료 코드 0으로 끝내고 결과의 `indexed.reason`과 `unindexed`에 남은 백로그와 이유를 적는다. `--no-index`도 같은 모양으로 알린다.
+- 현황 조회 `memory import-status`는 잠금을 잡지 않는 읽기 전용이라 앱이 떠 있어도 답한다(`src/cli/import-status.ts`). 그래서 `readOnlyMemoryLayer`가 읽기 전용 연결의 `SqlClient`도 같이 내보낸다.
+- 출력 계약은 조회 명령과 같다: 성공은 stdout에 JSON 한 줄과 종료 코드 0, 거부는 stderr에 `{"error":{"code":…,"detail":…}}` 한 줄과 종료 코드 2. 새 코드는 `storage_locked`·`storage_lock_failed`·`storage_open_failed`·`import_failed`다.
+- 넣지 않은 것: `--source`로 한 소스만 가져오기. 임포트 패스 API에 소스별 필터가 없어 worker 프로토콜까지 바꿔야 하는데, 두 소스를 다 훑는 비용이 작아 미뤘다.
+- 확인(2026-11-08): 합성 Claude Code 트랜스크립트를 둔 임시 홈에서 CLI 조립만으로 저장소를 만들고 import worker를 띄워 패스가 끝났고, 색인 뒤 `find-memory`가 그 대화를 찾았다. 잠금을 쥔 상태에서는 `StorageLockHeld`로 거부하고 잠금 파일을 그대로 뒀다(`tests/cli/import.test.ts`).
 
 ## 작업 알림은 system prompt가 아니라 run에 합류하는 메시지로 보낸다 (2026-11-08)
 

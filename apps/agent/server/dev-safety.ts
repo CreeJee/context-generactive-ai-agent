@@ -9,19 +9,10 @@ import { Hex } from "effect/encoding";
 import { nativeFailure } from "memory-agent/native-effect";
 import { nodePlatform } from "memory-agent/node-platform";
 import { path as hostPath } from "memory-agent/synchronous-path";
-import {
-  Array as Arr,
-  DateTime,
-  Match,
-  MutableRef,
-  Option,
-  Schema,
-  Scope,
-  Exit,
-  Cause,
-} from "effect";
+import { lockStorageRoot } from "memory-agent/storage-lock";
+import { Array as Arr, DateTime, MutableRef, Option, Scope, Exit, Cause } from "effect";
 
-const { join, resolve } = hostPath;
+const { resolve } = hostPath;
 
 export const developmentBuildHeader = "x-context-agent-build-id";
 
@@ -91,15 +82,6 @@ const fingerprint = Effect.fn("dev.fingerprint")(function* (appRoot: string) {
 /** Stable fingerprint of every source file owned by the no-HMR backend boundary. */
 export const developmentBuildId = (appRoot: string) =>
   nodePlatform.runPromise(fingerprint(appRoot));
-
-const LockRecord = Schema.Struct({
-  pid: Schema.Finite,
-  /** The owner process's start time; tells this process apart from an earlier one given the same pid. */
-  startedAt: Schema.optional(Schema.Finite),
-  instanceId: Schema.String,
-  port: Schema.Finite,
-});
-const decodeLock = Schema.decodeUnknownOption(Schema.fromJsonString(LockRecord));
 
 export interface DevelopmentBoundary {
   readonly buildId: string;
@@ -193,16 +175,6 @@ function developmentRequestDecisionBody(
   return { kind: "allow" };
 }
 
-function processIsAlive(pid: number) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    const NativeError = Schema.Struct({ code: Schema.String });
-    return Schema.is(NativeError)(error) && error.code === "EPERM";
-  }
-}
-
 /** Acquires one backend owner for a storage root. The returned release is idempotent. */
 export const acquireStorageLock: {
   (
@@ -214,59 +186,21 @@ function acquireStorageLockBody(storageRoot: string, port: number, instanceId: s
   return nodePlatform
     .runPromiseExit(
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const file = join(storageRoot, "backend.lock");
-        const record = { pid: process.pid, startedAt: performance.timeOrigin, instanceId, port };
-        yield* fs.makeDirectory(storageRoot, { recursive: true, mode: 0o700 });
-        const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(LockRecord))(record);
-        const create = fs.writeFileString(file, encoded, {
-          flag: "wx",
-          mode: 0o600,
-        });
-        // A record with this process's pid but another start time was left by an earlier run whose pid
-        // was reused, as a restarted container's entrypoint gets the same pid every time.
-        const liveOwner = (record: typeof LockRecord.Type) =>
-          Match.value(record.pid === process.pid).pipe(
-            Match.when(true, () => record.startedAt === performance.timeOrigin),
-            Match.when(false, () => processIsAlive(record.pid)),
-            Match.exhaustive,
-          );
-        const takeOverStale = fs.readFileString(file).pipe(
-          Effect.map(decodeLock),
-          Effect.flatMap(
-            Option.match({
-              onNone: () => Effect.void,
-              onSome: (record) =>
-                Effect.fail(
-                  new Cause.UnknownError(
-                    new Error(`backend already owns this storage root on port ${record.port}`),
-                  ),
-                ).pipe(Effect.when(Effect.succeed(liveOwner(record)))),
-            }),
-          ),
-          Effect.andThen(fs.remove(file)),
-          Effect.andThen(create),
-        );
-        yield* create.pipe(
-          Effect.catchReason("PlatformError", "AlreadyExists", () => takeOverStale),
-        );
+        // The lock itself lives in memory-agent: the writing CLI commands take the same one.
         const scope = yield* Scope.make();
-        yield* Scope.addFinalizer(
-          scope,
-          fs.readFileString(file).pipe(
-            Effect.map(decodeLock),
-            Effect.flatMap((record) =>
-              fs
-                .remove(file)
-                .pipe(
-                  Effect.when(
-                    Effect.succeed(
-                      Option.exists(record, (owner) => owner.instanceId === instanceId),
-                    ),
-                  ),
+        yield* Scope.provide(lockStorageRoot({ storageRoot, port, instanceId }), scope).pipe(
+          // The caller gets the failure it has always seen; the half-open scope is closed first.
+          Effect.catch((error) =>
+            Effect.andThen(
+              Scope.close(scope, Exit.void),
+              Effect.fail(
+                new Cause.UnknownError(
+                  error._tag === "StorageLockHeld"
+                    ? new Error(`backend already owns this storage root on port ${error.port}`)
+                    : error.cause,
                 ),
+              ),
             ),
-            Effect.ignore,
           ),
         );
         return () => nodePlatform.runPromise(Scope.close(scope, Exit.void));
