@@ -1273,7 +1273,8 @@ const unappendable = (
 /**
  * `added` with search leads before the user turn among them, when the request leaves content out:
  * a new turn may ask about what is no longer sent. Placed among the new messages, the leads leave
- * what was sent before as it was.
+ * what was sent before as it was. Leads already sent, as for a message that joins the run, are not
+ * sent twice.
  */
 const withTurnLeads = (
   sources: CompactionSources,
@@ -1294,7 +1295,9 @@ const withTurnLeads = (
         Effect.map(
           retrieve([...previous.messages, ...added]),
           (appendix): ReadonlyArray<StoredMessage | CompactionMessage> =>
-            appendix === null ? added : [...added.slice(0, turn), appendix, ...added.slice(turn)],
+            appendix === null || previous.messages.some((message) => sameAt(appendix, message))
+              ? added
+              : [...added.slice(0, turn), appendix, ...added.slice(turn)],
         ),
     },
   );
@@ -1454,8 +1457,11 @@ export const compactionHook = Effect.fnUntraced(function* (options: {
     onSome: Effect.succeed,
     onNone: () => makeLastRequests,
   });
-  /** The run's search leads, once looked up. */
-  const leads = yield* Ref.make(Option.none<CompactionMessage | null>());
+  /**
+   * The run's search leads, once found. Finding none, or failing to search, is not kept: the next
+   * new turn or compacted request looks again.
+   */
+  const leads = yield* Ref.make(Option.none<CompactionMessage>());
   const sources: CompactionSources = Option.match(
     Option.fromNullishOr(options.sources.retrievalAppendix),
     {
@@ -1468,7 +1474,7 @@ export const compactionHook = Effect.fnUntraced(function* (options: {
             Option.match({
               onSome: Effect.succeed,
               onNone: () =>
-                Effect.tap(retrieve(sent), (found) => Ref.set(leads, Option.some(found))),
+                Effect.tap(retrieve(sent), (found) => Ref.set(leads, Option.fromNullishOr(found))),
             }),
           ),
       }),

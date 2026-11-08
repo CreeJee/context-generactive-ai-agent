@@ -1,10 +1,14 @@
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Layer, Option, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import {
   compactionHook,
   estimateConversation,
   LastRequests,
   lookupSources,
+  nextRequestHistory,
+  RequestBasis,
+  type CompactionMessage,
+  type SentRequest,
 } from "../../src/agent/compaction.ts";
 import { StoredMessage } from "../../src/chat-store/schema.ts";
 import { RunStore } from "../../src/loop/store.ts";
@@ -129,6 +133,51 @@ testAgent()("requests append to the one before", (it) => {
         third?.find((message) => message.role === "tool" && message.toolCallId === "read-1")
           ?.content,
       ).toContain("y".repeat(4_000));
+    }),
+  );
+
+  it.effect("leads already sent are not sent again before a message that joins the run", () =>
+    Effect.gen(function* () {
+      const { project } = yield* TestEnv;
+      const session = yield* (yield* Sessions).create(project.id);
+      const metadata = (yield* RunStore).chatMetadata;
+      const leads: CompactionMessage = { role: "assistant", content: "[Retrieval appendix] lead" };
+      const withLeads = { ...sources, retrievalAppendix: () => Effect.succeed(leads) };
+      const asked: StoredMessage = { role: "user", content: "질문" };
+      // A request that left content out, with leads before its turn.
+      const previous: SentRequest = {
+        from: [asked],
+        messages: [leads, asked],
+        stage: "leave-out",
+        manual: { clearedThrough: 0, summarizedTurns: 0 },
+      };
+      const step: ReadonlyArray<StoredMessage> = [
+        {
+          role: "assistant",
+          content: null,
+          toolCalls: [
+            {
+              id: "read-0",
+              type: "function",
+              function: { name: "read_file", arguments: '{"path":"read-0.ts"}' },
+            },
+          ],
+        },
+        { role: "tool", toolCallId: "read-0", content: "y".repeat(4_000) },
+      ];
+      const joined: StoredMessage = { role: "user", content: "그리고 이것도" };
+      const next = yield* nextRequestHistory({
+        metadata,
+        threadId: session.id,
+        messages: [asked, ...step, joined],
+        restored: null,
+        sources: withLeads,
+        budget: { compactAt: 0, leaveOutAt: noLimit, inputCeiling: noLimit },
+        previous: Option.some(previous),
+      });
+      expect(next.basis).toEqual(RequestBasis.Appended());
+      expect(next.messages.filter((message) => message === leads)).toHaveLength(1);
+      expect(next.messages.at(-1)).toEqual(joined);
     }),
   );
 });
