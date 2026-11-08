@@ -50,6 +50,25 @@ const checkpoints = (blocks: ReadonlyArray<{ readonly byte: number; readonly len
   };
 };
 
+/** The index of `text` as stored, in the blocks a read of it would take. */
+const indexText = (text: string): TextIndex => {
+  const bytes = new TextEncoder().encode(text);
+  const decoder = new TextDecoder();
+  const blocks = Arr.unfold(0, (byte) =>
+    Option.map(
+      Option.liftPredicate(byte, (from) => from < bytes.length),
+      (from) => {
+        const end = blockEnd(bytes, from);
+        return [
+          { byte: from, length: decoder.decode(bytes.subarray(from, end)).length },
+          end,
+        ] as const;
+      },
+    ),
+  );
+  return { size: bytes.length, ...checkpoints(blocks) };
+};
+
 /**
  * Append-only node text. Cache IDs are strings; no schema migration or persisted copy is needed.
  * Only bounded BLOB slices cross into JavaScript.
@@ -142,17 +161,16 @@ export const createResultPageReader = Effect.gen(function* () {
     size: number,
     started: number,
   ) {
+    // Only each block's length stays; its text goes as soon as it was measured.
     const parts = Option.all(
       yield* blocksFrom(id, projectId, sessionId, 0, size).pipe(
+        Stream.map(Option.map(({ byte, text }) => ({ byte, length: text.length }))),
         Stream.tap(() => Effect.yieldNow),
         Stream.runCollect,
       ),
     );
     if (Option.isNone(parts)) return null;
-    const built: TextIndex = {
-      size,
-      ...checkpoints(parts.value.map(({ byte, text }) => ({ byte, length: text.length }))),
-    };
+    const built: TextIndex = { size, ...checkpoints(parts.value) };
     // Cached only when nothing changed meanwhile, checked and cached in one step.
     const unchanged = yield* Ref.modify(cache, (state) =>
       state.generation === started ? [true, withIndex(state, id, built)] : [false, state],
@@ -226,26 +244,15 @@ export const createResultPageReader = Effect.gen(function* () {
   return {
     read: readPage,
     invalidate: Ref.update(cache, (state) => ({ generation: state.generation + 1, indexes: [] })),
-    /** Saving already has the complete redacted string. Index it here, before any page is asked for. */
-    remember: (id: string, text: string) => {
-      // The text as stored, in the blocks a read of it would take.
-      const bytes = new TextEncoder().encode(text);
-      const decoder = new TextDecoder();
-      const blocks = Arr.unfold(0, (byte) =>
-        Option.map(
-          Option.liftPredicate(byte, (from) => from < bytes.length),
-          (from) => {
-            const end = blockEnd(bytes, from);
-            return [
-              { byte: from, length: decoder.decode(bytes.subarray(from, end)).length },
-              end,
-            ] as const;
-          },
-        ),
-      );
-      return Ref.update(cache, (state) =>
-        withIndex(state, id, { size: bytes.length, ...checkpoints(blocks) }),
-      );
-    },
+    /**
+     * Saving already has the complete redacted string. Index it here, before any page is asked for.
+     * Node text does not change, so a node indexed already is not indexed again.
+     */
+    remember: (id: string, text: string) =>
+      Ref.update(cache, (state) =>
+        state.indexes.some(([cached]) => cached === id)
+          ? state
+          : withIndex(state, id, indexText(text)),
+      ),
   };
 });
