@@ -2226,7 +2226,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           summaries.hookFor(sessionId),
           // Last to choose the history sent to the model; only retained local images are inlined.
           compacting.hook,
-          modelImagesHook(attachments),
+          yield* modelImagesHook(attachments),
           contextUsageHook({
             windowTokens: Effect.sync(window),
             compactionStage: compacting.stage,

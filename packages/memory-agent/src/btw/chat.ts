@@ -181,7 +181,7 @@ const make = Effect.gen(function* () {
       // Only the messages the prompt shows are read, not the parent's tool calls and results.
       parentConversationPrompt(yield* nodes.ofKinds(thread.parentSessionId, ["user", "assistant"])),
     ];
-    const hooks = [btwToolGuardHook, yield* repeatGuardHook, modelImagesHook(attachments)];
+    const hooks = [btwToolGuardHook, yield* repeatGuardHook, yield* modelImagesHook(attachments)];
     const conversation = withPageTurns(yield* threads.messages(threadId), [question.message]);
     const runtime = yield* active.runtime(selection);
     yield* threads.link(

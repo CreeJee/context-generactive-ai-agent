@@ -1,4 +1,4 @@
-import { Array as Arr, Effect, HashMap, Option, Schema } from "effect";
+import { Array as Arr, Effect, HashMap, Option, Ref, Schema } from "effect";
 import type { StoredMessage } from "../chat-store/schema.ts";
 import { asRunFailed, type RunHook } from "../loop/run.ts";
 import type { Attachment, AttachmentsApi } from "./attachments.ts";
@@ -54,26 +54,28 @@ const inlineImage = Effect.fn("modelImages.inlineImage")(function* (
 });
 
 /**
- * Reads each of `ids` once, all at the same time, and gives what puts them inline: a part that
- * shows one of them by URL becomes its image data, or a note when it is gone.
+ * Reads each of `ids` that `known` does not hold yet, all at the same time, and keeps them there.
+ * Gives what puts them inline: a part that shows one of them by URL becomes its image data, or a
+ * note when it is gone.
  */
 const inlinerFor = Effect.fnUntraced(function* (
   attachments: ImageAttachments,
+  known: Ref.Ref<HashMap.HashMap<string, InlinePart>>,
   ids: ReadonlyArray<string>,
 ) {
-  const parts = HashMap.fromIterable(
-    yield* Effect.forEach(
-      ids,
-      (id) =>
-        Effect.flatMap(attachments.get(id), (attachment) =>
-          Option.match(Option.fromNullishOr(attachment), {
-            onNone: () => Effect.succeed<InlinePart>(unavailable),
-            onSome: (found) => inlineImage(attachments, found),
-          }),
-        ).pipe(Effect.map((part) => [id, part] as const)),
-      { concurrency: "unbounded" },
-    ),
+  const held = yield* Ref.get(known);
+  const read = yield* Effect.forEach(
+    ids.filter((id) => !HashMap.has(held, id)),
+    (id) =>
+      Effect.flatMap(attachments.get(id), (attachment) =>
+        Option.match(Option.fromNullishOr(attachment), {
+          onNone: () => Effect.succeed<InlinePart>(unavailable),
+          onSome: (found) => inlineImage(attachments, found),
+        }),
+      ).pipe(Effect.map((part) => [id, part] as const)),
+    { concurrency: "unbounded" },
   );
+  const parts = yield* Ref.updateAndGet(known, HashMap.setMany(read));
   return <P extends Part>(part: P) =>
     Option.getOrElse(
       Option.flatMap(attachmentOf(part), (id) => HashMap.get(parts, id)),
@@ -89,19 +91,21 @@ const storedParts = (message: StoredMessage): ReadonlyArray<Part> =>
 /**
  * Stored transcripts use browser-safe relative attachment URLs. Providers cannot fetch those, so
  * only the model-bound copy gets the smaller stored image as provider-neutral inline data: each
- * model step's history gets the images inline.
+ * model step's history gets the images inline. An image is read once per run, not on every step:
+ * stored images do not change.
  */
-export const modelImagesHook = (attachments: ImageAttachments): RunHook => ({
-  request: (_scope, request) =>
-    inlinerFor(attachments, attachmentsIn(request.history.map(storedParts))).pipe(
-      Effect.map((inline) => ({
-        ...request,
-        history: request.history.map((message) =>
-          message.role === "assistant" || isText(message.content)
-            ? message
-            : { ...message, content: message.content.map(inline) },
-        ),
-      })),
-      Effect.mapError(asRunFailed),
-    ),
-});
+export const modelImagesHook = (attachments: ImageAttachments) =>
+  Effect.map(Ref.make(HashMap.empty<string, InlinePart>()), (known): RunHook => ({
+    request: (_scope, request) =>
+      inlinerFor(attachments, known, attachmentsIn(request.history.map(storedParts))).pipe(
+        Effect.map((inline) => ({
+          ...request,
+          history: request.history.map((message) =>
+            message.role === "assistant" || isText(message.content)
+              ? message
+              : { ...message, content: message.content.map(inline) },
+          ),
+        })),
+        Effect.mapError(asRunFailed),
+      ),
+  }));

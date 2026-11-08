@@ -20,7 +20,7 @@
 - `modelImageEdge` (2048) / `maxModelImageBytes` (2MiB) — 모델용 사본의 최대 변 길이와 목표 바이트 상한
 - `maxDrawingBytes` — 그림으로 바꿀 SVG의 최대 크기 2MiB
 - `ModelImage` — 모델로 보낼 이미지 `{ path, mimeType }` 인터페이스
-- `modelImagesHook(attachments)` — `RunHook`. `request` 단계에서 history의 비-assistant 메시지 이미지 URL 파트를 inline data 이미지로 바꾼다. 첨부가 없으면 `[Attached image is unavailable.]` 텍스트로 바꾼다
+- `modelImagesHook(attachments)` — `RunHook`을 만드는 Effect. run마다 하나 만든다. `request` 단계에서 history의 비-assistant 메시지 이미지 URL 파트를 inline data 이미지로 바꾼다. 첨부가 없으면 `[Attached image is unavailable.]` 텍스트로 바꾼다. 저장된 이미지는 바뀌지 않으므로 이미지마다 run에서 한 번만 읽고 base64로 바꾼다
 - `DrawingPreviews` — `Context.Service`(`memory-agent/attachments/previews/DrawingPreviews`). `DrawingPreviews.layer`로 제공하며 `Attachments`와 `FileSystem`이 필요하다. API는 `withPreviews(project, tools)`
 - `DrawingPreview` — `{ attachmentId, mimeType }` 인터페이스. 도구 결과의 `preview` 필드 모양이다
 - `attachmentUrl(id)` — `/api/attachments/<id>` URL을 만든다
