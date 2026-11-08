@@ -23,7 +23,10 @@ const scope: RunScope = { threadId: "thread", runId: "run", emit: () => Effect.v
 /** The system prompts one model step of a new run in `root` is asked with. */
 const stepSystem = (root: string, system: ReadonlyArray<string> = []) =>
   Effect.flatMap(projectInstructionsHook(root), (hook) =>
-    Effect.map(hook.request!(scope, { system, history: [] }), (request) => request.system),
+    Effect.map(
+      hook.request!(scope, { system, history: [], tools: [] }),
+      (request) => request.system,
+    ),
   );
 
 it.live("loads root guidance and a recursive catalog, not the scoped files' content", () =>
@@ -42,7 +45,7 @@ it.live("loads root guidance and a recursive catalog, not the scoped files' cont
       path.join(root, "packages", "memory", "src", "AGENTS.md"),
     );
     const hook = yield* projectInstructionsHook(root);
-    const first = yield* hook.request!(scope, { system: ["BASE"], history: [] });
+    const first = yield* hook.request!(scope, { system: ["BASE"], history: [], tools: [] });
     const prompt = first.system.join("\n");
     expect(first.system[0]).toBe("BASE");
     expect(prompt).toContain("ROOT RULE");
@@ -57,7 +60,7 @@ it.live("loads root guidance and a recursive catalog, not the scoped files' cont
     expect(prompt).not.toContain("packages/memory/src/AGENTS.md");
     // Read once per run: a later step of the same run is asked with the same instructions.
     yield* fs.writeFileString(path.join(root, "AGENTS.md"), "UPDATED ROOT");
-    const next = yield* hook.request!(scope, { system: ["BASE"], history: [] });
+    const next = yield* hook.request!(scope, { system: ["BASE"], history: [], tools: [] });
     expect(next.system).toEqual(first.system);
   }).pipe(withTestPlatform),
 );

@@ -4336,3 +4336,15 @@
   - 지금처럼 차이를 고정값으로 더하면, 재계산 직후 실제 크기를 평균 47% 틀렸다. 비율로 보정하면 14%, 고정분(system과 도구 정의)을 따로 두면 10%였다.
   - 그래서 "절반"이 실제로는 약 100–118K에서 멈춘다. 의도한 크기는 창의 27.5%다.
   - 비율 보정을 하려면 system과 도구 정의의 추정이 hook까지 와야 한다.
+
+## 도구 정의나 system prompt가 바뀐 요청은 다시 계산한다 (2026-11-08)
+
+- 계기: 이어 붙이기를 적용한 뒤 dev 대화 614cf1e5의 run 시작 4번 중 3번이 캐시를 거의 읽지 못했다.
+  - 19:00 run: Plan 승인으로 workflow phase가 `plan`에서 `execute`로 바뀌었다. phase마다 제공하는 도구와 system prompt가 달라 tools부터 캐시를 하나도 읽지 못했다(`cache_read` 0, 쓰기 193,644토큰).
+  - 19:16 run: 사용자가 시작한 run의 시작 알림이 system prompt에 들어갔다. 같은 날의 결정("작업 알림은 system prompt가 아니라 run에 합류하는 메시지로 보낸다")으로 없어졌다.
+  - 18:51 run: phase는 `plan` 그대로였는데 도구 정의 중간부터 달라졌다(`cache_read` 5,063). 저장된 기록으로는 어느 도구인지 가릴 수 없었다.
+  - 19:00 run은 그렇게 전부 다시 쓴 뒤 36초 안에 `over-budget` 재계산을 두 번 더 했다.
+- 결정: 요청이 앞 요청의 도구 정의(이름, 설명, 인자 schema)나 system prompt와 다르면 `tools-changed` 또는 `system-changed`로 다시 계산한다. provider는 요청을 앞에서부터 캐시하므로, 앞부분이 바뀐 요청은 메시지를 어차피 모두 새로 쓴다. 그때 줄이면 같은 쓰기 한 번으로 끝난다.
+  - 이를 위해 run loop의 `StepRequest`가 그 step이 제공하는 tools를 들고, toolkit은 hook을 거친 `request.tools`로 만든다.
+  - `tools-changed`면 `model request history` 로그에 바뀐 도구 이름(`changedTools`)을 남긴다. 18:51 같은 경우가 다시 생기면 원인을 바로 가릴 수 있다.
+- 남은 것: phase가 바뀔 때 도구와 system prompt가 바뀌는 것 자체는 그대로다. 막으려면 도구 목록을 phase와 무관하게 두고 호출할 때 거부하며, phase 안내를 메시지로 보내야 한다. 범위가 커서 따로 정한다.

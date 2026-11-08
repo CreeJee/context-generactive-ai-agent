@@ -80,6 +80,8 @@ export interface RunScope {
 export interface StepRequest {
   readonly system: ReadonlyArray<string>;
   readonly history: ReadonlyArray<StoredMessage>;
+  /** The tools the step offers: the run's, with the lazy ones it discovered so far. */
+  readonly tools: ReadonlyArray<RunTool>;
 }
 
 /** A call and the answer it got. */
@@ -687,12 +689,12 @@ const runAccepted = Effect.fnUntraced(function* <R>(
           Effect.map(joining(scope, messages), (added) => [...messages, ...added]),
       );
       yield* Ref.set(conversation, current);
+      const offeredTools = yield* tools.offered;
       const request = yield* Effect.reduce(
         hooks.flatMap((hook) => hook.request ?? []),
-        (): StepRequest => ({ system: spec.system, history: current }),
+        (): StepRequest => ({ system: spec.system, history: current, tools: offeredTools }),
         (sent, hook) => hook(scope, sent),
       );
-      const offeredTools = yield* tools.offered;
       const messageId = yield* crypto.uuidV7();
       const createdAt = DateTime.formatIso(yield* DateTime.now);
       const scheduler = yield* stepScheduler<StoredInterruptPayload, RunFailed, R>({ answered });
@@ -801,7 +803,7 @@ const runAccepted = Effect.fnUntraced(function* <R>(
       yield* spec.model
         .streamText({
           prompt: toPrompt(request.history, request.system),
-          toolkit: toolkitOf(offeredTools, spec.providerTools ?? []),
+          toolkit: toolkitOf(request.tools, spec.providerTools ?? []),
           disableToolCallResolution: true,
           toolCallValidation: "deferred",
         })

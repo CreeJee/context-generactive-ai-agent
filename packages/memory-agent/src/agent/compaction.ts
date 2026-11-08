@@ -6,6 +6,8 @@ import {
   Context,
   Data,
   Duration,
+  Equal,
+  Equivalence,
   FiberHandle,
   HashMap,
   HashSet,
@@ -21,6 +23,8 @@ import type { ChatMetadata, ChatMetadataFailed, SummaryBlock } from "../chat-sto
 import { type OrchestratorNote, StoredMessage } from "../chat-store/schema.ts";
 import { firstChange } from "../chat-store/thread-messages.ts";
 import { asRunFailed, type RunHook } from "../loop/run.ts";
+import { toolParameters } from "../model/tool-schema.ts";
+import type { RunTool } from "../tools/run-tool.ts";
 import { RunStore } from "../loop/store.ts";
 import type { ModelHandoffFailed } from "./model-handoff.ts";
 import { recentRawSteps, recentRawUserTurns, stepBlockSteps } from "./compaction-policy.ts";
@@ -1180,13 +1184,16 @@ export const requestHistory = <M extends ConversationMessage>(
 /**
  * Why a request was made from the conversation again rather than from the previous request: none
  * is kept that the provider likely still caches (`no-previous`), `/compact` ran (`manual-compact`),
- * the conversation is not the previous one with messages after it (`conversation-changed`), or the
- * new messages would pass `leaveOutAt` (`over-budget`).
+ * the conversation is not the previous one with messages after it (`conversation-changed`), the
+ * tool definitions or the system prompt are not the previous request's (`tools-changed`,
+ * `system-changed`), or the new messages would pass `leaveOutAt` (`over-budget`).
  */
 export type RebuildReason =
   | "no-previous"
   | "manual-compact"
   | "conversation-changed"
+  | "tools-changed"
+  | "system-changed"
   | "over-budget";
 
 /** What a request was made from. */
@@ -1198,6 +1205,29 @@ export type RequestBasis = Data.TaggedEnum<{
 }>;
 export const RequestBasis = Data.taggedEnum<RequestBasis>();
 
+/**
+ * What a request sends before its messages: the tool definitions, then the system prompt. The
+ * provider caches a request from its start, so once either differs it reads none of the messages
+ * from its cache.
+ */
+export interface RequestPrefix {
+  /** Each offered tool's name and its definition as the model reads it, in the order offered. */
+  readonly tools: ReadonlyArray<readonly [name: string, definition: string]>;
+  readonly system: ReadonlyArray<string>;
+}
+
+/** The prefix of a step's request (see {@link RequestPrefix}). */
+export const requestPrefix = (request: {
+  readonly tools: ReadonlyArray<RunTool>;
+  readonly system: ReadonlyArray<string>;
+}): RequestPrefix => ({
+  tools: request.tools.map(({ tool }) => [
+    tool.name,
+    JSON.stringify({ description: tool.description ?? "", parameters: toolParameters(tool) }),
+  ]),
+  system: request.system,
+});
+
 /** A request as it was sent, and the conversation it was made from. */
 export interface SentRequest {
   /** The stored conversation, or the one a model handoff put in its place. */
@@ -1206,6 +1236,7 @@ export interface SentRequest {
   readonly stage: CompactionStage;
   /** How far `/compact` had compacted the conversation. */
   readonly manual: ManualCompaction;
+  readonly prefix: RequestPrefix;
 }
 
 /** A request kept until the provider likely no longer caches it (epoch milliseconds). */
@@ -1274,20 +1305,51 @@ const sameMessage = Schema.toEquivalence(StoredMessage);
 const keptMessages = (previous: ReadonlyArray<StoredMessage>, next: ReadonlyArray<StoredMessage>) =>
   firstChange(next, previous);
 
+const sameTool = Equivalence.Tuple([Equivalence.String, Equivalence.String]);
+const sameTools = EffectArray.makeEquivalence(sameTool);
+const sameSystem = EffectArray.makeEquivalence(Equivalence.String);
+
+/**
+ * The tools whose definition `after` does not share with `before`: added, removed or changed.
+ * None when only their order changed.
+ */
+const changedTools = (before: RequestPrefix["tools"], after: RequestPrefix["tools"]) => {
+  const unshared = (tools: RequestPrefix["tools"], others: RequestPrefix["tools"]) =>
+    tools.filter((tool) => !others.some((other) => sameTool(tool, other)));
+  return EffectArray.dedupe(
+    [...unshared(before, after), ...unshared(after, before)].map(([name]) => name),
+  );
+};
+
 /** Why `previous` cannot take the new messages after it, before reading what they are. */
 const unappendable = (
   previous: SentRequest,
   now: {
     readonly from: ReadonlyArray<StoredMessage>;
     readonly manual: ManualCompaction;
+    readonly prefix: RequestPrefix;
   },
 ): Option.Option<RebuildReason> =>
-  previous.manual.clearedThrough !== now.manual.clearedThrough ||
-  previous.manual.summarizedTurns !== now.manual.summarizedTurns
-    ? Option.some("manual-compact")
-    : keptMessages(previous.from, now.from) < previous.from.length
-      ? Option.some("conversation-changed")
-      : Option.none();
+  Option.map(
+    EffectArray.findFirst(
+      [
+        [
+          "manual-compact",
+          () =>
+            previous.manual.clearedThrough !== now.manual.clearedThrough ||
+            previous.manual.summarizedTurns !== now.manual.summarizedTurns,
+        ],
+        [
+          "conversation-changed",
+          () => keptMessages(previous.from, now.from) < previous.from.length,
+        ],
+        ["tools-changed", () => !sameTools(previous.prefix.tools, now.prefix.tools)],
+        ["system-changed", () => !sameSystem(previous.prefix.system, now.prefix.system)],
+      ] satisfies ReadonlyArray<readonly [RebuildReason, () => boolean]>,
+      ([, applies]) => applies(),
+    ),
+    ([reason]) => reason,
+  );
 
 /**
  * `added` with search leads before the message among them that starts a run, when the request
@@ -1330,6 +1392,7 @@ const appendedTo = Effect.fnUntraced(function* (
   now: {
     readonly from: ReadonlyArray<StoredMessage>;
     readonly manual: ManualCompaction;
+    readonly prefix: RequestPrefix;
     readonly sources: CompactionSources;
     readonly budget: Budget;
   },
@@ -1337,7 +1400,7 @@ const appendedTo = Effect.fnUntraced(function* (
   Result.Result<{ readonly sent: SentRequest; readonly tokens: number }, RebuildReason>,
   CompactionFailed
 > {
-  const { from, manual, sources, budget } = now;
+  const { from, manual, prefix, sources, budget } = now;
   const added = from.slice(previous.from.length);
   const { toolResultId } = yield* memoryLookups(sources, added, []);
   const shown = previewedResults(added, toolResultId, sources.pointers ?? memoryPointers).filter(
@@ -1351,7 +1414,7 @@ const appendedTo = Effect.fnUntraced(function* (
   const tokens = estimateConversation(messages);
   return tokens > budget.leaveOutAt
     ? Result.fail("over-budget")
-    : Result.succeed({ sent: { from, messages, stage: previous.stage, manual }, tokens });
+    : Result.succeed({ sent: { from, messages, stage: previous.stage, manual, prefix }, tokens });
 });
 
 /** What one model request sends, what it was made from, and the request to append to next. */
@@ -1369,8 +1432,9 @@ export interface NextRequest {
  * prompt cache, where a request that changes earlier messages is written to it anew at twice the
  * input price. While the conversation only grows, a request is `previous` with the new messages
  * after it. The conversation is compacted again ({@link requestHistory}) only when that would pass
- * `leaveOutAt`, after `/compact`, when the conversation changed, or once the provider likely let
- * `previous` go; answered tool outputs are cleared then too, and new summaries are first sent then.
+ * `leaveOutAt`, after `/compact`, when the conversation changed, once the provider likely let
+ * `previous` go, or when `prefix` is not `previous`'s and the provider would write all of it to its
+ * cache anyway; answered tool outputs are cleared then too, and new summaries are first sent then.
  */
 export const nextRequestHistory = Effect.fnUntraced(function* (options: {
   readonly metadata: ChatMetadata;
@@ -1381,17 +1445,19 @@ export const nextRequestHistory = Effect.fnUntraced(function* (options: {
   readonly budget: Budget;
   readonly steps?: ReadonlyArray<StepBlock>;
   readonly previous: Option.Option<SentRequest>;
+  /** What the request sends before its messages. */
+  readonly prefix: RequestPrefix;
 }): Effect.fn.Return<NextRequest, CompactionFailed> {
-  const { metadata, threadId, sources, budget } = options;
+  const { metadata, threadId, sources, budget, prefix } = options;
   const from = options.restored ?? options.messages;
   const state = yield* compactionStateEffect({ metadata, threadId });
   const { manual } = state;
   const appended = yield* Option.match(options.previous, {
     onNone: () => Effect.succeed(Result.fail<RebuildReason>("no-previous")),
     onSome: (previous) =>
-      Option.match(unappendable(previous, { from, manual }), {
+      Option.match(unappendable(previous, { from, manual, prefix }), {
         onSome: (reason) => Effect.succeed(Result.fail(reason)),
-        onNone: () => appendedTo(previous, { from, manual, sources, budget }),
+        onNone: () => appendedTo(previous, { from, manual, prefix, sources, budget }),
       }),
   });
   return yield* Result.match(appended, {
@@ -1409,12 +1475,14 @@ export const nextRequestHistory = Effect.fnUntraced(function* (options: {
         (made): NextRequest => ({
           ...made,
           basis: RequestBasis.Rebuilt({ reason }),
-          sent: { from, messages: made.messages, stage: made.stage, manual },
+          sent: { from, messages: made.messages, stage: made.stage, manual, prefix },
           estimatedTokens: estimateConversation(made.messages),
         }),
       ),
   });
 });
+
+const toolsChanged = RequestBasis.Rebuilt({ reason: "tools-changed" });
 
 /** How a request was made and how much of the previous one it kept, to find what breaks caching. */
 const logRequestBasis = (
@@ -1440,6 +1508,16 @@ const logRequestBasis = (
       }),
       estimatedTokens: next.estimatedTokens,
       stage: next.stage,
+      // Which tools broke the cache, when they did.
+      ...Option.match(
+        Option.filter(previous, () => Equal.equals(next.basis, toolsChanged)),
+        {
+          onNone: () => ({}),
+          onSome: (sent) => ({
+            changedTools: changedTools(sent.prefix.tools, next.sent.prefix.tools),
+          }),
+        },
+      ),
     }),
   );
 
@@ -1604,6 +1682,7 @@ export const compactionHook = Effect.fnUntraced(function* (options: {
           budget,
           steps,
           previous,
+          prefix: requestPrefix(request),
         });
         yield* lastRequests.set(threadId, sent.sent, options.promptCacheFor);
         yield* logRequestBasis(threadId, previous, sent);

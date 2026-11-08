@@ -8,6 +8,7 @@ import {
   nextRequestHistory,
   RequestBasis,
   type CompactionMessage,
+  type RequestPrefix,
   type SentRequest,
 } from "../../src/agent/compaction.ts";
 import { StoredMessage } from "../../src/chat-store/schema.ts";
@@ -35,6 +36,9 @@ const readCall = (id: string): ScriptedTurn => ({
 const sources = lookupSources({ toolResultId: (id) => id, nodeText: () => null });
 
 const sameMessage = Schema.toEquivalence(StoredMessage);
+
+/** What the requests these tests make send before their messages: the same every time. */
+const prefix: RequestPrefix = { tools: [["read_file", "{}"]], system: ["시스템"] };
 
 /** Whether `next` sends `previous` again first, so the provider reads it from its cache. */
 const startsWith = (next: ReadonlyArray<StoredMessage>, previous: ReadonlyArray<StoredMessage>) =>
@@ -171,6 +175,7 @@ testAgent()("requests append to the one before", (it) => {
         messages: [leads, asked],
         stage: "leave-out",
         manual: { clearedThrough: 0, summarizedTurns: 0 },
+        prefix,
       };
       const step: ReadonlyArray<StoredMessage> = [
         {
@@ -195,6 +200,7 @@ testAgent()("requests append to the one before", (it) => {
         sources: withLeads,
         budget: { compactAt: 0, leaveOutAt: noLimit, inputCeiling: noLimit },
         previous: Option.some(previous),
+        prefix,
       });
       expect(next.basis).toEqual(RequestBasis.Appended());
       expect(next.messages.filter((message) => message === leads)).toHaveLength(1);
@@ -237,11 +243,55 @@ testAgent()("requests append to the one before", (it) => {
           messages: sentBefore,
           stage: "none",
           manual: { clearedThrough: 0, summarizedTurns: 0 },
+          prefix,
         }),
+        prefix,
       });
       expect(next.basis).toEqual(RequestBasis.Rebuilt({ reason: "over-budget" }));
       // Short of half, the next few steps would pass leaveOutAt and write it to the cache again.
       expect(next.estimatedTokens).toBeLessThanOrEqual(leaveOutAt / 2);
+    }),
+  );
+
+  it.effect("a request whose tools or system prompt changed is compacted again", () =>
+    Effect.gen(function* () {
+      const { project } = yield* TestEnv;
+      const session = yield* (yield* Sessions).create(project.id);
+      const metadata = (yield* RunStore).chatMetadata;
+      const asked: StoredMessage = { role: "user", content: "질문" };
+      const previous: SentRequest = {
+        from: [asked],
+        messages: [asked],
+        stage: "none",
+        manual: { clearedThrough: 0, summarizedTurns: 0 },
+        prefix,
+      };
+      const basisWith = (now: RequestPrefix) =>
+        Effect.map(
+          nextRequestHistory({
+            metadata,
+            threadId: session.id,
+            messages: [
+              asked,
+              { role: "assistant", content: "답" },
+              { role: "user", content: "다음" },
+            ],
+            restored: null,
+            sources,
+            budget: { compactAt: 0, leaveOutAt: noLimit, inputCeiling: noLimit },
+            previous: Option.some(previous),
+            prefix: now,
+          }),
+          (next) => next.basis,
+        );
+      expect(yield* basisWith(prefix)).toEqual(RequestBasis.Appended());
+      // The provider caches none of the messages after a changed prefix: they are written anyway.
+      expect(
+        yield* basisWith({ ...prefix, tools: [...prefix.tools, ["write_file", "{}"]] }),
+      ).toEqual(RequestBasis.Rebuilt({ reason: "tools-changed" }));
+      expect(yield* basisWith({ ...prefix, system: ["다른 시스템"] })).toEqual(
+        RequestBasis.Rebuilt({ reason: "system-changed" }),
+      );
     }),
   );
 });

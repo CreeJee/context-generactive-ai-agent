@@ -15,7 +15,7 @@ run·thread·interrupt 행은 `RunStore`(SqlClient)가 `chat_threads`, `chat_thr
 - `RunScope` — 훅이 받는 run 문맥(`threadId`, `runId`, 페이지로 이벤트를 보내는 `emit`)
 - `RunFailed` — 계속할 수 없는 run의 TaggedError(`message`, `code?`). message는 사용자에게 보이고 run 행에 저장된다
 - `asRunFailed` / `modelFailureOf` — 일반 에러를 `RunFailed`로 바꾼다. `modelFailureOf`는 모델이 보여 주는 실패 텍스트로 `RunSpec.modelFailure`를 만든다
-- `StepEnded` / `StepRequest` / `AnsweredCall` — step 종료(`Model` | `Resume`), step 요청(system, history), 호출과 그 응답의 쌍
+- `StepEnded` / `StepRequest` / `AnsweredCall` — step 종료(`Model` | `Resume`), step 요청(system, history, 그 step이 제공하는 tools), 호출과 그 응답의 쌍
 - `stepScheduler` / `StepScheduler` — 한 model step의 도구 호출을 Scope 안에서 fork 실행한다. `offer(call, admission)`, `settle(complete)`
 - `CallOutcome` / `CallAnswer` / `Admission` / `Run` / `StepCall` — 호출 결과 TaggedEnum(`Returned`/`Failed`/`Refused`/`Waiting`), gate 결정(`Run` 또는 결과), 호출 형태
 - `RunStore` — `Context.Service`. `RunStore.layer`는 `make`와 `HistoryPageReader.layer`로 구성된다. thread·run·interrupt 행과 화면 메시지 행을 다룬다(thread, threadSaved, activeRun, saveThread, startRun, endRun, run, lastRun, pendingInterrupts, createInterrupts 등)

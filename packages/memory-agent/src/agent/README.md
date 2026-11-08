@@ -47,7 +47,7 @@
 - `apiUsageHook`은 카운트만 기록한다. 프롬프트·메시지·도구 인자는 절대 저장하지 않는다.
 - compaction의 answered 도구 출력 비우기는 마지막 '도구 호출 없는 assistant 답변'까지만 적용한다. 진행 중인 실행의 도구 결과는 그대로 둔다.
 - `keepLatestAnswered`일 때 최신 답변 턴은 다음 실행이 답할 때까지 유지한다. 비운 결과는 메모리 노드 id를 안내한다.
-- `compactionHook`의 요청은 앞 요청에 새 메시지만 붙인다(`nextRequestHistory`). 새 메시지는 미리보기와 빈 사용자 글 빼기만 거친다. 다시 계산(`requestHistory`)은 붙이면 `leaveOutAt`을 넘을 때, `/compact` 뒤, 대화가 앞 요청 때와 달라졌을 때, 앞 요청이 없거나 provider가 캐시하는 시간(`RunModel.promptCacheFor`)이 지났을 때만 한다. 답한 도구 출력 비우기, 턴 요약 블록, step 요약 블록은 그 다시 계산하는 요청부터 보낸다. `leaveOutAt`을 넘어서 다시 계산하는 요청은 요약으로 `leaveOutAt` 아래가 되어도 절반까지 내린다. 바로 아래에서 멈추면 몇 step 뒤 다시 넘어 캐시를 또 쓰기 때문이다. 요청마다 `model request history` 로그에 basis와 유지한 메시지 수, 추정 토큰, stage를 남긴다.
+- `compactionHook`의 요청은 앞 요청에 새 메시지만 붙인다(`nextRequestHistory`). 새 메시지는 미리보기와 빈 사용자 글 빼기만 거친다. 다시 계산(`requestHistory`)은 붙이면 `leaveOutAt`을 넘을 때, `/compact` 뒤, 대화가 앞 요청 때와 달라졌을 때, 앞 요청이 없거나 provider가 캐시하는 시간(`RunModel.promptCacheFor`)이 지났을 때, 도구 정의나 system prompt가 앞 요청과 다를 때(`tools-changed`, `system-changed`)만 한다. provider는 요청을 앞에서부터 캐시하므로 앞부분이 바뀌면 메시지를 어차피 모두 새로 쓴다. 답한 도구 출력 비우기, 턴 요약 블록, step 요약 블록은 그 다시 계산하는 요청부터 보낸다. `leaveOutAt`을 넘어서 다시 계산하는 요청은 요약으로 `leaveOutAt` 아래가 되어도 절반까지 내린다. 바로 아래에서 멈추면 몇 step 뒤 다시 넘어 캐시를 또 쓰기 때문이다. 요청마다 `model request history` 로그에 basis와 유지한 메시지 수, 추정 토큰, stage를 남긴다. `tools-changed`면 바뀐 도구 이름(`changedTools`)도 남긴다.
 - retrieval appendix는 찾은 것만 run 동안 기억한다. 이어 붙일 때는 새 사용자 턴 바로 앞에 넣고, 앞 요청에 이미 있는 appendix는 다시 넣지 않는다.
 - 요약 블록은 불변이다. 블록을 추가해도 이전 메시지를 다시 쓰지 않는다(프로바이더 KV prefix 유지).
 - `SummaryBlock`은 `nextTurnNodeId`의 기록 텍스트가 해당 위치의 사용자 턴과 같을 때만 쓴다(`sameTurn`, `[redacted:` 포함 노드는 어떤 텍스트와도 일치). `linedUp`은 `end`가 엄격히 증가하는 앞쪽 연속 블록만 받는다.
