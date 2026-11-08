@@ -19,6 +19,7 @@ import {
 } from "effect";
 import type { ChatMetadata, ChatMetadataFailed, SummaryBlock } from "../chat-store/metadata.ts";
 import { StoredMessage } from "../chat-store/schema.ts";
+import { firstChange } from "../chat-store/thread-messages.ts";
 import { asRunFailed, type RunHook } from "../loop/run.ts";
 import { RunStore } from "../loop/store.ts";
 import type { ModelHandoffFailed } from "./model-handoff.ts";
@@ -1079,26 +1080,24 @@ function previewedResults<M extends ConversationMessage>(
   );
 }
 
-/**
- * What one model request of a session sends of its conversation, and the stage that made it so
- * (see {@link compactEffect}). `restored` is the history a model handoff put in place of
- * `messages`, headed by its notice.
- */
-export const requestHistory = Effect.fnUntraced(function* <M extends ConversationMessage>(options: {
-  readonly metadata: ChatMetadata;
-  readonly threadId: string;
+/** What {@link requestHistory} compacts, with the session's compaction state read. */
+interface HistoryRequest<M> {
+  readonly state: CompactionState;
   readonly messages: ReadonlyArray<M>;
   readonly restored: ReadonlyArray<M | CompactionMessage> | null;
   readonly sources: CompactionSources;
   readonly budget: Budget;
   /** Summaries of the run's earlier steps (see {@link compactEffect}). */
-  readonly steps?: ReadonlyArray<StepBlock>;
-}): Effect.fn.Return<
+  readonly steps?: ReadonlyArray<StepBlock> | undefined;
+}
+
+const compactedRequest = Effect.fnUntraced(function* <M extends ConversationMessage>(
+  options: HistoryRequest<M>,
+): Effect.fn.Return<
   { readonly messages: ReadonlyArray<M | CompactionMessage>; readonly stage: CompactionStage },
   CompactionFailed
 > {
-  const { metadata, threadId, messages, restored, sources, budget, steps = [] } = options;
-  const state = yield* compactionStateEffect({ metadata, threadId });
+  const { state, messages, restored, sources, budget, steps = [] } = options;
   const removedTurns =
     restored === null ? 0 : userTurns(messages).length - userTurns(restored).length;
   const restoredContext = restored?.[0];
@@ -1140,6 +1139,22 @@ export const requestHistory = Effect.fnUntraced(function* <M extends Conversatio
     stage: restored !== null && compacted.stage === "none" ? "summarize" : compacted.stage,
   };
 });
+
+/**
+ * What one model request of a session sends of its conversation, and the stage that made it so
+ * (see {@link compactEffect}). `restored` is the history a model handoff put in place of
+ * `messages`, headed by its notice.
+ */
+export const requestHistory = <M extends ConversationMessage>(
+  options: Omit<HistoryRequest<M>, "state"> & {
+    readonly metadata: ChatMetadata;
+    readonly threadId: string;
+  },
+) =>
+  Effect.flatMap(
+    compactionStateEffect({ metadata: options.metadata, threadId: options.threadId }),
+    (state) => compactedRequest({ ...options, state }),
+  );
 
 /**
  * Why a request was made from the conversation again rather than from the previous request: none
@@ -1233,12 +1248,10 @@ export class LastRequests extends Context.Service<
 }
 
 const sameMessage = Schema.toEquivalence(StoredMessage);
-const sameAt = (message: StoredMessage, other: StoredMessage | undefined) =>
-  other !== undefined && (message === other || sameMessage(message, other));
 
 /** How many of `previous`'s messages `next` begins with. */
 const keptMessages = (previous: ReadonlyArray<StoredMessage>, next: ReadonlyArray<StoredMessage>) =>
-  EffectArray.takeWhile(previous, (message, index) => sameAt(message, next[index])).length;
+  firstChange(next, previous);
 
 /** Why `previous` cannot take the new messages after it, before reading what they are. */
 const unappendable = (
@@ -1251,8 +1264,7 @@ const unappendable = (
   previous.manual.clearedThrough !== now.manual.clearedThrough ||
   previous.manual.summarizedTurns !== now.manual.summarizedTurns
     ? Option.some("manual-compact")
-    : now.from.length < previous.from.length ||
-        keptMessages(previous.from, now.from) < previous.from.length
+    : keptMessages(previous.from, now.from) < previous.from.length
       ? Option.some("conversation-changed")
       : Option.none();
 
@@ -1281,7 +1293,7 @@ const withTurnLeads = (
         Effect.map(
           retrieve([...previous.messages, ...added]),
           (appendix): ReadonlyArray<StoredMessage | CompactionMessage> =>
-            appendix === null || previous.messages.some((message) => sameAt(appendix, message))
+            appendix === null || previous.messages.some((message) => sameMessage(appendix, message))
               ? added
               : [...added.slice(0, turn), appendix, ...added.slice(turn)],
         ),
@@ -1300,23 +1312,25 @@ const appendedTo = Effect.fnUntraced(function* (
     readonly sources: CompactionSources;
     readonly budget: Budget;
   },
-): Effect.fn.Return<Result.Result<SentRequest, RebuildReason>, CompactionFailed> {
+): Effect.fn.Return<
+  Result.Result<{ readonly sent: SentRequest; readonly tokens: number }, RebuildReason>,
+  CompactionFailed
+> {
   const { from, manual, sources, budget } = now;
   const added = from.slice(previous.from.length);
   const { toolResultId } = yield* memoryLookups(sources, added, []);
   const shown = previewedResults(added, toolResultId, sources.pointers ?? memoryPointers).filter(
     (message) => !isEmptyUserText(message),
   );
+  // What was sent is replayable already, so pairing calls with results keeps all of it.
   const messages = replayableToolHistory([
     ...previous.messages,
     ...(yield* withTurnLeads(sources, previous, shown)),
   ]);
-  // Pairing calls with their results may drop an earlier message, which changes what was sent.
-  return keptMessages(previous.messages, messages) < previous.messages.length
-    ? Result.fail("conversation-changed")
-    : estimateConversation(messages) > budget.leaveOutAt
-      ? Result.fail("over-budget")
-      : Result.succeed({ from, messages, stage: previous.stage, manual });
+  const tokens = estimateConversation(messages);
+  return tokens > budget.leaveOutAt
+    ? Result.fail("over-budget")
+    : Result.succeed({ sent: { from, messages, stage: previous.stage, manual }, tokens });
 });
 
 /** What one model request sends, what it was made from, and the request to append to next. */
@@ -1325,6 +1339,8 @@ export interface NextRequest {
   readonly stage: CompactionStage;
   readonly basis: RequestBasis;
   readonly sent: SentRequest;
+  /** Our estimate of {@link messages}. */
+  readonly estimatedTokens: number;
 }
 
 /**
@@ -1347,7 +1363,8 @@ export const nextRequestHistory = Effect.fnUntraced(function* (options: {
 }): Effect.fn.Return<NextRequest, CompactionFailed> {
   const { metadata, threadId, sources, budget } = options;
   const from = options.restored ?? options.messages;
-  const { manual } = yield* compactionStateEffect({ metadata, threadId });
+  const state = yield* compactionStateEffect({ metadata, threadId });
+  const { manual } = state;
   const appended = yield* Option.match(options.previous, {
     onNone: () => Effect.succeed(Result.fail<RebuildReason>("no-previous")),
     onSome: (previous) =>
@@ -1357,18 +1374,20 @@ export const nextRequestHistory = Effect.fnUntraced(function* (options: {
       }),
   });
   return yield* Result.match(appended, {
-    onSuccess: (sent) =>
+    onSuccess: ({ sent, tokens }) =>
       Effect.succeed<NextRequest>({
         messages: sent.messages,
         stage: sent.stage,
         basis: RequestBasis.Appended(),
         sent,
+        estimatedTokens: tokens,
       }),
     onFailure: (reason) =>
-      Effect.map(requestHistory(options), (made): NextRequest => ({
+      Effect.map(compactedRequest({ ...options, state }), (made): NextRequest => ({
         ...made,
         basis: RequestBasis.Rebuilt({ reason }),
         sent: { from, messages: made.messages, stage: made.stage, manual },
+        estimatedTokens: estimateConversation(made.messages),
       })),
   });
 });
@@ -1389,9 +1408,13 @@ const logRequestBasis = (
       messages: next.messages.length,
       keptMessages: Option.match(previous, {
         onNone: () => 0,
-        onSome: (sent) => keptMessages(sent.messages, next.messages),
+        onSome: (sent) =>
+          RequestBasis.$match(next.basis, {
+            Appended: () => sent.messages.length,
+            Rebuilt: () => keptMessages(sent.messages, next.messages),
+          }),
       }),
-      estimatedTokens: estimateConversation(next.messages),
+      estimatedTokens: next.estimatedTokens,
       stage: next.stage,
     }),
   );
@@ -1556,9 +1579,8 @@ export const compactionHook = Effect.fnUntraced(function* (options: {
         yield* lastRequests.set(threadId, sent.sent, options.promptCacheFor);
         yield* logRequestBasis(threadId, previous, sent);
         yield* Ref.set(stage, sent.stage);
-        const sentTokens = estimateConversation(sent.messages);
-        yield* Ref.set(sentEstimate, Option.some(sentTokens));
-        yield* summarizeDue(request.history, steps, budget, sentTokens);
+        yield* Ref.set(sentEstimate, Option.some(sent.estimatedTokens));
+        yield* summarizeDue(request.history, steps, budget, sent.estimatedTokens);
         return { ...request, history: sent.messages };
       }).pipe(Effect.mapError(asRunFailed)),
     // A response that reported no input count keeps the overhead the one before it measured.
