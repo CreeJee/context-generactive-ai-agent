@@ -4401,3 +4401,23 @@
   - 사용자 말을 메모리에서 읽지 않는 history(subagent, 모델 handoff, 평가)는 `CompactionSources.userMessages`가 없으니 표지가 전과 같다.
 - 실측: 614cf1e5의 사용자 말은 13개, 합계 887자, 가장 긴 것 239자였다. 정정·철회된 것은 없었다. 모두 표지에 들어가고 늘어나는 양은 약 500토큰이다(그 요청 추정 33,059토큰).
 - 남은 것: 얼마나 도움이 되는지 평가하는 방법(빠진 뒤 결정을 지키는지, 근거를 다시 찾는지)은 따로 정한다.
+
+## 큰 배열을 통째로 복사하지 않는다 (2026-11-08)
+
+- 계기: 큰 데이터를 불필요하게 복제하는 코드를 정리하기 전에 먼저 쟀다. 실제 DB 사본에서 `v8.getHeapStatistics().total_allocated_bytes`와 heap sampling으로 할당량을, 523개 세션에서 시간을 쟀다.
+  - retrieval appendix: 세션 노드 전체를 읽고 요청의 모든 메시지와 비교해 7.7초, 7.7GB를 할당했다.
+  - sessionMessages: 88ms, 1GB. 턴 요약은 143MB, BTW는 부모 대화 3,600만 자를 읽었다.
+  - 임베딩 배치(5만 개)는 1.19GB였다.
+- 결정: 필요한 노드만 SQL에서 읽는다(`5290988f`, `4cfcf3ff`, `15e2f5f5`).
+  - retrieval appendix는 검색 결과만 요청에 이미 있는지 확인한다. 4–14ms가 됐다.
+  - 턴 요약은 사용자 노드와 요약할 구간(`Nodes.between`)만, BTW는 부모의 사용자·assistant 노드(`Nodes.ofKinds`)만 읽는다. 각각 52MB 이하, 20만 자가 됐다.
+- 결정: fold 단계마다 누적값 전체를 복사하지 않는다. 단계마다 복사하면 길이의 제곱만큼 할당한다.
+  - 원소마다 결과를 내는 fold는 `Array.mapAccum`으로 결과를 한 번에 만든다. 누적값을 계속 키워야 하면 구조를 공유하는 `Chunk`·`HashMap`·`HashSet`에 담는다.
+  - sessionMessages는 16–25ms, 32–37MB, 임베딩 배치는 15.7MB가 됐다.
+  - `RunHook.joining`은 hook마다 대화를 이어 붙여 넘기지 않는다. 모든 hook이 단계를 시작할 때의 대화를 받고, 준 메시지는 hook 순서대로 한 번에 붙인다(`63b4022d`). 지금 joining hook은 큐 전달과 subagent 알림뿐이라 동작은 같다.
+- 결정: 이어진 원소를 묶거나 고정 크기로 자를 때는 Effect `Iterable.groupWith`·`Iterable.chunksOf`를 쓴다. 같은 이름의 `Array` 함수는 `chop`이 조각마다 나머지 배열을 `slice`로 복사해서 조각 수 × 길이만큼 할당한다. 5만 개 배치에서 `Array.groupWith`가 353MB를 할당했다. 직접 만든 `runsOf`·`piecesOf`(`src/slices.ts`)도 지웠다.
+- 결정: 위 두 패턴은 저장소가 직접 쓴 Oxlint 플러그인 `allocation`(`lint/allocation`)이 잡는다(`1a29a53c`).
+  - 가져온 코드인 anti-slop과 섞지 않는다(위 "anti-slop 플러그인은 가져온 코드라서" 결정).
+  - 규칙은 warn이다. 사용자 결정: 소스에서 규칙을 끄는 주석은 쓰지 않는다. 크기가 작은 fold도 코드를 고친다.
+- 확인: 바꾼 함수는 HEAD 사본과 같은 입력으로 출력을 비교했다. 실제 세션 523개, 임의 입력으로 배치 3,000번, BTW 묶기 20,000번, 비밀값 구간 합치기 30,000번, 벡터 군집 20,000번이다.
+- 참고: `memory/graph.ts`의 탐색 후보 정리(`improving`)는 같은 작업이지만 다른 세션의 커밋 `8217f111`에 함께 들어갔다.
