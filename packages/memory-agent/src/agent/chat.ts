@@ -123,7 +123,12 @@ import {
   messageText,
   type CompactionSources,
 } from "./compaction.ts";
-import { contextUsageHook, contextView, lastContextUsageEffect } from "./context-usage.ts";
+import {
+  contextUsageHook,
+  contextView,
+  lastContextUsageEffect,
+  measuredOverhead,
+} from "./context-usage.ts";
 import { endedTasks, orchestratorMessage } from "./orchestrator-message.ts";
 import { ApiUsage, apiUsageHook } from "./api-usage.ts";
 import { stepSummarizer } from "./step-summaries.ts";
@@ -2173,6 +2178,19 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           toolResultIds: (toolCallIds) => nodes.toolResultIds(sessionId, toolCallIds),
         });
         const window = () => runtime.contextWindow(selection.model);
+        const lastUsage = yield* lastContextUsageEffect({
+          metadata: runStore.chatMetadata,
+          threadId: sessionId,
+        }).pipe(
+          Effect.catch((error) =>
+            Effect.as(
+              logFailure("Context usage unreadable; the run's first request goes by the estimate")(
+                error,
+              ),
+              null,
+            ),
+          ),
+        );
         // A run's step summaries are made in the background for as long as the run goes on.
         const compacting = yield* compactionHook({
           sources: compactionSources(sessionId, reportSource !== null ? undefined : project, [
@@ -2183,6 +2201,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           budget: budgetFor(window()),
           lastRequests,
           promptCacheFor: runModel.promptCacheFor,
+          overhead: measuredOverhead(lastUsage),
           restore,
           summarizeSteps: stepSummarizer({
             services: { active, usageLedger, crypto },
@@ -2214,6 +2233,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           contextUsageHook({
             windowTokens: Effect.sync(window),
             compactionStage: compacting.stage,
+            estimatedTokens: compacting.sentEstimate,
             windowKnown: Effect.sync(() => runtime.contextWindowKnown?.(selection.model) ?? false),
           }),
           apiUsageHook(usageLedger, {

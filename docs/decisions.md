@@ -4302,3 +4302,7 @@
   - 캐시가 식었는지는 이제 첫 요청 전에 시간으로 안다(`promptCacheFor`). 그 요청을 다시 계산하므로 관측은 쓰지 않는다.
   - 관측 id 저장(`ContextUsage.observationId`)과 소비 기록(`memory-agent/consumed-cold-usage`)도 지운다. 예전 행의 그 값은 읽지 않는다.
   - 2026-09-25의 "명시적 cache-cold one-shot은 별개로 유지한다"를 이것으로 바꾼다.
+- provider가 추정보다 더 센 양을 run을 넘어 이어 쓴다(같은 날 dev 확인 뒤).
+  - 이 양은 run 안에서만 기억했다. 그래서 run의 첫 요청은 추정만 보고 보냈다. dev를 다시 켠 뒤 614cf1e5의 첫 요청은 추정이 60,898토큰이었는데 provider는 약 171K로 셌다. 200K 창의 상한(약 184K) 바로 아래였고, 이어 붙인 run 첫 요청은 상한을 넘을 수 있었다.
+  - 이제 사용량 저장(`ContextUsage`)에 그 요청의 추정(`estimatedTokens`)을 같이 남긴다. 다음 run은 첫 요청부터 `inputTokens − estimatedTokens`만큼 상한을 낮춰 본다(`measuredOverhead`). 저장한 값이라 앱을 다시 켜도 이어진다.
+  - 이 양은 고정값으로 더한다. 실제 차이는 메시지가 늘면 같이 는다. 이 대화는 tokenizer 차이로 추정이 약 2.5배 낮았다. 그래도 run 사이에 느는 것은 앞 run의 답과 새 사용자 턴뿐이라 오차가 작다. 모델을 바꾸면 첫 요청은 이전 모델의 값으로 정하고, 그 요청의 사용량부터 새 값을 쓴다.

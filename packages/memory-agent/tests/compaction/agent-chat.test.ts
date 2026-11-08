@@ -1,7 +1,7 @@
 import { Cause, Deferred, Effect, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
-import { budgetFor } from "../../src/agent/compaction.ts";
+import { budgetFor, messageText } from "../../src/agent/compaction.ts";
 import { TurnSummaries } from "../../src/agent/turn-summaries.ts";
 import { AgUiEvent } from "../../src/loop/chunks.ts";
 import { RunStore } from "../../src/loop/store.ts";
@@ -272,5 +272,33 @@ testAgent({
         compactionStage: "none",
       });
     }),
+  );
+});
+
+/** An answer of about 4,000 tokens. */
+const longAnswer = "x".repeat(16_000);
+
+// The provider counts far beyond the messages on every request, as a long system prompt would.
+testAgent({
+  testProvider: {
+    responder: (invocation) => ({
+      text: invocation.index === 0 ? longAnswer : "ok",
+      usage: { inputTokens: { uncached: 180_000, total: 180_000 }, outputTokens: { total: 5 } },
+    }),
+  },
+})("what a provider counted, across runs", (it) => {
+  it.effect(
+    "a run's first request fits under the window by what the last run's request counted",
+    () =>
+      Effect.gen(function* () {
+        const { sessionId } = yield* freshSession;
+        yield* send(sessionId, "run-1", "설계를 설명해 줘");
+        yield* send(sessionId, "run-2", "요약해 줘");
+        // About 180,000 tokens beyond the messages leave under 4,000 of the 200,000-token window.
+        const sent = yield* lastInvocation;
+        expect(sent.some((message) => message.content === longAnswer)).toBe(false);
+        expect(sent.some((message) => messageText(message).includes("were left out"))).toBe(true);
+        expect(sent.at(-1)?.content).toBe("요약해 줘");
+      }),
   );
 });

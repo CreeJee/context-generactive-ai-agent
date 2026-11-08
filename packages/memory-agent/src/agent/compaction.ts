@@ -1422,11 +1422,11 @@ const logRequestBasis = (
 /**
  * Compaction in the Effect AI loop: what each model step sends of its conversation. Goes last
  * among the hooks that shape the request, before local images are inlined. `stage` is the stage
- * the latest request reached, for its usage record.
+ * the latest request reached and `sentEstimate` our estimate of its messages, for its usage record.
  *
- * Our estimate counts the messages alone. Once a step's usage comes back, what the provider counted
- * beyond it holds the later steps of the run under `budget.inputCeiling`; the run's first step has
- * no count yet and goes by the estimate.
+ * Our estimate counts the messages alone. What the provider counted beyond it holds requests under
+ * `budget.inputCeiling`: the conversation's latest count before the run (`overhead`) for its first
+ * step, then each step's as its usage comes back. Without either, a step goes by the estimate.
  *
  * A long run's earlier steps are summarized in the background, one block at a time, once they are
  * due ({@link dueSteps}) and the request nears `leaveOutAt`; the next request compacted again sends
@@ -1442,6 +1442,11 @@ export const compactionHook = Effect.fnUntraced(function* (options: {
   readonly lastRequests?: LastRequests["Service"];
   /** How long the provider likely caches a request after it was sent: the run model's. */
   readonly promptCacheFor: Duration.Duration;
+  /**
+   * What the provider counted of the conversation's latest request before this run beyond our
+   * estimate of its messages, if that was kept.
+   */
+  readonly overhead?: Option.Option<number>;
   /** The history a model handoff puts in place of the conversation, or null to keep it. */
   readonly restore: (
     messages: ReadonlyArray<StoredMessage>,
@@ -1456,7 +1461,7 @@ export const compactionHook = Effect.fnUntraced(function* (options: {
   /** Our estimate of the messages the latest request sent. */
   const sentEstimate = yield* Ref.make(Option.none<number>());
   /** What the provider counted of the latest request it reported beyond {@link sentEstimate}. */
-  const overhead = yield* Ref.make(Option.none<number>());
+  const overhead = yield* Ref.make(options.overhead ?? Option.none<number>());
   const stepBlocks = yield* Ref.make<ReadonlyArray<StepBlock>>([]);
   /** Set once a summary could not be made: asking again would likely fail again, every request. */
   const stepsStopped = yield* Ref.make(false);
@@ -1596,7 +1601,7 @@ export const compactionHook = Effect.fnUntraced(function* (options: {
         ),
       ),
   };
-  return { hook, stage: Ref.get(stage) };
+  return { hook, stage: Ref.get(stage), sentEstimate: Ref.get(sentEstimate) };
 });
 
 /** How summarizing went before `/compact`. */

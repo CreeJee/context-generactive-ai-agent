@@ -18,9 +18,22 @@ const ContextUsage = Schema.Struct({
   compactionStage: Schema.NullOr(CompactionStageSchema).pipe(
     Schema.withDecodingDefaultTypeKey(Effect.succeed(null)),
   ),
+  /** Our estimate of the messages the request sent, which `inputTokens` counts with the rest. */
+  estimatedTokens: Schema.NullOr(Schema.Finite).pipe(
+    Schema.withDecodingDefaultTypeKey(Effect.succeed(null)),
+  ),
 });
 const decodeContextUsage = Schema.decodeUnknownOption(ContextUsage);
 export type StoredContextUsage = typeof ContextUsage.Type;
+
+/**
+ * What the provider counted of a session's latest request beyond our estimate of its messages, if
+ * both were kept: the system prompt, tool definitions and its own tokenizer.
+ */
+export const measuredOverhead = (usage: StoredContextUsage | null) =>
+  Option.flatMap(Option.fromNullishOr(usage), ({ inputTokens, estimatedTokens }) =>
+    Option.map(Option.fromNullishOr(estimatedTokens), (estimate) => inputTokens - estimate),
+  );
 
 export const contextView = ({
   usedTokens,
@@ -88,6 +101,8 @@ export const lastContextUsageEffect = (input: {
 export const contextUsageHook = (options: {
   readonly windowTokens: Effect.Effect<number>;
   readonly compactionStage: Effect.Effect<CompactionStage>;
+  /** Our estimate of the messages the latest request sent, once one was sent. */
+  readonly estimatedTokens: Effect.Effect<Option.Option<number>>;
   readonly windowKnown: Effect.Effect<boolean>;
 }): RunHook<RunStore> => ({
   usage: ({ threadId, emit }, { inputTokens }) =>
@@ -99,6 +114,7 @@ export const contextUsageHook = (options: {
             inputTokens: usedTokens,
             cachedTokens: inputTokens.cacheRead ?? null,
             compactionStage: yield* options.compactionStage,
+            estimatedTokens: Option.getOrNull(yield* options.estimatedTokens),
           };
           yield* store.metadata.set(contextUsageNamespace, threadId, stored);
           yield* emit({

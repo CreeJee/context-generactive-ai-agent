@@ -1,4 +1,4 @@
-import { Duration, Effect, Schema } from "effect";
+import { Duration, Effect, Option, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import {
   budgetFor,
@@ -265,6 +265,48 @@ testAgent()("compaction over recorded history", (it) => {
         const unreported = yield* secondRequest("unreported", readCall);
         expect(unreported.some((message) => message.content === earlier)).toBe(true);
       }),
+  );
+
+  it.effect("a run's first request fits under the ceiling by what the last request counted", () =>
+    Effect.gen(function* () {
+      const at = yield* freshSession;
+      // An earlier answer of about 4,000 tokens, then the question the run answers.
+      const earlier = "x".repeat(16_000);
+      const conversation: ReadonlyArray<StoredMessage> = [
+        { role: "user", content: "설계를 설명해 줘" },
+        { role: "assistant", content: earlier },
+        { role: "user", content: "요약해 줘" },
+      ];
+      /** The run's first request, after a last request that counted `overhead` beyond it. */
+      const firstRequest = Effect.fnUntraced(function* (
+        name: string,
+        overhead: Option.Option<number>,
+      ) {
+        const compacting = yield* compactionHook({
+          sources: sourcesOf(yield* Nodes, at.sessionId),
+          budget: { compactAt: 0, leaveOutAt: noLimit, inputCeiling: 14_000 },
+          restore: () => Effect.succeed(null),
+          promptCacheFor: Duration.hours(1),
+          overhead,
+        });
+        const { invocations } = yield* scriptedRun({
+          turns: [{ text: "요약했어요." }],
+          runId: `${at.sessionId}:${name}`,
+          threadId: at.sessionId,
+          conversation,
+          tools: [],
+          hooks: [compacting.hook],
+        });
+        return (yield* invocations)[0]?.history ?? [];
+      });
+
+      // 12,000 tokens beyond the messages leave about 2,000 under the ceiling: the earlier answer goes.
+      const counted = yield* firstRequest("counted", Option.some(12_000));
+      expect(counted.some((message) => message.content === earlier)).toBe(false);
+      expect(counted.at(-1)?.content).toBe("요약해 줘");
+      const unknown = yield* firstRequest("unknown", Option.none());
+      expect(unknown.some((message) => message.content === earlier)).toBe(true);
+    }),
   );
 
   it.effect(

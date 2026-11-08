@@ -15,6 +15,7 @@
       "value": {
         "cachedTokens": 1000,
         "compactionStage": "none",
+        "estimatedTokens": 90,
         "inputTokens": 1200
       }
     },
