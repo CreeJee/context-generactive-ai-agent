@@ -2,7 +2,16 @@ import { nativePromise } from "../runtime/native-effect.ts";
 import { lintSource } from "@secretlint/core";
 import { secretLintProfiler } from "@secretlint/profiler";
 import { creator as recommendedRules } from "@secretlint/secretlint-rule-preset-recommend";
-import { Array as Arr, Context, Effect, Layer, Match, Option, Schema } from "effect";
+import {
+  Array as Arr,
+  Context,
+  Effect,
+  Iterable as EffectIterable,
+  Layer,
+  Match,
+  Option,
+  Schema,
+} from "effect";
 import { JsonValue, type JsonValue as Json } from "../json.ts";
 import { fallbackLogged } from "../runtime/logged-failures.ts";
 import type { ShownFailure } from "../runtime/shown-failure.ts";
@@ -123,51 +132,59 @@ const formatFindings = (text: string) =>
  */
 export function mergeFindings(findings: readonly Finding[]): Finding[] {
   const sorted = [...findings].sort((a, b) => a.start - b.start || b.end - a.end);
-  return Arr.reduce(sorted, Arr.empty<Finding>(), (merged, finding) =>
-    Option.match(
-      Option.filter(Arr.last(merged), (last) => finding.start < last.end),
-      {
-        onNone: () => [...merged, finding],
-        // A provider's name says more than "credential", so it wins.
-        onSome: (last) => [
-          ...merged.slice(0, -1),
-          {
-            start: last.start,
-            end: Math.max(last.end, finding.end),
-            kind: last.kind === "credential" ? finding.kind : last.kind,
-          },
-        ],
-      },
-    ),
+  // Each finding gets the number of its span: it joins the span before it when it starts inside.
+  const [, numbered] = Arr.mapAccum(
+    sorted,
+    { span: -1, end: Number.NEGATIVE_INFINITY },
+    (current, finding) => {
+      const next =
+        finding.start < current.end
+          ? { span: current.span, end: Math.max(current.end, finding.end) }
+          : { span: current.span + 1, end: finding.end };
+      return [next, { finding, span: next.span, end: next.end }] as const;
+    },
+  );
+  return Arr.fromIterable(
+    EffectIterable.groupWith(numbered, (first, item) => item.span === first.span),
+  ).map((span) =>
+    span.length === 1
+      ? span[0].finding
+      : {
+          start: span[0].finding.start,
+          end: span.at(-1)!.end,
+          // A provider's name says more than "credential", so it wins.
+          kind:
+            span.find(({ finding }) => finding.kind !== "credential")?.finding.kind ?? "credential",
+        },
   );
 }
 
-/** The text replaced so far, where the rest starts, and the spans its placeholders hide. */
+/** The text replaced so far, and where the rest starts. */
 interface Replacing {
   readonly out: string;
   readonly at: number;
-  readonly hidden: ReadonlyArray<HiddenSpan>;
 }
 
 function replaceFindings(text: string, findings: readonly Finding[]): RedactedView {
-  const start: Replacing = { out: "", at: 0, hidden: [] };
-  const { out, at, hidden } = Arr.reduce(findings, start, (state, finding): Replacing => {
-    const before = state.out + text.slice(state.at, finding.start);
-    const shown = placeholderOf(finding.kind);
-    return {
-      out: before + shown,
-      at: finding.end,
-      hidden: [
-        ...state.hidden,
+  const start: Replacing = { out: "", at: 0 };
+  // Each finding gives the span its placeholder hides.
+  const [{ out, at }, hidden] = Arr.mapAccum(
+    findings,
+    start,
+    (state, finding): readonly [Replacing, HiddenSpan] => {
+      const before = state.out + text.slice(state.at, finding.start);
+      const shown = placeholderOf(finding.kind);
+      return [
+        { out: before + shown, at: finding.end },
         {
           start: before.length,
           end: before.length + shown.length,
           kind: finding.kind,
           value: text.slice(finding.start, finding.end),
         },
-      ],
-    };
-  });
+      ];
+    },
+  );
   return { text: out + text.slice(at), hidden };
 }
 
