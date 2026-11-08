@@ -59,6 +59,7 @@ export default defineConfig({
       "anti-slop-effect/no-service-constructor-imports": "error",
       // A fold emits through Array.mapAccum or grows a Chunk, HashMap or HashSet; no source disables these.
       "allocation/no-accumulator-copy": "warn",
+      "allocation/no-intermediate-array": "warn",
       "allocation/prefer-iterable-grouping": "warn",
       "shadcn/no-restyle": [
         "error",
