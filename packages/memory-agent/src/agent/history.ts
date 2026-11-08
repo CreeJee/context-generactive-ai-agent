@@ -2,6 +2,7 @@ import {
   Array as EffectArray,
   DateTime,
   Function as EffectFunction,
+  Iterable as EffectIterable,
   Option,
   Schema,
   String as EffectString,
@@ -32,22 +33,15 @@ function sessionMessagesBody(
   nodes: readonly Node[],
   attachmentsOf: (nodeId: string) => readonly Attachment[],
 ): StoredMessage[] {
-  return EffectArray.match(
-    nodes.filter((node) => isConversation(node.kind)),
-    {
-      onEmpty: () => [],
-      // A user turn is one node; a run is the nodes of one run id between user turns.
-      onNonEmpty: (conversation) =>
-        EffectArray.groupWith(
-          conversation,
-          (node, first) =>
-            node.kind !== "user" && first.kind !== "user" && node.runId === first.runId,
-        ).flatMap((turn) =>
-          turn[0].kind === "user"
-            ? userMessage(turn[0], attachmentsOf(turn[0].id))
-            : runMessages(turn),
-        ),
-    },
+  // A user turn is one node; a run is the nodes of one run id between user turns. Iterable's
+  // groupWith reads the nodes once; Array's copies the rest of them for every turn it cuts.
+  return EffectArray.fromIterable(
+    EffectIterable.groupWith(
+      nodes.filter((node) => isConversation(node.kind)),
+      (first, node) => first.kind !== "user" && node.kind !== "user" && node.runId === first.runId,
+    ),
+  ).flatMap((turn) =>
+    turn[0].kind === "user" ? userMessage(turn[0], attachmentsOf(turn[0].id)) : runMessages(turn),
   );
 }
 
