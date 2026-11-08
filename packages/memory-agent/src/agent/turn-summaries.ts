@@ -209,8 +209,7 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
         if (estimateConversation(unsummarized.messages) <= threshold) return "done" as const;
       }
       const turns = userTurns(messages);
-      const sessionNodes = yield* nodes.session(sessionId);
-      const turnNodes = sessionNodes.filter((node) => node.kind === "user");
+      const turnNodes = yield* nodes.ofKind(sessionId, "user");
       const limit = Math.min(turns.length, turnNodes.length) - recentRawUserTurns;
       const lines = (index: number) => {
         const at = turns[index];
@@ -239,11 +238,10 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
       yield* Stream.fromIterable(pending).pipe(
         Stream.mapEffect(
           ({ end, first, next }) =>
+            // Only the block's own nodes are read, as it is summarized.
             Effect.map(
-              summarize(
-                sessionId,
-                sessionNodes.filter((node) => node.seq >= first.seq && node.seq < next.seq),
-                selection,
+              Effect.flatMap(nodes.between(sessionId, first.seq, next.seq), (part) =>
+                summarize(sessionId, part, selection),
               ),
               (text): SummaryBlock => ({ end, nextTurnNodeId: next.id, text }),
             ),
