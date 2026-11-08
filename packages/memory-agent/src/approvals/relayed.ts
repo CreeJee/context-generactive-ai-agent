@@ -95,15 +95,11 @@ const make = (timeoutMs: number) =>
 
     const find = (sessionId: string, approvalId: string) =>
       Effect.map(
-        storage.workflowExecutions(relayedApprovalWorkflow),
+        storage.executionsWith(relayedApprovalWorkflow, { sessionId, approvalId }),
         (executions) =>
           executions.flatMap((execution) => {
             const decoded = Schema.decodeUnknownResult(RelayedApprovalPayload)(execution.payload);
-            return Result.isSuccess(decoded) &&
-              decoded.success.sessionId === sessionId &&
-              decoded.success.approvalId === approvalId
-              ? [{ execution, payload: decoded.success }]
-              : [];
+            return Result.isSuccess(decoded) ? [{ execution, payload: decoded.success }] : [];
           })[0],
       );
 

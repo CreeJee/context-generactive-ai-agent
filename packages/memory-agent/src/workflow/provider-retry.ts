@@ -21,7 +21,7 @@ import type { ProviderRetryView } from "./contracts.ts";
 import { WorkflowExecution } from "./execution.ts";
 import { ownerWorkflowEngineLayer, suspendedRetrySchedule } from "./owner-workflow-engine.ts";
 import { executionSubjects } from "./execution-subjects.ts";
-import { OwnerWorkflowStorage } from "./owner-workflow-storage.ts";
+import { OwnerWorkflowStorage, type StoredExecution } from "./owner-workflow-storage.ts";
 
 /**
  * Backoff and exhaustion of a provider request that was never sent. One place for every limit;
@@ -126,18 +126,15 @@ const make = Effect.gen(function* () {
   const provideEngine = <A, E>(effect: Effect.Effect<A, E, WorkflowEngine.WorkflowEngine>) =>
     Effect.provideService(effect, WorkflowEngine.WorkflowEngine, engine);
 
-  const stored = (pendingOnly: boolean) =>
-    (pendingOnly
-      ? storage.pendingExecutions(providerRetryWorkflow)
-      : storage.workflowExecutions(providerRetryWorkflow)
-    ).pipe(
-      Effect.map((executions) =>
-        executions.flatMap((entry) => {
-          const decoded = Schema.decodeUnknownResult(ProviderRetryWaitPayload)(entry.payload);
-          return Result.isSuccess(decoded) ? [decoded.success] : [];
-        }),
-      ),
+  /** The waits these executions hold; unreadable payloads are skipped. */
+  const waitsOf = <E>(read: Effect.Effect<ReadonlyArray<StoredExecution>, E>) =>
+    Effect.map(read, (executions) =>
+      executions.flatMap((entry) => {
+        const decoded = Schema.decodeUnknownResult(ProviderRetryWaitPayload)(entry.payload);
+        return Result.isSuccess(decoded) ? [decoded.success] : [];
+      }),
     );
+  const pendingWaits = waitsOf(storage.pendingExecutions(providerRetryWorkflow));
 
   /** Joins a wait; an interrupted wait reports cancellation instead of a durable failure. */
   const join = (payload: ProviderRetryWaitPayload) =>
@@ -187,7 +184,9 @@ const make = Effect.gen(function* () {
           yield* changed;
           return ProviderRetryOutcome.Exhausted();
         }
-        const runWaits = (yield* stored(false)).filter((entry) => entry.runId === request.runId);
+        const runWaits = yield* waitsOf(
+          storage.executionsWith(providerRetryWorkflow, { runId: request.runId }),
+        );
         const payload: ProviderRetryWaitPayload = {
           sessionId: request.sessionId,
           runId: request.runId,
@@ -220,7 +219,7 @@ const make = Effect.gen(function* () {
 
     /** Waits still pending in a session, oldest first. */
     pending: (sessionId: string) =>
-      stored(true).pipe(
+      pendingWaits.pipe(
         Effect.map((waits) =>
           waits
             .filter((entry) => entry.sessionId === sessionId)
@@ -238,7 +237,7 @@ const make = Effect.gen(function* () {
      * pending, and reports cancellation when the owner interrupts it meanwhile.
      */
     awaitRun: (runId: string) =>
-      stored(true).pipe(
+      pendingWaits.pipe(
         Effect.flatMap((waits) =>
           Effect.findFirst(
             waits.filter((entry) => entry.runId === runId),
@@ -254,7 +253,7 @@ const make = Effect.gen(function* () {
 
     /** Owner cancellation of every pending wait in the session; never a durable failure. */
     cancelSession: (sessionId: string) =>
-      stored(true).pipe(
+      pendingWaits.pipe(
         Effect.flatMap((waits) =>
           Effect.forEach(
             waits.filter((entry) => entry.sessionId === sessionId),

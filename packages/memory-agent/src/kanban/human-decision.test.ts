@@ -130,6 +130,31 @@ testAgent()("human decisions", (it) => {
     }),
   );
 
+  it.effect("reads a card's and a Goal's requests apart from other cards and Goals", () =>
+    Effect.gen(function* () {
+      const decisions = yield* HumanDecisions;
+      const first = yield* boardSession();
+      const second = yield* boardSession();
+      const ask = (board: typeof first, cardId: string) =>
+        Effect.map(
+          decisions.request({ ...board, cardId, ...uncertain, author: orchestrator }),
+          (request) => request.requestId,
+        );
+      const firstA = yield* ask(first, "a");
+      const firstB = yield* ask(first, "b");
+      yield* ask(second, "a");
+
+      const ids = (requests: ReadonlyArray<{ readonly requestId: string }>) =>
+        requests.map((request) => request.requestId).toSorted();
+      expect(ids(yield* decisions.forCard(first.sessionId, first.goalInstanceId, "a"))).toEqual([
+        firstA,
+      ]);
+      expect(ids(yield* decisions.forGoal(first.sessionId, first.goalInstanceId))).toEqual(
+        [firstA, firstB].toSorted(),
+      );
+    }),
+  );
+
   it.effect("accepts the same answer again and refuses a different or misdirected one", () =>
     Effect.gen(function* () {
       const decisions = yield* HumanDecisions;

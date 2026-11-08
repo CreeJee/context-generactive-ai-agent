@@ -33,7 +33,7 @@
 
 ## Side Effects
 
-- `OwnerWorkflowStorage`로 워크플로 실행 영속 저장소를 읽는다. 호출은 `workflowExecutions`, `pendingExecutions`, `deferredResult`다.
+- `OwnerWorkflowStorage`로 워크플로 실행 영속 저장소를 읽는다. 호출은 `executionsWith`, `pendingExecutions`, `deferredResult`다. `executionsWith`는 payload 필드 값으로 SQL에서 거른 실행만 읽는다.
 - `WorkflowEngine`으로 실행을 생성·재개·중단한다. 호출은 `execute`, `interrupt`, `DurableDeferred.succeed`이며 owner workflow engine 저장소에 쓰기가 생긴다.
 - `DurableClock.sleep`으로 durable 타이머를 건다. 기본값은 1일이다.
 - `ask`는 서비스 scope에 fiber를 fork한다.

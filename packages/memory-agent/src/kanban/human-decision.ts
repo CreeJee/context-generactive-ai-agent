@@ -462,18 +462,9 @@ const make = Effect.gen(function* () {
       Effect.map((all) => all.filter((request) => Predicate.isTagged(request.state, "Pending"))),
     );
 
-  /** A Goal instance's requests in any state, newest first. */
-  const ofGoal = (sessionId: string, goalInstanceId: string) =>
-    stored(storage.workflowExecutions(humanDecisionWorkflow)).pipe(
-      Effect.map((executions) =>
-        executions.filter((execution) =>
-          Option.exists(
-            decoded(execution),
-            (payload) =>
-              payload.sessionId === sessionId && payload.goalInstanceId === goalInstanceId,
-          ),
-        ),
-      ),
+  /** Requests whose payload has these fields, in any state, newest first. */
+  const requestsWith = (payload: Partial<HumanDecisionPayload>) =>
+    stored(storage.executionsWith(humanDecisionWorkflow, payload)).pipe(
       Effect.flatMap(requests),
       Effect.map((all) => all.toSorted((left, right) => right.createdAt - left.createdAt)),
     );
@@ -732,12 +723,11 @@ const make = Effect.gen(function* () {
 
     /** A card's requests in any state, newest first. */
     forCard: (sessionId: string, goalInstanceId: string, cardId: string) =>
-      Effect.map(ofGoal(sessionId, goalInstanceId), (all) =>
-        all.filter((request) => request.cardId === cardId),
-      ),
+      requestsWith({ sessionId, goalInstanceId, cardId }),
 
     /** A Goal instance's requests in any state, newest first, for the loop to take up answers. */
-    forGoal: (sessionId: string, goalInstanceId: string) => ofGoal(sessionId, goalInstanceId),
+    forGoal: (sessionId: string, goalInstanceId: string) =>
+      requestsWith({ sessionId, goalInstanceId }),
 
     /** Unanswered requests of the session's current Goal, oldest first. */
     pending: (sessionId: string) => pendingOf(new Set([sessionId])),

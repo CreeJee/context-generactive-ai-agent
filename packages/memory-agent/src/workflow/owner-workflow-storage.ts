@@ -127,7 +127,11 @@ export interface OwnerWorkflowStorageApi {
     bind: Effect.Effect<A, E>,
   ) => Effect.Effect<OwnerWorkflowAdmissionResult<A>, OwnerWorkflowStorageError | E>;
   readonly execution: (executionId: string) => Stored<Option.Option<StoredExecution>>;
-  readonly workflowExecutions: (workflowName: string) => Stored<ReadonlyArray<StoredExecution>>;
+  /** The workflow's executions whose payload has each top-level field at the given value. */
+  readonly executionsWith: (
+    workflowName: string,
+    payload: Readonly<Record<string, string>>,
+  ) => Stored<ReadonlyArray<StoredExecution>>;
   readonly pendingExecutions: (workflowName: string) => Stored<ReadonlyArray<StoredExecution>>;
   readonly setRunning: (executionId: string) => Stored<void>;
   readonly setInterrupted: (executionId: string) => Stored<void>;
@@ -184,13 +188,23 @@ const makeOwnerWorkflowStorage = Effect.gen(function* () {
         created_at, updated_at
       FROM owner_workflow_executions WHERE execution_id = ${executionId}`,
   });
-  const allByWorkflow = SqlSchema.findAll({
-    Request: Schema.String,
+  const matchingPayload = SqlSchema.findAll({
+    Request: Schema.Struct({
+      workflowName: Schema.String,
+      payload: Schema.Record(Schema.String, Schema.String),
+    }),
     Result: ExecutionRow,
-    execute: (workflowName) => sql`
+    execute: ({ workflowName, payload }) => sql`
       SELECT execution_id, workflow_name, payload_json, parent_execution_id, status, result_json,
         created_at, updated_at
-      FROM owner_workflow_executions WHERE workflow_name = ${workflowName} ORDER BY execution_id`,
+      FROM owner_workflow_executions
+      WHERE ${sql.and([
+        sql`workflow_name = ${workflowName}`,
+        ...Object.entries(payload).map(
+          ([field, value]) => sql`json_extract(payload_json, ${`$.${field}`}) = ${value}`,
+        ),
+      ])}
+      ORDER BY execution_id`,
   });
   const pendingByWorkflow = SqlSchema.findAll({
     Request: Schema.String,
@@ -345,8 +359,8 @@ const makeOwnerWorkflowStorage = Effect.gen(function* () {
         }),
       ),
     execution: readExecution,
-    workflowExecutions: (workflowName) =>
-      Effect.flatMap(step("execution.list")(allByWorkflow(workflowName)), (rows) =>
+    executionsWith: (workflowName, payload) =>
+      Effect.flatMap(step("execution.match")(matchingPayload({ workflowName, payload })), (rows) =>
         Effect.forEach(rows, decodeExecution),
       ),
     pendingExecutions: (workflowName) =>
