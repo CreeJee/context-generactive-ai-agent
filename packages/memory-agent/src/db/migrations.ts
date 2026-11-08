@@ -2757,6 +2757,13 @@ export const migrations: readonly string[] = [
   memoryCandidateDecisionsMigration,
   lexicalJournalMigration,
   textIndexDropMigration,
+  `
+  -- Recording a tool result looks up the node of its call. Without this index the lookup read
+  -- every node of the session, text included, because detail is stored after text.
+  CREATE INDEX nodes_tool_call_call
+    ON nodes(session_id, json_extract(detail, '$.toolCallId'), seq)
+    WHERE kind = 'tool_call';
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.
