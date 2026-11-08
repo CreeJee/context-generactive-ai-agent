@@ -359,7 +359,8 @@ impl Best {
 }
 
 struct Lexical {
-    writer: IndexWriter,
+    /// `None` for an index opened to read only: it holds no writer lock, and writes fail.
+    writer: Option<IndexWriter>,
     reader: IndexReader,
     fields: Fields,
     morphology: Morphology,
@@ -387,11 +388,13 @@ fn open_index(dir: &Path, recover: bool) -> Failed<Index> {
     Index::create_in_dir(dir, expected).map_err(failed)
 }
 
+fn read_only() -> String {
+    "Lexical index is open read-only".to_string()
+}
+
 impl Lexical {
     fn open(dir: &Path, recover: bool) -> Failed<Self> {
         let index = open_index(dir, recover)?;
-        register(&index);
-        let instance = index.load_metas().map_err(failed)?.payload;
         let writer = index
             .writer_with_num_threads(WRITER_THREADS, WRITER_HEAP)
             .map_err(|error| match error {
@@ -400,6 +403,23 @@ impl Lexical {
                 }
                 error => failed(error),
             })?;
+        Self::over(index, Some(writer))
+    }
+
+    /// Opens the index in `dir` to read only, beside the process that writes it: no writer, so no
+    /// writer lock, and an index that is missing or has another layout fails instead of being
+    /// created or replaced. The reader sees the commits made before it opened.
+    fn open_read_only(dir: &Path) -> Failed<Self> {
+        let index = Index::open_in_dir(dir).map_err(failed)?;
+        if index.schema() != schema().0 {
+            return Err("Lexical index layout mismatch".into());
+        }
+        Self::over(index, None)
+    }
+
+    fn over(index: Index, writer: Option<IndexWriter>) -> Failed<Self> {
+        register(&index);
+        let instance = index.load_metas().map_err(failed)?.payload;
         let reader = index
             .reader_builder()
             .reload_policy(ReloadPolicy::Manual)
@@ -417,7 +437,8 @@ impl Lexical {
     /// Commits with the instance as the payload, which every commit replaces, and makes the
     /// commit visible to the next search.
     fn commit(&mut self) -> Failed<()> {
-        let mut prepared = self.writer.prepare_commit().map_err(failed)?;
+        let writer = self.writer.as_mut().ok_or_else(read_only)?;
+        let mut prepared = writer.prepare_commit().map_err(failed)?;
         if let Some(instance) = &self.instance {
             prepared.set_payload(instance);
         }
@@ -426,7 +447,8 @@ impl Lexical {
     }
 
     fn reset(&mut self, instance: String) -> Failed<()> {
-        self.writer.delete_all_documents().map_err(failed)?;
+        let writer = self.writer.as_mut().ok_or_else(read_only)?;
+        writer.delete_all_documents().map_err(failed)?;
         self.instance = Some(instance);
         self.commit()
     }
@@ -436,12 +458,12 @@ impl Lexical {
             .iter()
             .map(|node| self.document(node))
             .collect::<Failed<Vec<_>>>()?;
+        let writer = self.writer.as_mut().ok_or_else(read_only)?;
         for value in removed.iter().chain(documents.iter().map(|node| &node.seq)) {
-            self.writer
-                .delete_term(Term::from_field_u64(self.fields.seq, seq(*value)?));
+            writer.delete_term(Term::from_field_u64(self.fields.seq, seq(*value)?));
         }
         for doc in built {
-            self.writer.add_document(doc).map_err(failed)?;
+            writer.add_document(doc).map_err(failed)?;
         }
         self.commit()?;
         Ok(self.searcher().num_docs() as u32)
@@ -700,6 +722,15 @@ impl LexicalIndex {
             inner: Some(Lexical::open(Path::new(&dir), recover).map_err(js_error)?),
         })
     }
+    /// Opens the existing index in `dir` to read only, while another process may hold its writer:
+    /// it takes no writer lock and sees the commits made before it opened. A missing index or one
+    /// with another layout fails; `reset` and `apply` on it fail.
+    #[napi(factory)]
+    pub fn open_read_only(dir: String) -> Result<Self> {
+        Ok(Self {
+            inner: Some(Lexical::open_read_only(Path::new(&dir)).map_err(js_error)?),
+        })
+    }
     /// The build the index holds, as `reset` named it; none for a new or replaced index.
     #[napi]
     pub fn instance(&self) -> Result<Option<String>> {
@@ -729,10 +760,10 @@ impl LexicalIndex {
     /// merge still writing segment files has finished. Idempotent.
     #[napi]
     pub fn close(&mut self) {
-        if let Some(lexical) = self.inner.take() {
+        if let Some(writer) = self.inner.take().and_then(|lexical| lexical.writer) {
             // Dropping the writer stops its indexing threads but not a running merge, which
             // would go on writing into the folder after close.
-            let _ = lexical.writer.wait_merging_threads();
+            let _ = writer.wait_merging_threads();
         }
     }
     /// The morph terms of `text`, for tests and evaluations of the analysis.
@@ -886,5 +917,41 @@ mod tests {
         assert!(Lexical::open(&dir, false).is_err());
         drop(first);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_read_only_open_reads_beside_the_held_writer() {
+        let dir = temp_dir("read-only");
+        let mut writer = Lexical::open(&dir, false).unwrap();
+        writer.reset("first".into()).unwrap();
+        writer
+            .apply(&[node(1, "p", "검색엔진을 바꿨다")], &[])
+            .unwrap();
+        let mut reader = Lexical::open_read_only(&dir).unwrap();
+        assert_eq!(reader.instance.as_deref(), Some("first"));
+        assert_eq!(size(&reader), 1);
+        let projects = ["p".to_string()];
+        let scope = Scope {
+            projects: &projects,
+            before: None,
+        };
+        assert_eq!(
+            search(&reader).morphs("검색엔진", 10, &scope, &ok).unwrap(),
+            [1]
+        );
+        assert!(reader.apply(&[node(2, "p", "오늘")], &[]).is_err());
+        assert!(reader.reset("second".into()).is_err());
+        // The writer keeps writing while the reader is open.
+        writer.apply(&[node(2, "p", "오늘")], &[]).unwrap();
+        drop(reader);
+        drop(writer);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_read_only_open_neither_creates_nor_replaces() {
+        let dir = temp_dir("read-only-missing");
+        assert!(Lexical::open_read_only(&dir).is_err());
+        assert!(!dir.exists());
     }
 }

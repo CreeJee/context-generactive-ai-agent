@@ -11,7 +11,7 @@
 - `CacheLease` — napi 클래스. 생성자는 경로의 파일을 열거나 만들고(0o600) 배타적 non-blocking 락을 잡는다. `close()`로 락을 놓는다
 - `SearchControl` — napi 클래스. `new(token, ownerKey, epoch, requestId, remainingMs)`, `token()`, `snapshotWasPinned()`, `cancel()`, `close()`, static `count()`를 제공한다. 요청별 취소와 deadline 상태를 전역 레지스트리에 등록한다
 - `ControlledSearchResult` — napi 객체 `{ kind, ids, scores, nativeWindow, nativeMs }`. `kind`는 Outcome 태그 문자열이다
-- `LexicalIndex` — napi 클래스. factory `open(dir, recover)`는 색인을 열거나 만든다. 열 수 없거나 스키마가 다르면 `recover`일 때만 비운 색인으로 바꾸고, 아니면 "Lexical index layout mismatch"로 실패한다. `instance()`는 마지막 `reset(instance)`가 commit payload로 남긴 build 이름(없으면 null), `apply(documents, removed)`는 `removed`와 각 문서 seq의 문서를 지우고 문서를 더해 한 번 commit한 뒤 크기를 돌려준다. `size()`, `morphTerms(text)`, `close()`를 제공한다
+- `LexicalIndex` — napi 클래스. factory `open(dir, recover)`는 색인을 열거나 만든다. 열 수 없거나 스키마가 다르면 `recover`일 때만 비운 색인으로 바꾸고, 아니면 "Lexical index layout mismatch"로 실패한다. `instance()`는 마지막 `reset(instance)`가 commit payload로 남긴 build 이름(없으면 null), `apply(documents, removed)`는 `removed`와 각 문서 seq의 문서를 지우고 문서를 더해 한 번 commit한 뒤 크기를 돌려준다. `size()`, `morphTerms(text)`, `close()`를 제공한다. factory `openReadOnly(dir)`는 이미 있는 색인을 writer 없이 연다. 다른 프로세스가 writer를 잡고 있어도 열리고, 연 시점까지의 commit을 본다. 색인이 없거나 스키마가 다르면 만들거나 바꾸지 않고 실패하며, 이렇게 연 색인의 `reset`·`apply`는 "Lexical index is open read-only"로 실패한다
 - `LexicalDocument` — napi 객체 `{ seq: i64, project, text }`
 - `lexical::{Morphology, LexicalSearch}` — crate 내부. `Morphology::terms`는 NFKC 정규화한 원문의 ko-dic 형태소에서 Kiwi 규칙(품사 NNG·NNP·NR·VV·VA·XR·SH, 가벼운 어간 제외, 붙여 쓴 명사 합침, 원문의 라틴 문자·숫자)으로 검색어를 고르고 소문자로 바꾼다. `LexicalSearch`는 한 읽기의 searcher로 `phrases`(3글자 이상 검색어를 gram 구절로, BM25 top k), `short_terms`(두 글자 검색어마다 최신 k개), `morphs`(질문의 형태소 검색어, BM25 top k)를 찾는다. 모두 프로젝트를 수집하며 거르고, 일치 문서를 전부 점수 매긴다
 - `MemoryReadSession` — napi 클래스. `new(databasePath)`는 읽기 전용 SQLite 연결을 연다. `close()`, `search(index, lexical, input, token, ownerKey, epoch, requestId) -> NativeReadOutput`을 제공한다. text나 morph 채널을 켜면 `lexical`이 있어야 한다(없으면 `invalid-input`)
@@ -34,7 +34,7 @@
 - worker teardown 전에 `MemoryReadSession.close()`로 SQLite를 닫아야 한다. 나중의 N-API GC가 WAL 매핑을 붙잡으면 안 되기 때문이다
 - 벡터 후보는 허용 프로젝트의 `node_vectors` 중 `memory_graph_vector_removals`에서 색인을 떠나기를 기다리지 않는 것 전부다. indexer는 검색할 수 있는 발언만 임베딩하고, 숨기거나 바뀐 노드의 벡터는 그 대기열에 들어가므로 kind·공백·숨김을 다시 보지 않는다
 - lexical 색인은 노드를 마지막으로 반영한 변경 때의 모습으로 들고 있다. 그래서 text·morph 채널은 k의 2배(`LEXICAL_DEPTH`)를 찾고, 이 스냅샷에서 허용 프로젝트이고 `lexical_changes`에 남은 변경이 없는 노드만 순서대로 k개 남긴다(`lexical_ids`, SQL 한 번). 비었거나 숨긴 노드는 indexer가 색인에 넣지 않고, 숨김 추가·해제도 변경으로 기록되므로 따로 검사하지 않는다. 미임베딩·미해석·lexical 미반영 수(coverage)는 읽기가 세지 않는다. 호스트 worker가 자기 연결로 센다
-- `LexicalIndex`의 동기 메서드는 소유 worker 안에서만 호출된다. 열려 있는 동안 Tantivy writer lock을 잡으므로 같은 폴더를 두 번 열면 "Lexical index is locked by another writer"로 실패한다. 모든 commit은 build 이름을 payload로 다시 쓴다(commit마다 payload가 바뀐다). commit 뒤 reader를 바로 reload하므로 다음 검색이 그 commit을 본다
+- `LexicalIndex`의 동기 메서드는 소유 worker 안에서만 호출된다. `open`은 열려 있는 동안 Tantivy writer lock을 잡으므로 같은 폴더를 두 번 열면 "Lexical index is locked by another writer"로 실패한다. `openReadOnly`는 writer lock을 잡지 않으므로 writer가 열려 있는 폴더도 열 수 있다. 모든 commit은 build 이름을 payload로 다시 쓴다(commit마다 payload가 바뀐다). commit 뒤 reader를 바로 reload하므로 다음 검색이 그 commit을 본다
 - `LexicalIndex` 안의 오류는 문자열로 다루고 napi 메서드에서만 JS 오류로 바꾼다. Rust 단위 테스트 실행 파일에는 napi 오류를 만들 Node가 없기 때문이다
 - 두 글자 검색어는 그 두 글자로 시작하거나 끝나는 gram(`(?s:ab.|.ab)`)으로 찾는다. 원문 끝이 아니면 시작하는 gram이 있고, 끝이면 끝나는 gram이 있다. 원문 전체가 두 글자인 노드는 찾지 못한다
 - 검색 수집은 segment의 alive bitset으로 지운 문서를 건너뛴다. `Weight::for_each`는 지운 문서를 거르지 않는다
@@ -52,7 +52,7 @@
 
 ## Side Effects
 
-- `LexicalIndex`: 폴더를 만들고(`recover`면 지우고 다시 만들고) Tantivy segment·meta 파일과 writer lock 파일을 쓴다. writer thread 2개(메모리 128MiB)와 Tantivy merge thread를 띄운다. 내장 ko-dic 사전을 불러온다
+- `LexicalIndex`: `open`은 폴더를 만들고(`recover`면 지우고 다시 만들고) Tantivy segment·meta 파일과 writer lock 파일을 쓴다. `openReadOnly`는 아무것도 쓰지 않는다. writer thread 2개(메모리 128MiB)와 Tantivy merge thread를 띄운다. 내장 ko-dic 사전을 불러온다
 - `CacheLease`: 경로의 파일을 read/write/create로 연다. truncate하지 않고, unix에서는 0o600 권한이다. close나 drop 전까지 OS 배타 파일 락을 잡고 있다
 - `VectorIndex.save`는 인덱스 파일을 디스크에 쓰고, `VectorIndex.load`는 디스크에서 읽는다
 - `MemoryReadSession`: SQLite 파일을 읽기 전용으로 연다. 요청마다 `BEGIN DEFERRED`/`ROLLBACK`을 실행하고, 1000 VM op마다 취소와 deadline을 확인해 중단하는 progress handler를 건다

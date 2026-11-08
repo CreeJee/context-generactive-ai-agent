@@ -14,7 +14,7 @@
 - `ControlledSearchResult` — `{ kind: "success"|"cancelled"|"budget-exceeded"|"invalid-input"|"index-failed", ids, scores, nativeWindow: "whole-call", nativeMs }`
 - `SearchControl` — Rust가 소유한 일회성 요청 제어. `new(token, ownerKey, epoch, requestId, remainingMs)`, `token()`(새로 발급한 capability), `snapshotWasPinned()`, `cancel()`, `close()`, static `count()`
 - `CacheLease` — 벡터 캐시 디렉터리에 한 프로세스만 쓰도록 OS 파일 락을 잡는 클래스. `new(path)`, `close()`
-- `LexicalIndex` — 노드 원문의 Tantivy 색인(위치 있는 3글자 `ngram`, Lindera 형태소를 Kiwi 규칙으로 고른 `lindera`). factory `open(dir, recover)`, `instance()`, `reset(instance)`, `apply(documents, removed)`, `size()`, `morphTerms(text)`, `close()`
+- `LexicalIndex` — 노드 원문의 Tantivy 색인(위치 있는 3글자 `ngram`, Lindera 형태소를 Kiwi 규칙으로 고른 `lindera`). factory `open(dir, recover)`·`openReadOnly(dir)`, `instance()`, `reset(instance)`, `apply(documents, removed)`, `size()`, `morphTerms(text)`, `close()`
 - `LexicalDocument` — `{ seq, project, text }`. `LexicalIndex.apply`가 받는 노드
 - `MemoryReadSession` — 읽기 전용 SQLite 세션. `new(databasePath)`, `close()`, `search(index, lexical, input, token, ownerKey, epoch, requestId) -> NativeReadOutput`. text·morph 채널은 `lexical`(`LexicalIndex`)에서 찾는다
 - `NativeReadInput` — `allowedProjects`, `embedder`, `query?`, `trigramTerms`/`shortTerms`, `morphQuery`(질문 원문), `beforeSeq?`(이 seq 전에 저장된 노드만 읽는다), `vectorK`/`textK`/`morphK`, `textEnabled`/`morphEnabled`, `remainingMs`, `inputBudgetBytes`/`outputBudgetBytes`

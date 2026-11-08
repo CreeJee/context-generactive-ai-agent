@@ -132,11 +132,18 @@ export interface LexicalDocument {
 }
 /**
  * Tantivy index of node text (trigram phrases and Lindera morph terms), derived from SQLite.
- * Holds the folder's writer lock while open. Synchronous: call it only inside its owning worker.
+ * `open` holds the folder's writer lock while open; `openReadOnly` takes none. Synchronous: call it
+ * only inside its owning worker.
  */
 export declare class LexicalIndex {
   /** Opens or creates the index; `recover` replaces one that cannot be opened with an empty one. */
   static open(dir: string, recover: boolean): LexicalIndex;
+  /**
+   * Opens the existing index to read only while another process may hold its writer: no writer
+   * lock, and it sees the commits made before it opened. Throws when the index is missing or has
+   * another layout; `reset` and `apply` on it throw.
+   */
+  static openReadOnly(dir: string): LexicalIndex;
   /** The build its last reset named; null for a new or replaced index. */
   instance(): string | null;
   /** Empties the index and names the new build. */
