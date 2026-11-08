@@ -201,4 +201,47 @@ testAgent()("requests append to the one before", (it) => {
       expect(next.messages.at(-1)).toEqual(joined);
     }),
   );
+
+  it.effect("a request compacted again past leaveOutAt comes down to half, summaries or not", () =>
+    Effect.gen(function* () {
+      const { project } = yield* TestEnv;
+      const session = yield* (yield* Sessions).create(project.id);
+      const asked: StoredMessage = { role: "user", content: "파일들을 읽어 줘" };
+      const steps = Array.from({ length: 14 }, (_, index): ReadonlyArray<StoredMessage> => [
+        {
+          role: "assistant",
+          content: null,
+          toolCalls: [
+            {
+              id: `read-${index}`,
+              type: "function",
+              function: { name: "read_file", arguments: `{"path":"read-${index}.ts"}` },
+            },
+          ],
+        },
+        { role: "tool", toolCallId: `read-${index}`, content: "y".repeat(4_000) },
+      ]);
+      const sentBefore = [asked, ...steps.slice(0, 10).flat()];
+      const leaveOutAt = 12_000;
+      const next = yield* nextRequestHistory({
+        metadata: (yield* RunStore).chatMetadata,
+        threadId: session.id,
+        messages: [asked, ...steps.flat()],
+        restored: null,
+        sources,
+        budget: { compactAt: 0, leaveOutAt, inputCeiling: noLimit },
+        // The summary takes off four steps: the ten left fit under leaveOutAt, not under half.
+        steps: [{ from: "read-0", through: "read-3", text: "read-0부터 read-3까지 읽었다." }],
+        previous: Option.some({
+          from: sentBefore,
+          messages: sentBefore,
+          stage: "none",
+          manual: { clearedThrough: 0, summarizedTurns: 0 },
+        }),
+      });
+      expect(next.basis).toEqual(RequestBasis.Rebuilt({ reason: "over-budget" }));
+      // Short of half, the next few steps would pass leaveOutAt and write it to the cache again.
+      expect(next.estimatedTokens).toBeLessThanOrEqual(leaveOutAt / 2);
+    }),
+  );
 });

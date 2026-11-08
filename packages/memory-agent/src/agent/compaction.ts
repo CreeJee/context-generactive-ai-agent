@@ -671,11 +671,14 @@ const broughtDown = <M extends ConversationMessage>(
 /** What a request past `leaveOutAt` is brought down to. */
 const keptOf = (leaveOutAt: number) => Math.floor(leaveOutAt / 2);
 
-/** Past `leaveOutAt`, what is sent is brought down to its latest half (see {@link broughtDown}). */
+/**
+ * Past `past`, what is sent is brought down to the latest half of `leaveOutAt` (see
+ * {@link broughtDown}).
+ */
 const leftOutPast =
-  (leaveOutAt: number, recall: Recall) =>
+  (past: number, leaveOutAt: number, recall: Recall) =>
   <M extends ConversationMessage>(sending: Sending<M>): Sending<M> =>
-    estimateConversation(sending.sent) > leaveOutAt
+    estimateConversation(sending.sent) > past
       ? broughtDown(sending, keptOf(leaveOutAt), recall)
       : sending;
 
@@ -890,8 +893,14 @@ export const compactEffect = Effect.fnUntraced(function* <M extends Conversation
   readonly budget: Budget;
   /** Summaries of the run's earlier steps, sent in their place. */
   readonly steps?: ReadonlyArray<StepBlock>;
+  /**
+   * The request is made again because it would pass `leaveOutAt`. It comes down to the latest half
+   * however much the summaries took off: just under `leaveOutAt`, it would pass again a few steps
+   * later and be written to the provider's cache again.
+   */
+  readonly overBudget?: boolean;
 }): Effect.fn.Return<Compacted<M>, CompactionFailed> {
-  const { messages, state, sources, budget, steps = [] } = options;
+  const { messages, state, sources, budget, steps = [], overBudget = false } = options;
   // A record for a longer conversation was made for another one.
   const manual = state.manual.clearedThrough <= messages.length ? state.manual : noManualCompaction;
   const { toolResultId, nodeText } = yield* memoryLookups(sources, messages, state.blocks);
@@ -922,7 +931,11 @@ export const compactEffect = Effect.fnUntraced(function* <M extends Conversation
     summarized(summaries, turns[summarizedTurns]),
     stepsSummarized(steps),
     paired,
-    leftOutPast(budget.leaveOutAt, recall),
+    leftOutPast(
+      overBudget ? keptOf(budget.leaveOutAt) : budget.leaveOutAt,
+      budget.leaveOutAt,
+      recall,
+    ),
   );
   // Leaving out the oldest messages can split a call from its result.
   const { sent, stage } = paired(yield* withAppendix(sources, prepared));
@@ -1094,6 +1107,8 @@ interface HistoryRequest<M> {
   readonly budget: Budget;
   /** Summaries of the run's earlier steps (see {@link compactEffect}). */
   readonly steps?: ReadonlyArray<StepBlock> | undefined;
+  /** The request would pass `leaveOutAt` (see {@link compactEffect}). */
+  readonly overBudget?: boolean;
 }
 
 const compactedRequest = Effect.fnUntraced(function* <M extends ConversationMessage>(
@@ -1102,7 +1117,7 @@ const compactedRequest = Effect.fnUntraced(function* <M extends ConversationMess
   { readonly messages: ReadonlyArray<M | CompactionMessage>; readonly stage: CompactionStage },
   CompactionFailed
 > {
-  const { state, messages, restored, sources, budget, steps = [] } = options;
+  const { state, messages, restored, sources, budget, steps = [], overBudget = false } = options;
   const removedTurns =
     restored === null ? 0 : userTurns(messages).length - userTurns(restored).length;
   const restoredContext = restored?.[0];
@@ -1126,6 +1141,7 @@ const compactedRequest = Effect.fnUntraced(function* <M extends ConversationMess
             leaveOutAt: Math.max(1, budget.leaveOutAt - estimateTokens(restoredContext)),
           },
     steps,
+    overBudget,
   });
   const question = restored?.findLast(
     (message) => startsRun(message) && messageText(message).trim(),
@@ -1388,12 +1404,15 @@ export const nextRequestHistory = Effect.fnUntraced(function* (options: {
         estimatedTokens: tokens,
       }),
     onFailure: (reason) =>
-      Effect.map(compactedRequest({ ...options, state }), (made): NextRequest => ({
-        ...made,
-        basis: RequestBasis.Rebuilt({ reason }),
-        sent: { from, messages: made.messages, stage: made.stage, manual },
-        estimatedTokens: estimateConversation(made.messages),
-      })),
+      Effect.map(
+        compactedRequest({ ...options, state, overBudget: reason === "over-budget" }),
+        (made): NextRequest => ({
+          ...made,
+          basis: RequestBasis.Rebuilt({ reason }),
+          sent: { from, messages: made.messages, stage: made.stage, manual },
+          estimatedTokens: estimateConversation(made.messages),
+        }),
+      ),
   });
 });
 
