@@ -4,6 +4,7 @@ import {
   Data,
   Effect,
   Function as EffectFunction,
+  HashMap,
   Layer,
   Match,
   Option,
@@ -81,6 +82,12 @@ interface Candidate {
 const byKey = (a: Candidate, b: Candidate) =>
   a.key[0] - b.key[0] || a.key[1] - b.key[1] || a.key[2] - b.key[2];
 
+/** Slots not handed out yet, and how many each Goal holds. */
+interface Slots {
+  readonly left: number;
+  readonly given: HashMap.HashMap<string, number>;
+}
+
 /** Hands `free` slots to the candidates in order; a Goal takes no more than its mode allows. */
 const assign = (
   candidates: readonly Candidate[],
@@ -88,28 +95,27 @@ const assign = (
   free: number,
   limit: number,
 ): ReadonlyMap<string, readonly string[]> => {
-  const slots = candidates.reduce<{
-    readonly left: number;
-    readonly given: ReadonlyMap<string, number>;
-    readonly taken: readonly Candidate[];
-  }>(
-    (slots, candidate) => {
+  const [, assigned] = EffectArray.mapAccum(
+    candidates,
+    { left: free, given: HashMap.fromIterable(held) },
+    (slots: Slots, candidate): readonly [Slots, Option.Option<Candidate>] => {
       const id = candidate.goal.goalInstanceId;
-      const mine = slots.given.get(id) ?? 0;
+      const mine = Option.getOrElse(HashMap.get(slots.given, id), () => 0);
       const cap = candidate.goal.mode === "sequential" ? 1 : limit;
       return slots.left <= 0 || mine >= cap
-        ? slots
-        : {
-            left: slots.left - 1,
-            given: new Map(slots.given).set(id, mine + 1),
-            taken: [...slots.taken, candidate],
-          };
+        ? [slots, Option.none()]
+        : [
+            { left: slots.left - 1, given: HashMap.set(slots.given, id, mine + 1) },
+            Option.some(candidate),
+          ];
     },
-    { left: free, given: held, taken: [] },
   );
   return new Map(
     Object.entries(
-      EffectArray.groupBy(slots.taken, (candidate) => candidate.goal.goalInstanceId),
+      EffectArray.groupBy(
+        EffectArray.getSomes(assigned),
+        (candidate) => candidate.goal.goalInstanceId,
+      ),
     ).map(([id, taken]) => [id, taken.map((candidate) => candidate.cardId)]),
   );
 };

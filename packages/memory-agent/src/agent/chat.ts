@@ -331,6 +331,12 @@ interface UserTurn {
   readonly imageUrls: readonly string[];
 }
 
+/** How much of the retrieval appendix the leads kept so far take up. */
+interface AppendixSize {
+  readonly lines: number;
+  readonly tokens: number;
+}
+
 const UrlImageSource = Schema.Struct({ type: Schema.Literal("url"), value: Schema.String });
 
 /** The text and image URLs of a new user turn. Images held inline are not kept. */
@@ -778,22 +784,20 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               return Number(right.kind === "user") - Number(left.kind === "user");
             });
           // A lead that would pass the token budget is skipped; a shorter one after it may still fit.
-          const { lines } = EffectArray.reduce(
+          const [, leads] = EffectArray.mapAccum(
             candidates,
-            {
-              lines: EffectArray.empty<string>(),
-              tokens: estimateTokens({ role: "assistant", content: "" }),
-            },
-            (kept, match) => {
+            { lines: 0, tokens: estimateTokens({ role: "assistant", content: "" }) },
+            (kept: AppendixSize, match): readonly [AppendixSize, Option.Option<string>] => {
               const provenance = `${match.createdAt.slice(0, 10)} · ${match.projectName} · ${match.kind} · ${match.foundBy}`;
               const line = `- node ${match.id} (${provenance}): ${match.snippet.replace(/\s+/g, " ")}`;
               const tokens = kept.tokens + estimateTokens({ role: "assistant", content: line });
-              return kept.lines.length < retrievalAppendixLimits.lines &&
+              return kept.lines < retrievalAppendixLimits.lines &&
                 tokens <= retrievalAppendixLimits.tokens
-                ? { lines: EffectArray.append(kept.lines, line), tokens }
-                : kept;
+                ? [{ lines: kept.lines + 1, tokens }, Option.some(line)]
+                : [kept, Option.none()];
             },
           );
+          const lines = EffectArray.getSomes(leads);
           return lines.length === 0
             ? null
             : {

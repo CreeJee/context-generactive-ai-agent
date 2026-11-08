@@ -2,10 +2,12 @@ import {
   Array as Arr,
   Data,
   Effect,
+  HashSet,
   type JsonSchema,
   Option,
   Predicate,
   Ref,
+  Result,
   Schema,
 } from "effect";
 import type { StoredMessage } from "../chat-store/schema.ts";
@@ -87,15 +89,11 @@ export type ToolLookup = Data.TaggedEnum<{
 }>;
 export const ToolLookup = Data.taggedEnum<ToolLookup>();
 
-/** One discovery call so far: the names discovered, what it found, and the names it did not. */
-interface Discovering {
-  readonly names: Array<string>;
-  readonly found: ReadonlyArray<{
-    readonly name: string;
-    readonly description: string;
-    readonly inputSchema: JsonSchema.JsonSchema;
-  }>;
-  readonly errors: ReadonlyArray<string>;
+/** A lazy tool a discovery call found, as its answer describes it. */
+interface Found {
+  readonly name: string;
+  readonly description: string;
+  readonly inputSchema: JsonSchema.JsonSchema;
 }
 
 /** The run's tools with TanStack's lazy discovery, seeded with what `history` discovered. */
@@ -107,8 +105,8 @@ export const lazyToolsFor = Effect.fnUntraced(function* (
   const eager = tools.filter((tool) => !tool.lazy);
   const lazyByName = new Map(lazy.map((tool) => [tool.tool.name, tool] as const));
   const discovered = yield* Ref.make(discoveredIn(history, new Set(lazyByName.keys())));
-  const undiscovered = (names: ReadonlyArray<string>) =>
-    lazy.map((tool) => tool.tool.name).filter((name) => !names.includes(name));
+  const undiscovered = (seen: HashSet.HashSet<string>) =>
+    lazy.map((tool) => tool.tool.name).filter((name) => !HashSet.has(seen, name));
 
   const discovery = runTool({
     name: discoveryToolName,
@@ -117,30 +115,31 @@ export const lazyToolsFor = Effect.fnUntraced(function* (
     jsonSchema: discoveryParameters,
     handler: ({ toolNames }) =>
       Ref.modify(discovered, (before) => {
-        const start: Discovering = { names: before, found: [], errors: [] };
-        const { names, found, errors } = Arr.reduce(toolNames, start, (state, name): Discovering =>
-          Option.match(Option.fromNullishOr(lazyByName.get(name)), {
-            onNone: () => ({
-              ...state,
-              errors: [
-                ...state.errors,
-                `Unknown tool: '${name}'. Available tools: [${undiscovered(state.names).join(", ")}]`,
+        // Each name asked for is found, or fails with the tools still undiscovered at that point.
+        const [, answers] = Arr.mapAccum(
+          toolNames,
+          HashSet.fromIterable(before),
+          (seen, name): readonly [HashSet.HashSet<string>, Result.Result<Found, string>] =>
+            Option.match(Option.fromNullishOr(lazyByName.get(name)), {
+              onNone: () => [
+                seen,
+                Result.fail(
+                  `Unknown tool: '${name}'. Available tools: [${undiscovered(seen).join(", ")}]`,
+                ),
               ],
-            }),
-            onSome: (tool) => ({
-              names: state.names.includes(name) ? state.names : [...state.names, name],
-              found: [
-                ...state.found,
-                {
+              onSome: (tool) => [
+                HashSet.add(seen, name),
+                Result.succeed({
                   name,
                   description: tool.tool.description ?? "",
                   inputSchema: toolParameters(tool.tool),
-                },
+                }),
               ],
-              errors: state.errors,
             }),
-          }),
         );
+        const found = Arr.getSuccesses(answers);
+        const errors = Arr.getFailures(answers);
+        const names = Arr.dedupe([...before, ...found.map((tool) => tool.name)]);
         const answer = {
           tools: found,
           ...optionalProperty("errors", errors.length > 0 ? errors : undefined),

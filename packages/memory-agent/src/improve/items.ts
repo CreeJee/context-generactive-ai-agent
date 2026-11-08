@@ -1,4 +1,4 @@
-import { Effect, Array as EffectArray, Function as EffectFunction } from "effect";
+import { Chunk, Effect, Array as EffectArray, Function as EffectFunction, Option } from "effect";
 import { Embedder } from "../memory/embedding/embedder.ts";
 import { localModel } from "../memory/embedding/models.ts";
 import { sha256 } from "../runtime/synchronous-crypto.ts";
@@ -36,13 +36,25 @@ const dot = (a: Float32Array, b: Float32Array) =>
 export const clusterByVector: {
   (threshold: number): (vectors: readonly Float32Array[]) => number[][];
 } & typeof clusterByVectorBody = EffectFunction.dual(2, clusterByVectorBody);
-function clusterByVectorBody(vectors: readonly Float32Array[], threshold: number) {
-  return vectors.reduce<number[][]>((groups, vector, index) => {
-    const home = groups.find((group) => dot(vectors[group[0]], vector) >= threshold);
-    return home === undefined
-      ? [...groups, [index]]
-      : groups.map((group) => (group === home ? [...group, index] : group));
-  }, []);
+function clusterByVectorBody(vectors: readonly Float32Array[], threshold: number): number[][] {
+  // Each vector's leader: the first leader similar enough, or the vector itself as a new one.
+  const [leaders, leaderOf] = EffectArray.mapAccum(
+    vectors,
+    Chunk.empty<number>(),
+    (leaders, vector, index): readonly [Chunk.Chunk<number>, number] =>
+      Option.match(
+        Chunk.findFirst(leaders, (leader) => dot(vectors[leader], vector) >= threshold),
+        {
+          onNone: () => [Chunk.append(leaders, index), index],
+          onSome: (leader) => [leaders, leader],
+        },
+      ),
+  );
+  const members = EffectArray.groupBy(
+    vectors.map((_, index) => index),
+    (index) => String(leaderOf[index]),
+  );
+  return Chunk.toReadonlyArray(leaders).map((leader) => members[String(leader)] ?? []);
 }
 
 type Correction = typeof Signal.cases.correction.Type;

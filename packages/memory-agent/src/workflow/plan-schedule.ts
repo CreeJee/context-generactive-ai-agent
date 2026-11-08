@@ -1,5 +1,6 @@
 import {
   Array as EffectArray,
+  Chunk,
   Data,
   Effect,
   Function as EffectFunction,
@@ -65,7 +66,7 @@ export function planDependencyIssues(
         {
           onSome: (index) => ({
             ...search,
-            cycles: EffectArray.append(
+            cycles: Chunk.append(
               search.cycles,
               PlanDependencyIssue.cases.DependencyCycle.make({
                 cycle: [...along.slice(index), next],
@@ -78,16 +79,19 @@ export function planDependencyIssues(
     );
     return { ...searched, finished: HashSet.add(searched.finished, id) };
   };
-  const unsearched: CycleSearch = { cycles: [], finished: HashSet.empty() };
+  const unsearched: CycleSearch = { cycles: Chunk.empty(), finished: HashSet.empty() };
   const { cycles } = EffectArray.reduce([...dependencies.keys()], unsearched, (search, id) =>
     HashSet.has(search.finished, id) ? search : visit(search, id, []),
   );
   return [...duplicates, ...references, ...cycles];
 }
 
-/** The cycles found so far, and the steps whose dependencies are all searched. */
+/**
+ * The cycles found so far, and the steps whose dependencies are all searched. A Chunk adds a
+ * cycle without copying the ones before it.
+ */
 interface CycleSearch {
-  readonly cycles: ReadonlyArray<PlanDependencyIssue>;
+  readonly cycles: Chunk.Chunk<PlanDependencyIssue>;
   readonly finished: HashSet.HashSet<string>;
 }
 

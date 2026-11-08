@@ -1,10 +1,12 @@
 import {
+  Chunk,
   Clock,
   Context,
   Data,
   Duration,
   Effect,
   FiberMap,
+  Iterable as EffectIterable,
   Layer,
   Match,
   Option,
@@ -851,18 +853,22 @@ const make = (options: KanbanOrchestratorOptions) =>
           !busy.has(step.id) &&
           (ladders.get(step.id)?.notBefore ?? 0) <= now,
       );
-      return yield* Effect.reduce(
+      // A Chunk adds a planned card without copying the ones before it.
+      const planned = yield* Effect.reduce(
         [...orphans, ...ready],
-        (): readonly PlanStep[] => [],
+        (): Chunk.Chunk<PlanStep> => Chunk.empty(),
         (planned, step) =>
           // Expected files that overlap a working card wait for it; this is a hint, not a lock.
           [working, planned].some((cards) =>
-            cards.some((other) => other.id !== step.id && boundariesOverlap(step, other)),
+            EffectIterable.some(
+              cards,
+              (other) => other.id !== step.id && boundariesOverlap(step, other),
+            ),
           )
             ? Effect.succeed(planned)
             : Effect.flatMap(scheduler.crossGoalOverlap(goal, step), (overlap) =>
                 Match.valueTags(overlap, {
-                  None: () => Effect.succeed([...planned, step]),
+                  None: () => Effect.succeed(Chunk.append(planned, step)),
                   // Another Goal's running card goes first; both boards hear about it.
                   Running: (running) =>
                     Effect.as(scheduler.notice(goal.goalInstanceId, step.id, running), planned),
@@ -883,6 +889,7 @@ const make = (options: KanbanOrchestratorOptions) =>
                 }),
               ),
       );
+      return Chunk.toReadonlyArray(planned);
     });
 
     /** One look at a board: take up outcomes, then assign what may run. */
