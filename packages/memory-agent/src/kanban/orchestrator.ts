@@ -955,9 +955,10 @@ const make = (options: KanbanOrchestratorOptions) =>
       const allDone = steps.length > 0 && steps.every((step) => step.status === "done");
 
       // Cards in verify that no integration is working on (after a restart, or a person moved
-      // them there) are verified again.
+      // them there) are verified again. A held Goal verifies none until its cards are classified:
+      // the integration would end at once and wake the board for another look, over and over.
       yield* Effect.forEach(
-        steps.filter((step) => step.status === "verify"),
+        steps.filter((step) => goal.hold === null && step.status === "verify"),
         (step) =>
           Effect.when(
             startIntegration(goal, step.id, ""),
@@ -972,7 +973,7 @@ const make = (options: KanbanOrchestratorOptions) =>
       const executing = state.phase === "execute" && state.plan?.status === "executing";
       // A Goal waiting for another Goal's merge takes no slots; its cards stay where they are.
       const waitingOn = yield* scheduler.waitingOn(goalInstanceId);
-      yield* scheduler.clearNotices(goalInstanceId);
+      yield* scheduler.reviewNotices(goalInstanceId);
       const planned =
         executing && goal.hold === null && waitingOn.length === 0
           ? yield* assignable(goal, steps, ladders)
@@ -1062,9 +1063,10 @@ const make = (options: KanbanOrchestratorOptions) =>
               Stopped: () => true,
               Continued: ({ value }) => value === "stopped",
             });
+            // Pokes that queued up meanwhile all come before the next look: it covers them all.
             yield* Effect.when(
-              PubSub.take(wakeups).pipe(
-                Effect.repeat({ until: (woken) => woken === goalInstanceId }),
+              PubSub.takeAll(wakeups).pipe(
+                Effect.repeat({ until: (woken) => woken.includes(goalInstanceId) }),
                 Effect.timeoutOption(pollInterval),
               ),
               Effect.succeed(!stopped),

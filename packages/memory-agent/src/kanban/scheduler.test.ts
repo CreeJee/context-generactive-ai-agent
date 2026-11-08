@@ -1,4 +1,4 @@
-import { Deferred, Effect, Option, Ref, Schedule } from "effect";
+import { Deferred, Effect, Option, Ref, Schedule, Stream } from "effect";
 import { expect } from "vite-plus/test";
 import { layer } from "@effect/vitest";
 import {
@@ -232,6 +232,66 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
             });
             yield* orchestrator.poke(goalB.goalInstanceId);
             yield* eventually(Ref.get(started), (list) => list.includes("b1"));
+          }),
+        );
+      }),
+  );
+
+  it.effect(
+    "wakes the other board for a notice only when the previous look did not record it",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* kanbanFixture;
+        const run = yield* openKanbanOwner(fixture, yield* Effect.scope, {
+          agent: () => Effect.succeed(finished),
+        });
+        yield* run(
+          Effect.gen(function* () {
+            const scheduler = yield* ProjectScheduler;
+            const woken = yield* Ref.make<ReadonlyArray<string>>([]);
+            yield* Effect.forkChild(
+              Stream.runForEach(scheduler.wakeups, (id) =>
+                Ref.update(woken, (ids) => [...ids, id]),
+              ),
+            );
+            // A cleared notice is new every time; repeat it until the listener hears one.
+            yield* eventually(
+              Effect.andThen(
+                Effect.andThen(
+                  scheduler.clearNotices("probe"),
+                  scheduler.notice("probe", "p", {
+                    otherGoalInstanceId: "listening",
+                    otherCardId: "p",
+                  }),
+                ),
+                Ref.getAndSet(woken, []),
+              ),
+              (ids) => ids.includes("listening"),
+            );
+            yield* Ref.set(woken, []);
+
+            const waitOnA = { otherGoalInstanceId: "goal-a", otherCardId: "a1" };
+            const look = (record: boolean) =>
+              Effect.andThen(
+                scheduler.reviewNotices("goal-b"),
+                Effect.when(scheduler.notice("goal-b", "b1", waitOnA), Effect.succeed(record)),
+              );
+            yield* look(true);
+            // The next look finds the same card waiting: the other board heard about it already.
+            yield* look(true);
+            yield* look(true);
+            expect(yield* scheduler.notices("goal-a")).toEqual(["goal-b/b1~goal-a/a1"]);
+            // A look that no longer finds it hides it; a later look finding it again is news.
+            yield* look(false);
+            expect(yield* scheduler.notices("goal-a")).toEqual([]);
+            yield* look(true);
+            // The last wake marks the end of what this test sent.
+            yield* scheduler.notice("goal-c", "c1", {
+              otherGoalInstanceId: "goal-d",
+              otherCardId: "d1",
+            });
+            const ids = yield* eventually(Ref.get(woken), (ids) => ids.includes("goal-d"));
+            expect(ids.filter((id) => id !== "listening")).toEqual(["goal-a", "goal-a", "goal-d"]);
           }),
         );
       }),

@@ -11,6 +11,7 @@ import {
   Predicate,
   PubSub,
   Ref,
+  Result,
   Stream,
 } from "effect";
 import { KanbanSettings } from "../config/kanban-settings.ts";
@@ -120,6 +121,16 @@ const assign = (
   );
 };
 
+/**
+ * A card of the waiting Goal waits for a running card of the other Goal. `stale` from the start
+ * of the waiting board's look until that look finds the card waiting again.
+ */
+interface Notice {
+  readonly waiting: string;
+  readonly running: string;
+  readonly stale: boolean;
+}
+
 const make = Effect.gen(function* () {
   const attempts = yield* CardAttempts;
   const schedules = yield* GoalSchedules;
@@ -129,7 +140,7 @@ const make = Effect.gen(function* () {
   const goalOrder = yield* GoalOrder;
   // The cards each Goal's last look could start.
   const demand = yield* Ref.make<ReadonlyMap<string, readonly PlanStep[]>>(new Map());
-  const notices = yield* Ref.make<ReadonlyMap<string, readonly [string, string]>>(new Map());
+  const notices = yield* Ref.make<ReadonlyMap<string, Notice>>(new Map());
   const wakeups = yield* PubSub.unbounded<string>();
 
   const poke = (goalInstanceId: string) => PubSub.publish(wakeups, goalInstanceId);
@@ -333,8 +344,8 @@ const make = Effect.gen(function* () {
     }),
 
     /**
-     * Records that a card of `goal` waits for a running card of another Goal, and wakes the other
-     * board so both orchestrators hear about it.
+     * Records that a card of `goal` waits for a running card of another Goal. A notice the board's
+     * previous look did not record wakes the other board, so both orchestrators hear about it.
      */
     notice: Effect.fn("ProjectScheduler.notice")(function* (
       goalInstanceId: string,
@@ -342,31 +353,53 @@ const make = Effect.gen(function* () {
       other: { readonly otherGoalInstanceId: string; readonly otherCardId: string },
     ) {
       const key = `${goalInstanceId}/${cardId}~${other.otherGoalInstanceId}/${other.otherCardId}`;
-      const known = yield* Ref.get(notices);
-      yield* Effect.when(
-        Effect.andThen(
-          Ref.set(
-            notices,
-            new Map(known).set(key, [goalInstanceId, other.otherGoalInstanceId] as const),
-          ),
-          poke(other.otherGoalInstanceId),
-        ),
-        Effect.succeed(!known.has(key)),
-      );
+      const notice: Notice = {
+        waiting: goalInstanceId,
+        running: other.otherGoalInstanceId,
+        stale: false,
+      };
+      const added = yield* Ref.modify(notices, (known) => [
+        !known.has(key),
+        new Map(known).set(key, notice),
+      ]);
+      yield* Effect.when(poke(other.otherGoalInstanceId), Effect.succeed(added));
     }),
 
-    /** Drops the notices of cards of `goal` that waited; its next look records the current ones. */
+    /**
+     * Starts a look of `goal`'s board: the notices its previous look did not record again are
+     * dropped, and the others wait for this look to record them again.
+     */
+    reviewNotices: (goalInstanceId: string) =>
+      Ref.update(
+        notices,
+        (known) =>
+          new Map(
+            EffectArray.filterMap(known, ([key, notice]) =>
+              notice.waiting !== goalInstanceId
+                ? Result.succeed([key, notice] as const)
+                : notice.stale
+                  ? Result.failVoid
+                  : Result.succeed([key, { ...notice, stale: true }] as const),
+            ),
+          ),
+      ),
+
+    /** Drops the notices of cards of `goal` that waited, once its board stops. */
     clearNotices: (goalInstanceId: string) =>
       Ref.update(
         notices,
-        (known) => new Map([...known].filter(([, [waiting]]) => waiting !== goalInstanceId)),
+        (known) => new Map([...known].filter(([, notice]) => notice.waiting !== goalInstanceId)),
       ),
 
     /** The file overlap notices a board is part of, as stable keys. */
     notices: (goalInstanceId: string) =>
       Effect.map(Ref.get(notices), (known) =>
         [...known]
-          .filter(([, goals]) => goals.includes(goalInstanceId))
+          .filter(
+            ([, notice]) =>
+              !notice.stale &&
+              (notice.waiting === goalInstanceId || notice.running === goalInstanceId),
+          )
           .map(([key]) => key)
           .toSorted(),
       ),
