@@ -4424,7 +4424,33 @@
 - 결정: `filter`·`map`이 만든 배열을 다음 호출이 한 번 읽고 버리면 고친다. `allocation/no-intermediate-array` 규칙이 잡는다(`106eec4f`).
   - `filter(p).length`는 `Array.countBy`로 센다. 20만 개에서 2.79MB가 0.01MB가 됐다.
   - `map().map()`처럼 같은 함수를 잇는 체인은 하나로 합친다. 체인이 `some`·`every`·`find`로 끝나면 원소를 한 번 읽으며 판단한다.
-  - `filter().map()`·`map().filter()`는 그대로 둔다. 20만 개에서 `filter.map` 3.59MB를 `Array.filterMap`(Result)으로 바꾸면 6.05MB, Iterable 체인으로 바꾸면 19.11MB였다. 원소마다 `Result`나 iterator 결과 객체를 만들기 때문이다. `Array.from(set, f)`도 `[...set].map(f)`보다 많이 할당했다(14.92MB, 3.23MB).
+  - `filter().map()`은 그대로 둔다. 20만 개에서 `filter.map` 3.59MB를 `Array.filterMap`(Result)으로 바꾸면 6.05MB, Iterable 체인으로 바꾸면 19.11MB였다. 원소마다 `Result`나 iterator 결과 객체를 만들기 때문이다. `Array.from(set, f)`도 `[...set].map(f)`보다 많이 할당했다(14.92MB, 3.23MB).
+  - 사용자 결정: `map().filter()`는 고친다. `map`이 버릴 원소까지 변환한다. 조건이 원본을 읽으면 `filter`를 먼저 하고(20만 개 필드 비교에서 5.76MB가 5.23MB), 변환한 값을 봐야 하면 `Array.filterMap`을 쓴다(`86f5fbd2`, `1e6b8b2a`). 규칙도 이것을 잡는다(`e4c40a2f`).
+- 결정: 배열을 spread로 합치는 코드(`[...a, ...b]`, 약 160곳)는 바꾸지 않는다.
+  - 큰 배열에서는 `concat`보다 2.4배 할당한다. 하지만 합치는 배열은 대부분 도구·프롬프트·섹션처럼 작다. 가장 큰 경우인 모델 step마다의 대화 복사도 메시지 5,000개에서 step당 103KB·3.6µs(`concat`은 43KB·1.7µs)라 모델 호출 옆에서 의미가 없다.
+  - `concat`은 원소가 배열이면 그 원소까지 펼친다. 기계적으로 바꾸면 이 차이로 동작이 바뀔 수 있다.
+  - 호출 인자 spread(`Math.max(...xs)`, `push(...xs)`)는 원소가 20만 개쯤이면 stack을 넘긴다. 지금 쓰는 곳은 모두 목록 수·세트 수·한 줄의 항목처럼 작은 쪽을 펼친다.
+- 결정: 같은 기준으로 자주 지나는 경로를 더 줄였다.
+  - Goal tick과 카드 확인이 읽는 human decision, relayed 승인, provider retry 실행은 payload 필드로 SQL에서 거른다(`OwnerWorkflowStorage.executionsWith`, `fb42f972`). 결정 2,000건과 다른 실행 5,000건에서 한 번에 20.65MB·13.7ms가 0.15MB·1.2ms가 됐다. `workflow_name` 인덱스는 1.23ms를 0.73ms로 줄일 뿐이라 만들지 않았다.
+  - 첨부 이미지는 run마다 한 번만 읽어 inline한다(`943cd30d`). 전에는 모델 step마다 이미지 파일(최대 2MB)을 읽고 base64로 바꿨다.
+  - 근거 페이지는 노드 텍스트를 페이지마다 다시 색인하지 않는다(`fa980b71`). 10MB tool result를 세 페이지 읽을 때 39.3MB·34ms가 13.2MB·11ms가 됐다. `Effect.when`으로 감싼 `remember(...)`가 인자를 먼저 평가해서 tool_result가 아닌 노드도 매번 인코딩하던 것도 없앴다.
+  - AGENTS.md 목록은 항목마다 `lstat`하지 않고 `readDirectoryEntries`의 type을 쓴다(`cf111f35`). 이 저장소에서 run마다 637ms·217MB가 179ms·43.9MB가 됐다.
+- 고친 버그: Work Trace task 상세가 세션의 처음 500개 이벤트에서 task 이벤트를 고르던 것을, task의 최신 500개를 SQL에서 고르게 고쳤다(`6ed54e95`).
+
+## run-state 이벤트마다 보드 이력을 다시 계산하지 않는다 (2026-11-08)
+
+- 계기: `Workflows.get`이 무거워 보였지만, 라이브 DB에서 한 번에 0.25–0.6ms였다. run-state 이벤트 하나마다 열린 탭이 함께 다시 부르는 `Boards.view`가 28–67ms였다. 최근 revision 201개의 Plan(활성 보드에서 2.58MB)을 모두 decode하고 카드를 다시 encode해 앞 revision과 비교했다.
+- 결정: revision을 저장할 때 세션의 바로 앞 revision과 카드를 비교해, 바뀐 카드 id를 `workflow_board_changes`에 둔다(`6f746afd`, 마이그레이션 v94).
+  - revision은 고치지 않으므로(update trigger) 이 비교는 저장할 때 한 번이면 된다. revision은 세션을 지울 때만 함께 지워진다.
+  - `workflow_state_revisions`에 열을 더하지 않고 표를 따로 만든다. 새 열은 `plan_json` 뒤에 저장돼, 읽을 때마다 Plan의 overflow page를 지나간다.
+  - 기존 revision은 마이그레이션의 `migrateBoardChanges`가 같은 비교로 채운다. Plan을 읽지 못한 revision은 변경을 남기지 않고, 다음 revision은 마지막으로 읽은 것과 비교한다. 그런 revision은 전에도 보드를 띄우지 못했다.
+  - view는 창(최근 revision 200개) 안의 변경 행만 읽고, 이력에 보일 30개의 ledger detail만 따로 읽는다. 창은 그대로 두어 보이는 이력과 마지막 변경이 같다.
+- 확인: bench 사본(58개 세션)과 라이브 DB 사본(62개 세션)에서 모든 view가 HEAD와 같았다. revision 243개 세션의 view가 68.5MB·97ms에서 0.9MB·2ms, 라이브 사본의 가장 큰 view는 68.1MB·68ms에서 1.0MB·1ms가 됐다. backfill 자체는 0.4초쯤이다. 마이그레이션이 있을 때마다 도는 `PRAGMA foreign_key_check`가 이 DB들에서 7–12초 걸린다.
+- 같이 고친 것(`9f1fdaad`): 칸반 보드 look이 기다리지 않고 되풀이되던 경우 둘과, 쌓인 poke 수만큼 look하던 것.
+  - Goal이 바뀌어 배정을 멈춘 동안 verify 카드의 통합을 다시 시작하지 않는다. 통합이 바로 끝나며 보드를 깨워 카드가 분류될 때까지 look이 쉬지 않고 돌았다. 이 경우는 관찰할 수 있는 값이 없어 회귀 테스트가 없다.
+  - look마다 file overlap notice를 지우고 다시 기록해 같은 notice가 매번 상대 보드를 깨웠다. 서로 기다리는 두 Goal이 번갈아 쉬지 않고 돌았다. 이제 이전 look에 없던 notice만 깨운다.
+- 같이 고친 것(`91374e2a`): run이 없는 세션의 상태 조회가 고칠 것이 없어도 `BEGIN IMMEDIATE`로 시작했다. 다른 연결이 쓰기 잠금을 들고 있으면 앱의 유일한 연결을 쥔 채 최대 30초 기다렸다. 이제 먼저 읽고 고칠 것이 있을 때만 트랜잭션을 연다.
+- 남은 것: 페이지는 이벤트를 하나씩 받아 키마다 refetch하고, TanStack Query가 진행 중 요청을 취소해도 `appCall`이 AbortSignal을 넘기지 않아 서버는 취소된 요청도 끝까지 처리한다. api 함수마다 signal을 받아야 해서 이번에 고치지 않았다.
 - 결정: 같은 기준으로 자주 지나는 경로의 읽기를 줄였다. 실제 DB 사본(4GB)에서 쟀다.
   - 보드 조회는 revision마다 ledger 전체 대신 plan과 마지막 ledger detail만 읽는다(`45d45b9f`). 할당 106MB, 265ms가 67MB, 67ms가 됐다.
   - 토큰 추정은 ASCII 밖 글자를 배열로 세지 않는다(`02ee5222`). 2,700만 자 세션 한 번에 71MB, 155ms가 39MB, 44ms가 됐다.
