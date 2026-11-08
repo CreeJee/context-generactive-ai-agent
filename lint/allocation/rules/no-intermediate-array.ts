@@ -31,13 +31,13 @@ function readsIndex(callback: ESTree.Node | undefined): boolean {
   );
 }
 
-/** Ban a filter or map whose array the next call only counts, scans or maps again. */
+/** Ban a filter or map whose array the next call only counts, scans, filters or maps again. */
 export const noIntermediateArrayRule = defineRule({
   meta: {
     type: "problem",
     docs: {
       description:
-        "Disallow building an array with filter or map only to count it, take its first element, scan it, or filter or map it again.",
+        "Disallow building an array with filter or map only to count it, take its first element, scan it, or filter or map it again, and mapping elements that a filter then drops.",
     },
     messages: {
       count:
@@ -46,6 +46,8 @@ export const noIntermediateArrayRule = defineRule({
         "filter builds an array only to take its first element. find stops at the first match.",
       twice:
         "The first {{name}} builds an array that the second one reads once and drops. Do both in one {{name}}.",
+      mapThenFilter:
+        "map builds a value for every element, and filter then drops some of them. Filter the source first when the condition reads the source; when it needs the mapped value, use Array.filterMap.",
       scan: "{{inner}} builds an array that {{outer}} reads once and drops. Check each element in one pass instead (combine the conditions, or Array.findFirst with an Option for a mapped value).",
     },
   },
@@ -65,6 +67,8 @@ export const noIntermediateArrayRule = defineRule({
         if (inner === null || outer === null) return;
         if (inner === "filter" && readsIndex(node.arguments[0])) return;
         if (outer === inner) context.report({ node, messageId: "twice", data: { name: inner } });
+        else if (inner === "map" && outer === "filter")
+          context.report({ node, messageId: "mapThenFilter" });
         else if (scans.includes(outer))
           context.report({ node, messageId: "scan", data: { inner, outer } });
       },

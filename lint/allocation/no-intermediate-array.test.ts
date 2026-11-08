@@ -10,7 +10,6 @@ const tester = new RuleTester({ languageOptions: { parserOptions: { lang: "ts" }
 tester.run("no-intermediate-array", noIntermediateArrayRule, {
   valid: [
     "items.filter(keep).map(name);",
-    "items.map(name).filter(keep);",
     'items.map(name).join(", ");',
     "items.filter(keep);",
     "items.length;",
@@ -40,6 +39,10 @@ tester.run("no-intermediate-array", noIntermediateArrayRule, {
     {
       code: "items.filter(keep).filter(valid);",
       errors: [{ messageId: "twice", data: { name: "filter" } }],
+    },
+    {
+      code: 'items.map((item) => item.name.trim()).filter((name) => name !== "");',
+      errors: [{ messageId: "mapThenFilter" }],
     },
     {
       code: "items.filter(keep).every((item) => item.done);",
