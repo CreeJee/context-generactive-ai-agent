@@ -1,6 +1,6 @@
 import { isTruthy } from "../../truthy.ts";
 import { useState } from "react";
-import { Array as Arr, Match } from "effect";
+import { Array as Arr, Match, Result } from "effect";
 import { ChevronRightIcon, CircleSlashIcon, KanbanSquareIcon, PlusIcon } from "lucide-react";
 import { parseAsBoolean, parseAsString, useQueryStates } from "nuqs";
 import { Badge } from "../../components/ui/badge";
@@ -96,13 +96,11 @@ export function WorkflowBoard({
   const total = view.cards.length;
   const done = Arr.countBy(view.cards, ({ card }) => card.status === "done");
   // The progress line already counts the finished cards; empty columns say nothing.
-  const counts = boardColumns
-    .filter((status) => status !== "done")
-    .map((status) => ({
-      status,
-      count: Arr.countBy(view.cards, ({ card }) => card.status === status),
-    }))
-    .filter(({ count }) => count > 0);
+  const counts = Arr.filterMap(boardColumns, (status) => {
+    if (status === "done") return Result.failVoid;
+    const count = Arr.countBy(view.cards, ({ card }) => card.status === status);
+    return count > 0 ? Result.succeed({ status, count }) : Result.failVoid;
+  });
   const waiting = decisions.length;
   const open = location.board === true || location.card !== null;
   const start = () => {

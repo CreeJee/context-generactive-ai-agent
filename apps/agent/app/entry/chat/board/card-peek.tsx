@@ -1,6 +1,6 @@
 import { isTruthy } from "../../../truthy.ts";
 import { useState, type ReactNode } from "react";
-import { Data, type Types } from "effect";
+import { Array as Arr, Data, Result, type Types } from "effect";
 import type { CardDraft, CardRisk } from "memory-agent";
 import {
   AlertDialog,
@@ -65,16 +65,13 @@ const riskItems = [
   { value: "high", label: riskLabels.high },
 ] as const;
 
-const lines = (text: string) =>
-  text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-const ids = (text: string) =>
-  text
-    .split(",")
-    .map((id) => id.trim())
-    .filter((id) => id.length > 0);
+/** The text without its surrounding spaces, unless nothing is left. */
+const trimmed = (text: string) => {
+  const kept = text.trim();
+  return kept.length > 0 ? Result.succeed(kept) : Result.failVoid;
+};
+const lines = (text: string) => Arr.filterMap(text.split("\n"), trimmed);
+const ids = (text: string) => Arr.filterMap(text.split(","), trimmed);
 
 /** The editor's text fields; contract fields left empty are cleared. */
 interface CardForm {
