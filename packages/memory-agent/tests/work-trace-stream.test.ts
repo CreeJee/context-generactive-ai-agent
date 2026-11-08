@@ -119,6 +119,41 @@ describe("Work Trace durable stream source", () => {
     ),
   );
 
+  it.effect("task detail reads the task's newest events past the session's first 500", () =>
+    run(
+      Effect.gen(function* () {
+        const trace = yield* WorkTraceStore;
+        yield* seed();
+        const start = (parentToolCallId: string) =>
+          trace.startAttempt({
+            sessionId: "s1",
+            parentRunId: "parent-1",
+            parentToolCallId,
+            agentId: "agent-1",
+            title: "Research",
+            request: "Research the code",
+            kind: "start",
+            threadId: `subagent-agent-1-${parentToolCallId}`,
+          });
+        const step = (handle: Effect.Success<ReturnType<typeof start>>, summary: string) =>
+          trace.appendEvent({ handle, sessionId: "s1", kind: "steered", summary });
+        const busy = yield* start("call-1");
+        yield* Effect.forEach(
+          Array.from({ length: 600 }, (_, index) => `step ${index}`),
+          (summary) => step(busy, summary),
+        );
+        const quiet = yield* start("call-2");
+        const last = yield* step(quiet, "answered");
+
+        const quietDetail = yield* trace.taskDetail("s1", quiet.taskId);
+        expect(quietDetail?.events.map((event) => event.id)).toContain(last.id);
+        const busyDetail = yield* trace.taskDetail("s1", busy.taskId);
+        expect(busyDetail?.events).toHaveLength(500);
+        expect(busyDetail?.events.at(-1)?.summary).toBe("step 599");
+      }),
+    ),
+  );
+
   it.effect("wakes a live tail on an appended event and emits an idle heartbeat", () =>
     run(
       Effect.gen(function* () {

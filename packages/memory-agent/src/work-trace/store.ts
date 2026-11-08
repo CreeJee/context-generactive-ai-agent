@@ -1261,7 +1261,8 @@ const make = Effect.gen(function* () {
   const taskViews = (rows: ReadonlyArray<typeof TaskViewRow.Type>) =>
     Effect.forEach(rows, taskView);
 
-  const taskTree = (sessionId: string) =>
+  /** The tasks `where` selects, with each one's latest attempt. */
+  const tasksWhere = (where: Statement.Fragment) =>
     sql`SELECT t.id, t.project_id, t.origin_session_id, t.parent_task_id,
         t.parent_run_id, t.parent_tool_call_id, t.agent_id, t.agent_name,
         CASE
@@ -1280,35 +1281,15 @@ const make = Effect.gen(function* () {
       LEFT JOIN agent_run_attempts a ON a.id =
         (SELECT latest.id FROM agent_run_attempts latest
          WHERE latest.task_id = t.id ORDER BY latest.attempt_number DESC LIMIT 1)
-      WHERE t.origin_session_id = ${sessionId} ORDER BY t.created_at, t.id`.pipe(
+      WHERE ${where} ORDER BY t.created_at, t.id`.pipe(
       Effect.flatMap(decodeTaskViewRows),
       Effect.flatMap(taskViews),
     );
 
+  const taskTree = (sessionId: string) => tasksWhere(sql`t.origin_session_id = ${sessionId}`);
+
   /** Project-owned review projection, including tasks whose origin session was deleted. */
-  const projectTaskTree = (projectId: string) =>
-    sql`SELECT t.id, t.project_id, t.origin_session_id, t.parent_task_id,
-        t.parent_run_id, t.parent_tool_call_id, t.agent_id, t.agent_name,
-        CASE
-          WHEN t.deleted_at IS NOT NULL THEN 'deleted'
-          WHEN t.archived_at IS NOT NULL THEN 'archived'
-          ELSE t.status
-        END AS status,
-        t.title, t.request,
-        t.active_attempt_id, a.id AS latest_attempt_id,
-        a.status AS latest_attempt_status, a.attempt_number AS latest_attempt_number,
-        a.resumed_from_attempt_id AS latest_resumed_from_attempt_id,
-        a.heartbeat_state, a.heartbeat_step, a.heartbeat_at, a.failure AS latest_failure,
-        t.archived_at, t.delete_requested_at, t.deleted_at, t.purge_receipt_id,
-        t.updated_at, t.created_at
-      FROM work_tasks t
-      LEFT JOIN agent_run_attempts a ON a.id =
-        (SELECT latest.id FROM agent_run_attempts latest
-         WHERE latest.task_id = t.id ORDER BY latest.attempt_number DESC LIMIT 1)
-      WHERE t.project_id = ${projectId} ORDER BY t.created_at, t.id`.pipe(
-      Effect.flatMap(decodeTaskViewRows),
-      Effect.flatMap(taskViews),
-    );
+  const projectTaskTree = (projectId: string) => tasksWhere(sql`t.project_id = ${projectId}`);
 
   const attemptsForTask = Effect.fnUntraced(function* (taskId: string) {
     const rows = yield* decodeAttemptViewRows(
@@ -1355,32 +1336,30 @@ const make = Effect.gen(function* () {
     };
   });
 
+  /**
+   * The task's newest visible events, oldest first. A long task keeps its last events, where an
+   * attempt names its answer.
+   */
+  const taskEvents = (taskId: string, ...where: ReadonlyArray<Statement.Fragment>) =>
+    sql`SELECT * FROM (
+        SELECT seq AS cursor, id, origin_session_id, task_id, invocation_id, attempt_id,
+          attempt_sequence, kind, visibility, redaction, summary, payload, occurred_at
+        FROM run_events WHERE ${sql.and([sql`task_id = ${taskId}`, ...where])}
+          AND visibility <> 'internal' AND redaction <> 'omitted'
+        ORDER BY seq DESC LIMIT 500
+      ) ORDER BY cursor`.pipe(Effect.flatMap(decodeStoredEventRows), Effect.flatMap(eventViews));
+
   const taskDetail = Effect.fnUntraced(function* (sessionId: string, taskId: string) {
-    const task = (yield* taskTree(sessionId)).find((candidate) => candidate.id === taskId);
+    const [task] = yield* tasksWhere(sql`t.id = ${taskId} AND t.origin_session_id = ${sessionId}`);
     if (!isTruthy(task)) return null;
-    return yield* detailOf(
-      task,
-      Effect.map(events(sessionId, 0, 500), (found) =>
-        found.filter((event) => event.taskId === taskId),
-      ),
-    );
+    return yield* detailOf(task, taskEvents(taskId, sql`origin_session_id = ${sessionId}`));
   });
 
   const projectTaskDetail = Effect.fnUntraced(function* (projectId: string, taskId: string) {
-    const task = (yield* projectTaskTree(projectId)).find((candidate) => candidate.id === taskId);
+    const [task] = yield* tasksWhere(sql`t.id = ${taskId} AND t.project_id = ${projectId}`);
     if (!isTruthy(task)) return null;
     if (task.originSessionId !== null) return yield* taskDetail(task.originSessionId, taskId);
-    return yield* detailOf(
-      task,
-      sql`SELECT seq AS cursor, id, origin_session_id, task_id, invocation_id, attempt_id,
-          attempt_sequence, kind, visibility, redaction, summary, payload, occurred_at
-        FROM run_events WHERE task_id = ${taskId}
-          AND visibility <> 'internal' AND redaction <> 'omitted'
-        ORDER BY seq LIMIT 500`.pipe(
-        Effect.flatMap(decodeStoredEventRows),
-        Effect.flatMap(eventViews),
-      ),
-    );
+    return yield* detailOf(task, taskEvents(taskId));
   });
 
   const resumeBlocked = (reason: ResumeBlocker): ResumeClaim => ResumeClaim.blocked({ reason });
