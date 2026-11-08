@@ -23,6 +23,7 @@ import { type EmbeddingChoice, GpuCheck } from "../../config/contracts.ts";
 import { GlobalConfig, type Settings } from "../../config/global-config.ts";
 import { StorageRoot } from "../../config/storage-root.ts";
 import { runtimeWorker, runtimeWorkerOptions } from "../../runtime/resources.ts";
+import { runsOf } from "../../slices.ts";
 import { type ChunkSpan, chunkPolicy } from "./chunks.ts";
 import { type EmbeddingDevice, EmbeddingMode, type EmbeddingOverview } from "./contracts.ts";
 import { type DownloadReport, ModelDownloads } from "./downloads.ts";
@@ -87,16 +88,22 @@ function planBatchesBody(
   const order = tokenCounts
     .map((_, index) => index)
     .sort((a, b) => tokenCounts[a]! - tokenCounts[b]!);
-  return order.reduce<number[][]>((batches, index) => {
-    const current = batches.at(-1) ?? [];
+  // Each text gets a batch number: it joins the batch before it when it fits, or starts the next.
+  const [, numbered] = EffectArray.mapAccum(order, { batch: -1, size: 0 }, (current, index) => {
     // Counts ascend, so the text joining a batch is its longest.
     const longest = tokenCounts[index]!;
     const fits =
-      current.length > 0 &&
-      current.length + 1 <= limits.size &&
-      (current.length + 1) * longest * longest <= limits.cost;
-    return fits ? [...batches.slice(0, -1), [...current, index]] : [...batches, [index]];
-  }, []);
+      current.size > 0 &&
+      current.size + 1 <= limits.size &&
+      (current.size + 1) * longest * longest <= limits.cost;
+    const next = fits
+      ? { batch: current.batch, size: current.size + 1 }
+      : { batch: current.batch + 1, size: 1 };
+    return [next, { index, batch: next.batch }] as const;
+  });
+  return runsOf(numbered, (text, first) => text.batch === first.batch).map((batch) =>
+    batch.map((text) => text.index),
+  );
 }
 
 /** Which mode's file to load, and the devices to try it on in order. */
