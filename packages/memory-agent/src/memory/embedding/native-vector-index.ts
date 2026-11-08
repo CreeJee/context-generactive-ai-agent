@@ -1,6 +1,13 @@
 // Native transport/filesystem/SQLite boundaries; the worker is the sole index and lease owner.
 import { sha256 } from "../../runtime/synchronous-crypto.ts";
-import { Array as EffectArray, Effect, Option, Path, Schema } from "effect";
+import {
+  Array as EffectArray,
+  Effect,
+  Iterable as EffectIterable,
+  Option,
+  Path,
+  Schema,
+} from "effect";
 import { SecureRandom } from "effect/crypto";
 import { SqlClient, type SqlError } from "effect/sql";
 import { StorageRoot } from "../../config/storage-root.ts";
@@ -51,7 +58,7 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
     ids: readonly number[],
     query: (batch: readonly number[]) => Effect.Effect<readonly A[], E>,
   ) =>
-    Effect.forEach(EffectArray.chunksOf(ids, idsPerStatement), query).pipe(
+    Effect.forEach(EffectIterable.chunksOf(ids, idsPerStatement), query).pipe(
       Effect.map((batches) => batches.flat()),
     );
   const databasePath = yield* sql`PRAGMA database_list`.pipe(

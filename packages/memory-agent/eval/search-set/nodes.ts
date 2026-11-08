@@ -2,7 +2,7 @@
  * Node lookups on the `SqlClient` in scope: the copy's database, opened read-only by the set's own
  * steps or by the app's services when a step searches.
  */
-import { Array as Arr, Effect, HashMap, Schema } from "effect";
+import { Array as Arr, Effect, HashMap, Iterable as EffectIterable, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 
 export const NodeRecord = Schema.Struct({
@@ -15,7 +15,8 @@ export type NodeRecord = typeof NodeRecord.Type;
 
 /** Ids per statement, well under SQLite's bound on statement parameters. */
 const idsPerStatement = 500;
-const chunks = (ids: ReadonlyArray<string>) => Arr.chunksOf(Arr.dedupe(ids), idsPerStatement);
+const chunks = (ids: ReadonlyArray<string>) =>
+  EffectIterable.chunksOf(Arr.dedupe(ids), idsPerStatement);
 
 /** The seq of each id that names a node; seqs grow in the order nodes were stored. */
 export const nodeSeqs = Effect.fn("searchSet.nodeSeqs")(function* (ids: ReadonlyArray<string>) {

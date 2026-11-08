@@ -11,6 +11,7 @@ import {
   FileSystem,
   HashMap,
   HashSet,
+  Iterable as EffectIterable,
   Option,
   Schema,
 } from "effect";
@@ -80,7 +81,7 @@ const gradeBatches = Effect.fn("searchSet.gradeBatches")(function* (
 ) {
   const model = yield* EvalModel;
   const batches = work.flatMap(({ need, records }) =>
-    Arr.chunksOf(records, batchSize).map((batch) => ({ need, batch })),
+    Array.from(EffectIterable.chunksOf(records, batchSize), (batch) => ({ need, batch })),
   );
   yield* Console.log(
     `needs ${work.length}; records ${work.reduce((sum, { records }) => sum + records.length, 0)}; calls ${batches.length}`,

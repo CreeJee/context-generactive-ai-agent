@@ -200,8 +200,9 @@ export const displayMessages = Effect.gen(function* () {
         display_id: displayId,
         first_message_seq: seq,
       }));
+      // Iterable's chunksOf reads the rows once; its pieces are never empty, as insert needs.
       yield* Effect.forEach(
-        Arr.chunksOf(rows, rowsPerInsert),
+        EffectIterable.filter(EffectIterable.chunksOf(rows, rowsPerInsert), Arr.isArrayNonEmpty),
         (chunk) => sql`INSERT INTO chat_thread_display_messages ${sql.insert(chunk)}`,
         { discard: true },
       );

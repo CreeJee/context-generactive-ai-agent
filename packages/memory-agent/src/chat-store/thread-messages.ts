@@ -1,4 +1,11 @@
-import { Array as Arr, Effect, Function as EffectFunction, Option, Schema } from "effect";
+import {
+  Array as Arr,
+  Effect,
+  Function as EffectFunction,
+  Iterable as EffectIterable,
+  Option,
+  Schema,
+} from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { StoredMessage } from "./schema.ts";
 
@@ -67,10 +74,14 @@ export const threadMessages = Effect.gen(function* () {
     insertFrom: (threadId: string, seq: number, messages: ReadonlyArray<StoredMessage>) =>
       Effect.forEach(messages, (message) => encodeMessage(message)).pipe(
         Effect.tap((texts) =>
+          // Iterable's chunksOf reads the rows once; its pieces are never empty, as insert needs.
           Effect.forEach(
-            Arr.chunksOf(
-              texts.map((message, index) => ({ thread_id: threadId, seq: seq + index, message })),
-              rowsPerInsert,
+            EffectIterable.filter(
+              EffectIterable.chunksOf(
+                texts.map((message, index) => ({ thread_id: threadId, seq: seq + index, message })),
+                rowsPerInsert,
+              ),
+              Arr.isArrayNonEmpty,
             ),
             (chunk) => sql`INSERT INTO chat_thread_messages ${sql.insert(chunk)}`,
             { discard: true },
