@@ -299,7 +299,7 @@ const make = Effect.gen(function* () {
         const previous = isTruthy(input.sessionId)
           ? idOf(yield* lastInSession(input.sessionId))
           : Option.none();
-        const [inserted] = yield* sql`INSERT INTO nodes ${sql.insert({
+        const row = {
           id: yield* crypto.uuidV4(),
           project_id: input.projectId,
           session_id: input.sessionId,
@@ -308,8 +308,12 @@ const make = Effect.gen(function* () {
           text: input.text,
           detail: yield* encodeDetail(input.detail ?? {}),
           created_at: createdAt,
-        })} RETURNING *`;
-        const node = nodeOfRow(yield* Schema.decodeUnknownEffect(NodeRow)(inserted));
+        };
+        // Only the seq comes back: returning the row would copy the text out of SQLite again.
+        const [inserted] = yield* sql`INSERT INTO nodes ${sql.insert(row)} RETURNING seq`;
+        const node = nodeOfRow(
+          yield* Schema.decodeUnknownEffect(NodeRow)({ ...row, seq: inserted?.seq }),
+        );
         if (node.kind === "tool_result") yield* resultPages.remember(node.id, node.text);
         // Only the first accepted, redacted user message names a local conversation.
         if (
