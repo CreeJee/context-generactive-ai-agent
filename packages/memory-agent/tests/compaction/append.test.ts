@@ -1,0 +1,134 @@
+import { Effect, Layer, Schema } from "effect";
+import { expect } from "vite-plus/test";
+import {
+  compactionHook,
+  estimateConversation,
+  LastRequests,
+  lookupSources,
+} from "../../src/agent/compaction.ts";
+import { StoredMessage } from "../../src/chat-store/schema.ts";
+import { RunStore } from "../../src/loop/store.ts";
+import { Sessions } from "../../src/sessions/sessions.ts";
+import type { ScriptedTurn } from "../../src/testing/scripted-model.ts";
+import { runTool } from "../../src/tools/run-tool.ts";
+import { scriptedRun } from "../support/loop-run.ts";
+import { TestEnv, testAgent } from "../support/test-env.ts";
+import { noLimit } from "./fixtures.ts";
+
+const readFile = runTool({
+  name: "read_file",
+  description: "Read a project file",
+  parameters: Schema.Struct({ path: Schema.String }),
+  // About 1,000 tokens a result.
+  handler: () => Effect.succeed({ content: "y".repeat(4_000) }),
+});
+
+const readCall = (id: string): ScriptedTurn => ({
+  toolCalls: [{ id, name: "read_file", arguments: `{"path":"${id}.ts"}` }],
+});
+
+/** Every output can be read again by its call id, so compaction may clear any of them. */
+const sources = lookupSources({ toolResultId: (id) => id, nodeText: () => null });
+
+const sameMessage = Schema.toEquivalence(StoredMessage);
+
+/** Whether `next` sends `previous` again first, so the provider reads it from its cache. */
+const startsWith = (next: ReadonlyArray<StoredMessage>, previous: ReadonlyArray<StoredMessage>) =>
+  previous.every((message, index) => {
+    const other = next[index];
+    return other !== undefined && sameMessage(message, other);
+  });
+
+/** One run of `turns` after `conversation`; what each of its requests sent. */
+const run = Effect.fnUntraced(function* (options: {
+  readonly name: string;
+  readonly sessionId: string;
+  readonly conversation: ReadonlyArray<StoredMessage>;
+  readonly turns: readonly [ScriptedTurn, ...Array<ScriptedTurn>];
+  readonly leaveOutAt: number;
+  readonly lastRequests: LastRequests["Service"];
+}) {
+  const compacting = yield* compactionHook({
+    sources,
+    budget: { compactAt: 0, leaveOutAt: options.leaveOutAt, inputCeiling: noLimit },
+    restore: () => Effect.succeed(null),
+    lastRequests: options.lastRequests,
+  });
+  const { invocations } = yield* scriptedRun({
+    turns: options.turns,
+    runId: `${options.sessionId}:${options.name}`,
+    threadId: options.sessionId,
+    conversation: options.conversation,
+    tools: [readFile],
+    hooks: [compacting.hook],
+  });
+  return (yield* invocations).map((invocation) => invocation.history);
+});
+
+/** A store of its own, so no other test's requests are appended to. */
+const freshLastRequests = Effect.gen(function* () {
+  const services = yield* Layer.build(LastRequests.layer);
+  return yield* Effect.provideContext(LastRequests, services);
+});
+
+/** Twenty steps that each read a file, then the answer. */
+const longRun: readonly [ScriptedTurn, ...Array<ScriptedTurn>] = [
+  readCall("read-0"),
+  ...Array.from({ length: 19 }, (_, step) => readCall(`read-${step + 1}`)),
+  { text: "다 읽었어요." },
+];
+
+testAgent()("requests append to the one before", (it) => {
+  it.effect("a run compacts again only when its requests would pass leaveOutAt", () =>
+    Effect.gen(function* () {
+      const { project } = yield* TestEnv;
+      const session = yield* (yield* Sessions).create(project.id);
+      const leaveOutAt = 12_000;
+      const sent = yield* run({
+        name: "long",
+        sessionId: session.id,
+        conversation: [{ role: "user", content: "파일들을 읽어 줘" }],
+        turns: longRun,
+        leaveOutAt,
+        lastRequests: yield* freshLastRequests,
+      });
+      const rewritten = sent.filter(
+        (request, index) => index > 0 && !startsWith(request, sent[index - 1] ?? []),
+      );
+      // Twenty steps of about 1,000 tokens pass 12,000 tokens twice, not on every later step.
+      expect(rewritten.length).toBeGreaterThan(0);
+      expect(rewritten.length).toBeLessThanOrEqual(2);
+      expect(sent.every((request) => estimateConversation(request) <= leaveOutAt)).toBe(true);
+    }),
+  );
+
+  it.effect("a new run's first request appends to the last one, answered outputs and all", () =>
+    Effect.gen(function* () {
+      const { project } = yield* TestEnv;
+      const session = yield* (yield* Sessions).create(project.id);
+      const store = yield* RunStore;
+      const lastRequests = yield* freshLastRequests;
+      /** A run that reads one file and answers, after what the session saved. */
+      const turn = Effect.fnUntraced(function* (index: number) {
+        const saved = yield* store.thread(session.id);
+        return yield* run({
+          name: `turn-${index}`,
+          sessionId: session.id,
+          conversation: [...saved, { role: "user", content: `질문 ${index}` }],
+          turns: [readCall(`read-${index}`), { text: `답 ${index}` }],
+          leaveOutAt: noLimit,
+          lastRequests,
+        });
+      });
+      yield* turn(1);
+      const second = yield* turn(2);
+      const [third] = yield* turn(3);
+      expect(startsWith(third ?? [], second.at(-1) ?? [])).toBe(true);
+      // Compaction would clear the first run's output once a later run answered; appending keeps it.
+      expect(
+        third?.find((message) => message.role === "tool" && message.toolCallId === "read-1")
+          ?.content,
+      ).toContain("y".repeat(4_000));
+    }),
+  );
+});

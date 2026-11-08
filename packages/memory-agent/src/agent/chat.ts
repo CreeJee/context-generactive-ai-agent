@@ -119,6 +119,7 @@ import {
   compactByHand,
   compactionHook,
   estimateTokens,
+  LastRequests,
   messageText,
   type CompactionSources,
 } from "./compaction.ts";
@@ -655,6 +656,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         ? HashMap.remove(cuts, sessionId)
         : cuts,
     );
+
+  /** Each session's latest model request, which its next run's first request appends to. */
+  const lastRequests = yield* LastRequests;
 
   const notificationWakeups = yield* Queue.unbounded<string>();
   const serializeNotification = yield* keyedSerialLimit();
@@ -2177,6 +2181,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             workflow.plan?.summary ?? "",
           ]),
           budget: budgetFor(window()),
+          lastRequests,
           restore,
           summarizeSteps: stepSummarizer({
             services: { active, usageLedger, crypto },
@@ -2937,6 +2942,7 @@ export class AgentChat extends Context.Service<AgentChat, Effect.Success<typeof 
 ) {
   static readonly layer = Layer.effect(AgentChat, make).pipe(
     Layer.provideMerge(RunCancellations.layer),
+    Layer.provide(LastRequests.layer),
     Layer.provide(NodeCrypto.layer),
   );
 }

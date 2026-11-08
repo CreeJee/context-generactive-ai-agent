@@ -28,10 +28,10 @@ const readCall = (step: number): ScriptedTurn => ({
   toolCalls: [{ id: `read-${step}`, name: "read_file", arguments: `{"path":"${step}.ts"}` }],
 });
 
-/** Thirty-four steps that each read a file, then the answer. */
+/** Forty-four steps that each read a file, then the answer. */
 const turns: readonly [ScriptedTurn, ...Array<ScriptedTurn>] = [
   readCall(0),
-  ...Array.from({ length: 33 }, (_, step) => readCall(step + 1)),
+  ...Array.from({ length: 43 }, (_, step) => readCall(step + 1)),
   { text: "다 읽었어요." },
 ];
 
@@ -52,7 +52,8 @@ const run = Effect.fnUntraced(function* (
   const asked = yield* Ref.make<ReadonlyArray<StepsToSummarize>>([]);
   const compacting = yield* compactionHook({
     sources: sources(rereadable),
-    // Past 20,000 tokens of steps a block is due: by the thirtieth step.
+    // Past 20,000 tokens of steps a block is due: by the thirtieth step. The request past 40,000
+    // tokens is compacted again, and sends it.
     budget: { compactAt: 0, leaveOutAt: 40_000, inputCeiling: noLimit },
     restore: () => Effect.succeed(null),
     summarizeSteps: (steps) =>
@@ -86,7 +87,7 @@ const resultOf = (history: ReadonlyArray<StoredMessage>, id: string) =>
   history.find((message) => message.role === "tool" && message.toolCallId === id);
 
 testAgent()("step summaries", (it) => {
-  it.effect("a long run's earlier steps are sent as their summary once it is made", () =>
+  it.effect("a long run's earlier steps are sent as their summary once it is compacted again", () =>
     Effect.gen(function* () {
       const { asked, last, stage, saved } = yield* run("summarized", true, Option.some("- 요약"));
       // One block: the first twenty steps, with the run's task and where to reread each output.
@@ -108,7 +109,7 @@ testAgent()("step summaries", (it) => {
       expect(last[1]?.content).toContain("- 요약");
       expect(firstCall(last[2])).toBe("read-20");
       expect(resultOf(last, "read-19")).toBeUndefined();
-      expect(resultOf(last, "read-33")?.content).toContain("y".repeat(4_000));
+      expect(resultOf(last, "read-43")?.content).toContain("y".repeat(4_000));
       expect(stage).toBe("summarize");
       // The saved run keeps every step.
       expect(resultOf(saved, "read-0")?.content).toContain("y".repeat(4_000));

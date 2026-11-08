@@ -2,16 +2,22 @@ import { Function as EffectFunction, pipe } from "effect";
 import { isTruthy } from "../truthy.ts";
 import {
   Array as EffectArray,
+  Clock,
+  Context,
+  Data,
+  Duration,
   FiberHandle,
   HashMap,
   HashSet,
   Effect,
+  Layer,
   Option,
   Ref,
+  Result,
   Schema,
 } from "effect";
 import type { ChatMetadata, ChatMetadataFailed, SummaryBlock } from "../chat-store/metadata.ts";
-import type { StoredMessage } from "../chat-store/schema.ts";
+import { StoredMessage } from "../chat-store/schema.ts";
 import { asRunFailed, type RunHook } from "../loop/run.ts";
 import { RunStore } from "../loop/store.ts";
 import type { ModelHandoffFailed } from "./model-handoff.ts";
@@ -277,7 +283,7 @@ const ManualCompaction = Schema.Struct({
   clearedThrough: Schema.Finite,
   summarizedTurns: Schema.Finite.pipe(Schema.withDecodingDefaultTypeKey(Effect.succeed(0))),
 });
-type ManualCompaction = typeof ManualCompaction.Type;
+export type ManualCompaction = typeof ManualCompaction.Type;
 const decodeManualCompaction = Schema.decodeUnknownOption(ManualCompaction);
 const noManualCompaction: ManualCompaction = { clearedThrough: 0, summarizedTurns: 0 };
 
@@ -1165,6 +1171,246 @@ export const requestHistory = Effect.fnUntraced(function* <M extends Conversatio
 });
 
 /**
+ * Why a request was made from the conversation again rather than from the previous request:
+ * none was kept (`no-previous`), the provider read nothing from its cache last time
+ * (`cache-cold`), `/compact` ran (`manual-compact`), the conversation is not the previous one with
+ * messages after it (`conversation-changed`), or the new messages would pass `leaveOutAt`
+ * (`over-budget`).
+ */
+export type RebuildReason =
+  | "no-previous"
+  | "cache-cold"
+  | "manual-compact"
+  | "conversation-changed"
+  | "over-budget";
+
+/** What a request was made from. */
+export type RequestBasis = Data.TaggedEnum<{
+  /** The previous request, with the messages that came after it. */
+  Appended: {};
+  /** The conversation, compacted again. */
+  Rebuilt: { readonly reason: RebuildReason };
+}>;
+export const RequestBasis = Data.taggedEnum<RequestBasis>();
+
+/** A request as it was sent, and the conversation it was made from. */
+export interface SentRequest {
+  /** The stored conversation, or the one a model handoff put in its place. */
+  readonly from: ReadonlyArray<StoredMessage>;
+  readonly messages: ReadonlyArray<StoredMessage | CompactionMessage>;
+  readonly stage: CompactionStage;
+  /** How far `/compact` had compacted the conversation. */
+  readonly manual: ManualCompaction;
+}
+
+/** The longest prompt cache retention the app asks for; an older request is not cached anyway. */
+const lastRequestRetention = Duration.hours(1);
+
+/** Requests kept in memory: after a restart, the next request is made from the conversation. */
+const makeLastRequests = Effect.gen(function* () {
+  const kept = yield* Ref.make(
+    HashMap.empty<string, { readonly sent: SentRequest; readonly at: number }>(),
+  );
+  const fresh =
+    (now: number) =>
+    ({ at }: { readonly at: number }) =>
+      now - at < Duration.toMillis(lastRequestRetention);
+  const get = (threadId: string) =>
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      return Option.map(
+        Option.filter(HashMap.get(yield* Ref.get(kept), threadId), fresh(now)),
+        ({ sent }) => sent,
+      );
+    });
+  const set = (threadId: string, sent: SentRequest) =>
+    Effect.flatMap(Clock.currentTimeMillis, (now) =>
+      Ref.update(kept, (entries) =>
+        HashMap.set(HashMap.filter(entries, fresh(now)), threadId, { sent, at: now }),
+      ),
+    );
+  return { get, set };
+});
+
+/** The latest request of each conversation, while the provider likely still caches it. */
+export class LastRequests extends Context.Service<
+  LastRequests,
+  {
+    readonly get: (threadId: string) => Effect.Effect<Option.Option<SentRequest>>;
+    readonly set: (threadId: string, sent: SentRequest) => Effect.Effect<void>;
+  }
+>()("memory-agent/agent/compaction/LastRequests") {
+  static readonly layer = Layer.effect(LastRequests, makeLastRequests);
+}
+
+const sameMessage = Schema.toEquivalence(StoredMessage);
+const sameAt = (message: StoredMessage, other: StoredMessage | undefined) =>
+  other !== undefined && (message === other || sameMessage(message, other));
+
+/** How many of `previous`'s messages `next` begins with. */
+const keptMessages = (previous: ReadonlyArray<StoredMessage>, next: ReadonlyArray<StoredMessage>) =>
+  EffectArray.takeWhile(previous, (message, index) => sameAt(message, next[index])).length;
+
+/** Why `previous` cannot take the new messages after it, before reading what they are. */
+const unappendable = (
+  previous: SentRequest,
+  now: {
+    readonly from: ReadonlyArray<StoredMessage>;
+    readonly manual: ManualCompaction;
+    readonly cold: string | null;
+  },
+): Option.Option<RebuildReason> =>
+  now.cold !== null
+    ? Option.some("cache-cold")
+    : previous.manual.clearedThrough !== now.manual.clearedThrough ||
+        previous.manual.summarizedTurns !== now.manual.summarizedTurns
+      ? Option.some("manual-compact")
+      : now.from.length < previous.from.length ||
+          keptMessages(previous.from, now.from) < previous.from.length
+        ? Option.some("conversation-changed")
+        : Option.none();
+
+/**
+ * `added` with search leads before the user turn among them, when the request leaves content out:
+ * a new turn may ask about what is no longer sent. Placed among the new messages, the leads leave
+ * what was sent before as it was.
+ */
+const withTurnLeads = (
+  sources: CompactionSources,
+  previous: SentRequest,
+  added: ReadonlyArray<StoredMessage>,
+) =>
+  Option.match(
+    Option.all({
+      retrieve: Option.filter(
+        Option.fromNullishOr(sources.retrievalAppendix),
+        () => previous.stage !== "none",
+      ),
+      turn: EffectArray.findLastIndex(added, (message) => message.role === "user"),
+    }),
+    {
+      onNone: () => Effect.succeed<ReadonlyArray<StoredMessage | CompactionMessage>>(added),
+      onSome: ({ retrieve, turn }) =>
+        Effect.map(
+          retrieve([...previous.messages, ...added]),
+          (appendix): ReadonlyArray<StoredMessage | CompactionMessage> =>
+            appendix === null ? added : [...added.slice(0, turn), appendix, ...added.slice(turn)],
+        ),
+    },
+  );
+
+/**
+ * `previous` with the messages added to the conversation since, each as {@link requestHistory}
+ * would send it, or why the conversation is compacted again instead.
+ */
+const appendedTo = Effect.fnUntraced(function* (
+  previous: SentRequest,
+  now: {
+    readonly from: ReadonlyArray<StoredMessage>;
+    readonly manual: ManualCompaction;
+    readonly sources: CompactionSources;
+    readonly budget: Budget;
+  },
+): Effect.fn.Return<Result.Result<SentRequest, RebuildReason>, CompactionFailed> {
+  const { from, manual, sources, budget } = now;
+  const added = from.slice(previous.from.length);
+  const { toolResultId } = yield* memoryLookups(sources, added, []);
+  const shown = previewedResults(added, toolResultId, sources.pointers ?? memoryPointers).filter(
+    (message) => !isEmptyUserText(message),
+  );
+  const messages = replayableToolHistory([
+    ...previous.messages,
+    ...(yield* withTurnLeads(sources, previous, shown)),
+  ]);
+  // Pairing calls with their results may drop an earlier message, which changes what was sent.
+  return keptMessages(previous.messages, messages) < previous.messages.length
+    ? Result.fail("conversation-changed")
+    : estimateConversation(messages) > budget.leaveOutAt
+      ? Result.fail("over-budget")
+      : Result.succeed({ from, messages, stage: previous.stage, manual });
+});
+
+/** What one model request sends, what it was made from, and the request to append to next. */
+export interface NextRequest {
+  readonly messages: ReadonlyArray<StoredMessage | CompactionMessage>;
+  readonly stage: CompactionStage;
+  readonly basis: RequestBasis;
+  readonly sent: SentRequest;
+}
+
+/**
+ * What one model request of a session sends, made so the provider reads most of it from its
+ * prompt cache, where a request that changes earlier messages is written to it anew at twice the
+ * input price. While the conversation only grows, a request is `previous` with the new messages
+ * after it. The conversation is compacted again ({@link requestHistory}) only when that would pass
+ * `leaveOutAt`, after `/compact`, once the cache went cold, or when the conversation changed;
+ * answered tool outputs are cleared then too, and new summaries are first sent then.
+ */
+export const nextRequestHistory = Effect.fnUntraced(function* (options: {
+  readonly metadata: ChatMetadata;
+  readonly threadId: string;
+  readonly messages: ReadonlyArray<StoredMessage>;
+  readonly restored: ReadonlyArray<StoredMessage> | null;
+  readonly sources: CompactionSources;
+  readonly budget: Budget;
+  readonly steps?: ReadonlyArray<StepBlock>;
+  readonly previous: Option.Option<SentRequest>;
+}): Effect.fn.Return<NextRequest, CompactionFailed> {
+  const { metadata, threadId, sources, budget } = options;
+  const from = options.restored ?? options.messages;
+  const { manual } = yield* compactionStateEffect({ metadata, threadId });
+  const cold = yield* pendingColdObservationEffect({ metadata, threadId }).pipe(
+    Effect.mapError(metadataFailed("read-cold")),
+  );
+  const appended = yield* Option.match(options.previous, {
+    onNone: () => Effect.succeed(Result.fail<RebuildReason>("no-previous")),
+    onSome: (previous) =>
+      Option.match(unappendable(previous, { from, manual, cold }), {
+        onSome: (reason) => Effect.succeed(Result.fail(reason)),
+        onNone: () => appendedTo(previous, { from, manual, sources, budget }),
+      }),
+  });
+  return yield* Result.match(appended, {
+    onSuccess: (sent) =>
+      Effect.succeed<NextRequest>({
+        messages: sent.messages,
+        stage: sent.stage,
+        basis: RequestBasis.Appended(),
+        sent,
+      }),
+    onFailure: (reason) =>
+      Effect.map(requestHistory(options), (made): NextRequest => ({
+        ...made,
+        basis: RequestBasis.Rebuilt({ reason }),
+        sent: { from, messages: made.messages, stage: made.stage, manual },
+      })),
+  });
+});
+
+/** How a request was made and how much of the previous one it kept, to find what breaks caching. */
+const logRequestBasis = (
+  threadId: string,
+  previous: Option.Option<SentRequest>,
+  next: NextRequest,
+) =>
+  Effect.logInfo("model request history").pipe(
+    Effect.annotateLogs({
+      threadId,
+      basis: RequestBasis.$match(next.basis, {
+        Appended: () => "appended",
+        Rebuilt: ({ reason }) => reason,
+      }),
+      messages: next.messages.length,
+      keptMessages: Option.match(previous, {
+        onNone: () => 0,
+        onSome: (sent) => keptMessages(sent.messages, next.messages),
+      }),
+      estimatedTokens: estimateConversation(next.messages),
+      stage: next.stage,
+    }),
+  );
+
+/**
  * Compaction in the Effect AI loop: what each model step sends of its conversation. Goes last
  * among the hooks that shape the request, before local images are inlined. `stage` is the stage
  * the latest request reached, for its usage record.
@@ -1174,12 +1420,17 @@ export const requestHistory = Effect.fnUntraced(function* <M extends Conversatio
  * no count yet and goes by the estimate.
  *
  * A long run's earlier steps are summarized in the background, one block at a time, once they are
- * due ({@link dueSteps}); the request that finds them due goes on without waiting, and the requests
- * after the summary send it in their place. The blocks end with the run's scope.
+ * due ({@link dueSteps}); the next request compacted again sends them in their place. The blocks
+ * end with the run's scope.
+ *
+ * Each request appends to the previous one ({@link nextRequestHistory}). Search leads are looked up
+ * once a run, so a run's requests send the same ones.
  */
 export const compactionHook = Effect.fnUntraced(function* (options: {
   readonly sources: CompactionSources;
   readonly budget: Budget;
+  /** Where each conversation's latest request is kept across runs; without it, for this run only. */
+  readonly lastRequests?: LastRequests["Service"];
   /** The history a model handoff puts in place of the conversation, or null to keep it. */
   readonly restore: (
     messages: ReadonlyArray<StoredMessage>,
@@ -1199,6 +1450,30 @@ export const compactionHook = Effect.fnUntraced(function* (options: {
   /** Set once a summary could not be made: asking again would likely fail again, every request. */
   const stepsStopped = yield* Ref.make(false);
   const summarizing = yield* FiberHandle.make<void, never>();
+  const lastRequests = yield* Option.match(Option.fromNullishOr(options.lastRequests), {
+    onSome: Effect.succeed,
+    onNone: () => makeLastRequests,
+  });
+  /** The run's search leads, once looked up. */
+  const leads = yield* Ref.make(Option.none<CompactionMessage | null>());
+  const sources: CompactionSources = Option.match(
+    Option.fromNullishOr(options.sources.retrievalAppendix),
+    {
+      onNone: () => options.sources,
+      onSome: (retrieve) => ({
+        ...options.sources,
+        retrievalAppendix: (sent) =>
+          Effect.flatMap(
+            Ref.get(leads),
+            Option.match({
+              onSome: Effect.succeed,
+              onNone: () =>
+                Effect.tap(retrieve(sent), (found) => Ref.set(leads, Option.some(found))),
+            }),
+          ),
+      }),
+    },
+  );
 
   /** The block for `due`, once every output in it can be read again. */
   const stepBlock = (
@@ -1268,15 +1543,19 @@ export const compactionHook = Effect.fnUntraced(function* (options: {
           onSome: (tokens) => withOverhead(options.budget, tokens),
         });
         const steps = yield* Ref.get(stepBlocks);
-        const sent = yield* requestHistory({
+        const previous = yield* lastRequests.get(threadId);
+        const sent = yield* nextRequestHistory({
           metadata: store.chatMetadata,
           threadId,
           messages: request.history,
           restored,
-          sources: options.sources,
+          sources,
           budget,
           steps,
+          previous,
         });
+        yield* lastRequests.set(threadId, sent.sent);
+        yield* logRequestBasis(threadId, previous, sent);
         yield* Ref.set(stage, sent.stage);
         yield* Ref.set(sentEstimate, Option.some(estimateConversation(sent.messages)));
         yield* summarizeDue(request.history, steps, budget);
