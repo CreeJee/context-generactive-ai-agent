@@ -55,8 +55,8 @@ const statsByName = (spans: ReadonlyArray<SpanRecord>) => {
       name,
       durations: group.map((span) => span.durationMs),
       selfMs: sum(group.map(selfOf)),
-      errors: group.filter((span) => span.outcome === "error").length,
-      interrupted: group.filter((span) => span.outcome === "interrupted").length,
+      errors: Arr.countBy(group, (span) => span.outcome === "error"),
+      interrupted: Arr.countBy(group, (span) => span.outcome === "interrupted"),
     }),
   );
 };
