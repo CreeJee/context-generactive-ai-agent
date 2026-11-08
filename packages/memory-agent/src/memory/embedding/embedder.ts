@@ -1,5 +1,9 @@
 import { NodePath, NodeWorker } from "@effect/platform-node";
-import { Array as EffectArray, Function as EffectFunction } from "effect";
+import {
+  Array as EffectArray,
+  Function as EffectFunction,
+  Iterable as EffectIterable,
+} from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { Worker } from "node:worker_threads";
 import {
@@ -23,7 +27,6 @@ import { type EmbeddingChoice, GpuCheck } from "../../config/contracts.ts";
 import { GlobalConfig, type Settings } from "../../config/global-config.ts";
 import { StorageRoot } from "../../config/storage-root.ts";
 import { runtimeWorker, runtimeWorkerOptions } from "../../runtime/resources.ts";
-import { runsOf } from "../../slices.ts";
 import { type ChunkSpan, chunkPolicy } from "./chunks.ts";
 import { type EmbeddingDevice, EmbeddingMode, type EmbeddingOverview } from "./contracts.ts";
 import { type DownloadReport, ModelDownloads } from "./downloads.ts";
@@ -101,9 +104,10 @@ function planBatchesBody(
       : { batch: current.batch + 1, size: 1 };
     return [next, { index, batch: next.batch }] as const;
   });
-  return runsOf(numbered, (text, first) => text.batch === first.batch).map((batch) =>
-    batch.map((text) => text.index),
-  );
+  // Iterable's groupWith reads the texts once; Array's copies the rest of them for every batch.
+  return EffectArray.fromIterable(
+    EffectIterable.groupWith(numbered, (first, text) => text.batch === first.batch),
+  ).map((batch) => batch.map((text) => text.index));
 }
 
 /** Which mode's file to load, and the devices to try it on in order. */
