@@ -4421,3 +4421,12 @@
   - 규칙은 warn이다. 사용자 결정: 소스에서 규칙을 끄는 주석은 쓰지 않는다. 크기가 작은 fold도 코드를 고친다.
 - 확인: 바꾼 함수는 HEAD 사본과 같은 입력으로 출력을 비교했다. 실제 세션 523개, 임의 입력으로 배치 3,000번, BTW 묶기 20,000번, 비밀값 구간 합치기 30,000번, 벡터 군집 20,000번이다.
 - 참고: `memory/graph.ts`의 탐색 후보 정리(`improving`)는 같은 작업이지만 다른 세션의 커밋 `8217f111`에 함께 들어갔다.
+- 결정: `filter`·`map`이 만든 배열을 다음 호출이 한 번 읽고 버리면 고친다. `allocation/no-intermediate-array` 규칙이 잡는다(`106eec4f`).
+  - `filter(p).length`는 `Array.countBy`로 센다. 20만 개에서 2.79MB가 0.01MB가 됐다.
+  - `map().map()`처럼 같은 함수를 잇는 체인은 하나로 합친다. 체인이 `some`·`every`·`find`로 끝나면 원소를 한 번 읽으며 판단한다.
+  - `filter().map()`·`map().filter()`는 그대로 둔다. 20만 개에서 `filter.map` 3.59MB를 `Array.filterMap`(Result)으로 바꾸면 6.05MB, Iterable 체인으로 바꾸면 19.11MB였다. 원소마다 `Result`나 iterator 결과 객체를 만들기 때문이다. `Array.from(set, f)`도 `[...set].map(f)`보다 많이 할당했다(14.92MB, 3.23MB).
+- 결정: 같은 기준으로 자주 지나는 경로의 읽기를 줄였다. 실제 DB 사본(4GB)에서 쟀다.
+  - 보드 조회는 revision마다 ledger 전체 대신 plan과 마지막 ledger detail만 읽는다(`45d45b9f`). 할당 106MB, 265ms가 67MB, 67ms가 됐다.
+  - 토큰 추정은 ASCII 밖 글자를 배열로 세지 않는다(`02ee5222`). 2,700만 자 세션 한 번에 71MB, 155ms가 39MB, 44ms가 됐다.
+  - 노드 저장은 `RETURNING seq`만 받는다(`f8ad45f5`). 78만 자 노드 한 번에 1.82MB가 0.01MB가 됐다.
+  - tool_call 노드에 tool call id 부분 인덱스를 만든다(`38021194`). 조회가 18~64ms에서 0.04ms가 됐다.
