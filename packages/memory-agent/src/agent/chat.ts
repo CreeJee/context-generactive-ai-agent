@@ -3,14 +3,7 @@ import type { RequestPermissionRequest } from "@agentclientprotocol/sdk";
 import { Cause, Fiber } from "effect";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-import {
-  Array as EffectArray,
-  HashMap,
-  HashSet,
-  MutableHashSet,
-  DateTime,
-  Predicate,
-} from "effect";
+import { Array as EffectArray, HashMap, HashSet, DateTime, Predicate } from "effect";
 import { modelFailureOf, runChat, type RunHook } from "../loop/run.ts";
 import { finishedRun, RunStore } from "../loop/store.ts";
 import { chatSnapshot } from "../chat-state/snapshot.ts";
@@ -739,23 +732,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         sent: Parameters<NonNullable<CompactionSources["retrievalAppendix"]>>[0],
       ) =>
         Effect.gen(function* () {
-          const sessionNodes = yield* nodes.session(sessionId);
           const currentUser = yield* nodes.latestOfKind(sessionId, "user");
           if (!isTruthy(currentUser)) return null;
-          // A node can remain as raw text or as a tool-result pointer. Do not retrieve either again.
-          const visible = MutableHashSet.fromIterable(
-            sessionNodes
-              .filter(
-                (node) =>
-                  node.text.length > 0 &&
-                  sent.some(
-                    (message) =>
-                      messageText(message) === node.text || messageText(message).includes(node.id),
-                  ),
-              )
-              .map((node) => node.id),
-          );
-          MutableHashSet.add(visible, currentUser.id);
           const recentTurns = (yield* nodes.recentOfKind(sessionId, "user", 3)).map(
             (node) => node.text,
           );
@@ -771,11 +749,22 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             crossProject: (yield* recallScope).crossProject,
             rerank: true,
           });
+          // A node can remain as raw text or as a tool-result pointer. Do not retrieve either again.
+          // Only this session's nodes count, so only the texts of its matches are read and checked:
+          // the session's other nodes are never loaded.
+          const sentTexts = sent.map(messageText);
+          const ownTexts = yield* nodes.texts(
+            found.matches.filter((match) => match.sessionId === sessionId).map((match) => match.id),
+          );
+          const visible = (id: string, text: string) =>
+            id === currentUser.id ||
+            (text.length > 0 &&
+              sentTexts.some((sentText) => sentText === text || sentText.includes(id)));
           // Hybrid search's order is relevance-first; preserve it inside each session-preference tier.
           const candidates = found.matches
             .filter(
               (match) =>
-                !MutableHashSet.has(visible, match.id) &&
+                !visible(match.id, ownTexts.get(match.id) ?? "") &&
                 match.supersededBy.length === 0 &&
                 match.kind !== "topic",
             )
