@@ -856,8 +856,8 @@ const make = (options: KanbanOrchestratorOptions) =>
         (): readonly PlanStep[] => [],
         (planned, step) =>
           // Expected files that overlap a working card wait for it; this is a hint, not a lock.
-          [...working, ...planned].some(
-            (other) => other.id !== step.id && boundariesOverlap(step, other),
+          [working, planned].some((cards) =>
+            cards.some((other) => other.id !== step.id && boundariesOverlap(step, other)),
           )
             ? Effect.succeed(planned)
             : Effect.flatMap(scheduler.crossGoalOverlap(goal, step), (overlap) =>

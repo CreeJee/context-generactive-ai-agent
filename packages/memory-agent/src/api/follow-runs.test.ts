@@ -1,3 +1,4 @@
+import { Array as Arr } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { followRuns, type ReadRuns, type RunSight } from "./follow-runs.ts";
 
@@ -5,13 +6,10 @@ const idle = { opened: true, reading: null, sending: false } as const;
 
 /** The sights in order, and for each whether the page read the conversation again. */
 const opens = (sights: ReadonlyArray<RunSight>) =>
-  sights.reduce<{ read: ReadRuns; opens: ReadonlyArray<boolean> }>(
-    (state, sight) => {
-      const next = followRuns(state.read, sight);
-      return { read: next.read, opens: [...state.opens, next.open] };
-    },
-    { read: null, opens: [] },
-  ).opens;
+  Arr.mapAccum(sights, null, (read: ReadRuns, sight): readonly [ReadRuns, boolean] => {
+    const next = followRuns(read, sight);
+    return [next.read, next.open];
+  })[1];
 
 describe("following runs the page did not start", () => {
   test("the first read covers the newest run, and the page's own runs are not read again", () => {

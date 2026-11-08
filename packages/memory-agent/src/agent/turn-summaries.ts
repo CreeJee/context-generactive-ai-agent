@@ -247,15 +247,16 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
             ),
           { concurrency: summaryConcurrency },
         ),
+        // Only how many blocks are kept is needed: each new one is saved after them.
         Stream.runFoldEffect(
-          () => blocks,
+          () => blocks.length,
           (kept, block) =>
             Effect.as(
               Effect.mapError(
-                runStore.chatMetadata.replaceSummaries(sessionId, kept.length, [block]),
+                runStore.chatMetadata.replaceSummaries(sessionId, kept, [block]),
                 summaryFailed("persist"),
               ),
-              Arr.append(kept, block),
+              kept + 1,
             ),
         ),
       );
