@@ -106,7 +106,11 @@ export interface RunHook<R = never> {
     scope: RunScope,
     resumed: ReadonlyArray<Resumed>,
   ) => Effect.Effect<void, RunFailed, R>;
-  /** Before each model step: messages that join the conversation, such as queued user messages. */
+  /**
+   * Before each model step: messages that join the conversation, such as queued user messages.
+   * Every joining hook sees the conversation as the step found it; what they give joins it in hook
+   * order.
+   */
   readonly joining?: (
     scope: RunScope,
     conversation: ReadonlyArray<StoredMessage>,
@@ -682,12 +686,11 @@ const runAccepted = Effect.fnUntraced(function* <R>(
   /** One model step: its events streamed, its calls run, its message and results kept. */
   const modelStep = Effect.fnUntraced(
     function* (before: ReadonlyArray<StoredMessage>) {
-      const current = yield* Effect.reduce(
+      const joined = yield* Effect.forEach(
         hooks.flatMap((hook) => hook.joining ?? []),
-        () => before,
-        (messages, joining) =>
-          Effect.map(joining(scope, messages), (added) => [...messages, ...added]),
+        (joining) => joining(scope, before),
       );
+      const current = [...before, ...joined.flat()];
       yield* Ref.set(conversation, current);
       const offeredTools = yield* tools.offered;
       const request = yield* Effect.reduce(
