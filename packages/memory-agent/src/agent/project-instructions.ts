@@ -13,31 +13,41 @@ const skipped = (relative: string, name: string) =>
 const scopedFiles = Effect.fnUntraced(function* (root: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  // The listing gives each entry's own type; only an entry it could not type is looked up.
+  const typeOf = (relative: string, type: FileSystem.File.Type) =>
+    type === "Unknown"
+      ? Effect.map(fs.lstat(path.join(root, relative)), (info) => info.type)
+      : Effect.succeed(type);
   const visit = (
     directory: string,
   ): Effect.Effect<ReadonlyArray<string>, PlatformError.PlatformError, FileSystem.FileSystem> =>
-    Effect.flatMap(fs.readDirectory(path.join(root, directory)), (names) =>
+    Effect.flatMap(fs.readDirectoryEntries(path.join(root, directory)), (entries) =>
       Effect.map(
-        Effect.forEach(names, (name) => {
-          const relative = path.join(directory, name);
-          return skipped(relative, name)
-            ? Effect.succeed([])
-            : Effect.flatMap(fs.lstat(path.join(root, relative)), ({ type }) =>
-                Match.value(type).pipe(
-                  // Match glob's default: never descend through symbolic links.
-                  Match.when("SymbolicLink", () => Effect.succeed([])),
-                  Match.when("Directory", () => visit(relative)),
-                  Match.orElse(() =>
-                    name === "AGENTS.md" && relative !== "AGENTS.md"
-                      ? resolveProjectPath(root, relative, "file").pipe(
-                          Effect.as([relative.split(path.sep).join("/")]),
-                          Effect.catchTag("PathRejected", () => Effect.succeed([])),
-                        )
-                      : Effect.succeed([]),
-                  ),
+        Effect.forEach(
+          entries.filter(
+            ({ name, type }) =>
+              (type === "Directory" || type === "Unknown" || name === "AGENTS.md") &&
+              !skipped(path.join(directory, name), name),
+          ),
+          ({ name, type }) => {
+            const relative = path.join(directory, name);
+            return Effect.flatMap(typeOf(relative, type), (kind) =>
+              Match.value(kind).pipe(
+                // Match glob's default: never descend through symbolic links.
+                Match.when("SymbolicLink", () => Effect.succeed([])),
+                Match.when("Directory", () => visit(relative)),
+                Match.orElse(() =>
+                  name === "AGENTS.md" && relative !== "AGENTS.md"
+                    ? resolveProjectPath(root, relative, "file").pipe(
+                        Effect.as([relative.split(path.sep).join("/")]),
+                        Effect.catchTag("PathRejected", () => Effect.succeed([])),
+                      )
+                    : Effect.succeed([]),
                 ),
-              );
-        }),
+              ),
+            );
+          },
+        ),
         Arr.flatten,
       ),
     );
