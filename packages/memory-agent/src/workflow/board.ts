@@ -1,34 +1,30 @@
-import { Context, Effect, Layer, Option, Schema } from "effect";
+import { Array as Arr, Context, Effect, Layer, Option, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { currentStatesSql } from "./state-rows.ts";
 import { GoalOrder } from "../kanban/goal-order.ts";
 import { planEnded, UserChange, UserChangeRequestStatus } from "./board-edit.ts";
 import { BoardAuthor, type CardStatus } from "./card.ts";
 import type { BoardCard, BoardRevision, BoardView, ProjectBoard } from "./contracts.ts";
-import {
-  decodeRevisionPlan,
-  PlanStep,
-  WorkflowStorageError,
-  type WorkflowState,
-} from "./workflow.ts";
+import { decodeRevisionPlan, PlanStep, WorkflowStorageError } from "./workflow.ts";
 
 /** Cards in each column of a board. */
 export type BoardColumnCounts = Readonly<Record<CardStatus, number>>;
 
 export type { BoardCard, BoardRevision, BoardView, ProjectBoard };
 
-/** Revisions read to attribute cards; one more is the baseline of the oldest. */
+/** The latest revisions whose changes attribute cards. */
 const revisionWindow = 200;
 const historyLimit = 30;
 
-/** A revision's Plan and the detail of the last ledger event it covers. */
-const RevisionRow = Schema.Struct({
+/** A revision of the window that changed cards. */
+const ChangeRow = Schema.Struct({
   id: Schema.Int,
-  plan_json: Schema.NullOr(Schema.String),
-  detail: Schema.NullOr(Schema.String),
+  card_ids_json: Schema.fromJsonString(Schema.Array(Schema.String)),
   author_json: Schema.NullOr(Schema.fromJsonString(BoardAuthor)),
   created_at: Schema.String,
 });
+/** The detail of the last ledger event a revision covers. */
+const DetailRow = Schema.Struct({ id: Schema.Int, detail: Schema.NullOr(Schema.String) });
 const ChangeRequestRow = Schema.Struct({
   id: Schema.Int,
   card_id: Schema.String,
@@ -61,17 +57,6 @@ const countedBy = (steps: readonly PlanStep[]): BoardColumnCounts =>
     noCards,
   );
 
-const encodeCard = Schema.encodeEffect(Schema.fromJsonString(PlanStep));
-
-/** Each card's encoded form, compared between consecutive revisions. */
-const cardsOf = (plan: WorkflowState["plan"]) =>
-  Effect.map(
-    Effect.forEach(plan?.steps ?? [], (step) =>
-      Effect.map(encodeCard(step), (json) => [step.id, json] as const),
-    ),
-    (entries) => new Map(entries),
-  );
-
 /** Read side of the board: cards, their authors and the changes waiting for the orchestrator. */
 export class Boards extends Context.Service<
   Boards,
@@ -95,16 +80,26 @@ export class Boards extends Context.Service<
         execute: (sessionId) =>
           sql`SELECT r.plan_json FROM ${currentStates} WHERE w.session_id = ${sessionId}`,
       });
-      const revisions = SqlSchema.findAll({
+      // Newest first. The window starts at the oldest of the session's latest revisions.
+      const changes = SqlSchema.findAll({
         Request: Schema.String,
-        Result: RevisionRow,
-        // The ledger events stay in SQLite: the board shows only each revision's last one.
-        execute: (sessionId) => sql`SELECT r.id, r.plan_json,
-          (SELECT e.detail FROM workflow_ledger_events e
+        Result: ChangeRow,
+        execute: (sessionId) => sql`SELECT c.revision_id AS id, c.card_ids_json, r.author_json,
+          r.created_at FROM workflow_board_changes c
+          JOIN workflow_state_revisions r ON r.id = c.revision_id
+          WHERE c.session_id = ${sessionId} AND c.revision_id >= coalesce(
+            (SELECT id FROM workflow_state_revisions WHERE session_id = ${sessionId}
+              ORDER BY id DESC LIMIT 1 OFFSET ${revisionWindow - 1}), 0)
+          ORDER BY c.revision_id DESC`,
+      });
+      // The ledger events stay in SQLite: the board shows only each revision's last one.
+      const details = SqlSchema.findAll({
+        Request: Schema.NonEmptyArray(Schema.Int),
+        Result: DetailRow,
+        execute: (ids) => sql`SELECT r.id, (SELECT e.detail FROM workflow_ledger_events e
             WHERE e.session_id = r.session_id AND e.sequence <= r.ledger_length
-            ORDER BY e.sequence DESC LIMIT 1) AS detail,
-          r.author_json, r.created_at FROM workflow_state_revisions r
-          WHERE r.session_id = ${sessionId} ORDER BY r.id DESC LIMIT ${revisionWindow + 1}`,
+            ORDER BY e.sequence DESC LIMIT 1) AS detail
+          FROM workflow_state_revisions r WHERE r.id IN ${sql.in(ids)}`,
       });
       const pending = SqlSchema.findAll({
         Request: Schema.String,
@@ -163,43 +158,33 @@ export class Boards extends Context.Service<
           Effect.gen(function* () {
             const row = yield* current(sessionId);
             const plan = Option.isNone(row) ? null : yield* decodeRevisionPlan(row.value.plan_json);
-            const window = (yield* revisions(sessionId)).toReversed();
-            // The oldest row is only the baseline when the window is full.
-            const full = window.length > revisionWindow;
-            const baseline = full ? window[0] : undefined;
-            const changes = full ? window.slice(1) : window;
-            const before =
-              baseline === undefined
-                ? new Map<string, string>()
-                : yield* cardsOf(yield* decodeRevisionPlan(baseline.plan_json));
-            const decoded = yield* Effect.forEach(changes, (revision) =>
-              Effect.map(
-                Effect.flatMap(decodeRevisionPlan(revision.plan_json), cardsOf),
-                (cards) => ({ revision, cards }),
-              ),
-            );
-            const history = decoded.flatMap(({ revision, cards }, index): BoardRevision[] => {
-              const previous = decoded[index - 1]?.cards ?? before;
-              const cardIds = [
-                ...[...cards].filter(([id, json]) => previous.get(id) !== json).map(([id]) => id),
-                ...[...previous.keys()].filter((id) => !cards.has(id)),
-              ];
-              return cardIds.length === 0
-                ? []
-                : [
-                    {
-                      revisionId: revision.id,
-                      at: revision.created_at,
-                      author: revision.author_json,
-                      detail: revision.detail ?? "",
-                      cardIds,
-                    },
-                  ];
+            const changed = yield* changes(sessionId);
+            const shown = changed.slice(0, historyLimit);
+            const detailOf = yield* Arr.match(shown, {
+              onEmpty: () => Effect.succeed(new Map<number, string | null>()),
+              onNonEmpty: (rows) =>
+                Effect.map(
+                  details(Arr.map(rows, (row) => row.id)),
+                  (found) => new Map(found.map((row) => [row.id, row.detail])),
+                ),
             });
-            const lastChange = new Map(
-              history.flatMap(({ author, at, cardIds }) =>
-                cardIds.map((id): [string, BoardCard["lastChange"]] => [id, { author, at }]),
-              ),
+            const history = shown.map((revision): BoardRevision => ({
+              revisionId: revision.id,
+              at: revision.created_at,
+              author: revision.author_json,
+              detail: detailOf.get(revision.id) ?? "",
+              cardIds: revision.card_ids_json,
+            }));
+            // Oldest first, so each card keeps its newest change.
+            const lastChange = new Map<string, BoardCard["lastChange"]>(
+              changed
+                .toReversed()
+                .flatMap(({ author_json, created_at, card_ids_json }) =>
+                  card_ids_json.map((id): [string, BoardCard["lastChange"]] => [
+                    id,
+                    { author: author_json, at: created_at },
+                  ]),
+                ),
             );
             const view: BoardView = {
               plan:
@@ -210,7 +195,7 @@ export class Boards extends Context.Service<
                 card,
                 lastChange: lastChange.get(card.id) ?? null,
               })),
-              history: history.toReversed().slice(0, historyLimit),
+              history,
               pendingChanges: (yield* pending(sessionId)).map((request) => ({
                 id: request.id,
                 cardId: request.card_id,

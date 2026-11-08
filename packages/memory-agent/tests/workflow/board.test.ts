@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { Boards } from "../../src/workflow/board.ts";
+import { migrateBoardChanges } from "../../src/workflow/board-changes-migration.ts";
 import {
   BoardEdit,
   BoardEditRefused,
@@ -127,6 +128,32 @@ testAgent()("kanban board", (it) => {
         ["Card a", orchestrator],
         ["Renamed", user],
       ]);
+    }),
+  );
+
+  it.effect("works out the board changes of revisions stored before they were recorded", () =>
+    Effect.gen(function* () {
+      const id = yield* freshSession;
+      const workflows = yield* Workflows;
+      yield* workflows.updateGoal(id, goal);
+      yield* workflows.updatePlan(id, plan, orchestrator);
+      yield* workflows.editBoard(
+        id,
+        BoardEdit.cases.EditCard.make({ planVersion: 1, cardId: "a", patch: { title: "First" } }),
+        user,
+      );
+      yield* workflows.updatePlan(id, { ...plan, steps: [step("a")] }, orchestrator);
+      const boards = yield* Boards;
+      const recorded = yield* boards.view(id);
+      expect(recorded.history.map((revision) => revision.cardIds)).toEqual([
+        ["a", "b"],
+        ["a"],
+        ["a", "b"],
+      ]);
+
+      yield* sqlRun("DELETE FROM workflow_board_changes");
+      yield* migrateBoardChanges();
+      expect(yield* boards.view(id)).toEqual(recorded);
     }),
   );
 

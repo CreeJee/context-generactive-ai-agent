@@ -730,6 +730,21 @@ export const textIndexDropMigration = `
 `;
 
 /**
+ * The cards each workflow revision changed from the revision before it in its session, for the
+ * board's history; a revision that changed no card has no row. Revisions never change, so this is
+ * worked out once as a revision is stored, not from every Plan of the window on each board read.
+ * `migrateBoardChanges` fills it for the stored revisions.
+ */
+export const boardChangesMigration = `
+  CREATE TABLE workflow_board_changes (
+    revision_id INTEGER PRIMARY KEY REFERENCES workflow_state_revisions(id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL,
+    card_ids_json TEXT NOT NULL CHECK (json_valid(card_ids_json))
+  );
+  CREATE INDEX workflow_board_changes_session ON workflow_board_changes(session_id, revision_id);
+`;
+
+/**
  * Ordered schema steps. `PRAGMA user_version` records how many have been applied.
  * Append new steps; never edit an applied one.
  */
@@ -2764,6 +2779,7 @@ export const migrations: readonly string[] = [
     ON nodes(session_id, json_extract(detail, '$.toolCallId'), seq)
     WHERE kind = 'tool_call';
   `,
+  boardChangesMigration,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

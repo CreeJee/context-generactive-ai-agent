@@ -6,7 +6,9 @@ import { Context, Effect, Exit, FileSystem, Layer, Path, Schema, Semaphore } fro
 import { Migrator, SqlClient, SqlError } from "effect/sql";
 import { migrateTanStackRows } from "../chat-store/tanstack-migration.ts";
 import { migrateHumanDecisionRows } from "../kanban/human-decision-migration.ts";
+import { migrateBoardChanges } from "../workflow/board-changes-migration.ts";
 import {
+  boardChangesMigration,
   goalHistoryMigration,
   humanDecisionFactsMigration,
   migrations,
@@ -170,6 +172,12 @@ const migrateInTransaction = Effect.fnUntraced(function* (sqlite: DatabaseSync) 
                   migrateHumanDecisionRows().pipe(
                     Effect.orDie,
                     Effect.when(Effect.succeed(step === humanDecisionFactsMigration)),
+                  ),
+                ),
+                Effect.andThen(
+                  migrateBoardChanges().pipe(
+                    Effect.orDie,
+                    Effect.when(Effect.succeed(step === boardChangesMigration)),
                   ),
                 ),
                 Effect.andThen(

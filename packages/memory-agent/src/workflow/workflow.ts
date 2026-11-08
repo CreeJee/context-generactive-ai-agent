@@ -207,6 +207,36 @@ const decodePersistedPlan = Schema.decodeEffect(Schema.fromJsonString(PersistedP
 /** The Plan a revision keeps in `plan_json`; NULL when the revision has none. */
 export const decodeRevisionPlan = (json: string | null) =>
   json === null ? Effect.succeed(null) : Effect.map(decodePersistedPlan(json), persistedPlan);
+const encodeCard = Schema.encodeEffect(Schema.fromJsonString(PlanStep));
+/** Each card of a revision's stored Plan in its encoded form, by id, in Plan order. */
+export const revisionCards = (json: string | null) =>
+  Effect.flatMap(decodeRevisionPlan(json), (plan) =>
+    Effect.map(
+      Effect.forEach(plan?.steps ?? [], (step) =>
+        Effect.map(encodeCard(step), (encoded) => [step.id, encoded] as const),
+      ),
+      (entries): ReadonlyMap<string, string> => new Map(entries),
+    ),
+  );
+const encodeCardIds = Schema.encodeEffect(Schema.fromJsonString(Schema.Array(Schema.String)));
+/**
+ * The cards a revision changed from the revision before it in its session, encoded for
+ * `workflow_board_changes`: the added and changed ones in Plan order, then the removed ones. None
+ * when it changed no card.
+ */
+export const boardChange = ({
+  before,
+  after,
+}: {
+  readonly before: ReadonlyMap<string, string>;
+  readonly after: ReadonlyMap<string, string>;
+}): Effect.Effect<Option.Option<string>, Schema.SchemaError> =>
+  Arr.match(
+    Arr.filterMap(after, ([id, json]) =>
+      before.get(id) === json ? Result.failVoid : Result.succeed(id),
+    ).concat(Arr.filter(before.keys(), (id) => !after.has(id))),
+    { onEmpty: () => Effect.succeedNone, onNonEmpty: (ids) => Effect.asSome(encodeCardIds(ids)) },
+  );
 const encodeGoal = Schema.encodeEffect(Schema.fromJsonString(GoalArtifact));
 const encodePlan = Schema.encodeEffect(Schema.fromJsonString(PlanArtifact));
 const encodeAuthor = Schema.encodeEffect(Schema.fromJsonString(BoardAuthor));
@@ -297,6 +327,12 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
       execute: (sessionId) => sql`SELECT sequence FROM workflow_ledger_events
         WHERE session_id = ${sessionId} ORDER BY sequence DESC LIMIT 1`,
     });
+    const latestPlan = SqlSchema.findOneOption({
+      Request: Schema.String,
+      Result: Schema.Struct({ plan_json: Schema.NullOr(Schema.String) }),
+      execute: (sessionId) => sql`SELECT plan_json FROM workflow_state_revisions
+        WHERE session_id = ${sessionId} ORDER BY id DESC LIMIT 1`,
+    });
     const goalIdentity = SqlSchema.findOneOption({
       Request: Schema.String,
       Result: Schema.Struct({ goal_instance_id: Schema.String }),
@@ -371,6 +407,16 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
       const goalJson = state.goal === null ? null : yield* encodeGoal(state.goal);
       const planJson = state.plan === null ? null : yield* encodePlan(state.plan);
       const authorJson = author === undefined ? null : yield* encodeAuthor(author);
+      // The board's history: the cards this revision changes from the session's latest one.
+      const change = yield* boardChange({
+        before: yield* revisionCards(
+          Option.match(yield* latestPlan(sessionId), {
+            onNone: () => null,
+            onSome: (row) => row.plan_json,
+          }),
+        ),
+        after: yield* revisionCards(planJson),
+      });
       // The ledger only grows: the events past the stored ones are this change's.
       const stored = Option.match(yield* lastLedgerEvent(sessionId), {
         onNone: () => 0,
@@ -404,6 +450,13 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
         VALUES (${sessionId}, last_insert_rowid(), ${now})
         ON CONFLICT(session_id) DO UPDATE SET revision_id = excluded.revision_id,
           updated_at = excluded.updated_at`;
+      yield* Option.match(change, {
+        onNone: () => Effect.void,
+        onSome: (json) => sql`INSERT INTO workflow_board_changes
+          (revision_id, session_id, card_ids_json)
+          SELECT revision_id, session_id, ${json} FROM session_workflows
+          WHERE session_id = ${sessionId}`,
+      });
       return state;
     });
     const change = <E>(
