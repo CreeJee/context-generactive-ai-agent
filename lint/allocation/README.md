@@ -1,0 +1,26 @@
+# allocation
+
+## Overview
+
+`lint/allocation`은 결과에 필요한 것보다 훨씬 많이 할당하는 코드를 잡는 저장소 전용 Oxlint JS 플러그인 `allocation`이다. `index.ts`가 `rules/`의 규칙 두 개를 `eslintCompatPlugin({ meta: { name: "allocation" }, rules })`로 묶어 default export한다. 루트 `vite.config.ts`가 `lint.jsPlugins`에 `{ name: "allocation", specifier: "./lint/allocation/index.ts" }`로 등록하고 두 규칙을 `"warn"`으로 켠다. 가져온 코드인 `anti-slop`과 달리 이 저장소가 직접 쓴 코드라서 lint·fmt 대상이다.
+
+## Interface
+
+- `allocationPlugin` (default export) — 규칙 두 개를 묶은 Oxlint 플러그인 객체.
+- `allocation/no-accumulator-copy` — `./rules/no-accumulator-copy.ts`의 `noAccumulatorCopyRule`. `reduce`·`reduceRight`·`runFold`·`runFoldEffect`에 넘긴 reducer 안에서 누적값(또는 그 필드)을 `append`·`appendAll`·`prepend`·`prependAll`·`concat`이나 배열 spread로 복사하면 보고한다. 단계마다 누적값 전체를 복사하면 길이의 제곱만큼 할당하기 때문이다. `Chunk.append`처럼 구조를 공유하는 모듈의 add는 보고하지 않는다.
+- `allocation/prefer-iterable-grouping` — `./rules/prefer-iterable-grouping.ts`의 `preferIterableGroupingRule`. Effect `Array` 모듈의 `groupWith`·`group`·`chunksOf` 호출을 보고한다. 이 함수들은 `chop`으로 조각을 하나 떼어낼 때마다 나머지 배열을 `slice`로 복사해서 조각 수 × 길이만큼 할당한다. 같은 이름의 `Iterable` 함수는 입력을 한 번만 읽는다.
+
+## Invariants
+
+- 플러그인 이름 `"allocation"`은 `vite.config.ts`의 등록 이름, 규칙 키 접두사와 일치해야 한다.
+- 두 규칙은 `"warn"`이고, 소스에서 규칙을 끄는 주석을 쓰지 않는다. 크기가 작은 fold도 코드를 고친다. 원소마다 결과를 내면 `Array.mapAccum`으로 결과를 한 번에 만들고, 누적값을 계속 키워야 하면 구조를 공유하는 `Chunk`·`HashMap`·`HashSet`에 담는다.
+- 규칙 모듈은 `.ts` 확장자를 붙인 상대 경로로 import한다.
+
+## Side Effects
+
+- 없음 (순수 함수와 타입만 제공)
+
+## Verification
+
+- Run: `vp test lint/allocation` (RuleTester로 두 규칙의 보고 여부 확인)
+- Run: `vp lint` (저장소 루트, 플러그인을 불러옴)

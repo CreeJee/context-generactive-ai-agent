@@ -37,6 +37,7 @@ export default defineConfig({
         specifier: "./lint/anti-slop/effect/index.ts",
       },
       { name: "shadcn", specifier: "@shadcn/lint" },
+      { name: "allocation", specifier: "./lint/allocation/index.ts" },
     ],
     rules: {
       "vite-plus/prefer-vite-plus-imports": "error",
@@ -56,6 +57,9 @@ export default defineConfig({
       "anti-slop/no-widen-then-assert": "error",
       "anti-slop/require-safety-comment-for-type-assertion": "error",
       "anti-slop-effect/no-service-constructor-imports": "error",
+      // A fold emits through Array.mapAccum or grows a Chunk, HashMap or HashSet; no source disables these.
+      "allocation/no-accumulator-copy": "warn",
+      "allocation/prefer-iterable-grouping": "warn",
       "shadcn/no-restyle": [
         "error",
         {
