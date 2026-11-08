@@ -4,6 +4,7 @@ import {
   Context,
   Effect,
   Exit,
+  Iterable as EffectIterable,
   Layer,
   Match,
   Option,
@@ -69,14 +70,8 @@ interface ShownGroup {
   readonly messages: Arr.NonEmptyReadonlyArray<StoredMessage>;
 }
 
-interface Grouping {
-  readonly groups: ReadonlyArray<ShownGroup>;
-  /** The last group is an answer, which its later steps and tool results join. */
-  readonly answering: boolean;
-}
-
 /** Whether `message` belongs to `answer`: a later step of it, or a tool result. */
-const continues = (answer: ShownGroup, message: NamedMessage) =>
+const continues = (answer: NamedMessage, message: NamedMessage) =>
   Match.value(message).pipe(
     Match.discriminatorsExhaustive("role")({
       user: () => false,
@@ -89,30 +84,14 @@ const continues = (answer: ShownGroup, message: NamedMessage) =>
  * The messages grouped as the panel shows them, as TanStack's `modelMessagesToUIMessages` grouped
  * them for it: an answer holds its steps and tool results until the next question.
  */
-const grouped = (messages: ReadonlyArray<NamedMessage>) =>
-  messages.reduce<Grouping>(
-    (state, message) =>
-      Option.match(
-        Option.filter(
-          Arr.last(state.groups),
-          (last) => state.answering && continues(last, message),
-        ),
-        {
-          onSome: (answer) => ({
-            groups: [
-              ...state.groups.slice(0, -1),
-              { ...answer, messages: Arr.append(answer.messages, message) },
-            ],
-            answering: true,
-          }),
-          onNone: () => ({
-            groups: [...state.groups, { id: message.id, messages: Arr.of(message) }],
-            answering: message.role === "assistant",
-          }),
-        },
-      ),
-    { groups: [], answering: false },
-  ).groups;
+const grouped = (messages: ReadonlyArray<NamedMessage>): ReadonlyArray<ShownGroup> =>
+  // A group that starts with an answer is joined by its later steps and tool results.
+  Arr.fromIterable(
+    EffectIterable.groupWith(
+      messages,
+      (first, message) => first.role === "assistant" && continues(first, message),
+    ),
+  ).map((group) => ({ id: group[0].id, messages: group }));
 
 const make = Effect.gen(function* () {
   const threads = yield* BtwThreads;
