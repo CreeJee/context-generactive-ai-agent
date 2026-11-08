@@ -168,10 +168,16 @@ const imagesIn = (message: ConversationMessage) =>
 export function estimateTokens(message: ConversationMessage): number {
   const calls = isTruthy(message.toolCalls?.length) ? JSON.stringify(message.toolCalls) : "";
   const text = messageText(message) + calls;
-  const ascii = text.replace(/\P{ASCII}/gu, "").length;
+  // Only the text outside ASCII is copied; counting it needs no array of its characters.
+  const other = text.replace(/\p{ASCII}+/gu, "");
   // Each character outside ASCII is a token; a surrogate pair is one character.
-  const other = text.match(/\P{ASCII}/gu)?.length ?? 0;
-  return Math.ceil(ascii / 4) + other + imagesIn(message) * imageTokens;
+  const pairs = other.match(/[\u{10000}-\u{10FFFF}]/gu)?.length ?? 0;
+  return (
+    Math.ceil((text.length - other.length) / 4) +
+    other.length -
+    pairs +
+    imagesIn(message) * imageTokens
+  );
 }
 
 export const estimateConversation = (messages: ReadonlyArray<ConversationMessage>) =>
