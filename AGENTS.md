@@ -61,6 +61,8 @@ release. Add a tool name to select part of the graph. For example, run
 
 Effect 가이드문서: 설치된 `node_modules/effect/AGENTS.md` or https://raw.githubusercontent.com/Effect-TS/effect/refs/heads/main/.agents/AGENTS.md
 
+항상 코드를 짤경우 effect standard way 에 일치하도록 코드를 작성한다.
+
 ## Info
 
 - ~/.context-generactive-agent/agent.db 가 sqlite 파일 db위치입니다
