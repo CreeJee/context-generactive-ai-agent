@@ -1,8 +1,13 @@
 import { Effect, Option } from "effect";
 import type { ModelSelection } from "../providers/contracts.ts";
 import { fallbackLogged } from "../runtime/logged-failures.ts";
-import { type ConversationMessage, messageText, type StepsToSummarize } from "./compaction.ts";
-import { cheapSummary, inputCharacters, shorten, type SummaryServices } from "./turn-summaries.ts";
+import {
+  type ConversationMessage,
+  messageText,
+  shorten,
+  type StepsToSummarize,
+} from "./compaction.ts";
+import { cheapSummary, inputCharacters, type SummaryServices } from "./turn-summaries.ts";
 
 /** Standing instructions for summarizing a run's earlier steps. The summary points back to them. */
 export const stepSummaryInstructions = `You summarize earlier steps of an agent's run, so the agent can carry on without them.

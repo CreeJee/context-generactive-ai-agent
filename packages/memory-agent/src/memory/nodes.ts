@@ -13,6 +13,7 @@ import {
 } from "effect";
 import { SecureRandom } from "effect/crypto";
 import { SqlClient, SqlSchema } from "effect/sql";
+import { changeAuthoritySql } from "./changes.ts";
 import { createResultPageReader } from "./result-pages.ts";
 import { hasStatementText } from "./quality.ts";
 import { createSupersededReads } from "./superseded-reads.ts";
@@ -91,6 +92,14 @@ export interface EvidencePage {
   readonly offset: number;
   readonly nextOffset: number | null;
   readonly length: number;
+}
+
+/** A user message as memory recorded it. */
+export interface RecordedUserMessage {
+  readonly id: string;
+  readonly text: string;
+  /** A later message of the user corrected or retracted it, by {@link changeAuthoritySql}. */
+  readonly changedLater: boolean;
 }
 
 /** A UTF-16 window of `text` that never ends inside a surrogate pair. */
@@ -248,6 +257,16 @@ const make = Effect.gen(function* () {
     Result: Schema.Struct({ id: Schema.String, text: Schema.String }),
     execute: (ids) => sql`SELECT id, text FROM nodes WHERE id IN ${sql.in(ids)}`,
   });
+  const changeAuthority = sql.literal(changeAuthoritySql("s", "n"));
+  const userMessagesOf = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: Schema.Struct({ id: Schema.String, text: Schema.String, changed_later: Schema.Finite }),
+    execute: (sessionId) => sql`
+      SELECT n.id, n.text, EXISTS (SELECT 1 FROM edges e JOIN nodes s ON s.id = e.from_id
+        WHERE e.to_id = n.id AND e.kind IN ('corrects', 'retracts') AND ${changeAuthority}
+      ) AS changed_later
+      FROM nodes n WHERE n.session_id = ${sessionId} AND n.kind = 'user' ORDER BY n.seq`,
+  });
   const idOf = Option.map((row: typeof IdRow.Type) => row.id);
   /** Rows keyed by `key`; a later row replaces an earlier one with the same key. */
   const keyed = <A>(rows: readonly A[], key: (row: A) => string, value: (row: A) => string) =>
@@ -398,6 +417,20 @@ const make = Effect.gen(function* () {
 
     session: (sessionId: string) =>
       stored(sessionNodes(sessionId).pipe(Effect.map((rows) => rows.map(nodeOfRow)))),
+
+    /** The session's user messages, oldest first. */
+    userMessages: (sessionId: string) =>
+      stored(
+        userMessagesOf(sessionId).pipe(
+          Effect.map((rows) =>
+            rows.map((row): RecordedUserMessage => ({
+              id: row.id,
+              text: row.text,
+              changedLater: row.changed_later === 1,
+            })),
+          ),
+        ),
+      ),
 
     edgesOf: (id: string) => stored(edgesOf(id).pipe(Effect.map((rows) => rows.map(edgeOfRow)))),
 

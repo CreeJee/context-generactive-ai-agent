@@ -730,6 +730,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     const base: CompactionSources = {
       toolResultIds: (toolCallIds) => nodes.toolResultIds(sessionId, toolCallIds),
       nodeTexts: nodes.texts,
+      userMessages: nodes.userMessages(sessionId),
     };
     if (!(project !== undefined)) return base;
     return {

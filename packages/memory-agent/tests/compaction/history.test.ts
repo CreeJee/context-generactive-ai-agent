@@ -1,12 +1,14 @@
-import { Duration, Effect, Option, Schema } from "effect";
+import { DateTime, Duration, Effect, Option, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import {
   budgetFor,
   clearedOutput,
+  compactEffect,
   compactionHook,
   estimateConversation,
   type Budget,
 } from "../../src/agent/compaction.ts";
+import type { SummaryBlock } from "../../src/chat-store/metadata.ts";
 import type { StoredMessage } from "../../src/chat-store/schema.ts";
 import type { JsonValue } from "../../src/json.ts";
 import { RunStore } from "../../src/loop/store.ts";
@@ -17,6 +19,7 @@ import { runTool } from "../../src/tools/run-tool.ts";
 import type { ScriptedTurn } from "../../src/testing/scripted-model.ts";
 import { scriptedRun } from "../support/loop-run.ts";
 import { callTool } from "../support/run-tools.ts";
+import { sqlRun } from "../support/sql.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { conversation, nextRequest, noLimit, sourcesOf } from "./fixtures.ts";
 
@@ -367,6 +370,69 @@ testAgent()("compaction over recorded history", (it) => {
             : message,
         );
         expect((yield* sent(overBudget, other))[0]).toEqual({ role: "user", content: "질문 1" });
+      }),
+  );
+
+  it.effect(
+    "messages left out leave behind the user's words in them that a later message did not change",
+    () =>
+      Effect.gen(function* () {
+        const at = yield* freshSession;
+        const nodes = yield* Nodes;
+        const said = (text: string) => nodes.append({ ...at, kind: "user", text });
+        const kept = yield* said("테스트는 vitest로만 돌려 줘");
+        const changed = yield* said("README는 영어로 써 줘");
+        const correction = yield* said("아니, README는 한국어로 써 줘");
+        const asked = yield* said("파일들을 읽어 줘");
+        const answer = yield* nodes.append({ ...at, kind: "assistant", text: "알겠어요" });
+        const linked = (from: string, to: string) =>
+          sqlRun(
+            "INSERT INTO edges VALUES (?, ?, 'corrects', 'llm', 0.95, ?)",
+            from,
+            to,
+            DateTime.formatIso(DateTime.nowUnsafe()),
+          );
+        // Only a later message of the user changes what the user said.
+        yield* linked(correction.id, changed.id);
+        yield* linked(answer.id, kept.id);
+        // Three answers of about 4,000 tokens each, then the question the run answers.
+        const messages: ReadonlyArray<StoredMessage> = [
+          ...[kept, changed, correction].flatMap((turn): ReadonlyArray<StoredMessage> => [
+            { role: "user", content: turn.text },
+            { role: "assistant", content: "x".repeat(16_000) },
+          ]),
+          { role: "user", content: asked.text },
+        ];
+        const leftOut = Effect.fnUntraced(function* (
+          blocks: ReadonlyArray<SummaryBlock>,
+          leaveOutAt: number,
+        ) {
+          const compacted = yield* compactEffect({
+            messages,
+            state: { manual: { clearedThrough: 0, summarizedTurns: 0 }, blocks },
+            sources: {
+              ...sourcesOf(nodes, at.sessionId),
+              userMessages: nodes.userMessages(at.sessionId),
+            },
+            budget: { compactAt: 0, leaveOutAt, inputCeiling: noLimit },
+          });
+          // Everything before the run in progress is left out.
+          expect(compacted.messages.slice(1)).toEqual([{ role: "user", content: asked.text }]);
+          return compacted.messages[0]?.content;
+        });
+        const told = [
+          yield* leftOut([], 8_000),
+          // The first two turns are sent as their summary, and the summary is left out too.
+          yield* leftOut([{ end: 2, nextTurnNodeId: correction.id, text: "요약" }], 3_000),
+        ];
+        told.forEach((marker) => {
+          expect(marker).toContain("left out to save context");
+          expect(marker).toContain(`(node ${kept.id}) ${kept.text}`);
+          expect(marker).toContain(`(node ${correction.id}) ${correction.text}`);
+          expect(marker).not.toContain(changed.text);
+          // The run's own message is sent as it is, not listed.
+          expect(marker).not.toContain(asked.text);
+        });
       }),
   );
 });

@@ -27,11 +27,17 @@ import { toolParameters } from "../model/tool-schema.ts";
 import type { RunTool } from "../tools/run-tool.ts";
 import { RunStore } from "../loop/store.ts";
 import type { ModelHandoffFailed } from "./model-handoff.ts";
-import { recentRawSteps, recentRawUserTurns, stepBlockSteps } from "./compaction-policy.ts";
+import {
+  recentRawSteps,
+  recentRawUserTurns,
+  stepBlockSteps,
+  summaryCharacters,
+  userMessageCharacters,
+} from "./compaction-policy.ts";
 import type { CompactResult, CompactionStage } from "./run-state.ts";
 import { isEmptyUserText } from "../messages/empty-user.ts";
 import { logFailure } from "../runtime/logged-failures.ts";
-import type { NodeStoreFailed } from "../memory/nodes.ts";
+import type { NodeStoreFailed, RecordedUserMessage } from "../memory/nodes.ts";
 
 /** A tool call as a message carries it. */
 export interface ConversationToolCall {
@@ -356,6 +362,12 @@ export interface CompactionSources {
   ) => Effect.Effect<CompactionMessage | null>;
   /** What stands in for what a request leaves out; memory's ({@link memoryPointers}) by default. */
   readonly pointers?: LeaveOutPointers;
+  /**
+   * The user's messages as memory recorded them, oldest first. Where a request leaves out earlier
+   * messages, the user's words in them that still hold are sent in their place; without them, only
+   * the pointer is.
+   */
+  readonly userMessages?: Effect.Effect<ReadonlyArray<RecordedUserMessage>, NodeStoreFailed>;
 }
 
 /** Sources answered from lookups already in memory, as evaluations and fixtures have them. */
@@ -387,6 +399,13 @@ export const answeredToolCalls = (messages: ReadonlyArray<ConversationMessage>) 
     ),
   );
 
+const memoryReadFailed = (cause: { readonly _tag: string }) =>
+  CompactionFailed.make({
+    operation: "read-memory",
+    reason: CompactionReason.cases.MemoryFailed.make({}),
+    cause,
+  });
+
 /**
  * What memory recorded for these messages and summary blocks, read once so compaction can decide
  * synchronously.
@@ -399,15 +418,7 @@ export const memoryLookups = Effect.fnUntraced(function* (
   const [results, texts] = yield* Effect.all([
     sources.toolResultIds(answeredToolCalls(messages)),
     sources.nodeTexts(EffectArray.dedupe(blocks.map((block) => block.nextTurnNodeId))),
-  ]).pipe(
-    Effect.mapError((cause) =>
-      CompactionFailed.make({
-        operation: "read-memory",
-        reason: CompactionReason.cases.MemoryFailed.make({}),
-        cause,
-      }),
-    ),
-  );
+  ]).pipe(Effect.mapError(memoryReadFailed));
   return {
     toolResultId: (toolCallId: string) => results.get(toolCallId) ?? null,
     nodeText: (id: string) => texts.get(id) ?? null,
@@ -417,6 +428,66 @@ export const memoryLookups = Effect.fnUntraced(function* (
 /** Where dropped messages went, for the model: they are in memory, not gone. */
 const droppedMarker = (count: number) =>
   `[${count} earlier messages of this conversation were left out to save context. They are kept in memory: use find_memory, read_evidence and trace_evidence to recall them.]`;
+
+const shortenBody = (text: string, limit: number) =>
+  text.length > limit ? `${text.slice(0, limit)}… (${text.length - limit} more characters)` : text;
+/** `text` cut to `limit` characters, saying how many were left out. */
+export const shorten: {
+  (limit: number): (text: string) => string;
+} & typeof shortenBody = EffectFunction.dual(2, shortenBody);
+
+/**
+ * The words of the user in the first `turns` turns of `messages` that no later message of theirs
+ * corrected or retracted, as memory recorded them, none when there are none. Unlike a summary they
+ * are what the user decided. Oldest first; when they do not all fit in the room of one summary of
+ * turns, the latest are kept. Each names its node, which read_evidence shows in full.
+ */
+const stillSaid = (
+  messages: ReadonlyArray<ConversationMessage>,
+  recorded: ReadonlyArray<RecordedUserMessage>,
+  turns: number,
+): Option.Option<string> => {
+  // Memory records the turns in order. One it did not record, or one of a branch the user went
+  // back from, matches no turn.
+  const [, matched] = EffectArray.mapAccum(
+    userTurns(messages).slice(0, turns),
+    0,
+    (from, at): readonly [number, Option.Option<RecordedUserMessage>] =>
+      Option.match(
+        EffectArray.findFirstIndex(recorded.slice(from), (message) =>
+          sameTurn(messages[at], message.text),
+        ),
+        {
+          onNone: () => [from, Option.none()],
+          onSome: (offset) => [from + offset + 1, EffectArray.get(recorded, from + offset)],
+        },
+      ),
+  );
+  const lines = EffectArray.getSomes(matched)
+    .filter((message) => !message.changedLater)
+    .map((message) => `- (node ${message.id}) ${shorten(message.text, userMessageCharacters)}`);
+  const latest = EffectArray.takeWhile(
+    EffectArray.scan(EffectArray.reverse(lines), 0, (length, line) => length + line.length).slice(
+      1,
+    ),
+    (length) => length <= summaryCharacters,
+  ).length;
+  const listed = lines.slice(lines.length - latest);
+  const unlisted = lines.length - listed.length;
+  return EffectArray.match(listed, {
+    onEmpty: () => Option.none(),
+    onNonEmpty: (kept) =>
+      Option.some(
+        [
+          "What the user said in them, oldest first, leaving out what a later message of theirs corrected or retracted. These are the user's own words, not a summary; read_evidence shows a node in full:",
+          ...(unlisted > 0
+            ? [`(${unlisted} earlier messages of the user are not listed: find_memory finds them.)`]
+            : []),
+          ...kept,
+        ].join("\n"),
+      ),
+  });
+};
 
 /**
  * What compaction puts in place of what it leaves out, saying where to read it again. A tool
@@ -448,18 +519,21 @@ export const memoryPointers: LeaveOutPointers = {
 interface Recall {
   readonly cleared: (toolCallId: string) => Option.Option<string>;
   readonly fullResult: (toolCallId: string) => Option.Option<string>;
-  readonly dropped: (count: number) => string;
+  /** What stands in for the oldest messages a request leaves out, `cut`. */
+  readonly dropped: (cut: ReadonlyArray<ConversationMessage>) => string;
 }
 
 const recallOf = (
   sources: CompactionSources,
   toolResultId: (toolCallId: string) => string | null,
+  stillSaidIn: (cut: ReadonlyArray<ConversationMessage>) => Option.Option<string> = Option.none,
 ): Recall => {
   const pointers = sources.pointers ?? memoryPointers;
   return {
     cleared: (toolCallId) => pointers.cleared(toolResultId(toolCallId)),
     fullResult: (toolCallId) => pointers.fullResult(toolResultId(toolCallId)),
-    dropped: pointers.dropped,
+    dropped: (cut) =>
+      [pointers.dropped(cut.length), ...Option.toArray(stillSaidIn(cut))].join("\n\n"),
   };
 };
 
@@ -515,13 +589,10 @@ export interface Compacted<M> {
  * `firstKept` is where the first turn after them starts.
  */
 const summarized =
-  (summaries: ReadonlyArray<SummaryBlock>, firstKept: number | undefined) =>
+  (summaries: ReadonlyArray<CompactionMessage>, firstKept: number | undefined) =>
   <M>(sending: Sending<M>): Sending<M> =>
     summaries.length > 0 && firstKept !== undefined
-      ? {
-          sent: [...summaryMessages(summaries), ...sending.sent.slice(firstKept)],
-          stage: "summarize",
-        }
+      ? { sent: [...summaries, ...sending.sent.slice(firstKept)], stage: "summarize" }
       : sending;
 
 /**
@@ -665,7 +736,10 @@ const broughtDown = <M extends ConversationMessage>(
     ? {
         sent:
           cut > 0
-            ? [{ role: "user", content: recall.dropped(cut) }, ...inRun.messages]
+            ? [
+                { role: "user", content: recall.dropped(before.messages.slice(0, cut)) },
+                ...inRun.messages,
+              ]
             : inRun.messages,
         stage: "leave-out",
       }
@@ -911,7 +985,25 @@ export const compactEffect = Effect.fnUntraced(function* <M extends Conversation
   const turns = userTurns(messages);
   const summaries = linedUp(messages, state.blocks, nodeText);
   const summarizedTurns = summaries.at(-1)?.end ?? 0;
-  const recall = recallOf(sources, toolResultId);
+  const recorded = yield* Effect.mapError(
+    sources.userMessages ?? Effect.succeed(EffectArray.empty<RecordedUserMessage>()),
+    memoryReadFailed,
+  );
+  const sentSummaries = summaryMessages(summaries);
+  /**
+   * How many user turns `cut` holds: those through the end of the last summary in it, as each
+   * covers the turns before it too, then those said as they were.
+   */
+  const turnsIn = (cut: ReadonlyArray<ConversationMessage>) =>
+    Option.match(
+      EffectArray.findLast(EffectArray.zip(sentSummaries, summaries), ([message]) =>
+        cut.includes(message),
+      ),
+      { onNone: () => 0, onSome: ([, block]) => block.end },
+    ) + userTurns(cut).length;
+  const recall = recallOf(sources, toolResultId, (cut) =>
+    stillSaid(messages, recorded, turnsIn(cut)),
+  );
 
   const clearedByHand = clearAnswered(
     messages.slice(0, manual.clearedThrough),
@@ -932,7 +1024,7 @@ export const compactEffect = Effect.fnUntraced(function* <M extends Conversation
   };
   const prepared = pipe(
     answeredCleared,
-    summarized(summaries, turns[summarizedTurns]),
+    summarized(sentSummaries, turns[summarizedTurns]),
     stepsSummarized(steps),
     paired,
     leftOutPast(

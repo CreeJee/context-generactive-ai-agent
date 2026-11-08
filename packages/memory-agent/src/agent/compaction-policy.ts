@@ -7,6 +7,10 @@ export const summaryBlockTurns = 4;
 export const defaultSummaryStartPercent = 25;
 /** Latest user turns always sent in their original form. */
 export const recentRawUserTurns = 2;
+/** How long a summary of turns gets, in characters. */
+export const summaryCharacters = 6_000;
+/** How much of one user message is carried where the message itself is not sent, in characters. */
+export const userMessageCharacters = 3_000;
 /** Maximum memory leads added after compaction omitted original content. */
 export const retrievalLeadLimit = 5;
 /** Estimated-token ceiling for the variable retrieval appendix. */

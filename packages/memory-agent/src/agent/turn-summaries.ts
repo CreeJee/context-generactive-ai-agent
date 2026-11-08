@@ -1,17 +1,7 @@
 import { isTruthy } from "../truthy.ts";
 import { Semaphore } from "effect";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import {
-  Array as Arr,
-  Cause,
-  Context,
-  Effect,
-  Function as EffectFunction,
-  Layer,
-  Option,
-  Schema,
-  Stream,
-} from "effect";
+import { Array as Arr, Cause, Context, Effect, Layer, Option, Schema, Stream } from "effect";
 import { SecureRandom } from "effect/crypto";
 import { singleAnswer } from "../model/single-call.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
@@ -22,6 +12,8 @@ import {
   defaultSummaryStartPercent,
   recentRawUserTurns,
   summaryBlockTurns,
+  summaryCharacters,
+  userMessageCharacters,
 } from "./compaction-policy.ts";
 import { ApiUsage, recordUsage } from "./api-usage.ts";
 import { fallbackLogged, logDefect } from "../runtime/logged-failures.ts";
@@ -34,6 +26,7 @@ import {
   linedUp,
   memoryLookups,
   sameTurn,
+  shorten,
   userTurns,
   type CompactionSources,
   type SummaryOutcome,
@@ -72,23 +65,15 @@ const summaryFailed =
     TurnSummaryFailed.make({ operation, cause });
 /** How much of what is summarized the summarizer reads. */
 export const inputCharacters = 60_000;
-const summaryCharacters = 6_000;
 /** How much of each node the summarizer reads. */
 const nodeCharacters = {
-  user: 3_000,
+  user: userMessageCharacters,
   assistant: 3_000,
   tool_call: 300,
   tool_result: 400,
   file_observation: 300,
   topic: 0,
 } satisfies Record<NodeKind, number>;
-
-const shortenBody = (text: string, limit: number) =>
-  text.length > limit ? `${text.slice(0, limit)}… (${text.length - limit} more characters)` : text;
-/** `text` cut to `limit` characters, saying how many were left out. */
-export const shorten: {
-  (limit: number): (text: string) => string;
-} & typeof shortenBody = EffectFunction.dual(2, shortenBody);
 
 /** The services a summary is asked for and recorded with. */
 export interface SummaryServices {

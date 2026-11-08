@@ -41,7 +41,7 @@
 
 ## Invariants
 
-- 정정·철회 권한은 같은 프로젝트의 더 뒤(`seq`가 큰) user 노드에만 있다. find_memory, trace_evidence, read_evidence가 모두 이 한 규칙을 쓰므로 `isChangeAuthority`와 `changeAuthoritySql`은 같은 조건을 유지해야 한다
+- 정정·철회 권한은 같은 프로젝트의 더 뒤(`seq`가 큰) user 노드에만 있다. find_memory, trace_evidence, read_evidence, 그리고 compaction이 빠진 턴의 사용자 말을 고르는 `Nodes.userMessages`가 모두 이 한 규칙을 쓰므로 `isChangeAuthority`와 `changeAuthoritySql`은 같은 조건을 유지해야 한다
 - `scopedChain`은 허용되지 않은 프로젝트를 만나는 첫 지점에서 멈춘다(takeWhile). 중간 원인을 거르면서 그 뒤의 조상을 드러내거나, 숨은 조상의 정정을 보이는 출처에 붙이면 안 된다
 - 증거 읽기의 저장소 실패는 stage만 담은 `EvidenceReadFailed`로 바꾼다. cause에는 개인 경로나 행 내용이 있을 수 있기 때문이다. 실패한 읽기를 '정정 없음'으로 돌려주면 안 된다
 - `readStructuredEvidence`와 `traceStructuredEvidence`는 읽기 시점에 조립만 한다. 새 검색, 모델 호출, 해석, 영속 사실을 만들지 않는다. root·원인·변경에 같은 범위를 적용하고, 노드가 없거나 범위 밖이면 null로 성공한다. 추적할 수 없는 노드도 `untraced` 증거로 보고한다
