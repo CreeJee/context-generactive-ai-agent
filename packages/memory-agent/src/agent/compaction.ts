@@ -1395,8 +1395,8 @@ const logRequestBasis = (
  * no count yet and goes by the estimate.
  *
  * A long run's earlier steps are summarized in the background, one block at a time, once they are
- * due ({@link dueSteps}); the next request compacted again sends them in their place. The blocks
- * end with the run's scope.
+ * due ({@link dueSteps}) and the request nears `leaveOutAt`; the next request compacted again sends
+ * them in their place. The blocks end with the run's scope.
  *
  * Each request appends to the previous one ({@link nextRequestHistory}). Search leads are looked up
  * once a run, so a run's requests send the same ones.
@@ -1484,16 +1484,24 @@ export const compactionHook = Effect.fnUntraced(function* (options: {
       ),
     );
 
-  /** Starts the block that is due, unless one is being made. */
+  /**
+   * Starts the block that is due, unless one is being made, once it would be sent: blocks go out
+   * with a request compacted again, and the request of `sentTokens` would pass `leaveOutAt` by
+   * the time as many steps again come.
+   */
   const summarizeDue = (
     messages: ReadonlyArray<ConversationMessage>,
     blocks: ReadonlyArray<StepBlock>,
     budget: Budget,
+    sentTokens: number,
   ) =>
     Option.match(
       Option.all({
         summarize: Option.fromNullishOr(options.summarizeSteps),
-        due: dueSteps({ messages, blocks, kept: keptOf(budget.leaveOutAt) }),
+        due: Option.filter(
+          dueSteps({ messages, blocks, kept: keptOf(budget.leaveOutAt) }),
+          (due) => sentTokens + estimateConversation(due.messages) > budget.leaveOutAt,
+        ),
       }),
       {
         onNone: () => Effect.void,
@@ -1537,8 +1545,9 @@ export const compactionHook = Effect.fnUntraced(function* (options: {
         yield* lastRequests.set(threadId, sent.sent, options.promptCacheFor);
         yield* logRequestBasis(threadId, previous, sent);
         yield* Ref.set(stage, sent.stage);
-        yield* Ref.set(sentEstimate, Option.some(estimateConversation(sent.messages)));
-        yield* summarizeDue(request.history, steps, budget);
+        const sentTokens = estimateConversation(sent.messages);
+        yield* Ref.set(sentEstimate, Option.some(sentTokens));
+        yield* summarizeDue(request.history, steps, budget, sentTokens);
         return { ...request, history: sent.messages };
       }).pipe(Effect.mapError(asRunFailed)),
     // A response that reported no input count keeps the overhead the one before it measured.

@@ -41,20 +41,26 @@ const task = "파일들을 읽어 줘";
 const sources = (rereadable: boolean) =>
   lookupSources({ toolResultId: (id) => (rereadable ? id : null), nodeText: () => null });
 
+/**
+ * Past 20,000 tokens of steps a block is due: by the thirtieth step, when the request would pass
+ * 40,000 tokens as many steps later. The request past 40,000 tokens is compacted again, and sends
+ * it.
+ */
+const leaveOutAt = 40_000;
+
 /** One run under compaction whose step summaries `summarize` gives; what it asked, and was sent. */
 const run = Effect.fnUntraced(function* (
   name: string,
   rereadable: boolean,
   summarize: Option.Option<string>,
+  leaveOutAt: number,
 ) {
   const { project } = yield* TestEnv;
   const session = yield* (yield* Sessions).create(project.id);
   const asked = yield* Ref.make<ReadonlyArray<StepsToSummarize>>([]);
   const compacting = yield* compactionHook({
     sources: sources(rereadable),
-    // Past 20,000 tokens of steps a block is due: by the thirtieth step. The request past 40,000
-    // tokens is compacted again, and sends it.
-    budget: { compactAt: 0, leaveOutAt: 40_000, inputCeiling: noLimit },
+    budget: { compactAt: 0, leaveOutAt, inputCeiling: noLimit },
     restore: () => Effect.succeed(null),
     promptCacheFor: Duration.hours(1),
     summarizeSteps: (steps) =>
@@ -90,7 +96,12 @@ const resultOf = (history: ReadonlyArray<StoredMessage>, id: string) =>
 testAgent()("step summaries", (it) => {
   it.effect("a long run's earlier steps are sent as their summary once it is compacted again", () =>
     Effect.gen(function* () {
-      const { asked, last, stage, saved } = yield* run("summarized", true, Option.some("- 요약"));
+      const { asked, last, stage, saved } = yield* run(
+        "summarized",
+        true,
+        Option.some("- 요약"),
+        leaveOutAt,
+      );
       // One block: the first twenty steps, with the run's task and where to reread each output.
       expect(asked).toHaveLength(1);
       const [steps] = asked;
@@ -119,7 +130,7 @@ testAgent()("step summaries", (it) => {
 
   it.effect("a summary that could not be made is not asked for again in the run", () =>
     Effect.gen(function* () {
-      const { asked, last } = yield* run("failed", true, Option.none());
+      const { asked, last } = yield* run("failed", true, Option.none(), leaveOutAt);
       expect(asked).toHaveLength(1);
       expect(last.some((message) => messageText(message).includes("[Summary of steps"))).toBe(
         false,
@@ -128,9 +139,17 @@ testAgent()("step summaries", (it) => {
     }),
   );
 
+  it.effect("a run that ends before its request would be compacted again asks for no summary", () =>
+    Effect.gen(function* () {
+      // About 45,000 tokens at the end: steps are due past 40,000, but 20 more would not pass 80,000.
+      const { asked } = yield* run("short", true, Option.some("- 요약"), 80_000);
+      expect(asked).toEqual([]);
+    }),
+  );
+
   it.effect("steps whose outputs cannot be read again are not summarized away", () =>
     Effect.gen(function* () {
-      const { asked } = yield* run("unrecorded", false, Option.some("- 요약"));
+      const { asked } = yield* run("unrecorded", false, Option.some("- 요약"), leaveOutAt);
       expect(asked).toEqual([]);
     }),
   );
