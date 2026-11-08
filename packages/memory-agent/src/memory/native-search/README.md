@@ -4,7 +4,7 @@
 
 `native-search`는 Rust/N-API 애드온 `turbovec`의 벡터 인덱스와 SQLite 읽기 세션을 전용 worker thread 하나에 가두는 계층이다. 호스트 쪽 `client.ts`의 `makeNativeOwner`/`NativeOwner`는 Effect RPC(`NativeOwnerRpcs`)로 worker를 띄운다. 호스트는 요청을 슬롯 1개와 대기 상한 32개로 직렬화하고, 취소·타임아웃·치명 실패를 관리한다.
 
-`worker.ts`는 worker 진입점이다. 인덱스 add/remove/save/reset/validate/vector-search와 controlled memory-search를 실행한다. `contracts.ts`·`read-protocol.ts`·`worker-protocol.ts`는 전송 계약과 스키마를 제공한다. `publication.ts`는 인덱스 변경과 읽기 스냅샷 pin을 묶는 세대(generation) 게이트를 제공한다. 이 계층은 `packages/memory-agent/src/memory/embedding/native-vector-index.ts`의 `makeNativeVectorIndex`가 `makeNativeOwner`를 호출해 사용한다.
+`worker.ts`는 worker 진입점이다. 인덱스 add/remove/save/reset/validate/vector-search와 controlled memory-search를 실행한다. `contracts.ts`·`read-protocol.ts`·`worker-protocol.ts`는 전송 계약과 스키마를 제공한다. `publication.ts`는 인덱스 변경과 읽기 스냅샷 pin을 묶는 세대(generation) 게이트를 제공한다. 이 계층은 `packages/memory-agent/src/memory/embedding/native-vector-index.ts`의 `nativeVectorIndexLayer`가 `NativeOwner.layer`와 `NativePublication.layer`를 제공하고 두 서비스를 yield해 사용한다.
 
 ## Interface
 
@@ -29,6 +29,7 @@
 - `nativeSearchBounds` — 고정 한도 상수(admittedSearches 32, activeSearches 1, workBudgetMs 2000, queuedAbortMs 50, activeAbortAcknowledgeMs 100, input/output 1 MiB)다.
 - `QueryVectorChannel` / `MorphTermsChannel` / `TextTermsChannel` / `PublishedGeneration` / `ChannelBudgets` / `RankedChannels` / `RankedVectorHit` / `SearchCoverage` / `NativeStageMetrics` / `NativeSearchFailureCode` — `contracts.ts`의 채널별 TaggedEnum과 결과·지표 타입이다.
 - `makePublication` — `(epoch)`로 세대 게이트를 만든다. `{ withMutation, admitSnapshot, read, inspect }`를 반환한다.
+- `NativePublication` — 세대 게이트 `Context.Service` 클래스(`"memory-agent/memory/native-search/publication/NativePublication"`)다. `static layer`가 context의 `NativeOwner` epoch으로 `makePublication`을 호출하므로, 게이트는 소유자 하나에 하나씩 그 소유자와 함께 생긴다.
 - `PublicationFailed` / `PublicationState` — 게이트 오류(`stopped` | `owner-mismatch`)와 상태 TaggedEnum(`ready{generation}` | `stopped{generation}`)이다. `stopped`(멈춤)는 갱신이 실패해 색인이 DB와 어긋났을 수 있는 상태다.
 - `worker.ts` (worker 진입점) — 최상위 `await runNativeEffect(Layer.launch(server))`로 `RpcServer.layer(NativeOwnerRpcs, { concurrency: 1 })`를 `NodeWorkerRunner` 위에서 실행한다.
 - 하위 디렉터리 없음.

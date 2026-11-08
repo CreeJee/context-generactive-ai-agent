@@ -1,6 +1,6 @@
 import { Deferred, Effect, Fiber, Layer, Ref, Schema } from "effect";
 import { expect, vi } from "vite-plus/test";
-import * as nativeClient from "../../src/memory/native-search/client.ts";
+import { NativeOwner } from "../../src/memory/native-search/client.ts";
 import { OwnerCommand } from "../../src/memory/native-search/worker-protocol.ts";
 import { EmbedderRuntime, Embedder } from "../../src/memory/embedding/embedder.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
@@ -14,10 +14,11 @@ import { sqlGet, sqlRun } from "../support/sql.ts";
 
 // Pause the real native save boundary without replacing its execution or publication protocol.
 const beforeSave = Ref.makeUnsafe<Effect.Effect<void>>(Effect.void);
-const openOwner = nativeClient.makeNativeOwner;
-vi.spyOn(nativeClient, "makeNativeOwner").mockImplementation((...args) =>
-  openOwner(...args).pipe(
-    Effect.map((owner) => ({
+const openOwner = NativeOwner.layer.bind(NativeOwner);
+vi.spyOn(NativeOwner, "layer").mockImplementation((setup, workerFile) =>
+  Layer.effect(
+    NativeOwner,
+    Effect.map(NativeOwner, (owner) => ({
       ...owner,
       execute: (command) =>
         OwnerCommand.guards.save(command)
@@ -27,7 +28,7 @@ vi.spyOn(nativeClient, "makeNativeOwner").mockImplementation((...args) =>
             )
           : owner.execute(command),
     })),
-  ),
+  ).pipe(Layer.provide(openOwner(setup, workerFile))),
 );
 const embedder = Layer.succeed(Embedder, {
   identity: "concurrent-chunks",

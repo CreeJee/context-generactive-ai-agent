@@ -1,9 +1,11 @@
 // Native transport/filesystem/SQLite boundaries; the worker is the sole index and lease owner.
+import { NodeCrypto, NodePath } from "@effect/platform-node";
 import { sha256 } from "../../runtime/synchronous-crypto.ts";
 import {
   Array as EffectArray,
   Effect,
   Iterable as EffectIterable,
+  Layer,
   Option,
   Path,
   Result,
@@ -13,10 +15,8 @@ import { SecureRandom } from "effect/crypto";
 import { SqlClient, type SqlError } from "effect/sql";
 import { StorageRoot } from "../../config/storage-root.ts";
 import { runtimeWorker } from "../../runtime/resources.ts";
-// eslint-disable-next-line anti-slop-effect/no-service-constructor-imports -- Backend composition root acquires its sole owner in the caller Scope.
-import { makeNativeOwner } from "../native-search/client.ts";
-// eslint-disable-next-line anti-slop-effect/no-service-constructor-imports -- This owner-specific gate must be created alongside, not independently from, its worker.
-import { makePublication } from "../native-search/publication.ts";
+import { NativeOwner } from "../native-search/client.ts";
+import { NativePublication } from "../native-search/publication.ts";
 import type { NativeReadInput } from "../native-search/read-protocol.ts";
 import {
   type LexicalDocument,
@@ -26,7 +26,12 @@ import {
 } from "../native-search/worker-protocol.ts";
 import { chunkVectorIdFloor } from "./chunks.ts";
 import { Embedder } from "./embedder.ts";
-import { VectorIndexError, type VectorHit, type VectorIndexApi } from "./vector-index.ts";
+import {
+  VectorIndex,
+  VectorIndexError,
+  type VectorHit,
+  type VectorIndexApi,
+} from "./vector-index.ts";
 
 const Seq = Schema.Struct({ seq: Schema.Finite });
 /**
@@ -37,15 +42,63 @@ export const lexicalLayout = "tantivy-0.27/ngram3+lindera-ko-dic-kiwi-rules/v1";
 /** SQLite binds at most 32,766 variables per statement; id lists are split well below that. */
 const idsPerStatement = 1000;
 
-/** The sole application vector backend, acquired inside the application's Scope. */
-export const makeNativeVectorIndex = Effect.gen(function* () {
-  const paths = yield* Path.Path;
-  const storage = yield* StorageRoot;
+const failure = (operation: VectorIndexError["operation"]) => (cause: unknown) =>
+  VectorIndexError.make({ operation, cause });
+
+/**
+ * The native owner of the active embedder's index: a worker reading the application's database
+ * file, keeping vectors and the lexical index under the storage root.
+ */
+const nativeOwnerLayer = Layer.effectContext(
+  Effect.gen(function* () {
+    const paths = yield* Path.Path;
+    const storage = yield* StorageRoot;
+    const sql = yield* SqlClient.SqlClient;
+    const embedder = yield* Embedder;
+    const crypto = yield* SecureRandom.SecureRandom;
+    const databasePath = yield* sql`PRAGMA database_list`.pipe(
+      Effect.flatMap(
+        Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ file: Schema.String }))),
+      ),
+      Effect.map((rows) => rows[0]?.file ?? ""),
+      Effect.mapError(failure("open")),
+    );
+    const worker = yield* runtimeWorker("native-search-worker").pipe(
+      Effect.mapError(failure("open")),
+    );
+    yield* Effect.when(
+      Effect.fail(
+        VectorIndexError.make({
+          operation: "open",
+          cause: NativeOwnerFailed.make({ reason: "native-incompatible" }),
+        }),
+      ),
+      Effect.succeed(databasePath.length === 0),
+    );
+    const owner = NativeOwner.layer(
+      {
+        kind: "setup",
+        epoch: yield* crypto.uuidV4(),
+        dimensions: embedder.dimensions,
+        bits: 4,
+        cacheDirectory: paths.join(storage.path, "vectors", sha256(embedder.identity).slice(0, 16)),
+        databasePath,
+        lexicalDirectory: paths.join(storage.path, "lexical", sha256(lexicalLayout).slice(0, 16)),
+        recover: true,
+      },
+      worker,
+    );
+    // Built here so a failed open is a VectorIndexError (`open`), which startup explains.
+    return yield* Layer.build(owner).pipe(Effect.mapError(failure("open")));
+  }),
+);
+
+const makeNativeVectorIndex = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const embedder = yield* Embedder;
   const crypto = yield* SecureRandom.SecureRandom;
-  const failure = (operation: VectorIndexError["operation"]) => (cause: unknown) =>
-    VectorIndexError.make({ operation, cause });
+  const owner = yield* NativeOwner;
+  const publication = yield* NativePublication;
   const io = <A>(operation: VectorIndexError["operation"], work: () => A) =>
     Effect.try({ try: work, catch: failure(operation) });
   /** Decodes a `SELECT … AS seq` result at this SQLite boundary. */
@@ -62,39 +115,6 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
     Effect.forEach(EffectIterable.chunksOf(ids, idsPerStatement), query).pipe(
       Effect.map((batches) => batches.flat()),
     );
-  const databasePath = yield* sql`PRAGMA database_list`.pipe(
-    Effect.flatMap(
-      Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ file: Schema.String }))),
-    ),
-    Effect.map((rows) => rows[0]?.file ?? ""),
-    Effect.mapError(failure("open")),
-  );
-  const opened = {
-    worker: yield* runtimeWorker("native-search-worker").pipe(Effect.mapError(failure("open"))),
-    databasePath,
-  };
-  yield* Effect.when(
-    Effect.fail(
-      VectorIndexError.make({
-        operation: "open",
-        cause: NativeOwnerFailed.make({ reason: "native-incompatible" }),
-      }),
-    ),
-    Effect.succeed(opened.databasePath.length === 0),
-  );
-  const owner = yield* makeNativeOwner(
-    {
-      kind: "setup",
-      epoch: yield* crypto.uuidV4(),
-      dimensions: embedder.dimensions,
-      bits: 4,
-      cacheDirectory: paths.join(storage.path, "vectors", sha256(embedder.identity).slice(0, 16)),
-      databasePath: opened.databasePath,
-      lexicalDirectory: paths.join(storage.path, "lexical", sha256(lexicalLayout).slice(0, 16)),
-      recover: true,
-    },
-    opened.worker,
-  ).pipe(Effect.mapError(failure("open")));
   const command = (input: OwnerCommand, operation: VectorIndexError["operation"]) =>
     owner.execute(input).pipe(Effect.mapError(failure(operation)));
   /** The owner's epoch and a fresh request id for one command. */
@@ -298,7 +318,6 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
       ),
     ),
   );
-  const publication = yield* makePublication(owner.epoch);
   const add = Effect.fnUntraced(function* (
     seqs: readonly number[],
     vectors: readonly Float32Array[],
@@ -412,3 +431,12 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
   };
   return api;
 });
+
+/**
+ * The sole application vector backend: VectorIndex over the native owner of the active embedder's
+ * index and that owner's publication gate, all released with the application's Scope.
+ */
+export const nativeVectorIndexLayer = Layer.effect(VectorIndex, makeNativeVectorIndex).pipe(
+  Layer.provide(NativePublication.layer.pipe(Layer.provideMerge(nativeOwnerLayer))),
+  Layer.provide(Layer.merge(NodeCrypto.layer, NodePath.layer)),
+);

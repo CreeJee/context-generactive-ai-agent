@@ -1,9 +1,11 @@
 import {
   Array as EffectArray,
   Cause,
+  Context,
   Data,
   Effect,
   Exit,
+  Layer,
   Option,
   Ref,
   Schema,
@@ -11,7 +13,7 @@ import {
   Semaphore,
 } from "effect";
 import { failureAnnotations, failureTags } from "../../runtime/logged-failures.ts";
-import type { ReadAdmission } from "./client.ts";
+import { NativeOwner, type ReadAdmission } from "./client.ts";
 
 const isTagged = Schema.is(Schema.Struct({ _tag: Schema.String }));
 
@@ -158,3 +160,14 @@ export const makePublication = Effect.fn("NativePublication.make")(function* (ep
 
   return { withMutation, admitSnapshot, read, inspect: Ref.get(state) };
 });
+
+/** The gate of the native owner in context: made with that owner, for its epoch only. */
+export class NativePublication extends Context.Service<
+  NativePublication,
+  Effect.Success<ReturnType<typeof makePublication>>
+>()("memory-agent/memory/native-search/publication/NativePublication") {
+  static readonly layer = Layer.effect(
+    NativePublication,
+    Effect.flatMap(NativeOwner, (owner) => makePublication(owner.epoch)),
+  );
+}

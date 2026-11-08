@@ -1,9 +1,5 @@
-import { NodeCrypto, NodePath } from "@effect/platform-node";
-import { Context, Effect, Layer, Schema } from "effect";
+import { Context, Effect, Schema } from "effect";
 import { NativeOwnerFailed } from "../native-search/worker-protocol.ts";
-// Composition root: the sole backend acquires resources in this Layer's Scope.
-// eslint-disable-next-line anti-slop-effect/no-service-constructor-imports
-import { makeNativeVectorIndex } from "./native-vector-index.ts";
 import type { NativeReadInput, NativeReadOutput } from "../native-search/read-protocol.ts";
 import type { LexicalDocument } from "../native-search/worker-protocol.ts";
 
@@ -84,14 +80,8 @@ export interface VectorHit {
 
 /**
  * turbovec index and read worker for the active embedder. The native owner is the only
- * production backend; `layer` remains the public composition API.
+ * production backend; `nativeVectorIndexLayer` in `native-vector-index.ts` provides it.
  */
-export class VectorIndex extends Context.Service<
-  VectorIndex,
-  Effect.Success<typeof makeNativeVectorIndex>
->()("memory-agent/memory/embedding/vector-index/VectorIndex") {
-  static readonly layer = Layer.effect(
-    VectorIndex,
-    Effect.suspend(() => makeNativeVectorIndex),
-  ).pipe(Layer.provide(Layer.merge(NodeCrypto.layer, NodePath.layer)));
-}
+export class VectorIndex extends Context.Service<VectorIndex, VectorIndexApi>()(
+  "memory-agent/memory/embedding/vector-index/VectorIndex",
+) {}

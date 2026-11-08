@@ -28,9 +28,9 @@ memory-agent의 임베딩 계층이다. 모델 표(`models.ts`)에서 고른 로
 - `EmbeddingWorkerData` / `EmbeddingDevice` / `EmbeddingWorkerFailed` — 워커 시작 데이터 스키마(모델 id, 파일, `output`, `textOnly`, maxTokens, 장치 순서), `cpu`/`webgpu` 장치(`contracts.ts`), `stage: load|run|lost` 실패 타입
 - `embed-worker.ts` — 워커 스레드 진입점. `runtimeWorker("embed-worker")`로 실행되고 `RpcServer.layer(EmbeddingRpcs, { concurrency: 1 })`을 띄운다
 - `ChunkSpan` / `chunkPolicy` / `chunkVectorIdFloor` / `ChunkingFailed` / `chunkText` — UTF-16 offset span 스키마, 512토큰·128 overlap 정책(version 1), chunk vector id 하한 2^52, 청킹 실패, 이분 탐색 청킹
-- `VectorIndex` / `VectorIndex.layer` — 네이티브 벡터 색인 서비스. NodeCrypto·NodePath를 공급하고 `makeNativeVectorIndex`를 Scope에서 획득한다
+- `VectorIndex` — 네이티브 벡터 색인 서비스 태그(`vector-index.ts`). 서비스 형태는 `VectorIndexApi`다
 - `VectorIndexApi` / `VectorBackend` / `VectorHit` / `VectorIndexError` — add/remove/search/save/flushRemovals/publish, lexical 색인 반영 `applyLexical`과 native read API, 검색 결과(seq, cosine score), operation별 오류(`lexical` 포함)
-- `makeNativeVectorIndex` — 네이티브 소유자 워커를 열고 시작 시 제거 저널과 예약 chunk를 정리하는 유일한 프로덕션 백엔드
+- `nativeVectorIndexLayer` — 유일한 프로덕션 백엔드 Layer(`native-vector-index.ts`). 네이티브 소유자(`NativeOwner`)와 그 소유자의 세대 게이트(`NativePublication`)를 Layer로 열어 yield하고, 시작 시 제거 저널과 예약 chunk를 정리한다. NodeCrypto·NodePath를 공급하고 `StorageRoot`·`SqlClient`·`Embedder`를 요구한다
 - `Indexer` / `Indexer.layer` — nodes 테이블과 벡터 색인을 맞춘다. `pending`, `indexBatch`, `indexAll`, `exclusive`, lexical 기록 반영 `lexicalBatch`/`lexicalAll`/`lexicalUpTo`, budget 제한 색인 메서드를 제공한다
 - `IndexingError` — `reason: read-failed | revalidation-failed | mapping-commit-failed`
 - `EmbeddingSetup` / `EmbeddingSetup.layer` / `GpuState` — 설정 화면용 서비스와 `EmbeddingOverview["gpu"]`의 `Data.taggedEnum` 생성자. 앱 API settings group(`apps/agent/app/.server/api/settings.ts`)이 사용한다. layer를 만들 때 lexical 기록 반영(`lexicalAll`, 임베더와 무관)과 로컬 임베더의 벡터 backfill(`indexAll`)을 layer Scope에 fork한다
@@ -66,7 +66,7 @@ memory-agent의 임베딩 계층이다. 모델 표(`models.ts`)에서 고른 로
 
 - worker_threads: `runtimeWorker("embed-worker")` 파일로 `new Worker`를 띄운다(NodeWorker). `worker.ref()`/`unref()`/`terminate()`를 호출한다. `checkGpu`는 별도 워커를 띄웠다가 끝낸다
 - 네이티브 추론: `@huggingface/transformers`(onnxruntime-node)로 tokenizer와 모델을 로드한다. `env.cacheDir`를 설정하고 WebGPU 또는 CPU 장치를 쓴다. 모델 파일은 `<storage>/models` 캐시에 둔다. 워커가 닫힐 때 모델을 dispose하고, 실패하면 `embedding_model_dispose_failed`로 로그만 남긴다
-- 네이티브 벡터 소유자: `runtimeWorker("native-search-worker")`로 `makeNativeOwner` 워커를 연다. lease를 잡고 `<storage>/vectors/<hash>` 디렉터리에 색인을 저장한다(save/remove/add 명령)
+- 네이티브 벡터 소유자: `runtimeWorker("native-search-worker")` 파일로 `NativeOwner.layer`를 연다. lease를 잡고 `<storage>/vectors/<hash>` 디렉터리에 색인을 저장한다(save/remove/add 명령)
 - SQLite 읽기·쓰기 대상 테이블: `nodes`, `node_vectors`, `node_vector_chunks`, `memory_graph_vector_removals`, `memory_chunk_vector_removals`, `lexical_changes`, `lexical_index`. `PRAGMA database_list`를 조회하고 `sql.withTransaction`을 쓴다
 - AppEvents: 색인이 하나 이상 커밋되면 `publishGlobal("embedding")`과 `publishGlobal("imports")`를 발행한다. `EmbeddingSetup`은 `ModelDownloads`가 바뀔 때마다 `publishGlobal("embedding")`을 발행한다
 - 난수: `uuidV4`로 owner epoch과 명령별 requestId를 만든다

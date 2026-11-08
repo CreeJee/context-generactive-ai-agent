@@ -5,6 +5,7 @@ import { expect } from "vite-plus/test";
 import { StorageRoot } from "../../src/config/storage-root.ts";
 import { Database } from "../../src/db/database.ts";
 import { EmbedderRuntime, Embedder } from "../../src/memory/embedding/embedder.ts";
+import { nativeVectorIndexLayer } from "../../src/memory/embedding/native-vector-index.ts";
 import { VectorIndex } from "../../src/memory/embedding/vector-index.ts";
 
 layer(NodeServices.layer)((it) => {
@@ -25,7 +26,7 @@ layer(NodeServices.layer)((it) => {
             embed: () => Effect.succeed([]),
           }),
         );
-        const services = yield* Layer.build(VectorIndex.layer.pipe(Layer.provide(foundation)));
+        const services = yield* Layer.build(nativeVectorIndexLayer.pipe(Layer.provide(foundation)));
         yield* Effect.provideContext(
           Effect.gen(function* () {
             const index = yield* VectorIndex;

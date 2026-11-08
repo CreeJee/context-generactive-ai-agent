@@ -65,7 +65,7 @@ import { ModelDownloads } from "./memory/embedding/downloads.ts";
 import { Reranker } from "./memory/rerank/reranker.ts";
 import { Indexer } from "./memory/embedding/indexer.ts";
 import { EmbeddingSetup } from "./memory/embedding/setup.ts";
-import { VectorIndex } from "./memory/embedding/vector-index.ts";
+import { nativeVectorIndexLayer } from "./memory/embedding/native-vector-index.ts";
 import { Graph } from "./memory/graph.ts";
 import { Interpreter } from "./memory/interpret.ts";
 import { Interpretations } from "./memory/interpretations.ts";
@@ -319,7 +319,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     KnowledgePromotions.layer,
     DrawingPreviews.layer,
     Graph.layer,
-    VectorIndex.layer,
+    nativeVectorIndexLayer,
     ChatState.layer,
     RunStore.layer,
     // Above the stores: the webhook URL is read from the keychain right before each send.

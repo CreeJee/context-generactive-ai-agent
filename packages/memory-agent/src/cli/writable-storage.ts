@@ -22,7 +22,7 @@ import { AppEvents } from "../events/app-events.ts";
 import { Projects } from "../projects/projects.ts";
 import { Embedder } from "../memory/embedding/embedder.ts";
 import { ModelDownloads } from "../memory/embedding/downloads.ts";
-import { VectorIndex } from "../memory/embedding/vector-index.ts";
+import { nativeVectorIndexLayer } from "../memory/embedding/native-vector-index.ts";
 import { Indexer } from "../memory/embedding/indexer.ts";
 import { Importer } from "../imports/importer.ts";
 
@@ -64,7 +64,7 @@ export function writableMemoryLayer(options: {
         options.embedder ?? Embedder.local,
       ).pipe(Layer.provideMerge(config));
       const indexing = Indexer.layer.pipe(
-        Layer.provideMerge(VectorIndex.layer),
+        Layer.provideMerge(nativeVectorIndexLayer),
         Layer.provideMerge(stores),
       );
       return Importer.layer(false, options.importsHome).pipe(Layer.provideMerge(indexing));

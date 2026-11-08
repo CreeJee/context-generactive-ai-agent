@@ -3069,7 +3069,7 @@
   - 테스트 fake의 호출 수 세기
 - 미룬 것:
   - 워크플로 엔진의 `executions` 표. 값이 effect/workflow의 바꿔 쓰는 `WorkflowInstance`를 따라가므로 엔진을 다시 설계할 때 본다. 등록 표만 `Ref`로 옮겼다. 다시 실행할 때 새 instance를 넣고 interrupt 표시를 옮기는 일은 yield 없이 한 번에 일어나야 한다. 표만 `Ref`로 바꾸고 기록을 바꿀 수 없게 하면 그 사이에 interrupt가 끼어 표시를 잃을 수 있다.
-  - native-search의 eslint 끄기 주석(`native-vector-index.ts`, `vector-index.ts`). 네이티브 읽기 계층을 다시 설계할 때 본다. 다른 oxlint 끄기 주석은 코드를 고쳐 지웠다(`3d0f4baf`).
+  - native-search의 eslint 끄기 주석(`native-vector-index.ts`, `vector-index.ts`). 네이티브 읽기 계층을 다시 설계할 때 본다. 다른 oxlint 끄기 주석은 코드를 고쳐 지웠다(`3d0f4baf`). 이 주석 3개도 2026-11-09에 코드를 고쳐 지웠다(아래 "native 소유자와 세대 게이트는 Layer에서 받는다").
 - 이어서 한 것(`77d85a4d`부터 `27ea313e`까지):
   - 하위 에이전트의 heartbeat가 처음 시각을 계속 적던 문제를 고쳤다(`77d85a4d`). `keepAlive`가 UPDATE 문을 한 번 만들고 `Effect.forever`로 되풀이해서, 1분 넘게 도는 시도가 `HeartbeatLost`로 끝났다. 이제 매번 시계를 읽는다. 이 문제는 main의 `91b8f349`에서 들어왔고 릴리즈에는 없다.
   - 시각은 `Clock.currentTimeMillis`와 `DateTime.now`로 읽는다. memory-agent에는 `currentTimeMillisUnsafe`와 `DateTime.nowUnsafe`가 남지 않았다. 워크플로의 ledger 사건과 Plan을 닫는 도우미는 시각을 인자로 받는다. 영속 큐의 `settle`은 시각을 받아 문장을 만든다.
@@ -4456,3 +4456,12 @@
   - 토큰 추정은 ASCII 밖 글자를 배열로 세지 않는다(`02ee5222`). 2,700만 자 세션 한 번에 71MB, 155ms가 39MB, 44ms가 됐다.
   - 노드 저장은 `RETURNING seq`만 받는다(`f8ad45f5`). 78만 자 노드 한 번에 1.82MB가 0.01MB가 됐다.
   - tool_call 노드에 tool call id 부분 인덱스를 만든다(`38021194`). 조회가 18~64ms에서 0.04ms가 됐다.
+
+## native 소유자와 세대 게이트는 Layer에서 받는다 (2026-11-09)
+
+- 계기: `native-vector-index.ts`와 `vector-index.ts`에 `anti-slop-effect/no-service-constructor-imports` 끄기 주석 3개가 남아 있었다. 벡터 색인이 `makeNativeOwner`와 `makePublication`을 직접 불렀다. `VectorIndex.layer`는 `makeNativeVectorIndex`를 import해 두 모듈이 서로 import했다.
+- 결정: 벡터 색인은 `NativeOwner`와 `NativePublication`을 yield한다.
+  - 소유자 Layer는 `native-vector-index.ts` 안에서 DB 파일 경로·worker 파일·epoch·색인 폴더를 정하고 `NativeOwner.layer`를 연다. 여는 실패는 전처럼 `VectorIndexError`(`open`)로 바꾼다. 그래서 lease를 다른 프로세스가 쥐었을 때의 시작 안내가 그대로다.
+  - 세대 게이트는 `NativePublication.layer`가 context의 소유자 epoch으로 만든다. 게이트는 소유자 하나에 하나씩, 그 소유자와 함께 생기고 먼저 닫힌다.
+  - VectorIndex Layer는 구현 쪽의 `nativeVectorIndexLayer`다. `VectorIndex`는 `VectorIndexApi` 태그만 남아 두 모듈의 순환 import가 없어졌다.
+- 테스트: `embedding-concurrency.test.ts`는 모듈 export 대신 `NativeOwner.layer`를 spy해 소유자의 save를 멈춘다.

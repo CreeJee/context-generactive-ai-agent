@@ -14,19 +14,19 @@
 
 주 프로세스:
 
-| 레이어                               | 근거                                                                     | 비고                                                            |
-| ------------------------------------ | ------------------------------------------------------------------------ | --------------------------------------------------------------- |
-| `nodePlatformLayer`                  | 파일시스템·경로·crypto·난수                                              | 터미널은 쓰지 않는다                                            |
-| `StorageRoot.layer(storage)`         | `importer.ts:200` `yield* StorageRoot`                                   |                                                                 |
-| `Database.layer(<storage>/agent.db)` | `layers.ts:220`                                                          | **마이그레이션을 여기서 수행**한다                              |
-| `GlobalConfig.layer`                 | `importer.ts:202`, `pass.ts:517`                                         | `importsInterpret`를 읽는 주체                                  |
-| `AppEvents.layer`                    | `importer.ts:203`, `indexer.ts`                                          | 발행만 하고 구독자는 없다                                       |
-| `Projects.layer`                     | `importer.ts:205`, 패스가 프로젝트를 등록                                |                                                                 |
-| `Embedder.local` (또는 `localFile`)  | `indexer.ts` `yield* Embedder`                                           | 모델 파일 필요                                                  |
-| `ModelDownloads.layer`               | `layers.ts:223`, 모델 내려받기 보고                                      | 색인 경로에서만                                                 |
-| `VectorIndex.layer`                  | `vector-index.ts:93` → `makeNativeVectorIndex`                           | `Path`·`StorageRoot`·`SqlClient`·`Embedder`·`SecureRandom` 요구 |
-| `Indexer.layer`                      | `indexer.ts:342`, 요구: `SqlClient`·`AppEvents`·`Embedder`·`VectorIndex` |                                                                 |
-| `Importer.layer(false, home)`        | `importer.ts:486`                                                        | **watching=false**: CLI는 감시 루프를 돌리지 않는다             |
+| 레이어                               | 근거                                                                     | 비고                                                |
+| ------------------------------------ | ------------------------------------------------------------------------ | --------------------------------------------------- |
+| `nodePlatformLayer`                  | 파일시스템·경로·crypto·난수                                              | 터미널은 쓰지 않는다                                |
+| `StorageRoot.layer(storage)`         | `importer.ts:200` `yield* StorageRoot`                                   |                                                     |
+| `Database.layer(<storage>/agent.db)` | `layers.ts:220`                                                          | **마이그레이션을 여기서 수행**한다                  |
+| `GlobalConfig.layer`                 | `importer.ts:202`, `pass.ts:517`                                         | `importsInterpret`를 읽는 주체                      |
+| `AppEvents.layer`                    | `importer.ts:203`, `indexer.ts`                                          | 발행만 하고 구독자는 없다                           |
+| `Projects.layer`                     | `importer.ts:205`, 패스가 프로젝트를 등록                                |                                                     |
+| `Embedder.local` (또는 `localFile`)  | `indexer.ts` `yield* Embedder`                                           | 모델 파일 필요                                      |
+| `ModelDownloads.layer`               | `layers.ts:223`, 모델 내려받기 보고                                      | 색인 경로에서만                                     |
+| `nativeVectorIndexLayer`             | `native-vector-index.ts:438` → `NativeOwner`·`NativePublication`         | `StorageRoot`·`SqlClient`·`Embedder` 요구           |
+| `Indexer.layer`                      | `indexer.ts:342`, 요구: `SqlClient`·`AppEvents`·`Embedder`·`VectorIndex` |                                                     |
+| `Importer.layer(false, home)`        | `importer.ts:486`                                                        | **watching=false**: CLI는 감시 루프를 돌리지 않는다 |
 
 워커 스레드(`imports/worker.ts`)는 자기 레이어를 따로 세운다: `Database`·`GlobalConfig`·
 `StorageRoot`·`Projects`·`Sessions`·`BulkNodes`·`SecretRedactor`·`Checkouts`·`TranscriptPass`·
