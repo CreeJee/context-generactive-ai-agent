@@ -256,6 +256,9 @@ const make = Effect.fn("Database.make")(function* (
           // effect before the first table, and before WAL is set; an existing file keeps its mode.
           sqlite.exec("PRAGMA auto_vacuum = INCREMENTAL");
           sqlite.exec("PRAGMA journal_mode = WAL");
+          // In WAL, NORMAL syncs at checkpoints instead of every commit: a process crash keeps every
+          // commit, a power loss may drop the last few. FULL fsyncs each streamed run log event.
+          sqlite.exec("PRAGMA synchronous = NORMAL");
           sqlite.exec("PRAGMA foreign_keys = ON");
           // For the migrations below, before anything serves; the client then waits out locks
           // between attempts instead (`sqlClientOver`).
