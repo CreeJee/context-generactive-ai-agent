@@ -165,6 +165,11 @@ export const KanbanBoardView = Schema.Struct({
   schedule: Schema.NullOr(KanbanScheduleView),
   /** How the board's loop stands; a stopped one waits for `restartLoop`. */
   loop: LoopHealth,
+  /**
+   * The board stopped waking its planner: it woke it several times in a row and no new outcome
+   * was met. A user turn in the conversation wakes it again.
+   */
+  plannerStalled: Schema.Boolean,
 });
 export type KanbanBoardView = typeof KanbanBoardView.Type;
 

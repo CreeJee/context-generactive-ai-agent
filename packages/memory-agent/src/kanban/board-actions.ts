@@ -25,7 +25,7 @@ import {
 import { CardStatus, type BoardAuthor } from "../workflow/card.ts";
 import { Workflows, type PlanStep } from "../workflow/workflow.ts";
 import { boardOps } from "./board-ops.ts";
-import { CardAttempts, type KanbanGoal } from "./card-attempts.ts";
+import { CardAttempts, plannerStalled, type KanbanGoal } from "./card-attempts.ts";
 import { cardQueueName } from "./card-queue.ts";
 import { CardHoldReason } from "./failures.ts";
 import {
@@ -741,6 +741,7 @@ const make = Effect.gen(function* () {
         cards,
         schedule: yield* scheduleView(goal.value),
         loop: yield* health.get(goalInstanceId),
+        plannerStalled: plannerStalled(goal.value.planner),
       });
     }),
 

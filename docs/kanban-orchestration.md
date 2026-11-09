@@ -120,6 +120,7 @@ GoalChanged(v3 → v4)
 → 배정 보류 해제
 ```
 
+- 루프 자신의 이유(`outcomes_open`, `replan_requested`, `goal_unverified`, `upstream_regressed`)로 계획자를 깨운 라운드를, 새로 met된 outcome이 생길 때까지 센다(`kanban_goals.planner_rounds`). 세 라운드가 넘으면 이 이유들로는 깨우지 않고 보드에 `plannerStalled`를 보인다. 사용자가 대화에 말하면(`KanbanOrchestrator.resumePlanner`) 다시 센다. decisions.md "outcome 장부와 이어 쓰는 Plan"의 진척 없음 한도.
 - 보류하는 카드는 Goal 차이로 정한다(2026-11-09, decisions.md "outcome 장부와 이어 쓰는 Plan"). 문장(statement)·제약·non-goal이 바뀌었거나 이전 Goal을 읽지 못하면 끝나지 않은 카드 모두를, 아니면 문장이 바뀌거나 빠진 outcome을 맡은 끝나지 않은 카드만 보류한다. 나머지 카드는 배정·통합이 계속된다. 새 outcome은 카드를 보류하지 않고, 맡은 카드가 없으므로 계획자가 카드를 더한다. 보류할 카드가 없으면 새 Goal 버전만 기록한다. merge와 outcome 판정은 분류가 끝날 때까지 기다린다.
 
 | 판정            | 처리                                                                                                     |

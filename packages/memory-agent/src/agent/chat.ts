@@ -1620,6 +1620,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             workTrace.resumeParentNotifications(sessionId),
             Effect.succeed(turn !== null),
           );
+          // The user's word is the direction a stalled board's planner waited for.
+          yield* Effect.when(
+            kanbanOrchestrator.resumePlanner(sessionId),
+            Effect.succeed(turn !== null),
+          );
           yield* events.publishSession(sessionId, "run-state");
           yield* Option.match(Option.fromNullishOr(queuedId), {
             onNone: () => Effect.void,

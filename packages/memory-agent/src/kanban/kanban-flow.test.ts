@@ -901,4 +901,55 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
       }),
     gitTimeout,
   );
+
+  it.effect(
+    "stops waking the planner after three rounds without a newly met outcome until the user speaks",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* kanbanFixture;
+        const run = yield* openKanbanOwner(fixture, yield* Effect.scope, {
+          agent: () => Effect.succeed(finished),
+          verifyOutcome: () =>
+            Effect.succeed(
+              CardVerdict.Failed({
+                failure: VerdictFailure.cases.Rejected.make({ note: "search is missing" }),
+              }),
+            ),
+        });
+        yield* run(
+          Effect.scoped(
+            Effect.gen(function* () {
+              const board = yield* executingPlan(fixture, [card("a")]);
+              yield* (yield* Projects).setPermissionMode(board.projectId, "full");
+              const orchestrator = yield* KanbanOrchestrator;
+              const heard = yield* Queue.unbounded<string>();
+              yield* orchestrator.attention.pipe(
+                Stream.filter((attention) => attention.reasons.includes("outcomes_open")),
+                Stream.runForEach((attention) => Queue.offer(heard, attention.sessionId)),
+                Effect.forkScoped,
+              );
+              yield* orchestrator.start(board.sessionId, "permission");
+              // Each round the planner adds a card for the outcome, which is judged not met again.
+              yield* Effect.forEach(
+                ["fix1", "fix2", "fix3"],
+                (id) => Effect.andThen(Queue.take(heard), plannerAdds(board.sessionId, id)),
+                { discard: true },
+              );
+              const stalled = Effect.map(
+                (yield* KanbanBoardActions).view(board.sessionId),
+                Option.exists((view) => view.plannerStalled),
+              );
+              yield* eventually(stalled, (found) => found);
+              expect(yield* Queue.size(heard)).toBe(0);
+
+              // The user's turn is the direction it waited for: the planner is woken again.
+              yield* orchestrator.resumePlanner(board.sessionId);
+              expect(yield* Queue.take(heard)).toBe(board.sessionId);
+              expect(yield* stalled).toBe(false);
+            }),
+          ),
+        );
+      }),
+    gitTimeout,
+  );
 });

@@ -2812,6 +2812,12 @@ export const migrations: readonly string[] = [
   ALTER TABLE kanban_goals ADD COLUMN card_approval TEXT NOT NULL DEFAULT 'user'
     CHECK (card_approval IN ('user', 'permission'));
   `,
+  `
+  -- How many times in a row the board woke its planner for work without a newly met outcome,
+  -- and how many outcomes were met when it last counted.
+  ALTER TABLE kanban_goals ADD COLUMN planner_rounds INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE kanban_goals ADD COLUMN planner_met INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

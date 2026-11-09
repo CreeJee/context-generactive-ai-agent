@@ -44,6 +44,7 @@ import {
   type CardAttemptOutcome,
   type CardApprovalPolicy,
   type CardLadder,
+  plannerStalled,
   type KanbanGoal,
 } from "./card-attempts.ts";
 import {
@@ -101,6 +102,17 @@ export const KanbanAttentionReason = Schema.Literals([
   "upstream_regressed",
 ]);
 export type KanbanAttentionReason = typeof KanbanAttentionReason.Type;
+
+/**
+ * The reasons the loop's own work raises; waking the planner for one is a planner round. A user's
+ * change and a changed Goal are the user's, and file overlaps are scheduling.
+ */
+const plannerRoundReasons: readonly KanbanAttentionReason[] = [
+  "replan_requested",
+  "outcomes_open",
+  "goal_unverified",
+  "upstream_regressed",
+];
 
 export interface KanbanAttention {
   readonly sessionId: string;
@@ -1185,6 +1197,9 @@ const make = (options: KanbanOrchestratorOptions) =>
         ),
       } as const satisfies Record<KanbanAttentionReason, boolean>;
       const reasons = KanbanAttentionReason.literals.filter((reason) => raised[reason]);
+      const met = Arr.countBy(standings, (standing) => OutcomeStatus.guards.Met(standing.status));
+      // A newly met outcome is progress: the planner rounds count again from zero.
+      const counted = met > goal.planner.met ? { rounds: 0, met } : goal.planner;
 
       // The model hears about a situation once; a later look finding the same one stays quiet.
       const situation = [
@@ -1198,12 +1213,28 @@ const make = (options: KanbanOrchestratorOptions) =>
         ...known,
         [goalInstanceId]: situation,
       }));
-      if (reasons.length > 0 && previous[goalInstanceId] !== situation)
+      const announcing = reasons.length > 0 && previous[goalInstanceId] !== situation;
+      const round = announcing && reasons.some((reason) => plannerRoundReasons.includes(reason));
+      const planner = round ? { rounds: counted.rounds + 1, met } : counted;
+      yield* Effect.when(
+        attempts.setPlannerRounds(goalInstanceId, planner),
+        Effect.succeed(planner.rounds !== goal.planner.rounds || planner.met !== goal.planner.met),
+      );
+      // Past the limit the loop's own reasons wait for the user; theirs still wake the planner.
+      const told = plannerStalled(planner)
+        ? reasons.filter((reason) => !plannerRoundReasons.includes(reason))
+        : reasons;
+      if (announcing && told.length > 0)
         yield* PubSub.publish(attention, {
           sessionId: goal.sessionId,
           goalInstanceId,
-          reasons,
+          reasons: told,
         });
+      // The board shows that it stopped waking the planner.
+      yield* Effect.when(
+        events.publishSession(goal.sessionId, "run-state"),
+        Effect.succeed(plannerStalled(planner) !== plannerStalled(goal.planner)),
+      );
       return executing || pending.some((attempt) => attempt.outcome === null)
         ? ("running" as const)
         : ("idle" as const);
@@ -1351,6 +1382,21 @@ const make = (options: KanbanOrchestratorOptions) =>
 
       /** Wakes a board's loop now, after a change the loop should see. */
       poke: (goalInstanceId: string) => PubSub.publish(pokes, goalInstanceId),
+
+      /**
+       * The user spoke to the planner: the board counts its planner rounds again from zero and
+       * tells the planner what it held back, if the board had stopped waking it.
+       */
+      resumePlanner: Effect.fn("KanbanOrchestrator.resumePlanner")(function* (sessionId: string) {
+        const goalInstanceId = yield* workflows.goalInstanceId(sessionId);
+        if (goalInstanceId === null) return;
+        const found = yield* attempts.goal(goalInstanceId);
+        if (Option.isNone(found) || !found.value.active || found.value.planner.rounds === 0) return;
+        yield* attempts.setPlannerRounds(goalInstanceId, { ...found.value.planner, rounds: 0 });
+        yield* Ref.update(announced, (known) => Struct.omit(known, [goalInstanceId]));
+        yield* events.publishSession(sessionId, "run-state");
+        yield* PubSub.publish(pokes, goalInstanceId);
+      }),
 
       /** Why boards need the orchestrator model, as their loops find out. */
       attention: Stream.fromPubSub(attention),

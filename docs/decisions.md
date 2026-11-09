@@ -4613,6 +4613,10 @@
   - `permission` 보드의 look이 프로젝트 권한 모드를 본다. full이면 승인한다. ask면 사용자를 기다린다. auto면 `CardApprovalReviewer`가 대기 카드를 한 번에 검토한다(계획자 모델의 `PermissionClassifier`, 입력은 Goal의 문장·제약·non-goal과 카드). 허용하지 않으면 그 판정(`review`)을 카드에 남기고 사용자를 기다린다. 검토한 카드는 다시 검토하지 않는다. 검토는 모델 호출이라 루프 옆 fiber에서 돈다.
   - 사용자는 카드 peek의 "승인"(`BoardIntent.Approve`)으로 승인하고, 거절은 카드 취소다. 모델은 `read_kanban_board`의 `awaitingApproval`로 본다.
   - 기존 카드를 대신하는 카드(split·merge·충돌 해결 카드)와 사용자가 더한 카드는 기다리지 않는다. 결정은 "새 카드"만 적었고, 대신하는 카드는 이미 승인된 일의 범위를 나눈 것이라 승인 대상에서 뺐다.
+- 구현(3 진척 없음 한도): 보드가 루프 자신의 이유(`outcomes_open`, `replan_requested`, `goal_unverified`, `upstream_regressed`)로 계획자를 깨울 때마다 한 라운드로 센다. 새로 met된 outcome이 생기면 0부터 다시 센다. 세 라운드 동안 새로 met된 outcome이 없으면 이 이유들로는 계획자를 더 깨우지 않는다. 그리고 보드에 "자동 계획 멈춤"을 보인다. 이미 맡은 카드는 계속 돈다.
+  - 사용자의 변경 요청과 Goal 변경은 사용자가 만든 이유라 멈춘 뒤에도 계획자를 깨운다. 승인 대기 카드가 outcome을 맡고 있으면 그 outcome은 열린 것이 아니므로 기다리는 동안은 세지 않는다.
+  - 사용자가 대화에 말하면(`resumePlanner`) 0부터 다시 세고 보류했던 이유를 계획자에게 알린다. 라운드 수는 `kanban_goals.planner_rounds`·`planner_met`에 남아 재시작 뒤에도 이어진다.
+  - 예전 채팅 경로의 한도는 두 턴이었다. 보드의 한 라운드는 카드를 더하고 그 카드가 끝나 판정까지 받는 긴 주기라서 세 번으로 정했다.
 
 ## SQLite 연결은 `synchronous = NORMAL`로 쓴다 (2026-11-09)
 

@@ -57,8 +57,27 @@ export interface KanbanGoal {
   readonly hold: AssignmentHold | null;
   /** Who approves the cards the planner adds while the board runs. */
   readonly cardApproval: CardApprovalPolicy;
+  readonly planner: PlannerRounds;
   readonly active: boolean;
 }
+
+/**
+ * How many times in a row the board woke its planner for work (an open outcome, a replan, a
+ * failed Goal check, a regression) while no new outcome was met, and how many were met then.
+ */
+export interface PlannerRounds {
+  readonly rounds: number;
+  readonly met: number;
+}
+
+/** How many times in a row the board wakes its planner without a newly met outcome. */
+export const maxPlannerRounds = 3;
+
+/**
+ * Whether the board stopped waking its planner: it woke it `maxPlannerRounds` times and no new
+ * outcome was met. A user turn in the conversation counts again from zero.
+ */
+export const plannerStalled = (planner: PlannerRounds) => planner.rounds > maxPlannerRounds;
 
 export interface CardAttemptKey {
   readonly goalInstanceId: string;
@@ -128,6 +147,8 @@ const GoalRow = Schema.Struct({
   goal_version: Schema.Int,
   hold_json: Schema.NullOr(Schema.fromJsonString(AssignmentHold)),
   card_approval: CardApprovalPolicy,
+  planner_rounds: Schema.Int,
+  planner_met: Schema.Int,
   status: Schema.Literals(["active", "stopped"]),
 });
 const AttemptRow = Schema.Struct({
@@ -179,6 +200,7 @@ const toGoal = (row: typeof GoalRow.Type): KanbanGoal => ({
   goalVersion: row.goal_version,
   hold: row.hold_json,
   cardApproval: row.card_approval,
+  planner: { rounds: row.planner_rounds, met: row.planner_met },
   active: row.status === "active",
 });
 const toAttempt = (row: typeof AttemptRow.Type): CardAttempt => ({
@@ -284,7 +306,7 @@ const make = Effect.gen(function* () {
      * but takes the approval policy of the latest start.
      */
     registerGoal: Effect.fn("CardAttempts.registerGoal")(function* (
-      goal: Omit<KanbanGoal, "hold" | "active" | "sessionId" | "projectId">,
+      goal: Omit<KanbanGoal, "hold" | "planner" | "active" | "sessionId" | "projectId">,
     ) {
       const at = yield* now;
       yield* sql`INSERT INTO kanban_goals
@@ -318,6 +340,14 @@ const make = Effect.gen(function* () {
         Effect.mapError(failed("goal")),
       );
     }),
+
+    /** Records the planner rounds counted since the board's last newly met outcome. */
+    setPlannerRounds: (goalInstanceId: string, planner: PlannerRounds) =>
+      Effect.flatMap(now, (at) =>
+        sql`UPDATE kanban_goals SET planner_rounds = ${planner.rounds},
+            planner_met = ${planner.met}, updated_at = ${at}
+            WHERE goal_instance_id = ${goalInstanceId}`.pipe(Effect.mapError(failed("goal"))),
+      ),
 
     /** The next attempt number of a card, from what is stored. */
     nextAttemptNo: (goalInstanceId: string, cardId: string) =>

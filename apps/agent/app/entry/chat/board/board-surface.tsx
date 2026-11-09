@@ -63,6 +63,10 @@ export interface SurfaceBoard {
 export const kanbanSwitchHint =
   "카드마다 에이전트를 따로 두고 보드가 배정·검증·통합해요. 이 대화의 모델은 카드를 직접 실행하지 않아요.";
 
+/** Why the board stopped waking its planner, for the badge's tooltip. */
+export const plannerStalledHint =
+  "계획자가 연속으로 카드를 고쳤지만 새로 충족된 outcome이 없어 자동 계획을 멈췄어요. 이미 맡은 카드는 계속 돌아요. 대화에서 방향을 알려 주면 다시 계획해요.";
+
 export const errorText = (code: ApiErrorCode) => {
   switch (code) {
     case "plan_version_conflict":

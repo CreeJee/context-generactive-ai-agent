@@ -48,6 +48,7 @@ import {
   BoardSurface,
   editErrorText,
   kanbanSwitchHint,
+  plannerStalledHint,
   type ActiveKanban,
   type BoardPlan,
 } from "./board/board-surface";
@@ -122,6 +123,11 @@ export function WorkflowBoard({
         {loop !== null ? (
           <>
             <Badge variant="secondary">칸반 실행 중</Badge>
+            {loop.plannerStalled && (
+              <Badge variant="outline" title={plannerStalledHint}>
+                자동 계획 멈춤
+              </Badge>
+            )}
             {loop.loop._tag !== "Healthy" && (
               <LoopHealthStatus
                 label="보드 루프"
@@ -276,6 +282,11 @@ function BoardSheet({
           <SheetDescription>
             <span className="flex flex-wrap items-center gap-2">
               {loop !== null && <Badge variant="secondary">칸반 실행 중</Badge>}
+              {loop !== null && loop.plannerStalled && (
+                <Badge variant="outline" title={plannerStalledHint}>
+                  자동 계획 멈춤
+                </Badge>
+              )}
               {loop !== null && loop.loop._tag !== "Healthy" && (
                 <LoopHealthStatus
                   label="보드 루프"

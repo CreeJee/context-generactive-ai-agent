@@ -31,7 +31,13 @@ import { sessionQueries } from "../../queries/session";
 import { LoopHealthStatus } from "../../shared/loop-health";
 import { planStatusLabels } from "../workflow-panel";
 import { boardColumns, type BoardCardRef } from "./board-moves";
-import { BoardSurface, editErrorText, kanbanSwitchHint, type SurfaceBoard } from "./board-surface";
+import {
+  BoardSurface,
+  editErrorText,
+  kanbanSwitchHint,
+  plannerStalledHint,
+  type SurfaceBoard,
+} from "./board-surface";
 import { BoardShortcuts } from "./kanban-board";
 import { Array as Arr } from "effect";
 
@@ -365,6 +371,11 @@ function ConversationRow({
         <Badge variant="secondary">칸반 실행 중</Badge>
       ) : (
         <Badge variant="outline">{planStatusLabels[row.plan.status]}</Badge>
+      )}
+      {loop !== null && loop.plannerStalled && (
+        <Badge variant="outline" title={plannerStalledHint}>
+          자동 계획 멈춤
+        </Badge>
       )}
       {loop !== null && loop.loop._tag !== "Healthy" && (
         <LoopHealthStatus
