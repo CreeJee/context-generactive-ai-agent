@@ -39,6 +39,7 @@
 
 ## Invariants
 
+- 세션의 지금 Goal이 칸반 보드로 실행 중이면 그 세션의 채팅 run은 계획자 모델(`ActiveProvider.selectedFor("planner")`)로 돈다. 상태 응답과 `/compact`의 context window도 같은 모델로 잰다. 보드가 없으면 선택된 모델이다.
 - `promptLayout`는 항상 standing → role → context 순서를 지킨다. 지침은 순서가 의미에 영향을 주므로 절대 정렬하지 않는다. 호출자가 각 블록을 명시적으로 분류한다.
 - `ApiUsage.record`는 보조 응답을 포함해 실제 프로바이더 응답마다 한 번만 호출한다. rootSessionId·purpose·model이 비면 `attribution-missing`으로 거부한다.
 - API usage 카운트의 NULL은 0이 아니라 '모름'이다. `byRootSession` 합계는 한 행이라도 값이 없으면 null을 돌려준다. SUM만 쓰면 모르는 행이 빠지기 때문이다.

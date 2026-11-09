@@ -12,7 +12,7 @@
 - `ImageSettings` — 이미지 생성 켜기/끄기와 공급자 간 이미지 생성 동의 모드(disabled/ask/always)를 고르는 페이지
 - `ImportSettings` — Claude Code·Codex CLI 대화 가져오기 페이지. 실행·계속 가져오기·감시 재시작·해석(`ImportCommand.run/enable/disable/restart_watch/interpret`)을 다루고 진행 상황, 소스별 통계, 등록하지 못한 폴더, 실패 기록을 보여 준다
 - `ImprovementSettings` — 프로젝트 개선 스캔 페이지. `/api/settings/improvements`로 시작·중지 명령을 보내고, 저장소별 `ImprovementReport`와 작업 명세 markdown을 보여 주며 복사할 수 있다
-- `KanbanSettings` — `{ project: Project | null }`. 칸반 동시 실행 카드 수(`ConcurrencyField`), 프로젝트 순서(`ProjectOrderField`), 보호 브랜치(Goal 병합 위치)를 정하는 페이지
+- `KanbanSettings` — `{ project: Project | null }`. 칸반 동시 실행 카드 수(`ConcurrencyField`), 프로젝트 순서(`ProjectOrderField`), 계획자·실행자·검증자 모델(`RoleModelField`, 비우면 선택된 모델), 보호 브랜치(Goal 병합 위치)를 정하는 페이지
 - `McpSettings` — `{ project: Project | null }`. 프로젝트의 MCP 서버 설정 페이지. 프로젝트가 없으면 `NoProject`를 보여 준다
 - `RecallSettings` — 대화가 자기 프로젝트 밖에서 닿을 수 있는 기억 범위를 정하는 페이지(`useRecallSettingsQuery`/`useRecallSettingsMutation`)
 - `SkillSettings` — `{ project: Project | null }`. 프로젝트 스킬 설정 페이지

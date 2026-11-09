@@ -72,6 +72,7 @@ import type {
   CrossProviderMediaConsentSettings,
   McpServerState as McpServerStateCase,
   McpServerView,
+  AgentRole,
   ModelSelection,
   PermissionMode,
   Project,
@@ -228,6 +229,7 @@ export type {
   WorkflowAction,
   WorkflowPhase,
   WorkflowState,
+  AgentRole,
 };
 
 /**
@@ -776,6 +778,13 @@ export const api = {
     appCall((client) =>
       client.settings.setKanban({
         payload: KanbanSettingsCommand.SetConcurrency({ concurrency }),
+      }),
+    ),
+  /** The role runs on this model from its next run; null goes back to the selected model. */
+  setRoleModel: (role: AgentRole, selection: ModelSelection | null) =>
+    appCall((client) =>
+      client.settings.setKanban({
+        payload: KanbanSettingsCommand.SetRoleModel({ role, selection }),
       }),
     ),
   /** Puts the project in front of `before` (or last) in the scheduler's order of projects. */

@@ -8,7 +8,7 @@ memory-agent의 사용자 전역 설정 계층이다. `<storage>/config.json`(`G
 
 - `GlobalConfig` — `<storage>/config.json`을 읽고(`read`) 부분 병합해 원자적으로 쓰는(`update`) Effect 서비스. `GlobalConfig.layer`는 NodeFileSystem·NodePath를 내장하고 `StorageRoot`를 요구한다
 - `GlobalConfigApi` — `GlobalConfig` 서비스의 구현 타입(`read`, `update(patch: Partial<Settings>)`)
-- `Settings` — 사용자 전역 설정 `Schema.Struct`(openaiCompatible, compatibleAccounts, provider, model, reasoningEffort, kagiEnabled, importsEnabled, embeddingDevice, gpuCheck, summaryStartPercent, kanbanConcurrency, crossProjectRecall, defectReports 등 전부 optional)
+- `Settings` — 사용자 전역 설정 `Schema.Struct`(openaiCompatible, compatibleAccounts, provider, model, reasoningEffort, kagiEnabled, importsEnabled, embeddingDevice, gpuCheck, summaryStartPercent, kanbanConcurrency, plannerModel, executorModel, verifierModel, crossProjectRecall, defectReports 등 전부 optional)
 - `GlobalConfigFailed` / `GlobalConfigFailedReason` — operation(`read`|`write`)과 reason(`MissingFile`|`ReadFailed`|`WriteFailed`|`InvalidSettings`)을 갖는 설정 입출력 오류
 - `EmbeddingChoice` — 임베딩 실행 장치 `auto`|`cpu`|`gpu` 리터럴 스키마(`contracts.ts`)
 - `GpuCheck` — WebGPU 확인 결과 TaggedUnion(`available`{checkedAt, model?} | `unavailable`{checkedAt, reason, model?})(`contracts.ts`). `model`은 확인한 gpu 모드 파일(`<model id>/onnx/<file>.onnx`)이고, 다른 파일이나 `model` 없는 결과는 지금 파일의 확인으로 치지 않는다

@@ -5,10 +5,29 @@ import { ChevronDownIcon, ChevronUpIcon } from "lucide-react";
 import { Button } from "~/components/ui/button";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "~/components/ui/field";
 import { Input } from "~/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "~/components/ui/select";
 import { Spinner } from "~/components/ui/spinner";
-import { isApiError, type ApiErrorCode, type Project } from "../../api";
-import { useKanbanSettingsQuery, useProjectsQuery } from "../../queries/global";
-import { useKanbanSettingsMutation, useProjectOrderMutation } from "../../queries/mutations/global";
+import {
+  isApiError,
+  type AgentRole,
+  type ApiErrorCode,
+  type ModelSelection,
+  type Project,
+  type ProviderId,
+} from "../../api";
+import { effortChoices, providerLabels } from "../../navigation/providers";
+import { useKanbanSettingsQuery, useModelsQuery, useProjectsQuery } from "../../queries/global";
+import {
+  useKanbanSettingsMutation,
+  useProjectOrderMutation,
+  useRoleModelMutation,
+} from "../../queries/mutations/global";
 import { useProtectedBranchesMutation } from "../../queries/mutations/project";
 import { useSuspenseProjectKanbanQuery } from "../../queries/project";
 import { PageHeader, PageError } from "../shared";
@@ -32,6 +51,8 @@ const errorText = (code: ApiErrorCode) => {
       return "값이 올바르지 않아요. 동시 실행 수는 1~32, 브랜치 이름은 영문·숫자·._/-만 쓸 수 있어요.";
     case "project_not_found":
       return "프로젝트를 찾을 수 없어요.";
+    case "role_model_unavailable":
+      return "이 모델을 쓸 수 없어요. 그 제공자에 로그인했는지, 모델과 추론 단계가 맞는지 확인해 주세요.";
     case "settings_failed":
     case "schedule_storage_failed":
     case "storage_failed":
@@ -179,6 +200,171 @@ function ProjectOrderField() {
   );
 }
 
+/** What each role of a Goal does, as the settings page names it. */
+const roleTexts = {
+  planner: {
+    label: "계획자 모델",
+    description:
+      "Goal을 붙잡고 다음 Plan을 쓰는 대화의 모델이에요. 칸반 보드로 실행 중인 대화에 쓰여요.",
+  },
+  executor: {
+    label: "실행자 모델",
+    description: "카드 하나를 맡아 그 카드의 worktree에서 작업하는 카드 에이전트의 모델이에요.",
+  },
+  verifier: {
+    label: "검증자 모델",
+    description: "끝난 카드와 merge 전 Goal 브랜치를 고치지 않고 판정만 하는 모델이에요.",
+  },
+} as const satisfies Record<AgentRole, { readonly label: string; readonly description: string }>;
+
+const roles = ["planner", "executor", "verifier"] as const satisfies readonly AgentRole[];
+
+const providerIds = [
+  "openai",
+  "anthropic",
+  "openai-compatible",
+] as const satisfies readonly ProviderId[];
+
+/** The provider select's value for "run on the selected model". */
+const followSelected = "selected";
+
+const sameSelection = (left: ModelSelection | null, right: ModelSelection | null) =>
+  left?.provider === right?.provider &&
+  left?.model === right?.model &&
+  left?.reasoningEffort === right?.reasoningEffort;
+
+/** One role's own model, or the selected model when the user leaves it unset. */
+function RoleModelField({ role }: { role: AgentRole }) {
+  const { data: settings } = useKanbanSettingsQuery();
+  const saved = settings.roleModels[role];
+  const mutation = useRoleModelMutation();
+  const [provider, setProvider] = useState<ProviderId | null>(saved?.provider ?? null);
+  const [modelId, setModelId] = useState<string | null>(saved?.model ?? null);
+  const [effort, setEffort] = useState<string | null>(saved?.reasoningEffort ?? null);
+  const [error, setError] = useState<string | null>(null);
+  const catalog = useModelsQuery(provider ?? "openai", provider !== null);
+  const models = catalog.data?.models ?? [];
+  const model = models.find((candidate) => candidate.id === modelId);
+  const draft: ModelSelection | null =
+    provider !== null &&
+    model !== undefined &&
+    effort !== null &&
+    model.supportedReasoningEfforts.includes(effort)
+      ? { provider, model: model.id, reasoningEffort: effort }
+      : null;
+  const efforts = draft === null || model === undefined ? [] : effortChoices(draft, model);
+  const busy = mutation.isPending;
+  const text = roleTexts[role];
+  const id = `kanban-role-${role}`;
+
+  const save = (selection: ModelSelection | null) => {
+    setError(null);
+    mutation.mutate(
+      { role, selection },
+      {
+        onError: (failure) =>
+          setError(isApiError(failure) ? errorText(failure.code) : "설정을 바꾸지 못했어요."),
+      },
+    );
+  };
+
+  return (
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        save(provider === null ? null : draft);
+      }}
+    >
+      <Field>
+        <FieldLabel htmlFor={id}>{text.label}</FieldLabel>
+        <div className="flex flex-wrap gap-2">
+          <Select
+            value={provider ?? followSelected}
+            disabled={busy}
+            onValueChange={(value) => {
+              setProvider(providerIds.find((candidate) => candidate === value) ?? null);
+              setModelId(null);
+              setEffort(null);
+            }}
+          >
+            <SelectTrigger id={id} className="w-36">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={followSelected}>선택된 모델</SelectItem>
+              {providerIds.map((candidate) => (
+                <SelectItem key={candidate} value={candidate}>
+                  {providerLabels[candidate]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {provider !== null && (
+            <Select
+              value={modelId ?? ""}
+              disabled={busy || models.length === 0}
+              onValueChange={(value) => {
+                const next = models.find((candidate) => candidate.id === value);
+                setModelId(next?.id ?? null);
+                setEffort(next?.defaultReasoningEffort ?? null);
+              }}
+            >
+              <SelectTrigger aria-label={`${text.label}: 모델`} className="w-56">
+                <SelectValue placeholder="모델 고르기" />
+              </SelectTrigger>
+              <SelectContent>
+                {models.map((candidate) => (
+                  <SelectItem key={candidate.id} value={candidate.id}>
+                    {candidate.displayName}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          {efforts.length > 0 && (
+            <Select
+              value={effort ?? ""}
+              disabled={busy}
+              onValueChange={(value) => setEffort(value)}
+            >
+              <SelectTrigger aria-label={`${text.label}: 추론 단계`} className="w-32">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {efforts.map((choice) => (
+                  <SelectItem key={choice.id} value={choice.id}>
+                    {choice.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          <Button
+            type="submit"
+            disabled={
+              busy ||
+              (provider === null ? saved === null : draft === null || sameSelection(draft, saved))
+            }
+          >
+            {busy && <Spinner />} 저장
+          </Button>
+        </div>
+        <FieldDescription>
+          {text.description}{" "}
+          {saved === null
+            ? "지금은 선택된 모델로 실행해요."
+            : `지금은 ${providerLabels[saved.provider]} / ${saved.model} (${saved.reasoningEffort})로 실행해요.`}{" "}
+          저장하면 다음 실행부터 적용돼요.
+        </FieldDescription>
+        {catalog.isError && (
+          <PageError error="모델 목록을 읽지 못했어요. 그 제공자에 로그인했는지 확인해 주세요." />
+        )}
+      </Field>
+      <PageError error={error} />
+    </form>
+  );
+}
+
 /** Branches this project's Goals never merge into on their own. */
 function ProtectedBranchesField({ project }: { project: Project }) {
   const { data: settings } = useSuspenseProjectKanbanQuery(project.id);
@@ -241,10 +427,13 @@ export function KanbanSettings({ project }: { project: Project | null }) {
     <FieldGroup>
       <PageHeader
         title="칸반 실행"
-        description="Goal을 칸반 보드로 실행할 때 카드를 몇 개까지 함께 돌리고, 끝난 Goal을 어느 브랜치에 자동으로 merge할지 정해요."
+        description="Goal을 칸반 보드로 실행할 때 카드를 몇 개까지 함께 돌리고, 계획·실행·검증을 어느 모델로 하고, 끝난 Goal을 어느 브랜치에 자동으로 merge할지 정해요."
       />
       <ConcurrencyField />
       <ProjectOrderField />
+      {roles.map((role) => (
+        <RoleModelField key={role} role={role} />
+      ))}
       {project === null ? (
         <p className="text-sm text-muted-foreground">
           보호 브랜치는 프로젝트마다 정해요. 프로젝트를 고른 뒤 다시 열어 주세요.

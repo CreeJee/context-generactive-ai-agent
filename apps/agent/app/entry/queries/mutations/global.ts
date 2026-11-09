@@ -4,6 +4,7 @@ import { type QueryClient, useMutation, useQueryClient } from "@tanstack/react-q
 import {
   api,
   type AccountAction,
+  type AgentRole,
   type ModelSelection,
   type ProviderId,
   type SubscriptionAccountProvider,
@@ -65,6 +66,21 @@ export function useKanbanSettingsMutation() {
   const client = useQueryClient();
   return useMutation({
     mutationFn: api.setKanbanConcurrency,
+    onSuccess: (settings) => client.setQueryData(globalQueries.kanban().queryKey, settings),
+  });
+}
+
+/** Gives a Goal role its own model, or null to run it on the selected model. */
+export function useRoleModelMutation() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      role,
+      selection,
+    }: {
+      readonly role: AgentRole;
+      readonly selection: ModelSelection | null;
+    }) => api.setRoleModel(role, selection),
     onSuccess: (settings) => client.setQueryData(globalQueries.kanban().queryKey, settings),
   });
 }

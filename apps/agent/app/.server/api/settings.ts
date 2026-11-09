@@ -2,6 +2,7 @@ import { Effect, Match, Option, Path } from "effect";
 import { HttpApiBuilder } from "effect/http-api";
 import { SqlClient } from "effect/sql";
 import {
+  ActiveProvider,
   AppEvents,
   CrossProviderMediaConsent,
   EmbeddingSetup,
@@ -41,6 +42,7 @@ export const SettingsApiHandlers = HttpApiBuilder.group(
     const summaries = yield* TurnSummaries;
     const config = yield* GlobalConfig;
     const kanban = yield* KanbanSettings;
+    const active = yield* ActiveProvider;
     const goalOrder = yield* GoalOrder;
     const projects = yield* Projects;
     const scheduler = yield* ProjectScheduler;
@@ -58,10 +60,16 @@ export const SettingsApiHandlers = HttpApiBuilder.group(
     const kanbanSettings = Effect.gen(function* () {
       const concurrency = yield* kanban.concurrency;
       const projectOrder = yield* goalOrder.projects;
+      const roleModels = yield* Effect.all({
+        planner: active.chosenFor("planner"),
+        executor: active.chosenFor("executor"),
+        verifier: active.chosenFor("verifier"),
+      });
       return {
         configured: Option.getOrNull(concurrency.configured),
         effective: concurrency.effective,
         projectOrder,
+        roleModels,
       };
     });
 
@@ -109,6 +117,7 @@ export const SettingsApiHandlers = HttpApiBuilder.group(
               if (before !== null) yield* projects.get(before);
               yield* scheduler.moveProject(projectId, before);
             }),
+          SetRoleModel: ({ role, selection }) => active.chooseFor(role, selection),
         }).pipe(
           // Other windows' kanban settings show both values, so they read them again.
           Effect.andThen(events.publishGlobal("kanban")),
@@ -116,6 +125,11 @@ export const SettingsApiHandlers = HttpApiBuilder.group(
           Effect.catchTags({
             GlobalConfigFailed: settingsFailed,
             KanbanSettingsRefused: () => Effect.fail({ error: "invalid_kanban_settings" } as const),
+            // A model the provider does not list, or a provider that cannot list its models now.
+            ModelUnavailable: () => Effect.fail({ error: "role_model_unavailable" } as const),
+            ProviderUnavailable: () => Effect.fail({ error: "role_model_unavailable" } as const),
+            ProviderOperationFailed: () =>
+              Effect.fail({ error: "role_model_unavailable" } as const),
             ProjectNotFound: () => Effect.fail({ error: "project_not_found" } as const),
             GoalScheduleStorageFailed: scheduleStorageFailed,
             KanbanStorageFailed: () => Effect.fail({ error: "kanban_storage_failed" } as const),

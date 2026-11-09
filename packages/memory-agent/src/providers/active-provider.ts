@@ -1,13 +1,22 @@
 import { isTruthy } from "../truthy.ts";
-import { Context, Effect, Layer } from "effect";
-import { GlobalConfig } from "../config/global-config.ts";
+import { Array as Arr, Context, Effect, Layer, Predicate } from "effect";
+import { GlobalConfig, type Settings } from "../config/global-config.ts";
 import {
+  type AgentRole,
   AuthConnectionState,
+  ModelUnavailable,
   type ModelSelection,
   type ProviderId,
   type ProviderServices,
 } from "./contracts.ts";
 import { ProviderRegistry } from "./registry.ts";
+
+/** Where each role's own model is kept in the global settings. */
+const roleModelKeys = {
+  planner: "plannerModel",
+  executor: "executorModel",
+  verifier: "verifierModel",
+} as const satisfies Record<AgentRole, keyof Settings>;
 
 export interface ResolvedProvider {
   readonly selection: ModelSelection;
@@ -24,6 +33,36 @@ const make = Effect.gen(function* () {
       ? Effect.flatMap(registry.get(settings.provider), ({ models }) => models.selected)
       : Effect.succeed(null),
   );
+
+  /** A role's own model, or null when it runs on the selected model. */
+  const chosenFor = (role: AgentRole) =>
+    Effect.map(config.read, (settings) => settings[roleModelKeys[role]] ?? null);
+  /** The model a role runs on: its own when the user chose one, else the selected model. */
+  const selectedFor = (role: AgentRole) =>
+    Effect.filterOrElse(chosenFor(role), Predicate.isNotNull, () => selected);
+  /**
+   * Saves a role's model after checking the provider lists it with that effort; null goes back to
+   * the selected model. The global selection is not touched.
+   */
+  const chooseFor = Effect.fn("ActiveProvider.chooseFor")(function* (
+    role: AgentRole,
+    selection: ModelSelection | null,
+  ) {
+    if (selection !== null) {
+      const { models } = yield* registry.get(selection.provider);
+      yield* Effect.fromOption(
+        Arr.findFirst(
+          yield* models.list,
+          (model) =>
+            model.id === selection.model &&
+            model.supportedReasoningEfforts.includes(selection.reasoningEffort),
+        ),
+        () => ModelUnavailable.make(selection),
+      );
+    }
+    yield* config.update({ [roleModelKeys[role]]: selection ?? undefined });
+    return selection;
+  });
 
   const resolve = (selection: ModelSelection) =>
     Effect.gen(function* () {
@@ -51,6 +90,9 @@ const make = Effect.gen(function* () {
   return {
     provider,
     selected,
+    chosenFor,
+    selectedFor,
+    chooseFor,
     resolve,
     models: (selection: ModelSelection) =>
       Effect.map(resolve(selection), ({ services }) => services.models),

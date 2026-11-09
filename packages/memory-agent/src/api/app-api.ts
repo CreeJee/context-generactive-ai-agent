@@ -64,6 +64,7 @@ export {
   KanbanSettings,
   KanbanSettingsCommand,
   RecallSettings,
+  RoleModels,
   ScanCommand,
 } from "./app-api/settings.ts";
 export {

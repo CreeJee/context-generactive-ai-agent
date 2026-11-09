@@ -152,6 +152,63 @@ describe("provider-neutral contracts", () => {
       }).pipe(withTestPlatform),
   );
 
+  effectTest.effect("runs a role on its own listed model without changing the selected model", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const storage = yield* fs.makeTempDirectoryScoped({ prefix: "role-models-" });
+      const baseAnthropic = fakeProvider("anthropic");
+      const anthropic = {
+        ...baseAnthropic,
+        models: {
+          ...baseAnthropic.models,
+          list: Effect.succeed([
+            {
+              provider: "anthropic" as const,
+              id: "claude-plan",
+              displayName: "Claude Plan",
+              isDefault: false,
+              defaultReasoningEffort: "high",
+              supportedReasoningEfforts: ["low", "high"],
+              capabilities: {
+                inputModalities: ["text" as const],
+                toolCalling: true,
+                reasoning: true,
+              },
+            },
+          ]),
+        },
+      };
+      const services = yield* Layer.build(
+        ActiveProvider.layer.pipe(
+          Layer.provideMerge(ProviderRegistry.layer([fakeProvider("openai"), anthropic], [])),
+          Layer.provideMerge(GlobalConfig.layer.pipe(Layer.provide(StorageRoot.layer(storage)))),
+        ),
+      );
+      const config = yield* Effect.provideContext(GlobalConfig, services);
+      yield* config.update({ provider: "anthropic", model: "claude-test", reasoningEffort: "low" });
+      const active = yield* Effect.provideContext(ActiveProvider, services);
+      const planner = {
+        provider: "anthropic" as const,
+        model: "claude-plan",
+        reasoningEffort: "high",
+      };
+
+      yield* active.chooseFor("planner", planner);
+      expect(yield* active.selectedFor("planner")).toEqual(planner);
+      expect(yield* active.selectedFor("executor")).toBe(yield* active.selected);
+      expect((yield* config.read).model).toBe("claude-test");
+
+      const unlisted = yield* Effect.result(
+        active.chooseFor("verifier", { ...planner, reasoningEffort: "max" }),
+      );
+      expect(Result.isFailure(unlisted) && unlisted.failure._tag).toBe("ModelUnavailable");
+      expect(yield* active.chosenFor("verifier")).toBeNull();
+
+      yield* active.chooseFor("planner", null);
+      expect(yield* active.chosenFor("planner")).toBeNull();
+    }).pipe(withTestPlatform),
+  );
+
   effectTest.effect("keeps unavailable providers in the typed error channel", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

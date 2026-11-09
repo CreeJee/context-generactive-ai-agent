@@ -11,7 +11,7 @@ import { ImportOverview } from "../../imports/contracts.ts";
 import { ImprovementScan, ScanState } from "../../improve/contracts.ts";
 import { KagiStatus } from "../../kagi/contracts.ts";
 import { EmbeddingOverview } from "../../memory/embedding/contracts.ts";
-import { ImageFeatureStatus } from "../../providers/contracts.ts";
+import { AgentRole, ImageFeatureStatus, ModelSelection } from "../../providers/contracts.ts";
 import { appRefusalFields, refusalWith, SameSite } from "../refusal.ts";
 
 const appRefusal = refusalWith(appRefusalFields);
@@ -27,14 +27,23 @@ export const RecallSettings = Schema.Struct({
 });
 export type RecallSettings = typeof RecallSettings.Type;
 
+/** Each role's own model; null runs it on the selected model. */
+export const RoleModels = Schema.Struct({
+  planner: Schema.NullOr(ModelSelection),
+  executor: Schema.NullOr(ModelSelection),
+  verifier: Schema.NullOr(ModelSelection),
+});
+export type RoleModels = typeof RoleModels.Type;
+
 /**
- * Kanban cards run at once across every Goal: the user's value, if any, and the one in use; and
- * the projects in the order the scheduler serves them.
+ * Kanban cards run at once across every Goal: the user's value, if any, and the one in use; the
+ * projects in the order the scheduler serves them; and the model each role of a Goal runs on.
  */
 export const KanbanSettings = Schema.Struct({
   configured: Schema.NullOr(KanbanConcurrency),
   effective: Schema.Int,
   projectOrder: Schema.Array(Schema.String),
+  roleModels: RoleModels,
 });
 export type KanbanSettings = typeof KanbanSettings.Type;
 
@@ -43,6 +52,8 @@ export const KanbanSettingsCommand = Schema.TaggedUnion({
   SetConcurrency: { concurrency: Schema.NullOr(KanbanConcurrency) },
   /** The project goes in front of `before`, or last. */
   MoveProject: { projectId: Schema.String, before: Schema.NullOr(Schema.String) },
+  /** The role runs on this model from its next run; null goes back to the selected model. */
+  SetRoleModel: { role: AgentRole, selection: Schema.NullOr(ModelSelection) },
 });
 export type KanbanSettingsCommand = typeof KanbanSettingsCommand.Type;
 
@@ -112,7 +123,7 @@ export type ScanCommand = typeof ScanCommand.Type;
 const SettingsFailed = appRefusal(500, ["settings_failed"]);
 
 const KanbanRefusals = [
-  appRefusal(400, ["invalid_kanban_settings"]),
+  appRefusal(400, ["invalid_kanban_settings", "role_model_unavailable"]),
   appRefusal(404, ["project_not_found"]),
   appRefusal(500, [
     "settings_failed",

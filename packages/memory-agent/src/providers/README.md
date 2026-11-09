@@ -13,7 +13,8 @@
 - `AuthConnectionState` / `AuthStatus` / `AuthProvider` — signed-out|pending|signed-in|error 로그인 상태 TaggedEnum과 status/connect/cancel/disconnect 인증 수명주기 인터페이스. 타입은 비공개 TaggedUnion Schema에서 꺼낸다
 - `ProviderAuthState` — 브라우저가 받는 `AuthConnectionState` Schema. pending의 `authorizationUrl`이 `authUrl`이다
 - `ModelCatalog` / `AgentModelRuntime` / `RunModel` / `ModelRun` / `ShownFailure` / `ProviderConfiguration` / `ProviderServices` — 모델 목록·선택, 런 단위 Effect AI 모델 생성(Scope 필요), 컨텍스트 창, 사용자 표시용 실패 계약
-- `ActiveProvider` — GlobalConfig와 ProviderRegistry로 저장된 공급자/모델을 resolve하고 models/runtime/auth/authFor를 제공하는 Context.Service(`ActiveProvider.layer`)
+- `ActiveProvider` — GlobalConfig와 ProviderRegistry로 저장된 공급자/모델을 resolve하고 models/runtime/auth/authFor를 제공하는 Context.Service(`ActiveProvider.layer`). 역할별 모델: `chosenFor(role)`(그 역할에 고른 모델, 없으면 null), `selectedFor(role)`(고른 모델, 없으면 `selected`), `chooseFor(role, selection | null)`(공급자 목록에 그 모델·추론 단계가 있을 때만 저장, null이면 지움)
+- `AgentRole` — Goal 역할 `planner`·`executor`·`verifier` 리터럴 Schema(`contracts.ts`)
 - `ProviderRegistry` / `ProviderRegistryApi` / `providerRegistryFrom` — 공급자별 configuration·runtime 조회 레지스트리 서비스(registry.ts; 시그니처만 확인)
 - `SubscriptionProviderRegistry` / `AccountSubscriptionProviderRegistry` — 구독 공급자 레지스트리 구성(subscriptions.ts; 이름만 확인)
 - `createSubscriptionProvider` / `parseSubscriptionCatalog` / `ProductOAuthClient` — 구독 OAuth 공급자 configuration 생성과 구독 카탈로그 페이지 파싱(subscription-provider.ts; 시그니처만 확인)
@@ -43,6 +44,7 @@
 - `RunModel.historyKey`는 자격증명을 보관하지 않고 연결 ID만 고정한다. `RunModel.source`는 모델이 쓰는 모든 메시지에 기록되고 replay가 비교한다.
 - `RunModel.promptCacheFor`는 provider가 요청 앞부분을 캐시하는 시간이다. compaction은 이 시간이 지난 앞 요청에 이어 붙이지 않는다. Anthropic 구독은 요청한 보존(`long` 1시간, `short` 5분), OpenAI 구독은 자동 캐시의 문서 최소치인 5분, compatible은 서버가 밝히지 않으므로 5분이다.
 - `AgentModelRuntime.model`은 `Scope.Scope`를 요구한다. 런에 고정된 계정 등은 scope가 닫힐 때 해제된다. 루프는 런마다 모델 하나를 만들고 프롬프트 캐시는 thread로 키잉한다.
+- 역할의 모델은 `plannerModel`·`executorModel`·`verifierModel`에 따로 저장하고, 전역 선택(`provider`·`model`·`reasoningEffort`)을 바꾸지 않는다. 고른 모델이 없는 역할만 전역 선택을 따른다(decisions.md 2026-11-09).
 - `ActiveProvider`는 다른 공급자로 조용히 대체하지 않는다. 설정에 provider가 없으면 `provider`는 `openai`, `selected`는 null이다. `authFor`는 `ProviderUnavailable`/`ProviderOperationFailed`를 `AuthConnectionState.error`로 바꿔 보고한다.
 - 운영 이미지 라우트는 `productionEnabled && verification === "verified"`인 계약만이다. `openai:provider_tool:image_generation`은 unverified·비활성이고, Anthropic 이미지 생성은 unsupported다.
 - `decideImageContext`: 사용자 설정 활성, 명시적 `generate_image` 의도, 선택된 라우트가 모두 있어야 허용한다. Provider Tool 주입과 워크플로 프롬프트 주입은 `provider_tool` 모드에서만, 직접 워크플로는 `direct_adapter`에서만 허용한다.

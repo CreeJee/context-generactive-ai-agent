@@ -33,7 +33,7 @@
 - `GoalSchedules` / `GoalMergeState` / `GoalScheduleRefused` / `GoalScheduleStorageFailed` — 프로젝트 스케줄러가 쓰는 Goal 일정 서비스와 그 타입입니다. 일정에는 대상 브랜치, 의존 edge, merge 상태, 보호 브랜치가 들어갑니다. `board-actions.ts`는 `get`, `edges`, `forProject`를 호출합니다.
 - `ProjectScheduler` / `GoalOrder` / `GoalMerges` — `ProjectScheduler`는 프로젝트 스케줄러로, slot을 배정하고 `waitingOn`을 제공합니다. `GoalOrder`는 프로젝트 순서와 프로젝트별 Goal 순서를, `GoalMerges`는 Goal merge queue를 맡습니다. 셋 다 `.layer`를 가집니다.
 - `KanbanTools` / `kanbanAttentionPrompt` — `KanbanTools`는 칸반 세션의 보드 도구(`readBoard`, `editBoard`)입니다. `kanbanAttentionPrompt`는 루프가 모델을 필요로 할 때 보내는 자동 후속 프롬프트입니다.
-- `PersistedQueueItems` / `persistedQueueStoreLayer` / `persistedQueueCleanupLayer` / `subagentCardAgentsLayer` — owner 연결의 PersistedQueue 저장소 레이어와 그 dead-letter 조회·requeue 서비스, 완료 항목 정리 레이어입니다. `subagentCardAgentsLayer`는 `CardAgent`·`CardVerifier`·`GoalVerifier`를 세션 subagent로 구현합니다.
+- `PersistedQueueItems` / `persistedQueueStoreLayer` / `persistedQueueCleanupLayer` / `subagentCardAgentsLayer` — owner 연결의 PersistedQueue 저장소 레이어와 그 dead-letter 조회·requeue 서비스, 완료 항목 정리 레이어입니다. `subagentCardAgentsLayer`는 `CardAgent`·`CardVerifier`·`GoalVerifier`를 세션 subagent로 구현합니다. 카드 에이전트는 실행자 모델, 두 검증기는 검증자 모델(`ActiveProvider.selectedFor`)로 돕니다.
 - 하위 디렉터리 없음
 
 ## Invariants

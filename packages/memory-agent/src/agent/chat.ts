@@ -627,6 +627,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             Option.exists((goal) => goal.active),
           ),
     );
+  /** On a kanban board the session's chat is the planner, so it runs on the planner's model. */
+  const sessionModel = (sessionId: string) =>
+    Effect.flatMap(kanbanBoard(sessionId), (board) =>
+      board ? active.selectedFor("planner") : active.selected,
+    );
   const workflowRules = yield* WorkflowRules;
   const workTrace = yield* WorkTraceStore;
   const knowledge = yield* KnowledgePromotions;
@@ -1339,7 +1344,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // A direct conversation with an external agent needs that agent, not the ChatGPT model.
         if (external !== null && !(yield* externalAgents.available(project)).includes(external))
           return refused({ error: "external_agent_unavailable", agent: external });
-        const selection = external === null ? yield* active.selected : null;
+        const selection = external === null ? yield* sessionModel(sessionId) : null;
         if (external === null) {
           const auth = yield* active.authFor(selection?.provider ?? (yield* active.provider));
           if (AuthConnectionState.$is("error")(auth))
@@ -2451,7 +2456,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         yield* refuseOtherHolder(sessionId, holder);
         yield* sessions.get(sessionId);
         if (isTruthy(yield* liveRuns.get(sessionId))) return yield* runInProgress();
-        const budget = budgetFor((yield* windowFor(yield* active.selected)).tokens);
+        const budget = budgetFor((yield* windowFor(yield* sessionModel(sessionId))).tokens);
         const result: CompactResult = yield* compactByHand(
           runStore.chatMetadata,
           sessionId,
@@ -2488,7 +2493,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ? yield* workflows.get(sessionId)
           : yield* workflows.reconcile(sessionId);
         const lease = yield* leases.view(sessionId, holder);
-        const window = yield* windowFor(yield* active.selected);
+        const window = yield* windowFor(yield* sessionModel(sessionId));
         const state: SessionRunState = {
           running: isTruthy(live) ? { runId: live.runId } : null,
           lastRun: last && { runId: last.runId, status: last.status, error: last.error ?? null },

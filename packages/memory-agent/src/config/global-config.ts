@@ -13,7 +13,7 @@ import {
   SchemaTransformation,
   Semaphore,
 } from "effect";
-import { ProviderId } from "../providers/contracts.ts";
+import { ModelSelection, ProviderId } from "../providers/contracts.ts";
 import {
   CompatibleAccounts,
   OpenAICompatibleConfiguration,
@@ -104,6 +104,12 @@ export const Settings = Schema.Struct({
   summaryStartPercent: Schema.optional(SummaryStartPercent),
   /** Half the CPU cores (1 to 4) when unset; read via `KanbanSettings`. */
   kanbanConcurrency: Schema.optional(KanbanConcurrency),
+  /** The planner's model; the selected model when unset. Read via `ActiveProvider.selectedFor`. */
+  plannerModel: Schema.optional(ModelSelection),
+  /** The card executor's model; the selected model when unset. */
+  executorModel: Schema.optional(ModelSelection),
+  /** The verifier's model; the selected model when unset. */
+  verifierModel: Schema.optional(ModelSelection),
   /** Also search other projects' memory (those not excluded). Off when unset. */
   crossProjectRecall: Schema.optional(Schema.Boolean),
   /** Send matching memory to an external agent in a direct conversation. Off when unset. */

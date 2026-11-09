@@ -2,6 +2,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { Context, Effect, HashSet, Layer, Match, Option, Ref, Schema } from "effect";
 import { SecureRandom } from "effect/crypto";
 import { ActiveProvider } from "../providers/active-provider.ts";
+import type { AgentRole } from "../providers/contracts.ts";
 import { Projects } from "../projects/projects.ts";
 import { Sessions } from "../sessions/sessions.ts";
 import { Subagents } from "../subagents/subagents.ts";
@@ -121,15 +122,16 @@ const make = Effect.gen(function* () {
   const approvedTools = yield* ApprovedTools;
   const crypto = yield* SecureRandom.SecureRandom;
 
-  /** The session's project as the card's tools see it, and the model the session uses. */
+  /** The session's project as the card's tools see it, and the model the role runs on. */
   const cardSetting = Effect.fnUntraced(function* (
     sessionId: string,
     projectId: string,
     worktree: CardWorktree,
+    role: AgentRole,
   ) {
     yield* sessions.get(sessionId);
     const project = yield* projects.get(projectId);
-    const selection = yield* active.selected;
+    const selection = yield* active.selectedFor(role);
     return {
       project: cardToolProject(project, worktree),
       selection: Option.fromNullishOr(selection),
@@ -147,6 +149,7 @@ const make = Effect.gen(function* () {
           run.sessionId,
           run.projectId,
           run.worktree,
+          "executor",
         );
         const attempt = (chosen: Option.Option.Value<typeof selection>) =>
           Effect.gen(function* () {
@@ -223,6 +226,7 @@ const make = Effect.gen(function* () {
         input.sessionId,
         input.projectId,
         input.worktree,
+        "verifier",
       );
       const verified = (chosen: Option.Option.Value<typeof selection>) =>
         Effect.gen(function* () {

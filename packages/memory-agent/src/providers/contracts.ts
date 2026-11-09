@@ -60,6 +60,13 @@ export const ModelSelection = Schema.Struct({
 });
 export type ModelSelection = typeof ModelSelection.Type;
 
+/**
+ * The parts a Goal's work is split into: the planner keeps the Goal and writes Plans, the executor
+ * works one card, the verifier judges one (docs/decisions.md 2026-11-09).
+ */
+export const AgentRole = Schema.Literals(["planner", "executor", "verifier"]);
+export type AgentRole = typeof AgentRole.Type;
+
 export const SubscriptionModelSelection = Schema.Struct({
   ...ModelSelection.fields,
   provider: SubscriptionAccountProvider,
