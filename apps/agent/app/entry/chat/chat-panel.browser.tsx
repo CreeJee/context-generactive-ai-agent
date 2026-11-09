@@ -1,7 +1,7 @@
 import { it } from "@effect/vitest";
 import { RegistryProvider } from "@effect/atom-react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Cause, Effect } from "effect";
+import { Array as Arr, Cause, Effect } from "effect";
 import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 import { render } from "vitest-browser-react";
 import { expect, vi } from "vite-plus/test";
@@ -67,26 +67,31 @@ const runState: SessionRunState = {
   uncertainRuns: [],
 };
 
-/** A Plan waiting for approval as its board: two cards serving the Goal's one outcome. */
+/** A board card with only what the chat's list reads. */
+const boardCard = (id: string, title: string, status: string) => ({
+  card: {
+    id,
+    title,
+    description: "",
+    dependsOn: [],
+    acceptanceCriteria: [],
+    ruleRefs: [],
+    outcomes: ["O1"],
+    status,
+    evidence: [],
+  },
+  lastChange: null,
+});
+
+/** A Plan of ten cards waiting for approval, serving the Goal's one outcome. */
 const draftBoard = {
   plan: { version: 4, status: "ready", summary: "Test the policy" },
   cards: [
-    { id: "c1", title: "정책 읽기", status: "ready" },
-    { id: "c2", title: "테스트 고치기", status: "backlog" },
-  ].map(({ id, title, status }) => ({
-    card: {
-      id,
-      title,
-      description: "",
-      dependsOn: [],
-      acceptanceCriteria: [],
-      ruleRefs: [],
-      outcomes: ["O1"],
-      status,
-      evidence: [],
-    },
-    lastChange: null,
-  })),
+    boardCard("c1", "정책 읽기", "ready"),
+    ...Arr.makeBy(9, (index) =>
+      boardCard(`c${index + 2}`, `테스트 고치기 ${index + 2}`, "backlog"),
+    ),
+  ],
   outcomes: [
     {
       id: "O1",
@@ -98,8 +103,19 @@ const draftBoard = {
   pendingChanges: [],
 };
 
+/** The same Plan running: the card that waits for a person sits last in the Plan. */
+const runningBoard: typeof draftBoard = {
+  ...draftBoard,
+  plan: { ...draftBoard.plan, status: "executing" },
+  cards: [
+    boardCard("c1", "정책 읽기", "done"),
+    boardCard("c2", "테스트 고치기", "in_progress"),
+    boardCard("c3", "배포 결정", "human_decision"),
+  ],
+};
+
 /** What the server answers for the session; a test may swap it before opening the session. */
-const served = { run: runState };
+const served = { run: runState, board: draftBoard };
 
 /** The changes the page sent: path and body. */
 const sent: string[] = [];
@@ -116,7 +132,7 @@ const server = (input: RequestInfo | URL, init?: RequestInit): Promise<Response>
     return Promise.resolve(
       Response.json({ messages, older: null, activeRun: null, interrupts: null }),
     );
-  if (pathname === "/api/sessions/s1/board") return Promise.resolve(Response.json(draftBoard));
+  if (pathname === "/api/sessions/s1/board") return Promise.resolve(Response.json(served.board));
   if (pathname === "/api/sessions/s1/kanban")
     return Promise.resolve(Response.json({ active: false }));
   if (pathname === "/api/sessions/s1/decisions") return Promise.resolve(Response.json([]));
@@ -237,26 +253,50 @@ it.live("leaving a running board asks first, and only a confirmed move is sent",
   }),
 );
 
-it.live(
-  "a Plan waiting for approval lists its cards and outcomes, each card linking to the board",
-  () =>
-    Effect.gen(function* () {
-      served.run = { ...runState, workflow: workflowFixture };
-      const { screen } = yield* openSession;
-      const panel = screen.getByRole("region", { name: "워크플로" });
+it.live("a Plan of ten cards waiting for approval lists them in a list of its own height", () =>
+  Effect.gen(function* () {
+    served.run = { ...runState, workflow: workflowFixture };
+    const { screen } = yield* openSession;
+    const panel = screen.getByRole("region", { name: "워크플로" });
 
-      yield* sdkCall(() => expect.element(panel.getByText("Plan · 계획 중")).toBeVisible());
-      yield* sdkCall(() => expect.element(panel.getByText("정책 테스트가 통과한다")).toBeVisible());
-      yield* sdkCall(() => expect.element(panel.getByText("카드 0/2 완료")).toBeVisible());
-      // A Plan still waiting for approval shows its cards without a click.
-      const first = panel.getByRole("link", { name: /정책 읽기/ });
-      yield* sdkCall(() => expect.element(first).toBeVisible());
-      expect(first.element().getAttribute("href")).toContain("card=c1");
-      yield* sdkCall(() =>
-        expect.element(panel.getByRole("button", { name: "승인하고 실행" })).toBeEnabled(),
-      );
-      served.run = runState;
-      yield* sdkCall(() => screen.unmount());
-      vi.unstubAllGlobals();
-    }),
+    yield* sdkCall(() => expect.element(panel.getByText("Plan · 계획 중")).toBeVisible());
+    yield* sdkCall(() => expect.element(panel.getByText("카드 0/10 완료")).toBeVisible());
+    // A Plan still waiting for approval shows its cards first, in the Plan's order.
+    const first = panel.getByRole("link", { name: /정책 읽기/ });
+    yield* sdkCall(() => expect.element(first).toBeVisible());
+    expect(first.element().getAttribute("href")).toContain("card=c1");
+    // Ten cards scroll inside the list instead of stretching the panel.
+    const list = panel.getByRole("list", { name: "카드" }).element().parentElement;
+    expect(list !== null && list.scrollHeight > list.clientHeight).toBe(true);
+    yield* sdkCall(() => userEvent.click(panel.getByRole("tab", { name: "결과 0/1 충족" })));
+    yield* sdkCall(() => expect.element(panel.getByText("정책 테스트가 통과한다")).toBeVisible());
+    yield* sdkCall(() =>
+      expect.element(panel.getByRole("button", { name: "승인하고 실행" })).toBeEnabled(),
+    );
+    served.run = runState;
+    yield* sdkCall(() => screen.unmount());
+    vi.unstubAllGlobals();
+  }),
+);
+
+it.live("a running Plan lists the cards that need a look first", () =>
+  Effect.gen(function* () {
+    served.run = { ...runState, workflow: { ...workflowFixture, phase: "running" } };
+    served.board = runningBoard;
+    const { screen } = yield* openSession;
+    const panel = screen.getByRole("region", { name: "워크플로" });
+
+    yield* sdkCall(() => userEvent.click(panel.getByRole("tab", { name: "카드 3" })));
+    const links = panel.getByRole("list", { name: "카드" }).getByRole("link");
+    yield* sdkCall(() => expect.poll(() => links.elements().length).toBe(3));
+    expect(links.elements().map((link) => link.textContent)).toEqual([
+      expect.stringContaining("배포 결정"),
+      expect.stringContaining("테스트 고치기"),
+      expect.stringContaining("정책 읽기"),
+    ]);
+    served.run = runState;
+    served.board = draftBoard;
+    yield* sdkCall(() => screen.unmount());
+    vi.unstubAllGlobals();
+  }),
 );

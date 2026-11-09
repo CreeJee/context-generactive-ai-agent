@@ -1,6 +1,6 @@
 import { isTruthy } from "../../truthy.ts";
 import { useState } from "react";
-import { Array as Arr, Match, Result } from "effect";
+import { Array as Arr, Match, Order, Result } from "effect";
 import { ChevronRightIcon, CircleSlashIcon, KanbanSquareIcon, PlusIcon } from "lucide-react";
 import { createSerializer, parseAsBoolean, parseAsString, useQueryStates } from "nuqs";
 import { Alert, AlertDescription } from "../../components/ui/alert";
@@ -38,16 +38,18 @@ import {
 } from "../../components/ui/sheet";
 import { Progress } from "../../components/ui/progress";
 import { Switch } from "../../components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import {
   BoardEdit,
   type BoardView,
+  type CardStatus,
   type GoalMergeState,
   type HumanDecisionRequest,
   type KanbanScheduleView,
 } from "../api";
 import { useBoardQuery, useDecisionsQuery, useKanbanQuery } from "../queries/session";
 import { DecisionPrompt } from "./decision-prompt";
-import { OutcomeChecklist } from "./outcome-checklist";
+import { metOutcomes, OutcomeChecklist, OutcomeList } from "./outcome-checklist";
 import {
   KanbanAction,
   useBoardsEditMutation,
@@ -98,6 +100,21 @@ export function OpenBoardButton() {
   );
 }
 
+/** Where a card stands in the chat's list once the Plan runs: what needs a look first. */
+const attentionRanks: Readonly<Record<CardStatus, number>> = {
+  human_decision: 0,
+  blocked: 1,
+  in_progress: 2,
+  verify: 3,
+  ready: 4,
+  backlog: 5,
+  done: 6,
+};
+const byAttention = Order.mapInput(
+  Order.Number,
+  ({ card }: BoardView["cards"][number]) => attentionRanks[card.status],
+);
+
 /**
  * The Plan's kanban board as the chat shows it: the outcomes, the progress and the cards. The board
  * itself opens wide over the page (`?board=1`), and a card opens in a peek panel beside it
@@ -145,6 +162,44 @@ export function WorkflowBoard({
     const count = Arr.countBy(view.cards, ({ card }) => card.status === status);
     return count > 0 ? Result.succeed({ status, count }) : Result.failVoid;
   });
+  const reviewing = plan.status === "draft" || plan.status === "ready";
+  // Read for approval, the cards keep the Plan's order; once running, what needs a look comes first.
+  const cards = reviewing ? view.cards : Arr.sort(view.cards, byAttention);
+  const cardList = (
+    <div className="max-h-60 overflow-y-auto">
+      <ItemGroup aria-label="카드">
+        {cards.map(({ card }) => (
+          // The list holds items; the item itself stays a link.
+          <div key={card.id} role="listitem">
+            <Item
+              size="xs"
+              render={
+                <a
+                  href={boardLink({ board: true, card: card.id })}
+                  onClick={(event) => {
+                    // A modified click opens the card in a new tab as the link says.
+                    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                    event.preventDefault();
+                    openBoard(card.id);
+                  }}
+                />
+              }
+            >
+              <ItemMedia variant="icon">
+                <StatusIcon status={card.status} />
+              </ItemMedia>
+              <ItemContent>
+                <ItemTitle title={card.title}>{card.title}</ItemTitle>
+              </ItemContent>
+              <ItemActions>
+                <Badge variant="outline">{cardStatusLabels[card.status]}</Badge>
+              </ItemActions>
+            </Item>
+          </div>
+        ))}
+      </ItemGroup>
+    </div>
+  );
   const waiting = decisions.length;
   const open = location.board === true || location.card !== null;
   const switchable = loop === null && plan.status === "executing";
@@ -198,74 +253,48 @@ export function WorkflowBoard({
           <AlertDescription>{startError}</AlertDescription>
         </Alert>
       )}
-      <OutcomeChecklist outcomes={view.outcomes} />
-      {/* A Plan still waiting for approval is read card by card; a running one by its progress. */}
-      <Collapsible defaultOpen={plan.status === "draft" || plan.status === "ready"}>
-        <div className="flex flex-col gap-1.5">
-          <div className="flex flex-wrap items-center gap-2">
-            <CollapsibleTrigger
-              render={<Button type="button" size="xs" variant="ghost" className="group" />}
-            >
-              <ChevronRightIcon
-                data-icon="inline-start"
-                className="transition-transform group-data-[panel-open]:rotate-90"
-              />
-              카드 {done}/{total} 완료
-            </CollapsibleTrigger>
-            {waiting > 0 && <Badge variant="outline">판단 대기 {waiting}</Badge>}
-            {view.pendingChanges.length > 0 && (
-              <Badge variant="outline">변경 요청 대기 {view.pendingChanges.length}</Badge>
-            )}
-          </div>
-          {/* An empty board has nothing to finish; a zero max would divide by zero. */}
-          <Progress aria-label="완료한 카드" value={done} max={Math.max(total, 1)} />
-          {counts.length > 0 && (
-            <ul className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-              {counts.map(({ status, count }) => (
-                <li key={status} className="flex items-center gap-1">
-                  <StatusIcon status={status} />
-                  {cardStatusLabels[status]}
-                  <span className="font-medium text-foreground">{count}</span>
-                </li>
-              ))}
-            </ul>
+      <div className="flex flex-col gap-1.5">
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="font-medium">
+            카드 {done}/{total} 완료
+          </span>
+          {waiting > 0 && <Badge variant="outline">판단 대기 {waiting}</Badge>}
+          {view.pendingChanges.length > 0 && (
+            <Badge variant="outline">변경 요청 대기 {view.pendingChanges.length}</Badge>
           )}
         </div>
-        <CollapsibleContent className="pt-2">
-          <ItemGroup>
-            {view.cards.map(({ card }) => (
-              // The list holds items; the item itself stays a link.
-              <div key={card.id} role="listitem">
-                <Item
-                  size="xs"
-                  render={
-                    <a
-                      href={boardLink({ board: true, card: card.id })}
-                      onClick={(event) => {
-                        // A modified click opens the card in a new tab as the link says.
-                        if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
-                          return;
-                        event.preventDefault();
-                        openBoard(card.id);
-                      }}
-                    />
-                  }
-                >
-                  <ItemMedia variant="icon">
-                    <StatusIcon status={card.status} />
-                  </ItemMedia>
-                  <ItemContent>
-                    <ItemTitle title={card.title}>{card.title}</ItemTitle>
-                  </ItemContent>
-                  <ItemActions>
-                    <Badge variant="outline">{cardStatusLabels[card.status]}</Badge>
-                  </ItemActions>
-                </Item>
-              </div>
+        {/* An empty board has nothing to finish; a zero max would divide by zero. */}
+        <Progress aria-label="완료한 카드" value={done} max={Math.max(total, 1)} />
+        {counts.length > 0 && (
+          <ul className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+            {counts.map(({ status, count }) => (
+              <li key={status} className="flex items-center gap-1">
+                <StatusIcon status={status} />
+                {cardStatusLabels[status]}
+                <span className="font-medium text-foreground">{count}</span>
+              </li>
             ))}
-          </ItemGroup>
-        </CollapsibleContent>
-      </Collapsible>
+          </ul>
+        )}
+      </div>
+      {view.outcomes.length === 0 ? (
+        cardList
+      ) : (
+        // One list at a time keeps a long Plan or Goal from pushing the chat away. A Plan waiting
+        // for approval is read card by card; a running one by the outcomes it is meant to meet.
+        <Tabs defaultValue={reviewing ? "cards" : "outcomes"}>
+          <TabsList variant="line">
+            <TabsTrigger value="cards">카드 {total}</TabsTrigger>
+            <TabsTrigger value="outcomes">
+              결과 {metOutcomes(view.outcomes)}/{view.outcomes.length} 충족
+            </TabsTrigger>
+          </TabsList>
+          <TabsContent value="cards">{cardList}</TabsContent>
+          <TabsContent value="outcomes">
+            <OutcomeList outcomes={view.outcomes} />
+          </TabsContent>
+        </Tabs>
+      )}
       {open && (
         <BoardSheet
           projectId={projectId}

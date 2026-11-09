@@ -23,8 +23,8 @@
 - `ApprovalCard` — 승인 대기 호출 하나를 보여 주는 카드다. props: `approval`, `disabled`, `requester`, `decision`, `onAnswer`. permission-review이고 `askedBy`가 review일 때만 검토 사유를 보인다
 - `ChatHistory` — 대화 기록 스크롤 영역이다. shadcn `MessageScroller` 위에 있어, 맨 아래에서 120px 안이면 새 내용을 따라 내려가고 아래로 가는 단추를 띄운다. 위쪽 200px 안으로 올라가면 이전 페이지를 불러오고, 위에 끼운 페이지가 읽던 자리를 밀지 않는다. 불러오기에 실패하면 위쪽에 다시 시도 단추를 띄운다. 메시지마다 `MessageScrollerItem`이고 `children`(패널·상태 표시)은 메시지 뒤에 온다
 - `MessageView`(memo) / `DeliveredMessageView` / `ResumeActionResult` / `ArchiveActionResult` / `DeleteActionResult` — 메시지 렌더링과 작업 추적 task 재개·보관·삭제 결과 TaggedEnum
-- `WorkflowBoard` / `OpenBoardButton` / `mergeStateLabel` / `cardStatusLabels` / `authorLabel` — 채팅 안의 보드 요약과 보드를 여는 버튼이다. 요약은 outcome 체크리스트, 카드 진행, 접히는 카드 목록을 보인다. 카드 목록은 승인 전 Plan(draft·ready)에서 펼친 채로 시작하고, 카드마다 `?board=1&card=…` 링크로 보드의 peek를 연다. 뒤의 두 심볼은 `board/`에서 다시 내보낸다
-- `OutcomeChecklist` — Goal의 outcome마다 장부 상태(카드 없음·진행 중·확인 대기·충족·미충족)와 판정을 보이는 `Item` 목록. 충족 수가 Goal의 진척이다
+- `WorkflowBoard` / `OpenBoardButton` / `mergeStateLabel` / `cardStatusLabels` / `authorLabel` — 채팅 안의 보드 요약과 보드를 여는 버튼이다. 요약은 카드 진행 막대와, 카드 목록·outcome 목록을 한 번에 하나씩 보이는 탭이다(outcome이 없으면 카드 목록만). 승인 전 Plan(draft·ready)은 카드 탭에서 Plan 순서로, 실행 중인 Plan은 결과 탭에서 시작하고 카드는 판단 필요·막힘·진행 중이 앞에 온다. 두 목록은 제 높이 안에서 스크롤해 카드나 outcome이 많아도 채팅을 밀어내지 않는다. 카드마다 `?board=1&card=…` 링크로 보드의 peek를 연다. 뒤의 두 심볼은 `board/`에서 다시 내보낸다
+- `OutcomeChecklist` / `OutcomeList` / `metOutcomes` — Goal의 outcome마다 장부 상태(카드 없음·진행 중·확인 대기·충족·미충족)와 판정을 보이는 `Item` 목록. 충족 수가 Goal의 진척이다
 - `WorkflowArtifactPanel` / `stageLabels` / `modeLabels` / `composerModeOf` / `workflowModeLabel` / `goalStatusLabels` / `planStatusLabels` — 워크플로 패널과 라벨 표. shadcn `Card` 하나로, 헤더에 모드·단계(계획 중·실행 중·완료)와 다음에 일어날 일, 보드 열기를 두고, 본문에 Goal 문장·Plan 요약·서버 알림(`Alert`)·보드 요약·Plan의 열린 질문과 위험을, footer에 그 단계의 동작(Plan 모드의 승인하고 실행, Plan 수정, Goal 일시 중지·계속·중단)을 둔다
 - `DecisionPrompt` / `describeDecision` — 결정 요청 프롬프트와 `DecisionKind` 설명
 - `BtwPanel` / `WorkTracePanel` / `QueuePanel` / `SubagentPanel` — BTW 곁질문, 작업 추적, 메시지 대기열, 하위 에이전트 패널

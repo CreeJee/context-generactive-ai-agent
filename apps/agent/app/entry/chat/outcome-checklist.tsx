@@ -46,19 +46,18 @@ const outcomeDetail = (status: BoardOutcome["status"]): string | null =>
     NotMet: verdictOf,
   });
 
+/** How many outcomes a verifier found met: the Goal's progress. */
+export const metOutcomes = (outcomes: readonly BoardOutcome[]): number =>
+  Arr.countBy(outcomes, (outcome) => outcome.status._tag === "Met");
+
 /**
- * The Goal's outcomes and where each stands. The Goal is done once a verifier finds every one
- * met, so this list is the Goal's progress.
+ * The Goal's outcomes and where each stands, one row each. A Goal with many outcomes scrolls
+ * inside its own height instead of pushing the chat away.
  */
-export function OutcomeChecklist({ outcomes }: { readonly outcomes: readonly BoardOutcome[] }) {
-  if (outcomes.length === 0) return null;
-  const met = Arr.countBy(outcomes, (outcome) => outcome.status._tag === "Met");
+export function OutcomeList({ outcomes }: { readonly outcomes: readonly BoardOutcome[] }) {
   return (
-    <section aria-label="Goal 결과" className="flex flex-col gap-1.5">
-      <p className="text-xs font-medium">
-        결과 {met}/{outcomes.length} 충족
-      </p>
-      <ItemGroup>
+    <div className="max-h-60 overflow-y-auto">
+      <ItemGroup aria-label="Goal 결과">
         {outcomes.map((outcome) => {
           const look = outcomeLooks[outcome.status._tag];
           const detail = outcomeDetail(outcome.status);
@@ -78,6 +77,22 @@ export function OutcomeChecklist({ outcomes }: { readonly outcomes: readonly Boa
           );
         })}
       </ItemGroup>
+    </div>
+  );
+}
+
+/**
+ * The outcomes under a heading that counts the met ones. The Goal is done once a verifier finds
+ * every one met, so this list is the Goal's progress.
+ */
+export function OutcomeChecklist({ outcomes }: { readonly outcomes: readonly BoardOutcome[] }) {
+  if (outcomes.length === 0) return null;
+  return (
+    <section aria-label="Goal 결과" className="flex flex-col gap-1.5">
+      <p className="text-xs font-medium">
+        결과 {metOutcomes(outcomes)}/{outcomes.length} 충족
+      </p>
+      <OutcomeList outcomes={outcomes} />
     </section>
   );
 }
