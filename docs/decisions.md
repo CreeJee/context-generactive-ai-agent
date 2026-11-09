@@ -4597,6 +4597,11 @@
 - 결정: `criterionMappings`(모델이 outcome 번호와 노드 id를 짝짓는 방식)는 장부로 대체한다. 완료된 세션의 기록은 그대로 둔다. 진행 중인 Goal은 처음 읽을 때 outcome 순서대로 `O1, O2, …`를 붙이고 모두 `open`으로 시작한다.
 - phase는 `chat`, 구체화, 실행 중, 완료로 줄인다. execute·verify는 세션 phase가 아니라 카드 루프 안의 상태가 된다.
 - 순서: 2a outcome id·장부·step의 `outcomes`·내용이 바뀌면 판정 초기화 → 2b 이어 쓰는 Plan(Plan 단독 완료 제거, Goal 완료를 장부로 판정) → 2c 모드 통합(phase 정리, Plan 모드 = 새 카드마다 사용자 승인, 채팅 모델 직접 실행 제거) → 3 루프(다음 카드 작성, 권한 모드별 승인, 진척 없음 한도).
+- 사용자 결정(3 루프): 새 카드가 승인을 기다리는 동안에도 이미 승인된 독립 카드는 계속 돈다. 승인을 기다리는 시간은 진척 없음 한도에 세지 않는다.
+- 구현(2b 칸반): 보드의 merge는 카드가 모두 done이고 장부의 outcome이 모두 met일 때 시작한다(전에는 카드가 모두 done이면 시작했다). 그래서 merge가 끝난 뒤 카드가 더해져 merge되지 않은 채 남는 일이 없다.
+  - merge가 일을 넘기면(merge됨, 수동 merge, PR 생성) 보드 루프가 `OutcomesMet` 전이로 Goal과 Plan을 함께 완료한다. Goal verification은 outcome별 판정 요약이다. worktree가 없는 Goal은 merge가 없으므로 outcome이 모두 met이면 바로 완료한다.
+  - 칸반 보드에서 모델이 `update_workflow_progress`로 Goal·Plan 완료를 기록하면 `outcomes_complete_goal`로 거절한다. 칸반이 아닌 Goal의 완료 기록과 `criterionMappings`는 채팅 모델 직접 실행을 없애는 2c에서 함께 걷는다.
+  - 모델에게 알리는 `cards_done`은 `outcomes_open`이 된다. 카드가 모두 done인데 카드가 없거나 not_met인 outcome이 있을 때만 알리고, 모델은 그 outcome을 위한 카드를 더한다.
 
 ## SQLite 연결은 `synchronous = NORMAL`로 쓴다 (2026-11-09)
 

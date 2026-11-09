@@ -336,6 +336,7 @@ export class WorkflowProgressRefused extends Schema.TaggedError<
       "completion_evidence_required",
       "completion_evidence_invalid",
       "completion_snapshot_conflict",
+      "outcomes_complete_goal",
     ]),
   ]),
 }) {}
@@ -1231,6 +1232,12 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                       },
               }),
             );
+            // A board's Goal completes only from the verifier's outcome verdicts.
+            if (
+              (input.goalStatus === "completed" || input.planStatus === "completed") &&
+              (yield* kanbanBoard(sessionId))
+            )
+              return yield* WorkflowProgressRefused.make({ reason: "outcomes_complete_goal" });
             if (outcome._tag === "Refused")
               return yield* WorkflowProgressRefused.make({ reason: outcome.reason });
             const goalVerification = verification ?? current.goal?.verification;
@@ -1370,6 +1377,80 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                   },
               author,
             );
+          }),
+        ),
+
+      /**
+       * Completes the Goal and its Plan once the verifier judged every outcome met. `met` are the
+       * standings it judged, for the Goal and Plan versions it read; a later version, or a Goal
+       * that may not complete now, is left as it is for the next look. True when it completed.
+       */
+      completeFromOutcomes: (
+        sessionId: string,
+        judged: {
+          readonly goalVersion: number;
+          readonly planVersion: number;
+          readonly met: ReadonlyArray<{ readonly outcomeId: string; readonly summary: string }>;
+        },
+        author: BoardAuthor,
+      ) =>
+        transacted(
+          Effect.gen(function* () {
+            const current = yield* get(sessionId);
+            if (
+              current.goal?.version !== judged.goalVersion ||
+              current.plan?.version !== judged.planVersion
+            )
+              return false;
+            const outcome = goalTransitions.OutcomesMet(
+              goalState(current),
+              GoalEvent.OutcomesMet(),
+            );
+            if (outcome._tag === "Refused") return false;
+            const now = yield* nowIso;
+            const verification = {
+              status: "passed" as const,
+              summary: "The verifier judged every Goal outcome met.",
+              evidence: judged.met.map(({ outcomeId, summary }) => `${outcomeId}: ${summary}`),
+              recoveryPhase: null,
+              updatedAt: now,
+            };
+            const next = withStanding(
+              {
+                ...current,
+                goal: { ...current.goal, verification, updatedAt: now },
+                plan: { ...current.plan, verification, updatedAt: now },
+              },
+              outcome.standing,
+              now,
+            );
+            const verified = event(
+              current,
+              "verification_recorded",
+              `goal completed: outcomes ${judged.met.map(({ outcomeId }) => outcomeId).join(", ")} met`,
+              now,
+            );
+            const ledger = [...current.ledger, verified];
+            yield* save(
+              sessionId,
+              {
+                ...next,
+                ledger:
+                  next.phase === current.phase
+                    ? ledger
+                    : [
+                        ...ledger,
+                        event(
+                          { ...current, ledger },
+                          "phase_changed",
+                          `${current.phase} -> ${next.phase} (goal completed)`,
+                          now,
+                        ),
+                      ],
+              },
+              author,
+            );
+            return true;
           }),
         ),
 

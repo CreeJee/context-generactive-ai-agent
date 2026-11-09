@@ -64,6 +64,28 @@ const releasingMerge = GoalMergeState.match({
 export const mergeReleases = (state: GoalMergeState | null) =>
   state !== null && releasingMerge(state);
 
+const deliveringMerge = GoalMergeState.match({
+  Merged: () => true,
+  ManualMerge: () => true,
+  PullRequestPending: () => false,
+  PullRequestCreated: () => true,
+  PullRequestUncertain: () => false,
+  PullRequestFailed: () => false,
+  Stopped: () => false,
+  Verifying: () => false,
+  VerifyFailed: () => false,
+  WaitingWorktree: () => false,
+  TargetMoving: () => false,
+  AwaitingDecision: () => false,
+});
+
+/**
+ * The Goal's work left the board: it is in the target, a person merges it by hand, or a pull
+ * request holds it. A Goal whose outcomes are all met completes then.
+ */
+export const mergeDelivers = (state: GoalMergeState | null) =>
+  state !== null && deliveringMerge(state);
+
 export interface GoalSchedule {
   readonly goalInstanceId: string;
   readonly projectId: string;

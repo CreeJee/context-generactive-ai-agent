@@ -3,6 +3,7 @@ import {
   Deferred,
   Effect,
   Exit,
+  Fiber,
   FileSystem,
   Option,
   Path,
@@ -10,6 +11,7 @@ import {
   Ref,
   Schedule,
   Scope,
+  Stream,
 } from "effect";
 import { expect } from "vite-plus/test";
 import { layer } from "@effect/vitest";
@@ -127,10 +129,7 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
         });
         yield* run(
           Effect.gen(function* () {
-            const board = yield* executingPlan(fixture, [
-              { ...card("a"), outcomes: ["O1"] },
-              { ...card("b"), outcomes: ["O1"] },
-            ]);
+            const board = yield* executingPlan(fixture, [card("a"), card("b")]);
             yield* (yield* GoalSchedules).setProtectedBranches(board.projectId, []);
             yield* (yield* KanbanOrchestrator).start(board.sessionId);
             // One serving card done is not the outcome done.
@@ -177,7 +176,7 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
         });
         yield* run(
           Effect.gen(function* () {
-            const board = yield* executingPlan(fixture, [{ ...card("a"), outcomes: ["O1"] }]);
+            const board = yield* executingPlan(fixture, [card("a")]);
             yield* (yield* GoalSchedules).setProtectedBranches(board.projectId, []);
             yield* (yield* KanbanOrchestrator).start(board.sessionId);
             yield* eventually(Ref.get(checks), (count) => count > 0);
@@ -192,7 +191,71 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "runs a Goal's cards in parallel by dependency, squashes one commit per card and merges the checked Goal",
+    "merges no Goal with an outcome judged not met, asks the model for cards and lets it not complete the Goal",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* kanbanFixture;
+        const goalChecks = yield* Ref.make(0);
+        const run = yield* openKanbanOwner(fixture, yield* Effect.scope, {
+          agent: () => Effect.succeed(finished),
+          verifyOutcome: () =>
+            Effect.succeed(
+              CardVerdict.Failed({
+                failure: VerdictFailure.cases.Rejected.make({ note: "search is missing" }),
+              }),
+            ),
+          verifyGoal: () =>
+            Effect.as(
+              Ref.update(goalChecks, (count) => count + 1),
+              passed,
+            ),
+        });
+        yield* run(
+          Effect.scoped(
+            Effect.gen(function* () {
+              const board = yield* executingPlan(fixture, [card("a")]);
+              yield* (yield* GoalSchedules).setProtectedBranches(board.projectId, []);
+              const orchestrator = yield* KanbanOrchestrator;
+              const heard = yield* orchestrator.attention.pipe(
+                Stream.filter((attention) => attention.reasons.includes("outcomes_open")),
+                Stream.runHead,
+                Effect.forkScoped,
+              );
+              yield* orchestrator.start(board.sessionId);
+              expect(
+                Option.map(yield* Fiber.join(heard), (attention) => attention.sessionId),
+              ).toEqual(Option.some(board.sessionId));
+              expect(yield* (yield* OutcomeLedger).latest(board.goalInstanceId)).toMatchObject([
+                { outcomeId: "O1", met: false, summary: "search is missing" },
+              ]);
+              // Looks keep coming; none merges or completes the Goal.
+              yield* Effect.sleep("300 millis");
+              expect(yield* mergeOf(board.goalInstanceId)).toBeNull();
+              expect(yield* Ref.get(goalChecks)).toBe(0);
+              const workflows = yield* Workflows;
+              expect((yield* workflows.get(board.sessionId)).goal?.status).toBe("active");
+              // Only the verdicts complete a board's Goal; the model's record is refused.
+              const refused = yield* workflows
+                .updateProgress(board.sessionId, {
+                  goalStatus: "completed",
+                  planStatus: "completed",
+                  steps: [],
+                  goalEvidence: [],
+                  planEvidence: [],
+                  verification: { status: "passed", summary: "done", evidence: ["looks done"] },
+                  detail: "Goal done",
+                })
+                .pipe(Effect.flip);
+              expect(refused).toMatchObject({ reason: "outcomes_complete_goal" });
+            }),
+          ),
+        );
+      }),
+    gitTimeout,
+  );
+
+  it.effect(
+    "runs a Goal's cards in parallel by dependency, squashes one commit per card, merges the checked Goal and completes it",
     () =>
       Effect.gen(function* () {
         const fixture = yield* kanbanFixture;
@@ -242,6 +305,17 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
             expect(yield* Queue.take(started)).toBe("c");
             yield* eventually(mergeOf(board.goalInstanceId), mergeIs("Merged"));
             expect(yield* waitForCards(board.sessionId, allDone)).toHaveLength(3);
+            // Merged with its one outcome met, the Goal and its Plan complete from the verdict.
+            const workflows = yield* Workflows;
+            const completed = yield* eventually(
+              workflows.get(board.sessionId),
+              (state) => state.phase === "completed",
+            );
+            expect(completed.goal).toMatchObject({
+              status: "completed",
+              verification: { status: "passed", evidence: ["O1: outcome O1 met"] },
+            });
+            expect(completed.plan?.status).toBe("completed");
             return board.goalInstanceId;
           }),
         );

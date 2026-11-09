@@ -29,6 +29,7 @@
 - `NewGoalRequested`: 거절: `goal_missing`, 거절: `phase_not_authorized`
 - `NewGoalStarted`: 거절: `goal_missing`, 거절: `phase_not_authorized`
 - `BoardEdited`: NoGoal, 거절: `plan_missing`, 그대로
+- `OutcomesMet`: 거절: `goal_missing`
 
 ## `Shaping`
 
@@ -45,6 +46,7 @@
 - `NewGoalRequested`: 거절: `phase_not_authorized`, 그대로
 - `NewGoalStarted`: Shaping, 거절: `phase_not_authorized`, 그대로
 - `BoardEdited`: Closed, Shaping, 거절: `plan_missing`, 그대로
+- `OutcomesMet`: 거절: `plan_not_executing`
 
 ## `Running`
 
@@ -61,6 +63,7 @@
 - `NewGoalRequested`: 거절: `phase_not_authorized`, 그대로
 - `NewGoalStarted`: Shaping, 거절: `phase_not_authorized`
 - `BoardEdited`: Closed, Running, 그대로
+- `OutcomesMet`: Completed, 거절: `steps_incomplete`
 
 ## `GoalChanged`
 
@@ -77,6 +80,7 @@
 - `NewGoalRequested`: 거절: `phase_not_authorized`, 그대로
 - `NewGoalStarted`: Shaping, 거절: `phase_not_authorized`
 - `BoardEdited`: Closed, GoalChanged, 그대로
+- `OutcomesMet`: Completed, 거절: `steps_incomplete`
 
 ## `Paused`
 
@@ -93,6 +97,7 @@
 - `NewGoalRequested`: 거절: `phase_not_authorized`, 그대로
 - `NewGoalStarted`: Shaping, 거절: `phase_not_authorized`
 - `BoardEdited`: Closed, Paused, 거절: `plan_missing`, 그대로
+- `OutcomesMet`: 거절: `goal_not_active`
 
 ## `Blocked`
 
@@ -109,6 +114,7 @@
 - `NewGoalRequested`: 거절: `phase_not_authorized`, 그대로
 - `NewGoalStarted`: Shaping, 거절: `phase_not_authorized`
 - `BoardEdited`: Blocked, Closed, 그대로
+- `OutcomesMet`: 거절: `plan_not_executing`
 
 ## `Stopped`
 
@@ -125,6 +131,7 @@
 - `NewGoalRequested`: 거절: `phase_not_authorized`, 그대로
 - `NewGoalStarted`: Shaping, 거절: `phase_not_authorized`
 - `BoardEdited`: Stopped, 거절: `plan_missing`, 그대로
+- `OutcomesMet`: 거절: `goal_terminal`
 
 ## `Closed`
 
@@ -141,6 +148,7 @@
 - `NewGoalRequested`: 거절: `phase_not_authorized`, 그대로
 - `NewGoalStarted`: Shaping, 거절: `phase_not_authorized`
 - `BoardEdited`: Closed, 그대로
+- `OutcomesMet`: 거절: `plan_not_executing`
 
 ## `Completed`
 
@@ -157,3 +165,4 @@
 - `NewGoalRequested`: 거절: `phase_not_authorized`, 그대로
 - `NewGoalStarted`: Shaping, 거절: `phase_not_authorized`
 - `BoardEdited`: Completed, 거절: `plan_missing`, 그대로
+- `OutcomesMet`: 거절: `goal_terminal`

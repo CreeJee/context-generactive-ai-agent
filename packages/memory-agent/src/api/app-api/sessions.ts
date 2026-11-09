@@ -264,6 +264,7 @@ const WorkflowChangeRefused = appRefusal(409, [
   "completion_evidence_required",
   "completion_evidence_invalid",
   "completion_snapshot_conflict",
+  "outcomes_complete_goal",
 ]);
 
 /** The archive, restore or delete cannot start; `blocker` says why. */

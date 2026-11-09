@@ -308,6 +308,7 @@ export const kanbanOwner = (owner: {
     Layer.provideMerge(kanbanOwnerBase(owner.fixture, owner.cores ?? 2)),
   );
 
+/** A card serving the fixture Goal's one outcome: a board whose cards are done reaches its Goal. */
 export const card = (id: string): UpdatePlan["steps"][number] => ({
   id,
   title: `Card ${id}`,
@@ -315,7 +316,7 @@ export const card = (id: string): UpdatePlan["steps"][number] => ({
   dependsOn: [],
   acceptanceCriteria: [`${id} works`],
   ruleRefs: [],
-  outcomes: [],
+  outcomes: ["O1"],
 });
 
 export const goalInput = {

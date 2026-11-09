@@ -80,6 +80,7 @@ const eventsFor = (standing: Standing): ReadonlyArray<GoalEvent> => [
   ...[false, true].flatMap((closes) =>
     steps.map((step) => GoalEvent.BoardEdited({ closes, ...step })),
   ),
+  GoalEvent.OutcomesMet(),
 ];
 
 const keyOf = ({ phase, goal, plan }: Standing) =>

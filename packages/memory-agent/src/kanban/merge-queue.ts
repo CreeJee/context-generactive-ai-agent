@@ -47,7 +47,8 @@ import { LoopStep } from "../runtime/loop-health.ts";
 
 /**
  * The merge queue of the project scheduler (docs/kanban-orchestration.md "브랜치 흐름" 5,
- * "프로젝트 스케줄러"). A Goal whose cards are all done takes the user's branch in, passes the
+ * "프로젝트 스케줄러"). A Goal whose cards are all done and whose outcomes the verifier judged all
+ * met takes the user's branch in, passes the
  * Goal-level check, and then moves the user's branch to the Goal branch. Merges into one branch
  * run one at a time, by the owner and outside any sandbox. Protected branches and conflicts go to a
  * person; a checkout with uncommitted changes is waited for, never overwritten.
@@ -574,7 +575,7 @@ const make = Effect.gen(function* () {
   );
 
   return {
-    /** Starts or continues the merge of a Goal whose cards are all done. */
+    /** Starts or continues the merge of a Goal whose cards are done and outcomes all met. */
     offer: Effect.fn("GoalMerges.offer")(function* (goal: KanbanGoal) {
       const schedule = yield* schedules.get(goal.goalInstanceId);
       yield* Effect.transposeOption(

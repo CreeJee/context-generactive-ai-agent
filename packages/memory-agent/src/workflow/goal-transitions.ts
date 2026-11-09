@@ -256,6 +256,8 @@ export type GoalEvent = Data.TaggedEnum<{
   NewGoalStarted: { readonly status: "draft" | "active" };
   /** A board change; `closes` when it ends the Plan. The step fields describe the changed steps. */
   BoardEdited: { readonly closes: boolean; readonly done: boolean; readonly proven: boolean };
+  /** The verifier judged every outcome of the Goal met and the owner delivered its work. */
+  OutcomesMet: {};
 }>;
 export const GoalEvent = Data.taggedEnum<GoalEvent>();
 
@@ -284,6 +286,12 @@ export interface GoalRefusals {
   readonly NewGoalRequested: "goal_missing" | "phase_not_authorized";
   readonly NewGoalStarted: "goal_missing" | "phase_not_authorized";
   readonly BoardEdited: "plan_missing";
+  readonly OutcomesMet:
+    | "goal_missing"
+    | "goal_terminal"
+    | "goal_not_active"
+    | "plan_not_executing"
+    | "steps_incomplete";
 }
 export type GoalRefusal = GoalRefusals[keyof GoalRefusals];
 
@@ -563,6 +571,24 @@ const editBoard =
           },
         });
 
+/** The Goal and its Plan complete together; only the outcome verdicts complete them. */
+const meet = ({ standing }: { readonly standing: Standing }) =>
+  standing.plan === null
+    ? refused("plan_not_executing")
+    : !standing.plan.done
+      ? refused("steps_incomplete")
+      : moved({
+          phase: "completed",
+          goal: { status: "completed", passed: true, proven: true },
+          plan: {
+            ...standing.plan,
+            status: "completed",
+            verification: "passed",
+            evidence: true,
+            recoveryPhase: null,
+          },
+        });
+
 /** Every event in every state. A state that is missing from an event is a type error. */
 export const goalTransitions: GoalTransitions = {
   Navigated: (state, { phase }) => {
@@ -725,6 +751,18 @@ export const goalTransitions: GoalTransitions = {
       Closed: editBoard(event),
       Completed: editBoard(event),
     }),
+  OutcomesMet: (state) =>
+    Match.valueTags(state, {
+      NoGoal: () => refused("goal_missing"),
+      Running: meet,
+      GoalChanged: meet,
+      Shaping: () => refused("plan_not_executing"),
+      Blocked: () => refused("plan_not_executing"),
+      Closed: () => refused("plan_not_executing"),
+      Paused: () => refused("goal_not_active"),
+      Stopped: terminal,
+      Completed: terminal,
+    }),
 };
 
 /** `event` in `state`, whichever event it is. */
@@ -746,5 +784,6 @@ export const transition: {
     NewGoalRequested: (value) => goalTransitions.NewGoalRequested(state, value),
     NewGoalStarted: (value) => goalTransitions.NewGoalStarted(state, value),
     BoardEdited: (value) => goalTransitions.BoardEdited(state, value),
+    OutcomesMet: (value) => goalTransitions.OutcomesMet(state, value),
   }),
 );

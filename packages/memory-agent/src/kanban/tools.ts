@@ -328,14 +328,15 @@ Your part is what the loop cannot decide. Read the board with read_kanban_board,
 - A blocked card whose deliveries ran out: requeue once the cause is understood.
 - The user asks the board to target the branch they now have checked out: retarget.
 - A Goal outcome that is unplanned or not_met: add cards that serve it (their outcomes name its id), reading a not_met verdict for what is missing.
+The verifier judges each outcome once its cards are done. When every outcome is met the owner merges the Goal branch and completes the Goal and its Plan; you never record their completion.
 Cards in human_decision wait for a person; do not move them yourself unless the user tells you to.`;
 
 const reasonText = {
   goal_changed: "The Goal changed: classify the cards with edit_kanban_board apply_goal_change.",
   replan_requested: "A card keeps failing and asks to be replanned.",
   change_requested: "A user asked to change a running card: settle it.",
-  cards_done:
-    "Every card is done: the owner checks the whole Goal branch and merges it into the user's branch; read the board's merge state and record the Goal's verification from it.",
+  outcomes_open:
+    "Every card is done, yet a Goal outcome is unplanned or not_met: add cards that serve it.",
   file_overlap:
     "A card's expected files overlap a running card of another Goal; the later card waits. Reorder or split cards if waiting is not right.",
   goal_unverified:

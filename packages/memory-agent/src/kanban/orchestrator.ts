@@ -63,7 +63,8 @@ import {
   type DecisionAnswer,
   type HumanDecisionRequest,
 } from "./human-decision.ts";
-import { GoalSchedules } from "./goal-schedules.ts";
+import { GoalSchedules, mergeDelivers } from "./goal-schedules.ts";
+import { OutcomeLedger, outcomeStandings, OutcomeStatus } from "../workflow/outcome-ledger.ts";
 import { CardFailure, CardHoldReason, failureCode, worktreeFailure } from "./failures.ts";
 import { loopStopped } from "../runtime/loop-health.ts";
 import { BoardHealth, type BoardRef } from "./board-health.ts";
@@ -87,7 +88,7 @@ export const KanbanAttentionReason = Schema.Literals([
   "goal_changed",
   "replan_requested",
   "change_requested",
-  "cards_done",
+  "outcomes_open",
   "file_overlap",
   "goal_unverified",
   "upstream_regressed",
@@ -176,6 +177,7 @@ const make = (options: KanbanOrchestratorOptions) =>
     const scheduler = yield* ProjectScheduler;
     const merges = yield* GoalMerges;
     const schedules = yield* GoalSchedules;
+    const ledger = yield* OutcomeLedger;
     const health = yield* BoardHealth;
     const janitor = yield* CardWorkspaceJanitor;
     const pollInterval = Duration.fromInputUnsafe(options.pollInterval ?? Duration.seconds(5));
@@ -961,6 +963,22 @@ const make = (options: KanbanOrchestratorOptions) =>
         .map((step) => step.id);
       const requests = yield* attempts.pendingChangeRequests(goal.sessionId);
       const allDone = steps.length > 0 && steps.every((step) => step.status === "done");
+      const standings = outcomeStandings({
+        outcomes: state.goal?.outcomes ?? [],
+        steps,
+        latest: yield* ledger.latest(goalInstanceId),
+      });
+      // The Goal is reached when every card is done and the verifier judged every outcome met.
+      const reached =
+        allDone && standings.every((standing) => OutcomeStatus.guards.Met(standing.status));
+      // Every card is done, yet an outcome has no card or was judged not met: the model adds cards.
+      const outcomesOpen =
+        allDone &&
+        standings.some(
+          (standing) =>
+            OutcomeStatus.guards.Unplanned(standing.status) ||
+            OutcomeStatus.guards.NotMet(standing.status),
+        );
 
       // Cards in verify that no integration is working on (after a restart, or a person moved
       // them there) are verified again. A held Goal verifies none until its cards are classified:
@@ -1000,9 +1018,29 @@ const make = (options: KanbanOrchestratorOptions) =>
         { discard: true },
       );
 
-      // Every card is done: the merge queue takes the Goal into its target branch.
+      // The Goal is reached: the merge queue takes it into its target branch.
       const schedule = yield* schedules.get(goalInstanceId);
-      if (executing && goal.hold === null && allDone) yield* merges.offer(goal);
+      const settled = executing && goal.hold === null && reached;
+      if (settled) yield* merges.offer(goal);
+      // Its work delivered, or run in the project itself, the Goal and its Plan complete.
+      yield* Effect.when(
+        workflows.completeFromOutcomes(
+          goal.sessionId,
+          {
+            goalVersion: state.goal?.version ?? -1,
+            planVersion: state.plan?.version ?? -1,
+            met: standings.flatMap(({ outcomeId, status }) =>
+              OutcomeStatus.guards.Met(status) ? [{ outcomeId, summary: status.summary }] : [],
+            ),
+          },
+          loopAuthor(goalInstanceId),
+        ),
+        Effect.succeed(
+          settled &&
+            (goal.mode === "sequential" ||
+              Option.exists(schedule, (found) => mergeDelivers(found.merge))),
+        ),
+      );
       // An outcome whose cards are all done is judged on the Goal's work.
       yield* Effect.when(
         merges.checkOutcomes(goal),
@@ -1017,7 +1055,7 @@ const make = (options: KanbanOrchestratorOptions) =>
         goal_changed: goal.hold !== null,
         replan_requested: replanning.length > 0,
         change_requested: requests > 0,
-        cards_done: allDone,
+        outcomes_open: outcomesOpen,
         file_overlap: notices.length > 0,
         goal_unverified: Option.exists(schedule, (found) =>
           Predicate.isTagged(found.merge, "VerifyFailed"),

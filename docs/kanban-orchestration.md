@@ -85,7 +85,7 @@ type BoardAuthor =
    - 그사이 다른 카드가 Goal 브랜치를 앞으로 옮겼으면, 먼저 Goal 브랜치를 카드 브랜치에 merge하고 카드의 Evidence를 다시 확인한다.
    - 그다음 카드 하나를 squash commit 하나로 Goal 브랜치에 올린다. 카드와 commit이 1:1이라 되돌리기 쉽다.
    - 충돌은 자동으로 풀지 않는다. 오케스트레이터가 해결 카드를 새로 만들거나 `human_decision`으로 보낸다.
-4. 카드가 모두 `done`이면 Goal 브랜치에서 Goal 수준 통합 검증을 한다.
+4. 카드가 모두 `done`이고 검증자가 Goal outcome을 모두 met으로 판정하면 Goal 브랜치에서 Goal 수준 통합 검증을 한다. 남은 outcome이 있으면 merge하지 않고 계획자가 카드를 더한다. merge가 일을 넘기면(merge됨, 수동 merge, PR 생성) Goal과 Plan이 함께 완료된다. worktree가 없는 Goal은 outcome이 모두 met일 때 바로 완료된다(2026-11-09, decisions.md "outcome 장부와 이어 쓰는 Plan").
 5. 통합 검증을 통과하면 Goal을 시작한 사용자 브랜치에 자동으로 merge한다(확정 2026-10-18). 예외: 대상이 보호 브랜치(프로젝트 설정, 기본 `main`·`staging`)면 자동 merge하지 않고 `human_decision`에서 PR 생성이나 수동 merge를 고른다.
    - 같은 대상 브랜치로 가는 merge는 owner가 대상 브랜치별로 하나씩 처리한다(merge queue).
    - 사용자 브랜치가 그사이 앞으로 갔으면 Goal 브랜치에 먼저 merge하고 통합 검증을 다시 한다. 충돌은 `human_decision`으로 보낸다.
@@ -134,7 +134,7 @@ GoalChanged(v3 → v4)
 ```text
 보드 로드 → Ready 선택(dependsOn·WIP·파일 겹침 힌트) → DurableQueue.process(card)
 → 결과 수집 → verify(Evidence) → merge | human_decision | 재계획(분할·병합·취소)
-→ UserChangeRequest 처리 → 반복. 카드가 모두 done이면 Goal 수준 통합 검증
+→ UserChangeRequest 처리 → 반복. 카드가 모두 done이고 outcome이 모두 met이면 Goal 수준 통합 검증
 ```
 
 - 반복 실패는 재시도 → 긴 backoff → 재계획 → `human_decision` 순서로 승격한다.

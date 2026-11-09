@@ -657,8 +657,8 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
           Effect.scoped(
             Effect.gen(function* () {
               const board = yield* executingBoard(fixture, [
-                { ...card("a"), outcomes: ["O1"] },
-                card("b"),
+                card("a"),
+                { ...card("b"), outcomes: [] },
               ]);
               const tools = Context.get(
                 yield* Layer.build(
