@@ -1,4 +1,4 @@
-import { Context, Effect, FileSystem, Layer, Schema, Semaphore } from "effect";
+import { Context, Effect, FileSystem, Layer, Option, Schema, Semaphore } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 
 const ScalarAttribute = Schema.Union([Schema.Finite, Schema.Boolean]);
@@ -15,6 +15,12 @@ export const SpanRecord = Schema.Struct({
   outcome: Schema.Literals(["ok", "error", "interrupted"]),
   /** Numbers and booleans only: string values can carry prompts, paths or provider errors. */
   attributes: Schema.Record(Schema.String, ScalarAttribute),
+  /**
+   * The SQL a statement span ran (`db.query.text`). Effect names every statement span the same,
+   * so this is what tells them apart; it holds the statement as the code wrote it, with
+   * placeholders where the values go.
+   */
+  query: Schema.optionalKey(Schema.String),
 });
 export type SpanRecord = typeof SpanRecord.Type;
 
@@ -26,6 +32,13 @@ export const scalarAttributes = (entries: Iterable<readonly [string, unknown]>) 
       isScalarAttribute(value) ? [[key, value] as const] : [],
     ),
   );
+
+/** The one string attribute the collectors keep: Effect sets it on every SQL statement span. */
+export const queryTextAttribute = "db.query.text";
+
+/** The record's `query` field, present only when the span carried its SQL. */
+export const queryField = (query: Option.Option<string>): { readonly query?: string } =>
+  Option.match(query, { onNone: () => ({}), onSome: (text) => ({ query: text }) });
 
 export const nanosToMillis = (nanos: bigint) => Number(nanos / 1_000n) / 1_000;
 

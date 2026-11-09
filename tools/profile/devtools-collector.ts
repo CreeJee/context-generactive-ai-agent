@@ -1,7 +1,14 @@
 import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer";
-import { Cause, Console, Effect, Exit, Match, Option, Stream } from "effect";
+import { Cause, Console, Effect, Exit, Match, Option, Predicate, Stream } from "effect";
 import { DevToolsSchema, DevToolsServer } from "effect/devtools";
-import { nanosToMillis, scalarAttributes, SpanWriter, type SpanRecord } from "./span-record.ts";
+import {
+  nanosToMillis,
+  queryField,
+  queryTextAttribute,
+  scalarAttributes,
+  SpanWriter,
+  type SpanRecord,
+} from "./span-record.ts";
 
 const outcomeOf = (exit: DevToolsSchema.SpanStatusEnded["exit"]): SpanRecord["outcome"] =>
   Exit.isSuccess(exit) ? "ok" : Cause.hasInterruptsOnly(exit.cause) ? "interrupted" : "error";
@@ -22,6 +29,12 @@ const toRecord = (request: DevToolsSchema.Request.WithoutPing): ReadonlyArray<Sp
             durationMs: nanosToMillis(status.endTime - status.startTime),
             outcome: outcomeOf(status.exit),
             attributes: scalarAttributes(span.attributes),
+            ...queryField(
+              Option.filter(
+                Option.fromNullishOr(span.attributes.get(queryTextAttribute)),
+                Predicate.isString,
+              ),
+            ),
           },
         ],
       }),

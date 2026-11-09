@@ -1,13 +1,22 @@
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
-import { Console, Effect, Layer, Schema } from "effect";
+import { Array as Arr, Console, Effect, Layer, Option, Schema } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
-import { nanosToMillis, scalarAttributes, SpanWriter, type SpanRecord } from "./span-record.ts";
+import {
+  nanosToMillis,
+  queryField,
+  queryTextAttribute,
+  scalarAttributes,
+  SpanWriter,
+  type SpanRecord,
+} from "./span-record.ts";
 
-// Excess keys are dropped while decoding, so string attribute values never reach the file.
+// Excess keys are dropped while decoding. A string value is read for the SQL text alone, so no
+// other string attribute reaches the file.
 const OtlpValue = Schema.Struct({
   boolValue: Schema.optionalKey(Schema.Boolean),
   intValue: Schema.optionalKey(Schema.Union([Schema.Finite, Schema.FiniteFromString])),
   doubleValue: Schema.optionalKey(Schema.Finite),
+  stringValue: Schema.optionalKey(Schema.String),
 });
 
 const OtlpSpan = Schema.Struct({
@@ -52,6 +61,12 @@ const toRecord = (span: typeof OtlpSpan.Type): SpanRecord => {
           ? "interrupted"
           : "ok",
     attributes,
+    ...queryField(
+      Option.flatMapNullishOr(
+        Arr.findFirst(span.attributes, ({ key }) => key === queryTextAttribute),
+        ({ value }) => value.stringValue,
+      ),
+    ),
   };
 };
 

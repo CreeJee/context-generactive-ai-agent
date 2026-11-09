@@ -10,15 +10,17 @@
 - `profile collect-otlp --out <file> [--port 4318] [--until-stdin-closes]` — 127.0.0.1에서 OTLP/JSON trace를 받아 span NDJSON으로 덧붙임, 플래그가 있으면 stdin이 닫힐 때 종료
 - `profile collect-devtools --out <file> [--port 34437]` — Effect devtools 프로토콜(WebSocket)로 끝난 span을 받아 NDJSON으로 저장 (개발용)
 - `profile summarize <file...> [--top 20]` — `.cpuprofile`로 끝나면 CPU 요약, 아니면 span NDJSON 요약을 stdout에 출력
-- `SpanRecord` — span 한 줄 Schema (traceId, spanId, parentSpanId|null, name, startUnixMs, durationMs, outcome `ok|error|interrupted`, 숫자·불리언만 있는 attributes)
+- `SpanRecord` — span 한 줄 Schema (traceId, spanId, parentSpanId|null, name, startUnixMs, durationMs, outcome `ok|error|interrupted`, 숫자·불리언만 있는 attributes, SQL 문장 span이면 선택 필드 `query`)
 - `SpanLine` — `Schema.fromJsonString(SpanRecord)`, NDJSON 한 줄 인코딩·디코딩
 - `SpanWriter` — `Context.Service`(키 `tools/profile/span-record/SpanWriter`), `{ file, write(records) }`, `SpanWriter.layer(file)`로 제공
 - `scalarAttributes` — 속성 항목 중 유한 숫자와 불리언만 남기는 함수
+- `queryTextAttribute` — 수집기가 남기는 유일한 문자열 속성 키 `db.query.text` (Effect가 SQL 문장 span마다 다는 문장)
+- `queryField(query)` — `Option<string>`을 레코드의 `{ query }` 필드로 바꾸고, 없으면 빈 객체를 돌려주는 함수
 - `nanosToMillis` — bigint 나노초를 밀리초 number로 변환
 - `otlpCollector(port)` — `POST /v1/traces`(OTLP/JSON 디코딩 후 `SpanWriter.write`)와 `POST /v1/metrics`(받고 버림)를 띄우는 `Layer.launch` Effect, `SpanWriter` 필요
 - `devtoolsCollector(port)` — `DevToolsServer.run`으로 클라이언트 큐의 Ended span만 기록하는 Effect, `SpanWriter` 필요
 - `readSpans(file)` — NDJSON 파일을 읽어 빈 줄을 빼고 `SpanLine`으로 디코딩
-- `summarizeSpans(spans, top)` — 이름별 total/self/count/p50/p95/max/err/int 표와 가장 느린 span 경로(바깥쪽부터) 텍스트 생성
+- `summarizeSpans(spans, top)` — 이름별 total/self/count/p50/p95/max/err/int 표, SQL 문장별 total/count/p50/p95/max/err 표, 가장 느린 span 경로(바깥쪽부터, SQL 문장이면 문장도) 텍스트 생성
 - `readCpuProfile(file)` — `.cpuprofile` JSON을 읽어 `CpuProfile` Schema로 디코딩
 - `summarizeCpuProfile(profile, root, top)` — self/total 상위 함수, VM 분류(idle/GC/program), 소유자(워크스페이스 폴더·의존성·node·vm)별 self 시간 텍스트 생성
 - `workingRoot` — `Path.resolve(".")`로 현재 작업 폴더를 돌려주는 Effect
@@ -26,6 +28,8 @@
 ## Invariants
 
 - `SpanRecord.attributes`는 숫자(Finite)와 불리언만 담는다. 문자열 값은 프롬프트·경로·provider 오류를 실을 수 있으므로 파일에 쓰지 않는다 (`scalarAttributes`, OTLP Schema는 초과 키를 디코딩 중에 버림).
+- 예외는 `db.query.text` 하나이고 `attributes`가 아니라 `query` 필드에 둔다. Effect SQL 문장 span은 이름이 모두 같아서 문장 없이는 어느 쿼리가 느린지 알 수 없다. 문장은 코드에 쓴 그대로이고 값은 `?` 자리로 빠진다. `sql.literal`·`sql.unsafe`로 넣은 값만 문장에 남는다.
+- 요약은 문장의 공백을 한 칸으로 줄여 같은 문장끼리 묶고, 표와 경로에는 앞 240자만 보인다.
 - `SpanWriter.write`는 `Semaphore.make(1)`로 한 번에 한 쓰기만 하여 동시 배치의 줄이 섞이지 않게 한다. 빈 배열이면 쓰지 않는다.
 - 두 수집기와 `summarize`는 같은 `SpanLine`(NDJSON 한 줄 = `SpanRecord` 하나) 형식을 공유한다. 형식을 바꾸면 수집기와 요약기를 함께 바꿔야 한다.
 - OTLP 수집기는 `127.0.0.1`에만 바인딩한다. span은 로컬 프로파일링 데이터이고 네트워크 서비스가 아니다.

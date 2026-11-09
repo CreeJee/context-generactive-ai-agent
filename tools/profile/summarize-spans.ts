@@ -80,6 +80,50 @@ const statsTable = (title: string, rows: ReadonlyArray<NameStats>) => [
   }),
 ];
 
+/** A statement on one line: SQL written across lines in the code reads as one in a table. */
+const oneLine = (query: string) => query.replace(/\s+/g, " ").trim();
+/** How much of a statement a table row shows; the start says which statement it is. */
+const shownQuery = 240;
+
+interface QueryStats {
+  readonly query: string;
+  readonly durations: ReadonlyArray<number>;
+  readonly errors: number;
+}
+
+/** Statement spans by their SQL, the most total time first. */
+const statementTable = (spans: ReadonlyArray<SpanRecord>, top: number) => {
+  const statements = spans.flatMap((span) =>
+    span.query === undefined ? [] : [{ query: oneLine(span.query), span }],
+  );
+  const rows = Object.entries(Arr.groupBy(statements, (statement) => statement.query)).map(
+    ([query, group]): QueryStats => ({
+      query,
+      durations: group.map(({ span }) => span.durationMs),
+      errors: Arr.countBy(group, ({ span }) => span.outcome === "error"),
+    }),
+  );
+  return [
+    `SQL 문장 total 기준 상위 ${Math.min(top, rows.length)} (문장 ${rows.length}종)`,
+    "  total ms  count     p50 ms     p95 ms     max ms  err  query",
+    ...rows
+      .toSorted((a, b) => sum(b.durations) - sum(a.durations))
+      .slice(0, top)
+      .map((row) => {
+        const sorted = row.durations.toSorted((a, b) => a - b);
+        return [
+          ms(sum(sorted)),
+          String(sorted.length).padStart(6),
+          ms(percentile(sorted, 0.5)),
+          ms(percentile(sorted, 0.95)),
+          ms(sorted.at(-1) ?? 0),
+          String(row.errors).padStart(4),
+          ` ${row.query.slice(0, shownQuery)}`,
+        ].join(" ");
+      }),
+  ];
+};
+
 /** The slowest spans with the chain of span names above them, outermost first. */
 const slowestPaths = (spans: ReadonlyArray<SpanRecord>, top: number) => {
   const byId = MutableHashMap.fromIterable(spans.map((span) => [span.spanId, span] as const));
@@ -97,7 +141,12 @@ const slowestPaths = (spans: ReadonlyArray<SpanRecord>, top: number) => {
   return spans
     .toSorted((a, b) => b.durationMs - a.durationMs)
     .slice(0, top)
-    .map((span) => `${ms(span.durationMs)}  ${span.outcome.padEnd(11)} ${pathOf(span)}`);
+    .map(
+      (span) =>
+        `${ms(span.durationMs)}  ${span.outcome.padEnd(11)} ${pathOf(span)}${
+          span.query === undefined ? "" : `  ${oneLine(span.query).slice(0, shownQuery)}`
+        }`,
+    );
 };
 
 export const summarizeSpans = (spans: ReadonlyArray<SpanRecord>, top: number) => {
@@ -117,6 +166,8 @@ export const summarizeSpans = (spans: ReadonlyArray<SpanRecord>, top: number) =>
       `self 기준 상위 ${top}`,
       stats.toSorted((a, b) => b.selfMs - a.selfMs).slice(0, top),
     ),
+    "",
+    ...statementTable(spans, top),
     "",
     `가장 느린 span ${Math.min(top, spans.length)}개 (경로는 바깥쪽부터)`,
     ...slowestPaths(spans, top),
