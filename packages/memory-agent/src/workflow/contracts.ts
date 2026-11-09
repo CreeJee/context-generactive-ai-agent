@@ -200,6 +200,9 @@ export const planStepFields = {
   dependsOn: Schema.Array(Schema.String),
   acceptanceCriteria: Schema.Array(Schema.String),
   ruleRefs: Schema.Array(Schema.String),
+  outcomes: Schema.Array(OutcomeId).annotate({
+    description: "Ids of the current Goal outcomes this step serves.",
+  }),
 } as const;
 
 const recordedEvidence = Schema.Array(Schema.String).pipe(
@@ -208,6 +211,8 @@ const recordedEvidence = Schema.Array(Schema.String).pipe(
 
 export const PlanStep = Schema.Struct({
   ...planStepFields,
+  // Steps saved before steps named their outcomes serve none.
+  outcomes: Schema.Array(OutcomeId).pipe(Schema.withDecodingDefaultTypeKey(Effect.succeed([]))),
   ...cardContractFields,
   ...cardHoldFields,
   status: CardStatus,
@@ -272,7 +277,7 @@ export const CardDraft = Schema.Struct({
   dependsOn: Schema.Array(Schema.String),
   acceptanceCriteria: Schema.Array(Schema.String),
   ruleRefs: Schema.optionalKey(Schema.Array(Schema.String)),
-  outcome: Schema.optionalKey(Schema.String),
+  outcomes: Schema.optionalKey(Schema.Array(OutcomeId)),
   boundaries: Schema.optionalKey(Schema.Array(Schema.String)),
   risk: Schema.optionalKey(CardRisk),
   requiredEvidence: Schema.optionalKey(Schema.Array(Schema.String)),
@@ -288,7 +293,7 @@ export const CardPatch = Schema.Struct({
   dependsOn: Schema.optionalKey(Schema.Array(Schema.String)),
   acceptanceCriteria: Schema.optionalKey(Schema.Array(Schema.String)),
   ruleRefs: Schema.optionalKey(Schema.Array(Schema.String)),
-  outcome: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  outcomes: Schema.optionalKey(Schema.Array(OutcomeId)),
   boundaries: Schema.optionalKey(Schema.NullOr(Schema.Array(Schema.String))),
   risk: Schema.optionalKey(Schema.NullOr(CardRisk)),
   requiredEvidence: Schema.optionalKey(Schema.NullOr(Schema.Array(Schema.String))),

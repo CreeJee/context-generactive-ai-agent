@@ -57,6 +57,7 @@ const plan = {
       dependsOn: [],
       acceptanceCriteria: ["Check passes"],
       ruleRefs: [],
+      outcomes: [],
     },
   ],
 };

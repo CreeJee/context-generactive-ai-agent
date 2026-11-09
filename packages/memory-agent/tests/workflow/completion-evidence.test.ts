@@ -39,6 +39,7 @@ const plan = {
       dependsOn: [],
       acceptanceCriteria: ["Actual verification"],
       ruleRefs: [],
+      outcomes: [],
     },
   ],
   risks: [],

@@ -15,6 +15,7 @@ import {
 } from "./workflow.ts";
 import { runTool, type RunTool } from "../tools/run-tool.ts";
 import { RuleSource, type ResolvedRules } from "./rules.ts";
+import { unknownStepOutcomeText } from "./step-outcomes.ts";
 import { WorkflowBlocker, WorkflowExecution } from "./execution.ts";
 import { BoardAuthor, stepProgressStatus } from "./card.ts";
 import { EditPlan } from "./contracts.ts";
@@ -69,7 +70,7 @@ const updateGoal = {
 const updatePlan = {
   name: "update_plan",
   description:
-    "Save the whole canonical Plan artifact. Use to make a Plan or rewrite most of it; to change, add, move or remove a few steps use edit_plan, which does not resend the Plan. Each step needs stable unique ids, dependencies, acceptance criteria and applicable workflow rule ids. dependsOn may name only other step ids in the same Plan and must not form a cycle; otherwise nothing is saved and the refusal lists each issue to fix. A step that keeps its id and every field keeps its progress and evidence; a changed or new step starts over. This creates the next version. Revising a Plan during Execute returns the workflow to Plan and invalidates concurrent or later progress calls from that turn; do not call update_workflow_progress in parallel with update_plan.",
+    "Save the whole canonical Plan artifact. Use to make a Plan or rewrite most of it; to change, add, move or remove a few steps use edit_plan, which does not resend the Plan. Each step needs stable unique ids, dependencies, acceptance criteria, applicable workflow rule ids and the ids of the current Goal outcomes it serves. dependsOn may name only other step ids in the same Plan and must not form a cycle, and outcomes may name only ids of the current Goal; otherwise nothing is saved and the refusal lists each issue to fix. A step that keeps its id and its work (every field except outcomes) keeps its progress and evidence; a changed or new step starts over. This creates the next version. Revising a Plan during Execute returns the workflow to Plan and invalidates concurrent or later progress calls from that turn; do not call update_workflow_progress in parallel with update_plan.",
   parameters: UpdatePlan,
 } as const;
 
@@ -80,7 +81,7 @@ const editPlan = {
 - edit: change the fields given in patch; absent fields keep their value. A done step cannot change.
 - move: put a step at index (0-based).
 - remove: take a step off the Plan. A done step cannot be removed.
-dependsOn follows the update_plan rules. Other steps keep their progress and the workflow phase stays as it is. Never call this in parallel with update_plan, edit_plan or update_workflow_progress.`,
+dependsOn and outcomes follow the update_plan rules. Other steps keep their progress and the workflow phase stays as it is. Never call this in parallel with update_plan, edit_plan or update_workflow_progress.`,
   parameters: EditPlan,
 } as const;
 
@@ -177,12 +178,18 @@ const make = Effect.gen(function* () {
         ).pipe(
           published,
           Effect.map((state) => ({ phase: state.phase, plan: state.plan })),
-          Effect.catchTag("PlanDependenciesRejected", (failure) =>
-            Effect.succeed({
-              error: "plan_dependencies_rejected" as const,
-              issues: failure.issues.map(dependencyIssueText),
-            }),
-          ),
+          Effect.catchTags({
+            PlanDependenciesRejected: (failure) =>
+              Effect.succeed({
+                error: "plan_dependencies_rejected" as const,
+                issues: failure.issues.map(dependencyIssueText),
+              }),
+            PlanOutcomesRejected: ({ unknown }) =>
+              Effect.succeed({
+                error: "plan_outcomes_rejected" as const,
+                issues: unknown.map(unknownStepOutcomeText),
+              }),
+          }),
           Effect.provideContext(runtime),
         ),
 
@@ -197,6 +204,11 @@ const make = Effect.gen(function* () {
               Effect.succeed({
                 error: "plan_dependencies_rejected" as const,
                 issues: failure.issues.map(dependencyIssueText),
+              }),
+            PlanOutcomesRejected: ({ unknown }) =>
+              Effect.succeed({
+                error: "plan_outcomes_rejected" as const,
+                issues: unknown.map(unknownStepOutcomeText),
               }),
           }),
           Effect.provideContext(runtime),
@@ -353,7 +365,7 @@ ${goal}`,
           ? `Plan v${state.plan.version} (${state.plan.status}, based on Goal v${state.plan.goalVersion}): ${state.plan.summary}`
           : "Plan: not recorded yet.";
         return `${common}
-You are planning, not executing. Project tools are restricted to read-only investigation. If no Goal is recorded, infer the smallest useful Goal from the user's request and save it before the Plan; the user does not need to enter Goal mode first. Produce ordered steps with stable unique ids, dependencies (dependsOn names only other step ids in this Plan, without cycles), acceptance criteria, risks and applicable rule ids. When a contradiction or unanswered question arises, record what is uncertain and which decisions depend on it; continue all independent read-only investigation and planning before asking. Narrow questions with evidence and ask only when no useful independent planning remains and the decision truly blocks progress. A non-blocking open question does not by itself require a draft Plan: save a ready Plan when its steps can proceed, and leave the unresolved decision for the step it actually affects. Never assume an answer to a blocking question or mark a Plan ready if the unresolved decision prevents safe execution of its next step. Do not modify files, run commands, delegate work or present investigation as implementation.
+You are planning, not executing. Project tools are restricted to read-only investigation. If no Goal is recorded, infer the smallest useful Goal from the user's request and save it before the Plan; the user does not need to enter Goal mode first. Produce ordered steps with stable unique ids, dependencies (dependsOn names only other step ids in this Plan, without cycles), acceptance criteria, risks, applicable rule ids and the Goal outcome ids each step serves. When a contradiction or unanswered question arises, record what is uncertain and which decisions depend on it; continue all independent read-only investigation and planning before asking. Narrow questions with evidence and ask only when no useful independent planning remains and the decision truly blocks progress. A non-blocking open question does not by itself require a draft Plan: save a ready Plan when its steps can proceed, and leave the unresolved decision for the step it actually affects. Never assume an answer to a blocking question or mark a Plan ready if the unresolved decision prevents safe execution of its next step. Do not modify files, run commands, delegate work or present investigation as implementation.
 
 ${goal}
 
@@ -372,7 +384,7 @@ ${
   isTruthy(state.plan)
     ? `Approved Plan v${state.plan.version}: ${state.plan.summary}
 Current steps:
-${state.plan.steps.map((step) => `- ${step.id} [${stepProgressStatus(step.status)}]: ${step.title}${step.status === "done" ? "" : `\n  Description: ${step.description}\n  Depends on: ${step.dependsOn.map((id) => `${id} [${progressStatusOf(state.plan?.steps.find((candidate) => candidate.id === id))}]`).join(", ") || "(none)"}\n  Acceptance criteria:\n${compactList(step.acceptanceCriteria, step.acceptanceCriteria.length)}\n  Rule refs: ${step.ruleRefs.join(", ") || "(none)"}\n  Recent evidence (historical evidence is not fresh verification):\n${compactList(step.evidence.slice(-6))}`}`).join("\n")}${scheduleText(state.plan.steps)}`
+${state.plan.steps.map((step) => `- ${step.id} [${stepProgressStatus(step.status)}]: ${step.title}${step.status === "done" ? "" : `\n  Description: ${step.description}\n  Depends on: ${step.dependsOn.map((id) => `${id} [${progressStatusOf(state.plan?.steps.find((candidate) => candidate.id === id))}]`).join(", ") || "(none)"}\n  Acceptance criteria:\n${compactList(step.acceptanceCriteria, step.acceptanceCriteria.length)}\n  Rule refs: ${step.ruleRefs.join(", ") || "(none)"}\n  Serves outcomes: ${step.outcomes.join(", ") || "(none)"}\n  Recent evidence (historical evidence is not fresh verification):\n${compactList(step.evidence.slice(-6))}`}`).join("\n")}${scheduleText(state.plan.steps)}`
     : "Approved Plan: missing."
 }`,
       ),

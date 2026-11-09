@@ -18,6 +18,7 @@ const step = (
   dependsOn,
   acceptanceCriteria: [],
   ruleRefs: [],
+  outcomes: [],
   status,
   evidence: [],
 });

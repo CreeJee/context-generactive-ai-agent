@@ -69,6 +69,8 @@ export const errorText = (code: ApiErrorCode) => {
       return "그사이 계획이 바뀌었어요. 최신 보드를 다시 확인해 주세요.";
     case "plan_dependencies_rejected":
       return "의존 관계가 올바르지 않아요. 없는 카드나 순환 의존을 확인해 주세요.";
+    case "plan_outcomes_rejected":
+      return "카드가 지금 Goal에 없는 outcome을 가리켜요. 최신 Goal을 다시 확인해 주세요.";
     case "card_finished":
       return "완료된 카드는 수정하거나 취소할 수 없어요.";
     case "card_missing":

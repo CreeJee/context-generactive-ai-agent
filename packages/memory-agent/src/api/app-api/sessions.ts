@@ -30,6 +30,7 @@ import {
 } from "../../workflow/contracts.ts";
 import { LifecycleResult } from "../../work-trace/contracts.ts";
 import { PlanDependencyIssue } from "../../workflow/plan-schedule.ts";
+import { UnknownStepOutcome } from "../../workflow/step-outcomes.ts";
 import { sessionHolderHeaders } from "../chat-api.ts";
 import { appRefusalFields, refusalWith, SameSite } from "../refusal.ts";
 import { SelectedProviderUnavailable } from "./providers.ts";
@@ -167,6 +168,12 @@ const PlanDependenciesRejected = refusalWith({ issues: Schema.NonEmptyArray(Plan
   ["plan_dependencies_rejected"],
 );
 
+/** The change names Goal outcomes that do not exist; `unknown` lists each card and id. */
+const PlanOutcomesRejected = refusalWith({ unknown: Schema.NonEmptyArray(UnknownStepOutcome) })(
+  422,
+  ["plan_outcomes_rejected"],
+);
+
 /**
  * A kanban action the board's state does not fit, the reason as the code. `request_missing` is
  * also a decision's 404; only the orchestrator's tools raise it here, so it never reaches the page.
@@ -286,6 +293,7 @@ export const sessionsRefusals = [
   ...DecisionRefusals,
   BoardEditRefused,
   PlanDependenciesRejected,
+  PlanOutcomesRejected,
   KanbanActionRefused,
   KanbanStartRefused,
   GoalScheduleRefused,
@@ -384,6 +392,7 @@ export class SessionsGroup extends HttpApiGroup.make("sessions")
         UnknownSession,
         BoardEditRefused,
         PlanDependenciesRejected,
+        PlanOutcomesRejected,
         SessionStorageFailed,
       ],
     }),
@@ -417,6 +426,7 @@ export class SessionsGroup extends HttpApiGroup.make("sessions")
         UnknownSession,
         BoardEditRefused,
         PlanDependenciesRejected,
+        PlanOutcomesRejected,
         KanbanActionRefused,
         KanbanStartRefused,
         GoalScheduleRefused,

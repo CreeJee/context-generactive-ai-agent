@@ -429,6 +429,7 @@ export { GoalOrder } from "./kanban/goal-order.ts";
 export { ProjectScheduler } from "./kanban/scheduler.ts";
 export { KanbanSettings, KanbanSettingsRefused } from "./config/kanban-settings.ts";
 export { PlanDependenciesRejected, type PlanDependencyIssue } from "./workflow/plan-schedule.ts";
+export { PlanOutcomesRejected, type UnknownStepOutcome } from "./workflow/step-outcomes.ts";
 export {
   RuleSource,
   WorkflowRule,

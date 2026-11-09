@@ -1,4 +1,4 @@
-import { Deferred, Effect, Fiber, Result, Schema } from "effect";
+import { Deferred, Effect, Fiber, Result, Schema, Struct } from "effect";
 import { SqlClient, SqlError } from "effect/sql";
 import { expect, vi } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
@@ -42,6 +42,7 @@ const plan = {
       dependsOn: [],
       acceptanceCriteria: ["State survives a process restart"],
       ruleRefs: ["workflow.thin-context"],
+      outcomes: [],
     },
   ],
   risks: [],
@@ -176,6 +177,72 @@ testAgent()("Workflows", (it) => {
     }),
   );
 
+  it.effect("refuses Plan steps that name outcomes the Goal does not have", () =>
+    Effect.gen(function* () {
+      const id = yield* freshSession;
+      const workflows = yield* Workflows;
+      yield* workflows.updateGoal(id, goal);
+      const updatePlan = yield* workflowTool(id, "plan", "update_plan");
+      const [store] = plan.steps;
+      expect(
+        yield* updatePlan({ ...plan, steps: [{ ...store!, outcomes: ["O1", "O9"] }] }),
+      ).toEqual({
+        error: "plan_outcomes_rejected",
+        issues: ["step store names outcome O9, which the current Goal does not have"],
+      });
+      expect((yield* workflows.get(id)).plan).toBeNull();
+
+      yield* workflows.updatePlan(id, plan);
+      const runId = yield* startRun(id);
+      const added = { ...store!, id: "expose", outcomes: ["O2"] };
+      const refused = yield* Effect.flip(
+        workflows.editPlan(id, { planVersion: 1, edits: [{ action: "add", step: added }] }, runId),
+      );
+      expect(refused).toMatchObject({
+        _tag: "PlanOutcomesRejected",
+        unknown: [{ stepId: "expose", outcomeId: "O2" }],
+      });
+      yield* workflows.editPlan(
+        id,
+        { planVersion: 1, edits: [{ action: "add", step: { ...added, outcomes: ["O1"] } }] },
+        runId,
+      );
+
+      // Once the Goal drops O1, its cards still take edits that do not name outcomes.
+      yield* workflows.updateGoal(id, { ...goal, outcomes: [{ id: "O2", text: "Replaced" }] });
+      const edited = yield* workflows.editPlan(
+        id,
+        { planVersion: 2, edits: [{ action: "edit", stepId: "expose", patch: { title: "Show" } }] },
+        runId,
+      );
+      expect(edited.plan?.steps[1]).toMatchObject({
+        id: "expose",
+        title: "Show",
+        outcomes: ["O1"],
+      });
+    }),
+  );
+
+  it.effect("reads steps saved before steps named outcomes as serving none", () =>
+    Effect.gen(function* () {
+      const id = yield* freshSession;
+      const workflows = yield* Workflows;
+      yield* workflows.updateGoal(id, goal);
+      const saved = yield* workflows.updatePlan(id, plan);
+      yield* storeWorkflowState(
+        id,
+        yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
+          ...saved,
+          plan: {
+            ...saved.plan,
+            steps: saved.plan?.steps.map((step) => Struct.omit(step, ["outcomes"])),
+          },
+        }),
+      );
+      expect((yield* workflows.get(id)).plan?.steps[0]?.outcomes).toEqual([]);
+    }),
+  );
+
   it.effect("refuses Execute until a Plan is ready", () =>
     Effect.gen(function* () {
       const id = yield* freshSession;
@@ -231,6 +298,15 @@ testAgent()("Workflows", (it) => {
         { id: "store", status: "done", evidence: ["stored"] },
         { id: "expose", status: "ready", evidence: [] },
       ]);
+      // Which outcomes a step serves is not its work: naming one keeps the step's progress.
+      const tagged = yield* workflows.updatePlan(id, {
+        ...plan,
+        steps: [{ ...store!, outcomes: ["O1"] }, expose],
+      });
+      expect(tagged.plan?.steps).toMatchObject([
+        { id: "store", outcomes: ["O1"], status: "done", evidence: ["stored"] },
+        { id: "expose", status: "ready" },
+      ]);
       // A step whose fields change starts over.
       const changed = yield* workflows.updatePlan(id, {
         ...plan,
@@ -260,6 +336,7 @@ testAgent()("Workflows", (it) => {
         dependsOn: ["store"],
         acceptanceCriteria: ["The page shows the Plan"],
         ruleRefs: [],
+        outcomes: [],
       };
       expect(
         yield* editPlan({

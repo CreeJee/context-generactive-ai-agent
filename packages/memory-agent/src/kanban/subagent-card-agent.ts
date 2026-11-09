@@ -63,7 +63,6 @@ const cardText = (card: PlanStep) =>
     ...listed("Acceptance criteria", card.acceptanceCriteria),
     ...listed("Required evidence", card.requiredEvidence ?? []),
     ...listed("Expected files", card.boundaries ?? []),
-    ...(card.outcome === undefined ? [] : [`Outcome: ${card.outcome}`]),
   ].join("\n");
 
 const CardVerdictInput = Schema.Struct({

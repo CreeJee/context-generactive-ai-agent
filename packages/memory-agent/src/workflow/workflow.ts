@@ -13,6 +13,7 @@ import {
   Predicate,
   Result,
   Schema,
+  Struct,
 } from "effect";
 import { SecureRandom } from "effect/crypto";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
@@ -51,6 +52,7 @@ import {
   WorkflowState,
 } from "./contracts.ts";
 import { notStartedStatus, validatePlanDependencies } from "./plan-schedule.ts";
+import { validateStepOutcomes } from "./step-outcomes.ts";
 import {
   BoardEditPlan,
   BoardEditRefused,
@@ -108,10 +110,11 @@ const cardStatuses = <S extends typeof PersistedPlanStep.Type>(
   }));
 };
 
-const sameStep = Schema.toEquivalence(Schema.Struct(planStepFields));
+/** Whether a replan left a step's work the same; which outcomes it serves is not its work. */
+const sameStep = Schema.toEquivalence(Schema.Struct(Struct.omit(planStepFields, ["outcomes"])));
 /**
- * A step's progress through a replan. A started step the replan leaves unchanged keeps it; any
- * other step starts over, and a step not started is placed again by its dependencies.
+ * A step's progress through a replan. A started step whose work the replan leaves unchanged keeps
+ * it; any other step starts over, and a step not started is placed again by its dependencies.
  */
 const replannedProgress = (
   prior: PlanStep,
@@ -1099,64 +1102,67 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
             change(
               sessionId,
               (current) =>
-                Effect.map(nowIso, (now) => {
-                  const previous = new Map(
-                    current.plan?.steps.map((step) => [step.id, step]) ?? [],
-                  );
-                  const plan: PlanArtifact = {
-                    ...input,
-                    steps: cardStatuses(
-                      input.steps.map((step) => {
-                        const replanned = { ...step, status: "pending" as const, evidence: [] };
-                        const prior = previous.get(step.id);
-                        return prior === undefined
-                          ? replanned
-                          : {
-                              ...cardContract(prior),
-                              ...optionalProperty("hold", prior.hold),
-                              ...step,
-                              ...replannedProgress(prior, step),
-                            };
-                      }),
-                    ),
-                    evidence: [],
-                    verification: verificationDefault,
-                    version: (current.plan?.version ?? 0) + 1,
-                    goalVersion: current.goal?.version ?? 0,
-                    updatedAt: now,
-                  };
-                  const { standing } = goalTransitions.PlanEdited(
-                    goalState(current),
-                    GoalEvent.PlanEdited({ status: input.status, ...stepsOf(plan.steps) }),
-                  );
-                  const kind = current.plan === null ? "plan_updated" : "plan_replanned";
-                  const planned = withStanding(
-                    {
-                      ...current,
-                      plan,
-                      ledger: [
-                        ...current.ledger,
-                        event(current, kind, `plan v${plan.version} (${plan.status})`, now),
-                      ],
-                    },
-                    standing,
-                    now,
-                  );
-                  return planned.phase === current.phase
-                    ? planned
-                    : {
-                        ...planned,
+                validateStepOutcomes(current.goal?.outcomes ?? [], input.steps).pipe(
+                  Effect.andThen(nowIso),
+                  Effect.map((now) => {
+                    const previous = new Map(
+                      current.plan?.steps.map((step) => [step.id, step]) ?? [],
+                    );
+                    const plan: PlanArtifact = {
+                      ...input,
+                      steps: cardStatuses(
+                        input.steps.map((step) => {
+                          const replanned = { ...step, status: "pending" as const, evidence: [] };
+                          const prior = previous.get(step.id);
+                          return prior === undefined
+                            ? replanned
+                            : {
+                                ...cardContract(prior),
+                                ...optionalProperty("hold", prior.hold),
+                                ...step,
+                                ...replannedProgress(prior, step),
+                              };
+                        }),
+                      ),
+                      evidence: [],
+                      verification: verificationDefault,
+                      version: (current.plan?.version ?? 0) + 1,
+                      goalVersion: current.goal?.version ?? 0,
+                      updatedAt: now,
+                    };
+                    const { standing } = goalTransitions.PlanEdited(
+                      goalState(current),
+                      GoalEvent.PlanEdited({ status: input.status, ...stepsOf(plan.steps) }),
+                    );
+                    const kind = current.plan === null ? "plan_updated" : "plan_replanned";
+                    const planned = withStanding(
+                      {
+                        ...current,
+                        plan,
                         ledger: [
-                          ...planned.ledger,
-                          event(
-                            planned,
-                            "phase_changed",
-                            `${current.phase} -> ${planned.phase} (plan revised)`,
-                            now,
-                          ),
+                          ...current.ledger,
+                          event(current, kind, `plan v${plan.version} (${plan.status})`, now),
                         ],
-                      };
-                }),
+                      },
+                      standing,
+                      now,
+                    );
+                    return planned.phase === current.phase
+                      ? planned
+                      : {
+                          ...planned,
+                          ledger: [
+                            ...planned.ledger,
+                            event(
+                              planned,
+                              "phase_changed",
+                              `${current.phase} -> ${planned.phase} (plan revised)`,
+                              now,
+                            ),
+                          ],
+                        };
+                  }),
+                ),
               author,
             ),
           ),
@@ -1398,7 +1404,13 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
           Effect.gen(function* () {
             const current = yield* get(sessionId);
             const cardId = `card-${(yield* crypto.uuidV4()).slice(0, 8)}`;
-            const planned = yield* planBoardEdit(current.plan, edit, author, cardId);
+            const planned = yield* planBoardEdit(
+              current.plan,
+              current.goal?.outcomes ?? [],
+              edit,
+              author,
+              cardId,
+            );
             const now = yield* nowIso;
             return yield* Match.valueTags(planned, {
               Apply: Effect.fnUntraced(function* (change) {
@@ -1454,7 +1466,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
               (done, planEdit) => {
                 const { edit, newCardId } = boardEditOf(planEdit, done.version);
                 return Effect.flatMap(
-                  planBoardEdit(done.plan, edit, author, newCardId),
+                  planBoardEdit(done.plan, current.goal?.outcomes ?? [], edit, author, newCardId),
                   (planned) =>
                     BoardEditPlan.$match(planned, {
                       Apply: ({ plan, detail }) =>

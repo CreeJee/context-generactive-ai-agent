@@ -12,6 +12,7 @@
 - `WorkflowState` / `GoalArtifact` / `PlanArtifact` / `PlanStep` / `WorkflowPhase` / `WorkflowAction` / `VerificationStatus` — 워크플로 상태 스키마(phase: chat|goal|plan|execute|verify|completed)
 - `UpdateGoal` / `StartNewGoal` / `UpdatePlan` / `UpdateWorkflowProgress` — 모델 도구 입력 스키마
 - `GoalOutcome` / `OutcomeId` — Goal outcome은 `{ id, text }`다. 뜻이 같으면 id를 유지하고 뜻이 바뀌면 새 id를 쓴다. 한 Goal 안에서 id는 한 번만 쓴다. id 없이 문자열로 저장된 옛 outcome은 순서대로 `O1`, `O2`…로 읽는다
+- `PlanOutcomesRejected` / `UnknownStepOutcome` / `validateStepOutcomes` / `unknownStepOutcomeText` — step(카드)은 `outcomes`에 자신이 위하는 현재 Goal outcome id를 적는다. `update_plan`은 모든 step을, 보드 편집은 새 카드와 patch가 적은 id를 검사하고 Goal에 없는 id면 아무것도 저장하지 않는다(`step-outcomes.ts`). Goal이 뒤에 outcome을 빼도 카드가 전에 적은 id는 남고, outcomes를 적지 않는 편집은 받는다. 어느 outcome을 위하는지는 step의 일이 아니라서 outcomes만 바뀐 step은 진행과 근거를 유지한다. outcomes 없이 저장된 옛 step은 `[]`로 읽는다
 - `decodeWorkflowState` — 저장된 상태 JSON 디코드
 - `GoalState` / `GoalStateConflict` / `GoalEvent` / `Standing` / `goalTransitions` / `transition` / `decodeGoalState` / `goalStateOf` / `repair` / `reconciledPhase` / `standingOf` / `stepsOf` — Goal 상태 전이 순수 함수(`goal-transitions.ts`)
 - `WorkflowStorageError` / `WorkflowTransitionRefused` / `WorkflowProgressRefused` / `NewGoalTransitionRefused`, `NewGoalSettlement` — 워크플로 오류와 새 Goal 정산 결과

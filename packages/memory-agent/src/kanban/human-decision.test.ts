@@ -38,6 +38,7 @@ const step = (id: string) => ({
   dependsOn: [],
   acceptanceCriteria: [],
   ruleRefs: [],
+  outcomes: [],
 });
 
 const orchestrator = BoardAuthor.cases.Orchestrator.make({ runId: "run-1" });

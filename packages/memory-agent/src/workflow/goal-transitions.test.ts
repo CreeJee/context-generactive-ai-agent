@@ -198,6 +198,7 @@ const stateFor = (standing: Standing): WorkflowState => {
               dependsOn: [],
               acceptanceCriteria: [],
               ruleRefs: [],
+              outcomes: [],
               status: standing.plan.done ? "done" : "ready",
               evidence: standing.plan.proven ? ["proof"] : [],
             },

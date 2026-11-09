@@ -120,13 +120,15 @@ export type GoalChangeVerdict = typeof GoalChangeVerdict.Type;
 /** A card attempt is running or waiting in the queue while the card is in these columns. */
 const running = (card: PlanStep) => card.status === "in_progress" || card.status === "verify";
 
-/** The card as a draft for another Plan: its contract travels, its dependencies do not. */
+/**
+ * The card as a draft for another Plan: its contract travels, its dependencies and the outcomes it
+ * served (ids of this Goal) do not.
+ */
 const draftOf = (card: PlanStep): CardDraft => ({
   title: card.title,
   description: card.description,
   dependsOn: [],
   acceptanceCriteria: card.acceptanceCriteria,
-  ...optionalProperty("outcome", card.outcome),
   ...optionalProperty("boundaries", card.boundaries),
   ...optionalProperty("risk", card.risk),
   ...optionalProperty("requiredEvidence", card.requiredEvidence),

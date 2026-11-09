@@ -24,6 +24,7 @@ const step = (
     dependsOn: [...dependsOn],
     acceptanceCriteria: [],
     ruleRefs: [],
+    outcomes: [],
     status,
     evidence: [],
   },

@@ -9,6 +9,7 @@ import {
   type BoardEditRefused,
 } from "../workflow/board-edit.ts";
 import type { PlanDependenciesRejected } from "../workflow/plan-schedule.ts";
+import { type PlanOutcomesRejected, unknownStepOutcomeText } from "../workflow/step-outcomes.ts";
 import type { WorkflowStorageError } from "../workflow/workflow.ts";
 import { Boards } from "../workflow/board.ts";
 import { BoardAuthor, CardStatus } from "../workflow/card.ts";
@@ -133,6 +134,7 @@ type ActionFailure =
   | MoveRefused
   | HumanDecisionRefused
   | PlanDependenciesRejected
+  | PlanOutcomesRejected
   | KanbanStorageFailed
   | CardWorktreeFailed
   | GoalScheduleStorageFailed
@@ -157,7 +159,8 @@ const editBoard = {
 - requeue: put a blocked card whose deliveries ran out back on the queue. It continues in its worktree with a fresh delivery budget.
 - settle_change_request: settle a user's pending change to a running card. decision apply continues the card with the change at once, reassign applies it and restarts the card in a fresh agent conversation, reject keeps the card as it is and records your reason for the user.
 - apply_goal_change: after the Goal changed, give one verdict per card that is not done (a card without one continues): continue, amend (change the card and tell its agent), stop (block it with a reason), replace (a new card takes its place) or needs_decision (a person decides). New assignments resume once this is saved.
-- retarget: make the branch checked out in the project now the Goal's target (the board's schedule.targetBranch) and restart the Goal branch from it, so new cards start from that branch. Only before the Goal has work of its own; refused with not_worktree, merge_started, detached_head, goal_has_work (the Goal branch has commits neither branch holds) or cards_started (branches ctx/card/<goalInstanceId>/* exist, cancelled cards' included).`,
+- retarget: make the branch checked out in the project now the Goal's target (the board's schedule.targetBranch) and restart the Goal branch from it, so new cards start from that branch. Only before the Goal has work of its own; refused with not_worktree, merge_started, detached_head, goal_has_work (the Goal branch has commits neither branch holds) or cards_started (branches ctx/card/<goalInstanceId>/* exist, cancelled cards' included).
+A new or changed card names in outcomes the ids of the current Goal outcomes it serves; an id the Goal does not have refuses the change with plan_outcomes_rejected.`,
   parameters: EditBoardInput,
 } as const;
 
@@ -189,6 +192,11 @@ const make = Effect.gen(function* () {
             Effect.succeed({ error: "human_decision_refused" as const, reason: refused.reason }),
           PlanDependenciesRejected: () =>
             Effect.succeed({ error: "plan_dependencies_rejected" as const }),
+          PlanOutcomesRejected: ({ unknown }) =>
+            Effect.succeed({
+              error: "plan_outcomes_rejected" as const,
+              issues: unknown.map(unknownStepOutcomeText),
+            }),
         }),
         Effect.provideContext(runtime),
       );

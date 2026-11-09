@@ -44,7 +44,6 @@ export type CardRisk = typeof CardRisk.Type;
  * card's risk; the step's `evidence` stays the evidence actually recorded.
  */
 export const cardContractFields = {
-  outcome: Schema.optionalKey(Schema.String),
   boundaries: Schema.optionalKey(Schema.Array(Schema.String)),
   risk: Schema.optionalKey(CardRisk),
   requiredEvidence: Schema.optionalKey(Schema.Array(Schema.String)),
@@ -52,7 +51,6 @@ export const cardContractFields = {
 } as const;
 
 export const cardContractKeys = [
-  "outcome",
   "boundaries",
   "risk",
   "requiredEvidence",

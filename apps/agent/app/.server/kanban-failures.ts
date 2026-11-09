@@ -8,6 +8,7 @@ import type {
   KanbanStartRefused,
   PersistedQueueItemsFailed,
   PlanDependenciesRejected,
+  PlanOutcomesRejected,
 } from "memory-agent";
 
 /**
@@ -31,6 +32,8 @@ export const kanbanRefusal = {
   KanbanStartRefused: ({ reason }: KanbanStartRefused) => Effect.fail({ error: reason }),
   PlanDependenciesRejected: ({ issues }: PlanDependenciesRejected) =>
     Effect.fail({ error: "plan_dependencies_rejected", issues } as const),
+  PlanOutcomesRejected: ({ unknown }: PlanOutcomesRejected) =>
+    Effect.fail({ error: "plan_outcomes_rejected", unknown } as const),
   PersistedQueueItemsFailed: ({ reason }: PersistedQueueItemsFailed) =>
     Effect.fail(
       Match.valueTags(reason, {

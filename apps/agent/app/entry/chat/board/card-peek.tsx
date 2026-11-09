@@ -79,7 +79,6 @@ interface CardForm {
   readonly description: string;
   readonly dependsOn: string;
   readonly acceptanceCriteria: string;
-  readonly outcome: string;
   readonly boundaries: string;
   readonly risk: CardRisk | "none";
   readonly requiredEvidence: string;
@@ -91,7 +90,6 @@ const formOf = (card: PlanStep | null): CardForm => ({
   description: card?.description ?? "",
   dependsOn: card?.dependsOn.join(", ") ?? "",
   acceptanceCriteria: card?.acceptanceCriteria.join("\n") ?? "",
-  outcome: card?.outcome ?? "",
   boundaries: card?.boundaries?.join("\n") ?? "",
   risk: card?.risk ?? "none",
   requiredEvidence: card?.requiredEvidence?.join("\n") ?? "",
@@ -385,7 +383,17 @@ function CardDetails({
           )}
         </DataListItem>
         <DataListItem term="완료 조건">{list(card.acceptanceCriteria)}</DataListItem>
-        {isTruthy(card.outcome) && <DataListItem term="결과">{card.outcome}</DataListItem>}
+        {card.outcomes.length > 0 && (
+          <DataListItem term="Goal 결과">
+            <span className="flex flex-wrap gap-1">
+              {card.outcomes.map((id) => (
+                <Badge key={id} variant="outline">
+                  {id}
+                </Badge>
+              ))}
+            </span>
+          </DataListItem>
+        )}
         {isTruthy(card.boundaries) && (
           <DataListItem term="경계">{list(card.boundaries)}</DataListItem>
         )}
@@ -456,7 +464,6 @@ function CardEditor({
               description: form.description,
               dependsOn: ids(form.dependsOn),
               acceptanceCriteria: lines(form.acceptanceCriteria),
-              outcome: blankToNull(form.outcome),
               boundaries: listOrNull(form.boundaries),
               risk: form.risk === "none" ? null : form.risk,
               requiredEvidence: listOrNull(form.requiredEvidence),
@@ -523,14 +530,6 @@ function CardEditor({
               onChange={(event) => set("acceptanceCriteria")(event.target.value)}
             />
             <FieldDescription>한 줄에 하나씩 적어요.</FieldDescription>
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="card-outcome">결과</FieldLabel>
-            <Input
-              id="card-outcome"
-              value={form.outcome}
-              onChange={(event) => set("outcome")(event.target.value)}
-            />
           </Field>
           <Field>
             <FieldLabel htmlFor="card-boundaries">경계</FieldLabel>
@@ -636,8 +635,6 @@ function CardEditor({
 /** Contract fields a new card carries; empty ones are left out. */
 function contractFields(form: CardForm) {
   const contract: Types.Mutable<Partial<Pick<CardDraft, ContractKey>>> = {};
-  const outcome = blankToNull(form.outcome);
-  if (outcome !== null) contract.outcome = outcome;
   const boundaries = listOrNull(form.boundaries);
   if (boundaries !== null) contract.boundaries = boundaries;
   if (form.risk !== "none") contract.risk = form.risk;
@@ -648,4 +645,4 @@ function contractFields(form: CardForm) {
   return contract;
 }
 
-type ContractKey = "outcome" | "boundaries" | "risk" | "requiredEvidence" | "humanDecision";
+type ContractKey = "boundaries" | "risk" | "requiredEvidence" | "humanDecision";

@@ -460,7 +460,7 @@ const make = (options: KanbanOrchestratorOptions) =>
           description: `Card ${card.id} could not join the Goal branch because ${listed} changed there too. Re-apply its change on the current Goal branch. ${workspace(goal).earlierWork(cardRef(goal, card.id))} Do not commit; the owner commits your work.\n\n${card.description}`,
           dependsOn: card.dependsOn,
           acceptanceCriteria: card.acceptanceCriteria,
-          ...Struct.pick(card, ["outcome", "boundaries", "requiredEvidence"]),
+          ...Struct.pick(card, ["outcomes", "boundaries", "requiredEvidence"]),
         },
         author,
       );

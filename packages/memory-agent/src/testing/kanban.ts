@@ -288,6 +288,7 @@ export const card = (id: string): UpdatePlan["steps"][number] => ({
   dependsOn: [],
   acceptanceCriteria: [`${id} works`],
   ruleRefs: [],
+  outcomes: [],
 });
 
 export const goalInput = {

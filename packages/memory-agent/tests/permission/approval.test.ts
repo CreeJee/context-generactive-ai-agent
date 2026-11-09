@@ -109,6 +109,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("approval-gat
             dependsOn: [],
             acceptanceCriteria: ["The check passes"],
             ruleRefs: [],
+            outcomes: [],
           },
         ],
         risks: [],

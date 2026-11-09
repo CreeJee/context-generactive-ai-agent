@@ -32,6 +32,7 @@ const step = (id: string, dependsOn: readonly string[] = []) => ({
   dependsOn,
   acceptanceCriteria: [],
   ruleRefs: [],
+  outcomes: [],
 });
 
 const plan = {

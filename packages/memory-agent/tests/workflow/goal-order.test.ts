@@ -26,6 +26,7 @@ const step = (id: string) => ({
   dependsOn: [],
   acceptanceCriteria: [`${id} done`],
   ruleRefs: [],
+  outcomes: [],
 });
 
 const plan = (ids: readonly string[]) => ({

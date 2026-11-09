@@ -6,6 +6,7 @@ import {
   CardPatch,
   UserChange,
   type BoardEditResultCases,
+  type GoalOutcome,
   type PlanArtifact,
   type PlanStep,
 } from "./contracts.ts";
@@ -14,6 +15,7 @@ import {
   validatePlanDependencies,
   type PlanDependenciesRejected,
 } from "./plan-schedule.ts";
+import { type PlanOutcomesRejected, validateStepOutcomes } from "./step-outcomes.ts";
 
 export {
   BoardEdit,
@@ -87,11 +89,10 @@ const field = <A>(current: A | undefined, next: A | null | undefined) =>
   next === undefined ? current : (next ?? undefined);
 
 const patched = (card: PlanStep, patch: CardPatch): PlanStep => {
-  const { outcome, boundaries, risk, requiredEvidence, humanDecision, ...core } = patch;
+  const { boundaries, risk, requiredEvidence, humanDecision, ...core } = patch;
   return {
     ...Struct.omit(card, cardContractKeys),
     ...core,
-    ...optionalProperty("outcome", field(card.outcome, outcome)),
     ...optionalProperty("boundaries", field(card.boundaries, boundaries)),
     ...optionalProperty("risk", field(card.risk, risk)),
     ...optionalProperty("requiredEvidence", field(card.requiredEvidence, requiredEvidence)),
@@ -124,14 +125,19 @@ const moved = (steps: readonly PlanStep[], from: number, index: number) => {
 
 /**
  * Plans a user's board change against the current Plan. Dependencies are checked with the same
- * rules as update_plan; a refused change saves nothing.
+ * rules as update_plan, and an added or edited card may name only `outcomes` of the current Goal;
+ * a refused change saves nothing.
  */
 export const planBoardEdit = Effect.fnUntraced(function* (
   plan: PlanArtifact | null,
+  outcomes: readonly GoalOutcome[],
   edit: BoardEdit,
   author: BoardAuthor,
   newCardId: string,
-): Effect.fn.Return<BoardEditPlan, BoardEditRefused | PlanDependenciesRejected> {
+): Effect.fn.Return<
+  BoardEditPlan,
+  BoardEditRefused | PlanDependenciesRejected | PlanOutcomesRejected
+> {
   if (plan === null) return yield* BoardEditRefused.make({ reason: "plan_missing" });
   if (planEnded(plan)) return yield* BoardEditRefused.make({ reason: "plan_closed" });
   if (plan.version !== edit.planVersion)
@@ -143,6 +149,9 @@ export const planBoardEdit = Effect.fnUntraced(function* (
     yield* validatePlanDependencies(steps);
     return BoardEditPlan.Apply({ plan: { ...plan, steps, version: plan.version + 1 }, detail });
   });
+  /** Outcomes a patch names; a card keeps the ones it named before the Goal dropped them. */
+  const patchedOutcomes = (card: PlanStep, patch: CardPatch) =>
+    validateStepOutcomes(outcomes, [{ id: card.id, outcomes: patch.outcomes ?? [] }]);
   const changeCard = Effect.fnUntraced(function* (cardId: string, change: UserChange) {
     const card = plan.steps.find((step) => step.id === cardId);
     if (card === undefined) return yield* BoardEditRefused.make({ reason: "card_missing" });
@@ -150,14 +159,21 @@ export const planBoardEdit = Effect.fnUntraced(function* (
     if (waitsForOrchestrator(author, card.status)) {
       // A request is checked now, so the orchestrator never receives a change it cannot apply.
       yield* UserChange.match(change, {
-        Edit: ({ patch }) => validatePlanDependencies(replace(plan.steps, patched(card, patch))),
+        Edit: ({ patch }) =>
+          patchedOutcomes(card, patch).pipe(
+            Effect.andThen(validatePlanDependencies(replace(plan.steps, patched(card, patch)))),
+          ),
         Cancel: () => Effect.void,
       });
       return BoardEditPlan.Request({ cardId: card.id, change });
     }
     return yield* UserChange.match(change, {
       Edit: ({ patch }) =>
-        applied(replace(plan.steps, patched(card, patch)), `card ${card.id} edited`),
+        patchedOutcomes(card, patch).pipe(
+          Effect.andThen(
+            applied(replace(plan.steps, patched(card, patch)), `card ${card.id} edited`),
+          ),
+        ),
       Cancel: () =>
         applied(
           plan.steps.filter((step) => step.id !== card.id),
@@ -171,9 +187,11 @@ export const planBoardEdit = Effect.fnUntraced(function* (
         ...draft,
         id: newCardId,
         ruleRefs: draft.ruleRefs ?? [],
+        outcomes: draft.outcomes ?? [],
         status: "backlog",
         evidence: [],
       };
+      yield* validateStepOutcomes(outcomes, [card]);
       const steps = [...plan.steps];
       steps.splice(Math.min(index ?? steps.length, steps.length), 0, card);
       return yield* applied(replace(steps, card), `card ${newCardId} added`);

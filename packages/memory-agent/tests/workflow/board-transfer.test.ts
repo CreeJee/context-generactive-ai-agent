@@ -24,6 +24,7 @@ const step = (id: string, dependsOn: readonly string[] = [], risk?: "low" | "med
     dependsOn,
     acceptanceCriteria: [`${id} done`],
     ruleRefs: [],
+    outcomes: [],
   };
   return risk === undefined ? card : { ...card, risk };
 };

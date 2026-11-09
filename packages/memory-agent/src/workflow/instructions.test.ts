@@ -141,6 +141,7 @@ describe("workflowInstructions", () => {
             dependsOn: ["P03B1"],
             acceptanceCriteria: ["Persisted replay passes"],
             ruleRefs: ["workflow.execute.approved@1"],
+            outcomes: [],
             status: "in_progress",
             evidence: Array.from({ length: 8 }, (_, i) => `receipt-${i}`),
           },
