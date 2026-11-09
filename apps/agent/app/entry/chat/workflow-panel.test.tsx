@@ -30,6 +30,23 @@ describe("server-authoritative workflow UI", () => {
     expect(workflowModeLabel(workflowFixture)).toBe("Plan");
     expect(workflowModeLabel({ ...workflowFixture, phase: "chat", mode: "goal" })).toBe("Chat");
   });
+  test("titles the panel with its mode and stage", () => {
+    expect(renderToStaticMarkup(<WorkflowArtifactPanel {...props} />)).toContain("Plan · 계획 중");
+    expect(
+      renderToStaticMarkup(
+        <WorkflowArtifactPanel
+          {...props}
+          state={{ ...workflowFixture, phase: "running", mode: "goal" }}
+        />,
+      ),
+    ).toContain("Goal · 실행 중");
+    const done = renderToStaticMarkup(
+      <WorkflowArtifactPanel {...props} state={{ ...workflowFixture, phase: "completed" }} />,
+    );
+    expect(done).toContain("Plan · 완료");
+    // A completed Goal leaves nothing to approve, revise or pause.
+    expect(done).not.toContain("<button");
+  });
   test("leaves the Plan to a running board's loop instead of offering to continue it", () => {
     const actions = {
       ...allowedWorkflowActions,
@@ -41,13 +58,13 @@ describe("server-authoritative workflow UI", () => {
     const html = renderToStaticMarkup(
       <WorkflowArtifactPanel {...props} actions={actions} kanbanRunning />,
     );
-    expect(html).not.toContain("구현 계속");
-    expect(html).toContain("수정 요청");
+    expect(html).not.toContain("보드에서 이어서 실행");
+    expect(html).toContain("Plan 수정");
   });
   test("uses server execute intent instead of inferring it from plan status", () => {
     // An executing artifact used to force the continue label. The server owns the decision.
     const html = renderToStaticMarkup(<WorkflowArtifactPanel {...props} />);
-    expect(button(html, "계획 실행")).not.toContain(' disabled=""');
+    expect(button(html, "승인하고 실행")).not.toContain(' disabled=""');
     const actions = {
       ...allowedWorkflowActions,
       moves: {
@@ -58,9 +75,16 @@ describe("server-authoritative workflow UI", () => {
     expect(
       button(
         renderToStaticMarkup(<WorkflowArtifactPanel {...props} actions={actions} />),
-        "구현 계속",
+        "보드에서 이어서 실행",
       ),
     ).not.toContain(' disabled=""');
+  });
+  test("leaves a Goal mode Plan to its own approval", () => {
+    const html = renderToStaticMarkup(
+      <WorkflowArtifactPanel {...props} state={{ ...workflowFixture, mode: "goal" }} />,
+    );
+    expect(html).not.toContain("승인하고 실행");
+    expect(html).toContain("Plan 수정");
   });
   test("honors refusal even when the artifact looks executable", () => {
     const actions = {
@@ -71,25 +95,29 @@ describe("server-authoritative workflow UI", () => {
       },
     };
     const html = renderToStaticMarkup(<WorkflowArtifactPanel {...props} actions={actions} />);
-    expect(button(html, "계획 실행")).toContain(' disabled=""');
+    expect(button(html, "승인하고 실행")).toContain(' disabled=""');
     expect(html).toContain("Goal이 변경되어");
   });
   test("fails closed without an action snapshot and preserves local request guards", () => {
     expect(
       button(
         renderToStaticMarkup(<WorkflowArtifactPanel {...props} actions={null} />),
-        "계획 실행",
+        "승인하고 실행",
       ),
     ).toContain(' disabled=""');
     expect(
-      button(renderToStaticMarkup(<WorkflowArtifactPanel {...props} controlling />), "계획 실행"),
+      button(
+        renderToStaticMarkup(<WorkflowArtifactPanel {...props} controlling />),
+        "승인하고 실행",
+      ),
     ).toContain(' disabled=""');
     expect(
-      button(renderToStaticMarkup(<WorkflowArtifactPanel {...props} busy />), "계획 실행"),
+      button(renderToStaticMarkup(<WorkflowArtifactPanel {...props} busy />), "승인하고 실행"),
     ).toContain(' disabled=""');
   });
   test("does not independently infer Goal control eligibility", () => {
-    const actions = {
+    // The server allows resuming: the panel offers it, whatever the Goal's status says.
+    const resumable = {
       ...allowedWorkflowActions,
       controls: {
         pause: { allowed: false as const, reason: "goal_not_active" as const },
@@ -101,11 +129,24 @@ describe("server-authoritative workflow UI", () => {
       <WorkflowArtifactPanel
         {...props}
         state={{ ...workflowFixture, mode: "goal" }}
-        actions={actions}
+        actions={resumable}
       />,
     );
     expect(button(html, "계속")).not.toContain(' disabled=""');
-    expect(button(html, "일시 중지")).toContain(' disabled=""');
     expect(button(html, "중단")).toContain(' disabled=""');
+    // Neither pausing nor resuming allowed: pause shows, refused.
+    const neither = {
+      ...resumable,
+      controls: {
+        ...resumable.controls,
+        resume: { allowed: false as const, reason: "goal_not_paused" as const },
+      },
+    };
+    expect(
+      button(
+        renderToStaticMarkup(<WorkflowArtifactPanel {...props} actions={neither} />),
+        "일시 중지",
+      ),
+    ).toContain(' disabled=""');
   });
 });

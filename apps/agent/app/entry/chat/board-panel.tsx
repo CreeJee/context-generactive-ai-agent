@@ -36,6 +36,7 @@ import {
 } from "../api";
 import { useBoardQuery, useDecisionsQuery, useKanbanQuery } from "../queries/session";
 import { DecisionPrompt } from "./decision-prompt";
+import { OutcomeChecklist } from "./outcome-checklist";
 import {
   KanbanAction,
   useBoardsEditMutation,
@@ -92,7 +93,13 @@ export function WorkflowBoard({
   const view = board.data;
   if (!isTruthy(view)) return <p className="text-muted-foreground">보드를 불러오는 중이에요.</p>;
   const plan = view.plan;
-  if (plan === null) return <p className="text-muted-foreground">아직 계획이 없어요.</p>;
+  if (plan === null)
+    return (
+      <div className="min-w-0 space-y-3">
+        <OutcomeChecklist outcomes={view.outcomes} />
+        <p className="text-muted-foreground">아직 카드가 없어요.</p>
+      </div>
+    );
   const loop = kanban.data?.active === true ? kanban.data : null;
   const total = view.cards.length;
   const done = Arr.countBy(view.cards, ({ card }) => card.status === "done");
@@ -167,10 +174,11 @@ export function WorkflowBoard({
           {startError}
         </p>
       )}
+      <OutcomeChecklist outcomes={view.outcomes} />
       <div className="space-y-1.5">
         <div className="flex items-center gap-2 text-xs">
           <span className="font-medium">
-            완료 {done}/{total}
+            카드 완료 {done}/{total}
           </span>
           {waiting > 0 && <Badge variant="outline">판단 대기 {waiting}</Badge>}
           {view.pendingChanges.length > 0 && (

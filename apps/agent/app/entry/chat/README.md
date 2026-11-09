@@ -23,8 +23,9 @@
 - `ApprovalCard` — 승인 대기 호출 하나를 보여 주는 카드다. props: `approval`, `disabled`, `requester`, `decision`, `onAnswer`. permission-review이고 `askedBy`가 review일 때만 검토 사유를 보인다
 - `ChatHistory` — 대화 기록 스크롤 영역이다. shadcn `MessageScroller` 위에 있어, 맨 아래에서 120px 안이면 새 내용을 따라 내려가고 아래로 가는 단추를 띄운다. 위쪽 200px 안으로 올라가면 이전 페이지를 불러오고, 위에 끼운 페이지가 읽던 자리를 밀지 않는다. 불러오기에 실패하면 위쪽에 다시 시도 단추를 띄운다. 메시지마다 `MessageScrollerItem`이고 `children`(패널·상태 표시)은 메시지 뒤에 온다
 - `MessageView`(memo) / `DeliveredMessageView` / `ResumeActionResult` / `ArchiveActionResult` / `DeleteActionResult` — 메시지 렌더링과 작업 추적 task 재개·보관·삭제 결과 TaggedEnum
-- `WorkflowBoard` / `mergeStateLabel` / `cardStatusLabels` / `authorLabel` — 채팅 안의 보드 패널이다. 뒤의 두 심볼은 `board/`에서 다시 내보낸다
-- `WorkflowArtifactPanel` / `phaseLabels` / `workflowModeLabel` / `goalStatusLabels` / `planStatusLabels` — Goal/Plan 워크플로 패널과 상태 라벨 표
+- `WorkflowBoard` / `mergeStateLabel` / `cardStatusLabels` / `authorLabel` — 채팅 안의 보드 패널이다. outcome 체크리스트, 카드 진행, 보드 열기를 보인다. 뒤의 두 심볼은 `board/`에서 다시 내보낸다
+- `OutcomeChecklist` — Goal의 outcome마다 장부 상태(카드 없음·진행 중·확인 대기·충족·미충족)와 판정을 보이는 목록. 충족 수가 Goal의 진척이다
+- `WorkflowArtifactPanel` / `stageLabels` / `modeLabels` / `composerModeOf` / `workflowModeLabel` / `goalStatusLabels` / `planStatusLabels` — 워크플로 패널과 라벨 표. 모드와 단계(계획 중·실행 중·완료)를 제목에 두고, Goal 문장, 다음에 일어날 일, 보드 요약, 그 단계의 동작(Plan 모드의 승인하고 실행, Plan 수정, Goal 일시 중지·계속·중단)을 한 패널에 보인다
 - `DecisionPrompt` / `describeDecision` — 결정 요청 프롬프트와 `DecisionKind` 설명
 - `BtwPanel` / `WorkTracePanel` / `QueuePanel` / `SubagentPanel` — BTW 곁질문, 작업 추적, 메시지 대기열, 하위 에이전트 패널
 - `BackgroundTaskIndicator` — 입력창 아래 상태줄 왼쪽(컨텍스트 표시 반대편)의 `백그라운드 N개`. 누르면 팝오버로 현재 세션의 실행 중 백그라운드 작업 목록을 보여 준다
@@ -35,6 +36,7 @@
 
 - 서버가 transcript를 소유한다. `ChatPanel`은 마운트할 때 최신 메시지와 남은 승인 대기를 함께 읽는다. 그래서 새로고침해도 같은 승인 카드가 다시 보인다.
 - turn과 승인 답에는 항상 `holder`를 넣어 보낸다. 서버는 다른 페이지가 보낸 turn과 답을 거절한다(`session_in_use`).
+- 실행 중인 보드에서 입력창의 모드 전환이나 "Plan 수정"으로 running을 떠나면 먼저 확인한다. 떠나면 보드가 새 카드를 맡기지 않기 때문이다. 직접 입력한 slash 명령은 묻지 않는다.
 - `readOnly = lease.state !== "mine"`이다. `mutationBlocked = readOnly || backendRestartRequired || !sendingEnabled`이다.
 - `stop()`은 `Atom.Interrupt`로 이 페이지의 읽기만 끊는다. 서버의 run은 서버에서 취소할 때까지 계속 돈다.
 - `resolveInterrupts`는 `interrupts !== null`일 때만 보낸다. 이때 `parentRunId`는 `interrupts.runId`다.

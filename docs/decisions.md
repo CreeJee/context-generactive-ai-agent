@@ -4624,6 +4624,10 @@
   - `controlGoal`의 거절은 `WorkflowTransitionRefused`로 합치고, API의 workflow 변경 거절 사유에서 더는 나오지 않는 값(`plan_missing`, `steps_incomplete`, `outcomes_complete_goal` 등)을 뺀다.
 - 구현(phase 넷과 모드): phase는 chat·shaping·running·completed이고, Plan/Goal 모드는 `WorkflowState.mode`로 따로 둔다. revision 테이블에 `mode` 열을 더하고, 열이 NULL인 예전 revision은 그 버전이 쓴 그대로 읽는다(goal·plan phase는 shaping과 그 모드, execute·verify는 running). 사용자 요청은 phase 대신 이동(`WorkflowMove`: chat·plan·goal·run, API `SessionChange.Move`)이다. 규칙 파일의 phase 어휘(goal·plan·execute·verify)는 그대로 두고 `rulePhases`로 읽을 규칙을 정한다. shaping과 running의 채팅은 프로젝트를 읽기만 하므로, Execute 채팅이 승인 게이트를 거친 shell 검사를 돌리던 테스트는 지운다.
 - 구현(채팅 진척 카운트 제거): 채팅은 Plan을 실행하지 않으므로 `WorkflowExecution`은 채팅 run의 진척(완료 step, 근거, 도구 결과 fingerprint)을 세지 않는다. 진척 없는 run 두 번의 `repeated_failure`와 의존성 막힘의 `dependency_stalled` blocker도 더는 만들지 않는다. 막힘과 반복 실패는 보드가 다룬다. 깨끗이 끝난 run은 Plan이 그대로면 `ready`가 되어 보드로 옮겨지고, 바뀌었으면 멈춘다. `no_progress_runs` 열과 진척 목록은 지우고, blocker 근거는 `workflow_blocker_evidence`로 옮긴다.
+- 구현(화면): 워크플로 패널을 하나로 합친다. 제목은 모드와 단계(`Plan · 계획 중`, `Goal · 실행 중`, `완료`)이고, Goal 문장, 다음에 일어날 일, 보드 요약, 그 단계의 동작을 차례로 보인다. 전에는 Goal 모드의 구체화만 Goal 패널이고 나머지는 Plan 패널이어서, 실행 중인 Goal에서 일시 중지·중단이 사라지고 완료된 Goal에도 수정·실행 버튼이 남았다.
+  - 보드 view(`BoardView.outcomes`)는 outcome마다 장부 상태를 싣고, 보드 요약은 outcome 체크리스트(`결과 n/m 충족`)를 카드 진행 위에 보인다. Goal은 outcome이 모두 충족돼야 끝나므로 카드 수보다 이 목록이 진척이다.
+  - 실행 버튼은 Plan 모드에서만 `승인하고 실행`으로 보인다. Goal 모드는 owner가 승인한다. 보드 없이 실행 중인 예전 Plan은 `보드에서 이어서 실행`이다.
+  - 실행 중인 보드에서 입력창의 모드를 바꾸거나 `Plan 수정`을 누르면 먼저 묻는다. running을 떠나면 보드가 새 카드를 맡기지 않기 때문이다. 직접 입력한 slash 명령은 묻지 않는다.
 
 ## SQLite 연결은 `synchronous = NORMAL`로 쓴다 (2026-11-09)
 

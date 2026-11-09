@@ -9,7 +9,7 @@ import { userEvent } from "vite-plus/test/browser";
 import "../../app.css";
 import type { SessionRunState } from "memory-agent/definitions";
 import { SessionEventScopeContext } from "../events/context";
-import { allowedWorkflowActions } from "../session/workflow-test-fixtures";
+import { allowedWorkflowActions, workflowFixture } from "../session/workflow-test-fixtures";
 import { SessionView, type SlashSupport } from "./chat-panel";
 
 /**
@@ -67,6 +67,9 @@ const runState: SessionRunState = {
   uncertainRuns: [],
 };
 
+/** What the server answers for the session; a test may swap it before opening the session. */
+const served = { run: runState };
+
 /** The changes the page sent: path and body. */
 const sent: string[] = [];
 
@@ -77,7 +80,7 @@ const server = (input: RequestInfo | URL, init?: RequestInit): Promise<Response>
   if (pathname === "/api/sessions/s1/lease")
     return Promise.resolve(Response.json({ state: "mine" }));
   if (pathname === "/api/sessions/s1" && request.method === "GET")
-    return Promise.resolve(Response.json(runState));
+    return Promise.resolve(Response.json(served.run));
   if (pathname === "/api/sessions/s1/messages")
     return Promise.resolve(
       Response.json({ messages, older: null, activeRun: null, interrupts: null }),
@@ -172,6 +175,28 @@ it.live("editing a queued message renders only the input box, and Enter saves th
       expect.poll(() => sent.some((line) => line.includes('"text":"대기 메시지 고침"'))).toBe(true),
     );
     yield* sdkCall(() => expect.element(input).toHaveValue(""));
+    yield* sdkCall(() => screen.unmount());
+    vi.unstubAllGlobals();
+  }),
+);
+
+it.live("leaving a running board asks first, and only a confirmed move is sent", () =>
+  Effect.gen(function* () {
+    served.run = { ...runState, workflow: { ...workflowFixture, phase: "running" } };
+    const { screen } = yield* openSession;
+    const moves = () => sent.filter((line) => line.includes('"Move"'));
+    const chat = screen.getByRole("button", { name: "Chat", exact: true });
+
+    yield* sdkCall(() => userEvent.click(chat));
+    yield* sdkCall(() => expect.element(screen.getByText("일반 대화로 바꿀까요?")).toBeVisible());
+    yield* sdkCall(() => userEvent.click(screen.getByRole("button", { name: "그대로 두기" })));
+    expect(moves()).toEqual([]);
+
+    yield* sdkCall(() => userEvent.click(chat));
+    yield* sdkCall(() => userEvent.click(screen.getByRole("button", { name: "바꾸기" })));
+    yield* sdkCall(() => expect.poll(() => moves().length).toBe(1));
+    expect(moves()[0]).toContain('"move":"chat"');
+    served.run = runState;
     yield* sdkCall(() => screen.unmount());
     vi.unstubAllGlobals();
   }),

@@ -46,6 +46,7 @@ import {
   QueueItemState,
   type QueuedMessage,
   ResumeTaskResult,
+  type WorkflowMode,
   type WorkflowMove,
   type WorkflowState,
 } from "../api";
@@ -350,6 +351,11 @@ function ChatPanel({
   const media = useImageGeneration((message) => setNotice(problem(message)));
   /** The prompt waiting for the user to accept a paid image generation. */
   const [imagePrompt, setImagePrompt] = useState<string | null>(null);
+  /** A move away from a running board the user is asked to confirm; `revise` focuses the composer after. */
+  const [leaving, setLeaving] = useState<{
+    readonly move: "chat" | WorkflowMode;
+    readonly revise: boolean;
+  } | null>(null);
   // What the run in progress reports; the server's record covers the time before and after it.
   const [liveContext, setLiveContext] = useState<ContextView | null>(null);
   const [placements, setPlacements] = useState<Readonly<Record<string, Placement>>>({});
@@ -454,17 +460,22 @@ function ChatPanel({
     );
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  const askForRevision = () => {
+    composerInput.current?.focus();
+    setNotice(done("바꾸고 싶은 내용을 입력해 주세요."));
+  };
+  // Revising a running Plan stops the board until it is approved again, so the user confirms it.
   const revisePlan = () =>
+    run.workflow?.phase === "running"
+      ? setLeaving({ move: run.workflow.mode, revise: true })
+      : askForRevision();
+
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  const leaveRun = (pending: NonNullable<typeof leaving>) =>
     runUiEffect(
       Effect.gen(function* () {
-        // Revising stops the board until the revised Plan is approved again, in the same mode.
-        if (
-          run.workflow?.phase !== "shaping" &&
-          !isTruthy(yield* uiPromise(() => moveWorkflow(run.workflow?.mode ?? "plan")))
-        )
-          return;
-        composerInput.current?.focus();
-        setNotice(done("바꾸고 싶은 내용을 입력해 주세요."));
+        if (!isTruthy(yield* uiPromise(() => moveWorkflow(pending.move)))) return;
+        if (pending.revise) askForRevision();
       }),
     );
 
@@ -937,7 +948,7 @@ function ChatPanel({
           onPause={() => void controlGoal("pause")}
           onResume={() => void controlGoal("resume")}
           onStop={() => void controlGoal("stop")}
-          onRevise={() => void revisePlan()}
+          onRevise={revisePlan}
           onExecute={() => void executePlan()}
           kanbanRunning={kanbanRunning}
           boardSlot={
@@ -1053,7 +1064,11 @@ function ChatPanel({
               onPickQueued={pickQueued}
               onCancel={() => void cancel()}
               onClear={clearComposer}
-              onWorkflowMode={(mode) => void moveWorkflow(mode)}
+              onWorkflowMode={(mode) =>
+                run.workflow?.phase === "running"
+                  ? setLeaving({ move: mode, revise: false })
+                  : void moveWorkflow(mode)
+              }
             />
           )}
           <AlertDialog
@@ -1077,6 +1092,43 @@ function ChatPanel({
                   }}
                 >
                   만들기
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+          <AlertDialog
+            open={leaving !== null}
+            onOpenChange={(open) => {
+              if (!open) setLeaving(null);
+            }}
+          >
+            <AlertDialogContent size="sm">
+              <AlertDialogHeader>
+                <AlertDialogTitle>
+                  {leaving?.revise === true
+                    ? "실행 중인 Plan을 고칠까요?"
+                    : leaving?.move === "chat"
+                      ? "일반 대화로 바꿀까요?"
+                      : `${modeLabels[leaving?.move ?? "plan"]} 모드로 바꿀까요?`}
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  보드는 새 카드를 맡기지 않고 기다려요. 이미 진행 중인 카드는 끝까지 돌아요.{" "}
+                  {leaving?.move === "goal"
+                    ? "계획자가 Plan을 다시 준비하면 바로 이어서 실행해요."
+                    : leaving?.move === "plan"
+                      ? "고친 Plan을 다시 승인하면 이어서 실행해요."
+                      : "Plan이나 Goal 모드에서 다시 승인하면 이어서 실행해요."}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>그대로 두기</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => {
+                    if (leaving !== null) void leaveRun(leaving);
+                    setLeaving(null);
+                  }}
+                >
+                  {leaving?.revise === true ? "고치기" : "바꾸기"}
                 </AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
