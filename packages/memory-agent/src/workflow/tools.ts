@@ -16,9 +16,10 @@ import {
 import { runTool, type RunTool } from "../tools/run-tool.ts";
 import { RuleSource, type ResolvedRules } from "./rules.ts";
 import { unknownStepOutcomeText } from "./step-outcomes.ts";
+import { OutcomeStatus, outcomeStatusWord, type OutcomeStanding } from "./outcome-ledger.ts";
 import { WorkflowBlocker, WorkflowExecution } from "./execution.ts";
 import { BoardAuthor, stepProgressStatus } from "./card.ts";
-import { EditPlan } from "./contracts.ts";
+import { EditPlan, type GoalOutcome } from "./contracts.ts";
 import {
   PlanDependencyIssue,
   planDependencyIssues,
@@ -310,15 +311,44 @@ const ruleSource = (rule: ResolvedRules["rules"][number]) =>
     skill: ({ scope, name, contentHash }) => `skill:${scope}/${name}#${contentHash.slice(0, 12)}`,
   });
 
+/** An outcome line; on a board it carries the outcome ledger's status and verdict. */
+const outcomeLine = (standings: readonly OutcomeStanding[]) => (outcome: GoalOutcome) => {
+  const standing = standings.find((candidate) => candidate.outcomeId === outcome.id);
+  if (standing === undefined) return `${outcome.id}: ${outcome.text}`;
+  const verdict = OutcomeStatus.match(standing.status, {
+    Unplanned: () => "",
+    InProgress: () => "",
+    AwaitingCheck: () => "",
+    Met: ({ summary }) => ` (verdict: ${summary})`,
+    NotMet: ({ summary }) => ` (verdict: ${summary})`,
+  });
+  return `${outcome.id} [${outcomeStatusWord(standing.status)}]: ${outcome.text}${verdict}`;
+};
+
+/**
+ * The workflow's standing instructions. `standings` are the outcome ledger's statuses of a Goal
+ * that runs as a kanban board; without them outcomes show no status.
+ */
 export const workflowInstructions: {
   (
     resolved: ResolvedRules,
     goalInstanceId?: string | null,
+    standings?: readonly OutcomeStanding[],
   ): (state: WorkflowState) => string | null;
-  (state: WorkflowState, resolved: ResolvedRules, goalInstanceId?: string | null): string | null;
+  (
+    state: WorkflowState,
+    resolved: ResolvedRules,
+    goalInstanceId?: string | null,
+    standings?: readonly OutcomeStanding[],
+  ): string | null;
 } = EffectFunction.dual(
   (args) => Schema.is(WorkflowState)(args[0]),
-  (state: WorkflowState, resolved: ResolvedRules, goalInstanceId: string | null = null) => {
+  (
+    state: WorkflowState,
+    resolved: ResolvedRules,
+    goalInstanceId: string | null = null,
+    standings: readonly OutcomeStanding[] = [],
+  ) => {
     const applicableRules = resolved.rules
       .map(
         (rule) =>
@@ -336,8 +366,8 @@ ${applicableRules || "(none)"}${resolved.degraded.includes("embedding") ? "\nOpt
 
     const goal = isTruthy(state.goal)
       ? `Goal v${state.goal.version} (${state.goal.status}): ${state.goal.statement}
-Outcomes (keep each id while the outcome means the same; give a changed meaning a new id):
-${compactList(state.goal.outcomes.map((outcome) => `${outcome.id}: ${outcome.text}`))}
+Outcomes (keep each id while the outcome means the same; give a changed meaning a new id${standings.length > 0 ? "; the status is the outcome ledger's: only the verifier's verdict makes one met" : ""}):
+${compactList(state.goal.outcomes.map(outcomeLine(standings)), state.goal.outcomes.length)}
 Constraints (apply across every continuation; a new turn does not reset limits):
 ${compactList(state.goal.constraints, state.goal.constraints.length)}
 Non-goals:

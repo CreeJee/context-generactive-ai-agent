@@ -38,6 +38,15 @@ export const OutcomeStatus = Schema.TaggedUnion({
 });
 export type OutcomeStatus = typeof OutcomeStatus.Type;
 
+/** An outcome status as the model reads it: one plain word. */
+export const outcomeStatusWord = OutcomeStatus.match({
+  Unplanned: () => "unplanned" as const,
+  InProgress: () => "in_progress" as const,
+  AwaitingCheck: () => "awaiting_check" as const,
+  Met: () => "met" as const,
+  NotMet: () => "not_met" as const,
+});
+
 export const OutcomeStanding = Schema.Struct({
   outcomeId: OutcomeId,
   outcomeText: Schema.String,

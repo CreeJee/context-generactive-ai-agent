@@ -165,6 +165,7 @@ import {
   type WorkflowState,
 } from "../workflow/workflow.ts";
 import { WorkflowTools, workflowInstructions } from "../workflow/tools.ts";
+import { OutcomeLedger, outcomeStandings } from "../workflow/outcome-ledger.ts";
 import { WorkflowExecution, WorkflowExecutionState } from "../workflow/execution.ts";
 import { GoalExecutions } from "../workflow/goal-execution.ts";
 import { OwnerWorkflowAdmissionResult } from "../workflow/owner-workflow-storage.ts";
@@ -609,6 +610,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const kanbanTools = yield* KanbanTools;
   const kanbanAttempts = yield* CardAttempts;
   const kanbanOrchestrator = yield* KanbanOrchestrator;
+  const outcomeLedger = yield* OutcomeLedger;
   const humanDecisions = yield* HumanDecisions;
   /** Settles a queued new Goal; once it applies, the replaced Goal's waits for people close. */
   const settleNewGoal = (sessionId: string, runId: string) =>
@@ -1805,7 +1807,21 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 : { ...resolved, degraded: [...resolved.degraded, "source" as const] };
             const goalInstanceId = yield* workflows.goalInstanceId(sessionId);
             const onKanbanBoard = yield* kanbanBoard(sessionId);
-            const workflowPrompt = workflowInstructions(workflow, resolvedRules, goalInstanceId);
+            // A board's planner reads where each outcome stands in the ledger.
+            const standings =
+              onKanbanBoard && goalInstanceId !== null
+                ? outcomeStandings({
+                    outcomes: workflow.goal?.outcomes ?? [],
+                    steps: workflow.plan?.steps ?? [],
+                    latest: yield* outcomeLedger.latest(goalInstanceId),
+                  })
+                : [];
+            const workflowPrompt = workflowInstructions(
+              workflow,
+              resolvedRules,
+              goalInstanceId,
+              standings,
+            );
             // Why an automatic run started; the orchestrator's message tells the model, with the
             // notifications, instead of `prompts`.
             const followup = [

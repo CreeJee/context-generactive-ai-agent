@@ -14,6 +14,7 @@ import {
   OutcomeLedger,
   outcomeStandings,
   OutcomeStatus,
+  outcomeStatusWord,
   type OutcomeStanding,
 } from "../workflow/outcome-ledger.ts";
 import { Workflows, type WorkflowStorageError } from "../workflow/workflow.ts";
@@ -174,15 +175,13 @@ A new or changed card names in outcomes the ids of the current Goal outcomes it 
 const outcomeView = ({ outcomeId, outcomeText, status }: OutcomeStanding) => ({
   id: outcomeId,
   text: outcomeText,
+  status: outcomeStatusWord(status),
   ...OutcomeStatus.match(status, {
-    Unplanned: () => ({ status: "unplanned" as const }),
-    InProgress: ({ pending }) => ({ status: "in_progress" as const, pendingCards: pending }),
-    AwaitingCheck: ({ stale }) => ({
-      status: "awaiting_check" as const,
-      earlierVerdictStale: stale,
-    }),
-    Met: ({ summary }) => ({ status: "met" as const, verdict: summary }),
-    NotMet: ({ summary }) => ({ status: "not_met" as const, verdict: summary }),
+    Unplanned: () => ({}),
+    InProgress: ({ pending }) => ({ pendingCards: pending }),
+    AwaitingCheck: ({ stale }) => ({ earlierVerdictStale: stale }),
+    Met: ({ summary }) => ({ verdict: summary }),
+    NotMet: ({ summary }) => ({ verdict: summary }),
   }),
 });
 

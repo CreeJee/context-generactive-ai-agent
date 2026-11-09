@@ -4617,6 +4617,7 @@
   - 사용자의 변경 요청과 Goal 변경은 사용자가 만든 이유라 멈춘 뒤에도 계획자를 깨운다. 승인 대기 카드가 outcome을 맡고 있으면 그 outcome은 열린 것이 아니므로 기다리는 동안은 세지 않는다.
   - 사용자가 대화에 말하면(`resumePlanner`) 0부터 다시 세고 보류했던 이유를 계획자에게 알린다. 라운드 수는 `kanban_goals.planner_rounds`·`planner_met`에 남아 재시작 뒤에도 이어진다.
   - 예전 채팅 경로의 한도는 두 턴이었다. 보드의 한 라운드는 카드를 더하고 그 카드가 끝나 판정까지 받는 긴 주기라서 세 번으로 정했다.
+- 구현(지시문의 outcome 상태): 칸반 보드에서 도는 대화의 워크플로 지시문은 outcome마다 장부 상태(unplanned·in_progress·awaiting_check·met·not_met)와 판정 요약을 붙인다. 보드가 아닌 대화는 장부가 없어 상태를 붙이지 않는다. outcome 목록은 앞의 6개만 보이던 것을 모두 보인다(세션 `037aa142`의 Goal은 outcome이 8개였다).
 
 ## SQLite 연결은 `synchronous = NORMAL`로 쓴다 (2026-11-09)
 

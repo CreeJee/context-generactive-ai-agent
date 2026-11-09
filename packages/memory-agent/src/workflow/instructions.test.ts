@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vite-plus/test";
 import { workflowActions } from "./actions.ts";
+import { OutcomeStatus } from "./outcome-ledger.ts";
 import { builtInWorkflowRules } from "./rules.ts";
 import { workflowInstructions } from "./tools.ts";
 import type { WorkflowPhase, WorkflowState } from "./workflow.ts";
@@ -57,6 +58,47 @@ describe("workflowInstructions", () => {
     );
 
     expect(prompt).toContain("Which approach for the second change?");
+  });
+  test("shows a board's outcomes with the ledger's status and verdict, every one of them", () => {
+    const outcomes = ["O1", "O2", "O3", "O4", "O5", "O6", "O7"].map((id) => ({
+      id,
+      text: `Outcome ${id}`,
+    }));
+    const goal = {
+      version: 1,
+      statement: "Ship the feature",
+      outcomes,
+      constraints: [],
+      nonGoals: [],
+      assumptions: [],
+      openQuestions: [],
+      status: "active" as const,
+      evidence: [],
+      verification: {
+        status: "not_run" as const,
+        summary: "",
+        evidence: [],
+        recoveryPhase: null,
+        updatedAt: null,
+      },
+      updatedAt: "2026-11-09T00:00:00.000Z",
+    };
+    const prompt = workflowInstructions({ ...state("execute"), goal }, resolved("execute"), "g", [
+      {
+        outcomeId: "O1",
+        outcomeText: "Outcome O1",
+        status: OutcomeStatus.cases.Met.make({ summary: "search returns results" }),
+      },
+      {
+        outcomeId: "O2",
+        outcomeText: "Outcome O2",
+        status: OutcomeStatus.cases.InProgress.make({ pending: ["c2"] }),
+      },
+    ]);
+    expect(prompt).toContain("O1 [met]: Outcome O1 (verdict: search returns results)");
+    expect(prompt).toContain("O2 [in_progress]: Outcome O2");
+    // Outcomes the ledger does not name show without a status; none is cut from the list.
+    expect(prompt).toContain("- O7: Outcome O7");
   });
 
   test("a recorded non-blocking question does not prevent a ready Plan from executing", () => {
