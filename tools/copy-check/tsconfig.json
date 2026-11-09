@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "strict": true,
+    "types": ["node"],
+    "typeRoots": ["../../packages/memory-agent/node_modules/@types"],
+    "skipLibCheck": true
+  },
+  "include": ["*.ts"]
+}

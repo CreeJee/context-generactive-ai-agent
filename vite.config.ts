@@ -22,6 +22,8 @@ export default defineConfig({
   },
   staged: {
     "*": "vp check --fix",
+    // Copy catalogs: banned phrases, glossary spellings and sentence endings (tools/copy-check).
+    "**/copy.ts": "node tools/copy-check/main.ts check",
   },
   fmt: {
     // Golden files are test output compared byte for byte.

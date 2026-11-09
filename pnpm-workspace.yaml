@@ -87,6 +87,9 @@ catalog:
   # same validator (packages/memory-agent/src/tools/input-repair.ts).
   "@cfworker/json-schema": 4.1.1
   "@shadcn/react": ^0.3.1
+  # Development-only checker for UI copy (tools/copy-check): Korean morphemes and copy.ts parsing.
+  kiwi-nlp: 0.24.1
+  oxc-parser: 0.148.0
 overrides:
   vite@*: "catalog:"
   vitest: 5.0.5
