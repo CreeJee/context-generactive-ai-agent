@@ -288,7 +288,7 @@ const fakeProvider = Effect.fn("fakeOAuthProvider")(function* (provider: OAuthPr
         if (provider === "openai") {
           events.push('data: {"type":"response.output_text.delta","delta":"hello"}\n\n');
           events.push(
-            'data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"call-1","name":"lookup","arguments":"{\\\"q\\\":\\\"x\\\"}"}}\n\n',
+            'data: {"type":"response.output_item.done","output_index":1,"item":{"type":"function_call","call_id":"call-1","name":"lookup","arguments":"{\\\"q\\\":\\\"x\\\"}"}}\n\n',
           );
         } else {
           events.push(
@@ -655,9 +655,10 @@ describe.each(["openai", "anthropic"] as const)("%s OAuth validation harness", (
             ? [
                 NormalizedStreamEvent.text({ text: "hello" }),
                 NormalizedStreamEvent["tool-call"]({
+                  index: 1,
                   id: "call-1",
                   name: "lookup",
-                  arguments: { q: "x" },
+                  arguments: '{"q":"x"}',
                 }),
               ]
             : [

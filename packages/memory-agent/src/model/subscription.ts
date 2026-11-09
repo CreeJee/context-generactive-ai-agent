@@ -741,9 +741,6 @@ const requestFingerprints = (request: LanguageModel.ProviderOptions) => {
 type Part = Response.StreamPartEncoded;
 
 const decodeArguments = Schema.decodeOption(Schema.fromJsonString(Schema.Unknown));
-// Arguments the provider decoded from JSON encode back to JSON.
-const encodeToolArguments = (args: ToolArguments) =>
-  Effect.orDie(Schema.encodeEffect(Schema.fromJsonString(ToolArguments))(args));
 /** The parameters of streamed arguments; arguments that do not parse stay text for the caller. */
 const paramsOf = (serialized: string) =>
   Option.getOrElse(decodeArguments(serialized === "" ? "{}" : serialized), () => serialized);
@@ -1047,23 +1044,23 @@ const makeTranslator = (provider: OAuthProvider) => {
           onSome: () => emit(...closeText(state)),
           onNone: () => blockEnd(state, end.index),
         }),
+      // The streamed arguments are the call's; its own copy of them only fills a call never streamed.
       "tool-call": (call) =>
         andThen(closeText(state), (closed) =>
-          Effect.map(encodeToolArguments(call.arguments), (serialized): Translated => [
-            { ...closed, toolCalls: closed.toolCalls + 1 },
-            [
-              { type: "tool-params-start", id: call.id, name: call.name },
-              { type: "tool-params-delta", id: call.id, delta: serialized },
-              { type: "tool-params-end", id: call.id },
-              {
-                type: "tool-call",
-                id: call.id,
-                name: call.name,
-                params: call.arguments,
-                ...metadata({ arguments: serialized }),
-              },
-            ],
-          ]),
+          HashMap.has(closed.streamingCalls, call.index)
+            ? blockEnd(closed, call.index)
+            : emit({ ...closed, toolCalls: closed.toolCalls + 1 }, [
+                { type: "tool-params-start", id: call.id, name: call.name },
+                { type: "tool-params-delta", id: call.id, delta: call.arguments },
+                { type: "tool-params-end", id: call.id },
+                {
+                  type: "tool-call",
+                  id: call.id,
+                  name: call.name,
+                  params: paramsOf(call.arguments),
+                  ...metadata({ arguments: call.arguments }),
+                },
+              ]),
         ),
       "tool-call-start": (start) =>
         andThen(closeText(state), (closed) => {

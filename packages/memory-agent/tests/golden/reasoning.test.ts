@@ -58,9 +58,10 @@ const turns = {
       afterRead
         ? NormalizedStreamEvent.text({ text: "The notes have two lines." })
         : NormalizedStreamEvent["tool-call"]({
+            index: 1,
             id: readCall,
             name: "read_file",
-            arguments: { path: "notes.txt" },
+            arguments: JSON.stringify({ path: "notes.txt" }),
           }),
       usage,
     ];

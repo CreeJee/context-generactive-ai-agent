@@ -183,10 +183,13 @@ export type ToolArguments = typeof ToolArguments.Type;
 /** The provider-neutral stream contract that both providers' SSE events are decoded into. */
 export type NormalizedStreamEvent = Data.TaggedEnum<{
   text: { readonly text: string };
+  /** A finished call: it ends the call streaming at `index`, or is the whole call if none is. */
   "tool-call": {
+    readonly index: number;
     readonly id: string;
     readonly name: string;
-    readonly arguments: ToolArguments;
+    /** The arguments as the model sent them. */
+    readonly arguments: string;
   };
   "tool-call-start": {
     readonly index: number;
@@ -332,7 +335,22 @@ const OpenAiWireEvent = Schema.Union([
     delta: Schema.String,
   }),
   Schema.Struct({
+    type: Schema.Literal("response.output_item.added"),
+    output_index: Schema.Finite,
+    item: Schema.Struct({
+      type: Schema.Literal("function_call"),
+      call_id: Schema.String,
+      name: Schema.String,
+    }),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("response.function_call_arguments.delta"),
+    output_index: Schema.Finite,
+    delta: Schema.String,
+  }),
+  Schema.Struct({
     type: Schema.Literal("response.output_item.done"),
+    output_index: Schema.Finite,
     item: Schema.Struct({
       type: Schema.Literal("function_call"),
       call_id: Schema.String,
@@ -342,6 +360,7 @@ const OpenAiWireEvent = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("response.output_item.done"),
+    output_index: Schema.Finite,
     item: Schema.Struct({
       type: Schema.Literal("reasoning"),
       id: Schema.String,
@@ -449,8 +468,6 @@ const AnthropicWireEvent = Schema.Union([
   }),
 ]);
 
-const decodeToolArguments = Schema.decodeUnknownOption(Schema.fromJsonString(ToolArguments));
-
 /** Parses one provider SSE data value into the provider-neutral stream contract. */
 export const decodeProviderEvent: {
   (data: string): (provider: OAuthProvider) => ReturnType<typeof decodeProviderEventBody>;
@@ -508,20 +525,27 @@ function decodeProviderEventBody(
               code: event.code ?? "provider_error",
               message: event.message,
             });
+          if (event.type === "response.output_item.added")
+            return NormalizedStreamEvent["tool-call-start"]({
+              index: event.output_index,
+              id: event.item.call_id,
+              name: event.item.name,
+            });
+          if (event.type === "response.function_call_arguments.delta")
+            return NormalizedStreamEvent["tool-call-arguments"]({
+              index: event.output_index,
+              delta: event.delta,
+            });
           if (event.item.type === "reasoning")
             return NormalizedStreamEvent.reasoning({
               id: event.item.id,
               encryptedContent: event.item.encrypted_content,
             });
-          const item = event.item;
-          return Option.match(decodeToolArguments(item.arguments), {
-            onNone: () => null,
-            onSome: (argumentsValue) =>
-              NormalizedStreamEvent["tool-call"]({
-                id: item.call_id,
-                name: item.name,
-                arguments: argumentsValue,
-              }),
+          return NormalizedStreamEvent["tool-call"]({
+            index: event.output_index,
+            id: event.item.call_id,
+            name: event.item.name,
+            arguments: event.item.arguments,
           });
         },
       });

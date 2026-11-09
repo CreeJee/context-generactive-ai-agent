@@ -139,10 +139,19 @@ describe("subscription language model", () => {
         },
         {
           type: "response.output_item.done",
+          output_index: 0,
           item: { type: "reasoning", id: "rs-1", encrypted_content: "encrypted-value" },
         },
         {
+          type: "response.output_item.added",
+          output_index: 1,
+          item: { type: "function_call", call_id: "call-1", name: "lookup", arguments: "" },
+        },
+        { type: "response.function_call_arguments.delta", output_index: 1, delta: '{"query":' },
+        { type: "response.function_call_arguments.delta", output_index: 1, delta: '"x"}' },
+        {
           type: "response.output_item.done",
+          output_index: 1,
           item: {
             type: "function_call",
             call_id: "call-1",
@@ -168,6 +177,7 @@ describe("subscription language model", () => {
         "reasoning-end",
         "tool-params-start",
         "tool-params-delta",
+        "tool-params-delta",
         "tool-params-end",
         "tool-call",
         "text-start",
@@ -192,6 +202,33 @@ describe("subscription language model", () => {
         params: { query: "x" },
       });
       expect(parts.at(-1)).toMatchObject({ type: "finish", reason: "tool-calls" });
+    }),
+  );
+
+  it.effect("takes an OpenAI call whose arguments never streamed from its finished item", () =>
+    Effect.gen(function* () {
+      const parts = yield* partsOf(
+        "openai",
+        clientOf([
+          NormalizedStreamEvent["tool-call"]({
+            index: 0,
+            id: "call-1",
+            name: "lookup",
+            arguments: '{"query":"x"}',
+          }),
+        ]),
+      );
+      expect(parts.map((part) => part.type)).toEqual([
+        "tool-params-start",
+        "tool-params-delta",
+        "tool-params-end",
+        "tool-call",
+        "finish",
+      ]);
+      expect(parts.find((part) => part.type === "tool-call")).toMatchObject({
+        params: { query: "x" },
+        metadata: { "memory-agent": { arguments: '{"query":"x"}' } },
+      });
     }),
   );
 
