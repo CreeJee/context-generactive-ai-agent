@@ -4484,3 +4484,11 @@
   - 사본을 분석한 때 `workflow_run_log_entries`는 run 하나의 66행, `lexical_changes`는 2행이었다. 그 통계로 run log 페이지 읽기가 `(run_id, cursor)` 인덱스 대신 모든 run의 cursor 범위를, lexical 반영 뒤 지우기가 rowid 범위 대신 표 전체를 훑는 플랜이 됐다. 긴 답이나 가져오기로 표가 찬 뒤에도 그 플랜이 남는다.
   - 통계가 없는 표는 플래너가 큰 표로 가정한다. 통계가 하나도 없던 지금까지의 플랜과 같다.
 - 확인: 소스의 `sql` 템플릿 613개를 뽑아(값은 `?`, `sql.in`은 `(?)`) 사본에서 통계 전후 플랜을 비교했다. 582개가 prepare됐고 24개가 바뀌었다. 모두 더 좁은 인덱스로 옮겨 가거나(`node_refs_ref (ref=?)`로 시작하는 참조 조회, `session_id`와 `project_id`를 함께 거는 조회의 `nodes_session`) 작은 표의 조인 순서만 바뀌었다. 제한 없이 모든 표를 분석했을 때는 39개가 바뀌었고, 그중 위의 run log 읽기와 lexical 지우기는 비우는 표를 빼자 그대로가 됐다.
+
+## topic을 이름으로 찾는 부분 인덱스를 둔다 (2026-11-09)
+
+- 계기: `Interpreter.runPending`의 커밋 트랜잭션이 7.3초·5.4초·2.1초 걸렸다. 쓰기 잠금을 쥔 채 `topicByLabel`(`memory/interpret.ts`)을 라벨마다 불렀고, 한 번에 0.4초쯤이었다. `kind = 'topic'`을 거를 인덱스가 없어 `nodes_project`로 프로젝트의 노드를 모두 읽었다. WHERE 맨 앞의 `meaningfulNodeFilter`가 행마다 `trim(text)`을 해서 큰 tool_result의 overflow page까지 읽었다. 그동안 같은 연결을 기다린 kanban 문장 4개가 각각 3.6초 걸렸다.
+- 결정: 마이그레이션 v95가 `nodes_topic_label ON nodes(project_id, lower(text)) WHERE kind = 'topic'`을 만든다. topic은 노드 55만 개 중 5,596개라 인덱스가 작다.
+  - 쿼리는 그대로다. 통계가 없어도 플래너가 이 인덱스를 고른다.
+  - `topicsOf`(최근 topic 50개)도 이 인덱스로 읽고 seq로 정렬한다. 5.8ms가 3.5ms가 됐다.
+- 확인: 라이브 사본의 22.5만 노드 프로젝트에서 라벨 조회가 370–388ms에서 0.003–0.009ms가 됐다. 인덱스를 만드는 데 1.6초 걸렸다.

@@ -2780,6 +2780,12 @@ export const migrations: readonly string[] = [
     WHERE kind = 'tool_call';
   `,
   boardChangesMigration,
+  `
+  -- The interpreter finds a topic by its label, case aside, inside the transaction that records
+  -- what it concluded. Topics are a few thousand of a project's nodes; without this index the
+  -- lookup read every node of the project and trimmed its text, 0.4 s each with a warm cache.
+  CREATE INDEX nodes_topic_label ON nodes(project_id, lower(text)) WHERE kind = 'topic';
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.
