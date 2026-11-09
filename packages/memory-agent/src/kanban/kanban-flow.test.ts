@@ -255,6 +255,85 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "holds only the cards serving an outcome whose text changed, and no card for a new outcome",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* kanbanFixture;
+        const started = yield* Queue.unbounded<string>();
+        const release = yield* Deferred.make<void>();
+        const run = yield* openKanbanOwner(fixture, yield* Effect.scope, {
+          cores: 8,
+          agent: (agent) =>
+            Effect.gen(function* () {
+              yield* Queue.offer(started, agent.card.id);
+              yield* Deferred.await(release);
+              return finished;
+            }),
+        });
+        yield* run(
+          Effect.gen(function* () {
+            const board = yield* executingPlan(fixture, [
+              card("a"),
+              { ...card("b"), outcomes: [] },
+            ]);
+            const workflows = yield* Workflows;
+            const attempts = yield* CardAttempts;
+            const loop = yield* KanbanOrchestrator;
+            yield* loop.start(board.sessionId);
+            expect([yield* Queue.take(started), yield* Queue.take(started)].toSorted()).toEqual([
+              "a",
+              "b",
+            ]);
+            const stored = attempts.goal(board.goalInstanceId);
+
+            // A new outcome concerns no card: the board only records the Goal version.
+            const saved = { id: "O1", text: "Cards are done" };
+            const listed = { id: "O2", text: "Cards are listed" };
+            yield* workflows.updateGoal(board.sessionId, {
+              ...goalInput,
+              outcomes: [saved, listed],
+            });
+            yield* loop.poke(board.goalInstanceId);
+            yield* eventually(
+              stored,
+              Option.exists((goal) => goal.goalVersion === 2),
+            );
+            expect(Option.map(yield* stored, (goal) => goal.hold)).toEqual(Option.some(null));
+
+            // O1 reworded holds a, which serves it; b serves no changed outcome and goes on.
+            yield* workflows.updateGoal(board.sessionId, {
+              ...goalInput,
+              outcomes: [{ ...saved, text: "Cards are done twice" }, listed],
+            });
+            yield* loop.poke(board.goalInstanceId);
+            const held = yield* eventually(
+              stored,
+              Option.exists((goal) => goal.hold !== null),
+            );
+            expect(Option.map(held, (goal) => goal.hold)).toEqual(
+              Option.some({ _tag: "GoalChanged", fromVersion: 2, toVersion: 3, cards: ["a"] }),
+            );
+            yield* Deferred.succeed(release, undefined);
+            const cards = yield* waitForCards(
+              board.sessionId,
+              (cards) => status(cards, "b") === "done",
+            );
+            // a finished against the earlier Goal; it waits for its verdict.
+            expect(status(cards, "a")).toBe("in_progress");
+
+            yield* (yield* KanbanBoardActions).applyGoalChange(
+              board.sessionId,
+              [GoalChangeVerdict.cases.Continue.make({ cardId: "a" })],
+              orchestrator,
+            );
+            yield* waitForCards(board.sessionId, allDone);
+          }),
+        );
+      }),
+    gitTimeout,
+  );
+
+  it.effect(
     "runs a Goal's cards in parallel by dependency, squashes one commit per card, merges the checked Goal and completes it",
     () =>
       Effect.gen(function* () {

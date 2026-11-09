@@ -16,7 +16,7 @@
 - `boardOps(workflows)` — 단일 카드 변경을 조합하는 헬퍼입니다. `addCard`, `editCard`, `cancelCard`, `replaceCards`를 돌려줍니다.
 - `CardAgent` / `CardVerifier` / `GoalVerifier` / `OutcomeVerifier` — 카드 한 번의 delivery 실행, 카드 검증, Goal 브랜치 통합 검증, Goal outcome 하나의 판정의 서비스 계약입니다. 입력은 `CardAgentRun`, `CardVerification`, `GoalVerification`, `OutcomeVerification`이고 결과는 `CardAgentOutcome`(Finished/Failed)과 `CardVerdict`(Passed/Failed)입니다.
 - `CardAttempts` — 칸반 실행 기록 서비스(`CardAttempts.layer`)입니다. owner 연결로 SQLite에 기록하며 `activeGoals`, `goal(goalInstanceId)` 등을 제공합니다.
-- `CardAttemptOutcome` / `AssignmentHold` / `KanbanMode` / `KanbanGoal` / `CardAttempt` / `CardAttemptKey` / `CardLadder` / `DeadLetteredAttempt` — 시도 결과 tagged union(Completed/Failed/Fenced/Superseded/Stopped), Goal 변경 hold, `worktree`·`sequential` 모드, 카드 실패 사다리를 정의합니다.
+- `CardAttemptOutcome` / `AssignmentHold` / `KanbanMode` / `KanbanGoal` / `CardAttempt` / `CardAttemptKey` / `CardLadder` / `DeadLetteredAttempt` — 시도 결과 tagged union(Completed/Failed/Fenced/Superseded/Stopped), Goal 변경 hold(`cards`: 분류될 때까지 멈추는 카드, 없는 옛 hold는 모든 카드), `worktree`·`sequential` 모드, 카드 실패 사다리를 정의합니다.
 - `KanbanStorageFailed` / `KanbanStorageReason` — 칸반 저장소 오류입니다. operation은 goal/attempt/run/card/dead_letters/change_request/decision이고, reason은 Storage/Encode/Missing입니다.
 - `CardQueue` / `CardRunPayload` / `cardQueueName` / `cardAttemptKey` / `cardDeliveryLimit` — 카드 시도 DurableQueue, 그 payload, 큐 이름, 시도 키, dead-letter 전 최대 delivery 수(3)입니다.
 - `CardAttemptExecution` / `cardAttemptExecutionLayer` — 카드 시도 하나를 기다리는 durable workflow(`KanbanCardAttempt`)와 그 등록 레이어입니다. 시도에 큐 항목 id(`queue_item_id`)를 적고, 항목을 offer하고, 결과를 기다립니다. dead letter는 이 id로 시도를 찾습니다.

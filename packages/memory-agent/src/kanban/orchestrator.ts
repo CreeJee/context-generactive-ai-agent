@@ -26,7 +26,12 @@ import { Projects } from "../projects/projects.ts";
 import { Sessions } from "../sessions/sessions.ts";
 import type { BoardEditRefused } from "../workflow/board-edit.ts";
 import { BoardAuthor, type CardStatus } from "../workflow/card.ts";
-import { Workflows, type PlanStep, type WorkflowState } from "../workflow/workflow.ts";
+import {
+  Workflows,
+  type GoalArtifact,
+  type PlanStep,
+  type WorkflowState,
+} from "../workflow/workflow.ts";
 import { CardVerifier } from "./card-agent.ts";
 import { executionSubjects } from "../workflow/execution-subjects.ts";
 import {
@@ -145,6 +150,43 @@ export interface KanbanOrchestratorOptions {
   /** The wait before a card's second retry. */
   readonly backoff?: Duration.Input;
 }
+
+/** What a Goal says about the work as a whole, apart from its outcomes. */
+const sameScope = Schema.toEquivalence(
+  Schema.Struct({
+    statement: Schema.String,
+    constraints: Schema.Array(Schema.String),
+    nonGoals: Schema.Array(Schema.String),
+  }),
+);
+
+/**
+ * The unfinished cards a Goal change may concern: every one when the statement, constraints or
+ * non-goals changed or the earlier Goal is unknown; otherwise those serving an outcome whose text
+ * changed or that the Goal dropped. A new outcome concerns no card; the model adds cards for it.
+ */
+const concernedCards = (
+  before: Option.Option<GoalArtifact>,
+  after: GoalArtifact,
+  steps: readonly PlanStep[],
+) => {
+  const unfinished = steps.filter((step) => step.status !== "done");
+  if (Option.isNone(before) || !sameScope(before.value, after))
+    return unfinished.map((step) => step.id);
+  const changed = before.value.outcomes
+    .filter(
+      (outcome) =>
+        !after.outcomes.some((next) => next.id === outcome.id && next.text === outcome.text),
+    )
+    .map((outcome) => outcome.id);
+  return unfinished
+    .filter((step) => step.outcomes.some((id) => changed.includes(id)))
+    .map((step) => step.id);
+};
+
+/** Whether a Goal change holds the card until it is classified. */
+const holdsCard = (hold: AssignmentHold | null, cardId: string) =>
+  hold !== null && (hold.cards === undefined || hold.cards.includes(cardId));
 
 const loopAuthor = (goalInstanceId: string): BoardAuthor =>
   BoardAuthor.cases.Orchestrator.make({ runId: `kanban:${goalInstanceId}` });
@@ -501,9 +543,8 @@ const make = (options: KanbanOrchestratorOptions) =>
        */
       const verifying = Effect.gen(function* () {
         const card = Option.getOrUndefined(stepOf(yield* workflows.get(goal.sessionId), cardId));
-        const held = Option.exists(
-          yield* attempts.goal(goal.goalInstanceId),
-          (current) => current.hold !== null,
+        const held = Option.exists(yield* attempts.goal(goal.goalInstanceId), (current) =>
+          holdsCard(current.hold, cardId),
         );
         return card?.status === "verify" && !held ? card : undefined;
       });
@@ -647,7 +688,7 @@ const make = (options: KanbanOrchestratorOptions) =>
           Effect.as(failCard(goal, attempt.cardId, "in_progress", failure), true),
         // Work done against an earlier Goal waits until the cards are classified against it.
         Completed: ({ report }) =>
-          goal.hold !== null
+          holdsCard(goal.hold, attempt.cardId)
             ? Effect.succeed(false)
             : Effect.as(
                 Effect.when(
@@ -834,14 +875,29 @@ const make = (options: KanbanOrchestratorOptions) =>
       yield* scheduler.clearNotices(goalInstanceId);
     });
 
-    /** A Goal changed since its cards were classified holds assignment until they are again. */
-    const holdAssignment = (goal: KanbanGoal, goalVersion: number) => {
-      const hold = AssignmentHold.make({ fromVersion: goal.goalVersion, toVersion: goalVersion });
-      return Effect.as(attempts.setHold(goal.goalInstanceId, hold, goal.goalVersion), {
-        ...goal,
-        hold,
+    /**
+     * A Goal changed since its cards were classified holds the cards the change may concern until
+     * they are classified again. A change that concerns no card only records the new version.
+     */
+    const holdAssignment = Effect.fnUntraced(function* (
+      goal: KanbanGoal,
+      after: GoalArtifact,
+      steps: readonly PlanStep[],
+    ) {
+      const before = yield* workflows.goalAt(goal.sessionId, goal.goalVersion);
+      const cards = concernedCards(before, after, steps);
+      if (cards.length === 0) {
+        yield* attempts.setHold(goal.goalInstanceId, null, after.version);
+        return { ...goal, goalVersion: after.version };
+      }
+      const hold = AssignmentHold.make({
+        fromVersion: goal.goalVersion,
+        toVersion: after.version,
+        cards,
       });
-    };
+      yield* attempts.setHold(goal.goalInstanceId, hold, goal.goalVersion);
+      return { ...goal, hold };
+    });
 
     /** The board's cards that may start now, in the order they start. */
     const assignable = Effect.fnUntraced(function* (
@@ -856,13 +912,18 @@ const make = (options: KanbanOrchestratorOptions) =>
       const working = steps.filter(
         (step) => HashSet.has(busy, step.id) || step.status === "verify",
       );
-      // A card a person or a restart left in_progress without an attempt continues first.
+      // A card a person or a restart left in_progress without an attempt continues first. A card a
+      // Goal change holds waits until it is classified.
       const orphans = steps.filter(
-        (step) => step.status === "in_progress" && !HashSet.has(busy, step.id),
+        (step) =>
+          step.status === "in_progress" &&
+          !HashSet.has(busy, step.id) &&
+          !holdsCard(goal.hold, step.id),
       );
       const ready = steps.filter(
         (step) =>
           step.status === "ready" &&
+          !holdsCard(goal.hold, step.id) &&
           !HashSet.has(busy, step.id) &&
           (ladderOf(step.id).notBefore ?? 0) <= now,
       );
@@ -930,10 +991,9 @@ const make = (options: KanbanOrchestratorOptions) =>
         yield* janitor.settleGoal(stored);
         return "stopped" as const;
       }
-      const goalVersion = before.goal?.version ?? stored.goalVersion;
       const goal: KanbanGoal =
-        goalVersion > stored.goalVersion && stored.hold === null
-          ? yield* holdAssignment(stored, goalVersion)
+        before.goal !== null && before.goal.version > stored.goalVersion && stored.hold === null
+          ? yield* holdAssignment(stored, before.goal, before.plan?.steps ?? [])
           : stored;
 
       yield* blockDeadLetters(goal);
@@ -971,20 +1031,19 @@ const make = (options: KanbanOrchestratorOptions) =>
       // The Goal is reached when every card is done and the verifier judged every outcome met.
       const reached =
         allDone && standings.every((standing) => OutcomeStatus.guards.Met(standing.status));
-      // Every card is done, yet an outcome has no card or was judged not met: the model adds cards.
-      const outcomesOpen =
-        allDone &&
-        standings.some(
-          (standing) =>
-            OutcomeStatus.guards.Unplanned(standing.status) ||
-            OutcomeStatus.guards.NotMet(standing.status),
-        );
+      // An outcome has no card (a new one, or the Plan missed it) or its done cards were judged not
+      // met: the model adds cards.
+      const outcomesOpen = standings.some(
+        (standing) =>
+          OutcomeStatus.guards.Unplanned(standing.status) ||
+          OutcomeStatus.guards.NotMet(standing.status),
+      );
 
       // Cards in verify that no integration is working on (after a restart, or a person moved
       // them there) are verified again. A held Goal verifies none until its cards are classified:
       // the integration would end at once and wake the board for another look, over and over.
       yield* Effect.forEach(
-        steps.filter((step) => goal.hold === null && step.status === "verify"),
+        steps.filter((step) => !holdsCard(goal.hold, step.id) && step.status === "verify"),
         (step) =>
           Effect.when(
             startIntegration(goal, step.id, ""),
@@ -1001,9 +1060,7 @@ const make = (options: KanbanOrchestratorOptions) =>
       const waitingOn = yield* scheduler.waitingOn(goalInstanceId);
       yield* scheduler.reviewNotices(goalInstanceId);
       const planned =
-        executing && goal.hold === null && waitingOn.length === 0
-          ? yield* assignable(goal, steps, ladderOf)
-          : [];
+        executing && waitingOn.length === 0 ? yield* assignable(goal, steps, ladderOf) : [];
       // Every look reports the cards it could start; the scheduler picks the project's next ones.
       const granted = yield* scheduler.grant(goal, planned);
       yield* Effect.forEach(
@@ -1055,7 +1112,7 @@ const make = (options: KanbanOrchestratorOptions) =>
         goal_changed: goal.hold !== null,
         replan_requested: replanning.length > 0,
         change_requested: requests > 0,
-        outcomes_open: outcomesOpen,
+        outcomes_open: executing && outcomesOpen,
         file_overlap: notices.length > 0,
         goal_unverified: Option.exists(schedule, (found) =>
           Predicate.isTagged(found.merge, "VerifyFailed"),

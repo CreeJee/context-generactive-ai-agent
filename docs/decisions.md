@@ -4601,7 +4601,8 @@
 - 구현(2b 칸반): 보드의 merge는 카드가 모두 done이고 장부의 outcome이 모두 met일 때 시작한다(전에는 카드가 모두 done이면 시작했다). 그래서 merge가 끝난 뒤 카드가 더해져 merge되지 않은 채 남는 일이 없다.
   - merge가 일을 넘기면(merge됨, 수동 merge, PR 생성) 보드 루프가 `OutcomesMet` 전이로 Goal과 Plan을 함께 완료한다. Goal verification은 outcome별 판정 요약이다. worktree가 없는 Goal은 merge가 없으므로 outcome이 모두 met이면 바로 완료한다.
   - 칸반 보드에서 모델이 `update_workflow_progress`로 Goal·Plan 완료를 기록하면 `outcomes_complete_goal`로 거절한다. 칸반이 아닌 Goal의 완료 기록과 `criterionMappings`는 채팅 모델 직접 실행을 없애는 2c에서 함께 걷는다.
-  - 모델에게 알리는 `cards_done`은 `outcomes_open`이 된다. 카드가 모두 done인데 카드가 없거나 not_met인 outcome이 있을 때만 알리고, 모델은 그 outcome을 위한 카드를 더한다.
+  - 모델에게 알리는 `cards_done`은 `outcomes_open`이 된다. 맡은 카드가 없거나 not_met인 outcome이 있으면 알리고, 모델은 그 outcome을 위한 카드를 더한다.
+  - Goal을 고치면 이전 버전(`Workflows.goalAt`)과 비교해 문장이 바뀌거나 빠진 outcome을 맡은 끝나지 않은 카드만 보류한다(`AssignmentHold.cards`). 문장·제약·non-goal이 바뀌면 끝나지 않은 카드 모두다. 결정에는 outcome만 적었지만, 이 셋은 모든 카드의 범위를 바꾸므로 넓게 잡았다. 보류할 카드가 없으면 새 Goal 버전만 기록하고 보드는 그대로 돈다.
 
 ## SQLite 연결은 `synchronous = NORMAL`로 쓴다 (2026-11-09)
 

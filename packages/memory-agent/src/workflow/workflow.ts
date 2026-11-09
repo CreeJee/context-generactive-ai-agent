@@ -805,8 +805,26 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
         ),
       );
 
+    const goalAtVersion = SqlSchema.findOneOption({
+      Request: Schema.Struct({ sessionId: Schema.String, version: Schema.Int }),
+      Result: Schema.Struct({ goal_json: Schema.fromJsonString(GoalArtifact) }),
+      execute: ({ sessionId, version }) => sql`SELECT goal_json FROM workflow_state_revisions
+        WHERE session_id = ${sessionId} AND goal_version = ${version}
+          AND goal_instance_id = (SELECT goal_instance_id FROM workflow_goal_identities
+            WHERE session_id = ${sessionId})
+        ORDER BY id DESC LIMIT 1`,
+    });
+
     return {
       get: (sessionId: string) => persisted(get(sessionId)),
+      /** The session's current Goal as it stood at `version`; none when no revision holds it. */
+      goalAt: (sessionId: string, version: number) =>
+        persisted(
+          Effect.map(
+            goalAtVersion({ sessionId, version }),
+            Option.map((row) => row.goal_json),
+          ),
+        ),
       goalInstanceId: (sessionId: string) =>
         persisted(
           goalIdentity(sessionId).pipe(

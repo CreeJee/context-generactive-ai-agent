@@ -151,7 +151,7 @@ type ActionFailure =
 const readBoard = {
   name: "read_kanban_board",
   description:
-    "Read the kanban board: each card's status and the Goal outcomes it serves, why the loop stopped it (failures, replan requests, conflicts, uncertain effects), users' pending change requests, whether a changed Goal holds new assignments, and each Goal outcome's status: unplanned (no card serves it), in_progress (its cards are not done), awaiting_check (its cards are done and the owner is judging it), met or not_met (the owner's verdict on the Goal branch).",
+    "Read the kanban board: each card's status and the Goal outcomes it serves, why the loop stopped it (failures, replan requests, conflicts, uncertain effects), users' pending change requests, the cards a changed Goal holds until they are classified (goalChange.cards), and each Goal outcome's status: unplanned (no card serves it), in_progress (its cards are not done), awaiting_check (its cards are done and the owner is judging it), met or not_met (the owner's verdict on the Goal branch).",
   parameters: ReadBoardInput,
 } as const;
 
@@ -164,7 +164,7 @@ const editBoard = {
 - move: move a card between statuses. Moving a running card stops its attempt. Moving a blocked card back to ready after replanning it starts a new failure streak; the next repeated failure goes to a person. A refused move answers the card's status now and the statuses it may move to.
 - requeue: put a blocked card whose deliveries ran out back on the queue. It continues in its worktree with a fresh delivery budget.
 - settle_change_request: settle a user's pending change to a running card. decision apply continues the card with the change at once, reassign applies it and restarts the card in a fresh agent conversation, reject keeps the card as it is and records your reason for the user.
-- apply_goal_change: after the Goal changed, give one verdict per card that is not done (a card without one continues): continue, amend (change the card and tell its agent), stop (block it with a reason), replace (a new card takes its place) or needs_decision (a person decides). New assignments resume once this is saved.
+- apply_goal_change: after the Goal changed, give one verdict per card goalChange.cards names (a card without one continues): continue, amend (change the card and tell its agent), stop (block it with a reason), replace (a new card takes its place) or needs_decision (a person decides). Only cards serving a changed or dropped outcome are held, or every unfinished card when the statement, constraints or non-goals changed; the others keep running. The held cards resume once this is saved.
 - retarget: make the branch checked out in the project now the Goal's target (the board's schedule.targetBranch) and restart the Goal branch from it, so new cards start from that branch. Only before the Goal has work of its own; refused with not_worktree, merge_started, detached_head, goal_has_work (the Goal branch has commits neither branch holds) or cards_started (branches ctx/card/<goalInstanceId>/* exist, cancelled cards' included).
 A new or changed card names in outcomes the ids of the current Goal outcomes it serves; an id the Goal does not have refuses the change with plan_outcomes_rejected.`,
   parameters: EditBoardInput,
@@ -324,7 +324,7 @@ export const kanbanInstructions = `This Goal runs as a kanban board. The owner's
 Your part is what the loop cannot decide. Read the board with read_kanban_board, then change it with edit_kanban_board:
 - A blocked card with a replan request: split, merge or cancel it, or change its fields with edit_plan, then move it back to ready.
 - A user's change request to a running card: settle_change_request (apply, reassign, or reject with a reason).
-- A changed Goal: apply_goal_change for every card that is not done; new assignments wait for it.
+- A changed Goal: apply_goal_change for the cards it holds; they wait for it. A new outcome holds no card: add cards for it.
 - A blocked card whose deliveries ran out: requeue once the cause is understood.
 - The user asks the board to target the branch they now have checked out: retarget.
 - A Goal outcome that is unplanned or not_met: add cards that serve it (their outcomes name its id), reading a not_met verdict for what is missing.
@@ -332,11 +332,11 @@ The verifier judges each outcome once its cards are done. When every outcome is 
 Cards in human_decision wait for a person; do not move them yourself unless the user tells you to.`;
 
 const reasonText = {
-  goal_changed: "The Goal changed: classify the cards with edit_kanban_board apply_goal_change.",
+  goal_changed:
+    "The Goal changed: classify the cards it holds with edit_kanban_board apply_goal_change.",
   replan_requested: "A card keeps failing and asks to be replanned.",
   change_requested: "A user asked to change a running card: settle it.",
-  outcomes_open:
-    "Every card is done, yet a Goal outcome is unplanned or not_met: add cards that serve it.",
+  outcomes_open: "A Goal outcome is unplanned or not_met: add cards that serve it.",
   file_overlap:
     "A card's expected files overlap a running card of another Goal; the later card waits. Reorder or split cards if waiting is not right.",
   goal_unverified:

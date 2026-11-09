@@ -97,6 +97,11 @@ export type GoalMergeState = typeof GoalMergeState.Type;
 export const AssignmentHold = Schema.TaggedStruct("GoalChanged", {
   fromVersion: Schema.Int,
   toVersion: Schema.Int,
+  /**
+   * The cards the change may concern, held until they are classified; the board's other cards go
+   * on. Holds saved before cards were named hold every card.
+   */
+  cards: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 export type AssignmentHold = typeof AssignmentHold.Type;
 
