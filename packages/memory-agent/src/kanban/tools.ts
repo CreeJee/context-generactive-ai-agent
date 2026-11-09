@@ -10,7 +10,13 @@ import {
 } from "../workflow/board-edit.ts";
 import type { PlanDependenciesRejected } from "../workflow/plan-schedule.ts";
 import { type PlanOutcomesRejected, unknownStepOutcomeText } from "../workflow/step-outcomes.ts";
-import type { WorkflowStorageError } from "../workflow/workflow.ts";
+import {
+  OutcomeLedger,
+  outcomeStandings,
+  OutcomeStatus,
+  type OutcomeStanding,
+} from "../workflow/outcome-ledger.ts";
+import { Workflows, type WorkflowStorageError } from "../workflow/workflow.ts";
 import { Boards } from "../workflow/board.ts";
 import { BoardAuthor, CardStatus } from "../workflow/card.ts";
 import {
@@ -145,7 +151,7 @@ type ActionFailure =
 const readBoard = {
   name: "read_kanban_board",
   description:
-    "Read the kanban board: each card's status, why the loop stopped it (failures, replan requests, conflicts, uncertain effects), users' pending change requests, and whether a changed Goal holds new assignments.",
+    "Read the kanban board: each card's status and the Goal outcomes it serves, why the loop stopped it (failures, replan requests, conflicts, uncertain effects), users' pending change requests, whether a changed Goal holds new assignments, and each Goal outcome's status: unplanned (no card serves it), in_progress (its cards are not done), awaiting_check (its cards are done and the owner is judging it), met or not_met (the owner's verdict on the Goal branch).",
   parameters: ReadBoardInput,
 } as const;
 
@@ -164,9 +170,27 @@ A new or changed card names in outcomes the ids of the current Goal outcomes it 
   parameters: EditBoardInput,
 } as const;
 
+/** An outcome's status as the model reads it: plain keys, the status a word. */
+const outcomeView = ({ outcomeId, outcomeText, status }: OutcomeStanding) => ({
+  id: outcomeId,
+  text: outcomeText,
+  ...OutcomeStatus.match(status, {
+    Unplanned: () => ({ status: "unplanned" as const }),
+    InProgress: ({ pending }) => ({ status: "in_progress" as const, pendingCards: pending }),
+    AwaitingCheck: ({ stale }) => ({
+      status: "awaiting_check" as const,
+      earlierVerdictStale: stale,
+    }),
+    Met: ({ summary }) => ({ status: "met" as const, verdict: summary }),
+    NotMet: ({ summary }) => ({ status: "not_met" as const, verdict: summary }),
+  }),
+});
+
 const make = Effect.gen(function* () {
   const events = yield* AppEvents;
   const boards = yield* Boards;
+  const workflows = yield* Workflows;
+  const ledger = yield* OutcomeLedger;
   const runtime = yield* Effect.context<KanbanBoardActions | Boards>();
 
   /** The tools' calls in `sessionId`, each change saved as the run `runId`'s. */
@@ -217,16 +241,25 @@ const make = Effect.gen(function* () {
           return yield* Option.match(yield* (yield* KanbanBoardActions).view(sessionId), {
             onNone: () => Effect.succeed({ error: "not_kanban" as const }),
             onSome: (view) =>
-              Effect.map(boards.view(sessionId), (board) => {
+              Effect.gen(function* () {
+                const board = yield* boards.view(sessionId);
+                const state = yield* workflows.get(sessionId);
                 const titles = new Map(board.cards.map(({ card }) => [card.id, card]));
+                const outcomes = outcomeStandings({
+                  outcomes: state.goal?.outcomes ?? [],
+                  steps: state.plan?.steps ?? [],
+                  latest: yield* ledger.latest(view.goalInstanceId),
+                });
                 return {
                   ...view,
                   cards: view.cards.map((card) => ({
                     ...card,
                     title: titles.get(card.cardId)?.title ?? "",
                     dependsOn: titles.get(card.cardId)?.dependsOn ?? [],
+                    outcomes: titles.get(card.cardId)?.outcomes ?? [],
                   })),
                   pendingChanges: board.pendingChanges,
+                  outcomes: outcomes.map(outcomeView),
                 };
               }),
           });
@@ -289,6 +322,7 @@ Your part is what the loop cannot decide. Read the board with read_kanban_board,
 - A changed Goal: apply_goal_change for every card that is not done; new assignments wait for it.
 - A blocked card whose deliveries ran out: requeue once the cause is understood.
 - The user asks the board to target the branch they now have checked out: retarget.
+- A Goal outcome that is unplanned or not_met: add cards that serve it (their outcomes name its id), reading a not_met verdict for what is missing.
 Cards in human_decision wait for a person; do not move them yourself unless the user tells you to.`;
 
 const reasonText = {

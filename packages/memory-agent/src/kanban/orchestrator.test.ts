@@ -648,6 +648,52 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "shows the model each Goal outcome's status and the outcomes each card serves",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* kanbanFixture;
+        const run = yield* openOwner(fixture, () => Effect.never, yield* Effect.scope);
+        yield* run(
+          Effect.scoped(
+            Effect.gen(function* () {
+              const board = yield* executingBoard(fixture, [
+                { ...card("a"), outcomes: ["O1"] },
+                card("b"),
+              ]);
+              const tools = Context.get(
+                yield* Layer.build(
+                  KanbanTools.layer.pipe(
+                    Layer.provide(Boards.layer),
+                    Layer.provide(GoalOrder.layer),
+                  ),
+                ),
+                KanbanTools,
+              ).toolsFor(board.sessionId, "test-model");
+              const read = yield* Effect.flatMap(Effect.fromNullishOr(tools[0]), (tool) =>
+                tool.prepare({}),
+              ).pipe(Effect.flatMap((call) => call({ toolCallId: "call-1" })));
+              expect(read).toMatchObject({
+                cards: [
+                  { cardId: "a", outcomes: ["O1"] },
+                  { cardId: "b", outcomes: [] },
+                ],
+                outcomes: [
+                  {
+                    id: "O1",
+                    text: "Cards are done",
+                    status: "in_progress",
+                    pendingCards: ["a"],
+                  },
+                ],
+              });
+            }),
+          ),
+        );
+      }),
+    gitTimeout,
+  );
+
+  it.effect(
     "answers the model's refused move with the card's status and where it may go",
     () =>
       Effect.gen(function* () {
