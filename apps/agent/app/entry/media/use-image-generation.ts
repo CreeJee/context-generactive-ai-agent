@@ -1,9 +1,11 @@
 import { Effect } from "effect";
 import { runUiEffect, uiPromise } from "../shared/ui-effect";
+import { problemText } from "../shared/copy-templates";
 import { useMutation } from "@tanstack/react-query";
 import { useBooleanState } from "react-simplikit";
 import { api, isApiError } from "../api";
 import { ApprovalChoice, chooseCrossProviderApproval } from "./cross-provider-approval";
+import { mediaCopy } from "./copy";
 import { useImageSettingsQuery } from "../queries/global";
 import { useCrossProviderConsentMutation } from "../queries/mutations/global";
 
@@ -54,7 +56,7 @@ export function useImageGeneration(onProblem: (message: string) => void) {
         }).pipe(
           Effect.catchTag("UnknownError", () =>
             Effect.sync(() => {
-              onProblem("이미지를 생성하지 못했어요. 설정과 계정 권한을 확인해 주세요.");
+              onProblem(problemText(mediaCopy.imageFailed));
               return false;
             }),
           ),

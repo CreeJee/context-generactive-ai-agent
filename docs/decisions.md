@@ -4680,3 +4680,15 @@
   - 패키지 함수의 경계(압축 원본 lookup, 리포트 근거 위치, 실패 span 조회 등)도 `HashMap`·`HashSet`으로 주고받고 `HashMap.get`의 `Option`으로 읽는다.
   - 예외는 소스 주석이 아니라 `vite.config.ts`의 파일 override로 둔다. 지금은 참조 동일성으로 방문한 스키마 노드를 세는 `tools/input-repair.ts`와, native `ReadonlySet` 타입인 `Logger.CurrentLoggers`에 넣는 테스트 세 개다.
   - `apps/agent`는 React prop이 native `ReadonlySet`을 받는 자리가 있어 이번 규칙 범위 밖이다.
+
+## 앱 문구는 copy.ts 카탈로그에 두고 결정론적으로 검사한다 (2026-11-10)
+
+- 계기: 앱 문구가 84개 파일 1,689줄에 흩어져 있었고, 용어(`Goal`/목표, `Plan`/계획, `outcome`/결과)와 말투(해요체 647, 합니다체 35, 해라체 19)가 섞여 있었다. 문구 대부분을 코딩 에이전트가 쓰는데, 스타일 지침(skill)은 쓸 때 참고만 할 뿐 결과를 검사하지 않는다.
+- 결정:
+  - 토스의 에러 메시지 시스템처럼 상황별 틀(`apps/agent/app/entry/shared/copy-templates.ts`)을 두고, 기능 디렉터리마다 그 틀을 채운 카탈로그 `copy.ts`를 둔다. 언어가 하나라서 i18n 런타임은 쓰지 않는다.
+  - 어디에 쓰는지는 lint가 지킨다. `copy/no-inline-copy`가 `copy.ts` 밖의 한글 문자열·템플릿·JSX 텍스트를 막는다. 옮긴 디렉터리부터 `vite.config.ts` overrides로 켜고, 다 옮기면 전체에 켠다.
+  - 무엇을 말하는지는 `tools/copy-check`가 결정론적으로 검사한다. 금지 표현(번역투, 이중 피동, 과한 경어, 줄표, 느낌표, 이모지), 용어집, 말투다. 말투는 Kiwi(`kiwi-nlp`, 개발 전용) 종결어미로 판정한다. 허용하는 끝은 `~요`, `죠`, 상태 라벨의 명사형(`없음`)이고, 종결어미가 없는 라벨은 마침표로 끝내지 않는다.
+  - 검사는 커밋 hook(`staged`의 `**/copy.ts`)과 Claude Code PostToolUse hook에서 돈다. hook은 위반을 `decision: "block"`으로 에이전트에게 돌려줘, 쓴 자리에서 고치게 한다.
+  - 금지 표현 목록은 작게 유지한다. 모델 세대마다 바뀌는 상투어는 목록 대신 예시로 다룬다. 금지어 목록은 다른 표현으로 옮겨 가거나 낡는다는 사례가 있다. LLM 판정은 게이트로 쓰지 않는다.
+- 남은 결정: 용어집에 넣을 용어(Goal, Plan, outcome을 영어로 둘지 한국어로 바꿀지)와 모델 프롬프트를 같은 체계에 넣을지.
+- 첫 적용: `apps/agent/app/entry/media`. 승인 대화상자 본문의 합니다체를 해요체로 바꿨다.

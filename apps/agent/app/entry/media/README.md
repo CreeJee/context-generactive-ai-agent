@@ -7,7 +7,8 @@
 ## Interface
 
 - `ApprovalChoice` — `Data.TaggedEnum` 타입이자 생성자. 변형은 `cancel`, `once { approval: CrossProviderMediaRunApproval }`, `always`이고 `$match`로 분기한다.
-- `chooseCrossProviderApproval(approval)` — `overlay.openAsync<ApprovalChoice>`로 'OpenAI 이미지 실행을 허용할까요?' 대화상자를 열고, 사용자가 고른 `ApprovalChoice`로 resolve되는 Promise를 돌려준다.
+- `chooseCrossProviderApproval(approval)` — `overlay.openAsync<ApprovalChoice>`로 `mediaCopy.crossProviderApproval` 문구의 승인 대화상자를 열고, 사용자가 고른 `ApprovalChoice`로 resolve되는 Promise를 돌려준다.
+- `mediaCopy` (`copy.ts`) — 이 기능의 문구 카탈로그. 승인 대화상자(`ConfirmCopy<ApprovalChoice["_tag"]>`라서 선택지마다 라벨이 있어야 한다)와 생성 실패(`ProblemCopy`) 문구를 담는다. 문구는 `tools/copy-check`가 검사하고, 이 디렉터리에서 `copy.ts` 밖에 한글 문구를 쓰면 `copy/no-inline-copy`가 오류를 낸다.
 - `useImageGeneration(onProblem)` — 이미지 생성 React 훅. 반환값은 `{ intent, clearIntent, toggleIntent, settings, generating, asset, generate }`이다.
 - `useImageGeneration().generate(prompt)` — 생성을 실행하고 `Promise<boolean>`을 돌려준다. 이미 진행 중이면 `false`, 취소(null 결과)면 `false`, 실패하면 `onProblem`을 부르고 `false`를 돌려준다.
 - `useImageGeneration().asset` — 진행 중이면 `null`이고, 끝나면 `generation.data ?? null`이다.
@@ -32,7 +33,7 @@
 - 서버 상태 변경: `useCrossProviderConsentMutation().mutateAsync("always")`로 cross-provider 동의를 '항상 허용'으로 저장한다.
 - UI/DOM: `overlay.openAsync`로 Dialog를 마운트하고, 선택 뒤 `close`/`unmount`로 정리한다.
 - React Query 상태: `useMutation`의 pending/data 상태와 `useImageSettingsQuery` 캐시를 읽는다.
-- 콜백: 생성 실패 시 `onProblem("이미지를 생성하지 못했어요. 설정과 계정 권한을 확인해 주세요.")`를 호출한다.
+- 콜백: 생성 실패 시 `onProblem(problemText(mediaCopy.imageFailed))`를 호출한다.
 
 ## Verification
 

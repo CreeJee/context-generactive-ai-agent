@@ -97,6 +97,13 @@ export default defineConfig({
         },
       },
       {
+        // App copy lives in copy.ts catalogs. Add each feature directory once its copy has moved there.
+        files: ["apps/agent/app/entry/media/**"],
+        rules: {
+          "copy/no-inline-copy": "error",
+        },
+      },
+      {
         // Packages keep collections in Effect's types (docs/map-set-audit-2026-10-06.md).
         files: ["packages/**"],
         rules: {

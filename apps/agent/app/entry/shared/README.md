@@ -23,6 +23,7 @@
 - `loopHealthLabel` — `LoopHealth`(`Healthy`/`Retrying`/`Exhausted`/`Defected`)를 한국어 문구로 바꾼다
 - `LoopHealthStatus` — 백그라운드 루프 상태 배지와, `Exhausted`/`Defected`일 때만 보이는 '다시 시작' 버튼 컴포넌트
 - `FailureDetails` — 실패의 외부 프로그램 원문(`detail`)을 접힌 `<pre>`로 보여 준다. `null`이면 렌더하지 않는다
+- `ConfirmCopy<Choice>` / `ProblemCopy` / `problemText` (`copy-templates.ts`) — 기능별 `copy.ts`가 채우는 상황별 문구 틀. 확인 질문은 제목·본문·선택지별 라벨, 문제 안내는 무엇이 안 됐는지와 다음에 할 일로 쓴다. `problemText`는 문제 안내를 한 줄로 잇는다
 - 하위 디렉터리 없음
 
 ## Invariants

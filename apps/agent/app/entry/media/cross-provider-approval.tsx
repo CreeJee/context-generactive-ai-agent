@@ -9,6 +9,7 @@ import {
   DialogTitle,
 } from "~/components/ui/dialog";
 import type { CrossProviderMediaRunApproval } from "../api";
+import { mediaCopy } from "./copy";
 
 export type ApprovalChoice = Data.TaggedEnum<{
   cancel: {};
@@ -19,6 +20,7 @@ export const ApprovalChoice = Data.taggedEnum<ApprovalChoice>();
 
 /** The server's cross-provider disclosure has three explicit outcomes. */
 export function chooseCrossProviderApproval(approval: CrossProviderMediaRunApproval) {
+  const copy = mediaCopy.crossProviderApproval;
   return overlay.openAsync<ApprovalChoice>(({ isOpen, close, unmount }) => {
     const choose = (choice: ApprovalChoice) => {
       close(choice);
@@ -33,21 +35,18 @@ export function chooseCrossProviderApproval(approval: CrossProviderMediaRunAppro
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>OpenAI 이미지 실행을 허용할까요?</DialogTitle>
-            <DialogDescription>
-              Claude는 이미지를 직접 생성하지 않습니다. 이미지 프롬프트가 OpenAI로 전송되고 사용량은
-              OpenAI 계정에 귀속됩니다.
-            </DialogDescription>
+            <DialogTitle>{copy.title}</DialogTitle>
+            <DialogDescription>{copy.body}</DialogDescription>
           </DialogHeader>
           <div className="flex justify-end gap-2">
             <Button variant="outline" onClick={() => choose(ApprovalChoice.cancel())}>
-              취소
+              {copy.choices.cancel}
             </Button>
             <Button variant="outline" onClick={() => choose(ApprovalChoice.once({ approval }))}>
-              이번만 허용
+              {copy.choices.once}
             </Button>
             <Button variant="outline" onClick={() => choose(ApprovalChoice.always())}>
-              항상 허용
+              {copy.choices.always}
             </Button>
           </div>
         </DialogContent>
