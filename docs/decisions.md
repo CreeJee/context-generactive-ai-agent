@@ -4568,7 +4568,34 @@
   - 같은 이유로 되풀이되는 실패는 재시도로 넘기지 않고 계획자의 원인 진단으로 올린다. 11/2 같은 세션의 카드 검증 거절 약 150건은 브랜치가 어긋난 환경 문제였는데 requeue만 반복됐다.
 - 사용자 결정: 계획자·실행자·검증자 모델을 따로 고를 수 있다. 비워 두면 지금처럼 선택된 모델(`ActiveProvider.selected`)을 쓴다.
 - 멈춤: blocker는 사용자 결정·권한·외부 의존·반복 실패뿐이고, 그 전에 독립적인 일을 먼저 끝낸다. Plan을 바꿔도 새로 끝난 outcome이 없는 일이 이어지면 멈춘다.
-- 순서: ① 역할별 모델 설정 ② outcome 장부(조각 결과가 Goal verification을 덮지 않음) ③ Goal 모드 루프(다음 Plan 작성, 권한 모드별 승인, 칸반이 아닌 세션의 카드 실행) ④ 계획자 컨텍스트 압축과 반복 실패 진단 ⑤ 카드가 모두 취소된 Plan 닫기.
+- 순서: ① 역할별 모델 설정 ② outcome 장부(조각 결과가 Goal verification을 덮지 않음) ③ Goal 모드 루프(다음 Plan 작성, 권한 모드별 승인, 칸반이 아닌 세션의 카드 실행) ④ 계획자 컨텍스트 압축과 반복 실패 진단 ⑤ 카드가 모두 취소된 Plan 닫기. ②는 아래 "outcome 장부와 이어 쓰는 Plan, Plan 모드는 첫 카드를 승인하는 Goal이다"로 넓혔다.
+- 구현: ① 계획자·실행자·검증자 모델은 전역 설정 `plannerModel`·`executorModel`·`verifierModel`이다. 카드 에이전트는 실행자, 카드·Goal 검증기는 검증자, 칸반 보드로 실행 중인 대화의 채팅 run은 계획자 모델로 돈다. 저장할 때 공급자 목록에 그 모델과 추론 단계가 있어야 하고, 전역 선택은 바꾸지 않는다.
+
+## outcome 장부와 이어 쓰는 Plan, Plan 모드는 첫 카드를 승인하는 Goal이다 (2026-11-09)
+
+- 계기(DB 조사, Goal 22개·Plan 버전 67개):
+  - 완료된 Goal 8개 모두 outcome(2~9개)과 근거를 짝짓지 않은 자유 문장 근거만 있다. 짝짓기를 강제하는 `criterionMappings`는 provenance Goal 2개에만 쓰였고, `fab823f6`에서는 모델이 outcome 번호·문장·노드 id를 맞추지 못해 도구 입력 오류가 10번 났다.
+  - Goal 버전이 바뀐 30번 중 outcome 목록이 그대로인 것은 1번이다. 같은 문장인데 번호가 바뀐 것이 28개, 고쳐진 107개 중 42개는 거의 같은 문장이지만 대개 조건이 붙었다("로그인" → "로그인(OTP 포함)"). 번호로도 문장으로도 이어 붙일 수 없고, 바뀐 문장의 이전 근거를 믿을 수 없다.
+  - Plan step id는 버전을 넘어 대체로 남지만(278개) 그중 162개(58%)는 내용이 바뀌었다. 최신 Plan step 140개 중 31개(22%)는 검증·테스트·스모크 step이다. 카드 계약 필드 Outcome·Boundaries·Risk는 한 번도 쓰이지 않았다.
+  - Goal phase의 revision 23개 중 22개가 이전 Goal 버전의 Plan을 들고 있었다. Plan만 완료하는 기록은 `goal_completion_required`로 거절되므로, Plan이 끝나도 outcome이 남아 다음 Plan을 쓰는 상태를 지금 상태 기계로 나타낼 수 없다.
+- 사용자 결정: Plan 모드와 Goal 모드는 같은 워크플로다. 계획자·실행자·검증자, outcome 장부, 이어 쓰는 Plan은 모드와 관계없이 같다.
+  - Goal 모드: 계획자가 첫 카드를 혼자 쓰고 바로 실행한다.
+  - Plan 모드: 계획자가 사용자와 outcome과 첫 카드를 구체화하고, 사용자가 첫 카드를 승인하면 실행한다. 그 뒤는 Goal 모드와 같다.
+  - 처음 이후에 더하는 카드의 승인은 두 모드 모두 프로젝트 권한 모드를 따른다(위 결정의 ask·auto·full).
+  - 채팅 모델이 Plan을 직접 실행하는 경로는 없앤다. 모델이 직접 고치는 일은 chat에만 남는다. git이 아닌 프로젝트는 카드를 메인 폴더에서 순차로 실행한다.
+- 결정: outcome에 계획자가 정하는 고정 id(`O1`처럼)를 붙인다. Goal을 고쳐도 같은 id는 같은 outcome이다.
+- 결정: outcome 장부는 Goal과 따로 둔다. outcome id마다 상태(`open`·`met`·`needs_recheck`)와 근거(카드, 검증 run, 판정)를 쌓는다. Goal verification을 덮어쓰지 않는다.
+  - `met`은 검증자의 판정으로만 된다. 실행자나 계획자가 바꾸지 못한다.
+  - outcome 문장이 바뀌면 `needs_recheck`가 된다. 근거는 이력으로 남고 `met`으로 세지 않는다. step도 같다: 같은 id라도 내용(제목·설명·수용 기준)이 바뀌면 이전 판정은 이력이다.
+- 결정: Plan은 Goal 하나에 하나이고 이어 쓴다(보드). 다음 Plan을 쓴다는 것은 남은 outcome을 위한 카드를 더하는 것이다.
+  - Plan은 혼자 완료되지 않는다. 장부의 outcome이 모두 `met`이면 Goal이 완료되고 Plan이 함께 닫힌다.
+  - Plan은 Goal 버전이 아니라 outcome id에 묶인다. Goal을 고치면 문장이 바뀐 outcome을 맡은 카드만 다시 분류한다.
+  - step은 `outcomes: [id]`로 자기가 맡은 outcome을 적는다. 쓰이지 않던 카드 계약 필드 Outcome은 이것으로 바꾼다.
+  - 카드 수용 기준은 카드 검증자가, outcome 충족은 그 outcome을 맡은 카드가 모두 done일 때 검증자가 판정한다. 계획자는 검증 카드를 만들지 않는다.
+  - 승인 단위는 Plan의 변경분(새로 더한 카드 묶음)이다.
+- 결정: `criterionMappings`(모델이 outcome 번호와 노드 id를 짝짓는 방식)는 장부로 대체한다. 완료된 세션의 기록은 그대로 둔다. 진행 중인 Goal은 처음 읽을 때 outcome 순서대로 `O1, O2, …`를 붙이고 모두 `open`으로 시작한다.
+- phase는 `chat`, 구체화, 실행 중, 완료로 줄인다. execute·verify는 세션 phase가 아니라 카드 루프 안의 상태가 된다.
+- 순서: 2a outcome id·장부·step의 `outcomes`·내용이 바뀌면 판정 초기화 → 2b 이어 쓰는 Plan(Plan 단독 완료 제거, Goal 완료를 장부로 판정) → 2c 모드 통합(phase 정리, Plan 모드 = 첫 카드 승인, 채팅 모델 직접 실행 제거) → 3 루프(다음 카드 작성, 권한 모드별 승인, 진척 없음 한도).
 
 ## SQLite 연결은 `synchronous = NORMAL`로 쓴다 (2026-11-09)
 
