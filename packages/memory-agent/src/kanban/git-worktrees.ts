@@ -6,8 +6,10 @@ import {
   Match,
   Option,
   Path,
+  RcMap,
   Ref,
   Schema,
+  Semaphore,
   Stream,
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -103,6 +105,8 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
   const leases = yield* Ref.make(HashSet.empty<string>());
   // Goal-level checks running now; their checkout stays until their scope closes.
   const checkouts = yield* Ref.make(HashSet.empty<string>());
+  // A Goal's checks share one checkout folder, so one check holds it at a time.
+  const checkoutHolders = yield* RcMap.make({ lookup: (_goal: string) => Semaphore.make(1) });
 
   const fail = (operation: Operation, reason: Reason, cause?: unknown) =>
     Effect.fail(CardWorktreeFailed.make({ operation, reason, cause }));
@@ -855,63 +859,84 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
       );
     }),
 
-    /** A detached worktree; a checkout a crash left behind is removed first. */
+    /**
+     * A detached worktree; a checkout a crash left behind is removed first. A second check of the
+     * same Goal waits until the first one's scope closes.
+     */
     goalCheckout: (goal: GoalRef, head: string) =>
-      Effect.acquireRelease(
-        serially(
-          `checkout:${goal.goalInstanceId}`,
-          Effect.gen(function* () {
-            yield* checkIds("checkout", [goal.goalInstanceId]);
-            const { repository, prefix, base } = yield* repositoryOf("checkout", goal.projectRoot);
-            const folder = path.join(base, goal.goalInstanceId, goalCheckoutFolder);
-            yield* Effect.when(
-              expect("checkout", repository, ["worktree", "remove", "--force", folder]),
-              Effect.map(registered("checkout", repository), (entries) =>
-                entries.some((entry) => entry.path === folder),
+      Effect.flatMap(RcMap.get(checkoutHolders, goal.goalInstanceId), (holder) =>
+        Effect.acquireRelease(holder.take(1), () => holder.release(1)),
+      ).pipe(
+        Effect.andThen(
+          Effect.acquireRelease(
+            serially(
+              `checkout:${goal.goalInstanceId}`,
+              Effect.gen(function* () {
+                yield* checkIds("checkout", [goal.goalInstanceId]);
+                const { repository, prefix, base } = yield* repositoryOf(
+                  "checkout",
+                  goal.projectRoot,
+                );
+                const folder = path.join(base, goal.goalInstanceId, goalCheckoutFolder);
+                yield* Effect.when(
+                  expect("checkout", repository, ["worktree", "remove", "--force", folder]),
+                  Effect.map(registered("checkout", repository), (entries) =>
+                    entries.some((entry) => entry.path === folder),
+                  ),
+                );
+                yield* expect("checkout", repository, ["worktree", "prune"]);
+                yield* fs.remove(folder, { recursive: true, force: true }).pipe(
+                  Effect.mapError((cause) =>
+                    CardWorktreeFailed.make({
+                      operation: "checkout",
+                      reason: reasons.GitFailed.make({ exitCode: null }),
+                      cause,
+                    }),
+                  ),
+                );
+                yield* fs
+                  .makeDirectory(path.dirname(folder), { recursive: true, mode: 0o700 })
+                  .pipe(
+                    Effect.mapError((cause) =>
+                      CardWorktreeFailed.make({
+                        operation: "checkout",
+                        reason: reasons.GitFailed.make({ exitCode: null }),
+                        cause,
+                      }),
+                    ),
+                  );
+                yield* expect("checkout", repository, [
+                  "worktree",
+                  "add",
+                  "--detach",
+                  folder,
+                  head,
+                ]);
+                yield* Ref.update(checkouts, HashSet.add(goalKey(goal)));
+                return {
+                  repository,
+                  branch: goalBranchName(goal.goalInstanceId),
+                  path: folder,
+                  toolRoot: prefix.length === 0 ? folder : path.join(folder, prefix),
+                  worktreesBase: base,
+                } satisfies GitWorktree;
+              }),
+            ),
+            (checkout) =>
+              expect("checkout", checkout.repository, [
+                "worktree",
+                "remove",
+                "--force",
+                checkout.path,
+              ]).pipe(
+                Effect.catchTag("CardWorktreeFailed", logFailure("Goal checkout was not removed")),
+                // One left behind is removed with the Goal's folder.
+                Effect.ensuring(Ref.update(checkouts, HashSet.remove(goalKey(goal)))),
               ),
-            );
-            yield* expect("checkout", repository, ["worktree", "prune"]);
-            yield* fs.remove(folder, { recursive: true, force: true }).pipe(
-              Effect.mapError((cause) =>
-                CardWorktreeFailed.make({
-                  operation: "checkout",
-                  reason: reasons.GitFailed.make({ exitCode: null }),
-                  cause,
-                }),
-              ),
-            );
-            yield* fs.makeDirectory(path.dirname(folder), { recursive: true, mode: 0o700 }).pipe(
-              Effect.mapError((cause) =>
-                CardWorktreeFailed.make({
-                  operation: "checkout",
-                  reason: reasons.GitFailed.make({ exitCode: null }),
-                  cause,
-                }),
-              ),
-            );
-            yield* expect("checkout", repository, ["worktree", "add", "--detach", folder, head]);
-            yield* Ref.update(checkouts, HashSet.add(goalKey(goal)));
-            return {
-              repository,
-              branch: goalBranchName(goal.goalInstanceId),
-              path: folder,
-              toolRoot: prefix.length === 0 ? folder : path.join(folder, prefix),
-              worktreesBase: base,
-            } satisfies GitWorktree;
-          }),
-        ),
-        (checkout) =>
-          expect("checkout", checkout.repository, [
-            "worktree",
-            "remove",
-            "--force",
-            checkout.path,
-          ]).pipe(
-            Effect.catchTag("CardWorktreeFailed", logFailure("Goal checkout was not removed")),
-            // One left behind is removed with the Goal's folder.
-            Effect.ensuring(Ref.update(checkouts, HashSet.remove(goalKey(goal)))),
           ),
-      ).pipe(Effect.map((checkout) => toolView(goal.projectRoot, checkout))),
+        ),
+        Effect.map((checkout) => toolView(goal.projectRoot, checkout)),
+      ),
 
     /** The Goal branch goes to `origin` under its own name. */
     pushGoalBranch: Effect.fn("CardWorktrees.pushGoalBranch")(function* (goal: GoalRef) {

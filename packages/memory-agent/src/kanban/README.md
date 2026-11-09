@@ -42,7 +42,7 @@
 - `WorktreeFailureReason` literal은 `satisfies`로 `CardWorktreeFailedReason`의 case 키와 맞춰져 있습니다. 둘 중 하나를 바꾸면 다른 하나도 함께 바꿔야 합니다.
 - 오케스트레이터와 큐 handler는 `CardAgent`, `CardVerifier`, `GoalVerifier`, `CardWorktrees` 계약에만 의존합니다. git 구현과 subagent 구현은 레이어로 바꿔 끼울 수 있게 둡니다.
 - `CardAgentRun.register`는 agent run에 id가 생긴 직후, 어떤 도구도 호출하기 전에 한 번만 불러야 합니다. `CardAgent.run`이 interrupt되면 run의 checkpoint가 정리된 다음에 effect가 끝납니다.
-- `lease`의 scope가 열려 있는 동안에는 그 worktree를 settle로 치울 수 없습니다. `goalCheckout`이 만든 checkout은 scope가 닫힐 때 제거됩니다.
+- `lease`의 scope가 열려 있는 동안에는 그 worktree를 settle로 치울 수 없습니다. `goalCheckout`이 만든 checkout은 scope가 닫힐 때 제거됩니다. 한 Goal의 검사는 checkout 폴더 하나를 같이 쓰므로, 같은 Goal의 두 번째 `goalCheckout`은 첫 검사의 scope가 닫힐 때까지 기다립니다.
 - `squashIntoGoal`을 하려면 카드에 이미 Goal HEAD가 들어 있어야 하고, 아니면 `GoalAdvanced`로 실패합니다. 한 Goal의 integration은 한 번에 하나씩만 실행합니다. `syncWithGoal`이 `Merged`를 돌려준 카드는 squash 전에 다시 검증해야 합니다.
 - 충돌은 자동으로 해결하지 않고 파일 단위로 보고합니다. `mergeTargetIntoGoal`은 충돌이 나면 아무것도 쓰지 않고 어떤 checkout도 건드리지 않습니다. `advanceTarget`은 uncommitted 변경이 있는 checkout을 덮어쓰지 않고 기다립니다. `pushGoalBranch`는 push를 반복하지 않습니다.
 - `prepareGoal`은 사용자의 checkout, index, 현재 브랜치를 바꾸지 않습니다. Goal 브랜치는 사용자의 현재 HEAD에서 시작합니다.

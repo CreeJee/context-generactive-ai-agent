@@ -1,5 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Effect, FileSystem, Layer, Path } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Layer, Path } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { expect } from "vite-plus/test";
 import { layer } from "@effect/vitest";
@@ -336,5 +336,38 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
           ]);
         }).pipe(Effect.scoped),
       ),
+  );
+
+  it.effect("lets one check of a Goal hold the Goal checkout at a time", () =>
+    run(({ fs, project }) =>
+      Effect.gen(function* () {
+        const worktrees = yield* CardWorktrees;
+        const goal = { projectRoot: project, goalInstanceId: "g1" };
+        yield* worktrees.prepareGoal(goal);
+        const head = yield* git(project, "rev-parse", "ctx/goal/g1");
+        const held = yield* Deferred.make<string>();
+        const done = yield* Deferred.make<void>();
+        const first = yield* Effect.forkChild(
+          Effect.scoped(
+            Effect.gen(function* () {
+              const checkout = yield* worktrees.goalCheckout(goal, head);
+              yield* Deferred.succeed(held, checkout.toolRoot);
+              yield* Deferred.await(done);
+              return yield* fs.exists(checkout.toolRoot);
+            }),
+          ),
+        );
+        const folder = yield* Deferred.await(held);
+        // Without the hold, the second check would remove the first one's folder to make its own.
+        const second = yield* Effect.forkChild(
+          Effect.scoped(Effect.map(worktrees.goalCheckout(goal, head), (c) => c.toolRoot)),
+        );
+        yield* Effect.sleep("500 millis");
+        expect(yield* fs.exists(folder)).toBe(true);
+        yield* Deferred.succeed(done, undefined);
+        expect(yield* Fiber.join(first)).toBe(true);
+        expect(yield* Fiber.join(second)).toBe(folder);
+      }),
+    ),
   );
 });
