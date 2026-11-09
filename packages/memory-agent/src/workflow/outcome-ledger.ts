@@ -1,6 +1,14 @@
 import { Array as Arr, Context, Effect, Layer, Order, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
-import { type GoalOutcome, OutcomeId, type PlanStep, StepWork } from "./contracts.ts";
+import {
+  type GoalOutcome,
+  OutcomeId,
+  OutcomeStatus,
+  type PlanStep,
+  StepWork,
+} from "./contracts.ts";
+
+export { OutcomeStatus } from "./contracts.ts";
 import { WorkflowStorageError } from "./workflow.ts";
 
 /**
@@ -21,22 +29,6 @@ export const OutcomeVerdict = Schema.Struct({
   at: Schema.String,
 });
 export type OutcomeVerdict = typeof OutcomeVerdict.Type;
-
-/** Where an outcome of the current Goal stands. */
-export const OutcomeStatus = Schema.TaggedUnion({
-  /** No card serves the outcome. */
-  Unplanned: {},
-  /** Cards serving the outcome are not done yet. */
-  InProgress: { pending: Schema.Array(Schema.String) },
-  /**
-   * Every card serving the outcome is done and no verdict holds for it. `stale` when an earlier
-   * verdict judged another outcome text or other card work.
-   */
-  AwaitingCheck: { stale: Schema.Boolean },
-  Met: { summary: Schema.String },
-  NotMet: { summary: Schema.String },
-});
-export type OutcomeStatus = typeof OutcomeStatus.Type;
 
 /** An outcome status as the model reads it: one plain word. */
 export const outcomeStatusWord = OutcomeStatus.match({

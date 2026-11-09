@@ -301,7 +301,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     BulkNodes.layer,
     SecretRedactor.layer,
     Workflows.layer,
-    Boards.layer.pipe(Layer.provide(GoalOrder.layer)),
+    Boards.layer.pipe(Layer.provide([GoalOrder.layer, OutcomeLedger.layer])),
     OutcomeLedger.layer,
     WorkflowExecution.layer,
     goalExecutionLayer,

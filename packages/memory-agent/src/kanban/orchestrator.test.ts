@@ -55,6 +55,7 @@ import { GoalSchedules } from "./goal-schedules.ts";
 import { KanbanTools } from "./tools.ts";
 import { GoalOrder } from "./goal-order.ts";
 import { Boards } from "../workflow/board.ts";
+import { OutcomeLedger } from "../workflow/outcome-ledger.ts";
 import {
   DecisionAnswer,
   DecisionKind,
@@ -664,7 +665,7 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
                 yield* Layer.build(
                   KanbanTools.layer.pipe(
                     Layer.provide(Boards.layer),
-                    Layer.provide(GoalOrder.layer),
+                    Layer.provide([GoalOrder.layer, OutcomeLedger.layer]),
                   ),
                 ),
                 KanbanTools,
@@ -707,7 +708,7 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
                 yield* Layer.build(
                   KanbanTools.layer.pipe(
                     Layer.provide(Boards.layer),
-                    Layer.provide(GoalOrder.layer),
+                    Layer.provide([GoalOrder.layer, OutcomeLedger.layer]),
                   ),
                 ),
                 KanbanTools,

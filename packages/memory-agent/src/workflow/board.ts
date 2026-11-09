@@ -11,6 +11,7 @@ import {
   type BoardView,
   type ProjectBoard,
 } from "./contracts.ts";
+import { OutcomeLedger, outcomeStandings } from "./outcome-ledger.ts";
 import { decodeRevisionPlan, PlanStep, WorkflowStorageError } from "./workflow.ts";
 
 /** Cards in each column of a board. */
@@ -79,15 +80,19 @@ export class Boards extends Context.Service<
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       const goalOrder = yield* GoalOrder;
+      const ledger = yield* OutcomeLedger;
       const currentStates = sql.literal(currentStatesSql);
       const current = SqlSchema.findOneOption({
         Request: Schema.String,
         Result: Schema.Struct({
           plan_json: Schema.NullOr(Schema.String),
           goal_json: Schema.NullOr(Schema.fromJsonString(GoalArtifact)),
+          goal_instance_id: Schema.NullOr(Schema.String),
         }),
         execute: (sessionId) =>
-          sql`SELECT r.plan_json, r.goal_json FROM ${currentStates} WHERE w.session_id = ${sessionId}`,
+          sql`SELECT r.plan_json, r.goal_json, (SELECT g.goal_instance_id
+              FROM workflow_goal_identities g WHERE g.session_id = w.session_id) AS goal_instance_id
+            FROM ${currentStates} WHERE w.session_id = ${sessionId}`,
       });
       // Newest first. The window starts at the oldest of the session's latest revisions.
       const changes = SqlSchema.findAll({
@@ -207,9 +212,24 @@ export class Boards extends Context.Service<
                 card,
                 lastChange: Option.getOrNull(HashMap.get(lastChange, card.id)),
               })),
-              outcomes: Option.match(row, {
-                onNone: () => [],
-                onSome: ({ goal_json }) => goal_json?.outcomes ?? [],
+              outcomes: yield* Option.match(row, {
+                onNone: () => Effect.succeed([]),
+                onSome: ({ goal_json, goal_instance_id }) =>
+                  Effect.map(
+                    goal_instance_id === null
+                      ? Effect.succeed([])
+                      : ledger.latest(goal_instance_id),
+                    (latest) =>
+                      outcomeStandings({
+                        outcomes: goal_json?.outcomes ?? [],
+                        steps: plan?.steps ?? [],
+                        latest,
+                      }).map(({ outcomeId, outcomeText, status }) => ({
+                        id: outcomeId,
+                        text: outcomeText,
+                        status,
+                      })),
+                  ),
               }),
               history,
               pendingChanges: (yield* pending(sessionId)).map((request) => ({

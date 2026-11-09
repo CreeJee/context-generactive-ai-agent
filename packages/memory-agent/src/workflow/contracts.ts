@@ -159,6 +159,26 @@ export const OutcomeId = Schema.String.pipe(
 export const GoalOutcome = Schema.Struct({ id: OutcomeId, text: Schema.String });
 export type GoalOutcome = typeof GoalOutcome.Type;
 
+/** Where an outcome of the current Goal stands. */
+export const OutcomeStatus = Schema.TaggedUnion({
+  /** No card serves the outcome. */
+  Unplanned: {},
+  /** Cards serving the outcome are not done yet. */
+  InProgress: { pending: Schema.Array(Schema.String) },
+  /**
+   * Every card serving the outcome is done and no verdict holds for it. `stale` when an earlier
+   * verdict judged another outcome text or other card work.
+   */
+  AwaitingCheck: { stale: Schema.Boolean },
+  Met: { summary: Schema.String },
+  NotMet: { summary: Schema.String },
+});
+export type OutcomeStatus = typeof OutcomeStatus.Type;
+
+/** An outcome of the board's Goal and where it stands. */
+export const BoardOutcome = Schema.Struct({ ...GoalOutcome.fields, status: OutcomeStatus });
+export type BoardOutcome = typeof BoardOutcome.Type;
+
 /** Outcomes whose ids are each used once. */
 export const GoalOutcomes = Schema.Array(GoalOutcome).check(
   Schema.makeFilter(
@@ -473,8 +493,8 @@ export type BoardRevision = typeof BoardRevision.Type;
 export const BoardView = Schema.Struct({
   plan: Schema.NullOr(PlanSummary),
   cards: Schema.Array(BoardCard),
-  /** The current Goal's outcomes, which cards name by id. */
-  outcomes: Schema.Array(GoalOutcome),
+  /** The current Goal's outcomes, which cards name by id, each with where it stands. */
+  outcomes: Schema.Array(BoardOutcome),
   history: Schema.Array(BoardRevision),
   pendingChanges: Schema.Array(UserChangeRequest),
 });

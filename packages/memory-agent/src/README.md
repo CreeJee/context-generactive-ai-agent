@@ -78,7 +78,7 @@
 - `ModelFeatureFlags.layer`는 `providerToolDescriptors`의 id 목록으로 만든다. 기본 `ProviderToolPolicy.featureFlagLayer`와 `ProviderToolRuntime.layer`는 같은 `providerToolRegistry`와 `modelFeatureFlags`를 공유한다
 - 보안 기본값: `providerToolRegistry`는 도구를 실행하거나 정책을 강제하지 않는다. `providerToolRuntime`은 명시적 입력 없이 도구를 노출하지 않는다. `directImageExecutor`는 production에서 명시적으로 구성하기 전까지 unavailable이다
 - 옵션 기본값: `interpretAutomatically`, `summarizeAutomatically`, `sweepSecrets`는 true다. `secrets`는 OS 키체인을 쓴다. 임포트는 실제 home을 계속 따라간다. `embedder`는 로컬 임베딩 모델을 쓴다
-- `Boards.layer`에는 `GoalOrder.layer`를 provide한다
+- `Boards.layer`에는 `GoalOrder.layer`와 `OutcomeLedger.layer`를 provide한다
 - `JsonValue` 스키마의 숫자는 `Schema.Finite`만 허용한다. 따라서 NaN과 Infinity는 거부된다
 - `optionalProperty`는 값이 `undefined`이면 키를 넣지 않는다. exact optional property 타입을 보존하려고 이렇게 한다
 
