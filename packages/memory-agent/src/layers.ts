@@ -52,6 +52,7 @@ import { ReportDelivery } from "./report/discord-webhook.ts";
 import { StorageRoot } from "./config/storage-root.ts";
 import { Database } from "./db/database.ts";
 import { FreePages } from "./db/free-pages.ts";
+import { PlannerStatistics } from "./db/planner-statistics.ts";
 import { AppEvents } from "./events/app-events.ts";
 import { Kagi } from "./kagi/kagi.ts";
 import { ExternalAgents } from "./external-agents/agents.ts";
@@ -291,6 +292,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     Attachments.layer,
     SessionLeases.layer(options.leaseTtlMs),
     FreePages.layer,
+    PlannerStatistics.layer,
     MessageQueue.layer,
     Interpretations.layer,
     RelayedApprovals.layer,

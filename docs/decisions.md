@@ -4473,3 +4473,14 @@
   - 어댑터는 이벤트를 받은 뒤의 실패도 `ResponseInterrupted`로 옮기되, client가 준 `codes`를 그대로 둔다.
   - `SubscriptionStreamFailed.message`는 compatible의 `Disconnected`와 같은 문장이다: `Anthropic API connection closed before the answer finished: UND_ERR_SOCKET`. 사용자에게 보이는 실패 문구와 `subscription model request failed` 로그의 `detail`이 이 문장이다.
 - 재시도는 이번에도 더하지 않는다. 끊긴 응답의 자동 재시도는 compatible과 함께 정한다("답 도중 끊긴 호환 연결은 `Disconnected`로 실패한다 (2026-11-03)").
+
+## 쿼리 플래너 통계를 둔다 (2026-11-09)
+
+- 계기: dev span 7.8시간에서 `Interpreter.runPending` 안의 SQL 문장 하나가 2,465ms, 이어진 수십 개가 50–120ms였다. 기억 검색이 결과마다 부르는 `unconfirmedOf`·`supersededBy`(`memory/search.ts`)였다. DB에 `sqlite_stat1`이 없어 플래너가 `nodes_project (project_id=? AND seq>?)`로 그 노드 뒤의 프로젝트 노드를 모두 훑었다. 라이브 DB 사본(6.29GB)의 22.5만 노드 프로젝트에서 차가울 때 2.16초, 따뜻할 때 71–80ms였다. 통계가 있으면 `interpretations_target`·`edges_to`부터 읽어 0.008ms다.
+- 결정: `PlannerStatistics.layer`(`db/planner-statistics.ts`)가 앱이 시작하면 모든 표, 이후 한 시간마다 이 연결이 질의한 표의 통계를 만든다. SQLite가 오래 여는 연결에 권하는 `PRAGMA optimize=0x10002`와 주기적 `PRAGMA optimize`를 따른다.
+  - `PRAGMA optimize`를 직접 돌리지 않고, 계획만 받아(`0x10003`·`0x3`) `ANALYZE`를 표 하나씩 실행한다. 차가운 사본의 첫 분석은 전체 1.3–5.3초, 가장 큰 표 하나가 1.2초였다. 동기 `DatabaseSync`라 한 번에 돌리면 그동안 이벤트 루프가 멈춘다. 표 사이에는 앱의 statement가 연결을 쓴다. 시작할 때도 서비스를 기다리게 하지 않고 fiber에서 돈다.
+  - `analysis_limit = 1000`이다. SQLite는 100–1000을 권한다. 따뜻한 사본에서 전체 분석이 93ms(제한 없으면 405ms)였다.
+- 결정: 비우는 표는 통계를 만들지 않는다(`drainedTables`): 변경 저널, 트랜잭션 안에서만 쓰는 permit, 큐, 기한이 지나면 지우는 run log.
+  - 사본을 분석한 때 `workflow_run_log_entries`는 run 하나의 66행, `lexical_changes`는 2행이었다. 그 통계로 run log 페이지 읽기가 `(run_id, cursor)` 인덱스 대신 모든 run의 cursor 범위를, lexical 반영 뒤 지우기가 rowid 범위 대신 표 전체를 훑는 플랜이 됐다. 긴 답이나 가져오기로 표가 찬 뒤에도 그 플랜이 남는다.
+  - 통계가 없는 표는 플래너가 큰 표로 가정한다. 통계가 하나도 없던 지금까지의 플랜과 같다.
+- 확인: 소스의 `sql` 템플릿 613개를 뽑아(값은 `?`, `sql.in`은 `(?)`) 사본에서 통계 전후 플랜을 비교했다. 582개가 prepare됐고 24개가 바뀌었다. 모두 더 좁은 인덱스로 옮겨 가거나(`node_refs_ref (ref=?)`로 시작하는 참조 조회, `session_id`와 `project_id`를 함께 거는 조회의 `nodes_session`) 작은 표의 조인 순서만 바뀌었다. 제한 없이 모든 표를 분석했을 때는 39개가 바뀌었고, 그중 위의 run log 읽기와 lexical 지우기는 비우는 표를 빼자 그대로가 됐다.

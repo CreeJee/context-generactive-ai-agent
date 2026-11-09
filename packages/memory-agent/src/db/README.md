@@ -17,6 +17,7 @@
 - `migrationClient(sqlite)` — 시작 마이그레이션 전용 `SqlClient` 어댑터. 트랜잭션은 `SAVEPOINT effect_migrate`로 연다
 - `sqliteDriver` — 두 어댑터의 `SqlClient.driver`(`"memory-agent-sqlite"`). 공식 `@effect/sql-sqlite-node`(`"sqlite-node"`)와 방언은 같지만 잠금을 SQLite 밖에서 기다리므로 이름을 따로 둔다
 - `FreePages.layer` — incremental auto_vacuum으로 만든 파일이면 10분마다 빈 페이지를 확인하는 fiber를 scope에 띄운다. 그렇지 않은 파일에서는 아무것도 하지 않는다. `reclaimFreePages()`는 빈 페이지가 1,024개 아래로 내려갈 때까지 `PRAGMA incremental_vacuum(256)`을 100ms씩 쉬어 가며 실행한다
+- `PlannerStatistics.layer` — 앱이 시작하면 모든 표, 이후 한 시간마다 이 연결이 질의한 표의 쿼리 플래너 통계(`sqlite_stat1`)를 새로 만드는 fiber를 scope에 띄운다. `refreshPlannerStatistics(scope)`는 `PRAGMA optimize(0x10003)`/`(0x3)`가 계획한 `ANALYZE`를 비우는 표만 빼고 표 하나씩 실행한다
 - `migrations` — `readonly string[]` 순서형 스키마 SQL 단계. projects, sessions, nodes, edges, lexical_changes, chat_threads, chat_thread_messages, chat_runs, queued_messages, subagents, mcp_trust, agent_trust 등을 정의한다
 - `goalHistoryMigration` — `{ version: 42, kind: "goal-history-binding-fk-rebuild", preservedTables }`. FK 검사를 멈춘 채 참조되는 테이블을 재구성할 수 있는 유일한 단계
 - `tanStackRowsMigration` — SQL 주석뿐인 단계. 시작 시 이 단계와 함께 `migrateTanStackRows`가 실행된다
@@ -46,6 +47,8 @@
 - prepared statement 캐시는 용량 200이다. 성공한 prepare만 10분 동안 캐시하고, 실패한 prepare는 즉시 만료한다.
 - `nodes`는 불변이다(`nodes_immutable` 트리거가 UPDATE를 막는다). `nodes.seq`는 turbovec 벡터 id로도 쓰인다. 노드의 삽입, `text`·`project_id` 변경, 삭제와 `memory_graph_suppressed_nodes`의 추가·삭제는 트리거가 `lexical_changes`에 기록한다(lexical 색인의 변경 기록). `lexical_index`는 그 기록이 이어지는 색인 build 이름 한 행이다.
 - 연결 PRAGMA는 `auto_vacuum = INCREMENTAL`, `journal_mode = WAL`, `foreign_keys = ON`, `busy_timeout = 5000`, `cache_size = -65536`(64 MiB, `docs/decisions.md` 근거)이다. `busy_timeout = 5000`은 열 때의 마이그레이션에만 쓰고, `sqlClientOver`가 0으로 둔다. `auto_vacuum`은 첫 표를 만들기 전, WAL보다 먼저 걸 때만 적용된다. 그래서 새 파일만 incremental이 되고, 기존 파일은 0(NONE)으로 남는다.
+- 쿼리 플래너 통계는 표 하나씩 `ANALYZE`한다(`analysis_limit = 1000`). 차가운 6GB 파일의 첫 분석은 1~5초라, 한 번에 돌리면 그동안 이벤트 루프가 멈춘다. 표 사이에는 앱의 statement가 연결을 쓴다.
+- 비우는 표(저널·permit·큐·기한 지난 run log: `lexical_changes`, `secret_sweep_changes`, `memory_chunk_vector_removals`, `memory_graph_vector_removals`, `secret_sweep_permits`, `node_project_moves`, `persisted_queue_items`, `queued_messages`, `workflow_run_log_entries`)는 통계를 만들지 않는다. 거의 빈 때 잰 행 수로 고른 플랜은 표가 찬 뒤 매번 전부 읽는다. 새로 비우는 표를 만들면 `drainedTables`에 더한다.
 - 전체 `VACUUM`은 돌리지 않는다. 동기 `DatabaseSync`라 이벤트 루프를 멈추고, 그동안 쓰기 잠금을 쥔다. 빈 페이지는 같은 연결의 semaphore 줄에 서서 1 MiB씩 돌려준다.
 - 마이그레이션을 하나라도 적용했으면, 연결을 넘기기 전에 `PRAGMA wal_checkpoint(TRUNCATE)`로 WAL을 파일에 옮기고 비운다. 남겨 두면 이후 커밋의 자동 checkpoint가 그 일을 한다. 그 커밋은 흔히 가져오기 worker의 것이고, worker는 그동안 앱 연결을 쥐고 있다.
 - DB 디렉터리는 `:memory:`가 아닐 때 mode `0o700`으로 recursive 생성한다.
