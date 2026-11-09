@@ -32,7 +32,7 @@ const item: ImprovementItem = {
 
 type Reply = "silent" | "answered";
 const answered: ScriptedTurn = {
-  text: '{"_tag":"improve","title":"t","problem":"p","rule":"r","change":"c","acceptance":"a"}',
+  text: '{"decision":"improve","title":"t","problem":"p","rule":"r","change":"c","acceptance":"a"}',
 };
 
 /** A signed-in provider whose model answers with `turns` in order. */
