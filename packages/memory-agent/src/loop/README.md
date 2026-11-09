@@ -24,7 +24,7 @@ run·thread·interrupt 행은 `RunStore`(SqlClient)가 `chat_threads`, `chat_thr
 - `resumeAnswers` / `ResumeEntry` / `ResumeRejected` / `Resumed` — resume batch를 대기 interrupt에 맞춰 검증하고 응답 목록을 만든다. 거부 시 `ResumeRejected`(code: `stale`/`conflict`/`unknown-interrupt`/`invalid-payload`)
 - `AgUiEvent` 외 chunks.ts 스키마 — AG-UI 1.0 이벤트 Schema 유니언(`RunStarted`, `RunFinished`, `RunError`, `TextMessage*`, `Reasoning*`, `ToolCall*`, `Custom`)과 `RunOutcome`(`success`/`interrupt`/`cancelled`)
 - `reasoningMessageId` / `reasoningStepMessage` — reasoning 메시지 id를 `${message}:${block}` 형태로 만들고, id에서 소속 assistant 메시지를 되찾는다
-- `memoryRunLogs` / `MemoryRunLogs` / `RunLog` / `RunLogEntry` / `RunLogFailed` / `runAcceptedEvent` — 프로세스 메모리 run 로그. `of`, `open`, `follow`와 `append`/`read(offset)`/`close`를 가진다. 이벤트 이름 상수는 `run.accepted`
+- `memoryRunLogs` / `MemoryRunLogs` / `RunLog` / `RunLogEntry` / `RunLogFailed` / `runAcceptedEvent` — 프로세스 메모리 run 로그. `of`, `open`, `follow`와 `append`/`appendAll`/`read(offset)`/`close`를 가진다. `appendAll`은 쌓인 이벤트를 차례대로 한 번에 붙인다. 이벤트 이름 상수는 `run.accepted`
 - 하위 디렉터리 없음
 
 ## Invariants
