@@ -4552,3 +4552,20 @@
   - `settle_change_request`의 `decision`은 `apply`·`reassign`·`reject` 문자열이다. `reject`는 사용자에게 보일 `reason`이 있어야 디코드된다. 그래서 이 작업만 JSON Schema 갈래가 둘이다.
   - 핸들러가 `KanbanBoardActions`의 `GoalChangeVerdict`·`ChangeDecision` 태그 유니온으로 바꾼다. 화면의 `BoardIntent`와 API는 앱 안쪽이라 그대로다.
 - 결정: 거절된 `move`는 카드의 지금 상태(`status`)와 거기서 갈 수 있는 상태(`allowed`)를 함께 답한다. 계기는 `edit_kanban_board` 호출 22건 중 4건이 `card_status_changed`·`card_transition_invalid`였던 것이다. `from`은 모델이 보드를 잘못 읽은 것을 막아 주므로 필수로 둔다. 대신 거절 답만 보고 한 번에 다시 고를 수 있게 한다.
+
+## Goal 모드는 Goal에 도달할 때까지 계획자와 실행자가 나눠서 돈다 (2026-11-09)
+
+- 계기: 세션 `037aa142`의 Goal 모드는 run 하나로 끝났다. 자동 이어가기(`WorkflowExecution.canContinue`)는 phase가 execute·verify일 때만 돌고, Goal 모드 지시문은 "이번 run 안에서" 하라고만 한다. 그래서 "이어서 해줘"마다 한 조각(P1, P2, FrameBlock, 지갑)만 하고 멈췄고, "할일이 없을때까지"에도 외부 blocker 하나에서 턴을 끝냈다. Goal은 v9(outcome 8개)인데 Plan은 Goal v7 기준에 카드 0개였고, Goal verification은 조각마다 덮여 outcome별 진척이 어디에도 없었다. 채팅 모델 하나가 계획·실행·판정을 다 하며 135k 토큰 컨텍스트에서 가까운 일만 골랐다.
+- 사용자 결정: Goal 모드는 Goal에 도달할 때까지 Plan → 실행 → 검증을 되풀이한다. Plan이 끝났는데 outcome이 남으면 계획자가 다음 Plan을 쓴다. Goal 완료는 모든 outcome이 검증자 근거로 덮일 때만이다.
+- 사용자 결정: 새 Plan 승인은 프로젝트 권한 모드를 따른다.
+  - `full`: 바로 실행한다. 보드와 대화에 새 Plan을 알린다.
+  - `auto`: `PermissionClassifier`가 Plan을 심사한다. Goal의 constraints·nonGoals 안이고 보호 브랜치 merge·push·외부 API처럼 되돌릴 수 없는 일이 없으면 실행하고, 아니면 사용자를 기다린다.
+  - `ask`: Plan마다 사용자 승인을 기다린다. 승인하면 루프가 이어진다.
+  - Plan 승인은 실행 허락일 뿐이다. 안의 도구 호출은 모드별 권한을 그대로 거친다.
+- 사용자 결정: 역할을 나눈다. 계획자(Goal 오케스트레이터)는 Goal·outcome 장부·Plan·반복 실패 진단·Goal 완료 판단을 맡고 코드를 고치지 않는다. 실행자(카드 에이전트)는 카드 하나를 맡아 근거와 함께 보고하고 Plan·Goal을 고치지 않는다. 검증자는 카드 수용 기준과 outcome 달성을 판정만 한다.
+  - Goal 모드는 칸반이 아닌 세션도 이 분리로 돈다. git이 아니면 카드를 순차로 돌린다. 그래서 Goal 모드의 채팅 모델은 코드를 직접 고치지 않는다.
+  - 계획자는 대화 전체가 아니라 Goal, outcome 장부, 보드, 최근 카드 보고서, 사용자 메시지만 받고 깨어난다. 대화가 길어져도 계획 품질이 떨어지지 않게 한다.
+  - 같은 이유로 되풀이되는 실패는 재시도로 넘기지 않고 계획자의 원인 진단으로 올린다. 11/2 같은 세션의 카드 검증 거절 약 150건은 브랜치가 어긋난 환경 문제였는데 requeue만 반복됐다.
+- 사용자 결정: 계획자·실행자·검증자 모델을 따로 고를 수 있다. 비워 두면 지금처럼 선택된 모델(`ActiveProvider.selected`)을 쓴다.
+- 멈춤: blocker는 사용자 결정·권한·외부 의존·반복 실패뿐이고, 그 전에 독립적인 일을 먼저 끝낸다. Plan을 바꿔도 새로 끝난 outcome이 없는 일이 이어지면 멈춘다.
+- 순서: ① 역할별 모델 설정 ② outcome 장부(조각 결과가 Goal verification을 덮지 않음) ③ Goal 모드 루프(다음 Plan 작성, 권한 모드별 승인, 칸반이 아닌 세션의 카드 실행) ④ 계획자 컨텍스트 압축과 반복 실패 진단 ⑤ 카드가 모두 취소된 Plan 닫기.
