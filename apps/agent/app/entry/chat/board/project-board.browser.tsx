@@ -66,18 +66,21 @@ const boards = {
   "session-a": {
     plan: payments.plan,
     cards: [card("a1", "토큰 저장", "done"), card("a2", "결제 요청", "in_progress", ["a1"])],
+    outcomes: [],
     history: [],
     pendingChanges: [],
   },
   "session-b": {
     plan: logging.plan,
     cards: [card("b1", "로그 포맷", "ready")],
+    outcomes: [],
     history: [],
     pendingChanges: [],
   },
   "session-c": {
     plan: alerts.plan,
     cards: [card("c1", "채널 고르기", "ready"), card("c2", "템플릿", "ready")],
+    outcomes: [],
     history: [],
     pendingChanges: [],
   },

@@ -112,6 +112,7 @@ export function CardPeek({
   loopCard,
   decisions,
   titleOf,
+  outcomeOf,
   group,
   changePending,
   projectId,
@@ -136,6 +137,8 @@ export function CardPeek({
   readonly loopCard: LoopCard | null;
   readonly decisions: readonly HumanDecisionRequest[];
   readonly titleOf: (cardId: string) => string;
+  /** An outcome's text in the current Goal; null when the Goal no longer has it. */
+  readonly outcomeOf: (outcomeId: string) => string | null;
   /** The card's conversation, when the board shows several Plans. */
   readonly group: string | null;
   readonly changePending: boolean;
@@ -270,7 +273,12 @@ export function CardPeek({
                   }
                 />
               ) : (
-                <CardDetails card={card} titleOf={titleOf} lastChange={lastChange} />
+                <CardDetails
+                  card={card}
+                  titleOf={titleOf}
+                  outcomeOf={outcomeOf}
+                  lastChange={lastChange}
+                />
               )}
               {!editing && transferTargets.length > 0 && canTransfer(card) && (
                 <div className="rounded-md border px-3 py-2">
@@ -368,10 +376,12 @@ export function CardPeek({
 function CardDetails({
   card,
   titleOf,
+  outcomeOf,
   lastChange,
 }: {
   readonly card: PlanStep;
   readonly titleOf: (cardId: string) => string;
+  readonly outcomeOf: (outcomeId: string) => string | null;
   readonly lastChange: BoardCard["lastChange"];
 }) {
   const list = (items: readonly string[] | undefined) =>
@@ -406,13 +416,18 @@ function CardDetails({
         <DataListItem term="완료 조건">{list(card.acceptanceCriteria)}</DataListItem>
         {card.outcomes.length > 0 && (
           <DataListItem term="Goal 결과">
-            <span className="flex flex-wrap gap-1">
+            <ul className="space-y-1">
               {card.outcomes.map((id) => (
-                <Badge key={id} variant="outline">
-                  {id}
-                </Badge>
+                <li key={id} className="flex items-start gap-1.5">
+                  <Badge variant="outline" className="shrink-0">
+                    {id}
+                  </Badge>
+                  <span className={outcomeOf(id) === null ? "text-muted-foreground" : undefined}>
+                    {outcomeOf(id) ?? "지금 Goal에는 없는 결과예요."}
+                  </span>
+                </li>
               ))}
-            </span>
+            </ul>
           </DataListItem>
         )}
         {isTruthy(card.boundaries) && (

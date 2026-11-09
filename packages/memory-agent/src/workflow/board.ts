@@ -4,7 +4,13 @@ import { currentStatesSql } from "./state-rows.ts";
 import { GoalOrder } from "../kanban/goal-order.ts";
 import { planEnded, UserChange, UserChangeRequestStatus } from "./board-edit.ts";
 import { BoardAuthor, type CardStatus } from "./card.ts";
-import type { BoardCard, BoardRevision, BoardView, ProjectBoard } from "./contracts.ts";
+import {
+  GoalArtifact,
+  type BoardCard,
+  type BoardRevision,
+  type BoardView,
+  type ProjectBoard,
+} from "./contracts.ts";
 import { decodeRevisionPlan, PlanStep, WorkflowStorageError } from "./workflow.ts";
 
 /** Cards in each column of a board. */
@@ -76,9 +82,12 @@ export class Boards extends Context.Service<
       const currentStates = sql.literal(currentStatesSql);
       const current = SqlSchema.findOneOption({
         Request: Schema.String,
-        Result: Schema.Struct({ plan_json: Schema.NullOr(Schema.String) }),
+        Result: Schema.Struct({
+          plan_json: Schema.NullOr(Schema.String),
+          goal_json: Schema.NullOr(Schema.fromJsonString(GoalArtifact)),
+        }),
         execute: (sessionId) =>
-          sql`SELECT r.plan_json FROM ${currentStates} WHERE w.session_id = ${sessionId}`,
+          sql`SELECT r.plan_json, r.goal_json FROM ${currentStates} WHERE w.session_id = ${sessionId}`,
       });
       // Newest first. The window starts at the oldest of the session's latest revisions.
       const changes = SqlSchema.findAll({
@@ -198,6 +207,10 @@ export class Boards extends Context.Service<
                 card,
                 lastChange: Option.getOrNull(HashMap.get(lastChange, card.id)),
               })),
+              outcomes: Option.match(row, {
+                onNone: () => [],
+                onSome: ({ goal_json }) => goal_json?.outcomes ?? [],
+              }),
               history,
               pendingChanges: (yield* pending(sessionId)).map((request) => ({
                 id: request.id,

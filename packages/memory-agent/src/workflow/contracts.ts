@@ -425,6 +425,8 @@ export type BoardRevision = typeof BoardRevision.Type;
 export const BoardView = Schema.Struct({
   plan: Schema.NullOr(PlanSummary),
   cards: Schema.Array(BoardCard),
+  /** The current Goal's outcomes, which cards name by id. */
+  outcomes: Schema.Array(GoalOutcome),
   history: Schema.Array(BoardRevision),
   pendingChanges: Schema.Array(UserChangeRequest),
 });

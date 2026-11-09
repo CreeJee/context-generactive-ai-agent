@@ -263,6 +263,8 @@ export function BoardSurface({
     cards.find((item) => item.key === boardCardKey(ref)) ?? null;
   const titleIn = (sessionId: string) => (cardId: string) =>
     boardOf(sessionId)?.view.cards.find(({ card }) => card.id === cardId)?.card.title ?? cardId;
+  const outcomeIn = (sessionId: string) => (outcomeId: string) =>
+    boardOf(sessionId)?.view.outcomes.find((outcome) => outcome.id === outcomeId)?.text ?? null;
   const doneIn = (sessionId: string, cardId: string) =>
     boardOf(sessionId)?.view.cards.find(({ card }) => card.id === cardId)?.card.status === "done";
   const loopCard = (ref: BoardCardRef) =>
@@ -407,6 +409,7 @@ export function BoardSurface({
           loopCard={peek === null ? null : loopCard(peek)}
           decisions={peek === null ? [] : decisionsOf(peek)}
           titleOf={titleIn(peekSession)}
+          outcomeOf={outcomeIn(peekSession)}
           group={peekBoard?.label ?? null}
           changePending={peek !== null && changePending(peek)}
           projectId={projectId}

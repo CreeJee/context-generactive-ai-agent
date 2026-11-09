@@ -121,6 +121,8 @@ testAgent()("kanban board", (it) => {
         { tag: "User", run: null },
       ]);
       const view = yield* (yield* Boards).view(id);
+      // Cards name outcomes by id; the board carries the Goal's text for them.
+      expect(view.outcomes).toEqual(goal.outcomes);
       expect(view.history.map((revision) => [revision.author, revision.cardIds])).toEqual([
         [user, ["b"]],
         [orchestrator, ["a", "b"]],
