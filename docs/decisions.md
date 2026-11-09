@@ -4575,3 +4575,10 @@
 - 계기: t3code와 툴콜 경로를 비교했다. 연결에 `synchronous`를 정하지 않아 기본값 FULL로 돌았고, Goal run은 AG-UI 이벤트 하나마다 autocommit `INSERT`를 하므로 이벤트마다 fsync했다. 연결이 하나라 그동안 다른 statement는 기다린다.
 - 결정: `Database.make`에서 WAL 다음에 `PRAGMA synchronous = NORMAL`을 건다. WAL에서 NORMAL은 커밋마다가 아니라 체크포인트에서 sync한다.
   - 프로세스가 죽어도 커밋은 남는다. 전원이 꺼지거나 OS가 죽을 때만 마지막 커밋 몇 개를 잃을 수 있고, DB가 깨지지는 않는다. 로컬 앱의 실행 기록에는 이 정도로 충분하다고 본다.
+
+## 도구 결과는 그 호출이 끝나는 대로 보낸다 (2026-11-09)
+
+- 계기: `TOOL_CALL_RESULT`를 step의 모든 호출이 끝난 뒤(`settle`) 호출 순서로 보냈다. 5ms에 끝난 읽기도 옆에 30초짜리 호출이 있으면 화면에서 30초 동안 실행 중으로 보였다.
+- 결정: 호출이 답을 얻으면(`answered`) 바로 `TOOL_CALL_RESULT`를 보낸다. 모델이 다음 요청에서 읽는 tool 메시지와 저장하는 대화는 전처럼 호출 순서다. 이벤트의 순서만 끝난 순서가 된다.
+  - 화면(`chat-view.ts`)과 ACP 브리지는 결과를 `toolCallId`로 찾아 붙이므로 순서에 기대지 않는다.
+  - 골든은 끝난 순서가 타이밍에 달려 있으므로 이어지는 결과 이벤트를 `toolCallId` 순서로 놓고 비교한다(`tests/golden/rows.ts`).

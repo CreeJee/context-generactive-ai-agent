@@ -112,22 +112,22 @@
     },
     {
       "event_json": {
-        "content": "{\"path\":\"notes.txt\",\"sha256\":\"c2097f55f01fc297fc7f4acf21438123e06e4d409a818524428534e850642f4f\",\"content\":\"first line\\nsecond line\\n\",\"startLine\":1,\"endLine\":2,\"totalLines\":2,\"nextStartLine\":null,\"lineTruncated\":false}",
+        "content": "{\"snapshot\":\"<id-3>\",\"directory\":\".\",\"glob\":\"notes*\",\"source\":\"walk\",\"total\":1,\"excludedCredentialFiles\":0,\"truncated\":false,\"paths\":[\"notes.txt\"],\"nextOffset\":null}",
         "messageId": "<id-6>",
         "role": "tool",
         "timestamp": "<time>",
-        "toolCallId": "goal-read@<session>",
+        "toolCallId": "goal-list@<session>",
         "type": "TOOL_CALL_RESULT"
       },
       "run_id": "<id-5>"
     },
     {
       "event_json": {
-        "content": "{\"snapshot\":\"<id-3>\",\"directory\":\".\",\"glob\":\"notes*\",\"source\":\"walk\",\"total\":1,\"excludedCredentialFiles\":0,\"truncated\":false,\"paths\":[\"notes.txt\"],\"nextOffset\":null}",
+        "content": "{\"path\":\"notes.txt\",\"sha256\":\"c2097f55f01fc297fc7f4acf21438123e06e4d409a818524428534e850642f4f\",\"content\":\"first line\\nsecond line\\n\",\"startLine\":1,\"endLine\":2,\"totalLines\":2,\"nextStartLine\":null,\"lineTruncated\":false}",
         "messageId": "<id-7>",
         "role": "tool",
         "timestamp": "<time>",
-        "toolCallId": "goal-list@<session>",
+        "toolCallId": "goal-read@<session>",
         "type": "TOOL_CALL_RESULT"
       },
       "run_id": "<id-5>"

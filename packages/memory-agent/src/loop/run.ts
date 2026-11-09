@@ -522,12 +522,23 @@ const runAccepted = Effect.fnUntraced(function* <R>(
   const partial = yield* Ref.make(Option.none<AssistantMessage>());
   const usage = yield* Ref.make(Option.none<StoredUsage>());
 
+  /** A call's result streams as soon as it has one, without waiting for the step's other calls. */
   const answered = (call: StepCall, answer: CallAnswer) =>
-    Effect.forEach(
-      hooks.flatMap((hook) => hook.answered ?? []),
-      (hook) => hook(scope, call, answer),
-      { discard: true },
-    );
+    Effect.gen(function* () {
+      const message = yield* toolMessage({ call, answer });
+      yield* emit({
+        type: "TOOL_CALL_RESULT",
+        messageId: yield* crypto.uuidV7(),
+        toolCallId: message.toolCallId,
+        content: message.content,
+        role: "tool",
+      });
+      yield* Effect.forEach(
+        hooks.flatMap((hook) => hook.answered ?? []),
+        (hook) => hook(scope, call, answer),
+        { discard: true },
+      );
+    }).pipe(Effect.mapError(asRunFailed));
 
   const stepEnded = (step: StepEnded) =>
     Effect.forEach(
@@ -619,21 +630,8 @@ const runAccepted = Effect.fnUntraced(function* <R>(
     );
   };
 
-  /** Streams each answered call's result, in call order, and gives their tool messages. */
-  const results = (calls: ReadonlyArray<AnsweredCall>) =>
-    Effect.forEach(calls, (answeredCall) =>
-      Effect.gen(function* () {
-        const message = yield* toolMessage(answeredCall);
-        yield* emit({
-          type: "TOOL_CALL_RESULT",
-          messageId: yield* crypto.uuidV7(),
-          toolCallId: message.toolCallId,
-          content: message.content,
-          role: "tool",
-        });
-        return message;
-      }),
-    );
+  /** The tool messages of the answered calls, in call order; `answered` already streamed them. */
+  const results = (calls: ReadonlyArray<AnsweredCall>) => Effect.forEach(calls, toolMessage);
 
   /**
    * A resume run first gives an answer to each call of the last assistant message that has none:

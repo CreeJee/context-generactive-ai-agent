@@ -1,9 +1,12 @@
 import {
+  Array as Arr,
   Effect,
   Function as EffectFunction,
+  Iterable,
   MutableHashMap,
   MutableRef,
   Option,
+  Order,
   Schema,
 } from "effect";
 import { expect } from "vite-plus/test";
@@ -101,6 +104,33 @@ const column = (value: JsonValue): JsonValue =>
   isString(value) && value.length > 1 && "[{".includes(value[0]!)
     ? Option.getOrElse(decodeJson(value), () => value)
     : value;
+
+/** A run log row's event type and call, when it is a tool call's result. */
+const resultCall = (row: JsonObject) =>
+  Option.flatMap(Option.liftPredicate(row["event_json"] ?? null, isObject), (event) =>
+    event["type"] === "TOOL_CALL_RESULT" && isString(event["toolCallId"])
+      ? Option.some(event["toolCallId"])
+      : Option.none(),
+  );
+
+/**
+ * Run log rows with each stretch of tool results in call id order: a result streams as soon as its
+ * call finished, so which of two calls finished first depends on timing, not on the run.
+ */
+const resultsSorted = (logged: ReadonlyArray<JsonObject>) =>
+  Arr.fromIterable(
+    Iterable.groupWith(
+      logged,
+      (left, right) => Option.isSome(resultCall(left)) && Option.isSome(resultCall(right)),
+    ),
+  ).flatMap((stretch) =>
+    Arr.sort(
+      stretch,
+      Order.mapInput(Order.String, (row: JsonObject) =>
+        Option.getOrElse(resultCall(row), () => ""),
+      ),
+    ),
+  );
 
 const rows = (query: string, ...params: ReadonlyArray<string>) =>
   Effect.flatMap(sqlAll(query, ...params), (found) =>
@@ -248,10 +278,12 @@ const conversationRows = Effect.fnUntraced(function* (sessionId: string) {
        WHERE a.session_id = ? ORDER BY ${runOrder("a")}`,
       sessionId,
     ),
-    events: yield* rows(
-      `SELECT run_id, event_json FROM workflow_run_log_entries
-       WHERE run_id IN ${inList(runList.length)} ORDER BY cursor`,
-      ...runList,
+    events: resultsSorted(
+      yield* rows(
+        `SELECT run_id, event_json FROM workflow_run_log_entries
+         WHERE run_id IN ${inList(runList.length)} ORDER BY cursor`,
+        ...runList,
+      ),
     ),
     ledger: yield* rows(
       `SELECT o.run_id, o.operation_id, o.side_effect, o.status, o.operation, o.tool_name,
