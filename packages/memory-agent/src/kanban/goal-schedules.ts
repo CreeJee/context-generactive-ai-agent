@@ -279,6 +279,16 @@ const make = Effect.gen(function* () {
             WHERE goal_instance_id = ${goalInstanceId}`,
       ),
 
+    /**
+     * Points the Goal at another branch of the user's. Its Goal branch was just moved onto that
+     * branch, so nothing of it is waiting to be taken in.
+     */
+    setTargetBranch: (goalInstanceId: string, branch: string) =>
+      touch(
+        (at) => sql`UPDATE kanban_goal_schedules SET target_branch = ${branch},
+            upstream_pending = 0, updated_at = ${at} WHERE goal_instance_id = ${goalInstanceId}`,
+      ),
+
     setUpstreamPending: (goalInstanceId: string, pending: boolean) =>
       touch(
         (at) => sql`UPDATE kanban_goal_schedules SET upstream_pending = ${pending ? 1 : 0},

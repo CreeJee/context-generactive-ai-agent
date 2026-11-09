@@ -186,6 +186,10 @@ export const SessionsApiHandlers = HttpApiBuilder.group(
                   Effect.tap(() => events.publishSession(session, "run-state")),
                   Effect.map((dependsOn) => ({ dependsOn })),
                 ),
+              Retarget: () =>
+                actions
+                  .retarget(session)
+                  .pipe(Effect.tap(() => events.publishSession(session, "run-state"))),
               Reorder: (intent) => applyIntent(session, intent),
               Requeue: (intent) => applyIntent(session, intent),
               Hold: (intent) => applyIntent(session, intent),

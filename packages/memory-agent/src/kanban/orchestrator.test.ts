@@ -21,6 +21,7 @@ import { AppEvents } from "../events/app-events.ts";
 import {
   attemptOutcome,
   card,
+  executingBoard,
   executingPlan,
   git,
   goalInput,
@@ -48,6 +49,7 @@ import {
 import { CardAttempts } from "./card-attempts.ts";
 import { CardRuns } from "./card-queue.ts";
 import { CardFailure, CardHoldReason } from "./failures.ts";
+import { GoalSchedules } from "./goal-schedules.ts";
 import {
   DecisionAnswer,
   DecisionKind,
@@ -582,6 +584,58 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
 
             yield* Deferred.succeed(release, undefined);
             yield* waitForCards(board.sessionId, allDone);
+          }),
+        );
+      }),
+    gitTimeout,
+  );
+
+  it.effect(
+    "targets the branch the user checked out while no card branch exists",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* kanbanFixture;
+        const run = yield* openOwner(fixture, () => Effect.never, yield* Effect.scope);
+        yield* run(
+          Effect.gen(function* () {
+            // Registered without a loop, so no card starts on its own.
+            const board = yield* executingBoard(fixture, [card("a")]);
+            const schedules = yield* GoalSchedules;
+            yield* schedules.register({
+              goalInstanceId: board.goalInstanceId,
+              targetBranch: "main",
+            });
+            const actions = yield* KanbanBoardActions;
+            const refused = actions.retarget(board.sessionId).pipe(
+              Effect.as(null),
+              Effect.catchTag("KanbanActionRefused", (error) => Effect.succeed(error.reason)),
+            );
+            const target = Effect.map(
+              schedules.get(board.goalInstanceId),
+              Option.map((schedule) => schedule.targetBranch),
+            );
+
+            yield* git(fixture.project, "switch", "--quiet", "--detach");
+            expect(yield* refused).toBe("detached_head");
+            yield* git(fixture.project, "switch", "--quiet", "-c", "feature");
+            yield* git(fixture.project, "commit", "--quiet", "--allow-empty", "-m", "feature work");
+            const featureHead = yield* git(fixture.project, "rev-parse", "HEAD");
+            expect(yield* actions.retarget(board.sessionId)).toEqual({
+              targetBranch: "feature",
+              goalHead: featureHead,
+            });
+            expect(yield* target).toEqual(Option.some("feature"));
+
+            yield* Effect.scoped(
+              (yield* CardWorktrees).lease({
+                projectRoot: fixture.project,
+                goalInstanceId: board.goalInstanceId,
+                cardId: "a",
+              }),
+            );
+            yield* git(fixture.project, "switch", "--quiet", "main");
+            expect(yield* refused).toBe("cards_started");
+            expect(yield* target).toEqual(Option.some("feature"));
           }),
         );
       }),

@@ -14,6 +14,7 @@ import {
   type KanbanActionRefused,
 } from "./board-actions.ts";
 import type { KanbanStorageFailed } from "./card-attempts.ts";
+import type { GoalScheduleStorageFailed } from "./goal-schedules.ts";
 import type { HumanDecisionRefused } from "./human-decision.ts";
 import type { PersistedQueueItemsFailed } from "./persisted-queue-store.ts";
 import type { CardWorktreeFailed } from "./worktree.ts";
@@ -46,6 +47,7 @@ const KanbanEdit = Schema.TaggedUnion({
   Requeue: { cardId: CardId },
   SettleChangeRequest: { requestId: Schema.Int, decision: ChangeDecision },
   ApplyGoalChange: { verdicts: Schema.Array(GoalChangeVerdict) },
+  Retarget: {},
 });
 const EditBoardInput = Schema.Struct({ edit: KanbanEdit });
 const ReadBoardInput = Schema.Struct({});
@@ -58,6 +60,7 @@ type ActionFailure =
   | PlanDependenciesRejected
   | KanbanStorageFailed
   | CardWorktreeFailed
+  | GoalScheduleStorageFailed
   | PersistedQueueItemsFailed
   | WorkflowStorageError
   | PlatformError;
@@ -78,7 +81,8 @@ const editBoard = {
 - Move: move a card between statuses. Moving a running card stops its attempt. Moving a blocked card back to ready after replanning it starts a new failure streak; the next repeated failure goes to a person.
 - Requeue: put a blocked card whose deliveries ran out back on the queue. It continues in its worktree with a fresh delivery budget.
 - SettleChangeRequest: settle a user's pending change to a running card. Apply continues the card with the change at once, Reassign applies it and restarts the card in a fresh agent conversation, Reject keeps the card as it is and records your reason for the user.
-- ApplyGoalChange: after the Goal changed, give one verdict per card that is not done (a card without one continues): Continue, Amend (change the card and tell its agent), Stop (block it with a reason), Replace (a new card takes its place) or NeedsDecision (a person decides). New assignments resume once this is saved.`,
+- ApplyGoalChange: after the Goal changed, give one verdict per card that is not done (a card without one continues): Continue, Amend (change the card and tell its agent), Stop (block it with a reason), Replace (a new card takes its place) or NeedsDecision (a person decides). New assignments resume once this is saved.
+- Retarget: make the branch checked out in the project now the Goal's target (the board's schedule.targetBranch) and restart the Goal branch from it, so new cards start from that branch. Only before the Goal has work of its own; refused with not_worktree, merge_started, detached_head, goal_has_work (the Goal branch has commits neither branch holds) or cards_started (branches ctx/card/<goalInstanceId>/* exist, cancelled cards' included).`,
   parameters: EditBoardInput,
 } as const;
 
@@ -145,6 +149,7 @@ const make = Effect.gen(function* () {
             SettleChangeRequest: ({ requestId, decision }) =>
               actions.settleChangeRequest(sessionId, requestId, decision, author),
             ApplyGoalChange: ({ verdicts }) => actions.applyGoalChange(sessionId, verdicts, author),
+            Retarget: () => actions.retarget(sessionId),
           }),
         ),
     };
@@ -175,6 +180,7 @@ Your part is what the loop cannot decide. Read the board with read_kanban_board,
 - A user's change request to a running card: SettleChangeRequest (Apply, Reassign or Reject with a reason).
 - A changed Goal: ApplyGoalChange for every card that is not done; new assignments wait for it.
 - A blocked card whose deliveries ran out: Requeue once the cause is understood.
+- The user asks the board to target the branch they now have checked out: Retarget.
 Cards in human_decision wait for a person; do not move them yourself unless the user tells you to.`;
 
 const reasonText = {

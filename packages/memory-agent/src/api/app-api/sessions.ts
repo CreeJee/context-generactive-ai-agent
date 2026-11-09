@@ -63,6 +63,8 @@ export const KanbanCommand = Schema.TaggedUnion({
   RestartLoop: {},
   /** The Goals this Goal waits for; an empty list lifts the wait. */
   SetDependencies: { dependsOn: Schema.Array(Schema.String) },
+  /** Targets the branch checked out in the project now, before the Goal has work of its own. */
+  Retarget: {},
 });
 export type KanbanCommand = typeof KanbanCommand.Type;
 
@@ -78,6 +80,12 @@ export const KanbanLoopRestarted = Schema.Struct({ restarted: Schema.Literal(tru
 
 /** The Goals the board's Goal now waits for. */
 export const GoalDependencies = Schema.Struct({ dependsOn: Schema.Array(Schema.String) });
+
+/** The board's new target branch, and the commit its Goal branch now starts from. */
+export const GoalRetargeted = Schema.Struct({
+  targetBranch: Schema.String,
+  goalHead: Schema.String,
+});
 
 /** One subagent and its saved conversation. */
 export const SubagentTranscript = Schema.Struct({
@@ -177,6 +185,11 @@ const KanbanActionRefused = appRefusal(409, [
   "card_waiting",
   "card_has_dependents",
   "transfer_target_invalid",
+  "not_worktree",
+  "merge_started",
+  "detached_head",
+  "goal_has_work",
+  "cards_started",
 ]);
 
 /** The Goal cannot start as a board: no Goal, no executing Plan, or no usable worktree. */
@@ -381,9 +394,10 @@ export class SessionsGroup extends HttpApiGroup.make("sessions")
       error: [UnknownSession, SessionStorageFailed],
     }),
     /**
-     * Starts the board, restarts its loop, sets the Goals it waits for, or carries out what a
-     * person meant by dragging a card. The owner decides the card's status and refuses an intent
-     * the card's state does not fit; a change request to an executing card is stored (202).
+     * Starts the board, restarts its loop, sets the Goals it waits for or its target branch, or
+     * carries out what a person meant by dragging a card. The owner decides the card's status and
+     * refuses an intent the card's state does not fit; a change request to an executing card is
+     * stored (202).
      */
     HttpApiEndpoint.post("kanbanAction", "/api/sessions/:session/kanban", {
       params: session,
@@ -393,6 +407,7 @@ export class SessionsGroup extends HttpApiGroup.make("sessions")
         KanbanStarted,
         KanbanLoopRestarted,
         GoalDependencies,
+        GoalRetargeted,
         BoardEditApplied,
         BoardEditRequested.pipe(HttpApiSchema.status(202)),
       ],

@@ -32,7 +32,7 @@ import {
   type DecisionCloseReason,
 } from "./human-decision.ts";
 import { KanbanOrchestrator } from "./orchestrator.ts";
-import { cardWorkspace, CardWorktrees, WorktreeDisposition } from "./worktree.ts";
+import { cardWorkspace, CardWorktrees, GoalRetarget, WorktreeDisposition } from "./worktree.ts";
 import { Sessions } from "../sessions/sessions.ts";
 import { GoalSchedules } from "./goal-schedules.ts";
 import { ProjectScheduler } from "./scheduler.ts";
@@ -80,6 +80,16 @@ export class KanbanActionRefused extends Schema.TaggedError<
     "card_has_dependents",
     /** The transfer target is this Plan, another project's conversation, or has no Plan. */
     "transfer_target_invalid",
+    /** The board runs its cards one at a time in the project; there is no Goal branch to move. */
+    "not_worktree",
+    /** The Goal's merge into its target has begun; it stays on the branch it is merging into. */
+    "merge_started",
+    /** The project has no branch checked out to target. */
+    "detached_head",
+    /** The Goal branch has commits that neither branch holds; moving it would drop them. */
+    "goal_has_work",
+    /** Card branches of the Goal exist, cancelled cards' included; they started from the old head. */
+    "cards_started",
   ]),
 }) {}
 
@@ -722,6 +732,46 @@ const make = Effect.gen(function* () {
     ) {
       const goal = yield* board(sessionId);
       return yield* scheduler.setDependencies(goal.goalInstanceId, dependsOn);
+    }),
+
+    /**
+     * Makes the branch checked out in the project now the Goal's target and starts the Goal branch
+     * over from it, so new cards see that branch. Only before the Goal has work of its own; see
+     * `CardWorktrees.retargetGoal`.
+     */
+    retarget: Effect.fn("KanbanBoardActions.retarget")(function* (sessionId: string) {
+      const goal = yield* board(sessionId);
+      if (goal.mode !== "worktree") return yield* refuse("not_worktree");
+      const schedule = yield* Effect.flatMap(
+        schedules.get(goal.goalInstanceId),
+        Option.match({ onNone: () => Effect.fail(refuse("not_kanban")), onSome: Effect.succeed }),
+      );
+      if (schedule.merge !== null) return yield* refuse("merge_started");
+      const branch = yield* Effect.flatMap(
+        worktrees.currentBranch(goal.projectRoot),
+        Option.match({
+          onNone: () => Effect.fail(refuse("detached_head")),
+          onSome: Effect.succeed,
+        }),
+      );
+      const goalHead = yield* worktrees
+        .retargetGoal(
+          { projectRoot: goal.projectRoot, goalInstanceId: goal.goalInstanceId },
+          schedule.targetBranch,
+          branch,
+        )
+        .pipe(
+          Effect.flatMap(
+            GoalRetarget.$match({
+              Moved: ({ head }) => Effect.succeed(head),
+              GoalHasWork: () => Effect.fail(refuse("goal_has_work")),
+              CardsStarted: () => Effect.fail(refuse("cards_started")),
+            }),
+          ),
+        );
+      yield* schedules.setTargetBranch(goal.goalInstanceId, branch);
+      yield* orchestrator.poke(goal.goalInstanceId);
+      return { targetBranch: branch, goalHead };
     }),
 
     /** Runs the board's loop again after it stopped on exhausted retries or a defect. */
