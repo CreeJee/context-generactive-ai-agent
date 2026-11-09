@@ -250,6 +250,22 @@ context-agent memory import-status
 
 조립은 `src/cli/writable-storage.ts`(잠금 → 마이그레이션 → 임포트·색인에 필요한 레이어만), 패스 실행은 `src/cli/import-run.ts`, 읽기 전용 현황은 `src/cli/import-status.ts`, 잠금 자체는 `src/runtime/storage-lock.ts`(앱 서버도 같은 것을 씁니다)입니다.
 
+## DB 파일 줄이기 (CLI compact)
+
+대화를 지우거나 마이그레이션이 데이터를 옮기면 그 자리는 DB 파일 안에 빈 페이지로 남습니다. 2026-11-04 이후 만든 DB는 앱이 빈 페이지를 조금씩 돌려주지만(`FreePages`), 그 전에 만든 DB는 이후 쓰기가 다시 쓸 때까지 파일 크기가 그대로입니다. `compact`는 파일을 빈 페이지 없이 다시 쓰고, 그 파일도 이후로는 빈 페이지를 조금씩 돌려주게 바꿉니다.
+
+```sh
+# 앱을 닫은 뒤
+context-agent memory compact
+```
+
+- 앱처럼 `backend.lock`을 잡습니다. 앱이 떠 있으면 `storage_locked`로 거부합니다. 앱의 연결은 동기라서 앱 안에서 돌리면 끝날 때까지 모든 요청이 멈추기 때문입니다.
+- 6 GB에 1분 가까이 걸리고, 그동안 파일 크기의 최대 두 배만큼 디스크 여유가 필요합니다. 여유가 모자라 실패하면 `compact_failed`로 거부하고 파일은 그대로입니다.
+- 결과는 stdout에 JSON 한 줄입니다: `{"storage":…,"before":{"bytes":…,"freeBytes":…,"incremental":false},"after":{"bytes":…,"freeBytes":0,"incremental":true}}`. `bytes`는 DB 크기, `freeBytes`는 그중 빈 페이지, `incremental`은 빈 페이지를 조금씩 돌려주는 파일인지입니다.
+- DB가 없으면 `storage_not_found`입니다. 연 DB는 앱처럼 마이그레이션합니다.
+
+구현은 `src/cli/compact.ts`, 테스트는 `tests/cli/compact.test.ts`입니다.
+
 ## 외부 에이전트 부르기 (ACP 클라이언트)
 
 `<프로젝트>/.agents/agents.json`(또는 `~/.context-generactive-agent/agents.json`):

@@ -4520,3 +4520,13 @@
   - 동시 개수: 이 저장소의 스킬 61개에서 하나씩은 30–42ms, 4·8개는 16–20ms, 16개는 10–14ms, 제한 없이는 9ms였다. 스킬 하나가 파일 하나를 열고 있으므로, 폴더에 스킬이 수천 개여도 한 번에 여는 파일 수가 16을 넘지 않게 했다.
   - 폴더의 type은 `readDirectoryEntries`가 준 것을 쓰고, 모를 때만 `lstat`한다(`AGENTS.md`를 찾을 때와 같다). SKILL.md는 `exists` 없이 `lstat` 하나로 보고, NotFound면 스킬이 아니다. 링크를 따르지 않는 것은 같다.
 - 확인: 바꾸기 전과 후의 카탈로그 JSON(스킬 61개, problem 1개, contentHash 포함)이 같았다. 같은 측정에서 p50이 27–59ms에서 10–12ms가 됐다.
+
+## DB 파일 줄이기는 앱을 닫고 CLI로 한다 (2026-11-09)
+
+- 계기: 라이브 DB 6.29 GB 중 4.06 GB(66%)가 빈 페이지였다. 2026-11-04 전에 만든 파일이라 `auto_vacuum`이 0이고, `FreePages`가 돌려줄 수 없다. 사본에 전체 `VACUUM`을 돌리니 41.5초 걸려 1.97 GB가 됐다.
+- 결정: `context-agent memory compact`(`src/cli/compact.ts`)가 `PRAGMA auto_vacuum = INCREMENTAL`, `VACUUM`, `PRAGMA wal_checkpoint(TRUNCATE)`를 차례로 돌린다. 그 뒤로는 `FreePages`가 빈 페이지를 조금씩 돌려준다.
+  - 2026-11-04 "새 DB는 빈 페이지를 조금씩 돌려준다"에 남긴 "사용자가 직접 실행하는 설정 동작"을 CLI 명령으로 바꾼다. 앱의 연결은 동기 `DatabaseSync` 하나라서, 설정 화면에서 돌려도 `VACUUM`이 끝날 때까지 이벤트 루프와 모든 요청이 멈춘다. 다른 연결의 쓰기도 잠금 재시도(30초)를 넘겨 실패한다. 앱이 꺼져 있을 때만 돌릴 수 있으니, 앱 밖의 명령이 맞다.
+  - `memory import`처럼 `backend.lock`을 잡고, 앱이 쥐고 있으면 빼앗지 않고 `storage_locked`로 거부한다. DB 파일이 없으면 `storage_not_found`, SQLite가 실패하면(대개 디스크 부족) `compact_failed`다.
+  - 연 DB는 앱처럼 마이그레이션한다. 다음 앱 시작이 같은 일을 하므로 달라지는 것이 없다.
+  - 결과 JSON은 전후의 DB 크기·빈 페이지 크기·incremental 여부다. 내용은 담지 않는다.
+- 확인: 테스트가 auto_vacuum 0인 파일을 빈 페이지 0의 incremental 파일로 바꾸고, 잠금을 쥔 동안은 거부하는지 본다(`tests/cli/compact.test.ts`). CLI 진입점으로 6.2 MB 파일이 1.3 MB가 됐다.

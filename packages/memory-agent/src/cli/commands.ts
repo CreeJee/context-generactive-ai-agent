@@ -9,6 +9,8 @@ import { readOnlyMemoryLayer } from "./read-only-storage.ts";
 import { importStatus } from "./import-status.ts";
 import { writableMemoryLayer } from "./writable-storage.ts";
 import { runImportPass } from "./import-run.ts";
+import { compactStorage } from "./compact.ts";
+import { nodePlatformLayer } from "../runtime/node-platform.ts";
 import { defaultStorageRoot } from "../config/storage-root.ts";
 
 /**
@@ -262,6 +264,23 @@ const importStatusCommand = Command.make(
   Command.withDescription("show what the import has taken in so far, without taking the lock"),
 );
 
+const compactCommand = Command.make("compact", { storage: storageFlag }, ({ storage }) =>
+  Effect.gen(function* () {
+    const root = yield* resolveStorage(storage);
+    const result = yield* compactStorage(root).pipe(
+      Effect.scoped,
+      // A command handler is its own composition root, as `import` is.
+      // @effect-diagnostics-next-line strictEffectProvide:off
+      Effect.provide(nodePlatformLayer),
+    );
+    yield* print(result);
+  }),
+).pipe(
+  Command.withDescription(
+    "shrink the database file by rewriting it without its free pages; close the app first. It takes about a minute for every 6 GB and needs free disk space up to twice the file's size",
+  ),
+);
+
 /**
  * The commands under one parent, named for the entry point that runs them: `memory` inside the
  * executable, the bin's own name standalone.
@@ -276,6 +295,7 @@ export const memoryCommands = (name: string) =>
       listProjects,
       importChats,
       importStatusCommand,
+      compactCommand,
     ]),
   );
 
