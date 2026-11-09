@@ -1,12 +1,13 @@
 # effect
 
 ## Overview
-이 디렉터리는 저장소 전용 Oxlint anti-slop 플러그인 중 Effect 서비스·Layer 구조를 검사하는 하위 플러그인 `anti-slop-effect`의 진입점이다. `index.ts`는 `vite-plus/lint/plugins`의 `eslintCompatPlugin`으로 `rules/` 하위 규칙을 묶어 default export한다. 루트 `vite.config.ts`가 이 파일을 `./lint/anti-slop/effect/index.ts` specifier로 `anti-slop-effect` 이름에 등록하고, `anti-slop-effect/no-service-constructor-imports` 규칙을 `"error"`로 켠다.
+이 디렉터리는 저장소 전용 Oxlint anti-slop 플러그인 중 Effect 서비스·Layer 구조를 검사하는 하위 플러그인 `anti-slop-effect`의 진입점이다. `index.ts`는 `vite-plus/lint/plugins`의 `eslintCompatPlugin`으로 `rules/` 하위 규칙을 묶어 default export한다. 루트 `vite.config.ts`가 이 파일을 `./lint/anti-slop/effect/index.ts` specifier로 `anti-slop-effect` 이름에 등록하고, `anti-slop-effect/no-service-constructor-imports` 규칙을 `"error"`로 켠다. `anti-slop-effect/no-native-collections`는 `packages/**` override에서만 `"error"`로 켜고, native 컬렉션이 꼭 필요한 파일은 다음 override에서 끈다.
 
 ## Interface
 - `antiSlopEffectPlugin` (default export) — `eslintCompatPlugin({ meta: { name: "anti-slop-effect" }, rules })`로 만든 Oxlint 플러그인 객체. 주석상 Effect 서비스·Layer 구조용 opt-in 규칙 모음이다.
 - `anti-slop-effect/no-service-constructor-imports` — 플러그인이 노출하는 규칙 키. 구현은 `./rules/no-service-constructor-imports.ts`의 `noServiceConstructorImportsRule`이다. 상대 경로 모듈의 `make<대문자>` 서비스 생성자 import를 막는다.
-- [`rules`](./rules/README.md) — Effect 계열 규칙 구현. `noServiceConstructorImportsRule`을 제공한다.
+- `anti-slop-effect/no-native-collections` — 구현은 `./rules/no-native-collections.ts`의 `noNativeCollectionsRule`이다. `new Set`·`new Map`을 보고하고 `HashSet`·`HashMap`·`MutableHashSet`·`MutableHashMap`·`Array.dedupe`를 안내한다. `WeakSet`·`WeakMap`과 `ReadonlySet` 같은 타입 표기는 보고하지 않는다. 테스트는 `no-native-collections.test.ts`(RuleTester).
+- [`rules`](./rules/README.md) — Effect 계열 규칙 구현. `noServiceConstructorImportsRule`과 `noNativeCollectionsRule`을 제공한다.
 
 ## Invariants
 - 플러그인 `meta.name`인 `"anti-slop-effect"`는 `vite.config.ts`의 플러그인 등록 이름, 규칙 키 접두사, 소스의 `// eslint-disable-next-line anti-slop-effect/no-service-constructor-imports` 주석과 일치해야 한다. 바꾸면 설정과 disable 주석이 함께 깨진다.
@@ -18,4 +19,5 @@
 - 없음 (순수 함수와 타입만 제공)
 
 ## Verification
+- Run: `vp test lint/anti-slop/effect` (RuleTester로 `no-native-collections` 확인)
 - Run: `vp lint` (저장소 루트, anti-slop 플러그인을 불러옴)

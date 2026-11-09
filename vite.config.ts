@@ -93,6 +93,26 @@ export default defineConfig({
           "shadcn/no-restyle": "off",
         },
       },
+      {
+        // Packages keep collections in Effect's types (docs/map-set-audit-2026-10-06.md).
+        files: ["packages/**"],
+        rules: {
+          "anti-slop-effect/no-native-collections": "error",
+        },
+      },
+      {
+        // Native collections these files must keep: a schema walk that tracks visited nodes by
+        // reference, and tests that hand Logger.CurrentLoggers the native Set it is typed as.
+        files: [
+          "packages/memory-agent/src/tools/input-repair.ts",
+          "packages/memory-agent/src/memory/native-search/publication.test.ts",
+          "packages/memory-agent/tests/model/compatible.test.ts",
+          "packages/memory-agent/tests/model/subscription.test.ts",
+        ],
+        rules: {
+          "anti-slop-effect/no-native-collections": "off",
+        },
+      },
     ],
     options: { typeAware: true, typeCheck: true },
   },

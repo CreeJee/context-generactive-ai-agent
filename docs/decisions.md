@@ -4638,3 +4638,13 @@
   - run은 끝을 저장하기 전에(완료, 사용자 대기, 실패, 취소 모두) 맡긴 쓰기를 모두 기다린다. 그래서 `ended` 훅, 끝의 `saveThread`, run 뒤의 lexical·벡터 색인 반영은 전과 같은 상태를 본다. 취소는 step fiber만 끊고 맡긴 쓰기는 끊지 않는다.
   - 기억 기록 훅(`makeRecordingHook`)은 step 노드를, 큐 전달(`QueueDelivery`)은 합류한 사용자 메시지 노드를 맡긴다. 두 쓰기가 같은 순서 체인을 타므로 노드 seq는 전처럼 시간 순서다(앞 step의 도구 노드, 그다음 합류한 사용자 말).
 - 남는 차이: 프로세스가 기록 도중에 죽으면 전에는 step 끝에서 잃던 노드를, 이제는 다음 step이 시작된 뒤에도 잃을 수 있다. Goal 복구는 결과 노드가 없는 부작용 호출을 불확실로 보므로 보수적으로 남는다.
+
+## 컬렉션은 Effect 타입으로 만들고 린트로 지킨다 (2026-11-09)
+
+- 계기: `new Set(xs.map(f))`처럼 배열을 만들어 컬렉션에 한 번 복사하고 버리는 코드와, 경계에서 `ReadonlyMap`·`ReadonlySet`을 주고받는 코드가 패키지 곳곳에 남아 있었다. 2026-10-06 정책(native Map은 SDK·wire 형식·플랫폼 API 경계에만)을 사람이 리뷰로만 지켜 왔다.
+- 결정:
+  - `allocation/no-intermediate-array`가 `filter`·`map` 결과를 `new Set`·`new Map`·`Array.from`·`HashSet`/`HashMap`/`MutableHashSet`/`MutableHashMap`/`Chunk`의 `fromIterable`이 복사만 하는 경우도 보고한다. `Iterable.map`·`Iterable.filter`를 넘긴다.
+  - `anti-slop-effect/no-native-collections`가 `packages/**`의 `new Set`·`new Map`을 오류로 막는다. 한 번 만들고 읽기만 하면 `HashSet`·`HashMap`, 제자리에서 바꾸면 `MutableHashSet`·`MutableHashMap`, 배열 중복 제거는 `Array.dedupe`를 쓴다. 순서가 드러나는 자리는 삽입 순서를 지키는 Mutable 변형이나 배열을 쓴다(HashMap·HashSet은 순서가 없다).
+  - 패키지 함수의 경계(압축 원본 lookup, 리포트 근거 위치, 실패 span 조회 등)도 `HashMap`·`HashSet`으로 주고받고 `HashMap.get`의 `Option`으로 읽는다.
+  - 예외는 소스 주석이 아니라 `vite.config.ts`의 파일 override로 둔다. 지금은 참조 동일성으로 방문한 스키마 노드를 세는 `tools/input-repair.ts`와, native `ReadonlySet` 타입인 `Logger.CurrentLoggers`에 넣는 테스트 세 개다.
+  - `apps/agent`는 React prop이 native `ReadonlySet`을 받는 자리가 있어 이번 규칙 범위 밖이다.
