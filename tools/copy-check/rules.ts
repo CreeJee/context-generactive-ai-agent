@@ -61,6 +61,10 @@ export interface GlossaryEntry {
 export const glossary = {
   // The board's top-level unit keeps its product name, as in the kanban and chat code.
   goal: { use: "Goal", avoid: ["목표"] },
+  // A Goal's Plan keeps its product name too.
+  plan: { use: "Plan", avoid: ["계획", "플랜"] },
+  // What a run produced reads as plain Korean.
+  outcome: { use: "결과", avoid: ["outcome"] },
 } as const satisfies Readonly<Record<string, GlossaryEntry>>;
 
 /** Kiwi tags whose morpheme ends a sentence: final endings, and connective endings before a full stop. */
