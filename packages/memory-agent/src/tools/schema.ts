@@ -1,7 +1,6 @@
 import {
   Array as EffectArray,
   Function as EffectFunction,
-  JsonSchema,
   Option,
   Predicate,
   Record as EffectRecord,
@@ -120,20 +119,20 @@ const foldNode = (node: JsonObject): JsonObject => {
 };
 
 /**
- * A tool's parameters in the draft-07 form TanStack sent providers, with closed objects, which
- * OpenAI strict tools require (an open one sends the tool non-strict). Decoding still drops
- * unmodeled properties instead of rejecting them.
+ * A tool's parameters as Effect writes them (`Tool.getJsonSchemaFromSchema`): draft 2020-12 with
+ * definitions under `$defs`, which Anthropic validates `input_schema` against (a draft-07 tuple's
+ * array `items` is refused there). Objects are closed, which OpenAI strict tools require (an open
+ * one sends the tool non-strict). Decoding still drops unmodeled properties instead of rejecting
+ * them.
  */
 export const toolParametersJsonSchema = (schema: Schema.Constraint): JsonObject => {
-  const draft07 = JsonSchema.toDocumentDraft07(
-    Schema.toJsonSchemaDocument(schema, { onExcessProperty: "error" }),
-  );
+  const document = Schema.toJsonSchemaDocument(schema, { onExcessProperty: "error" });
   return foldNode(
     toJsonObject({
-      ...draft07.schema,
+      ...document.schema,
       ...optionalProperty(
-        "definitions",
-        Object.keys(draft07.definitions).length > 0 ? draft07.definitions : undefined,
+        "$defs",
+        Object.keys(document.definitions).length > 0 ? document.definitions : undefined,
       ),
     }),
   );

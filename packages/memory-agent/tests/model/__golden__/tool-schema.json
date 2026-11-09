@@ -88,10 +88,10 @@
               },
               "args": {
                 "type": "array",
-                "description": "A sh skill's arguments, passed as $1, $2, … without shell parsing.",
                 "items": {
                   "type": "string"
-                }
+                },
+                "description": "A sh skill's arguments, passed as $1, $2, … without shell parsing."
               },
               "workdir": {
                 "type": "string",
@@ -176,12 +176,12 @@
                       },
                       "network": {
                         "type": "array",
-                        "maxItems": 32,
-                        "description": "The only hosts the script may connect to, exactly as it needs them (e.g. \"registry.npmjs.org\", \"*.github.com\", \"api.example.com:443\"). Omit for no network; localhost only if listed.",
                         "items": {
                           "type": "string",
                           "maxLength": 253
-                        }
+                        },
+                        "maxItems": 32,
+                        "description": "The only hosts the script may connect to, exactly as it needs them (e.g. \"registry.npmjs.org\", \"*.github.com\", \"api.example.com:443\"). Omit for no network; localhost only if listed."
                       }
                     },
                     "required": [
@@ -206,6 +206,32 @@
               "name",
               "description",
               "program"
+            ],
+            "additionalProperties": false
+          },
+          "eager_input_streaming": true
+        },
+        {
+          "name": "tag_files",
+          "description": "Tag files.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "tags": {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "string"
+                  }
+                ],
+                "minItems": 1,
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "tags"
             ],
             "additionalProperties": false
           },
@@ -336,10 +362,10 @@
               },
               "args": {
                 "type": "array",
-                "description": "A sh skill's arguments, passed as $1, $2, … without shell parsing.",
                 "items": {
                   "type": "string"
-                }
+                },
+                "description": "A sh skill's arguments, passed as $1, $2, … without shell parsing."
               },
               "workdir": {
                 "type": "string",
@@ -424,12 +450,12 @@
                       },
                       "network": {
                         "type": "array",
-                        "maxItems": 32,
-                        "description": "The only hosts the script may connect to, exactly as it needs them (e.g. \"registry.npmjs.org\", \"*.github.com\", \"api.example.com:443\"). Omit for no network; localhost only if listed.",
                         "items": {
                           "type": "string",
                           "maxLength": 253
-                        }
+                        },
+                        "maxItems": 32,
+                        "description": "The only hosts the script may connect to, exactly as it needs them (e.g. \"registry.npmjs.org\", \"*.github.com\", \"api.example.com:443\"). Omit for no network; localhost only if listed."
                       }
                     },
                     "required": [
@@ -454,6 +480,32 @@
               "name",
               "description",
               "program"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "type": "function",
+          "name": "tag_files",
+          "description": "Tag files.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "tags": {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "string"
+                  }
+                ],
+                "minItems": 1,
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "tags"
             ],
             "additionalProperties": false
           }
@@ -579,12 +631,12 @@
                       },
                       "network": {
                         "type": "array",
-                        "maxItems": 32,
-                        "description": "The only hosts the script may connect to, exactly as it needs them (e.g. \"registry.npmjs.org\", \"*.github.com\", \"api.example.com:443\"). Omit for no network; localhost only if listed.",
                         "items": {
                           "type": "string",
                           "maxLength": 253
-                        }
+                        },
+                        "maxItems": 32,
+                        "description": "The only hosts the script may connect to, exactly as it needs them (e.g. \"registry.npmjs.org\", \"*.github.com\", \"api.example.com:443\"). Omit for no network; localhost only if listed."
                       }
                     },
                     "required": [
@@ -634,10 +686,10 @@
               },
               "args": {
                 "type": "array",
-                "description": "A sh skill's arguments, passed as $1, $2, … without shell parsing.",
                 "items": {
                   "type": "string"
-                }
+                },
+                "description": "A sh skill's arguments, passed as $1, $2, … without shell parsing."
               },
               "workdir": {
                 "type": "string",
@@ -741,6 +793,35 @@
             "additionalProperties": false,
             "properties": {},
             "required": []
+          },
+          "strict": false
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "tag_files",
+          "description": "Tag files.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "tags": {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "string"
+                  }
+                ],
+                "minItems": 1,
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "tags"
+            ],
+            "additionalProperties": false
           },
           "strict": false
         }

@@ -10,9 +10,9 @@ import { runTool } from "../../src/tools/run-tool.ts";
 import { matchGolden, toolRequestBodies } from "../support/requests.ts";
 
 /**
- * A tool written with an Effect Schema reaches every provider with the parameters TanStack sent
- * for it (docs/effect-ai-migration.md step 3), as the golden requests keep it: bounds folded out
- * of `allOf`, closed objects, unions, records and optional fields.
+ * A tool written with an Effect Schema reaches every provider with the draft 2020-12 parameters
+ * Effect writes for it, as the golden requests keep them: bounds folded out of `allOf`, closed
+ * objects, unions, records, optional fields and non-empty arrays.
  */
 
 const cases = [
@@ -29,6 +29,12 @@ const cases = [
     }),
   },
   { name: "list_tasks", description: "List tasks.", parameters: Schema.Struct({}) },
+  // Draft 2020-12 `prefixItems`, not draft-07's array `items`, which Anthropic refuses.
+  {
+    name: "tag_files",
+    description: "Tag files.",
+    parameters: Schema.Struct({ tags: Schema.NonEmptyArray(Schema.String) }),
+  },
 ];
 
 const modelTools = cases.map(
@@ -36,7 +42,7 @@ const modelTools = cases.map(
 );
 
 describe("tool parameters", () => {
-  it.effect("are what TanStack sent each provider", () =>
+  it.effect("are what each provider gets", () =>
     Effect.flatMap(toolRequestBodies(modelTools), matchGolden("./__golden__/tool-schema.json")),
   );
 });

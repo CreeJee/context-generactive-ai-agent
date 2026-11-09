@@ -4,10 +4,9 @@ import { optionalProperty } from "../optional-property.ts";
 import { toolParametersJsonSchema } from "../tools/schema.ts";
 
 /**
- * The JSON Schema a provider gets for a tool's parameters, as TanStack sent it: the app's closed
- * draft-07 form of the tool's Effect Schema (`tools/schema.ts`) without `$schema`, and an object
- * schema always with `properties` and `required`. A tool written in JSON Schema (MCP) goes as
- * written.
+ * The JSON Schema a provider gets for a tool's parameters: the app's closed draft 2020-12 form of
+ * the tool's Effect Schema (`tools/schema.ts`) without `$schema`, and an object schema always with
+ * `properties` and `required`. A tool written in JSON Schema (MCP) goes as written.
  */
 export const toolParameters = (tool: Tool.Any): JsonSchema.JsonSchema =>
   Option.liftPredicate(tool, Tool.isDynamic).pipe(
