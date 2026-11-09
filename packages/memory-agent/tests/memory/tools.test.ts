@@ -522,7 +522,12 @@ testAgent()("memory tools per run", (it) => {
     answer: { readonly role: "assistant"; readonly id: string; readonly content: string },
   ) {
     const { stepEnded, ended } = yield* hook;
-    const scope = { threadId: `${runId}:thread`, runId, emit: () => Effect.void };
+    const scope = {
+      threadId: `${runId}:thread`,
+      runId,
+      emit: () => Effect.void,
+      inBackground: Effect.ignore,
+    };
     yield* stepEnded!(scope, StepEnded.Model({ message: answer, answered: [] }));
     yield* ended!(scope, RunEnd.Completed(), [answer]);
   });

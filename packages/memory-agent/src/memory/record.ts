@@ -278,15 +278,19 @@ export const makeRecordingHook = Effect.fnUntraced(function* (
       }));
 
   return {
-    stepEnded: (_scope, step) =>
-      StepEnded.$match(step, {
-        Model: ({ message, answered }) =>
-          Arr.isReadonlyArrayNonEmpty(message.toolCalls ?? [])
-            ? recorder.recordStep(message.content ?? "", stepCalls(message, answered))
-            : recorder.recordAnswer(message.content ?? ""),
-        // The message was recorded with its calls when the earlier run wrote it.
-        Resume: ({ message, answered }) => recorder.recordStep("", stepCalls(message, answered)),
-      }).pipe(Effect.asVoid, Effect.mapError(asRunFailed)),
+    // Nothing the run does next reads these nodes until it ends: a pointer to a tool result is only
+    // given once its node is found, and search indexes them after the run.
+    stepEnded: (scope, step) =>
+      scope.inBackground(
+        StepEnded.$match(step, {
+          Model: ({ message, answered }) =>
+            Arr.isReadonlyArrayNonEmpty(message.toolCalls ?? [])
+              ? recorder.recordStep(message.content ?? "", stepCalls(message, answered))
+              : recorder.recordAnswer(message.content ?? ""),
+          // The message was recorded with its calls when the earlier run wrote it.
+          Resume: ({ message, answered }) => recorder.recordStep("", stepCalls(message, answered)),
+        }).pipe(Effect.asVoid, Effect.mapError(asRunFailed)),
+      ),
 
     ended: (_scope, end, saved) =>
       Option.match(

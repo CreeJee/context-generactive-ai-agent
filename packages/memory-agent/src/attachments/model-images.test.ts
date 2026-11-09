@@ -22,7 +22,12 @@ const asked: StoredMessage = {
     },
   ],
 };
-const scope = { threadId: "thread", runId: "run", emit: () => Effect.void };
+const scope = {
+  threadId: "thread",
+  runId: "run",
+  emit: () => Effect.void,
+  inBackground: Effect.ignore,
+};
 
 it.effect("reads an image once per run and inlines it on every step", () =>
   Effect.gen(function* () {

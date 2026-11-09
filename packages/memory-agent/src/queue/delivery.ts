@@ -2,7 +2,7 @@ import { Array as Arr, Context, Effect, Layer } from "effect";
 import { Attachments } from "../attachments/attachments.ts";
 import { attachmentUrl } from "../attachments/urls.ts";
 import type { StoredMessage } from "../chat-store/schema.ts";
-import { asRunFailed, type RunHook } from "../loop/run.ts";
+import { asRunFailed, type RunHook, type RunScope } from "../loop/run.ts";
 import { Nodes } from "../memory/nodes.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { MessageQueue } from "./queue.ts";
@@ -69,13 +69,10 @@ const make = Effect.gen(function* () {
 
   /**
    * Marks the waiting messages delivered, tells the page which, and gives them as user turns, in
-   * queue order. Nothing joins when the step is not `due`.
+   * queue order. Nothing joins when the step is not `due`. Their nodes are written in the
+   * background, after the nodes of the step the model just ended.
    */
-  const deliver = (
-    binding: DeliveryBinding,
-    due: boolean,
-    announce: (ids: ReadonlyArray<string>) => Effect.Effect<void>,
-  ) =>
+  const deliver = (binding: DeliveryBinding, due: boolean, scope: RunScope) =>
     Effect.flatMap(
       due ? queue.deliverable(binding.sessionId) : Effect.succeed<ReadonlyArray<QueuedMessage>>([]),
       (found) =>
@@ -84,12 +81,20 @@ const make = Effect.gen(function* () {
           (message) =>
             queue
               .markDelivered(message.id, "tool_boundary", binding.runId)
-              .pipe(Effect.andThen(record(binding, message))),
+              .pipe(
+                Effect.andThen(
+                  scope.inBackground(record(binding, message).pipe(Effect.mapError(asRunFailed))),
+                ),
+              ),
           { discard: true },
         ).pipe(
           Effect.andThen(
             Effect.when(
-              announce(found.map((message) => message.id)),
+              scope.emit({
+                type: "CUSTOM",
+                name: queueDeliveredEvent,
+                value: { ids: found.map((message) => message.id) },
+              }),
               Effect.succeed(found.length > 0),
             ),
           ),
@@ -107,9 +112,7 @@ const make = Effect.gen(function* () {
     hookFor(binding: DeliveryBinding): RunHook {
       return {
         joining: (scope, conversation) =>
-          deliver(binding, afterTool(conversation), (ids) =>
-            scope.emit({ type: "CUSTOM", name: queueDeliveredEvent, value: { ids } }),
-          ).pipe(Effect.mapError(asRunFailed)),
+          deliver(binding, afterTool(conversation), scope).pipe(Effect.mapError(asRunFailed)),
       };
     },
   };

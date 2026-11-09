@@ -10,7 +10,7 @@ import { connectionContext } from "../../src/db/database.ts";
 import { migrations } from "../../src/db/migrations.ts";
 import type { AgUiEvent } from "../../src/loop/chunks.ts";
 import type { ResumeEntry } from "../../src/loop/resume.ts";
-import { RunFailed, runChat, type RunSpec } from "../../src/loop/run.ts";
+import { RunFailed, runChat, type RunHook, type RunSpec } from "../../src/loop/run.ts";
 import { RunStore } from "../../src/loop/store.ts";
 import { providerTools } from "../../src/providers/provider-tools.ts";
 import { scriptedModel, type ScriptedTurn } from "../../src/testing/scripted-model.ts";
@@ -95,16 +95,20 @@ const harness = Effect.fnUntraced(function* (
     options: {
       readonly resume?: ReadonlyArray<ResumeEntry>;
       readonly cancel?: Effect.Effect<void>;
+      readonly hooks?: ReadonlyArray<RunHook>;
     } = {},
   ): Effect.Effect<ReadonlyArray<AgUiEvent>, never, RunStore | SecureRandom.SecureRandom> =>
     Stream.runCollect(
-      runChat(spec, {
-        threadId: "thread",
-        runId,
-        conversation,
-        resume: options.resume ?? [],
-        cancel: options.cancel ?? Effect.never,
-      }),
+      runChat(
+        { ...spec, hooks: options.hooks ?? [] },
+        {
+          threadId: "thread",
+          runId,
+          conversation,
+          resume: options.resume ?? [],
+          cancel: options.cancel ?? Effect.never,
+        },
+      ),
     );
   return { run, ran: Ref.get(ran), invocations };
 });
@@ -185,6 +189,55 @@ describe("run loop", () => {
         ]);
         expect(yield* ran).toEqual([]);
         expect(yield* runs).toEqual([{ run_id: "run-1", status: "interrupted", error: null }]);
+      }),
+    ),
+  );
+
+  it.effect("does not hold the next step for a background write, and ends only after it", () =>
+    withRows(
+      Effect.gen(function* () {
+        const release = yield* Deferred.make<void>();
+        const secondStep = yield* Deferred.make<void>();
+        const { run } = yield* harness(
+          { toolCalls: [read] },
+          { text: "done", waitFor: Effect.asVoid(Deferred.succeed(secondStep, undefined)) },
+        );
+        const written = yield* Ref.make(false);
+        const endSawWrite = yield* Ref.make(false);
+        const hook: RunHook = {
+          stepEnded: (scope) =>
+            scope.inBackground(
+              Deferred.await(release).pipe(Effect.andThen(Ref.set(written, true))),
+            ),
+          ended: () => Effect.flatMap(Ref.get(written), (done) => Ref.set(endSawWrite, done)),
+        };
+
+        const running = yield* Effect.forkChild(run("run-1", [user], { hooks: [hook] }));
+        yield* Deferred.await(secondStep);
+        expect(yield* Ref.get(written)).toBe(false);
+        yield* Deferred.succeed(release, undefined);
+        expect((yield* Fiber.join(running)).at(-1)).toMatchObject({ type: "RUN_FINISHED" });
+        expect(yield* Ref.get(endSawWrite)).toBe(true);
+      }),
+    ),
+  );
+
+  it.effect("fails the run with a background write's failure", () =>
+    withRows(
+      Effect.gen(function* () {
+        const { run } = yield* harness({ toolCalls: [read] }, { text: "done" });
+        const hook: RunHook = {
+          stepEnded: (scope) =>
+            scope.inBackground(Effect.fail(RunFailed.make({ message: "The write failed." }))),
+        };
+
+        expect((yield* run("run-1", [user], { hooks: [hook] })).at(-1)).toMatchObject({
+          type: "RUN_ERROR",
+          message: "The write failed.",
+        });
+        expect(yield* runs).toEqual([
+          { run_id: "run-1", status: "failed", error: "The write failed." },
+        ]);
       }),
     ),
   );

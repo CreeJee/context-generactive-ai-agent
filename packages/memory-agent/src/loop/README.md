@@ -12,7 +12,7 @@ run·thread·interrupt 행은 `RunStore`(SqlClient)가 `chat_threads`, `chat_thr
 - `RunSpec` — run 설정: `model`(LanguageModel), `source`, `system`, `tools`(`RunTool[]`), `providerTools?`, `hooks`, `modelFailure`
 - `RunInput` — run 입력: `threadId`, `runId`, 호출자가 합친 `conversation`, `resume`(`ResumeEntry[]`), 사용자 취소 시 완료되는 `cancel`
 - `RunHook` — 앱이 run에 붙이는 선택적 훅들. 나열 순서대로 실행된다: `started`, `joining`, `request`, `admit`(gate), `answered`, `usage`, `stepEnded`, `continues`, `ended`
-- `RunScope` — 훅이 받는 run 문맥(`threadId`, `runId`, 페이지로 이벤트를 보내는 `emit`)
+- `RunScope` — 훅이 받는 run 문맥(`threadId`, `runId`, 페이지로 이벤트를 보내는 `emit`, run을 붙잡지 않는 쓰기를 맡기는 `inBackground`). `inBackground`로 맡긴 쓰기는 맡긴 순서대로 하나씩 돌고, 다음 step은 기다리지 않는다. run은 끝(완료·대기·실패·취소)을 저장하기 전에 모두 기다리고, 실패한 쓰기는 다음 step이나 끝에서 run을 실패시킨다
 - `RunFailed` — 계속할 수 없는 run의 TaggedError(`message`, `code?`). message는 사용자에게 보이고 run 행에 저장된다
 - `asRunFailed` / `modelFailureOf` — 일반 에러를 `RunFailed`로 바꾼다. `modelFailureOf`는 모델이 보여 주는 실패 텍스트로 `RunSpec.modelFailure`를 만든다
 - `StepEnded` / `StepRequest` / `AnsweredCall` — step 종료(`Model` | `Resume`), step 요청(system, history, 그 step이 제공하는 tools), 호출과 그 응답의 쌍

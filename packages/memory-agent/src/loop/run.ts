@@ -74,6 +74,13 @@ export interface RunScope {
   readonly runId: string;
   /** Streams an event of the app's own, such as a `CUSTOM` one, to the page. */
   readonly emit: (event: AgUiEvent) => Effect.Effect<void>;
+  /**
+   * Runs `write` without holding the run up, after the run's earlier background writes, so they
+   * land in the order they were asked for. The run waits for all of them before it saves its end,
+   * and a failure fails the run at its next step or at its end. For writes that what the run does
+   * next does not read, such as memory nodes.
+   */
+  readonly inBackground: (write: Effect.Effect<void, RunFailed>) => Effect.Effect<void>;
 }
 
 /** What one model step is asked with. */
@@ -513,7 +520,6 @@ const runAccepted = Effect.fnUntraced(function* <R>(
   const crypto = yield* SecureRandom.SecureRandom;
   const { threadId, runId } = input;
   const run = { threadId, runId };
-  const scope: RunScope = { threadId, runId, emit };
   const hooks = spec.hooks;
   const tools = yield* lazyToolsFor(spec.tools, input.conversation);
   const approvals = approvalsOf(resumed);
@@ -521,6 +527,33 @@ const runAccepted = Effect.fnUntraced(function* <R>(
   /** The answer being written, which a cut run keeps. */
   const partial = yield* Ref.make(Option.none<AssistantMessage>());
   const usage = yield* Ref.make(Option.none<StoredUsage>());
+  // Background writes belong to the run, not to the fiber that runs its steps: a cancel interrupts
+  // the steps, and the run still waits for its writes before it saves where it stopped.
+  const runScope = yield* Effect.scope;
+  /** The run's last background write; each one starts once the one before it is done. */
+  const lastWrite = yield* SynchronizedRef.make<Fiber.Fiber<void, RunFailed>>(
+    yield* Effect.forkIn(Effect.void, runScope),
+  );
+  const failedWrite = yield* Ref.make(Option.none<RunFailed>());
+  /** Runs `write` after the run's earlier background writes; a failed one skips those after it. */
+  const inBackground = (write: Effect.Effect<void, RunFailed>) =>
+    SynchronizedRef.updateEffect(lastWrite, (before) =>
+      Effect.forkIn(
+        Fiber.join(before).pipe(
+          Effect.andThen(write),
+          Effect.tapError((failure) => Ref.set(failedWrite, Option.some(failure))),
+        ),
+        runScope,
+      ),
+    );
+  const scope: RunScope = { threadId, runId, emit, inBackground };
+  /** Waits for every background write; fails with the first that failed. */
+  const written = Effect.flatMap(SynchronizedRef.get(lastWrite), Fiber.join);
+  /** Fails with a background write that already failed, without waiting for those still going. */
+  const noFailedWrite = Effect.flatMap(
+    Ref.get(failedWrite),
+    Option.match({ onNone: () => Effect.void, onSome: Effect.fail }),
+  );
 
   /** A call's result streams as soon as it has one, without waiting for the step's other calls. */
   const answered = (call: StepCall, answer: CallAnswer) =>
@@ -684,6 +717,7 @@ const runAccepted = Effect.fnUntraced(function* <R>(
   /** One model step: its events streamed, its calls run, its message and results kept. */
   const modelStep = Effect.fnUntraced(
     function* (before: ReadonlyArray<StoredMessage>) {
+      yield* noFailedWrite;
       const joined = yield* Effect.forEach(
         hooks.flatMap((hook) => hook.joining ?? []),
         (joining) => joining(scope, before),
@@ -718,9 +752,12 @@ const runAccepted = Effect.fnUntraced(function* <R>(
             onNone: () => true,
             onSome: (at) => now - at >= snapshotIntervalMs,
           });
-          // A reload while the answer is written shows what was written so far.
+          // A reload while the answer is written shows what was written so far. The run's end waits
+          // for it before saving, so it never lands over the final conversation.
           yield* Effect.when(
-            store.saveThread(threadId, [...current, answer]).pipe(Effect.ignore({ log: "Warn" })),
+            inBackground(
+              store.saveThread(threadId, [...current, answer]).pipe(Effect.ignore({ log: "Warn" })),
+            ),
             Effect.succeed(due),
           );
           return { ...state, text, lastSnapshot: due ? Option.some(now) : state.lastSnapshot };
@@ -897,6 +934,7 @@ const runAccepted = Effect.fnUntraced(function* <R>(
     waiting: Arr.NonEmptyReadonlyArray<StoredInterruptPayload>,
   ) =>
     Effect.gen(function* () {
+      yield* written;
       yield* commitResumes;
       yield* store.createInterrupts(run, waiting);
       yield* store.endRun(runId, RunEnd.Interrupted(), yield* Ref.get(usage));
@@ -912,6 +950,7 @@ const runAccepted = Effect.fnUntraced(function* <R>(
 
   const finished = (saved: ReadonlyArray<StoredMessage>) =>
     Effect.gen(function* () {
+      yield* written;
       yield* store.saveThread(threadId, saved);
       yield* commitResumes;
       yield* store.endRun(runId, RunEnd.Completed(), yield* Ref.get(usage));
@@ -934,6 +973,8 @@ const runAccepted = Effect.fnUntraced(function* <R>(
   /** The conversation as it was when the run stopped, with the answer it was writing. */
   const stoppedAt = (stopReason: "error" | "aborted", end: RunEnd) =>
     Effect.gen(function* () {
+      // A failed background write is the reason the run stopped, or it stops it anyway.
+      yield* written.pipe(Effect.ignore({ log: "Warn" }));
       const saved = [
         ...(yield* Ref.get(conversation)),
         ...Option.toArray(

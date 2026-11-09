@@ -18,7 +18,12 @@ const fixture = Effect.fn("projectInstructions.fixture")(function* () {
   return { root, fs, path };
 });
 
-const scope: RunScope = { threadId: "thread", runId: "run", emit: () => Effect.void };
+const scope: RunScope = {
+  threadId: "thread",
+  runId: "run",
+  emit: () => Effect.void,
+  inBackground: Effect.ignore,
+};
 
 /** The system prompts one model step of a new run in `root` is asked with. */
 const stepSystem = (root: string, system: ReadonlyArray<string> = []) =>
