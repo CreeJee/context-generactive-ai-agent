@@ -1,7 +1,7 @@
 import { it } from "@effect/vitest";
 // Stream fakes implement the subscription client contract.
 import { Effect, Logger, MutableRef, Option, References, Schema, Stream } from "effect";
-import { Prompt } from "effect/ai";
+import { Prompt, Tool } from "effect/ai";
 import { describe, expect } from "vite-plus/test";
 import {
   subscriptionModel,
@@ -536,6 +536,29 @@ describe("subscription request body", () => {
         ),
       )(body);
       expect(messages.map(({ role }) => role)).toEqual(["user", "assistant", "user"]);
+    }),
+  );
+
+  it.effect("asks Anthropic to stream every tool's input as it is generated", () =>
+    Effect.gen(function* () {
+      const body = subscriptionBody({
+        provider: "anthropic",
+        selection: { provider: "anthropic", model: "claude-opus-5-5", reasoningEffort: "high" },
+        prompt,
+        tools: [
+          Tool.make("first", { parameters: Schema.Struct({ a: Schema.String }) }),
+          Tool.make("second", { parameters: Schema.Struct({ b: Schema.String }) }),
+        ],
+        promptCache: { retention: "short", key: "thread" },
+      });
+      const { tools } = yield* Schema.decodeEffect(
+        Schema.fromJsonString(
+          Schema.Struct({
+            tools: Schema.Array(Schema.Struct({ eager_input_streaming: Schema.Boolean })),
+          }),
+        ),
+      )(body);
+      expect(tools.map((tool) => tool.eager_input_streaming)).toEqual([true, true]);
     }),
   );
 });

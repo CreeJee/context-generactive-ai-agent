@@ -43,7 +43,8 @@
             "required": [
               "text"
             ]
-          }
+          },
+          "eager_input_streaming": true
         },
         {
           "name": "mcp_fake__where",
@@ -52,6 +53,7 @@
             "type": "object",
             "properties": {}
           },
+          "eager_input_streaming": true,
           "cache_control": {
             "type": "ephemeral",
             "ttl": "1h"

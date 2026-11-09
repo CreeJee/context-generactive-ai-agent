@@ -670,10 +670,13 @@ const anthropicBody = (request: SubscriptionRequest) => {
         ? [{ type: "text", text: system, cache_control: cacheControl }]
         : system,
     messages: cacheControl === undefined ? messages : markLastUserBlock(messages, cacheControl),
+    // Without eager streaming Anthropic buffers each top-level input key until its whole value is
+    // generated, so a large Plan's `steps` arrive minutes later in one burst. Arguments that do not
+    // parse stay text and the toolkit's parameter decode refuses them.
     tools: tools.map((tool, index) =>
       cacheControl !== undefined && index === tools.length - 1
-        ? { ...tool, cache_control: cacheControl }
-        : tool,
+        ? { ...tool, eager_input_streaming: true, cache_control: cacheControl }
+        : { ...tool, eager_input_streaming: true },
     ),
     tool_choice: tools.length > 0 ? { type: "auto" } : undefined,
     thinking: anthropicThinking(selection.model),

@@ -47,7 +47,8 @@
             "required": [
               "toolNames"
             ]
-          }
+          },
+          "eager_input_streaming": true
         },
         {
           "name": "read_file",
@@ -64,6 +65,7 @@
             ],
             "additionalProperties": false
           },
+          "eager_input_streaming": true,
           "cache_control": {
             "type": "ephemeral",
             "ttl": "1h"
