@@ -650,6 +650,15 @@ export const api = {
         payload: KanbanCommand.SetDependencies({ dependsOn }),
       }),
     ),
+  /** Targets the branch checked out in the project now; refused once the Goal has work of its own. */
+  retargetKanban: (session: string, holder: string) =>
+    appCall((client) =>
+      client.sessions.kanbanAction({
+        params: { session },
+        headers: { "x-session-holder": holder },
+        payload: KanbanCommand.Retarget(),
+      }),
+    ),
   controlWorkflow: (session: string, holder: string, workflowAction: WorkflowAction) =>
     changeWorkflow(session, holder, SessionChange.Control({ workflowAction })),
   /** `agent`: talk directly to that trusted external ACP agent instead of the app's model. */

@@ -381,6 +381,7 @@ function BoardSheet({
                 {loop?.schedule != null && (
                   <GoalSchedulePanel
                     schedule={loop.schedule}
+                    worktree={loop.mode === "worktree"}
                     decisions={goalDecisions}
                     projectId={projectId}
                     holder={holder}
@@ -477,6 +478,7 @@ export function mergeStateLabel(state: GoalMergeState | null): string {
 /** How the project scheduler runs this Goal: the Goals it waits for and its merge. */
 function GoalSchedulePanel({
   schedule,
+  worktree,
   decisions,
   projectId,
   holder,
@@ -484,6 +486,8 @@ function GoalSchedulePanel({
   onChange,
 }: {
   readonly schedule: KanbanScheduleView;
+  /** Whether the cards run in worktrees off a Goal branch that can move to another target. */
+  readonly worktree: boolean;
   readonly decisions: readonly HumanDecisionRequest[];
   readonly projectId: string;
   readonly holder: string;
@@ -504,6 +508,18 @@ function GoalSchedulePanel({
           대상 브랜치: {schedule.targetBranch ?? "없음"} · {mergeStateLabel(schedule.merge)}
         </span>
         {schedule.upstreamPending && <Badge variant="outline">대상 브랜치 변경 반영 중</Badge>}
+        {worktree && schedule.merge === null && (
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            title="프로젝트에 지금 checkout한 브랜치를 대상으로 삼고, Goal 브랜치를 그 브랜치에서 다시 시작해요. 카드 브랜치가 생기기 전에만 바꿀 수 있어요."
+            disabled={disabled}
+            onClick={() => onChange(KanbanAction.Retarget())}
+          >
+            현재 브랜치로 바꾸기
+          </Button>
+        )}
       </div>
       {schedule.waitingOn.length > 0 && (
         <p role="status">

@@ -95,6 +95,16 @@ export const errorText = (code: ApiErrorCode) => {
       return "이 카드를 기다리는 카드가 있어서 옮길 수 없어요. 그 카드의 의존을 먼저 풀어 주세요.";
     case "transfer_target_invalid":
       return "같은 프로젝트에서 계획이 있는 다른 대화로만 옮길 수 있어요.";
+    case "not_worktree":
+      return "카드를 프로젝트에서 차례로 실행하는 보드라 옮길 Goal 브랜치가 없어요.";
+    case "merge_started":
+      return "merge를 시작한 Goal은 대상 브랜치를 바꿀 수 없어요.";
+    case "detached_head":
+      return "프로젝트에 checkout한 브랜치가 없어요(detached HEAD). 브랜치를 checkout한 뒤 다시 시도해 주세요.";
+    case "goal_has_work":
+      return "Goal 브랜치에 두 브랜치 어디에도 없는 커밋이 있어 대상 브랜치를 바꿀 수 없어요.";
+    case "cards_started":
+      return "이 Goal의 카드 브랜치(취소한 카드 것 포함)가 남아 있어 대상 브랜치를 바꿀 수 없어요.";
     case "reorder_across_columns":
       return "순서는 같은 열 안에서만 바꿀 수 있어요.";
     case "not_kanban":
