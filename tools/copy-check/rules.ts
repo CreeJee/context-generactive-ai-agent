@@ -55,9 +55,13 @@ export interface GlossaryEntry {
 
 /**
  * Domain terms with one spelling across the app. Add an entry only once the term is decided;
- * the decisions are recorded in docs/decisions.md ("UI 문구 카탈로그").
+ * the decisions are recorded in docs/decisions.md ("앱 문구는 copy.ts 카탈로그에 두고 …").
+ * A Latin spelling in `avoid` matches without case, so a case variant of `use` never goes there.
  */
-export const glossary: Readonly<Record<string, GlossaryEntry>> = {};
+export const glossary = {
+  // The board's top-level unit keeps its product name, as in the kanban and chat code.
+  goal: { use: "Goal", avoid: ["목표"] },
+} as const satisfies Readonly<Record<string, GlossaryEntry>>;
 
 /** Kiwi tags whose morpheme ends a sentence: final endings, and connective endings before a full stop. */
 export const finalEndingTag = "EF";
