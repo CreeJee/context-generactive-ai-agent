@@ -57,7 +57,8 @@
               "order"
             ],
             "additionalProperties": false
-          }
+          },
+          "eager_input_streaming": true
         },
         {
           "name": "list_tasks",
@@ -67,7 +68,8 @@
             "additionalProperties": false,
             "properties": {},
             "required": []
-          }
+          },
+          "eager_input_streaming": true
         },
         {
           "name": "run_skill",
@@ -112,7 +114,8 @@
               "name"
             ],
             "additionalProperties": false
-          }
+          },
+          "eager_input_streaming": true
         },
         {
           "name": "save_code_skill",
@@ -205,7 +208,8 @@
               "program"
             ],
             "additionalProperties": false
-          }
+          },
+          "eager_input_streaming": true
         },
         {
           "name": "write_outside_file",
@@ -236,6 +240,7 @@
             ],
             "additionalProperties": false
           },
+          "eager_input_streaming": true,
           "cache_control": {
             "type": "ephemeral",
             "ttl": "1h"

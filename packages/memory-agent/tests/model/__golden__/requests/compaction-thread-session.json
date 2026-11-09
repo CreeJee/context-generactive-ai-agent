@@ -126,7 +126,8 @@
           "input_schema": {
             "type": "object",
             "properties": {}
-          }
+          },
+          "eager_input_streaming": true
         },
         {
           "name": "read_file",
@@ -142,6 +143,7 @@
               "path"
             ]
           },
+          "eager_input_streaming": true,
           "cache_control": {
             "type": "ephemeral",
             "ttl": "1h"
