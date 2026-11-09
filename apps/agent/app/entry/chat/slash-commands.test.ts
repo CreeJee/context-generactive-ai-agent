@@ -90,14 +90,14 @@ describe("slash command parsing", () => {
     );
     expect(parseSlash("/goal 결제 실패를 줄이고 싶어", context)).toEqual(
       SlashParse.command({
-        command: SlashCommand.workflow({ phase: "goal", request: "결제 실패를 줄이고 싶어" }),
+        command: SlashCommand.workflow({ move: "goal", request: "결제 실패를 줄이고 싶어" }),
       }),
     );
     expect(parseSlash("/plan", context)).toEqual(
-      SlashParse.command({ command: SlashCommand.workflow({ phase: "plan", request: "" }) }),
+      SlashParse.command({ command: SlashCommand.workflow({ move: "plan", request: "" }) }),
     );
     expect(parseSlash("/execute", context)).toEqual(
-      SlashParse.command({ command: SlashCommand.workflow({ phase: "execute", request: "" }) }),
+      SlashParse.command({ command: SlashCommand.workflow({ move: "run", request: "" }) }),
     );
     expect(parseSlash("/status", context)).toEqual(
       SlashParse.command({ command: SlashCommand.workflow_status() }),

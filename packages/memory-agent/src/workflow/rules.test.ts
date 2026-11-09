@@ -12,7 +12,7 @@ describe("WorkflowRules", () => {
     it.effect("always includes required phase rules and ranks relevant optional rules", () =>
       Effect.gen(function* () {
         const result = yield* (yield* WorkflowRules).resolve({
-          phase: "plan",
+          phases: ["plan"],
           text: "Plan a database schema migration with a reversible backfill and tests",
           limit: 2,
         });
@@ -44,8 +44,8 @@ describe("WorkflowRules", () => {
     it.effect("shares rule vectors across equivalent queries while embedding each query", () =>
       Effect.gen(function* () {
         const rules = yield* WorkflowRules;
-        yield* rules.resolve({ phase: "plan", text: "database migration" });
-        yield* rules.resolve({ phase: "plan", text: "schema backfill" });
+        yield* rules.resolve({ phases: ["plan"], text: "database migration" });
+        yield* rules.resolve({ phases: ["plan"], text: "schema backfill" });
         expect(calls).toEqual([expect.any(Number), 1, 1]);
       }),
     );
@@ -69,8 +69,8 @@ describe("WorkflowRules", () => {
     it.effect("retries rule vectors after a failed embedding", () =>
       Effect.gen(function* () {
         const rules = yield* WorkflowRules;
-        const first = yield* rules.resolve({ phase: "plan", text: "database migration" });
-        const second = yield* rules.resolve({ phase: "plan", text: "database migration" });
+        const first = yield* rules.resolve({ phases: ["plan"], text: "database migration" });
+        const second = yield* rules.resolve({ phases: ["plan"], text: "database migration" });
         expect(first.degraded).toEqual(["embedding"]);
         expect(second.degraded).toEqual([]);
       }),

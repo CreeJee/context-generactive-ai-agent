@@ -1,4 +1,4 @@
-import { Effect, HashSet, Iterable, Predicate, Schema, SchemaTransformation } from "effect";
+import { Effect, HashSet, Iterable, Match, Predicate, Schema, SchemaTransformation } from "effect";
 import { BoardAuthor, CardRisk, CardStatus, cardContractFields, cardHoldFields } from "./card.ts";
 
 /**
@@ -92,15 +92,24 @@ export const CompletionRequest = Schema.Struct({
   mappings: Schema.Array(CriterionMapping),
 });
 
-export const WorkflowPhase = Schema.Literals([
-  "chat",
-  "goal",
-  "plan",
-  "execute",
-  "verify",
-  "completed",
-]);
+/**
+ * Where the session's workflow is: plain chat, shaping a Goal and its Plan, running the Plan on its
+ * board, or completed (decisions.md "outcome 장부와 이어 쓰는 Plan, Plan 모드는 카드를 사용자가 승인하는
+ * Goal이다").
+ */
+export const WorkflowPhase = Schema.Literals(["chat", "shaping", "running", "completed"]);
 export type WorkflowPhase = typeof WorkflowPhase.Type;
+
+/** Who approves the Plan and the cards added to it: the user (Plan) or the owner (Goal). */
+export const WorkflowMode = Schema.Literals(["plan", "goal"]);
+export type WorkflowMode = typeof WorkflowMode.Type;
+
+/** What the page asks of the workflow: a mode to work in, or running the approved Plan. */
+export const WorkflowMove = Schema.Literals(["chat", "plan", "goal", "run"]);
+export type WorkflowMove = typeof WorkflowMove.Type;
+
+/** Phases saved before the mode was its own value; each names its mode or a running Plan. */
+const LegacyWorkflowPhase = Schema.Literals(["goal", "plan", "execute", "verify"]);
 
 export const WorkflowAction = Schema.Literals(["pause", "resume", "stop"]);
 export type WorkflowAction = typeof WorkflowAction.Type;
@@ -270,12 +279,48 @@ export const LedgerEvent = Schema.Struct({
   detail: Schema.String,
 });
 
-export const WorkflowState = Schema.Struct({
-  phase: WorkflowPhase,
+const workflowStateFields = {
   goal: Schema.NullOr(GoalArtifact),
   plan: Schema.NullOr(PlanArtifact),
   ledger: Schema.Array(LedgerEvent),
-});
+};
+
+/** Where a saved state is: an older one has a legacy phase and no mode. */
+export const storedPlaceFields = {
+  phase: Schema.Union([WorkflowPhase, LegacyWorkflowPhase]),
+  mode: Schema.optionalKey(Schema.NullOr(WorkflowMode)),
+};
+const StoredWorkflowState = Schema.Struct({ ...workflowStateFields, ...storedPlaceFields });
+
+/** A saved state's phase and mode; a legacy phase names its mode, and no mode was Plan mode. */
+export const decodedPlace = ({
+  phase,
+  mode,
+}: Schema.Struct.Type<typeof storedPlaceFields>): {
+  readonly phase: WorkflowPhase;
+  readonly mode: WorkflowMode;
+} =>
+  Match.value(phase).pipe(
+    Match.whenOr("goal", "plan", (legacy) => ({ phase: "shaping" as const, mode: legacy })),
+    Match.whenOr("execute", "verify", () => ({ phase: "running" as const, mode: mode ?? "plan" })),
+    Match.whenOr("chat", "shaping", "running", "completed", (current) => ({
+      phase: current,
+      mode: mode ?? "plan",
+    })),
+    Match.exhaustive,
+  );
+
+export const WorkflowState = StoredWorkflowState.pipe(
+  Schema.decodeTo(
+    Schema.toType(
+      Schema.Struct({ ...workflowStateFields, phase: WorkflowPhase, mode: WorkflowMode }),
+    ),
+    SchemaTransformation.transform({
+      decode: (stored) => ({ ...stored, ...decodedPlace(stored) }),
+      encode: (state) => state,
+    }),
+  ),
+);
 export type WorkflowState = typeof WorkflowState.Type;
 
 const CardText = Schema.String.pipe(Schema.check(Schema.isTrimmed(), Schema.isMinLength(1)));
@@ -532,9 +577,9 @@ export const WorkflowActionDecision = Schema.Union([
 ]);
 export type WorkflowActionDecision = typeof WorkflowActionDecision.Type;
 
-/** What the page may ask of the workflow now: each phase and each control, allowed or why not. */
+/** What the page may ask of the workflow now: each move and each control, allowed or why not. */
 export const WorkflowActions = Schema.Struct({
-  phases: Schema.Record(WorkflowPhase, WorkflowActionDecision),
+  moves: Schema.Record(WorkflowMove, WorkflowActionDecision),
   controls: Schema.Record(WorkflowAction, WorkflowActionDecision),
 });
 export type WorkflowActions = typeof WorkflowActions.Type;

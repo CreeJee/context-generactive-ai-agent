@@ -2,7 +2,7 @@ import { runUiEffect, uiPromise } from "../shared/ui-effect";
 import { Cause, Effect, Function as EffectFunction } from "effect";
 import { isTruthy } from "../../truthy.ts";
 import { useState } from "react";
-import { isApiError, type WorkflowAction, type WorkflowPhase } from "../api";
+import { isApiError, type WorkflowAction, type WorkflowMove } from "../api";
 import { useProjectScope } from "../events/context";
 import { noticeOf, RunNotice, type PageView } from "./run-notice";
 import { useRunStateQuery } from "../queries/session";
@@ -60,8 +60,8 @@ function useRunStateBody(sessionId: string, holder: string, generating: boolean,
       ),
     );
 
-  const setWorkflowPhase = (phase: WorkflowPhase) =>
-    workflowMutation.mutateAsync(WorkflowChange.phase({ phase }));
+  const moveWorkflow = (move: WorkflowMove) =>
+    workflowMutation.mutateAsync(WorkflowChange.move({ move }));
 
   const controlWorkflow = (action: WorkflowAction) =>
     workflowMutation.mutateAsync(WorkflowChange.control({ action }));
@@ -79,7 +79,7 @@ function useRunStateBody(sessionId: string, holder: string, generating: boolean,
     providerRetry: state?.providerRetry ?? null,
     actions: state?.actions ?? null,
     uncertainRuns: state?.uncertainRuns ?? [],
-    setWorkflowPhase,
+    moveWorkflow,
     notice: cancelPending
       ? RunNotice["cancel-pending"]()
       : generating

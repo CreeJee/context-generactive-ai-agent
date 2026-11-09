@@ -381,7 +381,7 @@ export const executingSession = Effect.fn("executingSession")(function* (
       ops.editCard(session.id, cardId, { boundaries: files }, BoardAuthor.cases.User.make({})),
     { discard: true },
   );
-  yield* workflows.setPhase(session.id, "execute");
+  yield* workflows.move(session.id, "run");
   const goalInstanceId = Option.getOrThrow(
     Option.fromNullishOr(yield* workflows.goalInstanceId(session.id)),
   );
@@ -450,7 +450,7 @@ export const replaceGoal = Effect.fn("replaceGoal")(function* (sessionId: string
   const sql = yield* SqlClient.SqlClient;
   const workflows = yield* Workflows;
   const runId = `${sessionId}:new-goal`;
-  yield* workflows.setPhase(sessionId, "plan");
+  yield* workflows.move(sessionId, "plan");
   const [revision] = yield* sql<{ readonly id: number | null }>`SELECT MAX(id) AS id
     FROM workflow_state_revisions WHERE session_id = ${sessionId}`;
   yield* (yield* workflowRunBindings).bind(sessionId, runId, Number(revision?.id));

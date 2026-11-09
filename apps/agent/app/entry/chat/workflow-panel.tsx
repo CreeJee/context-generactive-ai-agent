@@ -14,28 +14,25 @@ import {
   AlertDialogTrigger,
 } from "../../components/ui/alert-dialog";
 import { Button } from "../../components/ui/button";
-import { WorkflowExecutionState, type WorkflowPhase, type WorkflowState } from "../api";
+import { WorkflowExecutionState, type WorkflowMode, type WorkflowState } from "../api";
 import { koreanLocalTime } from "../shared/local-time";
 
 const localTime = (epochMillis: number) => koreanLocalTime(epochMillis);
 
-export const phaseLabels: Readonly<Record<WorkflowPhase, string>> = {
+/** The modes the composer offers: plain chat, or who approves the Plan (Plan or Goal). */
+export const modeLabels: Readonly<Record<"chat" | WorkflowMode, string>> = {
   chat: "Chat",
-  goal: "Goal",
   plan: "Plan",
-  execute: "Execute",
-  verify: "Verify",
-  completed: "완료",
+  goal: "Goal",
 };
 
-/** A closed Verify phase is a completed workflow, not ongoing verification. */
+/** The mode the composer shows: plain chat, or the mode a workflow shapes and runs in. */
+export const composerModeOf = (state: WorkflowState | null): "chat" | WorkflowMode =>
+  state === null || state.phase === "chat" ? "chat" : state.mode;
+
+/** A completed workflow reads as done; any other as its mode. */
 export function workflowModeLabel(state: WorkflowState): string {
-  return state.phase === "verify" &&
-    state.goal?.status === "completed" &&
-    state.plan?.status === "completed" &&
-    state.plan.verification.status === "passed"
-    ? "완료"
-    : phaseLabels[state.phase];
+  return state.phase === "completed" ? "완료" : modeLabels[composerModeOf(state)];
 }
 
 export const goalStatusLabels: Record<NonNullable<WorkflowState["goal"]>["status"], string> = {
@@ -108,7 +105,7 @@ export function WorkflowArtifactPanel({
   readonly boardSlot?: ReactNode;
 }) {
   if (!(state !== null) || state.phase === "chat") return null;
-  if (state.phase === "goal") {
+  if (state.phase === "shaping" && state.mode === "goal") {
     return (
       <Alert>
         <AlertTitle>
@@ -190,7 +187,7 @@ export function WorkflowArtifactPanel({
 
   const plan = state.plan;
   if (!isTruthy(plan)) {
-    if (state.phase !== "plan") return null;
+    if (state.phase !== "shaping") return null;
     return (
       <Alert>
         <AlertTitle>Plan</AlertTitle>
@@ -201,16 +198,12 @@ export function WorkflowArtifactPanel({
     );
   }
 
-  const execute = actions?.phases.execute;
+  const execute = actions?.moves.run;
   const continuingImplementation = execute?.allowed && execute.intent === "continue";
   const outdated = execute && !execute.allowed && execute.reason === "plan_outdated";
   return (
     <Alert>
-      <AlertTitle>
-        {state.phase === "verify" && plan.status === "executing"
-          ? "검증 중"
-          : planStatusLabels[plan.status]}
-      </AlertTitle>
+      <AlertTitle>{planStatusLabels[plan.status]}</AlertTitle>
       <AlertDescription>
         {isTruthy(display) && (
           <p className="mb-3" role="status">
@@ -244,7 +237,9 @@ export function WorkflowArtifactPanel({
             type="button"
             size="sm"
             variant="outline"
-            disabled={!isTruthy(actions?.phases.plan.allowed) || busy || disabled || controlling}
+            disabled={
+              !isTruthy(actions?.moves[state.mode].allowed) || busy || disabled || controlling
+            }
             onClick={onRevise}
           >
             수정 요청

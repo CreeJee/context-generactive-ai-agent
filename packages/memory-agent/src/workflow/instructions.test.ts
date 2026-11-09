@@ -1,12 +1,13 @@
 import { describe, expect, test } from "vite-plus/test";
 import { workflowActions } from "./actions.ts";
 import { OutcomeStatus } from "./outcome-ledger.ts";
-import { builtInWorkflowRules } from "./rules.ts";
+import { builtInWorkflowRules, rulePhases } from "./rules.ts";
 import { workflowInstructions } from "./tools.ts";
-import type { WorkflowPhase, WorkflowState } from "./workflow.ts";
+import type { WorkflowMode, WorkflowPhase, WorkflowState } from "./workflow.ts";
 
-const state = (phase: WorkflowPhase): WorkflowState => ({
+const state = (phase: WorkflowPhase, mode: WorkflowMode = "plan"): WorkflowState => ({
   phase,
+  mode,
   goal: null,
   plan: null,
   ledger: [],
@@ -14,7 +15,9 @@ const state = (phase: WorkflowPhase): WorkflowState => ({
 
 const resolved = (phase: WorkflowPhase) => ({
   rules: builtInWorkflowRules.filter(
-    (rule) => rule.phases.includes(phase) && rule.priority === "required",
+    (rule) =>
+      rule.phases.some((rulePhase) => rulePhases[phase].some((read) => read === rulePhase)) &&
+      rule.priority === "required",
   ),
   degraded: [],
 });
@@ -24,14 +27,14 @@ describe("workflowInstructions", () => {
     const prompt = workflowInstructions(state("completed"), resolved("completed"), "owner-id-123");
     expect(prompt).toContain("Current Goal instance ID: owner-id-123");
     expect(prompt).toContain("use this exact ID as previousGoalInstanceId");
-    expect(workflowInstructions(state("goal"), resolved("goal"), null)).toContain(
+    expect(workflowInstructions(state("shaping", "goal"), resolved("shaping"), null)).toContain(
       "Current Goal instance ID: (none; legacy/unbound)",
     );
   });
   test("lists the Goal's blocking open questions in the Plan prompt", () => {
     const prompt = workflowInstructions(
       {
-        ...state("plan"),
+        ...state("shaping"),
         goal: {
           version: 1,
           statement: "Resolve two independent changes",
@@ -54,7 +57,7 @@ describe("workflowInstructions", () => {
           updatedAt: "2026-09-30T00:00:00.000Z",
         },
       },
-      resolved("plan"),
+      resolved("shaping"),
     );
 
     expect(prompt).toContain("Which approach for the second change?");
@@ -83,7 +86,7 @@ describe("workflowInstructions", () => {
       },
       updatedAt: "2026-11-09T00:00:00.000Z",
     };
-    const prompt = workflowInstructions({ ...state("execute"), goal }, resolved("execute"), "g", [
+    const prompt = workflowInstructions({ ...state("running"), goal }, resolved("running"), "g", [
       {
         outcomeId: "O1",
         outcomeText: "Outcome O1",
@@ -102,7 +105,7 @@ describe("workflowInstructions", () => {
   });
 
   test("a recorded non-blocking question does not prevent a ready Plan from executing", () => {
-    const template = state("plan");
+    const template = state("shaping");
     const goal: NonNullable<WorkflowState["goal"]> = {
       version: 1,
       statement: "Investigate",
@@ -135,11 +138,14 @@ describe("workflowInstructions", () => {
       updatedAt: goal.updatedAt,
     };
     const ready = { ...template, goal, plan };
-    expect(workflowActions(ready).phases.execute).toEqual({ allowed: true, intent: "start" });
-    expect(workflowInstructions(ready, resolved("plan"))).toContain("non-blocking open question");
-    expect(
-      workflowActions({ ...ready, plan: { ...plan, status: "draft" } }).phases.execute,
-    ).toEqual({ allowed: false, reason: "plan_not_ready" });
+    expect(workflowActions(ready).moves.run).toEqual({ allowed: true, intent: "start" });
+    expect(workflowInstructions(ready, resolved("shaping"))).toContain(
+      "non-blocking open question",
+    );
+    expect(workflowActions({ ...ready, plan: { ...plan, status: "draft" } }).moves.run).toEqual({
+      allowed: false,
+      reason: "plan_not_ready",
+    });
   });
 
   test("shows a running Plan's unfinished card and the constraints that outlive a turn", () => {
@@ -151,7 +157,7 @@ describe("workflowInstructions", () => {
       updatedAt: null,
     };
     const current: WorkflowState = {
-      ...state("execute"),
+      ...state("running"),
       goal: {
         version: 2,
         statement: "Long task",
@@ -190,7 +196,7 @@ describe("workflowInstructions", () => {
         ],
       },
     };
-    const prompt = workflowInstructions(current, resolved("execute"));
+    const prompt = workflowInstructions(current, resolved("running"));
     [
       "Approved Plan v11",
       "P03B2 [in_progress]",

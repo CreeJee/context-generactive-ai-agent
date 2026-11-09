@@ -78,6 +78,8 @@ import type {
   Project,
   SkillCatalog,
   WorkflowAction,
+  WorkflowMode,
+  WorkflowMove,
   WorkflowPhase,
   AccountLoginState as AccountLoginStateCase,
   OAuthProfile,
@@ -227,6 +229,8 @@ export type {
   UncertainRun,
   UncertainTool,
   WorkflowAction,
+  WorkflowMode,
+  WorkflowMove,
   WorkflowPhase,
   WorkflowState,
   AgentRole,
@@ -458,13 +462,13 @@ export function makeSessionLifecycleClient(fetch: typeof globalThis.fetch) {
 const changeWorkflow = (
   session: string,
   holder: string,
-  change: Extract<SessionChange, { readonly _tag: "Phase" | "Control" }>,
+  change: Extract<SessionChange, { readonly _tag: "Move" | "Control" }>,
 ) =>
   appCall((client) => {
     const request = { params: { session }, headers: { "x-session-holder": holder } };
     // The client takes a union payload one case at a time.
     return Match.valueTags(change, {
-      Phase: (payload) => client.sessions.change({ ...request, payload }),
+      Move: (payload) => client.sessions.change({ ...request, payload }),
       Control: (payload) => client.sessions.change({ ...request, payload }),
     }).pipe(
       Effect.catchTag("blocked", () => Effect.fail(unexpectedAnswer())),
@@ -559,9 +563,9 @@ export const api = {
   archivedSessions: (project: string) =>
     appCall((client) => client.sessions.list({ query: { project, archived: "1" } })),
   ...makeSessionLifecycleClient(appFetch),
-  /** Refused while a run is active; execute requires a current Plan that is ready or executing. */
-  setWorkflowPhase: (session: string, holder: string, phase: WorkflowPhase) =>
-    changeWorkflow(session, holder, SessionChange.Phase({ phase })),
+  /** Refused while a run is active; `run` requires a current Plan that is ready or executing. */
+  moveWorkflow: (session: string, holder: string, move: WorkflowMove) =>
+    changeWorkflow(session, holder, SessionChange.Move({ move })),
   board: (session: string) => appCall((client) => client.sessions.board({ params: { session } })),
   /** The user's board change; one to an executing card comes back as a stored request. */
   editBoard: (session: string, holder: string, edit: BoardEdit) =>

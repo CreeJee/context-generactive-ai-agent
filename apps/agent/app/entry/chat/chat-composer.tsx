@@ -18,11 +18,11 @@ import { ComposerShortcuts, ComposerStatus, type ComposerMode } from "./composer
 import { QueuePanel } from "./queue-panel";
 import { SlashPalette } from "./slash-palette";
 import { suggest, type SlashContext } from "./slash-commands";
-import { phaseLabels } from "./workflow-panel";
-import type { GeneratedImageAsset, ImageFeatureStatus, QueuedMessage, WorkflowPhase } from "../api";
+import { composerModeOf, modeLabels } from "./workflow-panel";
+import type { GeneratedImageAsset, ImageFeatureStatus, QueuedMessage, WorkflowMove } from "../api";
 import type { useRunState } from "../session/use-run-state";
 
-const workflowPhases = ["chat", "goal", "plan"] as const satisfies readonly WorkflowPhase[];
+const workflowModes = ["chat", "goal", "plan"] as const satisfies readonly WorkflowMove[];
 
 const imageFiles = (files: FileList | null) =>
   Array.from(files ?? []).filter((file) => file.type.startsWith("image/"));
@@ -61,7 +61,7 @@ export function ChatComposer({
   onPickQueued,
   onCancel,
   onClear,
-  onWorkflowPhase,
+  onWorkflowMode,
 }: {
   ref?: Ref<ChatComposerHandle>;
   draft: string;
@@ -91,7 +91,7 @@ export function ChatComposer({
   onPickQueued: (direction: "up" | "down") => void;
   onCancel: () => void;
   onClear: () => void;
-  onWorkflowPhase: (phase: WorkflowPhase) => void;
+  onWorkflowMode: (mode: (typeof workflowModes)[number]) => void;
 }) {
   const [highlight, setHighlight] = useState("");
   const textarea = useRef<HTMLTextAreaElement>(null);
@@ -268,9 +268,9 @@ export function ChatComposer({
                   ? "Enter를 누르면 고친 내용을 저장해요"
                   : generating
                     ? "답변 중에도 이어서 보낼 수 있어요"
-                    : run.workflow?.phase === "goal"
+                    : run.workflow?.phase === "shaping" && run.workflow.mode === "goal"
                       ? "달성할 결과를 입력하세요"
-                      : run.workflow?.phase === "plan"
+                      : run.workflow?.phase === "shaping"
                         ? "변경 없이 조사해서 계획할 내용을 입력하세요"
                         : "메시지를 입력하세요. /로 명령을 부르고, 이미지는 붙여넣거나 끌어다 놓아요"
             }
@@ -331,19 +331,19 @@ export function ChatComposer({
               variant="outline"
               size="sm"
               spacing={0}
-              value={[run.workflow?.phase ?? "chat"]}
+              value={[composerModeOf(run.workflow)]}
               onValueChange={(pressed) => {
-                // Pressing the current phase again releases it; the composer always keeps one.
-                const phase = workflowPhases.find((candidate) => pressed.includes(candidate));
-                if (phase !== undefined) onWorkflowPhase(phase);
+                // Pressing the current mode again releases it; the composer always keeps one.
+                const mode = workflowModes.find((candidate) => pressed.includes(candidate));
+                if (mode !== undefined) onWorkflowMode(mode);
               }}
             >
-              {workflowPhases.map((phase) => (
+              {workflowModes.map((mode) => (
                 <ToggleGroupItem
-                  key={phase}
-                  value={phase}
+                  key={mode}
+                  value={mode}
                   disabled={
-                    !isTruthy(run.actions?.phases[phase].allowed) ||
+                    !isTruthy(run.actions?.moves[mode].allowed) ||
                     run.controlling ||
                     mutationBlocked ||
                     generating ||
@@ -351,14 +351,14 @@ export function ChatComposer({
                     editingId !== null
                   }
                   title={
-                    phase === "goal"
-                      ? "결과를 맡기면 조사, 수정, 검증까지 진행해요"
-                      : phase === "plan"
-                        ? "프로젝트를 변경하지 않고 실행 계획을 만들어요"
+                    mode === "goal"
+                      ? "결과를 맡기면 계획한 카드를 보드에서 바로 실행해요"
+                      : mode === "plan"
+                        ? "프로젝트를 변경하지 않고 계획을 만들고, 승인하면 보드에서 실행해요"
                         : "일반 대화"
                   }
                 >
-                  {phaseLabels[phase]}
+                  {modeLabels[mode]}
                 </ToggleGroupItem>
               ))}
             </ToggleGroup>

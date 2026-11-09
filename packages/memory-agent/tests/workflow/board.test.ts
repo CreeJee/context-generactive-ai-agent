@@ -166,7 +166,7 @@ testAgent()("kanban board", (it) => {
       const workflows = yield* Workflows;
       yield* workflows.updateGoal(id, goal);
       yield* workflows.updatePlan(id, plan);
-      yield* workflows.setPhase(id, "execute");
+      yield* workflows.move(id, "run");
       const executing = yield* workflows.transitionCard(
         id,
         { cardId: "a", from: "ready", to: "in_progress" },
@@ -298,7 +298,7 @@ testAgent()("kanban board", (it) => {
       const executing = yield* freshSession;
       yield* workflows.updateGoal(executing, goal);
       yield* workflows.updatePlan(executing, plan, orchestrator);
-      yield* workflows.setPhase(executing, "execute");
+      yield* workflows.move(executing, "run");
       yield* Effect.forEach(
         [
           ["ready", "in_progress"],
@@ -317,7 +317,7 @@ testAgent()("kanban board", (it) => {
       );
       expect(BoardEditResult.$is("Applied")(closed)).toBe(true);
       const state = yield* workflows.get(executing);
-      expect(state.phase).toBe("plan");
+      expect(state.phase).toBe("shaping");
       expect(state.plan).toMatchObject({ status: "closed", version: 1 });
       expect(state.plan?.steps.map((step) => [step.id, step.status, step.hold])).toEqual([
         ["a", "done", undefined],

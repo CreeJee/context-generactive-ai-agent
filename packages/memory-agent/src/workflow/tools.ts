@@ -42,14 +42,14 @@ const startNewGoal = {
 const updateGoal = {
   name: "update_goal",
   description:
-    "Save the session's canonical Goal artifact. Use after discovering or revising the problem, outcomes, constraints, assumptions, non-goals, or blocking questions. This creates the next version. Reflect explicit user decisions, including an authorized change to implementation scope, without asking for the same approval again. Never remove constraints or non-goals merely to make execution possible. Revising a Goal during Execute or Verify returns the workflow to Plan; synchronize the Plan with the new Goal before execution is confirmed.",
+    "Save the session's canonical Goal artifact. Use after discovering or revising the problem, outcomes, constraints, assumptions, non-goals, or blocking questions. This creates the next version. Reflect explicit user decisions, including an authorized change to implementation scope, without asking for the same approval again. Never remove constraints or non-goals merely to make execution possible. Revising a Goal while its Plan runs returns the workflow to shaping, unless a kanban board runs it; synchronize the Plan with the new Goal before running it is confirmed.",
   parameters: UpdateGoal,
 } as const;
 
 const updatePlan = {
   name: "update_plan",
   description:
-    "Save the whole canonical Plan artifact. Use to make a Plan or rewrite most of it; to change, add, move or remove a few steps use edit_plan, which does not resend the Plan. Each step needs stable unique ids, dependencies, acceptance criteria, applicable workflow rule ids and the ids of the current Goal outcomes it serves. dependsOn may name only other step ids in the same Plan and must not form a cycle, and outcomes may name only ids of the current Goal; otherwise nothing is saved and the refusal lists each issue to fix. A step that keeps its id and its work (every field except outcomes) keeps its progress and evidence; a changed or new step starts over. This creates the next version. Revising a Plan during Execute returns the workflow to Plan.",
+    "Save the whole canonical Plan artifact. Use to make a Plan or rewrite most of it; to change, add, move or remove a few steps use edit_plan, which does not resend the Plan. Each step needs stable unique ids, dependencies, acceptance criteria, applicable workflow rule ids and the ids of the current Goal outcomes it serves. dependsOn may name only other step ids in the same Plan and must not form a cycle, and outcomes may name only ids of the current Goal; otherwise nothing is saved and the refusal lists each issue to fix. A step that keeps its id and its work (every field except outcomes) keeps its progress and evidence; a changed or new step starts over. This creates the next version. Revising a Plan while it runs returns the workflow to shaping.",
   parameters: UpdatePlan,
 } as const;
 
@@ -67,7 +67,7 @@ dependsOn and outcomes follow the update_plan rules. Other steps keep their prog
 const closePlan = {
   name: "close_plan",
   description:
-    "End the current Plan without completing it when its remaining work is no longer needed: another conversation or agent already did it, it was superseded, or the user asked to drop it. A draft, ready, executing or blocked Plan can be closed; a completed or closed one cannot. Done cards keep their evidence; every other card stays as blocked and nothing runs it again, and the Plan leaves the project board. An executing workflow returns to Plan. Give the concrete reason. To change the remaining work instead, revise the Plan with update_plan. Never call this in parallel with update_plan or edit_plan.",
+    "End the current Plan without completing it when its remaining work is no longer needed: another conversation or agent already did it, it was superseded, or the user asked to drop it. A draft, ready, executing or blocked Plan can be closed; a completed or closed one cannot. Done cards keep their evidence; every other card stays as blocked and nothing runs it again, and the Plan leaves the project board. A running workflow returns to shaping. Give the concrete reason. To change the remaining work instead, revise the Plan with update_plan. Never call this in parallel with update_plan or edit_plan.",
   parameters: ClosePlanInput,
 } as const;
 
@@ -75,10 +75,8 @@ type WorkflowTool = "startNewGoal" | "updateGoal" | "updatePlan" | "editPlan" | 
 
 /** The workflow tools each phase offers, in the order the model sees them. */
 const phaseTools = {
-  goal: ["updateGoal", "updatePlan", "editPlan", "startNewGoal"],
-  plan: ["updateGoal", "updatePlan", "editPlan", "closePlan", "startNewGoal"],
-  execute: ["updateGoal", "updatePlan", "editPlan", "closePlan"],
-  verify: ["updateGoal", "closePlan", "startNewGoal"],
+  shaping: ["updateGoal", "updatePlan", "editPlan", "closePlan", "startNewGoal"],
+  running: ["updateGoal", "updatePlan", "editPlan", "closePlan"],
   completed: ["startNewGoal"],
   chat: [],
 } as const satisfies Record<WorkflowPhase, ReadonlyArray<WorkflowTool>>;
@@ -296,12 +294,12 @@ export const workflowInstructions: {
           `- ${rule.id}@${rule.version} (${rule.priority}; ${ruleSource(rule)}): ${rule.instruction}\n  Evidence: ${rule.requiredEvidence.join("; ") || "(none)"}`,
       )
       .join("\n");
-    const common = `Workflow phase: ${state.phase}.
+    const common = `Workflow phase: ${state.phase} (${state.mode} mode).
 Current Goal instance ID: ${goalInstanceId ?? "(none; legacy/unbound)"}. For start_new_goal, use this exact ID as previousGoalInstanceId (null only if none). This is a snapshot; the owner checks the current ID again at request time.
 Goal and Plan are durable artifacts, not substitutes for a conversational answer.
 Use only the workflow artifact tools available in this phase, and update an artifact when the user's decisions materially change it.
 Never claim an artifact was stored unless its update tool completed.
-When an explicit user decision changes saved Goal constraints or non-goals, persist that decision with update_goal before proceeding; do not treat an artifact you can update as an external dependency or ask the user to use an unverified Goal editor. Do not ask again for an approval already explicitly given, and never infer permission from a generic resume request. While the Plan runs, update_goal returns the workflow to Plan. Synchronize the Plan with the revised Goal and wait for execution confirmation.
+When an explicit user decision changes saved Goal constraints or non-goals, persist that decision with update_goal before proceeding; do not treat an artifact you can update as an external dependency or ask the user to use an unverified Goal editor. Do not ask again for an approval already explicitly given, and never infer permission from a generic resume request. While the Plan runs, update_goal returns the workflow to shaping unless a kanban board runs it. Synchronize the Plan with the revised Goal and wait until running it is confirmed.
 Applicable workflow rules (reference these ids from Plan steps; do not copy their text into the artifact):
 ${applicableRules || "(none)"}${resolved.degraded.includes("embedding") ? "\nOptional semantic rule retrieval was unavailable; required metadata rules still apply." : ""}${resolved.degraded.includes("source") ? "\nOne or more optional structured rule sources were invalid or unreadable and were skipped." : ""}`;
 
@@ -317,7 +315,8 @@ Blocking questions:
 ${compactList(state.goal.openQuestions.filter((question) => question.blocking).map((question) => question.question))}`
       : "Goal: not recorded yet.";
 
-    return Match.value(state.phase).pipe(
+    // Shaping reads as its mode: the planner of a Goal mode Goal, or one the user approves.
+    return Match.value(state.phase === "shaping" ? state.mode : state.phase).pipe(
       Match.when("chat", () => null),
       Match.when(
         "completed",
@@ -342,12 +341,10 @@ ${goal}
 
 ${plan}`;
       }),
-      // Verify is only a phase saved before the board judged outcomes; it reads as running.
-      Match.whenOr(
-        "execute",
-        "verify",
+      Match.when(
+        "running",
         () => `${common}
-The current Plan runs on its kanban board: card agents execute the cards in separate worktrees and a verifier judges each Goal outcome; only those verdicts complete the Goal. You do not execute cards, verify them or record their progress yourself. Answer questions about the run from the board and the outcome statuses, without claiming work you did not see done. When the user changes the scope, design or acceptance criteria, revise the Plan with edit_plan, or with update_plan, which returns the workflow to Plan so the revised version can be confirmed before it runs again. Close the Plan with close_plan when its remaining work is no longer needed.
+The current Plan runs on its kanban board: card agents execute the cards in separate worktrees and a verifier judges each Goal outcome; only those verdicts complete the Goal. You do not execute cards, verify them or record their progress yourself. Answer questions about the run from the board and the outcome statuses, without claiming work you did not see done. When the user changes the scope, design or acceptance criteria, revise the Plan with edit_plan, or with update_plan, which returns the workflow to shaping so the revised version can be confirmed before it runs again. Close the Plan with close_plan when its remaining work is no longer needed.
 
 ${goal}
 

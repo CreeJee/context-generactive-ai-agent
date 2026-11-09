@@ -14,7 +14,25 @@ import {
   Schema,
 } from "effect";
 import { Embedder, type EmbeddingError } from "../memory/embedding/embedder.ts";
-import { WorkflowPhase } from "./workflow.ts";
+import type { WorkflowPhase } from "./workflow.ts";
+
+/**
+ * The work a rule guides: defining the Goal, planning, executing cards or verifying them. Rule
+ * files name these, so they stay apart from the workflow's phases.
+ */
+export const RulePhase = Schema.Literals(["goal", "plan", "execute", "verify"]);
+export type RulePhase = typeof RulePhase.Type;
+
+/**
+ * The rules a conversation in each phase reads: shaping defines the Goal and plans; while the Plan
+ * runs the conversation only revises it, and card agents read no rules.
+ */
+export const rulePhases = {
+  chat: [],
+  shaping: ["goal", "plan"],
+  running: ["plan"],
+  completed: [],
+} as const satisfies Record<WorkflowPhase, ReadonlyArray<RulePhase>>;
 
 export const RuleSource = Schema.TaggedUnion({
   builtin: { name: Schema.String },
@@ -31,7 +49,7 @@ export const WorkflowRule = Schema.Struct({
   id: Schema.String.pipe(Schema.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/))),
   version: Schema.Int,
   title: Schema.NonEmptyString,
-  phases: Schema.Array(WorkflowPhase),
+  phases: Schema.Array(RulePhase),
   priority: Schema.Literals(["required", "recommended"]),
   terms: Schema.Array(Schema.String),
   instruction: Schema.NonEmptyString,
@@ -41,7 +59,7 @@ export const WorkflowRule = Schema.Struct({
 export type WorkflowRule = typeof WorkflowRule.Type;
 
 export interface RuleQuery {
-  readonly phase: WorkflowPhase;
+  readonly phases: ReadonlyArray<RulePhase>;
   readonly text: string;
   /** Additional project or skill rules. Built-in ids cannot be overridden. */
   readonly rules?: readonly WorkflowRule[];
@@ -210,12 +228,12 @@ const make = Effect.gen(function* () {
   const vectors = (rules: readonly WorkflowRule[]) => Cache.get(vectorSets, rules);
 
   return {
-    resolve: ({ phase, text, rules = [], limit = 3 }: RuleQuery): Effect.Effect<ResolvedRules> => {
+    resolve: ({ phases, text, rules = [], limit = 3 }: RuleQuery): Effect.Effect<ResolvedRules> => {
       // A built-in rule keeps its id; a supplied rule with the same id is ignored.
       const candidates = EffectArray.dedupeWith(
         [...builtInWorkflowRules, ...rules],
         (left, right) => left.id === right.id,
-      ).filter((rule) => rule.phases.includes(phase));
+      ).filter((rule) => rule.phases.some((phase) => phases.includes(phase)));
       const required = candidates.filter((rule) => rule.priority === "required");
       const optional = candidates.filter((rule) => rule.priority === "recommended");
       if (optional.length === 0) return Effect.succeed({ rules: required, degraded: [] as const });

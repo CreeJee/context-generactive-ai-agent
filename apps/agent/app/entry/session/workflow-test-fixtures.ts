@@ -3,19 +3,18 @@ import type { WorkflowState } from "../api";
 
 /** Deliberately supplied server decisions: UI tests must not recalculate domain policy. */
 export const allowedWorkflowActions: SessionRunState["actions"] = {
-  phases: {
+  moves: {
     chat: { allowed: true },
-    goal: { allowed: true },
     plan: { allowed: true },
-    execute: { allowed: true, intent: "start" },
-    verify: { allowed: true },
-    completed: { allowed: false, reason: "goal_terminal" },
+    goal: { allowed: true },
+    run: { allowed: true, intent: "start" },
   },
   controls: { pause: { allowed: true }, resume: { allowed: true }, stop: { allowed: true } },
 };
 
 export const workflowFixture: WorkflowState = {
-  phase: "plan",
+  phase: "shaping",
+  mode: "plan",
   goal: {
     version: 2,
     statement: "Repair workflow",

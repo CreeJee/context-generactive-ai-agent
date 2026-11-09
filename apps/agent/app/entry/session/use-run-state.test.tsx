@@ -41,7 +41,8 @@ const snapshot = (version: number): SessionRunState => ({
     compactAtTokens: 64600,
   },
   workflow: {
-    phase: "plan",
+    phase: "shaping",
+    mode: "plan",
     goal: {
       version,
       statement: "Repair workflow",
@@ -103,7 +104,7 @@ describe("server mutation results", () => {
     return { client, run };
   }
 
-  it.live.each(["phase", "control"] as const)(
+  it.live.each(["move", "control"] as const)(
     "%s changes refresh artifacts and decisions together, including refusals",
     (kind) =>
       Effect.gen(function* () {
@@ -119,21 +120,21 @@ describe("server mutation results", () => {
             ...snapshot(2),
             actions: {
               ...allowedWorkflowActions,
-              phases: {
-                ...allowedWorkflowActions.phases,
-                execute: { allowed: false, reason: "plan_outdated" },
+              moves: {
+                ...allowedWorkflowActions.moves,
+                run: { allowed: false, reason: "plan_outdated" },
               },
             },
           };
           fetchState.mockResolvedValue(latest);
-          const phase = vi.spyOn(api, "setWorkflowPhase").mockResolvedValue(snapshot(2).workflow);
+          const move = vi.spyOn(api, "moveWorkflow").mockResolvedValue(snapshot(2).workflow);
           const control = vi.spyOn(api, "controlWorkflow").mockResolvedValue(snapshot(2).workflow);
           const mutate = () =>
-            kind === "phase" ? run.setWorkflowPhase("plan") : run.controlWorkflow("pause");
+            kind === "move" ? run.moveWorkflow("plan") : run.controlWorkflow("pause");
           yield* sdkCall(() => mutate());
           expect(client.getQueryData(queryKey)).toEqual(latest);
           const refusal = ApiError.make({ status: 409, code: "run_in_progress", reason: null });
-          phase.mockRejectedValue(refusal);
+          move.mockRejectedValue(refusal);
           control.mockRejectedValue(refusal);
           fetchState.mockResolvedValue(snapshot(3));
           expect(

@@ -53,8 +53,11 @@ import {
   verificationDefault,
   WorkflowAction,
   type WorkflowDisplay,
-  WorkflowPhase,
+  type WorkflowMove,
+  type WorkflowPhase,
   WorkflowState,
+  decodedPlace,
+  storedPlaceFields,
 } from "./contracts.ts";
 import { notStartedStatus, validatePlanDependencies } from "./plan-schedule.ts";
 import { validateStepOutcomes } from "./step-outcomes.ts";
@@ -85,6 +88,8 @@ export {
   VerificationStatus,
   WorkflowAction,
   WorkflowDisplay,
+  WorkflowMode,
+  WorkflowMove,
   WorkflowPhase,
   WorkflowState,
 } from "./contracts.ts";
@@ -212,7 +217,13 @@ export const UpdatePlan = Schema.Struct({
 });
 export type UpdatePlan = typeof UpdatePlan.Type;
 
-const emptyState = (): WorkflowState => ({ phase: "chat", goal: null, plan: null, ledger: [] });
+const emptyState = (): WorkflowState => ({
+  phase: "chat",
+  mode: "plan",
+  goal: null,
+  plan: null,
+  ledger: [],
+});
 
 // A saved Plan's steps may still hold the statuses written before cards.
 const PersistedPlanArtifact = Schema.Struct({
@@ -220,7 +231,7 @@ const PersistedPlanArtifact = Schema.Struct({
   steps: Schema.Array(PersistedPlanStep),
 });
 const PersistedWorkflowState = Schema.Struct({
-  phase: WorkflowPhase,
+  ...storedPlaceFields,
   goal: Schema.NullOr(GoalArtifact),
   plan: Schema.NullOr(PersistedPlanArtifact),
   ledger: Schema.Array(LedgerEvent),
@@ -229,7 +240,12 @@ const persistedPlan = (plan: typeof PersistedPlanArtifact.Type | null): Workflow
   plan === null ? null : { ...plan, steps: cardStatuses(plan.steps) };
 export const decodeWorkflowState = (json: string) =>
   Schema.decodeEffect(Schema.fromJsonString(PersistedWorkflowState))(json).pipe(
-    Effect.map((state): WorkflowState => ({ ...state, plan: persistedPlan(state.plan) })),
+    Effect.map((stored): WorkflowState => ({
+      ...decodedPlace(stored),
+      goal: stored.goal,
+      plan: persistedPlan(stored.plan),
+      ledger: stored.ledger,
+    })),
   );
 const decodePersistedPlan = Schema.decodeEffect(Schema.fromJsonString(PersistedPlanArtifact));
 /** The Plan a revision keeps in `plan_json`; NULL when the revision has none. */
@@ -296,6 +312,7 @@ export class WorkflowTransitionRefused extends Schema.TaggedError<
 const withStanding = (state: WorkflowState, standing: Standing, at: string): WorkflowState => ({
   ...state,
   phase: standing.phase,
+  mode: standing.mode,
   goal:
     state.goal === null || standing.goal === null || standing.goal.status === state.goal.status
       ? state.goal
@@ -306,7 +323,14 @@ const withStanding = (state: WorkflowState, standing: Standing, at: string): Wor
       : { ...state.plan, status: standing.plan.status, updatedAt: at },
 });
 const unchanged = (next: WorkflowState, current: WorkflowState) =>
-  next.phase === current.phase && next.goal === current.goal && next.plan === current.plan;
+  next.phase === current.phase &&
+  next.mode === current.mode &&
+  next.goal === current.goal &&
+  next.plan === current.plan;
+
+/** A ledger's name for where a state is; shaping and running say whose approval they wait for. */
+const placeText = ({ phase, mode }: WorkflowState) =>
+  phase === "shaping" || phase === "running" ? `${phase} (${mode})` : phase;
 
 const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
   Effect.gen(function* () {
@@ -446,9 +470,10 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
         },
       );
       yield* sql`INSERT INTO workflow_state_revisions
-        (session_id, phase, goal_json, plan_json, ledger_length, goal_version, plan_version,
+        (session_id, phase, mode, goal_json, plan_json, ledger_length, goal_version, plan_version,
          provenance, created_at, goal_instance_id, author_json)
-        VALUES (${sessionId}, ${state.phase}, ${goalJson}, ${planJson}, ${state.ledger.length},
+        VALUES (${sessionId}, ${state.phase}, ${state.mode}, ${goalJson}, ${planJson},
+          ${state.ledger.length},
           ${state.goal?.version ?? null}, ${state.plan?.version ?? null}, 'recorded', ${now},
           (SELECT goal_instance_id FROM workflow_goal_identities WHERE session_id = ${sessionId}),
           ${authorJson})`;
@@ -624,6 +649,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
         : insertGoalIdentity(sessionId, newId, now);
       yield* save(sessionId, {
         phase: standing.phase,
+        mode: standing.mode,
         goal: {
           ...input.goal,
           version: 1,
@@ -832,15 +858,16 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
         Effect.map((repaired) => repaired.flat()),
       ),
 
-      setPhase: (sessionId: string, phase: WorkflowPhase) =>
+      /** Works in a mode the user chose, or runs the approved Plan (`run`). */
+      move: (sessionId: string, move: WorkflowMove) =>
         transacted(
           Effect.gen(function* () {
             const current = yield* get(sessionId);
             const state = goalState(current);
             const outcome =
-              phase === "execute"
+              move === "run"
                 ? goalTransitions.ExecutionApproved(state, GoalEvent.ExecutionApproved())
-                : goalTransitions.Navigated(state, GoalEvent.Navigated({ phase }));
+                : goalTransitions.Navigated(state, GoalEvent.Navigated({ to: move }));
             if (outcome._tag === "Refused")
               return yield* WorkflowTransitionRefused.make({ reason: outcome.reason });
             const now = yield* nowIso;
@@ -849,7 +876,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
               ...next,
               ledger: [
                 ...next.ledger,
-                event(current, "phase_changed", `${current.phase} -> ${phase}`, now),
+                event(current, "phase_changed", `${placeText(current)} -> ${placeText(next)}`, now),
               ],
             });
           }),

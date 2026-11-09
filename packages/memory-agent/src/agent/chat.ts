@@ -161,6 +161,7 @@ import {
   NewGoalSettlement,
   Workflows,
   type WorkflowAction,
+  type WorkflowMove,
   type WorkflowPhase,
   type WorkflowState,
 } from "../workflow/workflow.ts";
@@ -178,7 +179,7 @@ import {
   GoalExecutionPayload,
 } from "../workflow/goal-execution-contracts.ts";
 import { toolProgressFingerprint } from "../workflow/tool-progress.ts";
-import { WorkflowRules } from "../workflow/rules.ts";
+import { rulePhases, WorkflowRules } from "../workflow/rules.ts";
 import { localWorkflowRules } from "../workflow/sources.ts";
 import {
   LifecycleOutcome,
@@ -365,13 +366,13 @@ const cancelWaitMs = 5_000;
 const afterRunBudget = 200;
 
 /**
- * Plan/Verify never receive project mutation, outside access or delegation tools, and receive
- * only the MCP tools their servers mark read-only.
+ * Outside plain chat the conversation plans, and the board's card agents do the work: it never
+ * receives project mutation, outside access or delegation tools, and receives only the MCP tools
+ * their servers mark read-only.
  */
 const readOnlyWorkflowPhases = HashSet.fromIterable<WorkflowPhase>([
-  "goal",
-  "plan",
-  "verify",
+  "shaping",
+  "running",
   "completed",
 ]);
 const workflowReadToolNames = HashSet.fromIterable([
@@ -397,8 +398,6 @@ const workflowReadToolNames = HashSet.fromIterable([
   "edit_plan",
   "close_plan",
 ]);
-/** Verify can execute checks, but cannot mutate source files or install dependencies. */
-const verificationToolNames = HashSet.fromIterable(["save_code_skill", "run_skill"]);
 
 type InternalFollowup = Data.TaggedEnum<{
   notification: {};
@@ -634,14 +633,15 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     );
   /** A Goal mode Plan its planner saved ready for the current Goal, waiting for nobody. */
   const goalModeReady = (state: WorkflowState) =>
-    state.phase === "goal" &&
+    state.phase === "shaping" &&
+    state.mode === "goal" &&
     state.goal !== null &&
     (state.goal.status === "active" || state.goal.status === "draft") &&
     state.plan?.status === "ready" &&
     state.plan.goalVersion === state.goal.version;
   /** An approved Plan runs on a kanban board; the chat never executes it. */
   const executesPlan = (state: WorkflowState) =>
-    (state.phase === "execute" || state.phase === "verify") && state.plan?.status === "executing";
+    state.phase === "running" && state.plan?.status === "executing";
   /**
    * Starts the session's kanban board unless one runs: card agents execute the approved Plan and
    * the chat plans (decisions.md "outcome 장부와 이어 쓰는 Plan"). Why it could not start, if so.
@@ -1788,7 +1788,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               Effect.provideContext(workflowRuleContext),
             );
             const resolved = yield* workflowRules.resolve({
-              phase: workflow.phase,
+              phases: rulePhases[workflow.phase],
               text: [
                 turn?.text ?? "",
                 workflow.goal?.statement ?? "",
@@ -2047,16 +2047,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           Match.exhaustive,
         );
         const gate = yield* Effect.forEach(gateBindings, permissionGate.hookFor);
-        // Plan/Verify have a hard mutation boundary. Verify additionally receives only the code
-        // skill tools from the approved tool set, so it can build and test without editing source.
+        // Outside plain chat the approved tools, which can mutate, are not offered.
         const phaseApproved = (binding?: BackgroundBinding) =>
-          reportSource !== null || (workflowReadOnly && workflow.phase !== "verify")
+          reportSource !== null || workflowReadOnly
             ? []
-            : approvedTools
-                .toolsFor(project, undefined, binding)
-                .filter(
-                  ({ tool }) => !workflowReadOnly || HashSet.has(verificationToolNames, tool.name),
-                );
+            : approvedTools.toolsFor(project, undefined, binding);
         const phaseApprovedTools = phaseApproved({
           sessionId,
           runId,
@@ -2549,13 +2544,13 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         }),
       ),
 
-    /** Changes the durable workflow phase. Execute also records the user's Plan approval. */
-    setWorkflowPhase: (sessionId: string, holder: string | null, phase: WorkflowPhase) =>
+    /** Moves the durable workflow to a mode; `run` also records the user's Plan approval. */
+    moveWorkflow: (sessionId: string, holder: string | null, move: WorkflowMove) =>
       Effect.gen(function* () {
         yield* refuseOtherHolder(sessionId, holder);
         yield* sessions.get(sessionId);
         if (isTruthy(yield* liveRuns.get(sessionId))) return yield* runInProgress();
-        const state = yield* workflows.setPhase(sessionId, phase);
+        const state = yield* workflows.move(sessionId, move);
         yield* execution.stop(sessionId);
         yield* cancelProviderRetries(sessionId);
         // A board that cannot start is offered again from the board panel.
@@ -2842,7 +2837,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           // current Goal is approved as the user would approve it in Plan mode.
           const workflow =
             !restarted && goalModeReady(reconciled)
-              ? yield* workflows.setPhase(sessionId, "execute").pipe(
+              ? yield* workflows.move(sessionId, "run").pipe(
                   Effect.tap(() => events.publishSession(sessionId, "run-state")),
                   Effect.catchTag("WorkflowTransitionRefused", () => Effect.succeed(reconciled)),
                 )
@@ -2854,7 +2849,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           if (executesPlan(workflow)) {
             const refused = yield* startBoard(
               sessionId,
-              reconciled.phase === "goal" ? "permission" : "user",
+              reconciled.phase === "shaping" && reconciled.mode === "goal" ? "permission" : "user",
             );
             if (Option.isSome(refused)) {
               yield* execution.blockPending(sessionId, last.runId, {

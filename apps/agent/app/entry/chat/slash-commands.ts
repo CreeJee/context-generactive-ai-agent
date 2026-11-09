@@ -15,9 +15,9 @@ export type SlashCommand = Data.TaggedEnum<{
   cancel: {};
   /** Stops sending the model tool output it has already answered from. */
   compact: {};
-  /** Selects Goal/Plan input or starts execution of a ready Plan. */
+  /** Selects Goal/Plan input or runs a ready Plan on its board. */
   workflow: {
-    readonly phase: "goal" | "plan" | "execute";
+    readonly move: "goal" | "plan" | "run";
     readonly request: string;
   };
   workflow_status: {};
@@ -249,11 +249,11 @@ function parseSlashBody(draft: string, context: SlashContext): SlashParse {
     case "goal":
     case "plan":
       return SlashParse.command({
-        command: SlashCommand.workflow({ phase: spec.name, request: rest }),
+        command: SlashCommand.workflow({ move: spec.name, request: rest }),
       });
     case "execute":
       return SlashParse.command({
-        command: SlashCommand.workflow({ phase: "execute", request: "" }),
+        command: SlashCommand.workflow({ move: "run", request: "" }),
       });
     case "status":
       return SlashParse.command({ command: SlashCommand.workflow_status() });

@@ -7,7 +7,7 @@ import {
   type DecisionAnswer,
   type HumanDecisionRequest,
   type WorkflowAction,
-  type WorkflowPhase,
+  type WorkflowMove,
 } from "../../api";
 import { sessionQueries } from "../session";
 import { projectQueries } from "../project";
@@ -319,7 +319,7 @@ function useCancelRunMutationBody(projectId: string, sessionId: string, holder: 
 }
 
 export type WorkflowChange = Data.TaggedEnum<{
-  phase: { readonly phase: WorkflowPhase };
+  move: { readonly move: WorkflowMove };
   control: { readonly action: WorkflowAction };
 }>;
 export const WorkflowChange = Data.taggedEnum<WorkflowChange>();
@@ -334,7 +334,7 @@ function useWorkflowMutationBody(projectId: string, sessionId: string, holder: s
   const client = useQueryClient();
   return useMutation({
     mutationFn: WorkflowChange.$match({
-      phase: ({ phase }) => api.setWorkflowPhase(sessionId, holder, phase),
+      move: ({ move }) => api.moveWorkflow(sessionId, holder, move),
       control: ({ action }) => api.controlWorkflow(sessionId, holder, action),
     }),
     onSuccess: () =>

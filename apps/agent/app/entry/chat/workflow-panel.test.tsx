@@ -24,59 +24,18 @@ function button(html: string, label: string) {
 }
 
 describe("server-authoritative workflow UI", () => {
-  test("labels a passed, completed Verify workflow as finished, but not an active one", () => {
-    const verified = {
-      ...workflowFixture,
-      phase: "verify" as const,
-      goal: { ...workflowFixture.goal!, status: "completed" as const },
-      plan: {
-        ...workflowFixture.plan!,
-        status: "completed" as const,
-        verification: { ...workflowFixture.plan!.verification, status: "passed" as const },
-      },
-    };
-    expect(workflowModeLabel(verified)).toBe("완료");
-    expect(workflowModeLabel({ ...verified, phase: "completed" })).toBe("완료");
-    expect(
-      workflowModeLabel({ ...verified, plan: { ...verified.plan, status: "executing" } }),
-    ).toBe("Verify");
-    expect(
-      workflowModeLabel({
-        ...verified,
-        plan: {
-          ...verified.plan,
-          verification: { ...verified.plan.verification, status: "failed" },
-        },
-      }),
-    ).toBe("Verify");
-    expect(workflowModeLabel({ ...verified, goal: { ...verified.goal, status: "active" } })).toBe(
-      "Verify",
-    );
-    expect(workflowModeLabel({ ...verified, phase: "plan" })).toBe("Plan");
-  });
-  test("shows verification only while the plan is executing", () => {
-    const state = { ...workflowFixture, phase: "verify" as const };
-    const executing = renderToStaticMarkup(<WorkflowArtifactPanel {...props} state={state} />);
-    expect(executing).toContain("검증 중");
-
-    for (const [status, label] of [
-      ["blocked", "막힘"],
-      ["completed", "완료"],
-      ["ready", "준비 완료"],
-    ] as const) {
-      const html = renderToStaticMarkup(
-        <WorkflowArtifactPanel {...props} state={{ ...state, plan: { ...state.plan!, status } }} />,
-      );
-      expect(html).toContain(label);
-      expect(html).not.toContain("검증 중");
-    }
+  test("labels a completed workflow as done and any other by its mode", () => {
+    expect(workflowModeLabel({ ...workflowFixture, phase: "completed" })).toBe("완료");
+    expect(workflowModeLabel({ ...workflowFixture, phase: "running", mode: "goal" })).toBe("Goal");
+    expect(workflowModeLabel(workflowFixture)).toBe("Plan");
+    expect(workflowModeLabel({ ...workflowFixture, phase: "chat", mode: "goal" })).toBe("Chat");
   });
   test("leaves the Plan to a running board's loop instead of offering to continue it", () => {
     const actions = {
       ...allowedWorkflowActions,
-      phases: {
-        ...allowedWorkflowActions.phases,
-        execute: { allowed: true as const, intent: "continue" as const },
+      moves: {
+        ...allowedWorkflowActions.moves,
+        run: { allowed: true as const, intent: "continue" as const },
       },
     };
     const html = renderToStaticMarkup(
@@ -91,9 +50,9 @@ describe("server-authoritative workflow UI", () => {
     expect(button(html, "계획 실행")).not.toContain(' disabled=""');
     const actions = {
       ...allowedWorkflowActions,
-      phases: {
-        ...allowedWorkflowActions.phases,
-        execute: { allowed: true as const, intent: "continue" as const },
+      moves: {
+        ...allowedWorkflowActions.moves,
+        run: { allowed: true as const, intent: "continue" as const },
       },
     };
     expect(
@@ -106,9 +65,9 @@ describe("server-authoritative workflow UI", () => {
   test("honors refusal even when the artifact looks executable", () => {
     const actions = {
       ...allowedWorkflowActions,
-      phases: {
-        ...allowedWorkflowActions.phases,
-        execute: { allowed: false as const, reason: "plan_outdated" as const },
+      moves: {
+        ...allowedWorkflowActions.moves,
+        run: { allowed: false as const, reason: "plan_outdated" as const },
       },
     };
     const html = renderToStaticMarkup(<WorkflowArtifactPanel {...props} actions={actions} />);
@@ -141,7 +100,7 @@ describe("server-authoritative workflow UI", () => {
     const html = renderToStaticMarkup(
       <WorkflowArtifactPanel
         {...props}
-        state={{ ...workflowFixture, phase: "goal" }}
+        state={{ ...workflowFixture, mode: "goal" }}
         actions={actions}
       />,
     );

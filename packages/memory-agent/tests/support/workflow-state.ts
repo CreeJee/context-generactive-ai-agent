@@ -34,9 +34,10 @@ export const storeWorkflowState = Effect.fnUntraced(function* (sessionId: string
   );
   yield* sqlRun(
     `INSERT INTO workflow_state_revisions
-       (session_id, phase, goal_json, plan_json, ledger_length, goal_version, plan_version,
+       (session_id, phase, mode, goal_json, plan_json, ledger_length, goal_version, plan_version,
         provenance, created_at, goal_instance_id)
-     VALUES (?1, ?2 ->> 'phase', nullif(?2 -> '$.goal', 'null'), nullif(?2 -> '$.plan', 'null'),
+     VALUES (?1, ?2 ->> 'phase', ?2 ->> 'mode', nullif(?2 -> '$.goal', 'null'),
+       nullif(?2 -> '$.plan', 'null'),
        json_array_length(?2, '$.ledger'), ?2 ->> '$.goal.version', ?2 ->> '$.plan.version',
        'recorded', 'test',
        (SELECT goal_instance_id FROM workflow_goal_identities WHERE session_id = ?1))`,

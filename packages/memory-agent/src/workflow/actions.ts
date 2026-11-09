@@ -8,12 +8,12 @@ import {
   type Transition,
 } from "./goal-transitions.ts";
 import type { WorkflowActionDecision, WorkflowActionReason, WorkflowActions } from "./contracts.ts";
-import type { WorkflowAction, WorkflowPhase, WorkflowState } from "./workflow.ts";
+import type { WorkflowAction, WorkflowMove, WorkflowState } from "./workflow.ts";
 
 export { WorkflowActionDecision, WorkflowActionReason, WorkflowActions } from "./contracts.ts";
 
 export type WorkflowActionRequest = Data.TaggedEnum<{
-  phase: { readonly phase: WorkflowPhase };
+  move: { readonly move: WorkflowMove };
   control: { readonly action: WorkflowAction };
 }>;
 export const WorkflowActionRequest = Data.taggedEnum<WorkflowActionRequest>();
@@ -25,7 +25,7 @@ export interface WorkflowActionContext {
 
 /** Shared by snapshots and serialized mutations against the latest durable state. */
 const isActionRequest = Predicate.or(
-  WorkflowActionRequest.$is("phase"),
+  WorkflowActionRequest.$is("move"),
   WorkflowActionRequest.$is("control"),
 );
 export const evaluateWorkflowAction: {
@@ -49,16 +49,16 @@ function evaluateWorkflowActionBody(
   if (context.lease?.state === "other") return { allowed: false, reason: "session_in_use" };
   if (
     context.running === true &&
-    (WorkflowActionRequest.$is("phase")(request) || request.action === "resume")
+    (WorkflowActionRequest.$is("move")(request) || request.action === "resume")
   )
     return { allowed: false, reason: "run_in_progress" };
   const goalState = goalStateOf(standingOf(state));
   const decided = (outcome: Transition<WorkflowActionReason>): WorkflowActionDecision =>
     outcome._tag === "Refused" ? { allowed: false, reason: outcome.reason } : { allowed: true };
   return WorkflowActionRequest.$match(request, {
-    phase: ({ phase }): WorkflowActionDecision => {
-      if (phase !== "execute")
-        return decided(goalTransitions.Navigated(goalState, GoalEvent.Navigated({ phase })));
+    move: ({ move }): WorkflowActionDecision => {
+      if (move !== "run")
+        return decided(goalTransitions.Navigated(goalState, GoalEvent.Navigated({ to: move })));
       const approved = decided(
         goalTransitions.ExecutionApproved(goalState, GoalEvent.ExecutionApproved()),
       );
@@ -91,19 +91,12 @@ function workflowActionsBody(
   state: WorkflowState,
   context: WorkflowActionContext = {},
 ): WorkflowActions {
-  const phase = (value: WorkflowPhase) =>
-    evaluateWorkflowAction(state, WorkflowActionRequest.phase({ phase: value }), context);
+  const move = (value: WorkflowMove) =>
+    evaluateWorkflowAction(state, WorkflowActionRequest.move({ move: value }), context);
   const control = (value: WorkflowAction) =>
     evaluateWorkflowAction(state, WorkflowActionRequest.control({ action: value }), context);
   return {
-    phases: {
-      chat: phase("chat"),
-      goal: phase("goal"),
-      plan: phase("plan"),
-      execute: phase("execute"),
-      verify: phase("verify"),
-      completed: phase("completed"),
-    },
+    moves: { chat: move("chat"), plan: move("plan"), goal: move("goal"), run: move("run") },
     controls: { pause: control("pause"), resume: control("resume"), stop: control("stop") },
   };
 }

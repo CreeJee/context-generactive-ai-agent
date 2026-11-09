@@ -210,7 +210,7 @@ testAgent({ testProvider: {} })("skills in a run", (it) => {
               openQuestions: [],
               status: "active",
             });
-            yield* workflows.setPhase(session, "goal");
+            yield* workflows.move(session, "goal");
             break;
           }
         }

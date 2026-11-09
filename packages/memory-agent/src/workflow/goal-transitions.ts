@@ -3,6 +3,7 @@ import type {
   GoalArtifact,
   PlanArtifact,
   VerificationStatus,
+  WorkflowMode,
   WorkflowPhase,
   WorkflowState,
 } from "./workflow.ts";
@@ -31,9 +32,10 @@ export interface PlanStanding {
   readonly recoveryPhase: "goal" | "plan" | null;
 }
 
-/** What decides a session's Goal transitions: its phase, its Goal and its Plan. */
+/** What decides a session's Goal transitions: its phase and mode, its Goal and its Plan. */
 export interface Standing {
   readonly phase: WorkflowPhase;
+  readonly mode: WorkflowMode;
   readonly goal: GoalStanding | null;
   readonly plan: PlanStanding | null;
 }
@@ -46,6 +48,7 @@ export const stepsOf = (steps: PlanArtifact["steps"]) => ({
 
 export const standingOf = (state: WorkflowState): Standing => ({
   phase: state.phase,
+  mode: state.mode,
   goal:
     state.goal === null
       ? null
@@ -95,7 +98,7 @@ export const GoalState = Data.taggedEnum<GoalState>();
 
 /** A stored Goal and Plan no transition makes. `repair` turns each into a state. */
 export type GoalStateConflict = Data.TaggedEnum<{
-  /** R1: the Goal and its Plan finished, yet the phase stays in Execute. */
+  /** R1: the Goal and its Plan finished, yet the phase stays running. */
   GoalCompletedPhaseOpen: { readonly standing: Standing };
   /** R2: the Plan finished for the current Goal version, yet the Goal stays open. */
   PlanCompletedGoalOpen: { readonly standing: Standing };
@@ -119,7 +122,7 @@ export const decodeGoalState = (
     Match.withReturnType<Result.Result<GoalState, GoalStateConflict>>(),
     Match.when("failed", () => state(GoalState.Stopped)),
     Match.when("completed", () =>
-      standing.phase === "execute" &&
+      standing.phase === "running" &&
       (plan === null || plan.status === "completed" || plan.status === "closed")
         ? conflict(GoalStateConflict.GoalCompletedPhaseOpen)
         : state(GoalState.Completed),
@@ -163,11 +166,11 @@ export const repair = (conflict: GoalStateConflict): GoalState =>
   Match.valueTags(conflict, {
     GoalCompletedPhaseOpen: ({ standing }) =>
       GoalState.Completed({ standing: { ...standing, phase: "completed" } }),
-    // Recording the Goal's completion evidence again lets the next Verify run finish it.
+    // The board judges the outcomes again and completes the Goal once they are met.
     PlanCompletedGoalOpen: ({ standing }) => {
       const repaired: Standing = {
         ...standing,
-        phase: "verify",
+        phase: "running",
         plan: standing.plan === null ? null : { ...standing.plan, status: "executing" },
       };
       return standing.goal?.status === "paused"
@@ -179,7 +182,7 @@ export const repair = (conflict: GoalStateConflict): GoalState =>
       GoalState.Shaping({
         standing: {
           ...standing,
-          phase: "goal",
+          phase: "shaping",
           plan: standing.plan === null ? null : { ...standing.plan, status: "ready" },
         },
       }),
@@ -189,33 +192,20 @@ export const repair = (conflict: GoalStateConflict): GoalState =>
 export const goalStateOf = (standing: Standing): GoalState =>
   Result.match(decodeGoalState(standing), { onSuccess: (state) => state, onFailure: repair });
 
-const progressing = (phase: WorkflowPhase) => phase === "execute" || phase === "verify";
-
-/** The only progress position the stored artifacts can make progress from. */
-export const reconciledPhase = ({ phase, goal, plan }: Standing): WorkflowPhase => {
-  if (!progressing(phase)) return phase;
-  if (plan === null || goal === null) return goal === null ? "goal" : "plan";
-  if (!plan.current) return "plan";
-  if (plan.status !== "executing")
-    return plan.status === "completed" || plan.status === "blocked" ? phase : "plan";
-  if (plan.verification === "failed" && plan.evidence) return "execute";
-  if (phase === "execute") return plan.proven ? "verify" : "execute";
-  if (!plan.proven) return "execute";
-  if (!plan.evidence) return "verify";
-  return Match.value(plan.verification).pipe(
-    Match.withReturnType<WorkflowPhase>(),
-    Match.when("failed", () => "execute"),
-    Match.when("invalid_hypothesis", () => plan.recoveryPhase ?? "plan"),
-    Match.whenOr("invalid_criterion", "inconclusive", () => "plan"),
-    Match.whenOr("not_run", "passed", "blocked", () => "verify"),
-    Match.exhaustive,
-  );
-};
+/** Running stays only while an executing, stopped or finished Plan for the current Goal is there. */
+export const reconciledPhase = ({ phase, goal, plan }: Standing): WorkflowPhase =>
+  phase !== "running" ||
+  (goal !== null &&
+    plan !== null &&
+    plan.current &&
+    (plan.status === "executing" || plan.status === "completed" || plan.status === "blocked"))
+    ? phase
+    : "shaping";
 
 /** Something a session's user, model or owner does to its Goal. */
 export type GoalEvent = Data.TaggedEnum<{
-  /** The user opens a screen. Execute is `ExecutionApproved`. */
-  Navigated: { readonly phase: Exclude<WorkflowPhase, "execute"> };
+  /** The user works in plain chat, or shapes the Goal in a mode. Running is `ExecutionApproved`. */
+  Navigated: { readonly to: "chat" | WorkflowMode };
   /** The user approves the Plan, or continues an executing one. */
   ExecutionApproved: {};
   GoalPaused: {};
@@ -241,7 +231,7 @@ export const GoalEvent = Data.taggedEnum<GoalEvent>();
 
 /** Why each event can be refused. */
 export interface GoalRefusals {
-  readonly Navigated: "goal_terminal";
+  readonly Navigated: never;
   readonly ExecutionApproved: "plan_outdated" | "plan_not_ready" | "goal_terminal";
   readonly GoalPaused: "goal_missing" | "goal_terminal" | "goal_not_active";
   readonly GoalResumed: "goal_missing" | "goal_terminal" | "goal_not_paused";
@@ -293,7 +283,8 @@ const approve = ({ standing }: { readonly standing: Standing }) => {
   if (goal === null || plan === null || (plan.status !== "ready" && plan.status !== "executing"))
     return refused("plan_not_ready");
   return moved({
-    phase: "execute",
+    phase: "running",
+    mode: standing.mode,
     goal: goal.status === "draft" ? { ...goal, status: "active" } : goal,
     plan: plan.status === "ready" ? { ...plan, status: "executing" } : plan,
   });
@@ -310,7 +301,7 @@ const pause = withGoal((standing, goal) =>
 const resume = withGoal((standing, goal) =>
   moved({
     ...standing,
-    phase: standing.plan?.status === "executing" ? "execute" : "goal",
+    phase: standing.plan?.status === "executing" ? "running" : "shaping",
     goal: { ...goal, status: "active" },
   }),
 );
@@ -330,13 +321,11 @@ const editGoal =
   ({ status, kanban }: Event<"GoalEdited">) =>
   ({ standing }: { readonly standing: Standing }) =>
     moved({
-      phase: progressing(standing.phase)
-        ? kanban
-          ? standing.phase
-          : "plan"
-        : standing.phase === "completed"
-          ? "goal"
+      phase:
+        (standing.phase === "running" && !kanban) || standing.phase === "completed"
+          ? "shaping"
           : standing.phase,
+      mode: standing.mode,
       goal: { status, passed: false, proven: false },
       plan: standing.plan === null ? null : { ...standing.plan, current: false },
     });
@@ -345,7 +334,8 @@ const editPlan =
   ({ status, done, proven }: Event<"PlanEdited">) =>
   ({ standing }: { readonly standing: Standing }) =>
     moved({
-      phase: progressing(standing.phase) ? "plan" : standing.phase,
+      phase: standing.phase === "running" ? "shaping" : standing.phase,
+      mode: standing.mode,
       goal: standing.goal,
       plan: {
         status,
@@ -364,31 +354,36 @@ const close = ({ standing }: { readonly standing: Standing }) => {
   if (plan.status === "completed" || plan.status === "closed") return refused("plan_closed");
   return moved({
     ...standing,
-    phase: progressing(standing.phase) ? "plan" : standing.phase,
+    phase: standing.phase === "running" ? "shaping" : standing.phase,
     plan: { ...plan, status: "closed" },
   });
 };
 
-/** A new Goal starts from Goal or Plan, or once the current Goal's verification closed. */
+/** A new Goal starts while shaping one, or once the current Goal completed. */
 const newGoal =
   (status: "draft" | "active" | null) =>
   ({ standing }: { readonly standing: Standing }): Transition<GoalRefusals["NewGoalStarted"]> => {
     const { phase, goal, plan } = standing;
-    const started = (next: WorkflowPhase) =>
+    const started = () =>
       moved(
         status === null
           ? standing
-          : { phase: next, goal: { status, passed: false, proven: false }, plan: null },
+          : {
+              phase: "shaping",
+              mode: standing.mode,
+              goal: { status, passed: false, proven: false },
+              plan: null,
+            },
       );
-    if (phase === "goal" || phase === "plan")
-      return goal === null ? refused("goal_missing") : started(phase);
+    if (phase === "shaping") return goal === null ? refused("goal_missing") : started();
     const closed = goal?.status === "completed" && goal.passed;
     if (
       closed &&
-      (phase === "verify" ||
-        (phase === "completed" && plan?.status === "completed" && plan.verification === "passed"))
+      phase === "completed" &&
+      plan?.status === "completed" &&
+      plan.verification === "passed"
     )
-      return started("goal");
+      return started();
     return refused("phase_not_authorized");
   };
 
@@ -399,7 +394,7 @@ const editBoard =
       ? refused("plan_missing")
       : moved({
           ...standing,
-          phase: closes && progressing(standing.phase) ? "plan" : standing.phase,
+          phase: closes && standing.phase === "running" ? "shaping" : standing.phase,
           plan: {
             ...standing.plan,
             status: closes ? "closed" : standing.plan.status,
@@ -416,6 +411,7 @@ const meet = ({ standing }: { readonly standing: Standing }) =>
       ? refused("steps_incomplete")
       : moved({
           phase: "completed",
+          mode: standing.mode,
           goal: { status: "completed", passed: true, proven: true },
           plan: {
             ...standing.plan,
@@ -428,9 +424,13 @@ const meet = ({ standing }: { readonly standing: Standing }) =>
 
 /** Every event in every state. A state that is missing from an event is a type error. */
 export const goalTransitions: GoalTransitions = {
-  Navigated: (state, { phase }) => {
+  Navigated: (state, { to }) => {
     const navigate = ({ standing }: { readonly standing: Standing }) =>
-      phase === "completed" ? terminal() : moved({ ...standing, phase });
+      moved(
+        to === "chat"
+          ? { ...standing, phase: "chat" }
+          : { ...standing, phase: "shaping", mode: to },
+      );
     return Match.valueTags(state, {
       NoGoal: navigate,
       Shaping: navigate,

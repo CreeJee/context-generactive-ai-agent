@@ -2818,6 +2818,12 @@ export const migrations: readonly string[] = [
   ALTER TABLE kanban_goals ADD COLUMN planner_rounds INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE kanban_goals ADD COLUMN planner_met INTEGER NOT NULL DEFAULT 0;
   `,
+  `
+  -- Who approves a revision's Plan and its new cards: the user (plan) or the owner (goal).
+  -- Older revisions keep NULL; their phase names the mode, or they were Plan mode.
+  ALTER TABLE workflow_state_revisions ADD COLUMN mode TEXT
+    CHECK (mode IS NULL OR mode IN ('plan', 'goal'));
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

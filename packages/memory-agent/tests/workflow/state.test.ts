@@ -51,12 +51,15 @@ const plan = {
   status: "ready" as const,
 };
 
-/** Goal and ready Plan recorded, with Execute started. */
+/** A state as a test stores it, in whatever shape a released version saved. */
+const stateJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+
+/** Goal and ready Plan recorded, and the Plan running. */
 const executing = Effect.fnUntraced(function* (sessionId: string) {
   const workflows = yield* Workflows;
   yield* workflows.updateGoal(sessionId, goal);
   yield* workflows.updatePlan(sessionId, plan);
-  return yield* workflows.setPhase(sessionId, "execute");
+  return yield* workflows.move(sessionId, "run");
 });
 
 const orchestrator = BoardAuthor.cases.Orchestrator.make({ runId: "test" });
@@ -103,16 +106,16 @@ const workflowTool = Effect.fnUntraced(function* (
 });
 
 testAgent()("Workflows", (it) => {
-  it.effect("versions artifacts and starts a ready Plan on Execute", () =>
+  it.effect("versions artifacts and runs a ready Plan", () =>
     Effect.gen(function* () {
       const id = yield* freshSession;
       const workflows = yield* Workflows;
-      yield* workflows.setPhase(id, "goal");
+      yield* workflows.move(id, "goal");
       yield* workflows.updateGoal(id, goal);
-      yield* workflows.setPhase(id, "plan");
+      yield* workflows.move(id, "plan");
       yield* workflows.updatePlan(id, plan);
-      const state = yield* workflows.setPhase(id, "execute");
-      expect(state.phase).toBe("execute");
+      const state = yield* workflows.move(id, "run");
+      expect(state.phase).toBe("running");
       expect(state.goal).toMatchObject({ version: 1, status: "active" });
       expect(state.plan).toMatchObject({ version: 1, goalVersion: 1, status: "executing" });
       expect(state.ledger.map((event) => event.kind)).toEqual([
@@ -148,7 +151,7 @@ testAgent()("Workflows", (it) => {
   it.effect("refuses a Goal that names two outcomes with one id", () =>
     Effect.gen(function* () {
       const id = yield* freshSession;
-      const updateGoal = yield* workflowTool(id, "goal", "update_goal");
+      const updateGoal = yield* workflowTool(id, "shaping", "update_goal");
       const failure = yield* Effect.flip(
         updateGoal({
           ...goal,
@@ -191,7 +194,7 @@ testAgent()("Workflows", (it) => {
       const id = yield* freshSession;
       const workflows = yield* Workflows;
       yield* workflows.updateGoal(id, goal);
-      const updatePlan = yield* workflowTool(id, "plan", "update_plan");
+      const updatePlan = yield* workflowTool(id, "shaping", "update_plan");
       const [store] = plan.steps;
       expect(
         yield* updatePlan({ ...plan, steps: [{ ...store!, outcomes: ["O1", "O9"] }] }),
@@ -252,17 +255,17 @@ testAgent()("Workflows", (it) => {
     }),
   );
 
-  it.effect("refuses Execute until a Plan is ready", () =>
+  it.effect("refuses to run until a Plan is ready", () =>
     Effect.gen(function* () {
       const id = yield* freshSession;
-      const result = yield* Effect.result((yield* Workflows).setPhase(id, "execute"));
+      const result = yield* Effect.result((yield* Workflows).move(id, "run"));
       expect(Result.isFailure(result)).toBe(true);
       if (Result.isFailure(result))
         expect(result.failure).toMatchObject({ reason: "plan_not_ready" });
     }),
   );
 
-  it.effect("returns Execute to Plan when the Plan is revised", () =>
+  it.effect("returns a running Plan to shaping when the Plan is revised", () =>
     Effect.gen(function* () {
       const id = yield* freshSession;
       yield* executing(id);
@@ -270,7 +273,7 @@ testAgent()("Workflows", (it) => {
         ...plan,
         summary: "Revised execution scope",
       });
-      expect(state.phase).toBe("plan");
+      expect(state.phase).toBe("shaping");
       expect(state.plan).toMatchObject({
         version: 2,
         status: "ready",
@@ -279,7 +282,7 @@ testAgent()("Workflows", (it) => {
       });
       expect(state.ledger.slice(-2)).toMatchObject([
         { kind: "plan_replanned", detail: "plan v2 (ready)" },
-        { kind: "phase_changed", detail: "execute -> plan (plan revised)" },
+        { kind: "phase_changed", detail: "running -> shaping (plan revised)" },
       ]);
       expect(state.ledger.at(-1)?.sequence).toBe(state.ledger.at(-2)!.sequence + 1);
     }),
@@ -330,7 +333,7 @@ testAgent()("Workflows", (it) => {
       const workflows = yield* Workflows;
       yield* executing(id);
       yield* finishCard(id, "store");
-      const editPlan = yield* workflowTool(id, "execute", "edit_plan");
+      const editPlan = yield* workflowTool(id, "running", "edit_plan");
       const step = {
         title: "Expose artifacts",
         description: "Show the Plan on the page",
@@ -350,7 +353,7 @@ testAgent()("Workflows", (it) => {
           ],
         }),
       ).toMatchObject({
-        phase: "execute",
+        phase: "running",
         plan: {
           version: 2,
           steps: [
@@ -389,7 +392,7 @@ testAgent()("Workflows", (it) => {
       const state = yield* workflows.updateGoal(id, { ...goal, statement: "Changed goal" });
       expect(state.goal?.version).toBe(2);
       expect(state.plan?.goalVersion).toBe(1);
-      const execute = yield* Effect.result(workflows.setPhase(id, "execute"));
+      const execute = yield* Effect.result(workflows.move(id, "run"));
       expect(Result.isFailure(execute)).toBe(true);
       if (Result.isFailure(execute))
         expect(execute.failure).toMatchObject({ reason: "plan_outdated" });
@@ -499,7 +502,7 @@ testAgent()("Workflows", (it) => {
     Effect.gen(function* () {
       const id = yield* freshSession;
       const workflows = yield* Workflows;
-      yield* workflows.setPhase(id, "goal");
+      yield* workflows.move(id, "goal");
       yield* workflows.updateGoal(id, goal);
       yield* workflows.controlGoal(id, "pause");
       const resumed = yield* workflows.controlGoal(id, "resume");
@@ -518,33 +521,54 @@ testAgent()("Workflows", (it) => {
     }),
   );
 
-  it.effect("reconciles a stale Verify with unfinished steps back to Execute", () =>
+  it.effect("reconciles a running phase whose Plan no longer runs back to shaping", () =>
     Effect.gen(function* () {
       const id = yield* freshSession;
       const workflows = yield* Workflows;
-      yield* executing(id);
-      yield* workflows.setPhase(id, "verify");
+      const current = yield* executing(id);
+      yield* storeWorkflowState(
+        id,
+        yield* stateJson({ ...current, plan: { ...current.plan, status: "ready" } }),
+      );
       const state = yield* workflows.reconcile(id);
-      expect(state.phase).toBe("execute");
-      expect(state.ledger.at(-1)?.detail).toBe("verify -> execute (state reconciled)");
+      expect(state.phase).toBe("shaping");
+      expect(state.ledger.at(-1)?.detail).toBe("running -> shaping (state reconciled)");
+    }),
+  );
+
+  it.effect("reads a phase saved before modes as its mode and place", () =>
+    Effect.gen(function* () {
+      const id = yield* freshSession;
+      const workflows = yield* Workflows;
+      const current = yield* executing(id);
+      const stored = (phase: string) =>
+        stateJson({ ...Struct.omit(current, ["mode"]), phase }).pipe(
+          Effect.andThen((json) => storeWorkflowState(id, json)),
+          Effect.andThen(workflows.get(id)),
+          Effect.map(({ phase, mode }) => ({ phase, mode })),
+        );
+      expect(yield* stored("goal")).toEqual({ phase: "shaping", mode: "goal" });
+      expect(yield* stored("plan")).toEqual({ phase: "shaping", mode: "plan" });
+      expect(yield* stored("execute")).toEqual({ phase: "running", mode: "plan" });
+      expect(yield* stored("verify")).toEqual({ phase: "running", mode: "plan" });
     }),
   );
 });
 
 testAgent()("WorkflowTools live refresh", (it) => {
   it.effect(
-    "execute can synchronize authorized Goal changes without executing the stale Plan",
+    "a running Plan synchronizes authorized Goal changes without running the stale Plan",
     () =>
       Effect.gen(function* () {
         const id = yield* freshSession;
         const workflows = yield* Workflows;
         yield* executing(id);
         const before = yield* workflows.get(id);
-        expect(before.phase).toBe("execute");
+        expect(before.phase).toBe("running");
         const identity = yield* workflows.goalInstanceId(id);
-        const updateGoal = yield* workflowTool(id, "execute", "update_goal");
+        const updateGoal = yield* workflowTool(id, "running", "update_goal");
         expect(yield* updateGoal({ ...goal, nonGoals: [] })).toMatchObject({
-          phase: "plan",
+          phase: "shaping",
           goal: { version: 2, nonGoals: [] },
           goalInstanceId: identity,
         });
@@ -553,11 +577,11 @@ testAgent()("WorkflowTools live refresh", (it) => {
         expect(revised.goal?.verification.status).toBe("not_run");
         expect(revised.ledger.at(-1)).toMatchObject({
           kind: "phase_changed",
-          detail: "execute -> plan (goal revised)",
+          detail: "running -> shaping (goal revised)",
         });
         yield* workflows.updatePlan(id, plan);
         expect((yield* workflows.get(id)).plan?.goalVersion).toBe(2);
-        expect((yield* workflows.setPhase(id, "execute")).phase).toBe("execute");
+        expect((yield* workflows.move(id, "run")).phase).toBe("running");
       }),
   );
 
@@ -583,7 +607,7 @@ testAgent()("WorkflowTools live refresh", (it) => {
           ),
         );
         yield* Effect.addFinalizer(() => Effect.sync(() => publish.mockRestore()));
-        const tool = yield* workflowTool(id, name === "update_goal" ? "goal" : "execute", name);
+        const tool = yield* workflowTool(id, name === "update_goal" ? "shaping" : "running", name);
         const input =
           name === "update_goal"
             ? { ...goal, statement: "Revised goal" }
@@ -631,8 +655,9 @@ testAgent()("server workflow action policy", (it) => {
             plan: { ...state.plan!, status },
           })),
           { ...state, goal: { ...state.goal!, version: 2 } },
-          { ...state, phase: "plan", plan: { ...state.plan!, status: "executing" } },
-          { ...state, phase: "verify", plan: { ...state.plan!, status: "executing" } },
+          { ...state, phase: "shaping", plan: { ...state.plan!, status: "executing" } },
+          { ...state, phase: "running", plan: { ...state.plan!, status: "executing" } },
+          { ...state, phase: "shaping", mode: "goal" },
         ];
         // The ledger goes on from the stored one, as a saved state's does.
         const reset = (current: WorkflowState) =>
@@ -643,7 +668,7 @@ testAgent()("server workflow action policy", (it) => {
         // Each advertised decision must match what the server does with the same persisted state.
         const matches = Effect.fnUntraced(function* <A, E>(
           current: WorkflowState,
-          decision: ReturnType<typeof workflowActions>["phases"]["chat"],
+          decision: ReturnType<typeof workflowActions>["moves"]["chat"],
           attempt: Effect.Effect<A, E>,
         ) {
           const stored = yield* reset(current);
@@ -658,8 +683,8 @@ testAgent()("server workflow action policy", (it) => {
           Effect.fnUntraced(function* (current) {
             const advertised = workflowActions(current);
             yield* Effect.forEach(
-              ["chat", "goal", "plan", "execute", "verify"] as const,
-              (phase) => matches(current, advertised.phases[phase], workflows.setPhase(id, phase)),
+              ["chat", "plan", "goal", "run"] as const,
+              (move) => matches(current, advertised.moves[move], workflows.move(id, move)),
               { discard: true },
             );
             yield* Effect.forEach(
@@ -679,9 +704,9 @@ testAgent()("server workflow action policy", (it) => {
       const id = yield* freshSession;
       const workflows = yield* Workflows;
       yield* executing(id);
-      const state = yield* workflows.setPhase(id, "plan");
-      expect(workflowActions(state).phases.execute).toEqual({ allowed: true, intent: "continue" });
-      expect((yield* workflows.setPhase(id, "execute")).plan).toEqual(state.plan);
+      const state = yield* workflows.move(id, "plan");
+      expect(workflowActions(state).moves.run).toEqual({ allowed: true, intent: "continue" });
+      expect((yield* workflows.move(id, "run")).plan).toEqual(state.plan);
     }),
   );
 
@@ -692,18 +717,18 @@ testAgent()("server workflow action policy", (it) => {
       yield* workflows.updateGoal(id, goal);
       const state = yield* workflows.updatePlan(id, plan);
       const actions = workflowActions(state, { running: true, lease: { state: "mine" } });
-      Object.values(actions.phases).forEach((decision) =>
+      Object.values(actions.moves).forEach((decision) =>
         expect(decision).toEqual({ allowed: false, reason: "run_in_progress" }),
       );
       expect(actions.controls.resume).toEqual({ allowed: false, reason: "run_in_progress" });
       expect(actions.controls.pause.allowed).toBe(true);
       expect(actions.controls.stop.allowed).toBe(true);
       const held = workflowActions(state, { running: true, lease: { state: "other", since: 0 } });
-      [...Object.values(held.phases), ...Object.values(held.controls)].forEach((decision) =>
+      [...Object.values(held.moves), ...Object.values(held.controls)].forEach((decision) =>
         expect(decision).toEqual({ allowed: false, reason: "session_in_use" }),
       );
       expect(
-        evaluateWorkflowAction(state, WorkflowActionRequest.phase({ phase: "execute" }), {
+        evaluateWorkflowAction(state, WorkflowActionRequest.move({ move: "run" }), {
           lease: { state: "free" },
         }).allowed,
       ).toBe(true);
@@ -728,8 +753,8 @@ testAgent()("server workflow action policy", (it) => {
               running: snapshot.running !== null,
             }),
           );
-          const changed = yield* Effect.result(agent.setWorkflowPhase(id, holder, "execute"));
-          expect(Result.isSuccess(changed)).toBe(snapshot.actions.phases.execute.allowed);
+          const changed = yield* Effect.result(agent.moveWorkflow(id, holder, "run"));
+          expect(Result.isSuccess(changed)).toBe(snapshot.actions.moves.run.allowed);
         }),
         { discard: true },
       );

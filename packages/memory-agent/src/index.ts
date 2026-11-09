@@ -350,6 +350,8 @@ export {
   PlanArtifact,
   PlanStep,
   WorkflowAction,
+  WorkflowMode,
+  WorkflowMove,
   WorkflowPhase,
   WorkflowState,
   WorkflowStorageError,
@@ -435,6 +437,8 @@ export {
   builtInWorkflowRules,
   type ResolvedRules,
   type RuleQuery,
+  RulePhase,
+  rulePhases,
 } from "./workflow/rules.ts";
 export {
   localWorkflowRules,

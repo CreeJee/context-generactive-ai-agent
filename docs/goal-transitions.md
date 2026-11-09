@@ -6,17 +6,17 @@
 
 - `NoGoal`: 28
 - `Shaping`: 88
-- `Running`: 10
-- `GoalChanged`: 20
-- `Paused`: 74
-- `Blocked`: 20
-- `Stopped`: 88
+- `Running`: 12
+- `GoalChanged`: 24
+- `Paused`: 80
+- `Blocked`: 24
+- `Stopped`: 92
 - `Closed`: 72
-- `Completed`: 70
+- `Completed`: 84
 
 ## `NoGoal`
 
-- `Navigated`: NoGoal, 거절: `goal_terminal`, 그대로
+- `Navigated`: NoGoal, 그대로
 - `ExecutionApproved`: 거절: `plan_not_ready`
 - `GoalPaused`: 거절: `goal_missing`
 - `GoalResumed`: 거절: `goal_missing`
@@ -31,7 +31,7 @@
 
 ## `Shaping`
 
-- `Navigated`: Shaping, 거절: `goal_terminal`, 그대로
+- `Navigated`: Shaping, 그대로
 - `ExecutionApproved`: Running, 거절: `plan_not_ready`, 거절: `plan_outdated`
 - `GoalPaused`: Paused
 - `GoalResumed`: 거절: `goal_not_paused`
@@ -46,7 +46,7 @@
 
 ## `Running`
 
-- `Navigated`: Running, 거절: `goal_terminal`, 그대로
+- `Navigated`: Running, 그대로
 - `ExecutionApproved`: Running, 그대로
 - `GoalPaused`: Paused
 - `GoalResumed`: 거절: `goal_not_paused`
@@ -61,7 +61,7 @@
 
 ## `GoalChanged`
 
-- `Navigated`: GoalChanged, 거절: `goal_terminal`, 그대로
+- `Navigated`: GoalChanged, 그대로
 - `ExecutionApproved`: 거절: `plan_outdated`
 - `GoalPaused`: Paused
 - `GoalResumed`: 거절: `goal_not_paused`
@@ -76,7 +76,7 @@
 
 ## `Paused`
 
-- `Navigated`: Paused, 거절: `goal_terminal`, 그대로
+- `Navigated`: Paused, 그대로
 - `ExecutionApproved`: Paused, 거절: `plan_not_ready`, 거절: `plan_outdated`, 그대로
 - `GoalPaused`: 거절: `goal_not_active`
 - `GoalResumed`: Blocked, GoalChanged, Running, Shaping
@@ -91,7 +91,7 @@
 
 ## `Blocked`
 
-- `Navigated`: Blocked, 거절: `goal_terminal`, 그대로
+- `Navigated`: Blocked, 그대로
 - `ExecutionApproved`: 거절: `plan_outdated`
 - `GoalPaused`: Paused
 - `GoalResumed`: 거절: `goal_not_paused`
@@ -106,7 +106,7 @@
 
 ## `Stopped`
 
-- `Navigated`: Stopped, 거절: `goal_terminal`, 그대로
+- `Navigated`: Stopped, 그대로
 - `ExecutionApproved`: 거절: `goal_terminal`
 - `GoalPaused`: 거절: `goal_terminal`
 - `GoalResumed`: 거절: `goal_terminal`
@@ -121,7 +121,7 @@
 
 ## `Closed`
 
-- `Navigated`: Closed, 거절: `goal_terminal`, 그대로
+- `Navigated`: Closed, 그대로
 - `ExecutionApproved`: 거절: `plan_not_ready`, 거절: `plan_outdated`
 - `GoalPaused`: Closed, 그대로
 - `GoalResumed`: 거절: `goal_not_paused`
@@ -136,7 +136,7 @@
 
 ## `Completed`
 
-- `Navigated`: Completed, 거절: `goal_terminal`, 그대로
+- `Navigated`: Completed, 그대로
 - `ExecutionApproved`: 거절: `goal_terminal`
 - `GoalPaused`: 거절: `goal_terminal`
 - `GoalResumed`: 거절: `goal_terminal`

@@ -100,7 +100,7 @@ const sessionIn = Effect.fnUntraced(function* (scenario: Scenario) {
   const session = (yield* (yield* Sessions).create(project.id)).id;
   MutableHashMap.set(scripts, session, { scenario, sql: yield* SqlClient.SqlClient });
   yield* Effect.addFinalizer(() => Effect.sync(() => MutableHashMap.remove(scripts, session)));
-  yield* workflows.setPhase(session, "goal");
+  yield* workflows.move(session, "goal");
   yield* workflows.updateGoal(session, goal);
   if (scenario === "completed") {
     yield* workflows.updatePlan(session, {
@@ -110,7 +110,7 @@ const sessionIn = Effect.fnUntraced(function* (scenario: Scenario) {
       openQuestions: [],
       status: "ready",
     });
-    yield* workflows.setPhase(session, "execute");
+    yield* workflows.move(session, "run");
     yield* workflows.completeFromOutcomes(
       session,
       { goalVersion: 1, planVersion: 1, met: [{ outcomeId: "O1", summary: "verified" }] },

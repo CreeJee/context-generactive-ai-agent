@@ -46,7 +46,7 @@ import {
   QueueItemState,
   type QueuedMessage,
   ResumeTaskResult,
-  type WorkflowPhase,
+  type WorkflowMove,
   type WorkflowState,
 } from "../api";
 import { ChatApprovals } from "./chat-approvals";
@@ -85,7 +85,7 @@ import { useKanbanQuery } from "../queries/session";
 import { WorkflowBoard } from "./board-panel";
 import {
   WorkflowArtifactPanel,
-  phaseLabels,
+  modeLabels,
   workflowModeLabel,
   goalStatusLabels,
   planStatusLabels,
@@ -423,11 +423,17 @@ function ChatPanel({
     answered: endsWithText,
   });
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const changeWorkflowPhase = (phase: WorkflowPhase) =>
+  const moveWorkflow = (move: WorkflowMove) =>
     runUiEffect(
       Effect.gen(function* () {
-        const state = yield* uiPromise(() => run.setWorkflowPhase(phase));
-        setNotice(done(`${phaseLabels[state.phase]} 모드로 바꿨어요.`));
+        const state = yield* uiPromise(() => run.moveWorkflow(move));
+        setNotice(
+          done(
+            move === "run"
+              ? "승인한 Plan을 칸반 보드에서 실행해요."
+              : `${modeLabels[move]} 모드로 바꿨어요.`,
+          ),
+        );
         return state;
       }).pipe(
         Effect.catchTag("UnknownError", (rejected) =>
@@ -451,9 +457,10 @@ function ChatPanel({
   const revisePlan = () =>
     runUiEffect(
       Effect.gen(function* () {
+        // Revising stops the board until the revised Plan is approved again, in the same mode.
         if (
-          run.workflow?.phase !== "plan" &&
-          !isTruthy(yield* uiPromise(() => changeWorkflowPhase("plan")))
+          run.workflow?.phase !== "shaping" &&
+          !isTruthy(yield* uiPromise(() => moveWorkflow(run.workflow?.mode ?? "plan")))
         )
           return;
         composerInput.current?.focus();
@@ -466,8 +473,7 @@ function ChatPanel({
     runUiEffect(
       Effect.gen(function* () {
         // The approval starts the Plan's kanban board: card agents execute it, not this chat.
-        if (!isTruthy(yield* uiPromise(() => changeWorkflowPhase("execute")))) return;
-        setNotice(done("승인한 Plan을 칸반 보드에서 실행해요."));
+        yield* uiPromise(() => moveWorkflow("run"));
       }),
     );
 
@@ -780,15 +786,14 @@ function ChatPanel({
             }),
           workflow: (command) =>
             Effect.gen(function* () {
-              const state = yield* uiPromise(() => changeWorkflowPhase(command.phase));
+              const state = yield* uiPromise(() => moveWorkflow(command.move));
               if (!isTruthy(state)) return Option.none<string>();
+              // An approved Plan runs on its board, so running it sends the chat nothing.
               const request =
                 command.request ||
-                (command.phase === "plan"
+                (command.move === "plan"
                   ? "요청에서 목표를 정리하고 실행 가능한 Plan을 읽기 전용으로 조사해 기록해 줘."
-                  : command.phase === "execute"
-                    ? "승인한 Plan을 첫 번째 미완료 단계부터 실행해 줘."
-                    : "");
+                  : "");
               if (!(request.length > 0)) {
                 setDraft("");
                 return Option.none<string>();
@@ -1048,7 +1053,7 @@ function ChatPanel({
               onPickQueued={pickQueued}
               onCancel={() => void cancel()}
               onClear={clearComposer}
-              onWorkflowPhase={(phase) => void changeWorkflowPhase(phase)}
+              onWorkflowMode={(mode) => void moveWorkflow(mode)}
             />
           )}
           <AlertDialog

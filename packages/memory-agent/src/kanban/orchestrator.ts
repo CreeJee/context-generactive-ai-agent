@@ -1128,7 +1128,7 @@ const make = (options: KanbanOrchestratorOptions) =>
         { discard: true },
       );
 
-      const executing = state.phase === "execute" && state.plan?.status === "executing";
+      const executing = state.phase === "running" && state.plan?.status === "executing";
       // A Goal waiting for another Goal's merge takes no slots; its cards stay where they are.
       const waitingOn = yield* scheduler.waitingOn(goalInstanceId);
       yield* scheduler.reviewNotices(goalInstanceId);
@@ -1335,7 +1335,7 @@ const make = (options: KanbanOrchestratorOptions) =>
         const state = yield* workflows.get(sessionId);
         if (goalInstanceId === null || state.goal === null)
           return yield* KanbanStartRefused.make({ reason: "goal_missing" });
-        if (state.phase !== "execute" || state.plan?.status !== "executing")
+        if (state.phase !== "running" || state.plan?.status !== "executing")
           return yield* KanbanStartRefused.make({ reason: "plan_not_executing" });
         const session = yield* sessions.get(sessionId);
         const project = yield* projects.get(session.projectId);

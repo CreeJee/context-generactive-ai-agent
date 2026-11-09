@@ -131,7 +131,7 @@ const progressOf = (
 });
 
 const executable = (state: WorkflowState) =>
-  (state.phase === "execute" || state.phase === "verify") &&
+  state.phase === "running" &&
   state.goal?.status === "active" &&
   state.plan?.status === "executing" &&
   state.plan.goalVersion === state.goal.version;

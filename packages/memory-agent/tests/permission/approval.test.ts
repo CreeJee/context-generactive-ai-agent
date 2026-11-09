@@ -4,7 +4,6 @@ import { AgentChat } from "../../src/agent/chat.ts";
 import { RunStore } from "../../src/loop/store.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
-import { Workflows } from "../../src/workflow/workflow.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { openPage, sessionScopedResponder } from "../support/chat-client.ts";
@@ -83,49 +82,6 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("approval-gat
         (node) => node.kind === "tool_result",
       );
       expect(result?.detail).toMatchObject({ toolName: "save_code_skill", ok: false });
-    }),
-  );
-
-  it.effect("Execute can run an approval-gated shell check", () =>
-    Effect.gen(function* () {
-      const sessionId = yield* freshSession;
-      const workflows = yield* Workflows;
-      yield* workflows.updateGoal(sessionId, {
-        statement: "Verify the implementation",
-        outcomes: [{ id: "O1", text: "Checks pass" }],
-        constraints: [],
-        nonGoals: [],
-        assumptions: [],
-        openQuestions: [],
-        status: "active",
-      });
-      yield* workflows.updatePlan(sessionId, {
-        summary: "Implement and verify",
-        steps: [
-          {
-            id: "implementation",
-            title: "Implement",
-            description: "Make the change",
-            dependsOn: [],
-            acceptanceCriteria: ["The check passes"],
-            ruleRefs: [],
-            outcomes: [],
-          },
-        ],
-        risks: [],
-        openQuestions: [],
-        status: "ready",
-      });
-      yield* workflows.setPhase(sessionId, "execute");
-
-      const page = yield* openPage(sessionId);
-      yield* page.send("please use the shell");
-      expect(page.pending()).toMatchObject([
-        { reason: "tool_call", metadata: { toolName: "save_code_skill" } },
-      ]);
-      yield* page.resolve(() => true);
-      expect(page.answer()).toContain("Shell said");
-      expect(page.answer()).toContain("approved-output");
     }),
   );
 

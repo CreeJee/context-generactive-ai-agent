@@ -25,7 +25,7 @@
 - `useBoardsKanbanMutation` — 여러 Plan을 보여 주는 보드에서 요청마다 sessionId를 지정하는 칸반 동작. Transfer면 받는 대화의 kanban·board도 무효화한다(dual arity 2).
 - `useEditBoardMutation` / `useBoardsEditMutation` — `api.editBoard`로 보드를 편집한다. 끝나면 board·runState(+boards)를 무효화한다.
 - `useAnswerDecisionMutation` — 프로젝트 안 아무 세션의 카드 결정에 답한다. board·decisions·kanban·project decisions를 무효화한다.
-- `WorkflowChange` / `useWorkflowMutation` — workflow 변경 tagged enum과 mutation. `api.setWorkflowPhase` 또는 `api.controlWorkflow`를 호출한다(301행 이후는 그래프로만 확인).
+- `WorkflowChange` / `useWorkflowMutation` — workflow 변경 tagged enum과 mutation. `api.moveWorkflow` 또는 `api.controlWorkflow`를 호출한다(301행 이후는 그래프로만 확인).
 - `useCancelRunMutation` / `useCompactSessionMutation` — 실행 취소(`api.cancelRun`)와 세션 compact. 성공하면 runState를 무효화한다.
 - `useEnqueueMutation` / `useEditQueueMutation` / `useRelayedApprovalMutation` — 메시지 큐 추가(`mode: "queue" | "steer"`)와 편집, 중계된 승인 응답. queue와 approvals 쿼리를 무효화한다.
 - `useResumeTraceTaskMutation` / `useArchiveTraceTaskMutation` / `useDeleteTraceTaskMutation` — work-trace task 재개(`confirmUncertain`), 보관, 삭제. 세션 trace와 project trace를 무효화한다.

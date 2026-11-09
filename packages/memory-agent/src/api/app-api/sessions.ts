@@ -25,7 +25,7 @@ import {
   BoardView,
   UncertainContinueRequest,
   WorkflowAction,
-  WorkflowPhase,
+  WorkflowMove,
   WorkflowState,
 } from "../../workflow/contracts.ts";
 import { LifecycleResult } from "../../work-trace/contracts.ts";
@@ -109,7 +109,7 @@ export type LeaseRequest = typeof LeaseRequest.Type;
 export const SessionChange = Schema.TaggedUnion({
   Archive: { archived: Schema.Boolean, idempotencyKey: Schema.optional(Schema.String) },
   Delete: { idempotencyKey: Schema.String },
-  Phase: { phase: WorkflowPhase },
+  Move: { move: WorkflowMove },
   Control: { workflowAction: WorkflowAction },
 });
 export type SessionChange = typeof SessionChange.Type;

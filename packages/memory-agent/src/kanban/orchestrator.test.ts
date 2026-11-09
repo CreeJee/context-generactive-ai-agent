@@ -460,13 +460,13 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
             ]);
             yield* waitForCards(board.sessionId, (cards) => status(cards, "a") === "in_progress");
             // The Plan stops executing while a runs; once a is done no attempt runs, and b waits.
-            yield* workflows.setPhase(board.sessionId, "plan");
+            yield* workflows.move(board.sessionId, "plan");
             yield* Deferred.succeed(releaseA, undefined);
             yield* waitForCards(board.sessionId, (cards) => status(cards, "a") === "done");
             // The looks that a's end set off finish first.
             yield* Effect.sleep("1 second");
             // The idle board polls once a minute, though a running one here every 50 ms.
-            yield* workflows.setPhase(board.sessionId, "execute");
+            yield* workflows.move(board.sessionId, "run");
             yield* Effect.sleep("300 millis");
             expect(status((yield* workflows.get(board.sessionId)).plan?.steps ?? [], "b")).toBe(
               "ready",

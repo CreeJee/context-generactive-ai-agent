@@ -255,9 +255,9 @@ export const SessionsApiHandlers = HttpApiBuilder.group(
               chat
                 .deleteSession(session, holder, idempotencyKey)
                 .pipe(Effect.tap(() => events.publishProject(projectId, "sessions"))),
-            Phase: ({ phase }) =>
+            Move: ({ move }) =>
               chat
-                .setWorkflowPhase(session, holder, phase)
+                .moveWorkflow(session, holder, move)
                 .pipe(Effect.tap(() => events.publishSession(session, "run-state"))),
             Control: ({ workflowAction }) =>
               chat

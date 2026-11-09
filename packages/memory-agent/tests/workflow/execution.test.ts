@@ -109,7 +109,7 @@ testAgent({ testProvider: { responder } })("approved Plan execution", (it) => {
       const session = yield* planned([]);
       expect(yield* session.board).toBe(false);
       yield* env.use(
-        Effect.flatMap(AgentChat, (chat) => chat.setWorkflowPhase(session.id, null, "execute")),
+        Effect.flatMap(AgentChat, (chat) => chat.moveWorkflow(session.id, null, "run")),
       );
       yield* waitForBoard(session.board);
       // The board executes it; no model turn ran for the approval.
@@ -124,9 +124,7 @@ testAgent({ testProvider: { responder } })("approved Plan execution", (it) => {
       const env = yield* TestEnv;
       const session = yield* planned([{ text: "Noted." }]);
       // Approved before boards ran approved Plans: the phase moved without one.
-      yield* env.use(
-        Effect.flatMap(Workflows, (workflows) => workflows.setPhase(session.id, "execute")),
-      );
+      yield* env.use(Effect.flatMap(Workflows, (workflows) => workflows.move(session.id, "run")));
       expect(yield* session.board).toBe(false);
       yield* runTurn(session.id, `${session.id}-turn`, "How is the Plan going?");
       yield* waitForBoard(session.board);
@@ -143,15 +141,13 @@ testAgent({ testProvider: { responder } })("approved Plan execution", (it) => {
         call("plan", "update_plan", plan),
         { text: "The board will run the cards." },
       ]);
-      yield* env.use(
-        Effect.flatMap(Workflows, (workflows) => workflows.setPhase(session.id, "goal")),
-      );
+      yield* env.use(Effect.flatMap(Workflows, (workflows) => workflows.move(session.id, "goal")));
       yield* runTurn(session.id, `${session.id}-turn`, "Get this done");
       yield* waitForBoard(session.board);
       const state = yield* env.use(
         Effect.flatMap(Workflows, (workflows) => workflows.get(session.id)),
       );
-      expect([state.phase, state.plan?.status]).toEqual(["execute", "executing"]);
+      expect([state.phase, state.plan?.status]).toEqual(["running", "executing"]);
       // The cards the planner adds later follow the project's permission mode.
       expect(yield* session.cardApproval).toBe("permission");
       // The planner had no project write tools and no progress tool.

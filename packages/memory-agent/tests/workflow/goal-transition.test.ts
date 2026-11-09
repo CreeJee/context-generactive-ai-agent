@@ -5,7 +5,12 @@ import type { JsonValue } from "../../src/json.ts";
 import { Admission, workflowRunBindings } from "../../src/workflow/run-bindings.ts";
 import { BoardAuthor } from "../../src/workflow/card.ts";
 import { WorkflowTools } from "../../src/workflow/tools.ts";
-import { NewGoalSettlement, Workflows, type WorkflowState } from "../../src/workflow/workflow.ts";
+import {
+  NewGoalSettlement,
+  Workflows,
+  type WorkflowMove,
+  type WorkflowState,
+} from "../../src/workflow/workflow.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { callTool } from "../support/run-tools.ts";
 import { sqlAll, sqlGet, sqlRun } from "../support/sql.ts";
@@ -40,7 +45,7 @@ const transition = (previousGoalInstanceId: string | null) => ({
 /** Completes the first Goal the way a board does once the verifier judged its outcome met. */
 const closeGoal = Effect.fnUntraced(function* (session: string) {
   const workflows = yield* Workflows;
-  yield* workflows.setPhase(session, "execute");
+  yield* workflows.move(session, "run");
   expect(
     yield* workflows.completeFromOutcomes(
       session,
@@ -132,7 +137,7 @@ const withHistory = Effect.fnUntraced(function* () {
   const { project } = yield* TestEnv;
   const workflows = yield* Workflows;
   const session = (yield* (yield* Sessions).create(project.id)).id;
-  yield* workflows.setPhase(session, "goal");
+  yield* workflows.move(session, "goal");
   yield* workflows.updateGoal(session, goal);
   yield* workflows.updatePlan(session, plan);
   const historical = `${session}:historical`;
@@ -183,9 +188,10 @@ const Expected = Data.taggedEnum<Expected>();
 const applied = Expected.applied();
 const refused = (reason: string) => Expected.refused({ reason });
 
-/** Goal phase, the earlier run completed with a settled receipt, and the current Goal named. */
+/** Goal mode shaping, the earlier run completed with a settled receipt, and the current Goal named. */
 const admissible = {
-  phase: "goal",
+  to: "goal",
+  phase: "shaping",
   closed: false,
   historicalRun: "completed",
   ownerEffect: "succeeded",
@@ -194,6 +200,8 @@ const admissible = {
 
 const transitionCases: ReadonlyArray<{
   readonly name: string;
+  /** Where the session moves before the request, unless its Goal was closed. */
+  readonly to: WorkflowMove;
   readonly phase: WorkflowState["phase"];
   /** The verifier judged the first Goal's outcomes met before the transition. */
   readonly closed: boolean;
@@ -202,8 +210,8 @@ const transitionCases: ReadonlyArray<{
   readonly previous: "current" | "stale" | "none";
   readonly admission: Expected;
 }> = [
-  { ...admissible, name: "goal with an existing Goal", admission: applied },
-  { ...admissible, name: "plan with an existing Goal", phase: "plan", admission: applied },
+  { ...admissible, name: "Goal mode with an existing Goal", admission: applied },
+  { ...admissible, name: "Plan mode with an existing Goal", to: "plan", admission: applied },
   {
     ...admissible,
     name: "completed workflow",
@@ -213,12 +221,18 @@ const transitionCases: ReadonlyArray<{
   },
   {
     ...admissible,
-    name: "unclosed verify",
-    phase: "verify",
+    name: "a running Plan",
+    to: "run",
+    phase: "running",
     admission: refused("phase_not_authorized"),
   },
-  { ...admissible, name: "execute", phase: "execute", admission: refused("phase_not_authorized") },
-  { ...admissible, name: "chat", phase: "chat", admission: refused("phase_not_authorized") },
+  {
+    ...admissible,
+    name: "chat",
+    to: "chat",
+    phase: "chat",
+    admission: refused("phase_not_authorized"),
+  },
   ...(["running", "failed", "missing"] as const).map((historicalRun) => ({
     ...admissible,
     name: `${historicalRun} bound worker execution`,
@@ -249,7 +263,7 @@ const transitionCases: ReadonlyArray<{
 
 /** The session's start_new_goal, called as the model would from the run `runId`. */
 const goalTool = Effect.fnUntraced(function* (session: string, runId: string) {
-  const tools = (yield* WorkflowTools).toolsFor(session, "goal", runId);
+  const tools = (yield* WorkflowTools).toolsFor(session, "shaping", runId);
   return (input: JsonValue) => callTool(tools, "start_new_goal", input);
 });
 
@@ -258,8 +272,7 @@ testAgent()("explicit new Goal transition", (it) => {
     Effect.gen(function* () {
       const history = yield* withHistory();
       const { workflows, session, historical, old } = history;
-      if (c.closed) yield* closeGoal(session);
-      else if (c.phase !== "goal") yield* workflows.setPhase(session, c.phase);
+      yield* c.closed ? closeGoal(session) : workflows.move(session, c.to);
       expect((yield* workflows.get(session)).phase).toBe(c.phase);
       const { invoking, settle } = yield* invokingRun(history);
       switch (c.historicalRun) {
@@ -320,10 +333,8 @@ testAgent()("explicit new Goal transition", (it) => {
         tools
           .toolsFor(f.session, phase, f.invoking)
           .some(({ tool }) => tool.name === "start_new_goal");
-      (["chat", "execute"] as const).forEach((phase) => expect(exposed(phase)).toBe(false));
-      (["goal", "plan", "verify", "completed"] as const).forEach((phase) =>
-        expect(exposed(phase)).toBe(true),
-      );
+      (["chat", "running"] as const).forEach((phase) => expect(exposed(phase)).toBe(false));
+      (["shaping", "completed"] as const).forEach((phase) => expect(exposed(phase)).toBe(true));
       const call = yield* goalTool(f.session, f.invoking);
       // The owner checks the session at call time: a run started since then refuses it.
       const other = `${f.session}:other`;
@@ -496,7 +507,8 @@ testAgent()("new Goal transition across reopening", (it) => {
         const newId = yield* identity(session);
         expect(newId).not.toBe(old);
         expect(yield* workflows.get(session)).toMatchObject({
-          phase: "goal",
+          phase: "shaping",
+          mode: "goal",
           plan: null,
           goal: { version: 1, evidence: [], verification: { status: "not_run", evidence: [] } },
         });
@@ -558,7 +570,8 @@ testAgent()("new Goal transition across reopening", (it) => {
         expect(yield* rows("goalInstances", f.session)).toHaveLength(2);
         yield* expectHistoryKept(f.session, before);
         expect(yield* f.workflows.get(f.session)).toMatchObject({
-          phase: "goal",
+          phase: "shaping",
+          mode: "goal",
           goal: { statement: "second", version: 1 },
           plan: null,
         });
@@ -628,7 +641,7 @@ testAgent()("new Goal transition across reopening", (it) => {
     Effect.gen(function* () {
       const env = yield* TestEnv;
       const { workflows, session, old } = yield* env.use(withHistory());
-      yield* workflows.setPhase(session, "execute");
+      yield* workflows.move(session, "run");
       yield* sqlRun(
         `INSERT INTO kanban_goals (goal_instance_id, project_root, mode, goal_version, status,
            created_at, updated_at)
@@ -637,7 +650,7 @@ testAgent()("new Goal transition across reopening", (it) => {
         env.project.root,
       );
       const edited = yield* workflows.updateGoal(session, { ...goal, statement: "revised" });
-      expect(edited.phase).toBe("execute");
+      expect(edited.phase).toBe("running");
       expect(yield* workflows.display(session, edited)).toBe("card_reclassifying");
     }),
   );

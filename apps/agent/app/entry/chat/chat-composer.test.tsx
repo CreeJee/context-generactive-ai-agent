@@ -47,7 +47,7 @@ function renderPlanComposer() {
       onPickQueued={() => {}}
       onCancel={() => {}}
       onClear={() => {}}
-      onWorkflowPhase={() => {}}
+      onWorkflowMode={() => {}}
     />,
   );
 }

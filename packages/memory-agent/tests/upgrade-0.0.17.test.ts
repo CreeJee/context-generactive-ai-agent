@@ -137,10 +137,11 @@ testAgent({ beforeOpen: seed })("upgrade from 0.0.17", (it) => {
       const workflows = yield* Workflows;
       const execution = yield* WorkflowExecution;
       const completed = yield* workflows.get(sessions.goalCompleted);
-      const verifying = yield* workflows.get(sessions.planCompleted);
+      const running = yield* workflows.get(sessions.planCompleted);
       expect([completed.phase, completed.goal?.status]).toEqual(["completed", "completed"]);
-      expect([verifying.phase, verifying.goal?.status, verifying.plan?.status]).toEqual([
-        "verify",
+      // The board judges the outcomes again and completes the Goal once they are met.
+      expect([running.phase, running.goal?.status, running.plan?.status]).toEqual([
+        "running",
         "active",
         "executing",
       ]);
