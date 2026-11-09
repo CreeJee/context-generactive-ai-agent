@@ -34,7 +34,7 @@ describe("workflowInstructions", () => {
         goal: {
           version: 1,
           statement: "Resolve two independent changes",
-          outcomes: ["Both changes planned"],
+          outcomes: [{ id: "O1", text: "Both changes planned" }],
           constraints: [],
           nonGoals: [],
           assumptions: [],
@@ -64,7 +64,7 @@ describe("workflowInstructions", () => {
     const goal: NonNullable<WorkflowState["goal"]> = {
       version: 1,
       statement: "Investigate",
-      outcomes: ["Evidence"],
+      outcomes: [{ id: "O1", text: "Evidence" }],
       constraints: [],
       nonGoals: [],
       assumptions: [],

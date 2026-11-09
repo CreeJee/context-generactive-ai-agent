@@ -324,8 +324,8 @@ ${applicableRules || "(none)"}${resolved.degraded.includes("embedding") ? "\nOpt
 
     const goal = isTruthy(state.goal)
       ? `Goal v${state.goal.version} (${state.goal.status}): ${state.goal.statement}
-Outcomes:
-${compactList(state.goal.outcomes)}
+Outcomes (keep each id while the outcome means the same; give a changed meaning a new id):
+${compactList(state.goal.outcomes.map((outcome) => `${outcome.id}: ${outcome.text}`))}
 Constraints (apply across every continuation; a new turn does not reset limits):
 ${compactList(state.goal.constraints, state.goal.constraints.length)}
 Non-goals:

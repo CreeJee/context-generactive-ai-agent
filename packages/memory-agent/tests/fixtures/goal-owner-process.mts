@@ -131,7 +131,7 @@ await Effect.runPromise(
         yield* Effect.provideContext(
           workflows.updateGoal(sessionId, {
             statement: "Preserve OS owner evidence",
-            outcomes: ["Never replay interrupted model work"],
+            outcomes: [{ id: "O1", text: "Never replay interrupted model work" }],
             constraints: [],
             nonGoals: [],
             assumptions: [],

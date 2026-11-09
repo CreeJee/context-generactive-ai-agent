@@ -11,7 +11,7 @@ import { freshSession, testAgent } from "../support/test-env.ts";
 
 const goal = {
   statement: "Run a Goal as a board",
-  outcomes: ["Goals are ordered in the project"],
+  outcomes: [{ id: "O1", text: "Goals are ordered in the project" }],
   constraints: [],
   nonGoals: [],
   assumptions: [],

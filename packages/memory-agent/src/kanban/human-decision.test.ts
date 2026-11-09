@@ -23,7 +23,7 @@ import {
 
 const goal = {
   statement: "Run a Goal as a board",
-  outcomes: ["Cards wait for people"],
+  outcomes: [{ id: "O1", text: "Cards wait for people" }],
   constraints: [],
   nonGoals: [],
   assumptions: [],

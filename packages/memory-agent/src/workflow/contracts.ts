@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { Effect, Predicate, Schema, SchemaTransformation } from "effect";
 import { BoardAuthor, CardRisk, CardStatus, cardContractFields, cardHoldFields } from "./card.ts";
 
 /**
@@ -138,12 +138,44 @@ export const verificationDefault: Verification = {
   updatedAt: null,
 };
 
+/** An outcome's id. The planner keeps it while the outcome means the same thing. */
+export const OutcomeId = Schema.String.pipe(
+  Schema.check(Schema.isTrimmed(), Schema.isMinLength(1)),
+);
+
+/** One outcome of a Goal, named by an id that survives Goal edits. */
+export const GoalOutcome = Schema.Struct({ id: OutcomeId, text: Schema.String });
+export type GoalOutcome = typeof GoalOutcome.Type;
+
+/** Outcomes whose ids are each used once. */
+export const GoalOutcomes = Schema.Array(GoalOutcome).check(
+  Schema.makeFilter(
+    (outcomes) =>
+      new Set(outcomes.map((outcome) => outcome.id)).size === outcomes.length ||
+      "each outcome id is used once",
+  ),
+);
+
+/** Goals saved before outcomes had ids hold bare texts; they read as `O1`, `O2`, … in order. */
+const StoredOutcomes = Schema.Array(Schema.Union([Schema.String, GoalOutcome])).pipe(
+  Schema.decodeTo(
+    Schema.Array(GoalOutcome),
+    SchemaTransformation.transform({
+      decode: (outcomes): ReadonlyArray<GoalOutcome> =>
+        outcomes.map((outcome, index) =>
+          Predicate.isString(outcome) ? { id: `O${index + 1}`, text: outcome } : outcome,
+        ),
+      encode: (outcomes) => outcomes,
+    }),
+  ),
+);
+
 const goalFields = {
   completion: Schema.optionalKey(CompletionSnapshot),
   completionRequest: Schema.optionalKey(CompletionRequest),
   version: Schema.Int,
   statement: Schema.String,
-  outcomes: Schema.Array(Schema.String),
+  outcomes: StoredOutcomes,
   constraints: Schema.Array(Schema.String),
   nonGoals: Schema.Array(Schema.String),
   assumptions: Schema.Array(Schema.String),

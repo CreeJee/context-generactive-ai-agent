@@ -13,7 +13,7 @@ import { revisionStateSql } from "../../src/workflow/state-rows.ts";
 
 const goal = {
   statement: "first",
-  outcomes: ["first success"],
+  outcomes: [{ id: "O1", text: "first success" }],
   constraints: [],
   nonGoals: [],
   assumptions: [],
@@ -33,7 +33,7 @@ const transition = (previousGoalInstanceId: string | null) => ({
   action: "new_independent_goal" as const,
   previousGoalInstanceId,
   reason: "explicit independent task",
-  goal: { ...goal, statement: "second", outcomes: ["different success"] },
+  goal: { ...goal, statement: "second", outcomes: [{ id: "O1", text: "different success" }] },
 });
 
 const closingProgress = {
@@ -505,7 +505,10 @@ testAgent()("new Goal transition across reopening", (it) => {
         yield* workflows.updatePlan(session, plan);
         expect(yield* identity(session)).toBe(newId);
         expect((yield* workflows.get(session)).goal?.version).toBe(1);
-        yield* workflows.updateGoal(session, { ...goal, outcomes: ["revised second purpose"] });
+        yield* workflows.updateGoal(session, {
+          ...goal,
+          outcomes: [{ id: "O1", text: "revised second purpose" }],
+        });
         expect(yield* identity(session)).toBe(newId);
         expect((yield* workflows.get(session)).goal?.version).toBe(2);
         yield* env.reopen;

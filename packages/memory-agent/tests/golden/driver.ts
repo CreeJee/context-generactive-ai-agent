@@ -226,7 +226,7 @@ export const conversation = Effect.fnUntraced(function* (mode: PermissionMode = 
       Effect.flatMap(Workflows, (workflows) =>
         workflows.updateGoal(sessionId, {
           statement: "Keep the golden notes",
-          outcomes: ["The notes are read and written"],
+          outcomes: [{ id: "O1", text: "The notes are read and written" }],
           constraints: [],
           nonGoals: [],
           assumptions: [],

@@ -297,7 +297,10 @@ const make = Effect.gen(function* () {
       agent: "goal-verify",
       message: [
         `Goal: ${input.goal.statement}`,
-        ...listed("Outcomes", input.goal.outcomes),
+        ...listed(
+          "Outcomes",
+          input.goal.outcomes.map((outcome) => `${outcome.id}: ${outcome.text}`),
+        ),
         ...listed("Constraints", input.goal.constraints),
         ...listed(
           "Cards integrated into the Goal branch",

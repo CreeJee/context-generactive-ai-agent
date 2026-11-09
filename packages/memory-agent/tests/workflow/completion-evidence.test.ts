@@ -19,7 +19,10 @@ import { revisionStateSql } from "../../src/workflow/state-rows.ts";
 
 const goal = {
   statement: "Verified Goal",
-  outcomes: ["Outcome A", "Outcome B"],
+  outcomes: [
+    { id: "O1", text: "Outcome A" },
+    { id: "O2", text: "Outcome B" },
+  ],
   constraints: [],
   nonGoals: [],
   assumptions: [],
@@ -153,7 +156,7 @@ const fixture = Effect.fnUntraced(function* (registration: Registration) {
   const { complete: completeRecorder } = yield* start(recorder);
   const mapping = (outcomeIndex: number) => ({
     outcomeIndex,
-    outcomeText: goal.outcomes[outcomeIndex]!,
+    outcomeText: goal.outcomes[outcomeIndex]!.text,
     stepId: "step",
     acceptanceIndex: 0,
     acceptanceText: "Actual verification",

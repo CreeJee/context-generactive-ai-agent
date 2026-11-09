@@ -203,7 +203,7 @@ testAgent({ testProvider: {} })("skills in a run", (it) => {
             const workflows = yield* Workflows;
             yield* workflows.updateGoal(session, {
               statement: "Greet the user using the available skill",
-              outcomes: ["Say hello in Korean"],
+              outcomes: [{ id: "O1", text: "Say hello in Korean" }],
               constraints: [],
               nonGoals: [],
               assumptions: [],

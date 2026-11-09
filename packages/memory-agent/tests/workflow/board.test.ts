@@ -17,7 +17,7 @@ import { storedWorkflowState, storeWorkflowState } from "../support/workflow-sta
 
 const goal = {
   statement: "Run a Goal as a board",
-  outcomes: ["Cards can be edited"],
+  outcomes: [{ id: "O1", text: "Cards can be edited" }],
   constraints: [],
   nonGoals: [],
   assumptions: [],

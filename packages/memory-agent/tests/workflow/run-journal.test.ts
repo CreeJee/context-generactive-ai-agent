@@ -14,7 +14,7 @@ import { sqlAll, sqlGet, sqlRun, sqlExec } from "../support/sql.ts";
 
 const goal = {
   statement: "Preserve an active Goal",
-  outcomes: ["Safe evidence"],
+  outcomes: [{ id: "O1", text: "Safe evidence" }],
   constraints: [],
   nonGoals: [],
   assumptions: [],
@@ -134,7 +134,10 @@ testAgent()("workflow run bindings", (it) => {
           Admission.refused({ reason: "run_outcome_uncertain" }),
         );
         yield* finishRun(session, first, "completed");
-        yield* (yield* Workflows).updateGoal(session, { ...goal, outcomes: ["New outcome"] });
+        yield* (yield* Workflows).updateGoal(session, {
+          ...goal,
+          outcomes: [{ id: "O1", text: "New outcome" }],
+        });
         expect(yield* owner.bind(session, second, revision)).toEqual(
           Admission.refused({ reason: "workflow_changed" }),
         );
@@ -253,7 +256,10 @@ testAgent()("workflow run bindings", (it) => {
           sideEffect ? 1 : 0,
           status,
         );
-        yield* (yield* Workflows).updateGoal(session, { ...goal, outcomes: ["Revised outcome"] });
+        yield* (yield* Workflows).updateGoal(session, {
+          ...goal,
+          outcomes: [{ id: "O1", text: "Revised outcome" }],
+        });
         const receipts = () => sqlAll("SELECT * FROM owner_rpc_operations WHERE run_id = ?", old);
         const before = yield* receipts();
         const admitted = yield* bindLatest(session, `${session}:new`);
@@ -270,7 +276,7 @@ testAgent()("workflow run log across a restart", (it) => {
   it.effect("a restart ends the log of a bound run it cut, still read to its partial end", () =>
     Effect.gen(function* () {
       const env = yield* TestEnv;
-      const session = yield* withGoal(["Replay output"]);
+      const session = yield* withGoal([{ id: "O1", text: "Replay output" }]);
       const run = `${session}:cut`;
       expect(Admission.$is("bound")(yield* bindLatest(session, run))).toBe(true);
       const started = { type: "RUN_STARTED", runId: run, threadId: session, timestamp: 1 } as const;

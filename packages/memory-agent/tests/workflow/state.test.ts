@@ -24,7 +24,7 @@ import { revisionStateSql } from "../../src/workflow/state-rows.ts";
 
 const goal = {
   statement: "Ship a durable planning workflow",
-  outcomes: ["A plan survives reloads"],
+  outcomes: [{ id: "O1", text: "A plan survives reloads" }],
   constraints: ["Keep prompts thin"],
   nonGoals: ["Automatic execution"],
   assumptions: ["A session owns one active workflow"],
@@ -112,6 +112,44 @@ testAgent()("Workflows", (it) => {
         "plan_updated",
         "phase_changed",
       ]);
+    }),
+  );
+
+  it.effect("reads outcomes saved without ids as O1, O2, … in order", () =>
+    Effect.gen(function* () {
+      const id = yield* freshSession;
+      const workflows = yield* Workflows;
+      yield* workflows.updateGoal(id, goal);
+      const saved = yield* workflows.get(id);
+      yield* storeWorkflowState(
+        id,
+        yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
+          ...saved,
+          goal: { ...saved.goal, outcomes: ["first", "second"] },
+        }),
+      );
+      expect((yield* workflows.get(id)).goal?.outcomes).toEqual([
+        { id: "O1", text: "first" },
+        { id: "O2", text: "second" },
+      ]);
+    }),
+  );
+
+  it.effect("refuses a Goal that names two outcomes with one id", () =>
+    Effect.gen(function* () {
+      const id = yield* freshSession;
+      const updateGoal = yield* workflowTool(id, "goal", "update_goal");
+      const failure = yield* Effect.flip(
+        updateGoal({
+          ...goal,
+          outcomes: [
+            { id: "O1", text: "one" },
+            { id: "O1", text: "two" },
+          ],
+        }),
+      );
+      expect(failure.message).toContain("each outcome id is used once");
+      expect((yield* (yield* Workflows).get(id)).goal).toBeNull();
     }),
   );
 
@@ -376,7 +414,7 @@ testAgent()("Workflows", (it) => {
       });
       // A method-only Plan revision and a Goal revision both keep the Goal identity.
       yield* workflows.updatePlan(id, { ...plan, summary: "Another method" });
-      yield* workflows.updateGoal(id, { ...goal, outcomes: ["New outcome"] });
+      yield* workflows.updateGoal(id, { ...goal, outcomes: [{ id: "O1", text: "New outcome" }] });
       yield* workflows.updatePlan(id, { ...plan, summary: "New method" });
       const rows = yield* revisions();
       expect(rows.map((row) => [row.goal_version, row.plan_version])).toEqual([
@@ -394,7 +432,11 @@ testAgent()("Workflows", (it) => {
         "observed old criterion",
       ]);
       const latest = yield* decode(String(rows.at(-1)?.state_json));
-      expect(latest.goal).toMatchObject({ version: 2, outcomes: ["New outcome"], evidence: [] });
+      expect(latest.goal).toMatchObject({
+        version: 2,
+        outcomes: [{ id: "O1", text: "New outcome" }],
+        evidence: [],
+      });
       expect(latest.plan).toMatchObject({ version: 3, goalVersion: 2 });
       const rewrite = yield* Effect.flip(
         sqlRun("UPDATE workflow_state_revisions SET phase = 'plan' WHERE id = ?", rows[0]!.id),
@@ -947,7 +989,7 @@ testAgent()("Workflows snapshot failure", (it) => {
 const RevisionState = Schema.Struct({
   goal: Schema.Struct({
     version: Schema.Finite,
-    outcomes: Schema.Array(Schema.String),
+    outcomes: Schema.Array(Schema.Struct({ id: Schema.String, text: Schema.String })),
     evidence: Schema.Array(Schema.String),
   }),
   plan: Schema.Struct({ version: Schema.Finite, goalVersion: Schema.Finite }),

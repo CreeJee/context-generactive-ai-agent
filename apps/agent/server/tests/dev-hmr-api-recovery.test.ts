@@ -65,7 +65,7 @@ testAgent({ testProvider: {} })("dev HMR API recovery", (it) => {
               yield* Effect.provideContext(
                 workflows.updateGoal(session.id, {
                   statement: `Keep ${session.id} isolated`,
-                  outcomes: ["No duplicate run"],
+                  outcomes: [{ id: "O1", text: "No duplicate run" }],
                   constraints: [],
                   nonGoals: [],
                   assumptions: [],

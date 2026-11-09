@@ -69,7 +69,7 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
         yield* Effect.provideContext(
           workflows.updateGoal(context.session.id, {
             statement: "Preserve the local leased session boundary",
-            outcomes: ["No unauthorized page or origin creates a run"],
+            outcomes: [{ id: "O1", text: "No unauthorized page or origin creates a run" }],
             constraints: [],
             nonGoals: [],
             assumptions: [],
@@ -141,7 +141,9 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
         yield* Effect.provideContext(
           workflows.updateGoal(context.session.id, {
             statement: "Reject foreign browser requests before any Goal execution",
-            outcomes: ["Origin and fetch metadata remain independent of page ownership"],
+            outcomes: [
+              { id: "O1", text: "Origin and fetch metadata remain independent of page ownership" },
+            ],
             constraints: [],
             nonGoals: [],
             assumptions: [],
@@ -207,7 +209,7 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
           yield* Effect.provideContext(
             workflows.updateGoal(sessionId, {
               statement: "Keep local session authority distinct",
-              outcomes: ["No cross-session run reuse"],
+              outcomes: [{ id: "O1", text: "No cross-session run reuse" }],
               constraints: [],
               nonGoals: [],
               assumptions: [],

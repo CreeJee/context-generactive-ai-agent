@@ -37,7 +37,7 @@ import { revisionStateSql } from "../../src/workflow/state-rows.ts";
 
 const goal = {
   statement: "Finish the approved work",
-  outcomes: ["Implemented and verified"],
+  outcomes: [{ id: "O1", text: "Implemented and verified" }],
   constraints: [],
   nonGoals: [],
   assumptions: [],
@@ -136,7 +136,7 @@ const citeProof = Effect.fnUntraced(function* (sessionId: string, toolCall: Scri
     ...toolCall,
     arguments: yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
       ...input,
-      criterionMappings: outcomes.map((outcomeText, outcomeIndex) => ({
+      criterionMappings: outcomes.map(({ text: outcomeText }, outcomeIndex) => ({
         outcomeIndex,
         outcomeText,
         stepId: step.id,

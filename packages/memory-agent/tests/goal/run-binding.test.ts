@@ -12,7 +12,7 @@ import { sqlGet, sqlRun } from "../support/sql.ts";
 
 const goal = {
   statement: "Run safely",
-  outcomes: ["One durable turn"],
+  outcomes: [{ id: "O1", text: "One durable turn" }],
   constraints: [],
   nonGoals: [],
   assumptions: [],
@@ -82,7 +82,10 @@ const refusedRequest = Effect.fnUntraced(function* (refusal: Refusal, session: s
     case "foreign-session":
       return { session: yield* freshSession, runId: reserved };
     case "changed-goal":
-      yield* (yield* Workflows).updateGoal(session, { ...goal, outcomes: ["New criterion"] });
+      yield* (yield* Workflows).updateGoal(session, {
+        ...goal,
+        outcomes: [{ id: "O1", text: "New criterion" }],
+      });
       return { session, runId: reserved };
   }
 });

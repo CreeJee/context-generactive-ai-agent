@@ -459,7 +459,10 @@
           "nonGoals": [],
           "openQuestions": [],
           "outcomes": [
-            "The notes are read and written"
+            {
+              "id": "O1",
+              "text": "The notes are read and written"
+            }
           ],
           "statement": "Keep the golden notes",
           "status": "active",

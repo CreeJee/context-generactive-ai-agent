@@ -292,7 +292,7 @@ export const card = (id: string): UpdatePlan["steps"][number] => ({
 
 export const goalInput = {
   statement: "Run cards",
-  outcomes: ["Cards are done"],
+  outcomes: [{ id: "O1", text: "Cards are done" }],
   constraints: [],
   nonGoals: [],
   assumptions: [],

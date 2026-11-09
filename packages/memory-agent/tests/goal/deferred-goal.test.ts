@@ -13,7 +13,7 @@ import { sqlAll, sqlGet } from "../support/sql.ts";
 
 const goal = {
   statement: "original",
-  outcomes: ["original result"],
+  outcomes: [{ id: "O1", text: "original result" }],
   constraints: [],
   nonGoals: [],
   assumptions: [],
@@ -83,7 +83,7 @@ const responder: ScriptedResponder = (invocation) =>
             previousGoalInstanceId: id,
             reason: "new independent task",
             goal: applies
-              ? { ...goal, statement: "new task", outcomes: ["new result"] }
+              ? { ...goal, statement: "new task", outcomes: [{ id: "O1", text: "new result" }] }
               : { ...goal, statement: "not saved" },
           }).pipe(Effect.orDie),
         },

@@ -214,7 +214,7 @@ export const completionEvidence = Effect.gen(function* () {
         step.evidence.length === 0 ||
         mapping.outcomeIndex < 0 ||
         mapping.acceptanceIndex < 0 ||
-        goal.outcomes[mapping.outcomeIndex] !== mapping.outcomeText ||
+        goal.outcomes[mapping.outcomeIndex]?.text !== mapping.outcomeText ||
         step.acceptanceCriteria[mapping.acceptanceIndex] !== mapping.acceptanceText ||
         mapping.evidenceNodeIds.length === 0
       )

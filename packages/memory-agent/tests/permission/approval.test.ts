@@ -92,7 +92,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("approval-gat
       const workflows = yield* Workflows;
       yield* workflows.updateGoal(sessionId, {
         statement: "Verify the implementation",
-        outcomes: ["Checks pass"],
+        outcomes: [{ id: "O1", text: "Checks pass" }],
         constraints: [],
         nonGoals: [],
         assumptions: [],

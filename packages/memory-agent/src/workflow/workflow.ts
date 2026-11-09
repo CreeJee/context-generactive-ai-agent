@@ -36,6 +36,7 @@ import {
   CriterionMapping,
   type EditPlan,
   GoalArtifact,
+  GoalOutcomes,
   GoalQuestion,
   LedgerEvent,
   PlanArtifact,
@@ -68,6 +69,8 @@ import { logFailure } from "../runtime/logged-failures.ts";
 
 export {
   GoalArtifact,
+  GoalOutcome,
+  OutcomeId,
   PlanArtifact,
   PlanStep,
   VerificationStatus,
@@ -146,7 +149,7 @@ const boardEditOf = (
 
 export const UpdateGoal = Schema.Struct({
   statement: Schema.String,
-  outcomes: Schema.Array(Schema.String),
+  outcomes: GoalOutcomes,
   constraints: Schema.Array(Schema.String),
   nonGoals: Schema.Array(Schema.String),
   assumptions: Schema.Array(Schema.String),

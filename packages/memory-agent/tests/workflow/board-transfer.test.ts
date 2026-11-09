@@ -8,7 +8,7 @@ import { freshSession, testAgent } from "../support/test-env.ts";
 
 const goal = {
   statement: "Run a Goal as a board",
-  outcomes: ["Cards can move between boards"],
+  outcomes: [{ id: "O1", text: "Cards can move between boards" }],
   constraints: [],
   nonGoals: [],
   assumptions: [],
