@@ -18,6 +18,10 @@ tester.run("no-intermediate-array", noIntermediateArrayRule, {
     "items.filter(keep).some((item, index) => index > 2);",
     "items.filter(keep).filter((item, index) => index % 2 === 0);",
     "items.filter(keep)[1];",
+    'import { Iterable } from "effect"; new Set(Iterable.map(items, name));',
+    "new Set(items);",
+    "new Set(items.keys());",
+    'import { HashSet, Iterable } from "effect"; HashSet.fromIterable(Iterable.filter(items, keep));',
   ],
   invalid: [
     {
@@ -51,6 +55,24 @@ tester.run("no-intermediate-array", noIntermediateArrayRule, {
     {
       code: "items.map(name).includes(wanted);",
       errors: [{ messageId: "scan", data: { inner: "map", outer: "includes" } }],
+    },
+    {
+      code: "new Set(items.map(name));",
+      errors: [{ messageId: "collection", data: { inner: "map", collection: "new Set" } }],
+    },
+    {
+      code: "new Map(items.map((item) => [item.id, item]));",
+      errors: [{ messageId: "collection", data: { inner: "map", collection: "new Map" } }],
+    },
+    {
+      code: 'import { HashSet } from "effect"; HashSet.fromIterable(items.filter(keep));',
+      errors: [
+        { messageId: "collection", data: { inner: "filter", collection: "HashSet.fromIterable" } },
+      ],
+    },
+    {
+      code: "Array.from(items.map(name));",
+      errors: [{ messageId: "collection", data: { inner: "map", collection: "Array.from" } }],
     },
     {
       code: "items.map((item, index) => item.at(index)).find(Boolean);",
