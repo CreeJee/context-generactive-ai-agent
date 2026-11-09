@@ -102,6 +102,7 @@ export function CardFace({
     isTruthy(card.risk) ||
     signals.decisionPending ||
     card.hold !== undefined ||
+    card.approval !== undefined ||
     signals.requesting ||
     signals.changePending ||
     signals.waitingOn.length > 0 ||
@@ -134,6 +135,12 @@ export function CardFace({
             <Badge variant="secondary">
               <CirclePauseIcon data-icon="inline-start" />
               보류
+            </Badge>
+          )}
+          {card.approval !== undefined && (
+            <Badge variant="outline">
+              <HourglassIcon data-icon="inline-start" />
+              승인 대기
             </Badge>
           )}
           {signals.requesting && (

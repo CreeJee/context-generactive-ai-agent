@@ -39,7 +39,7 @@ import {
 } from "effect";
 import { SecureRandom } from "effect/crypto";
 import type { SqlError } from "effect/sql";
-import { CardAttempts } from "../kanban/card-attempts.ts";
+import { CardAttempts, type CardApprovalPolicy } from "../kanban/card-attempts.ts";
 import { HumanDecisions } from "../kanban/human-decision.ts";
 import { KanbanOrchestrator, type KanbanAttentionReason } from "../kanban/orchestrator.ts";
 import { KanbanTools, kanbanAttentionPrompt, kanbanInstructions } from "../kanban/tools.ts";
@@ -646,11 +646,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
    * Starts the session's kanban board unless one runs: card agents execute the approved Plan and
    * the chat plans (decisions.md "outcome 장부와 이어 쓰는 Plan"). Why it could not start, if so.
    */
-  const startBoard = (sessionId: string) =>
+  const startBoard = (sessionId: string, cardApproval: CardApprovalPolicy) =>
     Effect.flatMap(kanbanBoard(sessionId), (running) =>
       running
         ? Effect.succeedNone
-        : kanbanOrchestrator.start(sessionId).pipe(
+        : kanbanOrchestrator.start(sessionId, cardApproval).pipe(
             Effect.tap(() => events.publishSession(sessionId, "run-state")),
             Effect.as(Option.none<string>()),
             Effect.catchTag("KanbanStartRefused", ({ reason }) => Effect.succeedSome(reason)),
@@ -2545,7 +2545,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         yield* execution.stop(sessionId);
         yield* cancelProviderRetries(sessionId);
         // A board that cannot start is offered again from the board panel.
-        yield* Effect.when(startBoard(sessionId), Effect.succeed(executesPlan(state)));
+        yield* Effect.when(startBoard(sessionId, "user"), Effect.succeed(executesPlan(state)));
         return state;
       }).pipe(
         Effect.catchTags({
@@ -2834,9 +2834,14 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 )
               : reconciled;
           // An executing Plan without a board moves onto one; one that cannot start waits as a
-          // blocker the user sees, never for the chat to execute it.
+          // blocker the user sees, never for the chat to execute it. The cards a Goal mode
+          // planner adds later follow the project's permission mode; a Plan the user approved
+          // leaves them to the user.
           if (executesPlan(workflow)) {
-            const refused = yield* startBoard(sessionId);
+            const refused = yield* startBoard(
+              sessionId,
+              reconciled.phase === "goal" ? "permission" : "user",
+            );
             if (Option.isSome(refused)) {
               yield* execution.blockPending(sessionId, last.runId, {
                 reason: "external_dependency",

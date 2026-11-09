@@ -2806,6 +2806,12 @@ export const migrations: readonly string[] = [
   CREATE INDEX workflow_outcome_verdicts_outcome
     ON workflow_outcome_verdicts(goal_instance_id, outcome_id, id);
   `,
+  `
+  -- Who approves the cards the planner adds to a running board. Boards started before this
+  -- column leave them to the user.
+  ALTER TABLE kanban_goals ADD COLUMN card_approval TEXT NOT NULL DEFAULT 'user'
+    CHECK (card_approval IN ('user', 'permission'));
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

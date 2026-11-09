@@ -130,6 +130,7 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
               projectRoot: fixture.project,
               mode: "worktree",
               goalVersion: 1,
+              cardApproval: "user",
             });
             const ref = cardOf(fixture, running);
             yield* Effect.scoped(worktrees.lease(ref("b")));

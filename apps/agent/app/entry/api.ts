@@ -629,6 +629,7 @@ export const api = {
         Requeue: (payload) => client.sessions.kanbanAction({ ...request, payload }),
         Hold: (payload) => client.sessions.kanbanAction({ ...request, payload }),
         Release: (payload) => client.sessions.kanbanAction({ ...request, payload }),
+        Approve: (payload) => client.sessions.kanbanAction({ ...request, payload }),
         ChangeRequest: (payload) => client.sessions.kanbanAction({ ...request, payload }),
         Cancel: (payload) => client.sessions.kanbanAction({ ...request, payload }),
         Transfer: (payload) => client.sessions.kanbanAction({ ...request, payload }),

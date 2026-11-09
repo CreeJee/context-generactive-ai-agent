@@ -36,6 +36,7 @@ import {
   CardRuns,
 } from "./kanban/card-queue.ts";
 import { KanbanOrchestrator } from "./kanban/orchestrator.ts";
+import { CardApprovalReviewer } from "./kanban/card-approval.ts";
 import { CardWorkspaceJanitor } from "./kanban/workspace-janitor.ts";
 import { subagentCardAgentsLayer } from "./kanban/subagent-card-agent.ts";
 import { GoalOrder } from "./kanban/goal-order.ts";
@@ -387,6 +388,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
   const kanbanRuntime = KanbanTools.layer.pipe(
     Layer.provideMerge(KanbanBoardActions.layer),
     Layer.provideMerge(KanbanOrchestrator.layer()),
+    Layer.provideMerge(CardApprovalReviewer.layer),
     Layer.provideMerge(GoalMerges.layer),
     Layer.provideMerge(BoardHealth.layer),
     Layer.provideMerge(ProjectScheduler.layer),

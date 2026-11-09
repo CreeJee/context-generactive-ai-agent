@@ -16,6 +16,7 @@ import {
   BoardEdit,
   BoardEditRefused,
   BoardEditResult,
+  CardApprovalChange,
   CardDraft,
   CardPatch,
   UserChange,
@@ -513,6 +514,17 @@ const make = Effect.gen(function* () {
         }),
         Hold: () => hold(true),
         Release: () => hold(false),
+        Approve: Effect.fnUntraced(function* () {
+          yield* board(sessionId);
+          yield* workflows.settleCardApproval(
+            sessionId,
+            [card.id],
+            CardApprovalChange.Approve(),
+            author,
+          );
+          yield* poke;
+          return yield* applied;
+        }),
         ChangeRequest: ({ patch }) =>
           card.status !== "in_progress"
             ? Effect.fail(refuse("card_not_running"))

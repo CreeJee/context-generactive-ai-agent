@@ -154,7 +154,7 @@ export function CardPeek({
   /** Asks to move the card to that conversation's Plan; the parent confirms and sends. */
   readonly onTransfer: (cardId: string, toSessionId: string) => void;
   readonly onEdit: (editing: boolean) => void;
-  readonly onIntent: (intent: "Hold" | "Release" | "Requeue", cardId: string) => void;
+  readonly onIntent: (intent: "Hold" | "Release" | "Requeue" | "Approve", cardId: string) => void;
   readonly onClose: () => void;
   /** Resolves with an error message, or null once the change was accepted. */
   readonly onSubmit: (edit: BoardEdit) => Promise<string | null>;
@@ -212,6 +212,27 @@ export function CardPeek({
                   disabled={disabled}
                 />
               ))}
+              {card.approval !== undefined && (
+                <div className="space-y-2 rounded-md border px-3 py-2" role="status">
+                  <p>
+                    계획자가 실행 중에 더한 카드라 승인을 기다려요. 승인하기 전에는 실행하지 않아요.
+                  </p>
+                  {card.approval.review !== undefined && (
+                    <p className="whitespace-pre-wrap text-muted-foreground">
+                      자동 검토: {card.approval.review.reason}
+                    </p>
+                  )}
+                  <p className="text-muted-foreground">거절하려면 편집에서 카드를 취소해 주세요.</p>
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={disabled || closed || intentPending}
+                    onClick={() => onIntent("Approve", card.id)}
+                  >
+                    승인
+                  </Button>
+                </div>
+              )}
               {(hold !== null || changePending) && (
                 <div className="space-y-2 rounded-md border px-3 py-2" role="status">
                   {hold !== null && <p>사유: {holdReasonText(hold)}</p>}

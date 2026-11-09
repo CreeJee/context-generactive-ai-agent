@@ -19,6 +19,7 @@ import {
 } from "effect";
 import { KanbanSettings } from "../config/kanban-settings.ts";
 import { Workflows, type PlanStep, type WorkflowStorageError } from "../workflow/workflow.ts";
+import { cardWaitsForNobody } from "../workflow/card.ts";
 import { CardAttempts, type KanbanGoal, type KanbanStorageFailed } from "./card-attempts.ts";
 import { GoalOrder } from "./goal-order.ts";
 import { GoalSchedules, type GoalScheduleStorageFailed, mergeReleases } from "./goal-schedules.ts";
@@ -189,7 +190,7 @@ const make = Effect.gen(function* () {
     return (state.plan?.steps ?? []).filter(
       (step) =>
         step.status === "ready" &&
-        step.hold === undefined &&
+        cardWaitsForNobody(step) &&
         (ids === null || HashSet.has(ids, step.id)),
     );
   });

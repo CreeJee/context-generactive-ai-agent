@@ -81,7 +81,7 @@ const editPlan = {
 - edit: change the fields given in patch; absent fields keep their value. A done step cannot change.
 - move: put a step at index (0-based).
 - remove: take a step off the Plan. A done step cannot be removed.
-dependsOn and outcomes follow the update_plan rules. Other steps keep their progress and the workflow phase stays as it is. Never call this in parallel with update_plan, edit_plan or update_workflow_progress.`,
+dependsOn and outcomes follow the update_plan rules. Other steps keep their progress and the workflow phase stays as it is. A step added while the Plan runs on a kanban board waits for approval before it runs. Never call this in parallel with update_plan, edit_plan or update_workflow_progress.`,
   parameters: EditPlan,
 } as const;
 

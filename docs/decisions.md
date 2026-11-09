@@ -4608,6 +4608,11 @@
   - 사용자 턴 안에서 보드를 시작하지 않는다. 예약된 턴이 보드의 카드 이동으로 `workflow_changed` 거절을 받는다. 그래서 보드 없이 실행 중인 이전 Plan에 사용자가 말하면 그 턴은 예전처럼 execute 지시문으로 돌고, 턴이 끝나면 보드가 이어받는다. execute 지시문은 phase 정리에서 없앤다.
   - 화면은 승인한 뒤 실행 메시지를 보내지 않는다.
 - 구현(2c Goal 모드): Goal phase의 채팅은 계획자다. 프로젝트 도구는 읽기만 하고, 워크플로 도구는 `update_goal`·`update_plan`·`edit_plan`·`start_new_goal`이다(`update_workflow_progress`는 뺀다). Goal과 outcome id, 모든 outcome을 위하는 카드의 ready Plan을 저장하면, run이 끝난 뒤 owner가 Plan을 승인하고 보드를 시작한다. Plan 모드에서 사용자가 승인하는 자리를 Goal 모드에서는 owner가 바로 채운다.
+- 구현(2c·3 새 카드 승인): 실행 중인 보드에 계획자가 더한 카드(`edit_plan`의 add, `update_plan`의 새 step id)는 `PlanStep.approval`을 달고 backlog에서 기다린다. 루프는 이 카드를 배정하지 않고, 이미 승인된 카드는 계속 돈다.
+  - 누가 승인하는지는 보드를 시작할 때 `kanban_goals.card_approval`에 남긴다. 사용자가 승인한 Plan, 보드 패널의 시작 버튼, 보드 없이 실행 중이던 이전 Plan은 `user`다. Goal 모드에서 owner가 승인한 Plan은 `permission`이다. 이 컬럼 전에 시작한 보드는 `user`로 읽는다.
+  - `permission` 보드의 look이 프로젝트 권한 모드를 본다. full이면 승인한다. ask면 사용자를 기다린다. auto면 `CardApprovalReviewer`가 대기 카드를 한 번에 검토한다(계획자 모델의 `PermissionClassifier`, 입력은 Goal의 문장·제약·non-goal과 카드). 허용하지 않으면 그 판정(`review`)을 카드에 남기고 사용자를 기다린다. 검토한 카드는 다시 검토하지 않는다. 검토는 모델 호출이라 루프 옆 fiber에서 돈다.
+  - 사용자는 카드 peek의 "승인"(`BoardIntent.Approve`)으로 승인하고, 거절은 카드 취소다. 모델은 `read_kanban_board`의 `awaitingApproval`로 본다.
+  - 기존 카드를 대신하는 카드(split·merge·충돌 해결 카드)와 사용자가 더한 카드는 기다리지 않는다. 결정은 "새 카드"만 적었고, 대신하는 카드는 이미 승인된 일의 범위를 나눈 것이라 승인 대상에서 뺐다.
 
 ## SQLite 연결은 `synchronous = NORMAL`로 쓴다 (2026-11-09)
 

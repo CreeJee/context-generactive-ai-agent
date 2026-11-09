@@ -1,6 +1,12 @@
 import { Data, Effect, HashSet, Iterable, Match, Schema, Struct } from "effect";
 import { optionalProperty } from "../optional-property.ts";
-import { BoardAuthor, cardContractKeys, type CardStatus } from "./card.ts";
+import {
+  BoardAuthor,
+  cardContractKeys,
+  type CardApproval,
+  type CardApprovalReview,
+  type CardStatus,
+} from "./card.ts";
 import {
   BoardEdit,
   CardPatch,
@@ -46,6 +52,7 @@ export class BoardEditRefused extends Schema.TaggedError<
     "card_not_waiting",
     "card_held",
     "card_not_held",
+    "card_not_pending",
   ]),
 }) {}
 
@@ -73,7 +80,9 @@ export const closedPlan = (plan: PlanArtifact): PlanArtifact => ({
   ...plan,
   status: "closed",
   steps: plan.steps.map((step) =>
-    step.status === "done" ? step : { ...Struct.omit(step, ["hold"]), status: "blocked" },
+    step.status === "done"
+      ? step
+      : { ...Struct.omit(step, ["hold", "approval"]), status: "blocked" },
   ),
 });
 
@@ -139,6 +148,8 @@ export const planBoardEdit = Effect.fnUntraced(function* (
   edit: BoardEdit,
   author: BoardAuthor,
   newCardId: string,
+  /** Set when an added card waits for approval before the board may assign it. */
+  approval?: CardApproval,
 ): Effect.fn.Return<
   BoardEditPlan,
   BoardEditRefused | PlanDependenciesRejected | PlanOutcomesRejected
@@ -193,6 +204,7 @@ export const planBoardEdit = Effect.fnUntraced(function* (
         id: newCardId,
         ruleRefs: draft.ruleRefs ?? [],
         outcomes: draft.outcomes ?? [],
+        ...optionalProperty("approval", approval),
         status: "backlog",
         evidence: [],
       };
@@ -295,5 +307,50 @@ export const planCardHold = Effect.fnUntraced(function* (
       steps: restatusAll(plan.steps.map((step) => (step.id === card.id ? next : step))),
     },
     detail: `card ${card.id} ${change.hold ? "held" : "released"}`,
+  };
+});
+
+/** Settles cards waiting for approval: approved, or the reviewer's verdict that leaves them to the user. */
+export type CardApprovalChange = Data.TaggedEnum<{
+  Approve: {};
+  Review: { readonly review: CardApprovalReview };
+}>;
+export const CardApprovalChange = Data.taggedEnum<CardApprovalChange>();
+
+/**
+ * Approves cards waiting for approval, or records the auto mode reviewer's verdict on them. An
+ * approved card follows its dependencies again. Like a hold it keeps the Plan version.
+ */
+export const planCardApproval = Effect.fnUntraced(function* (
+  plan: PlanArtifact | null,
+  cardIds: readonly string[],
+  change: CardApprovalChange,
+): Effect.fn.Return<{ readonly plan: PlanArtifact; readonly detail: string }, BoardEditRefused> {
+  if (plan === null) return yield* BoardEditRefused.make({ reason: "plan_missing" });
+  if (planEnded(plan)) return yield* BoardEditRefused.make({ reason: "plan_closed" });
+  const ids = HashSet.fromIterable(cardIds);
+  const cards = plan.steps.filter((step) => HashSet.has(ids, step.id));
+  if (cards.length !== HashSet.size(ids))
+    return yield* BoardEditRefused.make({ reason: "card_missing" });
+  if (cards.some((card) => card.approval === undefined))
+    return yield* BoardEditRefused.make({ reason: "card_not_pending" });
+  const settled = (card: PlanStep): PlanStep =>
+    CardApprovalChange.$match(change, {
+      Approve: () => Struct.omit(card, ["approval"]),
+      Review: ({ review }) =>
+        card.approval === undefined ? card : { ...card, approval: { ...card.approval, review } },
+    });
+  const listed = cards.map((card) => card.id).join(", ");
+  return {
+    plan: {
+      ...plan,
+      steps: restatusAll(
+        plan.steps.map((step) => (HashSet.has(ids, step.id) ? settled(step) : step)),
+      ),
+    },
+    detail: CardApprovalChange.$match(change, {
+      Approve: () => `cards ${listed} approved`,
+      Review: ({ review }) => `cards ${listed} left to the user: ${review.reason}`,
+    }),
   };
 });

@@ -195,6 +195,7 @@ export const SessionsApiHandlers = HttpApiBuilder.group(
               Requeue: (intent) => applyIntent(session, intent),
               Hold: (intent) => applyIntent(session, intent),
               Release: (intent) => applyIntent(session, intent),
+              Approve: (intent) => applyIntent(session, intent),
               ChangeRequest: (intent) => applyIntent(session, intent),
               Cancel: (intent) => applyIntent(session, intent),
               // The card lands on another conversation's board, so that board is told too.

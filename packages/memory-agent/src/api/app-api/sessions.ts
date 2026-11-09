@@ -160,6 +160,7 @@ const BoardEditRefused = appRefusal(409, [
   "card_not_waiting",
   "card_held",
   "card_not_held",
+  "card_not_pending",
 ]);
 
 /** The change would break the Plan's dependencies; `issues` says how. */

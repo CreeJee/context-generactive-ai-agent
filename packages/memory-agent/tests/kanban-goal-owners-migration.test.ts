@@ -46,6 +46,8 @@ it.effect("a board finds its session and project through its Goal instance", () 
         status: "active",
         created_at: 1,
         updated_at: 2,
+        // A later migration: boards started before it leave planner-added cards to the user.
+        card_approval: "user",
       },
     ]);
     expect(

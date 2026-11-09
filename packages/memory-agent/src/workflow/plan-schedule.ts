@@ -10,7 +10,12 @@ import {
   Option,
   Schema,
 } from "effect";
-import { stepProgressStatus, type CardStatus, type StepProgressStatus } from "./card.ts";
+import {
+  cardWaitsForNobody,
+  stepProgressStatus,
+  type CardStatus,
+  type StepProgressStatus,
+} from "./card.ts";
 import type { PlanStep } from "./workflow.ts";
 
 /** A dependency defect the model can fix by revising the Plan's step ids or dependsOn. */
@@ -27,7 +32,8 @@ export class PlanDependenciesRejected extends Schema.TaggedError<
   { readonly brand: unique symbol }
 >()("PlanDependenciesRejected", { issues: Schema.NonEmptyArray(PlanDependencyIssue) }) {}
 
-type DependencyStep = Pick<PlanStep, "id" | "dependsOn"> & Partial<Pick<PlanStep, "hold">>;
+type DependencyStep = Pick<PlanStep, "id" | "dependsOn"> &
+  Partial<Pick<PlanStep, "hold" | "approval">>;
 
 /** Edges to other existing steps; unknown and self references carry no ordering. */
 const knownDependencies = (steps: readonly DependencyStep[]) => {
@@ -112,7 +118,10 @@ export const validatePlanDependencies = Effect.fnUntraced(function* (
     return yield* PlanDependenciesRejected.make({ issues });
 });
 
-/** Status of a card not started yet: ready once every known dependency is done, unless held. */
+/**
+ * Status of a card not started yet: ready once every known dependency is done, unless held or
+ * waiting for approval.
+ */
 export const notStartedStatus: {
   (
     isDone: (id: string) => boolean,
@@ -123,7 +132,7 @@ function notStartedStatusBody(
   isDone: (id: string) => boolean,
 ): (step: DependencyStep) => "ready" | "backlog" {
   const edges = knownDependencies(steps);
-  return (step) => (step.hold === undefined && edges(step).every(isDone) ? "ready" : "backlog");
+  return (step) => (cardWaitsForNobody(step) && edges(step).every(isDone) ? "ready" : "backlog");
 }
 
 export interface UnmetDependency {

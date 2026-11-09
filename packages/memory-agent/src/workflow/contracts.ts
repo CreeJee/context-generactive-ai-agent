@@ -388,6 +388,8 @@ export const BoardIntent = Schema.TaggedUnion({
   Requeue: { cardId: Schema.String },
   Hold: { cardId: Schema.String },
   Release: { cardId: Schema.String },
+  /** A card the planner added, waiting for approval, may run; refusing it is `Cancel`. */
+  Approve: { cardId: Schema.String },
   /** A change to an executing card, which the orchestrator settles. */
   ChangeRequest: { cardId: Schema.String, patch: CardPatch },
   Cancel: { cardId: Schema.String },

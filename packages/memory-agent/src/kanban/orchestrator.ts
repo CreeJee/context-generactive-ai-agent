@@ -24,7 +24,7 @@ import { WorkflowEngine } from "effect/workflow";
 import { AppEvents } from "../events/app-events.ts";
 import { Projects } from "../projects/projects.ts";
 import { Sessions } from "../sessions/sessions.ts";
-import type { BoardEditRefused } from "../workflow/board-edit.ts";
+import { CardApprovalChange, type BoardEditRefused } from "../workflow/board-edit.ts";
 import { BoardAuthor, type CardStatus } from "../workflow/card.ts";
 import {
   Workflows,
@@ -33,6 +33,7 @@ import {
   type WorkflowState,
 } from "../workflow/workflow.ts";
 import { CardVerifier } from "./card-agent.ts";
+import { CardApprovalReviewer } from "./card-approval.ts";
 import { executionSubjects } from "../workflow/execution-subjects.ts";
 import {
   AssignmentHold,
@@ -41,6 +42,7 @@ import {
   KanbanStorageReason,
   type CardAttempt,
   type CardAttemptOutcome,
+  type CardApprovalPolicy,
   type CardLadder,
   type KanbanGoal,
 } from "./card-attempts.ts";
@@ -222,6 +224,7 @@ const make = (options: KanbanOrchestratorOptions) =>
     const ledger = yield* OutcomeLedger;
     const health = yield* BoardHealth;
     const janitor = yield* CardWorkspaceJanitor;
+    const reviewer = yield* CardApprovalReviewer;
     const pollInterval = Duration.fromInputUnsafe(options.pollInterval ?? Duration.seconds(5));
     const idlePollInterval = Duration.fromInputUnsafe(
       options.idlePollInterval ?? Duration.minutes(1),
@@ -229,6 +232,8 @@ const make = (options: KanbanOrchestratorOptions) =>
     const backoff = Duration.fromInputUnsafe(options.backoff ?? Duration.minutes(2));
     const loops = yield* FiberMap.make<string>();
     const integrations = yield* FiberMap.make<string>();
+    // One auto mode review of a board's waiting cards at a time; it runs beside the loop.
+    const approvals = yield* FiberMap.make<string>();
     const pokes = yield* PubSub.unbounded<string>();
     const attention = yield* PubSub.unbounded<KanbanAttention>();
     const announced = yield* Ref.make<Readonly<Record<string, string>>>({});
@@ -964,6 +969,61 @@ const make = (options: KanbanOrchestratorOptions) =>
     });
 
     /**
+     * Settles the cards the planner added that wait for approval, as the board's policy says. A
+     * board the user approved leaves them to the user. Otherwise the project's permission mode
+     * decides when the look happens: full approves them, ask leaves them to the user, auto has
+     * its reviewer judge the ones not reviewed yet and leaves the rest to the user with the
+     * reason. The cards wait in backlog meanwhile; the cards already approved keep running.
+     */
+    const settleApprovals = Effect.fnUntraced(function* (goal: KanbanGoal, state: WorkflowState) {
+      const waiting = (state.plan?.steps ?? []).filter(
+        (step) => step.approval !== undefined && step.approval.review === undefined,
+      );
+      if (goal.cardApproval === "user" || waiting.length === 0 || state.goal === null) return;
+      const goalArtifact = state.goal;
+      const found = yield* projects.get(goal.projectId).pipe(Effect.option);
+      if (Option.isNone(found)) return;
+      const project = found.value;
+      // A card cancelled or approved since the read refuses the batch; the next look settles the rest.
+      const settle = (change: CardApprovalChange) =>
+        workflows
+          .settleCardApproval(
+            goal.sessionId,
+            waiting.map((step) => step.id),
+            change,
+            loopAuthor(goal.goalInstanceId),
+          )
+          .pipe(Effect.catchTag("BoardEditRefused", () => Effect.void));
+      yield* Match.value(project.permissionMode).pipe(
+        Match.when("full", () => settle(CardApprovalChange.Approve())),
+        Match.when("ask", () => Effect.void),
+        Match.when("auto", () =>
+          FiberMap.run(
+            approvals,
+            goal.goalInstanceId,
+            reviewer
+              .review({ project, sessionId: goal.sessionId, goal: goalArtifact, cards: waiting })
+              .pipe(
+                Effect.flatMap(
+                  Option.match({
+                    onNone: () => settle(CardApprovalChange.Approve()),
+                    onSome: (review) => settle(CardApprovalChange.Review({ review })),
+                  }),
+                ),
+                Effect.andThen(PubSub.publish(pokes, goal.goalInstanceId)),
+                // Unsettled cards are reviewed again at the next look.
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("Card approval review was not recorded", cause),
+                ),
+              ),
+            { onlyIfMissing: true },
+          ),
+        ),
+        Match.exhaustive,
+      );
+    });
+
+    /**
      * One look at a board: take up outcomes, then assign what may run. It ends `idle` when the
      * Plan is not executing and no attempt of the board is running: nothing changes the board then
      * until someone else does.
@@ -1008,6 +1068,7 @@ const make = (options: KanbanOrchestratorOptions) =>
         { discard: true },
       );
 
+      yield* settleApprovals(goal, before);
       const state = yield* workflows.get(goal.sessionId);
       // After reading the board: an answer is stored before it moves its card, so every card an
       // answer moved in this board is followed before it can be assigned.
@@ -1232,8 +1293,13 @@ const make = (options: KanbanOrchestratorOptions) =>
       /**
        * Runs the session's current Goal as a kanban board. The Plan must be executing. A project
        * that cannot have worktrees runs its cards one at a time in the project itself.
+       * `cardApproval` says who approves the cards the planner adds while it runs: the user, unless
+       * the owner approved the Plan in Goal mode.
        */
-      start: Effect.fn("KanbanOrchestrator.start")(function* (sessionId: string) {
+      start: Effect.fn("KanbanOrchestrator.start")(function* (
+        sessionId: string,
+        cardApproval: CardApprovalPolicy = "user",
+      ) {
         const goalInstanceId = yield* workflows.goalInstanceId(sessionId);
         const state = yield* workflows.get(sessionId);
         if (goalInstanceId === null || state.goal === null)
@@ -1272,6 +1338,7 @@ const make = (options: KanbanOrchestratorOptions) =>
           projectRoot: project.root,
           mode,
           goalVersion: state.goal.version,
+          cardApproval,
         });
         yield* run({ sessionId, goalInstanceId });
         // A board already running looks now instead of at its next interval.

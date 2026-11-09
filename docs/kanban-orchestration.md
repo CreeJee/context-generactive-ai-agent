@@ -54,9 +54,11 @@ type BoardAuthor =
 | `Release`                  | 보류 카드 → 준비         | hold를 떼고 의존을 다시 따른다                                               | `card_not_held`                         |
 | `ChangeRequest(cardId, …)` | 진행 중 카드를 다른 열로 | 이동하지 않고 수정 요청을 쓰게 한 뒤 `UserChangeRequest`로 보낸다            | `card_not_running`                      |
 | `Cancel`                   | (peek의 취소)            | 기존 `CancelCard`·중단 경로                                                  | 기존 보드 편집 거절                     |
+| `Approve`                  | (peek의 승인)            | 승인 대기 카드의 `approval`을 떼고 의존을 다시 따른다                        | `card_not_pending`                      |
 
 - 매핑이 없는 드롭(진행 중·검증·판단 필요·완료·막힘 열로, 판단 필요·검증·완료 카드에서)은 드래그 중 비활성과 이유를 보인다. 판단 필요 카드는 판단 응답으로 처리한다.
 - 보류는 재시작·같은 id의 replan 뒤에도 유지된다(Plan과 함께 `workflow_state_revisions`에 저장). 이유는 decisions.md "드래그는 의도, 상태는 서버 (2026-10-18)".
+- 실행 중인 보드에 계획자가 더한 카드(`edit_plan`의 add, `update_plan`의 새 step id)는 `PlanStep.approval { requestedBy, at, review? }`를 달고 backlog에서 승인을 기다린다. 사용자가 더한 카드와 기존 카드를 대신하는 카드(split·merge·충돌 해결)는 기다리지 않는다. 누가 승인하는지는 보드를 시작할 때 정한다(`kanban_goals.card_approval`). 사용자가 승인한 Plan(`user`)은 사용자가, Goal 모드에서 owner가 승인한 Plan(`permission`)은 프로젝트 권한 모드가 정한다. full은 다음 look이 승인하고, ask는 사용자를 기다리고, auto는 `CardApprovalReviewer`(계획자 모델의 `PermissionClassifier`)가 대기 카드를 한 번에 검토한다. 허용하지 않으면 그 판정을 `review`로 남기고 사용자를 기다린다. 이미 승인된 카드는 그동안 계속 돈다. 거절은 카드 취소다. decisions.md "outcome 장부와 이어 쓰는 Plan".
 - 화면은 채팅의 요약과 전체 폭 보드 Sheet(`?board`), 카드 peek(`?card`)로 나눈다. 상호작용은 decisions.md "칸반 보드 화면 (2026-10-18)". 프로젝트의 실행 중인 Plan은 사이드바 "칸반 보드"의 전체 보드(`?boards`, 한 보드에 실행 중인 Plan의 카드, 카드 peek은 `?boardCard`)에서 함께 보고, 실행 전 Plan은 거기서 이름만 보인다. decisions.md "프로젝트 보드를 한 보드로 합치고 카드를 다른 대화로 옮기기 (2026-10-22)", "우선순위 트리 (2026-10-22)".
 
 ## 실행

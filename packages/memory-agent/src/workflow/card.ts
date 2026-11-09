@@ -75,5 +75,33 @@ export type BoardAuthor = typeof BoardAuthor.Type;
 export const CardHold = Schema.Struct({ by: BoardAuthor, at: Schema.String });
 export type CardHold = typeof CardHold.Type;
 
+/** The auto permission mode's reviewer would not approve a card; the user decides it. */
+export const CardApprovalReview = Schema.Struct({
+  decision: Schema.Literals(["ask", "block"]),
+  reason: Schema.String,
+});
+export type CardApprovalReview = typeof CardApprovalReview.Type;
+
+/**
+ * A card the planner added to a running board, waiting for approval: like a held card it stays in
+ * backlog and is never assigned until approved. The board approves it at once, through the auto
+ * permission mode's reviewer, or by the user, as the board's approval policy says.
+ */
+export const CardApproval = Schema.Struct({
+  requestedBy: BoardAuthor,
+  at: Schema.String,
+  review: Schema.optionalKey(CardApprovalReview),
+});
+export type CardApproval = typeof CardApproval.Type;
+
 /** The fields a card keeps when the model replans the same step id, besides its contract. */
-export const cardHoldFields = { hold: Schema.optionalKey(CardHold) } as const;
+export const cardHoldFields = {
+  hold: Schema.optionalKey(CardHold),
+  approval: Schema.optionalKey(CardApproval),
+} as const;
+
+/** Whether nothing keeps a card that is not started from following its dependencies. */
+export const cardWaitsForNobody = (card: {
+  readonly hold?: CardHold;
+  readonly approval?: CardApproval;
+}) => card.hold === undefined && card.approval === undefined;

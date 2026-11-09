@@ -85,6 +85,8 @@ export const errorText = (code: ApiErrorCode) => {
       return "이미 보류한 카드예요.";
     case "card_not_held":
       return "보류하지 않은 카드예요.";
+    case "card_not_pending":
+      return "승인을 기다리는 카드가 아니에요.";
     case "card_not_blocked":
       return "막힌 카드만 다시 대기열에 넣을 수 있어요.";
     case "card_not_running":
@@ -170,6 +172,7 @@ const pendingOf = (
       }),
     Hold: moved,
     Release: moved,
+    Approve: () => null,
     Requeue: moved,
     ChangeRequest: () => null,
     Cancel: () => null,

@@ -21,6 +21,7 @@ import {
   type GoalVerification,
   type OutcomeVerification,
 } from "../kanban/card-agent.ts";
+import { CardApprovalReviewer } from "../kanban/card-approval.ts";
 import { GoalOrder } from "../kanban/goal-order.ts";
 import { GoalSchedules } from "../kanban/goal-schedules.ts";
 import { BoardHealth } from "../kanban/board-health.ts";
@@ -184,6 +185,12 @@ export const passingOutcomeVerifier = Layer.succeed(
   }),
 );
 
+/** An auto mode reviewer that approves every card. */
+export const approvingCardReviewer = Layer.succeed(
+  CardApprovalReviewer,
+  CardApprovalReviewer.of({ review: () => Effect.succeedNone }),
+);
+
 /**
  * An owner with the orchestrator loop, the project scheduler, the merge queue and the board
  * actions; looks happen every 50ms.
@@ -194,12 +201,14 @@ export const kanbanBoardOwner = (owner: {
   readonly verifier: Layer.Layer<CardVerifier>;
   readonly goalVerifier?: Layer.Layer<GoalVerifier>;
   readonly outcomeVerifier?: Layer.Layer<OutcomeVerifier>;
+  readonly cardReviewer?: Layer.Layer<CardApprovalReviewer>;
   readonly cores?: number;
 }) =>
   KanbanBoardActions.layer.pipe(
     Layer.provideMerge(
       KanbanOrchestrator.layer({ pollInterval: "50 millis", backoff: "50 millis" }),
     ),
+    Layer.provideMerge(owner.cardReviewer ?? approvingCardReviewer),
     Layer.provideMerge(GoalMerges.layer),
     Layer.provideMerge(BoardHealth.layer),
     Layer.provideMerge(ProjectScheduler.layer),
@@ -224,6 +233,8 @@ export const openKanbanOwner = Effect.fnUntraced(function* (
     readonly verify?: (input: CardVerification) => Effect.Effect<CardVerdict>;
     readonly verifyGoal?: (input: GoalVerification) => Effect.Effect<CardVerdict>;
     readonly verifyOutcome?: (input: OutcomeVerification) => Effect.Effect<CardVerdict>;
+    /** The auto mode review of cards the planner added; approves them unless told otherwise. */
+    readonly reviewCards?: CardApprovalReviewer["Service"]["review"];
     readonly cores?: number;
   },
 ) {
@@ -259,6 +270,10 @@ export const openKanbanOwner = Effect.fnUntraced(function* (
                   CardVerdict.Passed({ evidence: [`outcome ${input.outcome.id} met`] }),
                 )),
           }),
+        ),
+        cardReviewer: Layer.succeed(
+          CardApprovalReviewer,
+          CardApprovalReviewer.of({ review: options.reviewCards ?? (() => Effect.succeedNone) }),
         ),
         cores: options.cores ?? 2,
       }),
@@ -388,6 +403,7 @@ export const executingBoard = Effect.fn("executingBoard")(function* (
     projectRoot: fixture.project,
     mode: "worktree",
     goalVersion: 1,
+    cardApproval: "user",
   });
   return { sessionId, projectId, goalInstanceId };
 });

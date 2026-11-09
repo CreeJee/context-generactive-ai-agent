@@ -76,20 +76,23 @@ const planned = Effect.fnUntraced(function* (turns: readonly ScriptedTurn[]) {
       yield* workflows.updatePlan(id, plan);
     }),
   );
-  const board = env.use(
+  const kanban = env.use(
     Effect.gen(function* () {
       const goalInstanceId = yield* (yield* Workflows).goalInstanceId(id);
-      if (goalInstanceId === null) return false;
-      return Option.exists(
-        yield* (yield* CardAttempts).goal(goalInstanceId),
-        (found) => found.active,
-      );
+      return goalInstanceId === null
+        ? Option.none()
+        : Option.filter(yield* (yield* CardAttempts).goal(goalInstanceId), (found) => found.active);
     }),
   );
   return {
     id,
     invocations: () => env.provider!.invocations.filter((turn) => turn.run.threadId === id),
-    board,
+    board: Effect.map(kanban, Option.isSome),
+    /** Who approves the cards the planner adds to the running board. */
+    cardApproval: Effect.map(
+      kanban,
+      Option.match({ onNone: () => null, onSome: (found) => found.cardApproval }),
+    ),
   };
 });
 
@@ -111,6 +114,8 @@ testAgent({ testProvider: { responder } })("approved Plan execution", (it) => {
       yield* waitForBoard(session.board);
       // The board executes it; no model turn ran for the approval.
       expect(session.invocations()).toHaveLength(0);
+      // The user approved the Plan, so the user approves the cards the planner adds later.
+      expect(yield* session.cardApproval).toBe("user");
     }),
   );
 
@@ -147,6 +152,8 @@ testAgent({ testProvider: { responder } })("approved Plan execution", (it) => {
         Effect.flatMap(Workflows, (workflows) => workflows.get(session.id)),
       );
       expect([state.phase, state.plan?.status]).toEqual(["execute", "executing"]);
+      // The cards the planner adds later follow the project's permission mode.
+      expect(yield* session.cardApproval).toBe("permission");
       // The planner had no project write tools and no progress tool.
       const tools = session.invocations()[0]?.toolNames ?? [];
       expect(tools).toEqual(expect.arrayContaining(["update_goal", "update_plan"]));

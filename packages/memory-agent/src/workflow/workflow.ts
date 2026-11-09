@@ -34,7 +34,13 @@ import {
 } from "./goal-transitions.ts";
 import { completionEvidence, Derived } from "./completion-evidence.ts";
 import { currentStatesSql, revisionStateSql } from "./state-rows.ts";
-import { BoardAuthor, CardStatus, cardContract, StepProgressStatus } from "./card.ts";
+import {
+  BoardAuthor,
+  CardStatus,
+  cardContract,
+  StepProgressStatus,
+  type CardApproval,
+} from "./card.ts";
 import {
   CompletionSnapshot,
   CriterionMapping,
@@ -63,10 +69,12 @@ import {
   BoardEditResult,
   closedPlan,
   planBoardEdit,
+  planCardApproval,
   planCardHold,
   planCardTransition,
   UserChange,
   type BoardEdit,
+  type CardApprovalChange,
   type CardTransition,
   type UserChangeRequest,
 } from "./board-edit.ts";
@@ -533,6 +541,16 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
       exists(sql`SELECT 1 AS active FROM kanban_goals k JOIN workflow_goal_identities g
         ON g.goal_instance_id = k.goal_instance_id
         WHERE g.session_id = ${sessionId} AND k.status = 'active'`);
+    /**
+     * The approval a card the planner adds now waits for: on a running board every new card it
+     * adds waits until the board's approval policy approves it. A user's own cards never wait.
+     */
+    const approvalFor = (sessionId: string, author: BoardAuthor | undefined, at: string) =>
+      author === undefined || BoardAuthor.guards.User(author)
+        ? Effect.succeedNone
+        : Effect.map(kanbanBoard(sessionId), (kanban) =>
+            kanban ? Option.some<CardApproval>({ requestedBy: author, at }) : Option.none(),
+          );
     const event = (
       state: WorkflowState,
       kind: (typeof LedgerEvent.Type)["kind"],
@@ -1130,7 +1148,9 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
               (current) =>
                 validateStepOutcomes(current.goal?.outcomes ?? [], input.steps).pipe(
                   Effect.andThen(nowIso),
-                  Effect.map((now) => {
+                  Effect.bindTo("now"),
+                  Effect.bind("approval", ({ now }) => approvalFor(sessionId, author, now)),
+                  Effect.map(({ now, approval }) => {
                     const previous = HashMap.fromIterable(
                       Iterable.map(current.plan?.steps ?? [], (step) => [step.id, step]),
                     );
@@ -1141,10 +1161,14 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                           const replanned = { ...step, status: "pending" as const, evidence: [] };
                           const prior = Option.getOrUndefined(HashMap.get(previous, step.id));
                           return prior === undefined
-                            ? replanned
+                            ? {
+                                ...replanned,
+                                ...optionalProperty("approval", Option.getOrUndefined(approval)),
+                              }
                             : {
                                 ...cardContract(prior),
                                 ...optionalProperty("hold", prior.hold),
+                                ...optionalProperty("approval", prior.approval),
                                 ...step,
                                 ...replannedProgress(prior, step),
                               };
@@ -1562,6 +1586,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
           Effect.gen(function* () {
             const author = BoardAuthor.cases.Orchestrator.make({ runId });
             const current = yield* get(sessionId);
+            const approval = yield* approvalFor(sessionId, author, yield* nowIso);
             const edited = yield* Effect.reduce(
               input.edits,
               () => ({
@@ -1572,7 +1597,14 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
               (done, planEdit) => {
                 const { edit, newCardId } = boardEditOf(planEdit, done.version);
                 return Effect.flatMap(
-                  planBoardEdit(done.plan, current.goal?.outcomes ?? [], edit, author, newCardId),
+                  planBoardEdit(
+                    done.plan,
+                    current.goal?.outcomes ?? [],
+                    edit,
+                    author,
+                    newCardId,
+                    Option.getOrUndefined(approval),
+                  ),
                   (planned) =>
                     BoardEditPlan.$match(planned, {
                       Apply: ({ plan, detail }) =>
@@ -1614,6 +1646,25 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
             const current = yield* get(sessionId);
             const now = yield* nowIso;
             const planned = yield* planCardHold(current.plan, change, author, now);
+            return yield* save(sessionId, yield* boardChanged(current, planned, now), author);
+          }),
+        ),
+
+      /**
+       * Approves cards the planner added, or records why the auto mode's reviewer left them to the
+       * user. Recorded with its author.
+       */
+      settleCardApproval: (
+        sessionId: string,
+        cardIds: readonly string[],
+        change: CardApprovalChange,
+        author: BoardAuthor,
+      ) =>
+        transacted(
+          Effect.gen(function* () {
+            const current = yield* get(sessionId);
+            const now = yield* nowIso;
+            const planned = yield* planCardApproval(current.plan, cardIds, change);
             return yield* save(sessionId, yield* boardChanged(current, planned, now), author);
           }),
         ),

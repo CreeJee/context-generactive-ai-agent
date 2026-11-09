@@ -151,7 +151,7 @@ type ActionFailure =
 const readBoard = {
   name: "read_kanban_board",
   description:
-    "Read the kanban board: each card's status and the Goal outcomes it serves, why the loop stopped it (failures, replan requests, conflicts, uncertain effects), users' pending change requests, the cards a changed Goal holds until they are classified (goalChange.cards), and each Goal outcome's status: unplanned (no card serves it), in_progress (its cards are not done), awaiting_check (its cards are done and the owner is judging it), met or not_met (the owner's verdict on the Goal branch).",
+    "Read the kanban board: each card's status and the Goal outcomes it serves, why the loop stopped it (failures, replan requests, conflicts, uncertain effects), users' pending change requests, the cards a changed Goal holds until they are classified (goalChange.cards), the cards you added that wait for approval before they run (awaitingApproval), and each Goal outcome's status: unplanned (no card serves it), in_progress (its cards are not done), awaiting_check (its cards are done and the owner is judging it), met or not_met (the owner's verdict on the Goal branch).",
   parameters: ReadBoardInput,
 } as const;
 
@@ -261,6 +261,7 @@ const make = Effect.gen(function* () {
                       title: found?.title ?? "",
                       dependsOn: found?.dependsOn ?? [],
                       outcomes: found?.outcomes ?? [],
+                      awaitingApproval: found?.approval !== undefined,
                     };
                   }),
                   pendingChanges: board.pendingChanges,
@@ -328,6 +329,7 @@ Your part is what the loop cannot decide. Read the board with read_kanban_board,
 - A blocked card whose deliveries ran out: requeue once the cause is understood.
 - The user asks the board to target the branch they now have checked out: retarget.
 - A Goal outcome that is unplanned or not_met: add cards that serve it (their outcomes name its id), reading a not_met verdict for what is missing.
+Cards you add while the board runs wait for approval (awaitingApproval) before the loop assigns them: by the user, or by the project's permission mode when the owner approved the Plan in Goal mode. The cards already approved keep running meanwhile; do not add the same cards again.
 The verifier judges each outcome once its cards are done. When every outcome is met the owner merges the Goal branch and completes the Goal and its Plan; you never record their completion.
 Cards in human_decision wait for a person; do not move them yourself unless the user tells you to.`;
 

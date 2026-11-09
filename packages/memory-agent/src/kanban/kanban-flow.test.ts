@@ -30,7 +30,9 @@ import {
   waitForCards,
   type KanbanFixture,
 } from "../testing/kanban.ts";
+import { Projects } from "../projects/projects.ts";
 import { BoardAuthor } from "../workflow/card.ts";
+import { BoardIntent } from "../workflow/contracts.ts";
 import { OutcomeLedger } from "../workflow/outcome-ledger.ts";
 import { Workflows, type PlanStep } from "../workflow/workflow.ts";
 import { GoalChangeVerdict, KanbanBoardActions } from "./board-actions.ts";
@@ -97,6 +99,21 @@ const mergeIs =
 
 const goalFile = (fixture: KanbanFixture, goalInstanceId: string, file: string) =>
   git(fixture.project, "show", `ctx/goal/${goalInstanceId}:${file}`);
+
+const user = BoardAuthor.cases.User.make({});
+
+/** The planner's run adds card `id` to the session's running board, as edit_plan does. */
+const plannerAdds = Effect.fnUntraced(function* (sessionId: string, id: string) {
+  const workflows = yield* Workflows;
+  const planVersion = (yield* workflows.get(sessionId)).plan?.version ?? 0;
+  yield* workflows.editPlan(
+    sessionId,
+    { planVersion, edits: [{ action: "add", step: card(id) }] },
+    "planner-run",
+  );
+});
+
+const cardOf = (cards: ReadonlyArray<PlanStep>, id: string) => cards.find((step) => step.id === id);
 
 layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
   it.effect(
@@ -764,6 +781,123 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
           attemptNo: 1,
           notes: ["A person found the earlier work missing."],
         });
+      }),
+    gitTimeout,
+  );
+
+  it.effect(
+    "runs a card the planner added to a board the user approved only once the user approves it",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* kanbanFixture;
+        const runs = yield* Queue.unbounded<string>();
+        const releaseA = yield* Deferred.make<void>();
+        const run = yield* openKanbanOwner(fixture, yield* Effect.scope, {
+          agent: (agent) =>
+            Effect.gen(function* () {
+              yield* Queue.offer(runs, agent.card.id);
+              if (agent.card.id === "a") yield* Deferred.await(releaseA);
+              return finished;
+            }),
+        });
+        yield* run(
+          Effect.gen(function* () {
+            const board = yield* executingPlan(fixture, [card("a")]);
+            const orchestrator = yield* KanbanOrchestrator;
+            yield* orchestrator.start(board.sessionId);
+            expect(yield* Queue.take(runs)).toBe("a");
+
+            yield* plannerAdds(board.sessionId, "b");
+            const added = cardOf((yield* (yield* Workflows).get(board.sessionId)).plan!.steps, "b");
+            expect([added?.status, added?.approval?.requestedBy]).toEqual([
+              "backlog",
+              BoardAuthor.cases.Orchestrator.make({ runId: "planner-run" }),
+            ]);
+            // The approved card keeps running and finishes; the waiting one is never assigned.
+            yield* Deferred.succeed(releaseA, undefined);
+            const waiting = yield* waitForCards(
+              board.sessionId,
+              (cards) => status(cards, "a") === "done",
+            );
+            expect(cardOf(waiting, "b")?.status).toBe("backlog");
+            expect(yield* Queue.size(runs)).toBe(0);
+
+            yield* (yield* KanbanBoardActions).applyIntent(
+              board.sessionId,
+              BoardIntent.cases.Approve.make({ cardId: "b" }),
+              user,
+            );
+            expect(yield* Queue.take(runs)).toBe("b");
+            const cards = yield* waitForCards(board.sessionId, allDone);
+            expect(cardOf(cards, "b")?.approval).toBeUndefined();
+          }),
+        );
+      }),
+    gitTimeout,
+  );
+
+  it.effect(
+    "approves the cards a Goal mode planner adds as the project's permission mode says",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* kanbanFixture;
+        const reviewed = yield* Queue.unbounded<ReadonlyArray<string>>();
+        // Card a runs until the end, so the Goal does not complete while cards are added.
+        const releaseA = yield* Deferred.make<void>();
+        const run = yield* openKanbanOwner(fixture, yield* Effect.scope, {
+          cores: 4,
+          agent: (agent) =>
+            agent.card.id === "a"
+              ? Effect.as(Deferred.await(releaseA), finished)
+              : Effect.succeed(finished),
+          reviewCards: (request) =>
+            Effect.as(
+              Queue.offer(
+                reviewed,
+                request.cards.map((step) => step.id),
+              ),
+              Option.some({ decision: "ask" as const, reason: "The Goal never asked for c." }),
+            ),
+        });
+        yield* run(
+          Effect.gen(function* () {
+            const board = yield* executingPlan(fixture, [card("a")]);
+            const projects = yield* Projects;
+            const orchestrator = yield* KanbanOrchestrator;
+            yield* projects.setPermissionMode(board.projectId, "full");
+            yield* orchestrator.start(board.sessionId, "permission");
+            // full: a card the planner adds runs without anyone approving it.
+            yield* plannerAdds(board.sessionId, "b");
+            const approved = yield* waitForCards(
+              board.sessionId,
+              (cards) => status(cards, "b") === "done",
+            );
+            expect(cardOf(approved, "b")?.approval).toBeUndefined();
+
+            // auto: the reviewer judges it and leaves it to the user with the reason.
+            yield* projects.setPermissionMode(board.projectId, "auto");
+            yield* plannerAdds(board.sessionId, "c");
+            expect(yield* Queue.take(reviewed)).toEqual(["c"]);
+            const left = yield* waitForCards(
+              board.sessionId,
+              (cards) => cardOf(cards, "c")?.approval?.review !== undefined,
+            );
+            expect(cardOf(left, "c")).toMatchObject({
+              status: "backlog",
+              approval: { review: { decision: "ask", reason: "The Goal never asked for c." } },
+            });
+            yield* (yield* KanbanBoardActions).applyIntent(
+              board.sessionId,
+              BoardIntent.cases.Approve.make({ cardId: "c" }),
+              user,
+            );
+            yield* waitForCards(board.sessionId, (cards) => status(cards, "c") === "done");
+            yield* Deferred.succeed(releaseA, undefined);
+            yield* waitForCards(board.sessionId, allDone);
+            // A reviewed card is not reviewed again.
+            expect(yield* Queue.size(reviewed)).toBe(0);
+          }),
+        );
       }),
     gitTimeout,
   );
