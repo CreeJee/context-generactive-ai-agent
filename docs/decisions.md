@@ -4500,3 +4500,14 @@
   - 쓰이지 않았으면(binding이 다르거나 log가 닫혔으면) 전의 확인 트랜잭션으로 다시 간다. 거부 사유의 순서는 전과 같다: binding, closure, 이벤트. 이벤트 인코딩이 실패하면 처음부터 확인 경로로 간다.
   - 쓴 뒤의 신호(`signals.written`)는 전처럼 커밋 뒤에 보낸다.
 - 확인: 앱의 `SqlClient`로 같은 이벤트를 3,000번 쓰면 append 하나가 164µs에서 30µs가 됐다(따뜻한 두 번째 측정). SQLite만 직접 부르면 97.6µs와 91.5µs라, 줄어든 것은 대부분 문장 수만큼의 lease·span·왕복이다.
+
+## 실행하지 않는 칸반 보드는 바뀔 때 본다 (2026-11-09)
+
+- 계기: dev span 7.9시간 내내 5초마다 SQL 45개 묶음이 돌았다(5,699번, 한 번에 12ms). Plan이 `ready`(phase `goal`)이고 카드 9개가 모두 blocked인 보드 하나의 look이었다. 카드마다 `attempts.ladder`를 따로 읽어 그중 9문장이 ladder였다.
+- 결정: Plan이 실행 중이 아니고 도는 attempt도 없는 보드의 look은 `idle`로 끝난다. idle 보드는 5초 대신 1분(`idlePollInterval`)마다 본다.
+  - 그런 보드를 바꾸는 것은 사람이나 모델이다. 보드 편집, phase·Goal 제어, 모델의 workflow·kanban 도구, 사람 결정의 요청·답·닫기는 모두 세션 `run-state` 이벤트를 낸다. 루프가 자기 세션의 `run-state`를 구독해 그때 바로 본다. poke, 기록된 outcome, 스케줄러 wakeup, integration 끝의 신호도 그대로다.
+  - 1분은 신호 없이 바뀐 경우를 놓치지 않는 상한이다. 실행 중이거나 attempt가 도는 보드는 5초 그대로다. backoff가 끝나는 때와 dead letter에는 신호가 없다.
+  - `start`는 이미 도는 루프도 깨운다. 전에는 `onlyIfMissing`이라 다음 poll까지 기다렸다.
+  - 루프 자신의 카드 이동도 `run-state`를 내서 그 뒤 한 번 더 본다. 그 look은 바꿀 것이 없으면 이벤트를 내지 않으므로 거기서 멈춘다.
+- 결정: 카드 ladder는 `attempts.ladders(goalInstanceId)`로 Goal의 것을 한 번에 읽는다. look과 보드 화면(`KanbanBoardActions.view`)이 쓴다.
+- 확인: 새 테스트는 poll이 50ms인 설정에서도 idle 보드가 300ms 동안 카드를 맡기지 않다가 `run-state` 이벤트 뒤에 끝까지 진행하는지 본다.

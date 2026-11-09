@@ -133,6 +133,7 @@ const CardRow = Schema.Struct({
   resolution_of: Schema.NullOr(Schema.String),
   notes_json: Schema.fromJsonString(Schema.Array(Schema.String)),
 });
+const GoalCardRow = Schema.Struct({ card_id: Schema.String, ...CardRow.fields });
 const NumberRow = Schema.Struct({ value: Schema.NullOr(Schema.Finite) });
 const ChangeRequestRow = Schema.Struct({
   id: Schema.Int,
@@ -182,6 +183,15 @@ const freshLadder: CardLadder = {
   resolutionOf: null,
   notes: [],
 };
+const toLadder = (row: typeof CardRow.Type): CardLadder => ({
+  failureStreak: row.failure_streak,
+  replans: row.replans,
+  generation: row.generation,
+  notBefore: row.not_before,
+  reason: row.reason,
+  resolutionOf: row.resolution_of,
+  notes: row.notes_json,
+});
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -239,15 +249,7 @@ const make = Effect.gen(function* () {
       Effect.map((found) =>
         Option.match(Option.fromUndefinedOr(found[0]), {
           onNone: () => freshLadder,
-          onSome: (row): CardLadder => ({
-            failureStreak: row.failure_streak,
-            replans: row.replans,
-            generation: row.generation,
-            notBefore: row.not_before,
-            reason: row.reason,
-            resolutionOf: row.resolution_of,
-            notes: row.notes_json,
-          }),
+          onSome: toLadder,
         }),
       ),
       Effect.mapError(failed("card")),
@@ -445,6 +447,21 @@ const make = Effect.gen(function* () {
       ),
 
     ladder,
+
+    /**
+     * Every card's ladder of a Goal instance in one read, by card id; a card with none stored is
+     * fresh. A board's look reads them all.
+     */
+    ladders: (goalInstanceId: string) =>
+      sql`SELECT card_id, failure_streak, replans, generation, not_before, reason, resolution_of,
+          notes_json FROM kanban_cards WHERE goal_instance_id = ${goalInstanceId}`.pipe(
+        rows(GoalCardRow),
+        Effect.map((found) => {
+          const stored = new Map(found.map((row) => [row.card_id, toLadder(row)] as const));
+          return (cardId: string) => stored.get(cardId) ?? freshLadder;
+        }),
+        Effect.mapError(failed("card")),
+      ),
 
     /** Saves a card's ladder position from the stored one. */
     updateLadder: Effect.fn("CardAttempts.updateLadder")(function* (

@@ -135,6 +135,11 @@ const boundariesOverlap = (left: PlanStep, right: PlanStep) =>
 export interface KanbanOrchestratorOptions {
   /** Longest wait between looks at a board when nothing in this process woke it. */
   readonly pollInterval?: Duration.Input;
+  /**
+   * The same wait for an idle board: its Plan is not executing and none of its attempts runs.
+   * Changes to it wake it; the interval covers a change that sends no signal.
+   */
+  readonly idlePollInterval?: Duration.Input;
   /** The wait before a card's second retry. */
   readonly backoff?: Duration.Input;
 }
@@ -173,6 +178,9 @@ const make = (options: KanbanOrchestratorOptions) =>
     const health = yield* BoardHealth;
     const janitor = yield* CardWorkspaceJanitor;
     const pollInterval = Duration.fromInputUnsafe(options.pollInterval ?? Duration.seconds(5));
+    const idlePollInterval = Duration.fromInputUnsafe(
+      options.idlePollInterval ?? Duration.minutes(1),
+    );
     const backoff = Duration.fromInputUnsafe(options.backoff ?? Duration.minutes(2));
     const loops = yield* FiberMap.make<string>();
     const integrations = yield* FiberMap.make<string>();
@@ -836,7 +844,7 @@ const make = (options: KanbanOrchestratorOptions) =>
     const assignable = Effect.fnUntraced(function* (
       goal: KanbanGoal,
       steps: readonly PlanStep[],
-      ladders: ReadonlyMap<string, CardLadder>,
+      ladderOf: (cardId: string) => CardLadder,
     ) {
       const busy = new Set(
         (yield* attempts.pending(goal.goalInstanceId)).map((attempt) => attempt.cardId),
@@ -849,7 +857,7 @@ const make = (options: KanbanOrchestratorOptions) =>
         (step) =>
           step.status === "ready" &&
           !busy.has(step.id) &&
-          (ladders.get(step.id)?.notBefore ?? 0) <= now,
+          (ladderOf(step.id).notBefore ?? 0) <= now,
       );
       // A Chunk adds a planned card without copying the ones before it.
       const planned = yield* Effect.reduce(
@@ -890,7 +898,11 @@ const make = (options: KanbanOrchestratorOptions) =>
       return Chunk.toReadonlyArray(planned);
     });
 
-    /** One look at a board: take up outcomes, then assign what may run. */
+    /**
+     * One look at a board: take up outcomes, then assign what may run. It ends `idle` when the
+     * Plan is not executing and no attempt of the board is running: nothing changes the board then
+     * until someone else does.
+     */
     const tick = Effect.fnUntraced(function* (goalInstanceId: string) {
       const found = yield* attempts.goal(goalInstanceId);
       if (Option.isNone(found) || !found.value.active) return "stopped" as const;
@@ -921,7 +933,8 @@ const make = (options: KanbanOrchestratorOptions) =>
           : stored;
 
       yield* blockDeadLetters(goal);
-      const outcomes = (yield* attempts.pending(goalInstanceId)).flatMap((attempt) =>
+      const pending = yield* attempts.pending(goalInstanceId);
+      const outcomes = pending.flatMap((attempt) =>
         attempt.outcome === null ? [] : [{ attempt, outcome: attempt.outcome }],
       );
       yield* Effect.forEach(
@@ -936,19 +949,12 @@ const make = (options: KanbanOrchestratorOptions) =>
       // answer moved in this board is followed before it can be assigned.
       yield* followAnswers(goal);
       const steps = state.plan?.steps ?? [];
-      const ladders = new Map(
-        yield* Effect.forEach(steps, (step) =>
-          Effect.map(
-            attempts.ladder(goalInstanceId, step.id),
-            (ladder) => [step.id, ladder] as const,
-          ),
-        ),
-      );
+      const ladderOf = yield* attempts.ladders(goalInstanceId);
       const replanning = steps
         .filter(
           (step) =>
             step.status === "blocked" &&
-            Predicate.isTagged(ladders.get(step.id)?.reason, "ReplanRequested"),
+            Predicate.isTagged(ladderOf(step.id).reason, "ReplanRequested"),
         )
         .map((step) => step.id);
       const requests = yield* attempts.pendingChangeRequests(goal.sessionId);
@@ -976,7 +982,7 @@ const make = (options: KanbanOrchestratorOptions) =>
       yield* scheduler.reviewNotices(goalInstanceId);
       const planned =
         executing && goal.hold === null && waitingOn.length === 0
-          ? yield* assignable(goal, steps, ladders)
+          ? yield* assignable(goal, steps, ladderOf)
           : [];
       // Every look reports the cards it could start; the scheduler picks the project's next ones.
       const granted = yield* scheduler.grant(goal, planned);
@@ -1012,7 +1018,7 @@ const make = (options: KanbanOrchestratorOptions) =>
         upstream_regressed: steps.some(
           (step) =>
             step.status === "done" &&
-            Predicate.isTagged(ladders.get(step.id)?.reason, "UpstreamRegressed"),
+            Predicate.isTagged(ladderOf(step.id).reason, "UpstreamRegressed"),
         ),
       } as const satisfies Record<KanbanAttentionReason, boolean>;
       const reasons = KanbanAttentionReason.literals.filter((reason) => raised[reason]);
@@ -1035,11 +1041,14 @@ const make = (options: KanbanOrchestratorOptions) =>
           goalInstanceId,
           reasons,
         });
-      return "running" as const;
+      return executing || pending.some((attempt) => attempt.outcome === null)
+        ? ("running" as const)
+        : ("idle" as const);
     });
 
     /**
-     * The board's loop: a look after every recorded outcome, poke or poll interval. A look that
+     * The board's loop: a look after every recorded outcome, poke, change to the board's
+     * conversation, or poll interval; an idle board's interval is `idlePollInterval`. A look that
      * fails is retried with backoff (`loopRetrySchedule`); the board and records are unchanged by
      * it. When the retries run out or a defect happens, here or in an integration or merge step
      * beside the loop, the loop stops and the board shows why until a person restarts it.
@@ -1053,25 +1062,31 @@ const make = (options: KanbanOrchestratorOptions) =>
             Stream.runForEach(() => PubSub.publish(pokes, goalInstanceId)),
             Effect.forkScoped,
           );
+          // A person or the model changed the conversation's Goal, Plan, cards or decisions.
+          yield* Stream.unwrap(events.sessionStream(board.sessionId)).pipe(
+            Stream.filter((frame) => frame.event === "changed" && frame.data.topic === "run-state"),
+            Stream.runForEach(() => PubSub.publish(pokes, goalInstanceId)),
+            Effect.forkScoped,
+          );
           /** One look, then a wait for the next reason to look; true once the loop stops. */
           const look = Effect.gen(function* () {
             if (loopStopped(yield* health.get(goalInstanceId))) return true;
             const step = yield* looking
               .withPermits(1)(tick(goalInstanceId))
               .pipe(health.supervise(board, "Kanban board look failed", {}));
-            const stopped = Match.valueTags(step, {
-              Stopped: () => true,
-              Continued: ({ value }) => value === "stopped",
+            const found = Match.valueTags(step, {
+              Stopped: () => "stopped" as const,
+              Continued: ({ value }) => value,
             });
             // Pokes that queued up meanwhile all come before the next look: it covers them all.
             yield* Effect.when(
               PubSub.takeAll(wakeups).pipe(
                 Effect.repeat({ until: (woken) => woken.includes(goalInstanceId) }),
-                Effect.timeoutOption(pollInterval),
+                Effect.timeoutOption(found === "idle" ? idlePollInterval : pollInterval),
               ),
-              Effect.succeed(!stopped),
+              Effect.succeed(found !== "stopped"),
             );
-            return stopped;
+            return found === "stopped";
           });
           yield* look.pipe(Effect.repeat({ until: (stopped) => stopped }));
         }),
@@ -1157,6 +1172,8 @@ const make = (options: KanbanOrchestratorOptions) =>
           goalVersion: state.goal.version,
         });
         yield* run({ sessionId, goalInstanceId });
+        // A board already running looks now instead of at its next interval.
+        yield* PubSub.publish(pokes, goalInstanceId);
         return { goalInstanceId, mode };
       }),
 

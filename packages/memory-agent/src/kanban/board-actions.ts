@@ -689,8 +689,10 @@ const make = Effect.gen(function* () {
           .filter((item) => item.goalInstanceId === goalInstanceId)
           .map((item) => item.cardId),
       );
-      const cards = yield* Effect.forEach(steps, (card) =>
-        Effect.map(attempts.ladder(goalInstanceId, card.id), (ladder): KanbanCardView => ({
+      const ladderOf = yield* attempts.ladders(goalInstanceId);
+      const cards = steps.map((card): KanbanCardView => {
+        const ladder = ladderOf(card.id);
+        return {
           cardId: card.id,
           status: card.status,
           reason: ladder.reason,
@@ -698,8 +700,8 @@ const make = Effect.gen(function* () {
           replans: ladder.replans,
           resolutionOf: ladder.resolutionOf,
           requeueable: card.status === "blocked" && dead.has(card.id),
-        })),
-      );
+        };
+      });
       return Option.some<KanbanBoardView>({
         goalInstanceId,
         mode,
