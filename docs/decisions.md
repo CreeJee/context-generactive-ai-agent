@@ -4530,3 +4530,14 @@
   - 연 DB는 앱처럼 마이그레이션한다. 다음 앱 시작이 같은 일을 하므로 달라지는 것이 없다.
   - 결과 JSON은 전후의 DB 크기·빈 페이지 크기·incremental 여부다. 내용은 담지 않는다.
 - 확인: 테스트가 auto_vacuum 0인 파일을 빈 페이지 0의 incremental 파일로 바꾸고, 잠금을 쥔 동안은 거부하는지 본다(`tests/cli/compact.test.ts`). CLI 진입점으로 6.2 MB 파일이 1.3 MB가 됐다.
+
+## 보드 대상 브랜치는 Goal에 작업이 생기기 전까지 바꿀 수 있다 (2026-11-09)
+
+- 계기: 세션 `037aa142`에서 사용자가 프로젝트 checkout을 `proj-airwallex-transfer`에서 `proj-sdui-renderer`로 바꿨지만 보드 대상 브랜치는 시작할 때 기록한 그대로였다. `GoalSchedules.register`는 `INSERT OR IGNORE`라 보드를 재시작해도 값이 남는다. Goal 브랜치도 시작할 때의 HEAD에서 잘려 카드 worktree에 새 브랜치 커밋이 없었고, 카드 9개가 모두 멈췄다. 대상 브랜치를 바꾸는 도구도 화면도 없어 새 Goal을 만드는 것밖에 길이 없었다.
+- 결정: `KanbanBoardActions.retarget`이 프로젝트에 지금 checkout된 브랜치를 대상으로 삼고 Goal 브랜치(`ctx/goal/<id>`)를 그 HEAD로 옮긴다. 모델은 `edit_kanban_board`의 `Retarget`으로, 화면은 Goal 스케줄 패널의 "현재 브랜치로 바꾸기"(kanbanAction `Retarget`)로 부른다.
+  - 대상 이름만 바꾸지 않는다. Goal 브랜치가 이전 대상 위에 있으므로, 이름만 바꾸면 카드는 여전히 새 브랜치 커밋을 못 보고 마지막 merge 때 이전 브랜치의 커밋이 새 대상으로 들어간다.
+  - 브랜치 이름은 받지 않는다. 브랜치 흐름 5의 "Goal을 시작한 사용자 브랜치" 규칙을 지금 checkout으로 다시 잇고, 모델이 아무 브랜치나 고르지 못하게 한다.
+  - Goal에 자기 작업이 없을 때만 옮긴다. worktree 보드이고, merge 상태가 없고, 카드 브랜치(`ctx/card/<id>/*`, 취소한 카드 것 포함)가 없고, Goal 브랜치의 커밋이 모두 이전 대상이나 새 대상에 있어야 한다. 아니면 `not_worktree`·`merge_started`·`detached_head`·`cards_started`·`goal_has_work`로 거절하고 아무것도 쓰지 않는다. 카드 브랜치는 이전 Goal HEAD에서 시작했으므로, 이어 쓰면 이전 브랜치의 커밋이 squash에 섞인다. 카드 작업을 새 브랜치로 옮기는 일(cherry-pick 등)은 하지 않는다.
+  - 새 카드 브랜치는 Goal 락 아래에서 Goal HEAD로 먼저 만들고, worktree는 그 뒤에 붙인다. retarget도 같은 락 안에서 카드 브랜치를 확인하고 ref를 옮기므로, 그사이에 카드가 이전 HEAD에서 시작하지 못한다. 락 순서는 squash·sync와 같은 Goal → 카드다.
+  - git ref를 먼저 옮기고 스케줄을 쓴다. 그 사이에 멈추면 다시 retarget하면 된다. Goal 브랜치가 이미 새 대상의 HEAD라 같은 검사를 통과한다.
+- 확인: git 테스트가 작업 전 Goal 브랜치를 새 브랜치로 옮긴 뒤 카드가 새 브랜치 파일을 보는지, 카드 브랜치가 있으면 `CardsStarted`, squash 커밋이 있으면 `GoalHasWork`로 답하고 ref를 그대로 두는지 본다. 보드 테스트가 detached HEAD 거절, 대상 갱신, 카드 브랜치가 생긴 뒤의 거절을 본다.
