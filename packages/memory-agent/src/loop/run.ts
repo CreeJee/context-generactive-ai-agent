@@ -530,25 +530,22 @@ const runAccepted = Effect.fnUntraced(function* <R>(
   // Background writes belong to the run, not to the fiber that runs its steps: a cancel interrupts
   // the steps, and the run still waits for its writes before it saves where it stopped.
   const runScope = yield* Effect.scope;
-  /** The run's last background write; each one starts once the one before it is done. */
-  const lastWrite = yield* SynchronizedRef.make<Fiber.Fiber<void, RunFailed>>(
-    yield* Effect.forkIn(Effect.void, runScope),
-  );
+  /** The run's background writes, which one writer runs in order; a failed one stops it. */
+  const writes = yield* Queue.unbounded<Effect.Effect<void, RunFailed>, Cause.Done>();
   const failedWrite = yield* Ref.make(Option.none<RunFailed>());
-  /** Runs `write` after the run's earlier background writes; a failed one skips those after it. */
+  const writer = yield* Stream.fromQueue(writes).pipe(
+    Stream.runForEach(EffectFunction.identity),
+    Effect.tapError((failure) => Ref.set(failedWrite, Option.some(failure))),
+    Effect.forkIn(runScope),
+  );
+  // Once the run took its last background write, one asked for later (an `ended` hook's) runs here.
   const inBackground = (write: Effect.Effect<void, RunFailed>) =>
-    SynchronizedRef.updateEffect(lastWrite, (before) =>
-      Effect.forkIn(
-        Fiber.join(before).pipe(
-          Effect.andThen(write),
-          Effect.tapError((failure) => Ref.set(failedWrite, Option.some(failure))),
-        ),
-        runScope,
-      ),
-    );
+    Effect.flatMap(Queue.offer(writes, write), (taken) =>
+      Effect.when(write.pipe(Effect.ignore({ log: "Warn" })), Effect.succeed(!taken)),
+    ).pipe(Effect.asVoid);
   const scope: RunScope = { threadId, runId, emit, inBackground };
-  /** Waits for every background write; fails with the first that failed. */
-  const backgroundWritesDone = Effect.flatMap(SynchronizedRef.get(lastWrite), Fiber.join);
+  /** Takes no more background writes and waits for those taken; fails with the one that failed. */
+  const backgroundWritesDone = Effect.andThen(Queue.end(writes), Fiber.join(writer));
   /** Fails with a background write that already failed, without waiting for those still going. */
   const failIfBackgroundWriteFailed = Effect.flatMap(
     Ref.get(failedWrite),

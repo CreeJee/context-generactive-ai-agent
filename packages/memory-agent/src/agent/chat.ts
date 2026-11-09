@@ -14,7 +14,7 @@ import type { RunTool } from "../tools/run-tool.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { workflowActions } from "../workflow/actions.ts";
 import { Scope } from "effect";
-import type { AgUiEvent } from "../loop/chunks.ts";
+import { AgUiEvent } from "../loop/chunks.ts";
 import { memoryRunLogs, runAcceptedEvent, type RunLog } from "../loop/run-log.ts";
 import type { Refusal, RunInput } from "../api/chat-api.ts";
 import { ImagePart, StoredUserMessage, TextPart } from "../chat-store/schema.ts";
@@ -883,8 +883,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   ) =>
     Effect.gen(function* () {
       const ended = yield* Ref.make(false);
-      const endsRun = (event: AgUiEvent) =>
-        event.type === "RUN_FINISHED" || event.type === "RUN_ERROR";
+      const endsRun = AgUiEvent.isAnyOf(["RUN_FINISHED", "RUN_ERROR"]);
       const append = (event: AgUiEvent) =>
         log.append(event).pipe(Effect.andThen(Ref.set(ended, endsRun(event))));
       // The events that came while the last write ran go in one write, without waiting for more.

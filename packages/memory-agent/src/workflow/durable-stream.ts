@@ -271,8 +271,9 @@ export const sqliteRunLog = Effect.fn("sqliteRunLog")(function* (input: {
         ),
         Effect.catchTag("SqlError", (cause) => Effect.fail(stored(cause))),
         Effect.flatMap((written) =>
-          written ? signals.written(runId) : Effect.forEach(events, append, { discard: true }),
+          Effect.when(Effect.forEach(events, append, { discard: true }), Effect.succeed(!written)),
         ),
+        Effect.andThen(signals.written(runId)),
       ),
     // A close also drops the entries of the logs past their time; this one's go in a later one.
     close: Effect.gen(function* () {
