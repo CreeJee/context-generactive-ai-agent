@@ -40,6 +40,7 @@ export default defineConfig({
       },
       { name: "shadcn", specifier: "@shadcn/lint" },
       { name: "allocation", specifier: "./lint/allocation/index.ts" },
+      { name: "copy", specifier: "./lint/copy/index.ts" },
     ],
     rules: {
       "vite-plus/prefer-vite-plus-imports": "error",
