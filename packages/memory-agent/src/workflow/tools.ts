@@ -110,7 +110,7 @@ type WorkflowTool =
 
 /** The workflow tools each phase offers, in the order the model sees them. */
 const phaseTools = {
-  goal: ["updateGoal", "updateProgress", "startNewGoal"],
+  goal: ["updateGoal", "updatePlan", "editPlan", "startNewGoal"],
   plan: ["updateGoal", "updatePlan", "editPlan", "closePlan", "startNewGoal"],
   execute: ["updateGoal", "updatePlan", "editPlan", "updateProgress", "recordBlocker", "closePlan"],
   verify: ["updateGoal", "updateProgress", "recordBlocker", "closePlan", "startNewGoal"],
@@ -356,7 +356,7 @@ ${compactList(state.goal.openQuestions.filter((question) => question.blocking).m
       Match.when(
         "goal",
         () => `${common}
-The user delegated an outcome, not merely a request to describe a goal. Save a concise active Goal artifact before material changes, then autonomously investigate, implement and verify the outcome in this run. Replan internally as needed without requiring a Plan artifact. Use update_workflow_progress to record pauses, failures, evidence and verification. Do not mark the Goal completed without passed verification evidence. Ask only genuinely blocking questions. Tool permissions still apply.
+The user delegated an outcome, not merely a request to describe a goal. You are its planner, not its executor: project tools are restricted to read-only investigation. Save a concise active Goal whose outcomes each have a stable id, then save a ready Plan whose cards together serve every outcome (each card names the outcome ids it serves). Goal mode runs it at once: when this run ends the owner approves the Plan and starts its kanban board, where card agents execute the cards and a verifier judges each outcome. Do not implement, verify or record progress yourself. Ask only genuinely blocking questions; record what is uncertain and plan the independent cards first.
 
 ${goal}`,
       ),

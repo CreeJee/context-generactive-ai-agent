@@ -2,6 +2,7 @@ import { Cause, Effect, MutableHashMap, Option, Schedule } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { CardAttempts } from "../../src/kanban/card-attempts.ts";
+import type { JsonValue as Json } from "../../src/json.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import type { ScriptedResponder, ScriptedTurn } from "../../src/testing/scripted-model.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
@@ -41,6 +42,10 @@ const plan = {
     },
   ],
 };
+
+const call = (id: string, name: string, input: Json): ScriptedTurn => ({
+  toolCalls: [{ id, name, arguments: JSON.stringify(input) }],
+});
 
 /** The shared model answers each session from that session's own turns. */
 const scripts = MutableHashMap.empty<string, readonly ScriptedTurn[]>();
@@ -122,6 +127,31 @@ testAgent({ testProvider: { responder } })("approved Plan execution", (it) => {
       yield* waitForBoard(session.board);
       // The chat did not continue the Plan after its turn.
       expect(session.invocations()).toHaveLength(1);
+    }),
+  );
+
+  it.effect("Goal mode runs the cards its planner saved once the run ends", () =>
+    Effect.gen(function* () {
+      const env = yield* TestEnv;
+      const session = yield* planned([
+        call("goal", "update_goal", goal),
+        call("plan", "update_plan", plan),
+        { text: "The board will run the cards." },
+      ]);
+      yield* env.use(
+        Effect.flatMap(Workflows, (workflows) => workflows.setPhase(session.id, "goal")),
+      );
+      yield* runTurn(session.id, `${session.id}-turn`, "Get this done");
+      yield* waitForBoard(session.board);
+      const state = yield* env.use(
+        Effect.flatMap(Workflows, (workflows) => workflows.get(session.id)),
+      );
+      expect([state.phase, state.plan?.status]).toEqual(["execute", "executing"]);
+      // The planner had no project write tools and no progress tool.
+      const tools = session.invocations()[0]?.toolNames ?? [];
+      expect(tools).toEqual(expect.arrayContaining(["update_goal", "update_plan"]));
+      expect(tools).not.toContain("update_workflow_progress");
+      expect(tools).not.toContain("write_file");
     }),
   );
 });

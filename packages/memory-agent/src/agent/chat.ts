@@ -367,7 +367,12 @@ const afterRunBudget = 200;
  * Plan/Verify never receive project mutation, outside access or delegation tools, and receive
  * only the MCP tools their servers mark read-only.
  */
-const readOnlyWorkflowPhases = HashSet.fromIterable<WorkflowPhase>(["plan", "verify", "completed"]);
+const readOnlyWorkflowPhases = HashSet.fromIterable<WorkflowPhase>([
+  "goal",
+  "plan",
+  "verify",
+  "completed",
+]);
 const workflowReadToolNames = HashSet.fromIterable([
   "find_memory",
   "read_evidence",
@@ -627,6 +632,13 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             Option.exists((goal) => goal.active),
           ),
     );
+  /** A Goal mode Plan its planner saved ready for the current Goal, waiting for nobody. */
+  const goalModeReady = (state: WorkflowState) =>
+    state.phase === "goal" &&
+    state.goal !== null &&
+    (state.goal.status === "active" || state.goal.status === "draft") &&
+    state.plan?.status === "ready" &&
+    state.plan.goalVersion === state.goal.version;
   /** An approved Plan runs on a kanban board; the chat never executes it. */
   const executesPlan = (state: WorkflowState) =>
     (state.phase === "execute" || state.phase === "verify") && state.plan?.status === "executing";
@@ -2811,7 +2823,16 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             !WorkflowExecutionState.isAnyOf(["retrying"])(yield* execution.get(sessionId))
           )
             return;
-          const workflow = yield* workflows.reconcile(sessionId);
+          const reconciled = yield* workflows.reconcile(sessionId);
+          // Goal mode runs its planner's first cards at once: a ready Plan its run saved for the
+          // current Goal is approved as the user would approve it in Plan mode.
+          const workflow =
+            !restarted && goalModeReady(reconciled)
+              ? yield* workflows.setPhase(sessionId, "execute").pipe(
+                  Effect.tap(() => events.publishSession(sessionId, "run-state")),
+                  Effect.catchTag("WorkflowTransitionRefused", () => Effect.succeed(reconciled)),
+                )
+              : reconciled;
           // An executing Plan without a board moves onto one; one that cannot start waits as a
           // blocker the user sees, never for the chat to execute it.
           if (executesPlan(workflow)) {

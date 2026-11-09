@@ -4607,6 +4607,7 @@
   - 채팅의 Plan 자동 이어가기(workflow follow-up, `canContinue`·`canResume`)를 없앤다. 승인한 Plan은 모두 보드가 실행하므로 이 경로는 닿지 않는다. 연속 진척 없음 한도는 3 루프에서 보드 기준으로 다시 둔다.
   - 사용자 턴 안에서 보드를 시작하지 않는다. 예약된 턴이 보드의 카드 이동으로 `workflow_changed` 거절을 받는다. 그래서 보드 없이 실행 중인 이전 Plan에 사용자가 말하면 그 턴은 예전처럼 execute 지시문으로 돌고, 턴이 끝나면 보드가 이어받는다. execute 지시문은 phase 정리에서 없앤다.
   - 화면은 승인한 뒤 실행 메시지를 보내지 않는다.
+- 구현(2c Goal 모드): Goal phase의 채팅은 계획자다. 프로젝트 도구는 읽기만 하고, 워크플로 도구는 `update_goal`·`update_plan`·`edit_plan`·`start_new_goal`이다(`update_workflow_progress`는 뺀다). Goal과 outcome id, 모든 outcome을 위하는 카드의 ready Plan을 저장하면, run이 끝난 뒤 owner가 Plan을 승인하고 보드를 시작한다. Plan 모드에서 사용자가 승인하는 자리를 Goal 모드에서는 owner가 바로 채운다.
 
 ## SQLite 연결은 `synchronous = NORMAL`로 쓴다 (2026-11-09)
 
