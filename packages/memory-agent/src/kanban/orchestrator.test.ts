@@ -671,6 +671,8 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
                   tool.prepare({ edit: change }),
                 ).pipe(Effect.flatMap((call) => call({ toolCallId: "call-1" })));
 
+              const events = yield* AppEvents;
+              const published = yield* events.revision;
               expect(
                 yield* edit({ action: "move", cardId: "a", from: "backlog", to: "done" }),
               ).toEqual({
@@ -679,6 +681,8 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
                 status: "ready",
                 allowed: ["backlog", "in_progress", "human_decision", "blocked"],
               });
+              // Nothing changed, so pages are not told the board moved.
+              expect(yield* events.revision).toBe(published);
               // A rejection without the reason the user is shown does not decode.
               expect(
                 Exit.isFailure(

@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Match, Option, Schema } from "effect";
+import { Context, Data, Effect, Layer, Match, Option, Schema } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import { AppEvents } from "../events/app-events.ts";
 import { runTool, type RunTool } from "../tools/run-tool.ts";
@@ -120,9 +120,17 @@ const EditBoardInput = Schema.Struct({ edit: KanbanEdit });
 const ReadBoardInput = Schema.Struct({});
 
 /** What a board change can fail with; refusals are answered to the model, the rest fail the call. */
+/** A refused move, with the card's status now and the statuses it may move to from there. */
+class MoveRefused extends Data.TaggedError("MoveRefused")<{
+  readonly reason: BoardEditRefused["reason"];
+  readonly status: CardStatus;
+  readonly allowed: readonly CardStatus[];
+}> {}
+
 type ActionFailure =
   | KanbanActionRefused
   | BoardEditRefused
+  | MoveRefused
   | HumanDecisionRefused
   | PlanDependenciesRejected
   | KanbanStorageFailed
@@ -161,7 +169,10 @@ const make = Effect.gen(function* () {
   /** The tools' calls in `sessionId`, each change saved as the run `runId`'s. */
   const callsFor = (sessionId: string, runId: string) => {
     const author: BoardAuthor = BoardAuthor.cases.Orchestrator.make({ runId });
-    /** Runs a board change and tells pages the board moved; a refusal is the call's answer. */
+    /**
+     * Runs a board change and tells pages the board moved. A refusal changed nothing: it is the
+     * call's answer and tells no one.
+     */
     const change = <A>(
       effect: (actions: KanbanBoardActions["Service"]) => Effect.Effect<A, ActionFailure>,
     ) =>
@@ -172,6 +183,8 @@ const make = Effect.gen(function* () {
             Effect.succeed({ error: "kanban_action_refused" as const, reason: refused.reason }),
           BoardEditRefused: (refused) =>
             Effect.succeed({ error: "board_edit_refused" as const, reason: refused.reason }),
+          MoveRefused: ({ reason, status, allowed }) =>
+            Effect.succeed({ error: "board_edit_refused" as const, reason, status, allowed }),
           HumanDecisionRefused: (refused) =>
             Effect.succeed({ error: "human_decision_refused" as const, reason: refused.reason }),
           PlanDependenciesRejected: () =>
@@ -183,14 +196,11 @@ const make = Effect.gen(function* () {
     const refusedMove = (cardId: string) => (refused: BoardEditRefused) =>
       Effect.flatMap(boards.view(sessionId), (board) => {
         const status = board.cards.find(({ card }) => card.id === cardId)?.card.status;
-        return status === undefined
-          ? Effect.fail(refused)
-          : Effect.succeed({
-              error: "board_edit_refused" as const,
-              reason: refused.reason,
-              status,
-              allowed: cardTransitions[status],
-            });
+        return Effect.fail(
+          status === undefined
+            ? refused
+            : new MoveRefused({ reason: refused.reason, status, allowed: cardTransitions[status] }),
+        );
       });
 
     return {
