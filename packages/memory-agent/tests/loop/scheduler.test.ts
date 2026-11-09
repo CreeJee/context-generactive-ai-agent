@@ -3,7 +3,7 @@ import { Deferred, Effect, Fiber, Ref } from "effect";
 import { describe, expect } from "vite-plus/test";
 import {
   type Admission,
-  CallOutcome,
+  CallResult,
   Run,
   type StepCall,
   stepScheduler,
@@ -37,7 +37,7 @@ const harness = Effect.fnUntraced(function* (ids: ReadonlyArray<string>) {
   const scheduler = yield* stepScheduler<string, never, never>({ answered: () => Effect.void });
   return {
     offer: (call: StepCall) => scheduler.offer(call, admit(call)),
-    settle: scheduler.settle,
+    responseEnded: scheduler.responseEnded,
     started: Ref.get(started),
     release,
   };
@@ -46,24 +46,24 @@ const harness = Effect.fnUntraced(function* (ids: ReadonlyArray<string>) {
 describe("step scheduler", () => {
   it.effect("starts a read when it is admitted, before the response finishes", () =>
     Effect.gen(function* () {
-      const { offer, settle, started, release } = yield* harness(["r1", "w1"]);
+      const { offer, responseEnded, started, release } = yield* harness(["r1", "w1"]);
       yield* offer(read("r1"));
       yield* offer(write("w1"));
       yield* Effect.yieldNow;
       expect(yield* started).toEqual(["r1"]);
       yield* release("r1");
       yield* release("w1");
-      yield* Effect.forkChild(settle(true));
+      yield* Effect.forkChild(responseEnded(true));
     }).pipe(Effect.scoped),
   );
 
   it.effect("starts every write after a complete finish without waiting for other calls", () =>
     Effect.gen(function* () {
-      const { offer, settle, started, release } = yield* harness(["r1", "w1", "w2"]);
+      const { offer, responseEnded, started, release } = yield* harness(["r1", "w1", "w2"]);
       yield* offer(read("r1"));
       yield* offer(write("w1"));
       yield* offer(write("w2"));
-      const settled = yield* Effect.forkChild(settle(true));
+      const settled = yield* Effect.forkChild(responseEnded(true));
       yield* Effect.yieldNow;
       // r1 is still running and neither write waits for it or for the other.
       expect(yield* started).toEqual(["r1", "w1", "w2"]);
@@ -71,25 +71,25 @@ describe("step scheduler", () => {
       yield* release("r1");
       yield* release("w1");
       expect(yield* Fiber.join(settled)).toEqual([
-        CallOutcome.Returned({ result: "r1" }),
-        CallOutcome.Returned({ result: "w1" }),
-        CallOutcome.Returned({ result: "w2" }),
+        CallResult.Returned({ result: "r1" }),
+        CallResult.Returned({ result: "w1" }),
+        CallResult.Returned({ result: "w2" }),
       ]);
     }).pipe(Effect.scoped),
   );
 
   it.effect("answers the writes of an incomplete response without running them", () =>
     Effect.gen(function* () {
-      const { offer, settle, started, release } = yield* harness(["r1", "w1"]);
+      const { offer, responseEnded, started, release } = yield* harness(["r1", "w1"]);
       yield* offer(read("r1"));
       yield* offer(write("w1"));
-      const settled = yield* Effect.forkChild(settle(false));
+      const settled = yield* Effect.forkChild(responseEnded(false));
       yield* Effect.yieldNow;
       // The running read is not cut; it still gives its result.
       yield* release("r1");
       const outcomes = yield* Fiber.join(settled);
       expect(yield* started).toEqual(["r1"]);
-      expect(outcomes[0]).toEqual(CallOutcome.Returned({ result: "r1" }));
+      expect(outcomes[0]).toEqual(CallResult.Returned({ result: "r1" }));
       expect(outcomes[1]).toMatchObject({
         _tag: "Refused",
         result: { error: "response_incomplete" },

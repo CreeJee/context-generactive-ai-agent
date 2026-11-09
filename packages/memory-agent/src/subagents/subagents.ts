@@ -41,7 +41,7 @@ import {
 import type { JsonValue } from "../json.ts";
 import type { AgUiEvent } from "../loop/chunks.ts";
 import { asRunFailed, modelFailureOf, type RunHook, runChat, StepEnded } from "../loop/run.ts";
-import { CallOutcome } from "../loop/scheduler.ts";
+import { CallResult } from "../loop/scheduler.ts";
 import { finishedRun, RunStore } from "../loop/store.ts";
 import { optionalProperty } from "../optional-property.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
@@ -767,7 +767,7 @@ const make = Effect.gen(function* () {
             name: call.name,
             written,
           }).pipe(
-            Effect.map(Option.map((result) => CallOutcome.Returned({ result }))),
+            Effect.map(Option.map((result) => CallResult.Returned({ result }))),
             Effect.mapError(asRunFailed),
           ),
       };

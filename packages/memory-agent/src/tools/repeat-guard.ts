@@ -1,7 +1,7 @@
 import { Effect, HashMap, HashSet, Match, Option, Ref, Schema } from "effect";
 import { JsonValue } from "../json.ts";
 import { RunFailed, type RunHook } from "../loop/run.ts";
-import { type CallAnswer, CallOutcome } from "../loop/scheduler.ts";
+import { type CallAnswer, CallResult } from "../loop/scheduler.ts";
 import { failureResult, ToolFailed, type ToolFailureResult } from "./failure.ts";
 
 /** Tools that wait on work in progress: the same answer again is what waiting looks like. */
@@ -152,7 +152,7 @@ export const repeatGuardHook = Effect.map(Ref.make(unguarded), (guard): RunHook 
   admit: (_scope, call) =>
     Ref.modify(guard, (current) => {
       const [refused, next] = beforeCall(current, call.id, call.name, JSON.stringify(call.params));
-      return [Option.map(refused, (result) => CallOutcome.Returned({ result })), next] as const;
+      return [Option.map(refused, (result) => CallResult.Returned({ result })), next] as const;
     }),
   answered: (_scope, call, answer) =>
     Ref.update(guard, (current) => afterCall(current, call.id, outcomeOf(answer))),

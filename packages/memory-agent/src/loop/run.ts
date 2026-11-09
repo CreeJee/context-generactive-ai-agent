@@ -40,7 +40,7 @@ import { type ResumeEntry, type ResumeRejected, type Resumed, resumeAnswers } fr
 import {
   type Admission,
   type CallAnswer,
-  CallOutcome,
+  CallResult,
   Run,
   type StepCall,
   stepScheduler,
@@ -226,7 +226,7 @@ type Next = Data.TaggedEnum<{
 }>;
 const Next = Data.taggedEnum<Next>();
 
-interface StepOutcome {
+interface StepResult {
   readonly conversation: ReadonlyArray<StoredMessage>;
   readonly next: Next;
 }
@@ -241,7 +241,7 @@ const decided = (admission: Admission<StoredInterruptPayload>) =>
 
 /** A call that never reaches its tool, as TanStack answered it: the failure text as its result. */
 const refused = (message: string) =>
-  decided(CallOutcome.Refused({ result: { error: message }, error: message }));
+  decided(CallResult.Refused({ result: { error: message }, error: message }));
 
 /** The arguments of a call as the model sent them. */
 interface SentArguments {
@@ -347,22 +347,22 @@ const toolMessage = ({ call, answer }: AnsweredCall) => {
 };
 
 /** Calls in the order the model made them, split into those answered and those that wait. */
-const sorted = (
+const answeredAndWaiting = (
   calls: ReadonlyArray<StepCall>,
-  outcomes: ReadonlyArray<CallOutcome<StoredInterruptPayload>>,
+  results: ReadonlyArray<CallResult<StoredInterruptPayload>>,
 ) => {
-  const pairs = Arr.zip(calls, outcomes);
+  const pairs = Arr.zip(calls, results);
   return {
-    answered: pairs.flatMap(([call, outcome]) =>
-      Match.valueTags(outcome, {
+    answered: pairs.flatMap(([call, result]) =>
+      Match.valueTags(result, {
         Waiting: (): ReadonlyArray<AnsweredCall> => [],
         Returned: (answer) => [{ call, answer }],
         Failed: (answer) => [{ call, answer }],
         Refused: (answer) => [{ call, answer }],
       }),
     ),
-    waiting: pairs.flatMap(([, outcome]) =>
-      CallOutcome.$is("Waiting")(outcome) ? [outcome.request] : [],
+    waiting: pairs.flatMap(([, result]) =>
+      CallResult.$is("Waiting")(result) ? [result.request] : [],
     ),
   };
 };
@@ -453,7 +453,7 @@ const isToolMessage = (
  * The conversation with `added` tool messages joined to those that follow `assistant`, all of them
  * in the order of its calls.
  */
-const placed = (
+const withToolResults = (
   conversation: ReadonlyArray<StoredMessage>,
   assistant: AssistantMessage,
   added: ReadonlyArray<StoredMessage>,
@@ -548,9 +548,9 @@ const runAccepted = Effect.fnUntraced(function* <R>(
     );
   const scope: RunScope = { threadId, runId, emit, inBackground };
   /** Waits for every background write; fails with the first that failed. */
-  const written = Effect.flatMap(SynchronizedRef.get(lastWrite), Fiber.join);
+  const backgroundWritesDone = Effect.flatMap(SynchronizedRef.get(lastWrite), Fiber.join);
   /** Fails with a background write that already failed, without waiting for those still going. */
-  const noFailedWrite = Effect.flatMap(
+  const failIfBackgroundWriteFailed = Effect.flatMap(
     Ref.get(failedWrite),
     Option.match({ onNone: () => Effect.void, onSome: Effect.fail }),
   );
@@ -641,7 +641,7 @@ const runAccepted = Effect.fnUntraced(function* <R>(
       );
       yield* Effect.when(
         Effect.flatMap(approvalRequest(call, tool), (request) =>
-          decided(CallOutcome.Waiting({ request })),
+          decided(CallResult.Waiting({ request })),
         ),
         Effect.succeed(tool.tool.needsApproval === true && Option.isNone(approval)),
       );
@@ -687,28 +687,28 @@ const runAccepted = Effect.fnUntraced(function* <R>(
         discard: true,
       });
       // The response that made these calls finished long ago.
-      const outcome = sorted(
+      const calls = answeredAndWaiting(
         offered.map(({ call }) => call),
-        yield* scheduler.settle(true),
+        yield* scheduler.responseEnded(true),
       );
-      const added = yield* results(outcome.answered);
+      const added = yield* results(calls.answered);
       const next = Option.match(last, {
         onNone: () => [...current, ...added],
-        onSome: (assistant) => placed(current, assistant, added),
+        onSome: (assistant) => withToolResults(current, assistant, added),
       });
       yield* Ref.set(conversation, next);
       yield* Effect.transposeOption(
         Option.map(last, (message) =>
-          stepEnded(StepEnded.Resume({ message, answered: outcome.answered })),
+          stepEnded(StepEnded.Resume({ message, answered: calls.answered })),
         ),
       );
       return {
         conversation: next,
-        next: Arr.match(outcome.waiting, {
+        next: Arr.match(calls.waiting, {
           onEmpty: () => Next.Continue(),
           onNonEmpty: (waiting) => Next.Interrupt({ waiting }),
         }),
-      } satisfies StepOutcome;
+      } satisfies StepResult;
     },
     Effect.scoped,
     Effect.mapError(asRunFailed),
@@ -717,7 +717,7 @@ const runAccepted = Effect.fnUntraced(function* <R>(
   /** One model step: its events streamed, its calls run, its message and results kept. */
   const modelStep = Effect.fnUntraced(
     function* (before: ReadonlyArray<StoredMessage>) {
-      yield* noFailedWrite;
+      yield* failIfBackgroundWriteFailed;
       const joined = yield* Effect.forEach(
         hooks.flatMap((hook) => hook.joining ?? []),
         (joining) => joining(scope, before),
@@ -860,9 +860,9 @@ const runAccepted = Effect.fnUntraced(function* <R>(
       const model = Arr.findFirst(done.parts, (part) =>
         part.type === "response-metadata" ? Option.fromNullishOr(part.modelId) : Option.none(),
       );
-      const outcome = sorted(
+      const calls = answeredAndWaiting(
         done.calls,
-        yield* scheduler.settle(Option.exists(finish, ({ reason }) => isComplete(reason))),
+        yield* scheduler.responseEnded(Option.exists(finish, ({ reason }) => isComplete(reason))),
       );
       const message = Option.map(
         Arr.findFirst(fromPrompt(Prompt.fromResponseParts(done.parts)).history, isAssistant),
@@ -886,7 +886,7 @@ const runAccepted = Effect.fnUntraced(function* <R>(
           };
         },
       );
-      const added = yield* results(outcome.answered);
+      const added = yield* results(calls.answered);
       const next = [...current, ...Option.toArray(message), ...added];
       yield* Ref.set(conversation, next);
       yield* Ref.set(partial, Option.none());
@@ -908,19 +908,19 @@ const runAccepted = Effect.fnUntraced(function* <R>(
       );
       yield* Effect.transposeOption(
         Option.map(message, (written) =>
-          stepEnded(StepEnded.Model({ message: written, answered: outcome.answered })),
+          stepEnded(StepEnded.Model({ message: written, answered: calls.answered })),
         ),
       );
       return {
         conversation: next,
-        next: Arr.match(outcome.waiting, {
+        next: Arr.match(calls.waiting, {
           onEmpty: () =>
             Option.exists(finish, ({ reason }) => reason === "tool-calls")
               ? Next.Continue()
               : Next.Finish(),
           onNonEmpty: (waiting) => Next.Interrupt({ waiting }),
         }),
-      } satisfies StepOutcome;
+      } satisfies StepResult;
     },
     Effect.scoped,
     Effect.mapError(asRunFailed),
@@ -934,7 +934,7 @@ const runAccepted = Effect.fnUntraced(function* <R>(
     waiting: Arr.NonEmptyReadonlyArray<StoredInterruptPayload>,
   ) =>
     Effect.gen(function* () {
-      yield* written;
+      yield* backgroundWritesDone;
       yield* commitResumes;
       yield* store.createInterrupts(run, waiting);
       yield* store.endRun(runId, RunEnd.Interrupted(), yield* Ref.get(usage));
@@ -950,7 +950,7 @@ const runAccepted = Effect.fnUntraced(function* <R>(
 
   const finished = (saved: ReadonlyArray<StoredMessage>) =>
     Effect.gen(function* () {
-      yield* written;
+      yield* backgroundWritesDone;
       yield* store.saveThread(threadId, saved);
       yield* commitResumes;
       yield* store.endRun(runId, RunEnd.Completed(), yield* Ref.get(usage));
@@ -958,23 +958,23 @@ const runAccepted = Effect.fnUntraced(function* <R>(
       yield* emit({ type: "RUN_FINISHED", threadId, runId });
     }).pipe(Effect.mapError(asRunFailed), Effect.uninterruptible);
 
-  const after = (outcome: StepOutcome): Effect.Effect<void, RunFailed, R> =>
-    Next.$match(outcome.next, {
-      Interrupt: ({ waiting }) => interrupted(outcome.conversation, waiting),
+  const after = (step: StepResult): Effect.Effect<void, RunFailed, R> =>
+    Next.$match(step.next, {
+      Interrupt: ({ waiting }) => interrupted(step.conversation, waiting),
       Continue: () =>
         Effect.forEach(
           hooks.flatMap((hook) => hook.continues ?? []),
-          (hook) => hook(scope, outcome.conversation),
+          (hook) => hook(scope, step.conversation),
           { discard: true },
-        ).pipe(Effect.andThen(modelStep(outcome.conversation)), Effect.flatMap(after)),
-      Finish: () => finished(outcome.conversation),
+        ).pipe(Effect.andThen(modelStep(step.conversation)), Effect.flatMap(after)),
+      Finish: () => finished(step.conversation),
     });
 
   /** The conversation as it was when the run stopped, with the answer it was writing. */
   const stoppedAt = (stopReason: "error" | "aborted", end: RunEnd) =>
     Effect.gen(function* () {
       // A failed background write is the reason the run stopped, or it stops it anyway.
-      yield* written.pipe(Effect.ignore({ log: "Warn" }));
+      yield* backgroundWritesDone.pipe(Effect.ignore({ log: "Warn" }));
       const saved = [
         ...(yield* Ref.get(conversation)),
         ...Option.toArray(

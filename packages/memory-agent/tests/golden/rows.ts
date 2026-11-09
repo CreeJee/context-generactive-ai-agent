@@ -106,7 +106,7 @@ const column = (value: JsonValue): JsonValue =>
     : value;
 
 /** A run log row's event type and call, when it is a tool call's result. */
-const resultCall = (row: JsonObject) =>
+const toolResultCallId = (row: JsonObject) =>
   Option.flatMap(Option.liftPredicate(row["event_json"] ?? null, isObject), (event) =>
     event["type"] === "TOOL_CALL_RESULT" && isString(event["toolCallId"])
       ? Option.some(event["toolCallId"])
@@ -117,17 +117,18 @@ const resultCall = (row: JsonObject) =>
  * Run log rows with each stretch of tool results in call id order: a result streams as soon as its
  * call finished, so which of two calls finished first depends on timing, not on the run.
  */
-const resultsSorted = (logged: ReadonlyArray<JsonObject>) =>
+const toolResultsInIdOrder = (logged: ReadonlyArray<JsonObject>) =>
   Arr.fromIterable(
     Iterable.groupWith(
       logged,
-      (left, right) => Option.isSome(resultCall(left)) && Option.isSome(resultCall(right)),
+      (left, right) =>
+        Option.isSome(toolResultCallId(left)) && Option.isSome(toolResultCallId(right)),
     ),
   ).flatMap((stretch) =>
     Arr.sort(
       stretch,
       Order.mapInput(Order.String, (row: JsonObject) =>
-        Option.getOrElse(resultCall(row), () => ""),
+        Option.getOrElse(toolResultCallId(row), () => ""),
       ),
     ),
   );
@@ -278,7 +279,7 @@ const conversationRows = Effect.fnUntraced(function* (sessionId: string) {
        WHERE a.session_id = ? ORDER BY ${runOrder("a")}`,
       sessionId,
     ),
-    events: resultsSorted(
+    events: toolResultsInIdOrder(
       yield* rows(
         `SELECT run_id, event_json FROM workflow_run_log_entries
          WHERE run_id IN ${inList(runList.length)} ORDER BY cursor`,

@@ -20,7 +20,7 @@ export interface StepCall {
 }
 
 /** What a call answers the model with, or the user's decision it waits for. */
-export type CallOutcome<Request> = Data.TaggedEnum<{
+export type CallResult<Request> = Data.TaggedEnum<{
   Returned: { readonly result: JsonValue };
   /**
    * The tool ran and failed. `result` is what the model reads; `error` is the stored tool message's
@@ -34,13 +34,13 @@ export type CallOutcome<Request> = Data.TaggedEnum<{
   Refused: { readonly result: JsonValue; readonly error: string };
   Waiting: { readonly request: Request };
 }>;
-interface CallOutcomeDefinition extends Data.TaggedEnum.WithGenerics<1> {
-  readonly taggedEnum: CallOutcome<this["A"]>;
+interface CallResultDefinition extends Data.TaggedEnum.WithGenerics<1> {
+  readonly taggedEnum: CallResult<this["A"]>;
 }
-export const CallOutcome = Data.taggedEnum<CallOutcomeDefinition>();
+export const CallResult = Data.taggedEnum<CallResultDefinition>();
 
 /** A call that got its answer, whether it ran or the gates answered for it. */
-export type CallAnswer = Exclude<CallOutcome<never>, { readonly _tag: "Waiting" }>;
+export type CallAnswer = Exclude<CallResult<never>, { readonly _tag: "Waiting" }>;
 
 /** The gates let the call run. */
 export interface Run {
@@ -49,8 +49,8 @@ export interface Run {
 }
 export const Run = (run: Run["run"]): Run => ({ _tag: "Run", run });
 
-/** What the gates decided for one call: run it, or its outcome without running it. */
-export type Admission<Request> = Run | CallOutcome<Request>;
+/** What the gates decided for one call: run it, or its result without running it. */
+export type Admission<Request> = Run | CallResult<Request>;
 
 /** The answer to a write the step's incomplete response asked for: it never started. */
 const responseIncomplete = ToolFailed.make({
@@ -60,13 +60,13 @@ const responseIncomplete = ToolFailed.make({
 });
 
 const failedWith = (failure: ToolFailed): CallAnswer =>
-  CallOutcome.Failed({
+  CallResult.Failed({
     result: failureResult(failure),
     error: failure.code,
     message: failure.message,
   });
 
-const notStarted = CallOutcome.Refused({
+const notStarted = CallResult.Refused({
   result: failureResult(responseIncomplete),
   error: responseIncomplete.code,
 });
@@ -83,9 +83,11 @@ export interface StepScheduler<Request, E, R> {
   /**
    * The response ended, `complete` with a finish of `stop`, `tool-calls` or `pause`. Writes start,
    * or are answered as not run when it was not complete. Waits for every call and gives their
-   * outcomes in call order; a failure of the gates or hooks fails it after all calls settled.
+   * results in call order; a failure of the gates or hooks fails it after all calls settled.
    */
-  readonly settle: (complete: boolean) => Effect.Effect<ReadonlyArray<CallOutcome<Request>>, E>;
+  readonly responseEnded: (
+    complete: boolean,
+  ) => Effect.Effect<ReadonlyArray<CallResult<Request>>, E>;
 }
 
 /** A scheduler for one step; its calls run in the scope, so closing it interrupts them. */
@@ -95,11 +97,11 @@ export const stepScheduler = Effect.fnUntraced(function* <Request, E, R>(options
 }): Effect.fn.Return<StepScheduler<Request, E, R>, never, Scope.Scope> {
   const scope = yield* Effect.scope;
   const finished = yield* Deferred.make<boolean>();
-  const calls = yield* Ref.make<ReadonlyArray<Fiber.Fiber<CallOutcome<Request>, E>>>([]);
+  const calls = yield* Ref.make<ReadonlyArray<Fiber.Fiber<CallResult<Request>, E>>>([]);
 
   const answerOf = (call: StepCall, run: Run["run"]) => {
     const ran = Effect.match(run, {
-      onSuccess: (result): CallAnswer => CallOutcome.Returned({ result }),
+      onSuccess: (result): CallAnswer => CallResult.Returned({ result }),
       onFailure: failedWith,
     });
     return (
@@ -111,7 +113,7 @@ export const stepScheduler = Effect.fnUntraced(function* <Request, E, R>(options
     ).pipe(Effect.tap((answer) => options.answered(call, answer)));
   };
 
-  const outcomeOf = (call: StepCall) => (admission: Admission<Request>) =>
+  const resultOf = (call: StepCall) => (admission: Admission<Request>) =>
     Match.valueTags(admission, {
       Run: ({ run }) => answerOf(call, run),
       Returned: (answer) => Effect.as(options.answered(call, answer), answer),
@@ -122,12 +124,12 @@ export const stepScheduler = Effect.fnUntraced(function* <Request, E, R>(options
 
   const offer = (call: StepCall, admission: Effect.Effect<Admission<Request>, E, R>) =>
     admission.pipe(
-      Effect.flatMap(outcomeOf(call)),
+      Effect.flatMap(resultOf(call)),
       Effect.forkIn(scope),
       Effect.flatMap((fiber) => Ref.update(calls, (all) => [...all, fiber])),
     );
 
-  const settle = (complete: boolean) =>
+  const responseEnded = (complete: boolean) =>
     Deferred.succeed(finished, complete).pipe(
       Effect.andThen(Ref.get(calls)),
       Effect.flatMap(Fiber.awaitAll),
@@ -135,5 +137,5 @@ export const stepScheduler = Effect.fnUntraced(function* <Request, E, R>(options
       Effect.flatMap(Effect.all),
     );
 
-  return { offer, settle };
+  return { offer, responseEnded };
 });

@@ -1,6 +1,6 @@
 import { Effect, Option, Schema } from "effect";
 import type { RunHook } from "../loop/run.ts";
-import { CallOutcome } from "../loop/scheduler.ts";
+import { CallResult } from "../loop/scheduler.ts";
 import { memoryReadRunTools, type MemoryToolEnvironment } from "../tools/memory.ts";
 import { BtwToolName } from "./contracts.ts";
 
@@ -28,7 +28,7 @@ export const btwToolGuardHook: RunHook = {
       allowed(call.name)
         ? Option.none()
         : Option.some(
-            CallOutcome.Returned({ result: { error: "btw_tool_not_allowed", tool: call.name } }),
+            CallResult.Returned({ result: { error: "btw_tool_not_allowed", tool: call.name } }),
           ),
     ),
 };

@@ -3,7 +3,7 @@ import { SecureRandom } from "effect/crypto";
 import type { StoredInterruptPayload } from "../chat-store/schema.ts";
 import type { JsonValue } from "../json.ts";
 import { asRunFailed, type RunHook } from "../loop/run.ts";
-import { type Admission, CallOutcome } from "../loop/scheduler.ts";
+import { type Admission, CallResult } from "../loop/scheduler.ts";
 import { InterruptAnswer } from "../loop/store.ts";
 import type { ModelSelection } from "../providers/contracts.ts";
 import type { Project } from "../projects/projects.ts";
@@ -157,7 +157,7 @@ const askUser = (call: GatedCall, { reason, askedBy }: Asking) =>
   Effect.map(
     Effect.flatMap(SecureRandom.SecureRandom, (crypto) => crypto.uuidV7()),
     (id): Admission<StoredInterruptPayload> =>
-      CallOutcome.Waiting({
+      CallResult.Waiting({
         request: {
           id: `interrupt-${id}`,
           reason: "permission_review",
@@ -223,7 +223,7 @@ export const makePermissionGateHook = Effect.fnUntraced(function* (
                 Effect.succeed(
                   isAllowed(decision)
                     ? Option.none()
-                    : Option.some(CallOutcome.Returned({ result: refusal(decision) })),
+                    : Option.some(CallResult.Returned({ result: refusal(decision) })),
                 ),
             }),
           ).pipe(Effect.mapError(asRunFailed))
