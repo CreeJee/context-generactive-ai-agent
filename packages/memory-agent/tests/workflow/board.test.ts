@@ -167,12 +167,11 @@ testAgent()("kanban board", (it) => {
       yield* workflows.updateGoal(id, goal);
       yield* workflows.updatePlan(id, plan);
       yield* workflows.setPhase(id, "execute");
-      const executing = yield* workflows.updateProgress(id, {
-        steps: [{ id: "a", status: "in_progress", evidence: [] }],
-        goalEvidence: [],
-        planEvidence: [],
-        detail: "Started a",
-      });
+      const executing = yield* workflows.transitionCard(
+        id,
+        { cardId: "a", from: "ready", to: "in_progress" },
+        orchestrator,
+      );
 
       const edit = yield* workflows.editBoard(
         id,

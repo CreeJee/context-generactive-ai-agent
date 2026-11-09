@@ -12,7 +12,7 @@ export const CardStatus = Schema.Literals([
 ]);
 export type CardStatus = typeof CardStatus.Type;
 
-/** Step statuses of the update_workflow_progress contract and of Plans saved before cards. */
+/** Step statuses of Plans saved before cards, as the model reads them. */
 export const StepProgressStatus = Schema.Literals([
   "pending",
   "in_progress",

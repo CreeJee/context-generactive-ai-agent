@@ -33,7 +33,7 @@ test("failures, refusals and empty results are not substantive progress", () => 
   expect(
     fingerprint("run_shell", "{}", { exitCode: 0, output: "passed", signal: null }),
   ).not.toBeNull();
-  expect(fingerprint("update_workflow_progress", "{}", { updatedAt: "new" })).toBeNull();
+  expect(fingerprint("update_plan", "{}", { updatedAt: "new" })).toBeNull();
 });
 
 test("stable result fingerprints ignore call arguments and volatile pagination/timing", () => {

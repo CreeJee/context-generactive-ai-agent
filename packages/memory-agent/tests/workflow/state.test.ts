@@ -8,6 +8,7 @@ import {
   WorkflowActionRequest,
   workflowActions,
 } from "../../src/workflow/actions.ts";
+import { BoardAuthor } from "../../src/workflow/card.ts";
 import { WorkflowTools } from "../../src/workflow/tools.ts";
 import { PlanDependencyIssue } from "../../src/workflow/plan-schedule.ts";
 import {
@@ -50,8 +51,6 @@ const plan = {
   status: "ready" as const,
 };
 
-const noProgress = { steps: [], goalEvidence: [], planEvidence: [] };
-
 /** Goal and ready Plan recorded, with Execute started. */
 const executing = Effect.fnUntraced(function* (sessionId: string) {
   const workflows = yield* Workflows;
@@ -60,16 +59,26 @@ const executing = Effect.fnUntraced(function* (sessionId: string) {
   return yield* workflows.setPhase(sessionId, "execute");
 });
 
-/** Every step completed and the Execute run finished, so the workflow is in Verify. */
-const verifying = Effect.fnUntraced(function* (sessionId: string) {
+const orchestrator = BoardAuthor.cases.Orchestrator.make({ runId: "test" });
+
+/** Moves the card through the board to done, as the orchestrator does. */
+const finishCard = Effect.fnUntraced(function* (sessionId: string, cardId: string) {
   const workflows = yield* Workflows;
-  yield* executing(sessionId);
-  yield* workflows.updateProgress(sessionId, {
-    ...noProgress,
-    steps: [{ id: "store", status: "completed", evidence: ["implementation evidence"] }],
-    detail: "Implementation complete",
-  });
-  return yield* workflows.finishRun(sessionId, "execute");
+  yield* workflows.transitionCard(
+    sessionId,
+    { cardId, from: "ready", to: "in_progress" },
+    orchestrator,
+  );
+  yield* workflows.transitionCard(
+    sessionId,
+    { cardId, from: "in_progress", to: "verify" },
+    orchestrator,
+  );
+  return yield* workflows.transitionCard(
+    sessionId,
+    { cardId, from: "verify", to: "done" },
+    orchestrator,
+  );
 });
 
 /** The session's run, still running as the owner records it; every tool of a test comes from it. */
@@ -281,11 +290,7 @@ testAgent()("Workflows", (it) => {
       const id = yield* freshSession;
       const workflows = yield* Workflows;
       yield* executing(id);
-      yield* workflows.updateProgress(id, {
-        ...noProgress,
-        steps: [{ id: "store", status: "completed", evidence: ["stored"] }],
-        detail: "store done",
-      });
+      yield* finishCard(id, "store");
       const [store] = plan.steps;
       const expose = {
         ...store!,
@@ -295,8 +300,8 @@ testAgent()("Workflows", (it) => {
       };
       const kept = yield* workflows.updatePlan(id, { ...plan, steps: [store!, expose] });
       expect(kept.plan?.steps).toMatchObject([
-        { id: "store", status: "done", evidence: ["stored"] },
-        { id: "expose", status: "ready", evidence: [] },
+        { id: "store", status: "done" },
+        { id: "expose", status: "ready" },
       ]);
       // Which outcomes a step serves is not its work: naming one keeps the step's progress.
       const tagged = yield* workflows.updatePlan(id, {
@@ -304,7 +309,7 @@ testAgent()("Workflows", (it) => {
         steps: [{ ...store!, outcomes: ["O1"] }, expose],
       });
       expect(tagged.plan?.steps).toMatchObject([
-        { id: "store", outcomes: ["O1"], status: "done", evidence: ["stored"] },
+        { id: "store", outcomes: ["O1"], status: "done" },
         { id: "expose", status: "ready" },
       ]);
       // A step whose fields change starts over.
@@ -313,8 +318,8 @@ testAgent()("Workflows", (it) => {
         steps: [{ ...store!, description: "Persist elsewhere" }, expose],
       });
       expect(changed.plan?.steps).toMatchObject([
-        { id: "store", status: "ready", evidence: [] },
-        { id: "expose", status: "backlog", evidence: [] },
+        { id: "store", status: "ready" },
+        { id: "expose", status: "backlog" },
       ]);
     }),
   );
@@ -324,11 +329,7 @@ testAgent()("Workflows", (it) => {
       const id = yield* freshSession;
       const workflows = yield* Workflows;
       yield* executing(id);
-      yield* workflows.updateProgress(id, {
-        ...noProgress,
-        steps: [{ id: "store", status: "completed", evidence: ["stored"] }],
-        detail: "store done",
-      });
+      yield* finishCard(id, "store");
       const editPlan = yield* workflowTool(id, "execute", "edit_plan");
       const step = {
         title: "Expose artifacts",
@@ -353,7 +354,7 @@ testAgent()("Workflows", (it) => {
         plan: {
           version: 2,
           steps: [
-            { id: "store", status: "done", evidence: ["stored"] },
+            { id: "store", status: "done" },
             { id: "expose", title: "Expose the Plan", status: "ready" },
             { id: "docs", status: "backlog" },
           ],
@@ -375,34 +376,6 @@ testAgent()("Workflows", (it) => {
       expect((yield* workflows.get(id)).plan).toMatchObject({
         version: 2,
         steps: [{ id: "store" }, { id: "expose" }, { id: "docs" }],
-      });
-    }),
-  );
-
-  it.effect("rejects stale execution progress after a Plan revision, also through the tool", () =>
-    Effect.gen(function* () {
-      const id = yield* freshSession;
-      const workflows = yield* Workflows;
-      yield* executing(id);
-      const progressTool = yield* workflowTool(id, "execute", "update_workflow_progress");
-      yield* workflows.updatePlan(id, { ...plan, summary: "Revised execution scope" });
-      const stale = {
-        ...noProgress,
-        planStatus: "executing" as const,
-        detail: "stale Execute tool call",
-      };
-      const progress = yield* Effect.result(workflows.updateProgress(id, stale));
-      expect(Result.isFailure(progress)).toBe(true);
-      if (Result.isFailure(progress))
-        expect(progress.failure).toMatchObject({ reason: "phase_not_executable" });
-      expect(yield* workflows.get(id)).toMatchObject({
-        phase: "plan",
-        plan: { version: 2, status: "ready" },
-      });
-      // The model sees a typed refusal rather than a generic execution error.
-      expect(yield* progressTool(stale)).toEqual({
-        error: "workflow_progress_refused",
-        reason: "phase_not_executable",
       });
     }),
   );
@@ -483,12 +456,11 @@ testAgent()("Workflows", (it) => {
       const goalId = original[0]?.goal_instance_id;
       expect(goalId).toEqual(expect.any(String));
       const previous = String(original[1]?.state_json);
-      yield* workflows.updateProgress(id, {
-        ...noProgress,
-        goalEvidence: ["observed old criterion"],
-        planEvidence: ["old approach"],
-        detail: "Document baseline",
-      });
+      yield* workflows.transitionCard(
+        id,
+        { cardId: "store", from: "ready", to: "in_progress" },
+        orchestrator,
+      );
       // A method-only Plan revision and a Goal revision both keep the Goal identity.
       yield* workflows.updatePlan(id, { ...plan, summary: "Another method" });
       yield* workflows.updateGoal(id, { ...goal, outcomes: [{ id: "O1", text: "New outcome" }] });
@@ -505,9 +477,6 @@ testAgent()("Workflows", (it) => {
       expect(rows.every((row) => row.goal_instance_id === goalId)).toBe(true);
       expect(rows[1]?.state_json).toBe(previous);
       const decode = Schema.decodeEffect(Schema.fromJsonString(RevisionState));
-      expect((yield* decode(String(rows[2]?.state_json))).goal.evidence).toEqual([
-        "observed old criterion",
-      ]);
       const latest = yield* decode(String(rows.at(-1)?.state_json));
       expect(latest.goal).toMatchObject({
         version: 2,
@@ -526,104 +495,14 @@ testAgent()("Workflows", (it) => {
     }),
   );
 
-  it.effect("records step evidence and requires passed verification before completion", () =>
-    Effect.gen(function* () {
-      const id = yield* freshSession;
-      const workflows = yield* Workflows;
-      yield* executing(id);
-      const run = yield* startRun(id);
-      yield* workflows.updateProgress(
-        id,
-        {
-          ...noProgress,
-          steps: [{ id: "store", status: "completed", evidence: ["workflow.test.ts passed"] }],
-          planEvidence: ["State persisted after reload"],
-          detail: "Completed the storage step",
-        },
-        run,
-      );
-      const staged = yield* workflows.updateProgress(
-        id,
-        {
-          ...noProgress,
-          goalStatus: "completed",
-          planStatus: "completed",
-          goalEvidence: ["The requested workflow is available"],
-          verification: {
-            status: "passed",
-            summary: "The workflow persists and reloads",
-            evidence: ["24 workflow assertions passed"],
-          },
-          detail: "Verification passed",
-        },
-        run,
-      );
-      // The running run's completion waits until the run ends.
-      expect(staged).toMatchObject({
-        phase: "execute",
-        goal: { status: "active" },
-        plan: { status: "executing" },
-      });
-      yield* sqlRun("UPDATE chat_runs SET status = 'completed' WHERE run_id = ?", run);
-      yield* workflows.finishRun(id, "execute");
-      const state = yield* workflows.finishRun(id, "verify");
-      expect(state.goal).toMatchObject({ status: "completed", verification: { status: "passed" } });
-      expect(state.plan).toMatchObject({
-        status: "completed",
-        verification: { status: "passed" },
-        steps: [{ id: "store", status: "done", evidence: ["workflow.test.ts passed"] }],
-      });
-      // The finished runs take the completed Plan out of Execute, so 0.0.17's stuck phase cannot recur.
-      expect(state.phase).toBe("completed");
-    }),
-  );
-
-  it.effect("refuses unsupported completion claims and steps without evidence", () =>
-    Effect.gen(function* () {
-      const id = yield* freshSession;
-      const workflows = yield* Workflows;
-      yield* workflows.updateGoal(id, goal);
-      const claim = yield* Effect.result(
-        workflows.updateProgress(id, {
-          ...noProgress,
-          goalStatus: "completed",
-          verification: { status: "passed", summary: "Claimed success", evidence: [] },
-          detail: "Tried to complete without evidence",
-        }),
-      );
-      expect(Result.isFailure(claim)).toBe(true);
-      if (Result.isFailure(claim))
-        expect(claim.failure).toMatchObject({ reason: "verification_required" });
-      yield* workflows.updatePlan(id, plan);
-      const step = yield* Effect.result(
-        workflows.updateProgress(id, {
-          ...noProgress,
-          steps: [{ id: "store", status: "completed", evidence: [] }],
-          detail: "Claimed the step was done",
-        }),
-      );
-      expect(Result.isFailure(step)).toBe(true);
-      if (Result.isFailure(step))
-        expect(step.failure).toMatchObject({ reason: "step_evidence_required" });
-    }),
-  );
-
   it.effect("records pause, resume and stop as durable Goal lifecycle events", () =>
     Effect.gen(function* () {
       const id = yield* freshSession;
       const workflows = yield* Workflows;
       yield* workflows.setPhase(id, "goal");
       yield* workflows.updateGoal(id, goal);
-      yield* workflows.updateProgress(id, {
-        ...noProgress,
-        goalStatus: "paused",
-        detail: "Paused by the user",
-      });
-      const resumed = yield* workflows.updateProgress(id, {
-        ...noProgress,
-        goalStatus: "active",
-        detail: "Resumed by the user",
-      });
+      yield* workflows.controlGoal(id, "pause");
+      const resumed = yield* workflows.controlGoal(id, "resume");
       expect(resumed.goal?.status).toBe("active");
       yield* workflows.controlGoal(id, "pause");
       yield* workflows.controlGoal(id, "resume");
@@ -639,16 +518,6 @@ testAgent()("Workflows", (it) => {
     }),
   );
 
-  it.effect("keeps Execute active while any Plan step lacks completion evidence", () =>
-    Effect.gen(function* () {
-      const id = yield* freshSession;
-      yield* executing(id);
-      const state = yield* (yield* Workflows).finishRun(id, "execute");
-      expect(state.phase).toBe("execute");
-      expect(state.plan?.steps[0]?.status).toBe("ready");
-    }),
-  );
-
   it.effect("reconciles a stale Verify with unfinished steps back to Execute", () =>
     Effect.gen(function* () {
       const id = yield* freshSession;
@@ -660,158 +529,20 @@ testAgent()("Workflows", (it) => {
       expect(state.ledger.at(-1)?.detail).toBe("verify -> execute (state reconciled)");
     }),
   );
-
-  it.effect("reconciles completed Execute work to Verify before the next turn", () =>
-    Effect.gen(function* () {
-      const id = yield* freshSession;
-      const workflows = yield* Workflows;
-      yield* executing(id);
-      yield* workflows.updateProgress(id, {
-        ...noProgress,
-        steps: [{ id: "store", status: "completed", evidence: ["workflow test passed"] }],
-        detail: "Implementation complete",
-      });
-      const state = yield* workflows.reconcile(id);
-      expect(state.phase).toBe("verify");
-      expect(state.ledger.at(-1)?.detail).toBe("execute -> verify (state reconciled)");
-    }),
-  );
-
-  it.effect("advances Execute to Verify only after every step has completion evidence", () =>
-    Effect.gen(function* () {
-      const id = yield* freshSession;
-      const state = yield* verifying(id);
-      expect(state.phase).toBe("verify");
-      expect(state.plan?.status).toBe("executing");
-      expect(state.ledger.at(-1)).toMatchObject({
-        kind: "phase_changed",
-        detail: "execute -> verify",
-      });
-    }),
-  );
-
-  it.effect("completes verified artifacts once after the Verify run", () =>
-    Effect.gen(function* () {
-      const id = yield* freshSession;
-      const workflows = yield* Workflows;
-      yield* verifying(id);
-      yield* workflows.updateProgress(id, {
-        ...noProgress,
-        verification: {
-          status: "passed",
-          summary: "Acceptance criteria passed",
-          evidence: ["workflow test passed"],
-        },
-        detail: "Verification passed",
-      });
-      const completed = yield* workflows.finishRun(id, "verify");
-      const repeated = yield* workflows.finishRun(id, "verify");
-      expect(completed.phase).toBe("completed");
-      expect(completed.goal).toMatchObject({
-        status: "completed",
-        verification: { status: "passed" },
-      });
-      expect(completed.plan).toMatchObject({
-        status: "completed",
-        verification: { status: "passed" },
-      });
-      expect(repeated).toEqual(completed);
-      expect(
-        repeated.ledger.filter((event) => event.detail === "Verification completed the workflow"),
-      ).toHaveLength(1);
-    }),
-  );
-
-  it.effect.each([
-    { verification: { status: "failed" }, phase: "execute", invalidated: false },
-    { verification: { status: "invalid_criterion" }, phase: "plan", invalidated: true },
-    { verification: { status: "inconclusive" }, phase: "plan", invalidated: false },
-    {
-      verification: { status: "invalid_hypothesis", recoveryPhase: "goal" },
-      phase: "goal",
-      invalidated: true,
-    },
-  ] as const)("routes $verification.status verification to $phase", (expected) =>
-    Effect.gen(function* () {
-      const id = yield* freshSession;
-      const workflows = yield* Workflows;
-      const { status } = expected.verification;
-      yield* verifying(id);
-      yield* workflows.updateProgress(id, {
-        ...noProgress,
-        verification: {
-          ...expected.verification,
-          summary: `Verification ended as ${status}`,
-          evidence: ["diagnostic evidence"],
-        },
-        detail: `Recorded ${status}`,
-      });
-      const state = yield* workflows.finishRun(id, "verify");
-      expect(state.phase).toBe(expected.phase);
-      expect(state.goal?.status).toBe("active");
-      expect(state.plan?.status).toBe("executing");
-      expect(state.ledger.at(-1)).toMatchObject({
-        kind: "phase_changed",
-        detail: `verify -> ${expected.phase} (${status})`,
-      });
-      if (expected.invalidated) expect(state.ledger.at(-2)?.kind).toBe("verification_invalidated");
-    }),
-  );
-
-  it.effect("keeps a confirmed external block in Verify and marks the Plan blocked", () =>
-    Effect.gen(function* () {
-      const id = yield* freshSession;
-      const workflows = yield* Workflows;
-      yield* verifying(id);
-      yield* workflows.updateProgress(id, {
-        ...noProgress,
-        verification: {
-          status: "blocked",
-          summary: "A real account login is required",
-          evidence: ["The provider returned an authentication challenge"],
-        },
-        detail: "Waiting for the user to authenticate",
-      });
-      const state = yield* workflows.finishRun(id, "verify");
-      expect(state.phase).toBe("verify");
-      expect(state.plan?.status).toBe("blocked");
-      expect(state.plan?.verification.status).toBe("blocked");
-    }),
-  );
-
-  it.effect("does not route a verification outcome without evidence", () =>
-    Effect.gen(function* () {
-      const id = yield* freshSession;
-      const workflows = yield* Workflows;
-      yield* verifying(id);
-      yield* workflows.updateProgress(id, {
-        ...noProgress,
-        verification: {
-          status: "invalid_criterion",
-          summary: "Unsupported invalidation claim",
-          evidence: [],
-        },
-        detail: "Tried to invalidate without evidence",
-      });
-      expect((yield* workflows.finishRun(id, "verify")).phase).toBe("verify");
-    }),
-  );
 });
 
 testAgent()("WorkflowTools live refresh", (it) => {
-  it.effect.each(["execute", "verify"] as const)(
-    "%s can synchronize authorized Goal changes without executing the stale Plan",
-    (phase) =>
+  it.effect(
+    "execute can synchronize authorized Goal changes without executing the stale Plan",
+    () =>
       Effect.gen(function* () {
         const id = yield* freshSession;
         const workflows = yield* Workflows;
-        if (phase === "execute") yield* executing(id);
-        else yield* verifying(id);
+        yield* executing(id);
         const before = yield* workflows.get(id);
-        expect(before.phase).toBe(phase);
+        expect(before.phase).toBe("execute");
         const identity = yield* workflows.goalInstanceId(id);
-        const updateGoal = yield* workflowTool(id, phase, "update_goal");
-        const progress = yield* workflowTool(id, phase, "update_workflow_progress");
+        const updateGoal = yield* workflowTool(id, "execute", "update_goal");
         expect(yield* updateGoal({ ...goal, nonGoals: [] })).toMatchObject({
           phase: "plan",
           goal: { version: 2, nonGoals: [] },
@@ -822,23 +553,15 @@ testAgent()("WorkflowTools live refresh", (it) => {
         expect(revised.goal?.verification.status).toBe("not_run");
         expect(revised.ledger.at(-1)).toMatchObject({
           kind: "phase_changed",
-          detail: `${phase} -> plan (goal revised)`,
+          detail: "execute -> plan (goal revised)",
         });
-        expect(
-          yield* progress({
-            ...noProgress,
-            steps: [{ id: "store", status: "in_progress", evidence: [] }],
-            detail: "Stale execution",
-          }),
-        ).toEqual({ error: "workflow_progress_refused", reason: "phase_not_executable" });
-        expect(yield* workflows.get(id)).toEqual(revised);
         yield* workflows.updatePlan(id, plan);
         expect((yield* workflows.get(id)).plan?.goalVersion).toBe(2);
         expect((yield* workflows.setPhase(id, "execute")).phase).toBe("execute");
       }),
   );
 
-  it.effect.each(["update_goal", "update_plan", "update_workflow_progress"])(
+  it.effect.each(["update_goal", "update_plan"])(
     "%s publishes run-state after persisting the artifact",
     (name) =>
       Effect.gen(function* () {
@@ -864,13 +587,7 @@ testAgent()("WorkflowTools live refresh", (it) => {
         const input =
           name === "update_goal"
             ? { ...goal, statement: "Revised goal" }
-            : name === "update_plan"
-              ? { ...plan, summary: "Revised plan" }
-              : {
-                  ...noProgress,
-                  steps: [{ id: "store", status: "in_progress", evidence: [] }],
-                  detail: "Started implementation",
-                };
+            : { ...plan, summary: "Revised plan" };
         const result = yield* tool(input);
         const state = yield* workflows.get(id);
         expect(publish).toHaveBeenCalledExactlyOnceWith(id, "run-state");
@@ -889,30 +606,7 @@ testAgent()("WorkflowTools live refresh", (it) => {
         expect(state.plan?.version).toBe(name === "update_plan" ? 2 : 1);
         if (name === "update_goal") expect(state.goal?.statement).toBe("Revised goal");
         if (name === "update_plan") expect(state.plan?.summary).toBe("Revised plan");
-        if (name === "update_workflow_progress")
-          expect(state.plan?.steps[0]?.status).toBe("in_progress");
       }),
-  );
-
-  it.effect("rejected progress does not publish a successful mutation event", () =>
-    Effect.gen(function* () {
-      const id = yield* freshSession;
-      const workflows = yield* Workflows;
-      yield* workflows.updateGoal(id, goal);
-      yield* workflows.updatePlan(id, plan);
-      const before = yield* workflows.setPhase(id, "plan");
-      const events = yield* AppEvents;
-      const beforeRevision = yield* events.revision;
-      const publish = vi.spyOn(events, "publishSession");
-      yield* Effect.addFinalizer(() => Effect.sync(() => publish.mockRestore()));
-      const progress = yield* workflowTool(id, "execute", "update_workflow_progress");
-      expect(
-        yield* progress({ ...noProgress, planStatus: "executing", detail: "Stale progress" }),
-      ).toEqual({ error: "workflow_progress_refused", reason: "phase_not_executable" });
-      expect(publish).not.toHaveBeenCalled();
-      expect(yield* events.revision).toBe(beforeRevision);
-      expect(yield* workflows.get(id)).toEqual(before);
-    }),
   );
 });
 

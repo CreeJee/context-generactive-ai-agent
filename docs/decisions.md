@@ -4618,6 +4618,10 @@
   - 사용자가 대화에 말하면(`resumePlanner`) 0부터 다시 세고 보류했던 이유를 계획자에게 알린다. 라운드 수는 `kanban_goals.planner_rounds`·`planner_met`에 남아 재시작 뒤에도 이어진다.
   - 예전 채팅 경로의 한도는 두 턴이었다. 보드의 한 라운드는 카드를 더하고 그 카드가 끝나 판정까지 받는 긴 주기라서 세 번으로 정했다.
 - 구현(지시문의 outcome 상태): 칸반 보드에서 도는 대화의 워크플로 지시문은 outcome마다 장부 상태(unplanned·in_progress·awaiting_check·met·not_met)와 판정 요약을 붙인다. 보드가 아닌 대화는 장부가 없어 상태를 붙이지 않는다. outcome 목록은 앞의 6개만 보이던 것을 모두 보인다(세션 `037aa142`의 Goal은 outcome이 8개였다).
+- 구현(2c 채팅 모델의 완료 경로 제거): `update_workflow_progress`·`record_workflow_blocker` 도구와 `ProgressRecorded`·`RunFinished` 전이, 완료 근거 계산(`completion-evidence.ts`)을 없앤다. Goal은 보드의 `OutcomesMet`으로만 완료된다.
+  - 저장된 Goal의 `completion`·`completionRequest`는 이제 아무도 쓰지 않지만, 예전 상태를 읽을 수 있게 Schema에 둔다.
+  - Execute 지시문은 보드가 카드를 실행하고 검증자가 outcome을 판정한다고 알리고, 모델은 상태에 답하고 Plan을 고치거나 닫는다. Verify는 채팅 모델이 근거를 남길 때만 닿던 phase라서 같은 지시문을 쓴다. 두 phase는 phase 정리에서 하나로 합친다.
+  - `controlGoal`의 거절은 `WorkflowTransitionRefused`로 합치고, API의 workflow 변경 거절 사유에서 더는 나오지 않는 값(`plan_missing`, `steps_incomplete`, `outcomes_complete_goal` 등)을 뺀다.
 
 ## SQLite 연결은 `synchronous = NORMAL`로 쓴다 (2026-11-09)
 

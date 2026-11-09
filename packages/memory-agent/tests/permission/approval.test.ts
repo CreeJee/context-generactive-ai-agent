@@ -86,7 +86,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("approval-gat
     }),
   );
 
-  it.effect("Verify can run an approval-gated shell check", () =>
+  it.effect("Execute can run an approval-gated shell check", () =>
     Effect.gen(function* () {
       const sessionId = yield* freshSession;
       const workflows = yield* Workflows;
@@ -117,13 +117,6 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("approval-gat
         status: "ready",
       });
       yield* workflows.setPhase(sessionId, "execute");
-      yield* workflows.updateProgress(sessionId, {
-        steps: [{ id: "implementation", status: "completed", evidence: ["change made"] }],
-        goalEvidence: [],
-        planEvidence: [],
-        detail: "Implementation complete",
-      });
-      yield* workflows.finishRun(sessionId, "execute");
 
       const page = yield* openPage(sessionId);
       yield* page.send("please use the shell");

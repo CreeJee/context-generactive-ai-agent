@@ -352,13 +352,11 @@ export {
   WorkflowAction,
   WorkflowPhase,
   WorkflowState,
-  WorkflowProgressRefused,
   WorkflowStorageError,
   WorkflowTransitionRefused,
   Workflows,
   type UpdateGoal,
   type UpdatePlan,
-  type UpdateWorkflowProgress,
   type Verification,
 } from "./workflow/workflow.ts";
 export { BoardAuthor, CardHold, CardRisk, CardStatus } from "./workflow/card.ts";

@@ -208,7 +208,7 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "merges no Goal with an outcome judged not met, asks the model for cards and lets it not complete the Goal",
+    "merges no Goal with an outcome judged not met and asks the planner for cards",
     () =>
       Effect.gen(function* () {
         const fixture = yield* kanbanFixture;
@@ -251,19 +251,6 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
               expect(yield* Ref.get(goalChecks)).toBe(0);
               const workflows = yield* Workflows;
               expect((yield* workflows.get(board.sessionId)).goal?.status).toBe("active");
-              // Only the verdicts complete a board's Goal; the model's record is refused.
-              const refused = yield* workflows
-                .updateProgress(board.sessionId, {
-                  goalStatus: "completed",
-                  planStatus: "completed",
-                  steps: [],
-                  goalEvidence: [],
-                  planEvidence: [],
-                  verification: { status: "passed", summary: "done", evidence: ["looks done"] },
-                  detail: "Goal done",
-                })
-                .pipe(Effect.flip);
-              expect(refused).toMatchObject({ reason: "outcomes_complete_goal" });
             }),
           ),
         );

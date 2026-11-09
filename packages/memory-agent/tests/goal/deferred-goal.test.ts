@@ -4,6 +4,7 @@ import { expect } from "vite-plus/test";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import type { ScriptedResponder } from "../../src/testing/scripted-model.ts";
 import { isTruthy } from "../../src/truthy.ts";
+import { BoardAuthor } from "../../src/workflow/card.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
 import { runTurn, streamedText } from "../support/chat-client.ts";
 import { selectTestModel } from "../support/provider.ts";
@@ -109,16 +110,12 @@ const sessionIn = Effect.fnUntraced(function* (scenario: Scenario) {
       openQuestions: [],
       status: "ready",
     });
-    yield* workflows.setPhase(session, "verify");
-    yield* workflows.updateProgress(session, {
-      goalStatus: "completed",
-      goalEvidence: ["verified"],
-      planEvidence: [],
-      steps: [],
-      verification: { status: "passed", summary: "closed", evidence: ["verified"] },
-      detail: "closed old task",
-    });
-    yield* workflows.finishRun(session, "verify");
+    yield* workflows.setPhase(session, "execute");
+    yield* workflows.completeFromOutcomes(
+      session,
+      { goalVersion: 1, planVersion: 1, met: [{ outcomeId: "O1", summary: "verified" }] },
+      BoardAuthor.cases.Orchestrator.make({ runId: "test" }),
+    );
     expect((yield* workflows.get(session)).phase).toBe("completed");
   }
   return session;

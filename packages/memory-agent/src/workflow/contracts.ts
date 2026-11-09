@@ -3,8 +3,8 @@ import { BoardAuthor, CardRisk, CardStatus, cardContractFields, cardHoldFields }
 
 /**
  * Workflow state, Plans and boards as the page reads and changes them. This module imports no
- * server code, so the browser bundle can use it; `workflow.ts`, `completion-evidence.ts`,
- * `board-edit.ts` and `board.ts` keep them.
+ * server code, so the browser bundle can use it; `workflow.ts`, `board-edit.ts` and `board.ts`
+ * keep them.
  */
 
 export const PlanStatus = Schema.Literals([
@@ -41,7 +41,10 @@ export const ProjectBoard = Schema.Struct({
 });
 export type ProjectBoard = typeof ProjectBoard.Type;
 
-/** Only the current Plan version is supported; historical Plan mappings are not adopted. */
+/**
+ * Completion evidence a chat run once recorded by mapping outcomes to cards' acceptance criteria.
+ * Nothing writes it since the board alone judges outcomes; stored Goals still carry it, so it decodes.
+ */
 export const CriterionMapping = Schema.Struct({
   outcomeIndex: Schema.Int,
   outcomeText: Schema.String,
@@ -81,7 +84,7 @@ export const CompletionSnapshot = Schema.Struct({
 export type CompletionSnapshot = typeof CompletionSnapshot.Type;
 export type CriterionMapping = typeof CriterionMapping.Type;
 
-/** A proposal is never completion evidence; the owner validates it after durable settlement. */
+/** A chat run's completion proposal, kept like `CriterionMapping` only so stored Goals decode. */
 export const CompletionRequest = Schema.Struct({
   recorderRunId: Schema.String,
   goalVersion: Schema.Int,

@@ -7,8 +7,6 @@ const parentToolNames = HashSet.fromIterable([
   "update_plan",
   "edit_plan",
   "close_plan",
-  "update_workflow_progress",
-  "record_workflow_blocker",
   "promote_memory_candidate",
   "use_promoted_memory",
   "delegate_to_agent",

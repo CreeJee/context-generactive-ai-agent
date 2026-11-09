@@ -22,20 +22,13 @@ const stateTags: ReadonlyArray<GoalState["_tag"]> = [
   "Closed",
   "Completed",
 ];
-const verifications = (
-  ["passed", "failed", "invalid_hypothesis", "invalid_criterion", "blocked", "not_run"] as const
-).map((status) => ({
-  status,
-  evidence: true,
-  recoveryPhase: status === "invalid_hypothesis" ? ("goal" as const) : null,
-}));
 const steps = [
   { done: true, proven: true },
   { done: false, proven: false },
 ] as const;
 
-/** Every event a test can send in `standing`; progress describes the steps it leaves. */
-const eventsFor = (standing: Standing): ReadonlyArray<GoalEvent> => [
+/** Every event a test can send. */
+const events: ReadonlyArray<GoalEvent> = [
   ...(["chat", "goal", "plan", "verify", "completed"] as const).map((phase) =>
     GoalEvent.Navigated({ phase }),
   ),
@@ -48,31 +41,6 @@ const eventsFor = (standing: Standing): ReadonlyArray<GoalEvent> => [
   ),
   ...(["draft", "ready"] as const).flatMap((status) =>
     steps.map((step) => GoalEvent.PlanEdited({ status, ...step })),
-  ),
-  ...([null, "active", "paused", "completed", "failed"] as const).flatMap((goalStatus) =>
-    ([null, "executing", "completed", "blocked"] as const).flatMap((planStatus) =>
-      [null, ...steps].flatMap((step) =>
-        [null, ...verifications].map((verification) =>
-          GoalEvent.ProgressRecorded({
-            goalStatus,
-            planStatus,
-            staged: false,
-            unknownStep: false,
-            stepsUpdated: step !== null,
-            stepEvidenceMissing: false,
-            done: step?.done ?? standing.plan?.done ?? true,
-            proven: step?.proven ?? standing.plan?.proven ?? true,
-            planEvidence: false,
-            verification,
-          }),
-        ),
-      ),
-    ),
-  ),
-  ...(["execute", "verify"] as const).flatMap((startedPhase) =>
-    [true, false].map((completionRecorded) =>
-      GoalEvent.RunFinished({ startedPhase, completionRecorded }),
-    ),
   ),
   GoalEvent.PlanClosed(),
   GoalEvent.NewGoalRequested(),
@@ -129,7 +97,7 @@ const explore = (frontier: ReadonlyArray<Standing>): void => {
     return Result.match(decodeGoalState(from), {
       onFailure: () => [],
       onSuccess: (state) =>
-        eventsFor(from).flatMap((event) => {
+        events.flatMap((event) => {
           const outcome = transition(state, event);
           const at = `${tag}|${event._tag}`;
           if (outcome._tag === "Refused") {
@@ -234,12 +202,12 @@ const transitionsDocument = () => {
   const counts = stateTags.map(
     (tag) => `- \`${tag}\`: ${Arr.countBy(standings, (standing) => tagOf(standing) === tag)}`,
   );
-  const events = Arr.dedupe(Iterable.map(eventsFor(start), (event) => event._tag));
+  const eventTags = Arr.dedupe(Iterable.map(events, (event) => event._tag));
   const sections = stateTags.flatMap((tag) => [
     "",
     `## \`${tag}\``,
     "",
-    ...events.flatMap((event) => {
+    ...eventTags.flatMap((event) => {
       const results = Array.from(
         Option.getOrElse(
           MutableHashMap.get(reached.outcomes, `${tag}|${event}`),

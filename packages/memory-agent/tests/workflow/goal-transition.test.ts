@@ -3,6 +3,7 @@ import { expect } from "vite-plus/test";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import type { JsonValue } from "../../src/json.ts";
 import { Admission, workflowRunBindings } from "../../src/workflow/run-bindings.ts";
+import { BoardAuthor } from "../../src/workflow/card.ts";
 import { WorkflowTools } from "../../src/workflow/tools.ts";
 import { NewGoalSettlement, Workflows, type WorkflowState } from "../../src/workflow/workflow.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
@@ -36,14 +37,18 @@ const transition = (previousGoalInstanceId: string | null) => ({
   goal: { ...goal, statement: "second", outcomes: [{ id: "O1", text: "different success" }] },
 });
 
-const closingProgress = {
-  goalStatus: "completed" as const,
-  goalEvidence: ["old proof"],
-  planEvidence: [],
-  steps: [],
-  verification: { status: "passed" as const, summary: "old success", evidence: ["old proof"] },
-  detail: "verified first",
-};
+/** Completes the first Goal the way a board does once the verifier judged its outcome met. */
+const closeGoal = Effect.fnUntraced(function* (session: string) {
+  const workflows = yield* Workflows;
+  yield* workflows.setPhase(session, "execute");
+  expect(
+    yield* workflows.completeFromOutcomes(
+      session,
+      { goalVersion: 1, planVersion: 1, met: [{ outcomeId: "O1", summary: "old proof" }] },
+      BoardAuthor.cases.Orchestrator.make({ runId: "test" }),
+    ),
+  ).toBe(true);
+});
 
 /** Rows a session owns; run-keyed tables are reached through the session's run bindings. */
 const sessionRows = {
@@ -190,7 +195,7 @@ const admissible = {
 const transitionCases: ReadonlyArray<{
   readonly name: string;
   readonly phase: WorkflowState["phase"];
-  /** Verify passed before the transition; a `completed` phase also finishes the run. */
+  /** The verifier judged the first Goal's outcomes met before the transition. */
   readonly closed: boolean;
   readonly historicalRun: "completed" | "running" | "failed" | "missing";
   readonly ownerEffect: "succeeded" | "pending" | "uncertain";
@@ -199,7 +204,6 @@ const transitionCases: ReadonlyArray<{
 }> = [
   { ...admissible, name: "goal with an existing Goal", admission: applied },
   { ...admissible, name: "plan with an existing Goal", phase: "plan", admission: applied },
-  { ...admissible, name: "closed verify", phase: "verify", closed: true, admission: applied },
   {
     ...admissible,
     name: "completed workflow",
@@ -223,8 +227,8 @@ const transitionCases: ReadonlyArray<{
   })),
   {
     ...admissible,
-    name: "closed verify while its run is still active",
-    phase: "verify",
+    name: "completed workflow while its run is still active",
+    phase: "completed",
     closed: true,
     historicalRun: "running",
     admission: refused("run_outcome_uncertain"),
@@ -254,11 +258,8 @@ testAgent()("explicit new Goal transition", (it) => {
     Effect.gen(function* () {
       const history = yield* withHistory();
       const { workflows, session, historical, old } = history;
-      if (c.closed) {
-        yield* workflows.setPhase(session, "verify");
-        yield* workflows.updateProgress(session, closingProgress);
-        if (c.phase === "completed") yield* workflows.finishRun(session, "verify");
-      } else if (c.phase !== "goal") yield* workflows.setPhase(session, c.phase);
+      if (c.closed) yield* closeGoal(session);
+      else if (c.phase !== "goal") yield* workflows.setPhase(session, c.phase);
       expect((yield* workflows.get(session)).phase).toBe(c.phase);
       const { invoking, settle } = yield* invokingRun(history);
       switch (c.historicalRun) {
@@ -486,8 +487,7 @@ testAgent()("new Goal transition across reopening", (it) => {
         const env = yield* TestEnv;
         const history = yield* env.use(withHistory());
         const { workflows, session, old } = history;
-        yield* workflows.updateProgress(session, closingProgress);
-        yield* workflows.setPhase(session, "verify");
+        yield* env.use(closeGoal(session));
         const { invoking, request, settle } = yield* env.use(invokingRun(history));
         const before = yield* snapshot(session);
         yield* request();

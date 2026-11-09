@@ -168,7 +168,7 @@ describe("compact", () => {
               {
                 id: "partial",
                 type: "function",
-                function: { name: "update_workflow_progress", arguments: '{"detail":"진행 중' },
+                function: { name: "update_plan", arguments: '{"detail":"진행 중' },
               },
               validCall,
             ],

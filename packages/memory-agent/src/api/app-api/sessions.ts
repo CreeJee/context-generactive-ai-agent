@@ -255,17 +255,6 @@ const WorkflowChangeRefused = appRefusal(409, [
   "goal_terminal",
   "plan_not_ready",
   "plan_outdated",
-  "plan_missing",
-  "unknown_step",
-  "step_evidence_required",
-  "verification_required",
-  "steps_incomplete",
-  "phase_not_executable",
-  "goal_completion_required",
-  "completion_evidence_required",
-  "completion_evidence_invalid",
-  "completion_snapshot_conflict",
-  "outcomes_complete_goal",
 ]);
 
 /** The archive, restore or delete cannot start; `blocker` says why. */

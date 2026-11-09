@@ -229,28 +229,6 @@ export type GoalEvent = Data.TaggedEnum<{
     readonly done: boolean;
     readonly proven: boolean;
   };
-  /**
-   * The model records progress. The statuses are the ones it asks for; `staged` holds a completion
-   * a running recorder asks for until its run settles. The step fields describe the merged steps.
-   */
-  ProgressRecorded: {
-    readonly goalStatus: "active" | "paused" | "completed" | "failed" | null;
-    readonly planStatus: "executing" | "completed" | "blocked" | null;
-    readonly staged: boolean;
-    readonly unknownStep: boolean;
-    readonly stepsUpdated: boolean;
-    readonly stepEvidenceMissing: boolean;
-    readonly done: boolean;
-    readonly proven: boolean;
-    readonly planEvidence: boolean;
-    readonly verification: {
-      readonly status: VerificationStatus;
-      readonly evidence: boolean;
-      readonly recoveryPhase: "goal" | "plan" | null;
-    } | null;
-  };
-  /** A run that started in `startedPhase` ended. `completionRecorded` when its completion evidence holds. */
-  RunFinished: { readonly startedPhase: WorkflowPhase; readonly completionRecorded: boolean };
   PlanClosed: {};
   NewGoalRequested: {};
   NewGoalStarted: { readonly status: "draft" | "active" };
@@ -270,18 +248,6 @@ export interface GoalRefusals {
   readonly GoalStopped: "goal_missing" | "goal_terminal";
   readonly GoalEdited: never;
   readonly PlanEdited: never;
-  readonly ProgressRecorded:
-    | "goal_missing"
-    | "goal_terminal"
-    | "plan_missing"
-    | "unknown_step"
-    | "phase_not_executable"
-    | "step_evidence_required"
-    | "verification_required"
-    | "steps_incomplete"
-    | "goal_completion_required"
-    | "goal_not_active";
-  readonly RunFinished: never;
   readonly PlanClosed: "plan_missing" | "plan_closed";
   readonly NewGoalRequested: "goal_missing" | "phase_not_authorized";
   readonly NewGoalStarted: "goal_missing" | "phase_not_authorized";
@@ -391,135 +357,6 @@ const editPlan =
         recoveryPhase: null,
       },
     });
-
-const record =
-  (event: Event<"ProgressRecorded">) =>
-  ({ standing }: { readonly standing: Standing }): Transition<GoalRefusals["ProgressRecorded"]> => {
-    const { phase, goal, plan } = standing;
-    const { verification } = event;
-    if (event.goalStatus !== null && goal === null) return refused("goal_missing");
-    // Only a new Goal version reopens a finished Goal.
-    if (
-      (goal?.status === "completed" || goal?.status === "failed") &&
-      event.goalStatus !== null &&
-      event.goalStatus !== goal.status
-    )
-      return refused("goal_terminal");
-    if ((event.planStatus !== null || event.stepsUpdated) && plan === null)
-      return refused("plan_missing");
-    if (event.unknownStep) return refused("unknown_step");
-    if (
-      phase === "plan" &&
-      (event.planStatus !== null ||
-        event.stepsUpdated ||
-        event.planEvidence ||
-        verification !== null)
-    )
-      return refused("phase_not_executable");
-    if (event.stepEvidenceMissing) return refused("step_evidence_required");
-    const verified = verification?.status === "passed" && verification.evidence;
-    if (
-      event.goalStatus === "completed" &&
-      !(verification === null ? goal?.proven === true : verified)
-    )
-      return refused("verification_required");
-    if (
-      event.planStatus === "completed" &&
-      !(verification === null ? plan?.verification === "passed" && plan.evidence : verified)
-    )
-      return refused("verification_required");
-    if (event.planStatus === "completed" && !event.done) return refused("steps_incomplete");
-    // A running recorder's completion waits for its run to settle.
-    const goalStatus = event.staged && event.goalStatus === "completed" ? null : event.goalStatus;
-    const planStatus = event.staged && event.planStatus === "completed" ? null : event.planStatus;
-    const recordGoal =
-      verification !== null &&
-      (event.goalStatus !== null || phase === "goal" || phase === "verify" || plan === null);
-    const recordPlan =
-      verification !== null &&
-      (event.planStatus !== null || phase === "execute" || phase === "verify");
-    const nextGoal: GoalStanding | null =
-      goal === null
-        ? null
-        : {
-            status: goalStatus ?? goal.status,
-            passed: recordGoal ? verification.status === "passed" : goal.passed,
-            proven: recordGoal ? verified : goal.proven,
-          };
-    const nextPlan: PlanStanding | null =
-      plan === null
-        ? null
-        : {
-            status: planStatus ?? plan.status,
-            current: plan.current,
-            done: event.done,
-            proven: event.proven,
-            verification: recordPlan ? verification.status : plan.verification,
-            evidence: recordPlan ? verification.evidence : plan.evidence,
-            recoveryPhase: recordPlan ? verification.recoveryPhase : plan.recoveryPhase,
-          };
-    // A Plan finishes its Goal, never on its own.
-    if (
-      nextPlan?.status === "completed" &&
-      nextPlan.current &&
-      nextGoal !== null &&
-      nextGoal.status !== "completed" &&
-      nextGoal.status !== "failed"
-    )
-      return refused("goal_completion_required");
-    if (nextPlan?.status === "executing" && nextPlan.current && nextGoal?.status === "draft")
-      return refused("goal_not_active");
-    return moved({
-      phase:
-        nextGoal?.status === "completed" && nextPlan?.status === "completed" && progressing(phase)
-          ? "completed"
-          : phase,
-      goal: nextGoal,
-      plan: nextPlan,
-    });
-  };
-
-const finish =
-  ({ startedPhase, completionRecorded }: Event<"RunFinished">) =>
-  ({ standing }: { readonly standing: Standing }) => {
-    const { phase, goal, plan } = standing;
-    if (startedPhase === "execute" && phase === "execute")
-      return moved(
-        plan !== null &&
-          plan.status === "executing" &&
-          plan.verification !== "failed" &&
-          plan.proven
-          ? { ...standing, phase: "verify" }
-          : standing,
-      );
-    if (startedPhase !== "verify" || phase !== "verify" || plan === null) return moved(standing);
-    if (
-      plan.status === "completed" ||
-      plan.status === "closed" ||
-      plan.verification === "not_run" ||
-      !plan.evidence
-    )
-      return moved(standing);
-    if (plan.verification !== "passed")
-      return moved({
-        ...standing,
-        phase: Match.value(plan.verification).pipe(
-          Match.withReturnType<WorkflowPhase>(),
-          Match.when("failed", () => "execute"),
-          Match.when("invalid_hypothesis", () => plan.recoveryPhase ?? "plan"),
-          Match.when("blocked", () => "verify"),
-          Match.whenOr("invalid_criterion", "inconclusive", () => "plan"),
-          Match.exhaustive,
-        ),
-        plan: plan.verification === "blocked" ? { ...plan, status: "blocked" } : plan,
-      });
-    if (!plan.done || !completionRecorded || goal === null) return moved(standing);
-    return moved({
-      phase: "completed",
-      goal: { status: "completed", passed: true, proven: true },
-      plan: { ...plan, status: "completed" },
-    });
-  };
 
 const close = ({ standing }: { readonly standing: Standing }) => {
   const { plan } = standing;
@@ -678,31 +515,6 @@ export const goalTransitions: GoalTransitions = {
       Closed: editPlan(event),
       Completed: editPlan(event),
     }),
-  ProgressRecorded: (state, event) =>
-    Match.valueTags(state, {
-      NoGoal: record(event),
-      Shaping: record(event),
-      Running: record(event),
-      GoalChanged: record(event),
-      Paused: record(event),
-      Blocked: record(event),
-      Stopped: record(event),
-      Closed: record(event),
-      Completed: record(event),
-    }),
-  RunFinished: (state, event) =>
-    Match.valueTags(state, {
-      NoGoal: finish(event),
-      Shaping: finish(event),
-      Running: finish(event),
-      GoalChanged: finish(event),
-      Paused: finish(event),
-      Blocked: finish(event),
-      // A run that ends after the user stopped the Goal changes nothing.
-      Stopped: ({ standing }) => moved(standing),
-      Closed: finish(event),
-      Completed: finish(event),
-    }),
   PlanClosed: (state) =>
     Match.valueTags(state, {
       NoGoal: close,
@@ -778,8 +590,6 @@ export const transition: {
     GoalStopped: (value) => goalTransitions.GoalStopped(state, value),
     GoalEdited: (value) => goalTransitions.GoalEdited(state, value),
     PlanEdited: (value) => goalTransitions.PlanEdited(state, value),
-    ProgressRecorded: (value) => goalTransitions.ProgressRecorded(state, value),
-    RunFinished: (value) => goalTransitions.RunFinished(state, value),
     PlanClosed: (value) => goalTransitions.PlanClosed(state, value),
     NewGoalRequested: (value) => goalTransitions.NewGoalRequested(state, value),
     NewGoalStarted: (value) => goalTransitions.NewGoalStarted(state, value),

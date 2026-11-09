@@ -396,8 +396,6 @@ const workflowReadToolNames = HashSet.fromIterable([
   "update_plan",
   "edit_plan",
   "close_plan",
-  "update_workflow_progress",
-  "record_workflow_blocker",
 ]);
 /** Verify can execute checks, but cannot mutate source files or install dependencies. */
 const verificationToolNames = HashSet.fromIterable(["save_code_skill", "run_skill"]);
@@ -1134,10 +1132,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             }),
           );
       }
-      const state =
-        completed && unresolved === undefined
-          ? yield* workflows.finishRun(sessionId, phase)
-          : yield* workflows.get(sessionId);
+      const state = yield* workflows.get(sessionId);
       if (completed && unresolved === undefined)
         yield* execution.finish(sessionId, runId, state, [...(yield* Ref.get(progress))]);
       else yield* execution.stop(sessionId, "run_failed", runId);
@@ -2474,8 +2469,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         yield* sessions.get(sessionId);
         if (isTruthy(yield* liveRuns.get(sessionId))) return yield* runInProgress();
         const discarded = yield* runStore.discardPendingInterrupts(sessionId);
-        const workflow = yield* workflows.get(sessionId);
-        yield* workflows.finishRun(sessionId, workflow.phase);
         yield* queue.holdWaiting(sessionId);
         return { discarded };
       }).pipe(Effect.catchTag("SessionNotFound", unknownSession)),
@@ -2592,7 +2585,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         return state;
       }).pipe(
         Effect.catchTags({
-          WorkflowProgressRefused: ({ reason }) => Effect.fail({ error: reason }),
+          WorkflowTransitionRefused: ({ reason }) => Effect.fail({ error: reason }),
           SessionNotFound: unknownSession,
         }),
       ),

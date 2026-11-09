@@ -94,14 +94,7 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
         expect(parentStart?.system.join("\n")).toContain("ROOT INSTRUCTIONS FOR EVERY AGENT");
         expect(childStart?.system.join("\n")).toContain("ROOT INSTRUCTIONS FOR EVERY AGENT");
         // No nesting, and nothing the parent does not have.
-        [
-          "run_subagent",
-          "update_goal",
-          "update_plan",
-          "update_workflow_progress",
-          "record_workflow_blocker",
-          "delegate_to_agent",
-        ].forEach((tool) => {
+        ["run_subagent", "update_goal", "update_plan", "delegate_to_agent"].forEach((tool) => {
           expect(childStart?.toolNames).not.toContain(tool);
         });
         expect(childStart?.system.some((prompt) => prompt.includes("Current workflow"))).toBe(

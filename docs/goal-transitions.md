@@ -4,15 +4,15 @@
 
 ## 도달한 상태 수
 
-- `NoGoal`: 392
-- `Shaping`: 1344
-- `Running`: 140
-- `GoalChanged`: 278
-- `Paused`: 1232
-- `Blocked`: 554
-- `Stopped`: 1576
-- `Closed`: 672
-- `Completed`: 1732
+- `NoGoal`: 28
+- `Shaping`: 88
+- `Running`: 10
+- `GoalChanged`: 20
+- `Paused`: 74
+- `Blocked`: 20
+- `Stopped`: 88
+- `Closed`: 72
+- `Completed`: 70
 
 ## `NoGoal`
 
@@ -21,10 +21,8 @@
 - `GoalPaused`: 거절: `goal_missing`
 - `GoalResumed`: 거절: `goal_missing`
 - `GoalStopped`: 거절: `goal_missing`
-- `GoalEdited`: Blocked, Closed, GoalChanged, Shaping
+- `GoalEdited`: Closed, Shaping
 - `PlanEdited`: NoGoal, 그대로
-- `ProgressRecorded`: NoGoal, 거절: `goal_missing`, 거절: `phase_not_executable`, 거절: `plan_missing`, 거절: `steps_incomplete`, 거절: `verification_required`, 그대로
-- `RunFinished`: NoGoal, 그대로
 - `PlanClosed`: NoGoal, 거절: `plan_closed`, 거절: `plan_missing`
 - `NewGoalRequested`: 거절: `goal_missing`, 거절: `phase_not_authorized`
 - `NewGoalStarted`: 거절: `goal_missing`, 거절: `phase_not_authorized`
@@ -40,8 +38,6 @@
 - `GoalStopped`: Stopped
 - `GoalEdited`: Shaping, 그대로
 - `PlanEdited`: Shaping, 그대로
-- `ProgressRecorded`: Blocked, Completed, GoalChanged, Paused, Running, Shaping, Stopped, 거절: `goal_completion_required`, 거절: `goal_not_active`, 거절: `phase_not_executable`, 거절: `plan_missing`, 거절: `steps_incomplete`, 거절: `verification_required`, 그대로
-- `RunFinished`: Blocked, Completed, Shaping, 그대로
 - `PlanClosed`: Closed, 거절: `plan_closed`, 거절: `plan_missing`
 - `NewGoalRequested`: 거절: `phase_not_authorized`, 그대로
 - `NewGoalStarted`: Shaping, 거절: `phase_not_authorized`, 그대로
@@ -57,8 +53,6 @@
 - `GoalStopped`: Stopped
 - `GoalEdited`: GoalChanged
 - `PlanEdited`: Shaping
-- `ProgressRecorded`: Blocked, Completed, Paused, Running, Stopped, 거절: `goal_completion_required`, 거절: `phase_not_executable`, 거절: `steps_incomplete`, 거절: `verification_required`, 그대로
-- `RunFinished`: Blocked, Completed, Running, 그대로
 - `PlanClosed`: Closed
 - `NewGoalRequested`: 거절: `phase_not_authorized`, 그대로
 - `NewGoalStarted`: Shaping, 거절: `phase_not_authorized`
@@ -74,8 +68,6 @@
 - `GoalStopped`: Stopped
 - `GoalEdited`: GoalChanged, 그대로
 - `PlanEdited`: Shaping
-- `ProgressRecorded`: Blocked, Completed, GoalChanged, Paused, Shaping, Stopped, 거절: `phase_not_executable`, 거절: `steps_incomplete`, 거절: `verification_required`, 그대로
-- `RunFinished`: Blocked, Completed, GoalChanged, 그대로
 - `PlanClosed`: Closed
 - `NewGoalRequested`: 거절: `phase_not_authorized`, 그대로
 - `NewGoalStarted`: Shaping, 거절: `phase_not_authorized`
@@ -91,8 +83,6 @@
 - `GoalStopped`: Stopped
 - `GoalEdited`: Blocked, GoalChanged, Shaping
 - `PlanEdited`: Paused, 그대로
-- `ProgressRecorded`: Blocked, Completed, GoalChanged, Paused, Running, Shaping, Stopped, 거절: `goal_completion_required`, 거절: `phase_not_executable`, 거절: `plan_missing`, 거절: `steps_incomplete`, 거절: `verification_required`, 그대로
-- `RunFinished`: Completed, Paused, 그대로
 - `PlanClosed`: Closed, 거절: `plan_closed`, 거절: `plan_missing`
 - `NewGoalRequested`: 거절: `phase_not_authorized`, 그대로
 - `NewGoalStarted`: Shaping, 거절: `phase_not_authorized`
@@ -102,14 +92,12 @@
 ## `Blocked`
 
 - `Navigated`: Blocked, 거절: `goal_terminal`, 그대로
-- `ExecutionApproved`: 거절: `plan_not_ready`, 거절: `plan_outdated`
+- `ExecutionApproved`: 거절: `plan_outdated`
 - `GoalPaused`: Paused
 - `GoalResumed`: 거절: `goal_not_paused`
 - `GoalStopped`: Stopped
 - `GoalEdited`: Blocked, 그대로
 - `PlanEdited`: Shaping
-- `ProgressRecorded`: Blocked, Completed, GoalChanged, Paused, Running, Shaping, Stopped, 거절: `goal_completion_required`, 거절: `goal_not_active`, 거절: `phase_not_executable`, 거절: `steps_incomplete`, 거절: `verification_required`, 그대로
-- `RunFinished`: Blocked, Completed, 그대로
 - `PlanClosed`: Closed
 - `NewGoalRequested`: 거절: `phase_not_authorized`, 그대로
 - `NewGoalStarted`: Shaping, 거절: `phase_not_authorized`
@@ -123,10 +111,8 @@
 - `GoalPaused`: 거절: `goal_terminal`
 - `GoalResumed`: 거절: `goal_terminal`
 - `GoalStopped`: 거절: `goal_terminal`
-- `GoalEdited`: Blocked, Closed, GoalChanged, Shaping
+- `GoalEdited`: Blocked, Closed, Shaping
 - `PlanEdited`: Stopped, 그대로
-- `ProgressRecorded`: Stopped, 거절: `goal_terminal`, 거절: `phase_not_executable`, 거절: `plan_missing`, 거절: `steps_incomplete`, 거절: `verification_required`, 그대로
-- `RunFinished`: 그대로
 - `PlanClosed`: Stopped, 거절: `plan_closed`, 거절: `plan_missing`
 - `NewGoalRequested`: 거절: `phase_not_authorized`, 그대로
 - `NewGoalStarted`: Shaping, 거절: `phase_not_authorized`
@@ -142,8 +128,6 @@
 - `GoalStopped`: Stopped
 - `GoalEdited`: Closed, 그대로
 - `PlanEdited`: Paused, Shaping
-- `ProgressRecorded`: Blocked, Closed, Completed, GoalChanged, Paused, Running, Shaping, Stopped, 거절: `goal_completion_required`, 거절: `goal_not_active`, 거절: `phase_not_executable`, 거절: `steps_incomplete`, 거절: `verification_required`, 그대로
-- `RunFinished`: 그대로
 - `PlanClosed`: 거절: `plan_closed`
 - `NewGoalRequested`: 거절: `phase_not_authorized`, 그대로
 - `NewGoalStarted`: Shaping, 거절: `phase_not_authorized`
@@ -157,12 +141,10 @@
 - `GoalPaused`: 거절: `goal_terminal`
 - `GoalResumed`: 거절: `goal_terminal`
 - `GoalStopped`: 거절: `goal_terminal`
-- `GoalEdited`: Blocked, Closed, GoalChanged, Shaping
+- `GoalEdited`: Closed, Shaping
 - `PlanEdited`: Completed, 그대로
-- `ProgressRecorded`: Completed, 거절: `goal_terminal`, 거절: `phase_not_executable`, 거절: `plan_missing`, 거절: `steps_incomplete`, 거절: `verification_required`, 그대로
-- `RunFinished`: Completed, 그대로
-- `PlanClosed`: Completed, 거절: `plan_closed`, 거절: `plan_missing`
+- `PlanClosed`: Completed, 거절: `plan_closed`
 - `NewGoalRequested`: 거절: `phase_not_authorized`, 그대로
 - `NewGoalStarted`: Shaping, 거절: `phase_not_authorized`
-- `BoardEdited`: Completed, 거절: `plan_missing`, 그대로
+- `BoardEdited`: Completed, 그대로
 - `OutcomesMet`: 거절: `goal_terminal`

@@ -9,7 +9,7 @@ import { failureAnnotations } from "../runtime/logged-failures.ts";
  * The tool ledger of a Goal's bound run (decisions.md "Goal도 owner 프로세스에서 돌고 도구를 병렬로
  * 실행한다 (2026-10-26)"): every call is written `pending` before its tool runs and settled when it
  * ends. The rows are the Goal worker's `tool` operations in `owner_rpc_operations`, so the SQL that
- * reads them (`run-bindings.ts`, `uncertain-runs.ts`, `completion-evidence.ts`) means the same.
+ * reads them (`run-bindings.ts`, `uncertain-runs.ts`) means the same.
  * Numbers follow the order the owner reserves them in and say nothing about the order calls ran in.
  */
 

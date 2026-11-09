@@ -5,9 +5,6 @@ import {
   StartNewGoal,
   UpdateGoal,
   UpdatePlan,
-  UpdateWorkflowProgress,
-  WorkflowProgressRefused,
-  type WorkflowStorageError,
   Workflows,
   type PlanStep,
   type WorkflowPhase,
@@ -17,7 +14,7 @@ import { runTool, type RunTool } from "../tools/run-tool.ts";
 import { RuleSource, type ResolvedRules } from "./rules.ts";
 import { unknownStepOutcomeText } from "./step-outcomes.ts";
 import { OutcomeStatus, outcomeStatusWord, type OutcomeStanding } from "./outcome-ledger.ts";
-import { WorkflowBlocker, WorkflowExecution } from "./execution.ts";
+import { WorkflowExecution } from "./execution.ts";
 import { BoardAuthor, stepProgressStatus } from "./card.ts";
 import { EditPlan, type GoalOutcome } from "./contracts.ts";
 import {
@@ -35,25 +32,6 @@ const ClosePlanInput = Schema.Struct({
   }),
 });
 
-const exposeProgressRefusal = <A, R>(
-  effect: Effect.Effect<A, WorkflowProgressRefused | WorkflowStorageError, R>,
-) =>
-  effect.pipe(
-    Effect.catchTag("WorkflowProgressRefused", (failure) =>
-      Effect.succeed({
-        error: "workflow_progress_refused" as const,
-        reason: failure.reason,
-      }),
-    ),
-  );
-
-const recordBlocker = {
-  name: "record_workflow_blocker",
-  description:
-    "Stop automatic Plan execution only for a confirmed user decision, permission wait, external dependency or repeated failed approach. Record the concrete missing requirement and actual evidence. Unfinished investigation, review, preparation or verification that you can perform is remaining work, not a blocker. Continue all independent work before recording a blocker.",
-  parameters: WorkflowBlocker,
-} as const;
-
 const startNewGoal = {
   name: "start_new_goal",
   description:
@@ -64,14 +42,14 @@ const startNewGoal = {
 const updateGoal = {
   name: "update_goal",
   description:
-    "Save the session's canonical Goal artifact. Use after discovering or revising the problem, outcomes, constraints, assumptions, non-goals, or blocking questions. This creates the next version. Reflect explicit user decisions, including an authorized change to implementation scope, without asking for the same approval again. Never remove constraints or non-goals merely to make execution possible. Revising a Goal during Execute or Verify returns the workflow to Plan; synchronize the Plan with the new Goal before execution is confirmed. Do not call update_workflow_progress in parallel with update_goal.",
+    "Save the session's canonical Goal artifact. Use after discovering or revising the problem, outcomes, constraints, assumptions, non-goals, or blocking questions. This creates the next version. Reflect explicit user decisions, including an authorized change to implementation scope, without asking for the same approval again. Never remove constraints or non-goals merely to make execution possible. Revising a Goal during Execute or Verify returns the workflow to Plan; synchronize the Plan with the new Goal before execution is confirmed.",
   parameters: UpdateGoal,
 } as const;
 
 const updatePlan = {
   name: "update_plan",
   description:
-    "Save the whole canonical Plan artifact. Use to make a Plan or rewrite most of it; to change, add, move or remove a few steps use edit_plan, which does not resend the Plan. Each step needs stable unique ids, dependencies, acceptance criteria, applicable workflow rule ids and the ids of the current Goal outcomes it serves. dependsOn may name only other step ids in the same Plan and must not form a cycle, and outcomes may name only ids of the current Goal; otherwise nothing is saved and the refusal lists each issue to fix. A step that keeps its id and its work (every field except outcomes) keeps its progress and evidence; a changed or new step starts over. This creates the next version. Revising a Plan during Execute returns the workflow to Plan and invalidates concurrent or later progress calls from that turn; do not call update_workflow_progress in parallel with update_plan.",
+    "Save the whole canonical Plan artifact. Use to make a Plan or rewrite most of it; to change, add, move or remove a few steps use edit_plan, which does not resend the Plan. Each step needs stable unique ids, dependencies, acceptance criteria, applicable workflow rule ids and the ids of the current Goal outcomes it serves. dependsOn may name only other step ids in the same Plan and must not form a cycle, and outcomes may name only ids of the current Goal; otherwise nothing is saved and the refusal lists each issue to fix. A step that keeps its id and its work (every field except outcomes) keeps its progress and evidence; a changed or new step starts over. This creates the next version. Revising a Plan during Execute returns the workflow to Plan.",
   parameters: UpdatePlan,
 } as const;
 
@@ -82,39 +60,25 @@ const editPlan = {
 - edit: change the fields given in patch; absent fields keep their value. A done step cannot change.
 - move: put a step at index (0-based).
 - remove: take a step off the Plan. A done step cannot be removed.
-dependsOn and outcomes follow the update_plan rules. Other steps keep their progress and the workflow phase stays as it is. A step added while the Plan runs on a kanban board waits for approval before it runs. Never call this in parallel with update_plan, edit_plan or update_workflow_progress.`,
+dependsOn and outcomes follow the update_plan rules. Other steps keep their progress and the workflow phase stays as it is. A step added while the Plan runs on a kanban board waits for approval before it runs. Never call this in parallel with update_plan or edit_plan.`,
   parameters: EditPlan,
-} as const;
-
-const updateProgress = {
-  name: "update_workflow_progress",
-  description:
-    "Record durable Goal/Plan/step progress, evidence and verification. Plan and step progress is executable only while the workflow is in Execute or Verify; after update_plan returns the workflow to Plan, wait for Execute to be confirmed before recording it. Never call this in parallel with update_plan. Classify verification as passed, failed, invalid_hypothesis, invalid_criterion, inconclusive, or blocked instead of treating every non-pass as an implementation failure. Set recoveryPhase to goal or plan for invalid_hypothesis. A completed step needs evidence; a completed Goal or Plan needs passed verification with evidence; a completed Plan also needs every step completed. Provenance-bound Goals also require criterionMappings covering every current outcome: freeze outcomeIndex/outcomeText and stepId/acceptanceIndex/acceptanceText from the current Plan, with actual runId and successful verification tool-result evidenceNodeIds. Only current Goal/Plan versions are supported; registration is execution authorization, not passed proof. The owner derives provenance and recorder identity, never accept those from input.",
-  parameters: UpdateWorkflowProgress,
 } as const;
 
 const closePlan = {
   name: "close_plan",
   description:
-    "End the current Plan without completing it when its remaining work is no longer needed: another conversation or agent already did it, it was superseded, or the user asked to drop it. A draft, ready, executing or blocked Plan can be closed; a completed or closed one cannot. Done cards keep their evidence; every other card stays as blocked and nothing runs it again, and the Plan leaves the project board. An executing workflow returns to Plan. Give the concrete reason. To change the remaining work instead, revise the Plan with update_plan. Never call this in parallel with update_plan or update_workflow_progress.",
+    "End the current Plan without completing it when its remaining work is no longer needed: another conversation or agent already did it, it was superseded, or the user asked to drop it. A draft, ready, executing or blocked Plan can be closed; a completed or closed one cannot. Done cards keep their evidence; every other card stays as blocked and nothing runs it again, and the Plan leaves the project board. An executing workflow returns to Plan. Give the concrete reason. To change the remaining work instead, revise the Plan with update_plan. Never call this in parallel with update_plan or edit_plan.",
   parameters: ClosePlanInput,
 } as const;
 
-type WorkflowTool =
-  | "recordBlocker"
-  | "startNewGoal"
-  | "updateGoal"
-  | "updatePlan"
-  | "editPlan"
-  | "updateProgress"
-  | "closePlan";
+type WorkflowTool = "startNewGoal" | "updateGoal" | "updatePlan" | "editPlan" | "closePlan";
 
 /** The workflow tools each phase offers, in the order the model sees them. */
 const phaseTools = {
   goal: ["updateGoal", "updatePlan", "editPlan", "startNewGoal"],
   plan: ["updateGoal", "updatePlan", "editPlan", "closePlan", "startNewGoal"],
-  execute: ["updateGoal", "updatePlan", "editPlan", "updateProgress", "recordBlocker", "closePlan"],
-  verify: ["updateGoal", "updateProgress", "recordBlocker", "closePlan", "startNewGoal"],
+  execute: ["updateGoal", "updatePlan", "editPlan", "closePlan"],
+  verify: ["updateGoal", "closePlan", "startNewGoal"],
   completed: ["startNewGoal"],
   chat: [],
 } as const satisfies Record<WorkflowPhase, ReadonlyArray<WorkflowTool>>;
@@ -130,13 +94,6 @@ const make = Effect.gen(function* () {
     const published = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       Effect.tap(effect, () => events.publishSession(sessionId, "run-state"));
     return {
-      recordBlocker: (input: WorkflowBlocker) =>
-        Effect.gen(function* () {
-          const result = yield* (yield* WorkflowExecution).block(sessionId, runId, input);
-          yield* events.publishSession(sessionId, "run-state");
-          return result;
-        }).pipe(Effect.provideContext(runtime)),
-
       // A run only asks; the owner applies it once the run completes.
       startNewGoal: (input: StartNewGoal) =>
         Effect.flatMap(Workflows, (workflows) =>
@@ -215,20 +172,6 @@ const make = Effect.gen(function* () {
           Effect.provideContext(runtime),
         ),
 
-      updateProgress: (input: UpdateWorkflowProgress) =>
-        Effect.flatMap(Workflows, (workflows) =>
-          workflows.updateProgress(sessionId, input, runId, author),
-        ).pipe(
-          published,
-          Effect.map((state) => ({
-            phase: state.phase,
-            goal: state.goal,
-            plan: state.plan,
-          })),
-          exposeProgressRefusal,
-          Effect.provideContext(runtime),
-        ),
-
       closePlan: (input: typeof ClosePlanInput.Type) =>
         Effect.flatMap(Workflows, (workflows) =>
           workflows.closePlan(sessionId, input.reason, author),
@@ -248,12 +191,10 @@ const make = Effect.gen(function* () {
     toolsFor: (sessionId: string, phase: WorkflowPhase, runId: string): RunTool[] => {
       const calls = callsFor(sessionId, runId);
       const tools = {
-        recordBlocker: runTool({ ...recordBlocker, handler: calls.recordBlocker }),
         startNewGoal: runTool({ ...startNewGoal, handler: calls.startNewGoal }),
         updateGoal: runTool({ ...updateGoal, handler: calls.updateGoal }),
         updatePlan: runTool({ ...updatePlan, handler: calls.updatePlan }),
         editPlan: runTool({ ...editPlan, handler: calls.editPlan }),
-        updateProgress: runTool({ ...updateProgress, handler: calls.updateProgress }),
         closePlan: runTool({ ...closePlan, handler: calls.closePlan }),
       } satisfies Record<WorkflowTool, RunTool>;
       return phaseTools[phase].map((tool) => tools[tool]);
@@ -360,7 +301,7 @@ Current Goal instance ID: ${goalInstanceId ?? "(none; legacy/unbound)"}. For sta
 Goal and Plan are durable artifacts, not substitutes for a conversational answer.
 Use only the workflow artifact tools available in this phase, and update an artifact when the user's decisions materially change it.
 Never claim an artifact was stored unless its update tool completed.
-When an explicit user decision changes saved Goal constraints or non-goals, persist that decision with update_goal before proceeding; do not treat an artifact you can update as an external dependency or ask the user to use an unverified Goal editor. Do not ask again for an approval already explicitly given, and never infer permission from a generic resume request. In Execute or Verify, update_goal returns to Plan and invalidates progress against the old Goal. Synchronize the Plan with the revised Goal and wait for execution confirmation; do not call update_goal and update_workflow_progress in parallel.
+When an explicit user decision changes saved Goal constraints or non-goals, persist that decision with update_goal before proceeding; do not treat an artifact you can update as an external dependency or ask the user to use an unverified Goal editor. Do not ask again for an approval already explicitly given, and never infer permission from a generic resume request. While the Plan runs, update_goal returns the workflow to Plan. Synchronize the Plan with the revised Goal and wait for execution confirmation.
 Applicable workflow rules (reference these ids from Plan steps; do not copy their text into the artifact):
 ${applicableRules || "(none)"}${resolved.degraded.includes("embedding") ? "\nOptional semantic rule retrieval was unavailable; required metadata rules still apply." : ""}${resolved.degraded.includes("source") ? "\nOne or more optional structured rule sources were invalid or unreadable and were skipped." : ""}`;
 
@@ -401,12 +342,12 @@ ${goal}
 
 ${plan}`;
       }),
-      Match.when(
+      // Verify is only a phase saved before the board judged outcomes; it reads as running.
+      Match.whenOr(
         "execute",
+        "verify",
         () => `${common}
-Execute only the current Plan. On a request to resume the approved work, continue an existing in_progress step from its recorded evidence rather than merely listing remaining tasks or restarting completed work. A request to continue an answer, explain status or discuss the Plan is not by itself execution intent or new approval; answer that request without claiming work was performed. When the wording is ambiguous, use the surrounding conversation and ask if execution intent remains unclear. Resume requests never waive Goal constraints, failed-approach limits, pending permissions or a confirmed blocker. Before each step, record it as in_progress. Record completed steps with actual evidence using update_workflow_progress; never mark work complete from intention alone. If the user materially changes the scope, design or acceptance criteria, revise the Plan with update_plan; this returns the workflow to Plan so the revised version can be confirmed before execution resumes. The workflow advances to Verify only when every step is completed with evidence.
-Continue the approved work through implementation, preparation, review and verification that you can perform. Do not end a turn merely promising to investigate or review next. After partial progress, persist new evidence with update_workflow_progress and continue. If progress genuinely requires a user decision, permission, an external dependency or recovery from a repeated failed approach, finish all independent work and record_workflow_blocker with the concrete reason and evidence before answering. Unverified work is remaining work to perform, not itself a reason to stop. The server continues unfinished approved execution automatically while executable; ending your answer does not pause the Plan. While background tasks run, the server holds automatic continuation and its completion notification starts your next turn: end your answer instead of polling them. Successful file modifications and new substantive successful tool results also count as progress before a step completes. Identical repeated reads, no-op writes, failed calls and permission refusals do not reset the two-consecutive-turn no-progress limit. Automatic continuation never grants new permission or bypasses a pending approval, confirmed blocker, user stop or failed run.
-When repairing failed verification, use the recorded failure evidence, perform the repair, and persist the repair evidence plus verification status not_run before returning to Verify.
+The current Plan runs on its kanban board: card agents execute the cards in separate worktrees and a verifier judges each Goal outcome; only those verdicts complete the Goal. You do not execute cards, verify them or record their progress yourself. Answer questions about the run from the board and the outcome statuses, without claiming work you did not see done. When the user changes the scope, design or acceptance criteria, revise the Plan with edit_plan, or with update_plan, which returns the workflow to Plan so the revised version can be confirmed before it runs again. Close the Plan with close_plan when its remaining work is no longer needed.
 
 ${goal}
 
@@ -417,14 +358,6 @@ Current steps:
 ${state.plan.steps.map((step) => `- ${step.id} [${stepProgressStatus(step.status)}]: ${step.title}${step.status === "done" ? "" : `\n  Description: ${step.description}\n  Depends on: ${step.dependsOn.map((id) => `${id} [${progressStatusOf(state.plan?.steps.find((candidate) => candidate.id === id))}]`).join(", ") || "(none)"}\n  Acceptance criteria:\n${compactList(step.acceptanceCriteria, step.acceptanceCriteria.length)}\n  Rule refs: ${step.ruleRefs.join(", ") || "(none)"}\n  Serves outcomes: ${step.outcomes.join(", ") || "(none)"}\n  Recent evidence (historical evidence is not fresh verification):\n${compactList(step.evidence.slice(-6))}`}`).join("\n")}${scheduleText(state.plan.steps)}`
     : "Approved Plan: missing."
 }`,
-      ),
-      Match.when(
-        "verify",
-        () => `${common}
-Verify the implementation against the Goal, Plan acceptance criteria and applicable rules. You have read/search tools and code skills for builds, tests, linters and other non-mutating checks: run a listed one with run_skill, or save one with save_code_skill. Actually run applicable checks instead of claiming this phase lacks tools. Apart from saving a code skill, do not edit files or install packages in Verify. First check whether the hypothesis and each criterion can actually distinguish the claimed cause. Record passed only with supporting evidence. Record failed only when valid criteria show an implementation defect; after you persist that failure the workflow automatically returns to Execute for repair. Use invalid_hypothesis when the premise is wrong (set recoveryPhase to goal or plan), invalid_criterion when the check itself is unsound, inconclusive when evidence cannot decide, and blocked only for a confirmed external dependency. Persist the result and evidence with update_workflow_progress. Do not invent settings, silently repair, waive a criterion, or ask the user to change workflow phases.
-Perform applicable review and checks now instead of ending with a promise to do them later. If a confirmed dependency prevents all independent verification, record_workflow_blocker with its reason and evidence.
-
-${goal}`,
       ),
       Match.exhaustive,
     );

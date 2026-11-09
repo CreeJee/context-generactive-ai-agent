@@ -44,13 +44,11 @@ export const builtinToolEffects = {
   // Report-session evidence tools only perform scoped SELECTs and redaction.
   list_report_evidence: "read",
   read_report_item: "read",
-  record_workflow_blocker: "effectful",
   start_new_goal: "effectful",
   update_goal: "effectful",
   update_plan: "effectful",
   edit_plan: "effectful",
   close_plan: "effectful",
-  update_workflow_progress: "effectful",
   // Kanban board reads only SELECT; every board edit saves a change with the run as its author.
   read_kanban_board: "read",
   edit_kanban_board: "effectful",

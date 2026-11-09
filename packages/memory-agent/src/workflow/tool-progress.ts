@@ -7,12 +7,10 @@ import { JsonValue } from "../json.ts";
 
 const bookkeeping = HashSet.fromIterable([
   "get_workflow",
-  "update_workflow_progress",
   "update_goal",
   "update_plan",
   "edit_plan",
   "close_plan",
-  "record_workflow_blocker",
   "read_skill",
 ]);
 const volatileKeys = HashSet.fromIterable([

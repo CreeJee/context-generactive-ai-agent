@@ -142,7 +142,7 @@ describe("workflowInstructions", () => {
     ).toEqual({ allowed: false, reason: "plan_not_ready" });
   });
 
-  test("rehydrates an unfinished approved step and preserves cross-turn constraints", () => {
+  test("shows a running Plan's unfinished card and the constraints that outlive a turn", () => {
     const verification = {
       status: "not_run" as const,
       summary: "",
@@ -202,9 +202,7 @@ describe("workflowInstructions", () => {
       "Stop after two failed approaches",
       "Do not replace the live runtime",
       "a new turn does not reset limits",
-      "rather than merely listing remaining tasks",
-      "is not by itself execution intent or new approval",
-      "pending permissions or a confirmed blocker",
+      "You do not execute cards, verify them or record their progress yourself.",
     ].forEach((text) => {
       expect(prompt).toContain(text);
     });
