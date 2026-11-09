@@ -11,7 +11,7 @@
 - `rules.ts`
   - `phraseRules` — 규칙 id별 금지 표현(`pattern`)과 고칠 방법(`message`). 번역투, 이중 피동, 과한 경어, 줄표, 느낌표, 이모지처럼 모델 세대가 바뀌어도 변하지 않는 패턴만 둔다.
   - `glossary` — 개념별로 쓸 말(`use`)과 피할 표기(`avoid`). 정한 용어만 넣고, 결정은 `docs/decisions.md`에 남긴다.
-  - `isAllowedEnding(form)` — 허용하는 종결어미: `~요`로 끝나는 해요체, `죠`, 상태 라벨의 명사형 `음`/`ᆷ`.
+  - `registers` — 문장 종류(`Mood`: `statement`, `question`)별로 허용하는 종결어미. 서술과 요청은 합니다체(`~니다`, `~시오`)와 상태 라벨의 명사형(`음`/`ᆷ`), 질문은 해요체(`~요`, `죠`)다. `~습니까?`는 쓰지 않는다.
 - `check.ts`
   - `phraseViolations(text)`, `glossaryViolations(text, entries?)`, `endingViolations(text, morphemes)` — 문구 하나의 위반을 돌려주는 순수 함수.
   - `checkCopy(file, texts)` — 세 검사를 합쳐 위치가 붙은 `Finding` 목록을 만든다. `Morphemes`가 필요하다.
@@ -20,7 +20,8 @@
 
 ## Invariants
 
-- 종결어미는 Kiwi 태그 `EF`이거나, 문장 부호(`S*`) 바로 앞이나 문구 끝의 연결어미(`EC*`)다. Kiwi가 `저장 중이에요…`의 `에요`를 연결어미로 읽기 때문이다.
+- 종결어미는 Kiwi 태그 `EF`이거나, 문장 부호(`S*`) 바로 앞이나 문구 끝의 연결어미(`EC*`)다. Kiwi가 `저장 중입니다…`의 `ᆸ니다`를 연결어미로 읽기 때문이다.
+- 물음표가 바로 뒤따르거나 어미에 `까`가 들어 있으면(`~할까요`, `~습니까`) 질문으로 본다.
 - 종결어미가 하나도 없는 문구는 라벨로 보고, 마침표로 끝나면 `label-period`로 보고한다.
 - 용어집의 라틴 문자 표기는 라틴 문자·숫자 경계에서만, 대소문자 없이 맞춘다(`Plan`은 `Plan을`에 맞고 `Planner`에는 맞지 않는다). 한글 표기는 조사가 붙어도 맞도록 부분 문자열로 찾는다.
 - Kiwi 모델 버전은 카탈로그의 `kiwi-nlp` 버전과 같아야 한다(`kiwiModel`). 둘은 함께 올린다.

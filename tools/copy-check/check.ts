@@ -2,8 +2,8 @@ import { Array as Arr, Effect, Record as Rec, RegExp as Re, Result } from "effec
 
 import type { CopyText } from "./extract.ts";
 import { Morphemes } from "./morphemes.ts";
-import { finalEndingTag, glossary, isAllowedEnding, phraseRules } from "./rules.ts";
-import type { GlossaryEntry } from "./rules.ts";
+import { finalEndingTag, glossary, phraseRules, registers } from "./rules.ts";
+import type { GlossaryEntry, Mood } from "./rules.ts";
 
 /** One rule a piece of copy breaks, and what to write instead. */
 export interface Violation {
@@ -57,23 +57,33 @@ export function glossaryViolations(
   );
 }
 
+/** The ending that closes one sentence, and whether that sentence asks. */
+interface SentenceEnding {
+  readonly form: string;
+  readonly mood: Mood;
+}
+
 /**
  * Endings that close a sentence: final endings, and a connective ending right before punctuation
- * or at the very end (Kiwi reads `저장 중이에요…` with a connective `에요`).
+ * or at the very end (Kiwi reads `저장 중입니다…` with a connective `ᆸ니다`). A sentence asks when
+ * a question mark follows or the ending itself is interrogative (`~까`, `~까요`).
  */
-function sentenceEndings(morphemes: ReadonlyArray<Morpheme>): ReadonlyArray<string> {
+function sentenceEndings(morphemes: ReadonlyArray<Morpheme>): ReadonlyArray<SentenceEnding> {
   return Arr.filterMap(morphemes, (morpheme, index) => {
     const next = morphemes[index + 1];
     const closes =
       morpheme.tag === finalEndingTag ||
       (morpheme.tag.startsWith("EC") && (next === undefined || next.tag.startsWith("S")));
-    return closes ? Result.succeed(morpheme.str) : Result.failVoid;
+    const asks = next?.str === "?" || morpheme.str.includes("까");
+    return closes
+      ? Result.succeed({ form: morpheme.str, mood: asks ? "question" : "statement" })
+      : Result.failVoid;
   });
 }
 
 /**
- * Sentences in a register other than 해요체, and labels (copy with no sentence ending) that end
- * with a full stop.
+ * Sentences whose ending is outside the register of their mood, and labels (copy with no
+ * sentence ending) that end with a full stop.
  */
 export function endingViolations(
   text: string,
@@ -85,12 +95,12 @@ export function endingViolations(
       ? [{ rule: "label-period", message: "문장이 아닌 라벨은 마침표 없이 끝내세요." }]
       : [];
   }
-  return Arr.filterMap(endings, (form) =>
-    isAllowedEnding(form)
+  return Arr.filterMap(endings, ({ form, mood }) =>
+    registers[mood].allows(form)
       ? Result.failVoid
       : Result.succeed({
           rule: "register",
-          message: `'${form}'로 끝나요. 문장은 해요체(~요)로 끝내세요.`,
+          message: `'${form}'로 끝나요. ${mood === "question" ? "질문은" : "문장은"} ${registers[mood].expected}로 끝내세요.`,
         }),
   );
 }

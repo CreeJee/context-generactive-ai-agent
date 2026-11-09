@@ -32,21 +32,32 @@ describe("glossaryViolations", () => {
 
 describe("endingViolations", () => {
   // Morphemes as Kiwi 0.24.1 tags them.
-  it("accepts 해요체 and the noun ending of status labels", () => {
+  it("accepts 합니다체 statements and requests, and the noun ending of status labels", () => {
     expect(
-      endingViolations("이미지를 만들지 못했어요.", [
-        { str: "어요", tag: "EF" },
+      endingViolations("이미지를 생성하지 못했습니다.", [
+        { str: "습니다", tag: "EF" },
         { str: ".", tag: "SF" },
       ]),
     ).toEqual([]);
-    expect(endingViolations("곧 끝나죠", [{ str: "죠", tag: "EF" }])).toEqual([]);
+    expect(
+      endingViolations("권한을 확인하십시오.", [
+        { str: "시", tag: "EP" },
+        { str: "ᆸ시오", tag: "EF" },
+        { str: ".", tag: "SF" },
+      ]),
+    ).toEqual([]);
     expect(endingViolations("파일이 없음", [{ str: "음", tag: "EF" }])).toEqual([]);
   });
 
-  it("flags 합니다체 and 해라체", () => {
-    expect(rules(endingViolations("준비됐습니다", [{ str: "습니다", tag: "EF" }]))).toEqual([
-      "register",
-    ]);
+  it("flags 해요체 and 해라체 statements", () => {
+    expect(
+      rules(
+        endingViolations("권한을 확인해 주세요.", [
+          { str: "세요", tag: "EF" },
+          { str: ".", tag: "SF" },
+        ]),
+      ),
+    ).toEqual(["register"]);
     expect(
       rules(
         endingViolations("저장했다.", [
@@ -57,17 +68,35 @@ describe("endingViolations", () => {
     ).toEqual(["register"]);
   });
 
+  it("accepts 해요체 questions and flags 합니다체 questions", () => {
+    expect(
+      endingViolations("허용할까요?", [
+        { str: "ᆯ까요", tag: "EF" },
+        { str: "?", tag: "SF" },
+      ]),
+    ).toEqual([]);
+    expect(endingViolations("삭제할까요", [{ str: "ᆯ까요", tag: "EF" }])).toEqual([]);
+    expect(
+      rules(
+        endingViolations("허용하시겠습니까?", [
+          { str: "습니까", tag: "EF" },
+          { str: "?", tag: "SF" },
+        ]),
+      ),
+    ).toEqual(["register"]);
+  });
+
   it("reads a connective ending before closing punctuation as the sentence ending", () => {
     expect(
-      endingViolations("저장 중이에요…", [
-        { str: "에요", tag: "EC" },
+      endingViolations("저장 중입니다…", [
+        { str: "ᆸ니다", tag: "EC" },
         { str: "…", tag: "SE" },
       ]),
     ).toEqual([]);
     expect(
       rules(
-        endingViolations("저장 중이다…", [
-          { str: "다", tag: "EC" },
+        endingViolations("저장 중이에요…", [
+          { str: "에요", tag: "EC" },
           { str: "…", tag: "SE" },
         ]),
       ),

@@ -66,10 +66,27 @@ export const glossary = {
 /** Kiwi tags whose morpheme ends a sentence: final endings, and connective endings before a full stop. */
 export const finalEndingTag = "EF";
 
-/**
- * Sentence endings copy may use: 해요체 (`~요`, `~죠`) for sentences, and the noun ending
- * (`없음`) that status labels use.
- */
-export function isAllowedEnding(form: string): boolean {
-  return form.endsWith("요") || form === "죠" || form === "음" || form === "ᆷ";
+/** Whether a sentence asks or tells; each has its own register. */
+export type Mood = "question" | "statement";
+
+/** A register a sentence ending must belong to, and how a finding names it. */
+export interface Register {
+  readonly allows: (form: string) => boolean;
+  readonly expected: string;
 }
+
+/**
+ * Statements and requests are written in 합니다체 (`~습니다`, `~십시오`); status labels may end
+ * with the noun ending (`없음`). Questions are softened to 해요체 (`~할까요?`), never `~습니까?`.
+ */
+export const registers = {
+  statement: {
+    allows: (form) =>
+      form.endsWith("니다") || form.endsWith("시오") || form === "음" || form === "ᆷ",
+    expected: "합니다체(~습니다, ~십시오)",
+  },
+  question: {
+    allows: (form) => form.endsWith("요") || form === "죠",
+    expected: "해요체(~할까요?)",
+  },
+} as const satisfies Readonly<Record<Mood, Register>>;
