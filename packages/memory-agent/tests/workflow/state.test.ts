@@ -171,6 +171,99 @@ testAgent()("Workflows", (it) => {
     }),
   );
 
+  it.effect("keeps the progress of steps a replan leaves unchanged", () =>
+    Effect.gen(function* () {
+      const id = yield* freshSession;
+      const workflows = yield* Workflows;
+      yield* executing(id);
+      yield* workflows.updateProgress(id, {
+        ...noProgress,
+        steps: [{ id: "store", status: "completed", evidence: ["stored"] }],
+        detail: "store done",
+      });
+      const [store] = plan.steps;
+      const expose = {
+        ...store!,
+        id: "expose",
+        title: "Expose artifacts",
+        dependsOn: ["store"],
+      };
+      const kept = yield* workflows.updatePlan(id, { ...plan, steps: [store!, expose] });
+      expect(kept.plan?.steps).toMatchObject([
+        { id: "store", status: "done", evidence: ["stored"] },
+        { id: "expose", status: "ready", evidence: [] },
+      ]);
+      // A step whose fields change starts over.
+      const changed = yield* workflows.updatePlan(id, {
+        ...plan,
+        steps: [{ ...store!, description: "Persist elsewhere" }, expose],
+      });
+      expect(changed.plan?.steps).toMatchObject([
+        { id: "store", status: "ready", evidence: [] },
+        { id: "expose", status: "backlog", evidence: [] },
+      ]);
+    }),
+  );
+
+  it.effect("edits some steps through edit_plan as one next version", () =>
+    Effect.gen(function* () {
+      const id = yield* freshSession;
+      const workflows = yield* Workflows;
+      yield* executing(id);
+      yield* workflows.updateProgress(id, {
+        ...noProgress,
+        steps: [{ id: "store", status: "completed", evidence: ["stored"] }],
+        detail: "store done",
+      });
+      const editPlan = yield* workflowTool(id, "execute", "edit_plan");
+      const step = {
+        title: "Expose artifacts",
+        description: "Show the Plan on the page",
+        dependsOn: ["store"],
+        acceptanceCriteria: ["The page shows the Plan"],
+        ruleRefs: [],
+      };
+      expect(
+        yield* editPlan({
+          planVersion: 1,
+          edits: [
+            { action: "add", step: { ...step, id: "expose" } },
+            { action: "add", step: { ...step, id: "docs", dependsOn: ["expose"] }, index: 0 },
+            { action: "edit", stepId: "expose", patch: { title: "Expose the Plan" } },
+            { action: "move", stepId: "docs", index: 2 },
+          ],
+        }),
+      ).toMatchObject({
+        phase: "execute",
+        plan: {
+          version: 2,
+          steps: [
+            { id: "store", status: "done", evidence: ["stored"] },
+            { id: "expose", title: "Expose the Plan", status: "ready" },
+            { id: "docs", status: "backlog" },
+          ],
+        },
+      });
+      // A refused edit saves none of the call's edits.
+      expect(
+        yield* editPlan({
+          planVersion: 2,
+          edits: [
+            { action: "remove", stepId: "docs" },
+            { action: "edit", stepId: "store", patch: { title: "Changed" } },
+          ],
+        }),
+      ).toEqual({ error: "plan_edit_refused", reason: "card_finished" });
+      expect(
+        yield* editPlan({ planVersion: 1, edits: [{ action: "remove", stepId: "docs" }] }),
+      ).toEqual({ error: "plan_edit_refused", reason: "plan_version_conflict" });
+      expect((yield* workflows.get(id)).plan).toMatchObject({
+        version: 2,
+        steps: [{ id: "store" }, { id: "expose" }, { id: "docs" }],
+      });
+    }),
+  );
+
   it.effect("rejects stale execution progress after a Plan revision, also through the tool", () =>
     Effect.gen(function* () {
       const id = yield* freshSession;

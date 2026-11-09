@@ -387,6 +387,7 @@ const workflowReadToolNames = HashSet.fromIterable([
   // still requires a quiescent session and never exempts the invoking live run.
   "start_new_goal",
   "update_plan",
+  "edit_plan",
   "close_plan",
   "update_workflow_progress",
   "record_workflow_blocker",

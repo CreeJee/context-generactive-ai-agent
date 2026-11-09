@@ -170,7 +170,7 @@ export const planBoardEdit = Effect.fnUntraced(function* (
       const card: PlanStep = {
         ...draft,
         id: newCardId,
-        ruleRefs: [],
+        ruleRefs: draft.ruleRefs ?? [],
         status: "backlog",
         evidence: [],
       };

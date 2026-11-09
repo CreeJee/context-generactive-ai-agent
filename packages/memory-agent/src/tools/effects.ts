@@ -48,6 +48,7 @@ export const builtinToolEffects = {
   start_new_goal: "effectful",
   update_goal: "effectful",
   update_plan: "effectful",
+  edit_plan: "effectful",
   close_plan: "effectful",
   update_workflow_progress: "effectful",
   // Kanban board reads only SELECT; every board edit saves a change with the run as its author.

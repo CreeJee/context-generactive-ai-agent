@@ -77,6 +77,7 @@ const programCallable = {
   start_new_goal: false,
   update_goal: false,
   update_plan: false,
+  edit_plan: false,
   close_plan: false,
   update_workflow_progress: false,
   read_kanban_board: true,

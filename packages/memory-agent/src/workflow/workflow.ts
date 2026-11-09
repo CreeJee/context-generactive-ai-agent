@@ -2,6 +2,7 @@ import { isTruthy } from "../truthy.ts";
 import { NodeCrypto } from "@effect/platform-node";
 import {
   Array as Arr,
+  Chunk,
   DateTime,
   Context,
   Data,
@@ -33,10 +34,12 @@ import { BoardAuthor, CardStatus, cardContract, StepProgressStatus } from "./car
 import {
   CompletionSnapshot,
   CriterionMapping,
+  type EditPlan,
   GoalArtifact,
   GoalQuestion,
   LedgerEvent,
   PlanArtifact,
+  type PlanEdit,
   PlanStep,
   planStepFields,
   verificationDefault,
@@ -48,6 +51,7 @@ import {
 } from "./contracts.ts";
 import { notStartedStatus, validatePlanDependencies } from "./plan-schedule.ts";
 import {
+  BoardEditPlan,
   BoardEditRefused,
   BoardEditResult,
   closedPlan,
@@ -100,6 +104,45 @@ const cardStatuses = <S extends typeof PersistedPlanStep.Type>(
     ),
   }));
 };
+
+const sameStep = Schema.toEquivalence(Schema.Struct(planStepFields));
+/**
+ * A step's progress through a replan. A started step the replan leaves unchanged keeps it; any
+ * other step starts over, and a step not started is placed again by its dependencies.
+ */
+const replannedProgress = (
+  prior: PlanStep,
+  step: UpdatePlan["steps"][number],
+): Pick<typeof PersistedPlanStep.Type, "status" | "evidence"> =>
+  sameStep(prior, step) && prior.status !== "backlog" && prior.status !== "ready"
+    ? { status: prior.status, evidence: prior.evidence }
+    : { status: "pending", evidence: [] };
+
+/** The board change a model's Plan edit is, against Plan version `planVersion`. */
+const boardEditOf = (
+  edit: PlanEdit,
+  planVersion: number,
+): { readonly edit: BoardEdit; readonly newCardId: string } =>
+  Match.value(edit).pipe(
+    Match.discriminatorsExhaustive("action")({
+      add: ({ step: { id, ...card }, index }) => ({
+        edit: { _tag: "AddCard" as const, planVersion, card, ...optionalProperty("index", index) },
+        newCardId: id,
+      }),
+      edit: ({ stepId, patch }) => ({
+        edit: { _tag: "EditCard" as const, planVersion, cardId: stepId, patch },
+        newCardId: "",
+      }),
+      move: ({ stepId, index }) => ({
+        edit: { _tag: "MoveCard" as const, planVersion, cardId: stepId, index },
+        newCardId: "",
+      }),
+      remove: ({ stepId }) => ({
+        edit: { _tag: "CancelCard" as const, planVersion, cardId: stepId },
+        newCardId: "",
+      }),
+    }),
+  );
 
 export const UpdateGoal = Schema.Struct({
   statement: Schema.String,
@@ -1068,7 +1111,8 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                           : {
                               ...cardContract(prior),
                               ...optionalProperty("hold", prior.hold),
-                              ...replanned,
+                              ...step,
+                              ...replannedProgress(prior, step),
                             };
                       }),
                     ),
@@ -1385,6 +1429,56 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                 return BoardEditResult.Applied({ state: yield* save(sessionId, next, author) });
               }),
             });
+          }),
+        ),
+
+      /**
+       * Applies a run's step edits in order to the Plan version it read and saves the result as
+       * one next version. A refused edit saves none of them.
+       */
+      editPlan: (sessionId: string, input: EditPlan, runId: string) =>
+        transacted(
+          Effect.gen(function* () {
+            const author = BoardAuthor.cases.Orchestrator.make({ runId });
+            const current = yield* get(sessionId);
+            const edited = yield* Effect.reduce(
+              input.edits,
+              () => ({
+                plan: current.plan,
+                version: input.planVersion,
+                details: Chunk.empty<string>(),
+              }),
+              (done, planEdit) => {
+                const { edit, newCardId } = boardEditOf(planEdit, done.version);
+                return Effect.flatMap(
+                  planBoardEdit(done.plan, edit, author, newCardId),
+                  (planned) =>
+                    BoardEditPlan.$match(planned, {
+                      Apply: ({ plan, detail }) =>
+                        Effect.succeed({
+                          plan,
+                          version: plan.version,
+                          details: Chunk.append(done.details, detail),
+                        }),
+                      // A run's own change never waits for the orchestrator, and no edit closes.
+                      Request: () => Effect.die("a run's Plan edit was stored as a request"),
+                      Close: () => Effect.die("a run's Plan edit closed the Plan"),
+                    }),
+                );
+              },
+            );
+            // Every applied edit had a Plan, so only an edit list that applied none leaves it null.
+            if (edited.plan === null)
+              return yield* BoardEditRefused.make({ reason: "plan_missing" });
+            const next = yield* boardChanged(
+              current,
+              {
+                plan: { ...edited.plan, version: input.planVersion + 1 },
+                detail: Chunk.toReadonlyArray(edited.details).join("; "),
+              },
+              yield* nowIso,
+            );
+            return yield* save(sessionId, next, author);
           }),
         ),
 

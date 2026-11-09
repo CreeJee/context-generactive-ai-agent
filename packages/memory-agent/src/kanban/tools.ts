@@ -276,7 +276,7 @@ export class KanbanTools extends Context.Service<KanbanTools, Effect.Success<typ
 
 export const kanbanInstructions = `This Goal runs as a kanban board. The owner's loop assigns ready cards to card agents in separate git worktrees, verifies each finished card and squashes it into the Goal branch; you do not execute cards yourself and do not mark card progress with update_workflow_progress.
 Your part is what the loop cannot decide. Read the board with read_kanban_board, then change it with edit_kanban_board:
-- A blocked card with a replan request: split, merge, edit or cancel it, then move it back to ready.
+- A blocked card with a replan request: split, merge or cancel it, or change its fields with edit_plan, then move it back to ready.
 - A user's change request to a running card: settle_change_request (apply, reassign, or reject with a reason).
 - A changed Goal: apply_goal_change for every card that is not done; new assignments wait for it.
 - A blocked card whose deliveries ran out: requeue once the cause is understood.

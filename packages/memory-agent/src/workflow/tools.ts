@@ -17,6 +17,7 @@ import { runTool, type RunTool } from "../tools/run-tool.ts";
 import { RuleSource, type ResolvedRules } from "./rules.ts";
 import { WorkflowBlocker, WorkflowExecution } from "./execution.ts";
 import { BoardAuthor, stepProgressStatus } from "./card.ts";
+import { EditPlan } from "./contracts.ts";
 import {
   PlanDependencyIssue,
   planDependencyIssues,
@@ -68,8 +69,19 @@ const updateGoal = {
 const updatePlan = {
   name: "update_plan",
   description:
-    "Save the session's canonical Plan artifact. Use after making or revising an actionable plan. Each step needs stable unique ids, dependencies, acceptance criteria and applicable workflow rule ids. dependsOn may name only other step ids in the same Plan and must not form a cycle; otherwise nothing is saved and the refusal lists each issue to fix. This creates the next version. Revising a Plan during Execute returns the workflow to Plan and invalidates concurrent or later progress calls from that turn; do not call update_workflow_progress in parallel with update_plan.",
+    "Save the whole canonical Plan artifact. Use to make a Plan or rewrite most of it; to change, add, move or remove a few steps use edit_plan, which does not resend the Plan. Each step needs stable unique ids, dependencies, acceptance criteria and applicable workflow rule ids. dependsOn may name only other step ids in the same Plan and must not form a cycle; otherwise nothing is saved and the refusal lists each issue to fix. A step that keeps its id and every field keeps its progress and evidence; a changed or new step starts over. This creates the next version. Revising a Plan during Execute returns the workflow to Plan and invalidates concurrent or later progress calls from that turn; do not call update_workflow_progress in parallel with update_plan.",
   parameters: UpdatePlan,
+} as const;
+
+const editPlan = {
+  name: "edit_plan",
+  description: `Change some steps of the current Plan without resending it. planVersion is the Plan version you last read; a newer Plan refuses the call with plan_version_conflict. The edits apply in order and save as one next version; a refused edit saves none of them. edits[].action picks the change:
+- add: a new step with its own unique id, placed at index (0-based) or at the end. Later edits and dependsOn may name its id.
+- edit: change the fields given in patch; absent fields keep their value. A done step cannot change.
+- move: put a step at index (0-based).
+- remove: take a step off the Plan. A done step cannot be removed.
+dependsOn follows the update_plan rules. Other steps keep their progress and the workflow phase stays as it is. Never call this in parallel with update_plan, edit_plan or update_workflow_progress.`,
+  parameters: EditPlan,
 } as const;
 
 const updateProgress = {
@@ -91,14 +103,15 @@ type WorkflowTool =
   | "startNewGoal"
   | "updateGoal"
   | "updatePlan"
+  | "editPlan"
   | "updateProgress"
   | "closePlan";
 
 /** The workflow tools each phase offers, in the order the model sees them. */
 const phaseTools = {
   goal: ["updateGoal", "updateProgress", "startNewGoal"],
-  plan: ["updateGoal", "updatePlan", "closePlan", "startNewGoal"],
-  execute: ["updateGoal", "updatePlan", "updateProgress", "recordBlocker", "closePlan"],
+  plan: ["updateGoal", "updatePlan", "editPlan", "closePlan", "startNewGoal"],
+  execute: ["updateGoal", "updatePlan", "editPlan", "updateProgress", "recordBlocker", "closePlan"],
   verify: ["updateGoal", "updateProgress", "recordBlocker", "closePlan", "startNewGoal"],
   completed: ["startNewGoal"],
   chat: [],
@@ -173,6 +186,22 @@ const make = Effect.gen(function* () {
           Effect.provideContext(runtime),
         ),
 
+      editPlan: (input: EditPlan) =>
+        Effect.flatMap(Workflows, (workflows) => workflows.editPlan(sessionId, input, runId)).pipe(
+          published,
+          Effect.map((state) => ({ phase: state.phase, plan: state.plan })),
+          Effect.catchTags({
+            BoardEditRefused: (failure) =>
+              Effect.succeed({ error: "plan_edit_refused" as const, reason: failure.reason }),
+            PlanDependenciesRejected: (failure) =>
+              Effect.succeed({
+                error: "plan_dependencies_rejected" as const,
+                issues: failure.issues.map(dependencyIssueText),
+              }),
+          }),
+          Effect.provideContext(runtime),
+        ),
+
       updateProgress: (input: UpdateWorkflowProgress) =>
         Effect.flatMap(Workflows, (workflows) =>
           workflows.updateProgress(sessionId, input, runId, author),
@@ -210,6 +239,7 @@ const make = Effect.gen(function* () {
         startNewGoal: runTool({ ...startNewGoal, handler: calls.startNewGoal }),
         updateGoal: runTool({ ...updateGoal, handler: calls.updateGoal }),
         updatePlan: runTool({ ...updatePlan, handler: calls.updatePlan }),
+        editPlan: runTool({ ...editPlan, handler: calls.editPlan }),
         updateProgress: runTool({ ...updateProgress, handler: calls.updateProgress }),
         closePlan: runTool({ ...closePlan, handler: calls.closePlan }),
       } satisfies Record<WorkflowTool, RunTool>;

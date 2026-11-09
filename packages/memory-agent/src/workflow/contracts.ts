@@ -239,6 +239,7 @@ export const CardDraft = Schema.Struct({
   description: Schema.String,
   dependsOn: Schema.Array(Schema.String),
   acceptanceCriteria: Schema.Array(Schema.String),
+  ruleRefs: Schema.optionalKey(Schema.Array(Schema.String)),
   outcome: Schema.optionalKey(Schema.String),
   boundaries: Schema.optionalKey(Schema.Array(Schema.String)),
   risk: Schema.optionalKey(CardRisk),
@@ -254,6 +255,7 @@ export const CardPatch = Schema.Struct({
   description: Schema.optionalKey(Schema.String),
   dependsOn: Schema.optionalKey(Schema.Array(Schema.String)),
   acceptanceCriteria: Schema.optionalKey(Schema.Array(Schema.String)),
+  ruleRefs: Schema.optionalKey(Schema.Array(Schema.String)),
   outcome: Schema.optionalKey(Schema.NullOr(Schema.String)),
   boundaries: Schema.optionalKey(Schema.NullOr(Schema.Array(Schema.String))),
   risk: Schema.optionalKey(Schema.NullOr(CardRisk)),
@@ -282,6 +284,29 @@ export const BoardEdit = Schema.TaggedUnion({
   ClosePlan: { planVersion: Schema.Int },
 });
 export type BoardEdit = typeof BoardEdit.Type;
+
+const StepPosition = Index.annotate({ description: "0-based position in the Plan's step list." });
+
+/** One change the model makes to the current Plan's steps; `action` picks it. */
+export const PlanEdit = Schema.Union([
+  Schema.Struct({
+    action: Schema.Literal("add"),
+    // The model names the id so dependencies and later edits can refer to the new step.
+    step: Schema.Struct(planStepFields),
+    index: Schema.optionalKey(StepPosition),
+  }),
+  Schema.Struct({ action: Schema.Literal("edit"), stepId: Schema.String, patch: CardPatch }),
+  Schema.Struct({ action: Schema.Literal("move"), stepId: Schema.String, index: StepPosition }),
+  Schema.Struct({ action: Schema.Literal("remove"), stepId: Schema.String }),
+]);
+export type PlanEdit = typeof PlanEdit.Type;
+
+/** Changes to the Plan version the model read, applied in order and saved as its next version. */
+export const EditPlan = Schema.Struct({
+  planVersion: Schema.Int,
+  edits: Schema.NonEmptyArray(PlanEdit),
+});
+export type EditPlan = typeof EditPlan.Type;
 
 /** What a user asked of an executing card; the orchestrator settles it. */
 export const UserChange = Schema.TaggedUnion({
