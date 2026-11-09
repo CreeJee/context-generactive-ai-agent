@@ -1001,6 +1001,11 @@ const make = (options: KanbanOrchestratorOptions) =>
       // Every card is done: the merge queue takes the Goal into its target branch.
       const schedule = yield* schedules.get(goalInstanceId);
       if (executing && goal.hold === null && allDone) yield* merges.offer(goal);
+      // An outcome whose cards are all done is judged on the Goal's work.
+      yield* Effect.when(
+        merges.checkOutcomes(goal),
+        Effect.succeed(executing && goal.hold === null),
+      );
       yield* Effect.when(
         merges.takeUpstream(goal),
         Effect.succeed(Option.exists(schedule, (found) => found.upstreamPending)),

@@ -18,9 +18,11 @@ import {
   CardVerdict,
   CardVerifier,
   GoalVerifier,
+  OutcomeVerifier,
   type CardAgentRun,
   type CardVerification,
   type GoalVerification,
+  type OutcomeVerification,
 } from "./card-agent.ts";
 import { cardToolProject, type CardWorktree } from "./worktree.ts";
 import { CardFailure, VerdictFailure, type AgentFailureCode } from "./failures.ts";
@@ -51,6 +53,12 @@ const goalVerifierInstructions = [
   "You verify a whole Goal branch after every card of its kanban board was integrated, before it merges into the user's branch. Your tools are rooted at a checkout of that branch; read its files and run its checks, but change nothing.",
   "- Check that the cards together meet the Goal's outcomes and constraints. Run the project's tests or builds.",
   "- Call record_card_verdict exactly once with your verdict before your final message.",
+].join("\n");
+
+const outcomeVerifierInstructions = [
+  "You check whether one outcome of a Goal is met, now that every card serving it is done. Your tools are rooted at the Goal's work; read its files and run its checks, but change nothing.",
+  "- Judge the outcome itself, not only the cards' acceptance criteria: the cards are how the outcome was meant to be reached. Run the project's tests or builds when the outcome depends on them.",
+  "- Call record_card_verdict exactly once before your final message: passed when the outcome is met, otherwise not passed with what is missing as the reason.",
 ].join("\n");
 
 const listed = (title: string, items: readonly string[]) =>
@@ -309,19 +317,38 @@ const make = Effect.gen(function* () {
       instructions: goalVerifierInstructions,
     });
 
+  const verifyOutcome = (input: OutcomeVerification) =>
+    runVerifier({
+      sessionId: input.sessionId,
+      projectId: input.projectId,
+      worktree: input.checkout,
+      runPrefix: `kanban:${input.goalInstanceId}:outcome:${input.outcome.id}:verify`,
+      agent: `outcome-${input.outcome.id}-verify`,
+      message: [
+        `Goal: ${input.goal.statement}`,
+        `Outcome to check: ${input.outcome.id}: ${input.outcome.text}`,
+        ...listed("Constraints", input.goal.constraints),
+        "Cards that served it:",
+        ...input.cards.map(cardText),
+      ].join("\n\n"),
+      instructions: outcomeVerifierInstructions,
+    });
+
   return {
     agent,
     verifier: CardVerifier.of({ verify }),
     goalVerifier: GoalVerifier.of({ verify: verifyGoal }),
+    outcomeVerifier: OutcomeVerifier.of({ verify: verifyOutcome }),
   };
 });
 
 /** Card agents and verifiers that run as session subagents in the card worktrees. */
 export const subagentCardAgentsLayer = Layer.effectContext(
-  Effect.map(make, ({ agent, verifier, goalVerifier }) =>
+  Effect.map(make, ({ agent, verifier, goalVerifier, outcomeVerifier }) =>
     Context.make(CardAgent, agent).pipe(
       Context.add(CardVerifier, verifier),
       Context.add(GoalVerifier, goalVerifier),
+      Context.add(OutcomeVerifier, outcomeVerifier),
     ),
   ),
 ).pipe(Layer.provide(NodeCrypto.layer));

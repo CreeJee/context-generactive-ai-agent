@@ -1,5 +1,5 @@
 import { Context, Data, type Effect } from "effect";
-import type { GoalArtifact, PlanStep } from "../workflow/workflow.ts";
+import type { GoalArtifact, GoalOutcome, PlanStep } from "../workflow/workflow.ts";
 import type { KanbanStorageFailed } from "./card-attempts.ts";
 import type { CardFailure, VerdictFailure } from "./failures.ts";
 import type { CardWorktree } from "./worktree.ts";
@@ -94,3 +94,25 @@ export class GoalVerifier extends Context.Service<
   GoalVerifier,
   { readonly verify: (input: GoalVerification) => Effect.Effect<CardVerdict> }
 >()("memory-agent/kanban/card-agent/GoalVerifier") {}
+
+/** One outcome of the Goal, once every card serving it is done. */
+export interface OutcomeVerification {
+  readonly sessionId: string;
+  readonly projectId: string;
+  readonly goalInstanceId: string;
+  readonly goal: GoalArtifact;
+  readonly outcome: GoalOutcome;
+  /** The cards that serve the outcome. */
+  readonly cards: readonly PlanStep[];
+  /** A checkout of the Goal branch, or the project itself for a Goal without worktrees. */
+  readonly checkout: CardWorktree;
+}
+
+/**
+ * Whether the Goal's work meets one outcome: Passed when it does, Failed with a Rejected note when
+ * it checked and found the outcome short. The verdict goes to the outcome ledger.
+ */
+export class OutcomeVerifier extends Context.Service<
+  OutcomeVerifier,
+  { readonly verify: (input: OutcomeVerification) => Effect.Effect<CardVerdict> }
+>()("memory-agent/kanban/card-agent/OutcomeVerifier") {}

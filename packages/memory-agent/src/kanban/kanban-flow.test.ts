@@ -28,10 +28,17 @@ import {
   type KanbanFixture,
 } from "../testing/kanban.ts";
 import { BoardAuthor } from "../workflow/card.ts";
+import { OutcomeLedger } from "../workflow/outcome-ledger.ts";
 import { Workflows, type PlanStep } from "../workflow/workflow.ts";
 import { GoalChangeVerdict, KanbanBoardActions } from "./board-actions.ts";
-import { CardAgentOutcome, CardVerdict, type CardAgentRun } from "./card-agent.ts";
+import {
+  CardAgentOutcome,
+  CardVerdict,
+  type CardAgentRun,
+  type OutcomeVerification,
+} from "./card-agent.ts";
 import { CardAttempts } from "./card-attempts.ts";
+import { VerdictFailure } from "./failures.ts";
 import { GoalMergeState, GoalSchedules } from "./goal-schedules.ts";
 import {
   DecisionAnswer,
@@ -89,6 +96,100 @@ const goalFile = (fixture: KanbanFixture, goalInstanceId: string, file: string) 
   git(fixture.project, "show", `ctx/goal/${goalInstanceId}:${file}`);
 
 layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
+  it.effect(
+    "judges an outcome on the Goal branch once every card serving it is done, and records the verdict",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* kanbanFixture;
+        const write = yield* writer;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const releaseB = yield* Deferred.make<void>();
+        const checks = yield* Ref.make<ReadonlyArray<OutcomeVerification>>([]);
+        const seen = yield* Ref.make<ReadonlyArray<string>>([]);
+        const run = yield* openKanbanOwner(fixture, yield* Effect.scope, {
+          agent: (agent) =>
+            Effect.gen(function* () {
+              yield* Effect.when(Deferred.await(releaseB), Effect.succeed(agent.card.id === "b"));
+              yield* write(agent, `${agent.card.id}.txt`, `${agent.card.id}\n`);
+              return finished;
+            }),
+          verifyOutcome: (input) =>
+            Effect.gen(function* () {
+              yield* Ref.update(checks, (all) => [...all, input]);
+              const present = yield* Effect.filter(["a", "b"], (id) =>
+                fs.exists(path.join(input.checkout.toolRoot, `${id}.txt`)),
+              );
+              yield* Ref.set(seen, present);
+              return passed;
+            }).pipe(Effect.orDie),
+        });
+        yield* run(
+          Effect.gen(function* () {
+            const board = yield* executingPlan(fixture, [
+              { ...card("a"), outcomes: ["O1"] },
+              { ...card("b"), outcomes: ["O1"] },
+            ]);
+            yield* (yield* GoalSchedules).setProtectedBranches(board.projectId, []);
+            yield* (yield* KanbanOrchestrator).start(board.sessionId);
+            // One serving card done is not the outcome done.
+            yield* waitForCards(board.sessionId, (cards) => status(cards, "a") === "done");
+            expect(yield* Ref.get(checks)).toEqual([]);
+            yield* Deferred.succeed(releaseB, undefined);
+            const ledger = yield* OutcomeLedger;
+            const [verdict] = yield* eventually(
+              ledger.latest(board.goalInstanceId),
+              (latest) => latest.length > 0,
+            );
+            expect(verdict).toMatchObject({
+              outcomeId: "O1",
+              outcomeText: "Cards are done",
+              met: true,
+              evidence: ["checked"],
+              cards: [{ id: "a" }, { id: "b" }],
+            });
+            expect(verdict?.goalHead).toMatch(/^[0-9a-f]{40}$/);
+            expect((yield* Ref.get(checks)).map((check) => check.cards.map((c) => c.id))).toEqual([
+              ["a", "b"],
+            ]);
+            // It checked the Goal branch with both cards' work in it.
+            expect(yield* Ref.get(seen)).toEqual(["a", "b"]);
+          }),
+        );
+      }),
+    gitTimeout,
+  );
+
+  it.effect(
+    "does not run an outcome check again at once when it ended without a verdict",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* kanbanFixture;
+        const checks = yield* Ref.make(0);
+        const run = yield* openKanbanOwner(fixture, yield* Effect.scope, {
+          agent: () => Effect.succeed(finished),
+          verifyOutcome: () =>
+            Effect.as(
+              Ref.update(checks, (count) => count + 1),
+              CardVerdict.Failed({ failure: VerdictFailure.cases.Unavailable.make({}) }),
+            ),
+        });
+        yield* run(
+          Effect.gen(function* () {
+            const board = yield* executingPlan(fixture, [{ ...card("a"), outcomes: ["O1"] }]);
+            yield* (yield* GoalSchedules).setProtectedBranches(board.projectId, []);
+            yield* (yield* KanbanOrchestrator).start(board.sessionId);
+            yield* eventually(Ref.get(checks), (count) => count > 0);
+            // Looks keep coming every 50ms; the same check on the same Goal head is not one of them.
+            yield* Effect.sleep("500 millis");
+            expect(yield* Ref.get(checks)).toBe(1);
+            expect(yield* (yield* OutcomeLedger).latest(board.goalInstanceId)).toEqual([]);
+          }),
+        );
+      }),
+    gitTimeout,
+  );
+
   it.effect(
     "runs a Goal's cards in parallel by dependency, squashes one commit per card and merges the checked Goal",
     () =>

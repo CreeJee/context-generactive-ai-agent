@@ -14,10 +14,12 @@ import {
   CardVerdict,
   CardVerifier,
   GoalVerifier,
+  OutcomeVerifier,
   type CardAgentOutcome,
   type CardAgentRun,
   type CardVerification,
   type GoalVerification,
+  type OutcomeVerification,
 } from "../kanban/card-agent.ts";
 import { GoalOrder } from "../kanban/goal-order.ts";
 import { GoalSchedules } from "../kanban/goal-schedules.ts";
@@ -26,6 +28,7 @@ import { GoalMerges } from "../kanban/merge-queue.ts";
 import { ProjectScheduler } from "../kanban/scheduler.ts";
 import { CardAttempts, type CardAttemptKey } from "../kanban/card-attempts.ts";
 import { executionSubjects } from "../workflow/execution-subjects.ts";
+import { OutcomeLedger } from "../workflow/outcome-ledger.ts";
 import { HumanDecisions } from "../kanban/human-decision.ts";
 import {
   cardAttemptExecutionLayer,
@@ -172,6 +175,15 @@ export const passingGoalVerifier = Layer.succeed(
   }),
 );
 
+/** An outcome check that finds every outcome met. */
+export const passingOutcomeVerifier = Layer.succeed(
+  OutcomeVerifier,
+  OutcomeVerifier.of({
+    verify: (input) =>
+      Effect.succeed(CardVerdict.Passed({ evidence: [`outcome ${input.outcome.id} met`] })),
+  }),
+);
+
 /**
  * An owner with the orchestrator loop, the project scheduler, the merge queue and the board
  * actions; looks happen every 50ms.
@@ -181,6 +193,7 @@ export const kanbanBoardOwner = (owner: {
   readonly agent: Layer.Layer<CardAgent>;
   readonly verifier: Layer.Layer<CardVerifier>;
   readonly goalVerifier?: Layer.Layer<GoalVerifier>;
+  readonly outcomeVerifier?: Layer.Layer<OutcomeVerifier>;
   readonly cores?: number;
 }) =>
   KanbanBoardActions.layer.pipe(
@@ -192,6 +205,8 @@ export const kanbanBoardOwner = (owner: {
     Layer.provideMerge(ProjectScheduler.layer),
     Layer.provideMerge(owner.verifier),
     Layer.provideMerge(owner.goalVerifier ?? passingGoalVerifier),
+    Layer.provideMerge(owner.outcomeVerifier ?? passingOutcomeVerifier),
+    Layer.provideMerge(OutcomeLedger.layer),
     Layer.provideMerge(kanbanOwner(owner)),
   );
 
@@ -208,6 +223,7 @@ export const openKanbanOwner = Effect.fnUntraced(function* (
     readonly agent: (run: CardAgentRun) => Effect.Effect<CardAgentOutcome>;
     readonly verify?: (input: CardVerification) => Effect.Effect<CardVerdict>;
     readonly verifyGoal?: (input: GoalVerification) => Effect.Effect<CardVerdict>;
+    readonly verifyOutcome?: (input: OutcomeVerification) => Effect.Effect<CardVerdict>;
     readonly cores?: number;
   },
 ) {
@@ -231,6 +247,17 @@ export const openKanbanOwner = Effect.fnUntraced(function* (
             verify:
               options.verifyGoal ??
               (() => Effect.succeed(CardVerdict.Passed({ evidence: ["goal verified"] }))),
+          }),
+        ),
+        outcomeVerifier: Layer.succeed(
+          OutcomeVerifier,
+          OutcomeVerifier.of({
+            verify:
+              options.verifyOutcome ??
+              ((input) =>
+                Effect.succeed(
+                  CardVerdict.Passed({ evidence: [`outcome ${input.outcome.id} met`] }),
+                )),
           }),
         ),
         cores: options.cores ?? 2,

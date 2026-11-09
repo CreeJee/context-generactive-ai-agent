@@ -1,13 +1,16 @@
 import {
   Array as Arr,
   Context,
+  DateTime,
   Effect,
   FiberMap,
   FileSystem,
+  HashSet,
   Layer,
   Match,
   Option,
   Predicate,
+  Ref,
   Schema,
   Stream,
 } from "effect";
@@ -16,8 +19,16 @@ import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
 import { AppEvents } from "../events/app-events.ts";
 import { findExecutable } from "../runtime/host.ts";
 import { BoardAuthor } from "../workflow/card.ts";
+import type { GoalArtifact, PlanStep } from "../workflow/contracts.ts";
+import {
+  OutcomeLedger,
+  outcomeStandings,
+  OutcomeStatus,
+  servingCards,
+  type OutcomeStanding,
+} from "../workflow/outcome-ledger.ts";
 import { Workflows } from "../workflow/workflow.ts";
-import { CardVerifier, GoalVerifier } from "./card-agent.ts";
+import { CardVerifier, GoalVerifier, OutcomeVerifier } from "./card-agent.ts";
 import { CardAttempts, type KanbanGoal } from "./card-attempts.ts";
 import { CardHoldReason } from "./failures.ts";
 import { GoalMergeState, GoalSchedules, mergeSettled } from "./goal-schedules.ts";
@@ -30,7 +41,7 @@ import {
   HumanDecisions,
 } from "./human-decision.ts";
 import { overlappingBoundaries, ProjectScheduler } from "./scheduler.ts";
-import { CardWorktrees, type GoalRef } from "./worktree.ts";
+import { type CardWorktree, CardWorktrees, type GoalRef } from "./worktree.ts";
 import { BoardHealth } from "./board-health.ts";
 import { LoopStep } from "../runtime/loop-health.ts";
 
@@ -74,6 +85,8 @@ const make = Effect.gen(function* () {
   const decisions = yield* HumanDecisions;
   const goalVerifier = yield* GoalVerifier;
   const cardVerifier = yield* CardVerifier;
+  const outcomeVerifier = yield* OutcomeVerifier;
+  const ledger = yield* OutcomeLedger;
   const workflows = yield* Workflows;
   const attempts = yield* CardAttempts;
   const scheduler = yield* ProjectScheduler;
@@ -83,6 +96,11 @@ const make = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const serially = yield* keyedSerialLimit();
   const running = yield* FiberMap.make<string>();
+  /**
+   * Outcome checks that ended without a verdict (the verifier could not run or recorded none), so
+   * a look does not start the same check again at once. In memory: a restarted owner tries again.
+   */
+  const unjudged = yield* Ref.make(HashSet.empty<string>());
 
   const goalRef = (goal: KanbanGoal): GoalRef => ({
     projectRoot: goal.projectRoot,
@@ -423,6 +441,87 @@ const make = Effect.gen(function* () {
   });
 
   /**
+   * Judges one outcome whose cards are all done, on the Goal branch at `head` or, for a Goal
+   * without worktrees, in the project itself. True when a verdict was recorded.
+   */
+  const judgeOutcome = Effect.fnUntraced(function* (
+    goal: KanbanGoal,
+    artifact: GoalArtifact,
+    steps: readonly PlanStep[],
+    standing: OutcomeStanding,
+    head: string | null,
+  ) {
+    const outcome = { id: standing.outcomeId, text: standing.outcomeText };
+    const cards = steps.filter((step) => step.outcomes.includes(outcome.id));
+    const attempt = [goal.goalInstanceId, outcome.id, outcome.text, head ?? ""]
+      .concat(cards.map((card) => card.id))
+      .join("\n");
+    if (HashSet.has(yield* Ref.get(unjudged), attempt)) return false;
+    const check = (checkout: CardWorktree) =>
+      outcomeVerifier.verify({
+        sessionId: goal.sessionId,
+        projectId: goal.projectId,
+        goalInstanceId: goal.goalInstanceId,
+        goal: artifact,
+        outcome,
+        cards,
+        checkout,
+      });
+    const verdict =
+      head === null
+        ? yield* check({ toolRoot: goal.projectRoot, deniedRoots: [] })
+        : yield* Effect.scoped(Effect.flatMap(worktrees.goalCheckout(goalRef(goal), head), check));
+    const recorded = (met: boolean, summary: string, evidence: readonly string[]) =>
+      Effect.gen(function* () {
+        yield* ledger.record(goal.goalInstanceId, {
+          outcomeId: outcome.id,
+          outcomeText: outcome.text,
+          met,
+          summary,
+          evidence,
+          cards: servingCards({ steps, outcomeId: outcome.id }),
+          goalHead: head,
+          runId: null,
+          at: DateTime.formatIso(yield* DateTime.now),
+        });
+        return true;
+      });
+    return yield* Match.valueTags(verdict, {
+      Passed: ({ evidence }) => recorded(true, evidence.join("; "), evidence),
+      Failed: ({ failure }) =>
+        Predicate.isTagged(failure, "Rejected")
+          ? recorded(false, failure.note, [failure.note])
+          : Effect.as(Ref.update(unjudged, HashSet.add(attempt)), false),
+    });
+  });
+
+  /**
+   * Judges each outcome of the Goal whose cards are all done and that no verdict holds for. A Goal
+   * without worktrees runs its cards in the project, so its outcomes are checked between cards.
+   * True when a verdict was recorded.
+   */
+  const checkOutcomes = Effect.fnUntraced(function* (goal: KanbanGoal) {
+    const state = yield* workflows.get(goal.sessionId);
+    const artifact = state.goal;
+    const steps = state.plan?.steps ?? [];
+    const cardRunning = steps.some(
+      (step) => step.status === "in_progress" || step.status === "verify",
+    );
+    if (artifact === null || (goal.mode === "sequential" && cardRunning)) return false;
+    const awaiting = outcomeStandings({
+      outcomes: artifact.outcomes,
+      steps,
+      latest: yield* ledger.latest(goal.goalInstanceId),
+    }).filter((standing) => OutcomeStatus.guards.AwaitingCheck(standing.status));
+    if (awaiting.length === 0) return false;
+    const head = goal.mode === "worktree" ? yield* worktrees.goalHead(goalRef(goal)) : null;
+    const judged = yield* Effect.forEach(awaiting, (standing) =>
+      judgeOutcome(goal, artifact, steps, standing, head),
+    );
+    return judged.some(Boolean);
+  });
+
+  /**
    * Runs `work` for the Goal beside its loop, once at a time per Goal and per target. The board's
    * look is woken when the step changed the Goal's schedule or stopped. A step that changed nothing
    * (a decision still unanswered, a busy checkout, a failed head not moved) is not: the look would
@@ -485,6 +584,28 @@ const make = Effect.gen(function* () {
         ),
       );
     }),
+
+    /**
+     * Starts judging the Goal's outcomes whose cards are all done, beside its loop and once at a
+     * time with its merge steps. The look is woken when a verdict was recorded.
+     */
+    checkOutcomes: (goal: KanbanGoal) =>
+      FiberMap.run(
+        running,
+        `outcomes:${goal.goalInstanceId}`,
+        serially(`goal:${goal.goalInstanceId}`, checkOutcomes(goal)).pipe(
+          health.supervise(goal, "Kanban outcome check stopped", { name: "outcomes" }),
+          Effect.flatMap((step) =>
+            Effect.when(
+              scheduler.poke(goal.goalInstanceId),
+              Effect.succeed(
+                LoopStep.$match(step, { Continued: ({ value }) => value, Stopped: () => true }),
+              ),
+            ),
+          ),
+        ),
+        { onlyIfMissing: true },
+      ),
 
     /** Takes in a target another Goal merged into, when the Goal was told about one. */
     takeUpstream: Effect.fn("GoalMerges.takeUpstream")(function* (goal: KanbanGoal) {
