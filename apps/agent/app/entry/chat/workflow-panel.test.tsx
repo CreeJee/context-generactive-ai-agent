@@ -18,7 +18,8 @@ const props = {
   kanbanRunning: false,
 };
 function button(html: string, label: string) {
-  const match = html.match(new RegExp(`<button[^>]*>\\s*${label}\\s*</button>`));
+  // A button may lead with its icon before the label.
+  const match = html.match(new RegExp(`<button[^>]*>(?:<svg.*?</svg>)?\\s*${label}\\s*</button>`));
   if (!isTruthy(match)) throw new Error(`Missing button: ${label}`);
   return match[0];
 }

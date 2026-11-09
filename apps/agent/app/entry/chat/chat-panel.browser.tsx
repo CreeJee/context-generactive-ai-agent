@@ -67,6 +67,37 @@ const runState: SessionRunState = {
   uncertainRuns: [],
 };
 
+/** A Plan waiting for approval as its board: two cards serving the Goal's one outcome. */
+const draftBoard = {
+  plan: { version: 4, status: "ready", summary: "Test the policy" },
+  cards: [
+    { id: "c1", title: "정책 읽기", status: "ready" },
+    { id: "c2", title: "테스트 고치기", status: "backlog" },
+  ].map(({ id, title, status }) => ({
+    card: {
+      id,
+      title,
+      description: "",
+      dependsOn: [],
+      acceptanceCriteria: [],
+      ruleRefs: [],
+      outcomes: ["O1"],
+      status,
+      evidence: [],
+    },
+    lastChange: null,
+  })),
+  outcomes: [
+    {
+      id: "O1",
+      text: "정책 테스트가 통과한다",
+      status: { _tag: "InProgress", pending: ["c1", "c2"] },
+    },
+  ],
+  history: [],
+  pendingChanges: [],
+};
+
 /** What the server answers for the session; a test may swap it before opening the session. */
 const served = { run: runState };
 
@@ -85,6 +116,10 @@ const server = (input: RequestInfo | URL, init?: RequestInit): Promise<Response>
     return Promise.resolve(
       Response.json({ messages, older: null, activeRun: null, interrupts: null }),
     );
+  if (pathname === "/api/sessions/s1/board") return Promise.resolve(Response.json(draftBoard));
+  if (pathname === "/api/sessions/s1/kanban")
+    return Promise.resolve(Response.json({ active: false }));
+  if (pathname === "/api/sessions/s1/decisions") return Promise.resolve(Response.json([]));
   if (pathname === "/api/sessions/s1/queue" && request.method === "GET")
     return Promise.resolve(Response.json({ items: [queued], nextDelivery: { _tag: "empty" } }));
   if (request.method === "POST")
@@ -200,4 +235,28 @@ it.live("leaving a running board asks first, and only a confirmed move is sent",
     yield* sdkCall(() => screen.unmount());
     vi.unstubAllGlobals();
   }),
+);
+
+it.live(
+  "a Plan waiting for approval lists its cards and outcomes, each card linking to the board",
+  () =>
+    Effect.gen(function* () {
+      served.run = { ...runState, workflow: workflowFixture };
+      const { screen } = yield* openSession;
+      const panel = screen.getByRole("region", { name: "워크플로" });
+
+      yield* sdkCall(() => expect.element(panel.getByText("Plan · 계획 중")).toBeVisible());
+      yield* sdkCall(() => expect.element(panel.getByText("정책 테스트가 통과한다")).toBeVisible());
+      yield* sdkCall(() => expect.element(panel.getByText("카드 0/2 완료")).toBeVisible());
+      // A Plan still waiting for approval shows its cards without a click.
+      const first = panel.getByRole("link", { name: /정책 읽기/ });
+      yield* sdkCall(() => expect.element(first).toBeVisible());
+      expect(first.element().getAttribute("href")).toContain("card=c1");
+      yield* sdkCall(() =>
+        expect.element(panel.getByRole("button", { name: "승인하고 실행" })).toBeEnabled(),
+      );
+      served.run = runState;
+      yield* sdkCall(() => screen.unmount());
+      vi.unstubAllGlobals();
+    }),
 );

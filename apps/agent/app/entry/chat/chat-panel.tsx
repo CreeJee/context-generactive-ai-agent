@@ -83,7 +83,7 @@ import {
   useResumeTraceTaskMutation,
 } from "../queries/mutations/session";
 import { useKanbanQuery } from "../queries/session";
-import { WorkflowBoard } from "./board-panel";
+import { OpenBoardButton, WorkflowBoard } from "./board-panel";
 import {
   WorkflowArtifactPanel,
   modeLabels,
@@ -951,6 +951,7 @@ function ChatPanel({
           onRevise={revisePlan}
           onExecute={() => void executePlan()}
           kanbanRunning={kanbanRunning}
+          boardAction={<OpenBoardButton />}
           boardSlot={
             <WorkflowBoard
               projectId={projectId}

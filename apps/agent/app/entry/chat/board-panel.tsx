@@ -2,8 +2,19 @@ import { isTruthy } from "../../truthy.ts";
 import { useState } from "react";
 import { Array as Arr, Match, Result } from "effect";
 import { ChevronRightIcon, CircleSlashIcon, KanbanSquareIcon, PlusIcon } from "lucide-react";
-import { parseAsBoolean, parseAsString, useQueryStates } from "nuqs";
+import { createSerializer, parseAsBoolean, parseAsString, useQueryStates } from "nuqs";
+import { Alert, AlertDescription } from "../../components/ui/alert";
 import { Badge } from "../../components/ui/badge";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../../components/ui/empty";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemGroup,
+  ItemMedia,
+  ItemTitle,
+} from "../../components/ui/item";
+import { Skeleton } from "../../components/ui/skeleton";
 import { Button } from "../../components/ui/button";
 import {
   Dialog,
@@ -60,9 +71,37 @@ import { BoardShortcuts } from "./board/kanban-board";
 export { cardStatusLabels } from "./board/board-moves";
 export { authorLabel } from "./board/card-face";
 
+/** Where the chat's board lives in the URL. Opening it closes the project board: one board per URL. */
+const boardLocation = {
+  board: parseAsBoolean,
+  card: parseAsString,
+  boards: parseAsBoolean,
+  boardCard: parseAsString,
+};
+const boardLink = createSerializer(boardLocation);
+
+function useBoardLocation() {
+  const [location, setLocation] = useQueryStates(boardLocation);
+  const openBoard = (card: string | null) =>
+    void setLocation({ board: true, card, boards: null, boardCard: null });
+  return { location, setLocation, openBoard };
+}
+
+/** Opens the Plan's board wide over the page, at the card it last showed. */
+export function OpenBoardButton() {
+  const { location, openBoard } = useBoardLocation();
+  return (
+    <Button type="button" size="sm" variant="outline" onClick={() => openBoard(location.card)}>
+      <KanbanSquareIcon data-icon="inline-start" />
+      보드 열기
+    </Button>
+  );
+}
+
 /**
- * The Plan's kanban board. The chat shows a summary of it; the board itself opens wide over the
- * page (`?board=1`), and a card opens in a peek panel beside it (`?card=…`, as the inbox links).
+ * The Plan's kanban board as the chat shows it: the outcomes, the progress and the cards. The board
+ * itself opens wide over the page (`?board=1`), and a card opens in a peek panel beside it
+ * (`?card=…`, as the inbox links and the card list here do).
  */
 export function WorkflowBoard({
   projectId,
@@ -79,25 +118,22 @@ export function WorkflowBoard({
   const decisions = useDecisionsQuery(projectId, sessionId).data ?? [];
   const kanban = useKanbanQuery(projectId, sessionId);
   const kanbanAction = useKanbanMutation(projectId, sessionId, holder);
-  // Opening this board closes the project board (`boards`, `boardCard`): one board per URL.
-  const [location, setLocation] = useQueryStates({
-    board: parseAsBoolean,
-    card: parseAsString,
-    boards: parseAsBoolean,
-    boardCard: parseAsString,
-  });
-  const openBoard = (card: string | null) =>
-    void setLocation({ board: true, card, boards: null, boardCard: null });
+  const { location, setLocation, openBoard } = useBoardLocation();
   const [startError, setStartError] = useState<string | null>(null);
 
   const view = board.data;
-  if (!isTruthy(view)) return <p className="text-muted-foreground">보드를 불러오는 중이에요.</p>;
+  if (!isTruthy(view)) return <Skeleton aria-label="보드를 불러오는 중" className="h-16 w-full" />;
   const plan = view.plan;
   if (plan === null)
     return (
-      <div className="min-w-0 space-y-3">
+      <div className="flex min-w-0 flex-col gap-3">
         <OutcomeChecklist outcomes={view.outcomes} />
-        <p className="text-muted-foreground">아직 카드가 없어요.</p>
+        <Empty>
+          <EmptyHeader>
+            <EmptyTitle>아직 카드가 없어요</EmptyTitle>
+            <EmptyDescription>계획자가 Plan을 만들면 카드가 여기에 보여요.</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
       </div>
     );
   const loop = kanban.data?.active === true ? kanban.data : null;
@@ -111,6 +147,7 @@ export function WorkflowBoard({
   });
   const waiting = decisions.length;
   const open = location.board === true || location.card !== null;
+  const switchable = loop === null && plan.status === "executing";
   const start = () => {
     setStartError(null);
     kanbanAction.mutate(KanbanAction.Start(), {
@@ -125,27 +162,24 @@ export function WorkflowBoard({
   };
 
   return (
-    <div className="min-w-0 space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
-        {loop !== null ? (
-          <>
-            <Badge variant="secondary">칸반 실행 중</Badge>
-            {loop.plannerStalled && (
-              <Badge variant="outline" title={plannerStalledHint}>
-                자동 계획 멈춤
-              </Badge>
-            )}
-            {loop.loop._tag !== "Healthy" && (
-              <LoopHealthStatus
-                label="보드 루프"
-                health={loop.loop}
-                disabled={disabled || kanbanAction.isPending}
-                onRestart={restart}
-              />
-            )}
-          </>
-        ) : (
-          plan.status === "executing" && (
+    <div className="flex min-w-0 flex-col gap-3">
+      {(loop !== null || switchable) && (
+        <div className="flex flex-wrap items-center gap-2">
+          {loop !== null && <Badge variant="secondary">칸반 실행 중</Badge>}
+          {loop !== null && loop.plannerStalled && (
+            <Badge variant="outline" title={plannerStalledHint}>
+              자동 계획 멈춤
+            </Badge>
+          )}
+          {loop !== null && loop.loop._tag !== "Healthy" && (
+            <LoopHealthStatus
+              label="보드 루프"
+              health={loop.loop}
+              disabled={disabled || kanbanAction.isPending}
+              onRestart={restart}
+            />
+          )}
+          {switchable && (
             <Button
               type="button"
               size="sm"
@@ -156,49 +190,82 @@ export function WorkflowBoard({
             >
               칸반으로 전환
             </Button>
-          )
-        )}
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          className="ml-auto"
-          onClick={() => openBoard(location.card)}
-        >
-          <KanbanSquareIcon data-icon="inline-start" />
-          보드 열기
-        </Button>
-      </div>
-      {startError !== null && (
-        <p className="text-destructive" role="alert">
-          {startError}
-        </p>
-      )}
-      <OutcomeChecklist outcomes={view.outcomes} />
-      <div className="space-y-1.5">
-        <div className="flex items-center gap-2 text-xs">
-          <span className="font-medium">
-            카드 완료 {done}/{total}
-          </span>
-          {waiting > 0 && <Badge variant="outline">판단 대기 {waiting}</Badge>}
-          {view.pendingChanges.length > 0 && (
-            <Badge variant="outline">변경 요청 대기 {view.pendingChanges.length}</Badge>
           )}
         </div>
-        {/* An empty board has nothing to finish; a zero max would divide by zero. */}
-        <Progress aria-label="완료한 카드" value={done} max={Math.max(total, 1)} />
-        {counts.length > 0 && (
-          <ul className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-            {counts.map(({ status, count }) => (
-              <li key={status} className="flex items-center gap-1">
-                <StatusIcon status={status} />
-                {cardStatusLabels[status]}
-                <span className="font-medium text-foreground">{count}</span>
-              </li>
+      )}
+      {startError !== null && (
+        <Alert variant="destructive">
+          <AlertDescription>{startError}</AlertDescription>
+        </Alert>
+      )}
+      <OutcomeChecklist outcomes={view.outcomes} />
+      {/* A Plan still waiting for approval is read card by card; a running one by its progress. */}
+      <Collapsible defaultOpen={plan.status === "draft" || plan.status === "ready"}>
+        <div className="flex flex-col gap-1.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <CollapsibleTrigger
+              render={<Button type="button" size="xs" variant="ghost" className="group" />}
+            >
+              <ChevronRightIcon
+                data-icon="inline-start"
+                className="transition-transform group-data-[panel-open]:rotate-90"
+              />
+              카드 {done}/{total} 완료
+            </CollapsibleTrigger>
+            {waiting > 0 && <Badge variant="outline">판단 대기 {waiting}</Badge>}
+            {view.pendingChanges.length > 0 && (
+              <Badge variant="outline">변경 요청 대기 {view.pendingChanges.length}</Badge>
+            )}
+          </div>
+          {/* An empty board has nothing to finish; a zero max would divide by zero. */}
+          <Progress aria-label="완료한 카드" value={done} max={Math.max(total, 1)} />
+          {counts.length > 0 && (
+            <ul className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+              {counts.map(({ status, count }) => (
+                <li key={status} className="flex items-center gap-1">
+                  <StatusIcon status={status} />
+                  {cardStatusLabels[status]}
+                  <span className="font-medium text-foreground">{count}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <CollapsibleContent className="pt-2">
+          <ItemGroup>
+            {view.cards.map(({ card }) => (
+              // The list holds items; the item itself stays a link.
+              <div key={card.id} role="listitem">
+                <Item
+                  size="xs"
+                  render={
+                    <a
+                      href={boardLink({ board: true, card: card.id })}
+                      onClick={(event) => {
+                        // A modified click opens the card in a new tab as the link says.
+                        if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
+                          return;
+                        event.preventDefault();
+                        openBoard(card.id);
+                      }}
+                    />
+                  }
+                >
+                  <ItemMedia variant="icon">
+                    <StatusIcon status={card.status} />
+                  </ItemMedia>
+                  <ItemContent>
+                    <ItemTitle title={card.title}>{card.title}</ItemTitle>
+                  </ItemContent>
+                  <ItemActions>
+                    <Badge variant="outline">{cardStatusLabels[card.status]}</Badge>
+                  </ItemActions>
+                </Item>
+              </div>
             ))}
-          </ul>
-        )}
-      </div>
+          </ItemGroup>
+        </CollapsibleContent>
+      </Collapsible>
       {open && (
         <BoardSheet
           projectId={projectId}
@@ -396,7 +463,7 @@ function BoardSheet({
               </DialogContent>
             </Dialog>
             {extras.length > 0 && (
-              <CollapsibleContent className="mt-2 max-h-72 space-y-3 overflow-y-auto rounded-md border px-3 py-2">
+              <CollapsibleContent className="mt-2 flex max-h-72 flex-col gap-3 overflow-y-auto rounded-md border px-3 py-2">
                 {loop?.schedule != null && (
                   <GoalSchedulePanel
                     schedule={loop.schedule}
@@ -409,9 +476,9 @@ function BoardSheet({
                   />
                 )}
                 {view.pendingChanges.length > 0 && (
-                  <div className="space-y-1" role="status">
+                  <div className="flex flex-col gap-1" role="status">
                     <p className="font-medium">오케스트레이터 확인을 기다리는 변경</p>
-                    <ul className="list-disc space-y-0.5 pl-5 text-muted-foreground">
+                    <ul className="flex list-disc flex-col gap-0.5 pl-5 text-muted-foreground">
                       {view.pendingChanges.map((request) => (
                         <li key={request.id}>
                           {titleOf(request.cardId)} ·{" "}
@@ -426,9 +493,9 @@ function BoardSheet({
                   </div>
                 )}
                 {view.history.length > 0 && (
-                  <div className="space-y-1">
+                  <div className="flex flex-col gap-1">
                     <p className="font-medium">보드 변경 이력</p>
-                    <ol className="space-y-0.5 text-xs text-muted-foreground">
+                    <ol className="flex flex-col gap-0.5 text-xs text-muted-foreground">
                       {view.history.map((revision) => (
                         <li key={revision.revisionId}>
                           <Badge variant={revision.author === null ? "outline" : "secondary"}>
@@ -520,7 +587,7 @@ function GoalSchedulePanel({
   return (
     <section
       aria-label="Goal 스케줄"
-      className="space-y-2 rounded-md border px-3 py-2 text-muted-foreground"
+      className="flex flex-col gap-2 rounded-md border px-3 py-2 text-muted-foreground"
     >
       <div className="flex flex-wrap items-center gap-3">
         <span>
@@ -547,9 +614,9 @@ function GoalSchedulePanel({
         </p>
       )}
       {schedule.otherGoals.length > 0 && (
-        <div className="space-y-1">
+        <div className="flex flex-col gap-1">
           <p className="font-medium text-foreground">이 Goal보다 먼저 merge될 Goal</p>
-          <ul className="space-y-1">
+          <ul className="flex flex-col gap-1">
             {schedule.otherGoals.map((other) => {
               const checked = schedule.dependsOn.includes(other.goalInstanceId);
               return (

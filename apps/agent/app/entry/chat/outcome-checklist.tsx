@@ -7,6 +7,14 @@ import {
   CircleXIcon,
   type LucideIcon,
 } from "lucide-react";
+import {
+  Item,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemMedia,
+  ItemTitle,
+} from "../../components/ui/item";
 import type { BoardView } from "../api";
 
 type BoardOutcome = BoardView["outcomes"][number];
@@ -46,33 +54,30 @@ export function OutcomeChecklist({ outcomes }: { readonly outcomes: readonly Boa
   if (outcomes.length === 0) return null;
   const met = Arr.countBy(outcomes, (outcome) => outcome.status._tag === "Met");
   return (
-    <section aria-label="Goal 결과" className="space-y-1.5">
+    <section aria-label="Goal 결과" className="flex flex-col gap-1.5">
       <p className="text-xs font-medium">
         결과 {met}/{outcomes.length} 충족
       </p>
-      <ul className="space-y-1">
+      <ItemGroup>
         {outcomes.map((outcome) => {
           const look = outcomeLooks[outcome.status._tag];
           const detail = outcomeDetail(outcome.status);
           return (
-            <li key={outcome.id} className="flex items-start gap-2 text-sm">
-              <look.icon aria-hidden className={`mt-0.5 size-4 shrink-0 ${look.className}`} />
-              <div className="min-w-0">
-                <p>
-                  <span className="mr-1.5 font-mono text-xs text-muted-foreground">
-                    {outcome.id}
-                  </span>
-                  {outcome.text}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  {look.label}
+            <Item key={outcome.id} role="listitem" variant="muted" size="xs">
+              <ItemMedia variant="icon">
+                <look.icon aria-hidden className={look.className} />
+              </ItemMedia>
+              <ItemContent>
+                <ItemTitle title={outcome.text}>{outcome.text}</ItemTitle>
+                <ItemDescription>
+                  {outcome.id} · {look.label}
                   {detail !== null && ` · ${detail}`}
-                </p>
-              </div>
-            </li>
+                </ItemDescription>
+              </ItemContent>
+            </Item>
           );
         })}
-      </ul>
+      </ItemGroup>
     </section>
   );
 }
