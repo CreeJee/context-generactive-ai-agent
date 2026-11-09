@@ -7,15 +7,9 @@ import {
   CircleXIcon,
   type LucideIcon,
 } from "lucide-react";
-import {
-  Item,
-  ItemContent,
-  ItemDescription,
-  ItemGroup,
-  ItemMedia,
-  ItemTitle,
-} from "../../components/ui/item";
+import { cn } from "cn";
 import type { BoardView } from "../api";
+import { WorkflowRow, WorkflowRows } from "./workflow-rows";
 
 type BoardOutcome = BoardView["outcomes"][number];
 type OutcomeTag = BoardOutcome["status"]["_tag"];
@@ -29,8 +23,8 @@ const outcomeLooks: Readonly<
 > = {
   Unplanned: { icon: CircleIcon, label: "맡은 카드 없음", className: "text-muted-foreground" },
   InProgress: { icon: CircleDotIcon, label: "진행 중", className: "text-warning" },
-  AwaitingCheck: { icon: CircleDashedIcon, label: "확인 대기", className: "text-info" },
-  Met: { icon: CircleCheckIcon, label: "충족", className: "text-success" },
+  AwaitingCheck: { icon: CircleDashedIcon, label: "확인 대기", className: "text-foreground/70" },
+  Met: { icon: CircleCheckIcon, label: "충족", className: "text-primary" },
   NotMet: { icon: CircleXIcon, label: "미충족", className: "text-destructive" },
 };
 
@@ -51,48 +45,28 @@ export const metOutcomes = (outcomes: readonly BoardOutcome[]): number =>
   Arr.countBy(outcomes, (outcome) => outcome.status._tag === "Met");
 
 /**
- * The Goal's outcomes and where each stands, one row each. A Goal with many outcomes scrolls
- * inside its own height instead of pushing the chat away.
- */
-export function OutcomeList({ outcomes }: { readonly outcomes: readonly BoardOutcome[] }) {
-  return (
-    <div className="max-h-60 overflow-y-auto">
-      <ItemGroup aria-label="Goal 결과">
-        {outcomes.map((outcome) => {
-          const look = outcomeLooks[outcome.status._tag];
-          const detail = outcomeDetail(outcome.status);
-          return (
-            <Item key={outcome.id} role="listitem" variant="muted" size="xs">
-              <ItemMedia variant="icon">
-                <look.icon aria-hidden className={look.className} />
-              </ItemMedia>
-              <ItemContent>
-                <ItemTitle title={outcome.text}>{outcome.text}</ItemTitle>
-                <ItemDescription>
-                  {outcome.id} · {look.label}
-                  {detail !== null && ` · ${detail}`}
-                </ItemDescription>
-              </ItemContent>
-            </Item>
-          );
-        })}
-      </ItemGroup>
-    </div>
-  );
-}
-
-/**
- * The outcomes under a heading that counts the met ones. The Goal is done once a verifier finds
- * every one met, so this list is the Goal's progress.
+ * The Goal's outcomes, one line each, under a heading that counts the met ones. The Goal is done
+ * once a verifier finds every one met, so this list is the Goal's progress.
  */
 export function OutcomeChecklist({ outcomes }: { readonly outcomes: readonly BoardOutcome[] }) {
   if (outcomes.length === 0) return null;
   return (
-    <section aria-label="Goal 결과" className="flex flex-col gap-1.5">
-      <p className="text-xs font-medium">
-        결과 {metOutcomes(outcomes)}/{outcomes.length} 충족
-      </p>
-      <OutcomeList outcomes={outcomes} />
-    </section>
+    <WorkflowRows label={`결과 ${metOutcomes(outcomes)}/${outcomes.length} 충족`}>
+      {outcomes.map((outcome) => {
+        const look = outcomeLooks[outcome.status._tag];
+        const detail = outcomeDetail(outcome.status);
+        const status = detail === null ? look.label : `${look.label} · ${detail}`;
+        return (
+          <WorkflowRow
+            key={outcome.id}
+            title={`${outcome.id} ${outcome.text}\n${status}`}
+            icon={<look.icon aria-hidden className={cn("size-3.5", look.className)} />}
+            trailing={<span className={look.className}>{status}</span>}
+          >
+            {outcome.text}
+          </WorkflowRow>
+        );
+      })}
+    </WorkflowRows>
   );
 }

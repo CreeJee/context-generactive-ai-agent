@@ -253,25 +253,24 @@ it.live("leaving a running board asks first, and only a confirmed move is sent",
   }),
 );
 
-it.live("a Plan of ten cards waiting for approval lists them in a list of its own height", () =>
+it.live("a Plan of ten cards waiting for approval lists them one line each", () =>
   Effect.gen(function* () {
     served.run = { ...runState, workflow: workflowFixture };
     const { screen } = yield* openSession;
-    const panel = screen.getByRole("region", { name: "워크플로" });
+    const bar = screen.getByRole("region", { name: "워크플로" });
 
-    yield* sdkCall(() => expect.element(panel.getByText("Plan · 계획 중")).toBeVisible());
-    yield* sdkCall(() => expect.element(panel.getByText("카드 0/10 완료")).toBeVisible());
-    // A Plan still waiting for approval shows its cards first, in the Plan's order.
-    const first = panel.getByRole("link", { name: /정책 읽기/ });
-    yield* sdkCall(() => expect.element(first).toBeVisible());
+    yield* sdkCall(() => expect.element(bar.getByText("Plan · 계획 중")).toBeVisible());
+    // A Plan still waiting for approval opens unfolded, its cards in the Plan's order.
+    const cards = bar.getByRole("region", { name: "카드 0/10 완료" }).getByRole("link");
+    yield* sdkCall(() => expect.poll(() => cards.elements().length).toBe(10));
+    const first = cards.first();
+    expect(first.element().textContent).toContain("정책 읽기");
     expect(first.element().getAttribute("href")).toContain("card=c1");
-    // Ten cards scroll inside the list instead of stretching the panel.
-    const list = panel.getByRole("list", { name: "카드" }).element().parentElement;
-    expect(list !== null && list.scrollHeight > list.clientHeight).toBe(true);
-    yield* sdkCall(() => userEvent.click(panel.getByRole("tab", { name: "결과 0/1 충족" })));
-    yield* sdkCall(() => expect.element(panel.getByText("정책 테스트가 통과한다")).toBeVisible());
+    // One line a card, so ten of them stay short.
+    expect(first.element().getBoundingClientRect().height).toBe(24);
+    yield* sdkCall(() => expect.element(bar.getByText("정책 테스트가 통과한다")).toBeVisible());
     yield* sdkCall(() =>
-      expect.element(panel.getByRole("button", { name: "승인하고 실행" })).toBeEnabled(),
+      expect.element(bar.getByRole("button", { name: "승인하고 실행" })).toBeEnabled(),
     );
     served.run = runState;
     yield* sdkCall(() => screen.unmount());
@@ -279,17 +278,27 @@ it.live("a Plan of ten cards waiting for approval lists them in a list of its ow
   }),
 );
 
-it.live("a running Plan lists the cards that need a look first", () =>
+it.live("a running Plan stays one line until unfolded, the cards that need a look first", () =>
   Effect.gen(function* () {
     served.run = { ...runState, workflow: { ...workflowFixture, phase: "running" } };
     served.board = runningBoard;
     const { screen } = yield* openSession;
-    const panel = screen.getByRole("region", { name: "워크플로" });
+    const bar = screen.getByRole("region", { name: "워크플로" });
+    const fold = bar.getByRole("button", { name: /Plan · 실행 중/ });
 
-    yield* sdkCall(() => userEvent.click(panel.getByRole("tab", { name: "카드 3" })));
-    const links = panel.getByRole("list", { name: "카드" }).getByRole("link");
-    yield* sdkCall(() => expect.poll(() => links.elements().length).toBe(3));
-    expect(links.elements().map((link) => link.textContent)).toEqual([
+    yield* sdkCall(() => expect.element(fold).toBeVisible());
+    yield* sdkCall(() => expect.element(bar.getByText("카드 1/3")).toBeVisible());
+    // Folded, the cards are on the page but not shown.
+    yield* sdkCall(() => expect.element(bar.getByText("배포 결정")).not.toBeVisible());
+    yield* sdkCall(() => userEvent.click(fold));
+    const cards = bar.getByRole("region", { name: "카드 1/3 완료" });
+    yield* sdkCall(() => expect.element(cards).toBeVisible());
+    expect(
+      cards
+        .getByRole("link")
+        .elements()
+        .map((link) => link.textContent),
+    ).toEqual([
       expect.stringContaining("배포 결정"),
       expect.stringContaining("테스트 고치기"),
       expect.stringContaining("정책 읽기"),

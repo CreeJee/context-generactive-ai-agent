@@ -1,19 +1,10 @@
 import { isTruthy } from "../../truthy.ts";
 import { useState } from "react";
-import { Array as Arr, Match, Order, Result } from "effect";
+import { Array as Arr, Match, Order } from "effect";
 import { ChevronRightIcon, CircleSlashIcon, KanbanSquareIcon, PlusIcon } from "lucide-react";
 import { createSerializer, parseAsBoolean, parseAsString, useQueryStates } from "nuqs";
 import { Alert, AlertDescription } from "../../components/ui/alert";
 import { Badge } from "../../components/ui/badge";
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../../components/ui/empty";
-import {
-  Item,
-  ItemActions,
-  ItemContent,
-  ItemGroup,
-  ItemMedia,
-  ItemTitle,
-} from "../../components/ui/item";
 import { Skeleton } from "../../components/ui/skeleton";
 import { Button } from "../../components/ui/button";
 import {
@@ -36,9 +27,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "../../components/ui/sheet";
-import { Progress } from "../../components/ui/progress";
 import { Switch } from "../../components/ui/switch";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import {
   BoardEdit,
   type BoardView,
@@ -49,7 +38,8 @@ import {
 } from "../api";
 import { useBoardQuery, useDecisionsQuery, useKanbanQuery } from "../queries/session";
 import { DecisionPrompt } from "./decision-prompt";
-import { metOutcomes, OutcomeChecklist, OutcomeList } from "./outcome-checklist";
+import { metOutcomes, OutcomeChecklist } from "./outcome-checklist";
+import { WorkflowRow, WorkflowRows } from "./workflow-rows";
 import {
   KanbanAction,
   useBoardsEditMutation,
@@ -57,7 +47,7 @@ import {
 } from "../queries/mutations/session";
 import { koreanLocalTime } from "../shared/local-time";
 import { LoopHealthStatus } from "../shared/loop-health";
-import { boardColumns, cardStatusLabels } from "./board/board-moves";
+import { cardStatusLabels } from "./board/board-moves";
 import {
   BoardSurface,
   editErrorText,
@@ -89,17 +79,6 @@ function useBoardLocation() {
   return { location, setLocation, openBoard };
 }
 
-/** Opens the Plan's board wide over the page, at the card it last showed. */
-export function OpenBoardButton() {
-  const { location, openBoard } = useBoardLocation();
-  return (
-    <Button type="button" size="sm" variant="outline" onClick={() => openBoard(location.card)}>
-      <KanbanSquareIcon data-icon="inline-start" />
-      보드 열기
-    </Button>
-  );
-}
-
 /** Where a card stands in the chat's list once the Plan runs: what needs a look first. */
 const attentionRanks: Readonly<Record<CardStatus, number>> = {
   human_decision: 0,
@@ -115,10 +94,88 @@ const byAttention = Order.mapInput(
   ({ card }: BoardView["cards"][number]) => attentionRanks[card.status],
 );
 
+/** The workflow bar's numbers: cards done, outcomes met and decisions waiting for the user. */
+export function BoardTally({
+  projectId,
+  sessionId,
+}: {
+  readonly projectId: string;
+  readonly sessionId: string;
+}) {
+  const view = useBoardQuery(projectId, sessionId).data;
+  const waiting = useDecisionsQuery(projectId, sessionId).data?.length ?? 0;
+  if (!isTruthy(view)) return null;
+  const done = Arr.countBy(view.cards, ({ card }) => card.status === "done");
+  return (
+    <span className="flex shrink-0 items-center gap-1.5 text-muted-foreground tabular-nums">
+      {view.plan !== null && (
+        <span>
+          카드 {done}/{view.cards.length}
+        </span>
+      )}
+      {view.plan !== null && view.outcomes.length > 0 && <span aria-hidden>·</span>}
+      {view.outcomes.length > 0 && (
+        <span>
+          결과 {metOutcomes(view.outcomes)}/{view.outcomes.length}
+        </span>
+      )}
+      {waiting > 0 && <span className="text-warning">판단 대기 {waiting}</span>}
+    </span>
+  );
+}
+
 /**
- * The Plan's kanban board as the chat shows it: the outcomes, the progress and the cards. The board
- * itself opens wide over the page (`?board=1`), and a card opens in a peek panel beside it
- * (`?card=…`, as the inbox links and the card list here do).
+ * Opens the Plan's board wide over the page (`?board=1`), at the card it last showed; a card opens
+ * in a peek panel beside it (`?card=…`, as the inbox links and the card rows do). The board lives
+ * here so it opens whether or not the bar is unfolded.
+ */
+export function OpenBoardButton({
+  projectId,
+  sessionId,
+  holder,
+  disabled,
+}: {
+  readonly projectId: string;
+  readonly sessionId: string;
+  readonly holder: string;
+  readonly disabled: boolean;
+}) {
+  const view = useBoardQuery(projectId, sessionId).data;
+  const decisions = useDecisionsQuery(projectId, sessionId).data ?? [];
+  const kanban = useKanbanQuery(projectId, sessionId);
+  const kanbanAction = useKanbanMutation(projectId, sessionId, holder);
+  const { location, setLocation, openBoard } = useBoardLocation();
+  if (!isTruthy(view) || view.plan === null) return null;
+  const open = location.board === true || location.card !== null;
+  return (
+    <>
+      <Button type="button" size="sm" variant="ghost" onClick={() => openBoard(location.card)}>
+        <KanbanSquareIcon data-icon="inline-start" />
+        보드
+      </Button>
+      {open && (
+        <BoardSheet
+          projectId={projectId}
+          sessionId={sessionId}
+          holder={holder}
+          disabled={disabled}
+          view={view}
+          plan={view.plan}
+          decisions={decisions}
+          loop={kanban.data?.active === true ? kanban.data : null}
+          kanbanAction={kanbanAction}
+          peekCardId={location.card}
+          onPeek={openBoard}
+          onClose={() => void setLocation({ board: null, card: null })}
+        />
+      )}
+    </>
+  );
+}
+
+/**
+ * The Plan's board as the unfolded workflow bar shows it: how the board's loop runs, the
+ * outcomes and the cards, one line each.
  */
 export function WorkflowBoard({
   projectId,
@@ -132,77 +189,29 @@ export function WorkflowBoard({
   readonly disabled: boolean;
 }) {
   const board = useBoardQuery(projectId, sessionId);
-  const decisions = useDecisionsQuery(projectId, sessionId).data ?? [];
   const kanban = useKanbanQuery(projectId, sessionId);
   const kanbanAction = useKanbanMutation(projectId, sessionId, holder);
-  const { location, setLocation, openBoard } = useBoardLocation();
+  const { openBoard } = useBoardLocation();
   const [startError, setStartError] = useState<string | null>(null);
 
   const view = board.data;
-  if (!isTruthy(view)) return <Skeleton aria-label="보드를 불러오는 중" className="h-16 w-full" />;
+  if (!isTruthy(view)) return <Skeleton aria-label="보드를 불러오는 중" className="h-6 w-full" />;
   const plan = view.plan;
   if (plan === null)
     return (
-      <div className="flex min-w-0 flex-col gap-3">
+      <div className="flex min-w-0 flex-col gap-2">
         <OutcomeChecklist outcomes={view.outcomes} />
-        <Empty>
-          <EmptyHeader>
-            <EmptyTitle>아직 카드가 없어요</EmptyTitle>
-            <EmptyDescription>계획자가 Plan을 만들면 카드가 여기에 보여요.</EmptyDescription>
-          </EmptyHeader>
-        </Empty>
+        <p className="px-1.5 text-muted-foreground">
+          아직 카드가 없어요. 계획자가 Plan을 만들면 여기에 보여요.
+        </p>
       </div>
     );
   const loop = kanban.data?.active === true ? kanban.data : null;
-  const total = view.cards.length;
   const done = Arr.countBy(view.cards, ({ card }) => card.status === "done");
-  // The progress line already counts the finished cards; empty columns say nothing.
-  const counts = Arr.filterMap(boardColumns, (status) => {
-    if (status === "done") return Result.failVoid;
-    const count = Arr.countBy(view.cards, ({ card }) => card.status === status);
-    return count > 0 ? Result.succeed({ status, count }) : Result.failVoid;
-  });
+  const switchable = loop === null && plan.status === "executing";
   const reviewing = plan.status === "draft" || plan.status === "ready";
   // Read for approval, the cards keep the Plan's order; once running, what needs a look comes first.
   const cards = reviewing ? view.cards : Arr.sort(view.cards, byAttention);
-  const cardList = (
-    <div className="max-h-60 overflow-y-auto">
-      <ItemGroup aria-label="카드">
-        {cards.map(({ card }) => (
-          // The list holds items; the item itself stays a link.
-          <div key={card.id} role="listitem">
-            <Item
-              size="xs"
-              render={
-                <a
-                  href={boardLink({ board: true, card: card.id })}
-                  onClick={(event) => {
-                    // A modified click opens the card in a new tab as the link says.
-                    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-                    event.preventDefault();
-                    openBoard(card.id);
-                  }}
-                />
-              }
-            >
-              <ItemMedia variant="icon">
-                <StatusIcon status={card.status} />
-              </ItemMedia>
-              <ItemContent>
-                <ItemTitle title={card.title}>{card.title}</ItemTitle>
-              </ItemContent>
-              <ItemActions>
-                <Badge variant="outline">{cardStatusLabels[card.status]}</Badge>
-              </ItemActions>
-            </Item>
-          </div>
-        ))}
-      </ItemGroup>
-    </div>
-  );
-  const waiting = decisions.length;
-  const open = location.board === true || location.card !== null;
-  const switchable = loop === null && plan.status === "executing";
   const start = () => {
     setStartError(null);
     kanbanAction.mutate(KanbanAction.Start(), {
@@ -217,14 +226,17 @@ export function WorkflowBoard({
   };
 
   return (
-    <div className="flex min-w-0 flex-col gap-3">
-      {(loop !== null || switchable) && (
-        <div className="flex flex-wrap items-center gap-2">
+    <div className="flex min-w-0 flex-col gap-2">
+      {(loop !== null || switchable || view.pendingChanges.length > 0) && (
+        <div className="flex flex-wrap items-center gap-1.5 px-1.5">
           {loop !== null && <Badge variant="secondary">칸반 실행 중</Badge>}
           {loop !== null && loop.plannerStalled && (
             <Badge variant="outline" title={plannerStalledHint}>
               자동 계획 멈춤
             </Badge>
+          )}
+          {view.pendingChanges.length > 0 && (
+            <Badge variant="outline">변경 요청 대기 {view.pendingChanges.length}</Badge>
           )}
           {loop !== null && loop.loop._tag !== "Healthy" && (
             <LoopHealthStatus
@@ -237,7 +249,7 @@ export function WorkflowBoard({
           {switchable && (
             <Button
               type="button"
-              size="sm"
+              size="xs"
               variant="outline"
               title={kanbanSwitchHint}
               disabled={disabled || kanbanAction.isPending}
@@ -253,64 +265,30 @@ export function WorkflowBoard({
           <AlertDescription>{startError}</AlertDescription>
         </Alert>
       )}
-      <div className="flex flex-col gap-1.5">
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          <span className="font-medium">
-            카드 {done}/{total} 완료
-          </span>
-          {waiting > 0 && <Badge variant="outline">판단 대기 {waiting}</Badge>}
-          {view.pendingChanges.length > 0 && (
-            <Badge variant="outline">변경 요청 대기 {view.pendingChanges.length}</Badge>
-          )}
-        </div>
-        {/* An empty board has nothing to finish; a zero max would divide by zero. */}
-        <Progress aria-label="완료한 카드" value={done} max={Math.max(total, 1)} />
-        {counts.length > 0 && (
-          <ul className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-            {counts.map(({ status, count }) => (
-              <li key={status} className="flex items-center gap-1">
-                <StatusIcon status={status} />
-                {cardStatusLabels[status]}
-                <span className="font-medium text-foreground">{count}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-      {view.outcomes.length === 0 ? (
-        cardList
-      ) : (
-        // One list at a time keeps a long Plan or Goal from pushing the chat away. A Plan waiting
-        // for approval is read card by card; a running one by the outcomes it is meant to meet.
-        <Tabs defaultValue={reviewing ? "cards" : "outcomes"}>
-          <TabsList variant="line">
-            <TabsTrigger value="cards">카드 {total}</TabsTrigger>
-            <TabsTrigger value="outcomes">
-              결과 {metOutcomes(view.outcomes)}/{view.outcomes.length} 충족
-            </TabsTrigger>
-          </TabsList>
-          <TabsContent value="cards">{cardList}</TabsContent>
-          <TabsContent value="outcomes">
-            <OutcomeList outcomes={view.outcomes} />
-          </TabsContent>
-        </Tabs>
-      )}
-      {open && (
-        <BoardSheet
-          projectId={projectId}
-          sessionId={sessionId}
-          holder={holder}
-          disabled={disabled}
-          view={view}
-          plan={plan}
-          decisions={decisions}
-          loop={loop}
-          kanbanAction={kanbanAction}
-          peekCardId={location.card}
-          onPeek={openBoard}
-          onClose={() => void setLocation({ board: null, card: null })}
-        />
-      )}
+      <OutcomeChecklist outcomes={view.outcomes} />
+      <WorkflowRows label={`카드 ${done}/${view.cards.length} 완료`}>
+        {cards.map(({ card }) => (
+          <WorkflowRow
+            key={card.id}
+            title={card.title}
+            icon={<StatusIcon status={card.status} />}
+            trailing={cardStatusLabels[card.status]}
+            render={
+              <a
+                href={boardLink({ board: true, card: card.id })}
+                onClick={(event) => {
+                  // A modified click opens the card in a new tab as the link says.
+                  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                  event.preventDefault();
+                  openBoard(card.id);
+                }}
+              />
+            }
+          >
+            {card.title}
+          </WorkflowRow>
+        ))}
+      </WorkflowRows>
     </div>
   );
 }

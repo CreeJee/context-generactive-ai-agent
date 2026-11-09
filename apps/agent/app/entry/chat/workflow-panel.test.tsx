@@ -45,8 +45,9 @@ describe("server-authoritative workflow UI", () => {
       <WorkflowArtifactPanel {...props} state={{ ...workflowFixture, phase: "completed" }} />,
     );
     expect(done).toContain("Plan · 완료");
-    // A completed Goal leaves nothing to approve, revise or pause.
-    expect(done).not.toContain("<button");
+    // A completed Goal leaves nothing to approve, revise or pause; only the fold stays a button.
+    for (const label of ["승인하고 실행", "Plan 수정", "일시 중지", "계속", "중단"])
+      expect(done).not.toContain(label);
   });
   test("leaves the Plan to a running board's loop instead of offering to continue it", () => {
     const actions = {

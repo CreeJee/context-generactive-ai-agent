@@ -83,7 +83,7 @@ import {
   useResumeTraceTaskMutation,
 } from "../queries/mutations/session";
 import { useKanbanQuery } from "../queries/session";
-import { OpenBoardButton, WorkflowBoard } from "./board-panel";
+import { BoardTally, OpenBoardButton, WorkflowBoard } from "./board-panel";
 import {
   WorkflowArtifactPanel,
   modeLabels,
@@ -936,31 +936,6 @@ function ChatPanel({
         {unplaced.map((taken) => (
           <DeliveredMessageView key={taken.id} message={taken} />
         ))}
-        <WorkflowArtifactPanel
-          state={run.workflow}
-          display={run.display}
-          execution={run.execution}
-          providerRetry={run.providerRetry}
-          actions={run.actions}
-          busy={generating}
-          disabled={mutationBlocked}
-          controlling={run.controlling}
-          onPause={() => void controlGoal("pause")}
-          onResume={() => void controlGoal("resume")}
-          onStop={() => void controlGoal("stop")}
-          onRevise={revisePlan}
-          onExecute={() => void executePlan()}
-          kanbanRunning={kanbanRunning}
-          boardAction={<OpenBoardButton />}
-          boardSlot={
-            <WorkflowBoard
-              projectId={projectId}
-              sessionId={sessionId}
-              holder={holder}
-              disabled={readOnly || backendRestartRequired}
-            />
-          }
-        />
         <ChatApprovals
           key={approvalBatchKey}
           sessionId={sessionId}
@@ -1023,6 +998,39 @@ function ChatPanel({
 
       <div className="bg-background px-6 pt-2 pb-4">
         <div className="mx-auto max-w-3xl">
+          <WorkflowArtifactPanel
+            state={run.workflow}
+            display={run.display}
+            execution={run.execution}
+            providerRetry={run.providerRetry}
+            actions={run.actions}
+            busy={generating}
+            disabled={mutationBlocked}
+            controlling={run.controlling}
+            onPause={() => void controlGoal("pause")}
+            onResume={() => void controlGoal("resume")}
+            onStop={() => void controlGoal("stop")}
+            onRevise={revisePlan}
+            onExecute={() => void executePlan()}
+            kanbanRunning={kanbanRunning}
+            boardTally={<BoardTally projectId={projectId} sessionId={sessionId} />}
+            boardAction={
+              <OpenBoardButton
+                projectId={projectId}
+                sessionId={sessionId}
+                holder={holder}
+                disabled={readOnly || backendRestartRequired}
+              />
+            }
+            boardSlot={
+              <WorkflowBoard
+                projectId={projectId}
+                sessionId={sessionId}
+                holder={holder}
+                disabled={readOnly || backendRestartRequired}
+              />
+            }
+          />
           {shownNotice && (
             <p
               className={cn(
