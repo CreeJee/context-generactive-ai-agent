@@ -1,3 +1,4 @@
+import { errorCodesOf } from "../runtime/failure-tag.ts";
 import { nativePromise } from "../runtime/native-effect.ts";
 import { Result } from "effect";
 import { isTruthy } from "../truthy.ts";
@@ -608,17 +609,18 @@ const tokenBody = (protocol: ProviderProtocol, values: TokenGrant): EncodedToken
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 function sseEvents(provider: OAuthProvider, response: Response) {
   // The provider accepted the request once headers arrived; any later loss is an interrupted response.
-  const interrupted = () =>
-    ProviderStreamFailed.make({ provider, reason: ResponseInterrupted.make({}) });
+  const interrupted = (codes: ReadonlyArray<string>) =>
+    ProviderStreamFailed.make({ provider, reason: ResponseInterrupted.make({ codes }) });
   const body = response.body;
-  if (body === null) return Stream.fail(interrupted());
+  if (body === null) return Stream.fail(interrupted([]));
   return Stream.fromReadableStream({
     evaluate: () => body.pipeThrough(new TextDecoderStream()),
-    onError: interrupted,
+    // undici fails a dropped body with `TypeError: terminated`; the socket's code is in its cause.
+    onError: (error) => interrupted(errorCodesOf(error)),
   }).pipe(
     Stream.pipeThroughChannel(Sse.decode()),
     // Neither provider sends `retry`; one, or an oversized event, ends the response like a lost one.
-    Stream.catchTag(["Retry", "SseError"], () => Stream.fail(interrupted())),
+    Stream.catchTag(["Retry", "SseError"], () => Stream.fail(interrupted([]))),
     Stream.takeWhile((event) => event.data !== "[DONE]"),
     Stream.map((event) => decodeProviderEvent(provider, event.data)),
     Stream.filter(Predicate.isNotNull),

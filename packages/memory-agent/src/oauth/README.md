@@ -13,7 +13,7 @@ memory-agent의 프로바이더/런 계층은 `OAuthProfiles`·`OAuthAccountLogi
 - `OAuthProvider` — `SubscriptionAccountProvider`(openai|anthropic)의 별칭 타입
 - `createPkce` / `createOAuthState` — `SecureRandom.SecureRandom`과 `Digest.Digest`(PKCE challenge)로 PKCE verifier/challenge(SHA-256, base64url)와 OAuth state를 만드는 Effect
 - `NormalizedStreamEvent` — 두 프로바이더의 SSE 이벤트를 디코드해 담는 프로바이더 중립 TaggedEnum(text, tool-call*, reasoning*, usage, error). `Stream*Event` 타입 별칭들이 함께 있다
-- `ProviderStreamFailed` / `ProviderStreamFailedReason` (`RequestNotSent`, `ProviderStatusRejected`, `ResponseInterrupted`, `RequestOutcomeUnknown`) — 모델 스트림 실패와 그 이유의 TaggedUnion
+- `ProviderStreamFailed` / `ProviderStreamFailedReason` (`RequestNotSent`, `ProviderStatusRejected`, `ResponseInterrupted{codes}`, `RequestOutcomeUnknown`) — 모델 스트림 실패와 그 이유의 TaggedUnion. `codes`는 끊긴 본문 읽기의 transport 코드(`UND_ERR_SOCKET` 등)
 - `ProviderFeatureRejectedError`, `ReasoningSummaryProtocolFailed`(+`ReasoningSummaryProtocolFailedReason`) — prompt-cache 기능 거부, reasoning summary 프로토콜 위반 오류
 - `ToolArguments` — `Schema.Record(String, JsonValue)` 도구 인자 스키마. `JsonValue`도 다시 내보낸다
 - `createSubscriptionOAuthClient` / `SubscriptionOAuthClient` / `SubscriptionOAuthClientOptions` — 프로바이더 하나의 로그인·상태·모델 카탈로그·연결 해제를 맡는 클라이언트. 구현은 `validation-harness.ts`에 있고 `subscription-oauth.ts`가 다시 내보낸다

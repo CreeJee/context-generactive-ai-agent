@@ -1050,7 +1050,29 @@ describe("provider wire contracts", () => {
               ),
             ),
           ),
-        ).toEqual(ResponseInterrupted.make({}));
+        ).toEqual(ResponseInterrupted.make({ codes: [] }));
+        // undici ends a body whose socket closed with `TypeError: terminated`, the socket error as
+        // its cause.
+        expect(
+          yield* failureOf(() =>
+            Promise.resolve(
+              new Response(
+                new ReadableStream({
+                  start(controller) {
+                    controller.enqueue(new TextEncoder().encode('data: {"type":"response.'));
+                    controller.error(
+                      new TypeError("terminated", {
+                        cause: Object.assign(new Error("other side closed"), {
+                          code: "UND_ERR_SOCKET",
+                        }),
+                      }),
+                    );
+                  },
+                }),
+              ),
+            ),
+          ),
+        ).toEqual(ResponseInterrupted.make({ codes: ["UND_ERR_SOCKET"] }));
       }),
     ).pipe(withOAuthTestPlatform),
   );

@@ -22,6 +22,7 @@ import {
   ReasoningSummaryProtocolFailed,
   ReasoningSummaryProtocolFailedReason,
   RequestNotSent,
+  ResponseInterrupted,
 } from "../../src/oauth/protocol.ts";
 import {
   OAuthHarnessError,
@@ -353,7 +354,28 @@ describe("subscription language model", () => {
             OAuthHarnessError.fromCode("transport_unavailable"),
           ),
         ),
-      ).toEqual(failed(SubscriptionStreamFailedReason.cases.ResponseInterrupted.make({})));
+      ).toEqual(
+        failed(SubscriptionStreamFailedReason.cases.ResponseInterrupted.make({ codes: [] })),
+      );
+      const dropped = ProviderStreamFailed.make({
+        provider: "anthropic",
+        reason: ResponseInterrupted.make({ codes: ["UND_ERR_SOCKET"] }),
+      });
+      const droppedFailure = yield* failureOf(
+        "anthropic",
+        clientOf([NormalizedStreamEvent.text({ text: "partial" })], dropped),
+      );
+      expect(droppedFailure).toEqual(
+        failed(
+          SubscriptionStreamFailedReason.cases.ResponseInterrupted.make({
+            codes: ["UND_ERR_SOCKET"],
+          }),
+          "anthropic",
+        ),
+      );
+      expect(Option.map(droppedFailure, (failure) => failure.message)).toEqual(
+        Option.some("Anthropic API connection closed before the answer finished: UND_ERR_SOCKET"),
+      );
       expect(
         yield* failureOf(
           "openai",

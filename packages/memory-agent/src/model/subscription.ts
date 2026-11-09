@@ -23,6 +23,7 @@ import {
   ReasoningSummaryProtocolFailed,
   ReasoningSummaryProtocolFailedReason,
   RequestNotSent,
+  ResponseInterrupted,
   ToolArguments,
   type OAuthProvider,
 } from "../oauth/protocol.ts";
@@ -71,7 +72,7 @@ export const SubscriptionStreamFailedReason = Schema.TaggedUnion({
     error: ProviderStatusRejected.fields.error,
     requestId: ProviderStatusRejected.fields.requestId,
   },
-  ResponseInterrupted: {},
+  ResponseInterrupted: { codes: ResponseInterrupted.fields.codes },
   RequestOutcomeUnknown: {},
   InvalidReasoning: {},
   InvalidToolCall: {},
@@ -107,6 +108,10 @@ export class SubscriptionStreamFailed extends Schema.TaggedError<
             requestId === null ? "" : ` (request ${requestId})`
           }`,
         ProviderRejected: ({ error }) => `${api}${providerWords(error)}`,
+        ResponseInterrupted: ({ codes }) =>
+          `${providerNames[this.provider]} API connection closed before the answer finished${
+            codes.length > 0 ? `: ${codes.join(" <- ")}` : ""
+          }`,
       },
       () => "Subscription provider stream failed.",
     );
@@ -300,12 +305,17 @@ const streamFailure = (
 ): SubscriptionFailure =>
   Match.value(cause).pipe(
     Match.tag("ProviderFeatureRejectedError", (failure): SubscriptionFailure => failure),
+    // A dropped body read keeps the transport codes it failed with.
+    Match.when(
+      { _tag: "ProviderStreamFailed", reason: { _tag: "ResponseInterrupted" } },
+      (failure) => SubscriptionStreamFailed.make({ provider, reason: failure.reason }),
+    ),
     Match.when(
       () => received,
       () =>
         SubscriptionStreamFailed.make({
           provider,
-          reason: SubscriptionStreamFailedReason.cases.ResponseInterrupted.make({}),
+          reason: SubscriptionStreamFailedReason.cases.ResponseInterrupted.make({ codes: [] }),
         }),
     ),
     Match.tag("ProviderStreamFailed", (failure) =>

@@ -831,7 +831,7 @@
 - `SubscriptionStreamFailed.reason`의 `TransportUnavailable`을 다음 넷으로 나눈다. 다른 reason(`ProviderRejected`, `InvalidToolCall` 등)과 로그의 `code: failure._tag`는 그대로다. 이 reason은 영속화하지 않는다.
   - `RequestNotSent { stage: "dns" | "connect" | "tls" }`: 요청 본문이 provider에 도달하지 않았음이 확정된 실패. fetch가 거절한 오류의 `cause.code`가 `ENOTFOUND`·`EAI_AGAIN`(dns), `ECONNREFUSED`·`ENETUNREACH`·`EHOSTUNREACH`·`UND_ERR_CONNECT_TIMEOUT`(connect), 인증서 검증 오류(tls)일 때만 해당한다.
   - `ProviderStatusRejected { statusClass: "client_error" | "server_error" }`: provider가 HTTP 오류 상태로 거절. 상태 범주만 남기고 응답 본문·메시지는 경계 밖으로 내보내지 않는다. Anthropic prompt-cache 거절은 기존대로 `ProviderFeatureRejectedError`로 baseline 요청을 한 번 다시 보낸다.
-  - `ResponseInterrupted`: 응답 헤더를 받은 뒤 본문 스트림이 끊기거나, 이벤트를 하나라도 받은 뒤 실패.
+  - `ResponseInterrupted`: 응답 헤더를 받은 뒤 본문 스트림이 끊기거나, 이벤트를 하나라도 받은 뒤 실패. (2026-11-09) 끊긴 본문 읽기의 transport 코드를 `codes`로 담는다("구독 응답이 도중에 끊기면 transport 코드를 남긴다 (2026-11-09)").
   - `RequestOutcomeUnknown`: 그 외 모든 실패. `ETIMEDOUT`·`ECONNRESET`·`UND_ERR_SOCKET`·헤더 timeout·redirect 거절·코드 없는 오류는 요청이 전송됐을 수 있으므로 여기에 둔다. 요청이 전송된 것으로 취급한다.
 - 분류는 입출력 경계에서 구조화된 값으로만 한다. OAuth 클라이언트가 fetch 단계(오류 code)·HTTP status·본문 스트림 단계를 `oauth/protocol.ts`의 `ProviderStreamFailed`로 표현하고, 어댑터는 첫 이벤트 수신 여부만 더해 `SubscriptionStreamFailed`로 옮긴다. `Error.message` 키워드로 분류하지 않는다.
 - 자격 증명 읽기·토큰 갱신 실패처럼 OAuth 클라이언트가 `ProviderStreamFailed`로 표현하지 않는 오류는 `RequestOutcomeUnknown`으로 보수적으로 둔다.
@@ -4465,3 +4465,11 @@
   - 세대 게이트는 `NativePublication.layer`가 context의 소유자 epoch으로 만든다. 게이트는 소유자 하나에 하나씩, 그 소유자와 함께 생기고 먼저 닫힌다.
   - VectorIndex Layer는 구현 쪽의 `nativeVectorIndexLayer`다. `VectorIndex`는 `VectorIndexApi` 태그만 남아 두 모듈의 순환 import가 없어졌다.
 - 테스트: `embedding-concurrency.test.ts`는 모듈 export 대신 `NativeOwner.layer`를 spy해 소유자의 save를 멈춘다.
+
+## 구독 응답이 도중에 끊기면 transport 코드를 남긴다 (2026-11-09)
+
+- 계기: Anthropic 구독 run이 "Subscription provider stream failed."로 끝났다. 로그에는 `SubscriptionStreamFailed:ResponseInterrupted`만 남았다. 응답 헤더와 이벤트를 받은 뒤 본문 읽기가 실패했다는 것까지만 알 수 있었다. `sseEvents`가 본문 읽기 오류를 버리고 사유 없는 `ResponseInterrupted`를 만들었기 때문이다. 연결이 왜 끊겼는지는 알 수 없었고, 사용자 문구도 실패했다는 말뿐이었다.
+- 결정: `ResponseInterrupted`에 `codes`를 둔다. 끊긴 본문 읽기 오류의 cause 사슬에서 `errorCodesOf`로 모은 transport 코드다. undici는 소켓이 닫힌 본문을 `TypeError: terminated`로 끝내고, cause에 `SocketError`(`UND_ERR_SOCKET`)를 단다. 응답이 없거나 `retry`·너무 큰 사건으로 끝나면 `codes`는 빈 배열이다.
+  - 어댑터는 이벤트를 받은 뒤의 실패도 `ResponseInterrupted`로 옮기되, client가 준 `codes`를 그대로 둔다.
+  - `SubscriptionStreamFailed.message`는 compatible의 `Disconnected`와 같은 문장이다: `Anthropic API connection closed before the answer finished: UND_ERR_SOCKET`. 사용자에게 보이는 실패 문구와 `subscription model request failed` 로그의 `detail`이 이 문장이다.
+- 재시도는 이번에도 더하지 않는다. 끊긴 응답의 자동 재시도는 compatible과 함께 정한다("답 도중 끊긴 호환 연결은 `Disconnected`로 실패한다 (2026-11-03)").

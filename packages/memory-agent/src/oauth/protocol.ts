@@ -48,8 +48,11 @@ export const ProviderStreamFailedReason = Schema.TaggedUnion({
     error: Schema.NullOr(ProviderErrorDetail),
     requestId: Schema.NullOr(Schema.String),
   },
-  /** The response or its event stream had started when the connection broke. */
-  ResponseInterrupted: {},
+  /**
+   * The response or its event stream had started when the connection broke. `codes` are the
+   * transport codes down the dropped body read's cause chain, such as `UND_ERR_SOCKET`.
+   */
+  ResponseInterrupted: { codes: Schema.Array(Schema.String) },
   /** The request may have reached the provider; treated as sent. */
   RequestOutcomeUnknown: {},
 });
