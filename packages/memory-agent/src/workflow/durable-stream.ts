@@ -205,20 +205,40 @@ export const sqliteRunLog = Effect.fn("sqliteRunLog")(function* (input: {
       AgUiEvent.isAnyOf(["RUN_STARTED", "RUN_FINISHED"])(event) ? named(event) : Effect.void,
       Effect.mapError(encodeEvent(event), stored),
     );
+  /**
+   * Writes the entry in one statement when the binding holds and the log is open; whether it wrote.
+   * A model's answer appends an event for every few tokens, tens a second.
+   */
+  const writeIfOpen = (json: string) =>
+    Effect.map(
+      sql`INSERT INTO workflow_run_log_entries (run_id, event_json)
+        SELECT ${runId}, ${json}
+        WHERE EXISTS (SELECT 1 FROM workflow_run_bindings
+            WHERE run_id = ${runId} AND session_id = ${sessionId})
+          AND NOT EXISTS (SELECT 1 FROM workflow_run_log_closures WHERE run_id = ${runId})
+        RETURNING cursor`,
+      (rows) => rows.length > 0,
+    );
+  /** Checks the binding, the closure and the event in turn, and writes the entry if all hold. */
+  const appendChecked = (event: AgUiEvent) =>
+    Effect.gen(function* () {
+      yield* check;
+      if (yield* closed) return yield* rejected("closed");
+      const json = yield* payload(event);
+      yield* sql`INSERT INTO workflow_run_log_entries ${sql.insert({ run_id: runId, event_json: json })}`;
+    }).pipe(sql.withTransaction);
   yield* check;
   yield* Option.match(Option.fromNullishOr(input.resumeOffset), {
     onNone: () => Effect.void,
     onSome: parse,
   });
   const log: RunLog = {
+    // An entry that was not written goes the checked way, which writes it after all or refuses it
+    // with the reason the log has always given first: the binding, then the closure, then the event.
     append: (event) =>
-      Effect.gen(function* () {
-        yield* check;
-        if (yield* closed) return yield* rejected("closed");
-        const json = yield* payload(event);
-        yield* sql`INSERT INTO workflow_run_log_entries ${sql.insert({ run_id: runId, event_json: json })}`;
-      }).pipe(
-        sql.withTransaction,
+      Effect.option(payload(event)).pipe(
+        Effect.flatMap(Option.match({ onNone: () => Effect.succeed(false), onSome: writeIfOpen })),
+        Effect.flatMap((written) => Effect.when(appendChecked(event), Effect.succeed(!written))),
         Effect.catchTag("SqlError", (cause) => Effect.fail(stored(cause))),
         Effect.andThen(signals.written(runId)),
       ),

@@ -4492,3 +4492,11 @@
   - 쿼리는 그대로다. 통계가 없어도 플래너가 이 인덱스를 고른다.
   - `topicsOf`(최근 topic 50개)도 이 인덱스로 읽고 seq로 정렬한다. 5.8ms가 3.5ms가 됐다.
 - 확인: 라이브 사본의 22.5만 노드 프로젝트에서 라벨 조회가 370–388ms에서 0.003–0.009ms가 됐다. 인덱스를 만드는 데 1.6초 걸렸다.
+
+## run log 이벤트를 문장 하나로 쓴다 (2026-11-09)
+
+- 계기: 채팅 한 번의 dev span에 `RunLog.append` 트랜잭션이 19,615개, 초당 22개쯤 있었다. 모델 답의 AG-UI 이벤트마다 `BEGIN IMMEDIATE`, binding 조회, closure 조회, `INSERT`, `COMMIT`의 문장 5개였다. 연결이 하나라 그동안 다른 statement는 lease를 기다렸다.
+- 결정: `sqliteRunLog`의 append는 `INSERT … SELECT … WHERE EXISTS(binding) AND NOT EXISTS(closure) RETURNING cursor` 한 문장으로 쓴다. 문장 하나는 그 자체로 원자적이라 트랜잭션이 필요 없다.
+  - 쓰이지 않았으면(binding이 다르거나 log가 닫혔으면) 전의 확인 트랜잭션으로 다시 간다. 거부 사유의 순서는 전과 같다: binding, closure, 이벤트. 이벤트 인코딩이 실패하면 처음부터 확인 경로로 간다.
+  - 쓴 뒤의 신호(`signals.written`)는 전처럼 커밋 뒤에 보낸다.
+- 확인: 앱의 `SqlClient`로 같은 이벤트를 3,000번 쓰면 append 하나가 164µs에서 30µs가 됐다(따뜻한 두 번째 측정). SQLite만 직접 부르면 97.6µs와 91.5µs라, 줄어든 것은 대부분 문장 수만큼의 lease·span·왕복이다.
