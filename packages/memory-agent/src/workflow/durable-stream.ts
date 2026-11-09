@@ -62,6 +62,8 @@ const stored = (cause: SqlError.SqlError | Schema.SchemaError | Cause.NoSuchElem
 const Entry = Schema.Struct({ cursor: Schema.Finite, event_json: Schema.String });
 const Closure = Schema.Struct({ closed_at: Schema.Finite });
 const encodeEvent = Schema.encodeEffect(Schema.fromJsonString(AgUiEvent));
+/** Entries' JSON as one JSON array, which `json_each` reads back in order. */
+const encodeTexts = Schema.encodeEffect(Schema.fromJsonString(Schema.Array(Schema.String)));
 const decodeEvent = Schema.decodeResult(Schema.fromJsonString(AgUiEvent));
 
 /** Whether a log that closed at `closedAt` is past the time a late page may still read it. */
@@ -219,6 +221,23 @@ export const sqliteRunLog = Effect.fn("sqliteRunLog")(function* (input: {
         RETURNING cursor`,
       (rows) => rows.length > 0,
     );
+  /**
+   * Writes the entries in their order in one statement when the binding holds and the log is open;
+   * whether it wrote them. It writes all of them or none.
+   */
+  const writeAllIfOpen = (texts: ReadonlyArray<string>) =>
+    Effect.flatMap(Effect.mapError(encodeTexts(texts), stored), (array) =>
+      Effect.map(
+        sql`INSERT INTO workflow_run_log_entries (run_id, event_json)
+          SELECT ${runId}, value FROM json_each(${array})
+          WHERE EXISTS (SELECT 1 FROM workflow_run_bindings
+              WHERE run_id = ${runId} AND session_id = ${sessionId})
+            AND NOT EXISTS (SELECT 1 FROM workflow_run_log_closures WHERE run_id = ${runId})
+          ORDER BY key
+          RETURNING cursor`,
+        (rows) => rows.length === texts.length,
+      ),
+    );
   /** Checks the binding, the closure and the event in turn, and writes the entry if all hold. */
   const appendChecked = (event: AgUiEvent) =>
     Effect.gen(function* () {
@@ -232,15 +251,28 @@ export const sqliteRunLog = Effect.fn("sqliteRunLog")(function* (input: {
     onNone: () => Effect.void,
     onSome: parse,
   });
+  // An entry that was not written goes the checked way, which writes it after all or refuses it
+  // with the reason the log has always given first: the binding, then the closure, then the event.
+  const append = (event: AgUiEvent) =>
+    Effect.option(payload(event)).pipe(
+      Effect.flatMap(Option.match({ onNone: () => Effect.succeed(false), onSome: writeIfOpen })),
+      Effect.flatMap((written) => Effect.when(appendChecked(event), Effect.succeed(!written))),
+      Effect.catchTag("SqlError", (cause) => Effect.fail(stored(cause))),
+      Effect.andThen(signals.written(runId)),
+    );
   const log: RunLog = {
-    // An entry that was not written goes the checked way, which writes it after all or refuses it
-    // with the reason the log has always given first: the binding, then the closure, then the event.
-    append: (event) =>
-      Effect.option(payload(event)).pipe(
-        Effect.flatMap(Option.match({ onNone: () => Effect.succeed(false), onSome: writeIfOpen })),
-        Effect.flatMap((written) => Effect.when(appendChecked(event), Effect.succeed(!written))),
+    append,
+    // Events that were not all written go one by one, so each is written or refused as `append`
+    // would: those before a refused one stay written.
+    appendAll: (events) =>
+      Effect.option(Effect.forEach(events, payload)).pipe(
+        Effect.flatMap(
+          Option.match({ onNone: () => Effect.succeed(false), onSome: writeAllIfOpen }),
+        ),
         Effect.catchTag("SqlError", (cause) => Effect.fail(stored(cause))),
-        Effect.andThen(signals.written(runId)),
+        Effect.flatMap((written) =>
+          written ? signals.written(runId) : Effect.forEach(events, append, { discard: true }),
+        ),
       ),
     // A close also drops the entries of the logs past their time; this one's go in a later one.
     close: Effect.gen(function* () {

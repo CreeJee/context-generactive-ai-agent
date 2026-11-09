@@ -883,14 +883,15 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   ) =>
     Effect.gen(function* () {
       const ended = yield* Ref.make(false);
+      const endsRun = (event: AgUiEvent) =>
+        event.type === "RUN_FINISHED" || event.type === "RUN_ERROR";
       const append = (event: AgUiEvent) =>
+        log.append(event).pipe(Effect.andThen(Ref.set(ended, endsRun(event))));
+      // The events that came while the last write ran go in one write, without waiting for more.
+      const appendAll = (events: EffectArray.NonEmptyReadonlyArray<AgUiEvent>) =>
         log
-          .append(event)
-          .pipe(
-            Effect.andThen(
-              Ref.set(ended, event.type === "RUN_FINISHED" || event.type === "RUN_ERROR"),
-            ),
-          );
+          .appendAll(events)
+          .pipe(Effect.andThen(Ref.set(ended, endsRun(EffectArray.lastNonEmpty(events)))));
       const endedBy = (cut: boolean) =>
         Effect.flatMap(Clock.currentTimeMillis, (timestamp) =>
           append({
@@ -907,7 +908,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       yield* Effect.flatMap(Clock.currentTimeMillis, (timestamp) =>
         log.append({ type: "CUSTOM", name: runAcceptedEvent, value: {}, timestamp }),
       ).pipe(
-        Effect.andThen(Stream.runForEach(events, append)),
+        Effect.andThen(Stream.runForEachArray(events, appendAll)),
         Effect.onExit((exit) =>
           Effect.gen(function* () {
             if (Exit.isFailure(exit) && !(yield* Ref.get(ended))) {

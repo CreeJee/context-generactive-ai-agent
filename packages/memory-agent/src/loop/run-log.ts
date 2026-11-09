@@ -45,6 +45,13 @@ export class RunLogFailed extends Schema.TaggedError<
 export interface RunLog {
   /** Keeps the event before any reader gets it. A closed log refuses it. */
   readonly append: (event: AgUiEvent) => Effect.Effect<void, RunLogFailed>;
+  /**
+   * Keeps the events in order, as `append` one after another would, in one write when the log can:
+   * a run hands over the events that piled up while the last write ran.
+   */
+  readonly appendAll: (
+    events: Arr.NonEmptyReadonlyArray<AgUiEvent>,
+  ) => Effect.Effect<void, RunLogFailed>;
   /** The events after `offset` (`-1`: all of them), then those to come until the log closes. */
   readonly read: (offset: string) => Stream.Stream<RunLogEntry, RunLogFailed>;
   /** Ends the log; its readers end once they have read it all. A second close does nothing. */
@@ -142,16 +149,19 @@ export const memoryRunLogs = Effect.gen(function* () {
       ),
     );
 
+  const appended = (runId: string, events: Chunk.Chunk<AgUiEvent>) =>
+    Effect.flatMap(logOf(runId), (log) =>
+      SubscriptionRef.updateEffect(log, (state) =>
+        Option.isSome(state.closedAt)
+          ? Effect.fail(RunLogFailed.make({ reason: "closed" }))
+          : Effect.succeed({ ...state, events: Chunk.appendAll(state.events, events) }),
+      ),
+    );
+
   /** The run's log. Appending or closing makes it; reading a log this process never made fails. */
   const of = (runId: string): RunLog => ({
-    append: (event) =>
-      Effect.flatMap(logOf(runId), (log) =>
-        SubscriptionRef.updateEffect(log, (state) =>
-          Option.isSome(state.closedAt)
-            ? Effect.fail(RunLogFailed.make({ reason: "closed" }))
-            : Effect.succeed({ ...state, events: Chunk.append(state.events, event) }),
-        ),
-      ),
+    append: (event) => appended(runId, Chunk.of(event)),
+    appendAll: (events) => appended(runId, Chunk.fromIterable(events)),
     read: (offset) =>
       Stream.unwrap(
         Effect.gen(function* () {

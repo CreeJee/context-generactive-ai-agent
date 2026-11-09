@@ -65,7 +65,7 @@ const pageReads = () => {
   });
   const count = () =>
     Arr.countBy(spans, (span) => String(span.attributes.get("db.query.text")).includes("cursor >"));
-  return { tracer, count };
+  return { tracer, count, spans: () => spans };
 };
 
 describe("central SQLite run log", () => {
@@ -143,6 +143,41 @@ describe("central SQLite run log", () => {
           // The clock moved a frame, not the fallback second, and both writes came in one page.
           expect(tail.pollUnsafe()?._tag).toBe("Success");
           expect(reads.count()).toBe(2);
+        }),
+      ),
+  );
+
+  it.effect(
+    "writes piled-up events in order in one statement, and refuses them as append does",
+    () =>
+      withOwnerLogs(
+        Effect.gen(function* () {
+          const db = yield* scopedOwner;
+          const log = yield* runLog(db);
+          const reads = pageReads();
+          const text = (delta: string): AgUiEvent => ({
+            type: "TEXT_MESSAGE_CONTENT",
+            messageId: "message",
+            delta,
+          });
+          yield* log
+            .appendAll([lifecycle("RUN_STARTED"), text("a"), text("b")])
+            .pipe(Effect.withTracer(reads.tracer));
+          const inserts = Arr.countBy(reads.spans(), (span) =>
+            String(span.attributes.get("db.query.text")).includes("INSERT"),
+          );
+          expect(inserts).toBe(1);
+          yield* log.close;
+          const written = yield* Stream.runCollect(log.read("-1"));
+          expect(
+            written.map(({ event }) =>
+              event.type === "TEXT_MESSAGE_CONTENT" ? event.delta : event.type,
+            ),
+          ).toEqual(["RUN_STARTED", "a", "b"]);
+          // A closed log refuses them with the reason `append` gives.
+          expect(yield* Effect.flip(log.appendAll([text("c")]))).toMatchObject({
+            reason: "closed",
+          });
         }),
       ),
   );

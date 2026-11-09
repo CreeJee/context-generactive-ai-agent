@@ -4582,3 +4582,11 @@
 - 결정: 호출이 답을 얻으면(`answered`) 바로 `TOOL_CALL_RESULT`를 보낸다. 모델이 다음 요청에서 읽는 tool 메시지와 저장하는 대화는 전처럼 호출 순서다. 이벤트의 순서만 끝난 순서가 된다.
   - 화면(`chat-view.ts`)과 ACP 브리지는 결과를 `toolCallId`로 찾아 붙이므로 순서에 기대지 않는다.
   - 골든은 끝난 순서가 타이밍에 달려 있으므로 이어지는 결과 이벤트를 `toolCallId` 순서로 놓고 비교한다(`tests/golden/rows.ts`).
+
+## run log는 밀린 이벤트를 한 문장으로 쓴다 (2026-11-09)
+
+- 계기: dev span에서 Goal run의 `INSERT INTO workflow_run_log_entries`가 4,790번, p50 1.24ms였다. 같은 문장을 SQLite로만 쓰면 FULL 70µs, NORMAL 28µs라, 대부분은 fsync가 아니라 문장마다 드는 lease·span·왕복이다. 연결이 하나라 그동안 다른 statement가 기다린다.
+- 결정: `filledLog`는 이벤트를 `Stream.runForEachArray`로 받아 `RunLog.appendAll`에 넘긴다. 앞 쓰기가 도는 동안 쌓인 이벤트가 한 번에 온다. 타이머로 더 기다리지 않으므로 이벤트가 밀리지 않으면 지금처럼 하나씩 쓴다(t3code의 group commit과 같은 방식).
+  - SQLite log는 이벤트 JSON 배열을 `json_each`로 펼쳐 `INSERT … SELECT … ORDER BY key` 한 문장으로 쓴다. binding과 closure 조건은 `append`와 같고, 모두 쓰거나 하나도 쓰지 않는다. 쓰지 못했거나 이벤트 하나라도 검사에 걸리면 `append`를 차례로 불러, 거부 사유와 앞 이벤트가 남는 동작이 전과 같다.
+  - 메모리 log는 한 번의 상태 변경으로 붙인다. 읽는 쪽은 변경 하나를 한 페이지로 받는다.
+  - 델타를 합치지 않는다. 이벤트 수와 내용은 그대로라 화면, 재생, 골든이 달라지지 않는다.
