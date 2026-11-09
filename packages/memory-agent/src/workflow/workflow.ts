@@ -13,7 +13,6 @@ import {
   Predicate,
   Result,
   Schema,
-  Struct,
 } from "effect";
 import { SecureRandom } from "effect/crypto";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
@@ -44,6 +43,7 @@ import {
   type PlanEdit,
   PlanStep,
   planStepFields,
+  StepWork,
   verificationDefault,
   VerificationStatus,
   WorkflowAction,
@@ -111,7 +111,7 @@ const cardStatuses = <S extends typeof PersistedPlanStep.Type>(
 };
 
 /** Whether a replan left a step's work the same; which outcomes it serves is not its work. */
-const sameStep = Schema.toEquivalence(Schema.Struct(Struct.omit(planStepFields, ["outcomes"])));
+const sameStep = Schema.toEquivalence(StepWork);
 /**
  * A step's progress through a replan. A started step whose work the replan leaves unchanged keeps
  * it; any other step starts over, and a step not started is placed again by its dependencies.

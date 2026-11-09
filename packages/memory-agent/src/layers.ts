@@ -114,6 +114,7 @@ import { OutsideTools } from "./tools/outside.ts";
 import { WorkTraceStore } from "./work-trace/store.ts";
 import { Workflows } from "./workflow/workflow.ts";
 import { Boards } from "./workflow/board.ts";
+import { OutcomeLedger } from "./workflow/outcome-ledger.ts";
 import { WorkflowExecution } from "./workflow/execution.ts";
 import { RunLogSignals } from "./workflow/durable-stream.ts";
 import { goalExecutionLayer } from "./workflow/goal-execution.ts";
@@ -300,6 +301,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     SecretRedactor.layer,
     Workflows.layer,
     Boards.layer.pipe(Layer.provide(GoalOrder.layer)),
+    OutcomeLedger.layer,
     WorkflowExecution.layer,
     goalExecutionLayer,
     providerRetryLayer,

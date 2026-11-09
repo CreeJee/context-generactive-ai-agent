@@ -2786,6 +2786,26 @@ export const migrations: readonly string[] = [
   -- lookup read every node of the project and trimmed its text, 0.4 s each with a warm cache.
   CREATE INDEX nodes_topic_label ON nodes(project_id, lower(text)) WHERE kind = 'topic';
   `,
+  `
+  -- Each judgment of whether a Goal's branch meets one of its outcomes, never rewritten. The
+  -- latest row of an outcome holds for the outcome text and the work of the cards it judged.
+  CREATE TABLE workflow_outcome_verdicts (
+    id INTEGER PRIMARY KEY,
+    goal_instance_id TEXT NOT NULL
+      REFERENCES workflow_goal_instances(goal_instance_id) ON DELETE CASCADE,
+    outcome_id TEXT NOT NULL,
+    outcome_text TEXT NOT NULL,
+    met INTEGER NOT NULL CHECK (met IN (0, 1)),
+    summary TEXT NOT NULL,
+    evidence_json TEXT NOT NULL CHECK (json_valid(evidence_json)),
+    cards_json TEXT NOT NULL CHECK (json_valid(cards_json)),
+    goal_head TEXT,
+    run_id TEXT,
+    at TEXT NOT NULL
+  );
+  CREATE INDEX workflow_outcome_verdicts_outcome
+    ON workflow_outcome_verdicts(goal_instance_id, outcome_id, id);
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

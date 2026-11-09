@@ -193,13 +193,20 @@ export const GoalArtifact = Schema.Struct({
 });
 export type GoalArtifact = typeof GoalArtifact.Type;
 
-export const planStepFields = {
+/** A step's work: what a replan must leave alone for the step to keep its progress. */
+export const stepWorkFields = {
   id: Schema.String,
   title: Schema.String,
   description: Schema.String,
   dependsOn: Schema.Array(Schema.String),
   acceptanceCriteria: Schema.Array(Schema.String),
   ruleRefs: Schema.Array(Schema.String),
+} as const;
+export const StepWork = Schema.Struct(stepWorkFields);
+export type StepWork = typeof StepWork.Type;
+
+export const planStepFields = {
+  ...stepWorkFields,
   outcomes: Schema.Array(OutcomeId).annotate({
     description: "Ids of the current Goal outcomes this step serves.",
   }),
