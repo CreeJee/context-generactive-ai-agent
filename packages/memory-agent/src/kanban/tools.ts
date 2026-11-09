@@ -2,7 +2,12 @@ import { Context, Effect, Layer, Match, Option, Schema } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import { AppEvents } from "../events/app-events.ts";
 import { runTool, type RunTool } from "../tools/run-tool.ts";
-import { CardDraft, type BoardEditRefused } from "../workflow/board-edit.ts";
+import {
+  CardDraft,
+  CardPatch,
+  cardTransitions,
+  type BoardEditRefused,
+} from "../workflow/board-edit.ts";
 import type { PlanDependenciesRejected } from "../workflow/plan-schedule.ts";
 import type { WorkflowStorageError } from "../workflow/workflow.ts";
 import { Boards } from "../workflow/board.ts";
@@ -28,27 +33,89 @@ import type { KanbanAttentionReason } from "./orchestrator.ts";
 
 const CardId = Schema.String.annotate({ description: "A card id on the board." });
 
+/*
+ * The model writes plain keys (`action`, `verdict`, `decision`), not the app's `_tag`
+ * (docs/decisions.md 2026-11-09); the handlers turn them into the board actions' tagged unions.
+ */
+
+/** The model's verdict on one card against a changed Goal. */
+const VerdictInput = Schema.Union([
+  Schema.Struct({ verdict: Schema.Literal("continue"), cardId: CardId }),
+  Schema.Struct({
+    verdict: Schema.Literal("amend"),
+    cardId: CardId,
+    patch: CardPatch,
+    note: Schema.NonEmptyString,
+  }),
+  Schema.Struct({ verdict: Schema.Literal("stop"), cardId: CardId, reason: Schema.NonEmptyString }),
+  Schema.Struct({ verdict: Schema.Literal("replace"), cardId: CardId, card: CardDraft }),
+  Schema.Struct({
+    verdict: Schema.Literal("needs_decision"),
+    cardId: CardId,
+    question: Schema.NonEmptyString,
+  }),
+]).pipe(Schema.toTaggedUnion("verdict"));
+
+const toVerdict = VerdictInput.match({
+  continue: ({ cardId }) => GoalChangeVerdict.cases.Continue.make({ cardId }),
+  amend: ({ cardId, patch, note }) => GoalChangeVerdict.cases.Amend.make({ cardId, patch, note }),
+  stop: ({ cardId, reason }) => GoalChangeVerdict.cases.Stop.make({ cardId, reason }),
+  replace: ({ cardId, card }) => GoalChangeVerdict.cases.Replace.make({ cardId, card }),
+  needs_decision: ({ cardId, question }) =>
+    GoalChangeVerdict.cases.NeedsDecision.make({ cardId, question }),
+});
+
+/** Settling a change request; a rejection carries the reason the user is shown. */
+const SettleInput = Schema.Union([
+  Schema.Struct({
+    action: Schema.Literal("settle_change_request"),
+    requestId: Schema.Int,
+    decision: Schema.Literals(["apply", "reassign"]),
+  }),
+  Schema.Struct({
+    action: Schema.Literal("settle_change_request"),
+    requestId: Schema.Int,
+    decision: Schema.Literal("reject"),
+    reason: Schema.NonEmptyString,
+  }),
+]);
+
+const toDecision = (settle: typeof SettleInput.Type): ChangeDecision =>
+  Match.value(settle).pipe(
+    Match.discriminatorsExhaustive("decision")({
+      apply: () => ChangeDecision.cases.Apply.make({}),
+      reassign: () => ChangeDecision.cases.Reassign.make({}),
+      reject: ({ reason }) => ChangeDecision.cases.Reject.make({ reason }),
+    }),
+  );
+
 /** One change to the board; the tool description says what each does. */
-const KanbanEdit = Schema.TaggedUnion({
-  Split: {
+const KanbanEdit = Schema.Union([
+  Schema.Struct({
+    action: Schema.Literal("split"),
     cardId: CardId,
     parts: Schema.Array(CardDraft).pipe(Schema.check(Schema.isMinLength(2))),
-  },
-  Merge: {
+  }),
+  Schema.Struct({
+    action: Schema.Literal("merge"),
     cardIds: Schema.Array(CardId).pipe(Schema.check(Schema.isMinLength(2))),
     card: CardDraft,
-  },
-  Cancel: { cardId: CardId },
-  Move: {
+  }),
+  Schema.Struct({ action: Schema.Literal("cancel"), cardId: CardId }),
+  Schema.Struct({
+    action: Schema.Literal("move"),
     cardId: CardId,
     from: CardStatus.annotate({ description: "The status the board shows for the card now." }),
     to: CardStatus,
-  },
-  Requeue: { cardId: CardId },
-  SettleChangeRequest: { requestId: Schema.Int, decision: ChangeDecision },
-  ApplyGoalChange: { verdicts: Schema.Array(GoalChangeVerdict) },
-  Retarget: {},
-});
+  }),
+  Schema.Struct({ action: Schema.Literal("requeue"), cardId: CardId }),
+  ...SettleInput.members,
+  Schema.Struct({
+    action: Schema.Literal("apply_goal_change"),
+    verdicts: Schema.Array(VerdictInput),
+  }),
+  Schema.Struct({ action: Schema.Literal("retarget") }),
+]);
 const EditBoardInput = Schema.Struct({ edit: KanbanEdit });
 const ReadBoardInput = Schema.Struct({});
 
@@ -74,20 +141,21 @@ const readBoard = {
 
 const editBoard = {
   name: "edit_kanban_board",
-  description: `Change the kanban board; edit._tag picks the change:
-- Split: replace a card that is not running with smaller cards. The parts keep its dependencies, and cards that depended on it wait for every part.
-- Merge: replace cards that are not running with one card that does all of their work. Cards that depended on any of them depend on the new card.
-- Cancel: take a card off the board. A running attempt is stopped; the card's work stays on its branch.
-- Move: move a card between statuses. Moving a running card stops its attempt. Moving a blocked card back to ready after replanning it starts a new failure streak; the next repeated failure goes to a person.
-- Requeue: put a blocked card whose deliveries ran out back on the queue. It continues in its worktree with a fresh delivery budget.
-- SettleChangeRequest: settle a user's pending change to a running card. Apply continues the card with the change at once, Reassign applies it and restarts the card in a fresh agent conversation, Reject keeps the card as it is and records your reason for the user.
-- ApplyGoalChange: after the Goal changed, give one verdict per card that is not done (a card without one continues): Continue, Amend (change the card and tell its agent), Stop (block it with a reason), Replace (a new card takes its place) or NeedsDecision (a person decides). New assignments resume once this is saved.
-- Retarget: make the branch checked out in the project now the Goal's target (the board's schedule.targetBranch) and restart the Goal branch from it, so new cards start from that branch. Only before the Goal has work of its own; refused with not_worktree, merge_started, detached_head, goal_has_work (the Goal branch has commits neither branch holds) or cards_started (branches ctx/card/<goalInstanceId>/* exist, cancelled cards' included).`,
+  description: `Change the kanban board; edit.action picks the change:
+- split: replace a card that is not running with smaller cards. The parts keep its dependencies, and cards that depended on it wait for every part.
+- merge: replace cards that are not running with one card that does all of their work. Cards that depended on any of them depend on the new card.
+- cancel: take a card off the board. A running attempt is stopped; the card's work stays on its branch.
+- move: move a card between statuses. Moving a running card stops its attempt. Moving a blocked card back to ready after replanning it starts a new failure streak; the next repeated failure goes to a person. A refused move answers the card's status now and the statuses it may move to.
+- requeue: put a blocked card whose deliveries ran out back on the queue. It continues in its worktree with a fresh delivery budget.
+- settle_change_request: settle a user's pending change to a running card. decision apply continues the card with the change at once, reassign applies it and restarts the card in a fresh agent conversation, reject keeps the card as it is and records your reason for the user.
+- apply_goal_change: after the Goal changed, give one verdict per card that is not done (a card without one continues): continue, amend (change the card and tell its agent), stop (block it with a reason), replace (a new card takes its place) or needs_decision (a person decides). New assignments resume once this is saved.
+- retarget: make the branch checked out in the project now the Goal's target (the board's schedule.targetBranch) and restart the Goal branch from it, so new cards start from that branch. Only before the Goal has work of its own; refused with not_worktree, merge_started, detached_head, goal_has_work (the Goal branch has commits neither branch holds) or cards_started (branches ctx/card/<goalInstanceId>/* exist, cancelled cards' included).`,
   parameters: EditBoardInput,
 } as const;
 
 const make = Effect.gen(function* () {
   const events = yield* AppEvents;
+  const boards = yield* Boards;
   const runtime = yield* Effect.context<KanbanBoardActions | Boards>();
 
   /** The tools' calls in `sessionId`, each change saved as the run `runId`'s. */
@@ -111,11 +179,23 @@ const make = Effect.gen(function* () {
         }),
         Effect.provideContext(runtime),
       );
+    /** A refused move answered with the card's status now and where it may go from there. */
+    const refusedMove = (cardId: string) => (refused: BoardEditRefused) =>
+      Effect.flatMap(boards.view(sessionId), (board) => {
+        const status = board.cards.find(({ card }) => card.id === cardId)?.card.status;
+        return status === undefined
+          ? Effect.fail(refused)
+          : Effect.succeed({
+              error: "board_edit_refused" as const,
+              reason: refused.reason,
+              status,
+              allowed: cardTransitions[status],
+            });
+      });
 
     return {
       readBoard: () =>
         Effect.gen(function* () {
-          const boards = yield* Boards;
           return yield* Option.match(yield* (yield* KanbanBoardActions).view(sessionId), {
             onNone: () => Effect.succeed({ error: "not_kanban" as const }),
             onSome: (view) =>
@@ -136,21 +216,31 @@ const make = Effect.gen(function* () {
 
       editBoard: ({ edit }: typeof EditBoardInput.Type) =>
         change((actions) =>
-          Match.valueTags(edit, {
-            Split: ({ cardId, parts }) => actions.splitCard(sessionId, cardId, parts, author),
-            Merge: ({ cardIds, card }) => actions.mergeCards(sessionId, cardIds, card, author),
-            Cancel: ({ cardId }) => actions.cancelCard(sessionId, cardId, author),
-            Move: ({ cardId, from, to }) =>
-              actions.moveCard(sessionId, { cardId, from, to }, author),
-            Requeue: ({ cardId }) =>
-              Effect.map(actions.requeueCard(sessionId, cardId, author), (requeued) => ({
-                requeued,
-              })),
-            SettleChangeRequest: ({ requestId, decision }) =>
-              actions.settleChangeRequest(sessionId, requestId, decision, author),
-            ApplyGoalChange: ({ verdicts }) => actions.applyGoalChange(sessionId, verdicts, author),
-            Retarget: () => actions.retarget(sessionId),
-          }),
+          Match.value(edit).pipe(
+            Match.discriminatorsExhaustive("action")({
+              split: ({ cardId, parts }) => actions.splitCard(sessionId, cardId, parts, author),
+              merge: ({ cardIds, card }) => actions.mergeCards(sessionId, cardIds, card, author),
+              cancel: ({ cardId }) => actions.cancelCard(sessionId, cardId, author),
+              move: ({ cardId, from, to }) =>
+                actions
+                  .moveCard(sessionId, { cardId, from, to }, author)
+                  .pipe(Effect.catchTag("BoardEditRefused", refusedMove(cardId))),
+              requeue: ({ cardId }) =>
+                Effect.map(actions.requeueCard(sessionId, cardId, author), (requeued) => ({
+                  requeued,
+                })),
+              settle_change_request: (settle) =>
+                actions.settleChangeRequest(
+                  sessionId,
+                  settle.requestId,
+                  toDecision(settle),
+                  author,
+                ),
+              apply_goal_change: ({ verdicts }) =>
+                actions.applyGoalChange(sessionId, verdicts.map(toVerdict), author),
+              retarget: () => actions.retarget(sessionId),
+            }),
+          ),
         ),
     };
   };
@@ -176,15 +266,15 @@ export class KanbanTools extends Context.Service<KanbanTools, Effect.Success<typ
 
 export const kanbanInstructions = `This Goal runs as a kanban board. The owner's loop assigns ready cards to card agents in separate git worktrees, verifies each finished card and squashes it into the Goal branch; you do not execute cards yourself and do not mark card progress with update_workflow_progress.
 Your part is what the loop cannot decide. Read the board with read_kanban_board, then change it with edit_kanban_board:
-- A blocked card with a replan request: Split, Merge, edit or Cancel it, then Move it back to ready.
-- A user's change request to a running card: SettleChangeRequest (Apply, Reassign or Reject with a reason).
-- A changed Goal: ApplyGoalChange for every card that is not done; new assignments wait for it.
-- A blocked card whose deliveries ran out: Requeue once the cause is understood.
-- The user asks the board to target the branch they now have checked out: Retarget.
+- A blocked card with a replan request: split, merge, edit or cancel it, then move it back to ready.
+- A user's change request to a running card: settle_change_request (apply, reassign, or reject with a reason).
+- A changed Goal: apply_goal_change for every card that is not done; new assignments wait for it.
+- A blocked card whose deliveries ran out: requeue once the cause is understood.
+- The user asks the board to target the branch they now have checked out: retarget.
 Cards in human_decision wait for a person; do not move them yourself unless the user tells you to.`;
 
 const reasonText = {
-  goal_changed: "The Goal changed: classify the cards with edit_kanban_board ApplyGoalChange.",
+  goal_changed: "The Goal changed: classify the cards with edit_kanban_board apply_goal_change.",
   replan_requested: "A card keeps failing and asks to be replanned.",
   change_requested: "A user asked to change a running card: settle it.",
   cards_done:

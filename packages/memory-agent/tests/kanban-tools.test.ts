@@ -17,7 +17,7 @@ testAgent()("kanban tools", (it) => {
           Effect.flatMap((run) => run({ toolCallId: "call-1" })),
         );
       expect(yield* call(0, {})).toEqual({ error: "not_kanban" });
-      expect(yield* call(1, { edit: { _tag: "Cancel", cardId: "missing" } })).toEqual({
+      expect(yield* call(1, { edit: { action: "cancel", cardId: "missing" } })).toEqual({
         error: "kanban_action_refused",
         reason: "not_kanban",
       });

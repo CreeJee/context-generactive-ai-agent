@@ -4534,7 +4534,7 @@
 ## 보드 대상 브랜치는 Goal에 작업이 생기기 전까지 바꿀 수 있다 (2026-11-09)
 
 - 계기: 세션 `037aa142`에서 사용자가 프로젝트 checkout을 `proj-airwallex-transfer`에서 `proj-sdui-renderer`로 바꿨지만 보드 대상 브랜치는 시작할 때 기록한 그대로였다. `GoalSchedules.register`는 `INSERT OR IGNORE`라 보드를 재시작해도 값이 남는다. Goal 브랜치도 시작할 때의 HEAD에서 잘려 카드 worktree에 새 브랜치 커밋이 없었고, 카드 9개가 모두 멈췄다. 대상 브랜치를 바꾸는 도구도 화면도 없어 새 Goal을 만드는 것밖에 길이 없었다.
-- 결정: `KanbanBoardActions.retarget`이 프로젝트에 지금 checkout된 브랜치를 대상으로 삼고 Goal 브랜치(`ctx/goal/<id>`)를 그 HEAD로 옮긴다. 모델은 `edit_kanban_board`의 `Retarget`으로, 화면은 Goal 스케줄 패널의 "현재 브랜치로 바꾸기"(kanbanAction `Retarget`)로 부른다.
+- 결정: `KanbanBoardActions.retarget`이 프로젝트에 지금 checkout된 브랜치를 대상으로 삼고 Goal 브랜치(`ctx/goal/<id>`)를 그 HEAD로 옮긴다. 모델은 `edit_kanban_board`의 `retarget` 작업으로, 화면은 Goal 스케줄 패널의 "현재 브랜치로 바꾸기"(kanbanAction `Retarget`)로 부른다.
   - 대상 이름만 바꾸지 않는다. Goal 브랜치가 이전 대상 위에 있으므로, 이름만 바꾸면 카드는 여전히 새 브랜치 커밋을 못 보고 마지막 merge 때 이전 브랜치의 커밋이 새 대상으로 들어간다.
   - 브랜치 이름은 받지 않는다. 브랜치 흐름 5의 "Goal을 시작한 사용자 브랜치" 규칙을 지금 checkout으로 다시 잇고, 모델이 아무 브랜치나 고르지 못하게 한다.
   - Goal에 자기 작업이 없을 때만 옮긴다. worktree 보드이고, merge 상태가 없고, 카드 브랜치(`ctx/card/<id>/*`, 취소한 카드 것 포함)가 없고, Goal 브랜치의 커밋이 모두 이전 대상이나 새 대상에 있어야 한다. 아니면 `not_worktree`·`merge_started`·`detached_head`·`cards_started`·`goal_has_work`로 거절하고 아무것도 쓰지 않는다. 카드 브랜치는 이전 Goal HEAD에서 시작했으므로, 이어 쓰면 이전 브랜치의 커밋이 squash에 섞인다. 카드 작업을 새 브랜치로 옮기는 일(cherry-pick 등)은 하지 않는다.
@@ -4546,3 +4546,9 @@
 
 - 사용자 결정: 2026-10-21 "판별 키가 다른 도메인 유니온도 `_tag`로 통일한다"의 "모델 답 JSON의 판별 키도 `_tag`다"를 거둔다. `_tag`는 Effect 헬퍼를 위한 앱 안의 규칙이고, 모델이 쓰는 도구 인자와 답 JSON에는 그 형식이 뜻하는 평범한 키(`decision`, `action` 등)를 쓴다. 경계에서 한 번 디코드해 앱의 태그 유니온으로 바꾼다. 앱 코드의 `_tag` 규칙은 그대로다.
 - improve 해석 답은 `{"decision":"skip"|"improve",...}`다. `Schema.toTaggedUnion("decision")`으로 디코드해 `.match`로 `ItemInterpretation`을 만든다.
+- 사용자 결정: `edit_kanban_board`는 도구 하나로 둔다. 작업별 도구로 다시 나누는 안도 봤지만, 토큰 때문에 일곱 도구를 하나로 합친 결정(2026-10-24 "시스템 프롬프트와 도구 설명은 규칙을 한 곳에만 둔다"의 `edit_kanban_board`)을 따른다. 바꾸는 것은 키다.
+  - `edit.action`이 작업을 고른다: `split`·`merge`·`cancel`·`move`·`requeue`·`settle_change_request`·`apply_goal_change`·`retarget`.
+  - `apply_goal_change`의 판정은 `verdict` 키다: `continue`·`amend`·`stop`·`replace`·`needs_decision`.
+  - `settle_change_request`의 `decision`은 `apply`·`reassign`·`reject` 문자열이다. `reject`는 사용자에게 보일 `reason`이 있어야 디코드된다. 그래서 이 작업만 JSON Schema 갈래가 둘이다.
+  - 핸들러가 `KanbanBoardActions`의 `GoalChangeVerdict`·`ChangeDecision` 태그 유니온으로 바꾼다. 화면의 `BoardIntent`와 API는 앱 안쪽이라 그대로다.
+- 결정: 거절된 `move`는 카드의 지금 상태(`status`)와 거기서 갈 수 있는 상태(`allowed`)를 함께 답한다. 계기는 `edit_kanban_board` 호출 22건 중 4건이 `card_status_changed`·`card_transition_invalid`였던 것이다. `from`은 모델이 보드를 잘못 읽은 것을 막아 주므로 필수로 둔다. 대신 거절 답만 보고 한 번에 다시 고를 수 있게 한다.

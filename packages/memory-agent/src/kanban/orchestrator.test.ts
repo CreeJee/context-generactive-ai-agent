@@ -1,5 +1,6 @@
 import {
   Array as Arr,
+  Context,
   Deferred,
   Effect,
   Exit,
@@ -17,6 +18,7 @@ import { expect } from "vite-plus/test";
 import { layer } from "@effect/vitest";
 import { sqlGet, sqlRun } from "../../tests/support/sql.ts";
 import { Database } from "../db/database.ts";
+import type { JsonValue } from "../json.ts";
 import { AppEvents } from "../events/app-events.ts";
 import {
   attemptOutcome,
@@ -50,6 +52,9 @@ import { CardAttempts } from "./card-attempts.ts";
 import { CardRuns } from "./card-queue.ts";
 import { CardFailure, CardHoldReason } from "./failures.ts";
 import { GoalSchedules } from "./goal-schedules.ts";
+import { KanbanTools } from "./tools.ts";
+import { GoalOrder } from "./goal-order.ts";
+import { Boards } from "../workflow/board.ts";
 import {
   DecisionAnswer,
   DecisionKind,
@@ -637,6 +642,53 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
             expect(yield* refused).toBe("cards_started");
             expect(yield* target).toEqual(Option.some("feature"));
           }),
+        );
+      }),
+    gitTimeout,
+  );
+
+  it.effect(
+    "answers the model's refused move with the card's status and where it may go",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* kanbanFixture;
+        const run = yield* openOwner(fixture, () => Effect.never, yield* Effect.scope);
+        yield* run(
+          Effect.scoped(
+            Effect.gen(function* () {
+              const board = yield* executingBoard(fixture, [card("a")]);
+              const tools = Context.get(
+                yield* Layer.build(
+                  KanbanTools.layer.pipe(
+                    Layer.provide(Boards.layer),
+                    Layer.provide(GoalOrder.layer),
+                  ),
+                ),
+                KanbanTools,
+              ).toolsFor(board.sessionId, "test-model");
+              const edit = (change: JsonValue) =>
+                Effect.flatMap(Effect.fromNullishOr(tools[1]), (tool) =>
+                  tool.prepare({ edit: change }),
+                ).pipe(Effect.flatMap((call) => call({ toolCallId: "call-1" })));
+
+              expect(
+                yield* edit({ action: "move", cardId: "a", from: "backlog", to: "done" }),
+              ).toEqual({
+                error: "board_edit_refused",
+                reason: "card_status_changed",
+                status: "ready",
+                allowed: ["backlog", "in_progress", "human_decision", "blocked"],
+              });
+              // A rejection without the reason the user is shown does not decode.
+              expect(
+                Exit.isFailure(
+                  yield* Effect.exit(
+                    edit({ action: "settle_change_request", requestId: 1, decision: "reject" }),
+                  ),
+                ),
+              ).toBe(true);
+            }),
+          ),
         );
       }),
     gitTimeout,
