@@ -10,6 +10,9 @@ import {
   Array as Arr,
   Effect,
   Function as EffectFunction,
+  HashMap,
+  HashSet,
+  Iterable,
   type JsonSchema,
   Match,
   Option,
@@ -93,10 +96,7 @@ const nullableSchema = (bounded: JsonObject, path: string): Ready => {
   const values = bounded["enum"];
   const nullable: JsonObject = {
     ...bounded,
-    ...optionalProperty(
-      "type",
-      type === undefined ? undefined : [...new Set([type, "null"].flat())],
-    ),
+    ...optionalProperty("type", type === undefined ? undefined : Arr.dedupe([type, "null"].flat())),
     ...optionalProperty(
       "enum",
       isJsonArray(values) && !values.includes(null) ? [...values, null] : undefined,
@@ -340,7 +340,7 @@ const coerceArguments = (value: JsonValue, { schema: root, draft, lookup }: Comp
     candidate: JsonValue,
     schemas: ReadonlyArray<Node>,
     seen: ReadonlySet<JsonSchemaNode>,
-    required: ReadonlySet<string>,
+    required: HashSet.HashSet<string>,
   ): JsonValue =>
     Option.liftPredicate(candidate, (sent) => schemas.some((schema) => check(schema, sent))).pipe(
       Option.orElse(() =>
@@ -356,9 +356,9 @@ const coerceArguments = (value: JsonValue, { schema: root, draft, lookup }: Comp
     schema: Node,
     candidate: JsonValue,
     seen: ReadonlySet<JsonSchemaNode> = new Set(),
-  ): ReadonlySet<string> =>
+  ): HashSet.HashSet<string> =>
     Option.match(unvisited(schema, seen), {
-      onNone: () => new Set<string>(),
+      onNone: () => HashSet.empty<string>(),
       onSome: (node) => {
         const nextSeen = new Set([...seen, node]);
         const children: ReadonlyArray<Node> = [
@@ -366,25 +366,26 @@ const coerceArguments = (value: JsonValue, { schema: root, draft, lookup }: Comp
           ...Option.toArray(refTarget(node)),
           ...Option.toArray(branchOf(node, candidate)),
         ];
-        return new Set([
-          ...(Array.isArray(node.required) ? node.required : []),
-          ...children.flatMap((child) => [...requiredKeys(child, candidate, nextSeen)]),
-        ]);
+        return Arr.reduce(
+          children,
+          HashSet.fromIterable(Array.isArray(node.required) ? node.required : []),
+          (keys, child) => HashSet.union(keys, requiredKeys(child, candidate, nextSeen)),
+        );
       },
     });
   /** The object's fields repaired against `properties`, `patternProperties` and the rest. */
   const coerceFields = (
     object: JsonObject,
     schema: JsonSchemaNode,
-    required: ReadonlySet<string>,
+    required: HashSet.HashSet<string>,
   ): JsonObject => {
-    const properties = new Map(Object.entries(schema.properties ?? {}));
+    const properties = HashMap.fromIterable(Object.entries(schema.properties ?? {}));
     // A null the property cannot take is left out when the property is optional.
     const declared = Object.entries(object).flatMap(([key, field]): Array<Field> =>
-      Option.match(Option.fromUndefinedOr(properties.get(key)), {
+      Option.match(HashMap.get(properties, key), {
         onNone: () => [[key, field]],
         onSome: (property) =>
-          field === null && !required.has(key) && !check(property, null)
+          field === null && !HashSet.has(required, key) && !check(property, null)
             ? []
             : [[key, coerce(field, property)]],
       }),
@@ -399,19 +400,24 @@ const coerceArguments = (value: JsonValue, { schema: root, draft, lookup }: Comp
         ),
       declared,
     );
-    const known = new Set([
-      ...properties.keys(),
-      ...declared
-        .filter(([key]) => patterns.some(([expression]) => expression.test(key)))
-        .map(([key]) => key),
-    ]);
+    const known = HashSet.fromIterable(
+      Iterable.appendAll(
+        HashMap.keys(properties),
+        Iterable.map(
+          Iterable.filter(declared, ([key]) =>
+            patterns.some(([expression]) => expression.test(key)),
+          ),
+          ([key]) => key,
+        ),
+      ),
+    );
     const fields = Option.match(
       Option.filter(Option.fromUndefinedOr(schema.additionalProperties), isSchemaObject),
       {
         onNone: () => patterned,
         onSome: (additional) =>
           patterned.map(([key, field]): Field =>
-            known.has(key) ? [key, field] : [key, coerce(field, additional)],
+            HashSet.has(known, key) ? [key, field] : [key, coerce(field, additional)],
           ),
       },
     );
@@ -432,10 +438,10 @@ const coerceArguments = (value: JsonValue, { schema: root, draft, lookup }: Comp
     candidate: JsonValue,
     schema: JsonSchemaNode,
     seen: ReadonlySet<JsonSchemaNode>,
-    inheritedRequired: ReadonlySet<string>,
+    inheritedRequired: HashSet.HashSet<string>,
   ): JsonValue => {
     const nextSeen = new Set([...seen, schema]);
-    const required = new Set([...requiredKeys(schema, candidate), ...inheritedRequired]);
+    const required = HashSet.union(requiredKeys(schema, candidate), inheritedRequired);
     const nested = (next: JsonValue, inner: Node) => coerce(next, inner, nextSeen, required);
     const viaRef = Option.match(refTarget(schema), {
       onNone: () => candidate,
@@ -465,7 +471,7 @@ const coerceArguments = (value: JsonValue, { schema: root, draft, lookup }: Comp
     candidate: JsonValue,
     schema: Node,
     seen: ReadonlySet<JsonSchemaNode> = new Set(),
-    inheritedRequired: ReadonlySet<string> = new Set(),
+    inheritedRequired: HashSet.HashSet<string> = HashSet.empty(),
   ): JsonValue =>
     Option.match(unvisited(schema, seen), {
       onNone: () => candidate,

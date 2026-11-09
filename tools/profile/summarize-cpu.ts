@@ -1,4 +1,13 @@
-import { Array as Arr, Effect, FileSystem, MutableHashMap, Option, Path, Schema } from "effect";
+import {
+  Array as Arr,
+  Effect,
+  FileSystem,
+  Iterable,
+  MutableHashMap,
+  Option,
+  Path,
+  Schema,
+} from "effect";
 
 const CpuProfile = Schema.Struct({
   nodes: Schema.Array(
@@ -57,10 +66,12 @@ const share = (micros: number, whole: number) =>
   `${((micros / whole) * 100).toFixed(1).padStart(5)}%`;
 
 export const summarizeCpuProfile = (profile: CpuProfile, root: string, top: number) => {
-  const nodes = MutableHashMap.fromIterable(profile.nodes.map((node) => [node.id, node] as const));
+  const nodes = MutableHashMap.fromIterable(
+    Iterable.map(profile.nodes, (node) => [node.id, node] as const),
+  );
   const parents = MutableHashMap.fromIterable(
-    profile.nodes.flatMap((node) =>
-      (node.children ?? []).map((child) => [child, node.id] as const),
+    Iterable.flatMap(profile.nodes, (node) =>
+      Iterable.map(node.children ?? [], (child) => [child, node.id] as const),
     ),
   );
   const parentOf = (node: ProfileNode) =>

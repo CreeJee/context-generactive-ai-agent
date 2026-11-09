@@ -1,5 +1,5 @@
 import { isTruthy } from "../truthy.ts";
-import { MutableHashMap, Option, Context, Effect, Layer } from "effect";
+import { Iterable, MutableHashMap, Option, Context, Effect, Layer } from "effect";
 import {
   ProviderUnavailable,
   type AgentModelRuntime,
@@ -40,10 +40,13 @@ const providerRegistryFromBody = (
   subscriptionDependencies?: SubscriptionDependencyResolver,
 ): ProviderRegistryApi => {
   const byProvider = MutableHashMap.fromIterable(
-    configurations.map((configuration) => [configuration.provider, configuration]),
+    Iterable.map(
+      configurations,
+      (configuration) => [configuration.provider, configuration] as const,
+    ),
   );
   const runtimeByProvider = MutableHashMap.fromIterable(
-    runtimes.map((runtime) => [runtime.provider, runtime]),
+    Iterable.map(runtimes, (runtime) => [runtime.provider, runtime] as const),
   );
   return {
     providers: [...MutableHashMap.keys(byProvider)],

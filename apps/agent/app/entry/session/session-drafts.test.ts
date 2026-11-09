@@ -1,12 +1,13 @@
+import { MutableHashMap, Option } from "effect";
 import { Atom, AtomRegistry } from "effect/reactivity";
 import { describe, expect, test } from "vite-plus/test";
 import { type DraftStorage, draftsIn } from "./session-drafts";
 
 /** A storage every tab shares, as a browser's tabs share `localStorage`. */
-const storageOf = (items: Map<string, string>): DraftStorage => ({
-  getItem: (key) => items.get(key) ?? null,
-  setItem: (key, value) => void items.set(key, value),
-  removeItem: (key) => void items.delete(key),
+const storageOf = (items: MutableHashMap.MutableHashMap<string, string>): DraftStorage => ({
+  getItem: (key) => Option.getOrNull(MutableHashMap.get(items, key)),
+  setItem: (key, value) => void MutableHashMap.set(items, key, value),
+  removeItem: (key) => void MutableHashMap.remove(items, key),
 });
 
 /** A tab with the session's draft on screen. */
@@ -19,10 +20,10 @@ const tabOf = (atoms: { readonly text: Atom.Atom<string>; readonly follow: Atom.
 
 describe("session drafts", () => {
   test("the old shared drafts move to their own keys", () => {
-    const items = new Map([
+    const items = MutableHashMap.make(
       ["context-agent-session-drafts", JSON.stringify({ a: "old a", b: "old b" })],
       ["context-agent-session-draft:b", "newer b"],
-    ]);
+    );
     const atoms = draftsIn({ storage: () => storageOf(items), shown: Atom.make(0) })("a");
     expect(tabOf(atoms).get(atoms.text)).toBe("old a");
     expect(Object.fromEntries(items)).toEqual({
@@ -33,7 +34,7 @@ describe("session drafts", () => {
 
   test("a tab reads the stored text again when shown, unless it typed its own", () => {
     const shown = Atom.make(0);
-    const storage = storageOf(new Map());
+    const storage = storageOf(MutableHashMap.empty());
     const atoms = draftsIn({ storage: () => storage, shown })("s");
     const [first, second] = [tabOf(atoms), tabOf(atoms)];
     const show = (tab: AtomRegistry.AtomRegistry) => tab.set(shown, tab.get(shown) + 1);

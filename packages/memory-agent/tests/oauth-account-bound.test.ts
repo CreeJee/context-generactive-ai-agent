@@ -1,5 +1,5 @@
 import { AuthConnectionState } from "../src/providers/contracts.ts";
-import { Array as EffectArray } from "effect";
+import { Array as EffectArray, Iterable } from "effect";
 import { it as effectTest } from "@effect/vitest";
 import {
   Context,
@@ -442,7 +442,7 @@ describe("account-bound subscription provider", () => {
           expiresAt: 123,
         };
         const vault = MutableHashMap.fromIterable<string, StoredCredential>(
-          ids.map((id) => [id, credential]),
+          Iterable.map(ids, (id) => [id, credential]),
         );
         const accounts: ProfileCredentialStore = {
           read: (_provider, id) =>

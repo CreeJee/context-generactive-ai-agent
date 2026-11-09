@@ -12,6 +12,7 @@ import {
   HashMap,
   HashSet,
   Effect,
+  Iterable,
   Layer,
   Option,
   Ref,
@@ -355,11 +356,11 @@ export interface CompactionSources {
    */
   readonly toolResultIds: (
     toolCallIds: readonly string[],
-  ) => Effect.Effect<ReadonlyMap<string, string>, NodeStoreFailed | { readonly _tag: string }>;
+  ) => Effect.Effect<HashMap.HashMap<string, string>, NodeStoreFailed | { readonly _tag: string }>;
   /** The recorded text of each of these nodes that exists. */
   readonly nodeTexts: (
     ids: readonly string[],
-  ) => Effect.Effect<ReadonlyMap<string, string>, NodeStoreFailed>;
+  ) => Effect.Effect<HashMap.HashMap<string, string>, NodeStoreFailed>;
   /**
    * Bounded, variable-tail leads for content this request left out. It fails closed: when
    * retrieval is unavailable it gives none, and compaction still sends the request.
@@ -383,12 +384,14 @@ export const lookupSources = (lookups: {
   readonly nodeText: (id: string) => string | null;
 }) => {
   const found = (ids: readonly string[], lookup: (id: string) => string | null) =>
-    Effect.succeed<ReadonlyMap<string, string>>(
-      new Map(
-        ids.flatMap((id) => {
-          const value = lookup(id);
-          return value === null ? [] : [[id, value] as const];
-        }),
+    Effect.succeed(
+      HashMap.fromIterable(
+        ids.flatMap((id) =>
+          Option.match(Option.fromNullishOr(lookup(id)), {
+            onNone: () => [],
+            onSome: (value) => [[id, value] as const],
+          }),
+        ),
       ),
     );
   // They never fail, so a model handoff's lookup takes them as well.
@@ -427,8 +430,8 @@ export const memoryLookups = Effect.fnUntraced(function* (
     sources.nodeTexts(EffectArray.dedupe(blocks.map((block) => block.nextTurnNodeId))),
   ]).pipe(Effect.mapError(memoryReadFailed));
   return {
-    toolResultId: (toolCallId: string) => results.get(toolCallId) ?? null,
-    nodeText: (id: string) => texts.get(id) ?? null,
+    toolResultId: (toolCallId: string) => Option.getOrNull(HashMap.get(results, toolCallId)),
+    nodeText: (id: string) => Option.getOrNull(HashMap.get(texts, id)),
   };
 });
 
@@ -700,7 +703,10 @@ const clearedOldest = <M extends ConversationMessage>(
     (freed) => freed < over,
   ).length;
   const pointers = HashMap.fromIterable(
-    EffectArray.take(outputs, needed).map((output) => [output.index, output.pointer] as const),
+    Iterable.map(
+      EffectArray.take(outputs, needed),
+      (output) => [output.index, output.pointer] as const,
+    ),
   );
   return {
     cleared: HashMap.size(pointers),
@@ -784,7 +790,7 @@ export interface StepsToSummarize {
   readonly task: string;
   readonly messages: ReadonlyArray<ConversationMessage>;
   /** Where each tool call's output can be read again, by call id. */
-  readonly rereads: ReadonlyMap<string, string>;
+  readonly rereads: HashMap.HashMap<string, string>;
 }
 
 /** A step of the run in progress: where its message that calls tools is, and its first call. */
@@ -929,7 +935,7 @@ const rereadsOf = (messages: ReadonlyArray<ConversationMessage>, recall: Recall)
         Option.map(recall.fullResult(id), (where) => [id, where] as const),
       ),
     ),
-    (entries): ReadonlyMap<string, string> => new Map(entries),
+    HashMap.fromIterable,
   );
 
 /**

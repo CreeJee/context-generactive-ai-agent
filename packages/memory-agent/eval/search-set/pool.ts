@@ -4,7 +4,7 @@
  * lists before fusion, so the pool also holds what one channel finds and fusion drops. A recorded
  * question searches only the nodes stored before it was asked (`beforeSeq`), as the memory was then.
  */
-import { Array as Arr, Console, Effect, HashMap, Option } from "effect";
+import { Array as Arr, Console, Effect, HashMap, HashSet, Iterable, Option } from "effect";
 import { Embedder } from "../../src/memory/embedding/embedder.ts";
 import { VectorIndex } from "../../src/memory/embedding/vector-index.ts";
 import { maxVectorK } from "../../src/memory/native-search/read-protocol.ts";
@@ -51,13 +51,15 @@ export const searchRuns = Effect.fn("searchSet.searchRuns")(function* ({
   const vectors = yield* VectorIndex;
   const runs = [...Option.toArray(app), ...(channels ? ["vector", "text", "morph"] : [])];
   const done = yield* Effect.forEach(runs, (run) =>
-    Effect.map(readRows(files.run(run)), (rows) => new Set(rows.map((row) => row.item))),
+    Effect.map(readRows(files.run(run)), (rows) =>
+      HashSet.fromIterable(Iterable.map(rows, (row) => row.item)),
+    ),
   );
   const needs = HashMap.fromIterable(
-    (yield* readRows(files.needs)).map((need) => [need.need, need] as const),
+    Iterable.map(yield* readRows(files.needs), (need) => [need.need, need] as const),
   );
   const items = (yield* readRows(files.items)).flatMap((item) =>
-    done.every((items) => items.has(item.item))
+    done.every((items) => HashSet.has(items, item.item))
       ? []
       : Option.toArray(HashMap.get(needs, item.need)).map((need) => ({ item, need })),
   );

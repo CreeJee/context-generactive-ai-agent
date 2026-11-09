@@ -1,4 +1,4 @@
-import { Context, Data, Effect, Layer, Match, Option, Schema } from "effect";
+import { Context, Data, Effect, HashMap, Iterable, Layer, Match, Option, Schema } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import { AppEvents } from "../events/app-events.ts";
 import { runTool, type RunTool } from "../tools/run-tool.ts";
@@ -244,7 +244,9 @@ const make = Effect.gen(function* () {
               Effect.gen(function* () {
                 const board = yield* boards.view(sessionId);
                 const state = yield* workflows.get(sessionId);
-                const titles = new Map(board.cards.map(({ card }) => [card.id, card]));
+                const titles = HashMap.fromIterable(
+                  Iterable.map(board.cards, ({ card }) => [card.id, card]),
+                );
                 const outcomes = outcomeStandings({
                   outcomes: state.goal?.outcomes ?? [],
                   steps: state.plan?.steps ?? [],
@@ -252,12 +254,15 @@ const make = Effect.gen(function* () {
                 });
                 return {
                   ...view,
-                  cards: view.cards.map((card) => ({
-                    ...card,
-                    title: titles.get(card.cardId)?.title ?? "",
-                    dependsOn: titles.get(card.cardId)?.dependsOn ?? [],
-                    outcomes: titles.get(card.cardId)?.outcomes ?? [],
-                  })),
+                  cards: view.cards.map((card) => {
+                    const found = Option.getOrUndefined(HashMap.get(titles, card.cardId));
+                    return {
+                      ...card,
+                      title: found?.title ?? "",
+                      dependsOn: found?.dependsOn ?? [],
+                      outcomes: found?.outcomes ?? [],
+                    };
+                  }),
                   pendingChanges: board.pendingChanges,
                   outcomes: outcomes.map(outcomeView),
                 };

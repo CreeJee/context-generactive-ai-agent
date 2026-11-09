@@ -3,6 +3,7 @@ import {
   type Cause,
   Effect,
   Match,
+  MutableHashMap,
   MutableRef,
   Option,
   Predicate,
@@ -66,7 +67,7 @@ const lastUserText = (prompt: Prompt.Prompt) => {
 /** The answer one turn streams: the agent's text as it arrives, then the calls it reported. */
 const makeAnswer = () => {
   const open = MutableRef.make(false);
-  const calls = new Map<string, { readonly title: string; readonly status: string }>();
+  const calls = MutableHashMap.empty<string, { readonly title: string; readonly status: string }>();
   const text = (delta: string): Array<Part> => {
     const start: Array<Part> = MutableRef.getAndSet(open, true)
       ? []
@@ -78,12 +79,15 @@ const makeAnswer = () => {
     Match.discriminators("sessionUpdate")({
       agent_message_chunk: ({ content }) => (content.type === "text" ? text(content.text) : []),
       tool_call: (call) => {
-        calls.set(call.toolCallId, { title: call.title, status: call.status ?? "pending" });
+        MutableHashMap.set(calls, call.toolCallId, {
+          title: call.title,
+          status: call.status ?? "pending",
+        });
         return [];
       },
       tool_call_update: (call) => {
-        const known = calls.get(call.toolCallId);
-        calls.set(call.toolCallId, {
+        const known = Option.getOrUndefined(MutableHashMap.get(calls, call.toolCallId));
+        MutableHashMap.set(calls, call.toolCallId, {
           title: call.title ?? known?.title ?? "",
           status: call.status ?? known?.status ?? "",
         });
@@ -95,12 +99,13 @@ const makeAnswer = () => {
   /** The reported calls after the text, then the end of the answer. */
   const end = (): Array<Part> => {
     const reported =
-      calls.size === 0
+      MutableHashMap.size(calls) === 0
         ? []
         : text(
-            `\n\n외부 에이전트가 알린 도구 호출:\n${[...calls.values()]
-              .map((call) => `- ${call.title} (${call.status})`)
-              .join("\n")}`,
+            `\n\n외부 에이전트가 알린 도구 호출:\n${Array.from(
+              MutableHashMap.values(calls),
+              (call) => `- ${call.title} (${call.status})`,
+            ).join("\n")}`,
           );
     return [
       ...reported,

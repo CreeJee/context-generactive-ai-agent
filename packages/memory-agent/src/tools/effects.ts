@@ -1,4 +1,4 @@
-import { HashSet } from "effect";
+import { HashSet, Iterable } from "effect";
 
 /** Explicit owner execution contracts, not inferred from prefixes or tool descriptions.
  * Unknown/custom/MCP tools remain effectful. The source registration coverage test requires
@@ -69,7 +69,11 @@ const retiredToolEffects = {
 } as const satisfies Record<string, "read" | "effectful">;
 
 export const readOnlyToolNames = HashSet.fromIterable(
-  Object.entries({ ...builtinToolEffects, ...retiredToolEffects })
-    .filter(([, effect]) => effect === "read")
-    .map(([name]) => name),
+  Iterable.map(
+    Iterable.filter(
+      Object.entries({ ...builtinToolEffects, ...retiredToolEffects }),
+      ([, effect]) => effect === "read",
+    ),
+    ([name]) => name,
+  ),
 );

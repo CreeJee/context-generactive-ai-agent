@@ -1,4 +1,4 @@
-import { Effect, MutableHashMap, Option } from "effect";
+import { Effect, Iterable, MutableHashMap, Option } from "effect";
 import { expect } from "vite-plus/test";
 import { Graph } from "../../src/memory/graph.ts";
 import { conversation } from "../support/memory-graph.ts";
@@ -13,7 +13,9 @@ testAgent()("memory graph", (it) => {
         { budget: 10, minUtility: 0.5, projectIds: [project.id] },
       );
       expect(complete).toBe(true);
-      const byId = MutableHashMap.fromIterable(visits.map((visit) => [visit.node.id, visit]));
+      const byId = MutableHashMap.fromIterable(
+        Iterable.map(visits, (visit) => [visit.node.id, visit]),
+      );
       const visit = (id: string) => Option.getOrUndefined(MutableHashMap.get(byId, id));
       expect(visit(result.id)).toMatchObject({ utility: 1, path: [] });
       expect(visit(call.id)?.utility).toBeCloseTo(0.95);

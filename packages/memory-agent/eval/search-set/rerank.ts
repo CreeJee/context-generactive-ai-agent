@@ -11,7 +11,18 @@
  */
 import { createRequire } from "node:module";
 import type { Tensor } from "@huggingface/transformers";
-import { Array as Arr, Console, Duration, Effect, HashMap, Option, Order, Schema } from "effect";
+import {
+  Array as Arr,
+  Console,
+  Duration,
+  Effect,
+  HashMap,
+  HashSet,
+  Iterable,
+  Option,
+  Order,
+  Schema,
+} from "effect";
 import { nativePromise } from "../../src/runtime/native-effect.ts";
 import { path } from "../../src/runtime/synchronous-path.ts";
 import { appendRows, readRows, type RunRow, setFiles } from "./files.ts";
@@ -111,13 +122,15 @@ const byScore = Order.mapInput(
 
 export const rerankRun = Effect.fn("searchSet.rerank")(function* (options: RerankOptions) {
   const files = setFiles(options.storage);
-  const done = new Set((yield* readRows(files.run(options.name))).map((row) => row.item));
+  const done = HashSet.fromIterable(
+    Iterable.map(yield* readRows(files.run(options.name)), (row) => row.item),
+  );
   const lists = yield* Effect.forEach(options.candidates, (run) =>
     Effect.map(readRows(files.run(run)), (rows) =>
-      HashMap.fromIterable(rows.map((row) => [row.item, row.ids] as const)),
+      HashMap.fromIterable(Iterable.map(rows, (row) => [row.item, row.ids] as const)),
     ),
   );
-  const items = (yield* readRows(files.items)).filter((item) => !done.has(item.item));
+  const items = (yield* readRows(files.items)).filter((item) => !HashSet.has(done, item.item));
   yield* Console.log(`items to rerank ${items.length}`);
   const reranker = yield* loadReranker(options);
   // The first batch also compiles the device's kernels; it is not one an item would wait for.

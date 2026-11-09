@@ -1,5 +1,5 @@
 import { NodeCrypto } from "@effect/platform-node";
-import { Effect, Layer, MutableHashMap, MutableRef, Option, Schema } from "effect";
+import { Effect, HashMap, Layer, MutableHashMap, MutableRef, Option, Schema } from "effect";
 import { Digest } from "effect/crypto";
 import { expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
@@ -96,7 +96,7 @@ it.effect("stored messages name the model that wrote them", () =>
         model,
         provider: "openai-compatible",
         loadHistory: Effect.succeed(stored),
-        toolResultIds: () => Effect.succeed(new Map()),
+        toolResultIds: () => Effect.succeed(HashMap.empty<string, string>()),
       }).pipe(Effect.flatMap((restore) => restore(stored)));
     expect(yield* restore("old-model")).toBeNull();
     expect(yield* restore("new-model")).toEqual([
@@ -261,7 +261,7 @@ it.effect(
         model: "new-model",
         provider: "openai-compatible",
         loadHistory: Effect.succeed(past),
-        toolResultIds: () => Effect.succeed(new Map()),
+        toolResultIds: () => Effect.succeed(HashMap.empty<string, string>()),
       });
       const failures = yield* Effect.all([Effect.flip(restore(past)), Effect.flip(restore(past))], {
         concurrency: "unbounded",

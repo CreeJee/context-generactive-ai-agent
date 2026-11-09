@@ -19,7 +19,18 @@ import { Result, Function as EffectFunction } from "effect";
 // Native SDK fetch, keyring and AsyncGenerator adapters remain explicit Promise boundaries.
 import { testHttpServer, HttpServerRequest, HttpServerResponse } from "./support/http.ts";
 import { webCrypto } from "./support/platform.ts";
-import { Cause, Deferred, Effect, Fiber, Layer, MutableRef, Schema, Stream } from "effect";
+import {
+  Cause,
+  Deferred,
+  Effect,
+  Fiber,
+  Layer,
+  MutableHashMap,
+  MutableRef,
+  Option,
+  Schema,
+  Stream,
+} from "effect";
 import { optionalProperty } from "../src/optional-property.ts";
 import { Tool, Toolkit } from "effect/ai";
 import { GlobalConfig } from "../src/config/global-config.ts";
@@ -1160,7 +1171,7 @@ describe("OpenAI compatible settings", () => {
           reasoningEffort: "default",
           openaiCompatible: configuration,
         });
-        const stored = new Map<string, string>([
+        const stored = MutableHashMap.fromIterable<string, string>([
           [LEGACY_COMPATIBLE_CREDENTIAL_ENTRY, "legacy-key-from-before-accounts"],
         ]);
         const api = makeOpenAICompatibleSettings({
@@ -1172,10 +1183,13 @@ describe("OpenAI compatible settings", () => {
               ),
           },
           keys: (entry) => ({
-            get: Effect.sync(() => stored.get(entry) ?? null),
+            get: Effect.sync(() => Option.getOrNull(MutableHashMap.get(stored, entry))),
             set: (value) =>
               Effect.sync(
-                () => void (value === null ? stored.delete(entry) : stored.set(entry, value)),
+                () =>
+                  void (value === null
+                    ? MutableHashMap.remove(stored, entry)
+                    : MutableHashMap.set(stored, entry, value)),
               ),
           }),
           ...webCrypto,
@@ -1203,10 +1217,10 @@ describe("OpenAI compatible settings", () => {
           models: [],
         });
         expect(MutableRef.get(saved).openaiCompatible).toBeUndefined();
-        expect(stored.get(LEGACY_COMPATIBLE_CREDENTIAL_ENTRY)).toBe(
-          "legacy-key-from-before-accounts",
-        );
-        expect(stored.size).toBe(2);
+        expect(
+          Option.getOrNull(MutableHashMap.get(stored, LEGACY_COMPATIBLE_CREDENTIAL_ENTRY)),
+        ).toBe("legacy-key-from-before-accounts");
+        expect(MutableHashMap.size(stored)).toBe(2);
 
         const second = {
           id: "second",
@@ -1230,7 +1244,7 @@ describe("OpenAI compatible settings", () => {
         expect(runtime.contextWindow(configuration.model)).toBe(0);
 
         yield* api.remove(id);
-        expect(stored.size).toBe(1);
+        expect(MutableHashMap.size(stored)).toBe(1);
         expect(MutableRef.get(saved)).toMatchObject({ model: configuration.model });
         expect((yield* api.status).accounts).toMatchObject([
           { id: LEGACY_COMPATIBLE_ACCOUNT_ID, selected: true },

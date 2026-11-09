@@ -1,4 +1,5 @@
 import {
+  Array as Arr,
   Cause,
   Clock,
   Context,
@@ -86,7 +87,7 @@ const failureSummary = (cause: Cause.Cause<unknown>) => {
       Interrupt: () => "Interrupted",
     }),
   );
-  return [...new Set(tags)].join(",");
+  return Arr.dedupe(tags).join(",");
 };
 
 /**

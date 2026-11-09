@@ -1,4 +1,4 @@
-import { Data, Effect, Match, Schema, Struct } from "effect";
+import { Data, Effect, HashSet, Iterable, Match, Schema, Struct } from "effect";
 import { optionalProperty } from "../optional-property.ts";
 import { BoardAuthor, cardContractKeys, type CardStatus } from "./card.ts";
 import {
@@ -104,8 +104,13 @@ const patched = (card: PlanStep, patch: CardPatch): PlanStep => {
 const restatus = (steps: readonly PlanStep[], card: PlanStep): PlanStep =>
   Match.value(card.status).pipe(
     Match.whenOr("backlog", "ready", (): PlanStep => {
-      const done = new Set(steps.filter((step) => step.status === "done").map((step) => step.id));
-      return { ...card, status: notStartedStatus(steps, (id) => done.has(id))(card) };
+      const done = HashSet.fromIterable(
+        Iterable.map(
+          Iterable.filter(steps, (step) => step.status === "done"),
+          (step) => step.id,
+        ),
+      );
+      return { ...card, status: notStartedStatus(steps, (id) => HashSet.has(done, id))(card) };
     }),
     Match.whenOr("in_progress", "verify", "human_decision", "done", "blocked", () => card),
     Match.exhaustive,

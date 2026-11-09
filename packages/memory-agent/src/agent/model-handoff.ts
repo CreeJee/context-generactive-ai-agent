@@ -1,6 +1,16 @@
 import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { Array as Arr, Effect, HashSet, Match, Option, Schema, Struct } from "effect";
+import {
+  Array as Arr,
+  Effect,
+  HashMap,
+  HashSet,
+  Iterable,
+  Match,
+  Option,
+  Schema,
+  Struct,
+} from "effect";
 import type { ChatMetadata, ChatMetadataFailed } from "../chat-store/metadata.ts";
 import {
   answeredToolCalls,
@@ -130,10 +140,16 @@ function handoffHistoryBody<M extends ConversationMessage>(
     // Approved calls may complete before the first new-model request. Pair those results without
     // replaying the rest of the old protocol or changing the SDK's canonical execution state.
     const pairedIds = HashSet.fromIterable(
-      tail.filter((m) => m.role === "tool").map((m) => m.toolCallId),
+      Iterable.map(
+        Iterable.filter(tail, (m) => m.role === "tool"),
+        (m) => m.toolCallId,
+      ),
     );
     const recordedIds = HashSet.fromIterable(
-      past.filter((m) => m.role === "tool").map((m) => m.toolCallId),
+      Iterable.map(
+        Iterable.filter(past, (m) => m.role === "tool"),
+        (m) => m.toolCallId,
+      ),
     );
     const assistantText = (message: M): Array<CompactionMessage> => {
       const calls = message.toolCalls ?? [];
@@ -187,7 +203,7 @@ export interface ModelHandoffOptions<M extends ConversationMessage, E> {
   /** The recorded tool_result node of each of these earlier calls that has one. */
   readonly toolResultIds: (
     toolCallIds: readonly string[],
-  ) => Effect.Effect<ReadonlyMap<string, string>, NodeStoreFailed>;
+  ) => Effect.Effect<HashMap.HashMap<string, string>, NodeStoreFailed>;
 }
 
 export const modelHandoffHistoryEffect = <M extends ConversationMessage, E>(
@@ -294,7 +310,9 @@ export const modelHandoffHistoryEffect = <M extends ConversationMessage, E>(
                 }),
               ),
               Effect.flatMap((recorded) =>
-                handoffHistory(messages, handoff, (id) => recorded.get(id) ?? null),
+                handoffHistory(messages, handoff, (id) =>
+                  Option.getOrNull(HashMap.get(recorded, id)),
+                ),
               ),
             ),
         });

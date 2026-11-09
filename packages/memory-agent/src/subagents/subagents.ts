@@ -1,4 +1,4 @@
-import { Array as Arr, Data, Exit, Fiber, HashMap, HashSet, Predicate } from "effect";
+import { Array as Arr, Data, Exit, Fiber, HashMap, HashSet, Iterable, Predicate } from "effect";
 import { SecureRandom } from "effect/crypto";
 import { SqlClient, type SqlError, SqlSchema } from "effect/sql";
 import { Function as EffectFunction } from "effect";
@@ -205,11 +205,14 @@ export const childCompactionSources = <E extends { readonly _tag: string }>(
   toolResultIds: (toolCallIds) =>
     Effect.map(saved, (messages) => {
       const recorded = savedToolCallIds(messages);
-      return new Map(
-        toolCallIds.filter((id) => HashSet.has(recorded, id)).map((id) => [id, id] as const),
+      return HashMap.fromIterable(
+        Iterable.map(
+          Iterable.filter(toolCallIds, (id) => HashSet.has(recorded, id)),
+          (id) => [id, id] as const,
+        ),
       );
     }),
-  nodeTexts: () => Effect.succeed(new Map<string, string>()),
+  nodeTexts: () => Effect.succeed(HashMap.empty<string, string>()),
   pointers: childPointers,
 });
 

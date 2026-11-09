@@ -8,6 +8,7 @@ import {
   HashMap,
   Layer,
   Match,
+  MutableHashMap,
   MutableRef,
   Option,
   Order,
@@ -89,16 +90,16 @@ export const FailedSpans = Context.Reference<{
   /** Failed spans of each given run's trace, oldest first. */
   readonly ofRuns: (
     runIds: readonly string[],
-  ) => Effect.Effect<ReadonlyMap<string, readonly FailedSpan[]>>;
+  ) => Effect.Effect<HashMap.HashMap<string, readonly FailedSpan[]>>;
   /** Span totals of each given run's trace, from when the run named its trace. */
   readonly totalsOfRuns: (
     runIds: readonly string[],
-  ) => Effect.Effect<ReadonlyMap<string, RunSpanTotals>>;
+  ) => Effect.Effect<HashMap.HashMap<string, RunSpanTotals>>;
 }>("memory-agent/runtime/failed-spans/FailedSpans", {
   defaultValue: () => ({
     ofTrace: () => Effect.succeed([]),
-    ofRuns: () => Effect.succeed(new Map()),
-    totalsOfRuns: () => Effect.succeed(new Map()),
+    ofRuns: () => Effect.succeed(HashMap.empty()),
+    totalsOfRuns: () => Effect.succeed(HashMap.empty()),
   }),
 });
 
@@ -218,8 +219,10 @@ const plainAttributes = (attributes: ReadonlyMap<string, unknown>) =>
   );
 
 /** Keeps a map within `limit` entries by dropping the oldest. */
-const bounded = <K, V>(map: Map<K, V>, limit: number) =>
-  Arr.take(Arr.fromIterable(map.keys()), map.size - limit).forEach((key) => map.delete(key));
+const bounded = <K, V>(map: MutableHashMap.MutableHashMap<K, V>, limit: number) =>
+  Arr.take(Arr.fromIterable(MutableHashMap.keys(map)), MutableHashMap.size(map) - limit).forEach(
+    (key) => MutableHashMap.remove(map, key),
+  );
 
 const make = (role: "owner" | "worker") =>
   Effect.gen(function* () {
@@ -227,12 +230,12 @@ const make = (role: "owner" | "worker") =>
     // The tracer interface is synchronous, so the recorder's state is plain mutable data that never
     // leaves this closure; reads copy it.
     const spans = MutableRef.make<readonly FailedSpan[]>([]);
-    const traceOfRun = new Map<string, string>();
+    const traceOfRun = MutableHashMap.empty<string, string>();
     /** Running spans below which a failure was already recorded, with that failure. */
-    const failedBelow = new Map<string, string>();
+    const failedBelow = MutableHashMap.empty<string, string>();
     /** Span totals of the traces runs named, from when they named them. */
-    const totalsOfTrace = new Map<string, TraceTotals>();
-    const totalsOf = (traceId: string) => Option.fromNullishOr(totalsOfTrace.get(traceId));
+    const totalsOfTrace = MutableHashMap.empty<string, TraceTotals>();
+    const totalsOf = (traceId: string) => MutableHashMap.get(totalsOfTrace, traceId);
 
     const channel = new BroadcastChannel(failedSpanChannel);
     // The channel must never be the reason a thread stays alive.
@@ -248,14 +251,15 @@ const make = (role: "owner" | "worker") =>
       };
 
     const record = (span: Tracer.Span, endTime: bigint, exit: Exit.Exit<unknown, unknown>) => {
-      const below = failedBelow.get(span.spanId);
-      failedBelow.delete(span.spanId);
+      const below = Option.getOrUndefined(MutableHashMap.get(failedBelow, span.spanId));
+      MutableHashMap.remove(failedBelow, span.spanId);
       const failure = Exit.match(exit, {
         onSuccess: () => Option.none<string>(),
         onFailure: failureOf,
       });
       Option.map(totalsOf(span.traceId), (totals) =>
-        totalsOfTrace.set(
+        MutableHashMap.set(
+          totalsOfTrace,
           span.traceId,
           withSpanTotal(totals, spanTotalOf(span, endTime, Option.isSome(failure))),
         ),
@@ -263,7 +267,7 @@ const make = (role: "owner" | "worker") =>
       if (Option.isNone(failure)) return;
       const parent = Option.getOrUndefined(span.parent);
       if (parent !== undefined) {
-        failedBelow.set(parent.spanId, failure.value);
+        MutableHashMap.set(failedBelow, parent.spanId, failure.value);
         bounded(failedBelow, failedSpanLimits.marks);
       }
       // The same failure passing up through the spans above it is recorded once, where it began.
@@ -294,10 +298,11 @@ const make = (role: "owner" | "worker") =>
         span.attribute = (key, value) => {
           if (key !== runSpanAttribute) return attribute(key, value);
           Option.map(decodeRunId(value), (runId) => {
-            traceOfRun.set(runId, span.traceId);
+            MutableHashMap.set(traceOfRun, runId, span.traceId);
             bounded(traceOfRun, failedSpanLimits.runs);
             // A trace named again keeps what it counted.
-            totalsOfTrace.set(
+            MutableHashMap.set(
+              totalsOfTrace,
               span.traceId,
               Option.getOrElse(totalsOf(span.traceId), () => noTotals),
             );
@@ -319,40 +324,37 @@ const make = (role: "owner" | "worker") =>
       ofTrace: (traceId: string) =>
         Effect.map(recent, (kept) => kept.filter((span) => span.traceId === traceId)),
       ofRuns: (runIds: readonly string[]) =>
-        Effect.map(
-          recent,
-          (kept): ReadonlyMap<string, readonly FailedSpan[]> =>
-            new Map(
-              runIds.flatMap((runId) => {
-                const traceId = traceOfRun.get(runId);
-                const own = kept.filter((span) => span.traceId === traceId);
-                return traceId === undefined || own.length === 0 ? [] : [[runId, own] as const];
-              }),
-            ),
+        Effect.map(recent, (kept): HashMap.HashMap<string, readonly FailedSpan[]> =>
+          HashMap.fromIterable(
+            runIds.flatMap((runId) => {
+              const traceId = Option.getOrUndefined(MutableHashMap.get(traceOfRun, runId));
+              const own = kept.filter((span) => span.traceId === traceId);
+              return traceId === undefined || own.length === 0 ? [] : [[runId, own] as const];
+            }),
+          ),
         ),
       totalsOfRuns: (runIds: readonly string[]) =>
-        Effect.sync(
-          (): ReadonlyMap<string, RunSpanTotals> =>
-            new Map(
-              Arr.getSomes(
-                runIds.map((runId) =>
-                  Option.fromNullishOr(traceOfRun.get(runId)).pipe(
-                    Option.flatMap(totalsOf),
-                    Option.filter((totals) => HashMap.size(totals.paths) > 0),
-                    Option.map(
-                      (totals) =>
-                        [
-                          runId,
-                          {
-                            totals: Arr.sort(HashMap.toValues(totals.paths), longestFirst),
-                            dropped: totals.dropped,
-                          },
-                        ] as const,
-                    ),
+        Effect.sync((): HashMap.HashMap<string, RunSpanTotals> =>
+          HashMap.fromIterable(
+            Arr.getSomes(
+              runIds.map((runId) =>
+                MutableHashMap.get(traceOfRun, runId).pipe(
+                  Option.flatMap(totalsOf),
+                  Option.filter((totals) => HashMap.size(totals.paths) > 0),
+                  Option.map(
+                    (totals) =>
+                      [
+                        runId,
+                        {
+                          totals: Arr.sort(HashMap.toValues(totals.paths), longestFirst),
+                          dropped: totals.dropped,
+                        },
+                      ] as const,
                   ),
                 ),
               ),
             ),
+          ),
         ),
     };
     return Context.make(Tracer.Tracer, tracer).pipe(Context.add(FailedSpans, store));

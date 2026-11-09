@@ -13,7 +13,17 @@
  */
 import { DatabaseSync } from "node:sqlite";
 import { NodeFileSystem } from "@effect/platform-node";
-import { Console, Effect, FileSystem, Layer, Option, Schema } from "effect";
+import {
+  Console,
+  Effect,
+  FileSystem,
+  HashMap,
+  HashSet,
+  Iterable,
+  Layer,
+  Option,
+  Schema,
+} from "effect";
 import { loadTurbovec } from "../../turbovec/index.js";
 import { runNativeEffect } from "../src/runtime/native-effect.ts";
 import { StorageRoot } from "../src/config/storage-root.ts";
@@ -160,18 +170,24 @@ const program = Effect.gen(function* () {
         const hits = index.search(q, Math.min(12, vectors.length));
         const searchMs = performance.now() - searchStarted;
         const quantOrder = hits.ids.map((id) => Number(id));
-        const quantSet = new Set(quantOrder);
+        const quantSet = HashSet.fromIterable(quantOrder);
         const overlap = (limit: number) => {
-          const head = new Set(exact.slice(0, limit).map((entry) => entry.position));
-          let shared = 0;
-          for (const position of head) if (quantSet.has(position)) shared++;
-          return shared / Math.min(limit, vectors.length);
+          const head = HashSet.fromIterable(
+            Iterable.map(Iterable.take(exact, limit), (entry) => entry.position),
+          );
+          return (
+            HashSet.size(HashSet.intersection(head, quantSet)) / Math.min(limit, vectors.length)
+          );
         };
         const exactTop1 = exact[0]!.position;
         const quantRank = quantOrder.indexOf(exactTop1);
-        const exactScore = new Map(exact.map((entry) => [entry.position, entry.score] as const));
+        const exactScore = HashMap.fromIterable(
+          Iterable.map(exact, (entry) => [entry.position, entry.score] as const),
+        );
         const deltas = quantOrder.map((position, rank) =>
-          Math.abs(hits.scores[rank]! - (exactScore.get(position) ?? 0)),
+          Math.abs(
+            hits.scores[rank]! - Option.getOrElse(HashMap.get(exactScore, position), () => 0),
+          ),
         );
         rows.push({
           overlap5: overlap(5),

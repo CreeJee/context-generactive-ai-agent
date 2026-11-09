@@ -4,6 +4,7 @@ import {
   Array as EffectArray,
   HashMap,
   ConfigProvider,
+  Iterable,
   Option,
   Config,
   Context,
@@ -300,7 +301,7 @@ const sourceFromServices = Effect.gen(function* () {
     load: Effect.gen(function* () {
       const loaded = yield* Effect.forEach([...providers.providers].toSorted(), providerRoutes);
       const authByProvider = HashMap.fromIterable(
-        loaded.map(({ provider, authentication }) => [provider, authentication] as const),
+        Iterable.map(loaded, ({ provider, authentication }) => [provider, authentication] as const),
       );
 
       const openAIKey = yield* Config.String("OPENAI_API_KEY")

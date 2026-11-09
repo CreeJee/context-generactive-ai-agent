@@ -1,4 +1,4 @@
-import { Effect, Match, Option } from "effect";
+import { Array as Arr, Effect, HashMap, HashSet, Iterable, Match, Option } from "effect";
 import { BoardEdit, type CardDraft, type CardPatch } from "../workflow/board-edit.ts";
 import type { BoardAuthor } from "../workflow/card.ts";
 import type { PlanStep, Workflows } from "../workflow/workflow.ts";
@@ -15,7 +15,7 @@ export const boardOps = (workflows: Workflows["Service"]) => {
     author: BoardAuthor,
   ) {
     const before = yield* workflows.get(sessionId);
-    const known = new Set(before.plan?.steps.map((step) => step.id) ?? []);
+    const known = HashSet.fromIterable(Iterable.map(before.plan?.steps ?? [], (step) => step.id));
     const result = yield* workflows.editBoard(
       sessionId,
       BoardEdit.cases.AddCard.make({ planVersion: before.plan?.version ?? 0, card }),
@@ -23,7 +23,7 @@ export const boardOps = (workflows: Workflows["Service"]) => {
     );
     return Match.valueTags(result, {
       Applied: ({ state }) =>
-        Option.fromUndefinedOr(state.plan?.steps.find((step) => !known.has(step.id))),
+        Option.fromUndefinedOr(state.plan?.steps.find((step) => !HashSet.has(known, step.id))),
       Requested: () => Option.none<PlanStep>(),
     });
   });
@@ -65,16 +65,23 @@ export const boardOps = (workflows: Workflows["Service"]) => {
     replacements: readonly string[],
     author: BoardAuthor,
   ) {
-    const gone = new Set(replaced);
+    const gone = HashSet.fromIterable(replaced);
     const steps = (yield* workflows.get(sessionId)).plan?.steps ?? [];
     const dependents = steps.filter(
-      (step) => !gone.has(step.id) && step.dependsOn.some((id) => gone.has(id)),
+      (step) => !HashSet.has(gone, step.id) && step.dependsOn.some((id) => HashSet.has(gone, id)),
     );
-    const dependsOn = new Map(steps.map((step) => [step.id, step.dependsOn]));
+    const dependsOn = HashMap.fromIterable(
+      Iterable.map(steps, (step) => [step.id, step.dependsOn]),
+    );
     // A replaced card another replaced card depends on is cancelled after it.
     const cancelOrder = (remaining: readonly string[]): readonly string[] => {
       const leaf = remaining.find(
-        (id) => !remaining.some((other) => other !== id && dependsOn.get(other)?.includes(id)),
+        (id) =>
+          !remaining.some(
+            (other) =>
+              other !== id &&
+              Option.exists(HashMap.get(dependsOn, other), (deps) => deps.includes(id)),
+          ),
       );
       // A cycle among them cannot be cancelled in any order; the refusal names it.
       const next = leaf === undefined ? remaining : [leaf];
@@ -90,9 +97,9 @@ export const boardOps = (workflows: Workflows["Service"]) => {
           sessionId,
           step.id,
           {
-            dependsOn: [
-              ...new Set(step.dependsOn.flatMap((id) => (gone.has(id) ? replacements : [id]))),
-            ],
+            dependsOn: Arr.dedupe(
+              step.dependsOn.flatMap((id) => (HashSet.has(gone, id) ? replacements : [id])),
+            ),
           },
           author,
         ),

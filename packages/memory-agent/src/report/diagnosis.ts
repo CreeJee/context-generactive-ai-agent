@@ -1,5 +1,5 @@
 import { AuthConnectionState } from "../providers/contracts.ts";
-import { Context, Effect, Layer, Option, Schema } from "effect";
+import { Context, Effect, HashSet, Layer, Option, Schema } from "effect";
 import { SecureRandom } from "effect/crypto";
 import { ApiUsage, recordUsage } from "../agent/api-usage.ts";
 import { singleAnswer } from "../model/single-call.ts";
@@ -49,7 +49,7 @@ const maxSummary = 1_200;
  */
 export const parseDiagnosis = Effect.fnUntraced(function* (
   answer: string,
-  evidenceIds: ReadonlySet<string>,
+  evidenceIds: HashSet.HashSet<string>,
 ): Effect.fn.Return<ReportDiagnosis, ReportDiagnosisError> {
   const json = answer
     .trim()
@@ -60,13 +60,13 @@ export const parseDiagnosis = Effect.fnUntraced(function* (
   );
   const clip = (text: string) => text.trim().slice(0, maxText);
   const observations = decoded.observations.flatMap((item) => {
-    const cited = item.evidenceIds.filter((id) => evidenceIds.has(id));
+    const cited = item.evidenceIds.filter((id) => HashSet.has(evidenceIds, id));
     return cited.length > 0 && clip(item.text) !== ""
       ? [{ text: clip(item.text), evidenceIds: cited }]
       : [];
   });
   const uncited = decoded.observations
-    .filter((item) => !item.evidenceIds.some((id) => evidenceIds.has(id)))
+    .filter((item) => !item.evidenceIds.some((id) => HashSet.has(evidenceIds, id)))
     .map((item) => ({ text: clip(item.text) }));
   const hypotheses = [...decoded.hypotheses.map((item) => ({ text: clip(item.text) })), ...uncited]
     .filter((item) => item.text !== "")
@@ -156,7 +156,7 @@ export class ReportDiagnoser extends Context.Service<
         );
         return yield* parseDiagnosis(
           answer.text,
-          input.bundle === null ? new Set() : bundlePlaces(input.bundle),
+          input.bundle === null ? HashSet.empty() : bundlePlaces(input.bundle),
         );
       });
       return ReportDiagnoser.of({ diagnose });

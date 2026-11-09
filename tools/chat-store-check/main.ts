@@ -7,6 +7,7 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { DatabaseSync } from "node:sqlite";
 import {
+  Array as Arr,
   Clock,
   Console,
   Effect,
@@ -95,7 +96,7 @@ const differingPaths = (
   fingerprint(left) === fingerprint(right)
     ? []
     : isObject(left) && isObject(right)
-      ? [...new Set([...Object.keys(left), ...Object.keys(right)])].flatMap((key) =>
+      ? Arr.dedupe([...Object.keys(left), ...Object.keys(right)]).flatMap((key) =>
           differingPaths(left[key], right[key], `${path}.${key}`),
         )
       : Array.isArray(left) && Array.isArray(right)
@@ -122,7 +123,7 @@ const shown = (message: JsonValue | undefined): JsonValue | undefined =>
 
 /** Where a migrated screen message differs from the original: its JSON paths, indexes left out. */
 const screenDifference = (before: JsonValue | undefined, after: JsonValue | undefined) =>
-  [...new Set(differingPaths(before, after, "$").map((path) => path.replace(/\.\d+/g, "[]")))]
+  Arr.dedupe(differingPaths(before, after, "$").map((path) => path.replace(/\.\d+/g, "[]")))
     .sort()
     .join(" ");
 
@@ -150,16 +151,14 @@ const decodeHandoff = Schema.decodeUnknownEffect(Schema.fromJsonString(HandoffSt
 const issues = SchemaIssue.makeFormatterStandardSchemaV1();
 /** Where a value failed its Schema; the messages are left out, as they quote the value. */
 const issuePaths = (error: Schema.SchemaError) =>
-  [
-    ...new Set(
-      issues(error.issue).issues.map(
-        (issue) =>
-          (issue.path ?? [])
-            .map((segment) => String(Predicate.isObject(segment) ? segment.key : segment))
-            .join(".") || "(root)",
-      ),
+  Arr.dedupe(
+    issues(error.issue).issues.map(
+      (issue) =>
+        (issue.path ?? [])
+          .map((segment) => String(Predicate.isObject(segment) ? segment.key : segment))
+          .join(".") || "(root)",
     ),
-  ].join(" | ");
+  ).join(" | ");
 
 /** Counts of each check, and the first failures of each kind. */
 const makeReport = () => {

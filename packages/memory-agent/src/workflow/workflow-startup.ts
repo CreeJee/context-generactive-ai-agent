@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from "effect";
+import { Array as Arr, Context, Effect, Layer } from "effect";
 import { WorkflowExecution } from "./execution.ts";
 import { goalStateOf, standingOf } from "./goal-transitions.ts";
 import { Workflows } from "./workflow.ts";
@@ -28,7 +28,7 @@ export class WorkflowStartup extends Context.Service<
           (state) => goalStateOf(standingOf(state))._tag !== "Running",
         ),
       );
-      yield* Effect.forEach([...new Set([...repaired, ...halted])], execution.stopReconciled, {
+      yield* Effect.forEach(Arr.dedupe([...repaired, ...halted]), execution.stopReconciled, {
         discard: true,
       });
       const settled = yield* workflows.settleAbandonedNewGoalRequests;

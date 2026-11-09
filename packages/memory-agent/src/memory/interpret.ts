@@ -1,6 +1,6 @@
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { HashSet, Array as EffectArray, DateTime, Semaphore } from "effect";
+import { HashMap, HashSet, Iterable, Array as EffectArray, DateTime, Semaphore } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { Context, Effect, Layer, Match, Option, Schema, Stream } from "effect";
 import { SecureRandom } from "effect/crypto";
@@ -210,12 +210,13 @@ const make = Effect.gen(function* () {
 
   const interpretBatch = (pending: readonly Node[], selection: ModelSelection) =>
     Effect.gen(function* () {
-      const candidates = new Map(
+      const candidates = HashMap.fromIterable(
         yield* Effect.forEach(pending, (statement) =>
           Effect.map(candidatesFor(statement), (found) => [statement.id, found] as const),
         ),
       );
-      const offeredTo = (statement: Node) => candidates.get(statement.id) ?? [];
+      const offeredTo = (statement: Node) =>
+        Option.getOrElse(HashMap.get(candidates, statement.id), () => []);
       // A statement with no earlier candidate can relate to nothing, so it costs no model call.
       const batch = pending.filter((statement) => offeredTo(statement).length > 0);
       const alone = pending.filter((statement) => !batch.includes(statement));
@@ -290,7 +291,7 @@ const make = Effect.gen(function* () {
           answered,
           Effect.fnUntraced(function* ({ statement, result }) {
             const offered = offeredTo(statement);
-            const allowed = HashSet.fromIterable(offered.map((node) => node.id));
+            const allowed = HashSet.fromIterable(Iterable.map(offered, (node) => node.id));
             yield* Effect.forEach(
               EffectArray.dedupe(result.topics.map(normalizeTopic)).filter(
                 (label) => label.length > 0,

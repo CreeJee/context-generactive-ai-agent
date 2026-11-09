@@ -1,4 +1,14 @@
-import { Effect, FileSystem, Layer, MutableHashMap, Option, Path, Random, Schema } from "effect";
+import {
+  Effect,
+  FileSystem,
+  Iterable,
+  Layer,
+  MutableHashMap,
+  Option,
+  Path,
+  Random,
+  Schema,
+} from "effect";
 import { expect } from "vite-plus/test";
 import { EmbedderRuntime, Embedder, EmbeddingError } from "../../src/memory/embedding/embedder.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
@@ -100,7 +110,9 @@ testAgent()("MemorySearch.find", (it) => {
           query: "SQLite로 결정했던 이유",
           projectId: earlier.project.id,
         });
-        const byId = MutableHashMap.fromIterable(result.matches.map((match) => [match.id, match]));
+        const byId = MutableHashMap.fromIterable(
+          Iterable.map(result.matches, (match) => [match.id, match]),
+        );
         const match = (id: string) => Option.getOrUndefined(MutableHashMap.get(byId, id));
         expect(result.degraded).toEqual([]);
         expect(result.unindexed).toBe(0);
@@ -315,9 +327,13 @@ testAgent()("MemorySearch.find", (it) => {
         hooks: [yield* (yield* Recorder).hookFor(binding)],
       });
       const results = MutableHashMap.fromIterable(
-        (yield* nodes.session(newSession.id))
-          .filter((node) => node.kind === "tool_result")
-          .map((node) => [node.detail.toolCallId, node.text]),
+        Iterable.map(
+          Iterable.filter(
+            yield* nodes.session(newSession.id),
+            (node) => node.kind === "tool_result",
+          ),
+          (node) => [node.detail.toolCallId, node.text],
+        ),
       );
       const output = <S extends Schema.Top>(id: string, schema: S) =>
         Schema.decodeEffect(Schema.fromJsonString(schema))(

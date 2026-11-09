@@ -7,8 +7,12 @@ import {
   Context,
   Data,
   Effect,
+  HashMap,
+  HashSet,
+  Iterable,
   Layer,
   Match,
+  MutableHashMap,
   Option,
   Predicate,
   Result,
@@ -93,12 +97,13 @@ const PersistedPlanStep = Schema.Struct({
 const cardStatuses = <S extends typeof PersistedPlanStep.Type>(
   steps: readonly S[],
 ): Array<Omit<S, "status"> & { readonly status: CardStatus }> => {
-  const done = new Set(
-    steps
-      .filter((step) => step.status === "done" || step.status === "completed")
-      .map((step) => step.id),
+  const done = HashSet.fromIterable(
+    Iterable.map(
+      Iterable.filter(steps, (step) => step.status === "done" || step.status === "completed"),
+      (step) => step.id,
+    ),
   );
-  const notStarted = notStartedStatus(steps, (id) => done.has(id));
+  const notStarted = notStartedStatus(steps, (id) => HashSet.has(done, id));
   return steps.map((step) => ({
     ...step,
     status: Match.value(step.status).pipe(
@@ -264,7 +269,9 @@ export const revisionCards = (json: string | null) =>
       Effect.forEach(plan?.steps ?? [], (step) =>
         Effect.map(encodeCard(step), (encoded) => [step.id, encoded] as const),
       ),
-      (entries): ReadonlyMap<string, string> => new Map(entries),
+      // The mutable map keeps Plan order, which `boardChange` reports the cards in.
+      (entries): MutableHashMap.MutableHashMap<string, string> =>
+        MutableHashMap.fromIterable(entries),
     ),
   );
 const encodeCardIds = Schema.encodeEffect(Schema.fromJsonString(Schema.Array(Schema.String)));
@@ -277,13 +284,13 @@ export const boardChange = ({
   before,
   after,
 }: {
-  readonly before: ReadonlyMap<string, string>;
-  readonly after: ReadonlyMap<string, string>;
+  readonly before: MutableHashMap.MutableHashMap<string, string>;
+  readonly after: MutableHashMap.MutableHashMap<string, string>;
 }): Effect.Effect<Option.Option<string>, Schema.SchemaError> =>
   Arr.match(
     Arr.filterMap(after, ([id, json]) =>
-      before.get(id) === json ? Result.failVoid : Result.succeed(id),
-    ).concat(Arr.filter(before.keys(), (id) => !after.has(id))),
+      Option.contains(MutableHashMap.get(before, id), json) ? Result.failVoid : Result.succeed(id),
+    ).concat(Arr.filter(MutableHashMap.keys(before), (id) => !MutableHashMap.has(after, id))),
     { onEmpty: () => Effect.succeedNone, onNonEmpty: (ids) => Effect.asSome(encodeCardIds(ids)) },
   );
 const encodeGoal = Schema.encodeEffect(Schema.fromJsonString(GoalArtifact));
@@ -1105,15 +1112,15 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                 validateStepOutcomes(current.goal?.outcomes ?? [], input.steps).pipe(
                   Effect.andThen(nowIso),
                   Effect.map((now) => {
-                    const previous = new Map(
-                      current.plan?.steps.map((step) => [step.id, step]) ?? [],
+                    const previous = HashMap.fromIterable(
+                      Iterable.map(current.plan?.steps ?? [], (step) => [step.id, step]),
                     );
                     const plan: PlanArtifact = {
                       ...input,
                       steps: cardStatuses(
                         input.steps.map((step) => {
                           const replanned = { ...step, status: "pending" as const, evidence: [] };
-                          const prior = previous.get(step.id);
+                          const prior = Option.getOrUndefined(HashMap.get(previous, step.id));
                           return prior === undefined
                             ? replanned
                             : {

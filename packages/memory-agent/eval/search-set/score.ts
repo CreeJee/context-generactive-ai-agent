@@ -8,7 +8,7 @@
  * item. With `complete`, only items whose top 10 every scored run has graded are counted: until the
  * judge has graded every run, an ungraded node would count against one run more than another.
  */
-import { Array as Arr, Console, Effect, HashMap, Option, Order } from "effect";
+import { Array as Arr, Console, Effect, HashMap, Iterable, Option, Order } from "effect";
 import { ageBandOf, type Item, type Need, readRows, type RunRow, setFiles } from "./files.ts";
 
 interface ItemScore {
@@ -80,14 +80,17 @@ export const scoreRuns = Effect.fn("searchSet.score")(function* ({
 }: ScoreInput) {
   const files = setFiles(storage);
   const needs = HashMap.fromIterable(
-    (yield* readRows(files.needs)).map((need) => [need.need, need] as const),
+    Iterable.map(yield* readRows(files.needs), (need) => [need.need, need] as const),
   );
   const gradesOf = HashMap.fromIterable(
-    Object.entries(Arr.groupBy(yield* readRows(files.judgments), ({ need }) => need)).map(
+    Iterable.map(
+      Object.entries(Arr.groupBy(yield* readRows(files.judgments), ({ need }) => need)),
       ([need, rows]) =>
         [
           need,
-          HashMap.fromIterable(rows.map((row): readonly [string, number] => [row.node, row.grade])),
+          HashMap.fromIterable(
+            Iterable.map(rows, (row): readonly [string, number] => [row.node, row.grade]),
+          ),
         ] as const,
     ),
   );
@@ -107,7 +110,7 @@ export const scoreRuns = Effect.fn("searchSet.score")(function* ({
   const all = yield* Effect.forEach(runs, (run) =>
     Effect.map(readRows(files.run(run)), (rows) => {
       // A resumed run may hold an item twice; the last row is the one written last.
-      const rowOf = HashMap.fromIterable(rows.map((row) => [row.item, row] as const));
+      const rowOf = HashMap.fromIterable(Iterable.map(rows, (row) => [row.item, row] as const));
       return {
         run,
         scores: scorable.flatMap(({ item, need, grades }) =>
@@ -119,7 +122,7 @@ export const scoreRuns = Effect.fn("searchSet.score")(function* ({
     }),
   );
   const completeIn = all.map(({ scores }) =>
-    HashMap.fromIterable(scores.map((score) => [score.item, score.complete] as const)),
+    HashMap.fromIterable(Iterable.map(scores, (score) => [score.item, score.complete] as const)),
   );
   const counted = (score: ItemScore) =>
     !complete ||
@@ -159,7 +162,7 @@ export const scoreRuns = Effect.fn("searchSet.score")(function* ({
     onNone: () => Effect.void,
     onSome: (baseline) => {
       const baseOf = HashMap.fromIterable(
-        baseline.scores.map((score) => [score.item, score.ndcg] as const),
+        Iterable.map(baseline.scores, (score) => [score.item, score.ndcg] as const),
       );
       return Effect.forEach(
         scored.slice(1),

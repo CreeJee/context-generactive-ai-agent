@@ -6,6 +6,7 @@ import { isTruthy } from "../truthy.ts";
 import { path } from "../runtime/synchronous-path.ts";
 import {
   Array as EffectArray,
+  Iterable,
   Match,
   MutableHashMap,
   Option,
@@ -248,7 +249,10 @@ const make = (options: SkillsOptions) =>
         { concurrency: "unbounded" },
       );
       const byName = MutableHashMap.fromIterable(
-        layers.flatMap((layer) => layer.skills).map((entry) => [entry.skill.name, entry] as const),
+        Iterable.map(
+          Iterable.flatMap(layers, (layer) => layer.skills),
+          (entry) => [entry.skill.name, entry] as const,
+        ),
       );
       return {
         entries: [...MutableHashMap.values(byName)],

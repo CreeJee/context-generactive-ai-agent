@@ -1,4 +1,4 @@
-import { Match } from "effect";
+import { HashSet, Match } from "effect";
 import {
   BundleEvent,
   type BundleRun,
@@ -142,8 +142,8 @@ const failureText = (run: BundleRun) => {
 };
 
 /** Every place in the bundle an observation may cite. */
-export function bundlePlaces(bundle: ReportBundle): Set<string> {
-  return new Set([
+export function bundlePlaces(bundle: ReportBundle): HashSet.HashSet<string> {
+  return HashSet.fromIterable([
     "environment",
     "timeline",
     ...bundle.timeline.items.flatMap((run) => [

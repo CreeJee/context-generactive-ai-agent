@@ -5,7 +5,7 @@
  * model opened from the result (read_evidence or trace_evidence before its next search) are kept as
  * known nodes: the judge grades them with the rest, and they show how often it agrees.
  */
-import { Array as Arr, Console, Effect, HashMap, Option, Schema } from "effect";
+import { Array as Arr, Console, Effect, HashMap, HashSet, Iterable, Option, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { namesSomethingExactly } from "../../src/memory/search.ts";
 import { appendRows, languageOf, type Need, readRows, setFiles, textId } from "./files.ts";
@@ -87,14 +87,14 @@ export const buildRecorded = Effect.fn("searchSet.recorded")(function* (storage:
   const searches = Object.values(Arr.groupBy(calls, (call) => call.run_id)).flatMap((runCalls) =>
     runCalls.flatMap((call, index): ReadonlyArray<Search> => {
       if (call.tool !== "find_memory") return [];
-      const listed = new Set(call.result === null ? [] : resultIds(call.result));
+      const listed = HashSet.fromIterable(call.result === null ? [] : resultIds(call.result));
       return Option.toArray(argumentsOf(FindArguments)(call))
         .filter((input) => input.query.trim().length > 0)
         .map((input) => ({
           call,
           query: input.query,
           crossProject: input.crossProject ?? true,
-          opened: openedAfter(runCalls, index).filter((id) => listed.has(id)),
+          opened: openedAfter(runCalls, index).filter((id) => HashSet.has(listed, id)),
         }));
     }),
   );
@@ -159,8 +159,10 @@ export const buildRecorded = Effect.fn("searchSet.recorded")(function* (storage:
       query: first.query,
     };
   });
-  const existing = new Set((yield* readRows(files.needs)).map((need) => need.need));
-  const added = needs.filter(({ need }) => !existing.has(need.need));
+  const existing = HashSet.fromIterable(
+    Iterable.map(yield* readRows(files.needs), (need) => need.need),
+  );
+  const added = needs.filter(({ need }) => !HashSet.has(existing, need.need));
   yield* appendRows(files.needs)(added.map(({ need }) => need));
   yield* appendRows(files.items)(
     added.map(({ need, query }) => ({

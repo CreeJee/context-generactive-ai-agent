@@ -1,4 +1,4 @@
-import { Effect, Predicate, Schema, SchemaTransformation } from "effect";
+import { Effect, HashSet, Iterable, Predicate, Schema, SchemaTransformation } from "effect";
 import { BoardAuthor, CardRisk, CardStatus, cardContractFields, cardHoldFields } from "./card.ts";
 
 /**
@@ -151,8 +151,8 @@ export type GoalOutcome = typeof GoalOutcome.Type;
 export const GoalOutcomes = Schema.Array(GoalOutcome).check(
   Schema.makeFilter(
     (outcomes) =>
-      new Set(outcomes.map((outcome) => outcome.id)).size === outcomes.length ||
-      "each outcome id is used once",
+      HashSet.size(HashSet.fromIterable(Iterable.map(outcomes, (outcome) => outcome.id))) ===
+        outcomes.length || "each outcome id is used once",
   ),
 );
 

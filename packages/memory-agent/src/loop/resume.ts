@@ -2,6 +2,7 @@ import {
   Array as Arr,
   Effect,
   HashSet,
+  Iterable,
   Match,
   Option,
   Order,
@@ -58,7 +59,7 @@ const checkBatch = Effect.fnUntraced(function* (
   resume: ReadonlyArray<ResumeEntry>,
   entryOf: (interruptId: string) => Option.Option<ResumeEntry>,
 ) {
-  if (HashSet.size(HashSet.fromIterable(pending.map(({ runId }) => runId))) > 1)
+  if (HashSet.size(HashSet.fromIterable(Iterable.map(pending, ({ runId }) => runId))) > 1)
     return yield* ResumeRejected.make({
       code: "stale",
       message: "Thread has pending interrupts from more than one run.",
@@ -102,7 +103,7 @@ const checkBatch = Effect.fnUntraced(function* (
       }),
     { discard: true },
   );
-  const pendingIds = HashSet.fromIterable(pending.map(({ interruptId }) => interruptId));
+  const pendingIds = HashSet.fromIterable(Iterable.map(pending, ({ interruptId }) => interruptId));
   yield* Effect.forEach(
     resume,
     ({ interruptId }) =>

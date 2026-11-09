@@ -23,7 +23,17 @@
  * Nothing it reads is printed: only counts and times. `--json` writes per-read rows (no text).
  */
 import { DatabaseSync } from "node:sqlite";
-import { Array as Arr, Console, Effect, FileSystem, Option, Random, Schema } from "effect";
+import {
+  Array as Arr,
+  Console,
+  Effect,
+  FileSystem,
+  Iterable,
+  MutableHashMap,
+  Option,
+  Random,
+  Schema,
+} from "effect";
 import { SecureRandom } from "effect/crypto";
 import { addonPath, loadTurbovec, type NativeReadOutput } from "../../turbovec/index.js";
 import { initializeNodeSqlite } from "../src/runtime/node-sqlite-bridge.ts";
@@ -133,7 +143,14 @@ const recordedFinds = (
 await print(
   `recorded find_memory calls: ${recordedFinds.length}, own project ${Arr.countBy(recordedFinds, (q) => q.projectId === ownProject)}`,
 );
-const finds = [...new Map(recordedFinds.map((q) => [`${q.projectId}\u0000${q.query}`, q])).values()]
+// The last call per project and query, at the place its first call was recorded.
+const finds = Array.from(
+  MutableHashMap.values(
+    MutableHashMap.fromIterable(
+      Iterable.map(recordedFinds, (q) => [`${q.projectId}\u0000${q.query}`, q]),
+    ),
+  ),
+)
   // Each replayed in the project it was asked in, as its own project.
   .slice(0, 60);
 const users = await Effect.runPromise(
@@ -324,14 +341,12 @@ await print(
   "| group | pass | n | fail (stage) | wall p50/p95 | text p50/p95 | trigram p50/p95 | short sum p50/p95 | short max p95 | short terms p50/max | trigram terms p50/max | candidate+vector p50/p95 | morph p50/p95 | morph terms p50/max | coverage p50/p95 |",
 );
 await print("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
-const groups = [...new Set(rows.map((row) => row.group))];
+const groups = Arr.dedupe(rows.map((row) => row.group));
 for (const group of groups)
   for (const pass of ["cold", "warm"] as const) {
     const selected = rows.filter((row) => row.group === group && row.pass === pass);
     const failed = selected.filter((row) => row.out.kind !== "success");
-    const stages = [
-      ...new Set(failed.map((row) => `${row.out.kind}@${row.out.failedStage ?? "-"}`)),
-    ];
+    const stages = Arr.dedupe(failed.map((row) => `${row.out.kind}@${row.out.failedStage ?? "-"}`));
     await print(
       `| ${group} | ${pass} | ${selected.length} | ${failed.length} ${stages.join(",")} | ${stat(selected.map((r) => r.wallMs))} | ${stat(selected.map((r) => r.out.textMs))} | ${stat(selected.flatMap((r) => (r.out.trigramMs == null ? [] : [r.out.trigramMs])))} | ${stat(selected.map((r) => r.out.shortTermMs))} | ${fmt(
         quantile(

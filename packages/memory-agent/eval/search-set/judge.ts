@@ -11,7 +11,7 @@ import {
   FileSystem,
   HashMap,
   HashSet,
-  Iterable as EffectIterable,
+  Iterable,
   Option,
   Schema,
 } from "effect";
@@ -81,7 +81,7 @@ const gradeBatches = Effect.fn("searchSet.gradeBatches")(function* (
 ) {
   const model = yield* EvalModel;
   const batches = work.flatMap(({ need, records }) =>
-    Array.from(EffectIterable.chunksOf(records, batchSize), (batch) => ({ need, batch })),
+    Array.from(Iterable.chunksOf(records, batchSize), (batch) => ({ need, batch })),
   );
   yield* Console.log(
     `needs ${work.length}; records ${work.reduce((sum, { records }) => sum + records.length, 0)}; calls ${batches.length}`,
@@ -147,7 +147,7 @@ export const judgePools = Effect.fn("searchSet.judge")(function* ({
         .filter((file) => file.endsWith(".jsonl"))
         .map((file) => file.slice(0, -".jsonl".length));
   const needOf = HashMap.fromIterable(
-    (yield* readRows(files.items)).map((item) => [item.item, item.need] as const),
+    Iterable.map(yield* readRows(files.items), (item) => [item.item, item.need] as const),
   );
   const ranked = (yield* Effect.forEach(names, (name) => readRows(files.run(name)))).flat();
   const pooled = Arr.groupBy(
@@ -159,7 +159,7 @@ export const judgePools = Effect.fn("searchSet.judge")(function* ({
     ({ need }) => need,
   );
   const judged = HashSet.fromIterable(
-    (yield* readRows(files.judgments)).map(({ need, node }) => pairKey(need, node)),
+    Iterable.map(yield* readRows(files.judgments), ({ need, node }) => pairKey(need, node)),
   );
   const work = yield* Effect.forEach(yield* readRows(files.needs), (need) =>
     Effect.map(
@@ -200,7 +200,7 @@ export const judgeCheck = Effect.fn("searchSet.judgeCheck")(function* ({
   const files = setFiles(storage);
   const file = files.check(model.name);
   const checked = HashSet.fromIterable(
-    (yield* readRows(file)).map(({ need, node }) => pairKey(need, node)),
+    Iterable.map(yield* readRows(file), ({ need, node }) => pairKey(need, node)),
   );
   const pending = Arr.groupBy(
     (yield* readRows(files.judgments)).filter(
@@ -235,7 +235,10 @@ export const agreement = Effect.fn("searchSet.agreement")(function* ({
 }: AgreementInput) {
   const files = setFiles(storage);
   const main = HashMap.fromIterable(
-    (yield* readRows(files.judgments)).map((row) => [pairKey(row.need, row.node), row.grade]),
+    Iterable.map(yield* readRows(files.judgments), (row) => [
+      pairKey(row.need, row.node),
+      row.grade,
+    ]),
   );
   const pairs = (yield* readRows(files.check(model))).flatMap((row) =>
     Option.toArray(HashMap.get(main, pairKey(row.need, row.node))).map(

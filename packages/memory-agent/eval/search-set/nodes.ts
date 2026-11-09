@@ -2,7 +2,7 @@
  * Node lookups on the `SqlClient` in scope: the copy's database, opened read-only by the set's own
  * steps or by the app's services when a step searches.
  */
-import { Array as Arr, Effect, HashMap, Iterable as EffectIterable, Schema } from "effect";
+import { Array as Arr, Effect, HashMap, Iterable, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 
 export const NodeRecord = Schema.Struct({
@@ -15,8 +15,7 @@ export type NodeRecord = typeof NodeRecord.Type;
 
 /** Ids per statement, well under SQLite's bound on statement parameters. */
 const idsPerStatement = 500;
-const chunks = (ids: ReadonlyArray<string>) =>
-  EffectIterable.chunksOf(Arr.dedupe(ids), idsPerStatement);
+const chunks = (ids: ReadonlyArray<string>) => Iterable.chunksOf(Arr.dedupe(ids), idsPerStatement);
 
 /** The seq of each id that names a node; seqs grow in the order nodes were stored. */
 export const nodeSeqs = Effect.fn("searchSet.nodeSeqs")(function* (ids: ReadonlyArray<string>) {
@@ -27,7 +26,7 @@ export const nodeSeqs = Effect.fn("searchSet.nodeSeqs")(function* (ids: Readonly
     execute: (chunk) => sql`SELECT id, seq FROM nodes WHERE id IN ${sql.in(chunk)}`,
   });
   const rows = (yield* Effect.forEach(chunks(ids), select)).flat();
-  return HashMap.fromIterable(rows.map(({ id, seq }) => [id, seq] as const));
+  return HashMap.fromIterable(Iterable.map(rows, ({ id, seq }) => [id, seq] as const));
 });
 
 /** The nodes the ids name, in the order of the ids; ids naming no node are left out. */
@@ -42,7 +41,10 @@ export const nodeRecords = Effect.fn("searchSet.nodeRecords")(function* (
       sql`SELECT id, kind, text, created_at FROM nodes WHERE id IN ${sql.in(chunk)}`,
   });
   const byId = HashMap.fromIterable(
-    (yield* Effect.forEach(chunks(ids), select)).flat().map((row) => [row.id, row] as const),
+    Iterable.map(
+      (yield* Effect.forEach(chunks(ids), select)).flat(),
+      (row) => [row.id, row] as const,
+    ),
   );
   return Arr.getSomes(ids.map((id) => HashMap.get(byId, id)));
 });

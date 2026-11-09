@@ -1,3 +1,4 @@
+import { Array as Arr } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 import {
   goalExecutionIdempotencyKey,
@@ -36,8 +37,10 @@ describe("GoalExecution contracts", () => {
       identity({ workflowRevisionId: 8 }),
     ];
     expect(
-      new Set([goalExecutionIdempotencyKey(base), ...alternatives.map(goalExecutionIdempotencyKey)])
-        .size,
+      Arr.dedupe([
+        goalExecutionIdempotencyKey(base),
+        ...alternatives.map(goalExecutionIdempotencyKey),
+      ]).length,
     ).toBe(5);
 
     const left = identity({ sessionId: "a:b", runId: "c" });

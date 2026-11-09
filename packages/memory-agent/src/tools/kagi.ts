@@ -1,6 +1,6 @@
 import { Array as Arr, Cause } from "effect";
 import { logFailure } from "../runtime/logged-failures.ts";
-import { HashSet, Context, Effect, Layer, Option, Schema } from "effect";
+import { HashSet, Context, Effect, Iterable, Layer, Option, Schema } from "effect";
 import { Kagi, maxExtractUrls } from "../kagi/kagi.ts";
 import { runTool, type RunTool } from "./run-tool.ts";
 
@@ -100,7 +100,7 @@ const make = Effect.gen(function* () {
             }),
           }),
         );
-        const answered = HashSet.fromIterable(pages.map((page) => page.url));
+        const answered = HashSet.fromIterable(Iterable.map(pages, (page) => page.url));
         return {
           pages,
           // URLs Kagi reported an error for, or left out of the answer entirely.

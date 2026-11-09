@@ -17,6 +17,7 @@ import {
   Ref,
   HashSet,
   Chunk,
+  Iterable,
   Array as EffectArray,
 } from "effect";
 import { SecureRandom } from "effect/crypto";
@@ -166,7 +167,10 @@ const walkFiles = Effect.fn("FileListing.walkFiles")(function* (
       const credential = (path: string) => isCredentialPath(join(credentialPrefix, path));
       const here: Walk = {
         files: Chunk.fromIterable(
-          read.filter(({ entry }) => entry.type === "File").map(({ path }) => path),
+          Iterable.map(
+            Iterable.filter(read, ({ entry }) => entry.type === "File"),
+            ({ path }) => path,
+          ),
         ),
         excluded: EffectArray.countBy(directories, credential),
         truncated: entries.some(({ full }) => full),

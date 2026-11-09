@@ -1,4 +1,4 @@
-import { Effect, Layer, Schema } from "effect";
+import { Effect, HashSet, Layer, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 import { describe, expect, vi } from "vite-plus/test";
 import { it } from "@effect/vitest";
@@ -296,7 +296,7 @@ describe("history pages", () => {
       const second = yield* threadRevision("a");
       yield* sqlRun("DELETE FROM chat_threads WHERE thread_id = ?", "a");
       yield* store.saveThread("a", users(1));
-      expect(new Set([first, second, yield* threadRevision("a")]).size).toBe(3);
+      expect(HashSet.size(HashSet.make(first, second, yield* threadRevision("a")))).toBe(3);
       expect(
         yield* sqlGet("SELECT display_revision = revision AS current FROM chat_threads"),
       ).toEqual({ current: 1 });

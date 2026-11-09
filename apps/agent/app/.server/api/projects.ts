@@ -1,4 +1,4 @@
-import { Effect, FileSystem, Match, Option, Schema } from "effect";
+import { Effect, FileSystem, HashSet, Match, Option, Schema } from "effect";
 import { HttpApiBuilder } from "effect/http-api";
 import { ChildProcessSpawner } from "effect/process";
 import {
@@ -175,9 +175,11 @@ export const ProjectsApiHandlers = HttpApiBuilder.group(
       running: ({ params }) =>
         withProject(params.project, () =>
           Effect.gen(function* () {
-            const running = new Set(yield* chat.runningSessions);
+            const running = HashSet.fromIterable(yield* chat.runningSessions);
             const listed = yield* Effect.orDie(sessions.list(params.project));
-            return listed.filter((session) => running.has(session.id)).map((session) => session.id);
+            return listed
+              .filter((session) => HashSet.has(running, session.id))
+              .map((session) => session.id);
           }),
         ),
       decisions: ({ params }) =>

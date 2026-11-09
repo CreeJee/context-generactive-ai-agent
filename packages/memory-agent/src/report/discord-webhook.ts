@@ -6,6 +6,8 @@ import {
   DateTime,
   Duration,
   Effect,
+  HashMap,
+  HashSet,
   Layer,
   Match,
   Option,
@@ -22,12 +24,12 @@ import { ReportDeliveryFailure, ReportDeliveryResult } from "./delivery-contract
  * Hosts an execute-webhook URL may point at. The URL's token is the only credential: anyone holding
  * it can post, edit or delete the webhook's messages and the webhook itself, so it is a secret.
  */
-const discordHosts = new Set([
+const discordHosts = HashSet.make(
   "discord.com",
   "discordapp.com",
   "ptb.discord.com",
   "canary.discord.com",
-]);
+);
 const webhookPath = /^\/api(?:\/v\d+)?\/webhooks\/(\d{17,20})\/([\w-]{20,100})\/?$/;
 
 /** Discord limits message `content` to 2000 characters; longer reports go as a text attachment. */
@@ -92,7 +94,7 @@ const WebhookConfig = Data.taggedEnum<WebhookConfig>();
 export function parseWebhookUrl(input: string): WebhookUrl | null {
   const url = URL.parse(input.trim());
   if (url === null || url.username !== "" || url.password !== "") return null;
-  if (url.protocol !== "https:" || !discordHosts.has(url.hostname)) return null;
+  if (url.protocol !== "https:" || !HashSet.has(discordHosts, url.hostname)) return null;
   const match = webhookPath.exec(url.pathname);
   if (match === null || match[1] === undefined) return null;
   return {
@@ -153,13 +155,13 @@ const make = Effect.gen(function* () {
       .digest(Digest.sha256, new TextEncoder().encode(text))
       .pipe(Effect.map(Hex.encode), Effect.orDie);
   // Per server process: repeated clicks and retries of the same text are recognised until restart.
-  const attempts = yield* Ref.make<ReadonlyMap<string, Attempt>>(new Map());
+  const attempts = yield* Ref.make(HashMap.empty<string, Attempt>());
   const now = Effect.map(DateTime.now, DateTime.formatIso);
   const setAttempt = (hash: string, attempt: Attempt | null) =>
     Ref.update(attempts, (current) =>
       Option.match(Option.fromNullishOr(attempt), {
-        onNone: () => new Map([...current].filter(([key]) => key !== hash)),
-        onSome: (recorded) => new Map(current).set(hash, recorded),
+        onNone: () => HashMap.remove(current, hash),
+        onSome: (recorded) => HashMap.set(current, hash, recorded),
       }),
     );
 
@@ -296,12 +298,12 @@ const make = Effect.gen(function* () {
     // Claim the text atomically so two tabs or double clicks cannot post it twice.
     const claimed = yield* Ref.modify(
       attempts,
-      (current): [Attempt | "claimed", ReadonlyMap<string, Attempt>] => {
-        const previous = current.get(hash);
+      (current): [Attempt | "claimed", HashMap.HashMap<string, Attempt>] => {
+        const previous = HashMap.get(current, hash);
         // A send still running is never joined by another; a settled one only when asked.
-        return previous !== undefined && (Attempt.$is("sending")(previous) || !resend)
-          ? [previous, current]
-          : ["claimed", new Map(current).set(hash, Attempt.sending())];
+        return Option.isSome(previous) && (Attempt.$is("sending")(previous.value) || !resend)
+          ? [previous.value, current]
+          : ["claimed", HashMap.set(current, hash, Attempt.sending())];
       },
     );
     if (claimed !== "claimed")

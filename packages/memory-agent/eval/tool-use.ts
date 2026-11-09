@@ -6,6 +6,8 @@ import {
   DateTime,
   Effect,
   FileSystem,
+  HashMap,
+  Iterable,
   Layer,
   Option,
   Path,
@@ -297,8 +299,8 @@ const failureOf = (content: string) =>
 
 /** The conversation's calls in order, each with its result's failure. */
 const callsOf = (messages: ReadonlyArray<StoredMessage>): ReadonlyArray<Call> => {
-  const results = new Map(
-    messages.flatMap((message) =>
+  const results = HashMap.fromIterable(
+    Iterable.flatMap(messages, (message) =>
       message.role === "tool" ? [[message.toolCallId, messageText(message)] as const] : [],
     ),
   );
@@ -307,7 +309,7 @@ const callsOf = (messages: ReadonlyArray<StoredMessage>): ReadonlyArray<Call> =>
       ? (message.toolCalls ?? []).map((call) => ({
           name: call.function.name,
           arguments: call.function.arguments,
-          failure: Option.flatMap(Option.fromNullishOr(results.get(call.id)), failureOf),
+          failure: Option.flatMap(HashMap.get(results, call.id), failureOf),
         }))
       : [],
   );

@@ -1,7 +1,8 @@
+import { HashSet } from "effect";
 import type { TraceTaskView } from "memory-agent";
 
 /** Task statuses in which a background job is still going. */
-const runningStatuses: ReadonlySet<TraceTaskView["status"]> = new Set([
+const runningStatuses = HashSet.fromIterable<TraceTaskView["status"]>([
   "queued",
   "running",
   "waiting",
@@ -13,7 +14,7 @@ export const runningBackgroundTasks = (tasks: readonly TraceTaskView[]) =>
   tasks.filter(
     (task) =>
       task.agentName.startsWith("background_") &&
-      runningStatuses.has(task.status) &&
+      HashSet.has(runningStatuses, task.status) &&
       task.archivedAt === null &&
       task.deleteRequestedAt === null,
   );

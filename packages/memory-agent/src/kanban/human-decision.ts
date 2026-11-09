@@ -5,6 +5,9 @@ import {
   Data,
   DateTime,
   Effect,
+  HashMap,
+  HashSet,
+  Iterable,
   Layer,
   Match,
   Option,
@@ -505,16 +508,28 @@ const make = Effect.gen(function* () {
     });
 
   /** Open requests of the session's current Goal, oldest first. */
-  const pendingOf = (sessionIds: ReadonlySet<string>) =>
+  const pendingOf = (sessionIds: HashSet.HashSet<string>) =>
     Effect.gen(function* () {
-      const requests = (yield* open()).filter((request) => sessionIds.has(request.sessionId));
-      const current = new Map(
-        yield* Effect.forEach(new Set(requests.map((request) => request.sessionId)), (sessionId) =>
-          Effect.map(pointer(sessionId), (goalInstanceId) => [sessionId, goalInstanceId] as const),
+      const requests = (yield* open()).filter((request) =>
+        HashSet.has(sessionIds, request.sessionId),
+      );
+      const current = HashMap.fromIterable(
+        yield* Effect.forEach(
+          EffectArray.dedupe(Iterable.map(requests, (request) => request.sessionId)),
+          (sessionId) =>
+            Effect.map(
+              pointer(sessionId),
+              (goalInstanceId) => [sessionId, goalInstanceId] as const,
+            ),
         ),
       );
       return requests
-        .filter((request) => current.get(request.sessionId) === request.goalInstanceId)
+        .filter((request) =>
+          Option.exists(
+            HashMap.get(current, request.sessionId),
+            (goalInstanceId) => goalInstanceId === request.goalInstanceId,
+          ),
+        )
         .sort((left, right) => left.createdAt - right.createdAt);
     });
 
@@ -529,7 +544,7 @@ const make = Effect.gen(function* () {
     { discard: true },
   );
   yield* Effect.forEach(
-    new Set((yield* open()).map((request) => request.sessionId)),
+    EffectArray.dedupe(Iterable.map(yield* open(), (request) => request.sessionId)),
     closeSuperseded,
     { discard: true },
   );
@@ -730,34 +745,39 @@ const make = Effect.gen(function* () {
       requestsWith({ sessionId, goalInstanceId }),
 
     /** Unanswered requests of the session's current Goal, oldest first. */
-    pending: (sessionId: string) => pendingOf(new Set([sessionId])),
+    pending: (sessionId: string) => pendingOf(HashSet.make(sessionId)),
 
     /** Unanswered requests across the project's sessions and their current Goals, oldest first. */
     inbox: (projectId: string) =>
       Effect.gen(function* () {
         const sessions = yield* stored(projectSessions(projectId));
-        const titles = new Map(sessions.map((session) => [session.id, session.title]));
-        const requests = yield* pendingOf(new Set(titles.keys()));
-        const cardTitles = new Map(
+        const titles = HashMap.fromIterable(
+          Iterable.map(sessions, (session) => [session.id, session.title]),
+        );
+        const requests = yield* pendingOf(HashSet.fromIterable(HashMap.keys(titles)));
+        const cardTitles = HashMap.fromIterable(
           yield* Effect.forEach(
-            new Set(requests.map((request) => request.sessionId)),
+            EffectArray.dedupe(Iterable.map(requests, (request) => request.sessionId)),
             (sessionId) =>
               Effect.map(
                 workflows.get(sessionId),
                 (state) =>
                   [
                     sessionId,
-                    new Map((state.plan?.steps ?? []).map((step) => [step.id, step.title])),
+                    HashMap.fromIterable(
+                      Iterable.map(state.plan?.steps ?? [], (step) => [step.id, step.title]),
+                    ),
                   ] as const,
               ),
           ),
         );
         return requests.map((request): DecisionInboxItem => ({
           ...request,
-          sessionTitle: titles.get(request.sessionId) ?? null,
-          cardTitle:
-            cardTitles.get(request.sessionId)?.get(request.cardId) ??
-            (request.cardId === goalDecisionCardId ? "Goal" : request.cardId),
+          sessionTitle: Option.getOrNull(HashMap.get(titles, request.sessionId)),
+          cardTitle: Option.getOrElse(
+            Option.flatMap(HashMap.get(cardTitles, request.sessionId), HashMap.get(request.cardId)),
+            () => (request.cardId === goalDecisionCardId ? "Goal" : request.cardId),
+          ),
         }));
       }),
   };

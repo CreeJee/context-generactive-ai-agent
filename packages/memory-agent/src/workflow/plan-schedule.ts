@@ -4,7 +4,9 @@ import {
   Data,
   Effect,
   Function as EffectFunction,
+  HashMap,
   HashSet,
+  Iterable,
   Option,
   Schema,
 } from "effect";
@@ -29,15 +31,15 @@ type DependencyStep = Pick<PlanStep, "id" | "dependsOn"> & Partial<Pick<PlanStep
 
 /** Edges to other existing steps; unknown and self references carry no ordering. */
 const knownDependencies = (steps: readonly DependencyStep[]) => {
-  const ids = new Set(steps.map((step) => step.id));
+  const ids = HashSet.fromIterable(Iterable.map(steps, (step) => step.id));
   return (step: DependencyStep) =>
-    EffectArray.dedupe(step.dependsOn.filter((id) => id !== step.id && ids.has(id)));
+    EffectArray.dedupe(step.dependsOn.filter((id) => id !== step.id && HashSet.has(ids, id)));
 };
 
 export function planDependencyIssues(
   steps: readonly DependencyStep[],
 ): ReadonlyArray<PlanDependencyIssue> {
-  const ids = new Set(steps.map((step) => step.id));
+  const ids = HashSet.fromIterable(Iterable.map(steps, (step) => step.id));
   // Every repeat of an id after its first step is one duplicate.
   const duplicates = steps.flatMap((step, index): PlanDependencyIssue[] =>
     steps.findIndex((other) => other.id === step.id) < index
@@ -48,39 +50,45 @@ export function planDependencyIssues(
     EffectArray.dedupe(step.dependsOn).flatMap((dependsOn): PlanDependencyIssue[] =>
       dependsOn === step.id
         ? [PlanDependencyIssue.cases.SelfDependency.make({ stepId: step.id })]
-        : ids.has(dependsOn)
+        : HashSet.has(ids, dependsOn)
           ? []
           : [PlanDependencyIssue.cases.UnknownDependency.make({ stepId: step.id, dependsOn })],
     ),
   );
 
   const edges = knownDependencies(steps);
-  const dependencies = new Map(steps.map((step) => [step.id, edges(step)]));
+  const dependencies = HashMap.fromIterable(Iterable.map(steps, (step) => [step.id, edges(step)]));
   // Depth-first search; every back edge closes one reported cycle. A Plan is small, so the
   // search recurses as deep as its longest dependency chain.
   const visit = (search: CycleSearch, id: string, path: ReadonlyArray<string>): CycleSearch => {
     const along = EffectArray.append(path, id);
-    const searched = EffectArray.reduce(dependencies.get(id) ?? [], search, (search, next) =>
-      Option.match(
-        EffectArray.findFirstIndex(along, (onPath) => onPath === next),
-        {
-          onSome: (index) => ({
-            ...search,
-            cycles: Chunk.append(
-              search.cycles,
-              PlanDependencyIssue.cases.DependencyCycle.make({
-                cycle: [...along.slice(index), next],
-              }),
-            ),
-          }),
-          onNone: () => (HashSet.has(search.finished, next) ? search : visit(search, next, along)),
-        },
-      ),
+    const searched = EffectArray.reduce(
+      Option.getOrElse(HashMap.get(dependencies, id), () => []),
+      search,
+      (search, next) =>
+        Option.match(
+          EffectArray.findFirstIndex(along, (onPath) => onPath === next),
+          {
+            onSome: (index) => ({
+              ...search,
+              cycles: Chunk.append(
+                search.cycles,
+                PlanDependencyIssue.cases.DependencyCycle.make({
+                  cycle: [...along.slice(index), next],
+                }),
+              ),
+            }),
+            onNone: () =>
+              HashSet.has(search.finished, next) ? search : visit(search, next, along),
+          },
+        ),
     );
     return { ...searched, finished: HashSet.add(searched.finished, id) };
   };
   const unsearched: CycleSearch = { cycles: Chunk.empty(), finished: HashSet.empty() };
-  const { cycles } = EffectArray.reduce([...dependencies.keys()], unsearched, (search, id) =>
+  // Searches start from the steps in Plan order, so the cycles are reported in that order.
+  const starts = EffectArray.dedupe(Iterable.map(steps, (step) => step.id));
+  const { cycles } = EffectArray.reduce(starts, unsearched, (search, id) =>
     HashSet.has(search.finished, id) ? search : visit(search, id, []),
   );
   return [...duplicates, ...references, ...cycles];
@@ -161,7 +169,7 @@ export const PlanSchedule = Data.taggedEnum<PlanSchedule>();
  * ready and therefore surfaces as a stall the model can repair with update_plan.
  */
 export function planSchedule(steps: readonly PlanStep[]): PlanSchedule {
-  const status = new Map(steps.map((step) => [step.id, step.status]));
+  const status = HashMap.fromIterable(Iterable.map(steps, (step) => [step.id, step.status]));
   const edges = knownDependencies(steps);
   const inStage = (stage: (typeof scheduleStage)[CardStatus]) =>
     steps.filter((step) => scheduleStage[step.status] === stage);
@@ -170,7 +178,7 @@ export function planSchedule(steps: readonly PlanStep[]): PlanSchedule {
   const notStarted = inStage("notStarted").map((step) => ({
     stepId: step.id,
     unmet: edges(step).flatMap((id): UnmetDependency[] => {
-      const dependency = status.get(id) ?? "done";
+      const dependency = Option.getOrElse(HashMap.get(status, id), (): CardStatus => "done");
       return dependency === "done" ? [] : [{ id, status: stepProgressStatus(dependency) }];
     }),
   }));

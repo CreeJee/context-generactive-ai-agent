@@ -54,7 +54,7 @@
 - 환경·설정 읽기: `CONTEXT_AGENT_RELEASE`(기본 `0.0.0-dev`, 오류 시 `unknown`), `DISCORD_WEBHOOK_URL`(Redacted), `GlobalConfig.read`(kanbanConcurrency, defectReports), `process.versions.node`, `hostPlatform`.
 - 네트워크: `ReportDelivery`가 Discord webhook URL로 `?wait=true` multipart POST를 보낸다(리포트 `send`, 서버 알림 `sendNotice`).
 - LLM 호출: `ReportDiagnoser.diagnose`가 `singleAnswer`로 선택된 모델을 호출하고 `recordUsage`로 API 사용량을 기록한다.
-- 프로세스 메모리 상태: `ReportDelivery`의 전송 시도 `Ref<Map<hash, Attempt>>`, `defectReportsLayer`의 rate-limit `Ref<AdmissionState>`와 최근 결함 `Ref<RecentDefect[]>`.
+- 프로세스 메모리 상태: `ReportDelivery`의 전송 시도 `Ref<HashMap<hash, Attempt>>`, `defectReportsLayer`의 rate-limit `Ref<AdmissionState>`와 최근 결함 `Ref<RecentDefect[]>`.
 - 백그라운드 fiber: `defectReportsLayer`가 `Queue.dropping(64)`을 소비하는 Stream을 `Effect.forkScoped`로 띄운다(동시성 2).
 - 로깅: `fallbackLogged`(`report_bundle_section_failed`, `report_bundle_model_unknown`, `report_bundle_settings_unknown`), `logFailure("defect_report_failed")`.
 - 시계·암호: `Clock.currentTimeMillis`, `DateTime.now`, `Digest.digest(Digest.sha256)`, `crypto.uuidV4`(진단 threadId).

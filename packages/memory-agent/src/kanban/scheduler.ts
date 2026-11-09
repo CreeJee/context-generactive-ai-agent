@@ -5,11 +5,14 @@ import {
   Effect,
   Function as EffectFunction,
   HashMap,
+  HashSet,
+  Iterable,
   Layer,
   Match,
   Option,
   Predicate,
   PubSub,
+  Record,
   Ref,
   Result,
   Stream,
@@ -92,13 +95,13 @@ interface Slots {
 /** Hands `free` slots to the candidates in order; a Goal takes no more than its mode allows. */
 const assign = (
   candidates: readonly Candidate[],
-  held: ReadonlyMap<string, number>,
+  held: HashMap.HashMap<string, number>,
   free: number,
   limit: number,
-): ReadonlyMap<string, readonly string[]> => {
+): Record.ReadonlyRecord<string, readonly string[]> => {
   const [, assigned] = EffectArray.mapAccum(
     candidates,
-    { left: free, given: HashMap.fromIterable(held) },
+    { left: free, given: held },
     (slots: Slots, candidate): readonly [Slots, Option.Option<Candidate>] => {
       const id = candidate.goal.goalInstanceId;
       const mine = Option.getOrElse(HashMap.get(slots.given, id), () => 0);
@@ -111,13 +114,12 @@ const assign = (
           ];
     },
   );
-  return new Map(
-    Object.entries(
-      EffectArray.groupBy(
-        EffectArray.getSomes(assigned),
-        (candidate) => candidate.goal.goalInstanceId,
-      ),
-    ).map(([id, taken]) => [id, taken.map((candidate) => candidate.cardId)]),
+  return Record.map(
+    EffectArray.groupBy(
+      EffectArray.getSomes(assigned),
+      (candidate) => candidate.goal.goalInstanceId,
+    ),
+    (taken) => taken.map((candidate) => candidate.cardId),
   );
 };
 
@@ -139,8 +141,8 @@ const make = Effect.gen(function* () {
   const decisions = yield* HumanDecisions;
   const goalOrder = yield* GoalOrder;
   // The cards each Goal's last look could start.
-  const demand = yield* Ref.make<ReadonlyMap<string, readonly PlanStep[]>>(new Map());
-  const notices = yield* Ref.make<ReadonlyMap<string, Notice>>(new Map());
+  const demand = yield* Ref.make(HashMap.empty<string, readonly PlanStep[]>());
+  const notices = yield* Ref.make(HashMap.empty<string, Notice>());
   const wakeups = yield* PubSub.unbounded<string>();
 
   const poke = (goalInstanceId: string) => PubSub.publish(wakeups, goalInstanceId);
@@ -150,11 +152,13 @@ const make = Effect.gen(function* () {
     const schedule = yield* schedules.get(goalInstanceId);
     if (Option.isNone(schedule)) return [];
     const edges = yield* schedules.edges(schedule.value.projectId);
-    return yield* Effect.filter(edges.get(goalInstanceId) ?? [], (other) =>
-      Effect.map(
-        schedules.get(other),
-        Option.exists((found) => !mergeReleases(found.merge)),
-      ),
+    return yield* Effect.filter(
+      Option.getOrElse(HashMap.get(edges, goalInstanceId), () => []),
+      (other) =>
+        Effect.map(
+          schedules.get(other),
+          Option.exists((found) => !mergeReleases(found.merge)),
+        ),
     );
   });
 
@@ -178,10 +182,15 @@ const make = Effect.gen(function* () {
     reported: readonly PlanStep[] | undefined,
   ) {
     const state = yield* workflows.get(goal.sessionId);
-    const ids = reported === undefined ? null : new Set(reported.map((step) => step.id));
+    const ids =
+      reported === undefined
+        ? null
+        : HashSet.fromIterable(Iterable.map(reported, (step) => step.id));
     return (state.plan?.steps ?? []).filter(
       (step) =>
-        step.status === "ready" && step.hold === undefined && (ids === null || ids.has(step.id)),
+        step.status === "ready" &&
+        step.hold === undefined &&
+        (ids === null || HashSet.has(ids, step.id)),
     );
   });
 
@@ -203,21 +212,22 @@ const make = Effect.gen(function* () {
       goal: KanbanGoal,
       planned: readonly PlanStep[],
     ) {
-      yield* Ref.update(demand, (known) => new Map(known).set(goal.goalInstanceId, planned));
+      yield* Ref.update(demand, HashMap.set(goal.goalInstanceId, planned));
       const limit = (yield* settings.concurrency).effective;
       const active = yield* attempts.activeGoals;
       const held = yield* attempts.outstanding;
       const known = yield* Ref.get(demand);
-      const projectPlace = new Map(
-        (yield* goalOrder.projects).map((projectId, index) => [projectId, index] as const),
+      const projectPlace = HashMap.fromIterable(
+        Iterable.map(yield* goalOrder.projects, (projectId, index) => [projectId, index] as const),
       );
-      const goalPlace = new Map(
-        (yield* Effect.forEach(new Set(active.map((other) => other.projectId)), (projectId) =>
+      const goalOrders = yield* Effect.forEach(
+        HashSet.fromIterable(Iterable.map(active, (other) => other.projectId)),
+        (projectId) =>
           Effect.map(goalOrder.goals(projectId), (order) =>
             order.map((sessionId, index) => [`${projectId}:${sessionId}`, index] as const),
           ),
-        )).flat(),
       );
+      const goalPlace = HashMap.fromIterable<string, number>(Iterable.flatten(goalOrders));
       // A Goal waiting for another Goal's merge takes no slots.
       const ready = yield* Effect.filter(active, (other) =>
         Effect.map(waitingOn(other.goalInstanceId), (waiting) => waiting.length === 0),
@@ -226,39 +236,42 @@ const make = Effect.gen(function* () {
         Effect.map(
           other.goalInstanceId === goal.goalInstanceId
             ? Effect.succeed(planned)
-            : startable(other, known.get(other.goalInstanceId)),
+            : startable(other, Option.getOrUndefined(HashMap.get(known, other.goalInstanceId))),
           (wanted) =>
             wanted.map((step, index): Candidate => ({
               goal: other,
               cardId: step.id,
               key: [
-                projectPlace.get(other.projectId) ?? Number.POSITIVE_INFINITY,
-                goalPlace.get(`${other.projectId}:${other.sessionId}`) ?? Number.POSITIVE_INFINITY,
+                Option.getOrElse(
+                  HashMap.get(projectPlace, other.projectId),
+                  () => Number.POSITIVE_INFINITY,
+                ),
+                Option.getOrElse(
+                  HashMap.get(goalPlace, `${other.projectId}:${other.sessionId}`),
+                  () => Number.POSITIVE_INFINITY,
+                ),
                 // A card left in progress continues before its Goal starts anything.
                 step.status === "in_progress" ? -1 : index,
               ],
             })),
         ),
       )).flat();
-      const total = [...held.values()].reduce((sum, count) => sum + count, 0);
+      const total = HashMap.reduce(held, 0, (sum, count) => sum + count);
       const assigned = assign(candidates.toSorted(byKey), held, limit - total, limit);
-      const mine = new Set(assigned.get(goal.goalInstanceId) ?? []);
+      const mine = HashSet.fromIterable(
+        Option.getOrElse(Record.get(assigned, goal.goalInstanceId), () => []),
+      );
       // The other Goals' cards are theirs to start: wake those Goals.
       yield* Effect.forEach(
-        [...assigned.keys()].filter((id) => id !== goal.goalInstanceId),
+        Record.keys(assigned).filter((id) => id !== goal.goalInstanceId),
         poke,
         { discard: true },
       );
-      return planned.filter((step) => mine.has(step.id));
+      return planned.filter((step) => HashSet.has(mine, step.id));
     }),
 
     /** Forgets what a stopped Goal could start, so its cards take no slots. */
-    forget: (goalInstanceId: string) =>
-      Ref.update(demand, (known) => {
-        const next = new Map(known);
-        next.delete(goalInstanceId);
-        return next;
-      }),
+    forget: (goalInstanceId: string) => Ref.update(demand, HashMap.remove(goalInstanceId)),
 
     /**
      * How the card's expected files meet the cards of the project's other unmerged Goals. A card
@@ -359,8 +372,8 @@ const make = Effect.gen(function* () {
         stale: false,
       };
       const added = yield* Ref.modify(notices, (known) => [
-        !known.has(key),
-        new Map(known).set(key, notice),
+        !HashMap.has(known, key),
+        HashMap.set(known, key, notice),
       ]);
       yield* Effect.when(poke(other.otherGoalInstanceId), Effect.succeed(added));
     }),
@@ -372,36 +385,35 @@ const make = Effect.gen(function* () {
     reviewNotices: (goalInstanceId: string) =>
       Ref.update(
         notices,
-        (known) =>
-          new Map(
-            EffectArray.filterMap(known, ([key, notice]) =>
-              notice.waiting !== goalInstanceId
-                ? Result.succeed([key, notice] as const)
-                : notice.stale
-                  ? Result.failVoid
-                  : Result.succeed([key, { ...notice, stale: true }] as const),
-            ),
-          ),
+        HashMap.filterMap((notice) =>
+          notice.waiting !== goalInstanceId
+            ? Result.succeed(notice)
+            : notice.stale
+              ? Result.failVoid
+              : Result.succeed({ ...notice, stale: true }),
+        ),
       ),
 
     /** Drops the notices of cards of `goal` that waited, once its board stops. */
     clearNotices: (goalInstanceId: string) =>
       Ref.update(
         notices,
-        (known) => new Map([...known].filter(([, notice]) => notice.waiting !== goalInstanceId)),
+        HashMap.filter((notice) => notice.waiting !== goalInstanceId),
       ),
 
     /** The file overlap notices a board is part of, as stable keys. */
     notices: (goalInstanceId: string) =>
       Effect.map(Ref.get(notices), (known) =>
-        [...known]
-          .filter(
-            ([, notice]) =>
-              !notice.stale &&
-              (notice.waiting === goalInstanceId || notice.running === goalInstanceId),
-          )
-          .map(([key]) => key)
-          .toSorted(),
+        Array.from(
+          HashMap.keys(
+            HashMap.filter(
+              known,
+              (notice) =>
+                !notice.stale &&
+                (notice.waiting === goalInstanceId || notice.running === goalInstanceId),
+            ),
+          ),
+        ).toSorted(),
       ),
 
     /** Moves a conversation's Goal in its project's order and lets the project's boards look again. */

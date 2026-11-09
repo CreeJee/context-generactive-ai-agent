@@ -129,7 +129,7 @@ export const builtinOverlap = (script: string): Option.Option<CodeSkillRejected>
     ? Option.some(
         CodeSkillRejected.make({
           reason: "builtin_overlap",
-          detail: `${[...new Set(programs)].join(", ")} ${programs.length === 1 ? "is" : "are"} covered by ${[...new Set(tools)].join(", ")}. Call those tools directly, or combine them in a ts skill; save a sh skill only for what no built-in tool does (builds, tests, git, package managers, project commands).`,
+          detail: `${EffectArray.dedupe(programs).join(", ")} ${programs.length === 1 ? "is" : "are"} covered by ${EffectArray.dedupe(tools).join(", ")}. Call those tools directly, or combine them in a ts skill; save a sh skill only for what no built-in tool does (builds, tests, git, package managers, project commands).`,
         }),
       )
     : Option.none();
@@ -251,7 +251,7 @@ const programText = (program: SkillProgram) =>
           withNewline(code),
         ].join(""),
       sh: ({ script, network = [] }) => {
-        const hosts = [...new Set(network)];
+        const hosts = EffectArray.dedupe(network);
         return [
           ...(hosts.length > 0 ? [`${networkMarker} ${hosts.join(" ")}\n`] : []),
           withNewline(script),
@@ -487,7 +487,7 @@ const make = Effect.gen(function* () {
           sh: ({ network = [] }) => ({
             ...saved,
             runtime: "sh" as const,
-            network: [...new Set(network)],
+            network: EffectArray.dedupe(network),
           }),
         }),
       );

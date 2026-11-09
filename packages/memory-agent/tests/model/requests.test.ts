@@ -41,7 +41,7 @@ const goldenHistories = Effect.gen(function* () {
       history: thread.messages,
     })),
     // The screen history of a thread, group after group, is a longer history of the same shapes.
-    ...[...new Set(history.map((group) => group.thread_id))].map((threadId) => ({
+    ...Arr.dedupe(history.map((group) => group.thread_id)).map((threadId) => ({
       name: `${name} history ${threadId}`,
       history: history
         .filter((group) => group.thread_id === threadId)

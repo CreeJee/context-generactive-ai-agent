@@ -7,7 +7,8 @@ import {
   Duration,
   Effect,
   FiberMap,
-  Iterable as EffectIterable,
+  HashSet,
+  Iterable,
   Layer,
   Match,
   Option,
@@ -756,7 +757,7 @@ const make = (options: KanbanOrchestratorOptions) =>
         (request) =>
           Match.valueTags(request.state, {
             Answered: ({ answer }) =>
-              followed.has(request.requestId) ? [] : [{ request, answer }],
+              HashSet.has(followed, request.requestId) ? [] : [{ request, answer }],
             Pending: () => [],
             Closed: () => [],
           }),
@@ -846,17 +847,21 @@ const make = (options: KanbanOrchestratorOptions) =>
       steps: readonly PlanStep[],
       ladderOf: (cardId: string) => CardLadder,
     ) {
-      const busy = new Set(
-        (yield* attempts.pending(goal.goalInstanceId)).map((attempt) => attempt.cardId),
+      const busy = HashSet.fromIterable(
+        Iterable.map(yield* attempts.pending(goal.goalInstanceId), (attempt) => attempt.cardId),
       );
       const now = yield* Clock.currentTimeMillis;
-      const working = steps.filter((step) => busy.has(step.id) || step.status === "verify");
+      const working = steps.filter(
+        (step) => HashSet.has(busy, step.id) || step.status === "verify",
+      );
       // A card a person or a restart left in_progress without an attempt continues first.
-      const orphans = steps.filter((step) => step.status === "in_progress" && !busy.has(step.id));
+      const orphans = steps.filter(
+        (step) => step.status === "in_progress" && !HashSet.has(busy, step.id),
+      );
       const ready = steps.filter(
         (step) =>
           step.status === "ready" &&
-          !busy.has(step.id) &&
+          !HashSet.has(busy, step.id) &&
           (ladderOf(step.id).notBefore ?? 0) <= now,
       );
       // A Chunk adds a planned card without copying the ones before it.
@@ -866,10 +871,7 @@ const make = (options: KanbanOrchestratorOptions) =>
         (planned, step) =>
           // Expected files that overlap a working card wait for it; this is a hint, not a lock.
           [working, planned].some((cards) =>
-            EffectIterable.some(
-              cards,
-              (other) => other.id !== step.id && boundariesOverlap(step, other),
-            ),
+            Iterable.some(cards, (other) => other.id !== step.id && boundariesOverlap(step, other)),
           )
             ? Effect.succeed(planned)
             : Effect.flatMap(scheduler.crossGoalOverlap(goal, step), (overlap) =>

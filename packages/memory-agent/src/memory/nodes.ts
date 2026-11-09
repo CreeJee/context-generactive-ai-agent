@@ -8,7 +8,9 @@ import {
   Layer,
   Option,
   Schema,
+  HashMap,
   HashSet,
+  Iterable,
   Array as EffectArray,
 } from "effect";
 import { SecureRandom } from "effect/crypto";
@@ -286,7 +288,7 @@ const make = Effect.gen(function* () {
   const idOf = Option.map((row: typeof IdRow.Type) => row.id);
   /** Rows keyed by `key`; a later row replaces an earlier one with the same key. */
   const keyed = <A>(rows: readonly A[], key: (row: A) => string, value: (row: A) => string) =>
-    new Map(rows.map((row) => [key(row), value(row)]));
+    HashMap.fromIterable(Iterable.map(rows, (row) => [key(row), value(row)] as const));
 
   const link = (fromId: string, toId: string, kind: EdgeKind, createdAt: string) =>
     sql`INSERT INTO edges VALUES (${fromId}, ${toId}, ${kind}, 'structure', ${edgeWeights[kind]},
@@ -405,7 +407,7 @@ const make = Effect.gen(function* () {
      */
     toolResultIds: (sessionId: string, toolCallIds: readonly string[]) =>
       toolCallIds.length === 0
-        ? Effect.succeed(new Map<string, string>())
+        ? Effect.succeed(HashMap.empty<string, string>())
         : stored(
             // Newest first, so the first recorded result is the one each key keeps.
             firstResults({ sessionId, toolCallIds }).pipe(
@@ -422,7 +424,7 @@ const make = Effect.gen(function* () {
     /** The text of each of these nodes that exists. */
     texts: (ids: readonly string[]) =>
       ids.length === 0
-        ? Effect.succeed(new Map<string, string>())
+        ? Effect.succeed(HashMap.empty<string, string>())
         : stored(
             textsOf(ids).pipe(
               Effect.map((rows) =>

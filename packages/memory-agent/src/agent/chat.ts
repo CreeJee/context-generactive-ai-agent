@@ -3,7 +3,7 @@ import type { RequestPermissionRequest } from "@agentclientprotocol/sdk";
 import { Cause, Fiber } from "effect";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { Array as EffectArray, HashMap, HashSet, DateTime, Predicate } from "effect";
+import { Array as EffectArray, HashMap, HashSet, DateTime, Iterable, Predicate } from "effect";
 import { modelFailureOf, runChat, type RunHook } from "../loop/run.ts";
 import { finishedRun, RunStore } from "../loop/store.ts";
 import { chatSnapshot } from "../chat-state/snapshot.ts";
@@ -234,7 +234,7 @@ const promotionRules = {
 
 /** memoryInstructions without the rules of the promotion tools a run does not get. */
 const memoryRulesFor = (tools: readonly { readonly name: string }[]) => {
-  const names = HashSet.fromIterable(tools.map((tool) => tool.name));
+  const names = HashSet.fromIterable(Iterable.map(tools, (tool) => tool.name));
   return memoryInstructions
     .split("\n")
     .filter((line) =>
@@ -776,7 +776,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           const candidates = found.matches
             .filter(
               (match) =>
-                !visible(match.id, ownTexts.get(match.id) ?? "") &&
+                !visible(
+                  match.id,
+                  Option.getOrElse(HashMap.get(ownTexts, match.id), () => ""),
+                ) &&
                 match.supersededBy.length === 0 &&
                 match.kind !== "topic",
             )
@@ -2097,7 +2100,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             [],
           ),
           deliveredParentNotificationIds: HashSet.fromIterable(
-            situation.parentNotifications.map((notification) => notification.id),
+            Iterable.map(situation.parentNotifications, (notification) => notification.id),
           ),
           gated,
         });

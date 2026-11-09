@@ -333,7 +333,7 @@ const runStageEffects = Effect.fn("lab.stage.effects")(function* (stage: Stage) 
     embedMsPerQuery: (embedMs / queryCount).toFixed(1),
     // What the last search reported; -1 when no query ran.
     unindexed: searched.at(-1)?.unindexed ?? -1,
-    degraded: [...new Set(searched.flatMap(({ degraded }) => degraded))],
+    degraded: Arr.dedupe(searched.flatMap(({ degraded }) => degraded)),
     sets: metrics,
   } satisfies StageResult;
 });

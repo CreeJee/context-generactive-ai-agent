@@ -33,7 +33,7 @@ layer(Layer.merge(NodeFileSystem.layer, NodePath.layer))((it) => {
         (yield* fs.readDirectory(root, { recursive: true })).filter((path) => path.endsWith(".ts")),
         (path) => Effect.map(fs.readFileString(`${root}/${path}`), (source) => ({ path, source })),
       );
-      const registered = new Set<string>([
+      const registered = HashSet.fromIterable<string>([
         ...gatedToolNames,
         delegateToolName,
         ...sources.flatMap(({ path, source }) => [
@@ -51,8 +51,10 @@ layer(Layer.merge(NodeFileSystem.layer, NodePath.layer))((it) => {
           ),
         ]),
       ]);
-      expect(unclassified([...registered])).toEqual([]);
-      expect(Object.keys(builtinToolEffects).filter((name) => !registered.has(name))).toEqual([]);
+      expect(unclassified(Array.from(registered))).toEqual([]);
+      expect(
+        Object.keys(builtinToolEffects).filter((name) => !HashSet.has(registered, name)),
+      ).toEqual([]);
       expect(unclassified([...registered, "new_unclassified_tool"])).toEqual([
         "new_unclassified_tool",
       ]);

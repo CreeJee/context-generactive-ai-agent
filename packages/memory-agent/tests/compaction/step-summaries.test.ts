@@ -1,4 +1,4 @@
-import { Duration, Effect, Option, Ref, Schema } from "effect";
+import { Duration, Effect, HashMap, Option, Ref, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import {
   compactionHook,
@@ -109,7 +109,9 @@ testAgent()("step summaries", (it) => {
       expect(steps?.messages).toHaveLength(40);
       expect(steps?.messages[0]?.toolCalls?.[0]?.id).toBe("read-0");
       expect(steps?.messages.at(-1)?.toolCallId).toBe("read-19");
-      expect(steps?.rereads.get("read-19")).toBe("read_tool_result ID read-19, page by offset");
+      expect(Option.getOrUndefined(HashMap.get(steps?.rereads ?? HashMap.empty(), "read-19"))).toBe(
+        "read_tool_result ID read-19, page by offset",
+      );
       const prompt = stepSummaryPrompt(steps!);
       expect(prompt).toContain(task);
       expect(prompt).toContain("reread: read_tool_result ID read-0, page by offset");

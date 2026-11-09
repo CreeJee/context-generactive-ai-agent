@@ -14,6 +14,7 @@ import {
   Array as EffectArray,
   HashMap,
   HashSet,
+  Iterable,
   MutableHashMap,
   Option,
   DateTime,
@@ -426,16 +427,20 @@ const make = Effect.gen(function* () {
     const trustedFingerprint = (server: ConfiguredServer) =>
       trust.find((row) => row.scope === server.scope && row.name === server.name)?.fingerprint ??
       null;
-    const localNames = HashSet.fromIterable(local.servers.map((server) => server.name));
+    const localNames = HashSet.fromIterable(Iterable.map(local.servers, (server) => server.name));
     const servers = [...global.servers, ...local.servers].map((server) => ({
       server,
       trusted: trustedFingerprint(server),
       shadowed: server.scope === "global" && HashSet.has(localNames, server.name),
     }));
     const usableFingerprints = MutableHashMap.fromIterable(
-      servers
-        .filter((entry) => !entry.shadowed && entry.trusted === entry.server.fingerprint)
-        .map((entry) => [connectionKey(project, entry.server), entry.server.fingerprint]),
+      Iterable.map(
+        Iterable.filter(
+          servers,
+          (entry) => !entry.shadowed && entry.trusted === entry.server.fingerprint,
+        ),
+        (entry) => [connectionKey(project, entry.server), entry.server.fingerprint] as const,
+      ),
     );
     yield* closeWhere(
       (connection, key) =>

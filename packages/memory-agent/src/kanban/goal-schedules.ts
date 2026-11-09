@@ -1,4 +1,17 @@
-import { Array as EffectArray, Clock, Context, Effect, Layer, Option, Schema } from "effect";
+import {
+  Array as EffectArray,
+  Clock,
+  Context,
+  Effect,
+  HashMap,
+  HashSet,
+  Iterable,
+  Layer,
+  MutableHashSet,
+  Option,
+  Record,
+  Schema,
+} from "effect";
 import { SqlClient, type SqlError } from "effect/sql";
 import { GoalMergeState, ProtectedBranches } from "./contracts.ts";
 
@@ -114,11 +127,16 @@ const toSchedule = (row: typeof ScheduleRow.Type): GoalSchedule => ({
 });
 
 /** Whether `from` reaches `to` along the dependency edges. */
-const reaches = (edges: ReadonlyMap<string, readonly string[]>, from: string, to: string) => {
-  const seen = new Set<string>();
+const reaches = (edges: HashMap.HashMap<string, readonly string[]>, from: string, to: string) => {
+  const seen = MutableHashSet.empty<string>();
   const visit = (next: string): boolean => {
-    seen.add(next);
-    return next === to || (edges.get(next) ?? []).some((other) => !seen.has(other) && visit(other));
+    MutableHashSet.add(seen, next);
+    return (
+      next === to ||
+      Option.getOrElse(HashMap.get(edges, next), () => []).some(
+        (other) => !MutableHashSet.has(seen, other) && visit(other),
+      )
+    );
   };
   return visit(from);
 };
@@ -171,13 +189,15 @@ const make = Effect.gen(function* () {
         JOIN kanban_goal_dependencies d ON d.goal_instance_id = s.goal_instance_id
         WHERE ss.project_id = ${projectId} ORDER BY d.created_at, d.depends_on`.pipe(
       rows(DependencyRow),
-      Effect.map(
-        (found): ReadonlyMap<string, readonly string[]> =>
-          new Map(
-            Object.entries(EffectArray.groupBy(found, (row) => row.goal_instance_id)).map(
-              ([goal, group]) => [goal, group.map((row) => row.depends_on)],
+      Effect.map((found): HashMap.HashMap<string, readonly string[]> =>
+        HashMap.fromIterable(
+          Record.toEntries(
+            Record.map(
+              EffectArray.groupBy(found, (row) => row.goal_instance_id),
+              (group) => group.map((row) => row.depends_on),
             ),
           ),
+        ),
       ),
       Effect.mapError(failed),
     );
@@ -223,23 +243,24 @@ const make = Effect.gen(function* () {
           Option.match({ onNone: () => refused("goal_missing"), onSome: Effect.succeed }),
         );
       const goal = yield* existing(goalInstanceId);
-      const wanted = [...new Set(dependsOn)];
+      const wanted = EffectArray.dedupe(dependsOn);
       yield* Effect.when(
         refused("self_dependency"),
         Effect.succeed(wanted.includes(goalInstanceId)),
       );
-      const project = new Set((yield* forProject(goal.projectId)).map((s) => s.goalInstanceId));
+      const project = HashSet.fromIterable(
+        Iterable.map(yield* forProject(goal.projectId), (s) => s.goalInstanceId),
+      );
       yield* Effect.forEach(
         wanted,
         (other) =>
           Effect.andThen(
             existing(other),
-            Effect.when(refused("other_project"), Effect.succeed(!project.has(other))),
+            Effect.when(refused("other_project"), Effect.succeed(!HashSet.has(project, other))),
           ),
         { discard: true },
       );
-      const current = new Map(yield* edges(goal.projectId));
-      current.set(goalInstanceId, wanted);
+      const current = HashMap.set(yield* edges(goal.projectId), goalInstanceId, wanted);
       yield* Effect.when(
         refused("dependency_cycle"),
         Effect.succeed(wanted.some((other) => reaches(current, other, goalInstanceId))),
@@ -310,9 +331,9 @@ const make = Effect.gen(function* () {
       projectId: string,
       branches: readonly string[],
     ) {
-      const checked = yield* Schema.decodeEffect(ProtectedBranches)([...new Set(branches)]).pipe(
-        Effect.mapError(() => GoalScheduleRefused.make({ reason: "invalid_branch" })),
-      );
+      const checked = yield* Schema.decodeEffect(ProtectedBranches)(
+        EffectArray.dedupe(branches),
+      ).pipe(Effect.mapError(() => GoalScheduleRefused.make({ reason: "invalid_branch" })));
       const json = yield* encodeBranches(checked).pipe(Effect.mapError(unencoded));
       yield* sql`INSERT INTO kanban_project_settings (project_id, protected_branches_json)
           VALUES (${projectId}, ${json})

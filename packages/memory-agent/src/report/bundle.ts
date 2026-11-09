@@ -1,4 +1,14 @@
-import { Array as Arr, Config, DateTime, Effect, Match, Option, Schema } from "effect";
+import {
+  Array as Arr,
+  Config,
+  DateTime,
+  Effect,
+  HashMap,
+  Match,
+  MutableHashMap,
+  Option,
+  Schema,
+} from "effect";
 import { Digest } from "effect/crypto";
 import { Hex } from "effect/encoding";
 import { SqlClient, SqlSchema } from "effect/sql";
@@ -415,7 +425,7 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
   /** Messages and tool calls in order; a result joins the call it answers. */
   const eventsOf = (rows: readonly NodeRow[], texts: readonly BundleText[]) => {
     const events: BundleEvent[] = [];
-    const calls = new Map<string, number>();
+    const calls = MutableHashMap.empty<string, number>();
     // Each row hands on the number of the last tool call so far.
     rows.reduce((callSeq, row, index) => {
       const text = texts[index] ?? { text: "", cut: false };
@@ -425,7 +435,7 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
           return callSeq;
         }),
         Match.when("tool_call", () => {
-          if (row.tool_call_id !== null) calls.set(row.tool_call_id, events.length);
+          if (row.tool_call_id !== null) MutableHashMap.set(calls, row.tool_call_id, events.length);
           events.push(
             BundleEvent.cases.ToolCall.make({
               seq: callSeq + 1,
@@ -439,7 +449,10 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
         }),
         Match.when("tool_result", () => {
           const result = { ok: row.ok === null ? null : row.ok !== 0, at: row.created_at, text };
-          const at = row.tool_call_id === null ? undefined : calls.get(row.tool_call_id);
+          const at =
+            row.tool_call_id === null
+              ? undefined
+              : Option.getOrUndefined(MutableHashMap.get(calls, row.tool_call_id));
           const call = at === undefined ? undefined : events[at];
           if (BundleEvent.guards.ToolCall(call)) {
             events[at ?? 0] = { ...call, result };
@@ -521,7 +534,10 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
                 tasks.filter((task) => task.parentRunId === run.run_id),
                 (task) =>
                   Effect.map(ref(task.id), (taskRef): BundleEvent => {
-                    const call = events[calls.get(task.parentToolCallId) ?? -1];
+                    const call =
+                      events[
+                        Option.getOrElse(MutableHashMap.get(calls, task.parentToolCallId), () => -1)
+                      ];
                     return BundleEvent.cases.Trace.make({
                       ref: taskRef,
                       status: task.status,
@@ -561,7 +577,7 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
                     },
               events: kept,
               eventsCut: timed.length > room || total > own.length,
-              failedSpans: (spansOfRun.get(run.run_id) ?? [])
+              failedSpans: Option.getOrElse(HashMap.get(spansOfRun, run.run_id), () => [])
                 .slice(-bundleLimits.failedSpansPerRun)
                 .map((span) => ({
                   path: span.path,
@@ -570,7 +586,7 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
                   durationMs: span.durationMs,
                   attributes: span.attributes,
                 })),
-              ...runSpanTotals(Option.fromNullishOr(totalsOfRun.get(run.run_id))),
+              ...runSpanTotals(HashMap.get(totalsOfRun, run.run_id)),
             } satisfies BundleRun;
           }),
         ),

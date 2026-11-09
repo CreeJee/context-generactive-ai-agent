@@ -1,5 +1,5 @@
 import { expect, layer } from "@effect/vitest";
-import { Data, Deferred, Effect, Layer, Schedule } from "effect";
+import { Data, Deferred, Effect, HashMap, Layer, Option, Schedule } from "effect";
 import {
   FailedSpans,
   failedSpansLayer,
@@ -29,7 +29,9 @@ layer(failedSpansLayer, { excludeTestServices: true })("failed span recorder", (
         }).pipe(Effect.withSpan("AgentChat.start"));
         yield* Effect.exit(run);
 
-        const spans = (yield* (yield* FailedSpans).ofRuns(["run-1", "run-2"])).get("run-1");
+        const spans = Option.getOrUndefined(
+          HashMap.get(yield* (yield* FailedSpans).ofRuns(["run-1", "run-2"]), "run-1"),
+        );
         expect(
           spans?.map(({ path, failure, attributes }) => ({ path, failure, attributes })),
         ).toEqual([
@@ -57,7 +59,9 @@ layer(failedSpansLayer, { excludeTestServices: true })("failed span recorder", (
       }).pipe(Effect.withSpan("AgentChat.start"));
       yield* Effect.exit(run);
 
-      const spans = (yield* (yield* FailedSpans).ofRuns(["run-3"])).get("run-3");
+      const spans = Option.getOrUndefined(
+        HashMap.get(yield* (yield* FailedSpans).ofRuns(["run-3"]), "run-3"),
+      );
       expect(spans?.map((span) => span.failure)).toEqual(["ProviderUnreachable (ECONNREFUSED)"]);
     }),
   );
@@ -76,7 +80,9 @@ layer(failedSpansLayer, { excludeTestServices: true })("failed span recorder", (
       // A trace no run named, such as a page's request, is not summed.
       yield* Effect.void.pipe(Effect.withSpan("Sessions.list"));
 
-      const recorded = (yield* (yield* FailedSpans).totalsOfRuns(["run-4", "run-5"])).get("run-4");
+      const recorded = Option.getOrUndefined(
+        HashMap.get(yield* (yield* FailedSpans).totalsOfRuns(["run-4", "run-5"]), "run-4"),
+      );
       expect(recorded?.dropped).toBe(0);
       expect(
         recorded?.totals

@@ -1,4 +1,16 @@
-import { Context, Data, Effect, Layer, Option, Schema, Semaphore } from "effect";
+import {
+  Array as Arr,
+  Context,
+  Data,
+  Effect,
+  HashMap,
+  HashSet,
+  Iterable,
+  Layer,
+  Option,
+  Schema,
+  Semaphore,
+} from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { AppEvents } from "../../events/app-events.ts";
 import { embeddedKindFilter, meaningfulNodeFilter } from "../quality.ts";
@@ -258,14 +270,17 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const changes = yield* selectChanges(limit).pipe(Effect.mapError(failed("read-failed")));
       if (changes.length === 0) return 0;
-      const sizes = yield* selectBytes([...new Set(changes.map((change) => change.node_seq))]).pipe(
-        Effect.mapError(failed("read-failed")),
+      const sizes = yield* selectBytes(
+        Arr.dedupe(Iterable.map(changes, (change) => change.node_seq)),
+      ).pipe(Effect.mapError(failed("read-failed")));
+      const bytesOf = HashMap.fromIterable(
+        Iterable.map(sizes, (row) => [row.seq, row.bytes] as const),
       );
-      const bytesOf = new Map(sizes.map((row) => [row.seq, row.bytes]));
       // The longest prefix of the journal within the budget, and never less than one change.
       const taken = changes.reduce<{ readonly count: number; readonly bytes: number }>(
         (cut, change, index) => {
-          const bytes = cut.bytes + (bytesOf.get(change.node_seq) ?? 0);
+          const bytes =
+            cut.bytes + Option.getOrElse(HashMap.get(bytesOf, change.node_seq), () => 0);
           return cut.count === index && (index === 0 || bytes <= lexicalBatchBytes)
             ? { count: index + 1, bytes }
             : cut;
@@ -273,12 +288,12 @@ const make = Effect.gen(function* () {
         { count: 0, bytes: 0 },
       ).count;
       const applied = changes.slice(0, taken);
-      const seqs = [...new Set(applied.map((change) => change.node_seq))];
+      const seqs = Arr.dedupe(Iterable.map(applied, (change) => change.node_seq));
       const searchable = yield* selectSearchable(seqs).pipe(Effect.mapError(failed("read-failed")));
-      const kept = new Set(searchable.map((node) => node.seq));
+      const kept = HashSet.fromIterable(Iterable.map(searchable, (node) => node.seq));
       yield* vectors.applyLexical(
         searchable.map((node) => ({ seq: node.seq, project: node.project_id, text: node.text })),
-        seqs.filter((seq) => !kept.has(seq)),
+        seqs.filter((seq) => !HashSet.has(kept, seq)),
       );
       yield* sql`DELETE FROM lexical_changes WHERE id <= ${applied.at(-1)!.id}`.pipe(
         Effect.mapError(failed("mapping-commit-failed")),

@@ -1,4 +1,4 @@
-import { Array as Arr, Result } from "effect";
+import { Array as Arr, Iterable, MutableHashMap, MutableHashSet, Option, Result } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 import {
   decodeGoalState,
@@ -103,15 +103,22 @@ const tagOf = (standing: Standing) =>
   });
 
 /** What sending every event from a new session finds. */
+// Mutable collections keep the order standings are reached in, which the tests and the document follow.
 const reached = {
-  standings: new Map<string, Standing>(),
+  standings: MutableHashMap.empty<string, Standing>(),
   /** Outcome texts by state and event. */
-  outcomes: new Map<string, Set<string>>(),
+  outcomes: MutableHashMap.empty<string, MutableHashSet.MutableHashSet<string>>(),
   /** Where each standing is moved from, without stopping or a new Goal. */
-  sources: new Map<string, Set<string>>(),
+  sources: MutableHashMap.empty<string, MutableHashSet.MutableHashSet<string>>(),
 };
-const add = (map: Map<string, Set<string>>, key: string, value: string) =>
-  map.set(key, (map.get(key) ?? new Set()).add(value));
+const add = (
+  map: MutableHashMap.MutableHashMap<string, MutableHashSet.MutableHashSet<string>>,
+  key: string,
+  value: string,
+) =>
+  MutableHashMap.modifyAt(map, key, (found) =>
+    Option.some(MutableHashSet.add(Option.getOrElse(found, MutableHashSet.empty<string>), value)),
+  );
 
 const explore = (frontier: ReadonlyArray<Standing>): void => {
   if (frontier.length === 0) return;
@@ -133,8 +140,8 @@ const explore = (frontier: ReadonlyArray<Standing>): void => {
           add(reached.outcomes, at, toKey === fromKey ? "그대로" : tagOf(to));
           if (event._tag !== "GoalStopped" && event._tag !== "NewGoalStarted")
             add(reached.sources, toKey, fromKey);
-          if (reached.standings.has(toKey)) return [];
-          reached.standings.set(toKey, to);
+          if (MutableHashMap.has(reached.standings, toKey)) return [];
+          MutableHashMap.set(reached.standings, toKey, to);
           return [to];
         }),
     });
@@ -142,16 +149,21 @@ const explore = (frontier: ReadonlyArray<Standing>): void => {
   explore(fresh);
 };
 const start: Standing = { phase: "chat", goal: null, plan: null };
-reached.standings.set(keyOf(start), start);
+MutableHashMap.set(reached.standings, keyOf(start), start);
 explore([start]);
-const standings = [...reached.standings.values()];
+const standings = Array.from(MutableHashMap.values(reached.standings));
 
 /** `found` and every standing that moves into it, walking the moves backwards from `frontier`. */
-const reaching = (frontier: ReadonlyArray<string>, found: Set<string>): ReadonlySet<string> => {
-  const fresh = [
-    ...new Set(frontier.flatMap((key) => [...(reached.sources.get(key) ?? [])])),
-  ].filter((from) => !found.has(from));
-  fresh.forEach((from) => found.add(from));
+const reaching = (
+  frontier: ReadonlyArray<string>,
+  found: MutableHashSet.MutableHashSet<string>,
+): MutableHashSet.MutableHashSet<string> => {
+  const fresh = Arr.dedupe(
+    Iterable.flatMap(frontier, (key) =>
+      Option.getOrElse(MutableHashMap.get(reached.sources, key), MutableHashSet.empty<string>),
+    ),
+  ).filter((from) => !MutableHashSet.has(found, from));
+  fresh.forEach((from) => MutableHashSet.add(found, from));
   return fresh.length === 0 ? found : reaching(fresh, found);
 };
 
@@ -221,13 +233,18 @@ const transitionsDocument = () => {
   const counts = stateTags.map(
     (tag) => `- \`${tag}\`: ${Arr.countBy(standings, (standing) => tagOf(standing) === tag)}`,
   );
-  const events = [...new Set(eventsFor(start).map((event) => event._tag))];
+  const events = Arr.dedupe(Iterable.map(eventsFor(start), (event) => event._tag));
   const sections = stateTags.flatMap((tag) => [
     "",
     `## \`${tag}\``,
     "",
     ...events.flatMap((event) => {
-      const results = [...(reached.outcomes.get(`${tag}|${event}`) ?? [])].sort();
+      const results = Array.from(
+        Option.getOrElse(
+          MutableHashMap.get(reached.outcomes, `${tag}|${event}`),
+          MutableHashSet.empty<string>,
+        ),
+      ).sort();
       return results.length === 0 ? [] : [`- \`${event}\`: ${results.join(", ")}`];
     }),
   ]);
@@ -251,8 +268,10 @@ describe("Goal transitions", () => {
 
   it("reaches Completed from every reached state without stopping or a new Goal", () => {
     const completed = standings.filter((standing) => tagOf(standing) === "Completed").map(keyOf);
-    const finishing = reaching(completed, new Set(completed));
-    expect(standings.filter((standing) => !finishing.has(keyOf(standing)))).toEqual([]);
+    const finishing = reaching(completed, MutableHashSet.fromIterable(completed));
+    expect(standings.filter((standing) => !MutableHashSet.has(finishing, keyOf(standing)))).toEqual(
+      [],
+    );
   });
 
   it("stores every reached state and reads it back the same", () => {

@@ -1,6 +1,6 @@
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { layer } from "@effect/vitest";
-import { Effect, FileSystem, Layer, MutableHashMap, Option } from "effect";
+import { Effect, FileSystem, Iterable, Layer, MutableHashMap, Option } from "effect";
 import { expect } from "vite-plus/test";
 import { agentCommandInvocation } from "./agents.ts";
 
@@ -13,7 +13,7 @@ const windowsInvocation = Effect.fnUntraced(function* (
   const fs = yield* FileSystem.FileSystem;
   const fileInfo = yield* fs.stat(yield* fs.makeTempFileScoped());
   const knownFiles = MutableHashMap.fromIterable(
-    files.map(([name, text]) => [name.toLowerCase(), text] as const),
+    Iterable.map(files, ([name, text]) => [name.toLowerCase(), text] as const),
   );
   const missing = FileSystem.makeNoop({});
   const fixtureFs = FileSystem.makeNoop({

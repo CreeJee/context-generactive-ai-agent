@@ -18,7 +18,19 @@
  * the same relevant nodes, with limit 16.
  */
 import { DatabaseSync } from "node:sqlite";
-import { Array as Arr, Console, Effect, FileSystem, Layer, Option, Schema } from "effect";
+import {
+  Array as Arr,
+  Console,
+  Effect,
+  FileSystem,
+  HashSet,
+  Iterable,
+  Layer,
+  MutableHashMap,
+  MutableHashSet,
+  Option,
+  Schema,
+} from "effect";
 import { copyLayer } from "./copy-storage.ts";
 import { MemorySearch, searchTuning, type SearchTuning } from "../src/memory/search.ts";
 import { nodePlatform } from "../src/runtime/node-platform.ts";
@@ -178,16 +190,21 @@ const build = Effect.gen(function* () {
         const input = argumentsOf(FindArguments, call.text);
         if (Option.isNone(input) || input.value.query.trim().length === 0) return;
         seen.parsed++;
-        const listed = new Set(resultIds(call.result));
-        if (listed.size > 0) seen.listed++;
-        const opened = new Set<string>();
+        const listed = HashSet.fromIterable(resultIds(call.result));
+        if (HashSet.size(listed) > 0) seen.listed++;
+        const opened = MutableHashSet.empty<string>();
         for (const later of calls.slice(index + 1)) {
           if (later.run_id !== call.run_id) continue;
           if (later.tool === "find_memory") break;
-          Option.map(argumentsOf(OpenArguments, later.text), ({ id }) => opened.add(id));
+          Option.map(argumentsOf(OpenArguments, later.text), ({ id }) =>
+            MutableHashSet.add(opened, id),
+          );
         }
-        if (opened.size > 0) seen.opened++;
-        const relevant = [...opened].filter((id) => listed.has(id) && exists.get(id) !== undefined);
+        if (MutableHashSet.size(opened) > 0) seen.opened++;
+        const relevant = Arr.filter(
+          opened,
+          (id) => HashSet.has(listed, id) && exists.get(id) !== undefined,
+        );
         if (relevant.length === 0) return;
         const crossProject = input.value.crossProject ?? true;
         items.push({
@@ -218,11 +235,16 @@ const build = Effect.gen(function* () {
     { discard: true },
   );
   // One item per distinct query and project; the later call's opened nodes win.
-  const unique = [
-    ...new Map(
-      items.map((item) => [`${item.group}\u0000${item.projectId}\u0000${item.query}`, item]),
-    ).values(),
-  ];
+  const unique = Array.from(
+    MutableHashMap.values(
+      MutableHashMap.fromIterable(
+        Iterable.map(items, (item) => [
+          `${item.group}\u0000${item.projectId}\u0000${item.query}`,
+          item,
+        ]),
+      ),
+    ),
+  );
   const lines = yield* Effect.forEach(unique, (item) => encodeJson(item));
   yield* fs.writeFileString(setFile, lines.join("\n") + "\n");
   const count = (group: string) => Arr.countBy(unique, (item) => item.group === group);
@@ -281,7 +303,7 @@ const score = Effect.gen(function* () {
           Effect.flatMap((text) => decodedLines(DumpedKey, text)),
         )
       : [];
-  const doneKeys = new Set(dumped.map((row) => `${row.group}|${row.query}`));
+  const doneKeys = HashSet.fromIterable(Iterable.map(dumped, (row) => `${row.group}|${row.query}`));
   const decodeItem = Schema.decodeUnknownEffect(Schema.fromJsonString(Item));
   const items = (yield* Effect.forEach(
     (yield* fs.readFileString(setFile)).split("\n").filter((line) => line.trim().length > 0),
@@ -289,7 +311,7 @@ const score = Effect.gen(function* () {
   )).filter(
     (item) =>
       (onlyGroup === undefined || item.group === onlyGroup) &&
-      !doneKeys.has(`${item.group}|${querySha(item.query)}`),
+      !HashSet.has(doneKeys, `${item.group}|${querySha(item.query)}`),
   );
   const search = yield* MemorySearch;
   // Rows land in the dump as they finish: a long run shows progress, and a killed run keeps
@@ -351,14 +373,17 @@ const score = Effect.gen(function* () {
     (values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length)).toFixed(3);
   // A resumed run scored only its remaining items; the table reads the whole dump instead (the
   // last row per query wins, a torn final line is skipped), so it stays the set's score.
-  const summaryRows = new Map<string, ScoredRow>(
-    (dumpFile === undefined
+  const summarized: ReadonlyArray<ScoredRow & Pick<DumpRow, "query">> =
+    dumpFile === undefined
       ? rows
-      : yield* decodedLines(DumpedRow, yield* fs.readFileString(dumpFile))
-    ).map((row) => [`${row.group}|${row.query}`, row] as const),
+      : yield* decodedLines(DumpedRow, yield* fs.readFileString(dumpFile));
+  const summaryRows = MutableHashMap.fromIterable(
+    Iterable.map(summarized, (row) => [`${row.group}|${row.query}`, row] as const),
   );
-  for (const group of new Set([...summaryRows.values()].map((row) => row.group))) {
-    const selected = [...summaryRows.values()].filter((row) => row.group === group);
+  for (const group of Arr.dedupe(
+    Iterable.map(MutableHashMap.values(summaryRows), (row) => row.group),
+  )) {
+    const selected = Arr.filter(MutableHashMap.values(summaryRows), (row) => row.group === group);
     yield* Console.log(
       `| ${label} | ${group} | ${selected.length} | ${Arr.countBy(selected, (row) => row.failed)} | ${Arr.countBy(selected, (row) => row.degraded.length > 0)} | ${mean(selected.map((row) => row.reciprocal))} | ${mean(selected.map((row) => row.at5))} | ${mean(selected.map((row) => row.at12))} | ${mean(selected.map((row) => row.at16))} |`,
     );

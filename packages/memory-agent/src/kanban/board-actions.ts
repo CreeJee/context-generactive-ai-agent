@@ -2,6 +2,9 @@ import {
   Array as EffectArray,
   Context,
   Effect,
+  HashMap,
+  HashSet,
+  Iterable,
   Layer,
   Match,
   Option,
@@ -187,7 +190,7 @@ const make = Effect.gen(function* () {
     );
     return {
       targetBranch: schedule.targetBranch,
-      dependsOn: edges.get(goal.goalInstanceId) ?? [],
+      dependsOn: Option.getOrElse(HashMap.get(edges, goal.goalInstanceId), () => []),
       waitingOn: yield* scheduler.waitingOn(goal.goalInstanceId),
       merge: schedule.merge,
       upstreamPending: schedule.upstreamPending,
@@ -366,10 +369,11 @@ const make = Effect.gen(function* () {
     ) {
       const goal = yield* board(sessionId);
       const cards = yield* Effect.forEach(cardIds, (cardId) => idle(sessionId, cardId));
-      const ids = new Set(cardIds);
-      const dependsOn = [
-        ...new Set([...cards.flatMap((card) => card.dependsOn), ...merged.dependsOn]),
-      ].filter((id) => !ids.has(id));
+      const ids = HashSet.fromIterable(cardIds);
+      const dependsOn = EffectArray.dedupe([
+        ...cards.flatMap((card) => card.dependsOn),
+        ...merged.dependsOn,
+      ]).filter((id) => !HashSet.has(ids, id));
       const saved = yield* ops.addCard(sessionId, { ...merged, dependsOn }, author);
       const added = Option.map(saved, (card) => card.id);
       yield* ops.replaceCards(sessionId, cardIds, Option.toArray(added), author);
@@ -696,10 +700,14 @@ const make = Effect.gen(function* () {
       if (Option.isNone(goal)) return Option.none<KanbanBoardView>();
       const { goalInstanceId, mode, hold } = goal.value;
       const steps = (yield* workflows.get(sessionId)).plan?.steps ?? [];
-      const dead = new Set(
-        (yield* attempts.deadLettered(cardQueueName))
-          .filter((item) => item.goalInstanceId === goalInstanceId)
-          .map((item) => item.cardId),
+      const dead = HashSet.fromIterable(
+        Iterable.map(
+          Iterable.filter(
+            yield* attempts.deadLettered(cardQueueName),
+            (item) => item.goalInstanceId === goalInstanceId,
+          ),
+          (item) => item.cardId,
+        ),
       );
       const ladderOf = yield* attempts.ladders(goalInstanceId);
       const cards = steps.map((card): KanbanCardView => {
@@ -711,7 +719,7 @@ const make = Effect.gen(function* () {
           failures: ladder.failureStreak,
           replans: ladder.replans,
           resolutionOf: ladder.resolutionOf,
-          requeueable: card.status === "blocked" && dead.has(card.id),
+          requeueable: card.status === "blocked" && HashSet.has(dead, card.id),
         };
       });
       return Option.some<KanbanBoardView>({

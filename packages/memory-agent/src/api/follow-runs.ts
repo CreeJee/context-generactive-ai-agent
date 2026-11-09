@@ -1,4 +1,4 @@
-import { Function as EffectFunction } from "effect";
+import { Function as EffectFunction, HashSet } from "effect";
 
 /** What a page knows when it decides whether to read a run it did not start. */
 export interface RunSight {
@@ -16,7 +16,7 @@ export interface RunSight {
 }
 
 /** The runs a page has read; null until it has seen what its first read covered. */
-export type ReadRuns = ReadonlySet<string> | null;
+export type ReadRuns = HashSet.HashSet<string> | null;
 
 /** What `followRuns` leaves the page with: the runs it has read, and whether it reads again. */
 export interface FollowStep {
@@ -39,11 +39,9 @@ function followRunsBody(
   { latest, opened, reading, sending }: RunSight,
 ): FollowStep {
   if (latest === undefined || !opened) return { read, open: false };
-  const seen = new Set([
-    ...(read ?? (latest === null ? [] : [latest])),
-    ...(reading === null ? [] : [reading]),
-  ]);
-  if (read === null || sending || reading !== null || latest === null || seen.has(latest))
+  const known = read ?? (latest === null ? HashSet.empty<string>() : HashSet.make(latest));
+  const seen = reading === null ? known : HashSet.add(known, reading);
+  if (read === null || sending || reading !== null || latest === null || HashSet.has(seen, latest))
     return { read: seen, open: false };
-  return { read: new Set([...seen, latest]), open: true };
+  return { read: HashSet.add(seen, latest), open: true };
 }

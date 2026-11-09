@@ -3,7 +3,9 @@ import {
   Data,
   Effect,
   HashSet,
+  Iterable,
   type JsonSchema,
+  MutableHashMap,
   Option,
   Predicate,
   Ref,
@@ -51,9 +53,9 @@ const decodeAnswer = Schema.decodeUnknownOption(
 );
 
 /** The lazy tools a conversation discovered, in the order it did. */
-const discoveredIn = (history: ReadonlyArray<StoredMessage>, lazy: ReadonlySet<string>) => {
-  const calls = new Set(
-    history.flatMap((message) =>
+const discoveredIn = (history: ReadonlyArray<StoredMessage>, lazy: HashSet.HashSet<string>) => {
+  const calls = HashSet.fromIterable(
+    Iterable.flatMap(history, (message) =>
       message.role === "assistant"
         ? (message.toolCalls ?? [])
             .filter((call) => call.function.name === discoveryToolName)
@@ -63,7 +65,7 @@ const discoveredIn = (history: ReadonlyArray<StoredMessage>, lazy: ReadonlySet<s
   );
   return Arr.dedupe(
     history.flatMap((message) =>
-      message.role === "tool" && calls.has(message.toolCallId)
+      message.role === "tool" && HashSet.has(calls, message.toolCallId)
         ? Option.match(
             decodeAnswer(
               Predicate.isString(message.content)
@@ -73,7 +75,7 @@ const discoveredIn = (history: ReadonlyArray<StoredMessage>, lazy: ReadonlySet<s
             {
               onNone: () => [],
               onSome: ({ tools }) =>
-                tools.filter((tool) => lazy.has(tool.name)).map((tool) => tool.name),
+                tools.filter((tool) => HashSet.has(lazy, tool.name)).map((tool) => tool.name),
             },
           )
         : [],
@@ -103,14 +105,18 @@ export const lazyToolsFor = Effect.fnUntraced(function* (
 ) {
   const lazy = tools.filter((tool) => tool.lazy);
   const eager = tools.filter((tool) => !tool.lazy);
-  const lazyByName = new Map(lazy.map((tool) => [tool.tool.name, tool] as const));
-  const discovered = yield* Ref.make(discoveredIn(history, new Set(lazyByName.keys())));
+  const lazyByName = MutableHashMap.fromIterable(
+    Iterable.map(lazy, (tool) => [tool.tool.name, tool] as const),
+  );
+  const discovered = yield* Ref.make(
+    discoveredIn(history, HashSet.fromIterable(MutableHashMap.keys(lazyByName))),
+  );
   const undiscovered = (seen: HashSet.HashSet<string>) =>
     lazy.filter((tool) => !HashSet.has(seen, tool.tool.name)).map((tool) => tool.tool.name);
 
   const discovery = runTool({
     name: discoveryToolName,
-    description: `You have access to additional tools that can be discovered. Available tools: [${[...lazyByName.keys()].join(", ")}]. Call this tool with a list of tool names to discover their full descriptions and argument schemas before using them.`,
+    description: `You have access to additional tools that can be discovered. Available tools: [${Arr.fromIterable(MutableHashMap.keys(lazyByName)).join(", ")}]. Call this tool with a list of tool names to discover their full descriptions and argument schemas before using them.`,
     parameters: DiscoveryInput,
     jsonSchema: discoveryParameters,
     handler: ({ toolNames }) =>
@@ -120,7 +126,7 @@ export const lazyToolsFor = Effect.fnUntraced(function* (
           toolNames,
           HashSet.fromIterable(before),
           (seen, name): readonly [HashSet.HashSet<string>, Result.Result<Found, string>] =>
-            Option.match(Option.fromNullishOr(lazyByName.get(name)), {
+            Option.match(MutableHashMap.get(lazyByName, name), {
               onNone: () => [
                 seen,
                 Result.fail(
@@ -152,7 +158,7 @@ export const lazyToolsFor = Effect.fnUntraced(function* (
     /** The tools a step offers: eager ones, discovered ones, and discovery while some remain. */
     offered: Effect.map(Ref.get(discovered), (names): ReadonlyArray<RunTool> => [
       ...eager,
-      ...names.flatMap((name) => Option.toArray(Option.fromNullishOr(lazyByName.get(name)))),
+      ...names.flatMap((name) => Option.toArray(MutableHashMap.get(lazyByName, name))),
       ...(lazy.length > names.length ? [discovery] : []),
     ]),
 
@@ -165,7 +171,7 @@ export const lazyToolsFor = Effect.fnUntraced(function* (
           ),
           Option.map((tool) => ToolLookup.Found({ tool })),
           Option.getOrElse(() =>
-            Option.match(Option.fromNullishOr(lazyByName.get(name)), {
+            Option.match(MutableHashMap.get(lazyByName, name), {
               onNone: () => ToolLookup.Unknown(),
               onSome: (lazyTool) =>
                 names.includes(name)

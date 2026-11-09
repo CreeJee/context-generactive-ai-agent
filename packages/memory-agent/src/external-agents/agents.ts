@@ -17,6 +17,7 @@ import {
   Function as EffectFunction,
   HashMap,
   HashSet,
+  Iterable,
   Match,
   MutableHashMap,
   MutableRef,
@@ -352,7 +353,7 @@ const make = Effect.gen(function* () {
       Effect.provideService(FileSystem.FileSystem, fs),
     );
     const trust = yield* selectTrust(project.id);
-    const localNames = HashSet.fromIterable(local.agents.map((agent) => agent.name));
+    const localNames = HashSet.fromIterable(Iterable.map(local.agents, (agent) => agent.name));
     const agents = [...global.agents, ...local.agents].map((agent) => ({
       agent,
       trusted:
@@ -361,9 +362,13 @@ const make = Effect.gen(function* () {
       shadowed: agent.scope === "global" && HashSet.has(localNames, agent.name),
     }));
     const usableFingerprints = MutableHashMap.fromIterable(
-      agents
-        .filter((entry) => !entry.shadowed && entry.trusted === entry.agent.fingerprint)
-        .map((entry) => [linkKey(project, entry.agent), entry.agent.fingerprint]),
+      Iterable.map(
+        Iterable.filter(
+          agents,
+          (entry) => !entry.shadowed && entry.trusted === entry.agent.fingerprint,
+        ),
+        (entry) => [linkKey(project, entry.agent), entry.agent.fingerprint] as const,
+      ),
     );
     yield* retireLinks(
       (link, key) =>

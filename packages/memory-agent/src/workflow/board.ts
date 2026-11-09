@@ -1,4 +1,4 @@
-import { Array as Arr, Context, Effect, Layer, Option, Schema } from "effect";
+import { Array as Arr, Context, Effect, HashMap, Iterable, Layer, Option, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { currentStatesSql } from "./state-rows.ts";
 import { GoalOrder } from "../kanban/goal-order.ts";
@@ -126,8 +126,11 @@ export class Boards extends Context.Service<
         list: (projectId) =>
           Effect.gen(function* () {
             const rows = yield* projectBoards(projectId);
-            const rankOf = new Map(
-              (yield* goalOrder.goals(projectId)).map((sessionId, rank) => [sessionId, rank]),
+            const rankOf = HashMap.fromIterable(
+              Iterable.map(yield* goalOrder.goals(projectId), (sessionId, rank) => [
+                sessionId,
+                rank,
+              ]),
             );
             const boards = yield* Effect.forEach(rows, (row) =>
               Effect.map(decodeRevisionPlan(row.plan_json), (plan): readonly ProjectBoard[] =>
@@ -147,7 +150,10 @@ export class Boards extends Context.Service<
                         counts: countedBy(plan.steps),
                         kanbanActive: row.kanban_active === 1,
                         updatedAt: row.updated_at,
-                        rank: rankOf.get(row.session_id) ?? rows.length,
+                        rank: Option.getOrElse(
+                          HashMap.get(rankOf, row.session_id),
+                          () => rows.length,
+                        ),
                       },
                     ],
               ),
@@ -161,30 +167,27 @@ export class Boards extends Context.Service<
             const changed = yield* changes(sessionId);
             const shown = changed.slice(0, historyLimit);
             const detailOf = yield* Arr.match(shown, {
-              onEmpty: () => Effect.succeed(new Map<number, string | null>()),
+              onEmpty: () => Effect.succeed(HashMap.empty<number, string | null>()),
               onNonEmpty: (rows) =>
-                Effect.map(
-                  details(Arr.map(rows, (row) => row.id)),
-                  (found) => new Map(found.map((row) => [row.id, row.detail])),
+                Effect.map(details(Arr.map(rows, (row) => row.id)), (found) =>
+                  HashMap.fromIterable(Iterable.map(found, (row) => [row.id, row.detail])),
                 ),
             });
             const history = shown.map((revision): BoardRevision => ({
               revisionId: revision.id,
               at: revision.created_at,
               author: revision.author_json,
-              detail: detailOf.get(revision.id) ?? "",
+              detail: Option.getOrNull(HashMap.get(detailOf, revision.id)) ?? "",
               cardIds: revision.card_ids_json,
             }));
             // Oldest first, so each card keeps its newest change.
-            const lastChange = new Map<string, BoardCard["lastChange"]>(
-              changed
-                .toReversed()
-                .flatMap(({ author_json, created_at, card_ids_json }) =>
-                  card_ids_json.map((id): [string, BoardCard["lastChange"]] => [
-                    id,
-                    { author: author_json, at: created_at },
-                  ]),
-                ),
+            const lastChange = HashMap.fromIterable(
+              Iterable.flatMap(changed.toReversed(), ({ author_json, created_at, card_ids_json }) =>
+                Iterable.map(card_ids_json, (id): [string, BoardCard["lastChange"]] => [
+                  id,
+                  { author: author_json, at: created_at },
+                ]),
+              ),
             );
             const view: BoardView = {
               plan:
@@ -193,7 +196,7 @@ export class Boards extends Context.Service<
                   : { version: plan.version, status: plan.status, summary: plan.summary },
               cards: (plan?.steps ?? []).map((card) => ({
                 card,
-                lastChange: lastChange.get(card.id) ?? null,
+                lastChange: Option.getOrNull(HashMap.get(lastChange, card.id)),
               })),
               history,
               pendingChanges: (yield* pending(sessionId)).map((request) => ({

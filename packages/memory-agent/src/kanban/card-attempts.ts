@@ -1,4 +1,17 @@
-import { Clock, Context, DateTime, Effect, Layer, Option, PubSub, Schema, Stream } from "effect";
+import {
+  Clock,
+  Context,
+  DateTime,
+  Effect,
+  HashMap,
+  HashSet,
+  Iterable,
+  Layer,
+  Option,
+  PubSub,
+  Schema,
+  Stream,
+} from "effect";
 import { SqlClient, type SqlError } from "effect/sql";
 import { endedWithKnownEffectsSql } from "../workflow/run-bindings.ts";
 import { UserChange, UserChangeRequestStatus } from "../workflow/board-edit.ts";
@@ -345,9 +358,8 @@ const make = Effect.gen(function* () {
         WHERE g.status = 'active' AND a.outcome_json IS NULL
         GROUP BY a.goal_instance_id`.pipe(
       rows(Schema.Struct({ goal_instance_id: Schema.String, value: Schema.Int })),
-      Effect.map(
-        (found): ReadonlyMap<string, number> =>
-          new Map(found.map((row) => [row.goal_instance_id, row.value])),
+      Effect.map((found): HashMap.HashMap<string, number> =>
+        HashMap.fromIterable(Iterable.map(found, (row) => [row.goal_instance_id, row.value])),
       ),
       Effect.mapError(failed("attempt")),
     ),
@@ -419,7 +431,7 @@ const make = Effect.gen(function* () {
       sql`SELECT request_id FROM kanban_decision_followups
           WHERE goal_instance_id = ${goalInstanceId}`.pipe(
         rows(RequestRow),
-        Effect.map((found) => new Set(found.map((row) => row.request_id))),
+        Effect.map((found) => HashSet.fromIterable(Iterable.map(found, (row) => row.request_id))),
         Effect.mapError(failed("decision")),
       ),
 
@@ -457,8 +469,11 @@ const make = Effect.gen(function* () {
           notes_json FROM kanban_cards WHERE goal_instance_id = ${goalInstanceId}`.pipe(
         rows(GoalCardRow),
         Effect.map((found) => {
-          const stored = new Map(found.map((row) => [row.card_id, toLadder(row)] as const));
-          return (cardId: string) => stored.get(cardId) ?? freshLadder;
+          const stored = HashMap.fromIterable(
+            Iterable.map(found, (row) => [row.card_id, toLadder(row)] as const),
+          );
+          return (cardId: string) =>
+            Option.getOrElse(HashMap.get(stored, cardId), () => freshLadder);
         }),
         Effect.mapError(failed("card")),
       ),

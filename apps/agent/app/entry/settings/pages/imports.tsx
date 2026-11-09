@@ -1,4 +1,4 @@
-import { type Data, Effect } from "effect";
+import { Array as Arr, type Data, Effect } from "effect";
 import { runUiEffect, uiPromise } from "../../shared/ui-effect";
 import { BotIcon, RefreshCwIcon } from "lucide-react";
 import { Schema } from "effect";
@@ -92,7 +92,7 @@ const importFailurePart = (part: string) => {
  * generically: it can hold paths or transcript content.
  */
 const importFailureText = (failure: string) =>
-  [...new Set(failure.split(",").map(importFailurePart))].join(", ");
+  Arr.dedupe(failure.split(",").map(importFailurePart)).join(", ");
 
 /** Why a pass stopped partway. */
 const crashReasons = {

@@ -17,6 +17,7 @@ import {
   Deferred,
   Duration,
   Function,
+  Iterable,
   MutableHashMap,
   MutableRef,
   Option,
@@ -183,7 +184,7 @@ export const defaultTestResponder = (invocation: ScriptedInvocation): ScriptedTu
 
   if (tools.length > 0) {
     const byId = MutableHashMap.fromIterable(
-      tools.map((message) => [message.toolCallId, toolText(message)]),
+      Iterable.map(tools, (message) => [message.toolCallId, toolText(message)]),
     );
     if (MutableHashMap.has(byId, "call-memory")) {
       const found = JSON.parse(Option.getOrUndefined(MutableHashMap.get(byId, "call-memory"))!);

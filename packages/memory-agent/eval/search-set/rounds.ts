@@ -5,7 +5,18 @@
  * user's message and the answer and writes what someone might ask later to find it again: a full
  * question and a short search query, both searched for the same need.
  */
-import { Array as Arr, Console, DateTime, Effect, Match, Option, Order, Schema } from "effect";
+import {
+  Array as Arr,
+  Console,
+  DateTime,
+  Effect,
+  HashSet,
+  Iterable,
+  Match,
+  Option,
+  Order,
+  Schema,
+} from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { namesSomethingExactly } from "../../src/memory/search.ts";
 import { sha256 } from "../../src/runtime/synchronous-crypto.ts";
@@ -161,11 +172,13 @@ export const writeRounds = Effect.fn("searchSet.rounds")(function* ({
   const model = yield* EvalModel;
   const files = setFiles(storage);
   const rounds = drawn(yield* candidateRounds(), count);
-  const done = new Set([
-    ...(yield* readRows(files.needs)).map((need) => need.need),
-    ...(yield* readRows(files.skippedRounds)).map(({ round }) => `round:${round}`),
-  ]);
-  const pending = rounds.filter((round) => !done.has(`round:${round.run}`));
+  const done = HashSet.fromIterable(
+    Iterable.appendAll(
+      Iterable.map(yield* readRows(files.needs), (need) => need.need),
+      Iterable.map(yield* readRows(files.skippedRounds), ({ round }) => `round:${round}`),
+    ),
+  );
+  const pending = rounds.filter((round) => !HashSet.has(done, `round:${round.run}`));
   yield* Console.log(`rounds drawn ${rounds.length}; to write ${pending.length}`);
 
   const write = (round: Round, question: string, keywords: string) =>

@@ -1,4 +1,4 @@
-import { Effect, Option } from "effect";
+import { Effect, HashMap, Option } from "effect";
 import type { ModelSelection } from "../providers/contracts.ts";
 import { fallbackLogged } from "../runtime/logged-failures.ts";
 import {
@@ -40,11 +40,11 @@ const stepLines = {
     ]
       .filter((line) => line.length > 0)
       .join("\n"),
-  tool: (message: ConversationMessage, rereads: ReadonlyMap<string, string>) =>
-    `[result ${message.toolCallId ?? ""}; reread: ${rereads.get(message.toolCallId ?? "") ?? "none"}]\n${shorten(messageText(message), stepCharacters.result)}`,
+  tool: (message: ConversationMessage, rereads: HashMap.HashMap<string, string>) =>
+    `[result ${message.toolCallId ?? ""}; reread: ${Option.getOrElse(HashMap.get(rereads, message.toolCallId ?? ""), () => "none")}]\n${shorten(messageText(message), stepCharacters.result)}`,
 } satisfies Record<
   ConversationMessage["role"],
-  (message: ConversationMessage, rereads: ReadonlyMap<string, string>) => string
+  (message: ConversationMessage, rereads: HashMap.HashMap<string, string>) => string
 >;
 
 /** What the summarizer is asked: the run's task, then its steps. */

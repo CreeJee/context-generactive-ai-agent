@@ -1,4 +1,4 @@
-import { Array as Arr, Effect, Schema } from "effect";
+import { Array as Arr, Effect, HashSet, Iterable, Schema } from "effect";
 import { type GoalOutcome, OutcomeId, type PlanStep } from "./contracts.ts";
 
 /** A step that names an outcome id the current Goal does not have. */
@@ -22,10 +22,10 @@ const unknownStepOutcomes = (
   outcomes: readonly GoalOutcome[],
   steps: readonly OutcomeStep[],
 ): ReadonlyArray<UnknownStepOutcome> => {
-  const ids = new Set(outcomes.map((outcome) => outcome.id));
+  const ids = HashSet.fromIterable(Iterable.map(outcomes, (outcome) => outcome.id));
   return steps.flatMap((step) =>
     Arr.dedupe(step.outcomes)
-      .filter((outcomeId) => !ids.has(outcomeId))
+      .filter((outcomeId) => !HashSet.has(ids, outcomeId))
       .map((outcomeId) => ({ stepId: step.id, outcomeId })),
   );
 };

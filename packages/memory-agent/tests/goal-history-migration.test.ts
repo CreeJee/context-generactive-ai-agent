@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { it } from "@effect/vitest";
-import { Effect, FileSystem, Path } from "effect";
+import { Effect, FileSystem, HashSet, Path } from "effect";
 import { expect } from "vite-plus/test";
 import { DatabaseSchemaRejectedReason, migrateDatabase } from "../src/db/database.ts";
 import { goalHistoryMigration, migrations } from "../src/db/migrations.ts";
@@ -41,12 +41,12 @@ const snapshot = (
  * receipts, the ledger step keeps the workflow states as rows, and the owner ledger step keeps an
  * operation's kind and tool as columns.
  */
-const rewritten = new Set([
+const rewritten = HashSet.make(
   "workflow_run_events",
   "workflow_state_revisions",
   "session_workflows",
   "owner_rpc_operations",
-]);
+);
 /** The fixture's operation once its fingerprint, which is not JSON, went: it names nothing. */
 const operation = {
   run_id: "run",
@@ -58,9 +58,13 @@ const operation = {
   status: "uncertain",
   outcome: null,
 };
-const stillKept = goalHistoryMigration.preservedTables.filter((table) => !rewritten.has(table));
+const stillKept = goalHistoryMigration.preservedTables.filter(
+  (table) => !HashSet.has(rewritten, table),
+);
 const keptOf = <A>(rows: ReadonlyArray<A>) =>
-  rows.filter((_, index) => !rewritten.has(goalHistoryMigration.preservedTables[index] ?? ""));
+  rows.filter(
+    (_, index) => !HashSet.has(rewritten, goalHistoryMigration.preservedTables[index] ?? ""),
+  );
 const states = (db: DatabaseSync) =>
   db
     .prepare(

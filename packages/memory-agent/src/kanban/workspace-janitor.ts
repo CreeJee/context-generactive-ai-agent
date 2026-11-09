@@ -1,4 +1,14 @@
-import { Array as Arr, Context, Data, Effect, Layer, Option } from "effect";
+import {
+  Array as Arr,
+  Context,
+  Data,
+  Effect,
+  HashSet,
+  Iterable,
+  Layer,
+  MutableHashMap,
+  Option,
+} from "effect";
 import { Number as EffectNumber } from "effect";
 import { Workflows } from "../workflow/workflow.ts";
 import { CardAttempts, type KanbanGoal } from "./card-attempts.ts";
@@ -170,13 +180,13 @@ const make = Effect.gen(function* () {
         : kept;
     // A new Goal took over: the board's next look settles its folder.
     if ((yield* workflows.goalInstanceId(goal.sessionId)) !== goalInstanceId) return kept;
-    const pending = new Set(
-      (yield* attempts.pending(goalInstanceId)).map((attempt) => attempt.cardId),
+    const pending = HashSet.fromIterable(
+      Iterable.map(yield* attempts.pending(goalInstanceId), (attempt) => attempt.cardId),
     );
     const steps = (yield* workflows.get(goal.sessionId)).plan?.steps ?? [];
     const orphans = folder.cardIds.flatMap((cardId) => {
       const step = steps.find((candidate) => candidate.id === cardId);
-      if (pending.has(cardId) || (step !== undefined && step.status !== "done")) return [];
+      if (HashSet.has(pending, cardId) || (step !== undefined && step.status !== "done")) return [];
       return [
         Orphan.Card({
           card: cardOf(goal, cardId),
@@ -200,7 +210,7 @@ const make = Effect.gen(function* () {
    */
   const sweep = Effect.fn("CardWorkspaceJanitor.sweep")(function* (mode: SweepMode) {
     const judgements = yield* Effect.forEach(yield* worktrees.goalFolders, judge);
-    const roots = new Set([
+    const roots = Arr.dedupe([
       ...judgements.flatMap((judgement) =>
         judgement.projectRoot === null ? [] : [judgement.projectRoot],
       ),
@@ -208,14 +218,14 @@ const make = Effect.gen(function* () {
         .filter((goal) => goal.mode === "worktree")
         .map((goal) => goal.projectRoot),
     ]);
-    // Several projects can share a repository; each gone folder counts once.
-    const stale = new Map(
-      (yield* Effect.forEach(roots, (root) =>
-        Effect.map(worktrees.staleWorktrees(root), (paths) =>
-          paths.map((path) => [path, root] as const),
-        ),
-      )).flat(),
+    // Several projects can share a repository; each gone folder counts once. The mutable map
+    // keeps the order the folders were found in, which the warnings follow.
+    const staleByRoot = yield* Effect.forEach(roots, (root) =>
+      Effect.map(worktrees.staleWorktrees(root), (paths) =>
+        paths.map((path) => [path, root] as const),
+      ),
     );
+    const stale = MutableHashMap.fromIterable<string, string>(Iterable.flatten(staleByRoot));
     const orphans = judgements.flatMap((judgement) => judgement.orphans);
     yield* Effect.forEach(
       orphans,
@@ -236,7 +246,7 @@ const make = Effect.gen(function* () {
       { discard: true },
     );
     yield* Effect.forEach(
-      stale.keys(),
+      MutableHashMap.keys(stale),
       (path) => Effect.logWarning("Registered worktree without its folder", { path, mode }),
       { discard: true },
     );
@@ -245,9 +255,9 @@ const make = Effect.gen(function* () {
         ? 0
         : Arr.countBy(yield* Effect.forEach(orphans, clean), Boolean) +
           EffectNumber.sumAll(
-            yield* Effect.forEach(new Set(stale.values()), (root) =>
+            yield* Effect.forEach(Arr.dedupe(MutableHashMap.values(stale)), (root) =>
               worktrees.prune(root).pipe(
-                Effect.as(Arr.countBy(stale.values(), (other) => other === root)),
+                Effect.as(Arr.countBy(MutableHashMap.values(stale), (other) => other === root)),
                 Effect.catchTag("CardWorktreeFailed", (failure) =>
                   Effect.as(warned("Registered worktrees were not pruned", { root })(failure), 0),
                 ),
@@ -256,7 +266,7 @@ const make = Effect.gen(function* () {
           );
     const summary: SweepSummary = {
       found: EffectNumber.sumAll(judgements.map((judgement) => judgement.found)),
-      orphaned: orphans.length + stale.size,
+      orphaned: orphans.length + MutableHashMap.size(stale),
       cleaned,
       skipped: EffectNumber.sumAll(judgements.map((judgement) => judgement.skipped)),
     };

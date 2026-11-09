@@ -1,5 +1,5 @@
 import { runUiEffect, uiPromise } from "../shared/ui-effect";
-import { Effect, Function as EffectFunction } from "effect";
+import { Effect, Function as EffectFunction, Iterable } from "effect";
 import { queryOptions, useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { AgentTrustState, McpServerState, api } from "../api";
 import { appQueryKeys } from "./keys";
@@ -93,7 +93,10 @@ export function useWorkingSessions(projectId: string | null) {
   return {
     answering: new Set(answering.data ?? []),
     boardRunning: new Set(
-      (boards.data ?? []).filter((board) => board.kanbanActive).map((board) => board.sessionId),
+      Iterable.map(
+        Iterable.filter(boards.data ?? [], (board) => board.kanbanActive),
+        (board) => board.sessionId,
+      ),
     ),
   };
 }

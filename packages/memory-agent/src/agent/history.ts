@@ -2,7 +2,8 @@ import {
   Array as EffectArray,
   DateTime,
   Function as EffectFunction,
-  Iterable as EffectIterable,
+  HashSet,
+  Iterable,
   Option,
   Schema,
   String as EffectString,
@@ -36,7 +37,7 @@ function sessionMessagesBody(
   // A user turn is one node; a run is the nodes of one run id between user turns. Iterable's
   // groupWith reads the nodes once; Array's copies the rest of them for every turn it cuts.
   return EffectArray.fromIterable(
-    EffectIterable.groupWith(
+    Iterable.groupWith(
       nodes.filter((node) => isConversation(node.kind)),
       (first, node) => first.kind !== "user" && node.kind !== "user" && node.runId === first.runId,
     ),
@@ -108,20 +109,23 @@ function runMessages(run: EffectArray.NonEmptyReadonlyArray<Node>): ReadonlyArra
     node.kind === "tool_result" ? [{ node, index }] : [],
   );
   // A call keeps its first result; a later one still ends the segment before it.
-  const firstResults = new Set(
-    Object.values(
-      EffectArray.groupBy(
-        results.map(({ node }) => node),
-        resultCallId,
+  const firstResults = HashSet.fromIterable(
+    Iterable.map(
+      Object.values(
+        EffectArray.groupBy(
+          results.map(({ node }) => node),
+          resultCallId,
+        ),
       ),
-    ).map((sameCall) => sameCall[0]),
+      (sameCall) => sameCall[0].id,
+    ),
   );
   // A result ends the segment before it; the run's first result keeps an empty one, so the
   // answer starts before it. The nodes after the last result are the final segment.
   const messages = [
     ...results.flatMap(({ node, index }, nth): StoredMessage[] => [
       ...answer(run.slice((results[nth - 1]?.index ?? -1) + 1, index), nth === 0),
-      ...(firstResults.has(node)
+      ...(HashSet.has(firstResults, node.id)
         ? [{ role: "tool" as const, content: node.text, toolCallId: resultCallId(node) }]
         : []),
     ]),

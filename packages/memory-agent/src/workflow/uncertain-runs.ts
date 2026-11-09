@@ -142,11 +142,11 @@ export const uncertainRuns = Effect.gen(function* () {
               { discard: true },
             );
             const current = runs.map((run) => run.runId);
-            const asked = new Set(runIds);
+            const asked = HashSet.fromIterable(runIds);
             if (
               current.length === 0 ||
-              current.length !== asked.size ||
-              !current.every((id) => asked.has(id))
+              current.length !== HashSet.size(asked) ||
+              !current.every((id) => HashSet.has(asked, id))
             )
               return UncertainContinue.refused({ reason: "uncertain_runs_changed" });
             yield* Effect.forEach(

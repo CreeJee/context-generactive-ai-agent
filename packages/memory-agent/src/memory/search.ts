@@ -1,6 +1,8 @@
 import {
   MutableHashMap,
+  HashMap,
   HashSet,
+  Iterable,
   Array as EffectArray,
   Function as EffectFunction,
   Option,
@@ -154,7 +156,9 @@ export function fuseRanks(input: {
     );
   });
   const best = weights.reduce((sum, weight) => sum + weight, 0) / (fusionK + 1);
-  return MutableHashMap.fromIterable([...scores].map(([id, score]) => [id, score / best]));
+  return MutableHashMap.fromIterable(
+    Iterable.map(scores, ([id, score]) => [id, score / best] as const),
+  );
 }
 
 /**
@@ -416,11 +420,14 @@ const make = (tuning: SearchTuning) =>
         alternate(lists.map((list) => list.slice(0, rerankDepth))),
       );
       if (candidates.length === 0) return seeds;
-      const textOf = new Map(
-        (yield* storageRead(nodeTexts(candidates))).map((row) => [row.id, row.text] as const),
+      const textOf = HashMap.fromIterable(
+        Iterable.map(
+          yield* storageRead(nodeTexts(candidates)),
+          (row) => [row.id, row.text] as const,
+        ),
       );
       const present = candidates.flatMap((id) =>
-        Option.toArray(Option.map(Option.fromNullishOr(textOf.get(id)), (text) => ({ id, text }))),
+        Option.toArray(Option.map(HashMap.get(textOf, id), (text) => ({ id, text }))),
       );
       const scores = yield* reranker.score(
         query,
@@ -502,16 +509,19 @@ const make = (tuning: SearchTuning) =>
           chunkSpans(result.vectorSeqs.map(Number)).pipe(
             Effect.mapError(() => NativeMemorySearchFailed.make({ reason: "read-failed" })),
             Effect.map((rows) => {
-              const spanOf = new Map(
-                rows.map(({ vector_id, start, end }) => [vector_id, { start, end }] as const),
+              const spanOf = HashMap.fromIterable(
+                Iterable.map(
+                  rows,
+                  ({ vector_id, start, end }) => [vector_id, { start, end }] as const,
+                ),
               );
               // Best-ranked chunk per node, keyed by node id. Hits arrive best first, so the first
               // span stored for a node wins.
               const spans = result.vectorSeqs.reduce((spans, seq, index) => {
                 const id = result.vectorIds[index]!;
-                const span = spanOf.get(Number(seq));
-                if (span !== undefined && !MutableHashMap.has(spans, id))
-                  MutableHashMap.set(spans, id, span);
+                const span = HashMap.get(spanOf, Number(seq));
+                if (Option.isSome(span) && !MutableHashMap.has(spans, id))
+                  MutableHashMap.set(spans, id, span.value);
                 return spans;
               }, MutableHashMap.empty<string, ChunkSpan>());
               return {

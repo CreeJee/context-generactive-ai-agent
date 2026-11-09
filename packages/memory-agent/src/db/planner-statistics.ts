@@ -1,4 +1,4 @@
-import { Effect, Layer, Option, Schema } from "effect";
+import { Effect, HashSet, Layer, Option, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 
 /**
@@ -24,7 +24,7 @@ const checkEvery = "1 hour";
  * range would do, every run's log for one run's page. They get no statistics, so the planner
  * assumes a large table for them, as it did when no table had statistics.
  */
-const drainedTables: ReadonlySet<string> = new Set([
+const drainedTables = HashSet.make(
   "lexical_changes",
   "secret_sweep_changes",
   "memory_chunk_vector_removals",
@@ -34,7 +34,7 @@ const drainedTables: ReadonlySet<string> = new Set([
   "persisted_queue_items",
   "queued_messages",
   "workflow_run_log_entries",
-]);
+);
 
 /** Which tables a refresh looks at: all of them, or those this connection has queried. */
 type Scope = "all" | "used";
@@ -64,7 +64,7 @@ export const refreshPlannerStatistics = Effect.fnUntraced(function* (scope: Scop
   yield* Effect.forEach(
     planned.filter(
       ({ optimize }) =>
-        !Option.exists(analyzedTable(optimize), (table) => drainedTables.has(table)),
+        !Option.exists(analyzedTable(optimize), (table) => HashSet.has(drainedTables, table)),
     ),
     ({ optimize }) => sql.unsafe(optimize),
     { discard: true },

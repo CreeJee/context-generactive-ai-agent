@@ -1,4 +1,4 @@
-import { DateTime, Duration, Effect, Option, Schema } from "effect";
+import { DateTime, Duration, Effect, HashMap, Option, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import {
   budgetFor,
@@ -53,9 +53,9 @@ testAgent()("compaction over recorded history", (it) => {
           text: "second",
           detail: { toolCallId: "same-call" },
         });
-        expect(yield* nodes.toolResultIds(at.sessionId, ["same-call", "missing"])).toEqual(
-          new Map([["same-call", first.id]]),
-        );
+        expect(
+          HashMap.toEntries(yield* nodes.toolResultIds(at.sessionId, ["same-call", "missing"])),
+        ).toEqual([["same-call", first.id]]);
       }),
   );
 

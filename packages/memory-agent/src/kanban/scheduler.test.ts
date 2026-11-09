@@ -1,4 +1,4 @@
-import { Deferred, Effect, Option, Ref, Schedule, Stream } from "effect";
+import { Array as Arr, Deferred, Effect, HashMap, Option, Ref, Schedule, Stream } from "effect";
 import { expect } from "vite-plus/test";
 import { layer } from "@effect/vitest";
 import {
@@ -28,16 +28,18 @@ const gates = (ids: readonly string[]) =>
   Effect.map(
     Effect.forEach(ids, () => Deferred.make<void>()),
     (made) => {
-      const byId = new Map(ids.map((id, index) => [id, made[index]]));
+      const byId = HashMap.fromIterable(Arr.zip(ids, made));
       return {
-        wait: (id: string) => {
-          const gate = byId.get(id);
-          return gate === undefined ? Effect.void : Deferred.await(gate);
-        },
-        open: (id: string) => {
-          const gate = byId.get(id);
-          return gate === undefined ? Effect.void : Deferred.succeed(gate, undefined);
-        },
+        wait: (id: string) =>
+          Option.match(HashMap.get(byId, id), {
+            onNone: () => Effect.void,
+            onSome: Deferred.await,
+          }),
+        open: (id: string) =>
+          Option.match(HashMap.get(byId, id), {
+            onNone: () => Effect.void,
+            onSome: (gate) => Deferred.succeed(gate, undefined),
+          }),
       };
     },
   );
@@ -106,7 +108,7 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
     Effect.gen(function* () {
       const fixture = yield* kanbanFixture;
       const gate = yield* gates(["a1", "b1"]);
-      const seen = yield* Ref.make<ReadonlyMap<string, GoalMergeState | null>>(new Map());
+      const seen = yield* Ref.make(HashMap.empty<string, GoalMergeState | null>());
       // Where Goal A's merge stands; set once Goal A exists.
       const mergeOfA = yield* Ref.make<Effect.Effect<GoalMergeState | null>>(Effect.succeed(null));
       const run = yield* openKanbanOwner(fixture, yield* Effect.scope, {
@@ -114,7 +116,7 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
         agent: (agent) =>
           Effect.gen(function* () {
             const merge = yield* Effect.flatten(Ref.get(mergeOfA));
-            yield* Ref.update(seen, (known) => new Map(known).set(agent.card.id, merge));
+            yield* Ref.update(seen, HashMap.set(agent.card.id, merge));
             yield* gate.wait(agent.card.id);
             return finished;
           }),
@@ -137,7 +139,7 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
           );
           yield* schedules.setProtectedBranches(goalA.projectId, []);
           yield* orchestrator.start(goalA.sessionId);
-          yield* eventually(Ref.get(seen), (known) => known.has("a1"));
+          yield* eventually(Ref.get(seen), HashMap.has("a1"));
 
           // B is told to wait for A before its board starts; C waits for A too.
           const goalB = yield* executingSession(goalA.projectId, [card("b1")]);
@@ -162,14 +164,18 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
 
           // A person lifts B's wait: B runs while A has not merged.
           yield* scheduler.setDependencies(goalB.goalInstanceId, []);
-          yield* eventually(Ref.get(seen), (known) => known.has("b1"));
-          expect((yield* Ref.get(seen)).get("b1")).toBeNull();
-          expect((yield* Ref.get(seen)).has("c1")).toBe(false);
+          yield* eventually(Ref.get(seen), HashMap.has("b1"));
+          expect(Option.getOrUndefined(HashMap.get(yield* Ref.get(seen), "b1"))).toBeNull();
+          expect(HashMap.has(yield* Ref.get(seen), "c1")).toBe(false);
 
           // A merges into main and C continues on its own.
           yield* gate.open("a1");
-          yield* eventually(Ref.get(seen), (known) => known.has("c1"));
-          expect(GoalMergeState.guards.Merged((yield* Ref.get(seen)).get("c1"))).toBe(true);
+          yield* eventually(Ref.get(seen), HashMap.has("c1"));
+          expect(
+            GoalMergeState.guards.Merged(
+              Option.getOrUndefined(HashMap.get(yield* Ref.get(seen), "c1")),
+            ),
+          ).toBe(true);
           yield* gate.open("b1");
         }),
       );

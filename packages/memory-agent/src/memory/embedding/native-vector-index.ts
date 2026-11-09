@@ -4,7 +4,8 @@ import { sha256 } from "../../runtime/synchronous-crypto.ts";
 import {
   Array as EffectArray,
   Effect,
-  Iterable as EffectIterable,
+  HashMap,
+  Iterable,
   Layer,
   Option,
   Path,
@@ -112,7 +113,7 @@ const makeNativeVectorIndex = Effect.gen(function* () {
     ids: readonly number[],
     query: (batch: readonly number[]) => Effect.Effect<readonly A[], E>,
   ) =>
-    Effect.forEach(EffectIterable.chunksOf(ids, idsPerStatement), query).pipe(
+    Effect.forEach(Iterable.chunksOf(ids, idsPerStatement), query).pipe(
       Effect.map((batches) => batches.flat()),
     );
   const command = (input: OwnerCommand, operation: VectorIndexError["operation"]) =>
@@ -162,12 +163,15 @@ const makeNativeVectorIndex = Effect.gen(function* () {
         return id >= chunkVectorIdFloor ? Result.succeed(id) : Result.failVoid;
       });
       const parents = yield* mappings("vector_id", chunkIds);
-      const parentOf = new Map(parents.map((row) => [row.vector_id, row.node_seq]));
+      const parentOf = HashMap.fromIterable(
+        Iterable.map(parents, (row) => [row.vector_id, row.node_seq] as const),
+      );
       return EffectArray.dedupeWith(
         ids.flatMap((id, rank): VectorHit[] => {
           const native = Number(id);
-          const seq = native < chunkVectorIdFloor ? native : parentOf.get(native);
-          return seq === undefined ? [] : [{ seq, score: scores[rank]! }];
+          const seq =
+            native < chunkVectorIdFloor ? Option.some(native) : HashMap.get(parentOf, native);
+          return Option.toArray(Option.map(seq, (found) => ({ seq: found, score: scores[rank]! })));
         }),
         (left, right) => left.seq === right.seq,
       );

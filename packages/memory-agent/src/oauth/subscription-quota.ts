@@ -5,6 +5,7 @@ import {
   Duration,
   Effect,
   Exit,
+  HashMap,
   Layer,
   Option,
   Ref,
@@ -120,7 +121,7 @@ export class SubscriptionQuota extends Context.Service<
     Effect.gen(function* () {
       const oauthProfiles = yield* OAuthProfiles;
       const usage = yield* SubscriptionUsage;
-      const lastObserved = yield* Ref.make<ReadonlyMap<string, ObservedQuota>>(new Map());
+      const lastObserved = yield* Ref.make(HashMap.empty<string, ObservedQuota>());
       const observe = Effect.fn("SubscriptionQuota.observe")(function* (
         provider: SubscriptionAccountProvider,
         accountId: string,
@@ -161,22 +162,20 @@ export class SubscriptionQuota extends Context.Service<
               windows: observedWindows,
               observedAt: at,
             });
-            return Effect.as(
-              Ref.update(lastObserved, (map) => new Map(map).set(accountId, observed)),
-              observed,
-            );
+            return Effect.as(Ref.update(lastObserved, HashMap.set(accountId, observed)), observed);
           },
           onFailure: (reason) =>
-            Effect.map(Ref.get(lastObserved), (map) => {
-              const previous = map.get(accountId);
-              return previous === undefined
-                ? SubscriptionQuotaStatus.cases.unavailable.make({ reason })
-                : SubscriptionQuotaStatus.cases.stale.make({
+            Effect.map(Ref.get(lastObserved), (map) =>
+              Option.match(HashMap.get(map, accountId), {
+                onNone: () => SubscriptionQuotaStatus.cases.unavailable.make({ reason }),
+                onSome: (previous) =>
+                  SubscriptionQuotaStatus.cases.stale.make({
                     windows: previous.windows,
                     observedAt: previous.observedAt,
                     failedAt: at,
-                  });
-            }),
+                  }),
+              }),
+            ),
         });
         return { quota, holdFor };
       });

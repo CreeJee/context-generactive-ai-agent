@@ -1,4 +1,5 @@
 import {
+  Array as Arr,
   Deferred,
   Effect,
   Exit,
@@ -245,7 +246,7 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
           }),
         );
         // A card that finished beside another syncs with the moved Goal branch and is verified again.
-        expect([...new Set(yield* Ref.get(verified))].toSorted()).toEqual(["a", "b", "c"]);
+        expect(Arr.dedupe(yield* Ref.get(verified)).toSorted()).toEqual(["a", "b", "c"]);
         expect(yield* Ref.get(goalChecks)).toBe(1);
         // One squash commit per card, no merge commits, and main is the checked Goal branch.
         expect(yield* git(fixture.project, "rev-parse", "main")).toBe(

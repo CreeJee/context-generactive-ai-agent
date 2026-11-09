@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Effect } from "effect";
+import { Effect, HashSet } from "effect";
 import { BundleEvent, type BundleRun, type ReportBundle } from "../src/report/bundle-contract.ts";
 import { bundlePlaces, diagnosisDigest, digestLimits } from "../src/report/bundle-digest.ts";
 import { parseDiagnosis } from "../src/report/diagnosis.ts";
@@ -72,7 +72,7 @@ describe("report diagnosis answer", () => {
 
   it.effect("a non-JSON answer is a typed invalid_answer failure", () =>
     Effect.gen(function* () {
-      const failure = yield* Effect.flip(parseDiagnosis("모르겠어요", new Set()));
+      const failure = yield* Effect.flip(parseDiagnosis("모르겠어요", HashSet.empty()));
       expect(failure.reason).toBe("invalid_answer");
     }),
   );

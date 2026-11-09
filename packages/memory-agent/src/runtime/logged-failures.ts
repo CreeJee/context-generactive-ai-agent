@@ -108,5 +108,5 @@ export const failureTags = (cause: Cause.Cause<unknown>) => {
       Interrupt: () => "Interrupted",
     }),
   );
-  return [...new Set(tags)].join(",");
+  return EffectArray.dedupe(tags).join(",");
 };

@@ -1,5 +1,6 @@
 import {
   Array as EffectArray,
+  Iterable,
   MutableHashMap,
   Option,
   Context,
@@ -274,7 +275,9 @@ export function rankImageRoutes(
   return Option.match(validateInput(input), {
     onSome: (invalid) => Effect.fail(invalid),
     onNone: () => {
-      const facts = MutableHashMap.fromIterable(input.facts.map((fact) => [fact.routeId, fact]));
+      const facts = MutableHashMap.fromIterable(
+        Iterable.map(input.facts, (fact) => [fact.routeId, fact] as const),
+      );
       const ranking = input.routes
         .map((route) =>
           scoreRoute(
@@ -368,8 +371,12 @@ function makeImageRouterBody(
         intent: request.intent,
         policy: request.policy,
       });
-      const routeById = MutableHashMap.fromIterable(routes.map((route) => [route.id, route]));
-      const factById = MutableHashMap.fromIterable(facts.map((fact) => [fact.routeId, fact]));
+      const routeById = MutableHashMap.fromIterable(
+        Iterable.map(routes, (route) => [route.id, route] as const),
+      );
+      const factById = MutableHashMap.fromIterable(
+        Iterable.map(facts, (fact) => [fact.routeId, fact] as const),
+      );
       return {
         chat,
         ranking,

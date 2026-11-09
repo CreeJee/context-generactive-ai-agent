@@ -4,6 +4,7 @@ import {
   Duration,
   Effect,
   Function as EffectFunction,
+  HashMap,
   Layer,
   Match,
   Option,
@@ -95,11 +96,11 @@ interface Seen {
 
 /** What the rate limit remembers: each fingerprint, and when recent messages went out. */
 export interface AdmissionState {
-  readonly seen: ReadonlyMap<string, Seen>;
+  readonly seen: HashMap.HashMap<string, Seen>;
   readonly sentTimes: readonly number[];
 }
 
-export const noDefectsSent: AdmissionState = { seen: new Map(), sentTimes: [] };
+export const noDefectsSent: AdmissionState = { seen: HashMap.empty(), sentTimes: [] };
 
 interface Outgoing {
   readonly facts: DefectFacts;
@@ -118,7 +119,10 @@ function admitDefectBody(
   fingerprint: string,
   now: number,
 ): { readonly count: Option.Option<number>; readonly state: AdmissionState } {
-  const previous = state.seen.get(fingerprint) ?? { sentAt: null, unsent: 0 };
+  const previous = Option.getOrElse(HashMap.get(state.seen, fingerprint), () => ({
+    sentAt: null,
+    unsent: 0,
+  }));
   const unsent = previous.unsent + 1;
   const sentTimes = state.sentTimes.filter((at) => now - at < Duration.toMillis("1 minute"));
   const due =
@@ -128,14 +132,14 @@ function admitDefectBody(
     ? {
         count: Option.some(unsent),
         state: {
-          seen: new Map(state.seen).set(fingerprint, { sentAt: now, unsent: 0 }),
+          seen: HashMap.set(state.seen, fingerprint, { sentAt: now, unsent: 0 }),
           sentTimes: [...sentTimes, now],
         },
       }
     : {
         count: Option.none<number>(),
         state: {
-          seen: new Map(state.seen).set(fingerprint, { sentAt: previous.sentAt, unsent }),
+          seen: HashMap.set(state.seen, fingerprint, { sentAt: previous.sentAt, unsent }),
           sentTimes,
         },
       };

@@ -2,6 +2,7 @@ import {
   Array as Arr,
   Effect,
   FileSystem,
+  Iterable,
   MutableHashMap,
   MutableHashSet,
   Option,
@@ -126,7 +127,9 @@ const statementTable = (spans: ReadonlyArray<SpanRecord>, top: number) => {
 
 /** The slowest spans with the chain of span names above them, outermost first. */
 const slowestPaths = (spans: ReadonlyArray<SpanRecord>, top: number) => {
-  const byId = MutableHashMap.fromIterable(spans.map((span) => [span.spanId, span] as const));
+  const byId = MutableHashMap.fromIterable(
+    Iterable.map(spans, (span) => [span.spanId, span] as const),
+  );
   const parentOf = (span: SpanRecord) =>
     Option.flatMap(Option.fromNullishOr(span.parentSpanId), (id) => MutableHashMap.get(byId, id));
   const pathOf = (span: SpanRecord) =>
@@ -152,7 +155,7 @@ const slowestPaths = (spans: ReadonlyArray<SpanRecord>, top: number) => {
 export const summarizeSpans = (spans: ReadonlyArray<SpanRecord>, top: number) => {
   const stats = statsByName(spans);
   const traces = MutableHashSet.size(
-    MutableHashSet.fromIterable(spans.map((span) => span.traceId)),
+    MutableHashSet.fromIterable(Iterable.map(spans, (span) => span.traceId)),
   );
   return [
     `span ${spans.length}개, trace ${traces}개`,

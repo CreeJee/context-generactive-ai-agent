@@ -1,4 +1,4 @@
-import { Cause, Deferred, Effect, Fiber, Match, Schema } from "effect";
+import { Cause, Deferred, Effect, Fiber, HashSet, Match, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { RunStore } from "../../src/loop/store.ts";
@@ -301,7 +301,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
       const systems = provider!.invocations
         .filter((invocation) => invocation.run.threadId === sessionId)
         .map((invocation) => invocation.system.join("\n"));
-      expect(new Set(systems).size).toBe(1);
+      expect(HashSet.size(HashSet.fromIterable(systems))).toBe(1);
     }),
   );
 

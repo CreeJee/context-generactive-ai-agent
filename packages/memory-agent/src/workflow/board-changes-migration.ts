@@ -1,4 +1,4 @@
-import { Effect, Option, Schema } from "effect";
+import { Effect, MutableHashMap, Option, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
 import { boardChange, revisionCards } from "./workflow.ts";
 
@@ -7,7 +7,7 @@ const RevisionRow = Schema.Struct({ id: Schema.Int, plan_json: Schema.NullOr(Sch
 
 /** A session's revisions so far: the cards of the latest one it could read, and those it could not. */
 interface Walk {
-  readonly cards: ReadonlyMap<string, string>;
+  readonly cards: MutableHashMap.MutableHashMap<string, string>;
   readonly unreadable: number;
 }
 
@@ -41,7 +41,7 @@ export const migrateBoardChanges = Effect.fn("Workflows.migrateBoardChanges")(fu
     Effect.flatMap(revisions(session_id), (rows) =>
       Effect.reduce(
         rows,
-        (): Walk => ({ cards: new Map(), unreadable: 0 }),
+        (): Walk => ({ cards: MutableHashMap.empty(), unreadable: 0 }),
         (walk, row) =>
           Effect.matchEffect(revisionCards(row.plan_json), {
             onFailure: () => Effect.succeed({ ...walk, unreadable: walk.unreadable + 1 }),

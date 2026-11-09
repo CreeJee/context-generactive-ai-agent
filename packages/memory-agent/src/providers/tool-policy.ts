@@ -1,4 +1,4 @@
-import { HashSet } from "effect";
+import { HashSet, Iterable } from "effect";
 import { Function as EffectFunction } from "effect";
 import { optionalProperty } from "../optional-property.ts";
 import { Option, Context, Effect, Layer, Match, Predicate, Schema } from "effect";
@@ -381,7 +381,7 @@ function makeProviderToolRuntimeBody(
     compose: (context, requests = []) =>
       Effect.gen(function* () {
         const exposed = yield* policyService.expose(context);
-        const allowed = HashSet.fromIterable(exposed.tools.map((tool) => tool.id));
+        const allowed = HashSet.fromIterable(Iterable.map(exposed.tools, (tool) => tool.id));
         const notExposed = (toolId: string) =>
           ProviderToolNotExposed.make({ toolId, provider: context.provider, model: context.model });
         const composed = (request: ProviderToolRequest) =>

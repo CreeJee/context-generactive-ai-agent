@@ -155,7 +155,7 @@ const program = Effect.gen(function* () {
       const followup =
         ablation || latestProtocol
           ? yield* Effect.forEach(
-              [...new Set(structured.evidenceContext.changes.map((change) => change.source.id))],
+              Arr.dedupe(structured.evidenceContext.changes.map((change) => change.source.id)),
               Effect.fnUntraced(function* (id) {
                 const page = yield* Effect.provideContext(
                   readStructuredEvidence(id, 0, seeded.projectId, false),

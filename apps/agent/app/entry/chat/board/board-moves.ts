@@ -1,4 +1,4 @@
-import { Data, Function as EffectFunction } from "effect";
+import { Data, Function as EffectFunction, HashSet, Iterable } from "effect";
 import type { BoardView, CardStatus } from "../../api";
 
 export type BoardCard = BoardView["cards"][number];
@@ -82,9 +82,16 @@ const refused = (reason: string): DropOutcome => DropOutcome.Refused({ reason })
 
 /** Whether the card's known dependencies are all done; unknown ids do not hold it back. */
 const dependenciesDone = (cards: readonly PlanStep[], card: PlanStep) => {
-  const ids = new Set(cards.map((other) => other.id));
-  const done = new Set(cards.filter((other) => other.status === "done").map((other) => other.id));
-  return card.dependsOn.every((id) => id === card.id || !ids.has(id) || done.has(id));
+  const ids = HashSet.fromIterable(Iterable.map(cards, (other) => other.id));
+  const done = HashSet.fromIterable(
+    Iterable.map(
+      Iterable.filter(cards, (other) => other.status === "done"),
+      (other) => other.id,
+    ),
+  );
+  return card.dependsOn.every(
+    (id) => id === card.id || !HashSet.has(ids, id) || HashSet.has(done, id),
+  );
 };
 
 /** Why a column takes no drop: the orchestrator moves cards there. */

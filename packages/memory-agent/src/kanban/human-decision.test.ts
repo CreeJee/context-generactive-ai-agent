@@ -1,5 +1,5 @@
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
-import { Effect, FileSystem, Option, Path, Result, Schema } from "effect";
+import { Array as Arr, Effect, FileSystem, Iterable, Option, Path, Result, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { freshSession, TestEnv, testAgent } from "../../tests/support/test-env.ts";
 import { sqlAll, sqlGet } from "../../tests/support/sql.ts";
@@ -386,8 +386,8 @@ testAgent()("human decisions", (it) => {
         [waiting.requestId, "Card a"],
         [other.requestId, "Card a"],
       ]);
-      expect(new Set(inbox.map((item) => item.goalInstanceId))).toEqual(
-        new Set([first.goalInstanceId, second.goalInstanceId]),
+      expect(Arr.dedupe(Iterable.map(inbox, (item) => item.goalInstanceId)).toSorted()).toEqual(
+        [first.goalInstanceId, second.goalInstanceId].toSorted(),
       );
     }).pipe(Effect.provide([NodeFileSystem.layer, NodePath.layer])),
   );

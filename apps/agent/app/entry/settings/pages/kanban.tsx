@@ -1,4 +1,4 @@
-import { type Cause, Effect } from "effect";
+import { Array as Arr, type Cause, Effect, HashMap, Iterable, Option } from "effect";
 import { runUiEffect, uiPromise } from "../../shared/ui-effect";
 import { useState } from "react";
 import { ChevronDownIcon, ChevronUpIcon } from "lucide-react";
@@ -41,9 +41,8 @@ const validConcurrency = (text: string) => {
 };
 
 /** Comma or whitespace separated branch names, without repeats. */
-const branchList = (text: string) => [
-  ...new Set(text.split(/[\s,]+/u).filter((branch) => branch.length > 0)),
-];
+const branchList = (text: string) =>
+  Arr.dedupe(text.split(/[\s,]+/u).filter((branch) => branch.length > 0));
 
 const errorText = (code: ApiErrorCode) => {
   switch (code) {
@@ -142,11 +141,8 @@ function ProjectOrderField() {
   const projects = useProjectsQuery().data ?? [];
   const mutation = useProjectOrderMutation();
   const [error, setError] = useState<string | null>(null);
-  const byId = new Map(projects.map((project) => [project.id, project]));
-  const ordered = settings.projectOrder.flatMap((id) => {
-    const project = byId.get(id);
-    return project === undefined ? [] : [project];
-  });
+  const byId = HashMap.fromIterable(Iterable.map(projects, (project) => [project.id, project]));
+  const ordered = settings.projectOrder.flatMap((id) => Option.toArray(HashMap.get(byId, id)));
   const move = (projectId: string, before: string | null) => {
     setError(null);
     mutation.mutate(

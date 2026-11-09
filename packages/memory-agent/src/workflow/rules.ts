@@ -2,6 +2,7 @@ import { isTruthy } from "../truthy.ts";
 import {
   Array as EffectArray,
   HashSet,
+  Iterable,
   MutableHashMap,
   Option,
   Cache,
@@ -163,10 +164,7 @@ export const builtInWorkflowRules: readonly WorkflowRule[] = builtInRuleInputs.m
 
 const normalizedTerms = (text: string) =>
   HashSet.fromIterable(
-    text
-      .toLocaleLowerCase()
-      .split(/[^\p{L}\p{N}_./:-]+/u)
-      .filter(Boolean),
+    Iterable.filter(text.toLocaleLowerCase().split(/[^\p{L}\p{N}_./:-]+/u), Boolean),
   );
 
 const lexicalScore = (query: HashSet.HashSet<string>, rule: WorkflowRule) =>
