@@ -153,19 +153,20 @@ testAgent({ testProvider: {} })("dev chat route boundary", (it) => {
           services,
         );
         expect(yield* leases.claim(context.session.id, "valid-page")).toEqual({ claimed: true });
-        const tables = [
-          "nodes",
-          "chat_runs",
-          "workflow_run_bindings",
-          "owner_rpc_operations",
-          "workflow_run_log_entries",
-          "session_workflows",
-          "workflow_state_revisions",
-          "workflow_ledger_events",
-          "workflow_goal_identities",
-        ];
-        const snapshot = Effect.forEach(tables, (table) =>
-          sqlAll(`SELECT * FROM ${table} ORDER BY rowid`),
+        // Each table's stable order; the ledger is WITHOUT ROWID and orders by its primary key.
+        const tables = {
+          nodes: "rowid",
+          chat_runs: "rowid",
+          workflow_run_bindings: "rowid",
+          owner_rpc_operations: "rowid",
+          workflow_run_log_entries: "rowid",
+          session_workflows: "rowid",
+          workflow_state_revisions: "rowid",
+          workflow_ledger_events: "session_id, sequence",
+          workflow_goal_identities: "rowid",
+        };
+        const snapshot = Effect.forEach(Object.entries(tables), ([table, order]) =>
+          sqlAll(`SELECT * FROM ${table} ORDER BY ${order}`),
         );
         const before = yield* snapshot;
         const cases = [
