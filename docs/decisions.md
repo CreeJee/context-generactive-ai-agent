@@ -4541,3 +4541,8 @@
   - 새 카드 브랜치는 Goal 락 아래에서 Goal HEAD로 먼저 만들고, worktree는 그 뒤에 붙인다. retarget도 같은 락 안에서 카드 브랜치를 확인하고 ref를 옮기므로, 그사이에 카드가 이전 HEAD에서 시작하지 못한다. 락 순서는 squash·sync와 같은 Goal → 카드다.
   - git ref를 먼저 옮기고 스케줄을 쓴다. 그 사이에 멈추면 다시 retarget하면 된다. Goal 브랜치가 이미 새 대상의 HEAD라 같은 검사를 통과한다.
 - 확인: git 테스트가 작업 전 Goal 브랜치를 새 브랜치로 옮긴 뒤 카드가 새 브랜치 파일을 보는지, 카드 브랜치가 있으면 `CardsStarted`, squash 커밋이 있으면 `GoalHasWork`로 답하고 ref를 그대로 두는지 본다. 보드 테스트가 detached HEAD 거절, 대상 갱신, 카드 브랜치가 생긴 뒤의 거절을 본다.
+
+## 모델에게 보내고 받는 형식은 `_tag`를 쓰지 않는다 (2026-11-09)
+
+- 사용자 결정: 2026-10-21 "판별 키가 다른 도메인 유니온도 `_tag`로 통일한다"의 "모델 답 JSON의 판별 키도 `_tag`다"를 거둔다. `_tag`는 Effect 헬퍼를 위한 앱 안의 규칙이고, 모델이 쓰는 도구 인자와 답 JSON에는 그 형식이 뜻하는 평범한 키(`decision`, `action` 등)를 쓴다. 경계에서 한 번 디코드해 앱의 태그 유니온으로 바꾼다. 앱 코드의 `_tag` 규칙은 그대로다.
+- improve 해석 답은 `{"decision":"skip"|"improve",...}`다. `Schema.toTaggedUnion("decision")`으로 디코드해 `.match`로 `ItemInterpretation`을 만든다.

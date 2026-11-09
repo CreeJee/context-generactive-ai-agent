@@ -93,10 +93,10 @@ describe("project improvement discovery", () => {
   it.effect("reads a fenced verdict and drops what the model skips", () =>
     Effect.gen(function* () {
       const improve = yield* parseInterpretation(
-        '```json\n{"_tag":"improve","title":"t","problem":"p","rule":"r","change":"c","acceptance":"a"}\n```',
+        '```json\n{"decision":"improve","title":"t","problem":"p","rule":"r","change":"c","acceptance":"a"}\n```',
       );
       expect(Option.exists(improve, ItemInterpretation.guards.interpreted)).toBe(true);
-      expect(yield* parseInterpretation('{"_tag":"skip","reason":"평범한 요청"}')).toEqual(
+      expect(yield* parseInterpretation('{"decision":"skip","reason":"평범한 요청"}')).toEqual(
         Option.none(),
       );
     }),
