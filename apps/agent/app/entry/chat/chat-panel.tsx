@@ -465,20 +465,9 @@ function ChatPanel({
   const executePlan = () =>
     runUiEffect(
       Effect.gen(function* () {
-        const retryingFailedVerification =
-          run.workflow?.plan?.status === "executing" &&
-          run.workflow.plan.verification.status === "failed";
-        // Even a continuation rechecks the current server policy before dispatching another turn.
+        // The approval starts the Plan's kanban board: card agents execute it, not this chat.
         if (!isTruthy(yield* uiPromise(() => changeWorkflowPhase("execute")))) return;
-        setNotice(null);
-        sendMessage(
-          contentOf(
-            retryingFailedVerification
-              ? "저장된 검증 실패 evidence를 바탕으로 구현 결함을 수정하고 다시 검증해 줘."
-              : "승인한 Plan을 첫 번째 미완료 단계부터 실행하고 결과를 검증하며, 검증된 결과를 확인 하고 단계가 완료될때까지 반복하여 플랜을 완결성있게 마무리해줘",
-            [],
-          ),
-        );
+        setNotice(done("승인한 Plan을 칸반 보드에서 실행해요."));
       }),
     );
 

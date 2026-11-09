@@ -60,7 +60,6 @@ const Conflict = chatRefusal(409, [
   "model_unavailable_for_account",
   "image_direct_workflow_required",
   "notification_followup_deferred",
-  "workflow_followup_deferred",
 ]);
 const PreconditionFailed = chatRefusal(412, ["model_selection_required"]);
 const Unprocessable = chatRefusal(422, [

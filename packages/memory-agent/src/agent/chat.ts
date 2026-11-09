@@ -162,6 +162,7 @@ import {
   Workflows,
   type WorkflowAction,
   type WorkflowPhase,
+  type WorkflowState,
 } from "../workflow/workflow.ts";
 import { WorkflowTools, workflowInstructions } from "../workflow/tools.ts";
 import { WorkflowExecution, WorkflowExecutionState } from "../workflow/execution.ts";
@@ -397,7 +398,6 @@ const verificationToolNames = HashSet.fromIterable(["save_code_skill", "run_skil
 
 type InternalFollowup = Data.TaggedEnum<{
   notification: {};
-  workflow: { readonly afterRunId: string };
   /** The next turn is the message at the head of the queue, sent with no page needed. */
   queued: {};
   /** The kanban loop needs the model's judgement on the board. */
@@ -625,6 +625,29 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         : Effect.map(
             kanbanAttempts.goal(goalInstanceId),
             Option.exists((goal) => goal.active),
+          ),
+    );
+  /** An approved Plan runs on a kanban board; the chat never executes it. */
+  const executesPlan = (state: WorkflowState) =>
+    (state.phase === "execute" || state.phase === "verify") && state.plan?.status === "executing";
+  /**
+   * Starts the session's kanban board unless one runs: card agents execute the approved Plan and
+   * the chat plans (decisions.md "outcome 장부와 이어 쓰는 Plan"). Why it could not start, if so.
+   */
+  const startBoard = (sessionId: string) =>
+    Effect.flatMap(kanbanBoard(sessionId), (running) =>
+      running
+        ? Effect.succeedNone
+        : kanbanOrchestrator.start(sessionId).pipe(
+            Effect.tap(() => events.publishSession(sessionId, "run-state")),
+            Effect.as(Option.none<string>()),
+            Effect.catchTag("KanbanStartRefused", ({ reason }) => Effect.succeedSome(reason)),
+            Effect.catchCause((cause) =>
+              Effect.as(
+                Effect.logWarning("Approved Plan did not start a board", cause),
+                Option.some("board_start_failed"),
+              ),
+            ),
           ),
     );
   /** On a kanban board the session's chat is the planner, so it runs on the planner's model. */
@@ -1680,23 +1703,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           )
             return refused({ error: "notification_followup_deferred" });
         }
-        if (InternalFollowup.$is("workflow")(internalFollowup)) {
-          const current = yield* sessions.get(sessionId);
-          const last = yield* lastRun(sessionId);
-          const state = yield* workflows.get(sessionId);
-          if (
-            current.archivedAt !== null ||
-            last?.runId !== internalFollowup.afterRunId ||
-            !(last.status === "completed"
-              ? yield* execution.canContinue(sessionId, last.runId, state)
-              : yield* execution.canResume(sessionId, last.runId, state)) ||
-            state.phase !== workflow.phase ||
-            state.plan?.version !== workflow.plan?.version ||
-            !NextDelivery.$is("empty")((yield* queue.snapshot(sessionId)).nextDelivery) ||
-            (yield* relayed.pending(sessionId)).length > 0
-          )
-            return refused({ error: "workflow_followup_deferred" });
-        }
         // Prepared the same way for either loop.
         const memoryScope: MemoryToolScope = (yield* recallScope).crossProject
           ? "allowed-projects"
@@ -1786,11 +1792,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             // Why an automatic run started; the orchestrator's message tells the model, with the
             // notifications, instead of `prompts`.
             const followup = [
-              ...(InternalFollowup.$is("workflow")(internalFollowup)
-                ? [
-                    "This is an automatic continuation of the already approved Plan, not a new user request or approval. Continue the first unfinished step, performing the investigation, preparation, implementation and review yourself. Persist new progress evidence. If all implementation steps are complete, perform verification and persist its result. Do not repeat a promise to work later; record_workflow_blocker only when a confirmed dependency prevents all useful independent work.",
-                  ]
-                : []),
               ...(kanbanFollowup !== null ? [kanbanAttentionPrompt(kanbanFollowup.reasons)] : []),
               ...(notificationFollowup
                 ? [
@@ -1822,11 +1823,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                   crypto.uuidV7(),
                   orchestratorMessage(
                     {
-                      next: InternalFollowup.$is("workflow")(internalFollowup)
-                        ? "plan"
-                        : kanbanFollowup !== null
-                          ? "board"
-                          : "results",
+                      next: kanbanFollowup !== null ? "board" : "results",
                       ended: endedTasks(parentNotifications),
                     },
                     [
@@ -2535,6 +2532,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const state = yield* workflows.setPhase(sessionId, phase);
         yield* execution.stop(sessionId);
         yield* cancelProviderRetries(sessionId);
+        // A board that cannot start is offered again from the board panel.
+        yield* Effect.when(startBoard(sessionId), Effect.succeed(executesPlan(state)));
         return state;
       }).pipe(
         Effect.catchTags({
@@ -2813,6 +2812,21 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           )
             return;
           const workflow = yield* workflows.reconcile(sessionId);
+          // An executing Plan without a board moves onto one; one that cannot start waits as a
+          // blocker the user sees, never for the chat to execute it.
+          if (executesPlan(workflow)) {
+            const refused = yield* startBoard(sessionId);
+            if (Option.isSome(refused)) {
+              yield* execution.blockPending(sessionId, last.runId, {
+                reason: "external_dependency",
+                detail:
+                  "승인한 Plan을 칸반 보드에서 시작하지 못했어요. 보드 패널에서 칸반으로 전환을 다시 눌러 주세요.",
+                evidence: [refused.value],
+              });
+              yield* events.publishSession(sessionId, "run-state");
+              return;
+            }
+          }
           // A kanban board's loop executes the Plan; the model runs only when the loop needs it.
           if (yield* kanbanBoard(sessionId)) {
             const reasons = (yield* Ref.get(kanbanAttention))[sessionId];
@@ -2826,43 +2840,14 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             yield* Ref.update(kanbanAttention, ({ [sessionId]: _taken, ...rest }) => rest);
             return yield* drain(yield* send(followupRunId, InternalFollowup.kanban({ reasons })));
           }
-          // Background work still running holds the Plan: the session waits for it, not the model,
-          // and its end wakes the session again with its notification.
-          const continuing =
-            !(yield* background.hasSession(sessionId)) &&
-            (restarted
-              ? yield* execution.canResume(sessionId, last.runId, workflow)
-              : yield* execution.canContinue(sessionId, last.runId, workflow));
           if (
-            !continuing &&
-            (restarted || !(yield* workTrace.pendingParentNotificationSessions).includes(sessionId))
-          )
-            return;
-          // A user's queued request or pending approval takes precedence over automatic work.
-          if (
-            continuing &&
-            (!NextDelivery.$is("empty")((yield* queue.snapshot(sessionId)).nextDelivery) ||
-              (yield* relayed.pending(sessionId)).length > 0)
+            restarted ||
+            !(yield* workTrace.pendingParentNotificationSessions).includes(sessionId)
           )
             return;
           const pendingApprovals = yield* runStore.pendingInterrupts(sessionId);
           if (pendingApprovals.length > 0) return;
-          const started = yield* send(
-            followupRunId,
-            continuing
-              ? InternalFollowup.workflow({ afterRunId: last.runId })
-              : InternalFollowup.notification(),
-          );
-          if (Result.isFailure(started) && continuing) {
-            yield* execution.blockPending(sessionId, last.runId, {
-              reason: "external_dependency",
-              detail:
-                "자동 진행 요청을 시작하지 못했어요. 로그인 상태와 실행 조건을 확인해 주세요.",
-              evidence: [started.failure],
-            });
-            yield* events.publishSession(sessionId, "run-state");
-          }
-          yield* drain(started);
+          yield* drain(yield* send(followupRunId, InternalFollowup.notification()));
         });
         // A run waiting for approvals goes on with their answers first. After a cancel or a failure
         // waiting messages are held, so one waiting now was confirmed by the user since.

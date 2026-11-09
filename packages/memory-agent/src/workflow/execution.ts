@@ -205,23 +205,6 @@ const make = Effect.gen(function* () {
   });
   const sessionsIn = (kind: keyof typeof cases) =>
     sessionsOf(kind).pipe(Effect.map((rows) => rows.map((row) => row.session_id)));
-  const current = Effect.fnUntraced(function* (
-    sessionId: string,
-    runId: string,
-    state: WorkflowState,
-    kind: "ready" | "retrying",
-  ) {
-    const execution = yield* read(sessionId);
-    return (
-      WorkflowExecutionState.isAnyOf([kind])(execution) &&
-      execution.runId === runId &&
-      executable(state) &&
-      execution.goalVersion === state.goal?.version &&
-      execution.planVersion === state.plan?.version &&
-      !PlanSchedule.$is("stalled")(planSchedule(state.plan.steps))
-    );
-  });
-
   return {
     get: Effect.fn("WorkflowExecution.get")((sessionId: string) => reading(read(sessionId))),
     readySessions: Effect.fn("WorkflowExecution.readySessions")(() => reading(sessionsIn("ready"))),
@@ -243,34 +226,6 @@ const make = Effect.gen(function* () {
         ),
       ),
     ),
-
-    canContinue: Effect.fn("WorkflowExecution.canContinue")(
-      (sessionId: string, runId: string, state: WorkflowState) =>
-        reading(current(sessionId, runId, state, "ready")),
-    ),
-
-    /**
-     * Whether a new run continues the Plan after `runId` was cut off by a restart: a later run
-     * knows everything it did and its `retryAt` has passed. The ended run is not replayed.
-     */
-    canResume: Effect.fn("WorkflowExecution.canResume")(function* (
-      sessionId: string,
-      runId: string,
-      state: WorkflowState,
-    ) {
-      const now = yield* Clock.currentTimeMillis;
-      return yield* reading(
-        Effect.gen(function* () {
-          const execution = yield* read(sessionId);
-          return (
-            isRetrying(execution) &&
-            execution.retryAt <= now &&
-            (yield* current(sessionId, runId, state, "retrying")) &&
-            (yield* endedWithKnownEffects(runId))
-          );
-        }),
-      );
-    }),
 
     /**
      * Continuation of a running Goal whose run the previous process left unfinished. A run whose

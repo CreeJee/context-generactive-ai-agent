@@ -4603,6 +4603,10 @@
   - 칸반 보드에서 모델이 `update_workflow_progress`로 Goal·Plan 완료를 기록하면 `outcomes_complete_goal`로 거절한다. 칸반이 아닌 Goal의 완료 기록과 `criterionMappings`는 채팅 모델 직접 실행을 없애는 2c에서 함께 걷는다.
   - 모델에게 알리는 `cards_done`은 `outcomes_open`이 된다. 맡은 카드가 없거나 not_met인 outcome이 있으면 알리고, 모델은 그 outcome을 위한 카드를 더한다.
   - Goal을 고치면 이전 버전(`Workflows.goalAt`)과 비교해 문장이 바뀌거나 빠진 outcome을 맡은 끝나지 않은 카드만 보류한다(`AssignmentHold.cards`). 문장·제약·non-goal이 바뀌면 끝나지 않은 카드 모두다. 결정에는 outcome만 적었지만, 이 셋은 모든 카드의 범위를 바꾸므로 넓게 잡았다. 보류할 카드가 없으면 새 Goal 버전만 기록하고 보드는 그대로 돈다.
+- 구현(2c 승인한 Plan은 보드가 실행): Plan을 승인하면(`setWorkflowPhase(execute)`) owner가 그 Goal의 칸반 보드를 시작한다. git이 아니면 순차 보드다. 보드 없이 실행 중인 Plan(이전에 승인한 것)은 run이 끝난 뒤 보드로 옮긴다. 보드를 시작하지 못하면 채팅이 대신 실행하지 않고, 자동 진행을 사용자에게 보이는 blocker로 멈춘다. 보드 패널의 "칸반으로 전환"이 다시 시도하는 길이다.
+  - 채팅의 Plan 자동 이어가기(workflow follow-up, `canContinue`·`canResume`)를 없앤다. 승인한 Plan은 모두 보드가 실행하므로 이 경로는 닿지 않는다. 연속 진척 없음 한도는 3 루프에서 보드 기준으로 다시 둔다.
+  - 사용자 턴 안에서 보드를 시작하지 않는다. 예약된 턴이 보드의 카드 이동으로 `workflow_changed` 거절을 받는다. 그래서 보드 없이 실행 중인 이전 Plan에 사용자가 말하면 그 턴은 예전처럼 execute 지시문으로 돌고, 턴이 끝나면 보드가 이어받는다. execute 지시문은 phase 정리에서 없앤다.
+  - 화면은 승인한 뒤 실행 메시지를 보내지 않는다.
 
 ## SQLite 연결은 `synchronous = NORMAL`로 쓴다 (2026-11-09)
 

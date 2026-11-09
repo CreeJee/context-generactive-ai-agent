@@ -24,7 +24,7 @@
 - 페이지가 읽고 보내는 모양도 `contracts.ts`의 Schema다: 워크플로 상태(`WorkflowState`와 그 안의 Goal·Plan·카드·완료 근거 Schema), 보드 편집(`CardDraft`, `CardPatch`, `BoardEdit`, `BoardIntent`, `UserChange`, `UserChangeRequest`), 보드 화면(`BoardCard`, `BoardRevision`, `BoardView`), 편집 결과(`BoardEditApplied`, `BoardEditRequested`), 세션 실행 상태에 실리는 모양(`WorkflowExecutionState`, `WorkflowBlocker`, `WorkflowDisplay`, `WorkflowActions`, `WorkflowActionDecision`, `WorkflowActionReason`, `ProviderRetryView`, `UncertainRun`, `UncertainTool`, `UncertainContinueRequest`). `workflow.ts`, `completion-evidence.ts`, `board-edit.ts`, `board.ts`, `execution.ts`, `actions.ts`, `provider-retry.ts`, `uncertain-runs.ts`가 이름을 다시 내보내고, `BoardEditResult`의 `Data.taggedEnum` 생성자는 `board-edit.ts`에 있다
 - `BoardEdit` / `BoardIntent` / `CardDraft` / `CardPatch` / `UserChange` / `UserChangeRequest` / `BoardEditResult` / `BoardEditRefused` / `BoardEditPlan` — 보드 편집 스키마와 결과
 - `planBoardEdit` / `planCardTransition` / `planCardHold` / `cardTransitions` / `planEnded` / `closedPlan` — 보드 편집·카드 전이 계획 함수
-- `WorkflowExecution` — durable 연속 실행 의도 서비스, `WorkflowExecutionState`(idle|running|ready|retrying|blocked|stopped), `WorkflowBlocker`, `WorkflowExecutionFailed`
+- `WorkflowExecution` — durable 연속 실행 의도 서비스, `WorkflowExecutionState`(idle|running|ready|retrying|blocked|stopped), `WorkflowBlocker`, `WorkflowExecutionFailed`. 승인한 Plan은 칸반 보드가 실행하므로 채팅은 Plan을 이어서 실행하지 않는다. `ready`·`retrying`인 세션은 run이 끝나면 보드로 옮겨지고, 보드를 시작하지 못하면 `blocked`가 된다
 - `GoalExecution` — owner에 묶인 Goal SDK run의 durable `Workflow.make` 정의
 - `GoalExecutionCompletion` — SDK 루프가 한 번 완료하는 `DurableDeferred` 대기 지점
 - `GoalExecutions` / `goalExecutionLayer` / `GoalExecutionAdmissionRefused` — Goal 실행 admission 서비스와 레이어
