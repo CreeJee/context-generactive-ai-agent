@@ -94,6 +94,17 @@ export type TargetAdvance = Data.TaggedEnum<{
 }>;
 export const TargetAdvance = Data.taggedEnum<TargetAdvance>();
 
+/** Moving the Goal branch onto another branch of the user's before its cards add work to it. */
+export type GoalRetarget = Data.TaggedEnum<{
+  /** The Goal branch now points at `head`, the new branch's commit. */
+  Moved: { readonly head: string };
+  /** The Goal branch has commits that neither branch contains; moving it would drop them. */
+  GoalHasWork: {};
+  /** Card branches exist; they started from the old Goal head and would carry it into the target. */
+  CardsStarted: { readonly branches: readonly string[] };
+}>;
+export const GoalRetarget = Data.taggedEnum<GoalRetarget>();
+
 /**
  * The project as a card's tools see it: rooted at the card worktree, with what the worktree denies
  * fenced off from the outside tools. Credential and storage-root refusals are unchanged; this only
@@ -246,6 +257,16 @@ export interface CardWorktreesApi extends CardWorkspace {
   ) => Effect.Effect<Option.Option<string>, CardWorktreeFailed>;
   /** The Goal branch's current commit. */
   readonly goalHead: (goal: GoalRef) => Effect.Effect<string, CardWorktreeFailed>;
+  /**
+   * Points the Goal branch at the user's branch `to` when that loses nothing: no card branch exists
+   * and every Goal branch commit is already in `from` (the branch it targeted, if any) or `to`.
+   * `TargetMissing` when `to` has no commit.
+   */
+  readonly retargetGoal: (
+    goal: GoalRef,
+    from: string | null,
+    to: string,
+  ) => Effect.Effect<GoalRetarget, CardWorktreeFailed>;
   /**
    * Takes the user's branch into the Goal branch without touching any checkout. Conflicts write
    * nothing and are reported by file.

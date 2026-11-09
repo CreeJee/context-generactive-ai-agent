@@ -34,7 +34,8 @@
 - 스킬 로드 순서는 builtin, global, project다. 이름이 같으면 뒤 scope가 이긴다. 이 순서는 `Skills.load`의 `MutableHashMap.fromIterable`가 정한다
 - builtin 스킬 경로는 이 모듈 위치가 아니라 패키지(`runtimeRoot` 또는 `memory-agent/package.json`)로 찾는다. 앱이 이 모듈을 서버 빌드에 번들하기 때문이다
 - SKILL.md가 `maxSkillBytes`를 넘거나 디코드한 텍스트가 `maxSkillCharacters`를 넘으면 `too_large`, description이 비면 `no_description`이 된다. 읽기 실패(PlatformError, PathRejected, TextFileIoFailed, TextFileRejected)는 조용히 버리지 않고 `unreadable` problem으로 남긴다
-- 스캔은 `.`으로 시작하는 폴더를 건너뛰고 폴더를 정렬한다. `lstat` 기준 Directory가 아닌 항목은 제외한다. SKILL.md도 `lstat`이 File일 때만 읽으므로 심볼릭 링크는 따라가지 않는다
+- 스캔은 `.`으로 시작하는 폴더를 건너뛰고 폴더를 정렬한다. 목록(`readDirectoryEntries`)이 준 항목 자신의 type이 Directory가 아니면 제외하고, type을 모르는 항목만 `lstat`한다. SKILL.md도 `lstat`이 File일 때만 읽으므로 심볼릭 링크는 따라가지 않는다
+- 카탈로그와 `read`는 부를 때마다 디스크를 다시 읽고 캐시하지 않는다. 사람이 스킬을 언제든 바꿀 수 있기 때문이다. 세 scope를 함께, scope마다 스킬 16개(`readConcurrency`)씩 함께 읽는다. 결과 순서는 폴더 이름 순서 그대로다
 - SKILL.md는 발견 뒤 바꿔치기된 링크를 따르지 않도록 같은 leaf를 `readFileBytesEffect`로 연다. 크기는 lstat 때와 읽은 뒤에 두 번 확인한다
 - `contentHash`는 발견에 쓴 정확한 SKILL.md 텍스트의 SHA-256 hex다
 - description은 `maxDescriptionCharacters`로 자른다. name이 없으면 폴더 이름을 쓴다
@@ -47,7 +48,7 @@
 
 ## Side Effects
 
-- `Skills`: FileSystem의 `exists`, `stat`, `lstat`, `readDirectory`와 `readFileBytesEffect`로 builtin, `~/.agents/skills`, `<project>/.agents/skills`를 읽는다. 쓰기는 하지 않는다
+- `Skills`: FileSystem의 `stat`, `lstat`, `readDirectoryEntries`, `readDirectory`와 `readFileBytesEffect`로 builtin, `~/.agents/skills`, `<project>/.agents/skills`를 읽는다. 쓰기는 하지 않는다
 - `Skills`: `Digest.digest(Digest.sha256)`으로 해시를 계산한다. `homeDirectory`, `runtimeRoot`, `runtimeRequire`(require.resolve)로 호스트 경로를 확인한다
 - `CodeSkills`: `resolveProjectPath`를 거쳐 프로젝트 안 `.agents/skills/<name>/` 아래 SKILL.md와 `scripts/run.*`에 `createTextFileEffect`, `readTextFileEffect`, `replaceTextFileEffect`, `deleteTextFileEffect`를 실행한다(생성, 읽기, 교체, 삭제)
 - `code-skills.ts`는 `SqlClient`(effect/sql), `Clock`, `DateTime`, `effect/crypto`를 import한다

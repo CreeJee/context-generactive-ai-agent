@@ -24,6 +24,7 @@ import {
   CardWorktreeFailedReason,
   CardWorktrees,
   GoalMergeConflict,
+  GoalRetarget,
   GoalSync,
   TargetAdvance,
   TargetSync,
@@ -87,7 +88,9 @@ interface GitOutput {
 const lines = (text: string) => text.split("\n").filter((line) => line.length > 0);
 
 const goalBranchName = (goal: string) => `ctx/goal/${goal}`;
-const cardBranchName = (goal: string, card: string) => `ctx/card/${goal}/${card}`;
+/** The folder of the Goal's card branches; as a ref pattern it matches every one of them. */
+const cardBranchFolder = (goal: string) => `ctx/card/${goal}`;
+const cardBranchName = (goal: string, card: string) => `${cardBranchFolder(goal)}/${card}`;
 const cardTrailer = (goal: string, card: string) => `Ctx-Card: ${goal}/${card}`;
 
 const make = Effect.fnUntraced(function* (worktreesBase: string) {
@@ -315,19 +318,13 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
           }),
         ),
       );
-      const branch = yield* revision("lease", worktree.repository, `refs/heads/${worktree.branch}`);
-      // A redelivered card continues on its existing branch; a new one starts from the Goal's HEAD.
-      const args = Option.isSome(branch)
-        ? ["worktree", "add", worktree.path, worktree.branch]
-        : [
-            "worktree",
-            "add",
-            "-b",
-            worktree.branch,
-            worktree.path,
-            yield* goalHead("lease", worktree.repository, card.goalInstanceId),
-          ];
-      yield* expect("lease", worktree.repository, args).pipe(Effect.uninterruptible);
+      // The lease started the card branch before it got here (`startBranch`).
+      yield* expect("lease", worktree.repository, [
+        "worktree",
+        "add",
+        worktree.path,
+        worktree.branch,
+      ]).pipe(Effect.uninterruptible);
       return worktree;
     });
     return yield* Match.value(state).pipe(
@@ -361,6 +358,29 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
 
   const cardKey = (card: CardRef) => `card:${card.goalInstanceId}/${card.cardId}`;
   const goalKey = (goal: GoalRef) => `goal:${goal.goalInstanceId}`;
+
+  /**
+   * Starts the card branch at the Goal's HEAD unless it exists; a redelivered card continues on its
+   * branch. The Goal's lock is held, so the Goal branch cannot be retargeted in between.
+   */
+  const startBranch = (card: CardRef) =>
+    serially(
+      goalKey(card),
+      serially(
+        cardKey(card),
+        Effect.gen(function* () {
+          const { repository, branch } = yield* describe("lease", card);
+          yield* Effect.when(
+            Effect.flatMap(goalHead("lease", repository, card.goalInstanceId), (head) =>
+              expect("lease", repository, ["branch", "--no-track", branch, head]).pipe(
+                Effect.uninterruptible,
+              ),
+            ),
+            Effect.map(revision("lease", repository, `refs/heads/${branch}`), Option.isNone),
+          );
+        }),
+      ),
+    );
 
   const presentWorktree = (operation: Operation, card: CardRef) =>
     Effect.flatMap(lookup(operation, card), (found) =>
@@ -397,18 +417,21 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
 
     lease: (card: CardRef) =>
       Effect.acquireRelease(
-        serially(
-          cardKey(card),
-          Effect.gen(function* () {
-            const key = cardKey(card);
-            yield* Effect.when(
-              fail("lease", reasons.InUse.make({})),
-              Effect.map(Ref.get(leases), HashSet.has(key)),
-            );
-            const worktree = yield* ensure(card);
-            yield* Ref.update(leases, HashSet.add(key));
-            return worktree;
-          }),
+        Effect.andThen(
+          startBranch(card),
+          serially(
+            cardKey(card),
+            Effect.gen(function* () {
+              const key = cardKey(card);
+              yield* Effect.when(
+                fail("lease", reasons.InUse.make({})),
+                Effect.map(Ref.get(leases), HashSet.has(key)),
+              );
+              const worktree = yield* ensure(card);
+              yield* Ref.update(leases, HashSet.add(key));
+              return worktree;
+            }),
+          ),
         ),
         () => Ref.update(leases, HashSet.remove(cardKey(card))),
       ).pipe(
@@ -627,6 +650,59 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
       yield* checkIds("goal_merge", [goal.goalInstanceId]);
       const { repository } = yield* repositoryOf("goal_merge", goal.projectRoot);
       return yield* goalHead("goal_merge", repository, goal.goalInstanceId);
+    }),
+
+    /**
+     * Only the Goal branch ref moves, and only from the head that was read. Card branches start
+     * under the same lock (`startBranch`), so none can start from the old head in between.
+     */
+    retargetGoal: Effect.fn("CardWorktrees.retargetGoal")(function* (
+      goal: GoalRef,
+      from: string | null,
+      to: string,
+    ) {
+      yield* checkIds("goal_branch", [goal.goalInstanceId]);
+      const { repository } = yield* repositoryOf("goal_branch", goal.projectRoot);
+      return yield* serially(
+        goalKey(goal),
+        Effect.gen(function* (): Effect.fn.Return<GoalRetarget, CardWorktreeFailed> {
+          const branches = lines(
+            yield* expect("goal_branch", repository, [
+              "for-each-ref",
+              "--format=%(refname:short)",
+              `refs/heads/${cardBranchFolder(goal.goalInstanceId)}`,
+            ]),
+          );
+          if (branches.length > 0) return GoalRetarget.CardsStarted({ branches });
+          const targetHead = yield* existing(
+            "goal_branch",
+            repository,
+            `refs/heads/${to}`,
+            reasons.TargetMissing.make({}),
+          );
+          const head = yield* goalHead("goal_branch", repository, goal.goalInstanceId);
+          // A branch that was deleted since holds nothing the Goal branch could lose.
+          const earlier =
+            from === null
+              ? Option.none<string>()
+              : yield* revision("goal_branch", repository, `refs/heads/${from}`);
+          const holder = yield* Effect.findFirst(
+            [targetHead, ...Option.toArray(earlier)],
+            (commit) =>
+              answers("goal_branch", repository, ["merge-base", "--is-ancestor", head, commit]),
+          );
+          if (Option.isNone(holder)) return GoalRetarget.GoalHasWork();
+          yield* expect("goal_branch", repository, [
+            "update-ref",
+            "-m",
+            `ctx: retarget to ${to}`,
+            `refs/heads/${goalBranchName(goal.goalInstanceId)}`,
+            targetHead,
+            head,
+          ]).pipe(Effect.uninterruptible);
+          return GoalRetarget.Moved({ head: targetHead });
+        }),
+      );
     }),
 
     /**

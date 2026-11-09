@@ -17,6 +17,7 @@ import {
   CardWorktreeFailedReason,
   cardWorktreeFailedReasonName,
   CardWorktrees,
+  GoalRetarget,
   GoalSync,
   WorktreeDisposition,
   WorktreeSettlement,
@@ -230,6 +231,56 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
           const cWorktree = yield* worktrees.present(card("c"));
           expect(yield* git(cWorktree.toolRoot, "status", "--porcelain")).toBe("");
           expect(yield* git(project, "branch", "--show-current")).toBe("main");
+        }),
+      ),
+  );
+
+  it.effect(
+    "moves an untouched Goal branch onto another user branch, and refuses once that would carry or drop work",
+    () =>
+      run(({ fs, path, project }) =>
+        Effect.gen(function* () {
+          const worktrees = yield* CardWorktrees;
+          const goal = { projectRoot: project, goalInstanceId: "g3" };
+          const card = { ...goal, cardId: "c1" };
+          yield* worktrees.prepareGoal(goal);
+          // After the board started, the user moved to another branch with work of its own.
+          yield* git(project, "switch", "--quiet", "-c", "feature");
+          yield* fs.writeFileString(path.join(project, "feature.txt"), "feature\n");
+          yield* git(project, "add", "feature.txt");
+          yield* git(project, "commit", "--quiet", "-m", "feature work");
+          const featureHead = yield* git(project, "rev-parse", "HEAD");
+
+          expect(yield* worktrees.retargetGoal(goal, "main", "feature")).toEqual(
+            GoalRetarget.Moved({ head: featureHead }),
+          );
+          expect(yield* git(project, "rev-parse", "ctx/goal/g3")).toBe(featureHead);
+          // A card started now has the new branch's work.
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const worktree = yield* worktrees.lease(card);
+              expect(yield* fs.readFileString(path.join(worktree.toolRoot, "feature.txt"))).toBe(
+                "feature\n",
+              );
+              yield* fs.writeFileString(path.join(worktree.toolRoot, "card.txt"), "card\n");
+            }),
+          );
+          yield* worktrees.commitWork(card, "c1 work");
+          yield* worktrees.squashIntoGoal(card, "Card c1");
+          const goalHead = yield* git(project, "rev-parse", "ctx/goal/g3");
+
+          // The card branch started from the Goal head this would leave behind.
+          expect(yield* worktrees.retargetGoal(goal, "feature", "main")).toEqual(
+            GoalRetarget.CardsStarted({ branches: ["ctx/card/g3/c1"] }),
+          );
+          expect(yield* worktrees.settle(card, WorktreeDisposition.Done())).toEqual(
+            WorktreeSettlement.Removed({ branchKept: false }),
+          );
+          // The card's squash commit is in neither user branch.
+          expect(yield* worktrees.retargetGoal(goal, "feature", "main")).toEqual(
+            GoalRetarget.GoalHasWork(),
+          );
+          expect(yield* git(project, "rev-parse", "ctx/goal/g3")).toBe(goalHead);
         }),
       ),
   );

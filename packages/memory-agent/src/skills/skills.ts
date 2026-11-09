@@ -14,6 +14,7 @@ import {
   Effect,
   FileSystem,
   Layer,
+  Order,
 } from "effect";
 import { Digest } from "effect/crypto";
 import type { Project } from "../projects/projects.ts";
@@ -105,6 +106,12 @@ export function parseFrontMatter(text: string): FrontMatter {
 }
 
 const skillFileOf = (directory: string) => join(directory, "SKILL.md");
+/**
+ * Skills one scope reads at once, each holding one open file. For this repository's 61 skills a
+ * catalog took 30–42 ms one at a time, 16–20 ms with 4 or 8 and 10–14 ms with 16; with no bound,
+ * 9 ms, but a folder of thousands of skills would open as many files at once.
+ */
+const readConcurrency = 16;
 
 type SkillRead = Data.TaggedEnum<{
   none: {};
@@ -142,10 +149,12 @@ const make = (options: SkillsOptions) =>
         | import("../files/paths.ts").PathRejected
         | import("effect/PlatformError").PlatformError
       > {
-        if (!(yield* fs.exists(file))) return SkillRead.none();
-        const entry = yield* fs.lstat(file);
-        if (entry.type !== "File") return SkillRead.none();
-        if (Number(entry.size) > maxSkillBytes) return problem("too_large");
+        const found = yield* fs.lstat(file).pipe(
+          Effect.asSome,
+          Effect.catchReason("PlatformError", "NotFound", () => Effect.succeedNone),
+        );
+        if (Option.isNone(found) || found.value.type !== "File") return SkillRead.none();
+        if (Number(found.value.size) > maxSkillBytes) return problem("too_large");
         // Open the same leaf without following a link swapped in after discovery.
         const { bytes } = yield* readFileBytesEffect({ absolute: file, path: file }).pipe(
           Effect.provideService(FileSystem.FileSystem, fs),
@@ -179,21 +188,35 @@ const make = (options: SkillsOptions) =>
       );
     });
 
+    /**
+     * The skills of one scope. A skill folder linked from elsewhere is not followed. The listing
+     * gives each folder's own type; only a folder it could not type is looked up.
+     */
     const scan = Effect.fn("Skills.scan")(function* (scope: SkillScope, root: string) {
-      const folders =
-        (yield* fs.exists(root)) && (yield* fs.stat(root)).type === "Directory"
-          ? (yield* fs.readDirectory(root)).filter((folder) => !folder.startsWith(".")).sort()
-          : [];
-      const reads = yield* Effect.forEach(folders, (folder) => {
-        const directory = join(root, folder);
-        return Effect.when(
-          readSkill(scope, directory, folder),
-          fs.lstat(directory).pipe(
-            Effect.map((entry) => entry.type === "Directory"),
-            Effect.catchTag("PlatformError", () => Effect.succeed(false)),
-          ),
-        );
-      });
+      const listed = yield* fs.stat(root).pipe(
+        Effect.map((info) => info.type === "Directory"),
+        Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed(false)),
+      );
+      const folders = listed
+        ? EffectArray.sort(
+            (yield* fs.readDirectoryEntries(root)).filter(({ name }) => !name.startsWith(".")),
+            Order.mapInput(Order.String, (entry: FileSystem.DirectoryEntry) => entry.name),
+          )
+        : [];
+      const isDirectory = ({ name, type }: FileSystem.DirectoryEntry) =>
+        type === "Unknown"
+          ? fs.lstat(join(root, name)).pipe(
+              Effect.map((entry) => entry.type === "Directory"),
+              Effect.catchTag("PlatformError", () => Effect.succeed(false)),
+            )
+          : Effect.succeed(type === "Directory");
+      // Every read is current: a person may change a skill at any time.
+      const reads = yield* Effect.forEach(
+        folders,
+        (folder) =>
+          Effect.when(readSkill(scope, join(root, folder.name), folder.name), isDirectory(folder)),
+        { concurrency: readConcurrency },
+      );
       const found = EffectArray.getSomes(reads);
       return {
         skills: found.filter(SkillRead.$is("skill")),
@@ -216,11 +239,14 @@ const make = (options: SkillsOptions) =>
     });
     const load = Effect.fn("Skills.load")(function* (project: Project) {
       // Later scopes win on a shared name: the app's defaults, then the user's, then the project's.
-      const layers = [
-        yield* scan("builtin", builtinRoot),
-        yield* scan("global", globalSkillsDirectory(home)),
-        yield* scan("project", projectSkillsDirectory(project.root)),
-      ];
+      const layers = yield* Effect.all(
+        [
+          scan("builtin", builtinRoot),
+          scan("global", globalSkillsDirectory(home)),
+          scan("project", projectSkillsDirectory(project.root)),
+        ],
+        { concurrency: "unbounded" },
+      );
       const byName = MutableHashMap.fromIterable(
         layers.flatMap((layer) => layer.skills).map((entry) => [entry.skill.name, entry] as const),
       );

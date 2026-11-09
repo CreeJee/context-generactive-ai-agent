@@ -4511,3 +4511,12 @@
   - 루프 자신의 카드 이동도 `run-state`를 내서 그 뒤 한 번 더 본다. 그 look은 바꿀 것이 없으면 이벤트를 내지 않으므로 거기서 멈춘다.
 - 결정: 카드 ladder는 `attempts.ladders(goalInstanceId)`로 Goal의 것을 한 번에 읽는다. look과 보드 화면(`KanbanBoardActions.view`)이 쓴다.
 - 확인: 새 테스트는 poll이 50ms인 설정에서도 idle 보드가 300ms 동안 카드를 맡기지 않다가 `run-state` 이벤트 뒤에 끝까지 진행하는지 본다.
+
+## 스킬 카탈로그는 캐시 없이 함께 읽는다 (2026-11-09)
+
+- 계기: run마다 부르는 `Skills.catalog`가 SKILL.md 61–68개를 하나씩 읽었다. dev span에서 p50 172ms, 최대 1,076ms였다. 스킬마다 폴더 `lstat`, SKILL.md `exists`와 `lstat`, 열기·`fstat`·읽기·닫기를 차례로 기다렸다.
+- 결정: 캐시는 두지 않는다. 스킬은 사람이 다른 에이전트나 편집기로 언제든 바꾸고, 카탈로그는 부를 때의 디스크를 보여야 한다. 대신 기다림을 줄인다.
+  - 세 scope(builtin, global, project)를 함께 읽고, scope 안에서는 스킬 16개씩 함께 읽는다. 결과 순서는 폴더 이름 순서 그대로다.
+  - 동시 개수: 이 저장소의 스킬 61개에서 하나씩은 30–42ms, 4·8개는 16–20ms, 16개는 10–14ms, 제한 없이는 9ms였다. 스킬 하나가 파일 하나를 열고 있으므로, 폴더에 스킬이 수천 개여도 한 번에 여는 파일 수가 16을 넘지 않게 했다.
+  - 폴더의 type은 `readDirectoryEntries`가 준 것을 쓰고, 모를 때만 `lstat`한다(`AGENTS.md`를 찾을 때와 같다). SKILL.md는 `exists` 없이 `lstat` 하나로 보고, NotFound면 스킬이 아니다. 링크를 따르지 않는 것은 같다.
+- 확인: 바꾸기 전과 후의 카탈로그 JSON(스킬 61개, problem 1개, contentHash 포함)이 같았다. 같은 측정에서 p50이 27–59ms에서 10–12ms가 됐다.
