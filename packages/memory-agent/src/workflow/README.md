@@ -39,8 +39,8 @@
 - `executionSubjects` / `ExecutionSubject` — owner workflow 실행이 속한 session과 Goal 실행의 bound run을 앱 표(`workflow_execution_subjects`)에 기록한다. 앱 조회는 엔진 payload 대신 이 표를 읽는다
 - `workflowRunBindings` / `RunBinding` / `Admission` / `toolOperationSql` / `endedWithKnownEffectsSql` / `acknowledgedRunSql` / `resolvedRunSql` / `recoveredReadRunSql` — run 바인딩 admission과 공유 SQL 조각
 - `revisionStateSql` / `currentStatesSql` — revision 행에서 워크플로 상태 JSON을 만드는 SQL 조각과, 세션의 현재 revision을 붙인 표(`state-rows.ts`)
-- `toolLedger` / `toolProgressFingerprint` / `uncertainRuns` / `UncertainContinue` / `UncertainRunsFailed` — tool 부수효과 ledger와 결과 불확실 run 처리
-- `planSchedule` / `PlanSchedule` / `planDependencyIssues` / `validatePlanDependencies` / `PlanDependenciesRejected` / `notStartedStatus` / `stalledEvidence` — Plan 의존성 검증과 실행 가능 step 스케줄
+- `toolLedger` / `uncertainRuns` / `UncertainContinue` / `UncertainRunsFailed` — tool 부수효과 ledger와 결과 불확실 run 처리
+- `planSchedule` / `PlanSchedule` / `planDependencyIssues` / `validatePlanDependencies` / `PlanDependenciesRejected` / `notStartedStatus` — Plan 의존성 검증과 실행 가능 step 스케줄
 - `WorkflowRules` / `WorkflowRule` / `RuleSource` / `builtInWorkflowRules` / `projectWorkflowRules` / `skillWorkflowRules` / `structuredWorkflowRules` / `localWorkflowRules` / `projectWorkflowRulesPath` — 워크플로 규칙 해석과 소스 로딩
 - `WorkflowTools` / `workflowInstructions` / `ProviderRetries` / `providerRetryLayer` / `providerRetryIdempotencyKey` / `providerRetryDelay` / `providerRetryLimits` — 모델용 워크플로 도구, 지시문 생성, provider 재시도 서비스
 
@@ -65,7 +65,7 @@
 - 사용자는 chat이나 모드(plan·goal)로 옮기거나 Plan을 실행(`run`)한다. 모드로 옮기면 shaping이 되고, 실행 중인 보드는 다시 승인할 때까지 카드를 배정하지 않는다. `completed`는 서버만 정한다. `run` 외의 이동은 산출물을 승인하거나 바꾸지 않는다.
 - `run`(running 진입)은 `plan.goalVersion === goal.version`이고 plan status가 `ready` 또는 `executing`일 때만 허용된다. lease가 다른 소유자면 `session_in_use`, run이 진행 중이면 이동 요청과 resume이 `run_in_progress`로 거부된다.
 - 실행 가능 조건: phase가 running이고, goal status가 active, plan status가 executing이며, plan의 goalVersion이 goal의 version과 같아야 한다.
-- `WorkflowBlocker`로 모델이 기록할 수 있는 사유는 `user_decision`·`permission`·`external_dependency`·`repeated_failure`뿐이다. `dependency_stalled`와 `server_restarted`는 서버만 정한다.
+- 연속 실행의 blocker는 서버만 기록한다(보드를 시작하지 못함, provider 재시도, 재시작). 모델이 `WorkflowBlocker`를 기록하던 때의 사유(`user_decision`·`permission`·`repeated_failure`)와 `dependency_stalled`는 저장된 실행을 읽으려고 남긴다.
 - 턴을 끝내는 모델 텍스트로는 Plan이 완료되지 않는다(`WorkflowExecution` doc).
 - hold된 카드는 의존성이 끝나도 backlog에 남고 루프가 배정하지 않는다. 카드 계약 필드(`cardContractKeys`)와 `hold`는 모델이 같은 step id로 replan해도 유지된다.
 - `StartNewGoal`은 별도의 독립 성공 기준이다. `updateGoal`을 암묵적으로 해석해 만들어서는 안 된다.
@@ -80,7 +80,7 @@
 
 - SQLite 읽기/쓰기(`owner_workflow_storage`): `owner_workflow_executions`, `owner_workflow_activities`, `owner_workflow_deferreds`, `owner_workflow_clocks`에 INSERT/UPDATE/SELECT. 실행 행의 `created_at`은 admission 때, `updated_at`은 상태가 바뀔 때마다 `Clock`의 millis로 쓴다. 이 열이 생기기 전의 행은 둘 다 NULL이다.
 - SQLite 읽기/쓰기(`workflow.ts`): `session_workflows`, `workflow_state_revisions`, `workflow_board_changes`, `workflow_ledger_events`, `workflow_goal_identities`, `workflow_goal_instances`, `workflow_new_goal_requests`, `board_change_requests`에 INSERT/UPDATE. `chat_runs`, `kanban_goals`, `work_tasks`, `owner_rpc_operations`, `workflow_run_bindings`는 조회
-- SQLite 쓰기: `run-bindings.ts`는 `workflow_run_bindings`에, `durable-stream.ts`는 `workflow_run_log_entries`·`workflow_run_log_closures`에 INSERT/DELETE, `tool-ledger.ts`는 `owner_rpc_operations`에 INSERT/UPDATE, `execution-subjects.ts`는 `workflow_execution_subjects`에 INSERT, `uncertain-runs.ts`는 `workflow_uncertain_acknowledgements`에 INSERT, `execution.ts`는 `workflow_executions`에 upsert하고 그 목록을 `workflow_execution_entries`에 지운 뒤 다시 INSERT
+- SQLite 쓰기: `run-bindings.ts`는 `workflow_run_bindings`에, `durable-stream.ts`는 `workflow_run_log_entries`·`workflow_run_log_closures`에 INSERT/DELETE, `tool-ledger.ts`는 `owner_rpc_operations`에 INSERT/UPDATE, `execution-subjects.ts`는 `workflow_execution_subjects`에 INSERT, `uncertain-runs.ts`는 `workflow_uncertain_acknowledgements`에 INSERT, `execution.ts`는 `workflow_executions`에 upsert하고 blocker 근거를 `workflow_blocker_evidence`에 지운 뒤 다시 INSERT
 - SQLite 읽기: `board.ts`가 `kanban_goals`, `sessions`를, `read-recoveries.ts`가 `owner_read_recoveries`, `owner_read_recovery_revocations`를 조회
 - 타이머: `sqliteRunLog`는 열린 로그 끝에 도달한 reader가 자기 run의 `RunLogSignals` 신호를 기다리고, 신호가 없으면 1초 뒤 다시 읽는다. append와 close는 transaction이 commit된 뒤 신호를 보낸다. `appendAll`은 쌓인 이벤트를 `json_each`로 펼친 `INSERT` 한 문장으로 쓰고, 쓰지 못하면 `append`를 차례로 부른다. owner workflow engine은 `Clock`·`FiberMap`으로 durable clock을 예약하고 발화하며 실행 fiber를 관리한다. 대기 중인 호출자는 workflow 정의의 `suspendedRetrySchedule` 간격으로 실행을 다시 돈다
 - 암호화: `goalExecutionIdempotencyKey`가 `sha256`을 쓰고, `workflow.ts`는 `SecureRandom`/`NodeCrypto`로 id를 생성한다

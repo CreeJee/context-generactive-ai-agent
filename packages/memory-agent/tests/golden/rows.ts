@@ -206,9 +206,9 @@ const conversationRows = Effect.fnUntraced(function* (sessionId: string) {
       ...ids,
     ),
     execution: yield* rows(
-      `SELECT state, run_id, goal_version, plan_version, no_progress_runs, retry_at, reason, detail,
-         (SELECT json_group_array(json_array(x.list, x.value) ORDER BY x.list, x.position)
-           FROM workflow_execution_entries x WHERE x.session_id = e.session_id) AS entries
+      `SELECT state, run_id, goal_version, plan_version, retry_at, reason, detail,
+         (SELECT json_group_array(x.value ORDER BY x.position)
+           FROM workflow_blocker_evidence x WHERE x.session_id = e.session_id) AS evidence
        FROM workflow_executions e WHERE e.session_id = ?`,
       sessionId,
     ),

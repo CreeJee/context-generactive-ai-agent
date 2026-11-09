@@ -494,7 +494,10 @@ const blockerFields = {
   evidence: Schema.Array(Schema.NonEmptyString).pipe(Schema.check(Schema.isMinLength(1))),
 };
 
-/** Blockers the model may record; dependency stalls are decided only by the server. */
+/**
+ * Why the server stops a continuation. The model recorded these once; a stored execution may
+ * still hold any of them.
+ */
 export const WorkflowBlocker = Schema.Struct({
   reason: Schema.Literals([
     "user_decision",
@@ -506,19 +509,10 @@ export const WorkflowBlocker = Schema.Struct({
 });
 export type WorkflowBlocker = typeof WorkflowBlocker.Type;
 
-const Progress = Schema.Struct({
-  completedSteps: Schema.Array(Schema.String),
-  evidence: Schema.Array(Schema.String),
-  toolResults: Schema.Array(Schema.String).pipe(
-    Schema.withDecodingDefaultTypeKey(Effect.succeed([])),
-  ),
-});
 const executionFields = {
   runId: Schema.String,
   goalVersion: Schema.Int,
   planVersion: Schema.Int,
-  noProgressRuns: Schema.Int,
-  progress: Progress,
 };
 
 export const WorkflowExecutionState = Schema.TaggedUnion({

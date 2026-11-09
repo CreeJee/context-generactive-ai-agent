@@ -4619,10 +4619,11 @@
   - 예전 채팅 경로의 한도는 두 턴이었다. 보드의 한 라운드는 카드를 더하고 그 카드가 끝나 판정까지 받는 긴 주기라서 세 번으로 정했다.
 - 구현(지시문의 outcome 상태): 칸반 보드에서 도는 대화의 워크플로 지시문은 outcome마다 장부 상태(unplanned·in_progress·awaiting_check·met·not_met)와 판정 요약을 붙인다. 보드가 아닌 대화는 장부가 없어 상태를 붙이지 않는다. outcome 목록은 앞의 6개만 보이던 것을 모두 보인다(세션 `037aa142`의 Goal은 outcome이 8개였다).
 - 구현(2c 채팅 모델의 완료 경로 제거): `update_workflow_progress`·`record_workflow_blocker` 도구와 `ProgressRecorded`·`RunFinished` 전이, 완료 근거 계산(`completion-evidence.ts`)을 없앤다. Goal은 보드의 `OutcomesMet`으로만 완료된다.
-- 구현(phase 넷과 모드): phase는 chat·shaping·running·completed이고, Plan/Goal 모드는 `WorkflowState.mode`로 따로 둔다. revision 테이블에 `mode` 열을 더하고, 열이 NULL인 예전 revision은 그 버전이 쓴 그대로 읽는다(goal·plan phase는 shaping과 그 모드, execute·verify는 running). 사용자 요청은 phase 대신 이동(`WorkflowMove`: chat·plan·goal·run, API `SessionChange.Move`)이다. 규칙 파일의 phase 어휘(goal·plan·execute·verify)는 그대로 두고 `rulePhases`로 읽을 규칙을 정한다. shaping과 running의 채팅은 프로젝트를 읽기만 하므로, Execute 채팅이 승인 게이트를 거친 shell 검사를 돌리던 테스트는 지운다.
   - 저장된 Goal의 `completion`·`completionRequest`는 이제 아무도 쓰지 않지만, 예전 상태를 읽을 수 있게 Schema에 둔다.
   - Execute 지시문은 보드가 카드를 실행하고 검증자가 outcome을 판정한다고 알리고, 모델은 상태에 답하고 Plan을 고치거나 닫는다. Verify는 채팅 모델이 근거를 남길 때만 닿던 phase라서 같은 지시문을 쓴다. 두 phase는 phase 정리에서 하나로 합친다.
   - `controlGoal`의 거절은 `WorkflowTransitionRefused`로 합치고, API의 workflow 변경 거절 사유에서 더는 나오지 않는 값(`plan_missing`, `steps_incomplete`, `outcomes_complete_goal` 등)을 뺀다.
+- 구현(phase 넷과 모드): phase는 chat·shaping·running·completed이고, Plan/Goal 모드는 `WorkflowState.mode`로 따로 둔다. revision 테이블에 `mode` 열을 더하고, 열이 NULL인 예전 revision은 그 버전이 쓴 그대로 읽는다(goal·plan phase는 shaping과 그 모드, execute·verify는 running). 사용자 요청은 phase 대신 이동(`WorkflowMove`: chat·plan·goal·run, API `SessionChange.Move`)이다. 규칙 파일의 phase 어휘(goal·plan·execute·verify)는 그대로 두고 `rulePhases`로 읽을 규칙을 정한다. shaping과 running의 채팅은 프로젝트를 읽기만 하므로, Execute 채팅이 승인 게이트를 거친 shell 검사를 돌리던 테스트는 지운다.
+- 구현(채팅 진척 카운트 제거): 채팅은 Plan을 실행하지 않으므로 `WorkflowExecution`은 채팅 run의 진척(완료 step, 근거, 도구 결과 fingerprint)을 세지 않는다. 진척 없는 run 두 번의 `repeated_failure`와 의존성 막힘의 `dependency_stalled` blocker도 더는 만들지 않는다. 막힘과 반복 실패는 보드가 다룬다. 깨끗이 끝난 run은 Plan이 그대로면 `ready`가 되어 보드로 옮겨지고, 바뀌었으면 멈춘다. `no_progress_runs` 열과 진척 목록은 지우고, blocker 근거는 `workflow_blocker_evidence`로 옮긴다.
 
 ## SQLite 연결은 `synchronous = NORMAL`로 쓴다 (2026-11-09)
 

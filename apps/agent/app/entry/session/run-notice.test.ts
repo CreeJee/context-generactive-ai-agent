@@ -65,8 +65,6 @@ describe("run notices", () => {
         runId: "run-1",
         goalVersion: 1,
         planVersion: 1,
-        noProgressRuns: 0,
-        progress: { completedSteps: [], evidence: [], toolResults: [] },
         retryAt: 9_000,
       }),
     };

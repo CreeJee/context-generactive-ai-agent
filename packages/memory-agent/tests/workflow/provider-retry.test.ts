@@ -87,8 +87,8 @@ const runningGoal = Effect.fnUntraced(function* (runId: string) {
   );
   yield* sqlRun(
     `INSERT OR REPLACE INTO workflow_executions
-      (session_id, state, run_id, goal_version, plan_version, no_progress_runs)
-      VALUES ('s', 'running', ?, 1, 1, 0)`,
+      (session_id, state, run_id, goal_version, plan_version)
+      VALUES ('s', 'running', ?, 1, 1)`,
     runId,
   );
   yield* sqlRun(
@@ -311,8 +311,6 @@ describe("durable provider retry", () => {
             runId: "run-1",
             goalVersion: 2,
             planVersion: 3,
-            noProgressRuns: 1,
-            progress: { completedSteps: ["p1"], evidence: ["e1"], toolResults: [] },
           }),
         );
         yield* Scope.close(reopened.scope, Exit.void);

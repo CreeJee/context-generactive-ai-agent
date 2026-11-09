@@ -178,7 +178,6 @@ import {
   GoalExecutionErrorReason,
   GoalExecutionPayload,
 } from "../workflow/goal-execution-contracts.ts";
-import { toolProgressFingerprint } from "../workflow/tool-progress.ts";
 import { rulePhases, WorkflowRules } from "../workflow/rules.ts";
 import { localWorkflowRules } from "../workflow/sources.ts";
 import {
@@ -1069,29 +1068,13 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
 
   const workflowAfterRun = Effect.fnUntraced(function* (
     sessionId: string,
-    phase: WorkflowPhase,
     runId: string,
     goalExecution: Effect.Effect<GoalExecutionPayload | null>,
   ) {
-    // The progress the run's tools made, each once in the order made, and how the run ended.
-    const progress = yield* Ref.make<ReadonlyArray<string>>([]);
+    // How the run ended.
     const terminalOutcome = yield* Ref.make<"pending" | "completed" | "failed">("pending");
     const settled = yield* Ref.make(false);
-    const madeProgress = (made: ReadonlyArray<string | null>) =>
-      Ref.update(progress, (all) =>
-        EffectArray.dedupe([...all, ...EffectArray.filter(made, Predicate.isNotNull)]),
-      );
     const hook: RunHook = {
-      // Only a call whose tool ran and returned counts; what a gate answers always carries an
-      // error, which never counts either.
-      stepEnded: (_scope, { answered }) =>
-        madeProgress(
-          answered.map(({ call, answer }) =>
-            Predicate.isTagged(answer, "Returned")
-              ? toolProgressFingerprint(call.name, JSON.stringify(call.params), answer.result)
-              : null,
-          ),
-        ),
       // Waiting for the user is a finish; settlement leaves it.
       ended: (_scope, end) => Ref.set(terminalOutcome, finishedRun(end) ? "completed" : "failed"),
     };
@@ -1133,8 +1116,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           );
       }
       const state = yield* workflows.get(sessionId);
-      if (completed && unresolved === undefined)
-        yield* execution.finish(sessionId, runId, state, [...(yield* Ref.get(progress))]);
+      if (completed && unresolved === undefined) yield* execution.finish(sessionId, runId, state);
       else yield* execution.stop(sessionId, "run_failed", runId);
       yield* events.publishSession(sessionId, "run-state");
     });
@@ -1735,7 +1717,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         ]);
         const workflowLifecycle = yield* workflowAfterRun(
           sessionId,
-          workflow.phase,
           runId,
           Ref.get(goalExecutionPayload),
         );

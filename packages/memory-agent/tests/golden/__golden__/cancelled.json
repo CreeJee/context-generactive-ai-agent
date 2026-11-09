@@ -8,9 +8,8 @@
   "execution": [
     {
       "detail": null,
-      "entries": [],
+      "evidence": [],
       "goal_version": null,
-      "no_progress_runs": null,
       "plan_version": null,
       "reason": "user",
       "retry_at": null,

@@ -2824,6 +2824,21 @@ export const migrations: readonly string[] = [
   ALTER TABLE workflow_state_revisions ADD COLUMN mode TEXT
     CHECK (mode IS NULL OR mode IN ('plan', 'goal'));
   `,
+  `
+  -- The board runs an approved Plan, so a continuation no longer counts the chat's own progress.
+  -- What is left of its lists is a blocked execution's evidence, in order.
+  ALTER TABLE workflow_executions DROP COLUMN no_progress_runs;
+  CREATE TABLE workflow_blocker_evidence (
+    session_id TEXT NOT NULL REFERENCES workflow_executions(session_id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    value TEXT NOT NULL,
+    PRIMARY KEY (session_id, position)
+  );
+  INSERT INTO workflow_blocker_evidence (session_id, position, value)
+    SELECT session_id, position, value FROM workflow_execution_entries
+    WHERE list = 'blocker_evidence';
+  DROP TABLE workflow_execution_entries;
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

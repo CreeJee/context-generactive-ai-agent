@@ -204,15 +204,3 @@ export function planSchedule(steps: readonly PlanStep[]): PlanSchedule {
 
 export const unmetDependencyText = (step: WaitingStep) =>
   `${step.stepId} waits on ${step.unmet.map((dependency) => `${dependency.id} [${dependency.status}]`).join(", ")}`;
-
-/** Deterministic chain of why no remaining step can start. */
-export const stalledEvidence = (
-  schedule: Data.TaggedEnum.Value<PlanSchedule, "stalled">,
-): EffectArray.NonEmptyReadonlyArray<string> => {
-  const lines = [
-    ...schedule.blocked.map((id) => `${id} [blocked]`),
-    ...schedule.waiting.map(unmetDependencyText),
-  ];
-  // A stalled schedule always has at least one blocked or waiting step.
-  return EffectArray.isReadonlyArrayNonEmpty(lines) ? lines : ["no startable step"];
-};

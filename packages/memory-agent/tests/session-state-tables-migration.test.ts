@@ -70,7 +70,6 @@ it.effect("what tasks and sessions kept in chat_metadata moves to tables of thei
       run_id: null,
       goal_version: null,
       plan_version: null,
-      no_progress_runs: null,
       retry_at: null,
       reason: null,
       detail: null,
@@ -91,7 +90,6 @@ it.effect("what tasks and sessions kept in chat_metadata moves to tables of thei
         run_id: "r4",
         goal_version: 1,
         plan_version: 1,
-        no_progress_runs: 0,
         retry_at: 12.5,
       },
       {
@@ -101,23 +99,19 @@ it.effect("what tasks and sessions kept in chat_metadata moves to tables of thei
         run_id: "r1",
         goal_version: 2,
         plan_version: 3,
-        no_progress_runs: 1,
       },
       { ...none, session_id: "stopped", state: "stopped", reason: "user" },
     ]);
+    // A later step drops the progress lists the chat counted; the blocker evidence stays.
     expect(
       db
         .prepare(
-          "SELECT session_id, list, position, value FROM workflow_execution_entries ORDER BY session_id, list, position",
+          "SELECT session_id, position, value FROM workflow_blocker_evidence ORDER BY session_id, position",
         )
         .all(),
     ).toEqual([
-      { session_id: "blocked", list: "blocker_evidence", position: 0, value: "x" },
-      { session_id: "blocked", list: "blocker_evidence", position: 1, value: "y" },
-      { session_id: "running", list: "completed_step", position: 0, value: "a" },
-      { session_id: "running", list: "completed_step", position: 1, value: "b" },
-      { session_id: "running", list: "progress_evidence", position: 0, value: "e" },
-      { session_id: "running", list: "tool_result", position: 0, value: "t" },
+      { session_id: "blocked", position: 0, value: "x" },
+      { session_id: "blocked", position: 1, value: "y" },
     ]);
     expect(
       db

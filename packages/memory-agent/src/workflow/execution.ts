@@ -1,15 +1,5 @@
-import {
-  Array as EffectArray,
-  Clock,
-  Context,
-  Effect,
-  Layer,
-  Option,
-  Schema,
-  Struct,
-} from "effect";
+import { Clock, Context, Effect, Layer, Option, Schema, Struct } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
-import { PlanSchedule, planSchedule, stalledEvidence } from "./plan-schedule.ts";
 import { endedWithKnownEffectsSql } from "./run-bindings.ts";
 import { type WorkflowBlocker, WorkflowExecutionState } from "./contracts.ts";
 import type { WorkflowState } from "./workflow.ts";
@@ -33,23 +23,18 @@ export class WorkflowExecutionFailed extends Schema.TaggedError<
   cause: Schema.Defect(),
 }) {}
 
-/** The lists of an execution, by the `workflow_execution_entries` list that keeps them. */
-type EntryList = "completed_step" | "progress_evidence" | "tool_result" | "blocker_evidence";
-const Entries = Schema.fromJsonString(Schema.Array(Schema.String));
-const encodeEntries = Schema.encodeEffect(Entries);
+/** A blocked execution's evidence, as `workflow_blocker_evidence` keeps it in order. */
+const Evidence = Schema.fromJsonString(Schema.Array(Schema.String));
+const encodeEvidence = Schema.encodeEffect(Evidence);
 const ExecutionRow = Schema.Struct({
   state: Schema.String,
   run_id: Schema.NullOr(Schema.String),
   goal_version: Schema.NullOr(Schema.Finite),
   plan_version: Schema.NullOr(Schema.Finite),
-  no_progress_runs: Schema.NullOr(Schema.Finite),
   retry_at: Schema.NullOr(Schema.Finite),
   reason: Schema.NullOr(Schema.String),
   detail: Schema.NullOr(Schema.String),
-  completed_step: Entries,
-  progress_evidence: Entries,
-  tool_result: Entries,
-  blocker_evidence: Entries,
+  evidence: Evidence,
 });
 /** A stored execution as its case: a field of another case is not read. */
 const stateOf = (row: typeof ExecutionRow.Type) =>
@@ -58,16 +43,10 @@ const stateOf = (row: typeof ExecutionRow.Type) =>
     runId: row.run_id,
     goalVersion: row.goal_version,
     planVersion: row.plan_version,
-    noProgressRuns: row.no_progress_runs,
-    progress: {
-      completedSteps: row.completed_step,
-      evidence: row.progress_evidence,
-      toolResults: row.tool_result,
-    },
     retryAt: row.retry_at,
     reason: row.reason,
     detail: row.detail,
-    evidence: row.blocker_evidence,
+    evidence: row.evidence,
   });
 
 /** The columns a case fills; the table's CHECKs keep the others empty. */
@@ -75,7 +54,6 @@ const noColumns = {
   run_id: null,
   goal_version: null,
   plan_version: null,
-  no_progress_runs: null,
   retry_at: null,
   reason: null,
   detail: null,
@@ -87,22 +65,15 @@ const executionColumns = (state: Execution) => ({
   run_id: state.runId,
   goal_version: state.goalVersion,
   plan_version: state.planVersion,
-  no_progress_runs: state.noProgressRuns,
 });
-type Lists = ReadonlyArray<readonly [EntryList, readonly string[]]>;
-const progressLists = (state: Execution): Lists => [
-  ["completed_step", state.progress.completedSteps],
-  ["progress_evidence", state.progress.evidence],
-  ["tool_result", state.progress.toolResults],
-];
 const rowOf = (state: WorkflowExecutionState) =>
   WorkflowExecutionState.match(state, {
-    idle: () => ({ columns: noColumns, lists: [] }),
-    running: (running) => ({ columns: executionColumns(running), lists: progressLists(running) }),
-    ready: (ready) => ({ columns: executionColumns(ready), lists: progressLists(ready) }),
+    idle: () => ({ columns: noColumns, evidence: [] }),
+    running: (running) => ({ columns: executionColumns(running), evidence: [] }),
+    ready: (ready) => ({ columns: executionColumns(ready), evidence: [] }),
     retrying: (retrying) => ({
       columns: { ...executionColumns(retrying), retry_at: retrying.retryAt },
-      lists: progressLists(retrying),
+      evidence: [],
     }),
     blocked: (blocked) => ({
       columns: {
@@ -111,24 +82,10 @@ const rowOf = (state: WorkflowExecutionState) =>
         reason: blocked.reason,
         detail: blocked.detail,
       },
-      lists: [["blocker_evidence", blocked.evidence]] satisfies Lists,
+      evidence: blocked.evidence,
     }),
-    stopped: (stopped) => ({ columns: { ...noColumns, reason: stopped.reason }, lists: [] }),
+    stopped: (stopped) => ({ columns: { ...noColumns, reason: stopped.reason }, evidence: [] }),
   });
-const progressOf = (
-  state: WorkflowState,
-  toolResults: readonly string[] = [],
-): typeof cases.running.fields.progress.Type => ({
-  toolResults,
-  completedSteps:
-    state.plan?.steps.filter((step) => step.status === "done").map((step) => step.id) ?? [],
-  evidence: EffectArray.dedupe([
-    ...(state.goal?.evidence ?? []),
-    ...(state.plan?.evidence ?? []),
-    ...(state.plan?.steps.flatMap((step) => step.evidence) ?? []),
-    ...(state.plan?.verification.evidence ?? []),
-  ]),
-});
 
 const executable = (state: WorkflowState) =>
   state.phase === "running" &&
@@ -144,16 +101,13 @@ const make = Effect.gen(function* () {
   const reading = <A, E>(effect: Effect.Effect<A, E>) => Effect.mapError(effect, failed("read"));
   const writing = <A, E>(effect: Effect.Effect<A, E>) =>
     Effect.mapError(sql.withTransaction(effect), failed("write"));
-  const entries = (list: EntryList) =>
-    sql.literal(`(SELECT json_group_array(x.value ORDER BY x.position)
-      FROM workflow_execution_entries x
-      WHERE x.session_id = e.session_id AND x.list = '${list}') AS ${list}`);
   const select = SqlSchema.findOneOption({
     Request: Schema.String,
     Result: ExecutionRow,
     execute: (sessionId) => sql`SELECT e.state, e.run_id, e.goal_version, e.plan_version,
-        e.no_progress_runs, e.retry_at, e.reason, e.detail, ${entries("completed_step")},
-        ${entries("progress_evidence")}, ${entries("tool_result")}, ${entries("blocker_evidence")}
+        e.retry_at, e.reason, e.detail,
+        (SELECT json_group_array(x.value ORDER BY x.position) FROM workflow_blocker_evidence x
+          WHERE x.session_id = e.session_id) AS evidence
       FROM workflow_executions e WHERE e.session_id = ${sessionId}`,
   });
   const sessionsOf = SqlSchema.findAll({
@@ -175,32 +129,20 @@ const make = Effect.gen(function* () {
         }),
       ),
     );
-  /** Replaces the session's execution and its lists; callers run it inside `writing`. */
+  /** Replaces the session's execution and its evidence; callers run it inside `writing`. */
   const save = Effect.fnUntraced(function* (sessionId: string, state: WorkflowExecutionState) {
-    const { columns, lists } = rowOf(state);
+    const { columns, evidence } = rowOf(state);
     yield* sql`INSERT INTO workflow_executions
-        (session_id, state, run_id, goal_version, plan_version, no_progress_runs, retry_at, reason,
-         detail)
+        (session_id, state, run_id, goal_version, plan_version, retry_at, reason, detail)
       VALUES (${sessionId}, ${state._tag}, ${columns.run_id}, ${columns.goal_version},
-        ${columns.plan_version}, ${columns.no_progress_runs}, ${columns.retry_at}, ${columns.reason},
-        ${columns.detail})
+        ${columns.plan_version}, ${columns.retry_at}, ${columns.reason}, ${columns.detail})
       ON CONFLICT (session_id) DO UPDATE SET state = excluded.state, run_id = excluded.run_id,
         goal_version = excluded.goal_version, plan_version = excluded.plan_version,
-        no_progress_runs = excluded.no_progress_runs, retry_at = excluded.retry_at,
-        reason = excluded.reason, detail = excluded.detail`;
-    yield* sql`DELETE FROM workflow_execution_entries WHERE session_id = ${sessionId}`;
-    yield* Effect.forEach(
-      lists,
-      ([list, values]) =>
-        Effect.flatMap(
-          encodeEntries(values),
-          (
-            encoded,
-          ) => sql`INSERT INTO workflow_execution_entries (session_id, list, position, value)
-            SELECT ${sessionId}, ${list}, key, value FROM json_each(${encoded})`,
-        ),
-      { discard: true },
-    );
+        retry_at = excluded.retry_at, reason = excluded.reason, detail = excluded.detail`;
+    yield* sql`DELETE FROM workflow_blocker_evidence WHERE session_id = ${sessionId}`;
+    const encoded = yield* encodeEvidence(evidence);
+    yield* sql`INSERT INTO workflow_blocker_evidence (session_id, position, value)
+      SELECT ${sessionId}, key, value FROM json_each(${encoded})`;
     return state;
   });
   const sessionsIn = (kind: keyof typeof cases) =>
@@ -287,86 +229,37 @@ const make = Effect.gen(function* () {
               return;
             }
             if (isRunning(previous) && previous.runId === runId) return;
-            const continued = isPending(previous);
             yield* save(
               sessionId,
               cases.running.make({
                 runId,
                 goalVersion: state.goal.version,
                 planVersion: state.plan.version,
-                noProgressRuns: !userTurn && continued ? previous.noProgressRuns : 0,
-                progress: progressOf(
-                  state,
-                  !userTurn && continued ? previous.progress.toolResults : [],
-                ),
               }),
             );
           }),
         ),
     ),
 
+    /**
+     * A run that ended cleanly leaves its executing Plan to the board, `ready` until the board takes
+     * it. A Goal or Plan the run changed, or one that no longer runs, ends the continuation.
+     */
     finish: Effect.fn("WorkflowExecution.finish")(
-      (
-        sessionId: string,
-        runId: string,
-        state: WorkflowState,
-        toolResults: readonly string[] = [],
-      ) =>
+      (sessionId: string, runId: string, state: WorkflowState) =>
         writing(
           Effect.gen(function* () {
             const previous = yield* read(sessionId);
             if (!isRunning(previous) || previous.runId !== runId) return;
-            if (
-              !executable(state) ||
-              state.goal?.version !== previous.goalVersion ||
-              state.plan?.version !== previous.planVersion
-            ) {
-              yield* save(
-                sessionId,
-                cases.stopped.make({
-                  reason: state.goal?.status === "completed" ? "completed" : "workflow_changed",
-                }),
-              );
-              return;
-            }
-            const progress = progressOf(
-              state,
-              EffectArray.dedupe([...previous.progress.toolResults, ...toolResults]),
-            );
-            const advanced =
-              progress.toolResults.some((item) => !previous.progress.toolResults.includes(item)) ||
-              progress.completedSteps.some(
-                (id) => !previous.progress.completedSteps.includes(id),
-              ) ||
-              progress.evidence.some((item) => !previous.progress.evidence.includes(item));
-            const noProgressRuns = advanced ? 0 : previous.noProgressRuns + 1;
-            const schedule = planSchedule(state.plan?.steps ?? []);
             yield* save(
               sessionId,
-              PlanSchedule.$is("stalled")(schedule)
-                ? cases.blocked.make({
-                    runId,
-                    reason: "dependency_stalled",
-                    detail:
-                      "남은 단계가 모두 막혔거나 끝나지 않은 단계를 기다리고 있어 바로 시작할 단계가 없어요. 막힌 단계나 단계 의존 관계를 확인해 주세요.",
-                    evidence: stalledEvidence(schedule),
-                  })
-                : noProgressRuns >= 2
-                  ? cases.blocked.make({
-                      runId,
-                      reason: "repeated_failure",
-                      detail:
-                        "두 턴 연속 완료된 단계, 새로운 진행 근거 또는 유의미한 도구 결과가 없어 자동 진행을 멈췄어요.",
-                      evidence: [
-                        previous.runId,
-                        "Two consecutive runs without new workflow evidence, completed steps or substantive successful tool results",
-                      ],
-                    })
-                  : cases.ready.make({
-                      ...Struct.pick(previous, executionKeys),
-                      progress,
-                      noProgressRuns,
-                    }),
+              executable(state) &&
+                state.goal?.version === previous.goalVersion &&
+                state.plan?.version === previous.planVersion
+                ? cases.ready.make(Struct.pick(previous, executionKeys))
+                : cases.stopped.make({
+                    reason: state.goal?.status === "completed" ? "completed" : "workflow_changed",
+                  }),
             );
           }),
         ),
