@@ -2488,6 +2488,10 @@ msgid "모델을 골라 주십시오."
 msgstr "모델을 골라 주십시오."
 
 #: app/entry/index.tsx
+msgid "모델을 바꾸지 못했습니다. 연결 상태를 확인한 뒤 다시 시도해 주십시오."
+msgstr "모델을 바꾸지 못했습니다. 연결 상태를 확인한 뒤 다시 시도해 주십시오."
+
+#: app/entry/index.tsx
 msgid "모델을 선택해 주십시오"
 msgstr "모델을 선택해 주십시오"
 
@@ -3080,6 +3084,10 @@ msgstr "새 대화"
 #: app/entry/navigation/sidebar.tsx
 msgid "새 대화 상대"
 msgstr "새 대화 상대"
+
+#: app/entry/index.tsx
+msgid "새 대화를 만들지 못했습니다. 잠시 뒤 다시 시도해 주십시오."
+msgstr "새 대화를 만들지 못했습니다. 잠시 뒤 다시 시도해 주십시오."
 
 #: app/entry/index.tsx
 msgid "새 대화를 시작해 주십시오"
@@ -4465,6 +4473,10 @@ msgstr "이 카드를 취소할까요?"
 msgid "이 페이지와 연결이 끊겼지만 서버에서는 계속 답하고 있습니다. 다시 연결하면 이어서 볼 수 있습니다."
 msgstr "이 페이지와 연결이 끊겼지만 서버에서는 계속 답하고 있습니다. 다시 연결하면 이어서 볼 수 있습니다."
 
+#: app/entry/navigation/sidebar.tsx
+msgid "이 프로젝트의 대화가 셸 명령과 MCP 도구처럼 승인을 받던 도구를 묻지 않고 바로 실행합니다. 믿을 수 있는 프로젝트에서만 써 주십시오."
+msgstr "이 프로젝트의 대화가 셸 명령과 MCP 도구처럼 승인을 받던 도구를 묻지 않고 바로 실행합니다. 믿을 수 있는 프로젝트에서만 써 주십시오."
+
 #: app/entry/navigation/decision-inbox.tsx
 msgid "이 프로젝트의 모든 대화와 Goal에서 사람의 판단을 기다리는 카드입니다. 여기서 답하거나 카드가 있는 보드로 이동합니다."
 msgstr "이 프로젝트의 모든 대화와 Goal에서 사람의 판단을 기다리는 카드입니다. 여기서 답하거나 카드가 있는 보드로 이동합니다."
@@ -4990,6 +5002,15 @@ msgstr "전체 경로 복사"
 msgid "전체 권한 (full)"
 msgstr "전체 권한 (full)"
 
+#. Dialog button that confirms switching the project to full permission
+#: app/entry/navigation/sidebar.tsx
+msgid "전체 권한으로 바꾸기"
+msgstr "전체 권한으로 바꾸기"
+
+#: app/entry/navigation/sidebar.tsx
+msgid "전체 권한으로 바꿀까요?"
+msgstr "전체 권한으로 바꿀까요?"
+
 #: app/entry/report/report-draft.tsx
 msgid "전체 내용: 첨부 context-agent-evidence.json (세션 #{session}, run {runs}/{runCount}개)"
 msgstr "전체 내용: 첨부 context-agent-evidence.json (세션 #{session}, run {runs}/{runCount}개)"
@@ -5451,6 +5472,7 @@ msgstr "충족"
 #. Button that closes the model form
 #. Button that closes the new account form
 #. Button that closes the new endpoint form
+#. Dialog button that cancels
 #. Dialog button that cancels
 #. Dialog button that cancels
 #. Dialog button that cancels
@@ -6001,6 +6023,14 @@ msgstr "프로젝트 칸반 보드"
 #: app/entry/chat/chat-composer.tsx
 msgid "프로젝트를 변경하지 않은 채 Plan을 만듭니다. 승인하면 보드에서 실행합니다"
 msgstr "프로젝트를 변경하지 않은 채 Plan을 만듭니다. 승인하면 보드에서 실행합니다"
+
+#: app/entry/index.tsx
+msgid "프로젝트를 보관에서 꺼내지 못했습니다. 잠시 뒤 다시 시도해 주십시오."
+msgstr "프로젝트를 보관에서 꺼내지 못했습니다. 잠시 뒤 다시 시도해 주십시오."
+
+#: app/entry/index.tsx
+msgid "프로젝트를 보관하지 못했습니다. 잠시 뒤 다시 시도해 주십시오."
+msgstr "프로젝트를 보관하지 못했습니다. 잠시 뒤 다시 시도해 주십시오."
 
 #: app/entry/chat/refusals.ts
 #: app/entry/settings/pages/kanban.tsx

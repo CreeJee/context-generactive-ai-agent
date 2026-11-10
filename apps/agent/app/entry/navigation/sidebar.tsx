@@ -112,10 +112,16 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 export function ModelSection({
   models,
   selection,
+  busy = false,
+  error = null,
   onSelect,
 }: {
   models: ReadonlyArray<ProviderModel>;
   selection: ModelSelection | null;
+  /** A model change is being saved. */
+  busy?: boolean;
+  /** Why the last model change failed. */
+  error?: string | null;
   onSelect: (model: string, reasoningEffort?: string) => void;
 }) {
   const { t } = useLingui();
@@ -130,6 +136,7 @@ export function ModelSection({
         <Select
           value={selection?.model ?? null}
           items={models.map((model) => ({ value: model.id, label: model.displayName }))}
+          disabled={busy}
           onValueChange={(value) => value && onSelect(value)}
         >
           <SelectTrigger className="w-full" size="sm" aria-label={modelTerm}>
@@ -154,6 +161,7 @@ export function ModelSection({
           <Select
             value={selection.reasoningEffort}
             items={efforts.map(({ id, label }) => ({ value: id, label }))}
+            disabled={busy}
             onValueChange={(value) => value && onSelect(current.id, value)}
           >
             <SelectTrigger
@@ -183,6 +191,7 @@ export function ModelSection({
           </p>
         </DataListItem>
       )}
+      {error && <p className="col-span-2 text-2xs text-destructive">{error}</p>}
     </Section>
   );
 }
@@ -212,6 +221,8 @@ export function ProjectSection({
   onCrossRecall,
   onHide,
   onRestore,
+  busy = false,
+  error = null,
 }: {
   projects: ReadonlyArray<Project>;
   /** Archived projects; choosing one releases it from the archive. */
@@ -228,10 +239,15 @@ export function ProjectSection({
   onHide: (projectId: string) => void;
   /** Releases an archived project back into the list. */
   onRestore: (projectId: string) => void;
+  /** A project change is being saved; its controls wait for it. */
+  busy?: boolean;
+  /** Why the last project change failed. */
+  error?: string | null;
 }) {
   const { t } = useLingui();
   const current = projects.find((project) => project.id === projectId);
   const [open, setOpen] = useAtom(projectSectionOpenAtom);
+  const [confirmingFull, setConfirmingFull] = useState(false);
   const sectionLabel = t({ message: "프로젝트", comment: "Sidebar section of project settings" });
   const modeItems = permissionModes.map((option) => ({
     value: option.value,
@@ -296,9 +312,12 @@ export function ProjectSection({
                   <Select
                     value={current.permissionMode}
                     items={modeItems}
+                    disabled={busy}
                     onValueChange={(value) => {
                       const mode = permissionModes.find((option) => option.value === value);
-                      if (isTruthy(mode)) onPermissionMode(mode.value);
+                      // Full permission runs every tool without asking, so it is confirmed first.
+                      if (mode?.value === "full") setConfirmingFull(true);
+                      else if (isTruthy(mode)) onPermissionMode(mode.value);
                     }}
                   >
                     <SelectTrigger
@@ -334,6 +353,7 @@ export function ProjectSection({
                     </span>
                     <Switch
                       checked={!current.crossRecallExcluded}
+                      disabled={busy}
                       onCheckedChange={(checked) => onCrossRecall(checked)}
                     />
                   </label>
@@ -351,6 +371,7 @@ export function ProjectSection({
                       message: "프로젝트 보관",
                       comment: "Tooltip: archiving takes the project out of the list",
                     })}
+                    disabled={busy}
                     onClick={() => onHide(current.id)}
                   >
                     <ArchiveIcon />{" "}
@@ -360,8 +381,44 @@ export function ProjectSection({
               </>
             )}
           </DataList>
+          {error && (
+            <Alert variant="destructive" className="mt-2">
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
         </CollapsibleContent>
       </Collapsible>
+      <AlertDialog open={confirmingFull} onOpenChange={setConfirmingFull}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              <Trans>전체 권한으로 바꿀까요?</Trans>
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              <Trans>
+                이 프로젝트의 대화가 셸 명령과 MCP 도구처럼 승인을 받던 도구를 묻지 않고 바로
+                실행합니다. 믿을 수 있는 프로젝트에서만 써 주십시오.
+              </Trans>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>
+              <Trans comment="Dialog button that cancels">취소</Trans>
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                setConfirmingFull(false);
+                onPermissionMode("full");
+              }}
+            >
+              <Trans comment="Dialog button that confirms switching the project to full permission">
+                전체 권한으로 바꾸기
+              </Trans>
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </section>
   );
 }

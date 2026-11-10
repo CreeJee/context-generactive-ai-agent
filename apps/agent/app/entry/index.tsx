@@ -70,6 +70,7 @@ import {
   archiveErrorMessage,
   projectErrorMessage,
   refusalOf,
+  type ApiError,
   type ModelSelection,
   type PendingLifecycle,
   type ProviderId,
@@ -79,6 +80,7 @@ import { AppEventsProvider, SessionEventsProvider } from "./events/providers";
 import { ThemeSelect } from "./shared/theme";
 import { pageHolder } from "./session/session-lease";
 import { openSettingsOverlay } from "./settings/open-settings";
+import { errorMessage } from "./settings/shared";
 import { ModelSection, ProjectSection, SessionSection } from "./navigation/sidebar";
 import { DecisionInbox } from "./navigation/decision-inbox";
 import { ProjectBoardButton } from "./navigation/project-board-button";
@@ -192,6 +194,13 @@ export function App() {
   const archived = sessionsQuery.data?.archived ?? [];
   const working = useWorkingSessions(projectId);
   const [archiveError, setArchiveError] = useState<string | null>(null);
+  const [projectError, setProjectError] = useState<string | null>(null);
+  const [modelError, setModelError] = useState<string | null>(null);
+  const projectBusy =
+    permissionMutation.isPending ||
+    crossRecallMutation.isPending ||
+    hideProjectMutation.isPending ||
+    restoreProjectMutation.isPending;
   const agentsQuery = useAgentsQuery(projectId);
   const skillsQuery = useSkillsQuery(projectId ?? "", projectId !== null);
   const slashAgents = isTruthy(agentsQuery.data) ? usableAgents(agentsQuery.data) : [];
@@ -283,7 +292,10 @@ export function App() {
 
   const selectProject = (id: string) =>
     void setLocation({ ...leaveProject, project: id }, { history: "push" });
-  useEffect(() => setArchiveError(null), [projectId]);
+  useEffect(() => {
+    setArchiveError(null);
+    setProjectError(null);
+  }, [projectId]);
 
   const refreshPendingLifecycle = (pending: PendingLifecycle) => {
     setArchiveError(
@@ -380,9 +392,35 @@ export function App() {
   const selectModel = (model: string, effort?: string) =>
     runUiEffect(
       Effect.gen(function* () {
+        setModelError(null);
         const selected = yield* uiPromise(() => modelMutation.mutateAsync({ model, effort }));
         setSelection(selected);
-      }),
+      }).pipe(
+        Effect.catchTag("UnknownError", () =>
+          Effect.sync(() =>
+            setModelError(t`모델을 바꾸지 못했습니다. 연결 상태를 확인한 뒤 다시 시도해 주십시오.`),
+          ),
+        ),
+      ),
+    );
+
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  /** Runs one project change from the sidebar; a refusal shows under the project controls. */
+  const changeProject = <A,>(input: {
+    readonly change: () => Promise<A>;
+    readonly failed: (refusal: ApiError | null) => string;
+    readonly done?: () => void;
+  }) =>
+    runUiEffect(
+      Effect.gen(function* () {
+        setProjectError(null);
+        yield* uiPromise(input.change);
+        input.done?.();
+      }).pipe(
+        Effect.catchTag("UnknownError", (failure) =>
+          Effect.sync(() => setProjectError(input.failed(refusalOf(failure.cause)))),
+        ),
+      ),
     );
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -415,8 +453,15 @@ export function App() {
       Effect.gen(function* () {
         if (!isTruthy(projectId)) return;
         const session = yield* uiPromise(() => createSessionMutation.mutateAsync(agent));
+        setArchiveError(null);
         void setLocation({ session: session.id }, { history: "push" });
-      }),
+      }).pipe(
+        Effect.catchTag("UnknownError", () =>
+          Effect.sync(() =>
+            setArchiveError(t`새 대화를 만들지 못했습니다. 잠시 뒤 다시 시도해 주십시오.`),
+          ),
+        ),
+      ),
     );
 
   // `/effort` changes the model the sidebar shows, as the sidebar's effort selector does.
@@ -575,6 +620,8 @@ export function App() {
                   <ModelSection
                     models={models}
                     selection={selection?.provider === provider ? selection : null}
+                    busy={modelMutation.isPending}
+                    error={modelError}
                     onSelect={(model, effort) => void selectModel(model, effort)}
                   />
                 ) : (
@@ -597,25 +644,38 @@ export function App() {
                 onSelect={selectProject}
                 onAdd={addProject}
                 onPickFolder={api.pickFolder}
-                onRestore={(restoredId) => {
-                  void restoreProjectMutation
-                    .mutateAsync(restoredId)
-                    .then(() => selectProject(restoredId));
-                }}
-                onPermissionMode={(mode) => {
-                  if (!isTruthy(projectId)) return;
-                  void permissionMutation.mutateAsync(mode);
-                }}
-                onCrossRecall={(allowed) => {
-                  if (!isTruthy(projectId)) return;
-                  void crossRecallMutation.mutateAsync(!allowed);
-                }}
-                onHide={(hiddenId) => {
-                  void hideProjectMutation.mutateAsync(hiddenId).then(() => {
-                    const left = projects.filter((project) => project.id !== hiddenId);
-                    void setLocation({ ...leaveProject, project: left.at(0)?.id ?? null });
-                  });
-                }}
+                busy={projectBusy}
+                error={projectError}
+                onRestore={(restoredId) =>
+                  void changeProject({
+                    change: () => restoreProjectMutation.mutateAsync(restoredId),
+                    failed: () =>
+                      t`프로젝트를 보관에서 꺼내지 못했습니다. 잠시 뒤 다시 시도해 주십시오.`,
+                    done: () => selectProject(restoredId),
+                  })
+                }
+                onPermissionMode={(mode) =>
+                  void changeProject({
+                    change: () => permissionMutation.mutateAsync(mode),
+                    failed: errorMessage,
+                  })
+                }
+                onCrossRecall={(allowed) =>
+                  void changeProject({
+                    change: () => crossRecallMutation.mutateAsync(!allowed),
+                    failed: errorMessage,
+                  })
+                }
+                onHide={(hiddenId) =>
+                  void changeProject({
+                    change: () => hideProjectMutation.mutateAsync(hiddenId),
+                    failed: () => t`프로젝트를 보관하지 못했습니다. 잠시 뒤 다시 시도해 주십시오.`,
+                    done: () => {
+                      const left = projects.filter((project) => project.id !== hiddenId);
+                      void setLocation({ ...leaveProject, project: left.at(0)?.id ?? null });
+                    },
+                  })
+                }
               />
             </div>
             <SidebarSeparator />
