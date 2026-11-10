@@ -72,6 +72,8 @@ function useRunStateBody(sessionId: string, holder: string, generating: boolean,
     cancel,
     controlWorkflow,
     refresh,
+    /** The run the server is answering with, whether or not this page reads it. */
+    running: state?.running ?? null,
     context: state?.context ?? null,
     workflow: state?.workflow ?? null,
     display: state?.display ?? null,

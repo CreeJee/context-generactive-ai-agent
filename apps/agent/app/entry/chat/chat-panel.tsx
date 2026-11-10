@@ -104,6 +104,7 @@ import {
 } from "./slash-commands";
 import { BackgroundTaskIndicator } from "./background-task-panel";
 import { runningBackgroundTasks } from "../session/background-tasks";
+import { useDelegatedWork } from "../session/delegated-work";
 import { chatPrompts } from "./prompts";
 
 /** Slash commands: what they can offer, and how the app runs the ones outside this panel. */
@@ -561,6 +562,13 @@ function ChatPanel({
   useEffect(() => setLiveContext(null), [run.context]);
   const context = liveContext ?? run.context;
   const queue = useMessageQueue(sessionId, holder, generating);
+  const delegated = useDelegatedWork(sessionId, generating).state;
+  // What Stop ends: a run, this page's or one it does not read, and work delegated from it.
+  const stoppable =
+    generating ||
+    run.running !== null ||
+    delegated.subagents.some((child) => child.status === "running") ||
+    runningBackgroundTasks(workTrace.tasks).length > 0;
   const [submitting, trackSubmission] = useLoading();
 
   // Messages the run took in, shown in the conversation until it is read again with them.
@@ -839,11 +847,16 @@ function ChatPanel({
           else yield* uiPromise(() => finishEdit("save", typed));
           return;
         }
-        if (!canSend(typed)) return;
         const written = renumberReferences(
           typed.trim(),
           ready.map((image) => image.number),
         );
+        const parsed =
+          ready.length === 0 ? parseSlash(written, slash.context) : SlashParse.not_command();
+        // `/cancel` stops the work going on, also while an approval waits for its answer.
+        const cancelling =
+          SlashParse.$is("command")(parsed) && SlashCommand.$is("cancel")(parsed.command);
+        if (!canSend(typed) && !(cancelling && !mutationBlocked)) return;
         const outsidePanel = (command: Parameters<SlashSupport["run"]>[0]) =>
           Effect.sync(() => {
             setDraft("");
@@ -908,18 +921,15 @@ function ChatPanel({
           report: outsidePanel,
         });
         // A slash command runs instead of being sent; `skill` and `recall` become a message.
-        const message = yield* SlashParse.$match(
-          ready.length === 0 ? parseSlash(written, slash.context) : SlashParse.not_command(),
-          {
-            not_command: () => Effect.succeedSome(written),
-            incomplete: ({ reason }) =>
-              Effect.sync(() => {
-                setNotice(problem(reason));
-                return Option.none<string>();
-              }),
-            command: ({ command }) => runCommand(command),
-          },
-        );
+        const message = yield* SlashParse.$match(parsed, {
+          not_command: () => Effect.succeedSome(written),
+          incomplete: ({ reason }) =>
+            Effect.sync(() => {
+              setNotice(problem(reason));
+              return Option.none<string>();
+            }),
+          command: ({ command }) => runCommand(command),
+        });
         if (Option.isNone(message)) return;
         const text = message.value;
         const attachmentIds = ready.map(attachmentOf);
@@ -1143,6 +1153,7 @@ function ChatPanel({
               imagesSupported={imagesSupported}
               mutationBlocked={mutationBlocked}
               generating={generating}
+              stoppable={stoppable}
               waitingForApproval={waitingForApproval}
               canSend={canSend}
               composerMode={composerMode}

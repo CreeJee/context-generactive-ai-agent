@@ -90,6 +90,7 @@ export function ChatComposer({
   imagesSupported,
   mutationBlocked,
   generating,
+  stoppable,
   waitingForApproval,
   canSend,
   composerMode,
@@ -120,6 +121,8 @@ export function ChatComposer({
   imagesSupported: boolean;
   mutationBlocked: boolean;
   generating: boolean;
+  /** Work goes on that Stop ends: this page's answer, a run it does not read, or delegated work. */
+  stoppable: boolean;
   waitingForApproval: boolean;
   canSend: boolean;
   composerMode: ComposerMode;
@@ -284,7 +287,7 @@ export function ChatComposer({
                 if (editingId !== null) onFinishEdit();
                 else if (draft.length > 0 || draftImages.images.length > 0 || imageIntent)
                   onClear();
-                else if (generating) onCancel();
+                else if (stoppable) onCancel();
               }
             }}
             placeholder={
@@ -395,7 +398,7 @@ export function ChatComposer({
             </ToggleGroup>
             <div className="ml-auto flex items-center gap-3">
               <ComposerShortcuts mode={composerMode} />
-              {generating && editingId === null && (
+              {stoppable && editingId === null && (
                 <Tooltip>
                   <TooltipTrigger
                     render={

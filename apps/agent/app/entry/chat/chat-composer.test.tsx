@@ -33,6 +33,7 @@ function renderPlanComposer() {
         imagesSupported={false}
         mutationBlocked={false}
         generating
+        stoppable
         waitingForApproval={false}
         canSend={false}
         composerMode={ComposerMode.generating()}
