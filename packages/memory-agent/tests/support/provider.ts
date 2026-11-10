@@ -147,6 +147,9 @@ export const defaultTestResponder = (invocation: ScriptedInvocation): ScriptedTu
             certainty: "clear",
             reason: "x",
           });
+        // One statement answered in a shape the interpreter cannot read.
+        if (statement.text.includes("[malformed-interpret]"))
+          return { id: statement.id, topics: "not a list", links };
         return { id: statement.id, topics, links };
       },
     );

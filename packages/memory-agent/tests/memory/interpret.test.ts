@@ -187,6 +187,22 @@ testAgent({ testProvider: {} })("llm-interpret", (it) => {
       expect(found.uninterpreted).toBe(1);
     }),
   );
+
+  it.effect("a statement answered in an unreadable shape fails alone, not its batch", () =>
+    Effect.gen(function* () {
+      yield* selectTestModel();
+      const context = yield* freshProject;
+      yield* context.say("user", "로그는 JSON으로 남긴다");
+      const malformed = yield* context.say("user", "로그 형식 이야기 [malformed-interpret]");
+      const fine = yield* context.say("user", "로그는 텍스트로 바꾸자 [corrects:JSON]");
+      yield* interpret;
+
+      // Retried in the run's later batches on its own, then left failed.
+      expect(yield* context.job(malformed.id)).toEqual({ status: "failed", attempts: 3 });
+      expect(yield* context.job(fine.id)).toEqual({ status: "done", attempts: 1 });
+      expect(yield* context.edges("corrects")).toHaveLength(1);
+    }),
+  );
 });
 
 // Selecting a model is global configuration, so the unselected agent is its own.

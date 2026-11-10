@@ -12,6 +12,7 @@ import { AuthConnectionState, type ModelSelection } from "../providers/contracts
 import { SqlClient, SqlSchema } from "effect/sql";
 import { Interpretations } from "./interpretations.ts";
 import { NodeRow, nodeOfRow, Nodes, type Node } from "./nodes.ts";
+import { JsonValue } from "../json.ts";
 import { meaningfulNodeFilter } from "./quality.ts";
 import { MemorySearch } from "./search.ts";
 
@@ -51,9 +52,12 @@ const Labelled = Schema.Struct({
   topics: Schema.Array(Schema.String).pipe(Schema.withDecodingDefaultTypeKey(Effect.succeed([]))),
   links: Schema.Array(Link).pipe(Schema.withDecodingDefaultTypeKey(Effect.succeed([]))),
 });
+// Each statement of the answer is read on its own: one the model got wrong does not cost the others.
 const decodeAnswer = Schema.decodeUnknownOption(
-  Schema.fromJsonString(Schema.Struct({ statements: Schema.Array(Labelled) })),
+  Schema.fromJsonString(Schema.Struct({ statements: Schema.Array(JsonValue) })),
 );
+const decodeStatementId = Schema.decodeUnknownOption(Schema.Struct({ id: Schema.String }));
+const decodeLabelled = Schema.decodeUnknownOption(Labelled);
 
 export class InterpretationFailed extends Schema.TaggedError<
   InterpretationFailed,
@@ -281,10 +285,16 @@ const make = Effect.gen(function* () {
         decodeAnswer(answer.text.match(/\{[\s\S]*\}/)?.[0] ?? ""),
         () => InterpretationFailed.make({ reason: "unreadable_answer" }),
       );
-      const answered = batch.flatMap((statement) => {
-        const result = labelled.statements.find((entry) => entry.id === statement.id);
-        return result === undefined ? [] : [{ statement, result }];
-      });
+      const entryOf = (statement: Node) =>
+        EffectArray.findFirst(labelled.statements, (entry) =>
+          Option.exists(decodeStatementId(entry), ({ id }) => id === statement.id),
+        );
+      const answered = batch.flatMap((statement) =>
+        Option.toArray(Option.flatMap(entryOf(statement), decodeLabelled)).map((result) => ({
+          statement,
+          result,
+        })),
+      );
 
       yield* Effect.andThen(
         Effect.forEach(
@@ -355,13 +365,18 @@ const make = Effect.gen(function* () {
           }),
           { discard: true },
         ),
-        // A statement the answer skipped is retried later, like any other failure.
+        // A statement the answer skipped, or answered in a shape it cannot read, is retried later,
+        // like any other failure.
         Effect.forEach(
-          batch.filter(
-            (statement) => !labelled.statements.some((entry) => entry.id === statement.id),
-          ),
+          batch.filter((statement) => !answered.some((entry) => entry.statement === statement)),
           (statement) =>
-            Effect.flatMap(nowIso, (now) => markFailed(statement.id, "missing_from_answer", now)),
+            Effect.flatMap(nowIso, (now) =>
+              markFailed(
+                statement.id,
+                Option.isSome(entryOf(statement)) ? "unreadable_answer" : "missing_from_answer",
+                now,
+              ),
+            ),
           { discard: true },
         ),
       ).pipe(sql.withTransaction);
