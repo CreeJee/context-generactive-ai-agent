@@ -23,6 +23,10 @@ import {
   diagnosisText,
   DiagnosisState,
 } from "../entry/report/report-diagnosis";
+import { reportCopy } from "../entry/report/copy";
+import { problemText } from "../entry/shared/copy-templates";
+
+const pageCopy = reportCopy.page;
 
 /** The evidence bundle on the page: collected on open when the report names a session. */
 type EvidenceState = Data.TaggedEnum<{
@@ -48,13 +52,13 @@ const reportSource = () => {
 };
 
 export function meta() {
-  return [{ title: "문제 제보 · Context Agent" }];
+  return [{ title: pageCopy.title }];
 }
 
 export default function ReportPage() {
   const [fields, setFields] = useState<ReportFields>({ symptom: "", expected: "", actual: "" });
   const [editedText, setEditedText] = useState<string | null>(null);
-  const [createdAt, setCreatedAt] = useState("작성 중");
+  const [createdAt, setCreatedAt] = useState(pageCopy.drafting);
   useEffect(
     () =>
       setCreatedAt(
@@ -71,7 +75,7 @@ export default function ReportPage() {
   );
   const [evidence, setEvidence] = useState<EvidenceState>(EvidenceState.none());
   const [evidenceRetry, setEvidenceRetry] = useState(0);
-  const [status, setStatus] = useState("세션 없이 열면 증상 설명만으로 제보합니다.");
+  const [status, setStatus] = useState(pageCopy.status.noSession);
   const [analysisSession, setAnalysisSession] = useState<{
     projectId: string;
     reportSessionId: string;
@@ -91,7 +95,7 @@ export default function ReportPage() {
           onSuccess: ({ reportSessionId }) => setAnalysisSession({ projectId, reportSessionId }),
           onFailure: () => {
             setSessionFailed(true);
-            setStatus("분석 세션을 열 수 없습니다. 증상 제보문은 계속 작성·저장할 수 있습니다.");
+            setStatus(problemText(pageCopy.sessionFailed));
           },
         }),
       ),
@@ -114,17 +118,17 @@ export default function ReportPage() {
     const source = reportSource();
     if (source === null) return;
     setEvidence(EvidenceState.loading());
-    setStatus("세션의 증거 묶음을 모으는 중입니다. 증상은 계속 작성할 수 있습니다.");
+    setStatus(pageCopy.status.collecting);
     const task = Effect.runFork(
       readReportEvidence(source).pipe(
         Effect.match({
           onSuccess: (collected) => {
             setEvidence(EvidenceState.collected({ bundle: collected }));
-            setStatus("증거 묶음을 모았습니다. 아래에서 보낼 내용을 확인하세요.");
+            setStatus(pageCopy.status.collected);
           },
           onFailure: () => {
             setEvidence(EvidenceState.failed());
-            setStatus("증거 묶음을 모으지 못했습니다. 증상만으로도 제보할 수 있습니다.");
+            setStatus(problemText(pageCopy.evidenceFailed));
           },
         }),
       ),
@@ -165,11 +169,7 @@ export default function ReportPage() {
   const shared = () => shareableText(text, draftEvidence(evidence));
   const copy = () =>
     copyReportText(shared(), (value) => navigator.clipboard.writeText(value)).then((copied) => {
-      setStatus(
-        copied
-          ? "제보문과 증거 묶음을 복사했습니다. 개발자의 Discord 채널에 직접 붙여넣으세요."
-          : "클립보드를 사용할 수 없습니다. 위 제보 문안에서 텍스트를 직접 선택해 복사하세요.",
-      );
+      setStatus(copied ? pageCopy.status.copied : problemText(pageCopy.clipboardFailed));
     });
 
   const download = () => {
@@ -187,22 +187,19 @@ export default function ReportPage() {
     <main className="mx-auto max-w-3xl space-y-6 px-4 py-8 text-foreground">
       <header className="space-y-2">
         <a href="/" className="text-sm text-primary underline">
-          ← 앱으로 돌아가기
+          {pageCopy.back}
         </a>
-        <h1 className="text-2xl font-semibold">문제 제보</h1>
-        <p className="text-sm text-muted-foreground">
-          채팅이나 실행이 멈춰도 여기서 증상을 기록할 수 있습니다. 이 화면은 제보를 자동으로
-          전송하지 않으며, 직접 누를 때만 개발자 Discord 웹훅으로 보냅니다.
-        </p>
+        <h1 className="text-2xl font-semibold">{pageCopy.heading}</h1>
+        <p className="text-sm text-muted-foreground">{pageCopy.intro}</p>
       </header>
       {analysisSession && (
         <p className="text-sm">
-          별도 분석 세션이 열렸습니다.{" "}
+          {pageCopy.sessionOpened}{" "}
           <a
             className="text-primary underline"
             href={`/?project=${encodeURIComponent(analysisSession.projectId)}&session=${encodeURIComponent(analysisSession.reportSessionId)}`}
           >
-            분석 세션 보기
+            {pageCopy.openSession}
           </a>
         </p>
       )}
@@ -212,30 +209,27 @@ export default function ReportPage() {
           className="text-sm text-primary underline"
           onClick={() => setSessionRetry((attempt) => attempt + 1)}
         >
-          분석 세션 다시 열기
+          {pageCopy.retrySession}
         </button>
       )}
       <ReportDraft fields={fields} onChange={setFields} text={text} onTextChange={setEditedText} />
       {editedText !== null && (
         <div className="space-y-1 text-sm">
-          <p>
-            문안을 직접 편집 중입니다. 위 증상·진단을 바꾸거나 증거 묶음이 도착해도 현재 문안에는
-            자동 반영되지 않습니다.
-          </p>
+          <p>{pageCopy.editing}</p>
           <button
             type="button"
             onClick={() => setEditedText(null)}
             className="text-primary underline"
           >
-            설명·진단·증거 묶음으로 문안 다시 생성 (직접 편집한 내용 삭제)
+            {pageCopy.regenerate}
           </button>
         </div>
       )}
-      <section className="space-y-2" aria-label="AI 진단">
-        <h2 className="text-sm font-medium">오류 진단과 제보 초안</h2>
+      <section className="space-y-2" aria-label={pageCopy.diagnosisSection}>
+        <h2 className="text-sm font-medium">{pageCopy.diagnosisHeading}</h2>
         <ReportDiagnosisReview state={diagnosis} onRequest={runDiagnosis} onChange={setDiagnosis} />
       </section>
-      <section className="space-y-3" aria-label="증거 수집">
+      <section className="space-y-3" aria-label={pageCopy.evidenceSection}>
         <p role="status" className="text-sm text-muted-foreground">
           {status}
         </p>
@@ -245,31 +239,28 @@ export default function ReportPage() {
             className="text-sm text-primary underline"
             onClick={() => setEvidenceRetry((attempt) => attempt + 1)}
           >
-            증거 묶음 다시 모으기
+            {pageCopy.retryEvidence}
           </button>
         )}
         {bundle && <ReportBundlePreview bundle={bundle} />}
       </section>
-      <section className="space-y-2" aria-label="복사·저장">
-        <p className="text-sm">
-          문안과 증거 묶음을 함께 복사하거나 텍스트 파일로 저장해 개발자의 Discord에 직접 게시할 수
-          있습니다. 웹훅 전송이 실패해도 이 방법은 항상 쓸 수 있습니다.
-        </p>
+      <section className="space-y-2" aria-label={pageCopy.shareSection}>
+        <p className="text-sm">{pageCopy.shareHint}</p>
         <div className="flex gap-2">
           <button
             type="button"
             onClick={() => void copy()}
             className="rounded-md border px-3 py-2 text-sm"
           >
-            제보문 복사
+            {pageCopy.copy}
           </button>
           <button type="button" onClick={download} className="rounded-md border px-3 py-2 text-sm">
-            텍스트 파일 저장
+            {pageCopy.download}
           </button>
         </div>
       </section>
-      <section className="space-y-2" aria-label="Discord 웹훅 전송">
-        <h2 className="text-sm font-medium">개발자 Discord로 보내기 (선택)</h2>
+      <section className="space-y-2" aria-label={pageCopy.deliverySection}>
+        <h2 className="text-sm font-medium">{pageCopy.deliveryHeading}</h2>
         <ReportDelivery text={text} evidence={bundle} />
       </section>
     </main>

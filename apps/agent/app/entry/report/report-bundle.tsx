@@ -14,26 +14,31 @@ import { Badge } from "~/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "~/components/ui/collapsible";
 import { koreanLocalTime } from "../shared/local-time";
 import { Array as Arr } from "effect";
+import { reportCopy } from "./copy";
 
-const sectionNames = [
-  ["integrations", "MCP·외부 에이전트"],
-  ["loops", "백그라운드 루프"],
-  ["boards", "칸반 보드"],
-  ["defects", "최근 결함"],
-  ["timeline", "세션 타임라인"],
-  ["unlinked", "run 없는 항목"],
+const copy = reportCopy.bundle;
+
+const bundleSections = [
+  "integrations",
+  "loops",
+  "boards",
+  "defects",
+  "timeline",
+  "unlinked",
 ] as const;
+export type BundleSection = (typeof bundleSections)[number];
 
 /** What the reader should know is missing from the bundle: failed sources and cut sections. */
 export function bundleGaps(bundle: ReportBundle): string[] {
-  return sectionNames.flatMap(([key, name]) => {
+  return bundleSections.flatMap((key) => {
     const part = bundle[key];
+    const name = copy.sections[key];
     switch (part.status) {
       case "failed":
-        return [`${name}: 수집 실패`];
+        return [copy.gapFailed(name)];
       case "empty":
       case "available":
-        return part.truncated ? [`${name}: 오래된 항목은 상한 때문에 빠졌음`] : [];
+        return part.truncated ? [copy.gapTruncated(name)] : [];
     }
   });
 }
@@ -87,8 +92,8 @@ function Fold({
 function Text({ value }: { value: BundleText }) {
   return (
     <pre className="max-h-48 overflow-auto rounded bg-muted/50 p-2 text-xs whitespace-pre-wrap break-all">
-      {value.text === "" ? "(비어 있음)" : value.text}
-      {value.cut && <span className="text-muted-foreground"> [상한에서 잘림]</span>}
+      {value.text === "" ? copy.emptyText : value.text}
+      {value.cut && <span className="text-muted-foreground"> {copy.textCut}</span>}
     </pre>
   );
 }
@@ -98,7 +103,7 @@ function Event({ event }: { event: BundleEvent }) {
     Message: (message) => (
       <div className="space-y-1">
         <p className="text-xs text-muted-foreground">
-          {message.role === "user" ? "사용자" : "모델"} · {koreanLocalTime(message.at)}
+          {message.role === "user" ? copy.user : copy.model} · {koreanLocalTime(message.at)}
         </p>
         <Text value={message.text} />
       </div>
@@ -107,14 +112,14 @@ function Event({ event }: { event: BundleEvent }) {
       <div className="space-y-1">
         <p className="flex flex-wrap items-center gap-2 text-xs">
           <span className="font-medium">
-            call-{call.seq} {call.name ?? "(이름 없음)"}
+            call-{call.seq} {call.name ?? copy.noName}
           </span>
           {call.result === null ? (
-            <Badge variant="outline">결과 없음</Badge>
+            <Badge variant="outline">{copy.noResult}</Badge>
           ) : call.result.ok === false ? (
-            <Badge variant="destructive">실패</Badge>
+            <Badge variant="destructive">{copy.failed}</Badge>
           ) : (
-            <Badge variant="secondary">완료</Badge>
+            <Badge variant="secondary">{copy.done}</Badge>
           )}
         </p>
         <Text value={call.input} />
@@ -123,15 +128,17 @@ function Event({ event }: { event: BundleEvent }) {
     ),
     Approval: (approval) => (
       <p className="text-xs">
-        승인 요청 {approval.tool ?? "(도구 미상)"}: {approval.status}
-        {approval.approved === null ? "" : approval.approved ? " · 승인" : " · 거부"} ·{" "}
-        {koreanLocalTime(approval.requestedAt)}
+        {copy.approval(approval.tool ?? copy.unknownTool, approval.status)}
+        {approval.approved === null
+          ? ""
+          : ` · ${approval.approved ? copy.approved : copy.rejected}`}{" "}
+        · {koreanLocalTime(approval.requestedAt)}
       </p>
     ),
     Trace: (trace) => (
       <p className="text-xs">
         Work Trace #{trace.ref}: {trace.status}
-        {trace.parentToolSeq === null ? "" : ` (call-${trace.parentToolSeq}에서 시작)`}
+        {trace.parentToolSeq === null ? "" : ` ${copy.traceFrom(trace.parentToolSeq)}`}
       </p>
     ),
   });
@@ -144,22 +151,22 @@ function Run({ run }: { run: BundleRun }) {
       title={`${runPlace(run)} · ${run.status} · ${koreanLocalTime(run.startedAt)}`}
       badge={
         <>
-          {failed && <Badge variant="destructive">실패 포함</Badge>}
-          <Badge variant="outline">{run.events.length}개</Badge>
+          {failed && <Badge variant="destructive">{copy.hasFailure}</Badge>}
+          <Badge variant="outline">{copy.eventCount(run.events.length)}</Badge>
         </>
       }
     >
       {run.error && (
         <div className="space-y-1">
           <p className="text-xs font-medium text-destructive">
-            run 오류 {run.error.code ?? "(코드 없음)"}
+            {copy.runError(run.error.code ?? copy.noCode)}
           </p>
           <Text value={run.error.detail} />
         </div>
       )}
       {run.failedSpans.length > 0 && (
         <div className="space-y-1">
-          <p className="text-xs font-medium text-destructive">실패한 span</p>
+          <p className="text-xs font-medium text-destructive">{copy.failedSpans}</p>
           <ul className="space-y-0.5 font-mono text-xs break-all">
             {run.failedSpans.map((span, index) => (
               <li key={index}>{spanLine(span)}</li>
@@ -169,18 +176,18 @@ function Run({ run }: { run: BundleRun }) {
       )}
       {run.spanTotals.length > 0 && (
         <div className="space-y-1">
-          <p className="text-xs font-medium">시간을 쓴 곳 (span 합계)</p>
+          <p className="text-xs font-medium">{copy.spanTotals}</p>
           <ul className="space-y-0.5 font-mono text-xs break-all">
             {run.spanTotals.map((total) => (
               <li key={total.path.join("\n")}>{spanTotalLine(total)}</li>
             ))}
           </ul>
           {run.spanTotalsCut && (
-            <p className="text-xs text-muted-foreground">짧게 걸린 span 경로는 빠졌어요.</p>
+            <p className="text-xs text-muted-foreground">{copy.spanTotalsCut}</p>
           )}
         </div>
       )}
-      {run.eventsCut && <p className="text-xs text-muted-foreground">앞부분 이벤트는 빠졌어요.</p>}
+      {run.eventsCut && <p className="text-xs text-muted-foreground">{copy.eventsCut}</p>}
       {run.events.map((event, index) => (
         <Event key={index} event={event} />
       ))}
@@ -201,72 +208,73 @@ export const ReportBundlePreview = memo(function ReportBundlePreview({
   const size = new TextEncoder().encode(JSON.stringify(bundle)).byteLength;
   const failingRuns = Arr.countBy(bundle.timeline.items, runHasFailure);
   return (
-    <section className="space-y-2" aria-label="보낼 증거 묶음">
-      <h2 className="text-sm font-medium">보낼 증거 묶음 (읽기 전용)</h2>
-      <p className="text-xs text-muted-foreground">
-        아래 내용 전체가 제보에 JSON 첨부 파일로 붙습니다. 비밀정보 탐지기로 가렸지만 놓친 값이 있을
-        수 있으니 보내기 전에 펼쳐서 확인하세요.
-      </p>
+    <section className="space-y-2" aria-label={copy.section}>
+      <h2 className="text-sm font-medium">{copy.heading}</h2>
+      <p className="text-xs text-muted-foreground">{copy.note}</p>
       <p className="text-xs" role="status">
-        세션 #{bundle.session.ref} · run {bundle.timeline.items.length}/{bundle.session.runCount}
-        개 · 실패 포함 run {failingRuns}개 · 잘린 원문 {cutTexts(bundle)}개 · 약{" "}
-        {Math.ceil(size / 1024).toLocaleString("ko-KR")}KB
+        {copy.summary({
+          session: bundle.session.ref,
+          runs: bundle.timeline.items.length,
+          runCount: bundle.session.runCount,
+          failingRuns,
+          cutTexts: cutTexts(bundle),
+          kilobytes: Math.ceil(size / 1024).toLocaleString("ko-KR"),
+        })}
       </p>
       {bundleGaps(bundle).map((gap) => (
         <p className="text-xs text-warning" key={gap}>
           {gap}
         </p>
       ))}
-      <Fold title="환경">
+      <Fold title={copy.environment}>
         <ul className="space-y-1 text-xs">
           <li>
-            버전 {environment.release} · {environment.platform} · {environment.runtime}
+            {copy.version} {environment.release} · {environment.platform} · {environment.runtime}
           </li>
           <li>
-            모델 {environment.provider ?? "(선택 없음)"} / {environment.model ?? "(선택 없음)"}
+            {copy.model} {environment.provider ?? copy.notSelected} /{" "}
+            {environment.model ?? copy.notSelected}
           </li>
-          <li>칸반 동시 실행 {environment.kanbanConcurrency ?? "기본값"}</li>
+          <li>
+            {copy.concurrency} {environment.kanbanConcurrency ?? copy.defaultValue}
+          </li>
         </ul>
       </Fold>
       <Fold
-        title="연동·루프·결함"
+        title={copy.integrations}
         badge={
           bundle.defects.items.length > 0 && (
-            <Badge variant="destructive">결함 {bundle.defects.items.length}</Badge>
+            <Badge variant="destructive">{copy.defectCount(bundle.defects.items.length)}</Badge>
           )
         }
       >
         <ul className="space-y-1 text-xs">
           {bundle.integrations.items.map((item) => (
             <li key={`${item.kind}/${item.scope}/${item.name}`}>
-              {item.kind === "mcp" ? "MCP" : "에이전트"} {item.name} ({item.scope}): {item.status}
+              {item.kind === "mcp" ? "MCP" : copy.agent} {item.name} ({item.scope}): {item.status}
               {item.code === null ? "" : ` · ${item.code}`}
             </li>
           ))}
           {bundle.loops.items.map((item) => (
-            <li key={item.loop}>
-              루프 {item.loop}: {item.health}
-            </li>
+            <li key={item.loop}>{copy.loop(item.loop, item.health)}</li>
           ))}
           {bundle.defects.items.map((defect) => (
             <li key={`${defect.tag}@${defect.location}`}>
-              결함 {defect.tag} @ {defect.location} ×{defect.count} ·{" "}
+              {copy.defect(defect.tag, defect.location, defect.count)} ·{" "}
               {koreanLocalTime(defect.lastAt)}
             </li>
           ))}
         </ul>
       </Fold>
       {bundle.boards.items.length > 0 && (
-        <Fold title={`칸반 보드 (${bundle.boards.items.length})`}>
+        <Fold title={copy.boards(bundle.boards.items.length)}>
           {bundle.boards.items.map((board) => (
             <div key={board.ref} className="space-y-1 text-xs">
-              <p className="font-medium">
-                보드 #{board.ref} · {board.status} · 루프 {board.health}
-              </p>
+              <p className="font-medium">{copy.board(board.ref, board.status, board.health)}</p>
               <ul className="space-y-0.5">
                 {board.cards.map((card) => (
                   <li key={card.card}>
-                    {card.card}: 실패 {card.failureStreak} · 재계획 {card.replans}
+                    {copy.card(card.card, card.failureStreak, card.replans)}
                     {card.reason === null ? "" : ` · ${card.reason}`}
                   </li>
                 ))}
@@ -275,14 +283,14 @@ export const ReportBundlePreview = memo(function ReportBundlePreview({
           ))}
         </Fold>
       )}
-      <Fold title={`세션 타임라인 (run ${bundle.timeline.items.length})`}>
-        {bundle.timeline.items.length === 0 && <p className="text-xs">기록된 run이 없어요.</p>}
+      <Fold title={copy.timeline(bundle.timeline.items.length)}>
+        {bundle.timeline.items.length === 0 && <p className="text-xs">{copy.noRuns}</p>}
         {bundle.timeline.items.toReversed().map((run) => (
           <Run key={run.ref} run={run} />
         ))}
       </Fold>
       {bundle.unlinked.items.length > 0 && (
-        <Fold title={`run 없는 항목 (${bundle.unlinked.items.length})`}>
+        <Fold title={copy.unlinked(bundle.unlinked.items.length)}>
           {bundle.unlinked.items.map((event, index) => (
             <Event key={index} event={event} />
           ))}

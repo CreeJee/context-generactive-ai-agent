@@ -10,6 +10,7 @@
 - `report-delivery`: 웹훅 전송 UI
 - `report-copy`: 클립보드 복사
 - `report-link`: 다른 화면에서 들어오는 링크
+- `copy`: 화면 문구와 제보 문안 문구 카탈로그(`reportCopy`, `tools/copy-check`가 검사)
 
 스키마와 타입(`ReportBundle`, `ReportDiagnosis`, `ReportDeliveryStatus` 등)은 `memory-agent/definitions`에서 가져온다.
 
@@ -24,10 +25,10 @@
 - `ReportBundlePreview` — memo된 React 컴포넌트다. 증거 묶음 전체(환경, 연동·루프·결함, 칸반 보드, 타임라인 run, run 없는 항목)를 읽기 전용 접이식 패널로 보여 준다.
 - `bundleGaps` / `cutTexts` — 묶음에서 수집에 실패했거나 상한으로 잘린 섹션의 문구 목록과, 잘린 원문 개수를 계산한다.
 - `DeliveryOutcome` — `Data.TaggedEnum`이다. idle, sending, delivered, duplicate, uncertain_duplicate, failed 상태로 이루어진 전송 진행 상태다.
-- `deliveryFailure` / `deliveryFailureText` / `deliveryOutcomeText` — 전송 오류를 HTTP 상태코드로 `ReportDeliveryFailure | "request_failed"`에 매핑하고, 실패 사유와 상태를 한국어 문구로 바꾼다.
+- `deliveryFailure` / `deliveryOutcomeText` — 전송 오류를 HTTP 상태코드로 `ReportDeliveryFailure | "request_failed"`에 매핑하고, 전송 상태를 `reportCopy.delivery`의 문구로 바꾼다.
 - `ReportDelivery` — React 컴포넌트다. 웹훅 설정 조회, Discord 전송, 중복일 때 다시 보내기, 결함 자동 전송 체크박스를 제공한다.
 - `DiagnosisState` / `DiagnosisText` / `diagnosisText` — 진단 수명주기(idle, running, ready{diagnosis, included}, failed)와, 그 상태를 최종 문안에 들어갈 형태(none, failed, included)로 바꾸는 변환이다.
-- `diagnosisFailure` / `diagnosisFailureText` — 진단 오류를 상태코드로 `ReportDiagnosisFailure | "request_failed"`에 매핑하고 한국어 문구로 바꾼다.
+- `diagnosisFailure` — 진단 오류를 상태코드로 `ReportDiagnosisFailure | "request_failed"`에 매핑한다. 사유 문구는 `reportCopy.diagnosis.failure`에 있다.
 - `ReportDiagnosisReview` — React 컴포넌트다. 진단 요청 버튼, 진행·실패 표시, 요약·관측·가설 편집과 항목 빼기, 문안 포함 여부 체크를 제공한다.
 - `ReportFields` / `DraftEvidence` — 사용자 설명 필드(symptom, expected, actual) 타입과, 증거 상태 TaggedEnum(none, failed, collected{bundle})이다.
 - `reportText` — 사용자 설명, AI 진단, 증거 묶음 요약을 합쳐 마크다운 제보 문안 문자열을 만든다.
@@ -41,7 +42,7 @@
 - 거절된 응답은 상태코드만 보관하고 body를 읽지 않는다(`ReportRequestFailed` 주석, delivery·diagnosis 매핑 주석). 서버 라우트가 사유마다 상태코드 하나를 배정한다는 전제를 따른다.
 - 상태코드에서 reason을 찾는 표는 계약(`memory-agent/app-api`의 `deliveryFailureStatus`·`diagnosisFailureStatus`)의 것을 그대로 쓴다. 페이지가 따로 표를 두지 않는다. 설정을 읽지 못한 전송 상태 조회는 500이라 `request_failed`다.
 - 매핑에 없는 상태코드와 transport·response 실패는 `request_failed`가 된다. `SchemaError`는 진단에서 `invalid_answer`, 전송에서 `request_failed`로 매핑된다.
-- `deliveryFailureText`와 `diagnosisFailureText`는 `satisfies Record<...Failure | "request_failed", string>`로 모든 사유를 빠짐없이 다뤄야 한다.
+- `reportCopy.delivery.failure`와 `reportCopy.diagnosis.failure`는 `satisfies Record<...Failure | "request_failed", string>`로 모든 사유를 빠짐없이 다뤄야 한다.
 - `request`는 `Effect.abortSignal`과 `Effect.scoped`로 fetch에 signal을 넘긴다. 따라서 fiber를 interrupt하면 HTTP 요청도 중단된다.
 - `ReportDelivery`의 상태 조회, 전송, 결함 토글은 `task` ref 하나를 공유한다. 새 작업을 시작하면 이전 fiber를 interrupt하고, 언마운트할 때도 interrupt한다.
 - '그래도 다시 보내기'(`resend=true`)는 결과가 `duplicate`나 `uncertain_duplicate`일 때만 노출된다. `sending` 동안에는 전송 버튼이 비활성화된다.

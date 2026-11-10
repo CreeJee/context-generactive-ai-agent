@@ -6,7 +6,9 @@ import type {
   ReportDeliveryStatus,
 } from "memory-agent/definitions";
 import { useEffect, useRef, useState } from "react";
+import { problemText } from "../shared/copy-templates";
 import { koreanLocalTime } from "../shared/local-time";
+import { reportCopy } from "./copy";
 import {
   readDeliveryStatus,
   sendReport,
@@ -38,30 +40,17 @@ export function deliveryFailure(
   });
 }
 
-export const deliveryFailureText = {
-  not_configured: "이 서버에 개발자 웹훅이 설정되지 않았어요",
-  invalid_webhook_url: "서버에 설정된 웹훅 주소가 Discord 웹훅 형식이 아니에요",
-  too_large: "제보문이나 증거 묶음이 너무 커요. 문안을 줄이거나 복사·저장으로 게시하세요",
-  in_progress: "같은 제보문을 보내는 중이에요",
-  rate_limited: "Discord가 잠시 요청을 막았어요. 잠시 후 다시 시도하세요",
-  webhook_rejected:
-    "Discord가 이 웹훅을 거부했어요(삭제·재발급됐을 수 있어요). 개발자에게 알려 주세요",
-  payload_rejected: "Discord가 메시지 형식을 거부했어요",
-  discord_unavailable: "Discord에 연결할 수 없어요",
-  uncertain: "전송 확인을 받지 못했어요. 채널에 이미 올라갔을 수 있어요",
-  request_failed: "로컬 서버 요청이 실패했어요",
-} satisfies Record<ReportDeliveryFailure | "request_failed", string>;
+const copy = reportCopy.delivery;
 
 export const deliveryOutcomeText: (outcome: DeliveryOutcome) => string | null =
   DeliveryOutcome.$match({
     idle: () => null,
-    sending: () => "Discord로 보내는 중입니다.",
-    delivered: ({ messageId }) => `개발자 Discord 채널로 보냈습니다 (메시지 ${messageId}).`,
-    duplicate: ({ deliveredAt }) => `이 문안은 ${koreanLocalTime(deliveredAt)}에 이미 보냈습니다.`,
+    sending: () => copy.outcome.sending,
+    delivered: ({ messageId }) => copy.outcome.delivered(messageId),
+    duplicate: ({ deliveredAt }) => copy.outcome.duplicate(koreanLocalTime(deliveredAt)),
     uncertain_duplicate: ({ attemptedAt }) =>
-      `이 문안의 이전 전송(${koreanLocalTime(attemptedAt)})은 확인되지 않았습니다. 채널을 확인한 뒤 필요하면 다시 보내세요.`,
-    failed: ({ reason }) =>
-      `보내지 못했습니다: ${deliveryFailureText[reason]}. 위의 복사·텍스트 파일 저장으로 직접 게시할 수 있습니다.`,
+      copy.outcome.uncertainDuplicate(koreanLocalTime(attemptedAt)),
+    failed: ({ reason }) => copy.outcome.failed(copy.failure[reason]),
   });
 
 /**
@@ -116,19 +105,15 @@ export function ReportDelivery({
   const message = deliveryOutcomeText(outcome);
   return (
     <div className="space-y-2 text-sm">
-      {config === null && <p className="text-muted-foreground">웹훅 설정을 확인하는 중입니다.</p>}
-      {config === "unavailable" && (
-        <p>웹훅 설정을 확인하지 못했습니다. 복사·저장으로 직접 게시하세요.</p>
-      )}
+      {config === null && <p className="text-muted-foreground">{copy.checking}</p>}
+      {config === "unavailable" && <p>{problemText(copy.unavailable)}</p>}
       {config !== null && config !== "unavailable" && !config.configured && (
-        <p>이 서버에는 개발자 Discord 웹훅이 설정되지 않았습니다. 복사·저장으로 직접 게시하세요.</p>
+        <p>{problemText(copy.notConfigured)}</p>
       )}
       {config !== null && config !== "unavailable" && config.configured && (
         <div className="space-y-2">
           <p className="text-muted-foreground">
-            개발자 웹훅 …{config.webhookIdSuffix}. 위 최종 문안이 메시지로,
-            {evidence === null ? " 증거 묶음 없이" : " 증거 묶음 전체가 JSON 첨부 파일로"}{" "}
-            전송됩니다.
+            {copy.configured(config.webhookIdSuffix ?? "", evidence !== null)}
           </p>
           <label className="flex items-center gap-2">
             <input
@@ -136,7 +121,7 @@ export function ReportDelivery({
               checked={config.defectReports}
               onChange={(event) => toggleDefectReports(event.currentTarget.checked)}
             />
-            앱에서 결함이 생기면 요약을 이 웹훅으로 자동 전송 (대화·프롬프트·자격증명은 보내지 않음)
+            {copy.defectReports}
           </label>
           <div className="flex flex-wrap gap-2">
             <button
@@ -145,7 +130,7 @@ export function ReportDelivery({
               onClick={() => send(false)}
               className="rounded-md border px-3 py-2 disabled:opacity-50"
             >
-              Discord로 보내기
+              {copy.send}
             </button>
             {(DeliveryOutcome.$is("duplicate")(outcome) ||
               DeliveryOutcome.$is("uncertain_duplicate")(outcome)) && (
@@ -154,7 +139,7 @@ export function ReportDelivery({
                 onClick={() => send(true)}
                 className="rounded-md border px-3 py-2"
               >
-                그래도 다시 보내기
+                {copy.resend}
               </button>
             )}
           </div>

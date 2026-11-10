@@ -5,6 +5,7 @@ import { ReportDeliveryCommand as DeliveryCommand } from "memory-agent/app-api";
 import { ReportDeliveryResult } from "memory-agent/definitions";
 import { describe, expect, vi } from "vite-plus/test";
 import "../../app.css";
+import { reportCopy } from "./copy";
 import { ReportDelivery } from "./report-delivery";
 
 const DeliveryCommandJson = Schema.fromJsonString(DeliveryCommand);
@@ -33,18 +34,18 @@ describe("report review and delivery", () => {
         render(<ReportDelivery text="# 제보 문안" evidence={null} />),
       );
 
-      yield* sdkCall(() => expect.element(screen.getByText(/개발자 웹훅 …5678/)).toBeVisible());
+      const copy = reportCopy.delivery;
+      yield* sdkCall(() =>
+        expect.element(screen.getByText(copy.configured("5678", false))).toBeVisible(),
+      );
 
-      yield* sdkCall(() => screen.getByRole("button", { name: "Discord로 보내기" }).click());
+      yield* sdkCall(() => screen.getByRole("button", { name: copy.send }).click());
       yield* sdkCall(() =>
-        expect.element(screen.getByText(/채널에 이미 올라갔을 수 있어요/)).toBeVisible(),
+        expect.element(screen.getByText(copy.outcome.failed(copy.failure.uncertain))).toBeVisible(),
       );
+      yield* sdkCall(() => screen.getByRole("button", { name: copy.send }).click());
       yield* sdkCall(() =>
-        expect.element(screen.getByText(/복사·텍스트 파일 저장으로 직접 게시/)).toBeVisible(),
-      );
-      yield* sdkCall(() => screen.getByRole("button", { name: "Discord로 보내기" }).click());
-      yield* sdkCall(() =>
-        expect.element(screen.getByRole("button", { name: "그래도 다시 보내기" })).toBeVisible(),
+        expect.element(screen.getByRole("button", { name: copy.resend })).toBeVisible(),
       );
       expect(yield* Schema.decodeEffect(DeliveryCommandJson)(bodies.at(-1) ?? "null")).toEqual(
         DeliveryCommand.cases.send.make({ text: "# 제보 문안", evidence: null, resend: false }),
@@ -71,16 +72,15 @@ describe("report review and delivery", () => {
           />,
         ),
       );
+      const copy = reportCopy.diagnosis;
       yield* sdkCall(() =>
-        expect
-          .element(screen.getByRole("group", { name: "관측 (증거 묶음에서 확인)" }))
-          .toBeVisible(),
+        expect.element(screen.getByRole("group", { name: copy.observations })).toBeVisible(),
       );
-      yield* sdkCall(() => expect.element(screen.getByText("근거: run-2")).toBeVisible());
+      yield* sdkCall(() => expect.element(screen.getByText(copy.evidence("run-2"))).toBeVisible());
       yield* sdkCall(() =>
         screen
-          .getByRole("group", { name: "가설 (검증되지 않음)" })
-          .getByRole("button", { name: "이 항목 빼기" })
+          .getByRole("group", { name: copy.hypotheses })
+          .getByRole("button", { name: copy.remove })
           .click(),
       );
       expect(states.at(-1)).toMatchObject({ diagnosis: { hypotheses: [] } });
