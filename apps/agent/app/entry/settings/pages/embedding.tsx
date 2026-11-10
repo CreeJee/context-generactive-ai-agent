@@ -25,18 +25,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "~/components/ui/select";
-import { Progress, ProgressLabel, ProgressValue } from "~/components/ui/progress";
 import { Spinner } from "~/components/ui/spinner";
 import { dayAndTime } from "~/lib/dates";
 import {
   EmbedderRuntime,
   EmbeddingCommand,
   type EmbeddingChoice,
-  type EmbeddingOverview,
   GpuState,
   refusalOf,
 } from "../../api";
 import { useEmbeddingQuery } from "../../queries/global";
+import { ModelDownloadList } from "../../shared/model-downloads";
 import { useEmbeddingMutation } from "../../queries/mutations/global";
 import { errorMessage, PageHeader, PageError, pageTitles } from "../shared";
 
@@ -77,34 +76,6 @@ function RunningBadge({ running }: { running: EmbedderRuntime }) {
         </Badge>
       ),
   });
-}
-
-type ModelDownload = EmbeddingOverview["downloads"][number];
-
-const downloadNames = {
-  embedding: msg({ message: "임베딩 모델", comment: "Local model being downloaded" }),
-  rerank: msg({ message: "검색 결과 정렬 모델", comment: "Local model being downloaded" }),
-} satisfies Record<ModelDownload["purpose"], MessageDescriptor>;
-
-const megabytes = (bytes: number) => `${Math.round(bytes / 1_000_000)}MB`;
-
-/** A local model's download as it goes. */
-function DownloadProgress({ download }: { download: ModelDownload }) {
-  const { t } = useLingui();
-  const model = t(downloadNames[download.purpose]);
-  return (
-    <Field>
-      <Progress value={Math.floor((download.loaded / download.total) * 100)}>
-        <ProgressLabel>
-          <Trans>{model} 내려받는 중</Trans>
-        </ProgressLabel>
-        <ProgressValue />
-      </Progress>
-      <FieldDescription>
-        {megabytes(download.loaded)} / {megabytes(download.total)}
-      </FieldDescription>
-    </Field>
-  );
 }
 
 /** What the running model means for the user, in words; nothing when the badge says it all. */
@@ -233,9 +204,7 @@ export function EmbeddingSettings() {
       </Field>
 
       {note && <FieldDescription>{note}</FieldDescription>}
-      {overview.downloads.map((download) => (
-        <DownloadProgress key={download.model} download={download} />
-      ))}
+      <ModelDownloadList />
       {restartNeeded && (
         <Alert>
           <AlertDescription>

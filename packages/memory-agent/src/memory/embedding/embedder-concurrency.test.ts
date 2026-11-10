@@ -32,7 +32,7 @@ const fixture = Effect.gen(function* () {
     });
   const model = yield* modelWorker(
     "/unused-test-model-cache",
-    { mode: "cpu", devices: ["cpu"] },
+    { mode: "cpu", devices: ["cpu"], purpose: "embedding" },
     connect,
   );
   return { sent, sessions: () => MutableRef.get(sessions), model };
@@ -97,7 +97,7 @@ it.effect("a request still loading the model stops when it is cancelled", () =>
     const loading = yield* Deferred.make<void>();
     const model = yield* modelWorker(
       "/unused-test-model-cache",
-      { mode: "cpu", devices: ["cpu"] },
+      { mode: "cpu", devices: ["cpu"], purpose: "embedding" },
       // A model load that never finishes, like a download that hangs.
       () => Deferred.succeed(loading, undefined).pipe(Effect.andThen(Effect.never)),
     );

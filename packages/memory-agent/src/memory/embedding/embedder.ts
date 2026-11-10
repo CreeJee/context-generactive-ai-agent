@@ -28,7 +28,12 @@ import { GlobalConfig, type Settings } from "../../config/global-config.ts";
 import { StorageRoot } from "../../config/storage-root.ts";
 import { runtimeWorker, runtimeWorkerOptions } from "../../runtime/resources.ts";
 import { type ChunkSpan, chunkPolicy } from "./chunks.ts";
-import { type EmbeddingDevice, EmbeddingMode, type EmbeddingOverview } from "./contracts.ts";
+import {
+  type DownloadPurpose,
+  type EmbeddingDevice,
+  EmbeddingMode,
+  type EmbeddingOverview,
+} from "./contracts.ts";
 import { type DownloadReport, ModelDownloads } from "./downloads.ts";
 import {
   EmbeddingRpcs,
@@ -115,11 +120,13 @@ function planBatchesBody(
 interface ModelSetup {
   readonly mode: EmbeddingMode;
   readonly devices: readonly EmbeddingDevice[];
+  /** What the page calls the model's download. */
+  readonly purpose: DownloadPurpose;
 }
 
 const modes = {
-  cpu: { mode: "cpu", devices: ["cpu"] },
-  gpu: { mode: "gpu", devices: ["webgpu", "cpu"] },
+  cpu: { mode: "cpu", devices: ["cpu"], purpose: "embedding" },
+  gpu: { mode: "gpu", devices: ["webgpu", "cpu"], purpose: "embedding" },
 } satisfies Record<EmbeddingMode, ModelSetup>;
 
 /** Changes whenever the vectors of the model's file for `mode` are not comparable with earlier ones. */
@@ -203,8 +210,8 @@ const rpcSession = (report: DownloadReport) => (data: EmbeddingWorkerData) =>
           Stream.runHead,
         ),
     ).pipe(
-      Effect.ensuring(report.done),
       Effect.flatMap(Effect.fromOption(() => lost("the model's load ended without a device"))),
+      Effect.onExit(report.ended),
     );
     const worker = yield* Deferred.await(spawned);
     return {
@@ -242,8 +249,8 @@ export const modelWorker = Effect.fnUntraced(function* (
     data: EmbeddingWorkerData,
   ) => Effect.Effect<ModelSession, EmbeddingWorkerFailed, Scope.Scope>,
 ) {
-  // The worker's download shows on the settings page when the app tracks downloads.
-  const open = connect ?? rpcSession(yield* ModelDownloads.report("embedding", localModel.id));
+  // The worker's download shows on the page when the app tracks downloads.
+  const open = connect ?? rpcSession(yield* ModelDownloads.report(setup.purpose, localModel.id));
   const data: EmbeddingWorkerData = {
     cacheDir,
     modelId: localModel.id,
@@ -355,6 +362,7 @@ export const checkGpu = (storageRoot: string) =>
       const model = yield* modelWorker(paths.join(storageRoot, "models"), {
         mode: "gpu",
         devices: ["webgpu"],
+        purpose: "gpu-check",
       });
       /** Why the GPU cannot be used, if it cannot. */
       const unavailable = yield* model.embed([memoryPrompts.warmUp], "query").pipe(
@@ -392,7 +400,8 @@ export class Embedder extends Context.Service<Embedder, EmbedderApi>()(
   ).pipe(Layer.provide(NodePath.layer));
   /** The file a mode runs, on the CPU, to compare files' quality and memory. */
   static readonly localFile = (mode: EmbeddingMode) =>
-    Layer.effect(Embedder, makeLocal({ mode, devices: ["cpu"] }, LocalPurpose.evaluation())).pipe(
-      Layer.provide(NodePath.layer),
-    );
+    Layer.effect(
+      Embedder,
+      makeLocal({ mode, devices: ["cpu"], purpose: "embedding" }, LocalPurpose.evaluation()),
+    ).pipe(Layer.provide(NodePath.layer));
 }

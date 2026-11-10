@@ -10,7 +10,11 @@ import {
 import { ImportOverview } from "../../imports/contracts.ts";
 import { ImprovementScan, ScanState } from "../../improve/contracts.ts";
 import { KagiStatus } from "../../kagi/contracts.ts";
-import { EmbeddingOverview } from "../../memory/embedding/contracts.ts";
+import {
+  DownloadPurpose,
+  EmbeddingOverview,
+  ModelDownload,
+} from "../../memory/embedding/contracts.ts";
 import { AgentRole, ImageFeatureStatus, ModelSelection } from "../../providers/contracts.ts";
 import { appRefusalFields, refusalWith, SameSite } from "../refusal.ts";
 
@@ -213,6 +217,15 @@ export class SettingsGroup extends HttpApiGroup.make("settings")
     HttpApiEndpoint.post("embeddingAction", "/api/settings/embedding", {
       payload: EmbeddingCommand,
       success: EmbeddingOverview,
+    }),
+    /** The local models being downloaded now, and the downloads that failed. */
+    HttpApiEndpoint.get("modelDownloads", "/api/settings/model-downloads", {
+      success: Schema.Array(ModelDownload),
+    }),
+    /** Downloads a model again after its download failed, in the background. */
+    HttpApiEndpoint.post("retryModelDownload", "/api/settings/model-downloads/retry", {
+      payload: Schema.Struct({ purpose: DownloadPurpose }),
+      success: Schema.Array(ModelDownload),
     }),
     HttpApiEndpoint.get("image", "/api/settings/image", { success: ImageSettings }),
     /** Updates an image-generation preference without restarting the app. */

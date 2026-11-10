@@ -24,6 +24,7 @@
 - `LoopHealthStatus` — 백그라운드 루프 상태 배지와, `Exhausted`/`Defected`일 때만 보이는 '다시 시작' 버튼 컴포넌트. `Exhausted`면 멈춘 이유 한 줄과 서버가 준 오류 이름을 접힌 `FailureDetails`로 보인다
 - `LoadFailed` / `RetryButton` — 읽지 못한 목록이나 상태를 빈 것처럼 보이지 않고 "…을 불러오지 못했습니다"와 '다시 시도' 버튼으로 보인다. 설정 페이지 경계(`QuerySection`), 사이드바 대화 목록, 계정 전환, 첫 화면 빈 상태가 함께 쓴다
 - `FailureDetails` — 실패의 외부 프로그램 원문(`detail`)을 접힌 `<pre>`로 보여 준다. `null`이면 렌더하지 않는다
+- `model-downloads.tsx` — 로컬 모델 다운로드 표시. `ModelDownloadList`는 다운로드마다 모델 이름, 진행 막대, `115MB / 575MB (20%) · 남은 시간 약 3분`을 보이고, 실패한 다운로드는 `LoadFailed`와 '다시 시도'(`POST /api/settings/model-downloads/retry`)로 보인다. 다운로드가 없으면 그리지 않는다. 사이드바 아래와 설정의 임베딩 페이지가 쓴다. `TurnWaitsForModel`은 답을 기다리는 턴의 "생각하는 중…" 아래에 임베딩 모델의 다운로드·적재만 보인다(턴의 기억 검색이 그 모델을 기다린다). `useModelDownloads`는 목록 훅이다. 목록은 global `downloads` 이벤트로 다시 읽는다
 - 문구 — 쓰이는 자리에 Lingui 메시지로 쓴다. `app/locales/ko.po`로 추출되고 `lint/wording`이 검사한다.
 - 하위 디렉터리 없음
 

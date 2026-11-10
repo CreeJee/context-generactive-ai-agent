@@ -1,7 +1,7 @@
 import type { ProgressInfo } from "@huggingface/transformers";
 import { Effect, Stream } from "effect";
 import { describe, expect, it } from "vite-plus/test";
-import { downloadProgress } from "./download-progress.ts";
+import { downloadProgress, type LoadReport } from "./download-progress.ts";
 
 describe("downloadProgress", () => {
   it("reports the files seen part-way, summed, once per whole percent", () =>
@@ -71,6 +71,58 @@ describe("downloadProgress", () => {
           { loaded: 1000, total: 2000 },
           { loaded: 2000, total: 2000 },
         ]);
+      }),
+    ));
+
+  const file = (name: string, loaded: number, total: number): LoadReport => ({
+    status: "progress",
+    name: "m",
+    progress: 0,
+    file: name,
+    loaded,
+    total,
+  });
+  const collected = (reports: readonly LoadReport[]) =>
+    Stream.runCollect(downloadProgress(Stream.fromIterable(reports)));
+
+  it("counts a planned download's whole size from its start", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        expect(
+          yield* collected([
+            {
+              status: "planned",
+              files: {
+                "tokenizer.json": { loaded: 0, total: 100 },
+                "onnx/model.onnx": { loaded: 0, total: 1000 },
+              },
+            },
+            // Cached: read in one report, and not part of the plan.
+            file("config.json", 5, 5),
+            file("tokenizer.json", 100, 100),
+            file("onnx/model.onnx", 500, 1000),
+            file("onnx/model.onnx", 1000, 1000),
+          ]),
+        ).toEqual([
+          { loaded: 0, total: 1100 },
+          { loaded: 100, total: 1100 },
+          { loaded: 600, total: 1100 },
+          { loaded: 1100, total: 1100 },
+        ]);
+      }),
+    ));
+
+  it("reports nothing when every file is cached, and unknown sizes when they could not be read", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        expect(
+          yield* collected([
+            { status: "planned", files: {} },
+            file("tokenizer.json", 100, 100),
+            file("onnx/model.onnx", 1000, 1000),
+          ]),
+        ).toEqual([]);
+        expect(yield* collected([{ status: "unplanned" }])).toEqual([{ loaded: 0, total: 0 }]);
       }),
     ));
 });

@@ -58,6 +58,8 @@ export interface RerankerApi {
     query: string,
     texts: readonly string[],
   ) => Effect.Effect<Option.Option<readonly number[]>>;
+  /** Loads the model again, in the background, when it is off after a failed load. */
+  readonly retry: Effect.Effect<void>;
 }
 
 /** The running worker as the host uses it. */
@@ -102,7 +104,7 @@ const rpcSession = (data: RerankWorkerData, report: DownloadReport) =>
             RerankLoadEvent.match({ downloading: report.progress, loaded: () => Effect.void }),
           ),
         ),
-    ).pipe(Effect.ensuring(report.done));
+    ).pipe(Effect.onExit(report.ended));
     const worker = yield* Deferred.await(spawned);
     return {
       score: (query, texts) => call(client.Score({ query, texts })),
@@ -130,7 +132,7 @@ const RerankState = Data.taggedEnum<RerankState>();
 /**
  * The reranker in a worker thread on WebGPU, loaded in the background when the layer is built: the
  * first start downloads the model, and a search never waits for that. A worker that fails to load
- * or is lost leaves the reranker off until the app restarts.
+ * or is lost leaves the reranker off until the app restarts or a retry loads it again.
  */
 const makeLocal = Effect.gen(function* () {
   const storage = yield* StorageRoot;
@@ -142,20 +144,22 @@ const makeLocal = Effect.gen(function* () {
       logFailure("reranker_unavailable", { stage: error.stage })(error),
       Ref.set(state, RerankState.unavailable()),
     );
-  yield* rpcSession(
-    {
-      cacheDir: paths.join(storage.path, "models"),
-      modelId: rerankModel.id,
-      modelFileName: rerankModel.file,
-      maxTokens: rerankModel.maxTokens,
-    },
-    yield* ModelDownloads.report("rerank", rerankModel.id),
-  ).pipe(
-    Effect.flatMap((session) => Ref.set(state, RerankState.ready({ session }))),
-    Effect.catch(unavailable),
-    Scope.provide(scope),
-    Effect.forkIn(scope),
+  const data: RerankWorkerData = {
+    cacheDir: paths.join(storage.path, "models"),
+    modelId: rerankModel.id,
+    modelFileName: rerankModel.file,
+    maxTokens: rerankModel.maxTokens,
+  };
+  const report = yield* ModelDownloads.report("rerank", rerankModel.id);
+  // Each load's worker lives in a scope of its own, closed when the load fails.
+  const load = Effect.flatMap(Scope.fork(scope), (attempt) =>
+    rpcSession(data, report).pipe(
+      Scope.provide(attempt),
+      Effect.flatMap((session) => Ref.set(state, RerankState.ready({ session }))),
+      Effect.catch((error) => Effect.andThen(Scope.close(attempt, Exit.void), unavailable(error))),
+    ),
   );
+  yield* Effect.forkIn(load, scope);
   // ONNX inference cannot be interrupted in place: a batch runs to its end, holding the worker.
   const oneRequest = yield* Semaphore.make(1);
   const run = (session: RerankSession, query: string, texts: readonly string[]) =>
@@ -193,6 +197,12 @@ const makeLocal = Effect.gen(function* () {
             texts.length === 0 ? Effect.succeedSome([]) : run(session, query, texts),
         }),
       ),
+    retry: Ref.modify(state, (current) =>
+      RerankState.$is("unavailable")(current) ? [true, RerankState.loading()] : [false, current],
+    ).pipe(
+      Effect.flatMap((again) => Effect.when(Effect.forkIn(load, scope), Effect.succeed(again))),
+      Effect.asVoid,
+    ),
   } satisfies RerankerApi;
 });
 
@@ -201,7 +211,10 @@ export class Reranker extends Context.Service<Reranker, RerankerApi>()(
   "memory-agent/memory/rerank/reranker",
 ) {
   /** No reranker: searches keep their fused order. */
-  static readonly none = Layer.succeed(Reranker, { score: () => Effect.succeedNone });
+  static readonly none = Layer.succeed(Reranker, {
+    score: () => Effect.succeedNone,
+    retry: Effect.void,
+  });
   /** The local reranker on WebGPU, whatever the embedder; evaluations use it over a copy. */
   static readonly localGpu = Layer.effect(Reranker, makeLocal).pipe(Layer.provide(NodePath.layer));
   /**

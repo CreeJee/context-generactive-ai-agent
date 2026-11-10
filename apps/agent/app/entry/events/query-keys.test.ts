@@ -67,6 +67,11 @@ describe("hierarchical app query keys", () => {
     expect(invalidationKeys({ scope: "global", topic: "embedding", revision: 1 })).toEqual([
       appQueryKeys.global.embedding,
     ]);
+    // A model's load ending also changes where the embedding model runs on the settings page.
+    expect(invalidationKeys({ scope: "global", topic: "downloads", revision: 1 })).toEqual([
+      appQueryKeys.global.downloads,
+      appQueryKeys.global.embedding,
+    ]);
     // The order of projects changed in another window: the kanban settings are read again.
     expect(invalidationKeys({ scope: "global", topic: "kanban", revision: 1 })).toEqual([
       appQueryKeys.global.kanban,

@@ -25,11 +25,28 @@ export type EmbeddingMode = typeof EmbeddingMode.Type;
 export const DownloadProgress = Schema.Struct({ loaded: Schema.Finite, total: Schema.Finite });
 export type DownloadProgress = typeof DownloadProgress.Type;
 
-/** A local model being downloaded: the embedding model or the reranker, by its Hugging Face id. */
-export const ModelDownload = Schema.Struct({
-  purpose: Schema.Literals(["embedding", "rerank"]),
-  model: Schema.String,
-  ...DownloadProgress.fields,
+/**
+ * What a downloaded model is for: the embedding model the app runs, the reranker, or the gpu mode's
+ * file that the settings page's WebGPU check loads. At most one download each.
+ */
+export const DownloadPurpose = Schema.Literals(["embedding", "rerank", "gpu-check"]);
+export type DownloadPurpose = typeof DownloadPurpose.Type;
+
+/**
+ * A local model's download, by its Hugging Face id.
+ * - `downloading`: bytes so far of the files it downloads. A `total` of 0 means their sizes are not
+ *   known yet; `loaded` equal to `total` means the files are in and the model is loading.
+ *   `secondsLeft` follows the download's average speed so far, once it has run for a few seconds.
+ * - `failed`: the download stopped before its end; it stays until the model is loaded again.
+ */
+export const ModelDownload = Schema.TaggedUnion({
+  downloading: {
+    purpose: DownloadPurpose,
+    model: Schema.String,
+    ...DownloadProgress.fields,
+    secondsLeft: Schema.NullOr(Schema.Finite),
+  },
+  failed: { purpose: DownloadPurpose, model: Schema.String },
 });
 export type ModelDownload = typeof ModelDownload.Type;
 
@@ -69,8 +86,6 @@ export const EmbeddingOverview = Schema.Struct({
   gpu: GpuState,
   /** Nodes the running embedder has not embedded yet. */
   unindexed: Schema.Finite,
-  /** Local models being downloaded now; empty once their files are cached. */
-  downloads: Schema.Array(ModelDownload),
   maintenance: MaintenanceOverview,
 });
 export type EmbeddingOverview = typeof EmbeddingOverview.Type;

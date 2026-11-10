@@ -10,6 +10,7 @@ export const appQueryKeys = {
     accountQuota: (provider: string) => ["app", "global", "account-quota", provider] as const,
     imports: ["app", "global", "imports"] as const,
     embedding: ["app", "global", "embedding"] as const,
+    downloads: ["app", "global", "downloads"] as const,
     imageSettings: ["app", "global", "image-settings"] as const,
     kagi: ["app", "global", "kagi"] as const,
     conversation: ["app", "global", "conversation"] as const,

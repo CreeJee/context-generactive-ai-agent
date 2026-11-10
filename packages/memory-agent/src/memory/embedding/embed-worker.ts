@@ -16,7 +16,7 @@ import { workerFailedSpansLayer } from "../../runtime/failed-spans.ts";
 import { nativeFailure, nativePromise, runNativeEffect } from "../../runtime/native-effect.ts";
 import { ignoreLogged } from "../../runtime/logged-failures.ts";
 import { ChunkingFailed, chunkText } from "./chunks.ts";
-import { downloadProgress } from "./download-progress.ts";
+import { downloadProgress, type LoadReport, plannedDownload } from "./download-progress.ts";
 import {
   EmbeddingRpcs,
   EmbeddingWorkerData,
@@ -29,12 +29,19 @@ import { memoryPrompts } from "../prompts.ts";
 // main thread every batch would hold up the requests the server is answering meanwhile.
 import { createRequire } from "node:module";
 import { workerData } from "node:worker_threads";
-import type { ProgressCallback, ProgressInfo, Tensor } from "@huggingface/transformers";
+import type { Tensor } from "@huggingface/transformers";
 
 // The CommonJS build, resolved next to this file: in the package in a checkout, in the runtime
 // folder in the executable.
-const { AutoConfig, AutoModel, AutoTokenizer, env }: typeof import("@huggingface/transformers") =
-  createRequire(import.meta.url)("@huggingface/transformers");
+const {
+  AutoConfig,
+  AutoModel,
+  AutoTokenizer,
+  ModelRegistry,
+  env,
+}: typeof import("@huggingface/transformers") = createRequire(import.meta.url)(
+  "@huggingface/transformers",
+);
 
 const failure = (stage: EmbeddingWorkerFailed["stage"]) => (cause: unknown) =>
   EmbeddingWorkerFailed.make({ stage, reason: String(nativeFailure(Cause.fail(cause)).cause) });
@@ -42,18 +49,33 @@ const failure = (stage: EmbeddingWorkerFailed["stage"]) => (cause: unknown) =>
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 const load = Effect.fn("EmbeddingWorker.load")(function* (
   setup: EmbeddingWorkerData,
-  progress_callback: ProgressCallback,
+  progress_callback: (report: LoadReport) => void,
 ) {
   env.cacheDir = setup.cacheDir;
   env.allowLocalModels = false;
-  const tokenizer = yield* nativePromise(() =>
-    AutoTokenizer.from_pretrained(setup.modelId, { progress_callback }),
-  );
-  const config = yield* nativePromise(() =>
-    AutoConfig.from_pretrained(setup.modelId, { progress_callback }),
+  // Read before the download is sized, which asks for it; a few kilobytes, not counted. Not read,
+  // it was not cached and could not be downloaded: the download could not be sized either.
+  const config = yield* nativePromise(() => AutoConfig.from_pretrained(setup.modelId)).pipe(
+    Effect.tapError(() => Effect.sync(() => progress_callback({ status: "unplanned" }))),
   );
   // A text-only load: without these configs the model loads no vision or audio encoder.
   if (setup.textOnly) Object.assign(config, { vision_config: null, audio_config: null });
+  yield* Effect.flatMap(
+    plannedDownload({
+      registry: ModelRegistry,
+      modelId: setup.modelId,
+      files: {
+        config,
+        dtype: "fp32",
+        model_file_name: setup.modelFileName,
+        device: setup.devices[0],
+      },
+    }),
+    (plan) => Effect.sync(() => progress_callback(plan)),
+  );
+  const tokenizer = yield* nativePromise(() =>
+    AutoTokenizer.from_pretrained(setup.modelId, { progress_callback }),
+  );
   /** The model on `device`, once it has run; one that loaded and then failed is disposed of. */
   const onDevice = (device: EmbeddingWorkerData["devices"][number]) =>
     nativePromise(() =>
@@ -143,8 +165,8 @@ const handlers = EmbeddingRpcs.toLayer(
     const scope = yield* Scope.Scope;
     // transformers.js reports a load's progress synchronously; each report goes on to the `Load`
     // stream as it is.
-    const reports = yield* PubSub.unbounded<ProgressInfo>();
-    const progress: ProgressCallback = (report) => PubSub.publishUnsafe(reports, report);
+    const reports = yield* PubSub.unbounded<LoadReport>();
+    const progress = (report: LoadReport) => PubSub.publishUnsafe(reports, report);
     const model = yield* Effect.cached(
       load(setup, progress).pipe(
         Effect.tap(({ model: loaded, device }) =>

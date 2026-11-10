@@ -493,7 +493,13 @@ export {
   EmbedderRuntime,
 } from "./memory/embedding/embedder.ts";
 export { EmbeddingRole, localModel } from "./memory/embedding/models.ts";
-export { EmbeddingDevice, EmbeddingMode, EmbeddingOverview } from "./memory/embedding/contracts.ts";
+export {
+  DownloadPurpose,
+  EmbeddingDevice,
+  EmbeddingMode,
+  EmbeddingOverview,
+  ModelDownload,
+} from "./memory/embedding/contracts.ts";
 export { Indexer } from "./memory/embedding/indexer.ts";
 export { EmbeddingSetup, GpuState } from "./memory/embedding/setup.ts";
 export { VectorIndex, VectorIndexError, type VectorHit } from "./memory/embedding/vector-index.ts";

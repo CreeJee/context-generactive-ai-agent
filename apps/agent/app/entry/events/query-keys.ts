@@ -8,6 +8,9 @@ export function invalidationKeys(event: AppChangedEvent): readonly AppQueryKey[]
     if (event.topic === "all") return [appQueryKeys.global.root];
     // Sign-in state decides which accounts exist and which one is used.
     if (event.topic === "auth") return [appQueryKeys.global.auth, appQueryKeys.global.accountsRoot];
+    // A load's end also changes where the embedding model runs.
+    if (event.topic === "downloads")
+      return [appQueryKeys.global.downloads, appQueryKeys.global.embedding];
     return [appQueryKeys.global[event.topic]];
   }
   if (event.scope === "project") {

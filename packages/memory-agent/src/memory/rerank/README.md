@@ -11,6 +11,7 @@
   - `Reranker.localGpu`: 임베더와 상관없이 WebGPU reranker를 띄운다. 평가가 사본 위에서 쓴다.
   - `Reranker.none`: 언제나 None을 돌려준다.
 - `RerankerApi.score(query, texts)` — text마다 relevance 점수 하나를 순서대로 돌려준다(클수록 관련). 아직 적재 중이거나, 이 기기에서 돌지 않거나, 실패했거나, 예산을 넘기면 None이다.
+- `RerankerApi.retry` — 적재에 실패해 꺼진 reranker를 백그라운드에서 다시 적재한다. 꺼져 있지 않으면 아무것도 하지 않는다. 다운로드가 실패했을 때 화면의 '다시 시도'가 `EmbeddingSetup.retryDownload`를 거쳐 부른다.
 - `rerankModel` — 모델 id, 파일(`model_fp16`), 쌍당 token(192).
 - `RerankRpcs` (`Load`, `Score`) / `RerankWorkerData` / `RerankWorkerFailed` — 호스트와 `rerank-worker.ts` 사이의 RpcGroup 프로토콜, 시작 데이터, `stage: load|run|lost` 실패 타입. `Load`는 stream이다. 모델 파일을 내려받는 동안 `RerankLoadEvent.downloading{loaded, total}`을 보내고, 적재가 끝나면 `loaded`를 보내고 끝난다. 호스트는 진행을 `ModelDownloads`(`../embedding/downloads.ts`)에 `rerank` 용도로 보고한다.
 - `rerank-worker.ts` — worker thread 진입점. `runtimeWorker("rerank-worker")`로 실행되고 `RpcServer.layer(RerankRpcs, { concurrency: 1 })`을 띄운다.
@@ -19,7 +20,7 @@
 ## Invariants
 
 - 모델은 layer를 만들 때 백그라운드로 적재한다. 처음 시작하면 모델(299 MB)을 `<storage>/models`에 내려받는다. 검색은 적재를 기다리지 않고, 그동안은 fused 순서를 쓴다.
-- WebGPU에서만 돈다. CPU에서는 한 검색의 batch가 몇 초씩 걸려 검색이 기다릴 수 있는 시간을 넘는다(docs/memory-search-measurements.md "rerank"). WebGPU에서 적재하지 못하면 앱을 다시 시작할 때까지 rerank를 끈다. worker를 잃어도(`lost`) 마찬가지다. 요청 하나의 실패(`run`)는 그 검색만 fused 순서로 둔다.
+- WebGPU에서만 돈다. CPU에서는 한 검색의 batch가 몇 초씩 걸려 검색이 기다릴 수 있는 시간을 넘는다(docs/memory-search-measurements.md "rerank"). WebGPU에서 적재하지 못하면 앱을 다시 시작하거나 `retry`할 때까지 rerank를 끈다. worker를 잃어도(`lost`) 마찬가지다. 적재 시도마다 worker를 자기 Scope에 두고, 실패한 시도의 Scope는 닫는다. 요청 하나의 실패(`run`)는 그 검색만 fused 순서로 둔다.
 - worker는 한 번에 요청 하나만 처리한다. ONNX 추론은 그 자리에서 중단할 수 없어서 batch는 끝까지 돈다. 검색은 점수를 2초(검색의 native read 예산)까지 기다린다. 넘기면 아직 worker를 기다리던 요청은 버리고, 돌던 batch는 혼자 끝난다.
 - 유휴 worker는 `unref` 상태이고, 작업 중에만 `ref`한다. 모델의 `dispose()`는 worker Scope finalizer에 등록된다.
 - worker는 `env.allowLocalModels = false`로 동작한다. 첫 실행(짧은 쌍 하나)이 성공해야 적재로 본다.

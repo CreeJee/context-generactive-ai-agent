@@ -164,6 +164,9 @@ export const SettingsApiHandlers = HttpApiBuilder.group(
           choose: ({ choice }) => embedding.choose(choice),
           check: () => embedding.recheck,
         }).pipe(Effect.orDie, Effect.provideService(Path.Path, path)),
+      modelDownloads: () => embedding.downloads,
+      retryModelDownload: ({ payload }) =>
+        embedding.retryDownload(payload.purpose).pipe(Effect.provideService(Path.Path, path)),
       image: () => Effect.orDie(imageSettings),
       imageAction: ({ payload }) =>
         Match.valueTags(payload, {

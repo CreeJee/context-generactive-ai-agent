@@ -228,6 +228,10 @@ msgstr "{cwd}: 대화 {transcripts}개, {reason}"
 msgid "{days}일"
 msgstr "{days}일"
 
+#: app/entry/shared/model-downloads.tsx
+msgid "{done} / {size} ({percent}%)"
+msgstr "{done} / {size} ({percent}%)"
+
 #. Slash-command choice for the reasoning effort the model uses now
 #: app/entry/index.tsx
 msgid "{effort} (현재)"
@@ -305,9 +309,13 @@ msgstr "{mode} 모드, 아직 불러오지 않음"
 msgid "{mode} 모드로 바꿨습니다."
 msgstr "{mode} 모드로 바꿨습니다."
 
-#: app/entry/settings/pages/embedding.tsx
+#: app/entry/shared/model-downloads.tsx
 msgid "{model} 내려받는 중"
 msgstr "{model} 내려받는 중"
+
+#: app/entry/shared/model-downloads.tsx
+msgid "{model}을 내려받지 못했습니다. 네트워크를 확인한 뒤 다시 시도해 주십시오."
+msgstr "{model}을 내려받지 못했습니다. 네트워크를 확인한 뒤 다시 시도해 주십시오."
 
 #: app/entry/navigation/compatible-accounts.tsx
 msgid "{modelId} 삭제"
@@ -815,6 +823,11 @@ msgstr "GPU (빠름)"
 msgid "GPU 모드, CPU에서 실행 중"
 msgstr "GPU 모드, CPU에서 실행 중"
 
+#. Local model being downloaded: the GPU file the settings page's WebGPU check loads
+#: app/entry/shared/model-downloads.tsx
+msgid "GPU 확인용 임베딩 모델"
+msgstr "GPU 확인용 임베딩 모델"
+
 #: app/entry/settings/pages/embedding.tsx
 msgid "GPU(WebGPU)에서 실행 중"
 msgstr "GPU(WebGPU)에서 실행 중"
@@ -1150,7 +1163,7 @@ msgid "거절하려면 편집에서 카드를 취소해 주십시오."
 msgstr "거절하려면 편집에서 카드를 취소해 주십시오."
 
 #. Local model being downloaded
-#: app/entry/settings/pages/embedding.tsx
+#: app/entry/shared/model-downloads.tsx
 msgid "검색 결과 정렬 모델"
 msgstr "검색 결과 정렬 모델"
 
@@ -1667,6 +1680,14 @@ msgstr "기억에서 찾아 답하기"
 msgid "기억을 뜻으로 찾을 때 쓰는 벡터를 어디서 만들지 정합니다. 사용자와 모델의 발언만 임베딩합니다. 도구 기록은 글자 검색으로 찾습니다."
 msgstr "기억을 뜻으로 찾을 때 쓰는 벡터를 어디서 만들지 정합니다. 사용자와 모델의 발언만 임베딩합니다. 도구 기록은 글자 검색으로 찾습니다."
 
+#: app/entry/shared/model-downloads.tsx
+msgid "기억을 찾는 임베딩 모델을 내려받는 중이라 답이 늦어질 수 있습니다: <0/>"
+msgstr "기억을 찾는 임베딩 모델을 내려받는 중이라 답이 늦어질 수 있습니다: <0/>"
+
+#: app/entry/shared/model-downloads.tsx
+msgid "기억을 찾는 임베딩 모델을 불러오는 중이라 답이 늦어질 수 있습니다."
+msgstr "기억을 찾는 임베딩 모델을 불러오는 중이라 답이 늦어질 수 있습니다."
+
 #. Settings page name: when a long conversation starts being summarized
 #: app/entry/settings/shared.tsx
 msgid "긴 대화"
@@ -1720,9 +1741,25 @@ msgstr "끼어들기"
 msgid "남긴 근거"
 msgstr "남긴 근거"
 
+#: app/entry/shared/model-downloads.tsx
+msgid "남은 시간 1분 이내"
+msgstr "남은 시간 1분 이내"
+
+#: app/entry/shared/model-downloads.tsx
+msgid "남은 시간 약 {hours}시간 {minutes}분"
+msgstr "남은 시간 약 {hours}시간 {minutes}분"
+
+#: app/entry/shared/model-downloads.tsx
+msgid "남은 시간 약 {minutes}분"
+msgstr "남은 시간 약 {minutes}분"
+
 #: app/entry/report/report-diagnosis.tsx
 msgid "내 모델로 오류 진단·초안 만들기"
 msgstr "내 모델로 오류 진단·초안 만들기"
+
+#: app/entry/shared/model-downloads.tsx
+msgid "내려받을 크기를 확인하는 중"
+msgstr "내려받을 크기를 확인하는 중"
 
 #: app/entry/chat/approval.tsx
 msgid "네트워크: 접속하지 않습니다."
@@ -1747,6 +1784,10 @@ msgstr "놓으면 수정 요청을 남길지 묻습니다."
 #: app/entry/chat/images.tsx
 msgid "누르면 본문에 넣습니다"
 msgstr "누르면 본문에 넣습니다"
+
+#: app/entry/shared/model-downloads.tsx
+msgid "다 내려받아 불러오는 중"
+msgstr "다 내려받아 불러오는 중"
 
 #. Decision answer: run this card after the other Goal merges
 #: app/entry/chat/decision-prompt.tsx
@@ -2493,6 +2534,10 @@ msgstr "모델 ID"
 #: app/entry/settings/pages/kanban.tsx
 msgid "모델 고르기"
 msgstr "모델 고르기"
+
+#: app/entry/shared/model-downloads.tsx
+msgid "모델 내려받기"
+msgstr "모델 내려받기"
 
 #. Label of the form that registers a model
 #: app/entry/navigation/compatible-accounts.tsx
@@ -4948,9 +4993,13 @@ msgid "임베딩 worker가 응답 없이 끝났습니다."
 msgstr "임베딩 worker가 응답 없이 끝났습니다."
 
 #. Local model being downloaded
-#: app/entry/settings/pages/embedding.tsx
+#: app/entry/shared/model-downloads.tsx
 msgid "임베딩 모델"
 msgstr "임베딩 모델"
+
+#: app/entry/shared/model-downloads.tsx
+msgid "임베딩 모델 내려받기"
+msgstr "임베딩 모델 내려받기"
 
 #: app/entry/settings/pages/improvements.tsx
 msgid "임베딩 모델로 비슷한 정정을 묶지 못했습니다. 임베딩 설정을 확인해 주십시오."

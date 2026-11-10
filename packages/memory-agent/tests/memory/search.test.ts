@@ -459,6 +459,7 @@ testAgent({ embedder: brokenEmbedder })("MemorySearch.find with a failing embedd
 const markerReranker = Layer.succeed(Reranker, {
   score: (_query, texts) =>
     Effect.succeedSome(texts.map((text) => (text.includes("정답") ? 1 : 0))),
+  retry: Effect.void,
 });
 
 testAgent({ reranker: markerReranker })("MemorySearch.find with a reranker", (it) => {

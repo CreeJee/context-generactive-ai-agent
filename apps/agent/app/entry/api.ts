@@ -58,11 +58,13 @@ import type {
   KanbanScheduleView,
   GoalMergeState,
   ProviderModel,
+  DownloadPurpose,
   EmbeddingChoice,
   EmbeddingOverview,
   ExternalAgentsOverview,
   ExternalAgentView,
   GpuState as GpuStateCase,
+  ModelDownload as ModelDownloadCase,
   ImportActivity as ImportActivityCase,
   ImportOverview,
   ImageFeatureStatus,
@@ -157,6 +159,9 @@ export type EmbedderRuntime = EmbeddingOverview["running"];
 export const EmbedderRuntime = Data.taggedEnum<EmbedderRuntime>();
 export type GpuState = GpuStateCase;
 export const GpuState = Data.taggedEnum<GpuState>();
+/** A local model's download, or one that failed, as the server tracks it. */
+export type ModelDownload = ModelDownloadCase;
+export const ModelDownload = Data.taggedEnum<ModelDownload>();
 export type AgentTrustState = AgentTrustStateCase;
 export const AgentTrustState = Data.taggedEnum<AgentTrustState>();
 export type AgentLinkState = AgentLinkStateCase;
@@ -203,6 +208,7 @@ export type {
   ProviderModel,
   CompactResult,
   ContextView,
+  DownloadPurpose,
   EmbeddingChoice,
   EmbeddingOverview,
   ExternalAgentsOverview,
@@ -850,6 +856,9 @@ export const api = {
         check: (payload) => client.settings.embeddingAction({ payload }),
       }),
     ),
+  modelDownloads: () => appCall((client) => client.settings.modelDownloads()),
+  retryModelDownload: (purpose: DownloadPurpose) =>
+    appCall((client) => client.settings.retryModelDownload({ payload: { purpose } })),
 
   improvements: () => appCall((client) => client.settings.improvements()),
   improvementScan: (command: ScanCommand) =>

@@ -22,6 +22,7 @@ export const GlobalEventTopic = Schema.Literals([
   "auth",
   "imports",
   "embedding",
+  "downloads",
   "projects",
   "kanban",
 ]);

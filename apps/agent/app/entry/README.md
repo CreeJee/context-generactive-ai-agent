@@ -24,7 +24,7 @@
 - `KanbanView` — `{active:false}` 또는 `{active:true} & KanbanBoardView`인 세션 Goal 칸반 상태다
 - `BoardEdit` / `BoardIntent` / `DecisionAnswer` — memory-agent 타입에서 `Data.taggedEnum`으로 만든 생성자·matcher다. 페이지가 서버로 보낼 때 쓴다
 - `KagiCommand` / `ImportCommand` / `EmbeddingCommand` — `/api/settings/kagi`, `/api/settings/imports`, `/api/settings/embedding` 명령 TaggedEnum이다. 비공개 `ImageSettingsCommand`, `ExternalAgentCommand`, `KanbanCommand`도 같은 방식으로 정의된다
-- `EmbedderRuntime` / `GpuState` / `AgentTrustState` / `AgentLinkState` / `McpServerState` / `AccountLoginState` / `ImportActivity` / `WorkflowExecutionState` — 서버 유니온 타입에 `Data.taggedEnum` 생성자·matcher를 붙여 다시 내보낸 것이다
+- `EmbedderRuntime` / `GpuState` / `ModelDownload` / `AgentTrustState` / `AgentLinkState` / `McpServerState` / `AccountLoginState` / `ImportActivity` / `WorkflowExecutionState` — 서버 유니온 타입에 `Data.taggedEnum` 생성자·matcher를 붙여 다시 내보낸 것이다
 - `GeneratedImageAsset` / `ImageSettingsView` / `CrossProviderMediaRunApproval` — 이미지 자산(+url) 타입(계약의 `GeneratedImage`), 이미지 설정 뷰(+crossProviderMediaConsent) 타입, 교차 공급자 실행 승인 `Schema.Struct`(계약에서 다시 내보낸다)다
 - `ConversationSettings` / `RecallSettings` / `KanbanSettings` / `KanbanSettingsCommand` / `ProjectKanbanSettings` / `ProjectKanbanCommand` — 대화·회상·칸반 설정 뷰와 명령 타입으로, `api.ts`에 정의되어 있다
 - `DeliveredEvent` / `ContextEvent` / `eventDecoders` — 스트림 이벤트(대기열 전달, context) `Schema.Struct`와 그 디코더 표다

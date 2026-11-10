@@ -1,10 +1,10 @@
-import { Context, Data, Effect, Layer, Option, Ref, Stream } from "effect";
+import { Array as Arr, Context, Data, Effect, Layer, Option, type Path, Ref, Stream } from "effect";
 import { logFailure } from "../../runtime/logged-failures.ts";
 import type { EmbeddingChoice } from "../../config/contracts.ts";
 import { GlobalConfig } from "../../config/global-config.ts";
 import { StorageRoot } from "../../config/storage-root.ts";
 import { AppEvents } from "../../events/app-events.ts";
-import type { EmbeddingOverview } from "./contracts.ts";
+import { type DownloadPurpose, type EmbeddingOverview, ModelDownload } from "./contracts.ts";
 import {
   checkGpu,
   currentGpuCheck,
@@ -15,6 +15,7 @@ import {
 import { MemoryGraphMaintenance } from "../maintenance.ts";
 import { ModelDownloads } from "./downloads.ts";
 import { Indexer } from "./indexer.ts";
+import { Reranker } from "../rerank/reranker.ts";
 import { memoryPrompts } from "../prompts.ts";
 
 /** Whether WebGPU was found to work here, or is being checked now (`contracts.ts`). */
@@ -29,6 +30,7 @@ const make = Effect.gen(function* () {
   const indexer = yield* Indexer;
   const maintenance = yield* MemoryGraphMaintenance;
   const downloads = yield* ModelDownloads;
+  const reranker = yield* Reranker;
   const layerScope = yield* Effect.scope;
   const checking = yield* Ref.make(false);
 
@@ -56,9 +58,9 @@ const make = Effect.gen(function* () {
     );
   });
 
-  // The settings page shows a model's download as it goes.
+  // The page shows a model's download as it goes.
   yield* Effect.forkIn(
-    Stream.runForEach(downloads.changes, () => events.publishGlobal("embedding")),
+    Stream.runForEach(downloads.changes, () => events.publishGlobal("downloads")),
     layerScope,
   );
 
@@ -78,22 +80,30 @@ const make = Effect.gen(function* () {
   // downloading it) took seconds there. A changed chunk identity must rebuild existing
   // conversations even when no new import or chat arrives. The service Scope owns the drain;
   // failed nodes remain pending for the next run.
-  yield* Effect.when(
-    Effect.forkIn(
-      embedder.embed([memoryPrompts.warmUp], "query").pipe(
-        Effect.catch(logFailure("memory_embedder_warm_up_failed")),
-        Effect.andThen(indexer.indexAll()),
-        Effect.catchTags({
-          EmbeddingError: logFailure("memory_backfill_embedding_failed"),
-          VectorIndexError: logFailure("memory_backfill_vector_failed"),
-          IndexingError: (error) =>
-            logFailure("memory_backfill_mapping_failed", { reason: error.reason })(error),
-        }),
-      ),
-      layerScope,
+  const loadAndBackfill = Effect.forkIn(
+    embedder.embed([memoryPrompts.warmUp], "query").pipe(
+      Effect.catch(logFailure("memory_embedder_warm_up_failed")),
+      Effect.andThen(indexer.indexAll()),
+      Effect.catchTags({
+        EmbeddingError: logFailure("memory_backfill_embedding_failed"),
+        VectorIndexError: logFailure("memory_backfill_vector_failed"),
+        IndexingError: (error) =>
+          logFailure("memory_backfill_mapping_failed", { reason: error.reason })(error),
+      }),
     ),
+    layerScope,
+  );
+  yield* Effect.when(
+    loadAndBackfill,
     Effect.succeed(EmbedderRuntime.$is("local")(embedder.runtime())),
   );
+
+  /** What loads each model again: its next load downloads what is still missing. */
+  const loadAgain = {
+    embedding: Effect.asVoid(loadAndBackfill),
+    rerank: reranker.retry,
+    "gpu-check": startCheck,
+  } satisfies Record<DownloadPurpose, Effect.Effect<void, never, Path.Path>>;
 
   const overview = Effect.gen(function* () {
     const settings = yield* config.read;
@@ -106,7 +116,6 @@ const make = Effect.gen(function* () {
       next: embeddingModeFor(settings),
       gpu,
       unindexed: yield* indexer.pending,
-      downloads: yield* downloads.current,
       maintenance: yield* maintenance.overview,
     } satisfies EmbeddingOverview;
   });
@@ -123,6 +132,21 @@ const make = Effect.gen(function* () {
       }),
     /** Checks WebGPU, first or again for a machine whose drivers or hardware changed. */
     recheck: Effect.andThen(startCheck, overview),
+    /** The local models being downloaded, and the downloads that failed. */
+    downloads: downloads.current,
+    /** Downloads a model again after its download failed; nothing for any other model. */
+    retryDownload: (purpose: DownloadPurpose) =>
+      Effect.flatMap(downloads.current, (current) =>
+        Effect.when(
+          loadAgain[purpose],
+          Effect.succeed(
+            Arr.some(
+              current,
+              (download) => download.purpose === purpose && ModelDownload.guards.failed(download),
+            ),
+          ),
+        ),
+      ).pipe(Effect.andThen(downloads.current)),
   };
 });
 

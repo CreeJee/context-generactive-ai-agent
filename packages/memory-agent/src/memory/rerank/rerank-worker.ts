@@ -4,20 +4,25 @@ import { RpcServer } from "effect/rpc";
 import { workerFailedSpansLayer } from "../../runtime/failed-spans.ts";
 import { nativeFailure, nativePromise, runNativeEffect } from "../../runtime/native-effect.ts";
 import { ignoreLogged } from "../../runtime/logged-failures.ts";
-import { downloadProgress } from "../embedding/download-progress.ts";
+import {
+  downloadProgress,
+  type LoadReport,
+  plannedDownload,
+} from "../embedding/download-progress.ts";
 import { RerankLoadEvent, RerankRpcs, RerankWorkerData, RerankWorkerFailed } from "./rerank-rpc.ts";
 import { memoryPrompts } from "../prompts.ts";
 // The reranker in a worker thread: onnxruntime-node runs a session synchronously, so on the main
 // thread a batch would hold up the requests the server is answering meanwhile.
 import { createRequire } from "node:module";
 import { workerData } from "node:worker_threads";
-import type { ProgressCallback, ProgressInfo, Tensor } from "@huggingface/transformers";
+import type { Tensor } from "@huggingface/transformers";
 
 // The CommonJS build, resolved next to this file: in the package in a checkout, in the runtime
 // folder in the executable.
 const {
   AutoModelForSequenceClassification,
   AutoTokenizer,
+  ModelRegistry,
   env,
 }: typeof import("@huggingface/transformers") = createRequire(import.meta.url)(
   "@huggingface/transformers",
@@ -57,10 +62,18 @@ const score = Effect.fn("RerankWorker.score")(function* (
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 const load = Effect.fn("RerankWorker.load")(function* (
   setup: RerankWorkerData,
-  progress_callback: ProgressCallback,
+  progress_callback: (report: LoadReport) => void,
 ) {
   env.cacheDir = setup.cacheDir;
   env.allowLocalModels = false;
+  yield* Effect.flatMap(
+    plannedDownload({
+      registry: ModelRegistry,
+      modelId: setup.modelId,
+      files: { dtype: "fp32", model_file_name: setup.modelFileName, device: "webgpu" },
+    }),
+    (plan) => Effect.sync(() => progress_callback(plan)),
+  );
   const tokenizer = yield* nativePromise(() =>
     AutoTokenizer.from_pretrained(setup.modelId, { progress_callback }),
   );
@@ -98,8 +111,8 @@ const handlers = RerankRpcs.toLayer(
     const scope = yield* Scope.Scope;
     // transformers.js reports a load's progress synchronously; each report goes on to the `Load`
     // stream as it is.
-    const reports = yield* PubSub.unbounded<ProgressInfo>();
-    const progress: ProgressCallback = (report) => PubSub.publishUnsafe(reports, report);
+    const reports = yield* PubSub.unbounded<LoadReport>();
+    const progress = (report: LoadReport) => PubSub.publishUnsafe(reports, report);
     const model = yield* Effect.cached(
       load(setup, progress).pipe(
         Effect.tap(({ model: loaded }) =>
