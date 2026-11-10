@@ -709,7 +709,8 @@ const make = Effect.gen(function* () {
       const goal = yield* kanbanOf(sessionId);
       if (Option.isNone(goal)) return Option.none<KanbanBoardView>();
       const { goalInstanceId, mode, hold } = goal.value;
-      const steps = (yield* workflows.get(sessionId)).plan?.steps ?? [];
+      const state = yield* workflows.get(sessionId);
+      const steps = state.plan?.steps ?? [];
       const ladderOf = yield* attempts.ladders(goalInstanceId);
       const cards = steps.map((card): KanbanCardView => {
         const ladder = ladderOf(card.id);
@@ -730,6 +731,7 @@ const make = Effect.gen(function* () {
         schedule: yield* scheduleView(goal.value),
         loop: yield* health.get(goalInstanceId),
         plannerStalled: plannerStalled(goal.value.planner),
+        goalPaused: state.goal?.status === "paused",
         unjudgedOutcomes: yield* orchestrator.unjudgedOutcomes(goalInstanceId),
       });
     }),

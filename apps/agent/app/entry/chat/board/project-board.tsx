@@ -35,7 +35,12 @@ import { LoadFailed } from "../../shared/load-failed";
 import { LoopHealthStatus } from "../../shared/loop-health";
 import { planStatusLabels } from "../workflow-panel";
 import { boardColumns, type BoardCardRef } from "./board-moves";
-import { BoardSurface, editErrorText, type SurfaceBoard } from "./board-surface";
+import {
+  BoardSurface,
+  editErrorText,
+  KanbanRunningBadge,
+  type SurfaceBoard,
+} from "./board-surface";
 import { BoardShortcuts } from "./kanban-board";
 import { Array as Arr } from "effect";
 
@@ -405,9 +410,7 @@ function ConversationRow({
       </span>
       <h3 className="min-w-0 max-w-full truncate text-sm font-medium">{title}</h3>
       {row.kanbanActive ? (
-        <Badge variant="secondary">
-          <Trans comment="Badge: the kanban loop is running this Plan">칸반 실행 중</Trans>
-        </Badge>
+        <KanbanRunningBadge paused={loop?.goalPaused === true} />
       ) : (
         <Badge variant="outline">{t(planStatusLabels[row.plan.status])}</Badge>
       )}

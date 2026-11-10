@@ -56,6 +56,7 @@ import {
   editErrorText,
   startErrorText,
   type ActiveKanban,
+  KanbanRunningBadge,
   type BoardPlan,
 } from "./board/board-surface";
 import { cardStatusLabels } from "./board/board-moves";
@@ -310,11 +311,7 @@ export function WorkflowBoard({
     <div className="flex min-w-0 flex-col gap-2">
       {(loop !== null || switchable || view.pendingChanges.length > 0) && (
         <div className="flex flex-wrap items-center gap-1.5 px-1.5">
-          {loop !== null && (
-            <Badge variant="secondary">
-              <Trans comment="Badge: the kanban loop is running this Plan">칸반 실행 중</Trans>
-            </Badge>
-          )}
+          {loop !== null && <KanbanRunningBadge paused={loop.goalPaused} />}
           {loop !== null && loop.plannerStalled && (
             <Badge
               variant="outline"
@@ -488,11 +485,7 @@ function BoardSheet({
           </SheetTitle>
           <SheetDescription>
             <span className="flex flex-wrap items-center gap-2">
-              {loop !== null && (
-                <Badge variant="secondary">
-                  <Trans comment="Badge: the kanban loop is running this Plan">칸반 실행 중</Trans>
-                </Badge>
-              )}
+              {loop !== null && <KanbanRunningBadge paused={loop.goalPaused} />}
               {loop !== null && loop.plannerStalled && (
                 <Badge
                   variant="outline"

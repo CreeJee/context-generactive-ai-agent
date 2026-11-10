@@ -774,6 +774,10 @@ msgstr "Goal을 붙잡고 다음 Plan을 쓰는 대화의 모델입니다. 칸�
 msgid "Goal을 시작한 브랜치가 여기 있으면 카드가 모두 끝나도 자동으로 merge하지 않습니다. 대신 PR을 만들지 직접 merge할지 묻습니다. 쉼표로 구분합니다. 비우면 모든 브랜치에 자동으로 merge합니다."
 msgstr "Goal을 시작한 브랜치가 여기 있으면 카드가 모두 끝나도 자동으로 merge하지 않습니다. 대신 PR을 만들지 직접 merge할지 묻습니다. 쉼표로 구분합니다. 비우면 모든 브랜치에 자동으로 merge합니다."
 
+#: app/entry/chat/board/board-surface.tsx
+msgid "Goal을 일시 중지해서 새 카드를 맡기지 않습니다. 이미 진행 중인 카드는 끝까지 실행합니다. 계속하면 다시 맡깁니다."
+msgstr "Goal을 일시 중지해서 새 카드를 맡기지 않습니다. 이미 진행 중인 카드는 끝까지 실행합니다. 계속하면 다시 맡깁니다."
+
 #: app/entry/chat/chat-panel.tsx
 msgid "Goal을 일시 중지했습니다."
 msgstr "Goal을 일시 중지했습니다."
@@ -4844,6 +4848,11 @@ msgstr "일반 대화로 바꿀까요?"
 msgid "일시 중지"
 msgstr "일시 중지"
 
+#. Badge: the user paused the Goal, so the kanban board starts no new card
+#: app/entry/chat/board/board-surface.tsx
+msgid "일시 중지 · 새 카드 멈춤"
+msgstr "일시 중지 · 새 카드 멈춤"
+
 #. Import button label while an import pass is reading
 #: app/entry/settings/pages/imports.tsx
 msgid "읽는 중"
@@ -5806,10 +5815,7 @@ msgid "칸반 실행"
 msgstr "칸반 실행"
 
 #. Badge: the kanban loop is running this Plan
-#. Badge: the kanban loop is running this Plan
-#. Badge: the kanban loop is running this Plan
-#: app/entry/chat/board-panel.tsx
-#: app/entry/chat/board/project-board.tsx
+#: app/entry/chat/board/board-surface.tsx
 msgid "칸반 실행 중"
 msgstr "칸반 실행 중"
 

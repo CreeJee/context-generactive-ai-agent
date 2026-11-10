@@ -3,6 +3,7 @@ import { Trans } from "@lingui/react/macro";
 import { useEffect, useState } from "react";
 import { Effect, Fiber } from "effect";
 import { Alert, AlertDescription } from "../../../components/ui/alert";
+import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import {
   Dialog,
@@ -43,6 +44,24 @@ import { holdReasonText } from "./hold-reason";
 import { KanbanBoard } from "./kanban-board";
 
 export type ActiveKanban = Extract<KanbanView, { readonly active: true }>;
+
+/** Whether the board's loop runs this Plan, or holds new cards while the user paused the Goal. */
+export function KanbanRunningBadge({ paused }: { readonly paused: boolean }) {
+  return paused ? (
+    <Badge
+      variant="outline"
+      title={t`Goal을 일시 중지해서 새 카드를 맡기지 않습니다. 이미 진행 중인 카드는 끝까지 실행합니다. 계속하면 다시 맡깁니다.`}
+    >
+      <Trans comment="Badge: the user paused the Goal, so the kanban board starts no new card">
+        일시 중지 · 새 카드 멈춤
+      </Trans>
+    </Badge>
+  ) : (
+    <Badge variant="secondary">
+      <Trans comment="Badge: the kanban loop is running this Plan">칸반 실행 중</Trans>
+    </Badge>
+  );
+}
 export type BoardPlan = NonNullable<BoardView["plan"]>;
 
 /** One Plan on the surface: a conversation's board with its loop and its waiting decisions. */

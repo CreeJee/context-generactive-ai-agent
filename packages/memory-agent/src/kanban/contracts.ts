@@ -169,6 +169,8 @@ export const KanbanBoardView = Schema.Struct({
    * was met. A user turn in the conversation wakes it again.
    */
   plannerStalled: Schema.Boolean,
+  /** The user paused the Goal: the board starts no new card; cards already running finish. */
+  goalPaused: Schema.Boolean,
   /** Outcomes whose last check ended without a verdict, and why; they wait for a new check. */
   unjudgedOutcomes: Schema.Array(
     Schema.Struct({ outcomeId: Schema.String, failure: VerdictFailure }),
