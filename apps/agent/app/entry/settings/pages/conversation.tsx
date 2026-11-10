@@ -16,7 +16,10 @@ const maximumPercent = 50;
 
 const validPercent = (text: string) => {
   const value = Number(text);
-  return Number.isInteger(value) && value >= 0 && value <= maximumPercent ? value : null;
+  // `Number("")` is 0: a cleared field must not save as "summarize from the start".
+  return text.trim() !== "" && Number.isInteger(value) && value >= 0 && value <= maximumPercent
+    ? value
+    : null;
 };
 
 /** When a long conversation starts being sent as summaries of its earlier turns. */
