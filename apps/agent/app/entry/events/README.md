@@ -13,7 +13,7 @@
 - `QueryKey` — `readonly unknown[]` 쿼리 키 타입이다.
 - `invalidationKeys(event)` — `AppChangedEvent`를 무효화할 `AppQueryKey` 목록으로 매핑한다.
 - `appQueryKeys` / `AppQueryKey` — `../queries/keys`에서 재수출한 쿼리 키 팩토리와 타입이다.
-- `AppEventsProvider` — `/api/events` 스트림 하나를 구독하는 React Provider이다. 스트림은 global·project·session 무효화를 모두 싣는다. `EventConnectionContext`로 연결 상태를 제공한다.
+- `AppEventsProvider` — `/api/events` 스트림 하나를 구독하는 React Provider이다. 스트림은 global·project·session 무효화를 모두 싣는다. `EventConnectionContext`로 연결 상태를 제공한다. 연결이 끊겨 다시 연결하는 동안(`reconnecting`)에는 화면 위에 다시 연결하는 중이라는 띠를 띄운다. 서버 재시작 띠가 떠 있으면 그 띠에 맡긴다. 다시 연결되면 `ready`가 놓친 변경을 무효화한다.
 - `SessionEventsProvider` — `projectId`/`sessionId`를 `SessionEventScopeContext`로 제공하는 Provider이다.
 - `EventConnectionContext` / `useEventConnection()` — 연결 상태 Context와 hook이다. 기본값은 `"connecting"`이다.
 - `SessionEventScopeContext` / `useSessionEventScope()` — 세션 스코프 Context와 hook이다. 기본값은 `{ projectId: null, sessionId: null }`이다.

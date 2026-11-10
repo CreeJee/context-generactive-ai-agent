@@ -3095,6 +3095,10 @@ msgstr "서버에서 쓰는 정확한 ID를 입력해 주십시오."
 msgid "서버에서 아직 멈추지 않았습니다. 멈추면 여기에 표시됩니다."
 msgstr "서버에서 아직 멈추지 않았습니다. 멈추면 여기에 표시됩니다."
 
+#: app/entry/events/providers.tsx
+msgid "서버와 연결이 끊겨 다시 연결하는 중입니다. 그동안 화면이 최신 상태가 아닐 수 있습니다."
+msgstr "서버와 연결이 끊겨 다시 연결하는 중입니다. 그동안 화면이 최신 상태가 아닐 수 있습니다."
+
 #. Label of the models the server listed, offered as choices
 #: app/entry/navigation/compatible-accounts.tsx
 msgid "서버의 모델"
