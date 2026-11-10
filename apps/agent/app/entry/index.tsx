@@ -100,6 +100,7 @@ import { WorkTracePanel } from "./chat/work-trace-panel";
 import { BtwPanel } from "./chat/btw-panel";
 import { ReportLink, reportHref } from "./report/report-link";
 import { RetryButton } from "./shared/load-failed";
+import { ModelDownloadList } from "./shared/model-downloads";
 import { effortChoices, providerLabels } from "./navigation/providers";
 
 const locationParsers = {
@@ -785,6 +786,7 @@ export function App() {
             )}
             <SidebarSeparator />
             <SidebarFooter>
+              <ModelDownloadList className="px-2 pb-2" />
               <AccountSwitcher
                 activeProvider={selection?.provider ?? provider}
                 busy={switchMutation.isPending}

@@ -77,6 +77,7 @@ import { sessionDrafts } from "../session/session-drafts";
 import { useSessionLease, type PageLease } from "../session/session-lease";
 import { useWorkTrace } from "../session/work-trace";
 import { useBackendRestartRequired } from "../shared/use-backend-restart";
+import { TurnWaitsForModel } from "../shared/model-downloads";
 import { useImageGeneration } from "../media/use-image-generation";
 import { useRunState } from "../session/use-run-state";
 import { useProjectScope } from "../events/context";
@@ -1074,7 +1075,10 @@ function ChatPanel({
               <Spinner />
             </MarkerIcon>
             <MarkerContent>
-              <Trans>생각하는 중…</Trans>
+              <span className="flex flex-col gap-1">
+                <Trans>생각하는 중…</Trans>
+                <TurnWaitsForModel />
+              </span>
             </MarkerContent>
           </Marker>
         )}

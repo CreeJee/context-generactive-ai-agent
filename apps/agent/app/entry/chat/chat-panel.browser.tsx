@@ -10,6 +10,7 @@ import { expect, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 import "../../app.css";
 import type { SessionRunState } from "memory-agent/definitions";
+import type { ModelDownload } from "../api";
 import { SessionEventScopeContext } from "../events/context";
 import { allowedWorkflowActions, workflowFixture } from "../session/workflow-test-fixtures";
 import { SessionView, type SlashSupport } from "./chat-panel";
@@ -116,8 +117,17 @@ const runningBoard: typeof draftBoard = {
   ],
 };
 
-/** What the server answers for the session; a test may swap it before opening the session. */
-const served = { run: runState, board: draftBoard };
+/**
+ * What the server answers for the session and the model downloads; a test may swap it before
+ * opening the session. `answering` keeps a sent turn's answer from starting.
+ */
+interface Served {
+  run: SessionRunState;
+  board: typeof draftBoard;
+  downloads: readonly ModelDownload[];
+  answering: boolean;
+}
+const served: Served = { run: runState, board: draftBoard, downloads: [], answering: true };
 
 /** The changes the page sent: path and body. */
 const sent: string[] = [];
@@ -138,6 +148,13 @@ const server = (input: RequestInfo | URL, init?: RequestInit): Promise<Response>
   if (pathname === "/api/sessions/s1/kanban")
     return Promise.resolve(Response.json({ active: false }));
   if (pathname === "/api/sessions/s1/decisions") return Promise.resolve(Response.json([]));
+  if (pathname === "/api/settings/model-downloads")
+    return Promise.resolve(Response.json(served.downloads));
+  // The answer has not begun: the stream stays open with nothing in it.
+  if (pathname === "/api/sessions/s1/runs" && !served.answering)
+    return Promise.resolve(
+      new Response(new ReadableStream(), { headers: { "content-type": "text/event-stream" } }),
+    );
   if (pathname === "/api/sessions/s1/queue" && request.method === "GET")
     return Promise.resolve(Response.json({ items: [queued], nextDelivery: { _tag: "empty" } }));
   if (request.method === "POST")
@@ -202,6 +219,39 @@ it.live("typing renders only the input box, and Enter sends what was typed", () 
       expect.poll(() => sent.some((line) => line.startsWith("/api/sessions/s1/runs "))).toBe(true),
     );
     expect(sent.find((line) => line.startsWith("/api/sessions/s1/runs "))).toContain("새 질문");
+    yield* sdkCall(() => screen.unmount());
+    vi.unstubAllGlobals();
+  }),
+);
+
+it.live("a sent turn waiting on the embedding model's download says how far it is", () =>
+  Effect.gen(function* () {
+    served.downloads = [
+      {
+        _tag: "downloading",
+        purpose: "embedding",
+        model: "onnx-community/embeddinggemma-2-ONNX",
+        loaded: 115_000_000,
+        total: 575_000_000,
+        secondsLeft: 150,
+      },
+    ];
+    served.answering = false;
+    const { screen, input } = yield* openSession;
+    yield* sdkCall(() => userEvent.type(input, "새 질문"));
+    yield* sdkCall(() => userEvent.keyboard("{Enter}"));
+    const waiting = screen.getByRole("status").filter({ hasText: "생각하는 중…" });
+    yield* sdkCall(() =>
+      expect
+        .element(
+          waiting.getByText(
+            "기억을 찾는 임베딩 모델을 내려받는 중이라 답이 늦어질 수 있습니다: 115MB / 575MB (20%) · 남은 시간 약 3분",
+          ),
+        )
+        .toBeVisible(),
+    );
+    served.downloads = [];
+    served.answering = true;
     yield* sdkCall(() => screen.unmount());
     vi.unstubAllGlobals();
   }),
