@@ -348,7 +348,7 @@ export function ProjectSection({
                   <label className="flex min-h-8 cursor-pointer items-center justify-between gap-2">
                     <span className="text-xs">
                       <Trans comment="Switch: conversations in other projects may recall this project's memory">
-                        다른 프로젝트에서도 찾기
+                        다른 프로젝트가 이 기억을 찾도록 허용
                       </Trans>
                     </span>
                     <Switch

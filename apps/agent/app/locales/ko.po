@@ -1766,8 +1766,8 @@ msgstr "다른 프로젝트 기억도 찾기"
 
 #. Switch: conversations in other projects may recall this project's memory
 #: app/entry/navigation/sidebar.tsx
-msgid "다른 프로젝트에서도 찾기"
-msgstr "다른 프로젝트에서도 찾기"
+msgid "다른 프로젝트가 이 기억을 찾도록 허용"
+msgstr "다른 프로젝트가 이 기억을 찾도록 허용"
 
 #. Button in the card panel that puts a held card back in the queue
 #: app/entry/chat/board/card-peek.tsx
@@ -2100,8 +2100,8 @@ msgid "대화가 길어지면 앞쪽 턴을 요약으로 바꿔 보냅니다. �
 msgstr "대화가 길어지면 앞쪽 턴을 요약으로 바꿔 보냅니다. 원문은 기억에 남아 있어서 모델이 필요할 때 다시 읽습니다."
 
 #: app/entry/settings/pages/imports.tsx
-msgid "대화가 있던 폴더는 프로젝트로 등록됩니다. 에이전트가 그 폴더의 파일을 읽고 고칠 수 있게 됩니다. 필요 없는 프로젝트는 사이드바에서 목록에서 빼 주십시오."
-msgstr "대화가 있던 폴더는 프로젝트로 등록됩니다. 에이전트가 그 폴더의 파일을 읽고 고칠 수 있게 됩니다. 필요 없는 프로젝트는 사이드바에서 목록에서 빼 주십시오."
+msgid "대화가 있던 폴더는 프로젝트로 등록됩니다. 에이전트가 그 폴더의 파일을 읽고 고칠 수 있게 됩니다. 필요 없는 프로젝트는 사이드바에서 보관해 주십시오."
+msgstr "대화가 있던 폴더는 프로젝트로 등록됩니다. 에이전트가 그 폴더의 파일을 읽고 고칠 수 있게 됩니다. 필요 없는 프로젝트는 사이드바에서 보관해 주십시오."
 
 #: app/entry/settings/pages/recall.tsx
 msgid "대화가 지금 프로젝트 밖의 기억을 쓰거나 내보낼지 정합니다. 둘 다 처음에는 꺼져 있습니다."

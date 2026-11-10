@@ -315,7 +315,7 @@ export function ImportSettings() {
       <FieldDescription>
         <Trans>
           대화가 있던 폴더는 프로젝트로 등록됩니다. 에이전트가 그 폴더의 파일을 읽고 고칠 수 있게
-          됩니다. 필요 없는 프로젝트는 사이드바에서 목록에서 빼 주십시오.
+          됩니다. 필요 없는 프로젝트는 사이드바에서 보관해 주십시오.
         </Trans>
       </FieldDescription>
 
