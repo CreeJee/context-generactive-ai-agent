@@ -1384,6 +1384,20 @@ const make = (options: KanbanOrchestratorOptions) =>
       poke: (goalInstanceId: string) => PubSub.publish(pokes, goalInstanceId),
 
       /**
+       * A Plan approved again while its board kept running: the board takes the approval policy
+       * of that approval, as `start` gives a board it starts, and looks at the waiting cards.
+       */
+      setCardApproval: Effect.fn("KanbanOrchestrator.setCardApproval")(function* (
+        sessionId: string,
+        cardApproval: CardApprovalPolicy,
+      ) {
+        const goalInstanceId = yield* workflows.goalInstanceId(sessionId);
+        if (goalInstanceId === null) return;
+        yield* attempts.setCardApproval(goalInstanceId, cardApproval);
+        yield* PubSub.publish(pokes, goalInstanceId);
+      }),
+
+      /**
        * The user spoke to the planner: the board counts its planner rounds again from zero and
        * tells the planner what it held back, if the board had stopped waking it.
        */

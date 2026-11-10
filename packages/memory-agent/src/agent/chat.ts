@@ -664,6 +664,21 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             ),
           ),
     );
+  /**
+   * The board of a Plan approval just recorded: a board that kept running takes the approval's
+   * policy for the cards the planner adds, as a board it starts would. Why it could not start, if so.
+   */
+  const approvedPlanBoard = (sessionId: string, cardApproval: CardApprovalPolicy) =>
+    Effect.flatMap(kanbanBoard(sessionId), (running) =>
+      running
+        ? kanbanOrchestrator.setCardApproval(sessionId, cardApproval).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Approved Plan did not set its board's card approval", cause),
+            ),
+            Effect.as(Option.none<string>()),
+          )
+        : startBoard(sessionId, cardApproval),
+    );
   /** On a kanban board the session's chat is the planner, so it runs on the planner's model. */
   const sessionModel = (sessionId: string) =>
     Effect.flatMap(kanbanBoard(sessionId), (board) =>
@@ -2537,7 +2552,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         yield* execution.stop(sessionId);
         yield* cancelProviderRetries(sessionId);
         // A board that cannot start is offered again from the board panel.
-        yield* Effect.when(startBoard(sessionId, "user"), Effect.succeed(executesPlan(state)));
+        yield* Effect.when(
+          approvedPlanBoard(sessionId, "user"),
+          Effect.succeed(executesPlan(state)),
+        );
         return state;
       }).pipe(
         Effect.catchTags({
@@ -2827,13 +2845,13 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               : reconciled;
           // An executing Plan without a board moves onto one; one that cannot start waits as a
           // blocker the user sees, never for the chat to execute it. The cards a Goal mode
-          // planner adds later follow the project's permission mode; a Plan the user approved
-          // leaves them to the user.
+          // planner adds later follow the project's permission mode, also on a board that kept
+          // running since an earlier approval; a Plan the user approved leaves them to the user.
           if (executesPlan(workflow)) {
-            const refused = yield* startBoard(
-              sessionId,
-              reconciled.phase === "shaping" && reconciled.mode === "goal" ? "permission" : "user",
-            );
+            // Only the Goal mode approval above leaves a shaping state executing.
+            const refused = yield* reconciled.phase === "shaping"
+              ? approvedPlanBoard(sessionId, "permission")
+              : startBoard(sessionId, "user");
             if (Option.isSome(refused)) {
               yield* execution.blockPending(sessionId, last.runId, {
                 reason: "external_dependency",

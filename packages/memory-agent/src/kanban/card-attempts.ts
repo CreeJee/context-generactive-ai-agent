@@ -341,6 +341,13 @@ const make = Effect.gen(function* () {
       );
     }),
 
+    /** Records who approves the cards the planner adds, as the latest Plan approval says. */
+    setCardApproval: (goalInstanceId: string, cardApproval: CardApprovalPolicy) =>
+      Effect.flatMap(now, (at) =>
+        sql`UPDATE kanban_goals SET card_approval = ${cardApproval}, updated_at = ${at}
+            WHERE goal_instance_id = ${goalInstanceId}`.pipe(Effect.mapError(failed("goal"))),
+      ),
+
     /** Records the planner rounds counted since the board's last newly met outcome. */
     setPlannerRounds: (goalInstanceId: string, planner: PlannerRounds) =>
       Effect.flatMap(now, (at) =>

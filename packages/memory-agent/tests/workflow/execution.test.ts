@@ -5,6 +5,7 @@ import { CardAttempts } from "../../src/kanban/card-attempts.ts";
 import type { JsonValue as Json } from "../../src/json.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import type { ScriptedResponder, ScriptedTurn } from "../../src/testing/scripted-model.ts";
+import { BoardAuthor } from "../../src/workflow/card.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
 import { runTurn } from "../support/chat-client.ts";
 import { selectTestModel } from "../support/provider.ts";
@@ -155,6 +156,47 @@ testAgent({ testProvider: { responder } })("approved Plan execution", (it) => {
       expect(tools).toEqual(expect.arrayContaining(["update_goal", "update_plan"]));
       expect(tools).not.toContain("update_workflow_progress");
       expect(tools).not.toContain("write_file");
+    }),
+  );
+
+  it.effect("a Goal mode approval gives a board that kept running the permission mode", () =>
+    Effect.gen(function* () {
+      const env = yield* TestEnv;
+      const session = yield* planned([
+        call("plan", "update_plan", plan),
+        { text: "The board will run the cards." },
+      ]);
+      // The held card keeps the board from moving cards while the planner writes the Plan.
+      yield* env.use(
+        Effect.flatMap(Workflows, (workflows) =>
+          workflows.holdCard(
+            session.id,
+            { cardId: "p1", hold: true },
+            BoardAuthor.cases.User.make({}),
+          ),
+        ),
+      );
+      yield* env.use(
+        Effect.flatMap(AgentChat, (chat) => chat.moveWorkflow(session.id, null, "run")),
+      );
+      yield* waitForBoard(session.board);
+      expect(yield* session.cardApproval).toBe("user");
+      // Back in Goal mode the board stays active while the planner writes the next Plan.
+      yield* env.use(Effect.flatMap(Workflows, (workflows) => workflows.move(session.id, "goal")));
+      yield* runTurn(session.id, `${session.id}-turn`, "Plan the rest");
+      // The owner approved this Plan once the run ended, so the cards the planner adds later
+      // follow the project's permission mode.
+      yield* session.cardApproval.pipe(
+        Effect.repeat({
+          until: (policy) => policy === "permission",
+          schedule: Schedule.spaced(10),
+        }),
+        Effect.timeout("5 seconds"),
+      );
+      const state = yield* env.use(
+        Effect.flatMap(Workflows, (workflows) => workflows.get(session.id)),
+      );
+      expect([state.phase, state.plan?.status]).toEqual(["running", "executing"]);
     }),
   );
 });
