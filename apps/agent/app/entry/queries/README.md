@@ -34,6 +34,7 @@
 - `sessionQueries.runState` 키에는 `holder`가 들어가지 않는다. 같은 세션의 run-state 캐시는 holder와 관계없이 하나다.
 - 첫 문서에서는 `../../routes/_index.tsx`의 loader(`app/.server/first-screen.ts`)가 이 팩토리의 `queryKey`로 캐시를 채운다: global projects·hiddenProjects·imageSettings, project sessions·agents·skills·decisions·boards, session queue·subagents·approvals·trace·kanban. `queryKey`의 data 타입이 채우는 값의 타입과 맞아야 컴파일된다. auth·accounts·accountQuota·models는 공급자·keychain·원격을 부르므로, runState는 page holder에 따라 달라서 채우지 않는다. staleTime 0인 query는 채운 값을 먼저 보이고 마운트할 때 다시 읽는다.
 - staleTime 0을 유지하는 쿼리: project decisions·boards, session runState·board·decisions·kanban. 이 쿼리들은 항상 최신 서버 상태를 다시 읽어야 한다.
+- 설정 페이지의 MCP 서버·외부 에이전트·skills Suspense 훅은 `refetchOnMount: "always"`로 페이지를 열 때마다 다시 읽는다. 이 셋은 서버 이벤트가 없고(파일과 연결 상태가 스스로 바뀐다), 사이드바가 agents·skills를 계속 구독해서 캐시가 오래 남는다.
 - nullable id 훅(`useProjectSessionsQuery`, `useAgentsQuery`, `useProjectTraceTaskQuery`)은 null이면 키에 빈 문자열을 넣고 `enabled: false`로 둔다. 코드 주석은 '프로젝트는 URL과 프로젝트 목록이 정리되는 동안 없을 수 있다'고 설명한다.
 - `projectQueries.sessions`의 queryFn은 Promise 경계다. 주석: 'Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.' active와 archived 세션은 동시에 읽는다.
 - dual 훅의 data-last 형태에서 마지막에 받는 인자는 항상 첫 인자(provider 또는 projectId)다. arity(2·3·4)는 body 함수의 인자 수와 맞아야 한다.

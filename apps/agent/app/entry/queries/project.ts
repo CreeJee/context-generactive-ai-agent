@@ -119,12 +119,14 @@ const useProjectTraceTaskQueryBody = (projectId: string, taskId: string | null) 
 export const useProjectTraceTaskQuery: {
   (taskId: string | null): (projectId: string) => ReturnType<typeof useProjectTraceTaskQueryBody>;
 } & typeof useProjectTraceTaskQueryBody = EffectFunction.dual(2, useProjectTraceTaskQueryBody);
+// No server event follows MCP servers, agents or skills (their files and connections change on
+// their own), so each settings page reads them again when it opens, showing the cached list first.
 export const useSuspenseMcpQuery = (projectId: string) =>
-  useSuspenseQuery(projectQueries.mcp(projectId));
+  useSuspenseQuery({ ...projectQueries.mcp(projectId), refetchOnMount: "always" });
 export const useSuspenseAgentsQuery = (projectId: string) =>
-  useSuspenseQuery(projectQueries.agents(projectId));
+  useSuspenseQuery({ ...projectQueries.agents(projectId), refetchOnMount: "always" });
 export const useSuspenseSkillsQuery = (projectId: string) =>
-  useSuspenseQuery(projectQueries.skills(projectId));
+  useSuspenseQuery({ ...projectQueries.skills(projectId), refetchOnMount: "always" });
 export const useSuspenseProjectKanbanQuery = (projectId: string) =>
   useSuspenseQuery(projectQueries.kanban(projectId));
 
