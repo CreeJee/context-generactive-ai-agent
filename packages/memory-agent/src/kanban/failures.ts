@@ -69,6 +69,15 @@ export const CardFailure = Schema.TaggedUnion({
 });
 export type CardFailure = typeof CardFailure.Type;
 
+/**
+ * What the card's next attempt reads about a verifier that did not pass its work: the verifier's
+ * own words, when it wrote why. The board shows the same words as the verifier's opinion.
+ */
+export const verifierNote = (failure: CardFailure): ReadonlyArray<string> =>
+  CardFailure.guards.Verification(failure) && VerdictFailure.guards.Rejected(failure.verdict)
+    ? [`The verifier did not pass your last work: ${failure.verdict.note}`]
+    : [];
+
 export const worktreeFailure = (failure: CardWorktreeFailed): CardFailure =>
   CardFailure.cases.Worktree.make({ reason: cardWorktreeFailedReasonName(failure.reason) });
 

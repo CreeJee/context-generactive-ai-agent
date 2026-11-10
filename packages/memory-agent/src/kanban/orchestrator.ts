@@ -73,7 +73,13 @@ import {
 } from "./human-decision.ts";
 import { GoalSchedules, mergeDelivers } from "./goal-schedules.ts";
 import { OutcomeLedger, outcomeStandings, OutcomeStatus } from "../workflow/outcome-ledger.ts";
-import { CardFailure, CardHoldReason, failureCode, worktreeFailure } from "./failures.ts";
+import {
+  CardFailure,
+  CardHoldReason,
+  failureCode,
+  verifierNote,
+  worktreeFailure,
+} from "./failures.ts";
 import { loopStopped } from "../runtime/loop-health.ts";
 import { BoardHealth, type BoardRef } from "./board-health.ts";
 import { GoalMerges } from "./merge-queue.ts";
@@ -405,9 +411,11 @@ const make = (options: KanbanOrchestratorOptions) =>
       failure: CardFailure,
     ) {
       const code = failureCode(failure);
+      // A verifier's reason goes to the card's next attempt, which otherwise would not know it.
       const ladder = yield* attempts.updateLadder(goal.goalInstanceId, cardId, (current) => ({
         ...current,
         failureStreak: current.failureStreak + 1,
+        notes: [...current.notes, ...verifierNote(failure)],
       }));
       const step = failureStep(ladder, backoff);
       const now = yield* Clock.currentTimeMillis;

@@ -189,10 +189,10 @@ const make = Effect.gen(function* () {
             const message = [
               ...(run.continuation
                 ? [
-                    "You worked on this card before and were cut off. Your earlier changes are already in your folder: check what is there before you change anything, and do not redo work that is done.",
+                    "You worked on this card before. Your earlier changes are already in your folder: check what is there before you change anything, and do not redo work that is done.",
                   ]
                 : []),
-              ...listed("The orchestrator changed the card since your last run", run.notes),
+              ...listed("Since your last run", run.notes),
               cardText(run.card),
             ].join("\n\n");
             const outcome = yield* subagents.runAttempt(

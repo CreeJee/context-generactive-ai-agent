@@ -211,6 +211,42 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "gives the card's next attempt the reason its verifier did not pass the work",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* kanbanFixture;
+        const notes = yield* Ref.make<ReadonlyArray<CardAgentRun["notes"]>>([]);
+        const verdicts = yield* Ref.make(0);
+        const run = yield* openKanbanOwner(fixture, yield* Effect.scope, {
+          agent: (agent) => Effect.as(Ref.update(notes, Arr.append(agent.notes)), finished),
+          verify: () =>
+            Effect.map(
+              Ref.getAndUpdate(verdicts, (count) => count + 1),
+              (count) =>
+                count === 0
+                  ? CardVerdict.Failed({
+                      failure: VerdictFailure.cases.Rejected.make({ note: "add.js is missing" }),
+                    })
+                  : passed,
+            ),
+        });
+        yield* run(
+          Effect.gen(function* () {
+            const board = yield* executingPlan(fixture, [card("a")]);
+            yield* (yield* GoalSchedules).setProtectedBranches(board.projectId, []);
+            yield* (yield* KanbanOrchestrator).start(board.sessionId);
+            yield* eventually(Ref.get(notes), (seen) => seen.length >= 2);
+            expect(yield* Ref.get(notes)).toEqual([
+              [],
+              ["The verifier did not pass your last work: add.js is missing"],
+            ]);
+          }),
+        );
+      }),
+    gitTimeout,
+  );
+
+  it.effect(
     "merges no Goal with an outcome judged not met and asks the planner for cards",
     () =>
       Effect.gen(function* () {
