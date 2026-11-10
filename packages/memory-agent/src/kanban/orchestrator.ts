@@ -1433,10 +1433,19 @@ const make = (options: KanbanOrchestratorOptions) =>
       resumePlanner: Effect.fn("KanbanOrchestrator.resumePlanner")(function* (sessionId: string) {
         const goalInstanceId = yield* workflows.goalInstanceId(sessionId);
         if (goalInstanceId === null) return;
-        const found = yield* attempts.goal(goalInstanceId);
-        if (Option.isNone(found) || !found.value.active || found.value.planner.rounds === 0) return;
-        yield* attempts.setPlannerRounds(goalInstanceId, { ...found.value.planner, rounds: 0 });
-        yield* Ref.update(announced, (known) => Struct.omit(known, [goalInstanceId]));
+        // Between looks: a look in progress read the stalled rounds and would record the situation
+        // as told again after this cleared it, so the next look would stay quiet.
+        const reset = yield* looking.withPermits(1)(
+          Effect.gen(function* () {
+            const found = yield* attempts.goal(goalInstanceId);
+            if (Option.isNone(found) || !found.value.active || found.value.planner.rounds === 0)
+              return false;
+            yield* attempts.setPlannerRounds(goalInstanceId, { ...found.value.planner, rounds: 0 });
+            yield* Ref.update(announced, (known) => Struct.omit(known, [goalInstanceId]));
+            return true;
+          }),
+        );
+        if (!reset) return;
         yield* events.publishSession(sessionId, "run-state");
         yield* PubSub.publish(pokes, goalInstanceId);
       }),
