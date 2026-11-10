@@ -3,7 +3,7 @@ import { isTruthy } from "../../truthy.ts";
 import { ApprovalRequester, type RelayedApprovalView, type SubagentView } from "../api";
 import { useProjectScope } from "../events/context";
 import { useApprovalsQuery, useSubagentsQuery } from "../queries/session";
-import { sessionCopy } from "./copy";
+import { t } from "@lingui/core/macro";
 
 interface DelegatedState {
   readonly subagents: readonly SubagentView[];
@@ -27,6 +27,15 @@ function useDelegatedWorkBody(sessionId: string, _generating: boolean) {
 
 export const requesterLabel = ApprovalRequester.match({
   subagent: ({ name }) =>
-    isTruthy(name) ? sessionCopy.requester.namedSubagent(name) : sessionCopy.requester.subagent,
-  external_agent: ({ agent }) => sessionCopy.requester.externalAgent(agent),
+    isTruthy(name)
+      ? t({
+          message: `서브에이전트 ${name}`,
+          comment: "Who asks for an approval; {name} is the subagent's name",
+        })
+      : t({ message: "서브에이전트", comment: "Who asks for an approval: an unnamed subagent" }),
+  external_agent: ({ agent }) =>
+    t({
+      message: `외부 에이전트 ${agent}`,
+      comment: "Who asks for an approval; {agent} is the external coding agent's name",
+    }),
 });

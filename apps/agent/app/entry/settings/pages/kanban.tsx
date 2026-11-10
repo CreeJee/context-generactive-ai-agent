@@ -1,3 +1,6 @@
+import type { MessageDescriptor } from "@lingui/core";
+import { msg, ph, t } from "@lingui/core/macro";
+import { Trans, useLingui } from "@lingui/react/macro";
 import { Array as Arr, type Cause, Effect, HashMap, Iterable, Option } from "effect";
 import { runUiEffect, uiPromise } from "../../shared/ui-effect";
 import { useState } from "react";
@@ -30,12 +33,7 @@ import {
 } from "../../queries/mutations/global";
 import { useProtectedBranchesMutation } from "../../queries/mutations/project";
 import { useSuspenseProjectKanbanQuery } from "../../queries/project";
-import { PageHeader, PageError } from "../shared";
-import { problemText } from "../../shared/copy-templates";
-import { settingsCopy } from "../copy";
-
-const copy = settingsCopy.kanban;
-const { save: saveLabel, settingsChangeFailed } = settingsCopy.shared;
+import { PageHeader, PageError, pageTitles } from "../shared";
 
 /** The most cards the user may let run at once (memory-agent `kanbanConcurrencyLimit`). */
 const maximumConcurrency = 32;
@@ -49,35 +47,41 @@ const validConcurrency = (text: string) => {
 const branchList = (text: string) =>
   Arr.dedupe(text.split(/[\s,]+/u).filter((branch) => branch.length > 0));
 
+/** A failed save that carries no error code this page knows. */
+const changeFailed = () => t`설정을 바꾸지 못했습니다.`;
+
 const errorText = (code: ApiErrorCode) => {
   switch (code) {
     case "invalid_kanban_settings":
-      return copy.errors.invalidSettings;
+      return t`값이 올바르지 않습니다. 동시 실행 수는 1~32, 브랜치 이름은 영문·숫자·._/-만 쓸 수 있습니다.`;
     case "project_not_found":
-      return copy.errors.projectNotFound;
+      return t`프로젝트를 찾을 수 없습니다.`;
     case "role_model_unavailable":
-      return problemText(copy.errors.roleModelUnavailable);
+      return t`이 모델을 쓸 수 없습니다. 그 제공자 로그인 상태와 모델, 추론 단계가 맞는지 확인해 주십시오.`;
     case "settings_failed":
     case "schedule_storage_failed":
     case "storage_failed":
-      return problemText(copy.errors.saveFailed);
+      return t`설정을 저장하지 못했습니다. 잠시 뒤 다시 시도해 주십시오.`;
     default:
-      return settingsChangeFailed;
+      return changeFailed();
   }
 };
 
 /** The page's wording for a failed save, from the response's error code only. */
 const failureText = (failure: Cause.UnknownError) =>
-  isApiError(failure.cause) ? errorText(failure.cause.code) : settingsChangeFailed;
+  isApiError(failure.cause) ? errorText(failure.cause.code) : changeFailed();
 
 /** How many kanban cards run at once on this machine, across every Goal. */
 function ConcurrencyField() {
+  const { t } = useLingui();
   const { data: settings } = useKanbanSettingsQuery();
   const mutation = useKanbanSettingsMutation();
   const [draft, setDraft] = useState(String(settings.configured ?? settings.effective));
   const [error, setError] = useState<string | null>(null);
   const value = validConcurrency(draft);
   const busy = mutation.isPending;
+  const { effective } = settings;
+  const deviceDefault = settings.configured === null ? t`(기기 기본값: CPU 코어 절반, 1~4개)` : "";
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const save = (concurrency: number | null) =>
@@ -104,7 +108,9 @@ function ConcurrencyField() {
       }}
     >
       <Field>
-        <FieldLabel htmlFor="kanban-concurrency">{copy.concurrencyLabel}</FieldLabel>
+        <FieldLabel htmlFor="kanban-concurrency">
+          <Trans>동시에 실행할 카드 수</Trans>
+        </FieldLabel>
         <div className="flex gap-2">
           <Input
             id="kanban-concurrency"
@@ -117,7 +123,7 @@ function ConcurrencyField() {
             className="w-24"
           />
           <Button type="submit" disabled={busy || value === null || value === settings.configured}>
-            {busy && <Spinner />} {saveLabel}
+            {busy && <Spinner />} <Trans comment="Button that saves a settings field">저장</Trans>
           </Button>
           <Button
             type="button"
@@ -125,14 +131,17 @@ function ConcurrencyField() {
             disabled={busy || settings.configured === null}
             onClick={() => void save(null)}
           >
-            {copy.useDefault}
+            <Trans comment="Button that clears the saved card count so the device default applies">
+              기본값으로
+            </Trans>
           </Button>
         </div>
         <FieldDescription>
-          {copy.concurrencyHelp(
-            settings.effective,
-            settings.configured === null ? copy.deviceDefault : "",
-          )}
+          <Trans comment="{effective} is the card count in use; {deviceDefault} is empty, or a parenthesized note when the count is the device default">
+            모든 Goal의 카드를 합쳐 이만큼만 동시에 실행합니다. 지금 {effective}개{deviceDefault}로
+            실행합니다. 저장하면 바로 적용됩니다. 실행 중인 카드는 멈추지 않습니다. 빈 슬롯은 아래
+            프로젝트 순서, 그 안에서는 칸반 보드의 대화 순서대로 줍니다.
+          </Trans>
         </FieldDescription>
       </Field>
       <PageError error={error} />
@@ -142,6 +151,7 @@ function ConcurrencyField() {
 
 /** The projects in the order the scheduler serves them; a person moves one up or down. */
 function ProjectOrderField() {
+  const { t } = useLingui();
   const { data: settings } = useKanbanSettingsQuery();
   const projects = useProjectsQuery().data ?? [];
   const mutation = useProjectOrderMutation();
@@ -154,17 +164,24 @@ function ProjectOrderField() {
       { projectId, before },
       {
         onError: (failure) =>
-          setError(isApiError(failure) ? errorText(failure.code) : settingsChangeFailed),
+          setError(isApiError(failure) ? errorText(failure.code) : changeFailed()),
       },
     );
   };
 
   return (
     <Field>
-      <FieldLabel htmlFor="kanban-project-order">{copy.projectOrder}</FieldLabel>
+      <FieldLabel htmlFor="kanban-project-order">
+        <Trans comment="Label of the list that orders projects for the kanban scheduler">
+          프로젝트 순서
+        </Trans>
+      </FieldLabel>
       <ol
         id="kanban-project-order"
-        aria-label={copy.projectOrder}
+        aria-label={t({
+          message: "프로젝트 순서",
+          comment: "Label of the list that orders projects for the kanban scheduler",
+        })}
         className="divide-y rounded-md border"
       >
         {ordered.map((project, index) => (
@@ -174,7 +191,10 @@ function ProjectOrderField() {
               type="button"
               size="icon-sm"
               variant="ghost-muted"
-              aria-label={copy.moveUp(project.name)}
+              aria-label={t({
+                message: `${ph({ project: project.name })} 위로`,
+                comment: "Button that moves {project} one place up in the kanban project order",
+              })}
               disabled={mutation.isPending || index === 0}
               onClick={() => move(project.id, ordered[index - 1]?.id ?? null)}
             >
@@ -184,7 +204,10 @@ function ProjectOrderField() {
               type="button"
               size="icon-sm"
               variant="ghost-muted"
-              aria-label={copy.moveDown(project.name)}
+              aria-label={t({
+                message: `${ph({ project: project.name })} 아래로`,
+                comment: "Button that moves {project} one place down in the kanban project order",
+              })}
               disabled={mutation.isPending || index === ordered.length - 1}
               onClick={() => move(project.id, ordered[index + 2]?.id ?? null)}
             >
@@ -193,13 +216,36 @@ function ProjectOrderField() {
           </li>
         ))}
       </ol>
-      <FieldDescription>{copy.projectOrderHelp}</FieldDescription>
+      <FieldDescription>
+        <Trans>
+          위 프로젝트의 카드부터 실행합니다. 한 프로젝트 안에서는 칸반 보드의 대화 순서를 따릅니다.
+        </Trans>
+      </FieldDescription>
       <PageError error={error} />
     </Field>
   );
 }
 
 const roles = ["planner", "executor", "verifier"] as const satisfies readonly AgentRole[];
+
+/** What each role of a Goal does. */
+const roleTexts = {
+  planner: {
+    label: msg`Plan 작성자 모델`,
+    description: msg`Goal을 붙잡고 다음 Plan을 쓰는 대화의 모델입니다. 칸반 보드로 실행 중인 대화에 쓰입니다.`,
+  },
+  executor: {
+    label: msg`실행자 모델`,
+    description: msg`카드 하나를 맡아 그 카드의 worktree에서 작업하는 카드 에이전트의 모델입니다.`,
+  },
+  verifier: {
+    label: msg`검증자 모델`,
+    description: msg`끝난 카드와 merge 전 Goal 브랜치를 고치지 않고 판정만 하는 모델입니다.`,
+  },
+} satisfies Record<
+  AgentRole,
+  { readonly label: MessageDescriptor; readonly description: MessageDescriptor }
+>;
 
 const providerIds = [
   "openai",
@@ -217,6 +263,7 @@ const sameSelection = (left: ModelSelection | null, right: ModelSelection | null
 
 /** One role's own model, or the selected model when the user leaves it unset. */
 function RoleModelField({ role }: { role: AgentRole }) {
+  const { t } = useLingui();
   const { data: settings } = useKanbanSettingsQuery();
   const saved = settings.roleModels[role];
   const mutation = useRoleModelMutation();
@@ -236,7 +283,7 @@ function RoleModelField({ role }: { role: AgentRole }) {
       : null;
   const efforts = draft === null || model === undefined ? [] : effortChoices(draft, model);
   const busy = mutation.isPending;
-  const text = copy.roles[role];
+  const label = t(roleTexts[role].label);
   const id = `kanban-role-${role}`;
 
   const save = (selection: ModelSelection | null) => {
@@ -245,7 +292,7 @@ function RoleModelField({ role }: { role: AgentRole }) {
       { role, selection },
       {
         onError: (failure) =>
-          setError(isApiError(failure) ? errorText(failure.code) : settingsChangeFailed),
+          setError(isApiError(failure) ? errorText(failure.code) : changeFailed()),
       },
     );
   };
@@ -258,7 +305,7 @@ function RoleModelField({ role }: { role: AgentRole }) {
       }}
     >
       <Field>
-        <FieldLabel htmlFor={id}>{text.label}</FieldLabel>
+        <FieldLabel htmlFor={id}>{label}</FieldLabel>
         <div className="flex flex-wrap gap-2">
           <Select
             value={provider ?? followSelected}
@@ -273,10 +320,14 @@ function RoleModelField({ role }: { role: AgentRole }) {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value={followSelected}>{copy.selectedModel}</SelectItem>
+              <SelectItem value={followSelected}>
+                <Trans comment="Option: run this role on the model selected in the chat">
+                  선택된 모델
+                </Trans>
+              </SelectItem>
               {providerIds.map((candidate) => (
                 <SelectItem key={candidate} value={candidate}>
-                  {providerLabels[candidate]}
+                  {t(providerLabels[candidate])}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -291,8 +342,19 @@ function RoleModelField({ role }: { role: AgentRole }) {
                 setEffort(next?.defaultReasoningEffort ?? null);
               }}
             >
-              <SelectTrigger aria-label={copy.modelSelect(text.label)} className="w-56">
-                <SelectValue placeholder={copy.modelPlaceholder} />
+              <SelectTrigger
+                aria-label={t({
+                  message: `${label}: 모델`,
+                  comment: "Model select of a kanban role; {label} is the role's name",
+                })}
+                className="w-56"
+              >
+                <SelectValue
+                  placeholder={t({
+                    message: "모델 고르기",
+                    comment: "Placeholder of the model select before one is picked",
+                  })}
+                />
               </SelectTrigger>
               <SelectContent>
                 {models.map((candidate) => (
@@ -309,7 +371,13 @@ function RoleModelField({ role }: { role: AgentRole }) {
               disabled={busy}
               onValueChange={(value) => setEffort(value)}
             >
-              <SelectTrigger aria-label={copy.effortSelect(text.label)} className="w-32">
+              <SelectTrigger
+                aria-label={t({
+                  message: `${label}: 추론 단계`,
+                  comment: "Reasoning effort select of a kanban role; {label} is the role's name",
+                })}
+                className="w-32"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -328,17 +396,26 @@ function RoleModelField({ role }: { role: AgentRole }) {
               (provider === null ? saved === null : draft === null || sameSelection(draft, saved))
             }
           >
-            {busy && <Spinner />} {saveLabel}
+            {busy && <Spinner />} <Trans comment="Button that saves a settings field">저장</Trans>
           </Button>
         </div>
         <FieldDescription>
-          {text.description}{" "}
-          {saved === null
-            ? copy.runsSelected
-            : copy.runsOn(providerLabels[saved.provider], saved.model, saved.reasoningEffort)}{" "}
-          {copy.appliesNextRun}
+          {t(roleTexts[role].description)}{" "}
+          {saved === null ? (
+            <Trans>지금은 선택된 모델로 실행합니다.</Trans>
+          ) : (
+            <Trans comment="Which provider, model and reasoning effort a kanban role runs on">
+              지금은 {ph({ provider: t(providerLabels[saved.provider]) })} /{" "}
+              {ph({ model: saved.model })} ({ph({ effort: saved.reasoningEffort })})로 실행합니다.
+            </Trans>
+          )}{" "}
+          <Trans>저장하면 다음 실행부터 적용됩니다.</Trans>
         </FieldDescription>
-        {catalog.isError && <PageError error={problemText(copy.modelsFailed)} />}
+        {catalog.isError && (
+          <PageError
+            error={t`모델 목록을 읽지 못했습니다. 그 제공자에 로그인했는지 확인해 주십시오.`}
+          />
+        )}
       </Field>
       <PageError error={error} />
     </form>
@@ -380,7 +457,9 @@ function ProtectedBranchesField({ project }: { project: Project }) {
     >
       <Field>
         <FieldLabel htmlFor="kanban-protected-branches">
-          {copy.protectedBranches(project.name)}
+          <Trans comment="Field label; {project} is the project name">
+            보호 브랜치 ({ph({ project: project.name })})
+          </Trans>
         </FieldLabel>
         <div className="flex gap-2">
           <Input
@@ -390,10 +469,16 @@ function ProtectedBranchesField({ project }: { project: Project }) {
             onChange={(event) => setDraft(event.target.value)}
           />
           <Button type="submit" disabled={busy || unchanged}>
-            {busy && <Spinner />} {saveLabel}
+            {busy && <Spinner />} <Trans comment="Button that saves a settings field">저장</Trans>
           </Button>
         </div>
-        <FieldDescription>{copy.protectedBranchesHelp}</FieldDescription>
+        <FieldDescription>
+          <Trans>
+            Goal을 시작한 브랜치가 여기 있으면 카드가 모두 끝나도 자동으로 merge하지 않습니다. 대신
+            PR을 만들지 직접 merge할지 묻습니다. 쉼표로 구분합니다. 비우면 모든 브랜치에 자동으로
+            merge합니다.
+          </Trans>
+        </FieldDescription>
       </Field>
       <PageError error={error} />
     </form>
@@ -402,16 +487,27 @@ function ProtectedBranchesField({ project }: { project: Project }) {
 
 /** Kanban execution: how many cards run at once, which project goes first, and where Goals merge. */
 export function KanbanSettings({ project }: { project: Project | null }) {
+  const { t } = useLingui();
   return (
     <FieldGroup>
-      <PageHeader title={settingsCopy.titles.kanban} description={copy.description} />
+      <PageHeader
+        title={t(pageTitles.kanban)}
+        description={
+          <Trans>
+            Goal을 칸반 보드로 실행할 때 쓰는 값을 정합니다. 함께 돌릴 카드 수, Plan
+            작성·실행·검증에 쓸 모델, 끝난 Goal을 자동으로 merge할 브랜치입니다.
+          </Trans>
+        }
+      />
       <ConcurrencyField />
       <ProjectOrderField />
       {roles.map((role) => (
         <RoleModelField key={role} role={role} />
       ))}
       {project === null ? (
-        <p className="text-sm text-muted-foreground">{copy.protectedBranchesNoProject}</p>
+        <p className="text-sm text-muted-foreground">
+          <Trans>보호 브랜치는 프로젝트마다 정합니다. 프로젝트를 고른 뒤 다시 열어 주십시오.</Trans>
+        </p>
       ) : (
         <ProtectedBranchesField project={project} />
       )}

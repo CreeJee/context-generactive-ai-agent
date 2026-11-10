@@ -1,3 +1,4 @@
+import { t } from "@lingui/core/macro";
 import { Effect, Schema } from "effect";
 import {
   CompatibleAccountCommand,
@@ -6,9 +7,7 @@ import {
 } from "memory-agent/app-api";
 import { CompatibleAccountsView } from "memory-agent/compatible-config";
 import { appFetch } from "../shared/backend-restart";
-import { problemText } from "../shared/copy-templates";
 import { appQueryKeys } from "../queries/keys";
-import { navigationCopy } from "./copy";
 
 export type {
   CompatibleAccountStatus,
@@ -65,8 +64,11 @@ export function makeCompatibleClient(fetcher: typeof fetch) {
           status,
           reason,
           message: CompatibleRequestFailedReason.guards.PartialWrite(reason)
-            ? problemText(navigationCopy.compatible.partialWrite)
-            : navigationCopy.compatible.requestFailedWith(status),
+            ? t`키와 설정이 부분적으로 저장됐을 수 있습니다. 계정 목록을 새로고침하고 키 상태를 확인해 주십시오.`
+            : t({
+                message: `호환 공급자 요청에 실패했습니다 (${status}).`,
+                comment: "status is the HTTP status code, or 0 when no response arrived",
+              }),
         });
       const signal = yield* Effect.abortSignal;
       const encoded =

@@ -2,9 +2,7 @@ import { Effect, FileSystem, Match, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { FolderPick } from "memory-agent";
 import { platform } from "node:os";
-import { serverCopy } from "./copy";
-
-const { prompt } = serverCopy.folderPicker;
+import { t } from "@lingui/core/macro";
 
 interface Dialog {
   readonly command: string;
@@ -16,52 +14,54 @@ interface Dialog {
 /** Hosts with a known folder dialog. */
 const DialogHost = Schema.Literals(["darwin", "win32", "linux"]);
 
-const dialogs = {
-  // `activate` brings the dialog in front of the browser; -128 (exit 1) is "User canceled".
-  darwin: [
-    {
-      command: "osascript",
-      args: [
-        "-e",
-        "tell current application to activate",
-        "-e",
-        `POSIX path of (choose folder with prompt "${prompt}")`,
-      ],
-      cancelCodes: [1],
-    },
-  ],
-  win32: [
-    {
-      command: "powershell.exe",
-      args: [
-        "-NoProfile",
-        "-STA",
-        "-Command",
-        [
-          "[Console]::OutputEncoding = [Text.Encoding]::UTF8",
-          "Add-Type -AssemblyName System.Windows.Forms",
-          "$dialog = New-Object System.Windows.Forms.FolderBrowserDialog",
-          `$dialog.Description = '${prompt}'`,
-          "if ($dialog.ShowDialog() -eq 'OK') { [Console]::Out.Write($dialog.SelectedPath) } else { exit 1 }",
-        ].join("; "),
-      ],
-      cancelCodes: [1],
-    },
-  ],
-  // zenity and kdialog both exit 1 when cancelled; the first one installed is used.
-  linux: [
-    {
-      command: "zenity",
-      args: ["--file-selection", "--directory", `--title=${prompt}`],
-      cancelCodes: [1],
-    },
-    {
-      command: "kdialog",
-      args: ["--getexistingdirectory", ".", "--title", prompt],
-      cancelCodes: [1],
-    },
-  ],
-} satisfies Record<typeof DialogHost.Type, ReadonlyArray<Dialog>>;
+/** The dialogs for each host, showing `prompt`. */
+const dialogs = (prompt: string) =>
+  ({
+    // `activate` brings the dialog in front of the browser; -128 (exit 1) is "User canceled".
+    darwin: [
+      {
+        command: "osascript",
+        args: [
+          "-e",
+          "tell current application to activate",
+          "-e",
+          `POSIX path of (choose folder with prompt "${prompt}")`,
+        ],
+        cancelCodes: [1],
+      },
+    ],
+    win32: [
+      {
+        command: "powershell.exe",
+        args: [
+          "-NoProfile",
+          "-STA",
+          "-Command",
+          [
+            "[Console]::OutputEncoding = [Text.Encoding]::UTF8",
+            "Add-Type -AssemblyName System.Windows.Forms",
+            "$dialog = New-Object System.Windows.Forms.FolderBrowserDialog",
+            `$dialog.Description = '${prompt}'`,
+            "if ($dialog.ShowDialog() -eq 'OK') { [Console]::Out.Write($dialog.SelectedPath) } else { exit 1 }",
+          ].join("; "),
+        ],
+        cancelCodes: [1],
+      },
+    ],
+    // zenity and kdialog both exit 1 when cancelled; the first one installed is used.
+    linux: [
+      {
+        command: "zenity",
+        args: ["--file-selection", "--directory", `--title=${prompt}`],
+        cancelCodes: [1],
+      },
+      {
+        command: "kdialog",
+        args: ["--getexistingdirectory", ".", "--title", prompt],
+        cancelCodes: [1],
+      },
+    ],
+  }) satisfies Record<typeof DialogHost.Type, ReadonlyArray<Dialog>>;
 
 /**
  * One dialog run, scoped so an interrupted request closes it. Fails with `PlatformError` when it
@@ -119,7 +119,12 @@ const ask = (dialog: Dialog) => Effect.flatMap(run(dialog), (output) => answer(d
  */
 export const pickFolder = Effect.fn("FolderPicker.pick")(function* () {
   const host = yield* Effect.sync(platform);
-  const asked = Schema.is(DialogHost)(host) ? dialogs[host].map(ask) : [];
+  const prompt = t({
+    message: "프로젝트로 열 폴더를 골라 주십시오",
+    comment:
+      "Prompt of the operating system's folder dialog. It is put inside shell and AppleScript quotes, so do not use quotation marks.",
+  });
+  const asked = Schema.is(DialogHost)(host) ? dialogs(prompt)[host].map(ask) : [];
   // The first dialog that starts answers; when none does, the path is typed instead.
   return yield* Effect.firstSuccessOf([
     ...asked,

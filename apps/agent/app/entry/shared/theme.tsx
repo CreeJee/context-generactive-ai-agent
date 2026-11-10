@@ -1,3 +1,5 @@
+import { msg } from "@lingui/core/macro";
+import { useLingui } from "@lingui/react/macro";
 import { isTruthy } from "../../truthy.ts";
 import { useEffect, useState } from "react";
 import { MonitorIcon, MoonIcon, SunIcon } from "lucide-react";
@@ -8,12 +10,23 @@ import {
   SelectTrigger,
   SelectValue,
 } from "~/components/ui/select";
-import { sharedCopy } from "./copy";
 
 export const themes = [
-  { value: "system", label: sharedCopy.theme.options.system },
-  { value: "light", label: sharedCopy.theme.options.light },
-  { value: "dark", label: sharedCopy.theme.options.dark },
+  {
+    value: "system",
+    label: msg({
+      message: "시스템 테마",
+      comment: "Theme picker option: follow the OS color scheme",
+    }),
+  },
+  {
+    value: "light",
+    label: msg({ message: "라이트 모드", comment: "Theme picker option: always light colors" }),
+  },
+  {
+    value: "dark",
+    label: msg({ message: "다크 모드", comment: "Theme picker option: always dark colors" }),
+  },
 ] as const;
 type Theme = (typeof themes)[number]["value"];
 const storageKey = "context-agent-theme";
@@ -28,6 +41,7 @@ function savedTheme(): Theme {
 }
 
 export function ThemeSelect() {
+  const { t } = useLingui();
   const [theme, setTheme] = useState<Theme | null>(null);
   useEffect(() => {
     setTheme(savedTheme());
@@ -46,12 +60,15 @@ export function ThemeSelect() {
   }, [theme]);
 
   const current = themes.find((item) => item.value === theme) ?? themes[0];
+  const label = t(current.label);
+  const triggerLabel = t`화면 테마: ${label}`;
+  const items = themes.map((item) => ({ value: item.value, label: t(item.label) }));
   const Icon =
     current.value === "light" ? SunIcon : current.value === "dark" ? MoonIcon : MonitorIcon;
   return (
     <Select
       value={theme}
-      items={themes}
+      items={items}
       onValueChange={(value) => {
         const selected = themes.find((item) => item.value === value);
         if (!isTruthy(selected)) return;
@@ -67,15 +84,15 @@ export function ThemeSelect() {
         size="sm"
         variant="ghost"
         className="min-w-6 justify-center [&_[data-slot=select-value]]:flex-none"
-        aria-label={sharedCopy.theme.current(current.label)}
-        title={sharedCopy.theme.current(current.label)}
+        aria-label={triggerLabel}
+        title={triggerLabel}
       >
         <SelectValue>
           <Icon aria-hidden="true" className="size-3.5" />
         </SelectValue>
       </SelectTrigger>
       <SelectContent>
-        {themes.map((item) => (
+        {items.map((item) => (
           <SelectItem key={item.value} value={item.value}>
             {item.label}
           </SelectItem>

@@ -1,3 +1,6 @@
+import type { MessageDescriptor } from "@lingui/core";
+import { msg, ph, t } from "@lingui/core/macro";
+import { Trans, useLingui } from "@lingui/react/macro";
 import { Array, Data, Effect, Option } from "effect";
 import { runUiEffect, uiPromise } from "../shared/ui-effect";
 import { isTruthy } from "../../truthy.ts";
@@ -96,7 +99,6 @@ import {
   type Session,
 } from "../api";
 import { DataList, DataListItem } from "~/components/ui/data-list";
-import { navigationCopy } from "./copy";
 import { SidebarDisclosureTrigger } from "./sidebar-disclosure-trigger";
 import { effortChoices } from "./providers";
 
@@ -117,19 +119,27 @@ export function ModelSection({
   selection: ModelSelection | null;
   onSelect: (model: string, reasoningEffort?: string) => void;
 }) {
+  const { t } = useLingui();
   const current = models.find((model) => model.id === selection?.model);
   const efforts =
     current !== undefined && selection !== null ? effortChoices(selection, current) : [];
+  const modelTerm = t({ message: "모델", comment: "Sidebar field label: the chat model" });
+  const effortTerm = t({ message: "추론", comment: "Sidebar field label: reasoning effort" });
   return (
-    <Section title={navigationCopy.model.section}>
-      <DataListItem term={navigationCopy.model.model}>
+    <Section title={t({ message: "모델", comment: "Sidebar section of model settings" })}>
+      <DataListItem term={modelTerm}>
         <Select
           value={selection?.model ?? null}
           items={models.map((model) => ({ value: model.id, label: model.displayName }))}
           onValueChange={(value) => value && onSelect(value)}
         >
-          <SelectTrigger className="w-full" size="sm" aria-label={navigationCopy.model.model}>
-            <SelectValue placeholder={navigationCopy.model.placeholder} />
+          <SelectTrigger className="w-full" size="sm" aria-label={modelTerm}>
+            <SelectValue
+              placeholder={t({
+                message: "모델 선택",
+                comment: "Placeholder of the model picker when none is chosen",
+              })}
+            />
           </SelectTrigger>
           <SelectContent>
             {models.map((model) => (
@@ -141,7 +151,7 @@ export function ModelSection({
         </Select>
       </DataListItem>
       {current && selection && efforts.length > 0 && (
-        <DataListItem term={navigationCopy.model.effort}>
+        <DataListItem term={effortTerm}>
           <Select
             value={selection.reasoningEffort}
             items={efforts.map(({ id, label }) => ({ value: id, label }))}
@@ -150,7 +160,10 @@ export function ModelSection({
             <SelectTrigger
               className="w-full"
               size="sm"
-              aria-label={navigationCopy.model.effortSelect}
+              aria-label={t({
+                message: "추론 강도",
+                comment: "Picker of the model's reasoning effort",
+              })}
             >
               <SelectValue />
             </SelectTrigger>
@@ -165,19 +178,27 @@ export function ModelSection({
         </DataListItem>
       )}
       {!(selection !== null) && (
-        <DataListItem term={navigationCopy.model.effort}>
-          <p className="pt-1.5 text-xs text-muted-foreground">{navigationCopy.model.chooseFirst}</p>
+        <DataListItem term={effortTerm}>
+          <p className="pt-1.5 text-xs text-muted-foreground">
+            <Trans>모델을 선택해 주십시오.</Trans>
+          </p>
         </DataListItem>
       )}
     </Section>
   );
 }
 
+const permissionModeLabels = {
+  ask: msg({ message: "매번 묻기", comment: "Project permission mode `ask`" }),
+  auto: msg({ message: "자동 판단 (auto)", comment: "Project permission mode `auto`" }),
+  full: msg({ message: "전체 권한 (full)", comment: "Project permission mode `full`" }),
+} satisfies Record<PermissionMode, MessageDescriptor>;
+
 const permissionModes = [
-  { value: "ask", label: navigationCopy.project.permissionModes.ask },
-  { value: "auto", label: navigationCopy.project.permissionModes.auto },
-  { value: "full", label: navigationCopy.project.permissionModes.full },
-] satisfies ReadonlyArray<{ value: PermissionMode; label: string }>;
+  { value: "ask", label: permissionModeLabels.ask },
+  { value: "auto", label: permissionModeLabels.auto },
+  { value: "full", label: permissionModeLabels.full },
+] satisfies ReadonlyArray<{ value: PermissionMode; label: MessageDescriptor }>;
 
 const projectSectionOpenAtom = atomWithStorage("context-agent-project-section-open-v2", false);
 
@@ -209,26 +230,40 @@ export function ProjectSection({
   /** Releases an archived project back into the list. */
   onRestore: (projectId: string) => void;
 }) {
+  const { t } = useLingui();
   const current = projects.find((project) => project.id === projectId);
   const [open, setOpen] = useAtom(projectSectionOpenAtom);
-  const copy = navigationCopy.project;
+  const sectionLabel = t({ message: "프로젝트", comment: "Sidebar section of project settings" });
+  const modeItems = permissionModes.map((option) => ({
+    value: option.value,
+    label: t(option.label),
+  }));
 
   return (
     <section>
       <Collapsible open={open} onOpenChange={setOpen}>
         {/* Collapsed, a selected project shows only its name; the label keeps the context. */}
         <SidebarDisclosureTrigger
-          aria-label={current !== undefined ? copy.sectionWith(current.name) : copy.section}
+          aria-label={
+            current !== undefined
+              ? t({
+                  message: `프로젝트 ${ph({ name: current.name })}`,
+                  comment: "Project section button; name is the selected project's name",
+                })
+              : sectionLabel
+          }
         >
           {current !== undefined ? (
             <span className="font-medium">{current.name}</span>
           ) : (
-            <span className="font-medium">{copy.choose}</span>
+            <span className="font-medium">
+              <Trans>프로젝트 선택</Trans>
+            </span>
           )}
         </SidebarDisclosureTrigger>
         <CollapsibleContent className="px-4 pb-2">
           <DataList className="grid-cols-[3.5rem_minmax(0,1fr)]">
-            <DataListItem term={copy.section}>
+            <DataListItem term={sectionLabel}>
               <div className="flex min-w-0 items-center gap-2">
                 {projects.length > 0 || hiddenProjects.length > 0 ? (
                   <ProjectCombobox
@@ -239,7 +274,9 @@ export function ProjectSection({
                     onRestore={onRestore}
                   />
                 ) : (
-                  <p className="min-w-0 flex-1 text-xs text-muted-foreground">{copy.none}</p>
+                  <p className="min-w-0 flex-1 text-xs text-muted-foreground">
+                    <Trans>등록된 프로젝트가 없습니다.</Trans>
+                  </p>
                 )}
                 <OpenFolderButton
                   projects={projects}
@@ -251,20 +288,32 @@ export function ProjectSection({
             </DataListItem>
             {current && (
               <>
-                <DataListItem term={copy.permission}>
+                <DataListItem
+                  term={t({
+                    message: "권한",
+                    comment: "Sidebar field label: the project's permission mode",
+                  })}
+                >
                   <Select
                     value={current.permissionMode}
-                    items={permissionModes}
+                    items={modeItems}
                     onValueChange={(value) => {
                       const mode = permissionModes.find((option) => option.value === value);
                       if (isTruthy(mode)) onPermissionMode(mode.value);
                     }}
                   >
-                    <SelectTrigger className="w-full" size="sm" aria-label={copy.permissionSelect}>
+                    <SelectTrigger
+                      className="w-full"
+                      size="sm"
+                      aria-label={t({
+                        message: "권한 모드",
+                        comment: "Picker of the project's permission mode",
+                      })}
+                    >
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {permissionModes.map((option) => (
+                      {modeItems.map((option) => (
                         <SelectItem key={option.value} value={option.value}>
                           {option.label}
                         </SelectItem>
@@ -272,23 +321,41 @@ export function ProjectSection({
                     </SelectContent>
                   </Select>
                 </DataListItem>
-                <DataListItem term={copy.memory}>
+                <DataListItem
+                  term={t({
+                    message: "기억",
+                    comment: "Sidebar field label: the project's memory",
+                  })}
+                >
                   <label className="flex min-h-8 cursor-pointer items-center justify-between gap-2">
-                    <span className="text-xs">{copy.crossRecall}</span>
+                    <span className="text-xs">
+                      <Trans comment="Switch: conversations in other projects may recall this project's memory">
+                        다른 프로젝트에서도 찾기
+                      </Trans>
+                    </span>
                     <Switch
                       checked={!current.crossRecallExcluded}
                       onCheckedChange={(checked) => onCrossRecall(checked)}
                     />
                   </label>
                 </DataListItem>
-                <DataListItem term={copy.list}>
+                <DataListItem
+                  term={t({
+                    message: "목록",
+                    comment: "Sidebar field label: the project's place in the project list",
+                  })}
+                >
                   <Button
                     variant="ghost-muted"
                     size="sm"
-                    title={copy.archiveTitle}
+                    title={t({
+                      message: "프로젝트 보관",
+                      comment: "Tooltip: archiving takes the project out of the list",
+                    })}
                     onClick={() => onHide(current.id)}
                   >
-                    <ArchiveIcon /> {copy.archive}
+                    <ArchiveIcon />{" "}
+                    <Trans comment="Button that archives the project">보관하기</Trans>
                   </Button>
                 </DataListItem>
               </>
@@ -314,10 +381,15 @@ function ProjectCombobox({
   onSelect: (projectId: string) => void;
   onRestore: (projectId: string) => void;
 }) {
+  const { t } = useLingui();
   const groups = [
-    { value: navigationCopy.project.section, items: projects },
+    {
+      value: "listed",
+      label: t({ message: "프로젝트", comment: "Sidebar section of project settings" }),
+      items: projects,
+    },
     ...(hiddenProjects.length > 0
-      ? [{ value: navigationCopy.project.archivedGroup, items: hiddenProjects }]
+      ? [{ value: "archived", label: t`보관된 프로젝트`, items: hiddenProjects }]
       : []),
   ];
   return (
@@ -334,22 +406,30 @@ function ProjectCombobox({
     >
       <ComboboxInput
         className="h-6 min-w-0 flex-1"
-        placeholder={navigationCopy.project.search}
-        aria-label={navigationCopy.project.choose}
+        placeholder={t({
+          message: "프로젝트 검색",
+          comment: "Placeholder of the project search box",
+        })}
+        aria-label={t`프로젝트 선택`}
       />
       <ComboboxContent>
-        <ComboboxEmpty>{navigationCopy.project.noMatch}</ComboboxEmpty>
+        <ComboboxEmpty>
+          <Trans>맞는 프로젝트가 없습니다.</Trans>
+        </ComboboxEmpty>
         <ComboboxList>
           {(group: (typeof groups)[number]) => (
             <ComboboxGroup key={group.value} items={group.items}>
-              {groups.length > 1 && <ComboboxLabel>{group.value}</ComboboxLabel>}
+              {groups.length > 1 && <ComboboxLabel>{group.label}</ComboboxLabel>}
               <ComboboxCollection>
                 {(project: Project) => (
                   <ComboboxItem key={project.id} value={project} title={project.root}>
                     <span className="min-w-0 flex-1 truncate">{project.name}</span>
                     {project.hiddenAt !== null && (
                       <span className="flex shrink-0 items-center gap-1 pr-5 text-muted-foreground">
-                        <ArchiveRestoreIcon /> {navigationCopy.project.unarchive}
+                        <ArchiveRestoreIcon />{" "}
+                        <Trans comment="Hint on an archived project: choosing it unarchives it">
+                          보관 해제
+                        </Trans>
                       </span>
                     )}
                   </ComboboxItem>
@@ -379,6 +459,7 @@ function OpenFolderButton({
   onSelect: (projectId: string) => void;
   onPickFolder: () => Promise<FolderPick>;
 }) {
+  const { t } = useLingui();
   const [picking, setPicking] = useState(false);
   const [fallback, setFallback] = useState<{ root: string; error: string | null } | null>(null);
 
@@ -431,8 +512,11 @@ function OpenFolderButton({
       <Button
         variant="outline"
         size="icon-sm"
-        aria-label={navigationCopy.project.openFolder}
-        title={navigationCopy.project.openFolder}
+        aria-label={t({
+          message: "폴더 열기",
+          comment: "Button that adds a project from a folder",
+        })}
+        title={t({ message: "폴더 열기", comment: "Button that adds a project from a folder" })}
         disabled={picking}
         onClick={() => void open()}
       >
@@ -475,8 +559,15 @@ function AddProjectDialog({
     >
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>{navigationCopy.addProject.title}</DialogTitle>
-          <DialogDescription>{navigationCopy.addProject.description}</DialogDescription>
+          <DialogTitle>
+            <Trans>프로젝트 추가</Trans>
+          </DialogTitle>
+          <DialogDescription>
+            <Trans>
+              폴더의 절대 경로를 입력해 주십시오. 등록한 폴더 안의 파일은 에이전트가 읽고 고칠 수
+              있습니다.
+            </Trans>
+          </DialogDescription>
         </DialogHeader>
         <form
           className="flex flex-col gap-3"
@@ -497,7 +588,9 @@ function AddProjectDialog({
           }
         >
           <Field>
-            <FieldLabel htmlFor="project-root">{navigationCopy.addProject.path}</FieldLabel>
+            <FieldLabel htmlFor="project-root">
+              <Trans>폴더 경로</Trans>
+            </FieldLabel>
             <Input
               id="project-root"
               value={root}
@@ -509,10 +602,10 @@ function AddProjectDialog({
           </Field>
           <DialogFooter>
             <DialogClose render={<Button type="button" variant="outline" />}>
-              {navigationCopy.addProject.cancel}
+              <Trans comment="Button that closes the add project dialog">취소</Trans>
             </DialogClose>
             <Button type="submit" disabled={adding || !isTruthy(root.trim())}>
-              {adding && <Spinner />} {navigationCopy.addProject.submit}
+              {adding && <Spinner />} <Trans comment="Button that adds the project">추가</Trans>
             </Button>
           </DialogFooter>
         </form>
@@ -526,7 +619,7 @@ function AddProjectDialog({
  * zone, so the server's HTML and its hydration name it in words instead.
  */
 const sessionLabel = (hydrated: boolean) => (session: Session) =>
-  session.title ?? (hydrated ? dayAndTime(session.createdAt) : navigationCopy.sessions.untitled);
+  session.title ?? (hydrated ? dayAndTime(session.createdAt) : t`제목 없는 대화`);
 
 /** Where in the repository a conversation ran: its branch, or else its worktree folder's name. */
 const sessionPlace = (session: Session) =>
@@ -575,6 +668,7 @@ function SessionGroup({
   defaultOpen?: boolean;
   children: React.ReactNode;
 }) {
+  const { t } = useLingui();
   // The heading sticks to the top of the scrolling list while its section is in view; the next
   // section's heading pushes it out, since a sticky element stays inside its own section.
   return (
@@ -583,7 +677,13 @@ function SessionGroup({
         <CollapsibleTrigger className="group sticky top-0 z-10 flex h-8 w-full items-center gap-1 rounded-md bg-sidebar px-2 text-2xs font-medium tracking-wide text-muted-foreground uppercase outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring">
           <ChevronRightIcon className="size-3.5 shrink-0 transition-transform group-data-[panel-open]:rotate-90" />
           <span className="min-w-0 flex-1 truncate text-left">{title}</span>
-          <span className="tabular-nums" aria-label={navigationCopy.sessions.count(count)}>
+          <span
+            className="tabular-nums"
+            aria-label={t({
+              message: `${count}개`,
+              comment: "How many conversations the section holds",
+            })}
+          >
             {count}
           </span>
         </CollapsibleTrigger>
@@ -628,8 +728,8 @@ export function SessionSection({
   /** Trusted external agents a conversation can talk to directly. */
   agents: readonly string[];
 }) {
+  const { t } = useLingui();
   const label = sessionLabel(useHydrated());
-  const copy = navigationCopy.sessions;
   const [placeValue, setPlaceValue] = useState(everyPlace);
   // The asked-about conversation stays while the dialog closes, so its title does not blank out.
   const [deleteAsk, setDeleteAsk] = useState<{
@@ -646,11 +746,25 @@ export function SessionSection({
   const atWork = shown.filter(working);
   const rest = shown.filter((session) => !working(session));
   const everywhere = PlaceFilter.$is("all")(filter);
+  const everyPlaceLabel = t({
+    message: "모든 작업 위치",
+    comment: "Place filter option: conversations from every branch and worktree",
+  });
+  const checkoutLabel = t({
+    message: "저장소 본체",
+    comment: "Place filter option: conversations in the repository checkout, not a worktree",
+  });
   const placeLabel = PlaceFilter.$match(filter, {
-    all: () => copy.everyPlace,
-    checkout: () => copy.checkout,
+    all: () => everyPlaceLabel,
+    checkout: () => checkoutLabel,
     place: ({ place }) => place,
   });
+  const menuLabel = (session: Session) =>
+    t({
+      message: `${ph({ title: label(session) })} 메뉴`,
+      comment: "Button that opens a conversation's menu; title is the conversation's title",
+    });
+  const deleteTitle = deleteAsk === null ? null : label(deleteAsk.session);
   const row = (session: Session) => (
     <SidebarMenuItem key={session.id}>
       <SidebarMenuButton
@@ -681,26 +795,45 @@ export function SessionSection({
         )}
         {working(session) && (
           <span className="flex shrink-0 text-muted-foreground">
-            <Spinner aria-label={answering.has(session.id) ? copy.answering : copy.boardRunning} />
+            <Spinner
+              aria-label={
+                answering.has(session.id)
+                  ? t({
+                      message: "답변 중",
+                      comment: "Conversation status: an answer is streaming",
+                    })
+                  : t({
+                      message: "보드 실행 중",
+                      comment: "Conversation status: its kanban board is running",
+                    })
+              }
+            />
           </span>
         )}
       </SidebarMenuButton>
       {/* One menu on hover or focus keeps the row's width for its title. */}
       <DropdownMenu>
         <DropdownMenuTrigger
-          render={<SidebarMenuAction showOnHover aria-label={copy.menuFor(label(session))} />}
+          render={<SidebarMenuAction showOnHover aria-label={menuLabel(session)} />}
         >
           <EllipsisIcon />
         </DropdownMenuTrigger>
         <DropdownMenuContent side="right" align="start">
-          <DropdownMenuItem onClick={() => onArchive(session.id)} title={copy.archiveTitle}>
-            <ArchiveIcon /> {copy.archive}
+          <DropdownMenuItem
+            onClick={() => onArchive(session.id)}
+            title={t`실행 중이면 안전하게 중단하고 기억은 남깁니다`}
+          >
+            <ArchiveIcon />{" "}
+            <Trans comment="Menu item that archives the conversation">보관하기</Trans>
           </DropdownMenuItem>
           <DropdownMenuItem
             variant="destructive"
             onClick={() => setDeleteAsk({ session, open: true })}
           >
-            <Trash2Icon /> {copy.deleteSource}
+            <Trash2Icon />{" "}
+            <Trans comment="Menu item that deletes the conversation's source record">
+              원본 삭제
+            </Trans>
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -711,31 +844,49 @@ export function SessionSection({
       {/* The list's actions come first, then its sections; no title row competes with them. */}
       <div className="flex px-2 pt-3 pb-1">
         <div className="flex min-w-0 flex-1">
-          <ButtonGroup aria-label={copy.newChat} className="w-full">
+          <ButtonGroup
+            aria-label={t({
+              message: "새 대화",
+              comment: "Group of buttons that start a conversation",
+            })}
+            className="w-full"
+          >
             <Button
               variant="outline"
               size="sm"
               className="flex-1 justify-start"
               onClick={() => onCreate()}
             >
-              <PlusIcon /> {copy.newChat}
+              <PlusIcon /> <Trans comment="Button that starts a conversation">새 대화</Trans>
             </Button>
             <DropdownMenu>
               <DropdownMenuTrigger
-                render={<Button variant="outline" size="icon-sm" aria-label={copy.pickPartner} />}
+                render={
+                  <Button variant="outline" size="icon-sm" aria-label={t`대화 상대 고르기`} />
+                }
               >
                 <ChevronDownIcon />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuGroup>
-                  <DropdownMenuLabel>{copy.newPartner}</DropdownMenuLabel>
-                  <DropdownMenuItem onClick={() => onCreate()}>{copy.appModel}</DropdownMenuItem>
+                  <DropdownMenuLabel>
+                    <Trans comment="Menu heading: who the new conversation talks to">
+                      새 대화 상대
+                    </Trans>
+                  </DropdownMenuLabel>
+                  <DropdownMenuItem onClick={() => onCreate()}>
+                    <Trans comment="Menu item: talk to this app's own model">이 앱의 모델</Trans>
+                  </DropdownMenuItem>
                 </DropdownMenuGroup>
                 <DropdownMenuSeparator />
                 <DropdownMenuGroup>
-                  <DropdownMenuLabel>{copy.externalAgents}</DropdownMenuLabel>
+                  <DropdownMenuLabel>
+                    <Trans>외부 에이전트와 직접</Trans>
+                  </DropdownMenuLabel>
                   {agents.length === 0 ? (
-                    <DropdownMenuItem disabled>{copy.noTrustedAgents}</DropdownMenuItem>
+                    <DropdownMenuItem disabled>
+                      <Trans>설정에서 신뢰한 에이전트가 없습니다</Trans>
+                    </DropdownMenuItem>
                   ) : (
                     agents.map((agent) => (
                       <DropdownMenuItem key={agent} onClick={() => onCreate(agent)}>
@@ -760,8 +911,14 @@ export function SessionSection({
                   variant={everywhere ? "ghost-muted" : "secondary"}
                   size="sm"
                   className="w-full justify-start"
-                  aria-label={copy.placeWith(placeLabel)}
-                  title={copy.placeWith(placeLabel)}
+                  aria-label={t({
+                    message: `작업 위치: ${placeLabel}`,
+                    comment: "Place filter button; placeLabel is the branch or worktree shown",
+                  })}
+                  title={t({
+                    message: `작업 위치: ${placeLabel}`,
+                    comment: "Place filter button; placeLabel is the branch or worktree shown",
+                  })}
                 />
               }
             >
@@ -771,16 +928,18 @@ export function SessionSection({
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-64">
               <DropdownMenuGroup>
-                <DropdownMenuLabel>{copy.place}</DropdownMenuLabel>
+                <DropdownMenuLabel>
+                  <Trans comment="Place filter menu heading: a branch or worktree">작업 위치</Trans>
+                </DropdownMenuLabel>
                 <DropdownMenuRadioGroup
                   value={placeValue}
                   onValueChange={(value: string) => setPlaceValue(value)}
                 >
                   <DropdownMenuRadioItem value={everyPlace}>
-                    {copy.everyPlace}
+                    {everyPlaceLabel}
                   </DropdownMenuRadioItem>
                   <DropdownMenuRadioItem value={checkoutPlace}>
-                    {copy.checkout}
+                    {checkoutLabel}
                   </DropdownMenuRadioItem>
                   {places.map((place) => (
                     <DropdownMenuRadioItem key={place} value={place} title={place}>
@@ -808,24 +967,46 @@ export function SessionSection({
           </div>
         )}
         {!loading && sessions.length === 0 && (
-          <p className="px-4 py-2 text-xs text-muted-foreground">{copy.empty}</p>
+          <p className="px-4 py-2 text-xs text-muted-foreground">
+            <Trans>아직 대화가 없습니다.</Trans>
+          </p>
         )}
         {sessions.length > 0 && shown.length === 0 && (
-          <p className="px-4 py-2 text-xs text-muted-foreground">{copy.emptyPlace}</p>
+          <p className="px-4 py-2 text-xs text-muted-foreground">
+            <Trans>이 작업 위치의 대화가 없습니다.</Trans>
+          </p>
         )}
         {/* Three sections of one rank: same heading, same rows, one after another. */}
         {sessions.length > 0 && shown.length > 0 && (
           <>
-            <SessionGroup title={copy.atWork} count={atWork.length} defaultOpen>
+            <SessionGroup
+              title={t({
+                message: "진행 중",
+                comment: "Conversation list section: conversations answering or running a board",
+              })}
+              count={atWork.length}
+              defaultOpen
+            >
               {atWork.length === 0 ? (
-                <p className="px-2 py-1 text-xs text-muted-foreground">{copy.atWorkEmpty}</p>
+                <p className="px-2 py-1 text-xs text-muted-foreground">
+                  <Trans>진행 중인 대화가 없습니다.</Trans>
+                </p>
               ) : (
                 <SidebarMenu>{atWork.map(row)}</SidebarMenu>
               )}
             </SessionGroup>
-            <SessionGroup title={copy.conversations} count={rest.length} defaultOpen>
+            <SessionGroup
+              title={t({
+                message: "대화",
+                comment: "Conversation list section: the conversations not at work",
+              })}
+              count={rest.length}
+              defaultOpen
+            >
               {rest.length === 0 ? (
-                <p className="px-2 py-1 text-xs text-muted-foreground">{copy.conversationsEmpty}</p>
+                <p className="px-2 py-1 text-xs text-muted-foreground">
+                  <Trans>다른 대화가 없습니다.</Trans>
+                </p>
               ) : (
                 <SidebarMenu>{rest.map(row)}</SidebarMenu>
               )}
@@ -833,7 +1014,13 @@ export function SessionSection({
           </>
         )}
         {archived.length > 0 && (
-          <SessionGroup title={copy.archived} count={archived.length}>
+          <SessionGroup
+            title={t({
+              message: "보관함",
+              comment: "Conversation list section: archived conversations",
+            })}
+            count={archived.length}
+          >
             <SidebarMenu>
               {archived.map((session) => (
                 <SidebarMenuItem key={session.id}>
@@ -842,8 +1029,8 @@ export function SessionSection({
                     <DropdownMenuTrigger
                       render={
                         <SidebarMenuButton
-                          title={copy.archivedTitle}
-                          aria-label={copy.menuFor(label(session))}
+                          title={t`목록에서만 뺀 대화입니다. 기억 검색에는 계속 나옵니다.`}
+                          aria-label={menuLabel(session)}
                         />
                       }
                     >
@@ -851,13 +1038,19 @@ export function SessionSection({
                     </DropdownMenuTrigger>
                     <DropdownMenuContent side="right" align="start">
                       <DropdownMenuItem onClick={() => onRestore(session.id)}>
-                        <ArchiveRestoreIcon /> {copy.restore}
+                        <ArchiveRestoreIcon />{" "}
+                        <Trans comment="Menu item that brings the conversation back to the list">
+                          복원
+                        </Trans>
                       </DropdownMenuItem>
                       <DropdownMenuItem
                         variant="destructive"
                         onClick={() => setDeleteAsk({ session, open: true })}
                       >
-                        <Trash2Icon /> {copy.deleteSource}
+                        <Trash2Icon />{" "}
+                        <Trans comment="Menu item that deletes the conversation's source record">
+                          원본 삭제
+                        </Trans>
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
@@ -875,14 +1068,18 @@ export function SessionSection({
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>{copy.deleteConfirm.title}</AlertDialogTitle>
+            <AlertDialogTitle>
+              <Trans>대화 원본을 삭제할까요?</Trans>
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              {deleteAsk === null ? "" : `${copy.deleteTarget(label(deleteAsk.session))} `}
-              {copy.deleteConfirm.body}
+              {deleteTitle === null ? "" : `${t`"${deleteTitle}" 대화의 원본을 지웁니다.`} `}
+              <Trans>채택된 project memory와 Work Trace provenance는 유지됩니다.</Trans>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>{copy.deleteConfirm.choices.cancel}</AlertDialogCancel>
+            <AlertDialogCancel>
+              <Trans comment="Dialog button that cancels">취소</Trans>
+            </AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
               onClick={() => {
@@ -890,7 +1087,9 @@ export function SessionSection({
                 setDeleteAsk((current) => (current === null ? null : { ...current, open: false }));
               }}
             >
-              {copy.deleteConfirm.choices.delete}
+              <Trans comment="Dialog button that confirms deleting the conversation's source">
+                삭제
+              </Trans>
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

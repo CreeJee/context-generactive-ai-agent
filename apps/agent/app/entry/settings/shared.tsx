@@ -1,3 +1,6 @@
+import type { MessageDescriptor } from "@lingui/core";
+import { msg, t } from "@lingui/core/macro";
+import { Trans, useLingui } from "@lingui/react/macro";
 import { Effect, Fiber, Function as EffectFunction } from "effect";
 import { isTruthy } from "../../truthy.ts";
 import { CheckIcon, CopyIcon, FolderIcon } from "lucide-react";
@@ -17,19 +20,55 @@ import {
 import type { ConfigFileFailureCode, ShownFailure } from "memory-agent/definitions";
 import type { ApiError, Project } from "../api";
 import { FailureDetails } from "../shared/failure-details";
-import { settingsCopy } from "./copy";
 
-const copy = settingsCopy.shared;
+/** Each page's name, in the tab list and at the top of the page. */
+export const pageTitles = {
+  web: msg({ message: "웹 검색", comment: "Settings page name: web search through Kagi" }),
+  image: msg({ message: "이미지 생성", comment: "Settings page name: image generation" }),
+  mcp: msg({ message: "MCP 서버", comment: "Settings page name: configured MCP servers" }),
+  agents: msg({
+    message: "외부 에이전트",
+    comment: "Settings page name: outside ACP agents the conversation may delegate to",
+  }),
+  conversation: msg({
+    message: "긴 대화",
+    comment: "Settings page name: when a long conversation starts being summarized",
+  }),
+  recall: msg({
+    message: "기억 범위",
+    comment: "Settings page name: which memory a conversation may search beyond its project",
+  }),
+  imports: msg({
+    message: "대화 가져오기",
+    comment: "Settings page name: importing other coding agents' conversations into memory",
+  }),
+  embedding: msg({
+    message: "임베딩",
+    comment: "Settings page name: where memory search vectors are computed",
+  }),
+  kanban: msg({
+    message: "칸반 실행",
+    comment: "Settings page name: running Goals on the kanban board",
+  }),
+  improvements: msg({
+    message: "프로젝트 개선",
+    comment: "Settings page name: finding repeated corrections in project history",
+  }),
+  skills: msg({
+    message: "Skills",
+    comment: "Settings page name: skill instructions the model reads",
+  }),
+} as const satisfies Record<string, MessageDescriptor>;
 
 export function errorMessage(error: ApiError | null) {
-  if (error === null) return copy.settingsChangeFailed;
+  if (error === null) return t`설정을 바꾸지 못했습니다.`;
   switch (error.code) {
     case "keychain_failed":
-      return copy.keychainFailed;
+      return t`OS 키체인에 접근하지 못했습니다. 키를 다른 곳에 대신 저장하지 않습니다.`;
     case "kagi_key_required":
-      return copy.kagiKeyRequired;
+      return t`먼저 API 키를 등록해 주십시오.`;
     default:
-      return copy.settingsChangeFailed;
+      return t`설정을 바꾸지 못했습니다.`;
   }
 }
 
@@ -81,7 +120,11 @@ export function PageError({ error }: { error: string | null }) {
 }
 
 export function NoProject() {
-  return <FieldDescription>{copy.noProject}</FieldDescription>;
+  return (
+    <FieldDescription>
+      <Trans>사이드바에서 프로젝트를 고르면 그 프로젝트의 설정이 보입니다.</Trans>
+    </FieldDescription>
+  );
 }
 
 /** A path as the page shows it: the home folder as `~`, and only its end when it is long. */
@@ -106,6 +149,7 @@ function pathInBody(project: Project, path: string) {
 const copiedForMs = 1_500;
 
 function CopyPathButton({ path }: { path: string }) {
+  const { t } = useLingui();
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!copied) return;
@@ -120,7 +164,17 @@ function CopyPathButton({ path }: { path: string }) {
     <Button
       variant="ghost-muted"
       size="icon-xs"
-      aria-label={copied ? copy.pathCopied : copy.copyPath}
+      aria-label={
+        copied
+          ? t({
+              message: "경로를 복사했습니다",
+              comment: "Copy button label right after it copied a path",
+            })
+          : t({
+              message: "전체 경로 복사",
+              comment: "Icon button that copies a config file's full path",
+            })
+      }
       title={path}
       onClick={() =>
         void navigator.clipboard.writeText(path).then(
@@ -147,12 +201,19 @@ export interface ConfigProblem {
   readonly detail: string | null;
 }
 
+const configFileFailures = {
+  unreadable: msg`파일을 읽지 못했습니다.`,
+  invalid_config: msg`설정 형식이 맞지 않아 이 파일을 쓰지 않습니다.`,
+  invalid_names: msg`이름은 영문자·숫자·_·-로 1~32자여야 합니다. 맞지 않는 항목은 빼고 씁니다.`,
+} satisfies Record<ConfigFileFailureCode, MessageDescriptor>;
+
 /** Where a page's list comes from, one short line per file; the full path is copied on demand. */
-export function SourceFiles({ files, note }: { files: readonly SourceFile[]; note?: string }) {
+export function SourceFiles({ files, note }: { files: readonly SourceFile[]; note?: ReactNode }) {
+  const { t } = useLingui();
   return (
     <div className="flex flex-col gap-1 rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
       {files.map((file) => (
-        <div key={file.label}>
+        <div key={file.path}>
           <div className="flex min-w-0 items-center gap-2">
             <span className="w-12 shrink-0">{file.label}</span>
             <code className="min-w-0 flex-1 truncate" title={file.path}>
@@ -162,7 +223,7 @@ export function SourceFiles({ files, note }: { files: readonly SourceFile[]; not
           </div>
           {file.error && (
             <>
-              <p className="text-destructive">{copy.configFileFailure[file.error.code]}</p>
+              <p className="text-destructive">{t(configFileFailures[file.error.code])}</p>
               <FailureDetails detail={file.error.detail} />
             </>
           )}
@@ -173,9 +234,18 @@ export function SourceFiles({ files, note }: { files: readonly SourceFile[]; not
   );
 }
 
-export const scopeLabels = copy.scopes;
+export const scopeLabels = {
+  global: msg({
+    message: "공통",
+    comment: "Scope badge: set in the user-wide config, shared by every project",
+  }),
+  project: msg({ message: "프로젝트", comment: "Scope badge: set in this project's config" }),
+} as const;
 /** Skills also come built into the app, which MCP servers and agents do not. */
-export const skillScopeLabels = { builtin: copy.builtinScope, ...scopeLabels } as const;
+export const skillScopeLabels = {
+  builtin: msg({ message: "기본", comment: "Scope badge: a skill built into the app" }),
+  ...scopeLabels,
+} as const;
 
 /** One configured MCP server or agent: name, where it is set, how it runs, and what to do. */
 export function ConfigEntry({
@@ -202,20 +272,30 @@ export function ConfigEntry({
   children?: ReactNode;
   actions?: ReactNode;
 }) {
+  const { t } = useLingui();
+  const names = secretNames.join(", ");
   return (
     <Item variant="outline" size="sm">
       <ItemMedia variant="icon">{icon}</ItemMedia>
       <ItemContent className="min-w-0">
         <ItemTitle className="flex-wrap">
           {name}
-          <Badge variant="secondary">{scopeLabels[scope]}</Badge>
+          <Badge variant="secondary">{t(scopeLabels[scope])}</Badge>
           {state}
         </ItemTitle>
         <ItemDescription className="break-all">
-          {target === null ? copy.hiddenTarget : <code>{target}</code>}
+          {target === null ? (
+            <Trans>비밀정보 확인에 실패해 명령줄을 숨겼습니다.</Trans>
+          ) : (
+            <code>{target}</code>
+          )}
         </ItemDescription>
         {secretNames.length > 0 && (
-          <ItemDescription>{copy.secretNames(secretKind, secretNames.join(", "))}</ItemDescription>
+          <ItemDescription>
+            <Trans comment="{secretKind} is the kind of secret (environment variables or HTTP headers); {names} lists their names">
+              {secretKind}: {names} (값은 보여 주지 않습니다)
+            </Trans>
+          </ItemDescription>
         )}
         {problem && (
           <>
@@ -249,9 +329,25 @@ export function TrustButton({
       disabled={busy}
       onClick={onClick}
     >
-      {active ? copy.trust.stop : changed ? copy.trust.again : copy.trust.first}
+      {active ? (
+        <Trans comment="Button that stops a trusted MCP server or agent from running">
+          사용 중지
+        </Trans>
+      ) : changed ? (
+        <Trans comment="Button that trusts an MCP server or agent again after its config changed">
+          다시 신뢰하기
+        </Trans>
+      ) : (
+        <Trans comment="Button that trusts an MCP server or agent so it may start">신뢰하기</Trans>
+      )}
     </Button>
   );
 }
 
-export const shadowedBadge = <Badge variant="outline">{copy.shadowed}</Badge>;
+export const shadowedBadge = (
+  <Badge variant="outline">
+    <Trans comment="Badge on a user-wide entry that a project entry of the same name replaces">
+      프로젝트 설정으로 대체됨
+    </Trans>
+  </Badge>
+);

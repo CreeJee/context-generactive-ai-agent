@@ -1,4 +1,7 @@
-import { Array as Arr, Effect } from "effect";
+import { i18n, type MessageDescriptor } from "@lingui/core";
+import { msg, ph, t } from "@lingui/core/macro";
+import { Trans, useLingui } from "@lingui/react/macro";
+import { Array as Arr, type Data, Effect } from "effect";
 import { runUiEffect, uiPromise } from "../../shared/ui-effect";
 import { BotIcon, RefreshCwIcon } from "lucide-react";
 import { Schema } from "effect";
@@ -28,11 +31,8 @@ import { timeOfDay } from "~/lib/dates";
 import { ImportActivity, ImportCommand, refusalOf } from "../../api";
 import { useImportsQuery } from "../../queries/global";
 import { useImportMutation } from "../../queries/mutations/global";
-import { errorMessage, PageHeader, PageError, shortPath } from "../shared";
+import { errorMessage, PageHeader, PageError, pageTitles, shortPath } from "../shared";
 import { LoopHealthStatus } from "../../shared/loop-health";
-import { settingsCopy } from "../copy";
-
-const copy = settingsCopy.imports;
 
 const sourceNames = { "claude-code": "Claude Code", codex: "Codex CLI" } as const;
 
@@ -44,12 +44,18 @@ const UnplacedReason = Schema.Literals([
   "no_session_line",
   "no_project",
 ]);
-const unplacedReasons = copy.unplaced satisfies Record<typeof UnplacedReason.Type, string>;
+const unplacedReasons = {
+  not_found: msg`폴더가 없어졌습니다`,
+  not_directory: msg`폴더가 아닙니다`,
+  overlaps_storage: msg`이 앱의 저장 폴더 안입니다`,
+  no_session_line: msg`어느 대화인지 알 수 없습니다`,
+  no_project: msg`프로젝트를 찾지 못했습니다`,
+} satisfies Record<typeof UnplacedReason.Type, MessageDescriptor>;
 const isUnplacedReason = Schema.is(UnplacedReason);
 
 /** A reason this build does not know yet is shown as it came, rather than hidden. */
 const unplacedReason = (reason: string) =>
-  isUnplacedReason(reason) ? unplacedReasons[reason] : reason;
+  isUnplacedReason(reason) ? i18n._(unplacedReasons[reason]) : reason;
 
 /** The failure tags a transcript's import records, as `Tag` or `Tag:Reason` joined by commas. */
 const ImportFailureTag = Schema.Literals([
@@ -62,18 +68,36 @@ const ImportFailureTag = Schema.Literals([
   "Defect",
   "Interrupted",
 ]);
-const importFailureTexts = copy.failures satisfies Record<typeof ImportFailureTag.Type, string>;
+const importFailureTexts = {
+  PlatformError: msg`파일을 읽지 못했습니다`,
+  SchemaError: msg`기록 형식을 읽지 못했습니다`,
+  TranscriptDecompressFailed: msg`압축된 기록을 풀지 못했습니다`,
+  ImportStoreFailed: msg`기억 저장소에 쓰지 못했습니다`,
+  BulkWriteFailed: msg`기억 저장소에 쓰지 못했습니다`,
+  SqlError: msg`기억 저장소에 쓰지 못했습니다`,
+  Defect: msg`예상하지 못한 오류가 났습니다`,
+  Interrupted: msg`가져오기가 중단됐습니다`,
+} satisfies Record<typeof ImportFailureTag.Type, MessageDescriptor>;
 const PlatformFailureReason = Schema.Literals(["NotFound", "PermissionDenied"]);
-const platformFailureTexts = copy.platformFailures satisfies Record<
-  typeof PlatformFailureReason.Type,
-  string
->;
+const platformFailureTexts = {
+  NotFound: msg`파일을 찾지 못했습니다`,
+  PermissionDenied: msg`파일을 읽을 권한이 없습니다`,
+} satisfies Record<typeof PlatformFailureReason.Type, MessageDescriptor>;
+
+const crashReasons = {
+  start: msg`가져오기 작업을 시작하지 못했습니다`,
+  count: msg`기록 수를 세지 못했습니다`,
+  pass: msg`기록을 읽다가 실패했습니다`,
+  lost: msg`가져오기 작업이 끊겼습니다`,
+} satisfies Record<Data.TaggedEnum.Value<ImportActivity, "crashed">["reason"], MessageDescriptor>;
 
 const importFailurePart = (part: string) => {
   const [tag, reason] = part.split(":");
   if (tag === "PlatformError" && Schema.is(PlatformFailureReason)(reason))
-    return platformFailureTexts[reason];
-  return Schema.is(ImportFailureTag)(tag) ? importFailureTexts[tag] : copy.failureOther;
+    return i18n._(platformFailureTexts[reason]);
+  return Schema.is(ImportFailureTag)(tag)
+    ? i18n._(importFailureTexts[tag])
+    : t`가져오지 못했습니다`;
 };
 /**
  * A recorded import failure in words. Anything else, such as text an older build stored, reads
@@ -85,41 +109,63 @@ const importFailureText = (failure: string) =>
 /** How often the page asks again while a pass reads, and while its nodes wait to be indexed. */
 /** The pass this server is running, or how its latest one went. */
 function ImportActivityLine({ activity }: { activity: ImportActivity }) {
+  const { t } = useLingui();
   return ImportActivity.$match(activity, {
     running: (activity) => (
       <FieldDescription className="flex items-center">
         <Spinner className="mr-1.5" />
         <span>
-          {copy.running.reading} <AnimatedNumber value={activity.checked} />/
-          <AnimatedNumber value={activity.total} />
-          {copy.running.checked} <AnimatedNumber value={activity.written} />
-          {copy.running.written}
+          <Trans>
+            기록을 읽는 중입니다. <AnimatedNumber value={activity.checked} />/
+            <AnimatedNumber value={activity.total} />
+            개를 확인하고 노드 <AnimatedNumber value={activity.written} />
+            개를 더했습니다.
+          </Trans>
           {activity.failed > 0 && (
             <>
               {" "}
-              <AnimatedNumber value={activity.failed} />
-              {copy.unreadAfter}
+              <Trans>
+                <AnimatedNumber value={activity.failed} />
+                개는 읽지 못했습니다.
+              </Trans>
             </>
           )}
         </span>
       </FieldDescription>
     ),
-    finished: (activity) => (
-      <FieldDescription>
-        {copy.finished(timeOfDay(activity.finishedAt), activity.checked, activity.written)}
-        {activity.failed > 0 && ` ${copy.unread(activity.failed)}`}
-      </FieldDescription>
-    ),
-    crashed: (activity) => (
-      <FieldError>
-        {copy.crashed(timeOfDay(activity.finishedAt), copy.crashReasons[activity.reason])}
-      </FieldError>
-    ),
+    finished: ({ finishedAt, checked, written, failed }) => {
+      const time = timeOfDay(finishedAt);
+      return (
+        <FieldDescription>
+          <Trans>
+            {time}에 기록 {checked}개를 확인하고 노드 {written}개를 더했습니다.
+          </Trans>
+          {failed > 0 && (
+            <>
+              {" "}
+              <Trans>{failed}개는 읽지 못했습니다.</Trans>
+            </>
+          )}
+        </FieldDescription>
+      );
+    },
+    crashed: ({ finishedAt, reason: code }) => {
+      const time = timeOfDay(finishedAt);
+      const reason = t(crashReasons[code]);
+      return (
+        <FieldError>
+          <Trans>
+            {time}에 가져오기가 중간에 멈췄습니다: {reason}
+          </Trans>
+        </FieldError>
+      );
+    },
   });
 }
 
 /** Migrating other coding agents' local conversations into this app's memory. */
 export function ImportSettings() {
+  const { t } = useLingui();
   const mutation = useImportMutation();
   const { data: overview } = useImportsQuery();
   const busy = mutation.isPending;
@@ -142,8 +188,13 @@ export function ImportSettings() {
 
   const header = (
     <PageHeader
-      title={settingsCopy.titles.imports}
-      description={copy.description}
+      title={t(pageTitles.imports)}
+      description={
+        <Trans>
+          Claude Code와 Codex CLI가 이 컴퓨터에 남긴 대화를 기억으로 옮깁니다. 도구 호출과 결과까지
+          옮겨서 옛 대화도 근거를 따라갈 수 있습니다. 원본 파일은 읽기만 합니다.
+        </Trans>
+      }
       action={
         <Button
           variant="outline"
@@ -152,7 +203,11 @@ export function ImportSettings() {
           onClick={() => void apply(ImportCommand.run())}
         >
           {busy || reading ? <Spinner /> : <RefreshCwIcon />}
-          {reading ? copy.reading : copy.importNow}
+          {reading ? (
+            <Trans comment="Import button label while an import pass is reading">읽는 중</Trans>
+          ) : (
+            <Trans comment="Button that starts importing conversations now">지금 가져오기</Trans>
+          )}
         </Button>
       }
     />
@@ -163,8 +218,16 @@ export function ImportSettings() {
 
       <Field orientation="horizontal">
         <FieldContent>
-          <FieldLabel htmlFor="imports-enabled">{copy.keepImportingLabel}</FieldLabel>
-          <FieldDescription>{copy.keepImportingHelp}</FieldDescription>
+          <FieldLabel htmlFor="imports-enabled">
+            <Trans comment="Switch label: keep importing new conversations in the background">
+              계속 가져오기
+            </Trans>
+          </FieldLabel>
+          <FieldDescription>
+            <Trans>
+              5분마다 새로 쌓인 대화를 이어서 읽습니다. 켤 때 지금 있는 기록을 한 번 읽습니다.
+            </Trans>
+          </FieldDescription>
         </FieldContent>
         <Switch
           id="imports-enabled"
@@ -177,7 +240,10 @@ export function ImportSettings() {
       </Field>
       {overview.enabled && overview.watch !== null && (
         <LoopHealthStatus
-          label={copy.watch}
+          label={t({
+            message: "감시",
+            comment: "Name of the background loop that watches for new conversations to import",
+          })}
           health={overview.watch}
           disabled={busy}
           onRestart={() => void apply(ImportCommand.restart_watch())}
@@ -186,8 +252,15 @@ export function ImportSettings() {
 
       <Field orientation="horizontal">
         <FieldContent>
-          <FieldLabel htmlFor="imports-interpret">{copy.interpretLabel}</FieldLabel>
-          <FieldDescription>{copy.interpretHelp}</FieldDescription>
+          <FieldLabel htmlFor="imports-interpret">
+            <Trans>가져온 발언도 해석</Trans>
+          </FieldLabel>
+          <FieldDescription>
+            <Trans>
+              주제를 붙이고 정정, 취소 관계를 정리합니다. 모델을 쓰기 때문에 답변이 끝난 뒤 조금씩
+              처리됩니다.
+            </Trans>
+          </FieldDescription>
         </FieldContent>
         <Switch
           id="imports-interpret"
@@ -206,11 +279,18 @@ export function ImportSettings() {
             <ItemContent className="min-w-0">
               <ItemTitle>{sourceNames[source.name]}</ItemTitle>
               <ItemDescription>
-                {copy.source.transcripts} <AnimatedNumber value={source.transcripts} />
-                {copy.source.migrated} <AnimatedNumber value={source.migrated} />
-                {copy.source.nodes} <AnimatedNumber value={source.nodes} />
-                {copy.source.written}
-                {source.failed > 0 && ` ${copy.unread(source.failed)}`}
+                <Trans>
+                  기록 <AnimatedNumber value={source.transcripts} />
+                  개 중 <AnimatedNumber value={source.migrated} />
+                  개를 읽어 노드 <AnimatedNumber value={source.nodes} />
+                  개를 넣었습니다.
+                </Trans>
+                {source.failed > 0 && (
+                  <>
+                    {" "}
+                    <Trans>{ph({ failed: source.failed })}개는 읽지 못했습니다.</Trans>
+                  </>
+                )}
               </ItemDescription>
               <ItemDescription className="break-all" title={source.root}>
                 <code>{shortPath(source.root)}</code>
@@ -224,25 +304,34 @@ export function ImportSettings() {
 
       {overview.unindexed > 0 && (
         <FieldDescription>
-          {copy.unindexed.before} <AnimatedNumber value={overview.unindexed} />
-          {copy.unindexed.after}
+          <Trans>
+            아직 <AnimatedNumber value={overview.unindexed} />
+            개를 인덱싱하고 있습니다. 최근 대화부터 채웁니다. 그동안에도 글자 검색과 형태소
+            검색으로는 찾을 수 있습니다.
+          </Trans>
         </FieldDescription>
       )}
 
-      <FieldDescription>{copy.projectsNote}</FieldDescription>
+      <FieldDescription>
+        <Trans>
+          대화가 있던 폴더는 프로젝트로 등록됩니다. 에이전트가 그 폴더의 파일을 읽고 고칠 수 있게
+          됩니다. 필요 없는 프로젝트는 사이드바에서 목록에서 빼 주십시오.
+        </Trans>
+      </FieldDescription>
 
       {overview.unplaced.length > 0 && (
         <Alert>
           <AlertDescription>
-            <div className="mb-1">{copy.unplacedTitle}</div>
+            <div className="mb-1">
+              <Trans>아래 폴더는 프로젝트로 만들 수 없어 가져오지 않았습니다.</Trans>
+            </div>
             <ul className="font-mono text-xs">
               {overview.unplaced.map((folder) => (
                 <li key={`${folder.cwd}:${folder.reason}`}>
-                  {copy.unplacedFolder(
-                    folder.cwd,
-                    folder.transcripts,
-                    unplacedReason(folder.reason),
-                  )}
+                  <Trans comment="A folder that could not become a project: its path, how many conversations it holds, and why">
+                    {ph({ cwd: folder.cwd })}: 대화 {ph({ transcripts: folder.transcripts })}개,{" "}
+                    {ph({ reason: unplacedReason(folder.reason) })}
+                  </Trans>
                 </li>
               ))}
             </ul>
@@ -253,7 +342,9 @@ export function ImportSettings() {
       {overview.failures.length > 0 && (
         <Alert variant="destructive">
           <AlertDescription>
-            <div className="mb-1">{copy.failuresTitle}</div>
+            <div className="mb-1">
+              <Trans>아래 기록은 읽지 못했습니다. 다음에 읽을 때 다시 시도합니다.</Trans>
+            </div>
             <ul className="font-mono text-xs">
               {overview.failures.map((failure) => (
                 <li key={`${failure.source}:${failure.path}`}>

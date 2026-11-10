@@ -1,7 +1,7 @@
 import { DateTime, Effect, Option, Schema } from "effect";
 import { SecureRandom } from "effect/crypto";
 import { SqlClient, SqlSchema } from "effect/sql";
-import { serverCopy } from "./copy";
+import { t } from "@lingui/core/macro";
 
 export interface ReportSessionBinding {
   reportSessionId: string;
@@ -34,8 +34,12 @@ export const openReportSession = Effect.fn("openReportSession")(function* (
       WHERE source_session_id = ${key.sourceSessionId} AND project_id = ${key.projectId}`,
   });
   const create = Effect.gen(function* () {
+    const title = t({
+      message: "문제 제보 분석",
+      comment: "Title of the conversation the app opens to analyze a problem report",
+    });
     yield* sql`INSERT INTO sessions (id, project_id, title, created_at)
-      VALUES (${id}, ${projectId}, ${serverCopy.reportSession.title}, ${createdAt})`;
+      VALUES (${id}, ${projectId}, ${title}, ${createdAt})`;
     yield* sql`INSERT INTO report_sessions (report_session_id, source_session_id, project_id, created_at)
       VALUES (${id}, ${sourceSessionId}, ${projectId}, ${createdAt})`;
     return id;

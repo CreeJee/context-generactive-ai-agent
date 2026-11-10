@@ -1,7 +1,6 @@
 import { expect, test } from "vite-plus/test";
 import { ProviderAuthState } from "../api";
 import { accountSummary } from "./account-model-panel";
-import { navigationCopy } from "./copy";
 
 test("compatible provider without a configuration reads as needing setup", () => {
   expect(
@@ -11,5 +10,5 @@ test("compatible provider without a configuration reads as needing setup", () =>
       null,
       undefined,
     ).status,
-  ).toBe(navigationCopy.accountModel.status.setupNeeded);
+  ).toBe("설정 필요");
 });

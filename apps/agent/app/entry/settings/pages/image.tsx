@@ -1,3 +1,6 @@
+import type { MessageDescriptor } from "@lingui/core";
+import { msg } from "@lingui/core/macro";
+import { Trans, useLingui } from "@lingui/react/macro";
 import { Effect } from "effect";
 import { runUiEffect, uiPromise } from "../../shared/ui-effect";
 import { useState } from "react";
@@ -24,10 +27,16 @@ import {
   useCrossProviderConsentMutation,
   useImageGenerationEnabledMutation,
 } from "../../queries/mutations/global";
-import { PageHeader } from "../shared";
-import { settingsCopy } from "../copy";
+import { PageHeader, pageTitles } from "../shared";
 
-const copy = settingsCopy.image;
+const consentModes = {
+  disabled: msg({
+    message: "사용 안 함",
+    comment: "Option: never send image prompts from Claude to OpenAI",
+  }),
+  ask: msg({ message: "매번 확인", comment: "Option: ask before each cross-provider image run" }),
+  always: msg({ message: "항상 허용", comment: "Option: always allow cross-provider image runs" }),
+} satisfies Record<CrossProviderMediaConsentMode, MessageDescriptor>;
 
 function isCrossProviderMediaConsentMode(
   value: string | null,
@@ -36,6 +45,7 @@ function isCrossProviderMediaConsentMode(
 }
 
 export function ImageSettings() {
+  const { t } = useLingui();
   const enabledMutation = useImageGenerationEnabledMutation();
   const consentMutation = useCrossProviderConsentMutation();
   const { data: status } = useSuspenseImageSettingsQuery();
@@ -50,7 +60,7 @@ export function ImageSettings() {
         yield* uiPromise(() => enabledMutation.mutateAsync(enabled)).pipe(
           Effect.catchTag("UnknownError", (_failure) =>
             Effect.sync(() => {
-              setError(copy.enabledFailed);
+              setError(t`이미지 설정을 바꾸지 못했습니다.`);
             }),
           ),
         );
@@ -65,7 +75,7 @@ export function ImageSettings() {
         yield* uiPromise(() => consentMutation.mutateAsync(mode)).pipe(
           Effect.catchTag("UnknownError", (_failure) =>
             Effect.sync(() => {
-              setError(copy.consentFailed);
+              setError(t`공급자 간 이미지 실행 동의를 바꾸지 못했습니다.`);
             }),
           ),
         );
@@ -74,15 +84,24 @@ export function ImageSettings() {
 
   const header = (
     <PageHeader
-      title={settingsCopy.titles.image}
+      title={t(pageTitles.image)}
       badge={
         status && (
           <Badge variant={status.imageGenerationEnabled ? "secondary" : "outline"}>
-            {status.imageGenerationEnabled ? copy.badge.on : copy.badge.off}
+            {status.imageGenerationEnabled ? (
+              <Trans comment="Badge: image generation is switched on">사용 중</Trans>
+            ) : (
+              <Trans comment="Badge: image generation is switched off">꺼짐</Trans>
+            )}
           </Badge>
         )
       }
-      description={copy.description}
+      description={
+        <Trans>
+          이미지 생성이 필요할 때만 작성창에서 생성 모드를 선택해 사용합니다. 일반 대화에는 이미지
+          도구가 추가되지 않습니다.
+        </Trans>
+      }
     />
   );
 
@@ -91,8 +110,15 @@ export function ImageSettings() {
       {header}
       <Field orientation="horizontal">
         <FieldContent>
-          <FieldLabel htmlFor="image-generation-enabled">{copy.enabledLabel}</FieldLabel>
-          <FieldDescription>{copy.enabledHelp}</FieldDescription>
+          <FieldLabel htmlFor="image-generation-enabled">
+            <Trans>이미지 생성 사용</Trans>
+          </FieldLabel>
+          <FieldDescription>
+            <Trans>
+              OpenAI API 키가 필요하며 생성할 때마다 비용이 발생할 수 있습니다. 설정은 바로 적용되고
+              앱을 다시 시작할 필요가 없습니다.
+            </Trans>
+          </FieldDescription>
         </FieldContent>
         <Switch
           id="image-generation-enabled"
@@ -102,12 +128,24 @@ export function ImageSettings() {
         />
       </Field>
       <Alert>
-        <AlertDescription>{copy.notAutomatic}</AlertDescription>
+        <AlertDescription>
+          <Trans>
+            켜도 이미지는 자동으로 생성되지 않습니다. 작성창에서 이미지 생성 모드를 선택한 요청만
+            처리합니다. 유료 실행 전에는 별도로 확인합니다.
+          </Trans>
+        </AlertDescription>
       </Alert>
       <Field orientation="horizontal">
         <FieldContent>
-          <FieldLabel htmlFor="cross-provider-media">{copy.crossProviderLabel}</FieldLabel>
-          <FieldDescription>{copy.crossProviderHelp}</FieldDescription>
+          <FieldLabel htmlFor="cross-provider-media">
+            <Trans>Claude에서 이미지 생성</Trans>
+          </FieldLabel>
+          <FieldDescription>
+            <Trans>
+              Claude 사용 중 이미지 생성을 요청하면 프롬프트를 OpenAI로 보냅니다. 사용량은 OpenAI
+              계정에 귀속됩니다. 로그인만으로 자동 허용되지 않습니다.
+            </Trans>
+          </FieldDescription>
         </FieldContent>
         <Select
           value={
@@ -123,9 +161,9 @@ export function ImageSettings() {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="disabled">{copy.consentModes.disabled}</SelectItem>
-            <SelectItem value="ask">{copy.consentModes.ask}</SelectItem>
-            <SelectItem value="always">{copy.consentModes.always}</SelectItem>
+            <SelectItem value="disabled">{t(consentModes.disabled)}</SelectItem>
+            <SelectItem value="ask">{t(consentModes.ask)}</SelectItem>
+            <SelectItem value="always">{t(consentModes.always)}</SelectItem>
           </SelectContent>
         </Select>
       </Field>

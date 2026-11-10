@@ -1,3 +1,6 @@
+import type { MessageDescriptor } from "@lingui/core";
+import { msg } from "@lingui/core/macro";
+import { Trans, useLingui } from "@lingui/react/macro";
 import { BookOpenIcon } from "lucide-react";
 import { Badge } from "~/components/ui/badge";
 import { FieldDescription, FieldError, FieldGroup } from "~/components/ui/field";
@@ -9,19 +12,32 @@ import {
   ItemMedia,
   ItemTitle,
 } from "~/components/ui/item";
-import { type Project } from "../../api";
+import { type Project, type SkillCatalog } from "../../api";
 import { useSuspenseSkillsQuery } from "../../queries/project";
-import { PageHeader, NoProject, pathIn, SourceFiles, skillScopeLabels } from "../shared";
-import { settingsCopy } from "../copy";
+import {
+  PageHeader,
+  NoProject,
+  pathIn,
+  SourceFiles,
+  skillScopeLabels,
+  pageTitles,
+} from "../shared";
 
-const copy = settingsCopy.skills;
+const description = msg`모델이 이름과 설명을 보고 작업에 맞는 skill을 읽어 따릅니다. skill은 지침일 뿐이라 승인을 대신하지 않습니다.`;
+
+const problems = {
+  no_description: msg`description이 없어 쓰지 않습니다.`,
+  too_large: msg`SKILL.md가 너무 커서 쓰지 않습니다.`,
+  unreadable: msg`읽지 못했습니다.`,
+} satisfies Record<SkillCatalog["problems"][number]["problem"], MessageDescriptor>;
 
 /** Skills the model can read in this project (R18). They are instructions, not permissions. */
 export function SkillSettings({ project }: { project: Project | null }) {
+  const { t } = useLingui();
   if (!(project !== null))
     return (
       <FieldGroup>
-        <PageHeader title={settingsCopy.titles.skills} description={copy.description} />
+        <PageHeader title={t(pageTitles.skills)} description={t(description)} />
         <NoProject />
       </FieldGroup>
     );
@@ -29,14 +45,24 @@ export function SkillSettings({ project }: { project: Project | null }) {
 }
 
 function SkillSettingsContent({ project }: { project: Project }) {
+  const { t } = useLingui();
   const { data: catalog } = useSuspenseSkillsQuery(project.id);
+  const count = catalog.skills.length;
 
   const header = (
     <PageHeader
-      title={settingsCopy.titles.skills}
+      title={t(pageTitles.skills)}
       project={project}
-      badge={catalog && <Badge variant="secondary">{copy.count(catalog.skills.length)}</Badge>}
-      description={copy.description}
+      badge={
+        catalog && (
+          <Badge variant="secondary">
+            <Trans comment="Badge next to the Skills page title; {count} is how many skills there are">
+              {count}개
+            </Trans>
+          </Badge>
+        )
+      }
+      description={t(description)}
     />
   );
 
@@ -45,20 +71,27 @@ function SkillSettingsContent({ project }: { project: Project }) {
       {header}
       <SourceFiles
         files={catalog.directories.map((directory) => ({
-          label: skillScopeLabels[directory.scope],
+          label: t(skillScopeLabels[directory.scope]),
           path: directory.path,
           shown: pathIn(project, directory.path),
         }))}
-        note={copy.sourceNote}
+        note={
+          <Trans>
+            이름이 같으면 프로젝트, 공통, 기본 순으로 앞의 것을 씁니다. 기본 skill도 같은 이름으로
+            덮어쓸 수 있습니다.
+          </Trans>
+        }
       />
       {catalog.problems.map((problem) => (
         <FieldError key={problem.directory}>
           <code className="break-all">{pathIn(project, problem.directory)}</code>:{" "}
-          {copy.problems[problem.problem]}
+          {t(problems[problem.problem])}
         </FieldError>
       ))}
       {catalog.skills.length === 0 ? (
-        <FieldDescription>{copy.empty}</FieldDescription>
+        <FieldDescription>
+          <Trans>쓸 수 있는 skill이 없습니다.</Trans>
+        </FieldDescription>
       ) : (
         <ItemGroup>
           {catalog.skills.map((skill) => (
@@ -69,7 +102,7 @@ function SkillSettingsContent({ project }: { project: Project }) {
               <ItemContent className="min-w-0">
                 <ItemTitle>
                   {skill.name}
-                  <Badge variant="secondary">{skillScopeLabels[skill.scope]}</Badge>
+                  <Badge variant="secondary">{t(skillScopeLabels[skill.scope])}</Badge>
                 </ItemTitle>
                 <ItemDescription>{skill.description}</ItemDescription>
               </ItemContent>

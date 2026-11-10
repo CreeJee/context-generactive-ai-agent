@@ -1,3 +1,4 @@
+import { Trans, useLingui } from "@lingui/react/macro";
 import { cn } from "cn";
 import { Data, DateTime } from "effect";
 import { CheckIcon, ChevronsUpDownIcon, UserIcon } from "lucide-react";
@@ -32,7 +33,6 @@ import {
   windowLabel,
 } from "./account-profiles";
 import { timeUntil } from "../shared/local-time";
-import { navigationCopy } from "./copy";
 import { providerLabels } from "./providers";
 
 /** One row of the switcher: a subscription login, or a compatible endpoint. */
@@ -67,9 +67,10 @@ const entryLabel = AccountEntry.$match({
 
 /** Provider type and the user's name for the account, read together on one line. */
 function AccountName({ entry }: { entry: AccountEntry }) {
+  const { t } = useLingui();
   return (
     <span className="min-w-0 flex-1 truncate text-left text-xs">
-      <span className="text-muted-foreground">{providerLabels[entryProvider(entry)]} · </span>
+      <span className="text-muted-foreground">{t(providerLabels[entryProvider(entry)])} · </span>
       <span className="font-medium">{entryLabel(entry)}</span>
     </span>
   );
@@ -114,7 +115,9 @@ function QuotaHeadline({ entry }: { entry: AccountEntry }) {
     compatible: ({ account }) =>
       account.models.length > 0 ? null : (
         <span className="shrink-0 text-2xs text-muted-foreground">
-          {navigationCopy.switcher.noModels}
+          <Trans comment="Account switcher: the compatible endpoint has no registered model">
+            모델 없음
+          </Trans>
         </span>
       ),
     profile: ({ quota }) =>
@@ -123,7 +126,9 @@ function QuotaHeadline({ entry }: { entry: AccountEntry }) {
         : QuotaStatus.$match(quota, {
             unavailable: () => (
               <span className="shrink-0 text-2xs text-muted-foreground">
-                {navigationCopy.quota.unavailableShort}
+                <Trans comment="Account switcher: the subscription quota could not be read">
+                  조회 불가
+                </Trans>
               </span>
             ),
             observed: tightestWindow,
@@ -156,7 +161,16 @@ export function AccountSwitcherMenu({
   onSwitch: (target: AccountTarget) => void;
   onManage: () => void;
 }) {
+  const { t } = useLingui();
   const current = entries.find((entry) => entry.current);
+  const switchLabel = (entry: AccountEntry) => {
+    const label = entryLabel(entry);
+    const provider = t(providerLabels[entryProvider(entry)]);
+    return t({
+      message: `계정 전환: ${label} (${provider})`,
+      comment: "Account switcher button; label is the account's name, provider its provider",
+    });
+  };
   return (
     <div className="flex flex-col gap-1">
       {error && <p className="px-1 text-2xs text-destructive">{error}</p>}
@@ -167,11 +181,8 @@ export function AccountSwitcherMenu({
             aria-busy={busy}
             aria-label={
               current !== undefined
-                ? navigationCopy.switcher.openWith(
-                    entryLabel(current),
-                    providerLabels[entryProvider(current)],
-                  )
-                : navigationCopy.switcher.open
+                ? switchLabel(current)
+                : t({ message: "계정 전환", comment: "Account switcher button and menu heading" })
             }
             render={
               <button
@@ -186,7 +197,7 @@ export function AccountSwitcherMenu({
               <>
                 <ProviderMark provider="openai-compatible" />
                 <span className="flex-1 text-left text-xs text-muted-foreground">
-                  {navigationCopy.switcher.none}
+                  <Trans>연결된 계정이 없습니다</Trans>
                 </span>
               </>
             )}
@@ -201,12 +212,14 @@ export function AccountSwitcherMenu({
           </DropdownMenuTrigger>
           <DropdownMenuContent side="top" align="start" className="w-(--anchor-width) min-w-72">
             <DropdownMenuGroup>
-              <DropdownMenuLabel>{navigationCopy.switcher.open}</DropdownMenuLabel>
+              <DropdownMenuLabel>
+                <Trans comment="Account switcher button and menu heading">계정 전환</Trans>
+              </DropdownMenuLabel>
               {entries.map((entry) => (
                 <DropdownMenuItem
                   key={entryKey(entry)}
                   disabled={busy}
-                  aria-label={`${entryLabel(entry)} (${providerLabels[entryProvider(entry)]})`}
+                  aria-label={`${entryLabel(entry)} (${t(providerLabels[entryProvider(entry)])})`}
                   onClick={() => {
                     if (entry.current) return;
                     onSwitch(
@@ -236,8 +249,11 @@ export function AccountSwitcherMenu({
         <Button
           variant="ghost-muted"
           size="icon-lg"
-          aria-label={navigationCopy.switcher.manage}
-          title={navigationCopy.switcher.manageTitle}
+          aria-label={t({ message: "계정 관리", comment: "Button that opens the account manager" })}
+          title={t({
+            message: "계정 추가·수정·로그아웃",
+            comment: "Tooltip of the account manager button: what it lets you do",
+          })}
           onClick={onManage}
         >
           <UserIcon />

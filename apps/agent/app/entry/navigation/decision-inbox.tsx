@@ -1,3 +1,5 @@
+import { ph } from "@lingui/core/macro";
+import { Trans, useLingui } from "@lingui/react/macro";
 import { useState } from "react";
 import { InboxIcon } from "lucide-react";
 import { Badge } from "~/components/ui/badge";
@@ -13,7 +15,6 @@ import { SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem } from "~/componen
 import { DecisionPrompt } from "../chat/decision-prompt";
 import { useDecisionInboxQuery } from "../queries/project";
 import { koreanLocalTime } from "../shared/local-time";
-import { navigationCopy } from "./copy";
 
 /**
  * The project inbox: every card decision waiting for a person, across conversations and Goals.
@@ -28,14 +29,16 @@ export function DecisionInbox({
   readonly holder: string;
   readonly onOpenCard: (sessionId: string, cardId: string) => void;
 }) {
+  const { t } = useLingui();
   const [open, setOpen] = useState(false);
   const items = useDecisionInboxQuery(projectId).data ?? [];
-  const copy = navigationCopy.decisionInbox;
   return (
     <SidebarMenuItem>
       <SidebarMenuButton onClick={() => setOpen(true)}>
         <InboxIcon />
-        <span>{copy.title}</span>
+        <span>
+          <Trans comment="Sidebar menu item: card decisions waiting for a person">판단 대기</Trans>
+        </span>
       </SidebarMenuButton>
       {/* Only a waiting decision asks for attention; none is the usual state. */}
       {items.length > 0 && (
@@ -46,23 +49,36 @@ export function DecisionInbox({
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent side="left">
           <SheetHeader>
-            <SheetTitle>{copy.title}</SheetTitle>
-            <SheetDescription>{copy.description}</SheetDescription>
+            <SheetTitle>
+              <Trans comment="Sheet title: card decisions waiting for a person">판단 대기</Trans>
+            </SheetTitle>
+            <SheetDescription>
+              <Trans>
+                이 프로젝트의 모든 대화와 Goal에서 사람의 판단을 기다리는 카드입니다. 여기서
+                답하거나 카드가 있는 보드로 이동합니다.
+              </Trans>
+            </SheetDescription>
           </SheetHeader>
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 pb-4 text-xs text-muted-foreground">
-            {items.length === 0 && <p>{copy.empty}</p>}
+            {items.length === 0 && (
+              <p>
+                <Trans>판단을 기다리는 카드가 없습니다.</Trans>
+              </p>
+            )}
             {items.map((item) => (
               <section
                 key={item.requestId}
-                aria-label={copy.item(item.cardTitle)}
+                aria-label={t({
+                  message: `${ph({ cardTitle: item.cardTitle })} 판단`,
+                  comment: "Label of one waiting decision; cardTitle is its kanban card's title",
+                })}
                 className="space-y-1.5 rounded-md border p-2"
               >
                 <div className="flex items-start gap-2">
                   <div className="min-w-0 flex-1">
                     <p className="truncate font-medium text-foreground">{item.cardTitle}</p>
                     <p className="truncate">
-                      {item.sessionTitle ?? navigationCopy.sessions.untitled} ·{" "}
-                      {koreanLocalTime(item.createdAt)}
+                      {item.sessionTitle ?? t`제목 없는 대화`} · {koreanLocalTime(item.createdAt)}
                     </p>
                   </div>
                   <Button
@@ -74,7 +90,9 @@ export function DecisionInbox({
                       onOpenCard(item.sessionId, item.cardId);
                     }}
                   >
-                    {copy.openCard}
+                    <Trans comment="Button that opens the decision's card on its board">
+                      카드 보기
+                    </Trans>
                   </Button>
                 </div>
                 <DecisionPrompt

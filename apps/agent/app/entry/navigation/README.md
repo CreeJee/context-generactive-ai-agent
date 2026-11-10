@@ -14,8 +14,8 @@
 - `AccountModelPanel` / `accountSummary` — 공급자 인증 상태와 선택 모델을 한 줄로 요약하고 설정을 접어 두는 패널. `accountSummary`는 `{status, model, hasError}`를 돌려주는 dual 함수다
 - `DecisionInbox` — 프로젝트 전체에서 사람의 판단을 기다리는 카드 수를 `SidebarMenuBadge`로 보여 준다(0이면 배지 없음). `SidebarMenuItem`을 돌려주므로 `SidebarMenu` 안에 둔다. Sheet에서 `DecisionPrompt`로 답하거나 `onOpenCard(sessionId, cardId)`로 보드를 연다
 - `ProjectBoardButton` — 프로젝트 칸반 보드를 여는 `SidebarMenuItem`. 배지는 보드 수를 보이고 실행 중(`kanbanActive`)인 보드가 있으면 강조된다
-- `providerLabels` — `ProviderId`별 표시 이름(ChatGPT/Claude/OpenAI 호환). `satisfies Record<ProviderId, string>`
-- `navigationCopy` (`copy.ts`) — 이 디렉터리의 문구 카탈로그. 사이드바, 계정 전환기·관리자, 호환 엔드포인트, 판단 대기함 문구를 담고, `providerLabels`·한도 조회 불가 사유·권한 모드 라벨 표도 여기 있다(`satisfies Record<…>`). 문구는 `lint/wording`가 검사한다
+- `providerLabels` — `ProviderId`별 표시 이름(ChatGPT/Claude/OpenAI 호환) Lingui 메시지. `satisfies Record<ProviderId, MessageDescriptor>`라서 화면에서 `t(…)`로 푼다
+- 문구 — 쓰이는 자리에 Lingui 메시지로 쓴다. `app/locales/ko.po`로 추출되고 `lint/wording`이 검사한다
 - `effortChoices` / `EffortChoice` — `(selection, model)` dual 함수. 사이드바와 `/effort`가 쓰는 추론 강도 선택지를 만든다
 - `AccountSwitcher` / `AccountSwitcherMenu` — 사이드바 하단의 계정 전환 드롭다운. openai·anthropic 프로필, 한도, 호환 계정을 모아 `onSwitch(AccountTarget)`과 `onManage`를 호출한다
 - `AccountEntry` — 전환기 한 줄을 나타내는 `Data.TaggedEnum` (`profile` | `compatible`)
@@ -40,7 +40,7 @@
 - `compatibleErrorMessage`는 업스트림 본문을 보여 주지 않는다. `CompatibleRequestFailed`가 아니면 일반 문구를 쓰고, `RequestRejected`이면서 상태가 400/404/502일 때만 고정 문구를 쓴다.
 - 계정을 바꾸는 호환 명령(`CompatibleAccountChange`)은 응답으로 전체 `CompatibleAccountsView` 목록을 돌려준다(주석). `test`는 `{ok:true}`(`CompatibleTestResult`), `discover`는 `{models:[{id}]}`(`CompatibleModelList`)로 디코딩한다.
 - 요청 Effect는 `Effect.abortSignal`을 fetch에 넘기고 `Effect.scoped`로 감싼다.
-- `providerLabels`는 `satisfies Record<ProviderId, string>`이다. `ProviderId`를 추가하면 라벨도 함께 추가해야 한다.
+- `providerLabels`는 `satisfies Record<ProviderId, MessageDescriptor>`이다. `ProviderId`를 추가하면 라벨도 함께 추가해야 한다.
 - `effortChoices`: 노력 목록이 1개 이하인 `openai-compatible` 모델은 선택지를 내지 않는다(서버 기본값만 있음). 호환 모델의 `default`는 '서버 기본값'으로 표시한다.
 - 계정 전환기의 '사용 중' 계정은 `activeProvider === provider && selected`로 정한다. 사용 계정은 모델 선택을 따른다. 이미 사용 중인 항목을 클릭하면 아무 일도 하지 않는다. 호환 항목 key는 `openai-compatible:` 접두사를 붙인다.
 - 한도는 앱이 추정하지 않는다(주석). `unavailable` 사유는 `credential_expired`·`lookup_failed`뿐이다. `stale` 값은 흐리게 표시한다. 사용률은 0~100으로 자른다.

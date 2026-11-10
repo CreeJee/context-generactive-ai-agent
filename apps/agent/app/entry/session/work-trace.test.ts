@@ -1,7 +1,6 @@
 import type { TraceTaskView } from "memory-agent";
 import { describe, expect, test } from "vite-plus/test";
 import { backgroundKindLabel, runningBackgroundTasks } from "./background-tasks";
-import { sessionCopy } from "./copy";
 
 const task = (id: string, parentToolCallId: string): TraceTaskView => ({
   id,
@@ -53,9 +52,6 @@ describe("running background tasks", () => {
     const running = runningBackgroundTasks(tasks);
 
     expect(running.map(({ id }) => id)).toEqual(["shell", "agent"]);
-    expect(running.map(backgroundKindLabel)).toEqual([
-      sessionCopy.backgroundKind.shell,
-      sessionCopy.backgroundKind.externalAgent,
-    ]);
+    expect(running.map(backgroundKindLabel)).toEqual(["셸 명령", "외부 에이전트"]);
   });
 });

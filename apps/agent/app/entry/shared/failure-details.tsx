@@ -1,6 +1,6 @@
+import { Trans } from "@lingui/react/macro";
 import { ChevronRightIcon } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "~/components/ui/collapsible";
-import { sharedCopy } from "./copy";
 
 /**
  * The outside program's own text behind a failure, folded until asked for. The wording above it
@@ -12,7 +12,9 @@ export function FailureDetails({ detail }: { detail: string | null }) {
     <Collapsible>
       <CollapsibleTrigger className="group flex cursor-pointer items-center gap-1 text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
         <ChevronRightIcon className="size-3 transition-transform group-data-[panel-open]:rotate-90" />
-        {sharedCopy.failureDetails.toggle}
+        <Trans comment="Toggle that unfolds a failure's raw text from the outside program">
+          자세히
+        </Trans>
       </CollapsibleTrigger>
       <CollapsibleContent>
         <pre className="mt-1 max-h-48 overflow-auto rounded-md bg-muted px-2 py-1.5 font-mono text-xs break-all whitespace-pre-wrap text-muted-foreground">

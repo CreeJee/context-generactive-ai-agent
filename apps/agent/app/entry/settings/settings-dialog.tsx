@@ -1,3 +1,5 @@
+import { msg } from "@lingui/core/macro";
+import { Trans, useLingui } from "@lingui/react/macro";
 import {
   BookOpenIcon,
   BotIcon,
@@ -33,38 +35,52 @@ import { AgentSettings } from "./pages/agents";
 import { SkillSettings } from "./pages/skills";
 import { ImprovementSettings } from "./pages/improvements";
 import { KanbanSettings } from "./pages/kanban";
-import { settingsCopy } from "./copy";
-
-const { groups } = settingsCopy.dialog;
-const { titles } = settingsCopy;
+import { pageTitles } from "./shared";
 
 const settingsGroups = [
   {
-    label: groups.connection,
+    id: "connection",
+    label: msg({ message: "연결", comment: "Settings tab group: web, image, MCP and agent pages" }),
     pages: [
-      { value: "web", label: titles.web, icon: GlobeIcon },
-      { value: "image", label: titles.image, icon: ImageIcon },
-      { value: "mcp", label: titles.mcp, icon: PlugIcon },
-      { value: "agents", label: titles.agents, icon: BotIcon },
+      { value: "web", icon: GlobeIcon },
+      { value: "image", icon: ImageIcon },
+      { value: "mcp", icon: PlugIcon },
+      { value: "agents", icon: BotIcon },
     ],
   },
   {
-    label: groups.memory,
+    id: "memory",
+    label: msg({
+      message: "기억",
+      comment: "Settings tab group: pages about the app's stored conversation memory",
+    }),
     pages: [
-      { value: "conversation", label: titles.conversation, icon: MessagesSquareIcon },
-      { value: "recall", label: titles.recall, icon: WaypointsIcon },
-      { value: "imports", label: titles.imports, icon: HistoryIcon },
-      { value: "embedding", label: titles.embedding, icon: CpuIcon },
+      { value: "conversation", icon: MessagesSquareIcon },
+      { value: "recall", icon: WaypointsIcon },
+      { value: "imports", icon: HistoryIcon },
+      { value: "embedding", icon: CpuIcon },
     ],
   },
-  { label: groups.run, pages: [{ value: "kanban", label: titles.kanban, icon: KanbanIcon }] },
   {
-    label: groups.improvement,
-    pages: [{ value: "improvements", label: titles.improvements, icon: WrenchIcon }],
+    id: "run",
+    label: msg({
+      message: "실행",
+      comment: "Settings tab group: how Goals run on the kanban board",
+    }),
+    pages: [{ value: "kanban", icon: KanbanIcon }],
   },
   {
-    label: groups.instructions,
-    pages: [{ value: "skills", label: titles.skills, icon: BookOpenIcon }],
+    id: "improvement",
+    label: msg({ message: "개선", comment: "Settings tab group: project improvement reports" }),
+    pages: [{ value: "improvements", icon: WrenchIcon }],
+  },
+  {
+    id: "instructions",
+    label: msg({
+      message: "지침",
+      comment: "Settings tab group: skill instructions for the model",
+    }),
+    pages: [{ value: "skills", icon: BookOpenIcon }],
   },
 ] as const;
 
@@ -104,6 +120,7 @@ export function SettingsOverlay({
   open: boolean;
   onClose: () => void;
 }) {
+  const { t } = useLingui();
   return (
     <Dialog
       open={open}
@@ -113,21 +130,25 @@ export function SettingsOverlay({
     >
       <DialogContent className="flex h-[min(40rem,calc(100dvh-2rem))] flex-col sm:max-w-3xl">
         <DialogHeader>
-          <DialogTitle>{settingsCopy.dialog.title}</DialogTitle>
-          <DialogDescription>{settingsCopy.dialog.description}</DialogDescription>
+          <DialogTitle>
+            <Trans comment="Title of the app settings dialog">설정</Trans>
+          </DialogTitle>
+          <DialogDescription>
+            <Trans>대화 밖에서 쓰는 도구와 연결을 관리합니다.</Trans>
+          </DialogDescription>
         </DialogHeader>
         <Tabs defaultValue={initialPage} orientation="vertical" className="min-h-0 flex-1">
           <div className="mr-2 w-40 shrink-0 border-r pr-3">
             <TabsList variant="nav" className="w-full items-stretch justify-start">
               {settingsGroups.map((group) => (
-                <div key={group.label} className="flex flex-col gap-0.5 not-first:pt-3">
+                <div key={group.id} className="flex flex-col gap-0.5 not-first:pt-3">
                   <div className="px-2 pb-1 text-2xs font-medium text-muted-foreground">
-                    {group.label}
+                    {t(group.label)}
                   </div>
                   {group.pages.map((page) => (
                     <TabsTrigger key={page.value} value={page.value}>
                       <page.icon />
-                      {page.label}
+                      {t(pageTitles[page.value])}
                     </TabsTrigger>
                   ))}
                 </div>

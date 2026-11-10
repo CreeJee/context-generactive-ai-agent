@@ -1,6 +1,7 @@
 import { browserCrypto } from "./shared/browser-crypto";
 import { runUiEffect, uiPromise } from "./shared/ui-effect";
-import { entryCopy } from "./copy";
+import { i18n, type MessageDescriptor } from "@lingui/core";
+import { msg, t } from "@lingui/core/macro";
 import { isTruthy } from "../truthy.ts";
 import { Cause, Context, Data, Effect, Layer, ManagedRuntime, Match } from "effect";
 import { FetchHttpClient, HttpClientError } from "effect/http";
@@ -959,15 +960,16 @@ export const api = {
 };
 
 const AttachmentRejection = Schema.Literals(["too_large", "unsupported_type", "empty"]);
-const attachmentRejections = entryCopy.attachment.rejections satisfies Record<
-  typeof AttachmentRejection.Type,
-  string
->;
+const attachmentRejections = {
+  too_large: msg`20MB보다 큰 이미지는 올릴 수 없습니다.`,
+  unsupported_type: msg`PNG, JPEG, GIF, WebP 이미지만 올릴 수 있습니다.`,
+  empty: msg`빈 파일입니다.`,
+} satisfies Record<typeof AttachmentRejection.Type, MessageDescriptor>;
 
 export function attachmentErrorMessage(error: ApiError | null) {
-  if (error === null || !isTruthy(error.reason)) return entryCopy.attachment.failed;
+  if (error === null || !isTruthy(error.reason)) return t`이미지를 올리지 못했습니다.`;
   return Schema.is(AttachmentRejection)(error.reason)
-    ? attachmentRejections[error.reason]
+    ? i18n._(attachmentRejections[error.reason])
     : error.reason;
 }
 
@@ -980,14 +982,18 @@ const ProjectRejection = Schema.Literals([
   "overlaps_storage",
   "already_registered",
 ]);
-const projectRejections = entryCopy.project.rejections satisfies Record<
-  typeof ProjectRejection.Type,
-  string
->;
+const projectRejections = {
+  not_found: msg`경로를 찾을 수 없습니다.`,
+  not_directory: msg`폴더 경로가 아닙니다.`,
+  overlaps_storage: msg`앱 저장소 폴더와 겹치는 경로는 등록할 수 없습니다.`,
+  already_registered: msg`이미 등록된 프로젝트입니다.`,
+} satisfies Record<typeof ProjectRejection.Type, MessageDescriptor>;
 
 export function projectErrorMessage(error: ApiError | null) {
-  if (error === null || !isTruthy(error.reason)) return entryCopy.project.failed;
-  return Schema.is(ProjectRejection)(error.reason) ? projectRejections[error.reason] : error.reason;
+  if (error === null || !isTruthy(error.reason)) return t`프로젝트를 추가하지 못했습니다.`;
+  return Schema.is(ProjectRejection)(error.reason)
+    ? i18n._(projectRejections[error.reason])
+    : error.reason;
 }
 
 const ArchiveRejection = Schema.Literals([
@@ -995,15 +1001,19 @@ const ArchiveRejection = Schema.Literals([
   "session_in_use",
   "session_not_found",
 ]);
-const archiveRejections = entryCopy.archive.rejections satisfies Record<
-  typeof ArchiveRejection.Type,
-  string
->;
+const archiveRejections = {
+  run_in_progress: msg`답변 중인 대화는 보관할 수 없습니다. 끝나거나 멈춘 뒤 다시 시도해 주십시오.`,
+  session_in_use: msg`다른 탭에서 쓰고 있는 대화입니다. 그 탭을 닫은 뒤 다시 시도해 주십시오.`,
+  session_not_found: msg`대화를 찾을 수 없습니다.`,
+} satisfies Record<typeof ArchiveRejection.Type, MessageDescriptor>;
 
 export function archiveErrorMessage(error: ApiError | null) {
   return error !== null && Schema.is(ArchiveRejection)(error.code)
-    ? archiveRejections[error.code]
-    : entryCopy.archive.failed;
+    ? i18n._(archiveRejections[error.code])
+    : t({
+        message: "대화를 바꾸지 못했습니다.",
+        comment: "Shown when archiving, deleting or restoring a conversation failed",
+      });
 }
 
 /** Which queued messages a run just took in at a tool call. */
@@ -1033,15 +1043,16 @@ const CompactRejection = Schema.Literals([
   "session_in_use",
   "session_not_found",
 ]);
-const compactRejections = entryCopy.compact.rejections satisfies Record<
-  typeof CompactRejection.Type,
-  string
->;
+const compactRejections = {
+  run_in_progress: msg`답변이 끝난 뒤에 비울 수 있습니다.`,
+  session_in_use: msg`다른 탭에서 쓰고 있는 대화입니다. 그 탭에서 다시 시도해 주십시오.`,
+  session_not_found: msg`대화를 찾을 수 없습니다.`,
+} satisfies Record<typeof CompactRejection.Type, MessageDescriptor>;
 
 export function compactErrorMessage(error: ApiError | null) {
   return error !== null && Schema.is(CompactRejection)(error.code)
-    ? compactRejections[error.code]
-    : entryCopy.compact.failed;
+    ? i18n._(compactRejections[error.code])
+    : t`도구 출력을 비우지 못했습니다.`;
 }
 
 export const eventDecoders = {

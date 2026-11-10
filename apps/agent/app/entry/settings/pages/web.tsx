@@ -1,3 +1,4 @@
+import { Trans, useLingui } from "@lingui/react/macro";
 import { Effect } from "effect";
 import { runUiEffect, uiPromise } from "../../shared/ui-effect";
 import { isTruthy } from "../../../truthy.ts";
@@ -19,19 +20,31 @@ import { Switch } from "~/components/ui/switch";
 import { KagiCommand, type KagiStatus, refusalOf } from "../../api";
 import { useKagiQuery } from "../../queries/global";
 import { useKagiMutation } from "../../queries/mutations/global";
-import { errorMessage, PageHeader, PageError } from "../shared";
-import { settingsCopy } from "../copy";
-
-const copy = settingsCopy.web;
+import { errorMessage, PageHeader, PageError, pageTitles } from "../shared";
 
 function KagiBadge({ status }: { status: KagiStatus }) {
-  if (status.enabled) return <Badge>{copy.badge.on}</Badge>;
-  if (status.keyRegistered) return <Badge variant="secondary">{copy.badge.off}</Badge>;
-  return <Badge variant="outline">{copy.badge.noKey}</Badge>;
+  if (status.enabled)
+    return (
+      <Badge>
+        <Trans comment="Badge: web search is switched on">켜짐</Trans>
+      </Badge>
+    );
+  if (status.keyRegistered)
+    return (
+      <Badge variant="secondary">
+        <Trans comment="Badge: web search is switched off">꺼짐</Trans>
+      </Badge>
+    );
+  return (
+    <Badge variant="outline">
+      <Trans comment="Badge: no Kagi API key is registered">키 없음</Trans>
+    </Badge>
+  );
 }
 
 /** Kagi Search and Extract (R19): a key in the keychain, then an explicit switch. */
 export function KagiSettings() {
+  const { t } = useLingui();
   const mutation = useKagiMutation();
   const { data: status } = useKagiQuery();
   const [key, setKey] = useState("");
@@ -58,9 +71,14 @@ export function KagiSettings() {
 
   const header = (
     <PageHeader
-      title={settingsCopy.titles.web}
+      title={t(pageTitles.web)}
       badge={status && <KagiBadge status={status} />}
-      description={copy.description}
+      description={
+        <Trans>
+          켜면 모델이 필요할 때 Kagi로 웹을 검색하고 페이지를 읽습니다. 모든 프로젝트에 적용됩니다.
+          호출마다 Kagi 요금이 나갑니다.
+        </Trans>
+      }
     />
   );
 
@@ -71,8 +89,12 @@ export function KagiSettings() {
         <>
           <Field orientation="horizontal">
             <FieldContent>
-              <FieldLabel htmlFor="kagi-enabled">{copy.enabledLabel}</FieldLabel>
-              <FieldDescription>{copy.enabledHelp}</FieldDescription>
+              <FieldLabel htmlFor="kagi-enabled">
+                <Trans>검색과 페이지 읽기 사용</Trans>
+              </FieldLabel>
+              <FieldDescription>
+                <Trans>실패해도 다시 시도하지 않습니다. 끄면 다음 호출부터 바로 막힙니다.</Trans>
+              </FieldDescription>
             </FieldContent>
             <Switch
               id="kagi-enabled"
@@ -85,8 +107,12 @@ export function KagiSettings() {
           </Field>
           <Field orientation="horizontal">
             <FieldContent>
-              <FieldTitle>{copy.keyTitle}</FieldTitle>
-              <FieldDescription>{copy.keyStored}</FieldDescription>
+              <FieldTitle>
+                <Trans comment="Field title for the Kagi API key">API 키</Trans>
+              </FieldTitle>
+              <FieldDescription>
+                <Trans>OS 키체인에 저장돼 있습니다. 화면에 다시 보여 주지 않습니다.</Trans>
+              </FieldDescription>
             </FieldContent>
             <Button
               variant="ghost-muted"
@@ -94,7 +120,8 @@ export function KagiSettings() {
               disabled={busy}
               onClick={() => void apply(KagiCommand.remove())}
             >
-              <Trash2Icon /> {copy.deleteKey}
+              <Trash2Icon />{" "}
+              <Trans comment="Button that deletes the stored Kagi API key">키 삭제</Trans>
             </Button>
           </Field>
         </>
@@ -106,7 +133,9 @@ export function KagiSettings() {
           }}
         >
           <Field>
-            <FieldLabel htmlFor="kagi-key">{copy.keyTitle}</FieldLabel>
+            <FieldLabel htmlFor="kagi-key">
+              <Trans comment="Field title for the Kagi API key">API 키</Trans>
+            </FieldLabel>
             <div className="flex gap-2">
               <Input
                 id="kagi-key"
@@ -114,13 +143,19 @@ export function KagiSettings() {
                 autoComplete="off"
                 value={key}
                 onChange={(event) => setKey(event.target.value)}
-                placeholder={copy.keyPlaceholder}
+                placeholder={t`kagi.com/api/keys에서 발급한 키`}
               />
               <Button type="submit" disabled={busy || !isTruthy(key.trim())}>
-                {busy ? <Spinner /> : <KeyRoundIcon />} {settingsCopy.shared.save}
+                {busy ? <Spinner /> : <KeyRoundIcon />}{" "}
+                <Trans comment="Button that saves a settings field">저장</Trans>
               </Button>
             </div>
-            <FieldDescription>{copy.keyHelp}</FieldDescription>
+            <FieldDescription>
+              <Trans>
+                키는 OS 키체인에만 저장되고 모델, 대화, 로그에는 보이지 않습니다. 저장해도 저절로
+                켜지지는 않습니다.
+              </Trans>
+            </FieldDescription>
           </Field>
         </form>
       )}

@@ -22,7 +22,7 @@
 - `failureLabel(failure: AttemptFailure)` — 실패 이유 태그와 단계를 한국어 한 줄로 만든다. `Match.tagsExhaustive` 사용
 - `useDelegatedWork` (dual: `(sessionId, _generating)`) — 서브에이전트와 relay된 승인 목록 스냅샷 훅
 - `requesterLabel` — `ApprovalRequester.match`로 승인 요청자(subagent/external_agent) 문구를 만든다
-- `sessionCopy` (`copy.ts`) — 이 디렉터리의 문구 카탈로그. 실패 이유·단계 라벨(키는 태그와 stage 그대로), 백그라운드 작업 종류, 승인 요청자, `RunNoticeView` 안내를 담고, 문구는 `lint/wording`가 검사한다.
+- 문구 — 쓰이는 자리에 Lingui 메시지(`<Trans>`, `` t`…` ``, `msg`)로 쓴다. `app/locales/ko.po`로 추출되고 `lint/wording`이 검사한다.
 - `useWorkTrace(sessionId)` — 세션 trace 쿼리와 EventSource 구독을 묶은 훅. `{ tasks, connection }`을 돌려준다
 - `taskForToolCall` (dual: `(tasks, toolCallId)`) — `parentToolCallId`가 같은 마지막 durable task를 찾는다
 - `TraceConnection` — `"connecting" | "live" | "reconnecting"` 타입

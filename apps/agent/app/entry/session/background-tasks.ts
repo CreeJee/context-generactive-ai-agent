@@ -1,6 +1,6 @@
 import { HashSet } from "effect";
 import type { TraceTaskView } from "memory-agent";
-import { sessionCopy } from "./copy";
+import { t } from "@lingui/core/macro";
 
 /** Task statuses in which a background job is still going. */
 const runningStatuses = HashSet.fromIterable<TraceTaskView["status"]>([
@@ -23,5 +23,8 @@ export const runningBackgroundTasks = (tasks: readonly TraceTaskView[]) =>
 /** What kind of background job a task is, in the UI's words. */
 export const backgroundKindLabel = (task: TraceTaskView) =>
   task.agentName === "background_external_agent"
-    ? sessionCopy.backgroundKind.externalAgent
-    : sessionCopy.backgroundKind.shell;
+    ? t({
+        message: "외부 에이전트",
+        comment: "Kind of background job: a turn of an external coding agent",
+      })
+    : t({ message: "셸 명령", comment: "Kind of background job: a shell command" });

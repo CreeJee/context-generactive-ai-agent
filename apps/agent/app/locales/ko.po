@@ -7,26 +7,2326 @@ msgstr ""
 "X-Generator: @lingui/cli\n"
 "Language: ko\n"
 
+#: app/entry/navigation/sidebar.tsx
+msgid "\"{deleteTitle}\" 대화의 원본을 지웁니다."
+msgstr "\"{deleteTitle}\" 대화의 원본을 지웁니다."
+
+#: app/entry/settings/pages/kanban.tsx
+msgid "(기기 기본값: CPU 코어 절반, 1~4개)"
+msgstr "(기기 기본값: CPU 코어 절반, 1~4개)"
+
+#. Label of an endpoint's row; accountName is the endpoint's name
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "{accountName} (OpenAI 호환)"
+msgstr "{accountName} (OpenAI 호환)"
+
+#: app/entry/navigation/account-profiles.tsx
+msgid "{accountName} 계정에서 로그아웃할까요?"
+msgstr "{accountName} 계정에서 로그아웃할까요?"
+
+#: app/entry/navigation/account-profiles.tsx
+msgid "{accountName} 로그아웃"
+msgstr "{accountName} 로그아웃"
+
+#. Label of the list of models registered under the endpoint
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "{accountName} 모델"
+msgstr "{accountName} 모델"
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "{accountName} 삭제"
+msgstr "{accountName} 삭제"
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "{accountName} 엔드포인트를 지울까요?"
+msgstr "{accountName} 엔드포인트를 지울까요?"
+
+#. Label of the endpoint's connection form
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "{accountName} 연결"
+msgstr "{accountName} 연결"
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "{accountName} 연결 수정"
+msgstr "{accountName} 연결 수정"
+
+#: app/entry/navigation/account-profiles.tsx
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "{accountName} 이름 변경"
+msgstr "{accountName} 이름 변경"
+
+#. Label of one waiting decision; cardTitle is its kanban card's title
+#: app/entry/navigation/decision-inbox.tsx
+msgid "{cardTitle} 판단"
+msgstr "{cardTitle} 판단"
+
+#. Model specs: context window tokens / max output tokens · tool calling
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "{contextWindow} / 출력 {output} · 도구 {tools}"
+msgstr "{contextWindow} / 출력 {output} · 도구 {tools}"
+
+#. Badge next to the Skills page title; {count} is how many skills there are
+#. How many conversations the section holds
+#: app/entry/navigation/sidebar.tsx
+#: app/entry/settings/pages/skills.tsx
+msgid "{count}개"
+msgstr "{count}개"
+
+#. count is how many models the server listed
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "{count}개 모델을 불러왔습니다. 목록에 없는 ID도 직접 입력할 수 있습니다."
+msgstr "{count}개 모델을 불러왔습니다. 목록에 없는 ID도 직접 입력할 수 있습니다."
+
+#. How many times a correction or failure repeated
+#: app/entry/settings/pages/improvements.tsx
+msgid "{count}회"
+msgstr "{count}회"
+
+#. A folder that could not become a project: its path, how many conversations it holds, and why
+#: app/entry/settings/pages/imports.tsx
+msgid "{cwd}: 대화 {transcripts}개, {reason}"
+msgstr "{cwd}: 대화 {transcripts}개, {reason}"
+
+#. Name of a usage window by its length in days
+#: app/entry/navigation/account-profiles.tsx
+msgid "{days}일"
+msgstr "{days}일"
+
+#. Slash-command choice for the reasoning effort the model uses now
+#: app/entry/index.tsx
+msgid "{effort} (현재)"
+msgstr "{effort} (현재)"
+
+#: app/entry/settings/pages/imports.tsx
+msgid "{failed}개는 읽지 못했습니다."
+msgstr "{failed}개는 읽지 못했습니다."
+
+#. Name of a usage window by its length in hours
+#: app/entry/navigation/account-profiles.tsx
+msgid "{hours}시간"
+msgstr "{hours}시간"
+
+#. Badge next to a repository name; {itemCount} is how many items its report lists
+#: app/entry/settings/pages/improvements.tsx
+msgid "{itemCount}개 항목"
+msgstr "{itemCount}개 항목"
+
+#. Model select of a kanban role; {label} is the role's name
+#: app/entry/settings/pages/kanban.tsx
+msgid "{label}: 모델"
+msgstr "{label}: 모델"
+
+#. Reasoning effort select of a kanban role; {label} is the role's name
+#: app/entry/settings/pages/kanban.tsx
+msgid "{label}: 추론 단계"
+msgstr "{label}: 추론 단계"
+
+#. Badge: the embedding model is set to {mode} (CPU or GPU) but not loaded yet
+#: app/entry/settings/pages/embedding.tsx
+msgid "{mode} 모드, 아직 불러오지 않음"
+msgstr "{mode} 모드, 아직 불러오지 않음"
+
+#: app/entry/settings/pages/embedding.tsx
+msgid "{model} 내려받는 중"
+msgstr "{model} 내려받는 중"
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "{modelId} 삭제"
+msgstr "{modelId} 삭제"
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "{modelId} 수정"
+msgstr "{modelId} 수정"
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "{modelId} 연결을 확인했습니다."
+msgstr "{modelId} 연결을 확인했습니다."
+
+#. Share of the usage window used so far
+#. Share of the usage window used so far
+#: app/entry/navigation/account-profiles.tsx
+msgid "{percent}% 사용"
+msgstr "{percent}% 사용"
+
+#. Button that moves {project} one place down in the kanban project order
+#: app/entry/settings/pages/kanban.tsx
+msgid "{project} 아래로"
+msgstr "{project} 아래로"
+
+#. Button that moves {project} one place up in the kanban project order
+#: app/entry/settings/pages/kanban.tsx
+msgid "{project} 위로"
+msgstr "{project} 위로"
+
+#: app/entry/navigation/account-profiles.tsx
+msgid "{providerName} 계정 목록"
+msgstr "{providerName} 계정 목록"
+
+#: app/entry/navigation/account-profiles.tsx
+msgid "{providerName} 계정 추가"
+msgstr "{providerName} 계정 추가"
+
+#. Tooltip of the sidebar account panel; model reads as provider / model name
+#: app/entry/navigation/account-model-panel.tsx
+msgid "{providerName} 계정과 모델 설정: {status}, {model}"
+msgstr "{providerName} 계정과 모델 설정: {status}, {model}"
+
+#. {providerName} is the model provider's name, such as ChatGPT
+#: app/entry/index.tsx
+msgid "{providerName} 계정을 연결하면 모델을 고를 수 있습니다."
+msgstr "{providerName} 계정을 연결하면 모델을 고를 수 있습니다."
+
+#: app/entry/settings/pages/agents.tsx
+msgid "{reason} 두 번 연달아 실패해서 멈췄습니다. 다시 연결을 눌러 주십시오."
+msgstr "{reason} 두 번 연달아 실패해서 멈췄습니다. 다시 연결을 눌러 주십시오."
+
+#. {secretKind} is the kind of secret (environment variables or HTTP headers); {names} lists their names
+#: app/entry/settings/shared.tsx
+msgid "{secretKind}: {names} (값은 보여 주지 않습니다)"
+msgstr "{secretKind}: {names} (값은 보여 주지 않습니다)"
+
+#. {selectedProviderName} is the model provider's name, such as ChatGPT
+#: app/entry/index.tsx
+msgid "{selectedProviderName} 연결이 필요합니다."
+msgstr "{selectedProviderName} 연결이 필요합니다."
+
+#. When the quota was read; time is a short local time
+#: app/entry/navigation/account-profiles.tsx
+msgid "{time} 조회"
+msgstr "{time} 조회"
+
+#: app/entry/settings/pages/imports.tsx
+msgid "{time}에 가져오기가 중간에 멈췄습니다: {reason}"
+msgstr "{time}에 가져오기가 중간에 멈췄습니다: {reason}"
+
+#: app/entry/settings/pages/imports.tsx
+msgid "{time}에 기록 {checked}개를 확인하고 노드 {written}개를 더했습니다."
+msgstr "{time}에 기록 {checked}개를 확인하고 노드 {written}개를 더했습니다."
+
+#: app/entry/settings/pages/improvements.tsx
+msgid "{time}에 찾은 결과입니다."
+msgstr "{time}에 찾은 결과입니다."
+
+#. Button that opens a conversation's menu; title is the conversation's title
+#: app/entry/navigation/sidebar.tsx
+msgid "{title} 메뉴"
+msgstr "{title} 메뉴"
+
+#. When the usage window resets; until is the time left
+#: app/entry/navigation/account-profiles.tsx
+msgid "{until} 후 초기화"
+msgstr "{until} 후 초기화"
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "/chat/completions 경로는 자동으로 붙습니다."
+msgstr "/chat/completions 경로는 자동으로 붙습니다."
+
+#: app/entry/settings/pages/imports.tsx
+msgid "<0/>개는 읽지 못했습니다."
+msgstr "<0/>개는 읽지 못했습니다."
+
+#: app/entry/api.ts
+msgid "20MB보다 큰 이미지는 올릴 수 없습니다."
+msgstr "20MB보다 큰 이미지는 올릴 수 없습니다."
+
+#: app/entry/settings/pages/imports.tsx
+msgid "5분마다 새로 쌓인 대화를 이어서 읽습니다. 켤 때 지금 있는 기록을 한 번 읽습니다."
+msgstr "5분마다 새로 쌓인 대화를 이어서 읽습니다. 켤 때 지금 있는 기록을 한 번 읽습니다."
+
+#. Name of the subscription's 5-hour usage window
+#: app/entry/navigation/account-profiles.tsx
+msgid "5시간"
+msgstr "5시간"
+
+#. Name of the subscription's 7-day usage window
+#: app/entry/navigation/account-profiles.tsx
+msgid "7일"
+msgstr "7일"
+
+#. Field title for the Kagi API key
+#. Field title for the Kagi API key
+#: app/entry/settings/pages/web.tsx
+msgid "API 키"
+msgstr "API 키"
+
+#. Field label: the endpoint's API key, which may be left empty
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "API 키 (선택)"
+msgstr "API 키 (선택)"
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "Chat Completions 호환 서버를 엔드포인트마다 등록하고 쓸 모델을 직접 추가합니다. 공급자의 API 요금이 적용될 수 있습니다."
+msgstr "Chat Completions 호환 서버를 엔드포인트마다 등록하고 쓸 모델을 직접 추가합니다. 공급자의 API 요금이 적용될 수 있습니다."
+
+#. Provider name: OpenAI's ChatGPT subscription
+#: app/entry/navigation/providers.ts
+msgid "ChatGPT"
+msgstr "ChatGPT"
+
+#. Provider name: Anthropic's Claude subscription
+#: app/entry/navigation/providers.ts
+msgid "Claude"
+msgstr "Claude"
+
+#: app/entry/settings/pages/imports.tsx
+msgid "Claude Code와 Codex CLI가 이 컴퓨터에 남긴 대화를 기억으로 옮깁니다. 도구 호출과 결과까지 옮겨서 옛 대화도 근거를 따라갈 수 있습니다. 원본 파일은 읽기만 합니다."
+msgstr "Claude Code와 Codex CLI가 이 컴퓨터에 남긴 대화를 기억으로 옮깁니다. 도구 호출과 결과까지 옮겨서 옛 대화도 근거를 따라갈 수 있습니다. 원본 파일은 읽기만 합니다."
+
+#: app/entry/settings/pages/image.tsx
+msgid "Claude 사용 중 이미지 생성을 요청하면 프롬프트를 OpenAI로 보냅니다. 사용량은 OpenAI 계정에 귀속됩니다. 로그인만으로 자동 허용되지 않습니다."
+msgstr "Claude 사용 중 이미지 생성을 요청하면 프롬프트를 OpenAI로 보냅니다. 사용량은 OpenAI 계정에 귀속됩니다. 로그인만으로 자동 허용되지 않습니다."
+
 #: app/entry/media/cross-provider-approval.tsx
 msgid "Claude는 이미지를 직접 생성하지 않습니다. 이미지 프롬프트가 OpenAI로 전송되고 사용량은 OpenAI 계정에 귀속됩니다."
 msgstr "Claude는 이미지를 직접 생성하지 않습니다. 이미지 프롬프트가 OpenAI로 전송되고 사용량은 OpenAI 계정에 귀속됩니다."
+
+#: app/entry/settings/pages/image.tsx
+msgid "Claude에서 이미지 생성"
+msgstr "Claude에서 이미지 생성"
+
+#. Embedding device option: run the model on the CPU
+#: app/entry/settings/pages/embedding.tsx
+msgid "CPU"
+msgstr "CPU"
+
+#: app/entry/settings/pages/embedding.tsx
+msgid "CPU는 벡터를 만드는 동안 코어를 여럿 씁니다. GPU는 CPU를 훨씬 덜 쓰고 다섯 배쯤 빠르며 메모리도 조금 덜 씁니다. 자동은 GPU와 같습니다. WebGPU를 쓸 수 없으면 같은 모델을 CPU에서 돌립니다."
+msgstr "CPU는 벡터를 만드는 동안 코어를 여럿 씁니다. GPU는 CPU를 훨씬 덜 쓰고 다섯 배쯤 빠르며 메모리도 조금 덜 씁니다. 자동은 GPU와 같습니다. WebGPU를 쓸 수 없으면 같은 모델을 CPU에서 돌립니다."
+
+#: app/entry/settings/pages/embedding.tsx
+msgid "CPU에서 실행 중"
+msgstr "CPU에서 실행 중"
+
+#: app/entry/settings/pages/skills.tsx
+msgid "description이 없어 쓰지 않습니다."
+msgstr "description이 없어 쓰지 않습니다."
+
+#: app/entry/settings/pages/improvements.tsx
+msgid "git 저장소인 열린 프로젝트가 없습니다."
+msgstr "git 저장소인 열린 프로젝트가 없습니다."
+
+#: app/entry/settings/pages/kanban.tsx
+msgid "Goal을 붙잡고 다음 Plan을 쓰는 대화의 모델입니다. 칸반 보드로 실행 중인 대화에 쓰입니다."
+msgstr "Goal을 붙잡고 다음 Plan을 쓰는 대화의 모델입니다. 칸반 보드로 실행 중인 대화에 쓰입니다."
+
+#: app/entry/settings/pages/kanban.tsx
+msgid "Goal을 시작한 브랜치가 여기 있으면 카드가 모두 끝나도 자동으로 merge하지 않습니다. 대신 PR을 만들지 직접 merge할지 묻습니다. 쉼표로 구분합니다. 비우면 모든 브랜치에 자동으로 merge합니다."
+msgstr "Goal을 시작한 브랜치가 여기 있으면 카드가 모두 끝나도 자동으로 merge하지 않습니다. 대신 PR을 만들지 직접 merge할지 묻습니다. 쉼표로 구분합니다. 비우면 모든 브랜치에 자동으로 merge합니다."
+
+#: app/entry/settings/pages/kanban.tsx
+msgid "Goal을 칸반 보드로 실행할 때 쓰는 값을 정합니다. 함께 돌릴 카드 수, Plan 작성·실행·검증에 쓸 모델, 끝난 Goal을 자동으로 merge할 브랜치입니다."
+msgstr "Goal을 칸반 보드로 실행할 때 쓰는 값을 정합니다. 함께 돌릴 카드 수, Plan 작성·실행·검증에 쓸 모델, 끝난 Goal을 자동으로 merge할 브랜치입니다."
+
+#. Embedding device option: run the model on the GPU
+#: app/entry/settings/pages/embedding.tsx
+msgid "GPU (빠름)"
+msgstr "GPU (빠름)"
+
+#: app/entry/settings/pages/embedding.tsx
+msgid "GPU 모드, CPU에서 실행 중"
+msgstr "GPU 모드, CPU에서 실행 중"
+
+#: app/entry/settings/pages/embedding.tsx
+msgid "GPU(WebGPU)에서 실행 중"
+msgstr "GPU(WebGPU)에서 실행 중"
+
+#: app/entry/settings/pages/web.tsx
+msgid "kagi.com/api/keys에서 발급한 키"
+msgstr "kagi.com/api/keys에서 발급한 키"
+
+#. Settings page name: configured MCP servers
+#: app/entry/settings/shared.tsx
+msgid "MCP 서버"
+msgstr "MCP 서버"
+
+#. dayjs format pattern for when a conversation started. Keep the tokens M, D, A, hh and mm.
+#: app/lib/dates.ts
+msgid "M월 D일 A hh:mm"
+msgstr "M월 D일 A hh:mm"
+
+#: app/entry/settings/pages/image.tsx
+msgid "OpenAI API 키가 필요하며 생성할 때마다 비용이 발생할 수 있습니다. 설정은 바로 적용되고 앱을 다시 시작할 필요가 없습니다."
+msgstr "OpenAI API 키가 필요하며 생성할 때마다 비용이 발생할 수 있습니다. 설정은 바로 적용되고 앱을 다시 시작할 필요가 없습니다."
 
 #: app/entry/media/cross-provider-approval.tsx
 msgid "OpenAI 이미지 실행을 허용할까요?"
 msgstr "OpenAI 이미지 실행을 허용할까요?"
 
+#. Provider name: any server that speaks the OpenAI Chat Completions API
+#: app/entry/navigation/providers.ts
+msgid "OpenAI 호환"
+msgstr "OpenAI 호환"
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "OpenAI 호환 엔드포인트 목록"
+msgstr "OpenAI 호환 엔드포인트 목록"
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "OpenAI 호환 엔드포인트 추가"
+msgstr "OpenAI 호환 엔드포인트 추가"
+
+#: app/entry/settings/pages/web.tsx
+msgid "OS 키체인에 저장돼 있습니다. 화면에 다시 보여 주지 않습니다."
+msgstr "OS 키체인에 저장돼 있습니다. 화면에 다시 보여 주지 않습니다."
+
+#: app/entry/settings/shared.tsx
+msgid "OS 키체인에 접근하지 못했습니다. 키를 다른 곳에 대신 저장하지 않습니다."
+msgstr "OS 키체인에 접근하지 못했습니다. 키를 다른 곳에 대신 저장하지 않습니다."
+
+#: app/entry/settings/pages/kanban.tsx
+msgid "Plan 작성자 모델"
+msgstr "Plan 작성자 모델"
+
+#: app/entry/api.ts
+msgid "PNG, JPEG, GIF, WebP 이미지만 올릴 수 있습니다."
+msgstr "PNG, JPEG, GIF, WebP 이미지만 올릴 수 있습니다."
+
+#: app/entry/settings/pages/skills.tsx
+msgid "SKILL.md가 너무 커서 쓰지 않습니다."
+msgstr "SKILL.md가 너무 커서 쓰지 않습니다."
+
+#. Settings page name: skill instructions the model reads
+#: app/entry/settings/shared.tsx
+msgid "Skills"
+msgstr "Skills"
+
+#: app/entry/settings/pages/embedding.tsx
+msgid "WebGPU 장치를 찾지 못했습니다."
+msgstr "WebGPU 장치를 찾지 못했습니다."
+
+#: app/entry/settings/pages/embedding.tsx
+msgid "WebGPU를 쓸 수 없어 지금은 CPU에서 GPU용 모델을 돌리고 있습니다. 벡터는 같지만 더 느립니다."
+msgstr "WebGPU를 쓸 수 없어 지금은 CPU에서 GPU용 모델을 돌리고 있습니다. 벡터는 같지만 더 느립니다."
+
+#: app/entry/settings/pages/imports.tsx
+msgid "가져오기 작업을 시작하지 못했습니다"
+msgstr "가져오기 작업을 시작하지 못했습니다"
+
+#: app/entry/settings/pages/imports.tsx
+msgid "가져오기 작업이 끊겼습니다"
+msgstr "가져오기 작업이 끊겼습니다"
+
+#: app/entry/settings/pages/imports.tsx
+msgid "가져오기가 중단됐습니다"
+msgstr "가져오기가 중단됐습니다"
+
+#: app/entry/settings/pages/imports.tsx
+msgid "가져오지 못했습니다"
+msgstr "가져오지 못했습니다"
+
+#: app/entry/settings/pages/imports.tsx
+msgid "가져온 발언도 해석"
+msgstr "가져온 발언도 해석"
+
+#. Name of the background loop that watches for new conversations to import
+#: app/entry/settings/pages/imports.tsx
+msgid "감시"
+msgstr "감시"
+
+#: app/entry/settings/pages/kanban.tsx
+msgid "값이 올바르지 않습니다. 동시 실행 수는 1~32, 브랜치 이름은 영문·숫자·._/-만 쓸 수 있습니다."
+msgstr "값이 올바르지 않습니다. 동시 실행 수는 1~32, 브랜치 이름은 영문·숫자·._/-만 쓸 수 있습니다."
+
+#. Settings tab group: project improvement reports
+#: app/entry/settings/settings-dialog.tsx
+msgid "개선"
+msgstr "개선"
+
+#: app/entry/settings/pages/improvements.tsx
+msgid "개선 문서를 쓰거나 읽지 못했습니다."
+msgstr "개선 문서를 쓰거나 읽지 못했습니다."
+
+#: app/entry/settings/pages/improvements.tsx
+msgid "개선 항목 찾기"
+msgstr "개선 항목 찾기"
+
+#: app/entry/settings/pages/improvements.tsx
+msgid "개선 항목을 찾는 중 오류가 났습니다. 다시 시도해 주십시오."
+msgstr "개선 항목을 찾는 중 오류가 났습니다. 다시 시도해 주십시오."
+
+#: app/entry/settings/pages/improvements.tsx
+msgid "개선 항목을 해석할 모델이 없습니다. 채팅에서 모델을 고르고 로그인한 뒤 다시 시도해 주십시오."
+msgstr "개선 항목을 해석할 모델이 없습니다. 채팅에서 모델을 고르고 로그인한 뒤 다시 시도해 주십시오."
+
+#. Local model being downloaded
+#: app/entry/settings/pages/embedding.tsx
+msgid "검색 결과 정렬 모델"
+msgstr "검색 결과 정렬 모델"
+
+#: app/entry/settings/pages/web.tsx
+msgid "검색과 페이지 읽기 사용"
+msgstr "검색과 페이지 읽기 사용"
+
+#: app/entry/settings/pages/kanban.tsx
+msgid "검증자 모델"
+msgstr "검증자 모델"
+
+#. Stage of an agent run at which it failed
+#: app/entry/session/attempt-failure.ts
+msgid "결과 저장 중"
+msgstr "결과 저장 중"
+
+#: app/entry/session/attempt-failure.ts
+msgid "결과가 바뀌지 않는 같은 도구 호출을 되풀이해서 멈췄습니다"
+msgstr "결과가 바뀌지 않는 같은 도구 호출을 되풀이해서 멈췄습니다"
+
+#: app/entry/session/attempt-failure.ts
+msgid "결과를 저장하지 못했습니다"
+msgstr "결과를 저장하지 못했습니다"
+
+#. Status badge: a background loop stopped on a defect
+#: app/entry/shared/loop-health.tsx
+msgid "결함으로 중단"
+msgstr "결함으로 중단"
+
+#. Copy button label right after it copied a path
+#: app/entry/settings/shared.tsx
+msgid "경로를 복사했습니다"
+msgstr "경로를 복사했습니다"
+
+#: app/entry/api.ts
+msgid "경로를 찾을 수 없습니다."
+msgstr "경로를 찾을 수 없습니다."
+
+#. Switch label: keep importing new conversations in the background
+#: app/entry/settings/pages/imports.tsx
+msgid "계속 가져오기"
+msgstr "계속 가져오기"
+
+#. Title of the account management sheet
+#: app/entry/index.tsx
+msgid "계정 관리"
+msgstr "계정 관리"
+
+#: app/entry/navigation/account-profiles.tsx
+msgid "계정 목록을 불러오지 못했습니다."
+msgstr "계정 목록을 불러오지 못했습니다."
+
+#. Button that opens account management to connect an account
+#: app/entry/index.tsx
+msgid "계정 연결"
+msgstr "계정 연결"
+
+#. Field for renaming an account in place
+#. Field for renaming an account in place
+#: app/entry/navigation/account-profiles.tsx
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "계정 이름"
+msgstr "계정 이름"
+
+#: app/entry/navigation/account-profiles.tsx
+msgid "계정 이름 (예: 개인, 회사)"
+msgstr "계정 이름 (예: 개인, 회사)"
+
+#: app/entry/navigation/account-profiles.tsx
+msgid "계정 이름은 1~80자로 입력해 주십시오."
+msgstr "계정 이름은 1~80자로 입력해 주십시오."
+
+#: app/entry/navigation/account-profiles.tsx
+msgid "계정 작업에 실패했습니다."
+msgstr "계정 작업에 실패했습니다."
+
+#: app/entry/navigation/account-profiles.tsx
+msgid "계정 작업을 완료하지 못했습니다. 이 계정의 실행이 끝난 뒤 다시 시도해 주십시오."
+msgstr "계정 작업을 완료하지 못했습니다. 이 계정의 실행이 끝난 뒤 다시 시도해 주십시오."
+
+#: app/entry/navigation/account-profiles.tsx
+msgid "계정 저장소를 열지 못했습니다. 잠시 뒤 다시 시도해 주십시오."
+msgstr "계정 저장소를 열지 못했습니다. 잠시 뒤 다시 시도해 주십시오."
+
+#. Account switcher button and menu heading
+#. Account switcher button and menu heading
+#: app/entry/navigation/account-switcher.tsx
+msgid "계정 전환"
+msgstr "계정 전환"
+
+#. Account switcher button; label is the account's name, provider its provider
+#: app/entry/navigation/account-switcher.tsx
+msgid "계정 전환: {label} ({provider})"
+msgstr "계정 전환: {label} ({provider})"
+
+#. Button that adds an account of the provider
+#: app/entry/navigation/account-profiles.tsx
+msgid "계정 추가"
+msgstr "계정 추가"
+
+#. Tooltip of the account manager button: what it lets you do
+#: app/entry/navigation/account-switcher.tsx
+msgid "계정 추가·수정·로그아웃"
+msgstr "계정 추가·수정·로그아웃"
+
+#: app/entry/navigation/account-profiles.tsx
+msgid "계정마다 따로 로그인합니다. 쓸 계정은 사이드바 아래에서 고릅니다."
+msgstr "계정마다 따로 로그인합니다. 쓸 계정은 사이드바 아래에서 고릅니다."
+
+#: app/entry/index.tsx
+msgid "계정에서 쓸 수 있는 모델 중 하나를 골라 주십시오."
+msgstr "계정에서 쓸 수 있는 모델 중 하나를 골라 주십시오."
+
+#: app/entry/index.tsx
+msgid "계정을 바꾸지 못했습니다. 연결 상태를 확인한 뒤 다시 시도해 주십시오."
+msgstr "계정을 바꾸지 못했습니다. 연결 상태를 확인한 뒤 다시 시도해 주십시오."
+
+#: app/entry/navigation/account-profiles.tsx
+msgid "계정을 찾을 수 없습니다. 목록을 새로 고친 뒤 다시 시도해 주십시오."
+msgstr "계정을 찾을 수 없습니다. 목록을 새로 고친 뒤 다시 시도해 주십시오."
+
+#: app/entry/index.tsx
+msgid "계정을 추가하고 계정마다 이름을 바꾸거나 로그아웃합니다. 쓸 계정은 사이드바 아래 계정 전환에서 고릅니다."
+msgstr "계정을 추가하고 계정마다 이름을 바꾸거나 로그아웃합니다. 쓸 계정은 사이드바 아래 계정 전환에서 고릅니다."
+
+#: app/entry/settings/pages/image.tsx
+msgid "공급자 간 이미지 실행 동의를 바꾸지 못했습니다."
+msgstr "공급자 간 이미지 실행 동의를 바꾸지 못했습니다."
+
+#: app/entry/index.tsx
+msgid "공급자를 연결해 주십시오"
+msgstr "공급자를 연결해 주십시오"
+
+#. Scope badge: set in the user-wide config, shared by every project
+#: app/entry/settings/shared.tsx
+msgid "공통"
+msgstr "공통"
+
+#: app/entry/navigation/account-profiles.tsx
+msgid "구독 한도 조회 불가: 저장된 로그인이 만료돼 조회하지 않았습니다"
+msgstr "구독 한도 조회 불가: 저장된 로그인이 만료돼 조회하지 않았습니다"
+
+#: app/entry/navigation/account-profiles.tsx
+msgid "구독 한도 조회 실패: 공급자에게서 사용량을 받지 못했습니다"
+msgstr "구독 한도 조회 실패: 공급자에게서 사용량을 받지 못했습니다"
+
+#. Sidebar field label: the project's permission mode
+#: app/entry/navigation/sidebar.tsx
+msgid "권한"
+msgstr "권한"
+
+#. Picker of the project's permission mode
+#: app/entry/navigation/sidebar.tsx
+msgid "권한 모드"
+msgstr "권한 모드"
+
+#: app/entry/settings/pages/embedding.tsx
+msgid "근거 연결 {repaired}개, 의미 연결 {suppressed}개, 불필요한 주제 {retired}개를 정리했습니다."
+msgstr "근거 연결 {repaired}개, 의미 연결 {suppressed}개, 불필요한 주제 {retired}개를 정리했습니다."
+
+#: app/entry/settings/pages/imports.tsx
+msgid "기록 <0/>개 중 <1/>개를 읽어 노드 <2/>개를 넣었습니다."
+msgstr "기록 <0/>개 중 <1/>개를 읽어 노드 <2/>개를 넣었습니다."
+
+#: app/entry/settings/pages/imports.tsx
+msgid "기록 수를 세지 못했습니다"
+msgstr "기록 수를 세지 못했습니다"
+
+#: app/entry/settings/pages/imports.tsx
+msgid "기록 형식을 읽지 못했습니다"
+msgstr "기록 형식을 읽지 못했습니다"
+
+#: app/entry/settings/pages/imports.tsx
+msgid "기록을 읽는 중입니다. <0/>/<1/>개를 확인하고 노드 <2/>개를 더했습니다."
+msgstr "기록을 읽는 중입니다. <0/>/<1/>개를 확인하고 노드 <2/>개를 더했습니다."
+
+#: app/entry/settings/pages/imports.tsx
+msgid "기록을 읽다가 실패했습니다"
+msgstr "기록을 읽다가 실패했습니다"
+
+#: app/entry/settings/pages/improvements.tsx
+msgid "기록한 개선 항목을 불러오는 중입니다."
+msgstr "기록한 개선 항목을 불러오는 중입니다."
+
+#. Scope badge: a skill built into the app
+#: app/entry/settings/shared.tsx
+msgid "기본"
+msgstr "기본"
+
+#. Button that clears the saved card count so the device default applies
+#: app/entry/settings/pages/kanban.tsx
+msgid "기본값으로"
+msgstr "기본값으로"
+
+#. Settings tab group: pages about the app's stored conversation memory
+#. Sidebar field label: the project's memory
+#: app/entry/navigation/sidebar.tsx
+#: app/entry/settings/settings-dialog.tsx
+msgid "기억"
+msgstr "기억"
+
+#: app/entry/settings/pages/embedding.tsx
+msgid "기억 그래프 정리"
+msgstr "기억 그래프 정리"
+
+#. Settings page name: which memory a conversation may search beyond its project
+#: app/entry/settings/shared.tsx
+msgid "기억 범위"
+msgstr "기억 범위"
+
+#: app/entry/settings/pages/imports.tsx
+msgid "기억 저장소에 쓰지 못했습니다"
+msgstr "기억 저장소에 쓰지 못했습니다"
+
+#: app/entry/settings/pages/embedding.tsx
+msgid "기억을 뜻으로 찾을 때 쓰는 벡터를 어디서 만들지 정합니다. 사용자와 모델의 발언만 임베딩합니다. 도구 기록은 글자 검색으로 찾습니다."
+msgstr "기억을 뜻으로 찾을 때 쓰는 벡터를 어디서 만들지 정합니다. 사용자와 모델의 발언만 임베딩합니다. 도구 기록은 글자 검색으로 찾습니다."
+
+#. Settings page name: when a long conversation starts being summarized
+#: app/entry/settings/shared.tsx
+msgid "긴 대화"
+msgstr "긴 대화"
+
+#. Badge: image generation is switched off
+#. Badge: web search is switched off
+#: app/entry/settings/pages/image.tsx
+#: app/entry/settings/pages/web.tsx
+msgid "꺼짐"
+msgstr "꺼짐"
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "끄면 이미지를 보낼 수 없습니다. 이미지가 있던 대화는 글 메모로 이어 보냅니다."
+msgstr "끄면 이미지를 보낼 수 없습니다. 이미지가 있던 대화는 글 메모로 이어 보냅니다."
+
+#. Model tool calling: off
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "끔"
+msgstr "끔"
+
+#: app/entry/session/run-state.tsx
+msgid "끝까지 답하지 못했습니다. 필요하면 다시 보내 주십시오."
+msgstr "끝까지 답하지 못했습니다. 필요하면 다시 보내 주십시오."
+
+#: app/entry/settings/pages/kanban.tsx
+msgid "끝난 카드와 merge 전 Goal 브랜치를 고치지 않고 판정만 하는 모델입니다."
+msgstr "끝난 카드와 merge 전 Goal 브랜치를 고치지 않고 판정만 하는 모델입니다."
+
+#: app/entry/index.tsx
+msgid "다른 Goal 보드가 이 대화의 Goal이 merge되기를 기다리고 있습니다. 그 보드에서 의존을 먼저 풀어 주십시오."
+msgstr "다른 Goal 보드가 이 대화의 Goal이 merge되기를 기다리고 있습니다. 그 보드에서 의존을 먼저 풀어 주십시오."
+
+#: app/entry/navigation/sidebar.tsx
+msgid "다른 대화가 없습니다."
+msgstr "다른 대화가 없습니다."
+
+#: app/entry/api.ts
+msgid "다른 탭에서 쓰고 있는 대화입니다. 그 탭에서 다시 시도해 주십시오."
+msgstr "다른 탭에서 쓰고 있는 대화입니다. 그 탭에서 다시 시도해 주십시오."
+
+#: app/entry/api.ts
+msgid "다른 탭에서 쓰고 있는 대화입니다. 그 탭을 닫은 뒤 다시 시도해 주십시오."
+msgstr "다른 탭에서 쓰고 있는 대화입니다. 그 탭을 닫은 뒤 다시 시도해 주십시오."
+
+#: app/entry/settings/pages/recall.tsx
+msgid "다른 프로젝트 기억도 찾기"
+msgstr "다른 프로젝트 기억도 찾기"
+
+#. Switch: conversations in other projects may recall this project's memory
+#: app/entry/navigation/sidebar.tsx
+msgid "다른 프로젝트에서도 찾기"
+msgstr "다른 프로젝트에서도 찾기"
+
+#. Button that signs in to an MCP server again
+#: app/entry/settings/pages/mcp.tsx
+msgid "다시 로그인"
+msgstr "다시 로그인"
+
+#. Button that loads a settings section again after it failed to load
+#: app/entry/queries/boundary.tsx
+msgid "다시 시도"
+msgstr "다시 시도"
+
+#. Button that restarts a stopped background loop
+#: app/entry/shared/loop-health.tsx
+msgid "다시 시작"
+msgstr "다시 시작"
+
+#. Button that trusts an MCP server or agent again after its config changed
+#: app/entry/settings/shared.tsx
+msgid "다시 신뢰하기"
+msgstr "다시 신뢰하기"
+
+#. Button that reconnects an agent that stopped retrying
+#. Button that reloads the page to receive the running answer again
+#: app/entry/session/run-state.tsx
+#: app/entry/settings/pages/agents.tsx
+msgid "다시 연결"
+msgstr "다시 연결"
+
+#. Button that opens the login page in the browser again
+#: app/entry/navigation/account-profiles.tsx
+msgid "다시 열기"
+msgstr "다시 열기"
+
+#. Button that runs the improvement scan again
+#: app/entry/settings/pages/improvements.tsx
+msgid "다시 찾기"
+msgstr "다시 찾기"
+
+#. Button that checks again whether WebGPU can be used
+#: app/entry/settings/pages/embedding.tsx
+msgid "다시 확인"
+msgstr "다시 확인"
+
+#. Badge on a trusted MCP server that starts with the next conversation
+#: app/entry/settings/pages/mcp.tsx
+msgid "다음 대화에서 시작"
+msgstr "다음 대화에서 시작"
+
+#. Theme picker option: always dark colors
+#: app/entry/shared/theme.tsx
+msgid "다크 모드"
+msgstr "다크 모드"
+
+#: app/entry/session/run-state.tsx
+msgid "답변 글 없이 끝났습니다"
+msgstr "답변 글 없이 끝났습니다"
+
+#. Conversation status: an answer is streaming
+#: app/entry/navigation/sidebar.tsx
+msgid "답변 중"
+msgstr "답변 중"
+
+#. {resumeAt} is the local time the new run starts
+#: app/entry/session/run-state.tsx
+msgid "답변 중에 서버가 다시 시작됐습니다. 도구를 실행하기 전이라 같은 요청을 {resumeAt}에 새 실행으로 이어서 진행합니다."
+msgstr "답변 중에 서버가 다시 시작됐습니다. 도구를 실행하기 전이라 같은 요청을 {resumeAt}에 새 실행으로 이어서 진행합니다."
+
+#: app/entry/session/run-state.tsx
+msgid "답변 중에 서버가 다시 시작됐습니다. 자동으로 다시 실행하지 않습니다. 필요하면 다시 보내 주십시오."
+msgstr "답변 중에 서버가 다시 시작됐습니다. 자동으로 다시 실행하지 않습니다. 필요하면 다시 보내 주십시오."
+
+#: app/entry/api.ts
+msgid "답변 중인 대화는 보관할 수 없습니다. 끝나거나 멈춘 뒤 다시 시도해 주십시오."
+msgstr "답변 중인 대화는 보관할 수 없습니다. 끝나거나 멈춘 뒤 다시 시도해 주십시오."
+
+#: app/entry/session/run-state.tsx
+msgid "답변을 멈췄습니다."
+msgstr "답변을 멈췄습니다."
+
+#: app/entry/api.ts
+msgid "답변이 끝난 뒤에 비울 수 있습니다."
+msgstr "답변이 끝난 뒤에 비울 수 있습니다."
+
+#: app/entry/session/run-state.tsx
+msgid "답변이 아직 진행 중입니다"
+msgstr "답변이 아직 진행 중입니다"
+
+#: app/entry/session/run-state.tsx
+msgid "답변이 중간에 멈췄습니다"
+msgstr "답변이 중간에 멈췄습니다"
+
+#. Conversation list section: the conversations not at work
+#: app/entry/navigation/sidebar.tsx
+msgid "대화"
+msgstr "대화"
+
+#. Settings page name: importing other coding agents' conversations into memory
+#: app/entry/settings/shared.tsx
+msgid "대화 가져오기"
+msgstr "대화 가져오기"
+
+#: app/entry/settings/settings-dialog.tsx
+msgid "대화 밖에서 쓰는 도구와 연결을 관리합니다."
+msgstr "대화 밖에서 쓰는 도구와 연결을 관리합니다."
+
+#: app/entry/navigation/sidebar.tsx
+msgid "대화 상대 고르기"
+msgstr "대화 상대 고르기"
+
+#: app/entry/navigation/sidebar.tsx
+msgid "대화 원본을 삭제할까요?"
+msgstr "대화 원본을 삭제할까요?"
+
+#: app/entry/settings/pages/conversation.tsx
+msgid "대화가 길어지면 앞쪽 턴을 요약으로 바꿔 보냅니다. 원문은 기억에 남아 있어서 모델이 필요할 때 다시 읽습니다."
+msgstr "대화가 길어지면 앞쪽 턴을 요약으로 바꿔 보냅니다. 원문은 기억에 남아 있어서 모델이 필요할 때 다시 읽습니다."
+
+#: app/entry/settings/pages/imports.tsx
+msgid "대화가 있던 폴더는 프로젝트로 등록됩니다. 에이전트가 그 폴더의 파일을 읽고 고칠 수 있게 됩니다. 필요 없는 프로젝트는 사이드바에서 목록에서 빼 주십시오."
+msgstr "대화가 있던 폴더는 프로젝트로 등록됩니다. 에이전트가 그 폴더의 파일을 읽고 고칠 수 있게 됩니다. 필요 없는 프로젝트는 사이드바에서 목록에서 빼 주십시오."
+
+#: app/entry/settings/pages/recall.tsx
+msgid "대화가 지금 프로젝트 밖의 기억을 쓰거나 내보낼지 정합니다. 둘 다 처음에는 꺼져 있습니다."
+msgstr "대화가 지금 프로젝트 밖의 기억을 쓰거나 내보낼지 정합니다. 둘 다 처음에는 꺼져 있습니다."
+
+#. Shown when archiving, deleting or restoring a conversation failed
+#: app/entry/api.ts
+msgid "대화를 바꾸지 못했습니다."
+msgstr "대화를 바꾸지 못했습니다."
+
+#: app/entry/api.ts
+msgid "대화를 찾을 수 없습니다."
+msgstr "대화를 찾을 수 없습니다."
+
+#: app/entry/index.tsx
+msgid "대화와 기억은 프로젝트 단위로 저장됩니다."
+msgstr "대화와 기억은 프로젝트 단위로 저장됩니다."
+
+#. Badge on a connected MCP server; {count} is how many tools it offers
+#: app/entry/settings/pages/mcp.tsx
+msgid "도구 {count}개"
+msgstr "도구 {count}개"
+
+#. Stage of an agent run at which it failed
+#: app/entry/session/attempt-failure.ts
+msgid "도구 실행 중"
+msgstr "도구 실행 중"
+
+#: app/entry/api.ts
+msgid "도구 출력을 비우지 못했습니다."
+msgstr "도구 출력을 비우지 못했습니다."
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "도구 호출 지원"
+msgstr "도구 호출 지원"
+
+#: app/entry/settings/pages/kanban.tsx
+msgid "동시에 실행할 카드 수"
+msgstr "동시에 실행할 카드 수"
+
+#. Placeholder of the API key field: empty keeps the saved key
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "등록된 키 유지"
+msgstr "등록된 키 유지"
+
+#: app/entry/navigation/sidebar.tsx
+msgid "등록된 프로젝트가 없습니다."
+msgstr "등록된 프로젝트가 없습니다."
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "등록한 모델이 없습니다. 모델을 추가해야 이 엔드포인트로 대화할 수 있습니다."
+msgstr "등록한 모델이 없습니다. 모델을 추가해야 이 엔드포인트로 대화할 수 있습니다."
+
+#. Theme picker option: always light colors
+#: app/entry/shared/theme.tsx
+msgid "라이트 모드"
+msgstr "라이트 모드"
+
+#. Button that signs out of an MCP server
+#: app/entry/settings/pages/mcp.tsx
+msgid "로그아웃"
+msgstr "로그아웃"
+
+#. Button that signs in to an MCP server
+#: app/entry/settings/pages/mcp.tsx
+msgid "로그인"
+msgstr "로그인"
+
+#. Account connection status: waiting for the browser login to finish
+#: app/entry/navigation/account-model-panel.tsx
+msgid "로그인 대기"
+msgstr "로그인 대기"
+
+#. Button that cancels an MCP server's OAuth login in progress
+#: app/entry/settings/pages/mcp.tsx
+msgid "로그인 취소"
+msgstr "로그인 취소"
+
+#. Badge on an MCP server that needs an OAuth login
+#: app/entry/settings/pages/mcp.tsx
+msgid "로그인 필요"
+msgstr "로그인 필요"
+
+#: app/entry/settings/pages/mcp.tsx
+msgid "로그인 후 돌아올 포트를 열지 못했습니다. 다른 프로그램이 쓰고 있을 수 있습니다."
+msgstr "로그인 후 돌아올 포트를 열지 못했습니다. 다른 프로그램이 쓰고 있을 수 있습니다."
+
+#: app/entry/navigation/account-profiles.tsx
+msgid "로그인을 시작하지 못했습니다. 잠시 뒤 다시 시도해 주십시오."
+msgstr "로그인을 시작하지 못했습니다. 잠시 뒤 다시 시도해 주십시오."
+
+#: app/entry/settings/pages/mcp.tsx
+msgid "로그인이 거절됐습니다."
+msgstr "로그인이 거절됐습니다."
+
+#: app/entry/settings/pages/mcp.tsx
+msgid "로그인이 제시간에 끝나지 않았습니다."
+msgstr "로그인이 제시간에 끝나지 않았습니다."
+
+#: app/entry/settings/pages/mcp.tsx
+msgid "로그인하지 못했습니다."
+msgstr "로그인하지 못했습니다."
+
+#: app/entry/session/run-state.tsx
+msgid "마지막 답변이 끝나지 않았습니다"
+msgstr "마지막 답변이 끝나지 않았습니다"
+
+#: app/entry/session/run-state.tsx
+msgid "마지막 답변이 실패했습니다"
+msgstr "마지막 답변이 실패했습니다"
+
+#: app/entry/navigation/sidebar.tsx
+msgid "맞는 프로젝트가 없습니다."
+msgstr "맞는 프로젝트가 없습니다."
+
+#. Project permission mode `ask`
+#: app/entry/navigation/sidebar.tsx
+msgid "매번 묻기"
+msgstr "매번 묻기"
+
+#. Option: ask before each cross-provider image run
+#: app/entry/settings/pages/image.tsx
+msgid "매번 확인"
+msgstr "매번 확인"
+
+#: app/entry/settings/shared.tsx
+msgid "먼저 API 키를 등록해 주십시오."
+msgstr "먼저 API 키를 등록해 주십시오."
+
+#: app/entry/session/run-state.tsx
+msgid "멈추기를 요청했습니다"
+msgstr "멈추기를 요청했습니다"
+
+#. Sidebar field label: the chat model
+#. Sidebar section of model settings
+#: app/entry/navigation/sidebar.tsx
+msgid "모델"
+msgstr "모델"
+
+#. Field label: the model id the server expects
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "모델 ID"
+msgstr "모델 ID"
+
+#. Placeholder of the model select before one is picked
+#: app/entry/settings/pages/kanban.tsx
+msgid "모델 고르기"
+msgstr "모델 고르기"
+
+#. Label of the form that registers a model
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "모델 등록"
+msgstr "모델 등록"
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "모델 목록 불러오기"
+msgstr "모델 목록 불러오기"
+
+#: app/entry/settings/pages/kanban.tsx
+msgid "모델 목록을 읽지 못했습니다. 그 제공자에 로그인했는지 확인해 주십시오."
+msgstr "모델 목록을 읽지 못했습니다. 그 제공자에 로그인했는지 확인해 주십시오."
+
+#. Sidebar account summary when no model is chosen
+#: app/entry/navigation/account-model-panel.tsx
+msgid "모델 미선택"
+msgstr "모델 미선택"
+
+#: app/entry/settings/pages/improvements.tsx
+msgid "모델 서버가 응답하지 않아 찾기를 멈췄습니다. 모델 서버 연결을 확인한 뒤 다시 시도해 주십시오."
+msgstr "모델 서버가 응답하지 않아 찾기를 멈췄습니다. 모델 서버 연결을 확인한 뒤 다시 시도해 주십시오."
+
+#. Placeholder of the model picker when none is chosen
+#: app/entry/navigation/sidebar.tsx
+msgid "모델 선택"
+msgstr "모델 선택"
+
+#. Account switcher: the compatible endpoint has no registered model
+#: app/entry/navigation/account-switcher.tsx
+msgid "모델 없음"
+msgstr "모델 없음"
+
+#: app/entry/session/attempt-failure.ts
+msgid "모델 응답 스트림이 끊겼습니다"
+msgstr "모델 응답 스트림이 끊겼습니다"
+
+#. Stage of an agent run at which it failed
+#: app/entry/session/attempt-failure.ts
+msgid "모델 응답 중"
+msgstr "모델 응답 중"
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "모델 저장"
+msgstr "모델 저장"
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "모델 추가"
+msgstr "모델 추가"
+
+#: app/entry/settings/pages/conversation.tsx
+msgid "모델 컨텍스트가 이만큼 찰 때까지는 원문 그대로 보냅니다. 낮추면 일찍 요약해 짧게 보냅니다. 높이면 원문을 오래 보냅니다. 0이면 처음부터 요약합니다. 최대 {maximumPercent}%입니다. 다음 응답부터 적용됩니다. 이미 요약을 쓰기 시작한 대화는 계속 요약을 씁니다."
+msgstr "모델 컨텍스트가 이만큼 찰 때까지는 원문 그대로 보냅니다. 낮추면 일찍 요약해 짧게 보냅니다. 높이면 원문을 오래 보냅니다. 0이면 처음부터 요약합니다. 최대 {maximumPercent}%입니다. 다음 응답부터 적용됩니다. 이미 요약을 쓰기 시작한 대화는 계속 요약을 씁니다."
+
+#: app/entry/settings/pages/embedding.tsx
+msgid "모델은 처음 임베딩할 때 불러옵니다."
+msgstr "모델은 처음 임베딩할 때 불러옵니다."
+
+#: app/entry/index.tsx
+msgid "모델을 선택해 주십시오"
+msgstr "모델을 선택해 주십시오"
+
+#: app/entry/navigation/sidebar.tsx
+msgid "모델을 선택해 주십시오."
+msgstr "모델을 선택해 주십시오."
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "모델을 저장했습니다."
+msgstr "모델을 저장했습니다."
+
+#: app/entry/session/run-state.tsx
+msgid "모델이 도구만 쓰고 답을 쓰지 않은 채 마쳤습니다. 이어서 답해 달라고 다시 보내 주십시오."
+msgstr "모델이 도구만 쓰고 답을 쓰지 않은 채 마쳤습니다. 이어서 답해 달라고 다시 보내 주십시오."
+
+#: app/entry/session/attempt-failure.ts
+msgid "모델이 오류를 보냈습니다"
+msgstr "모델이 오류를 보냈습니다"
+
+#: app/entry/settings/pages/skills.tsx
+msgid "모델이 이름과 설명을 보고 작업에 맞는 skill을 읽어 따릅니다. skill은 지침일 뿐이라 승인을 대신하지 않습니다."
+msgstr "모델이 이름과 설명을 보고 작업에 맞는 skill을 읽어 따릅니다. skill은 지침일 뿐이라 승인을 대신하지 않습니다."
+
+#: app/entry/settings/pages/improvements.tsx
+msgid "모델이 해석하지 못했습니다. 문서의 근거를 직접 확인해 주십시오."
+msgstr "모델이 해석하지 못했습니다. 문서의 근거를 직접 확인해 주십시오."
+
+#. {effective} is the card count in use; {deviceDefault} is empty, or a parenthesized note when the count is the device default
+#: app/entry/settings/pages/kanban.tsx
+msgid "모든 Goal의 카드를 합쳐 이만큼만 동시에 실행합니다. 지금 {effective}개{deviceDefault}로 실행합니다. 저장하면 바로 적용됩니다. 실행 중인 카드는 멈추지 않습니다. 빈 슬롯은 아래 프로젝트 순서, 그 안에서는 칸반 보드의 대화 순서대로 줍니다."
+msgstr "모든 Goal의 카드를 합쳐 이만큼만 동시에 실행합니다. 지금 {effective}개{deviceDefault}로 실행합니다. 저장하면 바로 적용됩니다. 실행 중인 카드는 멈추지 않습니다. 빈 슬롯은 아래 프로젝트 순서, 그 안에서는 칸반 보드의 대화 순서대로 줍니다."
+
+#. Place filter option: conversations from every branch and worktree
+#: app/entry/navigation/sidebar.tsx
+msgid "모든 작업 위치"
+msgstr "모든 작업 위치"
+
+#. Sidebar field label: the project's place in the project list
+#: app/entry/navigation/sidebar.tsx
+msgid "목록"
+msgstr "목록"
+
+#: app/entry/navigation/sidebar.tsx
+msgid "목록에서만 뺀 대화입니다. 기억 검색에는 계속 나옵니다."
+msgstr "목록에서만 뺀 대화입니다. 기억 검색에는 계속 나옵니다."
+
+#. Button that copies the improvement document
+#: app/entry/settings/pages/improvements.tsx
+msgid "문서 복사"
+msgstr "문서 복사"
+
+#: app/entry/settings/pages/agents.tsx
+#: app/entry/settings/pages/mcp.tsx
+msgid "바꾸지 못했습니다."
+msgstr "바꾸지 못했습니다."
+
+#: app/entry/settings/pages/improvements.tsx
+msgid "반복된 정정이나 실패가 없어 고칠 항목이 없습니다."
+msgstr "반복된 정정이나 실패가 없어 고칠 항목이 없습니다."
+
+#. Hint on an archived project: choosing it unarchives it
+#: app/entry/navigation/sidebar.tsx
+msgid "보관 해제"
+msgstr "보관 해제"
+
+#: app/entry/navigation/sidebar.tsx
+msgid "보관된 프로젝트"
+msgstr "보관된 프로젝트"
+
+#. Button that archives the project
+#. Menu item that archives the conversation
+#: app/entry/navigation/sidebar.tsx
+msgid "보관하기"
+msgstr "보관하기"
+
+#. Conversation list section: archived conversations
+#: app/entry/navigation/sidebar.tsx
+msgid "보관함"
+msgstr "보관함"
+
+#. Conversation status: its kanban board is running
+#: app/entry/navigation/sidebar.tsx
+msgid "보드 실행 중"
+msgstr "보드 실행 중"
+
+#. Field label; {project} is the project name
+#: app/entry/settings/pages/kanban.tsx
+msgid "보호 브랜치 ({project})"
+msgstr "보호 브랜치 ({project})"
+
+#: app/entry/settings/pages/kanban.tsx
+msgid "보호 브랜치는 프로젝트마다 정합니다. 프로젝트를 고른 뒤 다시 열어 주십시오."
+msgstr "보호 브랜치는 프로젝트마다 정합니다. 프로젝트를 고른 뒤 다시 열어 주십시오."
+
+#. Copy button label right after it copied the document
+#: app/entry/settings/pages/improvements.tsx
+msgid "복사했습니다"
+msgstr "복사했습니다"
+
+#. Menu item that brings the conversation back to the list
+#: app/entry/navigation/sidebar.tsx
+msgid "복원"
+msgstr "복원"
+
+#: app/entry/navigation/account-profiles.tsx
+msgid "브라우저에서 {providerName} 로그인을 완료해 주십시오"
+msgstr "브라우저에서 {providerName} 로그인을 완료해 주십시오"
+
+#. Link that opens an MCP server's OAuth login page in the browser
+#: app/entry/settings/pages/mcp.tsx
+msgid "브라우저에서 로그인"
+msgstr "브라우저에서 로그인"
+
+#. Badge on an MCP server whose OAuth login is open in the browser
+#: app/entry/settings/pages/mcp.tsx
+msgid "브라우저에서 로그인 중"
+msgstr "브라우저에서 로그인 중"
+
+#: app/entry/settings/shared.tsx
+msgid "비밀정보 확인에 실패해 명령줄을 숨겼습니다."
+msgstr "비밀정보 확인에 실패해 명령줄을 숨겼습니다."
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "비워 두면 서버 주소로 부릅니다"
+msgstr "비워 두면 서버 주소로 부릅니다"
+
+#: app/entry/api.ts
+msgid "빈 파일입니다."
+msgstr "빈 파일입니다."
+
+#: app/entry/settings/pages/improvements.tsx
+msgid "사용 기록에서 신호를 모으는 중입니다."
+msgstr "사용 기록에서 신호를 모으는 중입니다."
+
+#. Option: never send image prompts from Claude to OpenAI
+#: app/entry/settings/pages/image.tsx
+msgid "사용 안 함"
+msgstr "사용 안 함"
+
+#. Badge: image generation is switched on
+#: app/entry/settings/pages/image.tsx
+msgid "사용 중"
+msgstr "사용 중"
+
+#. Button that stops a trusted MCP server or agent from running
+#: app/entry/settings/shared.tsx
+msgid "사용 중지"
+msgstr "사용 중지"
+
+#: app/entry/index.tsx
+msgid "사이드바 접기"
+msgstr "사이드바 접기"
+
+#: app/entry/index.tsx
+msgid "사이드바 접기 (⌘B)"
+msgstr "사이드바 접기 (⌘B)"
+
+#: app/entry/index.tsx
+msgid "사이드바 접기·펼치기"
+msgstr "사이드바 접기·펼치기"
+
+#: app/entry/index.tsx
+msgid "사이드바 접기·펼치기 (⌘B)"
+msgstr "사이드바 접기·펼치기 (⌘B)"
+
+#: app/entry/index.tsx
+msgid "사이드바 펼치기"
+msgstr "사이드바 펼치기"
+
+#: app/entry/index.tsx
+msgid "사이드바 펼치기 (⌘B)"
+msgstr "사이드바 펼치기 (⌘B)"
+
+#: app/entry/settings/shared.tsx
+msgid "사이드바에서 프로젝트를 고르면 그 프로젝트의 설정이 보입니다."
+msgstr "사이드바에서 프로젝트를 고르면 그 프로젝트의 설정이 보입니다."
+
+#. Dialog button that confirms deleting the conversation's source
+#: app/entry/navigation/sidebar.tsx
+msgid "삭제"
+msgstr "삭제"
+
+#. Label of the form that adds an account of the provider
+#: app/entry/navigation/account-profiles.tsx
+msgid "새 {providerName} 계정"
+msgstr "새 {providerName} 계정"
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "새 OpenAI 호환 엔드포인트"
+msgstr "새 OpenAI 호환 엔드포인트"
+
+#: app/entry/navigation/account-profiles.tsx
+msgid "새 계정 로그인을 완료하지 못했습니다. 다시 시도해 주십시오."
+msgstr "새 계정 로그인을 완료하지 못했습니다. 다시 시도해 주십시오."
+
+#. Field for the new account's name
+#: app/entry/navigation/account-profiles.tsx
+msgid "새 계정 이름"
+msgstr "새 계정 이름"
+
+#. Button that starts a conversation
+#. Group of buttons that start a conversation
+#: app/entry/navigation/sidebar.tsx
+msgid "새 대화"
+msgstr "새 대화"
+
+#. Menu heading: who the new conversation talks to
+#: app/entry/navigation/sidebar.tsx
+msgid "새 대화 상대"
+msgstr "새 대화 상대"
+
+#: app/entry/index.tsx
+msgid "새 대화를 시작해 주십시오"
+msgstr "새 대화를 시작해 주십시오"
+
+#. Reasoning effort option: whatever the endpoint server uses by default
+#: app/entry/navigation/providers.ts
+msgid "서버 기본값"
+msgstr "서버 기본값"
+
+#: app/root.tsx
+msgid "서버 연결이 바뀌었습니다. 페이지를 새로고침한 뒤 작업을 이어가 주십시오."
+msgstr "서버 연결이 바뀌었습니다. 페이지를 새로고침한 뒤 작업을 이어가 주십시오."
+
+#. Stage of an agent run at which it failed
+#: app/entry/session/attempt-failure.ts
+msgid "서버 재시작 중"
+msgstr "서버 재시작 중"
+
+#: app/entry/session/attempt-failure.ts
+msgid "서버가 다시 시작돼 실행이 멈췄습니다"
+msgstr "서버가 다시 시작돼 실행이 멈췄습니다"
+
+#: app/entry/settings/pages/mcp.tsx
+msgid "서버가 제시간에 도구 목록을 주지 않았습니다."
+msgstr "서버가 제시간에 도구 목록을 주지 않았습니다."
+
+#: app/entry/settings/pages/mcp.tsx
+msgid "서버가 제시간에 연결되지 않았습니다."
+msgstr "서버가 제시간에 연결되지 않았습니다."
+
+#: app/entry/settings/pages/mcp.tsx
+msgid "서버를 시작하거나 연결하지 못했습니다."
+msgstr "서버를 시작하거나 연결하지 못했습니다."
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "서버에서 쓰는 정확한 ID를 입력해 주십시오."
+msgstr "서버에서 쓰는 정확한 ID를 입력해 주십시오."
+
+#: app/entry/session/run-state.tsx
+msgid "서버에서 아직 멈추지 않았습니다. 멈추면 여기에 표시됩니다."
+msgstr "서버에서 아직 멈추지 않았습니다. 멈추면 여기에 표시됩니다."
+
+#. Label of the models the server listed, offered as choices
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "서버의 모델"
+msgstr "서버의 모델"
+
+#. Who asks for an approval: an unnamed subagent
+#: app/entry/session/delegated-work.ts
+msgid "서브에이전트"
+msgstr "서브에이전트"
+
+#. Who asks for an approval; {name} is the subagent's name
+#: app/entry/session/delegated-work.ts
+msgid "서브에이전트 {name}"
+msgstr "서브에이전트 {name}"
+
+#. Option: run this role on the model selected in the chat
+#: app/entry/settings/pages/kanban.tsx
+msgid "선택된 모델"
+msgstr "선택된 모델"
+
+#: app/entry/index.tsx
+msgid "선택한 공급자에 로그인해 주십시오"
+msgstr "선택한 공급자에 로그인해 주십시오"
+
+#. Sidebar button that opens the settings
+#. Sidebar button that opens the settings
+#. Title of the app settings dialog
+#: app/entry/index.tsx
+#: app/entry/settings/settings-dialog.tsx
+msgid "설정"
+msgstr "설정"
+
+#. Badge on an MCP server or agent whose config changed after it was trusted
+#. Badge on an MCP server or agent whose config changed after it was trusted
+#: app/entry/settings/pages/agents.tsx
+#: app/entry/settings/pages/mcp.tsx
+msgid "설정 바뀜, 다시 신뢰 필요"
+msgstr "설정 바뀜, 다시 신뢰 필요"
+
+#. Account connection status: no compatible endpoint is set up yet
+#: app/entry/navigation/account-model-panel.tsx
+msgid "설정 필요"
+msgstr "설정 필요"
+
+#: app/entry/settings/shared.tsx
+msgid "설정 형식이 맞지 않아 이 파일을 쓰지 않습니다."
+msgstr "설정 형식이 맞지 않아 이 파일을 쓰지 않습니다."
+
+#: app/entry/settings/pages/mcp.tsx
+msgid "설정된 MCP 서버가 없습니다."
+msgstr "설정된 MCP 서버가 없습니다."
+
+#: app/entry/settings/pages/agents.tsx
+msgid "설정된 에이전트가 없습니다."
+msgstr "설정된 에이전트가 없습니다."
+
+#: app/entry/navigation/sidebar.tsx
+msgid "설정에서 신뢰한 에이전트가 없습니다"
+msgstr "설정에서 신뢰한 에이전트가 없습니다"
+
+#: app/entry/settings/pages/kanban.tsx
+#: app/entry/settings/shared.tsx
+msgid "설정을 바꾸지 못했습니다."
+msgstr "설정을 바꾸지 못했습니다."
+
+#. Accessible label of the spinner shown while a settings section loads
+#: app/entry/queries/boundary.tsx
+msgid "설정을 불러오는 중"
+msgstr "설정을 불러오는 중"
+
+#: app/entry/queries/boundary.tsx
+msgid "설정을 불러오지 못했습니다."
+msgstr "설정을 불러오지 못했습니다."
+
+#: app/entry/settings/pages/kanban.tsx
+msgid "설정을 저장하지 못했습니다. 잠시 뒤 다시 시도해 주십시오."
+msgstr "설정을 저장하지 못했습니다. 잠시 뒤 다시 시도해 주십시오."
+
+#: app/entry/settings/pages/mcp.tsx
+msgid "설정이 쓰는 환경 변수가 없습니다."
+msgstr "설정이 쓰는 환경 변수가 없습니다."
+
+#. Kind of background job: a shell command
+#: app/entry/session/background-tasks.ts
+msgid "셸 명령"
+msgstr "셸 명령"
+
+#. Stage of an agent run at which it failed
+#: app/entry/session/attempt-failure.ts
+msgid "승인 대기 중"
+msgstr "승인 대기 중"
+
+#. Theme picker option: follow the OS color scheme
+#: app/entry/shared/theme.tsx
+msgid "시스템 테마"
+msgstr "시스템 테마"
+
+#. Badge on an MCP server that failed to start
+#: app/entry/settings/pages/mcp.tsx
+msgid "시작 실패"
+msgstr "시작 실패"
+
+#. Stage of an agent run at which it failed
+#: app/entry/session/attempt-failure.ts
+msgid "시작 중"
+msgstr "시작 중"
+
+#: app/entry/settings/pages/embedding.tsx
+msgid "시험 임베딩을 하지 못했습니다."
+msgstr "시험 임베딩을 하지 못했습니다."
+
+#. Badge on an MCP server or agent the user has not trusted yet
+#. Badge on an MCP server or agent the user has not trusted yet
+#: app/entry/settings/pages/agents.tsx
+#: app/entry/settings/pages/mcp.tsx
+msgid "신뢰 필요"
+msgstr "신뢰 필요"
+
+#. Button that trusts an MCP server or agent so it may start
+#: app/entry/settings/shared.tsx
+msgid "신뢰하기"
+msgstr "신뢰하기"
+
+#: app/entry/settings/pages/agents.tsx
+msgid "신뢰한 ACP 에이전트에게 모델이 작업을 맡길 수 있습니다. 맡길 때마다 승인합니다. 에이전트는 이 앱의 ChatGPT 로그인이 아니라 자기 로그인으로 일합니다."
+msgstr "신뢰한 ACP 에이전트에게 모델이 작업을 맡길 수 있습니다. 맡길 때마다 승인합니다. 에이전트는 이 앱의 ChatGPT 로그인이 아니라 자기 로그인으로 일합니다."
+
+#: app/entry/settings/pages/mcp.tsx
+msgid "신뢰한 서버만 시작합니다. 설정 파일이 바뀌면 다시 신뢰해야 합니다. 신뢰해도 도구를 부를 때마다 승인이나 자동 판단을 거칩니다."
+msgstr "신뢰한 서버만 시작합니다. 설정 파일이 바뀌면 다시 신뢰해야 합니다. 신뢰해도 도구를 부를 때마다 승인이나 자동 판단을 거칩니다."
+
+#: app/entry/settings/pages/web.tsx
+msgid "실패해도 다시 시도하지 않습니다. 끄면 다음 호출부터 바로 막힙니다."
+msgstr "실패해도 다시 시도하지 않습니다. 끄면 다음 호출부터 바로 막힙니다."
+
+#. Settings tab group: how Goals run on the kanban board
+#: app/entry/settings/settings-dialog.tsx
+msgid "실행"
+msgstr "실행"
+
+#. Label of the select that picks CPU or GPU for the embedding model
+#: app/entry/settings/pages/embedding.tsx
+msgid "실행 방식"
+msgstr "실행 방식"
+
+#: app/entry/navigation/sidebar.tsx
+msgid "실행 중이면 안전하게 중단하고 기억은 남깁니다"
+msgstr "실행 중이면 안전하게 중단하고 기억은 남깁니다"
+
+#: app/entry/settings/pages/improvements.tsx
+msgid "실행 중인 서버가 프로젝트 개선을 지원하지 않습니다. 앱 서버를 재시작한 뒤 다시 시도해 주십시오."
+msgstr "실행 중인 서버가 프로젝트 개선을 지원하지 않습니다. 앱 서버를 재시작한 뒤 다시 시도해 주십시오."
+
+#: app/entry/index.tsx
+msgid "실행이 멈추기를 기다리고 있습니다. 아직 대화를 바꾸지 않았습니다."
+msgstr "실행이 멈추기를 기다리고 있습니다. 아직 대화를 바꾸지 않았습니다."
+
+#: app/entry/settings/pages/kanban.tsx
+msgid "실행자 모델"
+msgstr "실행자 모델"
+
+#. Badge on a trusted agent that connects when the conversation first uses it
+#: app/entry/settings/pages/agents.tsx
+msgid "쓸 때 시작"
+msgstr "쓸 때 시작"
+
+#: app/entry/settings/pages/embedding.tsx
+msgid "쓸 수 없습니다({time} 확인): {reason}"
+msgstr "쓸 수 없습니다({time} 확인): {reason}"
+
+#: app/entry/settings/pages/skills.tsx
+msgid "쓸 수 있는 skill이 없습니다."
+msgstr "쓸 수 있는 skill이 없습니다."
+
+#: app/entry/settings/pages/embedding.tsx
+msgid "쓸 수 있습니다({time} 확인)."
+msgstr "쓸 수 있습니다({time} 확인)."
+
+#: app/entry/settings/pages/imports.tsx
+msgid "아래 기록은 읽지 못했습니다. 다음에 읽을 때 다시 시도합니다."
+msgstr "아래 기록은 읽지 못했습니다. 다음에 읽을 때 다시 시도합니다."
+
+#: app/entry/settings/pages/imports.tsx
+msgid "아래 폴더는 프로젝트로 만들 수 없어 가져오지 않았습니다."
+msgstr "아래 폴더는 프로젝트로 만들 수 없어 가져오지 않았습니다."
+
+#: app/entry/settings/pages/imports.tsx
+msgid "아직 <0/>개를 인덱싱하고 있습니다. 최근 대화부터 채웁니다. 그동안에도 글자 검색과 형태소 검색으로는 찾을 수 있습니다."
+msgstr "아직 <0/>개를 인덱싱하고 있습니다. 최근 대화부터 채웁니다. 그동안에도 글자 검색과 형태소 검색으로는 찾을 수 있습니다."
+
+#: app/entry/settings/pages/embedding.tsx
+msgid "아직 <0/>개를 임베딩하지 않았습니다. 최근 대화부터 채웁니다."
+msgstr "아직 <0/>개를 임베딩하지 않았습니다. 최근 대화부터 채웁니다."
+
+#: app/entry/settings/pages/improvements.tsx
+msgid "아직 개선 항목을 찾은 적이 없습니다."
+msgstr "아직 개선 항목을 찾은 적이 없습니다."
+
+#: app/entry/navigation/sidebar.tsx
+msgid "아직 대화가 없습니다."
+msgstr "아직 대화가 없습니다."
+
+#: app/entry/settings/pages/embedding.tsx
+msgid "아직 확인하지 않았습니다."
+msgstr "아직 확인하지 않았습니다."
+
+#. Failure message of a run that recorded no message of its own
+#: app/entry/session/run-notice.ts
+msgid "알 수 없는 오류"
+msgstr "알 수 없는 오류"
+
+#: app/entry/settings/pages/imports.tsx
+msgid "압축된 기록을 풀지 못했습니다"
+msgstr "압축된 기록을 풀지 못했습니다"
+
+#: app/entry/api.ts
+msgid "앱 저장소 폴더와 겹치는 경로는 등록할 수 없습니다."
+msgstr "앱 저장소 폴더와 겹치는 경로는 등록할 수 없습니다."
+
+#: app/entry/settings/pages/embedding.tsx
+msgid "앱을 다시 시작한 뒤에는 {mode} 모드로 돌아갑니다. 그 모드로 만든 벡터가 없으면 처음부터 다시 만듭니다. 그동안에도 글자 검색과 형태소 검색은 됩니다."
+msgstr "앱을 다시 시작한 뒤에는 {mode} 모드로 돌아갑니다. 그 모드로 만든 벡터가 없으면 처음부터 다시 만듭니다. 그동안에도 글자 검색과 형태소 검색은 됩니다."
+
+#: app/entry/session/run-state.tsx
+msgid "앱이 상태를 고쳤습니다"
+msgstr "앱이 상태를 고쳤습니다"
+
+#: app/entry/settings/pages/imports.tsx
+msgid "어느 대화인지 알 수 없습니다"
+msgstr "어느 대화인지 알 수 없습니다"
+
+#: app/entry/session/attempt-failure.ts
+msgid "에이전트 실행이 비정상 종료됐습니다"
+msgstr "에이전트 실행이 비정상 종료됐습니다"
+
+#: app/entry/session/attempt-failure.ts
+msgid "에이전트가 응답을 멈췄습니다"
+msgstr "에이전트가 응답을 멈췄습니다"
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "엔드포인트 목록을 불러오지 못했습니다."
+msgstr "엔드포인트 목록을 불러오지 못했습니다."
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "엔드포인트 추가"
+msgstr "엔드포인트 추가"
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "엔드포인트가 응답하지 않았습니다. 주소와 서버 상태를 확인해 주십시오."
+msgstr "엔드포인트가 응답하지 않았습니다. 주소와 서버 상태를 확인해 주십시오."
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "엔드포인트나 모델을 찾지 못했습니다. 목록을 새로고침해 주십시오."
+msgstr "엔드포인트나 모델을 찾지 못했습니다. 목록을 새로고침해 주십시오."
+
+#. Settings tab group: web, image, MCP and agent pages
+#: app/entry/settings/settings-dialog.tsx
+msgid "연결"
+msgstr "연결"
+
+#. Badge on an agent; {failures} is how many connection attempts failed in a row
+#: app/entry/settings/pages/agents.tsx
+msgid "연결 실패 {failures}회"
+msgstr "연결 실패 {failures}회"
+
+#. Account connection status: the connection failed
+#: app/entry/navigation/account-model-panel.tsx
+msgid "연결 오류"
+msgstr "연결 오류"
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "연결 저장"
+msgstr "연결 저장"
+
+#. Badge on an agent that is connecting
+#: app/entry/settings/pages/agents.tsx
+msgid "연결 중"
+msgstr "연결 중"
+
+#: app/entry/navigation/account-switcher.tsx
+msgid "연결된 계정이 없습니다"
+msgstr "연결된 계정이 없습니다"
+
+#. Badge on an agent that is connected
+#: app/entry/settings/pages/agents.tsx
+msgid "연결됨"
+msgstr "연결됨"
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "연결을 저장했습니다."
+msgstr "연결을 저장했습니다."
+
+#: app/entry/settings/pages/improvements.tsx
+msgid "열린 프로젝트의 최근 90일 사용 기록에서 반복된 정정과 실패를 찾아 저장소마다 고칠 항목과 작업 명세를 문서로 남깁니다. 코드와 에이전트 지침을 함께 고치는 명세입니다. 앱은 저장소를 직접 바꾸지 않습니다."
+msgstr "열린 프로젝트의 최근 90일 사용 기록에서 반복된 정정과 실패를 찾아 저장소마다 고칠 항목과 작업 명세를 문서로 남깁니다. 코드와 에이전트 지침을 함께 고치는 명세입니다. 앱은 저장소를 직접 바꾸지 않습니다."
+
+#: app/entry/settings/pages/imports.tsx
+msgid "예상하지 못한 오류가 났습니다"
+msgstr "예상하지 못한 오류가 났습니다"
+
+#. Kind of background job: a turn of an external coding agent
+#. Settings page name: outside ACP agents the conversation may delegate to
+#: app/entry/session/background-tasks.ts
+#: app/entry/settings/shared.tsx
+msgid "외부 에이전트"
+msgstr "외부 에이전트"
+
+#. Who asks for an approval; {agent} is the external coding agent's name
+#: app/entry/session/delegated-work.ts
+msgid "외부 에이전트 {agent}"
+msgstr "외부 에이전트 {agent}"
+
+#. {code} is the failure code the external coding agent reported
+#: app/entry/session/attempt-failure.ts
+msgid "외부 에이전트가 실패했습니다 ({code})"
+msgstr "외부 에이전트가 실패했습니다 ({code})"
+
+#: app/entry/settings/pages/recall.tsx
+msgid "외부 에이전트에 기억 보내기"
+msgstr "외부 에이전트에 기억 보내기"
+
+#: app/entry/navigation/sidebar.tsx
+msgid "외부 에이전트와 직접"
+msgstr "외부 에이전트와 직접"
+
+#: app/entry/settings/pages/recall.tsx
+msgid "외부 에이전트와 직접 대화할 때, 메시지와 관련된 기억을 최대 5개까지 출처와 함께 메시지 앞에 붙여 보냅니다. 외부 프로세스로 나가는 내용이라 필요할 때만 켜 주십시오."
+msgstr "외부 에이전트와 직접 대화할 때, 메시지와 관련된 기억을 최대 5개까지 출처와 함께 메시지 앞에 붙여 보냅니다. 외부 프로세스로 나가는 내용이라 필요할 때만 켜 주십시오."
+
+#: app/entry/index.tsx
+msgid "왼쪽에서 OpenAI 호환 공급자를 설정하거나 구독 계정에 로그인해 주십시오."
+msgstr "왼쪽에서 OpenAI 호환 공급자를 설정하거나 구독 계정에 로그인해 주십시오."
+
+#: app/entry/index.tsx
+msgid "왼쪽의 새 대화 버튼을 눌러 주십시오."
+msgstr "왼쪽의 새 대화 버튼을 눌러 주십시오."
+
+#: app/entry/settings/pages/conversation.tsx
+msgid "요약 시작 시점 (컨텍스트 대비 %)"
+msgstr "요약 시작 시점 (컨텍스트 대비 %)"
+
+#: app/entry/settings/pages/improvements.tsx
+msgid "요청을 처리하지 못했습니다."
+msgstr "요청을 처리하지 못했습니다."
+
+#. Menu item that deletes the conversation's source record
+#. Menu item that deletes the conversation's source record
+#: app/entry/navigation/sidebar.tsx
+msgid "원본 삭제"
+msgstr "원본 삭제"
+
+#. Settings page name: web search through Kagi
+#: app/entry/settings/shared.tsx
+msgid "웹 검색"
+msgstr "웹 검색"
+
+#: app/entry/settings/pages/kanban.tsx
+msgid "위 프로젝트의 카드부터 실행합니다. 한 프로젝트 안에서는 칸반 보드의 대화 순서를 따릅니다."
+msgstr "위 프로젝트의 카드부터 실행합니다. 한 프로젝트 안에서는 칸반 보드의 대화 순서를 따릅니다."
+
+#: app/entry/settings/pages/kanban.tsx
+msgid "이 모델을 쓸 수 없습니다. 그 제공자 로그인 상태와 모델, 추론 단계가 맞는지 확인해 주십시오."
+msgstr "이 모델을 쓸 수 없습니다. 그 제공자 로그인 상태와 모델, 추론 단계가 맞는지 확인해 주십시오."
+
+#: app/entry/navigation/account-profiles.tsx
+msgid "이 앱의 계정 목록에서도 지웁니다."
+msgstr "이 앱의 계정 목록에서도 지웁니다."
+
+#. Menu item: talk to this app's own model
+#: app/entry/navigation/sidebar.tsx
+msgid "이 앱의 모델"
+msgstr "이 앱의 모델"
+
+#: app/entry/settings/pages/imports.tsx
+msgid "이 앱의 저장 폴더 안입니다"
+msgstr "이 앱의 저장 폴더 안입니다"
+
+#: app/entry/navigation/sidebar.tsx
+msgid "이 작업 위치의 대화가 없습니다."
+msgstr "이 작업 위치의 대화가 없습니다."
+
+#: app/entry/session/run-state.tsx
+msgid "이 페이지와 연결이 끊겼지만 서버에서는 계속 답하고 있습니다. 다시 연결하면 이어서 볼 수 있습니다."
+msgstr "이 페이지와 연결이 끊겼지만 서버에서는 계속 답하고 있습니다. 다시 연결하면 이어서 볼 수 있습니다."
+
+#: app/entry/navigation/decision-inbox.tsx
+msgid "이 프로젝트의 모든 대화와 Goal에서 사람의 판단을 기다리는 카드입니다. 여기서 답하거나 카드가 있는 보드로 이동합니다."
+msgstr "이 프로젝트의 모든 대화와 Goal에서 사람의 판단을 기다리는 카드입니다. 여기서 답하거나 카드가 있는 보드로 이동합니다."
+
+#. Field label: the endpoint's name, which may be left empty
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "이름 (선택)"
+msgstr "이름 (선택)"
+
+#. Button that renames the account
+#. Button that renames the account
+#: app/entry/navigation/account-profiles.tsx
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "이름 변경"
+msgstr "이름 변경"
+
+#. Icon button that drops the typed account name
+#. Icon button that drops the typed account name
+#: app/entry/navigation/account-profiles.tsx
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "이름 변경 취소"
+msgstr "이름 변경 취소"
+
+#. Icon button that saves the account's new name
+#. Icon button that saves the account's new name
+#: app/entry/navigation/account-profiles.tsx
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "이름 저장"
+msgstr "이름 저장"
+
+#: app/entry/settings/shared.tsx
+msgid "이름은 영문자·숫자·_·-로 1~32자여야 합니다. 맞지 않는 항목은 빼고 씁니다."
+msgstr "이름은 영문자·숫자·_·-로 1~32자여야 합니다. 맞지 않는 항목은 빼고 씁니다."
+
+#: app/entry/settings/pages/agents.tsx
+#: app/entry/settings/pages/mcp.tsx
+msgid "이름이 같으면 프로젝트 설정을 씁니다."
+msgstr "이름이 같으면 프로젝트 설정을 씁니다."
+
+#: app/entry/settings/pages/skills.tsx
+msgid "이름이 같으면 프로젝트, 공통, 기본 순으로 앞의 것을 씁니다. 기본 skill도 같은 이름으로 덮어쓸 수 있습니다."
+msgstr "이름이 같으면 프로젝트, 공통, 기본 순으로 앞의 것을 씁니다. 기본 skill도 같은 이름으로 덮어쓸 수 있습니다."
+
+#: app/entry/api.ts
+msgid "이미 등록된 프로젝트입니다."
+msgstr "이미 등록된 프로젝트입니다."
+
+#: app/entry/navigation/account-profiles.tsx
+msgid "이미 진행 중인 로그인이 있습니다. 그 로그인을 마치거나 취소한 뒤 다시 시도해 주십시오."
+msgstr "이미 진행 중인 로그인이 있습니다. 그 로그인을 마치거나 취소한 뒤 다시 시도해 주십시오."
+
+#. Model spec: accepts image input
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "이미지"
+msgstr "이미지"
+
+#. Settings page name: image generation
+#: app/entry/settings/shared.tsx
+msgid "이미지 생성"
+msgstr "이미지 생성"
+
+#: app/entry/settings/pages/image.tsx
+msgid "이미지 생성 사용"
+msgstr "이미지 생성 사용"
+
+#: app/entry/settings/pages/image.tsx
+msgid "이미지 생성이 필요할 때만 작성창에서 생성 모드를 선택해 사용합니다. 일반 대화에는 이미지 도구가 추가되지 않습니다."
+msgstr "이미지 생성이 필요할 때만 작성창에서 생성 모드를 선택해 사용합니다. 일반 대화에는 이미지 도구가 추가되지 않습니다."
+
+#: app/entry/settings/pages/image.tsx
+msgid "이미지 설정을 바꾸지 못했습니다."
+msgstr "이미지 설정을 바꾸지 못했습니다."
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "이미지 입력 지원"
+msgstr "이미지 입력 지원"
+
 #: app/entry/media/use-image-generation.ts
 msgid "이미지를 생성하지 못했습니다. 설정과 계정 권한을 확인해 주십시오."
 msgstr "이미지를 생성하지 못했습니다. 설정과 계정 권한을 확인해 주십시오."
+
+#: app/entry/api.ts
+msgid "이미지를 올리지 못했습니다."
+msgstr "이미지를 올리지 못했습니다."
 
 #: app/entry/media/cross-provider-approval.tsx
 msgid "이번만 허용"
 msgstr "이번만 허용"
 
-#: app/entry/media/cross-provider-approval.tsx
+#: app/entry/session/run-state.tsx
+msgid "이전 버전이 끝내지 못한 Goal 상태를 고치고 자동 실행을 멈췄습니다. 이어서 하려면 메시지를 보내 주십시오."
+msgstr "이전 버전이 끝내지 못한 Goal 상태를 고치고 자동 실행을 멈췄습니다. 이어서 하려면 메시지를 보내 주십시오."
+
+#: app/entry/settings/pages/embedding.tsx
+msgid "이전 버전이 잘못 남긴 기억 연결을 자동으로 점검합니다. 원문과 정상 벡터는 보존하고 빈 응답의 의미 연결과 근거 연결 오류만 정리합니다. 정정과 취소 해석은 바꾸지 않습니다."
+msgstr "이전 버전이 잘못 남긴 기억 연결을 자동으로 점검합니다. 원문과 정상 벡터는 보존하고 빈 응답의 의미 연결과 근거 연결 오류만 정리합니다. 정정과 취소 해석은 바꾸지 않습니다."
+
+#. Import button label while an import pass is reading
+#: app/entry/settings/pages/imports.tsx
+msgid "읽는 중"
+msgstr "읽는 중"
+
+#: app/entry/settings/pages/skills.tsx
+msgid "읽지 못했습니다."
+msgstr "읽지 못했습니다."
+
+#. Settings page name: where memory search vectors are computed
+#: app/entry/settings/shared.tsx
+msgid "임베딩"
+msgstr "임베딩"
+
+#: app/entry/settings/pages/embedding.tsx
+msgid "임베딩 worker가 모델을 불러오지 못했습니다."
+msgstr "임베딩 worker가 모델을 불러오지 못했습니다."
+
+#: app/entry/settings/pages/embedding.tsx
+msgid "임베딩 worker가 시험 임베딩을 하지 못했습니다."
+msgstr "임베딩 worker가 시험 임베딩을 하지 못했습니다."
+
+#: app/entry/settings/pages/embedding.tsx
+msgid "임베딩 worker가 응답 없이 끝났습니다."
+msgstr "임베딩 worker가 응답 없이 끝났습니다."
+
+#. Local model being downloaded
+#: app/entry/settings/pages/embedding.tsx
+msgid "임베딩 모델"
+msgstr "임베딩 모델"
+
+#: app/entry/settings/pages/improvements.tsx
+msgid "임베딩 모델로 비슷한 정정을 묶지 못했습니다. 임베딩 설정을 확인해 주십시오."
+msgstr "임베딩 모델로 비슷한 정정을 묶지 못했습니다. 임베딩 설정을 확인해 주십시오."
+
+#. Embedding device option: let the app pick (same as GPU)
+#: app/entry/settings/pages/embedding.tsx
+msgid "자동"
+msgstr "자동"
+
+#. Project permission mode `auto`
+#: app/entry/navigation/sidebar.tsx
+msgid "자동 판단 (auto)"
+msgstr "자동 판단 (auto)"
+
+#. Toggle that unfolds a failure's raw text from the outside program
+#: app/entry/shared/failure-details.tsx
+msgid "자세히"
+msgstr "자세히"
+
+#: app/entry/settings/pages/improvements.tsx
+msgid "작업 명세 문서 보기"
+msgstr "작업 명세 문서 보기"
+
+#. Place filter menu heading: a branch or worktree
+#: app/entry/navigation/sidebar.tsx
+msgid "작업 위치"
+msgstr "작업 위치"
+
+#. Place filter button; placeLabel is the branch or worktree shown
+#. Place filter button; placeLabel is the branch or worktree shown
+#: app/entry/navigation/sidebar.tsx
+msgid "작업 위치: {placeLabel}"
+msgstr "작업 위치: {placeLabel}"
+
+#: app/entry/session/attempt-failure.ts
+msgid "작업이 결과 없이 실패했습니다"
+msgstr "작업이 결과 없이 실패했습니다"
+
+#. Status badge: a background loop used up its retries
+#: app/entry/shared/loop-health.tsx
+msgid "재시도 소진"
+msgstr "재시도 소진"
+
+#: app/entry/shared/loop-health.tsx
+msgid "재시도 중 {attempt}/{of}"
+msgstr "재시도 중 {attempt}/{of}"
+
+#. Badge on an agent that stopped reconnecting after repeated failures
+#: app/entry/settings/pages/agents.tsx
+msgid "재연결 중단"
+msgstr "재연결 중단"
+
+#. Button that saves a settings field
+#. Button that saves a settings field
+#. Button that saves a settings field
+#. Button that saves a settings field
+#. Button that saves a settings field
+#: app/entry/settings/pages/conversation.tsx
+#: app/entry/settings/pages/kanban.tsx
+#: app/entry/settings/pages/web.tsx
+msgid "저장"
+msgstr "저장"
+
+#: app/entry/settings/pages/embedding.tsx
+msgid "저장된 기억을 자동으로 점검할 예정입니다."
+msgstr "저장된 기억을 자동으로 점검할 예정입니다."
+
+#: app/entry/settings/pages/embedding.tsx
+msgid "저장된 기억을 점검하고 있습니다."
+msgstr "저장된 기억을 점검하고 있습니다."
+
+#: app/entry/navigation/account-profiles.tsx
+msgid "저장된 로그인 정보를 확인하지 못했습니다. 계정을 다시 추가해 주십시오."
+msgstr "저장된 로그인 정보를 확인하지 못했습니다. 계정을 다시 추가해 주십시오."
+
+#. Place filter option: conversations in the repository checkout, not a worktree
+#: app/entry/navigation/sidebar.tsx
+msgid "저장소 본체"
+msgstr "저장소 본체"
+
+#: app/entry/settings/pages/kanban.tsx
+msgid "저장하면 다음 실행부터 적용됩니다."
+msgstr "저장하면 다음 실행부터 적용됩니다."
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "저장한 API 키도 함께 지웁니다."
+msgstr "저장한 API 키도 함께 지웁니다."
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "저장할 때 기존 키 삭제"
+msgstr "저장할 때 기존 키 삭제"
+
+#. Icon button that copies a config file's full path
+#: app/entry/settings/shared.tsx
+msgid "전체 경로 복사"
+msgstr "전체 경로 복사"
+
+#. Project permission mode `full`
+#: app/entry/navigation/sidebar.tsx
+msgid "전체 권한 (full)"
+msgstr "전체 권한 (full)"
+
+#. Status badge of a background loop that runs fine
+#: app/entry/shared/loop-health.tsx
+msgid "정상"
+msgstr "정상"
+
+#: app/entry/navigation/sidebar.tsx
+msgid "제목 없는 대화"
+msgstr "제목 없는 대화"
+
+#. Model output limit: none set
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "제한 없음"
+msgstr "제한 없음"
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "제한 없음: 서버의 한도까지 출력합니다. 추론 모델은 추론도 이 한도를 씁니다."
+msgstr "제한 없음: 서버의 한도까지 출력합니다. 추론 모델은 추론도 이 한도를 씁니다."
+
+#. Account switcher: the subscription quota could not be read
+#: app/entry/navigation/account-switcher.tsx
+msgid "조회 불가"
+msgstr "조회 불가"
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "주소, 키 또는 모델 한도를 확인해 주십시오. 키가 있는 엔드포인트의 주소를 바꾸려면 새 키를 넣거나 키를 지워야 합니다."
+msgstr "주소, 키 또는 모델 한도를 확인해 주십시오. 키가 있는 엔드포인트의 주소를 바꾸려면 새 키를 넣거나 키를 지워야 합니다."
+
+#: app/entry/settings/pages/imports.tsx
+msgid "주제를 붙이고 정정, 취소 관계를 정리합니다. 모델을 쓰기 때문에 답변이 끝난 뒤 조금씩 처리됩니다."
+msgstr "주제를 붙이고 정정, 취소 관계를 정리합니다. 모델을 쓰기 때문에 답변이 끝난 뒤 조금씩 처리됩니다."
+
+#: app/entry/session/attempt-failure.ts
+msgid "줄여도 모델의 컨텍스트 창을 넘어서 멈췄습니다"
+msgstr "줄여도 모델의 컨텍스트 창을 넘어서 멈췄습니다"
+
+#. Button that stops a running improvement scan
+#: app/entry/settings/pages/improvements.tsx
+msgid "중지"
+msgstr "중지"
+
+#. Button that starts importing conversations now
+#: app/entry/settings/pages/imports.tsx
+msgid "지금 가져오기"
+msgstr "지금 가져오기"
+
+#. Which provider, model and reasoning effort a kanban role runs on
+#: app/entry/settings/pages/kanban.tsx
+msgid "지금은 {provider} / {model} ({effort})로 실행합니다."
+msgstr "지금은 {provider} / {model} ({effort})로 실행합니다."
+
+#: app/entry/index.tsx
+msgid "지금은 대화를 바꿀 수 없습니다. 실행 상태를 확인한 뒤 다시 시도해 주십시오."
+msgstr "지금은 대화를 바꿀 수 없습니다. 실행 상태를 확인한 뒤 다시 시도해 주십시오."
+
+#: app/entry/settings/pages/kanban.tsx
+msgid "지금은 선택된 모델로 실행합니다."
+msgstr "지금은 선택된 모델로 실행합니다."
+
+#. Settings tab group: skill instructions for the model
+#: app/entry/settings/settings-dialog.tsx
+msgid "지침"
+msgstr "지침"
+
+#: app/entry/settings/pages/improvements.tsx
+msgid "지침: {rule}"
+msgstr "지침: {rule}"
+
+#. Toggle that shows the connection error's diagnostic fields
+#: app/entry/navigation/account-profiles.tsx
+msgid "진단 정보"
+msgstr "진단 정보"
+
+#. Conversation list section: conversations answering or running a board
+#: app/entry/navigation/sidebar.tsx
+msgid "진행 중"
+msgstr "진행 중"
+
+#: app/entry/navigation/sidebar.tsx
+msgid "진행 중인 대화가 없습니다."
+msgstr "진행 중인 대화가 없습니다."
+
+#: app/entry/settings/pages/improvements.tsx
+msgid "찾기를 중지했습니다. 이전 결과는 그대로입니다."
+msgstr "찾기를 중지했습니다. 이전 결과는 그대로입니다."
+
+#: app/entry/settings/pages/improvements.tsx
+msgid "찾는 중입니다. 저장소 {repositoriesDone}/{repositoriesTotal} · 해석한 항목 {itemsDone}/{itemsTotal}"
+msgstr "찾는 중입니다. 저장소 {repositoriesDone}/{repositoriesTotal} · 해석한 항목 {itemsDone}/{itemsTotal}"
+
+#: app/entry/navigation/sidebar.tsx
+msgid "채택된 project memory와 Work Trace provenance는 유지됩니다."
+msgstr "채택된 project memory와 Work Trace provenance는 유지됩니다."
+
+#. The last quota read failed; the values shown were read at time
+#: app/entry/navigation/account-profiles.tsx
+msgid "최근 조회 실패 · {time} 기준 값"
+msgstr "최근 조회 실패 · {time} 기준 값"
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "최대 출력 토큰"
+msgstr "최대 출력 토큰"
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "최대 출력 토큰 제한"
+msgstr "최대 출력 토큰 제한"
+
+#. Button that adds the project
+#: app/entry/navigation/sidebar.tsx
+msgid "추가"
+msgstr "추가"
+
+#: app/entry/navigation/account-profiles.tsx
+msgid "추가한 계정이 없습니다."
+msgstr "추가한 계정이 없습니다."
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "추가한 엔드포인트가 없습니다."
+msgstr "추가한 엔드포인트가 없습니다."
+
+#. Sidebar field label: reasoning effort
+#: app/entry/navigation/sidebar.tsx
+msgid "추론"
+msgstr "추론"
+
+#. Reasoning effort option; effort is the level id, such as low or high
+#: app/entry/navigation/providers.ts
+msgid "추론 {effort}"
+msgstr "추론 {effort}"
+
+#. Picker of the model's reasoning effort
+#: app/entry/navigation/sidebar.tsx
+msgid "추론 강도"
+msgstr "추론 강도"
+
+#. Button that closes the add project dialog
+#. Dialog button that cancels
+#: app/entry/navigation/sidebar.tsx
 msgid "취소"
 msgstr "취소"
 
-#: app/entry/media/cross-provider-approval.tsx
+#. Button that opens the decision's card on its board
+#: app/entry/navigation/decision-inbox.tsx
+msgid "카드 보기"
+msgstr "카드 보기"
+
+#: app/entry/settings/pages/kanban.tsx
+msgid "카드 하나를 맡아 그 카드의 worktree에서 작업하는 카드 에이전트의 모델입니다."
+msgstr "카드 하나를 맡아 그 카드의 worktree에서 작업하는 카드 에이전트의 모델입니다."
+
+#. Sidebar menu item that opens the project's kanban board
+#: app/entry/navigation/project-board-button.tsx
+msgid "칸반 보드"
+msgstr "칸반 보드"
+
+#. Settings page name: running Goals on the kanban board
+#: app/entry/settings/shared.tsx
+msgid "칸반 실행"
+msgstr "칸반 실행"
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "컨텍스트 창 (토큰)"
+msgstr "컨텍스트 창 (토큰)"
+
+#: app/entry/settings/pages/image.tsx
+msgid "켜도 이미지는 자동으로 생성되지 않습니다. 작성창에서 이미지 생성 모드를 선택한 요청만 처리합니다. 유료 실행 전에는 별도로 확인합니다."
+msgstr "켜도 이미지는 자동으로 생성되지 않습니다. 작성창에서 이미지 생성 모드를 선택한 요청만 처리합니다. 유료 실행 전에는 별도로 확인합니다."
+
+#: app/entry/settings/pages/recall.tsx
+msgid "켜면 다른 프로젝트의 대화도 함께 찾습니다. 사이드바에서 다른 프로젝트 검색을 막아 둔 프로젝트는 제외됩니다."
+msgstr "켜면 다른 프로젝트의 대화도 함께 찾습니다. 사이드바에서 다른 프로젝트 검색을 막아 둔 프로젝트는 제외됩니다."
+
+#: app/entry/settings/pages/web.tsx
+msgid "켜면 모델이 필요할 때 Kagi로 웹을 검색하고 페이지를 읽습니다. 모든 프로젝트에 적용됩니다. 호출마다 Kagi 요금이 나갑니다."
+msgstr "켜면 모델이 필요할 때 Kagi로 웹을 검색하고 페이지를 읽습니다. 모든 프로젝트에 적용됩니다. 호출마다 Kagi 요금이 나갑니다."
+
+#. Badge: web search is switched on
+#: app/entry/settings/pages/web.tsx
+msgid "켜짐"
+msgstr "켜짐"
+
+#. Model tool calling: on
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "켬"
+msgstr "켬"
+
+#. Button that deletes the stored Kagi API key
+#: app/entry/settings/pages/web.tsx
+msgid "키 삭제"
+msgstr "키 삭제"
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "키 없는 로컬 서버도 연결할 수 있습니다"
+msgstr "키 없는 로컬 서버도 연결할 수 있습니다"
+
+#. Badge: no Kagi API key is registered
+#: app/entry/settings/pages/web.tsx
+msgid "키 없음"
+msgstr "키 없음"
+
+#. Endpoint status: an API key is saved
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "키 있음"
+msgstr "키 있음"
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "키는 OS 키체인에만 저장되고 다시 표시되지 않습니다."
+msgstr "키는 OS 키체인에만 저장되고 다시 표시되지 않습니다."
+
+#: app/entry/settings/pages/web.tsx
+msgid "키는 OS 키체인에만 저장되고 모델, 대화, 로그에는 보이지 않습니다. 저장해도 저절로 켜지지는 않습니다."
+msgstr "키는 OS 키체인에만 저장되고 모델, 대화, 로그에는 보이지 않습니다. 저장해도 저절로 켜지지는 않습니다."
+
+#: app/entry/navigation/compatible-client.ts
+msgid "키와 설정이 부분적으로 저장됐을 수 있습니다. 계정 목록을 새로고침하고 키 상태를 확인해 주십시오."
+msgstr "키와 설정이 부분적으로 저장됐을 수 있습니다. 계정 목록을 새로고침하고 키 상태를 확인해 주십시오."
+
+#. Button that sends a test request to the model
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "테스트"
+msgstr "테스트"
+
+#: app/entry/settings/pages/imports.tsx
+msgid "파일을 읽을 권한이 없습니다"
+msgstr "파일을 읽을 권한이 없습니다"
+
+#: app/entry/settings/pages/imports.tsx
+msgid "파일을 읽지 못했습니다"
+msgstr "파일을 읽지 못했습니다"
+
+#: app/entry/settings/shared.tsx
+msgid "파일을 읽지 못했습니다."
+msgstr "파일을 읽지 못했습니다."
+
+#: app/entry/settings/pages/imports.tsx
+msgid "파일을 찾지 못했습니다"
+msgstr "파일을 찾지 못했습니다"
+
+#. Sheet title: card decisions waiting for a person
+#. Sidebar menu item: card decisions waiting for a person
+#: app/entry/navigation/decision-inbox.tsx
+msgid "판단 대기"
+msgstr "판단 대기"
+
+#: app/entry/navigation/decision-inbox.tsx
+msgid "판단을 기다리는 카드가 없습니다."
+msgstr "판단을 기다리는 카드가 없습니다."
+
+#: app/entry/navigation/sidebar.tsx
+msgid "폴더 경로"
+msgstr "폴더 경로"
+
+#: app/entry/api.ts
+msgid "폴더 경로가 아닙니다."
+msgstr "폴더 경로가 아닙니다."
+
+#. Button that adds a project from a folder
+#. Button that adds a project from a folder
+#: app/entry/navigation/sidebar.tsx
+msgid "폴더 열기"
+msgstr "폴더 열기"
+
+#: app/entry/settings/pages/imports.tsx
+msgid "폴더가 아닙니다"
+msgstr "폴더가 아닙니다"
+
+#: app/entry/settings/pages/imports.tsx
+msgid "폴더가 없어졌습니다"
+msgstr "폴더가 없어졌습니다"
+
+#: app/entry/navigation/sidebar.tsx
+msgid "폴더의 절대 경로를 입력해 주십시오. 등록한 폴더 안의 파일은 에이전트가 읽고 고칠 수 있습니다."
+msgstr "폴더의 절대 경로를 입력해 주십시오. 등록한 폴더 안의 파일은 에이전트가 읽고 고칠 수 있습니다."
+
+#. Stage of an agent run at which it failed
+#: app/entry/session/attempt-failure.ts
+msgid "프로세스 실행 중"
+msgstr "프로세스 실행 중"
+
+#. {signal} is the operating system signal name, such as SIGTERM
+#: app/entry/session/attempt-failure.ts
+msgid "프로세스가 {signal} 신호로 종료됐습니다"
+msgstr "프로세스가 {signal} 신호로 종료됐습니다"
+
+#: app/entry/session/attempt-failure.ts
+msgid "프로세스가 시간 제한을 넘었습니다"
+msgstr "프로세스가 시간 제한을 넘었습니다"
+
+#. {code} is the process exit code, or ? when it is unknown
+#: app/entry/session/attempt-failure.ts
+msgid "프로세스가 종료 코드 {code}로 끝났습니다"
+msgstr "프로세스가 종료 코드 {code}로 끝났습니다"
+
+#. Scope badge: set in this project's config
+#. Sidebar section of project settings
+#. Sidebar section of project settings
+#: app/entry/navigation/sidebar.tsx
+#: app/entry/settings/shared.tsx
+msgid "프로젝트"
+msgstr "프로젝트"
+
+#. Project section button; name is the selected project's name
+#: app/entry/navigation/sidebar.tsx
+msgid "프로젝트 {name}"
+msgstr "프로젝트 {name}"
+
+#. Settings page name: finding repeated corrections in project history
+#: app/entry/settings/shared.tsx
+msgid "프로젝트 개선"
+msgstr "프로젝트 개선"
+
+#. Placeholder of the project search box
+#: app/entry/navigation/sidebar.tsx
+msgid "프로젝트 검색"
+msgstr "프로젝트 검색"
+
+#. Tooltip: archiving takes the project out of the list
+#: app/entry/navigation/sidebar.tsx
+msgid "프로젝트 보관"
+msgstr "프로젝트 보관"
+
+#: app/entry/settings/pages/improvements.tsx
+msgid "프로젝트 사용 기록을 읽지 못했습니다."
+msgstr "프로젝트 사용 기록을 읽지 못했습니다."
+
+#: app/entry/navigation/sidebar.tsx
+msgid "프로젝트 선택"
+msgstr "프로젝트 선택"
+
+#. Badge on a user-wide entry that a project entry of the same name replaces
+#: app/entry/settings/shared.tsx
+msgid "프로젝트 설정으로 대체됨"
+msgstr "프로젝트 설정으로 대체됨"
+
+#. Label of the list that orders projects for the kanban scheduler
+#. Label of the list that orders projects for the kanban scheduler
+#: app/entry/settings/pages/kanban.tsx
+msgid "프로젝트 순서"
+msgstr "프로젝트 순서"
+
+#: app/entry/navigation/sidebar.tsx
+msgid "프로젝트 추가"
+msgstr "프로젝트 추가"
+
+#: app/entry/settings/pages/kanban.tsx
+msgid "프로젝트를 찾을 수 없습니다."
+msgstr "프로젝트를 찾을 수 없습니다."
+
+#: app/entry/settings/pages/imports.tsx
+msgid "프로젝트를 찾지 못했습니다"
+msgstr "프로젝트를 찾지 못했습니다"
+
+#: app/entry/api.ts
+msgid "프로젝트를 추가하지 못했습니다."
+msgstr "프로젝트를 추가하지 못했습니다."
+
+#: app/entry/index.tsx
+msgid "프로젝트를 추가해 주십시오"
+msgstr "프로젝트를 추가해 주십시오"
+
+#: app/entry/navigation/account-profiles.tsx
+msgid "한도 상태를 확인하지 못했습니다"
+msgstr "한도 상태를 확인하지 못했습니다"
+
+#. Account card: the quota is still loading
+#: app/entry/navigation/account-profiles.tsx
+msgid "한도 확인 중"
+msgstr "한도 확인 중"
+
+#. Option: always allow cross-provider image runs
+#: app/entry/settings/pages/image.tsx
 msgid "항상 허용"
 msgstr "항상 허용"
+
+#. Kind of secret whose names an entry lists: HTTP headers
+#: app/entry/settings/pages/mcp.tsx
+msgid "헤더"
+msgstr "헤더"
+
+#. status is the HTTP status code, or 0 when no response arrived
+#: app/entry/navigation/compatible-client.ts
+msgid "호환 공급자 요청에 실패했습니다 ({status})."
+msgstr "호환 공급자 요청에 실패했습니다 ({status})."
+
+#: app/entry/navigation/compatible-accounts.tsx
+msgid "호환 공급자 요청에 실패했습니다."
+msgstr "호환 공급자 요청에 실패했습니다."
+
+#: app/entry/index.tsx
+msgid "호환 공급자를 설정해 주십시오"
+msgstr "호환 공급자를 설정해 주십시오"
+
+#: app/entry/shared/theme.tsx
+msgid "화면 테마: {label}"
+msgstr "화면 테마: {label}"
+
+#. Account connection status: still being checked
+#: app/entry/navigation/account-model-panel.tsx
+msgid "확인 중"
+msgstr "확인 중"
+
+#: app/entry/settings/pages/embedding.tsx
+msgid "확인 중 문제가 생겼습니다."
+msgstr "확인 중 문제가 생겼습니다."
+
+#: app/entry/settings/pages/embedding.tsx
+msgid "확인하는 중입니다. 처음 확인할 때는 GPU용 모델(약 570MB)을 내려받습니다."
+msgstr "확인하는 중입니다. 처음 확인할 때는 GPU용 모델(약 570MB)을 내려받습니다."
+
+#. Kind of secret whose names an entry lists: environment variables
+#. Kind of secret whose names an entry lists: environment variables
+#: app/entry/settings/pages/agents.tsx
+#: app/entry/settings/pages/mcp.tsx
+msgid "환경 변수"
+msgstr "환경 변수"
