@@ -68,13 +68,14 @@ export const uncertainRuns = Effect.gen(function* () {
       AND (coalesce(r.status, '') <> 'completed' OR EXISTS (SELECT 1 FROM owner_rpc_operations o
         WHERE o.run_id = b.run_id AND (o.status = 'pending' OR (o.side_effect = 1 AND o.status <> 'succeeded'))))
     ORDER BY b.created_at, b.run_id`;
-  // An operation recorded without a tool still counts, with no name to show.
+  // An operation recorded without a tool still counts, with no name to show. `+o.tool_call_id`
+  // keeps the node lookups on their tool call id expression indexes.
   const operations = (runId: string) => sql`
     SELECT o.status, o.operation, o.tool_name AS name, o.tool_call_id AS toolCallId,
       (SELECT n.text FROM nodes n WHERE n.session_id = b.session_id AND n.kind = 'tool_call'
-        AND json_extract(n.detail, '$.toolCallId') = o.tool_call_id ORDER BY n.seq LIMIT 1) AS call,
+        AND json_extract(n.detail, '$.toolCallId') = +o.tool_call_id ORDER BY n.seq LIMIT 1) AS call,
       EXISTS (SELECT 1 FROM nodes n WHERE n.session_id = b.session_id AND n.kind = 'tool_result'
-        AND json_extract(n.detail, '$.toolCallId') = o.tool_call_id) AS recorded
+        AND json_extract(n.detail, '$.toolCallId') = +o.tool_call_id) AS recorded
     FROM owner_rpc_operations o JOIN workflow_run_bindings b ON b.run_id = o.run_id
     WHERE o.run_id = ${runId} AND ${sql.literal(toolOperationSql("o"))}
     ORDER BY o.operation_id`;

@@ -42,7 +42,8 @@ const readOnlyToolsSql = [...readOnlyToolNames].map((name) => `'${name}'`).join(
  * repeated harmfully even when the run stopped before recording it. Authorizing a tool runs
  * nothing. That run may continue the Plan as a new turn; nothing is replayed. A tool still pending
  * or uncertain, a recorded-less effectful tool, or an operation that names no known tool step keeps
- * the session fenced.
+ * the session fenced. `+eo.tool_call_id` drops the column's affinity so the lookup uses the
+ * `nodes_tool_result_call` expression index instead of reading every node of the session.
  */
 export const endedWithKnownEffectsSql = (
   run: string,
@@ -53,7 +54,7 @@ export const endedWithKnownEffectsSql = (
       OR eo.operation = 'tool' AND coalesce(eo.tool_name, '') NOT IN (${readOnlyToolsSql})
         AND NOT EXISTS (SELECT 1 FROM nodes n
           WHERE n.session_id = ${run}.thread_id AND n.kind = 'tool_result'
-            AND json_extract(n.detail, '$.toolCallId') = eo.tool_call_id))))`;
+            AND json_extract(n.detail, '$.toolCallId') = +eo.tool_call_id))))`;
 
 /**
  * A bound run whose unknown outcome the user saw and chose to continue past. `binding` names a
