@@ -1,5 +1,5 @@
 import * as NodeWorkerRunner from "@effect/platform-node/NodeWorkerRunner";
-import { Cause, Effect, Layer, PubSub, Schema, Scope, Stream } from "effect";
+import { Array as Arr, Cause, Effect, Layer, Option, PubSub, Schema, Scope, Stream } from "effect";
 import { RpcServer } from "effect/rpc";
 import { workerFailedSpansLayer } from "../../runtime/failed-spans.ts";
 import { nativeFailure, nativePromise, runNativeEffect } from "../../runtime/native-effect.ts";
@@ -37,6 +37,32 @@ class NotOneLogit extends Schema.TaggedError<NotOneLogit, { readonly brand: uniq
   { dims: Schema.Array(Schema.Finite) },
 ) {}
 
+/** The last whitespace in `text` up to position `chars`, when it is not the first character. */
+const lastSpace = (text: string, chars: number) =>
+  Option.filter(Option.some(text.slice(0, chars + 1).search(/\s\S*$/)), (at) => at > 0);
+
+/**
+ * The start of `text` that holds its first `tokens` tokens, or the whole text. It is cut before a
+ * whitespace, where the tokenizer always ends a word, so its tokens are the whole text's first
+ * ones. Lengths double from `tokens` characters, since a token holds at least one. Tokenizing a
+ * whole 100 KB tool result took about a second, and 800 KB eight, while the model reads a pair's
+ * first `maxTokens` tokens only.
+ */
+const leadingText = (tokenizer: LoadedModel["tokenizer"], tokens: number) => (text: string) =>
+  Option.getOrElse(
+    Arr.findFirst(
+      Arr.unfold(tokens, (chars) =>
+        chars < text.length ? Option.some([chars, chars * 2] as const) : Option.none(),
+      ),
+      (chars) =>
+        Option.filter(
+          Option.map(lastSpace(text, chars), (at) => text.slice(0, at)),
+          (start) => tokenizer.encode(start, { add_special_tokens: false }).length >= tokens,
+        ),
+    ),
+    () => text,
+  );
+
 /** The model's relevance logits for the pairs, one per text. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 const score = Effect.fn("RerankWorker.score")(function* (
@@ -45,9 +71,23 @@ const score = Effect.fn("RerankWorker.score")(function* (
   texts: readonly string[],
   { maxTokens }: RerankWorkerData,
 ) {
+  const leading = leadingText(tokenizer, maxTokens);
+  const question = leading(query);
+  const pairs = texts.map(leading);
+  // The tokens the model reads of each pair. Pairs that read the same are scored once: a question
+  // longer than the model reads leaves every pair the same.
+  const read = pairs.map((text) =>
+    tokenizer.encode(question, { text_pair: text }).slice(0, maxTokens).join(","),
+  );
+  const distinct = Arr.dedupe(read);
   const inputs = tokenizer(
-    texts.map(() => query),
-    { text_pair: [...texts], padding: true, truncation: true, max_length: maxTokens },
+    distinct.map(() => question),
+    {
+      text_pair: distinct.map((tokens) => pairs[read.indexOf(tokens)]!),
+      padding: true,
+      truncation: true,
+      max_length: maxTokens,
+    },
   );
   // An interrupted request still waits for its session run, so the worker never disposes of the
   // model while a run is in flight.
@@ -56,7 +96,8 @@ const score = Effect.fn("RerankWorker.score")(function* (
   );
   const dims: ReadonlyArray<number> = logits.dims;
   if (dims[1] !== 1) return yield* NotOneLogit.make({ dims });
-  return Array.from(logits.to("float32").data, Number);
+  const scores = Array.from(logits.to("float32").data, Number);
+  return read.map((tokens) => scores[distinct.indexOf(tokens)]!);
 });
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
