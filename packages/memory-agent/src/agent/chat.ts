@@ -1493,7 +1493,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         if (isTruthy(latest?.goal_instance_id) && (!isTruthy(selection) || isTruthy(boundRun)))
           return refused({ error: "automatic_goal_admission_unavailable" });
         const newGoalRun = isTruthy(latest?.goal_instance_id)
-          ? { goalInstanceId: latest.goal_instance_id, revisionId: latest.id }
+          ? { goalInstanceId: latest.goal_instance_id }
           : null;
         const goalExecutionPayload = yield* Ref.make<GoalExecutionPayload | null>(null);
         // The run already ended aborted: its stream is replayed, not run again.
@@ -2302,7 +2302,27 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         ];
         // A Goal's new run is bound now that it is ready to start; only then is its turn recorded.
         if (newGoalRun !== null) {
-          const admitted = yield* admitGoalRun(newGoalRun.goalInstanceId, newGoalRun.revisionId);
+          // The board moves cards while the turn gets ready, each move a new revision: the turn is
+          // bound to the Goal as it is now, and only another Goal instance refuses it. A move
+          // between this read and the binding is read again.
+          const changed = Result.fail<Refusal>({ error: "workflow_changed" });
+          const admitCurrent = Effect.flatMap(
+            latestRevision(sessionId),
+            Option.match({
+              onNone: () => Effect.succeed(changed),
+              onSome: (current) =>
+                current.goal_instance_id === newGoalRun.goalInstanceId
+                  ? admitGoalRun(newGoalRun.goalInstanceId, current.id)
+                  : Effect.succeed(changed),
+            }),
+          );
+          const admitted = yield* admitCurrent.pipe(
+            Effect.repeat({
+              until: (result) =>
+                !(Result.isFailure(result) && result.failure.error === "workflow_changed"),
+              times: 2,
+            }),
+          );
           if (Result.isFailure(admitted)) return refused(admitted.failure);
           yield* persistUserTurn;
         }
