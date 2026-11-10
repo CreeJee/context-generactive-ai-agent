@@ -1,8 +1,10 @@
 import { createRequire } from "node:module";
 
+import * as NodeServices from "@effect/platform-node/NodeServices";
+
 import { Array as Arr, Context, Effect, Layer, Path, FileSystem, Schema } from "effect";
 import { Digest } from "effect/crypto";
-import { HttpClient, HttpClientResponse } from "effect/http";
+import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { KiwiBuilder } from "kiwi-nlp";
 import type { TokenInfo } from "kiwi-nlp";
@@ -62,6 +64,11 @@ export class Morphemes extends Context.Service<
   );
 }
 
+/** Kiwi on Node, with what it needs to fetch, verify and unpack its model on first use. */
+export const morphemesLive = Morphemes.layer.pipe(
+  Layer.provide([FetchHttpClient.layer, Digest.layerWebCrypto, NodeServices.layer]),
+);
+
 /**
  * The model directory, downloaded into `node_modules/.cache/wording` on first use. The archive
  * is checked against its digest and its entry names before anything is extracted, and it is
@@ -71,7 +78,8 @@ export class Morphemes extends Context.Service<
 const ensureModel = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const cacheRoot = path.resolve("node_modules/.cache/wording");
+  // From this file rather than the working directory: the lint rule may run from anywhere.
+  const cacheRoot = path.resolve(import.meta.dirname, "../../../node_modules/.cache/wording");
   const root = path.join(cacheRoot, `kiwi-${kiwiModel.version}`);
   const modelDirectory = path.join(root, kiwiModel.directory);
   if (yield* fs.exists(path.join(modelDirectory, "cong.mdl"))) return modelDirectory;

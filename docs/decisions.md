@@ -4716,4 +4716,5 @@
   - 카탈로그는 앱·`server/`·memory-agent 세 개이고 출처는 줄 번호 없이 적는다(공식 권장, 편집마다 diff가 나지 않게). 빌드는 더 이상 추출하지 않고, 커밋 hook이 각 패키지의 `i18n:check`(`lingui check sync --clean`)로 카탈로그가 소스와 맞는지 본다. 갱신은 `i18n:extract`다.
   - 문구를 메시지 안에 두는 lint는 자체 규칙 `wording/no-raw-korean` 대신 공식 `eslint-plugin-lingui`(권장 규칙과 `no-unlocalized-strings`)를 Oxlint JS 플러그인으로 쓴다. 앱이 한국어만 쓰므로 한글 없는 문자열은 `ignore`(`policy.ts`의 `notWording`)로 뺀다. 자체 규칙과 같은 범위를 잡았고, 권장 규칙이 메시지 안에 템플릿을 넣은 곳 하나를 더 찾았다.
   - `lint/wording/check`는 카탈로그(`.po`)를 공식 파서(`@lingui/format-po`)로 읽어 화면에 나오는 번역(`msgstr`)을 검사한다. Claude Code hook은 추출 전에도 고친 소스의 메시지를 공식 추출기로 읽어 검사한다. `copy.ts` 파서(`oxc-parser`)는 지웠다.
+- 후속(같은 날): 사용자 요청으로 문구 내용 검사(Kiwi)를 oxlint 규칙 `wording/content`로 옮겨 에디터와 `vp lint`에서 오류로 보이게 했다. oxlint 규칙은 동기라서 추출과 Kiwi는 worker thread에서 돌리고 규칙은 `Atomics.wait`로 답을 기다린다(eslint-plugin-prettier의 synckit과 같은 방식). 저장소 전체 lint는 약 1초 늘었다. oxlint가 읽지 못하는 `.po` 카탈로그와 Claude hook은 같은 검사 코드를 쓰는 CLI로 남겼다.
 - 남은 일: 모델에 보내는 `prompts.ts`는 이 체계 밖이다. 영어 화면 문구("Oops!")와 개발 스크립트는 검사하지 않는다. memory-agent가 앱에 문자열로 넘기는 표(`runFailureText`, `externalAgentFailureText`, `sourceLabels`)는 모듈을 읽을 때 한 번 푼다. 로케일이 하나라 결과는 같지만, 로케일을 늘리려면 설명자 표로 바꿔야 한다.

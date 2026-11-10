@@ -5,27 +5,15 @@
 import { matchesGlob } from "node:path";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import {
-  Array as Arr,
-  Console,
-  Effect,
-  FileSystem,
-  Layer,
-  Path,
-  Schema,
-  Stdio,
-  Stream,
-} from "effect";
+import { Array as Arr, Console, Effect, FileSystem, Path, Schema, Stdio, Stream } from "effect";
 import { Argument, Command } from "effect/cli";
-import { Digest } from "effect/crypto";
-import { FetchHttpClient } from "effect/http";
 
 import { wordingCatalogs, wordingExempt, wordingScope } from "../policy.ts";
 import { checkMessages } from "./check.ts";
 import type { Finding } from "./check.ts";
 import { catalogMessages, sourceMessages } from "./messages.ts";
 import type { Message } from "./messages.ts";
-import { Morphemes } from "./morphemes.ts";
+import { morphemesLive } from "./morphemes.ts";
 
 /** Some wording breaks the rules; the findings are already printed. */
 class WordingViolations extends Schema.TaggedError<WordingViolations>()("WordingViolations", {
@@ -35,11 +23,6 @@ class WordingViolations extends Schema.TaggedError<WordingViolations>()("Wording
     return `문구 규칙 위반 ${this.count}건`;
   }
 }
-
-/** Kiwi with what it needs to fetch and verify its model on first use. */
-const morphemes = Morphemes.layer.pipe(
-  Layer.provide([FetchHttpClient.layer, Digest.layerWebCrypto]),
-);
 
 const matchesAny = (file: string, globs: ReadonlyArray<string>) =>
   globs.some((glob) => matchesGlob(file, glob));
@@ -68,7 +51,7 @@ const findingsOf = Effect.fnUntraced(function* (files: ReadonlyArray<string>) {
     ),
   );
   if (Arr.isReadonlyArrayEmpty(messages)) return Arr.empty<Finding>();
-  return yield* checkMessages(messages).pipe(Effect.provide(morphemes));
+  return yield* checkMessages(messages).pipe(Effect.provide(morphemesLive));
 });
 
 const formatFinding = ({ where, text, rule, message }: Finding) =>

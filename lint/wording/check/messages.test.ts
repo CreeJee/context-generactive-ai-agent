@@ -48,8 +48,8 @@ describe("sourceMessages", () => {
     ].join("\n");
     const messages = await Effect.runPromise(sourceMessages("server/a.ts", source));
     expect(messages).toEqual([
-      { text: "X을 열었습니다.", where: "server/a.ts:3:37" },
-      { text: "폴더를 찾을 수 없습니다: X", where: "server/a.ts:4:18" },
+      { text: "X을 열었습니다.", where: "server/a.ts:3:37", line: 3, column: 36 },
+      { text: "폴더를 찾을 수 없습니다: X", where: "server/a.ts:4:18", line: 4, column: 17 },
     ]);
   });
 });

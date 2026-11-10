@@ -12,7 +12,7 @@ export interface Violation {
 }
 
 /** A violation in one message, and where the message is. */
-export interface Finding extends Violation, Message {}
+export type Finding<Place extends Message = Message> = Violation & Place;
 
 /** The part of a Kiwi token the ending check reads. */
 export interface Morpheme {
@@ -107,17 +107,19 @@ export function endingViolations(
   );
 }
 
-/** Every violation in each of `messages`. */
-export const checkMessages = Effect.fnUntraced(function* (messages: ReadonlyArray<Message>) {
+/** Every violation in each of `messages`, carrying the message's place along. */
+export const checkMessages = Effect.fnUntraced(function* <Place extends Message>(
+  messages: ReadonlyArray<Place>,
+) {
   const morphemes = yield* Morphemes;
-  return Arr.flatMap(messages, (message) =>
+  return Arr.flatMap(messages, (message): ReadonlyArray<Finding<Place>> =>
     Arr.map(
       [
         ...phraseViolations(message.text),
         ...glossaryViolations(message.text),
         ...endingViolations(message.text, morphemes.tokenize(message.text)),
       ],
-      (violation): Finding => ({ ...violation, ...message }),
+      (violation) => ({ ...violation, ...message }),
     ),
   );
 });

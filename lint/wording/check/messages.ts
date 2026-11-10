@@ -10,6 +10,12 @@ export interface Message {
   readonly where: string;
 }
 
+/** A message in a source file, with where its macro starts (line from 1, column from 0). */
+export interface SourceMessage extends Message {
+  readonly line: number;
+  readonly column: number;
+}
+
 /** The file could not be read for messages, so nothing in it was checked. */
 export class MessagesUnreadable extends Schema.TaggedError<MessagesUnreadable>()(
   "MessagesUnreadable",
@@ -35,8 +41,11 @@ const placeholder = "X";
 const plainText = (message: string) =>
   message.replace(messageArgument, placeholder).replace(messageTag, "");
 
-const withHangul = (text: string, where: string): Result.Result<Message, void> =>
-  hangul.test(text) ? Result.succeed({ text: plainText(text), where }) : Result.failVoid;
+const withHangul = <Place extends Omit<Message, "text">>(
+  text: string,
+  place: Place,
+): Result.Result<Place & Message, void> =>
+  hangul.test(text) ? Result.succeed({ ...place, text: plainText(text) }) : Result.failVoid;
 
 /**
  * The messages of a Lingui catalog that `lingui extract` wrote. Each reads as what the app shows:
@@ -57,16 +66,19 @@ export const catalogMessages = Effect.fnUntraced(function* (file: string, source
             () => item.msgid,
           ),
           // A `#:` line lists its origins separated by spaces.
-          `${file} (${item.references.flatMap((line) => line.split(" ")).join(", ")})`,
+          { where: `${file} (${item.references.flatMap((line) => line.split(" ")).join(", ")})` },
         ),
   );
 });
 
 /**
  * The messages a source file declares, read with the extractor `lingui extract` uses but without
- * writing a catalog: the Claude Code hook checks an edit before anyone extracts.
+ * writing a catalog: the lint rule and the Claude Code hook check an edit before anyone extracts.
  */
-export const sourceMessages = Effect.fnUntraced(function* (file: string, source: string) {
+export const sourceMessages = Effect.fnUntraced(function* (
+  file: string,
+  source: string,
+): Effect.fn.Return<ReadonlyArray<SourceMessage>, MessagesUnreadable> {
   const extracted = yield* Effect.tryPromise({
     try: () =>
       extractMessages(source, file, {
@@ -77,9 +89,12 @@ export const sourceMessages = Effect.fnUntraced(function* (file: string, source:
       }),
     catch: (cause) => new MessagesUnreadable({ file, message: String(cause) }),
   });
-  return Arr.filterMap(extracted.messages, ({ message, origin }) =>
-    message === undefined
+  return Arr.filterMap(extracted.messages, ({ message, origin }) => {
+    // The extractor counts columns from 1; lint locations count them from 0.
+    const line = origin?.line ?? 1;
+    const column = origin?.column ?? 1;
+    return message === undefined
       ? Result.failVoid
-      : withHangul(message, `${file}:${origin?.line ?? 1}:${origin?.column ?? 1}`),
-  );
+      : withHangul(message, { where: `${file}:${line}:${column}`, line, column: column - 1 });
+  });
 });

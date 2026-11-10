@@ -47,6 +47,7 @@ export default defineConfig({
       { name: "shadcn", specifier: "@shadcn/lint" },
       { name: "allocation", specifier: "./lint/allocation/index.ts" },
       { name: "lingui", specifier: "eslint-plugin-lingui" },
+      { name: "wording", specifier: "./lint/wording/index.ts" },
     ],
     rules: {
       "vite-plus/prefer-vite-plus-imports": "error",
@@ -114,12 +115,15 @@ export default defineConfig({
           "lingui/no-single-variables-to-translate": "error",
           "lingui/no-trans-inside-trans": "error",
           "lingui/no-expression-in-message": "error",
+          // What the messages say, which Lingui does not check (Kiwi; lint/wording).
+          "wording/content": "error",
         },
       },
       {
         files: wordingExempt,
         rules: {
           "lingui/no-unlocalized-strings": "off",
+          "wording/content": "off",
         },
       },
       {

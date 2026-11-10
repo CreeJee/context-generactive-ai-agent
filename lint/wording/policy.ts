@@ -1,8 +1,9 @@
 // The Korean wording policy in one place. Where text lives is Lingui's job: messages are written with
 // its macros and extracted into catalogs by `lingui extract`, and the official lint rules
 // (`eslint-plugin-lingui`) keep text inside messages. What the text says is not: this file holds
-// those rules, and the wording check (`check/main.ts`) applies them to the catalogs with Kiwi. The
-// lint overrides in the root `vite.config.ts`, the commit hook and the Claude Code hook read it.
+// those rules, and the lint rule `wording/content` and the catalog check (`check/main.ts`) apply
+// them with Kiwi. The lint overrides in the root `vite.config.ts`, the commit hook and the Claude
+// Code hook read it.
 // Every content rule is a fixed pattern with a reason and a fix, so a finding tells the writer (often
 // a coding agent) what to write instead.
 
