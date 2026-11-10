@@ -824,6 +824,58 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "runs the cards a planner wrote while shaping once the Plan is approved, though the board stayed active",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* kanbanFixture;
+        const runs = yield* Queue.unbounded<string>();
+        const releaseA = yield* Deferred.make<void>();
+        const run = yield* openKanbanOwner(fixture, yield* Effect.scope, {
+          cores: 4,
+          agent: (agent) =>
+            Effect.gen(function* () {
+              yield* Queue.offer(runs, agent.card.id);
+              if (agent.card.id === "a") yield* Deferred.await(releaseA);
+              return finished;
+            }),
+        });
+        yield* run(
+          Effect.gen(function* () {
+            const board = yield* executingPlan(fixture, [card("a")]);
+            const orchestrator = yield* KanbanOrchestrator;
+            const workflows = yield* Workflows;
+            yield* orchestrator.start(board.sessionId);
+            expect(yield* Queue.take(runs)).toBe("a");
+
+            // Back in shaping the board stays active while the planner rewrites the Plan.
+            yield* workflows.move(board.sessionId, "goal");
+            yield* workflows.updatePlan(
+              board.sessionId,
+              {
+                summary: "Cards",
+                steps: [card("a"), card("b")],
+                risks: [],
+                openQuestions: [],
+                status: "ready",
+              },
+              BoardAuthor.cases.Orchestrator.make({ runId: "planner-run" }),
+            );
+            const written = cardOf((yield* workflows.get(board.sessionId)).plan!.steps, "b");
+            expect(written?.approval).toBeUndefined();
+
+            // Approving the Plan approves the cards written with it.
+            yield* workflows.move(board.sessionId, "run");
+            yield* orchestrator.poke(board.goalInstanceId);
+            expect(yield* Queue.take(runs)).toBe("b");
+            yield* Deferred.succeed(releaseA, undefined);
+            yield* waitForCards(board.sessionId, allDone);
+          }),
+        );
+      }),
+    gitTimeout,
+  );
+
+  it.effect(
     "approves the cards a Goal mode planner adds as the project's permission mode says",
     () =>
       Effect.gen(function* () {

@@ -4718,3 +4718,10 @@
   - `lint/wording/check`는 카탈로그(`.po`)를 공식 파서(`@lingui/format-po`)로 읽어 화면에 나오는 번역(`msgstr`)을 검사한다. Claude Code hook은 추출 전에도 고친 소스의 메시지를 공식 추출기로 읽어 검사한다. `copy.ts` 파서(`oxc-parser`)는 지웠다.
 - 후속(같은 날): 사용자 요청으로 문구 내용 검사(Kiwi)를 oxlint 규칙 `wording/content`로 옮겨 에디터와 `vp lint`에서 오류로 보이게 했다. oxlint 규칙은 동기라서 추출과 Kiwi는 worker thread에서 돌리고 규칙은 `Atomics.wait`로 답을 기다린다(eslint-plugin-prettier의 synckit과 같은 방식). 저장소 전체 lint는 약 1초 늘었다. oxlint가 읽지 못하는 `.po` 카탈로그와 Claude hook은 같은 검사 코드를 쓰는 CLI로 남겼다. 카탈로그 검사는 번역을 원문과 다르게 고친 항목만 보고 `.po`의 `msgstr` 줄을 가리킨다(원문은 lint가 소스 줄로 본다). 소스 줄로 맞추려면 출처에 줄 번호를 다시 넣어야 해서 택하지 않았다.
 - 남은 일: 모델에 보내는 `prompts.ts`는 이 체계 밖이다. 영어 화면 문구("Oops!")와 개발 스크립트는 검사하지 않는다. memory-agent가 앱에 문자열로 넘기는 표(`runFailureText`, `externalAgentFailureText`, `sourceLabels`)는 모듈을 읽을 때 한 번 푼다. 로케일이 하나라 결과는 같지만, 로케일을 늘리려면 설명자 표로 바꿔야 한다.
+
+## 구체화 중에 쓴 카드는 Plan 승인으로 승인된다 (2026-11-11)
+
+- 계기: 세션 `037aa142`의 Goal은 11-02부터 칸반 보드가 active였다. 11-09에 Goal 모드 구체화(shaping)에서 계획자가 Plan v18의 카드 10장을 쓰자, `approvalFor`가 보드 행이 active인 것만 보고 10장 모두에 새 카드 승인 대기(`approval`)를 달았다. owner가 Plan을 승인해 running이 되어도 승인 대기는 풀리지 않아, 사용자가 S0을 직접 승인한 11-10까지 카드가 하나도 시작되지 않았고 검증자도 돌 차례가 오지 않았다.
+- 결정: 새 카드 승인 대기는 승인된 Plan을 돌리는 보드(phase `running`이고 보드가 active)에 계획자가 더한 카드에만 단다. 구체화 중에 쓴 카드는 그 뒤의 Plan 승인(Plan 모드는 사용자, Goal 모드는 owner)이 함께 승인한다. 결정 "승인 단위는 Plan의 변경분"과 같은 뜻이다.
+  - Plan을 승인할 때 대기를 푸는 방법은 쓰지 않는다. Goal 모드의 owner 자동 승인이 보드가 돌던 중에 생겨 사용자나 auto 검토를 기다리던 카드까지 풀기 때문이다.
+  - 보드 없이 running인 Plan(보드를 시작하지 못한 경우)에 더한 카드는 예전처럼 기다리지 않는다.

@@ -509,11 +509,18 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
         ON g.goal_instance_id = k.goal_instance_id
         WHERE g.session_id = ${sessionId} AND k.status = 'active'`);
     /**
-     * The approval a card the planner adds now waits for: on a running board every new card it
-     * adds waits until the board's approval policy approves it. A user's own cards never wait.
+     * The approval a card the planner adds now waits for: on a board running an approved Plan,
+     * every new card it adds waits until the board's approval policy approves it. A card written
+     * while shaping is approved with the Plan, even when an earlier approval left its board
+     * active. A user's own cards never wait.
      */
-    const approvalFor = (sessionId: string, author: BoardAuthor | undefined, at: string) =>
-      author === undefined || BoardAuthor.guards.User(author)
+    const approvalFor = (
+      sessionId: string,
+      current: WorkflowState,
+      author: BoardAuthor | undefined,
+      at: string,
+    ) =>
+      author === undefined || BoardAuthor.guards.User(author) || current.phase !== "running"
         ? Effect.succeedNone
         : Effect.map(kanbanBoard(sessionId), (kanban) =>
             kanban ? Option.some<CardApproval>({ requestedBy: author, at }) : Option.none(),
@@ -1046,7 +1053,9 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                 validateStepOutcomes(current.goal?.outcomes ?? [], input.steps).pipe(
                   Effect.andThen(nowIso),
                   Effect.bindTo("now"),
-                  Effect.bind("approval", ({ now }) => approvalFor(sessionId, author, now)),
+                  Effect.bind("approval", ({ now }) =>
+                    approvalFor(sessionId, current, author, now),
+                  ),
                   Effect.map(({ now, approval }) => {
                     const previous = HashMap.fromIterable(
                       Iterable.map(current.plan?.steps ?? [], (step) => [step.id, step]),
@@ -1279,7 +1288,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
           Effect.gen(function* () {
             const author = BoardAuthor.cases.Orchestrator.make({ runId });
             const current = yield* get(sessionId);
-            const approval = yield* approvalFor(sessionId, author, yield* nowIso);
+            const approval = yield* approvalFor(sessionId, current, author, yield* nowIso);
             const edited = yield* Effect.reduce(
               input.edits,
               () => ({
