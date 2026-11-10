@@ -1817,12 +1817,14 @@ msgstr "다시 보내기"
 
 #. Button that asks the server again whether this window may write
 #. Button that loads a list or settings section again after it failed to load
+#. Button that loads a part of the page again after it failed to load
 #. Button that loads the conversation again after it failed to load
 #. Button that reruns a subagent task as a new attempt
 #: app/entry/chat/chat-history.tsx
 #: app/entry/chat/message.tsx
 #: app/entry/chat/read-only-bar.tsx
 #: app/entry/shared/load-failed.tsx
+#: app/entry/shared/load-failure.tsx
 msgid "다시 시도"
 msgstr "다시 시도"
 
@@ -2856,6 +2858,11 @@ msgstr "보드를 불러오는 중"
 #: app/entry/chat/board/project-board.tsx
 msgid "보드를 불러오는 중입니다."
 msgstr "보드를 불러오는 중입니다."
+
+#: app/entry/chat/board-panel.tsx
+#: app/entry/chat/board/project-board.tsx
+msgid "보드를 불러오지 못했습니다."
+msgstr "보드를 불러오지 못했습니다."
 
 #: app/entry/chat/board/board-surface.tsx
 msgid "보드를 저장하거나 읽지 못했습니다. 잠시 뒤 다시 시도해 주십시오."
@@ -5937,6 +5944,10 @@ msgstr "판단을 기다리는 카드가 없습니다."
 #: app/entry/chat/board/board-surface.tsx
 msgid "판단을 기다리는 카드는 판단에 답한 뒤에 옮길 수 있습니다."
 msgstr "판단을 기다리는 카드는 판단에 답한 뒤에 옮길 수 있습니다."
+
+#: app/entry/navigation/decision-inbox.tsx
+msgid "판단을 기다리는 카드를 불러오지 못했습니다."
+msgstr "판단을 기다리는 카드를 불러오지 못했습니다."
 
 #. Goal verification status: the check could not decide
 #: app/entry/chat/workflow-panel.tsx

@@ -31,6 +31,7 @@ import { useGoalOrderMutation } from "../../queries/mutations/project";
 import { KanbanAction, useKanbanMutation } from "../../queries/mutations/session";
 import { useDecisionInboxQuery, useProjectBoardsQuery } from "../../queries/project";
 import { sessionQueries } from "../../queries/session";
+import { LoadFailure } from "../../shared/load-failure";
 import { LoopHealthStatus } from "../../shared/loop-health";
 import { planStatusLabels } from "../workflow-panel";
 import { boardColumns, type BoardCardRef } from "./board-moves";
@@ -297,11 +298,16 @@ export function ProjectBoard({
             </span>
           )}
         </SheetHeader>
-        {boards.data === undefined && (
-          <p className="px-4 text-muted-foreground">
-            <Trans>보드를 불러오는 중입니다.</Trans>
-          </p>
-        )}
+        {boards.data === undefined &&
+          (boards.isError ? (
+            <LoadFailure className="px-4" onRetry={() => void boards.refetch()}>
+              <Trans>보드를 불러오지 못했습니다.</Trans>
+            </LoadFailure>
+          ) : (
+            <p className="px-4 text-muted-foreground">
+              <Trans>보드를 불러오는 중입니다.</Trans>
+            </p>
+          ))}
         {boards.data !== undefined && rows.length === 0 && (
           <p className="px-4 text-muted-foreground">
             <Trans>실행 중인 Plan이 없습니다. 대화에서 Plan을 실행하면 보드에 올라옵니다.</Trans>

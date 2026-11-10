@@ -17,6 +17,7 @@ import { DecisionPrompt } from "../chat/decision-prompt";
 import { intentErrorText } from "../chat/board/board-surface";
 import { KanbanAction, useBoardsKanbanMutation } from "../queries/mutations/session";
 import { useDecisionInboxQuery, useProjectBoardsQuery } from "../queries/project";
+import { LoadFailure } from "../shared/load-failure";
 import { koreanLocalTime } from "../shared/local-time";
 
 /**
@@ -34,8 +35,12 @@ export function DecisionInbox({
 }) {
   const { t } = useLingui();
   const [open, setOpen] = useState(false);
-  const items = useDecisionInboxQuery(projectId).data ?? [];
-  const approvals = (useProjectBoardsQuery(projectId).data ?? []).flatMap((board) =>
+  const inbox = useDecisionInboxQuery(projectId);
+  const boards = useProjectBoardsQuery(projectId);
+  const items = inbox.data ?? [];
+  // A list that did not load is not an empty one.
+  const failed = inbox.isError || boards.isError;
+  const approvals = (boards.data ?? []).flatMap((board) =>
     board.awaitingApproval.map((card) => ({ ...card, board })),
   );
   const approve = useBoardsKanbanMutation(holder)(projectId);
@@ -69,7 +74,17 @@ export function DecisionInbox({
             </SheetDescription>
           </SheetHeader>
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 pb-4 text-xs text-muted-foreground">
-            {count === 0 && (
+            {failed && (
+              <LoadFailure
+                onRetry={() => {
+                  void inbox.refetch();
+                  void boards.refetch();
+                }}
+              >
+                <Trans>판단을 기다리는 카드를 불러오지 못했습니다.</Trans>
+              </LoadFailure>
+            )}
+            {count === 0 && !failed && (
               <p>
                 <Trans>판단을 기다리는 카드가 없습니다.</Trans>
               </p>

@@ -48,6 +48,7 @@ import {
   useBoardsEditMutation,
   useKanbanMutation,
 } from "../queries/mutations/session";
+import { LoadFailure } from "../shared/load-failure";
 import { koreanLocalTime } from "../shared/local-time";
 import { loopHealthLabel, LoopHealthStatus } from "../shared/loop-health";
 import {
@@ -267,7 +268,13 @@ export function WorkflowBoard({
 
   const view = board.data;
   if (!isTruthy(view))
-    return <Skeleton aria-label={t`보드를 불러오는 중`} className="h-6 w-full" />;
+    return board.isError ? (
+      <LoadFailure onRetry={() => void board.refetch()}>
+        <Trans>보드를 불러오지 못했습니다.</Trans>
+      </LoadFailure>
+    ) : (
+      <Skeleton aria-label={t`보드를 불러오는 중`} className="h-6 w-full" />
+    );
   const plan = view.plan;
   if (plan === null)
     return (
