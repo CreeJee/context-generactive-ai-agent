@@ -12,7 +12,7 @@
 - `SlashSupport` — 슬래시 명령의 `SlashContext`와, 패널 밖에서 실행할 명령(new/agent/mode/model/effort/settings/report)을 처리하는 `run`을 묶은 인터페이스
 - `chatRuntime` — 페이지 전체가 공유하는 `Atom.runtime`이다. `ChatApiClient.layer`+`FetchHttpClient.layer`, `FetchHttpClient.Fetch`=`appFetch`, `SecureRandom.SecureRandom`=`browserCrypto`를 합친다
 - `useAgentChat` — 한 세션 대화 훅이다. 열면 최신 메시지를 읽고 진행 중 run에 다시 붙는다. 그 뒤 다른 탭이나 서버가 시작한 run도 따라 읽는다. run 상태의 최신 run id를 세션 Atom `latest`에 넘기고, 판단은 `chatSessions`의 `follow`가 한다. `onNotTaken`은 서버가 거절했거나 받지 못한 turn을 받는다. ChatPanel은 보낸 글과 이미지를 입력창에 되돌리고, `run_in_progress` 거절이면 대기열에 넣는다. 반환: `messages`, `opened`(세션을 한 번 읽었는지. `ChatHistory`는 읽기 전에는 "새 대화" 대신 로딩을 보인다), `openFailed`·`reopen`(처음 읽기가 실패했을 때 오류와 다시 시도), `hasOlderMessages`, `loadOlderMessages`, `sendMessage`, `stop`, `isLoading`, `sessionGenerating`, `resuming`, `failure`, `refusal`, `dismissRefusal`, `unsent`, `interrupts`, `answerProblem`, `resolveInterrupts`
-- `AnswerProblem` — 승인 답이 이어지지 못한 이유: `"unsent"` | `"refused"` | `"lost"`
+- `AnswerProblem` — 승인 답이 이어지지 못한 이유 TaggedEnum: `unsent` | `refused{refusal}` | `lost`. `ChatApprovals`는 `refused`를 거절 코드로 나눈다: `no_user_turn`·`empty_message`는 승인 목록이 바뀐 것이고, 나머지는 `refusalTexts` 문구를 보인다
 - `useBtwThread` — BTW 스레드 하나의 훅(`btwThreads(chatRuntime)`)이다. `onNotTaken`은 서버가 받지 않은 질문을 받는다. 반환: `messages`, `ask`, `isLoading`, `failure`, `error`, `refusal`
 - `PendingApproval` / `toPendingApproval` / `approvalAnswer` — 승인 대기 TaggedEnum(`tool-approval`, `permission-review`)이다. `PendingInterrupts`의 interrupt를 reason별로 바꾸고, 결정을 `ResumeEntry`로 만든다
 - `missingDeliveredMessages` — 전달된 대기열 항목 중 아직 transcript에 user turn이 없는 것만 남기는 dual 함수

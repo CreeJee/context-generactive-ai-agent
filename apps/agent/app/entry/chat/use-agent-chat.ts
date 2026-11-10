@@ -1,5 +1,5 @@
 import { useAtomSet, useAtomSubscribe, useAtomValue } from "@effect/atom-react";
-import { Match, Option, Schema } from "effect";
+import { Data, Match, Option, Schema } from "effect";
 import { Sse } from "effect/encoding";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { type ChatMessage, Refusal, type ResumeEntry } from "memory-agent/chat-api";
@@ -36,9 +36,14 @@ const shownText = Match.type<
 
 /**
  * Why the page's answers to the approvals did not go on: they never reached the server, the server
- * refused them, or the run they started failed with the approvals still pending.
+ * refused them (and why), or the run they started failed with the approvals still pending.
  */
-export type AnswerProblem = "unsent" | "refused" | "lost";
+export type AnswerProblem = Data.TaggedEnum<{
+  unsent: {};
+  refused: { readonly refusal: Refusal };
+  lost: {};
+}>;
+export const AnswerProblem = Data.taggedEnum<AnswerProblem>();
 
 /**
  * One session's conversation on the chat API. It opens the session's newest messages and rejoins
@@ -121,10 +126,11 @@ export function useAgentChat({
     ),
     interrupts,
     answerProblem: Option.match(AsyncResult.error(answering), {
-      onSome: (error): AnswerProblem => (isRefusal(error) ? "refused" : "unsent"),
+      onSome: (error): AnswerProblem =>
+        isRefusal(error) ? AnswerProblem.refused({ refusal: error }) : AnswerProblem.unsent(),
       onNone: () =>
         AsyncResult.isSuccess(answering) && failure !== null && interrupts !== null
-          ? ("lost" as const)
+          ? AnswerProblem.lost()
           : null,
     }),
     resolveInterrupts: (answers: ReadonlyArray<ResumeEntry>) => {

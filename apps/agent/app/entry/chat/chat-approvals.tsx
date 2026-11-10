@@ -11,13 +11,22 @@ import { Button } from "~/components/ui/button";
 import { cn } from "cn";
 import { api, isApiError } from "../api";
 import { ApprovalCard } from "./approval";
+import type { Refusal } from "memory-agent/chat-api";
 import type { PendingApproval } from "./pending-approval";
-import type { AnswerProblem } from "./use-agent-chat";
+import { refusalTexts } from "./refusals";
+import { AnswerProblem } from "./use-agent-chat";
+
+/**
+ * A refused answer whose approvals are no longer the ones waiting: the server took it as a turn
+ * with nothing to answer.
+ */
+const answersOutdated = (refusal: Refusal) =>
+  refusal.error === "no_user_turn" || refusal.error === "empty_message";
 
 /** What the alert says for each problem, and what its button does. */
 const problems = {
   unsent: { text: msg`승인 응답을 전송하지 못했습니다.`, action: msg`응답 다시 보내기` },
-  refused: {
+  outdated: {
     text: msg`연결이 끊긴 사이 승인 목록이 바뀌었습니다. 서버의 최신 요청을 다시 불러와야 합니다.`,
     action: msg`최신 요청 불러오기`,
   },
@@ -26,7 +35,7 @@ const problems = {
     action: msg`끊어진 요청 폐기하고 계속`,
   },
 } satisfies Record<
-  AnswerProblem,
+  "unsent" | "outdated" | "lost",
   { readonly text: MessageDescriptor; readonly action: MessageDescriptor }
 >;
 
@@ -78,33 +87,52 @@ export function ChatApprovals({
         ),
       ),
     );
-  const actions = {
-    unsent: () => onResolve(decisions),
-    refused: onResync,
-    lost: () => void discard(),
-  } satisfies Record<AnswerProblem, () => void>;
+  // A refusal for another reason says why in the refusal's words; reading the approvals again
+  // shows what the server has now.
+  const shown =
+    problem === null
+      ? null
+      : AnswerProblem.$match(problem, {
+          unsent: () => ({
+            text: t(problems.unsent.text),
+            action: t(problems.unsent.action),
+            act: () => onResolve(decisions),
+          }),
+          refused: ({ refusal }) => ({
+            text: t(
+              answersOutdated(refusal) ? problems.outdated.text : refusalTexts[refusal.error],
+            ),
+            action: t(problems.outdated.action),
+            act: onResync,
+          }),
+          lost: () => ({
+            text: t(problems.lost.text),
+            action: t(problems.lost.action),
+            act: () => void discard(),
+          }),
+        });
 
   return (
     <>
-      {problem !== null && (
+      {shown !== null && (
         <Alert variant="destructive">
           <AlertTitle>
             <Trans>승인 요청을 이어가지 못했습니다</Trans>
           </AlertTitle>
           <AlertDescription>
             <div className="flex flex-col items-start gap-3">
-              <p>{t(problems[problem].text)}</p>
+              <p>{shown.text}</p>
               <Button
                 type="button"
                 size="sm"
                 variant="outline"
                 disabled={readOnly || resuming || discarding}
-                onClick={actions[problem]}
+                onClick={shown.act}
               >
                 <RefreshCwIcon
                   className={cn("size-3.5", (resuming || discarding) && "animate-spin")}
                 />
-                {t(problems[problem].action)}
+                {shown.action}
               </Button>
             </div>
           </AlertDescription>
