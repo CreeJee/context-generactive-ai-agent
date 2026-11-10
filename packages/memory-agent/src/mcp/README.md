@@ -36,7 +36,7 @@
 - `inputSchemaOf` — 도구 input schema에 `type`(기본 `object`)과 `properties`(기본 `{}`)를 채운다
 - `callTool` — 도구를 한 번 호출하고 결과를 TanStack 형식(text 또는 parts, structuredContent)으로 바꾼다. task 필수 도구이고 프로토콜이 modern이 아니면 spec 2025 task 폴링을 쓴다
 - `JsonObject` — MCP 도구 인자 타입
-- `mcpCopy` (`copy.ts`) — 로그인 뒤 브라우저 창에 보이는 문구 카탈로그. 문구는 `lint/wording`가 검사한다
+- 문구 — Lingui 런타임 매크로 메시지(`msg`)로 쓰는 곳에 두고 `src/i18n.ts`로 푼다. `src/locales/ko.po`로 추출되고 `lint/wording`가 검사한다
 - 하위 디렉터리: 없음
 
 ## Invariants

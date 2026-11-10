@@ -18,7 +18,8 @@ import { RequestNotSent } from "../oauth/protocol.ts";
 import { ExecutionAdmission } from "../runtime/execution-admission.ts";
 import { sha256 } from "../runtime/synchronous-crypto.ts";
 import type { ProviderRetryView } from "./contracts.ts";
-import { workflowCopy } from "./copy.ts";
+import { msg } from "@lingui/core/runtime-macro";
+import { i18n } from "../i18n.ts";
 import { WorkflowExecution } from "./execution.ts";
 import { ownerWorkflowEngineLayer, suspendedRetrySchedule } from "./owner-workflow-engine.ts";
 import { executionSubjects } from "./execution-subjects.ts";
@@ -174,7 +175,9 @@ const make = Effect.gen(function* () {
         if (retryAt - request.firstFailedAt > providerRetryLimits.maxElapsedMs) {
           yield* execution.block(request.sessionId, request.runId, {
             reason: "external_dependency",
-            detail: workflowCopy.blocked.providerRetryExhausted,
+            detail: i18n._(
+              msg`공급자에 요청을 보내지 못하는 상태가 이어져 자동 재시도를 멈췄습니다. 네트워크와 공급자 연결을 확인한 뒤 다시 보내 주십시오.`,
+            ),
             evidence: [
               request.runId,
               `provider_request_not_sent:${request.stage}`,

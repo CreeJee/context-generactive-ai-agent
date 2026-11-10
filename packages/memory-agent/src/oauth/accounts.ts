@@ -16,7 +16,9 @@ import { isTruthy } from "../truthy.ts";
 import { SubscriptionAccountProvider } from "../providers/contracts.ts";
 import type { OAuthProfile } from "./contracts.ts";
 import type { OAuthProvider } from "./protocol.ts";
-import { oauthCopy } from "./copy.ts";
+import type { MessageDescriptor } from "@lingui/core";
+import { msg } from "@lingui/core/runtime-macro";
+import { i18n } from "../i18n.ts";
 import {
   OAuthKeychain,
   StoredCredentialSchema,
@@ -138,6 +140,18 @@ type ProfileRunState = Data.TaggedEnum<{
   removing: {};
 }>;
 const ProfileRunState = Data.taggedEnum<ProfileRunState>();
+/** Labels of accounts imported from the earlier single-account login, keyed by provider. */
+const legacyLabels: Readonly<Record<OAuthProvider, MessageDescriptor>> = {
+  openai: msg({
+    message: "ChatGPT (이전 계정)",
+    comment: "Name of an account carried over from the earlier single-account login",
+  }),
+  anthropic: msg({
+    message: "Claude (이전 계정)",
+    comment: "Name of an account carried over from the earlier single-account login",
+  }),
+};
+
 const runKey = (provider: OAuthProvider, id: string) => `${provider}:${id}`;
 
 const make = Effect.gen(function* () {
@@ -436,7 +450,7 @@ const make = Effect.gen(function* () {
     // No asynchronous work in this transaction. A second importer may win; the legacy slot survives either way.
     yield* commit(
       sql`INSERT OR IGNORE INTO oauth_profiles(id, provider, label, selected, created_at)
-        SELECT ${id}, ${provider}, ${oauthCopy.legacyLabel[provider]},
+        SELECT ${id}, ${provider}, ${i18n._(legacyLabels[provider])},
           NOT EXISTS (SELECT 1 FROM oauth_profiles WHERE provider = ${provider} AND selected = 1),
           ${createdAt}`,
     );

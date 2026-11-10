@@ -1,5 +1,6 @@
 import { Clock, Context, DateTime, Effect, Layer, Option, Schema } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
+import { msg } from "@lingui/core/runtime-macro";
 
 /**
  * - `allow` / `ask` / `block`: the classifier's (or fallback's) verdict on a call.
@@ -26,6 +27,13 @@ export const PermissionReview = Schema.Struct({
 export type PermissionReview = typeof PermissionReview.Type;
 
 export type NewPermissionReview = Omit<PermissionReview, "createdAt">;
+
+/** Asked of the user when no review ran: the tool needs a decision on every call. */
+export const askEveryCallReason = msg`호출할 때마다 확인하는 도구입니다.`;
+
+/** The recorded reason of the user's answer. */
+export const answeredReason = (approved: boolean) =>
+  approved ? msg`사용자가 승인했습니다.` : msg`사용자가 거부했습니다.`;
 
 const ReviewRow = Schema.Struct({
   session_id: Schema.String,

@@ -6,7 +6,8 @@ import { Indexer } from "./embedding/indexer.ts";
 import { VectorIndex } from "./embedding/vector-index.ts";
 import { meaningfulNodeFilter, memoryGraphRepairVersion, nonBlankTextSql } from "./quality.ts";
 import { createSupersededReads } from "./superseded-reads.ts";
-import { memoryCopy } from "./copy.ts";
+import { msg } from "@lingui/core/runtime-macro";
+import { i18n } from "../i18n.ts";
 
 export class MemoryGraphRepairFailed extends Schema.TaggedError<
   MemoryGraphRepairFailed,
@@ -222,9 +223,10 @@ const make = Effect.gen(function* () {
   });
 
   const failed = Effect.gen(function* () {
-    yield* setStatus("failed", memoryCopy.maintenanceFailed).pipe(
-      Effect.catch(logFailure("Memory graph maintenance status not saved")),
-    );
+    yield* setStatus(
+      "failed",
+      i18n._(msg`그래프 정리를 완료하지 못했습니다. 다음 시작 시 다시 시도합니다.`),
+    ).pipe(Effect.catch(logFailure("Memory graph maintenance status not saved")));
     yield* events.publishGlobal("embedding");
   });
 

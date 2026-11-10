@@ -32,7 +32,7 @@ memory-agent의 프로바이더/런 계층은 `OAuthProfiles`·`OAuthAccountLogi
 - `contracts.ts` — `/api/accounts`·`/api/accounts/quota`가 브라우저로 보내는 Schema(`OAuthProfile`, `AccountLoginState` 타입, `SubscriptionAccountsView`, 쿼터 스키마). 서버 코드를 import하지 않아 브라우저 번들이 쓴다
 - `anthropicSubscriptionUsage`, `anthropicSubscriptionUsageProbe`, `openAiSubscriptionUsage`, `SubscriptionUsageCredentialExpired`, `SubscriptionUsageProbe`, `SubscriptionUsageWindow` — 프로바이더별 사용량 조회(`subscription-usage-probe.ts`)
 - `parseWindowsProxy`, `classifyWindowsProxyOutput`, `windowsTokenProxy`, `fetchOpenAiTokenViaSystemProxy` — Windows 시스템 프록시를 해석하고 그 프록시로 OpenAI 토큰을 요청한다(`windows-token-proxy.ts`)
-- `oauthCopy` (`copy.ts`) — 이전 단일 계정에서 가져온 계정의 라벨 문구 카탈로그(`satisfies Record<OAuthProvider, string>`). 문구는 `lint/wording`가 검사한다
+- 문구 — Lingui 런타임 매크로 메시지(`msg`)로 쓰는 곳에 두고 `src/i18n.ts`로 푼다. `src/locales/ko.po`로 추출되고 `lint/wording`가 검사한다
 - 하위 디렉터리 없음
 
 ## Invariants

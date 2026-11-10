@@ -34,7 +34,8 @@ import {
   type BundleText,
   type ReportBundle,
 } from "./bundle-contract.ts";
-import { reportCopy } from "./copy.ts";
+import { msg } from "@lingui/core/runtime-macro";
+import { i18n } from "../i18n.ts";
 
 /** How much of a session a bundle holds (decided 2026-10-18). */
 export const bundleLimits = {
@@ -210,7 +211,12 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
         cut: excerpt.length > excerpt.text.length,
       });
       const withheld = (excerpt: Excerpt): BundleText => ({
-        text: reportCopy.bundle.withheld,
+        text: i18n._(
+          msg({
+            message: "[비밀정보 확인 실패로 숨김]",
+            comment: "Stands in for a report bundle text whose secrets could not be checked",
+          }),
+        ),
         cut: excerpt.length > 0,
       });
       const joined = yield* redactor

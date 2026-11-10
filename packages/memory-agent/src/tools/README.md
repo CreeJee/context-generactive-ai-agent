@@ -33,7 +33,8 @@
 - `DelegateTools` / `delegateToolName` / `delegateInstructions` / `DelegateToolset` / `DelegateBinding` 및 `SkillTools` / `skillsInstructions` / `SkillToolset` — 다른 에이전트 위임(`delegate_to_agent`)과 스킬 도구
 - `lazyToolsFor` / `discoveryToolName` / `isDiscoveryCall` / `ToolLookup` 및 `repeatGuardHook` / `RepeatedToolCall` / `repeatedToolCallCode` — history 기반 lazy 도구 발견, 같은 호출 반복을 막는 `RunHook`
 - `reportRunToolsForSession` / `reportBinding` / `initialReportEvidence` / `ReportBinding` 및 `prepareRepaired` / `repairedInput` / `jsonSchemaIssues` — 리포트 세션 증거 도구, 보낸 인수가 안 맞으면 수리된 인수로 호출을 준비하는 입력 수리
-- `toolsCopy` / `toolsPrompts` — 사람이 읽는 문구 카탈로그(`copy.ts`: 위임 승인 사유)와 리포트 증거 스냅샷에서 모델이 읽는 지침(`prompts.ts`)
+- `toolsPrompts` — 리포트 증거 스냅샷에서 모델이 읽는 지침(`prompts.ts`)
+- 문구 — Lingui 런타임 매크로 메시지(`msg`)로 쓰는 곳에 두고 `src/i18n.ts`로 푼다. `src/locales/ko.po`로 추출되고 `lint/wording`가 검사한다
 - 하위 디렉터리 없음
 
 ## Invariants

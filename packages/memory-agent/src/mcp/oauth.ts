@@ -53,7 +53,8 @@ import {
   type MissingVariable,
 } from "./config.ts";
 import type { McpScope } from "./contracts.ts";
-import { mcpCopy } from "./copy.ts";
+import { msg } from "@lingui/core/runtime-macro";
+import { i18n } from "../i18n.ts";
 
 /**
  * MCP authorization (spec 2025-06-18 and later) for HTTP servers, on the SDK's `auth()`: discovery
@@ -782,16 +783,18 @@ export const openMcpCredentials = Effect.fnUntraced(function* (options: {
         )
           return respond("Not found.", 404);
         if (yield* Ref.getAndSet(claimed, true))
-          return respond(mcpCopy.loginCallback.alreadyFinished, 410);
+          return respond(i18n._(msg`이 로그인은 이미 끝났습니다.`), 410);
         const result =
           callback.searchParams.get("state") === state
             ? yield* completed(callback.searchParams)
             : failedLogin({ code: "login_failed", detail: "state mismatch" });
         yield* settleAfterResponse(result);
         return McpLoginOutcome.$match(result, {
-          succeeded: () => respond(mcpCopy.loginCallback.succeeded, 200),
-          cancelled: () => respond(mcpCopy.loginCallback.cancelled, 410),
-          failed: () => respond(mcpCopy.loginCallback.failed, 400),
+          succeeded: () =>
+            respond(i18n._(msg`로그인했습니다. 이 창을 닫고 앱으로 돌아가 주십시오.`), 200),
+          cancelled: () => respond(i18n._(msg`로그인을 취소했습니다.`), 410),
+          failed: () =>
+            respond(i18n._(msg`로그인하지 못했습니다. 앱에서 이유를 확인해 주십시오.`), 400),
         });
       });
       yield* Effect.provideContext(

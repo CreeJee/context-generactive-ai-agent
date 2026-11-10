@@ -51,7 +51,9 @@ import {
   type ProjectSummary,
 } from "./app-api.ts";
 import { toolDetail, toolLocations, toolView } from "./tool-view.ts";
-import { acpCopy } from "./copy.ts";
+import type { MessageDescriptor } from "@lingui/core";
+import { msg } from "@lingui/core/runtime-macro";
+import { i18n } from "../i18n.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import {
   RunFailureCode,
@@ -100,7 +102,13 @@ const ExplainedFailure = Schema.Literals([
   "session_in_use",
   "session_not_found",
 ]);
-const failureMessages = acpCopy.failure satisfies Record<typeof ExplainedFailure.Type, string>;
+const failureMessages: Readonly<Record<typeof ExplainedFailure.Type, MessageDescriptor>> = {
+  unreachable: msg`앱에 연결하지 못했습니다. context-generactive-agent 앱을 먼저 실행해 주십시오.`,
+  login_required: msg`앱에서 지금 쓰는 모델 제공자에 로그인해 주십시오.`,
+  model_selection_required: msg`앱에서 모델을 선택해 주십시오.`,
+  session_in_use: msg`다른 창에서 쓰고 있는 대화입니다.`,
+  session_not_found: msg`그런 대화가 없습니다.`,
+};
 
 /** Why the bridge refused an editor's request itself, before or after asking the app. */
 const EditorRefusal = Schema.TaggedUnion({
@@ -122,10 +130,11 @@ class EditorRequestRefused extends Schema.TaggedError<
 >()("EditorRequestRefused", { reason: EditorRefusal }) {}
 
 const refusalMessage = EditorRefusal.match({
-  FolderNotFound: ({ cwd }) => acpCopy.refusal.FolderNotFound(cwd),
-  ProjectNotRegistered: ({ root }) => acpCopy.refusal.ProjectNotRegistered(root),
-  SessionNotOpen: () => acpCopy.refusal.SessionNotOpen,
-  TurnInProgress: () => acpCopy.refusal.TurnInProgress,
+  FolderNotFound: ({ cwd }) => i18n._(msg`폴더를 찾을 수 없습니다: ${{ cwd }}`),
+  ProjectNotRegistered: ({ root }) =>
+    i18n._(msg`등록된 프로젝트가 아닙니다. 앱에서 ${{ root }}를 먼저 추가해 주십시오.`),
+  SessionNotOpen: () => i18n._(msg`그런 세션이 없습니다. 새로 시작하거나 다시 불러와 주십시오.`),
+  TurnInProgress: () => i18n._(msg`이미 답하는 중입니다.`),
   RunFailed: ({ code }) => runFailureText[code],
 });
 
@@ -147,8 +156,8 @@ const explain = (
       ? Effect.succeed(
           requestError(
             Schema.is(ExplainedFailure)(error.code)
-              ? failureMessages[error.code]
-              : acpCopy.appRequestFailed(error.code),
+              ? i18n._(failureMessages[error.code])
+              : i18n._(msg`앱 요청이 실패했습니다: ${{ code: error.code }}`),
           ),
         )
       : Schema.is(EditorRequestRefused)(error)
@@ -243,8 +252,27 @@ function promptText(blocks: readonly ContentBlock[]) {
 
 const requesterLabel = ApprovalRequester.match({
   subagent: ({ name }) =>
-    isTruthy(name) ? acpCopy.requester.subagent(name) : acpCopy.requester.oneOffSubagent,
-  external_agent: ({ agent }) => acpCopy.requester.externalAgent(agent),
+    isTruthy(name)
+      ? i18n._(
+          msg({
+            message: msg`서브에이전트 ${{ name }}`,
+            comment: "Who asks for an approval: a named helper agent the session started",
+          }),
+        )
+      : i18n._(
+          msg({
+            message: "일회성 서브에이전트",
+            comment:
+              "Who asks for an approval: a helper agent started for one task, without a name",
+          }),
+        ),
+  external_agent: ({ agent }) =>
+    i18n._(
+      msg({
+        message: msg`외부 에이전트 ${{ agent }}`,
+        comment: "Who asks for an approval: an outside coding agent, by its name",
+      }),
+    ),
 });
 
 const cut = (text: string) =>
@@ -486,8 +514,26 @@ const makeAcpAgent = Effect.fnUntraced(function* (options: {
           rawInput: call.argumentsJson,
         },
         options: [
-          { optionId: "allow", name: acpCopy.permission.allowOnce, kind: "allow_once" },
-          { optionId: "reject", name: acpCopy.permission.reject, kind: "reject_once" },
+          {
+            optionId: "allow",
+            name: i18n._(
+              msg({
+                message: "이번 한 번 허용",
+                comment: "Choice of a permission request in the editor: allow this one tool call",
+              }),
+            ),
+            kind: "allow_once",
+          },
+          {
+            optionId: "reject",
+            name: i18n._(
+              msg({
+                message: "거부",
+                comment: "Choice of a permission request in the editor: reject this tool call",
+              }),
+            ),
+            kind: "reject_once",
+          },
         ],
       }),
     );

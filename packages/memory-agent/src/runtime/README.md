@@ -27,7 +27,7 @@
 - `runProcess` / `CommandOptions` / `runTrace` / `onRun` / `RunTrace` — 프로세스 실행 함수와 실행 trace 헬퍼. 그래프 시그니처만 확인함
 - `nodePlatformLayer` / `nodePlatform` / `NodePlatform` / `initializeNodeSqlite(addonPath)` — Node 플랫폼 Layer와 node sqlite addon 초기화. 그래프 시그니처만 확인함
 - `sha256` (synchronous-crypto) / `posix`·`win32`·`path` (synchronous-path) — 동기 sha256, 동기 path 모듈. 그래프 시그니처만 확인함
-- `runtimeCopy` — 사람이 읽는 실패 문구 카탈로그(`copy.ts`). `runFailureText`와 `externalAgentFailureText`는 이 카탈로그를 가리킴
+- 문구 — Lingui 런타임 매크로 메시지(`msg`)로 쓰는 곳에 두고 `src/i18n.ts`로 푼다. `src/locales/ko.po`로 추출되고 `lint/wording`가 검사한다. `runFailureText`와 `externalAgentFailureText`는 앱 화면이 문자열로 쓰므로 모듈을 읽을 때 푼 표임
 - 하위 디렉터리 없음
 
 ## Invariants

@@ -15,7 +15,8 @@ import { AiError, LanguageModel, type Prompt, type Response } from "effect/ai";
 import { ExternalPromptOutcome } from "../external-agents/agents.ts";
 import type { ShownFailure } from "../providers/contracts.ts";
 import { ExternalAgentFailureCode } from "../runtime/shown-failure.ts";
-import { modelCopy } from "./copy.ts";
+import { msg } from "@lingui/core/runtime-macro";
+import { i18n } from "../i18n.ts";
 import { optionsKey } from "./prompt.ts";
 import { collectResponse } from "./response.ts";
 import { shownReason } from "./shown-failure.ts";
@@ -103,7 +104,7 @@ const makeAnswer = () => {
       MutableHashMap.size(calls) === 0
         ? []
         : text(
-            `\n\n${modelCopy.reportedToolCalls}\n${Array.from(
+            `\n\n${i18n._(msg`외부 에이전트가 알린 도구 호출:`)}\n${Array.from(
               MutableHashMap.values(calls),
               (call) => `- ${call.title} (${call.status})`,
             ).join("\n")}`,

@@ -23,7 +23,8 @@ import { tagOfUnknown } from "../runtime/failure-tag.ts";
 import { logFailure } from "../runtime/logged-failures.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { spanLine } from "./bundle-digest.ts";
-import { reportCopy } from "./copy.ts";
+import { msg } from "@lingui/core/runtime-macro";
+import { i18n } from "../i18n.ts";
 import { ReportDelivery } from "./discord-webhook.ts";
 
 /** The same defect is sent at most once per this window; the next message counts the rest. */
@@ -179,14 +180,30 @@ const make = Effect.gen(function* () {
     const summary = yield* redacted(facts.summary);
     const stack = yield* redacted(facts.stack.join("\n"));
     const lines = [
-      reportCopy.defect.heading(facts.tag, facts.location, count),
-      reportCopy.defect.build(release, platform),
+      i18n._(
+        msg({
+          message: msg`[결함] ${{ tag: facts.tag }} @ ${{ location: facts.location }} ×${{ count }}`,
+          comment:
+            "Heading of a defect message sent to the developer: error tag, source location, times it happened",
+        }),
+      ),
+      i18n._(
+        msg({
+          message: msg`버전 ${{ release }} · ${{ platform }}`,
+          comment: "Line of a defect message: the app's release and the platform it runs on",
+        }),
+      ),
       ...item.ids,
-      summary === "" ? "" : reportCopy.defect.summary(summary),
+      summary === "" ? "" : i18n._(msg`요약: ${{ summary }}`),
       // Before the stack: the message is cut at its end, and these name what failed first.
       item.spans.length === 0
         ? ""
-        : reportCopy.defect.failedSpans(item.spans.map((line) => `- ${line}`).join("\n")),
+        : i18n._(
+            msg({
+              message: msg`실패 span:\n${{ spans: item.spans.map((line) => `- ${line}`).join("\n") }}`,
+              comment: "Section of a defect message: the failed trace spans, one per line",
+            }),
+          ),
       stack === "" ? "" : `\`\`\`\n${stack}\n\`\`\``,
     ].filter((line) => line !== "");
     return lines.join("\n").slice(0, contentLimit);

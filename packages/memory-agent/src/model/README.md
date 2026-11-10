@@ -35,7 +35,7 @@
 - `shownReason` — `AiError` reason을 기본 `ShownFailure`로 바꾼다. 응답 HTTP 상태와 공급자 오류 본문의 `type`·`code`(짧은 식별자일 때만), 연결 실패의 전송 코드(`errorCodesOf`, 예: `UND_ERR_CONNECT_TIMEOUT`)를 괄호로 덧붙이고, 공급자의 문장·URL은 넣지 않는다.
 - `singleAnswer` / `singleAnswerParts` / `SingleCall` — system 프롬프트 하나 아래에서 질문 하나를 보내는 단발 호출(권한 리뷰, 보고서 진단, 해석, 턴 요약). 전체 답과 usage를 돌려주거나 part 스트림을 돌려준다.
 - `unsentRetried` / `UnsentRetry` — Goal run 모델 래퍼. 공급자가 요청을 받지 못했을 때만 `wait` 뒤에 다시 보낸다. `toolParameters`(`tool-schema.ts`)는 도구 파라미터의 provider용 JSON Schema를 만든다.
-- `modelCopy` — 외부 에이전트 답 뒤에 붙는 도구 호출 목록 제목 문구 카탈로그(`copy.ts`).
+- 문구 — Lingui 런타임 매크로 메시지(`msg`)로 쓰는 곳에 두고 `src/i18n.ts`로 푼다. `src/locales/ko.po`로 추출되고 `lint/wording`가 검사한다.
 - 하위 디렉터리 없음.
 
 ## Invariants

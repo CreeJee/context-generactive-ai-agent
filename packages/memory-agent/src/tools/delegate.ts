@@ -6,7 +6,8 @@ import { AttemptFailureReason } from "../work-trace/contracts.ts";
 import { ExternalAgentFailureCode } from "../runtime/shown-failure.ts";
 import type { Project } from "../projects/projects.ts";
 import { BackgroundOperationFailed, BackgroundTasks } from "./background.ts";
-import { toolsCopy } from "./copy.ts";
+import { msg } from "@lingui/core/runtime-macro";
+import { i18n } from "../i18n.ts";
 import { runTool, type RunTool } from "./run-tool.ts";
 
 export const delegateToolName = "delegate_to_agent";
@@ -132,7 +133,7 @@ const make = Effect.gen(function* () {
                       requester: ApprovalRequester.cases.external_agent.make({ agent }),
                       toolName: request.toolCall.title ?? "external tool",
                       argumentsJson: JSON.stringify(request.toolCall.rawInput ?? {}),
-                      reason: toolsCopy.delegate.externalPermission,
+                      reason: i18n._(msg`외부 에이전트가 권한을 요청했습니다.`),
                       askedBy: "agent",
                     },
                     turnSignal,

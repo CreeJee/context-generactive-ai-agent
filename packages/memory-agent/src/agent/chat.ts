@@ -195,7 +195,8 @@ import {
 } from "../work-trace/contracts.ts";
 import { BackgroundTasks, type BackgroundBinding } from "../tools/background.ts";
 import { AppEvents } from "../events/app-events.ts";
-import { agentCopy } from "./copy.ts";
+import { msg } from "@lingui/core/runtime-macro";
+import { i18n } from "../i18n.ts";
 import { agentPrompts } from "./prompts.ts";
 import {
   initialReportEvidence,
@@ -1535,7 +1536,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                   }),
                   toolName: permission.toolCall.title ?? "external tool",
                   argumentsJson: stringifyJson(permission.toolCall.rawInput ?? {}),
-                  reason: agentCopy.externalAgentPermission,
+                  reason: i18n._(msg`외부 에이전트가 권한을 요청했습니다.`),
                   askedBy: "agent",
                 },
                 abortController.signal,
@@ -2836,7 +2837,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             if (Option.isSome(refused)) {
               yield* execution.blockPending(sessionId, last.runId, {
                 reason: "external_dependency",
-                detail: agentCopy.planBoardNotStarted,
+                detail: i18n._(
+                  msg`승인한 Plan을 칸반 보드에서 시작하지 못했습니다. 보드 패널에서 칸반으로 전환을 다시 눌러 주십시오.`,
+                ),
                 evidence: [refused.value],
               });
               yield* events.publishSession(sessionId, "run-state");

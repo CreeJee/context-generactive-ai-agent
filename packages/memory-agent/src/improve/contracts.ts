@@ -1,5 +1,6 @@
 import { Schema } from "effect";
-import { improveCopy } from "./copy.ts";
+import { msg } from "@lingui/core/runtime-macro";
+import { i18n } from "../i18n.ts";
 
 // Shapes and wording shared by the backend and the settings page; nothing here reaches the
 // database, the file system or a model.
@@ -94,8 +95,30 @@ export const ScanState = Schema.TaggedUnion({
 });
 export type ScanState = typeof ScanState.Type;
 
-/** How the app names each kind of item, in reports and on the settings page. */
-export const sourceLabels = improveCopy.sourceLabels;
+/**
+ * How the app names each kind of item, in reports and on the settings page. Resolved when the
+ * module loads: the settings page renders the labels as plain text.
+ */
+export const sourceLabels = {
+  correction: i18n._(
+    msg({
+      message: "반복된 정정",
+      comment: "Kind of improvement item: the user corrected the agent the same way more than once",
+    }),
+  ),
+  tool_failure: i18n._(
+    msg({
+      message: "반복된 도구 실패",
+      comment: "Kind of improvement item: the same tool call kept failing",
+    }),
+  ),
+  card_failure: i18n._(
+    msg({
+      message: "칸반 카드 실패",
+      comment: "Kind of improvement item: a kanban card failed or was replanned",
+    }),
+  ),
+} satisfies Record<ImprovementItem["source"], string>;
 
 /** The item's name: the model's title when it read the item, otherwise the grouping label. */
 export const reportedTitle = (item: ReportedItem) =>

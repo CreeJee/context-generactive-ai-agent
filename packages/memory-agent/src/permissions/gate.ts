@@ -8,8 +8,13 @@ import { InterruptAnswer } from "../loop/store.ts";
 import type { ModelSelection } from "../providers/contracts.ts";
 import type { Project } from "../projects/projects.ts";
 import { PermissionClassifier } from "./classifier.ts";
-import { permissionsCopy } from "./copy.ts";
-import { PermissionReviews, type PermissionReview } from "./reviews.ts";
+import { i18n } from "../i18n.ts";
+import {
+  answeredReason,
+  askEveryCallReason,
+  PermissionReviews,
+  type PermissionReview,
+} from "./reviews.ts";
 
 export interface GateBinding {
   readonly project: Project;
@@ -128,7 +133,7 @@ const gateFor = Effect.fnUntraced(function* (binding: GateBinding) {
   const askingOf = (decision: Option.Option<PermissionReview>) =>
     Option.match(decision, {
       onNone: () =>
-        Option.some<Asking>({ reason: permissionsCopy.askEveryCall, askedBy: "every_call" }),
+        Option.some<Asking>({ reason: i18n._(askEveryCallReason), askedBy: "every_call" }),
       onSome: ({ decision, reason }) =>
         decision === "ask" ? Option.some<Asking>({ reason, askedBy: "review" }) : Option.none(),
     });
@@ -143,7 +148,7 @@ const gateFor = Effect.fnUntraced(function* (binding: GateBinding) {
         record(call, {
           decision: approved ? "approved" : "denied",
           decidedBy: "user",
-          reason: approved ? permissionsCopy.answered.approved : permissionsCopy.answered.denied,
+          reason: i18n._(answeredReason(approved)),
         }),
       { discard: true },
     );

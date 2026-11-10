@@ -47,10 +47,10 @@ import { optionalProperty } from "../optional-property.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import type { ModelSelection } from "../providers/contracts.ts";
 import { PermissionClassifier } from "../permissions/classifier.ts";
-import { permissionsCopy } from "../permissions/copy.ts";
 import { RelayedApprovals } from "../approvals/relayed.ts";
 import { ApprovalRequester } from "../approvals/relayed-state.ts";
-import { PermissionReviews } from "../permissions/reviews.ts";
+import { answeredReason, askEveryCallReason, PermissionReviews } from "../permissions/reviews.ts";
+import { i18n } from "../i18n.ts";
 import type { Project } from "../projects/projects.ts";
 import { CodeTools } from "../tools/code.ts";
 import { repeatGuardHook, repeatedToolCallCode } from "../tools/repeat-guard.ts";
@@ -653,11 +653,7 @@ const make = Effect.gen(function* () {
         yield* events.publishSession(binding.sessionId, "relayed-approvals");
         const approved = yield* Fiber.join(decision);
         yield* events.publishSession(binding.sessionId, "relayed-approvals");
-        yield* record(
-          approved ? "approved" : "denied",
-          "user",
-          approved ? permissionsCopy.answered.approved : permissionsCopy.answered.denied,
-        );
+        yield* record(approved ? "approved" : "denied", "user", i18n._(answeredReason(approved)));
         yield* trace.transitionAttempt(
           handle,
           binding.sessionId,
@@ -694,7 +690,7 @@ const make = Effect.gen(function* () {
       ? Match.value(binding.project.permissionMode).pipe(
           Match.when("full", () => Effect.succeedNone),
           Match.when("auto", () => reviewed),
-          Match.orElse(() => askUser(permissionsCopy.askEveryCall, "every_call")),
+          Match.orElse(() => askUser(i18n._(askEveryCallReason), "every_call")),
         )
       : Effect.succeedNone;
   };

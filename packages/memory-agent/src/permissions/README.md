@@ -18,7 +18,8 @@
 - `PermissionReview` / `NewPermissionReview` — 검토 기록 Schema와 타입. `NewPermissionReview`는 createdAt을 뺀 형태다.
 - `ReviewDecision` — Schema.Literals allow|ask|block|approved|denied
 - `ReviewDecider` — Schema.Literals classifier|fallback|user
-- `permissionsCopy` — 사람이 읽는 승인 사유 문구 카탈로그(`copy.ts`). gate와 `subagents`가 함께 쓴다
+- `askEveryCallReason` / `answeredReason(approved)` — gate와 `subagents`가 함께 쓰는 승인 사유 메시지(`reviews.ts`)
+- 문구 — Lingui 런타임 매크로 메시지(`msg`)로 쓰는 곳에 두고 `src/i18n.ts`로 푼다. `src/locales/ko.po`로 추출되고 `lint/wording`가 검사한다
 
 ## Invariants
 

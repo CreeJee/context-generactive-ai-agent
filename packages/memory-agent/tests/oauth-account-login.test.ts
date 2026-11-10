@@ -18,7 +18,6 @@ import { describe, expect, vi } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
 import { AccountLoginState, createOAuthAccountLoginManager } from "../src/oauth/account-login.ts";
 import { createProfileCredentialStore, OAuthProfiles } from "../src/oauth/accounts.ts";
-import { oauthCopy } from "../src/oauth/copy.ts";
 import { providerProtocols, type OAuthProvider } from "../src/oauth/protocol.ts";
 import {
   createSubscriptionOAuthClient,
@@ -97,6 +96,12 @@ const fixture = Effect.fn("oauthLoginTest.fixture")(function* () {
     manager: yield* createOAuthAccountLoginManager({ profiles, accounts, startLogin: start }),
   };
 });
+
+/** Labels the app gives accounts imported from the earlier single-account login. */
+const legacyLabels = {
+  openai: "ChatGPT (이전 계정)",
+  anthropic: "Claude (이전 계정)",
+} satisfies Record<OAuthProvider, string>;
 
 /** The authorization URL of a login waiting for the browser. */
 const authorizationUrl = (login: AccountLoginState) =>
@@ -231,7 +236,7 @@ describe("multi-account OAuth login manager", () => {
         );
         expect(
           (yield* manager.profiles(provider)).profiles.map((profile) => profile.label).sort(),
-        ).toEqual([oauthCopy.legacyLabel[provider], "계정 1", "계정 2"].sort());
+        ).toEqual([legacyLabels[provider], "계정 1", "계정 2"].sort());
         expect(
           (yield* manager.profiles(provider)).profiles.filter((p) => p.selected).map((p) => p.id),
         ).toEqual([`legacy-${provider}`]);
