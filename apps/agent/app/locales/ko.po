@@ -5222,6 +5222,10 @@ msgid "조회 불가"
 msgstr "조회 불가"
 
 #: app/entry/navigation/compatible-accounts.tsx
+msgid "주소, 키 또는 모델 한도를 확인해 주십시오."
+msgstr "주소, 키 또는 모델 한도를 확인해 주십시오."
+
+#: app/entry/navigation/compatible-accounts.tsx
 msgid "주소, 키 또는 모델 한도를 확인해 주십시오. 키가 있는 엔드포인트의 주소를 바꾸려면 새 키를 넣거나 키를 지워야 합니다."
 msgstr "주소, 키 또는 모델 한도를 확인해 주십시오. 키가 있는 엔드포인트의 주소를 바꾸려면 새 키를 넣거나 키를 지워야 합니다."
 

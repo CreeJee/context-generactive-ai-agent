@@ -40,7 +40,7 @@ import { providerLabels } from "./providers";
 const rejectedStatuses = Schema.Literals([400, 404, 502]);
 /** What a rejected endpoint request means, by the status codes the server answers with. */
 const rejectedStatusText = {
-  400: msg`주소, 키 또는 모델 한도를 확인해 주십시오. 키가 있는 엔드포인트의 주소를 바꾸려면 새 키를 넣거나 키를 지워야 합니다.`,
+  400: msg`주소, 키 또는 모델 한도를 확인해 주십시오.`,
   404: msg`엔드포인트나 모델을 찾지 못했습니다. 목록을 새로고침해 주십시오.`,
   502: msg`엔드포인트가 응답하지 않았습니다. 주소와 서버 상태를 확인해 주십시오.`,
 } satisfies Record<typeof rejectedStatuses.Type, MessageDescriptor>;
@@ -52,9 +52,11 @@ export const compatibleErrorMessage = (failure: Error) => {
     failure.reason,
     {
       RequestRejected: () =>
-        Schema.is(rejectedStatuses)(failure.status)
-          ? i18n._(rejectedStatusText[failure.status])
-          : failure.message,
+        failure.operation === "connect" && failure.status === 400
+          ? t`주소, 키 또는 모델 한도를 확인해 주십시오. 키가 있는 엔드포인트의 주소를 바꾸려면 새 키를 넣거나 키를 지워야 합니다.`
+          : Schema.is(rejectedStatuses)(failure.status)
+            ? i18n._(rejectedStatusText[failure.status])
+            : failure.message,
     },
     () => failure.message,
   );
