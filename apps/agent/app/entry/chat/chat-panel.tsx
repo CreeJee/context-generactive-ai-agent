@@ -528,13 +528,8 @@ function ChatPanel({
     );
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const executePlan = () =>
-    runUiEffect(
-      Effect.gen(function* () {
-        // The approval starts the Plan's kanban board: card agents execute it, not this chat.
-        yield* uiPromise(() => moveWorkflow("run"));
-      }),
-    );
+  // The approval starts the Plan's kanban board: card agents execute it, not this chat.
+  const executePlan = () => runUiEffect(Effect.asVoid(uiPromise(() => moveWorkflow("run"))));
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const controlGoal = (action: "pause" | "resume" | "stop") =>
