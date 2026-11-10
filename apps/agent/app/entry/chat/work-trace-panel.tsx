@@ -314,7 +314,7 @@ function TaskDetail({ detail }: { detail: TraceTaskDetail | null }) {
                   </p>
                   {candidate.originSessionId === null && (
                     <p className="mt-1 text-muted-foreground">
-                      <Trans>원본 대화 삭제됨 · project provenance 유지</Trans>
+                      <Trans>원본 대화 삭제됨 · 출처 기록 유지</Trans>
                     </p>
                   )}
                 </li>

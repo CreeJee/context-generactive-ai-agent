@@ -519,18 +519,19 @@ const TaskSummaryCard = memo(function TaskSummaryCard({
       )}
       {task.latestResumedFromAttemptId && (
         <p className="mt-1 text-xs text-muted-foreground">
-          <Trans>이전 실행을 새 attempt로 다시 시도함</Trans>
+          <Trans>이전 실행을 새로 다시 시도함</Trans>
         </p>
       )}
       {task.status === "resumable" && (
         <p className="mt-1 text-xs text-destructive">
-          <Trans>실행이 중단됐습니다. 작업을 새 attempt로 다시 시도할 수 있습니다.</Trans>
+          <Trans>실행이 중단됐습니다. 이 작업을 새로 다시 시도할 수 있습니다.</Trans>
         </p>
       )}
       {resumeState === "confirm-uncertain" && (
         <p className="mt-1 text-xs text-destructive">
           <Trans>
-            완료 여부가 불확실한 도구가 있습니다. 중복 side effect 가능성을 확인해야 합니다.
+            끝났는지 알 수 없는 도구 실행이 있습니다. 다시 시도하면 같은 변경이 두 번 일어날 수
+            있으니 먼저 확인해 주십시오.
           </Trans>
         </p>
       )}
@@ -609,8 +610,8 @@ const TaskSummaryCard = memo(function TaskSummaryCard({
                 </AlertDialogTitle>
                 <AlertDialogDescription>
                   <Trans>
-                    transcript와 locator를 지웁니다. 채택된 project memory와 provenance는
-                    유지됩니다.
+                    이 작업의 대화 기록을 지웁니다. 프로젝트 기억으로 채택된 내용과 그 출처 기록은
+                    남습니다.
                   </Trans>
                 </AlertDialogDescription>
               </AlertDialogHeader>

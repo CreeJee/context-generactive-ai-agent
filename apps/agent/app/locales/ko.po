@@ -980,10 +980,6 @@ msgstr "skill을 골라 주십시오."
 msgid "skill을 따라 요청하기"
 msgstr "skill을 따라 요청하기"
 
-#: app/entry/chat/message.tsx
-msgid "transcript와 locator를 지웁니다. 채택된 project memory와 provenance는 유지됩니다."
-msgstr "transcript와 locator를 지웁니다. 채택된 project memory와 provenance는 유지됩니다."
-
 #: app/entry/chat/approval.tsx
 msgid "TypeScript 스킬 {name}을(를) 저장할까요?"
 msgstr "TypeScript 스킬 {name}을(를) 저장할까요?"
@@ -1644,6 +1640,10 @@ msgstr "끝까지 답하지 못했습니다. 필요하면 다시 보내 주십�
 msgid "끝난 카드와 merge 전 Goal 브랜치를 고치지 않고 판정만 하는 모델입니다."
 msgstr "끝난 카드와 merge 전 Goal 브랜치를 고치지 않고 판정만 하는 모델입니다."
 
+#: app/entry/chat/message.tsx
+msgid "끝났는지 알 수 없는 도구 실행이 있습니다. 다시 시도하면 같은 변경이 두 번 일어날 수 있으니 먼저 확인해 주십시오."
+msgstr "끝났는지 알 수 없는 도구 실행이 있습니다. 다시 시도하면 같은 변경이 두 번 일어날 수 있으니 먼저 확인해 주십시오."
+
 #. Queue row state: the message interrupts the answer
 #. Shortcut hint: the keys interrupt the answer
 #: app/entry/chat/composer-status.tsx
@@ -1800,8 +1800,8 @@ msgid "다시 시도 요청을 저장하지 못했습니다."
 msgstr "다시 시도 요청을 저장하지 못했습니다."
 
 #: app/entry/chat/chat-panel.tsx
-msgid "다시 시도 요청을 저장했습니다. 다음 실행에서 새 attempt로 시작합니다."
-msgstr "다시 시도 요청을 저장했습니다. 다음 실행에서 새 attempt로 시작합니다."
+msgid "다시 시도 요청을 저장했습니다. 다음 실행에서 이 작업을 새로 시작합니다."
+msgstr "다시 시도 요청을 저장했습니다. 다음 실행에서 이 작업을 새로 시작합니다."
 
 #. Status badge of a task in Work Trace
 #: app/entry/chat/work-trace-panel.tsx
@@ -1933,6 +1933,10 @@ msgstr "답변 중인 대화는 보관할 수 없습니다. 끝나거나 멈춘 
 #: app/entry/chat/work-trace-panel.tsx
 msgid "답변 출처"
 msgstr "답변 출처"
+
+#: app/entry/chat/chat-panel.tsx
+msgid "답변을 멈추지 못했습니다. 다시 시도해 주십시오."
+msgstr "답변을 멈추지 못했습니다. 다시 시도해 주십시오."
 
 #: app/entry/session/run-state.tsx
 msgid "답변을 멈췄습니다."
@@ -3480,8 +3484,8 @@ msgid "승인한 Plan을 칸반 보드에서 실행합니다."
 msgstr "승인한 Plan을 칸반 보드에서 실행합니다."
 
 #: app/entry/chat/chat-approvals.tsx
-msgid "승인한 뒤 실행을 이어가지 못했습니다. 요청을 폐기해도 셸 명령은 실행되지 않습니다. 대화와 작업 evidence는 유지됩니다."
-msgstr "승인한 뒤 실행을 이어가지 못했습니다. 요청을 폐기해도 셸 명령은 실행되지 않습니다. 대화와 작업 evidence는 유지됩니다."
+msgid "승인한 뒤 실행을 이어가지 못했습니다. 요청을 폐기하면 승인을 기다리던 작업은 실행하지 않습니다. 대화와 작업 기록은 남습니다."
+msgstr "승인한 뒤 실행을 이어가지 못했습니다. 요청을 폐기하면 승인을 기다리던 작업은 실행하지 않습니다. 대화와 작업 기록은 남습니다."
 
 #: app/entry/report/report-bundle.tsx
 msgid "시간을 쓴 곳 (span 합계)"
@@ -3687,8 +3691,8 @@ msgid "실행이 멈추기를 기다리고 있습니다. 아직 대화를 바꾸
 msgstr "실행이 멈추기를 기다리고 있습니다. 아직 대화를 바꾸지 않았습니다."
 
 #: app/entry/chat/message.tsx
-msgid "실행이 중단됐습니다. 작업을 새 attempt로 다시 시도할 수 있습니다."
-msgstr "실행이 중단됐습니다. 작업을 새 attempt로 다시 시도할 수 있습니다."
+msgid "실행이 중단됐습니다. 이 작업을 새로 다시 시도할 수 있습니다."
+msgstr "실행이 중단됐습니다. 이 작업을 새로 다시 시도할 수 있습니다."
 
 #: app/entry/settings/pages/kanban.tsx
 msgid "실행자 모델"
@@ -4060,10 +4064,6 @@ msgstr "완료"
 msgid "완료 {doneCount}/{cardCount}"
 msgstr "완료 {doneCount}/{cardCount}"
 
-#: app/entry/chat/message.tsx
-msgid "완료 여부가 불확실한 도구가 있습니다. 중복 side effect 가능성을 확인해야 합니다."
-msgstr "완료 여부가 불확실한 도구가 있습니다. 중복 side effect 가능성을 확인해야 합니다."
-
 #. Card field: when the card counts as done
 #. Card field: when the card counts as done
 #: app/entry/chat/board/card-peek.tsx
@@ -4212,8 +4212,8 @@ msgid "원문 읽기"
 msgstr "원문 읽기"
 
 #: app/entry/chat/work-trace-panel.tsx
-msgid "원본 대화 삭제됨 · project provenance 유지"
-msgstr "원본 대화 삭제됨 · project provenance 유지"
+msgid "원본 대화 삭제됨 · 출처 기록 유지"
+msgstr "원본 대화 삭제됨 · 출처 기록 유지"
 
 #. Menu item that deletes the conversation's source record
 #. Menu item that deletes the conversation's source record
@@ -4429,12 +4429,20 @@ msgid "이 작업에서 승격을 검토한 memory candidate가 없습니다."
 msgstr "이 작업에서 승격을 검토한 memory candidate가 없습니다."
 
 #: app/entry/chat/chat-panel.tsx
+msgid "이 작업은 이미 실행 중입니다."
+msgstr "이 작업은 이미 실행 중입니다."
+
+#: app/entry/chat/chat-panel.tsx
 msgid "이 작업은 지금 다시 시도할 수 없습니다."
 msgstr "이 작업은 지금 다시 시도할 수 없습니다."
 
 #: app/entry/chat/message.tsx
 msgid "이 작업의 기록을 삭제할까요?"
 msgstr "이 작업의 기록을 삭제할까요?"
+
+#: app/entry/chat/message.tsx
+msgid "이 작업의 대화 기록을 지웁니다. 프로젝트 기억으로 채택된 내용과 그 출처 기록은 남습니다."
+msgstr "이 작업의 대화 기록을 지웁니다. 프로젝트 기억으로 채택된 내용과 그 출처 기록은 남습니다."
 
 #: app/entry/chat/work-trace-panel.tsx
 msgid "이 작업의 보고서를 쓴 최종 답변이 없습니다."
@@ -4523,10 +4531,6 @@ msgstr "이미 등록된 프로젝트입니다."
 #: app/entry/chat/board/board-surface.tsx
 msgid "이미 보류한 카드입니다."
 msgstr "이미 보류한 카드입니다."
-
-#: app/entry/chat/chat-panel.tsx
-msgid "이미 실행 중인 attempt가 있습니다."
-msgstr "이미 실행 중인 attempt가 있습니다."
 
 #: app/entry/navigation/account-profiles.tsx
 msgid "이미 진행 중인 로그인이 있습니다. 그 로그인을 마치거나 취소한 뒤 다시 시도해 주십시오."
@@ -4654,8 +4658,8 @@ msgid "이전 실행을 다시 시도함"
 msgstr "이전 실행을 다시 시도함"
 
 #: app/entry/chat/message.tsx
-msgid "이전 실행을 새 attempt로 다시 시도함"
-msgstr "이전 실행을 새 attempt로 다시 시도함"
+msgid "이전 실행을 새로 다시 시도함"
+msgstr "이전 실행을 새로 다시 시도함"
 
 #: app/entry/chat/board/hold-reason.ts
 msgid "이전 실행의 결과를 알 수 없어 확인이 필요합니다"
@@ -4819,8 +4823,8 @@ msgid "작업 원본을 삭제하지 못했습니다."
 msgstr "작업 원본을 삭제하지 못했습니다."
 
 #: app/entry/chat/chat-panel.tsx
-msgid "작업 원본을 삭제했습니다. 채택된 project memory와 provenance는 유지됩니다."
-msgstr "작업 원본을 삭제했습니다. 채택된 project memory와 provenance는 유지됩니다."
+msgid "작업 원본을 삭제했습니다. 프로젝트 기억으로 채택된 내용과 그 출처 기록은 남습니다."
+msgstr "작업 원본을 삭제했습니다. 프로젝트 기억으로 채택된 내용과 그 출처 기록은 남습니다."
 
 #. Place filter menu heading: a branch or worktree
 #: app/entry/navigation/sidebar.tsx
@@ -4861,8 +4865,8 @@ msgid "작업을 보관하지 못했습니다."
 msgstr "작업을 보관하지 못했습니다."
 
 #: app/entry/chat/chat-panel.tsx
-msgid "작업을 보관했습니다. Work Trace 기록과 project provenance는 유지됩니다."
-msgstr "작업을 보관했습니다. Work Trace 기록과 project provenance는 유지됩니다."
+msgid "작업을 보관했습니다. Work Trace 기록과 프로젝트 기억의 출처 기록은 남습니다."
+msgstr "작업을 보관했습니다. Work Trace 기록과 프로젝트 기억의 출처 기록은 남습니다."
 
 #: app/entry/chat/work-trace-panel.tsx
 msgid "작업을 선택하면 실행 근거가 표시됩니다."

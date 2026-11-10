@@ -31,7 +31,7 @@ const problems = {
     action: msg`최신 요청 불러오기`,
   },
   lost: {
-    text: msg`승인한 뒤 실행을 이어가지 못했습니다. 요청을 폐기해도 셸 명령은 실행되지 않습니다. 대화와 작업 evidence는 유지됩니다.`,
+    text: msg`승인한 뒤 실행을 이어가지 못했습니다. 요청을 폐기하면 승인을 기다리던 작업은 실행하지 않습니다. 대화와 작업 기록은 남습니다.`,
     action: msg`끊어진 요청 폐기하고 계속`,
   },
 } satisfies Record<

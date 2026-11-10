@@ -594,7 +594,8 @@ function ChatPanel({
         const result = yield* uiPromise(() => run.cancel());
         if (result !== "failed") stop();
         if (result === "idle") setNotice(problem(t`멈출 답변이 없습니다.`));
-        if (result === "failed") setNotice(problem(t`명령을 실행하지 못했습니다.`));
+        if (result === "failed")
+          setNotice(problem(t`답변을 멈추지 못했습니다. 다시 시도해 주십시오.`));
       }),
     );
 
@@ -615,7 +616,7 @@ function ChatPanel({
             );
             if (ResumeTaskResult.guards.queued(result)) {
               setNotice(
-                done(t`다시 시도 요청을 저장했습니다. 다음 실행에서 새 attempt로 시작합니다.`),
+                done(t`다시 시도 요청을 저장했습니다. 다음 실행에서 이 작업을 새로 시작합니다.`),
               );
               return ResumeActionResult.queued();
             }
@@ -625,7 +626,7 @@ function ChatPanel({
                   result.reason === "stale_attempt"
                     ? t`작업 상태가 바뀌었습니다. 최신 Work Trace를 확인해 주십시오.`
                     : result.reason === "attempt_alive"
-                      ? t`이미 실행 중인 attempt가 있습니다.`
+                      ? t`이 작업은 이미 실행 중입니다.`
                       : t`이 작업은 지금 다시 시도할 수 없습니다.`,
                 ),
               );
@@ -651,7 +652,7 @@ function ChatPanel({
           const result = yield* uiPromise(() => archiveTrace(task.id));
           if (ArchiveTaskResult.guards.completed(result)) {
             setNotice(
-              done(t`작업을 보관했습니다. Work Trace 기록과 project provenance는 유지됩니다.`),
+              done(t`작업을 보관했습니다. Work Trace 기록과 프로젝트 기억의 출처 기록은 남습니다.`),
             );
             return ArchiveActionResult.archived();
           }
@@ -679,7 +680,9 @@ function ChatPanel({
           const result = yield* uiPromise(() => deleteTrace(task.id));
           if (ArchiveTaskResult.guards.completed(result)) {
             setNotice(
-              done(t`작업 원본을 삭제했습니다. 채택된 project memory와 provenance는 유지됩니다.`),
+              done(
+                t`작업 원본을 삭제했습니다. 프로젝트 기억으로 채택된 내용과 그 출처 기록은 남습니다.`,
+              ),
             );
             return DeleteActionResult.deleted();
           }
