@@ -103,6 +103,36 @@ describe("endingViolations", () => {
     ).toEqual(["register"]);
   });
 
+  it("reads a connective ending before a comma or a Latin word as part of the sentence", () => {
+    expect(
+      endingViolations("승인하고, 실행합니다.", [
+        { str: "고", tag: "EC" },
+        { str: ",", tag: "SP" },
+        { str: "실행", tag: "NNG" },
+        { str: "ᆸ니다", tag: "EF" },
+        { str: ".", tag: "SF" },
+      ]),
+    ).toEqual([]);
+    expect(
+      endingViolations("로그인하거나 OpenAI 키를 넣습니다.", [
+        { str: "거나", tag: "EC" },
+        { str: "OpenAI", tag: "SL" },
+        { str: "습니다", tag: "EF" },
+        { str: ".", tag: "SF" },
+      ]),
+    ).toEqual([]);
+    expect(
+      rules(
+        endingViolations("저장했어요, 다음으로 넘어갑니다.", [
+          { str: "어요", tag: "EC" },
+          { str: ",", tag: "SP" },
+          { str: "ᆸ니다", tag: "EF" },
+          { str: ".", tag: "SF" },
+        ]),
+      ),
+    ).toEqual(["register"]);
+  });
+
   it("flags a full stop after a label", () => {
     expect(
       rules(

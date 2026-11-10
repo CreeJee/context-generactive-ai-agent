@@ -70,6 +70,9 @@ export const glossary = {
 /** Kiwi tags whose morpheme ends a sentence: final endings, and connective endings before a full stop. */
 export const finalEndingTag = "EF";
 
+/** Punctuation tags that end a sentence: `.`, `?`, `!` (SF) and an ellipsis (SE). */
+export const sentenceStopTags: ReadonlyArray<string> = ["SF", "SE"];
+
 /** Whether a sentence asks or tells; each has its own register. */
 export type Mood = "question" | "statement";
 

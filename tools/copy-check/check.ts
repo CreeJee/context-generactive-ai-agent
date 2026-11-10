@@ -2,7 +2,7 @@ import { Array as Arr, Effect, Record as Rec, RegExp as Re, Result } from "effec
 
 import type { CopyText } from "./extract.ts";
 import { Morphemes } from "./morphemes.ts";
-import { finalEndingTag, glossary, phraseRules, registers } from "./rules.ts";
+import { finalEndingTag, glossary, phraseRules, registers, sentenceStopTags } from "./rules.ts";
 import type { GlossaryEntry, Mood } from "./rules.ts";
 
 /** One rule a piece of copy breaks, and what to write instead. */
@@ -64,16 +64,22 @@ interface SentenceEnding {
 }
 
 /**
- * Endings that close a sentence: final endings, and a connective ending right before punctuation
- * or at the very end (Kiwi reads `저장 중입니다…` with a connective `ᆸ니다`). A sentence asks when
- * a question mark follows or the ending itself is interrogative (`~까`, `~까요`).
+ * Endings that close a sentence: final endings, and a connective ending right before a full stop,
+ * question mark or ellipsis, or at the very end (Kiwi reads `저장 중입니다…` with a connective
+ * `ᆸ니다`). A comma, a Latin word or a number after a connective ending continues the sentence
+ * (`승인하고, …`, `로그인하거나 OpenAI …`), except a 해요체 ending, which Kiwi also tags as
+ * connective before a comma (`저장했어요, …`). A sentence asks when a question mark follows or
+ * the ending itself is interrogative (`~까`, `~까요`).
  */
 function sentenceEndings(morphemes: ReadonlyArray<Morpheme>): ReadonlyArray<SentenceEnding> {
   return Arr.filterMap(morphemes, (morpheme, index) => {
     const next = morphemes[index + 1];
     const closes =
       morpheme.tag === finalEndingTag ||
-      (morpheme.tag.startsWith("EC") && (next === undefined || next.tag.startsWith("S")));
+      (morpheme.tag.startsWith("EC") &&
+        (next === undefined ||
+          Arr.contains(sentenceStopTags, next.tag) ||
+          morpheme.str.endsWith("요")));
     const asks = next?.str === "?" || morpheme.str.includes("까");
     return closes
       ? Result.succeed({ form: morpheme.str, mood: asks ? "question" : "statement" })
