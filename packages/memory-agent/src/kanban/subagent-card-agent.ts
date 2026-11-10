@@ -1,9 +1,10 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import { Context, Effect, HashSet, Layer, Match, Option, Ref, Schema } from "effect";
+import { Context, Effect, HashSet, Iterable, Layer, Match, Option, Ref, Schema } from "effect";
+import { McpServers, mcpInstructionsForMode } from "../mcp/servers.ts";
 import { SecureRandom } from "effect/crypto";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import type { AgentRole } from "../providers/contracts.ts";
-import { Projects } from "../projects/projects.ts";
+import { Projects, type Project } from "../projects/projects.ts";
 import { Sessions } from "../sessions/sessions.ts";
 import { Subagents } from "../subagents/subagents.ts";
 import { ApprovedTools } from "../tools/approved.ts";
@@ -60,6 +61,10 @@ const outcomeVerifierInstructions = [
   "- Judge the outcome itself, not only the cards' acceptance criteria: the cards are how the outcome was meant to be reached. Run the project's tests or builds when the outcome depends on them.",
   "- Call record_card_verdict exactly once before your final message: passed when the outcome is met, otherwise not passed with what is missing as the reason.",
 ].join("\n");
+
+/** Where the MCP servers a card's agent or verifier calls look, beside their own guides. */
+const mcpFolderNote =
+  "- MCP servers run for the project's main folder, not the folder you work in: what they return shows the main checkout without this card's changes. Check this card's own work with your file tools.";
 
 const listed = (title: string, items: readonly string[]) =>
   items.length === 0 ? [] : [`${title}:`, ...items.map((item) => `- ${item}`)];
@@ -127,7 +132,26 @@ const make = Effect.gen(function* () {
   const fileTools = yield* FileTools;
   const outsideTools = yield* OutsideTools;
   const approvedTools = yield* ApprovedTools;
+  const mcpServers = yield* McpServers;
   const crypto = yield* SecureRandom.SecureRandom;
+
+  /**
+   * The read-only tools of the project's trusted MCP servers, which run for the project's main
+   * folder. Each call asks first as the permission mode says, as in the chat. A server that fails
+   * to start is left out, as in the chat.
+   */
+  const readOnlyMcp = (home: Project) =>
+    Effect.map(mcpServers.readOnlyRunTools(home), (mcp) => ({
+      tools: mcp.tools,
+      gated: HashSet.union(
+        gatedToolNames,
+        HashSet.fromIterable(Iterable.map(mcp.tools, ({ tool }) => tool.name)),
+      ),
+      systemPrompts:
+        mcp.tools.length === 0
+          ? []
+          : [`${mcpInstructionsForMode(home.permissionMode, mcp.guides)}\n${mcpFolderNote}`],
+    }));
 
   /** The session's project as the card's tools see it, and the model the role runs on. */
   const cardSetting = Effect.fnUntraced(function* (
@@ -141,6 +165,7 @@ const make = Effect.gen(function* () {
     const selection = yield* active.selectedFor(role);
     return {
       project: cardToolProject(project, worktree),
+      mcp: yield* readOnlyMcp(project),
       selection: Option.fromNullishOr(selection),
     };
   });
@@ -152,7 +177,7 @@ const make = Effect.gen(function* () {
   const agent = CardAgent.of({
     run: Effect.fnUntraced(
       function* (run: CardAgentRun) {
-        const { project, selection } = yield* cardSetting(
+        const { project, mcp, selection } = yield* cardSetting(
           run.sessionId,
           run.projectId,
           run.worktree,
@@ -179,9 +204,10 @@ const make = Effect.gen(function* () {
                   ...fileTools.toolsFor(project),
                   ...outsideTools.toolsFor(project),
                   ...approvedTools.toolsFor(project, "gate"),
+                  ...mcp.tools,
                 ],
-                systemPrompts: [],
-                gated: gatedToolNames,
+                systemPrompts: mcp.systemPrompts,
+                gated: mcp.gated,
               },
               {
                 agent: `card-${run.card.id}-g${run.generation}`,
@@ -229,7 +255,7 @@ const make = Effect.gen(function* () {
       readonly instructions: string;
     }) {
       const runId = `${input.runPrefix}:${yield* crypto.uuidV7()}`;
-      const { project, selection } = yield* cardSetting(
+      const { project, mcp, selection } = yield* cardSetting(
         input.sessionId,
         input.projectId,
         input.worktree,
@@ -245,6 +271,7 @@ const make = Effect.gen(function* () {
             ...approvedTools
               .toolsFor(project, "gate")
               .filter(({ tool }) => HashSet.has(checkToolNames, tool.name)),
+            ...mcp.tools,
             recorder.runTool,
           ];
           const outcome = yield* subagents.runAttempt(
@@ -254,8 +281,8 @@ const make = Effect.gen(function* () {
               runId,
               selection: chosen,
               tools,
-              systemPrompts: [],
-              gated: gatedToolNames,
+              systemPrompts: mcp.systemPrompts,
+              gated: mcp.gated,
             },
             { agent: input.agent, message: input.message, instructions: input.instructions },
             () => Effect.void,

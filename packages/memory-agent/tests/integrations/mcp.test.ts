@@ -2,6 +2,7 @@ import { NodePath } from "@effect/platform-node";
 import { Context, Effect, FileSystem, Layer, Path, Schedule, Schema } from "effect";
 import { build } from "vite/rolldown";
 import { expect, vi } from "vite-plus/test";
+import { CardVerifier } from "../../src/kanban/card-agent.ts";
 import { McpServers, McpServerState, mcpToolName } from "../../src/mcp/servers.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { PermissionReviews } from "../../src/permissions/reviews.ts";
@@ -478,6 +479,47 @@ const mcpChat = Effect.fnUntraced(function* (mode: "ask" | "auto") {
 testAgent({ testProvider: { responder: sessionScopedResponder } })(
   "MCP tool calls in a chat",
   (it) => {
+    it.effect(
+      "a card verifier gets the read-only MCP tools, told they show the main folder",
+      () =>
+        Effect.gen(function* () {
+          const env = yield* TestEnv;
+          const { project, fake } = yield* freshProject;
+          yield* writeJson(fake.config, { mcpServers: { fake: fake.entry() } });
+          yield* selectTestModel();
+          yield* (yield* McpServers).setTrusted(project, "project", "fake", true);
+          const session = (yield* (yield* Sessions).create(project.id)).id;
+          yield* (yield* CardVerifier).verify({
+            sessionId: session,
+            projectId: project.id,
+            goalInstanceId: "goal",
+            card: {
+              id: "c1",
+              title: "Find the callers",
+              description: "Look the callers up",
+              dependsOn: [],
+              acceptanceCriteria: ["The callers are listed"],
+              ruleRefs: [],
+              outcomes: [],
+              status: "verify",
+              evidence: [],
+            },
+            worktree: { toolRoot: project.root, deniedRoots: [] },
+            report: "Listed them.",
+          });
+          const verifier = env.provider!.invocations.find(
+            (invocation) => invocation.run.threadId !== session,
+          );
+          expect(verifier?.toolNames).toEqual(
+            expect.arrayContaining([discoveryToolName, "record_card_verdict"]),
+          );
+          expect(verifier?.system.join("\n")).toContain(
+            "MCP servers run for the project's main folder",
+          );
+        }),
+      serverStartTimeout,
+    );
+
     it.effect(
       "ask mode asks before every MCP call and runs it once approved",
       () =>
