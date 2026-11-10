@@ -1,4 +1,6 @@
 import { it } from "@effect/vitest";
+import { i18n } from "@lingui/core";
+import { I18nProvider } from "@lingui/react";
 import { Cause, Effect } from "effect";
 import { useState } from "react";
 import { render } from "vitest-browser-react";
@@ -40,12 +42,16 @@ it.live("a plain click toggles and a drag's closing click does not", () =>
     // viewport is narrower.
     yield* sdkCall(() => page.viewport(1024, 768));
     const screen = yield* sdkCall(() =>
-      render(<Harness onOpenChange={(open) => changes.push(open)} />),
+      render(
+        <I18nProvider i18n={i18n}>
+          <Harness onOpenChange={(open) => changes.push(open)} />
+        </I18nProvider>,
+      ),
     );
 
     // A plain click (no move past the threshold) toggles the sidebar.
     const rail = yield* sdkCall(() =>
-      Promise.resolve(screen.getByRole("button", { name: "Toggle Sidebar" })),
+      Promise.resolve(screen.getByRole("button", { name: "사이드바 열고 닫기" })),
     );
     yield* sdkCall(() => rail.click());
     yield* sdkCall(() => expect.element(screen.getByText("collapsed")).toBeVisible());

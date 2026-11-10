@@ -1,3 +1,4 @@
+import { Trans, useLingui } from "@lingui/react/macro";
 import * as React from "react";
 import { mergeProps } from "@base-ui/react/merge-props";
 import { useRender } from "@base-ui/react/use-render";
@@ -319,13 +320,18 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
       {...props}
     >
       <PanelLeftIcon />
-      <span className="sr-only">Toggle Sidebar</span>
+      <span className="sr-only">
+        <Trans comment="Screen reader label of the button that shows or hides the sidebar">
+          사이드바 열고 닫기
+        </Trans>
+      </span>
     </Button>
   );
 }
 
 function SidebarRail({ className, ...props }: React.ComponentProps<"button">) {
   const { toggleSidebar, sidebarWidth, setSidebarWidth } = useSidebar();
+  const { t } = useLingui();
   /** Tracks the gesture from pointerdown through the click that ends it: a state update only
    * commits after the click, so the click has to read this synchronously. */
   const drag = React.useRef<{ startX: number; startWidth: number; side: string } | null>(null);
@@ -387,12 +393,12 @@ function SidebarRail({ className, ...props }: React.ComponentProps<"button">) {
     <button
       data-sidebar="rail"
       data-slot="sidebar-rail"
-      aria-label="Toggle Sidebar"
+      aria-label={t`사이드바 열고 닫기`}
       tabIndex={-1}
       onClick={toggleSidebar}
       onPointerDown={onPointerDown}
       onClickCapture={onClickCapture}
-      title="Toggle Sidebar"
+      title={t`사이드바 열고 닫기`}
       className={cn(
         "absolute inset-y-0 z-20 hidden w-4 group-data-[side=left]:-right-4 group-data-[side=right]:left-0 after:absolute after:inset-y-0 after:start-1/2 after:w-[2px] hover:after:bg-sidebar-border sm:flex ltr:-translate-x-1/2 rtl:-translate-x-1/2",
         "in-data-[side=left]:cursor-ew-resize in-data-[side=right]:cursor-ew-resize",

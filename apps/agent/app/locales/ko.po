@@ -1937,6 +1937,10 @@ msgid "다크 모드"
 msgstr "다크 모드"
 
 #. Button that closes the card editor
+#. Screen reader label of the X button that closes a dialog or panel
+#. Screen reader label of the X button that closes a dialog or panel
+#: app/components/ui/dialog.tsx
+#: app/components/ui/sheet.tsx
 #: app/entry/chat/board/card-peek.tsx
 msgid "닫기"
 msgstr "닫기"
@@ -2961,6 +2965,11 @@ msgstr "분석 세션 보기"
 msgid "분석 세션을 열 수 없습니다. 증상 제보문은 계속 작성·저장할 수 있습니다."
 msgstr "분석 세션을 열 수 없습니다. 증상 제보문은 계속 작성·저장할 수 있습니다."
 
+#. Screen reader label of a loading spinner
+#: app/components/ui/spinner.tsx
+msgid "불러오는 중"
+msgstr "불러오는 중"
+
 #: app/entry/navigation/account-profiles.tsx
 msgid "브라우저에서 {providerName} 로그인을 완료해 주십시오"
 msgstr "브라우저에서 {providerName} 로그인을 완료해 주십시오"
@@ -3058,6 +3067,11 @@ msgstr "사용한 보고서 {sources} · 반영된 상태 알림 {notifications}
 #: app/entry/chat/board/card-peek.tsx
 msgid "사유: {reason}"
 msgstr "사유: {reason}"
+
+#. Screen reader label of the button that shows or hides the sidebar
+#: app/components/ui/sidebar.tsx
+msgid "사이드바 열고 닫기"
+msgstr "사이드바 열고 닫기"
 
 #: app/entry/index.tsx
 msgid "사이드바 접기"
