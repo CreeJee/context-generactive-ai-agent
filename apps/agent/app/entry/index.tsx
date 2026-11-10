@@ -4,7 +4,9 @@ import { Effect, Match, Predicate } from "effect";
 import { runUiEffect, uiPromise } from "./shared/ui-effect";
 import { isTruthy } from "../truthy.ts";
 import {
+  useAccountsQuery,
   useAuthQuery,
+  useCompatibleAccountsQuery,
   useHiddenProjectsQuery,
   useModelsQuery,
   useProjectsQuery,
@@ -225,6 +227,46 @@ export function App() {
     anthropicModels.data?.selected,
     compatibleModels.data?.selected,
   ]);
+
+  // The account each provider would run on; the switcher lists the same queries.
+  const openAIAccounts = useAccountsQuery("openai", true);
+  const anthropicAccounts = useAccountsQuery("anthropic", true);
+  const compatibleAccounts = useCompatibleAccountsQuery();
+  const selectedAccountIds = {
+    openai: openAIAccounts.data?.profiles.find((profile) => profile.selected)?.id,
+    anthropic: anthropicAccounts.data?.profiles.find((profile) => profile.selected)?.id,
+    "openai-compatible": compatibleAccounts.data?.accounts.find((account) => account.selected)?.id,
+  };
+  const providerOrder = ["openai", "anthropic", "openai-compatible"] as const;
+  const usableSelection = providerOrder.some(
+    (candidate) =>
+      signedInAuth(auth[candidate]) && isTruthy(modelQueries[candidate].data?.selected),
+  );
+  /**
+   * With no usable account in use, the first account that is signed in and has a model to run
+   * on; a first login, or a first endpoint with its first model, then starts being used as a
+   * switch from the account switcher would.
+   */
+  const firstUsableAccount =
+    signedIn || selectedSignedIn || usableSelection
+      ? undefined
+      : providerOrder
+          .flatMap((candidate): AccountTarget[] => {
+            const accountId = selectedAccountIds[candidate];
+            return accountId !== undefined &&
+              signedInAuth(auth[candidate]) &&
+              (modelQueries[candidate].data?.models.length ?? 0) > 0
+              ? [{ provider: candidate, accountId }]
+              : [];
+          })
+          .at(0);
+  const firstUsableKey =
+    firstUsableAccount === undefined
+      ? null
+      : `${firstUsableAccount.provider}:${firstUsableAccount.accountId}`;
+  useEffect(() => {
+    if (firstUsableAccount !== undefined) void switchAccount(firstUsableAccount);
+  }, [firstUsableKey]);
 
   useEffect(() => {
     if (!isTruthy(projectId) || !isTruthy(sessionsQuery.data)) return;

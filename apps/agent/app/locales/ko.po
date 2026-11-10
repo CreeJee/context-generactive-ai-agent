@@ -3706,6 +3706,11 @@ msgstr "실행하려면 먼저 준비된 Plan이 필요합니다."
 msgid "실행할 모델이 선택되지 않았습니다"
 msgstr "실행할 모델이 선택되지 않았습니다"
 
+#. Account switcher when accounts exist but none is in use
+#: app/entry/navigation/account-switcher.tsx
+msgid "쓸 계정을 골라 주십시오"
+msgstr "쓸 계정을 골라 주십시오"
+
 #. Badge on a trusted agent that connects when the conversation first uses it
 #: app/entry/settings/pages/agents.tsx
 msgid "쓸 때 시작"

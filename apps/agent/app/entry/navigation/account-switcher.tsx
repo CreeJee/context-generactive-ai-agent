@@ -197,7 +197,13 @@ export function AccountSwitcherMenu({
               <>
                 <ProviderMark provider="openai-compatible" />
                 <span className="flex-1 text-left text-xs text-muted-foreground">
-                  <Trans>연결된 계정이 없습니다</Trans>
+                  {entries.length > 0 ? (
+                    <Trans comment="Account switcher when accounts exist but none is in use">
+                      쓸 계정을 골라 주십시오
+                    </Trans>
+                  ) : (
+                    <Trans>연결된 계정이 없습니다</Trans>
+                  )}
                 </span>
               </>
             )}
