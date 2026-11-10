@@ -8,7 +8,7 @@ import {
   runCommand,
   stopAllCommands,
 } from "../src/shell/run.ts";
-import { resolveShellWorkingDirectory } from "../src/tools/approved.ts";
+import { resolveWorkingDirectory } from "../src/files/path-policy.ts";
 
 const sdkCall = Effect.fn("shellTest.sdkCall")(function* <A>(operation: () => A | PromiseLike<A>) {
   return yield* Effect.tryPromise({
@@ -102,16 +102,16 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const project = yield* workdir();
         const storage = yield* workdir();
         const scratch = yield* workdir();
-        const allowed = yield* resolveShellWorkingDirectory(project, storage, scratch).pipe(
+        const allowed = yield* resolveWorkingDirectory({ root: project }, storage, scratch).pipe(
           Effect.result,
         );
         expect(Result.isSuccess(allowed)).toBe(true);
         if (Result.isSuccess(allowed)) expect(allowed.success.absolute).toBe(scratch);
-        const refused = yield* resolveShellWorkingDirectory(project, storage, "/usr").pipe(
+        const refused = yield* resolveWorkingDirectory({ root: project }, storage, "/usr").pipe(
           Effect.result,
         );
         expect(Result.isFailure(refused)).toBe(true);
-        if (Result.isFailure(refused)) expect(refused.failure.reason).toBe("invalid_path");
+        if (Result.isFailure(refused)) expect(refused.failure.reason).toBe("outside_project");
       }),
     );
 

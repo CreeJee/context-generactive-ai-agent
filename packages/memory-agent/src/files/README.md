@@ -6,13 +6,16 @@
 
 ## Interface
 
-- `PathRejected` — 경로 거부 TaggedError, reason은 `invalid_path`/`credential`/`git_internal`/`inside_project`/`outside_tool_root`/`symlink`/`hard_link`/`not_found`/`not_file`/`not_directory`. `symlink`일 때 링크가 이끄는 경로를 file tool이 쓸 수 있으면 `target`에 그 프로젝트 상대 경로를 담는다
+- `PathRejected` — 경로 거부 TaggedError, reason은 `invalid_path`/`credential`/`git_internal`/`inside_project`/`outside_project`/`outside_tool_root`/`symlink`/`hard_link`/`not_found`/`not_file`/`not_directory`. `target`은 file tool이 대신 받을 프로젝트 상대 경로다. `symlink`이면 링크가 이끄는 곳, `inside_project`이면 절대 경로가 프로젝트에서 가리키는 곳이다
 - `isCredentialPath` — 자격증명 디렉터리·파일명·`.env`·확장자·secret 단어 세그먼트로 비밀 경로인지 판정하는 이름 기반 가드
 - `pathsOverlap` — 두 절대 경로가 같거나 한쪽이 다른 쪽을 포함하는지 철자로 비교(dual)
+- `relativeBelow` — 정규 경로가 디렉터리 아래 어디인지 dev+inode로 찾아 `/` 구분 상대 경로(Option)로 돌려준다. 디렉터리가 없으면 철자로 비교한다
+- `hasControlCharacter` — 경로에 제어 문자가 있는지
 - `canonicalPathEffect` — realPath로 심볼릭 링크를 풀고, 없는 접미부는 가장 가까운 존재 부모를 거쳐 정규 경로를 만듦
 - `resolveProjectPath` / `ProjectPath` — 프로젝트 상대 경로를 세그먼트마다 lstat으로 해석, kind `file`/`directory`/`new-or-file` (dual: root를 마지막 인자로)
 - `resolveOutsidePath` / `OutsidePath` — 외부 도구용 절대 경로 해석, 철자와 정규 대상 모두 자격증명 검사, 프로젝트·저장소 루트 내부는 거부
-- `resolveFencedOutsidePath` / `ToolFence` / `Fenced<P>` — `resolveOutsidePath` 뒤에 `deniedRoots`와 같거나 아래·위인 대상을 거부(칸반 카드 같은 fenced 실행)
+- `resolveFencedOutsidePath` / `ToolFence` / `Fenced<P>` — `resolveOutsidePath` 뒤에 `deniedRoots`와 같거나 아래·위인 대상을 거부(칸반 카드 같은 fenced 실행). `ToolFence.userRoot`는 카드 worktree가 복사한 사용자 프로젝트 폴더다
+- `path-policy.ts` — 모든 도구가 묻는 경로 정책. `placePath`/`PathPlace`(`Root`·`Mapped`·`Outside`)가 경로가 놓인 곳을 정하고, `resolveRootPath`(파일 도구), `resolveOutsideToolPath`(외부 도구), `resolveWorkingDirectory`(`run_skill` workdir), `temporaryRoots`/`writableRoots`(sh 스킬 샌드박스), `folderMentions`(저장할 프로그램 속 폴더 절대 경로)가 그 결과를 쓴다. `ToolRoots`는 run의 root와 카드 fence다
 - `gitEnvironment` — git 폴더와 시스템 폴더만 PATH에 둔 helper 환경(사용자 경로 제외)
 - `gitNames({ stdout, limit })` — Git `-z` 출력에서 이름을 `limit + 1`개까지만 읽어 `{ names, truncated }`를 반환. git grep과 ls-files가 함께 쓴다
 - `gitGrepFilesEffect({ root, directory, query, caseSensitive, limit })` — `git grep --untracked -z -l -F`로 질의를 포함한 파일 후보 HashSet 반환, 사용할 수 없거나 일치 파일이 `limit`개를 넘으면 null
@@ -40,6 +43,7 @@
 - `.git` 세그먼트(대소문자 무시)는 `git_internal`로 거부하고 목록에서도 뺀다. 순회는 `.git`, `node_modules` 디렉터리로 내려가지 않는다.
 - `resolveProjectPath`는 절대 경로, 백슬래시, 제어 문자, 빈·`.`·`..`·앞뒤 공백 세그먼트를 `invalid_path`로 거부한다. 각 세그먼트를 lstat한다. 어느 단계든 SymbolicLink면 `symlink`로 거부한다. 링크를 따라간 실제 경로가 프로젝트 안이고 `.git`·credential이 아니면 거부에 `target`으로 싣는다. 모델이 실제 경로를 찾아 헤매지 않게 하려는 것이며, 링크는 여전히 따라가지 않는다. file 계열은 nlink가 정확히 1이어야 하며 아니면 `hard_link`이다. 주석상 동시 디렉터리 교체를 막는 OS 샌드박스는 아니다.
 - `resolveOutsidePath`는 철자와 정규 대상 모두에 자격증명 검사를 한다. 프로젝트나 앱 저장소 루트 내부를 가리키면 `inside_project`로 거부한다. fenced 실행은 denied root의 같은 경로·하위·상위를 모두 거부한다. 상위를 목록화하면 거부된 트리가 보이기 때문이다.
+- 경로 정책(`path-policy.ts`): 상대 경로는 run의 root 아래로 읽는다. root 아래 절대 경로는 그 상대 경로로 바꿔 같은 프로젝트 규칙(`..`·링크·`.git`·credential 거부)을 거친다. 카드에서는 `userRoot` 아래 절대 경로를 카드 worktree의 같은 상대 경로로 읽는다(`Mapped`). 비교는 실제 경로와 dev+inode로 해서 `/tmp`→`/private/tmp` 같은 링크와 대소문자 차이를 같은 곳으로 본다. 그 밖의 절대 경로(`..`로 root를 벗어난 것 포함)는 `Outside`다.
 - `canonicalPathEffect`는 NotFound일 때만 부모로 올라가 해석한다. 권한·I/O 실패를 추측 경로로 바꾸면 안 된다.
 - `isSameOrBelow`는 철자가 아닌 dev+inode로 비교한다. 대소문자 무시 볼륨 우회를 막기 위함이다. ino가 없으면 `invalid_path`로 거부한다.
 - POSIX 읽기·생성·임시 파일은 `noFollow: true`로 연다. Windows는 O_NOFOLLOW가 없다. 대신 lstat으로 관찰된 링크 leaf를 거부하며, 주석상 원자적 보장은 아니다.

@@ -1,6 +1,3 @@
-import { Function as EffectFunction } from "effect";
-import { path } from "../runtime/synchronous-path.ts";
-const { isAbsolute, relative, sep } = path;
 import { Context, Effect, FileSystem, Layer, Match, Option, Schema } from "effect";
 import { SecureRandom } from "effect/crypto";
 import { ChildProcessSpawner } from "effect/process";
@@ -11,15 +8,9 @@ import {
   type BackgroundBinding,
 } from "./background.ts";
 import { StorageRoot } from "../config/storage-root.ts";
-import { temporaryDirectory } from "../runtime/host-system.ts";
-import {
-  canonicalPathEffect,
-  PathRejected,
-  resolveFencedOutsidePath,
-  resolveOutsidePath,
-  type Fenced,
-  resolveProjectPath,
-} from "../files/paths.ts";
+import { resolveOutsideToolPath, resolveWorkingDirectory } from "../files/path-policy.ts";
+import { PathRejected, type Fenced } from "../files/paths.ts";
+import { optionalProperty } from "../optional-property.ts";
 import {
   createTextFileEffect,
   deleteTextFileEffect,
@@ -61,6 +52,7 @@ const runSkill = {
 
 const ShellResult = Schema.Struct({
   workdir: Schema.String,
+  pathMapped: Schema.optionalKey(Schema.String),
   command: Schema.String,
   shell: Schema.String,
   status: Schema.Literals(["succeeded", "failed", "timed_out", "cancelled"]),
@@ -83,49 +75,6 @@ const commandFailure = Match.type<CommandResult>().pipe(
     timed_out: () => AttemptFailureReason.cases.ProcessTimedOut.make({}),
   }),
 );
-
-const isSameOrBelow = (root: string, candidate: string) => {
-  const path = relative(root, candidate);
-  return path === "" || (path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path));
-};
-
-/** Project-relative directories plus host temp directories are valid shell working directories. */
-export const resolveShellWorkingDirectory: {
-  (
-    storageRoot: string,
-    workdir: string,
-  ): (projectRoot: string) => ReturnType<typeof resolveShellWorkingDirectoryBody>;
-} & typeof resolveShellWorkingDirectoryBody = EffectFunction.dual(
-  3,
-  resolveShellWorkingDirectoryBody,
-);
-function resolveShellWorkingDirectoryBody(
-  projectRoot: string,
-  storageRoot: string,
-  workdir: string,
-) {
-  return isAbsolute(workdir)
-    ? outsideWorkingDirectory(projectRoot, storageRoot, workdir)
-    : resolveProjectPath(projectRoot, workdir, "directory");
-}
-
-/** An absolute working directory, which must be under a temporary directory. */
-function outsideWorkingDirectory(projectRoot: string, storageRoot: string, workdir: string) {
-  return Effect.gen(function* () {
-    const directory = yield* resolveOutsidePath(projectRoot, storageRoot, workdir, "directory");
-    const tempRoots = yield* Effect.all(
-      [canonicalPathEffect("/tmp"), Effect.flatMap(temporaryDirectory, canonicalPathEffect)],
-      { concurrency: 2 },
-    );
-    return yield* tempRoots.some((root) => isSameOrBelow(root, directory.absolute))
-      ? Effect.succeed({
-          absolute: directory.absolute,
-          relative: directory.absolute,
-          stats: directory.stats,
-        })
-      : Effect.fail(PathRejected.make({ path: workdir, reason: "invalid_path" }));
-  });
-}
 
 const make = Effect.gen(function* () {
   const storage = yield* StorageRoot;
@@ -162,11 +111,15 @@ const make = Effect.gen(function* () {
           });
           const command = skillCommand(name, runnable.text, args);
           const label = [name, ...args].join(" ");
-          const directory = yield* resolveShellWorkingDirectory(
-            project.root,
+          const directory = yield* resolveWorkingDirectory(
+            project,
             storage.path,
             workdir ?? ".",
           ).pipe(Effect.provideContext(platform));
+          const mapped = optionalProperty(
+            "pathMapped",
+            Option.getOrUndefined(directory.mappedNote),
+          );
           const seconds = Math.min(
             Math.max(1, timeoutSeconds ?? defaultTimeoutSeconds),
             maxTimeoutSeconds,
@@ -217,6 +170,7 @@ const make = Effect.gen(function* () {
                   Effect.map((result) => ({
                     report: JSON.stringify({
                       workdir: directory.relative,
+                      ...mapped,
                       ...result,
                       command: label,
                     }),
@@ -244,6 +198,7 @@ const make = Effect.gen(function* () {
             });
           const inline = Effect.map(execute, (result) => ({
             workdir: directory.relative,
+            ...mapped,
             ...result,
             command: label,
           }));
@@ -258,13 +213,7 @@ const make = Effect.gen(function* () {
       guardedChange(
         path,
         Effect.gen(function* () {
-          const target = yield* resolveFencedOutsidePath(
-            project.toolFence,
-            project.root,
-            storage.path,
-            path,
-            "new-or-file",
-          );
+          const target = yield* resolveOutsideToolPath(project, storage.path, path, "new-or-file");
           // Without a hash the file must be new; with one it replaces the file it names.
           return yield* Option.match(Option.fromNullishOr(expectedSha256), {
             onNone: () =>
@@ -296,13 +245,7 @@ const make = Effect.gen(function* () {
       guardedChange(
         path,
         Effect.gen(function* () {
-          const target = yield* resolveFencedOutsidePath(
-            project.toolFence,
-            project.root,
-            storage.path,
-            path,
-            "file",
-          );
+          const target = yield* resolveOutsideToolPath(project, storage.path, path, "file");
           const removed = yield* deleteTextFileEffect({
             absolute: target.absolute,
             path,

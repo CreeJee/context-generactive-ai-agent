@@ -23,7 +23,6 @@
 - `PermissionReviewPayload` / `PermissionReviewResponse` — 권한 검토 요청(`askedBy: review | every_call`)과 응답 계약
 - `definitions.ts` 재수출 묶음 — run-state, report(diagnosis/bundle/delivery), uncertain-runs, lease, shown-failure, subagent, loop-health, provider-retry, approvals, queue, improve 계약을 채팅 UI와 공유
 - `ApprovedTools` — 코드 스킬 저장·`run_skill`(sh 스킬 샌드박스 실행)·외부 파일 쓰기/삭제를 제공하는 서비스(`ApprovedTools.layer`)
-- `resolveShellWorkingDirectory` — 셸 작업 디렉터리 해석: 상대 경로는 프로젝트 내부, 절대 경로는 `/tmp` 또는 호스트 임시 디렉터리 하위만 허용
 - `BackgroundTasks` / `BackgroundBinding` / `BackgroundOutcome` / `BackgroundOperationFailed` / `BackgroundResultStoreFailed` / `BackgroundTraceFailed` / `BackgroundTaskNotFound` — 백그라운드 작업 시작·결과 대기 서비스와 그 바인딩(`sessionId`, `runId`, `abortSignal`)·결과·오류
 - `FileTools` / `fileToolNames` / `listPageSize` — 프로젝트 파일 도구 서비스(`SecretRedactor.layer` 제공), 목록 페이지 크기 500
 - `OutsideTools` / `outsideReadToolNames` — 프로젝트 밖 파일 읽기 전용 도구(자격 증명 제외)
@@ -54,13 +53,14 @@
 - OS 샌드박스가 없을 때(`SandboxUnavailable`) 샌드박스 없이 실행하는 것은 `permissionMode === "full"`에서만 허용한다.
 - `run_skill` 타임아웃은 `[1, maxTimeoutSeconds]`로 고정되고 기본값은 `defaultTimeoutSeconds`다. `yieldMs` 기본값은 1000, 범위는 0~30000이다.
 - `write_outside_file`은 `expectedSha256`가 없으면 새 파일만 만들고, 있으면 기존 파일이 있어야 한다(없으면 `not_found`). 외부 경로는 `project.toolFence`로 제한된다.
+- 도구의 경로는 모두 `files/path-policy.ts` 한 정책으로 읽는다. 파일 도구와 `run_skill`의 `workdir`는 프로젝트 상대 경로와 프로젝트 안 절대 경로를 받고(결과의 `path`·`workdir`는 상대 경로), 그 밖의 절대 경로는 `outside_project`로 거부한다. `workdir`만 임시 폴더 아래 절대 경로도 받는다. 외부 도구는 프로젝트 안 경로를 `inside_project`로 거부하고 detail 끝에 `Project path: <상대 경로>`를 붙인다. 칸반 카드에서 사용자 프로젝트 폴더 아래 절대 경로는 카드 worktree의 같은 자리로 읽고, 결과에 `pathMapped` 문장을 붙인다.
 - 백그라운드 sh 스킬 결과: `failed`이면 `ProcessExited`, `timed_out`이면 `ProcessTimedOut`, `succeeded`/`cancelled`이면 실패 이유가 없다. 비정상 종료여도 출력은 보관한다.
 - `reportRunToolsForSession`의 trace 콜백은 소스 세션으로 이미 범위가 정해져 있어야 한다. 세션 id를 콜백에 넘기지 않는다.
 
 ## Side Effects
 
 - 자식 프로세스: `ApprovedTools.runSkill`이 `runSandboxed`/`runCommand`로 sh 스킬을 실행하고 `process.env`를 그대로 넘긴다(`ChildProcessSpawner`).
-- 파일 시스템: `write_outside_file`/`delete_outside_file`이 프로젝트 밖 텍스트 파일을 생성·교체·삭제한다(`createTextFileEffect`, `replaceTextFileEffect`, `deleteTextFileEffect`). 작업 디렉터리 해석 때 `/tmp`와 호스트 임시 디렉터리의 canonical 경로를 읽는다.
+- 파일 시스템: `write_outside_file`/`delete_outside_file`이 프로젝트 밖 텍스트 파일을 생성·교체·삭제한다(`createTextFileEffect`, `replaceTextFileEffect`, `deleteTextFileEffect`). 작업 디렉터리 해석 때 `/tmp`와 호스트 임시 디렉터리의 canonical 경로를 읽는다(`temporaryRoots`).
 - 파일 시스템: `save_code_skill`이 `CodeSkills.save`로 `.agents/skills/<name>/`(SKILL.md, scripts/run.ts 또는 run.sh)에 스킬을 저장한다.
 - 프로젝트 파일 도구(`FileTools`)가 `write_file`/`edit_file`/`delete_file`로 프로젝트 파일을 바꾼다. 목록·검색은 파일 시스템 페이징/스냅샷 캐시만 쓴다(`effects.ts` 주석 근거).
 - 백그라운드 작업: `BackgroundTasks.start`/`waitResult`가 세션 단위 백그라운드 작업을 시작하고 결과를 기다린다. 마스킹한 결과는 `background_task_results`에 작업 한 개당 한 행으로 upsert한다. 결과 저장소·trace 실패 오류 타입이 따로 있다.

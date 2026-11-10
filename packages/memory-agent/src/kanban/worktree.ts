@@ -108,7 +108,8 @@ export const GoalRetarget = Data.taggedEnum<GoalRetarget>();
 /**
  * The project as a card's tools see it: rooted at the card worktree, with what the worktree denies
  * fenced off from the outside tools. Credential and storage-root refusals are unchanged; this only
- * narrows.
+ * narrows. The user's project folder stays known, so an absolute path into it is read at the same
+ * place in the worktree.
  */
 export const cardToolProject: {
   (worktree: CardWorktree): <P extends { readonly root: string }>(project: P) => Fenced<P>;
@@ -118,7 +119,7 @@ export const cardToolProject: {
   <P extends { readonly root: string }>(project: P, worktree: CardWorktree): Fenced<P> => ({
     ...project,
     root: worktree.toolRoot,
-    toolFence: { deniedRoots: worktree.deniedRoots },
+    toolFence: { deniedRoots: worktree.deniedRoots, userRoot: project.root },
   }),
 );
 

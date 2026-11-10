@@ -147,7 +147,7 @@ export const RunSkillInput = Schema.Struct({
   workdir: Schema.optionalKey(
     Schema.String.annotate({
       description:
-        'A sh skill\'s directory to run in: project-relative, or absolute below /tmp. Defaults to the project root (".").',
+        'A sh skill\'s directory to run in: relative to the project, absolute inside it, or absolute below a temporary folder such as /tmp. Defaults to the project root (".").',
     }),
   ),
   timeoutSeconds: Schema.optionalKey(

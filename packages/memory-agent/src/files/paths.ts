@@ -15,6 +15,7 @@ const { basename, dirname, isAbsolute, join, relative, resolve, sep } = path;
  * - `credential`: looks like secret material (R04/R05: no approval ever unlocks it)
  * - `git_internal`: inside `.git` (R04: direct changes are excluded)
  * - `inside_project`: an outside tool was pointed at the project; use the project tools
+ * - `outside_project`: a project tool was pointed outside the project; use the outside tools
  * - `outside_tool_root`: a fenced run (a kanban card) reached a root it must not touch
  * - `symlink` / `hard_link`: a link could redirect the operation past these checks
  * - `not_found` / `not_file` / `not_directory`: the filesystem does not match the request
@@ -24,13 +25,17 @@ export class PathRejected extends Schema.TaggedError<
   { readonly brand: unique symbol }
 >()("PathRejected", {
   path: Schema.String,
-  /** For `symlink`: the project-relative path the link leads to, when a file tool could use it. */
+  /**
+   * The project-relative path a file tool would take instead: for `symlink`, where the link leads;
+   * for `inside_project`, where the absolute path lands in the project.
+   */
   target: Schema.optionalKey(Schema.String),
   reason: Schema.Literals([
     "invalid_path",
     "credential",
     "git_internal",
     "inside_project",
+    "outside_project",
     "outside_tool_root",
     "symlink",
     "hard_link",
@@ -136,7 +141,7 @@ export function isCredentialPath(path: string): boolean {
   );
 }
 
-const hasControlCharacter = (path: string) =>
+export const hasControlCharacter = (path: string) =>
   Array.from(path).some((character) => {
     const code = character.charCodeAt(0);
     return code < 32 || code === 127;
@@ -184,17 +189,23 @@ export const canonicalPathEffect = Effect.fn("Paths.canonicalPath")(function* (
 });
 
 /**
- * True when `candidate` is `directory` or below it, compared by device and inode so a different
- * letter case on a case-insensitive volume cannot slip past.
+ * Where `candidate`, a canonical path, sits below `directory`: its `/`-separated relative path
+ * (`""` for the directory itself), or none when it is elsewhere. Compared by device and inode, so a
+ * different letter case on a case-insensitive volume or a linked `directory` cannot slip past.
  */
-const isSameOrBelow = Effect.fn("Paths.isSameOrBelow")(function* (
+export const relativeBelow = Effect.fn("Paths.relativeBelow")(function* (
   directory: string,
   candidate: string,
 ) {
   // A linked root protects what it points to; lstat on the link itself never matches a candidate.
   const root = yield* canonicalPathEffect(directory);
   const target = yield* lstat(root);
-  if (!(target !== undefined)) return pathsOverlap(root, candidate);
+  const spelled = (from: string) => relative(from, candidate).split(sep).join("/");
+  if (!(target !== undefined))
+    return Option.liftPredicate(
+      spelled(root),
+      (path) => path !== ".." && !path.startsWith("../") && !isAbsolute(path),
+    );
   if (Option.isNone(target.ino)) return yield* reject(candidate, "invalid_path");
   // The candidate and each of its parents up to the filesystem root.
   const ancestors = Arr.unfold(
@@ -221,7 +232,21 @@ const isSameOrBelow = Effect.fn("Paths.isSameOrBelow")(function* (
           ),
     ),
   );
-  return Option.isSome(reached);
+  return Option.map(reached, spelled);
+});
+
+/**
+ * True when `candidate` is `directory` or below it, as {@link relativeBelow} decides. A directory
+ * that does not exist yet is compared by spelling, and a parent of it counts too.
+ */
+const isSameOrBelow = Effect.fn("Paths.isSameOrBelow")(function* (
+  directory: string,
+  candidate: string,
+) {
+  const root = yield* canonicalPathEffect(directory);
+  return (yield* lstat(root)) === undefined
+    ? pathsOverlap(root, candidate)
+    : Option.isSome(yield* relativeBelow(root, candidate));
 });
 
 /**
@@ -419,6 +444,11 @@ function resolveOutsidePathBody(
  */
 export interface ToolFence {
   readonly deniedRoots: ReadonlyArray<string>;
+  /**
+   * The user's project folder when the run's root is a worktree copy of it (a kanban card). An
+   * absolute path below it means the same place below the run's root (`path-policy.ts`).
+   */
+  readonly userRoot?: string | undefined;
 }
 
 /** A tool target that carries its fence, if it has one. */

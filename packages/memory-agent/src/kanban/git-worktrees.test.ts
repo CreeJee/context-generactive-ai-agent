@@ -4,6 +4,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { expect, vi } from "vite-plus/test";
 import { layer } from "@effect/vitest";
 import { StorageRoot } from "../config/storage-root.ts";
+import { resolveRootPath } from "../files/path-policy.ts";
 import {
   canonicalPathEffect,
   resolveFencedOutsidePath,
@@ -311,6 +312,10 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
           expect((yield* resolveProjectPath(tools.root, "a.txt", "file")).absolute).toBe(
             path.join(own.toolRoot, "a.txt"),
           );
+          // A path in the user's checkout means the same file in the card's own worktree.
+          expect(
+            (yield* resolveRootPath(tools, path.join(project, "a.txt"), "file")).absolute,
+          ).toBe(path.join(own.toolRoot, "a.txt"));
           const outside = (target: string, kind: "file" | "directory" | "new-or-file") =>
             resolveFencedOutsidePath(tools.toolFence, tools.root, storage, target, kind).pipe(
               Effect.map(() => "allowed"),

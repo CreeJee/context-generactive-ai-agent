@@ -8,11 +8,15 @@ import { optionalProperty } from "../optional-property.ts";
 const refusalHints = HashMap.fromIterable<string, string>([
   [
     "invalid_path",
-    "Project file tools take relative paths with / separators and no . or .. segments; outside tools take absolute paths.",
+    "Project file tools take paths relative to the project, with / separators and no . or .. segments, or absolute paths inside it; outside tools take absolute paths.",
   ],
   ["credential", "Credential files are never read or changed, even with approval."],
   ["git_internal", "Files inside .git are not changed directly; run git through a sh skill."],
   ["inside_project", "The path is inside the project; use the project file tools instead."],
+  [
+    "outside_project",
+    "The path is outside the project. Project file tools and run_skill's workdir take paths inside it; run_skill's workdir may also be below a temporary folder; use the outside tools for other files.",
+  ],
   [
     "outside_tool_root",
     "This run's tools are limited to its own card worktree; other worktrees and the user's checkout are refused.",
@@ -119,11 +123,13 @@ function toolFailureBody(error: Error, path: string): ToolFailed {
     : Schema.is(TextFileRejected)(error)
       ? textFileRejectedReasonName(error.reason)
       : null;
-  // Where a refused link leads, when the project's file tools could use that path.
+  // The project path a file tool would take instead: where a refused link leads, or where an
+  // absolute path lands in the project.
   const target = Schema.is(PathRejected)(error)
     ? Option.match(Option.fromNullishOr(error.target), {
         onNone: () => "",
-        onSome: (target) => ` Real path: ${target}`,
+        onSome: (target) =>
+          error.reason === "inside_project" ? ` Project path: ${target}` : ` Real path: ${target}`,
       })
     : "";
   const ioError = (code: string) =>

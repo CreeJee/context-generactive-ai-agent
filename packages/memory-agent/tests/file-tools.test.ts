@@ -47,7 +47,7 @@ const project = Effect.fn("fileToolsTest.project")(function* (
   );
   return { base, root };
 });
-const fileTools = Effect.fn("fileToolsTest.tools")(function* (root: string) {
+const fileTools = Effect.fn("fileToolsTest.tools")(function* (root: string, userRoot?: string) {
   const service = yield* Effect.provideContext(FileTools, yield* Layer.build(FileTools.layer));
   const tools = service.toolsFor({
     id: "p1",
@@ -57,6 +57,7 @@ const fileTools = Effect.fn("fileToolsTest.tools")(function* (root: string) {
     permissionMode: "ask",
     createdAt: "2026-09-14T00:00:00.000Z",
     hiddenAt: null,
+    toolFence: userRoot === undefined ? undefined : { deniedRoots: [userRoot], userRoot },
   });
   const named = (name: string) => (input: JsonValue) => callTool(tools, name, input);
   return {
@@ -291,6 +292,37 @@ describe("read, write, edit and delete", () => {
         nextStartLine: 3,
         sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
       });
+    }).pipe(withTestPlatform),
+  );
+
+  it.live("takes an absolute path inside the project, and in a card one in the user's folder", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { root, base } = yield* project(MutableHashMap.fromIterable([["notes.txt", "one\n"]]));
+      yield* fs.writeFileString(path.join(base, "outside.txt"), "outside\n");
+      const { readFile } = yield* fileTools(root);
+      expect(yield* readFile({ path: path.join(root, "notes.txt") })).toMatchObject({
+        path: "notes.txt",
+        content: "one\n",
+      });
+      expect(yield* failureCode(readFile({ path: path.join(base, "outside.txt") }))).toBe(
+        "outside_project",
+      );
+
+      // The card's worktree holds its own copy of the file.
+      const card = path.join(base, "card");
+      yield* fs.makeDirectory(card);
+      yield* fs.writeFileString(path.join(card, "notes.txt"), "card\n");
+      const inCard = yield* fileTools(card, root);
+      expect(yield* inCard.readFile({ path: path.join(root, "notes.txt") })).toMatchObject({
+        path: "notes.txt",
+        content: "card\n",
+        pathMapped: expect.stringContaining("used as notes.txt"),
+      });
+      yield* inCard.writeFile({ path: path.join(root, "new.txt"), content: "new\n" });
+      expect(yield* fs.readFileString(path.join(card, "new.txt"))).toBe("new\n");
+      expect(yield* fs.exists(path.join(root, "new.txt"))).toBe(false);
     }).pipe(withTestPlatform),
   );
 

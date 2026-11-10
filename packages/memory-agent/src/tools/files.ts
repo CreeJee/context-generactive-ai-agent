@@ -24,7 +24,8 @@ import {
   walkLimit,
   type Snapshot,
 } from "../files/listing.ts";
-import { PathRejected, resolveProjectPath } from "../files/paths.ts";
+import { resolveRootPath, type ToolRoots } from "../files/path-policy.ts";
+import { PathRejected, resolveProjectPath, type Fenced } from "../files/paths.ts";
 import { decodeSearchCursor, encodeSearchCursor, searchTextFilesEffect } from "../files/search.ts";
 import {
   createTextFileEffect,
@@ -39,6 +40,7 @@ import {
 import type { Project } from "../projects/projects.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { HiddenReplaceFailure, mentionsHidden, replaceKeepingHidden } from "../secrets/restore.ts";
+import { optionalProperty } from "../optional-property.ts";
 import { guardedChange, guardedEffect } from "./failure.ts";
 import { runTool } from "./run-tool.ts";
 
@@ -53,9 +55,11 @@ export const fileToolNames = [
 
 const directoryField = Schema.optionalKey(
   Schema.String.annotate({
-    description: 'Project-relative directory to look in. Defaults to the project root (".").',
+    description:
+      'Directory to look in: relative to the project, or absolute inside it. Defaults to the project root (".").',
   }),
 );
+const filePathDescription = "File path: relative to the project, or absolute inside it.";
 const globField = Schema.optionalKey(
   Schema.String.annotate({
     description: 'Glob relative to the directory, like "**/*.ts" or "src/*.md".',
@@ -89,7 +93,7 @@ const searchFilesInput = Schema.Struct({
 });
 
 const readFileInput = Schema.Struct({
-  path: Schema.String.annotate({ description: "Project-relative file path." }),
+  path: Schema.String.annotate({ description: filePathDescription }),
   startLine: Schema.optionalKey(Schema.Int.annotate({ description: "1-based. Defaults to 1." })),
   maxLines: Schema.optionalKey(
     Schema.Int.annotate({ description: "Lines per page, up to 2000. Defaults to 400." }),
@@ -97,7 +101,7 @@ const readFileInput = Schema.Struct({
 });
 
 const writeFileInput = Schema.Struct({
-  path: Schema.String.annotate({ description: "Project-relative file path." }),
+  path: Schema.String.annotate({ description: filePathDescription }),
   content: Schema.String.annotate({ description: "The complete new file content." }),
   expectedSha256: Schema.optionalKey(
     sha256Field.annotate({
@@ -107,7 +111,7 @@ const writeFileInput = Schema.Struct({
 });
 
 const editFileInput = Schema.Struct({
-  path: Schema.String.annotate({ description: "Project-relative file path." }),
+  path: Schema.String.annotate({ description: filePathDescription }),
   oldText: Schema.NonEmptyString.annotate({
     description: "Exact text to replace, including indentation. Must occur exactly once.",
   }),
@@ -119,7 +123,7 @@ const editFileInput = Schema.Struct({
 });
 
 const deleteFileInput = Schema.Struct({
-  path: Schema.String.annotate({ description: "Project-relative file path." }),
+  path: Schema.String.annotate({ description: filePathDescription }),
   expectedSha256: sha256Field,
 });
 
@@ -324,30 +328,38 @@ const make = Effect.gen(function* () {
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const snapshotFor = Effect.fn("FileTools.snapshot")(function* (
-    root: string,
+    roots: ToolRoots,
     directory: string | undefined,
     glob: string | undefined,
   ) {
-    const resolved = yield* resolveProjectPath(root, directory ?? ".", "directory");
-    return yield* snapshots.add(
-      root,
+    const resolved = yield* resolveRootPath(roots, directory ?? ".", "directory");
+    const view = yield* snapshots.add(
+      roots.root,
       resolved.relative,
       glob,
-      yield* listProjectFilesEffect(root, resolved.relative, glob),
+      yield* listProjectFilesEffect(roots.root, resolved.relative, glob),
     );
+    return { view, mappedNote: resolved.mappedNote };
   });
+  /** A listing taken earlier, for a later page; its path was already reported. */
+  const earlierSnapshot = (id: string, root: string) =>
+    Effect.map(snapshots.get(id, root), (view) => ({ view, mappedNote: Option.none<string>() }));
+  /** The note a result carries when its path was read in a card's worktree instead. */
+  const pathMapped = (note: Option.Option<string>) =>
+    optionalProperty("pathMapped", Option.getOrUndefined(note));
 
-  /** The file tools' calls in project `root`, each failing with what the model reads. */
-  const callsFor = (root: string) => ({
+  /** The file tools' calls in the run's root, each failing with what the model reads. */
+  const callsFor = ({ root, toolFence }: ToolRoots) => ({
     listFiles: ({ directory, glob, snapshot, offset }: typeof listFilesInput.Type) =>
       guardedEffect(
         directory ?? ".",
         Effect.gen(function* () {
+          const taken = yield* Option.match(Option.liftPredicate(snapshot, isTruthy), {
+            onNone: () => snapshotFor({ root, toolFence }, directory, glob),
+            onSome: (id) => earlierSnapshot(id, root),
+          });
           const view = yield* unexpired(
-            Option.match(Option.liftPredicate(snapshot, isTruthy), {
-              onNone: () => snapshotFor(root, directory, glob),
-              onSome: (id) => snapshots.get(id, root),
-            }),
+            Effect.succeed(taken.view),
             "snapshot_expired: start again without snapshot and offset.",
           );
           const start = Math.max(0, offset ?? 0);
@@ -356,6 +368,7 @@ const make = Effect.gen(function* () {
           return {
             snapshot: view.id,
             directory: view.directory,
+            ...pathMapped(taken.mappedNote),
             glob: view.glob ?? null,
             source: view.source,
             total: view.paths.length,
@@ -401,7 +414,7 @@ const make = Effect.gen(function* () {
           const started = yield* Option.match(position, {
             onSome: () => Effect.succeedNone,
             onNone: () =>
-              resolveProjectPath(root, directory ?? ".", "directory").pipe(
+              resolveRootPath({ root, toolFence }, directory ?? ".", "directory").pipe(
                 Effect.flatMap((resolved) =>
                   Effect.forkChild(
                     gitGrepFilesEffect({
@@ -416,11 +429,12 @@ const make = Effect.gen(function* () {
                 Effect.asSome,
               ),
           });
+          const taken = yield* Option.match(position, {
+            onSome: (at) => earlierSnapshot(at.snapshot, root),
+            onNone: () => snapshotFor({ root, toolFence }, directory, glob),
+          });
           const view = yield* unexpired(
-            Option.match(position, {
-              onSome: (at) => snapshots.get(at.snapshot, root),
-              onNone: () => snapshotFor(root, directory, glob),
-            }),
+            Effect.succeed(taken.view),
             "snapshot_expired: start the search again without cursor.",
           );
 
@@ -478,6 +492,7 @@ const make = Effect.gen(function* () {
             candidates,
           });
           return {
+            ...pathMapped(taken.mappedNote),
             filesInView: view.paths.length,
             matches: page.matches,
             skipped: page.skipped,
@@ -495,13 +510,14 @@ const make = Effect.gen(function* () {
       guardedEffect(
         path,
         Effect.gen(function* () {
-          const resolved = yield* resolveProjectPath(root, path, "file");
+          const resolved = yield* resolveRootPath({ root, toolFence }, path, "file");
           const lines = Math.min(Math.max(1, maxLines ?? 400), 2000);
           return {
-            path,
+            path: resolved.relative,
+            ...pathMapped(resolved.mappedNote),
             ...(yield* readPage({
               absolute: resolved.absolute,
-              path,
+              path: resolved.relative,
               startLine: startLine ?? 1,
               maxLines: lines,
               checkLeaf: true,
@@ -510,14 +526,16 @@ const make = Effect.gen(function* () {
         }).pipe(Effect.provideContext(platform)),
       ),
 
-    writeFile: ({ path, content, expectedSha256 }: typeof writeFileInput.Type) =>
+    writeFile: ({ path: given, content, expectedSha256 }: typeof writeFileInput.Type) =>
       guardedChange(
-        path,
+        given,
         Effect.gen(function* () {
-          const resolved = yield* resolveProjectPath(root, path, "new-or-file");
+          const resolved = yield* resolveRootPath({ root, toolFence }, given, "new-or-file");
+          const path = resolved.relative;
+          const mapped = pathMapped(resolved.mappedNote);
           const create = Effect.map(
             createTextFileEffect({ absolute: resolved.absolute, path: path, text: content }),
-            (created) => ({ path, created: true, ...created }),
+            (created) => ({ path, ...mapped, created: true, ...created }),
           );
           const replace = (expected: string) =>
             Effect.gen(function* () {
@@ -525,7 +543,10 @@ const make = Effect.gen(function* () {
                 PathRejected.make({ path, reason: "not_found" }),
               );
               // The values hidden behind placeholders the model wrote are put back.
-              const restored = readTextFileEffect({ absolute: resolved.absolute, path: path }).pipe(
+              const restored = readTextFileEffect({
+                absolute: resolved.absolute,
+                path: path,
+              }).pipe(
                 Effect.filterOrFail(
                   (file) => file.sha256 === expected,
                   () =>
@@ -552,7 +573,7 @@ const make = Effect.gen(function* () {
                 expectedSha256: expected,
                 text,
               });
-              return { path, created: false, ...replaced };
+              return { path, ...mapped, created: false, ...replaced };
             });
           return yield* Option.match(Option.fromNullishOr(expectedSha256), {
             onNone: () => create,
@@ -562,17 +583,21 @@ const make = Effect.gen(function* () {
       ),
 
     editFile: ({
-      path,
+      path: given,
       oldText,
       newText,
       replaceAll = false,
       expectedSha256,
     }: typeof editFileInput.Type) =>
       guardedChange(
-        path,
+        given,
         Effect.gen(function* () {
-          const resolved = yield* resolveProjectPath(root, path, "file");
-          const file = yield* readTextFileEffect({ absolute: resolved.absolute, path: path }).pipe(
+          const resolved = yield* resolveRootPath({ root, toolFence }, given, "file");
+          const path = resolved.relative;
+          const file = yield* readTextFileEffect({
+            absolute: resolved.absolute,
+            path: path,
+          }).pipe(
             Effect.filterOrFail(
               (read) => expectedSha256 === undefined || expectedSha256 === read.sha256,
               () =>
@@ -593,21 +618,27 @@ const make = Effect.gen(function* () {
             expectedSha256: file.sha256,
             text: edited.text,
           });
-          return { path, replacements: edited.replacements, ...written };
+          return {
+            path,
+            ...pathMapped(resolved.mappedNote),
+            replacements: edited.replacements,
+            ...written,
+          };
         }).pipe(Effect.provideContext(platform)),
       ),
 
-    deleteFile: ({ path, expectedSha256 }: typeof deleteFileInput.Type) =>
+    deleteFile: ({ path: given, expectedSha256 }: typeof deleteFileInput.Type) =>
       guardedChange(
-        path,
+        given,
         Effect.gen(function* () {
-          const resolved = yield* resolveProjectPath(root, path, "file");
+          const resolved = yield* resolveRootPath({ root, toolFence }, given, "file");
+          const path = resolved.relative;
           const removed = yield* deleteTextFileEffect({
             absolute: resolved.absolute,
             path: path,
             expectedSha256: expectedSha256,
           });
-          return { path, deleted: true, ...removed };
+          return { path, ...pathMapped(resolved.mappedNote), deleted: true, ...removed };
         }).pipe(Effect.provideContext(platform)),
       ),
   });
@@ -615,11 +646,12 @@ const make = Effect.gen(function* () {
   return {
     /**
      * File tools for one project (R04). Reads, searches, creation, edits and deletion inside the
-     * project run without approval; `.git`, links and credential files are refused. They run on
+     * project run without approval; `.git`, links and credential files are refused. A path is
+     * relative to the project or absolute inside it (`path-policy.ts`). They run on
      * the loop's fiber, so their spans join the run's trace.
      */
-    toolsFor: (project: Project) => {
-      const calls = callsFor(project.root);
+    toolsFor: (project: Fenced<Project>) => {
+      const calls = callsFor(project);
       return [
         runTool({ ...listFiles, handler: calls.listFiles }),
         runTool({ ...searchFiles, handler: calls.searchFiles }),
