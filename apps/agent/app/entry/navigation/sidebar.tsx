@@ -100,6 +100,7 @@ import {
 } from "../api";
 import { DataList, DataListItem } from "~/components/ui/data-list";
 import { SidebarDisclosureTrigger } from "./sidebar-disclosure-trigger";
+import { LoadFailed } from "../shared/load-failed";
 import { effortChoices } from "./providers";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -786,6 +787,8 @@ export function SessionSection({
   answering,
   boardRunning,
   loading,
+  failed = false,
+  onRetry = () => {},
   projectId,
   sessionId,
   archiveError,
@@ -803,6 +806,10 @@ export function SessionSection({
   boardRunning: ReadonlySet<string>;
   /** The list has not arrived yet, so an empty one says nothing. */
   loading: boolean;
+  /** The list could not be read; an empty one would say there are no conversations. */
+  failed?: boolean;
+  /** Reads the list again after it failed. */
+  onRetry?: () => void;
   projectId: string;
   sessionId: string | null;
   /** Why the last archive or restore was refused, if it was. */
@@ -1053,7 +1060,12 @@ export function SessionSection({
             <Skeleton className="h-4 w-2/3" />
           </div>
         )}
-        {!loading && sessions.length === 0 && (
+        {failed && (
+          <LoadFailed className="px-4 py-2" onRetry={onRetry}>
+            <Trans>대화 목록을 불러오지 못했습니다.</Trans>
+          </LoadFailed>
+        )}
+        {!loading && !failed && sessions.length === 0 && (
           <p className="px-4 py-2 text-xs text-muted-foreground">
             <Trans>아직 대화가 없습니다.</Trans>
           </p>

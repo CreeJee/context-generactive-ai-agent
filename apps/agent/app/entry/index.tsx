@@ -99,6 +99,7 @@ import { AccountSwitcher } from "./navigation/account-switcher";
 import { WorkTracePanel } from "./chat/work-trace-panel";
 import { BtwPanel } from "./chat/btw-panel";
 import { ReportLink, reportHref } from "./report/report-link";
+import { RetryButton } from "./shared/load-failed";
 import { effortChoices, providerLabels } from "./navigation/providers";
 
 const locationParsers = {
@@ -521,7 +522,23 @@ export function App() {
       ),
   };
 
-  const main = match({ selection, signedIn, selectedSignedIn, projectId, sessionId })
+  const authQueries = {
+    openai: openAIAuth,
+    anthropic: anthropicAuth,
+    "openai-compatible": compatibleAuth,
+  };
+  // A failed read must not look like a provider that is not connected or an empty project list.
+  const authFailed = authQueries[provider].isError;
+  const projectsFailed = projectsQuery.isError;
+  const main = match({
+    selection,
+    signedIn,
+    selectedSignedIn,
+    projectId,
+    sessionId,
+    authFailed,
+    projectsFailed,
+  })
     // Local history does not depend on the provider's remote model catalogue.
     // Keep model/auth readiness on mutations, not on mounting the session reader.
     .with({ projectId: P.string, sessionId: P.string }, ({ sessionId: id }) => (
@@ -537,6 +554,22 @@ export function App() {
             .find((model) => model.id === selection.model)
             ?.capabilities.inputModalities.includes("image") ??
             false)
+        }
+      />
+    ))
+    .with({ selection: null, signedIn: false, authFailed: true }, () => (
+      <Placeholder
+        icon={<LogInIcon />}
+        title={t`계정 연결 상태를 불러오지 못했습니다`}
+        description={t`앱 서버 연결을 확인한 뒤 다시 시도해 주십시오.`}
+        action={
+          <RetryButton
+            onRetry={() =>
+              Object.values(authQueries)
+                .filter((query) => query.isError)
+                .forEach((query) => void query.refetch())
+            }
+          />
         }
       />
     ))
@@ -576,6 +609,14 @@ export function App() {
         />
       );
     })
+    .with({ projectId: null, projectsFailed: true }, () => (
+      <Placeholder
+        icon={<FolderIcon />}
+        title={t`프로젝트 목록을 불러오지 못했습니다`}
+        description={t`앱 서버 연결을 확인한 뒤 다시 시도해 주십시오.`}
+        action={<RetryButton onRetry={() => void projectsQuery.refetch()} />}
+      />
+    ))
     .with({ projectId: null }, () => (
       <Placeholder
         icon={<FolderIcon />}
@@ -730,6 +771,8 @@ export function App() {
                 answering={working.answering}
                 boardRunning={working.boardRunning}
                 loading={sessionsQuery.isPending}
+                failed={sessionsQuery.isError}
+                onRetry={() => void sessionsQuery.refetch()}
                 projectId={projectId}
                 sessionId={sessionId}
                 archiveError={archiveError}

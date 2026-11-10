@@ -34,6 +34,7 @@ import {
 } from "./account-profiles";
 import { timeUntil } from "../shared/local-time";
 import { providerLabels } from "./providers";
+import { LoadFailed } from "../shared/load-failed";
 
 /** One row of the switcher: a subscription login, or a compatible endpoint. */
 export type AccountEntry = Data.TaggedEnum<{
@@ -152,12 +153,17 @@ export function AccountSwitcherMenu({
   entries,
   busy,
   error,
+  loadFailed = false,
+  onRetry = () => {},
   onSwitch,
   onManage,
 }: {
   entries: readonly AccountEntry[];
   busy: boolean;
   error: string | null;
+  /** Some account list could not be read, so `entries` may be missing accounts. */
+  loadFailed?: boolean;
+  onRetry?: () => void;
   onSwitch: (target: AccountTarget) => void;
   onManage: () => void;
 }) {
@@ -174,6 +180,11 @@ export function AccountSwitcherMenu({
   return (
     <div className="flex flex-col gap-1">
       {error && <p className="px-1 text-2xs text-destructive">{error}</p>}
+      {loadFailed && (
+        <LoadFailed className="px-1" onRetry={onRetry}>
+          <Trans>계정 목록을 불러오지 못했습니다.</Trans>
+        </LoadFailed>
+      )}
       <div className="flex items-center gap-1">
         <DropdownMenu>
           <DropdownMenuTrigger
@@ -316,6 +327,12 @@ export function AccountSwitcher({
       entries={entries}
       busy={busy}
       error={error}
+      loadFailed={openai.isError || anthropic.isError || compatible.isError}
+      onRetry={() =>
+        [openai, anthropic, compatible]
+          .filter((query) => query.isError)
+          .forEach((query) => void query.refetch())
+      }
       onSwitch={onSwitch}
       onManage={onManage}
     />

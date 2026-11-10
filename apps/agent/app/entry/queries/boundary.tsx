@@ -1,9 +1,9 @@
 import { isTruthy } from "../../truthy.ts";
 import { QueryErrorResetBoundary } from "@tanstack/react-query";
 import { Component, Suspense, type ReactNode } from "react";
-import { Button } from "~/components/ui/button";
 import { Spinner } from "~/components/ui/spinner";
 import { Trans, useLingui } from "@lingui/react/macro";
+import { LoadFailed } from "../shared/load-failed";
 
 class SectionErrorBoundary extends Component<
   { children: ReactNode; onReset: () => void },
@@ -18,23 +18,15 @@ class SectionErrorBoundary extends Component<
   render() {
     if (isTruthy(this.state.error))
       return (
-        <div role="alert" className="flex items-center gap-3 text-sm">
-          <span>
-            <Trans>설정을 불러오지 못했습니다.</Trans>
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              this.props.onReset();
-              this.setState({ error: null });
-            }}
-          >
-            <Trans comment="Button that loads a settings section again after it failed to load">
-              다시 시도
-            </Trans>
-          </Button>
-        </div>
+        <LoadFailed
+          className="text-sm"
+          onRetry={() => {
+            this.props.onReset();
+            this.setState({ error: null });
+          }}
+        >
+          <Trans>설정을 불러오지 못했습니다.</Trans>
+        </LoadFailed>
       );
     return this.props.children;
   }

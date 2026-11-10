@@ -1295,6 +1295,7 @@ msgid "계정 관리"
 msgstr "계정 관리"
 
 #: app/entry/navigation/account-profiles.tsx
+#: app/entry/navigation/account-switcher.tsx
 msgid "계정 목록을 불러오지 못했습니다."
 msgstr "계정 목록을 불러오지 못했습니다."
 
@@ -1302,6 +1303,10 @@ msgstr "계정 목록을 불러오지 못했습니다."
 #: app/entry/index.tsx
 msgid "계정 연결"
 msgstr "계정 연결"
+
+#: app/entry/index.tsx
+msgid "계정 연결 상태를 불러오지 못했습니다"
+msgstr "계정 연결 상태를 불러오지 못했습니다"
 
 #. Field for renaming an account in place
 #. Field for renaming an account in place
@@ -1782,13 +1787,13 @@ msgid "다시 보내기"
 msgstr "다시 보내기"
 
 #. Button that asks the server again whether this window may write
-#. Button that loads a settings section again after it failed to load
+#. Button that loads a list or settings section again after it failed to load
 #. Button that loads the conversation again after it failed to load
 #. Button that reruns a subagent task as a new attempt
 #: app/entry/chat/chat-history.tsx
 #: app/entry/chat/message.tsx
 #: app/entry/chat/read-only-bar.tsx
-#: app/entry/queries/boundary.tsx
+#: app/entry/shared/load-failed.tsx
 msgid "다시 시도"
 msgstr "다시 시도"
 
@@ -2065,6 +2070,10 @@ msgstr "대화 가져오기"
 #: app/entry/chat/chat-composer.tsx
 msgid "대화 모델: {chatModel} · 실행 경로: {mediaRoute}"
 msgstr "대화 모델: {chatModel} · 실행 경로: {mediaRoute}"
+
+#: app/entry/navigation/sidebar.tsx
+msgid "대화 목록을 불러오지 못했습니다."
+msgstr "대화 목록을 불러오지 못했습니다."
 
 #: app/entry/settings/settings-dialog.tsx
 msgid "대화 밖에서 쓰는 도구와 연결을 관리합니다."
@@ -3839,6 +3848,10 @@ msgstr "앞선 답변이 끝나지 않아 후속 실행을 미뤘습니다."
 #: app/entry/chat/refusals.ts
 msgid "앞선 실행이 끝났는지 확인하지 못해 새 요청을 받지 않았습니다. 그 실행을 확인한 뒤 이어서 진행해 주십시오."
 msgstr "앞선 실행이 끝났는지 확인하지 못해 새 요청을 받지 않았습니다. 그 실행을 확인한 뒤 이어서 진행해 주십시오."
+
+#: app/entry/index.tsx
+msgid "앱 서버 연결을 확인한 뒤 다시 시도해 주십시오."
+msgstr "앱 서버 연결을 확인한 뒤 다시 시도해 주십시오."
 
 #: app/entry/api.ts
 msgid "앱 저장소 폴더와 겹치는 경로는 등록할 수 없습니다."
@@ -5986,6 +5999,10 @@ msgstr "프로젝트 개선"
 #: app/entry/navigation/sidebar.tsx
 msgid "프로젝트 검색"
 msgstr "프로젝트 검색"
+
+#: app/entry/index.tsx
+msgid "프로젝트 목록을 불러오지 못했습니다"
+msgstr "프로젝트 목록을 불러오지 못했습니다"
 
 #: app/entry/chat/message.tsx
 msgid "프로젝트 밖 파일 검색"
