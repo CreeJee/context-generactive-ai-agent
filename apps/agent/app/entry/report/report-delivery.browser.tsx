@@ -66,6 +66,52 @@ describe("report review and delivery", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.live("keeps the send running when the auto-report setting fails meanwhile", () =>
+    Effect.gen(function* () {
+      const delivered = Promise.withResolvers<Response>();
+      const replies = [
+        Promise.resolve(
+          Response.json({ configured: true, webhookIdSuffix: "5678", defectReports: false }),
+        ),
+        delivered.promise,
+        Promise.resolve(new Response(null, { status: 500 })),
+      ];
+      const fetch = vi
+        .spyOn(globalThis, "fetch")
+        .mockImplementation(() => replies.shift() ?? Promise.resolve(new Response(null)));
+      yield* Effect.addFinalizer(() => Effect.sync(() => fetch.mockRestore()));
+      const screen = yield* sdkCall(() =>
+        render(<ReportDelivery text="# 제보 문안" evidence={null} />, { wrapper: Catalog }),
+      );
+
+      yield* sdkCall(() => screen.getByRole("button", { name: "Discord로 보내기" }).click());
+      yield* sdkCall(() => screen.getByRole("checkbox").click());
+      yield* sdkCall(() =>
+        expect
+          .element(
+            screen.getByText("자동 전송 설정을 바꾸지 못했습니다. 잠시 뒤 다시 시도해 주십시오."),
+          )
+          .toBeVisible(),
+      );
+      delivered.resolve(
+        Response.json(
+          ReportDeliveryResult.cases.delivered.make({
+            messageId: "m-1",
+            deliveredAt: "2026-11-11T00:00:00.000Z",
+          }),
+        ),
+      );
+      yield* sdkCall(() =>
+        expect
+          .element(screen.getByText("개발자 Discord 채널로 보냈습니다 (메시지 m-1)."))
+          .toBeVisible(),
+      );
+      yield* sdkCall(() =>
+        expect.element(screen.getByRole("button", { name: "Discord로 보내기" })).toBeVisible(),
+      );
+    }).pipe(Effect.scoped),
+  );
+
   it.live("keeps observations and hypotheses apart and lets the user remove one", () =>
     Effect.gen(function* () {
       const states: DiagnosisState[] = [];

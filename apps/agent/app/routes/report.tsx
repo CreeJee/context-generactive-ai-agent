@@ -80,6 +80,7 @@ export default function ReportPage() {
   const [evidence, setEvidence] = useState<EvidenceState>(EvidenceState.none());
   const [evidenceRetry, setEvidenceRetry] = useState(0);
   const [status, setStatus] = useState(t`세션 없이 열면 증상 설명만으로 제보합니다.`);
+  const [copyStatus, setCopyStatus] = useState<string | null>(null);
   const [analysisSession, setAnalysisSession] = useState<{
     projectId: string;
     reportSessionId: string;
@@ -97,10 +98,7 @@ export default function ReportPage() {
       openReportSession({ projectId, sourceSessionId }).pipe(
         Effect.match({
           onSuccess: ({ reportSessionId }) => setAnalysisSession({ projectId, reportSessionId }),
-          onFailure: () => {
-            setSessionFailed(true);
-            setStatus(t`분석 세션을 열 수 없습니다. 증상 제보문은 계속 작성·저장할 수 있습니다.`);
-          },
+          onFailure: () => setSessionFailed(true),
         }),
       ),
     );
@@ -173,7 +171,7 @@ export default function ReportPage() {
   const shared = () => shareableText(text, draftEvidence(evidence));
   const copy = () =>
     copyReportText(shared(), (value) => navigator.clipboard.writeText(value)).then((copied) => {
-      setStatus(
+      setCopyStatus(
         copied
           ? t`제보문과 증거 묶음을 복사했습니다. 개발자의 Discord 채널에 직접 붙여넣어 주십시오.`
           : t`클립보드를 사용할 수 없습니다. 위 제보 문안에서 텍스트를 직접 선택해 복사해 주십시오.`,
@@ -221,13 +219,18 @@ export default function ReportPage() {
         </p>
       )}
       {sessionFailed && (
-        <button
-          type="button"
-          className="text-sm text-primary underline"
-          onClick={() => setSessionRetry((attempt) => attempt + 1)}
-        >
-          <Trans>분석 세션 다시 열기</Trans>
-        </button>
+        <div className="space-y-1 text-sm">
+          <p role="alert">
+            <Trans>분석 세션을 열 수 없습니다. 증상 제보문은 계속 작성·저장할 수 있습니다.</Trans>
+          </p>
+          <button
+            type="button"
+            className="text-primary underline"
+            onClick={() => setSessionRetry((attempt) => attempt + 1)}
+          >
+            <Trans>분석 세션 다시 열기</Trans>
+          </button>
+        </div>
       )}
       <ReportDraft fields={fields} onChange={setFields} text={text} onTextChange={setEditedText} />
       {editedText !== null && (
@@ -309,6 +312,11 @@ export default function ReportPage() {
             </Trans>
           </button>
         </div>
+        {copyStatus !== null && (
+          <p role="status" className="text-sm text-muted-foreground">
+            {copyStatus}
+          </p>
+        )}
       </section>
       <section
         className="space-y-2"

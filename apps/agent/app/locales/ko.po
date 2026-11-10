@@ -4772,6 +4772,10 @@ msgstr "자동 검토: {reason}"
 msgid "자동 검토로 막힘"
 msgstr "자동 검토로 막힘"
 
+#: app/entry/report/report-delivery.tsx
+msgid "자동 전송 설정을 바꾸지 못했습니다. 잠시 뒤 다시 시도해 주십시오."
+msgstr "자동 전송 설정을 바꾸지 못했습니다. 잠시 뒤 다시 시도해 주십시오."
+
 #: app/entry/chat/workflow-panel.tsx
 msgid "자동 진행 중단: {detail}"
 msgstr "자동 진행 중단: {detail}"

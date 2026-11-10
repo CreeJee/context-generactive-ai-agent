@@ -87,25 +87,32 @@ export function ReportDelivery({
 }) {
   const [config, setConfig] = useState<ReportDeliveryStatus | "unavailable" | null>(null);
   const [outcome, setOutcome] = useState<DeliveryOutcome>(DeliveryOutcome.idle());
-  const task = useRef<Fiber.Fiber<void> | null>(null);
-  const run = (program: Effect.Effect<void>) => {
-    if (task.current !== null) Effect.runFork(Fiber.interrupt(task.current));
-    task.current = Effect.runFork(program);
+  const [defectReportsSaving, setDefectReportsSaving] = useState(false);
+  const [defectReportsFailed, setDefectReportsFailed] = useState(false);
+  // The send and the settings run on their own slots so toggling one never cancels the other.
+  const sendTask = useRef<Fiber.Fiber<void> | null>(null);
+  const settingsTask = useRef<Fiber.Fiber<void> | null>(null);
+  const run = (slot: { current: Fiber.Fiber<void> | null }, program: Effect.Effect<void>) => {
+    if (slot.current !== null) Effect.runFork(Fiber.interrupt(slot.current));
+    slot.current = Effect.runFork(program);
   };
   useEffect(() => {
     run(
+      settingsTask,
       readDeliveryStatus.pipe(
         Effect.match({ onSuccess: setConfig, onFailure: () => setConfig("unavailable") }),
       ),
     );
     return () => {
-      if (task.current !== null) Effect.runFork(Fiber.interrupt(task.current));
+      if (sendTask.current !== null) Effect.runFork(Fiber.interrupt(sendTask.current));
+      if (settingsTask.current !== null) Effect.runFork(Fiber.interrupt(settingsTask.current));
     };
   }, []);
 
   const send = (resend: boolean) => {
     setOutcome(DeliveryOutcome.sending());
     run(
+      sendTask,
       sendReport({ text, evidence }, resend).pipe(
         Effect.match({
           onSuccess: setOutcome,
@@ -116,12 +123,18 @@ export function ReportDelivery({
     );
   };
 
-  const toggleDefectReports = (enabled: boolean) =>
+  // A failed change keeps the last known settings; only the checkbox reports the failure.
+  const toggleDefectReports = (enabled: boolean) => {
+    setDefectReportsSaving(true);
+    setDefectReportsFailed(false);
     run(
+      settingsTask,
       setDefectReports(enabled).pipe(
-        Effect.match({ onSuccess: setConfig, onFailure: () => setConfig("unavailable") }),
+        Effect.match({ onSuccess: setConfig, onFailure: () => setDefectReportsFailed(true) }),
+        Effect.ensuring(Effect.sync(() => setDefectReportsSaving(false))),
       ),
     );
+  };
 
   const message = deliveryOutcomeText(outcome);
   return (
@@ -163,6 +176,7 @@ export function ReportDelivery({
             <input
               type="checkbox"
               checked={config.defectReports}
+              disabled={defectReportsSaving}
               onChange={(event) => toggleDefectReports(event.currentTarget.checked)}
             />
             <Trans>
@@ -170,6 +184,11 @@ export function ReportDelivery({
               않음)
             </Trans>
           </label>
+          {defectReportsFailed && (
+            <p role="alert">
+              <Trans>자동 전송 설정을 바꾸지 못했습니다. 잠시 뒤 다시 시도해 주십시오.</Trans>
+            </p>
+          )}
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
