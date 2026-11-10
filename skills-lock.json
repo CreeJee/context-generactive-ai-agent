@@ -7,17 +7,47 @@
       "skillPath": "skills/effect-ts/SKILL.md",
       "computedHash": "6bdb9b95aa83071eca2f67ae947b7d398a22e9e6e08f6cfa35de9516b03efa6e"
     },
+    "enhanced-message-context": {
+      "source": "lingui/skills",
+      "sourceType": "github",
+      "skillPath": "skills/enhanced-message-context/SKILL.md",
+      "computedHash": "de808be0383d355a128534dc8f80676461317df447b46c6cf93005a71b6abc37"
+    },
+    "find-unwrapped-strings": {
+      "source": "lingui/skills",
+      "sourceType": "github",
+      "skillPath": "skills/find-unwrapped-strings/SKILL.md",
+      "computedHash": "b22e320a8edc46a3d1f1f3e95f1fb1d6aac97918384a7bff95dc2b37775ffe06"
+    },
     "install-anti-slop": {
       "source": "dmmulroy/anti-slop",
       "sourceType": "github",
       "skillPath": "skills/install-anti-slop/SKILL.md",
       "computedHash": "4031728fbe75bdcad6ee3208fd52b5d66e167b056fefee1fa9758e9a6cb9c0c8"
     },
+    "lingui-best-practices": {
+      "source": "lingui/skills",
+      "sourceType": "github",
+      "skillPath": "skills/lingui-best-practices/SKILL.md",
+      "computedHash": "9e7fabb0c057906d29a924884a2951f8c726fa2ba0c868b10b395859ced65cbc"
+    },
+    "lingui-framework-setup": {
+      "source": "lingui/skills",
+      "sourceType": "github",
+      "skillPath": "skills/lingui-framework-setup/SKILL.md",
+      "computedHash": "079f3002a4ed1f8b2962896f3d4b5fb6ed170f2376fed15884e48c641baf142a"
+    },
     "list-good-prs": {
       "source": "kdy1/kdy1-scripts",
       "sourceType": "github",
       "skillPath": "skills/list-good-prs/SKILL.md",
       "computedHash": "23f1cd42efc069fa73fa0588f7ae72739d453c116322ac0db1b29cbf13760c11"
+    },
+    "migrate-radix-to-base": {
+      "source": "shadcn/ui",
+      "sourceType": "github",
+      "skillPath": "skills/migrate-radix-to-base/SKILL.md",
+      "computedHash": "e1f2030ee5059be3dff0812ca0e4b995ee9fa3132176f049ebe6c90346a6755e"
     },
     "repair-pr": {
       "source": "kdy1/kdy1-scripts",
@@ -30,6 +60,12 @@
       "sourceType": "github",
       "skillPath": "skills/review-full/SKILL.md",
       "computedHash": "ff036f0e3e520b41e7bf2b72037d1e8e76e5fb0970dc54737305e05ab01c7ca2"
+    },
+    "shadcn": {
+      "source": "shadcn/ui",
+      "sourceType": "github",
+      "skillPath": "skills/shadcn/SKILL.md",
+      "computedHash": "b864a958765563321f485a96f4d59c0bb6539f4286ab6d8b8b66895b7ebd302d"
     },
     "vitest": {
       "source": "antfu/skills",
