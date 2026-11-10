@@ -50,7 +50,7 @@ import { SecretStore } from "./config/secrets.ts";
 import { SubscriptionQuota, SubscriptionUsage } from "./oauth/subscription-quota.ts";
 import { defectReportsLayer } from "./report/defect-reports.ts";
 import { ReportDelivery } from "./report/discord-webhook.ts";
-import { StorageRoot } from "./config/storage-root.ts";
+import { leftoverStorageCleanup, StorageRoot } from "./config/storage-root.ts";
 import { Database } from "./db/database.ts";
 import { FreePages } from "./db/free-pages.ts";
 import { PlannerStatistics } from "./db/planner-statistics.ts";
@@ -427,6 +427,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
         // Above retrieval: migrating a transcript hands its nodes straight to the indexer.
         Importer.layer(options.importsWatching, options.importsHome),
         EmbeddingSetup.layer,
+        leftoverStorageCleanup,
         // Above retrieval too: a swept node's vector and terms are dropped and made again.
         SecretSweep.layer(options.sweepSecrets),
       ),

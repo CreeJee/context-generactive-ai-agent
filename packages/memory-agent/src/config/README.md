@@ -26,6 +26,7 @@ memory-agent의 사용자 전역 설정 계층이다. `<storage>/config.json`(`G
 - `keychainService` — 키체인 서비스 이름 상수 `context-generactive-agent`
 - `StorageRoot` — DB·벡터 인덱스·모델·설정을 담는 디렉터리 경로 서비스. `StorageRoot.layer(path)`와 `StorageRoot.home` 레이어
 - `defaultStorageRoot` — 홈 디렉터리 아래 `.context-generactive-agent` 경로를 계산하는 Effect
+- `leftoverStorageCleanup` — 시작할 때 저장 루트에서 이전 버전이 남기고 더는 읽지 않는 것(지운 Goal worker의 `goal-worker-assets-*` 임시 폴더, 메모리 검색이 더는 쓰지 않는 `models/kiwi-0.24.0`)을 백그라운드로 지우는 Layer. 지우지 못한 것은 로그만 남기고 다음 시작에 다시 지운다
 - 하위 디렉터리 없음
 
 ## Invariants
