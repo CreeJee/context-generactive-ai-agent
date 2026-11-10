@@ -384,15 +384,17 @@ function ModelForm({
           <Trans>도구 호출 지원</Trans>
         </FieldLabel>
       </div>
-      <div className="flex items-center gap-2">
-        <Switch
-          id={`${idPrefix}-image-input`}
-          checked={model.imageInput}
-          onCheckedChange={(imageInput) => setModel({ ...model, imageInput })}
-        />
-        <FieldLabel htmlFor={`${idPrefix}-image-input`}>
-          <Trans>이미지 입력 지원</Trans>
-        </FieldLabel>
+      <div className="flex flex-col gap-1">
+        <div className="flex items-center gap-2">
+          <Switch
+            id={`${idPrefix}-image-input`}
+            checked={model.imageInput}
+            onCheckedChange={(imageInput) => setModel({ ...model, imageInput })}
+          />
+          <FieldLabel htmlFor={`${idPrefix}-image-input`}>
+            <Trans>이미지 입력 지원</Trans>
+          </FieldLabel>
+        </div>
         <FieldDescription>
           <Trans>
             끄면 이미지를 보낼 수 없습니다. 이미지가 있던 대화는 글 메모로 이어 보냅니다.
@@ -512,25 +514,15 @@ function EndpointCard({
           </Button>
         </form>
       ) : (
-        <div className="flex min-w-0 items-start gap-2">
-          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <span className="flex min-w-0 items-center gap-1.5">
-              <span className="truncate text-sm font-medium">{account.label}</span>
-              {current && (
-                <Badge variant="outline">
-                  <Trans comment="Badge on the account chats run on now">사용 중</Trans>
-                </Badge>
-              )}
-            </span>
-            <span className="truncate text-2xs text-muted-foreground">
-              {account.baseUrl} ·{" "}
-              {account.hasApiKey ? (
-                <Trans comment="Endpoint status: an API key is saved">키 있음</Trans>
-              ) : (
-                <Trans comment="Endpoint status: no API key is saved">키 없음</Trans>
-              )}
-            </span>
-          </div>
+        <div className="flex min-w-0 flex-wrap items-start gap-x-2 gap-y-0.5">
+          <span className="flex min-w-0 flex-1 items-center gap-1.5">
+            <span className="truncate text-sm font-medium">{account.label}</span>
+            {current && (
+              <Badge variant="outline">
+                <Trans comment="Badge on the account chats run on now">사용 중</Trans>
+              </Badge>
+            )}
+          </span>
           <Button
             variant="ghost-muted"
             size="sm"
@@ -586,6 +578,15 @@ function EndpointCard({
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
+          {/* Below the buttons, the address gets the card's whole width. */}
+          <span className="w-full truncate text-2xs text-muted-foreground" title={account.baseUrl}>
+            {account.baseUrl} ·{" "}
+            {account.hasApiKey ? (
+              <Trans comment="Endpoint status: an API key is saved">키 있음</Trans>
+            ) : (
+              <Trans comment="Endpoint status: no API key is saved">키 없음</Trans>
+            )}
+          </span>
         </div>
       )}
       {CardMode.$is("connect")(mode) && (
