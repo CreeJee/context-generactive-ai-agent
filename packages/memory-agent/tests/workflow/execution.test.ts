@@ -159,6 +159,31 @@ testAgent({ testProvider: { responder } })("approved Plan execution", (it) => {
     }),
   );
 
+  it.effect("the planner of a running board reads the project only but changes the board", () =>
+    Effect.gen(function* () {
+      const env = yield* TestEnv;
+      const session = yield* planned([{ text: "Noted." }]);
+      // The held card keeps the board from running cards beside the planner's turn.
+      yield* env.use(
+        Effect.flatMap(Workflows, (workflows) =>
+          workflows.holdCard(
+            session.id,
+            { cardId: "p1", hold: true },
+            BoardAuthor.cases.User.make({}),
+          ),
+        ),
+      );
+      yield* env.use(
+        Effect.flatMap(AgentChat, (chat) => chat.moveWorkflow(session.id, null, "run")),
+      );
+      yield* waitForBoard(session.board);
+      yield* runTurn(session.id, `${session.id}-turn`, "How is the board going?");
+      const tools = session.invocations()[0]?.toolNames ?? [];
+      expect(tools).toEqual(expect.arrayContaining(["read_kanban_board", "edit_kanban_board"]));
+      expect(tools).not.toContain("write_file");
+    }),
+  );
+
   it.effect("a Goal mode approval gives a board that kept running the permission mode", () =>
     Effect.gen(function* () {
       const env = yield* TestEnv;

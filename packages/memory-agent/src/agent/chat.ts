@@ -377,6 +377,11 @@ const readOnlyWorkflowPhases = HashSet.fromIterable<WorkflowPhase>([
   "running",
   "completed",
 ]);
+/**
+ * Where the chat of a kanban board gets the board's tools: plain chat, and the running board whose
+ * planner it is (read-only for the project, not for the board).
+ */
+const boardToolPhases = HashSet.fromIterable<WorkflowPhase>(["chat", "running"]);
 const workflowReadToolNames = HashSet.fromIterable([
   "find_memory",
   "read_evidence",
@@ -2122,9 +2127,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ),
           gated,
         });
-        // The board's tools are the parent's alone; card agents never change the board.
+        // The board's tools are the parent's alone; card agents never change the board. A running
+        // board's chat is its planner: it reads only the project, but it changes the board.
         const boardTools =
-          situation.onKanbanBoard && !workflowReadOnly
+          situation.onKanbanBoard && HashSet.has(boardToolPhases, workflow.phase)
             ? kanbanTools.toolsFor(sessionId, runId)
             : [];
         // A program calls the run's tools as the model would, except the ones that ask first. Its
