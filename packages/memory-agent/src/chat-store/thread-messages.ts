@@ -14,7 +14,8 @@ import { StoredMessage } from "./schema.ts";
  * them in order from 0. Joined in order, the rows' JSON texts are the transcript's JSON array.
  */
 
-const StoredThread = Schema.Struct({ revision: Schema.Int, messages: Schema.String });
+/** A row of a thread read: its revision, beside one message; a thread with none has one row. */
+const StoredRow = Schema.Struct({ revision: Schema.Int, message: Schema.NullOr(Schema.String) });
 
 const encodeMessage = Schema.encodeEffect(Schema.fromJsonString(StoredMessage));
 const sameMessage = Schema.toEquivalence(StoredMessage);
@@ -48,20 +49,29 @@ export const firstChange: {
 /** Reads and writes threads' message rows, on the app's SqlClient. */
 export const threadMessages = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+  // The messages come in `seq` order straight from the primary key. Joining them into one text in
+  // SQL (`group_concat(... ORDER BY seq)`) sorted the whole transcript in a temporary B-tree first
+  // and copied it into one string: about half a second for a 50 MB thread.
+  const storedRows = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: StoredRow,
+    execute: (threadId) => sql`
+      SELECT t.revision, m.message FROM chat_threads AS t
+      LEFT JOIN chat_thread_messages AS m ON m.thread_id = t.thread_id
+      WHERE t.thread_id = ${threadId} ORDER BY m.seq`,
+  });
   return {
     /**
-     * The thread's revision and its messages' JSON array text, in one statement: the messages are
-     * the ones at that revision. None when the thread was never saved.
+     * The thread's revision and its messages' JSON texts in order, in one statement: the messages
+     * are the ones at that revision. None when the thread was never saved.
      */
-    stored: SqlSchema.findOneOption({
-      Request: Schema.String,
-      Result: StoredThread,
-      execute: (threadId) => sql`
-        SELECT revision, '[' || COALESCE((
-          SELECT group_concat(message, ',' ORDER BY seq) FROM chat_thread_messages AS m
-          WHERE m.thread_id = chat_threads.thread_id), '') || ']' AS messages
-        FROM chat_threads WHERE thread_id = ${threadId}`,
-    }),
+    stored: (threadId: string) =>
+      Effect.map(storedRows(threadId), (rows) =>
+        Option.map(Arr.head(rows), ({ revision }) => ({
+          revision,
+          messages: Arr.flatMapNullishOr(rows, ({ message }) => message),
+        })),
+      ),
     /** Removes the thread's messages from `seq` on. */
     removeFrom: (threadId: string, seq: number) =>
       Effect.asVoid(

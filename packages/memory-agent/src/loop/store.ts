@@ -33,7 +33,8 @@ import { optionalProperty } from "../optional-property.ts";
  * `chat-store/schema.ts`. Each save rewrites the thread's shown messages from its first change on.
  */
 
-const Thread = Schema.fromJsonString(Schema.Array(StoredMessage));
+/** A thread's messages from their rows' JSON texts, in order. */
+const Thread = Schema.Array(Schema.fromJsonString(StoredMessage));
 const Usage = Schema.fromJsonString(StoredUsage);
 const Payload = Schema.fromJsonString(StoredInterruptPayload);
 const Response = Schema.fromJsonString(StoredInterruptResponse);

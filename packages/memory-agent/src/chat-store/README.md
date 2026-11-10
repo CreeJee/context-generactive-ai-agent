@@ -7,7 +7,7 @@
 ## Interface
 
 - `StoredMessage` — `chat_thread_messages.message`. 메시지 하나. user/assistant/tool 메시지의 `role` 판별 유니온(Schema와 타입)
-- `threadMessages` — `Effect` (SqlClient 필요). `chat_thread_messages`를 읽고 쓴다: `stored(threadId)`(revision과 순번 순서로 이어 붙인 메시지 JSON 배열 텍스트를 한 문장으로, 저장된 적 없으면 None), `removeFrom(threadId, seq)`, `insertFrom(threadId, seq, messages)`(메시지마다 인코딩해 500행씩 삽입하고, 쓴 JSON 텍스트를 순서대로 돌려준다).
+- `threadMessages` — `Effect` (SqlClient 필요). `chat_thread_messages`를 읽고 쓴다: `stored(threadId)`(revision과 메시지 JSON 텍스트 배열을 순번 순서로 한 문장에서 읽는다. 행은 기본 키 순서로 바로 나오고 SQL에서 이어 붙이지 않는다. 저장된 적 없으면 None), `removeFrom(threadId, seq)`, `insertFrom(threadId, seq, messages)`(메시지마다 인코딩해 500행씩 삽입하고, 쓴 JSON 텍스트를 순서대로 돌려준다).
 - `firstChange` — dual 함수 `(stored, next)`. `next`가 `stored`와 처음 달라지는 순번. 참조가 같으면 바로 넘어가고, 다르면 `Schema.toEquivalence(StoredMessage)`로 구조를 비교한다. `stored`가 `next`를 모두 앞에 담고 있으면 `next.length`다.
 - `releasedProjectionSchema` — TanStack 단계가 0.0.18~0.1.1에서 만든 history 투영 DDL 사본. 그 단계와 테스트가 쓴다. 투영 표는 뒤의 `threadDisplayMessagesMigration` 단계가 화면 메시지 행으로 옮기고 지운다.
 - `StoredUserMessage` / `StoredAssistantMessage` / `StoredToolMessage` — 역할별 메시지 Schema. assistant에는 `toolCalls`, `thinking`, `model`, `source`, `finishReason`, `stopReason`이 선택 키로 있다
