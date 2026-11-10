@@ -60,6 +60,7 @@ export function useAgentChat({
 }) {
   const atoms = sessions(sessionId);
   const open = useAtomSet(atoms.open);
+  const opening = useAtomValue(atoms.open);
   const state = useAtomValue(atoms.state);
   const sending = useAtomValue(atoms.send);
   const answering = useAtomValue(atoms.answer);
@@ -87,6 +88,10 @@ export function useAgentChat({
     messages: Option.match(view, { onNone: () => noMessages, onSome: ({ messages }) => messages }),
     /** The session was read once; before that, no messages does not mean a new conversation. */
     opened: Option.isSome(state),
+    /** The session could not be read, so the page has nothing to show until it reads it again. */
+    openFailed: Option.isNone(state) && AsyncResult.isFailure(opening),
+    /** Reads the session again after it could not be read. */
+    reopen: () => open(undefined),
     hasOlderMessages: Option.exists(view, ({ older }) => older !== null),
     loadOlderMessages: () => loadOlder(undefined),
     sendMessage: (content: Send["content"], forwardedProps?: Send["forwardedProps"]) =>

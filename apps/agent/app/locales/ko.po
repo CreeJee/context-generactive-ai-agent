@@ -1738,7 +1738,9 @@ msgid "다시 로그인"
 msgstr "다시 로그인"
 
 #. Button that loads a settings section again after it failed to load
+#. Button that loads the conversation again after it failed to load
 #. Button that reruns a subagent task as a new attempt
+#: app/entry/chat/chat-history.tsx
 #: app/entry/chat/message.tsx
 #: app/entry/queries/boundary.tsx
 msgid "다시 시도"
@@ -2038,6 +2040,15 @@ msgstr "대화가 지금 프로젝트 밖의 기억을 쓰거나 내보낼지 �
 #: app/entry/api.ts
 msgid "대화를 바꾸지 못했습니다."
 msgstr "대화를 바꾸지 못했습니다."
+
+#. Accessible label of the spinner shown while the conversation loads
+#: app/entry/chat/chat-history.tsx
+msgid "대화를 불러오는 중"
+msgstr "대화를 불러오는 중"
+
+#: app/entry/chat/chat-history.tsx
+msgid "대화를 불러오지 못했습니다"
+msgstr "대화를 불러오지 못했습니다"
 
 #: app/entry/chat/context-meter.tsx
 msgid "대화를 원문 그대로 보냈습니다."
@@ -3086,6 +3097,10 @@ msgstr "서버를 시작하거나 연결하지 못했습니다."
 #: app/entry/report/report-delivery.tsx
 msgid "서버에 설정된 웹훅 주소가 Discord 웹훅 형식이 아닙니다"
 msgstr "서버에 설정된 웹훅 주소가 Discord 웹훅 형식이 아닙니다"
+
+#: app/entry/chat/chat-history.tsx
+msgid "서버에 연결되지 않았을 수 있습니다. 다시 시도해 주십시오."
+msgstr "서버에 연결되지 않았을 수 있습니다. 다시 시도해 주십시오."
 
 #: app/entry/navigation/compatible-accounts.tsx
 msgid "서버에서 쓰는 정확한 ID를 입력해 주십시오."

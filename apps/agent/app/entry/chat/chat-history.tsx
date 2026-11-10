@@ -1,11 +1,12 @@
 import { Trans, useLingui } from "@lingui/react/macro";
 import { runUiEffect, uiPromise } from "../shared/ui-effect";
 import { Effect } from "effect";
-import { ArrowDownIcon, MessageSquareIcon } from "lucide-react";
+import { ArrowDownIcon, MessageSquareIcon, RefreshCwIcon } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
 import {
   Empty,
+  EmptyContent,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
@@ -19,6 +20,7 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from "~/components/ui/message-scroller";
+import { Spinner } from "~/components/ui/spinner";
 import { cn } from "cn";
 import type { ChatMessage } from "memory-agent/chat-api";
 
@@ -32,6 +34,8 @@ const followDistance = 120;
 export function ChatHistory({
   messages,
   opened,
+  openFailed,
+  onReopen,
   hasOlderMessages,
   loadOlderMessages,
   renderMessage,
@@ -40,6 +44,9 @@ export function ChatHistory({
   messages: readonly ChatMessage[];
   /** The conversation was read; only then do no messages show it as new. */
   opened: boolean;
+  /** The conversation could not be read; `onReopen` reads it again. */
+  openFailed: boolean;
+  onReopen: () => void;
   hasOlderMessages: boolean;
   loadOlderMessages: () => Promise<void>;
   renderMessage: (message: ChatMessage, index: number) => ReactNode;
@@ -109,6 +116,35 @@ export function ChatHistory({
           <MessageScrollerContent
             className={cn("mx-auto max-w-3xl gap-5 px-4 pb-6", messages.length > 0 && "pt-6")}
           >
+            {!opened && !openFailed && (
+              <Spinner
+                className="mx-auto mt-24"
+                aria-label={t({
+                  message: "대화를 불러오는 중",
+                  comment: "Accessible label of the spinner shown while the conversation loads",
+                })}
+              />
+            )}
+            {openFailed && (
+              <Empty role="alert" className="mt-24">
+                <EmptyHeader>
+                  <EmptyTitle>
+                    <Trans>대화를 불러오지 못했습니다</Trans>
+                  </EmptyTitle>
+                  <EmptyDescription>
+                    <Trans>서버에 연결되지 않았을 수 있습니다. 다시 시도해 주십시오.</Trans>
+                  </EmptyDescription>
+                </EmptyHeader>
+                <EmptyContent>
+                  <Button type="button" variant="outline" size="sm" onClick={onReopen}>
+                    <RefreshCwIcon />
+                    <Trans comment="Button that loads the conversation again after it failed to load">
+                      다시 시도
+                    </Trans>
+                  </Button>
+                </EmptyContent>
+              </Empty>
+            )}
             {opened && messages.length === 0 && (
               <Empty className="mt-24">
                 <EmptyHeader>

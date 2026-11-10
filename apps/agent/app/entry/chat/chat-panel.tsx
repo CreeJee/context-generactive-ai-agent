@@ -408,6 +408,8 @@ function ChatPanel({
   const {
     messages,
     opened,
+    openFailed,
+    reopen,
     hasOlderMessages,
     loadOlderMessages,
     sendMessage,
@@ -725,8 +727,12 @@ function ChatPanel({
         : generating
           ? ComposerMode.generating()
           : ComposerMode.idle();
-  /** Whether the typed text, with the images ready, can go now. */
+  /**
+   * Whether the typed text, with the images ready, can go now. A turn sent before the conversation
+   * was read would not show, nor would its answer.
+   */
   const canSend = (text: string) =>
+    opened &&
     (text.trim().length > 0 || ready.length > 0) &&
     !uploading &&
     !failed &&
@@ -992,6 +998,8 @@ function ChatPanel({
       <ChatHistory
         messages={messages}
         opened={opened}
+        openFailed={openFailed}
+        onReopen={reopen}
         hasOlderMessages={hasOlderMessages}
         loadOlderMessages={loadOlderMessages}
         renderMessage={(message, index) => (
