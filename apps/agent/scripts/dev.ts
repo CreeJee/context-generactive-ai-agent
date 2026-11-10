@@ -11,6 +11,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { Option, Schema } from "effect";
 import { developmentBuildId } from "../server/dev-safety.ts";
 import { devHelp, readDevConfiguration } from "./dev-configuration.ts";
+import { backendEnvironment } from "./dev-environment.ts";
 import { assertPortAvailable } from "./dev-process.ts";
 
 const developmentRuntime = ManagedRuntime.make(
@@ -187,7 +188,11 @@ const stableBackend = Effect.fnUntraced(function* (buildId: string) {
   return yield* spawner.spawn(
     ChildProcess.make(process.execPath, args, {
       cwd: app,
-      env: { CONTEXT_AGENT_BUILD_ID: buildId, ...spanExport() },
+      env: {
+        ...backendEnvironment(process.platform)(process.env),
+        CONTEXT_AGENT_BUILD_ID: buildId,
+        ...spanExport(),
+      },
       extendEnv: true,
       // The open stdin pipe is the backend's lifetime, as with the span collector.
       stdin: "pipe",

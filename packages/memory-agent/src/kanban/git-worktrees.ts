@@ -117,6 +117,9 @@ const offlineInstalls = [
 /** Longest a worktree's install may take before the card starts without it. */
 const installTimeout = Duration.minutes(5);
 
+/** How much of the end of a failed install's output the warning keeps, per stream. */
+const installOutputTail = 2_000;
+
 const make = Effect.fnUntraced(function* (worktreesBase: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -196,7 +199,14 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
           folder,
           missing: install.lockfile,
         });
-      const exitCode = yield* Effect.scoped(
+      // Package managers print their errors on either stream; the end of each says why it failed.
+      const tail = <E>(output: Stream.Stream<Uint8Array, E>) =>
+        output.pipe(
+          Stream.decodeText(),
+          Stream.mkString,
+          Effect.map((text) => text.slice(-installOutputTail).trim()),
+        );
+      const [exitCode, stdout, stderr] = yield* Effect.scoped(
         Effect.flatMap(
           spawner.spawn(
             ChildProcess.make(executable, install.args, {
@@ -205,11 +215,12 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
               extendEnv: true,
               windowsHide: true,
               stdin: "ignore",
-              stdout: "ignore",
-              stderr: "ignore",
             }),
           ),
-          (child) => child.exitCode,
+          (child) =>
+            Effect.all([child.exitCode, tail(child.stdout), tail(child.stderr)], {
+              concurrency: 3,
+            }),
         ),
       ).pipe(Effect.timeout(installTimeout));
       yield* Effect.when(
@@ -217,6 +228,8 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
           folder,
           lockfile: install.lockfile,
           exitCode: Number(exitCode),
+          stdout,
+          stderr,
         }),
         Effect.succeed(Number(exitCode) !== 0),
       );
