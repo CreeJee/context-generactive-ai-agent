@@ -152,7 +152,7 @@ export const startErrorText = (error: Error) =>
     ? t`칸반 보드로 실행할 Goal이 없습니다. Goal을 먼저 정해 주십시오.`
     : editErrorText(error);
 /** Why a person's intent for a card was refused; approving needs the board running. */
-export const intentErrorText = (sent: BoardIntent["_tag"], error: Error) =>
+export const intentErrorText = (sent: BoardIntent["_tag"]) => (error: Error) =>
   sent === "Approve" && isApiError(error) && error.code === "not_kanban"
     ? t`칸반 보드가 실행 중일 때만 카드를 승인할 수 있습니다.`
     : editErrorText(error);
@@ -440,7 +440,7 @@ export function BoardSurface({
                 sessionId: peekSession,
                 action: KanbanAction.Intent({ intent: BoardIntent[sent]({ cardId }) }),
               },
-              { onError: (error) => setNotice(intentErrorText(sent, error)) },
+              { onError: (error) => setNotice(intentErrorText(sent)(error)) },
             )
           }
           onClose={() => {

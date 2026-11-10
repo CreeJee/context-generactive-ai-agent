@@ -17,7 +17,7 @@ import { DecisionPrompt } from "../chat/decision-prompt";
 import { intentErrorText } from "../chat/board/board-surface";
 import { KanbanAction, useBoardsKanbanMutation } from "../queries/mutations/session";
 import { useDecisionInboxQuery, useProjectBoardsQuery } from "../queries/project";
-import { LoadFailure } from "../shared/load-failure";
+import { LoadFailed } from "../shared/load-failed";
 import { koreanLocalTime } from "../shared/local-time";
 
 /**
@@ -75,14 +75,14 @@ export function DecisionInbox({
           </SheetHeader>
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 pb-4 text-xs text-muted-foreground">
             {failed && (
-              <LoadFailure
+              <LoadFailed
                 onRetry={() => {
                   void inbox.refetch();
                   void boards.refetch();
                 }}
               >
                 <Trans>판단을 기다리는 카드를 불러오지 못했습니다.</Trans>
-              </LoadFailure>
+              </LoadFailed>
             )}
             {count === 0 && !failed && (
               <p>
@@ -174,7 +174,7 @@ export function DecisionInbox({
                           sessionId: board.sessionId,
                           action: KanbanAction.Intent({ intent: BoardIntent.Approve({ cardId }) }),
                         },
-                        { onError: (error) => setApproveError(intentErrorText("Approve", error)) },
+                        { onError: (error) => setApproveError(intentErrorText("Approve")(error)) },
                       );
                     }}
                   >

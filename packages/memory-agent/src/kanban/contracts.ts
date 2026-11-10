@@ -126,7 +126,6 @@ export const KanbanCardView = Schema.Struct({
   replans: Schema.Finite,
   /** The card a resolution card re-applies. */
   resolutionOf: Schema.NullOr(Schema.String),
-  requeueable: Schema.Boolean,
 });
 export type KanbanCardView = typeof KanbanCardView.Type;
 

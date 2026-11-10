@@ -4,7 +4,6 @@ import {
   Effect,
   HashMap,
   HashSet,
-  Iterable,
   Layer,
   Match,
   Option,
@@ -26,7 +25,6 @@ import { CardStatus, type BoardAuthor } from "../workflow/card.ts";
 import { Workflows, type PlanStep } from "../workflow/workflow.ts";
 import { boardOps } from "./board-ops.ts";
 import { CardAttempts, plannerStalled, type KanbanGoal } from "./card-attempts.ts";
-import { cardQueueName } from "./card-queue.ts";
 import { CardHoldReason } from "./failures.ts";
 import {
   DecisionCloseScope,
@@ -704,23 +702,14 @@ const make = Effect.gen(function* () {
     }),
 
     /**
-     * The session's kanban board as the loop sees it: why it stopped each card and which blocked
-     * cards can be requeued. None when the session's Goal does not run as a board.
+     * The session's kanban board as the loop sees it: why it stopped each card. None when the
+     * session's Goal does not run as a board.
      */
     view: Effect.fn("KanbanBoardActions.view")(function* (sessionId: string) {
       const goal = yield* kanbanOf(sessionId);
       if (Option.isNone(goal)) return Option.none<KanbanBoardView>();
       const { goalInstanceId, mode, hold } = goal.value;
       const steps = (yield* workflows.get(sessionId)).plan?.steps ?? [];
-      const dead = HashSet.fromIterable(
-        Iterable.map(
-          Iterable.filter(
-            yield* attempts.deadLettered(cardQueueName),
-            (item) => item.goalInstanceId === goalInstanceId,
-          ),
-          (item) => item.cardId,
-        ),
-      );
       const ladderOf = yield* attempts.ladders(goalInstanceId);
       const cards = steps.map((card): KanbanCardView => {
         const ladder = ladderOf(card.id);
@@ -731,7 +720,6 @@ const make = Effect.gen(function* () {
           failures: ladder.failureStreak,
           replans: ladder.replans,
           resolutionOf: ladder.resolutionOf,
-          requeueable: card.status === "blocked" && HashSet.has(dead, card.id),
         };
       });
       return Option.some<KanbanBoardView>({

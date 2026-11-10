@@ -1817,14 +1817,12 @@ msgstr "다시 보내기"
 
 #. Button that asks the server again whether this window may write
 #. Button that loads a list or settings section again after it failed to load
-#. Button that loads a part of the page again after it failed to load
 #. Button that loads the conversation again after it failed to load
 #. Button that reruns a subagent task as a new attempt
 #: app/entry/chat/chat-history.tsx
 #: app/entry/chat/message.tsx
 #: app/entry/chat/read-only-bar.tsx
 #: app/entry/shared/load-failed.tsx
-#: app/entry/shared/load-failure.tsx
 msgid "다시 시도"
 msgstr "다시 시도"
 
