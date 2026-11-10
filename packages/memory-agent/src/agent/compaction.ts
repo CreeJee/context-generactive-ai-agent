@@ -1,5 +1,6 @@
 import { Function as EffectFunction, pipe } from "effect";
 import { isTruthy } from "../truthy.ts";
+import { JsonValue } from "../json.ts";
 import {
   Array as EffectArray,
   Clock,
@@ -14,6 +15,7 @@ import {
   Effect,
   Iterable,
   Layer,
+  Match,
   Option,
   Ref,
   Result,
@@ -1116,6 +1118,48 @@ const shellPreview = (content: string) =>
     stderr: preview(result.stderr, result.status === "succeeded" ? 600 : 1_500),
   }));
 
+/** How a ts skill's or run_code's program ended, as `tools/code.ts` reports it. */
+const ProgramLogs = Schema.Array(Schema.String);
+const largeProgramResult = Schema.fromJsonString(
+  Schema.Union([
+    Schema.Struct({ status: Schema.Literal("returned"), value: JsonValue, logs: ProgramLogs }),
+    Schema.Struct({ status: Schema.Literal("threw"), error: Schema.String, logs: ProgramLogs }),
+    Schema.Struct({ status: Schema.Literal("timed_out"), logs: ProgramLogs }),
+  ]),
+);
+
+/** The logged lines as they are when they fit, otherwise as shortened text. */
+const logsPreview = (logs: readonly string[], length: number) => {
+  const text = logs.join("\n");
+  return text.length <= length ? logs : preview(text, length);
+};
+
+/** The returned value as it is when its JSON text fits, otherwise that text shortened. */
+const valuePreview = (value: JsonValue, length: number) => {
+  const text = JSON.stringify(value);
+  return text.length <= length ? value : preview(text, length);
+};
+
+/** A returned program mainly needs its value; one that threw or timed out keeps more logs. */
+const programOutcome = Match.type<typeof largeProgramResult.Type>().pipe(
+  Match.discriminatorsExhaustive("status")({
+    returned: ({ status, value, logs }) => ({
+      status,
+      value: valuePreview(value, 1_200),
+      logs: logsPreview(logs, 600),
+    }),
+    threw: ({ status, error, logs }) => ({
+      status,
+      error: preview(error, 1_500),
+      logs: logsPreview(logs, 1_000),
+    }),
+    timed_out: ({ status, logs }) => ({ status, logs: logsPreview(logs, 1_000) }),
+  }),
+);
+
+const programPreview = (content: string) =>
+  Option.map(Schema.decodeOption(largeProgramResult)(content), programOutcome);
+
 const reportPreview = (content: string) =>
   Option.map(Schema.decodeOption(largeReportResult)(content), (result) => ({
     ...result,
@@ -1126,6 +1170,7 @@ const reportPreview = (content: string) =>
 /** The tools whose large results are sent as previews. */
 const PreviewedTool = Schema.Literals([
   "run_skill",
+  "run_code",
   "run_shell",
   "list_files",
   "search_files",
@@ -1135,7 +1180,9 @@ const PreviewedTool = Schema.Literals([
 
 /** How each previewed tool's result is shortened, or none when it does not have its shape. */
 const previews: Record<typeof PreviewedTool.Type, (content: string) => Option.Option<object>> = {
-  run_skill: shellPreview,
+  // A sh skill reports its process; a ts skill, its program.
+  run_skill: (content) => Option.orElse(shellPreview(content), () => programPreview(content)),
+  run_code: programPreview,
   // run_shell and get_subagent_report are in history recorded before their replacements.
   run_shell: shellPreview,
   list_files: (content) =>

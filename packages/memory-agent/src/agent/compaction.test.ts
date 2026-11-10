@@ -501,6 +501,40 @@ describe("lightweight tool results", () => {
     expect(messages[1]?.content).toBe(original);
   });
 
+  const logs = [...Array.from({ length: 400 }, (_, index) => `checked file-${index}.ts`), "LAST"];
+  it.each([
+    {
+      name: "run_skill",
+      result: { status: "returned", value: { summary: `${"x".repeat(4_000)}END` }, logs },
+      essential: ['"status":"returned"', "END", "LAST"],
+    },
+    {
+      name: "run_code",
+      result: { status: "threw", error: `${"trace".repeat(1_000)}FINAL CAUSE`, logs },
+      essential: ['"status":"threw"', "FINAL CAUSE", "LAST"],
+    },
+    {
+      name: "run_code",
+      result: { status: "timed_out", logs },
+      essential: ['"status":"timed_out"', "LAST"],
+    },
+  ])("$name program $result.status keeps its outcome and shortens logs and value", (program) => {
+    const original = JSON.stringify(program.result);
+    const messages = exchange(program.name, "{}", original);
+    const sent = lightweightToolResults(messages, recorded);
+    program.essential.forEach((text) => expect(sent[1]?.content).toContain(text));
+    expect(sent[1]?.content).toContain("read_tool_result ID node-1");
+    expect(JSON.stringify(sent).length).toBeLessThan(original.length / 2);
+    expect(messages[1]?.content).toBe(original);
+  });
+
+  it("keeps a small returned value as JSON while shortening a program's logs", () => {
+    const original = JSON.stringify({ status: "returned", value: { failing: 2 }, logs });
+    const sent = lightweightToolResults(exchange("run_skill", "{}", original), recorded);
+    expect(sent[1]?.content).toContain('"value":{"failing":2}');
+    expect(sent[1]?.content?.length).toBeLessThan(original.length);
+  });
+
   it("shortens a sub-4000-character directory listing by default, without losing navigation", () => {
     const original = JSON.stringify({
       total: 80,
