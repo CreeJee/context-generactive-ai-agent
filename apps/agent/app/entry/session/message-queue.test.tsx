@@ -61,14 +61,16 @@ describe("queue snapshot from server", () => {
         nextDelivery: NextDelivery.blocked({ messageId: item.id, reason: "held" }),
       };
       vi.spyOn(api, "editQueued").mockResolvedValue(null);
-      vi.spyOn(api, "queue").mockResolvedValue(updated);
+      const read = vi.spyOn(api, "queue").mockResolvedValue(updated);
       const queue = readSnapshot({
         items: [item],
         nextDelivery: NextDelivery.server(),
       });
+      // The change went through, so there is no reason to show, and the queue is read again.
       expect(
         yield* sdkCall(() => queue.change(item.id, QueueEdit.edit({ draft: item.text }))),
-      ).toEqual(updated);
+      ).toBeNull();
+      expect(read).toHaveBeenCalled();
     }),
   );
 });

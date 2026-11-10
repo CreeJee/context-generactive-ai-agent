@@ -26,12 +26,17 @@ const deliveryLabels = {
   next_turn: msg`다음 턴으로 전달됨`,
 } satisfies Record<DeliveryVia, MessageDescriptor>;
 
-/** Icon, colour and short label for each state; delivery says only "delivered", never "done". */
+/**
+ * Icon, colour and short label for each state, and why a message that will not go on its own waits;
+ * delivery says only "delivered", never "done".
+ */
 function stateView(message: QueuedMessage, editingHere: boolean) {
   return QueueItemState.$match(message.state, {
     waiting: ({ steered }) => ({
       icon: Clock3Icon,
       tone: "text-muted-foreground",
+      why: null,
+      detail: null,
       label: steered
         ? msg({
             message: "끼어들기",
@@ -42,6 +47,8 @@ function stateView(message: QueuedMessage, editingHere: boolean) {
     editing: () => ({
       icon: PencilLineIcon,
       tone: "text-primary",
+      why: msg`편집을 끝낼 때까지 이 메시지와 그 뒤 메시지는 보내지 않습니다.`,
+      detail: null,
       label: editingHere
         ? msg({ message: "편집 중", comment: "Queue row state: the message is being edited here" })
         : msg`편집 중, 저장 안 됨`,
@@ -49,6 +56,8 @@ function stateView(message: QueuedMessage, editingHere: boolean) {
     held: ({ draft }) => ({
       icon: CircleAlertIcon,
       tone: "text-amber-600 dark:text-amber-400",
+      why: msg`답변이 멈추거나 실패했거나 앱이 다시 시작돼서 저절로 보내지 않습니다. 보내기를 누르면 보냅니다.`,
+      detail: null,
       label:
         draft === null
           ? msg({
@@ -60,11 +69,16 @@ function stateView(message: QueuedMessage, editingHere: boolean) {
     delivered: ({ via }) => ({
       icon: CheckIcon,
       tone: "text-muted-foreground",
+      why: null,
+      detail: null,
       label: deliveryLabels[via],
     }),
-    failed: () => ({
+    failed: ({ reason }) => ({
       icon: CircleXIcon,
       tone: "text-destructive",
+      why: msg`이 메시지를 보내지 못했습니다. 보내기를 누르면 다시 보냅니다.`,
+      // The text an earlier version recorded, shown only on hover.
+      detail: reason.length > 0 ? reason : null,
       label: msg({
         message: "전달 실패",
         comment: "Queue row state: the message was not delivered",
@@ -172,9 +186,27 @@ export function QueuePanel({
                   </span>
                 )}
               </span>
-              {view.label && (
-                <span className={cn("shrink-0 text-xs", view.tone)}>{t(view.label)}</span>
-              )}
+              {view.label &&
+                (view.why === null ? (
+                  <span className={cn("shrink-0 text-xs", view.tone)}>{t(view.label)}</span>
+                ) : (
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <span
+                          tabIndex={0}
+                          className="shrink-0 text-xs underline decoration-dotted"
+                        />
+                      }
+                    >
+                      <span className={view.tone}>{t(view.label)}</span>
+                    </TooltipTrigger>
+                    <TooltipContent className="max-w-72">
+                      <p>{t(view.why)}</p>
+                      {view.detail !== null && <p className="opacity-70">{view.detail}</p>}
+                    </TooltipContent>
+                  </Tooltip>
+                ))}
               {(failed || QueueItemState.$is("held")(message.state)) && (
                 <Button
                   size="sm"

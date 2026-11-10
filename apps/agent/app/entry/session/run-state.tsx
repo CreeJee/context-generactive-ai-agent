@@ -1,5 +1,5 @@
 import { Trans } from "@lingui/react/macro";
-import { RefreshCwIcon } from "lucide-react";
+import { RefreshCwIcon, SendIcon } from "lucide-react";
 import { runFailureText } from "memory-agent/definitions";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Button } from "~/components/ui/button";
@@ -8,7 +8,31 @@ import { FailureDetails } from "../shared/failure-details";
 import { koreanLocalTime } from "../shared/local-time";
 import { RunNotice } from "./run-notice";
 
-export function RunNoticeView({ notice }: { notice: RunNotice }) {
+/** Sends the last user turn again, for a run that ended without its answer. */
+function ResendAction({ onResend }: { onResend: (() => void) | null }) {
+  return (
+    onResend !== null && (
+      <AlertAction>
+        <Button size="sm" variant="outline" onClick={onResend}>
+          <SendIcon />{" "}
+          <Trans comment="Button that sends the user's last message again">다시 보내기</Trans>
+        </Button>
+      </AlertAction>
+    )
+  );
+}
+
+/**
+ * How the last run ended. `onResend` sends the last user turn again; null when there is none, or
+ * the page may not send.
+ */
+export function RunNoticeView({
+  notice,
+  onResend,
+}: {
+  notice: RunNotice;
+  onResend: (() => void) | null;
+}) {
   return RunNotice.$match(notice, {
     cancelled: () => (
       <Marker>
@@ -38,6 +62,7 @@ export function RunNoticeView({ notice }: { notice: RunNotice }) {
             주십시오.
           </Trans>
         </AlertDescription>
+        <ResendAction onResend={onResend} />
       </Alert>
     ),
     resuming: ({ at }) => {
@@ -65,6 +90,7 @@ export function RunNoticeView({ notice }: { notice: RunNotice }) {
           <p>{runFailureText[code]}</p>
           <FailureDetails detail={detail} />
         </AlertDescription>
+        <ResendAction onResend={onResend} />
       </Alert>
     ),
     discarded: () => (
@@ -101,6 +127,7 @@ export function RunNoticeView({ notice }: { notice: RunNotice }) {
         <AlertDescription>
           <Trans>끝까지 답하지 못했습니다. 필요하면 다시 보내 주십시오.</Trans>
         </AlertDescription>
+        <ResendAction onResend={onResend} />
       </Alert>
     ),
     "no-answer": () => (

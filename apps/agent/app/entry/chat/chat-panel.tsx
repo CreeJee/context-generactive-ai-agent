@@ -4,7 +4,7 @@ import { Trans, useLingui } from "@lingui/react/macro";
 import { Data, Effect, Fiber, Match } from "effect";
 import { runUiEffect, uiPromise } from "../shared/ui-effect";
 import { isTruthy } from "../../truthy.ts";
-import type { Refusal } from "memory-agent/chat-api";
+import { MessagePart, type Refusal } from "memory-agent/chat-api";
 import type { UserContent } from "memory-agent/chat-session";
 import { attachmentUrl, contextUsageEvent, queueDeliveredEvent } from "memory-agent/definitions";
 import { cn } from "cn";
@@ -699,6 +699,16 @@ function ChatPanel({
     [deleteTrace, t],
   );
 
+  // The last turn the user wrote, as it was sent, for a run that ended without its answer.
+  const lastTurn = messages.findLast((message) => message.role === "user");
+  const resend =
+    lastTurn === undefined || mutationBlocked || !opened
+      ? null
+      : () => {
+          setNotice(null);
+          sendMessage(lastTurn.parts.filter(MessagePart.isAnyOf(["text", "image"])));
+        };
+
   const ready = draftImages.images.filter(DraftImage.$is("ready"));
   const uploading = draftImages.images.some(DraftImage.$is("uploading"));
   const failed = draftImages.images.some(DraftImage.$is("failed"));
@@ -753,6 +763,15 @@ function ChatPanel({
     void handleRunSettled();
   }, [generating, readOnly]);
 
+  /** Changes a queued message, and says why when the server did not take the change. */
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  const changeQueued = (id: string, edit: QueueEdit) =>
+    runUiEffect(
+      uiPromise(() => queue.change(id, edit)).pipe(
+        Effect.map((refused) => refused !== null && setNotice(problem(t(refused)))),
+      ),
+    );
+
   const startEdit = (message: QueuedMessage) => {
     if (editing !== null || readOnly) return;
     const text = Match.value(message.state).pipe(
@@ -762,7 +781,7 @@ function ChatPanel({
     );
     setComposer(Composer.editing({ id: message.id, text: Atom.make(text) }));
     setNotice(null);
-    void queue.change(message.id, QueueEdit.edit({ draft: text }));
+    void changeQueued(message.id, QueueEdit.edit({ draft: text }));
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -773,7 +792,7 @@ function ChatPanel({
         setComposer(Composer.compose());
         const text = typed.trim();
         yield* uiPromise(() =>
-          queue.change(
+          changeQueued(
             editing.id,
             outcome === "save" && text.length > 0 ? QueueEdit.save({ text }) : QueueEdit.remove(),
           ),
@@ -781,16 +800,14 @@ function ChatPanel({
       }),
     );
 
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const confirmQueued = (message: QueuedMessage) =>
-    runUiEffect(uiPromise(() => queue.change(message.id, QueueEdit.confirm())));
+  const confirmQueued = (message: QueuedMessage) => changeQueued(message.id, QueueEdit.confirm());
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const removeQueued = (message: QueuedMessage) =>
     runUiEffect(
       Effect.gen(function* () {
         if (editing?.id === message.id) return yield* uiPromise(() => finishEdit("remove"));
-        yield* uiPromise(() => queue.change(message.id, QueueEdit.remove()));
+        yield* uiPromise(() => changeQueued(message.id, QueueEdit.remove()));
       }),
     );
 
@@ -1086,7 +1103,9 @@ function ChatPanel({
               </AlertDescription>
             </Alert>
           )}
-        {!generating && !waitingForApproval && run.notice && <RunNoticeView notice={run.notice} />}
+        {!generating && !waitingForApproval && run.notice && (
+          <RunNoticeView notice={run.notice} onResend={resend} />
+        )}
       </ChatHistory>
 
       <div className="bg-background px-6 pt-2 pb-4">
@@ -1140,7 +1159,7 @@ function ChatPanel({
             <DraftComposer
               ref={composerInput}
               textAtom={editing?.text ?? drafts.text}
-              onEditDraft={(id, text) => void queue.change(id, QueueEdit.edit({ draft: text }))}
+              onEditDraft={(id, text) => void changeQueued(id, QueueEdit.edit({ draft: text }))}
               editingId={editing?.id ?? null}
               slashContext={slash.context}
               draftImages={draftImages}

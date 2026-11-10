@@ -1,7 +1,10 @@
+import type { MessageDescriptor } from "@lingui/core";
+import { msg } from "@lingui/core/macro";
 import { runUiEffect, uiPromise } from "../shared/ui-effect";
-import { Data, Effect, Function as EffectFunction } from "effect";
+import { Data, Effect, Function as EffectFunction, Schema } from "effect";
 import {
   isApiError,
+  refusalOf,
   NextDelivery,
   type QueuedMessage,
   type QueueEdit,
@@ -20,6 +23,23 @@ export type AddOutcome = Data.TaggedEnum<{
   failed: {};
 }>;
 export const AddOutcome = Data.taggedEnum<AddOutcome>();
+
+const QueueChangeRefusal = Schema.Literals([
+  "queue_not_found",
+  "queue_delivered",
+  "queue_reserved",
+  "queue_not_held",
+  "session_in_use",
+]);
+/** Why the server did not take a change to a queued message. */
+const queueChangeRefusals = {
+  queue_not_found: msg`그 메시지는 이미 대기열에 없습니다.`,
+  queue_delivered: msg`그 메시지는 이미 보냈습니다.`,
+  queue_reserved: msg`그 메시지는 지금 보내는 중이라 바꿀 수 없습니다.`,
+  queue_not_held: msg`그 메시지는 확인을 기다리지 않고 이미 보낼 차례를 기다립니다.`,
+  session_in_use: msg`다른 창이 이 대화를 쓰고 있습니다.`,
+} satisfies Record<typeof QueueChangeRefusal.Type, MessageDescriptor>;
+const isQueueChangeRefusal = Schema.is(QueueChangeRefusal);
 
 /** Messages a page can still change: everything that has not reached the agent. */
 export const isPending = (message: QueuedMessage) =>
@@ -63,12 +83,23 @@ function useMessageQueueBody(sessionId: string, holder: string, _generating: boo
       ),
     );
 
-  const change = (id: string, edit: QueueEdit) =>
+  /**
+   * Changes a queued message. A refused or failed change shows as the queue the server still has,
+   * and gives why it did not go through for the page to say.
+   */
+  const change = (id: string, edit: QueueEdit): Promise<MessageDescriptor | null> =>
     runUiEffect(
       uiPromise(() => editQueue.mutateAsync({ id, edit })).pipe(
-        // A refused or failed edit shows as the queue the server still has.
-        Effect.catchTag("UnknownError", () => Effect.succeed(null)),
-        Effect.andThen(uiPromise(() => refresh())),
+        Effect.as(null),
+        Effect.catchTag("UnknownError", (failure) => {
+          const code = refusalOf(failure.cause)?.code;
+          return Effect.succeed(
+            isQueueChangeRefusal(code)
+              ? queueChangeRefusals[code]
+              : msg`대기열 메시지를 바꾸지 못했습니다. 다시 시도해 주십시오.`,
+          );
+        }),
+        Effect.tap(() => uiPromise(() => refresh())),
       ),
     );
 

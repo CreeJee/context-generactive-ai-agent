@@ -1436,6 +1436,22 @@ msgstr "권한 모드를 골라 주십시오(ask 또는 auto)."
 msgid "그 대화 Plan의 새 카드로 들어갑니다. 의존은 끊기고 처음부터 다시 시작합니다."
 msgstr "그 대화 Plan의 새 카드로 들어갑니다. 의존은 끊기고 처음부터 다시 시작합니다."
 
+#: app/entry/session/message-queue.ts
+msgid "그 메시지는 이미 대기열에 없습니다."
+msgstr "그 메시지는 이미 대기열에 없습니다."
+
+#: app/entry/session/message-queue.ts
+msgid "그 메시지는 이미 보냈습니다."
+msgstr "그 메시지는 이미 보냈습니다."
+
+#: app/entry/session/message-queue.ts
+msgid "그 메시지는 지금 보내는 중이라 바꿀 수 없습니다."
+msgstr "그 메시지는 지금 보내는 중이라 바꿀 수 없습니다."
+
+#: app/entry/session/message-queue.ts
+msgid "그 메시지는 확인을 기다리지 않고 이미 보낼 차례를 기다립니다."
+msgstr "그 메시지는 확인을 기다리지 않고 이미 보낼 차례를 기다립니다."
+
 #. Closes the dialog and leaves the card in its conversation
 #. Closes the dialog and leaves the running card unchanged
 #. Dialog button: keep the running board as it is
@@ -1720,6 +1736,7 @@ msgstr "다른 창이 이 대화를 더 이상 쓰지 않습니다"
 
 #: app/entry/chat/refusals.ts
 #: app/entry/chat/subagent-panel.tsx
+#: app/entry/session/message-queue.ts
 msgid "다른 창이 이 대화를 쓰고 있습니다."
 msgstr "다른 창이 이 대화를 쓰고 있습니다."
 
@@ -1749,6 +1766,11 @@ msgstr "다시 대기열에"
 #: app/entry/settings/pages/mcp.tsx
 msgid "다시 로그인"
 msgstr "다시 로그인"
+
+#. Button that sends the user's last message again
+#: app/entry/session/run-state.tsx
+msgid "다시 보내기"
+msgstr "다시 보내기"
 
 #. Button that asks the server again whether this window may write
 #. Button that loads a settings section again after it failed to load
@@ -1932,6 +1954,10 @@ msgstr "답변이 끝난 뒤 모드를 바꿀 수 있습니다."
 msgid "답변이 끝난 뒤에 비울 수 있습니다."
 msgstr "답변이 끝난 뒤에 비울 수 있습니다."
 
+#: app/entry/chat/queue-panel.tsx
+msgid "답변이 멈추거나 실패했거나 앱이 다시 시작돼서 저절로 보내지 않습니다. 보내기를 누르면 보냅니다."
+msgstr "답변이 멈추거나 실패했거나 앱이 다시 시작돼서 저절로 보내지 않습니다. 보내기를 누르면 보냅니다."
+
 #: app/entry/session/run-state.tsx
 msgid "답변이 아직 진행 중입니다"
 msgstr "답변이 아직 진행 중입니다"
@@ -1984,6 +2010,10 @@ msgstr "대기열"
 #: app/entry/chat/refusals.ts
 msgid "대기열 메시지를 고치는 사이라 보내지 않았습니다. 대기열에서 확인한 뒤 보내 주십시오."
 msgstr "대기열 메시지를 고치는 사이라 보내지 않았습니다. 대기열에서 확인한 뒤 보내 주십시오."
+
+#: app/entry/session/message-queue.ts
+msgid "대기열 메시지를 바꾸지 못했습니다. 다시 시도해 주십시오."
+msgstr "대기열 메시지를 바꾸지 못했습니다. 다시 시도해 주십시오."
 
 #: app/entry/chat/chat-composer.tsx
 msgid "대기열에 넣기"
@@ -4337,6 +4367,10 @@ msgstr "이 대화로 아직 모델에 요청하지 않았습니다."
 msgid "이 대화를 쓸 수 있는지 확인하지 못했습니다"
 msgstr "이 대화를 쓸 수 있는지 확인하지 못했습니다"
 
+#: app/entry/chat/queue-panel.tsx
+msgid "이 메시지를 보내지 못했습니다. 보내기를 누르면 다시 보냅니다."
+msgstr "이 메시지를 보내지 못했습니다. 보내기를 누르면 다시 보냅니다."
+
 #: app/entry/settings/pages/kanban.tsx
 msgid "이 모델을 쓸 수 없습니다. 그 제공자 로그인 상태와 모델, 추론 단계가 맞는지 확인해 주십시오."
 msgstr "이 모델을 쓸 수 없습니다. 그 제공자 로그인 상태와 모델, 추론 단계가 맞는지 확인해 주십시오."
@@ -5818,6 +5852,10 @@ msgstr "편집 중, 저장 안 됨"
 #: app/entry/chat/chat-panel.tsx
 msgid "편집을 끝낸 뒤 스티어링할 수 있습니다."
 msgstr "편집을 끝낸 뒤 스티어링할 수 있습니다."
+
+#: app/entry/chat/queue-panel.tsx
+msgid "편집을 끝낼 때까지 이 메시지와 그 뒤 메시지는 보내지 않습니다."
+msgstr "편집을 끝낼 때까지 이 메시지와 그 뒤 메시지는 보내지 않습니다."
 
 #: app/entry/navigation/sidebar.tsx
 msgid "폴더 경로"

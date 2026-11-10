@@ -18,7 +18,7 @@
 - `RunNotice` — `cancelled | cancel-pending | restarted | resuming{at} | failed{detail,code} | discarded | detached | stopped | no-answer | reconciled` TaggedEnum. `failed`는 코드 문구를 보이고 `detail`(run 원문)은 접어 둔다. `discarded`는 사용자가 끊어진 승인을 폐기한 run이다
 - `noticeOf` (dual: `(state, page)`) — `SessionRunState`와 `PageView`로 보여 줄 `RunNotice`를 고르거나 null을 돌려준다
 - `PageView` — `{ waitingForApproval, answered }` 페이지 측 정보 인터페이스
-- `RunNoticeView({ notice })` — `RunNotice`를 Alert/Marker UI로 그리는 React 컴포넌트. detached일 때 `window.location.reload()` 버튼을 둔다
+- `RunNoticeView({ notice, onResend })` — `RunNotice`를 Alert/Marker UI로 그리는 React 컴포넌트. detached일 때 `window.location.reload()` 버튼을, failed·stopped·restarted일 때 마지막 사용자 turn을 다시 보내는 "다시 보내기" 버튼(`onResend`가 null이 아닐 때)을 둔다
 - `failureLabel(failure: AttemptFailure)` — 실패 이유 태그와 단계를 한국어 한 줄로 만든다. `Match.tagsExhaustive` 사용
 - `useDelegatedWork` (dual: `(sessionId, _generating)`) — 서브에이전트와 relay된 승인 목록 스냅샷 훅
 - `requesterLabel` — `ApprovalRequester.match`로 승인 요청자(subagent/external_agent) 문구를 만든다
@@ -49,7 +49,7 @@
 - `failureLabel`의 reason 매핑은 `Match.tagsExhaustive`로, stage 매핑은 `Record<AttemptFailureStage, string>`로 둔다. memory-agent에 새 태그나 stage가 생기면 여기도 바꿔야 한다
 - `useWorkTrace`의 refresh는 `refreshing`/`dirty` 플래그로 invalidate를 한 번에 하나만 돌리고, 도중에 들어온 변경은 루프에서 다시 반영한다. 언마운트할 때 `active = false`로 두고 fiber를 interrupt한다
 - 문서가 hidden이면 EventSource를 닫고 `connecting`으로 둔다. 다시 보이면 trace 쿼리를 invalidate한 뒤 cursor로 다시 연결한다
-- `useMessageQueue.change`는 편집이 거부되거나 실패해도 오류를 삼키고 refresh해서 서버가 가진 큐를 보여 준다. `add`는 `not_running` ApiError를 `AddOutcome["not-running"]`로 바꾼다
+- `useMessageQueue.change`는 편집이 거부되거나 실패하면 refresh해서 서버가 가진 큐를 보여 주고, 그 이유 문구(`MessageDescriptor`)를 돌려준다. 받아들여지면 null이다. ChatPanel은 이유를 입력창 위 알림으로 보인다. `add`는 `not_running` ApiError를 `AddOutcome["not-running"]`로 바꾼다
 - HMR dispose 때 `runLeaseAction.dispose()`로 lease 러너의 ManagedRuntime을 정리한다
 
 ## Side Effects
