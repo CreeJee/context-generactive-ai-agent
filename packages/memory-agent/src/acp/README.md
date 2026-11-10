@@ -18,6 +18,7 @@
 - `toolView` — 도구 이름을 `{title, kind}`로 바꾼다. 표에 없는 `mcp_<server>__<tool>` 이름은 `MCP server · tool`로, 그 밖의 이름은 원래 이름과 kind `other`로 보여 준다
 - `ToolView` — 에디터 표시용 인터페이스 `{ title: string; kind: ToolKind }`
 - `toolDetail` — 인자 JSON의 `path`·`command`·`query`·`task` 중 첫 값을 80자 제한(77자 + `…`)으로 돌려준다. 없으면 `null`
+- `toolTitle` — dual `(name, argumentsJson)`. 에디터에 보일 도구 호출 제목이다. `run_skill`은 도구 제목 뒤에 ` · <스킬 이름>`을 붙이고, 그 밖의 도구는 `toolDetail`, 없으면 도구 제목을 쓴다
 - `toolLocations` — dual `(argumentsJson, projectRoot)`. `path` 인자를 `path.resolve`로 절대 경로 `[{ path }]`로 바꾼다
 - 문구 — Lingui 런타임 매크로 메시지(`msg`)로 쓰는 곳에 두고 `src/i18n.ts`로 푼다. `src/locales/ko.po`로 추출되고 `lint/wording`가 검사한다
 - `SdkStreams` — `Context.Service`(`memory-agent/acp/web-streams/SdkStreams`). `{readable, writable}` Web stream을 갖고, `SdkStreams.layer({input, output, closeOutput})`로 만든다

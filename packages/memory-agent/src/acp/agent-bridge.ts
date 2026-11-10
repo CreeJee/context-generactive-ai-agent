@@ -50,7 +50,7 @@ import {
   type AppApi,
   type ProjectSummary,
 } from "./app-api.ts";
-import { toolDetail, toolLocations, toolView } from "./tool-view.ts";
+import { toolLocations, toolTitle, toolView } from "./tool-view.ts";
 import type { MessageDescriptor } from "@lingui/core";
 import { msg } from "@lingui/core/runtime-macro";
 import { i18n } from "../i18n.ts";
@@ -72,9 +72,15 @@ const relayPollMs = 1_500;
 /** Longest tool output passed to the editor. */
 const maxToolOutput = 4_000;
 
+/** A tool call the model is still writing: its tool, and the arguments streamed so far. */
+interface StreamedCall {
+  readonly name: string;
+  readonly args: string;
+}
+
 interface PromptTurn {
   readonly client: AgentContext;
-  readonly args: Ref.Ref<HashMap.HashMap<string, string>>;
+  readonly calls: Ref.Ref<HashMap.HashMap<string, StreamedCall>>;
   readonly cancelled: Ref.Ref<boolean>;
   readonly failure: Ref.Ref<Option.Option<ShownFailure<RunFailureCode>>>;
 }
@@ -295,7 +301,7 @@ const replayed = (message: ChatMessage) =>
           {
             sessionUpdate: "tool_call",
             toolCallId: call.id,
-            title: toolDetail(call.arguments) ?? view.title,
+            title: toolTitle(call.name, call.arguments),
             kind: view.kind,
             status: "completed",
             rawInput: call.arguments,
@@ -323,10 +329,8 @@ const makeAcpAgent = Effect.fnUntraced(function* (options: {
     Effect.sync(
       () => void turn.client.notify(acp.methods.client.session.update, { sessionId, update }),
     );
-  const argsOf = (turn: PromptTurn, toolCallId: string) =>
-    Effect.map(Ref.get(turn.args), (args) =>
-      Option.getOrElse(HashMap.get(args, toolCallId), () => ""),
-    );
+  const callOf = (turn: PromptTurn, toolCallId: string) =>
+    Effect.map(Ref.get(turn.calls), HashMap.get(toolCallId));
 
   /** Streams the app's run events to the editor as session updates. */
   const forward = (session: BridgeSession, turn: PromptTurn) =>
@@ -340,7 +344,10 @@ const makeAcpAgent = Effect.fnUntraced(function* (options: {
           }),
         TOOL_CALL_START: ({ toolCallId, toolCallName }) => {
           const view = toolView(toolCallName);
-          return Ref.update(turn.args, HashMap.set(toolCallId, "")).pipe(
+          return Ref.update(
+            turn.calls,
+            HashMap.set(toolCallId, { name: toolCallName, args: "" }),
+          ).pipe(
             Effect.andThen(
               notify(turn, session.id, {
                 sessionUpdate: "tool_call",
@@ -353,26 +360,27 @@ const makeAcpAgent = Effect.fnUntraced(function* (options: {
           );
         },
         TOOL_CALL_ARGS: ({ toolCallId, delta }) =>
-          Ref.update(turn.args, (args) =>
-            HashMap.set(
-              args,
-              toolCallId,
-              Option.getOrElse(HashMap.get(args, toolCallId), () => "") + delta,
-            ),
+          Ref.update(turn.calls, (calls) =>
+            HashMap.modify(calls, toolCallId, (call) => ({ ...call, args: call.args + delta })),
           ),
         TOOL_CALL_END: ({ toolCallId }) =>
-          Effect.flatMap(argsOf(turn, toolCallId), (args) => {
-            const update: SessionUpdate = {
+          Effect.flatMap(callOf(turn, toolCallId), (call) => {
+            const args = Option.match(call, {
+              onNone: () => "",
+              onSome: (started) => started.args,
+            });
+            return notify(turn, session.id, {
               sessionUpdate: "tool_call_update",
               toolCallId,
               status: "in_progress",
+              // The path, command, query or skill makes a better title than the tool name alone.
+              ...Option.match(call, {
+                onNone: () => ({}),
+                onSome: ({ name }) => ({ title: toolTitle(name, args) }),
+              }),
               locations: toolLocations(args, session.project.root),
               rawInput: args,
-            };
-            // The path, command or query makes a better title than the tool name alone.
-            const detail = toolDetail(args);
-            if (isTruthy(detail)) update.title = detail;
-            return notify(turn, session.id, update);
+            });
           }),
         TOOL_CALL_RESULT: ({ toolCallId, content }) =>
           notify(turn, session.id, {
@@ -658,7 +666,7 @@ const makeAcpAgent = Effect.fnUntraced(function* (options: {
             });
           const turn: PromptTurn = {
             client: ctx.client,
-            args: yield* Ref.make(HashMap.empty<string, string>()),
+            calls: yield* Ref.make(HashMap.empty<string, StreamedCall>()),
             cancelled: yield* Ref.make(false),
             failure: yield* Ref.make(Option.none<ShownFailure<RunFailureCode>>()),
           };

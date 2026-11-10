@@ -131,6 +131,27 @@ export function toolDetail(argumentsJson: string): string | null {
   });
 }
 
+const decodeSkillArguments = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ name: Schema.String })),
+);
+
+/**
+ * The editor's title for a call. A run_skill call keeps the tool's title and adds the skill it
+ * runs; any other call shows its {@link toolDetail}, or the tool's title when it has none.
+ */
+export const toolTitle: {
+  (argumentsJson: string): (name: string) => string;
+  (name: string, argumentsJson: string): string;
+} = EffectFunction.dual(2, (name: string, argumentsJson: string): string => {
+  const { title } = toolView(name);
+  return name === "run_skill"
+    ? Option.match(decodeSkillArguments(argumentsJson), {
+        onNone: () => title,
+        onSome: (args) => `${title} · ${args.name}`,
+      })
+    : (toolDetail(argumentsJson) ?? title);
+});
+
 /** Absolute paths a call touches, for editors that follow along. Project-relative ones are resolved. */
 export const toolLocations: {
   (projectRoot: string): (argumentsJson: string) => ReturnType<typeof toolLocationsBody>;
