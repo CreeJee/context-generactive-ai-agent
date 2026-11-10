@@ -34,12 +34,13 @@ import {
   useWorkingSessions,
   usableAgents,
 } from "./queries/project";
-import { FolderIcon, LogInIcon, SettingsIcon } from "lucide-react";
+import { FolderIcon, LogInIcon, SettingsIcon, UserIcon } from "lucide-react";
 import { match, P } from "ts-pattern";
 import { parseAsBoolean, parseAsString, useQueryStates } from "nuqs";
 import { useEffect, useState } from "react";
 import {
   Empty,
+  EmptyContent,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
@@ -81,7 +82,12 @@ import { ThemeSelect } from "./shared/theme";
 import { pageHolder } from "./session/session-lease";
 import { openSettingsOverlay } from "./settings/open-settings";
 import { errorMessage } from "./settings/shared";
-import { ModelSection, ProjectSection, SessionSection } from "./navigation/sidebar";
+import {
+  ModelSection,
+  OpenFolderButton,
+  ProjectSection,
+  SessionSection,
+} from "./navigation/sidebar";
 import { DecisionInbox } from "./navigation/decision-inbox";
 import { ProjectBoardButton } from "./navigation/project-board-button";
 import { boardCardKey, parseBoardCardKey } from "./chat/board/board-moves";
@@ -133,10 +139,13 @@ function Placeholder({
   icon,
   title,
   description,
+  action,
 }: {
   icon: React.ReactNode;
   title: string;
   description: string;
+  /** What the sidebar would do about it, offered here too. */
+  action?: React.ReactNode;
 }) {
   return (
     <Empty className="h-full">
@@ -145,6 +154,7 @@ function Placeholder({
         <EmptyTitle>{title}</EmptyTitle>
         <EmptyDescription>{description}</EmptyDescription>
       </EmptyHeader>
+      {action !== undefined && <EmptyContent>{action}</EmptyContent>}
     </Empty>
   );
 }
@@ -535,6 +545,11 @@ export function App() {
         icon={<LogInIcon />}
         title={t`공급자를 연결해 주십시오`}
         description={t`왼쪽에서 OpenAI 호환 공급자를 설정하거나 구독 계정에 로그인해 주십시오.`}
+        action={
+          <Button variant="outline" onClick={() => setAccountsOpen(true)}>
+            <UserIcon /> <Trans comment="Button that opens the account manager">계정 관리</Trans>
+          </Button>
+        }
       />
     ))
     .with({ selection: null }, () => (
@@ -566,6 +581,18 @@ export function App() {
         icon={<FolderIcon />}
         title={t`프로젝트를 추가해 주십시오`}
         description={t`대화와 기억은 프로젝트 단위로 저장됩니다.`}
+        action={
+          <OpenFolderButton
+            projects={projects}
+            onAdd={addProject}
+            onSelect={selectProject}
+            onPickFolder={api.pickFolder}
+            label={t({
+              message: "프로젝트 추가",
+              comment: "Button that adds a project from a folder",
+            })}
+          />
+        }
       />
     ))
     .with({ sessionId: null }, () => (

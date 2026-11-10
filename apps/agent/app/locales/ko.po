@@ -1287,6 +1287,7 @@ msgid "계속 실패해 카드를 다시 짭니다: {failure}"
 msgstr "계속 실패해 카드를 다시 짭니다: {failure}"
 
 #. Button that opens the account manager
+#. Button that opens the account manager
 #. Title of the account management sheet
 #: app/entry/index.tsx
 #: app/entry/navigation/account-switcher.tsx
@@ -6038,6 +6039,8 @@ msgstr "프로젝트 설정으로 대체됨"
 msgid "프로젝트 순서"
 msgstr "프로젝트 순서"
 
+#. Button that adds a project from a folder
+#: app/entry/index.tsx
 #: app/entry/navigation/sidebar.tsx
 msgid "프로젝트 추가"
 msgstr "프로젝트 추가"

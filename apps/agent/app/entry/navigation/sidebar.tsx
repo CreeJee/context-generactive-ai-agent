@@ -528,16 +528,19 @@ function ProjectCombobox({
  * may touch, so the server still checks the path. Without a dialog on the host, or when the
  * chosen folder is refused, the path dialog opens with what is known so far.
  */
-function OpenFolderButton({
+export function OpenFolderButton({
   projects,
   onAdd,
   onSelect,
   onPickFolder,
+  label,
 }: {
   projects: ReadonlyArray<ListedProject>;
   onAdd: (root: string) => Promise<string | null>;
   onSelect: (projectId: string) => void;
   onPickFolder: () => Promise<FolderPick>;
+  /** Shown next to the icon; without it the button is the sidebar's icon button. */
+  label?: string;
 }) {
   const { t } = useLingui();
   const [picking, setPicking] = useState(false);
@@ -591,16 +594,20 @@ function OpenFolderButton({
     <>
       <Button
         variant="outline"
-        size="icon-sm"
-        aria-label={t({
-          message: "폴더 열기",
-          comment: "Button that adds a project from a folder",
-        })}
+        size={label === undefined ? "icon-sm" : "default"}
+        aria-label={
+          label ??
+          t({
+            message: "폴더 열기",
+            comment: "Button that adds a project from a folder",
+          })
+        }
         title={t({ message: "폴더 열기", comment: "Button that adds a project from a folder" })}
         disabled={picking}
         onClick={() => void open()}
       >
         {picking ? <Spinner /> : <FolderOpenIcon />}
+        {label}
       </Button>
       {fallback !== null && (
         <AddProjectDialog
