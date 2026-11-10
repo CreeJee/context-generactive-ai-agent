@@ -5,7 +5,7 @@ import { HashMap, HashSet, Iterable, Array as EffectArray, DateTime, Semaphore }
 import { Context, Effect, Layer, Match, Option, Schema, Stream } from "effect";
 import { SecureRandom } from "effect/crypto";
 import { ActiveProvider } from "../providers/active-provider.ts";
-import { failureAnnotations } from "../runtime/logged-failures.ts";
+import { failureAnnotations, logFailure } from "../runtime/logged-failures.ts";
 import { ApiUsage, recordUsage } from "../agent/api-usage.ts";
 import { singleAnswer } from "../model/single-call.ts";
 import { AuthConnectionState, type ModelSelection } from "../providers/contracts.ts";
@@ -275,10 +275,18 @@ const make = Effect.gen(function* () {
             ),
           ),
         ),
+        // The batch keeps only the reason; the log tells a provider failure from a timeout.
+        Effect.tapError(logFailure("Interpretation model call failed")),
         Effect.mapError(() => InterpretationFailed.make({ reason: "model_call_failed" })),
         Effect.timeoutOrElse({
           duration: interpretTimeoutMs,
-          orElse: () => Effect.fail(InterpretationFailed.make({ reason: "model_call_failed" })),
+          orElse: () =>
+            Effect.andThen(
+              Effect.logWarning("Interpretation model call timed out", {
+                timeoutMs: `${interpretTimeoutMs}`,
+              }),
+              Effect.fail(InterpretationFailed.make({ reason: "model_call_failed" })),
+            ),
         }),
       );
       const labelled = yield* Effect.fromOption(
