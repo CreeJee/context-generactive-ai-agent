@@ -15,6 +15,7 @@
 - `root.tsx` `default App` — 루트 컴포넌트다. `QueryClient`(queries: `refetchOnReconnect: false`, `refetchOnWindowFocus: false`, `staleTime: Infinity`)를 `useState`로 한 번 만든다. `QueryClientProvider` > `NuqsAdapter`(`nuqs/adapters/react-router/v8`) > `OverlayProvider` > `Outlet` 순서로 감싼다. `useBackendRestartRequired()`가 참이면 상단 고정 `role="alert"` 새로고침 안내 배너를 띄운다.
 - `root.tsx` `ErrorBoundary` — 라우트 오류 화면이다. `isRouteErrorResponse`면 404 또는 `statusText`를 보이고, 그 밖의 `Error`는 `import.meta.env.DEV`일 때만 message와 stack을 보인다.
 - `root.tsx` `links` — 빈 배열을 돌려주는 `Route.LinksFunction`이다.
+- `appCopy` (`copy.ts`) — 앱 루트의 문구 카탈로그. 백엔드 재시작 안내 배너 문구를 담고, 문구는 `tools/copy-check`가 검사한다.
 - `routes.ts` `default` — `RouteConfig`다. `flatRoutes({ ignoredRouteFiles })` 결과에 `prefix("api", flatRoutes({ rootDirectory: "routes/api", ignoredRouteFiles }))`를 이어 붙인다. `ignoredRouteFiles`는 `["**/README.md"]`다.
 - `isTruthy<T>(value)` — `truthy.ts`의 타입 가드다. JavaScript truthiness를 그대로 쓰면서 `Exclude<NonNullable<T>, false | 0 | 0n | "">`로 좁힌다.
 - `app.css` — Tailwind v4 진입 스타일이다. `tailwindcss`, `tw-animate-css`, `shadcn/tailwind.css`, `@fontsource-variable/inter`를 가져온다. `:root`/`.dark` 색 토큰(`--warning` 포함), `--radius` 파생 반경, `--text-2xs`/`--text-3xs`, base 레이어 규칙을 정의한다.

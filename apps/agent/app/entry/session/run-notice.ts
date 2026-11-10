@@ -6,6 +6,7 @@ import {
   type SessionRunState,
 } from "memory-agent/definitions";
 import { WorkflowExecutionState } from "../api";
+import { sessionCopy } from "./copy";
 
 /** How a session's last run ended, or that it is still going, when that is worth telling the user. */
 export type RunNotice = Data.TaggedEnum<{
@@ -59,7 +60,7 @@ function noticeOfBody(state: SessionRunState | null, page: PageView): RunNotice 
       return RunNotice.cancelled();
     case "failed":
       return RunNotice.failed({
-        message: lastRun.error?.message ?? "알 수 없는 오류",
+        message: lastRun.error?.message ?? sessionCopy.unknownError,
         code: runFailureCodeOf(lastRun.error?.code),
       });
     case "interrupted":

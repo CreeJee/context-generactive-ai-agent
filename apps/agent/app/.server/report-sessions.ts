@@ -1,6 +1,7 @@
 import { DateTime, Effect, Option, Schema } from "effect";
 import { SecureRandom } from "effect/crypto";
 import { SqlClient, SqlSchema } from "effect/sql";
+import { serverCopy } from "./copy";
 
 export interface ReportSessionBinding {
   reportSessionId: string;
@@ -34,7 +35,7 @@ export const openReportSession = Effect.fn("openReportSession")(function* (
   });
   const create = Effect.gen(function* () {
     yield* sql`INSERT INTO sessions (id, project_id, title, created_at)
-      VALUES (${id}, ${projectId}, ${"문제 제보 분석"}, ${createdAt})`;
+      VALUES (${id}, ${projectId}, ${serverCopy.reportSession.title}, ${createdAt})`;
     yield* sql`INSERT INTO report_sessions (report_session_id, source_session_id, project_id, created_at)
       VALUES (${id}, ${sourceSessionId}, ${projectId}, ${createdAt})`;
     return id;

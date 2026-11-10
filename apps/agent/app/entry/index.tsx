@@ -1,5 +1,7 @@
 import { Effect, Match, Predicate } from "effect";
 import { runUiEffect, uiPromise } from "./shared/ui-effect";
+import { problemText } from "./shared/copy-templates";
+import { entryCopy } from "./copy";
 import { isTruthy } from "../truthy.ts";
 import {
   useAuthQuery,
@@ -117,7 +119,7 @@ function SidebarReopen() {
   const { open, isMobile } = useSidebar();
   return open && !isMobile ? null : (
     <div className="absolute top-2 left-2 z-20">
-      <SidebarTrigger aria-label="사이드바 펼치기" title="사이드바 펼치기 (⌘B)" />
+      <SidebarTrigger aria-label={entryCopy.sidebar.open} title={entryCopy.sidebar.openHint} />
     </div>
   );
 }
@@ -241,11 +243,13 @@ export function App() {
   const refreshPendingLifecycle = (pending: PendingLifecycle) => {
     setArchiveError(
       Match.valueTags(pending, {
-        waiting_for_stop: () => "실행이 멈추기를 기다리고 있어요. 아직 대화를 바꾸지 않았어요.",
+        waiting_for_stop: () => entryCopy.pendingLifecycle.waitingForStop,
         blocked: ({ blocker }) =>
-          blocker === "goal_dependents"
-            ? "다른 Goal 보드가 이 대화의 Goal이 merge되기를 기다리고 있어요. 그 보드에서 의존을 먼저 풀어 주세요."
-            : "지금은 대화를 바꿀 수 없어요. 실행 상태를 확인한 뒤 다시 시도하세요.",
+          problemText(
+            blocker === "goal_dependents"
+              ? entryCopy.pendingLifecycle.goalDependents
+              : entryCopy.pendingLifecycle.blocked,
+          ),
       }),
     );
   };
@@ -352,9 +356,7 @@ export function App() {
         if (selected !== null) setSelection(selected);
       }).pipe(
         Effect.catchTag("UnknownError", () =>
-          Effect.sync(() =>
-            setSwitchError("계정을 바꾸지 못했어요. 연결 상태를 확인한 뒤 다시 시도하세요."),
-          ),
+          Effect.sync(() => setSwitchError(problemText(entryCopy.switchAccountFailed))),
         ),
       ),
     );
@@ -377,7 +379,7 @@ export function App() {
       ? []
       : effortChoices(shownSelection, shownModel).map((choice) =>
           choice.id === shownSelection.reasoningEffort
-            ? { ...choice, label: `${choice.label} (현재)` }
+            ? { ...choice, label: entryCopy.currentEffort(choice.label) }
             : choice,
         );
 
@@ -432,15 +434,15 @@ export function App() {
     .with({ selection: null, signedIn: false }, () => (
       <Placeholder
         icon={<LogInIcon />}
-        title="공급자를 연결하세요"
-        description="왼쪽에서 구독 계정에 로그인하거나 OpenAI 호환 공급자를 설정하세요."
+        title={entryCopy.placeholder.connectProvider.title}
+        description={entryCopy.placeholder.connectProvider.description}
       />
     ))
     .with({ selection: null }, () => (
       <Placeholder
         icon={<LogInIcon />}
-        title="모델을 선택하세요"
-        description="계정에서 쓸 수 있는 모델 중 하나를 고르세요."
+        title={entryCopy.placeholder.selectModel.title}
+        description={entryCopy.placeholder.selectModel.description}
       />
     ))
     .with({ selection: P.nonNullable, selectedSignedIn: false }, ({ selection: selected }) => (
@@ -448,24 +450,24 @@ export function App() {
         icon={<LogInIcon />}
         title={
           selected.provider === "openai-compatible"
-            ? "호환 공급자를 설정하세요"
-            : "선택한 공급자에 로그인하세요"
+            ? entryCopy.placeholder.setUpCompatible
+            : entryCopy.placeholder.signIn
         }
-        description={`${providerLabels[selected.provider]} 연결이 필요해요.`}
+        description={entryCopy.placeholder.connectionNeeded(providerLabels[selected.provider])}
       />
     ))
     .with({ projectId: null }, () => (
       <Placeholder
         icon={<FolderIcon />}
-        title="프로젝트를 추가하세요"
-        description="대화와 기억은 프로젝트 단위로 저장돼요."
+        title={entryCopy.placeholder.addProject.title}
+        description={entryCopy.placeholder.addProject.description}
       />
     ))
     .with({ sessionId: null }, () => (
       <Placeholder
         icon={<FolderIcon />}
-        title="새 대화를 시작하세요"
-        description="왼쪽의 새 대화 버튼을 누르세요."
+        title={entryCopy.placeholder.newSession.title}
+        description={entryCopy.placeholder.newSession.description}
       />
     ))
     .exhaustive();
@@ -483,13 +485,16 @@ export function App() {
                 <Button
                   variant="ghost"
                   size="icon-sm"
-                  aria-label="설정"
-                  title="설정"
+                  aria-label={entryCopy.sidebar.settings}
+                  title={entryCopy.sidebar.settings}
                   onClick={openSettings}
                 >
                   <SettingsIcon />
                 </Button>
-                <SidebarTrigger aria-label="사이드바 접기" title="사이드바 접기 (⌘B)" />
+                <SidebarTrigger
+                  aria-label={entryCopy.sidebar.close}
+                  title={entryCopy.sidebar.closeHint}
+                />
               </div>
             </SidebarHeader>
             <SidebarSeparator />
@@ -514,9 +519,9 @@ export function App() {
                   />
                 ) : (
                   <div className="flex flex-col gap-2 px-4 py-3 text-xs text-muted-foreground">
-                    {providerLabels[provider]} 계정을 연결하면 모델을 고를 수 있어요.
+                    {entryCopy.accountModel.signInHint(providerLabels[provider])}
                     <Button variant="outline" size="sm" onClick={() => setAccountsOpen(true)}>
-                      계정 연결
+                      {entryCopy.accountModel.connect}
                     </Button>
                   </div>
                 )}
@@ -594,16 +599,16 @@ export function App() {
                 onManage={() => setAccountsOpen(true)}
               />
             </SidebarFooter>
-            <SidebarRail aria-label="사이드바 접기·펼치기" title="사이드바 접기·펼치기 (⌘B)" />
+            <SidebarRail
+              aria-label={entryCopy.sidebar.toggle}
+              title={entryCopy.sidebar.toggleHint}
+            />
           </Sidebar>
           <Sheet open={accountsOpen} onOpenChange={setAccountsOpen}>
             <SheetContent side="left">
               <SheetHeader>
-                <SheetTitle>계정 관리</SheetTitle>
-                <SheetDescription>
-                  계정을 추가하고, 계정마다 이름을 바꾸거나 로그아웃해요. 쓸 계정은 사이드바 아래
-                  계정 전환에서 골라요.
-                </SheetDescription>
+                <SheetTitle>{entryCopy.accounts.title}</SheetTitle>
+                <SheetDescription>{entryCopy.accounts.description}</SheetDescription>
               </SheetHeader>
               <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
                 <AccountManager

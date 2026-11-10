@@ -19,6 +19,7 @@
 - `createDevelopmentBoundary` / `DevelopmentBoundary` / `developmentRequestDecision` / `DevelopmentRequestDecision` — 개발 백엔드의 drain 상태와 `/api/health` 응답을 맡는다. buildId가 다른 변경 요청은 409로, drain 중인 변경 요청은 503으로 거절한다
 - `developmentBuildId(appRoot)` / `developmentBackendWatchPaths` / `developmentBuildHeader`(`x-context-agent-build-id`) — no-HMR 백엔드 경계 소스의 SHA-256 지문(24 hex)과 감시 경로, 헤더 이름
 - `parseCommandLine(name, config, usage, args)` — Effect CLI built-in 플래그 없이 인자를 해석한다. 도움말과 오류는 stderr로 보낸다
+- `cliCopy` (`copy.ts`) — `context-agent` 명령의 문구 카탈로그. 사용법(`usage`)과 콘솔 안내·오류 문구를 담고, 문구는 `tools/copy-check`가 검사한다.
 - `readBuildConfig` / `BuildConfigInvalid` — SEA 자산의 빌드 설정을 `BuildServerConfig`로 디코드한다. 소스 번들이면 `{}`를 쓴다
 - `readReleaseInfo()` / `ReleaseInfo` / `releaseInfoAsset` — SEA 자산 `release/info.json`의 버전·채널·대상을 읽는다. SEA가 아니면 `0.0.0-dev`/prerelease를 쓴다
 - `unpackRuntime(storageRoot)` / `RuntimeManifest` / `runtimeManifestAsset` / `runtimeFilePrefix` — SEA에 담긴 런타임 파일을 `<storage>/runtime/<hash>`에 한 번 풀고 그 경로를 돌려준다. SEA가 아니면 null이다

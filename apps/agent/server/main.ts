@@ -36,21 +36,8 @@ import { unpackRuntime } from "./runtime-assets.ts";
 import { parseCommandLine } from "./command-line.ts";
 import { acquireStorageLock } from "./dev-safety.ts";
 import { openInBrowser, serve, type Exposure } from "./serve.ts";
+import { cliCopy } from "./copy.ts";
 const { dirname } = nodePath;
-
-const usage = `사용법:
-  context-agent [폴더] [--port 5173] [--no-open] [--storage <폴더>] [--broadcast]
-      폴더(없으면 실행한 위치)를 프로젝트로 열어요. 앱이 이미 실행 중이면 그 앱에서 열어요.
-      --broadcast: 이 컴퓨터 밖(같은 네트워크, 컨테이너 밖)에서도 접속할 수 있게 모든 네트워크에 열어요.
-      인증이 없으니 믿을 수 있는 네트워크에서만 쓰세요.
-  context-agent acp [--port 5173]
-      에디터(Zed 등)용 ACP 에이전트(실행 중인 앱에 연결)
-  context-agent memory <명령> [플래그]
-      앱 없이 기억을 읽어요(읽기 전용): find-memory, read-evidence, trace-evidence, projects.
-      자세한 사용법은 context-agent memory --help.
-      acp와 memory는 첫 인자에서 예약어라, 그 이름의 폴더는 ./acp, ./memory로 열어요.
-  context-agent --version
-      실행 파일의 버전, 릴리스 채널과 대상 플랫폼을 표시해요.`;
 
 const commandLineOptions = {
   folder: Argument.String("folder").pipe(Argument.optional),
@@ -92,7 +79,7 @@ const commandLine = await nodePlatform.runPromise(
     Effect.flatMap(Layer.build(NodeTerminal.layer), (terminal) =>
       Effect.flatMap(Stdio.Stdio, (stdio) => stdio.args).pipe(
         Effect.flatMap((args) =>
-          parseCommandLine("context-agent", commandLineOptions, usage, args),
+          parseCommandLine("context-agent", commandLineOptions, cliCopy.usage, args),
         ),
         Effect.provideContext(terminal),
       ),
@@ -112,7 +99,7 @@ if (commandLine.version) {
 
 if (commandLine.help) {
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-  await Effect.runPromise(Console.error(usage));
+  await Effect.runPromise(Console.error(cliCopy.usage));
   process.exit(0);
 }
 const { port } = commandLine;
@@ -131,14 +118,14 @@ const pageFor = Effect.fn("launch.pageFor")(function* (folder: LaunchFolder) {
         case "opened":
           // Native stdout/stderr or SDK logging boundary preserves the existing output format.
           yield* Console.log(
-            `${opened.added ? "프로젝트로 추가했어요" : "등록된 프로젝트예요"}: ${folder.root}`,
+            opened.added
+              ? cliCopy.projectAdded(folder.root)
+              : cliCopy.projectRegistered(folder.root),
           );
           return `${baseUrl}/?project=${encodeURIComponent(opened.projectId)}`;
         case "rejected":
           // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-          yield* Console.error(
-            `이 폴더는 프로젝트로 열 수 없어요(${opened.reason}): ${folder.root}`,
-          );
+          yield* Console.error(cliCopy.projectRejected(opened.reason, folder.root));
           return baseUrl;
       }
     }
@@ -194,7 +181,7 @@ if (folderArgument === "acp") {
     : await launchFolder(folderArgument, process.cwd(), storageRoot, executableFolder);
   if (folder.kind === "invalid") {
     // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-    await Effect.runPromise(Console.error(`폴더를 찾을 수 없어요: ${folder.path}`));
+    await Effect.runPromise(Console.error(cliCopy.folderNotFound(folder.path)));
     process.exit(2);
   }
 
@@ -202,7 +189,7 @@ if (folderArgument === "acp") {
     // One server per storage root: a second start hands the folder to the running app.
     const page = await runLaunchRequest(pageFor(folder));
     // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-    await Effect.runPromise(Console.log(`이미 실행 중인 앱(${baseUrl})에서 열었어요.`));
+    await Effect.runPromise(Console.log(cliCopy.openedInRunningApp(baseUrl)));
     if (commandLine.open) openInBrowser(page);
     process.exit(0);
   }
@@ -294,22 +281,18 @@ if (folderArgument === "acp") {
         Effect.runPromise(
           Console.error(
             error.code === "EADDRINUSE"
-              ? `포트 ${port}를 다른 프로그램이 쓰고 있어요. --port로 다른 포트를 지정하세요.`
-              : `서버를 시작하지 못했어요: ${error.message}`,
+              ? cliCopy.portInUse(port)
+              : cliCopy.startFailed(error.message),
           ),
         ),
       )
       .then(() => process.exit(1)),
   );
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-  await Effect.runPromise(
-    Console.log(`Context Agent가 ${baseUrl} 에서 실행 중이에요. 끝내려면 Ctrl+C.`),
-  );
+  await Effect.runPromise(Console.log(cliCopy.running(baseUrl)));
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
   await Effect.runPromise(
-    Console.error(
-      `--broadcast: 모든 네트워크의 ${port} 포트에 열었어요. 인증이 없으니 같은 네트워크의 누구나 이 앱을 쓸 수 있어요.`,
-    ).pipe(Effect.when(Effect.succeed(commandLine.broadcast))),
+    Console.error(cliCopy.broadcast(port)).pipe(Effect.when(Effect.succeed(commandLine.broadcast))),
   );
   const page = await runLaunchRequest(pageFor(folder));
   if (commandLine.open) openInBrowser(page);

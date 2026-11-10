@@ -3,6 +3,7 @@ import { QueryErrorResetBoundary } from "@tanstack/react-query";
 import { Component, Suspense, type ReactNode } from "react";
 import { Button } from "~/components/ui/button";
 import { Spinner } from "~/components/ui/spinner";
+import { queriesCopy } from "./copy";
 
 class SectionErrorBoundary extends Component<
   { children: ReactNode; onReset: () => void },
@@ -18,7 +19,7 @@ class SectionErrorBoundary extends Component<
     if (isTruthy(this.state.error))
       return (
         <div role="alert" className="flex items-center gap-3 text-sm">
-          <span>설정을 불러오지 못했어요.</span>
+          <span>{queriesCopy.section.loadFailed}</span>
           <Button
             variant="outline"
             size="sm"
@@ -27,7 +28,7 @@ class SectionErrorBoundary extends Component<
               this.setState({ error: null });
             }}
           >
-            다시 시도
+            {queriesCopy.section.retry}
           </Button>
         </div>
       );
@@ -41,7 +42,9 @@ export function QuerySection({ children }: { children: ReactNode }) {
     <QueryErrorResetBoundary>
       {({ reset }) => (
         <SectionErrorBoundary onReset={reset}>
-          <Suspense fallback={<Spinner aria-label="설정을 불러오는 중" />}>{children}</Suspense>
+          <Suspense fallback={<Spinner aria-label={queriesCopy.section.loading} />}>
+            {children}
+          </Suspense>
         </SectionErrorBoundary>
       )}
     </QueryErrorResetBoundary>

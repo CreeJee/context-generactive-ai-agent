@@ -14,6 +14,7 @@ import { OverlayProvider } from "overlay-kit";
 
 import { useBackendRestartRequired } from "./entry/shared/use-backend-restart";
 import { themeScript } from "./entry/shared/theme-script";
+import { appCopy } from "./copy";
 import { TooltipProvider } from "~/components/ui/tooltip";
 import type { Route } from "./+types/root";
 import "./app.css";
@@ -62,7 +63,7 @@ export default function App() {
             className="fixed inset-x-0 top-0 z-100 border-b border-warning/40 bg-background px-4 py-2 text-center text-sm text-foreground shadow-sm"
             role="alert"
           >
-            서버 연결이 변경되었어요. 페이지를 새로고침한 뒤 작업을 이어가세요.
+            {appCopy.backendRestart}
           </div>
         )}
         <OverlayProvider>

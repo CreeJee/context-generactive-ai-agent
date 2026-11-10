@@ -22,6 +22,7 @@
 - `useRunStateQuery` / `useObservedRunStateQuery` — session run-state 훅. `Function.dual(3)`과 `Function.dual(4)`로 data-first와 data-last `(sessionId, holder[, enabled])(projectId)` 호출을 지원한다
 - `useQueueQuery` / `useSubagentsQuery` / `useApprovalsQuery` / `useBoardQuery` / `useDecisionsQuery` / `useKanbanQuery` / `useSessionTraceQuery` — `Function.dual(2)` session 훅. `(projectId, sessionId)` 또는 `(sessionId)(projectId)`로 호출한다
 - `QuerySection` — `QueryErrorResetBoundary`, 내부 `SectionErrorBoundary`, `Suspense`(Spinner fallback)로 감싸 실패나 로딩을 설정 섹션 안에 가두는 React 컴포넌트. '다시 시도' 버튼이 query reset과 오류 상태 초기화를 함께 한다
+- `queriesCopy` (`copy.ts`) — `QuerySection`의 로딩·실패·다시 시도 문구 카탈로그. 문구는 `tools/copy-check`가 검사한다.
 - `mutations` — 같은 키와 팩토리로 캐시를 갱신·무효화하는 mutation 훅 모음: [`./mutations/README.md`](./mutations/README.md)
 
 ## Invariants

@@ -3,14 +3,15 @@ import type { LoopHealth } from "memory-agent/definitions";
 import { RotateCcwIcon } from "lucide-react";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
+import { sharedCopy } from "./copy";
 
 /** How a background loop the server runs stands, in words. */
 export function loopHealthLabel(health: LoopHealth): string {
   return Match.valueTags(health, {
-    Healthy: () => "정상",
-    Retrying: ({ attempt, of }) => `재시도 중 ${attempt}/${of}`,
-    Exhausted: () => "재시도 소진",
-    Defected: () => "결함으로 중단",
+    Healthy: () => sharedCopy.loopHealth.status.Healthy,
+    Retrying: ({ attempt, of }) => sharedCopy.loopHealth.status.Retrying(attempt, of),
+    Exhausted: () => sharedCopy.loopHealth.status.Exhausted,
+    Defected: () => sharedCopy.loopHealth.status.Defected,
   });
 }
 
@@ -46,7 +47,7 @@ export function LoopHealthStatus({
       {stopped && (
         <Button type="button" size="xs" variant="outline" disabled={disabled} onClick={onRestart}>
           <RotateCcwIcon data-icon="inline-start" />
-          다시 시작
+          {sharedCopy.loopHealth.restart}
         </Button>
       )}
     </span>

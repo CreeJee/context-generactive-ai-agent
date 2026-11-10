@@ -8,6 +8,7 @@
 
 - `dayAndTime` — ISO 문자열을 한국어 로케일 "M월 D일 A hh:mm" 형식(예: "9월 15일 오후 11:33")으로 바꾼다. 제목이 아직 없는 대화의 시작 시각 표시에 쓴다(sidebar, btw-panel, settings/pages/embedding).
 - `timeOfDay` — ISO 문자열을 한국어 로케일 "A hh:mm" 형식(예: "오후 09:53")으로 바꾼다. 날짜를 말하지 않아도 되는 곳에서 쓴다(settings/pages/imports).
+- `dateCopy` (`copy.ts`) — 날짜 형식 패턴 카탈로그. `dayAndTime`의 "M월 D일" 패턴이 여기 있어 `tools/copy-check`가 읽는다.
 - `cn` — `cn` 패키지에서 다시 내보내는 className 결합 함수다. `~/lib/utils`로 UI 컴포넌트 여러 곳이 가져다 쓴다.
 
 ## Invariants

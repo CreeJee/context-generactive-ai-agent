@@ -2,8 +2,9 @@ import { Effect, FileSystem, Match, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { FolderPick } from "memory-agent";
 import { platform } from "node:os";
+import { serverCopy } from "./copy";
 
-const prompt = "프로젝트로 열 폴더를 고르세요";
+const { prompt } = serverCopy.folderPicker;
 
 interface Dialog {
   readonly command: string;

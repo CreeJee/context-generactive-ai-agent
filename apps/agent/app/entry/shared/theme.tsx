@@ -8,11 +8,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "~/components/ui/select";
+import { sharedCopy } from "./copy";
 
 export const themes = [
-  { value: "system", label: "시스템 테마" },
-  { value: "light", label: "라이트 모드" },
-  { value: "dark", label: "다크 모드" },
+  { value: "system", label: sharedCopy.theme.options.system },
+  { value: "light", label: sharedCopy.theme.options.light },
+  { value: "dark", label: sharedCopy.theme.options.dark },
 ] as const;
 type Theme = (typeof themes)[number]["value"];
 const storageKey = "context-agent-theme";
@@ -66,8 +67,8 @@ export function ThemeSelect() {
         size="sm"
         variant="ghost"
         className="min-w-6 justify-center [&_[data-slot=select-value]]:flex-none"
-        aria-label={`화면 테마: ${current.label}`}
-        title={`화면 테마: ${current.label}`}
+        aria-label={sharedCopy.theme.current(current.label)}
+        title={sharedCopy.theme.current(current.label)}
       >
         <SelectValue>
           <Icon aria-hidden="true" className="size-3.5" />

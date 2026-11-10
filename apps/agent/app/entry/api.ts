@@ -1,5 +1,6 @@
 import { browserCrypto } from "./shared/browser-crypto";
 import { runUiEffect, uiPromise } from "./shared/ui-effect";
+import { entryCopy } from "./copy";
 import { isTruthy } from "../truthy.ts";
 import { Cause, Context, Data, Effect, Layer, ManagedRuntime, Match } from "effect";
 import { FetchHttpClient, HttpClientError } from "effect/http";
@@ -958,14 +959,13 @@ export const api = {
 };
 
 const AttachmentRejection = Schema.Literals(["too_large", "unsupported_type", "empty"]);
-const attachmentRejections = {
-  too_large: "20MB보다 큰 이미지는 올릴 수 없어요.",
-  unsupported_type: "PNG, JPEG, GIF, WebP 이미지만 올릴 수 있어요.",
-  empty: "빈 파일이에요.",
-} satisfies Record<typeof AttachmentRejection.Type, string>;
+const attachmentRejections = entryCopy.attachment.rejections satisfies Record<
+  typeof AttachmentRejection.Type,
+  string
+>;
 
 export function attachmentErrorMessage(error: ApiError | null) {
-  if (error === null || !isTruthy(error.reason)) return "이미지를 올리지 못했어요.";
+  if (error === null || !isTruthy(error.reason)) return entryCopy.attachment.failed;
   return Schema.is(AttachmentRejection)(error.reason)
     ? attachmentRejections[error.reason]
     : error.reason;
@@ -980,15 +980,13 @@ const ProjectRejection = Schema.Literals([
   "overlaps_storage",
   "already_registered",
 ]);
-const projectRejections = {
-  not_found: "경로를 찾을 수 없어요.",
-  not_directory: "폴더 경로가 아니에요.",
-  overlaps_storage: "앱 저장소 폴더와 겹치는 경로는 등록할 수 없어요.",
-  already_registered: "이미 등록된 프로젝트예요.",
-} satisfies Record<typeof ProjectRejection.Type, string>;
+const projectRejections = entryCopy.project.rejections satisfies Record<
+  typeof ProjectRejection.Type,
+  string
+>;
 
 export function projectErrorMessage(error: ApiError | null) {
-  if (error === null || !isTruthy(error.reason)) return "프로젝트를 추가하지 못했어요.";
+  if (error === null || !isTruthy(error.reason)) return entryCopy.project.failed;
   return Schema.is(ProjectRejection)(error.reason) ? projectRejections[error.reason] : error.reason;
 }
 
@@ -997,16 +995,15 @@ const ArchiveRejection = Schema.Literals([
   "session_in_use",
   "session_not_found",
 ]);
-const archiveRejections = {
-  run_in_progress: "답변 중인 대화는 보관할 수 없어요. 끝나거나 멈춘 뒤 다시 시도하세요.",
-  session_in_use: "다른 탭에서 쓰고 있는 대화예요. 그 탭을 닫은 뒤 다시 시도하세요.",
-  session_not_found: "대화를 찾을 수 없어요.",
-} satisfies Record<typeof ArchiveRejection.Type, string>;
+const archiveRejections = entryCopy.archive.rejections satisfies Record<
+  typeof ArchiveRejection.Type,
+  string
+>;
 
 export function archiveErrorMessage(error: ApiError | null) {
   return error !== null && Schema.is(ArchiveRejection)(error.code)
     ? archiveRejections[error.code]
-    : "대화를 바꾸지 못했어요.";
+    : entryCopy.archive.failed;
 }
 
 /** Which queued messages a run just took in at a tool call. */
@@ -1036,16 +1033,15 @@ const CompactRejection = Schema.Literals([
   "session_in_use",
   "session_not_found",
 ]);
-const compactRejections = {
-  run_in_progress: "답변이 끝난 뒤에 비울 수 있어요.",
-  session_in_use: "다른 탭에서 쓰고 있는 대화예요. 그 탭에서 다시 시도하세요.",
-  session_not_found: "대화를 찾을 수 없어요.",
-} satisfies Record<typeof CompactRejection.Type, string>;
+const compactRejections = entryCopy.compact.rejections satisfies Record<
+  typeof CompactRejection.Type,
+  string
+>;
 
 export function compactErrorMessage(error: ApiError | null) {
   return error !== null && Schema.is(CompactRejection)(error.code)
     ? compactRejections[error.code]
-    : "도구 출력을 비우지 못했어요.";
+    : entryCopy.compact.failed;
 }
 
 export const eventDecoders = {
