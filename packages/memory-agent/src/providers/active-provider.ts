@@ -1,4 +1,6 @@
+import { msg } from "@lingui/core/runtime-macro";
 import { isTruthy } from "../truthy.ts";
+import { i18n } from "../i18n.ts";
 import { Array as Arr, Context, Effect, Layer, Predicate } from "effect";
 import { GlobalConfig, type Settings } from "../config/global-config.ts";
 import {
@@ -22,6 +24,9 @@ export interface ResolvedProvider {
   readonly selection: ModelSelection;
   readonly services: ProviderServices;
 }
+
+/** An unreachable provider, shown as its login state. */
+const authUnavailable = msg`공급자 로그인 상태를 확인하지 못했습니다.`;
 
 const make = Effect.gen(function* () {
   const config = yield* GlobalConfig;
@@ -81,7 +86,7 @@ const make = Effect.gen(function* () {
         Effect.succeed(
           AuthConnectionState.error({
             provider,
-            message: "Provider authentication is unavailable.",
+            message: i18n._(authUnavailable),
           }),
         ),
       ),

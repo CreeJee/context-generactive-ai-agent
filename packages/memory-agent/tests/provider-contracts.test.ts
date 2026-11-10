@@ -230,7 +230,7 @@ describe("provider-neutral contracts", () => {
       expect(yield* active.authFor("anthropic")).toEqual(
         AuthConnectionState.error({
           provider: "anthropic",
-          message: "Provider authentication is unavailable.",
+          message: "공급자 로그인 상태를 확인하지 못했습니다.",
         }),
       );
     }).pipe(withTestPlatform),

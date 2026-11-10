@@ -1,4 +1,7 @@
+import type { MessageDescriptor } from "@lingui/core";
+import { msg } from "@lingui/core/runtime-macro";
 import { Cause, Function as EffectFunction } from "effect";
+import { i18n } from "../i18n.ts";
 import { isTruthy } from "../truthy.ts";
 import { ANTHROPIC_MODELS } from "./model-catalog.ts";
 import {
@@ -231,19 +234,21 @@ function parseSubscriptionCatalogBody(
   });
 }
 
-/** What a person reads for each way a login can fail. */
+/** What a person reads for each way a login can fail; the account manager shows it as is. */
 const loginFailureMessages = {
-  cancelled: "Login was cancelled.",
-  callback_invalid: "The browser returned an invalid login callback.",
-  callback_state_mismatch: "Login verification failed. Please retry.",
-  callback_timeout: "The browser did not return to this app in time.",
-  credential_store_unavailable: "The system credential store is unavailable.",
-  invalid_token_response: "The provider returned an invalid login response.",
-  login_in_progress: "A login is already in progress.",
-  not_connected: "The provider is not connected.",
-  provider_rejected: "The provider rejected the login request.",
-  transport_unavailable: "The login server or provider could not be reached.",
-} satisfies Record<OAuthHarnessError["code"], string>;
+  cancelled: msg`로그인을 취소했습니다.`,
+  callback_invalid: msg`브라우저가 잘못된 로그인 응답을 돌려줬습니다. 다시 로그인해 주십시오.`,
+  callback_state_mismatch: msg`로그인 확인에 실패했습니다. 다시 로그인해 주십시오.`,
+  callback_timeout: msg`브라우저가 제시간에 이 앱으로 돌아오지 않았습니다. 다시 로그인해 주십시오.`,
+  credential_store_unavailable: msg`OS 키체인을 쓸 수 없습니다.`,
+  invalid_token_response: msg`공급자가 잘못된 로그인 응답을 보냈습니다.`,
+  login_in_progress: msg`이미 진행 중인 로그인이 있습니다.`,
+  not_connected: msg`공급자에 연결되어 있지 않습니다.`,
+  provider_rejected: msg`공급자가 로그인 요청을 거절했습니다.`,
+  transport_unavailable: msg`로그인 서버나 공급자에 연결하지 못했습니다.`,
+} satisfies Record<OAuthHarnessError["code"], MessageDescriptor>;
+/** A login that ended without a known cause. */
+const loginIncomplete = msg`로그인을 끝내지 못했습니다. 다시 로그인해 주십시오.`;
 
 const isHarnessError = Schema.is(OAuthHarnessError);
 
@@ -299,11 +304,11 @@ export const createSubscriptionProvider = Effect.fnUntraced(function* (
     harnessError: Option.Option<OAuthHarnessError>,
   ): Data.TaggedEnum.Value<AuthConnectionState, "error"> =>
     Option.match(harnessError, {
-      onNone: () => AuthConnectionState.error({ provider, message: "Login did not complete." }),
+      onNone: () => AuthConnectionState.error({ provider, message: i18n._(loginIncomplete) }),
       onSome: (error) =>
         AuthConnectionState.error({
           provider,
-          message: loginFailureMessages[error.code] ?? "Login did not complete.",
+          message: i18n._(loginFailureMessages[error.code]),
           code: error.code,
           ...optionalProperty("operation", error.operation ?? undefined),
           ...optionalProperty("httpStatus", error.status ?? undefined),

@@ -38,6 +38,10 @@ msgstr "Claude (이전 계정)"
 msgid "npx·pnpx는 패키지가 없으면 내려받아 실행할 수 있습니다. 이미 설치된 프로젝트 패키지만 실행하려면 pnpm exec 또는 npm exec --를 사용해 주십시오."
 msgstr "npx·pnpx는 패키지가 없으면 내려받아 실행할 수 있습니다. 이미 설치된 프로젝트 패키지만 실행하려면 pnpm exec 또는 npm exec --를 사용해 주십시오."
 
+#: src/providers/subscription-provider.ts
+msgid "OS 키체인을 쓸 수 없습니다."
+msgstr "OS 키체인을 쓸 수 없습니다."
+
 #. Tool call title in the editor
 #: src/acp/tool-view.ts
 msgid "skill 읽기"
@@ -56,6 +60,14 @@ msgstr "결과가 확인되지 않은 도구 실행 중 서버가 다시 시작�
 msgid "공급자 계정의 사용 한도가 남지 않았습니다. 한도가 다시 차거나 다른 계정으로 바꾼 뒤 다시 보내 주십시오."
 msgstr "공급자 계정의 사용 한도가 남지 않았습니다. 한도가 다시 차거나 다른 계정으로 바꾼 뒤 다시 보내 주십시오."
 
+#: src/providers/active-provider.ts
+msgid "공급자 로그인 상태를 확인하지 못했습니다."
+msgstr "공급자 로그인 상태를 확인하지 못했습니다."
+
+#: src/providers/subscription-provider.ts
+msgid "공급자가 로그인 요청을 거절했습니다."
+msgstr "공급자가 로그인 요청을 거절했습니다."
+
 #: src/runtime/shown-failure.ts
 msgid "공급자가 로그인 정보를 받지 않았습니다. 다시 로그인한 뒤 보내 주십시오."
 msgstr "공급자가 로그인 정보를 받지 않았습니다. 다시 로그인한 뒤 보내 주십시오."
@@ -67,6 +79,14 @@ msgstr "공급자가 오류로 답했습니다. 잠시 뒤 다시 보내 주십�
 #: src/runtime/shown-failure.ts
 msgid "공급자가 요청을 잠시 제한하고 있습니다. 잠시 뒤 다시 보내 주십시오."
 msgstr "공급자가 요청을 잠시 제한하고 있습니다. 잠시 뒤 다시 보내 주십시오."
+
+#: src/providers/subscription-provider.ts
+msgid "공급자가 잘못된 로그인 응답을 보냈습니다."
+msgstr "공급자가 잘못된 로그인 응답을 보냈습니다."
+
+#: src/providers/subscription-provider.ts
+msgid "공급자에 연결되어 있지 않습니다."
+msgstr "공급자에 연결되어 있지 않습니다."
 
 #: src/runtime/shown-failure.ts
 msgid "공급자에 연결하지 못했습니다. 네트워크를 확인한 뒤 다시 보내 주십시오."
@@ -110,7 +130,20 @@ msgstr "대화를 줄여도 모델의 컨텍스트 창에 들어가지 않아 �
 msgid "등록된 프로젝트가 아닙니다. 앱에서 {root}를 먼저 추가해 주십시오."
 msgstr "등록된 프로젝트가 아닙니다. 앱에서 {root}를 먼저 추가해 주십시오."
 
+#: src/providers/subscription-provider.ts
+msgid "로그인 서버나 공급자에 연결하지 못했습니다."
+msgstr "로그인 서버나 공급자에 연결하지 못했습니다."
+
+#: src/providers/subscription-provider.ts
+msgid "로그인 확인에 실패했습니다. 다시 로그인해 주십시오."
+msgstr "로그인 확인에 실패했습니다. 다시 로그인해 주십시오."
+
+#: src/providers/subscription-provider.ts
+msgid "로그인을 끝내지 못했습니다. 다시 로그인해 주십시오."
+msgstr "로그인을 끝내지 못했습니다. 다시 로그인해 주십시오."
+
 #: src/mcp/oauth.ts
+#: src/providers/subscription-provider.ts
 msgid "로그인을 취소했습니다."
 msgstr "로그인을 취소했습니다."
 
@@ -140,6 +173,14 @@ msgstr "반복된 정정"
 #: src/report/defect-reports.ts
 msgid "버전 {release} · {platform}"
 msgstr "버전 {release} · {platform}"
+
+#: src/providers/subscription-provider.ts
+msgid "브라우저가 잘못된 로그인 응답을 돌려줬습니다. 다시 로그인해 주십시오."
+msgstr "브라우저가 잘못된 로그인 응답을 돌려줬습니다. 다시 로그인해 주십시오."
+
+#: src/providers/subscription-provider.ts
+msgid "브라우저가 제시간에 이 앱으로 돌아오지 않았습니다. 다시 로그인해 주십시오."
+msgstr "브라우저가 제시간에 이 앱으로 돌아오지 않았습니다. 다시 로그인해 주십시오."
 
 #: src/permissions/reviews.ts
 msgid "사용자가 거부했습니다."
@@ -294,6 +335,10 @@ msgstr "이 로그인은 이미 끝났습니다."
 #: src/acp/agent-bridge.ts
 msgid "이미 답하는 중입니다."
 msgstr "이미 답하는 중입니다."
+
+#: src/providers/subscription-provider.ts
+msgid "이미 진행 중인 로그인이 있습니다."
+msgstr "이미 진행 중인 로그인이 있습니다."
 
 #. Title of a conversation whose first message has no text, such as an image alone
 #: src/sessions/title.ts
