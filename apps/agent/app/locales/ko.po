@@ -1809,6 +1809,8 @@ msgid "다시 시도 중"
 msgstr "다시 시도 중"
 
 #. Button that restarts a stopped background loop
+#. Button that starts an MCP server again after it failed to start
+#: app/entry/settings/pages/mcp.tsx
 #: app/entry/shared/loop-health.tsx
 msgid "다시 시작"
 msgstr "다시 시작"

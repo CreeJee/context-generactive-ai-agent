@@ -3,7 +3,7 @@ import { msg } from "@lingui/core/macro";
 import { Trans, useLingui } from "@lingui/react/macro";
 import { Effect } from "effect";
 import { runUiEffect, uiPromise } from "../../shared/ui-effect";
-import { PlugIcon } from "lucide-react";
+import { PlugIcon, RefreshCwIcon } from "lucide-react";
 import { useState } from "react";
 import { Badge } from "~/components/ui/badge";
 import { Button, buttonVariants } from "~/components/ui/button";
@@ -201,6 +201,29 @@ function McpSettingsContent({ project }: { project: Project }) {
                         busy={busy}
                         run={(command) => run(row, command)}
                       />
+                      {McpServerState.$is("failed")(server.state) && (
+                        // Trusting again starts a failed server now instead of in the next conversation.
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={busy}
+                          onClick={() =>
+                            void run(
+                              row,
+                              McpCommand.trust({
+                                scope: server.scope,
+                                name: server.name,
+                                trusted: true,
+                              }),
+                            )
+                          }
+                        >
+                          <RefreshCwIcon />{" "}
+                          <Trans comment="Button that starts an MCP server again after it failed to start">
+                            다시 시작
+                          </Trans>
+                        </Button>
+                      )}
                       <TrustButton
                         active={active}
                         changed={McpServerState.$is("changed")(server.state)}
