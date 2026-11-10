@@ -1,3 +1,5 @@
+import { t } from "@lingui/core/macro";
+import { Trans, useLingui } from "@lingui/react/macro";
 import { Data, DateTime, Effect, Fiber } from "effect";
 import { isTruthy } from "../truthy.ts";
 import type { ReportBundle } from "memory-agent/definitions";
@@ -23,10 +25,6 @@ import {
   diagnosisText,
   DiagnosisState,
 } from "../entry/report/report-diagnosis";
-import { reportCopy } from "../entry/report/copy";
-import { problemText } from "../entry/shared/copy-templates";
-
-const pageCopy = reportCopy.page;
 
 /** The evidence bundle on the page: collected on open when the report names a session. */
 type EvidenceState = Data.TaggedEnum<{
@@ -52,13 +50,19 @@ const reportSource = () => {
 };
 
 export function meta() {
-  return [{ title: pageCopy.title }];
+  return [{ title: t`문제 제보 · Context Agent` }];
 }
 
 export default function ReportPage() {
+  const { t } = useLingui();
   const [fields, setFields] = useState<ReportFields>({ symptom: "", expected: "", actual: "" });
   const [editedText, setEditedText] = useState<string | null>(null);
-  const [createdAt, setCreatedAt] = useState(pageCopy.drafting);
+  const [createdAt, setCreatedAt] = useState(
+    t({
+      message: "작성 중",
+      comment: "Shown as the report's creation time until the clock is read",
+    }),
+  );
   useEffect(
     () =>
       setCreatedAt(
@@ -75,7 +79,7 @@ export default function ReportPage() {
   );
   const [evidence, setEvidence] = useState<EvidenceState>(EvidenceState.none());
   const [evidenceRetry, setEvidenceRetry] = useState(0);
-  const [status, setStatus] = useState(pageCopy.status.noSession);
+  const [status, setStatus] = useState(t`세션 없이 열면 증상 설명만으로 제보합니다.`);
   const [analysisSession, setAnalysisSession] = useState<{
     projectId: string;
     reportSessionId: string;
@@ -95,7 +99,7 @@ export default function ReportPage() {
           onSuccess: ({ reportSessionId }) => setAnalysisSession({ projectId, reportSessionId }),
           onFailure: () => {
             setSessionFailed(true);
-            setStatus(problemText(pageCopy.sessionFailed));
+            setStatus(t`분석 세션을 열 수 없습니다. 증상 제보문은 계속 작성·저장할 수 있습니다.`);
           },
         }),
       ),
@@ -118,17 +122,17 @@ export default function ReportPage() {
     const source = reportSource();
     if (source === null) return;
     setEvidence(EvidenceState.loading());
-    setStatus(pageCopy.status.collecting);
+    setStatus(t`세션의 증거 묶음을 모으는 중입니다. 증상은 계속 작성할 수 있습니다.`);
     const task = Effect.runFork(
       readReportEvidence(source).pipe(
         Effect.match({
           onSuccess: (collected) => {
             setEvidence(EvidenceState.collected({ bundle: collected }));
-            setStatus(pageCopy.status.collected);
+            setStatus(t`증거 묶음을 모았습니다. 아래에서 보낼 내용을 확인해 주십시오.`);
           },
           onFailure: () => {
             setEvidence(EvidenceState.failed());
-            setStatus(problemText(pageCopy.evidenceFailed));
+            setStatus(t`증거 묶음을 모으지 못했습니다. 증상만으로도 제보할 수 있습니다.`);
           },
         }),
       ),
@@ -169,7 +173,11 @@ export default function ReportPage() {
   const shared = () => shareableText(text, draftEvidence(evidence));
   const copy = () =>
     copyReportText(shared(), (value) => navigator.clipboard.writeText(value)).then((copied) => {
-      setStatus(copied ? pageCopy.status.copied : problemText(pageCopy.clipboardFailed));
+      setStatus(
+        copied
+          ? t`제보문과 증거 묶음을 복사했습니다. 개발자의 Discord 채널에 직접 붙여넣어 주십시오.`
+          : t`클립보드를 사용할 수 없습니다. 위 제보 문안에서 텍스트를 직접 선택해 복사해 주십시오.`,
+      );
     });
 
   const download = () => {
@@ -187,19 +195,28 @@ export default function ReportPage() {
     <main className="mx-auto max-w-3xl space-y-6 px-4 py-8 text-foreground">
       <header className="space-y-2">
         <a href="/" className="text-sm text-primary underline">
-          {pageCopy.back}
+          <Trans>← 앱으로 돌아가기</Trans>
         </a>
-        <h1 className="text-2xl font-semibold">{pageCopy.heading}</h1>
-        <p className="text-sm text-muted-foreground">{pageCopy.intro}</p>
+        <h1 className="text-2xl font-semibold">
+          <Trans comment="Heading of the problem report page">문제 제보</Trans>
+        </h1>
+        <p className="text-sm text-muted-foreground">
+          <Trans>
+            채팅이나 실행이 멈춰도 여기서 증상을 기록할 수 있습니다. 이 화면은 제보를 자동으로
+            전송하지 않습니다. 직접 누를 때만 개발자 Discord 웹훅으로 보냅니다.
+          </Trans>
+        </p>
       </header>
       {analysisSession && (
         <p className="text-sm">
-          {pageCopy.sessionOpened}{" "}
+          <Trans>별도 분석 세션이 열렸습니다.</Trans>{" "}
           <a
             className="text-primary underline"
             href={`/?project=${encodeURIComponent(analysisSession.projectId)}&session=${encodeURIComponent(analysisSession.reportSessionId)}`}
           >
-            {pageCopy.openSession}
+            <Trans comment="Link that opens the separate analysis chat session">
+              분석 세션 보기
+            </Trans>
           </a>
         </p>
       )}
@@ -209,27 +226,46 @@ export default function ReportPage() {
           className="text-sm text-primary underline"
           onClick={() => setSessionRetry((attempt) => attempt + 1)}
         >
-          {pageCopy.retrySession}
+          <Trans>분석 세션 다시 열기</Trans>
         </button>
       )}
       <ReportDraft fields={fields} onChange={setFields} text={text} onTextChange={setEditedText} />
       {editedText !== null && (
         <div className="space-y-1 text-sm">
-          <p>{pageCopy.editing}</p>
+          <p>
+            <Trans>
+              문안을 직접 편집 중입니다. 위 증상·진단을 바꾸거나 증거 묶음이 도착해도 현재 문안에는
+              자동 반영되지 않습니다.
+            </Trans>
+          </p>
           <button
             type="button"
             onClick={() => setEditedText(null)}
             className="text-primary underline"
           >
-            {pageCopy.regenerate}
+            <Trans>설명·진단·증거 묶음으로 문안 다시 생성 (직접 편집한 내용 삭제)</Trans>
           </button>
         </div>
       )}
-      <section className="space-y-2" aria-label={pageCopy.diagnosisSection}>
-        <h2 className="text-sm font-medium">{pageCopy.diagnosisHeading}</h2>
+      <section
+        className="space-y-2"
+        aria-label={t({
+          message: "AI 진단",
+          comment: "Accessible name of the AI diagnosis section",
+        })}
+      >
+        <h2 className="text-sm font-medium">
+          <Trans>오류 진단과 제보 초안</Trans>
+        </h2>
         <ReportDiagnosisReview state={diagnosis} onRequest={runDiagnosis} onChange={setDiagnosis} />
       </section>
-      <section className="space-y-3" aria-label={pageCopy.evidenceSection}>
+      <section
+        className="space-y-3"
+        aria-label={t({
+          message: "증거 수집",
+          comment: "Accessible name of the evidence collection section",
+        })}
+      >
         <p role="status" className="text-sm text-muted-foreground">
           {status}
         </p>
@@ -239,28 +275,51 @@ export default function ReportPage() {
             className="text-sm text-primary underline"
             onClick={() => setEvidenceRetry((attempt) => attempt + 1)}
           >
-            {pageCopy.retryEvidence}
+            <Trans>증거 묶음 다시 모으기</Trans>
           </button>
         )}
         {bundle && <ReportBundlePreview bundle={bundle} />}
       </section>
-      <section className="space-y-2" aria-label={pageCopy.shareSection}>
-        <p className="text-sm">{pageCopy.shareHint}</p>
+      <section
+        className="space-y-2"
+        aria-label={t({
+          message: "복사·저장",
+          comment: "Accessible name of the section for copying or saving the report",
+        })}
+      >
+        <p className="text-sm">
+          <Trans>
+            문안과 증거 묶음을 함께 복사하거나 텍스트 파일로 저장해 개발자의 Discord에 직접 게시할
+            수 있습니다. 웹훅 전송이 실패해도 이 방법은 항상 쓸 수 있습니다.
+          </Trans>
+        </p>
         <div className="flex gap-2">
           <button
             type="button"
             onClick={() => void copy()}
             className="rounded-md border px-3 py-2 text-sm"
           >
-            {pageCopy.copy}
+            <Trans comment="Button that copies the report and evidence to the clipboard">
+              제보문 복사
+            </Trans>
           </button>
           <button type="button" onClick={download} className="rounded-md border px-3 py-2 text-sm">
-            {pageCopy.download}
+            <Trans comment="Button that saves the report and evidence as a text file">
+              텍스트 파일 저장
+            </Trans>
           </button>
         </div>
       </section>
-      <section className="space-y-2" aria-label={pageCopy.deliverySection}>
-        <h2 className="text-sm font-medium">{pageCopy.deliveryHeading}</h2>
+      <section
+        className="space-y-2"
+        aria-label={t({
+          message: "Discord 웹훅 전송",
+          comment: "Accessible name of the section that sends the report to Discord",
+        })}
+      >
+        <h2 className="text-sm font-medium">
+          <Trans>개발자 Discord로 보내기 (선택)</Trans>
+        </h2>
         <ReportDelivery text={text} evidence={bundle} />
       </section>
     </main>

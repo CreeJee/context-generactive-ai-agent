@@ -20,9 +20,52 @@ msgstr "\"{card}\" 카드가 \"{conversation}\" 대화 Plan의 마지막에 새 
 msgid "\"{deleteTitle}\" 대화의 원본을 지웁니다."
 msgstr "\"{deleteTitle}\" 대화의 원본을 지웁니다."
 
+#. seq: number of the tool call that started this work trace
+#: app/entry/report/report-bundle.tsx
+msgid "(call-{seq}에서 시작)"
+msgstr "(call-{seq}에서 시작)"
+
 #: app/entry/settings/pages/kanban.tsx
 msgid "(기기 기본값: CPU 코어 절반, 1~4개)"
 msgstr "(기기 기본값: CPU 코어 절반, 1~4개)"
+
+#. Shown for an approval request with no tool name
+#: app/entry/report/report-bundle.tsx
+msgid "(도구 미상)"
+msgstr "(도구 미상)"
+
+#. Shown in place of an empty text in the evidence preview
+#: app/entry/report/report-bundle.tsx
+msgid "(비어 있음)"
+msgstr "(비어 있음)"
+
+#. Shown when no model provider or model was selected
+#: app/entry/report/report-bundle.tsx
+msgid "(선택 없음)"
+msgstr "(선택 없음)"
+
+#: app/entry/report/report-draft.tsx
+msgid "(오류 {code})"
+msgstr "(오류 {code})"
+
+#. Shown for a tool call whose tool name was not recorded
+#: app/entry/report/report-bundle.tsx
+msgid "(이름 없음)"
+msgstr "(이름 없음)"
+
+#: app/entry/report/report-draft.tsx
+msgid "(작성하지 않음)"
+msgstr "(작성하지 않음)"
+
+#. Shown for a run error without a code
+#: app/entry/report/report-bundle.tsx
+msgid "(코드 없음)"
+msgstr "(코드 없음)"
+
+#. Marks a text that was cut at the size limit
+#: app/entry/report/report-bundle.tsx
+msgid "[상한에서 잘림]"
+msgstr "[상한에서 잘림]"
 
 #. Label of an endpoint's row; accountName is the endpoint's name
 #: app/entry/navigation/compatible-accounts.tsx
@@ -112,6 +155,11 @@ msgstr "{card} 카드를 집었습니다."
 msgid "{card} 카드의 보류를 풉니다."
 msgstr "{card} 카드의 보류를 풉니다."
 
+#. card: card ref; failureStreak: failures in a row; replans: Plan rewrites
+#: app/entry/report/report-bundle.tsx
+msgid "{card}: 실패 {failureStreak} · Plan 재작성 {replans}"
+msgstr "{card}: 실패 {failureStreak} · Plan 재작성 {replans}"
+
 #. Label of one waiting decision; cardTitle is its kanban card's title
 #: app/entry/navigation/decision-inbox.tsx
 msgid "{cardTitle} 판단"
@@ -180,6 +228,11 @@ msgstr "{days}일"
 msgid "{effort} (현재)"
 msgstr "{effort} (현재)"
 
+#. Badge with the number of events in a run
+#: app/entry/report/report-bundle.tsx
+msgid "{eventCount}개"
+msgstr "{eventCount}개"
+
 #: app/entry/settings/pages/imports.tsx
 msgid "{failed}개는 읽지 못했습니다."
 msgstr "{failed}개는 읽지 못했습니다."
@@ -204,7 +257,9 @@ msgid "{host}의 이미지 불러오기"
 msgstr "{host}의 이미지 불러오기"
 
 #. How long a task has run, in hours
+#. Name of a usage window by its length in hours
 #: app/entry/chat/message.tsx
+#: app/entry/navigation/account-profiles.tsx
 msgid "{hours}시간"
 msgstr "{hours}시간"
 
@@ -317,6 +372,14 @@ msgstr "{seconds}초"
 msgid "{secretKind}: {names} (값은 보여 주지 않습니다)"
 msgstr "{secretKind}: {names} (값은 보여 주지 않습니다)"
 
+#: app/entry/report/report-bundle.tsx
+msgid "{section}: 수집 실패"
+msgstr "{section}: 수집 실패"
+
+#: app/entry/report/report-bundle.tsx
+msgid "{section}: 오래된 항목은 상한 때문에 빠졌음"
+msgstr "{section}: 오래된 항목은 상한 때문에 빠졌음"
+
 #. {selectedProviderName} is the model provider's name, such as ChatGPT
 #: app/entry/index.tsx
 msgid "{selectedProviderName} 연결이 필요합니다."
@@ -377,6 +440,10 @@ msgstr "{until} 후 초기화"
 msgid "/chat/completions 경로는 자동으로 붙습니다."
 msgstr "/chat/completions 경로는 자동으로 붙습니다."
 
+#: app/entry/report/report-draft.tsx
+msgid "# Context Agent 문제 제보"
+msgstr "# Context Agent 문제 제보"
+
 #: app/entry/chat/images.tsx
 msgid "#{number} 본문에 넣기"
 msgstr "#{number} 본문에 넣기"
@@ -384,6 +451,34 @@ msgstr "#{number} 본문에 넣기"
 #: app/entry/chat/images.tsx
 msgid "#{number} 첨부 제거"
 msgstr "#{number} 첨부 제거"
+
+#: app/entry/report/report-draft.tsx
+msgid "## AI 진단 요약 (사용자가 검토함)"
+msgstr "## AI 진단 요약 (사용자가 검토함)"
+
+#: app/entry/report/report-draft.tsx
+msgid "## AI 진단: 가설 (검증되지 않은 추정)"
+msgstr "## AI 진단: 가설 (검증되지 않은 추정)"
+
+#: app/entry/report/report-draft.tsx
+msgid "## AI 진단: 관측 (증거 묶음에서 확인)"
+msgstr "## AI 진단: 관측 (증거 묶음에서 확인)"
+
+#: app/entry/report/report-draft.tsx
+msgid "## 사용자 설명 (AI 진단 아님)"
+msgstr "## 사용자 설명 (AI 진단 아님)"
+
+#: app/entry/report/report-draft.tsx
+msgid "## 증거 묶음 (context-agent-evidence.json)"
+msgstr "## 증거 묶음 (context-agent-evidence.json)"
+
+#: app/entry/report/report-draft.tsx
+msgid "## 증거 묶음 요약"
+msgstr "## 증거 묶음 요약"
+
+#: app/routes/report.tsx
+msgid "← 앱으로 돌아가기"
+msgstr "← 앱으로 돌아가기"
 
 #. Keyboard hint under the slash palette
 #: app/entry/chat/slash-palette.tsx
@@ -435,6 +530,19 @@ msgstr "5시간"
 #: app/entry/navigation/account-profiles.tsx
 msgid "7일"
 msgstr "7일"
+
+#. Accessible name of the AI diagnosis section
+#: app/routes/report.tsx
+msgid "AI 진단"
+msgstr "AI 진단"
+
+#: app/entry/report/report-draft.tsx
+msgid "AI 진단: 수행하지 않음"
+msgstr "AI 진단: 수행하지 않음"
+
+#: app/entry/report/report-draft.tsx
+msgid "AI 진단: 실패 ({reason}). 이 제보는 사용자 설명과 증거 묶음뿐입니다."
+msgstr "AI 진단: 실패 ({reason}). 이 제보는 사용자 설명과 증거 묶음뿐입니다."
 
 #. Field title for the Kagi API key
 #. Field title for the Kagi API key
@@ -533,6 +641,36 @@ msgstr "description이 없어 쓰지 않습니다."
 #: app/entry/chat/board-panel.tsx
 msgid "detached HEAD에서 시작해 브랜치가 없으므로 자동 merge하지 않습니다"
 msgstr "detached HEAD에서 시작해 브랜치가 없으므로 자동 merge하지 않습니다"
+
+#. Accessible name of the section that sends the report to Discord
+#: app/routes/report.tsx
+msgid "Discord 웹훅 전송"
+msgstr "Discord 웹훅 전송"
+
+#: app/entry/report/report-delivery.tsx
+msgid "Discord가 메시지 형식을 거부했습니다"
+msgstr "Discord가 메시지 형식을 거부했습니다"
+
+#: app/entry/report/report-delivery.tsx
+msgid "Discord가 이 웹훅을 거부했습니다(삭제되거나 재발급됐을 수 있습니다). 개발자에게 알려 주십시오"
+msgstr "Discord가 이 웹훅을 거부했습니다(삭제되거나 재발급됐을 수 있습니다). 개발자에게 알려 주십시오"
+
+#: app/entry/report/report-delivery.tsx
+msgid "Discord가 잠시 요청을 막았습니다. 잠시 후 다시 시도해 주십시오"
+msgstr "Discord가 잠시 요청을 막았습니다. 잠시 후 다시 시도해 주십시오"
+
+#. Button that sends the report to the developer's Discord webhook
+#: app/entry/report/report-delivery.tsx
+msgid "Discord로 보내기"
+msgstr "Discord로 보내기"
+
+#: app/entry/report/report-delivery.tsx
+msgid "Discord로 보내는 중입니다."
+msgstr "Discord로 보내는 중입니다."
+
+#: app/entry/report/report-delivery.tsx
+msgid "Discord에 연결할 수 없습니다"
+msgstr "Discord에 연결할 수 없습니다"
 
 #: app/entry/chat/chat-panel.tsx
 msgid "Enter(저장)나 Esc(지우기)로 편집을 끝낸 뒤 다른 메시지를 고를 수 있습니다."
@@ -677,6 +815,10 @@ msgstr "MCP 도구 {name} 실행을 승인할까요?"
 msgid "MCP 서버"
 msgstr "MCP 서버"
 
+#: app/entry/report/report-bundle.tsx
+msgid "MCP·외부 에이전트"
+msgstr "MCP·외부 에이전트"
+
 #: app/entry/chat/board-panel.tsx
 msgid "merge됨 ({commit})"
 msgstr "merge됨 ({commit})"
@@ -767,6 +909,7 @@ msgstr "Plan을 확인하고 승인하면 칸반 보드에서 실행합니다. �
 msgid "Plan이나 Goal 모드에서 다시 승인하면 이어서 실행합니다."
 msgstr "Plan이나 Goal 모드에서 다시 승인하면 이어서 실행합니다."
 
+#: app/entry/api.ts
 #: app/entry/chat/draft-images.ts
 msgid "PNG, JPEG, GIF, WebP 이미지만 올릴 수 있습니다."
 msgstr "PNG, JPEG, GIF, WebP 이미지만 올릴 수 있습니다."
@@ -792,6 +935,20 @@ msgstr "PR을 만들던 중 멈췄습니다. 원격 저장소에서 직접 확�
 msgid "PR을 만듦: {url}"
 msgstr "PR을 만듦: {url}"
 
+#: app/entry/report/report-bundle.tsx
+msgid "run 없는 항목"
+msgstr "run 없는 항목"
+
+#. Panel title with the number of events not linked to any run
+#: app/entry/report/report-bundle.tsx
+msgid "run 없는 항목 ({count})"
+msgstr "run 없는 항목 ({count})"
+
+#. code: the run's error code
+#: app/entry/report/report-bundle.tsx
+msgid "run 오류 {code}"
+msgstr "run 오류 {code}"
+
 #: app/entry/chat/message.tsx
 msgid "skill 읽기"
 msgstr "skill 읽기"
@@ -801,7 +958,9 @@ msgid "SKILL.md가 너무 커서 쓰지 않습니다."
 msgstr "SKILL.md가 너무 커서 쓰지 않습니다."
 
 #. Heading of the skill group in the slash palette
+#. Settings page name: skill instructions the model reads
 #: app/entry/chat/slash-palette.tsx
+#: app/entry/settings/shared.tsx
 msgid "Skills"
 msgstr "Skills"
 
@@ -849,6 +1008,10 @@ msgstr "Work Trace에서 보기"
 msgid "Work Trace에서 자세히 보려면 작업을 누르십시오."
 msgstr "Work Trace에서 자세히 보려면 작업을 누르십시오."
 
+#: app/entry/report/report-diagnosis.tsx
+msgid "가설 (검증되지 않음)"
+msgstr "가설 (검증되지 않음)"
+
 #. Goal verification status: the hypothesis being checked was wrong
 #: app/entry/chat/workflow-panel.tsx
 msgid "가설 무효"
@@ -883,9 +1046,29 @@ msgstr "감시"
 msgid "값이 올바르지 않습니다. 동시 실행 수는 1~32, 브랜치 이름은 영문·숫자·._/-만 쓸 수 있습니다."
 msgstr "값이 올바르지 않습니다. 동시 실행 수는 1~32, 브랜치 이름은 영문·숫자·._/-만 쓸 수 있습니다."
 
+#: app/entry/report/report-delivery.tsx
+msgid "같은 제보문을 보내는 중입니다"
+msgstr "같은 제보문을 보내는 중입니다"
+
 #: app/entry/chat/board/board-surface.tsx
 msgid "같은 프로젝트에서 Plan이 있는 다른 대화로만 옮길 수 있습니다."
 msgstr "같은 프로젝트에서 Plan이 있는 다른 대화로만 옮길 수 있습니다."
+
+#: app/entry/report/report-delivery.tsx
+msgid "개발자 Discord 채널로 보냈습니다 (메시지 {messageId})."
+msgstr "개발자 Discord 채널로 보냈습니다 (메시지 {messageId})."
+
+#: app/routes/report.tsx
+msgid "개발자 Discord로 보내기 (선택)"
+msgstr "개발자 Discord로 보내기 (선택)"
+
+#: app/entry/report/report-delivery.tsx
+msgid "개발자 웹훅 …{webhookIdSuffix}. 위 최종 문안이 메시지로, 증거 묶음 없이 전송됩니다."
+msgstr "개발자 웹훅 …{webhookIdSuffix}. 위 최종 문안이 메시지로, 증거 묶음 없이 전송됩니다."
+
+#: app/entry/report/report-delivery.tsx
+msgid "개발자 웹훅 …{webhookIdSuffix}. 위 최종 문안이 메시지로, 증거 묶음 전체가 JSON 첨부 파일로 전송됩니다."
+msgstr "개발자 웹훅 …{webhookIdSuffix}. 위 최종 문안이 메시지로, 증거 묶음 전체가 JSON 첨부 파일로 전송됩니다."
 
 #. Settings tab group: project improvement reports
 #: app/entry/settings/settings-dialog.tsx
@@ -909,7 +1092,9 @@ msgid "개선 항목을 해석할 모델이 없습니다. 채팅에서 모델을
 msgstr "개선 항목을 해석할 모델이 없습니다. 채팅에서 모델을 고르고 로그인한 뒤 다시 시도해 주십시오."
 
 #. Button that rejects the tool call
+#. The user rejected the tool call
 #: app/entry/chat/approval.tsx
+#: app/entry/report/report-bundle.tsx
 msgid "거부"
 msgstr "거부"
 
@@ -997,6 +1182,11 @@ msgstr "결과 {met}/{outcomeCount}"
 msgid "결과 {met}/{total} 충족"
 msgstr "결과 {met}/{total} 충족"
 
+#. Badge on a tool call that has no result yet
+#: app/entry/report/report-bundle.tsx
+msgid "결과 없음"
+msgstr "결과 없음"
+
 #. Stage of an agent run at which it failed
 #: app/entry/session/attempt-failure.ts
 msgid "결과 저장 중"
@@ -1035,6 +1225,17 @@ msgstr "결과물"
 msgid "결정 요청을 찾을 수 없습니다."
 msgstr "결정 요청을 찾을 수 없습니다."
 
+#. Badge with the number of recent defects
+#: app/entry/report/report-bundle.tsx
+msgid "결함 {count}"
+msgstr "결함 {count}"
+
+#. tag: defect kind; location: where it happened; count: occurrences
+#: app/entry/report/report-bundle.tsx
+#: app/entry/report/report-draft.tsx
+msgid "결함 {tag} @ {location} ×{count}"
+msgstr "결함 {tag} @ {location} ×{count}"
+
 #. Status badge: a background loop stopped on a defect
 #: app/entry/shared/loop-health.tsx
 msgid "결함으로 중단"
@@ -1069,8 +1270,10 @@ msgstr "계속 가져오기"
 msgid "계속 실패해 카드를 다시 짭니다: {failure}"
 msgstr "계속 실패해 카드를 다시 짭니다: {failure}"
 
+#. Button that opens the account manager
 #. Title of the account management sheet
 #: app/entry/index.tsx
+#: app/entry/navigation/account-switcher.tsx
 msgid "계정 관리"
 msgstr "계정 관리"
 
@@ -1182,6 +1385,10 @@ msgstr "공급자에 요청을 보내지 못했습니다. {time}에 다시 보�
 msgid "공통"
 msgstr "공통"
 
+#: app/entry/report/report-diagnosis.tsx
+msgid "관측 (증거 묶음에서 확인)"
+msgstr "관측 (증거 묶음에서 확인)"
+
 #: app/entry/navigation/account-profiles.tsx
 msgid "구독 한도 조회 불가: 저장된 로그인이 만료돼 조회하지 않았습니다"
 msgstr "구독 한도 조회 불가: 저장된 로그인이 만료돼 조회하지 않았습니다"
@@ -1234,6 +1441,11 @@ msgstr "그대로 두기"
 msgid "그대로 진행"
 msgstr "그대로 진행"
 
+#. Button that sends the report again although it may already be sent
+#: app/entry/report/report-delivery.tsx
+msgid "그래도 다시 보내기"
+msgstr "그래도 다시 보내기"
+
 #: app/entry/chat/images.tsx
 msgid "그린 그림: {path}"
 msgstr "그린 그림: {path}"
@@ -1267,9 +1479,23 @@ msgstr "근거 연결 {repaired}개, 의미 연결 {suppressed}개, 불필요한
 msgid "근거 추적"
 msgstr "근거 추적"
 
+#. ids: run and call ids the diagnosis item cites
+#: app/entry/report/report-diagnosis.tsx
+#: app/entry/report/report-draft.tsx
+msgid "근거: {ids}"
+msgstr "근거: {ids}"
+
 #: app/entry/chat/board/board-surface.tsx
 msgid "기다릴 수 없는 Goal입니다."
 msgstr "기다릴 수 없는 Goal입니다."
+
+#: app/entry/report/report-draft.tsx
+msgid "기대한 동작 (선택)"
+msgstr "기대한 동작 (선택)"
+
+#: app/entry/report/report-draft.tsx
+msgid "기대한 동작: {expected}"
+msgstr "기대한 동작: {expected}"
 
 #: app/entry/settings/pages/imports.tsx
 msgid "기록 <0/>개 중 <1/>개를 읽어 노드 <2/>개를 넣었습니다."
@@ -1288,6 +1514,10 @@ msgstr "기록 없음"
 msgid "기록 형식을 읽지 못했습니다"
 msgstr "기록 형식을 읽지 못했습니다"
 
+#: app/entry/report/report-bundle.tsx
+msgid "기록된 run이 없습니다."
+msgstr "기록된 run이 없습니다."
+
 #: app/entry/settings/pages/imports.tsx
 msgid "기록을 읽는 중입니다. <0/>/<1/>개를 확인하고 노드 <2/>개를 더했습니다."
 msgstr "기록을 읽는 중입니다. <0/>/<1/>개를 확인하고 노드 <2/>개를 더했습니다."
@@ -1304,6 +1534,11 @@ msgstr "기록한 개선 항목을 불러오는 중입니다."
 #: app/entry/settings/shared.tsx
 msgid "기본"
 msgstr "기본"
+
+#. The setting is left at its default value
+#: app/entry/report/report-bundle.tsx
+msgid "기본값"
+msgstr "기본값"
 
 #. Button that clears the saved card count so the device default applies
 #: app/entry/settings/pages/kanban.tsx
@@ -1392,6 +1627,10 @@ msgstr "끼어들기"
 #: app/entry/chat/board/card-peek.tsx
 msgid "남긴 근거"
 msgstr "남긴 근거"
+
+#: app/entry/report/report-diagnosis.tsx
+msgid "내 모델로 오류 진단·초안 만들기"
+msgstr "내 모델로 오류 진단·초안 만들기"
 
 #: app/entry/chat/approval.tsx
 msgid "네트워크: 접속하지 않습니다."
@@ -1498,8 +1737,10 @@ msgstr "다시 대기열에"
 msgid "다시 로그인"
 msgstr "다시 로그인"
 
+#. Button that loads a settings section again after it failed to load
 #. Button that reruns a subagent task as a new attempt
 #: app/entry/chat/message.tsx
+#: app/entry/queries/boundary.tsx
 msgid "다시 시도"
 msgstr "다시 시도"
 
@@ -1553,6 +1794,15 @@ msgstr "다시 연결"
 #: app/entry/navigation/account-profiles.tsx
 msgid "다시 열기"
 msgstr "다시 열기"
+
+#. Button that requests the AI diagnosis again
+#: app/entry/report/report-diagnosis.tsx
+msgid "다시 진단 받기"
+msgstr "다시 진단 받기"
+
+#: app/entry/report/report-diagnosis.tsx
+msgid "다시 진단 받기 (편집 내용 삭제)"
+msgstr "다시 진단 받기 (편집 내용 삭제)"
 
 #: app/entry/chat/board/hold-reason.ts
 msgid "다시 짠 뒤에도 실패했습니다: {failure}"
@@ -1618,7 +1868,9 @@ msgid "답변 멈추기"
 msgstr "답변 멈추기"
 
 #. Composer status while the model writes its answer
+#. Conversation status: an answer is streaming
 #: app/entry/chat/composer-status.tsx
+#: app/entry/navigation/sidebar.tsx
 msgid "답변 중"
 msgstr "답변 중"
 
@@ -1729,7 +1981,9 @@ msgid "대상 브랜치가 없어졌습니다"
 msgstr "대상 브랜치가 없어졌습니다"
 
 #. Accessible name of the scrolling message list
+#. Conversation list section: the conversations not at work
 #: app/entry/chat/chat-history.tsx
+#: app/entry/navigation/sidebar.tsx
 msgid "대화"
 msgstr "대화"
 
@@ -1875,11 +2129,16 @@ msgid "라이트 모드"
 msgstr "라이트 모드"
 
 #. Button that signs out of an MCP server
+#. Button that signs the account out and removes it
+#. Dialog button that confirms signing the account out
+#: app/entry/navigation/account-profiles.tsx
 #: app/entry/settings/pages/mcp.tsx
 msgid "로그아웃"
 msgstr "로그아웃"
 
+#. Button that adds the account by opening its login
 #. Button that signs in to an MCP server
+#: app/entry/navigation/account-profiles.tsx
 #: app/entry/settings/pages/mcp.tsx
 msgid "로그인"
 msgstr "로그인"
@@ -1894,7 +2153,9 @@ msgstr "로그인 대기"
 msgid "로그인 취소"
 msgstr "로그인 취소"
 
+#. Account connection status: signed out
 #. Badge on an MCP server that needs an OAuth login
+#: app/entry/navigation/account-model-panel.tsx
 #: app/entry/settings/pages/mcp.tsx
 msgid "로그인 필요"
 msgstr "로그인 필요"
@@ -1918,6 +2179,20 @@ msgstr "로그인이 제시간에 끝나지 않았습니다."
 #: app/entry/settings/pages/mcp.tsx
 msgid "로그인하지 못했습니다."
 msgstr "로그인하지 못했습니다."
+
+#: app/entry/report/report-delivery.tsx
+msgid "로컬 서버 요청이 실패했습니다"
+msgstr "로컬 서버 요청이 실패했습니다"
+
+#. loop: background loop name; health: its health status
+#: app/entry/report/report-bundle.tsx
+msgid "루프 {loop}: {health}"
+msgstr "루프 {loop}: {health}"
+
+#. Icon link in the sidebar header that opens the problem report page
+#: app/entry/report/report-link.tsx
+msgid "리포트하기"
+msgstr "리포트하기"
 
 #: app/entry/session/run-state.tsx
 msgid "마지막 답변이 끝나지 않았습니다"
@@ -1975,7 +2250,9 @@ msgid "맡은 카드 없음"
 msgstr "맡은 카드 없음"
 
 #. Permission mode 'ask': ask before each tool call
+#. Project permission mode `ask`
 #: app/entry/chat/slash-commands.ts
+#: app/entry/navigation/sidebar.tsx
 msgid "매번 묻기"
 msgstr "매번 묻기"
 
@@ -2040,9 +2317,12 @@ msgstr "명령"
 msgid "명령을 실행하지 못했습니다."
 msgstr "명령을 실행하지 못했습니다."
 
+#. Author of a chat message in the evidence preview: the AI model
+#. Label before the selected provider and AI model
 #. Sidebar field label: the chat model
 #. Sidebar section of model settings
 #: app/entry/navigation/sidebar.tsx
+#: app/entry/report/report-bundle.tsx
 msgid "모델"
 msgstr "모델"
 
@@ -2101,6 +2381,10 @@ msgstr "모델 응답 스트림이 끊겼습니다"
 msgid "모델 응답 중"
 msgstr "모델 응답 중"
 
+#: app/entry/report/report-diagnosis.tsx
+msgid "모델 응답을 진단 형식으로 읽지 못했습니다"
+msgstr "모델 응답을 진단 형식으로 읽지 못했습니다"
+
 #: app/entry/navigation/compatible-accounts.tsx
 msgid "모델 저장"
 msgstr "모델 저장"
@@ -2121,6 +2405,10 @@ msgstr "모델 한도"
 #: app/entry/chat/context-meter.tsx
 msgid "모델 한도를 알 수 없어 사용률은 표시하지 않습니다."
 msgstr "모델 한도를 알 수 없어 사용률은 표시하지 않습니다."
+
+#: app/entry/report/report-diagnosis.tsx
+msgid "모델 호출이 실패했거나 시간이 초과됐습니다"
+msgstr "모델 호출이 실패했거나 시간이 초과됐습니다"
 
 #: app/entry/settings/pages/embedding.tsx
 msgid "모델은 처음 임베딩할 때 불러옵니다."
@@ -2199,6 +2487,28 @@ msgstr "목록에서만 뺀 대화입니다. 기억 검색에는 계속 나옵�
 msgid "문서 복사"
 msgstr "문서 복사"
 
+#: app/routes/report.tsx
+msgid "문안과 증거 묶음을 함께 복사하거나 텍스트 파일로 저장해 개발자의 Discord에 직접 게시할 수 있습니다. 웹훅 전송이 실패해도 이 방법은 항상 쓸 수 있습니다."
+msgstr "문안과 증거 묶음을 함께 복사하거나 텍스트 파일로 저장해 개발자의 Discord에 직접 게시할 수 있습니다. 웹훅 전송이 실패해도 이 방법은 항상 쓸 수 있습니다."
+
+#: app/routes/report.tsx
+msgid "문안을 직접 편집 중입니다. 위 증상·진단을 바꾸거나 증거 묶음이 도착해도 현재 문안에는 자동 반영되지 않습니다."
+msgstr "문안을 직접 편집 중입니다. 위 증상·진단을 바꾸거나 증거 묶음이 도착해도 현재 문안에는 자동 반영되지 않습니다."
+
+#. Accessible name of the section where the user describes the problem
+#: app/entry/report/report-draft.tsx
+msgid "문제 설명"
+msgstr "문제 설명"
+
+#. Heading of the problem report page
+#: app/routes/report.tsx
+msgid "문제 제보"
+msgstr "문제 제보"
+
+#: app/routes/report.tsx
+msgid "문제 제보 · Context Agent"
+msgstr "문제 제보 · Context Agent"
+
 #. Goal verification status: not run
 #: app/entry/chat/workflow-panel.tsx
 msgid "미실행"
@@ -2246,6 +2556,10 @@ msgstr "반영됨, 이어서 진행"
 msgid "백그라운드 {count}개"
 msgstr "백그라운드 {count}개"
 
+#: app/entry/report/report-bundle.tsx
+msgid "백그라운드 루프"
+msgstr "백그라운드 루프"
+
 #: app/entry/chat/message.tsx
 msgid "백그라운드 작업 {backgroundCount}개 끝남"
 msgstr "백그라운드 작업 {backgroundCount}개 끝남"
@@ -2254,6 +2568,11 @@ msgstr "백그라운드 작업 {backgroundCount}개 끝남"
 #: app/entry/chat/board/board-moves.ts
 msgid "백로그"
 msgstr "백로그"
+
+#. Label before the app release version
+#: app/entry/report/report-bundle.tsx
+msgid "버전"
+msgstr "버전"
 
 #: app/entry/chat/slash-commands.ts
 msgid "변경 없이 조사한 뒤 Plan 만들기"
@@ -2283,6 +2602,10 @@ msgstr "변경 요청 대기 {pendingCount}"
 #: app/entry/chat/board-panel.tsx
 msgid "변경 이력"
 msgstr "변경 이력"
+
+#: app/routes/report.tsx
+msgid "별도 분석 세션이 열렸습니다."
+msgstr "별도 분석 세션이 열렸습니다."
 
 #. Context card value: the provider did not report cache use
 #: app/entry/chat/context-meter.tsx
@@ -2338,14 +2661,32 @@ msgstr "보관함"
 msgid "보내기"
 msgstr "보내기"
 
+#: app/entry/report/report-delivery.tsx
+msgid "보내지 못했습니다: {reason}. 위의 복사·텍스트 파일 저장으로 직접 게시할 수 있습니다."
+msgstr "보내지 못했습니다: {reason}. 위의 복사·텍스트 파일 저장으로 직접 게시할 수 있습니다."
+
 #: app/entry/chat/queue-panel.tsx
 msgid "보낼 메시지 {count}개"
 msgstr "보낼 메시지 {count}개"
+
+#. Accessible name of the evidence preview section
+#: app/entry/report/report-bundle.tsx
+msgid "보낼 증거 묶음"
+msgstr "보낼 증거 묶음"
+
+#: app/entry/report/report-bundle.tsx
+msgid "보낼 증거 묶음 (읽기 전용)"
+msgstr "보낼 증거 묶음 (읽기 전용)"
 
 #. Button that opens the kanban board of the Plan
 #: app/entry/chat/board-panel.tsx
 msgid "보드"
 msgstr "보드"
+
+#. ref: board ref; status: board status; health: its loop's health
+#: app/entry/report/report-bundle.tsx
+msgid "보드 #{ref} · {status} · 루프 {health}"
+msgstr "보드 #{ref} · {status} · 루프 {health}"
 
 #. Name of the board loop in its health status
 #. Name of the board loop in its health status
@@ -2440,6 +2781,11 @@ msgstr "보호 브랜치는 프로젝트마다 정합니다. 프로젝트를 고
 msgid "복사"
 msgstr "복사"
 
+#. Accessible name of the section for copying or saving the report
+#: app/routes/report.tsx
+msgid "복사·저장"
+msgstr "복사·저장"
+
 #. Copy button label right after it copied the document
 #: app/entry/settings/pages/improvements.tsx
 msgid "복사했습니다"
@@ -2449,6 +2795,19 @@ msgstr "복사했습니다"
 #: app/entry/navigation/sidebar.tsx
 msgid "복원"
 msgstr "복원"
+
+#: app/routes/report.tsx
+msgid "분석 세션 다시 열기"
+msgstr "분석 세션 다시 열기"
+
+#. Link that opens the separate analysis chat session
+#: app/routes/report.tsx
+msgid "분석 세션 보기"
+msgstr "분석 세션 보기"
+
+#: app/routes/report.tsx
+msgid "분석 세션을 열 수 없습니다. 증상 제보문은 계속 작성·저장할 수 있습니다."
+msgstr "분석 세션을 열 수 없습니다. 증상 제보문은 계속 작성·저장할 수 있습니다."
 
 #: app/entry/navigation/account-profiles.tsx
 msgid "브라우저에서 {providerName} 로그인을 완료해 주십시오"
@@ -2495,7 +2854,11 @@ msgstr "사용 기록에서 신호를 모으는 중입니다."
 msgid "사용 안 함"
 msgstr "사용 안 함"
 
+#. Badge on the account chats run on now
+#. Badge on the account chats run on now
 #. Badge: image generation is switched on
+#: app/entry/navigation/account-profiles.tsx
+#: app/entry/navigation/compatible-accounts.tsx
 #: app/entry/settings/pages/image.tsx
 msgid "사용 중"
 msgstr "사용 중"
@@ -2513,8 +2876,10 @@ msgstr "사용량: {usage}"
 msgid "사용량이 모델 한도보다 커서 사용률은 표시하지 않습니다. 다음 요청부터 새 압축 결과가 반영됩니다."
 msgstr "사용량이 모델 한도보다 커서 사용률은 표시하지 않습니다. 다음 요청부터 새 압축 결과가 반영됩니다."
 
+#. Author of a chat message in the evidence preview
 #. Who changed a card last: the person using the app
 #: app/entry/chat/board/card-face.tsx
+#: app/entry/report/report-bundle.tsx
 msgid "사용자"
 msgstr "사용자"
 
@@ -2568,9 +2933,14 @@ msgstr "사이드바에서 프로젝트를 고르면 그 프로젝트의 설정�
 
 #. Button that deletes a subagent task's record
 #. Button that deletes the BTW thread
+#. Button that removes the endpoint
+#. Dialog button that confirms deleting the conversation's source
+#. Dialog button that confirms removing the endpoint
 #. Dialog button that deletes the task record
 #: app/entry/chat/btw-panel.tsx
 #: app/entry/chat/message.tsx
+#: app/entry/navigation/compatible-accounts.tsx
+#: app/entry/navigation/sidebar.tsx
 msgid "삭제"
 msgstr "삭제"
 
@@ -2621,8 +2991,11 @@ msgstr "새 계정 로그인을 완료하지 못했습니다. 다시 시도해 �
 msgid "새 계정 이름"
 msgstr "새 계정 이름"
 
+#. Button that starts a conversation
+#. Group of buttons that start a conversation
 #. Title of an empty conversation
 #: app/entry/chat/chat-history.tsx
+#: app/entry/navigation/sidebar.tsx
 msgid "새 대화"
 msgstr "새 대화"
 
@@ -2710,6 +3083,10 @@ msgstr "서버가 제시간에 연결되지 않았습니다."
 msgid "서버를 시작하거나 연결하지 못했습니다."
 msgstr "서버를 시작하거나 연결하지 못했습니다."
 
+#: app/entry/report/report-delivery.tsx
+msgid "서버에 설정된 웹훅 주소가 Discord 웹훅 형식이 아닙니다"
+msgstr "서버에 설정된 웹훅 주소가 Discord 웹훅 형식이 아닙니다"
+
 #: app/entry/navigation/compatible-accounts.tsx
 msgid "서버에서 쓰는 정확한 ID를 입력해 주십시오."
 msgstr "서버에서 쓰는 정확한 ID를 입력해 주십시오."
@@ -2723,7 +3100,9 @@ msgstr "서버에서 아직 멈추지 않았습니다. 멈추면 여기에 표�
 msgid "서버의 모델"
 msgstr "서버의 모델"
 
+#. Who asks for an approval: an unnamed subagent
 #: app/entry/chat/message.tsx
+#: app/entry/session/delegated-work.ts
 msgid "서브에이전트"
 msgstr "서브에이전트"
 
@@ -2784,6 +3163,10 @@ msgstr "선택한 모델은 이미지를 읽지 못합니다. 이미지를 지�
 msgid "선택한 모델은 추론 강도를 고를 수 없습니다."
 msgstr "선택한 모델은 추론 강도를 고를 수 없습니다."
 
+#: app/entry/report/report-diagnosis.tsx
+msgid "선택한 모델을 쓸 수 없습니다(로그인과 모델 선택을 확인해 주십시오)"
+msgstr "선택한 모델을 쓸 수 없습니다(로그인과 모델 선택을 확인해 주십시오)"
+
 #: app/entry/chat/chat-panel.tsx
 msgid "선택한 제공자를 사용할 수 없습니다. 제공자 설정을 확인해 주십시오."
 msgstr "선택한 제공자를 사용할 수 없습니다. 제공자 설정을 확인해 주십시오."
@@ -2797,6 +3180,10 @@ msgstr "선행 {waitingOn}"
 #: app/entry/chat/board/card-peek.tsx
 msgid "설명"
 msgstr "설명"
+
+#: app/routes/report.tsx
+msgid "설명·진단·증거 묶음으로 문안 다시 생성 (직접 편집한 내용 삭제)"
+msgstr "설명·진단·증거 묶음으로 문안 다시 생성 (직접 편집한 내용 삭제)"
 
 #. Sidebar button that opens the settings
 #. Sidebar button that opens the settings
@@ -2864,6 +3251,28 @@ msgstr "설정을 저장하지 못했습니다. 잠시 뒤 다시 시도해 주�
 msgid "설정이 쓰는 환경 변수가 없습니다."
 msgstr "설정이 쓰는 환경 변수가 없습니다."
 
+#. session: session ref; runs/runCount: runs in the bundle / runs in the session
+#: app/entry/report/report-bundle.tsx
+msgid "세션 #{session} · run {runs}/{runCount}개 · 실패 포함 run {failingRuns}개 · 잘린 원문 {cutTexts}개 · 약 {kilobytes}KB"
+msgstr "세션 #{session} · run {runs}/{runCount}개 · 실패 포함 run {failingRuns}개 · 잘린 원문 {cutTexts}개 · 약 {kilobytes}KB"
+
+#: app/routes/report.tsx
+msgid "세션 없이 열면 증상 설명만으로 제보합니다."
+msgstr "세션 없이 열면 증상 설명만으로 제보합니다."
+
+#: app/entry/report/report-bundle.tsx
+msgid "세션 타임라인"
+msgstr "세션 타임라인"
+
+#. Panel title with the number of runs in the session timeline
+#: app/entry/report/report-bundle.tsx
+msgid "세션 타임라인 (run {count})"
+msgstr "세션 타임라인 (run {count})"
+
+#: app/routes/report.tsx
+msgid "세션의 증거 묶음을 모으는 중입니다. 증상은 계속 작성할 수 있습니다."
+msgstr "세션의 증거 묶음을 모으는 중입니다. 증상은 계속 작성할 수 있습니다."
+
 #. Kind of background job: a shell command
 #: app/entry/session/background-tasks.ts
 msgid "셸 명령"
@@ -2906,8 +3315,10 @@ msgstr "스티어링으로 전달됨"
 
 #. Button in the card panel that approves the card to run
 #. Button that approves the tool call
+#. The user approved the tool call
 #: app/entry/chat/approval.tsx
 #: app/entry/chat/board/card-peek.tsx
+#: app/entry/report/report-bundle.tsx
 msgid "승인"
 msgstr "승인"
 
@@ -2930,6 +3341,11 @@ msgstr "승인 대기 중"
 #: app/entry/chat/approval.tsx
 msgid "승인 선택됨"
 msgstr "승인 선택됨"
+
+#. status: the approval request's status code
+#: app/entry/report/report-bundle.tsx
+msgid "승인 요청 {tool}: {status}"
+msgstr "승인 요청 {tool}: {status}"
 
 #: app/entry/chat/chat-approvals.tsx
 msgid "승인 요청을 이어가지 못했습니다"
@@ -2975,6 +3391,10 @@ msgstr "승인한 Plan을 칸반 보드에서 실행합니다."
 #: app/entry/chat/chat-approvals.tsx
 msgid "승인한 뒤 실행을 이어가지 못했습니다. 요청을 폐기해도 셸 명령은 실행되지 않습니다. 대화와 작업 evidence는 유지됩니다."
 msgstr "승인한 뒤 실행을 이어가지 못했습니다. 요청을 폐기해도 셸 명령은 실행되지 않습니다. 대화와 작업 evidence는 유지됩니다."
+
+#: app/entry/report/report-bundle.tsx
+msgid "시간을 쓴 곳 (span 합계)"
+msgstr "시간을 쓴 곳 (span 합계)"
 
 #: app/entry/chat/decision-prompt.tsx
 msgid "시도를 모두 실패"
@@ -3036,13 +3456,37 @@ msgstr "신뢰한 에이전트를 골라 주십시오."
 msgid "실시간 연결됨"
 msgstr "실시간 연결됨"
 
+#: app/entry/report/report-draft.tsx
+msgid "실제 동작 (선택)"
+msgstr "실제 동작 (선택)"
+
+#: app/entry/report/report-draft.tsx
+msgid "실제 동작: {actual}"
+msgstr "실제 동작: {actual}"
+
+#. Badge on a tool call that failed
 #. Status badge of a task in Work Trace
 #. Status badge on a subagent task card
 #. Status of a tool call in the chat trace
 #: app/entry/chat/message.tsx
 #: app/entry/chat/work-trace-panel.tsx
+#: app/entry/report/report-bundle.tsx
 msgid "실패"
 msgstr "실패"
+
+#. Badge on a run that has a failure
+#: app/entry/report/report-bundle.tsx
+msgid "실패 포함"
+msgstr "실패 포함"
+
+#. Heading above the failed tracing spans of a run
+#: app/entry/report/report-bundle.tsx
+msgid "실패한 span"
+msgstr "실패한 span"
+
+#: app/entry/report/report-draft.tsx
+msgid "실패한 도구 {calls}"
+msgstr "실패한 도구 {calls}"
 
 #: app/entry/settings/pages/web.tsx
 msgid "실패해도 다시 시도하지 않습니다. 끄면 다음 호출부터 바로 막힙니다."
@@ -3192,6 +3636,10 @@ msgstr "쓸 수 있습니다({time} 확인)."
 msgid "아래 기록은 읽지 못했습니다. 다음에 읽을 때 다시 시도합니다."
 msgstr "아래 기록은 읽지 못했습니다. 다음에 읽을 때 다시 시도합니다."
 
+#: app/entry/report/report-bundle.tsx
+msgid "아래 내용 전체가 제보에 JSON 첨부 파일로 붙습니다. 비밀정보 탐지기로 가렸지만 놓친 값이 있을 수 있으니 보내기 전에 펼쳐서 확인해 주십시오."
+msgstr "아래 내용 전체가 제보에 JSON 첨부 파일로 붙습니다. 비밀정보 탐지기로 가렸지만 놓친 값이 있을 수 있으니 보내기 전에 펼쳐서 확인해 주십시오."
+
 #: app/entry/settings/pages/imports.tsx
 msgid "아래 폴더는 프로젝트로 만들 수 없어 가져오지 않았습니다."
 msgstr "아래 폴더는 프로젝트로 만들 수 없어 가져오지 않았습니다."
@@ -3264,9 +3712,17 @@ msgstr "앞 대화 {summarizedTurns}턴은 요약으로 보냅니다."
 msgid "앞 대화는 요약하지 못했습니다."
 msgstr "앞 대화는 요약하지 못했습니다."
 
+#: app/entry/report/report-bundle.tsx
+msgid "앞부분 이벤트는 빠졌습니다."
+msgstr "앞부분 이벤트는 빠졌습니다."
+
 #: app/entry/api.ts
 msgid "앱 저장소 폴더와 겹치는 경로는 등록할 수 없습니다."
 msgstr "앱 저장소 폴더와 겹치는 경로는 등록할 수 없습니다."
+
+#: app/entry/report/report-delivery.tsx
+msgid "앱에서 결함이 생기면 요약을 이 웹훅으로 자동 전송 (대화·프롬프트·자격증명은 보내지 않음)"
+msgstr "앱에서 결함이 생기면 요약을 이 웹훅으로 자동 전송 (대화·프롬프트·자격증명은 보내지 않음)"
 
 #: app/entry/settings/pages/embedding.tsx
 msgid "앱을 다시 시작한 뒤에는 {mode} 모드로 돌아갑니다. 그 모드로 만든 벡터가 없으면 처음부터 다시 만듭니다. 그동안에도 글자 검색과 형태소 검색은 됩니다."
@@ -3280,15 +3736,25 @@ msgstr "앱이 상태를 고쳤습니다"
 msgid "어느 대화인지 알 수 없습니다"
 msgstr "어느 대화인지 알 수 없습니다"
 
+#: app/entry/report/report-draft.tsx
+msgid "어떤 문제가 있었나요?"
+msgstr "어떤 문제가 있었나요?"
+
 #. A card field with nothing in it
+#. Report line for an empty diagnosis section
+#. Shown in place of an empty list of diagnosis items
 #. Target branch value when the Goal has no target branch
 #: app/entry/chat/board-panel.tsx
 #: app/entry/chat/board/card-peek.tsx
+#: app/entry/report/report-diagnosis.tsx
+#: app/entry/report/report-draft.tsx
 msgid "없음"
 msgstr "없음"
 
+#. Kind of an integration: an external agent
 #. Label of the agent name in a Work Trace task overview
 #: app/entry/chat/work-trace-panel.tsx
+#: app/entry/report/report-bundle.tsx
 msgid "에이전트"
 msgstr "에이전트"
 
@@ -3340,7 +3806,9 @@ msgstr "엔드포인트나 모델을 찾지 못했습니다. 목록을 새로고
 msgid "여기서는 읽기만 할 수 있습니다."
 msgstr "여기서는 읽기만 할 수 있습니다."
 
+#. Button that opens the endpoint's connection settings
 #. Settings tab group: web, image, MCP and agent pages
+#: app/entry/navigation/compatible-accounts.tsx
 #: app/entry/settings/settings-dialog.tsx
 msgid "연결"
 msgstr "연결"
@@ -3359,8 +3827,10 @@ msgstr "연결 오류"
 msgid "연결 저장"
 msgstr "연결 저장"
 
+#. Badge on an agent that is connecting
 #. Work Trace live connection status
 #: app/entry/chat/work-trace-panel.tsx
+#: app/entry/settings/pages/agents.tsx
 msgid "연결 중"
 msgstr "연결 중"
 
@@ -3372,7 +3842,9 @@ msgstr "연결된 결과물이 없습니다."
 msgid "연결된 계정이 없습니다"
 msgstr "연결된 계정이 없습니다"
 
+#. Account connection status
 #. Badge on an agent that is connected
+#: app/entry/navigation/account-model-panel.tsx
 #: app/entry/settings/pages/agents.tsx
 msgid "연결됨"
 msgstr "연결됨"
@@ -3389,6 +3861,11 @@ msgstr "연결이 끊긴 사이 승인 목록이 바뀌었습니다. 서버의 �
 msgid "연결하지 못했습니다. 다시 시도해 주십시오."
 msgstr "연결하지 못했습니다. 다시 시도해 주십시오."
 
+#. Panel title: integrations, background loops and defects
+#: app/entry/report/report-bundle.tsx
+msgid "연동·루프·결함"
+msgstr "연동·루프·결함"
+
 #: app/entry/chat/workflow-panel.tsx
 msgid "열린 질문 {count}"
 msgstr "열린 질문 {count}"
@@ -3396,6 +3873,10 @@ msgstr "열린 질문 {count}"
 #: app/entry/settings/pages/improvements.tsx
 msgid "열린 프로젝트의 최근 90일 사용 기록에서 반복된 정정과 실패를 찾아 저장소마다 고칠 항목과 작업 명세를 문서로 남깁니다. 코드와 에이전트 지침을 함께 고치는 명세입니다. 앱은 저장소를 직접 바꾸지 않습니다."
 msgstr "열린 프로젝트의 최근 90일 사용 기록에서 반복된 정정과 실패를 찾아 저장소마다 고칠 항목과 작업 명세를 문서로 남깁니다. 코드와 에이전트 지침을 함께 고치는 명세입니다. 앱은 저장소를 직접 바꾸지 않습니다."
+
+#: app/entry/report/report-draft.tsx
+msgid "예: 승인 창이 계속 나타나고 채팅을 이어갈 수 없습니다."
+msgstr "예: 승인 창이 계속 나타나고 채팅을 이어갈 수 없습니다."
 
 #: app/entry/chat/chat-composer.tsx
 msgid "예상 비용 ${usd}"
@@ -3416,6 +3897,10 @@ msgstr "예상하지 못한 오류로 실패했습니다"
 #: app/entry/chat/context-meter.tsx
 msgid "오래된 메시지 생략"
 msgstr "오래된 메시지 생략"
+
+#: app/routes/report.tsx
+msgid "오류 진단과 제보 초안"
+msgstr "오류 진단과 제보 초안"
 
 #. Who changed a card last: the agent that runs the kanban board
 #: app/entry/chat/board/card-face.tsx
@@ -3451,6 +3936,7 @@ msgstr "옮기기"
 msgid "옮길 대화"
 msgstr "옮길 대화"
 
+#. Badge on a tool call that finished
 #. Goal status: finished
 #. Kanban card status and column: finished
 #. Label before the finished and total card counts
@@ -3464,6 +3950,7 @@ msgstr "옮길 대화"
 #: app/entry/chat/message.tsx
 #: app/entry/chat/work-trace-panel.tsx
 #: app/entry/chat/workflow-panel.tsx
+#: app/entry/report/report-bundle.tsx
 msgid "완료"
 msgstr "완료"
 
@@ -3563,6 +4050,10 @@ msgstr "왼쪽의 새 대화 버튼을 눌러 주십시오."
 msgid "요약"
 msgstr "요약"
 
+#: app/entry/report/report-diagnosis.tsx
+msgid "요약 (개발자가 처음 읽는 부분)"
+msgstr "요약 (개발자가 처음 읽는 부분)"
+
 #: app/entry/settings/pages/conversation.tsx
 msgid "요약 시작 시점 (컨텍스트 대비 %)"
 msgstr "요약 시작 시점 (컨텍스트 대비 %)"
@@ -3636,13 +4127,23 @@ msgstr "원본 삭제됨"
 msgid "원본 위치가 삭제되었거나 가려졌습니다."
 msgstr "원본 위치가 삭제되었거나 가려졌습니다."
 
+#. Settings page name: web search through Kagi
 #: app/entry/chat/message.tsx
+#: app/entry/settings/shared.tsx
 msgid "웹 검색"
 msgstr "웹 검색"
 
 #: app/entry/chat/message.tsx
 msgid "웹 페이지 읽기"
 msgstr "웹 페이지 읽기"
+
+#: app/entry/report/report-delivery.tsx
+msgid "웹훅 설정을 확인하는 중입니다."
+msgstr "웹훅 설정을 확인하는 중입니다."
+
+#: app/entry/report/report-delivery.tsx
+msgid "웹훅 설정을 확인하지 못했습니다. 복사·저장으로 직접 게시해 주십시오."
+msgstr "웹훅 설정을 확인하지 못했습니다. 복사·저장으로 직접 게시해 주십시오."
 
 #: app/entry/settings/pages/kanban.tsx
 msgid "위 프로젝트의 카드부터 실행합니다. 한 프로젝트 안에서는 칸반 보드의 대화 순서를 따릅니다."
@@ -3758,6 +4259,22 @@ msgstr "이 대화로 아직 모델에 요청하지 않았습니다."
 msgid "이 모델을 쓸 수 없습니다. 그 제공자 로그인 상태와 모델, 추론 단계가 맞는지 확인해 주십시오."
 msgstr "이 모델을 쓸 수 없습니다. 그 제공자 로그인 상태와 모델, 추론 단계가 맞는지 확인해 주십시오."
 
+#: app/entry/report/report-delivery.tsx
+msgid "이 문안은 {deliveredAt}에 이미 보냈습니다."
+msgstr "이 문안은 {deliveredAt}에 이미 보냈습니다."
+
+#: app/entry/report/report-delivery.tsx
+msgid "이 문안의 이전 전송({attemptedAt})은 확인되지 않았습니다. 채널을 확인한 뒤 필요하면 다시 보내 주십시오."
+msgstr "이 문안의 이전 전송({attemptedAt})은 확인되지 않았습니다. 채널을 확인한 뒤 필요하면 다시 보내 주십시오."
+
+#: app/entry/report/report-delivery.tsx
+msgid "이 서버에 개발자 웹훅이 설정되지 않았습니다"
+msgstr "이 서버에 개발자 웹훅이 설정되지 않았습니다"
+
+#: app/entry/report/report-delivery.tsx
+msgid "이 서버에는 개발자 Discord 웹훅이 설정되지 않았습니다. 복사·저장으로 직접 게시해 주십시오."
+msgstr "이 서버에는 개발자 Discord 웹훅이 설정되지 않았습니다. 복사·저장으로 직접 게시해 주십시오."
+
 #: app/entry/chat/approval.tsx
 msgid "이 스크립트가 접속할 수 있는 호스트(이 목록 밖으로는 막힙니다):"
 msgstr "이 스크립트가 접속할 수 있는 호스트(이 목록 밖으로는 막힙니다):"
@@ -3818,6 +4335,11 @@ msgstr "이 페이지와 연결이 끊겼지만 서버에서는 계속 답하고
 #: app/entry/navigation/decision-inbox.tsx
 msgid "이 프로젝트의 모든 대화와 Goal에서 사람의 판단을 기다리는 카드입니다. 여기서 답하거나 카드가 있는 보드로 이동합니다."
 msgstr "이 프로젝트의 모든 대화와 Goal에서 사람의 판단을 기다리는 카드입니다. 여기서 답하거나 카드가 있는 보드로 이동합니다."
+
+#. Button that removes one item from the diagnosis list
+#: app/entry/report/report-diagnosis.tsx
+msgid "이 항목 빼기"
+msgstr "이 항목 빼기"
 
 #. Field label: the endpoint's name, which may be left empty
 #: app/entry/navigation/compatible-accounts.tsx
@@ -3882,8 +4404,10 @@ msgstr "이미 실행 중인 attempt가 있습니다."
 msgid "이미 진행 중인 로그인이 있습니다. 그 로그인을 마치거나 취소한 뒤 다시 시도해 주십시오."
 msgstr "이미 진행 중인 로그인이 있습니다. 그 로그인을 마치거나 취소한 뒤 다시 시도해 주십시오."
 
+#. Model spec: accepts image input
 #. Queue row text for a message that has only images
 #: app/entry/chat/queue-panel.tsx
+#: app/entry/navigation/compatible-accounts.tsx
 msgid "이미지"
 msgstr "이미지"
 
@@ -4123,10 +4647,20 @@ msgstr "자동 판단 (auto)"
 msgid "자세히"
 msgstr "자세히"
 
+#: app/entry/report/report-draft.tsx
+msgid "작성 시각: {createdAt}"
+msgstr "작성 시각: {createdAt}"
+
 #. Plan status: still being written
+#. Shown as the report's creation time until the clock is read
 #: app/entry/chat/workflow-panel.tsx
+#: app/routes/report.tsx
 msgid "작성 중"
 msgstr "작성 중"
+
+#: app/entry/report/report-diagnosis.tsx
+msgid "작성한 설명과 아래 증거 묶음의 요약(타임라인과 실패 주변 원문)을 선택한 모델에 보냅니다. 진단 없이도 제보할 수 있습니다."
+msgstr "작성한 설명과 아래 증거 묶음의 요약(타임라인과 실패 주변 원문)을 선택한 모델에 보냅니다. 진단 없이도 제보할 수 있습니다."
 
 #: app/entry/chat/message.tsx
 msgid "작업 기록을 준비하는 중"
@@ -4212,12 +4746,20 @@ msgstr "재시도 중 {attempt}/{of}"
 msgid "재연결 중단"
 msgstr "재연결 중단"
 
+#. Button that saves a settings field
+#. Button that saves a settings field
+#. Button that saves a settings field
+#. Button that saves a settings field
+#. Button that saves a settings field
 #. Button that saves the card
 #. Shortcut hint: Enter saves the edited message
 #. Submit button while editing a queued message
 #: app/entry/chat/board/card-peek.tsx
 #: app/entry/chat/chat-composer.tsx
 #: app/entry/chat/composer-status.tsx
+#: app/entry/settings/pages/conversation.tsx
+#: app/entry/settings/pages/kanban.tsx
+#: app/entry/settings/pages/web.tsx
 msgid "저장"
 msgstr "저장"
 
@@ -4281,6 +4823,10 @@ msgstr "전달 실패"
 msgid "전송"
 msgstr "전송"
 
+#: app/entry/report/report-delivery.tsx
+msgid "전송 확인을 받지 못했습니다. 채널에 이미 올라갔을 수 있습니다"
+msgstr "전송 확인을 받지 못했습니다. 채널에 이미 올라갔을 수 있습니다"
+
 #. Icon button that copies a config file's full path
 #: app/entry/settings/shared.tsx
 msgid "전체 경로 복사"
@@ -4290,6 +4836,10 @@ msgstr "전체 경로 복사"
 #: app/entry/navigation/sidebar.tsx
 msgid "전체 권한 (full)"
 msgstr "전체 권한 (full)"
+
+#: app/entry/report/report-draft.tsx
+msgid "전체 내용: 첨부 context-agent-evidence.json (세션 #{session}, run {runs}/{runCount}개)"
+msgstr "전체 내용: 첨부 context-agent-evidence.json (세션 #{session}, run {runs}/{runCount}개)"
 
 #. Status badge of a background loop that runs fine
 #: app/entry/shared/loop-health.tsx
@@ -4302,8 +4852,32 @@ msgid "제목"
 msgstr "제목"
 
 #: app/entry/chat/board/project-board.tsx
+#: app/entry/navigation/decision-inbox.tsx
+#: app/entry/navigation/sidebar.tsx
 msgid "제목 없는 대화"
 msgstr "제목 없는 대화"
+
+#. Accessible name of the section with the final report text
+#: app/entry/report/report-draft.tsx
+msgid "제보 문안"
+msgstr "제보 문안"
+
+#. Button that copies the report and evidence to the clipboard
+#: app/routes/report.tsx
+msgid "제보문 복사"
+msgstr "제보문 복사"
+
+#: app/routes/report.tsx
+msgid "제보문과 증거 묶음을 복사했습니다. 개발자의 Discord 채널에 직접 붙여넣어 주십시오."
+msgstr "제보문과 증거 묶음을 복사했습니다. 개발자의 Discord 채널에 직접 붙여넣어 주십시오."
+
+#: app/entry/report/report-diagnosis.tsx
+msgid "제보문에 AI 진단 포함"
+msgstr "제보문에 AI 진단 포함"
+
+#: app/entry/report/report-delivery.tsx
+msgid "제보문이나 증거 묶음이 너무 큽니다. 문안을 줄이거나 복사·저장으로 게시해 주십시오"
+msgstr "제보문이나 증거 묶음이 너무 큽니다. 문안을 줄이거나 복사·저장으로 게시해 주십시오"
 
 #. Model output limit: none set
 #: app/entry/navigation/compatible-accounts.tsx
@@ -4374,14 +4948,41 @@ msgstr "중단됨"
 msgid "중단한 Goal은 다시 계속할 수 없습니다. 잠시 멈추려면 일시 중지를 써 주십시오."
 msgstr "중단한 Goal은 다시 계속할 수 없습니다. 잠시 멈추려면 일시 중지를 써 주십시오."
 
+#. Button that stops a running improvement scan
 #. Button that stops the answer
 #: app/entry/chat/chat-composer.tsx
+#: app/entry/settings/pages/improvements.tsx
 msgid "중지"
 msgstr "중지"
 
 #: app/entry/chat/chat-composer.tsx
 msgid "중지(입력창이 비었을 때 Esc)"
 msgstr "중지(입력창이 비었을 때 Esc)"
+
+#: app/routes/report.tsx
+msgid "증거 묶음 다시 모으기"
+msgstr "증거 묶음 다시 모으기"
+
+#: app/routes/report.tsx
+msgid "증거 묶음을 모았습니다. 아래에서 보낼 내용을 확인해 주십시오."
+msgstr "증거 묶음을 모았습니다. 아래에서 보낼 내용을 확인해 주십시오."
+
+#: app/routes/report.tsx
+msgid "증거 묶음을 모으지 못했습니다. 증상만으로도 제보할 수 있습니다."
+msgstr "증거 묶음을 모으지 못했습니다. 증상만으로도 제보할 수 있습니다."
+
+#: app/entry/report/report-draft.tsx
+msgid "증거 묶음을 수집하지 못했습니다. 위 설명만으로 제보합니다."
+msgstr "증거 묶음을 수집하지 못했습니다. 위 설명만으로 제보합니다."
+
+#. Accessible name of the evidence collection section
+#: app/routes/report.tsx
+msgid "증거 수집"
+msgstr "증거 수집"
+
+#: app/entry/report/report-draft.tsx
+msgid "증상: {symptom}"
+msgstr "증상: {symptom}"
 
 #: app/entry/chat/board/card-peek.tsx
 msgid "지금 Goal에는 없는 결과입니다."
@@ -4462,17 +5063,31 @@ msgstr "직접 해결함, 다시 merge"
 msgid "직접 해결함, 다시 검증"
 msgstr "직접 해결함, 다시 검증"
 
+#: app/entry/report/report-diagnosis.tsx
+msgid "진단 실패: {reason}. 제보문에는 사용자 설명과 증거 묶음만 들어갑니다."
+msgstr "진단 실패: {reason}. 제보문에는 사용자 설명과 증거 묶음만 들어갑니다."
+
+#: app/entry/report/report-diagnosis.tsx
+msgid "진단 요청이 실패했습니다"
+msgstr "진단 요청이 실패했습니다"
+
 #. Toggle that shows the connection error's diagnostic fields
 #: app/entry/navigation/account-profiles.tsx
 msgid "진단 정보"
 msgstr "진단 정보"
 
+#: app/entry/report/report-diagnosis.tsx
+msgid "진단 중입니다. 기다리는 동안에도 제보문을 복사·저장·전송할 수 있습니다."
+msgstr "진단 중입니다. 기다리는 동안에도 제보문을 복사·저장·전송할 수 있습니다."
+
+#. Conversation list section: conversations answering or running a board
 #. Goal outcome status: its cards are being worked on
 #. Goal status: being worked on
 #. Kanban card status and column: an agent is working on it
 #: app/entry/chat/board/board-moves.ts
 #: app/entry/chat/outcome-checklist.tsx
 #: app/entry/chat/workflow-panel.tsx
+#: app/entry/navigation/sidebar.tsx
 msgid "진행 중"
 msgstr "진행 중"
 
@@ -4513,6 +5128,10 @@ msgstr "질문"
 msgid "질문·답변·근거 조회 기록과 이 BTW에만 쓰인 이미지를 이 기기의 활성 저장소에서 지웁니다. 이미 만들어진 백업, 데이터베이스 파일에 남은 빈 공간이나 WAL 기록, 모델 제공자에게 이미 보낸 내용은 지워진다고 보장할 수 없습니다."
 msgstr "질문·답변·근거 조회 기록과 이 BTW에만 쓰인 이미지를 이 기기의 활성 저장소에서 지웁니다. 이미 만들어진 백업, 데이터베이스 파일에 남은 빈 공간이나 WAL 기록, 모델 제공자에게 이미 보낸 내용은 지워진다고 보장할 수 없습니다."
 
+#: app/entry/report/report-bundle.tsx
+msgid "짧게 걸린 span 경로는 빠졌습니다."
+msgstr "짧게 걸린 span 경로는 빠졌습니다."
+
 #: app/entry/settings/pages/improvements.tsx
 msgid "찾기를 중지했습니다. 이전 결과는 그대로입니다."
 msgstr "찾기를 중지했습니다. 이전 결과는 그대로입니다."
@@ -4533,6 +5152,10 @@ msgstr "채택된 evidence {evidence} · 조회 {retrieved} · 답변 사용 {us
 msgid "채택된 project memory와 Work Trace provenance는 유지됩니다."
 msgstr "채택된 project memory와 Work Trace provenance는 유지됩니다."
 
+#: app/routes/report.tsx
+msgid "채팅이나 실행이 멈춰도 여기서 증상을 기록할 수 있습니다. 이 화면은 제보를 자동으로 전송하지 않습니다. 직접 누를 때만 개발자 Discord 웹훅으로 보냅니다."
+msgstr "채팅이나 실행이 멈춰도 여기서 증상을 기록할 수 있습니다. 이 화면은 제보를 자동으로 전송하지 않습니다. 직접 누를 때만 개발자 Discord 웹훅으로 보냅니다."
+
 #: app/entry/chat/decision-prompt.tsx
 msgid "처음 물은 뒤 상황이 바뀌어 최신 내용으로 보여 줍니다."
 msgstr "처음 물은 뒤 상황이 바뀌어 최신 내용으로 보여 줍니다."
@@ -4541,9 +5164,17 @@ msgstr "처음 물은 뒤 상황이 바뀌어 최신 내용으로 보여 줍니�
 msgid "첨부 이미지 #{number}"
 msgstr "첨부 이미지 #{number}"
 
+#: app/entry/report/report-draft.tsx
+msgid "첨부된 증거 없음. 위 설명만으로 제보합니다."
+msgstr "첨부된 증거 없음. 위 설명만으로 제보합니다."
+
 #: app/entry/chat/chat-panel.tsx
 msgid "첫 버전의 이미지 생성은 텍스트 프롬프트만 지원합니다."
 msgstr "첫 버전의 이미지 생성은 텍스트 프롬프트만 지원합니다."
+
+#: app/entry/report/report-bundle.tsx
+msgid "최근 결함"
+msgstr "최근 결함"
 
 #. The last quota read failed; the values shown were read at time
 #: app/entry/navigation/account-profiles.tsx
@@ -4570,7 +5201,13 @@ msgstr "최신 요청 불러오기"
 msgid "최종 답변 provenance"
 msgstr "최종 답변 provenance"
 
+#: app/entry/report/report-draft.tsx
+msgid "최종 제보 문안: 전송·복사·저장 전에 민감정보를 확인하고 편집해 주십시오."
+msgstr "최종 제보 문안: 전송·복사·저장 전에 민감정보를 확인하고 편집해 주십시오."
+
+#. Button that adds the endpoint
 #. Button that adds the project
+#: app/entry/navigation/compatible-accounts.tsx
 #: app/entry/navigation/sidebar.tsx
 msgid "추가"
 msgstr "추가"
@@ -4634,11 +5271,24 @@ msgstr "충돌한 파일: {files}"
 msgid "충족"
 msgstr "충족"
 
+#. Button that cancels the pending login
+#. Button that closes the add project dialog
+#. Button that closes the connection form
 #. Button that closes the delete dialog without deleting
+#. Button that closes the model form
+#. Button that closes the new account form
+#. Button that closes the new endpoint form
+#. Dialog button that cancels
+#. Dialog button that cancels
+#. Dialog button that cancels
 #. Dialog button that keeps the task record
 #: app/entry/chat/btw-panel.tsx
 #: app/entry/chat/chat-panel.tsx
 #: app/entry/chat/message.tsx
+#: app/entry/media/cross-provider-approval.tsx
+#: app/entry/navigation/account-profiles.tsx
+#: app/entry/navigation/compatible-accounts.tsx
+#: app/entry/navigation/sidebar.tsx
 msgid "취소"
 msgstr "취소"
 
@@ -4762,17 +5412,32 @@ msgstr "카드를 프로젝트에서 차례로 실행하는 보드이므로 옮�
 msgid "카드마다 에이전트를 따로 두고 보드가 배정·검증·통합합니다. 이 대화의 모델은 카드를 직접 실행하지 않습니다."
 msgstr "카드마다 에이전트를 따로 두고 보드가 배정·검증·통합합니다. 이 대화의 모델은 카드를 직접 실행하지 않습니다."
 
+#. Label before how many kanban cards run at once
+#: app/entry/report/report-bundle.tsx
+msgid "칸반 동시 실행"
+msgstr "칸반 동시 실행"
+
+#. Sidebar menu item that opens the project's kanban board
 #: app/entry/chat/board-panel.tsx
 #: app/entry/chat/board/kanban-board.tsx
+#: app/entry/navigation/project-board-button.tsx
+#: app/entry/report/report-bundle.tsx
 msgid "칸반 보드"
 msgstr "칸반 보드"
+
+#. Panel title with the number of kanban boards
+#: app/entry/report/report-bundle.tsx
+msgid "칸반 보드 ({count})"
+msgstr "칸반 보드 ({count})"
 
 #: app/entry/chat/message.tsx
 msgid "칸반 보드 확인"
 msgstr "칸반 보드 확인"
 
 #. Label before the number of conversations whose kanban loop runs
+#. Settings page name: running Goals on the kanban board
 #: app/entry/chat/board/project-board.tsx
+#: app/entry/settings/shared.tsx
 msgid "칸반 실행"
 msgstr "칸반 실행"
 
@@ -4848,6 +5513,15 @@ msgstr "코드 스킬 저장"
 msgid "코드 실행"
 msgstr "코드 실행"
 
+#. A run error without a code
+#: app/entry/report/report-draft.tsx
+msgid "코드 없음"
+msgstr "코드 없음"
+
+#: app/routes/report.tsx
+msgid "클립보드를 사용할 수 없습니다. 위 제보 문안에서 텍스트를 직접 선택해 복사해 주십시오."
+msgstr "클립보드를 사용할 수 없습니다. 위 제보 문안에서 텍스트를 직접 선택해 복사해 주십시오."
+
 #. Button that deletes the stored Kagi API key
 #: app/entry/settings/pages/web.tsx
 msgid "키 삭제"
@@ -4858,6 +5532,8 @@ msgid "키 없는 로컬 서버도 연결할 수 있습니다"
 msgstr "키 없는 로컬 서버도 연결할 수 있습니다"
 
 #. Badge: no Kagi API key is registered
+#. Endpoint status: no API key is saved
+#: app/entry/navigation/compatible-accounts.tsx
 #: app/entry/settings/pages/web.tsx
 msgid "키 없음"
 msgstr "키 없음"
@@ -4887,6 +5563,11 @@ msgstr "키와 설정이 부분적으로 저장됐을 수 있습니다. 계정 �
 #: app/entry/navigation/compatible-accounts.tsx
 msgid "테스트"
 msgstr "테스트"
+
+#. Button that saves the report and evidence as a text file
+#: app/routes/report.tsx
+msgid "텍스트 파일 저장"
+msgstr "텍스트 파일 저장"
 
 #. Goal verification status: passed
 #: app/entry/chat/workflow-panel.tsx
@@ -4934,7 +5615,10 @@ msgid "파일을 찾지 못했습니다"
 msgstr "파일을 찾지 못했습니다"
 
 #. Badge on a card: a decision about it waits for a person
+#. Sheet title: card decisions waiting for a person
+#. Sidebar menu item: card decisions waiting for a person
 #: app/entry/chat/board/card-face.tsx
+#: app/entry/navigation/decision-inbox.tsx
 msgid "판단 대기"
 msgstr "판단 대기"
 
@@ -5177,6 +5861,7 @@ msgid "한도 확인 중"
 msgstr "한도 확인 중"
 
 #. Option: always allow cross-provider image runs
+#: app/entry/media/cross-provider-approval.tsx
 #: app/entry/settings/pages/image.tsx
 msgid "항상 허용"
 msgstr "항상 허용"
@@ -5250,12 +5935,21 @@ msgstr "확인할 목록이 바뀌었습니다. 새 목록을 확인해 주십�
 msgid "확인했으니 이어서 진행"
 msgstr "확인했으니 이어서 진행"
 
+#. Panel title for the app's runtime environment
+#: app/entry/report/report-bundle.tsx
+msgid "환경"
+msgstr "환경"
+
 #. Kind of secret whose names an entry lists: environment variables
 #. Kind of secret whose names an entry lists: environment variables
 #: app/entry/settings/pages/agents.tsx
 #: app/entry/settings/pages/mcp.tsx
 msgid "환경 변수"
 msgstr "환경 변수"
+
+#: app/entry/report/report-draft.tsx
+msgid "환경: {release} · {platform} · {runtime} · 모델 {provider}/{model}"
+msgstr "환경: {release} · {platform} · {runtime} · 모델 {provider}/{model}"
 
 #. Section heading: the event log of a task
 #: app/entry/chat/work-trace-panel.tsx
