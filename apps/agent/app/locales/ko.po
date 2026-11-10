@@ -1737,11 +1737,13 @@ msgstr "다시 대기열에"
 msgid "다시 로그인"
 msgstr "다시 로그인"
 
+#. Button that asks the server again whether this window may write
 #. Button that loads a settings section again after it failed to load
 #. Button that loads the conversation again after it failed to load
 #. Button that reruns a subagent task as a new attempt
 #: app/entry/chat/chat-history.tsx
 #: app/entry/chat/message.tsx
+#: app/entry/chat/read-only-bar.tsx
 #: app/entry/queries/boundary.tsx
 msgid "다시 시도"
 msgstr "다시 시도"
@@ -4274,6 +4276,10 @@ msgstr "이 대화가 아직 답하는 중입니다."
 #: app/entry/chat/context-meter.tsx
 msgid "이 대화로 아직 모델에 요청하지 않았습니다."
 msgstr "이 대화로 아직 모델에 요청하지 않았습니다."
+
+#: app/entry/chat/read-only-bar.tsx
+msgid "이 대화를 쓸 수 있는지 확인하지 못했습니다"
+msgstr "이 대화를 쓸 수 있는지 확인하지 못했습니다"
 
 #: app/entry/settings/pages/kanban.tsx
 msgid "이 모델을 쓸 수 없습니다. 그 제공자 로그인 상태와 모델, 추론 단계가 맞는지 확인해 주십시오."

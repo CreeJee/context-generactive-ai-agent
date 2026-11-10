@@ -75,7 +75,14 @@ export function pageIdentity() {
   return identity;
 }
 
-export type PageLease = { readonly state: "checking" } | LeaseView;
+/**
+ * Who may change the session, as the page knows it: still asking, the server's answer, or no
+ * answer because the server could not be reached (the page keeps asking).
+ */
+export type PageLease =
+  | { readonly state: "checking" }
+  | { readonly state: "unreachable" }
+  | LeaseView;
 
 /**
  * Session ownership: owner renewal remains a heartbeat; read-only observation follows SSE. A
@@ -105,9 +112,17 @@ export function useSessionLease(sessionId: string) {
     if (!identified) return;
     let current = true;
     setLease({ state: "checking" });
-    void leaseAction(sessionId, holder, "claim").then(
-      (view) => current && setLease(view),
-      () => {},
+    // A claim that fails says so at once and is retried with backoff (decided 2026-10-18); the
+    // observed run state also takes the session again once the server answers.
+    const claiming = Effect.runFork(
+      uiPromise(() => leaseAction(sessionId, holder, "claim")).pipe(
+        Effect.tapError(() => Effect.sync(() => current && setLease({ state: "unreachable" }))),
+        Effect.retry(loopRetrySchedule),
+        Effect.tap((view) => Effect.sync(() => current && setLease(view))),
+        // The retries ran out: the page stays unreachable until the observed state or the user's
+        // retry reaches the server.
+        Effect.catchTag("UnknownError", () => Effect.void),
+      ),
     );
     const leave = () =>
       navigator.sendBeacon(
@@ -117,6 +132,7 @@ export function useSessionLease(sessionId: string) {
     window.addEventListener("pagehide", leave);
     return () => {
       current = false;
+      void Effect.runFork(Fiber.interrupt(claiming));
       window.removeEventListener("pagehide", leave);
       void leaseAction(sessionId, holder, "release").catch(() => {});
     };

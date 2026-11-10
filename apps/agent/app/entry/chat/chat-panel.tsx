@@ -68,7 +68,7 @@ import {
 } from "./message";
 import { AddOutcome, isTakenIn, useMessageQueue } from "../session/message-queue";
 import { SubagentPanel } from "./subagent-panel";
-import { ReadOnlyBar } from "./read-only-bar";
+import { isBlocked, ReadOnlyBar } from "./read-only-bar";
 import { approvalAnswer, toPendingApproval } from "./pending-approval";
 import { useAgentChat } from "./use-agent-chat";
 import { RunNoticeView } from "../session/run-state";
@@ -1138,7 +1138,7 @@ function ChatPanel({
               {shownNotice.text}
             </p>
           )}
-          {lease.state === "other" || lease.state === "free" ? (
+          {isBlocked(lease) ? (
             <ReadOnlyBar lease={lease} refused={refused} onContinue={onContinue} />
           ) : (
             <DraftComposer

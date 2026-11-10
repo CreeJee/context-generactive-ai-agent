@@ -9,7 +9,7 @@
 - `useSessionLease(sessionId)` — 세션 소유권 훅. claim, 20초 갱신, pagehide 때 release beacon, 관찰 모드에서 free가 되면 재claim을 맡고 `{ holder, lease, refused, continueHere }`를 돌려준다
 - `pageHolder()` — sessionStorage `context-agent:page-holder`에 저장된 이 페이지의 holder 토큰을 읽고, 없으면 새 UUIDv4를 만든다
 - `pageIdentity()` — Web Locks로 다른 열린 페이지와 겹치지 않는 holder를 확정하는 모듈 단위 memoized Promise
-- `PageLease` — `{ state: "checking" } | LeaseView` 타입
+- `PageLease` — `{ state: "checking" } | { state: "unreachable" } | LeaseView` 타입. `unreachable`은 첫 claim이 실패해 서버에 묻지 못한 상태다
 - `orderedLeaseActions()` — 세션별 Semaphore(1)로 같은 세션의 lease 작업을 순서대로 실행하는 함수. `dispose`를 붙여 돌려주고, ManagedRuntime + RcMap으로 만든다
 - `useMessageQueue` (dual: `(sessionId, holder, _generating)`) — 큐 스냅샷 훅. `items`, `nextDelivery`, `refresh`, `add(text, attachmentIds, mode)`, `change(id, edit)`를 돌려준다
 - `AddOutcome` — `queued | not-running | failed` Data.TaggedEnum. 실행 중 쓴 메시지가 어떻게 처리됐는지 나타낸다
@@ -37,6 +37,7 @@
 - lease 갱신 주기 `renewMs = 20_000`은 서버의 90초 lease 안쪽이어야 한다. 갱신 실패는 `loopRetrySchedule`로 재시도하고(2026-10-18 결정), 재시도가 바닥나면 lease를 `{ state: "free" }`로 두고 관찰 경로가 재claim하게 한다
 - holder는 sessionStorage에 두어 새로고침해도 같은 페이지로 취급한다. 복제된 탭은 Web Lock `context-agent:holder:${holder}`가 이미 잡혀 있으면 새 holder로 바꾼다. 이 lock은 페이지가 사라질 때만 풀린다(`Effect.never`)
 - `pageIdentity`가 끝나기 전(`identified === false`)에는 claim하지 않는다
+- 첫 claim이 실패하면 곧바로 `unreachable`로 두고 `loopRetrySchedule`로 다시 claim한다. `unreachable`도 관찰 모드라서 관찰한 run 상태가 서버의 lease를 알려 주면 그 값으로 바뀐다
 - 관찰 모드(`lease.state !== "checking" && !owning`)에서만 `useObservedRunStateQuery`를 켠다. 관찰 결과가 `free`면 claim을 시도하고, 경쟁하는 페이지 중 하나만 서버가 승인한다
 - draft는 세션마다 키가 따로라서 탭은 자기가 쓰는 세션의 키만 쓴다. 탭끼리 입력을 따라가지 않는다. 같은 세션은 마지막에 입력한 탭의 값이 남는다(2026-11-02)
 - `draft`·`text`·`follow`는 각각 `Atom.family`로 만든다. family는 만든 값을 약하게만 쥐므로, atom 묶음 객체를 family 값으로 두면 GC 뒤 새 atom이 생겨 입력 중인 값이 빈 값으로 깜빡이고 IME 조합이 깨진다. 마운트된 atom은 registry가 쥔다
