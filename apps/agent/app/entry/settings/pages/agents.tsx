@@ -9,10 +9,18 @@ import { Button } from "~/components/ui/button";
 import { FieldDescription, FieldGroup } from "~/components/ui/field";
 import { ItemGroup } from "~/components/ui/item";
 import { externalAgentFailureText } from "memory-agent/definitions";
-import { AgentLinkState, AgentTrustState, type ExternalAgentView, type Project } from "../../api";
+import { Spinner } from "~/components/ui/spinner";
+import {
+  AgentLinkState,
+  AgentTrustState,
+  refusalOf,
+  type ExternalAgentView,
+  type Project,
+} from "../../api";
 import { useSuspenseAgentsQuery } from "../../queries/project";
 import { AgentChange, useExternalAgentMutation } from "../../queries/mutations/project";
 import {
+  errorMessage,
   PageHeader,
   PageError,
   NoProject,
@@ -124,22 +132,25 @@ function AgentSettingsContent({ project }: { project: Project }) {
   const { t } = useLingui();
   const mutation = useExternalAgentMutation(project?.id ?? "");
   const { data: overview } = useSuspenseAgentsQuery(project.id);
-  const busy = mutation.isPending;
   const [error, setError] = useState<string | null>(null);
+  // Connecting an agent can take a while, so only the row being changed waits for it.
+  const [pending, setPending] = useState<readonly string[]>([]);
 
   const header = (
     <PageHeader title={t(pageTitles.agents)} project={project} description={t(description)} />
   );
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const apply = (change: Parameters<typeof mutation.mutateAsync>[0]) =>
+  const apply = (row: string, change: Parameters<typeof mutation.mutateAsync>[0]) =>
     runUiEffect(
       Effect.gen(function* () {
         setError(null);
+        setPending((rows) => [...rows, row]);
         yield* uiPromise(() => mutation.mutateAsync(change)).pipe(
-          Effect.catchTag("UnknownError", (_failure) =>
-            Effect.sync(() => {
-              setError(t`바꾸지 못했습니다.`);
-            }),
+          Effect.catchTag("UnknownError", (failure) =>
+            Effect.sync(() => setError(errorMessage(refusalOf(failure.cause)))),
+          ),
+          Effect.ensuring(
+            Effect.sync(() => setPending((rows) => rows.filter((item) => item !== row))),
           ),
         );
       }),
@@ -164,13 +175,15 @@ function AgentSettingsContent({ project }: { project: Project }) {
       ) : (
         <ItemGroup>
           {overview.agents.map((agent) => {
+            const row = `${agent.scope}/${agent.name}`;
+            const busy = pending.includes(row);
             const trusted = AgentTrustState.$is("trusted")(agent.state);
             const stopped =
               AgentTrustState.$is("trusted")(agent.state) &&
               AgentLinkState.$is("stopped")(agent.state.link);
             return (
               <ConfigEntry
-                key={`${agent.scope}/${agent.name}`}
+                key={row}
                 icon={<BotIcon />}
                 name={agent.name}
                 scope={agent.scope}
@@ -185,12 +198,15 @@ function AgentSettingsContent({ project }: { project: Project }) {
                 actions={
                   !agent.shadowed && (
                     <>
+                      {busy && <Spinner />}
                       {stopped && (
                         <Button
                           size="sm"
                           variant="outline"
                           disabled={busy}
-                          onClick={() => void apply(AgentChange.reconnect({ name: agent.name }))}
+                          onClick={() =>
+                            void apply(row, AgentChange.reconnect({ name: agent.name }))
+                          }
                         >
                           <RefreshCwIcon />{" "}
                           <Trans comment="Button that reconnects an agent that stopped retrying">
@@ -204,6 +220,7 @@ function AgentSettingsContent({ project }: { project: Project }) {
                         busy={busy}
                         onClick={() =>
                           void apply(
+                            row,
                             AgentChange.trust({
                               scope: agent.scope,
                               name: agent.name,

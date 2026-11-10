@@ -2601,11 +2601,6 @@ msgstr "바꾸고 싶은 내용을 입력해 주십시오."
 msgid "바꾸기"
 msgstr "바꾸기"
 
-#: app/entry/settings/pages/agents.tsx
-#: app/entry/settings/pages/mcp.tsx
-msgid "바꾸지 못했습니다."
-msgstr "바꾸지 못했습니다."
-
 #: app/entry/chat/outcome-checklist.tsx
 msgid "바뀐 뒤 다시 확인합니다"
 msgstr "바뀐 뒤 다시 확인합니다"

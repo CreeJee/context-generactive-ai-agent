@@ -10,10 +10,12 @@ import { Button, buttonVariants } from "~/components/ui/button";
 import { FieldDescription, FieldGroup } from "~/components/ui/field";
 import { ItemDescription, ItemGroup } from "~/components/ui/item";
 import type { McpFailureCode, McpLoginFailureCode } from "memory-agent/definitions";
-import { McpCommand, McpServerState, type McpServerView, type Project } from "../../api";
+import { Spinner } from "~/components/ui/spinner";
+import { McpCommand, McpServerState, refusalOf, type McpServerView, type Project } from "../../api";
 import { useSuspenseMcpQuery } from "../../queries/project";
 import { useMcpMutation } from "../../queries/mutations/project";
 import {
+  errorMessage,
   PageHeader,
   PageError,
   NoProject,
@@ -121,22 +123,25 @@ function McpSettingsContent({ project }: { project: Project }) {
   const { t } = useLingui();
   const mutation = useMcpMutation(project?.id ?? "");
   const { data: overview } = useSuspenseMcpQuery(project.id);
-  const busy = mutation.isPending;
   const [error, setError] = useState<string | null>(null);
+  // Starting a trusted server can take a while, so only the row being changed waits for it.
+  const [pending, setPending] = useState<readonly string[]>([]);
 
   const header = (
     <PageHeader title={t(pageTitles.mcp)} project={project} description={t(description)} />
   );
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const run = (command: McpCommand) =>
+  const run = (row: string, command: McpCommand) =>
     runUiEffect(
       Effect.gen(function* () {
         setError(null);
+        setPending((rows) => [...rows, row]);
         yield* uiPromise(() => mutation.mutateAsync(command)).pipe(
-          Effect.catchTag("UnknownError", (_failure) =>
-            Effect.sync(() => {
-              setError(t`바꾸지 못했습니다.`);
-            }),
+          Effect.catchTag("UnknownError", (failure) =>
+            Effect.sync(() => setError(errorMessage(refusalOf(failure.cause)))),
+          ),
+          Effect.ensuring(
+            Effect.sync(() => setPending((rows) => rows.filter((item) => item !== row))),
           ),
         );
       }),
@@ -161,12 +166,14 @@ function McpSettingsContent({ project }: { project: Project }) {
       ) : (
         <ItemGroup>
           {overview.servers.map((server) => {
+            const row = `${server.scope}/${server.name}`;
+            const busy = pending.includes(row);
             const active =
               !McpServerState.$is("untrusted")(server.state) &&
               !McpServerState.$is("changed")(server.state);
             return (
               <ConfigEntry
-                key={`${server.scope}/${server.name}`}
+                key={row}
                 icon={<PlugIcon />}
                 name={server.name}
                 scope={server.scope}
@@ -188,13 +195,19 @@ function McpSettingsContent({ project }: { project: Project }) {
                 actions={
                   !server.shadowed && (
                     <>
-                      <LoginActions server={server} busy={busy} run={run} />
+                      {busy && <Spinner />}
+                      <LoginActions
+                        server={server}
+                        busy={busy}
+                        run={(command) => run(row, command)}
+                      />
                       <TrustButton
                         active={active}
                         changed={McpServerState.$is("changed")(server.state)}
                         busy={busy}
                         onClick={() =>
                           void run(
+                            row,
                             McpCommand.trust({
                               scope: server.scope,
                               name: server.name,
