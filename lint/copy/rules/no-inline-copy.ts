@@ -6,6 +6,9 @@ const hangul = /\p{Script=Hangul}/u;
 /** Copy catalogs: the only files where app copy is written. */
 const catalogFile = /(^|\/)copy\.ts$/;
 
+/** Messages sent to the model in the user's voice; not UI copy, so copy-check skips them too. */
+const promptFile = /(^|\/)prompts\.ts$/;
+
 /** Tests, browser tests included, may spell the copy they look for on screen. */
 const testFile = /\.(test|spec|browser)\.tsx?$/;
 
@@ -27,7 +30,7 @@ export const noInlineCopyRule = defineRule({
   },
   create(context) {
     const file = context.filename.replaceAll("\\", "/");
-    if (catalogFile.test(file) || testFile.test(file)) return {};
+    if (catalogFile.test(file) || promptFile.test(file) || testFile.test(file)) return {};
     const report = (node: ESTree.Node) => context.report({ node, messageId: "inline" });
     return {
       // Only a string can hold Hangul; numbers, booleans and null print without it.

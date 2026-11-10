@@ -18,6 +18,10 @@ tester.run("no-inline-copy", noInlineCopyRule, {
       filename: "app/entry/media/dialog.test.tsx",
     },
     {
+      code: 'export const resume = "이어서 진행해 줘.";',
+      filename: "app/entry/chat/prompts.ts",
+    },
+    {
       code: 'expect(page.getByText("취소")).toBeVisible();',
       filename: "app/entry/chat/message.browser.tsx",
     },

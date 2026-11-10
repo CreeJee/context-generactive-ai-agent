@@ -97,8 +97,8 @@ export default defineConfig({
         },
       },
       {
-        // App copy lives in copy.ts catalogs. Add each feature directory once its copy has moved there.
-        files: ["apps/agent/app/entry/media/**"],
+        // App copy lives in copy.ts catalogs; model-facing messages live in prompts.ts.
+        files: ["apps/agent/app/**", "apps/agent/server/**"],
         rules: {
           "copy/no-inline-copy": "error",
         },

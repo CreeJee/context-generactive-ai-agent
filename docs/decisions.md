@@ -4691,5 +4691,6 @@
   - 검사는 커밋 hook(`staged`의 `**/copy.ts`)과 Claude Code PostToolUse hook에서 돈다. hook은 위반을 `decision: "block"`으로 에이전트에게 돌려줘, 쓴 자리에서 고치게 한다.
   - 금지 표현 목록은 작게 유지한다. 모델 세대마다 바뀌는 상투어는 목록 대신 예시로 다룬다. 금지어 목록은 다른 표현으로 옮겨 가거나 낡는다는 사례가 있다. LLM 판정은 게이트로 쓰지 않는다.
 - 용어: `Goal`과 `Plan`은 제품 이름이라 영어 그대로 쓰고 "목표", "계획", "플랜"은 쓰지 않는다. `outcome`은 "결과"로 옮긴다(용어집 `goal`, `plan`, `outcome`).
+- 모델에 사용자 대신 보내는 메시지(`/plan` 기본 요청, `/skill`·`/recall` 프롬프트 등)는 UI 문구가 아니라서 `prompts.ts`에 따로 모은다. lint는 이 파일을 건너뛰고 copy-check도 읽지 않는다.
 - 남은 결정: 모델 프롬프트를 같은 체계에 넣을지.
-- 첫 적용: `apps/agent/app/entry/media`. 생성 실패 문구를 합니다체로 바꿨다.
+- 적용: `apps/agent/app/entry/media`에 먼저 적용했고, 같은 날 앱 전체(`apps/agent/app`, `apps/agent/server`)로 넓혔다. 기존 문구를 카탈로그 13개로 옮기며 해요체 서술은 합니다체로 바꿨다. "계획자"는 용어집에 따라 "Plan 작성자"로 바꿨다.
