@@ -265,6 +265,8 @@ export const revisionCards = (json: string | null) =>
     ),
   );
 const encodeCardIds = Schema.encodeEffect(Schema.fromJsonString(Schema.Array(Schema.String)));
+/** A card's notes for its next agent run, as `kanban_cards.notes_json` stores them. */
+const encodeNotes = encodeCardIds;
 /**
  * The cards a revision changed from the revision before it in its session, encoded for
  * `workflow_board_changes`: the added and changed ones in Plan order, then the removed ones. None
@@ -508,6 +510,40 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
       exists(sql`SELECT 1 AS active FROM kanban_goals k JOIN workflow_goal_identities g
         ON g.goal_instance_id = k.goal_instance_id
         WHERE g.session_id = ${sessionId} AND k.status = 'active'`);
+    /**
+     * A card id a Plan brings back, or whose work it replaces, names a new card: the earlier
+     * card's failure streak, replans, hold reason and notes stay behind. Its agent starts a new
+     * conversation on the earlier card's branch, as a card reassigned after a change does, and is
+     * told the work there was done for the earlier card.
+     */
+    const renewReplacedCards = (
+      sessionId: string,
+      before: readonly PlanStep[],
+      after: UpdatePlan["steps"],
+    ) => {
+      const previous = HashMap.fromIterable(Iterable.map(before, (step) => [step.id, step]));
+      const replaced = after.flatMap((step) =>
+        Option.exists(HashMap.get(previous, step.id), (prior) => sameStep(prior, step))
+          ? []
+          : [step.id],
+      );
+      return Arr.match(replaced, {
+        onEmpty: () => Effect.void,
+        onNonEmpty: (ids) =>
+          Effect.flatMap(
+            encodeNotes([
+              "The planner rewrote this card. Changes already in your folder were made for its earlier version: keep only what this version needs.",
+            ]),
+            (notes) => sql`UPDATE kanban_cards SET failure_streak = 0, replans = 0,
+                not_before = NULL, reason = NULL, notes_json = ${notes},
+                generation = generation + 1
+              WHERE goal_instance_id =
+                  (SELECT goal_instance_id FROM workflow_goal_identities
+                   WHERE session_id = ${sessionId})
+                AND card_id IN ${sql.in(ids)}`,
+          ),
+      });
+    };
     /**
      * The approval a card the planner adds now waits for: on a board running an approved Plan,
      * every new card it adds waits until the board's approval policy approves it. A card written
@@ -1118,6 +1154,9 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                           ],
                         };
                   }),
+                  Effect.tap(() =>
+                    renewReplacedCards(sessionId, current.plan?.steps ?? [], input.steps),
+                  ),
                 ),
               author,
             ),

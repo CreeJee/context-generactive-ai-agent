@@ -773,6 +773,54 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "starts a card whose work a new Plan replaces on a fresh ladder",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* kanbanFixture;
+        const run = yield* openKanbanOwner(fixture, yield* Effect.scope, {
+          agent: () => Effect.succeed(finished),
+        });
+        yield* run(
+          Effect.gen(function* () {
+            const board = yield* executingBoard(fixture, [card("a"), card("b")]);
+            const attempts = yield* CardAttempts;
+            const failing = (cardId: string) =>
+              attempts.updateLadder(board.goalInstanceId, cardId, (current) => ({
+                ...current,
+                failureStreak: 3,
+                notes: ["An earlier note."],
+              }));
+            yield* failing("a");
+            yield* failing("b");
+
+            yield* (yield* Workflows).updatePlan(
+              board.sessionId,
+              {
+                summary: "Cards",
+                steps: [{ ...card("a"), description: "Do a differently" }, card("b")],
+                risks: [],
+                openQuestions: [],
+                status: "ready",
+              },
+              orchestrator,
+            );
+            const renewed = yield* attempts.ladder(board.goalInstanceId, "a");
+            expect([renewed.failureStreak, renewed.generation, renewed.notes.length]).toEqual([
+              0, 2, 1,
+            ]);
+            // A card whose work stays the same keeps its ladder.
+            expect(yield* attempts.ladder(board.goalInstanceId, "b")).toMatchObject({
+              failureStreak: 3,
+              generation: 1,
+              notes: ["An earlier note."],
+            });
+          }),
+        );
+      }),
+    gitTimeout,
+  );
+
+  it.effect(
     "runs a card the planner added to a board the user approved only once the user approves it",
     () =>
       Effect.gen(function* () {
