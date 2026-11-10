@@ -6,7 +6,6 @@ import {
   type SessionRunState,
 } from "memory-agent/definitions";
 import { WorkflowExecutionState } from "../api";
-import { t } from "@lingui/core/macro";
 
 /** How a session's last run ended, or that it is still going, when that is worth telling the user. */
 export type RunNotice = Data.TaggedEnum<{
@@ -15,8 +14,10 @@ export type RunNotice = Data.TaggedEnum<{
   restarted: {};
   /** Cut off by a restart before it ran any tool; a new run continues the Plan at `at`. */
   resuming: { readonly at: number };
-  /** `code` picks the wording; a general failure (`run_failed`) shows its message. */
-  failed: { readonly message: string; readonly code: RunFailureCode };
+  /** `code` picks the wording; `detail` is the run's own text, shown folded. */
+  failed: { readonly detail: string | null; readonly code: RunFailureCode };
+  /** The user discarded approvals the run could no longer go on from; the tools never ran. */
+  discarded: {};
   /** The server is still answering, but this page is no longer receiving it. */
   detached: {};
   /** Stopped partway without an approval to answer. */
@@ -58,16 +59,12 @@ function noticeOfBody(state: SessionRunState | null, page: PageView): RunNotice 
   switch (lastRun.status) {
     case "aborted":
       return RunNotice.cancelled();
-    case "failed":
-      return RunNotice.failed({
-        message:
-          lastRun.error?.message ??
-          t({
-            message: "알 수 없는 오류",
-            comment: "Failure message of a run that recorded no message of its own",
-          }),
-        code: runFailureCodeOf(lastRun.error?.code),
-      });
+    case "failed": {
+      const code = runFailureCodeOf(lastRun.error?.code);
+      return code === "interrupt_continuation_lost"
+        ? RunNotice.discarded()
+        : RunNotice.failed({ detail: lastRun.error?.message ?? null, code });
+    }
     case "interrupted":
       return page.waitingForApproval ? null : RunNotice.stopped();
     case "completed":

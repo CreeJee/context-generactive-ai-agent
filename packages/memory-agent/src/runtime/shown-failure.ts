@@ -81,6 +81,15 @@ export const RunFailureCode = Schema.Literals([
   /** The model kept repeating a tool call whose result could not change. */
   "repeated_tool_call",
   contextLimitExceededCode,
+  /** The model's provider limited requests, had no quota left, refused the login or failed. */
+  "provider_rate_limited",
+  "provider_quota_exhausted",
+  "provider_auth_failed",
+  "provider_failed",
+  /** The model's provider could not be reached. */
+  "provider_unreachable",
+  /** The user discarded approvals whose run could no longer go on; the gated tools never ran. */
+  "interrupt_continuation_lost",
   "run_failed",
 ]);
 export type RunFailureCode = typeof RunFailureCode.Type;
@@ -123,6 +132,22 @@ export const runFailureText = {
   ),
   context_limit_exceeded: i18n._(
     msg`대화를 줄여도 모델의 컨텍스트 창에 들어가지 않아 요청을 보내지 않았습니다. /compact로 줄이거나 설정에서 창 크기를 확인해 주십시오.`,
+  ),
+  provider_rate_limited: i18n._(
+    msg`공급자가 요청을 잠시 제한하고 있습니다. 잠시 뒤 다시 보내 주십시오.`,
+  ),
+  provider_quota_exhausted: i18n._(
+    msg`공급자 계정의 사용 한도가 남지 않았습니다. 한도가 다시 차거나 다른 계정으로 바꾼 뒤 다시 보내 주십시오.`,
+  ),
+  provider_auth_failed: i18n._(
+    msg`공급자가 로그인 정보를 받지 않았습니다. 다시 로그인한 뒤 보내 주십시오.`,
+  ),
+  provider_failed: i18n._(msg`공급자가 오류로 답했습니다. 잠시 뒤 다시 보내 주십시오.`),
+  provider_unreachable: i18n._(
+    msg`공급자에 연결하지 못했습니다. 네트워크를 확인한 뒤 다시 보내 주십시오.`,
+  ),
+  interrupt_continuation_lost: i18n._(
+    msg`이어갈 수 없던 승인 요청을 폐기했습니다. 승인을 기다리던 작업은 실행하지 않았습니다.`,
   ),
   run_failed: i18n._(msg`응답하는 중에 오류가 났습니다.`),
 } satisfies Readonly<Record<RunFailureCode, string>>;

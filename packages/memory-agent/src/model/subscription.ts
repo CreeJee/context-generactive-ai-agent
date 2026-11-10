@@ -13,6 +13,7 @@ import {
 } from "effect";
 import { AiError, LanguageModel, type Prompt, type Response, Tool } from "effect/ai";
 import { failureNameOf } from "../runtime/failure-tag.ts";
+import type { RunFailureCode } from "../runtime/shown-failure.ts";
 import { sha256 } from "../runtime/synchronous-crypto.ts";
 import {
   boundedErrorDetail,
@@ -1223,11 +1224,35 @@ export const subscriptionFailure = (error: AiError.AiError): Option.Option<Subsc
     ? decodeFailure(error.reason.metadata[optionsKey])
     : Option.none();
 
+/**
+ * The code the page words a subscription failure with, for the kinds the user can act on: the
+ * provider not reached, or the status it rejected the request with. The others are general.
+ */
+const subscriptionFailureCode = (failure: SubscriptionFailure): RunFailureCode | undefined =>
+  Predicate.isTagged(failure, "SubscriptionStreamFailed")
+    ? Match.value(failure.reason).pipe(
+        Match.tag("RequestNotSent", () => "provider_unreachable" as const),
+        Match.tag("ProviderStatusRejected", ({ status }) =>
+          status === 401 || status === 403
+            ? ("provider_auth_failed" as const)
+            : status === 429
+              ? ("provider_rate_limited" as const)
+              : status >= 500
+                ? ("provider_failed" as const)
+                : undefined,
+        ),
+        Match.orElse(() => undefined),
+      )
+    : undefined;
+
 /** A subscription model's failure as the user sees it, as the TanStack adapter worded it. */
 export const shownSubscriptionFailure = (error: AiError.AiError): ShownFailure =>
   Option.match(subscriptionFailure(error), {
     onNone: () => shownReason(error),
-    onSome: (failure) => ({ message: failure.message }),
+    onSome: (failure) => ({
+      message: failure.message,
+      ...optionalProperty("code", subscriptionFailureCode(failure)),
+    }),
   });
 
 const unsupported = (description: string) =>

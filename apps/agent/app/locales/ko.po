@@ -3706,11 +3706,6 @@ msgstr "안 함"
 msgid "알 수 없는 도구"
 msgstr "알 수 없는 도구"
 
-#. Failure message of a run that recorded no message of its own
-#: app/entry/session/run-notice.ts
-msgid "알 수 없는 오류"
-msgstr "알 수 없는 오류"
-
 #. Context card value that is not known
 #: app/entry/chat/context-meter.tsx
 msgid "알 수 없음"

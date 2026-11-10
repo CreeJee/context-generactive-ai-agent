@@ -602,9 +602,10 @@ describe("compatible language model", () => {
       );
       expect(error.reason._tag).toBe("NetworkError");
       // The run's error says how the connection failed, so a report tells a refused connection
-      // from one that timed out.
+      // from one that timed out; its code words it for the page.
       expect(shownCompatibleFailure(error)).toEqual({
         message: "The provider could not be reached. (ECONNREFUSED)",
+        code: "provider_unreachable",
       });
       expect(logs).not.toHaveLength(0);
       const written = yield* encodeJson(logs);

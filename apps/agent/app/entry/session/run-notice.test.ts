@@ -52,10 +52,13 @@ describe("run notices", () => {
   test("reports cancels, failures and restarts, a restart whatever status it was left with", () => {
     expect(noticeOf(ended("aborted"), page)).toEqual(RunNotice.cancelled());
     expect(noticeOf(ended("failed"), page)).toEqual(
-      RunNotice.failed({ message: "boom", code: "run_failed" }),
+      RunNotice.failed({ detail: "boom", code: "run_failed" }),
     );
     expect(noticeOf(ended("failed", serverRestartedCode), page)).toEqual(RunNotice.restarted());
     expect(noticeOf(ended("completed", serverRestartedCode), page)).toEqual(RunNotice.restarted());
+    expect(noticeOf(ended("failed", "interrupt_continuation_lost"), page)).toEqual(
+      RunNotice.discarded(),
+    );
   });
 
   test("a restart that the server continues by itself says when", () => {

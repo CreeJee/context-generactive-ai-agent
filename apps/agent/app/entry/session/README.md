@@ -15,7 +15,7 @@
 - `AddOutcome` — `queued | not-running | failed` Data.TaggedEnum. 실행 중 쓴 메시지가 어떻게 처리됐는지 나타낸다
 - `isPending(message)` / `isTakenIn(message)` — 큐 메시지 상태 판별. 아직 전달 전인지, `next_turn` 외 경로로 실행에 전달됐는지 본다
 - `useRunState` (dual: `(sessionId, holder, generating, page)`) — run/workflow 스냅샷 훅. `cancel`, `refresh`, `moveWorkflow`, `controlWorkflow`, `notice`, context/workflow/execution/providerRetry/actions/uncertainRuns를 돌려준다
-- `RunNotice` — `cancelled | cancel-pending | restarted | resuming{at} | failed{message,code} | detached | stopped | no-answer` TaggedEnum
+- `RunNotice` — `cancelled | cancel-pending | restarted | resuming{at} | failed{detail,code} | discarded | detached | stopped | no-answer | reconciled` TaggedEnum. `failed`는 코드 문구를 보이고 `detail`(run 원문)은 접어 둔다. `discarded`는 사용자가 끊어진 승인을 폐기한 run이다
 - `noticeOf` (dual: `(state, page)`) — `SessionRunState`와 `PageView`로 보여 줄 `RunNotice`를 고르거나 null을 돌려준다
 - `PageView` — `{ waitingForApproval, answered }` 페이지 측 정보 인터페이스
 - `RunNoticeView({ notice })` — `RunNotice`를 Alert/Marker UI로 그리는 React 컴포넌트. detached일 때 `window.location.reload()` 버튼을 둔다

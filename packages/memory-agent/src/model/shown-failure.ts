@@ -1,7 +1,9 @@
 import { Array as Arr, Option, Schema } from "effect";
 import type { AiError } from "effect/ai";
+import { optionalProperty } from "../optional-property.ts";
 import type { ShownFailure } from "../providers/contracts.ts";
 import { errorCodesOf } from "../runtime/failure-tag.ts";
+import type { RunFailureCode } from "../runtime/shown-failure.ts";
 
 /**
  * A failed model call that carries no failure of the app's own, as the user sees it: the kind of
@@ -28,6 +30,32 @@ const reasonText = {
   ToolkitRequiredError: "The model request failed.",
   InvalidUserInputError: "The model request failed.",
 } satisfies Record<AiError.AiErrorReason["_tag"], string>;
+
+/**
+ * The code the page words a failure with, for the kinds the user can act on; the others are a
+ * general failure.
+ */
+const reasonCode = {
+  RateLimitError: "provider_rate_limited",
+  QuotaExhaustedError: "provider_quota_exhausted",
+  AuthenticationError: "provider_auth_failed",
+  ContentPolicyError: undefined,
+  InvalidRequestError: undefined,
+  InternalProviderError: "provider_failed",
+  NetworkError: "provider_unreachable",
+  InvalidOutputError: undefined,
+  InvalidResponseError: undefined,
+  StructuredOutputError: undefined,
+  UnsupportedSchemaError: undefined,
+  UnknownError: undefined,
+  ToolNotFoundError: undefined,
+  ToolParameterValidationError: undefined,
+  InvalidToolResultError: undefined,
+  ToolResultEncodingError: undefined,
+  ToolConfigurationError: undefined,
+  ToolkitRequiredError: undefined,
+  InvalidUserInputError: undefined,
+} satisfies Record<AiError.AiErrorReason["_tag"], RunFailureCode | undefined>;
 
 /** A provider's error type or code, kept only when it is a short identifier and not free text. */
 const Identifier = Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_.-]{1,64}$/));
@@ -83,5 +111,8 @@ const providerFacts = (reason: AiError.AiErrorReason) =>
 export const shownReason = (error: AiError.AiError): ShownFailure => {
   const facts = [...providerFacts(error.reason), ...errorCodesOf(error.reason)];
   const text = reasonText[error.reason._tag];
-  return { message: facts.length === 0 ? text : `${text} (${facts.join(", ")})` };
+  return {
+    message: facts.length === 0 ? text : `${text} (${facts.join(", ")})`,
+    ...optionalProperty("code", reasonCode[error.reason._tag]),
+  };
 };

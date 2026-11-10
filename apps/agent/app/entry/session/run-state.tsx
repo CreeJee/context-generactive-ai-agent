@@ -56,22 +56,21 @@ export function RunNoticeView({ notice }: { notice: RunNotice }) {
         </Alert>
       );
     },
-    failed: ({ message, code }) => (
+    failed: ({ detail, code }) => (
       <Alert variant="destructive">
         <AlertTitle>
           <Trans>마지막 답변이 실패했습니다</Trans>
         </AlertTitle>
         <AlertDescription>
-          {code === "run_failed" ? (
-            message
-          ) : (
-            <>
-              <p>{runFailureText[code]}</p>
-              <FailureDetails detail={message} />
-            </>
-          )}
+          <p>{runFailureText[code]}</p>
+          <FailureDetails detail={detail} />
         </AlertDescription>
       </Alert>
+    ),
+    discarded: () => (
+      <Marker>
+        <MarkerContent>{runFailureText.interrupt_continuation_lost}</MarkerContent>
+      </Marker>
     ),
     detached: () => (
       <Alert>
