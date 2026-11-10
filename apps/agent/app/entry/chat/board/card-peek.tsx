@@ -36,7 +36,13 @@ import {
   SheetTitle,
 } from "../../../components/ui/sheet";
 import { Textarea } from "../../../components/ui/textarea";
-import { BoardEdit, type BoardView, type HumanDecisionRequest, type KanbanView } from "../../api";
+import {
+  BoardEdit,
+  type BoardView,
+  type CardStatus,
+  type HumanDecisionRequest,
+  type KanbanView,
+} from "../../api";
 import { koreanLocalTime } from "../../shared/local-time";
 import { DecisionPrompt } from "../decision-prompt";
 import { canTransfer, cardStatusLabels } from "./board-moves";
@@ -171,6 +177,10 @@ export function CardPeek({
   const [transferTo, setTransferTo] = useState<string | null>(null);
   const hold = loopCard?.reason ?? null;
   const holdNote = hold === null ? null : holdReasonNote(hold);
+  // The running board takes any blocked card back: a dead-lettered one continues its delivery,
+  // another starts a new failure streak from ready.
+  const requeueable = (card: { readonly status: CardStatus }) =>
+    loopCard !== null && card.status === "blocked";
   const content = (): ReactNode =>
     Peek.$match(peek, {
       New: () => (
@@ -253,7 +263,7 @@ export function CardPeek({
                   </Button>
                 </div>
               )}
-              {(hold !== null || changePending) && (
+              {(hold !== null || changePending || requeueable(card)) && (
                 <div className="space-y-2 rounded-md border px-3 py-2" role="status">
                   {hold !== null && (
                     <p>
@@ -270,7 +280,7 @@ export function CardPeek({
                       <Trans>오케스트레이터가 이 카드의 변경 요청을 확인하고 있습니다.</Trans>
                     </p>
                   )}
-                  {loopCard?.requeueable === true && (
+                  {requeueable(card) && (
                     <Button
                       type="button"
                       size="sm"
