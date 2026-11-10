@@ -82,7 +82,7 @@
         "permission": {
           "decidedBy": "user",
           "decision": "approved",
-          "reason": "사용자가 승인했어요."
+          "reason": "사용자가 승인했습니다."
         },
         "toolCallId": "review@<session>",
         "toolName": "save_code_skill"
