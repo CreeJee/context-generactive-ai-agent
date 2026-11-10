@@ -9,6 +9,9 @@ import { Spinner } from "~/components/ui/spinner";
 import { useConversationSettingsQuery } from "../../queries/global";
 import { useConversationSettingsMutation } from "../../queries/mutations/global";
 import { errorMessage, PageHeader, PageError } from "../shared";
+import { settingsCopy } from "../copy";
+
+const copy = settingsCopy.conversation;
 
 /** Below the share where the oldest messages are left out, so summaries are ready first. */
 const maximumPercent = 50;
@@ -42,10 +45,7 @@ export function ConversationSettings() {
 
   return (
     <FieldGroup>
-      <PageHeader
-        title="긴 대화"
-        description="대화가 길어지면 앞쪽 턴을 요약으로 바꿔 보내요. 원문은 기억에 남아 있어서 모델이 필요할 때 다시 읽어요."
-      />
+      <PageHeader title={settingsCopy.titles.conversation} description={copy.description} />
       <form
         onSubmit={(event) => {
           event.preventDefault();
@@ -53,7 +53,7 @@ export function ConversationSettings() {
         }}
       >
         <Field>
-          <FieldLabel htmlFor="summary-start-percent">요약 시작 시점 (컨텍스트 대비 %)</FieldLabel>
+          <FieldLabel htmlFor="summary-start-percent">{copy.startLabel}</FieldLabel>
           <div className="flex gap-2">
             <Input
               id="summary-start-percent"
@@ -70,14 +70,10 @@ export function ConversationSettings() {
               type="submit"
               disabled={busy || percent === null || percent === settings.summaryStartPercent}
             >
-              {busy && <Spinner />} 저장
+              {busy && <Spinner />} {settingsCopy.shared.save}
             </Button>
           </div>
-          <FieldDescription>
-            모델 컨텍스트가 이만큼 찰 때까지는 원문 그대로 보내요. 낮추면 일찍 요약해 짧게 보내고,
-            높이면 원문을 오래 보내요. 0이면 처음부터 요약하고, 최대 {maximumPercent}%예요. 다음
-            응답부터 적용되고, 이미 요약을 쓰기 시작한 대화는 계속 요약을 써요.
-          </FieldDescription>
+          <FieldDescription>{copy.startHelp(maximumPercent)}</FieldDescription>
         </Field>
       </form>
       <PageError error={error} />

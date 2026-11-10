@@ -12,22 +12,16 @@ import {
 import { type Project } from "../../api";
 import { useSuspenseSkillsQuery } from "../../queries/project";
 import { PageHeader, NoProject, pathIn, SourceFiles, skillScopeLabels } from "../shared";
+import { settingsCopy } from "../copy";
 
-const skillProblems = {
-  no_description: "description이 없어 쓰지 않아요.",
-  too_large: "SKILL.md가 너무 커서 쓰지 않아요.",
-  unreadable: "읽지 못했어요.",
-} as const;
+const copy = settingsCopy.skills;
 
 /** Skills the model can read in this project (R18). They are instructions, not permissions. */
-const description =
-  "모델이 이름과 설명을 보고 작업에 맞는 skill을 읽어 따라요. skill은 지침일 뿐이라 승인을 대신하지 않아요.";
-
 export function SkillSettings({ project }: { project: Project | null }) {
   if (!(project !== null))
     return (
       <FieldGroup>
-        <PageHeader title={"Skills"} description={description} />
+        <PageHeader title={settingsCopy.titles.skills} description={copy.description} />
         <NoProject />
       </FieldGroup>
     );
@@ -39,10 +33,10 @@ function SkillSettingsContent({ project }: { project: Project }) {
 
   const header = (
     <PageHeader
-      title="Skills"
+      title={settingsCopy.titles.skills}
       project={project}
-      badge={catalog && <Badge variant="secondary">{catalog.skills.length}개</Badge>}
-      description={description}
+      badge={catalog && <Badge variant="secondary">{copy.count(catalog.skills.length)}</Badge>}
+      description={copy.description}
     />
   );
 
@@ -55,16 +49,16 @@ function SkillSettingsContent({ project }: { project: Project }) {
           path: directory.path,
           shown: pathIn(project, directory.path),
         }))}
-        note="이름이 같으면 프로젝트, 공통, 기본 순으로 앞의 것을 써요. 기본 skill도 같은 이름으로 덮어쓸 수 있어요."
+        note={copy.sourceNote}
       />
       {catalog.problems.map((problem) => (
         <FieldError key={problem.directory}>
           <code className="break-all">{pathIn(project, problem.directory)}</code>:{" "}
-          {skillProblems[problem.problem]}
+          {copy.problems[problem.problem]}
         </FieldError>
       ))}
       {catalog.skills.length === 0 ? (
-        <FieldDescription>쓸 수 있는 skill이 없어요.</FieldDescription>
+        <FieldDescription>{copy.empty}</FieldDescription>
       ) : (
         <ItemGroup>
           {catalog.skills.map((skill) => (

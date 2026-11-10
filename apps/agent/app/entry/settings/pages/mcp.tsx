@@ -6,7 +6,6 @@ import { Badge } from "~/components/ui/badge";
 import { Button, buttonVariants } from "~/components/ui/button";
 import { FieldDescription, FieldGroup } from "~/components/ui/field";
 import { ItemDescription, ItemGroup } from "~/components/ui/item";
-import type { McpFailureCode, McpLoginFailureCode } from "memory-agent/definitions";
 import { McpCommand, McpServerState, type McpServerView, type Project } from "../../api";
 import { useSuspenseMcpQuery } from "../../queries/project";
 import { useMcpMutation } from "../../queries/mutations/project";
@@ -21,52 +20,38 @@ import {
   TrustButton,
   shadowedBadge,
 } from "../shared";
+import { settingsCopy } from "../copy";
+
+const copy = settingsCopy.mcp;
+const sharedCopy = settingsCopy.shared;
 
 function McpStateBadge({ server }: { server: McpServerView }) {
   if (server.shadowed) return shadowedBadge;
   return McpServerState.$match(server.state, {
-    untrusted: () => <Badge variant="outline">신뢰 필요</Badge>,
-    changed: () => <Badge variant="destructive">설정 바뀜, 다시 신뢰 필요</Badge>,
-    trusted: () => <Badge variant="secondary">다음 대화에서 시작</Badge>,
-    connected: ({ tools }) => <Badge>도구 {tools.length}개</Badge>,
-    failed: () => <Badge variant="destructive">시작 실패</Badge>,
-    needsLogin: () => <Badge variant="outline">로그인 필요</Badge>,
-    loggingIn: () => <Badge variant="secondary">브라우저에서 로그인 중</Badge>,
+    untrusted: () => <Badge variant="outline">{sharedCopy.trustBadges.untrusted}</Badge>,
+    changed: () => <Badge variant="destructive">{sharedCopy.trustBadges.changed}</Badge>,
+    trusted: () => <Badge variant="secondary">{copy.state.trusted}</Badge>,
+    connected: ({ tools }) => <Badge>{copy.state.connected(tools.length)}</Badge>,
+    failed: () => <Badge variant="destructive">{copy.state.failed}</Badge>,
+    needsLogin: () => <Badge variant="outline">{copy.state.needsLogin}</Badge>,
+    loggingIn: () => <Badge variant="secondary">{copy.state.loggingIn}</Badge>,
   });
 }
-
-const mcpFailureText = {
-  missing_env: "설정이 쓰는 환경 변수가 없어요.",
-  connect_timed_out: "서버가 제시간에 연결되지 않았어요.",
-  tools_list_timed_out: "서버가 제시간에 도구 목록을 주지 않았어요.",
-  start_failed: "서버를 시작하거나 연결하지 못했어요.",
-} as const satisfies Record<McpFailureCode, string>;
-
-const mcpLoginFailureText = {
-  callback_port_unavailable:
-    "로그인 후 돌아올 포트를 열지 못했어요. 다른 프로그램이 쓰고 있을 수 있어요.",
-  login_timed_out: "로그인이 제시간에 끝나지 않았어요.",
-  login_denied: "로그인이 거절됐어요.",
-  login_failed: "로그인하지 못했어요.",
-} as const satisfies Record<McpLoginFailureCode, string>;
 
 /** What went wrong with a server, with its own text on request. */
 const problemOf = (state: McpServerState) =>
   McpServerState.$is("failed")(state)
-    ? { text: mcpFailureText[state.failure.code], detail: state.failure.detail }
+    ? { text: copy.failures[state.failure.code], detail: state.failure.detail }
     : McpServerState.$is("needsLogin")(state) && state.failure !== null
-      ? { text: mcpLoginFailureText[state.failure.code], detail: state.failure.detail }
+      ? { text: copy.loginFailures[state.failure.code], detail: state.failure.detail }
       : null;
 
 /** MCP servers from the user-wide and project config files (R18). */
-const description =
-  "신뢰한 서버만 시작해요. 설정 파일이 바뀌면 다시 신뢰해야 하고, 신뢰해도 도구를 부를 때마다 승인이나 자동 판단을 거쳐요.";
-
 export function McpSettings({ project }: { project: Project | null }) {
   if (!(project !== null))
     return (
       <FieldGroup>
-        <PageHeader title={"MCP 서버"} description={description} />
+        <PageHeader title={settingsCopy.titles.mcp} description={copy.description} />
         <NoProject />
       </FieldGroup>
     );
@@ -79,7 +64,9 @@ function McpSettingsContent({ project }: { project: Project }) {
   const busy = mutation.isPending;
   const [error, setError] = useState<string | null>(null);
 
-  const header = <PageHeader title="MCP 서버" project={project} description={description} />;
+  const header = (
+    <PageHeader title={settingsCopy.titles.mcp} project={project} description={copy.description} />
+  );
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const run = (command: McpCommand) =>
     runUiEffect(
@@ -88,7 +75,7 @@ function McpSettingsContent({ project }: { project: Project }) {
         yield* uiPromise(() => mutation.mutateAsync(command)).pipe(
           Effect.catchTag("UnknownError", (_failure) =>
             Effect.sync(() => {
-              setError("바꾸지 못했어요.");
+              setError(sharedCopy.changeFailed);
             }),
           ),
         );
@@ -105,10 +92,10 @@ function McpSettingsContent({ project }: { project: Project }) {
           shown: pathIn(project, file.path),
           error: file.error,
         }))}
-        note="이름이 같으면 프로젝트 설정을 써요."
+        note={sharedCopy.projectWins}
       />
       {overview.servers.length === 0 ? (
-        <FieldDescription>설정된 MCP 서버가 없어요.</FieldDescription>
+        <FieldDescription>{copy.empty}</FieldDescription>
       ) : (
         <ItemGroup>
           {overview.servers.map((server) => {
@@ -123,7 +110,11 @@ function McpSettingsContent({ project }: { project: Project }) {
                 scope={server.scope}
                 state={<McpStateBadge server={server} />}
                 target={server.target}
-                secretKind={server.transport === "stdio" ? "환경 변수" : "헤더"}
+                secretKind={
+                  server.transport === "stdio"
+                    ? sharedCopy.secretKinds.env
+                    : sharedCopy.secretKinds.headers
+                }
                 secretNames={[...server.envNames, ...server.headerNames]}
                 problem={problemOf(server.state)}
                 actions={
@@ -183,7 +174,7 @@ function LoginActions({
           target="_blank"
           rel="noopener noreferrer"
         >
-          브라우저에서 로그인
+          {copy.loginInBrowser}
         </a>
         <Button
           size="sm"
@@ -191,7 +182,7 @@ function LoginActions({
           disabled={busy}
           onClick={() => void run(McpCommand.cancelLogin(target))}
         >
-          로그인 취소
+          {copy.cancelLogin}
         </Button>
       </>
     );
@@ -204,7 +195,7 @@ function LoginActions({
           disabled={busy}
           onClick={() => void run(McpCommand.login(target))}
         >
-          {server.signedIn ? "다시 로그인" : "로그인"}
+          {server.signedIn ? copy.loginAgain : copy.login}
         </Button>
       )}
       {server.signedIn && (
@@ -214,7 +205,7 @@ function LoginActions({
           disabled={busy}
           onClick={() => void run(McpCommand.logout(target))}
         >
-          로그아웃
+          {copy.logout}
         </Button>
       )}
     </>

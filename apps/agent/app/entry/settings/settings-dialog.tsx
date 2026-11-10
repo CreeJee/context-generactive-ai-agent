@@ -33,32 +33,39 @@ import { AgentSettings } from "./pages/agents";
 import { SkillSettings } from "./pages/skills";
 import { ImprovementSettings } from "./pages/improvements";
 import { KanbanSettings } from "./pages/kanban";
+import { settingsCopy } from "./copy";
+
+const { groups } = settingsCopy.dialog;
+const { titles } = settingsCopy;
 
 const settingsGroups = [
   {
-    label: "연결",
+    label: groups.connection,
     pages: [
-      { value: "web", label: "웹 검색", icon: GlobeIcon },
-      { value: "image", label: "이미지 생성", icon: ImageIcon },
-      { value: "mcp", label: "MCP 서버", icon: PlugIcon },
-      { value: "agents", label: "외부 에이전트", icon: BotIcon },
+      { value: "web", label: titles.web, icon: GlobeIcon },
+      { value: "image", label: titles.image, icon: ImageIcon },
+      { value: "mcp", label: titles.mcp, icon: PlugIcon },
+      { value: "agents", label: titles.agents, icon: BotIcon },
     ],
   },
   {
-    label: "기억",
+    label: groups.memory,
     pages: [
-      { value: "conversation", label: "긴 대화", icon: MessagesSquareIcon },
-      { value: "recall", label: "기억 범위", icon: WaypointsIcon },
-      { value: "imports", label: "대화 가져오기", icon: HistoryIcon },
-      { value: "embedding", label: "임베딩", icon: CpuIcon },
+      { value: "conversation", label: titles.conversation, icon: MessagesSquareIcon },
+      { value: "recall", label: titles.recall, icon: WaypointsIcon },
+      { value: "imports", label: titles.imports, icon: HistoryIcon },
+      { value: "embedding", label: titles.embedding, icon: CpuIcon },
     ],
   },
-  { label: "실행", pages: [{ value: "kanban", label: "칸반 실행", icon: KanbanIcon }] },
+  { label: groups.run, pages: [{ value: "kanban", label: titles.kanban, icon: KanbanIcon }] },
   {
-    label: "개선",
-    pages: [{ value: "improvements", label: "프로젝트 개선", icon: WrenchIcon }],
+    label: groups.improvement,
+    pages: [{ value: "improvements", label: titles.improvements, icon: WrenchIcon }],
   },
-  { label: "지침", pages: [{ value: "skills", label: "Skills", icon: BookOpenIcon }] },
+  {
+    label: groups.instructions,
+    pages: [{ value: "skills", label: titles.skills, icon: BookOpenIcon }],
+  },
 ] as const;
 
 type SettingsPage = (typeof settingsGroups)[number]["pages"][number]["value"];
@@ -106,8 +113,8 @@ export function SettingsOverlay({
     >
       <DialogContent className="flex h-[min(40rem,calc(100dvh-2rem))] flex-col sm:max-w-3xl">
         <DialogHeader>
-          <DialogTitle>설정</DialogTitle>
-          <DialogDescription>대화 밖에서 쓰는 도구와 연결을 관리해요.</DialogDescription>
+          <DialogTitle>{settingsCopy.dialog.title}</DialogTitle>
+          <DialogDescription>{settingsCopy.dialog.description}</DialogDescription>
         </DialogHeader>
         <Tabs defaultValue={initialPage} orientation="vertical" className="min-h-0 flex-1">
           <div className="mr-2 w-40 shrink-0 border-r pr-3">

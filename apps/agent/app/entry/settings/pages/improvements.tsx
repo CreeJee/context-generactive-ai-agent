@@ -3,7 +3,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRightIcon } from "lucide-react";
 import type { ImprovementReport } from "memory-agent";
-import { reportedTitle, type ScanFailure, ScanState, sourceLabels } from "memory-agent/definitions";
+import { reportedTitle, ScanState, sourceLabels } from "memory-agent/definitions";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { FieldDescription, FieldGroup } from "~/components/ui/field";
@@ -11,48 +11,41 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "~/component
 import { api, type ImprovementStatus, refusalOf, ScanCommand } from "../../api";
 import { koreanLocalTime } from "../../shared/local-time";
 import { PageError, PageHeader, shortPath } from "../shared";
+import { problemText } from "../../shared/copy-templates";
+import { settingsCopy } from "../copy";
+
+const copy = settingsCopy.improvements;
 
 const queryKey = ["settings", "improvements"];
 
 /** Why a request failed, as the server names it. */
 const FailureReason = Schema.Literals(["report"]);
-const failures: Record<ScanFailure, string> = {
-  storage: "프로젝트 사용 기록을 읽지 못했어요.",
-  report: "개선 문서를 쓰거나 읽지 못했어요.",
-  embedding: "임베딩 모델로 비슷한 정정을 묶지 못했어요. 임베딩 설정을 확인하세요.",
-  model_unavailable:
-    "개선 항목을 해석할 모델이 없어요. 채팅에서 모델을 고르고 로그인한 뒤 다시 시도하세요.",
-  model_unreachable:
-    "모델 서버가 응답하지 않아 찾기를 멈췄어요. 모델 서버 연결을 확인한 뒤 다시 시도하세요.",
-  internal: "개선 항목을 찾는 중 오류가 났어요. 다시 시도하세요.",
-};
 
 /** One line on where the scan stands; nothing while idle. */
 const stateLine = ScanState.match({
   idle: () => null,
   running: ({ repositories, items }) =>
     repositories.total === 0
-      ? "사용 기록에서 신호를 모으는 중이에요."
-      : `찾는 중이에요. 저장소 ${repositories.done}/${repositories.total} · 해석한 항목 ${items.done}/${items.total}`,
-  failed: ({ reason }) => failures[reason],
-  stopped: () => "찾기를 중지했어요. 이전 결과는 그대로예요.",
+      ? copy.collecting
+      : copy.progress(repositories.done, repositories.total, items.done, items.total),
+  failed: ({ reason }) => copy.failures[reason],
+  stopped: () => copy.stopped,
 });
 
 type ReportedItem = ImprovementReport["items"][number];
 const itemRule = (item: ReportedItem) =>
   Match.valueTags(item.interpretation, {
-    interpreted: ({ rule }) => `지침: ${rule}`,
-    failed: () => "모델이 해석하지 못했어요. 문서의 근거를 직접 확인하세요.",
+    interpreted: ({ rule }) => copy.rule(rule),
+    failed: () => copy.ruleFailed,
   });
 
 /** What a failed request says: this page's own wording, never a browser or transport message. */
 const requestFailure = (failure: Error) => {
   const refusal = refusalOf(failure);
-  if (refusal?.status === 404)
-    return "실행 중인 서버가 프로젝트 개선을 지원하지 않아요. 앱 서버를 재시작한 뒤 다시 시도하세요.";
+  if (refusal?.status === 404) return problemText(copy.unsupported);
   return Option.match(Schema.decodeUnknownOption(FailureReason)(refusal?.reason), {
-    onNone: () => "요청을 처리하지 못했어요.",
-    onSome: (reason) => failures[reason],
+    onNone: () => copy.requestFailed,
+    onSome: (reason) => copy.failures[reason],
   });
 };
 
@@ -63,13 +56,13 @@ function Report({ report }: { report: ImprovementReport }) {
     <section className="flex flex-col gap-2 rounded-md border p-3">
       <div className="flex flex-wrap items-center gap-2">
         <h4 className="text-sm font-medium">{name}</h4>
-        <Badge variant="secondary">{report.items.length}개 항목</Badge>
+        <Badge variant="secondary">{copy.itemCount(report.items.length)}</Badge>
         <span className="min-w-0 truncate text-xs text-muted-foreground">
           {shortPath(report.repository)}
         </span>
       </div>
       {report.items.length === 0 ? (
-        <FieldDescription>반복된 정정이나 실패가 없어 고칠 항목이 없어요.</FieldDescription>
+        <FieldDescription>{copy.noItems}</FieldDescription>
       ) : (
         <ol className="flex flex-col gap-1 text-xs">
           {report.items.map((item) => (
@@ -77,7 +70,9 @@ function Report({ report }: { report: ImprovementReport }) {
               <div className="flex items-baseline gap-2">
                 <Badge variant="outline">{sourceLabels[item.source]}</Badge>
                 <span className="min-w-0 flex-1 truncate">{reportedTitle(item)}</span>
-                <span className="shrink-0 text-muted-foreground">{item.count}회</span>
+                <span className="shrink-0 text-muted-foreground">
+                  {copy.occurrences(item.count)}
+                </span>
               </div>
               <span className="pl-1 text-muted-foreground">{itemRule(item)}</span>
             </li>
@@ -87,7 +82,7 @@ function Report({ report }: { report: ImprovementReport }) {
       <Collapsible>
         <CollapsibleTrigger className="group flex items-center gap-1 text-xs text-muted-foreground">
           <ChevronRightIcon className="size-3 transition-transform group-data-panel-open:rotate-90" />
-          작업 명세 문서 보기
+          {copy.showDocument}
         </CollapsibleTrigger>
         <CollapsibleContent className="flex flex-col gap-2 pt-2">
           <div className="flex items-center gap-2">
@@ -101,7 +96,7 @@ function Report({ report }: { report: ImprovementReport }) {
                 void navigator.clipboard.writeText(report.markdown).then(() => setCopied(true))
               }
             >
-              {copied ? "복사했어요" : "문서 복사"}
+              {copied ? copy.copied : copy.copyDocument}
             </Button>
           </div>
           <pre className="max-h-80 overflow-auto rounded-md bg-muted p-3 text-xs whitespace-pre-wrap">
@@ -146,8 +141,8 @@ export function ImprovementSettings() {
   return (
     <FieldGroup>
       <PageHeader
-        title="프로젝트 개선"
-        description="열린 프로젝트의 최근 90일 사용 기록에서 반복된 정정과 실패를 찾아, 저장소마다 고칠 항목과 작업 명세를 문서로 남겨요. 코드와 에이전트 지침을 함께 고치는 명세예요. 앱은 저장소를 직접 바꾸지 않아요."
+        title={settingsCopy.titles.improvements}
+        description={copy.description}
         action={
           running ? (
             <Button
@@ -156,7 +151,7 @@ export function ImprovementSettings() {
               disabled={command.isPending}
               onClick={() => command.mutate(ScanCommand.stop())}
             >
-              중지
+              {copy.stop}
             </Button>
           ) : (
             <Button
@@ -165,7 +160,7 @@ export function ImprovementSettings() {
               disabled={command.isPending || data === undefined}
               onClick={() => command.mutate(ScanCommand.start())}
             >
-              {latest === null ? "개선 항목 찾기" : "다시 찾기"}
+              {latest === null ? copy.find : copy.findAgain}
             </Button>
           )
         }
@@ -173,18 +168,14 @@ export function ImprovementSettings() {
       {line !== null && <FieldDescription role="status">{line}</FieldDescription>}
       <PageError error={error ?? (queryError === null ? null : requestFailure(queryError))} />
       {data === undefined ? (
-        queryError === null && (
-          <FieldDescription role="status">기록한 개선 항목을 불러오는 중이에요.</FieldDescription>
-        )
+        queryError === null && <FieldDescription role="status">{copy.loading}</FieldDescription>
       ) : latest === null ? (
-        <FieldDescription>아직 개선 항목을 찾은 적이 없어요.</FieldDescription>
+        <FieldDescription>{copy.neverScanned}</FieldDescription>
       ) : (
         <>
-          <FieldDescription>
-            {koreanLocalTime(latest.generatedAt)}에 찾은 결과예요.
-          </FieldDescription>
+          <FieldDescription>{copy.foundAt(koreanLocalTime(latest.generatedAt))}</FieldDescription>
           {latest.reports.length === 0 ? (
-            <FieldDescription>git 저장소인 열린 프로젝트가 없어요.</FieldDescription>
+            <FieldDescription>{copy.noRepositories}</FieldDescription>
           ) : (
             latest.reports.map((report) => <Report key={report.repository} report={report} />)
           )}

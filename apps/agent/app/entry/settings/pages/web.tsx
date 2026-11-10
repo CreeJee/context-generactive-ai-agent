@@ -20,11 +20,14 @@ import { KagiCommand, type KagiStatus, refusalOf } from "../../api";
 import { useKagiQuery } from "../../queries/global";
 import { useKagiMutation } from "../../queries/mutations/global";
 import { errorMessage, PageHeader, PageError } from "../shared";
+import { settingsCopy } from "../copy";
+
+const copy = settingsCopy.web;
 
 function KagiBadge({ status }: { status: KagiStatus }) {
-  if (status.enabled) return <Badge>켜짐</Badge>;
-  if (status.keyRegistered) return <Badge variant="secondary">꺼짐</Badge>;
-  return <Badge variant="outline">키 없음</Badge>;
+  if (status.enabled) return <Badge>{copy.badge.on}</Badge>;
+  if (status.keyRegistered) return <Badge variant="secondary">{copy.badge.off}</Badge>;
+  return <Badge variant="outline">{copy.badge.noKey}</Badge>;
 }
 
 /** Kagi Search and Extract (R19): a key in the keychain, then an explicit switch. */
@@ -55,9 +58,9 @@ export function KagiSettings() {
 
   const header = (
     <PageHeader
-      title="웹 검색"
+      title={settingsCopy.titles.web}
       badge={status && <KagiBadge status={status} />}
-      description="켜면 모델이 필요할 때 Kagi로 웹을 검색하고 페이지를 읽어요. 모든 프로젝트에 적용되고, 호출마다 Kagi 요금이 나가요."
+      description={copy.description}
     />
   );
 
@@ -68,10 +71,8 @@ export function KagiSettings() {
         <>
           <Field orientation="horizontal">
             <FieldContent>
-              <FieldLabel htmlFor="kagi-enabled">검색과 페이지 읽기 사용</FieldLabel>
-              <FieldDescription>
-                실패해도 다시 시도하지 않아요. 끄면 다음 호출부터 바로 막혀요.
-              </FieldDescription>
+              <FieldLabel htmlFor="kagi-enabled">{copy.enabledLabel}</FieldLabel>
+              <FieldDescription>{copy.enabledHelp}</FieldDescription>
             </FieldContent>
             <Switch
               id="kagi-enabled"
@@ -84,10 +85,8 @@ export function KagiSettings() {
           </Field>
           <Field orientation="horizontal">
             <FieldContent>
-              <FieldTitle>API 키</FieldTitle>
-              <FieldDescription>
-                OS 키체인에 저장돼 있어요. 화면에 다시 보여주지 않아요.
-              </FieldDescription>
+              <FieldTitle>{copy.keyTitle}</FieldTitle>
+              <FieldDescription>{copy.keyStored}</FieldDescription>
             </FieldContent>
             <Button
               variant="ghost-muted"
@@ -95,7 +94,7 @@ export function KagiSettings() {
               disabled={busy}
               onClick={() => void apply(KagiCommand.remove())}
             >
-              <Trash2Icon /> 키 삭제
+              <Trash2Icon /> {copy.deleteKey}
             </Button>
           </Field>
         </>
@@ -107,7 +106,7 @@ export function KagiSettings() {
           }}
         >
           <Field>
-            <FieldLabel htmlFor="kagi-key">API 키</FieldLabel>
+            <FieldLabel htmlFor="kagi-key">{copy.keyTitle}</FieldLabel>
             <div className="flex gap-2">
               <Input
                 id="kagi-key"
@@ -115,16 +114,13 @@ export function KagiSettings() {
                 autoComplete="off"
                 value={key}
                 onChange={(event) => setKey(event.target.value)}
-                placeholder="kagi.com/api/keys에서 발급한 키"
+                placeholder={copy.keyPlaceholder}
               />
               <Button type="submit" disabled={busy || !isTruthy(key.trim())}>
-                {busy ? <Spinner /> : <KeyRoundIcon />} 저장
+                {busy ? <Spinner /> : <KeyRoundIcon />} {settingsCopy.shared.save}
               </Button>
             </div>
-            <FieldDescription>
-              키는 OS 키체인에만 저장되고 모델, 대화, 로그에는 보이지 않아요. 저장해도 저절로
-              켜지지는 않아요.
-            </FieldDescription>
+            <FieldDescription>{copy.keyHelp}</FieldDescription>
           </Field>
         </form>
       )}

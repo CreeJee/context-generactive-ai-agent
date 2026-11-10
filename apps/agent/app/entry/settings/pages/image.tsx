@@ -25,6 +25,9 @@ import {
   useImageGenerationEnabledMutation,
 } from "../../queries/mutations/global";
 import { PageHeader } from "../shared";
+import { settingsCopy } from "../copy";
+
+const copy = settingsCopy.image;
 
 function isCrossProviderMediaConsentMode(
   value: string | null,
@@ -47,7 +50,7 @@ export function ImageSettings() {
         yield* uiPromise(() => enabledMutation.mutateAsync(enabled)).pipe(
           Effect.catchTag("UnknownError", (_failure) =>
             Effect.sync(() => {
-              setError("이미지 설정을 바꾸지 못했어요.");
+              setError(copy.enabledFailed);
             }),
           ),
         );
@@ -62,7 +65,7 @@ export function ImageSettings() {
         yield* uiPromise(() => consentMutation.mutateAsync(mode)).pipe(
           Effect.catchTag("UnknownError", (_failure) =>
             Effect.sync(() => {
-              setError("공급자 간 이미지 실행 동의를 바꾸지 못했어요.");
+              setError(copy.consentFailed);
             }),
           ),
         );
@@ -71,15 +74,15 @@ export function ImageSettings() {
 
   const header = (
     <PageHeader
-      title="이미지 생성"
+      title={settingsCopy.titles.image}
       badge={
         status && (
           <Badge variant={status.imageGenerationEnabled ? "secondary" : "outline"}>
-            {status.imageGenerationEnabled ? "사용 중" : "꺼짐"}
+            {status.imageGenerationEnabled ? copy.badge.on : copy.badge.off}
           </Badge>
         )
       }
-      description="이미지 생성이 필요할 때만 작성창에서 생성 모드를 선택해 사용해요. 일반 대화에는 이미지 도구가 추가되지 않아요."
+      description={copy.description}
     />
   );
 
@@ -88,11 +91,8 @@ export function ImageSettings() {
       {header}
       <Field orientation="horizontal">
         <FieldContent>
-          <FieldLabel htmlFor="image-generation-enabled">이미지 생성 사용</FieldLabel>
-          <FieldDescription>
-            OpenAI API 키가 필요하며 생성할 때마다 비용이 발생할 수 있어요. 설정은 바로 적용되고
-            앱을 다시 시작할 필요가 없어요.
-          </FieldDescription>
+          <FieldLabel htmlFor="image-generation-enabled">{copy.enabledLabel}</FieldLabel>
+          <FieldDescription>{copy.enabledHelp}</FieldDescription>
         </FieldContent>
         <Switch
           id="image-generation-enabled"
@@ -102,18 +102,12 @@ export function ImageSettings() {
         />
       </Field>
       <Alert>
-        <AlertDescription>
-          켜도 이미지는 자동으로 생성되지 않아요. 작성창에서 이미지 생성 모드를 선택한 요청만
-          처리하고, 유료 실행 전에는 별도로 확인해요.
-        </AlertDescription>
+        <AlertDescription>{copy.notAutomatic}</AlertDescription>
       </Alert>
       <Field orientation="horizontal">
         <FieldContent>
-          <FieldLabel htmlFor="cross-provider-media">Claude에서 이미지 생성</FieldLabel>
-          <FieldDescription>
-            Claude 사용 중 이미지 생성을 요청하면 프롬프트를 OpenAI로 보내요. 사용량은 OpenAI 계정에
-            귀속되며, 로그인만으로 자동 허용되지 않아요.
-          </FieldDescription>
+          <FieldLabel htmlFor="cross-provider-media">{copy.crossProviderLabel}</FieldLabel>
+          <FieldDescription>{copy.crossProviderHelp}</FieldDescription>
         </FieldContent>
         <Select
           value={
@@ -129,9 +123,9 @@ export function ImageSettings() {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="disabled">사용 안 함</SelectItem>
-            <SelectItem value="ask">매번 확인</SelectItem>
-            <SelectItem value="always">항상 허용</SelectItem>
+            <SelectItem value="disabled">{copy.consentModes.disabled}</SelectItem>
+            <SelectItem value="ask">{copy.consentModes.ask}</SelectItem>
+            <SelectItem value="always">{copy.consentModes.always}</SelectItem>
           </SelectContent>
         </Select>
       </Field>

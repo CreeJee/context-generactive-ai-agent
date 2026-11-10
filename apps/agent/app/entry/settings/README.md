@@ -19,6 +19,7 @@
 - `ConfigEntry` — MCP 서버나 에이전트 항목 하나를 그리는 `Item`이다. 이름, scope 배지, 상태, 명령줄(`target`), 비밀정보 이름, 문제, 동작을 보여 준다
 - `TrustButton` — `active`/`changed`/`busy`에 따라 '사용 중지', '다시 신뢰하기', '신뢰하기'를 표시하는 버튼이다
 - `scopeLabels`, `skillScopeLabels`, `shadowedBadge` — scope 표시 라벨 상수(global/project, skill용 builtin 추가)와 '프로젝트 설정으로 대체됨' 배지 엘리먼트다
+- `settingsCopy` (`copy.ts`) — 대화상자와 모든 설정 페이지의 화면 문구 카탈로그. `tools/copy-check`가 검사한다
 - [`pages`](./pages/README.md) — 설정 대화상자의 페이지 본문 React 컴포넌트. `settings-dialog.tsx`의 `pageBodies`가 렌더한다
 
 ## Invariants
@@ -27,7 +28,7 @@
 - 페이지마다 자기 데이터를 읽는다. 그래서 각 페이지 본문은 자기 `QuerySection` 로딩 경계로 따로 감싼다(주석에 명시)
 - Dialog는 페이지가 바뀌어도 크기를 유지한다(`h-[min(40rem,calc(100dvh-2rem))]`). 페이지 내용은 `TabsContent` 안에서 스크롤한다(주석에 명시)
 - `openSettingsOverlay`의 `initialPage` 타입은 `"web"`만 허용한다. `SettingsOverlay`는 모든 `SettingsPage`를 받는다
-- `configFileFailureText`는 `satisfies Record<ConfigFileFailureCode, string>`로 모든 실패 코드에 문구가 있어야 한다
+- `settingsCopy.shared.configFileFailure`는 `satisfies Record<ConfigFileFailureCode, string>`로 모든 실패 코드에 문구가 있어야 한다
 - `ConfigEntry`는 `target === null`(서버가 비밀정보를 확인하지 못함)이면 명령줄을 숨긴다. 비밀정보는 이름만 보여 주고 값은 보여 주지 않는다
 - `keychain_failed` 문구에 따르면 OS 키체인 접근에 실패해도 키를 다른 곳에 대신 저장하지 않는다
 - `CopyPathButton`의 1500ms 복사 표시 타이머는 Effect fiber로 실행한다. effect cleanup에서 `Fiber.interrupt`로 중단한다

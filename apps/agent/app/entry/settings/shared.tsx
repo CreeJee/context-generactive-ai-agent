@@ -17,16 +17,19 @@ import {
 import type { ConfigFileFailureCode, ShownFailure } from "memory-agent/definitions";
 import type { ApiError, Project } from "../api";
 import { FailureDetails } from "../shared/failure-details";
+import { settingsCopy } from "./copy";
+
+const copy = settingsCopy.shared;
 
 export function errorMessage(error: ApiError | null) {
-  if (error === null) return "설정을 바꾸지 못했어요.";
+  if (error === null) return copy.settingsChangeFailed;
   switch (error.code) {
     case "keychain_failed":
-      return "OS 키체인에 접근하지 못했어요. 키를 다른 곳에 대신 저장하지 않아요.";
+      return copy.keychainFailed;
     case "kagi_key_required":
-      return "먼저 API 키를 등록하세요.";
+      return copy.kagiKeyRequired;
     default:
-      return "설정을 바꾸지 못했어요.";
+      return copy.settingsChangeFailed;
   }
 }
 
@@ -78,9 +81,7 @@ export function PageError({ error }: { error: string | null }) {
 }
 
 export function NoProject() {
-  return (
-    <FieldDescription>사이드바에서 프로젝트를 고르면 그 프로젝트의 설정이 보여요.</FieldDescription>
-  );
+  return <FieldDescription>{copy.noProject}</FieldDescription>;
 }
 
 /** A path as the page shows it: the home folder as `~`, and only its end when it is long. */
@@ -119,7 +120,7 @@ function CopyPathButton({ path }: { path: string }) {
     <Button
       variant="ghost-muted"
       size="icon-xs"
-      aria-label={copied ? "경로를 복사했어요" : "전체 경로 복사"}
+      aria-label={copied ? copy.pathCopied : copy.copyPath}
       title={path}
       onClick={() =>
         void navigator.clipboard.writeText(path).then(
@@ -139,12 +140,6 @@ interface SourceFile {
   readonly shown: string;
   readonly error?: ShownFailure<ConfigFileFailureCode> | null;
 }
-
-const configFileFailureText = {
-  unreadable: "파일을 읽지 못했어요.",
-  invalid_config: "설정 형식이 맞지 않아 이 파일을 쓰지 않아요.",
-  invalid_names: "이름은 영문자·숫자·_·-로 1~32자여야 해요. 맞지 않는 항목은 빼고 써요.",
-} as const satisfies Record<ConfigFileFailureCode, string>;
 
 /** Why a configured server or agent is not working: the code's wording, the source's text folded. */
 export interface ConfigProblem {
@@ -167,7 +162,7 @@ export function SourceFiles({ files, note }: { files: readonly SourceFile[]; not
           </div>
           {file.error && (
             <>
-              <p className="text-destructive">{configFileFailureText[file.error.code]}</p>
+              <p className="text-destructive">{copy.configFileFailure[file.error.code]}</p>
               <FailureDetails detail={file.error.detail} />
             </>
           )}
@@ -178,9 +173,9 @@ export function SourceFiles({ files, note }: { files: readonly SourceFile[]; not
   );
 }
 
-export const scopeLabels = { global: "공통", project: "프로젝트" } as const;
+export const scopeLabels = copy.scopes;
 /** Skills also come built into the app, which MCP servers and agents do not. */
-export const skillScopeLabels = { builtin: "기본", ...scopeLabels } as const;
+export const skillScopeLabels = { builtin: copy.builtinScope, ...scopeLabels } as const;
 
 /** One configured MCP server or agent: name, where it is set, how it runs, and what to do. */
 export function ConfigEntry({
@@ -217,12 +212,10 @@ export function ConfigEntry({
           {state}
         </ItemTitle>
         <ItemDescription className="break-all">
-          {target === null ? "비밀정보 확인에 실패해 명령줄을 숨겼어요." : <code>{target}</code>}
+          {target === null ? copy.hiddenTarget : <code>{target}</code>}
         </ItemDescription>
         {secretNames.length > 0 && (
-          <ItemDescription>
-            {secretKind}: {secretNames.join(", ")} (값은 보여주지 않아요)
-          </ItemDescription>
+          <ItemDescription>{copy.secretNames(secretKind, secretNames.join(", "))}</ItemDescription>
         )}
         {problem && (
           <>
@@ -256,9 +249,9 @@ export function TrustButton({
       disabled={busy}
       onClick={onClick}
     >
-      {active ? "사용 중지" : changed ? "다시 신뢰하기" : "신뢰하기"}
+      {active ? copy.trust.stop : changed ? copy.trust.again : copy.trust.first}
     </Button>
   );
 }
 
-export const shadowedBadge = <Badge variant="outline">프로젝트 설정으로 대체됨</Badge>;
+export const shadowedBadge = <Badge variant="outline">{copy.shadowed}</Badge>;
