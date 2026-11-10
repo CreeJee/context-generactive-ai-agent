@@ -20,6 +20,7 @@ import { createResultPageReader } from "./result-pages.ts";
 import { hasStatementText } from "./quality.ts";
 import { createSupersededReads } from "./superseded-reads.ts";
 import { firstMessageTitle } from "../sessions/title.ts";
+import { sessionsCopy } from "../sessions/copy.ts";
 import { EdgeKind, EdgeOrigin, edgeWeights, type Edge, type NodeLink } from "./edges.ts";
 
 export const NodeKind = Schema.Literals([
@@ -323,7 +324,7 @@ const make = Effect.gen(function* () {
           isTruthy(input.sessionId) &&
           !isTruthy(input.detail?.importedFrom)
         ) {
-          const label = firstMessageTitle(input.text) || "이미지 대화";
+          const label = firstMessageTitle(input.text) || sessionsCopy.imageConversationTitle;
           yield* sql`
             UPDATE sessions SET title = ${label}
             WHERE id = ${input.sessionId} AND title IS NULL

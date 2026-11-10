@@ -16,6 +16,7 @@ import { isTruthy } from "../truthy.ts";
 import { SubscriptionAccountProvider } from "../providers/contracts.ts";
 import type { OAuthProfile } from "./contracts.ts";
 import type { OAuthProvider } from "./protocol.ts";
+import { oauthCopy } from "./copy.ts";
 import {
   OAuthKeychain,
   StoredCredentialSchema,
@@ -96,10 +97,6 @@ const databaseFailed = (cause: SqlError.SqlError | Schema.SchemaError) =>
 
 const profileIdPattern =
   /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|legacy-(?:openai|anthropic))$/;
-const legacyLabels = {
-  openai: "ChatGPT (이전 계정)",
-  anthropic: "Claude (이전 계정)",
-} satisfies Record<OAuthProvider, string>;
 
 const decodeProfiles = Schema.decodeUnknownEffect(
   Schema.Array(
@@ -439,7 +436,7 @@ const make = Effect.gen(function* () {
     // No asynchronous work in this transaction. A second importer may win; the legacy slot survives either way.
     yield* commit(
       sql`INSERT OR IGNORE INTO oauth_profiles(id, provider, label, selected, created_at)
-        SELECT ${id}, ${provider}, ${legacyLabels[provider]},
+        SELECT ${id}, ${provider}, ${oauthCopy.legacyLabel[provider]},
           NOT EXISTS (SELECT 1 FROM oauth_profiles WHERE provider = ${provider} AND selected = 1),
           ${createdAt}`,
     );

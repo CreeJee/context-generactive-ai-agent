@@ -24,6 +24,7 @@ import {
   LoadEvent,
 } from "./embedding-rpc.ts";
 import type { EmbeddingOutput } from "./models.ts";
+import { memoryPrompts } from "../prompts.ts";
 // The embedding model in a worker thread: onnxruntime-node runs a session synchronously, so on the
 // main thread every batch would hold up the requests the server is answering meanwhile.
 import { createRequire } from "node:module";
@@ -66,7 +67,9 @@ const load = Effect.fn("EmbeddingWorker.load")(function* (
       }),
     ).pipe(
       Effect.flatMap((loaded) =>
-        nativePromise(() => loaded(tokenizer(["준비"], { padding: true, truncation: true }))).pipe(
+        nativePromise(() =>
+          loaded(tokenizer([memoryPrompts.warmUp], { padding: true, truncation: true })),
+        ).pipe(
           Effect.as({ tokenizer, model: loaded, device }),
           Effect.tapError(() =>
             nativePromise(() => loaded.dispose()).pipe(

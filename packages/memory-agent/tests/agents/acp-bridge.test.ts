@@ -4,6 +4,7 @@ import { Effect, FileSystem } from "effect";
 import { expect } from "vite-plus/test";
 import { createAppApi } from "../../src/acp/app-api.ts";
 import { startAcpAgent } from "../../src/acp/agent-bridge.ts";
+import { acpCopy } from "../../src/acp/copy.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { sessionScopedResponder } from "../support/chat-client.ts";
@@ -128,7 +129,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("ACP agent br
       const allowed = yield* editor("allow");
       const done = yield* allowed.prompt(yield* allowed.newSession, "shell: printf from-editor");
       expect(done.stopReason).toBe("end_turn");
-      expect(allowed.permissions).toEqual(["코드 스킬 저장"]);
+      expect(allowed.permissions).toEqual([acpCopy.toolTitle.save_code_skill]);
       expect(allowed.text()).toContain("scriptSha256");
       const kinds = allowed.updates.map((notification) => notification.update.sessionUpdate);
       expect(kinds).toContain("tool_call");
@@ -172,7 +173,7 @@ testAgent({ testProvider: { signedIn: false } })("ACP sign-in", (it) => {
       yield* sdk(() =>
         expect(
           agent.request(acp.methods.agent.session.new, { cwd: project.root, mcpServers: [] }),
-        ).rejects.toThrow("지금 쓰는 모델 제공자에 로그인하세요"),
+        ).rejects.toThrow(acpCopy.failure.login_required),
       );
       expect(yield* sessions.list(project.id)).toEqual(before);
     }),

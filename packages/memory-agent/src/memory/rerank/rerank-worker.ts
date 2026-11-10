@@ -6,6 +6,7 @@ import { nativeFailure, nativePromise, runNativeEffect } from "../../runtime/nat
 import { ignoreLogged } from "../../runtime/logged-failures.ts";
 import { downloadProgress } from "../embedding/download-progress.ts";
 import { RerankLoadEvent, RerankRpcs, RerankWorkerData, RerankWorkerFailed } from "./rerank-rpc.ts";
+import { memoryPrompts } from "../prompts.ts";
 // The reranker in a worker thread: onnxruntime-node runs a session synchronously, so on the main
 // thread a batch would hold up the requests the server is answering meanwhile.
 import { createRequire } from "node:module";
@@ -75,7 +76,7 @@ const load = Effect.fn("RerankWorker.load")(function* (
   );
   const loaded = { tokenizer, model };
   // The first run also compiles the device's kernels; a load that cannot run is no load.
-  return yield* score(loaded, "준비", ["준비"], setup).pipe(
+  return yield* score(loaded, memoryPrompts.warmUp, [memoryPrompts.warmUp], setup).pipe(
     Effect.as(loaded),
     Effect.tapError(() =>
       nativePromise(() => model.dispose()).pipe(ignoreLogged("rerank_model_dispose_failed")),

@@ -37,6 +37,7 @@ import {
   LoadEvent,
 } from "./embedding-rpc.ts";
 import { type EmbeddingRole, localModel, modelFile } from "./models.ts";
+import { memoryPrompts } from "../prompts.ts";
 
 export class EmbeddingError extends Schema.TaggedError<
   EmbeddingError,
@@ -356,7 +357,7 @@ export const checkGpu = (storageRoot: string) =>
         devices: ["webgpu"],
       });
       /** Why the GPU cannot be used, if it cannot. */
-      const unavailable = yield* model.embed(["준비"], "query").pipe(
+      const unavailable = yield* model.embed([memoryPrompts.warmUp], "query").pipe(
         Effect.map(() =>
           model.device() === "webgpu" ? Option.none<string>() : Option.some("no WebGPU device"),
         ),

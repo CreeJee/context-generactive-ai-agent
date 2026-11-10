@@ -19,6 +19,7 @@
 - `ToolView` — 에디터 표시용 인터페이스 `{ title: string; kind: ToolKind }`
 - `toolDetail` — 인자 JSON의 `path`·`command`·`query`·`task` 중 첫 값을 80자 제한(77자 + `…`)으로 돌려준다. 없으면 `null`
 - `toolLocations` — dual `(argumentsJson, projectRoot)`. `path` 인자를 `path.resolve`로 절대 경로 `[{ path }]`로 바꾼다
+- `acpCopy` (`copy.ts`) — 에디터에 보이는 문구 카탈로그. 앱 실패 코드와 거부 사유 설명(키는 코드와 태그 그대로), 승인 요청자, 권한 선택지, 도구 제목을 담는다. 문구는 `tools/copy-check`가 검사한다
 - `SdkStreams` — `Context.Service`(`memory-agent/acp/web-streams/SdkStreams`). `{readable, writable}` Web stream을 갖고, `SdkStreams.layer({input, output, closeOutput})`로 만든다
 - 하위 디렉터리: 없음
 

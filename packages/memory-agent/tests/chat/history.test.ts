@@ -4,6 +4,7 @@ import { sessionMessages } from "../../src/agent/history.ts";
 import { ChatState } from "../../src/chat-state/chat-state.ts";
 import { RunStore } from "../../src/loop/store.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
+import { sessionsCopy } from "../../src/sessions/copy.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { sqlRun } from "../support/sql.ts";
@@ -126,7 +127,7 @@ testAgent()("session history", (it) => {
   it.effect.each([
     { origin: "new", text: "  첫 질문\n  입니다  ", title: "첫 질문 입니다" },
     { origin: "new", text: "😀".repeat(61), title: "😀".repeat(60) + "…" },
-    { origin: "new", text: "", title: "이미지 대화" },
+    { origin: "new", text: "", title: sessionsCopy.imageConversationTitle },
     { origin: "named", text: "바꾸지 않음", title: "직접 지정" },
     { origin: "imported", text: "가져온 대화", title: null },
   ] as const)(

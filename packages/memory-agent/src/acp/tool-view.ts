@@ -1,5 +1,6 @@
 import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
+import { acpCopy } from "./copy.ts";
 import { path } from "../runtime/synchronous-path.ts";
 import type { ToolKind } from "@agentclientprotocol/sdk";
 import { HashMap, Option, Schema } from "effect";
@@ -11,34 +12,34 @@ export interface ToolView {
 }
 
 const views = HashMap.fromIterable<string, ToolView>([
-  ["find_memory", { title: "기억 검색", kind: "search" }],
-  ["read_evidence", { title: "원문 읽기", kind: "read" }],
-  ["trace_evidence", { title: "근거 추적", kind: "search" }],
-  ["list_files", { title: "파일 목록", kind: "search" }],
-  ["search_files", { title: "파일 내용 검색", kind: "search" }],
-  ["read_file", { title: "파일 읽기", kind: "read" }],
-  ["write_file", { title: "파일 쓰기", kind: "edit" }],
-  ["edit_file", { title: "파일 편집", kind: "edit" }],
-  ["delete_file", { title: "파일 삭제", kind: "delete" }],
-  ["list_outside_files", { title: "프로젝트 밖 파일 목록", kind: "search" }],
-  ["read_outside_file", { title: "프로젝트 밖 파일 읽기", kind: "read" }],
-  ["search_outside_file", { title: "프로젝트 밖 파일 검색", kind: "search" }],
+  ["find_memory", { title: acpCopy.toolTitle.find_memory, kind: "search" }],
+  ["read_evidence", { title: acpCopy.toolTitle.read_evidence, kind: "read" }],
+  ["trace_evidence", { title: acpCopy.toolTitle.trace_evidence, kind: "search" }],
+  ["list_files", { title: acpCopy.toolTitle.list_files, kind: "search" }],
+  ["search_files", { title: acpCopy.toolTitle.search_files, kind: "search" }],
+  ["read_file", { title: acpCopy.toolTitle.read_file, kind: "read" }],
+  ["write_file", { title: acpCopy.toolTitle.write_file, kind: "edit" }],
+  ["edit_file", { title: acpCopy.toolTitle.edit_file, kind: "edit" }],
+  ["delete_file", { title: acpCopy.toolTitle.delete_file, kind: "delete" }],
+  ["list_outside_files", { title: acpCopy.toolTitle.list_outside_files, kind: "search" }],
+  ["read_outside_file", { title: acpCopy.toolTitle.read_outside_file, kind: "read" }],
+  ["search_outside_file", { title: acpCopy.toolTitle.search_outside_file, kind: "search" }],
   // Calls recorded before shell skills replaced it.
-  ["run_shell", { title: "셸 실행", kind: "execute" }],
+  ["run_shell", { title: acpCopy.toolTitle.run_shell, kind: "execute" }],
   // Calls recorded before code skills replaced it.
-  ["save_shell_skill", { title: "셸 스킬 저장", kind: "edit" }],
-  ["save_code_skill", { title: "코드 스킬 저장", kind: "edit" }],
-  ["run_skill", { title: "코드 스킬 실행", kind: "execute" }],
-  ["run_code", { title: "코드 실행", kind: "execute" }],
-  ["write_outside_file", { title: "프로젝트 밖 파일 쓰기", kind: "edit" }],
-  ["delete_outside_file", { title: "프로젝트 밖 파일 삭제", kind: "delete" }],
-  ["kagi_search", { title: "웹 검색", kind: "fetch" }],
-  ["kagi_extract", { title: "웹 페이지 읽기", kind: "fetch" }],
-  ["read_skill", { title: "skill 읽기", kind: "read" }],
-  ["run_subagent", { title: "서브에이전트 실행", kind: "other" }],
+  ["save_shell_skill", { title: acpCopy.toolTitle.save_shell_skill, kind: "edit" }],
+  ["save_code_skill", { title: acpCopy.toolTitle.save_code_skill, kind: "edit" }],
+  ["run_skill", { title: acpCopy.toolTitle.run_skill, kind: "execute" }],
+  ["run_code", { title: acpCopy.toolTitle.run_code, kind: "execute" }],
+  ["write_outside_file", { title: acpCopy.toolTitle.write_outside_file, kind: "edit" }],
+  ["delete_outside_file", { title: acpCopy.toolTitle.delete_outside_file, kind: "delete" }],
+  ["kagi_search", { title: acpCopy.toolTitle.kagi_search, kind: "fetch" }],
+  ["kagi_extract", { title: acpCopy.toolTitle.kagi_extract, kind: "fetch" }],
+  ["read_skill", { title: acpCopy.toolTitle.read_skill, kind: "read" }],
+  ["run_subagent", { title: acpCopy.toolTitle.run_subagent, kind: "other" }],
   // Calls recorded before run_subagent took a helper name.
-  ["message_subagent", { title: "서브에이전트에게 메시지 보내기", kind: "other" }],
-  ["delegate_to_agent", { title: "외부 에이전트에게 맡기기", kind: "other" }],
+  ["message_subagent", { title: acpCopy.toolTitle.message_subagent, kind: "other" }],
+  ["delegate_to_agent", { title: acpCopy.toolTitle.delegate_to_agent, kind: "other" }],
 ]);
 
 export function toolView(name: string): ToolView {

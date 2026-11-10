@@ -51,6 +51,7 @@ import {
   type ProjectSummary,
 } from "./app-api.ts";
 import { toolDetail, toolLocations, toolView } from "./tool-view.ts";
+import { acpCopy } from "./copy.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import {
   RunFailureCode,
@@ -99,13 +100,7 @@ const ExplainedFailure = Schema.Literals([
   "session_in_use",
   "session_not_found",
 ]);
-const failureMessages = {
-  unreachable: "앱에 연결하지 못했어요. context-generactive-agent 앱을 먼저 실행하세요.",
-  login_required: "앱에서 지금 쓰는 모델 제공자에 로그인하세요.",
-  model_selection_required: "앱에서 모델을 선택하세요.",
-  session_in_use: "다른 창에서 쓰고 있는 대화예요.",
-  session_not_found: "그런 대화가 없어요.",
-} satisfies Record<typeof ExplainedFailure.Type, string>;
+const failureMessages = acpCopy.failure satisfies Record<typeof ExplainedFailure.Type, string>;
 
 /** Why the bridge refused an editor's request itself, before or after asking the app. */
 const EditorRefusal = Schema.TaggedUnion({
@@ -127,11 +122,10 @@ class EditorRequestRefused extends Schema.TaggedError<
 >()("EditorRequestRefused", { reason: EditorRefusal }) {}
 
 const refusalMessage = EditorRefusal.match({
-  FolderNotFound: ({ cwd }) => `폴더를 찾을 수 없어요: ${cwd}`,
-  ProjectNotRegistered: ({ root }) =>
-    `등록된 프로젝트가 아니에요. 앱에서 ${root}를 먼저 추가하세요.`,
-  SessionNotOpen: () => "그런 세션이 없어요. 새로 시작하거나 다시 불러오세요.",
-  TurnInProgress: () => "이미 답하는 중이에요.",
+  FolderNotFound: ({ cwd }) => acpCopy.refusal.FolderNotFound(cwd),
+  ProjectNotRegistered: ({ root }) => acpCopy.refusal.ProjectNotRegistered(root),
+  SessionNotOpen: () => acpCopy.refusal.SessionNotOpen,
+  TurnInProgress: () => acpCopy.refusal.TurnInProgress,
   RunFailed: ({ code }) => runFailureText[code],
 });
 
@@ -154,7 +148,7 @@ const explain = (
           requestError(
             Schema.is(ExplainedFailure)(error.code)
               ? failureMessages[error.code]
-              : `앱 요청이 실패했어요: ${error.code}`,
+              : acpCopy.appRequestFailed(error.code),
           ),
         )
       : Schema.is(EditorRequestRefused)(error)
@@ -248,8 +242,9 @@ function promptText(blocks: readonly ContentBlock[]) {
 }
 
 const requesterLabel = ApprovalRequester.match({
-  subagent: ({ name }) => (isTruthy(name) ? `서브에이전트 ${name}` : "일회성 서브에이전트"),
-  external_agent: ({ agent }) => `외부 에이전트 ${agent}`,
+  subagent: ({ name }) =>
+    isTruthy(name) ? acpCopy.requester.subagent(name) : acpCopy.requester.oneOffSubagent,
+  external_agent: ({ agent }) => acpCopy.requester.externalAgent(agent),
 });
 
 const cut = (text: string) =>
@@ -491,8 +486,8 @@ const makeAcpAgent = Effect.fnUntraced(function* (options: {
           rawInput: call.argumentsJson,
         },
         options: [
-          { optionId: "allow", name: "이번 한 번 허용", kind: "allow_once" },
-          { optionId: "reject", name: "거부", kind: "reject_once" },
+          { optionId: "allow", name: acpCopy.permission.allowOnce, kind: "allow_once" },
+          { optionId: "reject", name: acpCopy.permission.reject, kind: "reject_once" },
         ],
       }),
     );

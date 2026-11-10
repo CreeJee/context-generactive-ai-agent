@@ -18,6 +18,7 @@ import { describe, expect, vi } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
 import { AccountLoginState, createOAuthAccountLoginManager } from "../src/oauth/account-login.ts";
 import { createProfileCredentialStore, OAuthProfiles } from "../src/oauth/accounts.ts";
+import { oauthCopy } from "../src/oauth/copy.ts";
 import { providerProtocols, type OAuthProvider } from "../src/oauth/protocol.ts";
 import {
   createSubscriptionOAuthClient,
@@ -230,13 +231,7 @@ describe("multi-account OAuth login manager", () => {
         );
         expect(
           (yield* manager.profiles(provider)).profiles.map((profile) => profile.label).sort(),
-        ).toEqual(
-          [
-            `${provider === "openai" ? "ChatGPT" : "Claude"} (이전 계정)`,
-            "계정 1",
-            "계정 2",
-          ].sort(),
-        );
+        ).toEqual([oauthCopy.legacyLabel[provider], "계정 1", "계정 2"].sort());
         expect(
           (yield* manager.profiles(provider)).profiles.filter((p) => p.selected).map((p) => p.id),
         ).toEqual([`legacy-${provider}`]);
