@@ -97,10 +97,20 @@ export default defineConfig({
         },
       },
       {
-        // App copy lives in copy.ts catalogs; model-facing messages live in prompts.ts.
-        files: ["apps/agent/app/**", "apps/agent/server/**"],
+        // Copy lives in copy.ts catalogs; model-facing messages live in prompts.ts.
+        files: ["apps/agent/app/**", "apps/agent/server/**", "packages/memory-agent/src/**"],
         rules: {
           "copy/no-inline-copy": "error",
+        },
+      },
+      {
+        // Korean here is not copy: comments inside migration SQL, and search fixture data.
+        files: [
+          "packages/memory-agent/src/db/migrations.ts",
+          "packages/memory-agent/src/memory/native-search/read-fixture.ts",
+        ],
+        rules: {
+          "copy/no-inline-copy": "off",
         },
       },
       {

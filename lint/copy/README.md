@@ -2,7 +2,7 @@
 
 ## Overview
 
-`lint/copy`는 앱 문구를 어디에 두는지 정하는 저장소 전용 Oxlint JS 플러그인 `copy`다. `index.ts`가 `rules/`의 규칙을 `eslintCompatPlugin({ meta: { name: "copy" }, rules })`로 묶어 default export한다. 루트 `vite.config.ts`가 `lint.jsPlugins`에 `{ name: "copy", specifier: "./lint/copy/index.ts" }`로 등록한다. 규칙은 앱(`apps/agent`)에 `overrides`로 `"error"`를 켠다. 문구가 무엇을 말하는지는 이 플러그인이 아니라 [`tools/copy-check`](../../tools/copy-check/README.md)가 검사한다. 이 저장소가 직접 쓴 코드라서 lint·fmt 대상이다.
+`lint/copy`는 앱 문구를 어디에 두는지 정하는 저장소 전용 Oxlint JS 플러그인 `copy`다. `index.ts`가 `rules/`의 규칙을 `eslintCompatPlugin({ meta: { name: "copy" }, rules })`로 묶어 default export한다. 루트 `vite.config.ts`가 `lint.jsPlugins`에 `{ name: "copy", specifier: "./lint/copy/index.ts" }`로 등록한다. 규칙은 앱(`apps/agent`)과 서버 패키지(`packages/memory-agent/src`)에 `overrides`로 `"error"`를 켠다. 문구가 무엇을 말하는지는 이 플러그인이 아니라 [`tools/copy-check`](../../tools/copy-check/README.md)가 검사한다. 이 저장소가 직접 쓴 코드라서 lint·fmt 대상이다.
 
 ## Interface
 
@@ -14,7 +14,7 @@
 - 이름이 정확히 `copy.ts`인 파일만 카탈로그다. `report-copy.ts`처럼 이름이 `copy.ts`로 끝나기만 하는 파일은 카탈로그가 아니다. 커밋 hook(`staged`의 `**/copy.ts`)과 Claude Code hook도 같은 이름으로 카탈로그를 찾는다.
 - 테스트 파일(`*.test.ts(x)`, `*.spec.ts(x)`, 브라우저 테스트 `*.browser.ts(x)`)은 화면에서 찾을 문구를 직접 쓸 수 있어 보고하지 않는다.
 - 이름이 `prompts.ts`인 파일은 사용자 대신 모델에 보내는 메시지를 모아 두는 곳이라 보고하지 않는다. UI 문구가 아니므로 `tools/copy-check`도 읽지 않는다.
-- 규칙은 루트 `vite.config.ts`의 `overrides`로 `apps/agent/app/**`와 `apps/agent/server/**`에 `"error"`로 켠다.
+- 규칙은 루트 `vite.config.ts`의 `overrides`로 `apps/agent/app/**`, `apps/agent/server/**`, `packages/memory-agent/src/**`에 `"error"`로 켠다. 한글이 문구가 아닌 파일(마이그레이션 SQL 주석 `db/migrations.ts`, 검색 fixture `memory/native-search/read-fixture.ts`)만 뒤따르는 override로 끈다.
 - 플러그인 이름 `"copy"`는 `vite.config.ts`의 등록 이름, 규칙 키 접두사와 일치해야 한다.
 - 규칙 모듈은 `.ts` 확장자를 붙인 상대 경로로 import한다.
 
