@@ -28,6 +28,7 @@ import {
 import { cardToolProject, type CardWorktree } from "./worktree.ts";
 import { CardFailure, VerdictFailure, type AgentFailureCode } from "./failures.ts";
 import { logFailure } from "../runtime/logged-failures.ts";
+import { boardRunId } from "./board-run.ts";
 
 /**
  * Production card agents: each card attempt and each verification is a named session subagent
@@ -198,7 +199,7 @@ const make = Effect.gen(function* () {
               {
                 project,
                 sessionId: run.sessionId,
-                runId: `kanban:${run.goalInstanceId}:${run.card.id}:${run.attemptNo}`,
+                runId: boardRunId(run.goalInstanceId, run.card.id, run.attemptNo),
                 selection: chosen,
                 tools: [
                   ...fileTools.toolsFor(project),
@@ -316,7 +317,7 @@ const make = Effect.gen(function* () {
       sessionId: input.sessionId,
       projectId: input.projectId,
       worktree: input.worktree,
-      runPrefix: `kanban:${input.goalInstanceId}:${input.card.id}:verify`,
+      runPrefix: boardRunId(input.goalInstanceId, input.card.id, "verify"),
       agent: `card-${input.card.id}-verify`,
       message: [cardText(input.card), `The card's agent reported:\n${input.report}`].join("\n\n"),
       instructions: verifierInstructions,
@@ -327,7 +328,7 @@ const make = Effect.gen(function* () {
       sessionId: input.sessionId,
       projectId: input.projectId,
       worktree: input.checkout,
-      runPrefix: `kanban:${input.goalInstanceId}:goal:verify`,
+      runPrefix: boardRunId(input.goalInstanceId, "goal", "verify"),
       agent: "goal-verify",
       message: [
         `Goal: ${input.goal.statement}`,
@@ -349,7 +350,7 @@ const make = Effect.gen(function* () {
       sessionId: input.sessionId,
       projectId: input.projectId,
       worktree: input.checkout,
-      runPrefix: `kanban:${input.goalInstanceId}:outcome:${input.outcome.id}:verify`,
+      runPrefix: boardRunId(input.goalInstanceId, "outcome", input.outcome.id, "verify"),
       agent: `outcome-${input.outcome.id}-verify`,
       message: [
         `Goal: ${input.goal.statement}`,

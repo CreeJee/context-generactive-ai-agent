@@ -134,6 +134,7 @@ const NotificationTaskRow = Schema.Struct({
 const ParentNotificationRow = Schema.Struct({
   id: Schema.String,
   task_id: Schema.String,
+  parent_run_id: Schema.String,
   agent_name: Schema.NullOr(Schema.String),
   kind: Schema.String,
   summary: Schema.String,
@@ -362,6 +363,8 @@ export type {
 export interface ParentNotificationView {
   readonly id: string;
   readonly taskId: string;
+  /** The run that started the task: a chat run, or one of the kanban board's (`isBoardRun`). */
+  readonly parentRunId: string;
   /** The task's agent, such as `background_shell`; null once the task is gone. */
   readonly agentName: string | null;
   readonly kind: string;
@@ -905,7 +908,8 @@ const make = Effect.gen(function* () {
   const consumeParentNotifications = (sessionId: string, deliveredToRunId: string) =>
     Effect.gen(function* () {
       const rows = yield* decodeParentNotificationRows(
-        yield* sql`SELECT n.id, n.task_id, t.agent_name, n.kind, n.summary, n.payload, n.created_at
+        yield* sql`SELECT n.id, n.task_id, n.parent_run_id, t.agent_name, n.kind, n.summary, n.payload,
+          n.created_at
           FROM parent_notifications n LEFT JOIN work_tasks t ON t.id = n.task_id
           WHERE n.origin_session_id = ${sessionId} AND n.delivered_at IS NULL ORDER BY n.seq`,
       );
@@ -922,6 +926,7 @@ const make = Effect.gen(function* () {
         Effect.map(decodePayload(row.payload), (payload): ParentNotificationView => ({
           id: row.id,
           taskId: row.task_id,
+          parentRunId: row.parent_run_id,
           agentName: row.agent_name,
           kind: row.kind,
           summary: row.summary,

@@ -1,15 +1,22 @@
 import { Array as Arr, DateTime, Effect, Function as EffectFunction, HashSet } from "effect";
 import type { OrchestratorNote, StoredUserMessage } from "../chat-store/schema.ts";
+import { isBoardRun } from "../kanban/board-run.ts";
 import type { ParentNotificationView } from "../work-trace/store.ts";
 
 /** Notification kinds that report a task's end. */
 const endKinds = HashSet.fromIterable(["completed", "failed", "stopped", "interrupted"]);
 
-/** The tasks whose end `notifications` report, the background tasks apart from the subagents. */
+/**
+ * The tasks whose end `notifications` report, the background tasks apart from the subagents. The
+ * kanban board's card agents and verifiers are not counted: the board reports its cards, and one
+ * card's attempts and checks would read as that many subagents.
+ */
 export const endedTasks = (
   notifications: ReadonlyArray<ParentNotificationView>,
 ): OrchestratorNote["ended"] => {
-  const ended = notifications.filter(({ kind }) => HashSet.has(endKinds, kind));
+  const ended = notifications.filter(
+    ({ kind, parentRunId }) => HashSet.has(endKinds, kind) && !isBoardRun(parentRunId),
+  );
   const background = Arr.countBy(
     ended,
     ({ agentName }) => agentName?.startsWith("background_") === true,

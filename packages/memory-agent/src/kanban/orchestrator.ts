@@ -79,6 +79,7 @@ import { BoardHealth, type BoardRef } from "./board-health.ts";
 import { GoalMerges } from "./merge-queue.ts";
 import { overlappingBoundaries, ProjectScheduler } from "./scheduler.ts";
 import { CardWorkspaceJanitor } from "./workspace-janitor.ts";
+import { boardRunId } from "./board-run.ts";
 
 /**
  * The Goal orchestrator loop of a kanban board (docs/kanban-orchestration.md "오케스트레이터
@@ -204,7 +205,7 @@ const holdsCard = (hold: AssignmentHold | null, cardId: string) =>
   hold !== null && (hold.cards === undefined || hold.cards.includes(cardId));
 
 const loopAuthor = (goalInstanceId: string): BoardAuthor =>
-  BoardAuthor.cases.Orchestrator.make({ runId: `kanban:${goalInstanceId}` });
+  BoardAuthor.cases.Orchestrator.make({ runId: boardRunId(goalInstanceId) });
 
 /** A squash attempt or Goal sync, read as what the loop does next. */
 type Integration = Data.TaggedEnum<{
