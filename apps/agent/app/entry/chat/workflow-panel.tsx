@@ -140,8 +140,21 @@ const stageGuides = {
   },
 } satisfies Record<"shaping" | "running", Record<WorkflowMode, MessageDescriptor>>;
 
-/** What the bar's icon says about the stage at a glance. */
-function StageIcon({ state }: { readonly state: WorkflowState }) {
+/**
+ * What the bar's icon says about the stage at a glance. It turns only while the board's loop runs
+ * a card; a running Plan whose board waits shows a clock.
+ */
+function StageIcon({
+  state,
+  kanbanRunning,
+}: {
+  readonly state: WorkflowState;
+  readonly kanbanRunning: boolean;
+}) {
+  const working =
+    kanbanRunning &&
+    (state.plan?.steps.some((step) => step.status === "in_progress" || step.status === "verify") ??
+      false);
   if (state.goal?.status === "failed")
     return <CircleXIcon aria-hidden className="size-3.5 shrink-0 text-destructive" />;
   if (state.goal?.status === "paused")
@@ -150,9 +163,13 @@ function StageIcon({ state }: { readonly state: WorkflowState }) {
     Match.when("completed", () => (
       <CircleCheckIcon aria-hidden className="size-3.5 shrink-0 text-primary" />
     )),
-    Match.when("running", () => (
-      <LoaderCircleIcon aria-hidden className="size-3.5 shrink-0 animate-spin text-primary" />
-    )),
+    Match.when("running", () =>
+      working ? (
+        <LoaderCircleIcon aria-hidden className="size-3.5 shrink-0 animate-spin text-primary" />
+      ) : (
+        <ClockIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+      ),
+    ),
     Match.orElse(() => <ListChecksIcon aria-hidden className="size-3.5 shrink-0 text-primary" />),
   );
 }
@@ -292,7 +309,7 @@ export function WorkflowArtifactPanel({
       <Collapsible key={`${phase}:${plan?.version ?? 0}`} defaultOpen={reviewing}>
         <div className="flex min-h-9 items-center gap-1 p-1">
           <CollapsibleTrigger className="group flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors outline-none hover:bg-muted/60 focus-visible:ring-3 focus-visible:ring-ring/50">
-            <StageIcon state={state} />
+            <StageIcon state={state} kanbanRunning={kanbanRunning} />
             <span className="shrink-0 font-medium">
               {modeLabels[mode]} · {t(stageLabels[phase])}
             </span>

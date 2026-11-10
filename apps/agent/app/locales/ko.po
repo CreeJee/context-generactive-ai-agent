@@ -2704,6 +2704,7 @@ msgstr "변경 요청 대기"
 
 #. Badge: card change requests waiting for the orchestrator
 #. Badge: card change requests waiting for the orchestrator
+#. Badge: card change requests waiting for the orchestrator
 #: app/entry/chat/board-panel.tsx
 #: app/entry/chat/board/project-board.tsx
 msgid "변경 요청 대기 {pendingCount}"
@@ -2804,6 +2805,7 @@ msgstr "보드"
 msgid "보드 #{ref} · {status} · 루프 {health}"
 msgstr "보드 #{ref} · {status} · 루프 {health}"
 
+#. Name of the board loop in its health status
 #. Name of the board loop in its health status
 #. Name of the board loop in its health status
 #. Name of the board loop in its health status
@@ -4820,6 +4822,7 @@ msgstr "자동 merge 멈춤"
 #. Badge: the automatic Plan writer has stopped
 #. Badge: the automatic Plan writer has stopped
 #. Badge: the automatic Plan writer has stopped
+#. Badge: the automatic Plan writer has stopped
 #: app/entry/chat/board-panel.tsx
 #: app/entry/chat/board/project-board.tsx
 msgid "자동 Plan 작성 멈춤"
@@ -6213,6 +6216,11 @@ msgstr "확인 중 문제가 생겼습니다."
 #: app/entry/chat/work-trace-panel.tsx
 msgid "확인 필요"
 msgstr "확인 필요"
+
+#. Badge: blocked cards the planner did not replan, waiting for the user
+#: app/entry/chat/board-panel.tsx
+msgid "확인 필요 카드 {replanWaits}"
+msgstr "확인 필요 카드 {replanWaits}"
 
 #. Badge: blocked cards the planner did not replan, waiting for the user
 #: app/entry/chat/board-panel.tsx

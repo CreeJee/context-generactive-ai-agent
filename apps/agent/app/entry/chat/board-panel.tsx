@@ -49,7 +49,7 @@ import {
   useKanbanMutation,
 } from "../queries/mutations/session";
 import { koreanLocalTime } from "../shared/local-time";
-import { LoopHealthStatus } from "../shared/loop-health";
+import { loopHealthLabel, LoopHealthStatus } from "../shared/loop-health";
 import {
   BoardSurface,
   editErrorText,
@@ -95,7 +95,10 @@ const byAttention = Order.mapInput(Order.Number, (entry: BoardView["cards"][numb
   awaitsApproval(entry) ? attentionRanks.human_decision : attentionRanks[entry.card.status],
 );
 
-/** The workflow bar's numbers: cards done, outcomes met and decisions waiting for the user. */
+/**
+ * The workflow bar's numbers: cards done, outcomes met and decisions waiting for the user, and
+ * what keeps the board from going on, so the folded bar shows a stopped or stuck board.
+ */
 export function BoardTally({
   projectId,
   sessionId,
@@ -105,8 +108,14 @@ export function BoardTally({
 }) {
   const view = useBoardQuery(projectId, sessionId).data;
   const decisions = useDecisionsQuery(projectId, sessionId).data?.length ?? 0;
+  const kanban = useKanbanQuery(projectId, sessionId).data;
+  const { t } = useLingui();
   if (!isTruthy(view)) return null;
   const waiting = decisions + Arr.countBy(view.cards, awaitsApproval);
+  const loop = kanban?.active === true ? kanban : null;
+  const replanWaits =
+    loop === null ? 0 : Arr.countBy(loop.cards, (card) => waitsForUser(card.reason));
+  const pendingCount = view.pendingChanges.length;
   const done = Arr.countBy(view.cards, ({ card }) => card.status === "done");
   const cardCount = view.cards.length;
   const met = metOutcomes(view.outcomes);
@@ -133,6 +142,34 @@ export function BoardTally({
           <Trans comment="Workflow bar tally: decisions waiting for the user">
             판단 대기 {waiting}
           </Trans>
+        </span>
+      )}
+      {replanWaits > 0 && (
+        <span className="text-warning">
+          <Trans comment="Badge: blocked cards the planner did not replan, waiting for the user">
+            확인 필요 카드 {replanWaits}
+          </Trans>
+        </span>
+      )}
+      {pendingCount > 0 && (
+        <span>
+          <Trans comment="Badge: card change requests waiting for the orchestrator">
+            변경 요청 대기 {pendingCount}
+          </Trans>
+        </span>
+      )}
+      {loop !== null && loop.plannerStalled && (
+        <span className="text-warning">
+          <Trans comment="Badge: the automatic Plan writer has stopped">자동 Plan 작성 멈춤</Trans>
+        </span>
+      )}
+      {loop !== null && loop.loop._tag !== "Healthy" && (
+        <span className={loop.loop._tag === "Retrying" ? "text-warning" : "text-destructive"}>
+          {t({
+            message: "보드 루프",
+            comment: "Name of the board loop in its health status",
+          })}
+          : {loopHealthLabel(loop.loop)}
         </span>
       )}
     </span>
