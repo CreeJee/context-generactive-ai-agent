@@ -71,6 +71,7 @@ function useAnswerDecisionMutationBody(projectId: string, holder: string) {
 export type KanbanAction = Data.TaggedEnum<{
   Start: {};
   RestartLoop: {};
+  RecheckOutcomes: {};
   Intent: { readonly intent: BoardIntent };
   SetDependencies: { readonly dependsOn: readonly string[] };
   Retarget: {};
@@ -81,6 +82,7 @@ const sendKanbanAction = (sessionId: string, holder: string, action: KanbanActio
   KanbanAction.$match(action, {
     Start: () => api.startKanban(sessionId, holder),
     RestartLoop: () => api.restartKanbanLoop(sessionId, holder),
+    RecheckOutcomes: () => api.recheckOutcomes(sessionId, holder),
     Intent: ({ intent }) => api.boardIntent(sessionId, holder, intent),
     SetDependencies: ({ dependsOn }) => api.setGoalDependencies(sessionId, holder, dependsOn),
     Retarget: () => api.retargetKanban(sessionId, holder),

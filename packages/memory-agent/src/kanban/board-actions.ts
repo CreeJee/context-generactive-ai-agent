@@ -742,6 +742,7 @@ const make = Effect.gen(function* () {
         schedule: yield* scheduleView(goal.value),
         loop: yield* health.get(goalInstanceId),
         plannerStalled: plannerStalled(goal.value.planner),
+        unjudgedOutcomes: yield* orchestrator.unjudgedOutcomes(goalInstanceId),
       });
     }),
 

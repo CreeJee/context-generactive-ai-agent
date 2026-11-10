@@ -357,7 +357,19 @@ export function WorkflowBoard({
           <AlertDescription>{startError}</AlertDescription>
         </Alert>
       )}
-      <OutcomeChecklist outcomes={view.outcomes} />
+      <OutcomeChecklist
+        outcomes={view.outcomes}
+        unjudged={loop?.unjudgedOutcomes ?? []}
+        recheck={{
+          disabled: disabled || kanbanAction.isPending,
+          onRecheck: () => {
+            setStartError(null);
+            kanbanAction.mutate(KanbanAction.RecheckOutcomes(), {
+              onError: (error) => setStartError(editErrorText(error)),
+            });
+          },
+        }}
+      />
       <WorkflowRows label={t`카드 ${done}/${total} 완료`}>
         {cards.map(({ card }) => (
           <WorkflowRow

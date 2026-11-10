@@ -170,6 +170,10 @@ export const KanbanBoardView = Schema.Struct({
    * was met. A user turn in the conversation wakes it again.
    */
   plannerStalled: Schema.Boolean,
+  /** Outcomes whose last check ended without a verdict, and why; they wait for a new check. */
+  unjudgedOutcomes: Schema.Array(
+    Schema.Struct({ outcomeId: Schema.String, failure: VerdictFailure }),
+  ),
 });
 export type KanbanBoardView = typeof KanbanBoardView.Type;
 

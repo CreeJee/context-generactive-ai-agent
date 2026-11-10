@@ -66,6 +66,8 @@ export const KanbanCommand = Schema.TaggedUnion({
   SetDependencies: { dependsOn: Schema.Array(Schema.String) },
   /** Targets the branch checked out in the project now, before the Goal has work of its own. */
   Retarget: {},
+  /** Checks again the outcomes whose last check ended without a verdict. */
+  RecheckOutcomes: {},
 });
 export type KanbanCommand = typeof KanbanCommand.Type;
 
@@ -78,6 +80,9 @@ export type KanbanView = typeof KanbanView.Type;
 
 /** The board's loop runs again. */
 export const KanbanLoopRestarted = Schema.Struct({ restarted: Schema.Literal(true) });
+
+/** The board checks its unjudged outcomes again. */
+export const KanbanOutcomesRechecked = Schema.Struct({ rechecked: Schema.Literal(true) });
 
 /** The Goals the board's Goal now waits for. */
 export const GoalDependencies = Schema.Struct({ dependsOn: Schema.Array(Schema.String) });
@@ -406,6 +411,7 @@ export class SessionsGroup extends HttpApiGroup.make("sessions")
       success: [
         KanbanStarted,
         KanbanLoopRestarted,
+        KanbanOutcomesRechecked,
         GoalDependencies,
         GoalRetargeted,
         BoardEditApplied,

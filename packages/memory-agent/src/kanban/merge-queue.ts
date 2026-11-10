@@ -5,7 +5,7 @@ import {
   Effect,
   FiberMap,
   FileSystem,
-  HashSet,
+  HashMap,
   Layer,
   Match,
   Option,
@@ -30,7 +30,7 @@ import {
 import { Workflows } from "../workflow/workflow.ts";
 import { CardVerifier, GoalVerifier, OutcomeVerifier } from "./card-agent.ts";
 import { CardAttempts, type KanbanGoal } from "./card-attempts.ts";
-import { CardHoldReason } from "./failures.ts";
+import { CardHoldReason, type VerdictFailure } from "./failures.ts";
 import { GoalMergeState, GoalSchedules, mergeSettled } from "./goal-schedules.ts";
 import {
   DecisionAnswer,
@@ -98,10 +98,24 @@ const make = Effect.gen(function* () {
   const serially = yield* keyedSerialLimit();
   const running = yield* FiberMap.make<string>();
   /**
-   * Outcome checks that ended without a verdict (the verifier could not run or recorded none), so
-   * a look does not start the same check again at once. In memory: a restarted owner tries again.
+   * Outcome checks that ended without a verdict (the verifier could not run or recorded none), by
+   * Goal and outcome: the check it was and why. A look does not start the same check again at
+   * once; the board shows why until the user asks for it again. In memory: a restarted owner
+   * tries again.
    */
-  const unjudged = yield* Ref.make(HashSet.empty<string>());
+  const unjudged = yield* Ref.make(
+    HashMap.empty<
+      string,
+      {
+        readonly goalInstanceId: string;
+        readonly outcomeId: string;
+        readonly attempt: string;
+        readonly failure: VerdictFailure;
+      }
+    >(),
+  );
+  const unjudgedKey = (goalInstanceId: string, outcomeId: string) =>
+    `${goalInstanceId}\n${outcomeId}`;
 
   const goalRef = (goal: KanbanGoal): GoalRef => ({
     projectRoot: goal.projectRoot,
@@ -457,7 +471,14 @@ const make = Effect.gen(function* () {
     const attempt = [goal.goalInstanceId, outcome.id, outcome.text, head ?? ""]
       .concat(cards.map((card) => card.id))
       .join("\n");
-    if (HashSet.has(yield* Ref.get(unjudged), attempt)) return false;
+    const key = unjudgedKey(goal.goalInstanceId, outcome.id);
+    if (
+      Option.exists(
+        HashMap.get(yield* Ref.get(unjudged), key),
+        (found) => found.attempt === attempt,
+      )
+    )
+      return false;
     const check = (checkout: CardWorktree) =>
       outcomeVerifier.verify({
         sessionId: goal.sessionId,
@@ -485,6 +506,7 @@ const make = Effect.gen(function* () {
           runId: null,
           at: DateTime.formatIso(yield* DateTime.now),
         });
+        yield* Ref.update(unjudged, HashMap.remove(key));
         return true;
       });
     return yield* Match.valueTags(verdict, {
@@ -492,7 +514,29 @@ const make = Effect.gen(function* () {
       Failed: ({ failure }) =>
         Predicate.isTagged(failure, "Rejected")
           ? recorded(false, failure.note, [failure.note])
-          : Effect.as(Ref.update(unjudged, HashSet.add(attempt)), false),
+          : Effect.as(
+              Effect.andThen(
+                Effect.logWarning("Outcome check ended without a verdict").pipe(
+                  Effect.annotateLogs({
+                    goalInstanceId: goal.goalInstanceId,
+                    outcomeId: outcome.id,
+                    failure: failure._tag,
+                  }),
+                ),
+                Ref.update(unjudged, (found) =>
+                  HashMap.set(found, key, {
+                    goalInstanceId: goal.goalInstanceId,
+                    outcomeId: outcome.id,
+                    attempt,
+                    failure,
+                  }),
+                ),
+              ).pipe(
+                // The board shows why the outcome waits.
+                Effect.andThen(events.publishSession(goal.sessionId, "run-state")),
+              ),
+              false,
+            ),
     });
   });
 
@@ -606,6 +650,23 @@ const make = Effect.gen(function* () {
           ),
         ),
         { onlyIfMissing: true },
+      ),
+
+    /** The Goal's outcomes whose last check ended without a verdict, and why. */
+    unjudged: (goalInstanceId: string) =>
+      Effect.map(Ref.get(unjudged), (found) =>
+        Arr.fromIterable(HashMap.values(found)).flatMap((entry) =>
+          entry.goalInstanceId === goalInstanceId
+            ? [{ outcomeId: entry.outcomeId, failure: entry.failure }]
+            : [],
+        ),
+      ),
+
+    /** The user asks again for the checks of the Goal's outcomes that ended without a verdict. */
+    forgetUnjudged: (goalInstanceId: string) =>
+      Ref.update(
+        unjudged,
+        HashMap.filter((entry) => entry.goalInstanceId !== goalInstanceId),
       ),
 
     /** Takes in a target another Goal merged into, when the Goal was told about one. */

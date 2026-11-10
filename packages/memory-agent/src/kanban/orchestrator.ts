@@ -1456,6 +1456,22 @@ const make = (options: KanbanOrchestratorOptions) =>
         );
       }),
 
+      /** The board's outcomes whose last check ended without a verdict, and why. */
+      unjudgedOutcomes: (goalInstanceId: string) => merges.unjudged(goalInstanceId),
+
+      /**
+       * The user asks again for the outcome checks of the session's board that ended without a
+       * verdict; the board looks now and starts them.
+       */
+      recheckOutcomes: Effect.fn("KanbanOrchestrator.recheckOutcomes")(function* (
+        sessionId: string,
+      ) {
+        const goalInstanceId = yield* workflows.goalInstanceId(sessionId);
+        if (goalInstanceId === null) return;
+        yield* merges.forgetUnjudged(goalInstanceId);
+        yield* PubSub.publish(pokes, goalInstanceId);
+      }),
+
       /** Why boards need the orchestrator model, as their loops find out. */
       attention: Stream.fromPubSub(attention),
 

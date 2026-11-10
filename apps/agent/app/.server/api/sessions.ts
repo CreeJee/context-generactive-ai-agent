@@ -182,6 +182,8 @@ export const SessionsApiHandlers = HttpApiBuilder.group(
                   .pipe(Effect.tap(() => events.publishSession(session, "run-state"))),
               RestartLoop: () =>
                 Effect.as(actions.restartLoop(session), { restarted: true } as const),
+              RecheckOutcomes: () =>
+                Effect.as(orchestrator.recheckOutcomes(session), { rechecked: true } as const),
               SetDependencies: ({ dependsOn }) =>
                 actions.setDependencies(session, dependsOn).pipe(
                   Effect.tap(() => events.publishSession(session, "run-state")),

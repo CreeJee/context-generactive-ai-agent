@@ -1,6 +1,6 @@
 import type { MessageDescriptor } from "@lingui/core";
 import { msg, ph } from "@lingui/core/macro";
-import { useLingui } from "@lingui/react/macro";
+import { Trans, useLingui } from "@lingui/react/macro";
 import { Array as Arr, Match } from "effect";
 import {
   CircleCheckIcon,
@@ -11,12 +11,16 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "cn";
-import type { BoardView } from "../api";
+import type { BoardView, KanbanView } from "../api";
+import { Button } from "../../components/ui/button";
+import { verdictText } from "./board/hold-reason";
 import { WorkflowRow, WorkflowRows } from "./workflow-rows";
 
 type BoardOutcome = BoardView["outcomes"][number];
 
 type OutcomeTag = BoardOutcome["status"]["_tag"];
+
+type UnjudgedOutcome = Extract<KanbanView, { readonly active: true }>["unjudgedOutcomes"][number];
 
 /** How each outcome status reads on the page. */
 const outcomeLooks: Readonly<
@@ -67,11 +71,29 @@ export const metOutcomes = (outcomes: readonly BoardOutcome[]): number =>
 
 /**
  * The Goal's outcomes, one line each, under a heading that counts the met ones. The Goal is done
- * once a verifier finds every one met, so this list is the Goal's progress.
+ * once a verifier finds every one met, so this list is the Goal's progress. An outcome whose last
+ * check ended without a verdict says why, and the user can ask for the check again.
  */
-export function OutcomeChecklist({ outcomes }: { readonly outcomes: readonly BoardOutcome[] }) {
+export function OutcomeChecklist({
+  outcomes,
+  unjudged = [],
+  recheck,
+}: {
+  readonly outcomes: readonly BoardOutcome[];
+  readonly unjudged?: readonly UnjudgedOutcome[];
+  readonly recheck?: { readonly disabled: boolean; readonly onRecheck: () => void };
+}) {
   const { t } = useLingui();
   if (outcomes.length === 0) return null;
+  const unjudgedOf = (outcome: BoardOutcome) =>
+    outcome.status._tag === "AwaitingCheck"
+      ? (unjudged.find((entry) => entry.outcomeId === outcome.id) ?? null)
+      : null;
+  const stuck = outcomes.flatMap((outcome) => {
+    const entry = unjudgedOf(outcome);
+    return entry === null ? [] : [entry];
+  });
+  const noModel = stuck.some((entry) => entry.failure._tag === "ModelSelectionRequired");
   /** What the status adds after its label: the cards left, or the verifier's verdict. */
   const outcomeDetail = (status: BoardOutcome["status"]): string | null =>
     Match.valueTags(status, {
@@ -88,7 +110,8 @@ export function OutcomeChecklist({ outcomes }: { readonly outcomes: readonly Boa
       {outcomes.map((outcome) => {
         const look = outcomeLooks[outcome.status._tag];
         const label = t(look.label);
-        const detail = outcomeDetail(outcome.status);
+        const entry = unjudgedOf(outcome);
+        const detail = entry === null ? outcomeDetail(outcome.status) : verdictText(entry.failure);
         const status = detail === null ? label : `${label} · ${detail}`;
         return (
           <WorkflowRow
@@ -101,6 +124,33 @@ export function OutcomeChecklist({ outcomes }: { readonly outcomes: readonly Boa
           </WorkflowRow>
         );
       })}
+      {stuck.length > 0 && (
+        <li role="status" className="flex flex-wrap items-center gap-2 px-1.5 py-1">
+          <span className="text-muted-foreground">
+            {noModel ? (
+              <Trans>
+                검증할 모델이 선택되지 않아 결과를 확인하지 못했습니다. 설정의 칸반 실행에서 검증자
+                모델을 고른 뒤 다시 확인해 주십시오.
+              </Trans>
+            ) : (
+              <Trans>결과를 확인하지 못했습니다. 다시 확인할 수 있습니다.</Trans>
+            )}
+          </span>
+          {recheck !== undefined && (
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              disabled={recheck.disabled}
+              onClick={recheck.onRecheck}
+            >
+              <Trans comment="Button that checks again the outcomes whose check ended without a verdict">
+                다시 확인
+              </Trans>
+            </Button>
+          )}
+        </li>
+      )}
     </WorkflowRows>
   );
 }

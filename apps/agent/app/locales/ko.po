@@ -1193,6 +1193,10 @@ msgstr "검증이 판정을 남기지 않았습니다"
 msgid "검증자 모델"
 msgstr "검증자 모델"
 
+#: app/entry/chat/outcome-checklist.tsx
+msgid "검증할 모델이 선택되지 않아 결과를 확인하지 못했습니다. 설정의 칸반 실행에서 검증자 모델을 고른 뒤 다시 확인해 주십시오."
+msgstr "검증할 모델이 선택되지 않아 결과를 확인하지 못했습니다. 설정의 칸반 실행에서 검증자 모델을 고른 뒤 다시 확인해 주십시오."
+
 #: app/entry/chat/board/hold-reason.ts
 msgid "검증할 모델이 선택되지 않았습니다"
 msgstr "검증할 모델이 선택되지 않았습니다"
@@ -1244,6 +1248,10 @@ msgstr "결과를 알 수 없는 도구 실행"
 #: app/entry/session/attempt-failure.ts
 msgid "결과를 저장하지 못했습니다"
 msgstr "결과를 저장하지 못했습니다"
+
+#: app/entry/chat/outcome-checklist.tsx
+msgid "결과를 확인하지 못했습니다. 다시 확인할 수 있습니다."
+msgstr "결과를 확인하지 못했습니다. 다시 확인할 수 있습니다."
 
 #. Section heading: files and outputs a task produced
 #: app/entry/chat/work-trace-panel.tsx
@@ -1894,7 +1902,9 @@ msgstr "다시 찾기"
 msgid "다시 큐에 넣기"
 msgstr "다시 큐에 넣기"
 
+#. Button that checks again the outcomes whose check ended without a verdict
 #. Button that checks again whether WebGPU can be used
+#: app/entry/chat/outcome-checklist.tsx
 #: app/entry/settings/pages/embedding.tsx
 msgid "다시 확인"
 msgstr "다시 확인"

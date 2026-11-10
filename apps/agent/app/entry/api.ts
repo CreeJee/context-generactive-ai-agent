@@ -652,6 +652,15 @@ export const api = {
         payload: KanbanCommand.RestartLoop(),
       }),
     ),
+  /** Checks again the outcomes whose last check ended without a verdict. */
+  recheckOutcomes: (session: string, holder: string) =>
+    appCall((client) =>
+      client.sessions.kanbanAction({
+        params: { session },
+        headers: { "x-session-holder": holder },
+        payload: KanbanCommand.RecheckOutcomes(),
+      }),
+    ),
   /** The Goals this Goal waits for; an empty list lifts the wait. */
   setGoalDependencies: (session: string, holder: string, dependsOn: readonly string[]) =>
     appCall((client) =>

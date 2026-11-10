@@ -1086,4 +1086,52 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
       }),
     gitTimeout,
   );
+
+  it.effect(
+    "shows why an outcome check ended without a verdict and checks it again when asked",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* kanbanFixture;
+        const chosen = yield* Ref.make(false);
+        const run = yield* openKanbanOwner(fixture, yield* Effect.scope, {
+          agent: () => Effect.succeed(finished),
+          verifyOutcome: (input) =>
+            Effect.map(Ref.get(chosen), (model) =>
+              model
+                ? CardVerdict.Passed({ evidence: [`outcome ${input.outcome.id} met`] })
+                : CardVerdict.Failed({
+                    failure: VerdictFailure.cases.ModelSelectionRequired.make({}),
+                  }),
+            ),
+        });
+        yield* run(
+          Effect.gen(function* () {
+            const board = yield* executingPlan(fixture, [card("a")]);
+            const orchestrator = yield* KanbanOrchestrator;
+            yield* orchestrator.start(board.sessionId);
+            const unjudged = Effect.map(
+              (yield* KanbanBoardActions).view(board.sessionId),
+              (view) => Option.getOrUndefined(view)?.unjudgedOutcomes ?? [],
+            );
+            expect(yield* eventually(unjudged, (found) => found.length > 0)).toEqual([
+              {
+                outcomeId: "O1",
+                failure: VerdictFailure.cases.ModelSelectionRequired.make({}),
+              },
+            ]);
+
+            // The user picked a verifier model and asks again.
+            yield* Ref.set(chosen, true);
+            yield* orchestrator.recheckOutcomes(board.sessionId);
+            const [verdict] = yield* eventually(
+              (yield* OutcomeLedger).latest(board.goalInstanceId),
+              (latest) => latest.length > 0,
+            );
+            expect(verdict).toMatchObject({ outcomeId: "O1", met: true });
+            expect(yield* unjudged).toEqual([]);
+          }),
+        );
+      }),
+    gitTimeout,
+  );
 });
