@@ -79,7 +79,6 @@ import { Separator } from "~/components/ui/separator";
 import {
   SidebarContent,
   SidebarGroup,
-  SidebarGroupLabel,
   SidebarMenu,
   SidebarMenuAction,
   SidebarMenuButton,
@@ -675,7 +674,7 @@ function SessionGroup({
     <SidebarGroup>
       <Collapsible defaultOpen={defaultOpen}>
         <CollapsibleTrigger className="group sticky top-0 z-10 flex h-8 w-full items-center gap-1 rounded-md bg-sidebar px-2 text-2xs font-medium tracking-wide text-muted-foreground uppercase outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring">
-          <ChevronRightIcon className="size-3.5 shrink-0 transition-transform group-data-[panel-open]:rotate-90" />
+          <ChevronRightIcon className="size-3.5 shrink-0 transition-transform group-data-panel-open:rotate-90" />
           <span className="min-w-0 flex-1 truncate text-left">{title}</span>
           <span
             className="tabular-nums"
