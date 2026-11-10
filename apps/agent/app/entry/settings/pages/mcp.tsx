@@ -148,6 +148,16 @@ function McpSettingsContent({ project }: { project: Project }) {
         setError(null);
         setPending((rows) => [...rows, row]);
         yield* uiPromise(() => mutation.mutateAsync(command)).pipe(
+          // A started login opens in the browser, as adding an account does.
+          Effect.tap((next) =>
+            Effect.sync(() => {
+              const started = next.servers.find(
+                (server) => server.scope === command.scope && server.name === command.name,
+              )?.state;
+              if (McpServerState.$is("loggingIn")(started))
+                window.open(started.authorizationUrl, "_blank", "noopener");
+            }).pipe(Effect.when(Effect.succeed(McpCommand.$is("login")(command)))),
+          ),
           Effect.catchTag("UnknownError", (failure) =>
             Effect.sync(() => setError(errorMessage(refusalOf(failure.cause)))),
           ),
