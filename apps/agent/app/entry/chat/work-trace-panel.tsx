@@ -69,9 +69,62 @@ const heartbeatLabel = {
 
 const locatorLabel = ArtifactLocator.$match({
   file: ({ path, sha256 }) => `${path} · sha256 ${sha256}`,
-  generated: ({ reference }) => `Generated ${reference}`,
-  external: ({ reference }) => `External ${reference}`,
+  generated: ({ reference }) => reference,
+  external: ({ reference }) => reference,
 });
+
+type TraceArtifact = TraceTaskDetail["artifacts"][number];
+
+const artifactKindLabel = {
+  file: msg({ message: "파일", comment: "Kind of a result a task produced, in Work Trace" }),
+  generated: msg({
+    message: "생성한 결과",
+    comment: "Kind of a result a task produced, in Work Trace: output the app stores itself",
+  }),
+  external: msg({
+    message: "외부 결과",
+    comment: "Kind of a result a task produced, in Work Trace: something outside the app",
+  }),
+} satisfies Record<TraceArtifact["kind"], MessageDescriptor>;
+
+const verificationLabel = {
+  unverified: msg({
+    message: "확인 전",
+    comment: "Whether a task's result was checked, in Work Trace",
+  }),
+  verified: msg({
+    message: "확인됨",
+    comment: "Whether a task's result was checked, in Work Trace",
+  }),
+  invalidated: msg({
+    message: "무효",
+    comment: "Whether a task's result was checked, in Work Trace: it no longer holds",
+  }),
+  unavailable: msg({
+    message: "읽을 수 없음",
+    comment: "Whether a task's result was checked, in Work Trace",
+  }),
+  source_deleted: msg({
+    message: "원본 삭제됨",
+    comment: "Whether a task's result was checked, in Work Trace",
+  }),
+} satisfies Record<TraceArtifact["verification"], MessageDescriptor>;
+
+const dispositionLabel = {
+  saved: msg({ message: "저장함", comment: "What the user decided for a memory proposal" }),
+  edited_saved: msg({
+    message: "고쳐서 저장함",
+    comment: "What the user decided for a memory proposal",
+  }),
+  conversation_only: msg({
+    message: "이 대화에만",
+    comment: "What the user decided for a memory proposal: keep it for this conversation only",
+  }),
+  rejected: msg({ message: "저장 안 함", comment: "What the user decided for a memory proposal" }),
+} satisfies Record<
+  NonNullable<TraceTaskDetail["memoryCandidates"]>[number]["disposition"],
+  MessageDescriptor
+>;
 
 function artifactLocatorLabel(locator: ArtifactLocator | null): React.ReactNode {
   if (!isTruthy(locator)) return <Trans>원본 위치가 삭제되었거나 가려졌습니다.</Trans>;
@@ -166,13 +219,19 @@ function TaskDetail({ detail }: { detail: TraceTaskDetail | null }) {
             <Trans comment="Label of the agent name in a Work Trace task overview">에이전트</Trans>
           </dt>
           <dd className="min-w-0 break-words">{task.agentName}</dd>
-          <dt>Task</dt>
+          <dt>
+            <Trans comment="Label of a task's id in a Work Trace task overview">작업 id</Trans>
+          </dt>
           <dd className="min-w-0 truncate font-mono" title={task.id}>
             {task.id}
           </dd>
-          <dt>Origin</dt>
+          <dt>
+            <Trans comment="Label of the conversation that started a task, in Work Trace">
+              시작한 대화
+            </Trans>
+          </dt>
           <dd className="min-w-0 break-all">
-            {task.originSessionId ?? <Trans>삭제된 대화 · project 기록 유지</Trans>}
+            {task.originSessionId ?? <Trans>삭제된 대화 · 프로젝트 기록 유지</Trans>}
           </dd>
         </dl>
       </section>
@@ -182,16 +241,20 @@ function TaskDetail({ detail }: { detail: TraceTaskDetail | null }) {
           <HistoryIcon className="size-4" aria-hidden /> <Trans>실행 이력</Trans>
         </h3>
         <ol className="mt-2 space-y-2">
-          {detail.attempts.map((attempt) => (
+          {detail.attempts.map(({ attemptNumber, chatRunId, ...attempt }) => (
             <li key={attempt.id} className="rounded-md border p-2 text-xs">
               <div className="flex items-center gap-2">
-                <span className="font-medium">Attempt {attempt.attemptNumber}</span>
+                <span className="font-medium">
+                  <Trans comment="One run of a task, by its number, in Work Trace">
+                    시도 {attemptNumber}
+                  </Trans>
+                </span>
                 <Badge className="ml-auto" variant="secondary">
-                  {attempt.status}
+                  {t(statusLabel[attempt.status])}
                 </Badge>
               </div>
-              <p className="mt-1 truncate text-muted-foreground" title={attempt.chatRunId}>
-                Run {attempt.chatRunId}
+              <p className="mt-1 truncate text-muted-foreground" title={chatRunId}>
+                <Trans comment="Id of the chat run a task attempt ran in">실행 {chatRunId}</Trans>
               </p>
               {attempt.resumedFromAttemptId && (
                 <p className="mt-1 text-muted-foreground">
@@ -219,18 +282,14 @@ function TaskDetail({ detail }: { detail: TraceTaskDetail | null }) {
             {detail.artifacts.map((artifact) => (
               <li key={artifact.id} className="rounded-md border p-2 text-xs">
                 <div className="flex items-center gap-2">
-                  <span className="font-medium">Artifact · {artifact.kind}</span>
+                  <span className="font-medium">{t(artifactKindLabel[artifact.kind])}</span>
                   <Badge className="ml-auto" variant="secondary">
-                    {artifact.verification}
+                    {t(verificationLabel[artifact.verification])}
                   </Badge>
                 </div>
                 <p className="mt-1 text-muted-foreground">
-                  {artifact.mediaType ?? "metadata"}
-                  {artifact.verification === "source_deleted" && (
-                    <>
-                      {" · "}
-                      <Trans comment="Note after an artifact's media type">원본 삭제됨</Trans>
-                    </>
+                  {artifact.mediaType ?? (
+                    <Trans comment="An artifact whose media type is unknown">형식 정보 없음</Trans>
                   )}
                 </p>
                 <p className="mt-1 break-all font-mono text-muted-foreground">
@@ -253,13 +312,16 @@ function TaskDetail({ detail }: { detail: TraceTaskDetail | null }) {
         {detail.answerClaims.map((claim) => {
           const sources = claim.sources.length;
           const notifications = claim.notificationIds.length;
+          const messageId = claim.parentMessageId;
           return (
             <div key={claim.id} className="mt-2 rounded-md bg-muted/50 p-2 text-xs">
               <p className="font-medium">
-                <Trans>최종 답변 provenance</Trans>
+                <Trans>최종 답변의 출처</Trans>
               </p>
               <p className="mt-1 truncate font-mono text-muted-foreground">
-                Message {claim.parentMessageId}
+                <Trans comment="Id of the chat message a final answer was written in">
+                  메시지 {messageId}
+                </Trans>
               </p>
               <p className="mt-1 text-muted-foreground">
                 <Trans>
@@ -272,11 +334,11 @@ function TaskDetail({ detail }: { detail: TraceTaskDetail | null }) {
       </section>
       <section aria-labelledby="trace-memory">
         <h3 id="trace-memory" className="flex items-center gap-2 text-sm font-medium">
-          <CircleDotIcon className="size-4" aria-hidden /> <Trans>Decision과 Memory</Trans>
+          <CircleDotIcon className="size-4" aria-hidden /> <Trans>기억 저장</Trans>
         </h3>
         {(detail.memoryCandidates ?? []).length === 0 ? (
           <p className="mt-2 text-xs text-muted-foreground">
-            <Trans>이 작업에서 승격을 검토한 memory candidate가 없습니다.</Trans>
+            <Trans>이 작업에서 기억으로 저장할지 물은 내용이 없습니다.</Trans>
           </p>
         ) : (
           <ul className="mt-2 space-y-2">
@@ -290,10 +352,14 @@ function TaskDetail({ detail }: { detail: TraceTaskDetail | null }) {
               return (
                 <li key={candidate.id} className="rounded-md border p-2 text-xs">
                   <div className="flex items-center gap-2">
-                    <span className="font-medium">{candidate.disposition}</span>
+                    <span className="font-medium">
+                      {t(dispositionLabel[candidate.disposition])}
+                    </span>
                     <Badge className="ml-auto" variant="secondary">
                       {isTruthy(candidate.memoryNodeId) ? (
-                        "project memory"
+                        <Trans comment="Badge: the memory proposal was saved to project memory">
+                          프로젝트 기억
+                        </Trans>
                       ) : (
                         <Trans comment="Badge: the memory candidate was not saved to project memory">
                           저장 안 함
@@ -309,7 +375,7 @@ function TaskDetail({ detail }: { detail: TraceTaskDetail | null }) {
                   )}
                   <p className="mt-1 text-muted-foreground">
                     <Trans>
-                      채택된 evidence {evidence} · 조회 {retrieved} · 답변 사용 {used}
+                      근거 {evidence} · 조회 {retrieved} · 답변에 사용 {used}
                     </Trans>
                   </p>
                   {candidate.originSessionId === null && (
@@ -382,14 +448,14 @@ function PanelBody({
           variant={mode === "live" ? "secondary" : "ghost"}
           onClick={() => setMode("live")}
         >
-          Live
+          <Trans comment="Work Trace view mode: follow tasks as they change">실시간</Trans>
         </Button>
         <Button
           size="sm"
           variant={mode === "review" ? "secondary" : "ghost"}
           onClick={() => setMode("review")}
         >
-          Review
+          <Trans comment="Work Trace view mode: everything saved so far">전체 기록</Trans>
         </Button>
         <span
           className="ml-auto flex min-w-0 items-center justify-end gap-1 text-right text-xs text-muted-foreground"

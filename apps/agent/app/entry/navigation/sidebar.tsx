@@ -1172,7 +1172,7 @@ export function SessionSection({
             </AlertDialogTitle>
             <AlertDialogDescription>
               {deleteTitle === null ? "" : `${t`"${deleteTitle}" 대화의 원본을 지웁니다.`} `}
-              <Trans>채택된 project memory와 Work Trace provenance는 유지됩니다.</Trans>
+              <Trans>프로젝트 기억으로 채택된 내용과 그 출처 기록은 남습니다.</Trans>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

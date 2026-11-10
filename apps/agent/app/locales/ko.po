@@ -639,10 +639,6 @@ msgstr "CPU는 벡터를 만드는 동안 코어를 여럿 씁니다. GPU는 CPU
 msgid "CPU에서 실행 중"
 msgstr "CPU에서 실행 중"
 
-#: app/entry/chat/work-trace-panel.tsx
-msgid "Decision과 Memory"
-msgstr "Decision과 Memory"
-
 #: app/entry/settings/pages/skills.tsx
 msgid "description이 없어 쓰지 않습니다."
 msgstr "description이 없어 쓰지 않습니다."
@@ -1410,6 +1406,11 @@ msgstr "계정을 추가하고 계정마다 이름을 바꾸거나 로그아웃�
 msgid "고를 수 있는 값"
 msgstr "고를 수 있는 값"
 
+#. What the user decided for a memory proposal
+#: app/entry/chat/work-trace-panel.tsx
+msgid "고쳐서 저장함"
+msgstr "고쳐서 저장함"
+
 #. Dialog button: go on to revise the running Plan
 #: app/entry/chat/chat-panel.tsx
 msgid "고치기"
@@ -1542,6 +1543,10 @@ msgstr "그사이 카드가 옮겨졌습니다. 최신 보드를 다시 확인�
 msgid "그사이 카드의 대기열 상태가 바뀌었습니다. 최신 보드를 다시 확인해 주십시오."
 msgstr "그사이 카드의 대기열 상태가 바뀌었습니다. 최신 보드를 다시 확인해 주십시오."
 
+#: app/entry/chat/work-trace-panel.tsx
+msgid "근거 {evidence} · 조회 {retrieved} · 답변에 사용 {used}"
+msgstr "근거 {evidence} · 조회 {retrieved} · 답변에 사용 {used}"
+
 #: app/entry/settings/pages/embedding.tsx
 msgid "근거 연결 {repaired}개, 의미 연결 {suppressed}개, 불필요한 주제 {retired}개를 정리했습니다."
 msgstr "근거 연결 {repaired}개, 의미 연결 {suppressed}개, 불필요한 주제 {retired}개를 정리했습니다."
@@ -1633,6 +1638,10 @@ msgstr "기억 그래프 정리"
 #: app/entry/settings/shared.tsx
 msgid "기억 범위"
 msgstr "기억 범위"
+
+#: app/entry/chat/work-trace-panel.tsx
+msgid "기억 저장"
+msgstr "기억 저장"
 
 #: app/entry/settings/pages/imports.tsx
 msgid "기억 저장소에 쓰지 못했습니다"
@@ -2413,6 +2422,11 @@ msgstr "멈추는 중"
 msgid "멈출 답변이 없습니다."
 msgstr "멈출 답변이 없습니다."
 
+#. Id of the chat message a final answer was written in
+#: app/entry/chat/work-trace-panel.tsx
+msgid "메시지 {messageId}"
+msgstr "메시지 {messageId}"
+
 #: app/entry/chat/chat-panel.tsx
 msgid "메시지를 넣지 못했습니다. 다시 시도해 주십시오."
 msgstr "메시지를 넣지 못했습니다. 다시 시도해 주십시오."
@@ -2606,6 +2620,11 @@ msgstr "목록"
 #: app/entry/navigation/sidebar.tsx
 msgid "목록에서만 뺀 대화입니다. 기억 검색에는 계속 나옵니다."
 msgstr "목록에서만 뺀 대화입니다. 기억 검색에는 계속 나옵니다."
+
+#. Whether a task's result was checked, in Work Trace: it no longer holds
+#: app/entry/chat/work-trace-panel.tsx
+msgid "무효"
+msgstr "무효"
 
 #. Button that copies the improvement document
 #: app/entry/settings/pages/improvements.tsx
@@ -3092,8 +3111,8 @@ msgid "삭제 중"
 msgstr "삭제 중"
 
 #: app/entry/chat/work-trace-panel.tsx
-msgid "삭제된 대화 · project 기록 유지"
-msgstr "삭제된 대화 · project 기록 유지"
+msgid "삭제된 대화 · 프로젝트 기록 유지"
+msgstr "삭제된 대화 · 프로젝트 기록 유지"
 
 #. Status badge of a task in Work Trace
 #. Status badge on a subagent task card
@@ -3176,6 +3195,11 @@ msgstr "생각하는 중…"
 #: app/entry/chat/chat-composer.tsx
 msgid "생성된 이미지"
 msgstr "생성된 이미지"
+
+#. Kind of a result a task produced, in Work Trace: output the app stores itself
+#: app/entry/chat/work-trace-panel.tsx
+msgid "생성한 결과"
+msgstr "생성한 결과"
 
 #: app/entry/chat/board/board-surface.tsx
 msgid "서로 기다리는 Goal이 생겨서 지정할 수 없습니다."
@@ -3561,6 +3585,11 @@ msgstr "승인한 뒤 실행을 이어가지 못했습니다. 요청을 폐기�
 msgid "시간을 쓴 곳 (span 합계)"
 msgstr "시간을 쓴 곳 (span 합계)"
 
+#. One run of a task, by its number, in Work Trace
+#: app/entry/chat/work-trace-panel.tsx
+msgid "시도 {attemptNumber}"
+msgstr "시도 {attemptNumber}"
+
 #: app/entry/chat/decision-prompt.tsx
 msgid "시도를 모두 실패"
 msgstr "시도를 모두 실패"
@@ -3583,6 +3612,11 @@ msgstr "시작 중"
 #: app/entry/chat/board/board-surface.tsx
 msgid "시작하지 않은 카드만 보류할 수 있습니다."
 msgstr "시작하지 않은 카드만 보류할 수 있습니다."
+
+#. Label of the conversation that started a task, in Work Trace
+#: app/entry/chat/work-trace-panel.tsx
+msgid "시작한 대화"
+msgstr "시작한 대화"
 
 #: app/entry/settings/pages/embedding.tsx
 msgid "시험 임베딩을 하지 못했습니다."
@@ -3615,6 +3649,11 @@ msgstr "신뢰한 에이전트 목록에 없습니다: {agent}"
 #: app/entry/chat/slash-commands.ts
 msgid "신뢰한 에이전트를 골라 주십시오."
 msgstr "신뢰한 에이전트를 골라 주십시오."
+
+#. Work Trace view mode: follow tasks as they change
+#: app/entry/chat/work-trace-panel.tsx
+msgid "실시간"
+msgstr "실시간"
 
 #. Work Trace live connection status
 #: app/entry/chat/work-trace-panel.tsx
@@ -3661,6 +3700,11 @@ msgstr "실패해도 다시 시도하지 않습니다. 끄면 다음 호출부�
 #: app/entry/settings/settings-dialog.tsx
 msgid "실행"
 msgstr "실행"
+
+#. Id of the chat run a task attempt ran in
+#: app/entry/chat/work-trace-panel.tsx
+msgid "실행 {chatRunId}"
+msgstr "실행 {chatRunId}"
 
 #: app/entry/chat/uncertain-runs.tsx
 msgid "실행 결과를 받지 못함"
@@ -4169,6 +4213,11 @@ msgstr "완료된 카드는 옮길 수 없습니다."
 msgid "완료했거나 닫은 Plan은 바꿀 수 없습니다."
 msgstr "완료했거나 닫은 Plan은 바꿀 수 없습니다."
 
+#. Kind of a result a task produced, in Work Trace: something outside the app
+#: app/entry/chat/work-trace-panel.tsx
+msgid "외부 결과"
+msgstr "외부 결과"
+
 #. Kind of background job: a turn of an external coding agent
 #. Settings page name: outside ACP agents the conversation may delegate to
 #: app/entry/session/background-tasks.ts
@@ -4300,7 +4349,7 @@ msgstr "원본 대화 삭제됨 · 출처 기록 유지"
 msgid "원본 삭제"
 msgstr "원본 삭제"
 
-#. Note after an artifact's media type
+#. Whether a task's result was checked, in Work Trace
 #: app/entry/chat/work-trace-panel.tsx
 msgid "원본 삭제됨"
 msgstr "원본 삭제됨"
@@ -4446,6 +4495,11 @@ msgstr "이 대화로 아직 모델에 요청하지 않았습니다."
 msgid "이 대화를 쓸 수 있는지 확인하지 못했습니다"
 msgstr "이 대화를 쓸 수 있는지 확인하지 못했습니다"
 
+#. What the user decided for a memory proposal: keep it for this conversation only
+#: app/entry/chat/work-trace-panel.tsx
+msgid "이 대화에만"
+msgstr "이 대화에만"
+
 #: app/entry/chat/queue-panel.tsx
 msgid "이 메시지를 보내지 못했습니다. 보내기를 누르면 다시 보냅니다."
 msgstr "이 메시지를 보내지 못했습니다. 보내기를 누르면 다시 보냅니다."
@@ -4504,8 +4558,8 @@ msgid "이 작업 위치의 대화가 없습니다."
 msgstr "이 작업 위치의 대화가 없습니다."
 
 #: app/entry/chat/work-trace-panel.tsx
-msgid "이 작업에서 승격을 검토한 memory candidate가 없습니다."
-msgstr "이 작업에서 승격을 검토한 memory candidate가 없습니다."
+msgid "이 작업에서 기억으로 저장할지 물은 내용이 없습니다."
+msgstr "이 작업에서 기억으로 저장할지 물은 내용이 없습니다."
 
 #: app/entry/chat/chat-panel.tsx
 msgid "이 작업은 이미 실행 중입니다."
@@ -4781,6 +4835,11 @@ msgstr "일시 중지"
 msgid "읽는 중"
 msgstr "읽는 중"
 
+#. Whether a task's result was checked, in Work Trace
+#: app/entry/chat/work-trace-panel.tsx
+msgid "읽을 수 없음"
+msgstr "읽을 수 없음"
+
 #: app/entry/settings/pages/skills.tsx
 msgid "읽지 못했습니다."
 msgstr "읽지 못했습니다."
@@ -4894,6 +4953,11 @@ msgstr "작성 중"
 msgid "작성한 설명과 아래 증거 묶음의 요약(타임라인과 실패 주변 원문)을 선택한 모델에 보냅니다. 진단 없이도 제보할 수 있습니다."
 msgstr "작성한 설명과 아래 증거 묶음의 요약(타임라인과 실패 주변 원문)을 선택한 모델에 보냅니다. 진단 없이도 제보할 수 있습니다."
 
+#. Label of a task's id in a Work Trace task overview
+#: app/entry/chat/work-trace-panel.tsx
+msgid "작업 id"
+msgstr "작업 id"
+
 #: app/entry/chat/message.tsx
 msgid "작업 기록을 준비하는 중"
 msgstr "작업 기록을 준비하는 중"
@@ -4996,6 +5060,7 @@ msgid "저장"
 msgstr "저장"
 
 #. Badge: the memory candidate was not saved to project memory
+#. What the user decided for a memory proposal
 #: app/entry/chat/work-trace-panel.tsx
 msgid "저장 안 함"
 msgstr "저장 안 함"
@@ -5049,6 +5114,11 @@ msgstr "저장한 로그인 정보를 지웁니다. 이 서버를 다시 쓰려�
 msgid "저장할 때 기존 키 삭제"
 msgstr "저장할 때 기존 키 삭제"
 
+#. What the user decided for a memory proposal
+#: app/entry/chat/work-trace-panel.tsx
+msgid "저장함"
+msgstr "저장함"
+
 #. Queue row state: the message was not delivered
 #: app/entry/chat/queue-panel.tsx
 msgid "전달 실패"
@@ -5081,6 +5151,11 @@ msgstr "전체 권한으로 바꾸기"
 #: app/entry/navigation/sidebar.tsx
 msgid "전체 권한으로 바꿀까요?"
 msgstr "전체 권한으로 바꿀까요?"
+
+#. Work Trace view mode: everything saved so far
+#: app/entry/chat/work-trace-panel.tsx
+msgid "전체 기록"
+msgstr "전체 기록"
 
 #: app/entry/report/report-draft.tsx
 msgid "전체 내용: 첨부 context-agent-evidence.json (세션 #{session}, run {runs}/{runCount}개)"
@@ -5405,14 +5480,6 @@ msgstr "찾는 중입니다. 저장소 {repositoriesDone}/{repositoriesTotal} ·
 msgid "찾을 내용을 적어 주십시오."
 msgstr "찾을 내용을 적어 주십시오."
 
-#: app/entry/chat/work-trace-panel.tsx
-msgid "채택된 evidence {evidence} · 조회 {retrieved} · 답변 사용 {used}"
-msgstr "채택된 evidence {evidence} · 조회 {retrieved} · 답변 사용 {used}"
-
-#: app/entry/navigation/sidebar.tsx
-msgid "채택된 project memory와 Work Trace provenance는 유지됩니다."
-msgstr "채택된 project memory와 Work Trace provenance는 유지됩니다."
-
 #: app/routes/report.tsx
 msgid "채팅이나 실행이 멈춰도 여기서 증상을 기록할 수 있습니다. 이 화면은 제보를 자동으로 전송하지 않습니다. 직접 누를 때만 개발자 Discord 웹훅으로 보냅니다."
 msgstr "채팅이나 실행이 멈춰도 여기서 증상을 기록할 수 있습니다. 이 화면은 제보를 자동으로 전송하지 않습니다. 직접 누를 때만 개발자 Discord 웹훅으로 보냅니다."
@@ -5463,8 +5530,8 @@ msgid "최신 요청 불러오기"
 msgstr "최신 요청 불러오기"
 
 #: app/entry/chat/work-trace-panel.tsx
-msgid "최종 답변 provenance"
-msgstr "최종 답변 provenance"
+msgid "최종 답변의 출처"
+msgstr "최종 답변의 출처"
 
 #: app/entry/report/report-draft.tsx
 msgid "최종 제보 문안: 전송·복사·저장 전에 민감정보를 확인하고 편집해 주십시오."
@@ -5858,6 +5925,11 @@ msgstr "텍스트 파일 저장"
 msgid "통과"
 msgstr "통과"
 
+#. Kind of a result a task produced, in Work Trace
+#: app/entry/chat/work-trace-panel.tsx
+msgid "파일"
+msgstr "파일"
+
 #: app/entry/chat/message.tsx
 msgid "파일 내용 검색"
 msgstr "파일 내용 검색"
@@ -6058,6 +6130,15 @@ msgstr "프로젝트 개선"
 msgid "프로젝트 검색"
 msgstr "프로젝트 검색"
 
+#. Badge: the memory proposal was saved to project memory
+#: app/entry/chat/work-trace-panel.tsx
+msgid "프로젝트 기억"
+msgstr "프로젝트 기억"
+
+#: app/entry/navigation/sidebar.tsx
+msgid "프로젝트 기억으로 채택된 내용과 그 출처 기록은 남습니다."
+msgstr "프로젝트 기억으로 채택된 내용과 그 출처 기록은 남습니다."
+
 #: app/entry/index.tsx
 msgid "프로젝트 목록을 불러오지 못했습니다"
 msgstr "프로젝트 목록을 불러오지 못했습니다"
@@ -6204,6 +6285,11 @@ msgstr "현재 Goal과 Plan 상태 보기"
 msgid "현재 브랜치로 바꾸기"
 msgstr "현재 브랜치로 바꾸기"
 
+#. An artifact whose media type is unknown
+#: app/entry/chat/work-trace-panel.tsx
+msgid "형식 정보 없음"
+msgstr "형식 정보 없음"
+
 #. status is the HTTP status code, or 0 when no response arrived
 #: app/entry/navigation/compatible-client.ts
 msgid "호환 공급자 요청에 실패했습니다 ({status})."
@@ -6225,6 +6311,11 @@ msgstr "화면 테마: {label}"
 #: app/entry/chat/outcome-checklist.tsx
 msgid "확인 대기"
 msgstr "확인 대기"
+
+#. Whether a task's result was checked, in Work Trace
+#: app/entry/chat/work-trace-panel.tsx
+msgid "확인 전"
+msgstr "확인 전"
 
 #. Account connection status: still being checked
 #: app/entry/navigation/account-model-panel.tsx
@@ -6257,6 +6348,11 @@ msgstr "확인 필요 카드 {waiting}"
 #: app/entry/chat/queue-panel.tsx
 msgid "확인 필요, 편집 저장 안 됨"
 msgstr "확인 필요, 편집 저장 안 됨"
+
+#. Whether a task's result was checked, in Work Trace
+#: app/entry/chat/work-trace-panel.tsx
+msgid "확인됨"
+msgstr "확인됨"
 
 #: app/entry/settings/pages/embedding.tsx
 msgid "확인하는 중입니다. 처음 확인할 때는 GPU용 모델(약 570MB)을 내려받습니다."
