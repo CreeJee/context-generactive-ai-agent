@@ -26,14 +26,16 @@ function useRunStateBody(sessionId: string, holder: string, generating: boolean,
   const workflowMutation = useWorkflowMutation(projectId, sessionId, holder);
   const query = useRunStateQuery(projectId, sessionId, holder);
   const state = query.data ?? null;
-  const [cancelPending, setCancelPending] = useState(false);
+  /** The run a cancel was asked for that had not stopped when the server answered. */
+  const [cancelAsked, setCancelAsked] = useState<string | null>(null);
+  // Asked to stop until the run state no longer shows that run going, however it learns so.
+  const cancelPending = cancelAsked !== null && state?.running?.runId === cancelAsked;
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const refresh = () =>
     runUiEffect(
       Effect.gen(function* () {
         const result = yield* uiPromise(() => query.refetch());
-        if (result.data?.running === null) setCancelPending(false);
         if (!isTruthy(result.data))
           return yield* new Cause.UnknownError(new Error("Run state refresh returned no snapshot"));
         return result.data;
@@ -45,17 +47,15 @@ function useRunStateBody(sessionId: string, holder: string, generating: boolean,
     runUiEffect(
       uiPromise(() => cancelMutation.mutateAsync()).pipe(
         Effect.map((result) => {
-          setCancelPending(!result.stopped);
+          setCancelAsked(result.stopped ? null : result.runId);
           return "requested" as const;
         }),
         Effect.catchTag("UnknownError", (failure) =>
-          Effect.sync(() => {
-            if (isApiError(failure.cause) && failure.cause.code === "no_running_run") {
-              setCancelPending(false);
-              return "idle" as const;
-            }
-            return "failed" as const;
-          }),
+          Effect.sync(() =>
+            isApiError(failure.cause) && failure.cause.code === "no_running_run"
+              ? ("idle" as const)
+              : ("failed" as const),
+          ),
         ),
       ),
     );

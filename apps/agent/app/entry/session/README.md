@@ -45,7 +45,7 @@
 - 탭이 다시 보일 때는 이 탭이 그 뒤로 입력하지 않은 draft만 저장값으로 바꾼다. 빈 draft는 입력하지 않은 것으로 본다. 그래서 다른 탭이 보낸 글은 사라지고, 보내고 비운 탭은 다른 탭이 쓴 글을 받는다
 - 예전 키 `context-agent-session-drafts`(세션별 Record)는 읽을 때 세션별 키로 옮기고 지운다. 세션별 키에 이미 값이 있으면 덮지 않는다
 - `noticeOf`에서 `serverRestartedCode` 오류 검사를 `lastRun.status` switch보다 먼저 한다. restart는 오류로 기록되고 status는 나중에 바뀔 수 있기 때문이다
-- `useRunState.notice`의 우선순위는 `cancelPending`, `generating`(null), `noticeOf(state, page)` 순서다
+- `useRunState.notice`의 우선순위는 `cancelPending`, `generating`(null), `noticeOf(state, page)` 순서다. `cancelPending`은 멈추기를 요청했지만 멈추지 않았던 run이 run 상태에 아직 진행 중으로 보일 때만 참이다(쿼리 데이터에서 계산한다)
 - `failureLabel`의 reason 매핑은 `Match.tagsExhaustive`로, stage 매핑은 `Record<AttemptFailureStage, string>`로 둔다. memory-agent에 새 태그나 stage가 생기면 여기도 바꿔야 한다
 - `useWorkTrace`의 refresh는 `refreshing`/`dirty` 플래그로 invalidate를 한 번에 하나만 돌리고, 도중에 들어온 변경은 루프에서 다시 반영한다. 언마운트할 때 `active = false`로 두고 fiber를 interrupt한다
 - 문서가 hidden이면 EventSource를 닫고 `connecting`으로 둔다. 다시 보이면 trace 쿼리를 invalidate한 뒤 cursor로 다시 연결한다
