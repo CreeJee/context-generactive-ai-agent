@@ -33,7 +33,7 @@ memory-agent의 임베딩 계층이다. 모델 표(`models.ts`)에서 고른 로
 - `nativeVectorIndexLayer` — 유일한 프로덕션 백엔드 Layer(`native-vector-index.ts`). 네이티브 소유자(`NativeOwner`)와 그 소유자의 세대 게이트(`NativePublication`)를 Layer로 열어 yield하고, 시작 시 제거 저널과 예약 chunk를 정리한다. NodeCrypto·NodePath를 공급하고 `StorageRoot`·`SqlClient`·`Embedder`를 요구한다
 - `Indexer` / `Indexer.layer` — nodes 테이블과 벡터 색인을 맞춘다. `pending`, `indexBatch`, `indexAll`, `exclusive`, lexical 기록 반영 `lexicalBatch`/`lexicalAll`/`lexicalUpTo`, budget 제한 색인 메서드를 제공한다
 - `IndexingError` — `reason: read-failed | revalidation-failed | mapping-commit-failed`
-- `EmbeddingSetup` / `EmbeddingSetup.layer` / `GpuState` — 설정 화면용 서비스와 `EmbeddingOverview["gpu"]`의 `Data.taggedEnum` 생성자. 앱 API settings group(`apps/agent/app/.server/api/settings.ts`)이 사용한다. layer를 만들 때 lexical 기록 반영(`lexicalAll`, 임베더와 무관)과 로컬 임베더의 벡터 backfill(`indexAll`)을 layer Scope에 fork한다
+- `EmbeddingSetup` / `EmbeddingSetup.layer` / `GpuState` — 설정 화면용 서비스와 `EmbeddingOverview["gpu"]`의 `Data.taggedEnum` 생성자. 앱 API settings group(`apps/agent/app/.server/api/settings.ts`)이 사용한다. layer를 만들 때 lexical 기록 반영(`lexicalAll`, 임베더와 무관)과, 로컬 임베더의 모델 적재(준비 입력 하나를 임베딩해 첫 메시지의 검색이 적재를 기다리지 않게 한다)에 이은 벡터 backfill(`indexAll`)을 layer Scope에 fork한다
 - `EmbeddingOverview` — 설정 화면 개요 Schema(choice, running, next, gpu, unindexed, downloads, maintenance)(`contracts.ts`). 서버 코드를 import하지 않아 앱 API 계약과 브라우저가 쓴다
 - 하위 디렉터리 없음
 

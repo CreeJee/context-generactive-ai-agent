@@ -15,6 +15,7 @@ import {
 import { MemoryGraphMaintenance } from "../maintenance.ts";
 import { ModelDownloads } from "./downloads.ts";
 import { Indexer } from "./indexer.ts";
+import { memoryPrompts } from "../prompts.ts";
 
 /** Whether WebGPU was found to work here, or is being checked now (`contracts.ts`). */
 export type GpuState = EmbeddingOverview["gpu"];
@@ -73,11 +74,15 @@ const make = Effect.gen(function* () {
     ),
     layerScope,
   );
-  // A changed chunk identity must rebuild existing conversations even when no new import or
-  // chat arrives. The service Scope owns the drain; failed nodes remain pending for the next run.
+  // The model loads here, not in the first message's search: loading it (and on a first start,
+  // downloading it) took seconds there. A changed chunk identity must rebuild existing
+  // conversations even when no new import or chat arrives. The service Scope owns the drain;
+  // failed nodes remain pending for the next run.
   yield* Effect.when(
     Effect.forkIn(
-      indexer.indexAll().pipe(
+      embedder.embed([memoryPrompts.warmUp], "query").pipe(
+        Effect.catch(logFailure("memory_embedder_warm_up_failed")),
+        Effect.andThen(indexer.indexAll()),
         Effect.catchTags({
           EmbeddingError: logFailure("memory_backfill_embedding_failed"),
           VectorIndexError: logFailure("memory_backfill_vector_failed"),
