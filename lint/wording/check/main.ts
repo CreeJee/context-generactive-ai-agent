@@ -31,7 +31,7 @@ const matchesAny = (file: string, globs: ReadonlyArray<string>) =>
 const messagesOf = Effect.fnUntraced(function* (file: string) {
   const fs = yield* FileSystem.FileSystem;
   if (matchesAny(file, wordingCatalogs)) {
-    return yield* catalogMessages(file, yield* fs.readFileString(file));
+    return catalogMessages(file, yield* fs.readFileString(file));
   }
   if (/\.tsx?$/.test(file) && matchesAny(file, wordingScope) && !matchesAny(file, wordingExempt)) {
     return yield* sourceMessages(file, yield* fs.readFileString(file));

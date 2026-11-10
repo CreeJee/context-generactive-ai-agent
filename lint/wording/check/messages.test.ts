@@ -16,23 +16,29 @@ msgid "저장했습니다."
 msgstr "저장했어요!"
 
 #: app/entry/d.tsx
+msgid "긴 문구입니다."
+msgstr ""
+"긴 문구를 "
+"\\"고쳤어요\\"."
+
+#: app/entry/e.tsx
 msgid "Open"
 msgstr "Open"
 
 #~ msgid "지난 문구입니다."
-#~ msgstr "지난 문구입니다."
+#~ msgstr "지난 문구를 고쳤어요."
 `;
 
 describe("catalogMessages", () => {
-  it("reads what the app shows, skipping obsolete and non-Korean entries", async () => {
-    const messages = await Effect.runPromise(catalogMessages("app/locales/ko.po", catalog));
-    expect(messages).toEqual([
+  it("reads only translations that differ from the source text, at their msgstr line", () => {
+    expect(catalogMessages("app/locales/ko.po", catalog)).toEqual([
+      { text: "저장했어요!", where: "app/locales/ko.po:11:1", line: 11, column: 0 },
       {
-        text: "X개를 지웠습니다. 되돌리기",
-        where: "app/locales/ko.po (app/entry/a.tsx, app/entry/b.tsx)",
+        text: '긴 문구를 "고쳤어요".',
+        where: "app/locales/ko.po:15:1",
+        line: 15,
+        column: 0,
       },
-      // The translation, not the source text, is what the screen shows.
-      { text: "저장했어요!", where: "app/locales/ko.po (app/entry/c.tsx)" },
     ]);
   });
 });

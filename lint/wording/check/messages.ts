@@ -1,17 +1,15 @@
-import { parsePoFile } from "@lingui/format-po";
 import { extractMessages } from "@lingui/native-tools";
-import { Array as Arr, Effect, Option, Result, Schema } from "effect";
+import { Array as Arr, Effect, Result, Schema } from "effect";
 
 import { linguiCoreMacroModules, linguiJsxMacroModules } from "../policy.ts";
 
-/** One Lingui message as the wording check reads it, and where a finding should point. */
+/**
+ * One Lingui message as the wording check reads it, and where a finding should point: `where` as
+ * `file:line:column` for people, `line` (from 1) and `column` (from 0) for lint locations.
+ */
 export interface Message {
   readonly text: string;
   readonly where: string;
-}
-
-/** A message in a source file, with where its macro starts (line from 1, column from 0). */
-export interface SourceMessage extends Message {
   readonly line: number;
   readonly column: number;
 }
@@ -47,29 +45,52 @@ const withHangul = <Place extends Omit<Message, "text">>(
 ): Result.Result<Place & Message, void> =>
   hangul.test(text) ? Result.succeed({ ...place, text: plainText(text) }) : Result.failVoid;
 
+/** A PO string line (`msgid "…"`, `msgstr "…"` or a continuation `"…"`) and its quoted text. */
+const poString = /^(?:msgid |msgstr |msgctxt )?(".*")$/u;
+
+/** The text a run of PO string lines spells; PO escapes are JSON's for what `lingui extract` writes. */
+const poText = (lines: ReadonlyArray<string>): string =>
+  Arr.map(lines, (line) => {
+    const quoted = poString.exec(line)?.[1];
+    // SAFETY: `quoted` matched `".*"`, a double-quoted string with C-style escapes.
+    return quoted === undefined ? "" : (JSON.parse(quoted) as string);
+  }).join("");
+
+/** The lines of a field: its keyword line and the continuation lines after it. */
+const fieldLines = (lines: ReadonlyArray<string>, at: number): ReadonlyArray<string> => {
+  const rest = lines.slice(at + 1);
+  const end = rest.findIndex((line) => !line.startsWith('"'));
+  return [lines[at] ?? "", ...(end === -1 ? rest : rest.slice(0, end))];
+};
+
 /**
- * The messages of a Lingui catalog that `lingui extract` wrote. Each reads as what the app shows:
- * the translation (`msgstr`), or the source text where the translation is empty. Obsolete entries
- * are skipped. A finding points at the catalog and the source files the message comes from.
+ * The messages of a Lingui catalog whose translation (`msgstr`) differs from its source text: the
+ * screen shows the translation, and the lint rule `wording/content` already checks the source text
+ * where it is written. A finding points at the `msgstr` line in the catalog. The header and obsolete
+ * (`#~`) entries are skipped.
  */
-export const catalogMessages = Effect.fnUntraced(function* (file: string, source: string) {
-  const catalog = yield* Effect.try({
-    try: () => parsePoFile(source),
-    catch: (cause) => new MessagesUnreadable({ file, message: String(cause) }),
-  });
-  return Arr.filterMap(catalog.items, (item) =>
-    item.obsolete
-      ? Result.failVoid
-      : withHangul(
-          Option.getOrElse(
-            Arr.findFirst(item.msgstr, (text) => text !== ""),
-            () => item.msgid,
-          ),
-          // A `#:` line lists its origins separated by spaces.
-          { where: `${file} (${item.references.flatMap((line) => line.split(" ")).join(", ")})` },
-        ),
+export function catalogMessages(file: string, source: string): ReadonlyArray<Message> {
+  const lines = source.split("\n");
+  // An entry starts at a non-blank line after a blank one (or the first line).
+  const starts = Arr.filterMap(lines, (line, index) =>
+    line !== "" && (index === 0 || lines[index - 1] === "")
+      ? Result.succeed(index)
+      : Result.failVoid,
   );
-});
+  return Arr.filterMap(starts, (start) => {
+    const rest = lines.slice(start);
+    const blank = rest.indexOf("");
+    const entry = blank === -1 ? rest : rest.slice(0, blank);
+    const msgid = entry.findIndex((line) => line.startsWith("msgid "));
+    const msgstr = entry.findIndex((line) => line.startsWith("msgstr "));
+    if (msgid === -1 || msgstr === -1) return Result.failVoid;
+    const original = poText(fieldLines(entry, msgid));
+    const translation = poText(fieldLines(entry, msgstr));
+    if (original === "" || translation === "" || translation === original) return Result.failVoid;
+    const line = start + msgstr + 1;
+    return withHangul(translation, { where: `${file}:${line}:1`, line, column: 0 });
+  });
+}
 
 /**
  * The messages a source file declares, read with the extractor `lingui extract` uses but without
@@ -78,7 +99,7 @@ export const catalogMessages = Effect.fnUntraced(function* (file: string, source
 export const sourceMessages = Effect.fnUntraced(function* (
   file: string,
   source: string,
-): Effect.fn.Return<ReadonlyArray<SourceMessage>, MessagesUnreadable> {
+): Effect.fn.Return<ReadonlyArray<Message>, MessagesUnreadable> {
   const extracted = yield* Effect.tryPromise({
     try: () =>
       extractMessages(source, file, {

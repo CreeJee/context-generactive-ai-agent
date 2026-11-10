@@ -9,7 +9,6 @@ import { Array as Arr, Effect } from "effect";
 import { checkMessages } from "./check.ts";
 import type { Finding } from "./check.ts";
 import { sourceMessages } from "./messages.ts";
-import type { SourceMessage } from "./messages.ts";
 import { Morphemes, morphemesLive } from "./morphemes.ts";
 
 /** A file the rule asks about. */
@@ -20,7 +19,7 @@ export interface CheckRequest {
 
 /** What the worker answers: the findings, or why the file could not be checked. */
 export type CheckReply =
-  | { readonly _tag: "Checked"; readonly findings: ReadonlyArray<Finding<SourceMessage>> }
+  | { readonly _tag: "Checked"; readonly findings: ReadonlyArray<Finding> }
   | { readonly _tag: "Unchecked"; readonly reason: string };
 
 /** What the rule hands the worker when it starts it. */
@@ -43,7 +42,7 @@ const check = ({ file, source }: CheckRequest) =>
   sourceMessages(file, source).pipe(
     Effect.flatMap((messages) =>
       Arr.isReadonlyArrayEmpty(messages)
-        ? Effect.succeed(Arr.empty<Finding<SourceMessage>>())
+        ? Effect.succeed(Arr.empty<Finding>())
         : Effect.provideServiceEffect(checkMessages(messages), Morphemes, morphemes),
     ),
     Effect.map((findings): CheckReply => ({ _tag: "Checked", findings })),

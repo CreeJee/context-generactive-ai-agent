@@ -8,7 +8,7 @@
 - **어디에 두는지**: 공식 `eslint-plugin-lingui`를 Oxlint JS 플러그인으로 불러 지킨다. 루트 `vite.config.ts`가 `policy.ts`의 `wordingScope`에 권장 규칙과 `no-unlocalized-strings`를 켜고, `wordingExempt`에서 끈다. 앱은 한국어만 쓰므로 한글이 없는 문자열은 문구가 아니다(`notWording`).
 - **카탈로그가 소스와 맞는지**: 각 패키지의 `i18n:check` 작업(`lingui check sync --clean`)이 본다. 커밋 hook이 돌린다.
 - **무엇을 말하는지**: Oxlint JS 플러그인 `wording`(`index.ts`)의 규칙 `wording/content`가 메시지의 금지 표현, 용어집, 말투를 Kiwi(`kiwi-nlp`) 형태소 분석으로 결정론적으로 검사한다. 에디터, `vp lint`, `vp check`(커밋 hook 포함)에서 lint 오류로 나온다. 범위는 위 공식 규칙과 같다.
-- **카탈로그와 Claude 편집**: oxlint가 읽지 못하는 카탈로그(`.po`)의 화면 문구(`msgstr`)는 개발용 CLI `check/main.ts`(명령 이름 `wording-check`)가 커밋 hook(`*.po`)에서 같은 규칙으로 검사한다. Claude Code PostToolUse hook(`.claude/settings.json`)도 이 CLI로 고친 파일을 바로 검사해 에이전트에게 돌려준다.
+- **카탈로그와 Claude 편집**: oxlint가 읽지 못하는 카탈로그(`.po`)에서 번역(`msgstr`)을 원문과 다르게 고친 항목은 개발용 CLI `check/main.ts`(명령 이름 `wording-check`)가 커밋 hook(`*.po`)에서 같은 규칙으로 검사하고 `msgstr` 줄을 가리킨다. 원문과 같은 번역은 소스에서 lint가 이미 본다. Claude Code PostToolUse hook(`.claude/settings.json`)도 이 CLI로 고친 파일을 바로 검사해 에이전트에게 돌려준다.
 
 ## Interface
 
@@ -17,10 +17,10 @@
   - 내용: `phraseRules`(금지 표현), `glossary`(용어집), `registers`(문장 종류별 말투), `finalEndingTag`, `sentenceStopTags`
 - `wording/content` (`rules/content.ts`의 `contentRule`) — Lingui 매크로 모듈을 import한 파일의 메시지를 검사해, 위반마다 메시지 위치에 `"문구": 메시지 [규칙]`을 보고한다. 검사할 수 없으면(모델을 받지 못함 등) 파일 첫머리에 `unchecked`를 보고한다.
 - `checkSource(request)` (`rules/checker.ts`) — oxlint 규칙은 동기로 답해야 하므로, 처음 쓸 때 `check/worker.ts`를 worker thread로 띄우고 파일을 넘긴 뒤 `Atomics.wait`로 답을 기다린다. 메시지 추출과 Kiwi는 worker에서 돈다. 한 파일에 5분을 넘기면 `Unchecked`를 돌려준다.
-- `wording-check check <file...>` — `wordingCatalogs`의 카탈로그(`.po`)는 메시지마다, `wordingScope` 안의 소스 파일은 그 파일이 선언한 메시지를 검사한다. 나머지 파일은 건너뛴다. 위반을 `위치 "문구" [규칙] 메시지`로 stderr에 쓰고, 하나라도 있으면 `WordingViolations`로 실패해 종료 코드 1을 낸다.
+- `wording-check check <file...>` — `wordingCatalogs`의 카탈로그(`.po`)는 원문과 다른 번역을, `wordingScope` 안의 소스 파일은 그 파일이 선언한 메시지를 검사한다. 나머지 파일은 건너뛴다. 위반을 `파일:줄:열 "문구" [규칙] 메시지`로 stderr에 쓰고, 하나라도 있으면 `WordingViolations`로 실패해 종료 코드 1을 낸다.
 - `wording-check hook` — Claude Code PostToolUse hook. stdin에서 `tool_input.file_path`를 읽어 그 파일을 검사하고, 위반이 있으면 `{"decision":"block","reason":…}`를 stdout에 써 에이전트에게 돌려준다. 추출 전이라도 고친 소스의 메시지를 바로 본다.
 - `check/messages.ts`
-  - `catalogMessages(file, source)` — `@lingui/format-po`의 `parsePoFile`로 카탈로그를 읽는다. 화면에 나오는 번역(`msgstr`, 비었으면 원문)을 읽고 폐기된 항목은 건너뛴다.
+  - `catalogMessages(file, source)` — 카탈로그를 줄 단위로 읽어 번역(`msgstr`)이 원문(`msgid`)과 다른 항목만 `msgstr` 줄 위치와 함께 돌려준다. 공식 파서는 줄 위치를 주지 않아 직접 읽는다. 머리 항목, 빈 번역, 폐기된 항목(`#~`)은 건너뛰고, `lingui extract`가 쓰는 이스케이프만 푼다.
   - `sourceMessages(file, source)` — `lingui extract`가 쓰는 네이티브 추출기(`@lingui/native-tools`의 `extractMessages`)로 소스 파일의 메시지를 읽는다. 카탈로그는 쓰지 않는다.
   - 둘 다 `{name}` 인자를 `X`로 읽고 `<0>` 태그를 뺀다.
 - `check/check.ts`의 순수 함수 `phraseViolations`, `glossaryViolations`, `endingViolations`와, Kiwi를 쓰는 `checkMessages`
