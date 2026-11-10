@@ -122,7 +122,11 @@ function ConcurrencyField() {
             onChange={(event) => setDraft(event.target.value)}
             className="w-24"
           />
-          <Button type="submit" disabled={busy || value === null || value === settings.configured}>
+          {/* Unchanged is the number shown, which is the device default when none is saved. */}
+          <Button
+            type="submit"
+            disabled={busy || value === null || value === (settings.configured ?? effective)}
+          >
             {busy && <Spinner />} <Trans comment="Button that saves a settings field">저장</Trans>
           </Button>
           <Button
