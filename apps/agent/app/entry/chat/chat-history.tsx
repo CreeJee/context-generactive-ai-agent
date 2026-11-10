@@ -20,6 +20,7 @@ import {
 } from "~/components/ui/message-scroller";
 import { cn } from "cn";
 import type { ChatMessage } from "memory-agent/chat-api";
+import { chatCopy } from "./copy";
 
 /** How close to the bottom, in pixels, still counts as reading the newest message. */
 const followDistance = 120;
@@ -94,7 +95,7 @@ export function ChatHistory({
   return (
     <MessageScrollerProvider autoScroll scrollEdgeThreshold={followDistance}>
       <MessageScroller className="flex-1">
-        <MessageScrollerViewport ref={viewport} aria-label="대화">
+        <MessageScrollerViewport ref={viewport} aria-label={chatCopy.chatHistory.label}>
           <div ref={topSentinel} aria-hidden className="absolute top-0 h-px w-full" />
           {/* Every child is a scroller item: the first message must come first, so the
               scroller can tell an older page was inserted above it. */}
@@ -107,10 +108,8 @@ export function ChatHistory({
                   <EmptyMedia variant="icon">
                     <MessageSquareIcon />
                   </EmptyMedia>
-                  <EmptyTitle>새 대화</EmptyTitle>
-                  <EmptyDescription>
-                    이전 세션과 다른 프로젝트에서 나눈 대화도 기억해서 답해요.
-                  </EmptyDescription>
+                  <EmptyTitle>{chatCopy.chatHistory.emptyTitle}</EmptyTitle>
+                  <EmptyDescription>{chatCopy.chatHistory.emptyDescription}</EmptyDescription>
                 </EmptyHeader>
               </Empty>
             )}
@@ -129,12 +128,12 @@ export function ChatHistory({
             className="absolute top-2 left-1/2 -translate-x-1/2"
             onClick={() => void loadPreviousMessages(true)}
           >
-            이전 메시지를 불러오지 못했어요. 다시 시도
+            {chatCopy.chatHistory.olderLoadFailed}
           </Button>
         )}
         <MessageScrollerButton>
           <ArrowDownIcon />
-          <span className="sr-only">맨 아래로</span>
+          <span className="sr-only">{chatCopy.chatHistory.scrollToBottom}</span>
         </MessageScrollerButton>
       </MessageScroller>
     </MessageScrollerProvider>

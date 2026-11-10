@@ -9,23 +9,15 @@ import {
   SendIcon,
   XIcon,
 } from "lucide-react";
-import { type DeliveryVia, type QueuedMessage, QueueItemState } from "memory-agent/definitions";
+import { type QueuedMessage, QueueItemState } from "memory-agent/definitions";
 import { Button } from "~/components/ui/button";
 import { Kbd, KbdGroup } from "~/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
 import { cn } from "~/lib/utils";
 import { isPending } from "../session/message-queue";
+import { chatCopy } from "./copy";
 
-const deliveryLabel = (via: DeliveryVia) => {
-  switch (via) {
-    case "tool_boundary":
-      return "도구 호출 뒤 전달됨";
-    case "steer":
-      return "스티어링으로 전달됨";
-    case "next_turn":
-      return "다음 턴으로 전달됨";
-  }
-};
+const copy = chatCopy.queuePanel;
 
 /** Icon, colour and short label for each state; delivery says only "delivered", never "done". */
 function stateView(message: QueuedMessage, editingHere: boolean) {
@@ -33,24 +25,24 @@ function stateView(message: QueuedMessage, editingHere: boolean) {
     waiting: ({ steered }) => ({
       icon: Clock3Icon,
       tone: "text-muted-foreground",
-      label: steered ? "끼어들기" : null,
+      label: steered ? copy.steered : null,
     }),
     editing: () => ({
       icon: PencilLineIcon,
       tone: "text-primary",
-      label: editingHere ? "편집 중" : "편집 중, 저장 안 됨",
+      label: editingHere ? copy.editingHere : copy.editingElsewhere,
     }),
     held: ({ draft }) => ({
       icon: CircleAlertIcon,
       tone: "text-amber-600 dark:text-amber-400",
-      label: draft === null ? "확인 필요" : "확인 필요, 편집 저장 안 됨",
+      label: draft === null ? copy.held : copy.heldWithDraft,
     }),
     delivered: ({ via }) => ({
       icon: CheckIcon,
       tone: "text-muted-foreground",
-      label: deliveryLabel(via),
+      label: copy.delivery[via],
     }),
-    failed: () => ({ icon: CircleXIcon, tone: "text-destructive", label: "전달 실패" }),
+    failed: () => ({ icon: CircleXIcon, tone: "text-destructive", label: copy.failed }),
   });
 }
 
@@ -112,14 +104,14 @@ export function QueuePanel({
   return (
     <div className="flex w-full flex-col border-b">
       <div className="flex items-center justify-between px-3 pt-2 pb-1 text-2xs text-muted-foreground">
-        <span className="font-medium">보낼 메시지 {shown.length}개</span>
+        <span className="font-medium">{copy.heading(shown.length)}</span>
         {!busy && (
           <span className="flex items-center gap-1">
             <KbdGroup>
               <Kbd>⌥</Kbd>
               <Kbd>↑</Kbd>
             </KbdGroup>
-            편집
+            {copy.editShortcut}
           </span>
         )}
       </div>
@@ -139,7 +131,7 @@ export function QueuePanel({
             >
               <Icon className={cn("size-3.5 shrink-0", view.tone)} />
               <span className="min-w-0 flex-1 truncate">
-                {message.text || "이미지"}
+                {message.text || copy.imageOnly}
                 {message.attachmentIds.length > 0 && (
                   <span className="ml-1.5 inline-flex translate-y-px items-center gap-0.5 text-xs text-muted-foreground">
                     <ImageIcon className="size-3" />
@@ -158,18 +150,22 @@ export function QueuePanel({
                   onClick={() => onConfirm(message)}
                 >
                   <SendIcon />
-                  보내기
+                  {copy.send}
                 </Button>
               )}
               {!editingHere && (
                 // Row actions stay out of the way until the row is hovered or focused.
                 <div className="flex shrink-0 items-center opacity-0 transition-opacity group-focus-within/row:opacity-100 group-hover/row:opacity-100">
                   {!failed && (
-                    <RowAction label="편집" disabled={busy} onClick={() => onEdit(message)}>
+                    <RowAction label={copy.edit} disabled={busy} onClick={() => onEdit(message)}>
                       <PencilIcon />
                     </RowAction>
                   )}
-                  <RowAction label="지우기" disabled={readOnly} onClick={() => onRemove(message)}>
+                  <RowAction
+                    label={copy.remove}
+                    disabled={readOnly}
+                    onClick={() => onRemove(message)}
+                  >
                     <XIcon />
                   </RowAction>
                 </div>

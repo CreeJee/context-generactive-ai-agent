@@ -12,6 +12,7 @@ import {
 import { Spinner } from "~/components/ui/spinner";
 import { ToggleGroup, ToggleGroupItem } from "~/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
+import { chatCopy } from "./copy";
 import { acceptedImageTypes, useDraftImages } from "./draft-images";
 import { DraftImageTray } from "./images";
 import { ComposerShortcuts, ComposerStatus, type ComposerMode } from "./composer-status";
@@ -23,6 +24,8 @@ import type { GeneratedImageAsset, ImageFeatureStatus, QueuedMessage, WorkflowMo
 import type { useRunState } from "../session/use-run-state";
 
 const workflowModes = ["chat", "goal", "plan"] as const satisfies readonly WorkflowMove[];
+
+const copy = chatCopy.composer;
 
 const imageFiles = (files: FileList | null) =>
   Array.from(files ?? []).filter((file) => file.type.startsWith("image/"));
@@ -169,28 +172,32 @@ export function ChatComposer({
         )}
         {generatingImage && (
           <div className="mb-2 rounded-lg border bg-muted/40 p-3 text-sm text-muted-foreground">
-            승인된 미디어 경로에서 이미지를 생성하고 있어요…
+            {copy.generatingImage}
           </div>
         )}
         {generatedImage && (
           <div className="mb-2 overflow-hidden rounded-lg border bg-card">
             <img
               src={generatedImage.url}
-              alt="생성된 이미지"
+              alt={copy.generatedAlt}
               className="max-h-96 w-full object-contain"
             />
             <div className="space-y-1 border-t p-3 text-xs text-muted-foreground">
               <div>
-                대화 모델: {generatedImage.initiatorChatModel} · 실행 경로:{" "}
-                {generatedImage.executorMediaRouteId}
+                {copy.generatedRoute(
+                  generatedImage.initiatorChatModel,
+                  generatedImage.executorMediaRouteId,
+                )}
               </div>
               <div>
-                실행 방식: {generatedImage.executionMode}
+                {copy.executionMode(generatedImage.executionMode)}
                 {generatedImage.estimatedCostUsd === undefined
-                  ? " · 예상 비용 미확인"
-                  : ` · 예상 비용 $${generatedImage.estimatedCostUsd.toFixed(4)}`}
+                  ? copy.costUnknown
+                  : copy.cost(generatedImage.estimatedCostUsd.toFixed(4))}
               </div>
-              {generatedImage.usage && <div>사용량: {JSON.stringify(generatedImage.usage)}</div>}
+              {generatedImage.usage && (
+                <div>{copy.usage(JSON.stringify(generatedImage.usage))}</div>
+              )}
             </div>
           </div>
         )}
@@ -263,16 +270,16 @@ export function ChatComposer({
             }}
             placeholder={
               waitingForApproval
-                ? "위의 승인 요청에 먼저 답해 주세요"
+                ? copy.placeholders.approval
                 : editingId !== null
-                  ? "Enter를 누르면 고친 내용을 저장해요"
+                  ? copy.placeholders.editing
                   : generating
-                    ? "답변 중에도 이어서 보낼 수 있어요"
+                    ? copy.placeholders.generating
                     : run.workflow?.phase === "shaping" && run.workflow.mode === "goal"
-                      ? "달성할 결과를 입력하세요"
+                      ? copy.placeholders.goal
                       : run.workflow?.phase === "shaping"
-                        ? "변경 없이 조사해서 계획할 내용을 입력하세요"
-                        : "메시지를 입력하세요. /로 명령을 부르고, 이미지는 붙여넣거나 끌어다 놓아요"
+                        ? copy.placeholders.plan
+                        : copy.placeholders.idle
             }
             rows={1}
           />
@@ -283,7 +290,7 @@ export function ChatComposer({
                   <PromptInputButton
                     variant="ghost"
                     disabled={!imagesSupported || mutationBlocked || editingId !== null}
-                    aria-label="이미지 첨부"
+                    aria-label={copy.attachImage}
                     onClick={() => filePicker.current?.click()}
                   />
                 }
@@ -291,7 +298,7 @@ export function ChatComposer({
                 <ImagePlusIcon />
               </TooltipTrigger>
               <TooltipContent>
-                {imagesSupported ? "이미지 첨부" : "선택한 모델은 이미지를 읽지 못해요"}
+                {imagesSupported ? copy.attachImage : copy.imagesUnsupported}
               </TooltipContent>
             </Tooltip>
             {imageSettings && (
@@ -308,7 +315,7 @@ export function ChatComposer({
                         generatingImage ||
                         editingId !== null
                       }
-                      aria-label="이미지 생성 요청"
+                      aria-label={copy.imageIntent}
                       aria-pressed={imageIntent}
                       onClick={onToggleImageIntent}
                     />
@@ -319,15 +326,15 @@ export function ChatComposer({
                 <TooltipContent>
                   {imageSettings.imageGenerationEnabled
                     ? imageIntent
-                      ? "이미지 생성 모드 끄기"
-                      : "이번 요청에서만 이미지 생성"
-                    : "설정에서 이미지 생성을 먼저 켜세요"}
+                      ? copy.imageIntentOff
+                      : copy.imageIntentOn
+                    : copy.imageGenerationDisabled}
                 </TooltipContent>
               </Tooltip>
             )}
             <ComposerStatus mode={composerMode} />
             <ToggleGroup
-              aria-label="입력 방식"
+              aria-label={copy.modeGroup}
               variant="outline"
               size="sm"
               spacing={0}
@@ -350,13 +357,7 @@ export function ChatComposer({
                     generatingImage ||
                     editingId !== null
                   }
-                  title={
-                    mode === "goal"
-                      ? "결과를 맡기면 계획한 카드를 보드에서 바로 실행해요"
-                      : mode === "plan"
-                        ? "프로젝트를 변경하지 않고 계획을 만들고, 승인하면 보드에서 실행해요"
-                        : "일반 대화"
-                  }
+                  title={copy.modeTitles[mode]}
                 >
                   {modeLabels[mode]}
                 </ToggleGroupItem>
@@ -371,23 +372,21 @@ export function ChatComposer({
                       <PromptInputButton
                         variant="outline"
                         disabled={run.cancelling || mutationBlocked}
-                        aria-label={run.cancelling ? "멈추는 중" : "중지"}
+                        aria-label={run.cancelling ? copy.stopping : copy.stop}
                         onClick={onCancel}
                       />
                     }
                   >
                     {run.cancelling ? <Spinner /> : <SquareIcon className="fill-current" />}
                   </TooltipTrigger>
-                  <TooltipContent>
-                    {run.cancelling ? "멈추는 중" : "중지(입력창이 비었을 때 Esc)"}
-                  </TooltipContent>
+                  <TooltipContent>{run.cancelling ? copy.stopping : copy.stopHint}</TooltipContent>
                 </Tooltip>
               )}
               <PromptInputButton
                 type="submit"
                 variant="default"
                 disabled={editingId !== null ? mutationBlocked : !canSend}
-                aria-label={editingId !== null ? "저장" : generating ? "대기열에 넣기" : "전송"}
+                aria-label={editingId !== null ? copy.save : generating ? copy.queue : copy.send}
               >
                 {editingId !== null ? <CheckIcon /> : <ArrowUpIcon />}
               </PromptInputButton>

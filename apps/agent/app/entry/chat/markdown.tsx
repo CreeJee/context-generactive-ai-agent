@@ -7,6 +7,7 @@ import { Streamdown, type Components } from "streamdown";
 import "streamdown/styles.css";
 import { Button } from "~/components/ui/button";
 import { isTruthy } from "../../truthy.ts";
+import { chatCopy } from "./copy";
 
 /** The Shiki highlighter answers use; tool blocks share it so a language loads once. */
 export const codeHighlighter = createCodePlugin({
@@ -49,7 +50,7 @@ function AnswerImage({
     <Button variant="outline" size="sm" onClick={() => setShown(true)}>
       <ImageIcon />
       {isTruthy(alt) ? `${alt} · ` : ""}
-      {host}의 이미지 불러오기
+      {chatCopy.markdown.loadRemoteImage(host)}
     </Button>
   );
 }

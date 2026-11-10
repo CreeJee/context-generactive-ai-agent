@@ -23,13 +23,14 @@
 - `ApprovalCard` — 승인 대기 호출 하나를 보여 주는 카드다. props: `approval`, `disabled`, `requester`, `decision`, `onAnswer`. permission-review이고 `askedBy`가 review일 때만 검토 사유를 보인다
 - `ChatHistory` — 대화 기록 스크롤 영역이다. shadcn `MessageScroller` 위에 있어, 맨 아래에서 120px 안이면 새 내용을 따라 내려가고 아래로 가는 단추를 띄운다. 위쪽 200px 안으로 올라가면 이전 페이지를 불러오고, 위에 끼운 페이지가 읽던 자리를 밀지 않는다. 불러오기에 실패하면 위쪽에 다시 시도 단추를 띄운다. 메시지마다 `MessageScrollerItem`이고 `children`(패널·상태 표시)은 메시지 뒤에 온다
 - `MessageView`(memo) / `DeliveredMessageView` / `ResumeActionResult` / `ArchiveActionResult` / `DeleteActionResult` — 메시지 렌더링과 작업 추적 task 재개·보관·삭제 결과 TaggedEnum
-- `WorkflowBoard` / `BoardTally` / `OpenBoardButton` / `mergeStateLabel` / `cardStatusLabels` / `authorLabel` — 워크플로 바에 들어가는 보드 조각이다. `BoardTally`는 바의 한 줄에 카드 완료·outcome 충족 수와 판단 대기를, `OpenBoardButton`은 보드 버튼과 보드 시트(`?board=1`, 카드 peek는 `?card=…`)를 맡아 바를 접어도 보드가 열린다. `WorkflowBoard`는 펼친 바의 본문으로 칸반 루프 상태, outcome, 카드를 한 줄씩 보인다. 승인 전 Plan(draft·ready)의 카드는 Plan 순서로, 실행 중에는 판단 필요·막힘·진행 중이 앞에 온다. 카드 줄은 보드 peek를 여는 링크다. 뒤의 두 심볼은 `board/`에서 다시 내보낸다
+- `WorkflowBoard` / `BoardTally` / `OpenBoardButton` / `mergeStateLabel` / `authorLabel` — 워크플로 바에 들어가는 보드 조각이다. `BoardTally`는 바의 한 줄에 카드 완료·outcome 충족 수와 판단 대기를, `OpenBoardButton`은 보드 버튼과 보드 시트(`?board=1`, 카드 peek는 `?card=…`)를 맡아 바를 접어도 보드가 열린다. `WorkflowBoard`는 펼친 바의 본문으로 칸반 루프 상태, outcome, 카드를 한 줄씩 보인다. 승인 전 Plan(draft·ready)의 카드는 Plan 순서로, 실행 중에는 판단 필요·막힘·진행 중이 앞에 온다. 카드 줄은 보드 peek를 여는 링크다. `authorLabel`은 `board/`에서 다시 내보낸다
 - `OutcomeChecklist` / `metOutcomes` — Goal의 outcome마다 장부 상태(카드 없음·진행 중·확인 대기·충족·미충족)와 판정을 한 줄씩 보이는 목록. 충족 수가 Goal의 진척이다
 - `WorkflowRows` / `WorkflowRow` — 워크플로 바의 제목 달린 한 줄 목록과 그 줄이다. 줄은 24px 한 줄로 잘리고 전체 글은 `title`에 둔다. `render`로 링크가 되면 hover가 표시된다
 - `WorkflowArtifactPanel` / `stageLabels` / `modeLabels` / `composerModeOf` / `workflowModeLabel` / `goalStatusLabels` / `planStatusLabels` — 입력창 위의 워크플로 바와 라벨 표. 접으면 한 줄로 모드·단계(계획 중·실행 중·완료), Goal 문장, 보드 수치와 다음 동작(Plan 모드의 승인하고 실행, 일시 중지된 Goal의 계속, 보드)을 보이고, 서버 알림은 그 아래 한 줄씩 붙는다. 펼치면 안내, Goal·Plan 요약, 보드, Plan의 열린 질문과 위험을 제 높이(최대 24rem·40dvh) 안에서 스크롤하고, 바닥에 Plan 수정·일시 중지·중단을 둔다. 승인 전 Plan은 펼친 채로 열리고 Plan 버전이 바뀌면 다시 펼친다. 펼침 영역은 접혀도 마운트된 채라 동작 버튼이 늘 있다
 - `DecisionPrompt` / `describeDecision` — 결정 요청 프롬프트와 `DecisionKind` 설명
 - `BtwPanel` / `WorkTracePanel` / `QueuePanel` / `SubagentPanel` — BTW 곁질문, 작업 추적, 메시지 대기열, 하위 에이전트 패널
 - `BackgroundTaskIndicator` — 입력창 아래 상태줄 왼쪽(컨텍스트 표시 반대편)의 `백그라운드 N개`. 누르면 팝오버로 현재 세션의 실행 중 백그라운드 작업 목록을 보여 준다
+- `chatCopy` — 채팅 화면의 UI 문구 카탈로그(`copy.ts`)다. `tools/copy-check`가 검사한다
 - 그 밖의 export(본문 미확인): `ChatApprovals`, `ContextMeter`, `Markdown`, `ReadOnlyBar`, `SlashPalette`, `UncertainRuns`, `RunFailureText`/`runFailureOf`, `UserMessageBody`/`DrawingPicture`/`DraftImageTray`/`MessageImage`
 - [`board`](./board/README.md) — 한 대화의 Plan 또는 프로젝트의 모든 실행 중 Plan을 7개 상태 열에 보여 주는 칸반 보드 UI
 

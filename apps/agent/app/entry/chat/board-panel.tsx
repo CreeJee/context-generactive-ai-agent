@@ -47,20 +47,18 @@ import {
 } from "../queries/mutations/session";
 import { koreanLocalTime } from "../shared/local-time";
 import { LoopHealthStatus } from "../shared/loop-health";
-import { cardStatusLabels } from "./board/board-moves";
 import {
   BoardSurface,
   editErrorText,
-  kanbanSwitchHint,
-  plannerStalledHint,
   type ActiveKanban,
   type BoardPlan,
 } from "./board/board-surface";
 import { authorLabel, StatusIcon } from "./board/card-face";
 import { verdictText } from "./board/hold-reason";
+import { boardCopy } from "./board/copy";
 import { BoardShortcuts } from "./board/kanban-board";
+import { chatCopy } from "./copy";
 
-export { cardStatusLabels } from "./board/board-moves";
 export { authorLabel } from "./board/card-face";
 
 /** Where the chat's board lives in the URL. Opening it closes the project board: one board per URL. */
@@ -108,18 +106,12 @@ export function BoardTally({
   const done = Arr.countBy(view.cards, ({ card }) => card.status === "done");
   return (
     <span className="flex shrink-0 items-center gap-1.5 text-muted-foreground tabular-nums">
-      {view.plan !== null && (
-        <span>
-          카드 {done}/{view.cards.length}
-        </span>
-      )}
+      {view.plan !== null && <span>{copy.cardTally(done, view.cards.length)}</span>}
       {view.plan !== null && view.outcomes.length > 0 && <span aria-hidden>·</span>}
       {view.outcomes.length > 0 && (
-        <span>
-          결과 {metOutcomes(view.outcomes)}/{view.outcomes.length}
-        </span>
+        <span>{copy.outcomeTally(metOutcomes(view.outcomes), view.outcomes.length)}</span>
       )}
-      {waiting > 0 && <span className="text-warning">판단 대기 {waiting}</span>}
+      {waiting > 0 && <span className="text-warning">{copy.waitingDecisions(waiting)}</span>}
     </span>
   );
 }
@@ -151,7 +143,7 @@ export function OpenBoardButton({
     <>
       <Button type="button" size="sm" variant="ghost" onClick={() => openBoard(location.card)}>
         <KanbanSquareIcon data-icon="inline-start" />
-        보드
+        {copy.open}
       </Button>
       {open && (
         <BoardSheet
@@ -195,15 +187,13 @@ export function WorkflowBoard({
   const [startError, setStartError] = useState<string | null>(null);
 
   const view = board.data;
-  if (!isTruthy(view)) return <Skeleton aria-label="보드를 불러오는 중" className="h-6 w-full" />;
+  if (!isTruthy(view)) return <Skeleton aria-label={copy.loading} className="h-6 w-full" />;
   const plan = view.plan;
   if (plan === null)
     return (
       <div className="flex min-w-0 flex-col gap-2">
         <OutcomeChecklist outcomes={view.outcomes} />
-        <p className="px-1.5 text-muted-foreground">
-          아직 카드가 없어요. 계획자가 Plan을 만들면 여기에 보여요.
-        </p>
+        <p className="px-1.5 text-muted-foreground">{copy.noCards}</p>
       </div>
     );
   const loop = kanban.data?.active === true ? kanban.data : null;
@@ -229,18 +219,18 @@ export function WorkflowBoard({
     <div className="flex min-w-0 flex-col gap-2">
       {(loop !== null || switchable || view.pendingChanges.length > 0) && (
         <div className="flex flex-wrap items-center gap-1.5 px-1.5">
-          {loop !== null && <Badge variant="secondary">칸반 실행 중</Badge>}
+          {loop !== null && <Badge variant="secondary">{copy.kanbanRunning}</Badge>}
           {loop !== null && loop.plannerStalled && (
-            <Badge variant="outline" title={plannerStalledHint}>
-              자동 계획 멈춤
+            <Badge variant="outline" title={boardCopy.plannerStalledHint}>
+              {copy.plannerStalled}
             </Badge>
           )}
           {view.pendingChanges.length > 0 && (
-            <Badge variant="outline">변경 요청 대기 {view.pendingChanges.length}</Badge>
+            <Badge variant="outline">{copy.pendingChanges(view.pendingChanges.length)}</Badge>
           )}
           {loop !== null && loop.loop._tag !== "Healthy" && (
             <LoopHealthStatus
-              label="보드 루프"
+              label={copy.loop}
               health={loop.loop}
               disabled={disabled || kanbanAction.isPending}
               onRestart={restart}
@@ -251,11 +241,11 @@ export function WorkflowBoard({
               type="button"
               size="xs"
               variant="outline"
-              title={kanbanSwitchHint}
+              title={boardCopy.kanbanSwitchHint}
               disabled={disabled || kanbanAction.isPending}
               onClick={start}
             >
-              칸반으로 전환
+              {copy.switchToKanban}
             </Button>
           )}
         </div>
@@ -266,13 +256,13 @@ export function WorkflowBoard({
         </Alert>
       )}
       <OutcomeChecklist outcomes={view.outcomes} />
-      <WorkflowRows label={`카드 ${done}/${view.cards.length} 완료`}>
+      <WorkflowRows label={copy.cardsDone(done, view.cards.length)}>
         {cards.map(({ card }) => (
           <WorkflowRow
             key={card.id}
             title={card.title}
             icon={<StatusIcon status={card.status} />}
-            trailing={cardStatusLabels[card.status]}
+            trailing={boardCopy.status[card.status]}
             render={
               <a
                 href={boardLink({ board: true, card: card.id })}
@@ -344,9 +334,9 @@ function BoardSheet({
   const goalDecisions = decisions.filter((request) => request.cardId === goalDecisionCardId);
   // The folded panel is named after what it holds, not every part it could hold.
   const extras = [
-    ...(loop?.schedule != null ? ["Goal 스케줄"] : []),
-    ...(view.pendingChanges.length > 0 ? ["대기 중인 변경"] : []),
-    ...(view.history.length > 0 ? ["변경 이력"] : []),
+    ...(loop?.schedule != null ? [copy.extras.schedule] : []),
+    ...(view.pendingChanges.length > 0 ? [copy.extras.pendingChanges] : []),
+    ...(view.history.length > 0 ? [copy.extras.history] : []),
   ];
 
   return (
@@ -360,26 +350,28 @@ function BoardSheet({
     >
       <SheetContent className="w-full sm:max-w-none">
         <SheetHeader>
-          <SheetTitle>칸반 보드</SheetTitle>
+          <SheetTitle>{copy.sheetTitle}</SheetTitle>
           <SheetDescription>
             <span className="flex flex-wrap items-center gap-2">
-              {loop !== null && <Badge variant="secondary">칸반 실행 중</Badge>}
+              {loop !== null && <Badge variant="secondary">{copy.kanbanRunning}</Badge>}
               {loop !== null && loop.plannerStalled && (
-                <Badge variant="outline" title={plannerStalledHint}>
-                  자동 계획 멈춤
+                <Badge variant="outline" title={boardCopy.plannerStalledHint}>
+                  {copy.plannerStalled}
                 </Badge>
               )}
               {loop !== null && loop.loop._tag !== "Healthy" && (
                 <LoopHealthStatus
-                  label="보드 루프"
+                  label={copy.loop}
                   health={loop.loop}
                   disabled={disabled || kanbanAction.isPending}
                   onRestart={() => act(KanbanAction.RestartLoop())}
                 />
               )}
               <span>
-                완료 {Arr.countBy(view.cards, ({ card }) => card.status === "done")}/
-                {view.cards.length}
+                {copy.doneCount(
+                  Arr.countBy(view.cards, ({ card }) => card.status === "done"),
+                  view.cards.length,
+                )}
               </span>
             </span>
           </SheetDescription>
@@ -390,11 +382,11 @@ function BoardSheet({
                   type="button"
                   variant="outline"
                   size="sm"
-                  title={kanbanSwitchHint}
+                  title={boardCopy.kanbanSwitchHint}
                   disabled={disabled || kanbanAction.isPending}
                   onClick={() => act(KanbanAction.Start())}
                 >
-                  칸반으로 전환
+                  {copy.switchToKanban}
                 </Button>
               )}
               <Button
@@ -405,7 +397,7 @@ function BoardSheet({
                 onClick={() => setAdding(true)}
               >
                 <PlusIcon data-icon="inline-start" />
-                카드 추가
+                {copy.addCard}
               </Button>
               <Button
                 type="button"
@@ -415,7 +407,7 @@ function BoardSheet({
                 onClick={() => setAskClose(true)}
               >
                 <CircleSlashIcon data-icon="inline-start" />
-                계획 닫기
+                {copy.closePlan}
               </Button>
               {actionError !== null && (
                 <span className="text-destructive" role="alert">
@@ -433,7 +425,7 @@ function BoardSheet({
                     />
                     {extras.join(" · ")}
                     {goalDecisions.length > 0 && (
-                      <Badge variant="outline">판단 대기 {goalDecisions.length}</Badge>
+                      <Badge variant="outline">{copy.waitingDecisions(goalDecisions.length)}</Badge>
                     )}
                   </CollapsibleTrigger>
                 )}
@@ -443,11 +435,8 @@ function BoardSheet({
             <Dialog open={askClose} onOpenChange={setAskClose}>
               <DialogContent className="sm:max-w-md">
                 <DialogHeader>
-                  <DialogTitle>이 계획을 닫을까요?</DialogTitle>
-                  <DialogDescription>
-                    완료되지 않은 카드는 막힘으로 정리되고, 이 계획은 칸반 보드 목록에서 사라져요.
-                    대화 기록과 지금까지 끝낸 카드는 그대로 남아요.
-                  </DialogDescription>
+                  <DialogTitle>{copy.closeConfirm.title}</DialogTitle>
+                  <DialogDescription>{copy.closeConfirm.body}</DialogDescription>
                 </DialogHeader>
                 <DialogFooter>
                   <Button
@@ -456,7 +445,7 @@ function BoardSheet({
                     disabled={edit.isPending}
                     onClick={() => setAskClose(false)}
                   >
-                    그만두기
+                    {copy.closeConfirm.choices.cancel}
                   </Button>
                   <Button
                     type="button"
@@ -464,7 +453,7 @@ function BoardSheet({
                     disabled={edit.isPending}
                     onClick={closePlan}
                   >
-                    사용자 요청으로 닫기
+                    {copy.closeConfirm.choices.close}
                   </Button>
                 </DialogFooter>
               </DialogContent>
@@ -484,16 +473,16 @@ function BoardSheet({
                 )}
                 {view.pendingChanges.length > 0 && (
                   <div className="flex flex-col gap-1" role="status">
-                    <p className="font-medium">오케스트레이터 확인을 기다리는 변경</p>
+                    <p className="font-medium">{copy.pendingHeading}</p>
                     <ul className="flex list-disc flex-col gap-0.5 pl-5 text-muted-foreground">
                       {view.pendingChanges.map((request) => (
                         <li key={request.id}>
                           {titleOf(request.cardId)} ·{" "}
                           {Match.valueTags(request.change, {
-                            Edit: () => "수정",
-                            Cancel: () => "취소",
+                            Edit: () => copy.pendingChange.Edit,
+                            Cancel: () => copy.pendingChange.Cancel,
                           })}{" "}
-                          요청 · {koreanLocalTime(request.createdAt)}
+                          · {koreanLocalTime(request.createdAt)}
                         </li>
                       ))}
                     </ul>
@@ -501,7 +490,7 @@ function BoardSheet({
                 )}
                 {view.history.length > 0 && (
                   <div className="flex flex-col gap-1">
-                    <p className="font-medium">보드 변경 이력</p>
+                    <p className="font-medium">{copy.historyHeading}</p>
                     <ol className="flex flex-col gap-0.5 text-xs text-muted-foreground">
                       {view.history.map((revision) => (
                         <li key={revision.revisionId}>
@@ -540,30 +529,27 @@ function BoardSheet({
 /** The card id Goal-level requests carry (memory-agent `goalDecisionCardId`). */
 const goalDecisionCardId = "@goal";
 
+const copy = chatCopy.boardPanel;
+
 /** Why the scheduler stopped merging a Goal on its own. */
-const stoppedMergeTexts = {
-  no_target: "시작할 때 브랜치가 없어(detached HEAD) 자동 merge하지 않아요",
-  target_missing: "대상 브랜치가 없어졌어요",
-  conflict_stopped: "충돌로 자동 merge를 멈췄어요",
-  goal_replaced: "Goal이 바뀌어 merge를 멈췄어요",
-} as const;
+const stoppedMergeTexts = copy.stoppedMerge;
 
 /** Where a Goal's merge into its target stands, in words. */
 export function mergeStateLabel(state: GoalMergeState | null): string {
-  if (state === null) return "카드가 모두 끝나면 merge해요";
+  if (state === null) return copy.merge.pending;
   return Match.valueTags(state, {
-    Verifying: () => "Goal 전체를 검증하는 중",
-    VerifyFailed: ({ verdict }) => `Goal 검증 실패: ${verdictText(verdict)}`,
-    WaitingWorktree: ({ worktree }) =>
-      `작업 트리에 커밋하지 않은 변경이 있어 기다리는 중 (${worktree})`,
-    TargetMoving: () => "대상 브랜치가 계속 바뀌어 다시 시도할 예정",
-    AwaitingDecision: () => "사람의 판단을 기다리는 중",
-    Merged: ({ commit }) => `merge됨 (${commit.slice(0, 8)})`,
-    ManualMerge: () => "직접 merge하기로 함, Goal 브랜치를 남겨 둠",
-    PullRequestPending: () => "PR을 만드는 중",
-    PullRequestCreated: ({ url }) => `PR을 만듦: ${url}`,
-    PullRequestUncertain: () => "PR을 만들던 중 멈췄어요. 원격 저장소에서 직접 확인해 주세요",
-    PullRequestFailed: ({ stage }) => (stage === "push" ? "Goal 브랜치 push 실패" : "PR 생성 실패"),
+    Verifying: () => copy.merge.Verifying,
+    VerifyFailed: ({ verdict }) => copy.merge.VerifyFailed(verdictText(verdict)),
+    WaitingWorktree: ({ worktree }) => copy.merge.WaitingWorktree(worktree),
+    TargetMoving: () => copy.merge.TargetMoving,
+    AwaitingDecision: () => copy.merge.AwaitingDecision,
+    Merged: ({ commit }) => copy.merge.Merged(commit.slice(0, 8)),
+    ManualMerge: () => copy.merge.ManualMerge,
+    PullRequestPending: () => copy.merge.PullRequestPending,
+    PullRequestCreated: ({ url }) => copy.merge.PullRequestCreated(url),
+    PullRequestUncertain: () => copy.merge.PullRequestUncertain,
+    PullRequestFailed: ({ stage }) =>
+      stage === "push" ? copy.merge.pushFailed : copy.merge.pullRequestFailed,
     Stopped: ({ reason }) => stoppedMergeTexts[reason],
   });
 }
@@ -593,36 +579,34 @@ function GoalSchedulePanel({
   };
   return (
     <section
-      aria-label="Goal 스케줄"
+      aria-label={copy.schedule}
       className="flex flex-col gap-2 rounded-md border px-3 py-2 text-muted-foreground"
     >
       <div className="flex flex-wrap items-center gap-3">
         <span>
-          대상 브랜치: {schedule.targetBranch ?? "없음"} · {mergeStateLabel(schedule.merge)}
+          {copy.targetBranch(schedule.targetBranch ?? copy.noTargetBranch)} ·{" "}
+          {mergeStateLabel(schedule.merge)}
         </span>
-        {schedule.upstreamPending && <Badge variant="outline">대상 브랜치 변경 반영 중</Badge>}
+        {schedule.upstreamPending && <Badge variant="outline">{copy.upstreamPending}</Badge>}
         {worktree && schedule.merge === null && (
           <Button
             type="button"
             size="xs"
             variant="outline"
-            title="프로젝트에 지금 checkout한 브랜치를 대상으로 삼고, Goal 브랜치를 그 브랜치에서 다시 시작해요. 카드 브랜치가 생기기 전에만 바꿀 수 있어요."
+            title={copy.retargetHint}
             disabled={disabled}
             onClick={() => onChange(KanbanAction.Retarget())}
           >
-            현재 브랜치로 바꾸기
+            {copy.retarget}
           </Button>
         )}
       </div>
       {schedule.waitingOn.length > 0 && (
-        <p role="status">
-          먼저 merge될 Goal을 기다리는 중: {schedule.waitingOn.map(goalName).join(", ")}. 그동안
-          카드를 새로 시작하지 않아요.
-        </p>
+        <p role="status">{copy.waitingOn(schedule.waitingOn.map(goalName).join(", "))}</p>
       )}
       {schedule.otherGoals.length > 0 && (
         <div className="flex flex-col gap-1">
-          <p className="font-medium text-foreground">이 Goal보다 먼저 merge될 Goal</p>
+          <p className="font-medium text-foreground">{copy.dependsHeading}</p>
           <ul className="flex flex-col gap-1">
             {schedule.otherGoals.map((other) => {
               const checked = schedule.dependsOn.includes(other.goalInstanceId);
@@ -632,7 +616,7 @@ function GoalSchedulePanel({
                     size="sm"
                     checked={checked}
                     disabled={disabled}
-                    aria-label={`${goalName(other.goalInstanceId)} 먼저`}
+                    aria-label={copy.dependsFirst(goalName(other.goalInstanceId))}
                     onCheckedChange={(next) =>
                       onChange(
                         KanbanAction.SetDependencies({

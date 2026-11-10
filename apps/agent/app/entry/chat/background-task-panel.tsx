@@ -20,6 +20,7 @@ import {
 } from "~/components/ui/popover";
 import { Spinner } from "~/components/ui/spinner";
 import { backgroundKindLabel, runningBackgroundTasks } from "../session/background-tasks";
+import { chatCopy } from "./copy";
 import { elapsed } from "./message";
 
 const openInWorkTrace = (taskId: string) =>
@@ -36,12 +37,12 @@ export function BackgroundTaskIndicator({ tasks }: { tasks: readonly TraceTaskVi
   return (
     <Popover>
       <PopoverTrigger render={<Button variant="ghost-muted" size="xs" />}>
-        <Spinner /> 백그라운드 {running.length}개
+        <Spinner /> {chatCopy.backgroundTasks.trigger(running.length)}
       </PopoverTrigger>
       <PopoverContent side="top" align="start">
         <PopoverHeader>
-          <PopoverTitle>실행 중인 백그라운드 작업</PopoverTitle>
-          <PopoverDescription>누르면 Work Trace에서 자세히 볼 수 있어요.</PopoverDescription>
+          <PopoverTitle>{chatCopy.backgroundTasks.title}</PopoverTitle>
+          <PopoverDescription>{chatCopy.backgroundTasks.description}</PopoverDescription>
         </PopoverHeader>
         <ItemGroup>
           {running.map((task) => (

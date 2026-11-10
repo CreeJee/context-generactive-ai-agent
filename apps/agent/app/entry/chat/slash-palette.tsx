@@ -1,12 +1,9 @@
 import { SparklesIcon, TerminalSquareIcon } from "lucide-react";
 import { CommandGroup, CommandItem, CommandList } from "~/components/ui/command";
+import { chatCopy } from "./copy";
 import type { Suggestion } from "./slash-commands";
 
-const headings = {
-  command: "명령",
-  skill: "Skills",
-  value: "고를 수 있는 값",
-} satisfies Record<Suggestion["kind"], string>;
+const headings = chatCopy.slashPalette.headings;
 
 // The order suggestions come in, so ↑/↓ walk the groups top to bottom.
 const groups: ReadonlyArray<Suggestion["kind"]> = ["command", "skill", "value"];
@@ -60,7 +57,7 @@ export function SlashPalette({
         })}
       </CommandList>
       <p className="border-t px-3 py-1.5 text-xs text-muted-foreground">
-        ↑↓로 고르고, Tab으로 채우고, Enter로 실행해요.
+        {chatCopy.slashPalette.keysHint}
       </p>
     </div>
   );

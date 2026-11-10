@@ -8,21 +8,12 @@ import { Button } from "~/components/ui/button";
 import { cn } from "cn";
 import { api, isApiError } from "../api";
 import { ApprovalCard } from "./approval";
+import { chatCopy } from "./copy";
 import type { PendingApproval } from "./pending-approval";
 import type { AnswerProblem } from "./use-agent-chat";
 
 /** What the alert says for each problem, and what its button does. */
-const problems = {
-  unsent: { text: "승인 응답을 전송하지 못했어요.", action: "응답 다시 보내기" },
-  refused: {
-    text: "연결이 끊긴 사이 승인 목록이 바뀌었어요. 서버의 최신 요청을 다시 불러와야 해요.",
-    action: "최신 요청 불러오기",
-  },
-  lost: {
-    text: "승인한 뒤 실행을 이어가지 못했어요. 요청을 폐기해도 셸 명령은 실행되지 않으며, 대화와 작업 evidence는 유지돼요.",
-    action: "끊어진 요청 폐기하고 계속",
-  },
-} satisfies Record<AnswerProblem, { readonly text: string; readonly action: string }>;
+const problems = chatCopy.chatApprovals.problems;
 
 /** Answers the approvals a run waits for together, once every one has a decision. */
 export function ChatApprovals({
@@ -64,8 +55,8 @@ export function ChatApprovals({
           Effect.sync(() =>
             onProblem(
               isApiError(failure.cause) && failure.cause.code === "run_in_progress"
-                ? "실행 중인 응답이 끝난 뒤 다시 시도해 주세요."
-                : "끊어진 승인 요청을 폐기하지 못했어요.",
+                ? chatCopy.chatApprovals.discardWhileRunning
+                : chatCopy.chatApprovals.discardFailed,
             ),
           ),
         ),
@@ -81,7 +72,7 @@ export function ChatApprovals({
     <>
       {problem !== null && (
         <Alert variant="destructive">
-          <AlertTitle>승인 요청을 이어가지 못했어요</AlertTitle>
+          <AlertTitle>{chatCopy.chatApprovals.title}</AlertTitle>
           <AlertDescription>
             <div className="flex flex-col items-start gap-3">
               <p>{problems[problem].text}</p>

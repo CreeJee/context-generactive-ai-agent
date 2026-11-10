@@ -18,7 +18,10 @@ import { Dialog, DialogContent, DialogTitle } from "~/components/ui/dialog";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "~/components/ui/hover-card";
 import { Message, MessageContent } from "~/components/ui/message";
 import { Spinner } from "~/components/ui/spinner";
+import { chatCopy } from "./copy";
 import { DraftImage } from "./draft-images";
+
+const copy = chatCopy.images;
 
 /** An image shown in a sent message: its `#N` position and where to load it from. */
 export interface MessageImage {
@@ -31,11 +34,11 @@ function ImageDialog({ image, onClose }: { image: MessageImage | null; onClose: 
   return (
     <Dialog open={image !== null} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-[min(90vw,64rem)] sm:max-w-[min(90vw,64rem)]">
-        <DialogTitle>이미지 #{image?.number}</DialogTitle>
+        <DialogTitle>{copy.dialogTitle(image?.number)}</DialogTitle>
         {image && (
           <img
             src={image.url}
-            alt={`첨부 이미지 #${image.number}`}
+            alt={copy.attachedAlt(image.number)}
             className="max-h-[75vh] w-full rounded object-contain"
           />
         )}
@@ -57,9 +60,9 @@ export function DrawingPicture({ url, path }: { url: string; path: string }) {
         type="button"
         onClick={() => setOpen(true)}
         className="block w-fit max-w-full overflow-hidden rounded-md border bg-white"
-        title={`${path} 크게 보기`}
+        title={copy.viewLarger(path)}
       >
-        <img src={url} alt={`그린 그림: ${path}`} className="max-h-80 max-w-full object-contain" />
+        <img src={url} alt={copy.drawingAlt(path)} className="max-h-80 max-w-full object-contain" />
       </button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-[min(90vw,64rem)] sm:max-w-[min(90vw,64rem)]">
@@ -68,7 +71,7 @@ export function DrawingPicture({ url, path }: { url: string; path: string }) {
           </DialogTitle>
           <img
             src={url}
-            alt={`그린 그림: ${path}`}
+            alt={copy.drawingAlt(path)}
             className="max-h-[75vh] w-full rounded bg-white object-contain"
           />
         </DialogContent>
@@ -137,7 +140,7 @@ export function UserMessageBody({
                         <HoverCardContent className="w-56">
                           <img
                             src={image.url}
-                            alt={`첨부 이미지 #${image.number}`}
+                            alt={copy.attachedAlt(image.number)}
                             className="max-h-48 w-full rounded object-contain"
                           />
                         </HoverCardContent>
@@ -160,7 +163,7 @@ export function UserMessageBody({
               >
                 <img
                   src={image.url}
-                  alt={`첨부 이미지 #${image.number}`}
+                  alt={copy.attachedAlt(image.number)}
                   className="h-28 max-w-48 object-cover"
                 />
                 <span className="absolute top-1 left-1 rounded bg-black/60 px-1 text-3xs text-white">
@@ -178,8 +181,8 @@ export function UserMessageBody({
 
 /** What the attachment card shows for each draft state. */
 const draftCard = DraftImage.$match({
-  uploading: () => ({ state: "uploading", description: "올리는 중…" }) as const,
-  ready: () => ({ state: "done", description: "누르면 본문에 넣어요" }) as const,
+  uploading: () => ({ state: "uploading", description: copy.uploading }) as const,
+  ready: () => ({ state: "done", description: copy.readyHint }) as const,
   failed: ({ reason }) => ({ state: "error", description: reason }) as const,
 });
 
@@ -216,7 +219,7 @@ export function DraftImageTray({
             </AttachmentContent>
             {DraftImage.$is("ready")(image) && (
               <AttachmentTrigger
-                aria-label={`#${image.number} 본문에 넣기`}
+                aria-label={copy.insert(image.number)}
                 onClick={() => onReference(image.number)}
               />
             )}
@@ -224,7 +227,7 @@ export function DraftImageTray({
               <AttachmentAction
                 variant="secondary"
                 onClick={() => onRemove(image.key)}
-                aria-label={`#${image.number} 첨부 제거`}
+                aria-label={copy.remove(image.number)}
               >
                 <XIcon />
               </AttachmentAction>

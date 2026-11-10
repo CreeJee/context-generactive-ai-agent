@@ -5,6 +5,9 @@ import { expect } from "vite-plus/test";
 import { page } from "vite-plus/test/browser/context";
 import "../../app.css";
 import { ContextMeter } from "./context-meter";
+import { chatCopy } from "./copy";
+
+const copy = chatCopy.contextMeter;
 
 const sdkCall = Effect.fn("ContextMeterTest.sdkCall")(<A,>(call: () => PromiseLike<A>) =>
   Effect.tryPromise({
@@ -32,15 +35,15 @@ it.live("context meter lays out the latest request's numbers on hover", () =>
         </div>,
       ),
     );
-    yield* sdkCall(() => screen.getByRole("button", { name: /컨텍스트/ }).hover());
+    yield* sdkCall(() => screen.getByRole("button", { name: new RegExp(copy.label) }).hover());
     yield* sdkCall(() =>
-      expect.element(page.getByText("지난 대화 일부를 요약으로 바꿔 보냈어요.")).toBeVisible(),
+      expect.element(page.getByText(copy.stages.summarize.detail)).toBeVisible(),
     );
-    const card = page.getByText("마지막 요청").element().closest("dl");
-    expect(card?.textContent).toContain("마지막 요청13만 토큰");
-    expect(card?.textContent).toContain("모델 한도20만 토큰");
-    expect(card?.textContent).toContain("캐시9.1만 토큰 · 70%");
-    expect(card?.textContent).toContain("압축요약");
+    const card = page.getByText(copy.lastRequest).element().closest("dl");
+    expect(card?.textContent).toContain(`${copy.lastRequest}${copy.tokenCount("13만")}`);
+    expect(card?.textContent).toContain(`${copy.windowLimit}${copy.tokenCount("20만")}`);
+    expect(card?.textContent).toContain(`${copy.cache}${copy.cacheUsage("9.1만", 70)}`);
+    expect(card?.textContent).toContain(`${copy.compaction}${copy.stages.summarize.label}`);
   }),
 );
 
@@ -63,12 +66,10 @@ it.live("context meter says no request was made yet", () =>
         </div>,
       ),
     );
-    yield* sdkCall(() => screen.getByRole("button", { name: /컨텍스트/ }).hover());
-    yield* sdkCall(() =>
-      expect.element(page.getByText("이 대화로 아직 모델에 요청하지 않았어요.")).toBeVisible(),
-    );
-    const card = page.getByText("모델 한도").element().closest("dl");
-    expect(card?.textContent).toBe("모델 한도알 수 없음");
-    expect(page.getByText("마지막 요청").query()).toBeNull();
+    yield* sdkCall(() => screen.getByRole("button", { name: new RegExp(copy.label) }).hover());
+    yield* sdkCall(() => expect.element(page.getByText(copy.noRequestYet)).toBeVisible());
+    const card = page.getByText(copy.windowLimit).element().closest("dl");
+    expect(card?.textContent).toBe(`${copy.windowLimit}${copy.unknown}`);
+    expect(page.getByText(copy.lastRequest).query()).toBeNull();
   }),
 );

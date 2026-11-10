@@ -15,12 +15,12 @@ import {
 } from "lucide-react";
 import { cn } from "cn";
 import { Match, Predicate } from "effect";
-import type { BoardAuthor, CardRisk } from "memory-agent";
+import type { BoardAuthor } from "memory-agent";
 import { Badge } from "../../../components/ui/badge";
 import { Spinner } from "../../../components/ui/spinner";
 import type { BoardView, CardStatus } from "../../api";
 import { koreanLocalTime } from "../../shared/local-time";
-import { cardStatusLabels } from "./board-moves";
+import { boardCopy } from "./copy";
 
 type BoardCard = BoardView["cards"][number];
 
@@ -45,15 +45,12 @@ export function StatusIcon({
   return <Icon aria-hidden className={cn("size-3.5 shrink-0", tone, className)} />;
 }
 
-export const riskLabels: Readonly<Record<CardRisk, string>> = {
-  low: "위험 낮음",
-  medium: "위험 보통",
-  high: "위험 높음",
-};
-
 export function authorLabel(author: BoardAuthor | null): string {
-  if (author === null) return "기록 없음";
-  return Match.valueTags(author, { User: () => "사용자", Orchestrator: () => "오케스트레이터" });
+  if (author === null) return boardCopy.lastChange.none;
+  return Match.valueTags(author, {
+    User: () => boardCopy.author.User,
+    Orchestrator: () => boardCopy.author.Orchestrator,
+  });
 }
 
 /**
@@ -61,7 +58,7 @@ export function authorLabel(author: BoardAuthor | null): string {
  * the board's normal course, so its changes are only in the peek.
  */
 export function UserChangeMark({ at }: { readonly at: string }) {
-  const label = `마지막 변경: 사용자 · ${koreanLocalTime(at)}`;
+  const label = boardCopy.lastChange.byUser(koreanLocalTime(at));
   return (
     <span
       role="img"
@@ -112,7 +109,7 @@ export function CardFace({
       <span className="flex items-center gap-1.5 text-2xs text-muted-foreground">
         <StatusIcon status={card.status} />
         <span className="shrink-0 font-mono">{card.id}</span>
-        <span className="sr-only">{cardStatusLabels[card.status]}</span>
+        <span className="sr-only">{boardCopy.status[card.status]}</span>
         {signals.group !== null && (
           <span className="truncate" title={signals.group}>
             · {signals.group}
@@ -124,36 +121,38 @@ export function CardFace({
       </span>
       {meta && (
         <span className="mt-2 flex flex-wrap items-center gap-1 text-2xs text-muted-foreground">
-          {isTruthy(card.risk) && <Badge variant="outline">{riskLabels[card.risk]}</Badge>}
+          {isTruthy(card.risk) && <Badge variant="outline">{boardCopy.risk[card.risk]}</Badge>}
           {signals.decisionPending && (
             <Badge variant="outline">
               <HourglassIcon data-icon="inline-start" />
-              판단 대기
+              {boardCopy.cardFace.decisionPending}
             </Badge>
           )}
           {card.hold !== undefined && (
             <Badge variant="secondary">
               <CirclePauseIcon data-icon="inline-start" />
-              보류
+              {boardCopy.cardFace.held}
             </Badge>
           )}
           {card.approval !== undefined && (
             <Badge variant="outline">
               <HourglassIcon data-icon="inline-start" />
-              승인 대기
+              {boardCopy.cardFace.approvalPending}
             </Badge>
           )}
           {signals.requesting && (
             <Badge variant="outline">
               <Spinner data-icon="inline-start" />
-              요청 중
+              {boardCopy.cardFace.requesting}
             </Badge>
           )}
-          {signals.changePending && <Badge variant="outline">변경 요청 대기</Badge>}
+          {signals.changePending && (
+            <Badge variant="outline">{boardCopy.cardFace.changePending}</Badge>
+          )}
           {signals.waitingOn.length > 0 && (
             <Badge variant="outline" title={signals.waitingOn.join(", ")}>
               <LinkIcon data-icon="inline-start" />
-              선행 {signals.waitingOn.length}
+              {boardCopy.cardFace.waitingOn(signals.waitingOn.length)}
             </Badge>
           )}
           {userChangedAt !== null && <UserChangeMark at={userChangedAt} />}

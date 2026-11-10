@@ -100,6 +100,9 @@ import {
 } from "./slash-commands";
 import { BackgroundTaskIndicator } from "./background-task-panel";
 import { runningBackgroundTasks } from "../session/background-tasks";
+import { problemText } from "../shared/copy-templates";
+import { chatCopy } from "./copy";
+import { chatPrompts } from "./prompts";
 
 /** Slash commands: what they can offer, and how the app runs the ones outside this panel. */
 export interface SlashSupport {
@@ -145,16 +148,20 @@ interface Notice {
 const problem = (text: string): Notice => ({ tone: "problem", text });
 const done = (text: string): Notice => ({ tone: "done", text });
 
+const copy = chatCopy.chatPanel;
+
 function workflowStatus(state: WorkflowState | null): Notice {
-  if (!(state !== null)) return problem("워크플로 상태를 아직 불러오지 못했어요.");
+  if (!(state !== null)) return problem(copy.workflowStatusMissing);
   const goal = isTruthy(state.goal)
     ? `Goal v${state.goal.version} · ${goalStatusLabels[state.goal.status]}`
-    : "Goal 없음";
+    : copy.noGoal;
   const plan = isTruthy(state.plan)
-    ? `Plan v${state.plan.version} · ${planStatusLabels[state.plan.status]}${isTruthy(state.goal) && state.plan.goalVersion !== state.goal.version ? " · Goal 변경으로 오래됨" : ""}`
-    : "Plan 없음";
+    ? `Plan v${state.plan.version} · ${planStatusLabels[state.plan.status]}${isTruthy(state.goal) && state.plan.goalVersion !== state.goal.version ? copy.planOutdated : ""}`
+    : copy.noPlan;
   const mode = workflowModeLabel(state);
-  return done(`${mode}${mode === "완료" ? "" : " 모드"} · ${goal} · ${plan}`);
+  return done(
+    `${mode === chatCopy.workflow.completed ? mode : copy.modeName(mode)} · ${goal} · ${plan}`,
+  );
 }
 
 const tokenCount = new Intl.NumberFormat("ko-KR", {
@@ -167,16 +174,16 @@ function compacted(result: CompactResult): Notice {
   const { cleared, summarizedTurns, summaryFailed, tokensBefore, tokensAfter } = result;
   // One sentence per change, so each noun keeps its own particle.
   const done = [
-    ...(cleared > 0 ? [`지난 도구 출력 ${cleared}개를 비웠어요.`] : []),
-    ...(summarizedTurns > 0 ? [`앞 대화 ${summarizedTurns}턴은 요약으로 보내요.`] : []),
+    ...(cleared > 0 ? [copy.compact.cleared(cleared)] : []),
+    ...(summarizedTurns > 0 ? [copy.compact.summarized(summarizedTurns)] : []),
   ];
-  const failed = summaryFailed ? ["앞 대화는 요약하지 못했어요."] : [];
+  const failed = summaryFailed ? [copy.compact.summaryFailed] : [];
   if (done.length === 0)
     return {
       tone: summaryFailed ? "problem" : "done",
-      text: ["더 줄일 내용이 없어요. 최근 대화는 그대로 보내요.", ...failed].join(" "),
+      text: [copy.compact.nothingToCompact, ...failed].join(" "),
     };
-  const size = `다음 질문부터 대화가 약 ${tokenCount.format(tokensBefore)} 토큰에서 ${tokenCount.format(tokensAfter)} 토큰으로 줄어요.`;
+  const size = copy.compact.size(tokenCount.format(tokensBefore), tokenCount.format(tokensAfter));
   return { tone: "done", text: [...done, ...failed, size].join(" ") };
 }
 
@@ -190,15 +197,7 @@ const contentOf = (text: string, attachmentIds: readonly string[]): UserContent 
 ];
 
 /** A refused turn's code as the user reads it; the other codes show as they are. */
-const refusalTexts: Partial<Record<Refusal["error"], string>> = {
-  provider_auth_unavailable: "인증 상태를 확인할 수 없어요. 잠시 후 다시 시도해 주세요.",
-  provider_unavailable: "선택한 제공자를 사용할 수 없어요. 제공자 설정을 확인해 주세요.",
-  login_required: "선택한 공급자에 로그인해야 해요.",
-  model_selection_required: "먼저 모델을 선택하세요.",
-  images_not_supported: "선택한 모델은 이미지를 읽지 못해요.",
-  run_in_progress: "이 대화가 아직 답하는 중이에요.",
-  session_in_use: "다른 창이 이 대화를 쓰고 있어요.",
-};
+const refusalTexts: Partial<Record<Refusal["error"], string>> = copy.refusals;
 
 /** Why the last turn got no answer: the server refused it, it was not sent, or its run failed. */
 function NoAnswer({
@@ -208,8 +207,7 @@ function NoAnswer({
   refusal: Refusal | null;
   error: { readonly message: string } | null;
 }) {
-  if (refusal !== null)
-    return refusalTexts[refusal.error] ?? `서버가 요청을 거절했어요 (${refusal.error}).`;
+  if (refusal !== null) return refusalTexts[refusal.error] ?? copy.refusedOther(refusal.error);
   return error !== null && <RunFailureText error={error} />;
 }
 
@@ -433,13 +431,7 @@ function ChatPanel({
     runUiEffect(
       Effect.gen(function* () {
         const state = yield* uiPromise(() => run.moveWorkflow(move));
-        setNotice(
-          done(
-            move === "run"
-              ? "승인한 Plan을 칸반 보드에서 실행해요."
-              : `${modeLabels[move]} 모드로 바꿨어요.`,
-          ),
-        );
+        setNotice(done(move === "run" ? copy.runOnBoard : copy.modeChanged(modeLabels[move])));
         return state;
       }).pipe(
         Effect.catchTag("UnknownError", (rejected) =>
@@ -448,10 +440,10 @@ function ChatPanel({
             const message =
               isApiError(failure) &&
               (failure.code === "plan_not_ready" || failure.code === "plan_outdated")
-                ? "실행하려면 먼저 준비된 Plan이 필요해요."
+                ? copy.planNotReady
                 : isApiError(failure) && failure.code === "run_in_progress"
-                  ? "답변이 끝난 뒤 모드를 바꿀 수 있어요."
-                  : "워크플로 모드를 바꾸지 못했어요.";
+                  ? copy.modeBusy
+                  : copy.modeFailed;
             setNotice(problem(message));
             return null;
           }),
@@ -462,7 +454,7 @@ function ChatPanel({
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const askForRevision = () => {
     composerInput.current?.focus();
-    setNotice(done("바꾸고 싶은 내용을 입력해 주세요."));
+    setNotice(done(copy.askRevision));
   };
   // Revising a running Plan stops the board until it is approved again, so the user confirms it.
   const revisePlan = () =>
@@ -495,15 +487,15 @@ function ChatPanel({
         yield* uiPromise(() => run.controlWorkflow(action));
         if (action === "pause" || action === "stop") {
           if (generating) stop();
-          setNotice(done(action === "pause" ? "Goal을 일시 중지했어요." : "Goal을 중단했어요."));
+          setNotice(done(action === "pause" ? copy.goalPaused : copy.goalStopped));
           return;
         }
         setNotice(null);
-        sendMessage(contentOf("일시 중지한 Goal을 현재 상태에서 이어서 진행해 줘.", []));
+        sendMessage(contentOf(chatPrompts.resumeGoal, []));
       }).pipe(
         Effect.catchTag("UnknownError", () =>
           Effect.sync(() => {
-            setNotice(problem("Goal 상태를 바꾸지 못했어요."));
+            setNotice(problem(copy.goalControlFailed));
           }),
         ),
       ),
@@ -536,8 +528,8 @@ function ChatPanel({
         // Stopping only the local stream would leave the run going on the server, so ask it first.
         const result = yield* uiPromise(() => run.cancel());
         if (result !== "failed") stop();
-        if (result === "idle") setNotice(problem("멈출 답변이 없어요."));
-        if (result === "failed") setNotice(problem("명령을 실행하지 못했어요."));
+        if (result === "idle") setNotice(problem(copy.nothingToStop));
+        if (result === "failed") setNotice(problem(copy.commandFailed));
       }),
     );
 
@@ -557,24 +549,24 @@ function ChatPanel({
               }),
             );
             if (ResumeTaskResult.guards.queued(result)) {
-              setNotice(done("다시 시도 요청을 저장했어요. 다음 실행에서 새 attempt로 시작해요."));
+              setNotice(done(copy.retryQueued));
               return ResumeActionResult.queued();
             }
             if (result.reason !== "uncertain_side_effect")
               setNotice(
                 problem(
                   result.reason === "stale_attempt"
-                    ? "작업 상태가 바뀌었어요. 최신 Work Trace를 확인해 주세요."
+                    ? copy.retryStale
                     : result.reason === "attempt_alive"
-                      ? "이미 실행 중인 attempt가 있어요."
-                      : "이 작업은 지금 다시 시도할 수 없어요.",
+                      ? copy.retryAlive
+                      : copy.retryUnavailable,
                 ),
               );
             return ResumeActionResult.blocked({ reason: result.reason });
           }).pipe(
             Effect.catchTag("UnknownError", () =>
               Effect.sync(() => {
-                setNotice(problem("다시 시도 요청을 저장하지 못했어요."));
+                setNotice(problem(copy.retryFailed));
                 return ResumeActionResult.failed();
               }),
             ),
@@ -591,17 +583,17 @@ function ChatPanel({
         Effect.gen(function* () {
           const result = yield* uiPromise(() => archiveTrace(task.id));
           if (ArchiveTaskResult.guards.completed(result)) {
-            setNotice(done("작업을 보관했어요. Work Trace 기록과 project provenance는 유지돼요."));
+            setNotice(done(copy.archived));
             return ArchiveActionResult.archived();
           }
-          setNotice(problem("작업 중단을 기다리고 있어요. 완료 후 다시 확인해 주세요."));
+          setNotice(problem(copy.awaitingStop));
           return ArchiveTaskResult.guards.blocked(result)
             ? ArchiveActionResult.blocked({ reason: result.blocker })
             : ArchiveActionResult.failed();
         }).pipe(
           Effect.catchTag("UnknownError", () =>
             Effect.sync(() => {
-              setNotice(problem("작업을 보관하지 못했어요."));
+              setNotice(problem(copy.archiveFailed));
               return ArchiveActionResult.failed();
             }),
           ),
@@ -617,19 +609,17 @@ function ChatPanel({
         Effect.gen(function* () {
           const result = yield* uiPromise(() => deleteTrace(task.id));
           if (ArchiveTaskResult.guards.completed(result)) {
-            setNotice(
-              done("작업 원본을 삭제했어요. 채택된 project memory와 provenance는 유지돼요."),
-            );
+            setNotice(done(copy.deleted));
             return DeleteActionResult.deleted();
           }
-          setNotice(problem("작업 중단을 기다리고 있어요. 완료 후 다시 확인해 주세요."));
+          setNotice(problem(copy.awaitingStop));
           return ArchiveTaskResult.guards.blocked(result)
             ? DeleteActionResult.blocked({ reason: result.blocker })
             : DeleteActionResult.failed();
         }).pipe(
           Effect.catchTag("UnknownError", () =>
             Effect.sync(() => {
-              setNotice(problem("작업 원본을 삭제하지 못했어요."));
+              setNotice(problem(copy.deleteFailed));
               return DeleteActionResult.failed();
             }),
           ),
@@ -641,8 +631,7 @@ function ChatPanel({
   const ready = draftImages.images.filter(DraftImage.$is("ready"));
   const uploading = draftImages.images.some(DraftImage.$is("uploading"));
   const failed = draftImages.images.some(DraftImage.$is("failed"));
-  const shownNotice =
-    notice ?? (failed ? problem("올리지 못한 이미지가 있어요. 빼고 보내 주세요.") : null);
+  const shownNotice = notice ?? (failed ? problem(copy.uploadFailed) : null);
   const editing = Composer.$is("editing")(composer) ? composer : null;
   const composerMode: ComposerMode =
     editing !== null
@@ -723,7 +712,7 @@ function ChatPanel({
   /** Alt+↑ picks the last message still waiting, Alt+↓ the first. */
   const pickQueued = (direction: "up" | "down") => {
     if (editing !== null) {
-      setNotice(problem("Enter로 저장하거나 Esc로 지운 뒤 다른 메시지를 고를 수 있어요."));
+      setNotice(problem(copy.finishEditFirst));
       return;
     }
     const editable = queue.items.filter(isEditable);
@@ -734,7 +723,7 @@ function ChatPanel({
   const attach = (files: readonly File[]) => {
     if (files.length === 0) return;
     if (!imagesSupported) {
-      setNotice(problem("선택한 모델은 이미지를 읽지 못해요. 이미지를 지원하는 모델을 고르세요."));
+      setNotice(problem(problemText(copy.imagesUnsupported)));
       return;
     }
     setNotice(null);
@@ -765,7 +754,7 @@ function ChatPanel({
     runUiEffect(
       Effect.gen(function* () {
         if (editing !== null) {
-          if (mode === "steer") setNotice(problem("편집을 끝낸 뒤 스티어링할 수 있어요."));
+          if (mode === "steer") setNotice(problem(copy.steerWhileEditing));
           else yield* uiPromise(() => finishEdit("save", typed));
           return;
         }
@@ -781,7 +770,7 @@ function ChatPanel({
           }).pipe(
             Effect.andThen(uiPromise(() => slash.run(command))),
             Effect.catchTag("UnknownError", () =>
-              Effect.sync(() => setNotice(problem("명령을 실행하지 못했어요."))),
+              Effect.sync(() => setNotice(problem(copy.commandFailed))),
             ),
             Effect.as(Option.none<string>()),
           );
@@ -801,10 +790,7 @@ function ChatPanel({
               if (!isTruthy(state)) return Option.none<string>();
               // An approved Plan runs on its board, so running it sends the chat nothing.
               const request =
-                command.request ||
-                (command.move === "plan"
-                  ? "요청에서 목표를 정리하고 실행 가능한 Plan을 읽기 전용으로 조사해 기록해 줘."
-                  : "");
+                command.request || (command.move === "plan" ? chatPrompts.planDefault : "");
               if (!(request.length > 0)) {
                 setDraft("");
                 return Option.none<string>();
@@ -861,14 +847,12 @@ function ChatPanel({
           sendMessage(contentOf(text, attachmentIds));
         };
         if (!generating && media.intent) {
-          if (attachmentIds.length > 0)
-            return setNotice(problem("첫 버전의 이미지 생성은 텍스트 프롬프트만 지원해요."));
+          if (attachmentIds.length > 0) return setNotice(problem(copy.imageTextOnly));
           // A paid media model may run, so the dialog asks before `generateImage` does.
           return setImagePrompt(text);
         }
         if (!generating) return sendTurn();
-        if (media.intent)
-          return setNotice(problem("이미지 생성 요청은 답변이 끝난 뒤 별도 요청으로 보내 주세요."));
+        if (media.intent) return setNotice(problem(copy.imageAfterAnswer));
 
         const outcome = yield* uiPromise(() =>
           trackSubmission(queue.add(text, attachmentIds, mode)),
@@ -876,7 +860,7 @@ function ChatPanel({
         AddOutcome.$match(outcome, {
           queued: clearComposer,
           "not-running": sendTurn,
-          failed: () => setNotice(problem("메시지를 넣지 못했어요. 다시 시도해 주세요.")),
+          failed: () => setNotice(problem(problemText(copy.queueFailed))),
         });
       }),
     );
@@ -903,7 +887,7 @@ function ChatPanel({
     >
       {dragging && (
         <div className="pointer-events-none absolute inset-2 z-10 flex items-center justify-center rounded-xl border-2 border-dashed border-primary bg-background/80 text-sm font-medium">
-          {imagesSupported ? "이미지를 놓으면 첨부돼요" : "선택한 모델은 이미지를 읽지 못해요"}
+          {imagesSupported ? copy.dropImage : copy.dropUnsupported}
         </div>
       )}
       <ChatHistory
@@ -971,7 +955,7 @@ function ChatPanel({
             <MarkerIcon>
               <Spinner />
             </MarkerIcon>
-            <MarkerContent>생각하는 중…</MarkerContent>
+            <MarkerContent>{copy.thinking}</MarkerContent>
           </Marker>
         )}
         {/* Between tool calls nothing streams, so the thread itself says the answer goes on. */}
@@ -980,14 +964,14 @@ function ChatPanel({
             <MarkerIcon>
               <Spinner />
             </MarkerIcon>
-            <MarkerContent>작업 중…</MarkerContent>
+            <MarkerContent>{copy.working}</MarkerContent>
           </Marker>
         )}
         {(refusal !== null || noAnswer !== null) &&
           answerProblem === null &&
           run.notice === null && (
             <Alert variant="destructive">
-              <AlertTitle>응답을 받지 못했어요</AlertTitle>
+              <AlertTitle>{copy.noResponse}</AlertTitle>
               <AlertDescription>
                 <NoAnswer refusal={refusal} error={noAnswer} />
               </AlertDescription>
@@ -1088,19 +1072,17 @@ function ChatPanel({
           >
             <AlertDialogContent>
               <AlertDialogHeader>
-                <AlertDialogTitle>이미지를 만들까요?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  이미지 생성은 별도 유료 미디어 모델을 호출할 수 있어요.
-                </AlertDialogDescription>
+                <AlertDialogTitle>{copy.imageConfirm.title}</AlertDialogTitle>
+                <AlertDialogDescription>{copy.imageConfirm.body}</AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
-                <AlertDialogCancel>취소</AlertDialogCancel>
+                <AlertDialogCancel>{copy.imageConfirm.choices.cancel}</AlertDialogCancel>
                 <AlertDialogAction
                   onClick={() => {
                     if (imagePrompt !== null) void generateImage(imagePrompt);
                   }}
                 >
-                  만들기
+                  {copy.imageConfirm.choices.create}
                 </AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
@@ -1115,29 +1097,29 @@ function ChatPanel({
               <AlertDialogHeader>
                 <AlertDialogTitle>
                   {leaving?.revise === true
-                    ? "실행 중인 Plan을 고칠까요?"
+                    ? copy.leave.reviseTitle
                     : leaving?.move === "chat"
-                      ? "일반 대화로 바꿀까요?"
-                      : `${modeLabels[leaving?.move ?? "plan"]} 모드로 바꿀까요?`}
+                      ? copy.leave.toChatTitle
+                      : copy.leave.toModeTitle(modeLabels[leaving?.move ?? "plan"])}
                 </AlertDialogTitle>
                 <AlertDialogDescription>
-                  보드는 새 카드를 맡기지 않고 기다려요. 이미 진행 중인 카드는 끝까지 돌아요.{" "}
+                  {copy.leave.body}{" "}
                   {leaving?.move === "goal"
-                    ? "계획자가 Plan을 다시 준비하면 바로 이어서 실행해요."
+                    ? copy.leave.resumeGoal
                     : leaving?.move === "plan"
-                      ? "고친 Plan을 다시 승인하면 이어서 실행해요."
-                      : "Plan이나 Goal 모드에서 다시 승인하면 이어서 실행해요."}
+                      ? copy.leave.resumePlan
+                      : copy.leave.resumeOther}
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
-                <AlertDialogCancel>그대로 두기</AlertDialogCancel>
+                <AlertDialogCancel>{copy.leave.keep}</AlertDialogCancel>
                 <AlertDialogAction
                   onClick={() => {
                     if (leaving !== null) void leaveRun(leaving);
                     setLeaving(null);
                   }}
                 >
-                  {leaving?.revise === true ? "고치기" : "바꾸기"}
+                  {leaving?.revise === true ? copy.leave.revise : copy.leave.change}
                 </AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>

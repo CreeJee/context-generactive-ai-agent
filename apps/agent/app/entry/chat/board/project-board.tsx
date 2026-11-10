@@ -31,19 +31,14 @@ import { sessionQueries } from "../../queries/session";
 import { LoopHealthStatus } from "../../shared/loop-health";
 import { planStatusLabels } from "../workflow-panel";
 import { boardColumns, type BoardCardRef } from "./board-moves";
-import {
-  BoardSurface,
-  editErrorText,
-  kanbanSwitchHint,
-  plannerStalledHint,
-  type SurfaceBoard,
-} from "./board-surface";
+import { BoardSurface, editErrorText, type SurfaceBoard } from "./board-surface";
+import { boardCopy } from "./copy";
 import { BoardShortcuts } from "./kanban-board";
 import { Array as Arr } from "effect";
 
 const cardsOf = (row: ProjectBoardRow) =>
   boardColumns.reduce((sum, status) => sum + row.counts[status], 0);
-const titleOf = (row: ProjectBoardRow) => row.sessionTitle ?? "제목 없는 대화";
+const titleOf = (row: ProjectBoardRow) => row.sessionTitle ?? boardCopy.project.untitled;
 /** Only an executing Plan's cards are the scheduler's business, so only those are on the board. */
 const onBoard = (row: ProjectBoardRow) => row.plan.status === "executing";
 
@@ -130,34 +125,38 @@ export function ProjectBoard({
     >
       <SheetContent className="w-full sm:max-w-none">
         <SheetHeader>
-          <SheetTitle>프로젝트 칸반 보드</SheetTitle>
+          <SheetTitle>{boardCopy.project.title}</SheetTitle>
           <SheetDescription>
             {/* Muted labels, numbers in the foreground colour: the counts read at a glance
                 without boxing every figure in a badge. The badge stays for "판단 대기" alone,
                 the one figure that asks for action. */}
             <span className="flex flex-wrap items-center gap-x-4 gap-y-1">
               <span>
-                실행 중인 대화{" "}
+                {boardCopy.project.conversations}{" "}
                 <span className="font-medium text-foreground tabular-nums">{rows.length}</span>
               </span>
               {running > 0 && (
                 <span>
-                  칸반 실행{" "}
+                  {boardCopy.project.kanbanRunning}{" "}
                   <span className="font-medium text-foreground tabular-nums">{running}</span>
                 </span>
               )}
               <span>
-                완료{" "}
+                {boardCopy.project.done}{" "}
                 <span className="font-medium text-foreground tabular-nums">
                   {done}/{total}
                 </span>
               </span>
-              {inbox.length > 0 && <Badge variant="outline">판단 대기 {inbox.length}</Badge>}
+              {inbox.length > 0 && (
+                <Badge variant="outline">{boardCopy.project.decisions(inbox.length)}</Badge>
+              )}
             </span>
           </SheetDescription>
           {waiting.length > 0 && (
             <p role="status" className="flex flex-wrap items-center gap-1 text-xs">
-              <span className="text-muted-foreground">실행 중이 아닌 계획 {waiting.length}개:</span>
+              <span className="text-muted-foreground">
+                {boardCopy.project.notExecuting(waiting.length)}
+              </span>
               {waiting.map((row) => (
                 <Button
                   key={row.sessionId}
@@ -181,10 +180,10 @@ export function ProjectBoard({
                     pressed={shown.length === 0}
                     onPressedChange={() => setShown([])}
                   >
-                    모든 대화
+                    {boardCopy.project.allConversations}
                   </Toggle>
                   <ToggleGroup
-                    aria-label="보이는 대화"
+                    aria-label={boardCopy.project.shownConversations}
                     multiple
                     size="sm"
                     spacing={1}
@@ -219,7 +218,7 @@ export function ProjectBoard({
                       data-icon="inline-start"
                       className="transition-transform group-data-[panel-open]:rotate-90"
                     />
-                    대화 순서와 상태
+                    {boardCopy.project.order}
                   </CollapsibleTrigger>
                 )}
               </span>
@@ -227,7 +226,7 @@ export function ProjectBoard({
             {rows.length > 0 && (
               <CollapsibleContent className="mt-2 max-h-60 divide-y overflow-y-auto rounded-md border">
                 <p className="px-3 py-2 text-xs text-muted-foreground">
-                  위쪽 대화의 카드부터 시작해요. 카드 순서는 같은 대화 안에서 바꿔요.
+                  {boardCopy.project.orderHint}
                 </p>
                 {rows.map((row, index) => (
                   <ConversationRow
@@ -271,12 +270,10 @@ export function ProjectBoard({
           )}
         </SheetHeader>
         {boards.data === undefined && (
-          <p className="px-4 text-muted-foreground">보드를 불러오는 중이에요.</p>
+          <p className="px-4 text-muted-foreground">{boardCopy.project.loading}</p>
         )}
         {boards.data !== undefined && rows.length === 0 && (
-          <p className="px-4 text-muted-foreground">
-            실행 중인 Plan이 없어요. 대화에서 계획을 실행하면 보드에 올라와요.
-          </p>
+          <p className="px-4 text-muted-foreground">{boardCopy.project.empty}</p>
         )}
         {rows.length > 0 && (
           <BoardSurface
@@ -341,7 +338,7 @@ function ConversationRow({
 
   return (
     <section
-      aria-label={`${title} 대화`}
+      aria-label={boardCopy.conversation.region(title)}
       className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2 text-xs"
     >
       <span className="flex items-center">
@@ -349,7 +346,7 @@ function ConversationRow({
           type="button"
           size="icon-sm"
           variant="ghost-muted"
-          aria-label={`${title} 위로`}
+          aria-label={boardCopy.conversation.up(title)}
           disabled={moving || onMoveUp === null}
           onClick={() => onMoveUp?.()}
         >
@@ -359,7 +356,7 @@ function ConversationRow({
           type="button"
           size="icon-sm"
           variant="ghost-muted"
-          aria-label={`${title} 아래로`}
+          aria-label={boardCopy.conversation.down(title)}
           disabled={moving || onMoveDown === null}
           onClick={() => onMoveDown?.()}
         >
@@ -368,39 +365,43 @@ function ConversationRow({
       </span>
       <h3 className="min-w-0 max-w-full truncate text-sm font-medium">{title}</h3>
       {row.kanbanActive ? (
-        <Badge variant="secondary">칸반 실행 중</Badge>
+        <Badge variant="secondary">{boardCopy.conversation.kanbanRunning}</Badge>
       ) : (
         <Badge variant="outline">{planStatusLabels[row.plan.status]}</Badge>
       )}
       {loop !== null && loop.plannerStalled && (
-        <Badge variant="outline" title={plannerStalledHint}>
-          자동 계획 멈춤
+        <Badge variant="outline" title={boardCopy.plannerStalledHint}>
+          {boardCopy.conversation.plannerStalled}
         </Badge>
       )}
       {loop !== null && loop.loop._tag !== "Healthy" && (
         <LoopHealthStatus
-          label="보드 루프"
+          label={boardCopy.conversation.loop}
           health={loop.loop}
           disabled={kanbanAction.isPending}
           onRestart={() => act(KanbanAction.RestartLoop())}
         />
       )}
       <span className="text-muted-foreground">
-        완료 {row.counts.done}/{cardsOf(row)}
+        {boardCopy.conversation.done(row.counts.done, cardsOf(row))}
       </span>
-      {decisions > 0 && <Badge variant="outline">판단 대기 {decisions}</Badge>}
-      {pendingChanges > 0 && <Badge variant="outline">변경 요청 대기 {pendingChanges}</Badge>}
+      {decisions > 0 && (
+        <Badge variant="outline">{boardCopy.conversation.decisions(decisions)}</Badge>
+      )}
+      {pendingChanges > 0 && (
+        <Badge variant="outline">{boardCopy.conversation.pendingChanges(pendingChanges)}</Badge>
+      )}
       <span className="ml-auto flex flex-wrap items-center gap-1">
         {loop === null && row.plan.status === "executing" && (
           <Button
             type="button"
             variant="outline"
             size="sm"
-            title={kanbanSwitchHint}
+            title={boardCopy.kanbanSwitchHint}
             disabled={kanbanAction.isPending}
             onClick={() => act(KanbanAction.Start())}
           >
-            칸반으로 전환
+            {boardCopy.conversation.startKanban}
           </Button>
         )}
         <Button
@@ -411,11 +412,11 @@ function ConversationRow({
           onClick={onAdd}
         >
           <PlusIcon data-icon="inline-start" />
-          카드 추가
+          {boardCopy.conversation.addCard}
         </Button>
         <Button type="button" size="sm" variant="outline" onClick={onOpenSession}>
           <MessageSquareTextIcon data-icon="inline-start" />
-          대화 열기
+          {boardCopy.conversation.open}
         </Button>
       </span>
       {actionError !== null && (

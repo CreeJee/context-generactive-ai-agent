@@ -25,6 +25,7 @@ import {
   useBoardsEditMutation,
   useBoardsKanbanMutation,
 } from "../../queries/mutations/session";
+import { problemText } from "../../shared/copy-templates";
 import {
   boardCardKey,
   boardItem,
@@ -37,6 +38,7 @@ import {
 } from "./board-moves";
 import type { CardSignals } from "./card-face";
 import { CardPeek, Peek, type TransferTarget } from "./card-peek";
+import { boardCopy } from "./copy";
 import { holdReasonText } from "./hold-reason";
 import { KanbanBoard } from "./kanban-board";
 
@@ -59,97 +61,90 @@ export interface SurfaceBoard {
   readonly rank: number | null;
 }
 
-/** What switching an executing Plan to the board changes, for the button's tooltip. */
-export const kanbanSwitchHint =
-  "카드마다 에이전트를 따로 두고 보드가 배정·검증·통합해요. 이 대화의 모델은 카드를 직접 실행하지 않아요.";
-
-/** Why the board stopped waking its planner, for the badge's tooltip. */
-export const plannerStalledHint =
-  "계획자가 연속으로 카드를 고쳤지만 새로 충족된 outcome이 없어 자동 계획을 멈췄어요. 이미 맡은 카드는 계속 돌아요. 대화에서 방향을 알려 주면 다시 계획해요.";
-
+const { errors } = boardCopy;
 export const errorText = (code: ApiErrorCode) => {
   switch (code) {
     case "plan_version_conflict":
-      return "그사이 계획이 바뀌었어요. 최신 보드를 다시 확인해 주세요.";
+      return problemText(errors.plan_version_conflict);
     case "plan_dependencies_rejected":
-      return "의존 관계가 올바르지 않아요. 없는 카드나 순환 의존을 확인해 주세요.";
+      return problemText(errors.plan_dependencies_rejected);
     case "plan_outcomes_rejected":
-      return "카드가 지금 Goal에 없는 outcome을 가리켜요. 최신 Goal을 다시 확인해 주세요.";
+      return problemText(errors.plan_outcomes_rejected);
     case "card_finished":
-      return "완료된 카드는 수정하거나 취소할 수 없어요.";
+      return errors.card_finished;
     case "card_missing":
-      return "카드를 찾을 수 없어요.";
+      return errors.card_missing;
     case "card_status_changed":
-      return "그사이 카드가 옮겨졌어요. 최신 보드를 다시 확인해 주세요.";
+      return problemText(errors.card_status_changed);
     case "card_transition_invalid":
-      return "이 열로는 옮길 수 없어요.";
+      return errors.card_transition_invalid;
     case "card_not_waiting":
-      return "시작하지 않은 카드만 보류할 수 있어요.";
+      return errors.card_not_waiting;
     case "card_held":
-      return "이미 보류한 카드예요.";
+      return errors.card_held;
     case "card_not_held":
-      return "보류하지 않은 카드예요.";
+      return errors.card_not_held;
     case "card_not_pending":
-      return "승인을 기다리는 카드가 아니에요.";
+      return errors.card_not_pending;
     case "card_not_blocked":
-      return "막힌 카드만 다시 대기열에 넣을 수 있어요.";
+      return errors.card_not_blocked;
     case "card_not_running":
-      return "진행 중인 카드에만 수정 요청을 남길 수 있어요.";
+      return errors.card_not_running;
     case "card_running":
-      return "진행 중인 카드는 다른 대화로 옮길 수 없어요. 끝나거나 멈춘 뒤에 옮겨 주세요.";
+      return problemText(errors.card_running);
     case "card_waiting":
-      return "판단을 기다리는 카드는 판단에 답한 뒤에 옮길 수 있어요.";
+      return errors.card_waiting;
     case "card_has_dependents":
-      return "이 카드를 기다리는 카드가 있어서 옮길 수 없어요. 그 카드의 의존을 먼저 풀어 주세요.";
+      return problemText(errors.card_has_dependents);
     case "transfer_target_invalid":
-      return "같은 프로젝트에서 계획이 있는 다른 대화로만 옮길 수 있어요.";
+      return errors.transfer_target_invalid;
     case "not_worktree":
-      return "카드를 프로젝트에서 차례로 실행하는 보드라 옮길 Goal 브랜치가 없어요.";
+      return errors.not_worktree;
     case "merge_started":
-      return "merge를 시작한 Goal은 대상 브랜치를 바꿀 수 없어요.";
+      return errors.merge_started;
     case "detached_head":
-      return "프로젝트에 checkout한 브랜치가 없어요(detached HEAD). 브랜치를 checkout한 뒤 다시 시도해 주세요.";
+      return problemText(errors.detached_head);
     case "goal_has_work":
-      return "Goal 브랜치에 두 브랜치 어디에도 없는 커밋이 있어 대상 브랜치를 바꿀 수 없어요.";
+      return errors.goal_has_work;
     case "cards_started":
-      return "이 Goal의 카드 브랜치(취소한 카드 것 포함)가 남아 있어 대상 브랜치를 바꿀 수 없어요.";
+      return errors.cards_started;
     case "reorder_across_columns":
-      return "순서는 같은 열 안에서만 바꿀 수 있어요.";
+      return errors.reorder_across_columns;
     case "not_kanban":
-      return "칸반으로 실행할 때만 열을 옮길 수 있어요.";
+      return errors.not_kanban;
     case "plan_closed":
-      return "완료했거나 닫은 계획은 바꿀 수 없어요.";
+      return errors.plan_closed;
     case "session_in_use":
-      return "다른 창에서 이 대화를 쓰고 있어요.";
+      return errors.session_in_use;
     case "plan_not_executing":
-      return "실행 중인 계획만 칸반으로 돌릴 수 있어요.";
+      return errors.plan_not_executing;
     case "worktree_unavailable":
-      return "카드 작업 폴더를 만들 수 없어요.";
+      return errors.worktree_unavailable;
     case "dependency_cycle":
-      return "서로 기다리는 Goal이 생겨서 지정할 수 없어요.";
+      return errors.dependency_cycle;
     case "goal_missing":
     case "other_project":
     case "self_dependency":
-      return "기다릴 수 없는 Goal이에요.";
+      return errors.goal_unwaitable;
     case "queue_item_changed":
-      return "그사이 카드의 대기열 상태가 바뀌었어요. 최신 보드를 다시 확인해 주세요.";
+      return problemText(errors.queue_item_changed);
     case "worktree_in_use":
-      return "카드 작업 폴더를 다른 실행이 쓰고 있어요. 잠시 뒤 다시 시도해 주세요.";
+      return problemText(errors.worktree_in_use);
     case "worktree_failed":
-      return "카드 작업 폴더를 정리하지 못했어요.";
+      return errors.worktree_failed;
     case "kanban_storage_failed":
     case "workflow_storage_failed":
     case "schedule_storage_failed":
     case "storage_failed":
-      return "보드를 저장하거나 읽지 못했어요. 잠시 뒤 다시 시도해 주세요.";
+      return problemText(errors.storage_failed);
     default:
-      return "보드를 바꾸지 못했어요.";
+      return errors.unknown;
   }
 };
 const holdText = (reason: Parameters<typeof holdReasonText>[0] | null) =>
   reason === null ? null : holdReasonText(reason);
 export const editErrorText = (error: Error) =>
-  isApiError(error) ? errorText(error.code) : "보드를 바꾸지 못했어요.";
+  isApiError(error) ? errorText(error.code) : errors.unknown;
 
 /** Where a dropped card is expected to land while its request is on the way. */
 type Landing = { readonly key: string; readonly lands: BoardCardStatus };
@@ -455,15 +450,12 @@ export function BoardSurface({
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>진행 중인 카드예요</DialogTitle>
-            <DialogDescription>
-              진행 중인 카드는 오케스트레이터가 옮겨요. 바꾸고 싶은 내용을 수정 요청으로 남기면
-              오케스트레이터가 반영할지 정해요.
-            </DialogDescription>
+            <DialogTitle>{boardCopy.askChange.title}</DialogTitle>
+            <DialogDescription>{boardCopy.askChange.body}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setAskChange(null)}>
-              그대로 두기
+              {boardCopy.askChange.choices.keep}
             </Button>
             <Button
               type="button"
@@ -475,7 +467,7 @@ export function BoardSurface({
                 setAskChange(null);
               }}
             >
-              수정 요청 남기기
+              {boardCopy.askChange.choices.request}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -488,15 +480,18 @@ export function BoardSurface({
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>다른 대화로 옮길까요?</DialogTitle>
+            <DialogTitle>{boardCopy.transfer.title}</DialogTitle>
             <DialogDescription>
               {transfer !== null &&
-                `"${transfer.item.card.title}" 카드가 "${transfer.to.label ?? transfer.to.plan.summary}" 대화 계획의 마지막에 새 카드로 들어가요. 의존은 끊기고 처음부터 다시 시작해요. 지금까지의 작업은 이 카드의 브랜치에 남아요.`}
+                boardCopy.transfer.body(
+                  transfer.item.card.title,
+                  transfer.to.label ?? transfer.to.plan.summary,
+                )}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setTransfer(null)}>
-              그대로 두기
+              {boardCopy.transfer.choices.keep}
             </Button>
             <Button
               type="button"
@@ -504,7 +499,7 @@ export function BoardSurface({
                 if (transfer !== null) sendTransfer(transfer);
               }}
             >
-              옮기기
+              {boardCopy.transfer.choices.move}
             </Button>
           </DialogFooter>
         </DialogContent>

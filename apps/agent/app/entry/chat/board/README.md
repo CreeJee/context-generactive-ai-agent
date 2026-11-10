@@ -9,23 +9,24 @@
 - `BoardSurface` — 하나 또는 여러 Plan의 열, 카드 peek, 거절 알림, 실행 중 카드 변경 요청 프롬프트, 다른 대화로 옮기기 확인을 그리는 공용 보드 컴포넌트다. props는 projectId, holder, boards, shown, peek, onPeek, adding, onDraggingChange, className 등이다
 - `SurfaceBoard` — 보드 위 한 Plan의 묶음이다(sessionId, label, view, plan, decisions, loop, rank). label과 rank는 Plan 하나만 보일 때 null이다
 - `ActiveKanban` / `BoardPlan` — `KanbanView`의 active 변형과 `BoardView["plan"]`의 non-null 타입 별칭
-- `errorText` / `editErrorText` — `ApiErrorCode`(또는 `isApiError` Error)를 한국어 안내 문구로 바꾼다. 모르는 코드는 "보드를 바꾸지 못했어요."로 떨어진다
+- `errorText` / `editErrorText` — `ApiErrorCode`(또는 `isApiError` Error)를 한국어 안내 문구로 바꾼다. 모르는 코드는 `boardCopy.errors.unknown`("보드를 바꾸지 못했습니다.")으로 떨어진다
 - `ProjectBoard` — 프로젝트의 모든 실행 중 Plan을 우선순위 트리 순서로 한 보드에 보여 준다. `useProjectBoardsQuery`, `useDecisionInboxQuery`, `useGoalOrderMutation`을 쓰고 `BoardSurface`를 렌더한다
 - `KanbanBoard` — 상태 열 7개와 dnd-kit 드래그(마우스, 터치 홀드, 그립 키보드), j/k/h/l·화살표 포커스 이동, 열 접기를 맡는다. 드롭 결과는 onReorder, onSend, onAskChange, onRefused 콜백으로 부모에 넘긴다
 - `CardPeek` — 오른쪽 Sheet peek 패널이다. 카드 상세, DecisionPrompt, 보류 사유와 검증 의견, 편집기, 새 카드 폼, 다른 대화로 옮기기 Select, Hold/Release/Requeue 버튼을 보여 준다. 카드 상세는 카드가 위하는 Goal outcome id를 보여 준다. outcome은 계획자가 정하므로 편집기에는 없다
 - `Peek` — peek 내용을 나타내는 TaggedEnum이다: `New` 또는 `Card{cardId, editing}`
 - `TransferTarget` — 카드를 옮길 수 있는 같은 프로젝트의 다른 대화 정보(sessionId, label)
 - `CardFace` / `CardSignals` — 보드와 드래그 오버레이가 함께 쓰는 카드 앞면이다. CardSignals는 판단 대기, 변경 요청 대기, 요청 중, 사유, 아직 끝나지 않은 선행 카드 제목, 그룹을 담는다
-- `StatusIcon` / `UserChangeMark` / `authorLabel` / `riskLabels` — 상태 아이콘, 사용자가 마지막으로 바꾼 카드의 표시, 마지막 변경자(User/Orchestrator) 라벨, 위험도 라벨
+- `StatusIcon` / `UserChangeMark` / `authorLabel` — 상태 아이콘, 사용자가 마지막으로 바꾼 카드의 표시, 마지막 변경자(User/Orchestrator) 라벨
 - `BoardCard` / `BoardCardRef` / `boardCardKey` / `parseBoardCardKey` — 보드 카드 타입과 (sessionId, cardId) 참조, `${sessionId}:${cardId}` 키 생성과 파싱
 - `BoardItem` / `boardItem` — sessionId와 보드 전체에서 고유한 key를 붙인 카드다. boardItem은 `Function.dual` 생성자다
-- `cardStatusLabels` / `boardColumns` — `CardStatus` 한국어 라벨과 왼쪽에서 오른쪽 열 순서(backlog, ready, in_progress, verify, human_decision, done, blocked)
+- `boardColumns` — 왼쪽에서 오른쪽 열 순서(backlog, ready, in_progress, verify, human_decision, done, blocked). `CardStatus` 라벨은 `boardCopy.status`에 있다
 - `DropOutcome` / `DropContext` / `dropOutcome` — 카드를 열에 놓았을 때의 의미(Reorder, Send{intent, lands}, AskChange, Refused{reason})를 정하는 TaggedEnum, 그 문맥, dual 판정 함수
 - `inProjectOrder` — Goal rank 순서로 정렬하고, 같은 rank 안에서는 원래 Plan 순서를 지킨다. rank가 null인 항목은 뒤로 간다
 - `foreignCardDrop` — 다른 대화의 카드 위에 놓은 드롭을 이유와 함께 거절하는 DropOutcome
 - `canTransfer` — 카드 상태가 backlog, ready, blocked일 때만 다른 대화 Plan으로 옮길 수 있다
 - `PendingMove` / `withPending` — 서버 응답 전 요청(Status, Order, Leaving)을 나타내는 TaggedEnum과, 그 요청을 서버 카드 목록에 반영해 보여 주는 dual 함수
 - `verdictText` / `holdReasonText` / `holdReasonNote` — memory-agent의 `VerdictFailure`, `CardHoldReason`(내부 `CardFailure` 포함)을 태그별 한국어 문구로 바꾼다. 모델이 쓴 의견은 holdReasonNote가 따로 돌려준다
+- `boardCopy` (`copy.ts`) — 보드 화면 문구 카탈로그다. 상태 열 라벨, 드롭 거절 사유, 보류 사유, API 오류 문구, 위험도 라벨, peek·편집기·프로젝트 보드 문구를 담고 `tools/copy-check`가 검사한다
 - 하위 디렉터리 없음
 
 ## Invariants

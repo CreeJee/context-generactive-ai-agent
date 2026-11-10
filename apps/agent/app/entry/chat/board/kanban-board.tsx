@@ -40,7 +40,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../../../components/ui/
 import type { CardStatus } from "../../api";
 import {
   boardColumns,
-  cardStatusLabels,
   DropOutcome,
   dropOutcome,
   foreignCardDrop,
@@ -48,6 +47,7 @@ import {
   type DropContext,
 } from "./board-moves";
 import { CardFace, StatusIcon, type CardSignals } from "./card-face";
+import { boardCopy } from "./copy";
 
 declare module "react" {
   /** Dynamic values the board's classes read: `transform-(--board-card-offset)`. */
@@ -89,17 +89,7 @@ const collision: CollisionDetection = (args) => {
   return within.length > 0 ? within : closestCorners(args);
 };
 
-/** What a drop on another column asks the server for, as the board says it. */
-const sendLabels = {
-  Hold: "보류해요",
-  Release: "보류를 풀어요",
-  Requeue: "다시 대기열에 넣어요",
-} as const satisfies Record<"Hold" | "Release" | "Requeue", string>;
-
-const screenReaderInstructions = {
-  draggable:
-    "카드를 옮기려면 스페이스나 엔터를 눌러 집고, 화살표 키로 옮긴 뒤 스페이스나 엔터로 놓아요. Esc를 누르면 취소해요.",
-};
+const screenReaderInstructions = { draggable: boardCopy.kanban.instructions };
 
 /** Which card the j/k and arrow keys move focus to. */
 const neighbor = (
@@ -216,23 +206,23 @@ export function KanbanBoard({
     const status = over === null ? null : statusOf(over);
     const outcome = item === null || over === null ? null : outcomeFor(item, over);
     if (item === null || status === null || outcome === null)
-      return `${titleOf(id)} 카드가 놓을 곳 밖에 있어요.`;
+      return boardCopy.kanban.outside(titleOf(id));
     const { card } = item;
     return DropOutcome.$match(outcome, {
-      Reorder: () => `${card.title} 카드가 ${cardStatusLabels[status]} 열 안에 있어요.`,
-      Send: ({ intent }) => `${card.title} 카드를 ${sendLabels[intent]}.`,
-      AskChange: () => `${card.title} 카드는 진행 중이라 옮기지 않고 수정 요청을 남길 수 있어요.`,
-      Refused: ({ reason }) => `${cardStatusLabels[status]} 열에는 놓을 수 없어요. ${reason}`,
+      Reorder: () => boardCopy.kanban.inColumn(card.title, boardCopy.status[status]),
+      Send: ({ intent }) => boardCopy.kanban.send[intent](card.title),
+      AskChange: () => boardCopy.kanban.askChange(card.title),
+      Refused: ({ reason }) => boardCopy.kanban.refused(boardCopy.status[status], reason),
     });
   };
   const announcements: Announcements = {
-    onDragStart: ({ active: picked }) => `${titleOf(picked.id)} 카드를 집었어요.`,
+    onDragStart: ({ active: picked }) => boardCopy.kanban.pickedUp(titleOf(picked.id)),
     onDragOver: ({ active: picked, over }) => describe(picked.id, over?.id ?? null),
     onDragEnd: ({ active: picked, over }) =>
       over === null
-        ? `${titleOf(picked.id)} 카드를 제자리에 두었어요.`
-        : `${titleOf(picked.id)} 카드를 놓았어요. ${describe(picked.id, over.id)}`,
-    onDragCancel: ({ active: picked }) => `${titleOf(picked.id)} 카드 옮기기를 취소했어요.`,
+        ? boardCopy.kanban.putBack(titleOf(picked.id))
+        : boardCopy.kanban.dropped(titleOf(picked.id), describe(picked.id, over.id)),
+    onDragCancel: ({ active: picked }) => boardCopy.kanban.cancelled(titleOf(picked.id)),
   };
 
   const finish = ({ active: dragged, over }: DragEndEvent) => {
@@ -304,7 +294,7 @@ export function KanbanBoard({
     >
       <div
         role="group"
-        aria-label="칸반 보드"
+        aria-label={boardCopy.kanban.label}
         onKeyDown={moveFocus}
         className={cn(
           "flex h-full min-h-0 snap-x snap-mandatory gap-2 overflow-x-auto px-4 pb-4 sm:snap-none",
@@ -374,7 +364,7 @@ export function BoardShortcuts() {
             type="button"
             size="icon-sm"
             variant="ghost-muted"
-            aria-label="키보드 단축키"
+            aria-label={boardCopy.shortcuts.label}
             className="hidden sm:inline-flex"
           />
         }
@@ -384,16 +374,20 @@ export function BoardShortcuts() {
       <TooltipContent side="bottom" align="end">
         <div className="flex flex-col items-start gap-1">
           <p>
-            <Kbd>j</Kbd> <Kbd>k</Kbd> <Kbd>h</Kbd> <Kbd>l</Kbd> 또는 화살표: 카드 사이 이동
+            <Kbd>j</Kbd> <Kbd>k</Kbd> <Kbd>h</Kbd> <Kbd>l</Kbd> {boardCopy.shortcuts.moveFocus}
           </p>
           <p>
-            <Kbd>Enter</Kbd>: 카드 열기
+            <Kbd>Enter</Kbd>
+            {boardCopy.shortcuts.open}
           </p>
           <p>
-            손잡이에서 <Kbd>Space</Kbd>: 카드 집기, 화살표로 옮기고 <Kbd>Space</Kbd>로 놓기
+            {boardCopy.shortcuts.pickUpAt} <Kbd>Space</Kbd>
+            {boardCopy.shortcuts.pickUp} <Kbd>Space</Kbd>
+            {boardCopy.shortcuts.drop}
           </p>
           <p>
-            <Kbd>Esc</Kbd>: 옮기기 취소
+            <Kbd>Esc</Kbd>
+            {boardCopy.shortcuts.cancel}
           </p>
         </div>
       </TooltipContent>
@@ -421,22 +415,22 @@ function BoardColumn({
 }) {
   const { setNodeRef } = useDroppable({ id: columnId(status) });
   const refused = DropOutcome.$is("Refused")(outcome);
-  const label = cardStatusLabels[status];
+  const label = boardCopy.status[status];
   /** What dropping here would do, in words; nothing for a reorder inside the column. */
   const hint =
     outcome === null
       ? null
       : DropOutcome.$match(outcome, {
           Reorder: () => null,
-          Send: ({ intent }) => `놓으면 ${sendLabels[intent]}.`,
-          AskChange: () => "놓으면 수정 요청을 남길지 물어봐요.",
+          Send: ({ intent }) => boardCopy.kanban.sendHint[intent],
+          AskChange: () => boardCopy.kanban.askChangeHint,
           Refused: ({ reason }) => reason,
         });
   if (folded)
     return (
       <section
         ref={setNodeRef}
-        aria-label={`${label} ${count}개, 접힘`}
+        aria-label={boardCopy.kanban.columnFolded(label, count)}
         className={cn(
           "flex w-10 shrink-0 snap-start flex-col items-center gap-2 rounded-lg bg-muted/40 py-2 transition-opacity",
           refused && "opacity-40",
@@ -447,7 +441,7 @@ function BoardColumn({
           type="button"
           size="icon-sm"
           variant="ghost-muted"
-          aria-label={`${label} 열 펼치기`}
+          aria-label={boardCopy.kanban.expand(label)}
           onClick={onToggle}
         >
           <ChevronsLeftRightIcon />
@@ -460,7 +454,7 @@ function BoardColumn({
   return (
     <section
       ref={setNodeRef}
-      aria-label={`${label} ${count}개`}
+      aria-label={boardCopy.kanban.column(label, count)}
       className={cn(
         // Every open column takes the same share, empty or not; folding is how a column gives
         // its width away.
@@ -478,7 +472,7 @@ function BoardColumn({
             type="button"
             size="icon-sm"
             variant="ghost-muted"
-            aria-label={`${label} 열 접기`}
+            aria-label={boardCopy.kanban.collapse(label)}
             onClick={onToggle}
           >
             <ChevronsRightLeftIcon />
@@ -551,7 +545,7 @@ function SortableCard({
           ref={setActivatorNodeRef}
           data-board-grip=""
           {...attributes}
-          aria-label={`${card.title} 옮기기`}
+          aria-label={boardCopy.kanban.grip(card.title)}
           className="-mr-1 grid size-5 shrink-0 cursor-grab place-items-center rounded-sm text-muted-foreground opacity-0 outline-none group-hover/board-card:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:opacity-100"
         >
           <GripVerticalIcon aria-hidden className="size-3.5" />

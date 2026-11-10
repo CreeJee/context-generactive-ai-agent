@@ -3,6 +3,7 @@ import { browserCrypto } from "../shared/browser-crypto";
 import { Function as EffectFunction } from "effect";
 import { useEffect, useRef, useState } from "react";
 import { api, attachmentErrorMessage, refusalOf, type Attachment } from "../api";
+import { chatCopy } from "./copy";
 
 /** Types the server accepts; anything else fails before uploading. */
 const acceptedTypes = ["image/png", "image/jpeg", "image/gif", "image/webp"] as const;
@@ -68,7 +69,7 @@ export function useDraftImages() {
       if (!acceptedTypes.some((type) => type === file.type)) {
         setImages((current) => [
           ...current,
-          DraftImage.failed({ ...base, reason: "PNG, JPEG, GIF, WebP 이미지만 올릴 수 있어요." }),
+          DraftImage.failed({ ...base, reason: chatCopy.draftImages.unsupportedType }),
         ]);
         continue;
       }

@@ -9,9 +9,12 @@ import {
 } from "lucide-react";
 import { cn } from "cn";
 import type { BoardView } from "../api";
+import { chatCopy } from "./copy";
 import { WorkflowRow, WorkflowRows } from "./workflow-rows";
 
 type BoardOutcome = BoardView["outcomes"][number];
+
+const copy = chatCopy.outcomeChecklist;
 type OutcomeTag = BoardOutcome["status"]["_tag"];
 
 /** How each outcome status reads on the page. */
@@ -21,11 +24,19 @@ const outcomeLooks: Readonly<
     { readonly icon: LucideIcon; readonly label: string; readonly className: string }
   >
 > = {
-  Unplanned: { icon: CircleIcon, label: "맡은 카드 없음", className: "text-muted-foreground" },
-  InProgress: { icon: CircleDotIcon, label: "진행 중", className: "text-warning" },
-  AwaitingCheck: { icon: CircleDashedIcon, label: "확인 대기", className: "text-foreground/70" },
-  Met: { icon: CircleCheckIcon, label: "충족", className: "text-primary" },
-  NotMet: { icon: CircleXIcon, label: "미충족", className: "text-destructive" },
+  Unplanned: {
+    icon: CircleIcon,
+    label: copy.status.Unplanned,
+    className: "text-muted-foreground",
+  },
+  InProgress: { icon: CircleDotIcon, label: copy.status.InProgress, className: "text-warning" },
+  AwaitingCheck: {
+    icon: CircleDashedIcon,
+    label: copy.status.AwaitingCheck,
+    className: "text-foreground/70",
+  },
+  Met: { icon: CircleCheckIcon, label: copy.status.Met, className: "text-primary" },
+  NotMet: { icon: CircleXIcon, label: copy.status.NotMet, className: "text-destructive" },
 };
 
 /** What the status adds after its label: the cards left, or the verifier's verdict. */
@@ -34,8 +45,8 @@ const verdictOf = ({ summary }: { readonly summary: string }) =>
 const outcomeDetail = (status: BoardOutcome["status"]): string | null =>
   Match.valueTags(status, {
     Unplanned: () => null,
-    InProgress: ({ pending }) => `카드 ${pending.length}개 남음`,
-    AwaitingCheck: ({ stale }) => (stale ? "바뀐 뒤 다시 확인해요" : null),
+    InProgress: ({ pending }) => copy.cardsLeft(pending.length),
+    AwaitingCheck: ({ stale }) => (stale ? copy.recheckAfterChange : null),
     Met: verdictOf,
     NotMet: verdictOf,
   });
@@ -51,7 +62,7 @@ export const metOutcomes = (outcomes: readonly BoardOutcome[]): number =>
 export function OutcomeChecklist({ outcomes }: { readonly outcomes: readonly BoardOutcome[] }) {
   if (outcomes.length === 0) return null;
   return (
-    <WorkflowRows label={`결과 ${metOutcomes(outcomes)}/${outcomes.length} 충족`}>
+    <WorkflowRows label={copy.heading(metOutcomes(outcomes), outcomes.length)}>
       {outcomes.map((outcome) => {
         const look = outcomeLooks[outcome.status._tag];
         const detail = outcomeDetail(outcome.status);

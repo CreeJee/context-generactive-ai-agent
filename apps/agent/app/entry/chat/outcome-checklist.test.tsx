@@ -1,6 +1,9 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vite-plus/test";
 import { OutcomeChecklist } from "./outcome-checklist";
+import { chatCopy } from "./copy";
+
+const copy = chatCopy.outcomeChecklist;
 
 describe("OutcomeChecklist", () => {
   test("counts the met outcomes and says where each one stands", () => {
@@ -14,11 +17,11 @@ describe("OutcomeChecklist", () => {
         ]}
       />,
     );
-    expect(html).toContain("결과 1/4 충족");
-    expect(html).toContain("충족 · checked");
-    expect(html).toContain("진행 중 · 카드 2개 남음");
-    expect(html).toContain("확인 대기 · 바뀐 뒤 다시 확인해요");
-    expect(html).toContain("맡은 카드 없음");
+    expect(html).toContain(copy.heading(1, 4));
+    expect(html).toContain(`${copy.status.Met} · checked`);
+    expect(html).toContain(`${copy.status.InProgress} · ${copy.cardsLeft(2)}`);
+    expect(html).toContain(`${copy.status.AwaitingCheck} · ${copy.recheckAfterChange}`);
+    expect(html).toContain(copy.status.Unplanned);
   });
   test("shows nothing for a Goal without outcomes", () => {
     expect(renderToStaticMarkup(<OutcomeChecklist outcomes={[]} />)).toBe("");

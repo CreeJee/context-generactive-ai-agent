@@ -9,6 +9,11 @@ import {
   type HumanDecisionRequest,
 } from "../api";
 import { useAnswerDecisionMutation } from "../queries/mutations/session";
+import { chatCopy } from "./copy";
+
+const copy = chatCopy.decision;
+const kinds = copy.kinds;
+const answers = copy.answers;
 
 interface AnswerOption {
   readonly answer: DecisionAnswer;
@@ -19,37 +24,37 @@ interface AnswerOption {
 export function describeDecision(kind: DecisionKind) {
   return Match.valueTags(kind, {
     UncertainSideEffect: ({ toolNames }) => ({
-      title: "결과를 알 수 없는 도구 실행",
+      title: kinds.UncertainSideEffect.title,
       detail:
         toolNames.length > 0
-          ? `도구 ${toolNames.join(", ")}의 실행 결과가 확인되지 않았어요. 실제로 반영됐는지 확인해 주세요.`
-          : "이전 실행에서 결과가 확인되지 않은 도구가 있어요. 카드 작업 폴더에 실제로 반영됐는지 확인해 주세요.",
+          ? kinds.UncertainSideEffect.detail(toolNames.join(", "))
+          : kinds.UncertainSideEffect.detailWithoutTools,
     }),
     IntegrationConflict: ({ files }) => ({
-      title: "Goal 브랜치 통합 충돌",
-      detail: `충돌한 파일: ${files.join(", ")}`,
+      title: kinds.IntegrationConflict.title,
+      detail: kinds.IntegrationConflict.detail(files.join(", ")),
     }),
     ImpactUnclear: ({ fromGoalVersion, toGoalVersion }) => ({
-      title: "Goal 변경의 영향 판단",
-      detail: `Goal v${fromGoalVersion} → v${toGoalVersion} 변경이 이 카드에 어떤 영향을 주는지 오케스트레이터가 판단하지 못했어요.`,
+      title: kinds.ImpactUnclear.title,
+      detail: kinds.ImpactUnclear.detail(fromGoalVersion, toGoalVersion),
     }),
     RetryExhausted: ({ attempts }) => ({
-      title: "시도를 모두 실패",
-      detail: `${attempts}번 시도했지만 끝내지 못했어요.`,
+      title: kinds.RetryExhausted.title,
+      detail: kinds.RetryExhausted.detail(attempts),
     }),
     ProtectedBranchMerge: ({ targetBranch, prAvailable }) => ({
-      title: "보호 브랜치 merge",
+      title: kinds.ProtectedBranchMerge.title,
       detail: prAvailable
-        ? `${targetBranch}는 보호 브랜치라 자동으로 merge하지 않아요. PR을 만들거나 직접 merge해 주세요.`
-        : `${targetBranch}는 보호 브랜치라 자동으로 merge하지 않아요. gh가 없어 PR은 만들 수 없어요. Goal 브랜치를 남겨 두었으니 직접 merge해 주세요.`,
+        ? kinds.ProtectedBranchMerge.detail(targetBranch)
+        : kinds.ProtectedBranchMerge.detailWithoutPr(targetBranch),
     }),
     MergeConflict: ({ targetBranch, files }) => ({
-      title: "사용자 브랜치 merge 충돌",
-      detail: `${targetBranch}를 Goal 브랜치에 merge하다 충돌했어요. 충돌한 파일: ${files.join(", ")}`,
+      title: kinds.MergeConflict.title,
+      detail: kinds.MergeConflict.detail(targetBranch, files.join(", ")),
     }),
     FileOverlap: ({ otherCardId, files }) => ({
-      title: "다른 Goal과 파일 겹침",
-      detail: `다른 Goal의 카드 ${otherCardId}가 같은 파일(${files.join(", ")})을 이미 바꿨지만 아직 merge되지 않았어요. 어느 쪽을 먼저 할지 정해 주세요.`,
+      title: kinds.FileOverlap.title,
+      detail: kinds.FileOverlap.detail(otherCardId, files.join(", ")),
     }),
   });
 }
@@ -59,78 +64,108 @@ const answerOptions = (kind: DecisionKind): readonly AnswerOption[] =>
     UncertainSideEffect: () => [
       {
         answer: DecisionAnswer.UncertainSideEffect({ choice: "continue" }),
-        label: "반영됨, 이어서 진행",
+        label: answers.UncertainSideEffect.continue,
       },
       {
         answer: DecisionAnswer.UncertainSideEffect({ choice: "retry" }),
-        label: "반영 안 됨, 다시 시도",
+        label: answers.UncertainSideEffect.retry,
       },
-      { answer: DecisionAnswer.UncertainSideEffect({ choice: "stop" }), label: "카드 멈춤" },
+      {
+        answer: DecisionAnswer.UncertainSideEffect({ choice: "stop" }),
+        label: answers.UncertainSideEffect.stop,
+      },
     ],
     IntegrationConflict: () => [
       {
         answer: DecisionAnswer.IntegrationConflict({ choice: "resolved" }),
-        label: "직접 해결함, 다시 검증",
+        label: answers.IntegrationConflict.resolved,
       },
-      { answer: DecisionAnswer.IntegrationConflict({ choice: "rework" }), label: "카드 다시 작업" },
-      { answer: DecisionAnswer.IntegrationConflict({ choice: "stop" }), label: "카드 멈춤" },
+      {
+        answer: DecisionAnswer.IntegrationConflict({ choice: "rework" }),
+        label: answers.IntegrationConflict.rework,
+      },
+      {
+        answer: DecisionAnswer.IntegrationConflict({ choice: "stop" }),
+        label: answers.IntegrationConflict.stop,
+      },
     ],
     ImpactUnclear: () => [
-      { answer: DecisionAnswer.ImpactUnclear({ choice: "continue" }), label: "그대로 진행" },
-      { answer: DecisionAnswer.ImpactUnclear({ choice: "replace" }), label: "새 카드로 대체" },
-      { answer: DecisionAnswer.ImpactUnclear({ choice: "stop" }), label: "카드 멈춤" },
+      {
+        answer: DecisionAnswer.ImpactUnclear({ choice: "continue" }),
+        label: answers.ImpactUnclear.continue,
+      },
+      {
+        answer: DecisionAnswer.ImpactUnclear({ choice: "replace" }),
+        label: answers.ImpactUnclear.replace,
+      },
+      {
+        answer: DecisionAnswer.ImpactUnclear({ choice: "stop" }),
+        label: answers.ImpactUnclear.stop,
+      },
     ],
     RetryExhausted: () => [
-      { answer: DecisionAnswer.RetryExhausted({ choice: "requeue" }), label: "다시 큐에 넣기" },
-      { answer: DecisionAnswer.RetryExhausted({ choice: "stop" }), label: "카드 멈춤" },
+      {
+        answer: DecisionAnswer.RetryExhausted({ choice: "requeue" }),
+        label: answers.RetryExhausted.requeue,
+      },
+      {
+        answer: DecisionAnswer.RetryExhausted({ choice: "stop" }),
+        label: answers.RetryExhausted.stop,
+      },
     ],
     ProtectedBranchMerge: ({ prAvailable }) => [
       ...(prAvailable
         ? [
             {
               answer: DecisionAnswer.ProtectedBranchMerge({ choice: "create_pr" }),
-              label: "PR 만들기",
+              label: answers.ProtectedBranchMerge.create_pr,
             },
           ]
         : []),
       {
         answer: DecisionAnswer.ProtectedBranchMerge({ choice: "manual_merge" }),
-        label: "직접 merge",
+        label: answers.ProtectedBranchMerge.manual_merge,
       },
     ],
     MergeConflict: () => [
       {
         answer: DecisionAnswer.MergeConflict({ choice: "resolved" }),
-        label: "직접 해결함, 다시 merge",
+        label: answers.MergeConflict.resolved,
       },
-      { answer: DecisionAnswer.MergeConflict({ choice: "stop" }), label: "자동 merge 멈춤" },
+      {
+        answer: DecisionAnswer.MergeConflict({ choice: "stop" }),
+        label: answers.MergeConflict.stop,
+      },
     ],
     FileOverlap: () => [
-      { answer: DecisionAnswer.FileOverlap({ choice: "wait" }), label: "다른 Goal merge 뒤에" },
-      { answer: DecisionAnswer.FileOverlap({ choice: "proceed" }), label: "지금 진행" },
+      { answer: DecisionAnswer.FileOverlap({ choice: "wait" }), label: answers.FileOverlap.wait },
+      {
+        answer: DecisionAnswer.FileOverlap({ choice: "proceed" }),
+        label: answers.FileOverlap.proceed,
+      },
     ],
   });
 
 const errorText = (code: ApiErrorCode) => {
   switch (code) {
     case "answer_conflict":
-      return "이미 다른 답이 기록됐어요. 보드를 다시 확인해 주세요.";
+      return copy.errors.answerConflict;
     case "facts_changed":
-      return "답을 고르는 동안 상황이 바뀌었어요. 바뀐 내용을 확인하고 다시 골라 주세요.";
+      return copy.errors.factsChanged;
     case "request_closed":
-      return "이 결정 요청은 닫혔어요. 카드가 멈췄거나 실행이 취소됐어요.";
+      return copy.errors.requestClosed;
     case "goal_superseded":
-      return "Goal이 바뀌어 이 결정 요청은 더 이상 쓰이지 않아요.";
+      return copy.errors.goalSuperseded;
     case "request_missing":
     case "request_mismatch":
-      return "결정 요청을 찾을 수 없어요.";
+      return copy.errors.requestMissing;
     case "session_in_use":
-      return "다른 창에서 이 대화를 쓰고 있어요.";
+      return copy.errors.sessionInUse;
     case "kanban_storage_failed":
     case "workflow_storage_failed":
-      return "답을 기록하거나 카드를 옮기지 못했어요. 잠시 뒤 다시 시도해 주세요.";
+      return copy.errors.storageFailed;
     default:
-      return "답을 보내지 못했어요.";
+      return copy.errors.failed;
   }
 };
 
@@ -157,9 +192,7 @@ export function DecisionPrompt({
     >
       <p className="font-medium text-foreground">{title}</p>
       <p>{detail}</p>
-      {request.factsChanged && (
-        <p className="text-muted-foreground">처음 물은 뒤 상황이 바뀌어 최신 내용으로 보여요.</p>
-      )}
+      {request.factsChanged && <p className="text-muted-foreground">{copy.factsChanged}</p>}
       <div className="flex flex-wrap gap-1">
         {answerOptions(request.kind).map((option) => (
           <Button

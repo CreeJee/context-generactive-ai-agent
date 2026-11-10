@@ -37,8 +37,9 @@ import { Textarea } from "../../../components/ui/textarea";
 import { BoardEdit, type BoardView, type HumanDecisionRequest, type KanbanView } from "../../api";
 import { koreanLocalTime } from "../../shared/local-time";
 import { DecisionPrompt } from "../decision-prompt";
-import { canTransfer, cardStatusLabels } from "./board-moves";
-import { authorLabel, riskLabels, StatusIcon } from "./card-face";
+import { canTransfer } from "./board-moves";
+import { authorLabel, StatusIcon } from "./card-face";
+import { boardCopy } from "./copy";
 import { holdReasonNote, holdReasonText } from "./hold-reason";
 
 type BoardCard = BoardView["cards"][number];
@@ -59,10 +60,10 @@ export interface TransferTarget {
 }
 
 const riskItems = [
-  { value: "none", label: "지정 안 함" },
-  { value: "low", label: riskLabels.low },
-  { value: "medium", label: riskLabels.medium },
-  { value: "high", label: riskLabels.high },
+  { value: "none", label: boardCopy.editor.riskNone },
+  { value: "low", label: boardCopy.risk.low },
+  { value: "medium", label: boardCopy.risk.medium },
+  { value: "high", label: boardCopy.risk.high },
 ] as const;
 
 /** The text without its surrounding spaces, unless nothing is left. */
@@ -186,8 +187,8 @@ export function CardPeek({
         if (entry === null)
           return (
             <SheetHeader>
-              <SheetTitle>카드를 찾을 수 없어요</SheetTitle>
-              <SheetDescription>취소됐거나 다른 카드로 바뀌었어요.</SheetDescription>
+              <SheetTitle>{boardCopy.peek.missing.title}</SheetTitle>
+              <SheetDescription>{boardCopy.peek.missing.body}</SheetDescription>
             </SheetHeader>
           );
         const { card, lastChange } = entry;
@@ -198,7 +199,7 @@ export function CardPeek({
               <SheetDescription>
                 <span className="flex items-center gap-1.5">
                   <StatusIcon status={card.status} />
-                  {cardStatusLabels[card.status]}
+                  {boardCopy.status[card.status]}
                   <span className="font-mono">· {card.id}</span>
                   {group !== null && <span>· {group}</span>}
                 </span>
@@ -217,34 +218,32 @@ export function CardPeek({
               ))}
               {card.approval !== undefined && (
                 <div className="space-y-2 rounded-md border px-3 py-2" role="status">
-                  <p>
-                    계획자가 실행 중에 더한 카드라 승인을 기다려요. 승인하기 전에는 실행하지 않아요.
-                  </p>
+                  <p>{boardCopy.peek.approval.waiting}</p>
                   {card.approval.review !== undefined && (
                     <p className="whitespace-pre-wrap text-muted-foreground">
-                      자동 검토: {card.approval.review.reason}
+                      {boardCopy.peek.approval.review(card.approval.review.reason)}
                     </p>
                   )}
-                  <p className="text-muted-foreground">거절하려면 편집에서 카드를 취소해 주세요.</p>
+                  <p className="text-muted-foreground">{boardCopy.peek.approval.rejectHint}</p>
                   <Button
                     type="button"
                     size="sm"
                     disabled={disabled || closed || intentPending}
                     onClick={() => onIntent("Approve", card.id)}
                   >
-                    승인
+                    {boardCopy.peek.approval.approve}
                   </Button>
                 </div>
               )}
               {(hold !== null || changePending) && (
                 <div className="space-y-2 rounded-md border px-3 py-2" role="status">
-                  {hold !== null && <p>사유: {holdReasonText(hold)}</p>}
+                  {hold !== null && <p>{boardCopy.peek.hold.reason(holdReasonText(hold))}</p>}
                   {holdNote !== null && (
                     <p className="whitespace-pre-wrap text-muted-foreground">
-                      검증 의견: {holdNote}
+                      {boardCopy.peek.hold.note(holdNote)}
                     </p>
                   )}
-                  {changePending && <p>오케스트레이터가 이 카드의 변경 요청을 확인하고 있어요.</p>}
+                  {changePending && <p>{boardCopy.peek.hold.changePending}</p>}
                   {loopCard?.requeueable === true && (
                     <Button
                       type="button"
@@ -253,7 +252,7 @@ export function CardPeek({
                       disabled={disabled || intentPending}
                       onClick={() => onIntent("Requeue", card.id)}
                     >
-                      다시 대기열에
+                      {boardCopy.peek.hold.requeue}
                     </Button>
                   )}
                 </div>
@@ -283,7 +282,7 @@ export function CardPeek({
               {!editing && transferTargets.length > 0 && canTransfer(card) && (
                 <div className="rounded-md border px-3 py-2">
                   <Field>
-                    <FieldLabel htmlFor="card-transfer">다른 대화로 옮기기</FieldLabel>
+                    <FieldLabel htmlFor="card-transfer">{boardCopy.peek.transfer.label}</FieldLabel>
                     <span className="flex flex-wrap items-center gap-2">
                       <Select
                         value={transferTo}
@@ -296,10 +295,10 @@ export function CardPeek({
                       >
                         <SelectTrigger
                           id="card-transfer"
-                          aria-label="옮길 대화"
+                          aria-label={boardCopy.peek.transfer.target}
                           className="min-w-40 flex-1"
                         >
-                          <SelectValue placeholder="대화 선택" />
+                          <SelectValue placeholder={boardCopy.peek.transfer.placeholder} />
                         </SelectTrigger>
                         <SelectContent>
                           {transferTargets.map((target) => (
@@ -317,12 +316,10 @@ export function CardPeek({
                           if (transferTo !== null) onTransfer(card.id, transferTo);
                         }}
                       >
-                        옮기기
+                        {boardCopy.peek.transfer.submit}
                       </Button>
                     </span>
-                    <FieldDescription>
-                      그 대화 Plan의 새 카드로 들어가요. 의존은 끊기고 처음부터 다시 시작해요.
-                    </FieldDescription>
+                    <FieldDescription>{boardCopy.peek.transfer.hint}</FieldDescription>
                   </Field>
                 </div>
               )}
@@ -343,7 +340,9 @@ export function CardPeek({
                         onIntent(card.hold === undefined ? "Hold" : "Release", card.id)
                       }
                     >
-                      {card.hold === undefined ? "보류" : "보류 해제"}
+                      {card.hold === undefined
+                        ? boardCopy.peek.actions.hold
+                        : boardCopy.peek.actions.release}
                     </Button>
                   )}
                 <Button
@@ -353,7 +352,9 @@ export function CardPeek({
                   disabled={!editable}
                   onClick={() => onEdit(true)}
                 >
-                  {card.status === "in_progress" ? "수정 요청" : "편집"}
+                  {card.status === "in_progress"
+                    ? boardCopy.peek.actions.requestChange
+                    : boardCopy.peek.actions.edit}
                 </Button>
               </SheetFooter>
             )}
@@ -392,7 +393,7 @@ function CardDetails({
         ))}
       </ul>
     ) : (
-      <span className="text-muted-foreground">없음</span>
+      <span className="text-muted-foreground">{boardCopy.peek.details.none}</span>
     );
   return (
     <div className="space-y-4">
@@ -400,7 +401,7 @@ function CardDetails({
         <p className="whitespace-pre-wrap">{card.description}</p>
       )}
       <DataList className="items-start">
-        <DataListItem term="의존">
+        <DataListItem term={boardCopy.peek.details.dependsOn}>
           {card.dependsOn.length > 0 ? (
             <span className="flex flex-wrap gap-1">
               {card.dependsOn.map((id) => (
@@ -410,12 +411,14 @@ function CardDetails({
               ))}
             </span>
           ) : (
-            <span className="text-muted-foreground">없음</span>
+            <span className="text-muted-foreground">{boardCopy.peek.details.none}</span>
           )}
         </DataListItem>
-        <DataListItem term="완료 조건">{list(card.acceptanceCriteria)}</DataListItem>
+        <DataListItem term={boardCopy.peek.details.acceptanceCriteria}>
+          {list(card.acceptanceCriteria)}
+        </DataListItem>
         {card.outcomes.length > 0 && (
-          <DataListItem term="Goal 결과">
+          <DataListItem term={boardCopy.peek.details.outcomes}>
             <ul className="space-y-1">
               {card.outcomes.map((id) => (
                 <li key={id} className="flex items-start gap-1.5">
@@ -423,7 +426,7 @@ function CardDetails({
                     {id}
                   </Badge>
                   <span className={outcomeOf(id) === null ? "text-muted-foreground" : undefined}>
-                    {outcomeOf(id) ?? "지금 Goal에는 없는 결과예요."}
+                    {outcomeOf(id) ?? boardCopy.peek.details.outcomeMissing}
                   </span>
                 </li>
               ))}
@@ -431,21 +434,31 @@ function CardDetails({
           </DataListItem>
         )}
         {isTruthy(card.boundaries) && (
-          <DataListItem term="경계">{list(card.boundaries)}</DataListItem>
+          <DataListItem term={boardCopy.peek.details.boundaries}>
+            {list(card.boundaries)}
+          </DataListItem>
         )}
-        {isTruthy(card.risk) && <DataListItem term="위험">{riskLabels[card.risk]}</DataListItem>}
+        {isTruthy(card.risk) && (
+          <DataListItem term={boardCopy.peek.details.risk}>
+            {boardCopy.risk[card.risk]}
+          </DataListItem>
+        )}
         {isTruthy(card.requiredEvidence) && (
-          <DataListItem term="필요한 근거">{list(card.requiredEvidence)}</DataListItem>
+          <DataListItem term={boardCopy.peek.details.requiredEvidence}>
+            {list(card.requiredEvidence)}
+          </DataListItem>
         )}
         {card.evidence.length > 0 && (
-          <DataListItem term="남긴 근거">{list(card.evidence)}</DataListItem>
+          <DataListItem term={boardCopy.peek.details.evidence}>{list(card.evidence)}</DataListItem>
         )}
         {isTruthy(card.humanDecision) && (
-          <DataListItem term="사람 판단">{card.humanDecision}</DataListItem>
+          <DataListItem term={boardCopy.peek.details.humanDecision}>
+            {card.humanDecision}
+          </DataListItem>
         )}
-        <DataListItem term="마지막 변경">
+        <DataListItem term={boardCopy.lastChange.label}>
           {lastChange === null
-            ? "기록 없음"
+            ? boardCopy.lastChange.none
             : `${authorLabel(lastChange.author)} · ${koreanLocalTime(lastChange.at)}`}
         </DataListItem>
       </DataList>
@@ -518,22 +531,17 @@ function CardEditor({
     >
       {card === null && (
         <SheetHeader>
-          <SheetTitle>카드 추가</SheetTitle>
-          <SheetDescription>
-            저장하면 보드에 바로 반영되고 작성자가 사용자로 남아요.
-          </SheetDescription>
+          <SheetTitle>{boardCopy.editor.newTitle}</SheetTitle>
+          <SheetDescription>{boardCopy.editor.newHint}</SheetDescription>
         </SheetHeader>
       )}
       <div className={card === null ? "flex-1 overflow-y-auto p-4" : "space-y-3"}>
         {executing && (
-          <p className="mb-3 text-muted-foreground">
-            진행 중인 카드라 바로 바뀌지 않아요. 변경 요청으로 저장되고 오케스트레이터가 반영할지
-            정해요.
-          </p>
+          <p className="mb-3 text-muted-foreground">{boardCopy.editor.executingHint}</p>
         )}
         <FieldGroup>
           <Field>
-            <FieldLabel htmlFor="card-title">제목</FieldLabel>
+            <FieldLabel htmlFor="card-title">{boardCopy.editor.title}</FieldLabel>
             <Input
               id="card-title"
               autoFocus
@@ -542,7 +550,7 @@ function CardEditor({
             />
           </Field>
           <Field>
-            <FieldLabel htmlFor="card-description">설명</FieldLabel>
+            <FieldLabel htmlFor="card-description">{boardCopy.editor.description}</FieldLabel>
             <Textarea
               id="card-description"
               value={form.description}
@@ -550,25 +558,25 @@ function CardEditor({
             />
           </Field>
           <Field>
-            <FieldLabel htmlFor="card-depends">의존 카드</FieldLabel>
+            <FieldLabel htmlFor="card-depends">{boardCopy.editor.dependsOn}</FieldLabel>
             <Input
               id="card-depends"
               value={form.dependsOn}
               onChange={(event) => set("dependsOn")(event.target.value)}
             />
-            <FieldDescription>카드 id를 쉼표로 구분해요.</FieldDescription>
+            <FieldDescription>{boardCopy.editor.dependsOnHint}</FieldDescription>
           </Field>
           <Field>
-            <FieldLabel htmlFor="card-criteria">완료 조건</FieldLabel>
+            <FieldLabel htmlFor="card-criteria">{boardCopy.editor.acceptanceCriteria}</FieldLabel>
             <Textarea
               id="card-criteria"
               value={form.acceptanceCriteria}
               onChange={(event) => set("acceptanceCriteria")(event.target.value)}
             />
-            <FieldDescription>한 줄에 하나씩 적어요.</FieldDescription>
+            <FieldDescription>{boardCopy.editor.onePerLine}</FieldDescription>
           </Field>
           <Field>
-            <FieldLabel htmlFor="card-boundaries">경계</FieldLabel>
+            <FieldLabel htmlFor="card-boundaries">{boardCopy.editor.boundaries}</FieldLabel>
             <Textarea
               id="card-boundaries"
               value={form.boundaries}
@@ -576,7 +584,7 @@ function CardEditor({
             />
           </Field>
           <Field>
-            <FieldLabel htmlFor="card-risk">위험</FieldLabel>
+            <FieldLabel htmlFor="card-risk">{boardCopy.editor.risk}</FieldLabel>
             <Select
               value={form.risk}
               items={riskItems}
@@ -598,7 +606,7 @@ function CardEditor({
             </Select>
           </Field>
           <Field>
-            <FieldLabel htmlFor="card-evidence">필요한 근거</FieldLabel>
+            <FieldLabel htmlFor="card-evidence">{boardCopy.editor.requiredEvidence}</FieldLabel>
             <Textarea
               id="card-evidence"
               value={form.requiredEvidence}
@@ -606,7 +614,7 @@ function CardEditor({
             />
           </Field>
           <Field>
-            <FieldLabel htmlFor="card-decision">사람 판단</FieldLabel>
+            <FieldLabel htmlFor="card-decision">{boardCopy.editor.humanDecision}</FieldLabel>
             <Input
               id="card-decision"
               value={form.humanDecision}
@@ -634,34 +642,34 @@ function CardEditor({
                 />
               }
             >
-              카드 취소
+              {boardCopy.editor.cancelCard.trigger}
             </AlertDialogTrigger>
             <AlertDialogContent size="sm">
               <AlertDialogHeader>
-                <AlertDialogTitle>이 카드를 취소할까요?</AlertDialogTitle>
+                <AlertDialogTitle>{boardCopy.editor.cancelCard.title}</AlertDialogTitle>
                 <AlertDialogDescription>
                   {executing
-                    ? "실행 중인 계획이라 오케스트레이터가 확인한 뒤 취소돼요."
-                    : "취소한 카드는 실행되지 않아요."}
+                    ? boardCopy.editor.cancelCard.executing
+                    : boardCopy.editor.cancelCard.waiting}
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
-                <AlertDialogCancel>그만두기</AlertDialogCancel>
+                <AlertDialogCancel>{boardCopy.editor.cancelCard.choices.keep}</AlertDialogCancel>
                 <AlertDialogAction
                   variant="destructive"
                   onClick={() => submit(BoardEdit.CancelCard({ planVersion, cardId: card.id }))}
                 >
-                  카드 취소
+                  {boardCopy.editor.cancelCard.choices.cancel}
                 </AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
         )}
         <Button type="button" size="sm" variant="outline" onClick={onCancel}>
-          닫기
+          {boardCopy.editor.close}
         </Button>
         <Button type="submit" size="sm" disabled={pending || form.title.trim().length === 0}>
-          {executing ? "변경 요청" : "저장"}
+          {executing ? boardCopy.editor.requestChange : boardCopy.editor.save}
         </Button>
       </div>
     </form>

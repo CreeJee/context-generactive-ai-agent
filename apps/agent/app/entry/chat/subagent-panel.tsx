@@ -11,6 +11,7 @@ import {
 import { Spinner } from "~/components/ui/spinner";
 import { ApprovalRequester, type RelayedApprovalView } from "../api";
 import { ApprovalCard } from "./approval";
+import { chatCopy } from "./copy";
 import { requesterLabel, useDelegatedWork } from "../session/delegated-work";
 import { useProjectScope } from "../events/context";
 import { useRelayedApprovalMutation } from "../queries/mutations/session";
@@ -66,7 +67,7 @@ export function SubagentPanel({
                     }),
                   )}
                   <Badge variant="secondary">
-                    <Spinner /> 작업 중
+                    <Spinner /> {chatCopy.subagents.working}
                   </Badge>
                 </ItemTitle>
                 <ItemDescription>{child.lastTask}</ItemDescription>

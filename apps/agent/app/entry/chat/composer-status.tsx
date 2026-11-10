@@ -2,6 +2,9 @@ import { Data } from "effect";
 import { useEffect, useState } from "react";
 import { Kbd, KbdGroup } from "~/components/ui/kbd";
 import { cn } from "~/lib/utils";
+import { chatCopy } from "./copy";
+
+const copy = chatCopy.composerStatus;
 
 /** What the input box is doing, which decides the status and the keys it offers. */
 export type ComposerMode = Data.TaggedEnum<{
@@ -44,11 +47,11 @@ export function ComposerStatus({ mode }: { mode: ComposerMode }) {
           <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary/60" />
           <span className="relative inline-flex size-1.5 rounded-full bg-primary" />
         </span>
-        답변 중
+        {copy.generating}
       </span>
     ),
-    editing: () => <span className="text-xs font-medium text-primary">대기 메시지 편집 중</span>,
-    approval: () => <span className="text-xs text-warning">승인을 기다리는 중</span>,
+    editing: () => <span className="text-xs font-medium text-primary">{copy.editing}</span>,
+    approval: () => <span className="text-xs text-warning">{copy.approval}</span>,
   });
 }
 
@@ -62,12 +65,12 @@ export function ComposerShortcuts({ mode, className }: { mode: ComposerMode; cla
     idle: () => [],
     approval: () => [],
     generating: () => [
-      { keys: ["⏎"], label: "대기열" },
-      { keys: [modifier, "⇧", "⏎"], label: "끼어들기" },
+      { keys: ["⏎"], label: copy.shortcuts.queue },
+      { keys: [modifier, "⇧", "⏎"], label: copy.shortcuts.interrupt },
     ],
     editing: () => [
-      { keys: ["⏎"], label: "저장" },
-      { keys: ["Esc"], label: "지우기" },
+      { keys: ["⏎"], label: copy.shortcuts.save },
+      { keys: ["Esc"], label: copy.shortcuts.clear },
     ],
   });
   if (shortcuts.length === 0) return null;

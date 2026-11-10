@@ -1,6 +1,10 @@
 import { Data, Function as EffectFunction, Match } from "effect";
 import { isTruthy } from "../../truthy.ts";
 import type { PermissionMode } from "../api";
+import { chatCopy } from "./copy";
+import { chatPrompts } from "./prompts";
+
+const copy = chatCopy.slashCommands;
 
 /** A command typed at the start of the composer, once it is complete. */
 export type SlashCommand = Data.TaggedEnum<{
@@ -48,42 +52,46 @@ interface CommandSpec {
 }
 
 export const commandSpecs: readonly CommandSpec[] = [
-  { name: "new", description: "이 앱의 모델과 새 대화", argument: Argument.none() },
+  { name: "new", description: copy.descriptions.new, argument: Argument.none() },
   {
     name: "agent",
-    description: "외부 에이전트와 새 대화",
+    description: copy.descriptions.agent,
     argument: Argument.choice({ from: "agents" }),
   },
   {
     name: "skill",
-    description: "skill을 따라 요청하기",
+    description: copy.descriptions.skill,
     argument: Argument.choice({ from: "skills" }),
-    trailingText: "요청",
+    trailingText: copy.skillRequest,
   },
   {
     name: "recall",
-    description: "기억에서 찾아 답하기",
-    argument: Argument.text({ placeholder: "질문" }),
+    description: copy.descriptions.recall,
+    argument: Argument.text({ placeholder: copy.recallPlaceholder }),
   },
-  { name: "goal", description: "결과를 맡기고 자율적으로 진행하기", argument: Argument.none() },
-  { name: "plan", description: "변경 없이 조사하고 실행 계획 만들기", argument: Argument.none() },
-  { name: "execute", description: "준비된 계획 승인하고 실행하기", argument: Argument.none() },
-  { name: "status", description: "현재 목표와 계획 상태 보기", argument: Argument.none() },
-  { name: "mode", description: "권한 모드 바꾸기", argument: Argument.choice({ from: "modes" }) },
-  { name: "model", description: "모델 바꾸기", argument: Argument.choice({ from: "models" }) },
+  { name: "goal", description: copy.descriptions.goal, argument: Argument.none() },
+  { name: "plan", description: copy.descriptions.plan, argument: Argument.none() },
+  { name: "execute", description: copy.descriptions.execute, argument: Argument.none() },
+  { name: "status", description: copy.descriptions.status, argument: Argument.none() },
+  {
+    name: "mode",
+    description: copy.descriptions.mode,
+    argument: Argument.choice({ from: "modes" }),
+  },
+  {
+    name: "model",
+    description: copy.descriptions.model,
+    argument: Argument.choice({ from: "models" }),
+  },
   {
     name: "effort",
-    description: "추론 강도 바꾸기",
+    description: copy.descriptions.effort,
     argument: Argument.choice({ from: "efforts" }),
   },
-  { name: "settings", description: "설정 열기", argument: Argument.none() },
-  {
-    name: "report",
-    description: "독립 문제 제보 화면 열기 (모델 호출 없음)",
-    argument: Argument.none(),
-  },
-  { name: "cancel", description: "답변 멈추기", argument: Argument.none() },
-  { name: "compact", description: "이미 답한 도구 출력 비우기", argument: Argument.none() },
+  { name: "settings", description: copy.descriptions.settings, argument: Argument.none() },
+  { name: "report", description: copy.descriptions.report, argument: Argument.none() },
+  { name: "cancel", description: copy.descriptions.cancel, argument: Argument.none() },
+  { name: "compact", description: copy.descriptions.compact, argument: Argument.none() },
 ];
 
 export interface SlashContext {
@@ -95,8 +103,8 @@ export interface SlashContext {
 }
 
 const modes: ReadonlyArray<{ readonly id: PermissionMode; readonly label: string }> = [
-  { id: "ask", label: "매번 묻기" },
-  { id: "auto", label: "자동 판단" },
+  { id: "ask", label: copy.modes.ask },
+  { id: "auto", label: copy.modes.auto },
 ];
 
 export interface Suggestion {
@@ -232,8 +240,8 @@ function parseSlashBody(draft: string, context: SlashContext): SlashParse {
   const known = (from: ChoiceSource) =>
     choices(from, context).some((choice) => choice.id === value);
   // Whole sentences per command, so each noun gets its own particle.
-  const needValue = (choose: string, unknown: string): SlashParse =>
-    SlashParse.incomplete({ reason: isTruthy(value) ? `${unknown}: ${value}` : choose });
+  const needValue = (choose: string, unknown: (value: string) => string): SlashParse =>
+    SlashParse.incomplete({ reason: isTruthy(value) ? unknown(value) : choose });
 
   switch (spec.name) {
     case "new":
@@ -260,45 +268,40 @@ function parseSlashBody(draft: string, context: SlashContext): SlashParse {
     case "agent":
       return known("agents") && others.length === 0
         ? SlashParse.command({ command: SlashCommand.agent({ agent: value }) })
-        : needValue("신뢰한 에이전트를 골라 주세요.", "신뢰한 에이전트 목록에 없어요");
+        : needValue(copy.chooseAgent, copy.unknownAgent);
     case "mode":
       return value === "ask" || value === "auto"
         ? SlashParse.command({ command: SlashCommand.mode({ mode: value }) })
-        : needValue(
-            "권한 모드를 골라 주세요(ask 또는 auto).",
-            "권한 모드는 ask나 auto만 쓸 수 있어요",
-          );
+        : needValue(copy.chooseMode, copy.unknownMode);
     case "model":
       return known("models")
         ? SlashParse.command({ command: SlashCommand.model({ model: value }) })
-        : needValue("모델을 골라 주세요.", "쓸 수 있는 모델 목록에 없어요");
+        : needValue(copy.chooseModel, copy.unknownModel);
     case "effort":
       if (context.efforts.length === 0)
-        return SlashParse.incomplete({ reason: "선택한 모델은 추론 강도를 고를 수 없어요." });
+        return SlashParse.incomplete({ reason: copy.effortUnavailable });
       return known("efforts")
         ? SlashParse.command({ command: SlashCommand.effort({ effort: value }) })
-        : needValue("추론 강도를 골라 주세요.", "선택한 모델에 없는 추론 강도예요");
+        : needValue(copy.chooseEffort, copy.unknownEffort);
     case "skill":
       return known("skills")
         ? SlashParse.command({
             command: SlashCommand.skill({ skill: value, request: trailing }),
           })
-        : needValue("skill을 골라 주세요.", "쓸 수 있는 skill 목록에 없어요");
+        : needValue(copy.chooseSkill, copy.unknownSkill);
     case "recall":
       return isTruthy(rest)
         ? SlashParse.command({ command: SlashCommand.recall({ question: rest }) })
-        : SlashParse.incomplete({ reason: "찾을 내용을 적어 주세요." });
+        : SlashParse.incomplete({ reason: copy.recallEmpty });
     default:
-      return SlashParse.incomplete({ reason: `모르는 명령이에요: /${parts.word}` });
+      return SlashParse.incomplete({ reason: copy.unknownCommand(parts.word) });
   }
 }
 
 /** The message a prompt command sends. */
 export function promptOf(command: Data.TaggedEnum.Value<SlashCommand, "skill" | "recall">) {
   return Match.valueTags(command, {
-    skill: ({ skill, request }) =>
-      `"${skill}" skill을 read_skill로 읽고 그 지침대로 해 주세요.${isTruthy(request) ? `\n\n${request}` : ""}`,
-    recall: ({ question }) =>
-      `find_memory로 기억을 찾아서, 출처(프로젝트와 시점)와 나중에 바뀐 결정이 있으면 함께 답해 주세요: ${question}`,
+    skill: ({ skill, request }) => chatPrompts.skill(skill, request),
+    recall: ({ question }) => chatPrompts.recall(question),
   });
 }

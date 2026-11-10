@@ -6,6 +6,9 @@ import { render } from "vitest-browser-react";
 import { expect, vi } from "vite-plus/test";
 import "../../app.css";
 import { BtwPanel } from "./btw-panel";
+import { chatCopy } from "./copy";
+
+const copy = chatCopy.btw;
 
 const requests: string[] = [];
 const earlier = {
@@ -68,26 +71,22 @@ it.live("BTW panel opens apart, reopens a saved thread and explains what delete 
         </QueryClientProvider>,
       ),
     );
-    yield* sdkCall(() => screen.getByRole("button", { name: "BTW 열기" }).click());
-    yield* sdkCall(() =>
-      expect.element(screen.getByText(/메인 대화나 검색 기억에 들어가지 않고/)).toBeVisible(),
-    );
+    yield* sdkCall(() => screen.getByRole("button", { name: copy.open }).click());
+    yield* sdkCall(() => expect.element(screen.getByText(copy.separate)).toBeVisible());
 
     yield* sdkCall(() => screen.getByRole("button", { name: /이전 질문/ }).click());
     yield* sdkCall(() => expect.element(screen.getByText("이전 답변")).toBeVisible());
-    yield* sdkCall(() => expect.element(screen.getByText("기억 검색")).toBeVisible());
+    yield* sdkCall(() => expect.element(screen.getByText(copy.tools.find_memory)).toBeVisible());
     yield* sdkCall(() =>
-      expect.element(screen.getByRole("button", { name: "원래 대화로 돌아가기" })).toBeVisible(),
+      expect.element(screen.getByRole("button", { name: copy.backToChat })).toBeVisible(),
     );
 
-    yield* sdkCall(() => screen.getByRole("button", { name: "BTW 삭제" }).click());
+    yield* sdkCall(() => screen.getByRole("button", { name: copy.deleteLabel }).click());
+    yield* sdkCall(() => expect.element(screen.getByText(copy.deleteConfirm.body)).toBeVisible());
     yield* sdkCall(() =>
-      expect
-        .element(screen.getByText(/백업, 데이터베이스 파일에 남은 빈 공간이나 WAL/))
-        .toBeVisible(),
+      screen.getByRole("button", { name: copy.deleteConfirm.choices.delete, exact: true }).click(),
     );
-    yield* sdkCall(() => screen.getByRole("button", { name: "삭제", exact: true }).click());
-    yield* sdkCall(() => expect.element(screen.getByText("BTW를 삭제했어요.")).toBeVisible());
+    yield* sdkCall(() => expect.element(screen.getByText(copy.deleted)).toBeVisible());
     expect(requests).toContain("DELETE /api/btw/btw-1");
     yield* sdkCall(() =>
       expect.element(screen.getByRole("button", { name: /이전 질문/ })).not.toBeInTheDocument(),

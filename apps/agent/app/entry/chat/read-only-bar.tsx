@@ -10,6 +10,10 @@ import {
   ItemTitle,
 } from "~/components/ui/item";
 import type { PageLease } from "../session/session-lease";
+import { problemText } from "../shared/copy-templates";
+import { chatCopy } from "./copy";
+
+const copy = chatCopy.readOnlyBar;
 
 /**
  * Takes the composer's place on a page that may only read the session: why, and a way to continue
@@ -45,16 +49,14 @@ export function ReadOnlyBar({
           </ItemMedia>
           <ItemContent>
             <ItemTitle>
-              {lease.state === "other"
-                ? "다른 창에서 이 대화를 쓰고 있어요"
-                : "다른 창이 이 대화를 더 이상 쓰지 않아요"}
+              {lease.state === "other" ? copy.inUseElsewhere : copy.releasedElsewhere}
             </ItemTitle>
             <ItemDescription>
               {connectionFailed
-                ? "연결하지 못했어요. 다시 시도해 주세요."
+                ? problemText(copy.connectionFailed)
                 : refused && lease.state === "other"
-                  ? "아직 쓰고 있어서 이어갈 수 없어요. 그 창을 닫거나 다른 대화로 옮기면 이어갈 수 있어요."
-                  : "여기서는 읽기만 할 수 있어요."}
+                  ? copy.stillInUse
+                  : copy.readOnly}
             </ItemDescription>
           </ItemContent>
           <ItemActions>
@@ -63,7 +65,7 @@ export function ReadOnlyBar({
               variant={lease.state === "free" ? "default" : "outline"}
               onClick={continueHere}
             >
-              이어서 작업
+              {copy.continueHere}
             </Button>
           </ItemActions>
         </Item>

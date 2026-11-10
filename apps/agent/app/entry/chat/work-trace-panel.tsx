@@ -27,45 +27,22 @@ import { failureLabel } from "../session/attempt-failure";
 import type { TraceConnection } from "../session/work-trace";
 import { useProjectTraceConnection } from "../session/use-project-trace-connection";
 import { useProjectTraceQuery, useProjectTraceTaskQuery } from "../queries/project";
+import { chatCopy } from "./copy";
+
+const copy = chatCopy.workTrace;
 
 type PanelMode = "live" | "review";
 const OpenTraceDetail = Schema.Struct({ taskId: Schema.String });
 const depthPadding = ["pl-2", "pl-5", "pl-8", "pl-11"] as const;
 
-const statusLabel: Readonly<Record<TraceTaskView["status"], string>> = {
-  queued: "대기 중",
-  running: "실행 중",
-  waiting: "승인 대기",
-  blocked: "확인 필요",
-  interrupted: "중단됨",
-  resumable: "다시 시도 가능",
-  resuming: "다시 시도 중",
-  completed: "완료",
-  failed: "실패",
-  cancelled: "취소됨",
-  archived: "보관됨",
-  deleted: "삭제됨",
-};
+const statusLabel: Readonly<Record<TraceTaskView["status"], string>> = copy.status;
 
-function connectionLabel(connection: TraceConnection) {
-  switch (connection) {
-    case "connecting":
-      return "연결 중";
-    case "live":
-      return "실시간 연결됨";
-    case "reconnecting":
-      return "저장된 기록 표시 중 · 재연결 중";
-  }
-}
+const connectionLabel = (connection: TraceConnection) => copy.connection[connection];
 
 type ArtifactLocator = NonNullable<TraceTaskDetail["artifacts"][number]["locator"]>;
 const ArtifactLocator = Data.taggedEnum<ArtifactLocator>();
 
-const heartbeatLabel: Readonly<Record<HeartbeatState, string>> = {
-  working: "작업 중",
-  idle: "대기",
-  waiting: "응답 대기",
-};
+const heartbeatLabel: Readonly<Record<HeartbeatState, string>> = copy.heartbeat;
 
 const locatorLabel = ArtifactLocator.$match({
   file: ({ path, sha256 }) => `${path} · sha256 ${sha256}`,
@@ -74,7 +51,7 @@ const locatorLabel = ArtifactLocator.$match({
 });
 
 function artifactLocatorLabel(locator: ArtifactLocator | null) {
-  if (!isTruthy(locator)) return "원본 위치가 삭제되었거나 가려졌어요.";
+  if (!isTruthy(locator)) return copy.locatorMissing;
   return locatorLabel(locator);
 }
 
@@ -124,7 +101,7 @@ function TaskTree({
         </div>
       ));
   return (
-    <nav className="min-w-0" aria-label="작업 트리">
+    <nav className="min-w-0" aria-label={copy.tree}>
       {branch(null, 0)}
     </nav>
   );
@@ -132,9 +109,7 @@ function TaskTree({
 
 function TaskDetail({ detail }: { detail: TraceTaskDetail | null }) {
   if (!(detail !== null))
-    return (
-      <p className="p-4 text-sm text-muted-foreground">작업을 선택하면 실행 근거가 표시돼요.</p>
-    );
+    return <p className="p-4 text-sm text-muted-foreground">{copy.selectTask}</p>;
   const task = detail.task;
   return (
     <div className="min-w-0 space-y-5 p-4 break-words">
@@ -158,22 +133,20 @@ function TaskDetail({ detail }: { detail: TraceTaskDetail | null }) {
           <p className="mt-1 text-xs text-destructive">{failureLabel(task.latestFailure)}</p>
         )}
         <dl className="mt-3 grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs text-muted-foreground">
-          <dt>에이전트</dt>
+          <dt>{copy.agent}</dt>
           <dd className="min-w-0 break-words">{task.agentName}</dd>
           <dt>Task</dt>
           <dd className="min-w-0 truncate font-mono" title={task.id}>
             {task.id}
           </dd>
           <dt>Origin</dt>
-          <dd className="min-w-0 break-all">
-            {task.originSessionId ?? "삭제된 대화 · project 기록 유지"}
-          </dd>
+          <dd className="min-w-0 break-all">{task.originSessionId ?? copy.originDeleted}</dd>
         </dl>
       </section>
       <Separator />
       <section aria-labelledby="trace-attempts">
         <h3 id="trace-attempts" className="flex items-center gap-2 text-sm font-medium">
-          <HistoryIcon className="size-4" aria-hidden /> 실행 이력
+          <HistoryIcon className="size-4" aria-hidden /> {copy.attempts}
         </h3>
         <ol className="mt-2 space-y-2">
           {detail.attempts.map((attempt) => (
@@ -188,7 +161,7 @@ function TaskDetail({ detail }: { detail: TraceTaskDetail | null }) {
                 Run {attempt.chatRunId}
               </p>
               {attempt.resumedFromAttemptId && (
-                <p className="mt-1 text-muted-foreground">이전 실행을 다시 시도함</p>
+                <p className="mt-1 text-muted-foreground">{copy.resumedAttempt}</p>
               )}
               {attempt.failure !== null && (
                 <p className="mt-1 text-destructive">{failureLabel(attempt.failure)}</p>
@@ -199,10 +172,10 @@ function TaskDetail({ detail }: { detail: TraceTaskDetail | null }) {
       </section>
       <section aria-labelledby="trace-artifacts">
         <h3 id="trace-artifacts" className="flex items-center gap-2 text-sm font-medium">
-          <CircleDotIcon className="size-4" aria-hidden /> 결과물
+          <CircleDotIcon className="size-4" aria-hidden /> {copy.artifacts}
         </h3>
         {detail.artifacts.length === 0 ? (
-          <p className="mt-2 text-xs text-muted-foreground">연결된 결과물이 없어요.</p>
+          <p className="mt-2 text-xs text-muted-foreground">{copy.noArtifacts}</p>
         ) : (
           <ul className="mt-2 space-y-2">
             {detail.artifacts.map((artifact) => (
@@ -215,7 +188,7 @@ function TaskDetail({ detail }: { detail: TraceTaskDetail | null }) {
                 </div>
                 <p className="mt-1 text-muted-foreground">
                   {artifact.mediaType ?? "metadata"}
-                  {artifact.verification === "source_deleted" ? " · 원본 삭제됨" : ""}
+                  {artifact.verification === "source_deleted" ? copy.sourceDeleted : ""}
                 </p>
                 <p className="mt-1 break-all font-mono text-muted-foreground">
                   {artifactLocatorLabel(artifact.locator)}
@@ -227,33 +200,29 @@ function TaskDetail({ detail }: { detail: TraceTaskDetail | null }) {
       </section>
       <section aria-labelledby="trace-answers">
         <h3 id="trace-answers" className="flex items-center gap-2 text-sm font-medium">
-          <CircleDotIcon className="size-4" aria-hidden /> 답변 출처
+          <CircleDotIcon className="size-4" aria-hidden /> {copy.answers}
         </h3>
         {detail.answerClaims.length === 0 && (
-          <p className="mt-2 text-xs text-muted-foreground">
-            이 작업의 보고서를 쓴 최종 답변이 없어요.
-          </p>
+          <p className="mt-2 text-xs text-muted-foreground">{copy.noAnswer}</p>
         )}
         {detail.answerClaims.map((claim) => (
           <div key={claim.id} className="mt-2 rounded-md bg-muted/50 p-2 text-xs">
-            <p className="font-medium">최종 답변 provenance</p>
+            <p className="font-medium">{copy.answerProvenance}</p>
             <p className="mt-1 truncate font-mono text-muted-foreground">
               Message {claim.parentMessageId}
             </p>
             <p className="mt-1 text-muted-foreground">
-              사용한 보고서 {claim.sources.length} · 반영된 상태 알림 {claim.notificationIds.length}
+              {copy.claimCounts(claim.sources.length, claim.notificationIds.length)}
             </p>
           </div>
         ))}
       </section>
       <section aria-labelledby="trace-memory">
         <h3 id="trace-memory" className="flex items-center gap-2 text-sm font-medium">
-          <CircleDotIcon className="size-4" aria-hidden /> Decision과 Memory
+          <CircleDotIcon className="size-4" aria-hidden /> {copy.memory}
         </h3>
         {(detail.memoryCandidates ?? []).length === 0 ? (
-          <p className="mt-2 text-xs text-muted-foreground">
-            이 작업에서 승격을 검토한 memory candidate가 없어요.
-          </p>
+          <p className="mt-2 text-xs text-muted-foreground">{copy.noCandidates}</p>
         ) : (
           <ul className="mt-2 space-y-2">
             {(detail.memoryCandidates ?? []).map((candidate) => {
@@ -265,22 +234,22 @@ function TaskDetail({ detail }: { detail: TraceTaskDetail | null }) {
                   <div className="flex items-center gap-2">
                     <span className="font-medium">{candidate.disposition}</span>
                     <Badge className="ml-auto" variant="secondary">
-                      {isTruthy(candidate.memoryNodeId) ? "project memory" : "저장 안 함"}
+                      {isTruthy(candidate.memoryNodeId) ? "project memory" : copy.notSaved}
                     </Badge>
                   </div>
                   <p className="mt-1 whitespace-pre-wrap">{candidate.resolvedText}</p>
                   {candidate.proposedText !== candidate.resolvedText && (
-                    <p className="mt-1 text-muted-foreground">사용자가 문구를 수정해 저장했어요.</p>
+                    <p className="mt-1 text-muted-foreground">{copy.editedByUser}</p>
                   )}
                   <p className="mt-1 text-muted-foreground">
-                    채택된 evidence {candidate.evidence.length} · 조회{" "}
-                    {Arr.countBy(usage, (item) => item.kind === "retrieved")} · 답변 사용{" "}
-                    {Arr.countBy(usage, (item) => item.kind === "used")}
+                    {copy.candidateCounts(
+                      candidate.evidence.length,
+                      Arr.countBy(usage, (item) => item.kind === "retrieved"),
+                      Arr.countBy(usage, (item) => item.kind === "used"),
+                    )}
                   </p>
                   {candidate.originSessionId === null && (
-                    <p className="mt-1 text-muted-foreground">
-                      원본 대화 삭제됨 · project provenance 유지
-                    </p>
+                    <p className="mt-1 text-muted-foreground">{copy.originDeletedProvenance}</p>
                   )}
                 </li>
               );
@@ -290,7 +259,7 @@ function TaskDetail({ detail }: { detail: TraceTaskDetail | null }) {
       </section>
       <section aria-labelledby="trace-activity">
         <h3 id="trace-activity" className="flex items-center gap-2 text-sm font-medium">
-          <ActivityIcon className="size-4" aria-hidden /> 활동
+          <ActivityIcon className="size-4" aria-hidden /> {copy.activity}
         </h3>
         <ol className="mt-2 space-y-3 border-l pl-3">
           {detail.events.map((event) => (
@@ -338,7 +307,7 @@ function PanelBody({
       <div
         className="flex min-w-0 items-center gap-1 border-b p-2"
         role="toolbar"
-        aria-label="Work Trace 보기 모드"
+        aria-label={copy.modeToolbar}
       >
         <Button
           size="sm"
@@ -358,21 +327,17 @@ function PanelBody({
           className="ml-auto flex min-w-0 items-center justify-end gap-1 text-right text-xs text-muted-foreground"
           role="status"
         >
-          {mode === "review" ? "저장된 전체 기록" : connectionLabel(connection)}
+          {mode === "review" ? copy.reviewAll : connectionLabel(connection)}
           {connection === "reconnecting" && <RefreshCwIcon className="size-3" aria-hidden />}
         </span>
       </div>
-      {failed && (
-        <p className="border-b px-3 py-2 text-xs text-destructive">
-          Work Trace를 불러오지 못했어요.
-        </p>
-      )}
+      {failed && <p className="border-b px-3 py-2 text-xs text-destructive">{copy.loadFailed}</p>}
       <div className="grid min-h-0 min-w-0 flex-1 grid-rows-[minmax(8rem,35%)_1fr]">
         <div className="min-h-0 min-w-0 border-b">
           <ScrollArea className="h-full min-w-0">
             <div className="min-w-0 p-2">
               {shownTasks.length === 0 ? (
-                <p className="p-3 text-sm text-muted-foreground">아직 기록된 작업이 없어요.</p>
+                <p className="p-3 text-sm text-muted-foreground">{copy.empty}</p>
               ) : (
                 <TaskTree
                   tasks={shownTasks}
@@ -420,7 +385,7 @@ export function WorkTracePanel({
           size="icon-sm"
           variant="outline"
           className="fixed top-3 right-3 z-30"
-          aria-label="Work Trace 열기"
+          aria-label={copy.open}
           onClick={() => setOpen(true)}
         >
           <PanelRightOpenIcon />
@@ -434,7 +399,7 @@ export function WorkTracePanel({
                 <NetworkIcon aria-hidden /> Work Trace
               </span>
             </SheetTitle>
-            <SheetDescription>저장된 작업 계층과 실행 근거를 확인해요.</SheetDescription>
+            <SheetDescription>{copy.description}</SheetDescription>
           </SheetHeader>
           <PanelBody
             projectId={projectId}

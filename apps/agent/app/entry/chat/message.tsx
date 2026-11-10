@@ -47,42 +47,14 @@ import { DrawingPicture, UserMessageBody } from "./images";
 import { codeHighlighter, Markdown } from "./markdown";
 import { failureLabel } from "../session/attempt-failure";
 import { taskForToolCall, type TraceConnection } from "../session/work-trace";
+import { chatCopy } from "./copy";
 
 type ToolCall = (typeof MessagePart.cases)["tool-call"]["Type"];
 type ToolResult = (typeof MessagePart.cases)["tool-result"]["Type"];
 
-const toolLabels = {
-  find_memory: "기억 검색",
-  read_evidence: "원문 읽기",
-  trace_evidence: "근거 추적",
-  list_files: "파일 목록",
-  search_files: "파일 내용 검색",
-  read_file: "파일 읽기",
-  write_file: "파일 쓰기",
-  edit_file: "파일 편집",
-  delete_file: "파일 삭제",
-  list_outside_files: "프로젝트 밖 파일 목록",
-  read_outside_file: "프로젝트 밖 파일 읽기",
-  search_outside_file: "프로젝트 밖 파일 검색",
-  // Calls recorded before shell skills replaced it.
-  run_shell: "셸 실행",
-  // Calls recorded before code skills replaced it.
-  save_shell_skill: "셸 스킬 저장",
-  save_code_skill: "코드 스킬 저장",
-  run_skill: "코드 스킬 실행",
-  run_code: "코드 실행",
-  write_outside_file: "프로젝트 밖 파일 쓰기",
-  delete_outside_file: "프로젝트 밖 파일 삭제",
-  kagi_search: "웹 검색",
-  kagi_extract: "웹 페이지 읽기",
-  read_skill: "skill 읽기",
-  run_subagent: "서브에이전트 실행",
-  // Calls recorded before run_subagent took a helper name.
-  message_subagent: "서브에이전트에게 메시지 보내기",
-  delegate_to_agent: "외부 에이전트에게 맡기기",
-  // Calls TanStack recorded to load a tool sent by name only.
-  __lazy__tool__discovery__: "도구 불러오기",
-} satisfies Record<string, string>;
+const copy = chatCopy.message;
+
+const toolLabels = copy.toolLabels satisfies Record<string, string>;
 
 /** Built-in tools by their label; MCP tools (`mcp_<server>__<tool>`) as "MCP server · tool". */
 function toolLabel(name: string) {
@@ -147,7 +119,7 @@ function ToolCode({ title, text, failed }: { title: ReactNode; text: string; fai
       <CodeBlockHeader>
         <CodeBlockTitle>{title}</CodeBlockTitle>
         <CodeBlockActions>
-          <CodeBlockCopyButton value={value} aria-label="복사" />
+          <CodeBlockCopyButton value={value} aria-label={copy.copy} />
         </CodeBlockActions>
       </CodeBlockHeader>
       <CodeBlockContent wrap className="max-h-64">
@@ -261,12 +233,12 @@ interface CallTrace {
 }
 
 const callTrace = CallStatus.$match({
-  running: (): CallTrace => ({ line: "running", label: "실행 중" }),
-  "awaiting-approval": (): CallTrace => ({ line: undefined, label: "승인 대기" }),
+  running: (): CallTrace => ({ line: "running", label: copy.call.running }),
+  "awaiting-approval": (): CallTrace => ({ line: undefined, label: copy.call.awaitingApproval }),
   completed: (): CallTrace => ({ line: undefined, label: null }),
-  failed: (): CallTrace => ({ line: "error", label: "실패" }),
-  denied: (): CallTrace => ({ line: "error", label: "거부됨" }),
-  blocked: (): CallTrace => ({ line: "error", label: "자동 검토로 막힘" }),
+  failed: (): CallTrace => ({ line: "error", label: copy.call.failed }),
+  denied: (): CallTrace => ({ line: "error", label: copy.call.denied }),
+  blocked: (): CallTrace => ({ line: "error", label: copy.call.blocked }),
 });
 
 const activeTaskStatuses: readonly TraceTaskView["status"][] = [
@@ -286,37 +258,37 @@ export function elapsed(task: TraceTaskView) {
       : task.updatedAt) - task.createdAt,
   );
   const seconds = Math.round(milliseconds / 1_000);
-  if (seconds < 60) return `${Math.max(1, seconds)}초`;
+  if (seconds < 60) return copy.seconds(Math.max(1, seconds));
   const minutes = Math.round(seconds / 60);
-  return minutes < 60 ? `${minutes}분` : `${Math.round(minutes / 60)}시간`;
+  return minutes < 60 ? copy.minutes(minutes) : copy.hours(Math.round(minutes / 60));
 }
 
 function taskStatus(task: TraceTaskView) {
   switch (task.status) {
     case "queued":
-      return { label: "대기 중", variant: "outline" as const };
+      return { label: copy.taskStatus.queued, variant: "outline" as const };
     case "running":
-      return { label: "실행 중", variant: "outline" as const };
+      return { label: copy.taskStatus.running, variant: "outline" as const };
     case "waiting":
-      return { label: "승인 대기", variant: "outline" as const };
+      return { label: copy.taskStatus.waiting, variant: "outline" as const };
     case "blocked":
-      return { label: "확인 필요", variant: "destructive" as const };
+      return { label: copy.taskStatus.blocked, variant: "destructive" as const };
     case "interrupted":
-      return { label: "중단됨", variant: "destructive" as const };
+      return { label: copy.taskStatus.interrupted, variant: "destructive" as const };
     case "resumable":
-      return { label: "다시 시도 가능", variant: "destructive" as const };
+      return { label: copy.taskStatus.resumable, variant: "destructive" as const };
     case "resuming":
-      return { label: "새 실행으로 다시 시도 중", variant: "outline" as const };
+      return { label: copy.taskStatus.resuming, variant: "outline" as const };
     case "completed":
-      return { label: "완료", variant: "secondary" as const };
+      return { label: copy.taskStatus.completed, variant: "secondary" as const };
     case "failed":
-      return { label: "실패", variant: "destructive" as const };
+      return { label: copy.taskStatus.failed, variant: "destructive" as const };
     case "cancelled":
-      return { label: "중단됨", variant: "destructive" as const };
+      return { label: copy.taskStatus.cancelled, variant: "destructive" as const };
     case "archived":
-      return { label: "보관됨", variant: "secondary" as const };
+      return { label: copy.taskStatus.archived, variant: "secondary" as const };
     case "deleted":
-      return { label: "삭제됨", variant: "secondary" as const };
+      return { label: copy.taskStatus.deleted, variant: "secondary" as const };
   }
 }
 
@@ -420,11 +392,11 @@ const TaskSummaryCard = memo(function TaskSummaryCard({
   return (
     <section
       className="min-w-72 rounded-lg border bg-muted/30 p-3"
-      aria-label={`서브에이전트 작업: ${task.title}`}
+      aria-label={copy.subagentTask(task.title)}
     >
       <div className="flex items-center gap-2">
         <BotIcon className="size-4 text-muted-foreground" aria-hidden />
-        <span className="min-w-0 truncate font-medium">{task.agentName ?? "서브에이전트"}</span>
+        <span className="min-w-0 truncate font-medium">{task.agentName ?? copy.subagent}</span>
         <Badge className="ml-auto shrink-0" variant={status.variant}>
           {status.label}
         </Badge>
@@ -436,8 +408,8 @@ const TaskSummaryCard = memo(function TaskSummaryCard({
         <span aria-hidden>·</span>
         <span className="min-w-0 truncate">
           {active && connection !== "live"
-            ? "실행 상태에 다시 연결 중"
-            : (task.heartbeat?.step ?? "작업 기록을 준비하는 중")}
+            ? copy.reconnecting
+            : (task.heartbeat?.step ?? copy.preparing)}
         </span>
       </div>
       {task.latestFailure !== null && (
@@ -446,20 +418,16 @@ const TaskSummaryCard = memo(function TaskSummaryCard({
         </p>
       )}
       {task.latestResumedFromAttemptId && (
-        <p className="mt-1 text-xs text-muted-foreground">이전 실행을 새 attempt로 다시 시도함</p>
+        <p className="mt-1 text-xs text-muted-foreground">{copy.resumedAttempt}</p>
       )}
       {task.status === "resumable" && (
-        <p className="mt-1 text-xs text-destructive">
-          실행이 중단됐어요. 작업을 새 attempt로 다시 시도할 수 있어요.
-        </p>
+        <p className="mt-1 text-xs text-destructive">{copy.interrupted}</p>
       )}
       {resumeState === "confirm-uncertain" && (
-        <p className="mt-1 text-xs text-destructive">
-          완료 여부가 불확실한 도구가 있어요. 중복 side effect 가능성을 확인해야 해요.
-        </p>
+        <p className="mt-1 text-xs text-destructive">{copy.uncertain}</p>
       )}
       {resumeState === "failed" && (
-        <p className="mt-1 text-xs text-destructive">최신 상태에서 다시 시도할 수 없어요.</p>
+        <p className="mt-1 text-xs text-destructive">{copy.resumeFailed}</p>
       )}
       <div className="mt-2 flex items-center justify-end gap-1">
         {retryableTaskStatuses.includes(task.status) &&
@@ -473,12 +441,12 @@ const TaskSummaryCard = memo(function TaskSummaryCard({
               onClick={() => void resume(resumeState === "confirm-uncertain")}
             >
               {resumeState === "requesting"
-                ? "요청 중"
+                ? copy.retry.requesting
                 : resumeState === "queued"
-                  ? "다시 시도 요청됨"
+                  ? copy.retry.queued
                   : resumeState === "confirm-uncertain"
-                    ? "위험 확인 후 다시 시도"
-                    : "다시 시도"}
+                    ? copy.retry.confirmUncertain
+                    : copy.retry.idle}
             </Button>
           )}
         {archivableTaskStatuses.includes(task.status) && (
@@ -490,10 +458,10 @@ const TaskSummaryCard = memo(function TaskSummaryCard({
             onClick={() => void archive()}
           >
             {archiveState === "requesting"
-              ? "보관 중"
+              ? copy.archive.requesting
               : archiveState === "failed"
-                ? "보관 재시도"
-                : "보관"}
+                ? copy.archive.failed
+                : copy.archive.idle}
           </Button>
         )}
         {task.status !== "deleted" && (
@@ -509,29 +477,27 @@ const TaskSummaryCard = memo(function TaskSummaryCard({
               }
             >
               {deleteState === "requesting"
-                ? "삭제 중"
+                ? copy.delete.requesting
                 : deleteState === "failed"
-                  ? "삭제 재시도"
-                  : "삭제"}
+                  ? copy.delete.failed
+                  : copy.delete.idle}
             </AlertDialogTrigger>
             <AlertDialogContent>
               <AlertDialogHeader>
-                <AlertDialogTitle>이 작업의 기록을 삭제할까요?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  transcript와 locator를 지워요. 채택된 project memory와 provenance는 유지돼요.
-                </AlertDialogDescription>
+                <AlertDialogTitle>{copy.deleteConfirm.title}</AlertDialogTitle>
+                <AlertDialogDescription>{copy.deleteConfirm.body}</AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
-                <AlertDialogCancel>취소</AlertDialogCancel>
+                <AlertDialogCancel>{copy.deleteConfirm.choices.cancel}</AlertDialogCancel>
                 <AlertDialogAction variant="destructive" onClick={() => void remove()}>
-                  삭제
+                  {copy.deleteConfirm.choices.delete}
                 </AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
         )}
         <Button type="button" size="sm" variant="ghost-muted" onClick={openTrace}>
-          Work Trace에서 보기
+          {copy.openTrace}
         </Button>
       </div>
     </section>
@@ -606,14 +572,14 @@ const ToolCallCard = memo(function ToolCallCard({
           <ToolCode
             title={
               <>
-                인자 · <code>{call.name}</code>
+                {copy.arguments} · <code>{call.name}</code>
               </>
             }
             text={call.arguments}
             failed={false}
           />
           {result && (
-            <ToolCode title="결과" text={result.content} failed={result.state === "error"} />
+            <ToolCode title={copy.result} text={result.content} failed={result.state === "error"} />
           )}
         </div>
       </TraceCollapsibleContent>
@@ -667,18 +633,13 @@ const sameMessageView = (previous: MessageViewProps, next: MessageViewProps) =>
 
 type OrchestratorMessage = Extract<ChatMessage, { readonly role: "orchestrator" }>;
 
-const nextLabels = {
-  results: "결과 확인",
-  plan: "Plan 이어서 진행",
-  board: "칸반 보드 확인",
-  run: "진행 중인 작업에 알림",
-} as const satisfies Record<OrchestratorMessage["note"]["next"], string>;
+const nextLabels = copy.next satisfies Record<OrchestratorMessage["note"]["next"], string>;
 
 /** What the orchestrator's message says, in the UI's words. */
 const orchestratorSummary = ({ next, ended }: OrchestratorMessage["note"]) =>
   [
-    ...(ended.background > 0 ? [`백그라운드 작업 ${ended.background}개 끝남`] : []),
-    ...(ended.subagent > 0 ? [`서브에이전트 ${ended.subagent}개 끝남`] : []),
+    ...(ended.background > 0 ? [copy.endedBackground(ended.background)] : []),
+    ...(ended.subagent > 0 ? [copy.endedSubagents(ended.subagent)] : []),
     nextLabels[next],
   ].join(", ");
 
@@ -690,7 +651,7 @@ const orchestratorSummary = ({ next, ended }: OrchestratorMessage["note"]) =>
 const OrchestratorMessageView = ({ message }: { readonly message: OrchestratorMessage }) => (
   <Message align="end">
     <MessageContent>
-      <MessageHeader>오케스트레이터</MessageHeader>
+      <MessageHeader>{copy.orchestrator}</MessageHeader>
       <Bubble variant="secondary">
         <BubbleContent>{orchestratorSummary(message.note)}</BubbleContent>
       </Bubble>
@@ -762,7 +723,7 @@ export const MessageView = memo(function MessageView({
               <TraceIcon>
                 <BrainIcon />
               </TraceIcon>
-              <TraceTitle>{thinking ? "추론 중" : "추론 내용"}</TraceTitle>
+              <TraceTitle>{thinking ? copy.thinking : copy.reasoning}</TraceTitle>
             </TraceLine>
           </TraceCollapsibleTrigger>
           <TraceCollapsibleContent>
