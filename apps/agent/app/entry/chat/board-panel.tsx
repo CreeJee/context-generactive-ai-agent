@@ -53,6 +53,7 @@ import { loopHealthLabel, LoopHealthStatus } from "../shared/loop-health";
 import {
   BoardSurface,
   editErrorText,
+  startErrorText,
   type ActiveKanban,
   type BoardPlan,
 } from "./board/board-surface";
@@ -288,7 +289,7 @@ export function WorkflowBoard({
   const start = () => {
     setStartError(null);
     kanbanAction.mutate(KanbanAction.Start(), {
-      onError: (error) => setStartError(editErrorText(error)),
+      onError: (error) => setStartError(startErrorText(error)),
     });
   };
   const restart = () => {
@@ -525,7 +526,12 @@ function BoardSheet({
                   size="sm"
                   title={t`카드마다 에이전트를 따로 두고 보드가 배정·검증·통합합니다. 이 대화의 모델은 카드를 직접 실행하지 않습니다.`}
                   disabled={disabled || kanbanAction.isPending}
-                  onClick={() => act(KanbanAction.Start())}
+                  onClick={() => {
+                    setActionError(null);
+                    kanbanAction.mutate(KanbanAction.Start(), {
+                      onError: (error) => setActionError(startErrorText(error)),
+                    });
+                  }}
                 >
                   <Trans comment="Button that hands the running Plan to the kanban loop">
                     칸반으로 전환

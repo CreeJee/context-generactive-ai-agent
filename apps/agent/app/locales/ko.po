@@ -5700,6 +5700,14 @@ msgstr "칸반 보드 ({count})"
 msgid "칸반 보드 확인"
 msgstr "칸반 보드 확인"
 
+#: app/entry/chat/board/board-surface.tsx
+msgid "칸반 보드가 실행 중일 때만 카드를 승인할 수 있습니다."
+msgstr "칸반 보드가 실행 중일 때만 카드를 승인할 수 있습니다."
+
+#: app/entry/chat/board/board-surface.tsx
+msgid "칸반 보드로 실행할 Goal이 없습니다. Goal을 먼저 정해 주십시오."
+msgstr "칸반 보드로 실행할 Goal이 없습니다. Goal을 먼저 정해 주십시오."
+
 #. Label before the number of conversations whose kanban loop runs
 #. Settings page name: running Goals on the kanban board
 #: app/entry/chat/board/project-board.tsx

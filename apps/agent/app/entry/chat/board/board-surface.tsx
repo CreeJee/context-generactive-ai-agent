@@ -146,6 +146,16 @@ const holdText = (reason: Parameters<typeof holdReasonText>[0] | null) =>
   reason === null ? null : holdReasonText(reason);
 export const editErrorText = (error: Error) =>
   isApiError(error) ? errorText(error.code) : unknownError();
+/** Why the board did not start; a Goal it lacks reads apart from a Goal it cannot wait for. */
+export const startErrorText = (error: Error) =>
+  isApiError(error) && error.code === "goal_missing"
+    ? t`칸반 보드로 실행할 Goal이 없습니다. Goal을 먼저 정해 주십시오.`
+    : editErrorText(error);
+/** Why a person's intent for a card was refused; approving needs the board running. */
+export const intentErrorText = (sent: BoardIntent["_tag"], error: Error) =>
+  sent === "Approve" && isApiError(error) && error.code === "not_kanban"
+    ? t`칸반 보드가 실행 중일 때만 카드를 승인할 수 있습니다.`
+    : editErrorText(error);
 
 /** Where a dropped card is expected to land while its request is on the way. */
 type Landing = { readonly key: string; readonly lands: BoardCardStatus };
@@ -430,7 +440,7 @@ export function BoardSurface({
                 sessionId: peekSession,
                 action: KanbanAction.Intent({ intent: BoardIntent[sent]({ cardId }) }),
               },
-              { onError: refused },
+              { onError: (error) => setNotice(intentErrorText(sent, error)) },
             )
           }
           onClose={() => {

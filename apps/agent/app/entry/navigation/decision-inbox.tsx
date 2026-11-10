@@ -14,7 +14,7 @@ import {
 import { SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem } from "~/components/ui/sidebar";
 import { BoardIntent } from "../api";
 import { DecisionPrompt } from "../chat/decision-prompt";
-import { editErrorText } from "../chat/board/board-surface";
+import { intentErrorText } from "../chat/board/board-surface";
 import { KanbanAction, useBoardsKanbanMutation } from "../queries/mutations/session";
 import { useDecisionInboxQuery, useProjectBoardsQuery } from "../queries/project";
 import { koreanLocalTime } from "../shared/local-time";
@@ -159,7 +159,7 @@ export function DecisionInbox({
                           sessionId: board.sessionId,
                           action: KanbanAction.Intent({ intent: BoardIntent.Approve({ cardId }) }),
                         },
-                        { onError: (error) => setApproveError(editErrorText(error)) },
+                        { onError: (error) => setApproveError(intentErrorText("Approve", error)) },
                       );
                     }}
                   >
