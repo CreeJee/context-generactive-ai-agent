@@ -57,6 +57,19 @@ export const ProjectsApiHandlers = HttpApiBuilder.group(
           Effect.catchIf(Schema.is(ProjectNotFound), projectNotFound, Effect.die),
         );
 
+    const fs = yield* FileSystem.FileSystem;
+    /** Marks projects whose folder is gone; a folder that cannot be checked is not marked. */
+    const listed = (all: ReadonlyArray<Project>) =>
+      Effect.forEach(
+        all,
+        (project) =>
+          fs.exists(project.root).pipe(
+            Effect.orElseSucceed(() => true),
+            Effect.map((exists) => ({ ...project, folderMissing: !exists })),
+          ),
+        { concurrency: 8 },
+      );
+
     const kanbanSettings = (projectId: string) =>
       Effect.all({
         protectedBranches: schedules.protectedBranches(projectId),
@@ -71,7 +84,7 @@ export const ProjectsApiHandlers = HttpApiBuilder.group(
                 all.filter((project) => project.hiddenAt !== null),
               )
             : projects.list,
-        ),
+        ).pipe(Effect.flatMap(listed)),
       add: ({ payload }) =>
         projects.add(payload.root).pipe(
           Effect.tap(() => events.publishGlobal("projects")),

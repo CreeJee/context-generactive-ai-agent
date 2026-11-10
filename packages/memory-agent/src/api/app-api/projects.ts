@@ -3,7 +3,7 @@ import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "effect/http-api";
 import { AgentScope, ExternalAgentsOverview } from "../../external-agents/contracts.ts";
 import { DecisionInboxItem, ProtectedBranches } from "../../kanban/contracts.ts";
 import { McpOverview, McpScope } from "../../mcp/contracts.ts";
-import { FolderPick, PermissionMode, Project } from "../../projects/contracts.ts";
+import { FolderPick, ListedProject, PermissionMode, Project } from "../../projects/contracts.ts";
 import { SkillCatalog } from "../../skills/contracts.ts";
 import { ProjectBoard } from "../../workflow/contracts.ts";
 import { appRefusalFields, refusalWith, SameSite } from "../refusal.ts";
@@ -110,10 +110,13 @@ const project = { project: Schema.String };
 /** Registered projects and what each one configures (`/api/projects/*`). */
 export class ProjectsGroup extends HttpApiGroup.make("projects")
   .add(
-    /** Registered project roots; `?hidden=1` lists the archived ones instead. */
+    /**
+     * Registered project roots; `?hidden=1` lists the archived ones instead. Each says whether its
+     * folder is gone (one check per project per list), so the page can offer to archive it.
+     */
     HttpApiEndpoint.get("list", "/api/projects", {
       query: { hidden: Schema.optional(Schema.Literal("1")) },
-      success: Schema.Array(Project),
+      success: Schema.Array(ListedProject),
     }),
     /**
      * Registers a directory. File and shell tools may later act inside it, so the path is

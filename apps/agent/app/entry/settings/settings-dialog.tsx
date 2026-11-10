@@ -13,7 +13,7 @@ import {
   WaypointsIcon,
   WrenchIcon,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import {
   Dialog,
   DialogContent,
@@ -21,8 +21,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "~/components/ui/dialog";
+import { Alert, AlertAction, AlertDescription } from "~/components/ui/alert";
+import { Button } from "~/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "~/components/ui/tabs";
-import { type Project } from "../api";
+import { type ListedProject, type Project } from "../api";
+import { MissingFolderNotice } from "../navigation/sidebar";
+import { useHideProjectMutation } from "../queries/mutations/project";
 import { QuerySection } from "../queries/boundary";
 import { ImageSettings } from "./pages/image";
 import { KagiSettings } from "./pages/web";
@@ -105,6 +109,38 @@ function SettingsPageBody({ page, project }: { page: SettingsPage; project: Proj
   return <QuerySection>{pageBodies[page](project)}</QuerySection>;
 }
 
+/** The selected project's folder is gone: say so above every page, and offer to archive it. */
+function MissingFolderAlert({ project, onArchived }: { project: Project; onArchived: () => void }) {
+  const hide = useHideProjectMutation();
+  const [failed, setFailed] = useState(false);
+  return (
+    <Alert variant="destructive">
+      <AlertDescription>
+        <MissingFolderNotice root={project.root} />
+        {failed && (
+          <>
+            {" "}
+            <Trans>프로젝트를 보관하지 못했습니다. 잠시 뒤 다시 시도해 주십시오.</Trans>
+          </>
+        )}
+      </AlertDescription>
+      <AlertAction>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={hide.isPending}
+          onClick={() => {
+            setFailed(false);
+            hide.mutateAsync(project.id).then(onArchived, () => setFailed(true));
+          }}
+        >
+          <Trans comment="Button that archives the project">보관하기</Trans>
+        </Button>
+      </AlertAction>
+    </Alert>
+  );
+}
+
 /**
  * Settings that apply beyond one conversation. The dialog keeps one size while pages change; a
  * page scrolls inside it.
@@ -115,7 +151,7 @@ export function SettingsOverlay({
   onClose,
   initialPage = "web",
 }: {
-  project: Project | null;
+  project: ListedProject | null;
   initialPage?: SettingsPage;
   open: boolean;
   onClose: () => void;
@@ -137,6 +173,9 @@ export function SettingsOverlay({
             <Trans>대화 밖에서 쓰는 도구와 연결을 관리합니다.</Trans>
           </DialogDescription>
         </DialogHeader>
+        {project?.folderMissing === true && (
+          <MissingFolderAlert project={project} onArchived={onClose} />
+        )}
         <Tabs defaultValue={initialPage} orientation="vertical" className="min-h-0 flex-1">
           <div className="mr-2 w-40 shrink-0 border-r pr-3">
             <TabsList variant="nav" className="w-full items-stretch justify-start">

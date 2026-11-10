@@ -25,6 +25,10 @@ export const Project = Schema.Struct({
 });
 export type Project = typeof Project.Type;
 
+/** A project as the list shows it: also whether its folder was gone when the list was read. */
+export const ListedProject = Schema.Struct({ ...Project.fields, folderMissing: Schema.Boolean });
+export type ListedProject = typeof ListedProject.Type;
+
 /** What the host's folder dialog answered. */
 export const FolderPick = Schema.TaggedUnion({
   picked: { root: Schema.String },

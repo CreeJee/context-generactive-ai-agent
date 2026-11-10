@@ -125,6 +125,7 @@ describe("sidebar disclosures", () => {
                   permissionMode: "ask",
                   createdAt: "2026-10-01T00:00:00.000Z",
                   hiddenAt: null,
+                  folderMissing: false,
                 },
               ]}
               projectId="project-1"
@@ -161,6 +162,7 @@ describe("sidebar disclosures", () => {
           permissionMode: "ask" as const,
           createdAt: "2026-10-01T00:00:00.000Z",
           hiddenAt,
+          folderMissing: false,
         });
         const events: string[] = [];
         // The section's open state persists across tests; start closed like a first visit.

@@ -2723,8 +2723,10 @@ msgid "보관됨"
 msgstr "보관됨"
 
 #. Button that archives the project
+#. Button that archives the project
 #. Menu item that archives the conversation
 #: app/entry/navigation/sidebar.tsx
+#: app/entry/settings/settings-dialog.tsx
 msgid "보관하기"
 msgstr "보관하기"
 
@@ -5919,6 +5921,11 @@ msgstr "폴더 경로"
 msgid "폴더 경로가 아닙니다."
 msgstr "폴더 경로가 아닙니다."
 
+#. Hint on a project whose folder no longer exists
+#: app/entry/navigation/sidebar.tsx
+msgid "폴더 없음"
+msgstr "폴더 없음"
+
 #. Button that adds a project from a folder
 #. Button that adds a project from a folder
 #: app/entry/navigation/sidebar.tsx
@@ -6039,6 +6046,10 @@ msgstr "프로젝트 추가"
 msgid "프로젝트 칸반 보드"
 msgstr "프로젝트 칸반 보드"
 
+#: app/entry/navigation/sidebar.tsx
+msgid "프로젝트 폴더({root})가 없습니다. 옮기거나 지웠다면 이 프로젝트를 보관해 주십시오. 대화와 기억은 남습니다."
+msgstr "프로젝트 폴더({root})가 없습니다. 옮기거나 지웠다면 이 프로젝트를 보관해 주십시오. 대화와 기억은 남습니다."
+
 #: app/entry/chat/chat-composer.tsx
 msgid "프로젝트를 변경하지 않은 채 Plan을 만듭니다. 승인하면 보드에서 실행합니다"
 msgstr "프로젝트를 변경하지 않은 채 Plan을 만듭니다. 승인하면 보드에서 실행합니다"
@@ -6048,6 +6059,7 @@ msgid "프로젝트를 보관에서 꺼내지 못했습니다. 잠시 뒤 다시
 msgstr "프로젝트를 보관에서 꺼내지 못했습니다. 잠시 뒤 다시 시도해 주십시오."
 
 #: app/entry/index.tsx
+#: app/entry/settings/settings-dialog.tsx
 msgid "프로젝트를 보관하지 못했습니다. 잠시 뒤 다시 시도해 주십시오."
 msgstr "프로젝트를 보관하지 못했습니다. 잠시 뒤 다시 시도해 주십시오."
 

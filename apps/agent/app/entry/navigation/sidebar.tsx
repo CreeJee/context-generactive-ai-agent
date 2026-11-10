@@ -12,6 +12,7 @@ import {
   ChevronRightIcon,
   EllipsisIcon,
   FolderOpenIcon,
+  FolderXIcon,
   GitBranchIcon,
   PlusIcon,
   Trash2Icon,
@@ -94,7 +95,7 @@ import {
   type ProviderModel,
   type ModelSelection,
   type PermissionMode,
-  type Project,
+  type ListedProject,
   type Session,
 } from "../api";
 import { DataList, DataListItem } from "~/components/ui/data-list";
@@ -224,9 +225,9 @@ export function ProjectSection({
   busy = false,
   error = null,
 }: {
-  projects: ReadonlyArray<Project>;
+  projects: ReadonlyArray<ListedProject>;
   /** Archived projects; choosing one releases it from the archive. */
-  hiddenProjects: ReadonlyArray<Project>;
+  hiddenProjects: ReadonlyArray<ListedProject>;
   projectId: string | null;
   onSelect: (projectId: string) => void;
   onAdd: (root: string) => Promise<string | null>;
@@ -378,6 +379,11 @@ export function ProjectSection({
                     <Trans comment="Button that archives the project">보관하기</Trans>
                   </Button>
                 </DataListItem>
+                {current.folderMissing && (
+                  <p className="col-span-2 text-2xs text-destructive">
+                    <MissingFolderNotice root={current.root} />
+                  </p>
+                )}
               </>
             )}
           </DataList>
@@ -423,6 +429,16 @@ export function ProjectSection({
   );
 }
 
+/** What a project whose folder is gone says, where it can be archived. */
+export function MissingFolderNotice({ root }: { root: string }) {
+  return (
+    <Trans>
+      프로젝트 폴더({root})가 없습니다. 옮기거나 지웠다면 이 프로젝트를 보관해 주십시오. 대화와
+      기억은 남습니다.
+    </Trans>
+  );
+}
+
 /** Picks among the projects by name; archived ones sit in their own group and come back when chosen. */
 function ProjectCombobox({
   projects,
@@ -431,9 +447,9 @@ function ProjectCombobox({
   onSelect,
   onRestore,
 }: {
-  projects: ReadonlyArray<Project>;
-  hiddenProjects: ReadonlyArray<Project>;
-  current: Project | null;
+  projects: ReadonlyArray<ListedProject>;
+  hiddenProjects: ReadonlyArray<ListedProject>;
+  current: ListedProject | null;
   onSelect: (projectId: string) => void;
   onRestore: (projectId: string) => void;
 }) {
@@ -452,9 +468,9 @@ function ProjectCombobox({
     <Combobox
       items={groups}
       value={current}
-      itemToStringLabel={(project: Project) => project.name}
-      isItemEqualToValue={(item: Project, value: Project) => item.id === value.id}
-      onValueChange={(project: Project | null) => {
+      itemToStringLabel={(project: ListedProject) => project.name}
+      isItemEqualToValue={(item: ListedProject, value: ListedProject) => item.id === value.id}
+      onValueChange={(project: ListedProject | null) => {
         if (project === null) return;
         if (project.hiddenAt !== null) onRestore(project.id);
         else onSelect(project.id);
@@ -477,9 +493,17 @@ function ProjectCombobox({
             <ComboboxGroup key={group.value} items={group.items}>
               {groups.length > 1 && <ComboboxLabel>{group.label}</ComboboxLabel>}
               <ComboboxCollection>
-                {(project: Project) => (
+                {(project: ListedProject) => (
                   <ComboboxItem key={project.id} value={project} title={project.root}>
                     <span className="min-w-0 flex-1 truncate">{project.name}</span>
+                    {project.folderMissing && (
+                      <span className="flex shrink-0 items-center gap-1 text-destructive">
+                        <FolderXIcon />{" "}
+                        <Trans comment="Hint on a project whose folder no longer exists">
+                          폴더 없음
+                        </Trans>
+                      </span>
+                    )}
                     {project.hiddenAt !== null && (
                       <span className="flex shrink-0 items-center gap-1 pr-5 text-muted-foreground">
                         <ArchiveRestoreIcon />{" "}
@@ -510,7 +534,7 @@ function OpenFolderButton({
   onSelect,
   onPickFolder,
 }: {
-  projects: ReadonlyArray<Project>;
+  projects: ReadonlyArray<ListedProject>;
   onAdd: (root: string) => Promise<string | null>;
   onSelect: (projectId: string) => void;
   onPickFolder: () => Promise<FolderPick>;
