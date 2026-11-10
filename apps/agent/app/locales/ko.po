@@ -1719,6 +1719,7 @@ msgid "다른 창이 이 대화를 더 이상 쓰지 않습니다"
 msgstr "다른 창이 이 대화를 더 이상 쓰지 않습니다"
 
 #: app/entry/chat/refusals.ts
+#: app/entry/chat/subagent-panel.tsx
 msgid "다른 창이 이 대화를 쓰고 있습니다."
 msgstr "다른 창이 이 대화를 쓰고 있습니다."
 
@@ -3406,10 +3407,12 @@ msgid "승인 요청 {tool}: {status}"
 msgstr "승인 요청 {tool}: {status}"
 
 #: app/entry/chat/chat-approvals.tsx
+#: app/entry/chat/subagent-panel.tsx
 msgid "승인 요청을 이어가지 못했습니다"
 msgstr "승인 요청을 이어가지 못했습니다"
 
 #: app/entry/chat/chat-approvals.tsx
+#: app/entry/chat/subagent-panel.tsx
 msgid "승인 응답을 전송하지 못했습니다."
 msgstr "승인 응답을 전송하지 못했습니다."
 
@@ -4474,6 +4477,10 @@ msgstr "이미 다른 답이 기록됐습니다. 보드를 다시 확인해 주�
 #: app/entry/chat/slash-commands.ts
 msgid "이미 답한 도구 출력 비우기"
 msgstr "이미 답한 도구 출력 비우기"
+
+#: app/entry/chat/subagent-panel.tsx
+msgid "이미 답했거나 더 이상 기다리지 않는 요청입니다. 남은 요청을 다시 불러왔습니다."
+msgstr "이미 답했거나 더 이상 기다리지 않는 요청입니다. 남은 요청을 다시 불러왔습니다."
 
 #: app/entry/api.ts
 msgid "이미 등록된 프로젝트입니다."

@@ -176,7 +176,8 @@ function useRelayedApprovalMutationBody(projectId: string, sessionId: string, ho
   return useMutation({
     mutationFn: ({ approvalId, approved }: { approvalId: string; approved: boolean }) =>
       api.answerApproval(sessionId, holder, approvalId, approved),
-    onSuccess: () =>
+    // A refused answer means the list changed under the page, so it is read again either way.
+    onSettled: () =>
       client.invalidateQueries({
         queryKey: sessionQueries.approvals(projectId, sessionId).queryKey,
       }),

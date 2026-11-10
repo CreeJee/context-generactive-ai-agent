@@ -1,5 +1,6 @@
-import { Trans } from "@lingui/react/macro";
+import { Trans, useLingui } from "@lingui/react/macro";
 import { BotIcon } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Badge } from "~/components/ui/badge";
 import {
   Item,
@@ -10,7 +11,7 @@ import {
   ItemTitle,
 } from "~/components/ui/item";
 import { Spinner } from "~/components/ui/spinner";
-import { ApprovalRequester, type RelayedApprovalView } from "../api";
+import { ApprovalRequester, refusalOf, type RelayedApprovalView } from "../api";
 import { ApprovalCard } from "./approval";
 import { requesterLabel, useDelegatedWork } from "../session/delegated-work";
 import { useProjectScope } from "../events/context";
@@ -40,6 +41,7 @@ export function SubagentPanel({
   generating: boolean;
   readOnly: boolean;
 }) {
+  const { t } = useLingui();
   const { state } = useDelegatedWork(sessionId, generating);
   const projectId = useProjectScope("relayed_approval");
   const answerMutation = useRelayedApprovalMutation(projectId, sessionId, holder);
@@ -47,7 +49,17 @@ export function SubagentPanel({
   if (running.length === 0 && state.approvals.length === 0) return null;
 
   const answer = (approvalId: string, approved: boolean) =>
-    void answerMutation.mutateAsync({ approvalId, approved }).catch(() => undefined);
+    answerMutation.mutate({ approvalId, approved });
+  // The list is read again after a failed answer, so the alert says why and what is left.
+  const refusal = refusalOf(answerMutation.error);
+  const problem =
+    answerMutation.error === null
+      ? null
+      : refusal?.code === "approval_not_pending"
+        ? t`이미 답했거나 더 이상 기다리지 않는 요청입니다. 남은 요청을 다시 불러왔습니다.`
+        : refusal?.code === "session_in_use"
+          ? t`다른 창이 이 대화를 쓰고 있습니다.`
+          : t`승인 응답을 전송하지 못했습니다.`;
 
   return (
     <div className="flex flex-col gap-3">
@@ -77,12 +89,20 @@ export function SubagentPanel({
           ))}
         </ItemGroup>
       )}
+      {problem !== null && (
+        <Alert variant="destructive">
+          <AlertTitle>
+            <Trans>승인 요청을 이어가지 못했습니다</Trans>
+          </AlertTitle>
+          <AlertDescription>{problem}</AlertDescription>
+        </Alert>
+      )}
       {state.approvals.map((approval) => (
         <ApprovalCard
           key={approval.id}
           requester={requesterLabel(approval.requester)}
           approval={toPending(approval)}
-          disabled={readOnly}
+          disabled={readOnly || answerMutation.isPending}
           onAnswer={(approved) => answer(approval.id, approved)}
         />
       ))}
