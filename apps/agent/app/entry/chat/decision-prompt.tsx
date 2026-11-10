@@ -117,7 +117,7 @@ const answerOptions = (kind: DecisionKind): readonly AnswerOption[] =>
       {
         answer: DecisionAnswer.RetryExhausted({ choice: "requeue" }),
         label: msg({
-          message: "다시 큐에 넣기",
+          message: "다시 대기열에 넣기",
           comment: "Decision answer: put the card back in the queue",
         }),
       },

@@ -1814,9 +1814,11 @@ msgid "다른 프로젝트가 이 기억을 찾도록 허용"
 msgstr "다른 프로젝트가 이 기억을 찾도록 허용"
 
 #. Button in the card panel that puts a held card back in the queue
+#. Decision answer: put the card back in the queue
 #: app/entry/chat/board/card-peek.tsx
-msgid "다시 대기열에"
-msgstr "다시 대기열에"
+#: app/entry/chat/decision-prompt.tsx
+msgid "다시 대기열에 넣기"
+msgstr "다시 대기열에 넣기"
 
 #. Button that signs in to an MCP server again
 #: app/entry/settings/pages/mcp.tsx
@@ -1909,11 +1911,6 @@ msgstr "다시 짠 뒤에도 실패했습니다: {failure}"
 #: app/entry/settings/pages/improvements.tsx
 msgid "다시 찾기"
 msgstr "다시 찾기"
-
-#. Decision answer: put the card back in the queue
-#: app/entry/chat/decision-prompt.tsx
-msgid "다시 큐에 넣기"
-msgstr "다시 큐에 넣기"
 
 #. Button that checks again the outcomes whose check ended without a verdict
 #. Button that checks again whether WebGPU can be used

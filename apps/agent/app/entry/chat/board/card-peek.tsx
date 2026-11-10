@@ -289,7 +289,7 @@ export function CardPeek({
                       onClick={() => onIntent("Requeue", card.id)}
                     >
                       <Trans comment="Button in the card panel that puts a held card back in the queue">
-                        다시 대기열에
+                        다시 대기열에 넣기
                       </Trans>
                     </Button>
                   )}
