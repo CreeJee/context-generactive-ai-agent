@@ -1,9 +1,9 @@
+import { useLingui } from "@lingui/react/macro";
 import { Data, Effect } from "effect";
 import { browserCrypto } from "../shared/browser-crypto";
 import { Function as EffectFunction } from "effect";
 import { useEffect, useRef, useState } from "react";
 import { api, attachmentErrorMessage, refusalOf, type Attachment } from "../api";
-import { chatCopy } from "./copy";
 
 /** Types the server accepts; anything else fails before uploading. */
 const acceptedTypes = ["image/png", "image/jpeg", "image/gif", "image/webp"] as const;
@@ -31,6 +31,7 @@ export const DraftImage = Data.taggedEnum<DraftImage>();
  * draft is sent or cleared, and object URLs released when an image leaves the draft.
  */
 export function useDraftImages() {
+  const { t } = useLingui();
   const [images, setImages] = useState<DraftImage[]>([]);
   const nextNumber = useRef(1);
   const live = useRef(images);
@@ -69,7 +70,10 @@ export function useDraftImages() {
       if (!acceptedTypes.some((type) => type === file.type)) {
         setImages((current) => [
           ...current,
-          DraftImage.failed({ ...base, reason: chatCopy.draftImages.unsupportedType }),
+          DraftImage.failed({
+            ...base,
+            reason: t`PNG, JPEG, GIF, WebP 이미지만 올릴 수 있습니다.`,
+          }),
         ]);
         continue;
       }

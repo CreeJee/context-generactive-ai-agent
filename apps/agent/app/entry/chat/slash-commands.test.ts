@@ -1,5 +1,4 @@
 import { describe, expect, test } from "vite-plus/test";
-import { chatCopy } from "./copy";
 import {
   parseSlash,
   promptOf,
@@ -87,7 +86,7 @@ describe("slash command parsing", () => {
     expect(SlashParse.$is("incomplete")(parseSlash("/effort max", context))).toBe(true);
     // A model without an effort choice says so rather than asking for a value it cannot take.
     expect(parseSlash("/effort high", { ...context, efforts: [] })).toEqual(
-      SlashParse.incomplete({ reason: chatCopy.slashCommands.effortUnavailable }),
+      SlashParse.incomplete({ reason: "선택한 모델은 추론 강도를 고를 수 없습니다." }),
     );
     expect(parseSlash("/goal 결제 실패를 줄이고 싶어", context)).toEqual(
       SlashParse.command({

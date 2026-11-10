@@ -1,8 +1,9 @@
+import { i18n } from "@lingui/core";
+import { I18nProvider } from "@lingui/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vite-plus/test";
 import { ChatComposer } from "./chat-composer";
 import { ComposerMode } from "./composer-status";
-import { chatCopy } from "./copy";
 import { allowedWorkflowActions, workflowFixture } from "../session/workflow-test-fixtures";
 import type { useDraftImages } from "./draft-images";
 
@@ -15,56 +16,54 @@ const draftImages = {
 
 function renderPlanComposer() {
   return renderToStaticMarkup(
-    <ChatComposer
-      draft=""
-      onDraftChange={() => {}}
-      editingId={null}
-      slashContext={{ agents: [], models: [], efforts: [], skills: [] }}
-      draftImages={draftImages}
-      queueItems={[]}
-      imageSettings={null}
-      imageIntent={false}
-      onToggleImageIntent={() => {}}
-      generatingImage={false}
-      generatedImage={null}
-      imagesSupported={false}
-      mutationBlocked={false}
-      generating
-      waitingForApproval={false}
-      canSend={false}
-      composerMode={ComposerMode.generating()}
-      run={{
-        workflow: workflowFixture,
-        actions: allowedWorkflowActions,
-        controlling: false,
-        cancelling: false,
-      }}
-      onSubmit={() => {}}
-      onAttach={() => {}}
-      onEditQueued={() => {}}
-      onRemoveQueued={() => {}}
-      onConfirmQueued={() => {}}
-      onFinishEdit={() => {}}
-      onPickQueued={() => {}}
-      onCancel={() => {}}
-      onClear={() => {}}
-      onWorkflowMode={() => {}}
-    />,
+    <I18nProvider i18n={i18n}>
+      <ChatComposer
+        draft=""
+        onDraftChange={() => {}}
+        editingId={null}
+        slashContext={{ agents: [], models: [], efforts: [], skills: [] }}
+        draftImages={draftImages}
+        queueItems={[]}
+        imageSettings={null}
+        imageIntent={false}
+        onToggleImageIntent={() => {}}
+        generatingImage={false}
+        generatedImage={null}
+        imagesSupported={false}
+        mutationBlocked={false}
+        generating
+        waitingForApproval={false}
+        canSend={false}
+        composerMode={ComposerMode.generating()}
+        run={{
+          workflow: workflowFixture,
+          actions: allowedWorkflowActions,
+          controlling: false,
+          cancelling: false,
+        }}
+        onSubmit={() => {}}
+        onAttach={() => {}}
+        onEditQueued={() => {}}
+        onRemoveQueued={() => {}}
+        onConfirmQueued={() => {}}
+        onFinishEdit={() => {}}
+        onPickQueued={() => {}}
+        onCancel={() => {}}
+        onClear={() => {}}
+        onWorkflowMode={() => {}}
+      />
+    </I18nProvider>,
   );
 }
 
 describe("Plan streaming composer", () => {
   test("keeps stop enabled while phase changes are disabled", () => {
     const html = renderPlanComposer();
-    const stop = html.match(
-      new RegExp(`<button[^>]*aria-label="${chatCopy.composer.stop}"[^>]*>`),
-    )?.[0];
+    const stop = html.match(/<button[^>]*aria-label="중지"[^>]*>/)?.[0];
     expect(stop).toBeDefined();
     expect(stop).not.toContain('disabled=""');
     const phaseGroup = html.match(
-      new RegExp(
-        `<div(?=[^>]*role="group")(?=[^>]*aria-label="${chatCopy.composer.modeGroup}")[^>]*>(.*?)</div>`,
-      ),
+      /<div(?=[^>]*role="group")(?=[^>]*aria-label="입력 방식")[^>]*>(.*?)<\/div>/,
     )?.[1];
     expect(phaseGroup).toBeDefined();
     const phaseButtons = phaseGroup?.match(/<button[^>]*>/g);

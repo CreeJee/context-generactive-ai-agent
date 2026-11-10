@@ -1,3 +1,6 @@
+import type { MessageDescriptor } from "@lingui/core";
+import { msg } from "@lingui/core/macro";
+import { Trans, useLingui } from "@lingui/react/macro";
 import { isTruthy } from "../../truthy.ts";
 import { ArrowUpIcon, CheckIcon, ImagePlusIcon, SquareIcon, WandSparklesIcon } from "lucide-react";
 import { type Ref, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
@@ -12,7 +15,6 @@ import {
 import { Spinner } from "~/components/ui/spinner";
 import { ToggleGroup, ToggleGroupItem } from "~/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
-import { chatCopy } from "./copy";
 import { acceptedImageTypes, useDraftImages } from "./draft-images";
 import { DraftImageTray } from "./images";
 import { ComposerShortcuts, ComposerStatus, type ComposerMode } from "./composer-status";
@@ -25,10 +27,47 @@ import type { useRunState } from "../session/use-run-state";
 
 const workflowModes = ["chat", "goal", "plan"] as const satisfies readonly WorkflowMove[];
 
-const copy = chatCopy.composer;
+/** What each mode button does, shown on hover. */
+const modeTitles = {
+  goal: msg`결과를 맡기면 보드에서 Plan의 카드를 바로 실행합니다`,
+  plan: msg`프로젝트를 변경하지 않은 채 Plan을 만듭니다. 승인하면 보드에서 실행합니다`,
+  chat: msg({ message: "일반 대화", comment: "Hover text of the Chat mode button: plain chat" }),
+} satisfies Record<(typeof workflowModes)[number], MessageDescriptor>;
 
 const imageFiles = (files: FileList | null) =>
   Array.from(files ?? []).filter((file) => file.type.startsWith("image/"));
+
+/** The image just generated, with the route that made it and what it cost. */
+function GeneratedImage({ image }: { image: GeneratedImageAsset }) {
+  const { t } = useLingui();
+  const chatModel = image.initiatorChatModel;
+  const mediaRoute = image.executorMediaRouteId;
+  const { executionMode } = image;
+  const usd = image.estimatedCostUsd?.toFixed(4);
+  const usage = JSON.stringify(image.usage);
+  return (
+    <div className="mb-2 overflow-hidden rounded-lg border bg-card">
+      <img src={image.url} alt={t`생성된 이미지`} className="max-h-96 w-full object-contain" />
+      <div className="space-y-1 border-t p-3 text-xs text-muted-foreground">
+        <div>
+          <Trans>
+            대화 모델: {chatModel} · 실행 경로: {mediaRoute}
+          </Trans>
+        </div>
+        <div>
+          <Trans>실행 방식: {executionMode}</Trans>
+          {" · "}
+          {usd === undefined ? <Trans>예상 비용 미확인</Trans> : <Trans>예상 비용 ${usd}</Trans>}
+        </div>
+        {image.usage && (
+          <div>
+            <Trans>사용량: {usage}</Trans>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export interface ChatComposerHandle {
   focus: () => void;
@@ -96,6 +135,7 @@ export function ChatComposer({
   onClear: () => void;
   onWorkflowMode: (mode: (typeof workflowModes)[number]) => void;
 }) {
+  const { t } = useLingui();
   const [highlight, setHighlight] = useState("");
   const textarea = useRef<HTMLTextAreaElement>(null);
   const filePicker = useRef<HTMLInputElement>(null);
@@ -103,6 +143,10 @@ export function ChatComposer({
   const suggestions = editingId === null ? suggest(draft, slashContext) : [];
   const highlighted =
     suggestions.find((suggestion) => suggestion.text === highlight) ?? suggestions[0] ?? null;
+
+  const stopLabel = run.cancelling
+    ? t({ message: "멈추는 중", comment: "Stop button while the answer is being stopped" })
+    : t({ message: "중지", comment: "Button that stops the answer" });
 
   useImperativeHandle(ref, () => ({ focus: () => textarea.current?.focus() }), []);
 
@@ -172,35 +216,10 @@ export function ChatComposer({
         )}
         {generatingImage && (
           <div className="mb-2 rounded-lg border bg-muted/40 p-3 text-sm text-muted-foreground">
-            {copy.generatingImage}
+            <Trans>승인된 미디어 경로에서 이미지를 생성하고 있습니다…</Trans>
           </div>
         )}
-        {generatedImage && (
-          <div className="mb-2 overflow-hidden rounded-lg border bg-card">
-            <img
-              src={generatedImage.url}
-              alt={copy.generatedAlt}
-              className="max-h-96 w-full object-contain"
-            />
-            <div className="space-y-1 border-t p-3 text-xs text-muted-foreground">
-              <div>
-                {copy.generatedRoute(
-                  generatedImage.initiatorChatModel,
-                  generatedImage.executorMediaRouteId,
-                )}
-              </div>
-              <div>
-                {copy.executionMode(generatedImage.executionMode)}
-                {generatedImage.estimatedCostUsd === undefined
-                  ? copy.costUnknown
-                  : copy.cost(generatedImage.estimatedCostUsd.toFixed(4))}
-              </div>
-              {generatedImage.usage && (
-                <div>{copy.usage(JSON.stringify(generatedImage.usage))}</div>
-              )}
-            </div>
-          </div>
-        )}
+        {generatedImage && <GeneratedImage image={generatedImage} />}
         <PromptInput editing={editingId !== null}>
           <QueuePanel
             items={queueItems}
@@ -270,16 +289,16 @@ export function ChatComposer({
             }}
             placeholder={
               waitingForApproval
-                ? copy.placeholders.approval
+                ? t`위의 승인 요청에 먼저 답해 주십시오`
                 : editingId !== null
-                  ? copy.placeholders.editing
+                  ? t`Enter를 누르면 고친 내용을 저장합니다`
                   : generating
-                    ? copy.placeholders.generating
+                    ? t`답변 중에도 이어서 보낼 수 있습니다`
                     : run.workflow?.phase === "shaping" && run.workflow.mode === "goal"
-                      ? copy.placeholders.goal
+                      ? t`달성할 결과를 입력해 주십시오`
                       : run.workflow?.phase === "shaping"
-                        ? copy.placeholders.plan
-                        : copy.placeholders.idle
+                        ? t`변경 없이 조사해 세울 Plan의 내용을 입력해 주십시오`
+                        : t`메시지를 입력해 주십시오. /로 명령을 부르고 이미지는 붙여넣거나 끌어다 놓습니다`
             }
             rows={1}
           />
@@ -290,7 +309,7 @@ export function ChatComposer({
                   <PromptInputButton
                     variant="ghost"
                     disabled={!imagesSupported || mutationBlocked || editingId !== null}
-                    aria-label={copy.attachImage}
+                    aria-label={t`이미지 첨부`}
                     onClick={() => filePicker.current?.click()}
                   />
                 }
@@ -298,7 +317,11 @@ export function ChatComposer({
                 <ImagePlusIcon />
               </TooltipTrigger>
               <TooltipContent>
-                {imagesSupported ? copy.attachImage : copy.imagesUnsupported}
+                {imagesSupported ? (
+                  <Trans>이미지 첨부</Trans>
+                ) : (
+                  <Trans>선택한 모델은 이미지를 읽지 못합니다</Trans>
+                )}
               </TooltipContent>
             </Tooltip>
             {imageSettings && (
@@ -315,7 +338,7 @@ export function ChatComposer({
                         generatingImage ||
                         editingId !== null
                       }
-                      aria-label={copy.imageIntent}
+                      aria-label={t`이미지 생성 요청`}
                       aria-pressed={imageIntent}
                       onClick={onToggleImageIntent}
                     />
@@ -324,17 +347,24 @@ export function ChatComposer({
                   <WandSparklesIcon />
                 </TooltipTrigger>
                 <TooltipContent>
-                  {imageSettings.imageGenerationEnabled
-                    ? imageIntent
-                      ? copy.imageIntentOff
-                      : copy.imageIntentOn
-                    : copy.imageGenerationDisabled}
+                  {imageSettings.imageGenerationEnabled ? (
+                    imageIntent ? (
+                      <Trans>이미지 생성 모드 끄기</Trans>
+                    ) : (
+                      <Trans>이번 요청에서만 이미지 생성</Trans>
+                    )
+                  ) : (
+                    <Trans>설정에서 이미지 생성을 먼저 켜 주십시오</Trans>
+                  )}
                 </TooltipContent>
               </Tooltip>
             )}
             <ComposerStatus mode={composerMode} />
             <ToggleGroup
-              aria-label={copy.modeGroup}
+              aria-label={t({
+                message: "입력 방식",
+                comment: "Accessible name of the Chat/Goal/Plan mode buttons in the composer",
+              })}
               variant="outline"
               size="sm"
               spacing={0}
@@ -357,7 +387,7 @@ export function ChatComposer({
                     generatingImage ||
                     editingId !== null
                   }
-                  title={copy.modeTitles[mode]}
+                  title={t(modeTitles[mode])}
                 >
                   {modeLabels[mode]}
                 </ToggleGroupItem>
@@ -372,21 +402,32 @@ export function ChatComposer({
                       <PromptInputButton
                         variant="outline"
                         disabled={run.cancelling || mutationBlocked}
-                        aria-label={run.cancelling ? copy.stopping : copy.stop}
+                        aria-label={stopLabel}
                         onClick={onCancel}
                       />
                     }
                   >
                     {run.cancelling ? <Spinner /> : <SquareIcon className="fill-current" />}
                   </TooltipTrigger>
-                  <TooltipContent>{run.cancelling ? copy.stopping : copy.stopHint}</TooltipContent>
+                  <TooltipContent>
+                    {run.cancelling ? stopLabel : <Trans>중지(입력창이 비었을 때 Esc)</Trans>}
+                  </TooltipContent>
                 </Tooltip>
               )}
               <PromptInputButton
                 type="submit"
                 variant="default"
                 disabled={editingId !== null ? mutationBlocked : !canSend}
-                aria-label={editingId !== null ? copy.save : generating ? copy.queue : copy.send}
+                aria-label={
+                  editingId !== null
+                    ? t({
+                        message: "저장",
+                        comment: "Submit button while editing a queued message",
+                      })
+                    : generating
+                      ? t`대기열에 넣기`
+                      : t({ message: "전송", comment: "Submit button that sends the message" })
+                }
               >
                 {editingId !== null ? <CheckIcon /> : <ArrowUpIcon />}
               </PromptInputButton>

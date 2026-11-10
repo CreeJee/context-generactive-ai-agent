@@ -1,4 +1,6 @@
 import { it } from "@effect/vitest";
+import { i18n } from "@lingui/core";
+import { I18nProvider } from "@lingui/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Cause, Effect, Schema } from "effect";
 import { useState } from "react";
@@ -7,7 +9,6 @@ import { expect, vi } from "vite-plus/test";
 import "../../../app.css";
 import { BoardIntent, ProjectKanbanCommand } from "../../api";
 import type { BoardCardRef } from "./board-moves";
-import { boardCopy } from "./copy";
 import { ProjectBoard } from "./project-board";
 
 /** A posted body back from the JSON the page sent; only its shape as a value matters here. */
@@ -125,16 +126,18 @@ const sdkCall = Effect.fn("BrowserTest.sdkCall")(<A,>(call: () => PromiseLike<A>
 function Harness({ onOpenSession }: { readonly onOpenSession: (sessionId: string) => void }) {
   const [peek, setPeek] = useState<BoardCardRef | null>(null);
   return (
-    <QueryClientProvider client={new QueryClient()}>
-      <ProjectBoard
-        projectId="project-1"
-        holder="page-1"
-        peek={peek}
-        onPeek={setPeek}
-        onOpenSession={onOpenSession}
-        onClose={() => {}}
-      />
-    </QueryClientProvider>
+    <I18nProvider i18n={i18n}>
+      <QueryClientProvider client={new QueryClient()}>
+        <ProjectBoard
+          projectId="project-1"
+          holder="page-1"
+          peek={peek}
+          onPeek={setPeek}
+          onOpenSession={onOpenSession}
+          onClose={() => {}}
+        />
+      </QueryClientProvider>
+    </I18nProvider>
   );
 }
 
@@ -156,25 +159,17 @@ it.live("project board shows the executing Plans in order, moves a Goal and move
 
     // The status panel has a line per executing conversation in the priority tree's order; the
     // arrows move a Goal, and "대화 열기" goes to that conversation.
-    yield* sdkCall(() => screen.getByRole("button", { name: boardCopy.project.order }).click());
+    yield* sdkCall(() => screen.getByRole("button", { name: "대화 순서와 상태" }).click());
     yield* sdkCall(() =>
       expect.element(screen.getByRole("heading", { name: "결제 모듈" })).toBeVisible(),
     );
     yield* sdkCall(() =>
-      expect
-        .element(screen.getByRole("heading", { name: boardCopy.project.untitled }))
-        .toBeVisible(),
+      expect.element(screen.getByRole("heading", { name: "제목 없는 대화" })).toBeVisible(),
     );
     yield* sdkCall(() =>
-      expect
-        .element(screen.getByRole("button", { name: boardCopy.conversation.up("결제 모듈") }))
-        .toBeDisabled(),
+      expect.element(screen.getByRole("button", { name: "결제 모듈 위로" })).toBeDisabled(),
     );
-    yield* sdkCall(() =>
-      screen
-        .getByRole("button", { name: boardCopy.conversation.up(boardCopy.project.untitled) })
-        .click(),
-    );
+    yield* sdkCall(() => screen.getByRole("button", { name: "제목 없는 대화 위로" }).click());
     yield* sdkCall(() =>
       expect.poll(() => requests).toContain("POST /api/projects/project-1/kanban"),
     );
@@ -184,8 +179,8 @@ it.live("project board shows the executing Plans in order, moves a Goal and move
     );
     yield* sdkCall(() =>
       screen
-        .getByRole("region", { name: boardCopy.conversation.region("결제 모듈") })
-        .getByRole("button", { name: boardCopy.conversation.open })
+        .getByRole("region", { name: "결제 모듈 대화" })
+        .getByRole("button", { name: "대화 열기" })
         .click(),
     );
     expect(opened).toHaveBeenCalledWith("session-a");
@@ -193,25 +188,19 @@ it.live("project board shows the executing Plans in order, moves a Goal and move
     // Opening a card peeks it beside the board; from there it can move to another conversation.
     // The columns scroll sideways at this width, so the card's column is brought into view first.
     screen
-      .getByRole("region", { name: boardCopy.kanban.column(boardCopy.status.ready, 1) })
+      .getByRole("region", { name: "준비 1개" })
       .element()
       .scrollIntoView({ inline: "start", block: "nearest" });
     yield* sdkCall(() => screen.getByText("로그 포맷").click());
     yield* sdkCall(() =>
       expect.element(screen.getByRole("heading", { name: "로그 포맷" })).toBeVisible(),
     );
-    yield* sdkCall(() =>
-      screen.getByRole("combobox", { name: boardCopy.peek.transfer.target }).click(),
-    );
+    yield* sdkCall(() => screen.getByRole("combobox", { name: "옮길 대화" }).click());
     yield* sdkCall(() => screen.getByRole("option", { name: "결제 모듈" }).click());
-    yield* sdkCall(() =>
-      screen.getByRole("button", { name: boardCopy.peek.transfer.submit }).click(),
-    );
-    const confirm = screen.getByRole("dialog", { name: boardCopy.transfer.title });
+    yield* sdkCall(() => screen.getByRole("button", { name: "옮기기" }).click());
+    const confirm = screen.getByRole("dialog", { name: "다른 대화로 옮길까요?" });
     yield* sdkCall(() => expect.element(confirm).toBeVisible());
-    yield* sdkCall(() =>
-      confirm.getByRole("button", { name: boardCopy.transfer.choices.move }).click(),
-    );
+    yield* sdkCall(() => confirm.getByRole("button", { name: "옮기기" }).click());
     yield* sdkCall(() =>
       expect.poll(() => requests).toContain("POST /api/sessions/session-b/kanban"),
     );

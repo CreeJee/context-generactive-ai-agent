@@ -1,5 +1,7 @@
 import { isTruthy } from "../../../truthy.ts";
 import { useState, type ReactNode } from "react";
+import { msg, ph } from "@lingui/core/macro";
+import { Trans, useLingui } from "@lingui/react/macro";
 import { Array as Arr, Data, Result, type Types } from "effect";
 import type { CardDraft, CardRisk } from "memory-agent";
 import {
@@ -37,9 +39,8 @@ import { Textarea } from "../../../components/ui/textarea";
 import { BoardEdit, type BoardView, type HumanDecisionRequest, type KanbanView } from "../../api";
 import { koreanLocalTime } from "../../shared/local-time";
 import { DecisionPrompt } from "../decision-prompt";
-import { canTransfer } from "./board-moves";
-import { authorLabel, StatusIcon } from "./card-face";
-import { boardCopy } from "./copy";
+import { canTransfer, cardStatusLabels } from "./board-moves";
+import { authorLabel, riskLabels, StatusIcon } from "./card-face";
 import { holdReasonNote, holdReasonText } from "./hold-reason";
 
 type BoardCard = BoardView["cards"][number];
@@ -60,10 +61,13 @@ export interface TransferTarget {
 }
 
 const riskItems = [
-  { value: "none", label: boardCopy.editor.riskNone },
-  { value: "low", label: boardCopy.risk.low },
-  { value: "medium", label: boardCopy.risk.medium },
-  { value: "high", label: boardCopy.risk.high },
+  {
+    value: "none",
+    label: msg({ message: "지정 안 함", comment: "Risk choice in the card editor: no risk given" }),
+  },
+  { value: "low", label: riskLabels.low },
+  { value: "medium", label: riskLabels.medium },
+  { value: "high", label: riskLabels.high },
 ] as const;
 
 /** The text without its surrounding spaces, unless nothing is left. */
@@ -163,6 +167,7 @@ export function CardPeek({
   /** Resolves with an error message, or null once the change was accepted. */
   readonly onSubmit: (edit: BoardEdit) => Promise<string | null>;
 }) {
+  const { t } = useLingui();
   const [transferTo, setTransferTo] = useState<string | null>(null);
   const hold = loopCard?.reason ?? null;
   const holdNote = hold === null ? null : holdReasonNote(hold);
@@ -187,8 +192,12 @@ export function CardPeek({
         if (entry === null)
           return (
             <SheetHeader>
-              <SheetTitle>{boardCopy.peek.missing.title}</SheetTitle>
-              <SheetDescription>{boardCopy.peek.missing.body}</SheetDescription>
+              <SheetTitle>
+                <Trans>카드를 찾을 수 없습니다</Trans>
+              </SheetTitle>
+              <SheetDescription>
+                <Trans>취소됐거나 다른 카드로 바뀌었습니다.</Trans>
+              </SheetDescription>
             </SheetHeader>
           );
         const { card, lastChange } = entry;
@@ -199,7 +208,7 @@ export function CardPeek({
               <SheetDescription>
                 <span className="flex items-center gap-1.5">
                   <StatusIcon status={card.status} />
-                  {boardCopy.status[card.status]}
+                  {t(cardStatusLabels[card.status])}
                   <span className="font-mono">· {card.id}</span>
                   {group !== null && <span>· {group}</span>}
                 </span>
@@ -218,32 +227,49 @@ export function CardPeek({
               ))}
               {card.approval !== undefined && (
                 <div className="space-y-2 rounded-md border px-3 py-2" role="status">
-                  <p>{boardCopy.peek.approval.waiting}</p>
+                  <p>
+                    <Trans>
+                      Plan 작성자가 실행 중에 더한 카드라 승인을 기다립니다. 승인하기 전에는
+                      실행하지 않습니다.
+                    </Trans>
+                  </p>
                   {card.approval.review !== undefined && (
                     <p className="whitespace-pre-wrap text-muted-foreground">
-                      {boardCopy.peek.approval.review(card.approval.review.reason)}
+                      <Trans>자동 검토: {ph({ reason: card.approval.review.reason })}</Trans>
                     </p>
                   )}
-                  <p className="text-muted-foreground">{boardCopy.peek.approval.rejectHint}</p>
+                  <p className="text-muted-foreground">
+                    <Trans>거절하려면 편집에서 카드를 취소해 주십시오.</Trans>
+                  </p>
                   <Button
                     type="button"
                     size="sm"
                     disabled={disabled || closed || intentPending}
                     onClick={() => onIntent("Approve", card.id)}
                   >
-                    {boardCopy.peek.approval.approve}
+                    <Trans comment="Button in the card panel that approves the card to run">
+                      승인
+                    </Trans>
                   </Button>
                 </div>
               )}
               {(hold !== null || changePending) && (
                 <div className="space-y-2 rounded-md border px-3 py-2" role="status">
-                  {hold !== null && <p>{boardCopy.peek.hold.reason(holdReasonText(hold))}</p>}
-                  {holdNote !== null && (
-                    <p className="whitespace-pre-wrap text-muted-foreground">
-                      {boardCopy.peek.hold.note(holdNote)}
+                  {hold !== null && (
+                    <p>
+                      <Trans>사유: {ph({ reason: holdReasonText(hold) })}</Trans>
                     </p>
                   )}
-                  {changePending && <p>{boardCopy.peek.hold.changePending}</p>}
+                  {holdNote !== null && (
+                    <p className="whitespace-pre-wrap text-muted-foreground">
+                      <Trans>검증 의견: {holdNote}</Trans>
+                    </p>
+                  )}
+                  {changePending && (
+                    <p>
+                      <Trans>오케스트레이터가 이 카드의 변경 요청을 확인하고 있습니다.</Trans>
+                    </p>
+                  )}
                   {loopCard?.requeueable === true && (
                     <Button
                       type="button"
@@ -252,7 +278,9 @@ export function CardPeek({
                       disabled={disabled || intentPending}
                       onClick={() => onIntent("Requeue", card.id)}
                     >
-                      {boardCopy.peek.hold.requeue}
+                      <Trans comment="Button in the card panel that puts a held card back in the queue">
+                        다시 대기열에
+                      </Trans>
                     </Button>
                   )}
                 </div>
@@ -282,7 +310,9 @@ export function CardPeek({
               {!editing && transferTargets.length > 0 && canTransfer(card) && (
                 <div className="rounded-md border px-3 py-2">
                   <Field>
-                    <FieldLabel htmlFor="card-transfer">{boardCopy.peek.transfer.label}</FieldLabel>
+                    <FieldLabel htmlFor="card-transfer">
+                      <Trans>다른 대화로 옮기기</Trans>
+                    </FieldLabel>
                     <span className="flex flex-wrap items-center gap-2">
                       <Select
                         value={transferTo}
@@ -295,10 +325,18 @@ export function CardPeek({
                       >
                         <SelectTrigger
                           id="card-transfer"
-                          aria-label={boardCopy.peek.transfer.target}
+                          aria-label={t({
+                            message: "옮길 대화",
+                            comment: "Picker of the conversation a card moves to",
+                          })}
                           className="min-w-40 flex-1"
                         >
-                          <SelectValue placeholder={boardCopy.peek.transfer.placeholder} />
+                          <SelectValue
+                            placeholder={t({
+                              message: "대화 선택",
+                              comment: "Placeholder of the conversation picker",
+                            })}
+                          />
                         </SelectTrigger>
                         <SelectContent>
                           {transferTargets.map((target) => (
@@ -316,10 +354,16 @@ export function CardPeek({
                           if (transferTo !== null) onTransfer(card.id, transferTo);
                         }}
                       >
-                        {boardCopy.peek.transfer.submit}
+                        <Trans comment="Moves the card to the chosen conversation's Plan">
+                          옮기기
+                        </Trans>
                       </Button>
                     </span>
-                    <FieldDescription>{boardCopy.peek.transfer.hint}</FieldDescription>
+                    <FieldDescription>
+                      <Trans>
+                        그 대화 Plan의 새 카드로 들어갑니다. 의존은 끊기고 처음부터 다시 시작합니다.
+                      </Trans>
+                    </FieldDescription>
                   </Field>
                 </div>
               )}
@@ -340,9 +384,15 @@ export function CardPeek({
                         onIntent(card.hold === undefined ? "Hold" : "Release", card.id)
                       }
                     >
-                      {card.hold === undefined
-                        ? boardCopy.peek.actions.hold
-                        : boardCopy.peek.actions.release}
+                      {card.hold === undefined ? (
+                        <Trans comment="Button in the card panel that puts the card on hold">
+                          보류
+                        </Trans>
+                      ) : (
+                        <Trans comment="Button in the card panel that takes the card off hold">
+                          보류 해제
+                        </Trans>
+                      )}
                     </Button>
                   )}
                 <Button
@@ -352,9 +402,15 @@ export function CardPeek({
                   disabled={!editable}
                   onClick={() => onEdit(true)}
                 >
-                  {card.status === "in_progress"
-                    ? boardCopy.peek.actions.requestChange
-                    : boardCopy.peek.actions.edit}
+                  {card.status === "in_progress" ? (
+                    <Trans comment="Button in the card panel that opens the editor for a change request">
+                      수정 요청
+                    </Trans>
+                  ) : (
+                    <Trans comment="Button in the card panel that opens the card editor">
+                      편집
+                    </Trans>
+                  )}
                 </Button>
               </SheetFooter>
             )}
@@ -385,6 +441,12 @@ function CardDetails({
   readonly outcomeOf: (outcomeId: string) => string | null;
   readonly lastChange: BoardCard["lastChange"];
 }) {
+  const { t } = useLingui();
+  const none = (
+    <span className="text-muted-foreground">
+      <Trans comment="A card field with nothing in it">없음</Trans>
+    </span>
+  );
   const list = (items: readonly string[] | undefined) =>
     items !== undefined && items.length > 0 ? (
       <ul className="list-disc space-y-0.5 pl-4">
@@ -393,7 +455,7 @@ function CardDetails({
         ))}
       </ul>
     ) : (
-      <span className="text-muted-foreground">{boardCopy.peek.details.none}</span>
+      none
     );
   return (
     <div className="space-y-4">
@@ -401,7 +463,9 @@ function CardDetails({
         <p className="whitespace-pre-wrap">{card.description}</p>
       )}
       <DataList className="items-start">
-        <DataListItem term={boardCopy.peek.details.dependsOn}>
+        <DataListItem
+          term={<Trans comment="Card field: the cards this card waits for">의존</Trans>}
+        >
           {card.dependsOn.length > 0 ? (
             <span className="flex flex-wrap gap-1">
               {card.dependsOn.map((id) => (
@@ -411,14 +475,20 @@ function CardDetails({
               ))}
             </span>
           ) : (
-            <span className="text-muted-foreground">{boardCopy.peek.details.none}</span>
+            none
           )}
         </DataListItem>
-        <DataListItem term={boardCopy.peek.details.acceptanceCriteria}>
+        <DataListItem
+          term={<Trans comment="Card field: when the card counts as done">완료 조건</Trans>}
+        >
           {list(card.acceptanceCriteria)}
         </DataListItem>
         {card.outcomes.length > 0 && (
-          <DataListItem term={boardCopy.peek.details.outcomes}>
+          <DataListItem
+            term={
+              <Trans comment="Card field: the Goal's outcomes the card serves">Goal 결과</Trans>
+            }
+          >
             <ul className="space-y-1">
               {card.outcomes.map((id) => (
                 <li key={id} className="flex items-start gap-1.5">
@@ -426,7 +496,7 @@ function CardDetails({
                     {id}
                   </Badge>
                   <span className={outcomeOf(id) === null ? "text-muted-foreground" : undefined}>
-                    {outcomeOf(id) ?? boardCopy.peek.details.outcomeMissing}
+                    {outcomeOf(id) ?? <Trans>지금 Goal에는 없는 결과입니다.</Trans>}
                   </span>
                 </li>
               ))}
@@ -434,31 +504,49 @@ function CardDetails({
           </DataListItem>
         )}
         {isTruthy(card.boundaries) && (
-          <DataListItem term={boardCopy.peek.details.boundaries}>
+          <DataListItem
+            term={<Trans comment="Card field: what the card's work must not touch">경계</Trans>}
+          >
             {list(card.boundaries)}
           </DataListItem>
         )}
         {isTruthy(card.risk) && (
-          <DataListItem term={boardCopy.peek.details.risk}>
-            {boardCopy.risk[card.risk]}
+          <DataListItem
+            term={<Trans comment="Card field: how risky the card's work is">위험</Trans>}
+          >
+            {t(riskLabels[card.risk])}
           </DataListItem>
         )}
         {isTruthy(card.requiredEvidence) && (
-          <DataListItem term={boardCopy.peek.details.requiredEvidence}>
+          <DataListItem
+            term={<Trans comment="Card field: proof the card's work must leave">필요한 근거</Trans>}
+          >
             {list(card.requiredEvidence)}
           </DataListItem>
         )}
         {card.evidence.length > 0 && (
-          <DataListItem term={boardCopy.peek.details.evidence}>{list(card.evidence)}</DataListItem>
+          <DataListItem
+            term={<Trans comment="Card field: proof the card's work left">남긴 근거</Trans>}
+          >
+            {list(card.evidence)}
+          </DataListItem>
         )}
         {isTruthy(card.humanDecision) && (
-          <DataListItem term={boardCopy.peek.details.humanDecision}>
+          <DataListItem
+            term={
+              <Trans comment="Card field: what a person must decide for the card">사람 판단</Trans>
+            }
+          >
             {card.humanDecision}
           </DataListItem>
         )}
-        <DataListItem term={boardCopy.lastChange.label}>
+        <DataListItem
+          term={
+            <Trans comment="Card field: who changed the card last, and when">마지막 변경</Trans>
+          }
+        >
           {lastChange === null
-            ? boardCopy.lastChange.none
+            ? authorLabel(null)
             : `${authorLabel(lastChange.author)} · ${koreanLocalTime(lastChange.at)}`}
         </DataListItem>
       </DataList>
@@ -483,6 +571,7 @@ function CardEditor({
   /** Resolves with an error message, or null once the change was accepted. */
   readonly onSubmit: (edit: BoardEdit) => Promise<string | null>;
 }) {
+  const { t } = useLingui();
   const [form, setForm] = useState<CardForm>(() => formOf(card));
   const [error, setError] = useState<string | null>(null);
   const set = (key: keyof CardForm) => (value: string) => setForm({ ...form, [key]: value });
@@ -531,17 +620,28 @@ function CardEditor({
     >
       {card === null && (
         <SheetHeader>
-          <SheetTitle>{boardCopy.editor.newTitle}</SheetTitle>
-          <SheetDescription>{boardCopy.editor.newHint}</SheetDescription>
+          <SheetTitle>
+            <Trans comment="Title of the form that adds a new card">카드 추가</Trans>
+          </SheetTitle>
+          <SheetDescription>
+            <Trans>저장하면 보드에 바로 반영되고 작성자가 사용자로 남습니다.</Trans>
+          </SheetDescription>
         </SheetHeader>
       )}
       <div className={card === null ? "flex-1 overflow-y-auto p-4" : "space-y-3"}>
         {executing && (
-          <p className="mb-3 text-muted-foreground">{boardCopy.editor.executingHint}</p>
+          <p className="mb-3 text-muted-foreground">
+            <Trans>
+              진행 중인 카드라 바로 바뀌지 않습니다. 변경 요청으로 저장되고 오케스트레이터가
+              반영할지 정합니다.
+            </Trans>
+          </p>
         )}
         <FieldGroup>
           <Field>
-            <FieldLabel htmlFor="card-title">{boardCopy.editor.title}</FieldLabel>
+            <FieldLabel htmlFor="card-title">
+              <Trans comment="Card editor field: the card's title">제목</Trans>
+            </FieldLabel>
             <Input
               id="card-title"
               autoFocus
@@ -550,7 +650,9 @@ function CardEditor({
             />
           </Field>
           <Field>
-            <FieldLabel htmlFor="card-description">{boardCopy.editor.description}</FieldLabel>
+            <FieldLabel htmlFor="card-description">
+              <Trans comment="Card editor field: the card's description">설명</Trans>
+            </FieldLabel>
             <Textarea
               id="card-description"
               value={form.description}
@@ -558,25 +660,37 @@ function CardEditor({
             />
           </Field>
           <Field>
-            <FieldLabel htmlFor="card-depends">{boardCopy.editor.dependsOn}</FieldLabel>
+            <FieldLabel htmlFor="card-depends">
+              <Trans comment="Card editor field: ids of the cards this card waits for">
+                의존 카드
+              </Trans>
+            </FieldLabel>
             <Input
               id="card-depends"
               value={form.dependsOn}
               onChange={(event) => set("dependsOn")(event.target.value)}
             />
-            <FieldDescription>{boardCopy.editor.dependsOnHint}</FieldDescription>
+            <FieldDescription>
+              <Trans>카드 id를 쉼표로 구분합니다.</Trans>
+            </FieldDescription>
           </Field>
           <Field>
-            <FieldLabel htmlFor="card-criteria">{boardCopy.editor.acceptanceCriteria}</FieldLabel>
+            <FieldLabel htmlFor="card-criteria">
+              <Trans comment="Card field: when the card counts as done">완료 조건</Trans>
+            </FieldLabel>
             <Textarea
               id="card-criteria"
               value={form.acceptanceCriteria}
               onChange={(event) => set("acceptanceCriteria")(event.target.value)}
             />
-            <FieldDescription>{boardCopy.editor.onePerLine}</FieldDescription>
+            <FieldDescription>
+              <Trans>한 줄에 하나씩 적습니다.</Trans>
+            </FieldDescription>
           </Field>
           <Field>
-            <FieldLabel htmlFor="card-boundaries">{boardCopy.editor.boundaries}</FieldLabel>
+            <FieldLabel htmlFor="card-boundaries">
+              <Trans comment="Card field: what the card's work must not touch">경계</Trans>
+            </FieldLabel>
             <Textarea
               id="card-boundaries"
               value={form.boundaries}
@@ -584,10 +698,12 @@ function CardEditor({
             />
           </Field>
           <Field>
-            <FieldLabel htmlFor="card-risk">{boardCopy.editor.risk}</FieldLabel>
+            <FieldLabel htmlFor="card-risk">
+              <Trans comment="Card field: how risky the card's work is">위험</Trans>
+            </FieldLabel>
             <Select
               value={form.risk}
-              items={riskItems}
+              items={riskItems.map(({ value, label }) => ({ value, label: t(label) }))}
               onValueChange={(value) => {
                 const item = riskItems.find((option) => option.value === value);
                 if (isTruthy(item)) setForm({ ...form, risk: item.value });
@@ -599,14 +715,16 @@ function CardEditor({
               <SelectContent>
                 {riskItems.map((option) => (
                   <SelectItem key={option.value} value={option.value}>
-                    {option.label}
+                    {t(option.label)}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </Field>
           <Field>
-            <FieldLabel htmlFor="card-evidence">{boardCopy.editor.requiredEvidence}</FieldLabel>
+            <FieldLabel htmlFor="card-evidence">
+              <Trans comment="Card field: proof the card's work must leave">필요한 근거</Trans>
+            </FieldLabel>
             <Textarea
               id="card-evidence"
               value={form.requiredEvidence}
@@ -614,7 +732,9 @@ function CardEditor({
             />
           </Field>
           <Field>
-            <FieldLabel htmlFor="card-decision">{boardCopy.editor.humanDecision}</FieldLabel>
+            <FieldLabel htmlFor="card-decision">
+              <Trans comment="Card field: what a person must decide for the card">사람 판단</Trans>
+            </FieldLabel>
             <Input
               id="card-decision"
               value={form.humanDecision}
@@ -642,34 +762,44 @@ function CardEditor({
                 />
               }
             >
-              {boardCopy.editor.cancelCard.trigger}
+              <Trans comment="Button in the card editor that cancels the card">카드 취소</Trans>
             </AlertDialogTrigger>
             <AlertDialogContent size="sm">
               <AlertDialogHeader>
-                <AlertDialogTitle>{boardCopy.editor.cancelCard.title}</AlertDialogTitle>
+                <AlertDialogTitle>
+                  <Trans>이 카드를 취소할까요?</Trans>
+                </AlertDialogTitle>
                 <AlertDialogDescription>
-                  {executing
-                    ? boardCopy.editor.cancelCard.executing
-                    : boardCopy.editor.cancelCard.waiting}
+                  {executing ? (
+                    <Trans>실행 중인 Plan이라 오케스트레이터가 확인한 뒤 취소됩니다.</Trans>
+                  ) : (
+                    <Trans>취소한 카드는 실행되지 않습니다.</Trans>
+                  )}
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
-                <AlertDialogCancel>{boardCopy.editor.cancelCard.choices.keep}</AlertDialogCancel>
+                <AlertDialogCancel>
+                  <Trans comment="Closes the dialog without cancelling the card">그만두기</Trans>
+                </AlertDialogCancel>
                 <AlertDialogAction
                   variant="destructive"
                   onClick={() => submit(BoardEdit.CancelCard({ planVersion, cardId: card.id }))}
                 >
-                  {boardCopy.editor.cancelCard.choices.cancel}
+                  <Trans comment="Button in the card editor that cancels the card">카드 취소</Trans>
                 </AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
         )}
         <Button type="button" size="sm" variant="outline" onClick={onCancel}>
-          {boardCopy.editor.close}
+          <Trans comment="Button that closes the card editor">닫기</Trans>
         </Button>
         <Button type="submit" size="sm" disabled={pending || form.title.trim().length === 0}>
-          {executing ? boardCopy.editor.requestChange : boardCopy.editor.save}
+          {executing ? (
+            <Trans comment="Button that sends the edit as a change request">변경 요청</Trans>
+          ) : (
+            <Trans comment="Button that saves the card">저장</Trans>
+          )}
         </Button>
       </div>
     </form>

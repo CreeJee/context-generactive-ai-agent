@@ -1,9 +1,18 @@
+import type { MessageDescriptor } from "@lingui/core";
+import { msg } from "@lingui/core/macro";
+import { Trans, useLingui } from "@lingui/react/macro";
 import { SparklesIcon, TerminalSquareIcon } from "lucide-react";
 import { CommandGroup, CommandItem, CommandList } from "~/components/ui/command";
-import { chatCopy } from "./copy";
 import type { Suggestion } from "./slash-commands";
 
-const headings = chatCopy.slashPalette.headings;
+const headings = {
+  command: msg({ message: "명령", comment: "Heading of the slash command group in the palette" }),
+  skill: msg({ message: "Skills", comment: "Heading of the skill group in the slash palette" }),
+  value: msg({
+    message: "고를 수 있는 값",
+    comment: "Heading of the values the typed slash command can take",
+  }),
+} satisfies Record<Suggestion["kind"], MessageDescriptor>;
 
 // The order suggestions come in, so ↑/↓ walk the groups top to bottom.
 const groups: ReadonlyArray<Suggestion["kind"]> = ["command", "skill", "value"];
@@ -19,6 +28,7 @@ export function SlashPalette({
   suggestions: readonly Suggestion[];
   onPick: (suggestion: Suggestion) => void;
 }) {
+  const { t } = useLingui();
   return (
     // The palette floats over the conversation, so its frame lifts it the way a popover would.
     <div className="mb-2 overflow-hidden rounded-xl border bg-popover shadow-md">
@@ -27,7 +37,7 @@ export function SlashPalette({
           const items = suggestions.filter((suggestion) => suggestion.kind === kind);
           if (items.length === 0) return null;
           return (
-            <CommandGroup key={kind} heading={headings[kind]}>
+            <CommandGroup key={kind} heading={t(headings[kind])}>
               {items.map((suggestion) => (
                 <CommandItem
                   key={suggestion.text}
@@ -57,7 +67,9 @@ export function SlashPalette({
         })}
       </CommandList>
       <p className="border-t px-3 py-1.5 text-xs text-muted-foreground">
-        {chatCopy.slashPalette.keysHint}
+        <Trans comment="Keyboard hint under the slash palette">
+          ↑↓ 고르기, Tab 채우기, Enter 실행
+        </Trans>
       </p>
     </div>
   );

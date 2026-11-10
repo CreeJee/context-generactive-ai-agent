@@ -1,3 +1,6 @@
+import { i18n, type MessageDescriptor } from "@lingui/core";
+import { msg, ph } from "@lingui/core/macro";
+import { Trans, useLingui } from "@lingui/react/macro";
 import { isTruthy } from "../../truthy.ts";
 import type { ReactNode } from "react";
 import type { SessionRunState } from "memory-agent/definitions";
@@ -41,12 +44,9 @@ import {
 } from "../../components/ui/collapsible";
 import { WorkflowExecutionState, type WorkflowMode, type WorkflowState } from "../api";
 import { koreanLocalTime } from "../shared/local-time";
-import { chatCopy } from "./copy";
 import { WorkflowRow, WorkflowRows } from "./workflow-rows";
 
 const localTime = (epochMillis: number) => koreanLocalTime(epochMillis);
-
-const copy = chatCopy.workflow;
 
 /** The modes the composer offers: plain chat, or who approves the Plan (Plan or Goal). */
 export const modeLabels: Readonly<Record<"chat" | WorkflowMode, string>> = {
@@ -59,33 +59,86 @@ export const modeLabels: Readonly<Record<"chat" | WorkflowMode, string>> = {
 export const composerModeOf = (state: WorkflowState | null): "chat" | WorkflowMode =>
   state === null || state.phase === "chat" ? "chat" : state.mode;
 
+const completedModeLabel = msg({
+  message: "완료",
+  comment: "Shown in place of the workflow mode (Plan, Goal) once the workflow has finished",
+});
+
 /** A completed workflow reads as done; any other as its mode. */
 export function workflowModeLabel(state: WorkflowState): string {
-  return state.phase === "completed" ? copy.completed : modeLabels[composerModeOf(state)];
+  return state.phase === "completed"
+    ? i18n._(completedModeLabel)
+    : modeLabels[composerModeOf(state)];
 }
 
-export const goalStatusLabels: Record<NonNullable<WorkflowState["goal"]>["status"], string> =
-  copy.goalStatus;
+export const goalStatusLabels = {
+  draft: msg({ message: "준비 중", comment: "Goal status: not started yet" }),
+  active: msg({ message: "진행 중", comment: "Goal status: being worked on" }),
+  paused: msg({ message: "일시 중지", comment: "Goal status: paused by the user" }),
+  completed: msg({ message: "완료", comment: "Goal status: finished" }),
+  failed: msg({ message: "중단됨", comment: "Goal status: stopped for good" }),
+} satisfies Record<NonNullable<WorkflowState["goal"]>["status"], MessageDescriptor>;
 
-export const planStatusLabels: Record<NonNullable<WorkflowState["plan"]>["status"], string> =
-  copy.planStatus;
+export const planStatusLabels = {
+  draft: msg({ message: "작성 중", comment: "Plan status: still being written" }),
+  ready: msg({ message: "준비 완료", comment: "Plan status: ready to approve and run" }),
+  executing: msg({ message: "실행 중", comment: "Plan status: its cards are running" }),
+  completed: msg({ message: "완료", comment: "Plan status: finished" }),
+  blocked: msg({ message: "막힘", comment: "Plan status: cannot go on" }),
+  closed: msg({ message: "닫음", comment: "Plan status: closed by the user" }),
+} satisfies Record<NonNullable<WorkflowState["plan"]>["status"], MessageDescriptor>;
 
-const verificationStatusLabels: Record<
-  NonNullable<WorkflowState["plan"]>["verification"]["status"],
-  string
-> = copy.verificationStatus;
+const verificationStatusLabels = {
+  not_run: msg({ message: "미실행", comment: "Goal verification status: not run" }),
+  passed: msg({ message: "통과", comment: "Goal verification status: passed" }),
+  failed: msg({
+    message: "구현 실패",
+    comment: "Goal verification status: the implementation failed the check",
+  }),
+  invalid_hypothesis: msg({
+    message: "가설 무효",
+    comment: "Goal verification status: the hypothesis being checked was wrong",
+  }),
+  invalid_criterion: msg({
+    message: "검증 조건 무효",
+    comment: "Goal verification status: the check itself was wrong",
+  }),
+  inconclusive: msg({
+    message: "판정 불가",
+    comment: "Goal verification status: the check could not decide",
+  }),
+  blocked: msg({
+    message: "외부 요인으로 막힘",
+    comment: "Goal verification status: something outside the project kept the check from running",
+  }),
+} satisfies Record<NonNullable<WorkflowState["plan"]>["verification"]["status"], MessageDescriptor>;
 
 /** What each `display` note says. */
-const displayTexts: Readonly<Record<NonNullable<SessionRunState["display"]>, string>> =
-  copy.display;
+const displayTexts = {
+  card_reclassifying: msg`Goal이 바뀌어 카드를 다시 분류하는 중입니다.`,
+} satisfies Record<NonNullable<SessionRunState["display"]>, MessageDescriptor>;
 
 /** Where the workflow is, beside its mode in the panel title. */
-export const stageLabels: Readonly<Record<Exclude<WorkflowState["phase"], "chat">, string>> =
-  copy.stages;
+export const stageLabels = {
+  shaping: msg({
+    message: "Plan 작성 중",
+    comment: "Workflow stage after the mode: writing the Plan",
+  }),
+  running: msg({ message: "실행 중", comment: "Workflow stage after the mode: running the cards" }),
+  completed: msg({ message: "완료", comment: "Workflow stage after the mode: finished" }),
+} satisfies Record<Exclude<WorkflowState["phase"], "chat">, MessageDescriptor>;
 
 /** What happens next, in the words of each stage and mode. */
-const stageGuides: Readonly<Record<"shaping" | "running", Readonly<Record<WorkflowMode, string>>>> =
-  copy.guides;
+const stageGuides = {
+  shaping: {
+    plan: msg`요청을 입력하면 프로젝트를 바꾸지 않고 조사한 뒤 Plan을 만듭니다. 승인하면 칸반 보드에서 카드로 실행합니다.`,
+    goal: msg`달성할 결과를 입력하면 그에 맞는 카드를 Plan 작성자가 만들어 바로 실행합니다. Goal은 결과가 모두 확인되면 끝납니다.`,
+  },
+  running: {
+    plan: msg`보드가 카드를 실행하고 결과마다 확인합니다. Plan 작성자가 더한 카드는 승인한 뒤에 실행됩니다.`,
+    goal: msg`보드가 카드를 실행하고 결과마다 확인합니다. 결과가 모두 확인될 때까지 Plan 작성자가 카드를 더합니다.`,
+  },
+} satisfies Record<"shaping" | "running", Record<WorkflowMode, MessageDescriptor>>;
 
 /** What the bar's icon says about the stage at a glance. */
 function StageIcon({ state }: { readonly state: WorkflowState }) {
@@ -131,10 +184,11 @@ function NoticeRow({
 
 /** The Plan's open questions and risks, one line each. */
 function PlanNotes({ plan }: { readonly plan: NonNullable<WorkflowState["plan"]> }) {
+  const { t } = useLingui();
   return (
     <>
       {plan.openQuestions.length > 0 && (
-        <WorkflowRows label={copy.openQuestions(plan.openQuestions.length)}>
+        <WorkflowRows label={t`열린 질문 ${ph({ count: plan.openQuestions.length })}`}>
           {plan.openQuestions.map((question) => (
             <WorkflowRow
               key={question}
@@ -147,7 +201,7 @@ function PlanNotes({ plan }: { readonly plan: NonNullable<WorkflowState["plan"]>
         </WorkflowRows>
       )}
       {plan.risks.length > 0 && (
-        <WorkflowRows label={copy.risks(plan.risks.length)}>
+        <WorkflowRows label={t`위험 ${ph({ count: plan.risks.length })}`}>
           {plan.risks.map((risk) => (
             <WorkflowRow
               key={risk}
@@ -210,6 +264,7 @@ export function WorkflowArtifactPanel({
   /** Opens the whole board. */
   readonly boardAction?: ReactNode;
 }) {
+  const { t } = useLingui();
   if (state === null || state.phase === "chat") return null;
   const { goal, plan, phase, mode } = state;
   const completed = phase === "completed";
@@ -227,17 +282,23 @@ export function WorkflowArtifactPanel({
     !completed && isTruthy(plan) && !kanbanRunning && (mode === "plan" || continuing);
   const resuming = !completed && isTruthy(goal) && (resumable || paused);
   return (
-    <section aria-label={copy.label} className="mb-2 rounded-xl border bg-card text-xs shadow-xs">
+    <section
+      aria-label={t({
+        message: "워크플로",
+        comment: "Accessible name of the workflow bar above the composer",
+      })}
+      className="mb-2 rounded-xl border bg-card text-xs shadow-xs"
+    >
       <Collapsible key={`${phase}:${plan?.version ?? 0}`} defaultOpen={reviewing}>
         <div className="flex min-h-9 items-center gap-1 p-1">
           <CollapsibleTrigger className="group flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors outline-none hover:bg-muted/60 focus-visible:ring-3 focus-visible:ring-ring/50">
             <StageIcon state={state} />
             <span className="shrink-0 font-medium">
-              {modeLabels[mode]} · {stageLabels[phase]}
+              {modeLabels[mode]} · {t(stageLabels[phase])}
             </span>
-            {paused && <Badge variant="outline">{goalStatusLabels.paused}</Badge>}
+            {paused && <Badge variant="outline">{t(goalStatusLabels.paused)}</Badge>}
             {goal?.status === "failed" && (
-              <Badge variant="destructive">{goalStatusLabels.failed}</Badge>
+              <Badge variant="destructive">{t(goalStatusLabels.failed)}</Badge>
             )}
             {isTruthy(goal) && (
               <span className="min-w-0 truncate text-muted-foreground">{goal.statement}</span>
@@ -259,7 +320,15 @@ export function WorkflowArtifactPanel({
               onClick={onExecute}
             >
               <PlayIcon data-icon="inline-start" />
-              {continuing ? copy.continueOnBoard : copy.approveAndRun}
+              {continuing ? (
+                <Trans comment="Button: keep running an approved Plan on the kanban board">
+                  보드에서 이어서 실행
+                </Trans>
+              ) : (
+                <Trans comment="Button: approve the Plan and run it on the kanban board">
+                  승인하고 실행
+                </Trans>
+              )}
             </Button>
           )}
           {resuming && (
@@ -271,7 +340,7 @@ export function WorkflowArtifactPanel({
               onClick={onResume}
             >
               <PlayIcon data-icon="inline-start" />
-              {copy.resume}
+              <Trans comment="Button: resume a paused Goal">계속</Trans>
             </Button>
           )}
           {hasWork && boardAction}
@@ -282,21 +351,36 @@ export function WorkflowArtifactPanel({
           isTruthy(providerRetry) ||
           outdated) && (
           <div className="flex flex-col gap-1 pb-2">
-            {isTruthy(display) && <NoticeRow icon={RefreshCwIcon} text={displayTexts[display]} />}
+            {isTruthy(display) && (
+              <NoticeRow icon={RefreshCwIcon} text={t(displayTexts[display])} />
+            )}
             {WorkflowExecutionState.$is("blocked")(execution) && (
-              <NoticeRow icon={CircleAlertIcon} destructive text={copy.blocked(execution.detail)} />
+              <NoticeRow
+                icon={CircleAlertIcon}
+                destructive
+                text={t`자동 진행 중단: ${ph({ detail: execution.detail })}`}
+              />
             )}
             {WorkflowExecutionState.$is("retrying")(execution) ? (
-              <NoticeRow icon={ClockIcon} text={copy.retrying(localTime(execution.retryAt))} />
+              <NoticeRow
+                icon={ClockIcon}
+                text={t`서버가 다시 시작돼 끊긴 실행을 ${ph({ time: localTime(execution.retryAt) })}에 이어서 진행합니다.`}
+              />
             ) : (
               isTruthy(providerRetry) && (
                 <NoticeRow
                   icon={ClockIcon}
-                  text={copy.providerRetry(localTime(providerRetry.retryAt), providerRetry.retry)}
+                  text={t`공급자에 요청을 보내지 못했습니다. ${ph({ time: localTime(providerRetry.retryAt) })}에 다시 보냅니다(${ph({ attempt: providerRetry.retry })}번째 재시도).`}
                 />
               )
             )}
-            {outdated && <NoticeRow icon={TriangleAlertIcon} destructive text={copy.outdated} />}
+            {outdated && (
+              <NoticeRow
+                icon={TriangleAlertIcon}
+                destructive
+                text={t`Goal이 변경되어 이 Plan을 다시 확인해야 합니다.`}
+              />
+            )}
           </div>
         )}
         {/* Kept mounted so the controls exist, folded, for the keyboard and for tests. */}
@@ -304,7 +388,14 @@ export function WorkflowArtifactPanel({
           <div className="flex max-h-[min(24rem,40dvh)] flex-col gap-3 overflow-y-auto p-2">
             {!completed && (
               <p className="px-1.5 text-muted-foreground">
-                {reviewing ? copy.reviewGuide : stageGuides[phase][mode]}
+                {reviewing ? (
+                  <Trans>
+                    Plan을 확인하고 승인하면 칸반 보드에서 실행합니다. 바꾸고 싶은 점은 그대로
+                    입력해 주십시오.
+                  </Trans>
+                ) : (
+                  t(stageGuides[phase][mode])
+                )}
               </p>
             )}
             {(isTruthy(goal) || (isTruthy(plan) && plan.summary.length > 0)) && (
@@ -322,7 +413,10 @@ export function WorkflowArtifactPanel({
               >
                 {verification.status === "passed" ? <CircleCheckIcon /> : <CircleAlertIcon />}
                 <AlertTitle>
-                  {copy.verification(verificationStatusLabels[verification.status])}
+                  {t({
+                    message: `검증 ${ph({ status: t(verificationStatusLabels[verification.status]) })}`,
+                    comment: "Title of the Goal verification result; the placeholder is its status",
+                  })}
                 </AlertTitle>
                 {verification.summary.length > 0 && (
                   <AlertDescription>{verification.summary}</AlertDescription>
@@ -345,7 +439,7 @@ export function WorkflowArtifactPanel({
                   onClick={onRevise}
                 >
                   <PencilIcon data-icon="inline-start" />
-                  {copy.revise}
+                  <Trans comment="Button: revise the Plan">Plan 수정</Trans>
                 </Button>
               )}
               {isTruthy(goal) && !resuming && (
@@ -357,7 +451,7 @@ export function WorkflowArtifactPanel({
                   onClick={onPause}
                 >
                   <PauseIcon data-icon="inline-start" />
-                  {copy.pause}
+                  <Trans comment="Button: pause the Goal">일시 중지</Trans>
                 </Button>
               )}
               {isTruthy(goal) && (
@@ -376,17 +470,28 @@ export function WorkflowArtifactPanel({
                     }
                   >
                     <SquareIcon data-icon="inline-start" />
-                    {copy.stop}
+                    <Trans comment="Button: stop the Goal for good">중단</Trans>
                   </AlertDialogTrigger>
                   <AlertDialogContent size="sm">
                     <AlertDialogHeader>
-                      <AlertDialogTitle>{copy.stopConfirm.title}</AlertDialogTitle>
-                      <AlertDialogDescription>{copy.stopConfirm.body}</AlertDialogDescription>
+                      <AlertDialogTitle>
+                        <Trans>이 Goal을 중단할까요?</Trans>
+                      </AlertDialogTitle>
+                      <AlertDialogDescription>
+                        <Trans>
+                          중단한 Goal은 다시 계속할 수 없습니다. 잠시 멈추려면 일시 중지를 써
+                          주십시오.
+                        </Trans>
+                      </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
-                      <AlertDialogCancel>{copy.stopConfirm.choices.cancel}</AlertDialogCancel>
+                      <AlertDialogCancel>
+                        <Trans comment="Button: close the stop dialog without stopping the Goal">
+                          그만두기
+                        </Trans>
+                      </AlertDialogCancel>
                       <AlertDialogAction variant="destructive" onClick={onStop}>
-                        {copy.stopConfirm.choices.stop}
+                        <Trans comment="Button: confirm stopping the Goal">중단</Trans>
                       </AlertDialogAction>
                     </AlertDialogFooter>
                   </AlertDialogContent>

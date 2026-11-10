@@ -14,13 +14,16 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "cn";
-import { Match, Predicate } from "effect";
-import type { BoardAuthor } from "memory-agent";
+import { i18n, type MessageDescriptor } from "@lingui/core";
+import { msg } from "@lingui/core/macro";
+import { Trans, useLingui } from "@lingui/react/macro";
+import { Predicate } from "effect";
+import type { BoardAuthor, CardRisk } from "memory-agent";
 import { Badge } from "../../../components/ui/badge";
 import { Spinner } from "../../../components/ui/spinner";
 import type { BoardView, CardStatus } from "../../api";
 import { koreanLocalTime } from "../../shared/local-time";
-import { boardCopy } from "./copy";
+import { cardStatusLabels } from "./board-moves";
 
 type BoardCard = BoardView["cards"][number];
 
@@ -45,12 +48,27 @@ export function StatusIcon({
   return <Icon aria-hidden className={cn("size-3.5 shrink-0", tone, className)} />;
 }
 
+/** A card's risk, on its face and in its peek. */
+export const riskLabels = {
+  low: msg`위험 낮음`,
+  medium: msg`위험 보통`,
+  high: msg`위험 높음`,
+} satisfies Readonly<Record<CardRisk, MessageDescriptor>>;
+
+const authorLabels = {
+  User: msg({ message: "사용자", comment: "Who changed a card last: the person using the app" }),
+  Orchestrator: msg({
+    message: "오케스트레이터",
+    comment: "Who changed a card last: the agent that runs the kanban board",
+  }),
+} satisfies Readonly<Record<BoardAuthor["_tag"], MessageDescriptor>>;
+const noChange = msg({
+  message: "기록 없음",
+  comment: "A card's last change, when none is recorded",
+});
+
 export function authorLabel(author: BoardAuthor | null): string {
-  if (author === null) return boardCopy.lastChange.none;
-  return Match.valueTags(author, {
-    User: () => boardCopy.author.User,
-    Orchestrator: () => boardCopy.author.Orchestrator,
-  });
+  return i18n._(author === null ? noChange : authorLabels[author._tag]);
 }
 
 /**
@@ -58,7 +76,9 @@ export function authorLabel(author: BoardAuthor | null): string {
  * the board's normal course, so its changes are only in the peek.
  */
 export function UserChangeMark({ at }: { readonly at: string }) {
-  const label = boardCopy.lastChange.byUser(koreanLocalTime(at));
+  const { t } = useLingui();
+  const time = koreanLocalTime(at);
+  const label = t`마지막 변경: 사용자 · ${time}`;
   return (
     <span
       role="img"
@@ -92,7 +112,9 @@ export function CardFace({
   readonly entry: BoardCard;
   readonly signals: CardSignals;
 }) {
+  const { t } = useLingui();
   const { card, lastChange } = entry;
+  const waitingOn = signals.waitingOn.length;
   const userChangedAt =
     lastChange !== null && Predicate.isTagged(lastChange.author, "User") ? lastChange.at : null;
   const meta =
@@ -109,7 +131,7 @@ export function CardFace({
       <span className="flex items-center gap-1.5 text-2xs text-muted-foreground">
         <StatusIcon status={card.status} />
         <span className="shrink-0 font-mono">{card.id}</span>
-        <span className="sr-only">{boardCopy.status[card.status]}</span>
+        <span className="sr-only">{t(cardStatusLabels[card.status])}</span>
         {signals.group !== null && (
           <span className="truncate" title={signals.group}>
             · {signals.group}
@@ -121,38 +143,50 @@ export function CardFace({
       </span>
       {meta && (
         <span className="mt-2 flex flex-wrap items-center gap-1 text-2xs text-muted-foreground">
-          {isTruthy(card.risk) && <Badge variant="outline">{boardCopy.risk[card.risk]}</Badge>}
+          {isTruthy(card.risk) && <Badge variant="outline">{t(riskLabels[card.risk])}</Badge>}
           {signals.decisionPending && (
             <Badge variant="outline">
               <HourglassIcon data-icon="inline-start" />
-              {boardCopy.cardFace.decisionPending}
+              <Trans comment="Badge on a card: a decision about it waits for a person">
+                판단 대기
+              </Trans>
             </Badge>
           )}
           {card.hold !== undefined && (
             <Badge variant="secondary">
               <CirclePauseIcon data-icon="inline-start" />
-              {boardCopy.cardFace.held}
+              <Trans comment="Badge on a card: the card is on hold">보류</Trans>
             </Badge>
           )}
           {card.approval !== undefined && (
             <Badge variant="outline">
               <HourglassIcon data-icon="inline-start" />
-              {boardCopy.cardFace.approvalPending}
+              <Trans comment="Badge on a card: the card waits for the person's approval">
+                승인 대기
+              </Trans>
             </Badge>
           )}
           {signals.requesting && (
             <Badge variant="outline">
               <Spinner data-icon="inline-start" />
-              {boardCopy.cardFace.requesting}
+              <Trans comment="Badge on a card: a move request is on its way to the server">
+                요청 중
+              </Trans>
             </Badge>
           )}
           {signals.changePending && (
-            <Badge variant="outline">{boardCopy.cardFace.changePending}</Badge>
+            <Badge variant="outline">
+              <Trans comment="Badge on a card: a change request waits for the orchestrator">
+                변경 요청 대기
+              </Trans>
+            </Badge>
           )}
           {signals.waitingOn.length > 0 && (
             <Badge variant="outline" title={signals.waitingOn.join(", ")}>
               <LinkIcon data-icon="inline-start" />
-              {boardCopy.cardFace.waitingOn(signals.waitingOn.length)}
+              <Trans comment="Badge on a card: how many unfinished cards it depends on">
+                선행 {waitingOn}
+              </Trans>
             </Badge>
           )}
           {userChangedAt !== null && <UserChangeMark at={userChangedAt} />}

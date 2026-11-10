@@ -1,3 +1,6 @@
+import type { MessageDescriptor } from "@lingui/core";
+import { msg } from "@lingui/core/macro";
+import { Trans, useLingui } from "@lingui/react/macro";
 import type { ContextView } from "memory-agent/definitions";
 import { motion } from "motion/react";
 import type { ReactNode } from "react";
@@ -5,10 +8,6 @@ import { AnimatedNumber } from "~/components/ui/animated-number";
 import { Button } from "~/components/ui/button";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "~/components/ui/hover-card";
 import { cn } from "~/lib/utils";
-import { chatCopy } from "./copy";
-
-const copy = chatCopy.contextMeter;
-
 const tokens = new Intl.NumberFormat("ko-KR", { notation: "compact", maximumFractionDigits: 1 });
 
 /** Past this share the line turns to a warning: the model is close to what it can read. */
@@ -19,14 +18,41 @@ const crowdedShare = 0.6;
  * the three steps beside the name.
  */
 const stages = {
-  none: { ...copy.stages.none, level: 0 },
-  "clear-answered": { ...copy.stages["clear-answered"], level: 1 },
-  summarize: { ...copy.stages.summarize, level: 2 },
-  "leave-out": { ...copy.stages["leave-out"], level: 3 },
+  none: {
+    label: msg({ message: "안 함", comment: "Compaction stage: the request was sent uncompacted" }),
+    detail: msg`대화를 원문 그대로 보냈습니다.`,
+    level: 0,
+  },
+  "clear-answered": {
+    label: msg`도구 출력 정리`,
+    detail: msg`답변이 끝난 도구 출력을 참조로 바꿔 보냈습니다.`,
+    level: 1,
+  },
+  summarize: {
+    label: msg({ message: "요약", comment: "Compaction stage: earlier turns were summarized" }),
+    detail: msg`지난 대화 일부를 요약으로 바꿔 보냈습니다.`,
+    level: 2,
+  },
+  "leave-out": {
+    label: msg`오래된 메시지 생략`,
+    detail: msg`요약으로도 넘쳐 오래된 메시지를 빼고 보냈습니다.`,
+    level: 3,
+  },
 } satisfies Record<
   NonNullable<ContextView["compactionStage"]>,
-  { label: string; level: number; detail: string }
+  { label: MessageDescriptor; level: number; detail: MessageDescriptor }
 >;
+
+/** A token count already shortened by `tokens`, such as 13만. */
+const tokenCount = (formatted: string) =>
+  msg({ message: `${formatted} 토큰`, comment: "{formatted} is a compact number such as 13만" });
+
+/** Cached tokens of the latest request and their share of it. */
+const cacheUsage = (formatted: string, percent: number) =>
+  msg({
+    message: `${formatted} 토큰 · ${percent}%`,
+    comment: "{formatted} is a compact token count such as 9.1만; {percent} is a whole percentage",
+  });
 
 /** One labelled value in the card. */
 function Row({ label, children }: { label: string; children: ReactNode }) {
@@ -81,6 +107,7 @@ function StageLevel({ level }: { level: number }) {
  * conversation took, with the numbers behind it on hover.
  */
 export function ContextMeter({ context }: { context: ContextView }) {
+  const { t } = useLingui();
   const { usedTokens, cachedTokens, cacheRatio, compactionStage, windowTokens, windowKnown } =
     context;
   // Historical requests can exceed a catalog limit (including when older middleware sent the
@@ -89,7 +116,13 @@ export function ContextMeter({ context }: { context: ContextView }) {
   const share = usedTokens === null || !comparable ? 0 : usedTokens / windowTokens;
   const crowded = comparable && share >= crowdedShare;
   const stage = compactionStage === null ? null : stages[compactionStage];
-  const limit = windowKnown ? copy.tokenCount(tokens.format(windowTokens)) : copy.unknown;
+  const unknown = t({ message: "알 수 없음", comment: "Context card value that is not known" });
+  const label = t({
+    message: "컨텍스트",
+    comment: "Name of the meter of how much of the model's context window the request used",
+  });
+  const windowLimit = t({ message: "모델 한도", comment: "Context card row: the model's window" });
+  const limit = windowKnown ? t(tokenCount(tokens.format(windowTokens))) : unknown;
   const summary =
     usedTokens === null ? (
       "-"
@@ -98,9 +131,13 @@ export function ContextMeter({ context }: { context: ContextView }) {
         <AnimatedNumber value={Math.round(share * 100)} />%
       </>
     ) : (
-      copy.tokenCount(tokens.format(usedTokens))
+      t(tokenCount(tokens.format(usedTokens)))
     );
-  const note = !windowKnown ? copy.windowUnknown : !comparable ? copy.overWindow : null;
+  const note = !windowKnown
+    ? t`모델 한도를 알 수 없어 사용률은 표시하지 않습니다.`
+    : !comparable
+      ? t`사용량이 모델 한도보다 커서 사용률은 표시하지 않습니다. 다음 요청부터 새 압축 결과가 반영됩니다.`
+      : null;
   return (
     <HoverCard>
       <HoverCardTrigger
@@ -109,22 +146,24 @@ export function ContextMeter({ context }: { context: ContextView }) {
       >
         {comparable && <ShareBar share={share} crowded={crowded} className="h-1 w-16" />}
         <span>
-          {copy.label} {summary}
+          {label} {summary}
         </span>
       </HoverCardTrigger>
       <HoverCardContent side="top" align="end" className="w-72">
         <div className="flex flex-col gap-2.5">
           <div className="flex items-baseline justify-between">
-            <p className="font-medium">{copy.label}</p>
+            <p className="font-medium">{label}</p>
             <p className={cn("text-sm font-medium tabular-nums", crowded && "text-warning")}>
               {summary}
             </p>
           </div>
           {usedTokens === null ? (
             <>
-              <p className="text-muted-foreground">{copy.noRequestYet}</p>
+              <p className="text-muted-foreground">
+                <Trans>이 대화로 아직 모델에 요청하지 않았습니다.</Trans>
+              </p>
               <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-                <Row label={copy.windowLimit}>{limit}</Row>
+                <Row label={windowLimit}>{limit}</Row>
               </dl>
               {note !== null && <p className="text-muted-foreground">{note}</p>}
             </>
@@ -132,21 +171,46 @@ export function ContextMeter({ context }: { context: ContextView }) {
             <>
               {comparable && <ShareBar share={share} crowded={crowded} className="h-1.5 w-full" />}
               <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-                <Row label={copy.lastRequest}>{copy.tokenCount(tokens.format(usedTokens))}</Row>
-                <Row label={copy.windowLimit}>{limit}</Row>
-                <Row label={copy.cache}>
-                  {cachedTokens === null || cacheRatio === null
-                    ? copy.cacheNotReported
-                    : copy.cacheUsage(tokens.format(cachedTokens), Math.round(cacheRatio * 100))}
+                <Row
+                  label={t({
+                    message: "마지막 요청",
+                    comment: "Context card row: tokens the latest request used",
+                  })}
+                >
+                  {t(tokenCount(tokens.format(usedTokens)))}
                 </Row>
-                <Row label={copy.compaction}>
+                <Row label={windowLimit}>{limit}</Row>
+                <Row
+                  label={t({
+                    message: "캐시",
+                    comment: "Context card row: prompt-cache hits of the latest request",
+                  })}
+                >
+                  {cachedTokens === null || cacheRatio === null
+                    ? t({
+                        message: "보고 안 됨",
+                        comment: "Context card value: the provider did not report cache use",
+                      })
+                    : t(cacheUsage(tokens.format(cachedTokens), Math.round(cacheRatio * 100)))}
+                </Row>
+                <Row
+                  label={t({
+                    message: "압축",
+                    comment: "Context card row: how strongly the conversation was compacted",
+                  })}
+                >
                   {stage !== null && <StageLevel level={stage.level} />}
-                  {stage?.label ?? copy.unknown}
+                  {stage === null ? unknown : t(stage.label)}
                 </Row>
               </dl>
-              {stage !== null && <p className="text-muted-foreground">{stage.detail}</p>}
+              {stage !== null && <p className="text-muted-foreground">{t(stage.detail)}</p>}
               {note !== null && <p className="text-muted-foreground">{note}</p>}
-              <p className="border-t pt-2 text-muted-foreground">{copy.footnote}</p>
+              <p className="border-t pt-2 text-muted-foreground">
+                <Trans>
+                  지침과 도구 정의를 포함한 마지막 요청 기준입니다. /compact로 지금 줄일 수
+                  있습니다.
+                </Trans>
+              </p>
             </>
           )}
         </div>

@@ -1,13 +1,17 @@
 import { it } from "@effect/vitest";
+import { i18n } from "@lingui/core";
+import { I18nProvider } from "@lingui/react";
 import { Cause, Effect } from "effect";
 import type { TraceTaskView } from "memory-agent";
+import type { ReactNode } from "react";
 import { render } from "vitest-browser-react";
 import { expect } from "vite-plus/test";
 import "../../app.css";
 import { DeleteActionResult, MessageView } from "./message";
-import { chatCopy } from "./copy";
 
-const copy = chatCopy.message;
+const Translated = ({ children }: { readonly children: ReactNode }) => (
+  <I18nProvider i18n={i18n}>{children}</I18nProvider>
+);
 
 const inactive = () => Promise.reject(new Error("No task action expected"));
 const props = {
@@ -30,9 +34,10 @@ it.live("reasoning can be expanded while streaming and stays separate from the a
           streaming
           message={{ id: "reasoning", role: "assistant", parts: [thinking] }}
         />,
+        { wrapper: Translated },
       ),
     );
-    const trigger = screen.getByRole("button", { name: copy.thinking });
+    const trigger = screen.getByRole("button", { name: "추론 중" });
     yield* sdkCall(() => expect.element(trigger).toHaveAttribute("aria-expanded", "false"));
     yield* sdkCall(() => trigger.click());
     yield* sdkCall(() => expect.element(screen.getByText("Compare the values.")).toBeVisible());
@@ -50,13 +55,13 @@ it.live("reasoning can be expanded while streaming and stays separate from the a
       ),
     );
     yield* sdkCall(() =>
-      expect.element(screen.getByRole("button", { name: copy.reasoning })).toBeVisible(),
+      expect.element(screen.getByRole("button", { name: "추론 내용" })).toBeVisible(),
     );
     yield* sdkCall(() => expect.element(screen.getByText("The answer is 42.")).toBeVisible());
-    yield* sdkCall(() => screen.getByRole("button", { name: copy.reasoning }).click());
+    yield* sdkCall(() => screen.getByRole("button", { name: "추론 내용" }).click());
     yield* sdkCall(() =>
       expect
-        .element(screen.getByRole("button", { name: copy.reasoning }))
+        .element(screen.getByRole("button", { name: "추론 내용" }))
         .toHaveAttribute("aria-expanded", "false"),
     );
     yield* sdkCall(() => expect.element(screen.getByText("The answer is 42.")).toBeVisible());
@@ -107,9 +112,11 @@ const task: TraceTaskView = {
 it.live("an unchanged message still follows its own call's approval and task", () =>
   Effect.gen(function* () {
     const screen = yield* sdkCall(() =>
-      render(<MessageView {...props} streaming={false} message={message} />),
+      render(<MessageView {...props} streaming={false} message={message} />, {
+        wrapper: Translated,
+      }),
     );
-    yield* sdkCall(() => expect.element(screen.getByText(copy.call.running)).toBeVisible());
+    yield* sdkCall(() => expect.element(screen.getByText("실행 중")).toBeVisible());
     yield* sdkCall(() =>
       screen.rerender(
         <MessageView
@@ -120,9 +127,7 @@ it.live("an unchanged message still follows its own call's approval and task", (
         />,
       ),
     );
-    yield* sdkCall(() =>
-      expect.element(screen.getByText(copy.call.awaitingApproval)).toBeVisible(),
-    );
+    yield* sdkCall(() => expect.element(screen.getByText("승인 대기")).toBeVisible());
     yield* sdkCall(() =>
       screen.rerender(
         <MessageView {...props} streaming={false} message={message} tasks={[task]} />,
@@ -130,7 +135,7 @@ it.live("an unchanged message still follows its own call's approval and task", (
     );
     yield* sdkCall(() =>
       expect
-        .element(screen.getByRole("region", { name: copy.subagentTask("Review") }))
+        .element(screen.getByRole("region", { name: "서브에이전트 작업: Review" }))
         .toBeVisible(),
     );
     yield* sdkCall(() => expect.element(screen.getByText("reading files")).toBeVisible());
@@ -152,15 +157,14 @@ it.live("deleting a task's record waits for the dialog's answer", () =>
             return Promise.resolve(DeleteActionResult.deleted());
           }}
         />,
+        { wrapper: Translated },
       ),
     );
-    yield* sdkCall(() => screen.getByRole("button", { name: copy.delete.idle }).click());
-    const dialog = screen.getByRole("alertdialog", { name: copy.deleteConfirm.title });
+    yield* sdkCall(() => screen.getByRole("button", { name: "삭제" }).click());
+    const dialog = screen.getByRole("alertdialog", { name: "이 작업의 기록을 삭제할까요?" });
     yield* sdkCall(() => expect.element(dialog).toBeVisible());
     expect(deleted).toEqual([]);
-    yield* sdkCall(() =>
-      dialog.getByRole("button", { name: copy.deleteConfirm.choices.delete }).click(),
-    );
+    yield* sdkCall(() => dialog.getByRole("button", { name: "삭제" }).click());
     yield* sdkCall(() => expect.poll(() => deleted).toEqual(["task-1"]));
   }),
 );

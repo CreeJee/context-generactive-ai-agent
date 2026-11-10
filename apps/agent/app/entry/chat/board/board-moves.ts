@@ -1,6 +1,7 @@
+import { i18n, type MessageDescriptor } from "@lingui/core";
+import { msg, t } from "@lingui/core/macro";
 import { Data, Function as EffectFunction, HashSet, Iterable } from "effect";
 import type { BoardView, CardStatus } from "../../api";
-import { boardCopy } from "./copy";
 
 export type BoardCard = BoardView["cards"][number];
 type PlanStep = BoardCard["card"];
@@ -46,6 +47,26 @@ export const boardColumns: readonly CardStatus[] = [
   "blocked",
 ];
 
+/** Each status's name, on its column and on its cards. */
+export const cardStatusLabels = {
+  backlog: msg({
+    message: "백로그",
+    comment: "Kanban card status and column: not ready to run yet",
+  }),
+  ready: msg({ message: "준비", comment: "Kanban card status and column: waiting for an agent" }),
+  in_progress: msg({
+    message: "진행 중",
+    comment: "Kanban card status and column: an agent is working on it",
+  }),
+  verify: msg({ message: "검증", comment: "Kanban card status and column: its result is checked" }),
+  human_decision: msg({
+    message: "판단 필요",
+    comment: "Kanban card status and column: waits for a person's decision",
+  }),
+  done: msg({ message: "완료", comment: "Kanban card status and column: finished" }),
+  blocked: msg({ message: "막힘", comment: "Kanban card status and column: cannot go on" }),
+} satisfies Readonly<Record<CardStatus, MessageDescriptor>>;
+
 /** What dropping a card on a column means. The server decides the card's status from it. */
 export type DropOutcome = Data.TaggedEnum<{
   /** Same column: the card takes the place of the card of its own Plan it was dropped on. */
@@ -90,16 +111,18 @@ const orchestratorColumn = (to: CardStatus) => {
   switch (to) {
     case "in_progress":
     case "verify":
-    case "done":
-      return boardCopy.drop.orchestratorMoves(boardCopy.status[to]);
+    case "done": {
+      const column = i18n._(cardStatusLabels[to]);
+      return t`${column} 열은 오케스트레이터가 옮깁니다.`;
+    }
     case "human_decision":
-      return boardCopy.drop.orchestratorAsks;
+      return t`판단 요청은 오케스트레이터가 만듭니다.`;
     case "blocked":
-      return boardCopy.drop.orchestratorBlocks;
+      return t`막힘은 오케스트레이터가 표시합니다.`;
     case "backlog":
-      return boardCopy.drop.holdFromReadyOnly;
+      return t`준비 카드만 백로그로 보류할 수 있습니다.`;
     case "ready":
-      return boardCopy.drop.readyFromHeldOrBlocked;
+      return t`보류했거나 막힌 카드만 준비로 옮길 수 있습니다.`;
   }
 };
 
@@ -108,7 +131,9 @@ const send = (
   lands: CardStatus,
   context: DropContext,
 ): DropOutcome =>
-  context.kanbanActive ? DropOutcome.Send({ intent, lands }) : refused(boardCopy.drop.needsKanban);
+  context.kanbanActive
+    ? DropOutcome.Send({ intent, lands })
+    : refused(t`칸반으로 실행할 때만 보류하거나 다시 대기열에 넣을 수 있습니다.`);
 
 /**
  * What dropping `card` on the `to` column means: ready to backlog holds it, a held card back to
@@ -116,27 +141,27 @@ const send = (
  * asked; the server still checks the intent against the card.
  */
 function dropOutcomeBody(card: PlanStep, to: CardStatus, context: DropContext): DropOutcome {
-  if (context.closed) return refused(boardCopy.drop.planClosed);
+  if (context.closed) return refused(t`완료된 Plan은 바꿀 수 없습니다.`);
   if (card.status === to) return DropOutcome.Reorder();
   switch (card.status) {
     case "in_progress":
       return DropOutcome.AskChange();
     case "human_decision":
-      return refused(boardCopy.drop.decisionCard);
+      return refused(t`판단 필요 카드는 판단에 답하면 옮겨집니다.`);
     case "verify":
-      return refused(boardCopy.drop.verifyCard);
+      return refused(t`검증 중인 카드는 오케스트레이터가 옮깁니다.`);
     case "done":
-      return refused(boardCopy.drop.doneCard);
+      return refused(t`완료된 카드는 옮길 수 없습니다.`);
     case "ready":
       return to === "backlog" ? send("Hold", "backlog", context) : refused(orchestratorColumn(to));
     case "backlog":
       if (to !== "ready") return refused(orchestratorColumn(to));
-      if (card.hold === undefined) return refused(boardCopy.drop.dependenciesPending);
+      if (card.hold === undefined) return refused(t`의존 카드가 아직 끝나지 않았습니다.`);
       return send("Release", dependenciesDone(context.cards, card) ? "ready" : "backlog", context);
     case "blocked":
       return to === "ready"
         ? send("Requeue", "ready", context)
-        : refused(boardCopy.drop.blockedToReadyOnly);
+        : refused(t`막힌 카드는 준비 열로만 옮길 수 있습니다.`);
   }
 }
 
@@ -164,7 +189,10 @@ export const inProjectOrder = (
  * Dropping on another conversation's card: cards are ordered inside their own Goal, and Goals
  * are ordered in the status panel, so the drop is refused and says where the order lives.
  */
-export const foreignCardDrop = (): DropOutcome => refused(boardCopy.drop.foreignCard);
+export const foreignCardDrop = (): DropOutcome =>
+  refused(
+    t`다른 대화의 카드와는 순서를 바꿀 수 없습니다. 대화 순서는 대화별 상태 패널에서 바꿉니다.`,
+  );
 
 /** Which card statuses can leave their Plan for another conversation's Plan. */
 const transferable: Readonly<Record<CardStatus, boolean>> = {

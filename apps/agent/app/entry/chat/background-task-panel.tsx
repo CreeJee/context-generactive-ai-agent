@@ -1,3 +1,4 @@
+import { Trans } from "@lingui/react/macro";
 import { TerminalIcon } from "lucide-react";
 import type { TraceTaskView } from "memory-agent";
 import { Badge } from "~/components/ui/badge";
@@ -20,7 +21,6 @@ import {
 } from "~/components/ui/popover";
 import { Spinner } from "~/components/ui/spinner";
 import { backgroundKindLabel, runningBackgroundTasks } from "../session/background-tasks";
-import { chatCopy } from "./copy";
 import { elapsed } from "./message";
 
 const openInWorkTrace = (taskId: string) =>
@@ -32,17 +32,25 @@ const openInWorkTrace = (taskId: string) =>
  */
 export function BackgroundTaskIndicator({ tasks }: { tasks: readonly TraceTaskView[] }) {
   const running = runningBackgroundTasks(tasks);
-  if (running.length === 0) return null;
+  const count = running.length;
+  if (count === 0) return null;
 
   return (
     <Popover>
       <PopoverTrigger render={<Button variant="ghost-muted" size="xs" />}>
-        <Spinner /> {chatCopy.backgroundTasks.trigger(running.length)}
+        <Spinner />{" "}
+        <Trans comment="Status-line button: number of background tasks still running">
+          백그라운드 {count}개
+        </Trans>
       </PopoverTrigger>
       <PopoverContent side="top" align="start">
         <PopoverHeader>
-          <PopoverTitle>{chatCopy.backgroundTasks.title}</PopoverTitle>
-          <PopoverDescription>{chatCopy.backgroundTasks.description}</PopoverDescription>
+          <PopoverTitle>
+            <Trans>실행 중인 백그라운드 작업</Trans>
+          </PopoverTitle>
+          <PopoverDescription>
+            <Trans>Work Trace에서 자세히 보려면 작업을 누르십시오.</Trans>
+          </PopoverDescription>
         </PopoverHeader>
         <ItemGroup>
           {running.map((task) => (

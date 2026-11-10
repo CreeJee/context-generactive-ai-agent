@@ -1,11 +1,13 @@
+import { i18n, type MessageDescriptor } from "@lingui/core";
+import { msg, ph, t } from "@lingui/core/macro";
 import { Match, Predicate } from "effect";
 import type {
+  AgentFailureCode,
   CardFailure,
   CardHoldReason,
   VerdictFailure,
   WorktreeFailureReason,
 } from "memory-agent";
-import { boardCopy } from "./copy";
 
 /**
  * Why the kanban loop held a card, in words picked by its tags. A model's own words (a verifier's
@@ -15,40 +17,60 @@ import { boardCopy } from "./copy";
 
 export const verdictText = (verdict: VerdictFailure) =>
   Match.valueTags(verdict, {
-    Rejected: () => boardCopy.verdict.Rejected,
-    NoVerdict: () => boardCopy.verdict.NoVerdict,
-    NotFinished: () => boardCopy.verdict.NotFinished,
-    ModelSelectionRequired: () => boardCopy.verdict.ModelSelectionRequired,
-    Unavailable: () => boardCopy.verdict.Unavailable,
+    Rejected: () => t`검증에서 통과하지 못했습니다`,
+    NoVerdict: () => t`검증이 판정을 남기지 않았습니다`,
+    NotFinished: () => t`검증이 끝나지 않았습니다`,
+    ModelSelectionRequired: () => t`검증할 모델이 선택되지 않았습니다`,
+    Unavailable: () => t`검증을 실행할 수 없었습니다`,
   });
 
+const agentFailureTexts = {
+  model_selection_required: msg`실행할 모델이 선택되지 않았습니다`,
+  not_started: msg`에이전트가 시작하지 못했습니다`,
+  failed: msg`에이전트 실행이 실패했습니다`,
+  cancelled: msg`에이전트 실행이 중단됐습니다`,
+  unavailable: msg`에이전트를 실행할 수 없었습니다`,
+} satisfies Readonly<Record<AgentFailureCode, MessageDescriptor>>;
+
 /** Worktree failures with their own words; the rest share one. */
-const worktreeFailureTexts: Readonly<Partial<Record<typeof WorktreeFailureReason.Type, string>>> =
-  boardCopy.worktreeFailure;
+const worktreeFailureTexts: Readonly<
+  Partial<Record<typeof WorktreeFailureReason.Type, MessageDescriptor>>
+> = {
+  WorktreeDirty: msg`카드 작업 폴더에 정리되지 않은 변경이 있습니다`,
+  InUse: msg`카드 작업 폴더를 다른 실행이 쓰고 있습니다`,
+  GitFailed: msg`git 명령이 실패했습니다`,
+};
+
+const worktreeFailureText = (reason: typeof WorktreeFailureReason.Type) => {
+  const own = worktreeFailureTexts[reason];
+  return own === undefined ? t`카드 작업 폴더를 준비하지 못했습니다` : i18n._(own);
+};
 
 const failureText = (failure: CardFailure) =>
   Match.valueTags(failure, {
-    Agent: ({ code }) => boardCopy.agentFailure[code],
-    Worktree: ({ reason }) => worktreeFailureTexts[reason] ?? boardCopy.failure.Worktree,
+    Agent: ({ code }) => i18n._(agentFailureTexts[code]),
+    Worktree: ({ reason }) => worktreeFailureText(reason),
     Verification: ({ verdict }) => verdictText(verdict),
-    GoalBranchKeptMoving: () => boardCopy.failure.GoalBranchKeptMoving,
-    Defect: () => boardCopy.failure.Defect,
+    GoalBranchKeptMoving: () => t`Goal 브랜치가 계속 바뀌어 통합하지 못했습니다`,
+    Defect: () => t`예상하지 못한 오류로 실패했습니다`,
   });
 
 export const holdReasonText = (reason: CardHoldReason) =>
   Match.valueTags(reason, {
-    RetryBackoff: ({ failure }) => boardCopy.holdReason.RetryBackoff(failureText(failure)),
+    RetryBackoff: ({ failure }) =>
+      t`다시 실패해 잠시 뒤 재시도합니다: ${ph({ failure: failureText(failure) })}`,
     ReplanRequested: ({ failure }) =>
       failure === null
-        ? boardCopy.holdReason.ReplanRequested
-        : boardCopy.holdReason.ReplanAfterFailure(failureText(failure)),
-    RepeatedFailure: ({ failure }) => boardCopy.holdReason.RepeatedFailure(failureText(failure)),
-    MergeConflict: ({ files }) => boardCopy.holdReason.MergeConflict(files.join(", ")),
-    UncertainEffect: () => boardCopy.holdReason.UncertainEffect,
-    DeadLettered: () => boardCopy.holdReason.DeadLettered,
-    GoalChanged: () => boardCopy.holdReason.GoalChanged,
+        ? t`새 카드로 대체하도록 요청했습니다`
+        : t`계속 실패해 카드를 다시 짭니다: ${ph({ failure: failureText(failure) })}`,
+    RepeatedFailure: ({ failure }) =>
+      t`다시 짠 뒤에도 실패했습니다: ${ph({ failure: failureText(failure) })}`,
+    MergeConflict: ({ files }) => t`Goal 브랜치와 충돌: ${ph({ files: files.join(", ") })}`,
+    UncertainEffect: () => t`이전 실행의 결과를 알 수 없어 확인이 필요합니다`,
+    DeadLettered: () => t`실행 기회를 모두 써서 멈췄습니다. 다시 대기열에 넣을 수 있습니다`,
+    GoalChanged: () => t`Goal이 바뀌어 오케스트레이터가 이 카드를 멈췄습니다`,
     UpstreamRegressed: ({ verdict }) =>
-      boardCopy.holdReason.UpstreamRegressed(verdictText(verdict)),
+      t`다른 Goal이 merge된 뒤 다시 검증하니 통과하지 못했습니다: ${ph({ verdict: verdictText(verdict) })}`,
   });
 
 const verdictNote = (verdict: VerdictFailure) =>

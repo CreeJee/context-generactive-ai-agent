@@ -1,4 +1,6 @@
 import { it } from "@effect/vitest";
+import { i18n } from "@lingui/core";
+import { I18nProvider } from "@lingui/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 import { Cause, Effect } from "effect";
@@ -6,9 +8,6 @@ import { render } from "vitest-browser-react";
 import { expect, vi } from "vite-plus/test";
 import "../../app.css";
 import { BtwPanel } from "./btw-panel";
-import { chatCopy } from "./copy";
-
-const copy = chatCopy.btw;
 
 const requests: string[] = [];
 const earlier = {
@@ -64,29 +63,45 @@ it.live("BTW panel opens apart, reopens a saved thread and explains what delete 
     vi.stubGlobal("fetch", server);
     const screen = yield* sdkCall(() =>
       render(
-        <QueryClientProvider client={new QueryClient()}>
-          <NuqsTestingAdapter>
-            <BtwPanel projectId="project-1" sessionId="session-1" />
-          </NuqsTestingAdapter>
-        </QueryClientProvider>,
+        <I18nProvider i18n={i18n}>
+          <QueryClientProvider client={new QueryClient()}>
+            <NuqsTestingAdapter>
+              <BtwPanel projectId="project-1" sessionId="session-1" />
+            </NuqsTestingAdapter>
+          </QueryClientProvider>
+        </I18nProvider>,
       ),
     );
-    yield* sdkCall(() => screen.getByRole("button", { name: copy.open }).click());
-    yield* sdkCall(() => expect.element(screen.getByText(copy.separate)).toBeVisible());
+    yield* sdkCall(() => screen.getByRole("button", { name: "BTW 열기" }).click());
+    yield* sdkCall(() =>
+      expect
+        .element(
+          screen.getByText(
+            "메인 대화와 이 프로젝트의 기억을 읽고 근거를 찾아 답합니다. 여기서 나눈 질문·답변·조회 결과는 메인 대화나 검색 기억에 들어가지 않습니다. 닫아도 다시 열 수 있게 이 BTW에만 남습니다.",
+          ),
+        )
+        .toBeVisible(),
+    );
 
     yield* sdkCall(() => screen.getByRole("button", { name: /이전 질문/ }).click());
     yield* sdkCall(() => expect.element(screen.getByText("이전 답변")).toBeVisible());
-    yield* sdkCall(() => expect.element(screen.getByText(copy.tools.find_memory)).toBeVisible());
+    yield* sdkCall(() => expect.element(screen.getByText("기억 검색")).toBeVisible());
     yield* sdkCall(() =>
-      expect.element(screen.getByRole("button", { name: copy.backToChat })).toBeVisible(),
+      expect.element(screen.getByRole("button", { name: "원래 대화로 돌아가기" })).toBeVisible(),
     );
 
-    yield* sdkCall(() => screen.getByRole("button", { name: copy.deleteLabel }).click());
-    yield* sdkCall(() => expect.element(screen.getByText(copy.deleteConfirm.body)).toBeVisible());
+    yield* sdkCall(() => screen.getByRole("button", { name: "BTW 삭제" }).click());
     yield* sdkCall(() =>
-      screen.getByRole("button", { name: copy.deleteConfirm.choices.delete, exact: true }).click(),
+      expect
+        .element(
+          screen.getByText(
+            "질문·답변·근거 조회 기록과 이 BTW에만 쓰인 이미지를 이 기기의 활성 저장소에서 지웁니다. 이미 만들어진 백업, 데이터베이스 파일에 남은 빈 공간이나 WAL 기록, 모델 제공자에게 이미 보낸 내용은 지워진다고 보장할 수 없습니다.",
+          ),
+        )
+        .toBeVisible(),
     );
-    yield* sdkCall(() => expect.element(screen.getByText(copy.deleted)).toBeVisible());
+    yield* sdkCall(() => screen.getByRole("button", { name: "삭제", exact: true }).click());
+    yield* sdkCall(() => expect.element(screen.getByText("BTW를 삭제했습니다.")).toBeVisible());
     expect(requests).toContain("DELETE /api/btw/btw-1");
     yield* sdkCall(() =>
       expect.element(screen.getByRole("button", { name: /이전 질문/ })).not.toBeInTheDocument(),

@@ -9,7 +9,6 @@ import {
   withPending,
   type DropContext,
 } from "./board-moves";
-import { boardCopy } from "./copy";
 
 type BoardCard = BoardView["cards"][number];
 
@@ -69,7 +68,7 @@ describe("board drops", () => {
 
   test("a card waiting for its dependencies cannot be pushed to ready", () => {
     expect(dropOutcome(card("b"), "ready", context)).toEqual(
-      DropOutcome.Refused({ reason: boardCopy.drop.dependenciesPending }),
+      DropOutcome.Refused({ reason: "의존 카드가 아직 끝나지 않았습니다." }),
     );
   });
 

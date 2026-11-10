@@ -1,3 +1,6 @@
+import type { MessageDescriptor } from "@lingui/core";
+import { msg } from "@lingui/core/macro";
+import { Trans, useLingui } from "@lingui/react/macro";
 import { runUiEffect, uiPromise } from "../shared/ui-effect";
 import { Effect } from "effect";
 import { RefreshCwIcon } from "lucide-react";
@@ -8,12 +11,24 @@ import { Button } from "~/components/ui/button";
 import { cn } from "cn";
 import { api, isApiError } from "../api";
 import { ApprovalCard } from "./approval";
-import { chatCopy } from "./copy";
 import type { PendingApproval } from "./pending-approval";
 import type { AnswerProblem } from "./use-agent-chat";
 
 /** What the alert says for each problem, and what its button does. */
-const problems = chatCopy.chatApprovals.problems;
+const problems = {
+  unsent: { text: msg`승인 응답을 전송하지 못했습니다.`, action: msg`응답 다시 보내기` },
+  refused: {
+    text: msg`연결이 끊긴 사이 승인 목록이 바뀌었습니다. 서버의 최신 요청을 다시 불러와야 합니다.`,
+    action: msg`최신 요청 불러오기`,
+  },
+  lost: {
+    text: msg`승인한 뒤 실행을 이어가지 못했습니다. 요청을 폐기해도 셸 명령은 실행되지 않습니다. 대화와 작업 evidence는 유지됩니다.`,
+    action: msg`끊어진 요청 폐기하고 계속`,
+  },
+} satisfies Record<
+  AnswerProblem,
+  { readonly text: MessageDescriptor; readonly action: MessageDescriptor }
+>;
 
 /** Answers the approvals a run waits for together, once every one has a decision. */
 export function ChatApprovals({
@@ -37,6 +52,7 @@ export function ChatApprovals({
   onResync: () => void;
   onProblem: (message: string) => void;
 }) {
+  const { t } = useLingui();
   const [decisions, setDecisions] = useState<Readonly<Record<string, boolean>>>({});
   const [discarding, trackDiscard] = useLoading();
 
@@ -55,8 +71,8 @@ export function ChatApprovals({
           Effect.sync(() =>
             onProblem(
               isApiError(failure.cause) && failure.cause.code === "run_in_progress"
-                ? chatCopy.chatApprovals.discardWhileRunning
-                : chatCopy.chatApprovals.discardFailed,
+                ? t`실행 중인 응답이 끝난 뒤 다시 시도해 주십시오.`
+                : t`끊어진 승인 요청을 폐기하지 못했습니다.`,
             ),
           ),
         ),
@@ -72,10 +88,12 @@ export function ChatApprovals({
     <>
       {problem !== null && (
         <Alert variant="destructive">
-          <AlertTitle>{chatCopy.chatApprovals.title}</AlertTitle>
+          <AlertTitle>
+            <Trans>승인 요청을 이어가지 못했습니다</Trans>
+          </AlertTitle>
           <AlertDescription>
             <div className="flex flex-col items-start gap-3">
-              <p>{problems[problem].text}</p>
+              <p>{t(problems[problem].text)}</p>
               <Button
                 type="button"
                 size="sm"
@@ -86,7 +104,7 @@ export function ChatApprovals({
                 <RefreshCwIcon
                   className={cn("size-3.5", (resuming || discarding) && "animate-spin")}
                 />
-                {problems[problem].action}
+                {t(problems[problem].action)}
               </Button>
             </div>
           </AlertDescription>

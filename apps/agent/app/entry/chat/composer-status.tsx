@@ -1,10 +1,8 @@
+import { Trans, useLingui } from "@lingui/react/macro";
 import { Data } from "effect";
 import { useEffect, useState } from "react";
 import { Kbd, KbdGroup } from "~/components/ui/kbd";
 import { cn } from "~/lib/utils";
-import { chatCopy } from "./copy";
-
-const copy = chatCopy.composerStatus;
 
 /** What the input box is doing, which decides the status and the keys it offers. */
 export type ComposerMode = Data.TaggedEnum<{
@@ -47,11 +45,19 @@ export function ComposerStatus({ mode }: { mode: ComposerMode }) {
           <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary/60" />
           <span className="relative inline-flex size-1.5 rounded-full bg-primary" />
         </span>
-        {copy.generating}
+        <Trans comment="Composer status while the model writes its answer">답변 중</Trans>
       </span>
     ),
-    editing: () => <span className="text-xs font-medium text-primary">{copy.editing}</span>,
-    approval: () => <span className="text-xs text-warning">{copy.approval}</span>,
+    editing: () => (
+      <span className="text-xs font-medium text-primary">
+        <Trans>대기 메시지 편집 중</Trans>
+      </span>
+    ),
+    approval: () => (
+      <span className="text-xs text-warning">
+        <Trans>승인을 기다리는 중</Trans>
+      </span>
+    ),
   });
 }
 
@@ -60,17 +66,30 @@ export function ComposerStatus({ mode }: { mode: ComposerMode }) {
  * while answering and while editing, Enter does something else.
  */
 export function ComposerShortcuts({ mode, className }: { mode: ComposerMode; className?: string }) {
+  const { t } = useLingui();
   const modifier = useModifierKey();
   const shortcuts = ComposerMode.$match(mode, {
     idle: () => [],
     approval: () => [],
     generating: () => [
-      { keys: ["⏎"], label: copy.shortcuts.queue },
-      { keys: [modifier, "⇧", "⏎"], label: copy.shortcuts.interrupt },
+      {
+        keys: ["⏎"],
+        label: t({ message: "대기열", comment: "Shortcut hint: Enter queues the message" }),
+      },
+      {
+        keys: [modifier, "⇧", "⏎"],
+        label: t({ message: "끼어들기", comment: "Shortcut hint: the keys interrupt the answer" }),
+      },
     ],
     editing: () => [
-      { keys: ["⏎"], label: copy.shortcuts.save },
-      { keys: ["Esc"], label: copy.shortcuts.clear },
+      {
+        keys: ["⏎"],
+        label: t({ message: "저장", comment: "Shortcut hint: Enter saves the edited message" }),
+      },
+      {
+        keys: ["Esc"],
+        label: t({ message: "지우기", comment: "Shortcut hint: Esc clears the edit" }),
+      },
     ],
   });
   if (shortcuts.length === 0) return null;
@@ -79,7 +98,7 @@ export function ComposerShortcuts({ mode, className }: { mode: ComposerMode; cla
       className={cn("hidden items-center gap-3 text-2xs text-muted-foreground md:flex", className)}
     >
       {shortcuts.map((shortcut) => (
-        <Shortcut key={shortcut.label} keys={shortcut.keys} label={shortcut.label} />
+        <Shortcut key={shortcut.keys.join(" ")} keys={shortcut.keys} label={shortcut.label} />
       ))}
     </span>
   );

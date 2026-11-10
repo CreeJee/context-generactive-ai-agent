@@ -1,3 +1,4 @@
+import { Trans, useLingui } from "@lingui/react/macro";
 import { runUiEffect, uiPromise } from "../shared/ui-effect";
 import { Effect } from "effect";
 import { ArrowDownIcon, MessageSquareIcon } from "lucide-react";
@@ -20,7 +21,6 @@ import {
 } from "~/components/ui/message-scroller";
 import { cn } from "cn";
 import type { ChatMessage } from "memory-agent/chat-api";
-import { chatCopy } from "./copy";
 
 /** How close to the bottom, in pixels, still counts as reading the newest message. */
 const followDistance = 120;
@@ -45,6 +45,7 @@ export function ChatHistory({
   renderMessage: (message: ChatMessage, index: number) => ReactNode;
   children: ReactNode;
 }) {
+  const { t } = useLingui();
   const viewport = useRef<HTMLDivElement>(null);
   const topSentinel = useRef<HTMLDivElement>(null);
   const loading = useRef(false);
@@ -95,7 +96,13 @@ export function ChatHistory({
   return (
     <MessageScrollerProvider autoScroll scrollEdgeThreshold={followDistance}>
       <MessageScroller className="flex-1">
-        <MessageScrollerViewport ref={viewport} aria-label={chatCopy.chatHistory.label}>
+        <MessageScrollerViewport
+          ref={viewport}
+          aria-label={t({
+            message: "대화",
+            comment: "Accessible name of the scrolling message list",
+          })}
+        >
           <div ref={topSentinel} aria-hidden className="absolute top-0 h-px w-full" />
           {/* Every child is a scroller item: the first message must come first, so the
               scroller can tell an older page was inserted above it. */}
@@ -108,8 +115,12 @@ export function ChatHistory({
                   <EmptyMedia variant="icon">
                     <MessageSquareIcon />
                   </EmptyMedia>
-                  <EmptyTitle>{chatCopy.chatHistory.emptyTitle}</EmptyTitle>
-                  <EmptyDescription>{chatCopy.chatHistory.emptyDescription}</EmptyDescription>
+                  <EmptyTitle>
+                    <Trans comment="Title of an empty conversation">새 대화</Trans>
+                  </EmptyTitle>
+                  <EmptyDescription>
+                    <Trans>이전 세션과 다른 프로젝트에서 나눈 대화도 기억해서 답합니다.</Trans>
+                  </EmptyDescription>
                 </EmptyHeader>
               </Empty>
             )}
@@ -128,12 +139,16 @@ export function ChatHistory({
             className="absolute top-2 left-1/2 -translate-x-1/2"
             onClick={() => void loadPreviousMessages(true)}
           >
-            {chatCopy.chatHistory.olderLoadFailed}
+            <Trans>이전 메시지를 불러오지 못했습니다. 다시 시도</Trans>
           </Button>
         )}
         <MessageScrollerButton>
           <ArrowDownIcon />
-          <span className="sr-only">{chatCopy.chatHistory.scrollToBottom}</span>
+          <span className="sr-only">
+            <Trans comment="Button that scrolls the conversation to the newest message">
+              맨 아래로
+            </Trans>
+          </span>
         </MessageScrollerButton>
       </MessageScroller>
     </MessageScrollerProvider>

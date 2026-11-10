@@ -1,5 +1,7 @@
 import { it } from "@effect/vitest";
 import { RegistryProvider } from "@effect/atom-react";
+import { i18n } from "@lingui/core";
+import { I18nProvider } from "@lingui/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Array as Arr, Cause, Effect } from "effect";
 import { NuqsTestingAdapter } from "nuqs/adapters/testing";
@@ -11,7 +13,6 @@ import type { SessionRunState } from "memory-agent/definitions";
 import { SessionEventScopeContext } from "../events/context";
 import { allowedWorkflowActions, workflowFixture } from "../session/workflow-test-fixtures";
 import { SessionView, type SlashSupport } from "./chat-panel";
-import { chatCopy } from "./copy";
 
 /**
  * Renders of the panel, with the conversation in it, that a keystroke caused. React renders a
@@ -167,15 +168,17 @@ const openSession = Effect.gen(function* () {
   sent.length = 0;
   const screen = yield* sdkCall(() =>
     render(
-      <RegistryProvider>
-        <QueryClientProvider client={new QueryClient()}>
-          <NuqsTestingAdapter>
-            <SessionEventScopeContext.Provider value={{ projectId: "p1", sessionId: "s1" }}>
-              <SessionView sessionId="s1" imagesSupported={false} sendingEnabled slash={slash} />
-            </SessionEventScopeContext.Provider>
-          </NuqsTestingAdapter>
-        </QueryClientProvider>
-      </RegistryProvider>,
+      <I18nProvider i18n={i18n}>
+        <RegistryProvider>
+          <QueryClientProvider client={new QueryClient()}>
+            <NuqsTestingAdapter>
+              <SessionEventScopeContext.Provider value={{ projectId: "p1", sessionId: "s1" }}>
+                <SessionView sessionId="s1" imagesSupported={false} sendingEnabled slash={slash} />
+              </SessionEventScopeContext.Provider>
+            </NuqsTestingAdapter>
+          </QueryClientProvider>
+        </RegistryProvider>
+      </I18nProvider>,
     ),
   );
   const input = screen.getByRole("textbox");
@@ -240,18 +243,12 @@ it.live("leaving a running board asks first, and only a confirmed move is sent",
     const chat = screen.getByRole("button", { name: "Chat", exact: true });
 
     yield* sdkCall(() => userEvent.click(chat));
-    yield* sdkCall(() =>
-      expect.element(screen.getByText(chatCopy.chatPanel.leave.toChatTitle)).toBeVisible(),
-    );
-    yield* sdkCall(() =>
-      userEvent.click(screen.getByRole("button", { name: chatCopy.chatPanel.leave.keep })),
-    );
+    yield* sdkCall(() => expect.element(screen.getByText("일반 대화로 바꿀까요?")).toBeVisible());
+    yield* sdkCall(() => userEvent.click(screen.getByRole("button", { name: "그대로 두기" })));
     expect(moves()).toEqual([]);
 
     yield* sdkCall(() => userEvent.click(chat));
-    yield* sdkCall(() =>
-      userEvent.click(screen.getByRole("button", { name: chatCopy.chatPanel.leave.change })),
-    );
+    yield* sdkCall(() => userEvent.click(screen.getByRole("button", { name: "바꾸기" })));
     yield* sdkCall(() => expect.poll(() => moves().length).toBe(1));
     expect(moves()[0]).toContain('"move":"chat"');
     served.run = runState;
@@ -264,15 +261,11 @@ it.live("a Plan of ten cards waiting for approval lists them one line each", () 
   Effect.gen(function* () {
     served.run = { ...runState, workflow: workflowFixture };
     const { screen } = yield* openSession;
-    const bar = screen.getByRole("region", { name: chatCopy.workflow.label });
+    const bar = screen.getByRole("region", { name: "워크플로" });
 
-    yield* sdkCall(() =>
-      expect.element(bar.getByText(`Plan · ${chatCopy.workflow.stages.shaping}`)).toBeVisible(),
-    );
+    yield* sdkCall(() => expect.element(bar.getByText("Plan · Plan 작성 중")).toBeVisible());
     // A Plan still waiting for approval opens unfolded, its cards in the Plan's order.
-    const cards = bar
-      .getByRole("region", { name: chatCopy.boardPanel.cardsDone(0, 10) })
-      .getByRole("link");
+    const cards = bar.getByRole("region", { name: "카드 0/10 완료" }).getByRole("link");
     yield* sdkCall(() => expect.poll(() => cards.elements().length).toBe(10));
     const first = cards.first();
     expect(first.element().textContent).toContain("정책 읽기");
@@ -281,9 +274,7 @@ it.live("a Plan of ten cards waiting for approval lists them one line each", () 
     expect(first.element().getBoundingClientRect().height).toBe(24);
     yield* sdkCall(() => expect.element(bar.getByText("정책 테스트가 통과한다")).toBeVisible());
     yield* sdkCall(() =>
-      expect
-        .element(bar.getByRole("button", { name: chatCopy.workflow.approveAndRun }))
-        .toBeEnabled(),
+      expect.element(bar.getByRole("button", { name: "승인하고 실행" })).toBeEnabled(),
     );
     served.run = runState;
     yield* sdkCall(() => screen.unmount());
@@ -296,19 +287,17 @@ it.live("a running Plan stays one line until unfolded, the cards that need a loo
     served.run = { ...runState, workflow: { ...workflowFixture, phase: "running" } };
     served.board = runningBoard;
     const { screen } = yield* openSession;
-    const bar = screen.getByRole("region", { name: chatCopy.workflow.label });
+    const bar = screen.getByRole("region", { name: "워크플로" });
     const fold = bar.getByRole("button", {
-      name: new RegExp(`Plan · ${chatCopy.workflow.stages.running}`),
+      name: /Plan · 실행 중/,
     });
 
     yield* sdkCall(() => expect.element(fold).toBeVisible());
-    yield* sdkCall(() =>
-      expect.element(bar.getByText(chatCopy.boardPanel.cardTally(1, 3))).toBeVisible(),
-    );
+    yield* sdkCall(() => expect.element(bar.getByText("카드 1/3")).toBeVisible());
     // Folded, the cards are on the page but not shown.
     yield* sdkCall(() => expect.element(bar.getByText("배포 결정")).not.toBeVisible());
     yield* sdkCall(() => userEvent.click(fold));
-    const cards = bar.getByRole("region", { name: chatCopy.boardPanel.cardsDone(1, 3) });
+    const cards = bar.getByRole("region", { name: "카드 1/3 완료" });
     yield* sdkCall(() => expect.element(cards).toBeVisible());
     expect(
       cards

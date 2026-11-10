@@ -1,3 +1,4 @@
+import { Trans } from "@lingui/react/macro";
 import { BotIcon } from "lucide-react";
 import { Badge } from "~/components/ui/badge";
 import {
@@ -11,7 +12,6 @@ import {
 import { Spinner } from "~/components/ui/spinner";
 import { ApprovalRequester, type RelayedApprovalView } from "../api";
 import { ApprovalCard } from "./approval";
-import { chatCopy } from "./copy";
 import { requesterLabel, useDelegatedWork } from "../session/delegated-work";
 import { useProjectScope } from "../events/context";
 import { useRelayedApprovalMutation } from "../queries/mutations/session";
@@ -67,7 +67,8 @@ export function SubagentPanel({
                     }),
                   )}
                   <Badge variant="secondary">
-                    <Spinner /> {chatCopy.subagents.working}
+                    <Spinner />{" "}
+                    <Trans comment="Badge on a subagent that is still running">작업 중</Trans>
                   </Badge>
                 </ItemTitle>
                 <ItemDescription>{child.lastTask}</ItemDescription>
