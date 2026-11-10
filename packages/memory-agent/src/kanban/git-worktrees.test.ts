@@ -1,7 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Deferred, Effect, Fiber, FileSystem, Layer, Path } from "effect";
+import { Config, Deferred, Effect, Fiber, FileSystem, Layer, Path } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { expect } from "vite-plus/test";
+import { expect, vi } from "vite-plus/test";
 import { layer } from "@effect/vitest";
 import { StorageRoot } from "../config/storage-root.ts";
 import {
@@ -336,6 +336,50 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
           ]);
         }).pipe(Effect.scoped),
       ),
+  );
+
+  it.effect(
+    "installs a new card worktree's dependencies offline from its lockfile, and leases it even when that fails",
+    () =>
+      Effect.gen(function* () {
+        const setup = yield* fixture;
+        const { fs, path, home, project } = setup;
+        // A stand-in pnpm on PATH records how it was called, and fails for card c2.
+        const bin = path.join(home, "bin");
+        yield* fs.makeDirectory(bin);
+        yield* fs.writeFileString(
+          path.join(bin, "pnpm"),
+          '#!/bin/sh\nmkdir -p node_modules && echo "$*" > node_modules/.installed\ncase "$PWD" in */c2) exit 1;; esac\n',
+        );
+        yield* fs.chmod(path.join(bin, "pnpm"), 0o755);
+        const searched = yield* Config.String("PATH").pipe(Config.withDefault(""));
+        yield* Effect.acquireRelease(
+          Effect.sync(() => vi.stubEnv("PATH", `${bin}:${searched}`)),
+          () => Effect.sync(() => vi.unstubAllEnvs()),
+        );
+        yield* fs.writeFileString(path.join(project, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+        yield* fs.writeFileString(path.join(project, ".gitignore"), "node_modules\n");
+        yield* git(project, "add", "pnpm-lock.yaml", ".gitignore");
+        yield* git(project, "commit", "-qm", "lockfile");
+        yield* provideLayer(setup.worktreesLayer)(
+          Effect.gen(function* () {
+            const worktrees = yield* CardWorktrees;
+            yield* worktrees.prepareGoal({ projectRoot: project, goalInstanceId: "g1" });
+            const installed = yield* Effect.scoped(
+              Effect.flatMap(
+                worktrees.lease({ projectRoot: project, goalInstanceId: "g1", cardId: "c1" }),
+                (worktree) =>
+                  fs.readFileString(path.join(worktree.toolRoot, "node_modules", ".installed")),
+              ),
+            );
+            expect(installed.trim()).toBe("install --offline --frozen-lockfile --ignore-scripts");
+            const failed = yield* Effect.scoped(
+              worktrees.lease({ projectRoot: project, goalInstanceId: "g1", cardId: "c2" }),
+            );
+            expect(yield* git(failed.toolRoot, "status", "--porcelain")).toBe("");
+          }),
+        );
+      }),
   );
 
   it.effect("lets one check of a Goal hold the Goal checkout at a time", () =>

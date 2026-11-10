@@ -4734,3 +4734,11 @@
 - 계기: 세션 `dcdab4da`의 카드 c2는 `codegraph_explore`로 사용처를 찾으라는 카드였는데, 카드 에이전트는 파일·밖 파일·승인 도구만 받아 MCP 도구가 없었다. 세 번 실패해 교체를 요청했다. 채팅의 일회 서브에이전트는 MCP를 부모 그대로 받지만 카드 에이전트에는 정해진 것이 없었다.
 - 결정(사용자): 카드 에이전트, 카드 검증자, Goal·outcome 검증자는 프로젝트의 신뢰된 MCP 서버 중 서버가 읽기 전용이라고 표시한 도구만 받는다. 계획자(shaping·running의 채팅)가 받는 범위와 같다. 호출마다 권한 모드대로 묻는 것도 채팅과 같다.
   - MCP 서버는 메인 프로젝트 폴더에서 돈다. 카드의 worktree에서 다시 띄우지 않으므로 결과는 이 카드의 변경이 없는 메인 checkout 기준이다. 이것을 카드와 검증자의 시스템 프롬프트에 MCP 지침과 함께 적는다.
+
+## 카드 worktree는 의존성을 오프라인으로 설치한 뒤 쓴다 (2026-11-11)
+
+- 계기: 세션 `dcdab4da`의 카드 c3는 vitest를 돌리지 못했다. worktree에는 `node_modules` 같은 git이 무시하는 폴더가 없어서, 카드가 프로젝트의 테스트나 빌드를 돌릴 수 없다. 스킬이 메인 폴더 경로로 `cd`해 우회하면 샌드박스가 메인 폴더 쓰기를 막고(정상), 막지 않아도 카드가 아닌 메인 폴더의 코드를 테스트한다.
+- 결정: owner는 카드 worktree와 Goal 검증용 checkout을 새로 만들 때, 루트의 lockfile을 보고 의존성을 설치한다. `pnpm-lock.yaml`이면 `pnpm install --offline --frozen-lockfile --ignore-scripts`, `package-lock.json`이면 `npm ci --offline --ignore-scripts`다. 이미 있는 worktree를 다시 쓸 때는 설치하지 않는다.
+  - 오프라인: 로컬 store에 있는 것만 쓰고 네트워크를 쓰지 않는다. lockfile이 고정한 그대로다. web 저장소(1576개 패키지)에서 7.4초가 걸렸고, 그 사본에서 c3의 vitest 4개가 통과했다.
+  - `--ignore-scripts`: owner는 샌드박스 밖에서 설치한다. husky의 `prepare` 같은 스크립트가 공유 `.git/config`를 쓰기 때문이다. 스크립트 없이도 위 vitest는 통과했다.
+  - 실패(도구 없음, 오류 종료, 5분 초과)는 로그만 남기고 카드는 그대로 시작한다. 카드가 무엇을 돌리지 못했는지 보고한다.

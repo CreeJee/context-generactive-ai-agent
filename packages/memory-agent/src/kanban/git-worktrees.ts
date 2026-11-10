@@ -1,4 +1,5 @@
 import {
+  Duration,
   Effect,
   FileSystem,
   HashSet,
@@ -95,12 +96,36 @@ const cardBranchFolder = (goal: string) => `ctx/card/${goal}`;
 const cardBranchName = (goal: string, card: string) => `${cardBranchFolder(goal)}/${card}`;
 const cardTrailer = (goal: string, card: string) => `Ctx-Card: ${goal}/${card}`;
 
+/**
+ * How a new worktree gets its JavaScript dependencies, by the lockfile at its root: from the local
+ * package store only, as the lockfile pins them, and without lifecycle scripts. The owner runs them
+ * outside the sandbox, where a script such as husky's `prepare` would write the shared git config.
+ */
+const offlineInstalls = [
+  {
+    lockfile: "pnpm-lock.yaml",
+    executable: "pnpm",
+    args: ["install", "--offline", "--frozen-lockfile", "--ignore-scripts"],
+  },
+  {
+    lockfile: "package-lock.json",
+    executable: "npm",
+    args: ["ci", "--offline", "--ignore-scripts", "--no-audit", "--no-fund"],
+  },
+] as const;
+
+/** Longest a worktree's install may take before the card starts without it. */
+const installTimeout = Duration.minutes(5);
+
 const make = Effect.fnUntraced(function* (worktreesBase: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const storage = yield* StorageRoot;
   const git = yield* findExecutable("git");
+  const installers = yield* Effect.forEach(offlineInstalls, (install) =>
+    Effect.map(findExecutable(install.executable), (executable) => ({ ...install, executable })),
+  );
   const serially = yield* keyedSerialLimit();
   const leases = yield* Ref.make(HashSet.empty<string>());
   // Goal-level checks running now; their checkout stays until their scope closes.
@@ -152,6 +177,52 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
             fail(operation, reasons.GitFailed.make({ exitCode: null }), cause),
           ),
         );
+  /**
+   * Installs a new worktree's dependencies (`offlineInstalls`). Ignored folders such as
+   * `node_modules` are not in a worktree, so without them a card cannot run the project's tests or
+   * builds. A missing tool, a failed install or one past `installTimeout` is logged, and the card
+   * starts without them and reports what it could not run.
+   */
+  const installDependencies = Effect.fnUntraced(
+    function* (folder: string) {
+      const present = yield* Effect.filter(installers, (install) =>
+        fs.exists(path.join(folder, install.lockfile)).pipe(Effect.orElseSucceed(() => false)),
+      );
+      const install = present[0];
+      if (install === undefined) return;
+      const executable = install.executable;
+      if (executable === null)
+        return yield* Effect.logWarning("Worktree dependencies not installed", {
+          folder,
+          missing: install.lockfile,
+        });
+      const exitCode = yield* Effect.scoped(
+        Effect.flatMap(
+          spawner.spawn(
+            ChildProcess.make(executable, install.args, {
+              cwd: folder,
+              env: { CI: "1" },
+              extendEnv: true,
+              windowsHide: true,
+              stdin: "ignore",
+              stdout: "ignore",
+              stderr: "ignore",
+            }),
+          ),
+          (child) => child.exitCode,
+        ),
+      ).pipe(Effect.timeout(installTimeout));
+      yield* Effect.when(
+        Effect.logWarning("Worktree dependencies not installed", {
+          folder,
+          lockfile: install.lockfile,
+          exitCode: Number(exitCode),
+        }),
+        Effect.succeed(Number(exitCode) !== 0),
+      );
+    },
+    Effect.catch(logFailure("Worktree dependencies not installed")),
+  );
   /** A git call that must succeed; its trimmed output. */
   const expect = (operation: Operation, cwd: string, args: ReadonlyArray<string>) =>
     Effect.flatMap(run(operation, cwd, args), (output) =>
@@ -329,6 +400,7 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
         worktree.path,
         worktree.branch,
       ]).pipe(Effect.uninterruptible);
+      yield* installDependencies(worktree.path);
       return worktree;
     });
     return yield* Match.value(state).pipe(
@@ -912,6 +984,7 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
                   folder,
                   head,
                 ]);
+                yield* installDependencies(folder);
                 yield* Ref.update(checkouts, HashSet.add(goalKey(goal)));
                 return {
                   repository,
