@@ -5,6 +5,7 @@ import { HttpServerResponse } from "effect/http";
 import { NetAddress } from "effect/net";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { expect, test } from "vite-plus/test";
+import type { JsonValue } from "../src/json.ts";
 import { builtinOverlap } from "../src/skills/code-skills.ts";
 import { ApprovedTools } from "../src/tools/approved.ts";
 import { CodeTools } from "../src/tools/code.ts";
@@ -208,6 +209,71 @@ testAgent()("code skills", (it) => {
           status: "succeeded",
           stdout: `. ok\n/tmp ok\n${tmpdir()} ok\n`,
           stderr: "",
+        });
+      }),
+    { timeout: 30_000 },
+  );
+
+  it.effect("a program that names the project folder by absolute path is not saved", () =>
+    Effect.gen(function* () {
+      const { project } = yield* TestEnv;
+      const path = yield* Path.Path;
+      const tools = (yield* ApprovedTools).toolsFor(project, "gate");
+      const save = (name: string, program: JsonValue) =>
+        Effect.flip(callTool(tools, "save_code_skill", { name, description: "Test", program }));
+      expect(
+        yield* save("cd-root", { runtime: "sh", script: `cd ${project.root} && pnpm test` }),
+      ).toMatchObject({ message: expect.stringContaining("absolute_path") });
+      expect(
+        yield* save("read-root", {
+          runtime: "ts",
+          code: `return external_read_file({ path: "${path.join(project.root, "a.txt")}" });`,
+        }),
+      ).toMatchObject({ message: expect.stringContaining("absolute_path") });
+      expect(
+        yield* callTool(tools, "save_code_skill", {
+          name: "cd-src",
+          description: "Test",
+          program: { runtime: "sh", script: 'cd ./src && pnpm test "$@"' },
+        }),
+      ).toMatchObject({ name: "cd-src" });
+    }),
+  );
+
+  it.effect.skipIf(process.platform !== "darwin")(
+    "in a card, run_skill runs in the card's copy and warns about a script naming the user's folder",
+    () =>
+      Effect.gen(function* () {
+        const { project } = yield* TestEnv;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const card = yield* fs.realPath(
+          yield* fs.makeTempDirectoryScoped({ prefix: "code-skills-card-" }),
+        );
+        // Saved before such scripts were refused; full mode runs it without an approval record.
+        const script = path.join(card, ".agents/skills/old-cd/scripts/run.sh");
+        yield* fs.makeDirectory(path.dirname(script), { recursive: true });
+        yield* fs.writeFileString(script, `cd ${project.root} && pwd\n`);
+        yield* fs.writeFileString(
+          path.join(card, ".agents/skills/old-cd/SKILL.md"),
+          "---\nname: old-cd\ndescription: Old\n---\n",
+        );
+        const tools = (yield* ApprovedTools).toolsFor(
+          {
+            ...project,
+            root: card,
+            permissionMode: "full",
+            toolFence: { deniedRoots: [project.root], userRoot: project.root },
+          },
+          "gate",
+        );
+        expect(
+          yield* callTool(tools, "run_skill", { name: "old-cd", workdir: project.root }),
+        ).toMatchObject({
+          workdir: ".",
+          pathMapped: expect.stringContaining("used as . there"),
+          pathWarning: expect.stringContaining(project.root),
+          status: "succeeded",
         });
       }),
     { timeout: 30_000 },

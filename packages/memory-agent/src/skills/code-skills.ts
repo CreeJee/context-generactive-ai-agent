@@ -18,7 +18,8 @@ import {
 } from "effect";
 import { SecureRandom } from "effect/crypto";
 import { SqlClient } from "effect/sql";
-import { resolveProjectPath } from "../files/paths.ts";
+import { folderMentions } from "../files/path-policy.ts";
+import { resolveProjectPath, type Fenced } from "../files/paths.ts";
 import {
   createTextFileEffect,
   deleteTextFileEffect,
@@ -57,6 +58,7 @@ export class CodeSkillRejected extends Schema.TaggedError<
     "not_found",
     "not_approved",
     "ts_skill",
+    "absolute_path",
   ]),
   detail: Schema.String,
 }) {
@@ -298,6 +300,43 @@ const programRefusal = (program: SkillProgram): Option.Option<CodeSkillRejected>
     }),
   );
 
+/**
+ * Refuses a program that names the project folder (or, in a kanban card, the user's project folder
+ * or the card's worktree) by absolute path. Text inside a program cannot be read through the path
+ * policy when it runs, and the skill runs in the project or in a card's own copy of it, so such a
+ * path can leave the folder the run works in.
+ */
+const absolutePathRefusal = Effect.fnUntraced(function* (
+  project: Fenced<Project>,
+  program: SkillProgram,
+) {
+  const checked = Match.value(program).pipe(
+    Match.discriminatorsExhaustive("runtime")({
+      ts: ({ code }) => ({
+        text: code,
+        advice: "The tools a ts skill calls take paths relative to the project; use those.",
+      }),
+      sh: ({ script }) => ({
+        text: script,
+        advice:
+          'A sh skill starts in the project folder, or in a kanban card\'s own copy of it; use paths relative to it, like ./src or "$PWD/src".',
+      }),
+    }),
+  );
+  const spellings = EffectArray.dedupe(
+    (yield* folderMentions(project, checked.text)).map(({ spelling }) => spelling),
+  );
+  yield* Effect.when(
+    Effect.fail(
+      CodeSkillRejected.make({
+        reason: "absolute_path",
+        detail: `The program names the project folder by its absolute path (${spellings.join(", ")}), which can leave the folder the skill runs in. ${checked.advice} Then save it again.`,
+      }),
+    ),
+    Effect.succeed(spellings.length > 0),
+  );
+});
+
 /** How SKILL.md tells a reader to run the skill. */
 const runLine = (name: string, program: SkillProgram) =>
   Match.value(program).pipe(
@@ -426,7 +465,7 @@ const make = Effect.gen(function* () {
      * again. A skill keeps one program: saving it in the other runtime removes the old one.
      */
     save: Effect.fn("CodeSkills.save")(function* (
-      project: Project,
+      project: Fenced<Project>,
       input: {
         readonly name: string;
         readonly description: string;
@@ -438,6 +477,7 @@ const make = Effect.gen(function* () {
         onNone: () => Effect.void,
         onSome: Effect.fail,
       });
+      yield* absolutePathRefusal(project, input.program);
       const runtime = input.program.runtime;
       const document = codeSkillDocument(input.name);
       const existing = yield* resolveProjectPath(project.root, document, "new-or-file");

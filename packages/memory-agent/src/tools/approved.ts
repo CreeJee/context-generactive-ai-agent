@@ -1,4 +1,4 @@
-import { Context, Effect, FileSystem, Layer, Match, Option, Schema } from "effect";
+import { Array as Arr, Context, Effect, FileSystem, Layer, Match, Option, Schema } from "effect";
 import { SecureRandom } from "effect/crypto";
 import { ChildProcessSpawner } from "effect/process";
 import { AttemptFailureReason } from "../work-trace/contracts.ts";
@@ -8,7 +8,11 @@ import {
   type BackgroundBinding,
 } from "./background.ts";
 import { StorageRoot } from "../config/storage-root.ts";
-import { resolveOutsideToolPath, resolveWorkingDirectory } from "../files/path-policy.ts";
+import {
+  folderMentions,
+  resolveOutsideToolPath,
+  resolveWorkingDirectory,
+} from "../files/path-policy.ts";
 import { PathRejected, type Fenced } from "../files/paths.ts";
 import { optionalProperty } from "../optional-property.ts";
 import {
@@ -53,6 +57,7 @@ const runSkill = {
 const ShellResult = Schema.Struct({
   workdir: Schema.String,
   pathMapped: Schema.optionalKey(Schema.String),
+  pathWarning: Schema.optionalKey(Schema.String),
   command: Schema.String,
   shell: Schema.String,
   status: Schema.Literals(["succeeded", "failed", "timed_out", "cancelled"]),
@@ -116,10 +121,26 @@ const make = Effect.gen(function* () {
             storage.path,
             workdir ?? ".",
           ).pipe(Effect.provideContext(platform));
-          const mapped = optionalProperty(
-            "pathMapped",
-            Option.getOrUndefined(directory.mappedNote),
+          // A script saved before such paths were refused may still name the user's project
+          // folder while this run works in a card's copy of it; it still runs, with a warning.
+          const leaving = Arr.dedupe(
+            (yield* folderMentions(project, runnable.text).pipe(Effect.provideContext(platform)))
+              .filter(({ folder }) => folder === "user")
+              .map(({ spelling }) => spelling),
           );
+          const mapped = {
+            ...optionalProperty("pathMapped", Option.getOrUndefined(directory.mappedNote)),
+            ...optionalProperty(
+              "pathWarning",
+              Option.getOrUndefined(
+                Option.map(
+                  Option.liftPredicate(leaving, Arr.isReadonlyArrayNonEmpty),
+                  (spellings) =>
+                    `This skill's script names the user's project folder by its absolute path (${spellings.join(", ")}). This run works in a kanban card's own copy of the project, so the script may read the user's folder instead of this copy, and the sandbox refuses writes there. Save the skill again with paths relative to its working directory.`,
+                ),
+              ),
+            ),
+          };
           const seconds = Math.min(
             Math.max(1, timeoutSeconds ?? defaultTimeoutSeconds),
             maxTimeoutSeconds,

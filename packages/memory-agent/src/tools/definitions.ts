@@ -99,7 +99,7 @@ export const ShSkillProgram = Schema.Struct({
   runtime: Schema.Literal("sh"),
   script: Schema.NonEmptyString.annotate({
     description:
-      "POSIX sh script for one job, run in the working directory with arguments as $1, $2, …. Print only what the task needs: filter or cap noisy output in the script.",
+      "POSIX sh script for one job, run in the working directory with arguments as $1, $2, …. Name project files by paths relative to it, never by the project's absolute path. Print only what the task needs: filter or cap noisy output in the script.",
   }),
   network: Schema.optionalKey(
     Schema.Array(NetworkHost).check(Schema.isMaxLength(32)).annotate({

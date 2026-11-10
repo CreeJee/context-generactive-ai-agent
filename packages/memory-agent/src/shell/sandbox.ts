@@ -4,7 +4,8 @@ import { Worker } from "node:worker_threads";
 import { Duration, Effect, FileSystem, Function as EffectFunction, Layer, Option } from "effect";
 import { RpcClient } from "effect/rpc";
 import { failureAnnotations } from "../runtime/logged-failures.ts";
-import { homeDirectory, temporaryDirectory } from "../runtime/host-system.ts";
+import { writableRoots } from "../files/path-policy.ts";
+import { homeDirectory } from "../runtime/host-system.ts";
 import { path } from "../runtime/synchronous-path.ts";
 import { runtimeWorker, runtimeWorkerOptions } from "../runtime/resources.ts";
 import type { CommandResult } from "./run.ts";
@@ -72,8 +73,9 @@ const cacheHomePaths = [
 ] as const;
 
 /**
- * What a sh skill's script may touch. Writes: the project, temp folders and caches, but not the
- * project's skills, which change only through `save_code_skill`. Reads: everything except
+ * What a sh skill's script may touch. Writes: the run's root (a card's worktree in a kanban card)
+ * and the temporary folders, as the path policy names them (`writableRoots`), and caches, but not
+ * the project's skills, which change only through `save_code_skill`. Reads: everything except
  * credential stores and the app's own storage. Network: only the script's approved hosts.
  * Loopback ports (local test and dev servers) only when the hosts include `localhost`, because that
  * also reaches every local service, this app's own server included. The sandbox runtime adds its
@@ -84,24 +86,24 @@ export const sandboxPolicy = Effect.fnUntraced(function* (input: {
   readonly storageRoot: string;
   readonly network: readonly string[];
 }) {
-  const [home, temporary] = yield* Effect.all([homeDirectory, temporaryDirectory]);
+  const home = yield* homeDirectory;
   const fs = yield* FileSystem.FileSystem;
   // macOS checks the real path, and the runtime leaves a bare `/tmp` unresolved because its link
   // leaves the folder (`/private/tmp`): the rule then matched nothing. A path that does not exist
   // yet keeps its spelling.
   const real = (paths: readonly string[]) =>
     Effect.forEach(paths, (entry) => fs.realPath(entry).pipe(Effect.orElseSucceed(() => entry)));
+  const writable = yield* writableRoots(input.projectRoot);
   return {
     network: input.network,
     allowLocalBinding: input.network.includes("localhost"),
-    allowWrite: yield* real([
-      input.projectRoot,
-      "/tmp",
-      temporary,
-      ...cacheHomePaths.map((entry) => path.join(home, entry)),
-    ]),
+    allowWrite: [
+      writable.root,
+      ...writable.temporary,
+      ...(yield* real(cacheHomePaths.map((entry) => path.join(home, entry)))),
+    ],
     denyRead: [...credentialHomePaths.map((entry) => path.join(home, entry)), input.storageRoot],
-    denyWrite: [path.join(input.projectRoot, ".agents", "skills")],
+    denyWrite: [path.join(writable.root, ".agents", "skills")],
   };
 });
 

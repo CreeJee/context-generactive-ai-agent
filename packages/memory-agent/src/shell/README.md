@@ -15,7 +15,7 @@
 - `hostShell(source)` — 명령이 실행될 셸 파일 경로(로그인 셸, `/bin/sh` 또는 `cmd.exe`)를 돌려주는 Effect
 - `defaultTimeoutSeconds` / `maxTimeoutSeconds` — 명령 타임아웃 기본값 120초, 최대값 1800초
 - `runSandboxed` — dual 함수 `(setup, run)`. worker를 띄워 `Prepare`로 감싼 명령을 받고, `run`으로 실행한 뒤 `Finish`로 stderr에 위반 내역을 덧붙인다. 오류는 `E | SandboxUnavailable`이고 `FileSystem`이 필요하다
-- `sandboxPolicy({projectRoot, storageRoot, network})` — 홈/임시 폴더를 읽어 `network`, `allowLocalBinding`, `allowWrite`, `denyRead`, `denyWrite` 정책을 만드는 Effect
+- `sandboxPolicy({projectRoot, storageRoot, network})` — 경로 정책의 `writableRoots`(run의 root와 임시 폴더의 실제 경로)와 홈 폴더를 읽어 `network`, `allowLocalBinding`, `allowWrite`, `denyRead`, `denyWrite` 정책을 만드는 Effect
 - `SandboxSetup` — worker에 `workerData.sandbox`로 보내는 `Schema.Struct`(`command`, `commandId`, `network`, `allowLocalBinding`, `allowWrite`, `denyRead`, `denyWrite`)
 - `SandboxUnavailable` — 샌드박스를 쓸 수 없음을 나타내는 TaggedError. `reason`은 `unsupported_platform`|`missing_dependencies`|`setup_failed`이고 `detail`이 붙는다. `sandbox.ts`에서도 re-export한다
 - `SandboxUnavailableReason` — 위 `reason`의 `Schema.Literals`
@@ -33,7 +33,7 @@
 - worker마다 별도 `TMPDIR`(`makeTempDirectoryScoped` 스크래치 폴더)을 준다. runtime이 프록시 소켓 이름을 pid로 짓기 때문이다. worker와 스크래치 폴더는 scope와 함께 끝난다(성공·실패·인터럽트 모두)
 - `SandboxManager.initialize`는 `acquireRelease`로 감싸고, release에서 `SandboxManager.reset`을 호출한다. network는 `strictAllowlist: true`이고 ask callback이 없어 목록 밖 호스트는 거부된다
 - `Finish` 응답은 최대 5초 기다린다. 타임아웃이나 오류가 나면 명령의 원래 stderr를 그대로 쓴다
-- 샌드박스 정책: 쓰기는 `projectRoot`, `/tmp`, 임시 폴더, 홈의 캐시 경로만 허용한다. `<projectRoot>/.agents/skills`는 쓰기 금지다(`save_code_skill`로만 바꾼다). 홈의 자격 증명 저장소와 `storageRoot`는 읽기 금지다. loopback 바인딩은 `network`에 `localhost`가 있을 때만 허용한다
+- 샌드박스 정책: 쓰기는 `projectRoot`(카드에서는 카드 worktree), `/tmp`, 임시 폴더, 홈의 캐시 경로만 허용하고 모두 실제 경로로 넘긴다. root와 임시 폴더는 `files/path-policy.ts`가 파일 도구·`run_skill` workdir와 같은 기준으로 정한다. 사용자 프로젝트 폴더는 카드에서 쓰기 목록에 없다. `<projectRoot>/.agents/skills`(실제 경로)는 쓰기 금지다(`save_code_skill`로만 바꾼다). 홈의 자격 증명 저장소와 `storageRoot`는 읽기 금지다. loopback 바인딩은 `network`에 `localhost`가 있을 때만 허용한다
 - `activeCommands` 레지스트리는 `globalThis.__contextGeneractiveAgentShellProcessState`에 하나만 둔다. 번들 중복이나 dev reload로 모듈이 여러 번 평가돼도 exit hook은 하나만 설치된다
 - process `'exit'` 훅이 `activeCommands`를 동기로 읽으므로, 레지스트리는 네이티브 `MutableHashSet`이어야 한다. force 경로의 kill은 동기로 시작한다
 - 명령 환경은 `extendEnv: false`인 `commandEnvironment`를 쓴다. 이름이 `TOKEN`/`SECRET`/`PASSWORD`/`API_KEY`/`AUTH` 등에 맞는 변수는 명령에 넘기지 않는다(R14)

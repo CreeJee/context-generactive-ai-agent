@@ -144,7 +144,8 @@ export const temporaryRoots = Effect.flatMap(temporaryDirectory, (temporary) =>
 
 /**
  * The folders a sh skill's script may write, as real paths (macOS's sandbox compares real paths):
- * the run's root and the temporary folders. A folder whose real path cannot be read keeps its
+ * the run's root, the same root the file tools work in, and the temporary folders that
+ * `run_skill`'s working directory may be below. A folder whose real path cannot be read keeps its
  * spelling.
  */
 export const writableRoots = (root: string) =>
@@ -153,7 +154,7 @@ export const writableRoots = (root: string) =>
       canonicalPathEffect(root).pipe(Effect.orElseSucceed(() => root)),
       temporaryRoots.pipe(Effect.orElseSucceed(() => ["/tmp"])),
     ]),
-    ([real, temporary]) => Arr.dedupe([real, ...temporary]),
+    ([real, temporary]) => ({ root: real, temporary }),
   );
 
 /**

@@ -19,7 +19,7 @@
 - `Skill` / `SkillProblem` / `SkillCatalog` / `SkillDocument` — 스킬 메타(scope, name, description, directory, contentHash), 문제(no_description, too_large, unreadable), 카탈로그와 문서. 앞의 셋은 `contracts.ts`의 Schema 타입이고(앱 API projects group `skills`가 돌려준다), `SkillDocument`는 `skills.ts`의 인터페이스다
 - `parseFrontMatter(text)` / `FrontMatter` — SKILL.md front matter의 작은 YAML 부분집합을 `MutableHashMap` 필드와 body로 파싱한다. 지원 형식은 `key: value`, 따옴표 값, `>`, `|`, `>-`, `|-` 블록이다
 - `CodeSkills` — 코드 스킬 `Context.Service`이고 `CodeSkills.layer`를 가진다. 구현 `make`는 프로젝트 파일 생성, 읽기, 교체, 삭제와 SKILL.md 생성을 다룬다
-- `CodeSkillRejected` — `Schema.TaggedError`. reason은 builtin_overlap, not_code_skill, network_line, input_line, input_schema, not_found, not_approved, ts_skill 중 하나다. 필드는 `detail`이다
+- `CodeSkillRejected` — `Schema.TaggedError`. reason은 builtin_overlap, not_code_skill, network_line, input_line, input_schema, not_found, not_approved, ts_skill, absolute_path 중 하나다. 필드는 `detail`이다
 - `SkillRuntime` — `"ts" | "sh"`
 - `codeSkillDirectory(name)` — 문자열 `.agents/skills/<name>`
 - `builtinOverlap(script)` — sh 스크립트의 모든 선두 프로그램이 내장 도구(ls, cat, grep, rm 등)로 대체 가능하면 `Option.some(CodeSkillRejected)`를 돌려준다
@@ -44,6 +44,7 @@
 - 프로그램은 저장할 때 승인된 정확한 내용일 때만 실행된다
 - network 호스트(`# run_skill network:`)와 입력 스키마(`// run_skill input:`)는 스크립트 첫 줄에 쓴다. 승인 텍스트의 일부이므로 코드와 함께 승인, 해시, 표시된다. 이 줄은 `network`/`input` 필드에서만 생성된다. 사용자가 code나 script에 직접 넣으면 `network_line`/`input_line`으로 거부한다
 - ts 스킬의 input은 `type: "object"`인 JSON Schema여야 한다. 아니면 `input_schema`로 거부한다
+- 저장할 프로그램(sh의 script, ts의 code)이 프로젝트 폴더를 절대 경로로 적으면 `absolute_path`로 거부한다. 칸반 카드에서는 카드 worktree와 사용자 프로젝트 폴더 둘 다 본다. 그대로 적은 경로, 실제 경로, 홈 아래면 `~/…`·`$HOME/…`·`${HOME}/…` 표기를 경로 전체이거나 `/`가 이어질 때만 찾는다(`files/path-policy.ts`의 `folderMentions`). 프로그램 속 경로는 실행 때 경로 정책으로 바꿀 수 없고, 스킬은 프로젝트나 카드 worktree에서 돌기 때문이다. 이미 저장된 스킬은 고치지 않는다
 - sh 스크립트의 모든 단계(`;`, `&&`, `||`로 나뉨)가 내장 도구로 대체 가능한 프로그램으로 시작하면 `builtin_overlap`으로 거부한다. 파이프 뒤 필터는 허용한다. 판정할 때 `command`, `exec`, `env`, `time`, `nice` 접두와 `VAR=` 대입은 건너뛴다. `cd`, `set`, `export`, `true`, `:`, `echo`, `printf`, `exit` 단계는 무시한다
 
 ## Side Effects

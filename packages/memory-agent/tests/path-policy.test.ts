@@ -8,10 +8,10 @@ import {
   resolveOutsideToolPath,
   resolveRootPath,
   resolveWorkingDirectory,
-  writableRoots,
   type ToolRoots,
 } from "../src/files/path-policy.ts";
 import type { PathRejected } from "../src/files/paths.ts";
+import { sandboxPolicy } from "../src/shell/sandbox.ts";
 import { withTestPlatform } from "./support/platform.ts";
 
 /** A user's project, a card worktree copy of it, a folder outside both, and the storage root. */
@@ -185,16 +185,27 @@ describe("run_skill working directory", () => {
 });
 
 describe("sh skill sandbox", () => {
-  it.live("may write the run's root and the temporary folders as real paths", () =>
-    Effect.gen(function* () {
-      const { base, card, fs, path } = yield* layout();
-      const link = path.join(base, "card-link");
-      yield* fs.symlink(card, link);
-      const writable = yield* writableRoots(link);
-      expect(writable).toContain(card);
-      expect(writable).toContain(yield* fs.realPath(tmpdir()));
-      expect(writable).toContain(yield* fs.realPath("/tmp"));
-    }).pipe(withTestPlatform),
+  it.live(
+    "may write the card's worktree and the temporary folders as real paths, not the user's folder",
+    () =>
+      Effect.gen(function* () {
+        const { base, user, card, storage, fs, path } = yield* layout();
+        // The worktree reached through a linked parent, as macOS's /tmp is.
+        const link = path.join(base, "base-link");
+        yield* fs.symlink(base, link);
+        const spelled = path.join(link, "worktrees", "g1", "c1");
+        const policy = yield* sandboxPolicy({
+          projectRoot: spelled,
+          storageRoot: storage,
+          network: [],
+        });
+        expect(policy.allowWrite).toEqual(
+          expect.arrayContaining([card, yield* fs.realPath(tmpdir()), yield* fs.realPath("/tmp")]),
+        );
+        expect(policy.allowWrite).not.toContain(user);
+        expect(policy.allowWrite).not.toContain(spelled);
+        expect(policy.denyWrite).toEqual([path.join(card, ".agents", "skills")]);
+      }).pipe(withTestPlatform),
   );
 });
 
