@@ -7,26 +7,26 @@ msgstr ""
 "X-Generator: @lingui/cli\n"
 "Language: ko\n"
 
-#: app/entry/media/cross-provider-approval.tsx:41
+#: app/entry/media/cross-provider-approval.tsx
 msgid "Claude는 이미지를 직접 생성하지 않습니다. 이미지 프롬프트가 OpenAI로 전송되고 사용량은 OpenAI 계정에 귀속됩니다."
 msgstr "Claude는 이미지를 직접 생성하지 않습니다. 이미지 프롬프트가 OpenAI로 전송되고 사용량은 OpenAI 계정에 귀속됩니다."
 
-#: app/entry/media/cross-provider-approval.tsx:38
+#: app/entry/media/cross-provider-approval.tsx
 msgid "OpenAI 이미지 실행을 허용할까요?"
 msgstr "OpenAI 이미지 실행을 허용할까요?"
 
-#: app/entry/media/use-image-generation.ts:58
+#: app/entry/media/use-image-generation.ts
 msgid "이미지를 생성하지 못했습니다. 설정과 계정 권한을 확인해 주십시오."
 msgstr "이미지를 생성하지 못했습니다. 설정과 계정 권한을 확인해 주십시오."
 
-#: app/entry/media/cross-provider-approval.tsx:52
+#: app/entry/media/cross-provider-approval.tsx
 msgid "이번만 허용"
 msgstr "이번만 허용"
 
-#: app/entry/media/cross-provider-approval.tsx:49
+#: app/entry/media/cross-provider-approval.tsx
 msgid "취소"
 msgstr "취소"
 
-#: app/entry/media/cross-provider-approval.tsx:55
+#: app/entry/media/cross-provider-approval.tsx
 msgid "항상 허용"
 msgstr "항상 허용"

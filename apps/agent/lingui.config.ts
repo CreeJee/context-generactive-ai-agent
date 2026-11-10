@@ -1,4 +1,5 @@
 import { defineConfig } from "@lingui/conf";
+import { formatter } from "@lingui/format-po";
 import { createSwcExtractor } from "@lingui/native-tools";
 
 /**
@@ -10,5 +11,7 @@ export default defineConfig({
   sourceLocale: "ko",
   locales: ["ko"],
   catalogs: [{ path: "<rootDir>/app/locales/{locale}", include: ["<rootDir>/app"] }],
+  // Origins without line numbers: a line number changes with almost every edit around a message.
+  format: formatter({ lineNumbers: false }),
   extractors: [createSwcExtractor()],
 });

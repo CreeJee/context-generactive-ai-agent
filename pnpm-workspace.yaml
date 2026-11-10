@@ -90,9 +90,11 @@ catalog:
   # Development-only wording check (lint/wording): Korean morphemes and copy.ts parsing.
   kiwi-nlp: 0.24.1
   oxc-parser: 0.148.0
-  # UI text as Lingui macros (t, msg, Trans); native-tools transforms the macros and extracts the
-  # messages without Babel. native-tools is pre-1.0, so every Lingui package is pinned exactly.
+  # UI text as Lingui messages: compile-time macros (t, msg, Trans) in the app, the runtime macro on
+  # the server. native-tools transforms the macros and extracts the messages without Babel. native-tools is pre-1.0, so every Lingui package is pinned exactly.
   "@lingui/core": 6.12.0
+  "@lingui/message-utils": 6.12.0
+  "@lingui/format-po": 6.12.0
   "@lingui/react": 6.12.0
   "@lingui/conf": 6.12.0
   "@lingui/cli": 6.12.0

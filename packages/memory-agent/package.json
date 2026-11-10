@@ -53,7 +53,8 @@
     "./redact-worker": "./src/secrets/redact-worker.ts",
     "./native-search-worker": "./src/memory/native-search/worker.ts",
     "./sandbox-worker": "./src/shell/sandbox-worker.ts",
-    "./code-worker": "./src/code/worker.ts"
+    "./code-worker": "./src/code/worker.ts",
+    "./i18n": "./src/i18n.ts"
   },
   "publishConfig": {
     "access": "public"
@@ -79,6 +80,8 @@
     "@effect/tsgo": "catalog:",
     "@huggingface/transformers": "catalog:",
     "@jitl/quickjs-singlefile-mjs-release-sync": "catalog:",
+    "@lingui/core": "catalog:",
+    "@lingui/message-utils": "catalog:",
     "@modelcontextprotocol/client": "catalog:",
     "@modelcontextprotocol/server": "catalog:",
     "@napi-rs/keyring": "catalog:",
@@ -100,6 +103,10 @@
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
+    "@lingui/cli": "catalog:",
+    "@lingui/conf": "catalog:",
+    "@lingui/format-po": "catalog:",
+    "@lingui/native-tools": "catalog:",
     "@types/cross-spawn": "catalog:",
     "@types/node": "catalog:",
     "bumpp": "catalog:",

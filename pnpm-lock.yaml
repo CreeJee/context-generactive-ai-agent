@@ -212,6 +212,12 @@ catalogs:
     '@lingui/core':
       specifier: 6.12.0
       version: 6.12.0
+    '@lingui/format-po':
+      specifier: 6.12.0
+      version: 6.12.0
+    '@lingui/message-utils':
+      specifier: 6.12.0
+      version: 6.12.0
     '@lingui/native-tools':
       specifier: 0.2.0
       version: 0.2.0
@@ -585,6 +591,9 @@ importers:
       '@lingui/conf':
         specifier: 'catalog:'
         version: 6.12.0
+      '@lingui/format-po':
+        specifier: 'catalog:'
+        version: 6.12.0
       '@lingui/native-tools':
         specifier: 'catalog:'
         version: 0.2.0(@lingui/conf@6.12.0)
@@ -651,6 +660,12 @@ importers:
       '@jitl/quickjs-singlefile-mjs-release-sync':
         specifier: 'catalog:'
         version: 0.32.0
+      '@lingui/core':
+        specifier: 'catalog:'
+        version: 6.12.0(@babel/core@7.29.7(supports-color@7.2.0))
+      '@lingui/message-utils':
+        specifier: 'catalog:'
+        version: 6.12.0
       '@modelcontextprotocol/client':
         specifier: 'catalog:'
         version: 2.3.1
@@ -709,6 +724,18 @@ importers:
       '@effect/vitest':
         specifier: 4.1.2
         version: 4.1.2(effect@4.1.2(patch_hash=b2038858deaf39c6a52f3d0af00c55e78935ac56accf11abc2db325e973cc126))(vitest@5.0.5)
+      '@lingui/cli':
+        specifier: 'catalog:'
+        version: 6.12.0(supports-color@7.2.0)
+      '@lingui/conf':
+        specifier: 'catalog:'
+        version: 6.12.0
+      '@lingui/format-po':
+        specifier: 'catalog:'
+        version: 6.12.0
+      '@lingui/native-tools':
+        specifier: 'catalog:'
+        version: 0.2.0(@lingui/conf@6.12.0)
       '@types/cross-spawn':
         specifier: 'catalog:'
         version: 6.0.6

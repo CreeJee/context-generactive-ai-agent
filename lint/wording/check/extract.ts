@@ -2,6 +2,8 @@ import { extractMessages } from "@lingui/native-tools";
 import { Array as Arr, Effect, Option, Predicate, Result, Schema } from "effect";
 import { parseSync, Visitor } from "oxc-parser";
 
+import { linguiCoreMacroModules, linguiJsxMacroModules } from "../policy.ts";
+
 /** One piece of wording in a source file, with where it starts. */
 export interface SourceText {
   readonly text: string;
@@ -77,7 +79,13 @@ const messageTag = /<\/?\d+\/?>/gu;
  */
 export const messageTexts = Effect.fnUntraced(function* (file: string, source: string) {
   const extracted = yield* Effect.tryPromise({
-    try: () => extractMessages(source, file),
+    try: () =>
+      extractMessages(source, file, {
+        macro: {
+          corePackage: [...linguiCoreMacroModules],
+          jsxPackage: [...linguiJsxMacroModules],
+        },
+      }),
     catch: (cause) => new SourceParseFailed({ file, message: String(cause) }),
   });
   return Arr.filterMap(

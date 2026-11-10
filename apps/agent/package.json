@@ -53,6 +53,7 @@
     "@effect/vitest": "catalog:",
     "@lingui/cli": "catalog:",
     "@lingui/conf": "catalog:",
+    "@lingui/format-po": "catalog:",
     "@lingui/native-tools": "catalog:",
     "@lingui/vite-plugin": "catalog:",
     "@react-router/dev": "catalog:",

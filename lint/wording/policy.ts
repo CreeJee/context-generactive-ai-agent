@@ -20,11 +20,17 @@ export const wordingExempt = [
 
 /**
  * Lingui macro modules. Text inside their tags, calls and elements (t`…`, msg(…),
- * <Trans>…</Trans>) is a message: extracted to the catalog and checked.
+ * <Trans>…</Trans>) is a message: extracted to the catalog and checked. The app uses the
+ * compile-time macros; server code, which runs without a build step, uses the runtime macro.
  */
-export const linguiMacroModules: ReadonlyArray<string> = [
+export const linguiCoreMacroModules: ReadonlyArray<string> = [
   "@lingui/core/macro",
-  "@lingui/react/macro",
+  "@lingui/core/runtime-macro",
+];
+export const linguiJsxMacroModules: ReadonlyArray<string> = ["@lingui/react/macro"];
+export const linguiMacroModules: ReadonlyArray<string> = [
+  ...linguiCoreMacroModules,
+  ...linguiJsxMacroModules,
 ];
 
 /** Object-literal catalogs, kept until their directory moves to Lingui messages. Checked. */

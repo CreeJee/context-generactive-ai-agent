@@ -70,6 +70,8 @@ export default defineConfig(({ command }) =>
         },
         test: {
           clearMocks: true,
+          // Activates the Korean catalog, as the app root does, so `t` works in unit tests too.
+          setupFiles: [`${import.meta.dirname}/app/i18n.ts`],
         },
         server: isTruthy(developmentBackend)
           ? {
