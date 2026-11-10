@@ -3891,6 +3891,7 @@ msgid "예상 비용 미확인"
 msgstr "예상 비용 미확인"
 
 #: app/entry/settings/pages/imports.tsx
+#: app/root.tsx
 msgid "예상하지 못한 오류가 났습니다"
 msgstr "예상하지 못한 오류가 났습니다"
 
@@ -4901,6 +4902,10 @@ msgstr "조회 불가"
 msgid "주소, 키 또는 모델 한도를 확인해 주십시오. 키가 있는 엔드포인트의 주소를 바꾸려면 새 키를 넣거나 키를 지워야 합니다."
 msgstr "주소, 키 또는 모델 한도를 확인해 주십시오. 키가 있는 엔드포인트의 주소를 바꾸려면 새 키를 넣거나 키를 지워야 합니다."
 
+#: app/root.tsx
+msgid "주소를 확인해 주십시오."
+msgstr "주소를 확인해 주십시오."
+
 #: app/entry/settings/pages/imports.tsx
 msgid "주제를 붙이고 정정, 취소 관계를 정리합니다. 모델을 쓰기 때문에 답변이 끝난 뒤 조금씩 처리됩니다."
 msgstr "주제를 붙이고 정정, 취소 관계를 정리합니다. 모델을 쓰기 때문에 답변이 끝난 뒤 조금씩 처리됩니다."
@@ -5667,6 +5672,14 @@ msgstr "판단을 기다리는 카드는 판단에 답한 뒤에 옮길 수 있�
 #: app/entry/chat/workflow-panel.tsx
 msgid "판정 불가"
 msgstr "판정 불가"
+
+#: app/root.tsx
+msgid "페이지를 새로고침한 뒤 다시 시도해 주십시오."
+msgstr "페이지를 새로고침한 뒤 다시 시도해 주십시오."
+
+#: app/root.tsx
+msgid "페이지를 찾을 수 없습니다"
+msgstr "페이지를 찾을 수 없습니다"
 
 #. Button in the card panel that opens the card editor
 #. Button that edits the queued message

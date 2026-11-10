@@ -80,33 +80,41 @@ export default function App() {
   );
 }
 
-export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
-  let message = "Oops!";
-  let details = "An unexpected error occurred.";
-  let stack: string | undefined;
-
-  if (isRouteErrorResponse(error)) {
-    message = error.status === 404 ? "404" : "Error";
-    details =
-      error.status === 404
-        ? "The requested page could not be found."
-        : error.statusText.length > 0
-          ? error.statusText
-          : details;
-  } else if (import.meta.env.DEV && isTruthy(error) && error instanceof Error) {
-    details = error.message;
-    stack = error.stack;
-  }
+function ErrorView({ error }: Route.ErrorBoundaryProps) {
+  const notFound = isRouteErrorResponse(error) && error.status === 404;
+  // The thrown error's own text and stack help while developing; a user gets what to do next.
+  const thrown = import.meta.env.DEV && isTruthy(error) && error instanceof Error ? error : null;
 
   return (
     <main className="pt-16 p-4 container mx-auto">
-      <h1>{message}</h1>
-      <p>{details}</p>
-      {stack && (
+      <h1>
+        {notFound ? (
+          <Trans>페이지를 찾을 수 없습니다</Trans>
+        ) : (
+          <Trans>예상하지 못한 오류가 났습니다</Trans>
+        )}
+      </h1>
+      <p>
+        {notFound ? (
+          <Trans>주소를 확인해 주십시오.</Trans>
+        ) : (
+          <Trans>페이지를 새로고침한 뒤 다시 시도해 주십시오.</Trans>
+        )}
+      </p>
+      {thrown && (
         <pre className="w-full p-4 overflow-x-auto">
-          <code>{stack}</code>
+          <code>{thrown.stack ?? thrown.message}</code>
         </pre>
       )}
     </main>
+  );
+}
+
+// The boundary renders in place of `App`, outside its providers.
+export function ErrorBoundary(props: Route.ErrorBoundaryProps) {
+  return (
+    <I18nProvider i18n={i18n}>
+      <ErrorView {...props} />
+    </I18nProvider>
   );
 }
