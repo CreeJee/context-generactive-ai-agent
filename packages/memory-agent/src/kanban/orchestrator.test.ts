@@ -1174,6 +1174,62 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "starts no card while its Goal is paused and stops the board once the Goal is stopped",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* kanbanFixture;
+        const started = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const ran = yield* Ref.make<readonly string[]>([]);
+        const run = yield* openOwner(
+          fixture,
+          (agent) =>
+            Ref.update(ran, Arr.append(agent.card.id)).pipe(
+              Effect.andThen(Deferred.succeed(started, undefined)),
+              Effect.andThen(Deferred.await(release)),
+              Effect.as(finished),
+            ),
+          yield* Effect.scope,
+        );
+        yield* run(
+          Effect.gen(function* () {
+            const board = yield* startBoard(fixture, [
+              card("a"),
+              { ...card("b"), dependsOn: ["a"] },
+            ]);
+            const workflows = yield* Workflows;
+            const orchestrator = yield* KanbanOrchestrator;
+            yield* Deferred.await(started);
+            yield* workflows.controlGoal(board.sessionId, "pause");
+            // The running card finishes; the card it unblocks waits for the Goal to resume.
+            yield* Deferred.succeed(release, undefined);
+            yield* eventually(
+              Effect.map(workflows.get(board.sessionId), (state) =>
+                status(state.plan?.steps ?? [], "a"),
+              ),
+              (found) => found === "done",
+            );
+            yield* orchestrator.poke(board.goalInstanceId);
+            yield* Effect.sleep("300 millis");
+            expect(yield* Ref.get(ran)).toEqual(["a"]);
+            expect(status((yield* workflows.get(board.sessionId)).plan?.steps ?? [], "b")).toBe(
+              "ready",
+            );
+
+            yield* workflows.controlGoal(board.sessionId, "stop");
+            yield* orchestrator.poke(board.goalInstanceId);
+            yield* eventually(
+              (yield* CardAttempts).goal(board.goalInstanceId),
+              Option.exists((goal) => !goal.active),
+            );
+            expect(yield* Ref.get(ran)).toEqual(["a"]);
+          }),
+        );
+      }),
+    gitTimeout,
+  );
+
+  it.effect(
     "stops a conversation's running card and board before it returns",
     () =>
       Effect.gen(function* () {

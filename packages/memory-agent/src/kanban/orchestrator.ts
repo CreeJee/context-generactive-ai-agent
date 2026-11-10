@@ -1055,10 +1055,10 @@ const make = (options: KanbanOrchestratorOptions) =>
         return "stopped" as const;
       }
       const before = yield* workflows.get(stored.sessionId);
-      if (before.plan?.status === "closed") {
-        // A closed Plan runs no card again: its running cards stop, its board stops and its
-        // people's waits close with the cards.
-        yield* halt(stored, before.plan.steps);
+      if (before.plan?.status === "closed" || before.goal?.status === "failed") {
+        // A closed Plan, or a Goal the user stopped, runs no card again: its running cards stop,
+        // its board stops and its people's waits close with the cards.
+        yield* halt(stored, before.plan?.steps ?? []);
         // Not in `halt`: a conversation being deleted halts its boards too and keeps the disk.
         yield* janitor.settleGoal(stored);
         return "stopped" as const;
@@ -1129,11 +1129,15 @@ const make = (options: KanbanOrchestratorOptions) =>
       );
 
       const executing = state.phase === "running" && state.plan?.status === "executing";
+      // A paused Goal starts no card; the cards it runs finish.
+      const paused = state.goal?.status === "paused";
       // A Goal waiting for another Goal's merge takes no slots; its cards stay where they are.
       const waitingOn = yield* scheduler.waitingOn(goalInstanceId);
       yield* scheduler.reviewNotices(goalInstanceId);
       const planned =
-        executing && waitingOn.length === 0 ? yield* assignable(goal, steps, ladderOf) : [];
+        executing && !paused && waitingOn.length === 0
+          ? yield* assignable(goal, steps, ladderOf)
+          : [];
       // Every look reports the cards it could start; the scheduler picks the project's next ones.
       const granted = yield* scheduler.grant(goal, planned);
       yield* Effect.forEach(
@@ -1196,7 +1200,10 @@ const make = (options: KanbanOrchestratorOptions) =>
             Predicate.isTagged(ladderOf(step.id).reason, "UpstreamRegressed"),
         ),
       } as const satisfies Record<KanbanAttentionReason, boolean>;
-      const reasons = KanbanAttentionReason.literals.filter((reason) => raised[reason]);
+      // A paused Goal wakes no planner; the model hears about the board once it resumes.
+      const reasons = paused
+        ? []
+        : KanbanAttentionReason.literals.filter((reason) => raised[reason]);
       const met = Arr.countBy(standings, (standing) => OutcomeStatus.guards.Met(standing.status));
       // A newly met outcome is progress: the planner rounds count again from zero.
       const counted = met > goal.planner.met ? { rounds: 0, met } : goal.planner;
