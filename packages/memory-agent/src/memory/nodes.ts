@@ -261,13 +261,15 @@ const make = Effect.gen(function* () {
       WHERE r.ref = ${ref} AND n.project_id = ${projectId} ORDER BY n.seq DESC LIMIT 1`,
   });
   const encodeDetail = Schema.encodeEffect(Schema.fromJsonString(NodeDetail));
-  const firstResults = SqlSchema.findAll({
-    Request: Schema.Struct({ sessionId: Schema.String, toolCallIds: Schema.Array(Schema.String) }),
+  // Every result of the session, read from its tool call index (the range condition keeps the
+  // planner on it) instead of binding one value per call: a long conversation asks for thousands.
+  const sessionResults = SqlSchema.findAll({
+    Request: Schema.String,
     Result: Schema.Struct({ tool_call_id: Schema.String, id: Schema.String }),
-    execute: ({ sessionId, toolCallIds }) => sql`
+    execute: (sessionId) => sql`
       SELECT json_extract(detail, '$.toolCallId') AS tool_call_id, id FROM nodes
       WHERE session_id = ${sessionId} AND kind = 'tool_result'
-        AND json_extract(detail, '$.toolCallId') IN ${sql.in(toolCallIds)}
+        AND json_extract(detail, '$.toolCallId') > ''
       ORDER BY seq DESC`,
   });
   const textsOf = SqlSchema.findAll({
@@ -410,14 +412,15 @@ const make = Effect.gen(function* () {
         ? Effect.succeed(HashMap.empty<string, string>())
         : stored(
             // Newest first, so the first recorded result is the one each key keeps.
-            firstResults({ sessionId, toolCallIds }).pipe(
-              Effect.map((rows) =>
-                keyed(
-                  rows,
+            sessionResults(sessionId).pipe(
+              Effect.map((rows) => {
+                const asked = HashSet.fromIterable(toolCallIds);
+                return keyed(
+                  rows.filter((row) => HashSet.has(asked, row.tool_call_id)),
                   (row) => row.tool_call_id,
                   (row) => row.id,
-                ),
-              ),
+                );
+              }),
             ),
           ),
 
