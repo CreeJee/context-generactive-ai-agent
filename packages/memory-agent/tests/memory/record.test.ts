@@ -1,5 +1,6 @@
 import { Effect, Ref, Schema } from "effect";
 import { expect } from "vite-plus/test";
+import type { JsonValue } from "../../src/json.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { makeRecordingHook, Recorder } from "../../src/memory/record.ts";
 import { PermissionReviews } from "../../src/permissions/reviews.ts";
@@ -37,6 +38,39 @@ const userTurn = Effect.fnUntraced(function* (text: string) {
     text,
   });
   return { project, session, user };
+});
+
+/** What the recorder keeps for a run_skill call whose skill returned `result`. */
+const recordedSkillResult = Effect.fnUntraced(function* (result: JsonValue) {
+  const { project, session, user } = yield* userTurn("테스트 돌려줘");
+  const runId = `${session.id}:run`;
+  const skill = runTool({
+    name: "run_skill",
+    description: "Run a project code skill",
+    parameters: Schema.Struct({ name: Schema.String }),
+    handler: () => Effect.succeed(result),
+  });
+  yield* scriptedRun({
+    turns: [
+      {
+        text: "",
+        toolCalls: [{ id: "call-1", name: "run_skill", arguments: '{"name":"test-failures"}' }],
+      },
+      { text: "테스트가 실패했어요." },
+    ],
+    runId,
+    conversation: [{ role: "user", content: user.text }],
+    tools: [skill],
+    hooks: [
+      yield* (yield* Recorder).hookFor({
+        projectId: project.id,
+        sessionId: session.id,
+        runId,
+        userNodeId: Effect.succeed(user.id),
+      }),
+    ],
+  });
+  return (yield* (yield* Nodes).toolNode(session.id, "tool_result", "call-1"))?.detail;
 });
 
 testAgent()("Recorder", (it) => {
@@ -116,51 +150,29 @@ testAgent()("Recorder", (it) => {
     }),
   );
 
-  it.effect("a shell command that exits non-zero is not recorded as ok", () =>
+  it.effect("a sh skill run that exits non-zero is not recorded as ok", () =>
     Effect.gen(function* () {
-      const { project, session, user } = yield* userTurn("테스트 돌려줘");
-      const runId = `${session.id}:run`;
-      const shell = runTool({
-        name: "run_shell",
-        description: "Run a command",
-        parameters: Schema.Struct({ command: Schema.String }),
-        handler: ({ command }) =>
-          Effect.succeed({
-            workdir: ".",
-            command,
-            shell: "zsh",
-            status: "failed",
-            exitCode: 1,
-            signal: null,
-            durationMs: 10,
-            stdout: "",
-            stderr: "2 failed",
-            stdoutTruncated: false,
-            stderrTruncated: false,
-          }),
+      const detail = yield* recordedSkillResult({
+        workdir: ".",
+        command: "test-failures",
+        shell: "zsh",
+        status: "failed",
+        exitCode: 1,
+        signal: null,
+        durationMs: 10,
+        stdout: "",
+        stderr: "2 failed",
+        stdoutTruncated: false,
+        stderrTruncated: false,
       });
-      yield* scriptedRun({
-        turns: [
-          {
-            text: "",
-            toolCalls: [{ id: "call-1", name: "run_shell", arguments: '{"command":"vp test"}' }],
-          },
-          { text: "테스트가 실패했어요." },
-        ],
-        runId,
-        conversation: [{ role: "user", content: user.text }],
-        tools: [shell],
-        hooks: [
-          yield* (yield* Recorder).hookFor({
-            projectId: project.id,
-            sessionId: session.id,
-            runId,
-            userNodeId: Effect.succeed(user.id),
-          }),
-        ],
-      });
-      const result = yield* (yield* Nodes).toolNode(session.id, "tool_result", "call-1");
-      expect(result?.detail).toMatchObject({ toolName: "run_shell", ok: false });
+      expect(detail).toMatchObject({ toolName: "run_skill", ok: false });
+    }),
+  );
+
+  it.effect("a ts skill program that timed out is not recorded as ok", () =>
+    Effect.gen(function* () {
+      const detail = yield* recordedSkillResult({ status: "timed_out", logs: ["checked 3 files"] });
+      expect(detail).toMatchObject({ toolName: "run_skill", ok: false });
     }),
   );
 

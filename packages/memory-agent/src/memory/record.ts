@@ -48,8 +48,9 @@ interface RecordedCall {
 
 /**
  * A result that reports the work did not succeed: a thrown tool or a declined tool approval
- * (`{ error }`), a denied permission review (`{ approved: false }`), a shell command that did not
- * exit cleanly, or an external agent that did not finish. Goal completion only counts results
+ * (`{ error }`, which also covers a program that threw), a denied permission review
+ * (`{ approved: false }`), a sh skill run that did not exit cleanly, a ts skill or run_code program
+ * that timed out, or an external agent that did not finish. Goal completion only counts results
  * recorded as ok.
  */
 const isErrorResult = Schema.is(
@@ -61,6 +62,7 @@ const isErrorResult = Schema.is(
       exitCode: Schema.NullOr(Schema.Finite),
       stdout: Schema.String,
     }),
+    Schema.Struct({ status: Schema.Literal("timed_out"), logs: Schema.Array(Schema.String) }),
     Schema.Struct({
       agent: Schema.String,
       status: Schema.Literals(["cancelled", "failed", "disconnected", "unavailable"]),
