@@ -90,6 +90,14 @@ catalog:
   # Development-only checker for UI copy (tools/copy-check): Korean morphemes and copy.ts parsing.
   kiwi-nlp: 0.24.1
   oxc-parser: 0.148.0
+  # UI text as Lingui macros (t, msg, Trans); native-tools transforms the macros and extracts the
+  # messages without Babel. native-tools is pre-1.0, so every Lingui package is pinned exactly.
+  "@lingui/core": 6.12.0
+  "@lingui/react": 6.12.0
+  "@lingui/conf": 6.12.0
+  "@lingui/cli": 6.12.0
+  "@lingui/vite-plugin": 6.12.0
+  "@lingui/native-tools": 0.2.0
 overrides:
   vite@*: "catalog:"
   vitest: 5.0.5

@@ -21,6 +21,7 @@
     "@effect/platform-node-shared": "catalog:",
     "@effect/tsgo": "catalog:",
     "@effect/vitest": "catalog:",
+    "@lingui/native-tools": "catalog:",
     "@shadcn/lint": "catalog:",
     "@ttsc/graph": "catalog:",
     "@vitest/browser-playwright": "catalog:",
