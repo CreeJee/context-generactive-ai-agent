@@ -58,7 +58,7 @@ import {
 } from "./board/board-surface";
 import { cardStatusLabels } from "./board/board-moves";
 import { authorLabel, StatusIcon } from "./board/card-face";
-import { verdictText } from "./board/hold-reason";
+import { verdictText, waitsForUser } from "./board/hold-reason";
 import { BoardShortcuts } from "./board/kanban-board";
 
 export { authorLabel } from "./board/card-face";
@@ -134,6 +134,23 @@ export function BoardTally({
         </span>
       )}
     </span>
+  );
+}
+
+/** The cards whose replan the planner left undone: they wait for the user. */
+function ReplanWaitBadge({ loop }: { readonly loop: ActiveKanban }) {
+  const { t } = useLingui();
+  const waiting = Arr.countBy(loop.cards, (card) => waitsForUser(card.reason));
+  if (waiting === 0) return null;
+  return (
+    <Badge
+      variant="outline"
+      title={t`계속 실패해 다시 짜 달라고 요청한 카드를 Plan 작성자가 고치지 않았습니다. 카드를 고치거나 다시 대기열에 넣어 주십시오.`}
+    >
+      <Trans comment="Badge: blocked cards the planner did not replan, waiting for the user">
+        확인 필요 카드 {waiting}
+      </Trans>
+    </Badge>
   );
 }
 
@@ -261,6 +278,7 @@ export function WorkflowBoard({
               </Trans>
             </Badge>
           )}
+          {loop !== null && <ReplanWaitBadge loop={loop} />}
           {view.pendingChanges.length > 0 && (
             <Badge variant="outline">
               <Trans comment="Badge: card change requests waiting for the orchestrator">
@@ -419,6 +437,7 @@ function BoardSheet({
                   </Trans>
                 </Badge>
               )}
+              {loop !== null && <ReplanWaitBadge loop={loop} />}
               {loop !== null && loop.loop._tag !== "Healthy" && (
                 <LoopHealthStatus
                   label={t({

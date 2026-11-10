@@ -59,10 +59,14 @@ export const holdReasonText = (reason: CardHoldReason) =>
   Match.valueTags(reason, {
     RetryBackoff: ({ failure }) =>
       t`다시 실패해 잠시 뒤 재시도합니다: ${ph({ failure: failureText(failure) })}`,
-    ReplanRequested: ({ failure }) =>
-      failure === null
-        ? t`새 카드로 대체하도록 요청했습니다`
-        : t`계속 실패해 카드를 다시 짭니다: ${ph({ failure: failureText(failure) })}`,
+    ReplanRequested: ({ failure, awaitingUser }) =>
+      awaitingUser === true
+        ? failure === null
+          ? t`Plan 작성자가 카드를 대체하지 않았습니다. 카드를 고치거나 다시 대기열에 넣어 주십시오`
+          : t`계속 실패했지만 Plan 작성자가 카드를 다시 짜지 않았습니다. 카드를 고치거나 다시 대기열에 넣어 주십시오: ${ph({ failure: failureText(failure) })}`
+        : failure === null
+          ? t`새 카드로 대체하도록 요청했습니다`
+          : t`계속 실패해 Plan 작성자에게 카드를 다시 짜 달라고 요청했습니다: ${ph({ failure: failureText(failure) })}`,
     RepeatedFailure: ({ failure }) =>
       t`다시 짠 뒤에도 실패했습니다: ${ph({ failure: failureText(failure) })}`,
     MergeConflict: ({ files }) => t`Goal 브랜치와 충돌: ${ph({ files: files.join(", ") })}`,
@@ -72,6 +76,10 @@ export const holdReasonText = (reason: CardHoldReason) =>
     UpstreamRegressed: ({ verdict }) =>
       t`다른 Goal이 merge된 뒤 다시 검증하니 통과하지 못했습니다: ${ph({ verdict: verdictText(verdict) })}`,
   });
+
+/** A card a replan was asked for and the planner's run left as it was: it waits for the user. */
+export const waitsForUser = (reason: CardHoldReason | null) =>
+  Predicate.isTagged(reason, "ReplanRequested") && reason.awaitingUser === true;
 
 const verdictNote = (verdict: VerdictFailure) =>
   Match.valueTags(verdict, {

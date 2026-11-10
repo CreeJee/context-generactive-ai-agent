@@ -1419,6 +1419,43 @@ const make = (options: KanbanOrchestratorOptions) =>
         yield* PubSub.publish(pokes, goalInstanceId);
       }),
 
+      /**
+       * A planner run told about the board's replan requests ended: a card it left blocked waits
+       * for the user, and the board says so. The planner is not woken for it again until the user
+       * speaks.
+       */
+      replanUnanswered: Effect.fn("KanbanOrchestrator.replanUnanswered")(function* (
+        sessionId: string,
+      ) {
+        const goalInstanceId = yield* workflows.goalInstanceId(sessionId);
+        if (goalInstanceId === null) return;
+        const steps = (yield* workflows.get(sessionId)).plan?.steps ?? [];
+        const ladderOf = yield* attempts.ladders(goalInstanceId);
+        const left = steps.filter((step) => {
+          const { reason } = ladderOf(step.id);
+          return (
+            step.status === "blocked" &&
+            Predicate.isTagged(reason, "ReplanRequested") &&
+            reason.awaitingUser !== true
+          );
+        });
+        yield* Effect.forEach(
+          left,
+          (step) =>
+            attempts.updateLadder(goalInstanceId, step.id, (current) => ({
+              ...current,
+              reason: Predicate.isTagged(current.reason, "ReplanRequested")
+                ? { ...current.reason, awaitingUser: true }
+                : current.reason,
+            })),
+          { discard: true },
+        );
+        yield* Effect.when(
+          events.publishSession(sessionId, "run-state"),
+          Effect.succeed(left.length > 0),
+        );
+      }),
+
       /** Why boards need the orchestrator model, as their loops find out. */
       attention: Stream.fromPubSub(attention),
 

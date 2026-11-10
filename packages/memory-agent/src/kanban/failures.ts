@@ -75,8 +75,14 @@ export const worktreeFailure = (failure: CardWorktreeFailed): CardFailure =>
 /** Why the loop stopped or delayed a card, as the board shows it. */
 export const CardHoldReason = Schema.TaggedUnion({
   RetryBackoff: { failure: CardFailure },
-  /** The orchestrator model replaces the card; no failure when a person asked for it. */
-  ReplanRequested: { failure: Schema.NullOr(CardFailure) },
+  /**
+   * The orchestrator model replaces the card; no failure when a person asked for it. `awaitingUser`
+   * once a planner run told about it ended and left the card blocked: it waits for the user.
+   */
+  ReplanRequested: {
+    failure: Schema.NullOr(CardFailure),
+    awaitingUser: Schema.optionalKey(Schema.Boolean),
+  },
   RepeatedFailure: { failure: CardFailure },
   MergeConflict: { files: Schema.Array(Schema.String) },
   UncertainEffect: { runId: Schema.String },

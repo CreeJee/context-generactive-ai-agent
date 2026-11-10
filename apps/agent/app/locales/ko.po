@@ -921,6 +921,10 @@ msgstr "Plan 작성자가 실행 중에 더한 카드라 승인을 기다립니�
 msgid "Plan 작성자가 연속으로 카드를 고쳤지만 새로 충족된 결과가 없어 자동 Plan 작성을 멈췄습니다. 이미 맡은 카드는 계속 실행됩니다. 대화에서 방향을 알려 주면 다시 Plan을 짭니다."
 msgstr "Plan 작성자가 연속으로 카드를 고쳤지만 새로 충족된 결과가 없어 자동 Plan 작성을 멈췄습니다. 이미 맡은 카드는 계속 실행됩니다. 대화에서 방향을 알려 주면 다시 Plan을 짭니다."
 
+#: app/entry/chat/board/hold-reason.ts
+msgid "Plan 작성자가 카드를 대체하지 않았습니다. 카드를 고치거나 다시 대기열에 넣어 주십시오"
+msgstr "Plan 작성자가 카드를 대체하지 않았습니다. 카드를 고치거나 다시 대기열에 넣어 주십시오"
+
 #: app/entry/chat/workflow-panel.tsx
 msgid "Plan을 확인하고 승인하면 칸반 보드에서 실행합니다. 바꾸고 싶은 점은 그대로 입력해 주십시오."
 msgstr "Plan을 확인하고 승인하면 칸반 보드에서 실행합니다. 바꾸고 싶은 점은 그대로 입력해 주십시오."
@@ -1287,8 +1291,16 @@ msgid "계속 가져오기"
 msgstr "계속 가져오기"
 
 #: app/entry/chat/board/hold-reason.ts
-msgid "계속 실패해 카드를 다시 짭니다: {failure}"
-msgstr "계속 실패해 카드를 다시 짭니다: {failure}"
+msgid "계속 실패해 Plan 작성자에게 카드를 다시 짜 달라고 요청했습니다: {failure}"
+msgstr "계속 실패해 Plan 작성자에게 카드를 다시 짜 달라고 요청했습니다: {failure}"
+
+#: app/entry/chat/board-panel.tsx
+msgid "계속 실패해 다시 짜 달라고 요청한 카드를 Plan 작성자가 고치지 않았습니다. 카드를 고치거나 다시 대기열에 넣어 주십시오."
+msgstr "계속 실패해 다시 짜 달라고 요청한 카드를 Plan 작성자가 고치지 않았습니다. 카드를 고치거나 다시 대기열에 넣어 주십시오."
+
+#: app/entry/chat/board/hold-reason.ts
+msgid "계속 실패했지만 Plan 작성자가 카드를 다시 짜지 않았습니다. 카드를 고치거나 다시 대기열에 넣어 주십시오: {failure}"
+msgstr "계속 실패했지만 Plan 작성자가 카드를 다시 짜지 않았습니다. 카드를 고치거나 다시 대기열에 넣어 주십시오: {failure}"
 
 #. Button that opens the account manager
 #. Button that opens the account manager
@@ -6189,6 +6201,11 @@ msgstr "확인 중 문제가 생겼습니다."
 #: app/entry/chat/work-trace-panel.tsx
 msgid "확인 필요"
 msgstr "확인 필요"
+
+#. Badge: blocked cards the planner did not replan, waiting for the user
+#: app/entry/chat/board-panel.tsx
+msgid "확인 필요 카드 {waiting}"
+msgstr "확인 필요 카드 {waiting}"
 
 #: app/entry/chat/queue-panel.tsx
 msgid "확인 필요, 편집 저장 안 됨"

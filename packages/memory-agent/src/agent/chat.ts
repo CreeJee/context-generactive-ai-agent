@@ -2909,7 +2909,16 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             )
               return;
             yield* Ref.update(kanbanAttention, ({ [sessionId]: _taken, ...rest }) => rest);
-            return yield* drain(yield* send(followupRunId, InternalFollowup.kanban({ reasons })));
+            const started = yield* send(followupRunId, InternalFollowup.kanban({ reasons }));
+            yield* drain(started);
+            // The planner had its turn: a card it left waiting for a replan waits for the user.
+            yield* Effect.when(
+              kanbanOrchestrator
+                .replanUnanswered(sessionId)
+                .pipe(Effect.catch(logFailure("Unanswered replan not shown", { sessionId }))),
+              Effect.succeed(Result.isSuccess(started) && reasons.includes("replan_requested")),
+            );
+            return;
           }
           if (
             restarted ||

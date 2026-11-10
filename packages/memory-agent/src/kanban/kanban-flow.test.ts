@@ -43,7 +43,7 @@ import {
   type OutcomeVerification,
 } from "./card-agent.ts";
 import { CardAttempts } from "./card-attempts.ts";
-import { VerdictFailure } from "./failures.ts";
+import { CardHoldReason, VerdictFailure } from "./failures.ts";
 import { GoalMergeState, GoalSchedules } from "./goal-schedules.ts";
 import {
   DecisionAnswer,
@@ -814,6 +814,53 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
               generation: 1,
               notes: ["An earlier note."],
             });
+          }),
+        );
+      }),
+    gitTimeout,
+  );
+
+  it.effect(
+    "leaves a card the planner did not replan waiting for the user",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* kanbanFixture;
+        const run = yield* openKanbanOwner(fixture, yield* Effect.scope, {
+          agent: () => Effect.succeed(finished),
+        });
+        yield* run(
+          Effect.gen(function* () {
+            const board = yield* executingBoard(fixture, [card("a"), card("b")]);
+            const attempts = yield* CardAttempts;
+            const workflows = yield* Workflows;
+            yield* Effect.forEach(["a", "b"], (cardId) =>
+              Effect.andThen(
+                attempts.updateLadder(board.goalInstanceId, cardId, (current) => ({
+                  ...current,
+                  reason: CardHoldReason.cases.ReplanRequested.make({ failure: null }),
+                })),
+                workflows.transitionCard(
+                  board.sessionId,
+                  { cardId, from: "ready", to: "blocked" },
+                  orchestrator,
+                ),
+              ),
+            );
+            // The planner's run moved one card back; the other stays blocked.
+            yield* workflows.transitionCard(
+              board.sessionId,
+              { cardId: "b", from: "blocked", to: "ready" },
+              orchestrator,
+            );
+
+            yield* (yield* KanbanOrchestrator).replanUnanswered(board.sessionId);
+            expect((yield* attempts.ladder(board.goalInstanceId, "a")).reason).toMatchObject({
+              _tag: "ReplanRequested",
+              awaitingUser: true,
+            });
+            expect((yield* attempts.ladder(board.goalInstanceId, "b")).reason).not.toHaveProperty(
+              "awaitingUser",
+            );
           }),
         );
       }),
