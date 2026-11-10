@@ -452,6 +452,9 @@ function BoardSheet({
   };
   const goalDecisions = decisions.filter((request) => request.cardId === goalDecisionCardId);
   const goalDecisionCount = goalDecisions.length;
+  // A Goal-level decision opened from the inbox names no card: the board opens with the Goal's
+  // schedule and decisions unfolded instead.
+  const goalAsked = peekCardId === goalDecisionCardId;
   const doneCount = Arr.countBy(view.cards, ({ card }) => card.status === "done");
   const cardCount = view.cards.length;
   // The folded panel is named after what it holds, not every part it could hold.
@@ -511,7 +514,9 @@ function BoardSheet({
               </span>
             </span>
           </SheetDescription>
-          <Collapsible defaultOpen={goalDecisions.length > 0 || view.pendingChanges.length > 0}>
+          <Collapsible
+            defaultOpen={goalAsked || goalDecisions.length > 0 || view.pendingChanges.length > 0}
+          >
             <div className="mt-1 flex flex-wrap items-center gap-2">
               {loop === null && plan.status === "executing" && (
                 <Button
@@ -667,7 +672,7 @@ function BoardSheet({
           disabled={disabled}
           boards={[{ sessionId, label: null, view, plan, decisions, loop, rank: null }]}
           shown={[]}
-          peek={peekCardId === null ? null : { sessionId, cardId: peekCardId }}
+          peek={peekCardId === null || goalAsked ? null : { sessionId, cardId: peekCardId }}
           onPeek={(card) => onPeek(card === null ? null : card.cardId)}
           adding={adding ? sessionId : null}
           onAddingChange={(session) => setAdding(session !== null)}
