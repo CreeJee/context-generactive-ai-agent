@@ -1,4 +1,5 @@
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
+import { tmpdir } from "node:os";
 import { Effect, FileSystem, HashSet, Option, Path, Schema } from "effect";
 import { HttpServerResponse } from "effect/http";
 import { NetAddress } from "effect/net";
@@ -180,6 +181,35 @@ testAgent()("code skills", (it) => {
         });
       }),
     // Five sandboxed runs, each starting its own worker and proxy.
+    { timeout: 30_000 },
+  );
+
+  it.effect.skipIf(process.platform !== "darwin")(
+    "a script writes the project, /tmp and the temp folder, which macOS reaches through links",
+    () =>
+      Effect.gen(function* () {
+        const { project } = yield* TestEnv;
+        const tools = (yield* ApprovedTools).toolsFor(project, "gate");
+        yield* callTool(tools, "save_code_skill", {
+          name: "write-around",
+          description: "Write and remove a file in the project, /tmp and the temp folder",
+          program: {
+            runtime: "sh",
+            script: [
+              'for dir in . /tmp "$1"; do',
+              '  echo x > "$dir/sandbox-write-probe-$$" && rm "$dir/sandbox-write-probe-$$" && echo "$dir ok"',
+              "done",
+            ].join("\n"),
+          },
+        });
+        expect(
+          yield* callTool(tools, "run_skill", { name: "write-around", args: [tmpdir()] }),
+        ).toMatchObject({
+          status: "succeeded",
+          stdout: `. ok\n/tmp ok\n${tmpdir()} ok\n`,
+          stderr: "",
+        });
+      }),
     { timeout: 30_000 },
   );
 });

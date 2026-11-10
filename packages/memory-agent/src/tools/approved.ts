@@ -185,7 +185,7 @@ const make = Effect.gen(function* () {
               projectRoot: project.root,
               storageRoot: storage.path,
               network: runnable.network,
-            })),
+            }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem))),
           };
           // Without an OS sandbox here, only `full` mode, which already runs unapproved scripts,
           // falls back to running the script as it is.

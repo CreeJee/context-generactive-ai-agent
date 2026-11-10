@@ -79,23 +79,31 @@ const cacheHomePaths = [
  * also reaches every local service, this app's own server included. The sandbox runtime adds its
  * own write protection (shell profiles, `.git/hooks`, `.git/config`, …).
  */
-export const sandboxPolicy = (input: {
+export const sandboxPolicy = Effect.fnUntraced(function* (input: {
   readonly projectRoot: string;
   readonly storageRoot: string;
   readonly network: readonly string[];
-}) =>
-  Effect.map(Effect.all([homeDirectory, temporaryDirectory]), ([home, temporary]) => ({
+}) {
+  const [home, temporary] = yield* Effect.all([homeDirectory, temporaryDirectory]);
+  const fs = yield* FileSystem.FileSystem;
+  // macOS checks the real path, and the runtime leaves a bare `/tmp` unresolved because its link
+  // leaves the folder (`/private/tmp`): the rule then matched nothing. A path that does not exist
+  // yet keeps its spelling.
+  const real = (paths: readonly string[]) =>
+    Effect.forEach(paths, (entry) => fs.realPath(entry).pipe(Effect.orElseSucceed(() => entry)));
+  return {
     network: input.network,
     allowLocalBinding: input.network.includes("localhost"),
-    allowWrite: [
+    allowWrite: yield* real([
       input.projectRoot,
       "/tmp",
       temporary,
       ...cacheHomePaths.map((entry) => path.join(home, entry)),
-    ],
+    ]),
     denyRead: [...credentialHomePaths.map((entry) => path.join(home, entry)), input.storageRoot],
     denyWrite: [path.join(input.projectRoot, ".agents", "skills")],
-  }));
+  };
+});
 
 /** How long the worker gets to report what it blocked once the command has exited. */
 const finishTimeout = Duration.seconds(5);
