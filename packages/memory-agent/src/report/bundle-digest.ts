@@ -7,6 +7,7 @@ import {
   type BundleText,
   type ReportBundle,
 } from "./bundle-contract.ts";
+import { reportPrompts } from "./prompts.ts";
 
 /** One part of the bundle as the diagnosis model reads it, named by its place in the bundle. */
 export interface DigestItem {
@@ -33,7 +34,7 @@ export const runPlace = (run: BundleRun) => `run-${run.seq}`;
 const clip = (text: string, limit: number) =>
   text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
 
-const shown = (text: BundleText) => (text.cut ? `${text.text} [잘림]` : text.text);
+const shown = (text: BundleText) => (text.cut ? reportPrompts.digest.cut(text.text) : text.text);
 
 const callOutcome = (ok: boolean | null | undefined) =>
   Match.value(ok).pipe(
@@ -166,12 +167,12 @@ export function diagnosisDigest(bundle: ReportBundle): DigestItem[] {
   return [
     {
       id: "environment",
-      label: "환경·연동·루프·결함",
+      label: reportPrompts.digest.environment,
       text: clip(environmentText(bundle), digestLimits.environmentChars),
     },
     {
       id: "timeline",
-      label: `세션 타임라인 (run ${bundle.timeline.items.length}/${bundle.session.runCount})`,
+      label: reportPrompts.digest.timeline(bundle.timeline.items.length, bundle.session.runCount),
       // The newest runs matter most: an outline over the limit loses its oldest lines.
       text:
         outline.length > digestLimits.outlineChars
@@ -180,7 +181,7 @@ export function diagnosisDigest(bundle: ReportBundle): DigestItem[] {
     },
     ...failing.map((run) => ({
       id: runPlace(run),
-      label: `실패 주변 ${runPlace(run)}`,
+      label: reportPrompts.digest.failure(runPlace(run)),
       text: clip(failureText(run), digestLimits.failureChars),
     })),
   ];

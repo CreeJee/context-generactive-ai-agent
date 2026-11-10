@@ -34,6 +34,7 @@ import {
   type BundleText,
   type ReportBundle,
 } from "./bundle-contract.ts";
+import { reportCopy } from "./copy.ts";
 
 /** How much of a session a bundle holds (decided 2026-10-18). */
 export const bundleLimits = {
@@ -209,7 +210,7 @@ export const collectReportBundle = Effect.fn("ReportBundle.collect")(function* (
         cut: excerpt.length > excerpt.text.length,
       });
       const withheld = (excerpt: Excerpt): BundleText => ({
-        text: "[비밀정보 확인 실패로 숨김]",
+        text: reportCopy.bundle.withheld,
         cut: excerpt.length > 0,
       });
       const joined = yield* redactor

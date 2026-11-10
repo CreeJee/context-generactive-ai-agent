@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { improveCopy } from "./copy.ts";
 
 // Shapes and wording shared by the backend and the settings page; nothing here reaches the
 // database, the file system or a model.
@@ -94,11 +95,7 @@ export const ScanState = Schema.TaggedUnion({
 export type ScanState = typeof ScanState.Type;
 
 /** How the app names each kind of item, in reports and on the settings page. */
-export const sourceLabels: Record<ReportedItem["source"], string> = {
-  correction: "반복된 정정",
-  tool_failure: "반복된 도구 실패",
-  card_failure: "칸반 카드 실패",
-};
+export const sourceLabels = improveCopy.sourceLabels;
 
 /** The item's name: the model's title when it read the item, otherwise the grouping label. */
 export const reportedTitle = (item: ReportedItem) =>

@@ -18,6 +18,7 @@ import {
 import { Digest } from "effect/crypto";
 import { Hex } from "effect/encoding";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
+import { reportCopy } from "./copy.ts";
 import { ReportDeliveryFailure, ReportDeliveryResult } from "./delivery-contract.ts";
 
 /**
@@ -111,7 +112,7 @@ const messageBody = ({ text, evidence }: ReportSend) => {
   const preview =
     text.length <= contentLimit
       ? text
-      : `${text.slice(0, contentLimit - 40)}\n…(전체 내용은 첨부 파일)`;
+      : reportCopy.delivery.preview(text.slice(0, contentLimit - 40));
   const files = [
     { filename: reportFile, body: new Blob([text], { type: "text/plain;charset=utf-8" }) },
     ...(evidence === null

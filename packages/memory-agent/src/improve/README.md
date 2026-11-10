@@ -14,7 +14,8 @@
 - `ImprovementReport` / `ImprovementScan` — 저장소별 보고서(repository, file, markdown, items)와 스캔 전체 색인(generatedAt, reports) Schema
 - `ScanFailure` — 스캔 중단 사유 리터럴(storage, report, embedding, model_unavailable, model_unreachable, internal)
 - `ScanState` — 백그라운드 스캔 상태 TaggedUnion(idle, running{startedAt, repositories, items 진행도}, failed{reason, at}, stopped{at})
-- `sourceLabels` / `reportedTitle` — 항목 종류의 한국어 라벨 표, 항목 이름(해석 성공 시 모델 title, 아니면 그룹 라벨)
+- `sourceLabels` / `reportedTitle` — 항목 종류의 한국어 라벨 표(`copy.ts`의 `improveCopy.sourceLabels`), 항목 이름(해석 성공 시 모델 title, 아니면 그룹 라벨)
+- `improveCopy` / `improvePrompts` — 설정 페이지 문구 카탈로그(`copy.ts`), 보고서 작업 명세와 정정 근거 문장(`prompts.ts`, 에이전트가 읽는다)
 - `ProjectImprovement` — 열린 프로젝트의 저장소에서 개선할 점을 찾는 Context 서비스. `layer`·`layerNoDeps` 정적 레이어를 가진다. `discover`, `scan`, `latest`, `state`, 백그라운드 실행을 다룬다.
 - `DiscoveryFailed` — TaggedError, reason `storage`(워크트리/프로젝트 읽기 실패) 또는 `report`(보고서·색인 쓰기/읽기 실패) + cause
 - `RepositoryImprovements` — 저장소 메인 체크아웃 경로, 해당 projectIds(NonEmpty), items 인터페이스

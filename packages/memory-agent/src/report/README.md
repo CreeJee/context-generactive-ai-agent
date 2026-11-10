@@ -18,6 +18,7 @@
 - `ReportDiagnoser` — `Context.Service`(`diagnose(input)`), `ReportDiagnoser.layer`로 제공; 선택된 모델로 리포트 초안을 진단한다
 - `parseDiagnosis(answer, evidenceIds)` — 모델 JSON 답을 디코드하고 인용 없는 observation을 hypotheses로 옮긴다
 - `diagnosisInstructions` — 진단 모델 system 프롬프트 문자열
+- `reportCopy` / `reportPrompts` — 사람이 읽는 문구 카탈로그(`copy.ts`: 숨긴 텍스트 표시, 결함 알림 줄, Discord 미리보기)와 진단 모델이 읽는 digest 라벨(`prompts.ts`)
 - `ReportDiagnosisError` — `Schema.TaggedError`(reason: `ReportDiagnosisFailure`, cause optional)
 - `ReportDelivery` — `Context.Service`(`status`, `send`, `sendNotice`), `ReportDelivery.layer()`로 제공(호출마다 따로 만들어진다); Discord webhook 전송
 - `ReportDeliveryError` — `Schema.TaggedError`(reason, httpStatus?, retryAfterSeconds?); URL·토큰·응답 본문을 담지 않는다

@@ -3,6 +3,7 @@ import { Embedder } from "../memory/embedding/embedder.ts";
 import { localModel } from "../memory/embedding/models.ts";
 import { sha256 } from "../runtime/synchronous-crypto.ts";
 import { ImprovementItem } from "./contracts.ts";
+import { improvePrompts } from "./prompts.ts";
 import { Signal } from "./signals.ts";
 
 /** How much repetition makes a signal worth an improvement, and how much evidence an item keeps. */
@@ -122,7 +123,9 @@ const correctionItems = Effect.fn("Improve.correctionItems")(function* (
         evidence: sorted.slice(0, grouping.evidence).map((correction) => correction.nodeId),
         excerpts: sorted
           .slice(0, grouping.excerpts)
-          .map((correction) => `${correction.text}\n— 정정 대상: ${correction.corrected}`),
+          .map((correction) =>
+            improvePrompts.correctionExcerpt(correction.text, correction.corrected),
+          ),
         latestAt: sorted[0].createdAt,
       };
     });

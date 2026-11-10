@@ -23,6 +23,7 @@ import { tagOfUnknown } from "../runtime/failure-tag.ts";
 import { logFailure } from "../runtime/logged-failures.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { spanLine } from "./bundle-digest.ts";
+import { reportCopy } from "./copy.ts";
 import { ReportDelivery } from "./discord-webhook.ts";
 
 /** The same defect is sent at most once per this window; the next message counts the rest. */
@@ -178,14 +179,14 @@ const make = Effect.gen(function* () {
     const summary = yield* redacted(facts.summary);
     const stack = yield* redacted(facts.stack.join("\n"));
     const lines = [
-      `[결함] ${facts.tag} @ ${facts.location} ×${count}`,
-      `버전 ${release} · ${platform}`,
+      reportCopy.defect.heading(facts.tag, facts.location, count),
+      reportCopy.defect.build(release, platform),
       ...item.ids,
-      summary === "" ? "" : `요약: ${summary}`,
+      summary === "" ? "" : reportCopy.defect.summary(summary),
       // Before the stack: the message is cut at its end, and these name what failed first.
       item.spans.length === 0
         ? ""
-        : `실패 span:\n${item.spans.map((line) => `- ${line}`).join("\n")}`,
+        : reportCopy.defect.failedSpans(item.spans.map((line) => `- ${line}`).join("\n")),
       stack === "" ? "" : `\`\`\`\n${stack}\n\`\`\``,
     ].filter((line) => line !== "");
     return lines.join("\n").slice(0, contentLimit);
