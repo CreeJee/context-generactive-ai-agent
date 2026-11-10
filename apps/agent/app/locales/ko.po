@@ -836,6 +836,10 @@ msgstr "MCP 도구 {name} 실행을 승인할까요?"
 msgid "MCP 서버"
 msgstr "MCP 서버"
 
+#: app/entry/settings/pages/mcp-tool-hints.tsx
+msgid "MCP 표준의 도구 표시를 따릅니다. 서버가 표시하지 않은 값은 표준의 조심스러운 기본값을 씁니다. 직접 고른 값이 서버 표시보다 우선합니다. 분류와 상관없이 도구를 부를 때마다 권한 모드대로 묻습니다."
+msgstr "MCP 표준의 도구 표시를 따릅니다. 서버가 표시하지 않은 값은 표준의 조심스러운 기본값을 씁니다. 직접 고른 값이 서버 표시보다 우선합니다. 분류와 상관없이 도구를 부를 때마다 권한 모드대로 묻습니다."
+
 #: app/entry/report/report-bundle.tsx
 msgid "MCP·외부 에이전트"
 msgstr "MCP·외부 에이전트"
@@ -1074,6 +1078,10 @@ msgstr "값이 올바르지 않습니다. 동시 실행 수는 1~32, 브랜치 �
 #: app/entry/shared/loop-health.tsx
 msgid "같은 실패가 이어져 다시 시도를 멈췄습니다. 원인을 확인한 뒤 다시 시작해 주십시오."
 msgstr "같은 실패가 이어져 다시 시도를 멈췄습니다. 원인을 확인한 뒤 다시 시작해 주십시오."
+
+#: app/entry/settings/pages/mcp-tool-hints.tsx
+msgid "같은 입력으로 다시 불러도 더 바뀌는 것이 없습니다."
+msgstr "같은 입력으로 다시 불러도 더 바뀌는 것이 없습니다."
 
 #: app/entry/report/report-delivery.tsx
 msgid "같은 제보문을 보내는 중입니다"
@@ -1830,6 +1838,11 @@ msgstr "다시 로그인"
 msgid "다시 보내기"
 msgstr "다시 보내기"
 
+#. MCP tool hint: calling the tool again with the same input changes nothing more
+#: app/entry/settings/pages/mcp-tool-hints.tsx
+msgid "다시 불러도 같음"
+msgstr "다시 불러도 같음"
+
 #. Button that asks the server again whether this window may write
 #. Button that loads a list or settings section again after it failed to load
 #. Button that loads the conversation again after it failed to load
@@ -2198,6 +2211,11 @@ msgstr "덮어쓰기"
 #: app/entry/settings/pages/mcp.tsx
 msgid "도구 {count}개"
 msgstr "도구 {count}개"
+
+#. Toggle that shows how each of an MCP server's tools is classified; {count} is how many
+#: app/entry/settings/pages/mcp-tool-hints.tsx
+msgid "도구 {count}개 분류"
+msgstr "도구 {count}개 분류"
 
 #: app/entry/chat/decision-prompt.tsx
 msgid "도구 {tools}의 실행 결과가 확인되지 않았습니다. 실제로 반영됐는지 확인해 주십시오."
@@ -2626,6 +2644,10 @@ msgstr "목록"
 msgid "목록에서만 뺀 대화입니다. 기억 검색에는 계속 나옵니다."
 msgstr "목록에서만 뺀 대화입니다. 기억 검색에는 계속 나옵니다."
 
+#: app/entry/settings/pages/mcp-tool-hints.tsx
+msgid "무언가를 바꿀 때 지우거나 덮어쓸 수 있습니다. 더하기만 하는 도구는 해당하지 않습니다."
+msgstr "무언가를 바꿀 때 지우거나 덮어쓸 수 있습니다. 더하기만 하는 도구는 해당하지 않습니다."
+
 #. Whether a task's result was checked, in Work Trace: it no longer holds
 #: app/entry/chat/work-trace-panel.tsx
 msgid "무효"
@@ -2668,6 +2690,12 @@ msgstr "미실행"
 msgid "미충족"
 msgstr "미충족"
 
+#. Badge on an MCP tool that reaches outside the server
+#. MCP tool hint: the tool reaches the web, other services or people
+#: app/entry/settings/pages/mcp-tool-hints.tsx
+msgid "바깥에 닿음"
+msgstr "바깥에 닿음"
+
 #: app/entry/chat/chat-panel.tsx
 msgid "바꾸고 싶은 내용을 입력해 주십시오."
 msgstr "바꾸고 싶은 내용을 입력해 주십시오."
@@ -2676,6 +2704,11 @@ msgstr "바꾸고 싶은 내용을 입력해 주십시오."
 #: app/entry/chat/chat-panel.tsx
 msgid "바꾸기"
 msgstr "바꾸기"
+
+#. Badge on an MCP tool that changes things without deleting
+#: app/entry/settings/pages/mcp-tool-hints.tsx
+msgid "바꿈"
+msgstr "바꿈"
 
 #: app/entry/chat/outcome-checklist.tsx
 msgid "바뀐 뒤 다시 확인합니다"
@@ -3234,6 +3267,11 @@ msgstr "서버 연결이 바뀌었습니다. 페이지를 새로고침한 뒤 �
 msgid "서버 재시작 중"
 msgstr "서버 재시작 중"
 
+#. MCP tool hint as the server gives it; {shown} is yes or no
+#: app/entry/settings/pages/mcp-tool-hints.tsx
+msgid "서버 표시: {shown}"
+msgstr "서버 표시: {shown}"
+
 #. Label before the MCP server name in an approval card
 #: app/entry/chat/approval.tsx
 msgid "서버:"
@@ -3654,8 +3692,8 @@ msgid "신뢰한 ACP 에이전트에게 모델이 작업을 맡길 수 있습니
 msgstr "신뢰한 ACP 에이전트에게 모델이 작업을 맡길 수 있습니다. 맡길 때마다 승인합니다. 에이전트는 이 앱의 ChatGPT 로그인이 아니라 자기 로그인으로 일합니다."
 
 #: app/entry/settings/pages/mcp.tsx
-msgid "신뢰한 서버만 시작합니다. 설정 파일이 바뀌면 다시 신뢰해야 합니다. 신뢰해도 도구를 부를 때마다 승인이나 자동 판단을 거칩니다."
-msgstr "신뢰한 서버만 시작합니다. 설정 파일이 바뀌면 다시 신뢰해야 합니다. 신뢰해도 도구를 부를 때마다 승인이나 자동 판단을 거칩니다."
+msgid "신뢰한 서버만 시작합니다. 설정 파일이 바뀌면 다시 신뢰해야 합니다. 신뢰해도 도구를 부를 때마다 승인이나 자동 판단을 거칩니다. 읽기만 하는 도구만 Plan 작성, 카드 실행, 검증 에이전트가 받습니다."
+msgstr "신뢰한 서버만 시작합니다. 설정 파일이 바뀌면 다시 신뢰해야 합니다. 신뢰해도 도구를 부를 때마다 승인이나 자동 판단을 거칩니다. 읽기만 하는 도구만 Plan 작성, 카드 실행, 검증 에이전트가 받습니다."
 
 #: app/entry/chat/slash-commands.ts
 msgid "신뢰한 에이전트 목록에 없습니다: {agent}"
@@ -3865,6 +3903,11 @@ msgstr "쓸 수 있는 모델 목록에 없습니다: {model}"
 msgid "쓸 수 있습니다({time} 확인)."
 msgstr "쓸 수 있습니다({time} 확인)."
 
+#. Value of an MCP tool hint
+#: app/entry/settings/pages/mcp-tool-hints.tsx
+msgid "아니오"
+msgstr "아니오"
+
 #: app/entry/settings/pages/imports.tsx
 msgid "아래 기록은 읽지 못했습니다. 다음에 읽을 때 다시 시도합니다."
 msgstr "아래 기록은 읽지 못했습니다. 다음에 읽을 때 다시 시도합니다."
@@ -3876,6 +3919,10 @@ msgstr "아래 내용 전체가 제보에 JSON 첨부 파일로 붙습니다. �
 #: app/entry/settings/pages/imports.tsx
 msgid "아래 폴더는 프로젝트로 만들 수 없어 가져오지 않았습니다."
 msgstr "아래 폴더는 프로젝트로 만들 수 없어 가져오지 않았습니다."
+
+#: app/entry/settings/pages/mcp-tool-hints.tsx
+msgid "아무것도 바꾸지 않습니다. 읽기만 하는 도구만 Plan 작성, 카드 실행, 검증 에이전트가 받습니다."
+msgstr "아무것도 바꾸지 않습니다. 읽기만 하는 도구만 Plan 작성, 카드 실행, 검증 에이전트가 받습니다."
 
 #: app/entry/settings/pages/imports.tsx
 msgid "아직 <0/>개를 인덱싱하고 있습니다. 최근 대화부터 채웁니다. 그동안에도 글자 검색과 형태소 검색으로는 찾을 수 있습니다."
@@ -4113,6 +4160,11 @@ msgstr "열린 질문 {count}"
 #: app/entry/settings/pages/improvements.tsx
 msgid "열린 프로젝트의 최근 90일 사용 기록에서 반복된 정정과 실패를 찾아 저장소마다 고칠 항목과 작업 명세를 문서로 남깁니다. 코드와 에이전트 지침을 함께 고치는 명세입니다. 앱은 저장소를 직접 바꾸지 않습니다."
 msgstr "열린 프로젝트의 최근 90일 사용 기록에서 반복된 정정과 실패를 찾아 저장소마다 고칠 항목과 작업 명세를 문서로 남깁니다. 코드와 에이전트 지침을 함께 고치는 명세입니다. 앱은 저장소를 직접 바꾸지 않습니다."
+
+#. Value of an MCP tool hint
+#: app/entry/settings/pages/mcp-tool-hints.tsx
+msgid "예"
+msgstr "예"
 
 #: app/entry/report/report-draft.tsx
 msgid "예: 승인 창이 계속 나타나고 채팅을 이어갈 수 없습니다."
@@ -4382,6 +4434,10 @@ msgstr "웹 검색"
 #: app/entry/chat/message.tsx
 msgid "웹 페이지 읽기"
 msgstr "웹 페이지 읽기"
+
+#: app/entry/settings/pages/mcp-tool-hints.tsx
+msgid "웹, 다른 서비스, 다른 사람처럼 이 서버 밖에 닿습니다."
+msgstr "웹, 다른 서비스, 다른 사람처럼 이 서버 밖에 닿습니다."
 
 #: app/entry/report/report-delivery.tsx
 msgid "웹훅 설정을 확인하는 중입니다."
@@ -4849,6 +4905,16 @@ msgstr "일시 중지"
 #: app/entry/chat/board/board-surface.tsx
 msgid "일시 중지 · 새 카드 멈춤"
 msgstr "일시 중지 · 새 카드 멈춤"
+
+#. Badge on an MCP tool that only reads
+#: app/entry/settings/pages/mcp-tool-hints.tsx
+msgid "읽기 전용"
+msgstr "읽기 전용"
+
+#. MCP tool hint: the tool does not change anything
+#: app/entry/settings/pages/mcp-tool-hints.tsx
+msgid "읽기만 함"
+msgstr "읽기만 함"
 
 #. Import button label while an import pass is reading
 #: app/entry/settings/pages/imports.tsx
@@ -5379,6 +5445,12 @@ msgstr "지난 대화 일부를 요약으로 바꿔 보냈습니다."
 msgid "지난 도구 출력 {cleared}개를 비웠습니다."
 msgstr "지난 도구 출력 {cleared}개를 비웠습니다."
 
+#. Badge on an MCP tool that may delete or overwrite
+#. MCP tool hint: when the tool changes something, it may delete or overwrite
+#: app/entry/settings/pages/mcp-tool-hints.tsx
+msgid "지우거나 덮어씀"
+msgstr "지우거나 덮어씀"
+
 #. Button that removes the queued message
 #. Shortcut hint: Esc clears the edit
 #: app/entry/chat/composer-status.tsx
@@ -5412,6 +5484,11 @@ msgstr "직접 merge"
 #: app/entry/chat/board-panel.tsx
 msgid "직접 merge하기로 함, Goal 브랜치를 남겨 둠"
 msgstr "직접 merge하기로 함, Goal 브랜치를 남겨 둠"
+
+#. Badge on an MCP tool whose hints the user changed
+#: app/entry/settings/pages/mcp-tool-hints.tsx
+msgid "직접 지정"
+msgstr "직접 지정"
 
 #. Decision answer: the user resolved the merge conflict; merge again
 #: app/entry/chat/decision-prompt.tsx
@@ -6108,6 +6185,11 @@ msgstr "폴더가 없어졌습니다"
 #: app/entry/navigation/sidebar.tsx
 msgid "폴더의 절대 경로를 입력해 주십시오. 등록한 폴더 안의 파일은 에이전트가 읽고 고칠 수 있습니다."
 msgstr "폴더의 절대 경로를 입력해 주십시오. 등록한 폴더 안의 파일은 에이전트가 읽고 고칠 수 있습니다."
+
+#. MCP tool hint the server does not give; {shown} is the spec's default (yes/no)
+#: app/entry/settings/pages/mcp-tool-hints.tsx
+msgid "표시 없음, 기본값: {shown}"
+msgstr "표시 없음, 기본값: {shown}"
 
 #. Stage of an agent run at which it failed
 #: app/entry/session/attempt-failure.ts

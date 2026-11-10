@@ -54,10 +54,15 @@ import type {
   ShownFailure,
 } from "../runtime/shown-failure.ts";
 import {
+  type McpHintValues,
   type McpOverview,
   McpScope,
   type McpServerState as McpServerStateCases,
   type McpServerView,
+  McpToolHint,
+  type McpToolView,
+  mcpHint,
+  noMcpHints,
 } from "./contracts.ts";
 import {
   McpServerConfig,
@@ -173,14 +178,56 @@ const TrustRow = Schema.Struct({
   fingerprint: Schema.String,
 });
 
+/** One hint of one tool the user set (`mcp_tool_hints`). */
+const HintRow = Schema.Struct({
+  scope: McpScope,
+  server: Schema.String,
+  tool: Schema.String,
+  hint: McpToolHint,
+  value: Schema.BooleanFromBit,
+});
+type HintRow = typeof HintRow.Type;
+
+/** The hints a server's tool annotations give; the spec leaves each one optional. */
+const serverHintsOf = (tool: McpTool): McpHintValues => ({
+  readOnly: tool.annotations?.readOnlyHint ?? null,
+  destructive: tool.annotations?.destructiveHint ?? null,
+  idempotent: tool.annotations?.idempotentHint ?? null,
+  openWorld: tool.annotations?.openWorldHint ?? null,
+});
+
+/** A server's tool with the hints the user set for it. */
+const withUserHints =
+  (rows: readonly HintRow[], scope: McpScope, server: string) =>
+  (tool: McpToolView): McpToolView => ({
+    ...tool,
+    user: rows
+      .filter((row) => row.scope === scope && row.server === server && row.tool === tool.name)
+      .reduce((user, row) => ({ ...user, [row.hint]: row.value }), noMcpHints),
+  });
+
+/**
+ * What a tool's hints say about calling it, in the words its description gives the model: whether
+ * it only reads, may delete or overwrite, and reaches outside services.
+ */
+const hintNote = (tool: McpToolView) =>
+  [
+    mcpHint(tool, "readOnly")
+      ? "reads only"
+      : mcpHint(tool, "destructive")
+        ? "may delete or overwrite"
+        : "changes things without deleting",
+    mcpHint(tool, "openWorld") ? "reaches outside services" : "stays within the server",
+  ].join(", ");
+
 /** One tool of a server as the model is told about it, and its call on the live connection. */
 interface ServerTool {
   readonly name: string;
   readonly description: string;
   readonly inputSchema: JsonSchema.JsonSchema;
   readonly outputSchema: McpTool["outputSchema"];
-  /** The server marks it as not changing its environment (`readOnlyHint`), which nothing checks. */
-  readonly readOnly: boolean;
+  /** The tool under the server's own name, with the hints the server gives (no user's yet). */
+  readonly view: McpToolView;
   readonly call: (
     args: JsonObject,
   ) => Effect.Effect<unknown, McpToolFailed | Schema.SchemaError | Cause.UnknownError>;
@@ -288,7 +335,7 @@ const limited = <A>(result: A) =>
 const runToolOf = (tool: ServerTool): RunTool =>
   runTool({
     name: tool.name,
-    description: tool.description,
+    description: `${tool.description} (${hintNote(tool.view)})`,
     lazy: true,
     parameters: Schema.Record(Schema.String, JsonValue).check(
       Schema.makeFilter((value) =>
@@ -384,6 +431,14 @@ const make = Effect.gen(function* () {
       WHERE project_id = '' OR project_id = ${projectId}`,
   });
 
+  const selectHints = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: HintRow,
+    execute: (projectId) => sql`
+      SELECT scope, server, tool, hint, value FROM mcp_tool_hints
+      WHERE project_id = '' OR project_id = ${projectId}`,
+  });
+
   const connectionKey = (project: Project, server: ConfiguredServer) =>
     `${project.id}/${server.scope}/${server.name}`;
 
@@ -461,7 +516,7 @@ const make = Effect.gen(function* () {
         }),
       ),
     );
-    return { files, servers };
+    return { files, servers, hints: yield* selectHints(project.id) };
   });
 
   /** Removes the connections `stale` picks and stops their clients. */
@@ -630,7 +685,7 @@ const make = Effect.gen(function* () {
           description: `[MCP ${server.name}] ${tool.description ?? ""}`.trim(),
           inputSchema: inputSchemaOf(tool),
           outputSchema: tool.outputSchema,
-          readOnly: tool.annotations?.readOnlyHint === true,
+          view: { name: tool.name, server: serverHintsOf(tool), user: noMcpHints },
           call: (args) =>
             authorized(login, callTool({ client, tool, args })).pipe(Effect.flatMap(limited)),
         })),
@@ -639,7 +694,13 @@ const make = Effect.gen(function* () {
       return Effect.as(
         Ref.set(
           connection.state,
-          McpServerState.connected({ tools: tools.map((tool) => tool.name) }),
+          McpServerState.connected({
+            tools: tools.map((tool) => ({
+              name: tool.name,
+              server: serverHintsOf(tool),
+              user: noMcpHints,
+            })),
+          }),
         ),
         discovered,
       );
@@ -698,9 +759,20 @@ const make = Effect.gen(function* () {
       }),
     );
 
+  /** A connected server's tools as settings show them, with the hints the user set. */
+  const withHintsShown =
+    (rows: readonly HintRow[], server: ConfiguredServer) =>
+    (state: McpServerState): McpServerState =>
+      McpServerState.$is("connected")(state)
+        ? McpServerState.connected({
+            tools: state.tools.map(withUserHints(rows, server.scope, server.name)),
+          })
+        : state;
+
   const stateOf = (
     project: Project,
     entry: Effect.Success<ReturnType<typeof configured>>["servers"][number],
+    rows: readonly HintRow[],
   ): Effect.Effect<McpServerState> =>
     Match.value(entry).pipe(
       Match.when(
@@ -720,12 +792,15 @@ const make = Effect.gen(function* () {
               onSome: (connection) => Ref.get(connection.state),
             }),
           ),
-        ).pipe(Effect.flatMap(withLogin(slotOf(project, server)))),
+        ).pipe(
+          Effect.flatMap(withLogin(slotOf(project, server))),
+          Effect.map(withHintsShown(rows, server)),
+        ),
       ),
     );
 
   const overview = Effect.fn("mcp.overview")(function* (project: Project) {
-    const { files, servers } = yield* configured(project);
+    const { files, servers, hints } = yield* configured(project);
     const views = yield* Effect.forEach(servers, (entry) => {
       const summary = summarize(entry.server.config);
       return Effect.map(
@@ -733,7 +808,7 @@ const make = Effect.gen(function* () {
           // A command line or URL can carry a key (`--api-key=…`, `?token=…`); the page gets it hidden.
           target: redactor.shownDetail(summary.target),
           signedIn: signedIn(slotOf(project, entry.server)),
-          state: stateOf(project, entry),
+          state: stateOf(project, entry, hints),
         }),
         ({ target, signedIn, state }): McpServerView => ({
           scope: entry.server.scope,
@@ -754,7 +829,8 @@ const make = Effect.gen(function* () {
   /** What every trusted, unchanged server of the project offers. */
   const discoveredFor = (project: Project) =>
     Effect.gen(function* () {
-      const usable = (yield* configured(project)).servers.filter(
+      const { servers, hints } = yield* configured(project);
+      const usable = servers.filter(
         (entry) => !entry.shadowed && entry.trusted === entry.server.fingerprint,
       );
       return yield* Effect.forEach(
@@ -762,7 +838,11 @@ const make = Effect.gen(function* () {
         (entry) =>
           Effect.map(discover(project, entry.server), (discovered) => ({
             server: entry.server.name,
-            ...discovered,
+            guide: discovered.guide,
+            tools: discovered.tools.map((tool) => ({
+              ...tool,
+              view: withUserHints(hints, entry.server.scope, entry.server.name)(tool.view),
+            })),
           })),
         { concurrency: "unbounded" },
       );
@@ -983,18 +1063,52 @@ const make = Effect.gen(function* () {
     runTools: (project: Project) => Effect.map(discoveredFor(project), runToolsOf),
 
     /**
-     * Only the tools their servers mark read-only, for the workflow phases that change nothing.
-     * The mark is the server's own claim, so each call still goes through the permission mode.
+     * Only the read-only tools (the user's `readOnly` hint, else the server's), for the workflow
+     * phases and agents that change nothing. A server's hint is its own claim, and the user's is a
+     * judgement, so each call still goes through the permission mode.
      */
     readOnlyRunTools: (project: Project) =>
       Effect.map(discoveredFor(project), (found) =>
         runToolsOf(
           found.map((server) => ({
             ...server,
-            tools: server.tools.filter((tool) => tool.readOnly),
+            tools: server.tools.filter((tool) => mcpHint(tool.view, "readOnly")),
           })),
         ),
       ),
+
+    /**
+     * Sets the user's value for one hint of a server's tool, or with `null` goes back to the
+     * server's hint (or the spec's default). The next run and the agents it starts use it.
+     */
+    setToolHint: (
+      project: Project,
+      change: {
+        readonly scope: McpScope;
+        readonly name: string;
+        readonly tool: string;
+        readonly hint: McpToolHint;
+        readonly value: boolean | null;
+      },
+    ) =>
+      Effect.gen(function* () {
+        const { scope, name, tool, hint, value } = change;
+        const projectId = scope === "global" ? "" : project.id;
+        if (value === null)
+          yield* sql`
+            DELETE FROM mcp_tool_hints
+            WHERE scope = ${scope} AND project_id = ${projectId} AND server = ${name}
+              AND tool = ${tool} AND hint = ${hint}`;
+        else {
+          const setAt = DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
+          yield* sql`
+            INSERT INTO mcp_tool_hints (scope, project_id, server, tool, hint, value, set_at)
+            VALUES (${scope}, ${projectId}, ${name}, ${tool}, ${hint}, ${value ? 1 : 0}, ${setAt})
+            ON CONFLICT (scope, project_id, server, tool, hint) DO UPDATE
+            SET value = excluded.value, set_at = excluded.set_at`;
+        }
+        return yield* overview(project);
+      }),
   };
 });
 

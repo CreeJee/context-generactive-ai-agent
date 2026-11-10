@@ -869,6 +869,7 @@ export const api = {
         login: (payload) => client.projects.mcpAction({ params: { project }, payload }),
         cancelLogin: (payload) => client.projects.mcpAction({ params: { project }, payload }),
         logout: (payload) => client.projects.mcpAction({ params: { project }, payload }),
+        toolHint: (payload) => client.projects.mcpAction({ params: { project }, payload }),
       }),
     ),
 

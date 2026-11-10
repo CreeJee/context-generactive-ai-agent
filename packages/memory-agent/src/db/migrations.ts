@@ -2839,6 +2839,22 @@ export const migrations: readonly string[] = [
     WHERE list = 'blocker_evidence';
   DROP TABLE workflow_execution_entries;
   `,
+  `
+  -- The user's value for one of an MCP tool's annotation hints (the spec's ToolAnnotations:
+  -- readOnly, destructive, idempotent, openWorld), which wins over what the server says. Keyed like
+  -- mcp_trust; it outlives a change of trust, since it is about the tool, not the configuration.
+  CREATE TABLE mcp_tool_hints (
+    scope TEXT NOT NULL CHECK (scope IN ('global', 'project')),
+    project_id TEXT NOT NULL,
+    server TEXT NOT NULL,
+    tool TEXT NOT NULL,
+    hint TEXT NOT NULL CHECK (hint IN ('readOnly', 'destructive', 'idempotent', 'openWorld')),
+    value INTEGER NOT NULL CHECK (value IN (0, 1)),
+    set_at TEXT NOT NULL,
+    PRIMARY KEY (scope, project_id, server, tool, hint),
+    CHECK ((scope = 'global') = (project_id = ''))
+  );
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

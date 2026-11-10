@@ -19,7 +19,7 @@ import {
 import { Badge } from "~/components/ui/badge";
 import { Button, buttonVariants } from "~/components/ui/button";
 import { FieldDescription, FieldGroup } from "~/components/ui/field";
-import { ItemDescription, ItemGroup } from "~/components/ui/item";
+import { ItemGroup } from "~/components/ui/item";
 import type { McpFailureCode, McpLoginFailureCode } from "memory-agent/definitions";
 import { Spinner } from "~/components/ui/spinner";
 import { McpCommand, McpServerState, refusalOf, type McpServerView, type Project } from "../../api";
@@ -38,8 +38,9 @@ import {
   shadowedBadge,
   pageTitles,
 } from "../shared";
+import { McpToolHints } from "./mcp-tool-hints";
 
-const description = msg`신뢰한 서버만 시작합니다. 설정 파일이 바뀌면 다시 신뢰해야 합니다. 신뢰해도 도구를 부를 때마다 승인이나 자동 판단을 거칩니다.`;
+const description = msg`신뢰한 서버만 시작합니다. 설정 파일이 바뀌면 다시 신뢰해야 합니다. 신뢰해도 도구를 부를 때마다 승인이나 자동 판단을 거칩니다. 읽기만 하는 도구만 Plan 작성, 카드 실행, 검증 에이전트가 받습니다.`;
 
 const failures = {
   missing_env: msg`설정이 쓰는 환경 변수가 없습니다.`,
@@ -265,9 +266,12 @@ function McpSettingsContent({ project }: { project: Project }) {
                 }
               >
                 {McpServerState.$is("connected")(server.state) && server.state.tools.length > 0 && (
-                  <ItemDescription>
-                    <code>{server.state.tools.join(", ")}</code>
-                  </ItemDescription>
+                  <McpToolHints
+                    server={server}
+                    tools={server.state.tools}
+                    busy={busy}
+                    run={(command) => run(row, command)}
+                  />
                 )}
               </ConfigEntry>
             );

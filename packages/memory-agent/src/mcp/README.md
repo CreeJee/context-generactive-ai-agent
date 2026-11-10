@@ -10,8 +10,9 @@
 
 ## Interface
 
-- `McpServers` — `Context.Service`(`memory-agent/mcp/servers/McpServers`)이고 `McpServers.layer = Layer.effect(McpServers, make)`이다. 메서드: `overview(project)`, `setTrusted`, `login`/`cancelLogin`/`logout`(모두 실행 후 overview 반환), `runTools(project)`, `readOnlyRunTools(project)`
-- `McpServerState` — 상태 `untrusted`/`changed`/`trusted`/`connected{tools}`/`failed{failure}`/`needsLogin{failure}`/`loggingIn{authorizationUrl}`. 타입은 `contracts.ts`에서 오고, `servers.ts`가 같은 이름의 `Data.taggedEnum` 생성자를 둔다. 설정 화면이 서버마다 표시한다
+- `McpServers` — `Context.Service`(`memory-agent/mcp/servers/McpServers`)이고 `McpServers.layer = Layer.effect(McpServers, make)`이다. 메서드: `overview(project)`, `setTrusted`, `login`/`cancelLogin`/`logout`, `setToolHint(project, {scope,name,tool,hint,value})`(모두 실행 후 overview 반환), `runTools(project)`, `readOnlyRunTools(project)`
+- `McpToolHint` / `McpToolView` / `McpHintValues` / `noMcpHints` / `mcpHintDefaults` / `mcpHint` / `mcpHintSource` — MCP 표준 `ToolAnnotations`의 네 힌트(`readOnly`, `destructive`, `idempotent`, `openWorld`). 도구 뷰는 서버가 준 값(`server`)과 사용자가 정한 값(`user`)을 따로 들고, `mcpHint`는 사용자 값 → 서버 값 → 표준 기본값(`false`, `true`, `false`, `true`) 순서로 정한다. `mcpHintSource`는 그 값을 누가 정했는지(`user`/`server`/`default`)다
+- `McpServerState` — 상태 `untrusted`/`changed`/`trusted`/`connected{tools: McpToolView[]}`/`failed{failure}`/`needsLogin{failure}`/`loggingIn{authorizationUrl}`. 타입은 `contracts.ts`에서 오고, `servers.ts`가 같은 이름의 `Data.taggedEnum` 생성자를 둔다. 설정 화면이 서버마다 표시한다
 - `McpScope` / `McpServerView` / `McpOverview` — `contracts.ts`의 Schema. 설정 위치(global/project), 설정 화면용 서버 뷰(scope, name, transport, 비밀을 가린 target, envNames, headerNames, shadowed, signedIn, state)와 파일별 오류 목록
 - `McpServerGuide` / `McpRunTools` — 서버가 연결 때 보낸 사용 안내문, 그리고 실행에 쓸 `RunTool[]`과 guides 묶음
 - `mcpToolPrefix` / `mcpToolName` / `isMcpToolName` — MCP 도구 이름 규칙 `mcp_<server>__<tool>`의 접두어, 생성 함수(dual), 판별 함수
@@ -54,6 +55,8 @@
 - `plainCall`은 modern 프로토콜에서 `toolDefinition`에 inputSchema만 넘긴다. outputSchema를 넘기면 SDK 출력 검사가 입력 요청을 거부하기 때문이다.
 - SDK가 인자를 JSON Schema로 검사하지 않는다. 그래서 `runToolOf`가 `jsonSchemaIssues`로 서버의 inputSchema에 대해 인자를 검사한다. `RunTool`의 `needsApproval`은 false이고, 승인 규칙은 `mcpInstructions`에 적혀 있다.
 - 도구 결과와 서버 guide는 지시나 승인이 아니다(`mcpInstructions`). 결과는 60_000자, guide는 8_000자를 넘으면 잘라서 넘긴다.
+- 읽기 전용 도구(`readOnlyRunTools`)는 `mcpHint(tool, "readOnly")`가 참인 도구다. 서버 표시도 사용자 값도 판단일 뿐이라, 호출은 분류와 상관없이 권한 모드대로 묻는다. 모델에게 주는 도구 설명 끝에는 힌트를 평이한 말로 붙인다(`reads only` / `may delete or overwrite` / `changes things without deleting`, `reaches outside services` / `stays within the server`).
+- 사용자 힌트는 `mcp_tool_hints`에 `(scope, project_id, server, tool, hint)`마다 한 행이다. global 서버는 `project_id ''`다. `null`로 되돌리면 행을 지운다. 신뢰를 거두거나 설정이 바뀌어도 지우지 않는다(설정이 아니라 도구에 대한 판단이다).
 - MCP 도구는 모두 lazy다. 이름만 discovery 도구 설명에 오르고, 모델이 요청한 뒤에 전체가 간다. 대화가 한 번 찾은 도구는 그 대화의 다음 run에도 전체로 간다. guide는 그대로 system prompt에 남는다.
 - connect 시간 제한은 20_000ms이다. `McpStepTimedOut` 단계는 `connect_timed_out` / `tools_list_timed_out` 코드에 대응한다.
 - 진행 중인 discovery는 `SynchronizedRef<Option<Fiber>>`로 호출자들이 함께 쓴다. `runTools`는 시작에 실패한 서버를 건너뛰고(설정 화면에는 failed로 표시) 실행을 계속한다.
@@ -68,7 +71,7 @@
 ## Side Effects
 
 - 파일 시스템: `<storageRoot>/mcp.json`과 `<projectRoot>/.mcp.json`을 `fs.exists`와 `fs.readFileString`으로 읽는다
-- SQLite(effect/sql `SqlClient`): MCP 신뢰 행을 조회하고, `(scope, project_id, name, fingerprint, trusted_at)`를 INSERT ... ON CONFLICT DO UPDATE로 upsert한다. 신뢰 해제 경로도 있다
+- SQLite(effect/sql `SqlClient`): `mcp_tool_hints`를 조회하고 upsert·삭제한다. MCP 신뢰 행을 조회하고, `(scope, project_id, name, fingerprint, trusted_at)`를 INSERT ... ON CONFLICT DO UPDATE로 upsert한다. 신뢰 해제 경로도 있다
 - 자식 프로세스: `StdioClientTransport`로 stdio MCP 서버(command, args, env)를 띄운다
 - 네트워크: `StreamableHTTPClientTransport`로 HTTP MCP 서버(url, headers)에 연결한다. 프로토콜 요청은 `tools/list`, `tools/call`, `tasks/get`, `tasks/result`, `tasks/cancel`이다. OAuth 서버에는 SDK `auth()`가 보호 리소스·인가 서버 메타데이터 조회, 클라이언트 등록, 토큰 요청을 보낸다(서버 설정의 헤더는 붙이지 않는다)
 - 루프백 HTTP 서버: 로그인마다 `127.0.0.1`에 콜백 리스너를 열고 로그인이 끝나면 닫는다

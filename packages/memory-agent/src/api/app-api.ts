@@ -96,6 +96,13 @@ export {
 } from "./app-api/reports.ts";
 export { GeneratedImage } from "./app-api/media.ts";
 export { CrossProviderMediaRunApproval } from "../providers/image-media-contracts.ts";
+export {
+  McpToolHint,
+  mcpHint,
+  mcpHintDefaults,
+  mcpHintSource,
+  type McpToolView,
+} from "../mcp/contracts.ts";
 export { AppChangedEvent, AppReadyEvent } from "../events/contracts.ts";
 export { Session } from "../sessions/contracts.ts";
 export { LifecycleResult, ResumeTaskResult } from "../work-trace/contracts.ts";

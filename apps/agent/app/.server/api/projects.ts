@@ -133,6 +133,7 @@ export const ProjectsApiHandlers = HttpApiBuilder.group(
             login: ({ scope, name }) => servers.login(project, scope, name),
             cancelLogin: ({ scope, name }) => servers.cancelLogin(project, scope, name),
             logout: ({ scope, name }) => servers.logout(project, scope, name),
+            toolHint: (change) => servers.setToolHint(project, change),
           }),
         ),
       skills: ({ params }) => withProject(params.project, skills.catalog),

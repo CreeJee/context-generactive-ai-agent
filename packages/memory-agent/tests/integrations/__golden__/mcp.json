@@ -32,7 +32,7 @@
       "tools": [
         {
           "name": "mcp_fake__echo",
-          "description": "[MCP fake] Repeats text.",
+          "description": "[MCP fake] Repeats text. (may delete or overwrite, reaches outside services)",
           "input_schema": {
             "type": "object",
             "properties": {
@@ -48,7 +48,7 @@
         },
         {
           "name": "mcp_fake__where",
-          "description": "[MCP fake] Working directory and whether the configured secret arrived.",
+          "description": "[MCP fake] Working directory and whether the configured secret arrived. (reads only, reaches outside services)",
           "input_schema": {
             "type": "object",
             "properties": {}
@@ -93,7 +93,7 @@
         {
           "type": "function",
           "name": "mcp_fake__echo",
-          "description": "[MCP fake] Repeats text.",
+          "description": "[MCP fake] Repeats text. (may delete or overwrite, reaches outside services)",
           "parameters": {
             "type": "object",
             "properties": {
@@ -109,7 +109,7 @@
         {
           "type": "function",
           "name": "mcp_fake__where",
-          "description": "[MCP fake] Working directory and whether the configured secret arrived.",
+          "description": "[MCP fake] Working directory and whether the configured secret arrived. (reads only, reaches outside services)",
           "parameters": {
             "type": "object",
             "properties": {}
@@ -148,7 +148,7 @@
         "type": "function",
         "function": {
           "name": "mcp_fake__echo",
-          "description": "[MCP fake] Repeats text.",
+          "description": "[MCP fake] Repeats text. (may delete or overwrite, reaches outside services)",
           "parameters": {
             "type": "object",
             "properties": {
@@ -167,7 +167,7 @@
         "type": "function",
         "function": {
           "name": "mcp_fake__where",
-          "description": "[MCP fake] Working directory and whether the configured secret arrived.",
+          "description": "[MCP fake] Working directory and whether the configured secret arrived. (reads only, reaches outside services)",
           "parameters": {
             "type": "object",
             "properties": {}

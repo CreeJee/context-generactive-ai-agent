@@ -3,6 +3,7 @@ import { Context, Effect, FileSystem, Layer, Path, Schedule, Schema } from "effe
 import { build } from "vite/rolldown";
 import { expect, vi } from "vite-plus/test";
 import { CardVerifier } from "../../src/kanban/card-agent.ts";
+import { noMcpHints } from "../../src/mcp/contracts.ts";
 import { McpServers, McpServerState, mcpToolName } from "../../src/mcp/servers.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { PermissionReviews } from "../../src/permissions/reviews.ts";
@@ -258,6 +259,47 @@ testAgent()("MCP servers of a project", (it) => {
   );
 
   it.effect(
+    "the user's hint wins over the server's, and clearing it goes back to the server's",
+    () =>
+      Effect.gen(function* () {
+        const servers = yield* McpServers;
+        const { project, fake } = yield* freshProject;
+        yield* writeJson(fake.config, { mcpServers: { fake: fake.entry() } });
+        yield* servers.setTrusted(project, "project", "fake", true);
+        const readOnlyNames = Effect.map(servers.readOnlyRunTools(project), ({ tools }) =>
+          tools.map((tool) => tool.tool.name),
+        );
+        const set = (tool: string, value: boolean | null) =>
+          servers.setToolHint(project, {
+            scope: "project",
+            name: "fake",
+            tool,
+            hint: "readOnly",
+            value,
+          });
+        // The server leaves `echo` unmarked (the spec assumes it changes things) and marks `where` read-only.
+        const changed = yield* set("echo", true);
+        yield* set("where", false);
+        expect(yield* readOnlyNames).toEqual([mcpToolName("fake", "echo")]);
+        const shown = changed.servers[0]?.state;
+        expect(McpServerState.$is("connected")(shown) && shown.tools[0]).toEqual({
+          name: "echo",
+          server: noMcpHints,
+          user: { ...noMcpHints, readOnly: true },
+        });
+        // The model reads the hints with each tool's description.
+        const echo = (yield* servers.runTools(project)).tools.find(
+          (tool) => tool.tool.name === mcpToolName("fake", "echo"),
+        );
+        expect(echo?.tool.description).toContain("(reads only, reaches outside services)");
+        yield* set("echo", null);
+        yield* set("where", null);
+        expect(yield* readOnlyNames).toEqual([mcpToolName("fake", "where")]);
+      }),
+    serverStartTimeout,
+  );
+
+  it.effect(
     "a tool that must run as a task answers once its task ends",
     () =>
       Effect.gen(function* () {
@@ -329,7 +371,12 @@ testAgent()("MCP global and project configuration", (it) => {
         );
         const trusted = yield* servers.setTrusted(project, "project", "docs", true);
         expect(trusted.servers[2]?.state).toEqual(
-          McpServerState.connected({ tools: ["echo", "where"] }),
+          McpServerState.connected({
+            tools: [
+              { name: "echo", server: noMcpHints, user: noMcpHints },
+              { name: "where", server: { ...noMcpHints, readOnly: true }, user: noMcpHints },
+            ],
+          }),
         );
         // A connection starts the server twice: a short-lived copy answers which protocol it
         // speaks (`server/discover`), then the session starts.
@@ -430,7 +477,9 @@ testAgent()("MCP servers behind OAuth", (it) => {
         );
         expect(connected).toMatchObject({
           signedIn: true,
-          state: McpServerState.connected({ tools: ["echo"] }),
+          state: McpServerState.connected({
+            tools: [{ name: "echo", server: noMcpHints, user: noMcpHints }],
+          }),
         });
 
         const echo = (text: string) =>

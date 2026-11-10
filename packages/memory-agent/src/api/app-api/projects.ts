@@ -2,7 +2,7 @@ import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "effect/http-api";
 import { AgentScope, ExternalAgentsOverview } from "../../external-agents/contracts.ts";
 import { DecisionInboxItem, ProtectedBranches } from "../../kanban/contracts.ts";
-import { McpOverview, McpScope } from "../../mcp/contracts.ts";
+import { McpOverview, McpScope, McpToolHint } from "../../mcp/contracts.ts";
 import { FolderPick, ListedProject, PermissionMode, Project } from "../../projects/contracts.ts";
 import { SkillCatalog } from "../../skills/contracts.ts";
 import { ProjectBoard } from "../../workflow/contracts.ts";
@@ -33,12 +33,21 @@ export type ExternalAgentCommand = typeof ExternalAgentCommand.Type;
  *   tool call. Distrusting also forgets the server's OAuth login.
  * - `login` { scope, name }: starts an OAuth login; the answer shows where to log in.
  * - `cancelLogin` / `logout` { scope, name }: stops that login, or forgets the stored one.
+ * - `toolHint` { scope, name, tool, hint, value }: the user's value for one of a tool's MCP
+ *   annotation hints, which wins over the server's; `null` goes back to the server's or the spec's.
  */
 export const McpCommand = Schema.TaggedUnion({
   trust: { scope: McpScope, name: Schema.NonEmptyString, trusted: Schema.Boolean },
   login: { scope: McpScope, name: Schema.NonEmptyString },
   cancelLogin: { scope: McpScope, name: Schema.NonEmptyString },
   logout: { scope: McpScope, name: Schema.NonEmptyString },
+  toolHint: {
+    scope: McpScope,
+    name: Schema.NonEmptyString,
+    tool: Schema.NonEmptyString,
+    hint: McpToolHint,
+    value: Schema.NullOr(Schema.Boolean),
+  },
 });
 export type McpCommand = typeof McpCommand.Type;
 
