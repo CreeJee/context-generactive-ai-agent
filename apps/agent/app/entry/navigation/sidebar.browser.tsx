@@ -10,6 +10,7 @@ import { AccountManagerList, QuotaStatus } from "./account-profiles";
 import { AccountEntry, AccountSwitcherMenu } from "./account-switcher";
 import { CompatibleAccountsList } from "./compatible-accounts";
 import type { CompatibleAccountChange } from "./compatible-client";
+import { navigationCopy as copy } from "./copy";
 import { ModelSection, ProjectSection } from "./sidebar";
 
 const alignedTerms = (root: HTMLElement, expected: string[]) => {
@@ -46,7 +47,9 @@ describe("sidebar disclosures", () => {
       };
       const screen = yield* sdkCall(() => render(<ModelSection {...props} models={[model]} />));
       yield* sdkCall(() =>
-        expect.element(screen.getByRole("combobox", { name: "추론 강도" })).not.toBeInTheDocument(),
+        expect
+          .element(screen.getByRole("combobox", { name: copy.model.effortSelect }))
+          .not.toBeInTheDocument(),
       );
       yield* sdkCall(() =>
         screen.rerender(
@@ -57,7 +60,9 @@ describe("sidebar disclosures", () => {
         ),
       );
       yield* sdkCall(() =>
-        expect.element(screen.getByRole("combobox", { name: "추론 강도" })).toBeVisible(),
+        expect
+          .element(screen.getByRole("combobox", { name: copy.model.effortSelect }))
+          .toBeVisible(),
       );
     }),
   );
@@ -93,7 +98,7 @@ describe("sidebar disclosures", () => {
       );
 
       yield* sdkCall(() => screen.getByRole("button", { name: /Model 1/ }).click());
-      alignedTerms(screen.container, ["모델", "추론"]);
+      alignedTerms(screen.container, [copy.model.model, copy.model.effort]);
     }),
   );
 
@@ -128,10 +133,15 @@ describe("sidebar disclosures", () => {
         ),
       );
 
-      const trigger = screen.getByRole("button", { name: "프로젝트 Project 1" });
+      const trigger = screen.getByRole("button", { name: copy.project.sectionWith("Project 1") });
       expect(trigger.element().textContent).toBe("Project 1");
       yield* sdkCall(() => trigger.click());
-      alignedTerms(screen.container, ["프로젝트", "권한", "기억", "목록"]);
+      alignedTerms(screen.container, [
+        copy.project.section,
+        copy.project.permission,
+        copy.project.memory,
+        copy.project.list,
+      ]);
     }),
   );
 
@@ -169,10 +179,12 @@ describe("sidebar disclosures", () => {
             </div>,
           ),
         );
-        yield* sdkCall(() => screen.getByRole("button", { name: "프로젝트 alpha" }).click());
-        yield* sdkCall(() => screen.getByRole("combobox", { name: "프로젝트 선택" }).click());
+        yield* sdkCall(() =>
+          screen.getByRole("button", { name: copy.project.sectionWith("alpha") }).click(),
+        );
+        yield* sdkCall(() => screen.getByRole("combobox", { name: copy.project.choose }).click());
         yield* sdkCall(() => screen.getByRole("option", { name: /beta/ }).click());
-        yield* sdkCall(() => screen.getByRole("button", { name: "폴더 열기" }).click());
+        yield* sdkCall(() => screen.getByRole("button", { name: copy.project.openFolder }).click());
         yield* sdkCall(() => expect.poll(() => events).toEqual(["restore:beta", "select:alpha"]));
       }),
   );
@@ -248,29 +260,29 @@ describe("sidebar disclosures", () => {
       );
 
       const personal = screen.getByRole("listitem", { name: "개인 (ChatGPT)" });
-      yield* sdkCall(() => expect.element(personal.getByText("사용 중")).toBeVisible());
+      yield* sdkCall(() => expect.element(personal.getByText(copy.inUse)).toBeVisible());
       yield* sdkCall(() =>
-        expect
-          .element(
-            personal.getByText("구독 한도 조회 불가: 저장된 로그인이 만료돼 조회하지 않았어요"),
-          )
-          .toBeVisible(),
+        expect.element(personal.getByText(copy.quota.unavailable.credential_expired)).toBeVisible(),
       );
       // Only the provider in use has an account in use, though each provider keeps a selection.
       const work = screen.getByRole("listitem", { name: "회사 (Claude)" });
-      yield* sdkCall(() => expect.element(work.getByText("사용 중")).not.toBeInTheDocument());
+      yield* sdkCall(() => expect.element(work.getByText(copy.inUse)).not.toBeInTheDocument());
       yield* sdkCall(() =>
         expect
-          .element(work.getByRole("meter", { name: "5시간" }))
+          .element(work.getByRole("meter", { name: copy.quota.window.fiveHour }))
           .toHaveAttribute("aria-valuenow", "37"),
       );
-      yield* sdkCall(() => work.getByRole("button", { name: "회사 이름 변경" }).click());
-      yield* sdkCall(() => work.getByRole("textbox", { name: "계정 이름" }).fill("팀"));
-      yield* sdkCall(() => work.getByRole("button", { name: "이름 저장" }).click());
+      yield* sdkCall(() => work.getByRole("button", { name: copy.rename.openFor("회사") }).click());
+      yield* sdkCall(() => work.getByRole("textbox", { name: copy.rename.field }).fill("팀"));
+      yield* sdkCall(() => work.getByRole("button", { name: copy.rename.save }).click());
 
-      yield* sdkCall(() => screen.getByRole("button", { name: "ChatGPT 계정 추가" }).click());
-      yield* sdkCall(() => screen.getByRole("textbox", { name: "새 계정 이름" }).fill("부계정"));
-      yield* sdkCall(() => screen.getByRole("button", { name: "로그인" }).click());
+      yield* sdkCall(() =>
+        screen.getByRole("button", { name: copy.subscriptionAccounts.addFor("ChatGPT") }).click(),
+      );
+      yield* sdkCall(() =>
+        screen.getByRole("textbox", { name: copy.addAccount.name }).fill("부계정"),
+      );
+      yield* sdkCall(() => screen.getByRole("button", { name: copy.addAccount.submit }).click());
       expect(actions).toEqual([
         { provider: "anthropic", action: { intent: "rename", accountId: "c", label: "팀" } },
         { provider: "openai", action: { intent: "add", label: "부계정" } },
@@ -345,7 +357,7 @@ describe("sidebar disclosures", () => {
         );
 
         yield* sdkCall(() =>
-          screen.getByRole("button", { name: "계정 전환: 개인 (ChatGPT)" }).click(),
+          screen.getByRole("button", { name: copy.switcher.openWith("개인", "ChatGPT") }).click(),
         );
         const work = screen.getByRole("menuitem", { name: "회사 (Claude)" });
         yield* sdkCall(() => expect.element(work.getByText("37%")).toBeVisible());
@@ -353,14 +365,16 @@ describe("sidebar disclosures", () => {
           expect
             .element(
               screen
-                .getByRole("menuitem", { name: "로컬 서버 (OpenAI 호환)" })
-                .getByText("모델 없음"),
+                .getByRole("menuitem", {
+                  name: `로컬 서버 (${copy.providerLabels["openai-compatible"]})`,
+                })
+                .getByText(copy.switcher.noModels),
             )
             .toBeVisible(),
         );
         yield* sdkCall(() => work.click());
         expect(switched).toEqual([{ provider: "anthropic", accountId: "c" }]);
-        yield* sdkCall(() => screen.getByRole("button", { name: "계정 관리" }).click());
+        yield* sdkCall(() => screen.getByRole("button", { name: copy.switcher.manage }).click());
         expect(managed).toBe(1);
       }),
   );
@@ -394,20 +408,30 @@ describe("sidebar disclosures", () => {
           </div>,
         ),
       );
-      const endpoint = screen.getByRole("listitem", { name: "로컬 서버 (OpenAI 호환)" });
-      yield* sdkCall(() => expect.element(endpoint.getByText("사용 중")).toBeVisible());
-      yield* sdkCall(() => endpoint.getByRole("button", { name: "모델 추가" }).click());
-      yield* sdkCall(() => endpoint.getByRole("button", { name: "모델 목록 불러오기" }).click());
+      const endpoint = screen.getByRole("listitem", {
+        name: copy.compatible.endpoint.row("로컬 서버"),
+      });
+      yield* sdkCall(() => expect.element(endpoint.getByText(copy.inUse)).toBeVisible());
+      yield* sdkCall(() =>
+        endpoint.getByRole("button", { name: copy.compatible.endpoint.addModel }).click(),
+      );
+      yield* sdkCall(() =>
+        endpoint.getByRole("button", { name: copy.compatible.modelForm.discover }).click(),
+      );
       yield* sdkCall(() => endpoint.getByRole("button", { name: "served-model" }).click());
-      yield* sdkCall(() => endpoint.getByRole("button", { name: "모델 저장" }).click());
+      yield* sdkCall(() =>
+        endpoint.getByRole("button", { name: copy.compatible.modelForm.save }).click(),
+      );
 
       yield* sdkCall(() =>
-        screen.getByRole("button", { name: "OpenAI 호환 엔드포인트 추가" }).click(),
+        screen.getByRole("button", { name: copy.compatible.list.addFor }).click(),
       );
       yield* sdkCall(() =>
         screen.getByRole("textbox", { name: "Base URL" }).fill("https://api.example.com/v1"),
       );
-      yield* sdkCall(() => screen.getByRole("button", { name: "추가" }).click());
+      yield* sdkCall(() =>
+        screen.getByRole("button", { name: copy.compatible.addEndpoint.submit }).click(),
+      );
       expect(changes).toEqual([
         {
           intent: "save-model",

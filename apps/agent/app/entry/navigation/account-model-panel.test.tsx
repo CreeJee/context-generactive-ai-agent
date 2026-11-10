@@ -2,6 +2,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vite-plus/test";
 import { ProviderAuthState, type ModelSelection } from "../api";
 import { AccountModelPanel, accountSummary } from "./account-model-panel";
+import { navigationCopy } from "./copy";
+
+const status = navigationCopy.accountModel.status;
 
 // The Base UI disclosure starts closed, reserving only the compact trigger's height.
 describe("compact sidebar controls", () => {
@@ -13,7 +16,7 @@ describe("compact sidebar controls", () => {
     };
     const error = ProviderAuthState.error({ provider: "anthropic", message: "연결 실패" });
     expect(accountSummary("anthropic", error, selection, "Very Long Model")).toMatchObject({
-      status: "연결 오류",
+      status: status.error,
       model: "ChatGPT / Very Long Model",
       hasError: true,
     });
@@ -30,7 +33,7 @@ describe("compact sidebar controls", () => {
     expect(html).toContain('data-slot="collapsible"');
     expect(html).toContain('aria-expanded="false"');
     expect(html).toContain("truncate");
-    expect(html).toContain("연결 오류");
+    expect(html).toContain(status.error);
     expect(html).not.toContain("계정 연결 해제");
   });
 
@@ -47,7 +50,7 @@ describe("compact sidebar controls", () => {
     );
     const summary = (html.split("</button>")[0] ?? "").replace(/title="[^"]*"/, "");
     expect(summary).toContain("ChatGPT / GPT");
-    expect(summary).not.toContain("ChatGPT · 연결됨");
+    expect(summary).not.toContain(`ChatGPT · ${status.signedIn}`);
     expect(summary.match(/ChatGPT \/ GPT/g)).toHaveLength(1);
   });
 });

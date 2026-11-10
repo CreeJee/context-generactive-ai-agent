@@ -6,7 +6,9 @@ import {
 } from "memory-agent/app-api";
 import { CompatibleAccountsView } from "memory-agent/compatible-config";
 import { appFetch } from "../shared/backend-restart";
+import { problemText } from "../shared/copy-templates";
 import { appQueryKeys } from "../queries/keys";
+import { navigationCopy } from "./copy";
 
 export type {
   CompatibleAccountStatus,
@@ -63,8 +65,8 @@ export function makeCompatibleClient(fetcher: typeof fetch) {
           status,
           reason,
           message: CompatibleRequestFailedReason.guards.PartialWrite(reason)
-            ? "키와 설정이 부분적으로 저장됐을 수 있어요. 계정 목록을 새로고침하고 키 상태를 확인해 주세요."
-            : `호환 공급자 요청에 실패했어요 (${status}).`,
+            ? problemText(navigationCopy.compatible.partialWrite)
+            : navigationCopy.compatible.requestFailedWith(status),
         });
       const signal = yield* Effect.abortSignal;
       const encoded =

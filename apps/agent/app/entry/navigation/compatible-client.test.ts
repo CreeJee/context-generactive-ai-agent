@@ -1,11 +1,13 @@
 import { it } from "@effect/vitest";
 import { Data, Effect, Schema } from "effect";
 import { expect } from "vite-plus/test";
+import { problemText } from "../shared/copy-templates";
 import {
   CompatibleAccountsView,
   CompatibleRequestFailedReason,
   makeCompatibleClient,
 } from "./compatible-client.ts";
+import { navigationCopy } from "./copy.ts";
 
 const reasons = CompatibleRequestFailedReason.cases;
 /** A subscription provider's `/api/accounts` body, which the compatible client refuses. */
@@ -59,7 +61,7 @@ it.effect("preserves partial-write guidance without reading a private failure bo
     );
     expect(failure.reason).toEqual(reasons.PartialWrite.make({}));
     expect(failure.operation).toBe("create");
-    expect(failure.message).toContain("부분적으로 저장");
+    expect(failure.message).toBe(problemText(navigationCopy.compatible.partialWrite));
     expect(failure.message).not.toContain("private");
   }),
 );

@@ -1,11 +1,8 @@
 import { Function as EffectFunction } from "effect";
-import type { ModelSelection, ProviderId, ProviderModel } from "../api";
+import type { ModelSelection, ProviderModel } from "../api";
+import { navigationCopy } from "./copy";
 
-export const providerLabels = {
-  openai: "ChatGPT",
-  anthropic: "Claude",
-  "openai-compatible": "OpenAI 호환",
-} satisfies Record<ProviderId, string>;
+export const providerLabels = navigationCopy.providerLabels;
 
 /**
  * The reasoning efforts the selected model lets the user pick, as the sidebar and `/effort` offer
@@ -19,7 +16,10 @@ export const effortChoices: {
   if (compatible && model.supportedReasoningEfforts.length <= 1) return [];
   return model.supportedReasoningEfforts.map((effort) => ({
     id: effort,
-    label: compatible && effort === "default" ? "서버 기본값" : `추론 ${effort}`,
+    label:
+      compatible && effort === "default"
+        ? navigationCopy.effort.serverDefault
+        : navigationCopy.effort.level(effort),
   }));
 });
 

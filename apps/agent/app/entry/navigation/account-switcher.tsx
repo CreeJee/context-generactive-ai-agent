@@ -32,6 +32,7 @@ import {
   windowLabel,
 } from "./account-profiles";
 import { timeUntil } from "../shared/local-time";
+import { navigationCopy } from "./copy";
 import { providerLabels } from "./providers";
 
 /** One row of the switcher: a subscription login, or a compatible endpoint. */
@@ -112,14 +113,18 @@ function QuotaHeadline({ entry }: { entry: AccountEntry }) {
     // Only a missing model needs saying; the count of registered ones is in the account manager.
     compatible: ({ account }) =>
       account.models.length > 0 ? null : (
-        <span className="shrink-0 text-2xs text-muted-foreground">모델 없음</span>
+        <span className="shrink-0 text-2xs text-muted-foreground">
+          {navigationCopy.switcher.noModels}
+        </span>
       ),
     profile: ({ quota }) =>
       quota === undefined
         ? null
         : QuotaStatus.$match(quota, {
             unavailable: () => (
-              <span className="shrink-0 text-2xs text-muted-foreground">조회 불가</span>
+              <span className="shrink-0 text-2xs text-muted-foreground">
+                {navigationCopy.quota.unavailableShort}
+              </span>
             ),
             observed: tightestWindow,
             stale: tightestWindow,
@@ -162,8 +167,11 @@ export function AccountSwitcherMenu({
             aria-busy={busy}
             aria-label={
               current !== undefined
-                ? `계정 전환: ${entryLabel(current)} (${providerLabels[entryProvider(current)]})`
-                : "계정 전환"
+                ? navigationCopy.switcher.openWith(
+                    entryLabel(current),
+                    providerLabels[entryProvider(current)],
+                  )
+                : navigationCopy.switcher.open
             }
             render={
               <button
@@ -178,7 +186,7 @@ export function AccountSwitcherMenu({
               <>
                 <ProviderMark provider="openai-compatible" />
                 <span className="flex-1 text-left text-xs text-muted-foreground">
-                  연결된 계정이 없어요
+                  {navigationCopy.switcher.none}
                 </span>
               </>
             )}
@@ -193,7 +201,7 @@ export function AccountSwitcherMenu({
           </DropdownMenuTrigger>
           <DropdownMenuContent side="top" align="start" className="w-(--anchor-width) min-w-72">
             <DropdownMenuGroup>
-              <DropdownMenuLabel>계정 전환</DropdownMenuLabel>
+              <DropdownMenuLabel>{navigationCopy.switcher.open}</DropdownMenuLabel>
               {entries.map((entry) => (
                 <DropdownMenuItem
                   key={entryKey(entry)}
@@ -228,8 +236,8 @@ export function AccountSwitcherMenu({
         <Button
           variant="ghost-muted"
           size="icon-lg"
-          aria-label="계정 관리"
-          title="계정 추가·수정·로그아웃"
+          aria-label={navigationCopy.switcher.manage}
+          title={navigationCopy.switcher.manageTitle}
           onClick={onManage}
         >
           <UserIcon />

@@ -13,6 +13,7 @@ import { SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem } from "~/componen
 import { DecisionPrompt } from "../chat/decision-prompt";
 import { useDecisionInboxQuery } from "../queries/project";
 import { koreanLocalTime } from "../shared/local-time";
+import { navigationCopy } from "./copy";
 
 /**
  * The project inbox: every card decision waiting for a person, across conversations and Goals.
@@ -29,11 +30,12 @@ export function DecisionInbox({
 }) {
   const [open, setOpen] = useState(false);
   const items = useDecisionInboxQuery(projectId).data ?? [];
+  const copy = navigationCopy.decisionInbox;
   return (
     <SidebarMenuItem>
       <SidebarMenuButton onClick={() => setOpen(true)}>
         <InboxIcon />
-        <span>판단 대기</span>
+        <span>{copy.title}</span>
       </SidebarMenuButton>
       {/* Only a waiting decision asks for attention; none is the usual state. */}
       {items.length > 0 && (
@@ -44,25 +46,23 @@ export function DecisionInbox({
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent side="left">
           <SheetHeader>
-            <SheetTitle>판단 대기</SheetTitle>
-            <SheetDescription>
-              이 프로젝트의 모든 대화와 Goal에서 사람의 판단을 기다리는 카드예요. 여기서 답하거나
-              카드가 있는 보드로 이동해요.
-            </SheetDescription>
+            <SheetTitle>{copy.title}</SheetTitle>
+            <SheetDescription>{copy.description}</SheetDescription>
           </SheetHeader>
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 pb-4 text-xs text-muted-foreground">
-            {items.length === 0 && <p>판단을 기다리는 카드가 없어요.</p>}
+            {items.length === 0 && <p>{copy.empty}</p>}
             {items.map((item) => (
               <section
                 key={item.requestId}
-                aria-label={`${item.cardTitle} 판단`}
+                aria-label={copy.item(item.cardTitle)}
                 className="space-y-1.5 rounded-md border p-2"
               >
                 <div className="flex items-start gap-2">
                   <div className="min-w-0 flex-1">
                     <p className="truncate font-medium text-foreground">{item.cardTitle}</p>
                     <p className="truncate">
-                      {item.sessionTitle ?? "제목 없는 대화"} · {koreanLocalTime(item.createdAt)}
+                      {item.sessionTitle ?? navigationCopy.sessions.untitled} ·{" "}
+                      {koreanLocalTime(item.createdAt)}
                     </p>
                   </div>
                   <Button
@@ -74,7 +74,7 @@ export function DecisionInbox({
                       onOpenCard(item.sessionId, item.cardId);
                     }}
                   >
-                    카드 보기
+                    {copy.openCard}
                   </Button>
                 </div>
                 <DecisionPrompt

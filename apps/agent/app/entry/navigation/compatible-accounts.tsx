@@ -32,18 +32,18 @@ import {
   type CompatibleAccountStatus,
   type CompatibleModelInput,
 } from "./compatible-client";
+import { navigationCopy } from "./copy";
+import { providerLabels } from "./providers";
+
+const copy = navigationCopy.compatible;
 
 const rejectedStatuses = Schema.Literals([400, 404, 502]);
 /** What a rejected endpoint request means, by the status codes the server answers with. */
-const rejectedStatusText: Readonly<Record<typeof rejectedStatuses.Type, string>> = {
-  400: "주소, 키 또는 모델 한도를 확인하세요. 키가 있는 엔드포인트의 주소를 바꾸려면 새 키를 넣거나 키를 지워야 해요.",
-  404: "엔드포인트나 모델을 찾지 못했어요. 목록을 새로고침하세요.",
-  502: "엔드포인트가 응답하지 않았어요. 주소와 서버 상태를 확인하세요.",
-};
+const rejectedStatusText: Readonly<Record<typeof rejectedStatuses.Type, string>> = copy.rejected;
 
 /** Safe text for a failed endpoint request; upstream bodies are never shown. */
 export const compatibleErrorMessage = (failure: Error) => {
-  if (!Schema.is(CompatibleRequestFailed)(failure)) return "호환 공급자 요청에 실패했어요.";
+  if (!Schema.is(CompatibleRequestFailed)(failure)) return copy.requestFailed;
   return CompatibleRequestFailedReason.matchOrElse(
     failure.reason,
     {
@@ -103,20 +103,20 @@ function ConnectionFields({
           placeholder="https://api.example.com/v1"
           onChange={(event) => onBaseUrl(event.target.value)}
         />
-        <FieldDescription>/chat/completions 경로는 자동으로 붙어요.</FieldDescription>
+        <FieldDescription>{copy.connection.pathHint}</FieldDescription>
       </Field>
       <Field>
-        <FieldLabel htmlFor={`${idPrefix}-key`}>API 키 (선택)</FieldLabel>
+        <FieldLabel htmlFor={`${idPrefix}-key`}>{copy.connection.key}</FieldLabel>
         <Input
           id={`${idPrefix}-key`}
           type="password"
           autoComplete="off"
           value={apiKey}
           disabled={removeKey}
-          placeholder={hasApiKey ? "등록된 키 유지" : "키 없는 로컬 서버도 연결할 수 있어요"}
+          placeholder={hasApiKey ? copy.connection.keyKept : copy.connection.keyOptional}
           onChange={(event) => onApiKey(event.target.value)}
         />
-        <FieldDescription>키는 OS 키체인에만 저장되고 다시 표시되지 않아요.</FieldDescription>
+        <FieldDescription>{copy.connection.keyHint}</FieldDescription>
         {hasApiKey && (
           <div className="flex items-center gap-2">
             <Switch
@@ -124,7 +124,7 @@ function ConnectionFields({
               checked={removeKey}
               onCheckedChange={onRemoveKey}
             />
-            <FieldLabel htmlFor={`${idPrefix}-remove-key`}>저장할 때 기존 키 삭제</FieldLabel>
+            <FieldLabel htmlFor={`${idPrefix}-remove-key`}>{copy.connection.removeKey}</FieldLabel>
           </div>
         )}
       </Field>
@@ -151,7 +151,7 @@ function AddEndpointForm({
   const labelId = useId();
   return (
     <form
-      aria-label="새 OpenAI 호환 엔드포인트"
+      aria-label={copy.addEndpoint.form}
       className="flex flex-col gap-3 rounded-lg border px-3 py-3"
       onSubmit={(event) => {
         event.preventDefault();
@@ -164,12 +164,12 @@ function AddEndpointForm({
       }}
     >
       <Field>
-        <FieldLabel htmlFor={labelId}>이름 (선택)</FieldLabel>
+        <FieldLabel htmlFor={labelId}>{copy.addEndpoint.name}</FieldLabel>
         <Input
           id={labelId}
           value={label}
           maxLength={80}
-          placeholder="비워 두면 서버 주소로 불러요"
+          placeholder={copy.addEndpoint.namePlaceholder}
           onChange={(event) => setLabel(event.target.value)}
           autoFocus
         />
@@ -185,10 +185,10 @@ function AddEndpointForm({
       />
       <div className="flex justify-end gap-1">
         <Button type="button" variant="outline" onClick={onClose}>
-          취소
+          {copy.addEndpoint.cancel}
         </Button>
         <Button type="submit" disabled={busy || baseUrl.trim() === ""}>
-          추가
+          {copy.addEndpoint.submit}
         </Button>
       </div>
     </form>
@@ -220,9 +220,7 @@ function ModelForm({
       .then(
         (ids) => {
           setSuggestions(ids);
-          setDiscovery(
-            `${ids.length}개 모델을 불러왔어요. 목록에 없어도 ID를 직접 입력할 수 있어요.`,
-          );
+          setDiscovery(copy.modelForm.discovered(ids.length));
         },
         (failure: Error) => setDiscovery(compatibleErrorMessage(failure)),
       )
@@ -230,7 +228,7 @@ function ModelForm({
   };
   return (
     <form
-      aria-label="모델 등록"
+      aria-label={copy.modelForm.form}
       className="flex flex-col gap-3 rounded-md border p-3"
       onSubmit={(event) => {
         event.preventDefault();
@@ -238,7 +236,7 @@ function ModelForm({
       }}
     >
       <Field>
-        <FieldLabel htmlFor={`${idPrefix}-id`}>모델 ID</FieldLabel>
+        <FieldLabel htmlFor={`${idPrefix}-id`}>{copy.modelForm.id}</FieldLabel>
         <div className="flex gap-1">
           <Input
             id={`${idPrefix}-id`}
@@ -247,11 +245,11 @@ function ModelForm({
             onChange={(event) => setModel({ ...model, id: event.target.value })}
           />
           <Button type="button" variant="outline" disabled={busy || discovering} onClick={discover}>
-            {discovering && <Spinner />} 모델 목록 불러오기
+            {discovering && <Spinner />} {copy.modelForm.discover}
           </Button>
         </div>
         {suggestions.length > 0 && (
-          <div className="flex flex-wrap gap-1.5" aria-label="서버의 모델">
+          <div className="flex flex-wrap gap-1.5" aria-label={copy.modelForm.suggestions}>
             {suggestions.slice(0, 20).map((id) => (
               <Button
                 key={id}
@@ -270,11 +268,11 @@ function ModelForm({
             {discovery}
           </p>
         )}
-        <FieldDescription>서버에서 쓰는 정확한 ID를 입력하세요.</FieldDescription>
+        <FieldDescription>{copy.modelForm.idHint}</FieldDescription>
       </Field>
       <div className="grid grid-cols-2 gap-2">
         <Field>
-          <FieldLabel htmlFor={`${idPrefix}-context`}>컨텍스트 창 (토큰)</FieldLabel>
+          <FieldLabel htmlFor={`${idPrefix}-context`}>{copy.modelForm.contextWindow}</FieldLabel>
           <Input
             id={`${idPrefix}-context`}
             type="number"
@@ -295,16 +293,16 @@ function ModelForm({
                 setModel({ ...model, outputBudget: limited ? initialOutputBudget : null })
               }
             />
-            <FieldLabel htmlFor={`${idPrefix}-output-limit`}>최대 출력 토큰 제한</FieldLabel>
+            <FieldLabel htmlFor={`${idPrefix}-output-limit`}>
+              {copy.modelForm.outputLimit}
+            </FieldLabel>
           </div>
           {model.outputBudget === null ? (
-            <FieldDescription>
-              제한 없음: 서버의 한도까지 출력해요. 추론 모델은 추론도 이 한도를 써요.
-            </FieldDescription>
+            <FieldDescription>{copy.modelForm.unlimitedHint}</FieldDescription>
           ) : (
             <Input
               id={`${idPrefix}-output`}
-              aria-label="최대 출력 토큰"
+              aria-label={copy.modelForm.outputTokens}
               type="number"
               required
               min={1}
@@ -322,7 +320,7 @@ function ModelForm({
           checked={model.toolCalling}
           onCheckedChange={(toolCalling) => setModel({ ...model, toolCalling })}
         />
-        <FieldLabel htmlFor={`${idPrefix}-tools`}>도구 호출 지원</FieldLabel>
+        <FieldLabel htmlFor={`${idPrefix}-tools`}>{copy.modelForm.toolCalling}</FieldLabel>
       </div>
       <div className="flex items-center gap-2">
         <Switch
@@ -330,17 +328,15 @@ function ModelForm({
           checked={model.imageInput}
           onCheckedChange={(imageInput) => setModel({ ...model, imageInput })}
         />
-        <FieldLabel htmlFor={`${idPrefix}-image-input`}>이미지 입력 지원</FieldLabel>
-        <FieldDescription>
-          끄면 이미지를 보낼 수 없고, 이미지가 있던 대화는 글 메모로 이어 보내요.
-        </FieldDescription>
+        <FieldLabel htmlFor={`${idPrefix}-image-input`}>{copy.modelForm.imageInput}</FieldLabel>
+        <FieldDescription>{copy.modelForm.imageInputHint}</FieldDescription>
       </div>
       <div className="flex justify-end gap-1">
         <Button type="button" variant="outline" onClick={onClose}>
-          취소
+          {copy.modelForm.cancel}
         </Button>
         <Button type="submit" disabled={busy || model.id.trim() === ""}>
-          모델 저장
+          {copy.modelForm.save}
         </Button>
       </div>
     </form>
@@ -387,13 +383,15 @@ function EndpointCard({
   };
   const change = (next: CompatibleAccountChange, done?: string) =>
     run(() => handlers.onChange(next), done);
+  const endpoint = copy.endpoint;
+  const removeConfirm = endpoint.removeConfirm(account.label);
   return (
     <li
       className={cn(
         "flex flex-col gap-3 rounded-lg border px-3 py-2.5",
         current && "border-primary/50",
       )}
-      aria-label={`${account.label} (OpenAI 호환)`}
+      aria-label={endpoint.row(account.label)}
     >
       {CardMode.$is("rename")(mode) ? (
         <form
@@ -405,21 +403,26 @@ function EndpointCard({
           }}
         >
           <Input
-            aria-label="계정 이름"
+            aria-label={navigationCopy.rename.field}
             value={label}
             maxLength={80}
             onChange={(event) => setLabel(event.target.value)}
             onKeyDown={(event) => event.key === "Escape" && setMode(CardMode.view())}
             autoFocus
           />
-          <Button type="submit" variant="ghost-muted" size="icon" aria-label="이름 저장">
+          <Button
+            type="submit"
+            variant="ghost-muted"
+            size="icon"
+            aria-label={navigationCopy.rename.save}
+          >
             <CheckIcon />
           </Button>
           <Button
             type="button"
             variant="ghost-muted"
             size="icon"
-            aria-label="이름 변경 취소"
+            aria-label={navigationCopy.rename.cancel}
             onClick={() => {
               setLabel(account.label);
               setMode(CardMode.view());
@@ -433,27 +436,27 @@ function EndpointCard({
           <div className="flex min-w-0 flex-1 flex-col gap-0.5">
             <span className="flex min-w-0 items-center gap-1.5">
               <span className="truncate text-sm font-medium">{account.label}</span>
-              {current && <Badge variant="outline">사용 중</Badge>}
+              {current && <Badge variant="outline">{navigationCopy.inUse}</Badge>}
             </span>
             <span className="truncate text-2xs text-muted-foreground">
-              {account.baseUrl} · {account.hasApiKey ? "키 있음" : "키 없음"}
+              {account.baseUrl} · {account.hasApiKey ? endpoint.hasKey : endpoint.noKey}
             </span>
           </div>
           <Button
             variant="ghost-muted"
             size="sm"
-            aria-label={`${account.label} 이름 변경`}
+            aria-label={navigationCopy.rename.openFor(account.label)}
             onClick={() => setMode(CardMode.rename())}
           >
-            <PencilIcon /> 이름 변경
+            <PencilIcon /> {navigationCopy.rename.open}
           </Button>
           <Button
             variant="ghost-muted"
             size="sm"
-            aria-label={`${account.label} 연결 수정`}
+            aria-label={endpoint.connectFor(account.label)}
             onClick={() => setMode(CardMode.connect())}
           >
-            <PlugIcon /> 연결
+            <PlugIcon /> {endpoint.connect}
           </Button>
           <AlertDialog open={confirmingRemove} onOpenChange={setConfirmingRemove}>
             <AlertDialogTrigger
@@ -461,20 +464,20 @@ function EndpointCard({
                 <Button
                   variant="ghost-muted"
                   size="sm"
-                  aria-label={`${account.label} 삭제`}
+                  aria-label={endpoint.removeFor(account.label)}
                   disabled={busy}
                 />
               }
             >
-              <Trash2Icon /> 삭제
+              <Trash2Icon /> {endpoint.remove}
             </AlertDialogTrigger>
             <AlertDialogContent>
               <AlertDialogHeader>
-                <AlertDialogTitle>{account.label} 엔드포인트를 지울까요?</AlertDialogTitle>
-                <AlertDialogDescription>저장한 API 키도 함께 지워요.</AlertDialogDescription>
+                <AlertDialogTitle>{removeConfirm.title}</AlertDialogTitle>
+                <AlertDialogDescription>{removeConfirm.body}</AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
-                <AlertDialogCancel>취소</AlertDialogCancel>
+                <AlertDialogCancel>{removeConfirm.choices.cancel}</AlertDialogCancel>
                 <AlertDialogAction
                   variant="destructive"
                   onClick={() => {
@@ -482,7 +485,7 @@ function EndpointCard({
                     void change({ intent: "remove", accountId: account.id });
                   }}
                 >
-                  삭제
+                  {removeConfirm.choices.remove}
                 </AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
@@ -491,7 +494,7 @@ function EndpointCard({
       )}
       {CardMode.$is("connect")(mode) && (
         <form
-          aria-label={`${account.label} 연결`}
+          aria-label={endpoint.connectionForm(account.label)}
           className="flex flex-col gap-3 rounded-md border p-3"
           onSubmit={(event) => {
             event.preventDefault();
@@ -502,7 +505,7 @@ function EndpointCard({
                 baseUrl: baseUrl.trim(),
                 ...keyChange(apiKey, removeKey),
               },
-              "연결을 저장했어요.",
+              endpoint.connectionSaved,
             ).then(() => {
               setApiKey("");
               setRemoveKey(false);
@@ -520,25 +523,30 @@ function EndpointCard({
           />
           <div className="flex justify-end gap-1">
             <Button type="button" variant="outline" onClick={() => setMode(CardMode.view())}>
-              취소
+              {endpoint.cancel}
             </Button>
             <Button type="submit" disabled={busy}>
-              연결 저장
+              {endpoint.saveConnection}
             </Button>
           </div>
         </form>
       )}
-      <ul className="flex flex-col gap-1" aria-label={`${account.label} 모델`}>
+      <ul className="flex flex-col gap-1" aria-label={endpoint.models(account.label)}>
         {account.models.map((model) => (
           <li key={model.id} className="flex min-w-0 items-center gap-1.5 text-xs">
             <span className="min-w-0 flex-1 truncate">
               <span className="font-medium">{model.id}</span>
               <span className="text-muted-foreground">
                 {" "}
-                · {model.contextWindow.toLocaleString()} / 출력{" "}
-                {model.outputBudget === null ? "제한 없음" : model.outputBudget.toLocaleString()} ·
-                도구 {model.toolCalling ? "켬" : "끔"}
-                {model.imageInput === true && " · 이미지"}
+                ·{" "}
+                {endpoint.modelSpec(
+                  model.contextWindow.toLocaleString(),
+                  model.outputBudget === null
+                    ? endpoint.unlimited
+                    : model.outputBudget.toLocaleString(),
+                  model.toolCalling ? endpoint.toolsOn : endpoint.toolsOff,
+                )}
+                {model.imageInput === true && ` · ${endpoint.image}`}
               </span>
             </span>
             <Button
@@ -546,18 +554,15 @@ function EndpointCard({
               size="sm"
               disabled={busy}
               onClick={() =>
-                void run(
-                  () => handlers.onTest(account.id, model.id),
-                  `${model.id} 연결을 확인했어요.`,
-                )
+                void run(() => handlers.onTest(account.id, model.id), endpoint.tested(model.id))
               }
             >
-              테스트
+              {endpoint.test}
             </Button>
             <Button
               variant="ghost-muted"
               size="icon-sm"
-              aria-label={`${model.id} 수정`}
+              aria-label={endpoint.editModel(model.id)}
               onClick={() => {
                 const { reasoning: _reasoning, imageInputSource: _source, ...input } = model;
                 setMode(
@@ -570,7 +575,7 @@ function EndpointCard({
             <Button
               variant="ghost-muted"
               size="icon-sm"
-              aria-label={`${model.id} 삭제`}
+              aria-label={endpoint.removeFor(model.id)}
               disabled={busy}
               onClick={() =>
                 void change({ intent: "remove-model", accountId: account.id, modelId: model.id })
@@ -581,9 +586,7 @@ function EndpointCard({
           </li>
         ))}
         {account.models.length === 0 && (
-          <li className="text-xs text-muted-foreground">
-            등록한 모델이 없어요. 모델을 추가해야 이 엔드포인트로 대화할 수 있어요.
-          </li>
+          <li className="text-xs text-muted-foreground">{endpoint.noModels}</li>
         )}
       </ul>
       {CardMode.$is("model")(mode) ? (
@@ -593,10 +596,7 @@ function EndpointCard({
           busy={busy}
           onDiscover={() => handlers.onDiscover(account.id)}
           onSave={(model) =>
-            void change(
-              { intent: "save-model", accountId: account.id, model },
-              "모델을 저장했어요.",
-            )
+            void change({ intent: "save-model", accountId: account.id, model }, endpoint.modelSaved)
           }
           onClose={() => setMode(CardMode.view())}
         />
@@ -607,7 +607,7 @@ function EndpointCard({
             size="sm"
             onClick={() => setMode(CardMode.model({ initial: newModel() }))}
           >
-            <PlusIcon /> 모델 추가
+            <PlusIcon /> {endpoint.addModel}
           </Button>
         </div>
       )}
@@ -641,30 +641,27 @@ export function CompatibleAccountsList({
 }) {
   const [adding, setAdding] = useState(false);
   return (
-    <section aria-label="OpenAI 호환" className="flex flex-col gap-3 py-5">
-      <ProviderHeader
-        provider="openai-compatible"
-        description="Chat Completions 호환 서버를 엔드포인트마다 등록하고, 쓸 모델을 직접 추가해요. 공급자의 API 요금이 적용될 수 있어요."
-      >
+    <section aria-label={providerLabels["openai-compatible"]} className="flex flex-col gap-3 py-5">
+      <ProviderHeader provider="openai-compatible" description={copy.list.description}>
         <Button
           variant="outline"
           size="sm"
-          aria-label="OpenAI 호환 엔드포인트 추가"
+          aria-label={copy.list.addFor}
           disabled={adding || busy}
           onClick={() => setAdding(true)}
         >
-          <PlusIcon /> 엔드포인트 추가
+          <PlusIcon /> {copy.list.add}
         </Button>
       </ProviderHeader>
       {failed && (
         <Alert variant="destructive">
-          <AlertDescription>엔드포인트 목록을 불러오지 못했어요.</AlertDescription>
+          <AlertDescription>{copy.list.failed}</AlertDescription>
         </Alert>
       )}
       {accounts === undefined ? (
         !failed && <Spinner />
       ) : accounts.length > 0 ? (
-        <ul className="flex flex-col gap-2" aria-label="OpenAI 호환 엔드포인트 목록">
+        <ul className="flex flex-col gap-2" aria-label={copy.list.list}>
           {accounts.map((account) => (
             <EndpointCard
               key={account.id}
@@ -676,7 +673,7 @@ export function CompatibleAccountsList({
           ))}
         </ul>
       ) : (
-        !adding && <p className="text-xs text-muted-foreground">추가한 엔드포인트가 없어요.</p>
+        !adding && <p className="text-xs text-muted-foreground">{copy.list.empty}</p>
       )}
       {adding && (
         <AddEndpointForm

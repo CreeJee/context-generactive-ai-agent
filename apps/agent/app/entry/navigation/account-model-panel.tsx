@@ -3,6 +3,7 @@ import { CircleAlertIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { Collapsible, CollapsibleContent } from "~/components/ui/collapsible";
 import { ProviderAuthState, type ModelSelection, type ProviderId } from "../api";
+import { navigationCopy } from "./copy";
 import { SidebarDisclosureTrigger } from "./sidebar-disclosure-trigger";
 
 import { providerLabels as providerLabel } from "./providers";
@@ -20,18 +21,20 @@ function accountSummaryBody(
   selection: ModelSelection | null,
   modelName: string | undefined,
 ) {
+  const copy = navigationCopy.accountModel.status;
   const status = !(auth !== null)
-    ? "확인 중"
+    ? copy.checking
     : ProviderAuthState.$match(auth, {
-        "signed-in": () => "연결됨",
-        pending: () => "로그인 대기",
-        error: () => "연결 오류",
-        "signed-out": () => (provider === "openai-compatible" ? "설정 필요" : "로그인 필요"),
+        "signed-in": () => copy.signedIn,
+        pending: () => copy.pending,
+        error: () => copy.error,
+        "signed-out": () =>
+          provider === "openai-compatible" ? copy.setupNeeded : copy.loginNeeded,
       });
   const model =
     selection !== null
       ? `${providerLabel[selection.provider]} / ${modelName ?? selection.model}`
-      : "모델 미선택";
+      : navigationCopy.accountModel.noModel;
   return { status, model, hasError: ProviderAuthState.$is("error")(auth) };
 }
 
@@ -58,9 +61,9 @@ export function AccountModelPanel({
             <CircleAlertIcon aria-hidden="true" className="size-4 shrink-0 text-destructive" />
           )
         }
-        title={`${providerLabel[provider]} 계정과 모델 설정: ${status}, ${model}`}
+        title={navigationCopy.accountModel.trigger(providerLabel[provider], status, model)}
       >
-        {status === "연결됨" ? (
+        {status === navigationCopy.accountModel.status.signedIn ? (
           <span className="font-medium">{model}</span>
         ) : (
           <>

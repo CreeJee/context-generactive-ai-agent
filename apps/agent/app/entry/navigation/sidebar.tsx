@@ -96,6 +96,7 @@ import {
   type Session,
 } from "../api";
 import { DataList, DataListItem } from "~/components/ui/data-list";
+import { navigationCopy } from "./copy";
 import { SidebarDisclosureTrigger } from "./sidebar-disclosure-trigger";
 import { effortChoices } from "./providers";
 
@@ -120,15 +121,15 @@ export function ModelSection({
   const efforts =
     current !== undefined && selection !== null ? effortChoices(selection, current) : [];
   return (
-    <Section title="모델">
-      <DataListItem term="모델">
+    <Section title={navigationCopy.model.section}>
+      <DataListItem term={navigationCopy.model.model}>
         <Select
           value={selection?.model ?? null}
           items={models.map((model) => ({ value: model.id, label: model.displayName }))}
           onValueChange={(value) => value && onSelect(value)}
         >
-          <SelectTrigger className="w-full" size="sm" aria-label="모델">
-            <SelectValue placeholder="모델을 선택하세요" />
+          <SelectTrigger className="w-full" size="sm" aria-label={navigationCopy.model.model}>
+            <SelectValue placeholder={navigationCopy.model.placeholder} />
           </SelectTrigger>
           <SelectContent>
             {models.map((model) => (
@@ -140,13 +141,17 @@ export function ModelSection({
         </Select>
       </DataListItem>
       {current && selection && efforts.length > 0 && (
-        <DataListItem term="추론">
+        <DataListItem term={navigationCopy.model.effort}>
           <Select
             value={selection.reasoningEffort}
             items={efforts.map(({ id, label }) => ({ value: id, label }))}
             onValueChange={(value) => value && onSelect(current.id, value)}
           >
-            <SelectTrigger className="w-full" size="sm" aria-label="추론 강도">
+            <SelectTrigger
+              className="w-full"
+              size="sm"
+              aria-label={navigationCopy.model.effortSelect}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -160,8 +165,8 @@ export function ModelSection({
         </DataListItem>
       )}
       {!(selection !== null) && (
-        <DataListItem term="추론">
-          <p className="pt-1.5 text-xs text-muted-foreground">모델을 선택하세요.</p>
+        <DataListItem term={navigationCopy.model.effort}>
+          <p className="pt-1.5 text-xs text-muted-foreground">{navigationCopy.model.chooseFirst}</p>
         </DataListItem>
       )}
     </Section>
@@ -169,9 +174,9 @@ export function ModelSection({
 }
 
 const permissionModes = [
-  { value: "ask", label: "매번 묻기" },
-  { value: "auto", label: "자동 판단 (auto)" },
-  { value: "full", label: "전체 권한 (full)" },
+  { value: "ask", label: navigationCopy.project.permissionModes.ask },
+  { value: "auto", label: navigationCopy.project.permissionModes.auto },
+  { value: "full", label: navigationCopy.project.permissionModes.full },
 ] satisfies ReadonlyArray<{ value: PermissionMode; label: string }>;
 
 const projectSectionOpenAtom = atomWithStorage("context-agent-project-section-open-v2", false);
@@ -206,23 +211,24 @@ export function ProjectSection({
 }) {
   const current = projects.find((project) => project.id === projectId);
   const [open, setOpen] = useAtom(projectSectionOpenAtom);
+  const copy = navigationCopy.project;
 
   return (
     <section>
       <Collapsible open={open} onOpenChange={setOpen}>
         {/* Collapsed, a selected project shows only its name; the label keeps the context. */}
         <SidebarDisclosureTrigger
-          aria-label={current !== undefined ? `프로젝트 ${current.name}` : "프로젝트"}
+          aria-label={current !== undefined ? copy.sectionWith(current.name) : copy.section}
         >
           {current !== undefined ? (
             <span className="font-medium">{current.name}</span>
           ) : (
-            <span className="font-medium">프로젝트 선택</span>
+            <span className="font-medium">{copy.choose}</span>
           )}
         </SidebarDisclosureTrigger>
         <CollapsibleContent className="px-4 pb-2">
           <DataList className="grid-cols-[3.5rem_minmax(0,1fr)]">
-            <DataListItem term="프로젝트">
+            <DataListItem term={copy.section}>
               <div className="flex min-w-0 items-center gap-2">
                 {projects.length > 0 || hiddenProjects.length > 0 ? (
                   <ProjectCombobox
@@ -233,9 +239,7 @@ export function ProjectSection({
                     onRestore={onRestore}
                   />
                 ) : (
-                  <p className="min-w-0 flex-1 text-xs text-muted-foreground">
-                    등록된 프로젝트가 없어요.
-                  </p>
+                  <p className="min-w-0 flex-1 text-xs text-muted-foreground">{copy.none}</p>
                 )}
                 <OpenFolderButton
                   projects={projects}
@@ -247,7 +251,7 @@ export function ProjectSection({
             </DataListItem>
             {current && (
               <>
-                <DataListItem term="권한">
+                <DataListItem term={copy.permission}>
                   <Select
                     value={current.permissionMode}
                     items={permissionModes}
@@ -256,7 +260,7 @@ export function ProjectSection({
                       if (isTruthy(mode)) onPermissionMode(mode.value);
                     }}
                   >
-                    <SelectTrigger className="w-full" size="sm" aria-label="권한 모드">
+                    <SelectTrigger className="w-full" size="sm" aria-label={copy.permissionSelect}>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -268,23 +272,23 @@ export function ProjectSection({
                     </SelectContent>
                   </Select>
                 </DataListItem>
-                <DataListItem term="기억">
+                <DataListItem term={copy.memory}>
                   <label className="flex min-h-8 cursor-pointer items-center justify-between gap-2">
-                    <span className="text-xs">다른 프로젝트에서도 찾기</span>
+                    <span className="text-xs">{copy.crossRecall}</span>
                     <Switch
                       checked={!current.crossRecallExcluded}
                       onCheckedChange={(checked) => onCrossRecall(checked)}
                     />
                   </label>
                 </DataListItem>
-                <DataListItem term="목록">
+                <DataListItem term={copy.list}>
                   <Button
                     variant="ghost-muted"
                     size="sm"
-                    title="프로젝트 보관"
+                    title={copy.archiveTitle}
                     onClick={() => onHide(current.id)}
                   >
-                    <ArchiveIcon /> 보관하기
+                    <ArchiveIcon /> {copy.archive}
                   </Button>
                 </DataListItem>
               </>
@@ -295,8 +299,6 @@ export function ProjectSection({
     </section>
   );
 }
-
-const archivedGroup = "보관된 프로젝트";
 
 /** Picks among the projects by name; archived ones sit in their own group and come back when chosen. */
 function ProjectCombobox({
@@ -313,8 +315,10 @@ function ProjectCombobox({
   onRestore: (projectId: string) => void;
 }) {
   const groups = [
-    { value: "프로젝트", items: projects },
-    ...(hiddenProjects.length > 0 ? [{ value: archivedGroup, items: hiddenProjects }] : []),
+    { value: navigationCopy.project.section, items: projects },
+    ...(hiddenProjects.length > 0
+      ? [{ value: navigationCopy.project.archivedGroup, items: hiddenProjects }]
+      : []),
   ];
   return (
     <Combobox
@@ -330,11 +334,11 @@ function ProjectCombobox({
     >
       <ComboboxInput
         className="h-6 min-w-0 flex-1"
-        placeholder="프로젝트 검색"
-        aria-label="프로젝트 선택"
+        placeholder={navigationCopy.project.search}
+        aria-label={navigationCopy.project.choose}
       />
       <ComboboxContent>
-        <ComboboxEmpty>맞는 프로젝트가 없어요.</ComboboxEmpty>
+        <ComboboxEmpty>{navigationCopy.project.noMatch}</ComboboxEmpty>
         <ComboboxList>
           {(group: (typeof groups)[number]) => (
             <ComboboxGroup key={group.value} items={group.items}>
@@ -345,7 +349,7 @@ function ProjectCombobox({
                     <span className="min-w-0 flex-1 truncate">{project.name}</span>
                     {project.hiddenAt !== null && (
                       <span className="flex shrink-0 items-center gap-1 pr-5 text-muted-foreground">
-                        <ArchiveRestoreIcon /> 보관 해제
+                        <ArchiveRestoreIcon /> {navigationCopy.project.unarchive}
                       </span>
                     )}
                   </ComboboxItem>
@@ -427,8 +431,8 @@ function OpenFolderButton({
       <Button
         variant="outline"
         size="icon-sm"
-        aria-label="폴더 열기"
-        title="폴더 열기"
+        aria-label={navigationCopy.project.openFolder}
+        title={navigationCopy.project.openFolder}
         disabled={picking}
         onClick={() => void open()}
       >
@@ -471,10 +475,8 @@ function AddProjectDialog({
     >
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>프로젝트 추가</DialogTitle>
-          <DialogDescription>
-            폴더의 절대 경로를 입력하세요. 등록한 폴더 안의 파일은 에이전트가 읽고 고칠 수 있어요.
-          </DialogDescription>
+          <DialogTitle>{navigationCopy.addProject.title}</DialogTitle>
+          <DialogDescription>{navigationCopy.addProject.description}</DialogDescription>
         </DialogHeader>
         <form
           className="flex flex-col gap-3"
@@ -495,7 +497,7 @@ function AddProjectDialog({
           }
         >
           <Field>
-            <FieldLabel htmlFor="project-root">폴더 경로</FieldLabel>
+            <FieldLabel htmlFor="project-root">{navigationCopy.addProject.path}</FieldLabel>
             <Input
               id="project-root"
               value={root}
@@ -506,9 +508,11 @@ function AddProjectDialog({
             {error && <FieldError>{error}</FieldError>}
           </Field>
           <DialogFooter>
-            <DialogClose render={<Button type="button" variant="outline" />}>취소</DialogClose>
+            <DialogClose render={<Button type="button" variant="outline" />}>
+              {navigationCopy.addProject.cancel}
+            </DialogClose>
             <Button type="submit" disabled={adding || !isTruthy(root.trim())}>
-              {adding && <Spinner />} 추가
+              {adding && <Spinner />} {navigationCopy.addProject.submit}
             </Button>
           </DialogFooter>
         </form>
@@ -522,7 +526,7 @@ function AddProjectDialog({
  * zone, so the server's HTML and its hydration name it in words instead.
  */
 const sessionLabel = (hydrated: boolean) => (session: Session) =>
-  session.title ?? (hydrated ? dayAndTime(session.createdAt) : "제목 없는 대화");
+  session.title ?? (hydrated ? dayAndTime(session.createdAt) : navigationCopy.sessions.untitled);
 
 /** Where in the repository a conversation ran: its branch, or else its worktree folder's name. */
 const sessionPlace = (session: Session) =>
@@ -579,7 +583,7 @@ function SessionGroup({
         <CollapsibleTrigger className="group sticky top-0 z-10 flex h-8 w-full items-center gap-1 rounded-md bg-sidebar px-2 text-2xs font-medium tracking-wide text-muted-foreground uppercase outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring">
           <ChevronRightIcon className="size-3.5 shrink-0 transition-transform group-data-[panel-open]:rotate-90" />
           <span className="min-w-0 flex-1 truncate text-left">{title}</span>
-          <span className="tabular-nums" aria-label={`${count}개`}>
+          <span className="tabular-nums" aria-label={navigationCopy.sessions.count(count)}>
             {count}
           </span>
         </CollapsibleTrigger>
@@ -625,6 +629,7 @@ export function SessionSection({
   agents: readonly string[];
 }) {
   const label = sessionLabel(useHydrated());
+  const copy = navigationCopy.sessions;
   const [placeValue, setPlaceValue] = useState(everyPlace);
   // The asked-about conversation stays while the dialog closes, so its title does not blank out.
   const [deleteAsk, setDeleteAsk] = useState<{
@@ -642,8 +647,8 @@ export function SessionSection({
   const rest = shown.filter((session) => !working(session));
   const everywhere = PlaceFilter.$is("all")(filter);
   const placeLabel = PlaceFilter.$match(filter, {
-    all: () => "모든 작업 위치",
-    checkout: () => "저장소 본체",
+    all: () => copy.everyPlace,
+    checkout: () => copy.checkout,
     place: ({ place }) => place,
   });
   const row = (session: Session) => (
@@ -676,29 +681,26 @@ export function SessionSection({
         )}
         {working(session) && (
           <span className="flex shrink-0 text-muted-foreground">
-            <Spinner aria-label={answering.has(session.id) ? "답변 중" : "보드 실행 중"} />
+            <Spinner aria-label={answering.has(session.id) ? copy.answering : copy.boardRunning} />
           </span>
         )}
       </SidebarMenuButton>
       {/* One menu on hover or focus keeps the row's width for its title. */}
       <DropdownMenu>
         <DropdownMenuTrigger
-          render={<SidebarMenuAction showOnHover aria-label={`${label(session)} 메뉴`} />}
+          render={<SidebarMenuAction showOnHover aria-label={copy.menuFor(label(session))} />}
         >
           <EllipsisIcon />
         </DropdownMenuTrigger>
         <DropdownMenuContent side="right" align="start">
-          <DropdownMenuItem
-            onClick={() => onArchive(session.id)}
-            title="실행 중이면 안전하게 중단하고 기억은 남겨요"
-          >
-            <ArchiveIcon /> 보관하기
+          <DropdownMenuItem onClick={() => onArchive(session.id)} title={copy.archiveTitle}>
+            <ArchiveIcon /> {copy.archive}
           </DropdownMenuItem>
           <DropdownMenuItem
             variant="destructive"
             onClick={() => setDeleteAsk({ session, open: true })}
           >
-            <Trash2Icon /> 원본 삭제
+            <Trash2Icon /> {copy.deleteSource}
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -709,31 +711,31 @@ export function SessionSection({
       {/* The list's actions come first, then its sections; no title row competes with them. */}
       <div className="flex px-2 pt-3 pb-1">
         <div className="flex min-w-0 flex-1">
-          <ButtonGroup aria-label="새 대화" className="w-full">
+          <ButtonGroup aria-label={copy.newChat} className="w-full">
             <Button
               variant="outline"
               size="sm"
               className="flex-1 justify-start"
               onClick={() => onCreate()}
             >
-              <PlusIcon /> 새 대화
+              <PlusIcon /> {copy.newChat}
             </Button>
             <DropdownMenu>
               <DropdownMenuTrigger
-                render={<Button variant="outline" size="icon-sm" aria-label="대화 상대 고르기" />}
+                render={<Button variant="outline" size="icon-sm" aria-label={copy.pickPartner} />}
               >
                 <ChevronDownIcon />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuGroup>
-                  <DropdownMenuLabel>새 대화 상대</DropdownMenuLabel>
-                  <DropdownMenuItem onClick={() => onCreate()}>이 앱의 모델</DropdownMenuItem>
+                  <DropdownMenuLabel>{copy.newPartner}</DropdownMenuLabel>
+                  <DropdownMenuItem onClick={() => onCreate()}>{copy.appModel}</DropdownMenuItem>
                 </DropdownMenuGroup>
                 <DropdownMenuSeparator />
                 <DropdownMenuGroup>
-                  <DropdownMenuLabel>외부 에이전트와 직접</DropdownMenuLabel>
+                  <DropdownMenuLabel>{copy.externalAgents}</DropdownMenuLabel>
                   {agents.length === 0 ? (
-                    <DropdownMenuItem disabled>설정에서 신뢰한 에이전트가 없어요</DropdownMenuItem>
+                    <DropdownMenuItem disabled>{copy.noTrustedAgents}</DropdownMenuItem>
                   ) : (
                     agents.map((agent) => (
                       <DropdownMenuItem key={agent} onClick={() => onCreate(agent)}>
@@ -758,8 +760,8 @@ export function SessionSection({
                   variant={everywhere ? "ghost-muted" : "secondary"}
                   size="sm"
                   className="w-full justify-start"
-                  aria-label={`작업 위치: ${placeLabel}`}
-                  title={`작업 위치: ${placeLabel}`}
+                  aria-label={copy.placeWith(placeLabel)}
+                  title={copy.placeWith(placeLabel)}
                 />
               }
             >
@@ -769,13 +771,17 @@ export function SessionSection({
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-64">
               <DropdownMenuGroup>
-                <DropdownMenuLabel>작업 위치</DropdownMenuLabel>
+                <DropdownMenuLabel>{copy.place}</DropdownMenuLabel>
                 <DropdownMenuRadioGroup
                   value={placeValue}
                   onValueChange={(value: string) => setPlaceValue(value)}
                 >
-                  <DropdownMenuRadioItem value={everyPlace}>모든 작업 위치</DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value={checkoutPlace}>저장소 본체</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value={everyPlace}>
+                    {copy.everyPlace}
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value={checkoutPlace}>
+                    {copy.checkout}
+                  </DropdownMenuRadioItem>
                   {places.map((place) => (
                     <DropdownMenuRadioItem key={place} value={place} title={place}>
                       <span className="min-w-0 flex-1 truncate">{place}</span>
@@ -802,24 +808,24 @@ export function SessionSection({
           </div>
         )}
         {!loading && sessions.length === 0 && (
-          <p className="px-4 py-2 text-xs text-muted-foreground">아직 대화가 없어요.</p>
+          <p className="px-4 py-2 text-xs text-muted-foreground">{copy.empty}</p>
         )}
         {sessions.length > 0 && shown.length === 0 && (
-          <p className="px-4 py-2 text-xs text-muted-foreground">이 작업 위치의 대화가 없어요.</p>
+          <p className="px-4 py-2 text-xs text-muted-foreground">{copy.emptyPlace}</p>
         )}
         {/* Three sections of one rank: same heading, same rows, one after another. */}
         {sessions.length > 0 && shown.length > 0 && (
           <>
-            <SessionGroup title="진행 중" count={atWork.length} defaultOpen>
+            <SessionGroup title={copy.atWork} count={atWork.length} defaultOpen>
               {atWork.length === 0 ? (
-                <p className="px-2 py-1 text-xs text-muted-foreground">진행 중인 대화가 없어요.</p>
+                <p className="px-2 py-1 text-xs text-muted-foreground">{copy.atWorkEmpty}</p>
               ) : (
                 <SidebarMenu>{atWork.map(row)}</SidebarMenu>
               )}
             </SessionGroup>
-            <SessionGroup title="대화" count={rest.length} defaultOpen>
+            <SessionGroup title={copy.conversations} count={rest.length} defaultOpen>
               {rest.length === 0 ? (
-                <p className="px-2 py-1 text-xs text-muted-foreground">다른 대화가 없어요.</p>
+                <p className="px-2 py-1 text-xs text-muted-foreground">{copy.conversationsEmpty}</p>
               ) : (
                 <SidebarMenu>{rest.map(row)}</SidebarMenu>
               )}
@@ -827,7 +833,7 @@ export function SessionSection({
           </>
         )}
         {archived.length > 0 && (
-          <SessionGroup title="보관함" count={archived.length}>
+          <SessionGroup title={copy.archived} count={archived.length}>
             <SidebarMenu>
               {archived.map((session) => (
                 <SidebarMenuItem key={session.id}>
@@ -836,8 +842,8 @@ export function SessionSection({
                     <DropdownMenuTrigger
                       render={
                         <SidebarMenuButton
-                          title="목록에서만 뺀 대화예요. 기억 검색에는 계속 나와요."
-                          aria-label={`${label(session)} 메뉴`}
+                          title={copy.archivedTitle}
+                          aria-label={copy.menuFor(label(session))}
                         />
                       }
                     >
@@ -845,13 +851,13 @@ export function SessionSection({
                     </DropdownMenuTrigger>
                     <DropdownMenuContent side="right" align="start">
                       <DropdownMenuItem onClick={() => onRestore(session.id)}>
-                        <ArchiveRestoreIcon /> 복원
+                        <ArchiveRestoreIcon /> {copy.restore}
                       </DropdownMenuItem>
                       <DropdownMenuItem
                         variant="destructive"
                         onClick={() => setDeleteAsk({ session, open: true })}
                       >
-                        <Trash2Icon /> 원본 삭제
+                        <Trash2Icon /> {copy.deleteSource}
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
@@ -869,14 +875,14 @@ export function SessionSection({
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>대화 원본을 삭제할까요?</AlertDialogTitle>
+            <AlertDialogTitle>{copy.deleteConfirm.title}</AlertDialogTitle>
             <AlertDialogDescription>
-              {deleteAsk === null ? "" : `"${label(deleteAsk.session)}" 대화의 원본을 지워요. `}
-              채택된 project memory와 Work Trace provenance는 유지돼요.
+              {deleteAsk === null ? "" : `${copy.deleteTarget(label(deleteAsk.session))} `}
+              {copy.deleteConfirm.body}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>취소</AlertDialogCancel>
+            <AlertDialogCancel>{copy.deleteConfirm.choices.cancel}</AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
               onClick={() => {
@@ -884,7 +890,7 @@ export function SessionSection({
                 setDeleteAsk((current) => (current === null ? null : { ...current, open: false }));
               }}
             >
-              삭제
+              {copy.deleteConfirm.choices.delete}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

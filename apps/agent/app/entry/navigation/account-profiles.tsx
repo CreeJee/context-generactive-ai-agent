@@ -44,7 +44,9 @@ import {
 } from "../api";
 import { useAccountQuotaQuery, useAccountsQuery } from "../queries/global";
 import { useAccountActionMutation } from "../queries/mutations/global";
+import { problemText } from "../shared/copy-templates";
 import { koreanShortTime, timeUntil } from "../shared/local-time";
+import { navigationCopy } from "./copy";
 import { providerLabels } from "./providers";
 
 export type QuotaStatus = SubscriptionQuotaReport["accounts"][number]["quota"];
@@ -58,13 +60,15 @@ type QuotaWindow = Data.TaggedEnum.Value<QuotaStatus, "observed">["windows"][num
 export const windowLabel = (window: Pick<QuotaWindow, "name" | "windowSeconds">) => {
   switch (window.name) {
     case "five_hour":
-      return "5시간";
+      return navigationCopy.quota.window.fiveHour;
     case "seven_day":
-      return "7일";
+      return navigationCopy.quota.window.sevenDay;
     default: {
       if (window.windowSeconds === null) return window.name;
       const hours = Math.round(window.windowSeconds / 3600);
-      return hours < 24 ? `${hours}시간` : `${Math.round(hours / 24)}일`;
+      return hours < 24
+        ? navigationCopy.quota.window.hours(hours)
+        : navigationCopy.quota.window.days(Math.round(hours / 24));
     }
   }
 };
@@ -73,12 +77,7 @@ export const windowLabel = (window: Pick<QuotaWindow, "name" | "windowSeconds">)
 export function quotaUnavailableText(
   reason: Data.TaggedEnum.Value<QuotaStatus, "unavailable">["reason"],
 ): string {
-  switch (reason) {
-    case "credential_expired":
-      return "구독 한도 조회 불가: 저장된 로그인이 만료돼 조회하지 않았어요";
-    case "lookup_failed":
-      return "구독 한도 조회 실패: 공급자에서 사용량을 받지 못했어요";
-  }
+  return navigationCopy.quota.unavailable[reason];
 }
 
 export const usedPercent = (window: QuotaWindow) => Math.min(100, Math.max(0, window.usedPercent));
@@ -126,7 +125,7 @@ function QuotaGauge({
     <Meter.Root
       value={used}
       className="flex flex-col gap-1"
-      getAriaValueText={() => `${Math.round(used)}% 사용`}
+      getAriaValueText={() => navigationCopy.quota.used(Math.round(used))}
     >
       <Meter.Label className="text-xs">{windowLabel(window)}</Meter.Label>
       <Meter.Track className="h-1.5 overflow-hidden rounded-full bg-muted">
@@ -139,8 +138,8 @@ function QuotaGauge({
         />
       </Meter.Track>
       <span className="flex justify-between gap-2 text-2xs text-muted-foreground tabular-nums">
-        <span>{Math.round(used)}% 사용</span>
-        {until !== null && <span>{until} 후 초기화</span>}
+        <span>{navigationCopy.quota.used(Math.round(used))}</span>
+        {until !== null && <span>{navigationCopy.quota.resetsIn(until)}</span>}
       </span>
     </Meter.Root>
   );
@@ -148,12 +147,12 @@ function QuotaGauge({
 
 /** The line under an account name: when its quota was read, or why it has none. */
 const quotaMeta = (quota: QuotaStatus | undefined, failed: boolean) => {
-  if (failed) return "한도 상태를 확인하지 못했어요";
-  if (quota === undefined) return "한도 확인 중";
+  if (failed) return navigationCopy.quota.failed;
+  if (quota === undefined) return navigationCopy.quota.checking;
   return QuotaStatus.$match(quota, {
     unavailable: ({ reason }) => quotaUnavailableText(reason),
-    observed: ({ observedAt }) => `${koreanShortTime(observedAt)} 조회`,
-    stale: ({ observedAt }) => `최근 조회 실패 · ${koreanShortTime(observedAt)} 기준 값`,
+    observed: ({ observedAt }) => navigationCopy.quota.observed(koreanShortTime(observedAt)),
+    stale: ({ observedAt }) => navigationCopy.quota.stale(koreanShortTime(observedAt)),
   });
 };
 
@@ -187,6 +186,7 @@ function ProfileCard({
   const windows =
     !quotaFailed && quota !== undefined && !QuotaStatus.$is("unavailable")(quota) ? quota : null;
   const now = DateTime.nowUnsafe();
+  const logoutConfirm = navigationCopy.profile.logoutConfirm(profile.label);
   return (
     <li
       className={cn(
@@ -206,21 +206,26 @@ function ProfileCard({
           }}
         >
           <Input
-            aria-label="계정 이름"
+            aria-label={navigationCopy.rename.field}
             value={label}
             maxLength={80}
             onChange={(event) => setLabel(event.target.value)}
             onKeyDown={(event) => event.key === "Escape" && cancelRename()}
             autoFocus
           />
-          <Button type="submit" variant="ghost-muted" size="icon" aria-label="이름 저장">
+          <Button
+            type="submit"
+            variant="ghost-muted"
+            size="icon"
+            aria-label={navigationCopy.rename.save}
+          >
             <CheckIcon />
           </Button>
           <Button
             type="button"
             variant="ghost-muted"
             size="icon"
-            aria-label="이름 변경 취소"
+            aria-label={navigationCopy.rename.cancel}
             onClick={cancelRename}
           >
             <XIcon />
@@ -231,7 +236,7 @@ function ProfileCard({
           <div className="flex min-w-0 flex-1 flex-col gap-0.5">
             <span className="flex min-w-0 items-center gap-1.5">
               <span className="truncate text-sm font-medium">{profile.label}</span>
-              {current && <Badge variant="outline">사용 중</Badge>}
+              {current && <Badge variant="outline">{navigationCopy.inUse}</Badge>}
             </span>
             <span className="truncate text-2xs text-muted-foreground">
               {quotaMeta(quota, quotaFailed)}
@@ -240,10 +245,10 @@ function ProfileCard({
           <Button
             variant="ghost-muted"
             size="sm"
-            aria-label={`${profile.label} 이름 변경`}
+            aria-label={navigationCopy.rename.openFor(profile.label)}
             onClick={() => setRenaming(true)}
           >
-            <PencilIcon /> 이름 변경
+            <PencilIcon /> {navigationCopy.rename.open}
           </Button>
           <AlertDialog open={confirmingLogout} onOpenChange={setConfirmingLogout}>
             <AlertDialogTrigger
@@ -251,20 +256,20 @@ function ProfileCard({
                 <Button
                   variant="ghost-muted"
                   size="sm"
-                  aria-label={`${profile.label} 로그아웃`}
+                  aria-label={navigationCopy.profile.logoutFor(profile.label)}
                   disabled={busy}
                 />
               }
             >
-              <LogOutIcon /> 로그아웃
+              <LogOutIcon /> {navigationCopy.profile.logout}
             </AlertDialogTrigger>
             <AlertDialogContent>
               <AlertDialogHeader>
-                <AlertDialogTitle>{profile.label} 계정에서 로그아웃할까요?</AlertDialogTitle>
-                <AlertDialogDescription>이 앱의 계정 목록에서도 지워요.</AlertDialogDescription>
+                <AlertDialogTitle>{logoutConfirm.title}</AlertDialogTitle>
+                <AlertDialogDescription>{logoutConfirm.body}</AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
-                <AlertDialogCancel>취소</AlertDialogCancel>
+                <AlertDialogCancel>{logoutConfirm.choices.cancel}</AlertDialogCancel>
                 <AlertDialogAction
                   variant="destructive"
                   onClick={() => {
@@ -272,7 +277,7 @@ function ProfileCard({
                     onAction({ intent: "remove", accountId: profile.id });
                   }}
                 >
-                  로그아웃
+                  {logoutConfirm.choices.logout}
                 </AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
@@ -308,7 +313,7 @@ function AuthErrorAlert({ auth }: { auth: Data.TaggedEnum.Value<ProviderAuthStat
                 aria-hidden="true"
                 className="size-3 transition-transform group-data-[panel-open]:rotate-90"
               />
-              진단 정보
+              {navigationCopy.profile.diagnostics}
             </CollapsibleTrigger>
             <CollapsibleContent className="mt-1 space-y-0.5 break-all font-mono">
               {auth.code && <div>code: {auth.code}</div>}
@@ -373,23 +378,23 @@ function LoginStatus({
       <div className="flex items-center gap-2 rounded-lg border px-3 py-2 text-xs">
         <Spinner />
         <span className="min-w-0 flex-1">
-          브라우저에서 {providerLabels[provider]} 로그인을 완료하세요
+          {navigationCopy.login.pending(providerLabels[provider])}
         </span>
         <Button
           variant="ghost-muted"
           size="sm"
           onClick={() => window.open(authorizationUrl, "_blank", "noopener")}
         >
-          다시 열기
+          {navigationCopy.login.reopen}
         </Button>
         <Button variant="ghost-muted" size="sm" onClick={onCancel}>
-          취소
+          {navigationCopy.login.cancel}
         </Button>
       </div>
     ),
     error: () => (
       <Alert variant="destructive">
-        <AlertDescription>새 계정 로그인을 완료하지 못했어요. 다시 시도하세요.</AlertDescription>
+        <AlertDescription>{problemText(navigationCopy.login.failed)}</AlertDescription>
       </Alert>
     ),
     idle: () => null,
@@ -411,7 +416,7 @@ function AddAccountForm({
   const [label, setLabel] = useState("");
   return (
     <form
-      aria-label={`새 ${providerLabels[provider]} 계정`}
+      aria-label={navigationCopy.addAccount.form(providerLabels[provider])}
       className="flex items-center gap-1 rounded-lg border px-3 py-2"
       onSubmit={(event) => {
         event.preventDefault();
@@ -421,8 +426,8 @@ function AddAccountForm({
       }}
     >
       <Input
-        aria-label="새 계정 이름"
-        placeholder="계정 이름 (예: 개인, 회사)"
+        aria-label={navigationCopy.addAccount.name}
+        placeholder={navigationCopy.addAccount.placeholder}
         value={label}
         maxLength={80}
         onChange={(event) => setLabel(event.target.value)}
@@ -430,10 +435,10 @@ function AddAccountForm({
         autoFocus
       />
       <Button type="submit" disabled={busy || label.trim() === ""}>
-        로그인
+        {navigationCopy.addAccount.submit}
       </Button>
       <Button type="button" variant="outline" onClick={onClose}>
-        취소
+        {navigationCopy.addAccount.cancel}
       </Button>
     </form>
   );
@@ -455,23 +460,26 @@ function ProviderAccountsSection({
     <section aria-label={label} className="flex flex-col gap-3 py-5 first:pt-0">
       <ProviderHeader
         provider={group.provider}
-        description="계정마다 따로 로그인해요. 쓸 계정은 사이드바 아래에서 골라요."
+        description={navigationCopy.subscriptionAccounts.description}
       >
         <Button
           variant="outline"
           size="sm"
-          aria-label={`${label} 계정 추가`}
+          aria-label={navigationCopy.subscriptionAccounts.addFor(label)}
           disabled={adding || group.busy}
           onClick={() => setAdding(true)}
         >
-          <PlusIcon /> 계정 추가
+          <PlusIcon /> {navigationCopy.subscriptionAccounts.add}
         </Button>
       </ProviderHeader>
       {ProviderAuthState.$is("error")(group.auth) && <AuthErrorAlert auth={group.auth} />}
       {group.view === undefined ? (
         <Spinner />
       ) : profiles.length > 0 ? (
-        <ul className="flex flex-col gap-2" aria-label={`${label} 계정 목록`}>
+        <ul
+          className="flex flex-col gap-2"
+          aria-label={navigationCopy.subscriptionAccounts.list(label)}
+        >
           {profiles.map((profile) => (
             <ProfileCard
               key={profile.id}
@@ -486,7 +494,11 @@ function ProviderAccountsSection({
           ))}
         </ul>
       ) : (
-        !adding && <p className="text-xs text-muted-foreground">추가한 계정이 없어요.</p>
+        !adding && (
+          <p className="text-xs text-muted-foreground">
+            {navigationCopy.subscriptionAccounts.empty}
+          </p>
+        )
       )}
       {adding && (
         <AddAccountForm
@@ -540,28 +552,29 @@ export function AccountManagerList({
 }
 
 const accountErrorMessage = (error: ApiError | null) => {
-  if (error === null) return "계정 작업에 실패했어요.";
+  const copy = navigationCopy.accountError;
+  if (error === null) return copy.failed;
   switch (error.code) {
     case "invalid_account_label":
     case "invalid_oauth_profile":
-      return "계정 이름은 1~80자로 입력하세요.";
+      return copy.invalidLabel;
     case "oauth_profile_in_use":
     case "oauth_profile_removing":
-      return "계정 작업을 완료하지 못했어요. 이 계정의 실행이 끝난 뒤 다시 시도하세요.";
+      return problemText(copy.profileBusy);
     case "oauth_profile_not_found":
-      return "계정을 찾을 수 없어요. 목록을 새로 고친 뒤 다시 시도하세요.";
+      return problemText(copy.profileNotFound);
     case "oauth_profile_missing_credential":
     case "oauth_profile_conflicting_credential":
     case "oauth_profile_copy_unverified":
-      return "저장된 로그인 정보를 확인하지 못했어요. 계정을 다시 추가하세요.";
+      return problemText(copy.credentialUnreadable);
     case "login_in_progress":
-      return "이미 진행 중인 로그인이 있어요. 그 로그인을 마치거나 취소한 뒤 다시 시도하세요.";
+      return problemText(copy.loginInProgress);
     case "account_login_failed":
-      return "로그인을 시작하지 못했어요. 잠시 뒤 다시 시도하세요.";
+      return problemText(copy.loginFailed);
     case "account_store_unavailable":
-      return "계정 저장소를 열지 못했어요. 잠시 뒤 다시 시도하세요.";
+      return problemText(copy.storeUnavailable);
     default:
-      return "계정 작업에 실패했어요.";
+      return copy.failed;
   }
 };
 
@@ -608,7 +621,10 @@ export function AccountManager({
     <AccountManagerList
       providers={[openai.group, anthropic.group]}
       activeProvider={activeProvider}
-      error={error ?? (openai.failed || anthropic.failed ? "계정 목록을 불러오지 못했어요." : null)}
+      error={
+        error ??
+        (openai.failed || anthropic.failed ? navigationCopy.subscriptionAccounts.listFailed : null)
+      }
       onAction={(provider, next) => {
         setError(null);
         runners[provider](next).then(

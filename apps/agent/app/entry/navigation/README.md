@@ -15,6 +15,7 @@
 - `DecisionInbox` — 프로젝트 전체에서 사람의 판단을 기다리는 카드 수를 `SidebarMenuBadge`로 보여 준다(0이면 배지 없음). `SidebarMenuItem`을 돌려주므로 `SidebarMenu` 안에 둔다. Sheet에서 `DecisionPrompt`로 답하거나 `onOpenCard(sessionId, cardId)`로 보드를 연다
 - `ProjectBoardButton` — 프로젝트 칸반 보드를 여는 `SidebarMenuItem`. 배지는 보드 수를 보이고 실행 중(`kanbanActive`)인 보드가 있으면 강조된다
 - `providerLabels` — `ProviderId`별 표시 이름(ChatGPT/Claude/OpenAI 호환). `satisfies Record<ProviderId, string>`
+- `navigationCopy` (`copy.ts`) — 이 디렉터리의 문구 카탈로그. 사이드바, 계정 전환기·관리자, 호환 엔드포인트, 판단 대기함 문구를 담고, `providerLabels`·한도 조회 불가 사유·권한 모드 라벨 표도 여기 있다(`satisfies Record<…>`). 문구는 `tools/copy-check`가 검사한다
 - `effortChoices` / `EffortChoice` — `(selection, model)` dual 함수. 사이드바와 `/effort`가 쓰는 추론 강도 선택지를 만든다
 - `AccountSwitcher` / `AccountSwitcherMenu` — 사이드바 하단의 계정 전환 드롭다운. openai·anthropic 프로필, 한도, 호환 계정을 모아 `onSwitch(AccountTarget)`과 `onManage`를 호출한다
 - `AccountEntry` — 전환기 한 줄을 나타내는 `Data.TaggedEnum` (`profile` | `compatible`)
