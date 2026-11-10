@@ -143,9 +143,10 @@ scripts/       package.ts(실행 파일 만들기), smoke-package.ts(배포물 �
 실행 명령은 위 `실행` 절, API 라우트는 위 `API 라우트` 절, 디렉터리 구조는 위 `구조` 절을 참고한다.
 
 - `developmentApiProxy` (`vite.config.ts`) — `EffectFunction.dual(2, ...)`로 `(target, backendBuildId)` 형태와 `(backendBuildId)(target)` 형태를 모두 받는다. Vite `ProxyOptions`를 돌려주고, 요청에 `x-context-agent-build-id` 헤더가 없을 때만 backendBuildId를 넣는다
-- `default` (`vite.config.ts`) — `defineConfig(({ command }) => ...)` Vite+ 설정. `ManagedRuntime.make(NodeFileSystem.layer)`로 Effect를 실행해 env를 읽고 define, test, server.proxy, lint, plugins(tailwindcss, reactRouter), resolve, optimizeDeps, ssr, pack, run.tasks를 만든다
+- `default` (`vite.config.ts`) — `defineConfig(({ command }) => ...)` Vite+ 설정. `ManagedRuntime.make(NodeFileSystem.layer)`로 Effect를 실행해 env를 읽고 define, test, server.proxy, lint, plugins(lingui `macroTransform`, tailwindcss, reactRouter), resolve, optimizeDeps, ssr, pack, run.tasks를 만든다
 - `import.meta.env.VITE_CONTEXT_AGENT_BUILD_ID` — `CONTEXT_AGENT_BUILD_ID`(없으면 `""`)를 JSON 문자열로 인코딩해 클라이언트 코드에 주입하는 define 상수
-- `run.tasks` (`vite.config.ts`) — `build`(`react-router build`, 의존 워크스페이스 build 먼저), `bundle`(`vp pack`, build 의존), `typecheck`(`react-router typegen && tsc && tsc -p server/tests/tsconfig.json`), `package`(`node scripts/package.ts`, build 의존), `smoke-package`, `notarize`(`node scripts/notarize-macos.ts`) Vite Task 작업
+- `lingui.config.ts` — Lingui 설정. 원문·유일 로케일 `ko`, 카탈로그 `app/locales/{locale}`, 추출기는 `@lingui/native-tools`의 `createSwcExtractor()`. `pnpm exec lingui extract`(이 디렉터리)로 카탈로그를 갱신한다
+- `run.tasks` (`vite.config.ts`) — `build`(`lingui extract --clean` 뒤 `react-router build`, 의존 워크스페이스 build 먼저), `bundle`(`vp pack`, build 의존), `typecheck`(`react-router typegen && tsc && tsc -p server/tests/tsconfig.json`), `package`(`node scripts/package.ts`, build 의존), `smoke-package`, `notarize`(`node scripts/notarize-macos.ts`) Vite Task 작업
 - `pack` (`vite.config.ts`) — entry `{ "context-agent": "server/main.ts" }`, esm/node, outDir `dist`. 모든 의존성을 번들하고 `codeSplitting: false`로 단일 파일을 만든다. `CONTEXT_AGENT_EXE_ASSETS`가 있으면 `exe`(fileName `context-agent`, `seaConfig.execArgvExtension: "none"`, assets)를 켠다
 - `default` (`react-router.config.ts`) — React Router `Config`: `ssr: true`, `future.unstable_enableNodeReadableStream: true`
 - `default` (`vite.browser.config.ts`) — 브라우저 테스트용 Vite+ 설정. Playwright chromium headless, `app/entry/...*.browser.tsx` 포함, `@dnd-kit/*`·`jotai`를 `optimizeDeps.include`로 미리 번들한다

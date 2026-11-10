@@ -4695,3 +4695,14 @@
 - 서버 패키지(`packages/memory-agent/src`)도 같은 규칙을 따른다. ACP 에디터처럼 앱 카탈로그를 거치지 않고 서버 문구를 그대로 보여 주는 화면이 있어, 서버 문구를 앱으로 옮기지 않고 서버 디렉터리마다 `copy.ts`를 둔다. 사람이 읽는 문구(실패 사유, 승인 사유, ACP 도구 제목, OAuth 결과 페이지, 문제 제보 알림)는 `copy.ts`로, 모델이 읽는 문장(제보 근거 지침, digest 라벨, 임베딩 예열 입력)은 바꾸지 않고 `prompts.ts`로 옮긴다. 개선 항목 보고서(`improve/report.ts`)는 화면에도 보이지만 코딩 에이전트에게 넘기는 작업 명세라서 `prompts.ts`에 둔다.
 - 남은 결정: 모델 프롬프트를 같은 체계에 넣을지.
 - 적용: `apps/agent/app/entry/media`에 먼저 적용했고, 같은 날 앱 전체(`apps/agent/app`, `apps/agent/server`)로 넓혔다. 기존 문구를 카탈로그 13개로 옮기며 해요체 서술은 합니다체로 바꿨다. "계획자"는 용어집에 따라 "Plan 작성자"로 바꿨다.
+
+## 화면 문구는 Lingui 메시지로 쓰고, 문구 정책은 lint/wording 한곳에 둔다 (2026-11-10)
+
+- 계기: 기능 디렉터리마다 둔 `copy.ts` 카탈로그는 문구가 쓰이는 자리에서 떨어져 있고, 중첩 객체·따옴표·화살표 함수 때문에 읽기 어려웠다. 문구 규칙도 `lint/copy`(어디에 두는지), `tools/copy-check`(무엇을 말하는지), `vite.config.ts` overrides(범위와 예외)에 흩어져 있었다.
+- 검토: MessageFormat 2.0은 CLDR 47에서 정식이 됐지만 JS 생태계는 참조 구현(`messageformat` v4)과 0.x 파일 형식뿐이고, 문구에 분기·복수형이 없어 이점이 작았다. Lingui(ICU MF1)는 `@lingui/native-tools`(Rust+SWC)로 Babel 없이 매크로를 바꾸고 문구를 추출한다.
+- 시험(media): `@lingui/vite-plugin`의 `macroTransform: true`로 개발 서버·운영 빌드·서버 번들(`vp pack`)·SSR·브라우저 테스트가 모두 동작했다. 운영 빌드의 매크로는 ID만 남기므로 한국어만 쓰더라도 `lingui extract`가 만든 `app/locales/ko.po`를 `app/i18n.ts`가 불러와 활성화한다. 네이티브 추출기는 문구와 위치를 함께 주어 Kiwi 검사에 그대로 쓴다.
+- 결정:
+  - 문구 정책은 `lint/wording/policy.ts` 하나에 둔다(범위, 예외, 문구가 있을 자리, 금지 표현, 용어집, 말투). lint 규칙 `wording/no-raw-korean`, 문구 검사 CLI `lint/wording/check`, 커밋 hook, Claude Code hook이 모두 이 파일을 읽는다. 이름은 카탈로그 형식(`copy.ts`)에 묶이지 않게 `wording`으로 바꿨다.
+  - 문구는 Lingui 메시지, 아직 옮기지 않은 `copy.ts`, 모델용 `prompts.ts` 세 곳에만 둔다.
+  - Lingui 패키지와 native-tools(1.0 전)는 정확한 버전으로 고정한다.
+- 남은 결정: 나머지 `copy.ts`를 Lingui로 옮길지, 서버 패키지(ACP 문구)에도 Lingui를 쓸지.

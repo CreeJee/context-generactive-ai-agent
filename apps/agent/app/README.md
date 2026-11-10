@@ -15,7 +15,9 @@
 - `root.tsx` `default App` — 루트 컴포넌트다. `QueryClient`(queries: `refetchOnReconnect: false`, `refetchOnWindowFocus: false`, `staleTime: Infinity`)를 `useState`로 한 번 만든다. `QueryClientProvider` > `NuqsAdapter`(`nuqs/adapters/react-router/v8`) > `OverlayProvider` > `Outlet` 순서로 감싼다. `useBackendRestartRequired()`가 참이면 상단 고정 `role="alert"` 새로고침 안내 배너를 띄운다.
 - `root.tsx` `ErrorBoundary` — 라우트 오류 화면이다. `isRouteErrorResponse`면 404 또는 `statusText`를 보이고, 그 밖의 `Error`는 `import.meta.env.DEV`일 때만 message와 stack을 보인다.
 - `root.tsx` `links` — 빈 배열을 돌려주는 `Route.LinksFunction`이다.
-- `appCopy` (`copy.ts`) — 앱 루트의 문구 카탈로그. 백엔드 재시작 안내 배너 문구를 담고, 문구는 `tools/copy-check`가 검사한다.
+- `i18n` (`i18n.ts`) — Lingui 인스턴스. 모듈을 불러올 때 `locales/ko.po`(한국어 원문 카탈로그, `@lingui/vite-plugin`이 import할 때 컴파일)를 `ko`로 활성화한다. 서버 렌더와 브라우저 모두에서 `t`와 `<Trans>`가 같은 문구를 낸다. `root.tsx`가 `I18nProvider`로 감싸고, 브라우저 테스트는 `setupFiles`로 불러온다.
+- `locales/ko.po` — `lingui extract`(설정 `../lingui.config.ts`, 네이티브 추출기)가 만드는 카탈로그. 원문 로케일이라 번역란도 원문으로 채워진다. 운영 빌드의 매크로는 ID만 남기므로 이 카탈로그가 있어야 문구가 나온다.
+- `appCopy` (`copy.ts`) — 앱 루트의 문구 카탈로그. 백엔드 재시작 안내 배너 문구를 담고, 문구는 `lint/wording`가 검사한다.
 - `routes.ts` `default` — `RouteConfig`다. `flatRoutes({ ignoredRouteFiles })` 결과에 `prefix("api", flatRoutes({ rootDirectory: "routes/api", ignoredRouteFiles }))`를 이어 붙인다. `ignoredRouteFiles`는 `["**/README.md"]`다.
 - `isTruthy<T>(value)` — `truthy.ts`의 타입 가드다. JavaScript truthiness를 그대로 쓰면서 `Exclude<NonNullable<T>, false | 0 | 0n | "">`로 좁힌다.
 - `app.css` — Tailwind v4 진입 스타일이다. `tailwindcss`, `tw-animate-css`, `shadcn/tailwind.css`, `@fontsource-variable/inter`를 가져온다. `:root`/`.dark` 색 토큰(`--warning` 포함), `--radius` 파생 반경, `--text-2xs`/`--text-3xs`, base 레이어 규칙을 정의한다.

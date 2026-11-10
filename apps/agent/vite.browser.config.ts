@@ -1,9 +1,13 @@
 import tailwindcss from "@tailwindcss/vite";
+import { lingui } from "@lingui/vite-plugin";
 import { defineConfig } from "vite-plus";
 import { playwright } from "vite-plus/test/browser-playwright";
 
 export default defineConfig({
-  plugins: [tailwindcss()],
+  plugins: [
+    lingui({ macroTransform: true, configPath: `${import.meta.dirname}/lingui.config.ts` }),
+    tailwindcss(),
+  ],
   resolve: { tsconfigPaths: true },
   optimizeDeps: {
     // The board is reached only through the project board test; found mid-run, these were
@@ -11,6 +15,8 @@ export default defineConfig({
     include: ["@dnd-kit/core", "@dnd-kit/sortable", "@dnd-kit/utilities", "jotai", "jotai/utils"],
   },
   test: {
+    // Activates the Korean catalog, as the app root does, before any component renders.
+    setupFiles: ["apps/agent/app/i18n.ts"],
     include: [
       "apps/agent/app/components/ui/*.browser.tsx",
       "apps/agent/app/entry/navigation/*.browser.tsx",

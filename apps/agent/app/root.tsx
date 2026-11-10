@@ -11,10 +11,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { NuqsAdapter } from "nuqs/adapters/react-router/v8";
 import { useState } from "react";
 import { OverlayProvider } from "overlay-kit";
+import { I18nProvider } from "@lingui/react";
 
 import { useBackendRestartRequired } from "./entry/shared/use-backend-restart";
 import { themeScript } from "./entry/shared/theme-script";
 import { appCopy } from "./copy";
+import { i18n } from "./i18n";
 import { TooltipProvider } from "~/components/ui/tooltip";
 import type { Route } from "./+types/root";
 import "./app.css";
@@ -56,21 +58,23 @@ export default function App() {
   const backendRestartRequired = useBackendRestartRequired();
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <NuqsAdapter>
-        {backendRestartRequired && (
-          <div
-            className="fixed inset-x-0 top-0 z-100 border-b border-warning/40 bg-background px-4 py-2 text-center text-sm text-foreground shadow-sm"
-            role="alert"
-          >
-            {appCopy.backendRestart}
-          </div>
-        )}
-        <OverlayProvider>
-          <Outlet />
-        </OverlayProvider>
-      </NuqsAdapter>
-    </QueryClientProvider>
+    <I18nProvider i18n={i18n}>
+      <QueryClientProvider client={queryClient}>
+        <NuqsAdapter>
+          {backendRestartRequired && (
+            <div
+              className="fixed inset-x-0 top-0 z-100 border-b border-warning/40 bg-background px-4 py-2 text-center text-sm text-foreground shadow-sm"
+              role="alert"
+            >
+              {appCopy.backendRestart}
+            </div>
+          )}
+          <OverlayProvider>
+            <Outlet />
+          </OverlayProvider>
+        </NuqsAdapter>
+      </QueryClientProvider>
+    </I18nProvider>
   );
 }
 

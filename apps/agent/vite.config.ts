@@ -9,6 +9,7 @@ import {
 import { isTruthy } from "./app/truthy.ts";
 import { reactRouter } from "@react-router/dev/vite";
 import tailwindcss from "@tailwindcss/vite";
+import { lingui } from "@lingui/vite-plugin";
 import { NodeFileSystem } from "@effect/platform-node";
 import { Schema } from "effect";
 import { lazyPlugins, defineConfig } from "vite-plus";
@@ -101,6 +102,8 @@ export default defineConfig(({ command }) =>
           ],
         },
         plugins: lazyPlugins(() => [
+          // Lingui macros (t, Trans) become runtime calls natively, without Babel.
+          lingui({ macroTransform: true, configPath: `${import.meta.dirname}/lingui.config.ts` }),
           tailwindcss(),
           reactRouter(),
           // react({
@@ -164,8 +167,10 @@ export default defineConfig(({ command }) =>
         run: {
           tasks: {
             // Workspace dependencies build first, down to turbovec's native addon.
+            // The catalog is extracted first: production macros keep only message ids, so a message
+            // missing from app/locales/ko.po would render as its id.
             build: {
-              command: "react-router build",
+              command: "lingui extract --clean --workers 1 && react-router build",
               dependsOn: [{ task: "build", from: "dependencies" }],
             },
             bundle: { command: "vp pack", dependsOn: ["build"] },

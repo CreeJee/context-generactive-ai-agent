@@ -1,11 +1,10 @@
+import { t } from "@lingui/core/macro";
 import { Effect } from "effect";
 import { runUiEffect, uiPromise } from "../shared/ui-effect";
-import { problemText } from "../shared/copy-templates";
 import { useMutation } from "@tanstack/react-query";
 import { useBooleanState } from "react-simplikit";
 import { api, isApiError } from "../api";
 import { ApprovalChoice, chooseCrossProviderApproval } from "./cross-provider-approval";
-import { mediaCopy } from "./copy";
 import { useImageSettingsQuery } from "../queries/global";
 import { useCrossProviderConsentMutation } from "../queries/mutations/global";
 
@@ -56,7 +55,7 @@ export function useImageGeneration(onProblem: (message: string) => void) {
         }).pipe(
           Effect.catchTag("UnknownError", () =>
             Effect.sync(() => {
-              onProblem(problemText(mediaCopy.imageFailed));
+              onProblem(t`이미지를 생성하지 못했습니다. 설정과 계정 권한을 확인해 주십시오.`);
               return false;
             }),
           ),
