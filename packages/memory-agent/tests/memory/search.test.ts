@@ -451,6 +451,16 @@ testAgent({ embedder: brokenEmbedder })("MemorySearch.find with a failing embedd
       // The two statements; tool calls and results are never embedded.
       expect(result.unindexed).toBe(2);
       expect(result.matches[0]).toMatchObject({ id: earlier.decision.id, foundBy: "text" });
+      // The same search without the coverage counts finds the same matches.
+      const matches = yield* (yield* MemorySearch).findMatches({
+        query: "Postgres",
+        projectId: earlier.project.id,
+      });
+      expect(matches).toEqual({
+        matches: result.matches,
+        complete: result.complete,
+        degraded: ["vector"],
+      });
     }),
   );
 });

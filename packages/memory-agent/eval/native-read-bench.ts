@@ -279,7 +279,7 @@ const readOnce = (reader: InstanceType<typeof MemoryReadSession>, q: BenchQuery)
     const coverageStarted = performance.now();
     const coverage =
       out.kind === "success"
-        ? Effect.runSync(readCoverage(db, embedder, [q.projectId]))
+        ? Effect.runSync(readCoverage(db, embedder, [q.projectId], "every-project"))
         : { unindexed: 0, lexicalPending: 0, uninterpreted: 0 };
     const coverageMs = performance.now() - coverageStarted;
     return { out, coverage, coverageMs, wallMs: performance.now() - started, terms, morphTerms };

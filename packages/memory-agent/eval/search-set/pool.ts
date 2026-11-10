@@ -112,6 +112,8 @@ export const searchRuns = Effect.fn("searchSet.searchRuns")(function* ({
             remainingMs: 2000,
             inputBudgetBytes: 1048576,
             outputBudgetBytes: 1048576,
+            // Only the channels' ids are ranked here.
+            coverage: "none",
           })
           .pipe(
             // A failed read leaves its lists out; the item's rows say so when every read failed.

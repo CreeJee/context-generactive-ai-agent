@@ -294,7 +294,12 @@ const owner = Effect.gen(function* () {
           const coverage = yield* result.kind === "success"
             ? Effect.map(
                 Effect.timed(
-                  readCoverage(sqlite, command.input.embedder, command.input.allowedProjects).pipe(
+                  readCoverage(
+                    sqlite,
+                    command.input.embedder,
+                    command.input.allowedProjects,
+                    command.input.coverage,
+                  ).pipe(
                     Effect.mapError((cause) =>
                       NativeOwnerFailed.make({ reason: "read-failed", cause }),
                     ),

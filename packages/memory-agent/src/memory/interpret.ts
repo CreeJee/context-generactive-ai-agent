@@ -171,7 +171,7 @@ const make = Effect.gen(function* () {
           )
         : [];
       const found = yield* search
-        .find({
+        .findMatches({
           query: statement.text.slice(0, 500),
           projectId: statement.projectId,
           crossProject: false,

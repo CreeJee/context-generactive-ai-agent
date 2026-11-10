@@ -272,7 +272,7 @@ const readOnlyVectorIndex = (sqlite: DatabaseSync, storage: string, mode: Embedd
             ({ result, control }) =>
               // The worker counts coverage on its own read-only connection after the read.
               result.kind === "success"
-                ? readCoverage(sqlite, input.embedder, input.allowedProjects).pipe(
+                ? readCoverage(sqlite, input.embedder, input.allowedProjects, input.coverage).pipe(
                     Effect.map((coverage) => {
                       control.close();
                       return {

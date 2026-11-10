@@ -57,6 +57,7 @@ layer(NodeServices.layer)((it) => {
               remainingMs: 2000,
               inputBudgetBytes: 1048576,
               outputBudgetBytes: 1048576,
+              coverage: "none",
             });
             expect(read.publication.generation).toBe(1);
             expect(read.result.kind).toBe("success");

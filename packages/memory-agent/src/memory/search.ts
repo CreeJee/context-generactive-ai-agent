@@ -22,7 +22,12 @@ import { Graph, type Hop } from "./graph.ts";
 import { latestResolver, type LatestEvidence } from "./latest.ts";
 import type { NodeKind } from "./nodes.ts";
 import { ChunkSpan } from "./embedding/chunks.ts";
-import { maxVectorK, type NativeReadInput, ReadStage } from "./native-search/read-protocol.ts";
+import {
+  type CoverageCounts,
+  maxVectorK,
+  type NativeReadInput,
+  ReadStage,
+} from "./native-search/read-protocol.ts";
 import { NativeOwnerFailed } from "./native-search/worker-protocol.ts";
 import { optionalProperty } from "../optional-property.ts";
 
@@ -74,7 +79,8 @@ export interface Match {
   readonly latest: LatestEvidence;
 }
 
-export interface FindResult {
+/** A search's matches, without the counts of what it has not covered. */
+export interface FoundMatches {
   readonly matches: readonly Match[];
   /** False when more matches exist beyond `limit` or graph expansion stopped at its budget. */
   readonly complete: boolean;
@@ -85,6 +91,13 @@ export interface FindResult {
   readonly degraded: readonly ("vector" | "text" | "other-projects")[];
   /** Why the other projects were skipped, when `degraded` names them. */
   readonly otherProjectsSkipped?: SkippedRead;
+}
+
+/**
+ * What a search has not covered yet, for the model to judge a miss by. Counting it walks every
+ * embeddable node, so only the searches that report it to the model count it.
+ */
+export interface SearchCoverage {
   /**
    * Statements not embedded yet; they are only reachable by text match or graph edges, as tool calls
    * and results always are.
@@ -101,6 +114,8 @@ export interface FindResult {
    */
   readonly uninterpreted: number;
 }
+
+export interface FindResult extends FoundMatches, SearchCoverage {}
 
 export class NativeMemorySearchFailed extends Schema.TaggedError<
   NativeMemorySearchFailed,
@@ -565,6 +580,7 @@ const make = (tuning: SearchTuning) =>
       input: FindInput,
       allowed: readonly string[],
       limit: number,
+      counted: boolean,
     ) {
       // Model/network stays in the host, outside the publication admission permit.
       const embedded = yield* embedder.embed([input.query], "query").pipe(
@@ -573,7 +589,7 @@ const make = (tuning: SearchTuning) =>
       );
       const query = Option.getOrUndefined(embedded);
       const grouped = searchTerms(input.query);
-      const readOver = (projects: readonly string[]) =>
+      const readOver = (projects: readonly string[], coverage: CoverageCounts) =>
         readSeeds({
           allowedProjects: projects,
           embedder: embedder.identity,
@@ -592,18 +608,20 @@ const make = (tuning: SearchTuning) =>
           remainingMs: 2000,
           inputBudgetBytes: 1048576,
           outputBudgetBytes: 1048576,
+          coverage,
         });
       // The conversation's own project is read first, on its own budget. The other projects hold
       // most of the memory; a failed read of them leaves the project's matches standing and says
       // why, so the model can judge whether to search again. The own read's failure fails the
       // search.
+      // The counts over every project are the same in each read, so only the first makes them.
       const [own, ...others] = allowed;
-      const ownSeeds = yield* readOver([own!]);
+      const ownSeeds = yield* readOver([own!], counted ? "every-project" : "none");
       const skip = (skipped: SkippedRead) => Effect.succeed(Result.fail(skipped));
       const otherSeeds =
         others.length === 0
           ? Result.succeed(Option.none())
-          : yield* readOver(others).pipe(
+          : yield* readOver(others, counted ? "allowed-projects" : "none").pipe(
               Effect.map((seeds) => Result.succeed(Option.some(seeds))),
               Effect.catchTags({
                 NativeMemorySearchFailed: ({ reason, stage, elapsedMs }) =>
@@ -657,12 +675,13 @@ const make = (tuning: SearchTuning) =>
       };
     });
 
-    const find = (input: FindInput) =>
+    /** One search; `counted` says whether it also counts what it has not covered. */
+    const search = (input: FindInput, counted: boolean) =>
       Effect.gen(function* () {
         const limit = input.limit ?? defaultLimit;
         const allowed = yield* allowedProjects(input.projectId, input.crossProject ?? true);
         const { byVector, byText, byMorph, coverage, spans, otherProjectsSkipped, degraded } =
-          yield* collectSeeds(input, allowed, limit);
+          yield* collectSeeds(input, allowed, limit, counted);
         // The vector list is always full, related or not. For a query that names something
         // exactly it would outvote the text match, so the text ranking goes first and counts more.
         const morph = byMorph.length > 0 ? [byMorph] : [];
@@ -737,17 +756,31 @@ const make = (tuning: SearchTuning) =>
           ),
         );
         return {
-          matches,
-          complete: walk.complete && walk.visits.length <= limit,
-          degraded,
-          ...optionalProperty("otherProjectsSkipped", otherProjectsSkipped),
-          unindexed,
-          textUnindexed,
-          uninterpreted,
-        } satisfies FindResult;
+          found: {
+            matches,
+            complete: walk.complete && walk.visits.length <= limit,
+            degraded,
+            ...optionalProperty("otherProjectsSkipped", otherProjectsSkipped),
+          } satisfies FoundMatches,
+          coverage: { unindexed, textUnindexed, uninterpreted } satisfies SearchCoverage,
+        };
       });
 
-    return { find, allowedProjects, latest };
+    /** Finds prior messages, with the counts of what the search has not covered for the model. */
+    const find = (input: FindInput) =>
+      Effect.map(search(input, true), ({ found, coverage }): FindResult => ({
+        ...found,
+        ...coverage,
+      }));
+
+    /**
+     * The matches alone, for a caller that shows the model no coverage, such as a turn's own
+     * retrieval: counting it walked every embeddable node on each search.
+     */
+    const findMatches = (input: FindInput) =>
+      Effect.map(search(input, false), ({ found }) => found);
+
+    return { find, findMatches, allowedProjects, latest };
   });
 
 /** Finds prior messages: vector and text matches seed a graph walk over the memory. */

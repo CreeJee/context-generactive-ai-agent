@@ -51,6 +51,7 @@ it("settles scoped admission on real pin or terminal result and propagates pre-a
                 remainingMs: 2_000,
                 inputBudgetBytes: 65_536,
                 outputBudgetBytes: 4_096,
+                coverage: "every-project",
               };
               const seeded = new Float32Array(3 * 384);
               seeded[0] = 1;

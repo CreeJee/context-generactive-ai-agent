@@ -350,6 +350,7 @@ testAgent()("SecretSweep of stored nodes", (it) => {
             remainingMs: 2000,
             inputBudgetBytes: 1048576,
             outputBudgetBytes: 1048576,
+            coverage: "none",
           });
           return { text: result.textIds, morph: result.morphIds };
         });

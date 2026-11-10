@@ -133,6 +133,7 @@ it(
               remainingMs: 2_000,
               inputBudgetBytes: 1_048_576,
               outputBudgetBytes: 1_048_576,
+              coverage: "every-project",
             };
             const search = (id: string, patch: Partial<NativeReadInput> = {}) =>
               owner.execute(
@@ -171,6 +172,26 @@ it(
             expect(reply.result.unindexed).toBe(unindexed);
             expect(reply.result.uninterpreted).toBe(uninterpreted);
             expect(reply.result.lexicalPending).toBe(0);
+            // A read of other projects counts only their uninterpreted nodes, and a search that
+            // reports no coverage counts nothing; the matches stay the same.
+            const allowedOnly = yield* search("allowed-projects", { coverage: "allowed-projects" });
+            const uncounted = yield* search("none", { coverage: "none" });
+            expect(allowedOnly).toMatchObject({
+              result: {
+                unindexed: 0,
+                lexicalPending: 0,
+                uninterpreted,
+                morphIds: ["alpha", "beta"],
+              },
+            });
+            expect(uncounted).toMatchObject({
+              result: {
+                unindexed: 0,
+                lexicalPending: 0,
+                uninterpreted: 0,
+                vectorIds: ["alpha", "beta"],
+              },
+            });
             // A change not applied yet: the index may hold text or a project the node no longer
             // has, so the read drops the node until it is applied.
             db.prepare("INSERT INTO lexical_changes(node_seq) VALUES (2)").run();

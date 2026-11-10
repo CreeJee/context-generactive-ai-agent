@@ -16,6 +16,14 @@ const elapsed = Schema.Finite.check(Schema.makeFilter((value) => value >= 0));
 /** Same bound as the native `admitted`: a larger vector k fails the whole read. */
 export const maxVectorK = 48;
 
+/**
+ * The coverage counts a read asks for. `every-project` adds the counts over every project to the
+ * allowed projects' uninterpreted nodes, as a search's first read does. A later read of other
+ * projects asks for `allowed-projects` only, and a search that reports no coverage for `none`.
+ */
+export const CoverageCounts = Schema.Literals(["every-project", "allowed-projects", "none"]);
+export type CoverageCounts = typeof CoverageCounts.Type;
+
 export const NativeReadInput = Schema.Struct({
   allowedProjects: ids,
   embedder: Schema.String,
@@ -34,6 +42,8 @@ export const NativeReadInput = Schema.Struct({
   remainingMs: Budget,
   inputBudgetBytes: Bytes,
   outputBudgetBytes: Bytes,
+  /** Which coverage counts the worker makes after the read (`coverage.ts`); the rest are 0. */
+  coverage: CoverageCounts,
 });
 export type NativeReadInput = typeof NativeReadInput.Type;
 
