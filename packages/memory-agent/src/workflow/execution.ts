@@ -280,6 +280,15 @@ const make = Effect.gen(function* () {
         ),
     ),
 
+    /**
+     * A Plan the user just approved whose board did not take it: the session shows why until the
+     * user acts, whatever ran before. `runId` is the session's last run.
+     */
+    blockApproval: Effect.fn("WorkflowExecution.blockApproval")(
+      (sessionId: string, runId: string, blocker: WorkflowBlocker) =>
+        writing(save(sessionId, cases.blocked.make({ runId, ...blocker }))),
+    ),
+
     blockPending: Effect.fn("WorkflowExecution.blockPending")(
       (sessionId: string, runId: string, blocker: WorkflowBlocker) =>
         writing(

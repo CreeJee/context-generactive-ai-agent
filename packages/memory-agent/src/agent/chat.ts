@@ -167,7 +167,11 @@ import {
 } from "../workflow/workflow.ts";
 import { WorkflowTools, workflowInstructions } from "../workflow/tools.ts";
 import { OutcomeLedger, outcomeStandings } from "../workflow/outcome-ledger.ts";
-import { WorkflowExecution, WorkflowExecutionState } from "../workflow/execution.ts";
+import {
+  type WorkflowBlocker,
+  WorkflowExecution,
+  WorkflowExecutionState,
+} from "../workflow/execution.ts";
 import { GoalExecutions } from "../workflow/goal-execution.ts";
 import { OwnerWorkflowAdmissionResult } from "../workflow/owner-workflow-storage.ts";
 import { ProviderRetries, ProviderRetryOutcome } from "../workflow/provider-retry.ts";
@@ -669,6 +673,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             ),
           ),
     );
+  /** Why an approval did not reach a running board: the board keeps its earlier approval policy. */
+  const cardApprovalNotSaved = "card_approval_not_saved";
   /**
    * The board of a Plan approval just recorded: a board that kept running takes the approval's
    * policy for the cards the planner adds, as a board it starts would. Why it could not start, if so.
@@ -677,13 +683,29 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     Effect.flatMap(kanbanBoard(sessionId), (running) =>
       running
         ? kanbanOrchestrator.setCardApproval(sessionId, cardApproval).pipe(
-            Effect.catchCause((cause) =>
-              Effect.logWarning("Approved Plan did not set its board's card approval", cause),
-            ),
             Effect.as(Option.none<string>()),
+            Effect.catchCause((cause) =>
+              Effect.as(
+                Effect.logWarning("Approved Plan did not set its board's card approval", cause),
+                Option.some(cardApprovalNotSaved),
+              ),
+            ),
           )
         : startBoard(sessionId, cardApproval),
     );
+  /** What the user sees when an approved Plan's board did not take it, by why. */
+  const approvalBlocker = (refused: string): WorkflowBlocker => ({
+    reason: "external_dependency",
+    detail:
+      refused === cardApprovalNotSaved
+        ? i18n._(
+            msg`실행 중인 보드에 이번 승인의 새 카드 승인 방식을 저장하지 못했습니다. 보드에 새로 더하는 카드는 이전 방식대로 승인합니다.`,
+          )
+        : i18n._(
+            msg`승인한 Plan을 칸반 보드에서 시작하지 못했습니다. 보드 패널에서 칸반으로 전환을 다시 눌러 주십시오.`,
+          ),
+    evidence: [refused],
+  });
   /** On a kanban board the session's chat is the planner, so it runs on the planner's model. */
   const sessionModel = (sessionId: string) =>
     Effect.flatMap(kanbanBoard(sessionId), (board) =>
@@ -2562,11 +2584,18 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const state = yield* workflows.move(sessionId, move);
         yield* execution.stop(sessionId);
         yield* cancelProviderRetries(sessionId);
-        // A board that cannot start is offered again from the board panel.
-        yield* Effect.when(
-          approvedPlanBoard(sessionId, "user"),
-          Effect.succeed(executesPlan(state)),
-        );
+        // A board that cannot start shows why, as in Goal mode, and is offered again from the board
+        // panel.
+        const refused = executesPlan(state)
+          ? yield* approvedPlanBoard(sessionId, "user")
+          : Option.none<string>();
+        if (Option.isSome(refused)) {
+          // The blocker belongs to a run; a session that never ran keeps the board panel's offer.
+          const last = yield* lastRun(sessionId);
+          yield* isTruthy(last)
+            ? execution.blockApproval(sessionId, last.runId, approvalBlocker(refused.value))
+            : Effect.logWarning("Approved Plan did not reach its board", refused.value);
+        }
         return state;
       }).pipe(
         Effect.catchTags({
@@ -2864,13 +2893,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               ? approvedPlanBoard(sessionId, "permission")
               : startBoard(sessionId, "user");
             if (Option.isSome(refused)) {
-              yield* execution.blockPending(sessionId, last.runId, {
-                reason: "external_dependency",
-                detail: i18n._(
-                  msg`승인한 Plan을 칸반 보드에서 시작하지 못했습니다. 보드 패널에서 칸반으로 전환을 다시 눌러 주십시오.`,
-                ),
-                evidence: [refused.value],
-              });
+              yield* execution.blockPending(sessionId, last.runId, approvalBlocker(refused.value));
               yield* events.publishSession(sessionId, "run-state");
               return;
             }
