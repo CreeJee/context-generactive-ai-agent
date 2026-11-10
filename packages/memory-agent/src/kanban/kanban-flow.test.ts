@@ -30,6 +30,7 @@ import {
   waitForCards,
   type KanbanFixture,
 } from "../testing/kanban.ts";
+import { AppEvents } from "../events/app-events.ts";
 import { Projects } from "../projects/projects.ts";
 import { BoardAuthor } from "../workflow/card.ts";
 import { BoardIntent } from "../workflow/contracts.ts";
@@ -111,6 +112,8 @@ const plannerAdds = Effect.fnUntraced(function* (sessionId: string, id: string) 
     { planVersion, edits: [{ action: "add", step: card(id) }] },
     "planner-run",
   );
+  // The planner's workflow tools tell the board its Plan changed.
+  yield* (yield* AppEvents).publishSession(sessionId, "run-state");
 });
 
 const cardOf = (cards: ReadonlyArray<PlanStep>, id: string) => cards.find((step) => step.id === id);

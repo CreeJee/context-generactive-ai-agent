@@ -25,7 +25,7 @@ import { AppEvents } from "../events/app-events.ts";
 import { Projects } from "../projects/projects.ts";
 import { Sessions } from "../sessions/sessions.ts";
 import { CardApprovalChange, type BoardEditRefused } from "../workflow/board-edit.ts";
-import { BoardAuthor, type CardStatus } from "../workflow/card.ts";
+import { BoardAuthor, cardWaitsForNobody, type CardStatus } from "../workflow/card.ts";
 import {
   Workflows,
   type GoalArtifact,
@@ -157,8 +157,9 @@ export interface KanbanOrchestratorOptions {
   /** Longest wait between looks at a board when nothing in this process woke it. */
   readonly pollInterval?: Duration.Input;
   /**
-   * The same wait for an idle board: its Plan is not executing and none of its attempts runs.
-   * Changes to it wake it; the interval covers a change that sends no signal.
+   * The same wait for an idle board: none of its attempts runs and no card of it could start
+   * without someone else acting first. Changes to it wake it; the interval covers a change that
+   * sends no signal.
    */
   readonly idlePollInterval?: Duration.Input;
   /** The wait before a card's second retry. */
@@ -1036,9 +1037,9 @@ const make = (options: KanbanOrchestratorOptions) =>
     });
 
     /**
-     * One look at a board: take up outcomes, then assign what may run. It ends `idle` when the
-     * Plan is not executing and no attempt of the board is running: nothing changes the board then
-     * until someone else does.
+     * One look at a board: take up outcomes, then assign what may run. It ends `idle` when no
+     * attempt of the board is running and no card of it could start: its cards wait for a person,
+     * the planner, a check or merge beside the loop, or another Goal, and those wake it.
      */
     const tick = Effect.fnUntraced(function* (goalInstanceId: string) {
       const found = yield* attempts.goal(goalInstanceId);
@@ -1242,7 +1243,19 @@ const make = (options: KanbanOrchestratorOptions) =>
         events.publishSession(goal.sessionId, "run-state"),
         Effect.succeed(plannerStalled(planner) !== plannerStalled(goal.planner)),
       );
-      return executing || pending.some((attempt) => attempt.outcome === null)
+      // A card that waits only for a free slot, a working card or its retry delay starts without
+      // anyone waking the board, so the board keeps looking for it.
+      const startable =
+        executing &&
+        !paused &&
+        waitingOn.length === 0 &&
+        steps.some(
+          (step) =>
+            (step.status === "ready" || step.status === "in_progress") &&
+            cardWaitsForNobody(step) &&
+            !holdsCard(goal.hold, step.id),
+        );
+      return startable || pending.some((attempt) => attempt.outcome === null)
         ? ("running" as const)
         : ("idle" as const);
     });
