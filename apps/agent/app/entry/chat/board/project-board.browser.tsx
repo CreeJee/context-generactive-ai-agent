@@ -44,6 +44,7 @@ const payments = {
   kanbanActive: true,
   updatedAt: "2026-10-21T01:00:00.000Z",
   rank: 0,
+  awaitingApproval: [],
 };
 const logging = {
   sessionId: "session-b",
@@ -53,6 +54,7 @@ const logging = {
   kanbanActive: false,
   updatedAt: "2026-10-20T01:00:00.000Z",
   rank: 1,
+  awaitingApproval: [],
 };
 /** A Plan not executing yet: named on the board, its cards not shown. */
 const alerts = {
@@ -63,6 +65,7 @@ const alerts = {
   kanbanActive: false,
   updatedAt: "2026-10-19T01:00:00.000Z",
   rank: 2,
+  awaitingApproval: [],
 };
 const boards = {
   "session-a": {

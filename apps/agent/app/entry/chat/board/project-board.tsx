@@ -76,6 +76,8 @@ export function ProjectBoard({
   const rows = everyRow.filter(onBoard);
   const waiting = everyRow.filter((row) => !onBoard(row));
   const inbox = useDecisionInboxQuery(projectId).data ?? [];
+  // Cards awaiting approval wait for the user too, as the inbox counts them.
+  const awaiting = everyRow.reduce((sum, row) => sum + row.awaitingApproval.length, 0);
   const order = useGoalOrderMutation(projectId);
   const views = useQueries({
     queries: rows.map((row) => sessionQueries.board(projectId, row.sessionId)),
@@ -157,10 +159,10 @@ export function ProjectBoard({
                   {done}/{total}
                 </span>
               </span>
-              {inbox.length > 0 && (
+              {inbox.length + awaiting > 0 && (
                 <Badge variant="outline">
                   <Trans comment="Badge: how many decisions wait for a person">
-                    판단 대기 {ph({ count: inbox.length })}
+                    판단 대기 {ph({ count: inbox.length + awaiting })}
                   </Trans>
                 </Badge>
               )}
@@ -258,7 +260,10 @@ export function ProjectBoard({
                     holder={holder}
                     row={row}
                     surface={surfaceOf(row.sessionId)}
-                    decisions={Arr.countBy(inbox, (item) => item.sessionId === row.sessionId)}
+                    decisions={
+                      Arr.countBy(inbox, (item) => item.sessionId === row.sessionId) +
+                      row.awaitingApproval.length
+                    }
                     moving={order.isPending}
                     onMoveUp={
                       index === 0
@@ -343,6 +348,7 @@ function ConversationRow({
   readonly row: ProjectBoardRow;
   /** The conversation's board as the surface shows it; null until it has loaded. */
   readonly surface: SurfaceBoard | null;
+  /** Decisions and card approvals waiting for the user. */
   readonly decisions: number;
   /** A move is on its way to the server. */
   readonly moving: boolean;

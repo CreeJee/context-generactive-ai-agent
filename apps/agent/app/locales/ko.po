@@ -160,6 +160,11 @@ msgstr "{card} 카드의 보류를 풉니다."
 msgid "{card}: 실패 {failureStreak} · Plan 재작성 {replans}"
 msgstr "{card}: 실패 {failureStreak} · Plan 재작성 {replans}"
 
+#. Label of one card awaiting approval; cardTitle is its kanban card's title
+#: app/entry/navigation/decision-inbox.tsx
+msgid "{cardTitle} 승인"
+msgstr "{cardTitle} 승인"
+
 #. Label of one waiting decision; cardTitle is its kanban card's title
 #: app/entry/navigation/decision-inbox.tsx
 msgid "{cardTitle} 판단"
@@ -3449,21 +3454,27 @@ msgid "스티어링으로 전달됨"
 msgstr "스티어링으로 전달됨"
 
 #. Button in the card panel that approves the card to run
+#. Button that approves a card the planner added
 #. Button that approves the tool call
 #. The user approved the tool call
 #: app/entry/chat/approval.tsx
 #: app/entry/chat/board/card-peek.tsx
+#: app/entry/navigation/decision-inbox.tsx
 #: app/entry/report/report-bundle.tsx
 msgid "승인"
 msgstr "승인"
 
+#. A card waiting for the user's approval
+#. A card waiting for the user's approval
 #. Badge on a card: the card waits for the person's approval
 #. Status badge of a task in Work Trace
 #. Status badge on a subagent task card
 #. Status of a tool call in the chat trace
+#: app/entry/chat/board-panel.tsx
 #: app/entry/chat/board/card-face.tsx
 #: app/entry/chat/message.tsx
 #: app/entry/chat/work-trace-panel.tsx
+#: app/entry/navigation/decision-inbox.tsx
 msgid "승인 대기"
 msgstr "승인 대기"
 
@@ -4516,8 +4527,8 @@ msgid "이 프로젝트의 대화가 셸 명령과 MCP 도구처럼 승인을 �
 msgstr "이 프로젝트의 대화가 셸 명령과 MCP 도구처럼 승인을 받던 도구를 묻지 않고 바로 실행합니다. 믿을 수 있는 프로젝트에서만 써 주십시오."
 
 #: app/entry/navigation/decision-inbox.tsx
-msgid "이 프로젝트의 모든 대화와 Goal에서 사람의 판단을 기다리는 카드입니다. 여기서 답하거나 카드가 있는 보드로 이동합니다."
-msgstr "이 프로젝트의 모든 대화와 Goal에서 사람의 판단을 기다리는 카드입니다. 여기서 답하거나 카드가 있는 보드로 이동합니다."
+msgid "이 프로젝트의 모든 대화와 Goal에서 사람의 판단이나 승인을 기다리는 카드입니다. 여기서 답하거나 승인하고, 카드가 있는 보드로 이동합니다."
+msgstr "이 프로젝트의 모든 대화와 Goal에서 사람의 판단이나 승인을 기다리는 카드입니다. 여기서 답하거나 승인하고, 카드가 있는 보드로 이동합니다."
 
 #. Button that removes one item from the diagnosis list
 #: app/entry/report/report-diagnosis.tsx
@@ -5577,6 +5588,7 @@ msgstr "카드 다시 작업"
 msgid "카드 멈춤"
 msgstr "카드 멈춤"
 
+#. Button that opens the decision's card on its board
 #. Button that opens the decision's card on its board
 #: app/entry/navigation/decision-inbox.tsx
 msgid "카드 보기"

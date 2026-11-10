@@ -168,6 +168,15 @@ export class Boards extends Context.Service<
                           HashMap.get(rankOf, row.session_id),
                           () => rows.length,
                         ),
+                        // Only a running board approves cards.
+                        awaitingApproval:
+                          row.kanban_active === 1
+                            ? plan.steps.flatMap((step) =>
+                                step.approval === undefined
+                                  ? []
+                                  : [{ cardId: step.id, title: step.title }],
+                              )
+                            : [],
                       },
                     ],
               ),

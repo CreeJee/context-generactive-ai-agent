@@ -89,9 +89,10 @@ const attentionRanks: Readonly<Record<CardStatus, number>> = {
   backlog: 5,
   done: 6,
 };
-const byAttention = Order.mapInput(
-  Order.Number,
-  ({ card }: BoardView["cards"][number]) => attentionRanks[card.status],
+/** A card awaiting the user's approval waits in backlog, yet asks for the user as a decision does. */
+const awaitsApproval = ({ card }: BoardView["cards"][number]) => card.approval !== undefined;
+const byAttention = Order.mapInput(Order.Number, (entry: BoardView["cards"][number]) =>
+  awaitsApproval(entry) ? attentionRanks.human_decision : attentionRanks[entry.card.status],
 );
 
 /** The workflow bar's numbers: cards done, outcomes met and decisions waiting for the user. */
@@ -103,8 +104,9 @@ export function BoardTally({
   readonly sessionId: string;
 }) {
   const view = useBoardQuery(projectId, sessionId).data;
-  const waiting = useDecisionsQuery(projectId, sessionId).data?.length ?? 0;
+  const decisions = useDecisionsQuery(projectId, sessionId).data?.length ?? 0;
   if (!isTruthy(view)) return null;
+  const waiting = decisions + Arr.countBy(view.cards, awaitsApproval);
   const done = Arr.countBy(view.cards, ({ card }) => card.status === "done");
   const cardCount = view.cards.length;
   const met = metOutcomes(view.outcomes);
@@ -325,7 +327,11 @@ export function WorkflowBoard({
             key={card.id}
             title={card.title}
             icon={<StatusIcon status={card.status} />}
-            trailing={t(cardStatusLabels[card.status])}
+            trailing={
+              card.approval !== undefined
+                ? t({ message: "승인 대기", comment: "A card waiting for the user's approval" })
+                : t(cardStatusLabels[card.status])
+            }
             render={
               <a
                 href={boardLink({ board: true, card: card.id })}

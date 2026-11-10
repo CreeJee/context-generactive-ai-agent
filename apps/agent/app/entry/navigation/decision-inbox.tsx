@@ -12,13 +12,16 @@ import {
   SheetTitle,
 } from "~/components/ui/sheet";
 import { SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem } from "~/components/ui/sidebar";
+import { BoardIntent } from "../api";
 import { DecisionPrompt } from "../chat/decision-prompt";
-import { useDecisionInboxQuery } from "../queries/project";
+import { editErrorText } from "../chat/board/board-surface";
+import { KanbanAction, useBoardsKanbanMutation } from "../queries/mutations/session";
+import { useDecisionInboxQuery, useProjectBoardsQuery } from "../queries/project";
 import { koreanLocalTime } from "../shared/local-time";
 
 /**
- * The project inbox: every card decision waiting for a person, across conversations and Goals.
- * Each one can be answered here or opened on its board.
+ * The project inbox: every card decision and every card awaiting approval, across conversations
+ * and Goals. Each one can be answered or approved here, or opened on its board.
  */
 export function DecisionInbox({
   projectId,
@@ -32,6 +35,12 @@ export function DecisionInbox({
   const { t } = useLingui();
   const [open, setOpen] = useState(false);
   const items = useDecisionInboxQuery(projectId).data ?? [];
+  const approvals = (useProjectBoardsQuery(projectId).data ?? []).flatMap((board) =>
+    board.awaitingApproval.map((card) => ({ ...card, board })),
+  );
+  const approve = useBoardsKanbanMutation(holder)(projectId);
+  const [approveError, setApproveError] = useState<string | null>(null);
+  const count = items.length + approvals.length;
   return (
     <SidebarMenuItem>
       <SidebarMenuButton onClick={() => setOpen(true)}>
@@ -41,9 +50,9 @@ export function DecisionInbox({
         </span>
       </SidebarMenuButton>
       {/* Only a waiting decision asks for attention; none is the usual state. */}
-      {items.length > 0 && (
+      {count > 0 && (
         <SidebarMenuBadge>
-          <Badge>{items.length}</Badge>
+          <Badge>{count}</Badge>
         </SidebarMenuBadge>
       )}
       <Sheet open={open} onOpenChange={setOpen}>
@@ -54,13 +63,13 @@ export function DecisionInbox({
             </SheetTitle>
             <SheetDescription>
               <Trans>
-                이 프로젝트의 모든 대화와 Goal에서 사람의 판단을 기다리는 카드입니다. 여기서
-                답하거나 카드가 있는 보드로 이동합니다.
+                이 프로젝트의 모든 대화와 Goal에서 사람의 판단이나 승인을 기다리는 카드입니다.
+                여기서 답하거나 승인하고, 카드가 있는 보드로 이동합니다.
               </Trans>
             </SheetDescription>
           </SheetHeader>
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 pb-4 text-xs text-muted-foreground">
-            {items.length === 0 && (
+            {count === 0 && (
               <p>
                 <Trans>판단을 기다리는 카드가 없습니다.</Trans>
               </p>
@@ -101,6 +110,62 @@ export function DecisionInbox({
                   request={item}
                   disabled={false}
                 />
+              </section>
+            ))}
+            {approveError !== null && (
+              <p role="alert" className="text-destructive">
+                {approveError}
+              </p>
+            )}
+            {approvals.map(({ cardId, title, board }) => (
+              <section
+                key={`${board.sessionId}:${cardId}`}
+                aria-label={t({
+                  message: `${ph({ cardTitle: title })} 승인`,
+                  comment:
+                    "Label of one card awaiting approval; cardTitle is its kanban card's title",
+                })}
+                className="space-y-1.5 rounded-md border p-2"
+              >
+                <div className="flex items-start gap-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-medium text-foreground">{title}</p>
+                    <p className="truncate">
+                      {board.sessionTitle ?? t`제목 없는 대화`} ·{" "}
+                      <Trans comment="A card waiting for the user's approval">승인 대기</Trans>
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setOpen(false);
+                      onOpenCard(board.sessionId, cardId);
+                    }}
+                  >
+                    <Trans comment="Button that opens the decision's card on its board">
+                      카드 보기
+                    </Trans>
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={approve.isPending}
+                    onClick={() => {
+                      setApproveError(null);
+                      approve.mutate(
+                        {
+                          sessionId: board.sessionId,
+                          action: KanbanAction.Intent({ intent: BoardIntent.Approve({ cardId }) }),
+                        },
+                        { onError: (error) => setApproveError(editErrorText(error)) },
+                      );
+                    }}
+                  >
+                    <Trans comment="Button that approves a card the planner added">승인</Trans>
+                  </Button>
+                </div>
               </section>
             ))}
           </div>

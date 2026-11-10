@@ -38,6 +38,8 @@ export const ProjectBoard = Schema.Struct({
   updatedAt: Schema.String,
   /** The conversation's place among the project's Goals in the priority tree, from 0. */
   rank: Schema.Finite,
+  /** The cards of a running board that wait for the user's approval, in Plan order. */
+  awaitingApproval: Schema.Array(Schema.Struct({ cardId: Schema.String, title: Schema.String })),
 });
 export type ProjectBoard = typeof ProjectBoard.Type;
 
