@@ -6,6 +6,7 @@
 
 ## Interface
 
+- `i18n` (`i18n.ts`, `memory-agent/i18n`로 내보냄) — 서버가 보이는 문구를 푸는 Lingui 인스턴스. 서버 코드는 빌드 없이 돌므로 문구를 `@lingui/core/runtime-macro`의 `msg`로 쓰고 `i18n._(…)`로 푼다. 설명자가 한국어 원문을 담아 카탈로그를 싣지 않고, 보일 때 메시지를 컴파일한다. `locales/ko.po`는 `lingui extract`(설정 `../lingui.config.ts`)가 만들고 `lint/wording`이 검사한다
 - `memoryAgentLayer` — `EffectFunction.dual`이며 `(storageRoot)`, `(storageRoot, options)`, `(options)(storageRoot)` 형태를 받는다. 첫 인자가 문자열(`Schema.is(Schema.String)`)이면 data-first로 판별한다. 저장 디렉터리 하나 위에 모든 memory-agent 서비스를 조립하는 composition root다
 - `MemoryAgentLayerOptions` — `memoryAgentLayer`의 선택 옵션이다. 레이어 교체용 옵션은 `compatibleSettings`, `embedder`, `providerRegistry`, `providerToolRegistry`, `modelFeatureFlags`, `crossProviderMediaConsent`, `providerToolPolicy`, `providerToolRuntime`, `routeCatalog`, `imageRouteFacts`, `imageRouter`, `imageFeature`, `directImageExecutor`, `imageMediaWorkflow`, `secrets`다. 값 옵션은 `openDatabase`, `leaseTtlMs`, `interpretAutomatically`, `summarizeAutomatically`, `kagiBaseUrl`, `skillsHome`, `skillsBuiltin`, `importsHome`, `importsWatching`, `sweepSecrets`, `kanbanWorktreesBase`다
 - `JsonValue` — 손실 없이 JSON으로 표현되는 값 타입이자 `Schema.Codec<JsonValue>`이다(`json.ts`). `Schema.suspend` 재귀 Union으로 String, Finite, Boolean, Null, Array, Record를 받는다. `index.ts`는 이를 `JsonValue`와 타입 별칭 `Json`으로 다시 내보낸다

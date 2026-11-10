@@ -286,6 +286,7 @@ context-agent memory compact
 vp test          # 이 패키지 테스트
 vp test bench --dir bench   # 도구 지연 측정(합성 저장소 3,000 파일)
 vp check         # 루트에서: 포맷·lint·타입 검사
+vp run memory-agent#i18n:extract   # 문구를 바꾼 뒤 src/locales/ko.po 갱신 (커밋 hook이 i18n:check로 확인)
 ```
 
 테스트는 임시 디렉터리의 실제 SQLite, turbovec, 파일 시스템을 씁니다.

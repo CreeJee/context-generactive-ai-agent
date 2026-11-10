@@ -1,6 +1,6 @@
 import { Array as Arr, Effect, Record as Rec, RegExp as Re, Result } from "effect";
 
-import type { SourceText } from "./extract.ts";
+import type { Message } from "./messages.ts";
 import { Morphemes } from "./morphemes.ts";
 import { finalEndingTag, glossary, phraseRules, registers, sentenceStopTags } from "../policy.ts";
 import type { GlossaryEntry, Mood } from "../policy.ts";
@@ -11,12 +11,8 @@ export interface Violation {
   readonly message: string;
 }
 
-/** A violation at its place in a file. */
-export interface Finding extends Violation {
-  readonly file: string;
-  readonly line: number;
-  readonly column: number;
-}
+/** A violation in one message, and where the message is. */
+export interface Finding extends Violation, Message {}
 
 /** The part of a Kiwi token the ending check reads. */
 export interface Morpheme {
@@ -111,20 +107,17 @@ export function endingViolations(
   );
 }
 
-/** Every violation in each piece of wording of `file`. */
-export const checkTexts = Effect.fnUntraced(function* (
-  file: string,
-  texts: ReadonlyArray<SourceText>,
-) {
+/** Every violation in each of `messages`. */
+export const checkMessages = Effect.fnUntraced(function* (messages: ReadonlyArray<Message>) {
   const morphemes = yield* Morphemes;
-  return Arr.flatMap(texts, ({ text, line, column }) =>
+  return Arr.flatMap(messages, (message) =>
     Arr.map(
       [
-        ...phraseViolations(text),
-        ...glossaryViolations(text),
-        ...endingViolations(text, morphemes.tokenize(text)),
+        ...phraseViolations(message.text),
+        ...glossaryViolations(message.text),
+        ...endingViolations(message.text, morphemes.tokenize(message.text)),
       ],
-      (violation): Finding => ({ ...violation, file, line, column }),
+      (violation): Finding => ({ ...violation, ...message }),
     ),
   );
 });

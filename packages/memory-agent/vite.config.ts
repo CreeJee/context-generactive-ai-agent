@@ -66,6 +66,10 @@ export default defineConfig({
         command: "vp pack",
         dependsOn: [{ task: "build", from: "dependencies" }],
       },
+      // The Lingui catalog of server text (runtime macro); the commit hook runs `i18n:check`.
+      // Never cached: the native extractor's reads are not tracked.
+      "i18n:extract": { command: "lingui extract --clean", cache: false },
+      "i18n:check": { command: "lingui check sync --clean", cache: false },
       test: {
         command: "vp test --project unit --project feature --maxWorkers=4",
         dependsOn: [{ task: "build", from: "dependencies" }],

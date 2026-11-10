@@ -1,6 +1,6 @@
 import { defineConfig } from "vite-plus";
 
-import { wordingExempt, wordingScope } from "./lint/wording/policy.ts";
+import { notWording, wordingExempt, wordingScope } from "./lint/wording/policy.ts";
 
 const agentAndVendoredIgnorePatterns = [
   ".agent/**",
@@ -24,9 +24,12 @@ export default defineConfig({
   },
   staged: {
     "*": "vp check --fix",
-    // What Korean wording says: banned phrases, glossary spellings and sentence endings. The check
-    // reads only the files lint/wording/policy.ts covers and skips the rest.
-    "*.{ts,tsx}": "node lint/wording/check/main.ts check",
+    // Catalogs match their sources: a message added or changed without `lingui extract` fails here.
+    "apps/agent/{app,server}/**/*.{ts,tsx,po}": () => "vp run agent#i18n:check",
+    "packages/memory-agent/src/**/*.{ts,po}": () => "vp run memory-agent#i18n:check",
+    // What Korean wording says, which Lingui does not check: banned phrases, glossary spellings and
+    // sentence endings in the extracted catalogs (lint/wording/policy.ts).
+    "*.po": "node lint/wording/check/main.ts check",
   },
   fmt: {
     // Golden files are test output compared byte for byte.
@@ -43,7 +46,7 @@ export default defineConfig({
       },
       { name: "shadcn", specifier: "@shadcn/lint" },
       { name: "allocation", specifier: "./lint/allocation/index.ts" },
-      { name: "wording", specifier: "./lint/wording/index.ts" },
+      { name: "lingui", specifier: "eslint-plugin-lingui" },
     ],
     rules: {
       "vite-plus/prefer-vite-plus-imports": "error",
@@ -100,16 +103,23 @@ export default defineConfig({
         },
       },
       {
-        // Where Korean text may live; scope and exemptions are in lint/wording/policy.ts.
+        // Korean text stays inside Lingui messages, and messages stay translatable: the official
+        // rules (eslint-plugin-lingui's recommended set plus no-unlocalized-strings). Scope and
+        // exemptions are in lint/wording/policy.ts.
         files: wordingScope,
         rules: {
-          "wording/no-raw-korean": "error",
+          "lingui/no-unlocalized-strings": ["error", { ignore: [notWording] }],
+          "lingui/t-call-in-function": "error",
+          "lingui/no-single-tag-to-translate": "error",
+          "lingui/no-single-variables-to-translate": "error",
+          "lingui/no-trans-inside-trans": "error",
+          "lingui/no-expression-in-message": "error",
         },
       },
       {
         files: wordingExempt,
         rules: {
-          "wording/no-raw-korean": "off",
+          "lingui/no-unlocalized-strings": "off",
         },
       },
       {

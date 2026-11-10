@@ -4705,4 +4705,15 @@
   - 문구 정책은 `lint/wording/policy.ts` 하나에 둔다(범위, 예외, 문구가 있을 자리, 금지 표현, 용어집, 말투). lint 규칙 `wording/no-raw-korean`, 문구 검사 CLI `lint/wording/check`, 커밋 hook, Claude Code hook이 모두 이 파일을 읽는다. 이름은 카탈로그 형식(`copy.ts`)에 묶이지 않게 `wording`으로 바꿨다.
   - 문구는 Lingui 메시지, 아직 옮기지 않은 `copy.ts`, 모델용 `prompts.ts` 세 곳에만 둔다.
   - Lingui 패키지와 native-tools(1.0 전)는 정확한 버전으로 고정한다.
-- 남은 결정: 나머지 `copy.ts`를 Lingui로 옮길지, 서버 패키지(ACP 문구)에도 Lingui를 쓸지.
+- 남은 결정: 나머지 `copy.ts`를 Lingui로 옮길지, 서버 패키지(ACP 문구)에도 Lingui를 쓸지. 같은 날 아래 항목에서 정했다.
+
+## 모든 문구를 Lingui로 옮기고, 자리는 공식 도구에, 내용은 Kiwi 검사에 맡긴다 (2026-11-10)
+
+- 계기: 사용자가 Lingui를 전체에 적용하고 공식 skill(`lingui-best-practices`, `lingui-framework-setup`, `enhanced-message-context`, `find-unwrapped-strings`)을 들였다. Lingui를 쓴다고 문구 규칙이 지켜지지는 않으므로, 공식 skill·CLI와 겹치는 자체 안내와 도구는 지우고 이 저장소의 도구는 추출된 문구의 문맥(금지 표현, 용어집, 말투)을 Kiwi로 보는 일에 모으기로 했다.
+- 결정:
+  - 앱(`apps/agent/app`)과 서버(`apps/agent/server`, `packages/memory-agent/src`)의 `copy.ts`와 `copy-templates.ts`를 모두 지우고 쓰이는 자리의 Lingui 메시지로 옮겼다. 문구는 바꾸지 않았고, 문제 안내의 what과 next는 `problemText`처럼 공백으로 이은 메시지 하나로 쓴다.
+  - 앱은 컴파일 타임 매크로(`<Trans>`, `useLingui`의 `t`, 모듈 수준 표는 `msg`)를 쓴다. 서버 코드는 빌드 없이 돌기도 하므로(`node bin/*.ts`, worker, Vitest) 공식 skill이 권하는 런타임 매크로(`@lingui/core/runtime-macro`, 실험 기능)를 쓰고 `memory-agent/i18n` 인스턴스로 푼다. 설명자가 원문을 담아 카탈로그를 싣지 않고 `compileMessage`로 보일 때 컴파일한다. 앱 설정에서 런타임 매크로를 켜면 Vite 플러그인이 memory-agent의 런타임 메시지를 ID만 남기게 바꾸므로 `apps/agent/server/lingui.config.ts`를 따로 둔다.
+  - 카탈로그는 앱·`server/`·memory-agent 세 개이고 출처는 줄 번호 없이 적는다(공식 권장, 편집마다 diff가 나지 않게). 빌드는 더 이상 추출하지 않고, 커밋 hook이 각 패키지의 `i18n:check`(`lingui check sync --clean`)로 카탈로그가 소스와 맞는지 본다. 갱신은 `i18n:extract`다.
+  - 문구를 메시지 안에 두는 lint는 자체 규칙 `wording/no-raw-korean` 대신 공식 `eslint-plugin-lingui`(권장 규칙과 `no-unlocalized-strings`)를 Oxlint JS 플러그인으로 쓴다. 앱이 한국어만 쓰므로 한글 없는 문자열은 `ignore`(`policy.ts`의 `notWording`)로 뺀다. 자체 규칙과 같은 범위를 잡았고, 권장 규칙이 메시지 안에 템플릿을 넣은 곳 하나를 더 찾았다.
+  - `lint/wording/check`는 카탈로그(`.po`)를 공식 파서(`@lingui/format-po`)로 읽어 화면에 나오는 번역(`msgstr`)을 검사한다. Claude Code hook은 추출 전에도 고친 소스의 메시지를 공식 추출기로 읽어 검사한다. `copy.ts` 파서(`oxc-parser`)는 지웠다.
+- 남은 일: 모델에 보내는 `prompts.ts`는 이 체계 밖이다. 영어 화면 문구("Oops!")와 개발 스크립트는 검사하지 않는다. memory-agent가 앱에 문자열로 넘기는 표(`runFailureText`, `externalAgentFailureText`, `sourceLabels`)는 모듈을 읽을 때 한 번 푼다. 로케일이 하나라 결과는 같지만, 로케일을 늘리려면 설명자 표로 바꿔야 한다.

@@ -179,6 +179,7 @@ const make = Effect.gen(function* () {
     const { facts, count } = item;
     const summary = yield* redacted(facts.summary);
     const stack = yield* redacted(facts.stack.join("\n"));
+    const spans = item.spans.map((line) => `- ${line}`).join("\n");
     const lines = [
       i18n._(
         msg({
@@ -200,7 +201,7 @@ const make = Effect.gen(function* () {
         ? ""
         : i18n._(
             msg({
-              message: msg`실패 span:\n${{ spans: item.spans.map((line) => `- ${line}`).join("\n") }}`,
+              message: msg`실패 span:\n${{ spans }}`,
               comment: "Section of a defect message: the failed trace spans, one per line",
             }),
           ),

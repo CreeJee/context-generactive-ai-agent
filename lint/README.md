@@ -8,4 +8,4 @@
 
 - anti-slop: [`./anti-slop/README.md`](./anti-slop/README.md) - `index.ts`가 `rules/`의 규칙 15개를 `eslintCompatPlugin({ meta: { name: "anti-slop" }, rules })`로 묶어 default export한다. 증거가 약하고 신호가 낮은 구현 패턴(타입 단언 남용, 넓은 타입, 런타임 `typeof`, `Reflect.apply`/`Reflect.get`, 모듈 mocking 등)을 막는다. Effect 서비스·Layer 구조용 규칙은 하위 플러그인 `effect/index.ts`(`anti-slop-effect`)로 따로 등록한다.
 - allocation: [`./allocation/README.md`](./allocation/README.md) - 결과에 필요한 것보다 훨씬 많이 할당하는 코드를 잡는 규칙 3개(`no-accumulator-copy`, `no-intermediate-array`, `prefer-iterable-grouping`)를 묶는다. fold 단계마다 누적값을 복사하는 코드, 한 번 읽고 버릴 배열을 `filter`·`map`으로 만드는 체인, 조각마다 나머지 배열을 복사하는 Effect `Array.groupWith`·`group`·`chunksOf`를 보고한다.
-- wording: [`./wording/README.md`](./wording/README.md) - 문구 정책(`policy.ts`), Lingui 메시지·`copy.ts`·`prompts.ts` 밖의 한글을 보고하는 규칙 `no-raw-korean`, 금지 표현·용어집·말투를 검사하는 CLI(`check/`)를 묶는다.
+- wording: [`./wording/README.md`](./wording/README.md) - 한국어 문구 정책(`policy.ts`)과, Lingui 카탈로그의 메시지를 금지 표현·용어집·말투로 검사하는 CLI(`check/`). 문구를 메시지 안에 두는 lint는 공식 `eslint-plugin-lingui`가 이 정책의 범위로 맡는다.

@@ -1,50 +1,61 @@
-// The wording policy in one place: where Korean text may live, and what it may say. The lint rule
-// (`wording/no-raw-korean`), the wording check (`check/main.ts`), the commit hook and the Claude
-// Code hook all read this file. Every content rule is a fixed pattern with a reason and a fix, so
-// a finding tells the writer (often a coding agent) what to write instead.
+// The Korean wording policy in one place. Where text lives is Lingui's job: messages are written with
+// its macros and extracted into catalogs by `lingui extract`, and the official lint rules
+// (`eslint-plugin-lingui`) keep text inside messages. What the text says is not: this file holds
+// those rules, and the wording check (`check/main.ts`) applies them to the catalogs with Kiwi. The
+// lint overrides in the root `vite.config.ts`, the commit hook and the Claude Code hook read it.
+// Every content rule is a fixed pattern with a reason and a fix, so a finding tells the writer (often
+// a coding agent) what to write instead.
 
-// ---- Where Korean text may live -------------------------------------------------------------
+// ---- Where Korean text lives ----------------------------------------------------------------
 
-/** Files the rule and the check cover (globs from the repository root). */
+/** Source files whose Korean text is wording (globs from the repository root). */
 export const wordingScope = [
   "apps/agent/app/**",
   "apps/agent/server/**",
   "packages/memory-agent/src/**",
 ];
 
-/** Files in scope whose Korean is not wording: migration SQL comments and search fixture data. */
+/**
+ * Files in scope whose Korean is not wording: messages sent to the model in the user's voice
+ * (`prompts.ts`), tests that look for text on screen, migration SQL comments and search fixture data.
+ */
 export const wordingExempt = [
+  "**/prompts.ts",
+  "**/*.test.{ts,tsx}",
+  "**/*.spec.{ts,tsx}",
+  "**/*.browser.{ts,tsx}",
   "packages/memory-agent/src/db/migrations.ts",
   "packages/memory-agent/src/memory/native-search/read-fixture.ts",
 ];
 
 /**
- * Lingui macro modules. Text inside their tags, calls and elements (t`…`, msg(…),
- * <Trans>…</Trans>) is a message: extracted to the catalog and checked. The app uses the
- * compile-time macros; server code, which runs without a build step, uses the runtime macro.
+ * Strings that are not wording, for `lingui/no-unlocalized-strings`: the app speaks Korean only, so a
+ * string without Hangul is an identifier, a class name or a protocol value. The rule compiles the
+ * pattern without the `u` flag, so Hangul is spelled as code point ranges (jamo, compatibility jamo,
+ * syllables).
+ */
+export const notWording = "^[^\\u1100-\\u11FF\\u3131-\\u318E\\uAC00-\\uD7A3]*$";
+
+/** The catalogs `lingui extract` writes from the messages in scope; the wording check reads them. */
+export const wordingCatalogs = [
+  "apps/agent/app/locales/*.po",
+  "apps/agent/server/locales/*.po",
+  "packages/memory-agent/src/locales/*.po",
+];
+
+/**
+ * Lingui macro modules, for reading the messages of a source file before extraction. The app uses
+ * the compile-time macros; server code, which runs without a build step, uses the runtime macro.
  */
 export const linguiCoreMacroModules: ReadonlyArray<string> = [
   "@lingui/core/macro",
   "@lingui/core/runtime-macro",
 ];
 export const linguiJsxMacroModules: ReadonlyArray<string> = ["@lingui/react/macro"];
-export const linguiMacroModules: ReadonlyArray<string> = [
-  ...linguiCoreMacroModules,
-  ...linguiJsxMacroModules,
-];
-
-/** Object-literal catalogs, kept until their directory moves to Lingui messages. Checked. */
-export const catalogFile = /(^|\/)copy\.ts$/;
-
-/** Messages sent to the model in the user's voice. Not wording, so neither linted nor checked. */
-export const promptFile = /(^|\/)prompts\.ts$/;
-
-/** Tests, browser tests included, may spell the text they look for on screen. */
-export const testFile = /\.(test|spec|browser)\.tsx?$/;
 
 // ---- What the text may say ------------------------------------------------------------------
 
-/** A phrase pattern that copy must not contain. */
+/** A phrase pattern that wording must not contain. */
 export interface PhraseRule {
   readonly pattern: RegExp;
   readonly message: string;
@@ -90,15 +101,15 @@ export const phraseRules = {
   },
 } as const satisfies Readonly<Record<string, PhraseRule>>;
 
-/** One concept and the single way copy names it. */
+/** One concept and the single way the wording names it. */
 export interface GlossaryEntry {
   readonly use: string;
   readonly avoid: ReadonlyArray<string>;
 }
 
 /**
- * Domain terms with one spelling across the app. Add an entry only once the term is decided;
- * the decisions are recorded in docs/decisions.md ("앱 문구는 copy.ts 카탈로그에 두고 …").
+ * Domain terms with one spelling across the app. Add an entry only once the term is decided; the
+ * decisions are recorded in docs/decisions.md.
  * A Latin spelling in `avoid` matches without case, so a case variant of `use` never goes there.
  */
 export const glossary = {

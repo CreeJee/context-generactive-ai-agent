@@ -169,11 +169,23 @@ export default defineConfig(({ command }) =>
         run: {
           tasks: {
             // Workspace dependencies build first, down to turbovec's native addon.
-            // The catalog is extracted first: production macros keep only message ids, so a message
-            // missing from app/locales/ko.po would render as its id.
             build: {
-              command: "lingui extract --clean --workers 1 && react-router build",
+              command: "react-router build",
               dependsOn: [{ task: "build", from: "dependencies" }],
+            },
+            // Lingui catalogs: the app's (compile-time macros) and the server's (runtime macro).
+            // Production macros keep only message ids, so a message missing from app/locales/ko.po
+            // would render as its id; the commit hook runs `i18n:check` to keep that from landing.
+            // Never cached: the native extractor's reads are not tracked.
+            "i18n:extract": {
+              command:
+                "lingui extract --clean && lingui extract --clean --config server/lingui.config.ts",
+              cache: false,
+            },
+            "i18n:check": {
+              command:
+                "lingui check sync --clean && lingui check sync --clean --config server/lingui.config.ts",
+              cache: false,
             },
             bundle: { command: "vp pack", dependsOn: ["build"] },
             // Never cached: Vite Task does not see the files TypeScript 7's native tsc reads, so a cached

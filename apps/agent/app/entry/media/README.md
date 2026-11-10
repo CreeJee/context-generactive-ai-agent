@@ -33,7 +33,7 @@
 - 서버 상태 변경: `useCrossProviderConsentMutation().mutateAsync("always")`로 cross-provider 동의를 '항상 허용'으로 저장한다.
 - UI/DOM: `overlay.openAsync`로 Dialog를 마운트하고, 선택 뒤 `close`/`unmount`로 정리한다.
 - React Query 상태: `useMutation`의 pending/data 상태와 `useImageSettingsQuery` 캐시를 읽는다.
-- 콜백: 생성 실패 시 `onProblem(problemText(mediaCopy.imageFailed))`를 호출한다.
+- 콜백: 생성 실패 시 실패 안내 메시지(`t`)로 `onProblem`을 호출한다.
 
 ## Verification
 

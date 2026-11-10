@@ -311,6 +311,9 @@ catalogs:
     dayjs:
       specifier: ^1.11.23
       version: 1.11.23
+    eslint-plugin-lingui:
+      specifier: 0.16.0
+      version: 0.16.0
     isbot:
       specifier: ^5.2.2
       version: 5.2.2
@@ -338,9 +341,6 @@ catalogs:
     overlay-kit:
       specifier: ^1.9.0
       version: 1.9.0
-    oxc-parser:
-      specifier: 0.148.0
-      version: 0.148.0
     oxc-transform-react:
       specifier: ^0.154.0
       version: 0.154.0
@@ -428,6 +428,9 @@ importers:
       '@effect/vitest':
         specifier: 4.1.2
         version: 4.1.2(effect@4.1.2(patch_hash=b2038858deaf39c6a52f3d0af00c55e78935ac56accf11abc2db325e973cc126))(vitest@5.0.5)
+      '@lingui/format-po':
+        specifier: 'catalog:'
+        version: 6.12.0
       '@lingui/native-tools':
         specifier: 'catalog:'
         version: 0.2.0(@lingui/conf@6.12.0)
@@ -443,12 +446,12 @@ importers:
       effect:
         specifier: 4.1.2
         version: 4.1.2(patch_hash=b2038858deaf39c6a52f3d0af00c55e78935ac56accf11abc2db325e973cc126)
+      eslint-plugin-lingui:
+        specifier: 'catalog:'
+        version: 0.16.0(eslint@10.10.0(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0)(typescript@7.0.2)
       kiwi-nlp:
         specifier: 'catalog:'
         version: 0.24.1
-      oxc-parser:
-        specifier: 'catalog:'
-        version: 0.148.0
       playwright:
         specifier: 'catalog:'
         version: 1.64.1
@@ -2800,6 +2803,43 @@ packages:
   '@types/yargs@17.0.35':
     resolution: {integrity: sha512-qUHkeCyQFxMXg79wQfTtfndEC+N9ZZg76HJftDJp+qH2tV7Gj4OJi7l+PiWwJ+pWtW8GwSmqsDj/oymhrTWXjg==}
 
+  '@typescript-eslint/project-service@8.72.1':
+    resolution: {integrity: sha512-fAuVMkwdO/huI8nyo/WKnNKf6Gag93S56Rh3Ts5mGcavwSdaN8tRg1gCeIGX8PF+nzp1BjGfO4gHhGzW1J6jTg==}
+    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+    peerDependencies:
+      typescript: '>=4.8.4 <6.1.0'
+
+  '@typescript-eslint/scope-manager@8.72.1':
+    resolution: {integrity: sha512-lC/t6eMCZZQAAKZEYGL6RDVSuFehpdmMT6h+nJIjIa6oylN/PwDgDVtEIbB7O9xFfZYtZAYLoLlDNWKJhtF+uQ==}
+    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+
+  '@typescript-eslint/tsconfig-utils@8.72.1':
+    resolution: {integrity: sha512-e4D5R5vpeAEPBxT2BAzsFQL3sbwyeeeo5+aczgNSRK1V734jE7pTqaGFU+fXapWEQwnZbpFaTn32+Z8DwS6OTg==}
+    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+    peerDependencies:
+      typescript: '>=4.8.4 <6.1.0'
+
+  '@typescript-eslint/types@8.72.1':
+    resolution: {integrity: sha512-LmE5IhQet1BWOWEXqBrVtBPsMAOQ6Nzk35d+WLh3mk4EUF33sqlfxjio1MdYeSvKSG5skactKKuixBIKXhL4Rw==}
+    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+
+  '@typescript-eslint/typescript-estree@8.72.1':
+    resolution: {integrity: sha512-DAlUoUV93hIvrtIQLwCbmZQYVZwOMhiHJrOVUUIWicFZaIYjTRqlY3I/NZevfkLmSqkNHRu2qYDcq9lrn16oOQ==}
+    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+    peerDependencies:
+      typescript: '>=4.8.4 <6.1.0'
+
+  '@typescript-eslint/utils@8.72.1':
+    resolution: {integrity: sha512-5v5liypurJBFHCBNqh/RjsymAD+VWcE0djuGY/BUqp5fC3Qn+luWDEksjuTtWjPn6i5zQlUtkZCRG/CYG0yCkA==}
+    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+    peerDependencies:
+      eslint: ^8.57.0 || ^9.0.0 || ^10.0.0
+      typescript: '>=4.8.4 <6.1.0'
+
+  '@typescript-eslint/visitor-keys@8.72.1':
+    resolution: {integrity: sha512-SB8xqipSzZHUePCCLNeYxqnxq83X61/qzNhjQGbTfjxGZIeOEP7tBgWYX05Tcd6CgE02WdTJnh5b8kMZJ/+bnQ==}
+    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+
   '@typescript/typescript-aix-ppc64@7.0.2':
     resolution: {integrity: sha512-MTKKkWB7p/0E9xi1d1tHtZ5PiLkGEMIq88pK2CubZjOsLtYTLqhgIgi6zepFa+9GHZ6h05NMCkQxGKiPXMxXtQ==}
     engines: {node: '>=16.20.0'}
@@ -3666,6 +3706,13 @@ packages:
   escape-string-regexp@5.0.0:
     resolution: {integrity: sha512-/veY75JbMK4j1yjvuUxuVsiS/hr/4iHs9FTT6cgTexxdE0Ly/glccBAkloH/DofkjRbZU3bnoj38mOmhkZ0lHw==}
     engines: {node: '>=12'}
+
+  eslint-plugin-lingui@0.16.0:
+    resolution: {integrity: sha512-IwfAimODo3XKwG/PsWjs2+i70vBqE/Gka/fHVZjnM7GKUFKiaPv+G9PKLD950fQEM1LqcgIOnA1kKg9K4oKDQg==}
+    engines: {node: '>=16.0.0'}
+    peerDependencies:
+      eslint: ^8.37.0 || ^9 || ^10
+      typescript: ^5.0.0 || ^6.0.0
 
   eslint-scope@9.1.2:
     resolution: {integrity: sha512-xS90H51cKw0jltxmvmHy2Iai1LIqrfbw57b79w/J7MfvDfkIkFZ+kj6zC3BjtUwh150HsSSdxXZcsuv72miDFQ==}
@@ -5474,6 +5521,12 @@ packages:
   trough@2.2.0:
     resolution: {integrity: sha512-tmMpK00BjZiUyVyvrBK7knerNgmgvcV/KLVyuma/SC+TQN167GrMRciANTz09+k3zW8L8t60jWO1GpfkZdjTaw==}
 
+  ts-api-utils@2.5.0:
+    resolution: {integrity: sha512-OJ/ibxhPlqrMM0UiNHJ/0CKQkoKF243/AEmplt3qpRgkW8VG7IfOS41h7V8TjITqdByHzrjcS/2si+y4lIh8NA==}
+    engines: {node: '>=18.12'}
+    peerDependencies:
+      typescript: '>=4.8.4'
+
   ts-interface-checker@0.1.13:
     resolution: {integrity: sha512-Y/arvbn+rrz3JCKl9C4kVNfTfSm2/mEp5FSz5EsZSANGPSlQrpRI5M4PKF+mJnE52jOO90PnPSc3Ur3bTQw0gA==}
 
@@ -6044,13 +6097,11 @@ snapshots:
       '@keyv/bigmap': 1.3.1(keyv@5.6.0)
       hookified: 1.15.1
       keyv: 5.6.0
-    optional: true
 
   '@cacheable/utils@2.5.0':
     dependencies:
       hashery: 1.5.1
       keyv: 5.6.0
-    optional: true
 
   '@cfworker/json-schema@4.1.1': {}
 
@@ -6177,10 +6228,8 @@ snapshots:
     dependencies:
       eslint: 10.10.0(jiti@2.7.0)(supports-color@7.2.0)
       eslint-visitor-keys: 3.4.3
-    optional: true
 
-  '@eslint-community/regexpp@4.12.2':
-    optional: true
+  '@eslint-community/regexpp@4.12.2': {}
 
   '@eslint/config-array@0.23.5(supports-color@7.2.0)':
     dependencies:
@@ -6189,12 +6238,10 @@ snapshots:
       minimatch: 10.2.6
     transitivePeerDependencies:
       - supports-color
-    optional: true
 
   '@eslint/config-helpers@0.7.0':
     dependencies:
       '@eslint/core': 1.2.1
-    optional: true
 
   '@eslint/core@0.17.0':
     dependencies:
@@ -6203,16 +6250,13 @@ snapshots:
   '@eslint/core@1.2.1':
     dependencies:
       '@types/json-schema': 7.0.15
-    optional: true
 
-  '@eslint/object-schema@3.0.5':
-    optional: true
+  '@eslint/object-schema@3.0.5': {}
 
   '@eslint/plugin-kit@0.7.3':
     dependencies:
       '@eslint/core': 1.2.1
       levn: 0.4.1
-    optional: true
 
   '@floating-ui/core@1.8.0':
     dependencies:
@@ -6254,23 +6298,18 @@ snapshots:
   '@humanfs/core@0.19.2':
     dependencies:
       '@humanfs/types': 0.15.0
-    optional: true
 
   '@humanfs/node@0.16.8':
     dependencies:
       '@humanfs/core': 0.19.2
       '@humanfs/types': 0.15.0
       '@humanwhocodes/retry': 0.4.3
-    optional: true
 
-  '@humanfs/types@0.15.0':
-    optional: true
+  '@humanfs/types@0.15.0': {}
 
-  '@humanwhocodes/module-importer@1.0.1':
-    optional: true
+  '@humanwhocodes/module-importer@1.0.1': {}
 
-  '@humanwhocodes/retry@0.4.3':
-    optional: true
+  '@humanwhocodes/retry@0.4.3': {}
 
   '@img/colour@1.1.0': {}
 
@@ -6421,10 +6460,8 @@ snapshots:
       hashery: 1.5.1
       hookified: 1.15.1
       keyv: 5.6.0
-    optional: true
 
-  '@keyv/serialize@1.1.1':
-    optional: true
+  '@keyv/serialize@1.1.1': {}
 
   '@lingui/babel-plugin-extract-messages@6.12.0':
     dependencies:
@@ -6732,7 +6769,8 @@ snapshots:
 
   '@oxc-project/runtime@0.154.0': {}
 
-  '@oxc-project/types@0.148.0': {}
+  '@oxc-project/types@0.148.0':
+    optional: true
 
   '@oxc-project/types@0.154.0': {}
 
@@ -7470,8 +7508,7 @@ snapshots:
 
   '@types/deep-eql@4.0.2': {}
 
-  '@types/esrecurse@4.3.1':
-    optional: true
+  '@types/esrecurse@4.3.1': {}
 
   '@types/estree-jsx@1.0.5':
     dependencies:
@@ -7528,6 +7565,57 @@ snapshots:
   '@types/yargs@17.0.35':
     dependencies:
       '@types/yargs-parser': 21.0.3
+
+  '@typescript-eslint/project-service@8.72.1(supports-color@7.2.0)(typescript@7.0.2)':
+    dependencies:
+      '@typescript-eslint/tsconfig-utils': 8.72.1(typescript@7.0.2)
+      '@typescript-eslint/types': 8.72.1
+      debug: 4.4.3(supports-color@7.2.0)
+      typescript: 7.0.2
+    transitivePeerDependencies:
+      - supports-color
+
+  '@typescript-eslint/scope-manager@8.72.1':
+    dependencies:
+      '@typescript-eslint/types': 8.72.1
+      '@typescript-eslint/visitor-keys': 8.72.1
+
+  '@typescript-eslint/tsconfig-utils@8.72.1(typescript@7.0.2)':
+    dependencies:
+      typescript: 7.0.2
+
+  '@typescript-eslint/types@8.72.1': {}
+
+  '@typescript-eslint/typescript-estree@8.72.1(supports-color@7.2.0)(typescript@7.0.2)':
+    dependencies:
+      '@typescript-eslint/project-service': 8.72.1(supports-color@7.2.0)(typescript@7.0.2)
+      '@typescript-eslint/tsconfig-utils': 8.72.1(typescript@7.0.2)
+      '@typescript-eslint/types': 8.72.1
+      '@typescript-eslint/visitor-keys': 8.72.1
+      debug: 4.4.3(supports-color@7.2.0)
+      minimatch: 10.2.6
+      semver: 7.8.5
+      tinyglobby: 0.2.17
+      ts-api-utils: 2.5.0(typescript@7.0.2)
+      typescript: 7.0.2
+    transitivePeerDependencies:
+      - supports-color
+
+  '@typescript-eslint/utils@8.72.1(eslint@10.10.0(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0)(typescript@7.0.2)':
+    dependencies:
+      '@eslint-community/eslint-utils': 4.10.1(eslint@10.10.0(jiti@2.7.0)(supports-color@7.2.0))
+      '@typescript-eslint/scope-manager': 8.72.1
+      '@typescript-eslint/types': 8.72.1
+      '@typescript-eslint/typescript-estree': 8.72.1(supports-color@7.2.0)(typescript@7.0.2)
+      eslint: 10.10.0(jiti@2.7.0)(supports-color@7.2.0)
+      typescript: 7.0.2
+    transitivePeerDependencies:
+      - supports-color
+
+  '@typescript-eslint/visitor-keys@8.72.1':
+    dependencies:
+      '@typescript-eslint/types': 8.72.1
+      eslint-visitor-keys: 5.0.1
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     optional: true
@@ -7784,12 +7872,10 @@ snapshots:
   acorn-jsx@5.3.2(acorn@8.18.0):
     dependencies:
       acorn: 8.18.0
-    optional: true
 
   acorn@8.16.0: {}
 
-  acorn@8.18.0:
-    optional: true
+  acorn@8.18.0: {}
 
   adm-zip@0.6.1: {}
 
@@ -7807,7 +7893,6 @@ snapshots:
       fast-json-stable-stringify: 2.1.0
       json-schema-traverse: 0.4.1
       uri-js: 4.4.1
-    optional: true
 
   ajv@8.20.0:
     dependencies:
@@ -7929,7 +8014,6 @@ snapshots:
       hookified: 1.15.1
       keyv: 5.6.0
       qified: 0.10.1
-    optional: true
 
   call-bind-apply-helpers@1.0.2:
     dependencies:
@@ -8090,8 +8174,7 @@ snapshots:
 
   dedent@1.7.2: {}
 
-  deep-is@0.1.4:
-    optional: true
+  deep-is@0.1.4: {}
 
   deepmerge@4.3.1: {}
 
@@ -8194,19 +8277,25 @@ snapshots:
 
   escape-string-regexp@5.0.0: {}
 
+  eslint-plugin-lingui@0.16.0(eslint@10.10.0(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0)(typescript@7.0.2):
+    dependencies:
+      '@typescript-eslint/utils': 8.72.1(eslint@10.10.0(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0)(typescript@7.0.2)
+      eslint: 10.10.0(jiti@2.7.0)(supports-color@7.2.0)
+      micromatch: 4.0.8
+      typescript: 7.0.2
+    transitivePeerDependencies:
+      - supports-color
+
   eslint-scope@9.1.2:
     dependencies:
       '@types/esrecurse': 4.3.1
       '@types/estree': 1.0.9
       esrecurse: 4.3.0
       estraverse: 5.3.0
-    optional: true
 
-  eslint-visitor-keys@3.4.3:
-    optional: true
+  eslint-visitor-keys@3.4.3: {}
 
-  eslint-visitor-keys@5.0.1:
-    optional: true
+  eslint-visitor-keys@5.0.1: {}
 
   eslint@10.10.0(jiti@2.7.0)(supports-color@7.2.0):
     dependencies:
@@ -8244,29 +8333,24 @@ snapshots:
       jiti: 2.7.0
     transitivePeerDependencies:
       - supports-color
-    optional: true
 
   espree@11.2.0:
     dependencies:
       acorn: 8.18.0
       acorn-jsx: 5.3.2(acorn@8.18.0)
       eslint-visitor-keys: 5.0.1
-    optional: true
 
   esprima@4.0.1: {}
 
   esquery@1.7.0:
     dependencies:
       estraverse: 5.3.0
-    optional: true
 
   esrecurse@4.3.0:
     dependencies:
       estraverse: 5.3.0
-    optional: true
 
-  estraverse@5.3.0:
-    optional: true
+  estraverse@5.3.0: {}
 
   estree-util-is-identifier-name@3.0.0: {}
 
@@ -8274,8 +8358,7 @@ snapshots:
     dependencies:
       '@types/estree': 1.0.9
 
-  esutils@2.0.3:
-    optional: true
+  esutils@2.0.3: {}
 
   etag@1.8.1: {}
 
@@ -8371,11 +8454,9 @@ snapshots:
       merge2: 1.4.1
       micromatch: 4.0.8
 
-  fast-json-stable-stringify@2.1.0:
-    optional: true
+  fast-json-stable-stringify@2.1.0: {}
 
-  fast-levenshtein@2.0.6:
-    optional: true
+  fast-levenshtein@2.0.6: {}
 
   fast-uri@3.1.7: {}
 
@@ -8396,7 +8477,6 @@ snapshots:
   file-entry-cache@11.1.5:
     dependencies:
       flat-cache: 6.1.23
-    optional: true
 
   fill-range@7.1.1:
     dependencies:
@@ -8421,14 +8501,12 @@ snapshots:
     dependencies:
       locate-path: 6.0.0
       path-exists: 4.0.0
-    optional: true
 
   flat-cache@6.1.23:
     dependencies:
       cacheable: 2.5.0
       flatted: 3.4.4
       hookified: 1.15.1
-    optional: true
 
   flatbuffers@25.9.23: {}
 
@@ -8500,7 +8578,6 @@ snapshots:
   glob-parent@6.0.2:
     dependencies:
       is-glob: 4.0.3
-    optional: true
 
   global-agent@4.1.3:
     dependencies:
@@ -8531,7 +8608,6 @@ snapshots:
   hashery@1.5.1:
     dependencies:
       hookified: 1.15.1
-    optional: true
 
   hasown@2.0.4:
     dependencies:
@@ -8632,11 +8708,9 @@ snapshots:
 
   hono@4.13.7: {}
 
-  hookified@1.15.1:
-    optional: true
+  hookified@1.15.1: {}
 
-  hookified@2.2.0:
-    optional: true
+  hookified@2.2.0: {}
 
   html-url-attributes@3.0.1: {}
 
@@ -8660,8 +8734,7 @@ snapshots:
 
   ignore@5.3.2: {}
 
-  imurmurhash@0.1.4:
-    optional: true
+  imurmurhash@0.1.4: {}
 
   inherits@2.0.4: {}
 
@@ -8764,8 +8837,7 @@ snapshots:
 
   jsesc@3.1.0: {}
 
-  json-schema-traverse@0.4.1:
-    optional: true
+  json-schema-traverse@0.4.1: {}
 
   json-schema-traverse@1.0.0: {}
 
@@ -8773,8 +8845,7 @@ snapshots:
 
   json-schema-typed@8.0.2: {}
 
-  json-stable-stringify-without-jsonify@1.0.1:
-    optional: true
+  json-stable-stringify-without-jsonify@1.0.1: {}
 
   json5@2.2.3: {}
 
@@ -8789,7 +8860,6 @@ snapshots:
   keyv@5.6.0:
     dependencies:
       '@keyv/serialize': 1.1.1
-    optional: true
 
   kiwi-nlp@0.24.1: {}
 
@@ -8803,7 +8873,6 @@ snapshots:
     dependencies:
       prelude-ls: 1.2.1
       type-check: 0.4.0
-    optional: true
 
   lightningcss-android-arm64@1.32.0:
     optional: true
@@ -8915,7 +8984,6 @@ snapshots:
   locate-path@6.0.0:
     dependencies:
       p-locate: 5.0.0
-    optional: true
 
   lodash@4.18.1: {}
 
@@ -9422,8 +9490,7 @@ snapshots:
 
   nanoid@3.3.20: {}
 
-  natural-compare@1.4.0:
-    optional: true
+  natural-compare@1.4.0: {}
 
   negotiator@1.1.0:
     dependencies:
@@ -9527,7 +9594,6 @@ snapshots:
       prelude-ls: 1.2.1
       type-check: 0.4.0
       word-wrap: 1.2.5
-    optional: true
 
   ora@8.2.0:
     dependencies:
@@ -9579,6 +9645,7 @@ snapshots:
       '@oxc-parser/binding-win32-arm64-msvc': 0.148.0
       '@oxc-parser/binding-win32-ia32-msvc': 0.148.0
       '@oxc-parser/binding-win32-x64-msvc': 0.148.0
+    optional: true
 
   oxc-transform-react@0.154.0:
     optionalDependencies:
@@ -9667,7 +9734,6 @@ snapshots:
   p-limit@3.1.0:
     dependencies:
       yocto-queue: 0.1.0
-    optional: true
 
   p-locate@3.0.0:
     dependencies:
@@ -9676,7 +9742,6 @@ snapshots:
   p-locate@5.0.0:
     dependencies:
       p-limit: 3.1.0
-    optional: true
 
   p-map@7.0.7: {}
 
@@ -9706,8 +9771,7 @@ snapshots:
 
   path-exists@3.0.0: {}
 
-  path-exists@4.0.0:
-    optional: true
+  path-exists@4.0.0: {}
 
   path-key@3.1.1: {}
 
@@ -9770,8 +9834,7 @@ snapshots:
 
   powershell-utils@0.2.1: {}
 
-  prelude-ls@1.2.1:
-    optional: true
+  prelude-ls@1.2.1: {}
 
   pretty-format@27.5.1:
     dependencies:
@@ -9819,13 +9882,11 @@ snapshots:
     dependencies:
       commander: 13.1.0
 
-  punycode@2.3.1:
-    optional: true
+  punycode@2.3.1: {}
 
   qified@0.10.1:
     dependencies:
       hookified: 2.2.0
-    optional: true
 
   qs@6.16.0:
     dependencies:
@@ -10366,6 +10427,10 @@ snapshots:
 
   trough@2.2.0: {}
 
+  ts-api-utils@2.5.0(typescript@7.0.2):
+    dependencies:
+      typescript: 7.0.2
+
   ts-interface-checker@0.1.13: {}
 
   ts-morph@26.0.0:
@@ -10403,7 +10468,6 @@ snapshots:
   type-check@0.4.0:
     dependencies:
       prelude-ls: 1.2.1
-    optional: true
 
   type-fest@0.20.2: {}
 
@@ -10515,7 +10579,6 @@ snapshots:
   uri-js@4.4.1:
     dependencies:
       punycode: 2.3.1
-    optional: true
 
   use-callback-ref@1.3.3(@types/react@19.3.0)(react@19.3.1):
     dependencies:
@@ -10671,8 +10734,7 @@ snapshots:
 
   why-is-node-running@3.2.1: {}
 
-  word-wrap@1.2.5:
-    optional: true
+  word-wrap@1.2.5: {}
 
   wrappy@1.0.2: {}
 
@@ -10689,8 +10751,7 @@ snapshots:
 
   yaml@2.9.1: {}
 
-  yocto-queue@0.1.0:
-    optional: true
+  yocto-queue@0.1.0: {}
 
   yocto-spinner@1.2.2:
     dependencies:

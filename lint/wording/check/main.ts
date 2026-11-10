@@ -1,6 +1,7 @@
 // Development tool: checks what Korean wording says (banned phrases, glossary spellings, sentence
-// endings) in Lingui messages and copy.ts catalogs. Which files it reads comes from
-// `../policy.ts`. Runs from the commit hook, the Claude Code PostToolUse hook, and by hand.
+// endings), which Lingui does not. It reads the catalogs `lingui extract` writes, and for the Claude
+// Code hook the messages of an edited source file. Which files it reads comes from `../policy.ts`.
+// Runs from the commit hook, the Claude Code PostToolUse hook, and by hand.
 import { matchesGlob } from "node:path";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -19,18 +20,11 @@ import { Argument, Command } from "effect/cli";
 import { Digest } from "effect/crypto";
 import { FetchHttpClient } from "effect/http";
 
-import {
-  catalogFile,
-  linguiMacroModules,
-  promptFile,
-  testFile,
-  wordingExempt,
-  wordingScope,
-} from "../policy.ts";
-import { checkTexts } from "./check.ts";
+import { wordingCatalogs, wordingExempt, wordingScope } from "../policy.ts";
+import { checkMessages } from "./check.ts";
 import type { Finding } from "./check.ts";
-import { catalogTexts, messageTexts } from "./extract.ts";
-import type { SourceText } from "./extract.ts";
+import { catalogMessages, sourceMessages } from "./messages.ts";
+import type { Message } from "./messages.ts";
 import { Morphemes } from "./morphemes.ts";
 
 /** Some wording breaks the rules; the findings are already printed. */
@@ -47,23 +41,19 @@ const morphemes = Morphemes.layer.pipe(
   Layer.provide([FetchHttpClient.layer, Digest.layerWebCrypto]),
 );
 
-/** Whether the policy covers `file` (a path from the repository root) at all. */
-const covered = (file: string) =>
-  /\.tsx?$/.test(file) &&
-  wordingScope.some((glob) => matchesGlob(file, glob)) &&
-  !wordingExempt.includes(file) &&
-  !promptFile.test(file) &&
-  !testFile.test(file);
+const matchesAny = (file: string, globs: ReadonlyArray<string>) =>
+  globs.some((glob) => matchesGlob(file, glob));
 
-/** The wording in one covered file: a catalog's strings, or the Lingui messages of any other. */
-const textsOf = Effect.fnUntraced(function* (file: string) {
+/** Which messages `file` (a path from the repository root) holds for the check, if any. */
+const messagesOf = Effect.fnUntraced(function* (file: string) {
   const fs = yield* FileSystem.FileSystem;
-  const source = yield* fs.readFileString(file);
-  if (catalogFile.test(file)) return yield* catalogTexts(file, source);
-  if (linguiMacroModules.some((module) => source.includes(module))) {
-    return yield* messageTexts(file, source);
+  if (matchesAny(file, wordingCatalogs)) {
+    return yield* catalogMessages(file, yield* fs.readFileString(file));
   }
-  return Arr.empty<SourceText>();
+  if (/\.tsx?$/.test(file) && matchesAny(file, wordingScope) && !matchesAny(file, wordingExempt)) {
+    return yield* sourceMessages(file, yield* fs.readFileString(file));
+  }
+  return Arr.empty<Message>();
 });
 
 /**
@@ -72,29 +62,25 @@ const textsOf = Effect.fnUntraced(function* (file: string) {
  */
 const findingsOf = Effect.fnUntraced(function* (files: ReadonlyArray<string>) {
   const path = yield* Path.Path;
-  const relative = Arr.filter(
-    Arr.map(files, (file) => path.relative(path.resolve("."), path.resolve(file))),
-    covered,
+  const messages = Arr.flatten(
+    yield* Effect.forEach(files, (file) =>
+      messagesOf(path.relative(path.resolve("."), path.resolve(file))),
+    ),
   );
-  const read = yield* Effect.forEach(relative, (file) =>
-    Effect.map(textsOf(file), (texts) => ({ file, texts })),
-  );
-  const withWording = Arr.filter(read, ({ texts }) => Arr.isReadonlyArrayNonEmpty(texts));
-  if (Arr.isReadonlyArrayEmpty(withWording)) return Arr.empty<Finding>();
-  const nested = yield* Effect.forEach(withWording, ({ file, texts }) =>
-    checkTexts(file, texts),
-  ).pipe(Effect.provide(morphemes));
-  return Arr.flatten(nested);
+  if (Arr.isReadonlyArrayEmpty(messages)) return Arr.empty<Finding>();
+  return yield* checkMessages(messages).pipe(Effect.provide(morphemes));
 });
 
-const formatFinding = ({ file, line, column, rule, message }: Finding) =>
-  `${file}:${line}:${column} [${rule}] ${message}`;
+const formatFinding = ({ where, text, rule, message }: Finding) =>
+  `${where} "${text}" [${rule}] ${message}`;
 
 const check = Command.make(
   "check",
   {
     files: Argument.String("file").pipe(
-      Argument.withDescription("검사할 파일 (정책 범위 밖이거나 문구가 없는 파일은 건너뜀)"),
+      Argument.withDescription(
+        "검사할 카탈로그(.po)나 소스 파일 (정책 범위 밖이거나 문구가 없는 파일은 건너뜀)",
+      ),
       Argument.atLeast(1),
     ),
   },
@@ -107,7 +93,7 @@ const check = Command.make(
       return yield* new WordingViolations({ count: findings.length });
     }
   }),
-).pipe(Command.withDescription("Lingui 메시지와 copy.ts 문구를 검사"));
+).pipe(Command.withDescription("Lingui 카탈로그와 소스 파일의 메시지 문구를 검사"));
 
 /** The part of a Claude Code PostToolUse payload this hook reads. */
 const HookInput = Schema.Struct({

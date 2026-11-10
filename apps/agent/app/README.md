@@ -16,7 +16,7 @@
 - `root.tsx` `ErrorBoundary` — 라우트 오류 화면이다. `isRouteErrorResponse`면 404 또는 `statusText`를 보이고, 그 밖의 `Error`는 `import.meta.env.DEV`일 때만 message와 stack을 보인다.
 - `root.tsx` `links` — 빈 배열을 돌려주는 `Route.LinksFunction`이다.
 - `i18n` (`i18n.ts`) — Lingui 인스턴스. 모듈을 불러올 때 `locales/ko.po`(한국어 원문 카탈로그, `@lingui/vite-plugin`이 import할 때 컴파일)를 `ko`로 활성화한다. 서버 렌더와 브라우저 모두에서 `t`와 `<Trans>`가 같은 문구를 낸다. `root.tsx`가 `I18nProvider`로 감싸고, 브라우저 테스트는 `setupFiles`로 불러온다.
-- `locales/ko.po` — `lingui extract`(설정 `../lingui.config.ts`, 네이티브 추출기)가 만드는 카탈로그. 원문 로케일이라 번역란도 원문으로 채워진다. 운영 빌드의 매크로는 ID만 남기므로 이 카탈로그가 있어야 문구가 나온다.
+- `locales/ko.po` — `lingui extract`(설정 `../lingui.config.ts`, `i18n:extract` 작업)가 만드는 카탈로그. 원문 로케일이라 번역란도 원문으로 채워진다. 운영 빌드의 매크로는 ID만 남기므로 이 카탈로그가 있어야 문구가 나온다. 커밋 hook이 `i18n:check`로 소스와 맞는지 확인하고, `lint/wording`이 메시지 문구를 검사한다.
 - 문구 — 쓰이는 자리에 Lingui 메시지(`<Trans>`, `` t`…` ``, `msg`)로 쓴다. `app/locales/ko.po`로 추출되고 `lint/wording`이 검사한다.
 - `routes.ts` `default` — `RouteConfig`다. `flatRoutes({ ignoredRouteFiles })` 결과에 `prefix("api", flatRoutes({ rootDirectory: "routes/api", ignoredRouteFiles }))`를 이어 붙인다. `ignoredRouteFiles`는 `["**/README.md"]`다.
 - `isTruthy<T>(value)` — `truthy.ts`의 타입 가드다. JavaScript truthiness를 그대로 쓰면서 `Exclude<NonNullable<T>, false | 0 | 0n | "">`로 좁힌다.
