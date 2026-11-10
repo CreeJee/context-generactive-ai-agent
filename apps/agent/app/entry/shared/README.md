@@ -21,7 +21,7 @@
 - `ThemeSelect` — 테마 선택 React 컴포넌트. localStorage `context-agent-theme`에 저장하고 `document.documentElement`의 `dark` 클래스를 토글한다
 - `themeScript` — 페인트 전에 실행할 인라인 테마 스크립트 문자열
 - `loopHealthLabel` — `LoopHealth`(`Healthy`/`Retrying`/`Exhausted`/`Defected`)를 한국어 문구로 바꾼다
-- `LoopHealthStatus` — 백그라운드 루프 상태 배지와, `Exhausted`/`Defected`일 때만 보이는 '다시 시작' 버튼 컴포넌트
+- `LoopHealthStatus` — 백그라운드 루프 상태 배지와, `Exhausted`/`Defected`일 때만 보이는 '다시 시작' 버튼 컴포넌트. `Exhausted`면 멈춘 이유 한 줄과 서버가 준 오류 이름을 접힌 `FailureDetails`로 보인다
 - `LoadFailed` / `RetryButton` — 읽지 못한 목록이나 상태를 빈 것처럼 보이지 않고 "…을 불러오지 못했습니다"와 '다시 시도' 버튼으로 보인다. 설정 페이지 경계(`QuerySection`), 사이드바 대화 목록, 계정 전환, 첫 화면 빈 상태가 함께 쓴다
 - `FailureDetails` — 실패의 외부 프로그램 원문(`detail`)을 접힌 `<pre>`로 보여 준다. `null`이면 렌더하지 않는다
 - 문구 — 쓰이는 자리에 Lingui 메시지로 쓴다. `app/locales/ko.po`로 추출되고 `lint/wording`이 검사한다.

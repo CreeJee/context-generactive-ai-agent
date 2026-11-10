@@ -5,6 +5,7 @@ import type { LoopHealth } from "memory-agent/definitions";
 import { RotateCcwIcon } from "lucide-react";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
+import { FailureDetails } from "./failure-details";
 
 /** How a background loop the server runs stands, in words. */
 export function loopHealthLabel(health: LoopHealth): string {
@@ -47,7 +48,7 @@ export function LoopHealthStatus({
 }) {
   const stopped = Predicate.isTagged(health, "Exhausted") || Predicate.isTagged(health, "Defected");
   return (
-    <span className="inline-flex items-center gap-2" role="status" aria-label={label}>
+    <div className="inline-flex flex-wrap items-center gap-2" role="status" aria-label={label}>
       <Badge variant={variantOf(health)}>
         {label}: {loopHealthLabel(health)}
       </Badge>
@@ -57,6 +58,15 @@ export function LoopHealthStatus({
           <Trans comment="Button that restarts a stopped background loop">다시 시작</Trans>
         </Button>
       )}
-    </span>
+      {/* The server names the failure only by its error tag, so the tag is the folded detail. */}
+      {Predicate.isTagged(health, "Exhausted") && (
+        <div className="basis-full text-xs text-muted-foreground">
+          <Trans>
+            같은 실패가 이어져 다시 시도를 멈췄습니다. 원인을 확인한 뒤 다시 시작해 주십시오.
+          </Trans>
+          <FailureDetails detail={health.error} />
+        </div>
+      )}
+    </div>
   );
 }
