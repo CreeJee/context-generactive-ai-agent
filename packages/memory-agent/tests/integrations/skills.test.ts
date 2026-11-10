@@ -65,6 +65,25 @@ testAgent()("linked skill files", (it) => {
       expect(yield* skills.read(project, "hard")).toMatchObject({ body: "Do it well." });
     }),
   );
+
+  it.effect("lists a skill changed or added since the last catalog", () =>
+    Effect.gen(function* () {
+      const { project, skills: root } = yield* freshProject;
+      const catalog = Effect.map(
+        Effect.flatMap(Skills, (skills) => skills.catalog(project)),
+        (read) => read.skills.map((skill) => [skill.name, skill.description]),
+      );
+      yield* writeSkill(root, "review", "description: Old rules.");
+      expect(yield* catalog).toEqual([["review", "Old rules."]]);
+      // The same size, so only the file's times tell the change.
+      yield* writeSkill(root, "review", "description: New rules.");
+      yield* writeSkill(root, "deploy", "description: Deploy it.");
+      expect(yield* catalog).toEqual([
+        ["deploy", "Deploy it."],
+        ["review", "New rules."],
+      ]);
+    }),
+  );
 });
 
 // Global and built-in skills are shared by every project, so each catalog owns an agent.

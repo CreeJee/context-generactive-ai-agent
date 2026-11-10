@@ -120,6 +120,12 @@ type SkillRead = Data.TaggedEnum<{
   problem: { readonly problem: SkillProblem };
 }>;
 const SkillRead = Data.taggedEnum<SkillRead>();
+/** Why a SKILL.md could not be read; the skill is then listed as unreadable. */
+type SkillReadFailure =
+  | import("../files/text.ts").TextFileIoFailed
+  | import("../files/text.ts").TextFileRejected
+  | import("../files/paths.ts").PathRejected
+  | import("effect/PlatformError").PlatformError;
 
 export interface SkillsOptions {
   /** Where global skills live; tests use a temporary home. */
@@ -135,6 +141,18 @@ const make = (options: SkillsOptions) =>
     const home = options.home ?? (yield* homeDirectory);
     const builtinRoot = options.builtin ?? (yield* builtinSkillsDirectory);
 
+    /**
+     * What each SKILL.md read last said, by scope and file, with the file's stamp then. A catalog is
+     * read on every request and most skills never change, so a file is read again only when its
+     * stamp (device, inode, size, change and modification times) differs.
+     */
+    const known = MutableHashMap.empty<
+      string,
+      { readonly stamp: string; readonly read: SkillRead }
+    >();
+    const stampOf = (info: FileSystem.File.Info) =>
+      `${info.dev}:${Option.getOrNull(info.ino)}:${info.size}:${Option.getOrNull(info.ctimeNs)}:${Option.getOrNull(info.mtimeNs)}`;
+
     const readSkill = Effect.fn("Skills.readSkill")(function* (
       scope: SkillScope,
       directory: string,
@@ -143,19 +161,7 @@ const make = (options: SkillsOptions) =>
       const file = skillFileOf(directory);
       const problem = (kind: SkillProblem["problem"]): SkillRead =>
         SkillRead.problem({ problem: { scope, directory, problem: kind } });
-      return yield* Effect.gen(function* (): Effect.fn.Return<
-        SkillRead,
-        | import("../files/text.ts").TextFileIoFailed
-        | import("../files/text.ts").TextFileRejected
-        | import("../files/paths.ts").PathRejected
-        | import("effect/PlatformError").PlatformError
-      > {
-        const found = yield* fs.lstat(file).pipe(
-          Effect.asSome,
-          Effect.catchReason("PlatformError", "NotFound", () => Effect.succeedNone),
-        );
-        if (Option.isNone(found) || found.value.type !== "File") return SkillRead.none();
-        if (Number(found.value.size) > maxSkillBytes) return problem("too_large");
+      const content = Effect.gen(function* (): Effect.fn.Return<SkillRead, SkillReadFailure> {
         // Open the same leaf without following a link swapped in after discovery.
         const { bytes } = yield* readFileBytesEffect({ absolute: file, path: file }).pipe(
           Effect.provideService(FileSystem.FileSystem, fs),
@@ -178,6 +184,27 @@ const make = (options: SkillsOptions) =>
             ),
           },
         });
+      });
+      return yield* Effect.gen(function* (): Effect.fn.Return<SkillRead, SkillReadFailure> {
+        const found = yield* fs.lstat(file).pipe(
+          Effect.asSome,
+          Effect.catchReason("PlatformError", "NotFound", () => Effect.succeedNone),
+        );
+        if (Option.isNone(found) || found.value.type !== "File") return SkillRead.none();
+        if (Number(found.value.size) > maxSkillBytes) return problem("too_large");
+        const key = `${scope}:${file}`;
+        const stamp = stampOf(found.value);
+        return yield* Option.match(
+          Option.filter(MutableHashMap.get(known, key), (entry) => entry.stamp === stamp),
+          {
+            onSome: (entry) => Effect.succeed(entry.read),
+            // A read that failed is not kept: the next catalog tries the file again.
+            onNone: () =>
+              Effect.tap(content, (read) =>
+                Effect.sync(() => MutableHashMap.set(known, key, { stamp, read })),
+              ),
+          },
+        );
       }).pipe(
         // A skill that cannot be read is listed as a problem, not dropped silently.
         Effect.catchTags({
@@ -211,7 +238,7 @@ const make = (options: SkillsOptions) =>
               Effect.catchTag("PlatformError", () => Effect.succeed(false)),
             )
           : Effect.succeed(type === "Directory");
-      // Every read is current: a person may change a skill at any time.
+      // Every catalog is current: a person may change a skill at any time (`known` rereads it).
       const reads = yield* Effect.forEach(
         folders,
         (folder) =>
