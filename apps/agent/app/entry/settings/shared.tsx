@@ -148,18 +148,33 @@ function pathInBody(project: Project, path: string) {
 /** How long the copy button shows that it copied. */
 const copiedForMs = 1_500;
 
-function CopyPathButton({ path }: { path: string }) {
-  const { t } = useLingui();
-  const [copied, setCopied] = useState(false);
+/** A copy to the clipboard: done (shown for a moment), refused, or not tried yet. */
+export type CopyOutcome = "idle" | "copied" | "failed";
+
+/** Copies text and reports the outcome; "copied" goes back to "idle" after a moment. */
+export function useClipboardCopy() {
+  const [outcome, setOutcome] = useState<CopyOutcome>("idle");
   useEffect(() => {
-    if (!copied) return;
+    if (outcome !== "copied") return;
     const task = Effect.runFork(
-      Effect.sleep(copiedForMs).pipe(Effect.andThen(Effect.sync(() => setCopied(false)))),
+      Effect.sleep(copiedForMs).pipe(Effect.andThen(Effect.sync(() => setOutcome("idle")))),
     );
     return () => {
       void Effect.runFork(Fiber.interrupt(task));
     };
-  }, [copied]);
+  }, [outcome]);
+  const copy = (text: string) =>
+    void navigator.clipboard.writeText(text).then(
+      () => setOutcome("copied"),
+      () => setOutcome("failed"),
+    );
+  return { outcome, copy };
+}
+
+function CopyPathButton({ path }: { path: string }) {
+  const { t } = useLingui();
+  const { outcome, copy } = useClipboardCopy();
+  const copied = outcome === "copied";
   return (
     <Button
       variant="ghost-muted"
@@ -176,12 +191,7 @@ function CopyPathButton({ path }: { path: string }) {
             })
       }
       title={path}
-      onClick={() =>
-        void navigator.clipboard.writeText(path).then(
-          () => setCopied(true),
-          () => undefined,
-        )
-      }
+      onClick={() => copy(path)}
     >
       {copied ? <CheckIcon /> : <CopyIcon />}
     </Button>

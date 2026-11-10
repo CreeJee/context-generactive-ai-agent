@@ -3,7 +3,7 @@ import { msg, ph, t } from "@lingui/core/macro";
 import { Trans, useLingui } from "@lingui/react/macro";
 import { Match, Option, Schema } from "effect";
 import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ChevronRightIcon } from "lucide-react";
 import type { ImprovementReport } from "memory-agent";
 import { reportedTitle, type ScanFailure, ScanState, sourceLabels } from "memory-agent/definitions";
@@ -11,11 +11,10 @@ import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { FieldDescription, FieldGroup } from "~/components/ui/field";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "~/components/ui/collapsible";
-import { api, type ImprovementStatus, refusalOf, ScanCommand } from "../../api";
+import { api, refusalOf, ScanCommand } from "../../api";
 import { koreanLocalTime } from "../../shared/local-time";
-import { PageError, PageHeader, pageTitles, shortPath } from "../shared";
-
-const queryKey = ["settings", "improvements"];
+import { globalQueries, useImprovementsQuery } from "../../queries/global";
+import { PageError, PageHeader, pageTitles, shortPath, useClipboardCopy } from "../shared";
 
 /** Why a request failed, as the server names it. */
 const FailureReason = Schema.Literals(["report"]);
@@ -59,7 +58,7 @@ const requestFailure = (failure: Error) => {
 };
 
 function Report({ report }: { report: ImprovementReport }) {
-  const [copied, setCopied] = useState(false);
+  const { outcome, copy } = useClipboardCopy();
   const name = report.repository.split(/[/\\]/u).at(-1) ?? report.repository;
   const itemCount = report.items.length;
   return (
@@ -107,14 +106,8 @@ function Report({ report }: { report: ImprovementReport }) {
             <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
               {shortPath(report.file)}
             </span>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() =>
-                void navigator.clipboard.writeText(report.markdown).then(() => setCopied(true))
-              }
-            >
-              {copied ? (
+            <Button size="sm" variant="outline" onClick={() => copy(report.markdown)}>
+              {outcome === "copied" ? (
                 <Trans comment="Copy button label right after it copied the document">
                   복사했습니다
                 </Trans>
@@ -123,6 +116,13 @@ function Report({ report }: { report: ImprovementReport }) {
               )}
             </Button>
           </div>
+          {outcome === "failed" && (
+            <p role="alert" className="text-xs text-destructive">
+              <Trans>
+                클립보드를 사용할 수 없습니다. 아래 문서에서 텍스트를 직접 선택해 복사해 주십시오.
+              </Trans>
+            </p>
+          )}
           <pre className="max-h-80 overflow-auto rounded-md bg-muted p-3 text-xs whitespace-pre-wrap">
             {report.markdown}
           </pre>
@@ -140,29 +140,20 @@ export function ImprovementSettings() {
   const { t } = useLingui();
   const cache = useQueryClient();
   const [error, setError] = useState<string | null>(null);
-  const { data, error: queryError } = useQuery({
-    queryKey,
-    queryFn: api.improvements,
-    // Follow a running scan; otherwise the page only changes when the user acts.
-    refetchInterval: (query) =>
-      query.state.data !== undefined && ScanState.guards.running(query.state.data.state)
-        ? 2000
-        : false,
-    retry: false,
-  });
+  const { data } = useImprovementsQuery();
   const command = useMutation({
     mutationFn: api.improvementScan,
     onSuccess: ({ state }) => {
       setError(null);
-      cache.setQueryData<ImprovementStatus>(queryKey, (current) =>
+      cache.setQueryData(globalQueries.improvements().queryKey, (current) =>
         current === undefined ? current : { ...current, state },
       );
     },
     onError: (failure) => setError(requestFailure(failure)),
   });
-  const latest = data?.scan ?? null;
-  const running = data !== undefined && ScanState.guards.running(data.state);
-  const line = data === undefined ? null : stateLine(data.state);
+  const latest = data.scan;
+  const running = ScanState.guards.running(data.state);
+  const line = stateLine(data.state);
   return (
     <FieldGroup>
       <PageHeader
@@ -188,7 +179,7 @@ export function ImprovementSettings() {
             <Button
               variant="outline"
               size="sm"
-              disabled={command.isPending || data === undefined}
+              disabled={command.isPending}
               onClick={() => command.mutate(ScanCommand.start())}
             >
               {latest === null ? (
@@ -201,14 +192,8 @@ export function ImprovementSettings() {
         }
       />
       {line !== null && <FieldDescription role="status">{line}</FieldDescription>}
-      <PageError error={error ?? (queryError === null ? null : requestFailure(queryError))} />
-      {data === undefined ? (
-        queryError === null && (
-          <FieldDescription role="status">
-            <Trans>기록한 개선 항목을 불러오는 중입니다.</Trans>
-          </FieldDescription>
-        )
-      ) : latest === null ? (
+      <PageError error={error} />
+      {latest === null ? (
         <FieldDescription>
           <Trans>아직 개선 항목을 찾은 적이 없습니다.</Trans>
         </FieldDescription>

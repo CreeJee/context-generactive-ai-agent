@@ -1,5 +1,6 @@
 import { Function as EffectFunction } from "effect";
 import { queryOptions, useQuery, useSuspenseQuery } from "@tanstack/react-query";
+import { ScanState } from "memory-agent/definitions";
 import { api, type ProviderId, type SubscriptionAccountProvider } from "../api";
 import { compatibleClient, compatibleQueryKey } from "../navigation/compatible-client";
 import { appQueryKeys } from "./keys";
@@ -38,6 +39,16 @@ export const globalQueries = {
       queryFn: api.conversationSettings,
     }),
   recall: () => queryOptions({ queryKey: appQueryKeys.global.recall, queryFn: api.recallSettings }),
+  improvements: () =>
+    queryOptions({
+      queryKey: appQueryKeys.global.improvements,
+      queryFn: api.improvements,
+      // Follow a running scan; otherwise the page only changes when the user acts.
+      refetchInterval: (query) =>
+        query.state.data !== undefined && ScanState.guards.running(query.state.data.state)
+          ? 2000
+          : false,
+    }),
   kanban: () => queryOptions({ queryKey: appQueryKeys.global.kanban, queryFn: api.kanbanSettings }),
   models: (provider: ProviderId) =>
     queryOptions({
@@ -72,6 +83,7 @@ export const useKagiQuery = () => useSuspenseQuery(globalQueries.kagi());
 export const useConversationSettingsQuery = () => useSuspenseQuery(globalQueries.conversation());
 export const useRecallSettingsQuery = () => useSuspenseQuery(globalQueries.recall());
 export const useKanbanSettingsQuery = () => useSuspenseQuery(globalQueries.kanban());
+export const useImprovementsQuery = () => useSuspenseQuery(globalQueries.improvements());
 const useModelsQueryBody = (provider: ProviderId, enabled: boolean) =>
   useQuery({ ...globalQueries.models(provider), enabled });
 export const useModelsQuery: {

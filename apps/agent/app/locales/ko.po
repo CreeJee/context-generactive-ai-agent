@@ -1562,10 +1562,6 @@ msgstr "기록을 읽는 중입니다. <0/>/<1/>개를 확인하고 노드 <2/>�
 msgid "기록을 읽다가 실패했습니다"
 msgstr "기록을 읽다가 실패했습니다"
 
-#: app/entry/settings/pages/improvements.tsx
-msgid "기록한 개선 항목을 불러오는 중입니다."
-msgstr "기록한 개선 항목을 불러오는 중입니다."
-
 #. Scope badge: a skill built into the app
 #: app/entry/settings/shared.tsx
 msgid "기본"
@@ -5730,6 +5726,10 @@ msgstr "코드 실행"
 #: app/entry/report/report-draft.tsx
 msgid "코드 없음"
 msgstr "코드 없음"
+
+#: app/entry/settings/pages/improvements.tsx
+msgid "클립보드를 사용할 수 없습니다. 아래 문서에서 텍스트를 직접 선택해 복사해 주십시오."
+msgstr "클립보드를 사용할 수 없습니다. 아래 문서에서 텍스트를 직접 선택해 복사해 주십시오."
 
 #: app/routes/report.tsx
 msgid "클립보드를 사용할 수 없습니다. 위 제보 문안에서 텍스트를 직접 선택해 복사해 주십시오."
