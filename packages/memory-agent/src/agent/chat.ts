@@ -195,6 +195,8 @@ import {
 } from "../work-trace/contracts.ts";
 import { BackgroundTasks, type BackgroundBinding } from "../tools/background.ts";
 import { AppEvents } from "../events/app-events.ts";
+import { agentCopy } from "./copy.ts";
+import { agentPrompts } from "./prompts.ts";
 import {
   initialReportEvidence,
   reportBinding,
@@ -1533,7 +1535,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                   }),
                   toolName: permission.toolCall.title ?? "external tool",
                   argumentsJson: stringifyJson(permission.toolCall.rawInput ?? {}),
-                  reason: "외부 에이전트가 권한을 요청했어요.",
+                  reason: agentCopy.externalAgentPermission,
                   askedBy: "agent",
                 },
                 abortController.signal,
@@ -1854,8 +1856,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                   ).pipe(
                     fallbackLogged(
                       "Report evidence snapshot failed",
-                      () =>
-                        "자동 근거 수집 실패. 원본 근거를 확인한 것으로 주장하지 마세요; 읽기 도구로 재시도할 수 있습니다.",
+                      () => agentPrompts.reportEvidenceFailed,
                     ),
                   )
                 : null;
@@ -2835,8 +2836,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             if (Option.isSome(refused)) {
               yield* execution.blockPending(sessionId, last.runId, {
                 reason: "external_dependency",
-                detail:
-                  "승인한 Plan을 칸반 보드에서 시작하지 못했어요. 보드 패널에서 칸반으로 전환을 다시 눌러 주세요.",
+                detail: agentCopy.planBoardNotStarted,
                 evidence: [refused.value],
               });
               yield* events.publishSession(sessionId, "run-state");

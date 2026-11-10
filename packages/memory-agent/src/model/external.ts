@@ -15,6 +15,7 @@ import { AiError, LanguageModel, type Prompt, type Response } from "effect/ai";
 import { ExternalPromptOutcome } from "../external-agents/agents.ts";
 import type { ShownFailure } from "../providers/contracts.ts";
 import { ExternalAgentFailureCode } from "../runtime/shown-failure.ts";
+import { modelCopy } from "./copy.ts";
 import { optionsKey } from "./prompt.ts";
 import { collectResponse } from "./response.ts";
 import { shownReason } from "./shown-failure.ts";
@@ -102,7 +103,7 @@ const makeAnswer = () => {
       MutableHashMap.size(calls) === 0
         ? []
         : text(
-            `\n\n외부 에이전트가 알린 도구 호출:\n${Array.from(
+            `\n\n${modelCopy.reportedToolCalls}\n${Array.from(
               MutableHashMap.values(calls),
               (call) => `- ${call.title} (${call.status})`,
             ).join("\n")}`,

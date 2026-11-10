@@ -8,6 +8,7 @@ import { InterruptAnswer } from "../loop/store.ts";
 import type { ModelSelection } from "../providers/contracts.ts";
 import type { Project } from "../projects/projects.ts";
 import { PermissionClassifier } from "./classifier.ts";
+import { permissionsCopy } from "./copy.ts";
 import { PermissionReviews, type PermissionReview } from "./reviews.ts";
 
 export interface GateBinding {
@@ -23,9 +24,6 @@ export interface GateBinding {
    */
   readonly decider: "classifier" | "user";
 }
-
-/** Asked of the user when no review ran: the tool needs a decision on every call. */
-const askEveryCallReason = "호출할 때마다 확인하는 도구예요.";
 
 /** A gated call, with its arguments as the model wrote them, which its review keeps. */
 interface GatedCall {
@@ -129,7 +127,8 @@ const gateFor = Effect.fnUntraced(function* (binding: GateBinding) {
   /** Why the user is asked about the call, or none when the decision needs no one. */
   const askingOf = (decision: Option.Option<PermissionReview>) =>
     Option.match(decision, {
-      onNone: () => Option.some<Asking>({ reason: askEveryCallReason, askedBy: "every_call" }),
+      onNone: () =>
+        Option.some<Asking>({ reason: permissionsCopy.askEveryCall, askedBy: "every_call" }),
       onSome: ({ decision, reason }) =>
         decision === "ask" ? Option.some<Asking>({ reason, askedBy: "review" }) : Option.none(),
     });
@@ -144,7 +143,7 @@ const gateFor = Effect.fnUntraced(function* (binding: GateBinding) {
         record(call, {
           decision: approved ? "approved" : "denied",
           decidedBy: "user",
-          reason: approved ? "사용자가 승인했어요." : "사용자가 거부했어요.",
+          reason: approved ? permissionsCopy.answered.approved : permissionsCopy.answered.denied,
         }),
       { discard: true },
     );

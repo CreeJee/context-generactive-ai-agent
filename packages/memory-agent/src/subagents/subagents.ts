@@ -47,6 +47,7 @@ import { optionalProperty } from "../optional-property.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import type { ModelSelection } from "../providers/contracts.ts";
 import { PermissionClassifier } from "../permissions/classifier.ts";
+import { permissionsCopy } from "../permissions/copy.ts";
 import { RelayedApprovals } from "../approvals/relayed.ts";
 import { ApprovalRequester } from "../approvals/relayed-state.ts";
 import { PermissionReviews } from "../permissions/reviews.ts";
@@ -375,8 +376,6 @@ export type SubagentReport =
     };
 type ChildOutcome = Extract<SubagentReport, { answer: string }>;
 
-const everyCallReason = "호출할 때마다 확인하는 도구예요.";
-
 /** A retry reruns the task in the same thread, so the child's earlier transcript is in context. */
 const retryMessage = (context: ResumeContext) =>
   [
@@ -657,7 +656,7 @@ const make = Effect.gen(function* () {
         yield* record(
           approved ? "approved" : "denied",
           "user",
-          approved ? "사용자가 승인했어요." : "사용자가 거부했어요.",
+          approved ? permissionsCopy.answered.approved : permissionsCopy.answered.denied,
         );
         yield* trace.transitionAttempt(
           handle,
@@ -695,7 +694,7 @@ const make = Effect.gen(function* () {
       ? Match.value(binding.project.permissionMode).pipe(
           Match.when("full", () => Effect.succeedNone),
           Match.when("auto", () => reviewed),
-          Match.orElse(() => askUser(everyCallReason, "every_call")),
+          Match.orElse(() => askUser(permissionsCopy.askEveryCall, "every_call")),
         )
       : Effect.succeedNone;
   };

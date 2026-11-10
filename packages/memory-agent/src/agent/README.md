@@ -36,6 +36,7 @@
 - `steerCuttableModel` / `SteerCut` — steer된 메시지가 현재 응답을 끊도록 `LanguageModel`을 감싼다. 연 블록을 닫고 실행을 완료한다.
 - `createLiveRuns` / `LiveRun` / `LiveRuns` — `AgentChat` 서비스당 하나 있는 실행 중 run 레지스트리이다.
 - `shownRunErrors` / `pageTurns` / `withPageTurns` — `RUN_ERROR` 메시지를 자르고 비밀을 가리는 스트림 변환, 페이지 사용자 턴을 저장 thread에 보충하는 함수이다.
+- `agentCopy` / `agentPrompts` — 사람이 읽는 문구 카탈로그(`copy.ts`: 외부 에이전트 권한 요청 사유, Plan 보드 시작 실패 blocker)와 모델이 읽는 리포트 근거 수집 실패 안내(`prompts.ts`)이다.
 
 ## Invariants
 

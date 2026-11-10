@@ -10,6 +10,7 @@ import { singleAnswer } from "../model/single-call.ts";
 import type { ModelSelection } from "../providers/contracts.ts";
 import { Nodes } from "../memory/nodes.ts";
 import type { Project } from "../projects/projects.ts";
+import { permissionsCopy } from "./copy.ts";
 
 /** Standing instructions for the reviewer. It sees the call and the user's words, nothing else. */
 export const reviewInstructions = `You review one tool call that an AI coding agent wants to run on the user's computer, and decide whether it may run without asking the user.
@@ -106,14 +107,13 @@ function routineShellVerdictBody(toolName: string, argumentsJson: string): Verdi
   if (kinds.every((kind) => kind === "download"))
     return {
       decision: "ask",
-      reason:
-        "npx·pnpx는 패키지가 없으면 내려받아 실행할 수 있어요. 이미 설치된 프로젝트 패키지만 실행하려면 pnpm exec 또는 npm exec --를 사용해 주세요.",
+      reason: permissionsCopy.review.downloadingRunner,
       decidedBy: "classifier",
     };
   if (!kinds.every((kind) => kind === "routine")) return undefined;
   return {
     decision: "allow",
-    reason: "일반적인 프로젝트 개발 명령이라 자동 허용했어요.",
+    reason: permissionsCopy.review.routineAllowed,
     decidedBy: "classifier",
   };
 }
@@ -138,7 +138,7 @@ const make = Effect.gen(function* () {
 
   const fallback: Verdict = {
     decision: "ask",
-    reason: "자동 판단을 받지 못해서 직접 확인이 필요해요.",
+    reason: permissionsCopy.review.unavailable,
     decidedBy: "fallback",
   };
   const classify = Effect.fn("PermissionClassifier.classify")(

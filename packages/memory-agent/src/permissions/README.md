@@ -18,6 +18,7 @@
 - `PermissionReview` / `NewPermissionReview` — 검토 기록 Schema와 타입. `NewPermissionReview`는 createdAt을 뺀 형태다.
 - `ReviewDecision` — Schema.Literals allow|ask|block|approved|denied
 - `ReviewDecider` — Schema.Literals classifier|fallback|user
+- `permissionsCopy` — 사람이 읽는 승인 사유 문구 카탈로그(`copy.ts`). gate와 `subagents`가 함께 쓴다
 
 ## Invariants
 

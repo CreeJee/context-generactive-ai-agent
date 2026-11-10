@@ -3,6 +3,7 @@ import { SqlClient, SqlSchema } from "effect/sql";
 import { endedWithKnownEffectsSql } from "./run-bindings.ts";
 import { type WorkflowBlocker, WorkflowExecutionState } from "./contracts.ts";
 import type { WorkflowState } from "./workflow.ts";
+import { workflowCopy } from "./copy.ts";
 
 export { WorkflowBlocker, WorkflowExecutionState } from "./contracts.ts";
 
@@ -198,8 +199,7 @@ const make = Effect.gen(function* () {
                 cases.blocked.make({
                   runId,
                   reason: "server_restarted",
-                  detail:
-                    "결과가 확인되지 않은 도구 실행 중 서버가 다시 시작돼 자동으로 이어가지 않았어요. 실행 결과를 확인한 뒤 다시 보내 주세요.",
+                  detail: workflowCopy.blocked.serverRestarted,
                   evidence: [
                     runId,
                     "Owner tool operation without a recorded result before the restart",

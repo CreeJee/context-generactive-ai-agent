@@ -27,6 +27,7 @@
 - `runProcess` / `CommandOptions` / `runTrace` / `onRun` / `RunTrace` — 프로세스 실행 함수와 실행 trace 헬퍼. 그래프 시그니처만 확인함
 - `nodePlatformLayer` / `nodePlatform` / `NodePlatform` / `initializeNodeSqlite(addonPath)` — Node 플랫폼 Layer와 node sqlite addon 초기화. 그래프 시그니처만 확인함
 - `sha256` (synchronous-crypto) / `posix`·`win32`·`path` (synchronous-path) — 동기 sha256, 동기 path 모듈. 그래프 시그니처만 확인함
+- `runtimeCopy` — 사람이 읽는 실패 문구 카탈로그(`copy.ts`). `runFailureText`와 `externalAgentFailureText`는 이 카탈로그를 가리킴
 - 하위 디렉터리 없음
 
 ## Invariants

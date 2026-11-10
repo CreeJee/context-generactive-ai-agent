@@ -2,6 +2,7 @@ import { Context, Effect, Layer, Option, Schema } from "effect";
 import { PermissionClassifier } from "../permissions/classifier.ts";
 import type { Project } from "../projects/projects.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
+import { kanbanCopy } from "./copy.ts";
 import type { CardApprovalReview } from "../workflow/card.ts";
 import type { GoalArtifact, PlanStep } from "../workflow/workflow.ts";
 
@@ -34,7 +35,7 @@ const encodeReviewed = Schema.encodeEffect(Schema.fromJsonString(ReviewedCards))
 /** The reviewer is not asked when nothing could be read; the user decides then. */
 const unreviewed: CardApprovalReview = {
   decision: "ask",
-  reason: "카드를 자동으로 검토하지 못해서 직접 확인이 필요해요.",
+  reason: kanbanCopy.cardsUnreviewed,
 };
 
 /**

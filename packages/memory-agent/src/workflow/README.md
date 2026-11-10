@@ -43,6 +43,7 @@
 - `planSchedule` / `PlanSchedule` / `planDependencyIssues` / `validatePlanDependencies` / `PlanDependenciesRejected` / `notStartedStatus` — Plan 의존성 검증과 실행 가능 step 스케줄
 - `WorkflowRules` / `WorkflowRule` / `RuleSource` / `builtInWorkflowRules` / `projectWorkflowRules` / `skillWorkflowRules` / `structuredWorkflowRules` / `localWorkflowRules` / `projectWorkflowRulesPath` — 워크플로 규칙 해석과 소스 로딩
 - `WorkflowTools` / `workflowInstructions` / `ProviderRetries` / `providerRetryLayer` / `providerRetryIdempotencyKey` / `providerRetryDelay` / `providerRetryLimits` — 모델용 워크플로 도구, 지시문 생성, provider 재시도 서비스
+- `workflowCopy` — 자동 실행이 멈춘 이유를 사람에게 보여 주는 blocker 문구 카탈로그(`copy.ts`)
 
 ## Invariants
 

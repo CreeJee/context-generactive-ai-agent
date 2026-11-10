@@ -36,6 +36,7 @@
 - `ProjectScheduler` / `GoalOrder` / `GoalMerges` — `ProjectScheduler`는 프로젝트 스케줄러로, slot을 배정하고 `waitingOn`을 제공합니다. `GoalOrder`는 프로젝트 순서와 프로젝트별 Goal 순서를, `GoalMerges`는 Goal merge queue와 outcome 판정을 맡습니다. 보드의 look은 실행 중인 Goal마다 `checkOutcomes`를 부르고, 위하는 카드가 다 끝났는데 판정이 없는 outcome(`AwaitingCheck`)을 Goal 브랜치 checkout(worktree가 없는 Goal은 카드가 돌지 않을 때 프로젝트 자체)에서 `OutcomeVerifier`로 판정해 `OutcomeLedger`에 적습니다. merge 단계와 같은 Goal 직렬 키로 하나씩 돌고, 판정을 적으면 look을 깨웁니다. 판정 없이 끝난 검사(검증기가 못 돌았거나 판정을 안 남김)는 같은 outcome 문장·Goal head·카드로는 이 프로세스에서 다시 돌리지 않습니다. 카드가 모두 done이고 outcome이 모두 met이어야 look이 merge를 시작합니다. merge가 일을 넘기면(`mergeDelivers`: merge됨, 수동 merge, PR 생성) worktree가 없는 Goal은 바로 look이 Goal과 Plan을 완료합니다. 카드가 모두 done인데 카드가 없거나 not_met인 outcome이 있으면 모델에게 `outcomes_open`으로 알립니다. 셋 다 `.layer`를 가집니다.
 - `KanbanTools` / `kanbanAttentionPrompt` — `KanbanTools`는 칸반 세션의 보드 도구(`readBoard`, `editBoard`)입니다. `readBoard`는 카드마다 위하는 outcome id와, Goal outcome마다 `OutcomeLedger`로 낸 상태(unplanned, in_progress, awaiting_check, met, not_met)를 평범한 키로 보여 줍니다. `kanbanAttentionPrompt`는 루프가 모델을 필요로 할 때 보내는 자동 후속 프롬프트입니다.
 - `PersistedQueueItems` / `persistedQueueStoreLayer` / `persistedQueueCleanupLayer` / `subagentCardAgentsLayer` — owner 연결의 PersistedQueue 저장소 레이어와 그 dead-letter 조회·requeue 서비스, 완료 항목 정리 레이어입니다. `subagentCardAgentsLayer`는 `CardAgent`·`CardVerifier`·`GoalVerifier`·`OutcomeVerifier`를 세션 subagent로 구현합니다. 카드 에이전트는 실행자 모델, 세 검증기는 검증자 모델(`ActiveProvider.selectedFor`)로 돕니다.
+- `kanbanCopy` — 카드 승인 사유 문구 카탈로그입니다(`copy.ts`).
 - 하위 디렉터리 없음
 
 ## Invariants
