@@ -119,6 +119,8 @@ export interface SlashSupport {
 const imageFiles = (files: FileList | null) =>
   Array.from(files ?? []).filter((file) => file.type.startsWith("image/"));
 
+const attachmentOf = (image: Data.TaggedEnum.Value<DraftImage, "ready">) => image.attachment.id;
+
 /**
  * The input box either writes a new message or edits one that is waiting in the queue. The text
  * being edited is an atom, like the draft, so only the input box reads it as it is typed.
@@ -136,6 +138,17 @@ const Composer = Data.taggedEnum<Composer>();
 interface Placement {
   readonly side: "before" | "after";
   readonly messageId: string;
+}
+
+/**
+ * A turn on its way to the server, kept until the server takes it: a turn it refuses or never gets
+ * goes back into the composer as the user wrote it.
+ */
+interface Outgoing {
+  readonly content: UserContent;
+  readonly typed: string;
+  readonly text: string;
+  readonly images: ReadonlyArray<Data.TaggedEnum.Value<DraftImage, "ready">>;
 }
 
 /** Unsaved edit text is stored after typing pauses this long. */
@@ -386,6 +399,12 @@ function ChatPanel({
     }));
   const draftImages = useDraftImages();
   const composerInput = useRef<ChatComposerHandle>(null);
+  const [outgoing, setOutgoing] = useState<Outgoing | null>(null);
+  /** Puts a turn that did not go back into the composer, where the user has not written since. */
+  const putBack = (turn: Outgoing) => {
+    setDraft((current) => (current.length === 0 ? turn.typed : current));
+    draftImages.restore(turn.images);
+  };
   const {
     messages,
     opened,
@@ -398,6 +417,7 @@ function ChatPanel({
     resuming,
     failure,
     refusal,
+    dismissRefusal,
     unsent,
     interrupts,
     answerProblem,
@@ -405,6 +425,25 @@ function ChatPanel({
   } = useAgentChat({
     sessionId,
     holder,
+    onNotTaken: ({ input, refusal }) => {
+      if (outgoing === null || input.content !== outgoing.content) return;
+      setOutgoing(null);
+      // A run this page had not heard of yet is answering: the turn waits in the queue for it.
+      if (refusal?.error !== "run_in_progress") return putBack(outgoing);
+      void runUiEffect(
+        uiPromise(() =>
+          trackSubmission(queue.add(outgoing.text, outgoing.images.map(attachmentOf), "queue")),
+        ).pipe(
+          Effect.map(
+            AddOutcome.$match({
+              queued: dismissRefusal,
+              "not-running": () => putBack(outgoing),
+              failed: () => putBack(outgoing),
+            }),
+          ),
+        ),
+      );
+    },
     onCustomEvent: (event) => {
       switch (event.name) {
         case contextUsageEvent: {
@@ -668,8 +707,15 @@ function ChatPanel({
   const uploading = draftImages.images.some(DraftImage.$is("uploading"));
   const failed = draftImages.images.some(DraftImage.$is("failed"));
   const leavingMode = modeLabels[leaving?.move ?? "plan"];
+  // Images stay in the draft when the model changes to one that cannot read them.
+  const unreadable = !imagesSupported && draftImages.images.length > 0;
   const shownNotice =
-    notice ?? (failed ? problem(t`올리지 못한 이미지가 있습니다. 빼고 보내 주십시오.`) : null);
+    notice ??
+    (failed
+      ? problem(t`올리지 못한 이미지가 있습니다. 빼고 보내 주십시오.`)
+      : unreadable
+        ? problem(t`선택한 모델은 이미지를 읽지 못합니다. 이미지를 지원하는 모델을 골라 주십시오.`)
+        : null);
   const editing = Composer.$is("editing")(composer) ? composer : null;
   const composerMode: ComposerMode =
     editing !== null
@@ -684,6 +730,7 @@ function ChatPanel({
     (text.trim().length > 0 || ready.length > 0) &&
     !uploading &&
     !failed &&
+    !unreadable &&
     !submitting &&
     !waitingForApproval &&
     !mutationBlocked;
@@ -883,10 +930,12 @@ function ChatPanel({
         );
         if (Option.isNone(message)) return;
         const text = message.value;
-        const attachmentIds = ready.map((image) => image.attachment.id);
+        const attachmentIds = ready.map(attachmentOf);
         const sendTurn = () => {
+          const content = contentOf(text, attachmentIds);
+          setOutgoing({ content, typed, text, images: ready });
           clearComposer();
-          sendMessage(contentOf(text, attachmentIds));
+          sendMessage(content);
         };
         if (!generating && media.intent) {
           if (attachmentIds.length > 0)

@@ -8,6 +8,7 @@ import {
   ChatApi,
   type ChatMessage,
   type MessagePart,
+  Refusal,
   type ResumeEntry,
   type RunEvent,
   type RunInput,
@@ -63,8 +64,15 @@ export interface Answer {
   readonly answers: ReadonlyArray<ResumeEntry>;
 }
 
+/** A turn the server did not take: what the page sent, and the server's refusal when it refused it. */
+export interface NotTaken {
+  readonly input: Send;
+  readonly refusal: Refusal | null;
+}
+
 const isCustom = AgUiEvent.guards.CUSTOM;
 const isText = Schema.is(Schema.String);
+const isRefusal = Schema.is(Refusal);
 
 /** Two sights that would decide the same. */
 const sameSight = (a: RunSight, b: RunSight) =>
@@ -85,6 +93,8 @@ export const chatSessions = <E>(
     const state = Atom.make<Option.Option<OpenSession>>(Option.none()).pipe(Atom.keepAlive);
     /** The last app event a run sent; the page subscribes to it. */
     const custom = Atom.make<Option.Option<CustomEvent>>(Option.none());
+    /** The last turn the server did not take; the page subscribes to it to put the turn back. */
+    const notTaken = Atom.make<Option.Option<NotTaken>>(Option.none());
 
     // Written through the call's own `get`, not the registry: once a newer call replaces this one,
     // its late writes are dropped instead of overwriting the newer run's view.
@@ -146,7 +156,10 @@ export const chatSessions = <E>(
       }),
     );
 
-    /** Sends a user turn and reads its run. A refused turn leaves the conversation. */
+    /**
+     * Sends a user turn and reads its run. A turn the server refused or never got leaves the
+     * conversation, and `notTaken` hands it back to the page.
+     */
     const send = runtime.fn((input: Send, get) =>
       Effect.gen(function* () {
         const { chat } = yield* ChatApiClient;
@@ -175,14 +188,23 @@ export const chatSessions = <E>(
             },
           })
           .pipe(
-            Effect.tapError(() =>
+            Effect.tapError((error) =>
               changed(get, (current) => ({
                 ...current,
                 view: {
                   ...current.view,
                   messages: current.view.messages.filter(({ id }) => id !== message.id),
                 },
-              })),
+              })).pipe(
+                Effect.andThen(
+                  Effect.sync(() =>
+                    get.set(
+                      notTaken,
+                      Option.some({ input, refusal: isRefusal(error) ? error : null }),
+                    ),
+                  ),
+                ),
+              ),
             ),
           );
         yield* following(get, runId, events);
@@ -267,5 +289,5 @@ export const chatSessions = <E>(
       ),
     );
 
-    return { state, custom, open, send, answer, loadOlder, latest, follow };
+    return { state, custom, notTaken, open, send, answer, loadOlder, latest, follow };
   });

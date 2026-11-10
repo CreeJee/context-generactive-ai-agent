@@ -2,6 +2,7 @@ import { useLingui } from "@lingui/react/macro";
 import { Data, Effect } from "effect";
 import { browserCrypto } from "../shared/browser-crypto";
 import { Function as EffectFunction } from "effect";
+import { attachmentUrl } from "memory-agent/definitions";
 import { useEffect, useRef, useState } from "react";
 import { api, attachmentErrorMessage, refusalOf, type Attachment } from "../api";
 
@@ -103,7 +104,21 @@ export function useDraftImages() {
     nextNumber.current = 1;
   };
 
-  return { images, add, remove, clear };
+  /**
+   * Puts back the uploaded images of a message that was not sent, with their numbers, into an
+   * empty draft. Their local previews were released with the draft, so they show the upload.
+   */
+  const restore = (sent: ReadonlyArray<Data.TaggedEnum.Value<DraftImage, "ready">>) => {
+    if (live.current.length > 0 || sent.length === 0) return;
+    setImages(
+      sent.map((image) =>
+        DraftImage.ready({ ...image, previewUrl: attachmentUrl(image.attachment.id) }),
+      ),
+    );
+    nextNumber.current = Math.max(...sent.map((image) => image.number)) + 1;
+  };
+
+  return { images, add, remove, clear, restore };
 }
 
 /**

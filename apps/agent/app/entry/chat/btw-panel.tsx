@@ -129,6 +129,8 @@ function BtwConversation({ thread }: { thread: BtwThread }) {
   const { t } = useLingui();
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState("");
+  /** The question on its way, which returns to the box if the server does not take it. */
+  const [asked, setAsked] = useState<string | null>(null);
   const { messages, ask, isLoading, failure, error, refusal } = useBtwThread({
     threadId: thread.id,
     // The thread's title is its first question.
@@ -136,11 +138,18 @@ function BtwConversation({ thread }: { thread: BtwThread }) {
       void queryClient.invalidateQueries({
         queryKey: appQueryKeys.session.btw(thread.projectId, thread.parentSessionId),
       }),
+    // A question that did not go returns to the box, unless something new was written there.
+    onNotTaken: (question) => {
+      if (asked === null || question !== asked) return;
+      setAsked(null);
+      setDraft((current) => (current.length === 0 ? asked : current));
+    },
   });
   const send = () => {
     const text = draft.trim();
     if (text.length === 0 || isLoading) return;
     setDraft("");
+    setAsked(text);
     ask(text);
   };
 

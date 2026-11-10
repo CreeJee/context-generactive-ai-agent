@@ -3,7 +3,12 @@ import { Match, Option, Schema } from "effect";
 import { Sse } from "effect/encoding";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { type ChatMessage, Refusal, type ResumeEntry } from "memory-agent/chat-api";
-import { chatSessions, type CustomEvent, type Send } from "memory-agent/chat-session";
+import {
+  chatSessions,
+  type CustomEvent,
+  type NotTaken,
+  type Send,
+} from "memory-agent/chat-session";
 import { useEffect } from "react";
 import { useProjectScope } from "../events/context";
 import { useRunStateQuery } from "../queries/session";
@@ -39,17 +44,19 @@ export type AnswerProblem = "unsent" | "refused" | "lost";
  * One session's conversation on the chat API. It opens the session's newest messages and rejoins
  * a run still going, and reads the runs another tab or the server itself starts later as they come
  * (`follow`, told of the newest run by the run state); `onCustomEvent` gets the app events runs
- * send.
+ * send, and `onNotTaken` each turn the server refused or never got.
  */
 export function useAgentChat({
   sessionId,
   holder,
   onCustomEvent,
+  onNotTaken,
 }: {
   readonly sessionId: string;
   /** The page that holds the session; the server refuses another page's turns and answers. */
   readonly holder: string;
   readonly onCustomEvent: (event: CustomEvent) => void;
+  readonly onNotTaken: (turn: NotTaken) => void;
 }) {
   const atoms = sessions(sessionId);
   const open = useAtomSet(atoms.open);
@@ -60,6 +67,7 @@ export function useAgentChat({
   const answer = useAtomSet(atoms.answer);
   const loadOlder = useAtomSet(atoms.loadOlder, { mode: "promise" });
   useAtomSubscribe(atoms.custom, (event) => Option.map(event, onCustomEvent));
+  useAtomSubscribe(atoms.notTaken, (turn) => Option.map(turn, onNotTaken));
   useEffect(() => open(undefined), [open]);
 
   const follow = useAtomSet(atoms.follow);
@@ -98,6 +106,8 @@ export function useAgentChat({
     failure,
     /** The server's refusal of the last turn. */
     refusal: Option.getOrNull(Option.filter(sendError, isRefusal)),
+    /** Forgets why the last turn was not sent, once the page sent it another way. */
+    dismissRefusal: () => send(Atom.Reset),
     /** Why the last turn could not be sent or its run read, when the server did not refuse it. */
     unsent: Option.getOrNull(
       Option.flatMap(sendError, (error) =>

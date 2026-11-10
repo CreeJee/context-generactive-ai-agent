@@ -12,6 +12,7 @@ const draftImages = {
   add: () => {},
   remove: () => {},
   clear: () => {},
+  restore: () => {},
 } satisfies ReturnType<typeof useDraftImages>;
 
 function renderPlanComposer() {

@@ -37,9 +37,9 @@
 - `ChatApiHandlers` — `AgentChat` 위의 `chat` 그룹 HttpApiBuilder 핸들러 레이어
 - `BtwApiHandlers` — `BtwChat` 위의 `btw` 그룹 HttpApiBuilder 핸들러 레이어
 - `ChatApiClient` — `HttpApiClient.make(ChatApi)` 클라이언트 Context.Service와 `ChatApiClient.layer`
-- `chatSessions` — 세션 id별 Atom 묶음(`keptAtomGroups`). `state`, `custom`(마지막 CUSTOM 이벤트), `open`, `send`, `answer`, `loadOlder`, `latest`(페이지가 알려 주는 서버의 최신 run id), `follow`(마운트된 동안 다른 탭이나 서버가 시작한 run을 따라 읽는다) 제공
+- `chatSessions` — 세션 id별 Atom 묶음(`keptAtomGroups`). `state`, `custom`(마지막 CUSTOM 이벤트), `notTaken`(서버가 받지 않은 마지막 turn과 거절. 페이지가 입력창에 되돌린다), `open`, `send`, `answer`, `loadOlder`, `latest`(페이지가 알려 주는 서버의 최신 run id), `follow`(마운트된 동안 다른 탭이나 서버가 시작한 run을 따라 읽는다) 제공
 - `followRuns(read, sight)` / `RunSight` / `ReadRuns` (`follow-runs.ts`) — 페이지가 시작하지 않은 run을 읽을지 정하는 순수 함수. 처음 본 최신 run은 첫 읽기가 덮은 것으로 두고, 그 뒤 읽지 않은 run이 보이면 페이지가 자기 run을 읽거나 보내는 중이 아닐 때 대화를 한 번 다시 열게 한다
-- `btwThreads` — BTW 스레드 id별 Atom 묶음(`keptAtomGroups`). `view`, `open`, `ask` 제공
+- `btwThreads` — BTW 스레드 id별 Atom 묶음(`keptAtomGroups`). `view`, `notTaken`(서버가 받지 않은 마지막 질문), `open`, `ask` 제공
 - `pageSize` — 클라이언트가 한 번에 읽는 메시지 수 20
 - `partsOf` — user 메시지 content(문자열 또는 파트 배열)를 표시용 `MessagePart` 배열로 변환
 - `OpenSession` / `Send` / `Answer` / `CustomEvent` / `UserContent` — 클라이언트 세션 상태, 보낼 turn, 승인 답변, CUSTOM 이벤트, user content 타입

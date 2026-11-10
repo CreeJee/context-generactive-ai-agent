@@ -21,6 +21,8 @@ export const btwThreads = <E>(
 ) =>
   keptAtomGroups((thread: string) => {
     const view = Atom.make<Option.Option<ChatView>>(Option.none()).pipe(Atom.keepAlive);
+    /** The last question the server did not take; the panel subscribes to it to put it back. */
+    const notTaken = Atom.make<Option.Option<UserContent>>(Option.none());
 
     // Written through the call's own `get`, not the registry: once a newer call replaces this one,
     // its late writes are dropped instead of overwriting the newer question's view.
@@ -36,8 +38,8 @@ export const btwThreads = <E>(
     );
 
     /**
-     * Asks a side question and reads its answer, then the saved thread again. A refused question
-     * leaves the thread.
+     * Asks a side question and reads its answer, then the saved thread again. A question the server
+     * refused or never got leaves the thread, and `notTaken` hands it back to the panel.
      */
     const ask = runtime.fn((content: UserContent, get) =>
       Effect.gen(function* () {
@@ -63,7 +65,7 @@ export const btwThreads = <E>(
               changed(get, (current) => ({
                 ...current,
                 messages: current.messages.filter(({ id }) => id !== message.id),
-              })),
+              })).pipe(Effect.andThen(Effect.sync(() => get.set(notTaken, Option.some(content))))),
             ),
           );
         yield* Stream.runForEach(events, ({ data }) => changed(get, applyEvent(data)));
@@ -72,5 +74,5 @@ export const btwThreads = <E>(
       }),
     );
 
-    return { view, open, ask };
+    return { view, notTaken, open, ask };
   });

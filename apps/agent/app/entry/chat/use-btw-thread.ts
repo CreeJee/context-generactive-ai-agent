@@ -1,4 +1,4 @@
-import { useAtomSet, useAtomValue } from "@effect/atom-react";
+import { useAtomSet, useAtomSubscribe, useAtomValue } from "@effect/atom-react";
 import { Option, Schema } from "effect";
 import { AsyncResult } from "effect/reactivity";
 import { btwThreads } from "memory-agent/btw-thread";
@@ -16,16 +16,20 @@ const isRefusal = Schema.is(Refusal);
 export function useBtwThread({
   threadId,
   onAnswered,
+  onNotTaken,
 }: {
   readonly threadId: string;
   /** Runs once a question's answer has ended, or the question was refused. */
   readonly onAnswered: () => void;
+  /** Gets back a question the server refused or never got. */
+  readonly onNotTaken: (question: UserContent) => void;
 }) {
   const atoms = threads(threadId);
   const open = useAtomSet(atoms.open);
   const view = useAtomValue(atoms.view);
   const asking = useAtomValue(atoms.ask);
   const ask = useAtomSet(atoms.ask, { mode: "promiseExit" });
+  useAtomSubscribe(atoms.notTaken, (question) => Option.map(question, onNotTaken));
   useEffect(() => open(undefined), [open]);
 
   return {

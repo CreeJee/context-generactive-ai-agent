@@ -33,7 +33,7 @@ const done = <A, E>(atom: Atom.Atom<AsyncResult.AsyncResult<A, E>>) =>
   Atom.getResult(atom, { suspendOnWaiting: true });
 
 testAgent({ testProvider: {} })("chat session atoms", (it) => {
-  it.effect("a sent turn shows its run, and a refused turn leaves the conversation", () =>
+  it.effect("a sent turn shows its run, and a refused turn goes back to the page", () =>
     Effect.gen(function* () {
       yield* selectTestModel();
       const session = yield* freshSession;
@@ -53,10 +53,15 @@ testAgent({ testProvider: {} })("chat session atoms", (it) => {
       );
 
       yield* (yield* agentChat).lease(session, "tab-b", "claim");
-      yield* Atom.set(atoms.send, { holder: "tab-a", content: "again" });
+      yield* Atom.mount(atoms.notTaken);
+      const again = { holder: "tab-a", content: "again" };
+      yield* Atom.set(atoms.send, again);
       expect(yield* Effect.flip(done(atoms.send))).toMatchObject({ error: "session_in_use" });
       expect(yield* shown).toEqual(answered);
-    }).pipe(Effect.provideService(AtomRegistry.AtomRegistry, AtomRegistry.make())),
+      const notTaken = Option.getOrThrow(yield* Atom.get(atoms.notTaken));
+      expect(notTaken.input).toBe(again);
+      expect(notTaken.refusal).toMatchObject({ error: "session_in_use" });
+    }).pipe(Effect.provideService(AtomRegistry.AtomRegistry, AtomRegistry.make()), Effect.scoped),
   );
 
   it.effect("a page reads a run another page started, once it hears of it", () =>
