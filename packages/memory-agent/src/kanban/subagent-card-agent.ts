@@ -359,7 +359,9 @@ const make = Effect.gen(function* () {
         `Goal: ${input.goal.statement}`,
         `Outcome to check: ${input.outcome.id}: ${input.outcome.text}`,
         ...listed("Constraints", input.goal.constraints),
-        "Cards that served it:",
+        input.served === "named"
+          ? "Cards that served it:"
+          : "No card named this outcome. Judge it against the work of every card of the Goal, all of them done:",
         ...input.cards.map(cardText),
       ].join("\n\n"),
       instructions: outcomeVerifierInstructions,

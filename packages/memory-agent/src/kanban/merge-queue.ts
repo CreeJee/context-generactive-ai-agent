@@ -25,6 +25,7 @@ import {
   outcomeStandings,
   OutcomeStatus,
   servingCards,
+  servingSteps,
   type OutcomeStanding,
 } from "../workflow/outcome-ledger.ts";
 import { Workflows } from "../workflow/workflow.ts";
@@ -467,7 +468,7 @@ const make = Effect.gen(function* () {
     head: string | null,
   ) {
     const outcome = { id: standing.outcomeId, text: standing.outcomeText };
-    const cards = steps.filter((step) => step.outcomes.includes(outcome.id));
+    const { served, steps: cards } = servingSteps({ steps, outcomeId: outcome.id });
     const attempt = [goal.goalInstanceId, outcome.id, outcome.text, head ?? ""]
       .concat(cards.map((card) => card.id))
       .join("\n");
@@ -486,6 +487,7 @@ const make = Effect.gen(function* () {
         goalInstanceId: goal.goalInstanceId,
         goal: artifact,
         outcome,
+        served,
         cards,
         checkout,
       });

@@ -60,14 +60,23 @@ testAgent()("OutcomeLedger", (it) => {
         {
           outcomeId: "O3",
           outcomeText: "Notes are searchable",
-          status: OutcomeStatus.cases.Unplanned.make({}),
+          // No card names it and every card is done: it is judged on the whole Plan's work.
+          status: OutcomeStatus.cases.AwaitingCheck.make({ stale: false }),
         },
       ]);
+      expect(
+        outcomeStandings({ outcomes, steps, latest: [...judged, verdict(steps, "O3", true)] })[2]
+          ?.status,
+      ).toEqual(OutcomeStatus.cases.Met.make({ summary: "checked" }));
 
       // A new card for O2 holds it in progress; once done, the old verdict judged other cards.
       const added = [...steps, card("c", ["O2"], "ready")];
       expect(outcomeStandings({ outcomes, steps: added, latest: judged })[1]?.status).toEqual(
         OutcomeStatus.cases.InProgress.make({ pending: ["c"] }),
+      );
+      // While a card is left, an outcome no card names waits for the planner to give it cards.
+      expect(outcomeStandings({ outcomes, steps: added, latest: judged })[2]?.status).toEqual(
+        OutcomeStatus.cases.Unplanned.make({}),
       );
       const finished = [...steps, card("c", ["O2"], "done")];
       expect(outcomeStandings({ outcomes, steps: finished, latest: judged })[1]?.status).toEqual(

@@ -247,6 +247,45 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "judges an outcome no card names on the whole finished Plan and completes the Goal",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* kanbanFixture;
+        const judged = yield* Ref.make<ReadonlyArray<readonly [string, readonly string[]]>>([]);
+        const run = yield* openKanbanOwner(fixture, yield* Effect.scope, {
+          agent: () => Effect.succeed(finished),
+          verifyOutcome: (input) =>
+            Effect.as(
+              Ref.update(
+                judged,
+                Arr.append([input.served, input.cards.map((step) => step.id)] as const),
+              ),
+              passed,
+            ),
+        });
+        yield* run(
+          Effect.gen(function* () {
+            // Cards of a Plan saved before steps named their outcomes name none.
+            const board = yield* executingPlan(fixture, [
+              { ...card("a"), outcomes: [] },
+              { ...card("b"), outcomes: [] },
+            ]);
+            yield* (yield* GoalSchedules).setProtectedBranches(board.projectId, []);
+            yield* (yield* KanbanOrchestrator).start(board.sessionId);
+            yield* eventually(mergeOf(board.goalInstanceId), mergeIs("Merged"));
+            const completed = yield* eventually(
+              (yield* Workflows).get(board.sessionId),
+              (state) => state.phase === "completed",
+            );
+            expect(completed.goal?.status).toBe("completed");
+            expect(yield* Ref.get(judged)).toEqual([["whole_plan", ["a", "b"]]]);
+          }),
+        );
+      }),
+    gitTimeout,
+  );
+
+  it.effect(
     "merges no Goal with an outcome judged not met and asks the planner for cards",
     () =>
       Effect.gen(function* () {

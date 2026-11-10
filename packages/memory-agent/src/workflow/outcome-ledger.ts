@@ -61,11 +61,33 @@ const workOf = (cards: readonly StepWork[]) =>
     byId,
   );
 
-/** The cards an outcome's verdict judges: every step that serves it, by id. */
+/** Which work an outcome's verdict judges: the steps that name it, or the whole finished Plan. */
+export type OutcomeServed = "named" | "whole_plan";
+
+/**
+ * The steps that serve an outcome: every step that names it. An outcome no step names is served
+ * by the whole Plan once every step is done, and is judged on all of its work: Plans saved before
+ * steps named their outcomes name none, and a planner may miss one the other cards reached.
+ */
+export const servingSteps = (input: {
+  readonly steps: readonly PlanStep[];
+  readonly outcomeId: string;
+}): { readonly served: OutcomeServed; readonly steps: readonly PlanStep[] } => {
+  const naming = input.steps.filter((step) => step.outcomes.includes(input.outcomeId));
+  const wholePlan =
+    naming.length === 0 &&
+    input.steps.length > 0 &&
+    input.steps.every((step) => step.status === "done");
+  return wholePlan
+    ? { served: "whole_plan", steps: input.steps }
+    : { served: "named", steps: naming };
+};
+
+/** The cards an outcome's verdict judges, by id. */
 export const servingCards = (input: {
   readonly steps: readonly PlanStep[];
   readonly outcomeId: string;
-}) => workOf(input.steps.filter((step) => step.outcomes.includes(input.outcomeId)));
+}) => workOf(servingSteps(input).steps);
 
 /** Each outcome of the Goal with its status, from the Plan's steps and each outcome's latest verdict. */
 export const outcomeStandings = ({
@@ -78,7 +100,7 @@ export const outcomeStandings = ({
   readonly latest: readonly OutcomeVerdict[];
 }): ReadonlyArray<OutcomeStanding> =>
   outcomes.map(({ id, text }) => {
-    const serving = steps.filter((step) => step.outcomes.includes(id));
+    const serving = servingSteps({ steps, outcomeId: id }).steps;
     const pending = serving.filter((step) => step.status !== "done").map((step) => step.id);
     const verdict = latest.find((candidate) => candidate.outcomeId === id);
     const holds =

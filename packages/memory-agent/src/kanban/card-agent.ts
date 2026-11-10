@@ -1,5 +1,6 @@
 import { Context, Data, type Effect } from "effect";
 import type { GoalArtifact, GoalOutcome, PlanStep } from "../workflow/workflow.ts";
+import type { OutcomeServed } from "../workflow/outcome-ledger.ts";
 import type { KanbanStorageFailed } from "./card-attempts.ts";
 import type { CardFailure, VerdictFailure } from "./failures.ts";
 import type { CardWorktree } from "./worktree.ts";
@@ -102,6 +103,8 @@ export interface OutcomeVerification {
   readonly goalInstanceId: string;
   readonly goal: GoalArtifact;
   readonly outcome: GoalOutcome;
+  /** Whether the cards named the outcome, or no card did and they are the whole finished Plan. */
+  readonly served: OutcomeServed;
   /** The cards that serve the outcome. */
   readonly cards: readonly PlanStep[];
   /** A checkout of the Goal branch, or the project itself for a Goal without worktrees. */
