@@ -5,7 +5,7 @@ import type { Suggestion } from "./slash-commands";
 import type { TraceConnection } from "../session/work-trace";
 import type { AnswerProblem } from "./use-agent-chat";
 
-/** Copy for the chat screen. Checked by tools/copy-check. */
+/** Copy for the chat screen. Checked by lint/wording. */
 export const chatCopy = {
   approval: {
     moreLines: (count: number) => `… ${count}줄 더`,

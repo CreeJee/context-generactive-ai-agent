@@ -19,7 +19,7 @@
 - `ConfigEntry` — MCP 서버나 에이전트 항목 하나를 그리는 `Item`이다. 이름, scope 배지, 상태, 명령줄(`target`), 비밀정보 이름, 문제, 동작을 보여 준다
 - `TrustButton` — `active`/`changed`/`busy`에 따라 '사용 중지', '다시 신뢰하기', '신뢰하기'를 표시하는 버튼이다
 - `scopeLabels`, `skillScopeLabels`, `shadowedBadge` — scope 표시 라벨 상수(global/project, skill용 builtin 추가)와 '프로젝트 설정으로 대체됨' 배지 엘리먼트다
-- `settingsCopy` (`copy.ts`) — 대화상자와 모든 설정 페이지의 화면 문구 카탈로그. `tools/copy-check`가 검사한다
+- `settingsCopy` (`copy.ts`) — 대화상자와 모든 설정 페이지의 화면 문구 카탈로그. `lint/wording`가 검사한다
 - [`pages`](./pages/README.md) — 설정 대화상자의 페이지 본문 React 컴포넌트. `settings-dialog.tsx`의 `pageBodies`가 렌더한다
 
 ## Invariants

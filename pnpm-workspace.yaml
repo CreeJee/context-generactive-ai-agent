@@ -87,7 +87,7 @@ catalog:
   # same validator (packages/memory-agent/src/tools/input-repair.ts).
   "@cfworker/json-schema": 4.1.1
   "@shadcn/react": ^0.3.1
-  # Development-only checker for UI copy (tools/copy-check): Korean morphemes and copy.ts parsing.
+  # Development-only wording check (lint/wording): Korean morphemes and copy.ts parsing.
   kiwi-nlp: 0.24.1
   oxc-parser: 0.148.0
   # UI text as Lingui macros (t, msg, Trans); native-tools transforms the macros and extracts the

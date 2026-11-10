@@ -1,6 +1,6 @@
 import type { ProblemCopy } from "./shared/copy-templates";
 
-/** Copy for the app shell (sidebar, first-run placeholders) and the API error messages. Checked by tools/copy-check. */
+/** Copy for the app shell (sidebar, first-run placeholders) and the API error messages. Checked by lint/wording. */
 export const entryCopy = {
   sidebar: {
     open: "사이드바 펼치기",

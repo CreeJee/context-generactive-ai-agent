@@ -1,4 +1,4 @@
-/** Copy for why a Goal run's automatic execution stopped. Checked by tools/copy-check. */
+/** Copy for why a Goal run's automatic execution stopped. Checked by lint/wording. */
 export const workflowCopy = {
   /** Blocker details the run state shows, keyed by the situation that blocked the run. */
   blocked: {

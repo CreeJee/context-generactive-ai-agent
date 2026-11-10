@@ -15,7 +15,7 @@ import type {
 } from "../api";
 import type { ProblemCopy } from "../shared/copy-templates";
 
-/** Copy for the settings dialog and its pages. Checked by tools/copy-check. */
+/** Copy for the settings dialog and its pages. Checked by lint/wording. */
 export const settingsCopy = {
   dialog: {
     title: "설정",

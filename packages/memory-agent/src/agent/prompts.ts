@@ -1,5 +1,5 @@
 /**
- * Text the session chat gives the model. It is not UI copy, so tools/copy-check does not read it
+ * Text the session chat gives the model. It is not UI copy, so lint/wording does not read it
  * (docs/decisions.md, "앱 문구는 copy.ts 카탈로그에 두고 …").
  */
 export const agentPrompts = {

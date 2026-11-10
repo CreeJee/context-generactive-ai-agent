@@ -1,11 +1,11 @@
 import { Array as Arr, Effect, Record as Rec, RegExp as Re, Result } from "effect";
 
-import type { CopyText } from "./extract.ts";
+import type { SourceText } from "./extract.ts";
 import { Morphemes } from "./morphemes.ts";
-import { finalEndingTag, glossary, phraseRules, registers, sentenceStopTags } from "./rules.ts";
-import type { GlossaryEntry, Mood } from "./rules.ts";
+import { finalEndingTag, glossary, phraseRules, registers, sentenceStopTags } from "../policy.ts";
+import type { GlossaryEntry, Mood } from "../policy.ts";
 
-/** One rule a piece of copy breaks, and what to write instead. */
+/** One rule a piece of wording breaks, and what to write instead. */
 export interface Violation {
   readonly rule: string;
   readonly message: string;
@@ -88,7 +88,7 @@ function sentenceEndings(morphemes: ReadonlyArray<Morpheme>): ReadonlyArray<Sent
 }
 
 /**
- * Sentences whose ending is outside the register of their mood, and labels (copy with no
+ * Sentences whose ending is outside the register of their mood, and labels (wording with no
  * sentence ending) that end with a full stop.
  */
 export function endingViolations(
@@ -111,10 +111,10 @@ export function endingViolations(
   );
 }
 
-/** Every violation in each piece of copy of `file`. */
-export const checkCopy = Effect.fnUntraced(function* (
+/** Every violation in each piece of wording of `file`. */
+export const checkTexts = Effect.fnUntraced(function* (
   file: string,
-  texts: ReadonlyArray<CopyText>,
+  texts: ReadonlyArray<SourceText>,
 ) {
   const morphemes = yield* Morphemes;
   return Arr.flatMap(texts, ({ text, line, column }) =>

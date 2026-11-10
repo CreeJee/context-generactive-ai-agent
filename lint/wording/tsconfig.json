@@ -6,5 +6,5 @@
     "typeRoots": ["../../packages/memory-agent/node_modules/@types"],
     "skipLibCheck": true
   },
-  "include": ["*.ts"]
+  "include": ["**/*.ts"]
 }

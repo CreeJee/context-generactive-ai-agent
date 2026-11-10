@@ -1,5 +1,5 @@
 /**
- * Text the report diagnosis model reads in its evidence snapshot. Not UI copy, so tools/copy-check
+ * Text the report diagnosis model reads in its evidence snapshot. Not UI copy, so lint/wording
  * does not read it.
  */
 export const toolsPrompts = {

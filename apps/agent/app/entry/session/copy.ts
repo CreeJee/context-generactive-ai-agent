@@ -1,6 +1,6 @@
 import type { AttemptFailureStage, ExternalAgentFailureCode } from "memory-agent";
 
-/** Copy for chat session state: run notices, failure lines and delegated work. Checked by tools/copy-check. */
+/** Copy for chat session state: run notices, failure lines and delegated work. Checked by lint/wording. */
 export const sessionCopy = {
   attemptFailure: {
     stage: {

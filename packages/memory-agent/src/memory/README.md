@@ -35,7 +35,7 @@
 - `createSupersededReads` / `supersededReadSql` — 뒤의 읽기가 대체한 파일 읽기를 판별하는 SQL과 생성 Effect(`memoryGraphRepairVersion` 사용)
 - `memoryGraphRepairVersion`(3) / `hasStatementText` / `nonBlankTextSql` / `meaningfulNodeFilter` / `embeddedKinds` / `embeddedKindFilter` — 그래프 수리·검색 제외 규칙의 버전, 공백이 아닌 텍스트 판별, SQL 필터(nodes 별칭 `n`), 임베딩 대상 kind(`user`, `assistant`, `topic`)와 그 SQL 필터
 - `refsInArguments` — tool call JSON 인자에서 파일·URL 참조를 뽑는다
-- `memoryCopy` (`copy.ts`) — 그래프 정리 실패처럼 설정 화면에 보이는 문구 카탈로그. 문구는 `tools/copy-check`가 검사한다
+- `memoryCopy` (`copy.ts`) — 그래프 정리 실패처럼 설정 화면에 보이는 문구 카탈로그. 문구는 `lint/wording`가 검사한다
 - `memoryPrompts` (`prompts.ts`) — 모델이 읽는 텍스트. 임베딩·rerank 모델이 적재 직후 한 번 돌리는 준비 입력(`warmUp`)을 담고, `embedding`과 `rerank` 하위 디렉터리도 이 파일을 쓴다
 - [`embedding`](./embedding/README.md) — 모델 표(`models.ts`)의 로컬 임베딩 모델(`Embedder`), 토큰 창 청킹, turbovec 위의 `VectorIndex`, nodes와 벡터 색인을 맞추는 `Indexer`
 - [`native-search`](./native-search/README.md) — turbovec 벡터 인덱스와 SQLite 읽기 세션을 전용 worker thread에 가두는 `NativeOwner`

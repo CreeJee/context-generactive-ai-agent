@@ -2,7 +2,7 @@
 
 ## Overview
 
-`tools`는 저장소 개발 도구를 모아 두는 디렉터리다. 바로 아래의 직접 소스는 `navigation-verification.mjs` 하나다. 이 Playwright(chromium headless) 스크립트는 이미 실행 중인 에이전트 웹 UI(기본 `http://localhost:5173`)에서 세션 간 클라이언트 측 이동을 검증한다. 모든 `/api/**` 요청을 가로채 고정 응답(fixture)으로 바꾸고, 세션 A와 가상의 세션 `navigation-fixture-b` 사이를 오가며 기록·실행 상태·승인·작성 중 초안이 섞이지 않는지 확인한다. 뒤로/앞으로 이동, 늦게 도착한 응답의 취소, 새 탭 열기, 전체 문서 재요청이 없는지도 확인한다. 저장소 안에서 이 스크립트를 import하거나 package 스크립트로 등록한 곳은 없으며, 손으로 실행하는 개발 도구다. 하위 디렉터리(`chat-store-check`, `copy-check`, `profile`)는 각각 독립된 개발용 CLI다. 저장소 전용 lint 플러그인은 [`lint/anti-slop`](../lint/anti-slop/README.md)에 있다.
+`tools`는 저장소 개발 도구를 모아 두는 디렉터리다. 바로 아래의 직접 소스는 `navigation-verification.mjs` 하나다. 이 Playwright(chromium headless) 스크립트는 이미 실행 중인 에이전트 웹 UI(기본 `http://localhost:5173`)에서 세션 간 클라이언트 측 이동을 검증한다. 모든 `/api/**` 요청을 가로채 고정 응답(fixture)으로 바꾸고, 세션 A와 가상의 세션 `navigation-fixture-b` 사이를 오가며 기록·실행 상태·승인·작성 중 초안이 섞이지 않는지 확인한다. 뒤로/앞으로 이동, 늦게 도착한 응답의 취소, 새 탭 열기, 전체 문서 재요청이 없는지도 확인한다. 저장소 안에서 이 스크립트를 import하거나 package 스크립트로 등록한 곳은 없으며, 손으로 실행하는 개발 도구다. 하위 디렉터리(`chat-store-check`, `profile`)는 각각 독립된 개발용 CLI다. 저장소 전용 lint 플러그인은 [`lint`](../lint/README.md)에 있고, 문구 검사 CLI도 [`lint/wording`](../lint/wording/README.md)에 함께 둔다.
 
 ## Interface
 
@@ -10,7 +10,6 @@
 - 환경 변수 입력 — `NAV_TEST_PROJECT`, `NAV_TEST_SESSION`(필수, 실제로 있는 활성 세션), `NAV_TEST_ORIGIN`(기본 `http://localhost:5173`), `NAV_TEST_APPROVALS`(`"1"`이면 승인 대기 interrupt 모드, 아니면 실패한 실행(run) 공지 모드로 검증)
 - `navigationInterrupt` (import, `apps/agent/scripts/navigation-fixtures.ts`) — `interruptFor`라는 이름으로 가져와 세션 id별 대기 승인 항목 fixture를 만든다. 화면에서는 `자동 검토: NAV-APPROVAL-<id>` 텍스트로 확인한다.
 - [`chat-store-check`](./chat-store-check/README.md) — TanStack 채팅 행 마이그레이션을 로컬 DB 복사본에서 검증하는 일회성 개발용 CLI
-- [`copy-check`](./copy-check/README.md) — 앱 문구 카탈로그(`copy.ts`)의 금지 표현·용어집·말투를 검사하는 개발용 CLI. 커밋 hook과 Claude Code PostToolUse hook에서도 돈다
 - [`profile`](./profile/README.md) — Effect span과 V8 `.cpuprofile`을 수집·요약하는 `profile` CLI
 
 ## Invariants

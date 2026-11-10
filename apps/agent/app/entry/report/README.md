@@ -10,7 +10,7 @@
 - `report-delivery`: 웹훅 전송 UI
 - `report-copy`: 클립보드 복사
 - `report-link`: 다른 화면에서 들어오는 링크
-- `copy`: 화면 문구와 제보 문안 문구 카탈로그(`reportCopy`, `tools/copy-check`가 검사)
+- `copy`: 화면 문구와 제보 문안 문구 카탈로그(`reportCopy`, `lint/wording`가 검사)
 
 스키마와 타입(`ReportBundle`, `ReportDiagnosis`, `ReportDeliveryStatus` 등)은 `memory-agent/definitions`에서 가져온다.
 

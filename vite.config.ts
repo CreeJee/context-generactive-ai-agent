@@ -1,5 +1,7 @@
 import { defineConfig } from "vite-plus";
 
+import { wordingExempt, wordingScope } from "./lint/wording/policy.ts";
+
 const agentAndVendoredIgnorePatterns = [
   ".agent/**",
   ".agents/**",
@@ -22,8 +24,9 @@ export default defineConfig({
   },
   staged: {
     "*": "vp check --fix",
-    // Copy catalogs: banned phrases, glossary spellings and sentence endings (tools/copy-check).
-    "**/copy.ts": "node tools/copy-check/main.ts check",
+    // What Korean wording says: banned phrases, glossary spellings and sentence endings. The check
+    // reads only the files lint/wording/policy.ts covers and skips the rest.
+    "*.{ts,tsx}": "node lint/wording/check/main.ts check",
   },
   fmt: {
     // Golden files are test output compared byte for byte.
@@ -40,7 +43,7 @@ export default defineConfig({
       },
       { name: "shadcn", specifier: "@shadcn/lint" },
       { name: "allocation", specifier: "./lint/allocation/index.ts" },
-      { name: "copy", specifier: "./lint/copy/index.ts" },
+      { name: "wording", specifier: "./lint/wording/index.ts" },
     ],
     rules: {
       "vite-plus/prefer-vite-plus-imports": "error",
@@ -97,20 +100,16 @@ export default defineConfig({
         },
       },
       {
-        // Copy lives in copy.ts catalogs; model-facing messages live in prompts.ts.
-        files: ["apps/agent/app/**", "apps/agent/server/**", "packages/memory-agent/src/**"],
+        // Where Korean text may live; scope and exemptions are in lint/wording/policy.ts.
+        files: wordingScope,
         rules: {
-          "copy/no-inline-copy": "error",
+          "wording/no-raw-korean": "error",
         },
       },
       {
-        // Korean here is not copy: comments inside migration SQL, and search fixture data.
-        files: [
-          "packages/memory-agent/src/db/migrations.ts",
-          "packages/memory-agent/src/memory/native-search/read-fixture.ts",
-        ],
+        files: wordingExempt,
         rules: {
-          "copy/no-inline-copy": "off",
+          "wording/no-raw-korean": "off",
         },
       },
       {

@@ -1,4 +1,4 @@
-/** Copy for the browser page an MCP server login returns to. Checked by tools/copy-check. */
+/** Copy for the browser page an MCP server login returns to. Checked by lint/wording. */
 export const mcpCopy = {
   loginCallback: {
     alreadyFinished: "이 로그인은 이미 끝났습니다.",

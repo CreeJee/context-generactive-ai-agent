@@ -1,5 +1,5 @@
 /**
- * Text the report diagnosis model reads in the evidence digest. Not UI copy, so tools/copy-check
+ * Text the report diagnosis model reads in the evidence digest. Not UI copy, so lint/wording
  * does not read it.
  */
 export const reportPrompts = {

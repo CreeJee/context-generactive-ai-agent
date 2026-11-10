@@ -1,4 +1,4 @@
-/** Copy for the session chat's approvals and blockers. Checked by tools/copy-check. */
+/** Copy for the session chat's approvals and blockers. Checked by lint/wording. */
 export const agentCopy = {
   /** Why the user is asked about an external agent's permission request. */
   externalAgentPermission: "외부 에이전트가 권한을 요청했습니다.",

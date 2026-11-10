@@ -6,7 +6,7 @@ type QuotaUnavailableReason = Extract<
   { readonly _tag: "unavailable" }
 >["reason"];
 
-/** Copy for the sidebar, the account switcher and the account manager. Checked by tools/copy-check. */
+/** Copy for the sidebar, the account switcher and the account manager. Checked by lint/wording. */
 export const navigationCopy = {
   providerLabels: {
     openai: "ChatGPT",

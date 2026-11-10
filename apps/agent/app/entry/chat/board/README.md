@@ -26,7 +26,7 @@
 - `canTransfer` — 카드 상태가 backlog, ready, blocked일 때만 다른 대화 Plan으로 옮길 수 있다
 - `PendingMove` / `withPending` — 서버 응답 전 요청(Status, Order, Leaving)을 나타내는 TaggedEnum과, 그 요청을 서버 카드 목록에 반영해 보여 주는 dual 함수
 - `verdictText` / `holdReasonText` / `holdReasonNote` — memory-agent의 `VerdictFailure`, `CardHoldReason`(내부 `CardFailure` 포함)을 태그별 한국어 문구로 바꾼다. 모델이 쓴 의견은 holdReasonNote가 따로 돌려준다
-- `boardCopy` (`copy.ts`) — 보드 화면 문구 카탈로그다. 상태 열 라벨, 드롭 거절 사유, 보류 사유, API 오류 문구, 위험도 라벨, peek·편집기·프로젝트 보드 문구를 담고 `tools/copy-check`가 검사한다
+- `boardCopy` (`copy.ts`) — 보드 화면 문구 카탈로그다. 상태 열 라벨, 드롭 거절 사유, 보류 사유, API 오류 문구, 위험도 라벨, peek·편집기·프로젝트 보드 문구를 담고 `lint/wording`가 검사한다
 - 하위 디렉터리 없음
 
 ## Invariants

@@ -13,7 +13,7 @@ const externalAgentFailure = {
   disconnected: "외부 에이전트 연결이 끊겼습니다. 보낸 요청은 다시 보내지 않았습니다.",
 } as const satisfies Record<ExternalAgentFailureCode, string>;
 
-/** Copy for failures of outside programs and chat runs as people see them. Checked by tools/copy-check. */
+/** Copy for failures of outside programs and chat runs as people see them. Checked by lint/wording. */
 export const runtimeCopy = {
   /** What people read for each external agent failure; the detail adds the agent's own text. */
   externalAgentFailure,

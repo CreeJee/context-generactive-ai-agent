@@ -1,4 +1,4 @@
-/** Copy for problem reports a developer or the user reads. Checked by tools/copy-check. */
+/** Copy for problem reports a developer or the user reads. Checked by lint/wording. */
 export const reportCopy = {
   bundle: {
     /** Stands in for a bundle text whose secrets could not be checked. */

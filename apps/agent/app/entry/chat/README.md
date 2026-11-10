@@ -30,7 +30,7 @@
 - `DecisionPrompt` / `describeDecision` — 결정 요청 프롬프트와 `DecisionKind` 설명
 - `BtwPanel` / `WorkTracePanel` / `QueuePanel` / `SubagentPanel` — BTW 곁질문, 작업 추적, 메시지 대기열, 하위 에이전트 패널
 - `BackgroundTaskIndicator` — 입력창 아래 상태줄 왼쪽(컨텍스트 표시 반대편)의 `백그라운드 N개`. 누르면 팝오버로 현재 세션의 실행 중 백그라운드 작업 목록을 보여 준다
-- `chatCopy` — 채팅 화면의 UI 문구 카탈로그(`copy.ts`)다. `tools/copy-check`가 검사한다
+- `chatCopy` — 채팅 화면의 UI 문구 카탈로그(`copy.ts`)다. `lint/wording`가 검사한다
 - 그 밖의 export(본문 미확인): `ChatApprovals`, `ContextMeter`, `Markdown`, `ReadOnlyBar`, `SlashPalette`, `UncertainRuns`, `RunFailureText`/`runFailureOf`, `UserMessageBody`/`DrawingPicture`/`DraftImageTray`/`MessageImage`
 - [`board`](./board/README.md) — 한 대화의 Plan 또는 프로젝트의 모든 실행 중 Plan을 7개 상태 열에 보여 주는 칸반 보드 UI
 

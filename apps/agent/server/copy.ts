@@ -1,4 +1,4 @@
-/** Copy for the `context-agent` command line: usage and console messages. Checked by tools/copy-check. */
+/** Copy for the `context-agent` command line: usage and console messages. Checked by lint/wording. */
 export const cliCopy = {
   usage: `사용법:
   context-agent [폴더] [--port 5173] [--no-open] [--storage <폴더>] [--broadcast]

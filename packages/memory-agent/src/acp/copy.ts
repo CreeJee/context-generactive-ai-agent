@@ -1,4 +1,4 @@
-/** Copy an ACP editor such as Zed shows for the bridge. Checked by tools/copy-check. */
+/** Copy an ACP editor such as Zed shows for the bridge. Checked by lint/wording. */
 export const acpCopy = {
   /** App failure codes the editor gets explained, keyed by the app's code. */
   failure: {

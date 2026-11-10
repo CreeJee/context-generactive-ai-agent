@@ -6,9 +6,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && PATH=\"$HOME/.local/share/vite-plus/bin:$PATH\" node tools/copy-check/main.ts hook",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && PATH=\"$HOME/.local/share/vite-plus/bin:$PATH\" node lint/wording/check/main.ts hook",
             "timeout": 60,
-            "statusMessage": "UI 문구 검사"
+            "statusMessage": "문구 검사"
           }
         ]
       }

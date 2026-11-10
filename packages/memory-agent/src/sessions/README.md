@@ -24,7 +24,7 @@
 - `LeaseView` — 한 페이지 기준 소유 상태 Schema union: mine / other(since) / free. 세션 실행 상태 응답이 쓰므로 `contracts.ts`에 두고 `lease-state.ts`가 타입을 다시 내보낸다
 - `ClaimResult` — claim 결과 union: { claimed: true } | { claimed: false, heldSince }
 - `firstMessageTitle(text)` — 공백을 접고 60자(code point)를 넘으면 잘라 "…"을 붙이며, 빈 문자열이면 `sessionsCopy.imageConversationTitle`("이미지 대화")
-- `sessionsCopy` (`copy.ts`) — 세션 문구 카탈로그. 문구는 `tools/copy-check`가 검사한다
+- `sessionsCopy` (`copy.ts`) — 세션 문구 카탈로그. 문구는 `lint/wording`가 검사한다
 
 ## Invariants
 

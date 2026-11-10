@@ -1,6 +1,6 @@
 import type { ImprovementItem } from "./contracts.ts";
 
-/** Copy for improvement items on the settings page. Checked by tools/copy-check. */
+/** Copy for improvement items on the settings page. Checked by lint/wording. */
 export const improveCopy = {
   /** How the app names each kind of item, in reports and on the settings page. */
   sourceLabels: {

@@ -25,7 +25,7 @@ export class MorphemeModelUnavailable extends Schema.TaggedError<MorphemeModelUn
 export class Morphemes extends Context.Service<
   Morphemes,
   { readonly tokenize: (text: string) => ReadonlyArray<TokenInfo> }
->()("copy-check/Morphemes") {
+>()("wording/Morphemes") {
   static readonly layer = Layer.effect(
     Morphemes,
     Effect.gen(function* () {
@@ -63,7 +63,7 @@ export class Morphemes extends Context.Service<
 }
 
 /**
- * The model directory, downloaded into `node_modules/.cache/copy-check` on first use. The archive
+ * The model directory, downloaded into `node_modules/.cache/wording` on first use. The archive
  * is checked against its digest and its entry names before anything is extracted, and it is
  * extracted next to the final place and then renamed, so an interrupted run never leaves half a
  * model in use.
@@ -71,7 +71,7 @@ export class Morphemes extends Context.Service<
 const ensureModel = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const cacheRoot = path.resolve("node_modules/.cache/copy-check");
+  const cacheRoot = path.resolve("node_modules/.cache/wording");
   const root = path.join(cacheRoot, `kiwi-${kiwiModel.version}`);
   const modelDirectory = path.join(root, kiwiModel.directory);
   if (yield* fs.exists(path.join(modelDirectory, "cong.mdl"))) return modelDirectory;

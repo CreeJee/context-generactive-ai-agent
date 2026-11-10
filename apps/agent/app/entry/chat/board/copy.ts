@@ -7,7 +7,7 @@ import type {
 import type { CardStatus } from "../../api";
 import type { ConfirmCopy, ProblemCopy } from "../../shared/copy-templates";
 
-/** Copy for the kanban board. Checked by tools/copy-check. */
+/** Copy for the kanban board. Checked by lint/wording. */
 export const boardCopy = {
   status: {
     backlog: "백로그",

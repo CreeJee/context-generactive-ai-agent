@@ -3,7 +3,7 @@ import type { ItemInterpretation, ReportedItem } from "./contracts.ts";
 /**
  * Text a coding agent reads: the improvement report is a task spec the user hands to an agent of
  * their choice, and the excerpts also go to the interpretation model. Not UI copy, so
- * tools/copy-check does not read it.
+ * lint/wording does not read it.
  */
 export const improvePrompts = {
   /** One correction as evidence: what the user wrote, then what it corrected. */

@@ -6,7 +6,7 @@ import type {
 import type { ProblemCopy } from "../shared/copy-templates";
 import type { BundleSection } from "./report-bundle";
 
-/** Copy for the problem report page. Checked by tools/copy-check. */
+/** Copy for the problem report page. Checked by lint/wording. */
 export const reportCopy = {
   link: { label: "리포트하기" },
   page: {

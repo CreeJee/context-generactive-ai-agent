@@ -1,6 +1,6 @@
 /**
  * Messages the app sends to the model in the user's voice. They are not UI copy, so
- * tools/copy-check does not read them; whether prompts follow the copy rules is still open
+ * lint/wording does not read them; whether prompts follow the copy rules is still open
  * (docs/decisions.md, "앱 문구는 copy.ts 카탈로그에 두고 …").
  */
 export const chatPrompts = {

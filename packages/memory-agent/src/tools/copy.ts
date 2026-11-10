@@ -1,4 +1,4 @@
-/** Copy for built-in tools the user reads. Checked by tools/copy-check. */
+/** Copy for built-in tools the user reads. Checked by lint/wording. */
 export const toolsCopy = {
   delegate: {
     /** The reason on the approval an external agent's permission request shows. */

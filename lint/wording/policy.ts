@@ -1,5 +1,42 @@
-// What app copy may say. Every entry is a fixed pattern with a reason and a fix, so a finding
-// tells the writer (often a coding agent) what to write instead.
+// The wording policy in one place: where Korean text may live, and what it may say. The lint rule
+// (`wording/no-raw-korean`), the wording check (`check/main.ts`), the commit hook and the Claude
+// Code hook all read this file. Every content rule is a fixed pattern with a reason and a fix, so
+// a finding tells the writer (often a coding agent) what to write instead.
+
+// ---- Where Korean text may live -------------------------------------------------------------
+
+/** Files the rule and the check cover (globs from the repository root). */
+export const wordingScope = [
+  "apps/agent/app/**",
+  "apps/agent/server/**",
+  "packages/memory-agent/src/**",
+];
+
+/** Files in scope whose Korean is not wording: migration SQL comments and search fixture data. */
+export const wordingExempt = [
+  "packages/memory-agent/src/db/migrations.ts",
+  "packages/memory-agent/src/memory/native-search/read-fixture.ts",
+];
+
+/**
+ * Lingui macro modules. Text inside their tags, calls and elements (t`…`, msg(…),
+ * <Trans>…</Trans>) is a message: extracted to the catalog and checked.
+ */
+export const linguiMacroModules: ReadonlyArray<string> = [
+  "@lingui/core/macro",
+  "@lingui/react/macro",
+];
+
+/** Object-literal catalogs, kept until their directory moves to Lingui messages. Checked. */
+export const catalogFile = /(^|\/)copy\.ts$/;
+
+/** Messages sent to the model in the user's voice. Not wording, so neither linted nor checked. */
+export const promptFile = /(^|\/)prompts\.ts$/;
+
+/** Tests, browser tests included, may spell the text they look for on screen. */
+export const testFile = /\.(test|spec|browser)\.tsx?$/;
+
+// ---- What the text may say ------------------------------------------------------------------
 
 /** A phrase pattern that copy must not contain. */
 export interface PhraseRule {

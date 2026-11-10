@@ -1,4 +1,4 @@
-/** Copy for why a tool call was allowed, asked about or decided. Checked by tools/copy-check. */
+/** Copy for why a tool call was allowed, asked about or decided. Checked by lint/wording. */
 export const permissionsCopy = {
   /** Reasons the permission review gives without asking the model. */
   review: {

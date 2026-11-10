@@ -1,4 +1,4 @@
-/** Copy for the shared UI pieces: theme picker, loop health and failure details. Checked by tools/copy-check. */
+/** Copy for the shared UI pieces: theme picker, loop health and failure details. Checked by lint/wording. */
 export const sharedCopy = {
   theme: {
     options: {
