@@ -285,6 +285,22 @@ function RoleModelField({ role }: { role: AgentRole }) {
   const busy = mutation.isPending;
   const label = t(roleTexts[role].label);
   const id = `kanban-role-${role}`;
+  // Each select's labels by value, so the closed select shows the label and not the raw value.
+  const providerItems = [
+    {
+      value: followSelected,
+      label: t({
+        message: "선택된 모델",
+        comment: "Option: run this role on the model selected in the chat",
+      }),
+    },
+    ...providerIds.map((candidate) => ({ value: candidate, label: t(providerLabels[candidate]) })),
+  ];
+  const modelItems = models.map((candidate) => ({
+    value: candidate.id,
+    label: candidate.displayName,
+  }));
+  const effortItems = efforts.map((choice) => ({ value: choice.id, label: choice.label }));
 
   const save = (selection: ModelSelection | null) => {
     setError(null);
@@ -309,6 +325,7 @@ function RoleModelField({ role }: { role: AgentRole }) {
         <div className="flex flex-wrap gap-2">
           <Select
             value={provider ?? followSelected}
+            items={providerItems}
             disabled={busy}
             onValueChange={(value) => {
               setProvider(providerIds.find((candidate) => candidate === value) ?? null);
@@ -320,14 +337,9 @@ function RoleModelField({ role }: { role: AgentRole }) {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value={followSelected}>
-                <Trans comment="Option: run this role on the model selected in the chat">
-                  선택된 모델
-                </Trans>
-              </SelectItem>
-              {providerIds.map((candidate) => (
-                <SelectItem key={candidate} value={candidate}>
-                  {t(providerLabels[candidate])}
+              {providerItems.map((item) => (
+                <SelectItem key={item.value} value={item.value}>
+                  {item.label}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -335,6 +347,7 @@ function RoleModelField({ role }: { role: AgentRole }) {
           {provider !== null && (
             <Select
               value={modelId ?? ""}
+              items={modelItems}
               disabled={busy || models.length === 0}
               onValueChange={(value) => {
                 const next = models.find((candidate) => candidate.id === value);
@@ -357,9 +370,9 @@ function RoleModelField({ role }: { role: AgentRole }) {
                 />
               </SelectTrigger>
               <SelectContent>
-                {models.map((candidate) => (
-                  <SelectItem key={candidate.id} value={candidate.id}>
-                    {candidate.displayName}
+                {modelItems.map((item) => (
+                  <SelectItem key={item.value} value={item.value}>
+                    {item.label}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -368,6 +381,7 @@ function RoleModelField({ role }: { role: AgentRole }) {
           {efforts.length > 0 && (
             <Select
               value={effort ?? ""}
+              items={effortItems}
               disabled={busy}
               onValueChange={(value) => setEffort(value)}
             >
@@ -381,9 +395,9 @@ function RoleModelField({ role }: { role: AgentRole }) {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {efforts.map((choice) => (
-                  <SelectItem key={choice.id} value={choice.id}>
-                    {choice.label}
+                {effortItems.map((item) => (
+                  <SelectItem key={item.value} value={item.value}>
+                    {item.label}
                   </SelectItem>
                 ))}
               </SelectContent>

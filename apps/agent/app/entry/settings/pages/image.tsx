@@ -51,6 +51,11 @@ export function ImageSettings() {
   const { data: status } = useSuspenseImageSettingsQuery();
   const busy = enabledMutation.isPending || consentMutation.isPending;
   const [error, setError] = useState<string | null>(null);
+  // The closed select shows the label of its value, not the raw mode.
+  const consentItems = (["disabled", "ask", "always"] as const).map((mode) => ({
+    value: mode,
+    label: t(consentModes[mode]),
+  }));
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const setImageGenerationEnabled = (enabled: boolean) =>
@@ -152,6 +157,7 @@ export function ImageSettings() {
             status.crossProviderMediaConsent.pairs["anthropic->openai:media.image.generate"] ??
             "disabled"
           }
+          items={consentItems}
           disabled={busy || !status.imageGenerationEnabled}
           onValueChange={(value) => {
             if (isCrossProviderMediaConsentMode(value)) void applyCrossProviderMode(value);
@@ -161,9 +167,11 @@ export function ImageSettings() {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="disabled">{t(consentModes.disabled)}</SelectItem>
-            <SelectItem value="ask">{t(consentModes.ask)}</SelectItem>
-            <SelectItem value="always">{t(consentModes.always)}</SelectItem>
+            {consentItems.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
       </Field>
