@@ -302,7 +302,7 @@ const make = Effect.sync(() => {
 
     /**
      * The same tools, with secrets hidden in what they return and in the errors they fail with,
-     * before either reaches the model, the page or memory. Every tool is covered — the shell, file
+     * before either reaches the model, the page or memory. Every tool is covered — skill runs, file
      * reads, web pages, MCP servers, other agents — because any of them can print a key.
      */
     withHiddenResults: (tools: ReadonlyArray<RunTool>): Array<RunTool> =>

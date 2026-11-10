@@ -2,7 +2,7 @@
 
 ## Overview
 
-`packages/memory-agent/src/shell`은 에이전트가 호스트에서 셸 명령을 실행하는 계층이다. `run.ts`는 명령 하나를 자식 프로세스(POSIX에서는 별도 프로세스 그룹)로 띄운다. 이 파일은 타임아웃·취소·강제 종료, 출력 head/tail 캡처, 비밀 환경 변수 제거를 맡는다. `sandbox*.ts`는 sh 스킬 스크립트를 `@anthropic-ai/sandbox-runtime`의 OS 샌드박스 안에서 실행한다. 실행 한 번마다 worker thread를 하나 띄우고, Effect RPC(`Prepare`/`Finish`)로 감싼 명령 줄과 위반 보고를 주고받는다.
+`packages/memory-agent/src/shell`은 sh 스킬 스크립트를 호스트 명령으로 실행하는 계층이다. 에이전트에게 따로 셸 도구는 없다. `run.ts`는 명령 하나를 자식 프로세스(POSIX에서는 별도 프로세스 그룹)로 띄운다. 이 파일은 타임아웃·취소·강제 종료, 출력 head/tail 캡처, 비밀 환경 변수 제거를 맡는다. `sandbox*.ts`는 sh 스킬 스크립트를 `@anthropic-ai/sandbox-runtime`의 OS 샌드박스 안에서 실행한다. 실행 한 번마다 worker thread를 하나 띄우고, Effect RPC(`Prepare`/`Finish`)로 감싼 명령 줄과 위반 보고를 주고받는다.
 
 ## Interface
 
@@ -29,7 +29,7 @@
 - 샌드박스 실행 하나에 worker 하나를 쓴다. sandbox-runtime은 모듈 인스턴스마다 정책·프록시·위반 저장소를 하나씩 두므로, 동시 실행끼리 allowlist를 공유하면 안 된다. 클라이언트 protocol은 size 1, concurrency 1이고, 서버도 concurrency 1이다
 - RPC 순서는 `Prepare` 다음 `Finish`다. `Finish`는 명령이 끝난 뒤 한 번만 보낸다. host가 감싼 명령을 직접 spawn하고, 그동안 worker는 살아서 네트워크 프록시를 서비스한다
 - worker setup이 실패해도 worker는 종료하지 않는다. `Effect.exit`로 실패를 보관하고 `Prepare`가 그 실패를 돌려준다. `Finish`는 prepared 실패를 `SandboxReportFailed`로 바꾼다
-- worker의 setup 실패 `detail`은 고정 문자열(`invalid_setup`|`runtime_unavailable`|`initialize_failed`|`wrap_failed`)만 쓴다. runtime 메시지에는 경로가 담길 수 있고, 그 메시지가 셸 도구 결과까지 가기 때문이다
+- worker의 setup 실패 `detail`은 고정 문자열(`invalid_setup`|`runtime_unavailable`|`initialize_failed`|`wrap_failed`)만 쓴다. runtime 메시지에는 경로가 담길 수 있고, 그 메시지가 `run_skill` 결과까지 가기 때문이다
 - worker마다 별도 `TMPDIR`(`makeTempDirectoryScoped` 스크래치 폴더)을 준다. runtime이 프록시 소켓 이름을 pid로 짓기 때문이다. worker와 스크래치 폴더는 scope와 함께 끝난다(성공·실패·인터럽트 모두)
 - `SandboxManager.initialize`는 `acquireRelease`로 감싸고, release에서 `SandboxManager.reset`을 호출한다. network는 `strictAllowlist: true`이고 ask callback이 없어 목록 밖 호스트는 거부된다
 - `Finish` 응답은 최대 5초 기다린다. 타임아웃이나 오류가 나면 명령의 원래 stderr를 그대로 쓴다

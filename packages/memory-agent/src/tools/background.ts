@@ -96,7 +96,7 @@ const attemptEvent = {
 const getBackgroundResult = {
   name: "get_background_result",
   description:
-    "Retrieve one background shell or ACP task's saved, redacted result by taskId. Result is JSON text, paged in 4000-character chunks with nextOffset; read all required pages before relying on it. Returns running if unfinished; interrupted after restart means do not retry blindly. A notification alone is not a result.",
+    "Retrieve one background task's saved, redacted result by taskId: a sh skill run or an external agent's (ACP) turn. Result is JSON text, paged in 4000-character chunks with nextOffset; read all required pages before relying on it. Returns running if unfinished; interrupted after restart means do not retry blindly. A notification alone is not a result.",
   parameters: ResultInput,
 } as const;
 

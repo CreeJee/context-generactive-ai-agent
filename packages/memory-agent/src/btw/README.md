@@ -25,7 +25,7 @@
 
 ## Invariants
 
-- BTW 스레드는 `btwToolNames`의 세 도구만 호출할 수 있다. 도구 목록은 `btwEvidenceRunTools`만 넘긴다. 그 밖의 이름은 `btwToolGuardHook`가 실행 없이 거부한다. 쓰기·승격·워크플로·파일·셸·서브에이전트는 제공하지 않는다
+- BTW 스레드는 `btwToolNames`의 세 도구만 호출할 수 있다. 도구 목록은 `btwEvidenceRunTools`만 넘긴다. 그 밖의 이름은 `btwToolGuardHook`가 실행 없이 거부한다. 쓰기·승격·워크플로·파일·스킬·서브에이전트는 제공하지 않는다
 - `btwEvidenceRunTools`에는 런 바인딩이 없다. 검색·사용·승격 기록이 남지 않아야 한다
 - BTW 실행은 `btwStore`를 쓴다. `thread`/`saveThread`는 `btw_thread_messages`를 가리킨다. 저장은 처음 달라진 메시지(`firstChange`)부터 다시 쓴다. `startRun`/`endRun`/interrupt 계열은 no-op이다. run·interrupt·metadata 행을 남기지 않는다
 - 스레드의 부모 세션 바인딩은 생성 후 바뀌지 않는다(`create` 주석). 생성 시 부모 세션이 없으면 `BtwParentNotFound`로 실패한다

@@ -185,7 +185,7 @@ const make = Effect.gen(function* () {
 
     get: find,
 
-    /** Registering a root widens what file and shell tools may touch, so it is checked here. */
+    /** Registering a root widens what file tools and code skills may touch, so it is checked here. */
     add: (requestedRoot: string) =>
       Effect.gen(function* () {
         const absolute = path.resolve(requestedRoot);

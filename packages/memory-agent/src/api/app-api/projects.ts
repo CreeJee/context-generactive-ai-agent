@@ -119,7 +119,7 @@ export class ProjectsGroup extends HttpApiGroup.make("projects")
       success: Schema.Array(ListedProject),
     }),
     /**
-     * Registers a directory. File and shell tools may later act inside it, so the path is
+     * Registers a directory. File tools and code skills may later act inside it, so the path is
      * canonicalized and must not overlap the app's storage directory.
      */
     HttpApiEndpoint.post("add", "/api/projects", {
@@ -134,7 +134,7 @@ export class ProjectsGroup extends HttpApiGroup.make("projects")
     HttpApiEndpoint.post("pick", "/api/projects/pick", { success: FolderPick }),
     /**
      * - crossRecallExcluded: this project's memory is not searched from other projects (PRD R08).
-     * - permissionMode: `ask` asks for every shell or outside write; `auto` lets a classifier decide.
+     * - permissionMode: `ask` asks before every code skill save or outside write; `auto` lets a classifier decide.
      * - hidden: take it out of the sidebar. Its sessions, memory and search are untouched, and
      *   adding the same folder again brings it back.
      */

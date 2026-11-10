@@ -6,7 +6,7 @@ import { Schema } from "effect";
  */
 
 /**
- * How approval-gated tools (shell, writes outside the project) are allowed.
+ * How approval-gated tools (saving code skills, writes outside the project) are allowed.
  * `ask`: the user answers every call. `auto`: a classifier allows, asks or blocks each call first.
  * `full`: approval-gated calls run immediately under the app's path and credential restrictions.
  */

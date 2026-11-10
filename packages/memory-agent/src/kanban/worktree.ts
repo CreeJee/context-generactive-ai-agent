@@ -22,9 +22,9 @@ export interface CardRef extends GoalRef {
   readonly cardId: string;
 }
 
-/** A worktree as the card's file and shell tools see it. */
+/** A worktree as the card's file tools and code skills see it. */
 export interface CardWorktree {
-  /** Where the project sits inside the worktree; the card's file and shell tools start here. */
+  /** Where the project sits inside the worktree; the card's file tools and code skills start here. */
   readonly toolRoot: string;
   /** Folders the card's tools must not reach, such as the user's checkout and other worktrees. */
   readonly deniedRoots: readonly string[];

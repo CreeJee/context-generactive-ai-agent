@@ -30,7 +30,7 @@ src/
   providers/    provider별 모델 목록·Effect AI 모델·실행 중 모델 선택
   files/        경로·자격 증명 검사, 텍스트 파일 읽기/쓰기, 목록, 줄 검색
   attachments/  업로드 이미지 저장(sha256, 바이트 서명 검사)과 메시지 연결, 첨부 URL 규칙
-  shell/        호스트 셸 실행(프로세스 그룹, timeout, 출력 앞뒤 보존)
+  shell/        sh 스킬 스크립트 실행(프로세스 그룹, timeout, 출력 앞뒤 보존)
   permissions/  auto 모드: 분류 모델, 판정 기록, 게이트 middleware
   tools/        모델이 쓰는 도구 정의와 구현
   agent/        채팅 run(`AgentChat`: 실행, 복원, 취소), 노드에서 예전 대화 다시 만들기

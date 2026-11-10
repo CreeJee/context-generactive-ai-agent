@@ -61,7 +61,7 @@
   - [`runtime`](./runtime/README.md) — 호스트·네이티브 경계와 공통 런타임
   - [`secrets`](./secrets/README.md) — 비밀 가리기와 sweep
   - [`sessions`](./sessions/README.md) — 세션 레코드와 lease
-  - [`shell`](./shell/README.md) — 호스트 셸 명령 실행
+  - [`shell`](./shell/README.md) — sh 스킬 스크립트를 호스트 명령으로 실행
   - [`skills`](./skills/README.md) — 에이전트 스킬 카탈로그
   - [`subagents`](./subagents/README.md) — 하위 에이전트 위임
   - [`tools`](./tools/README.md) — 모델 내장 도구

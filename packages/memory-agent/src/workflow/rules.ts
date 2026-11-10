@@ -91,7 +91,7 @@ const builtInRuleInputs: readonly Omit<WorkflowRule, "source">[] = [
     priority: "required",
     terms: ["plan", "research", "investigate", "read-only"],
     instruction:
-      "Investigate without changing project files, running shell commands, delegating, or using write-capable external tools.",
+      "Investigate without changing project files, saving or running code skills, delegating, or using write-capable external tools.",
     requiredEvidence: ["No project mutation was performed during Plan"],
   },
   {

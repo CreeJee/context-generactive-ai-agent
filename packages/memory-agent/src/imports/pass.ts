@@ -229,7 +229,7 @@ const make = (home: string) =>
      * The deepest registered root wins, and hidden projects count: they still own their memory, so
      * a transcript from that folder belongs to them rather than to a second registration.
      *
-     * Registering widens what the file and shell tools may touch. The user asked for this, because
+     * Registering widens what the file tools and code skills may touch. The user asked for this, because
      * these are their own working folders and naming them one by one is the tedious part; the
      * project list can be tidied afterwards (`Projects.setHidden`).
      */

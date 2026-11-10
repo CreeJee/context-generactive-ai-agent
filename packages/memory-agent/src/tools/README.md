@@ -4,7 +4,7 @@
 
 `packages/memory-agent/src/tools`는 에이전트 루프(Effect AI)가 모델에 노출하는 내장 도구의 정의·실행·실패 표현을 모은 디렉터리다. `runTool`/`RunTool`은 도구 정의(스키마·설명·승인 여부·lazy)와 핸들러를 묶는다. `failure.ts`는 모든 실패를 경로·시스템 메시지를 가린 `ToolFailed`로 바꾸고, `schema.ts`는 OpenAI strict 도구용 닫힌 JSON Schema를 만든다.
 
-파일·외부 파일·코드 스킬·셸·백그라운드 작업·메모리·Kagi 검색·위임·리포트 증거 도구는 각각 `Context.Service`(`FileTools`, `ApprovedTools`, `BackgroundTasks` 등)로 제공된다. `definitions.ts`는 브라우저에서도 import 가능한 채팅 UI·서버 공용 계약 모듈이며, 승인 게이트 도구의 서버 구현은 `approved.ts`에 있다.
+파일·외부 파일·코드 스킬·백그라운드 작업·메모리·Kagi 검색·위임·리포트 증거 도구는 각각 `Context.Service`(`FileTools`, `ApprovedTools`, `BackgroundTasks` 등)로 제공된다. `definitions.ts`는 브라우저에서도 import 가능한 채팅 UI·서버 공용 계약 모듈이며, 승인 게이트 도구의 서버 구현은 `approved.ts`에 있다.
 
 ## Interface
 
@@ -54,7 +54,7 @@
 - OS 샌드박스가 없을 때(`SandboxUnavailable`) 샌드박스 없이 실행하는 것은 `permissionMode === "full"`에서만 허용한다.
 - `run_skill` 타임아웃은 `[1, maxTimeoutSeconds]`로 고정되고 기본값은 `defaultTimeoutSeconds`다. `yieldMs` 기본값은 1000, 범위는 0~30000이다.
 - `write_outside_file`은 `expectedSha256`가 없으면 새 파일만 만들고, 있으면 기존 파일이 있어야 한다(없으면 `not_found`). 외부 경로는 `project.toolFence`로 제한된다.
-- 백그라운드 셸 결과: `failed`이면 `ProcessExited`, `timed_out`이면 `ProcessTimedOut`, `succeeded`/`cancelled`이면 실패 이유가 없다. 비정상 종료여도 출력은 보관한다.
+- 백그라운드 sh 스킬 결과: `failed`이면 `ProcessExited`, `timed_out`이면 `ProcessTimedOut`, `succeeded`/`cancelled`이면 실패 이유가 없다. 비정상 종료여도 출력은 보관한다.
 - `reportRunToolsForSession`의 trace 콜백은 소스 세션으로 이미 범위가 정해져 있어야 한다. 세션 id를 콜백에 넘기지 않는다.
 
 ## Side Effects

@@ -2,7 +2,7 @@ import { Schema } from "effect";
 
 /**
  * The only tools a BTW thread may call: search, read the original, trace provenance. All three
- * read the same project's memory. Writes, promotion, workflow, files, shell and subagents are
+ * read the same project's memory. Writes, promotion, workflow, files, skills and subagents are
  * never offered, and a call to any other name is refused by the server.
  */
 export const btwToolNames = ["find_memory", "read_evidence", "trace_evidence"] as const;

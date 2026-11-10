@@ -20,7 +20,7 @@ import {
 
 /**
  * The setup step that failed, as a fixed detail: the runtime's own message can hold paths, and it
- * reaches the shell tool's result.
+ * reaches run_skill's result.
  */
 const setupFailed =
   (step: "invalid_setup" | "runtime_unavailable" | "initialize_failed" | "wrap_failed") => () =>
