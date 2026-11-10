@@ -701,6 +701,10 @@ msgstr "Goal 검증 실패: {verdict}"
 msgid "Goal 결과"
 msgstr "Goal 결과"
 
+#: app/entry/chat/refusals.ts
+msgid "Goal 기록을 읽지 못해 실행하지 않았습니다. 잠시 뒤 다시 보내 주십시오."
+msgstr "Goal 기록을 읽지 못해 실행하지 않았습니다. 잠시 뒤 다시 보내 주십시오."
+
 #: app/entry/chat/board-panel.tsx
 msgid "Goal 변경으로 merge를 멈췄습니다"
 msgstr "Goal 변경으로 merge를 멈췄습니다"
@@ -740,6 +744,10 @@ msgstr "Goal 상태를 바꾸지 못했습니다."
 #: app/entry/chat/board-panel.tsx
 msgid "Goal 스케줄"
 msgstr "Goal 스케줄"
+
+#: app/entry/chat/refusals.ts
+msgid "Goal 실행을 시작하지 못했습니다. 잠시 뒤 다시 보내 주십시오."
+msgstr "Goal 실행을 시작하지 못했습니다. 잠시 뒤 다시 보내 주십시오."
 
 #: app/entry/chat/uncertain-runs.tsx
 msgid "Goal 실행이 끝나기 전에 멈춰서 아래 도구가 무엇을 바꿨는지 알 수 없습니다. 확인 없이 이어가면 같은 작업을 다시 할 수 있어서 새 실행을 멈춰 두었습니다. 직접 확인한 뒤 이어가 주십시오. 이 도구들은 다시 실행되지 않습니다."
@@ -1459,6 +1467,10 @@ msgstr "그린 그림: {path}"
 msgid "그만두기"
 msgstr "그만두기"
 
+#: app/entry/chat/refusals.ts
+msgid "그사이 Goal이나 Plan이 바뀌었습니다. 바뀐 내용을 확인한 뒤 다시 보내 주십시오."
+msgstr "그사이 Goal이나 Plan이 바뀌었습니다. 바뀐 내용을 확인한 뒤 다시 보내 주십시오."
+
 #: app/entry/chat/board/board-surface.tsx
 msgid "그사이 Plan이 바뀌었습니다. 최신 보드를 다시 확인해 주십시오."
 msgstr "그사이 Plan이 바뀌었습니다. 최신 보드를 다시 확인해 주십시오."
@@ -1706,7 +1718,7 @@ msgstr "다른 창에서 이 대화를 쓰고 있습니다."
 msgid "다른 창이 이 대화를 더 이상 쓰지 않습니다"
 msgstr "다른 창이 이 대화를 더 이상 쓰지 않습니다"
 
-#: app/entry/chat/chat-panel.tsx
+#: app/entry/chat/refusals.ts
 msgid "다른 창이 이 대화를 쓰고 있습니다."
 msgstr "다른 창이 이 대화를 쓰고 있습니다."
 
@@ -1903,6 +1915,10 @@ msgstr "답변 출처"
 msgid "답변을 멈췄습니다."
 msgstr "답변을 멈췄습니다."
 
+#: app/entry/chat/refusals.ts
+msgid "답변을 이어서 읽을 위치가 맞지 않습니다. 페이지를 새로 고쳐 주십시오."
+msgstr "답변을 이어서 읽을 위치가 맞지 않습니다. 페이지를 새로 고쳐 주십시오."
+
 #: app/entry/chat/context-meter.tsx
 msgid "답변이 끝난 도구 출력을 참조로 바꿔 보냈습니다."
 msgstr "답변이 끝난 도구 출력을 참조로 바꿔 보냈습니다."
@@ -1963,6 +1979,10 @@ msgstr "대기 중인 변경"
 #: app/entry/chat/composer-status.tsx
 msgid "대기열"
 msgstr "대기열"
+
+#: app/entry/chat/refusals.ts
+msgid "대기열 메시지를 고치는 사이라 보내지 않았습니다. 대기열에서 확인한 뒤 보내 주십시오."
+msgstr "대기열 메시지를 고치는 사이라 보내지 않았습니다. 대기열에서 확인한 뒤 보내 주십시오."
 
 #: app/entry/chat/chat-composer.tsx
 msgid "대기열에 넣기"
@@ -2057,6 +2077,7 @@ msgid "대화를 원문 그대로 보냈습니다."
 msgstr "대화를 원문 그대로 보냈습니다."
 
 #: app/entry/api.ts
+#: app/entry/chat/refusals.ts
 msgid "대화를 찾을 수 없습니다."
 msgstr "대화를 찾을 수 없습니다."
 
@@ -2288,7 +2309,7 @@ msgid "먼저 merge될 Goal을 기다리는 중: {goals}. 그동안 카드를 �
 msgstr "먼저 merge될 Goal을 기다리는 중: {goals}. 그동안 카드를 새로 시작하지 않습니다."
 
 #: app/entry/chat/btw-panel.tsx
-#: app/entry/chat/chat-panel.tsx
+#: app/entry/chat/refusals.ts
 msgid "먼저 모델을 선택해 주십시오."
 msgstr "먼저 모델을 선택해 주십시오."
 
@@ -2682,6 +2703,10 @@ msgstr "보내지 못했습니다: {reason}. 위의 복사·텍스트 파일 저
 msgid "보낼 메시지 {count}개"
 msgstr "보낼 메시지 {count}개"
 
+#: app/entry/chat/refusals.ts
+msgid "보낼 메시지가 없습니다."
+msgstr "보낼 메시지가 없습니다."
+
 #. Accessible name of the evidence preview section
 #: app/entry/report/report-bundle.tsx
 msgid "보낼 증거 묶음"
@@ -2843,6 +2868,10 @@ msgstr "비밀정보 확인에 실패해 명령줄을 숨겼습니다."
 #: app/entry/navigation/compatible-accounts.tsx
 msgid "비워 두면 서버 주소로 부릅니다"
 msgstr "비워 두면 서버 주소로 부릅니다"
+
+#: app/entry/chat/refusals.ts
+msgid "빈 메시지는 보낼 수 없습니다."
+msgstr "빈 메시지는 보낼 수 없습니다."
 
 #: app/entry/api.ts
 msgid "빈 파일입니다."
@@ -3080,10 +3109,6 @@ msgstr "서버가 다시 시작돼 끊긴 실행을 {time}에 이어서 진행�
 msgid "서버가 다시 시작돼 실행이 멈췄습니다"
 msgstr "서버가 다시 시작돼 실행이 멈췄습니다"
 
-#: app/entry/chat/chat-panel.tsx
-msgid "서버가 요청을 거절했습니다({code})."
-msgstr "서버가 요청을 거절했습니다({code})."
-
 #: app/entry/settings/pages/mcp.tsx
 msgid "서버가 제시간에 도구 목록을 주지 않았습니다."
 msgstr "서버가 제시간에 도구 목록을 주지 않았습니다."
@@ -3153,12 +3178,16 @@ msgstr "서브에이전트에게 메시지 보내기"
 msgid "선택된 모델"
 msgstr "선택된 모델"
 
+#: app/entry/chat/refusals.ts
+msgid "선택한 공급자는 이미지를 만들 수 없습니다."
+msgstr "선택한 공급자는 이미지를 만들 수 없습니다."
+
 #: app/entry/index.tsx
 msgid "선택한 공급자에 로그인해 주십시오"
 msgstr "선택한 공급자에 로그인해 주십시오"
 
 #: app/entry/chat/btw-panel.tsx
-#: app/entry/chat/chat-panel.tsx
+#: app/entry/chat/refusals.ts
 msgid "선택한 공급자에 로그인해야 합니다."
 msgstr "선택한 공급자에 로그인해야 합니다."
 
@@ -3172,7 +3201,7 @@ msgid "선택한 모델은 이미지를 읽지 못합니다"
 msgstr "선택한 모델은 이미지를 읽지 못합니다"
 
 #: app/entry/chat/btw-panel.tsx
-#: app/entry/chat/chat-panel.tsx
+#: app/entry/chat/refusals.ts
 msgid "선택한 모델은 이미지를 읽지 못합니다."
 msgstr "선택한 모델은 이미지를 읽지 못합니다."
 
@@ -3188,7 +3217,15 @@ msgstr "선택한 모델은 추론 강도를 고를 수 없습니다."
 msgid "선택한 모델을 쓸 수 없습니다(로그인과 모델 선택을 확인해 주십시오)"
 msgstr "선택한 모델을 쓸 수 없습니다(로그인과 모델 선택을 확인해 주십시오)"
 
-#: app/entry/chat/chat-panel.tsx
+#: app/entry/chat/refusals.ts
+msgid "선택한 모델을 지금 계정에서 쓸 수 없습니다. 모델을 다시 골라 주십시오."
+msgstr "선택한 모델을 지금 계정에서 쓸 수 없습니다. 모델을 다시 골라 주십시오."
+
+#: app/entry/chat/refusals.ts
+msgid "선택한 외부 에이전트를 지금 쓸 수 없습니다. 설정에서 연결 상태를 확인해 주십시오."
+msgstr "선택한 외부 에이전트를 지금 쓸 수 없습니다. 설정에서 연결 상태를 확인해 주십시오."
+
+#: app/entry/chat/refusals.ts
 msgid "선택한 제공자를 사용할 수 없습니다. 제공자 설정을 확인해 주십시오."
 msgstr "선택한 제공자를 사용할 수 없습니다. 제공자 설정을 확인해 주십시오."
 
@@ -3600,6 +3637,10 @@ msgstr "실행 중인 응답이 끝난 뒤 다시 시도해 주십시오."
 msgid "실행 중인 작업이 끝난 뒤 다시 시도해 주십시오."
 msgstr "실행 중인 작업이 끝난 뒤 다시 시도해 주십시오."
 
+#: app/entry/chat/refusals.ts
+msgid "실행 중인 작업이 많아 Goal 실행을 시작하지 못했습니다. 잠시 뒤 다시 보내 주십시오."
+msgstr "실행 중인 작업이 많아 Goal 실행을 시작하지 못했습니다. 잠시 뒤 다시 보내 주십시오."
+
 #: app/entry/chat/uncertain-runs.tsx
 msgid "실행됐는지 알 수 없음"
 msgstr "실행됐는지 알 수 없음"
@@ -3731,6 +3772,14 @@ msgstr "앞 대화는 요약하지 못했습니다."
 #: app/entry/report/report-bundle.tsx
 msgid "앞부분 이벤트는 빠졌습니다."
 msgstr "앞부분 이벤트는 빠졌습니다."
+
+#: app/entry/chat/refusals.ts
+msgid "앞선 답변이 끝나지 않아 후속 실행을 미뤘습니다."
+msgstr "앞선 답변이 끝나지 않아 후속 실행을 미뤘습니다."
+
+#: app/entry/chat/refusals.ts
+msgid "앞선 실행이 끝났는지 확인하지 못해 새 요청을 받지 않았습니다. 그 실행을 확인한 뒤 이어서 진행해 주십시오."
+msgstr "앞선 실행이 끝났는지 확인하지 못해 새 요청을 받지 않았습니다. 그 실행을 확인한 뒤 이어서 진행해 주십시오."
 
 #: app/entry/api.ts
 msgid "앱 저장소 폴더와 겹치는 경로는 등록할 수 없습니다."
@@ -4084,6 +4133,10 @@ msgstr "요약으로도 넘쳐 오래된 메시지를 빼고 보냈습니다."
 msgid "요청"
 msgstr "요청"
 
+#: app/entry/chat/refusals.ts
+msgid "요청 번호가 다른 대화의 요청과 겹쳤습니다. 다시 보내 주십시오."
+msgstr "요청 번호가 다른 대화의 요청과 겹쳤습니다. 다시 보내 주십시오."
+
 #. Badge on a card: a move request is on its way to the server
 #. Retry button while the retry request is being sent
 #: app/entry/chat/board/card-face.tsx
@@ -4237,6 +4290,7 @@ msgid "이 BTW가 아직 답하는 중입니다."
 msgstr "이 BTW가 아직 답하는 중입니다."
 
 #: app/entry/chat/btw-panel.tsx
+#: app/entry/chat/refusals.ts
 msgid "이 BTW는 삭제되었습니다."
 msgstr "이 BTW는 삭제되었습니다."
 
@@ -4247,6 +4301,10 @@ msgstr "이 BTW를 삭제할까요?"
 #: app/entry/chat/board-panel.tsx
 msgid "이 Goal보다 먼저 merge될 Goal"
 msgstr "이 Goal보다 먼저 merge될 Goal"
+
+#: app/entry/chat/refusals.ts
+msgid "이 Goal은 이미 다른 실행이 맡고 있습니다."
+msgstr "이 Goal은 이미 다른 실행이 맡고 있습니다."
 
 #: app/entry/chat/workflow-panel.tsx
 msgid "이 Goal을 중단할까요?"
@@ -4264,7 +4322,7 @@ msgstr "이 Plan을 닫을까요?"
 msgid "이 결정 요청은 닫혔습니다. 카드가 멈췄거나 실행이 취소됐습니다."
 msgstr "이 결정 요청은 닫혔습니다. 카드가 멈췄거나 실행이 취소됐습니다."
 
-#: app/entry/chat/chat-panel.tsx
+#: app/entry/chat/refusals.ts
 msgid "이 대화가 아직 답하는 중입니다."
 msgstr "이 대화가 아직 답하는 중입니다."
 
@@ -4320,6 +4378,10 @@ msgstr "이 앱의 저장 폴더 안입니다"
 #: app/entry/chat/board/board-surface.tsx
 msgid "이 열로는 옮길 수 없습니다."
 msgstr "이 열로는 옮길 수 없습니다."
+
+#: app/entry/chat/refusals.ts
+msgid "이 이미지 요청은 대화가 아닌 이미지 생성으로 보내 주십시오."
+msgstr "이 이미지 요청은 대화가 아닌 이미지 생성으로 보내 주십시오."
 
 #: app/entry/navigation/sidebar.tsx
 msgid "이 작업 위치의 대화가 없습니다."
@@ -4401,6 +4463,10 @@ msgstr "이름이 같으면 프로젝트 설정을 씁니다."
 msgid "이름이 같으면 프로젝트, 공통, 기본 순으로 앞의 것을 씁니다. 기본 skill도 같은 이름으로 덮어쓸 수 있습니다."
 msgstr "이름이 같으면 프로젝트, 공통, 기본 순으로 앞의 것을 씁니다. 기본 skill도 같은 이름으로 덮어쓸 수 있습니다."
 
+#: app/entry/chat/refusals.ts
+msgid "이미 끝난 요청입니다."
+msgstr "이미 끝난 요청입니다."
+
 #: app/entry/chat/decision-prompt.tsx
 msgid "이미 다른 답이 기록됐습니다. 보드를 다시 확인해 주십시오."
 msgstr "이미 다른 답이 기록됐습니다. 보드를 다시 확인해 주십시오."
@@ -4481,6 +4547,10 @@ msgstr "이미지 첨부"
 msgid "이미지를 놓으면 첨부됩니다"
 msgstr "이미지를 놓으면 첨부됩니다"
 
+#: app/entry/chat/refusals.ts
+msgid "이미지를 만들 경로가 없습니다. 설정에서 이미지 생성을 확인해 주십시오."
+msgstr "이미지를 만들 경로가 없습니다. 설정에서 이미지 생성을 확인해 주십시오."
+
 #: app/entry/chat/chat-panel.tsx
 msgid "이미지를 만들까요?"
 msgstr "이미지를 만들까요?"
@@ -4501,6 +4571,10 @@ msgstr "이번 요청에서만 이미지 생성"
 msgid "이번만 허용"
 msgstr "이번만 허용"
 
+#: app/entry/chat/refusals.ts
+msgid "이어서 읽을 답변을 찾을 수 없습니다."
+msgstr "이어서 읽을 답변을 찾을 수 없습니다."
+
 #. Button that takes over the conversation in this window
 #: app/entry/chat/read-only-bar.tsx
 msgid "이어서 작업"
@@ -4513,6 +4587,10 @@ msgstr "이어서 진행하지 못했습니다."
 #: app/entry/chat/chat-history.tsx
 msgid "이전 메시지를 불러오지 못했습니다. 다시 시도"
 msgstr "이전 메시지를 불러오지 못했습니다. 다시 시도"
+
+#: app/entry/chat/refusals.ts
+msgid "이전 버전에서 만든 Goal이라 자동으로 실행할 수 없습니다. Goal을 다시 정해 주십시오."
+msgstr "이전 버전에서 만든 Goal이라 자동으로 실행할 수 없습니다. Goal을 다시 정해 주십시오."
 
 #: app/entry/session/run-state.tsx
 msgid "이전 버전이 끝내지 못한 Goal 상태를 고치고 자동 실행을 멈췄습니다. 이어서 하려면 메시지를 보내 주십시오."
@@ -4551,7 +4629,7 @@ msgstr "이전 실행의 결과를 확인해 주십시오"
 msgid "인자"
 msgstr "인자"
 
-#: app/entry/chat/chat-panel.tsx
+#: app/entry/chat/refusals.ts
 msgid "인증 상태를 확인할 수 없습니다. 잠시 후 다시 시도해 주십시오."
 msgstr "인증 상태를 확인할 수 없습니다. 잠시 후 다시 시도해 주십시오."
 
@@ -4878,6 +4956,14 @@ msgstr "제목"
 msgid "제목 없는 대화"
 msgstr "제목 없는 대화"
 
+#: app/entry/chat/refusals.ts
+msgid "제보 대화는 외부 에이전트가 아닌 선택한 모델로만 답합니다. 대화 상대를 모델로 바꿔 주십시오."
+msgstr "제보 대화는 외부 에이전트가 아닌 선택한 모델로만 답합니다. 대화 상대를 모델로 바꿔 주십시오."
+
+#: app/entry/chat/refusals.ts
+msgid "제보 대화에서는 이미지를 만들 수 없습니다."
+msgstr "제보 대화에서는 이미지를 만들 수 없습니다."
+
 #. Accessible name of the section with the final report text
 #: app/entry/report/report-draft.tsx
 msgid "제보 문안"
@@ -5027,6 +5113,10 @@ msgstr "지금 진행"
 #: app/entry/settings/pages/kanban.tsx
 msgid "지금은 {provider} / {model} ({effort})로 실행합니다."
 msgstr "지금은 {provider} / {model} ({effort})로 실행합니다."
+
+#: app/entry/chat/refusals.ts
+msgid "지금은 Goal 실행을 시작할 수 없습니다. 잠시 뒤 다시 보내 주십시오."
+msgstr "지금은 Goal 실행을 시작할 수 없습니다. 잠시 뒤 다시 보내 주십시오."
 
 #: app/entry/index.tsx
 msgid "지금은 대화를 바꿀 수 없습니다. 실행 상태를 확인한 뒤 다시 시도해 주십시오."
@@ -5192,6 +5282,10 @@ msgstr "첨부 이미지 #{number}"
 #: app/entry/report/report-draft.tsx
 msgid "첨부된 증거 없음. 위 설명만으로 제보합니다."
 msgstr "첨부된 증거 없음. 위 설명만으로 제보합니다."
+
+#: app/entry/chat/refusals.ts
+msgid "첨부한 이미지를 서버에서 찾지 못했습니다. 이미지를 다시 올려 주십시오."
+msgstr "첨부한 이미지를 서버에서 찾지 못했습니다. 이미지를 다시 올려 주십시오."
 
 #: app/entry/chat/chat-panel.tsx
 msgid "첫 버전의 이미지 생성은 텍스트 프롬프트만 지원합니다."
@@ -5850,6 +5944,7 @@ msgstr "프로젝트 칸반 보드"
 msgid "프로젝트를 변경하지 않은 채 Plan을 만듭니다. 승인하면 보드에서 실행합니다"
 msgstr "프로젝트를 변경하지 않은 채 Plan을 만듭니다. 승인하면 보드에서 실행합니다"
 
+#: app/entry/chat/refusals.ts
 #: app/entry/settings/pages/kanban.tsx
 msgid "프로젝트를 찾을 수 없습니다."
 msgstr "프로젝트를 찾을 수 없습니다."

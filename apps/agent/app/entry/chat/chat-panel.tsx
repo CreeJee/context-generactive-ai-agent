@@ -1,4 +1,4 @@
-import { i18n, type MessageDescriptor } from "@lingui/core";
+import { i18n } from "@lingui/core";
 import { msg, ph } from "@lingui/core/macro";
 import { Trans, useLingui } from "@lingui/react/macro";
 import { Data, Effect, Fiber, Match } from "effect";
@@ -33,6 +33,7 @@ import {
   AlertDialogTitle,
 } from "~/components/ui/alert-dialog";
 import { RunFailureText } from "./run-failure";
+import { refusalTexts } from "./refusals";
 import { Marker, MarkerContent, MarkerIcon } from "~/components/ui/marker";
 import { Spinner } from "~/components/ui/spinner";
 import { DraftImage, renumberReferences, useDraftImages } from "./draft-images";
@@ -217,17 +218,6 @@ const contentOf = (text: string, attachmentIds: readonly string[]): UserContent 
   })),
 ];
 
-/** A refused turn's code as the user reads it; the other codes show as they are. */
-const refusalTexts: Partial<Record<Refusal["error"], MessageDescriptor>> = {
-  provider_auth_unavailable: msg`인증 상태를 확인할 수 없습니다. 잠시 후 다시 시도해 주십시오.`,
-  provider_unavailable: msg`선택한 제공자를 사용할 수 없습니다. 제공자 설정을 확인해 주십시오.`,
-  login_required: msg`선택한 공급자에 로그인해야 합니다.`,
-  model_selection_required: msg`먼저 모델을 선택해 주십시오.`,
-  images_not_supported: msg`선택한 모델은 이미지를 읽지 못합니다.`,
-  run_in_progress: msg`이 대화가 아직 답하는 중입니다.`,
-  session_in_use: msg`다른 창이 이 대화를 쓰고 있습니다.`,
-};
-
 /** Why the last turn got no answer: the server refused it, it was not sent, or its run failed. */
 function NoAnswer({
   refusal,
@@ -237,11 +227,7 @@ function NoAnswer({
   error: { readonly message: string } | null;
 }) {
   const { t } = useLingui();
-  if (refusal !== null) {
-    const code = refusal.error;
-    const text = refusalTexts[code];
-    return isTruthy(text) ? t(text) : t`서버가 요청을 거절했습니다(${code}).`;
-  }
+  if (refusal !== null) return t(refusalTexts[refusal.error]);
   return error !== null && <RunFailureText error={error} />;
 }
 

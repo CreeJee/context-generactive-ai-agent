@@ -31,6 +31,7 @@
 - `BtwPanel` / `WorkTracePanel` / `QueuePanel` / `SubagentPanel` — BTW 곁질문, 작업 추적, 메시지 대기열, 하위 에이전트 패널
 - `BackgroundTaskIndicator` — 입력창 아래 상태줄 왼쪽(컨텍스트 표시 반대편)의 `백그라운드 N개`. 누르면 팝오버로 현재 세션의 실행 중 백그라운드 작업 목록을 보여 준다
 - 문구 — 채팅 화면의 문구는 쓰이는 자리에 Lingui 메시지(`<Trans>`, `` t`…` ``, `msg`)로 쓴다. `app/locales/ko.po`로 추출되고 `lint/wording`이 검사한다
+- `refusalTexts` — chat API가 거절하는 모든 코드의 문구 표(`Record<Refusal["error"], MessageDescriptor>`). 코드가 늘면 문구가 생길 때까지 컴파일되지 않는다. 보내기 거절과 승인 답 거절이 같은 문구를 쓴다
 - 그 밖의 export(본문 미확인): `ChatApprovals`, `ContextMeter`, `Markdown`, `ReadOnlyBar`, `SlashPalette`, `UncertainRuns`, `RunFailureText`/`runFailureOf`, `UserMessageBody`/`DrawingPicture`/`DraftImageTray`/`MessageImage`
 - [`board`](./board/README.md) — 한 대화의 Plan 또는 프로젝트의 모든 실행 중 Plan을 7개 상태 열에 보여 주는 칸반 보드 UI
 
