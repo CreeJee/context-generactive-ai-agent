@@ -27,7 +27,7 @@ const openInWorkTrace = (taskId: string) =>
   window.dispatchEvent(new CustomEvent("work-trace:open", { detail: { taskId } }));
 
 /**
- * The status-line count of this conversation's background shell commands and external-agent
+ * The status-line count of this conversation's background skill runs and external-agent
  * turns that are still going; its popover lists them, and each opens in Work Trace.
  */
 export function BackgroundTaskIndicator({ tasks }: { tasks: readonly TraceTaskView[] }) {

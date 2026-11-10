@@ -10,7 +10,7 @@ const runningStatuses = HashSet.fromIterable<TraceTaskView["status"]>([
   "resuming",
 ]);
 
-/** Background shell commands and external-agent turns of a session that are still going. */
+/** Background sh skill runs and external-agent turns of a session that are still going. */
 export const runningBackgroundTasks = (tasks: readonly TraceTaskView[]) =>
   tasks.filter(
     (task) =>
@@ -27,4 +27,4 @@ export const backgroundKindLabel = (task: TraceTaskView) =>
         message: "외부 에이전트",
         comment: "Kind of background job: a turn of an external coding agent",
       })
-    : t({ message: "셸 명령", comment: "Kind of background job: a shell command" });
+    : t({ message: "스킬", comment: "Kind of background job: a run of a project code skill" });

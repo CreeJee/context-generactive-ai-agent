@@ -52,6 +52,6 @@ describe("running background tasks", () => {
     const running = runningBackgroundTasks(tasks);
 
     expect(running.map(({ id }) => id)).toEqual(["shell", "agent"]);
-    expect(running.map(backgroundKindLabel)).toEqual(["셸 명령", "외부 에이전트"]);
+    expect(running.map(backgroundKindLabel)).toEqual(["스킬", "외부 에이전트"]);
   });
 });
