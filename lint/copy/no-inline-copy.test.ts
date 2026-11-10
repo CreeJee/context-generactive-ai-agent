@@ -17,6 +17,10 @@ tester.run("no-inline-copy", noInlineCopyRule, {
       code: 'expect(screen.getByText("취소")).toBeVisible();',
       filename: "app/entry/media/dialog.test.tsx",
     },
+    {
+      code: 'expect(page.getByText("취소")).toBeVisible();',
+      filename: "app/entry/chat/message.browser.tsx",
+    },
   ],
   invalid: [
     { code: 'const label = "취소";', errors: [{ messageId: "inline" }] },

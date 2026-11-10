@@ -6,8 +6,8 @@ const hangul = /\p{Script=Hangul}/u;
 /** Copy catalogs: the only files where app copy is written. */
 const catalogFile = /(^|\/)copy\.ts$/;
 
-/** Tests may spell the copy they look for on screen. */
-const testFile = /\.(test|spec)\.tsx?$/;
+/** Tests, browser tests included, may spell the copy they look for on screen. */
+const testFile = /\.(test|spec|browser)\.tsx?$/;
 
 /**
  * Ban Korean copy written outside a `copy.ts` catalog. The app speaks Korean only, so Hangul in a
