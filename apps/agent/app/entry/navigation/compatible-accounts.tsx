@@ -171,6 +171,8 @@ function AddEndpointForm({
   const [label, setLabel] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const labelId = useId();
   return (
     <form
@@ -178,12 +180,16 @@ function AddEndpointForm({
       className="flex flex-col gap-3 rounded-lg border px-3 py-3"
       onSubmit={(event) => {
         event.preventDefault();
+        setPending(true);
+        setError(null);
         void onCreate({
           intent: "create",
           baseUrl: baseUrl.trim(),
           ...(label.trim() !== "" && { label: label.trim() }),
           ...keyChange(apiKey, false),
-        }).then(onClose, () => {});
+        })
+          .then(onClose, (failure: Error) => setError(compatibleErrorMessage(failure)))
+          .finally(() => setPending(false));
       }}
     >
       <Field>
@@ -214,10 +220,15 @@ function AddEndpointForm({
         <Button type="button" variant="outline" onClick={onClose}>
           <Trans comment="Button that closes the new endpoint form">취소</Trans>
         </Button>
-        <Button type="submit" disabled={busy || baseUrl.trim() === ""}>
-          <Trans comment="Button that adds the endpoint">추가</Trans>
+        <Button type="submit" disabled={busy || pending || baseUrl.trim() === ""}>
+          {pending && <Spinner />} <Trans comment="Button that adds the endpoint">추가</Trans>
         </Button>
       </div>
+      {error && (
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
     </form>
   );
 }
