@@ -16,6 +16,7 @@ import { unknownStepOutcomeText } from "./step-outcomes.ts";
 import { OutcomeStatus, outcomeStatusWord, type OutcomeStanding } from "./outcome-ledger.ts";
 import { WorkflowExecution } from "./execution.ts";
 import { BoardAuthor, stepProgressStatus } from "./card.ts";
+import { cardCapabilities } from "./card-capabilities.ts";
 import { EditPlan, type GoalOutcome } from "./contracts.ts";
 import {
   PlanDependencyIssue,
@@ -327,6 +328,7 @@ ${compactList(state.goal.openQuestions.filter((question) => question.blocking).m
         "goal",
         () => `${common}
 The user delegated an outcome, not merely a request to describe a goal. You are its planner, not its executor: project tools are restricted to read-only investigation. Save a concise active Goal whose outcomes each have a stable id, then save a ready Plan whose cards together serve every outcome (each card names the outcome ids it serves). Goal mode runs it at once: when this run ends the owner approves the Plan and starts its kanban board, where card agents execute the cards and a verifier judges each outcome. Do not implement, verify or record progress yourself. Ask only genuinely blocking questions; record what is uncertain and plan the independent cards first.
+${cardCapabilities}
 
 ${goal}`,
       ),
@@ -336,6 +338,8 @@ ${goal}`,
           : "Plan: not recorded yet.";
         return `${common}
 You are planning, not executing. Project tools are restricted to read-only investigation. If no Goal is recorded, infer the smallest useful Goal from the user's request and save it before the Plan; the user does not need to enter Goal mode first. Produce ordered steps with stable unique ids, dependencies (dependsOn names only other step ids in this Plan, without cycles), acceptance criteria, risks, applicable rule ids and the Goal outcome ids each step serves. When a contradiction or unanswered question arises, record what is uncertain and which decisions depend on it; continue all independent read-only investigation and planning before asking. Narrow questions with evidence and ask only when no useful independent planning remains and the decision truly blocks progress. A non-blocking open question does not by itself require a draft Plan: save a ready Plan when its steps can proceed, and leave the unresolved decision for the step it actually affects. Never assume an answer to a blocking question or mark a Plan ready if the unresolved decision prevents safe execution of its next step. Do not modify files, run skills, delegate work or present investigation as implementation.
+Once the Plan is approved, its steps run as cards of a kanban board.
+${cardCapabilities}
 
 ${goal}
 
@@ -345,6 +349,7 @@ ${plan}`;
         "running",
         () => `${common}
 The current Plan runs on its kanban board: card agents execute the cards in separate worktrees and a verifier judges each Goal outcome; only those verdicts complete the Goal. You do not execute cards, verify them or record their progress yourself. Answer questions about the run from the board and the outcome statuses, without claiming work you did not see done. When the user changes the scope, design or acceptance criteria, revise the Plan with edit_plan, or with update_plan, which returns the workflow to shaping so the revised version can be confirmed before it runs again. Close the Plan with close_plan when its remaining work is no longer needed.
+${cardCapabilities}
 
 ${goal}
 

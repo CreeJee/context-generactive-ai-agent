@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vite-plus/test";
 import { workflowActions } from "./actions.ts";
+import { cardCapabilities } from "./card-capabilities.ts";
 import { OutcomeStatus } from "./outcome-ledger.ts";
 import { builtInWorkflowRules, rulePhases } from "./rules.ts";
 import { workflowInstructions } from "./tools.ts";
@@ -23,6 +24,18 @@ const resolved = (phase: WorkflowPhase) => ({
 });
 
 describe("workflowInstructions", () => {
+  test("tells every planner what card agents and verifiers can do, and no other phase", () => {
+    const planner = (phase: WorkflowPhase, mode: WorkflowMode) =>
+      workflowInstructions(state(phase, mode), resolved(phase));
+    for (const prompt of [
+      planner("shaping", "goal"),
+      planner("shaping", "plan"),
+      planner("running", "plan"),
+    ]) {
+      expect(prompt).toContain(cardCapabilities);
+    }
+    expect(planner("completed", "plan")).not.toContain(cardCapabilities);
+  });
   test("provides the owner-read Goal instance ID instead of inferring it from Goal version", () => {
     const prompt = workflowInstructions(state("completed"), resolved("completed"), "owner-id-123");
     expect(prompt).toContain("Current Goal instance ID: owner-id-123");

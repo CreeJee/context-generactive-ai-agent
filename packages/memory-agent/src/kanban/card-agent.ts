@@ -18,7 +18,7 @@ export interface CardAgentRun {
   readonly card: PlanStep;
   readonly attemptNo: number;
   /**
-   * Where the agent's file and shell tools are rooted: the card worktree, or the project itself
+   * Where the agent's file tools and code skills are rooted: the card worktree, or the project itself
    * when the project cannot have worktrees and its cards run one at a time.
    */
   readonly worktree: CardWorktree;

@@ -13,6 +13,7 @@ import { FileTools } from "../tools/files.ts";
 import { OutsideTools } from "../tools/outside.ts";
 import { runTool, type RunTool } from "../tools/run-tool.ts";
 import type { PlanStep } from "../workflow/workflow.ts";
+import { cardAgentToolNames, verifierToolNames } from "../workflow/card-capabilities.ts";
 import {
   CardAgent,
   CardAgentOutcome,
@@ -32,34 +33,35 @@ import { boardRunId } from "./board-run.ts";
 
 /**
  * Production card agents: each card attempt and each verification is a named session subagent
- * whose file and shell tools are rooted at the card worktree, or at the project itself when its
+ * whose file tools and code skills are rooted at the card worktree, or at the project itself when its
  * cards run one at a time. The owner commits and integrates a worktree card's work; the sandbox
  * does not let the agent write to the repository's git data. The instructions hold for both.
  */
 
 const cardInstructions = [
-  "You carry out one card of a kanban board. Your file and shell tools are rooted at the folder this card works in.",
+  "You carry out one card of a kanban board. Your file tools and code skills are rooted at the folder this card works in.",
   "- Do the card's work in that folder and nowhere else. Other cards may run at the same time in folders of their own.",
-  "- Leave your changes in the files and do not commit, branch, merge or otherwise change git state; the owner handles that after you finish. Read-only git commands (git status, git diff, git log, git show) are fine.",
+  "- Leave your changes in the files and do not commit, branch, merge or otherwise change git state; the owner handles that after you finish. Read-only git commands (git status, git diff, git log, git show) are fine as a sh code skill.",
+  "- When a check the card needs (tests, a build, a lint) has no code skill yet, save one with save_code_skill and run it: the card's verifier cannot save skills and runs the one you saved.",
   "- When the card is done, reply with a short report of what you changed and how you checked it against the acceptance criteria.",
   "- If you cannot finish, say exactly what is missing; do not claim the card is done.",
 ].join("\n");
 
 const verifierInstructions = [
   "You verify one finished card of a kanban board. Your tools are rooted at the folder holding the card's work; read its files and run its checks, but change nothing.",
-  "- Check every acceptance criterion and every piece of required evidence. Run the project's tests or builds when a criterion depends on them.",
+  "- Check every acceptance criterion and every piece of required evidence. When a criterion depends on tests or a build, run them with the code skill that runs them; when no saved skill covers a check, report it as not run, since you cannot save skills.",
   "- Call record_card_verdict exactly once with your verdict before your final message.",
 ].join("\n");
 
 const goalVerifierInstructions = [
   "You verify a whole Goal branch after every card of its kanban board was integrated, before it merges into the user's branch. Your tools are rooted at a checkout of that branch; read its files and run its checks, but change nothing.",
-  "- Check that the cards together meet the Goal's outcomes and constraints. Run the project's tests or builds.",
+  "- Check that the cards together meet the Goal's outcomes and constraints. Run the project's tests or builds with the code skills that run them; when no saved skill covers a check, report it as not run, since you cannot save skills.",
   "- Call record_card_verdict exactly once with your verdict before your final message.",
 ].join("\n");
 
 const outcomeVerifierInstructions = [
   "You check whether one outcome of a Goal is met, now that every card serving it is done. Your tools are rooted at the Goal's work; read its files and run its checks, but change nothing.",
-  "- Judge the outcome itself, not only the cards' acceptance criteria: the cards are how the outcome was meant to be reached. Run the project's tests or builds when the outcome depends on them.",
+  "- Judge the outcome itself, not only the cards' acceptance criteria: the cards are how the outcome was meant to be reached. When the outcome depends on tests or a build, run them with the code skill that runs them; when no saved skill covers a check, report it as not run, since you cannot save skills.",
   "- Call record_card_verdict exactly once before your final message: passed when the outcome is met, otherwise not passed with what is missing as the reason.",
 ].join("\n");
 
@@ -122,8 +124,9 @@ export const verdictRecorder = Effect.gen(function* () {
   };
 });
 
-const readToolNames = HashSet.fromIterable(["list_files", "search_files", "read_file"]);
-const checkToolNames = HashSet.fromIterable(["run_skill"]);
+/** Only the tools `names` lists, which the planner was told the agent has. */
+const allowed = (names: HashSet.HashSet<string>) => (tools: readonly RunTool[]) =>
+  tools.filter(({ tool }) => HashSet.has(names, tool.name));
 
 const make = Effect.gen(function* () {
   const subagents = yield* Subagents;
@@ -202,9 +205,11 @@ const make = Effect.gen(function* () {
                 runId: boardRunId(run.goalInstanceId, run.card.id, run.attemptNo),
                 selection: chosen,
                 tools: [
-                  ...fileTools.toolsFor(project),
-                  ...outsideTools.toolsFor(project),
-                  ...approvedTools.toolsFor(project, "gate"),
+                  ...allowed(cardAgentToolNames)([
+                    ...fileTools.toolsFor(project),
+                    ...outsideTools.toolsFor(project),
+                    ...approvedTools.toolsFor(project, "gate"),
+                  ]),
                   ...mcp.tools,
                 ],
                 systemPrompts: mcp.systemPrompts,
@@ -266,12 +271,10 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const recorder = yield* verdictRecorder;
           const tools: RunTool[] = [
-            ...fileTools
-              .toolsFor(project)
-              .filter(({ tool }) => HashSet.has(readToolNames, tool.name)),
-            ...approvedTools
-              .toolsFor(project, "gate")
-              .filter(({ tool }) => HashSet.has(checkToolNames, tool.name)),
+            ...allowed(verifierToolNames)([
+              ...fileTools.toolsFor(project),
+              ...approvedTools.toolsFor(project, "gate"),
+            ]),
             ...mcp.tools,
             recorder.runTool,
           ];
