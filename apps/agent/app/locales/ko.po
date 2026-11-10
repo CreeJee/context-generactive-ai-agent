@@ -385,6 +385,10 @@ msgstr "{section}: 오래된 항목은 상한 때문에 빠졌음"
 msgid "{selectedProviderName} 연결이 필요합니다."
 msgstr "{selectedProviderName} 연결이 필요합니다."
 
+#: app/entry/settings/pages/mcp.tsx
+msgid "{serverName} 서버에서 로그아웃할까요?"
+msgstr "{serverName} 서버에서 로그아웃할까요?"
+
 #: app/entry/chat/decision-prompt.tsx
 msgid "{targetBranch}는 보호 브랜치라 자동으로 merge하지 않습니다. PR은 gh가 없어 만들 수 없습니다. Goal 브랜치를 남겨 두었으니 직접 merge해 주십시오."
 msgstr "{targetBranch}는 보호 브랜치라 자동으로 merge하지 않습니다. PR은 gh가 없어 만들 수 없습니다. Goal 브랜치를 남겨 두었으니 직접 merge해 주십시오."
@@ -811,6 +815,10 @@ msgid "GPU(WebGPU)에서 실행 중"
 msgstr "GPU(WebGPU)에서 실행 중"
 
 #: app/entry/settings/pages/web.tsx
+msgid "Kagi API 키를 지울까요?"
+msgstr "Kagi API 키를 지울까요?"
+
+#: app/entry/settings/pages/web.tsx
 msgid "kagi.com/api/keys에서 발급한 키"
 msgstr "kagi.com/api/keys에서 발급한 키"
 
@@ -868,6 +876,10 @@ msgstr "OS 키체인에 저장돼 있습니다. 화면에 다시 보여 주지 �
 #: app/entry/settings/shared.tsx
 msgid "OS 키체인에 접근하지 못했습니다. 키를 다른 곳에 대신 저장하지 않습니다."
 msgstr "OS 키체인에 접근하지 못했습니다. 키를 다른 곳에 대신 저장하지 않습니다."
+
+#: app/entry/settings/pages/web.tsx
+msgid "OS 키체인에서 키를 지우고 웹 검색을 끕니다. 다시 쓰려면 키를 새로 넣어야 합니다."
+msgstr "OS 키체인에서 키를 지우고 웹 검색을 끕니다. 다시 쓰려면 키를 새로 넣어야 합니다."
 
 #. Button that closes the Plan at the user's request
 #: app/entry/chat/board-panel.tsx
@@ -2201,6 +2213,7 @@ msgstr "라이트 모드"
 
 #. Button that signs out of an MCP server
 #. Button that signs the account out and removes it
+#. Dialog button that confirms signing out of an MCP server
 #. Dialog button that confirms signing the account out
 #: app/entry/navigation/account-profiles.tsx
 #: app/entry/settings/pages/mcp.tsx
@@ -4971,6 +4984,10 @@ msgstr "저장하면 보드에 바로 반영되고 작성자가 사용자로 남
 msgid "저장한 API 키도 함께 지웁니다."
 msgstr "저장한 API 키도 함께 지웁니다."
 
+#: app/entry/settings/pages/mcp.tsx
+msgid "저장한 로그인 정보를 지웁니다. 이 서버를 다시 쓰려면 다시 로그인해야 합니다."
+msgstr "저장한 로그인 정보를 지웁니다. 이 서버를 다시 쓰려면 다시 로그인해야 합니다."
+
 #: app/entry/navigation/compatible-accounts.tsx
 msgid "저장할 때 기존 키 삭제"
 msgstr "저장할 때 기존 키 삭제"
@@ -5473,6 +5490,8 @@ msgstr "충족"
 #. Dialog button that cancels
 #. Dialog button that cancels
 #. Dialog button that cancels
+#. Dialog button that cancels
+#. Dialog button that cancels
 #. Dialog button that keeps the task record
 #: app/entry/chat/btw-panel.tsx
 #: app/entry/chat/chat-panel.tsx
@@ -5481,6 +5500,8 @@ msgstr "충족"
 #: app/entry/navigation/account-profiles.tsx
 #: app/entry/navigation/compatible-accounts.tsx
 #: app/entry/navigation/sidebar.tsx
+#: app/entry/settings/pages/mcp.tsx
+#: app/entry/settings/pages/web.tsx
 msgid "취소"
 msgstr "취소"
 
@@ -5715,6 +5736,7 @@ msgid "클립보드를 사용할 수 없습니다. 위 제보 문안에서 텍�
 msgstr "클립보드를 사용할 수 없습니다. 위 제보 문안에서 텍스트를 직접 선택해 복사해 주십시오."
 
 #. Button that deletes the stored Kagi API key
+#. Dialog button that confirms deleting the Kagi API key
 #: app/entry/settings/pages/web.tsx
 msgid "키 삭제"
 msgstr "키 삭제"

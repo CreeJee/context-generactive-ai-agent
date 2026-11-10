@@ -4,6 +4,17 @@ import { runUiEffect, uiPromise } from "../../shared/ui-effect";
 import { isTruthy } from "../../../truthy.ts";
 import { KeyRoundIcon, Trash2Icon } from "lucide-react";
 import { useState } from "react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "~/components/ui/alert-dialog";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import {
@@ -48,6 +59,7 @@ export function KagiSettings() {
   const mutation = useKagiMutation();
   const { data: status } = useKagiQuery();
   const [key, setKey] = useState("");
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
   const busy = mutation.isPending;
   const [error, setError] = useState<string | null>(null);
 
@@ -114,15 +126,43 @@ export function KagiSettings() {
                 <Trans>OS 키체인에 저장돼 있습니다. 화면에 다시 보여 주지 않습니다.</Trans>
               </FieldDescription>
             </FieldContent>
-            <Button
-              variant="ghost-muted"
-              size="sm"
-              disabled={busy}
-              onClick={() => void apply(KagiCommand.remove())}
-            >
-              <Trash2Icon />{" "}
-              <Trans comment="Button that deletes the stored Kagi API key">키 삭제</Trans>
-            </Button>
+            <AlertDialog open={confirmingRemove} onOpenChange={setConfirmingRemove}>
+              <AlertDialogTrigger
+                render={<Button variant="ghost-muted" size="sm" disabled={busy} />}
+              >
+                <Trash2Icon />{" "}
+                <Trans comment="Button that deletes the stored Kagi API key">키 삭제</Trans>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>
+                    <Trans>Kagi API 키를 지울까요?</Trans>
+                  </AlertDialogTitle>
+                  <AlertDialogDescription>
+                    <Trans>
+                      OS 키체인에서 키를 지우고 웹 검색을 끕니다. 다시 쓰려면 키를 새로 넣어야
+                      합니다.
+                    </Trans>
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>
+                    <Trans comment="Dialog button that cancels">취소</Trans>
+                  </AlertDialogCancel>
+                  <AlertDialogAction
+                    variant="destructive"
+                    onClick={() => {
+                      setConfirmingRemove(false);
+                      void apply(KagiCommand.remove());
+                    }}
+                  >
+                    <Trans comment="Dialog button that confirms deleting the Kagi API key">
+                      키 삭제
+                    </Trans>
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </Field>
         </>
       ) : (

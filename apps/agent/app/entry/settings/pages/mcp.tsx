@@ -5,6 +5,17 @@ import { Effect } from "effect";
 import { runUiEffect, uiPromise } from "../../shared/ui-effect";
 import { PlugIcon, RefreshCwIcon } from "lucide-react";
 import { useState } from "react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "~/components/ui/alert-dialog";
 import { Badge } from "~/components/ui/badge";
 import { Button, buttonVariants } from "~/components/ui/button";
 import { FieldDescription, FieldGroup } from "~/components/ui/field";
@@ -268,7 +279,9 @@ function LoginActions({
   busy: boolean;
   run: (command: McpCommand) => Promise<void>;
 }) {
+  const [confirmingLogout, setConfirmingLogout] = useState(false);
   const target = { scope: server.scope, name: server.name };
+  const serverName = server.name;
   if (McpServerState.$is("loggingIn")(server.state))
     return (
       <>
@@ -311,14 +324,39 @@ function LoginActions({
         </Button>
       )}
       {server.signedIn && (
-        <Button
-          size="sm"
-          variant="ghost-muted"
-          disabled={busy}
-          onClick={() => void run(McpCommand.logout(target))}
-        >
-          <Trans comment="Button that signs out of an MCP server">로그아웃</Trans>
-        </Button>
+        <AlertDialog open={confirmingLogout} onOpenChange={setConfirmingLogout}>
+          <AlertDialogTrigger render={<Button size="sm" variant="ghost-muted" disabled={busy} />}>
+            <Trans comment="Button that signs out of an MCP server">로그아웃</Trans>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                <Trans>{serverName} 서버에서 로그아웃할까요?</Trans>
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                <Trans>
+                  저장한 로그인 정보를 지웁니다. 이 서버를 다시 쓰려면 다시 로그인해야 합니다.
+                </Trans>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>
+                <Trans comment="Dialog button that cancels">취소</Trans>
+              </AlertDialogCancel>
+              <AlertDialogAction
+                variant="destructive"
+                onClick={() => {
+                  setConfirmingLogout(false);
+                  void run(McpCommand.logout(target));
+                }}
+              >
+                <Trans comment="Dialog button that confirms signing out of an MCP server">
+                  로그아웃
+                </Trans>
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       )}
     </>
   );
