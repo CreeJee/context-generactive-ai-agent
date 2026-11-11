@@ -115,6 +115,15 @@ export const defaultTestResponder = (invocation: ScriptedInvocation): ScriptedTu
       )
     )
       return { text: "not json at all" };
+    // The provider fails the call, as when it is down or the call times out.
+    if (
+      isTruthy(
+        input.statements?.some((statement: { text: string }) =>
+          statement.text.includes("[failing-call-interpret]"),
+        ),
+      )
+    )
+      return { failAfterText: "provider unavailable" };
     const statements = (input.statements ?? []).map(
       (statement: {
         id: string;

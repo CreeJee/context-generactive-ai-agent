@@ -2855,6 +2855,13 @@ export const migrations: readonly string[] = [
     CHECK ((scope = 'global') = (project_id = ''))
   );
   `,
+  `
+  -- How many times an interpretation job whose model call failed was put back in the queue after a
+  -- later model call answered (memory/interpret.ts, at most 3). Jobs that failed before this
+  -- version count as used up: only the retry button in the memory settings puts them back.
+  ALTER TABLE interpret_jobs ADD COLUMN automatic_retries INTEGER NOT NULL DEFAULT 0;
+  UPDATE interpret_jobs SET automatic_retries = 3 WHERE status = 'failed';
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

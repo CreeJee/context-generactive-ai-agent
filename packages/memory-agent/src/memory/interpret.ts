@@ -73,6 +73,12 @@ const batchSize = 8;
 /** Batches per run, so a backlog never keeps the model busy for long. */
 const batchesPerRun = 5;
 const maxAttempts = 3;
+/**
+ * How many times a job that ran out of attempts because its model call failed is put back in the
+ * queue once a later model call answers; each time it gets one more try. Bounded, so a batch that
+ * always times out stops costing model calls (the `automatic_retries` migration writes this too).
+ */
+const maxAutomaticRetries = 3;
 const candidatesPerStatement = 10;
 const statementCharacters = 2_000;
 const candidateCharacters = 500;
@@ -131,6 +137,15 @@ const make = Effect.gen(function* () {
   const markFailed = (nodeId: string, error: string, now: string) => sql`
     UPDATE interpret_jobs SET status = CASE WHEN attempts >= ${maxAttempts} THEN 'failed' ELSE 'pending' END,
     error = ${error}, updated_at = ${now} WHERE node_id = ${nodeId} AND status = 'running'`;
+  // Only statements a run would pick up: a hidden or blank node's job would wait forever.
+  const isMeaningful = sql.literal(`EXISTS (SELECT 1 FROM nodes n
+    WHERE n.id = interpret_jobs.node_id AND ${meaningfulNodeFilter})`);
+  /** A model call answered, so model calls that failed before may work now. */
+  const requeueModelCallFailures = (now: string) => sql`
+    UPDATE interpret_jobs SET status = 'pending', automatic_retries = automatic_retries + 1,
+      updated_at = ${now}
+    WHERE status = 'failed' AND error = 'model_call_failed'
+      AND automatic_retries < ${maxAutomaticRetries} AND ${isMeaningful}`;
   const earlierInSession = SqlSchema.findAll({
     Request: Schema.Struct({ sessionId: Schema.String, seq: Schema.Finite }),
     Result: NodeRow,
@@ -289,6 +304,8 @@ const make = Effect.gen(function* () {
             ),
         }),
       );
+      // The model answered, so jobs that failed only because a model call failed get another try.
+      yield* requeueModelCallFailures(yield* nowIso);
       const labelled = yield* Effect.fromOption(
         decodeAnswer(answer.text.match(/\{[\s\S]*\}/)?.[0] ?? ""),
         () => InterpretationFailed.make({ reason: "unreadable_answer" }),
@@ -396,7 +413,8 @@ const make = Effect.gen(function* () {
      * Interprets pending statements in the background: topics, and corrections, retractions and
      * related statements among earlier ones. Needs a signed-in account and a selected model; without
      * them it does nothing and the jobs wait. Failures are retried a few times, then left failed;
-     * search keeps working either way.
+     * search keeps working either way. A job left failed because its model call failed is queued
+     * again when a later model call answers, a bounded number of times.
      */
     runPending: Effect.gen(function* () {
       const selection = yield* active.selected;

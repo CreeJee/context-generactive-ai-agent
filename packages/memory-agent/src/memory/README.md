@@ -54,6 +54,7 @@
 - Interpreter는 시작할 때 `running` 작업을 `pending`으로 되돌리고, assistant 노드의 pending 작업을 지운다. 사용자 발화만 해석한다. 삭제는 `EXISTS`로 조회한다. `IN (SELECT ...)` 전체 스캔이 네이티브 인덱스의 시작 deadline을 넘겨 event loop를 막았기 때문이다
 - Interpreter의 배치 순서: 생성 시각(`created_at`)이 가장 늦은 pending 발화의 세션을 먼저 고르고, 그 세션 안에서는 seq 오름차순으로 처리한다. 세션 선택에는 seq 순서를 쓰지 않는다. 고정값은 batchSize 8, 실행당 5배치, 최대 3회 시도, 모델 호출 타임아웃 90초다. `Semaphore(1)`로 실행은 한 번에 하나만 돈다
 - 해석 후보는 seq와 `createdAt`이 모두 앞선 user·assistant 노드로 한정한다. 검색도 `beforeSeq`로 그 발화 전에 저장된 노드만 찾아, 나중 노드가 후보 자리를 차지하지 않는다. 모델이 돌려준 link는 그 발화에 제시한 후보 id만 인정한다. 후보가 없는 발화는 모델을 부르지 않고 done으로 표시한다
+- 모델 호출이 실패해(`model_call_failed`) `failed`가 된 작업은 뒤의 모델 호출이 답을 받으면 `pending`으로 돌아간다. 작업마다 3번까지(`automatic_retries`)이고, 시도 수는 그대로라 돌아갈 때마다 한 번만 더 시도한다. 답을 읽지 못한 실패는 자동으로 돌리지 않는다
 - 모델 답은 문장마다 따로 읽는다. 답 전체가 JSON이 아니면 배치 전체가 `unreadable_answer`로 실패하지만, 한 문장의 모양만 틀리면 그 문장만 `unreadable_answer`로, 답에 없는 문장은 `missing_from_answer`로 실패하고 나머지는 기록된다
 - 해석 프롬프트는 발화 안의 텍스트를 데이터로 다루고, 그 안의 지시를 따르지 않는다. corrects·retracts는 user 발화만 할 수 있다
 - API 사용량(`memory-interpretation`)은 세션이 있는 발화에 대해서만 기록한다

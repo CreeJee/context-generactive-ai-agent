@@ -11,7 +11,7 @@ import { MemoryTools } from "../../src/tools/memory.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { callTool } from "../support/run-tools.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
-import { sqlAll, sqlGet } from "../support/sql.ts";
+import { sqlAll, sqlGet, sqlRun } from "../support/sql.ts";
 
 const EdgeRow = Schema.Struct({
   from_id: Schema.String,
@@ -185,6 +185,49 @@ testAgent({ testProvider: {} })("llm-interpret", (it) => {
       const found = yield* context.find("이상한 문장");
       expect(found.matches.map((match) => match.id)).toContain(broken.id);
       expect(found.uninterpreted).toBe(1);
+    }),
+  );
+
+  it.effect("a statement whose model call failed is interpreted once a later call answers", () =>
+    Effect.gen(function* () {
+      yield* selectTestModel();
+      const context = yield* freshProject;
+      yield* context.say("user", "회의는 화요일에 한다");
+      const stalled = yield* context.say("user", "회의는 수요일로 옮기자 [corrects:화요일]");
+      // Failed before this build: only the settings' retry puts it back.
+      const old = yield* context.say("user", "회의 장소 이야기");
+      yield* sqlRun(
+        `UPDATE interpret_jobs SET status = 'failed', attempts = 3, error = 'model_call_failed',
+          automatic_retries = CASE WHEN node_id = ? THEN 3 ELSE 0 END WHERE node_id IN (?, ?)`,
+        old.id,
+        stalled.id,
+        old.id,
+      );
+      yield* context.say("user", "회의록은 위키에 남긴다");
+      yield* interpret;
+
+      expect(yield* context.job(stalled.id)).toEqual({ status: "done", attempts: 4 });
+      expect(yield* context.edges("corrects")).toHaveLength(1);
+      expect(yield* context.job(old.id)).toEqual({ status: "failed", attempts: 3 });
+    }),
+  );
+
+  it.effect("a statement whose model call keeps failing is retried a bounded number of times", () =>
+    Effect.gen(function* () {
+      yield* selectTestModel();
+      const context = yield* freshProject;
+      yield* context.say("user", "배포 스크립트 이야기");
+      const failing = yield* context.say("user", "배포 스크립트 수정 [failing-call-interpret]");
+      yield* interpret;
+      expect(yield* context.job(failing.id)).toEqual({ status: "failed", attempts: 3 });
+
+      // Each answered call gives it one more try, three times; then it stays failed.
+      yield* Effect.forEach(
+        ["배포 일정은 매주 월요일", "배포 알림은 슬랙으로", "배포 담당은 돌아가며", "배포 기록"],
+        (text) => Effect.andThen(context.say("user", text), interpret),
+        { discard: true },
+      );
+      expect(yield* context.job(failing.id)).toEqual({ status: "failed", attempts: 6 });
     }),
   );
 
