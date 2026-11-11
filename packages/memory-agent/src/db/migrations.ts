@@ -2862,6 +2862,15 @@ export const migrations: readonly string[] = [
   ALTER TABLE interpret_jobs ADD COLUMN automatic_retries INTEGER NOT NULL DEFAULT 0;
   UPDATE interpret_jobs SET automatic_retries = 3 WHERE status = 'failed';
   `,
+  `
+  -- A card that conflicts with the Goal branch resolves the merge in its own worktree instead of
+  -- being replaced by a resolution card. conflict_rounds counts the conflicts it was sent to
+  -- resolve since it last joined the Goal branch or a person answered (kanban/orchestrator.ts).
+  -- Resolution cards already on a board stay ordinary cards.
+  ALTER TABLE kanban_cards ADD COLUMN conflict_rounds INTEGER NOT NULL DEFAULT 0
+    CHECK (conflict_rounds >= 0);
+  ALTER TABLE kanban_cards DROP COLUMN resolution_of;
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

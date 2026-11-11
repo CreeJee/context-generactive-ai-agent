@@ -140,6 +140,8 @@ export const CardWorktreeFailedReason = Schema.TaggedUnion({
   InUse: {},
   /** The Goal branch moved past the card branch; sync the card first and verify again. */
   GoalAdvanced: {},
+  /** Files the Goal branch merge left conflicted still carry conflict markers; nothing was committed. */
+  ConflictUnresolved: {},
   /** The branch the Goal merges into no longer exists. */
   TargetMissing: {},
   GitFailed: { exitCode: Schema.NullOr(Schema.Finite) },
@@ -157,6 +159,7 @@ export const cardWorktreeFailedReasonName = CardWorktreeFailedReason.match({
   WorktreeDirty: () => "WorktreeDirty" as const,
   InUse: () => "InUse" as const,
   GoalAdvanced: () => "GoalAdvanced" as const,
+  ConflictUnresolved: () => "ConflictUnresolved" as const,
   TargetMissing: () => "TargetMissing" as const,
   GitFailed: () => "GitFailed" as const,
 });
@@ -183,7 +186,10 @@ export class CardWorktreeFailed extends Schema.TaggedError<
   cause: Schema.optional(Schema.Defect()),
 }) {}
 
-/** Merging the Goal branch into the card stopped on conflicts; nothing was resolved automatically. */
+/**
+ * Merging the Goal branch into the card stopped on conflicts. The merge stays in the card's
+ * worktree, with conflict markers in `files`, for the card to resolve.
+ */
 export class CardIntegrationConflict extends Schema.TaggedError<
   CardIntegrationConflict,
   { readonly brand: unique symbol }
@@ -219,15 +225,20 @@ export interface CardWorkspace {
     card: CardRef,
     disposition: WorktreeDisposition,
   ) => Effect.Effect<WorktreeSettlement, CardWorktreeFailed>;
-  /** Commits the card's uncommitted work, for verify and integration to see; none when there was nothing. */
+  /**
+   * Commits the card's uncommitted work, for verify and integration to see; none when there was
+   * nothing. A merge left by {@link CardWorkspace.syncWithGoal} is committed as the merge once its
+   * conflicts are resolved; `ConflictUnresolved` while markers remain.
+   */
   readonly commitWork: (
     card: CardRef,
     message: string,
   ) => Effect.Effect<Option.Option<string>, CardWorktreeFailed>;
   /**
    * Brings Goal branch changes made since the card started into the card. Conflicts are reported
-   * by file and nothing is resolved automatically; the caller decides what happens next. A
-   * `Merged` card must be verified again before {@link CardWorkspace.squashIntoGoal}.
+   * by file and left in the worktree as an unfinished merge; nothing is resolved automatically and
+   * the caller decides who resolves them. A `Merged` card must be verified again before
+   * {@link CardWorkspace.squashIntoGoal}.
    */
   readonly syncWithGoal: (
     card: CardRef,
@@ -241,8 +252,6 @@ export interface CardWorkspace {
     card: CardRef,
     title: string,
   ) => Effect.Effect<CardIntegration, CardWorktreeFailed>;
-  /** Where a card's work stays once it leaves the board, told to the card that re-applies it. */
-  readonly earlierWork: (card: CardRef) => string;
 }
 
 /** Card worktrees together with the Goal branch they join and its way into the user's branch. */
@@ -335,7 +344,6 @@ export const sequentialWorkspace: CardWorkspace = {
   commitWork: () => Effect.succeedNone,
   syncWithGoal: () => Effect.succeed(GoalSync.UpToDate()),
   squashIntoGoal: () => Effect.succeed(CardIntegration.NoChanges()),
-  earlierWork: () => "Its changes are in the project as it is now.",
 };
 
 /** Where a Goal's cards run, by the mode its board started in. */

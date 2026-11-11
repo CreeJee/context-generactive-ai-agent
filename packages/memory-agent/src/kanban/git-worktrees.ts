@@ -1,4 +1,5 @@
 import {
+  Array as Arr,
   Duration,
   Effect,
   FileSystem,
@@ -432,7 +433,14 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
     );
   });
 
-  /** Commits everything in the worktree to the card branch; none when there was nothing to commit. */
+  /** Whether a merge waits in the worktree for its commit. */
+  const merging = (operation: Operation, worktree: string) =>
+    Effect.map(revision(operation, worktree, "MERGE_HEAD"), Option.isSome);
+
+  /**
+   * Commits everything in the worktree to the card branch; none when there was nothing to commit. A
+   * merge in progress is committed as the merge, even when its result equals HEAD.
+   */
   const commitIn = (operation: Operation, worktree: GitWorktree, message: string) =>
     Effect.when(
       Effect.gen(function* () {
@@ -447,8 +455,33 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
         ]).pipe(Effect.uninterruptible);
         return yield* expect(operation, worktree.path, ["rev-parse", "HEAD"]);
       }),
-      Effect.map(isClean(operation, worktree.path), (clean) => !clean),
+      Effect.flatMap(isClean(operation, worktree.path), (clean) =>
+        clean ? merging(operation, worktree.path) : Effect.succeed(true),
+      ),
     );
+
+  /** Files a merge left conflicted that still carry conflict markers. */
+  const unresolved = Effect.fnUntraced(function* (operation: Operation, worktree: string) {
+    const conflicted = lines(
+      yield* expect(operation, worktree, ["diff", "--name-only", "--diff-filter=U"]),
+    );
+    if (conflicted.length === 0) return [];
+    // git grep exits 1 when no file matches.
+    const found = yield* run(operation, worktree, [
+      "grep",
+      "-l",
+      "-E",
+      "-e",
+      "^(<<<<<<<|>>>>>>>)( |$)",
+      "--",
+      ...conflicted,
+    ]);
+    return yield* Match.value(found.exitCode).pipe(
+      Match.when(0, () => Effect.succeed(lines(found.stdout))),
+      Match.when(1, () => Effect.succeed([])),
+      Match.orElse((exitCode) => fail(operation, reasons.GitFailed.make({ exitCode }))),
+    );
+  });
 
   const cardKey = (card: CardRef) => `card:${card.goalInstanceId}/${card.cardId}`;
   const goalKey = (goal: GoalRef) => `goal:${goal.goalInstanceId}`;
@@ -607,12 +640,21 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
       return yield* serially(
         cardKey(card),
         Effect.flatMap(presentWorktree("commit", card), (worktree) =>
-          commitIn("commit", worktree, message),
+          Effect.andThen(
+            Effect.when(
+              fail("commit", reasons.ConflictUnresolved.make({})),
+              Effect.map(unresolved("commit", worktree.path), Arr.isReadonlyArrayNonEmpty),
+            ),
+            commitIn("commit", worktree, message),
+          ),
         ),
       );
     }),
 
-    /** The Goal branch comes in with a merge commit; a conflicted merge is aborted. */
+    /**
+     * The Goal branch comes in with a merge commit. A conflicted merge stays in the worktree for
+     * the card to resolve; one that failed otherwise is aborted.
+     */
     syncWithGoal: Effect.fn("CardWorktrees.syncWithGoal")(function* (card: CardRef) {
       return yield* serially(
         goalKey(card),
@@ -645,9 +687,11 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
             const files = lines(
               yield* expect("sync", worktree.path, ["diff", "--name-only", "--diff-filter=U"]),
             );
-            yield* expect("sync", worktree.path, ["merge", "--abort"]).pipe(Effect.uninterruptible);
             return yield* files.length === 0
-              ? fail("sync", reasons.GitFailed.make({ exitCode: merged.exitCode }))
+              ? Effect.andThen(
+                  expect("sync", worktree.path, ["merge", "--abort"]).pipe(Effect.uninterruptible),
+                  fail("sync", reasons.GitFailed.make({ exitCode: merged.exitCode })),
+                )
               : Effect.fail(
                   CardIntegrationConflict.make({
                     goalInstanceId: card.goalInstanceId,
@@ -725,10 +769,6 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
         ),
       );
     }),
-
-    /** Cancelled and conflicting cards keep their branch; git can read it from any worktree. */
-    earlierWork: (card: CardRef) =>
-      `Its work is on branch ${cardBranchName(card.goalInstanceId, card.cardId)}; read it with read-only git commands (git diff, git show).`,
 
     currentBranch: Effect.fn("CardWorktrees.currentBranch")(function* (projectRoot: string) {
       const output = yield* run("goal_branch", projectRoot, [

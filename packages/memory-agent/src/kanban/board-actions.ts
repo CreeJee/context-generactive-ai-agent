@@ -720,7 +720,7 @@ const make = Effect.gen(function* () {
           reason: ladder.reason,
           failures: ladder.failureStreak,
           replans: ladder.replans,
-          resolutionOf: ladder.resolutionOf,
+          conflictRounds: ladder.conflictRounds,
         };
       });
       return Option.some<KanbanBoardView>({

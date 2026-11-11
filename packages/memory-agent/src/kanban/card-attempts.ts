@@ -101,7 +101,11 @@ export interface CardLadder {
   /** Clock milliseconds before which the card is not assigned again. */
   readonly notBefore: number | null;
   readonly reason: CardHoldReason | null;
-  readonly resolutionOf: string | null;
+  /**
+   * Goal branch conflicts the card was sent to resolve in its worktree since it last joined the
+   * Goal branch or a person answered about one.
+   */
+  readonly conflictRounds: number;
   /** Changes applied to the card that its next attempt is told about. */
   readonly notes: readonly string[];
 }
@@ -167,7 +171,7 @@ const CardRow = Schema.Struct({
   generation: Schema.Int,
   not_before: Schema.NullOr(Schema.Finite),
   reason: Schema.NullOr(Schema.fromJsonString(CardHoldReason)),
-  resolution_of: Schema.NullOr(Schema.String),
+  conflict_rounds: Schema.Int,
   notes_json: Schema.fromJsonString(Schema.Array(Schema.String)),
 });
 const GoalCardRow = Schema.Struct({ card_id: Schema.String, ...CardRow.fields });
@@ -219,7 +223,7 @@ const freshLadder: CardLadder = {
   generation: 1,
   notBefore: null,
   reason: null,
-  resolutionOf: null,
+  conflictRounds: 0,
   notes: [],
 };
 const toLadder = (row: typeof CardRow.Type): CardLadder => ({
@@ -228,7 +232,7 @@ const toLadder = (row: typeof CardRow.Type): CardLadder => ({
   generation: row.generation,
   notBefore: row.not_before,
   reason: row.reason,
-  resolutionOf: row.resolution_of,
+  conflictRounds: row.conflict_rounds,
   notes: row.notes_json,
 });
 
@@ -282,8 +286,8 @@ const make = Effect.gen(function* () {
     );
 
   const ladder = (goalInstanceId: string, cardId: string) =>
-    sql`SELECT failure_streak, replans, generation, not_before, reason, resolution_of, notes_json
-        FROM kanban_cards WHERE goal_instance_id = ${goalInstanceId} AND card_id = ${cardId}`.pipe(
+    sql`SELECT failure_streak, replans, generation, not_before, reason, conflict_rounds,
+        notes_json FROM kanban_cards WHERE goal_instance_id = ${goalInstanceId} AND card_id = ${cardId}`.pipe(
       rows(CardRow),
       Effect.map((found) =>
         Option.match(Option.fromUndefinedOr(found[0]), {
@@ -510,8 +514,8 @@ const make = Effect.gen(function* () {
      * fresh. A board's look reads them all.
      */
     ladders: (goalInstanceId: string) =>
-      sql`SELECT card_id, failure_streak, replans, generation, not_before, reason, resolution_of,
-          notes_json FROM kanban_cards WHERE goal_instance_id = ${goalInstanceId}`.pipe(
+      sql`SELECT card_id, failure_streak, replans, generation, not_before, reason,
+          conflict_rounds, notes_json FROM kanban_cards WHERE goal_instance_id = ${goalInstanceId}`.pipe(
         rows(GoalCardRow),
         Effect.map((found) => {
           const stored = HashMap.fromIterable(
@@ -534,13 +538,13 @@ const make = Effect.gen(function* () {
       const reason = yield* encodeReason(next.reason).pipe(Effect.mapError(unencoded("card")));
       yield* sql`INSERT INTO kanban_cards
           (goal_instance_id, card_id, failure_streak, replans, generation, not_before, reason,
-           resolution_of, notes_json)
+           conflict_rounds, notes_json)
           VALUES (${goalInstanceId}, ${cardId}, ${next.failureStreak}, ${next.replans},
-            ${next.generation}, ${next.notBefore}, ${reason}, ${next.resolutionOf}, ${notes})
+            ${next.generation}, ${next.notBefore}, ${reason}, ${next.conflictRounds}, ${notes})
           ON CONFLICT(goal_instance_id, card_id) DO UPDATE SET
             failure_streak = excluded.failure_streak, replans = excluded.replans,
             generation = excluded.generation, not_before = excluded.not_before,
-            reason = excluded.reason, resolution_of = excluded.resolution_of,
+            reason = excluded.reason, conflict_rounds = excluded.conflict_rounds,
             notes_json = excluded.notes_json`.pipe(Effect.mapError(failed("card")));
       return next;
     }),

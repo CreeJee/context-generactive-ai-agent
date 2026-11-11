@@ -86,7 +86,7 @@ type BoardAuthor =
 3. verify를 통과한 카드는 Goal 브랜치에 하나씩 통합한다. 통합은 owner에서 직렬로 한다.
    - 그사이 다른 카드가 Goal 브랜치를 앞으로 옮겼으면, 먼저 Goal 브랜치를 카드 브랜치에 merge하고 카드의 Evidence를 다시 확인한다.
    - 그다음 카드 하나를 squash commit 하나로 Goal 브랜치에 올린다. 카드와 commit이 1:1이라 되돌리기 쉽다.
-   - 충돌은 자동으로 풀지 않는다. 오케스트레이터가 해결 카드를 새로 만들거나 `human_decision`으로 보낸다.
+   - 충돌한 merge는 카드 worktree에 남기고, 같은 카드의 다음 시도가 충돌을 푼다. owner가 그 결과를 merge commit으로 커밋하고 다시 verify한다. 연달아 3번 풀었는데 또 충돌하면 `human_decision`으로 보낸다(2026-11-11, decisions.md "카드가 Goal 브랜치와 충돌하면 그 카드가 자기 worktree에서 merge를 푼다").
 4. 카드가 모두 `done`이고 검증자가 Goal outcome을 모두 met으로 판정하면 Goal 브랜치에서 Goal 수준 통합 검증을 한다. 남은 outcome이 있으면 merge하지 않고 계획자가 카드를 더한다. merge가 일을 넘기면(merge됨, 수동 merge, PR 생성) Goal과 Plan이 함께 완료된다. worktree가 없는 Goal은 outcome이 모두 met일 때 바로 완료된다(2026-11-09, decisions.md "outcome 장부와 이어 쓰는 Plan").
 5. 통합 검증을 통과하면 Goal을 시작한 사용자 브랜치에 자동으로 merge한다(확정 2026-10-18). 예외: 대상이 보호 브랜치(프로젝트 설정, 기본 `main`·`staging`)면 자동 merge하지 않고 `human_decision`에서 PR 생성이나 수동 merge를 고른다.
    - 같은 대상 브랜치로 가는 merge는 owner가 대상 브랜치별로 하나씩 처리한다(merge queue).

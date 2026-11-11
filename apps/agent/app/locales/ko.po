@@ -750,6 +750,10 @@ msgstr "Goal 브랜치에 두 브랜치 어디에도 없는 커밋이 있어 대
 msgid "Goal 브랜치와 충돌: {files}"
 msgstr "Goal 브랜치와 충돌: {files}"
 
+#: app/entry/chat/board/hold-reason.ts
+msgid "Goal 브랜치와 충돌한 파일에 아직 풀지 않은 충돌이 남아 있습니다"
+msgstr "Goal 브랜치와 충돌한 파일에 아직 풀지 않은 충돌이 남아 있습니다"
+
 #: app/entry/chat/chat-panel.tsx
 msgid "Goal 상태를 바꾸지 못했습니다."
 msgstr "Goal 상태를 바꾸지 못했습니다."
@@ -5768,10 +5772,6 @@ msgstr "출처 추적"
 msgid "충돌로 자동 merge를 멈췄습니다"
 msgstr "충돌로 자동 merge를 멈췄습니다"
 
-#: app/entry/chat/decision-prompt.tsx
-msgid "충돌한 파일: {files}"
-msgstr "충돌한 파일: {files}"
-
 #. Goal outcome status: a verifier found it met
 #: app/entry/chat/outcome-checklist.tsx
 msgid "충족"
@@ -5902,6 +5902,10 @@ msgstr "카드가 모두 끝난 뒤 merge합니다"
 #: app/entry/chat/board/board-surface.tsx
 msgid "카드가 지금 Goal에 없는 결과를 가리킵니다. 최신 Goal을 다시 확인해 주십시오."
 msgstr "카드가 지금 Goal에 없는 결과를 가리킵니다. 최신 Goal을 다시 확인해 주십시오."
+
+#: app/entry/chat/decision-prompt.tsx
+msgid "카드가 충돌을 여러 번 풀었지만 Goal 브랜치와 다시 충돌했습니다. 카드 작업 폴더에 merge가 진행 중인 채로 남아 있습니다. 충돌한 파일: {files}"
+msgstr "카드가 충돌을 여러 번 풀었지만 Goal 브랜치와 다시 충돌했습니다. 카드 작업 폴더에 merge가 진행 중인 채로 남아 있습니다. 충돌한 파일: {files}"
 
 #: app/entry/chat/board/kanban-board.tsx
 msgid "카드를 옮기려면 스페이스나 엔터를 눌러 집은 뒤 화살표 키로 옮기고 스페이스나 엔터로 놓습니다. Esc를 누르면 취소합니다."

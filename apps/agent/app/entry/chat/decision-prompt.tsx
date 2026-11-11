@@ -36,7 +36,7 @@ export function describeDecision(kind: DecisionKind): {
     }),
     IntegrationConflict: ({ files }) => ({
       title: msg`Goal 브랜치 통합 충돌`,
-      detail: msg`충돌한 파일: ${ph({ files: files.join(", ") })}`,
+      detail: msg`카드가 충돌을 여러 번 풀었지만 Goal 브랜치와 다시 충돌했습니다. 카드 작업 폴더에 merge가 진행 중인 채로 남아 있습니다. 충돌한 파일: ${ph({ files: files.join(", ") })}`,
     }),
     ImpactUnclear: ({ fromGoalVersion, toGoalVersion }) => ({
       title: msg`Goal 변경의 영향 판단`,

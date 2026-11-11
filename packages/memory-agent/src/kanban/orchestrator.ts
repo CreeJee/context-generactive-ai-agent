@@ -54,7 +54,6 @@ import {
   type CardRunPayload,
 } from "./card-queue.ts";
 import { PersistedQueueItems } from "./persisted-queue-store.ts";
-import { boardOps } from "./board-ops.ts";
 import {
   cardWorkspace,
   CardWorktrees,
@@ -77,7 +76,7 @@ import {
   CardFailure,
   CardHoldReason,
   failureCode,
-  verifierNote,
+  failureNote,
   worktreeFailure,
 } from "./failures.ts";
 import { loopStopped } from "../runtime/loop-health.ts";
@@ -156,6 +155,12 @@ const failureStep = (ladder: CardLadder, backoff: Duration.Duration): FailureSte
         ? FailureStep.Replan()
         : FailureStep.HumanDecision();
 
+/**
+ * Goal branch conflicts a card resolves in its own worktree in a row; the next one goes to a
+ * person. The same count as the verification rounds of a Goal branch that keeps moving.
+ */
+const conflictRoundsBeforePerson = 3;
+
 /** Two cards' expected files overlap when one boundary is the other or lies below it. */
 const boundariesOverlap = (left: PlanStep, right: PlanStep) =>
   overlappingBoundaries(left, right).length > 0;
@@ -227,7 +232,6 @@ const make = (options: KanbanOrchestratorOptions) =>
   Effect.gen(function* () {
     const attempts = yield* CardAttempts;
     const workflows = yield* Workflows;
-    const ops = boardOps(workflows);
     const worktrees = yield* CardWorktrees;
     const verifier = yield* CardVerifier;
     const runs = yield* CardRuns;
@@ -415,7 +419,7 @@ const make = (options: KanbanOrchestratorOptions) =>
       const ladder = yield* attempts.updateLadder(goal.goalInstanceId, cardId, (current) => ({
         ...current,
         failureStreak: current.failureStreak + 1,
-        notes: [...current.notes, ...verifierNote(failure)],
+        notes: [...current.notes, ...failureNote(failure)],
       }));
       const step = failureStep(ladder, backoff);
       const now = yield* Clock.currentTimeMillis;
@@ -489,7 +493,7 @@ const make = (options: KanbanOrchestratorOptions) =>
           }),
         );
 
-    /** A resolution card that conflicts again goes to a person. */
+    /** A card that keeps conflicting goes to a person, with the last merge left in its worktree. */
     const askAboutConflict = Effect.fnUntraced(function* (
       goal: KanbanGoal,
       card: PlanStep,
@@ -514,46 +518,41 @@ const make = (options: KanbanOrchestratorOptions) =>
     });
 
     /**
-     * A conflicting card is re-applied by a resolution card on the current Goal branch, which takes
-     * its place in the Plan.
+     * The card's next attempt resolves the merge the sync left in its worktree; a note tells its
+     * agent which files conflict. The owner commits the resolved merge when the attempt finishes.
      */
-    const addResolutionCard = Effect.fnUntraced(function* (
+    const resolveInWorktree = Effect.fnUntraced(function* (
       goal: KanbanGoal,
       card: PlanStep,
       files: readonly string[],
     ) {
       const listed = files.join(", ");
-      const author = loopAuthor(goal.goalInstanceId);
-      const resolution = yield* ops.addCard(
-        goal.sessionId,
-        {
-          // Trimmed so the draft satisfies CardText: a stored title may carry edge whitespace.
-          title: `Resolve conflicts: ${card.title.trim()}`,
-          description: `Card ${card.id} could not join the Goal branch because ${listed} changed there too. Re-apply its change on the current Goal branch. ${workspace(goal).earlierWork(cardRef(goal, card.id))} Do not commit; the owner commits your work.\n\n${card.description}`,
-          dependsOn: card.dependsOn,
-          acceptanceCriteria: card.acceptanceCriteria,
-          ...Struct.pick(card, ["outcomes", "boundaries", "requiredEvidence"]),
-        },
-        author,
-      );
-      if (Option.isNone(resolution)) return;
-      yield* attempts.updateLadder(goal.goalInstanceId, resolution.value.id, (current) => ({
+      yield* attempts.updateLadder(goal.goalInstanceId, card.id, (current) => ({
         ...current,
-        resolutionOf: card.id,
+        conflictRounds: current.conflictRounds + 1,
+        notes: [
+          ...current.notes,
+          `The Goal branch changed while you worked. It is now being merged into your worktree and conflicts in ${listed}. Resolve the conflict markers in those files so that both your change and the Goal branch's are kept, then check that the card's work still holds. Do not commit or abort the merge; the owner commits it.`,
+        ],
       }));
-      // The conflicting card's branch stays as the resolution card's reference.
-      yield* ops.replaceCards(goal.sessionId, [card.id], [resolution.value.id], author);
-      yield* workspace(goal).settle(cardRef(goal, card.id), WorktreeDisposition.Cancelled());
+      yield* move(
+        goal,
+        card.id,
+        "verify",
+        "ready",
+        `card ${card.id} conflicts with the Goal branch in ${listed}; resolving it in the card`,
+      );
     });
 
+    /** A conflicting card resolves the merge itself, until it has done so too often in a row. */
     const resolveConflict = Effect.fnUntraced(function* (
       goal: KanbanGoal,
       card: PlanStep,
       files: readonly string[],
     ) {
       const ladder = yield* attempts.ladder(goal.goalInstanceId, card.id);
-      return yield* ladder.resolutionOf === null
-        ? addResolutionCard(goal, card, files)
+      return yield* ladder.conflictRounds < conflictRoundsBeforePerson
+        ? resolveInWorktree(goal, card, files)
         : askAboutConflict(goal, card, files);
     });
 
@@ -597,6 +596,7 @@ const make = (options: KanbanOrchestratorOptions) =>
               yield* attempts.updateLadder(goal.goalInstanceId, cardId, (current) => ({
                 ...current,
                 failureStreak: 0,
+                conflictRounds: 0,
                 reason: null,
               }));
               return true;
@@ -787,18 +787,43 @@ const make = (options: KanbanOrchestratorOptions) =>
             Match.when("stop", () => Effect.void),
             Match.exhaustive,
           ),
-        IntegrationConflict: ({ choice }) =>
-          Match.value(choice).pipe(
-            // The card is in verify again; the loop verifies and integrates it.
-            Match.when("resolved", () => resume(null)),
+        IntegrationConflict: ({ choice }) => {
+          // After a person's answer the card's next conflict is its own to resolve again.
+          const resumeConflicted = (note: string | null) =>
+            Effect.andThen(
+              resume(note),
+              attempts.updateLadder(goal.goalInstanceId, request.cardId, (current) => ({
+                ...current,
+                conflictRounds: 0,
+              })),
+            );
+          return Match.value(choice).pipe(
+            // The card is in verify again. The person's resolution is committed as the merge,
+            // and the loop verifies and integrates it; markers left over go back to the card.
+            Match.when("resolved", () =>
+              Effect.andThen(
+                resumeConflicted(null),
+                workspace(goal)
+                  .commitWork(
+                    cardRef(goal, request.cardId),
+                    "Conflicts with the Goal branch resolved by a person",
+                  )
+                  .pipe(
+                    Effect.catchTag("CardWorktreeFailed", (failure) =>
+                      failCard(goal, request.cardId, "verify", worktreeFailure(failure)),
+                    ),
+                  ),
+              ),
+            ),
             Match.when("rework", () =>
-              resume(
-                "A person asked to rework this card because it conflicted with the Goal branch. Re-apply its change on the current Goal branch.",
+              resumeConflicted(
+                "A person asked to rework this card because it conflicted with the Goal branch. If a merge of the Goal branch is still in progress in your worktree, resolve its conflicts; otherwise re-apply the card's change on the current Goal branch.",
               ),
             ),
             Match.when("stop", () => Effect.void),
             Match.exhaustive,
-          ),
+          );
+        },
         ImpactUnclear: ({ choice }) =>
           Match.value(choice).pipe(
             Match.when("continue", () => resume(null)),

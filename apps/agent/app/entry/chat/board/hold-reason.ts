@@ -37,6 +37,7 @@ const worktreeFailureTexts: Readonly<
   Partial<Record<typeof WorktreeFailureReason.Type, MessageDescriptor>>
 > = {
   WorktreeDirty: msg`카드 작업 폴더에 정리되지 않은 변경이 있습니다`,
+  ConflictUnresolved: msg`Goal 브랜치와 충돌한 파일에 아직 풀지 않은 충돌이 남아 있습니다`,
   InUse: msg`카드 작업 폴더를 다른 실행이 쓰고 있습니다`,
   GitFailed: msg`git 명령이 실패했습니다`,
 };

@@ -153,6 +153,21 @@ const answer = Effect.fn("answer")(function* (
 const goalFile = (fixture: KanbanFixture, goalInstanceId: string, file: string) =>
   git(fixture.project, "show", `ctx/goal/${goalInstanceId}:${file}`);
 
+/** Commits `text` as a.txt on the Goal branch from a checkout of its own, as other work would. */
+const advanceGoal = Effect.fn("advanceGoal")(function* (
+  fixture: KanbanFixture,
+  goalInstanceId: string,
+  text: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const advance = path.join(fixture.home, "advance");
+  yield* git(fixture.project, "worktree", "add", "--quiet", advance, `ctx/goal/${goalInstanceId}`);
+  yield* fs.writeFileString(path.join(advance, "a.txt"), text);
+  yield* git(advance, "commit", "--quiet", "-am", "elsewhere");
+  yield* git(fixture.project, "worktree", "remove", advance);
+});
+
 layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
   it.effect(
     "syncs a card with an advanced Goal and verifies it again before squashing",
@@ -199,7 +214,60 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "replaces a conflicting card with a resolution card, which goes to a person when it conflicts again and joins once resolved",
+    "has a conflicting card resolve the Goal branch merge in its own worktree and join",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* kanbanFixture;
+        const write = yield* writer;
+        const bWrote = yield* Deferred.make<void>();
+        const releaseB = yield* Deferred.make<void>();
+        const bRuns = yield* Ref.make<ReadonlyArray<CardAgentRun>>([]);
+        const run = yield* openOwner(
+          fixture,
+          (agent) =>
+            Effect.gen(function* () {
+              if (agent.card.id === "a") {
+                yield* write(agent, "a.txt", "from a\n");
+                return finished;
+              }
+              const earlier = yield* Ref.getAndUpdate(bRuns, (runs) => [...runs, agent]);
+              if (earlier.length > 0) {
+                // The run after the conflict resolves the merge left in the worktree.
+                yield* write(agent, "a.txt", "from a and b\n");
+                return finished;
+              }
+              yield* write(agent, "a.txt", "from b\n");
+              yield* Deferred.succeed(bWrote, undefined);
+              yield* Deferred.await(releaseB);
+              return finished;
+            }),
+          yield* Effect.scope,
+          { cores: 4 },
+        );
+        const { goalInstanceId, cards } = yield* run(
+          Effect.gen(function* () {
+            const board = yield* startBoard(fixture, [card("a"), card("b")]);
+            yield* Deferred.await(bWrote);
+            yield* waitForCards(board.sessionId, (cards) => status(cards, "a") === "done");
+            yield* Deferred.succeed(releaseB, undefined);
+            const cards = yield* waitForCards(board.sessionId, allDone);
+            return { goalInstanceId: board.goalInstanceId, cards };
+          }),
+        );
+        // The same card, not a new one, joined the Goal; its second run was told what conflicted.
+        expect(cards.map((step) => step.id)).toEqual(["a", "b"]);
+        const runs = yield* Ref.get(bRuns);
+        expect(runs.map((agent) => agent.notes)).toEqual([
+          [],
+          [expect.stringContaining("conflicts in a.txt")],
+        ]);
+        expect(yield* goalFile(fixture, goalInstanceId, "a.txt")).toBe("from a and b");
+      }),
+    gitTimeout,
+  );
+
+  it.effect(
+    "asks a person about a card that keeps conflicting, with the merge left in its worktree, and joins the person's resolution",
     () =>
       Effect.gen(function* () {
         const fixture = yield* kanbanFixture;
@@ -208,27 +276,26 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
         const write = yield* writer;
         const bWrote = yield* Deferred.make<void>();
         const releaseB = yield* Deferred.make<void>();
-        const resolving = yield* Deferred.make<string>();
-        const releaseResolution = yield* Deferred.make<void>();
+        const resolving = yield* Queue.unbounded<void>();
+        const released = yield* Queue.unbounded<void>();
         const run = yield* openOwner(
           fixture,
           (agent) =>
             Effect.gen(function* () {
-              switch (agent.card.id) {
-                case "a":
-                  yield* write(agent, "a.txt", "from a\n");
-                  return finished;
-                case "b":
-                  yield* write(agent, "a.txt", "from b\n");
-                  yield* Deferred.succeed(bWrote, undefined);
-                  yield* Deferred.await(releaseB);
-                  return finished;
-                default:
-                  yield* write(agent, "a.txt", "from a and b\n");
-                  yield* Deferred.succeed(resolving, agent.card.id);
-                  yield* Deferred.await(releaseResolution);
-                  return finished;
+              if (agent.card.id === "a") {
+                yield* write(agent, "a.txt", "from a\n");
+                return finished;
               }
+              if (agent.notes.length > 0) {
+                yield* write(agent, "a.txt", "from a and b\n");
+                yield* Queue.offer(resolving, undefined);
+                yield* Queue.take(released);
+                return finished;
+              }
+              yield* write(agent, "a.txt", "from b\n");
+              yield* Deferred.succeed(bWrote, undefined);
+              yield* Deferred.await(releaseB);
+              return finished;
             }),
           yield* Effect.scope,
           { cores: 4 },
@@ -239,55 +306,48 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
             yield* Deferred.await(bWrote);
             yield* waitForCards(board.sessionId, (cards) => status(cards, "a") === "done");
             yield* Deferred.succeed(releaseB, undefined);
-            const resolution = yield* Deferred.await(resolving);
 
-            // Someone else changes the same file on the Goal branch while the resolution card works.
-            const advance = path.join(fixture.home, "advance");
-            yield* git(
-              fixture.project,
-              "worktree",
-              "add",
-              "--quiet",
-              advance,
-              `ctx/goal/${board.goalInstanceId}`,
+            // Someone else changes the same file on the Goal branch each time b resolves a merge.
+            yield* Effect.forEach(
+              ["first", "second", "third"],
+              (round) =>
+                Effect.gen(function* () {
+                  yield* Queue.take(resolving);
+                  yield* advanceGoal(fixture, board.goalInstanceId, `from elsewhere, ${round}\n`);
+                  yield* Queue.offer(released, undefined);
+                }),
+              { discard: true },
             );
-            yield* fs.writeFileString(path.join(advance, "a.txt"), "from elsewhere\n");
-            yield* git(advance, "commit", "--quiet", "-am", "elsewhere");
-            yield* git(fixture.project, "worktree", "remove", advance);
-            yield* Deferred.succeed(releaseResolution, undefined);
 
             const cards = yield* waitForCards(
               board.sessionId,
-              (cards) => status(cards, resolution) === "human_decision",
+              (cards) => status(cards, "b") === "human_decision",
             );
-            const ladder = yield* (yield* CardAttempts).ladder(board.goalInstanceId, resolution);
-            expect(ladder).toMatchObject({ resolutionOf: "b" });
+            expect(cards.map((step) => step.id)).toEqual(["a", "b"]);
+            const ladder = yield* (yield* CardAttempts).ladder(board.goalInstanceId, "b");
+            expect(ladder.conflictRounds).toBe(3);
             expect(ladder.reason).toEqual(
               CardHoldReason.cases.MergeConflict.make({ files: ["a.txt"] }),
             );
             const [request] = yield* (yield* HumanDecisions).pending(board.sessionId);
             expect(request).toMatchObject({
-              cardId: resolution,
+              cardId: "b",
               kind: DecisionKind.cases.IntegrationConflict.make({ files: ["a.txt"] }),
             });
-            expect(cards.map((step) => [step.title, step.status])).toEqual([
-              ["Card a", "done"],
-              ["Resolve conflicts: Card b", "human_decision"],
-            ]);
 
-            // The person merges the Goal branch into the kept worktree, resolves it and answers; the
-            // card is verified again and joins the Goal.
-            const worktree = path.join(fixture.worktrees, board.goalInstanceId, resolution);
-            yield* git(worktree, "merge", "--no-edit", `ctx/goal/${board.goalInstanceId}`).pipe(
-              Effect.ignore,
-            );
+            // The merge waits in the kept worktree; the person resolves it there and answers. The
+            // loop commits the merge, verifies the card again and lets it join the Goal.
+            const worktree = path.join(fixture.worktrees, board.goalInstanceId, "b");
+            expect(yield* git(worktree, "status", "--porcelain")).toBe("UU a.txt");
             yield* fs.writeFileString(path.join(worktree, "a.txt"), "resolved\n");
-            yield* git(worktree, "commit", "--quiet", "--no-edit", "-a");
             yield* answer(
               request!,
               DecisionAnswer.cases.IntegrationConflict.make({ choice: "resolved" }),
             );
             yield* waitForCards(board.sessionId, allDone);
+            expect(
+              (yield* (yield* CardAttempts).ladder(board.goalInstanceId, "b")).conflictRounds,
+            ).toBe(0);
             return { goalInstanceId: board.goalInstanceId };
           }),
         );

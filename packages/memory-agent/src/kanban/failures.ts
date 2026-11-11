@@ -54,6 +54,7 @@ export const WorktreeFailureReason = Schema.Literals([
   "WorktreeDirty",
   "InUse",
   "GoalAdvanced",
+  "ConflictUnresolved",
   "TargetMissing",
   "GitFailed",
 ] as const satisfies readonly (keyof (typeof CardWorktreeFailedReason)["cases"])[]);
@@ -70,13 +71,18 @@ export const CardFailure = Schema.TaggedUnion({
 export type CardFailure = typeof CardFailure.Type;
 
 /**
- * What the card's next attempt reads about a verifier that did not pass its work: the verifier's
- * own words, when it wrote why. The board shows the same words as the verifier's opinion.
+ * What the card's next attempt reads about a failure it can act on: the verifier's own words, when
+ * it wrote why it did not pass the work (the board shows them as the verifier's opinion), or the
+ * conflict markers its last run left.
  */
-export const verifierNote = (failure: CardFailure): ReadonlyArray<string> =>
+export const failureNote = (failure: CardFailure): ReadonlyArray<string> =>
   CardFailure.guards.Verification(failure) && VerdictFailure.guards.Rejected(failure.verdict)
     ? [`The verifier did not pass your last work: ${failure.verdict.note}`]
-    : [];
+    : CardFailure.guards.Worktree(failure) && failure.reason === "ConflictUnresolved"
+      ? [
+          "Your last run left conflict markers in files the Goal branch merge conflicted in, so nothing was committed. The merge is still in progress in your worktree; resolve the remaining conflicts.",
+        ]
+      : [];
 
 export const worktreeFailure = (failure: CardWorktreeFailed): CardFailure =>
   CardFailure.cases.Worktree.make({ reason: cardWorktreeFailedReasonName(failure.reason) });

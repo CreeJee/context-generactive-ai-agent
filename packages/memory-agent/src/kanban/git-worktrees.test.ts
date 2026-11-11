@@ -1,5 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Config, Deferred, Effect, Fiber, FileSystem, Layer, Path } from "effect";
+import { Config, Deferred, Effect, Fiber, FileSystem, Layer, Option, Path } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { expect, vi } from "vite-plus/test";
 import { layer } from "@effect/vitest";
@@ -234,12 +234,30 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
           expect(yield* git(project, "show", "ctx/goal/g2:a.txt")).toBe("from a");
           expect(yield* git(project, "show", "ctx/goal/g2:b.txt")).toBe("from b");
 
+          // A conflict stays in the card's worktree as an unfinished merge for the card to resolve.
           const conflict = yield* Effect.flip(worktrees.syncWithGoal(card("c")));
           expect(conflict).toBeInstanceOf(CardIntegrationConflict);
           expect(conflict).toMatchObject({ files: ["a.txt"] });
           const cWorktree = yield* worktrees.present(card("c"));
-          expect(yield* git(cWorktree.toolRoot, "status", "--porcelain")).toBe("");
+          expect((yield* git(cWorktree.toolRoot, "status", "--porcelain")).split("\n")).toEqual([
+            "UU a.txt",
+            "A  b.txt",
+          ]);
           expect(yield* git(project, "branch", "--show-current")).toBe("main");
+
+          // Nothing is committed while conflict markers remain; the resolved merge is committed as
+          // the merge, and the card then joins the Goal.
+          const unresolved = yield* Effect.flip(worktrees.commitWork(card("c"), "c resolves"));
+          expect(cardWorktreeFailedReasonName(unresolved.reason)).toBe("ConflictUnresolved");
+          yield* fs.writeFileString(path.join(cWorktree.toolRoot, "a.txt"), "from a and c\n");
+          expect(Option.isSome(yield* worktrees.commitWork(card("c"), "c resolves"))).toBe(true);
+          expect(
+            (yield* git(cWorktree.toolRoot, "rev-list", "--parents", "-n", "1", "HEAD")).split(" "),
+          ).toHaveLength(3);
+          expect(
+            CardIntegration.$is("Integrated")(yield* worktrees.squashIntoGoal(card("c"), "Card c")),
+          ).toBe(true);
+          expect(yield* git(project, "show", "ctx/goal/g2:a.txt")).toBe("from a and c");
         }),
       ),
   );

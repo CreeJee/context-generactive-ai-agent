@@ -124,8 +124,8 @@ export const KanbanCardView = Schema.Struct({
   reason: Schema.NullOr(CardHoldReason),
   failures: Schema.Finite,
   replans: Schema.Finite,
-  /** The card a resolution card re-applies. */
-  resolutionOf: Schema.NullOr(Schema.String),
+  /** Goal branch conflicts the card was sent to resolve since it last joined the Goal branch. */
+  conflictRounds: Schema.Finite,
 });
 export type KanbanCardView = typeof KanbanCardView.Type;
 
