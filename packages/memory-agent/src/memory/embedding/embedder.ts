@@ -289,8 +289,8 @@ export const modelWorker = Effect.fnUntraced(function* (
     Effect.flatMap(live, (current) =>
       // ONNX inference cannot be interrupted in place, and terminating the thread during a
       // session call aborts the whole process: onnxruntime-node cannot throw into a stopping
-      // worker. An interrupted request holds the permit until its call ends, one batch at most,
-      // and leaves the worker and its loaded model to the next request.
+      // worker. An interrupted request holds the permit until its calls end, a count and one batch
+      // at most, and leaves the worker and its loaded model to the next request.
       Effect.uninterruptible(current.busy(call(current))).pipe(
         Effect.tapError((error) => (keepsSession[error.stage] ? Effect.void : discard)),
       ),
@@ -307,19 +307,29 @@ export const modelWorker = Effect.fnUntraced(function* (
     embed: Effect.fn("Embedder.embed")(function* (texts: readonly string[], role: EmbeddingRole) {
       if (texts.length === 0) return [];
       const prompted = texts.map((text) => localModel.prompts[role] + text);
-      const counts = yield* request((current) => current.countTokens(prompted));
-      // One worker serves one request at a time: batches run one after another.
-      const embedded = yield* Effect.forEach(planBatches(counts), (batch) =>
-        request((current) => current.embed(batch.map((index) => prompted[index]!))).pipe(
-          Effect.map((rows) =>
-            batch.map((index, position) => {
-              const start = position * localModel.dimensions;
-              return [index, normalize(rows.slice(start, start + localModel.dimensions))] as const;
-            }),
-          ),
+      const embedBatch = (current: ModelSession, batch: readonly number[]) =>
+        Effect.map(current.embed(batch.map((index) => prompted[index]!)), (rows) =>
+          batch.map((index, position) => {
+            const start = position * localModel.dimensions;
+            return [index, normalize(rows.slice(start, start + localModel.dimensions))] as const;
+          }),
+        );
+      // The count and the first batch take one turn of the worker. A question is one batch, and
+      // with a turn each it waited behind a backfill batch twice.
+      const first = yield* request((current) =>
+        Effect.flatMap(current.countTokens(prompted), (counts) =>
+          EffectArray.matchLeft(planBatches(counts), {
+            onEmpty: () => Effect.succeed({ rows: [], rest: [] }),
+            onNonEmpty: (batch, rest) =>
+              Effect.map(embedBatch(current, batch), (rows) => ({ rows, rest })),
+          }),
         ),
       );
-      return embedded
+      // One worker serves one request at a time: batches run one after another.
+      const others = yield* Effect.forEach(first.rest, (batch) =>
+        request((current) => embedBatch(current, batch)),
+      );
+      return [first.rows, ...others]
         .flat()
         .toSorted(([left], [right]) => left - right)
         .map(([, vector]) => vector);

@@ -106,3 +106,54 @@ it.effect("a request still loading the model stops when it is cancelled", () =>
     yield* Fiber.interrupt(call);
   }).pipe(Effect.scoped),
 );
+
+it.effect("a question's count and batch run together, not around a backfill batch", () =>
+  Effect.gen(function* () {
+    const calls: string[] = [];
+    const firstBatch = yield* Deferred.make<void>();
+    const firstBatchReached = yield* Deferred.make<void>();
+    const model = yield* modelWorker(
+      "/unused-test-model-cache",
+      { mode: "cpu", devices: ["cpu"], purpose: "embedding" },
+      () =>
+        Effect.succeed<ModelSession>({
+          device: "cpu",
+          // Texts this long go one to a batch.
+          countTokens: (texts) =>
+            Effect.sync(() => {
+              calls.push(`count ${texts.length}`);
+              return texts.map((text) => (text.includes("backfill") ? 100_000 : 5));
+            }),
+          embed: (texts) =>
+            Effect.gen(function* () {
+              calls.push(`embed ${texts.map((text) => text.split(" ").at(-1)).join(",")}`);
+              if (texts.some((text) => text.endsWith("backfill-1"))) {
+                yield* Deferred.succeed(firstBatchReached, undefined);
+                yield* Deferred.await(firstBatch);
+              }
+              return new Float32Array(4096);
+            }),
+          chunk: () => Effect.succeed([]),
+          busy: (work) => work,
+        }),
+    );
+    const backfill = yield* Effect.forkChild(
+      model.embed(["backfill-1", "backfill-2"], "document"),
+      { startImmediately: true },
+    );
+    yield* Deferred.await(firstBatchReached);
+    const question = yield* Effect.forkChild(model.embed(["question"], "query"), {
+      startImmediately: true,
+    });
+    yield* Deferred.succeed(firstBatch, undefined);
+    yield* Fiber.join(question);
+    yield* Fiber.join(backfill);
+    expect(calls).toEqual([
+      "count 2",
+      "embed backfill-1",
+      "count 1",
+      "embed question",
+      "embed backfill-2",
+    ]);
+  }).pipe(Effect.scoped),
+);
