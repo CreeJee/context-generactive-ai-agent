@@ -4903,3 +4903,8 @@
   - 표의 밖 파일 도구 행: root 안과 옮긴 경로를 `inside_project`로 거부하던 것. 이제 파일 도구로 돈다. 밖 도구의 경로 해석에 닿은 프로젝트 안 경로(승인 뒤 경로가 바뀐 경우)만 `inside_project`로 거부한다.
   - 표의 `save_code_skill` 행과 "저장할 때 run의 root를 절대 경로로 적은 프로그램을 거부한다"는 항목.
   - "이미 저장된 스킬은 고치지 않는다 … 그대로 실행하되 `pathWarning`을 붙여 다시 저장하게 한다"는 항목. 스킬 파일은 여전히 고치지 않지만, 카드에서는 경로를 바꿔 실행한다.
+
+## 카드 worktree는 그 앱의 저장소 폴더 옆에 둔다 (2026-11-11)
+
+- 계기: 카드 worktree 폴더가 저장소 폴더와 상관없이 늘 `~/.context-generactive-agent-worktrees`였다. 턴 시작 지연을 재려고 저장소 복사본(`--storage`)으로 띄운 별도 앱이 복사된 Goal의 보드를 다시 켜자, 그 카드 실행 4개가 사용자의 실제 카드 worktree에서 약 25초 돌았다. 바뀐 파일은 없었지만, 저장소를 나눈 앱이 다른 앱의 작업 폴더를 쓸 수 있었다. `kanbanWorktreesBase`를 주지 않은 테스트도 같은 폴더를 썼다.
+- 결정: 카드 worktree는 저장소 폴더 옆 `<저장소 폴더>-worktrees`에 둔다. 기본 저장소 `~/.context-generactive-agent`이면 지금과 같은 `~/.context-generactive-agent-worktrees`라 옮길 것이 없다. 저장소 폴더 안은 credential 폴더라 쓰지 않는다는 기존 이유는 그대로다.

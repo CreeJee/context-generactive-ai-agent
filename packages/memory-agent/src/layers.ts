@@ -25,7 +25,7 @@ import {
   persistedQueueStoreLayer,
 } from "./kanban/persisted-queue-store.ts";
 import { HumanDecisions } from "./kanban/human-decision.ts";
-import { gitCardWorktreesLayer } from "./kanban/git-worktrees.ts";
+import { gitCardWorktreesLayer, worktreesBesideStorage } from "./kanban/git-worktrees.ts";
 import { KanbanBoardActions } from "./kanban/board-actions.ts";
 import { CardAttempts } from "./kanban/card-attempts.ts";
 import {
@@ -192,7 +192,7 @@ export interface MemoryAgentLayerOptions {
    * start. Default true; tests run the sweep themselves.
    */
   readonly sweepSecrets?: boolean;
-  /** Folder holding kanban card worktrees; tests use a temporary one. */
+  /** Folder holding kanban card worktrees; beside the storage root unless given. */
   readonly kanbanWorktreesBase?: string;
 }
 
@@ -281,7 +281,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     persistedQueueStore,
     persistedQueueCleanupLayer().pipe(Layer.provide(persistedQueueStore)),
     KanbanSettings.layer(),
-    gitCardWorktreesLayer(options.kanbanWorktreesBase),
+    gitCardWorktreesLayer(options.kanbanWorktreesBase ?? worktreesBesideStorage(storageRoot)),
     HumanDecisions.layer,
   );
   const stores = Layer.mergeAll(

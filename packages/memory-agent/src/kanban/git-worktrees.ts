@@ -18,7 +18,6 @@ import { StorageRoot } from "../config/storage-root.ts";
 import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
 import { canonicalPathEffect, pathsOverlap } from "../files/paths.ts";
 import { findExecutable } from "../runtime/host.ts";
-import { homeDirectory } from "../runtime/host-system.ts";
 import { path as hostPath } from "../runtime/synchronous-path.ts";
 import {
   CardIntegration,
@@ -50,10 +49,16 @@ import { logFailure } from "../runtime/logged-failures.ts";
  * repeated here; ref updates run uninterruptibly so their outcome is always observed.
  */
 
-/** `~/.context-generactive-agent-worktrees`: outside the storage root, which is a credential directory. */
-const defaultWorktreesBase = Effect.map(homeDirectory, (home) =>
-  hostPath.join(home, ".context-generactive-agent-worktrees"),
-);
+/**
+ * Where an app's card worktrees go: beside its storage root, outside it (the storage root is a
+ * credential directory), so an app with its own storage never works in another app's worktrees.
+ * `~/.context-generactive-agent` keeps them in `~/.context-generactive-agent-worktrees`.
+ */
+export const worktreesBesideStorage = (storageRoot: string) =>
+  hostPath.join(
+    hostPath.dirname(hostPath.resolve(storageRoot)),
+    `${hostPath.basename(hostPath.resolve(storageRoot))}-worktrees`,
+  );
 
 /** Ids become path segments and branch names, so only plain names pass. */
 const KanbanId = Schema.String.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/));
@@ -1114,11 +1119,5 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
 });
 
 /** {@link CardWorktrees} on git, with card worktrees below `worktreesBase`. */
-export const gitCardWorktreesLayer = (worktreesBase?: string) =>
-  Layer.effect(
-    CardWorktrees,
-    Effect.flatMap(
-      worktreesBase === undefined ? defaultWorktreesBase : Effect.succeed(worktreesBase),
-      make,
-    ),
-  );
+export const gitCardWorktreesLayer = (worktreesBase: string) =>
+  Layer.effect(CardWorktrees, make(worktreesBase));

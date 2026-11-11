@@ -23,7 +23,7 @@ import {
   WorktreeDisposition,
   WorktreeSettlement,
 } from "./worktree.ts";
-import { gitCardWorktreesLayer } from "./git-worktrees.ts";
+import { gitCardWorktreesLayer, worktreesBesideStorage } from "./git-worktrees.ts";
 
 /** Builds a layer in the test's scope and provides what it made. */
 const provideLayer =
@@ -67,6 +67,14 @@ const run = <A, E>(
   });
 
 layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
+  it("keeps an app's card worktrees beside its own storage root", () => {
+    expect(worktreesBesideStorage("/Users/me/.context-generactive-agent")).toBe(
+      "/Users/me/.context-generactive-agent-worktrees",
+    );
+    // An app given its own storage never works in the default app's worktrees.
+    expect(worktreesBesideStorage("/tmp/run/storage/")).toBe("/tmp/run/storage-worktrees");
+  });
+
   it.effect("asks for sequential execution when the project is not a git repository", () =>
     run(({ fs, path, home }) =>
       Effect.gen(function* () {

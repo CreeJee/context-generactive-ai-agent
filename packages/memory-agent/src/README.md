@@ -88,7 +88,7 @@
 - `memoryAgentLayer`를 빌드하면 `Database.layer`가 SQLite 파일 `<storageRoot>/agent.db`를 열고 마이그레이션한다
 - `OAuthKeychain.keychain`과 기본 `SecretStore`는 OS 키체인에 접근한다
 - `defectReportsLayer`는 `ReportDelivery`로 defect를 Discord webhook에 보고한다. webhook이 설정되어 있을 때만 보고한다
-- `gitCardWorktreesLayer(options.kanbanWorktreesBase)`는 칸반 카드용 git worktree 폴더를 사용한다
+- `gitCardWorktreesLayer`는 칸반 카드용 git worktree 폴더를 사용한다. `options.kanbanWorktreesBase`가 없으면 저장소 폴더 옆(`<storage>-worktrees`)이다
 - 백그라운드 작업이 있다: run 이후의 해석과 요약, 시작 시 비밀 sweep, 다른 에이전트 transcript(`.claude`, `.codex`) 추적
 - Kagi API 서버(`kagiBaseUrl`)로 네트워크 요청을 보낸다
 - `json.ts`, `optional-property.ts`, `truthy.ts`는 순수 코드이며 부수 효과가 없다
