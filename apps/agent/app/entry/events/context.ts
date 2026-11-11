@@ -1,9 +1,9 @@
 import { Schema } from "effect";
 import { createContext, useContext } from "react";
 import { isTruthy } from "../../truthy.ts";
-import type { EventConnectionState } from "./event-source";
+import type { EventConnection } from "./event-source";
 
-export const EventConnectionContext = createContext<EventConnectionState>("connecting");
+export const EventConnectionContext = createContext<EventConnection>({ _tag: "connecting" });
 export const SessionEventScopeContext = createContext<{
   readonly projectId: string | null;
   readonly sessionId: string | null;

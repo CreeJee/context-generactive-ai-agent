@@ -1943,6 +1943,11 @@ msgstr "다시 실패해 잠시 뒤 재시도합니다: {failure}"
 msgid "다시 연결"
 msgstr "다시 연결"
 
+#. The app is trying to reach the server right now
+#: app/entry/events/providers.tsx
+msgid "다시 연결하는 중…"
+msgstr "다시 연결하는 중…"
+
 #. Button that opens the login page in the browser again
 #: app/entry/navigation/account-profiles.tsx
 msgid "다시 열기"
@@ -1977,6 +1982,11 @@ msgstr "다시 확인"
 #: app/entry/settings/pages/mcp.tsx
 msgid "다음 대화에서 시작"
 msgstr "다음 대화에서 시작"
+
+#. When the app tries to reach the server again
+#: app/entry/events/providers.tsx
+msgid "다음 시도 {seconds}초 뒤"
+msgstr "다음 시도 {seconds}초 뒤"
 
 #: app/entry/chat/chat-panel.tsx
 msgid "다음 질문부터 대화가 약 {before} 토큰에서 {after} 토큰으로 줄어듭니다."
@@ -3349,6 +3359,10 @@ msgstr "서버에 설정된 웹훅 주소가 Discord 웹훅 형식이 아닙니�
 #: app/entry/chat/chat-history.tsx
 msgid "서버에 연결되지 않았을 수 있습니다. 다시 시도해 주십시오."
 msgstr "서버에 연결되지 않았을 수 있습니다. 다시 시도해 주십시오."
+
+#: app/entry/events/providers.tsx
+msgid "서버에 연결할 수 없습니다. 앱이 실행 중인지 확인해 주십시오."
+msgstr "서버에 연결할 수 없습니다. 앱이 실행 중인지 확인해 주십시오."
 
 #: app/entry/navigation/compatible-accounts.tsx
 msgid "서버에서 쓰는 정확한 ID를 입력해 주십시오."
@@ -5463,6 +5477,10 @@ msgstr "지금 Goal에는 없는 결과입니다."
 #: app/entry/settings/pages/imports.tsx
 msgid "지금 가져오기"
 msgstr "지금 가져오기"
+
+#: app/entry/events/providers.tsx
+msgid "지금 다시 연결"
+msgstr "지금 다시 연결"
 
 #. Decision answer: go ahead now despite the overlap
 #: app/entry/chat/decision-prompt.tsx
