@@ -9,6 +9,7 @@
 //! fields; the project is filtered while collecting, and every matching document is scored:
 //! Block-WAND pruning barely cut the many-term unions the reads send, and full scoring stays
 //! exact whatever the filter drops.
+use crate::ms;
 use crate::search_control::Outcome;
 use lindera::dictionary::load_dictionary;
 use lindera::mode::Mode;
@@ -20,6 +21,7 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashSet};
 use std::path::Path;
+use std::time::Instant;
 use tantivy::query::{
     BooleanQuery, EnableScoring, Occur, PhraseQuery, Query, RegexQuery, TermQuery, Weight,
 };
@@ -35,6 +37,27 @@ use tantivy::{
     Term, TERMINATED,
 };
 use unicode_normalization::UnicodeNormalization;
+
+/// How long a commit and the reader reload after it took.
+struct Committed {
+    commit_ms: f64,
+    reload_ms: f64,
+}
+
+/// What one apply left and how long each step took: the addon cannot reach the host's tracer.
+#[napi(object)]
+pub struct LexicalApplied {
+    /// How many documents the index holds after the commit.
+    pub size: u32,
+    /// Building the documents, Lindera's morph analysis included.
+    pub analyze_ms: f64,
+    /// Handing the deletions and documents to the writer's indexing threads.
+    pub write_ms: f64,
+    /// Preparing and committing the segment files.
+    pub commit_ms: f64,
+    /// Reloading the reader so the next search sees the commit.
+    pub reload_ms: f64,
+}
 
 /// Tokens longer than this many bytes are blobs (hashes, base64), not words.
 const LONGEST_TOKEN: usize = 64;
@@ -436,28 +459,42 @@ impl Lexical {
 
     /// Commits with the instance as the payload, which every commit replaces, and makes the
     /// commit visible to the next search.
-    fn commit(&mut self) -> Failed<()> {
+    fn commit(&mut self) -> Failed<Committed> {
         let writer = self.writer.as_mut().ok_or_else(read_only)?;
+        let committing = Instant::now();
         let mut prepared = writer.prepare_commit().map_err(failed)?;
         if let Some(instance) = &self.instance {
             prepared.set_payload(instance);
         }
         prepared.commit().map_err(failed)?;
-        self.reader.reload().map_err(failed)
+        let commit_ms = ms(committing);
+        let reloading = Instant::now();
+        self.reader.reload().map_err(failed)?;
+        Ok(Committed {
+            commit_ms,
+            reload_ms: ms(reloading),
+        })
     }
 
     fn reset(&mut self, instance: String) -> Failed<()> {
         let writer = self.writer.as_mut().ok_or_else(read_only)?;
         writer.delete_all_documents().map_err(failed)?;
         self.instance = Some(instance);
-        self.commit()
+        self.commit().map(|_| ())
     }
 
-    fn apply(&mut self, documents: &[LexicalDocument], removed: &[i64]) -> Failed<u32> {
+    fn apply(
+        &mut self,
+        documents: &[LexicalDocument],
+        removed: &[i64],
+    ) -> Failed<LexicalApplied> {
+        let analyzing = Instant::now();
         let built = documents
             .iter()
             .map(|node| self.document(node))
             .collect::<Failed<Vec<_>>>()?;
+        let analyze_ms = ms(analyzing);
+        let writing = Instant::now();
         let writer = self.writer.as_mut().ok_or_else(read_only)?;
         for value in removed.iter().chain(documents.iter().map(|node| &node.seq)) {
             writer.delete_term(Term::from_field_u64(self.fields.seq, seq(*value)?));
@@ -465,8 +502,18 @@ impl Lexical {
         for doc in built {
             writer.add_document(doc).map_err(failed)?;
         }
-        self.commit()?;
-        Ok(self.searcher().num_docs() as u32)
+        let write_ms = ms(writing);
+        let Committed {
+            commit_ms,
+            reload_ms,
+        } = self.commit()?;
+        Ok(LexicalApplied {
+            size: self.searcher().num_docs() as u32,
+            analyze_ms,
+            write_ms,
+            commit_ms,
+            reload_ms,
+        })
     }
 
     fn document(&self, node: &LexicalDocument) -> Failed<TantivyDocument> {
@@ -746,7 +793,11 @@ impl LexicalIndex {
     /// Replaces the documents of `removed` and of every document's seq with `documents`, in one
     /// commit. Removing a seq the index does not hold does nothing.
     #[napi]
-    pub fn apply(&mut self, documents: Vec<LexicalDocument>, removed: Vec<i64>) -> Result<u32> {
+    pub fn apply(
+        &mut self,
+        documents: Vec<LexicalDocument>,
+        removed: Vec<i64>,
+    ) -> Result<LexicalApplied> {
         self.lexical_mut()
             .and_then(|lexical| lexical.apply(&documents, &removed))
             .map_err(js_error)

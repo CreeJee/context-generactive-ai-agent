@@ -9,12 +9,14 @@
 - `loadTurbovec()` — `createRequire`로 `memory-turbovec.node`를 불러 `TurbovecAddon`을 돌려준다. `vp run build`로 바이너리를 만들지 않았으면 throw한다
 - `addonPath` — 로컬 빌드된 애드온(`memory-turbovec.node`)의 절대 경로 문자열
 - `TurbovecAddon` — `{ VectorIndex, CacheLease, MemoryReadSession, SearchControl, LexicalIndex }` 클래스 묶음 타입
-- `VectorIndex` — 정규화된 u64 10진 문자열 id로 키를 거는 양자화 inner-product 인덱스. `new(dimensions, bits)`, static `load(path)`, `add(vectors: Float32Array, ids)`, `search(query, k, allowedIds?)`, `searchControlled(query, k, token, ownerKey, epoch, requestId, allowedIds?)`, `remove(id)`, `save(path)`, `dimensions()`, `bits()`, `size()`, `validateIds(ids)`, `close()`
+- `VectorIndex` — 정규화된 u64 10진 문자열 id로 키를 거는 양자화 inner-product 인덱스. `new(dimensions, bits)`, static `load(path)`, `add(vectors: Float32Array, ids)`, `search(query, k, allowedIds?)`, `searchControlled(query, k, token, ownerKey, epoch, requestId, allowedIds?)`, `remove(id)`, `save(path) -> SaveTimings`, `dimensions()`, `bits()`, `size()`, `validateIds(ids)`, `close()`
 - `SearchResult` — `{ ids: string[], scores: number[] }`. `VectorIndex.search` 결과
 - `ControlledSearchResult` — `{ kind: "success"|"cancelled"|"budget-exceeded"|"invalid-input"|"index-failed", ids, scores, nativeWindow: "whole-call", nativeMs }`
 - `SearchControl` — Rust가 소유한 일회성 요청 제어. `new(token, ownerKey, epoch, requestId, remainingMs)`, `token()`(새로 발급한 capability), `snapshotWasPinned()`, `cancel()`, `close()`, static `count()`
 - `CacheLease` — 벡터 캐시 디렉터리에 한 프로세스만 쓰도록 OS 파일 락을 잡는 클래스. `new(path)`, `close()`
-- `LexicalIndex` — 노드 원문의 Tantivy 색인(위치 있는 3글자 `ngram`, Lindera 형태소를 Kiwi 규칙으로 고른 `lindera`). factory `open(dir, recover)`·`openReadOnly(dir)`, `instance()`, `reset(instance)`, `apply(documents, removed)`, `size()`, `morphTerms(text)`, `close()`
+- `LexicalIndex` — 노드 원문의 Tantivy 색인(위치 있는 3글자 `ngram`, Lindera 형태소를 Kiwi 규칙으로 고른 `lindera`). factory `open(dir, recover)`·`openReadOnly(dir)`, `instance()`, `reset(instance)`, `apply(documents, removed) -> LexicalApplied`, `size()`, `morphTerms(text)`, `close()`
+- `SaveTimings` — `{ writeMs, syncMs }`. `VectorIndex.save`의 쓰기와 `fsync`(macOS는 `F_FULLFSYNC`) 시간
+- `LexicalApplied` — `{ size, analyzeMs, writeMs, commitMs, reloadMs }`. `LexicalIndex.apply`가 남긴 크기와 단계별 시간
 - `LexicalDocument` — `{ seq, project, text }`. `LexicalIndex.apply`가 받는 노드
 - `MemoryReadSession` — 읽기 전용 SQLite 세션. `new(databasePath)`, `close()`, `search(index, lexical, input, token, ownerKey, epoch, requestId) -> NativeReadOutput`. text·morph 채널은 `lexical`(`LexicalIndex`)에서 찾는다
 - `NativeReadInput` — `allowedProjects`, `embedder`, `query?`, `trigramTerms`/`shortTerms`, `morphQuery`(질문 원문), `beforeSeq?`(이 seq 전에 저장된 노드만 읽는다), `vectorK`/`textK`/`morphK`, `textEnabled`/`morphEnabled`, `remainingMs`, `inputBudgetBytes`/`outputBudgetBytes`

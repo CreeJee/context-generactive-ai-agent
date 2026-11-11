@@ -6,12 +6,12 @@
 
 ## Interface
 
-- `VectorIndex` — napi 클래스. `new(dimensions, bits)`, `add(vectors, ids)`, `search(query, k, allowedIds?)`, `searchControlled(query, k, token, ownerKey, epoch, requestId, allowedIds?)`, `remove(id)`, `save(path)`, 팩토리 `load(path)`, `dimensions()`, `bits()`, `size()`, `close()`, `validateIds(ids)`를 제공한다
+- `VectorIndex` — napi 클래스. `new(dimensions, bits)`, `add(vectors, ids)`, `search(query, k, allowedIds?)`, `searchControlled(query, k, token, ownerKey, epoch, requestId, allowedIds?)`, `remove(id)`, `save(path)`(단계별 시간 `SaveTimings` 반환), 팩토리 `load(path)`, `dimensions()`, `bits()`, `size()`, `close()`, `validateIds(ids)`를 제공한다
 - `SearchResult` — napi 객체 `{ ids: string[], scores: f64[] }`. `VectorIndex.search`의 결과다
 - `CacheLease` — napi 클래스. 생성자는 경로의 파일을 열거나 만들고(0o600) 배타적 non-blocking 락을 잡는다. `close()`로 락을 놓는다
 - `SearchControl` — napi 클래스. `new(token, ownerKey, epoch, requestId, remainingMs)`, `token()`, `snapshotWasPinned()`, `cancel()`, `close()`, static `count()`를 제공한다. 요청별 취소와 deadline 상태를 전역 레지스트리에 등록한다
 - `ControlledSearchResult` — napi 객체 `{ kind, ids, scores, nativeWindow, nativeMs }`. `kind`는 Outcome 태그 문자열이다
-- `LexicalIndex` — napi 클래스. factory `open(dir, recover)`는 색인을 열거나 만든다. 열 수 없거나 스키마가 다르면 `recover`일 때만 비운 색인으로 바꾸고, 아니면 "Lexical index layout mismatch"로 실패한다. `instance()`는 마지막 `reset(instance)`가 commit payload로 남긴 build 이름(없으면 null), `apply(documents, removed)`는 `removed`와 각 문서 seq의 문서를 지우고 문서를 더해 한 번 commit한 뒤 크기를 돌려준다. `size()`, `morphTerms(text)`, `close()`를 제공한다. factory `openReadOnly(dir)`는 이미 있는 색인을 writer 없이 연다. 다른 프로세스가 writer를 잡고 있어도 열리고, 연 시점까지의 commit을 본다. 색인이 없거나 스키마가 다르면 만들거나 바꾸지 않고 실패하며, 이렇게 연 색인의 `reset`·`apply`는 "Lexical index is open read-only"로 실패한다
+- `LexicalIndex` — napi 클래스. factory `open(dir, recover)`는 색인을 열거나 만든다. 열 수 없거나 스키마가 다르면 `recover`일 때만 비운 색인으로 바꾸고, 아니면 "Lexical index layout mismatch"로 실패한다. `instance()`는 마지막 `reset(instance)`가 commit payload로 남긴 build 이름(없으면 null), `apply(documents, removed)`는 `removed`와 각 문서 seq의 문서를 지우고 문서를 더해 한 번 commit한 뒤 크기와 단계별 시간(`LexicalApplied`: analyze/write/commit/reload ms)을 돌려준다. `size()`, `morphTerms(text)`, `close()`를 제공한다. factory `openReadOnly(dir)`는 이미 있는 색인을 writer 없이 연다. 다른 프로세스가 writer를 잡고 있어도 열리고, 연 시점까지의 commit을 본다. 색인이 없거나 스키마가 다르면 만들거나 바꾸지 않고 실패하며, 이렇게 연 색인의 `reset`·`apply`는 "Lexical index is open read-only"로 실패한다
 - `LexicalDocument` — napi 객체 `{ seq: i64, project, text }`
 - `lexical::{Morphology, LexicalSearch}` — crate 내부. `Morphology::terms`는 NFKC 정규화한 원문의 ko-dic 형태소에서 Kiwi 규칙(품사 NNG·NNP·NR·VV·VA·XR·SH, 가벼운 어간 제외, 붙여 쓴 명사 합침, 원문의 라틴 문자·숫자)으로 검색어를 고르고 소문자로 바꾼다. `LexicalSearch`는 한 읽기의 searcher로 `phrases`(3글자 이상 검색어를 gram 구절로, BM25 top k), `short_terms`(두 글자 검색어마다 최신 k개), `morphs`(질문의 형태소 검색어, BM25 top k)를 찾는다. 모두 프로젝트를 수집하며 거르고, 일치 문서를 전부 점수 매긴다
 - `MemoryReadSession` — napi 클래스. `new(databasePath)`는 읽기 전용 SQLite 연결을 연다. `close()`, `search(index, lexical, input, token, ownerKey, epoch, requestId) -> NativeReadOutput`을 제공한다. text나 morph 채널을 켜면 `lexical`이 있어야 한다(없으면 `invalid-input`)
@@ -54,7 +54,7 @@
 
 - `LexicalIndex`: `open`은 폴더를 만들고(`recover`면 지우고 다시 만들고) Tantivy segment·meta 파일과 writer lock 파일을 쓴다. `openReadOnly`는 아무것도 쓰지 않는다. writer thread 2개(메모리 128MiB)와 Tantivy merge thread를 띄운다. 내장 ko-dic 사전을 불러온다
 - `CacheLease`: 경로의 파일을 read/write/create로 연다. truncate하지 않고, unix에서는 0o600 권한이다. close나 drop 전까지 OS 배타 파일 락을 잡고 있다
-- `VectorIndex.save`는 인덱스 파일을 디스크에 쓰고, `VectorIndex.load`는 디스크에서 읽는다
+- `VectorIndex.save`는 인덱스 파일을 디스크에 쓰고 `fsync`한 뒤 쓰기·fsync 시간(`SaveTimings`)을 돌려준다. 자체 임시 파일과 rename은 하지 않는다. 바이트는 `IdMapIndex::write`와 같고(`write_to_writer`), 제자리 rename은 호출자가 한다. addon은 호스트 tracer에 닿지 못하므로 단계 시간을 값으로 돌려준다. `VectorIndex.load`는 디스크에서 읽는다 `VectorIndex.load`는 디스크에서 읽는다
 - `MemoryReadSession`: SQLite 파일을 읽기 전용으로 연다. 요청마다 `BEGIN DEFERRED`/`ROLLBACK`을 실행하고, 1000 VM op마다 취소와 deadline을 확인해 중단하는 progress handler를 건다
 - SQLite에서 읽는 테이블: `nodes`, `node_vectors`, `node_vector_chunks`, `memory_graph_vector_removals`, `lexical_changes`, `sqlite_schema`
 - 프로세스 전역 상태: `REGISTRY`(`OnceLock<Mutex<HashMap<String, Arc<RequestState>>>>`), `NEXT_TOKEN`(`AtomicU64`), `INITIALIZED`(`OnceLock<i32>`)

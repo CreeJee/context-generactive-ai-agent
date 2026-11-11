@@ -1,6 +1,10 @@
 import {
+  Array as EffectArray,
+  Clock,
+  Context,
   Duration,
   Effect,
+  Exit,
   FileSystem,
   Layer,
   Match,
@@ -41,6 +45,52 @@ const canonicalId = Schema.String.check(
   ),
 );
 const decodeIds = Schema.decodeUnknownEffect(Schema.Array(canonicalId));
+
+/**
+ * Child spans of the current span for the steps a native call timed itself, laid end to end from
+ * `start`. The addon cannot reach the tracer, so it reports each step's milliseconds instead.
+ */
+const stepSpans = Effect.fnUntraced(function* (
+  start: bigint,
+  steps: ReadonlyArray<readonly [name: string, ms: number]>,
+) {
+  const tracer = yield* Effect.tracer;
+  const parent = yield* Effect.option(Effect.currentSpan);
+  const [, windows] = EffectArray.mapAccum(steps, start, (from, [name, ms]) => {
+    const to = from + BigInt(Math.round(ms * 1_000_000));
+    return [to, { name, from, to }] as const;
+  });
+  yield* Effect.forEach(windows, ({ name, from, to }) =>
+    Effect.sync(() =>
+      tracer
+        .span({
+          name,
+          parent,
+          annotations: Context.empty(),
+          links: [],
+          startTime: from,
+          kind: "internal",
+          root: Option.isNone(parent),
+          sampled: Option.match(parent, { onNone: () => true, onSome: (span) => span.sampled }),
+        })
+        .end(to, Exit.void),
+    ),
+  );
+});
+
+/** A native call measured by itself: its span, and the spans of the steps it timed. */
+const timedNative = <A>(
+  name: string,
+  attributes: Readonly<Record<string, number>>,
+  call: Effect.Effect<A, NativeOwnerFailed>,
+  steps: (result: A) => ReadonlyArray<readonly [name: string, ms: number]>,
+) =>
+  Effect.gen(function* () {
+    const start = yield* Clock.currentTimeNanos;
+    const result = yield* call;
+    yield* stepSpans(start, steps(result));
+    return result;
+  }).pipe(Effect.withSpan(name, { attributes }));
 
 /** The owner's scoped resources and its command executor; Scope closure releases them. */
 const owner = Effect.gen(function* () {
@@ -174,7 +224,9 @@ const owner = Effect.gen(function* () {
             !command.vectors.every(Number.isFinite)
           )
             return yield* fail("invalid-input");
-          yield* native(() => index.add(command.vectors, [...command.ids]));
+          yield* native(() => index.add(command.vectors, [...command.ids])).pipe(
+            Effect.withSpan("VectorIndex.add", { attributes: { vectors: command.ids.length } }),
+          );
           return yield* native(ack);
         }),
       remove: (command) =>
@@ -182,6 +234,8 @@ const owner = Effect.gen(function* () {
           yield* ids(command.ids);
           const removed = yield* native(() =>
             command.ids.reduce((count, id) => (index.remove(id) ? count + 1 : count), 0),
+          ).pipe(
+            Effect.withSpan("VectorIndex.remove", { attributes: { ids: command.ids.length } }),
           );
           return yield* native(() =>
             OwnerReply.cases.removed.make({
@@ -195,14 +249,25 @@ const owner = Effect.gen(function* () {
       reset: () => ScopedRef.set(indexRef, empty).pipe(Effect.andThen(native(ack))),
       save: () =>
         Effect.gen(function* () {
-          yield* native(() => index.save(`${file}.tmp`));
-          yield* files(fs.rename(`${file}.tmp`, file));
+          const vectors = yield* native(() => index.size());
+          yield* timedNative(
+            "VectorIndex.save",
+            { vectors },
+            native(() => index.save(`${file}.tmp`)),
+            (took) => [
+              ["VectorIndex.save.write", took.writeMs],
+              ["VectorIndex.save.fsync", took.syncMs],
+            ],
+          );
+          yield* files(fs.rename(`${file}.tmp`, file)).pipe(Effect.withSpan("FileSystem.rename"));
           return yield* native(ack);
         }),
       validate: (command) =>
         Effect.gen(function* () {
           yield* ids(command.ids);
-          yield* native(() => index.validateIds([...command.ids]));
+          yield* native(() => index.validateIds([...command.ids])).pipe(
+            Effect.withSpan("VectorIndex.validateIds", { attributes: { ids: command.ids.length } }),
+          );
           return yield* native(ack);
         }),
       "vector-search": (command) =>
@@ -233,7 +298,7 @@ const owner = Effect.gen(function* () {
               size: index.size(),
               nativeWindow: { startNs: String(startNs), endNs: String(endNs) },
             });
-          });
+          }).pipe(Effect.withSpan("VectorIndex.search", { attributes: { k: command.k } }));
         }),
       "vector-search-controlled": (command) =>
         Effect.gen(function* () {
@@ -267,7 +332,9 @@ const owner = Effect.gen(function* () {
               nativeMs: result.nativeMs,
               size: index.size(),
             });
-          });
+          }).pipe(
+            Effect.withSpan("VectorIndex.searchControlled", { attributes: { k: command.k } }),
+          );
         }),
       "memory-search": (command) =>
         Effect.gen(function* () {
@@ -288,7 +355,7 @@ const owner = Effect.gen(function* () {
                 command.requestId,
               ),
             "read-failed",
-          );
+          ).pipe(Effect.withSpan("MemoryReadSession.search"));
           if (result.kind === "read-failed") return yield* fail("read-failed");
           // A failed read reports no coverage, as it reports no hits.
           const coverage = yield* result.kind === "success"
@@ -303,6 +370,7 @@ const owner = Effect.gen(function* () {
                     Effect.mapError((cause) =>
                       NativeOwnerFailed.make({ reason: "read-failed", cause }),
                     ),
+                    Effect.withSpan("NativeWorker.readCoverage"),
                   ),
                 ),
                 ([took, counts]) => ({ ...counts, coverageMs: Duration.toMillis(took) }),
@@ -324,18 +392,30 @@ const owner = Effect.gen(function* () {
             !command.removed.every((seq) => seq >= 0)
           )
             return yield* fail("invalid-input");
-          const size = yield* native(() =>
-            index.apply(
-              command.documents.map((document) => ({ ...document })),
-              [...command.removed],
+          const applied = yield* timedNative(
+            "LexicalIndex.apply",
+            { documents: command.documents.length, removed: command.removed.length },
+            native(() =>
+              index.apply(
+                command.documents.map((document) => ({ ...document })),
+                [...command.removed],
+              ),
             ),
+            (took) => [
+              ["LexicalIndex.apply.analyze", took.analyzeMs],
+              ["LexicalIndex.apply.write", took.writeMs],
+              ["LexicalIndex.apply.commit", took.commitMs],
+              ["LexicalIndex.apply.reload", took.reloadMs],
+            ],
           );
-          return lexicalAck(size);
+          return lexicalAck(applied.size);
         }),
       "lexical-reset": (command) =>
         Effect.gen(function* () {
           const index = yield* lexicalIndex;
-          yield* native(() => index.reset(command.instance));
+          yield* native(() => index.reset(command.instance)).pipe(
+            Effect.withSpan("LexicalIndex.reset"),
+          );
           return yield* native(() => lexicalAck(index.size()));
         }),
     });
@@ -374,10 +454,12 @@ const handlers = NativeOwnerRpcs.toLayer(
           Effect.map((current) => current.ready),
           Effect.mapError(reported),
         ),
+      // Named by the command, so a trace tells a slow save from a slow add.
       Execute: (command) =>
         opened.pipe(
           Effect.flatMap((current) => current.execute(command)),
           Effect.mapError(reported),
+          Effect.withSpan(`NativeWorker.${command._tag}`),
         ),
     });
   }),

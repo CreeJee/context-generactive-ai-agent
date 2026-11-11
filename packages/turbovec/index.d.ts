@@ -21,6 +21,14 @@ export interface SearchResult {
   scores: number[];
 }
 
+/** How long each step of `VectorIndex.save` took: the addon cannot reach the host's tracer. */
+export interface SaveTimings {
+  /** Serializing the index into the file, through its buffer. */
+  writeMs: number;
+  /** `fsync` of the written file (`F_FULLFSYNC` on macOS). */
+  syncMs: number;
+}
+
 export interface ControlledSearchResult {
   kind: "success" | "cancelled" | "budget-exceeded" | "invalid-input" | "index-failed";
   ids: string[];
@@ -58,7 +66,8 @@ export declare class VectorIndex {
     allowedIds?: string[],
   ): ControlledSearchResult;
   remove(id: string): boolean;
-  save(path: string): void;
+  /** Writes and syncs the index at `path` (the caller renames it into place), timing each step. */
+  save(path: string): SaveTimings;
   dimensions(): number;
   bits(): number;
   size(): number;
@@ -124,6 +133,21 @@ export interface NativeReadOutput {
   inputLogicalBytes: number;
   outputLogicalBytes: number;
 }
+/**
+ * How long each step of `LexicalIndex.apply` took, and the size it left. The addon cannot reach
+ * the host's tracer, so it reports durations.
+ */
+export interface LexicalApplied {
+  size: number;
+  /** Building the documents, Lindera's morph analysis included. */
+  analyzeMs: number;
+  /** Handing the deletions and documents to the writer's indexing threads. */
+  writeMs: number;
+  /** Preparing and committing the segment files. */
+  commitMs: number;
+  /** Reloading the reader so the next search sees the commit. */
+  reloadMs: number;
+}
 /** A node as the lexical index holds it. */
 export interface LexicalDocument {
   seq: number;
@@ -148,8 +172,8 @@ export declare class LexicalIndex {
   instance(): string | null;
   /** Empties the index and names the new build. */
   reset(instance: string): void;
-  /** Replaces the documents of `removed` and of each document's seq, in one commit; returns the size. */
-  apply(documents: LexicalDocument[], removed: number[]): number;
+  /** Replaces the documents of `removed` and of each document's seq, in one commit. */
+  apply(documents: LexicalDocument[], removed: number[]): LexicalApplied;
   size(): number;
   /** The morph terms of a text, for tests and evaluations. */
   morphTerms(text: string): string[];
