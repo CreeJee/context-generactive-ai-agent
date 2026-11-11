@@ -326,6 +326,40 @@ describe("read, write, edit and delete", () => {
     }).pipe(withTestPlatform),
   );
 
+  it.live("in a card, reads a file only the user's folder has there, and never changes it", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      // Files git does not track, which the card's worktree never got.
+      const { root, base } = yield* project(
+        MutableHashMap.fromIterable([
+          ["local/notes.txt", "user only\n"],
+          [".env", "TOKEN=1\n"],
+        ]),
+      );
+      const card = path.join(base, "card");
+      yield* fs.makeDirectory(card);
+      const inCard = yield* fileTools(card, root);
+      const notes = path.join(root, "local", "notes.txt");
+      expect(yield* inCard.readFile({ path: notes })).toMatchObject({
+        path: "local/notes.txt",
+        content: "user only\n",
+        pathMapped: expect.stringContaining("read in the user's project folder"),
+      });
+      expect(yield* failureCode(inCard.readFile({ path: path.join(root, ".env") }))).toBe(
+        "credential",
+      );
+      expect(
+        yield* failureCode(inCard.deleteFile({ path: notes, expectedSha256: "0".repeat(64) })),
+      ).toBe("not_found");
+      yield* inCard.writeFile({ path: notes, content: "card\n" });
+      expect(yield* fs.readFileString(path.join(card, "local", "notes.txt"))).toBe("card\n");
+      expect(yield* fs.readFileString(notes)).toBe("user only\n");
+      // Once the card's copy has the file, reads use it.
+      expect(yield* inCard.readFile({ path: notes })).toMatchObject({ content: "card\n" });
+    }).pipe(withTestPlatform),
+  );
+
   it.live("creates, replaces only the version that was read, and deletes with a sha256", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

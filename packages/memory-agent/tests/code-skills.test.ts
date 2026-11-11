@@ -318,4 +318,44 @@ testAgent()("code skills", (it) => {
       }),
     { timeout: 30_000 },
   );
+
+  it.effect.skipIf(process.platform !== "darwin")(
+    "in a card, a saved script reads a file only the user's folder has there",
+    () =>
+      Effect.gen(function* () {
+        const { project } = yield* TestEnv;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const card = yield* fs.realPath(
+          yield* fs.makeTempDirectoryScoped({ prefix: "code-skills-card-" }),
+        );
+        // Not tracked by git, so the card's worktree never got it.
+        yield* fs.makeDirectory(path.join(project.root, "local"), { recursive: true });
+        yield* fs.writeFileString(path.join(project.root, "local", "keys.txt"), "A\nB\n");
+        const script = path.join(card, ".agents/skills/keys/scripts/run.sh");
+        yield* fs.makeDirectory(path.dirname(script), { recursive: true });
+        yield* fs.writeFileString(script, `cat ${project.root}/local/keys.txt\n`);
+        yield* fs.writeFileString(
+          path.join(card, ".agents/skills/keys/SKILL.md"),
+          "---\nname: keys\ndescription: Keys\n---\n",
+        );
+        const tools = (yield* ApprovedTools).toolsFor(
+          {
+            ...project,
+            root: card,
+            permissionMode: "full",
+            toolFence: { deniedRoots: [project.root], userRoot: project.root },
+          },
+          "gate",
+        );
+        const result = yield* callTool(tools, "run_skill", { name: "keys" });
+        expect(result).toMatchObject({
+          status: "succeeded",
+          stdout: "A\nB\n",
+          pathMapped: expect.stringContaining(`read them in the user's project folder`),
+        });
+        expect(result).not.toHaveProperty("pathWarning");
+      }),
+    { timeout: 30_000 },
+  );
 });

@@ -43,7 +43,7 @@
 - `.git` 세그먼트(대소문자 무시)는 `git_internal`로 거부하고 목록에서도 뺀다. 순회는 `.git`, `node_modules` 디렉터리로 내려가지 않는다.
 - `resolveProjectPath`는 절대 경로, 백슬래시, 제어 문자, 빈·`.`·`..`·앞뒤 공백 세그먼트를 `invalid_path`로 거부한다. 각 세그먼트를 lstat한다. 어느 단계든 SymbolicLink면 `symlink`로 거부한다. 링크를 따라간 실제 경로가 프로젝트 안이고 `.git`·credential이 아니면 거부에 `target`으로 싣는다. 모델이 실제 경로를 찾아 헤매지 않게 하려는 것이며, 링크는 여전히 따라가지 않는다. file 계열은 nlink가 정확히 1이어야 하며 아니면 `hard_link`이다. 주석상 동시 디렉터리 교체를 막는 OS 샌드박스는 아니다.
 - `resolveOutsidePath`는 철자와 정규 대상 모두에 자격증명 검사를 한다. 프로젝트나 앱 저장소 루트 내부를 가리키면 `inside_project`로 거부한다. fenced 실행은 denied root의 같은 경로·하위·상위를 모두 거부한다. 상위를 목록화하면 거부된 트리가 보이기 때문이다.
-- 경로 정책(`path-policy.ts`): 상대 경로는 run의 root 아래로 읽는다. root 아래 절대 경로는 그 상대 경로로 바꿔 같은 프로젝트 규칙(`..`·링크·`.git`·credential 거부)을 거친다. 카드에서는 `userRoot` 아래 절대 경로를 카드 worktree의 같은 상대 경로로 읽는다(`Mapped`). 비교는 실제 경로와 dev+inode로 해서 `/tmp`→`/private/tmp` 같은 링크와 대소문자 차이를 같은 곳으로 본다. 그 밖의 절대 경로(`..`로 root를 벗어난 것 포함)는 `Outside`다.
+- 경로 정책(`path-policy.ts`): 상대 경로는 run의 root 아래로 읽는다. root 아래 절대 경로는 그 상대 경로로 바꿔 같은 프로젝트 규칙(`..`·링크·`.git`·credential 거부)을 거친다. 카드에서는 `userRoot` 아래 절대 경로를 카드 worktree의 같은 상대 경로로 읽는다(`Mapped`). 다만 파일 하나를 읽을 때(`resolveReadPath`), 사용자 폴더에는 있고 카드 worktree에는 없는 경로(git이 추적하지 않는 `.env`·`node_modules` 같은 것, `onlyInUserFolder`)는 사용자 폴더에서 같은 프로젝트 규칙으로 읽는다. 쓰기(`resolveRootPath`)는 늘 카드 worktree로 간다. 목록·검색 snapshot은 run의 root에서만 만든다. 비교는 실제 경로와 dev+inode로 해서 `/tmp`→`/private/tmp` 같은 링크와 대소문자 차이를 같은 곳으로 본다. 그 밖의 절대 경로(`..`로 root를 벗어난 것 포함)는 `Outside`다.
 - `canonicalPathEffect`는 NotFound일 때만 부모로 올라가 해석한다. 권한·I/O 실패를 추측 경로로 바꾸면 안 된다.
 - `isSameOrBelow`는 철자가 아닌 dev+inode로 비교한다. 대소문자 무시 볼륨 우회를 막기 위함이다. ino가 없으면 `invalid_path`로 거부한다.
 - POSIX 읽기·생성·임시 파일은 `noFollow: true`로 연다. Windows는 O_NOFOLLOW가 없다. 대신 lstat으로 관찰된 링크 leaf를 거부하며, 주석상 원자적 보장은 아니다.

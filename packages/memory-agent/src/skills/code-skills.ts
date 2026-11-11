@@ -317,7 +317,8 @@ const programBody = (program: SkillProgram) =>
  * In a kanban card, the program with the card's own folder written as the user's project folder,
  * or none when it does not name the card's folder. The card's folder is gone once the card is
  * merged, and a skill run in a card reads the user's folder as the card's own copy again
- * (`run_skill`), so the program means the same in the card and after it. Outside a card the run's
+ * (`run_skill`; files only the user's folder has stay there), so the program means the same in
+ * the card and after it. Outside a card the run's
  * folder is the user's project folder, so its absolute path is kept as written. A user's folder
  * whose path a program cannot take as it is (spaces, quotes, shell characters) is refused.
  */
@@ -346,7 +347,7 @@ const cardFolderRewritten = Effect.fnUntraced(function* (
 
 /** What a card's save result tells the model when the program names the user's project folder. */
 const cardFolderNote = (project: Fenced<Project>) =>
-  `In this kanban card, paths to the card's own folder (${project.root}) are saved as the user's project folder (${project.toolFence?.userRoot ?? project.root}). A skill run in a card reads that folder as the card's own copy, so the skill works here and after the card is merged.`;
+  `In this kanban card, paths to the card's own folder (${project.root}) are saved as the user's project folder (${project.toolFence?.userRoot ?? project.root}). A skill run in a card reads that folder as the card's own copy, except files the copy does not have because git does not track them (like .env or node_modules), which it reads in the user's folder. So the skill works here and after the card is merged.`;
 
 /** How SKILL.md tells a reader to run the skill. */
 const runLine = (name: string, program: SkillProgram) =>

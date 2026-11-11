@@ -1,4 +1,4 @@
-import { Array as Arr, Data, Effect, Function as EffectFunction, Option } from "effect";
+import { Array as Arr, Data, Effect, FileSystem, Function as EffectFunction, Option } from "effect";
 import { homeDirectory, temporaryDirectory } from "../runtime/host-system.ts";
 import { path } from "../runtime/synchronous-path.ts";
 import {
@@ -13,7 +13,7 @@ import {
   type Fenced,
 } from "./paths.ts";
 
-const { isAbsolute, relative, resolve } = path;
+const { isAbsolute, join, relative, resolve } = path;
 
 /**
  * The one path policy every tool asks: the file tools, the outside tools, `run_skill`'s working
@@ -24,7 +24,9 @@ const { isAbsolute, relative, resolve } = path;
  * - An absolute path below the run's root is read as the root-relative path it spells.
  * - In a kanban card, the run's root is a worktree copy of the user's project folder. An absolute
  *   path below that folder is read at the same place below the card's worktree, and the tool result
- *   says so (`pathMapped`).
+ *   says so (`pathMapped`). A file the copy does not have but the user's folder does (one git does
+ *   not track, like `.env` or `node_modules`) is read in the user's folder; writes always go to the
+ *   copy.
  * - Any other absolute path is outside: only the outside tools, and `run_skill` below a temporary
  *   folder, take it.
  *
@@ -96,15 +98,84 @@ export const resolveRootPath = Effect.fn("PathPolicy.resolveRootPath")(function*
   given: string,
   kind: Kind,
 ) {
+  return yield* resolvePlaced(roots, given, yield* placePath(roots, given), kind);
+});
+
+/** {@link resolveRootPath} for a path already placed. */
+const resolvePlaced = (roots: ToolRoots, given: string, place: PathPlace, kind: Kind) => {
   const inRoot = (relativePath: string, note: Option.Option<string>) =>
     Effect.map(resolveProjectPath(roots.root, relativePath, kind), (resolved) => ({
       ...resolved,
       mappedNote: note,
     }));
-  return yield* PathPlace.$match(yield* placePath(roots, given), {
+  return PathPlace.$match(place, {
     Root: ({ relative: below }) => inRoot(below, Option.none()),
     Mapped: ({ relative: below }) => inRoot(below, Option.some(mappedNote(given, below))),
     Outside: () => reject(given, "outside_project"),
+  });
+};
+
+/** True when there is an entry at `absolute`; one that cannot be checked counts as `unreadable`. */
+const hasEntry = (absolute: string, unreadable: boolean) =>
+  Effect.flatMap(FileSystem.FileSystem, (fs) => fs.lstat(absolute)).pipe(
+    Effect.as(true),
+    Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed(false)),
+    Effect.orElseSucceed(() => unreadable),
+  );
+
+/**
+ * In a card, the user's project folder when `below`, a path relative to it, is there but not in
+ * the card's worktree: a file git does not track, like `.env` or `node_modules`, which the copy
+ * never got. None outside a card, for a path the copy has, and for a new one. A copy that cannot
+ * be read counts as having the path, so a read stays in the copy as before.
+ */
+export const onlyInUserFolder = Effect.fn("PathPolicy.onlyInUserFolder")(function* (
+  roots: ToolRoots,
+  below: string,
+) {
+  return yield* Option.match(Option.fromNullishOr(roots.toolFence?.userRoot), {
+    onNone: () => Effect.succeed(Option.none<string>()),
+    onSome: (userRoot) =>
+      Effect.zipWith(
+        hasEntry(join(userRoot, below), false),
+        hasEntry(join(roots.root, below), true),
+        (inUserFolder, inCopy) => Option.liftPredicate(userRoot, () => inUserFolder && !inCopy),
+      ),
+  });
+});
+
+/** What a tool result tells the model when a path was read in the user's project folder. */
+const userFolderNote = (given: string) =>
+  `${given} is not in this run's own copy of the project (git does not track it, like .env or node_modules), so it was read in the user's project folder. A write to this path goes to this run's copy, not to the user's folder.`;
+
+/**
+ * A path a file tool reads, as {@link resolveRootPath} takes it, except in a card: a path below the
+ * user's project folder that the card's worktree does not have ({@link onlyInUserFolder}) is read
+ * in the user's folder, with the same project rules (no links, `.git` or credentials). Writes
+ * resolve with {@link resolveRootPath} and never reach the user's folder.
+ */
+export const resolveReadPath = Effect.fn("PathPolicy.resolveReadPath")(function* (
+  roots: ToolRoots,
+  given: string,
+  kind: "file" | "directory",
+) {
+  const place = yield* placePath(roots, given);
+  const inRoot = resolvePlaced(roots, given, place, kind);
+  return yield* PathPlace.$match(place, {
+    Mapped: ({ relative: below }) =>
+      Effect.flatMap(
+        onlyInUserFolder(roots, below),
+        Option.match({
+          onNone: () => inRoot,
+          onSome: (userRoot) =>
+            Effect.map(resolveProjectPath(userRoot, below, kind), (resolved) => ({
+              ...resolved,
+              mappedNote: Option.some(userFolderNote(given)),
+            })),
+        }),
+      ),
+    Root: () => inRoot,
+    Outside: () => inRoot,
   });
 });
 
@@ -126,17 +197,18 @@ export const projectPathOf = Effect.fn("PathPolicy.projectPathOf")(function* (
 
 /**
  * A file an outside tool reads: in the project (or, in a card, the user's project folder) as the
- * file tools read it, with the project rules; elsewhere as {@link resolveOutsideToolPath} does.
+ * file tools read it ({@link resolveReadPath}), with the project rules; elsewhere as
+ * {@link resolveOutsideToolPath} does.
  */
 export const resolveReadablePath = Effect.fn("PathPolicy.resolveReadablePath")(function* (
   roots: ToolRoots,
   storageRoot: string,
   given: string,
-  kind: Kind,
+  kind: "file" | "directory",
 ) {
   return yield* Option.match(yield* projectPathOf(roots, given), {
     onSome: () =>
-      Effect.map(resolveRootPath(roots, given, kind), ({ absolute, stats }) => ({
+      Effect.map(resolveReadPath(roots, given, kind), ({ absolute, stats }) => ({
         absolute,
         stats,
       })),
@@ -239,9 +311,20 @@ export interface FolderMention {
 
 const escapeForPattern = (text: string) => text.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** Any of `spellings`, as a whole path or followed by `/`. */
+/**
+ * Any of `spellings`, as a whole path or followed by `/`, and not the end of another name. A `-`
+ * before it counts only as a shell default (`${1:-/work/app/.env}`).
+ */
+const mentionSource = (spellings: ReadonlyArray<string>) =>
+  `(?<![\\w.~/$])(?<!(?<!:)-)(?:${spellings.map(escapeForPattern).join("|")})(?![\\w.-])`;
 const mentionPattern = (spellings: ReadonlyArray<string>, flags: string) =>
-  new RegExp(`(?<![\\w.~/$-])(?:${spellings.map(escapeForPattern).join("|")})(?![\\w.-])`, flags);
+  new RegExp(mentionSource(spellings), flags);
+
+/** Longest first, so `/work/app` never cuts into `/work/app/src`'s real path. */
+const longestFirst = (mentions: ReadonlyArray<FolderMention>) =>
+  Arr.dedupe(mentions.map(({ spelling }) => spelling)).toSorted(
+    (left, right) => right.length - left.length,
+  );
 
 /**
  * Where a saved program names the run's folders by absolute path: as given, as the real path, and
@@ -304,17 +387,64 @@ export const replaceFolderMentions: {
   3,
   (text: string, mentions: ReadonlyArray<FolderMention>, folder: string): string =>
     Arr.isReadonlyArrayNonEmpty(mentions)
-      ? text.replace(
-          mentionPattern(
-            Arr.dedupe(mentions.map(({ spelling }) => spelling)).toSorted(
-              (left, right) => right.length - left.length,
-            ),
-            "g",
-          ),
-          () => folder,
-        )
+      ? text.replace(mentionPattern(longestFirst(mentions), "g"), () => folder)
       : text,
 );
+
+/**
+ * The rest of a path after a folder's spelling: `/` and what follows up to a space, a quote or a
+ * shell character that ends a word.
+ */
+const pathRest = `((?:/[^\\s'"\`;&|<>(){}:,\\\\]*)?)`;
+
+/** A segment a shell reads as a pattern or a variable, which no single file name spells. */
+const isPatternSegment = (segment: string) => /[*?[\]$~]/.test(segment);
+
+/**
+ * What a card's sh script does with each place it names the user's project folder (`mentions`, of
+ * folder `user`): the path is written below `folder`, the card's worktree, as the file tools read
+ * it, except where it names a file only the user's folder has ({@link onlyInUserFolder}), like
+ * `.env` or `node_modules`, which the script reads there. A path is checked up to its first
+ * segment that is a pattern or a variable (`node_modules/.pnpm/pkg@*` is checked as
+ * `node_modules/.pnpm`). The sandbox still lets the script write only in the worktree.
+ */
+export const mapUserFolderMentions = Effect.fn("PathPolicy.mapUserFolderMentions")(function* (
+  roots: ToolRoots,
+  text: string,
+  mentions: ReadonlyArray<FolderMention>,
+  folder: string,
+) {
+  const found = Arr.isReadonlyArrayNonEmpty(mentions)
+    ? Array.from(
+        text.matchAll(new RegExp(`(${mentionSource(longestFirst(mentions))})${pathRest}`, "g")),
+      )
+    : [];
+  const decided = yield* Effect.forEach(found, (match) => {
+    const rest = match[2] ?? "";
+    const below = Arr.takeWhile(
+      rest.split("/").slice(1),
+      (segment) =>
+        segment !== "" && segment !== "." && segment !== ".." && !isPatternSegment(segment),
+    ).join("/");
+    return Effect.map(
+      below === "" ? Effect.succeed(Option.none<string>()) : onlyInUserFolder(roots, below),
+      (userFolder) => ({ match, rest, inUserFolder: Option.isSome(userFolder) }),
+    );
+  });
+  const [end, pieces] = Arr.mapAccum(decided, 0, (start, { match, rest, inUserFolder }) => [
+    match.index + match[0].length,
+    `${text.slice(start, match.index)}${inUserFolder ? match[0] : `${folder}${rest}`}`,
+  ]);
+  return {
+    text: `${pieces.join("")}${text.slice(end)}`,
+    /** The paths written below `folder`, as the script named them. */
+    mapped: Arr.dedupe(decided.filter((use) => !use.inUserFolder).map(({ match }) => match[0])),
+    /** The paths the script reads in the user's folder. */
+    readInUserFolder: Arr.dedupe(
+      decided.filter((use) => use.inUserFolder).map(({ match }) => match[0]),
+    ),
+  };
+});
 
 /**
  * True when `folder` can take the place of another absolute path in a program's text without

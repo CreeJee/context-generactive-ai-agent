@@ -7,7 +7,7 @@ import { listOutsideFilesEffect, createSnapshots, type Snapshot } from "../files
 import {
   projectPathOf,
   resolveReadablePath,
-  resolveRootPath,
+  resolveReadPath,
   type ToolRoots,
 } from "../files/path-policy.ts";
 import type { Fenced } from "../files/paths.ts";
@@ -281,7 +281,7 @@ const make = Effect.gen(function* () {
         // A directory is searched as search_files does; one file below it as here.
         const directory = guardedEffect(
           input.path,
-          resolveRootPath(project, input.path, "directory").pipe(
+          resolveReadPath(project, input.path, "directory").pipe(
             Effect.as(true),
             Effect.catchTag("PathRejected", (rejection) =>
               rejection.reason === "not_directory" ? Effect.succeed(false) : Effect.fail(rejection),

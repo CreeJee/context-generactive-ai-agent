@@ -11,8 +11,8 @@ import { StorageRoot } from "../config/storage-root.ts";
 import {
   folderMentions,
   isPlainPath,
+  mapUserFolderMentions,
   projectPathOf,
-  replaceFolderMentions,
   resolveOutsideToolPath,
   resolveWorkingDirectory,
 } from "../files/path-policy.ts";
@@ -146,34 +146,41 @@ const make = Effect.gen(function* () {
             workdir ?? ".",
           ).pipe(Effect.provideContext(platform));
           // In a card, a script that names the user's project folder runs with that folder written
-          // as the card's own copy, as the file tools read such a path (`path-policy.ts`). Only
-          // those paths of the approved text change. A copy whose path cannot take their place in
-          // a script runs the script as approved, with a warning.
+          // as the card's own copy, as the file tools read such a path (`path-policy.ts`), except
+          // where it names a file only the user's folder has (`.env`, `node_modules`), which it
+          // reads there. Only those paths of the approved text change. A copy whose path cannot
+          // take their place in a script runs the script as approved, with a warning.
           const userFolder = (yield* folderMentions(project, runnable.text).pipe(
             Effect.provideContext(platform),
           )).filter(({ folder }) => folder === "user");
           const spellings = Arr.dedupe(userFolder.map(({ spelling }) => spelling)).join(", ");
           const named = Option.liftPredicate(userFolder, Arr.isReadonlyArrayNonEmpty);
           const mapsFolder = Option.isSome(named) && isPlainPath(project.root);
-          const command = skillCommand(
-            name,
-            mapsFolder
-              ? replaceFolderMentions(runnable.text, userFolder, project.root)
-              : runnable.text,
-            args,
-          );
-          const scriptNote = Option.map(
-            Option.filter(named, () => mapsFolder),
-            () =>
-              `This skill's script names the user's project folder (${spellings}). This run works in a kanban card's own copy of the project, so the script ran with that folder as ${project.root}.`,
-          );
+          const script = yield* mapsFolder
+            ? mapUserFolderMentions(project, runnable.text, userFolder, project.root).pipe(
+                Effect.provideContext(platform),
+              )
+            : Effect.succeed({ text: runnable.text, mapped: [], readInUserFolder: [] });
+          const command = skillCommand(name, script.text, args);
+          const scriptNotes = [
+            ...(Arr.isReadonlyArrayNonEmpty(script.mapped)
+              ? [
+                  `This skill's script names the user's project folder (${spellings}). This run works in a kanban card's own copy of the project, so the script ran with that folder as ${project.root}.`,
+                ]
+              : []),
+            ...(Arr.isReadonlyArrayNonEmpty(script.readInUserFolder)
+              ? [
+                  `This card's copy of the project does not have these paths, because git does not track them (like .env or node_modules), so the script read them in the user's project folder, where it cannot write: ${script.readInUserFolder.join(", ")}.`,
+                ]
+              : []),
+          ];
           const mapped = {
             ...optionalProperty(
               "pathMapped",
               Option.getOrUndefined(
                 Option.map(
                   Option.liftPredicate(
-                    Arr.getSomes([directory.mappedNote, scriptNote]),
+                    [...Option.toArray(directory.mappedNote), ...scriptNotes],
                     Arr.isReadonlyArrayNonEmpty,
                   ),
                   (notes) => notes.join(" "),

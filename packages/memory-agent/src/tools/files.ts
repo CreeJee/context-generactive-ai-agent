@@ -24,7 +24,7 @@ import {
   walkLimit,
   type Snapshot,
 } from "../files/listing.ts";
-import { resolveRootPath, type ToolRoots } from "../files/path-policy.ts";
+import { resolveReadPath, resolveRootPath, type ToolRoots } from "../files/path-policy.ts";
 import { PathRejected, resolveProjectPath, type Fenced } from "../files/paths.ts";
 import { decodeSearchCursor, encodeSearchCursor, searchTextFilesEffect } from "../files/search.ts";
 import {
@@ -510,7 +510,7 @@ const make = Effect.gen(function* () {
       guardedEffect(
         path,
         Effect.gen(function* () {
-          const resolved = yield* resolveRootPath({ root, toolFence }, path, "file");
+          const resolved = yield* resolveReadPath({ root, toolFence }, path, "file");
           const lines = Math.min(Math.max(1, maxLines ?? 400), 2000);
           return {
             path: resolved.relative,

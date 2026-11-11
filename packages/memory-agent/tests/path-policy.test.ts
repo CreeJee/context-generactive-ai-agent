@@ -6,6 +6,7 @@ import { describe, expect } from "vite-plus/test";
 import {
   folderMentions,
   isPlainPath,
+  mapUserFolderMentions,
   replaceFolderMentions,
   resolveOutsideToolPath,
   resolveRootPath,
@@ -222,6 +223,9 @@ describe("saved programs", () => {
         yield* folderMentions(cardRun, `node "${path.join(card, "scripts", "a.js")}"`),
       ).toEqual([{ folder: "root", spelling: card }]);
       expect(yield* folderMentions(cardRun, `cd ${user}-old && ls ${user}2`)).toEqual([]);
+      expect(yield* folderMentions(cardRun, `FILE="\${1:-${user}/.env}"`)).toEqual([
+        { folder: "user", spelling: user },
+      ]);
       expect(yield* folderMentions(cardRun, "cd ./src && pnpm test")).toEqual([]);
     }).pipe(withTestPlatform),
   );
@@ -252,6 +256,34 @@ describe("saved programs", () => {
       expect(isPlainPath(card)).toBe(true);
       expect(isPlainPath("/Users/me/My Projects/app")).toBe(false);
       expect(isPlainPath("/Users/me/작업/app")).toBe(true);
+    }).pipe(withTestPlatform),
+  );
+
+  it.live("in a card, keep the user's folder only for paths the card's copy does not have", () =>
+    Effect.gen(function* () {
+      const { user, card, cardRun, fs, path } = yield* layout();
+      // Not tracked by git, so the card's worktree never got them.
+      yield* fs.writeFileString(path.join(user, ".env"), "TOKEN=1\n");
+      yield* fs.makeDirectory(path.join(user, "node_modules", ".pnpm"), { recursive: true });
+      const script = [
+        `cat ${user}/src/app.ts`,
+        `FILE="\${1:-${user}/.env}"`,
+        `ls -d ${user}/node_modules/.pnpm/pkg@*/schema.graphql`,
+        `echo x > ${user}/out.txt`,
+        `cd ${user}`,
+      ].join("\n");
+      const mentions = yield* folderMentions(cardRun, script);
+      expect(yield* mapUserFolderMentions(cardRun, script, mentions, card)).toEqual({
+        text: [
+          `cat ${card}/src/app.ts`,
+          `FILE="\${1:-${user}/.env}"`,
+          `ls -d ${user}/node_modules/.pnpm/pkg@*/schema.graphql`,
+          `echo x > ${card}/out.txt`,
+          `cd ${card}`,
+        ].join("\n"),
+        mapped: [`${user}/src/app.ts`, `${user}/out.txt`, user],
+        readInUserFolder: [`${user}/.env`, `${user}/node_modules/.pnpm/pkg@*/schema.graphql`],
+      });
     }).pipe(withTestPlatform),
   );
 });

@@ -44,7 +44,7 @@
 - 프로그램은 저장할 때 승인된 정확한 내용일 때만 실행된다
 - network 호스트(`# run_skill network:`)와 입력 스키마(`// run_skill input:`)는 스크립트 첫 줄에 쓴다. 승인 텍스트의 일부이므로 코드와 함께 승인, 해시, 표시된다. 이 줄은 `network`/`input` 필드에서만 생성된다. 사용자가 code나 script에 직접 넣으면 `network_line`/`input_line`으로 거부한다
 - ts 스킬의 input은 `type: "object"`인 JSON Schema여야 한다. 아니면 `input_schema`로 거부한다
-- 저장할 프로그램(sh의 script, ts의 code)이 프로젝트 폴더를 절대 경로로 적어도 거부하지 않는다. 카드 밖에서는 run의 root가 사용자 프로젝트 폴더라 적은 그대로 저장한다. 칸반 카드에서는 카드 worktree를 적은 곳을 사용자 프로젝트 폴더로 바꿔 저장한다(`CodeSkills.rewritten`). 카드 worktree는 merge 뒤 사라지고, 카드에서 sh 스킬을 실행할 때는 사용자 프로젝트 폴더를 다시 카드 worktree로 바꾸며(`tools/approved.ts`), ts 스킬이 부르는 도구는 경로 정책이 옮기기 때문이다. 찾는 표기는 그대로 적은 경로, 실제 경로, 홈 아래면 `~/…`·`$HOME/…`·`${HOME}/…`이고, 경로 전체이거나 `/`가 이어질 때만이다(`files/path-policy.ts`의 `folderMentions`)
+- 저장할 프로그램(sh의 script, ts의 code)이 프로젝트 폴더를 절대 경로로 적어도 거부하지 않는다. 카드 밖에서는 run의 root가 사용자 프로젝트 폴더라 적은 그대로 저장한다. 칸반 카드에서는 카드 worktree를 적은 곳을 사용자 프로젝트 폴더로 바꿔 저장한다(`CodeSkills.rewritten`). 카드 worktree는 merge 뒤 사라지고, 카드에서 sh 스킬을 실행할 때는 사용자 프로젝트 폴더를 다시 카드 worktree로 바꾸며(`tools/approved.ts`, 카드 worktree에 없는 `.env`·`node_modules` 같은 경로는 사용자 폴더 그대로), ts 스킬이 부르는 도구는 경로 정책이 옮기기 때문이다. 찾는 표기는 그대로 적은 경로, 실제 경로, 홈 아래면 `~/…`·`$HOME/…`·`${HOME}/…`이고, 경로 전체이거나 `/`가 이어질 때만이다(`files/path-policy.ts`의 `folderMentions`)
 - 이 바꾸기는 승인보다 먼저 한다. `save_code_skill`의 `plan`이 바꾼 프로그램으로 `Rewritten` 호출을 정해, 승인 창과 권한 검토가 저장될 프로그램을 본다. 저장 결과에는 카드에서 사용자 폴더를 적은 프로그램이면 `pathNote`가 붙는다. 사용자 프로젝트 폴더 경로가 프로그램에 그대로 들어갈 수 없으면(`isPlainPath`가 아니면) 예전처럼 `absolute_path`로 거부한다
 - sh 스크립트의 모든 단계(`;`, `&&`, `||`로 나뉨)가 내장 도구로 대체 가능한 프로그램으로 시작하면 `builtin_overlap`으로 거부한다. 파이프 뒤 필터는 허용한다. 판정할 때 `command`, `exec`, `env`, `time`, `nice` 접두와 `VAR=` 대입은 건너뛴다. `cd`, `set`, `export`, `true`, `:`, `echo`, `printf`, `exit` 단계는 무시한다
 
