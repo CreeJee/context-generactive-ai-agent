@@ -41,6 +41,9 @@ export const rerankModel = {
   id: "CreeJee/KURE-Reranker-nano-ONNX",
   file: "model_fp16",
   maxTokens: 192,
+  // The query is read whole and the text gets what is left. Cutting a long query to make room for
+  // the text scored below not reranking at all, and no other cut measured did better overall
+  // (docs/memory-search-measurements.md, "rerank 입력 방식").
   pairCut: PairCut.cases.head.make({}),
 } as const;
 

@@ -23,7 +23,8 @@
 - 모델은 layer를 만들 때 백그라운드로 적재한다. 처음 시작하면 모델(299 MB)을 `<storage>/models`에 내려받는다. 검색은 적재를 기다리지 않고, 그동안은 fused 순서를 쓴다.
 - WebGPU에서만 돈다. CPU에서는 한 검색의 batch가 몇 초씩 걸려 검색이 기다릴 수 있는 시간을 넘는다(docs/memory-search-measurements.md "rerank"). WebGPU에서 적재하지 못하면 앱을 다시 시작하거나 `retry`할 때까지 rerank를 끈다. worker를 잃어도(`lost`) 마찬가지다. 적재 시도마다 worker를 자기 Scope에 두고, 실패한 시도의 Scope는 닫는다. 요청 하나의 실패(`run`)는 그 검색만 fused 순서로 둔다.
 - 모델은 쌍(`<s> 질문 </s> 글 </s>`)의 `maxTokens`(192) token만 읽는다. worker는 tokenizer가 자르게 두지 않고 `pairTokens`로 쌍의 token id를 직접 만든다(transformers.js는 tokenizer 파일의 `truncation_strategy`를 따르지 않고 이은 쌍의 끝만 자른다). 질문과 글마다 그 token을 담는 앞부분만 tokenizer에 넘긴다. 앞부분은 공백 앞에서 자르고(tokenizer는 공백에서 늘 낱말을 끝내므로 앞부분의 token은 전체 글의 앞 token과 같다), `maxTokens`자부터 두 배씩 늘려 token이 `maxTokens`개 이상 담길 때까지 고른다. 글 전체를 tokenizing하면 100 KB에 약 1초, 800 KB에 8초가 걸렸다.
-- 모델이 읽는 token이 같은 쌍은 한 번만 점수를 매기고 그 점수를 나눠 준다. `head`에서 질문이 192 token보다 길면 모든 쌍이 질문만 읽어 같아진다(최근 사용자 턴 셋을 이은 retrieval 질문에서 흔하다).
+- 모델이 읽는 token이 같은 쌍은 한 번만 점수를 매기고 그 점수를 나눠 준다. `head`에서 질문이 192 token보다 길면 모든 쌍이 질문만 읽어 같아진다(최근 사용자 턴 셋을 이은 retrieval 질문에서 흔하다). 그때 점수는 모두 같아 검색은 후보 순서를 그대로 둔다.
+- 앱은 `head`로 자른다: 질문은 다 읽고 글은 남은 자리만 읽는다. 판정 세트에서 긴 질문을 잘라 글에 자리를 주는 방식(`longest-first`, `query-share`, 최신 발언만, 발언마다 따로)은 질문이 자리를 다 채우는 item에서 rerank하지 않은 순서보다 0.07–0.13 낮았고, 전체로 `head`보다 나은 방식이 없었다(docs/memory-search-measurements.md "rerank 입력 방식"). padding도 그대로 둔다: 쌍 하나씩이나 길이로 나눈 batch는 nDCG@10을 바꾸지 않았다.
 - worker는 한 번에 요청 하나만 처리한다. ONNX 추론은 그 자리에서 중단할 수 없어서 batch는 끝까지 돈다. 검색은 점수를 2초(검색의 native read 예산)까지 기다린다. 넘기면 아직 worker를 기다리던 요청은 버리고, 돌던 batch는 혼자 끝난다.
 - 유휴 worker는 `unref` 상태이고, 작업 중에만 `ref`한다. 모델의 `dispose()`는 worker Scope finalizer에 등록된다.
 - worker는 `env.allowLocalModels = false`로 동작한다. 첫 실행(짧은 쌍 하나)이 성공해야 적재로 본다.
