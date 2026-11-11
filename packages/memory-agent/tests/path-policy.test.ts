@@ -5,6 +5,8 @@ import { Effect, FileSystem, Layer, Option, Path } from "effect";
 import { describe, expect } from "vite-plus/test";
 import {
   folderMentions,
+  isPlainPath,
+  replaceFolderMentions,
   resolveOutsideToolPath,
   resolveRootPath,
   resolveWorkingDirectory,
@@ -237,6 +239,19 @@ describe("saved programs", () => {
       expect(yield* folderMentions(roots, 'cd "$HOME/work/app"')).toEqual([
         { folder: "root", spelling: "$HOME/work/app" },
       ]);
+    }).pipe(withTestPlatform),
+  );
+
+  it.live("write the folders they find as another folder, leaving longer names alone", () =>
+    Effect.gen(function* () {
+      const { user, card, cardRun } = yield* layout();
+      const script = `cd "${user}/src" && cp ${user}-old/a ${user}`;
+      expect(replaceFolderMentions(script, yield* folderMentions(cardRun, script), card)).toBe(
+        `cd "${card}/src" && cp ${user}-old/a ${card}`,
+      );
+      expect(isPlainPath(card)).toBe(true);
+      expect(isPlainPath("/Users/me/My Projects/app")).toBe(false);
+      expect(isPlainPath("/Users/me/작업/app")).toBe(true);
     }).pipe(withTestPlatform),
   );
 });

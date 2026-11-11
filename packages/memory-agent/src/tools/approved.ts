@@ -10,7 +10,9 @@ import {
 import { StorageRoot } from "../config/storage-root.ts";
 import {
   folderMentions,
+  isPlainPath,
   projectPathOf,
+  replaceFolderMentions,
   resolveOutsideToolPath,
   resolveWorkingDirectory,
 } from "../files/path-policy.ts";
@@ -137,29 +139,54 @@ const make = Effect.gen(function* () {
               ),
             sh: (saved) => Effect.succeed(saved),
           });
-          const command = skillCommand(name, runnable.text, args);
           const label = [name, ...args].join(" ");
           const directory = yield* resolveWorkingDirectory(
             project,
             storage.path,
             workdir ?? ".",
           ).pipe(Effect.provideContext(platform));
-          // A script saved before such paths were refused may still name the user's project
-          // folder while this run works in a card's copy of it; it still runs, with a warning.
-          const leaving = Arr.dedupe(
-            (yield* folderMentions(project, runnable.text).pipe(Effect.provideContext(platform)))
-              .filter(({ folder }) => folder === "user")
-              .map(({ spelling }) => spelling),
+          // In a card, a script that names the user's project folder runs with that folder written
+          // as the card's own copy, as the file tools read such a path (`path-policy.ts`). Only
+          // those paths of the approved text change. A copy whose path cannot take their place in
+          // a script runs the script as approved, with a warning.
+          const userFolder = (yield* folderMentions(project, runnable.text).pipe(
+            Effect.provideContext(platform),
+          )).filter(({ folder }) => folder === "user");
+          const spellings = Arr.dedupe(userFolder.map(({ spelling }) => spelling)).join(", ");
+          const named = Option.liftPredicate(userFolder, Arr.isReadonlyArrayNonEmpty);
+          const mapsFolder = Option.isSome(named) && isPlainPath(project.root);
+          const command = skillCommand(
+            name,
+            mapsFolder
+              ? replaceFolderMentions(runnable.text, userFolder, project.root)
+              : runnable.text,
+            args,
+          );
+          const scriptNote = Option.map(
+            Option.filter(named, () => mapsFolder),
+            () =>
+              `This skill's script names the user's project folder (${spellings}). This run works in a kanban card's own copy of the project, so the script ran with that folder as ${project.root}.`,
           );
           const mapped = {
-            ...optionalProperty("pathMapped", Option.getOrUndefined(directory.mappedNote)),
+            ...optionalProperty(
+              "pathMapped",
+              Option.getOrUndefined(
+                Option.map(
+                  Option.liftPredicate(
+                    Arr.getSomes([directory.mappedNote, scriptNote]),
+                    Arr.isReadonlyArrayNonEmpty,
+                  ),
+                  (notes) => notes.join(" "),
+                ),
+              ),
+            ),
             ...optionalProperty(
               "pathWarning",
               Option.getOrUndefined(
                 Option.map(
-                  Option.liftPredicate(leaving, Arr.isReadonlyArrayNonEmpty),
-                  (spellings) =>
-                    `This skill's script names the user's project folder by its absolute path (${spellings.join(", ")}). This run works in a kanban card's own copy of the project, so the script may read the user's folder instead of this copy, and the sandbox refuses writes there. Save the skill again with paths relative to its working directory.`,
+                  Option.filter(named, () => !mapsFolder),
+                  () =>
+                    `This skill's script names the user's project folder by its absolute path (${spellings}). This run works in a kanban card's own copy of the project, whose path cannot replace it in the script, so the script may read the user's folder instead of this copy, and the sandbox refuses writes there. Save the skill again with paths relative to its working directory.`,
                 ),
               ),
             ),

@@ -1,4 +1,4 @@
-import { Array as Arr, Data, Effect, Option } from "effect";
+import { Array as Arr, Data, Effect, Function as EffectFunction, Option } from "effect";
 import { homeDirectory, temporaryDirectory } from "../runtime/host-system.ts";
 import { path } from "../runtime/synchronous-path.ts";
 import {
@@ -239,6 +239,10 @@ export interface FolderMention {
 
 const escapeForPattern = (text: string) => text.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+/** Any of `spellings`, as a whole path or followed by `/`. */
+const mentionPattern = (spellings: ReadonlyArray<string>, flags: string) =>
+  new RegExp(`(?<![\\w.~/$-])(?:${spellings.map(escapeForPattern).join("|")})(?![\\w.-])`, flags);
+
 /**
  * Where a saved program names the run's folders by absolute path: as given, as the real path, and
  * below the home folder as `~/…`, `$HOME/…` or `${HOME}/…`. A spelling counts only as a whole path
@@ -282,11 +286,40 @@ export const folderMentions = Effect.fn("PathPolicy.folderMentions")(function* (
   const found = yield* Effect.forEach(folders, ([folder, spelled]) =>
     Effect.map(spellings(spelled), (candidates) =>
       candidates
-        .filter((spelling) =>
-          new RegExp(`(?<![\\w.~/$-])${escapeForPattern(spelling)}(?![\\w.-])`).test(text),
-        )
+        .filter((spelling) => mentionPattern([spelling], "").test(text))
         .map((spelling): FolderMention => ({ folder, spelling })),
     ),
   );
   return found.flat();
 });
+
+/**
+ * `text` with each of `mentions` written as `folder`. A longer spelling is replaced before one it
+ * starts with, so `/work/app` never cuts into `/work/app/src`'s real path.
+ */
+export const replaceFolderMentions: {
+  (mentions: ReadonlyArray<FolderMention>, folder: string): (text: string) => string;
+  (text: string, mentions: ReadonlyArray<FolderMention>, folder: string): string;
+} = EffectFunction.dual(
+  3,
+  (text: string, mentions: ReadonlyArray<FolderMention>, folder: string): string =>
+    Arr.isReadonlyArrayNonEmpty(mentions)
+      ? text.replace(
+          mentionPattern(
+            Arr.dedupe(mentions.map(({ spelling }) => spelling)).toSorted(
+              (left, right) => right.length - left.length,
+            ),
+            "g",
+          ),
+          () => folder,
+        )
+      : text,
+);
+
+/**
+ * True when `folder` can take the place of another absolute path in a program's text without
+ * changing how a shell or a JavaScript string reads it: no spaces, quotes, `$`, `\`, glob or
+ * other shell characters.
+ */
+export const isPlainPath = (folder: string) =>
+  isAbsolute(folder) && !/[\s'"`$\\;&|<>()*?[\]{}!#~%^=,]/.test(folder);

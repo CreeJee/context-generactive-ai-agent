@@ -241,7 +241,7 @@ testAgent()("code skills", (it) => {
   );
 
   it.effect.skipIf(process.platform !== "darwin")(
-    "in a card, run_skill runs in the card's copy and warns about a script naming the user's folder",
+    "in a card, a saved script naming the user's folder runs with it as the card's copy",
     () =>
       Effect.gen(function* () {
         const { project } = yield* TestEnv;
@@ -250,10 +250,10 @@ testAgent()("code skills", (it) => {
         const card = yield* fs.realPath(
           yield* fs.makeTempDirectoryScoped({ prefix: "code-skills-card-" }),
         );
-        // Saved before such scripts were refused; full mode runs it without an approval record.
+        // Saved in the user's folder; full mode runs it without an approval record.
         const script = path.join(card, ".agents/skills/old-cd/scripts/run.sh");
         yield* fs.makeDirectory(path.dirname(script), { recursive: true });
-        yield* fs.writeFileString(script, `cd ${project.root} && pwd\n`);
+        yield* fs.writeFileString(script, `cd ${project.root} && pwd && echo x > written.txt\n`);
         yield* fs.writeFileString(
           path.join(card, ".agents/skills/old-cd/SKILL.md"),
           "---\nname: old-cd\ndescription: Old\n---\n",
@@ -267,14 +267,19 @@ testAgent()("code skills", (it) => {
           },
           "gate",
         );
-        expect(
-          yield* callTool(tools, "run_skill", { name: "old-cd", workdir: project.root }),
-        ).toMatchObject({
-          workdir: ".",
-          pathMapped: expect.stringContaining("used as . there"),
-          pathWarning: expect.stringContaining(project.root),
-          status: "succeeded",
+        const result = yield* callTool(tools, "run_skill", {
+          name: "old-cd",
+          workdir: project.root,
         });
+        expect(result).toMatchObject({
+          workdir: ".",
+          pathMapped: expect.stringContaining(`as ${card}.`),
+          status: "succeeded",
+          stdout: `${card}\n`,
+        });
+        expect(result).not.toHaveProperty("pathWarning");
+        expect(yield* fs.readFileString(path.join(card, "written.txt"))).toBe("x\n");
+        expect(yield* fs.exists(path.join(project.root, "written.txt"))).toBe(false);
       }),
     { timeout: 30_000 },
   );
