@@ -414,9 +414,11 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
       Layer.mergeAll(
         MemoryTools.layer,
         BtwChat.layer,
-        FileTools.layer,
-        OutsideTools.layer,
-        ApprovedTools.layer.pipe(Layer.provide(CodeSkills.layer)),
+        // The outside tools run a path in the project as the file tools do.
+        Layer.mergeAll(
+          OutsideTools.layer,
+          ApprovedTools.layer.pipe(Layer.provide(CodeSkills.layer)),
+        ).pipe(Layer.provideMerge(FileTools.layer)),
         KagiTools.layer,
         SkillTools.layer,
         WorkflowTools.layer,

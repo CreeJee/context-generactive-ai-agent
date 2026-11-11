@@ -26,7 +26,8 @@
 - `ApprovedTools` — 코드 스킬 저장·`run_skill`(sh 스킬 샌드박스 실행)·외부 파일 쓰기/삭제를 제공하는 서비스(`ApprovedTools.layer`)
 - `BackgroundTasks` / `BackgroundBinding` / `BackgroundOutcome` / `BackgroundOperationFailed` / `BackgroundResultStoreFailed` / `BackgroundTraceFailed` / `BackgroundTaskNotFound` — 백그라운드 작업 시작·결과 대기 서비스와 그 바인딩(`sessionId`, `runId`, `abortSignal`)·결과·오류
 - `FileTools` / `fileToolNames` / `listPageSize` — 프로젝트 파일 도구 서비스(`SecretRedactor.layer` 제공), 목록 페이지 크기 500
-- `OutsideTools` / `outsideReadToolNames` — 프로젝트 밖 파일 읽기 전용 도구(자격 증명 제외)
+- `OutsideTools` / `outsideReadToolNames` — 프로젝트 밖 파일 읽기 전용 도구(자격 증명 제외). 프로젝트 안 경로는 `FileTools`의 호출로 돈다
+- `byPathPlace` — 밖 파일 도구의 경로가 프로젝트 안이면 파일 도구의 호출을 돌리고 결과에 `insideProject` 문장을 붙인다. 밖이면 밖 파일 도구의 일을 한다
 - `CodeTools` — 모델이 쓴 프로그램이 run의 도구를 코드 샌드박스에서 호출하게 하는 서비스(`CodeSandbox.layer` 제공)
 - `MemoryTools` / `memoryRunTools` / `memoryReadRunTools` / `memoryToolNames` / `PromotedMemoryUseRejected` / `MemoryToolEnvironment` / `MemoryToolRunBinding` / `MemoryToolScope` — 메모리 도구와 run 단위 검색·사용 귀속 기록
 - `KagiTools` / `kagiToolNames` / `kagiInstructions` / `maxPageCharacters` — Kagi 웹 검색(`kagi_search`, `kagi_extract`), 페이지 최대 40,000자
@@ -54,7 +55,9 @@
 - OS 샌드박스가 없을 때(`SandboxUnavailable`) 샌드박스 없이 실행하는 것은 `permissionMode === "full"`에서만 허용한다.
 - `run_skill` 타임아웃은 `[1, maxTimeoutSeconds]`로 고정되고 기본값은 `defaultTimeoutSeconds`다. `yieldMs` 기본값은 1000, 범위는 0~30000이다.
 - `write_outside_file`은 `expectedSha256`가 없으면 새 파일만 만들고, 있으면 기존 파일이 있어야 한다(없으면 `not_found`). 외부 경로는 `project.toolFence`로 제한된다.
-- 도구의 경로는 모두 `files/path-policy.ts` 한 정책으로 읽는다. 파일 도구와 `run_skill`의 `workdir`는 프로젝트 상대 경로와 프로젝트 안 절대 경로를 받고(결과의 `path`·`workdir`는 상대 경로), 그 밖의 절대 경로는 `outside_project`로 거부한다. `workdir`만 임시 폴더 아래 절대 경로도 받는다. 외부 도구는 프로젝트 안 경로를 `inside_project`로 거부하고 detail 끝에 `Project path: <상대 경로>`를 붙인다. 칸반 카드에서 사용자 프로젝트 폴더 아래 절대 경로는 카드 worktree의 같은 자리로 읽고, 결과에 `pathMapped` 문장을 붙인다. 카드에서 이미 저장된 sh 스킬의 스크립트가 사용자 프로젝트 폴더를 절대 경로로 적고 있으면 그대로 실행하되 결과에 `pathWarning`을 붙여 다시 저장하게 한다.
+- 도구의 경로는 모두 `files/path-policy.ts` 한 정책으로 읽는다. 파일 도구와 `run_skill`의 `workdir`는 프로젝트 상대 경로와 프로젝트 안 절대 경로를 받고(결과의 `path`·`workdir`는 상대 경로), 그 밖의 절대 경로는 `outside_project`로 거부한다. `workdir`만 임시 폴더 아래 절대 경로도 받는다.
+- 밖 파일 도구에 프로젝트 안 경로(상대 경로, 프로젝트 안 절대 경로, 카드에서는 사용자 프로젝트 폴더 아래 절대 경로)를 주면 같은 일을 하는 파일 도구로 돈다. `list_outside_files`는 `list_files`, `read_outside_file`은 `read_file`, `search_outside_file`은 디렉터리면 `search_files`이고 파일 하나면 그 파일만 프로젝트 규칙으로 찾는다. `write_outside_file`·`delete_outside_file`은 `write_file`·`delete_file`로 돈다. 결과는 파일 도구의 것이고 `insideProject` 문장이 붙는다. 프로젝트 규칙(`.gitignore`, 링크·`.git`·credential 거부, 카드 fence)이 그대로 걸린다.
+- 프로젝트 안 경로의 `write_outside_file`·`delete_outside_file`은 `write_file`·`delete_file`처럼 승인을 묻지 않는다. 도구의 `plan`이 경로를 프로젝트 상대 경로로 바꾼 `Ungated` 호출로 정하므로, 승인 없이 돈 호출은 그 사이 경로가 바뀌어도 프로젝트 밖에 쓰지 못한다. 밖 경로를 승인받은 호출이 돌 때 경로가 프로젝트 안이면 파일 도구로 쓴다. 그래도 밖 도구의 경로 해석에 닿은 프로젝트 안 경로는 `inside_project`로 거부한다. 칸반 카드에서 사용자 프로젝트 폴더 아래 절대 경로는 카드 worktree의 같은 자리로 읽고, 결과에 `pathMapped` 문장을 붙인다. 카드에서 이미 저장된 sh 스킬의 스크립트가 사용자 프로젝트 폴더를 절대 경로로 적고 있으면 그대로 실행하되 결과에 `pathWarning`을 붙여 다시 저장하게 한다.
 - 백그라운드 sh 스킬 결과: `failed`이면 `ProcessExited`, `timed_out`이면 `ProcessTimedOut`, `succeeded`/`cancelled`이면 실패 이유가 없다. 비정상 종료여도 출력은 보관한다.
 - `reportRunToolsForSession`의 trace 콜백은 소스 세션으로 이미 범위가 정해져 있어야 한다. 세션 id를 콜백에 넘기지 않는다.
 

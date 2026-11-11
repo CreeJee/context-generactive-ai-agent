@@ -109,6 +109,42 @@ export const resolveRootPath = Effect.fn("PathPolicy.resolveRootPath")(function*
 });
 
 /**
+ * Where an outside tool's path lands in the project: the path the file tools take, root-relative,
+ * or none when it is outside. In a card a path below the user's project folder lands in the card's
+ * worktree. An outside tool runs such a path as the file tool would, with the project rules.
+ */
+export const projectPathOf = Effect.fn("PathPolicy.projectPathOf")(function* (
+  roots: ToolRoots,
+  given: string,
+) {
+  return PathPlace.$match(yield* placePath(roots, given), {
+    Root: ({ relative: below }) => Option.some(below),
+    Mapped: ({ relative: below }) => Option.some(below),
+    Outside: () => Option.none<string>(),
+  });
+});
+
+/**
+ * A file an outside tool reads: in the project (or, in a card, the user's project folder) as the
+ * file tools read it, with the project rules; elsewhere as {@link resolveOutsideToolPath} does.
+ */
+export const resolveReadablePath = Effect.fn("PathPolicy.resolveReadablePath")(function* (
+  roots: ToolRoots,
+  storageRoot: string,
+  given: string,
+  kind: Kind,
+) {
+  return yield* Option.match(yield* projectPathOf(roots, given), {
+    onSome: () =>
+      Effect.map(resolveRootPath(roots, given, kind), ({ absolute, stats }) => ({
+        absolute,
+        stats,
+      })),
+    onNone: () => resolveOutsideToolPath(roots, storageRoot, given, kind),
+  });
+});
+
+/**
  * A path in the project, refused for an outside tool as `inside_project` with the project-relative
  * path the file tools take. Credentials and `.git` keep their own refusal.
  */
@@ -120,8 +156,10 @@ const insideProject = (given: string, below: string) =>
       : Effect.fail(PathRejected.make({ path: given, reason: "inside_project", target: below }));
 
 /**
- * A path for the outside tools: absolute, and outside the project. A path into the project (or, in
- * a card, the user's project folder) is refused with the relative path the file tools take.
+ * A path for the outside tools' own work: absolute, and outside the project. The outside tools run
+ * a path in the project as the file tools do ({@link projectPathOf}); one that reaches here anyway,
+ * such as a path that moved into the project after its call was approved as an outside write, is
+ * refused with the relative path the file tools take.
  */
 export const resolveOutsideToolPath = Effect.fn("PathPolicy.resolveOutsideToolPath")(function* (
   roots: ToolRoots,

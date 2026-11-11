@@ -3,6 +3,8 @@ import { it } from "@effect/vitest";
 import { describe, expect } from "vite-plus/test";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import type { JsonValue } from "../src/json.ts";
+import type { ToolFence } from "../src/files/paths.ts";
+import { FileTools } from "../src/tools/files.ts";
 import { OutsideTools } from "../src/tools/outside.ts";
 import { withTestPlatform } from "./support/platform.ts";
 import { callTool, failureCode } from "./support/run-tools.ts";
@@ -20,7 +22,10 @@ const layout = Effect.fn("outsideTools.layout")(function* () {
     (directory) => fs.makeDirectory(directory, { recursive: true }),
     { discard: true },
   );
+  yield* fs.makeDirectory(path.join(project, "src"));
   yield* fs.writeFileString(path.join(project, "app.ts"), "export {};\n");
+  yield* fs.writeFileString(path.join(project, "src", "deploy.ts"), "// deploy here\n");
+  yield* fs.writeFileString(path.join(project, ".env"), "TOKEN=1\n");
   yield* fs.writeFileString(path.join(docs, "guide", "intro.md"), "# Intro\nDeploy with care.\n");
   yield* fs.writeFileString(path.join(docs, "notes.txt"), "deploy on friday\r\nnothing else\r\n");
   yield* fs.writeFileString(path.join(docs, ".env"), "TOKEN=1\n");
@@ -29,14 +34,19 @@ const layout = Effect.fn("outsideTools.layout")(function* () {
   return { base, project, storage, docs, fs, path };
 });
 
-const outsideTools = Effect.fn("outsideTools")(function* (project: string, storage: string) {
+const outsideTools = Effect.fn("outsideTools")(function* (
+  project: string,
+  storage: string,
+  toolFence?: ToolFence,
+) {
   const services = yield* Layer.build(
-    OutsideTools.layer.pipe(Layer.provide(StorageRoot.layer(storage))),
+    OutsideTools.layer.pipe(Layer.provide([StorageRoot.layer(storage), FileTools.layer])),
   );
   const service = yield* Effect.provideContext(OutsideTools, services);
   const tools = service.toolsFor({
     id: "p1",
     root: project,
+    toolFence,
     name: "project",
     crossRecallExcluded: false,
     permissionMode: "ask",
@@ -97,7 +107,57 @@ describe("outside tools", () => {
     }).pipe(withTestPlatform),
   );
 
-  it.live("refuses credentials, the project, the storage root and relative paths", () =>
+  it.live("run a path in the project as the file tools do, with the project's rules", () =>
+    Effect.gen(function* () {
+      const { project, storage, path } = yield* layout();
+      const { readOutside, searchOutside, listOutside } = yield* outsideTools(project, storage);
+      expect(yield* readOutside({ path: path.join(project, "app.ts") })).toMatchObject({
+        path: "app.ts",
+        content: "export {};\n",
+        insideProject: expect.stringContaining("read_file"),
+      });
+      expect(yield* listOutside({ directory: project })).toMatchObject({
+        directory: ".",
+        paths: ["app.ts", "src/deploy.ts"],
+        excludedCredentialFiles: 1,
+        insideProject: expect.stringContaining("list_files"),
+      });
+      // A directory is searched as search_files does, and one file in it as well.
+      expect(yield* searchOutside({ path: project, query: "deploy" })).toMatchObject({
+        matches: [{ path: "src/deploy.ts", line: 1 }],
+        insideProject: expect.stringContaining("search_files"),
+      });
+      expect(
+        yield* searchOutside({ path: path.join(project, "src", "deploy.ts"), query: "deploy" }),
+      ).toMatchObject({ matches: [{ line: 1, text: "// deploy here" }], complete: true });
+      expect(yield* failureCode(readOutside({ path: path.join(project, ".env") }))).toBe(
+        "credential",
+      );
+      expect(yield* failureCode(readOutside({ path: path.join(project, ".git", "HEAD") }))).toBe(
+        "git_internal",
+      );
+    }).pipe(withTestPlatform),
+  );
+
+  it.live("in a card, read the user's project folder in the card's worktree", () =>
+    Effect.gen(function* () {
+      const { base, project, storage, fs, path } = yield* layout();
+      const card = path.join(base, "worktrees", "g1", "c1");
+      yield* fs.makeDirectory(card, { recursive: true });
+      yield* fs.writeFileString(path.join(card, "app.ts"), "card copy\n");
+      const { readOutside } = yield* outsideTools(card, storage, {
+        deniedRoots: [project, path.join(base, "worktrees")],
+        userRoot: project,
+      });
+      expect(yield* readOutside({ path: path.join(project, "app.ts") })).toMatchObject({
+        path: "app.ts",
+        content: "card copy\n",
+        pathMapped: expect.stringContaining("app.ts"),
+      });
+    }).pipe(withTestPlatform),
+  );
+
+  it.live("refuses credentials, the storage root and missing paths", () =>
     Effect.gen(function* () {
       const { project, storage, docs, path } = yield* layout();
       const { readOutside, searchOutside, listOutside } = yield* outsideTools(project, storage);
@@ -105,11 +165,9 @@ describe("outside tools", () => {
       expect(yield* failureCode(readOutside({ path: path.join(docs, ".ssh", "id_ed25519") }))).toBe(
         "credential",
       );
-      expect(yield* failureCode(readOutside({ path: path.join(project, "app.ts") }))).toBe(
-        "inside_project",
-      );
       expect(yield* failureCode(listOutside({ directory: storage }))).toBe("credential");
-      expect(yield* failureCode(searchOutside({ path: "docs", query: "x" }))).toBe("invalid_path");
+      // A relative path is a project path, as the file tools read it.
+      expect(yield* failureCode(searchOutside({ path: "docs", query: "x" }))).toBe("not_found");
       expect(yield* failureCode(readOutside({ path: path.join(docs, "missing.txt") }))).toBe(
         "not_found",
       );

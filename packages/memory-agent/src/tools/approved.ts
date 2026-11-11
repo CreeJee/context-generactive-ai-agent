@@ -10,6 +10,7 @@ import {
 import { StorageRoot } from "../config/storage-root.ts";
 import {
   folderMentions,
+  projectPathOf,
   resolveOutsideToolPath,
   resolveWorkingDirectory,
 } from "../files/path-policy.ts";
@@ -44,7 +45,9 @@ import {
   type WriteOutsideFileInput,
 } from "./definitions.ts";
 import { guardedChange, guardedEffect } from "./failure.ts";
-import { runTool } from "./run-tool.ts";
+import { FileTools } from "./files.ts";
+import { byPathPlace } from "./outside.ts";
+import { CallPlan, runTool } from "./run-tool.ts";
 
 /** Not gated per call: the program it runs was approved when it was saved. */
 const runSkill = {
@@ -83,11 +86,31 @@ const commandFailure = Match.type<CommandResult>().pipe(
 
 const make = Effect.gen(function* () {
   const storage = yield* StorageRoot;
+  const files = yield* FileTools;
   const background = yield* BackgroundTasks;
   const codeSkills = yield* CodeSkills;
   const fileSystem = yield* FileSystem.FileSystem;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const platform = yield* Effect.context<FileSystem.FileSystem | SecureRandom.SecureRandom>();
+
+  /**
+   * An outside write or delete whose path lands in the project does only what write_file or
+   * delete_file does, which asks nothing: it runs with the project-relative path, so it cannot
+   * reach outside the project when it runs even if the path changed since.
+   */
+  const projectChange =
+    (project: Fenced<Project>) =>
+    <P extends { readonly path: string }>(params: P) =>
+      projectPathOf(project, params.path).pipe(
+        Effect.map(
+          Option.match({
+            onSome: (below) => CallPlan.Ungated({ params: { ...params, path: below } }),
+            onNone: () => CallPlan.AsGiven<P>(),
+          }),
+        ),
+        Effect.orElseSucceed(() => CallPlan.AsGiven<P>()),
+        Effect.provideContext(platform),
+      );
 
   /** The approved tools' calls for `project`, each failing with what the model reads. */
   const callsFor = (project: Fenced<Project>, binding?: BackgroundBinding) => ({
@@ -230,51 +253,79 @@ const make = Effect.gen(function* () {
         }),
       ),
 
+    /**
+     * A path in the project is written as write_file writes it; its call needed no approval
+     * (`projectChange`). One outside the project was approved for this exact path.
+     */
     writeOutsideFile: ({ path, content, expectedSha256 }: typeof WriteOutsideFileInput.Type) =>
-      guardedChange(
+      byPathPlace(
+        project,
         path,
-        Effect.gen(function* () {
-          const target = yield* resolveOutsideToolPath(project, storage.path, path, "new-or-file");
-          // Without a hash the file must be new; with one it replaces the file it names.
-          return yield* Option.match(Option.fromNullishOr(expectedSha256), {
-            onNone: () =>
-              Effect.map(
-                createTextFileEffect({ absolute: target.absolute, path, text: content }),
-                (created) => ({ path: target.absolute, created: true, ...created }),
-              ),
-            onSome: (expected) =>
-              Effect.succeed(target).pipe(
-                Effect.filterOrFail(
-                  (existing) => existing.stats !== undefined,
-                  () => PathRejected.make({ path, reason: "not_found" }),
+        "write_file",
+        files
+          .callsFor(project)
+          .writeFile({ path, content, ...optionalProperty("expectedSha256", expectedSha256) }),
+        guardedChange(
+          path,
+          Effect.gen(function* () {
+            const target = yield* resolveOutsideToolPath(
+              project,
+              storage.path,
+              path,
+              "new-or-file",
+            );
+            // Without a hash the file must be new; with one it replaces the file it names.
+            return yield* Option.match(Option.fromNullishOr(expectedSha256), {
+              onNone: () =>
+                Effect.map(
+                  createTextFileEffect({ absolute: target.absolute, path, text: content }),
+                  (created) => ({ path: target.absolute, created: true, ...created }),
                 ),
-                Effect.andThen(
-                  replaceTextFileEffect({
-                    absolute: target.absolute,
-                    path,
-                    expectedSha256: expected,
-                    text: content,
-                  }),
+              onSome: (expected) =>
+                Effect.succeed(target).pipe(
+                  Effect.filterOrFail(
+                    (existing) => existing.stats !== undefined,
+                    () => PathRejected.make({ path, reason: "not_found" }),
+                  ),
+                  Effect.andThen(
+                    replaceTextFileEffect({
+                      absolute: target.absolute,
+                      path,
+                      expectedSha256: expected,
+                      text: content,
+                    }),
+                  ),
+                  Effect.map((replaced) => ({
+                    path: target.absolute,
+                    created: false,
+                    ...replaced,
+                  })),
                 ),
-                Effect.map((replaced) => ({ path: target.absolute, created: false, ...replaced })),
-              ),
-          });
-        }).pipe(Effect.provideContext(platform)),
-      ),
+            });
+          }).pipe(Effect.provideContext(platform)),
+        ),
+      ).pipe(Effect.provideContext(platform)),
 
+    /** A path in the project is deleted as delete_file deletes it, like {@link writeOutsideFile}. */
     deleteOutsideFile: ({ path, expectedSha256 }: typeof DeleteOutsideFileInput.Type) =>
-      guardedChange(
+      byPathPlace(
+        project,
         path,
-        Effect.gen(function* () {
-          const target = yield* resolveOutsideToolPath(project, storage.path, path, "file");
-          const removed = yield* deleteTextFileEffect({
-            absolute: target.absolute,
-            path,
-            expectedSha256,
-          });
-          return { path: target.absolute, deleted: true, ...removed };
-        }).pipe(Effect.provideContext(platform)),
-      ),
+        "delete_file",
+        files.callsFor(project).deleteFile({ path, expectedSha256 }),
+        guardedChange(
+          path,
+          Effect.gen(function* () {
+            const target = yield* resolveOutsideToolPath(project, storage.path, path, "file");
+            const removed = yield* deleteTextFileEffect({
+              absolute: target.absolute,
+              path,
+              expectedSha256,
+            });
+            return { path: target.absolute, deleted: true, ...removed };
+          }).pipe(Effect.provideContext(platform)),
+        ),
+      ).pipe(Effect.provideContext(platform)),
   });
 
   return {
@@ -307,12 +358,14 @@ const make = Effect.gen(function* () {
           ...writeOutsideFileSpec,
           needsApproval,
           lazy: true,
+          plan: projectChange(project),
           handler: calls.writeOutsideFile,
         }),
         runTool({
           ...deleteOutsideFileSpec,
           needsApproval,
           lazy: true,
+          plan: projectChange(project),
           handler: calls.deleteOutsideFile,
         }),
       ];

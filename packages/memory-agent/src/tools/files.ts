@@ -645,6 +645,12 @@ const make = Effect.gen(function* () {
 
   return {
     /**
+     * The file tools' calls in a run's root, for another tool given a path in the project: the
+     * outside tools run such a call as the file tool would, with the same rules.
+     */
+    callsFor,
+
+    /**
      * File tools for one project (R04). Reads, searches, creation, edits and deletion inside the
      * project run without approval; `.git`, links and credential files are refused. A path is
      * relative to the project or absolute inside it (`path-policy.ts`). They run on
