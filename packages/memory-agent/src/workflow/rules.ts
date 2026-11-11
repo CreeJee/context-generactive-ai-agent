@@ -1,19 +1,19 @@
 import { isTruthy } from "../truthy.ts";
 import {
   Array as EffectArray,
+  HashMap,
   HashSet,
   Iterable,
   MutableHashMap,
   Option,
-  Cache,
   Context,
   Effect,
-  Exit,
   Layer,
   Result,
   Schema,
+  SynchronizedRef,
 } from "effect";
-import { Embedder, type EmbeddingError } from "../memory/embedding/embedder.ts";
+import { Embedder } from "../memory/embedding/embedder.ts";
 import type { WorkflowPhase } from "./workflow.ts";
 
 /**
@@ -196,37 +196,55 @@ const lexicalScore = (query: HashSet.HashSet<string>, rule: WorkflowRule) =>
 const cosine = (left: Float32Array, right: Float32Array) =>
   left.reduce((score, value, index) => score + value * right[index]!, 0);
 
+/** The text a rule's vector is made from. */
+const embeddedText = (rule: WorkflowRule) =>
+  `${rule.title}\n${rule.terms.join(" ")}\n${rule.instruction}`;
+
+/** Most rule vectors kept; past it, only the rules of the latest request stay. */
+const keptRuleVectors = 512;
+
 const make = Effect.gen(function* () {
   const embedder = yield* Embedder;
-  const vectorSets = yield* Cache.makeWith<
-    readonly WorkflowRule[],
-    MutableHashMap.MutableHashMap<string, Float32Array>,
-    EmbeddingError
-  >(
-    (rules) =>
-      embedder
-        .embed(
-          rules.map((rule) => `${rule.title}\n${rule.terms.join(" ")}\n${rule.instruction}`),
-          "document",
-        )
-        .pipe(
-          Effect.map((embedded) =>
-            MutableHashMap.fromIterable(
-              rules.flatMap((rule, index) => {
-                const vector = embedded[index];
-                return isTruthy(vector) ? [[rule.id, vector] as const] : [];
-              }),
-            ),
-          ),
-        ),
-    {
-      capacity: 32,
-      timeToLive: (exit) => (Exit.isSuccess(exit) ? "1 hour" : 0),
-    },
-  );
+  // Vectors by the text they were made from, for as long as the app runs: the embedder does not
+  // change while it runs. Every project's rule set holds the built-in rules, embedded once.
+  const known = yield* SynchronizedRef.make(HashMap.empty<string, Float32Array>());
 
+  /** The rules' vectors by rule id, embedding only the texts not seen before. */
   const vectors = (rules: readonly WorkflowRule[]) =>
-    Cache.get(vectorSets, rules).pipe(Effect.withSpan("WorkflowRules.ruleVectors"));
+    SynchronizedRef.modifyEffect(known, (current) => {
+      const texts = rules.map(embeddedText);
+      const missing = EffectArray.dedupe(texts.filter((text) => !HashMap.has(current, text)));
+      return Effect.map(
+        EffectArray.isReadonlyArrayNonEmpty(missing)
+          ? embedder.embed(missing, "document")
+          : Effect.succeed<readonly Float32Array[]>([]),
+        (embedded) => {
+          const added = HashMap.setMany(
+            current,
+            missing.flatMap((text, index) => {
+              const vector = embedded[index];
+              return isTruthy(vector) ? [[text, vector] as const] : [];
+            }),
+          );
+          const wanted = HashSet.fromIterable(texts);
+          const kept =
+            HashMap.size(added) > keptRuleVectors
+              ? HashMap.filter(added, (_, text) => HashSet.has(wanted, text))
+              : added;
+          const byId = MutableHashMap.fromIterable(
+            rules.flatMap((rule, index) =>
+              Option.toArray(
+                Option.map(
+                  HashMap.get(kept, texts[index]!),
+                  (vector) => [rule.id, vector] as const,
+                ),
+              ),
+            ),
+          );
+          return [byId, kept] as const;
+        },
+      );
+    }).pipe(Effect.withSpan("WorkflowRules.ruleVectors"));
 
   return {
     resolve: ({ phases, text, rules = [], limit = 3 }: RuleQuery): Effect.Effect<ResolvedRules> => {

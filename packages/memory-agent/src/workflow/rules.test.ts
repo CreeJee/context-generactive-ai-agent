@@ -47,6 +47,14 @@ describe("WorkflowRules", () => {
         yield* rules.resolve({ phases: ["plan"], text: "database migration" });
         yield* rules.resolve({ phases: ["plan"], text: "schema backfill" });
         expect(calls).toEqual([expect.any(Number), 1, 1]);
+        // A project's own rule is embedded alone; the built-in rules beside it are not again.
+        const builtIn = builtInWorkflowRules.find((rule) => rule.id === "workflow.plan.migration")!;
+        yield* rules.resolve({
+          phases: ["plan"],
+          text: "schema backfill",
+          rules: [{ ...builtIn, id: "project.plan.fixtures", instruction: "Seed fixtures first." }],
+        });
+        expect(calls.slice(3)).toEqual([1, 1]);
       }),
     );
   });
