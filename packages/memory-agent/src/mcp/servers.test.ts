@@ -1,5 +1,6 @@
 import { expect, test } from "vite-plus/test";
 import {
+  failedServerWaitMs,
   maxMcpGuideCharacters,
   mcpInstructions,
   mcpInstructionsForMode,
@@ -22,4 +23,10 @@ test("server guides are quoted by server and cut to a bounded length", () => {
   expect(prompt).toContain('<server name="graph">\nUse trace for call paths.\n</server>');
   expect(prompt).toContain(`${"y".repeat(maxMcpGuideCharacters)}\n… [cut: 5 more characters]`);
   expect(prompt).not.toContain("y".repeat(maxMcpGuideCharacters + 1));
+});
+
+test("a failed server's wait doubles with each failure in a row, up to 10 minutes", () => {
+  expect([1, 2, 3, 5, 6, 20].map(failedServerWaitMs)).toEqual([
+    30_000, 60_000, 120_000, 480_000, 600_000, 600_000,
+  ]);
 });

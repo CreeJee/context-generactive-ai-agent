@@ -169,6 +169,25 @@ export const mcpInstructionsForMode: {
 export const maxMcpResultCharacters = 60_000;
 
 const connectTimeoutMs = 20_000;
+
+/**
+ * How long runs leave a server alone after `failures` failed starts in a row: 30 seconds, doubled
+ * for each failure after the first, at most 10 minutes. A failed start could cost every turn up to
+ * the connect limit. Settings start it again at once.
+ */
+export const failedServerWaitMs = (failures: number) =>
+  Math.min(30_000 * 2 ** (failures - 1), 10 * 60_000);
+
+/** A server's failed starts in a row, for the configuration that failed. */
+interface FailedStarts {
+  readonly fingerprint: string;
+  readonly failures: number;
+  /** When a run may start it again, in epoch milliseconds. */
+  readonly retryAt: number;
+}
+
+/** Whether a failed server starts again now (the user asked) or only once its wait is over (a run). */
+type StartAgain = "now" | "after-wait";
 /** How long a login waits for the person to finish it in the browser. */
 const loginTimeoutMs = 5 * 60_000;
 
@@ -399,6 +418,8 @@ const make = Effect.gen(function* () {
   const loginServices = yield* Effect.context<SecretStore | SecureRandom.SecureRandom>();
   const serviceScope = yield* Effect.scope;
   const connections = yield* SynchronizedRef.make(HashMap.empty<string, Connection>());
+  /** Servers that failed to start, by connection key, until one starts. */
+  const failedStarts = yield* Ref.make(HashMap.empty<string, FailedStarts>());
   /** One login per keychain entry, shared by every connection that uses it. */
   const credentials = yield* SynchronizedRef.make(HashMap.empty<SecretName, McpCredentials>());
   const logins = yield* Ref.make(HashMap.empty<SecretName, LoginState>());
@@ -612,17 +633,50 @@ const make = Effect.gen(function* () {
     );
   };
 
+  /** Whether a run leaves this configuration of the server alone: it failed, and its wait is on. */
+  const waiting = (key: string, server: ConfiguredServer) =>
+    Effect.flatMap(Ref.get(failedStarts), (current) =>
+      Effect.map(Clock.currentTimeMillis, (now) =>
+        Option.exists(
+          HashMap.get(current, key),
+          (failed) => failed.fingerprint === server.fingerprint && now < failed.retryAt,
+        ),
+      ),
+    );
+
+  /** Counts a failed start, or forgets the failures once the server starts or wants a login. */
+  const rememberStart = (key: string, server: ConfiguredServer, state: McpServerState) =>
+    McpServerState.$is("failed")(state)
+      ? Effect.flatMap(Clock.currentTimeMillis, (now) =>
+          Ref.update(failedStarts, (current) => {
+            const failures = Option.match(
+              Option.filter(
+                HashMap.get(current, key),
+                (failed) => failed.fingerprint === server.fingerprint,
+              ),
+              { onNone: () => 1, onSome: (failed) => failed.failures + 1 },
+            );
+            return HashMap.set(current, key, {
+              fingerprint: server.fingerprint,
+              failures,
+              retryAt: now + failedServerWaitMs(failures),
+            });
+          }),
+        )
+      : Ref.update(failedStarts, HashMap.remove(key));
+
   /**
    * Lists a server's tools as agent tools, with the guide it sent at connect. A failure is
-   * remembered and retried next time.
+   * remembered: runs start the server again once its wait is over, settings at once.
    */
-  const discover = (project: Project, server: ConfiguredServer) =>
-    Effect.flatMap(connect(project, server), (connection) =>
+  const discover = (project: Project, server: ConfiguredServer, startAgain: StartAgain) => {
+    const key = connectionKey(project, server);
+    const discovered = Effect.flatMap(connect(project, server), (connection) =>
       SynchronizedRef.modifyEffect(connection.discovering, (current) =>
         Option.match(current, {
           onSome: (running) => Effect.succeed([running, current] as const),
           onNone: () =>
-            discovery({ key: connectionKey(project, server), server, connection }).pipe(
+            discovery({ key, server, connection }).pipe(
               // A connection starts another discovery only once this one is cleared, so it is still this one.
               Effect.ensuring(SynchronizedRef.set(connection.discovering, Option.none())),
               // A caller that stops waiting does not stop the discovery the others share.
@@ -632,6 +686,12 @@ const make = Effect.gen(function* () {
         }),
       ).pipe(Effect.flatMap(Fiber.join)),
     );
+    return startAgain === "now"
+      ? discovered
+      : Effect.flatMap(waiting(key, server), (wait) =>
+          wait ? Effect.succeed(nothingDiscovered) : discovered,
+        );
+  };
 
   /** A discovery on `connection`, which it keeps until it ends so callers meanwhile share it. */
   const discovery = ({
@@ -691,18 +751,16 @@ const make = Effect.gen(function* () {
         })),
         guide: guide === "" ? null : guide,
       };
-      return Effect.as(
-        Ref.set(
-          connection.state,
-          McpServerState.connected({
-            tools: tools.map((tool) => ({
-              name: tool.name,
-              server: serverHintsOf(tool),
-              user: noMcpHints,
-            })),
-          }),
-        ),
-        discovered,
+      const state = McpServerState.connected({
+        tools: tools.map((tool) => ({
+          name: tool.name,
+          server: serverHintsOf(tool),
+          user: noMcpHints,
+        })),
+      });
+      return Ref.set(connection.state, state).pipe(
+        Effect.andThen(rememberStart(key, server, state)),
+        Effect.as(discovered),
       );
     };
     return Effect.gen(function* () {
@@ -732,7 +790,14 @@ const make = Effect.gen(function* () {
                   McpServerState.failed({ failure: shown }),
                 ),
           ),
-          Effect.flatMap((state) => Effect.when(Ref.set(connection.state, state), isCurrent)),
+          Effect.flatMap((state) =>
+            Effect.when(
+              Ref.set(connection.state, state).pipe(
+                Effect.andThen(rememberStart(key, server, state)),
+              ),
+              isCurrent,
+            ),
+          ),
           Effect.as(nothingDiscovered),
         ),
       ),
@@ -839,7 +904,7 @@ const make = Effect.gen(function* () {
     return yield* Effect.forEach(
       usable,
       (entry) =>
-        Effect.map(discover(project, entry.server), (discovered) => ({
+        Effect.map(discover(project, entry.server, "after-wait"), (discovered) => ({
           server: entry.server.name,
           guide: discovered.guide,
           tools: discovered.tools.map((tool) => ({
@@ -902,7 +967,7 @@ const make = Effect.gen(function* () {
         succeeded: () =>
           settled(Option.none()).pipe(
             Effect.andThen(closeWhere(usesLogin(project, server))),
-            Effect.andThen(discover(project, server)),
+            Effect.andThen(discover(project, server, "now")),
             Effect.asVoid,
           ),
         cancelled: () => settled(Option.none()),
@@ -1018,7 +1083,8 @@ const make = Effect.gen(function* () {
                 VALUES (${scope}, ${projectId}, ${name}, ${server.fingerprint}, ${trustedAt})
                 ON CONFLICT (scope, project_id, name) DO UPDATE
                 SET fingerprint = excluded.fingerprint, trusted_at = excluded.trusted_at`;
-              yield* Effect.when(discover(project, server), Effect.succeed(!shadowed));
+              // Trusting again is how settings start a failed server: at once, without its wait.
+              yield* Effect.when(discover(project, server, "now"), Effect.succeed(!shadowed));
             }),
         });
         yield* trusted ? trust : distrust;
@@ -1054,7 +1120,9 @@ const make = Effect.gen(function* () {
         yield* forgetLogin(project, scope, name);
         yield* closeWhere(usesLogin(project, { scope, name }));
         const server = yield* usableServer(project, scope, name);
-        yield* Effect.transposeOption(Option.map(server, (found) => discover(project, found)));
+        yield* Effect.transposeOption(
+          Option.map(server, (found) => discover(project, found, "now")),
+        );
         return yield* overview(project);
       }),
 

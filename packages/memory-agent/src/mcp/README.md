@@ -59,7 +59,7 @@
 - 사용자 힌트는 `mcp_tool_hints`에 `(scope, project_id, server, tool, hint)`마다 한 행이다. global 서버는 `project_id ''`다. `null`로 되돌리면 행을 지운다. 신뢰를 거두거나 설정이 바뀌어도 지우지 않는다(설정이 아니라 도구에 대한 판단이다).
 - MCP 도구는 모두 lazy다. 이름만 discovery 도구 설명에 오르고, 모델이 요청한 뒤에 전체가 간다. 대화가 한 번 찾은 도구는 그 대화의 다음 run에도 전체로 간다. guide는 그대로 system prompt에 남는다.
 - connect 시간 제한은 20_000ms이다. `McpStepTimedOut` 단계는 `connect_timed_out` / `tools_list_timed_out` 코드에 대응한다.
-- 진행 중인 discovery는 `SynchronizedRef<Option<Fiber>>`로 호출자들이 함께 쓴다. `runTools`는 시작에 실패한 서버를 건너뛰고(설정 화면에는 failed로 표시) 실행을 계속한다.
+- 진행 중인 discovery는 `SynchronizedRef<Option<Fiber>>`로 호출자들이 함께 쓴다. `runTools`는 시작에 실패한 서버를 건너뛰고(설정 화면에는 failed로 표시) 실행을 계속한다. 시작에 실패한 서버는 같은 설정인 동안 run이 바로 다시 시작하지 않는다. 연속 실패 횟수마다 기다리는 시간(`failedServerWaitMs`: 30초에서 실패마다 두 배, 최대 10분)이 지나야 다음 run이 다시 시작한다. 설정 화면의 "다시 시작"(`setTrusted`), 로그인·로그아웃은 기다리지 않고 바로 시작한다. 시작에 성공하거나 로그인이 필요해지면 실패 횟수를 잊는다.
 - `McpServers.layer`의 `make`는 `StorageRoot`를 yield한다. `readMcpFile`에는 `FileSystem`을 provide해서 쓴다. `SqlClient`, `SecretRedactor`, `SecretStore`, `SecureRandom`도 쓴다.
 - OAuth는 HTTP 서버에서 `oauth`가 있거나, 없더라도 `Authorization` 헤더를 적지 않았을 때 쓴다. 서버가 401을 주기 전에는 아무것도 하지 않는다.
 - 로그인은 키체인 항목(`loginSlot`)마다 하나이고, 그 항목을 쓰는 연결(공통 서버는 모든 프로젝트)이 함께 쓴다. 항목의 `binding`이 지금 URL·`oauth`와 다르면 빈 로그인으로 본다. 발견 결과와 PKCE verifier는 메모리에만 둔다.

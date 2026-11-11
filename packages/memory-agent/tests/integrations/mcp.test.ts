@@ -319,6 +319,39 @@ testAgent()("MCP servers of a project", (it) => {
   );
 });
 
+testAgent()("MCP servers that failed to start", (it) => {
+  it.effect(
+    "runs leave a failed server alone while it waits, and settings start it at once",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { project, fake } = yield* freshProject;
+          const servers = yield* McpServers;
+          yield* writeJson(fake.config, {
+            mcpServers: { fake: fake.entry({ FAKE_MCP_TOKEN: "${MCP_RETRY_TOKEN}" }) },
+          });
+          // Without the variable the server cannot start.
+          const failed = yield* servers.setTrusted(project, "project", "fake", true);
+          expect(failed.servers[0]?.state).toEqual(
+            McpServerState.failed({ failure: { code: "missing_env", detail: "MCP_RETRY_TOKEN" } }),
+          );
+          // Fixed now, but a run does not try it again until its wait is over.
+          yield* stubEnv({ MCP_RETRY_TOKEN: "set" });
+          expect((yield* servers.runTools(project)).tools).toEqual([]);
+          expect(yield* fake.starts).toBe(0);
+          expect((yield* servers.overview(project)).servers[0]?.state).toEqual(
+            failed.servers[0]?.state,
+          );
+          // Starting it again from settings does not wait.
+          const started = yield* servers.setTrusted(project, "project", "fake", true);
+          expect(McpServerState.$is("connected")(started.servers[0]!.state)).toBe(true);
+          expect((yield* servers.runTools(project)).tools.length).toBeGreaterThan(0);
+        }),
+      ),
+    serverStartTimeout,
+  );
+});
+
 // The global `mcp.json` and its trust are shared by every project, so these tests own an agent.
 // Each writes the global file whole before it reads it.
 testAgent()("MCP global and project configuration", (it) => {
