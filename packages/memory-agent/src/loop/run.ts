@@ -33,7 +33,7 @@ import { toolParameters } from "../model/tool-schema.ts";
 import { optionalProperty } from "../optional-property.ts";
 import { lazyToolsFor, ToolLookup } from "../tools/discovery.ts";
 import { jsonSchemaIssues, prepareRepaired } from "../tools/input-repair.ts";
-import type { RunTool } from "../tools/run-tool.ts";
+import { CallPlan, type RunTool } from "../tools/run-tool.ts";
 import { serverRestartedCode, serverRestartedMessage } from "../agent/run-state.ts";
 import { type AgUiEvent, reasoningMessageId } from "./chunks.ts";
 import { type ResumeEntry, type ResumeRejected, type Resumed, resumeAnswers } from "./resume.ts";
@@ -130,12 +130,14 @@ export interface RunHook<R = never> {
   /**
    * A gate for a call whose arguments fit its tool: its decision, or none to let the next gate
    * decide. A call that every gate lets through runs. `written` is the arguments as the model wrote
-   * them, which the stored message keeps.
+   * them, which the stored message keeps, or as its tool's plan rewrote them (`CallPlan`). `gated`
+   * is false for a call its plan runs as a tool without approval would, which no gate asks about.
    */
   readonly admit?: (
     scope: RunScope,
     call: StepCall,
     written: string,
+    gated: boolean,
   ) => Effect.Effect<Option.Option<Admission<StoredInterruptPayload>>, RunFailed, R>;
   /** A call got its answer, as soon as it did. */
   readonly answered?: (
@@ -636,22 +638,49 @@ const runAccepted = Effect.fnUntraced(function* <R>(
       const prepared = yield* prepareRepaired(tool)(call.params).pipe(
         Effect.catch((error) => refused(invalidInput(tool, offered, error))),
       );
+      // The call as the approval and the gates see it, and as it runs.
+      const planned = yield* Option.match(Option.fromNullishOr(tool.plan), {
+        onNone: () => Effect.succeed({ call, written, gated: true, run: prepared }),
+        onSome: (plan) =>
+          Effect.flatMap(
+            plan(call.params),
+            CallPlan.$match({
+              AsGiven: () => Effect.succeed({ call, written, gated: true, run: prepared }),
+              Ungated: ({ params }) =>
+                Effect.map(prepareRepaired(tool)(params), (run) => ({
+                  call: { ...call, params },
+                  written,
+                  gated: false,
+                  run,
+                })),
+              Rewritten: ({ params }) =>
+                Effect.zipWith(prepareRepaired(tool)(params), encodeJson(params), (run, text) => ({
+                  call: { ...call, params },
+                  written: text,
+                  gated: true,
+                  run,
+                })),
+            }),
+          ).pipe(Effect.catch((error) => refused(invalidInput(tool, offered, error)))),
+      });
       yield* Effect.when(
-        Effect.flatMap(approvalRequest(call, tool), (request) =>
+        Effect.flatMap(approvalRequest(planned.call, tool), (request) =>
           decided(CallResult.Waiting({ request })),
         ),
-        Effect.succeed(tool.tool.needsApproval === true && Option.isNone(approval)),
+        Effect.succeed(
+          tool.tool.needsApproval === true && planned.gated && Option.isNone(approval),
+        ),
       );
       yield* Effect.forEach(
         hooks.flatMap((hook) => hook.admit ?? []),
         (gate) =>
           Effect.flatMap(
-            gate(scope, call, written),
+            gate(scope, planned.call, planned.written, planned.gated),
             Option.match({ onNone: () => Effect.void, onSome: decided }),
           ),
         { discard: true },
       );
-      return Run(prepared({ toolCallId: call.id }));
+      return Run(planned.run({ toolCallId: call.id }));
     }).pipe(
       Effect.catchTag("Decided", ({ admission }) =>
         Effect.succeed<Admission<StoredInterruptPayload>>(admission),

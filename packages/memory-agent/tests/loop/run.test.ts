@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { NodeCrypto } from "@effect/platform-node";
 import { it } from "@effect/vitest";
-import { Context, Deferred, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect";
+import { Context, Deferred, Effect, Fiber, Layer, Option, Ref, Schema, Stream } from "effect";
 import type { SecureRandom } from "effect/crypto";
 import { SqlClient } from "effect/sql";
 import { describe, expect } from "vite-plus/test";
@@ -14,13 +14,14 @@ import { RunFailed, runChat, type RunHook, type RunSpec } from "../../src/loop/r
 import { RunStore } from "../../src/loop/store.ts";
 import { providerTools } from "../../src/providers/provider-tools.ts";
 import { scriptedModel, type ScriptedTurn } from "../../src/testing/scripted-model.ts";
-import { runTool } from "../../src/tools/run-tool.ts";
+import { CallPlan, runTool } from "../../src/tools/run-tool.ts";
 
 /**
  * The run loop's order and bookkeeping (docs/effect-ai-migration.md step 4), which types cannot
  * check: a call waiting for approval does not hold the others back, the resume runs only the calls
  * that had no answer and keeps results in call order, a refused resume starts nothing, a cut run
- * keeps what it wrote, and every step offers the provider's own tools.
+ * keeps what it wrote, and every step offers the provider's own tools. A tool's plan can run a call
+ * without asking or have it asked about with other arguments.
  */
 
 const database = Effect.acquireRelease(
@@ -53,7 +54,11 @@ const rows = (query: string) =>
 
 const Path = Schema.Struct({ path: Schema.String });
 
-/** A model scripted with `turns`, a read tool, and a write tool that needs approval. */
+/**
+ * A model scripted with `turns`, a read tool, and a write tool that needs approval. Its plan runs a
+ * path below `project/` as that relative path without asking, and asks about a `~/` path as the
+ * `/home/` path it stands for.
+ */
 const harness = Effect.fnUntraced(function* (
   ...turns: readonly [ScriptedTurn, ...Array<ScriptedTurn>]
 ) {
@@ -82,6 +87,14 @@ const harness = Effect.fnUntraced(function* (
         description: "Write.",
         parameters: Path,
         needsApproval: true,
+        plan: ({ path }) =>
+          Effect.succeed(
+            path.startsWith("project/")
+              ? CallPlan.Ungated({ params: { path: path.slice("project/".length) } })
+              : path.startsWith("~/")
+                ? CallPlan.Rewritten({ params: { path: `/home/${path.slice(2)}` } })
+                : CallPlan.AsGiven(),
+          ),
         handler: record("write"),
       }),
     ],
@@ -154,6 +167,49 @@ describe("run loop", () => {
           { run_id: "run-2", status: "completed", error: null },
         ]);
         expect(yield* rows("SELECT status FROM chat_interrupts")).toEqual([{ status: "resolved" }]);
+      }),
+    ),
+  );
+
+  it.effect("runs a call its plan ungates without asking, and asks about a rewritten one", () =>
+    withRows(
+      Effect.gen(function* () {
+        const store = yield* RunStore;
+        const admitted = yield* Ref.make<ReadonlyArray<string>>([]);
+        const gate: RunHook = {
+          admit: (_scope, call, written, gated) =>
+            Effect.as(
+              Ref.update(admitted, (all) => [...all, `${call.id} ${written} ${gated}`]),
+              Option.none(),
+            ),
+        };
+        const { run, ran } = yield* harness(
+          {
+            toolCalls: [
+              { id: "w1", name: "write_file", arguments: '{"path":"project/a"}' },
+              { id: "w2", name: "write_file", arguments: '{"path":"~/b"}' },
+            ],
+          },
+          { text: "done" },
+        );
+
+        expect((yield* run("run-1", [user], { hooks: [gate] })).at(-1)).toMatchObject({
+          outcome: { type: "interrupt", interrupts: [{ id: "approval_w2" }] },
+        });
+        expect(yield* ran).toEqual(["write a"]);
+        expect(yield* rows("SELECT payload FROM chat_interrupts")).toEqual([
+          { payload: expect.stringContaining('"input":{"path":"/home/b"}') },
+        ]);
+
+        yield* run("run-2", yield* store.thread("thread"), {
+          hooks: [gate],
+          resume: [{ interruptId: "approval_w2", status: "resolved", payload: { approved: true } }],
+        });
+        expect(yield* ran).toEqual(["write a", "write /home/b"]);
+        expect(yield* Ref.get(admitted)).toEqual([
+          'w1 {"path":"project/a"} false',
+          'w2 {"path":"/home/b"} true',
+        ]);
       }),
     ),
   );

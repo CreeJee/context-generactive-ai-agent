@@ -610,7 +610,13 @@ const make = Effect.gen(function* () {
     row: SubagentRow,
     handle: AttemptHandle,
     signal: AbortSignal,
-    call: { readonly id: string; readonly name: string; readonly written: string },
+    call: {
+      readonly id: string;
+      readonly name: string;
+      readonly written: string;
+      /** False for a call its tool runs as a tool without approval would (`CallPlan`). */
+      readonly gated: boolean;
+    },
   ) => {
     const record = (
       decision: "allow" | "ask" | "block" | "approved" | "denied",
@@ -686,7 +692,7 @@ const make = Effect.gen(function* () {
         Match.exhaustive,
       );
     });
-    return HashSet.has(binding.gated, call.name)
+    return call.gated && HashSet.has(binding.gated, call.name)
       ? Match.value(binding.project.permissionMode).pipe(
           Match.when("full", () => Effect.succeedNone),
           Match.when("auto", () => reviewed),
@@ -759,11 +765,12 @@ const make = Effect.gen(function* () {
       });
       const started = yield* Ref.make(HashSet.empty<string>());
       const relayGateHook: RunHook = {
-        admit: (_scope, call, written) =>
+        admit: (_scope, call, written, gated) =>
           relayDecision(binding, row, handle, signal, {
             id: call.id,
             name: call.name,
             written,
+            gated,
           }).pipe(
             Effect.map(Option.map((result) => CallResult.Returned({ result }))),
             Effect.mapError(asRunFailed),

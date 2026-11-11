@@ -8,8 +8,9 @@
 
 ## Interface
 
-- `runTool` — 이름·설명·파라미터 스키마·핸들러(+선택 `jsonSchema`, `needsApproval`, `lazy`)로 `RunTool`을 만든다. success는 `JsonValue`, failure는 `ToolFailureResult`, `failureMode: "return"`
-- `RunTool` / `ToolCall` / `PreparedCall` — 루프가 쓰는 도구 계약: `tool`(Effect AI `Tool.Any`), `lazy`, `prepare(params)`(스키마 디코드 후 실행 가능한 호출 반환)
+- `runTool` — 이름·설명·파라미터 스키마·핸들러(+선택 `jsonSchema`, `needsApproval`, `lazy`, `plan`)로 `RunTool`을 만든다. success는 `JsonValue`, failure는 `ToolFailureResult`, `failureMode: "return"`
+- `RunTool` / `ToolCall` / `PreparedCall` — 루프가 쓰는 도구 계약: `tool`(Effect AI `Tool.Any`), `lazy`, `prepare(params)`(스키마 디코드 후 실행 가능한 호출 반환), 선택 `plan(params)`
+- `CallPlan` — 호출 하나를 어떻게 돌릴지: `AsGiven`(받은 인수 그대로, 승인·gate를 거침), `Ungated`(승인 없는 도구가 하는 일만 하는 인수로, 승인도 gate도 묻지 않음), `Rewritten`(바꾼 인수로, 승인과 gate가 바꾼 인수를 봄). 같은 경로를 다른 표기로 적었다는 이유만으로 사용자에게 무언가를 묻거나 보이지 않게 하려고 쓴다
 - `preparedCall` — 임의 실패 가능한 핸들러를 모델이 읽는 JSON 결과·`ToolFailed` 실패로 감싼다(인터럽트는 유지)
 - `ToolFailed` — `code`/`tag`/`detail`/선택 `refused: true`를 가진 TaggedError. `message`는 `code: detail` 형식
 - `ToolFailureResult` / `failureResult` — 모델에 돌려주는 실패 결과 `{ error, cause, detail }` 스키마와 변환 함수

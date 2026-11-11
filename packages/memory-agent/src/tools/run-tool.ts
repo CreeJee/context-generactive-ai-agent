@@ -1,6 +1,7 @@
-import { Cause, Effect, type JsonSchema, Option, Predicate, Schema } from "effect";
+import { Cause, Data, Effect, type JsonSchema, Option, Predicate, Schema } from "effect";
 import { Tool } from "effect/ai";
 import { JsonValue } from "../json.ts";
+import { optionalProperty } from "../optional-property.ts";
 import { ToolFailed, ToolFailureResult, toolFailedOf } from "./failure.ts";
 
 /**
@@ -19,16 +20,40 @@ export interface ToolCall {
 /** A call whose arguments matched its tool's schema. Its failure is what the model reads. */
 export type PreparedCall = (call: ToolCall) => Effect.Effect<JsonValue, ToolFailed>;
 
+/**
+ * How one call runs, decided from its arguments before the approval and the gates see it. A path
+ * the model wrote in another form than the tool expects must not ask the user anything it would
+ * not ask otherwise (`files/path-policy.ts`).
+ */
+export type CallPlan<P> = Data.TaggedEnum<{
+  /** With the arguments as given, through the approval and the gates. */
+  AsGiven: {};
+  /**
+   * With `params`, which do only what a tool without approval does (an outside write that lands in
+   * the project is a project file write), so no approval or gate asks about it.
+   */
+  Ungated: { readonly params: P };
+  /** With `params` in place of the given arguments; the approval and the gates see `params`. */
+  Rewritten: { readonly params: P };
+}>;
+interface CallPlanDefinition extends Data.TaggedEnum.WithGenerics<1> {
+  readonly taggedEnum: CallPlan<this["A"]>;
+}
+export const CallPlan = Data.taggedEnum<CallPlanDefinition>();
+
 export interface RunTool {
   readonly tool: Tool.Any;
   /** Listed by name only until the model asks for it (TanStack's lazy tools). */
   readonly lazy: boolean;
   /** The call with these arguments, when they match the tool's schema. */
   readonly prepare: (params: JsonValue) => Effect.Effect<PreparedCall, Schema.SchemaError>;
+  /** How a call with these arguments runs; without it, every call runs as given. */
+  readonly plan?: (params: JsonValue) => Effect.Effect<CallPlan<JsonValue>>;
 }
 
 const decodeJsonText = Schema.decodeUnknownOption(Schema.fromJsonString(JsonValue));
 const encodeJsonText = Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
+const asJson = Schema.decodeUnknownEffect(JsonValue);
 
 const notJson = ToolFailed.make({
   code: "tool_failed",
@@ -86,6 +111,11 @@ export const runTool = <
   /** `true`: the call never runs without the user's approval (`definitions.ts`). */
   readonly needsApproval?: boolean;
   readonly lazy?: boolean;
+  /**
+   * How a call with these arguments runs. A plan whose arguments are not JSON, like arguments that
+   * do not match the schema, leaves the call as given.
+   */
+  readonly plan?: (params: Parameters["Type"]) => Effect.Effect<CallPlan<Parameters["Type"]>>;
   readonly handler: (params: Parameters["Type"], call: ToolCall) => Effect.Effect<A, E>;
 }): RunTool => {
   const decode = Schema.decodeUnknownEffect(options.parameters);
@@ -104,5 +134,27 @@ export const runTool = <
     lazy: options.lazy ?? false,
     prepare: (params) =>
       Effect.map(decode(params), (decoded) => preparedCall((call) => handler(decoded, call))),
+    ...optionalProperty(
+      "plan",
+      Option.getOrUndefined(
+        Option.map(
+          Option.fromNullishOr(options.plan),
+          (plan) => (params: JsonValue) =>
+            decode(params).pipe(
+              Effect.flatMap(plan),
+              Effect.flatMap(
+                CallPlan.$match({
+                  AsGiven: () => Effect.succeed(CallPlan.AsGiven<JsonValue>()),
+                  Ungated: ({ params: planned }) =>
+                    Effect.map(asJson(planned), (json) => CallPlan.Ungated({ params: json })),
+                  Rewritten: ({ params: planned }) =>
+                    Effect.map(asJson(planned), (json) => CallPlan.Rewritten({ params: json })),
+                }),
+              ),
+              Effect.orElseSucceed(() => CallPlan.AsGiven<JsonValue>()),
+            ),
+        ),
+      ),
+    ),
   };
 };

@@ -217,9 +217,9 @@ export const makePermissionGateHook = Effect.fnUntraced(function* (
         )
         .pipe(Effect.mapError(asRunFailed)),
 
-    admit: (_scope, { id, name }, written) => {
+    admit: (_scope, { id, name }, written, gated) => {
       const call: GatedCall = { id, name, written };
-      return HashSet.has(binding.gated, name)
+      return gated && HashSet.has(binding.gated, name)
         ? Effect.flatMap(gate.decisionOf(call), (decision) =>
             Option.match(gate.askingOf(decision), {
               onSome: (asking) => Effect.asSome(askUser(call, asking)),

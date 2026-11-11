@@ -12,7 +12,7 @@
 - `reviewInstructions` — 검토 모델에 주는 system 지시문 문자열이다. JSON `{decision, reason}` 한 객체로 답하고, reason은 한국어 한 문장으로 쓰게 한다.
 - `routineShellVerdict` — `EffectFunction.dual(2)` 순수 함수. `save_code_skill`의 sh 스크립트가 루틴 pnpm/npm/yarn/bun·git 명령뿐이면 allow, 줄이 전부 npx/pnpx면 ask를 반환한다. 그 밖에는 undefined를 반환해 모델 검토로 넘긴다.
 - `PermissionGate` — Effect 서비스. `hookFor(GateBinding)`가 한 run의 권한 RunHook을 만든다. 요구사항 `PermissionClassifier | PermissionReviews`를 layer 생성 시 캡처한다.
-- `makePermissionGateHook` — `GateBinding`으로 `RunHook<SecureRandom.SecureRandom>`를 만든다. `started`는 재개된 interrupt 답을 기록하고, `admit`은 gated 호출을 허용·거부하거나 사용자에게 묻는다.
+- `makePermissionGateHook` — `GateBinding`으로 `RunHook<SecureRandom.SecureRandom>`를 만든다. `started`는 재개된 interrupt 답을 기록하고, `admit`은 gated 호출을 허용·거부하거나 사용자에게 묻는다. 도구의 `CallPlan`이 `Ungated`로 정한 호출(`gated`가 false)은 묻지 않는다.
 - `GateBinding` — gate 설정(project, sessionId, selection, `gated: HashSet<string>`, `decider: classifier|user`)
 - `PermissionReviews` — `permission_reviews` 표 Effect 서비스. `record(NewPermissionReview)`와 `latest(sessionId, toolCallId)`를 제공한다.
 - `PermissionReview` / `NewPermissionReview` — 검토 기록 Schema와 타입. `NewPermissionReview`는 createdAt을 뺀 형태다.
