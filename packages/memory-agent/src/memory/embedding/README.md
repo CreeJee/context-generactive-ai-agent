@@ -7,7 +7,7 @@ memory-agent의 임베딩 계층이다. 모델 표(`models.ts`)에서 고른 로
 ## Interface
 
 - `Embedder` — `Context.Service<Embedder, EmbedderApi>`. `Embedder.local`은 GlobalConfig 설정과 메모리로 모드를 골라 `<storage>/models`의 로컬 모델 Layer를 만들고, `Embedder.localFile(mode)`는 그 모드의 파일을 CPU에서 돌리는 평가용 Layer다
-- `EmbedderApi` — `identity`(비교 불가 벡터가 되면 바뀜), `dimensions`, `embed(texts, role)`(role의 prompt를 붙여 임베딩한 L2 정규화 벡터), 선택적 `chunks`, `runtime()`
+- `EmbedderApi` — `identity`(비교 불가 벡터가 되면 바뀜), `dimensions`, `embed(texts, role, priority?)`(role의 prompt를 붙여 임베딩한 L2 정규화 벡터. `priority`는 `interactive`·`background`이고, 생략하면 `defaultPriority`대로 query는 `interactive`, document는 `background`다), 선택적 `chunks`, `runtime()`
 - `EmbedderRuntime` — `EmbeddingOverview["running"]`의 `Data.taggedEnum` 생성자. `local{mode, device}` 또는 `other`(테스트·평가용)
 - `EmbeddingError` — 임베더 실패를 나타내는 TaggedError(`cause: Defect`)
 - `EmbeddingMode` / `embedderIdentity(mode)` / `identityMode(identity)` — cpu/gpu 모드 Schema(`contracts.ts`), 로컬 모델의 그 모드 파일이 만드는 벡터의 identity(`<id>@<tag>/<output>/<maxTokens>/chunks-v<version>-<tokens>-<overlap>`), identity를 만든 모드(로컬 모델이 아니면 None)
@@ -40,7 +40,7 @@ memory-agent의 임베딩 계층이다. 모델 표(`models.ts`)에서 고른 로
 
 ## Invariants
 
-- 모델 워커는 한 번에 요청 하나만 처리한다. 워커 쪽 `RpcServer` concurrency 1, 호스트 쪽 `RpcClient.layerProtocolWorker({ size: 1, concurrency: 1 })`, `modelWorker`의 `Semaphore.make(1)`이 이를 보장한다. 세마포어는 문서 전체가 아니라 물리적 워커 요청 하나를 묶는다. 그래서 질의가 backfill 배치 사이에 끼어들 수 있다
+- 모델 워커는 한 번에 요청 하나만 처리한다. 워커 쪽 `RpcServer` concurrency 1, 호스트 쪽 `RpcClient.layerProtocolWorker({ size: 1, concurrency: 1 })`, `modelWorker`의 잠금(`TxRef` 두 개)이 이를 보장한다. 잠금은 문서 전체가 아니라 물리적 워커 요청 하나를 묶는다. `interactive` 요청이 기다리거나 도는 동안에는 `background` 요청이 워커를 잡지 못한다. 그래서 질문은 이미 기다리던 backfill 요청보다 먼저, backfill 배치 사이에 들어간다. backfill은 질문이 없을 때 이어서 돈다
 - `EmbeddingWorkerFailed.stage`가 `run`이면 세션을 유지한다. `load`나 `lost`이면 세션을 버리고 다음 요청이 새 워커를 띄운다(`keepsSession`). 워커는 모델을 `Effect.cached`로 한 번만 로드하며, 실패한 로드는 그 워커에서 계속 실패로 남는다. 로드한 모델의 `dispose()`는 워커 Scope finalizer에 등록되므로, 호스트가 워커를 닫으면 onnxruntime 세션이 스레드 종료 전에 해제된다
 - 세션은 호출자 Scope가 소유한 `ScopedRef`에 있다. 세션을 교체하거나 Scope를 닫으면 워커를 멈추고 종료를 기다린다. `ScopedRef.set`은 uninterruptible로 획득하므로 모델 로드는 `Effect.interruptible`로 감싸야 한다
 - ONNX 추론은 그 자리에서 중단할 수 없다. 진행 중 작업은 `terminate`로만 멈춘다. 워커 안의 `Embed` 실행은 `Effect.uninterruptible`이어서, 중단된 요청도 세션 실행이 끝날 때까지 기다리고 실행 도중에는 모델이 dispose되지 않는다. 유휴 워커는 `unref` 상태여야 하고, 작업 중에만 `busy`로 `ref`한다

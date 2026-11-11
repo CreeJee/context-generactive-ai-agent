@@ -216,7 +216,8 @@ const make = Effect.gen(function* () {
       const missing = EffectArray.dedupe(texts.filter((text) => !HashMap.has(current, text)));
       return Effect.map(
         EffectArray.isReadonlyArrayNonEmpty(missing)
-          ? embedder.embed(missing, "document")
+          ? // A turn waits on them, so they go before the backfill's batches.
+            embedder.embed(missing, "document", "interactive")
           : Effect.succeed<readonly Float32Array[]>([]),
         (embedded) => {
           const added = HashMap.setMany(

@@ -157,3 +157,59 @@ it.effect("a question's count and batch run together, not around a backfill batc
     ]);
   }).pipe(Effect.scoped),
 );
+
+it.effect("a question goes before background requests already waiting, which still finish", () =>
+  Effect.gen(function* () {
+    const calls: string[] = [];
+    const firstBatch = yield* Deferred.make<void>();
+    const firstBatchReached = yield* Deferred.make<void>();
+    const model = yield* modelWorker(
+      "/unused-test-model-cache",
+      { mode: "cpu", devices: ["cpu"], purpose: "embedding" },
+      () =>
+        Effect.succeed<ModelSession>({
+          device: "cpu",
+          // Backfill texts this long go one to a batch.
+          countTokens: (texts) =>
+            Effect.succeed(texts.map((text) => (text.includes("backfill") ? 100_000 : 5))),
+          embed: (texts) =>
+            Effect.gen(function* () {
+              calls.push(texts.map((text) => text.split(" ").at(-1)).join(","));
+              if (texts.some((text) => text.endsWith("backfill-1"))) {
+                yield* Deferred.succeed(firstBatchReached, undefined);
+                yield* Deferred.await(firstBatch);
+              }
+              return new Float32Array(4096 * texts.length);
+            }),
+          chunk: (texts) => Effect.succeed(texts.map(() => [])),
+          busy: (work) => work,
+        }),
+    );
+    const backfill = yield* Effect.forkChild(
+      model.embed(["backfill-1", "backfill-2"], "document"),
+      { startImmediately: true },
+    );
+    yield* Deferred.await(firstBatchReached);
+    // Both wait for the worker before the question does.
+    const chunking = yield* Effect.forkChild(model.chunks(["other"]), { startImmediately: true });
+    const document = yield* Effect.forkChild(model.embed(["backfill-3"], "document"), {
+      startImmediately: true,
+    });
+    const rules = yield* Effect.forkChild(model.embed(["rules"], "document", "interactive"), {
+      startImmediately: true,
+    });
+    const question = yield* Effect.forkChild(model.embed(["question"], "query"), {
+      startImmediately: true,
+    });
+    yield* Deferred.succeed(firstBatch, undefined);
+    yield* Fiber.joinAll([backfill, chunking, document, rules, question]);
+    expect(calls.slice(0, 3)).toEqual(["backfill-1", "rules", "question"]);
+    expect(calls.toSorted()).toEqual([
+      "backfill-1",
+      "backfill-2",
+      "backfill-3",
+      "question",
+      "rules",
+    ]);
+  }).pipe(Effect.scoped),
+);

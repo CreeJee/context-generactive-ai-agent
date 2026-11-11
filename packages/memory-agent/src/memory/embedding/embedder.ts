@@ -19,8 +19,8 @@ import {
   Schema,
   Scope,
   ScopedRef,
-  Semaphore,
   Stream,
+  TxRef,
 } from "effect";
 import { RpcClient, type RpcClientError } from "effect/rpc";
 import { type EmbeddingChoice, GpuCheck } from "../../config/contracts.ts";
@@ -55,14 +55,30 @@ export class EmbeddingError extends Schema.TaggedError<
 export type EmbedderRuntime = EmbeddingOverview["running"];
 export const EmbedderRuntime = Data.taggedEnum<EmbedderRuntime>();
 
+/**
+ * Whether someone waits on an embedding: `interactive` (a question, a turn's rules) goes to the
+ * worker before any `background` work (the backfill) still waiting for it.
+ */
+export type EmbeddingPriority = "interactive" | "background";
+
+/** A query is asked by someone waiting; documents are indexed in the background. */
+export const defaultPriority = {
+  query: "interactive",
+  document: "background",
+} as const satisfies Record<EmbeddingRole, EmbeddingPriority>;
+
 export interface EmbedderApi {
   /** Changes whenever vectors from this embedder are not comparable with earlier ones. */
   readonly identity: string;
   readonly dimensions: number;
-  /** L2-normalized vectors, one per text, in order, each embedded with the role's prompt. */
+  /**
+   * L2-normalized vectors, one per text, in order, each embedded with the role's prompt. The
+   * priority is the role's {@link defaultPriority} unless the caller says otherwise.
+   */
   readonly embed: (
     texts: readonly string[],
     role: EmbeddingRole,
+    priority?: EmbeddingPriority,
   ) => Effect.Effect<Float32Array[], EmbeddingError>;
   /** Local document windows; custom evaluation embedders may keep one vector per node. */
   readonly chunks?: (
@@ -261,9 +277,39 @@ export const modelWorker = Effect.fnUntraced(function* (
     devices: setup.devices,
   };
   const session = yield* ScopedRef.make(() => Option.none<ModelSession>());
-  // Bound physical worker work, not an entire document embedding. Queries can acquire a
-  // permit between backfill batches; a cancelled waiter never starts a worker request.
-  const oneRequest = yield* Semaphore.make(1);
+  // One worker request at a time, not an entire document embedding: a question takes the worker
+  // between backfill batches, ahead of any background request still waiting. A cancelled waiter
+  // never starts a worker request.
+  const busy = yield* TxRef.make(false);
+  /** Interactive requests waiting for the worker or using it; background ones wait for none. */
+  const interactive = yield* TxRef.make(0);
+  const take = (priority: EmbeddingPriority) =>
+    Effect.tx(
+      Effect.gen(function* () {
+        if (
+          (yield* TxRef.get(busy)) ||
+          (priority === "background" && (yield* TxRef.get(interactive)) > 0)
+        )
+          return yield* Effect.txRetry;
+        yield* TxRef.set(busy, true);
+      }),
+    );
+  const oneRequest =
+    (priority: EmbeddingPriority) =>
+    <A, E, R>(work: Effect.Effect<A, E, R>) => {
+      const held = Effect.acquireUseRelease(
+        Effect.interruptible(take(priority)),
+        () => work,
+        () => TxRef.set(busy, false),
+      );
+      return priority === "interactive"
+        ? Effect.acquireUseRelease(
+            TxRef.update(interactive, (count) => count + 1),
+            () => held,
+            () => TxRef.update(interactive, (count) => count - 1),
+          )
+        : held;
+    };
   const discard = ScopedRef.set(session, Effect.succeed(Option.none<ModelSession>()));
   const live = Effect.flatMap(
     ScopedRef.get(session),
@@ -285,7 +331,10 @@ export const modelWorker = Effect.fnUntraced(function* (
     load: false,
     lost: false,
   } as const satisfies Record<EmbeddingWorkerFailed["stage"], boolean>;
-  const request = <A>(call: (current: ModelSession) => Effect.Effect<A, EmbeddingWorkerFailed>) =>
+  const request = <A>(
+    priority: EmbeddingPriority,
+    call: (current: ModelSession) => Effect.Effect<A, EmbeddingWorkerFailed>,
+  ) =>
     Effect.flatMap(live, (current) =>
       // ONNX inference cannot be interrupted in place, and terminating the thread during a
       // session call aborts the whole process: onnxruntime-node cannot throw into a stopping
@@ -296,15 +345,20 @@ export const modelWorker = Effect.fnUntraced(function* (
       ),
     ).pipe(
       Effect.mapError((cause) => EmbeddingError.make({ cause })),
-      oneRequest.withPermits(1),
+      oneRequest(priority),
     );
 
   return {
     device: (): EmbeddingDevice | null =>
       Option.getOrNull(Option.map(ScopedRef.getUnsafe(session), (current) => current.device)),
-    chunks: (texts: readonly string[]) => request((current) => current.chunk(texts)),
+    // Only the indexer chunks documents, in the background.
+    chunks: (texts: readonly string[]) => request("background", (current) => current.chunk(texts)),
     // Its span shows how long a caller waits for the worker between the worker's own calls.
-    embed: Effect.fn("Embedder.embed")(function* (texts: readonly string[], role: EmbeddingRole) {
+    embed: Effect.fn("Embedder.embed")(function* (
+      texts: readonly string[],
+      role: EmbeddingRole,
+      priority: EmbeddingPriority = defaultPriority[role],
+    ) {
       if (texts.length === 0) return [];
       const prompted = texts.map((text) => localModel.prompts[role] + text);
       const embedBatch = (current: ModelSession, batch: readonly number[]) =>
@@ -316,7 +370,7 @@ export const modelWorker = Effect.fnUntraced(function* (
         );
       // The count and the first batch take one turn of the worker. A question is one batch, and
       // with a turn each it waited behind a backfill batch twice.
-      const first = yield* request((current) =>
+      const first = yield* request(priority, (current) =>
         Effect.flatMap(current.countTokens(prompted), (counts) =>
           EffectArray.matchLeft(planBatches(counts), {
             onEmpty: () => Effect.succeed({ rows: [], rest: [] }),
@@ -327,7 +381,7 @@ export const modelWorker = Effect.fnUntraced(function* (
       );
       // One worker serves one request at a time: batches run one after another.
       const others = yield* Effect.forEach(first.rest, (batch) =>
-        request((current) => embedBatch(current, batch)),
+        request(priority, (current) => embedBatch(current, batch)),
       );
       return [first.rows, ...others]
         .flat()
