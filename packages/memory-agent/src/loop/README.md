@@ -30,7 +30,7 @@ run·thread·interrupt 행은 `RunStore`(SqlClient)가 `chat_threads`, `chat_thr
 ## Invariants
 
 - `RunHook` 훅은 나열된 순서대로 실행된다. `admit` gate가 `Option.none`을 돌려주면 다음 gate가 결정한다. 모든 gate가 통과시킨 호출만 실행된다
-- 도구에 `plan`이 있으면 인수를 디코드한 뒤, 승인과 gate보다 먼저 묻는다. `Rewritten`이면 승인 interrupt와 `admit`이 바꾼 인수(와 그 JSON 문자열)를 보고, 호출도 그 인수로 돈다. `Ungated`면 `needsApproval` 도구라도 묻지 않고, `admit`의 `gated`가 false라서 권한 gate와 서브에이전트 relay가 건너뛴다. 다른 gate(반복 가드, trace)는 그대로 돈다. 저장된 assistant 메시지의 인수는 모델이 쓴 그대로다
+- 도구에 `plan`이 있으면 인수를 디코드한 뒤, 승인과 gate보다 먼저 묻는다. `Rewritten`이면 승인 interrupt와 `admit`이 바꾼 인수(와 그 JSON 문자열)를 보고, 호출도 그 인수로 돈다. `Ungated`면 `needsApproval` 도구라도 묻지 않고, `admit`의 `gated`가 false라서 권한 gate와 서브에이전트 relay가 건너뛴다. 다른 gate(반복 가드, trace)는 그대로 돈다. 저장된 assistant 메시지의 인수는 모델이 쓴 그대로다. 재개된 run은 `plan`을 다시 묻지만, 사용자가 답한 인수로만 호출을 돌린다: 승인은 interrupt의 `metadata.input`(사용자가 고친 `editedArgs`가 있으면 그것), 권한 검토는 `metadata.payload.arguments` 문자열이다. 다시 물은 결과가 이와 다르면(그 사이 폴더의 실제 경로가 바뀌었거나 경로 정책이 이제 거부해 `plan`이 다른 인수를 내면) 돌리지 않는다. 승인한 호출은 다시 하라는 결과를, 거절한 검토는 거절 결과를 받는다
 - 한 step의 도구 호출 사이에 순서가 없다(`docs/decisions.md` 2026-10-27). `readOnlyToolNames`에 있는 read 호출은 gate가 허용하는 즉시 시작한다. write 호출은 응답이 완전히 끝난 뒤(`settle(true)`)에만 시작한다. `settle(false)`이면 write는 `response_incomplete` Refused로 답한다
 - 이미 실행 중인 호출은 응답 때문에 끊지 않는다. step 중단(사용자 cancel, scope 닫힘)만 호출을 멈춘다
 - `settle`은 모든 호출이 끝날 때까지 기다린 뒤 call 순서로 결과를 준다. gate·hook 실패는 모든 호출이 끝난 뒤 call 순서상 첫 실패로 step을 실패시킨다

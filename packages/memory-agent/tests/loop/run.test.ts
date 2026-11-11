@@ -57,13 +57,14 @@ const Path = Schema.Struct({ path: Schema.String });
 /**
  * A model scripted with `turns`, a read tool, and a write tool that needs approval. Its plan runs a
  * path below `project/` as that relative path without asking, and asks about a `~/` path as the
- * `/home/` path it stands for.
+ * path below the home folder it stands for, `/home` until `moveHome` changes it.
  */
 const harness = Effect.fnUntraced(function* (
   ...turns: readonly [ScriptedTurn, ...Array<ScriptedTurn>]
 ) {
   const { model, invocations } = yield* scriptedModel(turns);
   const ran = yield* Ref.make<ReadonlyArray<string>>([]);
+  const home = yield* Ref.make("/home");
   const record = (name: string) => (params: typeof Path.Type) =>
     Effect.as(
       Ref.update(ran, (all) => [...all, `${name} ${params.path}`]),
@@ -88,11 +89,11 @@ const harness = Effect.fnUntraced(function* (
         parameters: Path,
         needsApproval: true,
         plan: ({ path }) =>
-          Effect.succeed(
+          Effect.map(Ref.get(home), (folder) =>
             path.startsWith("project/")
               ? CallPlan.Ungated({ params: { path: path.slice("project/".length) } })
               : path.startsWith("~/")
-                ? CallPlan.Rewritten({ params: { path: `/home/${path.slice(2)}` } })
+                ? CallPlan.Rewritten({ params: { path: `${folder}/${path.slice(2)}` } })
                 : CallPlan.AsGiven(),
           ),
         handler: record("write"),
@@ -123,7 +124,12 @@ const harness = Effect.fnUntraced(function* (
         },
       ),
     );
-  return { run, ran: Ref.get(ran), invocations };
+  return {
+    run,
+    ran: Ref.get(ran),
+    invocations,
+    moveHome: (folder: string) => Ref.set(home, folder),
+  };
 });
 
 const user: StoredMessage = { role: "user", content: "go" };
@@ -210,6 +216,31 @@ describe("run loop", () => {
           'w1 {"path":"project/a"} false',
           'w2 {"path":"/home/b"} true',
         ]);
+      }),
+    ),
+  );
+
+  it.effect("does not run an approved call whose plan now gives other arguments", () =>
+    withRows(
+      Effect.gen(function* () {
+        const store = yield* RunStore;
+        const { run, ran, moveHome } = yield* harness(
+          { toolCalls: [{ id: "w2", name: "write_file", arguments: '{"path":"~/b"}' }] },
+          { text: "done" },
+        );
+        yield* run("run-1", [user]);
+        // The home folder moved while the approval waited; the user approved /home/b.
+        yield* moveHome("/moved");
+        yield* run("run-2", yield* store.thread("thread"), {
+          resume: [{ interruptId: "approval_w2", status: "resolved", payload: { approved: true } }],
+        });
+        expect(yield* ran).toEqual([]);
+        expect(
+          (yield* store.thread("thread")).find((message) => message.role === "tool"),
+        ).toMatchObject({
+          toolCallId: "w2",
+          content: expect.stringContaining("It did not run."),
+        });
       }),
     ),
   );

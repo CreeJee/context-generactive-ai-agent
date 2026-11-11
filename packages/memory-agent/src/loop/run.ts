@@ -5,6 +5,7 @@ import {
   Data,
   DateTime,
   Effect,
+  Equal,
   Exit,
   Fiber,
   Function as EffectFunction,
@@ -197,27 +198,78 @@ export interface RunInput {
 
 /** The user's decision on a call that needed approval. */
 type Approval = Data.TaggedEnum<{
-  Approved: { readonly editedArgs: Option.Option<JsonValue> };
+  /**
+   * `approvedArgs`: the arguments the approval showed, or the user's edits of them. The call runs
+   * only with exactly these.
+   */
+  Approved: {
+    readonly editedArgs: Option.Option<JsonValue>;
+    readonly approvedArgs: JsonValue;
+  };
   Declined: {};
   Cancelled: {};
 }>;
 const Approval = Data.taggedEnum<Approval>();
 
-const approvalOf = InterruptAnswer.$match({
-  Resolved: ({ response }) =>
-    response.approved
-      ? Approval.Approved({ editedArgs: Option.fromNullishOr(response.editedArgs) })
-      : Approval.Declined(),
-  Cancelled: () => Approval.Cancelled(),
-});
+/** The answer to an approval that showed the arguments `shown`. */
+const approvalOf = (shown: JsonValue) =>
+  InterruptAnswer.$match({
+    Resolved: ({ response }) =>
+      response.approved
+        ? Approval.Approved({
+            editedArgs: Option.fromNullishOr(response.editedArgs),
+            approvedArgs: response.editedArgs ?? shown,
+          })
+        : Approval.Declined(),
+    Cancelled: () => Approval.Cancelled(),
+  });
 
 /** Each approval the resume answers, by the call it is for. */
 const approvalsOf = (resumed: ReadonlyArray<Resumed>) =>
   HashMap.fromIterable(
     resumed.flatMap(({ interrupt: { payload }, answer }) =>
-      payload.reason === "tool_call" ? [[payload.toolCallId, approvalOf(answer)] as const] : [],
+      payload.reason === "tool_call"
+        ? [[payload.toolCallId, approvalOf(payload.metadata.input)(answer)] as const]
+        : [],
     ),
   );
+
+/** A permission review the user answered: the arguments text it asked about, and the answer. */
+interface ReviewAnswer {
+  readonly written: string;
+  readonly approved: boolean;
+}
+
+/**
+ * Each permission review the resume answers, by the call it is for. The gate keeps the user's
+ * answer under the arguments text it asked about, so the call runs only with exactly that text.
+ */
+const reviewsOf = (resumed: ReadonlyArray<Resumed>) =>
+  HashMap.fromIterable(
+    resumed.flatMap(({ interrupt: { payload }, answer }) =>
+      payload.reason === "permission_review"
+        ? [
+            [
+              payload.metadata.payload.toolCallId,
+              {
+                written: payload.metadata.payload.arguments,
+                approved: InterruptAnswer.$match(answer, {
+                  Resolved: ({ response }) => response.approved,
+                  Cancelled: () => false,
+                }),
+              } satisfies ReviewAnswer,
+            ] as const,
+          ]
+        : [],
+    ),
+  );
+
+/**
+ * What the model reads when a call the user answered would now run with other arguments than the
+ * user saw, as when a folder in its path now leads somewhere else. It does not run.
+ */
+const changedSinceAsked =
+  "The user answered this call when its arguments were different from what it would run with now (a path in it may now lead to another place). It did not run. Make the call again if it is still needed.";
 
 /** What comes after a step. */
 type Next = Data.TaggedEnum<{
@@ -525,6 +577,7 @@ const runAccepted = Effect.fnUntraced(function* <R>(
   const hooks = spec.hooks;
   const tools = yield* lazyToolsFor(spec.tools, input.conversation);
   const approvals = approvalsOf(resumed);
+  const reviews = reviewsOf(resumed);
   const conversation = yield* Ref.make(input.conversation);
   /** The answer being written, which a cut run keeps. */
   const partial = yield* Ref.make(Option.none<AssistantMessage>());
@@ -663,6 +716,29 @@ const runAccepted = Effect.fnUntraced(function* <R>(
             }),
           ).pipe(Effect.catch((error) => refused(invalidInput(tool, offered, error)))),
       });
+      // A resumed call runs only with the arguments the user answered about. When its plan now
+      // gives other ones (a folder in a path moved, or the path policy refuses them now), nothing
+      // runs: a declined call stays declined, and an approved one is to be made again.
+      const approvedArgs = Option.flatMap(
+        approval,
+        Approval.$match({
+          Approved: ({ approvedArgs }) => Option.some(approvedArgs),
+          Declined: Option.none<JsonValue>,
+          Cancelled: Option.none<JsonValue>,
+        }),
+      );
+      const review = HashMap.get(reviews, call.id);
+      yield* Effect.when(
+        refused(
+          Option.exists(review, ({ approved }) => !approved)
+            ? "User denied this action"
+            : changedSinceAsked,
+        ),
+        Effect.succeed(
+          Option.exists(approvedArgs, (shown) => !Equal.equals(shown, planned.call.params)) ||
+            Option.exists(review, ({ written }) => written !== planned.written),
+        ),
+      );
       yield* Effect.when(
         Effect.flatMap(approvalRequest(planned.call, tool), (request) =>
           decided(CallResult.Waiting({ request })),
