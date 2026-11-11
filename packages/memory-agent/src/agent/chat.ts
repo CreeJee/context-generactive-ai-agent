@@ -1817,24 +1817,55 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           skillset: Omit<SkillToolset, "tools">,
           delegationInstructions: string | null,
         ) {
-          const localRules = yield* localWorkflowRules(project, skillset.skills).pipe(
-            Effect.provideContext(workflowRuleContext),
-          );
-          const resolved = yield* workflowRules.resolve({
-            phases: rulePhases[workflow.phase],
-            text: [
-              turn?.text ?? "",
-              workflow.goal?.statement ?? "",
-              workflow.plan?.summary ?? "",
-            ].join("\n"),
-            rules: localRules.rules,
-          });
-          const resolvedRules =
-            localRules.problems.length === 0
-              ? resolved
-              : { ...resolved, degraded: [...resolved.degraded, "source" as const] };
-          const goalInstanceId = yield* workflows.goalInstanceId(sessionId);
-          const onKanbanBoard = yield* kanbanBoard(sessionId);
+          // The rules, the workspace instructions and the board's state read nothing of one
+          // another; the notifications are taken below, after all of them.
+          const { resolvedRules, goalInstanceId, onKanbanBoard, reportSnapshot, workspace } =
+            yield* Effect.all(
+              {
+                resolvedRules: localWorkflowRules(project, skillset.skills).pipe(
+                  Effect.provideContext(workflowRuleContext),
+                  Effect.flatMap((localRules) =>
+                    Effect.map(
+                      workflowRules.resolve({
+                        phases: rulePhases[workflow.phase],
+                        text: [
+                          turn?.text ?? "",
+                          workflow.goal?.statement ?? "",
+                          workflow.plan?.summary ?? "",
+                        ].join("\n"),
+                        rules: localRules.rules,
+                      }),
+                      (resolved) =>
+                        localRules.problems.length === 0
+                          ? resolved
+                          : { ...resolved, degraded: [...resolved.degraded, "source" as const] },
+                    ),
+                  ),
+                ),
+                goalInstanceId: workflows.goalInstanceId(sessionId),
+                onKanbanBoard: kanbanBoard(sessionId),
+                reportSnapshot:
+                  reportSource !== null
+                    ? withSql(
+                        initialReportEvidence(
+                          sessionId,
+                          projectId,
+                          redactReport,
+                          workTrace.taskTree(reportSource.sourceSessionId),
+                        ),
+                      ).pipe(
+                        fallbackLogged(
+                          "Report evidence snapshot failed",
+                          () => agentPrompts.reportEvidenceFailed,
+                        ),
+                      )
+                    : Effect.succeed(null),
+                workspace: workspaceInstructions(project, places).pipe(
+                  Effect.provideContext(workflowRuleContext),
+                ),
+              },
+              { concurrency: "unbounded" },
+            );
           // A board's planner reads where each outcome stands in the ledger.
           const standings =
             onKanbanBoard && goalInstanceId !== null
@@ -1894,25 +1925,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 ),
               ),
           });
-          const reportSnapshot =
-            reportSource !== null
-              ? yield* withSql(
-                  initialReportEvidence(
-                    sessionId,
-                    projectId,
-                    redactReport,
-                    workTrace.taskTree(reportSource.sourceSessionId),
-                  ),
-                ).pipe(
-                  fallbackLogged(
-                    "Report evidence snapshot failed",
-                    () => agentPrompts.reportEvidenceFailed,
-                  ),
-                )
-              : null;
-          const workspace = yield* workspaceInstructions(project, places).pipe(
-            Effect.provideContext(workflowRuleContext),
-          );
           const prompts = [
             ...(isTruthy(reportSnapshot) ? [reportSnapshot] : []),
             ...(isTruthy(skillset.instructions) ? [skillset.instructions] : []),
@@ -2025,28 +2037,57 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           : [];
         const answers = { projectId, sessionId, runId, userNodeId };
         const readOnly = workflowReadOnly || reportSource !== null;
-        // Present only while the user has Kagi turned on with a key (R19).
-        const webTools = reportSource !== null ? [] : yield* kagiTools.runTools;
-        // A report session never connects external MCP servers or loads additional skills.
-        const mcp =
-          reportSource !== null
-            ? { tools: [], guides: [] }
-            : yield* workflowReadOnly
+        /** What a report session gets instead: it never connects or loads anything more. */
+        const unlessReport = <A, E, R>(effect: Effect.Effect<A, E, R>, none: NoInfer<A>) =>
+          reportSource !== null ? Effect.succeed(none) : effect;
+        // The tools and the run's context wait on one another only where the context reads the
+        // skills and the delegation instructions: MCP discovery, the slowest, runs beside them.
+        const {
+          webTools,
+          mcp,
+          memory,
+          context: { skills, delegation, situation },
+        } = yield* Effect.all(
+          {
+            // Present only while the user has Kagi turned on with a key (R19).
+            webTools: unlessReport(kagiTools.runTools, []),
+            mcp: unlessReport(
+              workflowReadOnly
                 ? mcpServers.readOnlyRunTools(project)
-                : mcpServers.runTools(project);
-        const skills =
-          reportSource !== null
-            ? { skills: [], tools: [], instructions: null }
-            : yield* skillTools.toolsFor(project);
-        // Trusted external ACP agents (R17); every delegation is gated below.
-        const delegation = readOnly
-          ? { tools: [], instructions: null }
-          : yield* delegateTools.toolsFor({
-              project,
-              sessionId,
-              signal: abortController.signal,
-              runId,
-            });
+                : mcpServers.runTools(project),
+              { tools: [], guides: [] },
+            ),
+            memory: memoryTools.toolsFor(answers, memoryScope),
+            context: Effect.all(
+              {
+                skills: unlessReport(skillTools.toolsFor(project), {
+                  skills: [],
+                  tools: [],
+                  instructions: null,
+                }),
+                // Trusted external ACP agents (R17); every delegation is gated below.
+                delegation: readOnly
+                  ? Effect.succeed({ tools: [], instructions: null })
+                  : delegateTools.toolsFor({
+                      project,
+                      sessionId,
+                      signal: abortController.signal,
+                      runId,
+                    }),
+              },
+              { concurrency: "unbounded" },
+            ).pipe(
+              Effect.flatMap(({ skills, delegation }) =>
+                Effect.map(runContext(skills, delegation.instructions), (situation) => ({
+                  skills,
+                  delegation,
+                  situation,
+                })),
+              ),
+            ),
+          },
+          { concurrency: "unbounded" },
+        );
         const askEveryCall = [...mcp.tools, ...delegation.tools].map(({ tool }) => tool.name);
         const gated = HashSet.fromIterable([...gatedToolNames, ...askEveryCall]);
         // In `auto` mode the gate reviews every gated call; in `ask` mode the built-in tools ask
@@ -2089,7 +2130,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           runId,
           abortSignal: abortController.signal,
         });
-        const memory = yield* memoryTools.toolsFor(answers, memoryScope);
         const allSharedTools = redactor.withHiddenResults([
           ...memory.tools.filter(({ tool }) => !HashSet.has(unusedPromotionTools, tool.name)),
           // An SVG the model writes comes back with a picture of it, for the page to show.
@@ -2130,7 +2170,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ...(injectImageProviderTool ? [imageProviderWorkflowPrompt] : []),
           concurrentCallsInstructions,
         ];
-        const situation = yield* runContext(skills, delegation.instructions);
         // Children get the same tools and rules, never more, and no subagent tools of their own.
         // Their approval-gated calls wait on the page instead of pausing this run (R18).
         const childSharedTools = sharedTools.filter(({ tool }) => !(tool.name in promotionRules));
