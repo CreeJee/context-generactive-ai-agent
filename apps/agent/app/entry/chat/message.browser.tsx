@@ -175,3 +175,43 @@ const sdkCall = Effect.fn("BrowserTest.sdkCall")(<A,>(call: () => PromiseLike<A>
     catch: (cause) => new Cause.UnknownError(cause),
   }),
 );
+
+it.live("an outside file tool that ran on a project file is shown as the project file tool", () =>
+  Effect.gen(function* () {
+    const call = (id: string, name: string) => ({
+      type: "tool-call" as const,
+      id,
+      name,
+      arguments: "{}",
+      state: "complete" as const,
+    });
+    const result = (toolCallId: string, content: string) => ({
+      type: "tool-result" as const,
+      toolCallId,
+      content,
+      state: "complete" as const,
+    });
+    const screen = yield* sdkCall(() =>
+      render(
+        <MessageView
+          {...props}
+          streaming={false}
+          message={{
+            id: "outside",
+            role: "assistant",
+            parts: [
+              call("in-project", "write_outside_file"),
+              result("in-project", '{"path":"notes.md","insideProject":"ran as write_file"}'),
+              call("outside", "read_outside_file"),
+              result("outside", '{"path":"/tmp/notes.md","text":"hi"}'),
+            ],
+          }}
+        />,
+        { wrapper: Translated },
+      ),
+    );
+    yield* sdkCall(() => expect.element(screen.getByText("파일 쓰기")).toBeVisible());
+    yield* sdkCall(() => expect.element(screen.getByText("프로젝트 밖 파일 읽기")).toBeVisible());
+    expect(screen.getByText("프로젝트 밖 파일 쓰기").elements()).toHaveLength(0);
+  }),
+);

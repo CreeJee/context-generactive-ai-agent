@@ -87,6 +87,29 @@ const toolLabels = {
   __lazy__tool__discovery__: msg`도구 불러오기`,
 } satisfies Record<string, MessageDescriptor>;
 
+/** The project file tool an outside file tool ran as, when its path was in the project. */
+const projectToolOf = {
+  list_outside_files: "list_files",
+  read_outside_file: "read_file",
+  search_outside_file: "search_files",
+  write_outside_file: "write_file",
+  delete_outside_file: "delete_file",
+} as const;
+
+/** An outside file tool's result for a path in the project, which ran as a project file tool. */
+const decodeInsideProject = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ insideProject: Schema.String })),
+);
+
+/**
+ * The tool a call is shown as: an outside file tool that ran on a project file is shown as the
+ * project file tool it ran as, so the row says what it did.
+ */
+const shownToolName = (call: ToolCall, result: ToolResult | undefined) =>
+  isTruthy(result) && Option.isSome(decodeInsideProject(result.content))
+    ? (Object.entries(projectToolOf).find(([tool]) => tool === call.name)?.[1] ?? call.name)
+    : call.name;
+
 /** Built-in tools by their label; MCP tools (`mcp_<server>__<tool>`) as "MCP server · tool". */
 function ToolLabel({ name }: { readonly name: string }) {
   const { t } = useLingui();
@@ -695,7 +718,7 @@ const ToolCallCard = memo(function ToolCallCard({
             <WrenchIcon />
           </TraceIcon>
           <TraceTitle>
-            <ToolLabel name={call.name} />
+            <ToolLabel name={shownToolName(call, result)} />
           </TraceTitle>
           {label !== null && <TraceDescription>{t(label)}</TraceDescription>}
         </TraceLine>
