@@ -111,7 +111,7 @@ run_skill
 | 읽기     | 그 밖의 전체                                                                                                                                                                               | `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.npmrc`, `~/.pypirc`, `~/.git-credentials`, gh·gcloud·1Password·Copilot 설정, cargo 자격증명, codex·Claude·Gemini 로그인, `~/.mcp-auth`, 키체인, 쿠키, 브라우저 프로필, 앱 저장소 폴더 |
 | 네트워크 | 스킬 `network`의 호스트. 루프백 포트 바인딩·접속은 `localhost`를 적었을 때만                                                                                                               | 그 밖의 전체. ssh 기반 git은 프록시를 지나지 못하므로 https remote를 쓴다                                                                                                                                                                                                 |
 
-- 쓰기의 프로젝트와 임시 폴더는 파일 도구·`run_skill` 작업 디렉터리와 같은 경로 정책(`packages/memory-agent/src/files/path-policy.ts`의 `writableRoots`)이 실제 경로로 정한다. 카드에서 사용자 프로젝트 폴더는 쓰기 목록에 없다. 스크립트 안의 경로는 실행 때 바꿀 수 없으므로, 프로젝트 폴더를 절대 경로로 적은 스크립트는 저장할 때 거부한다(decisions.md 2026-11-11 "모든 도구의 경로는 한 정책으로 읽고…").
+- 쓰기의 프로젝트와 임시 폴더는 파일 도구·`run_skill` 작업 디렉터리와 같은 경로 정책(`packages/memory-agent/src/files/path-policy.ts`의 `writableRoots`)이 실제 경로로 정한다. 카드에서 사용자 프로젝트 폴더는 쓰기 목록에 없다. 대신 카드에서는 스크립트가 사용자 프로젝트 폴더를 적은 곳을 카드 worktree 경로로 바꿔 실행하고, 카드에서 저장하는 스크립트의 카드 worktree 경로는 승인 전에 사용자 프로젝트 폴더로 바꿔 저장한다(decisions.md 2026-11-11 "같은 경로를 다른 표기로 적었다는 이유만으로…").
 - 권한 모드는 샌드박스를 풀지 않는다. 경로·자격증명 규칙을 모드가 풀지 않는다는 기존 원칙과 같다.
 - 샌드박스를 쓸 수 없는 환경
   - 대상: macOS·Linux가 아닌 OS, bubblewrap·socat이 없는 Linux.
