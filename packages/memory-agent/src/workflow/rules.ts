@@ -249,12 +249,16 @@ const make = Effect.gen(function* () {
 
   return {
     /**
-     * Embeds the built-in rules that are ranked by meaning, so a turn does not wait for them. The
-     * app does this in the background once the model has loaded.
+     * Embeds the built-in rules that are ranked by meaning, and `rules` besides, so a turn does not
+     * wait for them. The app does this in the background once the model has loaded.
      */
-    prepare: Effect.asVoid(
-      vectors(builtInWorkflowRules.filter((rule) => rule.priority === "recommended")),
-    ).pipe(Effect.withSpan("WorkflowRules.prepare")),
+    prepare: (rules: readonly WorkflowRule[] = []) =>
+      Effect.asVoid(
+        vectors([
+          ...builtInWorkflowRules.filter((rule) => rule.priority === "recommended"),
+          ...rules,
+        ]),
+      ).pipe(Effect.withSpan("WorkflowRules.prepare")),
     resolve: ({ phases, text, rules = [], limit = 3 }: RuleQuery): Effect.Effect<ResolvedRules> => {
       // A built-in rule keeps its id; a supplied rule with the same id is ignored.
       const candidates = EffectArray.dedupeWith(

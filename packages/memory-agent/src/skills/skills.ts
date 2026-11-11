@@ -265,16 +265,11 @@ const make = (options: SkillsOptions) =>
         Match.exhaustive,
       );
     });
-    const load = Effect.fn("Skills.load")(function* (project: Project) {
-      // Later scopes win on a shared name: the app's defaults, then the user's, then the project's.
-      const layers = yield* Effect.all(
-        [
-          scan("builtin", builtinRoot),
-          scan("global", globalSkillsDirectory(home)),
-          scan("project", projectSkillsDirectory(project.root)),
-        ],
-        { concurrency: "unbounded" },
-      );
+    /** The scopes every project has: the app's defaults, then the user's. */
+    const sharedScans = [scan("builtin", builtinRoot), scan("global", globalSkillsDirectory(home))];
+    /** Later scopes win on a shared name. */
+    const merged = Effect.fnUntraced(function* (scans: ReadonlyArray<ReturnType<typeof scan>>) {
+      const layers = yield* Effect.all(scans, { concurrency: "unbounded" });
       const byName = MutableHashMap.fromIterable(
         Iterable.map(
           Iterable.flatMap(layers, (layer) => layer.skills),
@@ -285,6 +280,9 @@ const make = (options: SkillsOptions) =>
         entries: [...MutableHashMap.values(byName)],
         problems: layers.flatMap((layer) => layer.problems),
       };
+    });
+    const load = Effect.fn("Skills.load")(function* (project: Project) {
+      return yield* merged([...sharedScans, scan("project", projectSkillsDirectory(project.root))]);
     });
 
     return {
@@ -302,6 +300,8 @@ const make = (options: SkillsOptions) =>
           problems,
         };
       }),
+      /** The skills of every project, before a project's own skills replace any of them. */
+      shared: Effect.map(merged(sharedScans), ({ entries }) => entries.map((entry) => entry.skill)),
       read: Effect.fn("Skills.read")(function* (
         project: Project,
         name: string,

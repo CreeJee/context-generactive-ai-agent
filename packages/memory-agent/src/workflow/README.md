@@ -41,7 +41,7 @@
 - `revisionStateSql` / `currentStatesSql` — revision 행에서 워크플로 상태 JSON을 만드는 SQL 조각과, 세션의 현재 revision을 붙인 표(`state-rows.ts`)
 - `toolLedger` / `uncertainRuns` / `UncertainContinue` / `UncertainRunsFailed` — tool 부수효과 ledger와 결과 불확실 run 처리
 - `planSchedule` / `PlanSchedule` / `planDependencyIssues` / `validatePlanDependencies` / `PlanDependenciesRejected` / `notStartedStatus` — Plan 의존성 검증과 실행 가능 step 스케줄
-- `WorkflowRules` / `WorkflowRule` / `RuleSource` / `builtInWorkflowRules` / `projectWorkflowRules` / `skillWorkflowRules` / `structuredWorkflowRules` / `localWorkflowRules` / `projectWorkflowRulesPath` — 워크플로 규칙 해석과 소스 로딩. `WorkflowRules.prepare`는 의미로 순위를 매기는 내장 규칙(`recommended`)의 벡터를 미리 만든다. 앱은 시작할 때 모델 적재 뒤 backfill 전에 이것을 부른다(`EmbeddingSetup`)
+- `WorkflowRules` / `WorkflowRule` / `RuleSource` / `builtInWorkflowRules` / `projectWorkflowRules` / `skillWorkflowRules` / `structuredWorkflowRules` / `localWorkflowRules` / `projectWorkflowRulesPath` — 워크플로 규칙 해석과 소스 로딩. `WorkflowRules.prepare(rules)`는 의미로 순위를 매기는 내장 규칙(`recommended`)과 넘긴 규칙의 벡터를 미리 만든다. 앱은 시작할 때 모델 적재 뒤 backfill 전에 이것을 부른다(`EmbeddingSetup`)
 - `WorkflowTools` / `workflowInstructions` / `ProviderRetries` / `providerRetryLayer` / `providerRetryIdempotencyKey` / `providerRetryDelay` / `providerRetryLimits` — 모델용 워크플로 도구, 지시문 생성, provider 재시도 서비스
 - 문구 — Lingui 런타임 매크로 메시지(`msg`)로 쓰는 곳에 두고 `src/i18n.ts`로 푼다. `src/locales/ko.po`로 추출되고 `lint/wording`가 검사한다
 

@@ -74,8 +74,15 @@ describe("WorkflowRules", () => {
     it.effect("after prepare, a Goal's turn embeds only its question", () =>
       Effect.gen(function* () {
         const rules = yield* WorkflowRules;
-        yield* rules.prepare;
-        yield* rules.resolve({ phases: ["goal", "plan"], text: "database migration" });
+        // A skill's rule, as every project has it.
+        const builtIn = builtInWorkflowRules.find((rule) => rule.id === "workflow.plan.migration")!;
+        const skill = { ...builtIn, id: "skill.global.fixtures", instruction: "Read the skill." };
+        yield* rules.prepare([skill]);
+        yield* rules.resolve({
+          phases: ["goal", "plan"],
+          text: "database migration",
+          rules: [skill],
+        });
         yield* rules.resolve({ phases: ["verify"], text: "acceptance tests" });
         expect(prepared.slice(1)).toEqual([["database migration"], ["acceptance tests"]]);
       }),

@@ -8,8 +8,9 @@
 
 ## Interface
 
-- `Skills` — `Context.Service` 태그 "memory-agent/skills/skills". 멤버는 `globalDirectory`, `catalog(project)`, `read(project, name)`. `Skills.layer(options)`가 NodeFileSystem과 NodeCrypto 레이어를 붙인다
+- `Skills` — `Context.Service` 태그 "memory-agent/skills/skills". 멤버는 `globalDirectory`, `catalog(project)`, `shared`, `read(project, name)`. `Skills.layer(options)`가 NodeFileSystem과 NodeCrypto 레이어를 붙인다
 - `Skills.catalog` — 프로젝트의 `SkillCatalog`(directories는 global/project만, skills, problems)를 돌려준다
+- `Skills.shared` — 모든 프로젝트가 가진 builtin·global 스킬(이름이 같으면 global이 이긴다). 앱이 시작할 때 이 스킬들의 작업 규칙 벡터를 미리 만든다(`EmbeddingSetup`)
 - `Skills.read` — 이름으로 `SkillDocument`(front matter를 뺀 body, 한 단계 파일 목록)를 돌려준다. 없으면 `null`
 - `SkillsOptions` — 테스트용 `home`과 `builtin` 경로를 덮어쓰는 옵션
 - `SkillScope` — `Schema.Literals(["builtin","global","project"])`와 같은 이름의 타입. `contracts.ts`에 있고 `skills.ts`가 다시 내보낸다

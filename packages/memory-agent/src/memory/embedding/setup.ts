@@ -18,6 +18,8 @@ import { Indexer } from "./indexer.ts";
 import { Reranker } from "../rerank/reranker.ts";
 import { memoryPrompts } from "../prompts.ts";
 import { WorkflowRules } from "../../workflow/rules.ts";
+import { skillWorkflowRules } from "../../workflow/sources.ts";
+import { Skills } from "../../skills/skills.ts";
 
 /** Whether WebGPU was found to work here, or is being checked now (`contracts.ts`). */
 export type GpuState = EmbeddingOverview["gpu"];
@@ -33,6 +35,7 @@ const make = Effect.gen(function* () {
   const downloads = yield* ModelDownloads;
   const reranker = yield* Reranker;
   const workflowRules = yield* WorkflowRules;
+  const skills = yield* Skills;
   const layerScope = yield* Effect.scope;
   const checking = yield* Ref.make(false);
 
@@ -79,16 +82,24 @@ const make = Effect.gen(function* () {
     layerScope,
   );
   // The model loads here, not in the first message's search: loading it (and on a first start,
-  // downloading it) took seconds there. The built-in workflow rules are embedded next, before the
-  // backfill, so a Goal's first turn does not wait for them. A changed chunk identity must rebuild
-  // existing conversations even when no new import or chat arrives. The service Scope owns the
-  // drain; failed nodes remain pending for the next run.
+  // downloading it) took seconds there. The workflow rules every project has are embedded next,
+  // before the backfill, so a Goal's first turn does not wait for them. A changed chunk identity
+  // must rebuild existing conversations even when no new import or chat arrives. The service Scope
+  // owns the drain; failed nodes remain pending for the next run.
   const loadAndBackfill = Effect.forkIn(
     embedder.embed([memoryPrompts.warmUp], "query").pipe(
       Effect.catch(logFailure("memory_embedder_warm_up_failed")),
-      // A turn embeds what is still missing, as it did before.
+      // With the rules of the skills every project has; a project's own skills are embedded by its
+      // first turn. A turn embeds what is still missing, as it did before.
       Effect.andThen(
-        workflowRules.prepare.pipe(Effect.catch(logFailure("workflow_rule_vectors_failed"))),
+        skills.shared.pipe(
+          Effect.map(skillWorkflowRules),
+          Effect.catchTag("PlatformError", (error) =>
+            Effect.as(logFailure("workflow_skill_rules_unread")(error), []),
+          ),
+          Effect.flatMap(workflowRules.prepare),
+          Effect.catch(logFailure("workflow_rule_vectors_failed")),
+        ),
       ),
       Effect.andThen(indexer.indexAll()),
       Effect.catchTags({
