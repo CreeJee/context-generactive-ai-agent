@@ -47,11 +47,12 @@ it.live("says the stream is lost, then that the server is out of reach, and reco
     });
     TestEventSource.up = true;
     TestEventSource.opened = [];
+    vi.stubGlobal("EventSource", TestEventSource);
     const screen = yield* sdkCall(() =>
       render(
         <I18nProvider i18n={i18n}>
           <QueryClientProvider client={new QueryClient()}>
-            <AppEventsProvider createSource={() => new TestEventSource()}>
+            <AppEventsProvider>
               <p>화면</p>
             </AppEventsProvider>
           </QueryClientProvider>
@@ -87,5 +88,6 @@ it.live("says the stream is lost, then that the server is out of reach, and reco
 
     yield* sdkCall(() => screen.unmount());
     vi.useRealTimers();
+    vi.unstubAllGlobals();
   }),
 );

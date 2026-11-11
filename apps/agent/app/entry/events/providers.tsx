@@ -8,12 +8,7 @@ import { Button } from "~/components/ui/button";
 import { Spinner } from "~/components/ui/spinner";
 import { useBackendRestartRequired } from "../shared/use-backend-restart";
 import { EventConnectionContext, SessionEventScopeContext, useEventConnection } from "./context";
-import {
-  appEvents,
-  type ConnectAppEventsOptions,
-  type EventConnection,
-  type NextAttempt,
-} from "./event-source";
+import { appEvents, type EventConnection, type NextAttempt } from "./event-source";
 import { createEventInvalidator } from "./invalidation";
 import { appQueryKeys } from "./query-keys";
 
@@ -21,7 +16,6 @@ function useScopedEvents(
   url: string | null,
   readyKey: readonly unknown[],
   onStatus: (state: EventConnection) => void,
-  createSource: ConnectAppEventsOptions["createSource"],
 ) {
   const queryClient = useQueryClient();
   useEffect(() => {
@@ -34,7 +28,6 @@ function useScopedEvents(
     Effect.runFork(
       appEvents({
         url,
-        createSource,
         onChanged: (event) => invalidations.changed(event),
         onReady: (event) => invalidations.ready(event.revision),
         onStatus,
@@ -42,7 +35,7 @@ function useScopedEvents(
       { signal: stop.signal },
     );
     return () => stop.abort();
-  }, [createSource, onStatus, queryClient, readyKey, url]);
+  }, [onStatus, queryClient, readyKey, url]);
 }
 
 /**
@@ -117,15 +110,9 @@ function Banner({ children }: PropsWithChildren) {
 }
 
 /** One stream carries global, project, and session invalidations. */
-export function AppEventsProvider({
-  children,
-  createSource,
-}: PropsWithChildren<{
-  /** Opens the stream; the browser's EventSource unless a test speaks for the server. */
-  readonly createSource?: ConnectAppEventsOptions["createSource"];
-}>) {
+export function AppEventsProvider({ children }: PropsWithChildren) {
   const [connection, setConnection] = useState<EventConnection>({ _tag: "connecting" });
-  useScopedEvents("/api/events", appQueryKeys.root, setConnection, createSource);
+  useScopedEvents("/api/events", appQueryKeys.root, setConnection);
   return (
     <EventConnectionContext value={connection}>
       <ReconnectingBanner />
