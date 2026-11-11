@@ -48,3 +48,25 @@ export const nodeRecords = Effect.fn("searchSet.nodeRecords")(function* (
   );
   return Arr.getSomes(ids.map((id) => HashMap.get(byId, id)));
 });
+
+/** Statements per lookup, as the turn path and automatic recall read them. */
+const recentUserStatements = 3;
+
+/**
+ * The last user statements before `beforeSeq` in the session of the node stored at that seq (a
+ * recorded call, or the first node of a turn's run), oldest first; none when no node has that seq.
+ */
+export const statementsBefore = Effect.fn("searchSet.statementsBefore")(function* (
+  beforeSeq: number,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  const rows = yield* SqlSchema.findAll({
+    Request: Schema.Finite,
+    Result: Schema.Struct({ text: Schema.String }),
+    execute: (seq) => sql`
+      SELECT text FROM nodes WHERE kind = 'user' AND seq < ${seq}
+        AND session_id = (SELECT session_id FROM nodes WHERE seq = ${seq})
+      ORDER BY seq DESC LIMIT ${recentUserStatements}`,
+  })(beforeSeq);
+  return rows.map((row) => row.text).reverse();
+});

@@ -1,5 +1,5 @@
 import * as NodeWorkerRunner from "@effect/platform-node/NodeWorkerRunner";
-import { Array as Arr, Cause, Effect, Layer, Option, PubSub, Schema, Scope, Stream } from "effect";
+import { Array as Arr, Cause, Effect, Layer, PubSub, Schema, Scope, Stream } from "effect";
 import { RpcServer } from "effect/rpc";
 import { workerFailedSpansLayer } from "../../runtime/failed-spans.ts";
 import { nativeFailure, nativePromise, runNativeEffect } from "../../runtime/native-effect.ts";
@@ -9,13 +9,14 @@ import {
   type LoadReport,
   plannedDownload,
 } from "../embedding/download-progress.ts";
+import { paddedBatch, type PairTokens, pairTokens } from "./pairs.ts";
 import { RerankLoadEvent, RerankRpcs, RerankWorkerData, RerankWorkerFailed } from "./rerank-rpc.ts";
 import { memoryPrompts } from "../prompts.ts";
 // The reranker in a worker thread: onnxruntime-node runs a session synchronously, so on the main
 // thread a batch would hold up the requests the server is answering meanwhile.
 import { createRequire } from "node:module";
 import { workerData } from "node:worker_threads";
-import type { Tensor } from "@huggingface/transformers";
+import type { Tensor as TensorType } from "@huggingface/transformers";
 
 // The CommonJS build, resolved next to this file: in the package in a checkout, in the runtime
 // folder in the executable.
@@ -23,6 +24,7 @@ const {
   AutoModelForSequenceClassification,
   AutoTokenizer,
   ModelRegistry,
+  Tensor,
   env,
 }: typeof import("@huggingface/transformers") = createRequire(import.meta.url)(
   "@huggingface/transformers",
@@ -37,67 +39,35 @@ class NotOneLogit extends Schema.TaggedError<NotOneLogit, { readonly brand: uniq
   { dims: Schema.Array(Schema.Finite) },
 ) {}
 
-/** The last whitespace in `text` up to position `chars`, when it is not the first character. */
-const lastSpace = (text: string, chars: number) =>
-  Option.filter(Option.some(text.slice(0, chars + 1).search(/\s\S*$/)), (at) => at > 0);
-
-/**
- * The start of `text` that holds its first `tokens` tokens, or the whole text. It is cut before a
- * whitespace, where the tokenizer always ends a word, so its tokens are the whole text's first
- * ones. Lengths double from `tokens` characters, since a token holds at least one. Tokenizing a
- * whole 100 KB tool result took about a second, and 800 KB eight, while the model reads a pair's
- * first `maxTokens` tokens only.
- */
-const leadingText = (tokenizer: LoadedModel["tokenizer"], tokens: number) => (text: string) =>
-  Option.getOrElse(
-    Arr.findFirst(
-      Arr.unfold(tokens, (chars) =>
-        chars < text.length ? Option.some([chars, chars * 2] as const) : Option.none(),
-      ),
-      (chars) =>
-        Option.filter(
-          Option.map(lastSpace(text, chars), (at) => text.slice(0, at)),
-          (start) => tokenizer.encode(start, { add_special_tokens: false }).length >= tokens,
-        ),
-    ),
-    () => text,
-  );
-
 /** The model's relevance logits for the pairs, one per text. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 const score = Effect.fn("RerankWorker.score")(function* (
-  { tokenizer, model }: LoadedModel,
+  { tokenizer, model, pairs }: LoadedModel,
   query: string,
   texts: readonly string[],
-  { maxTokens }: RerankWorkerData,
 ) {
-  const leading = leadingText(tokenizer, maxTokens);
-  const question = leading(query);
-  const pairs = texts.map(leading);
-  // The tokens the model reads of each pair. Pairs that read the same are scored once: a question
-  // longer than the model reads leaves every pair the same.
-  const read = pairs.map((text) =>
-    tokenizer.encode(question, { text_pair: text }).slice(0, maxTokens).join(","),
-  );
-  const distinct = Arr.dedupe(read);
-  const inputs = tokenizer(
-    distinct.map(() => question),
-    {
-      text_pair: distinct.map((tokens) => pairs[read.indexOf(tokens)]!),
-      padding: true,
-      truncation: true,
-      max_length: maxTokens,
-    },
-  );
+  // The tokens the model reads of each pair. Pairs that read the same are scored once.
+  const read = pairs(query, texts);
+  const keys = read.map((tokens) => tokens.join(","));
+  const distinct = Arr.dedupe(keys);
+  const batch = paddedBatch({
+    pairs: distinct.map((key) => read[keys.indexOf(key)]!),
+    padId: tokenizer.pad_token_id,
+  });
   // An interrupted request still waits for its session run, so the worker never disposes of the
   // model while a run is in flight.
   const { logits } = yield* Effect.uninterruptible(
-    nativePromise<{ readonly logits: Tensor }>(() => model(inputs)),
+    nativePromise<{ readonly logits: TensorType }>(() =>
+      model({
+        input_ids: new Tensor("int64", batch.ids, [...batch.dims]),
+        attention_mask: new Tensor("int64", batch.mask, [...batch.dims]),
+      }),
+    ),
   );
   const dims: ReadonlyArray<number> = logits.dims;
   if (dims[1] !== 1) return yield* NotOneLogit.make({ dims });
   const scores = Array.from(logits.to("float32").data, Number);
-  return read.map((tokens) => scores[distinct.indexOf(tokens)]!);
+  return keys.map((key) => scores[distinct.indexOf(key)]!);
 });
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -128,9 +98,13 @@ const load = Effect.fn("RerankWorker.load")(function* (
       progress_callback,
     }),
   );
-  const loaded = { tokenizer, model };
+  const loaded = {
+    tokenizer,
+    model,
+    pairs: pairTokens({ tokenizer, maxTokens: setup.maxTokens, cut: setup.pairCut }),
+  };
   // The first run also compiles the device's kernels; a load that cannot run is no load.
-  return yield* score(loaded, memoryPrompts.warmUp, [memoryPrompts.warmUp], setup).pipe(
+  return yield* score(loaded, memoryPrompts.warmUp, [memoryPrompts.warmUp]).pipe(
     Effect.as(loaded),
     Effect.tapError(() =>
       nativePromise(() => model.dispose()).pipe(ignoreLogged("rerank_model_dispose_failed")),
@@ -140,6 +114,7 @@ const load = Effect.fn("RerankWorker.load")(function* (
 interface LoadedModel {
   readonly tokenizer: Awaited<ReturnType<typeof AutoTokenizer.from_pretrained>>;
   readonly model: Awaited<ReturnType<typeof AutoModelForSequenceClassification.from_pretrained>>;
+  readonly pairs: PairTokens;
 }
 
 const handlers = RerankRpcs.toLayer(
@@ -176,7 +151,7 @@ const handlers = RerankRpcs.toLayer(
         ),
       Score: ({ query, texts }) =>
         Effect.flatMap(model, (loaded) =>
-          score(loaded, query, texts, setup).pipe(Effect.mapError(failure("run"))),
+          score(loaded, query, texts).pipe(Effect.mapError(failure("run"))),
         ),
     });
   }),

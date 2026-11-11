@@ -3,9 +3,10 @@
  * nDCG@10 (gain 2^grade - 1), Recall@20 and MRR over nodes graded 1 or 2, Ans@10 (a node graded 2 in
  * the top 10), and judged@10, the share of the top 10 the judge has graded: an ungraded node counts
  * as not relevant, so a low judged@10 means the run's scores are a lower bound until `judge` grades
- * that run. Items whose need has no relevant node are left out and counted. With more than one run,
- * the first is the baseline and each other run's nDCG@10 wins and losses against it are counted per
- * item. With `complete`, only items whose top 10 every scored run has graded are counted: until the
+ * that run. Items whose need has no relevant node are left out and counted. Slices come from the
+ * item and its need, and from the set's slices file. With more than one run, the first is the
+ * baseline: per slice, each other run's mean nDCG@10 change against it on the same items, with a 95%
+ * interval (normal, from the per-item changes), and its wins and losses. With `complete`, only items whose top 10 every scored run has graded are counted: until the
  * judge has graded every run, an ungraded node would count against one run more than another.
  */
 import { Array as Arr, Console, Effect, HashMap, Iterable, Option, Order } from "effect";
@@ -29,7 +30,8 @@ const dcg = (gains: ReadonlyArray<number>) =>
 const gainOf = (grade: number) => 2 ** grade - 1;
 
 /** The slices an item is counted in, besides "all". */
-const slicesOf = (item: Item, need: Need) => [
+const slicesOf = (item: Item, need: Need, more: ReadonlyArray<string>) => [
+  ...more,
   `style ${item.style}`,
   `language ${item.language}`,
   `exact ${item.exact ? "yes" : "no"}`,
@@ -39,6 +41,7 @@ const slicesOf = (item: Item, need: Need) => [
 const scoreItem = (
   item: Item,
   need: Need,
+  more: ReadonlyArray<string>,
   grades: HashMap.HashMap<string, number>,
   row: RunRow,
 ): ItemScore => {
@@ -51,7 +54,7 @@ const scoreItem = (
   const first = top20.findIndex((id) => gradeAt(id) > 0);
   return {
     item: item.item,
-    slices: slicesOf(item, need),
+    slices: slicesOf(item, need, more),
     failed: row.failed !== undefined,
     ndcg: ideal === 0 ? 0 : dcg(top10.map((id) => gainOf(gradeAt(id)))) / ideal,
     recall: Arr.countBy(top20, (id) => gradeAt(id) > 0) / Math.max(1, relevant),
@@ -94,6 +97,12 @@ export const scoreRuns = Effect.fn("searchSet.score")(function* ({
         ] as const,
     ),
   );
+  const moreSlices = HashMap.map(
+    HashMap.fromIterable(
+      Object.entries(Arr.groupBy(yield* readRows(files.slices), ({ item }) => item)),
+    ),
+    (rows) => Arr.dedupe(rows.map(({ slice }) => slice)),
+  );
   const items = (yield* readRows(files.items)).flatMap((item) =>
     Option.toArray(HashMap.get(needs, item.need)).map((need) => ({ item, need })),
   );
@@ -115,7 +124,13 @@ export const scoreRuns = Effect.fn("searchSet.score")(function* ({
         run,
         scores: scorable.flatMap(({ item, need, grades }) =>
           Option.toArray(HashMap.get(rowOf, item.item)).map((row) =>
-            scoreItem(item, need, grades, row),
+            scoreItem(
+              item,
+              need,
+              Option.getOrElse(HashMap.get(moreSlices, item.item), () => []),
+              grades,
+              row,
+            ),
           ),
         ),
       };
@@ -164,17 +179,29 @@ export const scoreRuns = Effect.fn("searchSet.score")(function* ({
       const baseOf = HashMap.fromIterable(
         Iterable.map(baseline.scores, (score) => [score.item, score.ndcg] as const),
       );
-      return Effect.forEach(
-        scored.slice(1),
-        ({ run, scores }) => {
-          const changes = scores.flatMap((score) =>
-            Option.toArray(HashMap.get(baseOf, score.item)).map((base) => score.ndcg - base),
+      const rows = slices.flatMap((slice) =>
+        scored.slice(1).map(({ run, scores }) => {
+          const changes = scores
+            .filter((score) => slice === "all" || score.slices.includes(slice))
+            .flatMap((score) =>
+              Option.toArray(HashMap.get(baseOf, score.item)).map((base) => score.ndcg - base),
+            );
+          const n = changes.length;
+          const average = changes.reduce((sum, change) => sum + change, 0) / Math.max(1, n);
+          const spread = Math.sqrt(
+            changes.reduce((sum, change) => sum + (change - average) ** 2, 0) / Math.max(1, n - 1),
           );
-          return Console.log(
-            `${run} vs ${baseline.run}: nDCG@10 wins ${Arr.countBy(changes, (d) => d > 1e-9)}, losses ${Arr.countBy(changes, (d) => d < -1e-9)}, ties ${Arr.countBy(changes, (d) => Math.abs(d) <= 1e-9)}; mean change ${mean(changes)}`,
-          );
-        },
-        { discard: true },
+          const half = (1.96 * spread) / Math.sqrt(Math.max(1, n));
+          return `| ${slice} | ${run} | ${n} | ${average.toFixed(3)} | ${(average - half).toFixed(3)} … ${(average + half).toFixed(3)} | ${Arr.countBy(changes, (d) => d > 1e-9)} | ${Arr.countBy(changes, (d) => d < -1e-9)} |`;
+        }),
+      );
+      return Console.log(
+        [
+          `\nnDCG@10 change against ${baseline.run}`,
+          "| slice | run | n | change | 95% interval | wins | losses |",
+          "|---|---|---|---|---|---|---|",
+          ...rows,
+        ].join("\n"),
       );
     },
   });

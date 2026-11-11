@@ -7,6 +7,7 @@
  *   search-set/items.jsonl       queries sent to a search; several items can share one need
  *   search-set/judgments.jsonl   one grade per need and node, from the model judge
  *   search-set/runs/<name>.jsonl one ranked list of node ids per item, from one search system
+ *   search-set/slices.jsonl      more slices items are scored in (see `ItemSlice`)
  */
 import { Array as Arr, Effect, FileSystem, Option, Schema } from "effect";
 import { sha256 } from "../../src/runtime/synchronous-crypto.ts";
@@ -65,12 +66,13 @@ export type Need = typeof Need.Type;
 
 /**
  * One query sent to a search. `find` and `recall` are recorded text; `question` and `keywords` are
- * the two forms written for a round: a full question and a short search query.
+ * the two forms written for a round: a full question and a short search query. `turn` is the turn
+ * path's lookup query for a recall need: the latest statement first, then the earlier ones.
  */
 export const Item = Schema.Struct({
   item: Schema.String,
   need: Schema.String,
-  style: Schema.Literals(["find", "recall", "question", "keywords"]),
+  style: Schema.Literals(["find", "recall", "question", "keywords", "turn"]),
   query: Schema.String,
   language: Language,
   /** The query names something exactly: a path, an identifier, a version, an error code. */
@@ -99,6 +101,9 @@ export const RunRow = Schema.Struct({
 });
 export type RunRow = typeof RunRow.Type;
 
+/** A slice an item is scored in besides those its item and need give, written by another step. */
+export const ItemSlice = Schema.Struct({ item: Schema.String, slice: Schema.String });
+
 /** A round the judge found nothing worth asking about, so a later run does not ask again. */
 export const SkippedRound = Schema.Struct({ round: Schema.String });
 
@@ -122,6 +127,7 @@ export const setFiles = (storage: string) => {
     items: { schema: Item, path: path.join(root, "items.jsonl") },
     judgments: { schema: Judgment, path: path.join(root, "judgments.jsonl") },
     skippedRounds: { schema: SkippedRound, path: path.join(root, "skipped-rounds.jsonl") },
+    slices: { schema: ItemSlice, path: path.join(root, "slices.jsonl") },
     runs: path.join(root, "runs"),
     run: (name: string) => ({ schema: RunRow, path: path.join(root, "runs", `${name}.jsonl`) }),
     /** A second model's grades of pairs the main judge graded, by the model's name. */

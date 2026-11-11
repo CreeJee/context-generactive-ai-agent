@@ -10,11 +10,14 @@
  * node_modules/.vp-tmp/cga-bench made by the bench-copy-stage skill. The usual order: recorded,
  * rounds, pool, judge, then score; a new search system writes a run, judge grades what only it
  * returned, and score compares it with the others. `rerank` reorders other runs' top ids with a
- * local reranker model as another run.
+ * local reranker model as another run. `turns` adds needs in the turn path's query shape, and
+ * `rerank-inputs` runs the app's reranker over the app's candidates with its input made in several
+ * ways, a run each.
  */
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Effect, Layer, Option, Schema } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
+import { ProviderId } from "../src/providers/contracts.ts";
 import { searchTuning, type SearchTuning } from "../src/memory/search.ts";
 import { copyDatabase, copyLayer } from "./copy-storage.ts";
 import { agreement, judgeCheck, judgePools } from "./search-set/judge.ts";
@@ -22,14 +25,22 @@ import { EvalModel } from "./search-set/model.ts";
 import { searchRuns } from "./search-set/pool.ts";
 import { buildRecorded } from "./search-set/recorded.ts";
 import { RerankDevice, RerankDtype, rerankRun } from "./search-set/rerank.ts";
+import { rerankInputs } from "./search-set/rerank-inputs.ts";
 import { writeRounds } from "./search-set/rounds.ts";
 import { scoreRuns } from "./search-set/score.ts";
+import { writeTurns } from "./search-set/turns.ts";
 
 const copy = Argument.Directory("copy", { mustExist: true }).pipe(
   Argument.withDescription("a copy of a storage folder: agent.db, vectors/, models/"),
 );
 const model = Flag.String("model").pipe(
-  Flag.withDescription("another model of the selected provider, by id"),
+  Flag.withDescription("another model, by id: of the selected provider, or of --provider"),
+  Flag.optional,
+);
+const provider = Flag.Literals("provider", ProviderId.literals).pipe(
+  Flag.withDescription(
+    "a provider other than the selected one, set up in the app; name its model with --model",
+  ),
   Flag.optional,
 );
 const concurrency = Flag.Int("concurrency").pipe(
@@ -56,8 +67,11 @@ const tuning = Flag.String("tuning").pipe(
 );
 
 /** The model, for the steps that ask it, beside the copy's database read-only. */
-const withModel = (storage: string, model: Option.Option<string>) =>
-  Layer.merge(copyDatabase(storage), EvalModel.layer({ storage, model }));
+const withModel = (
+  storage: string,
+  provider: Option.Option<ProviderId>,
+  model: Option.Option<string>,
+) => Layer.merge(copyDatabase(storage), EvalModel.layer({ storage, provider, model }));
 
 const recorded = Command.make("recorded", { copy }, ({ copy }) => buildRecorded(copy)).pipe(
   Command.withDescription("needs and items from recorded find_memory calls"),
@@ -68,6 +82,7 @@ const rounds = Command.make(
   "rounds",
   {
     copy,
+    provider,
     model,
     concurrency,
     count: Flag.Int("count").pipe(
@@ -78,7 +93,7 @@ const rounds = Command.make(
   ({ copy, count, concurrency }) => writeRounds({ storage: copy, count, concurrency }),
 ).pipe(
   Command.withDescription("needs the model writes from past rounds, drawn across age and language"),
-  Command.provide(({ copy, model }) => withModel(copy, model)),
+  Command.provide(({ copy, provider, model }) => withModel(copy, provider, model)),
 );
 
 const pool = Command.make("pool", { copy }, ({ copy }) =>
@@ -138,10 +153,50 @@ const rerank = Command.make(
   Command.provide(({ copy }) => copyDatabase(copy)),
 );
 
+const turns = Command.make(
+  "turns",
+  {
+    copy,
+    any: Flag.Int("any").pipe(
+      Flag.withDescription("turns drawn from all turns, counting those already written"),
+      Flag.withDefault(150),
+    ),
+    long: Flag.Int("long").pipe(
+      Flag.withDescription(
+        "turns drawn from those whose query is longer than the reranker reads, counting those already written",
+      ),
+      Flag.withDefault(150),
+    ),
+  },
+  ({ copy, any, long }) => writeTurns({ storage: copy, any, long }),
+).pipe(
+  Command.withDescription("recall needs with the turn path's query, as `turn` items"),
+  Command.provide(({ copy }) => copyDatabase(copy)),
+);
+
+const inputs = Command.make(
+  "rerank-inputs",
+  {
+    copy,
+    name: Flag.String("name").pipe(Flag.withDescription("the runs' name prefix")),
+    depth: Flag.Int("depth").pipe(
+      Flag.withDescription("ids taken from each of the vector, morph and text runs"),
+      Flag.withDefault(10),
+    ),
+  },
+  ({ copy, name, depth }) => rerankInputs({ storage: copy, name, depth }),
+).pipe(
+  Command.withDescription(
+    "the app's reranker over the app's candidates, its input made in several ways, a run each",
+  ),
+  Command.provide(({ copy }) => copyDatabase(copy)),
+);
+
 const judge = Command.make(
   "judge",
   {
     copy,
+    provider,
     model,
     concurrency,
     runs: Argument.String("run").pipe(
@@ -156,13 +211,14 @@ const judge = Command.make(
   ({ copy, runs, depth, concurrency }) => judgePools({ storage: copy, runs, depth, concurrency }),
 ).pipe(
   Command.withDescription("grades the pooled pairs not graded yet"),
-  Command.provide(({ copy, model }) => withModel(copy, model)),
+  Command.provide(({ copy, provider, model }) => withModel(copy, provider, model)),
 );
 
 const check = Command.make(
   "judge-check",
   {
     copy,
+    provider,
     model,
     concurrency,
     share: Flag.Finite("share").pipe(
@@ -173,7 +229,7 @@ const check = Command.make(
   ({ copy, share, concurrency }) => judgeCheck({ storage: copy, share, concurrency }),
 ).pipe(
   Command.withDescription("a second model grades a share of the graded pairs"),
-  Command.provide(({ copy, model }) => withModel(copy, model)),
+  Command.provide(({ copy, provider, model }) => withModel(copy, provider, model)),
 );
 
 const agree = Command.make(
@@ -204,7 +260,19 @@ const score = Command.make(
 
 const searchSet = Command.make("search-set").pipe(
   Command.withDescription("the memory search evaluation set"),
-  Command.withSubcommands([recorded, rounds, pool, appRun, rerank, judge, check, agree, score]),
+  Command.withSubcommands([
+    recorded,
+    rounds,
+    turns,
+    pool,
+    appRun,
+    rerank,
+    inputs,
+    judge,
+    check,
+    agree,
+    score,
+  ]),
 );
 
 Command.run(searchSet, { version: "1.0.0" }).pipe(

@@ -1,14 +1,17 @@
 import { Schema } from "effect";
 import { Rpc, RpcGroup } from "effect/rpc";
 import { DownloadProgress } from "../embedding/contracts.ts";
+import { PairCut } from "./pairs.ts";
 
 /** What the rerank worker is started with; the host owns every field. */
 export const RerankWorkerData = Schema.Struct({
   cacheDir: Schema.String,
   modelId: Schema.String,
   modelFileName: Schema.String,
-  /** Tokens of one query and text pair; the longer side is cut first. */
+  /** Tokens of one query and text pair. */
   maxTokens: Schema.Finite,
+  /** How a longer pair is cut to `maxTokens`. */
+  pairCut: PairCut,
 });
 export type RerankWorkerData = typeof RerankWorkerData.Type;
 

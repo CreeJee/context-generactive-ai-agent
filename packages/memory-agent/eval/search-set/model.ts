@@ -1,7 +1,8 @@
 /**
  * The model that writes round questions and grades search results: the one the user selected in the
- * app (copied from their config.json; keys stay in the keychain), or another model of the same
- * provider by id. The app's services for it run on their own storage folder inside the copy, so
+ * app (copied from their config.json; keys stay in the keychain), another model of the same provider
+ * by id, or a model of another provider the user has set up. Grades from one judge compare with each
+ * other, so a set keeps the judge it started with when the app's selection changes. The app's services for it run on their own storage folder inside the copy, so
  * nothing is written to the user's storage or to the copy's database.
  */
 import { Context, Effect, FileSystem, Layer, Option, Schema } from "effect";
@@ -10,7 +11,7 @@ import { defaultStorageRoot } from "../../src/config/storage-root.ts";
 import { memoryAgentLayer } from "../../src/layers.ts";
 import { singleAnswer } from "../../src/model/single-call.ts";
 import { ActiveProvider } from "../../src/providers/active-provider.ts";
-import { AuthConnectionState } from "../../src/providers/contracts.ts";
+import { AuthConnectionState, type ProviderId } from "../../src/providers/contracts.ts";
 import { path } from "../../src/runtime/synchronous-path.ts";
 import { fakeEmbedderLayer } from "../../src/testing/fake-embedder.ts";
 import { setFiles } from "./files.ts";
@@ -24,9 +25,13 @@ export class ModelUnavailable extends Schema.TaggedError<
 /** One call took longer than this: a local server under load can stall. */
 const callTimeout = "3 minutes";
 
-/** Which model to ask: the app's selection, or another model of its provider by id. */
+/**
+ * Which model to ask: the app's selection, or another model by id, of the selected provider or of
+ * `provider`.
+ */
 export interface ModelChoice {
   readonly storage: string;
+  readonly provider: Option.Option<ProviderId>;
   readonly model: Option.Option<string>;
 }
 
@@ -53,7 +58,11 @@ const modelServices = Effect.fn("searchSet.modelServices")(function* (storage: s
   );
 });
 
-const make = Effect.fn("searchSet.EvalModel.make")(function* ({ storage, model }: ModelChoice) {
+const make = Effect.fn("searchSet.EvalModel.make")(function* ({
+  storage,
+  provider,
+  model,
+}: ModelChoice) {
   const services = yield* modelServices(storage);
   return yield* Effect.provideContext(
     Effect.gen(function* () {
@@ -61,9 +70,19 @@ const make = Effect.fn("searchSet.EvalModel.make")(function* ({ storage, model }
       const selected = yield* Effect.fromNullishOr(yield* active.selected).pipe(
         Effect.mapError(() => ModelUnavailable.make({ reason: "no model is selected in the app" })),
       );
-      const selection = Option.match(model, {
-        onNone: () => selected,
-        onSome: (id) => ({ ...selected, model: id }),
+      const selection = yield* Option.match(provider, {
+        onNone: () =>
+          Effect.succeed({ ...selected, model: Option.getOrElse(model, () => selected.model) }),
+        // Another provider has no selected model here, so its model is named.
+        onSome: (other) =>
+          Effect.map(
+            Effect.fromOption(model).pipe(
+              Effect.mapError(() =>
+                ModelUnavailable.make({ reason: `name the model of ${other} with --model` }),
+              ),
+            ),
+            (id) => ({ provider: other, model: id, reasoningEffort: "default" }),
+          ),
       });
       const auth = yield* active.auth(selection);
       if (!AuthConnectionState.$is("signed-in")(auth))

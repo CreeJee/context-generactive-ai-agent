@@ -23,6 +23,7 @@ import { logFailure } from "../../runtime/logged-failures.ts";
 import { runtimeWorker, runtimeWorkerOptions } from "../../runtime/resources.ts";
 import { type DownloadReport, ModelDownloads } from "../embedding/downloads.ts";
 import { Embedder, EmbedderRuntime } from "../embedding/embedder.ts";
+import { PairCut } from "./pairs.ts";
 import {
   RerankLoadEvent,
   RerankRpcs,
@@ -40,6 +41,7 @@ export const rerankModel = {
   id: "CreeJee/KURE-Reranker-nano-ONNX",
   file: "model_fp16",
   maxTokens: 192,
+  pairCut: PairCut.cases.head.make({}),
 } as const;
 
 /**
@@ -149,6 +151,7 @@ const makeLocal = Effect.gen(function* () {
     modelId: rerankModel.id,
     modelFileName: rerankModel.file,
     maxTokens: rerankModel.maxTokens,
+    pairCut: rerankModel.pairCut,
   };
   const report = yield* ModelDownloads.report("rerank", rerankModel.id);
   // Each load's worker lives in a scope of its own, closed when the load fails.
