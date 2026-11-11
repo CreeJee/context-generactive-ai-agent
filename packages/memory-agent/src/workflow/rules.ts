@@ -225,7 +225,8 @@ const make = Effect.gen(function* () {
     },
   );
 
-  const vectors = (rules: readonly WorkflowRule[]) => Cache.get(vectorSets, rules);
+  const vectors = (rules: readonly WorkflowRule[]) =>
+    Cache.get(vectorSets, rules).pipe(Effect.withSpan("WorkflowRules.ruleVectors"));
 
   return {
     resolve: ({ phases, text, rules = [], limit = 3 }: RuleQuery): Effect.Effect<ResolvedRules> => {
@@ -296,7 +297,7 @@ const make = Effect.gen(function* () {
           rules: [...required, ...selected],
           degraded,
         };
-      });
+      }).pipe(Effect.withSpan("WorkflowRules.resolve"));
     },
   };
 });

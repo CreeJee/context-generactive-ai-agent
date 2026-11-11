@@ -747,15 +747,16 @@ const runAccepted = Effect.fnUntraced(function* <R>(
       const joined = yield* Effect.forEach(
         hooks.flatMap((hook) => hook.joining ?? []),
         (joining) => joining(scope, before),
-      );
+      ).pipe(Effect.withSpan("RunLoop.joining"));
       const current = [...before, ...joined.flat()];
       yield* Ref.set(conversation, current);
       const offeredTools = yield* tools.offered;
+      // The time from here to the model call is the hooks' (memory recall, compaction, images).
       const request = yield* Effect.reduce(
         hooks.flatMap((hook) => hook.request ?? []),
         (): StepRequest => ({ system: spec.system, history: current, tools: offeredTools }),
         (sent, hook) => hook(scope, sent),
-      );
+      ).pipe(Effect.withSpan("RunLoop.request"));
       const messageId = yield* crypto.uuidV7();
       const createdAt = DateTime.formatIso(yield* DateTime.now);
       const scheduler = yield* stepScheduler<StoredInterruptPayload, RunFailed, R>({ answered });
@@ -1066,7 +1067,7 @@ const runAccepted = Effect.fnUntraced(function* <R>(
       hooks.flatMap((hook) => hook.started ?? []),
       (hook) => hook(scope, resumed),
       { discard: true },
-    );
+    ).pipe(Effect.withSpan("RunLoop.started"));
     const first = Arr.isReadonlyArrayNonEmpty(resumed)
       ? yield* resumeStep(input.conversation)
       : yield* modelStep(input.conversation);

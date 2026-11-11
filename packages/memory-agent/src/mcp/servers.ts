@@ -713,8 +713,12 @@ const make = Effect.gen(function* () {
         Fiber.join(connection.client),
         connectTimeoutMs,
         "connect",
-      );
-      const tools = yield* withTimeout(listTools(connected.client), connectTimeoutMs, "tools/list");
+      ).pipe(Effect.withSpan("McpServers.connect"));
+      const tools = yield* withTimeout(
+        listTools(connected.client),
+        connectTimeoutMs,
+        "tools/list",
+      ).pipe(Effect.withSpan("McpServers.listTools"));
       return (yield* isCurrent) ? yield* offered(connected, tools) : nothingDiscovered;
     }).pipe(
       // A server that fails to start or list is remembered as failed and offers no tools.
@@ -827,26 +831,25 @@ const make = Effect.gen(function* () {
   });
 
   /** What every trusted, unchanged server of the project offers. */
-  const discoveredFor = (project: Project) =>
-    Effect.gen(function* () {
-      const { servers, hints } = yield* configured(project);
-      const usable = servers.filter(
-        (entry) => !entry.shadowed && entry.trusted === entry.server.fingerprint,
-      );
-      return yield* Effect.forEach(
-        usable,
-        (entry) =>
-          Effect.map(discover(project, entry.server), (discovered) => ({
-            server: entry.server.name,
-            guide: discovered.guide,
-            tools: discovered.tools.map((tool) => ({
-              ...tool,
-              view: withUserHints(hints, entry.server.scope, entry.server.name)(tool.view),
-            })),
+  const discoveredFor = Effect.fn("McpServers.discoveredFor")(function* (project: Project) {
+    const { servers, hints } = yield* configured(project);
+    const usable = servers.filter(
+      (entry) => !entry.shadowed && entry.trusted === entry.server.fingerprint,
+    );
+    return yield* Effect.forEach(
+      usable,
+      (entry) =>
+        Effect.map(discover(project, entry.server), (discovered) => ({
+          server: entry.server.name,
+          guide: discovered.guide,
+          tools: discovered.tools.map((tool) => ({
+            ...tool,
+            view: withUserHints(hints, entry.server.scope, entry.server.name)(tool.view),
           })),
-        { concurrency: "unbounded" },
-      );
-    });
+        })),
+      { concurrency: "unbounded" },
+    );
+  });
 
   /** A trusted, unchanged server of the project that a project server of its name does not replace. */
   const usableServer = (project: Project, scope: McpScope, name: string) =>

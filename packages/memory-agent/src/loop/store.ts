@@ -206,7 +206,7 @@ const make = Effect.gen(function* () {
           onSome: (entry) => Effect.succeed(entry.messages),
         },
       ),
-    );
+    ).pipe(Effect.withSpan("RunStore.thread"));
 
   const threadRow = SqlSchema.findOne({
     Request: Schema.String,

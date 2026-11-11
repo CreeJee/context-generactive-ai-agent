@@ -275,6 +275,7 @@ export const modelWorker = Effect.fnUntraced(function* (
           Effect.andThen(ScopedRef.get(session)),
           // `set` just stored the session it acquired.
           Effect.map(Option.getOrThrow),
+          Effect.withSpan("Embedder.startWorker"),
         ),
     }),
   );
@@ -302,7 +303,8 @@ export const modelWorker = Effect.fnUntraced(function* (
     device: (): EmbeddingDevice | null =>
       Option.getOrNull(Option.map(ScopedRef.getUnsafe(session), (current) => current.device)),
     chunks: (texts: readonly string[]) => request((current) => current.chunk(texts)),
-    embed: Effect.fnUntraced(function* (texts: readonly string[], role: EmbeddingRole) {
+    // Its span shows how long a caller waits for the worker between the worker's own calls.
+    embed: Effect.fn("Embedder.embed")(function* (texts: readonly string[], role: EmbeddingRole) {
       if (texts.length === 0) return [];
       const prompted = texts.map((text) => localModel.prompts[role] + text);
       const counts = yield* request((current) => current.countTokens(prompted));
