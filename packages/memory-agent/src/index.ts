@@ -486,6 +486,7 @@ export {
   type Visit,
 } from "./memory/graph.ts";
 export { MemorySearch, type FindInput, type FindResult, type Match } from "./memory/search.ts";
+export { Interpreter } from "./memory/interpret.ts";
 export {
   Embedder,
   EmbeddingError,

@@ -132,6 +132,14 @@ export function useRetryDownloadMutation() {
   });
 }
 
+export function useRetryInterpretationMutation() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: api.retryInterpretation,
+    onSuccess: (overview) => client.setQueryData(globalQueries.interpretation().queryKey, overview),
+  });
+}
+
 /** A switched or removed account changes the provider's auth, models and quota rows. */
 export function useAccountActionMutation(provider: SubscriptionAccountProvider) {
   const client = useQueryClient();

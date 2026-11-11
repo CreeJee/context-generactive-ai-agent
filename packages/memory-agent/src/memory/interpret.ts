@@ -7,6 +7,7 @@ import { SecureRandom } from "effect/crypto";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import { failureAnnotations, logFailure } from "../runtime/logged-failures.ts";
 import { ApiUsage, recordUsage } from "../agent/api-usage.ts";
+import { AppEvents } from "../events/app-events.ts";
 import { singleAnswer } from "../model/single-call.ts";
 import { AuthConnectionState, type ModelSelection } from "../providers/contracts.ts";
 import { SqlClient, SqlSchema } from "effect/sql";
@@ -97,6 +98,7 @@ const make = Effect.gen(function* () {
   const active = yield* ActiveProvider;
   const usageLedger = yield* ApiUsage;
   const crypto = yield* SecureRandom.SecureRandom;
+  const events = yield* AppEvents;
   const oneRunAtATime = yield* Semaphore.make(1);
   const meaningful = sql.literal(meaningfulNodeFilter);
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -146,6 +148,17 @@ const make = Effect.gen(function* () {
       updated_at = ${now}
     WHERE status = 'failed' AND error = 'model_call_failed'
       AND automatic_retries < ${maxAutomaticRetries} AND ${isMeaningful}`;
+  const requeueAllFailed = (now: string) => sql`
+    UPDATE interpret_jobs SET status = 'pending', attempts = 0, automatic_retries = 0,
+      updated_at = ${now}
+    WHERE status = 'failed' AND ${isMeaningful}`;
+  // CROSS JOIN keeps the failed jobs as the outer loop, as the uninterpreted count does.
+  const countFailed = SqlSchema.findOne({
+    Request: Schema.Void,
+    Result: Schema.Struct({ count: Schema.Finite }),
+    execute: () => sql`SELECT count(*) AS count FROM interpret_jobs j
+      CROSS JOIN nodes n ON n.id = j.node_id WHERE j.status = 'failed' AND ${meaningful}`,
+  });
   const earlierInSession = SqlSchema.findAll({
     Request: Schema.Struct({ sessionId: Schema.String, seq: Schema.Finite }),
     Result: NodeRow,
@@ -422,7 +435,7 @@ const make = Effect.gen(function* () {
       const auth = yield* active.auth(selection);
       if (!AuthConnectionState.$is("signed-in")(auth)) return 0;
       // Each batch is read after the one before it is settled, until none is left.
-      return yield* Stream.fromEffectRepeat(nextBatch).pipe(
+      const { batches, statements } = yield* Stream.fromEffectRepeat(nextBatch).pipe(
         Stream.take(batchesPerRun),
         Stream.takeWhile(EffectArray.isReadonlyArrayNonEmpty),
         Stream.mapEffect((batch) =>
@@ -450,10 +463,31 @@ const make = Effect.gen(function* () {
             );
           }),
         ),
-        Stream.runSum,
+        Stream.runFold(
+          () => ({ batches: 0, statements: 0 }),
+          (total, settled) => ({
+            batches: total.batches + 1,
+            statements: total.statements + settled,
+          }),
+        ),
       );
+      // A batch that ran may have left jobs failed or put failed ones back in the queue.
+      yield* Effect.when(events.publishGlobal("interpretation"), Effect.succeed(batches > 0));
+      return statements;
       // Named so a report tells its model calls, made under the run that just ended, from the run's.
     }).pipe(oneRunAtATime.withPermits(1), Effect.withSpan("Interpreter.runPending")),
+
+    /** How many statements are left failed, after their attempts and automatic retries. */
+    failedCount: Effect.map(countFailed(), ({ count }) => count),
+
+    /**
+     * Puts every failed statement back in the queue with its attempts and automatic retries
+     * restored. Finished runs interpret them a few batches at a time, newest conversation first.
+     */
+    retryFailed: Effect.andThen(
+      Effect.flatMap(nowIso, requeueAllFailed),
+      events.publishGlobal("interpretation"),
+    ),
   };
 });
 

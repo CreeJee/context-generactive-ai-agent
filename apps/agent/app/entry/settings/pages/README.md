@@ -8,7 +8,8 @@
 
 - `AgentSettings` — `{ project: Project | null }`. 외부 ACP 에이전트 목록, 신뢰·연결 상태 배지, 신뢰 토글과 다시 연결 버튼(`AgentChange.trust`/`AgentChange.reconnect`)을 보여 주는 페이지
 - `ConversationSettings` — 긴 대화를 요약으로 보내기 시작하는 시점(`summaryStartPercent`, 0~50%)을 저장하는 페이지
-- `EmbeddingSettings` — 임베딩 실행 방식(auto/cpu/gpu) 선택, WebGPU 다시 확인(`EmbeddingCommand.choose`/`check`), 임베딩 대기 수와 기억 그래프 정리 상태를 보여 주는 페이지
+- `EmbeddingSettings` — 임베딩 실행 방식(auto/cpu/gpu) 선택, WebGPU 다시 확인(`EmbeddingCommand.choose`/`check`), 임베딩 대기 수와 기억 그래프 정리 상태, 해석하지 못한 발언을 보여 주는 페이지
+- `FailedInterpretations` (`failed-interpretations.tsx`) — 기억 해석이 실패로 남긴 발언 수와 '다시 시도' 버튼. 실패한 발언이 없거나 수를 읽기 전에는 그리지 않는다. 임베딩 페이지가 쓴다
 - `ImageSettings` — 이미지 생성 켜기/끄기와 공급자 간 이미지 생성 동의 모드(disabled/ask/always)를 고르는 페이지
 - `ImportSettings` — Claude Code·Codex CLI 대화 가져오기 페이지. 실행·계속 가져오기·감시 재시작·해석(`ImportCommand.run/enable/disable/restart_watch/interpret`)을 다루고 진행 상황, 소스별 통계, 등록하지 못한 폴더, 실패 기록을 보여 준다
 - `ImprovementSettings` — 프로젝트 개선 스캔 페이지. `/api/settings/improvements`로 시작·중지 명령을 보내고, 저장소별 `ImprovementReport`와 작업 명세 markdown을 보여 주며 복사할 수 있다
@@ -29,7 +30,7 @@
 - `ImprovementSettings`는 상태가 `ScanState` running일 때만 2000ms 간격으로 refetch하고 `retry: false`다. 명령이 성공하면 `queryKey` 캐시의 `state`만 교체한다. 404 응답이면 '서버가 지원하지 않음' 문구를 쓰고, 다른 실패는 `FailureBody`(`reason: "report"`)를 디코딩해 `failures` 표로 문구를 고른다.
 - `AgentSettings`: shadowed 에이전트는 `shadowedBadge`만 보여 주고 동작 버튼이 없다. '다시 연결' 버튼은 trusted이면서 link가 `stopped`일 때만 보인다. 연결 문제 문구는 `AgentLinkState`가 `retrying` 또는 `stopped`일 때만 만든다.
 - `ImageSettings`: 공급자 간 동의 Select는 이미지 생성이 꺼져 있으면 비활성이다. 키 `anthropic->openai:media.image.generate`의 값이 없으면 `disabled`로 본다. 허용 모드는 `disabled`, `ask`, `always`뿐이다.
-- `EmbeddingSettings`: local runtime의 `mode`가 `overview.next`와 다르면 재시작 안내를 보여 준다. WebGPU 확인 중(`GpuState` checking)이거나 busy일 때는 다시 확인 버튼을 끈다. 로컬 모델(임베딩 모델, 검색 결과 정렬 모델)을 내려받는 동안 `overview.downloads`마다 진행 막대와 MB 수를 보여 준다.
+- `EmbeddingSettings`: local runtime의 `mode`가 `overview.next`와 다르면 재시작 안내를 보여 준다. WebGPU 확인 중(`GpuState` checking)이거나 busy일 때는 다시 확인 버튼을 끈다. 로컬 모델(임베딩 모델, 검색 결과 정렬 모델)을 내려받는 동안 `overview.downloads`마다 진행 막대와 MB 수를 보여 준다. 기억 해석이 실패로 남긴 발언이 있을 때만 `FailedInterpretations`가 '해석하지 못한 발언 n개'와 '다시 시도' 버튼(`POST /api/settings/interpretation/retry`)을 보인다.
 - `ImportSettings`: 가져오기 실행 중(`ImportActivity` running)이거나 busy일 때 '지금 가져오기' 버튼을 끈다. 감시 상태(`LoopHealthStatus`)는 `enabled`이고 `watch !== null`일 때만 보인다.
 
 ## Side Effects

@@ -228,6 +228,13 @@ testAgent({ testProvider: {} })("llm-interpret", (it) => {
         { discard: true },
       );
       expect(yield* context.job(failing.id)).toEqual({ status: "failed", attempts: 6 });
+
+      // The settings' retry queues every failed statement again, with fresh attempts.
+      const interpreter = yield* Interpreter;
+      expect(yield* interpreter.failedCount).toBeGreaterThan(0);
+      yield* interpreter.retryFailed;
+      expect(yield* interpreter.failedCount).toBe(0);
+      expect(yield* context.job(failing.id)).toEqual({ status: "pending", attempts: 0 });
     }),
   );
 

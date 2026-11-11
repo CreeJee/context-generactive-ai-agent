@@ -10,6 +10,7 @@ import {
   GoalOrder,
   ImageFeature,
   Importer,
+  Interpreter,
   Kagi,
   KanbanSettings,
   ProjectImprovement,
@@ -53,9 +54,14 @@ export const SettingsApiHandlers = HttpApiBuilder.group(
     const mediaConsent = yield* CrossProviderMediaConsent;
     const importer = yield* Importer;
     const improvement = yield* ProjectImprovement;
+    const interpreter = yield* Interpreter;
     // The importer's and the embedding setup's methods still ask for these per call.
     const path = yield* Path.Path;
     const sql = yield* SqlClient.SqlClient;
+
+    const interpretationOverview = Effect.orDie(
+      Effect.map(interpreter.failedCount, (failed) => ({ failed })),
+    );
 
     const kanbanSettings = Effect.gen(function* () {
       const concurrency = yield* kanban.concurrency;
@@ -167,6 +173,10 @@ export const SettingsApiHandlers = HttpApiBuilder.group(
       modelDownloads: () => embedding.downloads,
       retryModelDownload: ({ payload }) =>
         embedding.retryDownload(payload.purpose).pipe(Effect.provideService(Path.Path, path)),
+      // Like the embedding routes, these declare no refusals; a storage failure stays a 500.
+      interpretation: () => interpretationOverview,
+      retryInterpretation: () =>
+        Effect.andThen(Effect.orDie(interpreter.retryFailed), interpretationOverview),
       image: () => Effect.orDie(imageSettings),
       imageAction: ({ payload }) =>
         Match.valueTags(payload, {

@@ -38,6 +38,7 @@ import { useEmbeddingQuery } from "../../queries/global";
 import { ModelDownloadList } from "../../shared/model-downloads";
 import { useEmbeddingMutation } from "../../queries/mutations/global";
 import { errorMessage, PageHeader, PageError, pageTitles } from "../shared";
+import { FailedInterpretations } from "./failed-interpretations";
 
 const embeddingChoices = ["auto", "cpu", "gpu"] as const satisfies ReadonlyArray<EmbeddingChoice>;
 const choiceLabels = {
@@ -268,6 +269,8 @@ export function EmbeddingSettings() {
           )}
         </FieldDescription>
       </Field>
+
+      <FailedInterpretations />
 
       <PageError error={error} />
     </FieldGroup>

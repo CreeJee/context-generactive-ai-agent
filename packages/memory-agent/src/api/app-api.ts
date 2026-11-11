@@ -60,6 +60,7 @@ export {
   ImageSettingsCommand,
   ImportCommand,
   ImprovementStatus,
+  InterpretationOverview,
   KagiCommand,
   KanbanSettings,
   KanbanSettingsCommand,

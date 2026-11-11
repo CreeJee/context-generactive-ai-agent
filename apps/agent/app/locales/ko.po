@@ -1887,10 +1887,12 @@ msgstr "다시 불러도 같음"
 #. Button that asks the server again whether this window may write
 #. Button that loads a list or settings section again after it failed to load
 #. Button that loads the conversation again after it failed to load
+#. Button that queues the failed statements for interpretation again
 #. Button that reruns a subagent task as a new attempt
 #: app/entry/chat/chat-history.tsx
 #: app/entry/chat/message.tsx
 #: app/entry/chat/read-only-bar.tsx
+#: app/entry/settings/pages/failed-interpretations.tsx
 #: app/entry/shared/load-failed.tsx
 msgid "다시 시도"
 msgstr "다시 시도"
@@ -2666,6 +2668,10 @@ msgstr "모델이 이름과 설명을 보고 작업에 맞는 skill을 읽어 �
 #: app/entry/chat/approval.tsx
 msgid "모델이 이유를 적지 않았습니다."
 msgstr "모델이 이유를 적지 않았습니다."
+
+#: app/entry/settings/pages/failed-interpretations.tsx
+msgid "모델이 주제와 정정 관계를 붙이지 못한 발언입니다. 그래서 기억 검색이 이미 정정된 옛 내용을 그대로 보일 수 있습니다. 다시 시도하면 답변이 끝날 때마다 조금씩 다시 해석합니다."
+msgstr "모델이 주제와 정정 관계를 붙이지 못한 발언입니다. 그래서 기억 검색이 이미 정정된 옛 내용을 그대로 보일 수 있습니다. 다시 시도하면 답변이 끝날 때마다 조금씩 다시 해석합니다."
 
 #: app/entry/settings/pages/improvements.tsx
 msgid "모델이 해석하지 못했습니다. 문서의 근거를 직접 확인해 주십시오."
@@ -6441,6 +6447,11 @@ msgstr "한도 확인 중"
 #: app/entry/settings/pages/image.tsx
 msgid "항상 허용"
 msgstr "항상 허용"
+
+#. Count of user statements the memory interpreter could not label
+#: app/entry/settings/pages/failed-interpretations.tsx
+msgid "해석하지 못한 발언 {failed}개"
+msgstr "해석하지 못한 발언 {failed}개"
 
 #. Kind of secret whose names an entry lists: HTTP headers
 #: app/entry/settings/pages/mcp.tsx

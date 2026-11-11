@@ -31,6 +31,12 @@ export const RecallSettings = Schema.Struct({
 });
 export type RecallSettings = typeof RecallSettings.Type;
 
+/** How many user statements are left failed by memory interpretation. */
+export const InterpretationOverview = Schema.Struct({
+  failed: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
+});
+export type InterpretationOverview = typeof InterpretationOverview.Type;
+
 /** Each role's own model; null runs it on the selected model. */
 export const RoleModels = Schema.Struct({
   planner: Schema.NullOr(ModelSelection),
@@ -226,6 +232,14 @@ export class SettingsGroup extends HttpApiGroup.make("settings")
     HttpApiEndpoint.post("retryModelDownload", "/api/settings/model-downloads/retry", {
       payload: Schema.Struct({ purpose: DownloadPurpose }),
       success: Schema.Array(ModelDownload),
+    }),
+    /** How many statements memory interpretation left failed. */
+    HttpApiEndpoint.get("interpretation", "/api/settings/interpretation", {
+      success: InterpretationOverview,
+    }),
+    /** Puts the failed statements back in the interpretation queue. */
+    HttpApiEndpoint.post("retryInterpretation", "/api/settings/interpretation/retry", {
+      success: InterpretationOverview,
     }),
     HttpApiEndpoint.get("image", "/api/settings/image", { success: ImageSettings }),
     /** Updates an image-generation preference without restarting the app. */

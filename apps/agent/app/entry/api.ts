@@ -20,6 +20,7 @@ import {
   type ImageSettingsCommand as ImageSettingsCommandCase,
   type ImportCommand as ImportCommandCase,
   type ImprovementStatus,
+  type InterpretationOverview,
   type KagiCommand as KagiCommandCase,
   type KanbanCommand as KanbanCommandCase,
   type KanbanSettings,
@@ -264,7 +265,13 @@ const PageErrorCode = Schema.Literals([
 export const ApiErrorCode = Schema.Union([AppRefusalCode, PageErrorCode]);
 export type ApiErrorCode = typeof ApiErrorCode.Type;
 
-export type { ConversationSettings, ImprovementStatus, KanbanSettings, RecallSettings };
+export type {
+  ConversationSettings,
+  ImprovementStatus,
+  InterpretationOverview,
+  KanbanSettings,
+  RecallSettings,
+};
 /** The commands `/api/settings/kanban` reads. */
 export type KanbanSettingsCommand = KanbanSettingsCommandCase;
 export const KanbanSettingsCommand = Data.taggedEnum<KanbanSettingsCommand>();
@@ -859,6 +866,8 @@ export const api = {
   modelDownloads: () => appCall((client) => client.settings.modelDownloads()),
   retryModelDownload: (purpose: DownloadPurpose) =>
     appCall((client) => client.settings.retryModelDownload({ payload: { purpose } })),
+  interpretation: () => appCall((client) => client.settings.interpretation()),
+  retryInterpretation: () => appCall((client) => client.settings.retryInterpretation()),
 
   improvements: () => appCall((client) => client.settings.improvements()),
   improvementScan: (command: ScanCommand) =>

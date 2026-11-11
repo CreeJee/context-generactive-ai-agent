@@ -32,6 +32,8 @@ export const globalQueries = {
     queryOptions({ queryKey: appQueryKeys.global.embedding, queryFn: api.embedding }),
   downloads: () =>
     queryOptions({ queryKey: appQueryKeys.global.downloads, queryFn: api.modelDownloads }),
+  interpretation: () =>
+    queryOptions({ queryKey: appQueryKeys.global.interpretation, queryFn: api.interpretation }),
   imageSettings: () =>
     queryOptions({ queryKey: appQueryKeys.global.imageSettings, queryFn: api.imageSettings }),
   kagi: () => queryOptions({ queryKey: appQueryKeys.global.kagi, queryFn: api.kagi }),
@@ -83,6 +85,8 @@ export const useImportsQuery = () => useSuspenseQuery(globalQueries.imports());
 export const useEmbeddingQuery = () => useSuspenseQuery(globalQueries.embedding());
 /** The models being downloaded and the failed downloads; none until read, or when it fails. */
 export const useModelDownloadsQuery = () => useQuery(globalQueries.downloads());
+/** How many statements memory interpretation left failed; none until read, or when it fails. */
+export const useInterpretationQuery = () => useQuery(globalQueries.interpretation());
 export const useKagiQuery = () => useSuspenseQuery(globalQueries.kagi());
 export const useConversationSettingsQuery = () => useSuspenseQuery(globalQueries.conversation());
 export const useRecallSettingsQuery = () => useSuspenseQuery(globalQueries.recall());
