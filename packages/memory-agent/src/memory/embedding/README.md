@@ -56,6 +56,7 @@ memory-agent의 임베딩 계층이다. 모델 표(`models.ts`)에서 고른 로
 - 색인 순서는 다음과 같다. chunk 분할과 embed는 publication gate 밖에서 실행한다. 재검증(`selectFresh`), chunk id 예약, 네이티브 add/save, commit은 `vectors.publish` 안에서 실행한다. chunk 예약 INSERT는 한 트랜잭션에서 순차 실행해 RETURNING id가 chunk 순서와 맞게 한다
 - `node_vectors` 행만이 완전히 커밋된 노드를 뜻한다. commit 트랜잭션은 노드를 다시 읽어 텍스트가 같을 때만 `indexed`로 처리한다. 다르면 `stale-chunks`(chunk 행 삭제) 또는 `stale-whole`(`memory_graph_vector_removals`에 기록)로 처리한다. 시작 시 `node_vectors` 표시가 없는 예약 chunk는 네이티브에서 제거하고, 매핑을 삭제하고, 제거 저널을 acknowledge한다
 - 네이티브 소유자 워커가 유일한 색인·lease 소유자이며 명령을 하나씩 실행한다. remove는 id를 하나씩 보내지 않고 배치 하나를 한 owner 단계로 보낸다. `remove`는 네이티브 await 전에 모든 노드의 chunk id를 한 트랜잭션에서 읽는다
+- `publish`와 `flushRemovals`는 같은 `mutate`로 publication gate에 들어간다. 그 안의 갱신이 실패하면 게이트가 멈추고, 이후 읽기와 갱신은 owner를 다시 열 때까지 `stopped`로 실패한다. 그래서 `mutate`가 멈춘 원인을 그 자리에서 warn 로그(`Vector index stopped after a failed update`)로 한 번 남긴다. 태그와 cause 사슬, `VectorIndexError.operation`, cause가 `NativeOwnerFailed`이면 그 `reason`까지만 적는다. cause의 SQL이나 경로는 남기지 않는다
 - flush는 제거 저널과 live 매핑을 한 트랜잭션으로 snapshot한다. 그다음 네이티브 remove와 save를 실행하고, snapshot에 있던 id만 acknowledge한다. `owner.initialNeedsReset`이면 시작 시 flush와 네이티브 제거를 건너뛴다
 - SQLite 변수 한도 때문에 id 목록은 statement당 1000개(`idsPerStatement`)로 나눈다
 - `PRAGMA database_list`의 파일 경로가 비어 있으면 open이 `NativeOwnerFailed{native-incompatible}`로 실패한다. lease를 다른 프로세스가 쥐고 있으면(`lease-unavailable`) `VectorIndexError.message`가 같은 storage root를 쓰는 다른 서버를 멈추라고 안내한다

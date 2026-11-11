@@ -138,7 +138,7 @@ export default defineConfig({
         // reference, and tests that hand Logger.CurrentLoggers the native Set it is typed as.
         files: [
           "packages/memory-agent/src/tools/input-repair.ts",
-          "packages/memory-agent/src/memory/native-search/publication.test.ts",
+          "packages/memory-agent/tests/engine/native-vector-index.test.ts",
           "packages/memory-agent/tests/model/compatible.test.ts",
           "packages/memory-agent/tests/model/subscription.test.ts",
         ],

@@ -3,6 +3,7 @@ import { NodeCrypto, NodePath } from "@effect/platform-node";
 import { sha256 } from "../../runtime/synchronous-crypto.ts";
 import {
   Array as EffectArray,
+  Cause,
   Effect,
   HashMap,
   Iterable,
@@ -15,6 +16,7 @@ import {
 import { SecureRandom } from "effect/crypto";
 import { SqlClient, type SqlError } from "effect/sql";
 import { StorageRoot } from "../../config/storage-root.ts";
+import { failureAnnotations, failureTags } from "../../runtime/logged-failures.ts";
 import { runtimeWorker } from "../../runtime/resources.ts";
 import { NativeOwner } from "../native-search/client.ts";
 import { NativePublication } from "../native-search/publication.ts";
@@ -45,6 +47,40 @@ const idsPerStatement = 1000;
 
 const failure = (operation: VectorIndexError["operation"]) => (cause: unknown) =>
   VectorIndexError.make({ operation, cause });
+
+const isTagged = Schema.is(Schema.Struct({ _tag: Schema.String }));
+const isVectorIndexError = Schema.is(VectorIndexError);
+const isNativeOwnerFailed = Schema.is(NativeOwnerFailed);
+
+/** The index operation that failed, and the native owner's reason when it gave one. */
+const indexDetails = (error: { readonly _tag: string }) =>
+  Option.liftPredicate(error, isVectorIndexError).pipe(
+    Option.match({
+      onNone: () => ({}),
+      onSome: ({ operation, cause }) => ({
+        operation,
+        ...Option.match(Option.liftPredicate(cause, isNativeOwnerFailed), {
+          onNone: () => ({}),
+          onSome: ({ reason }) => ({ reason }),
+        }),
+      }),
+    }),
+  );
+
+/**
+ * The failure that stopped the index, by tag, cause chain, operation and native reason only:
+ * causes can hold SQL or paths. A failure without a tag (a defect, an interruption) is named by
+ * the cause's tags.
+ */
+const stoppedBy = (cause: Cause.Cause<unknown>) =>
+  EffectArray.findFirst(cause.reasons, Cause.isFailReason).pipe(
+    Option.map((reason) => reason.error),
+    Option.filter(isTagged),
+    Option.match({
+      onSome: (error) => ({ ...failureAnnotations(error), ...indexDetails(error) }),
+      onNone: () => ({ error: failureTags(cause) }),
+    }),
+  );
 
 /**
  * The native owner of the active embedder's index: a worker reading the application's database
@@ -342,6 +378,18 @@ const makeNativeVectorIndex = Effect.gen(function* () {
   });
   const publicationError = (cause: unknown) =>
     VectorIndexError.make({ operation: "search", cause });
+  /**
+   * Runs one update under the publication gate. A failed update stops the gate, and every later
+   * read and update fails with `stopped` until the owner is opened again, so the failure that
+   * stopped it is logged here, once.
+   */
+  const mutate = <A, E, R>(mutation: Effect.Effect<A, E, R>) =>
+    publication.withMutation(
+      Effect.tapCause(mutation, (cause) =>
+        Effect.logWarning("Vector index stopped after a failed update", stoppedBy(cause)),
+      ),
+      publicationError,
+    );
   const api: VectorIndexApi = {
     size: () => owner.size(),
     applyLexical: (documents: readonly LexicalDocument[], removed: readonly number[]) =>
@@ -354,12 +402,12 @@ const makeNativeVectorIndex = Effect.gen(function* () {
         ),
         Effect.asVoid,
       ),
-    flushRemovals: publication.withMutation(flush, publicationError),
+    flushRemovals: mutate(flush),
     add,
     remove,
     save,
     publish: (prepare) =>
-      publication.withMutation(
+      mutate(
         Effect.gen(function* () {
           const { seqs, vectors, commit } = yield* prepare;
           yield* Effect.when(
@@ -368,7 +416,6 @@ const makeNativeVectorIndex = Effect.gen(function* () {
           );
           return yield* commit;
         }),
-        publicationError,
       ),
     search: Effect.fnUntraced(function* (
       query: Float32Array,

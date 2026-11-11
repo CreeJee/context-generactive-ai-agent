@@ -1,35 +1,5 @@
-import {
-  Array as EffectArray,
-  Cause,
-  Context,
-  Data,
-  Effect,
-  Exit,
-  Layer,
-  Option,
-  Ref,
-  Schema,
-  Scope,
-  Semaphore,
-} from "effect";
-import { failureAnnotations, failureTags } from "../../runtime/logged-failures.ts";
+import { Context, Data, Effect, Exit, Layer, Ref, Schema, Scope, Semaphore } from "effect";
 import { NativeOwner, type ReadAdmission } from "./client.ts";
-
-const isTagged = Schema.is(Schema.Struct({ _tag: Schema.String }));
-
-/**
- * The failure that stopped a gate, by tag and cause chain only: causes can hold SQL or paths.
- * A failure without a tag (a defect, an interruption) is named by the cause's tags.
- */
-const stoppedBy = (cause: Cause.Cause<unknown>) =>
-  EffectArray.findFirst(cause.reasons, Cause.isFailReason).pipe(
-    Option.map((reason) => reason.error),
-    Option.filter(isTagged),
-    Option.match({
-      onSome: failureAnnotations,
-      onNone: () => ({ error: failureTags(cause) }),
-    }),
-  );
 
 export class PublicationFailed extends Schema.TaggedError<
   PublicationFailed,
@@ -51,7 +21,8 @@ export const PublicationState = Data.taggedEnum<PublicationState>();
 /**
  * One ephemeral gate per actual index owner; no additional writer or durable format.
  * Model/embedding work MUST run outside withMutation. A failed publication cannot
- * be read until explicit owner recovery creates a new gate/epoch.
+ * be read until explicit owner recovery creates a new gate/epoch. The gate does not log the
+ * failure: the mutation's owner names it, since only it knows its errors.
  *
  * admitSnapshot holds the gate only for an actual native BEGIN/read-snapshot pin
  * acknowledgement, NOT queue enqueue or the complete search. The opt-in backend
@@ -95,14 +66,7 @@ export const makePublication = Effect.fn("NativePublication.make")(function* (ep
               Ref.set<PublicationState>(
                 state,
                 PublicationState.stopped({ generation: before.generation }),
-              ).pipe(
-                // Every later read and mutation fails with `stopped` until the owner is opened
-                // again, so the failure that started it is logged here, once.
-                Effect.andThen(
-                  Effect.logWarning("Vector index stopped after a failed update", stoppedBy(cause)),
-                ),
-                Effect.andThen(Effect.failCause(cause)),
-              ),
+              ).pipe(Effect.andThen(Effect.failCause(cause))),
             onSuccess: (value) =>
               Ref.set<PublicationState>(
                 state,
