@@ -59,6 +59,29 @@ describe("WorkflowRules", () => {
     );
   });
 
+  const prepared: (readonly string[])[] = [];
+  const recordingEmbedder = Layer.succeed(Embedder, {
+    identity: "recording-fake",
+    dimensions: 64,
+    embed: (texts) =>
+      Effect.sync(() => {
+        prepared.push(texts);
+        return texts.map(fakeVector);
+      }),
+    runtime: () => EmbedderRuntime.other(),
+  });
+  testLayer(WorkflowRules.layer.pipe(Layer.provide(recordingEmbedder)))((it) => {
+    it.effect("after prepare, a Goal's turn embeds only its question", () =>
+      Effect.gen(function* () {
+        const rules = yield* WorkflowRules;
+        yield* rules.prepare;
+        yield* rules.resolve({ phases: ["goal", "plan"], text: "database migration" });
+        yield* rules.resolve({ phases: ["verify"], text: "acceptance tests" });
+        expect(prepared.slice(1)).toEqual([["database migration"], ["acceptance tests"]]);
+      }),
+    );
+  });
+
   const failRuleVectors = MutableRef.make(true);
   const recoveringEmbedder = Layer.succeed(Embedder, {
     identity: "recovering-fake",
