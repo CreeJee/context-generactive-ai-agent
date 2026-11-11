@@ -18,7 +18,8 @@ import {
 } from "effect";
 import { SecureRandom } from "effect/crypto";
 import { SqlClient } from "effect/sql";
-import { folderMentions } from "../files/path-policy.ts";
+import { folderMentions, isPlainPath, replaceFolderMentions } from "../files/path-policy.ts";
+import { optionalProperty } from "../optional-property.ts";
 import { resolveProjectPath, type Fenced } from "../files/paths.ts";
 import {
   createTextFileEffect,
@@ -300,42 +301,52 @@ const programRefusal = (program: SkillProgram): Option.Option<CodeSkillRejected>
     }),
   );
 
-/**
- * Refuses a program that names the project folder (or, in a kanban card, the user's project folder
- * or the card's worktree) by absolute path. Text inside a program cannot be read through the path
- * policy when it runs, and the skill runs in the project or in a card's own copy of it, so such a
- * path can leave the folder the run works in.
- */
-const absolutePathRefusal = Effect.fnUntraced(function* (
-  project: Fenced<Project>,
-  program: SkillProgram,
-) {
-  const checked = Match.value(program).pipe(
+/** A program's text, and the same program with another text. */
+const programBody = (program: SkillProgram) =>
+  Match.value(program).pipe(
     Match.discriminatorsExhaustive("runtime")({
-      ts: ({ code }) => ({
-        text: code,
-        advice: "The tools a ts skill calls take paths relative to the project; use those.",
-      }),
-      sh: ({ script }) => ({
-        text: script,
-        advice:
-          'A sh skill starts in the project folder, or in a kanban card\'s own copy of it; use paths relative to it, like ./src or "$PWD/src".',
+      ts: (ts) => ({ text: ts.code, with: (code: string): SkillProgram => ({ ...ts, code }) }),
+      sh: (sh) => ({
+        text: sh.script,
+        with: (script: string): SkillProgram => ({ ...sh, script }),
       }),
     }),
   );
-  const spellings = EffectArray.dedupe(
-    (yield* folderMentions(project, checked.text)).map(({ spelling }) => spelling),
+
+/**
+ * In a kanban card, the program with the card's own folder written as the user's project folder,
+ * or none when it does not name the card's folder. The card's folder is gone once the card is
+ * merged, and a skill run in a card reads the user's folder as the card's own copy again
+ * (`run_skill`), so the program means the same in the card and after it. Outside a card the run's
+ * folder is the user's project folder, so its absolute path is kept as written. A user's folder
+ * whose path a program cannot take as it is (spaces, quotes, shell characters) is refused.
+ */
+const cardFolderRewritten = Effect.fnUntraced(function* (
+  project: Fenced<Project>,
+  program: SkillProgram,
+) {
+  const body = programBody(program);
+  const own = (yield* folderMentions(project, body.text)).filter(({ folder }) => folder === "root");
+  const userRoot = Option.filter(Option.fromNullishOr(project.toolFence?.userRoot), () =>
+    EffectArray.isReadonlyArrayNonEmpty(own),
   );
-  yield* Effect.when(
-    Effect.fail(
-      CodeSkillRejected.make({
-        reason: "absolute_path",
-        detail: `The program names the project folder by its absolute path (${spellings.join(", ")}), which can leave the folder the skill runs in. ${checked.advice} Then save it again.`,
-      }),
-    ),
-    Effect.succeed(spellings.length > 0),
-  );
+  return yield* Option.match(userRoot, {
+    onNone: () => Effect.succeed(Option.none<SkillProgram>()),
+    onSome: (folder) =>
+      isPlainPath(folder)
+        ? Effect.succeedSome(body.with(replaceFolderMentions(body.text, own, folder)))
+        : Effect.fail(
+            CodeSkillRejected.make({
+              reason: "absolute_path",
+              detail: `The program names this card's own folder by its absolute path (${EffectArray.dedupe(own.map(({ spelling }) => spelling)).join(", ")}), which is gone once the card is merged. Use paths relative to the folder the skill runs in, like ./src or "$PWD/src". Then save it again.`,
+            }),
+          ),
+  });
 });
+
+/** What a card's save result tells the model when the program names the user's project folder. */
+const cardFolderNote = (project: Fenced<Project>) =>
+  `In this kanban card, paths to the card's own folder (${project.root}) are saved as the user's project folder (${project.toolFence?.userRoot ?? project.root}). A skill run in a card reads that folder as the card's own copy, so the skill works here and after the card is merged.`;
 
 /** How SKILL.md tells a reader to run the skill. */
 const runLine = (name: string, program: SkillProgram) =>
@@ -477,8 +488,11 @@ const make = Effect.gen(function* () {
         onNone: () => Effect.void,
         onSome: Effect.fail,
       });
-      yield* absolutePathRefusal(project, input.program);
-      const runtime = input.program.runtime;
+      const program = Option.getOrElse(
+        yield* cardFolderRewritten(project, input.program),
+        () => input.program,
+      );
+      const runtime = program.runtime;
       const document = codeSkillDocument(input.name);
       const existing = yield* resolveProjectPath(project.root, document, "new-or-file");
       const scriptPath = yield* resolveProjectPath(
@@ -501,23 +515,27 @@ const make = Effect.gen(function* () {
       const written = yield* put(
         project.root,
         codeSkillScript(input.name, runtime),
-        programText(input.program),
+        programText(program),
       );
       yield* otherPath.stats === undefined ? Effect.void : remove(otherPath.absolute, other);
-      yield* put(project.root, document, skillDocument(input));
+      yield* put(project.root, document, skillDocument({ ...input, program }));
       yield* sql`
         INSERT OR IGNORE INTO shell_skill_approvals (project_id, name, script_sha256, approved_at)
         VALUES (${project.id}, ${input.name}, ${written.sha256},
           ${DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis))})`.pipe(
         Effect.when(Effect.succeed(project.permissionMode !== "full")),
       );
+      const namesUserFolder = (yield* folderMentions(project, programBody(program).text)).some(
+        ({ folder }) => folder === "user",
+      );
       const saved = {
         name: input.name,
         directory: codeSkillDirectory(input.name),
         scriptSha256: written.sha256,
         replaced: existing.stats !== undefined,
+        ...optionalProperty("pathNote", namesUserFolder ? cardFolderNote(project) : undefined),
       };
-      return Match.value(input.program).pipe(
+      return Match.value(program).pipe(
         Match.discriminatorsExhaustive("runtime")({
           ts: ({ input: declared }) => ({
             ...saved,
@@ -532,6 +550,13 @@ const make = Effect.gen(function* () {
         }),
       );
     }, Effect.provideContext(platform)),
+
+    /**
+     * The program `save` would save in place of `program`, or none when it saves it as given; the
+     * approval asks about this one (`CallPlan.Rewritten`).
+     */
+    rewritten: (project: Fenced<Project>, program: SkillProgram) =>
+      cardFolderRewritten(project, program).pipe(Effect.provideContext(platform)),
 
     /** The program to run: refused unless its current content is approved (or the project is `full`). */
     runnable: Effect.fn("CodeSkills.runnable")(function* (project: Project, name: string) {

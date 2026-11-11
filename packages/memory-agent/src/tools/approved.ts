@@ -375,6 +375,17 @@ const make = Effect.gen(function* () {
           ...saveCodeSkillSpec,
           needsApproval,
           lazy: true,
+          // The approval shows the program as it will be saved.
+          plan: (input) =>
+            codeSkills.rewritten(project, input.program).pipe(
+              Effect.map(
+                Option.match({
+                  onNone: () => CallPlan.AsGiven<typeof input>(),
+                  onSome: (program) => CallPlan.Rewritten({ params: { ...input, program } }),
+                }),
+              ),
+              Effect.orElseSucceed(() => CallPlan.AsGiven<typeof input>()),
+            ),
           handler: calls.saveCodeSkill,
         }),
         runTool({

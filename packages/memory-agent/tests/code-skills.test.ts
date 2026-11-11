@@ -5,11 +5,10 @@ import { HttpServerResponse } from "effect/http";
 import { NetAddress } from "effect/net";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { expect, test } from "vite-plus/test";
-import type { JsonValue } from "../src/json.ts";
 import { builtinOverlap } from "../src/skills/code-skills.ts";
 import { ApprovedTools } from "../src/tools/approved.ts";
 import { CodeTools } from "../src/tools/code.ts";
-import { runTool } from "../src/tools/run-tool.ts";
+import { CallPlan, runTool } from "../src/tools/run-tool.ts";
 import { TestEnv, testAgent } from "./support/test-env.ts";
 import { callTool } from "./support/run-tools.ts";
 
@@ -214,30 +213,66 @@ testAgent()("code skills", (it) => {
     { timeout: 30_000 },
   );
 
-  it.effect("a program that names the project folder by absolute path is not saved", () =>
+  it.effect("a program that names the project folder by absolute path is saved as written", () =>
     Effect.gen(function* () {
       const { project } = yield* TestEnv;
       const path = yield* Path.Path;
       const tools = (yield* ApprovedTools).toolsFor(project, "gate");
-      const save = (name: string, program: JsonValue) =>
-        Effect.flip(callTool(tools, "save_code_skill", { name, description: "Test", program }));
-      expect(
-        yield* save("cd-root", { runtime: "sh", script: `cd ${project.root} && pnpm test` }),
-      ).toMatchObject({ message: expect.stringContaining("absolute_path") });
-      expect(
-        yield* save("read-root", {
-          runtime: "ts",
-          code: `return external_read_file({ path: "${path.join(project.root, "a.txt")}" });`,
-        }),
-      ).toMatchObject({ message: expect.stringContaining("absolute_path") });
+      const script = `cd ${project.root} && pnpm test`;
       expect(
         yield* callTool(tools, "save_code_skill", {
-          name: "cd-src",
+          name: "cd-root",
           description: "Test",
-          program: { runtime: "sh", script: 'cd ./src && pnpm test "$@"' },
+          program: { runtime: "sh", script },
         }),
-      ).toMatchObject({ name: "cd-src" });
+      ).not.toHaveProperty("pathNote");
+      expect(
+        yield* (yield* FileSystem.FileSystem).readFileString(
+          path.join(project.root, ".agents/skills/cd-root/scripts/run.sh"),
+        ),
+      ).toBe(`${script}\n`);
     }),
+  );
+
+  it.effect(
+    "in a card, a program naming the card's folder is asked about and saved naming the user's folder",
+    () =>
+      Effect.gen(function* () {
+        const { project } = yield* TestEnv;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const card = yield* fs.realPath(
+          yield* fs.makeTempDirectoryScoped({ prefix: "code-skills-card-" }),
+        );
+        const tools = (yield* ApprovedTools).toolsFor(
+          {
+            ...project,
+            root: card,
+            toolFence: { deniedRoots: [project.root], userRoot: project.root },
+          },
+          "gate",
+        );
+        const saveTool = tools.find(({ tool }) => tool.name === "save_code_skill");
+        const params = {
+          name: "card-test",
+          description: "Test",
+          program: { runtime: "sh", script: `cd "${card}/src" && pnpm test` },
+        };
+        const rewritten = {
+          ...params,
+          program: { runtime: "sh", script: `cd "${project.root}/src" && pnpm test` },
+        };
+        expect(
+          yield* Effect.fromNullishOr(saveTool?.plan).pipe(Effect.flatMap((plan) => plan(params))),
+        ).toEqual(CallPlan.Rewritten({ params: rewritten }));
+        expect(yield* callTool(tools, "save_code_skill", rewritten)).toMatchObject({
+          name: "card-test",
+          pathNote: expect.stringContaining(project.root),
+        });
+        expect(
+          yield* fs.readFileString(path.join(card, ".agents/skills/card-test/scripts/run.sh")),
+        ).toBe(`${rewritten.program.script}\n`);
+      }),
   );
 
   it.effect.skipIf(process.platform !== "darwin")(
