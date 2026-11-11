@@ -156,8 +156,9 @@ export const rerankInputs = Effect.fn("searchSet.rerankInputs")(function* ({
   const needs = HashMap.fromIterable(
     Iterable.map(yield* readRows(files.needs), (need) => [need.need, need] as const),
   );
+  // An item the channel runs have not searched yet is left for a later run.
   const items = (yield* readRows(files.items)).flatMap((item) =>
-    HashSet.has(done, item.item)
+    HashSet.has(done, item.item) || !channels.every((run) => HashMap.has(run, item.item))
       ? []
       : Option.toArray(HashMap.get(needs, item.need)).map((need) => ({ item, need })),
   );
