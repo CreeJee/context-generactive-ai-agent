@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import type { JsonValue } from "../json.ts";
 
 /** Reading or writing chat metadata failed; `cause` is what the store failed with. */
@@ -8,20 +8,25 @@ export class ChatMetadataFailed extends Schema.TaggedError<
 >()("ChatMetadataFailed", { cause: Schema.Defect() }) {}
 
 /**
- * A summary of consecutive user turns, from where the previous one ended up to `end` (exclusive,
- * counted from 0). `nextTurnNodeId` is the user node of turn `end`: a conversation whose turn
- * there says something else is not the one summarized, and the summary is not used for it.
+ * Where a session's summary ends: the first message of the conversation it does not cover. A
+ * conversation without that message there is not the one summarized, and the summary is not used
+ * for it.
  */
-export const SummaryBlock = Schema.Struct({
-  end: Schema.Finite,
-  nextTurnNodeId: Schema.String,
-  text: Schema.String,
+export const SummaryEnd = Schema.TaggedUnion({
+  /** User turn `turn`, counted from 0, which memory recorded as node `nodeId`. */
+  Turn: { turn: Schema.Int, nodeId: Schema.String },
+  /** The step whose first tool call is `callId`. */
+  Step: { callId: Schema.String },
 });
-export type SummaryBlock = typeof SummaryBlock.Type;
+export type SummaryEnd = typeof SummaryEnd.Type;
+
+/** A session's one summary of its conversation before `end`, rewritten as more is left out. */
+export const SessionSummary = Schema.Struct({ text: Schema.String, end: SummaryEnd });
+export type SessionSummary = typeof SessionSummary.Type;
 
 /**
  * What a session keeps beside its conversation, as compaction, model handoff and context usage
- * read and write it: `chat_metadata` rows, and the session's turn summaries. `RunStore` keeps
+ * read and write it: `chat_metadata` rows, and the session's summary. `RunStore` keeps
  * them.
  */
 export interface ChatMetadata {
@@ -32,14 +37,17 @@ export interface ChatMetadata {
     key: string,
     value: JsonValue,
   ) => Effect.Effect<void, ChatMetadataFailed>;
-  /** The session's turn summaries, in the order they were written; none for another thread. */
-  readonly summaries: (
+  /** The session's summary; none for another thread or before anything was left out. */
+  readonly summary: (
     sessionId: string,
-  ) => Effect.Effect<ReadonlyArray<SummaryBlock>, ChatMetadataFailed>;
-  /** Keeps the session's first `from` summaries and puts `blocks` after them, for the rest. */
-  readonly replaceSummaries: (
+  ) => Effect.Effect<Option.Option<SessionSummary>, ChatMetadataFailed>;
+  /**
+   * Puts `next` in place of the session's summary when that is still `from`, and says whether it
+   * did: a summary written meanwhile from the same one is kept, not overwritten.
+   */
+  readonly replaceSummary: (
     sessionId: string,
-    from: number,
-    blocks: ReadonlyArray<SummaryBlock>,
-  ) => Effect.Effect<void, ChatMetadataFailed>;
+    from: Option.Option<SessionSummary>,
+    next: SessionSummary,
+  ) => Effect.Effect<boolean, ChatMetadataFailed>;
 }

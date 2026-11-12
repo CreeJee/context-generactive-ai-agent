@@ -8,7 +8,7 @@
 
 ## Interface
 
-- `evaluateCompactionEffect` — legacy(10턴 합본 요약·원문 4턴)와 current(4턴 불변 블록·원문 2턴·제한된 retrieval) 압축 요청을 합성 대화(16/20/26턴)로 비교한다. 결과는 `CompactionEvaluation`이고, 실패 타입은 `CompactionFailed`다. (`compaction.ts`)
+- `evaluateCompactionEffect` — legacy(10턴 합본 요약·원문 4턴)와 current(다시 계산할 때마다 이어 쓰는 세션 요약 하나·원문 2턴·제한된 retrieval) 압축 요청을 합성 대화(16/20/26턴)로 비교한다. 결과는 `CompactionEvaluation`이고, 실패 타입은 `CompactionFailed`다. (`compaction.ts`)
 - `evaluateCompaction` — `evaluateCompactionEffect`를 `Effect.runPromise`로 실행하는 native 명령 경계 함수다. (`compaction.ts`)
 - `CompactionEvaluation` — 두 프로필의 평균 입력 토큰·cacheable prefix 비율·호출 수, 감소율, evidence reach·정정 반영률, retrieval 토큰, 5개 threshold boolean을 담는 결과 타입이다.
 - `evidenceNarrative` — `readStructuredEvidence` 결과 페이지들을 모든 필드와 원문을 보존한 서술형 문단으로 바꾼다. 내용 선택은 그대로 두고 표현만 바꾼다. (`evidence-narrative.ts`)

@@ -25,8 +25,8 @@ function fixture(stored: ReadonlyArray<StoredMessage>) {
       Effect.sync(() => {
         MutableHashMap.set(values, `${namespace}:${key}`, value);
       }),
-    summaries: () => Effect.succeed([]),
-    replaceSummaries: () => Effect.void,
+    summary: () => Effect.succeedNone,
+    replaceSummary: () => Effect.succeed(true),
   };
   const restore =
     (target: string, model: string, history = stored) =>
@@ -253,8 +253,8 @@ it.effect(
               Effect.fail(ChatMetadataFailed.make({ cause })),
             ),
           set: () => Effect.void,
-          summaries: () => Effect.succeed([]),
-          replaceSummaries: () => Effect.void,
+          summary: () => Effect.succeedNone,
+          replaceSummary: () => Effect.succeed(true),
         },
         threadId: "session",
         target: "new",

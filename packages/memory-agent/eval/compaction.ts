@@ -1,11 +1,7 @@
-import { Array as EffectArray, Effect } from "effect";
+import { Array as EffectArray, Effect, Option } from "effect";
 import { isTruthy } from "../src/truthy.ts";
 import type { StoredMessage } from "../src/chat-store/schema.ts";
-import {
-  recentRawUserTurns,
-  retrievalTokenLimit,
-  summaryBlockTurns,
-} from "../src/agent/compaction-policy.ts";
+import { recentRawUserTurns, retrievalTokenLimit } from "../src/agent/compaction-policy.ts";
 import {
   compactEffect,
   estimateConversation,
@@ -14,7 +10,7 @@ import {
   messageText,
   type CompactionState,
 } from "../src/agent/compaction.ts";
-import type { SummaryBlock } from "../src/chat-store/metadata.ts";
+import { type SessionSummary, SummaryEnd } from "../src/chat-store/metadata.ts";
 
 const legacyBlockTurns = 10;
 const legacyRecentTurns = 4;
@@ -116,22 +112,18 @@ const nodeText = (id: string) => {
   return Number.isInteger(turn) && turn > 0 ? userText(turn) : null;
 };
 
-function summaryBlocks(turns: number): SummaryBlock[] {
+/** The session's summary, written on through the turns before the latest two. */
+function sessionSummary(turns: number): Option.Option<SessionSummary> {
   const through = turns - recentRawUserTurns;
-  // Whole blocks only: each ends a multiple of summaryBlockTurns turns in, no later than `through`.
-  const ends = Array.from(
-    { length: Math.max(0, Math.floor(through / summaryBlockTurns)) },
-    (_, index) => (index + 1) * summaryBlockTurns,
+  const decision =
+    through < 14 ? "배포 창은 화요일 오후라는 초기 결정" : "배포 창은 목요일 오후라는 최신 정정";
+  return Option.liftPredicate(
+    {
+      text: `- ${decision}을 포함해 1-${through}턴을 요약했다. (node ${nodeId(through)})`,
+      end: SummaryEnd.cases.Turn.make({ turn: through, nodeId: nodeId(through + 1) }),
+    },
+    () => through > 0,
   );
-  return ends.map((end) => {
-    const decision =
-      end < 14 ? "배포 창은 화요일 오후라는 초기 결정" : "배포 창은 목요일 오후라는 최신 정정";
-    return {
-      end,
-      nextTurnNodeId: nodeId(end + 1),
-      text: `- ${decision}을 포함해 ${end - summaryBlockTurns + 1}-${end}턴을 요약했다. (node ${nodeId(end)})`,
-    };
-  });
 }
 
 const retrieval = {
@@ -145,7 +137,7 @@ const retrieval = {
 const currentRequest = Effect.fnUntraced(function* (messages: readonly StoredMessage[]) {
   const state: CompactionState = {
     manual: { clearedThrough: 0, summarizedTurns: 0 },
-    blocks: summaryBlocks(userIndexes(messages).length),
+    summary: sessionSummary(userIndexes(messages).length),
   };
   const result = yield* compactEffect({
     messages,
@@ -216,9 +208,9 @@ export const evaluateCompactionEffect: Effect.Effect<
     Math.floor((checkpoints.at(-1)! - legacyRecentTurns) / legacyBlockTurns),
   );
   const current = profile(
-    "current-aggressive (4-turn immutable blocks, 2 raw turns, bounded retrieval)",
+    "current (one session summary written on before each rebuild, 2 raw turns, bounded retrieval)",
     currentRequests,
-    Math.floor((checkpoints.at(-1)! - recentRawUserTurns) / summaryBlockTurns),
+    checkpoints.length,
   );
   const inputTokenReduction =
     (legacy.averageInputTokens - current.averageInputTokens) / legacy.averageInputTokens;

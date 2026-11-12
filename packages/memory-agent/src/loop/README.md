@@ -54,7 +54,7 @@ run·thread·interrupt 행은 `RunStore`(SqlClient)가 `chat_threads`, `chat_thr
 - SQLite 쓰기: `chat_threads` upsert(updated_at), 저장본과 처음 달라진 메시지부터의 `chat_thread_messages` 삭제·삽입(500행씩), `chat_thread_display_messages` 꼬리 재작성과 `chat_threads.display_revision` 갱신을 한 트랜잭션에서 수행
 - SQLite 쓰기: `chat_runs` INSERT(status `running`, started_at)와 종료 시 UPDATE(status, finished_at, detached_since, error, error_code, usage)
 - SQLite 쓰기: `chat_interrupts`에 pending 행 INSERT(`ON CONFLICT DO NOTHING`)와 resume 시 응답 commit
-- SQLite 읽기·쓰기: `store.ts`의 `chatMetadata`(`ChatMetadata`)가 `chat_metadata`를 namespace·key로 upsert하고, 세션의 턴 요약을 `turn_summary_blocks`에서 위치 순으로 읽는다. 요약 교체는 앞 `from`개를 남기고 나머지를 지운 뒤 새 블록을 한 트랜잭션에서 넣는다
+- SQLite 읽기·쓰기: `store.ts`의 `chatMetadata`(`ChatMetadata`)가 `chat_metadata`를 namespace·key로 upsert하고, 세션 요약을 `session_summaries`에서 읽는다. 요약 교체는 한 트랜잭션에서 저장된 요약이 읽은 것과 같은지 확인하고 upsert한다
 - 도구 실행: `stepScheduler`가 호출마다 fiber를 run Scope에 fork한다. Scope를 닫으면 실행 중인 호출이 interrupt된다
 - LanguageModel 호출(외부 provider 네트워크)이 run step마다 일어난다(`RunSpec.model`)
 - 프로세스 메모리 상태: `memoryRunLogs`의 SynchronizedRef/SubscriptionRef 맵. 새 로그를 만들 때 오래된 로그를 정리한다

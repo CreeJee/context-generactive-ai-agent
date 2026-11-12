@@ -3043,6 +3043,31 @@ export const migrations: readonly string[] = [
   CREATE INDEX sessions_parent ON sessions(parent_session_id) WHERE parent_session_id IS NOT NULL;
   `,
   `
+  -- A session's one summary, rewritten as compaction leaves more of the conversation out
+  -- (decisions.md "진행 중인 run도 줄이고, 진행 메모는 근거와 함께 남긴다 (2026-11-13)"). It covers
+  -- the conversation before the first message it does not: user turn next_turn, recorded as node
+  -- next_turn_node_id, or the step whose first tool call is next_call_id.
+  CREATE TABLE session_summaries (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    text TEXT NOT NULL,
+    next_turn INTEGER,
+    next_turn_node_id TEXT,
+    next_call_id TEXT,
+    CHECK ((next_turn IS NOT NULL AND next_turn_node_id IS NOT NULL AND next_call_id IS NULL)
+      OR (next_turn IS NULL AND next_turn_node_id IS NULL AND next_call_id IS NOT NULL))
+  );
+  -- A session's blocks become one summary that ends where the last one ended.
+  INSERT INTO session_summaries (session_id, text, next_turn, next_turn_node_id)
+    SELECT b.session_id,
+      (SELECT group_concat(t.text, char(10) || char(10) ORDER BY t.position)
+        FROM turn_summary_blocks t WHERE t.session_id = b.session_id),
+      b.turn_end, b.next_turn_node_id
+    FROM turn_summary_blocks b
+    WHERE b.position = (SELECT max(position) FROM turn_summary_blocks t
+      WHERE t.session_id = b.session_id);
+  DROP TABLE turn_summary_blocks;
+  `,
+  `
   -- A message one conversation leaves another conversation of the same project (decisions.md
   -- "세션 dispatch는 표에 영속으로 저장한다"). A row waits until the target conversation's next run
   -- delivers it, and the app restarts never lose one. BTW threads and subagent threads are not

@@ -212,9 +212,9 @@ const conversationRows = Effect.fnUntraced(function* (sessionId: string) {
        FROM workflow_executions e WHERE e.session_id = ?`,
       sessionId,
     ),
-    summaries: yield* rows(
-      `SELECT turn_end, next_turn_node_id, text FROM turn_summary_blocks WHERE session_id = ?
-       ORDER BY position`,
+    summary: yield* rows(
+      `SELECT text, next_turn, next_turn_node_id, next_call_id FROM session_summaries
+       WHERE session_id = ?`,
       sessionId,
     ),
     backgroundResults: yield* rows(

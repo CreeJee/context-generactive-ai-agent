@@ -1,4 +1,4 @@
-import { Function as EffectFunction, pipe } from "effect";
+import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { JsonValue } from "../json.ts";
 import {
@@ -9,7 +9,6 @@ import {
   Duration,
   Equal,
   Equivalence,
-  FiberHandle,
   HashMap,
   HashSet,
   Effect,
@@ -22,7 +21,12 @@ import {
   Schedule,
   Schema,
 } from "effect";
-import type { ChatMetadata, ChatMetadataFailed, SummaryBlock } from "../chat-store/metadata.ts";
+import {
+  type ChatMetadata,
+  type ChatMetadataFailed,
+  type SessionSummary,
+  SummaryEnd,
+} from "../chat-store/metadata.ts";
 import { type OrchestratorNote, StoredMessage } from "../chat-store/schema.ts";
 import { firstChange } from "../chat-store/thread-messages.ts";
 import { asRunFailed, type RunHook } from "../loop/run.ts";
@@ -33,14 +37,13 @@ import type { ModelHandoffFailed } from "./model-handoff.ts";
 import {
   recentRawSteps,
   recentRawUserTurns,
-  stepBlockSteps,
-  stepSummaryFailureLimit,
   summaryCharacters,
+  summaryFailureLimit,
+  summaryInputCharacters,
   userMessageCharacters,
 } from "./compaction-policy.ts";
 import type { CompactResult, CompactionStage } from "./run-state.ts";
 import { isEmptyUserText } from "../messages/empty-user.ts";
-import { logFailure } from "../runtime/logged-failures.ts";
 import type { NodeStoreFailed, RecordedUserMessage } from "../memory/nodes.ts";
 
 /** A tool call as a message carries it. */
@@ -266,40 +269,6 @@ export const sameTurn: {
   ): (message: ConversationMessage | undefined) => ReturnType<typeof sameTurnBody>;
 } & typeof sameTurnBody = EffectFunction.dual(2, sameTurnBody);
 
-/** The summaries that fit this conversation, oldest first, up to the first that does not. */
-export const linedUp: {
-  (
-    blocks: readonly SummaryBlock[],
-    nodeText: (id: string) => string | null,
-  ): (messages: ReadonlyArray<ConversationMessage>) => ReturnType<typeof linedUpBody>;
-} & typeof linedUpBody = EffectFunction.dual(3, linedUpBody);
-function linedUpBody(
-  messages: ReadonlyArray<ConversationMessage>,
-  blocks: readonly SummaryBlock[],
-  nodeText: (id: string) => string | null,
-): SummaryBlock[] {
-  const turns = userTurns(messages);
-  // Every block before one that fits fitted too, so the one before it is the previous fitting one.
-  return EffectArray.takeWhile(blocks, (block, index) => {
-    const next = turns[block.end];
-    return (
-      block.end > (blocks[index - 1]?.end ?? 0) &&
-      next !== undefined &&
-      sameTurn(messages[next], nodeText(block.nextTurnNodeId))
-    );
-  });
-}
-
-/**
- * Immutable summaries, one message per stored block. Appending a block never rewrites an earlier
- * message, so the provider can keep the KV prefix through the previous block.
- */
-const summaryMessages = (blocks: readonly SummaryBlock[]): ReadonlyArray<CompactionMessage> =>
-  blocks.map((block, index) => ({
-    role: "assistant",
-    content: `[Summary of user turns ${(blocks[index - 1]?.end ?? 0) + 1}-${block.end}, written afterwards. The turns themselves were left out to save context and are kept in memory. This summary is a lead, not evidence: read the nodes it cites with read_evidence before relying on a point. Only the user's own words are decisions.]\n\n${block.text}`,
-  }));
-
 /** Where `/compact` records how far it compacted a session's conversation. */
 export const manualCompactionNamespace = "memory-agent/manual-compaction";
 
@@ -318,7 +287,7 @@ const noManualCompaction: ManualCompaction = { clearedThrough: 0, summarizedTurn
 /** What is stored about compacting one session. */
 export interface CompactionState {
   readonly manual: ManualCompaction;
-  readonly blocks: readonly SummaryBlock[];
+  readonly summary: Option.Option<SessionSummary>;
 }
 
 const metadataFailed =
@@ -335,13 +304,13 @@ export const compactionStateEffect = Effect.fnUntraced(function* (options: {
   readonly threadId: string;
 }) {
   const { metadata, threadId } = options;
-  const [manual, blocks] = yield* Effect.all(
-    [metadata.get(manualCompactionNamespace, threadId), metadata.summaries(threadId)],
+  const [manual, summary] = yield* Effect.all(
+    [metadata.get(manualCompactionNamespace, threadId), metadata.summary(threadId)],
     { concurrency: "unbounded" },
   ).pipe(Effect.mapError(metadataFailed("read-state")));
   return {
     manual: Option.getOrElse(decodeManualCompaction(manual), () => noManualCompaction),
-    blocks,
+    summary,
   };
 });
 
@@ -411,18 +380,27 @@ const memoryReadFailed = (cause: { readonly _tag: string }) =>
     cause,
   });
 
+/** The user node a summary that ends at a user turn names, to tell whether the turn is still it. */
+const turnNodeOf = (summary: Option.Option<SessionSummary>) =>
+  Option.flatMap(summary, ({ end }) =>
+    SummaryEnd.match(end, {
+      Turn: ({ nodeId }) => Option.some(nodeId),
+      Step: () => Option.none(),
+    }),
+  );
+
 /**
- * What memory recorded for these messages and summary blocks, read once so compaction can decide
- * synchronously.
+ * What memory recorded for these messages and the session's summary, read once so compaction can
+ * decide synchronously.
  */
 export const memoryLookups = Effect.fnUntraced(function* (
   sources: CompactionSources,
   messages: ReadonlyArray<ConversationMessage>,
-  blocks: readonly SummaryBlock[],
+  summary: Option.Option<SessionSummary>,
 ) {
   const [results, texts] = yield* Effect.all([
     sources.toolResultIds(answeredToolCalls(messages)),
-    sources.nodeTexts(EffectArray.dedupe(blocks.map((block) => block.nextTurnNodeId))),
+    sources.nodeTexts(Option.toArray(turnNodeOf(summary))),
   ]).pipe(Effect.mapError(memoryReadFailed));
   return {
     toolResultId: (toolCallId: string) => Option.getOrNull(HashMap.get(results, toolCallId)),
@@ -442,20 +420,15 @@ export const shorten: {
 } & typeof shortenBody = EffectFunction.dual(2, shortenBody);
 
 /**
- * The words of the user in the first `turns` turns of `messages` that no later message of theirs
- * corrected or retracted, as memory recorded them, none when there are none. Unlike a summary they
- * are what the user decided. Oldest first; when they do not all fit in the room of one summary of
- * turns, the latest are kept. Each names its node, which read_evidence shows in full.
+ * The node memory recorded for each user turn of `messages`, oldest first: none for a turn it did
+ * not record, or one of a branch the user went back from. Memory records the turns in order.
  */
-const stillSaid = (
+const recordedTurns = (
   messages: ReadonlyArray<ConversationMessage>,
   recorded: ReadonlyArray<RecordedUserMessage>,
-  turns: number,
-): Option.Option<string> => {
-  // Memory records the turns in order. One it did not record, or one of a branch the user went
-  // back from, matches no turn.
-  const [, matched] = EffectArray.mapAccum(
-    userTurns(messages).slice(0, turns),
+): ReadonlyArray<Option.Option<RecordedUserMessage>> =>
+  EffectArray.mapAccum(
+    userTurns(messages),
     0,
     (from, at): readonly [number, Option.Option<RecordedUserMessage>] =>
       Option.match(
@@ -467,8 +440,18 @@ const stillSaid = (
           onSome: (offset) => [from + offset + 1, EffectArray.get(recorded, from + offset)],
         },
       ),
-  );
-  const lines = EffectArray.getSomes(matched)
+  )[1];
+
+/**
+ * The words of the user in these turns that no later message of theirs corrected or retracted, as
+ * memory recorded them, none when there are none. Unlike a summary they are what the user decided.
+ * Oldest first; when they do not all fit in the room of the session's summary, the latest are
+ * kept. Each names its node, which read_evidence shows in full.
+ */
+const stillSaid = (
+  turns: ReadonlyArray<Option.Option<RecordedUserMessage>>,
+): Option.Option<string> => {
+  const lines = EffectArray.getSomes(turns)
     .filter((message) => !message.changedLater)
     .map((message) => `- (node ${message.id}) ${shorten(message.text, userMessageCharacters)}`);
   const latest = EffectArray.takeWhile(
@@ -484,7 +467,7 @@ const stillSaid = (
     onNonEmpty: (kept) =>
       Option.some(
         [
-          "What the user said in them, oldest first, leaving out what a later message of theirs corrected or retracted. These are the user's own words, not a summary; read_evidence shows a node in full:",
+          "What the user said in what was left out, oldest first, leaving out what a later message of theirs corrected or retracted. These are the user's own words, not a summary; read_evidence shows a node in full:",
           ...(unlisted > 0
             ? [`(${unlisted} earlier messages of the user are not listed: find_memory finds them.)`]
             : []),
@@ -510,26 +493,17 @@ const memoryPointers = {
       Option.liftPredicate(nodeId, isTruthy),
       (id) => `read_tool_result ID ${id}, page by offset`,
     ),
-  /** What stands in for `count` messages left out. */
-  dropped: droppedMarker,
 };
 
 /** The pointers by tool call, once the ids are read. */
 interface Recall {
   readonly cleared: (toolCallId: string) => Option.Option<string>;
   readonly fullResult: (toolCallId: string) => Option.Option<string>;
-  /** What stands in for the oldest messages a request leaves out, `cut`. */
-  readonly dropped: (cut: ReadonlyArray<ConversationMessage>) => string;
 }
 
-const recallOf = (
-  toolResultId: (toolCallId: string) => string | null,
-  stillSaidIn: (cut: ReadonlyArray<ConversationMessage>) => Option.Option<string> = Option.none,
-): Recall => ({
+const recallOf = (toolResultId: (toolCallId: string) => string | null): Recall => ({
   cleared: (toolCallId) => memoryPointers.cleared(toolResultId(toolCallId)),
   fullResult: (toolCallId) => memoryPointers.fullResult(toolResultId(toolCallId)),
-  dropped: (cut) =>
-    [memoryPointers.dropped(cut.length), ...Option.toArray(stillSaidIn(cut))].join("\n\n"),
 });
 
 const decodeToolArguments = Schema.decodeUnknownOption(
@@ -575,20 +549,9 @@ export interface Compacted<M> {
   readonly messages: ReadonlyArray<M | CompactionMessage>;
   /** The strongest operation applied while preparing this request. */
   readonly stage: CompactionStage;
-  /** The user turns sent as their summaries. */
+  /** The user turns the session's summary covers. */
   readonly summarizedTurns: number;
 }
-
-/**
- * Stored, validated blocks are monotonic: even a small request keeps earlier turns summarized.
- * `firstKept` is where the first turn after them starts.
- */
-const summarized =
-  (summaries: ReadonlyArray<CompactionMessage>, firstKept: number | undefined) =>
-  <M>(sending: Sending<M>): Sending<M> =>
-    summaries.length > 0 && firstKept !== undefined
-      ? { sent: [...summaries, ...sending.sent.slice(firstKept)], stage: "summarize" }
-      : sending;
 
 /**
  * Results that cannot be replayed are dropped anyway; measured with them, a request whose history
@@ -601,40 +564,9 @@ const paired = <M extends ConversationMessage>(sending: Sending<M>): Sending<M> 
     : sending;
 };
 
-const isToolResult = (message: ConversationMessage) => message.role === "tool";
-
-/**
- * Where the latest messages that fit in `keep` tokens begin, at least the last one, moved past a
- * leading tool result so what is kept never starts with a result whose call was left out. As
- * `evictOldest` of @tanstack/ai-compaction found it.
- */
-const keptFrom = (messages: ReadonlyArray<ConversationMessage>, keep: number) => {
-  const fitting = EffectArray.takeWhile(
-    EffectArray.scan(
-      EffectArray.reverse(messages),
-      0,
-      (kept, message) => kept + estimateTokens(message),
-    ).slice(1),
-    (kept) => kept <= keep,
-  ).length;
-  const start = Math.min(messages.length - fitting, messages.length - 1);
-  const afterResults = start + EffectArray.takeWhile(messages.slice(start), isToolResult).length;
-  // Only results follow: keep from the call before them.
-  return afterResults < messages.length
-    ? afterResults
-    : Math.max(
-        0,
-        messages.length -
-          EffectArray.takeWhile(EffectArray.reverse(messages), isToolResult).length -
-          1,
-      );
-};
-
 /**
  * Where the run in progress starts: the latest message that started a run, or past the end when
- * there is none. Leaving the run out cost the model its own instruction and what it had just read;
- * it read them again, which pushed them out again, and a run went on for an hour without getting
- * anywhere.
+ * there is none.
  */
 const runStart = (messages: ReadonlyArray<ConversationMessage>) =>
   Option.getOrElse(EffectArray.findLastIndex(messages, startsRun), () => messages.length);
@@ -644,6 +576,30 @@ const latestStep = (messages: ReadonlyArray<ConversationMessage>) =>
   Option.getOrElse(
     EffectArray.findLastIndex(messages, (message) => message.role === "assistant"),
     () => 0,
+  );
+
+/**
+ * Where the latest {@link recentRawSteps} steps of the run in progress start, the end when it has
+ * none yet. They are never left out: leaving out the run's latest steps cost the model what it had
+ * just read; it read them again, which pushed them out again, and a run went on for an hour without
+ * getting anywhere (decisions.md, 2026-11-04).
+ */
+const recentStepsStart = (messages: ReadonlyArray<ConversationMessage>) => {
+  const start = runStart(messages);
+  const steps = messages.flatMap((message, index) =>
+    index > start && message.role === "assistant" ? [index] : [],
+  );
+  return steps.at(-Math.min(recentRawSteps, steps.length)) ?? messages.length;
+};
+
+/**
+ * Messages sent as they are wherever the conversation is cut: the one that started the run in
+ * progress, and the latest user turns.
+ */
+const alwaysSent = (messages: ReadonlyArray<ConversationMessage>) =>
+  HashSet.add(
+    HashSet.fromIterable(userTurns(messages).slice(-recentRawUserTurns)),
+    runStart(messages),
   );
 
 /** A tool output that its pointer makes smaller, and by how many tokens. */
@@ -693,235 +649,377 @@ const clearedOldest = <M extends ConversationMessage>(
       (output) => [output.index, output.pointer] as const,
     ),
   );
-  return {
-    cleared: HashMap.size(pointers),
-    messages: messages.map((message, index) =>
-      Option.match(HashMap.get(pointers, index), {
-        onNone: () => message,
-        onSome: (content) => ({ ...message, content }),
-      }),
-    ),
-  };
-};
-
-/**
- * What is sent brought down to `keep` tokens. Tool outputs give way before messages do, as
- * compaction was asked to work (2026-09-17): first the outputs before the run in progress, then
- * the oldest messages before the run, behind a marker, then the run's own oldest outputs. The run
- * is never left out and the latest step's results stay whole.
- */
-const broughtDown = <M extends ConversationMessage>(
-  sending: Sending<M>,
-  keep: number,
-  recall: Recall,
-): Sending<M> => {
-  const over = (messages: ReadonlyArray<ConversationMessage>) =>
-    estimateConversation(messages) - keep;
-  const start = runStart(sending.sent);
-  const before = clearedOldest(
-    sending.sent,
-    clearable(sending.sent, recall, [0, Math.min(start, latestStep(sending.sent))]),
-    over(sending.sent),
+  return messages.map((message, index) =>
+    Option.match(HashMap.get(pointers, index), {
+      onNone: () => message,
+      onSome: (content) => ({ ...message, content }),
+    }),
   );
-  const cut = over(before.messages) > 0 ? Math.min(keptFrom(before.messages, keep), start) : 0;
-  const kept = before.messages.slice(cut);
-  const inRun = clearedOldest(
-    kept,
-    clearable(kept, recall, [start - cut, latestStep(kept)]),
-    over(kept),
-  );
-  return before.cleared + cut + inRun.cleared > 0
-    ? {
-        sent:
-          cut > 0
-            ? [
-                { role: "user", content: recall.dropped(before.messages.slice(0, cut)) },
-                ...inRun.messages,
-              ]
-            : inRun.messages,
-        stage: "leave-out",
-      }
-    : sending;
 };
 
 /** What a request past `leaveOutAt` is brought down to. */
 const keptOf = (leaveOutAt: number) => Math.floor(leaveOutAt / 2);
 
-/**
- * Past `past`, what is sent is brought down to the latest half of `leaveOutAt` (see
- * {@link broughtDown}).
- */
-const leftOutPast =
-  (past: number, leaveOutAt: number, recall: Recall) =>
-  <M extends ConversationMessage>(sending: Sending<M>): Sending<M> =>
-    estimateConversation(sending.sent) > past
-      ? broughtDown(sending, keptOf(leaveOutAt), recall)
-      : sending;
-
-/**
- * A summary of earlier steps of the run in progress, sent in their place. It covers the step whose
- * first call is `from` through the one whose first call is `through`. Steps are named by call ids,
- * so a block finds its steps again as the run grows. Blocks live as long as their run.
- */
-export interface StepBlock {
-  readonly from: string;
-  readonly through: string;
-  readonly text: string;
-}
-
-/** A run's steps a summary is asked for, each output with where to read it again in full. */
-export interface StepsToSummarize {
-  /** What the run was asked to do. */
-  readonly task: string;
+/** What a summary is asked to write: the summary so far and the messages that came after it. */
+export interface SummaryRequest {
+  readonly previous: Option.Option<string>;
   readonly messages: ReadonlyArray<ConversationMessage>;
   /** Where each tool call's output can be read again, by call id. */
   readonly rereads: HashMap.HashMap<string, string>;
 }
 
-/** A step of the run in progress: where its message that calls tools is, and its first call. */
-interface Step {
-  readonly index: number;
-  readonly id: string;
+/** The summary of the summary so far and the messages after it; none when it could not be made. */
+export type Summarize = (request: SummaryRequest) => Effect.Effect<Option.Option<string>>;
+
+/** How much of each part of a message the summarizer reads, in characters. */
+const summaryReading = { text: 1_000, call: 400, result: 1_500 } as const;
+
+const summaryLines = {
+  user: (message: ConversationMessage) =>
+    `[user]\n${shorten(messageText(message), userMessageCharacters)}`,
+  assistant: (message: ConversationMessage) =>
+    [
+      "[assistant]",
+      shorten(messageText(message), summaryReading.text),
+      ...(message.toolCalls ?? []).map(
+        (call) =>
+          `[call ${call.function.name} ${call.id}] ${shorten(call.function.arguments, summaryReading.call)}`,
+      ),
+    ]
+      .filter((line) => line.length > 0)
+      .join("\n"),
+  tool: (message: ConversationMessage, rereads: HashMap.HashMap<string, string>) =>
+    `[result ${message.toolCallId ?? ""}; reread: ${Option.getOrElse(HashMap.get(rereads, message.toolCallId ?? ""), () => "none")}]\n${shorten(messageText(message), summaryReading.result)}`,
+} satisfies Record<
+  ConversationMessage["role"],
+  (message: ConversationMessage, rereads: HashMap.HashMap<string, string>) => string
+>;
+
+/** The messages as the summarizer reads them, each tool output with where to read it again. */
+export const summaryInput = (request: Omit<SummaryRequest, "previous">) =>
+  request.messages
+    .map((message) => summaryLines[message.role](message, request.rereads))
+    .join("\n\n");
+
+/** Writes the session's summary and keeps it. */
+export interface SummaryWriter {
+  readonly summarize: Summarize;
+  /** Keeps `next` in place of `from`, unless another summary was kept meanwhile; whether it did. */
+  readonly replace: (
+    from: Option.Option<SessionSummary>,
+    next: SessionSummary,
+  ) => Effect.Effect<boolean, CompactionFailed>;
 }
 
-const runSteps = (messages: ReadonlyArray<ConversationMessage>): ReadonlyArray<Step> => {
-  const start = runStart(messages);
-  return EffectArray.getSomes(
-    messages.map((message, index) =>
-      Option.map(
-        Option.liftPredicate(
-          index > start && message.role === "assistant" ? message.toolCalls?.[0]?.id : undefined,
-          isTruthy,
+/** The writer of a session whose summary is kept in `metadata` under `threadId`. */
+export const summaryWriter = (options: {
+  readonly metadata: ChatMetadata;
+  readonly threadId: string;
+  readonly summarize: Summarize;
+}): SummaryWriter => ({
+  summarize: options.summarize,
+  replace: (from, next) =>
+    Effect.mapError(
+      options.metadata.replaceSummary(options.threadId, from, next),
+      metadataFailed("persist"),
+    ),
+});
+
+/** How far a summary was written, and what is stored for the next part to replace. */
+interface Written {
+  readonly written: Cut;
+  readonly stored: Option.Option<SessionSummary>;
+  readonly stopped: boolean;
+}
+
+const firstCallOf = (message: ConversationMessage | undefined) =>
+  message?.role === "assistant"
+    ? Option.fromNullishOr(message.toolCalls?.[0]?.id)
+    : Option.none<string>();
+
+/**
+ * Where in `messages` the summary ends, when they are the conversation it summarized. A model
+ * handoff left out `turnOffset` user turns before them.
+ */
+const placedEnd = (
+  messages: ReadonlyArray<ConversationMessage>,
+  end: SummaryEnd,
+  nodeText: (id: string) => string | null,
+  turnOffset: number,
+): Option.Option<number> =>
+  SummaryEnd.match(end, {
+    Turn: ({ turn, nodeId }) =>
+      Option.filter(EffectArray.get(userTurns(messages), turn - turnOffset), (at) =>
+        sameTurn(messages[at], nodeText(nodeId)),
+      ),
+    Step: ({ callId }) =>
+      EffectArray.findFirstIndex(messages, (message) =>
+        Option.exists(firstCallOf(message), (id) => id === callId),
+      ),
+  });
+
+/**
+ * The end a summary of what comes before `index` would have, if one can end there: at a step's
+ * first call, or at a user turn memory recorded.
+ */
+const endAt = (
+  messages: ReadonlyArray<ConversationMessage>,
+  turns: ReadonlyArray<Option.Option<RecordedUserMessage>>,
+  turnOffset: number,
+  index: number,
+): Option.Option<SummaryEnd> =>
+  Option.orElse(
+    Option.map(firstCallOf(messages[index]), (callId) => SummaryEnd.cases.Step.make({ callId })),
+    () =>
+      Option.flatMap(
+        EffectArray.findFirstIndex(userTurns(messages), (at) => at === index),
+        (turn) =>
+          Option.map(Option.flatten(EffectArray.get(turns, turn)), ({ id }) =>
+            SummaryEnd.cases.Turn.make({ turn: turn + turnOffset, nodeId: id }),
+          ),
+      ),
+  );
+
+/**
+ * Where the first step from `from` whose output is not recorded yet starts, the end when there is
+ * none. Nothing could read such an output again, so it is not left out until it is recorded.
+ */
+const firstUnrecorded = (
+  messages: ReadonlyArray<ConversationMessage>,
+  from: number,
+  toolResultId: (toolCallId: string) => string | null,
+) =>
+  Option.getOrElse(
+    EffectArray.findFirstIndex(
+      messages,
+      (message, index) =>
+        index >= from &&
+        message.role === "assistant" &&
+        (message.toolCalls ?? []).some((call) => toolResultId(call.id) === null),
+    ),
+    () => messages.length,
+  );
+
+/** Tool outputs a left-out note lists; the rest are found with find_memory. */
+const leftOutOutputs = 20;
+
+/**
+ * What stands in for messages left out with no summary of them: how many, and where the latest of
+ * their tool outputs are read again.
+ */
+const leftOutNote = (
+  left: ReadonlyArray<ConversationMessage>,
+  toolResultId: (toolCallId: string) => string | null,
+) => {
+  const outputs = left.flatMap((message) =>
+    (message.toolCalls ?? []).flatMap((call) =>
+      Option.toArray(
+        Option.map(
+          Option.fromNullishOr(toolResultId(call.id)),
+          (nodeId) => `- ${call.function.name}: read_evidence ${nodeId}`,
         ),
-        (id) => ({ index, id }),
       ),
     ),
   );
+  const listed = outputs.slice(-leftOutOutputs);
+  return [
+    droppedMarker(left.length),
+    ...(listed.length > 0
+      ? [
+          `Their tool outputs, latest last${outputs.length > listed.length ? `, ${outputs.length - listed.length} earlier ones not listed` : ""}:`,
+          ...listed,
+        ]
+      : []),
+  ].join("\n");
 };
 
-/** A block and the positions of its first and last step among the run's steps. */
-interface PlacedSteps {
-  readonly block: StepBlock;
-  readonly first: number;
-  readonly last: number;
-}
-
-/**
- * The blocks that line up with the run's steps: the first starts at the run's first step, each
- * other right after the one before it, and a step is left after the last.
- */
-const placedSteps = (
-  steps: ReadonlyArray<Step>,
-  blocks: ReadonlyArray<StepBlock>,
-): ReadonlyArray<PlacedSteps> => {
-  const position = (id: string) => steps.findIndex((step) => step.id === id);
-  const placed = blocks.map((block) => ({
-    block,
-    first: position(block.from),
-    last: position(block.through),
-  }));
-  return EffectArray.takeWhile(
-    placed,
-    ({ first, last }, index) =>
-      first === (index === 0 ? 0 : (placed[index - 1]?.last ?? -1) + 1) &&
-      last >= first &&
-      last + 1 < steps.length,
-  );
-};
-
-const stepSummaryMessage = ({ block, first, last }: PlacedSteps): CompactionMessage => ({
+const summaryMessage = (text: string): CompactionMessage => ({
   role: "assistant",
-  content: `[Summary of steps ${first + 1}-${last + 1} of this run, written afterwards. The steps were left out to save context. This summary is a lead, not evidence: reread an output it cites before relying on it.]\n\n${block.text}`,
+  content: `[Summary of the earlier conversation, written afterwards. What it covers was left out to save context and is kept in memory; the user messages sent after it may be older than some of what it covers. This summary is a lead, not evidence: reread an output it cites before relying on it. Only the user's own words are decisions.]\n\n${text}`,
 });
 
 /**
- * The run's earlier steps sent as their summaries. A call and its result go together, so no result
- * is sent without its call. A block that no longer lines up is not sent, nor any after it.
+ * How a request cuts the conversation: the summary covers the messages before `summarized`, those
+ * from there to `cut` are left out behind a note, and from `cut` on they are sent. Before `cut`,
+ * the messages always sent are sent too.
  */
-const stepsSummarized =
-  (blocks: ReadonlyArray<StepBlock>) =>
-  <M extends ConversationMessage>(sending: Sending<M>): Sending<M> => {
-    const steps = runSteps(sending.sent);
-    const placed = placedSteps(steps, blocks);
-    return Option.match(
-      Option.all({
-        first: EffectArray.head(steps),
-        after: Option.flatMap(EffectArray.last(placed), ({ last }) =>
-          EffectArray.get(steps, last + 1),
-        ),
-      }),
-      {
-        onNone: () => sending,
-        onSome: ({ first, after }) => ({
-          sent: [
-            ...sending.sent.slice(0, first.index),
-            ...placed.map(stepSummaryMessage),
-            ...sending.sent.slice(after.index),
-          ],
-          stage: sending.stage === "leave-out" ? "leave-out" : "summarize",
-        }),
-      },
-    );
-  };
-
-/** The run's steps a summary is due for (see {@link dueSteps}). */
-export interface DueSteps {
-  readonly from: string;
-  readonly through: string;
-  readonly task: string;
-  readonly messages: ReadonlyArray<ConversationMessage>;
+interface Cut {
+  readonly summary: Option.Option<SessionSummary>;
+  readonly summarized: number;
+  readonly cut: number;
 }
 
-/**
- * The next {@link stepBlockSteps} steps of the run in progress to summarize. They are due once the
- * steps no block covers hold more than `kept` tokens, the size a request past `leaveOutAt` is
- * brought down to, and the latest {@link recentRawSteps} would still be sent as they are. Clearing
- * outputs cannot make a long run small: each step still sends its call and its pointer.
- */
-export const dueSteps = ({
-  messages,
-  blocks,
-  kept,
-}: {
-  readonly messages: ReadonlyArray<ConversationMessage>;
-  readonly blocks: ReadonlyArray<StepBlock>;
-  readonly kept: number;
-}): Option.Option<DueSteps> =>
-  Option.gen(function* () {
-    const steps = runSteps(messages);
-    const placed = placedSteps(steps, blocks);
-    // Blocks that no longer line up are not built on.
-    yield* Option.liftPredicate(placed, (lined) => lined.length === blocks.length);
-    const next = (placed.at(-1)?.last ?? -1) + 1;
-    const first = yield* EffectArray.get(steps, next);
-    const last = yield* EffectArray.get(steps, next + stepBlockSteps - 1);
-    const after = yield* EffectArray.get(steps, next + stepBlockSteps);
-    yield* EffectArray.get(steps, next + stepBlockSteps + recentRawSteps - 1);
-    yield* Option.liftPredicate(
-      estimateConversation(messages.slice(first.index)),
-      (tokens) => tokens > kept,
-    );
-    return {
-      from: first.id,
-      through: last.id,
-      task: Option.match(EffectArray.get(messages, runStart(messages)), {
-        onNone: () => "",
-        onSome: messageText,
-      }),
-      messages: messages.slice(first.index, after.index),
-    };
-  });
+/** What compaction reads of a conversation before it decides what to send. */
+const prepare = Effect.fnUntraced(function* <M extends ConversationMessage>(options: {
+  readonly messages: ReadonlyArray<M>;
+  readonly state: CompactionState;
+  readonly sources: CompactionSources;
+  readonly turnOffset: number;
+}) {
+  const { state, sources, turnOffset } = options;
+  // A record for a longer conversation was made for another one.
+  const manual =
+    state.manual.clearedThrough <= options.messages.length ? state.manual : noManualCompaction;
+  // Calls that cannot be replayed are left out of what is sent anyway, and so of what is measured.
+  const messages = replayableToolHistory(options.messages);
+  const clearedThrough = replayableToolHistory(
+    options.messages.slice(0, manual.clearedThrough),
+  ).length;
+  const { toolResultId, nodeText } = yield* memoryLookups(sources, messages, state.summary);
+  const recorded = yield* Effect.mapError(
+    sources.userMessages ?? Effect.succeed(EffectArray.empty<RecordedUserMessage>()),
+    memoryReadFailed,
+  );
+  const turns = userTurns(messages);
+  const turnRecords = recordedTurns(messages, recorded);
+  const recall = recallOf(toolResultId);
+  const kept = alwaysSent(messages);
 
-/** Where each tool output of `messages` can be read again, none when one of them cannot. */
-const rereadsOf = (messages: ReadonlyArray<ConversationMessage>, recall: Recall) =>
-  Option.map(
-    Option.all(
-      answeredToolCalls(messages).map((id) =>
-        Option.map(recall.fullResult(id), (where) => [id, where] as const),
+  const clearedByHand = clearAnswered(messages.slice(0, clearedThrough), recall.cleared, false);
+  const byHand =
+    clearedByHand === null ? messages : [...clearedByHand, ...messages.slice(clearedThrough)];
+  // An answered run's tool payload is cleared once the run after it has answered too. This
+  // transition happens once; clearAnswered leaves pointers unchanged and never touches the run
+  // still in progress.
+  const cleared = clearAnswered(byHand, recall.cleared, true);
+  const placed = Option.flatMap(state.summary, (summary) =>
+    Option.map(placedEnd(messages, summary.end, nodeText, turnOffset), (at): Cut => ({
+      summary: Option.some(summary),
+      summarized: at,
+      cut: at,
+    })),
+  );
+
+  /** The user turns before `cut` that are not sent. */
+  const leftOutTurns = (cut: number) =>
+    turnRecords.filter((_, turn) => {
+      const at = turns[turn] ?? messages.length;
+      return at < cut && !HashSet.has(kept, at);
+    });
+
+  /** Whether cutting from `from` to `to` leaves out a message that is not always sent. */
+  const leavesOut = (from: number, to: number) =>
+    messages.slice(from, to).some((_, offset) => !HashSet.has(kept, from + offset));
+
+  /** What is sent of `outgoing`, the messages as cleared so far, cut as `at` says. */
+  const sending = (outgoing: ReadonlyArray<M | CompactionMessage>, at: Cut) => {
+    const left = messages
+      .slice(at.summarized, at.cut)
+      .filter((_, index) => !HashSet.has(kept, at.summarized + index));
+    const notes = [
+      ...(left.length > 0 ? [leftOutNote(left, toolResultId)] : []),
+      ...Option.toArray(stillSaid(leftOutTurns(at.cut))),
+    ];
+    return [
+      ...Option.toArray(Option.map(at.summary, ({ text }) => summaryMessage(text))),
+      ...(notes.length > 0 ? [{ role: "user" as const, content: notes.join("\n\n") }] : []),
+      ...outgoing.slice(0, at.cut).filter((_, index) => HashSet.has(kept, index)),
+      ...outgoing.slice(at.cut),
+    ];
+  };
+
+  return {
+    messages,
+    current: cleared ?? byHand,
+    answered: clearedByHand !== null || cleared !== null || changed(options.messages, messages),
+    stored: state.summary,
+    start: Option.getOrElse(placed, (): Cut => ({ summary: Option.none(), summarized: 0, cut: 0 })),
+    placed: Option.isSome(placed),
+    turns,
+    recall,
+    toolResultId,
+    endAt: (index: number) => endAt(messages, turnRecords, turnOffset, index),
+    leavesOut,
+    sending,
+  };
+});
+
+/**
+ * Writes the summary on from where `from` ends through `to`, a part at a time, each part at most
+ * {@link summaryInputCharacters} as the summarizer reads it, and keeps each as it is written. It
+ * stops after `parts` parts, or at one that could not be written or kept. `to` is where a summary
+ * can end. Where the summary then ends, and the summary.
+ */
+const summarizedThrough = Effect.fnUntraced(function* (input: {
+  readonly messages: ReadonlyArray<ConversationMessage>;
+  /** The summary as stored, which the first part replaces. */
+  readonly stored: Option.Option<SessionSummary>;
+  readonly from: Cut;
+  readonly to: number;
+  readonly endAt: (index: number) => Option.Option<SummaryEnd>;
+  readonly toolResultId: (toolCallId: string) => string | null;
+  readonly writer: SummaryWriter;
+  readonly parts: number;
+}) {
+  const { messages, from, to, writer } = input;
+  const rereads = HashMap.fromIterable(
+    Iterable.flatMap(answeredToolCalls(messages.slice(from.summarized, to)), (id) =>
+      Option.toArray(
+        Option.map(
+          Option.fromNullishOr(input.toolResultId(id)),
+          (nodeId): readonly [string, string] => [id, `read_evidence ${nodeId}`],
+        ),
       ),
     ),
-    HashMap.fromIterable,
   );
+  // Pieces run from one place a summary can end to the next; a part holds whole pieces.
+  const bounds = [
+    from.summarized,
+    ...messages
+      .slice(from.summarized + 1, to)
+      .flatMap((_, offset) =>
+        Option.isSome(input.endAt(from.summarized + 1 + offset))
+          ? [from.summarized + 1 + offset]
+          : [],
+      ),
+    to,
+  ];
+  const [, partEnds] = EffectArray.mapAccum(
+    EffectArray.zip(bounds.slice(0, -1), bounds.slice(1)),
+    0,
+    (read, [start, end]): readonly [number, Option.Option<number>] => {
+      const piece = summaryInput({ messages: messages.slice(start, end), rereads }).length;
+      return read > 0 && read + piece > summaryInputCharacters
+        ? [piece, Option.some(start)]
+        : [read + piece, Option.none()];
+    },
+  );
+  const ends = [...EffectArray.getSomes(partEnds), to];
+  const parts = EffectArray.take(EffectArray.zip([from.summarized, ...ends], ends), input.parts);
+  const initial: Written = { written: from, stored: input.stored, stopped: false };
+  return yield* Effect.reduce(
+    parts,
+    () => initial,
+    (done, [start, end]): Effect.Effect<Written, CompactionFailed> =>
+      done.stopped
+        ? Effect.succeed(done)
+        : Effect.gen(function* () {
+            const text = yield* writer.summarize({
+              previous: Option.map(done.written.summary, ({ text }) => text),
+              messages: messages.slice(start, end),
+              rereads,
+            });
+            const next = Option.flatMap(text, (summary) =>
+              Option.map(input.endAt(end), (summaryEnd): SessionSummary => ({
+                text: summary,
+                end: summaryEnd,
+              })),
+            );
+            const kept = yield* Option.match(next, {
+              onNone: () => Effect.succeed(false),
+              onSome: (summary) => writer.replace(done.stored, summary),
+            });
+            const written: Written = kept
+              ? {
+                  written: { summary: next, summarized: end, cut: Math.max(end, done.written.cut) },
+                  stored: next,
+                  stopped: false,
+                }
+              : { ...done, stopped: true };
+            return written;
+          }),
+  ).pipe(Effect.map(({ written }) => written));
+});
 
 /**
  * Do not perturb an intact prefix with retrieval. Once this request did omit original content, an
@@ -957,81 +1055,185 @@ const withAppendix = <M extends ConversationMessage>(
   );
 
 /**
- * The conversation as the model is sent it. Answered tool outputs become pointers after a run,
- * and validated older summary blocks replace raw turns regardless of conversation size. Past
- * `leaveOutAt` tool outputs give way before messages do, and the run in progress is never left out.
- * The saved conversation is never changed.
+ * The conversation as the model is sent it. Answered tool outputs become pointers after a run, and
+ * the session's summary stands in for what it covers, whatever the size. Past `leaveOutAt` it is
+ * brought down to the latest half, by one rule whatever the run boundary: tool outputs before the
+ * run's latest steps give way to their pointers first, oldest first; then the oldest messages
+ * are left out, except the one that started the run in progress, the latest user turns and the
+ * run's latest steps; then the latest steps' outputs give way, all but the last step's. What is
+ * left out is summarized into the session's summary as it goes (`writer`), and a note stands in for
+ * what could not be: how many messages, and where their tool outputs are read again. The user's
+ * words in what is left out are sent as memory recorded them. An output not recorded yet is never
+ * left out. The saved conversation is never changed.
  */
 export const compactEffect = Effect.fnUntraced(function* <M extends ConversationMessage>(options: {
   readonly messages: ReadonlyArray<M>;
   readonly state: CompactionState;
   readonly sources: CompactionSources;
   readonly budget: Budget;
-  /** Summaries of the run's earlier steps, sent in their place. */
-  readonly steps?: ReadonlyArray<StepBlock>;
   /**
    * The request is made again because it would pass `leaveOutAt`. It comes down to the latest half
-   * however much the summaries took off: just under `leaveOutAt`, it would pass again a few steps
+   * however much the summary took off: just under `leaveOutAt`, it would pass again a few steps
    * later and be written to the provider's cache again.
    */
   readonly overBudget?: boolean;
-}): Effect.fn.Return<Compacted<M>, CompactionFailed> {
-  const { messages, state, sources, budget, steps = [], overBudget = false } = options;
-  // A record for a longer conversation was made for another one.
-  const manual = state.manual.clearedThrough <= messages.length ? state.manual : noManualCompaction;
-  const { toolResultId, nodeText } = yield* memoryLookups(sources, messages, state.blocks);
-  const turns = userTurns(messages);
-  const summaries = linedUp(messages, state.blocks, nodeText);
-  const summarizedTurns = summaries.at(-1)?.end ?? 0;
-  const recorded = yield* Effect.mapError(
-    sources.userMessages ?? Effect.succeed(EffectArray.empty<RecordedUserMessage>()),
-    memoryReadFailed,
-  );
-  const sentSummaries = summaryMessages(summaries);
+  /** User turns a model handoff left out before `messages`. */
+  readonly turnOffset?: number;
   /**
-   * How many user turns `cut` holds: those through the end of the last summary in it, as each
-   * covers the turns before it too, then those said as they were.
+   * Summarizes what the request leaves out, one part at most, before it is sent; without it, a
+   * note stands in for it.
    */
-  const turnsIn = (cut: ReadonlyArray<ConversationMessage>) =>
-    Option.match(
-      EffectArray.findLast(EffectArray.zip(sentSummaries, summaries), ([message]) =>
-        cut.includes(message),
-      ),
-      { onNone: () => 0, onSome: ([, block]) => block.end },
-    ) + userTurns(cut).length;
-  const recall = recallOf(toolResultId, (cut) => stillSaid(messages, recorded, turnsIn(cut)));
+  readonly writer?: SummaryWriter | undefined;
+}): Effect.fn.Return<Compacted<M>, CompactionFailed> {
+  const { sources, budget, overBudget = false } = options;
+  const at = yield* prepare({
+    messages: options.messages,
+    state: options.state,
+    sources,
+    turnOffset: options.turnOffset ?? 0,
+  });
+  const { messages, current, start, sending, recall } = at;
+  const keep = keptOf(budget.leaveOutAt);
+  const over = (sent: ReadonlyArray<ConversationMessage>) => estimateConversation(sent) - keep;
+  const recent = recentStepsStart(messages);
+  const latest = latestStep(messages);
+  const first = sending(current, start);
 
-  const clearedByHand = clearAnswered(
-    messages.slice(0, manual.clearedThrough),
-    recall.cleared,
-    false,
-  );
-  const byHand =
-    clearedByHand === null
-      ? messages
-      : [...clearedByHand, ...messages.slice(manual.clearedThrough)];
-  // An answered run's tool payload is cleared once the run after it has answered too. This
-  // transition happens once; clearAnswered leaves pointers unchanged and never touches the run
-  // still in progress.
-  const cleared = clearAnswered(byHand, recall.cleared, true);
-  const answeredCleared: Sending<M> = {
-    sent: cleared ?? byHand,
-    stage: clearedByHand !== null || cleared !== null ? "clear-answered" : "none",
-  };
-  const prepared = pipe(
-    answeredCleared,
-    summarized(sentSummaries, turns[summarizedTurns]),
-    stepsSummarized(steps),
-    paired,
-    leftOutPast(
-      overBudget ? keptOf(budget.leaveOutAt) : budget.leaveOutAt,
-      budget.leaveOutAt,
-      recall,
+  const brought = yield* Effect.gen(function* () {
+    // The outputs before the run's latest steps give way first.
+    const outputs = clearedOldest(
+      current,
+      clearable(current, recall, [start.cut, Math.min(recent, latest)]),
+      over(first),
+    );
+    if (over(sending(outputs, start)) <= 0) return { outgoing: outputs, cut: start };
+    // Then the oldest messages, as far as the latest that fit in what is kept. A cut never comes
+    // between a call and its result.
+    const bound = Math.min(recent, firstUnrecorded(messages, start.cut, at.toolResultId));
+    const after = (from: number, to: number, keep: (index: number) => boolean) =>
+      messages.slice(from + 1, to + 1).flatMap((_, offset) => {
+        const index = from + 1 + offset;
+        return keep(index) ? [index] : [];
+      });
+    const cuts = after(
+      start.cut,
+      bound,
+      (index) => messages[index]?.role !== "tool" && at.leavesOut(start.cut, index),
+    );
+    const target = Option.orElse(
+      EffectArray.findFirst(cuts, (cut) => over(sending(outputs, { ...start, cut })) <= 0),
+      () => EffectArray.last(cuts),
+    );
+    const cut = yield* Option.match(target, {
+      onNone: () => Effect.succeed(start),
+      onSome: (to) =>
+        Option.match(
+          Option.all({
+            writer: Option.fromNullishOr(options.writer),
+            // The summary ends where one can, at or before the cut; a note stands in for the rest.
+            end: EffectArray.last(
+              after(
+                start.summarized,
+                to,
+                (index) => Option.isSome(at.endAt(index)) && at.leavesOut(start.summarized, index),
+              ),
+            ),
+          }),
+          {
+            onNone: () => Effect.succeed({ ...start, cut: to }),
+            onSome: ({ writer, end }) =>
+              Effect.map(
+                summarizedThrough({
+                  messages,
+                  stored: at.stored,
+                  from: start,
+                  to: end,
+                  endAt: at.endAt,
+                  toolResultId: at.toolResultId,
+                  writer,
+                  parts: 1,
+                }),
+                (written): Cut => ({ ...written, cut: to }),
+              ),
+          },
+        ),
+    });
+    // Last, the latest steps' outputs, all but the last step's.
+    const inRun = clearedOldest(
+      outputs,
+      clearable(outputs, recall, [cut.cut, latest]),
+      over(sending(outputs, cut)),
+    );
+    return { outgoing: inRun, cut };
+  }).pipe(
+    Effect.when(
+      Effect.succeed(estimateConversation(first) > (overBudget ? keep : budget.leaveOutAt)),
     ),
   );
-  // Leaving out the oldest messages can split a call from its result.
-  const { sent, stage } = paired(yield* withAppendix(sources, prepared));
-  return { messages: sent, stage, summarizedTurns };
+
+  const made: Sending<M> = Option.match(brought, {
+    onNone: () => ({
+      sent: first,
+      stage: at.placed ? "summarize" : at.answered ? "clear-answered" : "none",
+    }),
+    onSome: ({ outgoing, cut }) => ({ sent: sending(outgoing, cut), stage: "leave-out" }),
+  });
+  const summarized = Option.match(brought, {
+    onNone: () => start.summarized,
+    onSome: ({ cut }) => cut.summarized,
+  });
+  const { sent, stage } = paired(yield* withAppendix(sources, paired(made)));
+  return {
+    messages: sent,
+    stage,
+    summarizedTurns: EffectArray.countBy(at.turns, (turn) => turn < summarized),
+  };
+});
+
+/**
+ * Writes the session's summary on through the turns before the latest few, which are always sent
+ * as they are, a part at a time. With `threshold`, only once what the conversation sends without
+ * a summary passes it; once it has one it keeps it, so the request prefix stays stable. Whether it
+ * got there.
+ */
+export const summarizeEarlierTurns = Effect.fnUntraced(function* (options: {
+  readonly messages: ReadonlyArray<ConversationMessage>;
+  readonly state: CompactionState;
+  readonly sources: CompactionSources;
+  readonly writer: SummaryWriter;
+  readonly threshold: Option.Option<number>;
+}) {
+  const at = yield* prepare({ ...options, turnOffset: 0 });
+  const { messages, start } = at;
+  const small = Option.exists(
+    options.threshold,
+    (threshold) => !at.placed && estimateConversation(at.sending(at.current, start)) <= threshold,
+  );
+  const target = Option.filter(
+    EffectArray.get(at.turns, at.turns.length - recentRawUserTurns),
+    (to) =>
+      !small &&
+      to > start.summarized &&
+      to <= firstUnrecorded(messages, start.summarized, at.toolResultId) &&
+      Option.isSome(at.endAt(to)),
+  );
+  return yield* Option.match(target, {
+    onNone: () => Effect.succeed(true),
+    onSome: (to) =>
+      Effect.map(
+        summarizedThrough({
+          messages,
+          stored: at.stored,
+          from: start,
+          to,
+          endAt: at.endAt,
+          toolResultId: at.toolResultId,
+          writer: options.writer,
+          parts: Number.POSITIVE_INFINITY,
+        }),
+        (written) => written.summarized === to,
+      ),
+  });
 });
 
 const largeShellResult = Schema.fromJsonString(
@@ -1241,8 +1443,8 @@ interface HistoryRequest<M> {
   readonly restored: ReadonlyArray<M | CompactionMessage> | null;
   readonly sources: CompactionSources;
   readonly budget: Budget;
-  /** Summaries of the run's earlier steps (see {@link compactEffect}). */
-  readonly steps?: ReadonlyArray<StepBlock> | undefined;
+  /** Summarizes what the request leaves out (see {@link compactEffect}). */
+  readonly writer?: SummaryWriter | undefined;
   /** The request would pass `leaveOutAt` (see {@link compactEffect}). */
   readonly overBudget?: boolean;
 }
@@ -1253,21 +1455,15 @@ const compactedRequest = Effect.fnUntraced(function* <M extends ConversationMess
   { readonly messages: ReadonlyArray<M | CompactionMessage>; readonly stage: CompactionStage },
   CompactionFailed
 > {
-  const { state, messages, restored, sources, budget, steps = [], overBudget = false } = options;
+  const { state, messages, restored, sources, budget, writer, overBudget = false } = options;
   const removedTurns =
     restored === null ? 0 : userTurns(messages).length - userTurns(restored).length;
   const restoredContext = restored?.[0];
   const compacted = yield* compactEffect({
     messages: restored === null ? messages : restored.slice(1),
-    state:
-      restored === null
-        ? state
-        : {
-            manual: noManualCompaction,
-            blocks: state.blocks
-              .filter((block) => block.end > removedTurns)
-              .map((block) => ({ ...block, end: block.end - removedTurns })),
-          },
+    state: restored === null ? state : { ...state, manual: noManualCompaction },
+    turnOffset: removedTurns,
+    writer,
     sources,
     budget:
       restoredContext === undefined
@@ -1276,7 +1472,6 @@ const compactedRequest = Effect.fnUntraced(function* <M extends ConversationMess
             ...budget,
             leaveOutAt: Math.max(1, budget.leaveOutAt - estimateTokens(restoredContext)),
           },
-    steps,
     overBudget,
   });
   const question = restored?.findLast(
@@ -1288,7 +1483,7 @@ const compactedRequest = Effect.fnUntraced(function* <M extends ConversationMess
       : compacted.messages;
   const outgoing =
     restoredContext === undefined ? compacted.messages : [restoredContext, ...retained];
-  const { toolResultId } = yield* memoryLookups(sources, outgoing, []);
+  const { toolResultId } = yield* memoryLookups(sources, outgoing, Option.none());
   return {
     messages: previewedResults(outgoing, toolResultId).filter(
       (message) => !isEmptyUserText(message),
@@ -1534,7 +1729,7 @@ const appendedTo = Effect.fnUntraced(function* (
 > {
   const { from, manual, prefix, sources, budget } = now;
   const added = from.slice(previous.from.length);
-  const { toolResultId } = yield* memoryLookups(sources, added, []);
+  const { toolResultId } = yield* memoryLookups(sources, added, Option.none());
   const shown = previewedResults(added, toolResultId).filter(
     (message) => !isEmptyUserText(message),
   );
@@ -1575,7 +1770,7 @@ export const nextRequestHistory = Effect.fnUntraced(function* (options: {
   readonly restored: ReadonlyArray<StoredMessage> | null;
   readonly sources: CompactionSources;
   readonly budget: Budget;
-  readonly steps?: ReadonlyArray<StepBlock>;
+  readonly writer?: SummaryWriter | undefined;
   readonly previous: Option.Option<SentRequest>;
   /** What the request sends before its messages. */
   readonly prefix: RequestPrefix;
@@ -1662,9 +1857,9 @@ const logRequestBasis = (
  * `budget.inputCeiling`: the conversation's latest count before the run (`overhead`) for its first
  * step, then each step's as its usage comes back. Without either, a step goes by the estimate.
  *
- * A long run's earlier steps are summarized in the background, one block at a time, once they are
- * due ({@link dueSteps}) and the request nears `leaveOutAt`; the next request compacted again sends
- * them in their place. The blocks end with the run's scope.
+ * A request that leaves messages out waits for them to be summarized into the session's summary,
+ * one part at most ({@link compactEffect}). Once summaries fail {@link summaryFailureLimit} times
+ * in a row, the run asks for none again and a note stands in for what it leaves out.
  *
  * Each request appends to the previous one ({@link nextRequestHistory}). Search leads are looked up
  * once a run, so a run's requests send the same ones.
@@ -1685,25 +1880,35 @@ export const compactionHook = Effect.fnUntraced(function* (options: {
   readonly restore: (
     messages: ReadonlyArray<StoredMessage>,
   ) => Effect.Effect<ReadonlyArray<StoredMessage> | null, ModelHandoffFailed>;
-  /**
-   * Summarizes a run's earlier steps, none when it could not. Without it, or once it could not
-   * {@link stepSummaryFailureLimit} times in a row, the run's steps are only cleared.
-   */
-  readonly summarizeSteps?: (steps: StepsToSummarize) => Effect.Effect<Option.Option<string>>;
+  /** Summarizes what a request leaves out; without it, a note stands in for what it leaves out. */
+  readonly summarize?: Summarize;
 }) {
   const stage = yield* Ref.make<CompactionStage>("none");
   /** Our estimate of the messages the latest request sent. */
   const sentEstimate = yield* Ref.make(Option.none<number>());
   /** What the provider counted of the latest request it reported beyond {@link sentEstimate}. */
   const overhead = yield* Ref.make(options.overhead ?? Option.none<number>());
-  const stepBlocks = yield* Ref.make<ReadonlyArray<StepBlock>>([]);
   /**
-   * Summaries that could not be made in a row. Past {@link stepSummaryFailureLimit} the run stops
+   * Summaries that could not be made in a row. Past {@link summaryFailureLimit} the run stops
    * asking: one that keeps failing would likely fail again, every request.
    */
-  const stepFailures = yield* Ref.make(0);
-  const stepFailed = Ref.update(stepFailures, (failures) => failures + 1);
-  const summarizing = yield* FiberHandle.make<void, never>();
+  const failures = yield* Ref.make(0);
+  const summarize = Option.map(
+    Option.fromNullishOr(options.summarize),
+    (write): Summarize =>
+      (request) =>
+        Effect.flatMap(Ref.get(failures), (failed) =>
+          failed >= summaryFailureLimit
+            ? Effect.succeedNone
+            : Effect.tap(
+                write(request),
+                Option.match({
+                  onNone: () => Ref.update(failures, (count) => count + 1),
+                  onSome: () => Ref.set(failures, 0),
+                }),
+              ),
+        ),
+  );
   const lastRequests = yield* Option.match(Option.fromNullishOr(options.lastRequests), {
     onSome: Effect.succeed,
     onNone: () => makeLastRequests,
@@ -1732,65 +1937,6 @@ export const compactionHook = Effect.fnUntraced(function* (options: {
     },
   );
 
-  /** The block for `due`, once every output in it can be read again. */
-  const stepBlock = (
-    summarize: (steps: StepsToSummarize) => Effect.Effect<Option.Option<string>>,
-    due: DueSteps,
-  ) =>
-    Effect.gen(function* () {
-      const { toolResultId } = yield* memoryLookups(options.sources, due.messages, []);
-      yield* Option.match(rereadsOf(due.messages, recallOf(toolResultId)), {
-        // An output nothing can read again is not summarized away; it is due again once it can be.
-        onNone: () => Effect.void,
-        onSome: (rereads) =>
-          Effect.flatMap(
-            summarize({ task: due.task, messages: due.messages, rereads }),
-            Option.match({
-              onNone: () => stepFailed,
-              onSome: (text) =>
-                Effect.andThen(
-                  Ref.update(
-                    stepBlocks,
-                    EffectArray.append({ from: due.from, through: due.through, text }),
-                  ),
-                  Ref.set(stepFailures, 0),
-                ),
-            }),
-          ),
-      });
-    }).pipe(
-      Effect.catch((error) => Effect.andThen(logFailure("Step summary failed")(error), stepFailed)),
-    );
-
-  /**
-   * Starts the block that is due, unless one is being made, once it would be sent: blocks go out
-   * with a request compacted again, and the request of `sentTokens` would pass `leaveOutAt` by
-   * the time as many steps again come.
-   */
-  const summarizeDue = (
-    messages: ReadonlyArray<ConversationMessage>,
-    blocks: ReadonlyArray<StepBlock>,
-    budget: Budget,
-    sentTokens: number,
-  ) =>
-    Option.match(
-      Option.all({
-        summarize: Option.fromNullishOr(options.summarizeSteps),
-        due: Option.filter(
-          dueSteps({ messages, blocks, kept: keptOf(budget.leaveOutAt) }),
-          (due) => sentTokens + estimateConversation(due.messages) > budget.leaveOutAt,
-        ),
-      }),
-      {
-        onNone: () => Effect.void,
-        onSome: ({ summarize, due }) =>
-          Effect.when(
-            FiberHandle.run(summarizing, stepBlock(summarize, due), { onlyIfMissing: true }),
-            Effect.map(Ref.get(stepFailures), (failures) => failures < stepSummaryFailureLimit),
-          ).pipe(Effect.asVoid),
-      },
-    );
-
   const hook: RunHook<RunStore> = {
     request: ({ threadId }, request) =>
       Effect.gen(function* () {
@@ -1808,7 +1954,6 @@ export const compactionHook = Effect.fnUntraced(function* (options: {
           onNone: () => options.budget,
           onSome: (tokens) => withOverhead(options.budget, tokens),
         });
-        const steps = yield* Ref.get(stepBlocks);
         const previous = yield* lastRequests.get(threadId);
         const sent = yield* nextRequestHistory({
           metadata: store.chatMetadata,
@@ -1817,7 +1962,11 @@ export const compactionHook = Effect.fnUntraced(function* (options: {
           restored,
           sources,
           budget,
-          steps,
+          writer: Option.getOrUndefined(
+            Option.map(summarize, (write) =>
+              summaryWriter({ metadata: store.chatMetadata, threadId, summarize: write }),
+            ),
+          ),
           previous,
           prefix: requestPrefix(request),
         });
@@ -1825,7 +1974,6 @@ export const compactionHook = Effect.fnUntraced(function* (options: {
         yield* logRequestBasis(threadId, previous, sent);
         yield* Ref.set(stage, sent.stage);
         yield* Ref.set(sentEstimate, Option.some(sent.estimatedTokens));
-        yield* summarizeDue(request.history, steps, budget, sent.estimatedTokens);
         return { ...request, history: sent.messages };
       }).pipe(Effect.mapError(asRunFailed)),
     // A response that reported no input count keeps the overhead the one before it measured.
@@ -1849,8 +1997,8 @@ export type SummaryOutcome = "done" | "failed" | "unavailable";
 
 /**
  * `/compact`: summarizes what has not been yet (`summarize`), then clears the output of every tool
- * call the model has answered from and sends the turns before the latest few as their summaries,
- * whatever the budget, for this and every later run.
+ * call the model has answered from, for this and every later run. The session's summary stands in
+ * for the turns before the latest few whatever the budget.
  */
 const compactByHandBody = <E>(
   metadata: ChatMetadata,
@@ -1865,20 +2013,9 @@ const compactByHandBody = <E>(
     const before = yield* compactEffect({ messages, state: initial, sources, budget });
     const outcome = yield* summarize();
     const state = yield* compactionStateEffect({ metadata, threadId });
-    const { nodeText } = yield* memoryLookups(sources, [], state.blocks);
-    const summaries = linedUp(messages, state.blocks, nodeText).filter(
-      (block) => block.end <= userTurns(messages).length - recentRawUserTurns,
-    );
-    const manual: ManualCompaction = {
-      clearedThrough: messages.length,
-      summarizedTurns: summaries.at(-1)?.end ?? 0,
-    };
-    yield* metadata
-      .set(manualCompactionNamespace, threadId, manual)
-      .pipe(Effect.mapError(metadataFailed("persist")));
     const after = yield* compactEffect({
       messages,
-      state: { ...state, manual },
+      state: { ...state, manual: { clearedThrough: messages.length, summarizedTurns: 0 } },
       sources,
       budget,
     }).pipe(
@@ -1890,6 +2027,13 @@ const compactByHandBody = <E>(
         }),
       ),
     );
+    const manual: ManualCompaction = {
+      clearedThrough: messages.length,
+      summarizedTurns: after.summarizedTurns,
+    };
+    yield* metadata
+      .set(manualCompactionNamespace, threadId, manual)
+      .pipe(Effect.mapError(metadataFailed("persist")));
     return {
       cleared: Math.max(0, wholeToolOutputs(before.messages) - wholeToolOutputs(after.messages)),
       summarizedTurns: Math.max(0, after.summarizedTurns - before.summarizedTurns),

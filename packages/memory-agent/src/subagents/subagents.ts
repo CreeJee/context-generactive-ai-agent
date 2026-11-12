@@ -28,7 +28,7 @@ import {
 } from "effect";
 import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
 import { ApiUsage, apiUsageHook } from "../agent/api-usage.ts";
-import { stepSummarizer } from "../agent/step-summaries.ts";
+import { sessionSummarizer } from "../agent/session-summary.ts";
 import { budgetFor, compactionHook } from "../agent/compaction.ts";
 import type { JsonValue } from "../json.ts";
 import type { AgUiEvent } from "../loop/chunks.ts";
@@ -734,7 +734,7 @@ const make = Effect.gen(function* () {
         budget: budgetFor(runtime.contextWindow(binding.selection.model)),
         promptCacheFor: model.promptCacheFor,
         restore: () => Effect.succeed(null),
-        summarizeSteps: stepSummarizer({
+        summarize: sessionSummarizer({
           services: { active, usageLedger, crypto },
           rootSessionId: binding.sessionId,
           selection: binding.selection,

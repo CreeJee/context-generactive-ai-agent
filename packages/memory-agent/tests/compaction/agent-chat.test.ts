@@ -1,14 +1,15 @@
-import { Cause, Deferred, Effect, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { budgetFor, messageText } from "../../src/agent/compaction.ts";
+import { SummaryEnd } from "../../src/chat-store/metadata.ts";
 import { TurnSummaries } from "../../src/agent/turn-summaries.ts";
 import { AgUiEvent } from "../../src/loop/chunks.ts";
 import { RunStore } from "../../src/loop/store.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { runTurn } from "../support/chat-client.ts";
-import { defaultTestResponder, selectTestModel } from "../support/provider.ts";
+import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { conversation, nextRequest } from "./fixtures.ts";
 
@@ -85,7 +86,7 @@ testAgent({ testProvider: {} })("compaction through AgentChat", (it) => {
         const agent = yield* AgentChat;
         // Answers worth summarizing: the summary's header alone outweighs a one-word answer.
         const answer = "테스트를 모두 통과했고 실패한 항목은 없어요. ".repeat(10);
-        const { userNodes, messages, toolOutput, toolResult } = yield* savedConversation(at, [
+        const { messages, toolOutput, toolResult } = yield* savedConversation(at, [
           answer,
           answer,
           answer,
@@ -123,7 +124,7 @@ testAgent({ testProvider: {} })("compaction through AgentChat", (it) => {
         );
         expect(sent[0]).toEqual({
           role: "assistant",
-          content: expect.stringContaining(`- 사용자 턴 4개 (node ${userNodes[0]!.id})`),
+          content: expect.stringContaining("- 사용자 메시지 4개"),
         });
         expect(sent[1]).toEqual({ role: "user", content: "질문 5" });
         expect(yield* stringifyJson(sent)).not.toContain(toolResult.id);
@@ -147,9 +148,10 @@ testAgent({ testProvider: {} })("compaction through AgentChat", (it) => {
         ]);
         // The pilot forces automatic catch-up before B's manual call: four older user turns
         // are already summarized and the two most recent user turns must stay raw.
-        yield* (yield* RunStore).chatMetadata.replaceSummaries(at.sessionId, 0, [
-          { end: 4, nextTurnNodeId: userNodes[4]!.id, text: "- 결정 보존" },
-        ]);
+        yield* (yield* RunStore).chatMetadata.replaceSummary(at.sessionId, Option.none(), {
+          text: "- 결정 보존",
+          end: SummaryEnd.cases.Turn.make({ turn: 4, nodeId: userNodes[4]!.id }),
+        });
         const before = yield* nextRequest(messages, at.sessionId, budgetFor(200_000));
         const result = yield* (yield* AgentChat).compact(at.sessionId, null);
         expect(result).toMatchObject({ cleared: 0, summarizedTurns: 0, summaryFailed: false });
@@ -162,62 +164,61 @@ testAgent({ testProvider: {} })("compaction through AgentChat", (it) => {
       const at = yield* freshSession;
       yield* savedConversation(at, ["네", "네", "네", "네", "네"]);
       const summaries = yield* TurnSummaries;
-      const blocks = (yield* RunStore).chatMetadata.summaries(at.sessionId);
+      const summary = (yield* RunStore).chatMetadata.summary(at.sessionId);
 
       expect(yield* summaries.startPercent).toBe(25);
       expect(yield* summaries.catchUp(at.sessionId, false)).toBe("done");
-      expect(yield* blocks).toEqual([]);
+      expect(yield* summary).toEqual(Option.none());
 
       yield* summaries.setStartPercent(0);
       yield* Effect.addFinalizer(() => Effect.orDie(summaries.setStartPercent(25)));
       expect(yield* summaries.catchUp(at.sessionId, false)).toBe("done");
-      expect(yield* blocks).toHaveLength(1);
+      expect(Option.isSome(yield* summary)).toBe(true);
     }),
   );
-});
 
-// Each summary waits until another has started too, so blocks summarized one at a time never end.
-const summariesStarted: string[] = [];
-const secondSummaryStarted = Deferred.makeUnsafe<void, Cause.UnknownError>();
-testAgent({
-  testProvider: {
-    responder: (invocation) => {
-      const turn = defaultTestResponder(invocation);
-      if (!invocation.system.join("\n").includes("You summarize part of a conversation"))
-        return turn;
-      summariesStarted.push(invocation.run.threadId);
-      if (summariesStarted.length === 2) Deferred.doneUnsafe(secondSummaryStarted, Effect.void);
-      return { ...turn, waitFor: Deferred.await(secondSummaryStarted) };
-    },
-  },
-})("summary blocks", (it) => {
-  it.effect("summarizes the blocks a conversation needs together and keeps them in order", () =>
+  it.effect("writes one summary through the turns before the latest two, folding in the last", () =>
     Effect.gen(function* () {
       const at = yield* freshSession;
-      // Ten user turns: the latest two stay raw, so two blocks of four are due.
-      const { userNodes } = yield* savedConversation(
+      const nodes = yield* Nodes;
+      // Ten user turns: the latest two stay as they were said.
+      const { userNodes, messages } = yield* savedConversation(
         at,
         Array.from({ length: 9 }, () => "네"),
       );
       const summaries = yield* TurnSummaries;
       yield* summaries.setStartPercent(0);
       yield* Effect.addFinalizer(() => Effect.orDie(summaries.setStartPercent(25)));
+      const { chatMetadata, saveThread } = yield* RunStore;
 
-      expect(yield* summaries.catchUp(at.sessionId, false).pipe(Effect.timeout("5 seconds"))).toBe(
-        "done",
+      expect(yield* summaries.catchUp(at.sessionId, false)).toBe("done");
+      expect(yield* chatMetadata.summary(at.sessionId)).toEqual(
+        Option.some({
+          text: "- 사용자 메시지 8개",
+          end: SummaryEnd.cases.Turn.make({ turn: 8, nodeId: userNodes[8]!.id }),
+        }),
       );
-      expect(yield* (yield* RunStore).chatMetadata.summaries(at.sessionId)).toEqual([
-        {
-          end: 4,
-          nextTurnNodeId: userNodes[4]!.id,
-          text: `- 사용자 턴 4개 (node ${userNodes[0]!.id})`,
-        },
-        {
-          end: 8,
-          nextTurnNodeId: userNodes[8]!.id,
-          text: `- 사용자 턴 4개 (node ${userNodes[4]!.id})`,
-        },
+      // Two more turns: only the two now before the latest two are read, after the summary so far.
+      const more = yield* Effect.forEach(["질문 11", "질문 12"], (question) =>
+        Effect.andThen(
+          nodes.append({ ...at, kind: "assistant", text: "네" }),
+          nodes.append({ ...at, kind: "user", text: question }),
+        ),
+      );
+      yield* saveThread(at.sessionId, [
+        ...messages,
+        { role: "assistant", content: "네" },
+        { role: "user", content: "질문 11" },
+        { role: "assistant", content: "네" },
+        { role: "user", content: "질문 12" },
       ]);
+      expect(yield* summaries.catchUp(at.sessionId, false)).toBe("done");
+      expect(yield* chatMetadata.summary(at.sessionId)).toEqual(
+        Option.some({
+          text: "- 사용자 메시지 8개\n- 사용자 메시지 2개",
+          end: SummaryEnd.cases.Turn.make({ turn: 10, nodeId: more[0]!.id }),
+        }),
+      );
     }),
   );
 });
@@ -297,7 +298,9 @@ testAgent({
         // About 180,000 tokens beyond the messages leave under 4,000 of the 200,000-token window.
         const sent = yield* lastInvocation;
         expect(sent.some((message) => message.content === longAnswer)).toBe(false);
-        expect(sent.some((message) => messageText(message).includes("were left out"))).toBe(true);
+        expect(
+          sent.some((message) => messageText(message).includes("left out to save context")),
+        ).toBe(true);
         expect(sent.at(-1)?.content).toBe("요약해 줘");
       }),
   );

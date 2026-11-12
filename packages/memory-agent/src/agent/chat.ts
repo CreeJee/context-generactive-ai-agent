@@ -133,7 +133,7 @@ import {
 import { taskNotifications } from "./task-notifications.ts";
 import { dispatchNotifications } from "./dispatch-notifications.ts";
 import { ApiUsage, apiUsageHook } from "./api-usage.ts";
-import { stepSummarizer } from "./step-summaries.ts";
+import { sessionSummarizer } from "./session-summary.ts";
 import { TurnSummaries } from "./turn-summaries.ts";
 import {
   failureAnnotations,
@@ -2207,7 +2207,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             ),
           ),
         );
-        // A run's step summaries are made in the background for as long as the run goes on.
+        // What a request leaves out is summarized into the session's summary before it is sent.
         const compacting = yield* compactionHook({
           sources: compactionSources(sessionId, reportSource !== null ? undefined : project, [
             turn?.text ?? "",
@@ -2219,7 +2219,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           promptCacheFor: runModel.promptCacheFor,
           overhead: measuredOverhead(lastUsage),
           restore,
-          summarizeSteps: stepSummarizer({
+          summarize: sessionSummarizer({
             services: { active, usageLedger, crypto },
             rootSessionId: sessionId,
             selection,

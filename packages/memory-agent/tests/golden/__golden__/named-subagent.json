@@ -119,6 +119,7 @@
             "answer": "child done: first task (earlier user messages: 0)",
             "attemptId": "<id-5>",
             "error": null,
+            "memo": [],
             "status": "completed",
             "subagentId": "<id-3>",
             "taskId": "<id-4>"
@@ -130,7 +131,7 @@
       "detail": {},
       "kind": "assistant",
       "run_id": "<id-10>",
-      "text": "Background work completed. {\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-4>\",\"attemptId\":\"<id-5>\",\"status\":\"completed\",\"answer\":\"child done: first task (earlier user messages: 0)\",\"error\":null}"
+      "text": "Background work completed. {\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-4>\",\"attemptId\":\"<id-5>\",\"status\":\"completed\",\"answer\":\"child done: first task (earlier user messages: 0)\",\"error\":null,\"memo\":[]}"
     },
     {
       "detail": {},
@@ -205,6 +206,7 @@
             "answer": "child done: second task (earlier user messages: 1)",
             "attemptId": "<id-15>",
             "error": null,
+            "memo": [],
             "status": "completed",
             "subagentId": "<id-3>",
             "taskId": "<id-14>"
@@ -216,7 +218,7 @@
       "detail": {},
       "kind": "assistant",
       "run_id": "<id-20>",
-      "text": "Background work completed. {\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-14>\",\"attemptId\":\"<id-15>\",\"status\":\"completed\",\"answer\":\"child done: second task (earlier user messages: 1)\",\"error\":null}"
+      "text": "Background work completed. {\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-14>\",\"attemptId\":\"<id-15>\",\"status\":\"completed\",\"answer\":\"child done: second task (earlier user messages: 1)\",\"error\":null,\"memo\":[]}"
     }
   ],
   "notifications": [
@@ -440,7 +442,7 @@
       "status": "completed"
     }
   ],
-  "summaries": [],
+  "summary": [],
   "tasks": [
     {
       "agent_id": "<id-3>",
@@ -552,12 +554,12 @@
           ]
         },
         {
-          "content": "{\"reports\":[{\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-4>\",\"attemptId\":\"<id-5>\",\"status\":\"completed\",\"answer\":\"child done: first task (earlier user messages: 0)\",\"error\":null}]}",
+          "content": "{\"reports\":[{\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-4>\",\"attemptId\":\"<id-5>\",\"status\":\"completed\",\"answer\":\"child done: first task (earlier user messages: 0)\",\"error\":null,\"memo\":[]}]}",
           "role": "tool",
           "toolCallId": "call-reports@<id-10>"
         },
         {
-          "content": "Background work completed. {\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-4>\",\"attemptId\":\"<id-5>\",\"status\":\"completed\",\"answer\":\"child done: first task (earlier user messages: 0)\",\"error\":null}",
+          "content": "Background work completed. {\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-4>\",\"attemptId\":\"<id-5>\",\"status\":\"completed\",\"answer\":\"child done: first task (earlier user messages: 0)\",\"error\":null,\"memo\":[]}",
           "createdAt": "<time>",
           "finishReason": "stop",
           "id": "<id-11>",
@@ -653,12 +655,12 @@
           ]
         },
         {
-          "content": "{\"reports\":[{\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-14>\",\"attemptId\":\"<id-15>\",\"status\":\"completed\",\"answer\":\"child done: second task (earlier user messages: 1)\",\"error\":null}]}",
+          "content": "{\"reports\":[{\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-14>\",\"attemptId\":\"<id-15>\",\"status\":\"completed\",\"answer\":\"child done: second task (earlier user messages: 1)\",\"error\":null,\"memo\":[]}]}",
           "role": "tool",
           "toolCallId": "call-reports@<id-20>"
         },
         {
-          "content": "Background work completed. {\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-14>\",\"attemptId\":\"<id-15>\",\"status\":\"completed\",\"answer\":\"child done: second task (earlier user messages: 1)\",\"error\":null}",
+          "content": "Background work completed. {\"subagentId\":\"<id-3>\",\"agent\":\"helper\",\"taskId\":\"<id-14>\",\"attemptId\":\"<id-15>\",\"status\":\"completed\",\"answer\":\"child done: second task (earlier user messages: 1)\",\"error\":null,\"memo\":[]}",
           "createdAt": "<time>",
           "finishReason": "stop",
           "id": "<id-21>",

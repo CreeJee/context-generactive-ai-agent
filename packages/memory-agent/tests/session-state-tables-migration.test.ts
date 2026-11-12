@@ -125,15 +125,15 @@ it.effect("what tasks and sessions kept in chat_metadata moves to tables of thei
       { session_id: "blocked", position: 0, value: "x" },
       { session_id: "blocked", position: 1, value: "y" },
     ]);
-    expect(
-      db
-        .prepare(
-          "SELECT session_id, position, turn_end, next_turn_node_id FROM turn_summary_blocks ORDER BY session_id, position",
-        )
-        .all(),
-    ).toEqual([
-      { session_id: "running", position: 0, turn_end: 4, next_turn_node_id: "n" },
-      { session_id: "running", position: 1, turn_end: 8, next_turn_node_id: "n" },
+    // A later step joins a session's blocks into one summary that ends where the last one did.
+    expect(db.prepare("SELECT * FROM session_summaries ORDER BY session_id").all()).toEqual([
+      {
+        session_id: "running",
+        text: "summary to 4\n\nsummary to 8",
+        next_turn: 8,
+        next_turn_node_id: "n",
+        next_call_id: null,
+      },
     ]);
     expect(
       db.prepare("SELECT namespace, key FROM chat_metadata ORDER BY namespace, key").all(),

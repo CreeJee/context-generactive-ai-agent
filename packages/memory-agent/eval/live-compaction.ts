@@ -178,17 +178,19 @@ const runArm = Effect.fn("eval.runArm")(function* (variant: "auto" | "auto-plus-
     yield* Effect.when(compactManually, Effect.succeed(variant === "auto-plus-manual")),
   );
   const answers = [...opening, yield* turn(Arr.lastNonEmpty(prompts), true)];
-  const blocks = (yield* compactionStateEffect({
-    metadata: services.metadata,
-    threadId: services.sessionId,
-  })).blocks.length;
+  const summarized = Option.isSome(
+    (yield* compactionStateEffect({
+      metadata: services.metadata,
+      threadId: services.sessionId,
+    })).summary,
+  );
   const final = answers.at(-1) ?? "";
   return {
     variant,
     model,
     effort,
     turns: answers.length,
-    summaryBlocks: blocks,
+    summarized,
     manual,
     usage: yield* services.usage.byRootSession(services.sessionId),
     evidenceCorrect: final.includes(phrase),

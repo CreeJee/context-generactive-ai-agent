@@ -8,7 +8,7 @@ import {
   estimateConversation,
   type Budget,
 } from "../../src/agent/compaction.ts";
-import type { SummaryBlock } from "../../src/chat-store/metadata.ts";
+import { type SessionSummary, SummaryEnd } from "../../src/chat-store/metadata.ts";
 import type { StoredMessage } from "../../src/chat-store/schema.ts";
 import type { JsonValue } from "../../src/json.ts";
 import { RunStore } from "../../src/loop/store.ts";
@@ -347,65 +347,51 @@ testAgent()("compaction over recorded history", (it) => {
     }),
   );
 
-  it.effect(
-    "sends earlier turns as their summaries once clearing is not enough, if they still fit",
-    () =>
-      Effect.gen(function* () {
-        const at = yield* freshSession;
-        const nodes = yield* Nodes;
-        const metadata = yield* metadataStore;
-        const long = "배포 절차를 설명해요. ".repeat(50);
-        const { userNodes, messages } = yield* conversation(nodes, at, [
-          long,
-          long,
-          long,
-          long,
-          long,
-        ]);
-        const summaries = (blocks: readonly { end: number; text: string }[]) =>
-          metadata.replaceSummaries(
-            at.sessionId,
-            0,
-            blocks.map(({ end, text }) => ({ end, nextTurnNodeId: userNodes[end]!.id, text })),
-          );
-        const sent = (budget: Budget, conversation: ReadonlyArray<StoredMessage>) =>
-          nextRequest(conversation, at.sessionId, budget);
-        const overBudget: Budget = { compactAt: 1_000, leaveOutAt: noLimit, inputCeiling: noLimit };
-        yield* summaries([{ end: 2, text: "- 배포 절차를 정했다" }]);
-        const firstBlock = yield* sent(overBudget, messages);
-        expect(firstBlock[0]).toEqual({
-          role: "assistant",
-          content: expect.stringContaining("user turns 1-2"),
-        });
-        expect(firstBlock[0]?.content).toContain("- 배포 절차를 정했다");
-        expect(firstBlock[1]).toEqual({ role: "user", content: "질문 3" });
-        expect(firstBlock.at(-1)).toEqual({ role: "user", content: "질문 6" });
-        yield* summaries([
-          { end: 2, text: "- 배포 절차를 정했다" },
-          { end: 4, text: "- 배포 검증을 마쳤다" },
-        ]);
-        const twoBlocks = yield* sent(overBudget, messages);
-        expect(twoBlocks[0]).toEqual(firstBlock[0]);
-        expect(twoBlocks[1]?.content).toContain("user turns 3-4");
-        expect(twoBlocks[2]).toEqual({ role: "user", content: "질문 5" });
-        // Ready blocks already applied below the former 25% gate; removing that dead gate must not
-        // resummarize or restore raw turns. The live request keeps the latest user message last.
-        const lowUsage = budgetFor(200_000);
-        expect(estimateConversation(messages)).toBeLessThan(200_000 * 0.25);
-        expect(lowUsage.compactAt).toBe(0);
-        expect(yield* sent(lowUsage, messages)).toEqual(twoBlocks);
-        expect(twoBlocks.at(-1)).toEqual({ role: "user", content: "질문 6" });
-        expect(
-          yield* sent({ compactAt: noLimit, leaveOutAt: noLimit, inputCeiling: noLimit }, messages),
-        ).toEqual(twoBlocks);
-        // A conversation whose turn 3 is not the one summarized gets no summary.
-        const other = messages.map((message) =>
-          message.role === "user" && message.content === "질문 3"
-            ? { ...message, content: "다른 질문" }
-            : message,
-        );
-        expect((yield* sent(overBudget, other))[0]).toEqual({ role: "user", content: "질문 1" });
-      }),
+  it.effect("sends the session's summary in place of the turns it covers, whatever the size", () =>
+    Effect.gen(function* () {
+      const at = yield* freshSession;
+      const nodes = yield* Nodes;
+      const metadata = yield* metadataStore;
+      const long = "배포 절차를 설명해요. ".repeat(50);
+      const { userNodes, messages } = yield* conversation(nodes, at, [
+        long,
+        long,
+        long,
+        long,
+        long,
+      ]);
+      const through = (turn: number, text: string): SessionSummary => ({
+        text,
+        end: SummaryEnd.cases.Turn.make({ turn, nodeId: userNodes[turn]!.id }),
+      });
+      const sent = (conversation: ReadonlyArray<StoredMessage>) =>
+        nextRequest(conversation, at.sessionId, budgetFor(200_000));
+      expect(estimateConversation(messages)).toBeLessThan(200_000 * 0.25);
+      const first = through(2, "- 배포 절차를 정했다");
+      expect(yield* metadata.replaceSummary(at.sessionId, Option.none(), first)).toBe(true);
+      const summarized = yield* sent(messages);
+      expect(summarized[0]).toEqual({
+        role: "assistant",
+        content: expect.stringContaining("Summary of the earlier conversation"),
+      });
+      expect(summarized[0]?.content).toContain("- 배포 절차를 정했다");
+      expect(summarized[1]).toEqual({ role: "user", content: "질문 3" });
+      expect(summarized.at(-1)).toEqual({ role: "user", content: "질문 6" });
+      // The summary is rewritten as more is left out; a summary written meanwhile is kept.
+      const second = through(4, "- 배포 절차를 정했다\n- 배포 검증을 마쳤다");
+      expect(yield* metadata.replaceSummary(at.sessionId, Option.some(first), second)).toBe(true);
+      expect(yield* metadata.replaceSummary(at.sessionId, Option.some(first), first)).toBe(false);
+      const rewritten = yield* sent(messages);
+      expect(rewritten[0]?.content).toContain("- 배포 검증을 마쳤다");
+      expect(rewritten[1]).toEqual({ role: "user", content: "질문 5" });
+      // A conversation whose turn 5 is not the one summarized gets no summary.
+      const other = messages.map((message) =>
+        message.role === "user" && message.content === "질문 5"
+          ? { ...message, content: "다른 질문" }
+          : message,
+      );
+      expect((yield* sent(other))[0]).toEqual({ role: "user", content: "질문 1" });
+    }),
   );
 
   it.effect(
@@ -438,36 +424,42 @@ testAgent()("compaction over recorded history", (it) => {
           ]),
           { role: "user", content: asked.text },
         ];
-        const leftOut = Effect.fnUntraced(function* (
-          blocks: ReadonlyArray<SummaryBlock>,
-          leaveOutAt: number,
-        ) {
-          const compacted = yield* compactEffect({
-            messages,
-            state: { manual: { clearedThrough: 0, summarizedTurns: 0 }, blocks },
-            sources: {
-              ...sourcesOf(nodes, at.sessionId),
-              userMessages: nodes.userMessages(at.sessionId),
-            },
-            budget: { compactAt: 0, leaveOutAt, inputCeiling: noLimit },
-          });
-          // Everything before the run in progress is left out.
-          expect(compacted.messages.slice(1)).toEqual([{ role: "user", content: asked.text }]);
-          return compacted.messages[0]?.content;
+        const leftOut = (summary: Option.Option<SessionSummary>, leaveOutAt: number) =>
+          Effect.map(
+            compactEffect({
+              messages,
+              state: { manual: { clearedThrough: 0, summarizedTurns: 0 }, summary },
+              sources: {
+                ...sourcesOf(nodes, at.sessionId),
+                userMessages: nodes.userMessages(at.sessionId),
+              },
+              budget: { compactAt: 0, leaveOutAt, inputCeiling: noLimit },
+            }),
+            (compacted) => compacted.messages,
+          );
+        const correctionSent = { role: "user", content: correction.text };
+        const askedSent = { role: "user", content: asked.text };
+        // Everything before the latest user turns is left out; they are sent as they were said.
+        const alone = yield* leftOut(Option.none(), 8_000);
+        expect(alone.slice(1)).toEqual([correctionSent, askedSent]);
+        // The summary of the first two turns stands in for them, and the rest is left out.
+        const summarized = yield* leftOut(
+          Option.some({
+            text: "요약",
+            end: SummaryEnd.cases.Turn.make({ turn: 2, nodeId: correction.id }),
+          }),
+          3_000,
+        );
+        expect(summarized[0]?.content).toContain("요약");
+        expect(summarized.slice(2)).toEqual([correctionSent, askedSent]);
+        [alone[0]?.content, summarized[1]?.content].forEach((note) => {
+          expect(note).toContain(`(node ${kept.id}) ${kept.text}`);
+          expect(note).not.toContain(changed.text);
+          // The latest user turns are sent as they are, not listed.
+          expect(note).not.toContain(correction.text);
+          expect(note).not.toContain(asked.text);
         });
-        const told = [
-          yield* leftOut([], 8_000),
-          // The first two turns are sent as their summary, and the summary is left out too.
-          yield* leftOut([{ end: 2, nextTurnNodeId: correction.id, text: "요약" }], 3_000),
-        ];
-        told.forEach((marker) => {
-          expect(marker).toContain("left out to save context");
-          expect(marker).toContain(`(node ${kept.id}) ${kept.text}`);
-          expect(marker).toContain(`(node ${correction.id}) ${correction.text}`);
-          expect(marker).not.toContain(changed.text);
-          // The run's own message is sent as it is, not listed.
-          expect(marker).not.toContain(asked.text);
-        });
+        expect(alone[0]?.content).toContain("left out to save context");
       }),
   );
 });

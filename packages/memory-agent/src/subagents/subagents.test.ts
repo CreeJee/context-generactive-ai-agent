@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest";
-import { Effect, HashMap, Iterable } from "effect";
+import { Effect, HashMap, Iterable, Option } from "effect";
 import { expect } from "vite-plus/test";
 import {
   budgetFor,
@@ -13,7 +13,7 @@ import { childFailureOf } from "./subagents.ts";
 
 const noCompaction: CompactionState = {
   manual: { clearedThrough: 0, summarizedTurns: 0 },
-  blocks: [],
+  summary: Option.none(),
 };
 
 /** A step that reads one file, and what it read. */
@@ -63,7 +63,7 @@ const compacted = (
     ({ messages: sent }) => sent,
   );
 
-it.effect("a child's run past the window's budget leaves its oldest results out", () =>
+it.effect("a child's run past the window's budget leaves its oldest steps and results out", () =>
   Effect.gen(function* () {
     // One run: the task, then twelve steps that each read 3,000 characters (750 tokens).
     const steps = Array.from({ length: 12 }, (_, step) => read(`call-${step}`, 3_000));
@@ -72,10 +72,14 @@ it.effect("a child's run past the window's budget leaves its oldest results out"
 
     const sent = yield* compacted(messages, messages, 10_000);
     expect(estimateConversation(sent)).toBeLessThanOrEqual(budgetFor(10_000).leaveOutAt / 2);
-    // The task and every call stay; the oldest results point at their nodes in the child's session.
-    expect(sent).toHaveLength(messages.length);
-    expect(sent[0]).toEqual(messages[0]);
-    expect(sent[2]?.content).toBe("[Tool output cleared. Reread: read_evidence node-call-0]");
+    // The two steps before the latest ten are left out behind a note that points at their outputs'
+    // nodes in the child's session. The task and the latest ten calls stay.
+    expect(sent).toHaveLength(messages.length - 3);
+    expect(sent[0]?.content).toContain("4 earlier messages");
+    expect(sent[0]?.content).toContain("read_file: read_evidence node-call-0");
+    expect(sent[1]).toEqual(messages[0]);
+    // The latest steps' oldest results point at their nodes.
+    expect(sent[3]?.content).toBe("[Tool output cleared. Reread: read_evidence node-call-2]");
     // The latest step's result is what the child asked for to go on: it stays whole.
     expect(sent.at(-1)).toEqual(messages.at(-1));
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Ref } from "effect";
-import type { ChatMetadata } from "../chat-store/metadata.ts";
+import { Effect, Option, Ref } from "effect";
+import { type ChatMetadata, SummaryEnd } from "../chat-store/metadata.ts";
 import type { StoredMessage } from "../chat-store/schema.ts";
 import {
   budgetFor,
@@ -17,14 +17,14 @@ import {
 const noLimit = 1_000_000;
 const unlimited: Budget = { compactAt: noLimit, leaveOutAt: noLimit, inputCeiling: noLimit };
 const noSources = lookupSources({ toolResultId: () => null, nodeText: () => null });
-const fresh = { manual: { clearedThrough: 0, summarizedTurns: 0 }, blocks: [] };
+const fresh = { manual: { clearedThrough: 0, summarizedTurns: 0 }, summary: Option.none() };
 
 /** A session with nothing stored about compacting it. */
 const noMetadata: ChatMetadata = {
   get: () => Effect.undefined,
   set: () => Effect.void,
-  summaries: () => Effect.succeed([]),
-  replaceSummaries: () => Effect.void,
+  summary: () => Effect.succeedNone,
+  replaceSummary: () => Effect.succeed(true),
 };
 
 /** What the model is sent on a request over `messages` of a session with nothing stored. */
@@ -72,15 +72,20 @@ describe("compact", () => {
           content: [{ type: "image", source: { type: "url", value: "/old-image" } }],
         },
         { role: "assistant", content: "previous answer" },
+        { role: "user", content: "next question" },
+        { role: "assistant", content: "next answer" },
         { role: "user", content: "current question" },
       ];
       const result = yield* compactEffect({
         messages,
         state: {
           manual: { clearedThrough: 0, summarizedTurns: 0 },
-          blocks: [{ end: 1, nextTurnNodeId: "next", text: "Earlier image discussed." }],
+          summary: Option.some({
+            text: "Earlier image discussed.",
+            end: SummaryEnd.cases.Turn.make({ turn: 1, nodeId: "next" }),
+          }),
         },
-        sources: lookupSources({ toolResultId: () => null, nodeText: () => "current question" }),
+        sources: lookupSources({ toolResultId: () => null, nodeText: () => "next question" }),
         budget: budgetFor(noLimit),
       });
       expect(result.stage).toBe("summarize");
@@ -333,48 +338,51 @@ describe("request history", () => {
 
   // A 100k-window model lost its instruction and what it had just read inside one run, read them
   // again, and went on for an hour without writing anything.
-  it.effect("never leaves out the run in progress; its oldest outputs give way to pointers", () =>
-    Effect.gen(function* () {
-      const long = "배포 절차를 설명해요. ".repeat(100);
-      const earlier: StoredMessage[] = Array.from({ length: 4 }, (_, index) => [
-        { role: "user" as const, content: `질문 ${index}: ${long}` },
-        { role: "assistant" as const, content: `답 ${index}: ${long}` },
-      ]).flat();
-      const steps: StoredMessage[] = Array.from({ length: 6 }, (_, index) => [
-        {
-          role: "assistant" as const,
-          content: null,
-          toolCalls: [
-            {
-              id: `read-${index}`,
-              type: "function" as const,
-              function: { name: "read_file", arguments: `{"path":"page-${index}.ts"}` },
-            },
-          ],
-        },
-        { role: "tool" as const, toolCallId: `read-${index}`, content: "스키마 줄 ".repeat(400) },
-      ]).flat();
-      const instruction: StoredMessage = { role: "user", content: "S8 작업 이어서 진행해줘" };
-      // Task notifications that joined the run do not start another one.
-      const notice: StoredMessage = {
-        role: "user",
-        content: "<orchestrator>\nNotification n-1; completed\n</orchestrator>",
-        orchestrator: { next: "run", ended: { background: 1, subagent: 0 } },
-      };
-      const sent = yield* firstSent(
-        [...earlier, instruction, ...steps.slice(0, 6), notice, ...steps.slice(6)],
-        lookupSources({ toolResultId: (id) => `node-${id}`, nodeText: () => null }),
-        { compactAt: 0, leaveOutAt: 6_000, inputCeiling: noLimit },
-      );
-      expect(sent[0]?.content).toContain("left out to save context");
-      expect(sent[1]).toEqual(instruction);
-      expect(sent).toContainEqual(notice);
-      // Every call of the run is still sent, so the model knows what it already did.
-      expect(sent.filter((message) => message.role === "assistant")).toHaveLength(6);
-      const results = sent.filter((message) => message.role === "tool");
-      expect(results[0]?.content).toBe(clearedOutput("node-read-0"));
-      expect(results.at(-1)).toEqual(steps.at(-1));
-    }),
+  it.effect(
+    "never leaves out the run's latest steps; their oldest outputs give way to pointers",
+    () =>
+      Effect.gen(function* () {
+        const long = "배포 절차를 설명해요. ".repeat(100);
+        const earlier: StoredMessage[] = Array.from({ length: 4 }, (_, index) => [
+          { role: "user" as const, content: `질문 ${index}: ${long}` },
+          { role: "assistant" as const, content: `답 ${index}: ${long}` },
+        ]).flat();
+        const steps: StoredMessage[] = Array.from({ length: 6 }, (_, index) => [
+          {
+            role: "assistant" as const,
+            content: null,
+            toolCalls: [
+              {
+                id: `read-${index}`,
+                type: "function" as const,
+                function: { name: "read_file", arguments: `{"path":"page-${index}.ts"}` },
+              },
+            ],
+          },
+          { role: "tool" as const, toolCallId: `read-${index}`, content: "스키마 줄 ".repeat(400) },
+        ]).flat();
+        const instruction: StoredMessage = { role: "user", content: "S8 작업 이어서 진행해줘" };
+        // Task notifications that joined the run do not start another one.
+        const notice: StoredMessage = {
+          role: "user",
+          content: "<orchestrator>\nNotification n-1; completed\n</orchestrator>",
+          orchestrator: { next: "run", ended: { background: 1, subagent: 0 } },
+        };
+        const sent = yield* firstSent(
+          [...earlier, instruction, ...steps.slice(0, 6), notice, ...steps.slice(6)],
+          lookupSources({ toolResultId: (id) => `node-${id}`, nodeText: () => null }),
+          { compactAt: 0, leaveOutAt: 6_000, inputCeiling: noLimit },
+        );
+        expect(sent[0]?.content).toContain("left out to save context");
+        // The latest user turns are sent wherever the conversation is cut.
+        expect(sent.slice(1, 3)).toEqual([earlier[6], instruction]);
+        expect(sent).toContainEqual(notice);
+        // Every call of the run is still sent, so the model knows what it already did.
+        expect(sent.filter((message) => message.role === "assistant")).toHaveLength(6);
+        const results = sent.filter((message) => message.role === "tool");
+        expect(results[0]?.content).toBe(clearedOutput("node-read-0"));
+        expect(results.at(-1)).toEqual(steps.at(-1));
+      }),
   );
 
   it.effect("clears outputs before the run before it leaves out older messages", () =>

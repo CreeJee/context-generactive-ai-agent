@@ -11,7 +11,12 @@ import {
   Schema,
 } from "effect";
 import { SqlClient, SqlSchema } from "effect/sql";
-import { type ChatMetadata, ChatMetadataFailed, SummaryBlock } from "../chat-store/metadata.ts";
+import {
+  type ChatMetadata,
+  ChatMetadataFailed,
+  SessionSummary,
+  SummaryEnd,
+} from "../chat-store/metadata.ts";
 import { interruptContinuationLostCode, type RunStatus } from "../agent/run-state.ts";
 import {
   StoredInterruptPayload,
@@ -500,12 +505,38 @@ const make = Effect.gen(function* () {
       Effect.asVoid(sql`DELETE FROM chat_metadata WHERE namespace = ${namespace} AND key = ${key}`),
   };
 
-  const summaryRows = SqlSchema.findAll({
+  /** A `session_summaries` row: it ends at a user turn or at a step, never both. */
+  const SummaryRow = Schema.Union([
+    Schema.Struct({
+      text: Schema.String,
+      nextTurn: Schema.Int,
+      nextTurnNodeId: Schema.String,
+      nextCallId: Schema.Null,
+    }),
+    Schema.Struct({
+      text: Schema.String,
+      nextTurn: Schema.Null,
+      nextTurnNodeId: Schema.Null,
+      nextCallId: Schema.String,
+    }),
+  ]);
+  const summaryRow = SqlSchema.findOneOption({
     Request: Schema.String,
-    Result: SummaryBlock,
-    execute: (sessionId) => sql`SELECT turn_end AS end, next_turn_node_id AS nextTurnNodeId, text
-      FROM turn_summary_blocks WHERE session_id = ${sessionId} ORDER BY position`,
+    Result: SummaryRow,
+    execute: (sessionId) => sql`SELECT text, next_turn AS nextTurn,
+        next_turn_node_id AS nextTurnNodeId, next_call_id AS nextCallId
+      FROM session_summaries WHERE session_id = ${sessionId}`,
   });
+  const summaryOf = (row: typeof SummaryRow.Type): SessionSummary => ({
+    text: row.text,
+    end:
+      row.nextCallId === null
+        ? SummaryEnd.cases.Turn.make({ turn: row.nextTurn, nodeId: row.nextTurnNodeId })
+        : SummaryEnd.cases.Step.make({ callId: row.nextCallId }),
+  });
+  const storedSummary = (sessionId: string) =>
+    Effect.map(summaryRow(sessionId), Option.map(summaryOf));
+  const sameSummary = Option.makeEquivalence(Schema.toEquivalence(SessionSummary));
   const metadataFailed = (cause: unknown) => ChatMetadataFailed.make({ cause });
 
   /** The same rows as compaction, model handoff and context usage use them. */
@@ -516,24 +547,24 @@ const make = Effect.gen(function* () {
         .pipe(Effect.map(Option.getOrUndefined), Effect.mapError(metadataFailed)),
     set: (namespace, key, value) =>
       Effect.mapError(metadata.set(namespace, key, value), metadataFailed),
-    summaries: (sessionId) => Effect.mapError(summaryRows(sessionId), metadataFailed),
-    replaceSummaries: (sessionId, from, blocks) =>
-      sql
-        .withTransaction(
-          Effect.andThen(
-            sql`DELETE FROM turn_summary_blocks
-              WHERE session_id = ${sessionId} AND position >= ${from}`,
-            Effect.forEach(
-              blocks,
-              (block, index) => sql`INSERT INTO turn_summary_blocks
-                  (session_id, position, turn_end, next_turn_node_id, text)
-                VALUES (${sessionId}, ${from + index}, ${block.end}, ${block.nextTurnNodeId},
-                  ${block.text})`,
-              { discard: true },
-            ),
-          ),
-        )
-        .pipe(Effect.mapError(metadataFailed)),
+    summary: (sessionId) => Effect.mapError(storedSummary(sessionId), metadataFailed),
+    replaceSummary: (sessionId, from, next) =>
+      Effect.gen(function* () {
+        const current = yield* storedSummary(sessionId);
+        if (!sameSummary(current, from)) return false;
+        const [turn, callId] = SummaryEnd.match(next.end, {
+          Turn: ({ turn, nodeId }) => [{ turn, nodeId }, null] as const,
+          Step: ({ callId }) => [null, callId] as const,
+        });
+        yield* sql`INSERT INTO session_summaries
+            (session_id, text, next_turn, next_turn_node_id, next_call_id)
+          VALUES (${sessionId}, ${next.text}, ${turn?.turn ?? null}, ${turn?.nodeId ?? null},
+            ${callId})
+          ON CONFLICT(session_id) DO UPDATE SET text = excluded.text,
+            next_turn = excluded.next_turn, next_turn_node_id = excluded.next_turn_node_id,
+            next_call_id = excluded.next_call_id`;
+        return true;
+      }).pipe(sql.withTransaction, Effect.mapError(metadataFailed)),
   };
 
   return {

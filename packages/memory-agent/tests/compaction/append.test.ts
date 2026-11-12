@@ -11,6 +11,7 @@ import {
   type RequestPrefix,
   type SentRequest,
 } from "../../src/agent/compaction.ts";
+import { SummaryEnd } from "../../src/chat-store/metadata.ts";
 import { StoredMessage } from "../../src/chat-store/schema.ts";
 import { RunStore } from "../../src/loop/store.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
@@ -229,15 +230,19 @@ testAgent()("requests append to the one before", (it) => {
       ]);
       const sentBefore = [asked, ...steps.slice(0, 10).flat()];
       const leaveOutAt = 12_000;
+      const metadata = (yield* RunStore).chatMetadata;
+      // The summary takes off four steps: the ten left fit under leaveOutAt, not under half.
+      yield* metadata.replaceSummary(session.id, Option.none(), {
+        text: "read-0부터 read-3까지 읽었다.",
+        end: SummaryEnd.cases.Step.make({ callId: "read-4" }),
+      });
       const next = yield* nextRequestHistory({
-        metadata: (yield* RunStore).chatMetadata,
+        metadata,
         threadId: session.id,
         messages: [asked, ...steps.flat()],
         restored: null,
         sources,
         budget: { compactAt: 0, leaveOutAt, inputCeiling: noLimit },
-        // The summary takes off four steps: the ten left fit under leaveOutAt, not under half.
-        steps: [{ from: "read-0", through: "read-3", text: "read-0부터 read-3까지 읽었다." }],
         previous: Option.some({
           from: sentBefore,
           messages: sentBefore,

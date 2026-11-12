@@ -168,11 +168,17 @@ export const defaultTestResponder = (invocation: ScriptedInvocation): ScriptedTu
     );
     return { text: JSON.stringify({ statements }) };
   }
-  if (instructions.includes("You summarize part of a conversation")) {
-    const users = [...user.matchAll(/^\[user (\S+)\]$/gmu)].map((match) => match[1]);
+  // The session's summary: the summary so far, then a line for the messages it now covers.
+  if (instructions.includes("You keep the running summary")) {
+    const previous = /^Summary so far:\n([\s\S]*?)\n\nMessages:/u.exec(user)?.[1];
+    const users = [...user.matchAll(/^\[user\]$/gmu)].length;
     return user.includes("[broken-summary]")
       ? { text: "  " }
-      : { text: `- 사용자 턴 ${users.length}개 (node ${users[0]})` };
+      : {
+          text: [...(isTruthy(previous) ? [previous] : []), `- 사용자 메시지 ${users}개`].join(
+            "\n",
+          ),
+        };
   }
 
   // A child's completion notification reaches the parent before its next model step, or in an

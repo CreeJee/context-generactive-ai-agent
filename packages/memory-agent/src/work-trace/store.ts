@@ -1453,7 +1453,7 @@ const make = Effect.gen(function* () {
     yield* run(sql`DELETE FROM session_workflows WHERE session_id = ${sessionId}`);
     yield* run(sql`DELETE FROM workflow_blocker_evidence WHERE session_id = ${sessionId}`);
     yield* run(sql`DELETE FROM workflow_executions WHERE session_id = ${sessionId}`);
-    yield* run(sql`DELETE FROM turn_summary_blocks WHERE session_id IN (${tree})`);
+    yield* run(sql`DELETE FROM session_summaries WHERE session_id IN (${tree})`);
     yield* run(sql`DELETE FROM subagents WHERE session_id = ${sessionId}`);
     yield* run(sql`DELETE FROM sessions WHERE parent_session_id = ${sessionId}`);
     yield* run(sql`DELETE FROM sessions WHERE id = ${sessionId}`);

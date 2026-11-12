@@ -220,11 +220,12 @@
     }
   ],
   "subagents": [],
-  "summaries": [
+  "summary": [
     {
+      "next_call_id": null,
+      "next_turn": 2,
       "next_turn_node_id": "<id-16>",
-      "text": "- 사용자 턴 2개 (node <id-17>)",
-      "turn_end": 2
+      "text": "- 사용자 메시지 2개"
     }
   ],
   "tasks": [],
