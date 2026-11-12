@@ -78,6 +78,8 @@ it.live("the note kinds rebuild keeps every node, edge, index, trigger and issue
         VALUES ('n1', 'p', 's', 'note', 'Found: the config is in a.ts', 'new');
       INSERT INTO nodes (id, project_id, session_id, kind, text, created_at)
         VALUES ('n2', 'p', 's', 'note', 'Found: the config moved to b.ts', 'new');
+      INSERT INTO nodes (id, project_id, session_id, kind, text, created_at)
+        VALUES ('v1', 'p', 's', 'plan', 'Plan v1', 'new');
       INSERT INTO edges (from_id, to_id, kind, origin, weight, created_at)
         VALUES ('n1', 'c1', 'cites', 'structure', 0.9, 'new');
       INSERT INTO edges (from_id, to_id, kind, origin, weight, created_at)

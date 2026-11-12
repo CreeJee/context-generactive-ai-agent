@@ -74,6 +74,7 @@ const nodeCharacters = {
   file_observation: 300,
   topic: 0,
   note: 1_000,
+  plan: 1_000,
 } satisfies Record<NodeKind, number>;
 
 /** The services a summary is asked for and recorded with. */

@@ -3,7 +3,7 @@ import { Option, Schema } from "effect";
 
 /**
  * The step that adds the memory note kinds (docs/decisions.md, 2026-11-13 "진행 중인 run도
- * 줄이고, 진행 메모는 근거와 함께 남긴다"): node kind `note`, and edge kinds `cites` (a note to its
+ * 줄이고, 진행 메모는 근거와 함께 남긴다"): node kinds `note` and `plan` (a version of a session's Plan, the source a card session starts from), and edge kinds `cites` (a note to its
  * evidence) and `supersedes` (a later note to the one it replaces). SQLite cannot change a CHECK,
  * so startup runs {@link rebuildMemoryKinds} with this step to rebuild both tables.
  */
@@ -15,7 +15,7 @@ export const memoryNoteKindsMigration = `
 const kindChecks = {
   nodes: {
     from: "CHECK (kind IN ('user', 'assistant', 'tool_call', 'tool_result', 'file_observation', 'topic'))",
-    to: "CHECK (kind IN ('user', 'assistant', 'tool_call', 'tool_result', 'file_observation', 'topic', 'note'))",
+    to: "CHECK (kind IN ('user', 'assistant', 'tool_call', 'tool_result', 'file_observation', 'topic', 'note', 'plan'))",
   },
   edges: {
     from: "CHECK (kind IN ('next', 'reply', 'calls', 'returns', 'touches', 'about', 'corrects', 'retracts', 'related'))",
