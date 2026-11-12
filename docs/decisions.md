@@ -718,6 +718,7 @@
 - `notify_session`은 같은 프로젝트의 다른 채팅 대화에 내용을 전달하는 읽기 성격 도구다. 대상 검증(자기 자신·없는 세션·다른 프로젝트·BTW·report 대화 거절)을 통과하면 `session_dispatches` 표에 한 행을 waiting으로 쓴다. 앱이 대화를 열 때 그 표를 읽어 알림으로 만든다. 메시지는 행에 영속으로 남으므로 쓴 run이 끊겨도 전달 기회가 남는다.
 - 대상은 `sessions` 행 중 프로젝트가 같고 `report_sessions`에 묶이지 않은 대화뿐이다. BTW 스레드와 run의 서브에이전트 thread는 `sessions` 행이 아니므로 같은 검증으로 거절된다. 거절은 타입 있는 오류(`NotifyTargetRejected`, 사유 `self_target`·`unknown_target`·`other_project`·`report_target`)로 돌려주고 아무 행도 쓰지 않는다.
 - 도구는 메인 채팅 run의 공용 도구 목록에만 둔다. 읽기 전용 워크플로 단계와 report 세션의 도구 목록에는 없고, 승인 게이트(`gatedToolNames`) 대상도 아니다. 내용만 전달하는 읽기 성격 호출이며, 쓰는 행은 이 도구의 소유 저장소(`session_dispatches`)로 좁혀져 있다.
+- 프로그램(`run_code`·ts 스킬)에서도 부를 수 있다(`programCallable` = true, "모델이 쓴 TypeScript로 도구를 묶어 부른다"의 표). run을 조종하는 도구가 아니라 내용을 전달하는 호출이고, 파일 도구들과 같은 근거다. 프로그램 호출은 모델이 직접 부를 때와 같은 도구 핸들러를 쓰므로 대상 검증과 거절 기록도 그대로 적용된다.
 - 표는 마이그레이션의 다음 빈 스키마 번호로 additive 추가한다. 열은 id, project_id, from_session_id, from_run_id, to_session_id, body, state(waiting|delivered), delivered_run_id, created_at, delivered_at이다. state는 전달 여부만 나타내고, 전달 기록은 `deliver`가 state와 delivered_run_id·delivered_at을 한 번만 바꾼다.
 
 ## Goal·Workflow·Durable 실행

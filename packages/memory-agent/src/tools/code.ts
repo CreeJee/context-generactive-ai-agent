@@ -80,6 +80,8 @@ const programCallable = {
   edit_kanban_board: false,
   record_card_verdict: false,
   run_code: false,
+  // Leaves a message in the other conversation's `session_dispatches`; it does not steer the run.
+  notify_session: true,
 } as const satisfies Record<keyof typeof builtinToolEffects, boolean>;
 
 const notCallable = HashSet.fromIterable(
