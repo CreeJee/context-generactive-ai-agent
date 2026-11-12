@@ -3054,6 +3054,20 @@ export const migrations: readonly string[] = [
   );
   CREATE INDEX session_dispatches_target ON session_dispatches(to_session_id, state, created_at);
   `,
+  `
+  -- The run that hands a dispatch to its model claims the row first, as parent notifications are
+  -- claimed (decisions.md "대상 세션의 다음 run에 전달한다"). The claim marks the run and keeps any
+  -- run, including its own, from taking the same dispatch twice. A run that does not finish
+  -- releases its claim, and a run that finishes marks the dispatch delivered; startup settles what
+  -- a dead process left claimed. The row's state stays 'waiting' until delivery completes, so only
+  -- delivery writes delivered_at.
+  CREATE TABLE session_dispatch_claims (
+    dispatch_id TEXT PRIMARY KEY REFERENCES session_dispatches(id) ON DELETE CASCADE,
+    run_id TEXT NOT NULL,
+    claimed_at TEXT NOT NULL
+  );
+  CREATE INDEX session_dispatch_claims_run ON session_dispatch_claims(run_id);
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

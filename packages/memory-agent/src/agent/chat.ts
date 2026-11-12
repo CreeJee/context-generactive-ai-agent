@@ -130,6 +130,7 @@ import {
   orchestratorMessage,
 } from "./orchestrator-message.ts";
 import { taskNotifications } from "./task-notifications.ts";
+import { dispatchNotifications } from "./dispatch-notifications.ts";
 import { ApiUsage, apiUsageHook } from "./api-usage.ts";
 import { stepSummarizer } from "./step-summaries.ts";
 import { TurnSummaries } from "./turn-summaries.ts";
@@ -693,6 +694,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const runStore = yield* RunStore;
   const crypto = yield* SecureRandom.SecureRandom;
   const notifications = taskNotifications({ trace: workTrace, background, crypto });
+  const toldDispatches = dispatchNotifications({ dispatches: sessionDispatches, crypto });
   const scope = yield* Effect.scope;
   // One owner-process fence for durable workflow admission: a restarted owner cannot create a
   // second workflow execution for a run.
@@ -2228,6 +2230,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ...gate,
           children.hook,
           notifications.hookFor(sessionId, runId),
+          toldDispatches.hookFor(sessionId, runId),
           yield* recorder.hookFor(answers),
           workflowLifecycle.hook,
           indexInBackground,

@@ -1,8 +1,9 @@
 import { Effect, FileSystem, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { Projects, SessionDispatch, SessionDispatches, Sessions } from "memory-agent";
+import { WorkTraceStore } from "../../src/work-trace/store.ts";
 import { callTool, failureCode } from "../support/run-tools.ts";
-import { sqlGet, sqlRun } from "../support/sql.ts";
+import { sqlAll, sqlGet, sqlRun } from "../support/sql.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 
 const decodeDispatch = Schema.decodeUnknownSync(SessionDispatch);
@@ -225,6 +226,134 @@ testAgent()(function (it) {
           ),
         ),
       ).toBe(0);
+    }),
+  );
+
+  it.effect("consume claims waiting dispatches for the run, once for that run", () =>
+    Effect.gen(function* () {
+      const env = yield* TestEnv;
+      const { project, session } = env;
+      const target = yield* env.use(
+        Effect.flatMap(Sessions, (sessions) => sessions.create(project.id)),
+      );
+      const dispatches = yield* env.use(SessionDispatches);
+      const first = decodeDispatch(
+        yield* env.use(
+          Effect.flatMap(notifyToolFor(project.id, session.id), (tools) =>
+            callTool([tools], "notify_session", { toSession: target.id, body: "one" }),
+          ),
+        ),
+      );
+      yield* env.use(
+        Effect.flatMap(notifyToolFor(project.id, session.id), (tools) =>
+          callTool([tools], "notify_session", { toSession: target.id, body: "two" }),
+        ),
+      );
+      const claims = (runId: string) => dispatches.consume(target.id, runId);
+      // Oldest first, marked with the consuming run.
+      const taken = yield* env.use(claims("run-a"));
+      expect(taken.map((row) => ({ id: row.id, body: row.body }))).toEqual([
+        { id: first.id, body: "one" },
+        { body: "two", id: expect.any(String) },
+      ]);
+      // Both rows carry the run's mark in the claims table.
+      expect(
+        yield* sqlAll(
+          "SELECT d.body AS body, c.run_id AS run_id FROM session_dispatch_claims c" +
+            " JOIN session_dispatches d ON d.id = c.dispatch_id" +
+            " WHERE c.dispatch_id IN (?, ?) ORDER BY d.body",
+          first.id,
+          taken[1]!.id,
+        ),
+      ).toEqual([
+        { body: "one", run_id: "run-a" },
+        { body: "two", run_id: "run-a" },
+      ]);
+      // The same run gets nothing the second time, and other runs get nothing either.
+      expect(yield* env.use(claims("run-a"))).toEqual([]);
+      expect(yield* env.use(claims("run-b"))).toEqual([]);
+      expect(yield* env.use(dispatches.pending(target.id))).toEqual([]);
+    }),
+  );
+
+  it.effect("release gives a claimed dispatch back to wait for another run", () =>
+    Effect.gen(function* () {
+      const env = yield* TestEnv;
+      const { project, session } = env;
+      const target = yield* env.use(
+        Effect.flatMap(Sessions, (sessions) => sessions.create(project.id)),
+      );
+      const dispatches = yield* env.use(SessionDispatches);
+      const stored = decodeDispatch(
+        yield* env.use(
+          Effect.flatMap(notifyToolFor(project.id, session.id), (tools) =>
+            callTool([tools], "notify_session", { toSession: target.id, body: "retry" }),
+          ),
+        ),
+      );
+      expect(yield* env.use(dispatches.consume(target.id, "run-a"))).toHaveLength(1);
+      yield* env.use(dispatches.release(target.id, "run-a"));
+      // The claim is gone and the row is waiting again, with no delivery fields written.
+      expect(
+        yield* sqlGet(
+          "SELECT state, delivered_run_id, delivered_at FROM session_dispatches WHERE id = ?",
+          stored.id,
+        ),
+      ).toEqual({ state: "waiting", delivered_run_id: null, delivered_at: null });
+      expect(
+        yield* sqlGet(
+          "SELECT count(*) AS n FROM session_dispatch_claims WHERE dispatch_id = ?",
+          stored.id,
+        ),
+      ).toEqual({ n: 0 });
+      // Another run consumes it now.
+      expect(
+        (yield* env.use(dispatches.consume(target.id, "run-b"))).map((row) => row.id),
+      ).toEqual([stored.id]);
+    }),
+  );
+
+  it.effect("a session whose notifications are on hold consumes nothing", () =>
+    Effect.gen(function* () {
+      const env = yield* TestEnv;
+      const { project, session } = env;
+      const target = yield* env.use(
+        Effect.flatMap(Sessions, (sessions) => sessions.create(project.id)),
+      );
+      const dispatches = yield* env.use(SessionDispatches);
+      const stored = decodeDispatch(
+        yield* env.use(
+          Effect.flatMap(notifyToolFor(project.id, session.id), (tools) =>
+            callTool([tools], "notify_session", { toSession: target.id, body: "wait out" }),
+          ),
+        ),
+      );
+      yield* env.use(
+        Effect.flatMap(
+          WorkTraceStore,
+          (trace) => trace.holdParentNotifications(target.id),
+        ),
+      );
+      expect(yield* env.use(dispatches.consume(target.id, "run-a"))).toEqual([]);
+      // The row keeps waiting, unclaimed, and the next run after the hold is lifted takes it.
+      expect(
+        yield* sqlGet(
+          "SELECT state, delivered_run_id, delivered_at FROM session_dispatches WHERE id = ?",
+          stored.id,
+        ),
+      ).toEqual({ state: "waiting", delivered_run_id: null, delivered_at: null });
+      expect(
+        yield* sqlGet(
+          "SELECT count(*) AS n FROM session_dispatch_claims WHERE dispatch_id = ?",
+          stored.id,
+        ),
+      ).toEqual({ n: 0 });
+      yield* env.use(
+        Effect.flatMap(WorkTraceStore, (trace) => trace.resumeParentNotifications(target.id)),
+      );
+      expect(
+        (yield* env.use(dispatches.consume(target.id, "run-b"))).map((row) => row.id),
+      ).toEqual([stored.id]);
     }),
   );
 });

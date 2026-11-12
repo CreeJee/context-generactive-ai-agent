@@ -148,8 +148,11 @@ const make = Effect.gen(function* () {
     Request: Schema.String,
     Result: DispatchRow,
     execute: (toSessionId) => sql`
-      SELECT * FROM session_dispatches WHERE to_session_id = ${toSessionId} AND state = 'waiting'
-      ORDER BY created_at, id`,
+      SELECT d.* FROM session_dispatches d
+      WHERE d.to_session_id = ${toSessionId} AND d.state = 'waiting'
+        AND NOT EXISTS (
+          SELECT 1 FROM session_dispatch_claims c WHERE c.dispatch_id = d.id)
+      ORDER BY d.created_at, d.id`,
   });
   const markDeliveredRows = SqlSchema.findAll({
     Request: Schema.Struct({
@@ -166,12 +169,71 @@ const make = Effect.gen(function* () {
         AND id IN ${sql.in(ids)}
       RETURNING id`,
   });
+  /** One run's claim on one dispatch: the mark that says which run is delivering it. */
+  const claimRow = SqlSchema.findAll({
+    Request: Schema.Struct({ id: Schema.String, runId: Schema.String, now: Schema.String }),
+    Result: Schema.Struct({ dispatch_id: Schema.String }),
+    execute: ({ id, runId, now }) => sql`
+      INSERT INTO session_dispatch_claims (dispatch_id, run_id, claimed_at)
+      VALUES (${id}, ${runId}, ${now})
+      ON CONFLICT(dispatch_id) DO NOTHING
+      RETURNING dispatch_id`,
+  });
+  const claimsOf = SqlSchema.findAll({
+    Request: Schema.Struct({ toSessionId: Schema.String, runId: Schema.String }),
+    Result: Schema.Struct({ dispatch_id: Schema.String }),
+    execute: ({ toSessionId, runId }) => sql`
+      SELECT c.dispatch_id FROM session_dispatch_claims c
+      JOIN session_dispatches d ON d.id = c.dispatch_id
+      WHERE d.to_session_id = ${toSessionId} AND c.run_id = ${runId}
+      ORDER BY d.created_at, d.id`,
+  });
+  const dropClaims = SqlSchema.findAll({
+    Request: Schema.Struct({ toSessionId: Schema.String, runId: Schema.String }),
+    Result: Schema.Struct({ dispatch_id: Schema.String }),
+    execute: ({ toSessionId, runId }) => sql`
+      DELETE FROM session_dispatch_claims WHERE run_id = ${runId}
+        AND dispatch_id IN (
+          SELECT id FROM session_dispatches WHERE to_session_id = ${toSessionId})
+      RETURNING dispatch_id`,
+  });
   const isoNow = Effect.map(Clock.currentTimeMillis, (millis) =>
     DateTime.formatIso(DateTime.makeUnsafe(millis)),
   );
+  /** Whether the user stopped the session's notifications (decisions.md "대상 세션의 다음 run에 전달한다"). */
+  const notificationsHeld = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({ held: Schema.Finite }),
+    execute: (sessionId) => sql`
+      SELECT 1 AS held FROM parent_notification_holds WHERE session_id = ${sessionId}`,
+  });
+
+  // A run that claimed dispatches and then died without settling them leaves its claims behind. A
+  // claim of a run that finished delivered what it claimed; every other claim is dropped, so those
+  // rows wait for the next run again. No current-process runs exist while this singleton is
+  // constructed, as the work trace's startup recovery assumes.
+  const settleAbandonedClaims = Effect.gen(function* () {
+    const now = yield* isoNow;
+    yield* Effect.asVoid(sql`
+      UPDATE session_dispatches SET state = 'delivered',
+        delivered_run_id = (SELECT c.run_id FROM session_dispatch_claims c
+          WHERE c.dispatch_id = session_dispatches.id),
+        delivered_at = ${now}
+      WHERE state = 'waiting' AND EXISTS (
+        SELECT 1 FROM session_dispatch_claims c JOIN chat_runs r ON r.run_id = c.run_id
+        WHERE c.dispatch_id = session_dispatches.id
+          AND r.status IN ('completed', 'interrupted'))`);
+    yield* Effect.asVoid(sql`
+      DELETE FROM session_dispatch_claims WHERE dispatch_id IN (
+        SELECT id FROM session_dispatches WHERE state = 'delivered')
+        OR run_id NOT IN (
+          SELECT run_id FROM chat_runs WHERE status IN ('completed', 'interrupted'))`);
+  });
 
   const rejectTarget = (reason: NotifyTargetRejectedReason, toSessionId: string) =>
     Effect.fail(NotifyTargetRejected.make({ reason, toSessionId }));
+
+  yield* settleAbandonedClaims;
 
   /**
    * Stores one dispatch for `toSessionId` after checking it is a chat conversation of the same
@@ -234,6 +296,53 @@ const make = Effect.gen(function* () {
         }).pipe(stored);
         return marked.map((row) => row.id);
       }),
+
+    /**
+     * Takes the conversation's waiting dispatches for the run `runId`, oldest first, each marked
+     * with the run that delivers it. The mark keeps every run, including `runId` again, from
+     * taking the same dispatch twice; a run that does not finish gives its takes back with
+     * `release`, and a run that finishes completes their delivery with `deliverClaimed`. A session
+     * whose user stopped the notifications (parent_notification_holds, decisions.md "대상 세션의
+     * 다음 run에 전달한다") takes nothing: its rows keep waiting for a later run.
+     */
+    consume: (toSessionId: string, runId: string) =>
+      Effect.gen(function* () {
+        const held = yield* stored(notificationsHeld(toSessionId));
+        if (Option.isSome(held)) return [];
+        const rows = yield* stored(waiting(toSessionId));
+        if (rows.length === 0) return [];
+        const now = yield* isoNow;
+        const claimed = yield* Effect.filter(
+          rows,
+          (row) =>
+            Effect.map(stored(claimRow({ id: row.id, runId, now })), (taken) => taken.length === 1),
+        );
+        return claimed.map(toDispatch);
+      }).pipe(sql.withTransaction),
+
+    /** Gives back the dispatches the run `runId` claimed; the rows wait for the next run again. */
+    release: (toSessionId: string, runId: string) =>
+      Effect.asVoid(stored(dropClaims({ toSessionId, runId }))),
+
+    /**
+     * Marks the dispatches the run `runId` claimed of the conversation delivered, as `deliver`
+     * does, and lets go of the claims. A row another call already delivered stays delivered.
+     */
+    deliverClaimed: (toSessionId: string, runId: string) =>
+      Effect.gen(function* () {
+        const ids = (yield* stored(claimsOf({ toSessionId, runId }))).map(
+          (row) => row.dispatch_id,
+        );
+        if (ids.length === 0) return [];
+        const marked = yield* markDeliveredRows({
+          toSessionId,
+          ids,
+          deliveredRunId: runId,
+          deliveredAt: yield* isoNow,
+        }).pipe(stored);
+        yield* stored(dropClaims({ toSessionId, runId }));
+        return marked.map((row) => row.id);
+      }).pipe(sql.withTransaction),
 
     /**
      * The run's `notify_session` tool, bound to the conversation and run whose model calls it.

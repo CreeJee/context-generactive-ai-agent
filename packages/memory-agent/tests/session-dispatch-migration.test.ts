@@ -46,6 +46,26 @@ describe("session dispatches table", () => {
               sqlite.exec(
                 "UPDATE session_dispatches SET state = 'delivered', delivered_run_id = 'run-2', delivered_at = '2026-01-02' WHERE id = 'd1'",
               );
+              // A run that is delivering a row claims it; an unknown dispatch cannot be claimed.
+              sqlite.exec(
+                "INSERT INTO session_dispatch_claims (dispatch_id, run_id, claimed_at) VALUES ('d1', 'run-3', '2026-01-02')",
+              );
+              expect(() =>
+                sqlite.exec(
+                  "INSERT INTO session_dispatch_claims (dispatch_id, run_id, claimed_at) VALUES ('no-such', 'run-3', '2026-01-02')",
+                ),
+              ).toThrow();
+              // One claim per dispatch: another run cannot take the same dispatch too.
+              expect(() =>
+                sqlite.exec(
+                  "INSERT INTO session_dispatch_claims (dispatch_id, run_id, claimed_at) VALUES ('d1', 'run-4', '2026-01-02')",
+                ),
+              ).toThrow();
+              // Deleting the dispatch takes its claim with it.
+              sqlite.exec("DELETE FROM session_dispatches WHERE id = 'd1'");
+              expect(
+                sqlite.prepare("SELECT count(*) AS n FROM session_dispatch_claims").get(),
+              ).toEqual({ n: 0 });
               // Self dispatch is refused by the table, so a rejected call cannot write one.
               expect(() =>
                 sqlite.exec(
@@ -59,7 +79,7 @@ describe("session dispatches table", () => {
     ),
   );
 
-  it.effect("a build that knows one step fewer reads a file without the table", () =>
+  it.effect("a build that knows one step fewer reads a file without the claims table", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const file = yield* tempFile;
@@ -67,14 +87,21 @@ describe("session dispatches table", () => {
           Effect.sync(() => new DatabaseSync(file)),
           (sqlite) =>
             Effect.sync(() => {
-              // An app from before the dispatch table applied every step but the last one.
+              // An app from before the claims table applied every step but the last one.
               migrations.slice(0, -1).forEach((step) => sqlite.exec(step));
               sqlite.exec(`PRAGMA user_version = ${migrations.length - 1}`);
-              // The step before the last one leaves no dispatch table behind.
+              // The dispatch table came one step before; the claims table is what is missing.
               expect(
                 sqlite
                   .prepare(
                     "SELECT count(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'session_dispatches'",
+                  )
+                  .get(),
+              ).toEqual({ n: 1 });
+              expect(
+                sqlite
+                  .prepare(
+                    "SELECT count(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'session_dispatch_claims'",
                   )
                   .get(),
               ).toEqual({ n: 0 });

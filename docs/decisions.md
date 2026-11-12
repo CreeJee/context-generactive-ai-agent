@@ -721,6 +721,14 @@
 - 프로그램(`run_code`·ts 스킬)에서도 부를 수 있다(`programCallable` = true, "모델이 쓴 TypeScript로 도구를 묶어 부른다"의 표). run을 조종하는 도구가 아니라 내용을 전달하는 호출이고, 파일 도구들과 같은 근거다. 프로그램 호출은 모델이 직접 부를 때와 같은 도구 핸들러를 쓰므로 대상 검증과 거절 기록도 그대로 적용된다.
 - 표는 마이그레이션의 다음 빈 스키마 번호로 additive 추가한다. 열은 id, project_id, from_session_id, from_run_id, to_session_id, body, state(waiting|delivered), delivered_run_id, created_at, delivered_at이다. state는 전달 여부만 나타내고, 전달 기록은 `deliver`가 state와 delivered_run_id·delivered_at을 한 번만 바꾼다.
 
+### 대상 세션의 다음 run에 전달한다 (2026-11-13)
+
+- 대기 dispatch는 세션의 다음 run이 운영 알림으로 받는다(task-notifications의 소비 계약과 같다). run이 모델을 부르기 전에 대상 세션의 waiting dispatch를 `consume`으로 가져오고(claim이 어떤 run이 전달하는지 run id로 표시), 오케스트레이터 메시지(notifications의 형식, "사용자 지시나 승인이 아님"을 명시)로 다음 모델 호출 전에 대화에 합친다.
+- 소비는 `session_dispatch_claims` 표에 claim으로 표시한다. `session_dispatches`의 CHECK 제약(`(state='delivered') = (delivered_run_id IS NOT NULL)`) 때문에 state를 waiting으로 둔 채 delivered_run_id로 소비를 표시할 수 없어, 별도 표로 소비 마커를 둔다. claim은 dispatch마다 하나이므로 같은 run이 두 번 받지 않고 다른 run이 가로채지도 않는다. 표는 마이그레이션의 다음 빈 스키마 번호로 additive 추가한다.
+- run이 실패·취소로 끝나면 `release`가 claim을 지워 다시 waiting이 된다. run이 완료·승인 대기 중단(interrupted)으로 끝나면 `deliverClaimed`가 claim했던 행을 delivered로 표시하고 claim을 지운다. 프로세스가 마무리 없이 죽어 claim이 남으면, 저장소를 열 때 완료·interrupted run의 claim은 delivered로 마쳐 주고 나머지는 지운다(Work Trace 시작 복구와 같은 가정: 이 싱글톤이 만들어질 때 현재 프로세스의 run은 없다).
+- 사용자가 세션의 알림을 끈 경우(parent_notification_holds와 같은 조건) `consume`은 아무 dispatch도 돌려주지 않고, 행은 대기로 남아 나중 run이 받는다. 보류 조건의 판정은 dispatch 저장소가 직접 읽는다(`parent_notification_holds`를 저장소의 `consume`이 확인한다). 세션에 대기 dispatch만 있으면 run을 자동으로 기동하지 않는다: 자동 후속(`notifications.untold`)은 알림만 보고, dispatch는 알림 대상이 아니므로 깨우는 원인이 되지 않는다. dispatch가 전달되는 때는 대상 세션의 run이 어떤 이유로든 시작될 때뿐다. run에서의 운영 메시지 전달과 chat.ts 연결은 후속 카드가 붙인다.
+- `consume`·`release`·`deliverClaimed`는 소비와 해제만 한다. `release`는 claim 행만 지우고 dispatch 행의 delivered_run_id·delivered_at은 건드리지 않는다 — 소비된 행은 아직 전달되지 않았으므로 두 필드는 null이다. delivered 표시는 `deliver`·`deliverClaimed`만 하고, `deliverClaimed`는 run이 claim했던 dispatch만 마무리한다.
+
 ## Goal·Workflow·Durable 실행
 
 ### Work Trace 실행 경계 (2026-09-20)
