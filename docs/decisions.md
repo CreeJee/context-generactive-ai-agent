@@ -5066,3 +5066,52 @@
   - `save_code_skill`·`run_skill`의 승인 게이트는 바꾸지 않는다: 카드 에이전트는 지금처럼 저장·실행을 프로젝트 권한 모드로 물어보고, 검증자는 애초에 그 도구가 없다.
 - 버린 안: 카드에 스킬 목록을 다른 방식(예: 커밋된 폴더 전체를 무조건 읽기)으로 넣기. 스킬 목록 규칙이 run마다 한 곳에 있어야 카드와 채팅이 같은 목록을 본다는 판단으로 `toolsFor` 재사용을 택했다.
 - 확인: `packages/memory-agent/tests/kanban-skills.test.ts` — 카드 에이전트는 스킬이 있으면 시스템 프롬프트에 카탈로그와 `read_skill`이 있고, 없으면 둘 다 없다. 검증자는 스킬 유무와 관계없이 쓰기 도구가 없고, 스킬이 있으면 `read_skill`이 있다.
+## 진행 중인 run도 줄이고, 진행 메모는 근거와 함께 남긴다 (2026-11-13)
+
+- 계기: dev 백엔드에서 서브에이전트 run이 메시지 985개, 약 139k 토큰까지 자랐다. step 요약이 120초 제한에 한 번 걸려 그 run에서 멈췄고(a8cdb85b에서 연속 3번으로 고침), 진행 중인 run은 leave-out하지 않으므로(2026-11-04) 호출과 포인터만 쌓였다. 요약이 다 성공해도 step 블록은 20 step마다 하나씩 쌓인다(2026-11-05 "남은 한계"). 진행 중인 run에는 LLM 성공과 상관없는 크기 상한이 없다.
+- 다른 구현 조사(2026-11-12, 소스와 공식 문서):
+  - OpenCode, Codex(turn 중 rollover), OpenHands, Claude Code 서브에이전트는 진행 중인 run도 줄인다. 남기는 것은 첫 작업 지시, 짧은 최근 tail, 요약 하나다.
+  - 요약은 이전 요약을 흡수해 하나로 유지한다(Anthropic compaction, Codex, OpenCode, OpenHands). Factory는 새로 빠지는 구간만 요약해 기존 요약에 합친다. 블록을 쌓는 곳은 찾지 못했다.
+  - 요약이 실패하면 정해진 규칙으로 대체하거나(Cline `basic`, Codex는 가장 오래된 항목을 빼고 재시도, OpenHands는 입력을 줄여 재시도) run을 끝낸다(OpenCode, Codex). 계속 커지게 두는 곳은 Goose와 Claude Code다.
+  - compaction 뒤에도 남는 것은 에이전트가 쓴 파일과 메모다(Anthropic memory tool, Claude Code의 plan·memory 다시 읽기, Manus `todo.md`, Codex `history-notes`). Cognition은 모델 메모만으로는 compaction을 대신하지 못했다고 적었다.
+  - t3code는 compaction을 provider CLI에 맡기고 유휴 시 `/compact`만 보낸다.
+- 2026-11-04가 run을 보호한 이유는 그대로 지킨다: leave-out 경계가 run 안으로 들어오자 모델이 run 지시와 방금 읽은 결과를 잃고 다시 읽었고, 다시 읽은 것이 또 밀려났다(도구 1,223번, 없는 id로 `read_tool_result` 294번). 그래서 run을 줄일 때도 run 지시, 최근 step, 진행 메모는 빼지 않는다.
+- 결정(사용자):
+  - 규칙 하나: 최근 tail보다 오래된 것은 run 경계와 상관없이 줄인다. 항상 남기는 것은 system prompt, 진행 중인 run을 시작한 메시지, 최근 사용자 턴 2개(`recentRawUserTurns`), 최근 step(`recentRawSteps`), run의 진행 메모다. 메인 채팅의 긴 run에도 같이 적용한다.
+  - 순서: 빠질 구간을 근거(`(reread: …)`)를 남기며 요약한다. 요약이 실패하면 그 구간의 호출과 결과를 쌍으로(`paired`) 빼고, 빠졌다는 표지와 다시 읽을 id를 남긴다. LLM이 실패해도 크기 상한이 보장된다.
+  - 요약은 하나로 합친다(사용자, rolling). 블록을 쌓지 않고, 새로 빠지는 구간만 요약해 기존 요약에 합친다. 줄일 때마다 앞부분 캐시를 한 번 깨지만, 줄이기는 `leaveOutAt`을 넘을 때만 일어나 드물다.
+  - 강도: `leaveOutAt`을 넘으면 절반까지 내린다(지금 규칙). 저장된 대화는 바꾸지 않고 출력은 `read_tool_result`로 다시 읽을 수 있으므로 되돌릴 수 있는 압축이다. 다시 읽을 곳이 기록되지 않은 출력은 기록될 때까지 빼지 않는다.
+  - 진행 메모: 대화(session)에 남긴다. run이 끝나도 버리지 않고 같은 대화의 다음 run이 이어 쓴다. 대화를 지우면 같이 지운다.
+    - 메모는 스레드마다 하나다(대화의 메인 스레드, 각 서브에이전트 스레드). Goal 대화에서 카드들이 동시에 돌아도 서로의 메모를 덮지 않는다.
+    - 서브에이전트는 끝날 때 마지막 텍스트와 함께 자기 메모를 부모에게 돌려준다.
+    - 항목마다 쓴 run과 시각을 남긴다. 근거가 불변 기록이므로 "그때 그랬다"는 사실은 계속 참이다. 지금도 참인지는 모델이 다시 확인한다.
+    - 항목은 `Found`(알아낸 것), `Done`(바꾼 것·실행한 것), `Tried`(시도와 결과), `Open`(열린 질문)이다. `Open` 말고는 근거가 하나 이상 있어야 한다.
+    - compaction에서 빼지 않고 요청 끝에 다시 보여 준다. 크기 상한을 넘으면 에이전트가 정리한다.
+    - (사용자) 메모 항목은 기억 그래프의 node로 올리고, 근거에 provenance edge를 잇는다.
+    - 메모와 정정·철회(사용자): 지금 규칙은 같은 프로젝트의 더 나중 사용자 node만 정정·철회할 수 있다(`isChangeAuthority`). 메모는 사용자 말도, 에이전트의 해석(`Interpretations`)도 아니므로 이렇게 둔다.
+      - 같은 스레드의 나중 메모 항목만 그 스레드의 이전 메모 항목을 대체한다. 에이전트가 항목을 고치거나 지우면 이 대체로 남기고, 이전 항목은 지우지 않는다. 정정 권한을 메모끼리, 같은 스레드 안으로만 넓힌 것이다.
+      - 메모보다 나중의 같은 프로젝트 사용자 말은 지금 규칙대로 메모를 정정·철회한다.
+      - 메모는 사용자 말이나 도구 출력을 정정·철회하지 못한다.
+    - 검색(사용자): 다른 대화의 `find_memory` 결과에도 메모 항목이 나온다. 해석처럼 "에이전트 메모, 사용자 확인 아님"을 표시하고 근거 node를 같이 보인다.
+  - 근거(사용자):
+    - 모델에게 보이는 근거는 `Node(id)` 하나다. 다른 run의 기록은 모두 node로 읽는다.
+    - 누가 어떤 id를 아는가(2026-11-12 코드 기준): 모델은 자기 기록의 call id만 안다. provider가 바뀌면 replay할 때 id가 다시 붙을 수 있어(`model/history.ts`의 `renamed`) 모델이 본 id와 저장된 id가 다를 수 있다. thread id는 어느 모델도 모른다(프롬프트에 없다). 부모는 서브에이전트의 `taskId`와 `attemptId`만 알고 그 안의 call id는 모른다. 계획자와 검증자는 카드의 call id를 모른다. node id는 pointer(`read_evidence <node id>`)와 `find_memory` 결과로만 본다.
+    - 그래서 쓸 때 모델은 자기 기록에서 본 call id나 이미 아는 node id만 적는다. thread와 저장된 원래 id는 서버가 채운다. 기록에 없는 id는 그 항목을 거절한다. file:line은 run 안에서 바뀌므로 받지 않고, 그 파일을 읽은 call id를 근거로 쓴다.
+    - 메인 스레드의 call id는 그 결과의 node로 바로 바꾼다(`Nodes.toolResultIds`).
+    - 서브에이전트(카드 포함)의 call id는 run 안에서만 서버 내부에 call 근거로 둔다. 자기 run 안에서는 `read_subagent_tool_result`로 연다. 서브에이전트 기록 전체는 기억에 넣지 않는다(RunStore 스레드에 그대로 둔다).
+    - run이 끝나면 메모가 인용한 서브에이전트 출력을 원문 그대로 기억 node로 옮긴다. LLM을 쓰지 않는다. 원문과 hash가 같은지 확인하고, 시크릿 가리기는 다른 node와 같이 거친다. 옮긴 node의 출처 edge는 그 일을 시작한 node 아래에 둔다. 채팅 서브에이전트는 부모의 `delegate_to_agent` 호출 node 아래(메모 → 위임 node → attempt → call)다. 카드 출력은 어느 카드, generation, 브랜치에서 나왔는지도 남긴다(worktree 기준이라 메인 checkout과 다를 수 있다).
+    - 인용되지 않은 출력 중 남길 것은 리뷰어, 계획자, 오케스트레이터가 판단해 같은 방식으로 옮긴다.
+    - 카드 출력의 기준점(사용자): Plan 버전마다 node를 하나 만든다. 카드는 메인 스레드에 위임 node가 없고, Plan 버전(`workflow_state_revisions`의 불변 행)은 기억 node가 아니다. 작성자(`author_json`)는 `User`(화면에서 고침)이거나 `Orchestrator { runId }`(call id는 남지 않음)다.
+      - 계획자가 만든 버전이면 그 `update_plan`/`edit_plan` 호출 node에 edge를 잇는다. 사용자가 고친 버전에도 기준점이 생긴다.
+      - 카드 출력은 attempt를 시작할 때의 Plan 버전 node 아래에 둔다. 실행 중인 카드는 고칠 수 없으므로(`card_running`) 그 버전이 카드가 따른 버전이다.
+      - 버린 안: 그 버전을 저장한 호출 node만 기준으로 쓰기. 사용자가 고친 버전에는 node가 없고, call id가 남지 않아 runId와 도구 이름으로 찾아야 한다.
+  - 근거를 여는 도구(사용자): 카드와 검증자에게 `read_evidence`를 준다. 읽기 전용이므로 2026-11-11의 카드 능력 목록(`card-capabilities.ts`)과 계획자 글에 같이 적는다. 이제 모든 run(메인 채팅, 서브에이전트, 카드, 검증자, BTW)이 같은 프로젝트의 node를 연다.
+    - 2026-11-12까지 카드는 파일, 밖 파일, `save_code_skill`, `run_skill`, 읽기 전용 MCP, `read_subagent_tool_result`만 받았고, 검증자는 파일 읽기, `run_skill`, 읽기 전용 MCP, `record_card_verdict`만 받았다. 기억 도구는 일부러 뺀 것이 아니라 처음부터 주지 않았다.
+  - 열 수 없는 근거: node로 옮기기가 저장 오류로 실패했거나, 근거 node가 읽는 run의 기억 범위(`memoryScope`) 밖이면 그 항목을 "근거 확인 불가"로 표시한다. 그 밖에는 표시하지 않는다.
+- 열린 것:
+- 기본값(구현하며 조정, 사용자가 맡김):
+  - 메모 크기 상한은 턴 요약 하나와 같은 `summaryCharacters`(6,000자)다. 넘으면 에이전트가 정리할 때까지 새 항목을 거절한다.
+  - 원문으로 남기는 최근 step은 지금 `recentRawSteps`(10)이다. 그래도 넘치면 2026-11-04의 3단계대로 run 안 출력을 pointer로 바꾸고 마지막 step의 결과는 그대로 둔다.
+  - 요약은 스레드마다 하나다. 지난 턴과 진행 중인 run의 step을 같은 요약에 합치고, 지금 턴 요약처럼 저장해 재시작 뒤에도 쓴다. 사용자 말은 지금처럼 leave-out 표지가 원문으로 남기고, 에이전트의 진행 상태는 메모가 남긴다. 턴 블록(`summaryBlockTurns`)과 step 블록(`stepBlockSteps`)은 없앤다.
+  - 서브에이전트 step 상한(OpenHands 500, Goose 1000)은 이번 범위에 넣지 않는다.
+- 대체할 결정: 2026-11-04 "진행 중인 run(마지막 user 메시지부터)은 빼지 않는다", 2026-11-05 "블록은 메모리에만 두고 run이 끝나면 버린다"의 블록 누적 부분.
