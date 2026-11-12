@@ -370,7 +370,7 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "installs a new card worktree's dependencies offline from its lockfile, and leases it even when that fails",
+    "installs a new card worktree's dependencies from its lockfile, preferring the local cache, and leases it even when that fails",
     () =>
       Effect.gen(function* () {
         const setup = yield* fixture;
@@ -403,7 +403,9 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
                   fs.readFileString(path.join(worktree.toolRoot, "node_modules", ".installed")),
               ),
             );
-            expect(installed.trim()).toBe("install --offline --frozen-lockfile --ignore-scripts");
+            expect(installed.trim()).toBe(
+              "install --prefer-offline --frozen-lockfile --ignore-scripts",
+            );
             const failed = yield* Effect.scoped(
               worktrees.lease({ projectRoot: project, goalInstanceId: "g1", cardId: "c2" }),
             );

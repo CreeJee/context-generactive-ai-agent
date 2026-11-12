@@ -4761,6 +4761,9 @@
   - 실패(도구 없음, 오류 종료, 5분 초과)는 로그만 남기고 카드는 그대로 시작한다. 카드가 무엇을 돌리지 못했는지 보고한다.
   - 실패 로그에는 설치 출력의 끝부분(stdout·stderr 각각 2,000자)을 남긴다. 처음 넣었을 때는 종료 코드만 남아, 실제 카드 4개에서 exit 1이 난 이유를 로그로 알 수 없었다.
 - 개발 환경 보정(2026-11-11): `vp run agent#dev`로 띄운 백엔드는 `vp run`이 넣은 환경을 그대로 물려받았다. PATH 앞에 이 저장소의 `node_modules/.bin`과 이 저장소가 고정한 node·pnpm(12.13.0)이 있었고, 파일 접근 추적 라이브러리(`DYLD_INSERT_LIBRARIES`의 fspy)도 실렸다. 그래서 web 저장소처럼 다른 pnpm(12.3.4)을 고정한 프로젝트에서는 pnpm이 고정 버전을 받으려다 오프라인이라 실패했다. 사용자의 셸에서는 같은 명령이 7.1초에 성공했다. dev 런처(`scripts/dev-environment.ts`)는 백엔드를 띄울 때 `vp run`이 PATH 앞에 붙인 폴더와 추적 변수를 뺀다. 사용자가 PATH에 둔 폴더는 건드리지 않고, `vp run` 밖에서 띄우면 아무것도 바꾸지 않는다. 같은 이유로 스킬과 git 같은 다른 프로젝트 명령도 이제 사용자의 도구를 찾는다.
+- pnpm 보정(2026-11-12, 사용자 결정): pnpm은 `pnpm install --prefer-offline --frozen-lockfile --ignore-scripts`로 설치한다. 위 "네트워크를 쓰지 않는다"를 pnpm에 한해 대체한다. npm은 그대로 `--offline`이다.
+  - 계기: web 저장소의 카드 S17에서 설치가 `ERR_PNPM_NO_OFFLINE_META`로 실패했다. pnpm 12는 `--frozen-lockfile`이어도 lockfile의 모든 항목(1939개)을 공급망 정책으로 검사한다. 검사에는 패키지 메타데이터가 필요한데, 오프라인에서는 메타데이터 캐시에서만 읽는다. 캐시에는 22개만 있었다. store에 패키지가 모두 있어도 실패한다. 11-11에 성공한 것은 그때 캐시가 차 있었기 때문으로 본다.
+  - 같은 lockfile 사본에서 `--config.minimum-release-age=0`을 더해도 GitHub registry 패키지의 메타데이터가 없어 실패했다. `--prefer-offline`은 5.6초에 성공했다. 패키지는 store에서 가져오고, 캐시에 없는 메타데이터만 받는다. 버전은 여전히 lockfile이 고정한다.
 
 ## 실시간 변경 연결이 끊기면 화면 위에 다시 연결하는 중이라고 알린다 (2026-11-11)
 

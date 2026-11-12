@@ -104,14 +104,16 @@ const cardTrailer = (goal: string, card: string) => `Ctx-Card: ${goal}/${card}`;
 
 /**
  * How a new worktree gets its JavaScript dependencies, by the lockfile at its root: from the local
- * package store only, as the lockfile pins them, and without lifecycle scripts. The owner runs them
+ * package store, as the lockfile pins them, and without lifecycle scripts. The owner runs them
  * outside the sandbox, where a script such as husky's `prepare` would write the shared git config.
+ * pnpm checks every lockfile entry against its supply-chain policies, which needs package metadata
+ * its cache may lack even when the store has every package, so pnpm may fetch that metadata.
  */
-const offlineInstalls = [
+const dependencyInstalls = [
   {
     lockfile: "pnpm-lock.yaml",
     executable: "pnpm",
-    args: ["install", "--offline", "--frozen-lockfile", "--ignore-scripts"],
+    args: ["install", "--prefer-offline", "--frozen-lockfile", "--ignore-scripts"],
   },
   {
     lockfile: "package-lock.json",
@@ -132,7 +134,7 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const storage = yield* StorageRoot;
   const git = yield* findExecutable("git");
-  const installers = yield* Effect.forEach(offlineInstalls, (install) =>
+  const installers = yield* Effect.forEach(dependencyInstalls, (install) =>
     Effect.map(findExecutable(install.executable), (executable) => ({ ...install, executable })),
   );
   const serially = yield* keyedSerialLimit();
@@ -187,7 +189,7 @@ const make = Effect.fnUntraced(function* (worktreesBase: string) {
           ),
         );
   /**
-   * Installs a new worktree's dependencies (`offlineInstalls`). Ignored folders such as
+   * Installs a new worktree's dependencies (`dependencyInstalls`). Ignored folders such as
    * `node_modules` are not in a worktree, so without them a card cannot run the project's tests or
    * builds. A missing tool, a failed install or one past `installTimeout` is logged, and the card
    * starts without them and reports what it could not run.
