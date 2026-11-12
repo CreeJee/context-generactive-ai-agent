@@ -50,7 +50,10 @@ export type Edge = typeof Edge.Type;
 
 /** Structural links a writer can declare for a new node; `next` and `touches` are derived. */
 export interface NodeLink {
-  readonly kind: "calls" | "returns" | "reply";
-  /** The existing node on the other end. The new node is `to` for calls/returns, `from` for reply. */
+  readonly kind: "calls" | "returns" | "reply" | "cites" | "supersedes";
+  /**
+   * The existing node on the other end. The new node is `to` for calls/returns, and `from` for
+   * reply, cites and supersedes.
+   */
   readonly nodeId: string;
 }

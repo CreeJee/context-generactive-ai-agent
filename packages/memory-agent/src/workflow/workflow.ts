@@ -1322,10 +1322,9 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
        * Applies a run's step edits in order to the Plan version it read and saves the result as
        * one next version. A refused edit saves none of them.
        */
-      editPlan: (sessionId: string, input: EditPlan, runId: string) =>
+      editPlan: (sessionId: string, input: EditPlan, author: BoardAuthor) =>
         transacted(
           Effect.gen(function* () {
-            const author = BoardAuthor.cases.Orchestrator.make({ runId });
             const current = yield* get(sessionId);
             const approval = yield* approvalFor(sessionId, current, author, yield* nowIso);
             const edited = yield* Effect.reduce(

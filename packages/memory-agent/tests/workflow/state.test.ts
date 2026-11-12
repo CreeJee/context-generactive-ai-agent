@@ -20,6 +20,7 @@ import type { JsonValue } from "../../src/json.ts";
 import { TestEnv, freshSession, testAgent } from "../support/test-env.ts";
 import { callTool } from "../support/run-tools.ts";
 import { sqlAll, sqlRun, sqlExec } from "../support/sql.ts";
+
 import { storeWorkflowState } from "../support/workflow-state.ts";
 import { revisionStateSql } from "../../src/workflow/state-rows.ts";
 
@@ -208,7 +209,11 @@ testAgent()("Workflows", (it) => {
       const runId = yield* startRun(id);
       const added = { ...store!, id: "expose", outcomes: ["O2"] };
       const refused = yield* Effect.flip(
-        workflows.editPlan(id, { planVersion: 1, edits: [{ action: "add", step: added }] }, runId),
+        workflows.editPlan(
+          id,
+          { planVersion: 1, edits: [{ action: "add", step: added }] },
+          BoardAuthor.cases.Orchestrator.make({ runId }),
+        ),
       );
       expect(refused).toMatchObject({
         _tag: "PlanOutcomesRejected",
@@ -217,7 +222,7 @@ testAgent()("Workflows", (it) => {
       yield* workflows.editPlan(
         id,
         { planVersion: 1, edits: [{ action: "add", step: { ...added, outcomes: ["O1"] } }] },
-        runId,
+        BoardAuthor.cases.Orchestrator.make({ runId }),
       );
 
       // Once the Goal drops O1, its cards still take edits that do not name outcomes.
@@ -225,7 +230,7 @@ testAgent()("Workflows", (it) => {
       const edited = yield* workflows.editPlan(
         id,
         { planVersion: 2, edits: [{ action: "edit", stepId: "expose", patch: { title: "Show" } }] },
-        runId,
+        BoardAuthor.cases.Orchestrator.make({ runId }),
       );
       expect(edited.plan?.steps[1]).toMatchObject({
         id: "expose",

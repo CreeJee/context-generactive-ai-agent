@@ -110,7 +110,7 @@ const plannerAdds = Effect.fnUntraced(function* (sessionId: string, id: string) 
   yield* workflows.editPlan(
     sessionId,
     { planVersion, edits: [{ action: "add", step: card(id) }] },
-    "planner-run",
+    BoardAuthor.cases.Orchestrator.make({ runId: "planner-run" }),
   );
   // The planner's workflow tools tell the board its Plan changed.
   yield* (yield* AppEvents).publishSession(sessionId, "run-state");

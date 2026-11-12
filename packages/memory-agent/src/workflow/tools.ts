@@ -10,7 +10,7 @@ import {
   type WorkflowPhase,
   WorkflowState,
 } from "./workflow.ts";
-import { runTool, type RunTool } from "../tools/run-tool.ts";
+import { runTool, type RunTool, type ToolCall } from "../tools/run-tool.ts";
 import { RuleSource, type ResolvedRules } from "./rules.ts";
 import { unknownStepOutcomeText } from "./step-outcomes.ts";
 import { OutcomeStatus, outcomeStatusWord, type OutcomeStanding } from "./outcome-ledger.ts";
@@ -88,8 +88,9 @@ const make = Effect.gen(function* () {
 
   /** The tools' calls in `sessionId` from the run `runId`. */
   const callsFor = (sessionId: string, runId: string) => {
-    // A run's own Plan and progress saves are board changes made by that run.
-    const author = BoardAuthor.cases.Orchestrator.make({ runId });
+    // A run's own Plan and progress saves are board changes made by that run, through this call.
+    const author = (call: ToolCall) =>
+      BoardAuthor.cases.Orchestrator.make({ runId, toolCallId: call.toolCallId });
     const published = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       Effect.tap(effect, () => events.publishSession(sessionId, "run-state"));
     return {
@@ -129,9 +130,9 @@ const make = Effect.gen(function* () {
           Effect.provideContext(runtime),
         ),
 
-      updatePlan: (input: UpdatePlan) =>
+      updatePlan: (input: UpdatePlan, call: ToolCall) =>
         Effect.flatMap(Workflows, (workflows) =>
-          workflows.updatePlan(sessionId, input, author),
+          workflows.updatePlan(sessionId, input, author(call)),
         ).pipe(
           published,
           Effect.map((state) => ({ phase: state.phase, plan: state.plan })),
@@ -150,8 +151,10 @@ const make = Effect.gen(function* () {
           Effect.provideContext(runtime),
         ),
 
-      editPlan: (input: EditPlan) =>
-        Effect.flatMap(Workflows, (workflows) => workflows.editPlan(sessionId, input, runId)).pipe(
+      editPlan: (input: EditPlan, call: ToolCall) =>
+        Effect.flatMap(Workflows, (workflows) =>
+          workflows.editPlan(sessionId, input, author(call)),
+        ).pipe(
           published,
           Effect.map((state) => ({ phase: state.phase, plan: state.plan })),
           Effect.catchTags({
@@ -171,9 +174,9 @@ const make = Effect.gen(function* () {
           Effect.provideContext(runtime),
         ),
 
-      closePlan: (input: typeof ClosePlanInput.Type) =>
+      closePlan: (input: typeof ClosePlanInput.Type, call: ToolCall) =>
         Effect.flatMap(Workflows, (workflows) =>
-          workflows.closePlan(sessionId, input.reason, author),
+          workflows.closePlan(sessionId, input.reason, author(call)),
         ).pipe(
           published,
           Effect.map((state) => ({ phase: state.phase, plan: state.plan })),

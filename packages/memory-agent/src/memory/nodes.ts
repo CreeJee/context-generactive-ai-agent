@@ -60,6 +60,13 @@ export const NodeDetail = Schema.Struct({
   memoryCandidateId: Schema.optional(Schema.String),
   /** User message whose turn authorized the promotion disposition. */
   authorizedByUserNodeId: Schema.optional(Schema.String),
+  /** plan: the Plan version this node holds. */
+  planVersion: Schema.optional(Schema.Int),
+  /**
+   * plan: the board revision that first saved this version. A new Goal numbers its Plan from 1
+   * again, so the version alone does not name one Plan.
+   */
+  planRevisionId: Schema.optional(Schema.Int),
 });
 export type NodeDetail = typeof NodeDetail.Type;
 
@@ -88,6 +95,11 @@ export interface NewNode {
   readonly links?: readonly NodeLink[];
   /** Files or URLs this node refers to. */
   readonly refs?: readonly string[];
+  /**
+   * False for a node written apart from the conversation's flow, like a Plan version recorded when
+   * a card first needs it: it gets no `next` edge from the session's latest node.
+   */
+  readonly inFlow?: boolean;
 }
 
 /** A window of a node's original text. Offsets are UTF-16 code units, like JavaScript strings. */
@@ -304,9 +316,10 @@ const make = Effect.gen(function* () {
     stored(
       Effect.gen(function* () {
         const createdAt = DateTime.formatIso(yield* DateTime.now);
-        const previous = isTruthy(input.sessionId)
-          ? idOf(yield* lastInSession(input.sessionId))
-          : Option.none();
+        const previous =
+          isTruthy(input.sessionId) && input.inFlow !== false
+            ? idOf(yield* lastInSession(input.sessionId))
+            : Option.none();
         const row = {
           id: yield* crypto.uuidV4(),
           project_id: input.projectId,
@@ -344,9 +357,9 @@ const make = Effect.gen(function* () {
         yield* Effect.forEach(
           input.links ?? [],
           (declared) =>
-            declared.kind === "reply"
-              ? link(node.id, declared.nodeId, "reply", createdAt)
-              : link(declared.nodeId, node.id, declared.kind, createdAt),
+            declared.kind === "calls" || declared.kind === "returns"
+              ? link(declared.nodeId, node.id, declared.kind, createdAt)
+              : link(node.id, declared.nodeId, declared.kind, createdAt),
           { discard: true },
         );
         yield* Effect.forEach(

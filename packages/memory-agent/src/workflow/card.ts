@@ -64,7 +64,11 @@ export const cardContract = <S extends Schema.Struct.Type<typeof cardContractFie
 /** Who changed the board; recorded with every board revision. */
 export const BoardAuthor = Schema.TaggedUnion({
   User: {},
-  Orchestrator: { runId: Schema.String },
+  /**
+   * A run changed it. `toolCallId` is the call that saved the change when a workflow tool did, so
+   * the Plan version's memory node can cite that call's node.
+   */
+  Orchestrator: { runId: Schema.String, toolCallId: Schema.optional(Schema.String) },
 });
 export type BoardAuthor = typeof BoardAuthor.Type;
 
