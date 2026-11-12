@@ -593,6 +593,8 @@ export {
   type SkillProblem,
 } from "./skills/skills.ts";
 export { SkillTools, skillsInstructions } from "./tools/skills.ts";
+export { AgentSkills } from "./skills/agent-skills.ts";
+export { ProjectSkills } from "./skills/project-skills.ts";
 export {
   DelegateTools,
   delegateInstructions,

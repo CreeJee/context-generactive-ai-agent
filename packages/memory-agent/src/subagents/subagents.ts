@@ -788,7 +788,9 @@ const make = Effect.gen(function* () {
           source: model.source,
           system: [...binding.systemPrompts, childInstructions(row.name, row.instructions)],
           tools: [
-            ...ownTools.map((tool) => programs.codeSkills(binding.project, tool)),
+            ...ownTools.map((tool) =>
+              programs.codeSkills(binding.project, binding.sessionId, tool),
+            ),
             programs.runCode,
           ],
           hooks,

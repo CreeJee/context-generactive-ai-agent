@@ -251,10 +251,23 @@ export const scopeLabels = {
   }),
   project: msg({ message: "프로젝트", comment: "Scope badge: set in this project's config" }),
 } as const;
-/** Skills also come built into the app, which MCP servers and agents do not. */
+/**
+ * Skills also come built into the app, which MCP servers and agents do not, and the app keeps the
+ * skills its conversations saved: promoted ones every conversation has, and a conversation's own.
+ */
 export const skillScopeLabels = {
   builtin: msg({ message: "기본", comment: "Scope badge: a skill built into the app" }),
   ...scopeLabels,
+  promoted: msg({
+    message: "정식",
+    comment:
+      "Scope badge: a skill a conversation saved that passed a review, so every conversation of the project can use it",
+  }),
+  candidate: msg({
+    message: "후보",
+    comment:
+      "Scope badge: a skill one conversation saved; only that conversation can use it until a review passes it",
+  }),
 } as const;
 
 /** One configured MCP server or agent: name, where it is set, how it runs, and what to do. */

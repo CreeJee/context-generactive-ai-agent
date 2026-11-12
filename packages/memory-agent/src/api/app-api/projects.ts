@@ -186,8 +186,9 @@ export class ProjectsGroup extends HttpApiGroup.make("projects")
       error: UnknownProject,
     }),
     /**
-     * Skills from `~/.agents/skills` and `<project>/.agents/skills` that conversations in this
-     * project can use, and folders that could not be read as skills.
+     * Skills that conversations in this project can use: from `~/.agents/skills`, the committed
+     * `<project>/.agents/skills`, and the promoted skills the app keeps; and folders that could not
+     * be read as skills.
      */
     HttpApiEndpoint.get("skills", "/api/projects/:project/skills", {
       params: project,

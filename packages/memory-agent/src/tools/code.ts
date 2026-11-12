@@ -7,6 +7,7 @@ import {
   type ProgramFunction,
 } from "../code/sandbox.ts";
 import { JsonValue } from "../json.ts";
+import type { Fenced } from "../files/paths.ts";
 import type { Project } from "../projects/projects.ts";
 import { defaultTimeoutSeconds, maxTimeoutSeconds } from "../shell/run.ts";
 import { CodeSkills, SavedProgram, type InputSchema } from "../skills/code-skills.ts";
@@ -250,7 +251,7 @@ const make = Effect.gen(function* () {
         }),
 
         /** `runSkill` that also runs `project`'s ts skills; any other tool comes back as it is. */
-        codeSkills: (project: Project, runSkill: RunTool): RunTool =>
+        codeSkills: (project: Fenced<Project>, sessionId: string, runSkill: RunTool): RunTool =>
           runSkill.tool.name === "run_skill"
             ? {
                 ...runSkill,
@@ -261,7 +262,7 @@ const make = Effect.gen(function* () {
                       preparedCall((call) =>
                         guardedEffect(
                           name,
-                          Effect.flatMap(codeSkills.runnable(project, name), (saved) =>
+                          Effect.flatMap(codeSkills.runnable(project, sessionId, name), (saved) =>
                             SavedProgram.$match(saved, {
                               sh: () => sh(call),
                               ts: ({ code, input: schema }) =>

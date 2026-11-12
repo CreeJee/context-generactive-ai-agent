@@ -5214,6 +5214,11 @@ msgstr "전체 내용: 첨부 context-agent-evidence.json (세션 #{session}, ru
 msgid "정상"
 msgstr "정상"
 
+#. Scope badge: a skill a conversation saved that passed a review, so every conversation of the project can use it
+#: app/entry/settings/shared.tsx
+msgid "정식"
+msgstr "정식"
+
 #. Card editor field: the card's title
 #: app/entry/chat/board/card-peek.tsx
 msgid "제목"
@@ -6436,3 +6441,8 @@ msgstr "환경: {release} · {platform} · {runtime} · 모델 {provider}/{model
 #: app/entry/chat/work-trace-panel.tsx
 msgid "활동"
 msgstr "활동"
+
+#. Scope badge: a skill one conversation saved; only that conversation can use it until a review passes it
+#: app/entry/settings/shared.tsx
+msgid "후보"
+msgstr "후보"

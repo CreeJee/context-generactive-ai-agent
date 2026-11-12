@@ -38,10 +38,10 @@ const shellRequest = Effect.fnUntraced(function* (command: string) {
 testAgent({ testProvider: { responder: sessionScopedResponder } })("auto permission mode", (it) => {
   it.effect("full mode removes static approval while ask mode keeps it", () =>
     Effect.gen(function* () {
-      const { project } = yield* TestEnv;
+      const { project, session } = yield* TestEnv;
       const approved = yield* ApprovedTools;
-      const [ask] = approved.toolsFor({ ...project, permissionMode: "ask" });
-      const [full] = approved.toolsFor({ ...project, permissionMode: "full" });
+      const [ask] = approved.toolsFor({ ...project, permissionMode: "ask" }, session.id);
+      const [full] = approved.toolsFor({ ...project, permissionMode: "full" }, session.id);
       expect(ask?.tool.needsApproval).toBe(true);
       expect(full?.tool.needsApproval).toBe(false);
     }),

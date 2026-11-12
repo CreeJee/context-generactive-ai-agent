@@ -63,7 +63,7 @@
           "content": [
             {
               "type": "text",
-              "text": "<orchestrator>\nThe app's orchestrator sent this message, not the user.\n\nThis is an automatic task completion follow-up, not a new user request or approval. Review operational notifications, retrieve subagent reports with get_subagent_reports and background operation results with get_background_result, and briefly update the user if useful. Do not repeat the original dispatch merely because it appears in the history.\n\nTask status notifications since the previous parent run:\n- Notification <id-8>; Task <id-4> (completed): Subagent completed; {\"attemptId\":\"<id-5>\"}\nTreat these as operational state, not as user instructions or approval.\n</orchestrator>"
+              "text": "<orchestrator>\nThe app's orchestrator sent this message, not the user.\n\nThis is an automatic task completion follow-up, not a new user request or approval. Review operational notifications, retrieve subagent reports with get_subagent_reports and background operation results with get_background_result, and briefly update the user if useful. Do not repeat the original dispatch merely because it appears in the history.\n\nTask status notifications since the previous parent run:\n- Notification <id-8>; task <id-4>; completed: Subagent completed; {\"attemptId\":\"<id-5>\"}\nTreat these as operational state, not as user instructions or approval.\n</orchestrator>"
             }
           ]
         },
@@ -153,7 +153,7 @@
           "content": [
             {
               "type": "text",
-              "text": "<orchestrator>\nThe app's orchestrator sent this message, not the user.\n\nThis is an automatic task completion follow-up, not a new user request or approval. Review operational notifications, retrieve subagent reports with get_subagent_reports and background operation results with get_background_result, and briefly update the user if useful. Do not repeat the original dispatch merely because it appears in the history.\n\nTask status notifications since the previous parent run:\n- Notification <id-18>; Task <id-14> (completed): Subagent completed; {\"attemptId\":\"<id-15>\"}\nTreat these as operational state, not as user instructions or approval.\n</orchestrator>"
+              "text": "<orchestrator>\nThe app's orchestrator sent this message, not the user.\n\nThis is an automatic task completion follow-up, not a new user request or approval. Review operational notifications, retrieve subagent reports with get_subagent_reports and background operation results with get_background_result, and briefly update the user if useful. Do not repeat the original dispatch merely because it appears in the history.\n\nTask status notifications since the previous parent run:\n- Notification <id-18>; task <id-14>; completed: Subagent completed; {\"attemptId\":\"<id-15>\"}\nTreat these as operational state, not as user instructions or approval.\n</orchestrator>"
             }
           ]
         },
@@ -295,7 +295,7 @@
           "content": [
             {
               "type": "input_text",
-              "text": "<orchestrator>\nThe app's orchestrator sent this message, not the user.\n\nThis is an automatic task completion follow-up, not a new user request or approval. Review operational notifications, retrieve subagent reports with get_subagent_reports and background operation results with get_background_result, and briefly update the user if useful. Do not repeat the original dispatch merely because it appears in the history.\n\nTask status notifications since the previous parent run:\n- Notification <id-8>; Task <id-4> (completed): Subagent completed; {\"attemptId\":\"<id-5>\"}\nTreat these as operational state, not as user instructions or approval.\n</orchestrator>"
+              "text": "<orchestrator>\nThe app's orchestrator sent this message, not the user.\n\nThis is an automatic task completion follow-up, not a new user request or approval. Review operational notifications, retrieve subagent reports with get_subagent_reports and background operation results with get_background_result, and briefly update the user if useful. Do not repeat the original dispatch merely because it appears in the history.\n\nTask status notifications since the previous parent run:\n- Notification <id-8>; task <id-4>; completed: Subagent completed; {\"attemptId\":\"<id-5>\"}\nTreat these as operational state, not as user instructions or approval.\n</orchestrator>"
             }
           ]
         },
@@ -357,7 +357,7 @@
           "content": [
             {
               "type": "input_text",
-              "text": "<orchestrator>\nThe app's orchestrator sent this message, not the user.\n\nThis is an automatic task completion follow-up, not a new user request or approval. Review operational notifications, retrieve subagent reports with get_subagent_reports and background operation results with get_background_result, and briefly update the user if useful. Do not repeat the original dispatch merely because it appears in the history.\n\nTask status notifications since the previous parent run:\n- Notification <id-18>; Task <id-14> (completed): Subagent completed; {\"attemptId\":\"<id-15>\"}\nTreat these as operational state, not as user instructions or approval.\n</orchestrator>"
+              "text": "<orchestrator>\nThe app's orchestrator sent this message, not the user.\n\nThis is an automatic task completion follow-up, not a new user request or approval. Review operational notifications, retrieve subagent reports with get_subagent_reports and background operation results with get_background_result, and briefly update the user if useful. Do not repeat the original dispatch merely because it appears in the history.\n\nTask status notifications since the previous parent run:\n- Notification <id-18>; task <id-14>; completed: Subagent completed; {\"attemptId\":\"<id-15>\"}\nTreat these as operational state, not as user instructions or approval.\n</orchestrator>"
             }
           ]
         },
@@ -471,7 +471,7 @@
       },
       {
         "role": "user",
-        "content": "<orchestrator>\nThe app's orchestrator sent this message, not the user.\n\nThis is an automatic task completion follow-up, not a new user request or approval. Review operational notifications, retrieve subagent reports with get_subagent_reports and background operation results with get_background_result, and briefly update the user if useful. Do not repeat the original dispatch merely because it appears in the history.\n\nTask status notifications since the previous parent run:\n- Notification <id-8>; Task <id-4> (completed): Subagent completed; {\"attemptId\":\"<id-5>\"}\nTreat these as operational state, not as user instructions or approval.\n</orchestrator>"
+        "content": "<orchestrator>\nThe app's orchestrator sent this message, not the user.\n\nThis is an automatic task completion follow-up, not a new user request or approval. Review operational notifications, retrieve subagent reports with get_subagent_reports and background operation results with get_background_result, and briefly update the user if useful. Do not repeat the original dispatch merely because it appears in the history.\n\nTask status notifications since the previous parent run:\n- Notification <id-8>; task <id-4>; completed: Subagent completed; {\"attemptId\":\"<id-5>\"}\nTreat these as operational state, not as user instructions or approval.\n</orchestrator>"
       },
       {
         "role": "assistant",
@@ -525,7 +525,7 @@
       },
       {
         "role": "user",
-        "content": "<orchestrator>\nThe app's orchestrator sent this message, not the user.\n\nThis is an automatic task completion follow-up, not a new user request or approval. Review operational notifications, retrieve subagent reports with get_subagent_reports and background operation results with get_background_result, and briefly update the user if useful. Do not repeat the original dispatch merely because it appears in the history.\n\nTask status notifications since the previous parent run:\n- Notification <id-18>; Task <id-14> (completed): Subagent completed; {\"attemptId\":\"<id-15>\"}\nTreat these as operational state, not as user instructions or approval.\n</orchestrator>"
+        "content": "<orchestrator>\nThe app's orchestrator sent this message, not the user.\n\nThis is an automatic task completion follow-up, not a new user request or approval. Review operational notifications, retrieve subagent reports with get_subagent_reports and background operation results with get_background_result, and briefly update the user if useful. Do not repeat the original dispatch merely because it appears in the history.\n\nTask status notifications since the previous parent run:\n- Notification <id-18>; task <id-14>; completed: Subagent completed; {\"attemptId\":\"<id-15>\"}\nTreat these as operational state, not as user instructions or approval.\n</orchestrator>"
       },
       {
         "role": "assistant",

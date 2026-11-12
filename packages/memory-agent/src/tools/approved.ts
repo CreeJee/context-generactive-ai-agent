@@ -103,9 +103,12 @@ const make = Effect.gen(function* () {
       );
 
   /** The approved tools' calls for `project`, each failing with what the model reads. */
-  const callsFor = (project: Fenced<Project>, binding?: BackgroundBinding) => ({
+  const callsFor = (project: Fenced<Project>, sessionId: string, binding?: BackgroundBinding) => ({
     saveCodeSkill: ({ name, description, program, usage }: typeof SaveCodeSkillInput.Type) =>
-      guardedEffect(name, codeSkills.save(project, { name, description, usage, program })),
+      guardedEffect(
+        name,
+        codeSkills.save(project, sessionId, { name, description, usage, program }),
+      ),
 
     /** Interrupting the call stops the command. */
     runSkill: (
@@ -117,16 +120,19 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           // A ts skill is run by `CodeTools`, which knows the run's tools; one reaches here
           // only from a program, which runs sh skills alone.
-          const runnable = yield* SavedProgram.$match(yield* codeSkills.runnable(project, name), {
-            ts: () =>
-              Effect.fail(
-                CodeSkillRejected.make({
-                  reason: "ts_skill",
-                  detail: `${name} is a ts skill, which a program cannot run. Call run_skill for it yourself.`,
-                }),
-              ),
-            sh: (saved) => Effect.succeed(saved),
-          });
+          const runnable = yield* SavedProgram.$match(
+            yield* codeSkills.runnable(project, sessionId, name),
+            {
+              ts: () =>
+                Effect.fail(
+                  CodeSkillRejected.make({
+                    reason: "ts_skill",
+                    detail: `${name} is a ts skill, which a program cannot run. Call run_skill for it yourself.`,
+                  }),
+                ),
+              sh: (saved) => Effect.succeed(saved),
+            },
+          );
           const label = [name, ...args].join(" ");
           const directory = yield* resolveWorkingDirectory(
             project,
@@ -359,10 +365,11 @@ const make = Effect.gen(function* () {
      */
     toolsFor: (
       project: Fenced<Project>,
+      sessionId: string,
       approval: "static" | "gate" = project.permissionMode === "ask" ? "static" : "gate",
       binding?: BackgroundBinding,
     ) => {
-      const calls = callsFor(project, binding);
+      const calls = callsFor(project, sessionId, binding);
       const needsApproval = approval === "static";
       return [
         runTool({

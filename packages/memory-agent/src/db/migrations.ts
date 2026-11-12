@@ -2979,6 +2979,40 @@ export const migrations: readonly string[] = [
   -- (2026-11-12)"), so a board no longer records who approves them.
   ALTER TABLE kanban_goals DROP COLUMN card_approval;
   `,
+  `
+  -- Skills the app keeps apart from any git checkout (decisions.md "에이전트가 저장한 스킬은 앱
+  -- 저장소에 후보로 두고, 검토를 통과한 것만 정식 스킬로 올린다 (2026-11-12)"). A candidate a
+  -- conversation saved is its own (session_id); one found in the user's skill folder has none.
+  -- files_json holds the skill folder's text files by their path inside it.
+  CREATE TABLE skill_candidates (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+    origin TEXT NOT NULL CHECK (origin IN ('saved', 'outside', 'edited')),
+    files_json TEXT NOT NULL CHECK (json_valid(files_json)),
+    content_sha256 TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK ((session_id IS NOT NULL) = (origin = 'saved'))
+  );
+  CREATE UNIQUE INDEX skill_candidates_saved ON skill_candidates(project_id, session_id, name)
+    WHERE session_id IS NOT NULL;
+  CREATE UNIQUE INDEX skill_candidates_found ON skill_candidates(project_id, name, content_sha256)
+    WHERE session_id IS NULL;
+  -- A skill a review promoted; every conversation of the project has it. copy_sha256 is the
+  -- content the app last wrote to the user's .agents/skills/<name>, null before it wrote one.
+  CREATE TABLE promoted_skills (
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    files_json TEXT NOT NULL CHECK (json_valid(files_json)),
+    content_sha256 TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    promoted_at TEXT NOT NULL,
+    copy_sha256 TEXT,
+    PRIMARY KEY (project_id, name)
+  );
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

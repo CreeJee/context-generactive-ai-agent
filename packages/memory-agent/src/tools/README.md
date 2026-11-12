@@ -69,7 +69,7 @@
 
 - 자식 프로세스: `ApprovedTools.runSkill`이 `runSandboxed`/`runCommand`로 sh 스킬을 실행하고 `process.env`를 그대로 넘긴다(`ChildProcessSpawner`).
 - 파일 시스템: `write_outside_file`/`delete_outside_file`이 프로젝트 밖 텍스트 파일을 생성·교체·삭제한다(`createTextFileEffect`, `replaceTextFileEffect`, `deleteTextFileEffect`). 작업 디렉터리 해석 때 `/tmp`와 호스트 임시 디렉터리의 canonical 경로를 읽는다(`temporaryRoots`).
-- 파일 시스템: `save_code_skill`이 `CodeSkills.save`로 `.agents/skills/<name>/`(SKILL.md, scripts/run.ts 또는 run.sh)에 스킬을 저장한다.
+- SQLite: `save_code_skill`이 `CodeSkills.save`로 스킬(SKILL.md, scripts/run.ts 또는 run.sh)을 그 대화의 후보로 `skill_candidates`에 저장한다. 사용자 폴더의 `.agents/skills`에는 쓰지 않는다.
 - 프로젝트 파일 도구(`FileTools`)가 `write_file`/`edit_file`/`delete_file`로 프로젝트 파일을 바꾼다. 목록·검색은 파일 시스템 페이징/스냅샷 캐시만 쓴다(`effects.ts` 주석 근거).
 - 백그라운드 작업: `BackgroundTasks.start`가 작업 한 개당 `background_tasks` 한 행을 만들고, 끝나면 마스킹한 결과로 그 행을 바꾼다. 시작할 때 앞 프로세스가 남긴 실행 중 행을 `interrupted`로 바꾼다. 시작과 끝에 세션의 `run-state` 이벤트를 발행한다.
 - 메모리 도구와 리포트 증거 도구는 범위가 정해진 SELECT만 하고 아무것도 기록하지 않는다(`effects.ts` 주석 근거).

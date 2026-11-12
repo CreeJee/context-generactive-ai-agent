@@ -14,8 +14,8 @@ import {
   ProjectNotFound,
   Projects,
   ProjectScheduler,
+  ProjectSkills,
   Sessions,
-  Skills,
 } from "memory-agent";
 import { AppApi } from "memory-agent/app-api";
 import { pickFolder } from "../folder-picker.ts";
@@ -32,7 +32,7 @@ export const ProjectsApiHandlers = HttpApiBuilder.group(
     const events = yield* AppEvents;
     const agents = yield* ExternalAgents;
     const servers = yield* McpServers;
-    const skills = yield* Skills;
+    const skills = yield* ProjectSkills;
     const schedules = yield* GoalSchedules;
     const goalOrder = yield* GoalOrder;
     const scheduler = yield* ProjectScheduler;
@@ -136,7 +136,7 @@ export const ProjectsApiHandlers = HttpApiBuilder.group(
             toolHint: (change) => servers.setToolHint(project, change),
           }),
         ),
-      skills: ({ params }) => withProject(params.project, skills.catalog),
+      skills: ({ params }) => withProject(params.project, (project) => skills.catalog(project)),
       kanban: ({ params }) =>
         projects.get(params.project).pipe(
           Effect.andThen(kanbanSettings(params.project)),

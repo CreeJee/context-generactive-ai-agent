@@ -208,7 +208,7 @@ const make = Effect.gen(function* () {
                   ...allowed(cardAgentToolNames)([
                     ...fileTools.toolsFor(project),
                     ...outsideTools.toolsFor(project),
-                    ...approvedTools.toolsFor(project, "gate"),
+                    ...approvedTools.toolsFor(project, run.sessionId, "gate"),
                   ]),
                   ...mcp.tools,
                 ],
@@ -273,7 +273,7 @@ const make = Effect.gen(function* () {
           const tools: RunTool[] = [
             ...allowed(verifierToolNames)([
               ...fileTools.toolsFor(project),
-              ...approvedTools.toolsFor(project, "gate"),
+              ...approvedTools.toolsFor(project, input.sessionId, "gate"),
             ]),
             ...mcp.tools,
             recorder.runTool,

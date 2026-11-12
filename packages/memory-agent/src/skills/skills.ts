@@ -14,6 +14,7 @@ import {
   Data,
   Effect,
   FileSystem,
+  HashSet,
   Layer,
   Order,
 } from "effect";
@@ -220,14 +221,22 @@ const make = (options: SkillsOptions) =>
      * The skills of one scope. A skill folder linked from elsewhere is not followed. The listing
      * gives each folder's own type; only a folder it could not type is looked up.
      */
-    const scan = Effect.fn("Skills.scan")(function* (scope: SkillScope, root: string) {
+    const scan = Effect.fn("Skills.scan")(function* (
+      scope: SkillScope,
+      root: string,
+      keep: Option.Option<HashSet.HashSet<string>> = Option.none(),
+    ) {
       const listed = yield* fs.stat(root).pipe(
         Effect.map((info) => info.type === "Directory"),
         Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed(false)),
       );
       const folders = listed
         ? EffectArray.sort(
-            (yield* fs.readDirectoryEntries(root)).filter(({ name }) => !name.startsWith(".")),
+            (yield* fs.readDirectoryEntries(root)).filter(
+              ({ name }) =>
+                !name.startsWith(".") &&
+                Option.match(keep, { onNone: () => true, onSome: HashSet.has(name) }),
+            ),
             Order.mapInput(Order.String, (entry: FileSystem.DirectoryEntry) => entry.name),
           )
         : [];
@@ -254,6 +263,7 @@ const make = (options: SkillsOptions) =>
     const filesOf = Effect.fn("Skills.filesOf")(function* (skill: Skill) {
       return yield* Match.value(skill.scope).pipe(
         Match.when("builtin", () => Effect.succeed<readonly string[]>([])),
+        Match.whenOr("promoted", "candidate", () => Effect.succeed<readonly string[]>([])),
         Match.whenOr("global", "project", () =>
           Effect.map(fs.readDirectory(skill.directory), (files) =>
             files
@@ -281,16 +291,24 @@ const make = (options: SkillsOptions) =>
         problems: layers.flatMap((layer) => layer.problems),
       };
     });
-    const load = Effect.fn("Skills.load")(function* (project: Project) {
-      return yield* merged([...sharedScans, scan("project", projectSkillsDirectory(project.root))]);
+    /** `committed`, when given, names the only project skill folders that count. */
+    const load = Effect.fn("Skills.load")(function* (
+      project: Project,
+      committed: Option.Option<HashSet.HashSet<string>>,
+    ) {
+      return yield* merged([
+        ...sharedScans,
+        scan("project", projectSkillsDirectory(project.root), committed),
+      ]);
     });
 
     return {
       globalDirectory: globalSkillsDirectory(home),
       catalog: Effect.fn("Skills.catalog")(function* (
         project: Project,
+        committed: Option.Option<HashSet.HashSet<string>> = Option.none(),
       ): Effect.fn.Return<SkillCatalog, import("effect/PlatformError").PlatformError> {
-        const { entries, problems } = yield* load(project);
+        const { entries, problems } = yield* load(project, committed);
         return {
           directories: [
             { scope: "global", path: globalSkillsDirectory(home) },
@@ -305,9 +323,10 @@ const make = (options: SkillsOptions) =>
       read: Effect.fn("Skills.read")(function* (
         project: Project,
         name: string,
+        committed: Option.Option<HashSet.HashSet<string>> = Option.none(),
       ): Effect.fn.Return<SkillDocument | null, import("effect/PlatformError").PlatformError> {
         const entry = EffectArray.findFirst(
-          (yield* load(project)).entries,
+          (yield* load(project, committed)).entries,
           (candidate) => candidate.skill.name === name,
         );
         return yield* Option.match(entry, {

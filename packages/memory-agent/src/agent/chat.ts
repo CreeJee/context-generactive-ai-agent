@@ -1967,7 +1967,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             ),
             context: Effect.all(
               {
-                skills: unlessReport(skillTools.toolsFor(project), {
+                skills: unlessReport(skillTools.toolsFor(project, sessionId), {
                   skills: [],
                   tools: [],
                   instructions: null,
@@ -2031,7 +2031,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const phaseApproved = (binding?: BackgroundBinding) =>
           reportSource !== null || workflowReadOnly
             ? []
-            : approvedTools.toolsFor(project, undefined, binding);
+            : approvedTools.toolsFor(project, sessionId, undefined, binding);
         const phaseApprovedTools = phaseApproved({
           sessionId,
           runId,
@@ -2087,7 +2087,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             ...sharedTools,
             ...(readOnly
               ? []
-              : redactor.withHiddenResults(approvedTools.toolsFor(project, "gate"))),
+              : redactor.withHiddenResults(approvedTools.toolsFor(project, sessionId, "gate"))),
           ],
           systemPrompts: promptLayout(
             standingPrompts,
@@ -2119,7 +2119,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ...sharedTools,
           ...boardTools,
           ...redactor.withHiddenResults([
-            ...phaseApprovedTools.map((tool) => programs.codeSkills(project, tool)),
+            ...phaseApprovedTools.map((tool) => programs.codeSkills(project, sessionId, tool)),
             ...(readOnly ? [] : children.tools),
             ...(reportSource !== null ? [] : [programs.runCode]),
           ]),

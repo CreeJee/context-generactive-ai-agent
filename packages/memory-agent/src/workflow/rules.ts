@@ -1,4 +1,5 @@
 import { isTruthy } from "../truthy.ts";
+import { SkillScope } from "../skills/contracts.ts";
 import {
   Array as EffectArray,
   HashMap,
@@ -39,7 +40,7 @@ export const RuleSource = Schema.TaggedUnion({
   project: { path: Schema.String, contentHash: Schema.String },
   skill: {
     name: Schema.String,
-    scope: Schema.Literals(["builtin", "global", "project"]),
+    scope: SkillScope,
     contentHash: Schema.String,
   },
 });

@@ -94,7 +94,7 @@ testAgent()("global and project skills", (it) => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const { project, base } = yield* TestEnv;
+        const { project, base, session } = yield* TestEnv;
         const global = yield* globalSkills;
         const local = path.join(project.root, ".agents", "skills");
         yield* writeSkill(global, "review", "name: review\ndescription: Global review.");
@@ -124,7 +124,7 @@ testAgent()("global and project skills", (it) => {
         expect(catalog.problems).toEqual([
           { scope: "global", directory: path.join(global, "broken"), problem: "no_description" },
         ]);
-        const tools = yield* (yield* SkillTools).toolsFor(project);
+        const tools = yield* (yield* SkillTools).toolsFor(project, session.id);
         expect(tools.instructions).toContain("- review (project): Project review.");
         // How to treat a skill comes with the skill read, not with the list.
         expect(yield* callTool(tools.tools, "read_skill", { name: "review" })).toMatchObject({

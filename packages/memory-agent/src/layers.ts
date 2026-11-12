@@ -61,6 +61,7 @@ import { BulkNodes } from "./imports/bulk.ts";
 import { Importer } from "./imports/importer.ts";
 import { McpServers } from "./mcp/servers.ts";
 import { Skills } from "./skills/skills.ts";
+import { ProjectSkills } from "./skills/project-skills.ts";
 import { Subagents } from "./subagents/subagents.ts";
 import { Embedder } from "./memory/embedding/embedder.ts";
 import { ModelDownloads } from "./memory/embedding/downloads.ts";
@@ -330,10 +331,14 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     Kagi.layer(options.kagiBaseUrl === undefined ? {} : { baseUrl: options.kagiBaseUrl }),
     McpServers.layer,
     ExternalAgents.layer,
-    Skills.layer({
-      ...optionalProperty("home", options.skillsHome),
-      ...optionalProperty("builtin", options.skillsBuiltin),
-    }),
+    ProjectSkills.layer.pipe(
+      Layer.provideMerge(
+        Skills.layer({
+          ...optionalProperty("home", options.skillsHome),
+          ...optionalProperty("builtin", options.skillsBuiltin),
+        }),
+      ),
+    ),
   );
   const routeCatalog =
     options.routeCatalog ??

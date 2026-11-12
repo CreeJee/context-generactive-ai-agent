@@ -7,9 +7,18 @@ import { Schema } from "effect";
 
 /**
  * Where a skill comes from. `builtin` ships with this app; the user's own (`global`) and the
- * project's replace a built-in skill of the same name, so any of them can be overridden.
+ * project's committed ones (`project`) replace a built-in skill of the same name, so any of them
+ * can be overridden. The app keeps the rest in its storage: `promoted` passed a review and every
+ * conversation of the project has it; `candidate` was saved by one conversation, which alone has
+ * it. Each later one of these replaces the earlier ones of the same name.
  */
-export const SkillScope = Schema.Literals(["builtin", "global", "project"]);
+export const SkillScope = Schema.Literals([
+  "builtin",
+  "global",
+  "project",
+  "promoted",
+  "candidate",
+]);
 export type SkillScope = typeof SkillScope.Type;
 
 export const Skill = Schema.Struct({

@@ -4,6 +4,8 @@
 
 `packages/memory-agent/src/skills`는 에이전트 스킬(`SKILL.md` 폴더)을 찾아 읽는 계층이다. `skills.ts`는 앱 내장(builtin), 사용자 전역(`~/.agents/skills`), 프로젝트(`.agents/skills`) 순서로 스킬을 스캔한다. 그 결과로 카탈로그와 본문을 내주는 `Skills` 서비스를 제공한다.
 
+`agent-skills.ts`는 앱이 SQLite에 두는 스킬(`AgentSkills`)을 다룬다. 대화가 저장한 후보는 그 대화의 run만 보고, 검토를 통과한 정식 스킬은 프로젝트의 모든 run이 본다(decisions.md "에이전트가 저장한 스킬은 앱 저장소에 후보로 두고, 검토를 통과한 것만 정식 스킬로 올린다 (2026-11-12)"). `project-skills.ts`의 `ProjectSkills`는 run 하나가 보는 목록을 만든다. builtin·global 스킬, run 폴더에서 git이 커밋한 프로젝트 스킬 폴더(`committed.ts`), 정식 스킬, 그 대화의 후보를 합친다.
+
 `code-skills.ts`는 모델이 저장하는 프로젝트 코드 스킬(`scripts/run.ts` 또는 `scripts/run.sh`)을 다룬다. 범위는 경로, 검증, 첫 줄 마커(input schema, network host), SKILL.md 생성, 실행 명령이다. `CodeSkills` 서비스는 `packages/memory-agent/src/tools/code.ts`와 `packages/memory-agent/src/tools/approved.ts`가 쓴다. 프로그램은 승인된 정확한 내용일 때만 실행된다.
 
 ## Interface
@@ -12,8 +14,13 @@
 - `Skills.catalog` — 프로젝트의 `SkillCatalog`(directories는 global/project만, skills, problems)를 돌려준다
 - `Skills.shared` — 모든 프로젝트가 가진 builtin·global 스킬(이름이 같으면 global이 이긴다). 앱이 시작할 때 이 스킬들의 작업 규칙 벡터를 미리 만든다(`EmbeddingSetup`)
 - `Skills.read` — 이름으로 `SkillDocument`(front matter를 뺀 body, 한 단계 파일 목록)를 돌려준다. 없으면 `null`
+- `Skills.catalog` · `Skills.read`의 `committed` — 주면 그 이름의 프로젝트 스킬 폴더만 센다. `ProjectSkills`가 git이 커밋한 폴더만 넘긴다
+- `AgentSkills` — `skill_candidates`·`promoted_skills` 표 서비스. `visible(projectId, sessionId?)`는 그 대화의 후보와, 이름이 겹치지 않는 정식 스킬을 이름순으로 돌려준다. `saveCandidate`는 대화의 후보를 같은 이름이면 바꿔 저장한다. `contentSha256(files)`는 경로순으로 놓은 파일의 해시다
+- `StoredSkill` — `candidate` | `promoted` TaggedEnum(name, files, contentSha256). `SkillFiles`는 스킬 폴더 안 경로별 텍스트다
+- `committedSkillFolders(root)` — `git ls-tree HEAD -- .agents/skills/`로 커밋된 스킬 폴더 이름을 돌려준다. git이 답하지 못하면(git 없음, 저장소 아님, 커밋 없음) `None`이고, 그때는 모든 폴더를 센다
+- `ProjectSkills` — `catalog(project, sessionId?)`, `find(project, sessionId, name)`(`FoundSkill` = `stored` | `folder`), `read`, `storedFile`. layer는 `AgentSkills`도 함께 준다
 - `SkillsOptions` — 테스트용 `home`과 `builtin` 경로를 덮어쓰는 옵션
-- `SkillScope` — `Schema.Literals(["builtin","global","project"])`와 같은 이름의 타입. `contracts.ts`에 있고 `skills.ts`가 다시 내보낸다
+- `SkillScope` — `Schema.Literals(["builtin","global","project","promoted","candidate"])`와 같은 이름의 타입. `contracts.ts`에 있고 `skills.ts`가 다시 내보낸다
 - `builtinSkillsDirectory` — Effect. `runtimeRoot`가 있으면 그것을, 없으면 `memory-agent/package.json` 위치를 써서 `skills/` 경로를 정한다
 - `globalSkillsDirectory(home)` / `projectSkillsDirectory(projectRoot)` — `<base>/.agents/skills` 경로
 - `maxSkillCharacters`(32_000자) / `maxSkillBytes`(`maxSkillCharacters * 3`, UTF-8 최대 3바이트/UTF-16 단위) / `maxDescriptionCharacters`(1024) / `maxListedSkills`(100) — 스킬 크기와 목록 한도 상수
@@ -32,7 +39,8 @@
 
 ## Invariants
 
-- 스킬 로드 순서는 builtin, global, project다. 이름이 같으면 뒤 scope가 이긴다. 이 순서는 `Skills.load`의 `MutableHashMap.fromIterable`가 정한다
+- 스킬 로드 순서는 builtin, global, project, promoted, candidate다. 이름이 같으면 뒤 scope가 이긴다. 앞의 셋은 `Skills.load`의 `MutableHashMap.fromIterable`가, 뒤의 둘은 `AgentSkills.visible`과 `ProjectSkills.load`가 정한다
+- run이 보는 프로젝트 스킬 폴더는 run 폴더의 HEAD에 커밋된 것뿐이다. 카드 worktree는 커밋에서 갈라지므로, 사용자 폴더에만 있는 폴더를 계획자가 보고 카드가 못 보는 일이 없다
 - builtin 스킬 경로는 이 모듈 위치가 아니라 패키지(`runtimeRoot` 또는 `memory-agent/package.json`)로 찾는다. 앱이 이 모듈을 서버 빌드에 번들하기 때문이다
 - SKILL.md가 `maxSkillBytes`를 넘거나 디코드한 텍스트가 `maxSkillCharacters`를 넘으면 `too_large`, description이 비면 `no_description`이 된다. 읽기 실패(PlatformError, PathRejected, TextFileIoFailed, TextFileRejected)는 조용히 버리지 않고 `unreadable` problem으로 남긴다
 - 스캔은 `.`으로 시작하는 폴더를 건너뛰고 폴더를 정렬한다. 목록(`readDirectoryEntries`)이 준 항목 자신의 type이 Directory가 아니면 제외하고, type을 모르는 항목만 `lstat`한다. SKILL.md도 `lstat`이 File일 때만 읽으므로 심볼릭 링크는 따라가지 않는다
@@ -41,7 +49,7 @@
 - `contentHash`는 발견에 쓴 정확한 SKILL.md 텍스트의 SHA-256 hex다
 - description은 `maxDescriptionCharacters`로 자른다. name이 없으면 폴더 이름을 쓴다
 - builtin 스킬의 `files`는 항상 빈 배열이다. global과 project 스킬의 files는 SKILL.md와 dotfile을 빼고 정렬한 뒤 최대 100개로 자른다
-- 코드 스킬은 표준 스킬 폴더 `.agents/skills/<name>/SKILL.md`와 `scripts/run.ts` 또는 `scripts/run.sh`를 쓴다. 그래서 다른 에이전트도 목록에서 보고 읽고 쓸 수 있다
+- 코드 스킬은 표준 스킬 폴더와 같은 파일(`SKILL.md`, `scripts/run.ts` 또는 `scripts/run.sh`)을 가진다. `save_code_skill`은 그 파일을 저장한 대화의 후보로 SQLite에 둔다. 실행은 그 대화의 후보, 정식 스킬, 커밋된 프로젝트 스킬 폴더 순으로 찾는다
 - 프로그램은 저장할 때 승인된 정확한 내용일 때만 실행된다
 - network 호스트(`# run_skill network:`)와 입력 스키마(`// run_skill input:`)는 스크립트 첫 줄에 쓴다. 승인 텍스트의 일부이므로 코드와 함께 승인, 해시, 표시된다. 이 줄은 `network`/`input` 필드에서만 생성된다. 사용자가 code나 script에 직접 넣으면 `network_line`/`input_line`으로 거부한다
 - ts 스킬의 input은 `type: "object"`인 JSON Schema여야 한다. 아니면 `input_schema`로 거부한다
@@ -53,7 +61,9 @@
 
 - `Skills`: FileSystem의 `stat`, `lstat`, `readDirectoryEntries`, `readDirectory`와 `readFileBytesEffect`로 builtin, `~/.agents/skills`, `<project>/.agents/skills`를 읽는다. 쓰기는 하지 않는다
 - `Skills`: `Digest.digest(Digest.sha256)`으로 해시를 계산한다. `homeDirectory`, `runtimeRoot`, `runtimeRequire`(require.resolve)로 호스트 경로를 확인한다
-- `CodeSkills`: `resolveProjectPath`를 거쳐 프로젝트 안 `.agents/skills/<name>/` 아래 SKILL.md와 `scripts/run.*`에 `createTextFileEffect`, `readTextFileEffect`, `replaceTextFileEffect`, `deleteTextFileEffect`를 실행한다(생성, 읽기, 교체, 삭제)
+- `CodeSkills`: 커밋된 스킬 폴더의 `scripts/run.*`를 `resolveProjectPath`와 `readTextFileEffect`로 읽는다. 저장은 `AgentSkills.saveCandidate`로 한다
+- `AgentSkills`: `skill_candidates` INSERT ... ON CONFLICT, `skill_candidates`·`promoted_skills` SELECT
+- `committedSkillFolders`: run 폴더에서 `git ls-tree`를 실행한다
 - `code-skills.ts`는 `SqlClient`(effect/sql), `Clock`, `DateTime`, `effect/crypto`를 import한다
 
 ## Verification

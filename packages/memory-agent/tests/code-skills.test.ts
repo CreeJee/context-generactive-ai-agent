@@ -5,12 +5,22 @@ import { HttpServerResponse } from "effect/http";
 import { NetAddress } from "effect/net";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { expect, test } from "vite-plus/test";
+import { AgentSkills } from "../src/skills/agent-skills.ts";
 import { builtinOverlap } from "../src/skills/code-skills.ts";
 import { ApprovedTools } from "../src/tools/approved.ts";
 import { CodeTools } from "../src/tools/code.ts";
 import { CallPlan, runTool } from "../src/tools/run-tool.ts";
-import { TestEnv, testAgent } from "./support/test-env.ts";
+import { TestEnv, freshSession, testAgent } from "./support/test-env.ts";
 import { callTool } from "./support/run-tools.ts";
+
+/** The sh script a conversation saved under `name`. */
+const savedScript = (projectId: string, sessionId: string, name: string) =>
+  Effect.flatMap(AgentSkills, (skills) =>
+    Effect.map(
+      skills.visible(projectId, sessionId),
+      (visible) => visible.find((skill) => skill.name === name)?.files["scripts/run.sh"],
+    ),
+  );
 
 const portOf = (address: NetAddress.SocketAddress) =>
   Effect.succeed(address).pipe(
@@ -28,45 +38,55 @@ test("a script that only wraps built-in tools is refused, a filter after a build
 });
 
 testAgent()("code skills", (it) => {
-  it.effect("an approved script runs with its arguments; an edited one is refused", () =>
-    Effect.gen(function* () {
-      const { project } = yield* TestEnv;
-      const tools = (yield* ApprovedTools).toolsFor(project, "gate");
-      yield* callTool(tools, "save_code_skill", {
-        name: "echo-args",
-        description: "Print the arguments",
-        program: { runtime: "sh", script: 'printf "%s|" "$@"' },
-      });
-      expect(
-        yield* callTool(tools, "run_skill", {
+  it.effect(
+    "an approved script runs with its arguments for its conversation; an unapproved one is refused",
+    () =>
+      Effect.gen(function* () {
+        const { project, session } = yield* TestEnv;
+        const approved = yield* ApprovedTools;
+        const tools = approved.toolsFor(project, session.id, "gate");
+        yield* callTool(tools, "save_code_skill", {
           name: "echo-args",
-          args: ["a b", "$(whoami)", "it's"],
-        }),
-      ).toMatchObject({ status: "succeeded", stdout: "a b|$(whoami)|it's|" });
+          description: "Print the arguments",
+          program: { runtime: "sh", script: 'printf "%s|" "$@"' },
+        });
+        expect(
+          yield* callTool(tools, "run_skill", {
+            name: "echo-args",
+            args: ["a b", "$(whoami)", "it's"],
+          }),
+        ).toMatchObject({ status: "succeeded", stdout: "a b|$(whoami)|it's|" });
+        // A saved skill is a candidate of the conversation that saved it until a review promotes it.
+        const other = approved.toolsFor(project, yield* freshSession, "gate");
+        expect(
+          yield* Effect.flip(callTool(other, "run_skill", { name: "echo-args" })),
+        ).toMatchObject({ message: expect.stringContaining("not_found") });
 
-      // A file tool edit needs no approval, so the edited script must not run.
-      const path = yield* Path.Path;
-      yield* (yield* FileSystem.FileSystem).writeFileString(
-        path.join(project.root, ".agents/skills/echo-args/scripts/run.sh"),
-        "printf changed\n",
-      );
-      expect(yield* Effect.flip(callTool(tools, "run_skill", { name: "echo-args" }))).toMatchObject(
-        {
-          message: expect.stringContaining("not_approved"),
-        },
-      );
+        // A skill folder written with a file tool, which needs no approval, must not run.
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const folder = path.join(project.root, ".agents/skills/hand-written");
+        yield* fs.makeDirectory(path.join(folder, "scripts"), { recursive: true });
+        yield* fs.writeFileString(
+          path.join(folder, "SKILL.md"),
+          "---\nname: hand-written\ndescription: Print\n---\n",
+        );
+        yield* fs.writeFileString(path.join(folder, "scripts/run.sh"), "printf written\n");
+        expect(
+          yield* Effect.flip(callTool(tools, "run_skill", { name: "hand-written" })),
+        ).toMatchObject({ message: expect.stringContaining("not_approved") });
 
-      const full = (yield* ApprovedTools).toolsFor({ ...project, permissionMode: "full" }, "gate");
-      expect(yield* callTool(full, "run_skill", { name: "echo-args" })).toMatchObject({
-        stdout: "changed",
-      });
-    }),
+        const full = approved.toolsFor({ ...project, permissionMode: "full" }, session.id, "gate");
+        expect(yield* callTool(full, "run_skill", { name: "hand-written" })).toMatchObject({
+          stdout: "written",
+        });
+      }),
   );
 
   it.effect("run_skill runs ts skills over the run's tools, and sh skills; a program cannot", () =>
     Effect.gen(function* () {
-      const { project } = yield* TestEnv;
-      const tools = (yield* ApprovedTools).toolsFor(project, "gate");
+      const { project, session } = yield* TestEnv;
+      const tools = (yield* ApprovedTools).toolsFor(project, session.id, "gate");
       const [, run] = tools;
       const echo = runTool({
         name: "echo_text",
@@ -76,7 +96,9 @@ testAgent()("code skills", (it) => {
       });
       const sh = yield* Effect.fromNullishOr(run);
       const runSkill = [
-        (yield* CodeTools).forRunTools([echo, sh], HashSet.empty()).codeSkills(project, sh),
+        (yield* CodeTools)
+          .forRunTools([echo, sh], HashSet.empty())
+          .codeSkills(project, session.id, sh),
       ];
       expect(
         yield* callTool(tools, "save_code_skill", {
@@ -118,11 +140,11 @@ testAgent()("code skills", (it) => {
     "a script reaches only its approved hosts and cannot write skills or read app storage",
     () =>
       Effect.gen(function* () {
-        const { project } = yield* TestEnv;
+        const { project, session } = yield* TestEnv;
         const storage = yield* StorageRoot;
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const tools = (yield* ApprovedTools).toolsFor(project, "gate");
+        const tools = (yield* ApprovedTools).toolsFor(project, session.id, "gate");
         const server = yield* NodeHttpServer.make(NodeHttpServer.createServer, {
           port: 0,
           host: "127.0.0.1",
@@ -163,12 +185,15 @@ testAgent()("code skills", (it) => {
 
         const secret = path.join(storage.path, "sandbox-probe.txt");
         yield* fs.writeFileString(secret, "secret\n");
+        yield* fs.makeDirectory(path.join(project.root, ".agents/skills/sandbox-probe"), {
+          recursive: true,
+        });
         yield* callTool(tools, "save_code_skill", {
           name: "touch-around",
           description: "Write a skill file, then read the file named by $1",
           program: {
             runtime: "sh",
-            script: 'echo x > .agents/skills/echo-args/SKILL.md; wc -c < "$1"',
+            script: 'echo x > .agents/skills/sandbox-probe/SKILL.md; wc -c < "$1"',
           },
         });
         expect(
@@ -188,8 +213,8 @@ testAgent()("code skills", (it) => {
     "a script writes the project, /tmp and the temp folder, which macOS reaches through links",
     () =>
       Effect.gen(function* () {
-        const { project } = yield* TestEnv;
-        const tools = (yield* ApprovedTools).toolsFor(project, "gate");
+        const { project, session } = yield* TestEnv;
+        const tools = (yield* ApprovedTools).toolsFor(project, session.id, "gate");
         yield* callTool(tools, "save_code_skill", {
           name: "write-around",
           description: "Write and remove a file in the project, /tmp and the temp folder",
@@ -215,9 +240,8 @@ testAgent()("code skills", (it) => {
 
   it.effect("a program that names the project folder by absolute path is saved as written", () =>
     Effect.gen(function* () {
-      const { project } = yield* TestEnv;
-      const path = yield* Path.Path;
-      const tools = (yield* ApprovedTools).toolsFor(project, "gate");
+      const { project, session } = yield* TestEnv;
+      const tools = (yield* ApprovedTools).toolsFor(project, session.id, "gate");
       const script = `cd ${project.root} && pnpm test`;
       expect(
         yield* callTool(tools, "save_code_skill", {
@@ -226,11 +250,7 @@ testAgent()("code skills", (it) => {
           program: { runtime: "sh", script },
         }),
       ).not.toHaveProperty("pathNote");
-      expect(
-        yield* (yield* FileSystem.FileSystem).readFileString(
-          path.join(project.root, ".agents/skills/cd-root/scripts/run.sh"),
-        ),
-      ).toBe(`${script}\n`);
+      expect(yield* savedScript(project.id, session.id, "cd-root")).toBe(`${script}\n`);
     }),
   );
 
@@ -238,9 +258,8 @@ testAgent()("code skills", (it) => {
     "in a card, a program naming the card's folder is asked about and saved naming the user's folder",
     () =>
       Effect.gen(function* () {
-        const { project } = yield* TestEnv;
+        const { project, session } = yield* TestEnv;
         const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
         const card = yield* fs.realPath(
           yield* fs.makeTempDirectoryScoped({ prefix: "code-skills-card-" }),
         );
@@ -250,6 +269,7 @@ testAgent()("code skills", (it) => {
             root: card,
             toolFence: { deniedRoots: [project.root], userRoot: project.root },
           },
+          session.id,
           "gate",
         );
         const saveTool = tools.find(({ tool }) => tool.name === "save_code_skill");
@@ -269,9 +289,9 @@ testAgent()("code skills", (it) => {
           name: "card-test",
           pathNote: expect.stringContaining(project.root),
         });
-        expect(
-          yield* fs.readFileString(path.join(card, ".agents/skills/card-test/scripts/run.sh")),
-        ).toBe(`${rewritten.program.script}\n`);
+        expect(yield* savedScript(project.id, session.id, "card-test")).toBe(
+          `${rewritten.program.script}\n`,
+        );
       }),
   );
 
@@ -279,7 +299,7 @@ testAgent()("code skills", (it) => {
     "in a card, a saved script naming the user's folder runs with it as the card's copy",
     () =>
       Effect.gen(function* () {
-        const { project } = yield* TestEnv;
+        const { project, session } = yield* TestEnv;
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const card = yield* fs.realPath(
@@ -300,6 +320,7 @@ testAgent()("code skills", (it) => {
             permissionMode: "full",
             toolFence: { deniedRoots: [project.root], userRoot: project.root },
           },
+          session.id,
           "gate",
         );
         const result = yield* callTool(tools, "run_skill", {
@@ -323,7 +344,7 @@ testAgent()("code skills", (it) => {
     "in a card, a saved script reads a file only the user's folder has there",
     () =>
       Effect.gen(function* () {
-        const { project } = yield* TestEnv;
+        const { project, session } = yield* TestEnv;
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const card = yield* fs.realPath(
@@ -346,6 +367,7 @@ testAgent()("code skills", (it) => {
             permissionMode: "full",
             toolFence: { deniedRoots: [project.root], userRoot: project.root },
           },
+          session.id,
           "gate",
         );
         const result = yield* callTool(tools, "run_skill", { name: "keys" });

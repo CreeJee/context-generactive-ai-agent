@@ -21,30 +21,36 @@ import { SqlClient } from "effect/sql";
 import { folderMentions, isPlainPath, replaceFolderMentions } from "../files/path-policy.ts";
 import { optionalProperty } from "../optional-property.ts";
 import { resolveProjectPath, type Fenced } from "../files/paths.ts";
-import {
-  createTextFileEffect,
-  deleteTextFileEffect,
-  readTextFileEffect,
-  replaceTextFileEffect,
-} from "../files/text.ts";
+import { readTextFileEffect, sha256 } from "../files/text.ts";
 import { JsonValue } from "../json.ts";
 import type { Project } from "../projects/projects.ts";
+import { path } from "../runtime/synchronous-path.ts";
 import { NetworkHost, type SaveCodeSkillInput } from "../tools/definitions.ts";
+import { AgentSkills, type SkillFiles } from "./agent-skills.ts";
+import { FoundSkill, ProjectSkills } from "./project-skills.ts";
 
 /**
  * Project code skills: a ts program that calls the run's tools, or a sh script, the only way the
- * model runs a host command. Each one is a standard skill folder, `.agents/skills/<name>/SKILL.md`
- * with `scripts/run.ts` or `scripts/run.sh`, so it stays listed, readable and usable by other
- * agents. A program runs only while its exact content was approved when it was saved.
+ * model runs a host command. Each one has the files of a standard skill folder, `SKILL.md` with
+ * `scripts/run.ts` or `scripts/run.sh`. A saved one is a candidate the app keeps for the
+ * conversation that saved it (`AgentSkills`); a committed folder `.agents/skills/<name>` in the
+ * run's folder runs too. A program runs only while its exact content was approved when it was
+ * saved.
  */
 
 export type SkillRuntime = "ts" | "sh";
 type SkillProgram = (typeof SaveCodeSkillInput.Type)["program"];
 
 export const codeSkillDirectory = (name: string) => `.agents/skills/${name}`;
+/** A code skill's program, by its path inside the skill. */
+const codeSkillFile = (runtime: SkillRuntime) => `scripts/run.${runtime}`;
 const codeSkillScript = (name: string, runtime: SkillRuntime) =>
-  `${codeSkillDirectory(name)}/scripts/run.${runtime}`;
-const codeSkillDocument = (name: string) => `${codeSkillDirectory(name)}/SKILL.md`;
+  `${codeSkillDirectory(name)}/${codeSkillFile(runtime)}`;
+const skillDocumentFile = "SKILL.md";
+
+/** Where a saved skill can run, as its save result tells the model. */
+const savedSkillScope =
+  "This conversation: its runs, and the cards and verifiers of its Goal, can run the skill now. A review later decides whether the project's other conversations get it too.";
 
 export class CodeSkillRejected extends Schema.TaggedError<
   CodeSkillRejected,
@@ -401,6 +407,8 @@ export const SavedProgram = Data.taggedEnum<SavedProgram>();
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+  const projectSkills = yield* ProjectSkills;
+  const agentSkills = yield* AgentSkills;
   const platform = yield* Effect.context<FileSystem.FileSystem | SecureRandom.SecureRandom>();
   // The table keeps its name from when every saved skill was a shell script.
   const approved = (projectId: string, name: string, sha256: string) =>
@@ -411,73 +419,93 @@ const make = Effect.gen(function* () {
       (rows) => rows.length > 0,
     );
 
-  /** Writes one project file, replacing whatever text is there now. */
-  const put = Effect.fn("CodeSkills.put")(function* (root: string, path: string, text: string) {
-    const target = yield* resolveProjectPath(root, path, "new-or-file");
-    if (target.stats === undefined)
-      return yield* createTextFileEffect({ absolute: target.absolute, path, text });
-    const current = yield* readTextFileEffect({ absolute: target.absolute, path });
-    if (current.text === text) return { sha256: current.sha256, bytes: current.bytes };
-    return yield* replaceTextFileEffect({
-      absolute: target.absolute,
-      path,
-      expectedSha256: current.sha256,
-      text,
+  const notFound = (name: string) =>
+    CodeSkillRejected.make({
+      reason: "not_found",
+      detail: `${name} has no scripts/run.ts or scripts/run.sh. Save it with save_code_skill first.`,
     });
-  });
 
-  /** Removes one project file as it is now. */
-  const remove = Effect.fn("CodeSkills.remove")(function* (absolute: string, path: string) {
-    const current = yield* readTextFileEffect({ absolute, path });
-    return yield* deleteTextFileEffect({ absolute, path, expectedSha256: current.sha256 });
-  });
+  /** A program from its text: a ts program with the input it declares, or a sh script. */
+  const savedProgram = (runtime: SkillRuntime, text: string, sha256: string) =>
+    runtime === "ts"
+      ? SavedProgram.ts({ code: text, sha256, input: programInput(text) })
+      : SavedProgram.sh({ text, sha256, network: scriptNetwork(text) });
 
-  const script = Effect.fn("CodeSkills.script")(function* (
+  /** The script of a committed skill folder in the run's folder, as it is now. */
+  const folderScript = Effect.fn("CodeSkills.folderScript")(function* (
     project: Project,
-    name: string,
+    folder: string,
     runtime: SkillRuntime,
   ) {
-    const path = codeSkillScript(name, runtime);
+    const path = codeSkillScript(folder, runtime);
     const target = yield* resolveProjectPath(project.root, path, "file");
     const file = yield* readTextFileEffect({ absolute: target.absolute, path });
-    return { text: file.text, sha256: file.sha256 };
+    return savedProgram(runtime, file.text, file.sha256);
   });
 
-  /** The program of a project code skill as it is now: its ts program, or else its sh script. */
-  const program = (project: Project, name: string) =>
-    script(project, name, "ts").pipe(
-      Effect.map(({ text, sha256 }) =>
-        SavedProgram.ts({ code: text, sha256, input: programInput(text) }),
-      ),
-      Effect.catchIf(
-        (rejection) =>
-          Predicate.isTagged(rejection, "PathRejected") && rejection.reason === "not_found",
-        () =>
-          Effect.map(script(project, name, "sh"), ({ text, sha256 }) =>
-            SavedProgram.sh({ text, sha256, network: scriptNetwork(text) }),
-          ),
-      ),
-      Effect.catchIf(
-        (rejection) =>
-          Predicate.isTagged(rejection, "PathRejected") && rejection.reason === "not_found",
-        () =>
-          Effect.fail(
-            CodeSkillRejected.make({
-              reason: "not_found",
-              detail: `${name} has no scripts/run.ts or scripts/run.sh. Save it with save_code_skill first.`,
-            }),
-          ),
+  /** A stored skill's ts program, or else its sh script. */
+  const storedProgram = (files: SkillFiles) =>
+    Option.firstSomeOf(
+      (["ts", "sh"] as const).map((runtime) =>
+        Option.map(Option.fromNullishOr(files[codeSkillFile(runtime)]), (text) =>
+          savedProgram(runtime, text, sha256(text)),
+        ),
       ),
     );
 
+  /** A committed skill folder's ts program, or else its sh script, or none when it has neither. */
+  const folderProgram = (project: Project, folder: string) =>
+    folderScript(project, folder, "ts").pipe(
+      Effect.catchIf(
+        (rejection) =>
+          Predicate.isTagged(rejection, "PathRejected") && rejection.reason === "not_found",
+        () => folderScript(project, folder, "sh"),
+      ),
+      Effect.asSome,
+      Effect.catchIf(
+        (rejection) =>
+          Predicate.isTagged(rejection, "PathRejected") && rejection.reason === "not_found",
+        () => Effect.succeedNone,
+      ),
+    );
+
+  /**
+   * A skill's program, or none when it is only instructions. Only the project's own folders hold
+   * programs; a user's or built-in skill folder is instructions.
+   */
+  const programOf = (project: Project, found: FoundSkill) =>
+    FoundSkill.$is("stored")(found)
+      ? Effect.succeed(storedProgram(found.stored.files))
+      : found.skill.scope === "project"
+        ? folderProgram(project, path.basename(found.skill.directory))
+        : Effect.succeedNone;
+
+  /**
+   * The program of the code skill a run of `sessionId` uses under `name`, as it is now: the
+   * conversation's candidate, the promoted skill, or the committed skill folder.
+   */
+  const program = Effect.fn("CodeSkills.program")(function* (
+    project: Fenced<Project>,
+    sessionId: string | undefined,
+    name: string,
+  ) {
+    const found = yield* projectSkills.find(project, sessionId, name);
+    const saved = Option.flatten(
+      yield* Effect.transposeOption(Option.map(found, (skill) => programOf(project, skill))),
+    );
+    return yield* Effect.fromOption(saved, () => notFound(name));
+  });
+
   return {
     /**
-     * Saves (or replaces) a code skill. The call itself was approved under the project's policy,
-     * so the saved program counts as approved; `full` mode records nothing, so leaving it asks
-     * again. A skill keeps one program: saving it in the other runtime removes the old one.
+     * Saves (or replaces) a code skill as a candidate of the conversation `sessionId`, which alone
+     * runs it until a review promotes it. The call itself was approved under the project's
+     * policy, so the saved program counts as approved; `full` mode records nothing, so leaving it
+     * asks again. A skill keeps one program: saving it in the other runtime replaces the old one.
      */
     save: Effect.fn("CodeSkills.save")(function* (
       project: Fenced<Project>,
+      sessionId: string,
       input: {
         readonly name: string;
         readonly description: string;
@@ -493,19 +521,18 @@ const make = Effect.gen(function* () {
         yield* cardFolderRewritten(project, input.program),
         () => input.program,
       );
-      const runtime = program.runtime;
-      const document = codeSkillDocument(input.name);
-      const existing = yield* resolveProjectPath(project.root, document, "new-or-file");
-      const scriptPath = yield* resolveProjectPath(
-        project.root,
-        codeSkillScript(input.name, runtime),
-        "new-or-file",
-      );
-      const other = codeSkillScript(input.name, runtime === "ts" ? "sh" : "ts");
-      const otherPath = yield* resolveProjectPath(project.root, other, "new-or-file");
-      yield* existing.stats !== undefined &&
-      scriptPath.stats === undefined &&
-      otherPath.stats === undefined
+      // A skill of this name that is only instructions keeps its name; a program would hide it.
+      const existing = yield* projectSkills.find(project, sessionId, input.name);
+      const existingProgram = yield* Option.match(existing, {
+        onNone: () => Effect.succeedNone,
+        onSome: (skill) => programOf(project, skill),
+      });
+      const projectInstructions =
+        Option.exists(
+          existing,
+          (skill) => skill.skill.scope !== "builtin" && skill.skill.scope !== "global",
+        ) && Option.isNone(existingProgram);
+      yield* projectInstructions
         ? Effect.fail(
             CodeSkillRejected.make({
               reason: "not_code_skill",
@@ -513,16 +540,20 @@ const make = Effect.gen(function* () {
             }),
           )
         : Effect.void;
-      const written = yield* put(
-        project.root,
-        codeSkillScript(input.name, runtime),
-        programText(program),
-      );
-      yield* otherPath.stats === undefined ? Effect.void : remove(otherPath.absolute, other);
-      yield* put(project.root, document, skillDocument({ ...input, program }));
+      const text = programText(program);
+      const scriptSha256 = sha256(text);
+      yield* agentSkills.saveCandidate({
+        projectId: project.id,
+        sessionId,
+        name: input.name,
+        files: {
+          [codeSkillFile(program.runtime)]: text,
+          [skillDocumentFile]: skillDocument({ ...input, program }),
+        },
+      });
       yield* sql`
         INSERT OR IGNORE INTO shell_skill_approvals (project_id, name, script_sha256, approved_at)
-        VALUES (${project.id}, ${input.name}, ${written.sha256},
+        VALUES (${project.id}, ${input.name}, ${scriptSha256},
           ${DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis))})`.pipe(
         Effect.when(Effect.succeed(project.permissionMode !== "full")),
       );
@@ -531,9 +562,9 @@ const make = Effect.gen(function* () {
       );
       const saved = {
         name: input.name,
-        directory: codeSkillDirectory(input.name),
-        scriptSha256: written.sha256,
-        replaced: existing.stats !== undefined,
+        scriptSha256,
+        replaced: Option.isSome(existingProgram),
+        availableTo: savedSkillScope,
         ...optionalProperty("pathNote", namesUserFolder ? cardFolderNote(project) : undefined),
       };
       return Match.value(program).pipe(
@@ -560,8 +591,12 @@ const make = Effect.gen(function* () {
       cardFolderRewritten(project, program).pipe(Effect.provideContext(platform)),
 
     /** The program to run: refused unless its current content is approved (or the project is `full`). */
-    runnable: Effect.fn("CodeSkills.runnable")(function* (project: Project, name: string) {
-      const saved = yield* program(project, name);
+    runnable: Effect.fn("CodeSkills.runnable")(function* (
+      project: Fenced<Project>,
+      sessionId: string | undefined,
+      name: string,
+    ) {
+      const saved = yield* program(project, sessionId, name);
       const allowed =
         project.permissionMode === "full" || (yield* approved(project.id, name, saved.sha256));
       return yield* allowed

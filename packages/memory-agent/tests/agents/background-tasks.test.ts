@@ -287,7 +287,7 @@ testAgent()("background shell across restart", (it) => {
         const { project, session } = env;
         const background = yield* BackgroundTasks;
         const run = yield* runOf(session.id);
-        const tools = (yield* ApprovedTools).toolsFor(project, "gate", run);
+        const tools = (yield* ApprovedTools).toolsFor(project, session.id, "gate", run);
         const script = `node -e 'const fs=require("fs");const t=setInterval(()=>{if(fs.existsSync("release")){clearInterval(t);console.log("finished")}},20)'`;
         yield* callTool(tools, "save_code_skill", {
           name: "wait-release",
