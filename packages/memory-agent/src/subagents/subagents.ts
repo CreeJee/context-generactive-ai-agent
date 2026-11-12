@@ -51,6 +51,7 @@ import { answeredReason, askEveryCallReason, PermissionReviews } from "../permis
 import { i18n } from "../i18n.ts";
 import type { Project } from "../projects/projects.ts";
 import { CodeTools } from "../tools/code.ts";
+import { SkillReviews } from "../skills/skill-review.ts";
 import { repeatGuardHook, repeatedToolCallCode } from "../tools/repeat-guard.ts";
 import { type RunTool, runTool } from "../tools/run-tool.ts";
 import {
@@ -450,6 +451,7 @@ const make = Effect.gen(function* () {
   const relayed = yield* RelayedApprovals;
   const trace = yield* WorkTraceStore;
   const codeTools = yield* CodeTools;
+  const skillReviews = yield* SkillReviews;
   const runStore = yield* RunStore;
   const crypto = yield* SecureRandom.SecureRandom;
 
@@ -775,6 +777,7 @@ const make = Effect.gen(function* () {
         relayGateHook,
         traceHook,
         compacting.hook,
+        skillReviews.hookFor(binding.project, binding.sessionId),
         apiUsageHook(usageLedger, {
           rootSessionId: binding.sessionId,
           purpose: "subagent",

@@ -84,6 +84,7 @@ import { DrawingPreviews } from "../attachments/previews.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { KagiTools, kagiInstructions } from "../tools/kagi.ts";
 import { SkillTools, type SkillToolset } from "../tools/skills.ts";
+import { SkillReviews } from "../skills/skill-review.ts";
 import { DelegateTools } from "../tools/delegate.ts";
 import { repeatGuardHook } from "../tools/repeat-guard.ts";
 import { Subagents, subagentInstructions } from "../subagents/subagents.ts";
@@ -570,6 +571,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const kagiTools = yield* KagiTools;
   const mcpServers = yield* McpServers;
   const skillTools = yield* SkillTools;
+  const skillReviews = yield* SkillReviews;
   const delegateTools = yield* DelegateTools;
   const subagents = yield* Subagents;
   const background = yield* BackgroundTasks;
@@ -2225,6 +2227,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           yield* recorder.hookFor(answers),
           workflowLifecycle.hook,
           indexInBackground,
+          skillReviews.hookFor(project, sessionId),
           summaries.hookFor(sessionId),
           // Last to choose the history sent to the model; only retained local images are inlined.
           compacting.hook,

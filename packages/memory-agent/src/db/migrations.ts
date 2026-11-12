@@ -3013,6 +3013,25 @@ export const migrations: readonly string[] = [
     PRIMARY KEY (project_id, name)
   );
   `,
+  `
+  -- A candidate's last review: the content it read, how many recorded runs of that content it saw,
+  -- and why it kept the skill a candidate. A promoted candidate leaves the table.
+  ALTER TABLE skill_candidates ADD COLUMN reviewed_sha256 TEXT;
+  ALTER TABLE skill_candidates ADD COLUMN reviewed_runs INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE skill_candidates ADD COLUMN kept_reason TEXT;
+  ALTER TABLE skill_candidates ADD COLUMN reviewed_at TEXT;
+  -- One run_skill call of a candidate, read from the conversation when its run ended: the result
+  -- the model read, cut short, and whether the call failed.
+  CREATE TABLE skill_runs (
+    candidate_id TEXT NOT NULL REFERENCES skill_candidates(id) ON DELETE CASCADE,
+    tool_call_id TEXT NOT NULL,
+    content_sha256 TEXT NOT NULL,
+    failed INTEGER NOT NULL CHECK (failed IN (0, 1)),
+    result TEXT NOT NULL,
+    ran_at TEXT NOT NULL,
+    PRIMARY KEY (candidate_id, tool_call_id)
+  );
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

@@ -105,6 +105,10 @@ export const defaultTestResponder = (invocation: ScriptedInvocation): ScriptedTu
         : "allow";
     return { text: JSON.stringify({ decision, reason: `검토 결과: ${decision}` }) };
   }
+  if (instructions.includes("You review a skill")) {
+    const decision = user.includes("promote-me") ? "promote" : "keep";
+    return { text: JSON.stringify({ decision, reason: `검토 결과: ${decision}` }) };
+  }
   if (instructions.includes("You label statements")) {
     const input = JSON.parse(user.match(/Input \(JSON\): (.*)$/s)?.[1] ?? "{}");
     if (

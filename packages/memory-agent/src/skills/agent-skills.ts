@@ -9,6 +9,7 @@ import {
   HashSet,
   Iterable,
   Layer,
+  Option,
   Order,
   Schema,
 } from "effect";
@@ -58,6 +59,30 @@ const PromotedRow = CandidateRow;
 
 const ProjectSkillKey = Schema.Struct({ projectId: Schema.String, sessionId: Schema.String });
 
+/** A candidate a review has not read as it is now, with the recorded runs of its content. */
+const UnreviewedRow = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  files: Schema.fromJsonString(SkillFiles),
+  contentSha256: Schema.String,
+  runs: Schema.Int,
+});
+export type UnreviewedCandidate = typeof UnreviewedRow.Type;
+
+/** One run_skill call of a candidate as the model read its result. */
+export interface SkillRun {
+  readonly name: string;
+  readonly toolCallId: string;
+  readonly failed: boolean;
+  readonly result: string;
+}
+
+const RunRow = Schema.Struct({ failed: Schema.BooleanFromBit, result: Schema.String });
+export type RecordedRun = typeof RunRow.Type;
+
+/** Recorded runs a review reads, the newest. */
+const shownRuns = 8;
+
 const byName = Order.mapInput(Order.String, (skill: StoredSkill) => skill.name);
 const byPath = Order.mapInput(Order.String, (entry: readonly [string, string]) => entry[0]);
 const encodeEntries = Schema.encodeEffect(
@@ -87,6 +112,47 @@ const make = Effect.gen(function* () {
     execute: ({ projectId, sessionId }) => sql`
       SELECT name, files_json, content_sha256 FROM skill_candidates
       WHERE project_id = ${projectId} AND session_id = ${sessionId}`,
+  });
+  const selectUnreviewed = SqlSchema.findAll({
+    Request: ProjectSkillKey,
+    Result: UnreviewedRow,
+    execute: ({ projectId, sessionId }) => sql`
+      WITH counted AS (
+        SELECT c.*, (SELECT count(*) FROM skill_runs r
+          WHERE r.candidate_id = c.id AND r.content_sha256 = c.content_sha256) AS runs
+        FROM skill_candidates c
+        WHERE c.project_id = ${projectId} AND c.session_id = ${sessionId})
+      SELECT id, name, files_json AS files, content_sha256 AS contentSha256, runs FROM counted
+      WHERE reviewed_sha256 IS NOT content_sha256 OR runs > reviewed_runs
+      ORDER BY name`,
+  });
+  const selectRuns = SqlSchema.findAll({
+    Request: Schema.Struct({ candidateId: Schema.String, contentSha256: Schema.String }),
+    Result: RunRow,
+    execute: ({ candidateId, contentSha256 }) => sql`
+      SELECT failed, result FROM skill_runs
+      WHERE candidate_id = ${candidateId} AND content_sha256 = ${contentSha256}
+      ORDER BY ran_at DESC, rowid DESC LIMIT ${shownRuns}`,
+  });
+  const upsertPromoted = SqlSchema.findOne({
+    Request: Schema.Struct({
+      projectId: Schema.String,
+      name: Schema.String,
+      files: Schema.String,
+      contentSha256: Schema.String,
+      reason: Schema.String,
+      at: Schema.String,
+    }),
+    Result: Schema.Struct({ copy_sha256: Schema.NullOr(Schema.String) }),
+    execute: (row) => sql`
+      INSERT INTO promoted_skills
+        (project_id, name, files_json, content_sha256, reason, promoted_at)
+      VALUES (${row.projectId}, ${row.name}, ${row.files}, ${row.contentSha256}, ${row.reason},
+        ${row.at})
+      ON CONFLICT (project_id, name) DO UPDATE SET files_json = excluded.files_json,
+        content_sha256 = excluded.content_sha256, reason = excluded.reason,
+        promoted_at = excluded.promoted_at
+      RETURNING copy_sha256`,
   });
   const selectPromoted = SqlSchema.findAll({
     Request: Schema.String,
@@ -158,6 +224,86 @@ const make = Effect.gen(function* () {
           updated_at = excluded.updated_at`;
       return { contentSha256: sha, replaced: existing.length > 0 };
     }),
+
+    /**
+     * Records run_skill calls of the conversation's candidates, each against the candidate's
+     * content now. A call recorded before stays as it was; a name with no candidate records nothing.
+     */
+    recordRuns: Effect.fn("AgentSkills.recordRuns")(function* (
+      projectId: string,
+      sessionId: string,
+      runs: ReadonlyArray<SkillRun>,
+    ) {
+      const at = yield* now;
+      yield* Effect.forEach(
+        runs,
+        (run) => sql`
+          INSERT OR IGNORE INTO skill_runs
+            (candidate_id, tool_call_id, content_sha256, failed, result, ran_at)
+          SELECT id, ${run.toolCallId}, content_sha256, ${run.failed ? 1 : 0}, ${run.result}, ${at}
+          FROM skill_candidates
+          WHERE project_id = ${projectId} AND session_id = ${sessionId} AND name = ${run.name}`,
+        { discard: true },
+      );
+    }),
+
+    /**
+     * The conversation's candidates no review has read as they are now: saved or changed since,
+     * or run again since.
+     */
+    unreviewed: (projectId: string, sessionId: string) =>
+      selectUnreviewed({ projectId, sessionId }),
+
+    /** The recorded runs of a candidate's content, newest first. */
+    runsOf: (candidateId: string, contentSha256: string) =>
+      selectRuns({ candidateId, contentSha256 }),
+
+    /** Keeps a candidate as it is, with the review's reason, unless it changed meanwhile. */
+    keep: (candidate: UnreviewedCandidate, reason: string) =>
+      Effect.flatMap(now, (at) =>
+        Effect.asVoid(sql`
+          UPDATE skill_candidates SET reviewed_sha256 = ${candidate.contentSha256},
+            reviewed_runs = ${candidate.runs}, kept_reason = ${reason}, reviewed_at = ${at}
+          WHERE id = ${candidate.id} AND content_sha256 = ${candidate.contentSha256}`),
+      ),
+
+    /**
+     * Moves a candidate to the project's promoted skills, replacing a promoted one of its name,
+     * unless it changed meanwhile. When it moved, returns the content the app last copied to the
+     * user's folder for that name, if it copied one.
+     */
+    promote: Effect.fn("AgentSkills.promote")(function* (
+      projectId: string,
+      candidate: UnreviewedCandidate,
+      reason: string,
+    ) {
+      const at = yield* now;
+      const files = yield* encodeFiles(candidate.files);
+      return yield* sql.withTransaction(
+        Effect.gen(function* () {
+          const moved = yield* sql`
+            DELETE FROM skill_candidates
+            WHERE id = ${candidate.id} AND content_sha256 = ${candidate.contentSha256}
+            RETURNING id`;
+          if (moved.length === 0) return Option.none<Option.Option<string>>();
+          const copied = yield* upsertPromoted({
+            projectId,
+            name: candidate.name,
+            files,
+            contentSha256: candidate.contentSha256,
+            reason,
+            at,
+          });
+          return Option.some(Option.fromNullishOr(copied.copy_sha256));
+        }),
+      );
+    }),
+
+    /** Notes the content the app wrote to the user's folder for a promoted skill. */
+    copied: (projectId: string, name: string, contentSha256: string) =>
+      Effect.asVoid(sql`
+        UPDATE promoted_skills SET copy_sha256 = ${contentSha256}
+        WHERE project_id = ${projectId} AND name = ${name}`),
   };
 });
 

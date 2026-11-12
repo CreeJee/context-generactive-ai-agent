@@ -17,6 +17,8 @@
 - `Skills.catalog` · `Skills.read`의 `committed` — 주면 그 이름의 프로젝트 스킬 폴더만 센다. `ProjectSkills`가 git이 커밋한 폴더만 넘긴다
 - `AgentSkills` — `skill_candidates`·`promoted_skills` 표 서비스. `visible(projectId, sessionId?)`는 그 대화의 후보와, 이름이 겹치지 않는 정식 스킬을 이름순으로 돌려준다. `saveCandidate`는 대화의 후보를 같은 이름이면 바꿔 저장한다. `contentSha256(files)`는 경로순으로 놓은 파일의 해시다
 - `StoredSkill` — `candidate` | `promoted` TaggedEnum(name, files, contentSha256). `SkillFiles`는 스킬 폴더 안 경로별 텍스트다
+- `SkillReviews` — `hookFor(project, sessionId)`는 run이 끝나면(`ended`) 검토를 run 밖에서 돌리는 `RunHook`이다. 채팅 run과 서브에이전트·카드 run에 붙는다. `afterRun(project, sessionId, conversation)`이 기록과 검토를 한다. `skillRunsIn(conversation)`은 답이 있는 run_skill 호출 중 뒤에 같은 이름의 save_code_skill이 없는 것을 고른다
+- `AgentSkills`의 검토 멤버 — `recordRuns`, `unreviewed`, `runsOf`, `keep`(유지 이유 기록), `promote`(후보를 `promoted_skills`로 옮기고 이전 사본 해시를 돌려줌), `copied`
 - `committedSkillFolders(root)` — `git ls-tree HEAD -- .agents/skills/`로 커밋된 스킬 폴더 이름을 돌려준다. git이 답하지 못하면(git 없음, 저장소 아님, 커밋 없음) `None`이고, 그때는 모든 폴더를 센다
 - `ProjectSkills` — `catalog(project, sessionId?)`, `find(project, sessionId, name)`(`FoundSkill` = `stored` | `folder`), `read`, `storedFile`. layer는 `AgentSkills`도 함께 준다
 - `SkillsOptions` — 테스트용 `home`과 `builtin` 경로를 덮어쓰는 옵션
@@ -40,6 +42,8 @@
 ## Invariants
 
 - 스킬 로드 순서는 builtin, global, project, promoted, candidate다. 이름이 같으면 뒤 scope가 이긴다. 앞의 셋은 `Skills.load`의 `MutableHashMap.fromIterable`가, 뒤의 둘은 `AgentSkills.visible`과 `ProjectSkills.load`가 정한다
+- 후보는 run이 끝날 때 검토한다. 그 대화의 run_skill 기록(`skill_runs`)을 남기고, 저장·변경 뒤나 새 실행 뒤 아직 검토하지 않은 후보만 저렴한 모델(검증자 역할 모델의 가장 낮은 effort)에 한 번 묻는다. 수치 기준은 두지 않는다. 답을 읽지 못하거나 모델이 없으면 다음 run 끝에 다시 묻는다
+- 정식 스킬의 사본은 사용자 폴더 `.agents/skills/<name>`에 쓴다. 폴더가 없거나 앱이 마지막에 쓴 내용(`copy_sha256`)과 같을 때만 바꾸고, 다른 내용이면 사용자 것으로 보고 그대로 둔다. 앱은 사본을 커밋하지 않는다
 - run이 보는 프로젝트 스킬 폴더는 run 폴더의 HEAD에 커밋된 것뿐이다. 카드 worktree는 커밋에서 갈라지므로, 사용자 폴더에만 있는 폴더를 계획자가 보고 카드가 못 보는 일이 없다
 - builtin 스킬 경로는 이 모듈 위치가 아니라 패키지(`runtimeRoot` 또는 `memory-agent/package.json`)로 찾는다. 앱이 이 모듈을 서버 빌드에 번들하기 때문이다
 - SKILL.md가 `maxSkillBytes`를 넘거나 디코드한 텍스트가 `maxSkillCharacters`를 넘으면 `too_large`, description이 비면 `no_description`이 된다. 읽기 실패(PlatformError, PathRejected, TextFileIoFailed, TextFileRejected)는 조용히 버리지 않고 `unreadable` problem으로 남긴다
@@ -62,7 +66,8 @@
 - `Skills`: FileSystem의 `stat`, `lstat`, `readDirectoryEntries`, `readDirectory`와 `readFileBytesEffect`로 builtin, `~/.agents/skills`, `<project>/.agents/skills`를 읽는다. 쓰기는 하지 않는다
 - `Skills`: `Digest.digest(Digest.sha256)`으로 해시를 계산한다. `homeDirectory`, `runtimeRoot`, `runtimeRequire`(require.resolve)로 호스트 경로를 확인한다
 - `CodeSkills`: 커밋된 스킬 폴더의 `scripts/run.*`를 `resolveProjectPath`와 `readTextFileEffect`로 읽는다. 저장은 `AgentSkills.saveCandidate`로 한다
-- `AgentSkills`: `skill_candidates` INSERT ... ON CONFLICT, `skill_candidates`·`promoted_skills` SELECT
+- `AgentSkills`: `skill_candidates` INSERT ... ON CONFLICT, `skill_candidates`·`promoted_skills` SELECT, `skill_runs` INSERT OR IGNORE, 검토 결과 UPDATE, 승격 때 후보 DELETE와 `promoted_skills` UPSERT(한 트랜잭션)
+- `SkillReviews`: 모델 호출 한 번(`singleAnswer`)과 `api_usage`의 `skill-review` 기록, 사용자 폴더 `.agents/skills/<name>` 읽기·삭제·쓰기
 - `committedSkillFolders`: run 폴더에서 `git ls-tree`를 실행한다
 - `code-skills.ts`는 `SqlClient`(effect/sql), `Clock`, `DateTime`, `effect/crypto`를 import한다
 
