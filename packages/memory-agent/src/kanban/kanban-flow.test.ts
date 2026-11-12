@@ -946,7 +946,7 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "runs a card the planner added to a board the user approved only once the user approves it",
+    "runs a card the planner added only once the user approves it when the project asks",
     () =>
       Effect.gen(function* () {
         const fixture = yield* kanbanFixture;
@@ -990,38 +990,6 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
             expect(yield* Queue.take(runs)).toBe("b");
             const cards = yield* waitForCards(board.sessionId, allDone);
             expect(cardOf(cards, "b")?.approval).toBeUndefined();
-          }),
-        );
-      }),
-    gitTimeout,
-  );
-
-  it.effect(
-    "runs a card the planner added to a board the user approved without waiting when the project has full permission",
-    () =>
-      Effect.gen(function* () {
-        const fixture = yield* kanbanFixture;
-        const releaseA = yield* Deferred.make<void>();
-        const run = yield* openKanbanOwner(fixture, yield* Effect.scope, {
-          cores: 4,
-          agent: (agent) =>
-            agent.card.id === "a"
-              ? Effect.as(Deferred.await(releaseA), finished)
-              : Effect.succeed(finished),
-        });
-        yield* run(
-          Effect.gen(function* () {
-            const board = yield* executingPlan(fixture, [card("a")]);
-            yield* (yield* Projects).setPermissionMode(board.projectId, "full");
-            yield* (yield* KanbanOrchestrator).start(board.sessionId, "user");
-            yield* plannerAdds(board.sessionId, "b");
-            const approved = yield* waitForCards(
-              board.sessionId,
-              (cards) => status(cards, "b") === "done",
-            );
-            expect(cardOf(approved, "b")?.approval).toBeUndefined();
-            yield* Deferred.succeed(releaseA, undefined);
-            yield* waitForCards(board.sessionId, allDone);
           }),
         );
       }),
@@ -1081,7 +1049,7 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "approves the cards a Goal mode planner adds as the project's permission mode says",
+    "approves the cards a planner adds as the project's permission mode says, though the user started the board",
     () =>
       Effect.gen(function* () {
         const fixture = yield* kanbanFixture;
@@ -1109,7 +1077,7 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
             const projects = yield* Projects;
             const orchestrator = yield* KanbanOrchestrator;
             yield* projects.setPermissionMode(board.projectId, "full");
-            yield* orchestrator.start(board.sessionId, "permission");
+            yield* orchestrator.start(board.sessionId, "user");
             // full: a card the planner adds runs without anyone approving it.
             yield* plannerAdds(board.sessionId, "b");
             const approved = yield* waitForCards(
