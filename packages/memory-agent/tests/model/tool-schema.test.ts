@@ -6,6 +6,7 @@ import {
   SaveCodeSkillInput,
   WriteOutsideFileInput,
 } from "../../src/tools/definitions.ts";
+import { NotifySessionInput } from "../../src/sessions/dispatches.ts";
 import { runTool } from "../../src/tools/run-tool.ts";
 import { matchGolden, toolRequestBodies } from "../support/requests.ts";
 
@@ -19,6 +20,11 @@ const cases = [
   { name: "save_code_skill", description: "Save a skill.", parameters: SaveCodeSkillInput },
   { name: "run_skill", description: "Run a skill.", parameters: RunSkillInput },
   { name: "write_outside_file", description: "Write a file.", parameters: WriteOutsideFileInput },
+  {
+    name: "notify_session",
+    description: "Notify another session.",
+    parameters: NotifySessionInput,
+  },
   {
     name: "list_files",
     description: "List files.",

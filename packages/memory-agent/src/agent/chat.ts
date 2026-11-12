@@ -76,6 +76,7 @@ import { Recorder } from "../memory/record.ts";
 import { Projects, type Project } from "../projects/projects.ts";
 import { type GateBinding, PermissionGate } from "../permissions/gate.ts";
 import { Sessions } from "../sessions/sessions.ts";
+import { SessionDispatches } from "../sessions/dispatches.ts";
 import { ApprovedTools } from "../tools/approved.ts";
 import { CodeTools } from "../tools/code.ts";
 import { gatedToolNames } from "../tools/definitions.ts";
@@ -587,6 +588,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const leases = yield* SessionLeases;
   const queue = yield* MessageQueue;
   const delivery = yield* QueueDelivery;
+  const sessionDispatches = yield* SessionDispatches;
   const summaries = yield* TurnSummaries;
   const workflows = yield* Workflows;
   const execution = yield* WorkflowExecution;
@@ -2050,6 +2052,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ...delegation.tools,
           ...workflowTools.toolsFor(sessionId, workflow.phase, runId),
           ...background.toolsFor(sessionId),
+          // Content-only handover between the same project's conversations; no approval is asked.
+          sessionDispatches.notifyToolFor(projectId, sessionId, runId),
         ]);
         const sharedTools =
           reportSource !== null

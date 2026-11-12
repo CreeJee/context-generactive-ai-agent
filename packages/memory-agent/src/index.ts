@@ -467,6 +467,16 @@ export {
   type QueuedMessage,
 } from "./queue/queue-state.ts";
 export { sessionHolderHeader, type ClaimResult, type LeaseView } from "./sessions/lease-state.ts";
+export {
+  DispatchStoreFailed,
+  maxDispatchBodyCharacters,
+  NotifySessionInput,
+  NotifyTargetRejected,
+  NotifyTargetRejectedReason,
+  SessionDispatch,
+  SessionDispatches,
+  SessionDispatchState,
+} from "./sessions/dispatches.ts";
 
 export { Edge, EdgeKind, edgeWeights, type NodeLink } from "./memory/edges.ts";
 export {

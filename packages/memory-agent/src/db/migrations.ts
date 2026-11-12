@@ -3032,6 +3032,28 @@ export const migrations: readonly string[] = [
     PRIMARY KEY (candidate_id, tool_call_id)
   );
   `,
+  `
+  -- A message one conversation leaves another conversation of the same project (decisions.md
+  -- "세션 dispatch는 표에 영속으로 저장한다"). A row waits until the target conversation's next run
+  -- delivers it, and the app restarts never lose one. BTW threads and subagent threads are not
+  -- rows of sessions, so their ids never pass the target check.
+  CREATE TABLE session_dispatches (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    from_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    from_run_id TEXT NOT NULL,
+    to_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    body TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('waiting', 'delivered')),
+    delivered_run_id TEXT,
+    created_at TEXT NOT NULL,
+    delivered_at TEXT,
+    CHECK (from_session_id <> to_session_id),
+    CHECK ((state = 'delivered') = (delivered_run_id IS NOT NULL)),
+    CHECK ((state = 'delivered') = (delivered_at IS NOT NULL))
+  );
+  CREATE INDEX session_dispatches_target ON session_dispatches(to_session_id, state, created_at);
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

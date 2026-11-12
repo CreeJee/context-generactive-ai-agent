@@ -72,6 +72,32 @@
           "eager_input_streaming": true
         },
         {
+          "name": "notify_session",
+          "description": "Notify another session.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "toSession": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Id of another conversation of the same project, as the session list shows it."
+              },
+              "body": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8000,
+                "description": "The message to leave. At most 8000 characters."
+              }
+            },
+            "required": [
+              "toSession",
+              "body"
+            ],
+            "additionalProperties": false
+          },
+          "eager_input_streaming": true
+        },
+        {
           "name": "run_skill",
           "description": "Run a skill.",
           "input_schema": {
@@ -342,6 +368,32 @@
             "additionalProperties": false,
             "properties": {},
             "required": []
+          }
+        },
+        {
+          "type": "function",
+          "name": "notify_session",
+          "description": "Notify another session.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "toSession": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Id of another conversation of the same project, as the session list shows it."
+              },
+              "body": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8000,
+                "description": "The message to leave. At most 8000 characters."
+              }
+            },
+            "required": [
+              "toSession",
+              "body"
+            ],
+            "additionalProperties": false
           }
         },
         {
@@ -744,6 +796,35 @@
             "required": [
               "path",
               "content"
+            ],
+            "additionalProperties": false
+          },
+          "strict": false
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "notify_session",
+          "description": "Notify another session.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "toSession": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Id of another conversation of the same project, as the session list shows it."
+              },
+              "body": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8000,
+                "description": "The message to leave. At most 8000 characters."
+              }
+            },
+            "required": [
+              "toSession",
+              "body"
             ],
             "additionalProperties": false
           },

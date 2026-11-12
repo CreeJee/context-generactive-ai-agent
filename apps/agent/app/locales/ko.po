@@ -3527,6 +3527,11 @@ msgstr "설정이 쓰는 환경 변수가 없습니다."
 msgid "세션 #{session} · run {runs}/{runCount}개 · 실패 포함 run {failingRuns}개 · 잘린 원문 {cutTexts}개 · 약 {kilobytes}KB"
 msgstr "세션 #{session} · run {runs}/{runCount}개 · 실패 포함 run {failingRuns}개 · 잘린 원문 {cutTexts}개 · 약 {kilobytes}KB"
 
+#. Label of the notify_session tool: a conversation leaving a message for another conversation of the same project, shown on the chat tool row. It is not a message the user sent.
+#: app/entry/chat/message.tsx
+msgid "세션 메시지 전달"
+msgstr "세션 메시지 전달"
+
 #: app/routes/report.tsx
 msgid "세션 없이 열면 증상 설명만으로 제보합니다."
 msgstr "세션 없이 열면 증상 설명만으로 제보합니다."

@@ -49,6 +49,9 @@ export const builtinToolEffects = {
   edit_kanban_board: "effectful",
   // A card verifier's verdict decides whether the card is integrated.
   record_card_verdict: "effectful",
+  // Content-only handover, but the dispatch row it inserts is durable, so the response settles
+  // before it runs; its refusals write nothing and are recorded through `refused`.
+  notify_session: "effectful",
 } as const satisfies Record<string, "read" | "effectful">;
 
 /** Built-ins since replaced, whose calls are still in recorded runs and history. */

@@ -85,6 +85,11 @@ const toolLabels = {
   delegate_to_agent: msg`외부 에이전트에게 맡기기`,
   // Calls TanStack recorded to load a tool sent by name only.
   __lazy__tool__discovery__: msg`도구 불러오기`,
+  notify_session: msg({
+    message: "세션 메시지 전달",
+    comment:
+      "Label of the notify_session tool: a conversation leaving a message for another conversation of the same project, shown on the chat tool row. It is not a message the user sent.",
+  }),
 } satisfies Record<string, MessageDescriptor>;
 
 /** The project file tool an outside file tool ran as, when its path was in the project. */

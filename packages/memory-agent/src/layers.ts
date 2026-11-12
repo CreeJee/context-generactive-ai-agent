@@ -102,6 +102,7 @@ import { ImageRouteFacts, ImageRouter } from "./providers/image-router.ts";
 import { QueueDelivery } from "./queue/delivery.ts";
 import { MessageQueue } from "./queue/queue.ts";
 import { SessionLeases } from "./sessions/leases.ts";
+import { SessionDispatches } from "./sessions/dispatches.ts";
 import { Sessions } from "./sessions/sessions.ts";
 import { ApprovedTools } from "./tools/approved.ts";
 import { CodeSkills } from "./skills/code-skills.ts";
@@ -297,6 +298,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     FreePages.layer,
     PlannerStatistics.layer,
     MessageQueue.layer,
+    SessionDispatches.layer,
     Interpretations.layer,
     RelayedApprovals.layer,
     BulkNodes.layer,
