@@ -18,7 +18,7 @@
 - `AgentSkills` — `skill_candidates`·`promoted_skills` 표 서비스. `visible(projectId, sessionId?)`는 그 대화의 후보와, 이름이 겹치지 않는 정식 스킬을 이름순으로 돌려준다. `saveCandidate`는 대화의 후보를 같은 이름이면 바꿔 저장한다. `contentSha256(files)`는 경로순으로 놓은 파일의 해시다
 - `StoredSkill` — `candidate` | `promoted` TaggedEnum(name, files, contentSha256). `SkillFiles`는 스킬 폴더 안 경로별 텍스트다
 - `SkillReviews` — `hookFor(project, sessionId)`는 run이 끝나면(`ended`) 검토를 run 밖에서 돌리는 `RunHook`이다. 채팅 run과 서브에이전트·카드 run에 붙는다. `afterRun(project, sessionId, conversation)`이 기록과 검토를 한다. `skillRunsIn(conversation)`은 답이 있는 run_skill 호출 중 뒤에 같은 이름의 save_code_skill이 없는 것을 고른다
-- `AgentSkills`의 검토 멤버 — `recordRuns`, `unreviewed`, `runsOf`, `keep`(유지 이유 기록), `promote`(후보를 `promoted_skills`로 옮기고 이전 사본 해시를 돌려줌), `copied`
+- `AgentSkills`의 검토 멤버 — `recordRuns`, `unreviewed`, `unreviewedFound`, `promotedCopies`, `syncFound(projectId, origin, folders)`, `runsOf`, `keep`(유지 이유 기록), `promote`(후보를 `promoted_skills`로 옮기고 이전 사본 해시를 돌려줌), `copied`
 - `committedSkillFolders(root)` — `git ls-tree HEAD -- .agents/skills/`로 커밋된 스킬 폴더 이름을 돌려준다. git이 답하지 못하면(git 없음, 저장소 아님, 커밋 없음) `None`이고, 그때는 모든 폴더를 센다
 - `ProjectSkills` — `catalog(project, sessionId?)`, `find(project, sessionId, name)`(`FoundSkill` = `stored` | `folder`), `read`, `storedFile`. layer는 `AgentSkills`도 함께 준다
 - `SkillsOptions` — 테스트용 `home`과 `builtin` 경로를 덮어쓰는 옵션
@@ -44,6 +44,7 @@
 - 스킬 로드 순서는 builtin, global, project, promoted, candidate다. 이름이 같으면 뒤 scope가 이긴다. 앞의 셋은 `Skills.load`의 `MutableHashMap.fromIterable`가, 뒤의 둘은 `AgentSkills.visible`과 `ProjectSkills.load`가 정한다
 - 후보는 run이 끝날 때 검토한다. 그 대화의 run_skill 기록(`skill_runs`)을 남기고, 저장·변경 뒤나 새 실행 뒤 아직 검토하지 않은 후보만 저렴한 모델(검증자 역할 모델의 가장 낮은 effort)에 한 번 묻는다. 수치 기준은 두지 않는다. 답을 읽지 못하거나 모델이 없으면 다음 run 끝에 다시 묻는다
 - 정식 스킬의 사본은 사용자 폴더 `.agents/skills/<name>`에 쓴다. 폴더가 없거나 앱이 마지막에 쓴 내용(`copy_sha256`)과 같을 때만 바꾸고, 다른 내용이면 사용자 것으로 보고 그대로 둔다. 앱은 사본을 커밋하지 않는다
+- 검토 때 사용자 폴더도 다시 읽는다. 없어진 정식 스킬 사본은 다시 쓴다. 앱이 마지막에 쓴 내용과 다른 사본은 그대로 두고 `edited` 후보로 둔다. HEAD에 커밋되지 않았고 정식 스킬도 아닌 폴더는 다른 에이전트나 사용자가 쓴 `outside` 후보다. 두 후보는 대화가 없어(session_id NULL) 검토를 통과하기 전에는 아무 run도 보지 못한다. 폴더 내용이 바뀌면 이전 후보와 그 검토는 지운다. git이 답하지 못하면 `outside` 후보는 건드리지 않는다. 파일 32개나 256,000바이트를 넘는 폴더는 읽지 않는다
 - run이 보는 프로젝트 스킬 폴더는 run 폴더의 HEAD에 커밋된 것뿐이다. 카드 worktree는 커밋에서 갈라지므로, 사용자 폴더에만 있는 폴더를 계획자가 보고 카드가 못 보는 일이 없다
 - builtin 스킬 경로는 이 모듈 위치가 아니라 패키지(`runtimeRoot` 또는 `memory-agent/package.json`)로 찾는다. 앱이 이 모듈을 서버 빌드에 번들하기 때문이다
 - SKILL.md가 `maxSkillBytes`를 넘거나 디코드한 텍스트가 `maxSkillCharacters`를 넘으면 `too_large`, description이 비면 `no_description`이 된다. 읽기 실패(PlatformError, PathRejected, TextFileIoFailed, TextFileRejected)는 조용히 버리지 않고 `unreadable` problem으로 남긴다

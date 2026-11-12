@@ -63,11 +63,36 @@ const ProjectSkillKey = Schema.Struct({ projectId: Schema.String, sessionId: Sch
 const UnreviewedRow = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
+  origin: CandidateOrigin,
   files: Schema.fromJsonString(SkillFiles),
   contentSha256: Schema.String,
   runs: Schema.Int,
 });
 export type UnreviewedCandidate = typeof UnreviewedRow.Type;
+
+/** A skill folder in the user's folder that the app found and keeps as a candidate. */
+export interface FoundFolder {
+  readonly name: string;
+  readonly files: SkillFiles;
+}
+
+/** Found in the user's folder: a skill another agent or the user wrote, or a changed copy. */
+export type FoundOrigin = Exclude<CandidateOrigin, "saved">;
+
+/** A promoted skill with the content the app last copied to the user's folder. */
+const PromotedCopyRow = Schema.Struct({
+  name: Schema.String,
+  files: Schema.fromJsonString(SkillFiles),
+  contentSha256: Schema.String,
+  copySha256: Schema.NullOr(Schema.String),
+});
+export type PromotedCopy = typeof PromotedCopyRow.Type;
+
+const FoundRow = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  contentSha256: Schema.String,
+});
 
 /** One run_skill call of a candidate as the model read its result. */
 export interface SkillRun {
@@ -122,9 +147,34 @@ const make = Effect.gen(function* () {
           WHERE r.candidate_id = c.id AND r.content_sha256 = c.content_sha256) AS runs
         FROM skill_candidates c
         WHERE c.project_id = ${projectId} AND c.session_id = ${sessionId})
-      SELECT id, name, files_json AS files, content_sha256 AS contentSha256, runs FROM counted
+      SELECT id, name, origin, files_json AS files, content_sha256 AS contentSha256, runs
+      FROM counted
       WHERE reviewed_sha256 IS NOT content_sha256 OR runs > reviewed_runs
       ORDER BY name`,
+  });
+  const selectUnreviewedFound = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: UnreviewedRow,
+    execute: (projectId) => sql`
+      SELECT id, name, origin, files_json AS files, content_sha256 AS contentSha256, 0 AS runs
+      FROM skill_candidates
+      WHERE project_id = ${projectId} AND session_id IS NULL
+        AND reviewed_sha256 IS NOT content_sha256
+      ORDER BY name`,
+  });
+  const selectFound = SqlSchema.findAll({
+    Request: Schema.Struct({ projectId: Schema.String, origin: CandidateOrigin }),
+    Result: FoundRow,
+    execute: ({ projectId, origin }) => sql`
+      SELECT id, name, content_sha256 AS contentSha256 FROM skill_candidates
+      WHERE project_id = ${projectId} AND session_id IS NULL AND origin = ${origin}`,
+  });
+  const selectPromotedCopies = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: PromotedCopyRow,
+    execute: (projectId) => sql`
+      SELECT name, files_json AS files, content_sha256 AS contentSha256, copy_sha256 AS copySha256
+      FROM promoted_skills WHERE project_id = ${projectId} ORDER BY name`,
   });
   const selectRuns = SqlSchema.findAll({
     Request: Schema.Struct({ candidateId: Schema.String, contentSha256: Schema.String }),
@@ -253,6 +303,57 @@ const make = Effect.gen(function* () {
      */
     unreviewed: (projectId: string, sessionId: string) =>
       selectUnreviewed({ projectId, sessionId }),
+
+    /** The skill folders found in the user's folder that no review has read as they are now. */
+    unreviewedFound: (projectId: string) => selectUnreviewedFound(projectId),
+
+    /** The project's promoted skills with what the app last copied to the user's folder. */
+    promotedCopies: (projectId: string) => selectPromotedCopies(projectId),
+
+    /**
+     * Makes the project's found candidates of `origin` the folders found now: one gone, or changed
+     * since, leaves with its review, and one new or changed comes in unreviewed.
+     */
+    syncFound: Effect.fn("AgentSkills.syncFound")(function* (
+      projectId: string,
+      origin: FoundOrigin,
+      found: ReadonlyArray<FoundFolder>,
+    ) {
+      const at = yield* now;
+      const rows = yield* Effect.forEach(found, (folder) =>
+        Effect.all({
+          folder: Effect.succeed(folder),
+          sha: contentSha256(folder.files),
+          files: encodeFiles(folder.files),
+          id: random.uuidV7(),
+        }),
+      );
+      const current = HashSet.fromIterable(
+        Iterable.map(rows, (row) => `${row.folder.name}\n${row.sha}`),
+      );
+      yield* sql.withTransaction(
+        Effect.gen(function* () {
+          const stale = (yield* selectFound({ projectId, origin })).filter(
+            (row) => !HashSet.has(current, `${row.name}\n${row.contentSha256}`),
+          );
+          yield* Effect.forEach(
+            stale,
+            (row) => sql`DELETE FROM skill_candidates WHERE id = ${row.id}`,
+            { discard: true },
+          );
+          yield* Effect.forEach(
+            rows,
+            ({ folder, sha, files, id }) => sql`
+              INSERT OR IGNORE INTO skill_candidates
+                (id, project_id, name, session_id, origin, files_json, content_sha256, created_at,
+                  updated_at)
+              VALUES (${id}, ${projectId}, ${folder.name}, NULL, ${origin}, ${files}, ${sha},
+                ${at}, ${at})`,
+            { discard: true },
+          );
+        }),
+      );
+    }),
 
     /** The recorded runs of a candidate's content, newest first. */
     runsOf: (candidateId: string, contentSha256: string) =>
