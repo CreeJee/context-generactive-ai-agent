@@ -42,7 +42,6 @@ import {
   KanbanStorageReason,
   type CardAttempt,
   type CardAttemptOutcome,
-  type CardApprovalPolicy,
   type CardLadder,
   plannerStalled,
   type KanbanGoal,
@@ -1377,14 +1376,8 @@ const make = (options: KanbanOrchestratorOptions) =>
       /**
        * Runs the session's current Goal as a kanban board. The Plan must be executing. A project
        * that cannot have worktrees runs its cards one at a time in the project itself.
-       * `cardApproval` says who approves the cards the planner adds while it runs: the user, unless
-       * the owner approved the Plan in Goal mode. A project in the full permission mode approves
-       * them either way.
        */
-      start: Effect.fn("KanbanOrchestrator.start")(function* (
-        sessionId: string,
-        cardApproval: CardApprovalPolicy = "user",
-      ) {
+      start: Effect.fn("KanbanOrchestrator.start")(function* (sessionId: string) {
         const goalInstanceId = yield* workflows.goalInstanceId(sessionId);
         const state = yield* workflows.get(sessionId);
         if (goalInstanceId === null || state.goal === null)
@@ -1423,7 +1416,6 @@ const make = (options: KanbanOrchestratorOptions) =>
           projectRoot: project.root,
           mode,
           goalVersion: state.goal.version,
-          cardApproval,
         });
         yield* run({ sessionId, goalInstanceId });
         // A board already running looks now instead of at its next interval.
@@ -1436,20 +1428,6 @@ const make = (options: KanbanOrchestratorOptions) =>
 
       /** Wakes a board's loop now, after a change the loop should see. */
       poke: (goalInstanceId: string) => PubSub.publish(pokes, goalInstanceId),
-
-      /**
-       * A Plan approved again while its board kept running: the board takes the approval policy
-       * of that approval, as `start` gives a board it starts, and looks at the waiting cards.
-       */
-      setCardApproval: Effect.fn("KanbanOrchestrator.setCardApproval")(function* (
-        sessionId: string,
-        cardApproval: CardApprovalPolicy,
-      ) {
-        const goalInstanceId = yield* workflows.goalInstanceId(sessionId);
-        if (goalInstanceId === null) return;
-        yield* attempts.setCardApproval(goalInstanceId, cardApproval);
-        yield* PubSub.publish(pokes, goalInstanceId);
-      }),
 
       /**
        * The user spoke to the planner: the board counts its planner rounds again from zero and

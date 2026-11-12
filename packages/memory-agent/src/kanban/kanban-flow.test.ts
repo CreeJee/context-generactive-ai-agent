@@ -1049,7 +1049,7 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "approves the cards a planner adds as the project's permission mode says, though the user started the board",
+    "approves the cards a planner adds as the project's permission mode says",
     () =>
       Effect.gen(function* () {
         const fixture = yield* kanbanFixture;
@@ -1077,7 +1077,7 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
             const projects = yield* Projects;
             const orchestrator = yield* KanbanOrchestrator;
             yield* projects.setPermissionMode(board.projectId, "full");
-            yield* orchestrator.start(board.sessionId, "user");
+            yield* orchestrator.start(board.sessionId);
             // full: a card the planner adds runs without anyone approving it.
             yield* plannerAdds(board.sessionId, "b");
             const approved = yield* waitForCards(
@@ -1140,7 +1140,7 @@ layer(kanbanTestLayer, { excludeTestServices: true })((it) => {
                 Stream.runForEach((attention) => Queue.offer(heard, attention.sessionId)),
                 Effect.forkScoped,
               );
-              yield* orchestrator.start(board.sessionId, "permission");
+              yield* orchestrator.start(board.sessionId);
               // Each round the planner adds a card for the outcome, which is judged not met again.
               yield* Effect.forEach(
                 ["fix1", "fix2", "fix3"],

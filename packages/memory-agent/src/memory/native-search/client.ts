@@ -89,15 +89,6 @@ const replyTimeout = Duration.seconds(2);
 const startupTimeout = Duration.seconds(15);
 
 /**
- * How long a command that writes the index's files may take before the host gives up on a hung
- * worker. A busy disk stretches those writes past `replyTimeout`: under sustained writes and
- * `sync` from other processes, one save of a 78,280-vector index (32 MB) took 3.9 s, nearly all
- * of it writing the file (2026-11-12). A timed-out update stops the vector index until the owner
- * is opened again, so, like `startupTimeout`, this only bounds a worker that never answers.
- */
-const writeTimeout = Duration.seconds(15);
-
-/**
  * A budgeted search answers `budget-exceeded` itself once its budget runs out, but an engine call
  * already admitted runs to its end. The host waits that long past the budget, so the typed native
  * outcome reaches the caller instead of a `request-timeout`.
@@ -110,11 +101,11 @@ const replyDeadline = OwnerCommand.match({
   add: () => replyTimeout,
   remove: () => replyTimeout,
   reset: () => replyTimeout,
-  save: () => writeTimeout,
+  save: () => replyTimeout,
   validate: () => replyTimeout,
   "vector-search": () => replyTimeout,
-  "lexical-apply": () => writeTimeout,
-  "lexical-reset": () => writeTimeout,
+  "lexical-apply": () => replyTimeout,
+  "lexical-reset": () => replyTimeout,
 });
 
 /** A started native owner worker, as the host drives it. Tests wrap it to gate transport. */

@@ -108,15 +108,6 @@ export type AssignmentHold = typeof AssignmentHold.Type;
 export const KanbanMode = Schema.Literals(["worktree", "sequential"]);
 export type KanbanMode = typeof KanbanMode.Type;
 
-/**
- * Who approves the cards the planner adds to a running board: the user (a Plan the user
- * approved), or the project's permission mode (a Goal mode Plan the owner approved): full approves
- * them at once, auto has its reviewer judge them, ask leaves them to the user. A project in the
- * full permission mode approves them on a board the user approved too.
- */
-export const CardApprovalPolicy = Schema.Literals(["user", "permission"]);
-export type CardApprovalPolicy = typeof CardApprovalPolicy.Type;
-
 /** What the loop knows about a card beyond the Plan. */
 export const KanbanCardView = Schema.Struct({
   cardId: Schema.String,

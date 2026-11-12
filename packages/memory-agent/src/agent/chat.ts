@@ -38,7 +38,7 @@ import {
 } from "effect";
 import { SecureRandom } from "effect/crypto";
 import type { SqlError } from "effect/sql";
-import { CardAttempts, type CardApprovalPolicy } from "../kanban/card-attempts.ts";
+import { CardAttempts } from "../kanban/card-attempts.ts";
 import { HumanDecisions } from "../kanban/human-decision.ts";
 import { KanbanOrchestrator, type KanbanAttentionReason } from "../kanban/orchestrator.ts";
 import { KanbanTools, kanbanAttentionPrompt, kanbanInstructions } from "../kanban/tools.ts";
@@ -638,11 +638,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
    * Starts the session's kanban board unless one runs: card agents execute the approved Plan and
    * the chat plans (decisions.md "outcome 장부와 이어 쓰는 Plan"). Why it could not start, if so.
    */
-  const startBoard = (sessionId: string, cardApproval: CardApprovalPolicy) =>
+  const startBoard = (sessionId: string) =>
     Effect.flatMap(kanbanBoard(sessionId), (running) =>
       running
         ? Effect.succeedNone
-        : kanbanOrchestrator.start(sessionId, cardApproval).pipe(
+        : kanbanOrchestrator.start(sessionId).pipe(
             Effect.tap(() => events.publishSession(sessionId, "run-state")),
             Effect.as(Option.none<string>()),
             Effect.catchTag("KanbanStartRefused", ({ reason }) => Effect.succeedSome(reason)),
@@ -654,37 +654,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             ),
           ),
     );
-  /** Why an approval did not reach a running board: the board keeps its earlier approval policy. */
-  const cardApprovalNotSaved = "card_approval_not_saved";
-  /**
-   * The board of a Plan approval just recorded: a board that kept running takes the approval's
-   * policy for the cards the planner adds, as a board it starts would. Why it could not start, if so.
-   */
-  const approvedPlanBoard = (sessionId: string, cardApproval: CardApprovalPolicy) =>
-    Effect.flatMap(kanbanBoard(sessionId), (running) =>
-      running
-        ? kanbanOrchestrator.setCardApproval(sessionId, cardApproval).pipe(
-            Effect.as(Option.none<string>()),
-            Effect.catchCause((cause) =>
-              Effect.as(
-                Effect.logWarning("Approved Plan did not set its board's card approval", cause),
-                Option.some(cardApprovalNotSaved),
-              ),
-            ),
-          )
-        : startBoard(sessionId, cardApproval),
-    );
-  /** What the user sees when an approved Plan's board did not take it, by why. */
+  /** What the user sees when an approved Plan's board did not start, with why. */
   const approvalBlocker = (refused: string): WorkflowBlocker => ({
     reason: "external_dependency",
-    detail:
-      refused === cardApprovalNotSaved
-        ? i18n._(
-            msg`실행 중인 보드에 이번 승인의 새 카드 승인 방식을 저장하지 못했습니다. 보드에 새로 더하는 카드는 이전 방식대로 승인합니다.`,
-          )
-        : i18n._(
-            msg`승인한 Plan을 칸반 보드에서 시작하지 못했습니다. 보드 패널에서 칸반으로 전환을 다시 눌러 주십시오.`,
-          ),
+    detail: i18n._(
+      msg`승인한 Plan을 칸반 보드에서 시작하지 못했습니다. 보드 패널에서 칸반으로 전환을 다시 눌러 주십시오.`,
+    ),
     evidence: [refused],
   });
   /** On a kanban board the session's chat is the planner, so it runs on the planner's model. */
@@ -2574,9 +2549,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         yield* cancelProviderRetries(sessionId);
         // A board that cannot start shows why, as in Goal mode, and is offered again from the board
         // panel.
-        const refused = executesPlan(state)
-          ? yield* approvedPlanBoard(sessionId, "user")
-          : Option.none<string>();
+        const refused = executesPlan(state) ? yield* startBoard(sessionId) : Option.none<string>();
         if (Option.isSome(refused)) {
           // The blocker belongs to a run; a session that never ran keeps the board panel's offer.
           const last = yield* lastRun(sessionId);
@@ -2872,14 +2845,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 )
               : reconciled;
           // An executing Plan without a board moves onto one; one that cannot start waits as a
-          // blocker the user sees, never for the chat to execute it. The cards a Goal mode
-          // planner adds later follow the project's permission mode, also on a board that kept
-          // running since an earlier approval; a Plan the user approved leaves them to the user.
+          // blocker the user sees, never for the chat to execute it.
           if (executesPlan(workflow)) {
-            // Only the Goal mode approval above leaves a shaping state executing.
-            const refused = yield* reconciled.phase === "shaping"
-              ? approvedPlanBoard(sessionId, "permission")
-              : startBoard(sessionId, "user");
+            const refused = yield* startBoard(sessionId);
             if (Option.isSome(refused)) {
               yield* execution.blockPending(sessionId, last.runId, approvalBlocker(refused.value));
               yield* events.publishSession(sessionId, "run-state");

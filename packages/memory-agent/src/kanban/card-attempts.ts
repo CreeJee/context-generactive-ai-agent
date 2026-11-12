@@ -17,9 +17,9 @@ import { endedWithKnownEffectsSql } from "../workflow/run-bindings.ts";
 import { UserChange, UserChangeRequestStatus } from "../workflow/board-edit.ts";
 import { CardStatus } from "../workflow/card.ts";
 import { CardFailure, CardHoldReason } from "./failures.ts";
-import { AssignmentHold, CardApprovalPolicy, KanbanMode } from "./contracts.ts";
+import { AssignmentHold, KanbanMode } from "./contracts.ts";
 
-export { AssignmentHold, CardApprovalPolicy, KanbanMode } from "./contracts.ts";
+export { AssignmentHold, KanbanMode } from "./contracts.ts";
 
 /**
  * Durable kanban execution records on the owner connection: which Goal instances run as a board,
@@ -55,8 +55,6 @@ export interface KanbanGoal {
   /** The Goal version the board was last classified against. */
   readonly goalVersion: number;
   readonly hold: AssignmentHold | null;
-  /** Who approves the cards the planner adds while the board runs. */
-  readonly cardApproval: CardApprovalPolicy;
   readonly planner: PlannerRounds;
   readonly active: boolean;
 }
@@ -150,7 +148,6 @@ const GoalRow = Schema.Struct({
   mode: KanbanMode,
   goal_version: Schema.Int,
   hold_json: Schema.NullOr(Schema.fromJsonString(AssignmentHold)),
-  card_approval: CardApprovalPolicy,
   planner_rounds: Schema.Int,
   planner_met: Schema.Int,
   status: Schema.Literals(["active", "stopped"]),
@@ -203,7 +200,6 @@ const toGoal = (row: typeof GoalRow.Type): KanbanGoal => ({
   mode: row.mode,
   goalVersion: row.goal_version,
   hold: row.hold_json,
-  cardApproval: row.card_approval,
   planner: { rounds: row.planner_rounds, met: row.planner_met },
   active: row.status === "active",
 });
@@ -305,21 +301,17 @@ const make = Effect.gen(function* () {
     goal: (goalInstanceId: string) =>
       Effect.map(goals("one", goalInstanceId), (found) => Option.fromUndefinedOr(found[0])),
 
-    /**
-     * Starts (or restarts) running a Goal instance as a board. An existing row keeps its state
-     * but takes the approval policy of the latest start.
-     */
+    /** Starts (or restarts) running a Goal instance as a board. An existing row keeps its state. */
     registerGoal: Effect.fn("CardAttempts.registerGoal")(function* (
       goal: Omit<KanbanGoal, "hold" | "planner" | "active" | "sessionId" | "projectId">,
     ) {
       const at = yield* now;
       yield* sql`INSERT INTO kanban_goals
-          (goal_instance_id, project_root, mode, goal_version, hold_json, card_approval, status,
-           created_at, updated_at)
+          (goal_instance_id, project_root, mode, goal_version, hold_json, status, created_at,
+           updated_at)
           VALUES (${goal.goalInstanceId}, ${goal.projectRoot}, ${goal.mode}, ${goal.goalVersion},
-            NULL, ${goal.cardApproval}, 'active', ${at}, ${at})
-          ON CONFLICT(goal_instance_id) DO UPDATE SET status = 'active',
-            card_approval = excluded.card_approval, updated_at = ${at}`.pipe(
+            NULL, 'active', ${at}, ${at})
+          ON CONFLICT(goal_instance_id) DO UPDATE SET status = 'active', updated_at = ${at}`.pipe(
         Effect.mapError(failed("goal")),
       );
     }),
@@ -344,13 +336,6 @@ const make = Effect.gen(function* () {
         Effect.mapError(failed("goal")),
       );
     }),
-
-    /** Records who approves the cards the planner adds, as the latest Plan approval says. */
-    setCardApproval: (goalInstanceId: string, cardApproval: CardApprovalPolicy) =>
-      Effect.flatMap(now, (at) =>
-        sql`UPDATE kanban_goals SET card_approval = ${cardApproval}, updated_at = ${at}
-            WHERE goal_instance_id = ${goalInstanceId}`.pipe(Effect.mapError(failed("goal"))),
-      ),
 
     /** Records the planner rounds counted since the board's last newly met outcome. */
     setPlannerRounds: (goalInstanceId: string, planner: PlannerRounds) =>

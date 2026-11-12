@@ -89,11 +89,6 @@ const planned = Effect.fnUntraced(function* (turns: readonly ScriptedTurn[]) {
     id,
     invocations: () => env.provider!.invocations.filter((turn) => turn.run.threadId === id),
     board: Effect.map(kanban, Option.isSome),
-    /** Who approves the cards the planner adds to the running board. */
-    cardApproval: Effect.map(
-      kanban,
-      Option.match({ onNone: () => null, onSome: (found) => found.cardApproval }),
-    ),
   };
 });
 
@@ -115,8 +110,6 @@ testAgent({ testProvider: { responder } })("approved Plan execution", (it) => {
       yield* waitForBoard(session.board);
       // The board executes it; no model turn ran for the approval.
       expect(session.invocations()).toHaveLength(0);
-      // The user approved the Plan, so the user approves the cards the planner adds later.
-      expect(yield* session.cardApproval).toBe("user");
     }),
   );
 
@@ -149,8 +142,6 @@ testAgent({ testProvider: { responder } })("approved Plan execution", (it) => {
         Effect.flatMap(Workflows, (workflows) => workflows.get(session.id)),
       );
       expect([state.phase, state.plan?.status]).toEqual(["running", "executing"]);
-      // The cards the planner adds later follow the project's permission mode.
-      expect(yield* session.cardApproval).toBe("permission");
       // The planner had no project write tools and no progress tool.
       const tools = session.invocations()[0]?.toolNames ?? [];
       expect(tools).toEqual(expect.arrayContaining(["update_goal", "update_plan"]));
@@ -184,7 +175,7 @@ testAgent({ testProvider: { responder } })("approved Plan execution", (it) => {
     }),
   );
 
-  it.effect("a Goal mode approval gives a board that kept running the permission mode", () =>
+  it.effect("a Goal mode approval runs its Plan on the board that kept running", () =>
     Effect.gen(function* () {
       const env = yield* TestEnv;
       const session = yield* planned([
@@ -205,23 +196,21 @@ testAgent({ testProvider: { responder } })("approved Plan execution", (it) => {
         Effect.flatMap(AgentChat, (chat) => chat.moveWorkflow(session.id, null, "run")),
       );
       yield* waitForBoard(session.board);
-      expect(yield* session.cardApproval).toBe("user");
       // Back in Goal mode the board stays active while the planner writes the next Plan.
       yield* env.use(Effect.flatMap(Workflows, (workflows) => workflows.move(session.id, "goal")));
       yield* runTurn(session.id, `${session.id}-turn`, "Plan the rest");
-      // The owner approved this Plan once the run ended, so the cards the planner adds later
-      // follow the project's permission mode.
-      yield* session.cardApproval.pipe(
-        Effect.repeat({
-          until: (policy) => policy === "permission",
-          schedule: Schedule.spaced(10),
-        }),
-        Effect.timeout("5 seconds"),
-      );
-      const state = yield* env.use(
-        Effect.flatMap(Workflows, (workflows) => workflows.get(session.id)),
-      );
-      expect([state.phase, state.plan?.status]).toEqual(["running", "executing"]);
+      // The owner approves this Plan once the run ends, and the board that kept running runs it.
+      const state = yield* env
+        .use(Effect.flatMap(Workflows, (workflows) => workflows.get(session.id)))
+        .pipe(
+          Effect.repeat({
+            until: (found) => found.phase === "running" && found.plan?.status === "executing",
+            schedule: Schedule.spaced(10),
+          }),
+          Effect.timeout("5 seconds"),
+        );
+      expect(state.plan?.status).toBe("executing");
+      expect(yield* session.board).toBe(true);
     }),
   );
 });

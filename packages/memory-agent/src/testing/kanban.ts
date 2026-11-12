@@ -403,7 +403,6 @@ export const executingBoard = Effect.fn("executingBoard")(function* (
     projectRoot: fixture.project,
     mode: "worktree",
     goalVersion: 1,
-    cardApproval: "user",
   });
   return { sessionId, projectId, goalInstanceId };
 });
