@@ -4,7 +4,7 @@ import { describe, expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
 import { Database } from "../src/db/database.ts";
 import { ArtifactLocator } from "../src/work-trace/contracts.ts";
-import { WorkTraceRejected, WorkTraceStore } from "../src/work-trace/store.ts";
+import { WorkTraceStore } from "../src/work-trace/store.ts";
 import { sqlAll, sqlRun } from "./support/sql.ts";
 
 const stringifyJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
@@ -106,81 +106,6 @@ describe("Work Trace artifact provenance", () => {
           expect.objectContaining({ artifacts: [expect.any(Object)] }),
         );
         expect(yield* trace.projectTaskDetail("other", handle.taskId)).toBeNull();
-      }),
-    ),
-  );
-});
-
-describe("Work Trace final answer sources", () => {
-  it.effect("links a final answer to the used report and reflected notification once", () =>
-    run(
-      Effect.gen(function* () {
-        const trace = yield* WorkTraceStore;
-        yield* seed();
-        const handle = yield* start(trace);
-        const notificationId = yield* trace.notifyParent({
-          taskId: handle.taskId,
-          kind: "completed",
-          summary: "Subagent completed",
-          idempotencyKey: "test:completed",
-          deliveredImmediately: true,
-        });
-        expect(notificationId).not.toBeNull();
-        const claim = {
-          projectId: "p1",
-          sessionId: "s1",
-          parentRunId: "parent-1",
-          parentMessageId: "parent-answer",
-          usedReports: [{ taskId: handle.taskId, attemptId: handle.id }],
-          reflectedNotificationIds: [notificationId!],
-        };
-        const claimId = yield* trace.finalizeAnswerClaim(claim);
-        expect(yield* trace.finalizeAnswerClaim(claim)).toBe(claimId);
-        expect((yield* trace.taskDetail("s1", handle.taskId))!.answerClaims).toEqual([
-          expect.objectContaining({
-            id: claimId,
-            parentMessageId: "parent-answer",
-            notificationIds: [notificationId],
-            sources: [{ taskId: handle.taskId, attemptId: handle.id }],
-          }),
-        ]);
-      }),
-    ),
-  );
-
-  it.effect("rejects a report outside the session and an undelivered notification", () =>
-    run(
-      Effect.gen(function* () {
-        const trace = yield* WorkTraceStore;
-        yield* seed();
-        const handle = yield* start(trace);
-        const base = {
-          projectId: "p1",
-          sessionId: "s1",
-          parentRunId: "parent-1",
-          parentMessageId: "parent-answer",
-        };
-        const rejections = [
-          yield* Effect.flip(
-            trace.finalizeAnswerClaim({
-              ...base,
-              usedReports: [{ taskId: handle.taskId, attemptId: "another-attempt" }],
-              reflectedNotificationIds: [],
-            }),
-          ),
-          yield* Effect.flip(
-            trace.finalizeAnswerClaim({
-              ...base,
-              usedReports: [],
-              reflectedNotificationIds: ["never-delivered"],
-            }),
-          ),
-        ];
-        expect(rejections).toEqual([expect.any(WorkTraceRejected), expect.any(WorkTraceRejected)]);
-        expect(rejections).toMatchObject([
-          { reason: "foreign_report" },
-          { reason: "undelivered_notification" },
-        ]);
       }),
     ),
   );

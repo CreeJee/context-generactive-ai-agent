@@ -71,7 +71,6 @@ import { nativeVectorIndexLayer } from "./memory/embedding/native-vector-index.t
 import { Graph } from "./memory/graph.ts";
 import { Interpreter } from "./memory/interpret.ts";
 import { Interpretations } from "./memory/interpretations.ts";
-import { KnowledgePromotions } from "./memory/knowledge.ts";
 import { Nodes } from "./memory/nodes.ts";
 import { Recorder } from "./memory/record.ts";
 import { MemorySearch, type SearchTuning } from "./memory/search.ts";
@@ -321,7 +320,6 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
   const memory = Layer.mergeAll(
     Sessions.layer,
     Recorder.layer,
-    KnowledgePromotions.layer,
     DrawingPreviews.layer,
     Graph.layer,
     nativeVectorIndexLayer,

@@ -40,7 +40,7 @@ import {
 } from "../agent/compaction.ts";
 import type { JsonValue } from "../json.ts";
 import type { AgUiEvent } from "../loop/chunks.ts";
-import { asRunFailed, modelFailureOf, type RunHook, runChat, StepEnded } from "../loop/run.ts";
+import { asRunFailed, modelFailureOf, type RunHook, runChat } from "../loop/run.ts";
 import { CallResult } from "../loop/scheduler.ts";
 import { finishedRun, RunStore } from "../loop/store.ts";
 import { optionalProperty } from "../optional-property.ts";
@@ -83,23 +83,6 @@ export class SubagentOperationFailed extends Schema.TaggedError<
   SubagentOperationFailed,
   { readonly brand: unique symbol }
 >()("SubagentOperationFailed", { operation: Schema.Literal("store"), cause: Schema.Defect() }) {}
-
-const adoptionMessages = {
-  NotReviewed: "Only reports reviewed in this run can be adopted",
-  NotificationNotDelivered: "Only status notifications delivered in this run can be adopted",
-} as const;
-
-/** Thrown to the SDK by `adopt_subagent_reports`; the model reads the fixed `message`. */
-export class SubagentAdoptionRejected extends Schema.TaggedError<
-  SubagentAdoptionRejected,
-  { readonly brand: unique symbol }
->()("SubagentAdoptionRejected", {
-  reason: Schema.Literals(["NotReviewed", "NotificationNotDelivered"]),
-  message: Schema.String,
-}) {}
-
-const adoptionRejected = (reason: SubagentAdoptionRejected["reason"]) =>
-  SubagentAdoptionRejected.make({ reason, message: adoptionMessages[reason] });
 
 export const subagentInstructions = `You can delegate with run_subagent (a one-off task, or with agent a named helper that keeps its own conversation in this session) and resume_subagent (a new attempt that retries a failed or interrupted task).
 - A subagent starts with none of this conversation: put everything it needs in the task. It uses the same model, project, tools and permissions as you; delegating never widens them.
@@ -241,22 +224,6 @@ const ResumeSubagentInput = Schema.Struct({
   }),
 });
 
-const AdoptSubagentReportsInput = Schema.Struct({
-  reports: Schema.Array(
-    Schema.Struct({
-      taskId: Schema.String,
-      attemptId: Schema.String,
-    }),
-  ),
-  reflectedNotificationIds: Schema.Array(Schema.String)
-    .pipe(Schema.withDecodingDefaultTypeKey(Effect.succeed([])))
-    .annotate({
-      description: "Delivered status notification ids.",
-    }),
-});
-
-type AdoptionDraft = typeof AdoptSubagentReportsInput.Type;
-
 const runSubagent = {
   name: "run_subagent",
   description:
@@ -274,15 +241,8 @@ const resumeSubagent = {
 const getSubagentReports = {
   name: "get_subagent_reports",
   description:
-    "Retrieve the reports of one or more exact subagent attempts in this session, concurrently. Unfinished attempts return running. Only completed reports retrieved here can be adopted; notifications do not count as review, and retrieval does not adopt them.",
+    "Retrieve the reports of one or more exact subagent attempts in this session, concurrently. Unfinished attempts return running.",
   parameters: AttemptsInput,
-} as const;
-
-const adoptSubagentReports = {
-  name: "adopt_subagent_reports",
-  description:
-    "Declare which reviewed subagent reports are actually used in the upcoming final answer. Call after review and before answering. Include delivered notification ids only when their stop/archive/delete/resume status affected the answer.",
-  parameters: AdoptSubagentReportsInput,
 } as const;
 
 const readSubagentToolResult = {
@@ -341,8 +301,6 @@ export interface SubagentBinding {
   /** The parent's tools, minus subagent tools. Children never get more than this. */
   readonly tools: ReadonlyArray<RunTool>;
   readonly systemPrompts: readonly string[];
-  /** Durable status notifications included in this parent's prompt and eligible for adoption. */
-  readonly deliveredParentNotificationIds: HashSet.HashSet<string>;
   /** Tools whose calls need an approval. For children every one goes through the relay gate. */
   readonly gated: HashSet.HashSet<string>;
 }
@@ -1327,17 +1285,11 @@ const make = Effect.gen(function* () {
     | Effect.Error<ReturnType<typeof startNamed>>
     | Effect.Error<ReturnType<typeof resumeTask>>;
 
-  /**
-   * One parent run's subagent calls, and what the run reviewed, was told and adopted. Dispatch is
-   * nonblocking; only explicit retrieval marks a report reviewed in this run.
-   */
+  /** One parent run's subagent calls. Dispatch is nonblocking. */
   const parentRun = Effect.fnUntraced(function* (binding: SubagentBinding) {
     const started = yield* SynchronizedRef.make(
       HashMap.empty<string, Fiber.Fiber<SubagentReport, DispatchFailure>>(),
     );
-    const reviewed = yield* Ref.make(HashSet.empty<string>());
-    const deliveredNotificationIds = yield* Ref.make(binding.deliveredParentNotificationIds);
-    const adoptionDraft = yield* Ref.make(Option.none<AdoptionDraft>());
 
     /**
      * Starts the call's task once; the same call asked again gets the same report. The task
@@ -1354,19 +1306,6 @@ const make = Effect.gen(function* () {
             ),
         }),
       ).pipe(Effect.flatMap(Fiber.join));
-
-    const unadoptable = Effect.fnUntraced(function* (draft: AdoptionDraft) {
-      const reviewedReports = yield* Ref.get(reviewed);
-      const delivered = yield* Ref.get(deliveredNotificationIds);
-      const notReviewed = ({ taskId, attemptId }: AdoptionDraft["reports"][number]) =>
-        !HashSet.has(reviewedReports, `${taskId}:${attemptId}`);
-      const notDelivered = (id: string) => !HashSet.has(delivered, id);
-      return draft.reports.some(notReviewed)
-        ? Option.some<SubagentAdoptionRejected["reason"]>("NotReviewed")
-        : draft.reflectedNotificationIds.some(notDelivered)
-          ? Option.some<SubagentAdoptionRejected["reason"]>("NotificationNotDelivered")
-          : Option.none<SubagentAdoptionRejected["reason"]>();
-    });
 
     return {
       run: (toolCallId: string, input: typeof RunSubagentInput.Type) => {
@@ -1411,32 +1350,6 @@ const make = Effect.gen(function* () {
           { concurrency: "unbounded" },
         ),
 
-      /** Marks the completed reports reviewed. Only this run's memory gates adoption. */
-      review: (reports: readonly SubagentReport[]) =>
-        Ref.update(reviewed, (marked) =>
-          Arr.reduce(reports, marked, (keys, outcome) =>
-            outcome.status === "completed"
-              ? HashSet.add(keys, `${outcome.taskId}:${outcome.attemptId}`)
-              : keys,
-          ),
-        ),
-
-      adopt: (draft: AdoptionDraft) =>
-        Effect.flatMap(
-          unadoptable(draft),
-          Option.match({
-            onSome: (reason) => Effect.fail(adoptionRejected(reason)),
-            onNone: () =>
-              Ref.set(adoptionDraft, Option.some(draft)).pipe(
-                Effect.as({
-                  status: "recorded" as const,
-                  usedReportCount: draft.reports.length,
-                  reflectedNotificationCount: draft.reflectedNotificationIds.length,
-                }),
-              ),
-          }),
-        ),
-
       /** Retries the run's unfinished children in the background. */
       retry: Effect.forkIn(
         retryForRun(binding).pipe(Effect.catch(logFailure("Subagent retry deferred"))),
@@ -1448,13 +1361,6 @@ const make = Effect.gen(function* () {
        * message that joins the conversation; none when there are none.
        */
       deliver: trace.consumeParentNotifications(binding.sessionId, binding.runId).pipe(
-        Effect.tap((notifications) =>
-          Ref.update(deliveredNotificationIds, (delivered) =>
-            Arr.reduce(notifications, delivered, (ids, notification) =>
-              HashSet.add(ids, notification.id),
-            ),
-          ),
-        ),
         Effect.flatMap(
           Arr.match({
             onEmpty: () => Effect.succeed(Arr.empty<StoredMessage>()),
@@ -1467,32 +1373,6 @@ const make = Effect.gen(function* () {
         ),
       ),
 
-      /** Saves what the answer `parentMessageId` adopted, when it adopted anything. */
-      recordAdoption: (parentMessageId: string) =>
-        Ref.get(adoptionDraft).pipe(
-          Effect.map(
-            Option.filter(
-              (draft) => draft.reports.length > 0 || draft.reflectedNotificationIds.length > 0,
-            ),
-          ),
-          Effect.flatMap(
-            Option.match({
-              onNone: () => Effect.void,
-              onSome: (draft) =>
-                Effect.asVoid(
-                  trace.finalizeAnswerClaim({
-                    projectId: binding.project.id,
-                    sessionId: binding.sessionId,
-                    parentRunId: binding.runId,
-                    parentMessageId,
-                    usedReports: draft.reports,
-                    reflectedNotificationIds: draft.reflectedNotificationIds,
-                  }),
-                ),
-            }),
-          ),
-        ),
-
       /** Gives the notifications this run did not answer back to the next run. */
       release: Effect.asVoid(trace.releaseParentNotifications(binding.sessionId, binding.runId)),
     };
@@ -1501,29 +1381,19 @@ const make = Effect.gen(function* () {
   return {
     /**
      * The subagent tools of a parent run. Its `hook` retries the run's unfinished children as it
-     * starts, adds status notifications to the conversation before each model call, records what
-     * the last answer adopted once the run finishes or waits, and gives the notifications back when
-     * it fails or is cancelled.
+     * starts, adds status notifications to the conversation before each model call, and gives the
+     * notifications back when it fails or is cancelled.
      */
     toolsFor: Effect.fnUntraced(function* (binding: SubagentBinding) {
       const parent = yield* parentRun(binding);
-      const hook = Effect.map(Ref.make(Option.none<string>()), (written): RunHook => ({
+      const hook: RunHook = {
         started: () => parent.retry,
         joining: () => Effect.mapError(parent.deliver, asRunFailed),
-        stepEnded: (_scope, step) =>
-          StepEnded.$match(step, {
-            Model: ({ message }) => Ref.set(written, Option.fromNullishOr(message.id)),
-            Resume: () => Effect.void,
-          }),
         ended: (_scope, end) =>
-          (finishedRun(end)
-            ? Effect.flatMap(
-                Ref.get(written),
-                Option.match({ onNone: () => Effect.void, onSome: parent.recordAdoption }),
-              )
-            : parent.release
-          ).pipe(Effect.ignore({ log: "Warn" })),
-      }));
+          Effect.when(parent.release, Effect.succeed(!finishedRun(end))).pipe(
+            Effect.ignore({ log: "Warn" }),
+          ),
+      };
       return {
         tools: [
           runTool({
@@ -1537,10 +1407,8 @@ const make = Effect.gen(function* () {
           }),
           runTool({
             ...getSubagentReports,
-            handler: (input) =>
-              parent.reports(input).pipe(Effect.tap(parent.review), Effect.map(reportsAnswer)),
+            handler: (input) => Effect.map(parent.reports(input), reportsAnswer),
           }),
-          runTool({ ...adoptSubagentReports, handler: parent.adopt }),
         ],
         hook,
       };
@@ -1553,7 +1421,7 @@ const make = Effect.gen(function* () {
      * waits until its outcome is recorded.
      */
     runAttempt: <E>(
-      binding: Omit<SubagentBinding, "abortSignal" | "deliveredParentNotificationIds">,
+      binding: Omit<SubagentBinding, "abortSignal">,
       attempt: { readonly agent: string; readonly message: string; readonly instructions: string },
       register: (handle: AttemptHandle) => Effect.Effect<void, E>,
     ) =>
@@ -1565,7 +1433,6 @@ const make = Effect.gen(function* () {
           const owned: SubagentBinding = {
             ...binding,
             abortSignal: yield* Effect.abortSignal,
-            deliveredParentNotificationIds: HashSet.empty(),
           };
           const { row, handle } = yield* namedAttempt(
             owned,

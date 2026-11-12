@@ -683,7 +683,6 @@ export {
   type TraceArtifactView,
   type TraceAttemptView,
   type TraceEventView,
-  type TraceFinalAnswerClaimView,
   type TraceTaskDetail,
   type TraceTaskView,
   type TraceTreeSnapshot,

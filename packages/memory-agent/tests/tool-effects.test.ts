@@ -64,7 +64,6 @@ layer(Layer.merge(NodeFileSystem.layer, NodePath.layer))((it) => {
 
 test("acknowledgements, durable writes, billable and unknown tools are never settled as pure reads", () => {
   [
-    "find_memory",
     "kagi_search",
     "kagi_extract",
     "cancel_background_task",
@@ -74,6 +73,7 @@ test("acknowledgements, durable writes, billable and unknown tools are never set
     "new_tool",
   ].forEach((name) => expect(HashSet.has(readOnlyToolNames, name)).toBe(false));
   [
+    "find_memory",
     "get_background_result",
     "get_subagent_report",
     "get_subagent_reports",

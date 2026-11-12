@@ -2871,6 +2871,18 @@ export const migrations: readonly string[] = [
     CHECK (conflict_rounds >= 0);
   ALTER TABLE kanban_cards DROP COLUMN resolution_of;
   `,
+  `
+  -- Adopting subagent reports into a final answer and promoting them to project memory is gone
+  -- (decisions.md "보고서 채택과 기억 승격을 걷어낸다 (2026-11-12)"). Nothing read what an answer
+  -- adopted, and no promotion was ever made. A topic node an earlier promotion saved stays; only its
+  -- candidate and use records go.
+  DROP TABLE memory_usage_events;
+  DROP TABLE memory_candidate_evidence;
+  DROP TABLE memory_candidates;
+  DROP TABLE final_answer_notifications;
+  DROP TABLE final_answer_sources;
+  DROP TABLE final_answer_claims;
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

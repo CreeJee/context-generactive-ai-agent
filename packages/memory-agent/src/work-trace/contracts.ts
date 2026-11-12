@@ -2,7 +2,6 @@ import { HashSet } from "effect";
 import { Function as EffectFunction } from "effect";
 import { Schema } from "effect";
 import { JsonValue } from "../json.ts";
-import { MemoryCandidateView, MemoryUsageView } from "../memory/contracts.ts";
 import { ExternalAgentFailureCode } from "../runtime/shown-failure.ts";
 
 /** Stable identity of a child agent. One-off agents have no reusable name. */
@@ -404,18 +403,6 @@ export const TraceTreeSnapshot = Schema.Struct({
 });
 export type TraceTreeSnapshot = typeof TraceTreeSnapshot.Type;
 
-export const TraceFinalAnswerClaimView = Schema.Struct({
-  id: Schema.String,
-  projectId: Schema.String,
-  originSessionId: Schema.NullOr(Schema.String),
-  parentRunId: Schema.String,
-  parentMessageId: Schema.String,
-  sources: Schema.Array(Schema.Struct({ taskId: Schema.String, attemptId: Schema.String })),
-  notificationIds: Schema.Array(Schema.String),
-  createdAt: Schema.Finite,
-});
-export type TraceFinalAnswerClaimView = typeof TraceFinalAnswerClaimView.Type;
-
 export const TraceArtifactView = Schema.Struct({
   id: Schema.String,
   taskId: Schema.String,
@@ -493,11 +480,6 @@ export const TraceTaskDetail = Schema.Struct({
   task: TraceTaskView,
   attempts: Schema.Array(TraceAttemptView),
   artifacts: Schema.Array(TraceArtifactView),
-  answerClaims: Schema.Array(TraceFinalAnswerClaimView),
-  /** Present on HTTP detail projections; omitted by the lower-level trace store. */
-  memoryCandidates: Schema.optionalKey(Schema.Array(MemoryCandidateView)),
-  /** Retrieval and actual-use events are separate so recall does not imply answer influence. */
-  memoryUsage: Schema.optionalKey(Schema.Array(MemoryUsageView)),
   events: Schema.Array(TraceEventView),
 });
 export type TraceTaskDetail = typeof TraceTaskDetail.Type;

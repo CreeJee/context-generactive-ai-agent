@@ -4953,3 +4953,14 @@
 - 계기: native worker에 명령·native 호출·단계별 span을 달았는데(`1ebfff36`), dev 수집기에는 하나도 오지 않았다. worker 진입점에는 실패 span recorder만 있고 exporter가 없었다. "개발용 관측과 프로파일링 도구"(2026-10-18)에서 "worker 내부 span은 이번 범위에서 내보내지 않는다"고 미뤄 둔 것이다. 그 뒤로 worker 안 시간을 재지 못한 기록이 남아 있다(SQLite 쓰기 잠금 항목).
 - 결정: worker 진입점 6곳(코드·가져오기·임베딩·rerank·native search·샌드박스)이 `workerObservabilityLayer`를 프로그램 전체에 준다. owner와 같은 `OtlpTracer.layerFromConfig`를 worker용 실패 span recorder 아래에 깐다. worker는 `env`를 따로 받지 않아 owner의 `OTEL_*`를 물려받으므로, 변수가 없으면 아무것도 내보내지 않는 것도 owner와 같다. trace는 Effect RPC가 넘긴 부모로 이미 이어져 있어, worker span은 owner의 요청 span 아래에 붙는다(`NativeOwner.execute ← Execute ← Execute ← NativeWorker.save`).
 - 확인: 따로 띄운 수집기와 native owner로 768차원 78,280개 인덱스에 publish 부하를 줬다. 같은 부하에서 dev의 19:28 실패(`save`, `request-timeout`)가 재현됐고(207회 중 1회), span으로 보니 2초를 넘긴 것은 `fsync`(78ms)가 아니라 쓰기 단계(3,781ms)였다. 디스크 쓰기와 `sync`를 계속 돌린 동안이다. 평소 `save`는 쓰기 17ms, `fsync` 7ms, rename 2ms다.
+
+## 보고서 채택과 기억 승격을 걷어낸다 (2026-11-12)
+
+- 계기: Work Trace에 백그라운드 셸 기록만 쌓이는 것을 정리하다가, 부모가 `adopt_subagent_reports`로 최종 답에 쓴 보고서를 남기고 `promote_memory_candidate`로 그것을 프로젝트 기억으로 올리는 사슬을 살폈다. 사용자 DB에는 승격 후보가 한 건도 없었다. 승격에 필요한 claim id는 모델이 볼 수 있는 곳에 나오지 않아, 이 사슬은 끝까지 이어진 적이 없다. 채택 기록도 Work Trace 상세의 "답변 출처"에만 보였고, 그것을 읽어 판단하는 곳은 없었다. Goal 완료 근거는 run의 `tool_result` 노드를 쓰고 채택 기록에 기대지 않는다.
+- 결정(사용자): 호출이 없다는 이유보다 지금 이 사슬이 유효한지를 보고, 고쳐 살리지 않고 걷어낸다.
+  - 도구 `adopt_subagent_reports`·`promote_memory_candidate`·`use_promoted_memory`와 `KnowledgePromotions` 서비스, 승격·채택 지시문을 지운다. 지운 도구 이름은 기록된 run에 남아 있으므로 `retiredToolEffects`에 쓰기 도구로 둔다.
+  - `find_memory`는 승격된 기억을 쓴 기록(`memory_usage_events`)을 남기지 않으므로 읽기 도구가 된다.
+  - 마이그레이션이 `final_answer_claims`·`final_answer_sources`·`final_answer_notifications`·`memory_candidates`·`memory_candidate_evidence`·`memory_usage_events`를 지운다. 예전 승격이 만든 topic 노드는 기억으로 남고, 후보·사용 기록만 사라진다.
+  - Work Trace 상세의 "답변 출처"·"프로젝트 기억" 칸을 뺀다.
+- 대체하는 결정: "메모리 승격 결정은 후보 행 하나로 둔다"(2026-11-04)와, 하위 에이전트 보고서를 "조회와 채택은 분리하며 최종 답변의 근거는 기존 `adopt_subagent_reports`로 기록한다"는 줄. 부모는 보고서를 `get_subagent_reports`로 읽고 답에 쓰기만 한다.
+- 다음: 백그라운드 작업(셸·외부 에이전트)을 Work Trace에서 떼어 자기 저장소로 옮기고, Work Trace는 지금 돌고 있는 작업만 보이게 다시 짠다.

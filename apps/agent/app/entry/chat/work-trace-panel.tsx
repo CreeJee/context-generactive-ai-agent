@@ -2,7 +2,7 @@ import type { MessageDescriptor } from "@lingui/core";
 import { msg } from "@lingui/core/macro";
 import { Trans, useLingui } from "@lingui/react/macro";
 import { isTruthy } from "../../truthy.ts";
-import { Array as Arr, Data, Schema } from "effect";
+import { Data, Schema } from "effect";
 import type { HeartbeatState, TraceTaskDetail, TraceTaskView } from "memory-agent";
 import {
   ActivityIcon,
@@ -109,22 +109,6 @@ const verificationLabel = {
     comment: "Whether a task's result was checked, in Work Trace",
   }),
 } satisfies Record<TraceArtifact["verification"], MessageDescriptor>;
-
-const dispositionLabel = {
-  saved: msg({ message: "저장함", comment: "What the user decided for a memory proposal" }),
-  edited_saved: msg({
-    message: "고쳐서 저장함",
-    comment: "What the user decided for a memory proposal",
-  }),
-  conversation_only: msg({
-    message: "이 대화에만",
-    comment: "What the user decided for a memory proposal: keep it for this conversation only",
-  }),
-  rejected: msg({ message: "저장 안 함", comment: "What the user decided for a memory proposal" }),
-} satisfies Record<
-  NonNullable<TraceTaskDetail["memoryCandidates"]>[number]["disposition"],
-  MessageDescriptor
->;
 
 function artifactLocatorLabel(locator: ArtifactLocator | null): React.ReactNode {
   if (!isTruthy(locator)) return <Trans>원본 위치가 삭제되었거나 가려졌습니다.</Trans>;
@@ -297,95 +281,6 @@ function TaskDetail({ detail }: { detail: TraceTaskDetail | null }) {
                 </p>
               </li>
             ))}
-          </ul>
-        )}
-      </section>
-      <section aria-labelledby="trace-answers">
-        <h3 id="trace-answers" className="flex items-center gap-2 text-sm font-medium">
-          <CircleDotIcon className="size-4" aria-hidden /> <Trans>답변 출처</Trans>
-        </h3>
-        {detail.answerClaims.length === 0 && (
-          <p className="mt-2 text-xs text-muted-foreground">
-            <Trans>이 작업의 보고서를 쓴 최종 답변이 없습니다.</Trans>
-          </p>
-        )}
-        {detail.answerClaims.map((claim) => {
-          const sources = claim.sources.length;
-          const notifications = claim.notificationIds.length;
-          const messageId = claim.parentMessageId;
-          return (
-            <div key={claim.id} className="mt-2 rounded-md bg-muted/50 p-2 text-xs">
-              <p className="font-medium">
-                <Trans>최종 답변의 출처</Trans>
-              </p>
-              <p className="mt-1 truncate font-mono text-muted-foreground">
-                <Trans comment="Id of the chat message a final answer was written in">
-                  메시지 {messageId}
-                </Trans>
-              </p>
-              <p className="mt-1 text-muted-foreground">
-                <Trans>
-                  사용한 보고서 {sources} · 반영된 상태 알림 {notifications}
-                </Trans>
-              </p>
-            </div>
-          );
-        })}
-      </section>
-      <section aria-labelledby="trace-memory">
-        <h3 id="trace-memory" className="flex items-center gap-2 text-sm font-medium">
-          <CircleDotIcon className="size-4" aria-hidden /> <Trans>기억 저장</Trans>
-        </h3>
-        {(detail.memoryCandidates ?? []).length === 0 ? (
-          <p className="mt-2 text-xs text-muted-foreground">
-            <Trans>이 작업에서 기억으로 저장할지 물은 내용이 없습니다.</Trans>
-          </p>
-        ) : (
-          <ul className="mt-2 space-y-2">
-            {(detail.memoryCandidates ?? []).map((candidate) => {
-              const usage = (detail.memoryUsage ?? []).filter(
-                (item) => item.candidateId === candidate.id,
-              );
-              const evidence = candidate.evidence.length;
-              const retrieved = Arr.countBy(usage, (item) => item.kind === "retrieved");
-              const used = Arr.countBy(usage, (item) => item.kind === "used");
-              return (
-                <li key={candidate.id} className="rounded-md border p-2 text-xs">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium">
-                      {t(dispositionLabel[candidate.disposition])}
-                    </span>
-                    <Badge className="ml-auto" variant="secondary">
-                      {isTruthy(candidate.memoryNodeId) ? (
-                        <Trans comment="Badge: the memory proposal was saved to project memory">
-                          프로젝트 기억
-                        </Trans>
-                      ) : (
-                        <Trans comment="Badge: the memory candidate was not saved to project memory">
-                          저장 안 함
-                        </Trans>
-                      )}
-                    </Badge>
-                  </div>
-                  <p className="mt-1 whitespace-pre-wrap">{candidate.resolvedText}</p>
-                  {candidate.proposedText !== candidate.resolvedText && (
-                    <p className="mt-1 text-muted-foreground">
-                      <Trans>사용자가 문구를 수정해 저장했습니다.</Trans>
-                    </p>
-                  )}
-                  <p className="mt-1 text-muted-foreground">
-                    <Trans>
-                      근거 {evidence} · 조회 {retrieved} · 답변에 사용 {used}
-                    </Trans>
-                  </p>
-                  {candidate.originSessionId === null && (
-                    <p className="mt-1 text-muted-foreground">
-                      <Trans>원본 대화 삭제됨 · 출처 기록 유지</Trans>
-                    </p>
-                  )}
-                </li>
-              );
-            })}
           </ul>
         )}
       </section>

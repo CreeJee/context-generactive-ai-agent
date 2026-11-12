@@ -70,11 +70,7 @@ testAgent()("compaction over recorded history", (it) => {
         const own = yield* nodes.append({ ...at, kind: "tool_result", text });
         const foreign = yield* nodes.append({ ...other, kind: "tool_result", text });
         const wrongKind = yield* nodes.append({ ...at, kind: "assistant", text });
-        const { tools } = yield* (yield* MemoryTools).toolsFor({
-          ...at,
-          runId: `${at.sessionId}:r1`,
-          userNodeId: Effect.succeed(wrongKind.id),
-        });
+        const tools = (yield* MemoryTools).toolsFor(at);
         const read = (params: JsonValue) => callTool(tools, "read_tool_result", params);
         expect(yield* read({ id: own.id, offset: 0 })).toMatchObject({
           id: own.id,
@@ -188,11 +184,7 @@ testAgent()("compaction over recorded history", (it) => {
           runId,
           threadId: at.sessionId,
           conversation: messages,
-          tools: (yield* (yield* MemoryTools).toolsFor({
-            ...at,
-            runId,
-            userNodeId: Effect.succeed(question.id),
-          })).tools,
+          tools: (yield* MemoryTools).toolsFor(at),
           hooks: [compacting.hook],
         });
         const [first, second] = yield* invocations;

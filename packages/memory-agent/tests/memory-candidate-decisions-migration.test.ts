@@ -5,7 +5,9 @@ import { expect } from "vite-plus/test";
 import { migrateDatabase } from "../src/db/database.ts";
 import { memoryCandidateDecisionsMigration, migrations } from "../src/db/migrations.ts";
 
-it.effect("a memory promotion's decision and candidate become one row", () =>
+// Promotion records are dropped since "보고서 채택과 기억 승격을 걷어낸다 (2026-11-12)"; an old file
+// that still has them, damaged rows included, passes through the merge into one row and the drop.
+it.effect("an old file's promotion records go away and the memory they saved stays", () =>
   Effect.gen(function* () {
     const db = yield* Effect.acquireRelease(
       Effect.sync(() => new DatabaseSync(":memory:")),
@@ -68,48 +70,17 @@ it.effect("a memory promotion's decision and candidate become one row", () =>
 
     yield* migrateDatabase(db);
 
-    expect(db.prepare("SELECT * FROM memory_candidates ORDER BY created_at").all()).toEqual([
-      {
-        id: "kept",
-        project_id: "p",
-        task_id: "task",
-        attempt_id: "attempt",
-        claim_id: "claim",
-        origin_session_id: "s",
-        authorized_by_user_node_id: "turn",
-        authorized_by_user_node_id_snapshot: "turn",
-        proposed_text: "a fact",
-        resolved_text: "kept fact",
-        disposition: "edited_saved",
-        memory_node_id: "memory",
-        created_at: 5,
-      },
-      {
-        id: "refused",
-        project_id: "p",
-        task_id: "task",
-        attempt_id: "attempt",
-        claim_id: "claim",
-        origin_session_id: "s",
-        authorized_by_user_node_id: null,
-        authorized_by_user_node_id_snapshot: "gone",
-        proposed_text: "not this",
-        resolved_text: "not this",
-        disposition: "rejected",
-        memory_node_id: null,
-        created_at: 6,
-      },
-    ]);
     expect(
       db
         .prepare(
-          "SELECT candidate_id FROM memory_candidate_evidence UNION ALL SELECT candidate_id FROM memory_usage_events",
+          `SELECT name FROM sqlite_master WHERE name IN ('knowledge_decisions', 'memory_candidates',
+            'memory_candidate_evidence', 'memory_usage_events', 'final_answer_claims')`,
         )
         .all(),
-    ).toEqual([{ candidate_id: "kept" }, { candidate_id: "kept" }]);
-    expect(
-      db.prepare("SELECT name FROM sqlite_master WHERE name = 'knowledge_decisions'").all(),
     ).toEqual([]);
+    expect(db.prepare("SELECT id, text FROM nodes WHERE kind = 'topic'").all()).toEqual([
+      { id: "memory", text: "kept fact" },
+    ]);
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   }),
 );

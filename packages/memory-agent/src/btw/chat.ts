@@ -33,7 +33,6 @@ import { modelFailureOf, runChat } from "../loop/run.ts";
 import { RunStore } from "../loop/store.ts";
 import { Graph } from "../memory/graph.ts";
 import { Interpretations } from "../memory/interpretations.ts";
-import { KnowledgePromotions } from "../memory/knowledge.ts";
 import { Nodes } from "../memory/nodes.ts";
 import { MemorySearch } from "../memory/search.ts";
 import { isEmptyUserText } from "../messages/empty-user.ts";
@@ -107,7 +106,6 @@ const make = Effect.gen(function* () {
     nodes: Nodes,
     graph: Graph,
     interpretations: Interpretations,
-    knowledge: KnowledgePromotions,
   });
   const liveRuns = yield* createLiveRuns;
   const cancellations = yield* RunCancellations;

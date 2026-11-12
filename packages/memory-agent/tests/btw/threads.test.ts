@@ -46,13 +46,13 @@ const count = (sql: string, ...values: string[]) =>
     Effect.map((row) => row.count),
   );
 
-/** Calls the tool its question names (`promote` asks for a write), then answers. */
+/** Calls the tool its question names (`delegate` asks for a write), then answers. */
 const responder: ScriptedResponder = (invocation) => {
   const last = invocation.history.at(-1);
   if (last?.role === "tool") return { text: "BTW answer" };
-  const wantsWrite = JSON.stringify(last).includes("promote");
+  const wantsWrite = JSON.stringify(last).includes("delegate");
   const [name, args] = wantsWrite
-    ? ["promote_memory_candidate", { claimId: "c", taskId: "t" }]
+    ? ["run_subagent", { task: "t" }]
     : ["find_memory", { query: "SQLite" }];
   return {
     toolCalls: [{ id: `call-${invocation.index}`, name, arguments: JSON.stringify(args) }],
@@ -82,14 +82,17 @@ testAgent({ testProvider: { responder } })("BTW threads", (it) => {
     Effect.gen(function* () {
       yield* selectTestModel();
       const { provider } = yield* TestEnv;
-      const thread = yield* (yield* BtwChat).create(yield* freshSession);
-      yield* ask(thread.id, "promote it");
+      const sessionId = yield* freshSession;
+      const thread = yield* (yield* BtwChat).create(sessionId);
+      yield* ask(thread.id, "delegate it");
       const [first, second] = provider!.invocations.slice(-2);
       expect(first!.toolNames.toSorted()).toEqual([...btwToolNames].toSorted());
       expect(second!.history.at(-1)).toMatchObject({
-        content: expect.stringContaining("Unknown tool: promote_memory_candidate"),
+        content: expect.stringContaining("Unknown tool: run_subagent"),
       });
-      expect(yield* count("SELECT count(*) AS count FROM memory_candidates")).toBe(0);
+      expect(
+        yield* count("SELECT count(*) AS count FROM subagents WHERE session_id = ?", sessionId),
+      ).toBe(0);
     }),
   );
 

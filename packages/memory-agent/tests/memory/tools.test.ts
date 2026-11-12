@@ -1,11 +1,8 @@
-import { Effect, FileSystem, Ref, Schema, Tracer } from "effect";
+import { Effect, FileSystem, Schema, Tracer } from "effect";
 import { expect } from "vite-plus/test";
-import { StepEnded, type RunHook } from "../../src/loop/run.ts";
-import { RunEnd } from "../../src/loop/store.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { Graph, GraphReadFailed } from "../../src/memory/graph.ts";
 import { Interpretations } from "../../src/memory/interpretations.ts";
-import { KnowledgePromotions } from "../../src/memory/knowledge.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { MemorySearch } from "../../src/memory/search.ts";
 import { Projects } from "../../src/projects/projects.ts";
@@ -13,15 +10,12 @@ import { Sessions } from "../../src/sessions/sessions.ts";
 import {
   MemoryTools,
   memoryReadRunTools,
-  memoryRunTools,
   type MemoryToolEnvironment,
 } from "../../src/tools/memory.ts";
 import type { RunTool } from "../../src/tools/run-tool.ts";
-import { WorkTraceStore } from "../../src/work-trace/store.ts";
 import type { JsonValue } from "../../src/json.ts";
 import { callTool } from "../support/run-tools.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
-import { sqlRun } from "../support/sql.ts";
 
 const environment = Effect.gen(function* () {
   return {
@@ -29,7 +23,6 @@ const environment = Effect.gen(function* () {
     nodes: yield* Nodes,
     graph: yield* Graph,
     interpretations: yield* Interpretations,
-    knowledge: yield* KnowledgePromotions,
   };
 });
 
@@ -40,8 +33,6 @@ const callers = (tools: ReadonlyArray<RunTool>) => {
     find: named("find_memory"),
     read: named("read_evidence"),
     trace: named("trace_evidence"),
-    promote: named("promote_memory_candidate"),
-    use: named("use_promoted_memory"),
   };
 };
 
@@ -55,15 +46,6 @@ const freshSession = Effect.gen(function* () {
   const session = (yield* (yield* Sessions).create(project.id)).id;
   return { projectId: project.id, sessionId: session };
 });
-
-const unadoptedClaim = {
-  claimId: "not-adopted",
-  taskId: "task",
-  attemptId: "attempt",
-  proposedText: "memory",
-  resolvedText: "memory",
-  disposition: "save" as const,
-};
 
 testAgent()("structured memory evidence", (it) => {
   it.effect("preserves exact pages and prioritizes direct changes within the excerpt budget", () =>
@@ -515,73 +497,6 @@ testAgent()("structured memory evidence", (it) => {
 });
 
 testAgent()("memory tools per run", (it) => {
-  /** Ends the run with `answer` as its last message, as the loop does, so `hook` records the use. */
-  const finish = Effect.fnUntraced(function* (
-    hook: Effect.Effect<RunHook>,
-    runId: string,
-    answer: { readonly role: "assistant"; readonly id: string; readonly content: string },
-  ) {
-    const { stepEnded, ended } = yield* hook;
-    const scope = {
-      threadId: `${runId}:thread`,
-      runId,
-      emit: () => Effect.void,
-      inBackground: Effect.ignore,
-    };
-    yield* stepEnded!(scope, StepEnded.Model({ message: answer, answered: [] }));
-    yield* ended!(scope, RunEnd.Completed(), [answer]);
-  });
-
-  it.effect(
-    "fresh run user-turn reads and conversation bindings are not reused; native promotion gates remain",
-    () =>
-      Effect.gen(function* () {
-        const at = yield* freshSession;
-        const env = yield* environment;
-        const user = yield* env.nodes.append({ ...at, kind: "user", text: "save" });
-        const currentUser = yield* Ref.make("missing");
-        const readsA = yield* Ref.make(0);
-        const readsB = yield* Ref.make(0);
-        const a = yield* memoryRunTools({
-          env,
-          binding: {
-            ...at,
-            runId: `${at.sessionId}:run-a`,
-            userNodeId: Ref.update(readsA, (reads) => reads + 1).pipe(Effect.as(user.id)),
-          },
-        });
-        const b = yield* memoryRunTools({
-          env,
-          binding: {
-            ...at,
-            runId: `${at.sessionId}:run-b`,
-            userNodeId: Ref.update(readsB, (reads) => reads + 1).pipe(
-              Effect.andThen(Ref.get(currentUser)),
-            ),
-          },
-        });
-        const promoteA = callers(a.tools).promote;
-        const promoteB = callers(b.tools).promote;
-        const notAdopted = {
-          tag: "MemoryPromotionRejected",
-          detail: "Memory promotion source is not an adopted final-answer claim",
-        };
-        expect(yield* Effect.flip(promoteA(unadoptedClaim))).toMatchObject(notAdopted);
-        expect(yield* Effect.flip(promoteB(unadoptedClaim))).toMatchObject({
-          tag: "MemoryPromotionRejected",
-          detail: "Memory promotion requires the current user turn as authorization",
-        });
-        yield* Ref.set(currentUser, user.id);
-        expect(yield* Effect.flip(promoteB(unadoptedClaim))).toMatchObject(notAdopted);
-        expect(yield* Ref.get(readsA)).toBe(1);
-        expect(yield* Ref.get(readsB)).toBe(2);
-        expect(a.hook).not.toBe(b.hook);
-        expect(
-          yield* Effect.flip(callers(b.tools).use({ memoryNodeIds: [user.id] })),
-        ).toMatchObject({ tag: "PromotedMemoryUseRejected" });
-      }),
-  );
-
   it.effect("runs a run's tool calls on its fiber, so their spans join the run's trace", () =>
     Effect.gen(function* () {
       const at = yield* freshSession;
@@ -593,11 +508,7 @@ testAgent()("memory tools per run", (it) => {
           return span;
         },
       });
-      const { tools } = yield* (yield* MemoryTools).toolsFor({
-        ...at,
-        runId: `${at.sessionId}:traced-run`,
-        userNodeId: Effect.succeed("user"),
-      });
+      const tools = (yield* MemoryTools).toolsFor(at);
       const { run, toolSpans } = yield* Effect.gen(function* () {
         const run = yield* Effect.currentSpan;
         const before = recorded.length;
@@ -606,104 +517,6 @@ testAgent()("memory tools per run", (it) => {
       }).pipe(Effect.withSpan("chat.run"), Effect.withTracer(tracer));
       expect(toolSpans.length).toBeGreaterThan(0);
       expect(toolSpans.every((span) => span.traceId === run.traceId)).toBe(true);
-    }),
-  );
-
-  it.effect("populated promoted-memory retrieval and use state never leak into a fresh run", () =>
-    Effect.gen(function* () {
-      const at = yield* freshSession;
-      const { sessionId } = at;
-      const env = yield* environment;
-      const trace = yield* WorkTraceStore;
-      const agentId = `${sessionId}:factory-agent`;
-      const parentRunId = `${sessionId}:parent`;
-      yield* sqlRun(
-        `INSERT INTO subagents
-          (id, session_id, name, instructions, status, parent_run_id, last_task, created_at, updated_at)
-          VALUES (?, ?, 'factory', 'research', 'interrupted', ?, 'task', 1, 1)`,
-        agentId,
-        sessionId,
-        parentRunId,
-      );
-      const user = yield* env.nodes.append({
-        ...at,
-        kind: "user",
-        text: "Save this fixture decision: isolated-memory-state.",
-      });
-      const handle = yield* trace.startAttempt({
-        sessionId,
-        parentRunId,
-        parentToolCallId: `${sessionId}:factory-call`,
-        agentId,
-        title: "Factory research",
-        request: "Research factory state",
-        kind: "start",
-        threadId: `${sessionId}:factory-thread`,
-      });
-      const claimId = yield* trace.finalizeAnswerClaim({
-        ...at,
-        parentRunId,
-        parentMessageId: "research-answer",
-        usedReports: [{ taskId: handle.taskId, attemptId: handle.id }],
-        reflectedNotificationIds: [],
-      });
-      const runA = `${sessionId}:memory-run-a`;
-      const runB = `${sessionId}:memory-run-b`;
-      const makeRun = (runId: string) =>
-        memoryRunTools({ env, binding: { ...at, runId, userNodeId: Effect.succeed(user.id) } });
-      const first = yield* makeRun(runA);
-      const second = yield* makeRun(runB);
-      const firstCalls = callers(first.tools);
-      const secondCalls = callers(second.tools);
-      const promoted = yield* Schema.decodeUnknownEffect(
-        Schema.Struct({ memoryNodeId: Schema.NonEmptyString }),
-      )(
-        yield* firstCalls.promote({
-          claimId,
-          taskId: handle.taskId,
-          attemptId: handle.id,
-          proposedText: "isolated-memory-state is a fixture decision",
-          resolvedText: "isolated-memory-state is a fixture decision",
-          disposition: "save",
-        }),
-      );
-      const memoryNodeIds = [promoted.memoryNodeId];
-      yield* (yield* Indexer).indexAll();
-      const found = yield* firstCalls.find({ query: "isolated-memory-state" });
-      expect(found).toMatchObject({
-        matches: expect.arrayContaining([expect.objectContaining({ id: promoted.memoryNodeId })]),
-      });
-      expect(yield* firstCalls.use({ memoryNodeIds })).toMatchObject({ usedMemoryCount: 1 });
-      expect(yield* Effect.flip(secondCalls.use({ memoryNodeIds }))).toMatchObject({
-        tag: "PromotedMemoryUseRejected",
-      });
-      const answer = (id: string) => ({
-        role: "assistant" as const,
-        id,
-        content: "fixture answer",
-      });
-      yield* finish(second.hook, runB, answer("answer-b"));
-      expect((yield* env.knowledge.usageForTask(handle.taskId)).map((usage) => usage.kind)).toEqual(
-        ["retrieved"],
-      );
-      yield* finish(first.hook, runA, answer("answer-a"));
-      const usage = () =>
-        Effect.map(env.knowledge.usageForTask(handle.taskId), (entries) =>
-          entries.map((entry) => ({ kind: entry.kind, parentRunId: entry.parentRunId })),
-        );
-      expect(yield* usage()).toEqual([
-        { kind: "retrieved", parentRunId: runA },
-        { kind: "used", parentRunId: runA },
-      ]);
-      yield* secondCalls.find({ query: "isolated-memory-state" });
-      yield* secondCalls.use({ memoryNodeIds });
-      yield* finish(second.hook, runB, answer("answer-b"));
-      expect(yield* usage()).toEqual([
-        { kind: "retrieved", parentRunId: runA },
-        { kind: "used", parentRunId: runA },
-        { kind: "retrieved", parentRunId: runB },
-        { kind: "used", parentRunId: runB },
-      ]);
     }),
   );
 });

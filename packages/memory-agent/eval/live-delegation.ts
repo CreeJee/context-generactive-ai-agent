@@ -79,7 +79,7 @@ const client = await oauth.runPromise(
     return yield* createSubscriptionOAuthClient({ protocol: providerProtocols.openai, store });
   }),
 );
-const baseline = `You can delegate with run_subagent, optionally to a named helper. A child sees only the task and uses the same workspace, model and permissions. Dispatch returns immediately. Retrieve its report with get_subagent_reports before relying on it. Before a final answer call adopt_subagent_reports with only the reports and evidence actually used.`;
+const baseline = `You can delegate with run_subagent, optionally to a named helper. A child sees only the task and uses the same workspace, model and permissions. Dispatch returns immediately. Retrieve its report with get_subagent_reports before relying on it.`;
 const Busy = Schema.Struct({ busy: Schema.Finite });
 /**
  * Until the session's children and the follow-ups they started are over: a child's report can

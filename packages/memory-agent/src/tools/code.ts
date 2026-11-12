@@ -38,15 +38,13 @@ const RunCodeInput = Schema.Struct({
 /**
  * Whether a program may call each built-in tool, beside what the run's permission mode asks about.
  * The tools that steer the run itself (its Goal and Plan, subagents, background tasks, delegation,
- * board edits, a card's verdict, memory adoption) stay with the model, which decides each call.
+ * board edits, a card's verdict) stay with the model, which decides each call.
  */
 const programCallable = {
   find_memory: true,
   read_evidence: true,
   trace_evidence: true,
   read_tool_result: true,
-  promote_memory_candidate: false,
-  use_promoted_memory: false,
   list_files: true,
   search_files: true,
   read_file: true,
@@ -70,7 +68,6 @@ const programCallable = {
   resume_subagent: false,
   read_subagent_tool_result: true,
   get_subagent_reports: false,
-  adopt_subagent_reports: false,
   list_report_evidence: true,
   read_report_item: true,
   start_new_goal: false,

@@ -174,8 +174,6 @@ const make = Effect.gen(function* () {
         AND n.kind = 'topic'
         AND json_extract(n.detail, '$.memoryCandidateId') IS NULL
         AND json_extract(n.detail, '$.authorizedByUserNodeId') IS NULL
-        AND NOT EXISTS (SELECT 1 FROM memory_candidates m WHERE m.memory_node_id = n.id)
-        AND NOT EXISTS (SELECT 1 FROM memory_usage_events u WHERE u.memory_node_id = n.id)
         AND NOT EXISTS (SELECT 1 FROM node_refs r WHERE r.node_id = n.id)
         AND NOT EXISTS (SELECT 1 FROM edges e WHERE e.from_id = n.id OR e.to_id = n.id)
       ON CONFLICT DO NOTHING`;

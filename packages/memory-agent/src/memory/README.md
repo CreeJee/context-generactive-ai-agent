@@ -4,7 +4,7 @@
 
 `src/memory`는 memory-agent의 장기 기억 그래프 계층이다. 대화 메시지를 append-only `nodes`와 `edges`(구조 링크와 LLM 링크)로 SQLite에 기록하고(`Nodes`, `Recorder`), 벡터·텍스트 검색으로 찾은 결과를 그래프 탐색의 시드로 쓴다(`MemorySearch`, `Graph`).
 
-저장된 사용자 발화는 LLM이 사후에 해석해 topic·corrects·retracts·related 관계를 붙인다(`Interpreter`, `Interpretations`). 그 결과를 바탕으로 출처 추적, 증거 읽기, 최신 결정 해석, 사용자 승인을 거친 지식 승격, 그래프 수리를 제공한다.
+저장된 사용자 발화는 LLM이 사후에 해석해 topic·corrects·retracts·related 관계를 붙인다(`Interpreter`, `Interpretations`). 그 결과를 바탕으로 출처 추적, 증거 읽기, 최신 결정 해석, 그래프 수리를 제공한다.
 
 임베딩·네이티브 검색 worker는 하위 디렉터리가 맡고, 이 디렉터리는 그 위에서 저장·질의 규칙을 정한다.
 
@@ -27,8 +27,6 @@
 - `Interpreter` / `InterpretationFailed` — llm-interpret 서비스(`Interpreter.layer(automatic = true)`). 저장된 발화를 topic·correction·relation edge로 바꾼다. 실패 reason은 `model_call_failed` 또는 `unreadable_answer`
 - `interpretInstructions` / `normalizeTopic` — 해석 모델의 시스템 지시문, topic 라벨 정규화(한 줄, 앞뒤 공백 제거, 최대 60자)
 - `Recorder` / `makeRecordingHook` / `RunBinding` — 채팅 run을 메모리 노드로 바꾸는 서비스(`Recorder.layer`)와 Effect AI run의 `RunHook`을 만드는 함수(`Nodes`·`PermissionReviews` 필요)
-- `KnowledgePromotions` — 채택된 final-answer claim을 사용자 승인으로 영속 프로젝트 메모리에 승격하는 서비스(`KnowledgePromotions.layer`)
-- `PromoteMemoryInput` / `MemoryCandidateView` / `MemoryUsageView` / `MemoryDisposition` / `MemoryPromotionRejected` / `KnowledgeStoreFailed` — 승격 입력, 후보·사용 기록 뷰, 처리 결과, 승격 거부 오류(reason별 고정 message), 저장소 실패 오류. 뷰와 처리 결과는 `contracts.ts`의 Schema이고 `knowledge.ts`가 타입을 다시 내보낸다. Work Trace 상세 계약이 이 Schema를 쓴다
 - `MemoryGraphMaintenance` / `MemoryGraphRepairFailed` — 이전 버전이 잘못 쓴 링크를 자동으로 고치는 로컬 수리 서비스(`MemoryGraphMaintenance.layer`)와 그 실패 오류
 - `latestResolver` / `ChainReads` / `LatestEvidence` / `LatestHead` / `BranchHead` / `AppliedChange` / `ChainSource` / `ChangeRelation` — owner 저장소 읽기를 통해 한 발화에 기록된 변경이 어디서 끝나는지 해석한다
 - `createResultPageReader` / `ResultPageReadFailed` — append-only 노드 텍스트를 블록 캐시·텍스트 인덱스로 페이지 단위로 읽는 리더와 그 실패 오류
@@ -59,17 +57,16 @@
 - 모델 답은 문장마다 따로 읽는다. 답 전체가 JSON이 아니면 배치 전체가 `unreadable_answer`로 실패하지만, 한 문장의 모양만 틀리면 그 문장만 `unreadable_answer`로, 답에 없는 문장은 `missing_from_answer`로 실패하고 나머지는 기록된다
 - 해석 프롬프트는 발화 안의 텍스트를 데이터로 다루고, 그 안의 지시를 따르지 않는다. corrects·retracts는 user 발화만 할 수 있다
 - API 사용량(`memory-interpretation`)은 세션이 있는 발화에 대해서만 기록한다
-- `MemoryPromotionRejected`의 message는 reason별로 고정되어 있고 요청 텍스트를 담지 않는다. 승격 거부는 그대로 전달되고, 그 밖의 저장소·코덱 실패만 `KnowledgeStoreFailed`로 감싼다
-- Layer 요구: `Graph`와 `Interpretations`에는 `SqlClient`가 필요하다. `Interpreter`에는 `SqlClient`, `Nodes`, `MemorySearch`, `Interpretations`, `ActiveProvider`, `ApiUsage`, `AppEvents`, `SecureRandom.SecureRandom`이 필요하다. `KnowledgePromotions`에는 `SecureRandom.SecureRandom`, `SqlClient`, `Nodes`가 필요하다. 증거 함수에는 `Nodes`, `Graph`, `Interpretations`, `MemorySearch`가 필요하다. `MemorySearch`에는 `Reranker`가 필요하다
+- Layer 요구: `Graph`와 `Interpretations`에는 `SqlClient`가 필요하다. `Interpreter`에는 `SqlClient`, `Nodes`, `MemorySearch`, `Interpretations`, `ActiveProvider`, `ApiUsage`, `AppEvents`, `SecureRandom.SecureRandom`이 필요하다. 증거 함수에는 `Nodes`, `Graph`, `Interpretations`, `MemorySearch`가 필요하다. `MemorySearch`에는 `Reranker`가 필요하다
 
 ## Side Effects
 
-- SQLite 읽기: `nodes`, `edges`, `memory_graph_suppressed_nodes`, `interpretations`, `interpret_jobs`, `final_answer_claims`, `final_answer_sources`, `memory_candidates`, `memory_candidate_evidence`
+- SQLite 읽기: `nodes`, `edges`, `memory_graph_suppressed_nodes`, `interpretations`, `interpret_jobs`
 - SQLite 쓰기: `interpretations` INSERT와 applied 결론의 `edges` INSERT(llm origin), `interpret_jobs` 상태 갱신(running/done/failed/pending)과 시작 시 정리(UPDATE·DELETE), topic 노드 append(`nodes.append`)
-- SQLite 쓰기: `Nodes`의 append-only 노드와 구조 edge 기록, `Recorder`의 채팅 run 기록, `MemoryGraphMaintenance`의 링크 수리, `KnowledgePromotions`의 승격 후보(결정 포함 한 행)·사용 기록
+- SQLite 쓰기: `Nodes`의 append-only 노드와 구조 edge 기록, `Recorder`의 채팅 run 기록, `MemoryGraphMaintenance`의 링크 수리
 - 네트워크: `Interpreter`가 `ActiveProvider`가 고른 provider의 가장 싼 effort 모델을 `singleAnswer`로 부르고, `recordUsage`로 API 사용량 ledger에 기록한다
 - 네이티브 검색: `MemorySearch`는 native-search owner worker를 거쳐 벡터·controlled 읽기를 하고, 실패한 읽기를 `SkippedRead`로 남긴다
-- 난수: `Interpreter`는 모델 호출 threadId에 `uuidV4`를 쓰고, `KnowledgePromotions`도 `SecureRandom.SecureRandom`으로 id를 만든다
+- 난수: `Interpreter`는 모델 호출 threadId에 `uuidV4`를 쓴다
 - 시계: `DateTime.now`·`Clock.currentTimeMillis`로 `created_at`·`updated_at`을 기록한다
 - 로그: 해석 후보 검색이 실패하면 `interpret_candidates_unavailable`를 debug 로그로 남긴다
 

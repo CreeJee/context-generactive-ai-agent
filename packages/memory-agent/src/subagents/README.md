@@ -4,7 +4,7 @@
 
 `packages/memory-agent/src/subagents`는 부모 에이전트 run이 하위 에이전트에게 일을 맡기는 기능(R18)을 구현한다. 하위 에이전트는 일회성일 수도 있고, 세션 안에서 자기 대화를 유지하는 이름 붙은 helper일 수도 있다. 하위 에이전트는 중첩되지 않는다.
 
-`subagents.ts`의 `Subagents` 서비스는 부모 모델에게 `run_subagent`, `resume_subagent`, `get_subagent_reports`, `adopt_subagent_reports` 도구를 제공하고, 자식에게는 `read_subagent_tool_result`를 준다. 이 서비스는 자식 run을 백그라운드 fiber로 `runChat`에 돌리고, 그 상태를 SQLite `subagents` 표와 Work Trace(task/attempt)에 기록한다. `role.ts`는 자식에게서 부모 전용 도구를 걸러 내고, `subagent-state.ts`는 채팅 화면(브라우저)이 쓰는 상태 타입을 정의한다.
+`subagents.ts`의 `Subagents` 서비스는 부모 모델에게 `run_subagent`, `resume_subagent`, `get_subagent_reports` 도구를 제공하고, 자식에게는 `read_subagent_tool_result`를 준다. 이 서비스는 자식 run을 백그라운드 fiber로 `runChat`에 돌리고, 그 상태를 SQLite `subagents` 표와 Work Trace(task/attempt)에 기록한다. `role.ts`는 자식에게서 부모 전용 도구를 걸러 내고, `subagent-state.ts`는 채팅 화면(브라우저)이 쓰는 상태 타입을 정의한다.
 
 이 서비스는 `packages/memory-agent/src/layers.ts`의 `memoryAgentLayerBody`, `packages/memory-agent/src/kanban/subagent-card-agent.ts`, `packages/memory-agent/eval/live-delegation.ts`가 사용한다.
 
@@ -16,24 +16,22 @@
 - `childInstructions` — `EffectFunction.dual(2)`로 만든 함수. `(name, instructions)`를 받아 자식 에이전트의 자기소개 프롬프트를 만든다.
 - `childCompactionSources` — 자식의 저장된 transcript(Effect)를 받아 `CompactionSources`를 만든다. 저장된 도구 결과의 id는 그 call id이고, pointer는 `read_subagent_tool_result`를 가리킨다. 요약 블록은 없다.
 - `SubagentOperationFailed` — `Schema.TaggedError`이며 필드는 `operation: "store"`, `cause: Defect`.
-- `SubagentAdoptionRejected` — `Schema.TaggedError`이며 `reason`은 `NotReviewed` 또는 `NotificationNotDelivered`이고 모델이 읽는 고정 `message`를 가진다. `adopt_subagent_reports`가 이 오류를 던진다.
 - `childFailureOf` — 자식 run의 `RUN_ERROR` code로 보고서의 실패 이유(`AttemptFailureReason`)를 정한다.
 - `subagentThreadId` — `` (subagentId) => `subagent-${subagentId}` ``로 자식 대화 thread id를 만든다.
-- `SubagentBinding` — subagent 도구 호출이 속한 부모 run 정보(project, sessionId, runId, selection, abortSignal, tools, systemPrompts, deliveredParentNotificationIds, gated).
+- `SubagentBinding` — subagent 도구 호출이 속한 부모 run 정보(project, sessionId, runId, selection, abortSignal, tools, systemPrompts, gated).
 - `SubagentReceipt` — 도구 호출이 부모 모델에게 돌려주는 receipt(status, subagentId, agent, taskId, attemptId, delivery).
 - `SubagentReport` — `get_subagent_reports`가 돌려주는 보고서 union 타입이며 `SubagentReceipt`와 `SubagentStatus`를 기반으로 한다.
-- `childRunTools` (`role.ts`) — `RunTool` 배열에서 부모 전용 도구(`start_new_goal`, `update_goal`, `update_plan`, `close_plan`, `promote_memory_candidate`, `use_promoted_memory`, `delegate_to_agent`, `cancel_background_task`, `get_background_result`)를 뺀다.
+- `childRunTools` (`role.ts`) — `RunTool` 배열에서 부모 전용 도구(`start_new_goal`, `update_goal`, `update_plan`, `close_plan`, `delegate_to_agent`, `cancel_background_task`, `get_background_result`)를 뺀다.
 - `SubagentStatus` (`subagent-state.ts`) — `"running" | "completed" | "failed" | "cancelled" | "interrupted"` Schema.
 - `SubagentView` (`subagent-state.ts`) — 채팅 화면이 보는 하위 에이전트 상태 Schema(id, name(일회성이면 null), status, lastTask, lastAnswer, error, createdAt, updatedAt).
-- 내부 모델 도구 정의(export 아님) — `run_subagent`(task, agent, instructions, ownership, acceptanceCriteria), `resume_subagent`(taskId, expectedAttemptId, confirmUncertain), `get_subagent_reports`(attempts 1~100), `adopt_subagent_reports`(reports, reflectedNotificationIds), `read_subagent_tool_result`(toolCallId, offset).
+- 내부 모델 도구 정의(export 아님) — `run_subagent`(task, agent, instructions, ownership, acceptanceCriteria), `resume_subagent`(taskId, expectedAttemptId, confirmUncertain), `get_subagent_reports`(attempts 1~100), `read_subagent_tool_result`(toolCallId, offset).
 - 하위 디렉터리 없음.
 
 ## Invariants
 
 - `subagent-state.ts`는 브라우저에서 import해도 안전해야 한다(파일 주석). 이 파일에 서버 전용 의존성을 넣지 않는다.
-- 하위 에이전트는 중첩되지 않는다(`Subagents` doc: "never nested", `run_subagent` 설명: "it cannot start subagents"). `childRunTools`는 `delegate_to_agent` 등 부모 전용 도구를 자식에게서 제거한다. 세션 Goal, Plan, workflow 진행, 최종 adoption은 부모가 맡는다.
+- 하위 에이전트는 중첩되지 않는다(`Subagents` doc: "never nested", `run_subagent` 설명: "it cannot start subagents"). `childRunTools`는 `delegate_to_agent` 등 부모 전용 도구를 자식에게서 제거한다. 세션 Goal, Plan, workflow 진행, 최종 답은 부모가 맡는다.
 - 자식은 부모와 같은 model, project, tools, permissions를 쓴다. 위임으로 권한이 넓어지지 않는다. 부모 에이전트의 task 메시지는 사용자 승인이 아니므로 위험한 동작은 평소대로 approval을 거친다. 자식의 gated 호출은 부모 페이지로 relay되어 묻는다. 도구의 `CallPlan`이 `Ungated`로 정한 호출은 relay하지 않는다.
-- Adoption 규칙이 있다. 이번 run에서 `get_subagent_reports`로 검토한 completed 보고서만 adopt할 수 있고(`NotReviewed`), 이번 run에 전달된 상태 알림 id만 adopt할 수 있다(`NotificationNotDelivered`). 알림은 검토로 치지 않고, 조회만으로는 adopt되지 않는다.
 - 자식 요청은 메인 대화와 같은 `compactionHook`을 같은 모델 창 예산(`budgetFor`)으로 거친다. 그래서 대화 compaction의 기준이 바뀌면 자식도 같이 바뀐다. 다른 것은 `childCompactionSources`뿐이다. 뺀 도구 결과는 `read_subagent_tool_result`로 다시 읽는 pointer가 되고, 아직 저장되지 않은 결과는 다시 읽을 곳이 없어 빼지 않는다. 자식에게는 모델 handoff가 없다. 턴 요약 블록과 `/compact` 기록도 쌓이지 않으므로 그 단계는 할 일이 없다. run 안의 step 요약은 대화와 같이 하고, 같은 모델의 가장 싼 강도로 요청해 `step-summary` usage로 기록한다. 앞 요청에 새 메시지만 붙이는 것도 대화와 같지만, 자식은 `LastRequests`를 넘기지 않으므로 run 안에서만 이어 붙인다. 모델 입력만 바꾸고 저장된 자식 transcript는 바꾸지 않는다.
 - 실패한 자식 보고서의 이유는 `RUN_ERROR` code로만 정한다. `repeated_tool_call`은 `RepeatedToolCall`, `context_limit_exceeded`는 `ContextLimitExceeded`, 그 밖의 code는 `ModelRunError`다. run의 텍스트는 provider 본문을 담을 수 있어 읽지 않는다. 부모는 `ContextLimitExceeded`를 보면 남은 일을 작게 나눠 다시 맡긴다(`subagentInstructions`).
 - 입력 제약이 있다. `agent` 이름은 `/^[A-Za-z0-9_-]{1,40}$/`, `attempts`는 1~100개, `offset`은 0 이상 정수이고 기본값은 0이다. named helper의 `instructions`는 이전 값을 대체하고, 생략하면 기존 값을 유지한다.

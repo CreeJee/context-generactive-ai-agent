@@ -4,7 +4,6 @@ import { isTruthy } from "../truthy.ts";
 import { logFailure } from "../runtime/logged-failures.ts";
 import { optionalProperty } from "../optional-property.ts";
 import {
-  MutableHashMap,
   DateTime,
   Clock,
   Context,
@@ -38,7 +37,6 @@ import {
   type TraceArtifactView,
   type TraceAttemptView,
   type TraceEventView,
-  type TraceFinalAnswerClaimView,
   type TraceHeartbeatView,
   type TraceTaskView,
   TraceVisibility,
@@ -78,9 +76,6 @@ export class WorkTraceRejected extends Schema.TaggedError<
     "artifact_kind_mismatch",
     "origin_missing",
     "invalid_transition",
-    "foreign_session",
-    "foreign_report",
-    "undelivered_notification",
     "attempt_not_found",
   ]),
   message: Schema.String,
@@ -144,7 +139,6 @@ const ParentNotificationRow = Schema.Struct({
 const SequenceRow = Schema.Struct({ sequence: Schema.Finite });
 const CursorRow = Schema.Struct({ seq: Schema.Finite });
 const IdRow = Schema.Struct({ id: Schema.String });
-const TaskIdRow = Schema.Struct({ task_id: Schema.String });
 const AttemptNumberRow = Schema.Struct({ attempt_number: Schema.Finite });
 const LifecycleOperationRow = Schema.Struct({
   id: Schema.String,
@@ -253,25 +247,6 @@ const ArtifactRow = Schema.Struct({
   created_at: Schema.Finite,
   updated_at: Schema.Finite,
 });
-const FinalAnswerClaimRow = Schema.Struct({
-  id: Schema.String,
-  project_id: Schema.String,
-  origin_session_id: Schema.NullOr(Schema.String),
-  parent_run_id: Schema.String,
-  parent_message_id: Schema.String,
-  created_at: Schema.Finite,
-});
-const FinalAnswerSourceRow = Schema.Struct({
-  id: Schema.String,
-  claim_id: Schema.String,
-  task_id: Schema.String,
-  attempt_id: Schema.String,
-});
-const FinalAnswerNotificationRow = Schema.Struct({
-  claim_id: Schema.String,
-  notification_id: Schema.String,
-  task_id: Schema.String,
-});
 const StoredEventRow = Schema.Struct({
   cursor: Schema.Finite,
   id: Schema.String,
@@ -315,7 +290,6 @@ const decodeSequence = Schema.decodeUnknownEffect(SequenceRow);
 const decodeCursor = Schema.decodeUnknownEffect(CursorRow);
 const decodeId = Schema.decodeUnknownEffect(IdRow);
 const decodeIds = Schema.decodeUnknownEffect(Schema.Array(IdRow));
-const decodeTaskId = Schema.decodeUnknownEffect(TaskIdRow);
 const decodeAttemptNumber = Schema.decodeUnknownEffect(AttemptNumberRow);
 const decodeLifecycleOperation = Schema.decodeUnknownEffect(LifecycleOperationRow);
 const decodeLifecycleTask = Schema.decodeUnknownEffect(LifecycleTaskRow);
@@ -325,11 +299,6 @@ const decodeStoredEventRows = Schema.decodeUnknownEffect(Schema.Array(StoredEven
 const decodeResumeTask = Schema.decodeUnknownEffect(ResumeTaskRow);
 const decodeArtifactRows = Schema.decodeUnknownEffect(Schema.Array(ArtifactRow));
 const decodeArtifactRow = Schema.decodeUnknownEffect(ArtifactRow);
-const decodeFinalAnswerClaimRows = Schema.decodeUnknownEffect(Schema.Array(FinalAnswerClaimRow));
-const decodeFinalAnswerSourceRows = Schema.decodeUnknownEffect(Schema.Array(FinalAnswerSourceRow));
-const decodeFinalAnswerNotificationRows = Schema.decodeUnknownEffect(
-  Schema.Array(FinalAnswerNotificationRow),
-);
 const decodeSessionLifecycle = Schema.decodeUnknownEffect(Schema.UndefinedOr(SessionLifecycleRow));
 const decodeRunIds = Schema.decodeUnknownEffect(
   Schema.Array(Schema.Struct({ run_id: Schema.String })),
@@ -353,7 +322,6 @@ export type {
   TraceArtifactView,
   TraceAttemptView,
   TraceEventView,
-  TraceFinalAnswerClaimView,
   TraceHeartbeatView,
   TraceTaskDetail,
   TraceTaskView,
@@ -1104,136 +1072,6 @@ const make = Effect.gen(function* () {
       Effect.flatMap((rows) => Effect.forEach(rows, artifactView)),
     );
 
-  const answerClaimsForTask = Effect.fnUntraced(function* (taskId: string) {
-    const claims = yield* decodeFinalAnswerClaimRows(
-      yield* sql`SELECT DISTINCT c.id, c.project_id, c.origin_session_id, c.parent_run_id,
-          c.parent_message_id, c.created_at
-        FROM final_answer_claims c
-        WHERE EXISTS (SELECT 1 FROM final_answer_sources s
-                      WHERE s.claim_id = c.id AND s.task_id = ${taskId})
-           OR EXISTS (SELECT 1 FROM final_answer_notifications n
-                      WHERE n.claim_id = c.id AND n.task_id = ${taskId})
-        ORDER BY c.created_at, c.id`,
-    );
-    return yield* Effect.forEach(claims, (claim) =>
-      Effect.gen(function* () {
-        const sources = yield* decodeFinalAnswerSourceRows(
-          yield* sql`SELECT id, claim_id, task_id, attempt_id
-            FROM final_answer_sources WHERE claim_id = ${claim.id}
-            ORDER BY task_id, attempt_id`,
-        );
-        const notifications = yield* decodeFinalAnswerNotificationRows(
-          yield* sql`SELECT claim_id, notification_id, task_id FROM final_answer_notifications
-            WHERE claim_id = ${claim.id} ORDER BY notification_id`,
-        );
-        const view: TraceFinalAnswerClaimView = {
-          id: claim.id,
-          projectId: claim.project_id,
-          originSessionId: claim.origin_session_id,
-          parentRunId: claim.parent_run_id,
-          parentMessageId: claim.parent_message_id,
-          sources: sources.map((source) => ({
-            taskId: source.task_id,
-            attemptId: source.attempt_id,
-          })),
-          notificationIds: notifications.map((notification) => notification.notification_id),
-          createdAt: claim.created_at,
-        };
-        return view;
-      }),
-    );
-  });
-
-  /**
-   * Records which subagent reports and status notifications an answer used. The caller checks
-   * that each report was reviewed in its run; the store checks that each belongs to the session.
-   */
-  const finalizeAnswerClaim = (input: {
-    readonly projectId: string;
-    readonly sessionId: string;
-    readonly parentRunId: string;
-    readonly parentMessageId: string;
-    readonly usedReports: readonly { readonly taskId: string; readonly attemptId: string }[];
-    readonly reflectedNotificationIds: readonly string[];
-  }) =>
-    Effect.gen(function* () {
-      const existing = yield* first(sql`SELECT id FROM final_answer_claims
-        WHERE parent_run_id = ${input.parentRunId} AND parent_message_id = ${input.parentMessageId}`);
-      if (isTruthy(existing)) return (yield* decodeId(existing)).id;
-      const session = yield* first(sql`SELECT 1 FROM sessions
-        WHERE id = ${input.sessionId} AND project_id = ${input.projectId}`);
-      yield* Effect.when(
-        Effect.fail(
-          rejected("foreign_session", "Final answer session does not belong to the project"),
-        ),
-        Effect.succeed(!isTruthy(session)),
-      );
-      const reports = EffectArray.dedupeWith(
-        input.usedReports,
-        (a, b) => a.taskId === b.taskId && a.attemptId === b.attemptId,
-      );
-      yield* Effect.forEach(
-        reports,
-        (report) =>
-          Effect.flatMap(
-            first(sql`SELECT 1 FROM agent_run_attempts a JOIN work_tasks t ON t.id = a.task_id
-              WHERE a.id = ${report.attemptId} AND a.task_id = ${report.taskId}
-                AND t.project_id = ${input.projectId} AND t.origin_session_id = ${input.sessionId}`),
-            (found) =>
-              Effect.when(
-                Effect.fail(
-                  rejected("foreign_report", "Final answer selected another session's report"),
-                ),
-                Effect.succeed(!isTruthy(found)),
-              ),
-          ),
-        { discard: true },
-      );
-      // A notification listed twice is recorded once.
-      const notificationTasks = MutableHashMap.fromIterable(
-        yield* Effect.forEach(input.reflectedNotificationIds, (notificationId) =>
-          first(sql`SELECT n.task_id FROM parent_notifications n
-            JOIN work_tasks t ON t.id = n.task_id
-            WHERE n.id = ${notificationId} AND n.origin_session_id = ${input.sessionId}
-              AND n.delivered_to_run_id = ${input.parentRunId} AND t.project_id = ${input.projectId}`).pipe(
-            Effect.flatMap((row) =>
-              Effect.fromOption(Option.fromUndefinedOr(row), () =>
-                rejected(
-                  "undelivered_notification",
-                  "Final answer selected an undelivered parent notification",
-                ),
-              ),
-            ),
-            Effect.flatMap(decodeTaskId),
-            Effect.map(({ task_id }) => [notificationId, task_id] as const),
-          ),
-        ),
-      );
-      const claimId = yield* crypto.uuidV4();
-      const claimedAt = yield* Clock.currentTimeMillis;
-      yield* run(sql`INSERT INTO final_answer_claims
-        (id, project_id, origin_session_id, parent_run_id, parent_message_id, created_at)
-        VALUES (${claimId}, ${input.projectId}, ${input.sessionId}, ${input.parentRunId},
-          ${input.parentMessageId}, ${claimedAt})`);
-      yield* Effect.forEach(
-        reports,
-        (report) =>
-          Effect.flatMap(crypto.uuidV4(), (id) =>
-            run(sql`INSERT INTO final_answer_sources (id, claim_id, task_id, attempt_id)
-              VALUES (${id}, ${claimId}, ${report.taskId}, ${report.attemptId})`),
-          ),
-        { discard: true },
-      );
-      yield* Effect.forEach(
-        notificationTasks,
-        ([id, taskId]) =>
-          run(sql`INSERT INTO final_answer_notifications (claim_id, notification_id, task_id)
-            VALUES (${claimId}, ${id}, ${taskId})`),
-        { discard: true },
-      );
-      return claimId;
-    }).pipe(sql.withTransaction);
-
   const taskView = Effect.fnUntraced(function* (row: typeof TaskViewRow.Type) {
     const view: TraceTaskView = {
       id: row.id,
@@ -1336,7 +1174,6 @@ const make = Effect.gen(function* () {
       task,
       attempts: yield* attemptsForTask(task.id),
       artifacts: yield* artifactsForTask(task.id),
-      answerClaims: yield* answerClaimsForTask(task.id),
       events: yield* events,
     };
   });
@@ -1621,12 +1458,7 @@ const make = Effect.gen(function* () {
     yield* run(sql`DELETE FROM subagents WHERE session_id = ${sessionId}`);
     yield* run(sql`DELETE FROM sessions WHERE id = ${sessionId}`);
     const purgedCounts = yield* encodeJson({ nodes, subagents: subagentRows.length, goals });
-    const retainedKinds = yield* encodeJson([
-      "task_tombstones",
-      "answer_claims",
-      "adopted_memory",
-      "purge_receipts",
-    ]);
+    const retainedKinds = yield* encodeJson(["task_tombstones", "purge_receipts"]);
     yield* run(sql`INSERT INTO purge_receipts
       (id, operation_id, project_id, target_kind, target_id, policy_version,
        purged_counts, retained_kinds, completed_at)
@@ -1820,12 +1652,7 @@ const make = Effect.gen(function* () {
       WHERE task_id = ${taskId}`);
     const receiptId = yield* crypto.uuidV4();
     const purgedCounts = yield* encodeJson({ artifacts, events });
-    const retainedKinds = yield* encodeJson([
-      "task_tombstone",
-      "attempt_lineage",
-      "answer_claims",
-      "adopted_memory",
-    ]);
+    const retainedKinds = yield* encodeJson(["task_tombstone", "attempt_lineage"]);
     yield* run(sql`INSERT INTO purge_receipts
       (id, operation_id, project_id, target_kind, target_id, policy_version,
        purged_counts, retained_kinds, completed_at)
@@ -2251,7 +2078,6 @@ const make = Effect.gen(function* () {
     keepAlive,
     recordArtifact,
     artifactsForTask,
-    finalizeAnswerClaim,
     taskTree,
     projectTaskTree,
     taskDetail,

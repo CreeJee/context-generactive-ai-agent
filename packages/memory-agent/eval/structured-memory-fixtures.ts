@@ -1,7 +1,6 @@
 import { Effect, Schema } from "effect";
 import { Graph } from "../src/memory/graph.ts";
 import { Interpretations } from "../src/memory/interpretations.ts";
-import { KnowledgePromotions } from "../src/memory/knowledge.ts";
 import { Nodes, type Node } from "../src/memory/nodes.ts";
 import { MemorySearch } from "../src/memory/search.ts";
 import { Sessions } from "../src/sessions/sessions.ts";
@@ -29,7 +28,6 @@ export const seedEvidenceCases = Effect.fn("eval.seedEvidenceCases")(function* (
     nodes: yield* Nodes,
     graph: yield* Graph,
     interpretations: yield* Interpretations,
-    knowledge: yield* KnowledgePromotions,
     search: yield* MemorySearch,
   };
   const sessions = yield* Sessions;

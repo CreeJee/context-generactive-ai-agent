@@ -64,7 +64,6 @@
 - `HandoffState.handoff.through`는 0보다 큰 정수이다. `context`는 이전 버전 호환용 optional 필드이며 더 이상 전송하지 않는다.
 - `run-state.ts`는 브라우저 번들이 쓰므로 `effect`와 다른 계약 모듈(`sessions/contracts.ts`, `workflow/contracts.ts`) 밖의 코드를 import하지 않는다. `chat-store/schema.ts`의 `StoredRunStatus`가 이 모듈의 `RunStatus`다.
 - ContextUsage 저장 스키마는 예전 행을 위해 `cachedTokens`·`compactionStage`·`estimatedTokens`를 decoding default null로 받는다. 예전 행의 `observationId`는 읽지 않는다. 저장 형식 하위 호환을 유지해야 한다.
-- `memoryRulesFor`는 실행에 `promote_memory_candidate`/`use_promoted_memory` 도구가 없으면 해당 규칙 줄을 뺀다. `promotionRules` 값은 `memoryInstructions` 줄 접두와 정확히 일치해야 한다.
 - 한 응답의 도구 호출은 동시에 실행되고 순서가 보장되지 않는다(`docs/decisions.md` "도구 호출 사이에 순서를 두지 않는다"). 의존 호출은 다음 응답에서 한다.
 - `AgentOperationFailed`의 `cause`는 서버에만 남기고 클라이언트에 노출하지 않는다.
 - `shownRunErrors`는 `RUN_ERROR` 메시지를 페이지·에디터·durable 로그가 읽기 전에 자르고 비밀을 가린다.

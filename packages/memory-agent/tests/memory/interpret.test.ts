@@ -67,11 +67,9 @@ const freshProject = Effect.gen(function* () {
   const find = (query: string) =>
     Effect.flatMap(MemorySearch, (search) => search.find({ query, projectId: project.id }));
   const trace = Effect.fnUntraced(function* (id: string) {
-    const { tools } = yield* (yield* MemoryTools).toolsFor({
+    const tools = (yield* MemoryTools).toolsFor({
       projectId: project.id,
       sessionId: session.id,
-      runId: `${session.id}:trace`,
-      userNodeId: Effect.succeed("user"),
     });
     return yield* Schema.decodeUnknownEffect(Trace)(
       yield* callTool(tools, "trace_evidence", { id }),

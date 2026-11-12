@@ -3,7 +3,6 @@ import { Context, Effect, Layer } from "effect";
 import { expect } from "vite-plus/test";
 import { Graph } from "../../src/memory/graph.ts";
 import { Interpretations } from "../../src/memory/interpretations.ts";
-import { KnowledgePromotions } from "../../src/memory/knowledge.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { MemorySearch } from "../../src/memory/search.ts";
 import {
@@ -22,7 +21,6 @@ const environment = Effect.gen(function* () {
     nodes: yield* Nodes,
     graph: yield* Graph,
     interpretations: yield* Interpretations,
-    knowledge: yield* KnowledgePromotions,
   };
 });
 
@@ -33,8 +31,6 @@ const callers = (tools: ReadonlyArray<RunTool>) => {
     find: named("find_memory"),
     read: named("read_evidence"),
     trace: named("trace_evidence"),
-    promote: named("promote_memory_candidate"),
-    use: named("use_promoted_memory"),
   };
 };
 
@@ -84,13 +80,11 @@ layer(
           id: b.id,
         });
         const wrapper = yield* second.use(MemoryTools);
-        const bound = yield* wrapper.toolsFor({
+        const bound = wrapper.toolsFor({
           projectId: second.project.id,
           sessionId: second.session.id,
-          runId: `${second.session.id}:run`,
-          userNodeId: Effect.succeed("user"),
         });
-        expect(yield* callers(bound.tools).read({ id: b.id })).toMatchObject({ text: b.text });
+        expect(yield* callers(bound).read({ id: b.id })).toMatchObject({ text: b.text });
       }),
   );
 });

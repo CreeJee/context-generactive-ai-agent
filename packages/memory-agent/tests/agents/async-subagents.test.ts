@@ -83,14 +83,8 @@ const asyncTurn = Effect.fnUntraced(
             Schema.decodeEffect(
               Schema.fromJsonString(Schema.Struct({ reports: Schema.Array(Report) })),
             )(messageText(last!)),
-            ({ reports }) =>
-              toolCall("call-adopt-batch", "adopt_subagent_reports", {
-                reports: reports.map(idsOf),
-              }),
+            ({ reports }) => Effect.map(encodeJson(reports.map(idsOf)), (text) => ({ text })),
           ),
-        ),
-        Match.when("call-adopt-batch", () =>
-          Effect.succeed({ text: "Used both reviewed reports." }),
         ),
         Match.orElse(() =>
           Effect.flatMap(
@@ -135,23 +129,6 @@ const asyncTurn = Effect.fnUntraced(
           },
         ],
       };
-    if (!internal && user.startsWith("review-and-adopt ")) {
-      const ids = yield* Schema.decodeEffect(Schema.fromJsonString(Ids))(
-        user.slice("review-and-adopt ".length),
-      );
-      return yield* Match.value(lastTool).pipe(
-        Match.when("call-review-report", () =>
-          Effect.andThen(
-            reportFrom(messageText(last!)),
-            toolCall("call-adopt-report", "adopt_subagent_reports", { reports: [ids] }),
-          ),
-        ),
-        Match.when("call-adopt-report", () =>
-          Effect.succeed({ text: "Used the reviewed report." }),
-        ),
-        Match.orElse(() => toolCall("call-review-report", "get_subagent_reports", oneAttempt(ids))),
-      );
-    }
     return yield* heldDefaultTurn(invocation);
   },
   Effect.mapError((cause) => new Cause.UnknownError(cause)),
@@ -207,10 +184,9 @@ const followedUp = Effect.fnUntraced(function* (sessionId: string) {
 // The restart tests replace the block's agent, so every test reads services through `current`
 // instead of the block's layer, and all of them share one agent.
 testAgent({ testProvider })("asynchronous subagents", (it) => {
-  it.effect("batch retrieval reviews each attempt for adoption in the same run", () =>
+  it.effect("batch retrieval returns every requested attempt's report in one call", () =>
     Effect.gen(function* () {
       const { sessionId, turns } = yield* parentSession;
-      const trace = yield* current(WorkTraceStore);
       const first = yield* receiptFrom(
         yield* send(sessionId, 'call run_subagent {"task":"nap first dispatch only"}'),
       );
@@ -221,18 +197,7 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
       const attempts = [idsOf(first), idsOf(second)];
       yield* settled(sessionId);
       expect(yield* send(sessionId, `review-batch ${yield* encodeJson(attempts)}`)).toBe(
-        "Used both reviewed reports.",
-      );
-      yield* Effect.forEach(
-        attempts,
-        Effect.fnUntraced(function* (attempt) {
-          expect(
-            (yield* trace.taskDetail(sessionId, attempt.taskId))?.answerClaims.flatMap(
-              (claim) => claim.sources,
-            ),
-          ).toContainEqual(attempt);
-        }),
-        { discard: true },
+        yield* encodeJson(attempts),
       );
     }),
   );
@@ -311,10 +276,8 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
       Effect.gen(function* () {
         const { sessionId, turns } = yield* parentSession;
         const children = yield* current(Subagents);
-        const trace = yield* current(WorkTraceStore);
-        const receipt = yield* receiptFrom(yield* send(sessionId, "dispatch only"));
+        yield* receiptFrom(yield* send(sessionId, "dispatch only"));
         expect((yield* children.list(sessionId))[0]?.status).toBe("running");
-        expect((yield* trace.taskDetail(sessionId, receipt.taskId))?.answerClaims).toEqual([]);
         expect(yield* send(sessionId, "unrelated parent work")).toContain("Hello");
         yield* turns.release("nap");
         yield* until(
@@ -328,7 +291,6 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
         );
         expect(yield* deliveredCompletions(sessionId)).toBe(1);
         expect(yield* userNodes(sessionId)).toBe(2);
-        expect((yield* trace.taskDetail(sessionId, receipt.taskId))?.answerClaims).toEqual([]);
         const messages = yield* (yield* current(RunStore)).thread(sessionId);
         expect(
           messages.some(
@@ -400,27 +362,19 @@ testAgent({ testProvider })("asynchronous subagents", (it) => {
     }),
   );
 
-  it.effect("adoption requires retrieval in the same run", () =>
+  it.effect("an unfinished attempt reports running until it completes", () =>
     Effect.gen(function* () {
       const { sessionId, turns } = yield* parentSession;
-      const trace = yield* current(WorkTraceStore);
       const ids = idsOf(yield* receiptFrom(yield* send(sessionId, "dispatch only")));
       expect(yield* callTool(sessionId, "get_subagent_reports", oneAttempt(ids))).toContain(
         '"status":"running"',
       );
       yield* turns.release("nap");
-      // The completion follow-up retrieves the report in a run of its own.
       yield* settled(sessionId);
-      expect((yield* trace.taskDetail(sessionId, ids.taskId))?.answerClaims).toEqual([]);
-      const adopt = callTool(sessionId, "adopt_subagent_reports", {
-        reports: [ids],
-      });
-      expect(yield* adopt).toContain("Only reports reviewed in this run");
-      expect(yield* send(sessionId, `review-and-adopt ${yield* encodeJson(ids)}`)).toContain(
-        "Used the reviewed report",
+      const report = yield* reportFrom(
+        yield* callTool(sessionId, "get_subagent_reports", oneAttempt(ids)),
       );
-      expect((yield* trace.taskDetail(sessionId, ids.taskId))?.answerClaims).toHaveLength(1);
-      expect(yield* adopt).toContain("Only reports reviewed in this run");
+      expect(report.status).toBe("completed");
     }),
   );
 

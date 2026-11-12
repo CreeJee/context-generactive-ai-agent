@@ -1435,11 +1435,6 @@ msgstr "계정을 추가하고 계정마다 이름을 바꾸거나 로그아웃�
 msgid "고를 수 있는 값"
 msgstr "고를 수 있는 값"
 
-#. What the user decided for a memory proposal
-#: app/entry/chat/work-trace-panel.tsx
-msgid "고쳐서 저장함"
-msgstr "고쳐서 저장함"
-
 #. Dialog button: go on to revise the running Plan
 #: app/entry/chat/chat-panel.tsx
 msgid "고치기"
@@ -1572,10 +1567,6 @@ msgstr "그사이 카드가 옮겨졌습니다. 최신 보드를 다시 확인�
 msgid "그사이 카드의 대기열 상태가 바뀌었습니다. 최신 보드를 다시 확인해 주십시오."
 msgstr "그사이 카드의 대기열 상태가 바뀌었습니다. 최신 보드를 다시 확인해 주십시오."
 
-#: app/entry/chat/work-trace-panel.tsx
-msgid "근거 {evidence} · 조회 {retrieved} · 답변에 사용 {used}"
-msgstr "근거 {evidence} · 조회 {retrieved} · 답변에 사용 {used}"
-
 #: app/entry/settings/pages/embedding.tsx
 msgid "근거 연결 {repaired}개, 의미 연결 {suppressed}개, 불필요한 주제 {retired}개를 정리했습니다."
 msgstr "근거 연결 {repaired}개, 의미 연결 {suppressed}개, 불필요한 주제 {retired}개를 정리했습니다."
@@ -1667,10 +1658,6 @@ msgstr "기억 그래프 정리"
 #: app/entry/settings/shared.tsx
 msgid "기억 범위"
 msgstr "기억 범위"
-
-#: app/entry/chat/work-trace-panel.tsx
-msgid "기억 저장"
-msgstr "기억 저장"
 
 #: app/entry/settings/pages/imports.tsx
 msgid "기억 저장소에 쓰지 못했습니다"
@@ -2060,10 +2047,6 @@ msgstr "답변 중에도 이어서 보낼 수 있습니다"
 #: app/entry/api.ts
 msgid "답변 중인 대화는 보관할 수 없습니다. 끝나거나 멈춘 뒤 다시 시도해 주십시오."
 msgstr "답변 중인 대화는 보관할 수 없습니다. 끝나거나 멈춘 뒤 다시 시도해 주십시오."
-
-#: app/entry/chat/work-trace-panel.tsx
-msgid "답변 출처"
-msgstr "답변 출처"
 
 #: app/entry/chat/chat-panel.tsx
 msgid "답변을 멈추지 못했습니다. 다시 시도해 주십시오."
@@ -2501,11 +2484,6 @@ msgstr "멈추는 중"
 #: app/entry/chat/chat-panel.tsx
 msgid "멈출 답변이 없습니다."
 msgstr "멈출 답변이 없습니다."
-
-#. Id of the chat message a final answer was written in
-#: app/entry/chat/work-trace-panel.tsx
-msgid "메시지 {messageId}"
-msgstr "메시지 {messageId}"
 
 #: app/entry/chat/chat-panel.tsx
 msgid "메시지를 넣지 못했습니다. 다시 시도해 주십시오."
@@ -3154,14 +3132,6 @@ msgstr "사용자 브랜치 merge 충돌"
 #: app/entry/chat/board-panel.tsx
 msgid "사용자 요청으로 닫기"
 msgstr "사용자 요청으로 닫기"
-
-#: app/entry/chat/work-trace-panel.tsx
-msgid "사용자가 문구를 수정해 저장했습니다."
-msgstr "사용자가 문구를 수정해 저장했습니다."
-
-#: app/entry/chat/work-trace-panel.tsx
-msgid "사용한 보고서 {sources} · 반영된 상태 알림 {notifications}"
-msgstr "사용한 보고서 {sources} · 반영된 상태 알림 {notifications}"
 
 #: app/entry/chat/board/card-peek.tsx
 msgid "사유: {reason}"
@@ -4475,10 +4445,6 @@ msgstr "원문 열람"
 msgid "원문 읽기"
 msgstr "원문 읽기"
 
-#: app/entry/chat/work-trace-panel.tsx
-msgid "원본 대화 삭제됨 · 출처 기록 유지"
-msgstr "원본 대화 삭제됨 · 출처 기록 유지"
-
 #. Menu item that deletes the conversation's source record
 #. Menu item that deletes the conversation's source record
 #: app/entry/navigation/sidebar.tsx
@@ -4635,11 +4601,6 @@ msgstr "이 대화로 아직 모델에 요청하지 않았습니다."
 msgid "이 대화를 쓸 수 있는지 확인하지 못했습니다"
 msgstr "이 대화를 쓸 수 있는지 확인하지 못했습니다"
 
-#. What the user decided for a memory proposal: keep it for this conversation only
-#: app/entry/chat/work-trace-panel.tsx
-msgid "이 대화에만"
-msgstr "이 대화에만"
-
 #: app/entry/chat/queue-panel.tsx
 msgid "이 메시지를 보내지 못했습니다. 보내기를 누르면 다시 보냅니다."
 msgstr "이 메시지를 보내지 못했습니다. 보내기를 누르면 다시 보냅니다."
@@ -4697,10 +4658,6 @@ msgstr "이 이미지 요청은 대화가 아닌 이미지 생성으로 보내 �
 msgid "이 작업 위치의 대화가 없습니다."
 msgstr "이 작업 위치의 대화가 없습니다."
 
-#: app/entry/chat/work-trace-panel.tsx
-msgid "이 작업에서 기억으로 저장할지 물은 내용이 없습니다."
-msgstr "이 작업에서 기억으로 저장할지 물은 내용이 없습니다."
-
 #: app/entry/chat/chat-panel.tsx
 msgid "이 작업은 이미 실행 중입니다."
 msgstr "이 작업은 이미 실행 중입니다."
@@ -4716,10 +4673,6 @@ msgstr "이 작업의 기록을 삭제할까요?"
 #: app/entry/chat/message.tsx
 msgid "이 작업의 대화 기록을 지웁니다. 프로젝트 기억으로 채택된 내용과 그 출처 기록은 남습니다."
 msgstr "이 작업의 대화 기록을 지웁니다. 프로젝트 기억으로 채택된 내용과 그 출처 기록은 남습니다."
-
-#: app/entry/chat/work-trace-panel.tsx
-msgid "이 작업의 보고서를 쓴 최종 답변이 없습니다."
-msgstr "이 작업의 보고서를 쓴 최종 답변이 없습니다."
 
 #: app/entry/chat/board/board-surface.tsx
 msgid "이 카드를 기다리는 카드가 있어서 옮길 수 없습니다. 그 카드의 의존을 먼저 풀어 주십시오."
@@ -5218,12 +5171,6 @@ msgstr "재연결 중단"
 msgid "저장"
 msgstr "저장"
 
-#. Badge: the memory candidate was not saved to project memory
-#. What the user decided for a memory proposal
-#: app/entry/chat/work-trace-panel.tsx
-msgid "저장 안 함"
-msgstr "저장 안 함"
-
 #: app/entry/chat/work-trace-panel.tsx
 msgid "저장된 기록 표시 중 · 재연결 중"
 msgstr "저장된 기록 표시 중 · 재연결 중"
@@ -5272,11 +5219,6 @@ msgstr "저장한 로그인 정보를 지웁니다. 이 서버를 다시 쓰려�
 #: app/entry/navigation/compatible-accounts.tsx
 msgid "저장할 때 기존 키 삭제"
 msgstr "저장할 때 기존 키 삭제"
-
-#. What the user decided for a memory proposal
-#: app/entry/chat/work-trace-panel.tsx
-msgid "저장함"
-msgstr "저장함"
 
 #. Queue row state: the message was not delivered
 #: app/entry/chat/queue-panel.tsx
@@ -5706,10 +5648,6 @@ msgstr "최신 상태에서 다시 시도할 수 없습니다."
 #: app/entry/chat/chat-approvals.tsx
 msgid "최신 요청 불러오기"
 msgstr "최신 요청 불러오기"
-
-#: app/entry/chat/work-trace-panel.tsx
-msgid "최종 답변의 출처"
-msgstr "최종 답변의 출처"
 
 #: app/entry/report/report-draft.tsx
 msgid "최종 제보 문안: 전송·복사·저장 전에 민감정보를 확인하고 편집해 주십시오."
@@ -6309,11 +6247,6 @@ msgstr "프로젝트 개선"
 #: app/entry/navigation/sidebar.tsx
 msgid "프로젝트 검색"
 msgstr "프로젝트 검색"
-
-#. Badge: the memory proposal was saved to project memory
-#: app/entry/chat/work-trace-panel.tsx
-msgid "프로젝트 기억"
-msgstr "프로젝트 기억"
 
 #: app/entry/navigation/sidebar.tsx
 msgid "프로젝트 기억으로 채택된 내용과 그 출처 기록은 남습니다."

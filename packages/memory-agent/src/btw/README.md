@@ -2,7 +2,7 @@
 
 ## Overview
 
-`packages/memory-agent/src/btw`는 메인 대화에서 갈라져 나온 BTW(by the way) 곁질문 스레드를 담당한다. `BtwChat` 서비스는 질문마다 메인 대화(`nodes.session`)를 새로 읽어 시스템 프롬프트에 붙인다. 그 뒤 같은 프로젝트 메모리의 읽기 전용 도구(`find_memory`, `read_evidence`, `trace_evidence`)만으로 `runChat` 루프를 돌린다. 답변·도구 호출·결과는 메시지 한 개당 한 행인 `btw_thread_messages` 한 곳에만 저장된다. run/interrupt/metadata 행, 기록기, 인덱서, 해석기, 승격 훅은 관여하지 않는다. `BtwThreads`는 SQLite의 `btw_threads`·`btw_thread_messages`·`btw_attachments` 테이블과 첨부 정리를 맡는다.
+`packages/memory-agent/src/btw`는 메인 대화에서 갈라져 나온 BTW(by the way) 곁질문 스레드를 담당한다. `BtwChat` 서비스는 질문마다 메인 대화(`nodes.session`)를 새로 읽어 시스템 프롬프트에 붙인다. 그 뒤 같은 프로젝트 메모리의 읽기 전용 도구(`find_memory`, `read_evidence`, `trace_evidence`)만으로 `runChat` 루프를 돌린다. 답변·도구 호출·결과는 메시지 한 개당 한 행인 `btw_thread_messages` 한 곳에만 저장된다. run/interrupt/metadata 행, 기록기, 인덱서, 해석기는 관여하지 않는다. `BtwThreads`는 SQLite의 `btw_threads`·`btw_thread_messages`·`btw_attachments` 테이블과 첨부 정리를 맡는다.
 
 ## Interface
 
@@ -25,8 +25,8 @@
 
 ## Invariants
 
-- BTW 스레드는 `btwToolNames`의 세 도구만 호출할 수 있다. 도구 목록은 `btwEvidenceRunTools`만 넘긴다. 그 밖의 이름은 `btwToolGuardHook`가 실행 없이 거부한다. 쓰기·승격·워크플로·파일·스킬·서브에이전트는 제공하지 않는다
-- `btwEvidenceRunTools`에는 런 바인딩이 없다. 검색·사용·승격 기록이 남지 않아야 한다
+- BTW 스레드는 `btwToolNames`의 세 도구만 호출할 수 있다. 도구 목록은 `btwEvidenceRunTools`만 넘긴다. 그 밖의 이름은 `btwToolGuardHook`가 실행 없이 거부한다. 쓰기·워크플로·파일·스킬·서브에이전트는 제공하지 않는다
+- `btwEvidenceRunTools`에는 런 바인딩이 없다. 메인 대화의 저장된 도구 결과를 읽지 않는다
 - BTW 실행은 `btwStore`를 쓴다. `thread`/`saveThread`는 `btw_thread_messages`를 가리킨다. 저장은 처음 달라진 메시지(`firstChange`)부터 다시 쓴다. `startRun`/`endRun`/interrupt 계열은 no-op이다. run·interrupt·metadata 행을 남기지 않는다
 - 스레드의 부모 세션 바인딩은 생성 후 바뀌지 않는다(`create` 주석). 생성 시 부모 세션이 없으면 `BtwParentNotFound`로 실패한다
 - `saveMessages`는 UPDATE만 한다. 진행 중인 답변이 삭제된 스레드를 되살리지 않는다. 빈 사용자 텍스트 메시지는 저장 전에 거른다

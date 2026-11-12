@@ -5,13 +5,10 @@ import { HashSet, Iterable } from "effect";
  * a decision for every new built-in; changing a contract requires checking the implementation.
  */
 export const builtinToolEffects = {
-  // Search records durable memory_usage_events when promoted matches are retrieved.
-  find_memory: "effectful",
+  find_memory: "read",
   read_evidence: "read",
   trace_evidence: "read",
   read_tool_result: "read",
-  promote_memory_candidate: "effectful",
-  use_promoted_memory: "effectful",
   // Filesystem paging/snapshot caches do not acknowledge or change domain state.
   list_files: "read",
   search_files: "read",
@@ -38,9 +35,7 @@ export const builtinToolEffects = {
   run_subagent: "effectful",
   resume_subagent: "effectful",
   read_subagent_tool_result: "read",
-  // Report caches are run-local; durable review/adoption is a separate middleware RPC.
   get_subagent_reports: "read",
-  adopt_subagent_reports: "effectful",
   // Report-session evidence tools only perform scoped SELECTs and redaction.
   list_report_evidence: "read",
   read_report_item: "read",
@@ -64,6 +59,10 @@ const retiredToolEffects = {
   save_shell_skill: "effectful",
   // Replaced by completion notifications and their follow-up; it only read status.
   wait_subagents: "read",
+  // Removed with report adoption and memory promotion; they saved claims and promotions.
+  adopt_subagent_reports: "effectful",
+  promote_memory_candidate: "effectful",
+  use_promoted_memory: "effectful",
 } as const satisfies Record<string, "read" | "effectful">;
 
 export const readOnlyToolNames = HashSet.fromIterable(
