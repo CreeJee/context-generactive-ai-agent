@@ -5,7 +5,7 @@ import { Cause, Effect } from "effect";
 import type { ReactNode } from "react";
 import { Array as EffectArray } from "effect";
 import { render } from "vitest-browser-react";
-import { describe, expect } from "vite-plus/test";
+import { describe, expect, beforeEach } from "vite-plus/test";
 import "../../app.css";
 import { AccountLoginState, ProviderAuthState } from "../api";
 import type { Session } from "../api";
@@ -46,6 +46,9 @@ const alignedTerms = (root: HTMLElement, expected: string[]) => {
 };
 
 describe("sidebar disclosures", () => {
+  // The project groups' folds persist in the browser's storage; every test starts like a first visit.
+  beforeEach(() => localStorage.removeItem("context-agent-session-groups-open-v1"));
+
   it.live("compatible reasoning output does not require an effort selector", () =>
     Effect.gen(function* () {
       const model = {
@@ -550,21 +553,133 @@ describe("sidebar disclosures", () => {
       );
 
       yield* sdkCall(() =>
-        expect.element(screen.getByRole("button", { name: "Alpha" })).toBeVisible(),
+        expect.element(screen.getByRole("button", { name: /^Alpha/ })).toBeVisible(),
       );
       yield* sdkCall(() =>
-        expect.element(screen.getByRole("button", { name: "Beta" })).toBeVisible(),
+        expect.element(screen.getByRole("button", { name: /^Beta/ })).toBeVisible(),
       );
       // Gamma has no conversations, so its group exists only while it is the selected project.
       yield* sdkCall(() =>
         expect.element(screen.getByRole("button", { name: "Gamma" })).toBeVisible(),
       );
+      // A folded group holds its conversations; opening it shows them.
+      yield* sdkCall(() => screen.getByRole("button", { name: /^Alpha/ }).click());
       yield* sdkCall(() =>
         expect.element(screen.getByRole("link", { name: "알파 대화" })).toBeVisible(),
       );
+      yield* sdkCall(() => screen.getByRole("button", { name: /^Beta/ }).click());
       yield* sdkCall(() =>
         expect.element(screen.getByRole("link", { name: "베타 질문" })).toBeVisible(),
       );
+    }),
+  );
+
+  it.live("a group keeps its fold across a fresh render", () =>
+    Effect.gen(function* () {
+      const screen = yield* sdkCall(() =>
+        render(
+          <div className="w-72">
+            <SessionSection
+              groups={[group("alpha", "Alpha", [sessionOf("alpha", "a1", "알파 대화")])]}
+              answering={new Set()}
+              boardRunning={new Set()}
+              loading={false}
+              // The selected project starts open, like a first visit to the page.
+              projectId="alpha"
+              sessionId="a1"
+              archiveError={null}
+              onCreate={() => {}}
+              onArchive={() => {}}
+              onDelete={() => {}}
+              onRestore={() => {}}
+              agents={[]}
+            />
+          </div>,
+          withSidebar,
+        ),
+      );
+      yield* sdkCall(() =>
+        expect.element(screen.getByRole("link", { name: "알파 대화" })).toBeVisible(),
+      );
+
+      // Folding it records the fold; the next visit starts folded even though it is the selected
+      // project, because the user's choice outranks the default.
+      yield* sdkCall(() => screen.getByRole("button", { name: /^Alpha/ }).click());
+      yield* sdkCall(() =>
+        expect.element(screen.getByRole("link", { name: "알파 대화" })).not.toBeInTheDocument(),
+      );
+      expect(localStorage.getItem("context-agent-session-groups-open-v1")).toBe(
+        JSON.stringify({ alpha: false }),
+      );
+
+      const again = yield* sdkCall(() =>
+        render(
+          <div className="w-72">
+            <SessionSection
+              groups={[group("alpha", "Alpha", [sessionOf("alpha", "a1", "알파 대화")])]}
+              answering={new Set()}
+              boardRunning={new Set()}
+              loading={false}
+              projectId="alpha"
+              sessionId="a1"
+              archiveError={null}
+              onCreate={() => {}}
+              onArchive={() => {}}
+              onDelete={() => {}}
+              onRestore={() => {}}
+              agents={[]}
+            />
+          </div>,
+          withSidebar,
+        ),
+      );
+      yield* sdkCall(() =>
+        expect.element(again.getByRole("link", { name: "알파 대화" })).not.toBeInTheDocument(),
+      );
+      yield* sdkCall(() => again.getByRole("button", { name: /^Alpha/ }).click());
+      yield* sdkCall(() =>
+        expect.element(again.getByRole("link", { name: "알파 대화" })).toBeVisible(),
+      );
+      expect(localStorage.getItem("context-agent-session-groups-open-v1")).toBe(
+        JSON.stringify({ alpha: true }),
+      );
+    }),
+  );
+
+  it.live("the project header stays pinned above the section headings", () =>
+    Effect.gen(function* () {
+      const screen = yield* sdkCall(() =>
+        render(
+          <div className="w-72">
+            <SessionSection
+              groups={[group("alpha", "Alpha", [sessionOf("alpha", "a1", "알파 대화")])]}
+              answering={new Set()}
+              boardRunning={new Set()}
+              loading={false}
+              projectId="alpha"
+              sessionId="a1"
+              archiveError={null}
+              onCreate={() => {}}
+              onArchive={() => {}}
+              onDelete={() => {}}
+              onRestore={() => {}}
+              agents={[]}
+            />
+          </div>,
+          withSidebar,
+        ),
+      );
+      // The project's name pins to the list's top like the section headings; it must sit above
+      // them so a scrolling heading passes under it instead of covering it.
+      const header = screen.getByRole("button", { name: "Alpha" }).element();
+      // The selected group is open, so its header shows only the project's name. The section
+      // heading below it is also a sticky button ("진행 중 {count}개").
+      const heading = screen.getByRole("button", { name: /^진행 중/u }).element();
+      const headerStyle = getComputedStyle(header);
+      const headingStyle = getComputedStyle(heading);
+      expect(headerStyle.position).toBe("sticky");
+      expect(headingStyle.position).toBe("sticky");
+      expect(Number(headerStyle.zIndex)).toBeGreaterThan(Number(headingStyle.zIndex));
     }),
   );
 
@@ -671,6 +786,8 @@ describe("sidebar disclosures", () => {
         ),
       );
 
+      // A group folds, so its conversations are behind its header: open it to reach the row.
+      yield* sdkCall(() => screen.getByRole("button", { name: /^Alpha/ }).click());
       const alpha = screen.getByRole("link", { name: "알파 대화" });
       expect(alpha.element().getAttribute("href")).toBe("/?project=alpha&session=a1");
       const beta = screen.getByRole("link", { name: "베타 질문" });
@@ -710,6 +827,8 @@ describe("sidebar disclosures", () => {
         ),
       );
 
+      // A group folds, so its conversations are behind its header: open it to reach the row.
+      yield* sdkCall(() => screen.getByRole("button", { name: /^Alpha/ }).click());
       const row = screen.getByRole("listitem", { name: /알파 대화/u });
       yield* sdkCall(() => row.getByRole("button", { name: "알파 대화 메뉴" }).click());
       yield* sdkCall(() => screen.getByRole("menuitem", { name: "보관하기" }).click());

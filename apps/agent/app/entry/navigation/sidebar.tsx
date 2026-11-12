@@ -198,6 +198,17 @@ export function ModelSection({
 
 const projectSectionOpenAtom = atomWithStorage("context-agent-project-section-open-v2", false);
 
+/**
+ * How each project's conversation group sits in the list: folded or open, kept per browser like
+ * the project section above. The server renders and hydrates with the empty default and the
+ * stored folds are read once the browser takes over, so the first paint never disagrees with the
+ * server's HTML.
+ */
+const sessionGroupsOpenAtom = atomWithStorage<Readonly<Record<string, boolean>>>(
+  "context-agent-session-groups-open-v1",
+  {},
+);
+
 export function ProjectSection({
   projects,
   hiddenProjects,
@@ -696,6 +707,13 @@ function ProjectSessionGroup({
 }) {
   const { t } = useLingui();
   const [placeValue, setPlaceValue] = useState(everyPlace);
+  // Whether the group is folded lives in the browser's storage, so the list comes back the way it
+  // was left. The atom starts empty on the server and the first render, then the stored folds
+  // arrive on mount; a project the user never touched keeps the old default (open when selected).
+  const [folds, setFolds] = useAtom(sessionGroupsOpenAtom);
+  const open = folds[group.projectId] ?? selected;
+  const setOpen = (next: boolean) =>
+    setFolds((current) => ({ ...current, [group.projectId]: next }));
   const places = [
     ...new Set(group.sessions.flatMap((session) => sessionPlace(session) ?? [])),
   ].toSorted();
@@ -719,13 +737,29 @@ function ProjectSessionGroup({
   });
   return (
     <SidebarGroup>
-      <Collapsible defaultOpen={selected}>
+      <Collapsible open={open} onOpenChange={setOpen}>
+        {/* The project's name pins to the top of the scrolling list while its group is in view,
+            like the section headings below it. It sits above them (z-20 over their z-10, h-8
+            offset) so a scrolling section heading passes under the project's name instead of
+            covering it. The count stays readable when the group is folded, as its only content. */}
         <CollapsibleTrigger
-          className="group sticky top-0 z-10 flex h-8 w-full items-center gap-1 rounded-md bg-sidebar px-2 text-xs font-semibold text-foreground outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+          className="group sticky top-0 z-20 flex h-8 w-full items-center gap-1 rounded-md bg-sidebar px-2 text-xs font-semibold text-foreground outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring"
           title={group.name}
         >
           <ChevronRightIcon className="size-3.5 shrink-0 transition-transform group-data-panel-open:rotate-90" />
           <span className="min-w-0 flex-1 truncate text-left">{group.name}</span>
+          {/* Readable while the group is folded too, when it is the header's only context. */}
+          {!open && (
+            <span
+              className="shrink-0 tabular-nums text-2xs font-medium text-muted-foreground"
+              aria-label={t({
+                message: `대화 ${ph({ count: group.sessions.length })}개`,
+                comment: "How many conversations the project's group header shows",
+              })}
+            >
+              {group.sessions.length}
+            </span>
+          )}
           {selected && <Badge variant="secondary">{t`사용 중`}</Badge>}
         </CollapsibleTrigger>
         <CollapsibleContent className="flex flex-col gap-0.5">
@@ -896,11 +930,13 @@ function SessionGroup({
 }) {
   const { t } = useLingui();
   // The heading sticks to the top of the scrolling list while its section is in view; the next
-  // section's heading pushes it out, since a sticky element stays inside its own section.
+  // section's heading pushes it out, since a sticky element stays inside its own section. Inside
+  // a project group it stops below the project's pinned name (its h-8, the group's z-20), so the
+  // two rows stay readable while both are stuck.
   return (
     <SidebarGroup>
       <Collapsible defaultOpen={defaultOpen}>
-        <CollapsibleTrigger className="group sticky top-0 z-10 flex h-8 w-full items-center gap-1 rounded-md bg-sidebar px-2 text-2xs font-medium tracking-wide text-muted-foreground uppercase outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring">
+        <CollapsibleTrigger className="group sticky top-8 z-10 flex h-8 w-full items-center gap-1 rounded-md bg-sidebar px-2 text-2xs font-medium tracking-wide text-muted-foreground uppercase outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring">
           <ChevronRightIcon className="size-3.5 shrink-0 transition-transform group-data-panel-open:rotate-90" />
           <span className="min-w-0 flex-1 truncate text-left">{title}</span>
           <span

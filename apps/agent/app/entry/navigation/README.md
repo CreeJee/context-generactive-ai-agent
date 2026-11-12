@@ -8,7 +8,7 @@
 
 - `ModelSection` — 모델 Select와, 선택한 모델이 허용하는 추론 강도 Select를 그리는 사이드바 섹션 (sidebar.tsx)
 - `ProjectSection` — 접히는 프로젝트 섹션. 이름으로 찾는 프로젝트 Combobox(보관한 프로젝트는 따로 묶음), 폴더 열기 버튼, 다른 프로젝트 기억 검색 토글(R08), 보관하기를 담는다. 권한 모드(ask/auto/full)는 설정 대화상자의 권한 페이지로 옮겨졌다 (sidebar.tsx)
-- `SessionSection` — 모든 표시 프로젝트의 세션·보관 세션 목록. 프로젝트별로 접히는 그룹(`ProjectSessionGroup`, 헤더에 프로젝트 이름, 현재 프로젝트는 `사용 중` 배지와 펼침)을 두고, 그 안에 `SessionGroup`으로 접는 섹션 세 개를 둔다: "진행 중"(답변 중 `answering`이거나 보드가 도는 `boardRunning` 대화, Spinner를 단다), "대화"(나머지), "보관함"(처음엔 접힘, 행을 누르면 복원·원본 삭제 메뉴). 세션이 없는 프로젝트는 현재 선택 프로젝트일 때만 그룹으로 보인다. 각 프로젝트 안의 "대화" 머리줄은 위치 필터 메뉴(`sessionPlace`·`placeFilterOf`·`shownIn`)로 나눠 보여 준다. 행은 `SidebarMenuButton`이고 `Session.projectId`를 반영해 `?project=…&session=…` 링크로 다른 프로젝트 대화도 바로 연다. 보관·원본 삭제는 행에 올리거나 포커스하면 나타나는 `SidebarMenuAction` 메뉴에 있고, 프로젝트와 세션을 함께 이름으로 넘긴다(`onArchive`·`onDelete`·`onRestore`). 원본 삭제는 `AlertDialog`로 확인받는다. 목록을 불러오는 동안(`loading`)은 Skeleton을, 어떤 프로젝트 목록이 실패하면(`failed`) 다시 시도를 보인다. 제목 없는 대화는 시작 시각(`dayAndTime`, 브라우저 시간대)으로 부르고, 서버 HTML과 hydration 동안에는 `제목 없는 대화`로 부른다 (sidebar.tsx, `App`이 렌더)
+- `SessionSection` — 모든 표시 프로젝트의 세션·보관 세션 목록. 프로젝트별로 접히는 그룹(`ProjectSessionGroup`, 헤더에 프로젝트 이름, 현재 프로젝트는 `사용 중` 배지와 펼침)을 두고, 그 안에 `SessionGroup`으로 접는 섹션 세 개를 둔다: "진행 중"(답변 중 `answering`이거나 보드가 도는 `boardRunning` 대화, Spinner를 단다), "대화"(나머지), "보관함"(처음엔 접힘, 행을 누르면 복원·원본 삭제 메뉴). 프로젝트 헤더는 목록 스크롤 맨 위에 붙고(sticky, `z-20`), 그 아래 섹션 머리줄(`top-8`, `z-10`)이 지나가며 가리지 않는다. 접힘 상태는 jotai `atomWithStorage("context-agent-session-groups-open-v1")`에 프로젝트별로 저장해 다음 방문에도 유지한다(서버 렌더와 첫 렌더는 빈 기본값, 저장된 값은 마운트 뒤 적용). 접힌 그룹 헤더는 대화 수를 함께 보인다. 세션이 없는 프로젝트는 현재 선택 프로젝트일 때만 그룹으로 보인다. 각 프로젝트 안의 "대화" 머리줄은 위치 필터 메뉴(`sessionPlace`·`placeFilterOf`·`shownIn`)로 나눠 보여 준다. 행은 `SidebarMenuButton`이고 `Session.projectId`를 반영해 `?project=…&session=…` 링크로 다른 프로젝트 대화도 바로 연다. 보관·원본 삭제는 행에 올리거나 포커스하면 나타나는 `SidebarMenuAction` 메뉴에 있고, 프로젝트와 세션을 함께 이름으로 넘긴다(`onArchive`·`onDelete`·`onRestore`). 원본 삭제는 `AlertDialog`로 확인받는다. 목록을 불러오는 동안(`loading`)은 Skeleton을, 어떤 프로젝트 목록이 실패하면(`failed`) 다시 시도를 보인다. 제목 없는 대화는 시작 시각(`dayAndTime`, 브라우저 시간대)으로 부르고, 서버 HTML과 hydration 동안에는 `제목 없는 대화`로 부른다 (sidebar.tsx, `App`이 렌더)
 - `Separator` — sidebar.tsx가 `~/components/ui/separator`에서 다시 내보내는 구분선
 - `SidebarDisclosureTrigger` — `CollapsibleTrigger` 래퍼. `leading` 슬롯, 말줄임 본문, 회전하는 chevron을 그린다
 - `AccountModelPanel` / `accountSummary` — 공급자 인증 상태와 선택 모델을 한 줄로 요약하고 설정을 접어 두는 패널. `accountSummary`는 `{status, model, hasError}`를 돌려주는 dual 함수다
@@ -56,7 +56,7 @@
 
 - 네트워크: `compatibleClient`가 `appFetch`로 `/api/accounts`를 GET/POST한다(list, create, connect, rename, save-model, remove-model, select, remove, test, discover).
 - React Query 조회·변경 훅이 백엔드 API를 호출한다: `useAccountsQuery`, `useAccountQuotaQuery`, `useCompatibleAccountsQuery`, `useDecisionInboxQuery`, `useProjectBoardsQuery`, `useAccountActionMutation`, `useCompatibleAccountMutation`.
-- 브라우저 localStorage: jotai `atomWithStorage("context-agent-project-section-open-v2")`에 프로젝트 섹션이 열려 있는지 저장한다.
+- 브라우저 localStorage: jotai `atomWithStorage("context-agent-project-section-open-v2")`에 프로젝트 섹션이 열려 있는지, `atomWithStorage("context-agent-session-groups-open-v1")`에 프로젝트별 대화 그룹 접힘을 저장한다.
 - 확인 창: 구독 계정 로그아웃(`remove`), 호환 엔드포인트 삭제, 대화 원본 삭제는 `AlertDialog`로 먼저 확인받는다.
 - 시계 읽기: `DateTime.nowUnsafe()`로 한도 창이 초기화되기까지 남은 시간을 계산한다(account-switcher, account-profiles).
 

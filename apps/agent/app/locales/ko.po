@@ -2184,6 +2184,11 @@ msgstr "대상 브랜치와 충돌한 파일 {count}개를 에이전트가 해�
 msgid "대화"
 msgstr "대화"
 
+#. How many conversations the project's group header shows
+#: app/entry/navigation/sidebar.tsx
+msgid "대화 {count}개"
+msgstr "대화 {count}개"
+
 #. Settings page name: importing other coding agents' conversations into memory
 #: app/entry/settings/shared.tsx
 msgid "대화 가져오기"
