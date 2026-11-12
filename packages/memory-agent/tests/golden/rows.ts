@@ -218,8 +218,8 @@ const conversationRows = Effect.fnUntraced(function* (sessionId: string) {
       sessionId,
     ),
     backgroundResults: yield* rows(
-      `SELECT r.task_id, r.status, r.result FROM background_task_results r
-       JOIN work_tasks t ON t.id = r.task_id WHERE t.origin_session_id = ? ORDER BY t.rowid`,
+      `SELECT id, kind, title, status, result FROM background_tasks WHERE session_id = ?
+       ORDER BY rowid`,
       sessionId,
     ),
     nodes: yield* rows(

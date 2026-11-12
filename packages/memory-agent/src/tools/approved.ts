@@ -1,7 +1,6 @@
 import { Array as Arr, Context, Effect, FileSystem, Layer, Match, Option, Schema } from "effect";
 import { SecureRandom } from "effect/crypto";
 import { ChildProcessSpawner } from "effect/process";
-import { AttemptFailureReason } from "../work-trace/contracts.ts";
 import {
   BackgroundOperationFailed,
   BackgroundTasks,
@@ -74,17 +73,6 @@ const ShellResult = Schema.Struct({
   stdoutTruncated: Schema.Boolean,
   stderrTruncated: Schema.Boolean,
 });
-
-/** A background command that did not exit cleanly fails its attempt; its output is still kept. */
-const commandFailure = Match.type<CommandResult>().pipe(
-  Match.discriminatorsExhaustive("status")({
-    succeeded: (): AttemptFailureReason | null => null,
-    cancelled: () => null,
-    failed: ({ exitCode, signal }) =>
-      AttemptFailureReason.cases.ProcessExited.make({ exitCode, signal }),
-    timed_out: () => AttemptFailureReason.cases.ProcessTimedOut.make({}),
-  }),
-);
 
 const make = Effect.gen(function* () {
   const storage = yield* StorageRoot;
@@ -245,15 +233,14 @@ const make = Effect.gen(function* () {
                 label,
                 execute.pipe(
                   Effect.mapError((cause) => BackgroundOperationFailed.make({ cause })),
-                  Effect.map((result) => ({
-                    report: JSON.stringify({
+                  Effect.map((result) =>
+                    JSON.stringify({
                       workdir: directory.relative,
                       ...mapped,
                       ...result,
                       command: label,
                     }),
-                    failure: commandFailure(result),
-                  })),
+                  ),
                 ),
               );
               const saved = yield* background.waitResult(

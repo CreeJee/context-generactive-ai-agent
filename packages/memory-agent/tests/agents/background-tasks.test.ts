@@ -2,18 +2,13 @@ import { Deferred, Effect, Fiber, FileSystem, Path, Ref, Schema, Stream } from "
 import { expect } from "vite-plus/test";
 import { ApprovedTools } from "../../src/tools/approved.ts";
 import { BackgroundOperationFailed, BackgroundTasks } from "../../src/tools/background.ts";
-import { AttemptFailureReason } from "../../src/work-trace/contracts.ts";
-import { LifecycleOutcome, LifecycleRequest, WorkTraceStore } from "../../src/work-trace/store.ts";
+import { WorkTraceStore } from "../../src/work-trace/store.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { callTool } from "../support/run-tools.ts";
 import { freshSession } from "./agent-env.ts";
 import { sqlGet, sqlRun, sqlExec } from "../support/sql.ts";
 
-const Receipt = Schema.Struct({
-  status: Schema.Literal("running"),
-  taskId: Schema.String,
-  attemptId: Schema.String,
-});
+const Receipt = Schema.Struct({ status: Schema.Literal("running"), taskId: Schema.String });
 const Page = Schema.Struct({
   status: Schema.String,
   result: Schema.String,
@@ -28,9 +23,6 @@ const runOf = Effect.fnUntraced(function* (sessionId: string, abortSignal?: Abor
     abortSignal: abortSignal ?? (yield* Effect.abortSignal),
   };
 });
-
-/** An operation's report when it ended normally. */
-const reported = (report: string) => ({ report, failure: null });
 
 /** Read a stored result through the session's `get_background_result` tool. */
 const readResult = Effect.fnUntraced(function* (
@@ -49,9 +41,7 @@ testAgent()("background task lifecycle", (it) => {
       const run = yield* runOf(sessionId);
       const callId = `${sessionId}:call`;
       const executions = yield* Ref.make(0);
-      const operation = Ref.update(executions, (count) => count + 1).pipe(
-        Effect.as(reported("done")),
-      );
+      const operation = Ref.update(executions, (count) => count + 1).pipe(Effect.as("done"));
       const [first, second] = yield* Effect.all(
         [
           tasks.start(run, callId, "shell", "task", operation),
@@ -63,14 +53,15 @@ testAgent()("background task lifecycle", (it) => {
       yield* tasks.waitResult(sessionId, first.taskId, 2000);
       expect(yield* tasks.start(run, callId, "shell", "task", operation)).toMatchObject({
         taskId: first.taskId,
-        attemptId: first.attemptId,
         status: "completed",
       });
       expect(yield* Ref.get(executions)).toBe(1);
+      // Background work is not a Work Trace task.
+      expect(yield* (yield* WorkTraceStore).taskTree(sessionId)).toEqual([]);
     }),
   );
 
-  it.effect("operation failure is stored once and finalizes the attempt as failed", () =>
+  it.effect("operation failure is stored as the task's failed result", () =>
     Effect.gen(function* () {
       const sessionId = yield* freshSession;
       const tasks = yield* BackgroundTasks;
@@ -86,36 +77,62 @@ testAgent()("background task lifecycle", (it) => {
       // The model reads the failure's tag, never the cause's text.
       expect(result?.result).toContain("BackgroundOperationFailed");
       expect(result?.result).not.toContain("execution failed");
-      expect(
-        (yield* (yield* WorkTraceStore).taskDetail(sessionId, receipt.taskId))?.task.status,
-      ).toBe("failed");
+      expect(yield* readResult(sessionId, { taskId: receipt.taskId })).toMatchObject({
+        status: "failed",
+      });
     }),
   );
 
-  it.effect("a reported process failure keeps the report and fails the attempt with its code", () =>
-    Effect.gen(function* () {
-      const sessionId = yield* freshSession;
-      const tasks = yield* BackgroundTasks;
-      const receipt = yield* tasks.start(
-        yield* runOf(sessionId),
-        `${sessionId}:call`,
-        "shell",
-        "failing command",
-        Effect.succeed({
-          report: "exit report",
-          failure: AttemptFailureReason.cases.ProcessExited.make({ exitCode: 2, signal: null }),
-        }),
-      );
-      expect(yield* tasks.waitResult(sessionId, receipt.taskId, 2000)).toMatchObject({
-        result: "exit report",
-      });
-      const detail = yield* (yield* WorkTraceStore).taskDetail(sessionId, receipt.taskId);
-      expect(detail?.task.status).toBe("failed");
-      expect(detail?.task.latestFailure).toEqual({
-        reason: AttemptFailureReason.cases.ProcessExited.make({ exitCode: 2, signal: null }),
-        stage: "process",
-      });
-    }),
+  it.effect(
+    "an end is told once to the run that takes it, and again after that run gives it back",
+    () =>
+      Effect.gen(function* () {
+        const sessionId = yield* freshSession;
+        const tasks = yield* BackgroundTasks;
+        const run = yield* runOf(sessionId);
+        const gate = yield* Deferred.make<void>();
+        const ended = yield* Stream.take(tasks.completions, 1).pipe(
+          Stream.runCollect,
+          Effect.forkScoped({ startImmediately: true }),
+        );
+        const receipt = yield* tasks.start(
+          run,
+          `${sessionId}:call`,
+          "shell",
+          "ls  -la",
+          Effect.as(Deferred.await(gate), "listing"),
+        );
+        expect((yield* tasks.running(sessionId)).map((task) => task.id)).toEqual([receipt.taskId]);
+        expect(yield* tasks.untold(sessionId)).toBe(false);
+        yield* Deferred.succeed(gate, undefined);
+        yield* Fiber.join(ended);
+        expect(yield* tasks.running(sessionId)).toEqual([]);
+        expect(yield* tasks.untold(sessionId)).toBe(true);
+        const told = [
+          {
+            taskId: receipt.taskId,
+            parentRunId: run.runId,
+            kind: "shell",
+            title: "ls -la",
+            status: "completed",
+          },
+        ];
+        expect(yield* tasks.consume(sessionId, "later-run")).toEqual(told);
+        expect(yield* tasks.consume(sessionId, "next-run")).toEqual([]);
+        yield* tasks.release(sessionId, "later-run");
+        expect(yield* tasks.consume(sessionId, "next-run")).toEqual(told);
+        expect(yield* tasks.untold(sessionId)).toBe(false);
+        // A result the run waited for is its own, so its end is not told again.
+        const waited = yield* tasks.start(
+          run,
+          `${sessionId}:waited`,
+          "shell",
+          "pwd",
+          Effect.succeed("/"),
+        );
+        yield* tasks.waitResult(sessionId, waited.taskId, 2000);
+        expect(yield* tasks.untold(sessionId)).toBe(false);
+      }),
   );
 
   it.effect(
@@ -158,17 +175,16 @@ testAgent()("background task lifecycle", (it) => {
       }),
   );
 
-  it.effect("paged results stay bounded and task deletion clears their stored payload", () =>
+  it.effect("paged results stay bounded", () =>
     Effect.gen(function* () {
       const sessionId = yield* freshSession;
       const tasks = yield* BackgroundTasks;
-      const trace = yield* WorkTraceStore;
       const receipt = yield* tasks.start(
         yield* runOf(sessionId),
         `${sessionId}:call`,
         "external_agent",
         "task",
-        Effect.succeed(reported("x".repeat(6000))),
+        Effect.succeed("x".repeat(6000)),
       );
       yield* tasks.waitResult(sessionId, receipt.taskId, 2000);
       expect(yield* readResult(sessionId, { taskId: receipt.taskId })).toMatchObject({
@@ -179,28 +195,6 @@ testAgent()("background task lifecycle", (it) => {
         result: "x".repeat(2000),
         nextOffset: null,
       });
-      const requested = yield* trace.requestTaskLifecycle({
-        sessionId,
-        taskId: receipt.taskId,
-        intent: "delete",
-        idempotencyKey: `${sessionId}:delete`,
-      });
-      expect(LifecycleRequest.$is("requested")(requested)).toBe(true);
-      if (LifecycleRequest.$is("requested")(requested))
-        expect(
-          LifecycleOutcome.$is("completed")(
-            yield* trace.finalizeTaskLifecycle(requested.operationId),
-          ),
-        ).toBe(true);
-      expect(
-        yield* sqlGet(
-          "SELECT count(*) AS n FROM background_task_results WHERE task_id = ?",
-          receipt.taskId,
-        ),
-      ).toEqual({ n: 0 });
-      expect(yield* Effect.flip(readResult(sessionId, { taskId: receipt.taskId }))).toMatchObject({
-        message: expect.stringContaining("not found"),
-      });
     }),
   );
 });
@@ -208,7 +202,7 @@ testAgent()("background task lifecycle", (it) => {
 // The spy and the completion listener replace parts of the block's agent, so the test owns it.
 testAgent()("background result storage failure", (it) => {
   it.effect(
-    "persistent result write failure records a terminal failure without retry or false completion",
+    "an end that cannot be saved reads as failed, without retry or a task left running",
     () =>
       Effect.gen(function* () {
         const { session } = yield* TestEnv;
@@ -216,7 +210,8 @@ testAgent()("background result storage failure", (it) => {
         // Each write is counted, then fails; FAIL keeps the count its statement wrote.
         yield* Effect.acquireRelease(
           sqlExec(`CREATE TEMP TABLE result_writes (n INTEGER);
-            CREATE TEMP TRIGGER result_write_fails BEFORE INSERT ON main.background_task_results
+            CREATE TEMP TRIGGER result_write_fails BEFORE UPDATE OF status ON main.background_tasks
+            WHEN NEW.status <> 'running'
             BEGIN
               INSERT INTO result_writes VALUES (1);
               SELECT RAISE(FAIL, 'storage offline');
@@ -235,14 +230,11 @@ testAgent()("background result storage failure", (it) => {
           `${session.id}:call`,
           "shell",
           "task",
-          Effect.succeed(reported("operation completed")),
+          Effect.succeed("operation completed"),
         );
         const result = yield* tasks.waitResult(session.id, receipt.taskId, 2000);
         expect(result).toMatchObject({ status: "failed" });
-        expect(result?.result).toContain("background_result_storage_failed");
-        expect(
-          (yield* (yield* WorkTraceStore).taskDetail(session.id, receipt.taskId))?.task.status,
-        ).toBe("failed");
+        expect(result?.result).toContain("could not be saved");
         expect(yield* readResult(session.id, { taskId: receipt.taskId })).toMatchObject({
           status: "failed",
         });
@@ -259,16 +251,16 @@ testAgent()("read-only background results", (it) => {
     Effect.gen(function* () {
       const { session } = yield* TestEnv;
       const tasks = yield* BackgroundTasks;
-      const trace = yield* WorkTraceStore;
       const receipt = yield* tasks.start(
         yield* runOf(session.id),
         `${session.id}:call`,
         "shell",
         "synthetic read-only contract",
-        Effect.succeed(reported("saved result")),
+        Effect.succeed("saved result"),
       );
-      yield* tasks.waitResult(session.id, receipt.taskId, 2000);
-      expect((yield* trace.taskDetail(session.id, receipt.taskId))?.task.status).toBe("completed");
+      expect(yield* tasks.waitResult(session.id, receipt.taskId, 2000)).toMatchObject({
+        status: "completed",
+      });
       const changes = yield* sqlGet("SELECT total_changes() AS n");
       yield* Effect.acquireRelease(sqlExec("PRAGMA query_only = ON"), () =>
         Effect.orDie(sqlExec("PRAGMA query_only = OFF")),
@@ -355,17 +347,15 @@ testAgent()("background cancellation across restart", (it) => {
         ),
       );
       yield* Deferred.await(started);
+      expect((yield* tasks.running(session.id)).map((task) => task.id)).toEqual([receipt.taskId]);
       yield* tasks.stopSession(session.id);
       expect(yield* Deferred.isDone(aborted)).toBe(true);
       expect(yield* readResult(session.id, { taskId: receipt.taskId })).toMatchObject({
         status: "cancelled",
       });
       // Simulate a process dying after dispatch with no durable result.
-      yield* sqlRun("DELETE FROM background_task_results WHERE task_id = ?", receipt.taskId);
-      yield* sqlRun("UPDATE agent_run_attempts SET status='running' WHERE id=?", receipt.attemptId);
       yield* sqlRun(
-        "UPDATE work_tasks SET active_attempt_id=?,status='running' WHERE id=?",
-        receipt.attemptId,
+        "UPDATE background_tasks SET status = 'running', result = NULL, finished_at = NULL WHERE id = ?",
         receipt.taskId,
       );
       yield* env.reopen;
@@ -373,6 +363,10 @@ testAgent()("background cancellation across restart", (it) => {
       expect(yield* env.use(readResult(session.id, { taskId: receipt.taskId }))).toMatchObject({
         status: "interrupted",
       });
+      // Its end is told like any other.
+      expect(
+        yield* env.use(Effect.flatMap(BackgroundTasks, (tasks) => tasks.untold(session.id))),
+      ).toBe(true);
     }),
   );
 });

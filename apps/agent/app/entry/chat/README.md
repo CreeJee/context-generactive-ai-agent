@@ -29,7 +29,7 @@
 - `WorkflowArtifactPanel` / `stageLabels` / `modeLabels` / `composerModeOf` / `workflowModeLabel` / `goalStatusLabels` / `planStatusLabels` — 입력창 위의 워크플로 바와 라벨 표. 접으면 한 줄로 모드·단계(계획 중·실행 중·완료), Goal 문장, 보드 수치와 다음 동작(Plan 모드의 승인하고 실행, 일시 중지된 Goal의 계속, 보드)을 보이고, 서버 알림은 그 아래 한 줄씩 붙는다. 펼치면 안내, Goal·Plan 요약, 보드, Plan의 열린 질문과 위험을 제 높이(최대 24rem·40dvh) 안에서 스크롤하고, 바닥에 Plan 수정·일시 중지·중단을 둔다. 승인 전 Plan은 펼친 채로 열리고 Plan 버전이 바뀌면 다시 펼친다. 펼침 영역은 접혀도 마운트된 채라 동작 버튼이 늘 있다
 - `DecisionPrompt` / `describeDecision` — 결정 요청 프롬프트와 `DecisionKind` 설명
 - `BtwPanel` / `WorkTracePanel` / `QueuePanel` / `SubagentPanel` — BTW 곁질문, 작업 추적, 메시지 대기열, 하위 에이전트 패널
-- `BackgroundTaskIndicator` — 입력창 아래 상태줄 왼쪽(컨텍스트 표시 반대편)의 `백그라운드 N개`. 누르면 팝오버로 현재 세션의 실행 중 백그라운드 작업 목록을 보여 준다
+- `BackgroundTaskIndicator` — 입력창 아래 상태줄 왼쪽(컨텍스트 표시 반대편)의 `백그라운드 N개`. 누르면 팝오버로 현재 세션의 실행 중 백그라운드 작업 목록(종류, 경과 시간)을 보여 준다. 목록은 run-state의 `background`에서 읽는다
 - 문구 — 채팅 화면의 문구는 쓰이는 자리에 Lingui 메시지(`<Trans>`, `` t`…` ``, `msg`)로 쓴다. `app/locales/ko.po`로 추출되고 `lint/wording`이 검사한다
 - `refusalTexts` — chat API가 거절하는 모든 코드의 문구 표(`Record<Refusal["error"], MessageDescriptor>`). 코드가 늘면 문구가 생길 때까지 컴파일되지 않는다. 보내기 거절과 승인 답 거절이 같은 문구를 쓴다
 - 그 밖의 export(본문 미확인): `ChatApprovals`, `ContextMeter`, `Markdown`, `ReadOnlyBar`, `SlashPalette`, `UncertainRuns`, `RunFailureText`/`runFailureOf`, `UserMessageBody`/`DrawingPicture`/`DraftImageTray`/`MessageImage`

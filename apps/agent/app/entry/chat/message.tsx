@@ -326,13 +326,16 @@ const activeTaskStatuses: readonly TraceTaskView["status"][] = [
 
 /** How long a task has run, or ran, in short Korean units. */
 export function elapsed(task: TraceTaskView): ReactNode {
-  const milliseconds = Math.max(
-    0,
+  return duration(
     (activeTaskStatuses.includes(task.status)
       ? DateTime.toEpochMillis(DateTime.nowUnsafe())
       : task.updatedAt) - task.createdAt,
   );
-  const seconds = Math.max(1, Math.round(milliseconds / 1_000));
+}
+
+/** A duration in short Korean units, at least one second. */
+export function duration(milliseconds: number): ReactNode {
+  const seconds = Math.max(1, Math.round(Math.max(0, milliseconds) / 1_000));
   if (seconds < 60) return <Trans comment="How long a task has run, in seconds">{seconds}초</Trans>;
   const minutes = Math.round(seconds / 60);
   const hours = Math.round(minutes / 60);

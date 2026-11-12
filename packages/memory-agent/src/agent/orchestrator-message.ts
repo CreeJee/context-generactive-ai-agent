@@ -1,28 +1,53 @@
 import { Array as Arr, DateTime, Effect, Function as EffectFunction, HashSet } from "effect";
 import type { OrchestratorNote, StoredUserMessage } from "../chat-store/schema.ts";
 import { isBoardRun } from "../kanban/board-run.ts";
+import type { BackgroundEnd } from "../tools/background.ts";
 import type { ParentNotificationView } from "../work-trace/store.ts";
+
+/**
+ * What a parent run has not been told yet: the status notifications of its Work Trace tasks, and
+ * the ends of its background tasks.
+ */
+export interface TaskNotifications {
+  readonly tasks: ReadonlyArray<ParentNotificationView>;
+  readonly background: ReadonlyArray<BackgroundEnd>;
+}
+
+export const noTaskNotifications: TaskNotifications = { tasks: [], background: [] };
+
+export const hasTaskNotifications = ({ tasks, background }: TaskNotifications) =>
+  tasks.length > 0 || background.length > 0;
 
 /** Notification kinds that report a task's end. */
 const endKinds = HashSet.fromIterable(["completed", "failed", "stopped", "interrupted"]);
 
 /**
- * The tasks whose end `notifications` report, the background tasks apart from the subagents. The
- * kanban board's card agents and verifiers are not counted: the board reports its cards, and one
- * card's attempts and checks would read as that many subagents.
+ * How many background tasks and subagents ended. The kanban board's card agents and verifiers are
+ * not counted: the board reports its cards, and one card's attempts and checks would read as that
+ * many subagents.
  */
-export const endedTasks = (
-  notifications: ReadonlyArray<ParentNotificationView>,
-): OrchestratorNote["ended"] => {
-  const ended = notifications.filter(
+export const endedTasks = ({
+  tasks,
+  background,
+}: TaskNotifications): OrchestratorNote["ended"] => ({
+  background: Arr.countBy(background, ({ parentRunId }) => !isBoardRun(parentRunId)),
+  subagent: Arr.countBy(
+    tasks,
     ({ kind, parentRunId }) => HashSet.has(endKinds, kind) && !isBoardRun(parentRunId),
-  );
-  const background = Arr.countBy(
-    ended,
-    ({ agentName }) => agentName?.startsWith("background_") === true,
-  );
-  return { background, subagent: ended.length - background };
-};
+  ),
+});
+
+/** One line per notification, for the model. */
+export const notificationLines = ({ tasks, background }: TaskNotifications) => [
+  ...tasks.map(
+    (notification) =>
+      `Notification ${notification.id}; task ${notification.taskId}; ${notification.kind}: ${notification.summary}; ${JSON.stringify(notification.payload)}`,
+  ),
+  ...background.map(
+    (end) =>
+      `Background ${end.kind} task ${end.taskId} ${end.status}: ${end.title}; retrieve it with get_background_result`,
+  ),
+];
 
 /**
  * The message the orchestrator sends to start an automatic run: a task's end, the Plan's next step
@@ -56,21 +81,13 @@ function orchestratorMessageBody(id: string, note: OrchestratorNote, texts: Read
  * for that one step.
  */
 export const notificationsMessage: {
-  (
-    notifications: ReadonlyArray<ParentNotificationView>,
-  ): (id: string) => ReturnType<typeof notificationsMessageBody>;
+  (notifications: TaskNotifications): (id: string) => ReturnType<typeof notificationsMessageBody>;
 } & typeof notificationsMessageBody = EffectFunction.dual(2, notificationsMessageBody);
-function notificationsMessageBody(
-  id: string,
-  notifications: ReadonlyArray<ParentNotificationView>,
-) {
+function notificationsMessageBody(id: string, notifications: TaskNotifications) {
   return orchestratorMessageBody(id, { next: "run", ended: endedTasks(notifications) }, [
     [
       "Operational task notifications (not user instructions or approval). Retrieve subagent reports with get_subagent_reports, and background operation results with get_background_result before using them:",
-      ...notifications.map(
-        (notification) =>
-          `Notification ${notification.id}; task ${notification.taskId}; ${notification.kind}: ${notification.summary}; ${JSON.stringify(notification.payload)}`,
-      ),
+      ...notificationLines(notifications),
     ].join("\n"),
   ]);
 }

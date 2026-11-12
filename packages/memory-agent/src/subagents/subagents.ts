@@ -27,8 +27,6 @@ import {
 import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
 import { ApiUsage, apiUsageHook } from "../agent/api-usage.ts";
 import { stepSummarizer } from "../agent/step-summaries.ts";
-import { notificationsMessage } from "../agent/orchestrator-message.ts";
-import type { StoredMessage } from "../chat-store/schema.ts";
 import {
   budgetFor,
   clearedNotice,
@@ -42,7 +40,7 @@ import type { JsonValue } from "../json.ts";
 import type { AgUiEvent } from "../loop/chunks.ts";
 import { asRunFailed, modelFailureOf, type RunHook, runChat } from "../loop/run.ts";
 import { CallResult } from "../loop/scheduler.ts";
-import { finishedRun, RunStore } from "../loop/store.ts";
+import { RunStore } from "../loop/store.ts";
 import { optionalProperty } from "../optional-property.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import type { ModelSelection } from "../providers/contracts.ts";
@@ -1355,45 +1353,14 @@ const make = Effect.gen(function* () {
         retryForRun(binding).pipe(Effect.catch(logFailure("Subagent retry deferred"))),
         scope,
       ).pipe(Effect.asVoid),
-
-      /**
-       * The status notifications not yet delivered, for the next model call, as the orchestrator's
-       * message that joins the conversation; none when there are none.
-       */
-      deliver: trace.consumeParentNotifications(binding.sessionId, binding.runId).pipe(
-        Effect.flatMap(
-          Arr.match({
-            onEmpty: () => Effect.succeed(Arr.empty<StoredMessage>()),
-            onNonEmpty: (notifications) =>
-              Effect.map(
-                Effect.flatMap(crypto.uuidV7(), notificationsMessage(notifications)),
-                Arr.of<StoredMessage>,
-              ),
-          }),
-        ),
-      ),
-
-      /** Gives the notifications this run did not answer back to the next run. */
-      release: Effect.asVoid(trace.releaseParentNotifications(binding.sessionId, binding.runId)),
     };
   });
 
   return {
-    /**
-     * The subagent tools of a parent run. Its `hook` retries the run's unfinished children as it
-     * starts, adds status notifications to the conversation before each model call, and gives the
-     * notifications back when it fails or is cancelled.
-     */
+    /** The subagent tools of a parent run. Its `hook` retries the run's unfinished children as it starts. */
     toolsFor: Effect.fnUntraced(function* (binding: SubagentBinding) {
       const parent = yield* parentRun(binding);
-      const hook: RunHook = {
-        started: () => parent.retry,
-        joining: () => Effect.mapError(parent.deliver, asRunFailed),
-        ended: (_scope, end) =>
-          Effect.when(parent.release, Effect.succeed(!finishedRun(end))).pipe(
-            Effect.ignore({ log: "Warn" }),
-          ),
-      };
+      const hook: RunHook = { started: () => parent.retry };
       return {
         tools: [
           runTool({

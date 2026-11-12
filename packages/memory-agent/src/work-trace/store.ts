@@ -333,7 +333,7 @@ export interface ParentNotificationView {
   readonly taskId: string;
   /** The run that started the task: a chat run, or one of the kanban board's (`isBoardRun`). */
   readonly parentRunId: string;
-  /** The task's agent, such as `background_shell`; null once the task is gone. */
+  /** The task's agent, such as a named helper; null once the task is gone. */
   readonly agentName: string | null;
   readonly kind: string;
   readonly summary: string;
@@ -1423,8 +1423,7 @@ const make = Effect.gen(function* () {
     yield* run(sql`DELETE FROM node_vectors WHERE node_seq IN (${seqs})`);
     yield* run(sql`DELETE FROM memory_graph_suppressed_nodes WHERE node_seq IN (${seqs})`);
     const nodes = (yield* run(sql`DELETE FROM nodes WHERE session_id = ${sessionId}`)).changes;
-    yield* run(sql`DELETE FROM background_task_results
-      WHERE task_id IN (SELECT id FROM work_tasks WHERE origin_session_id = ${sessionId})`);
+    yield* run(sql`DELETE FROM background_tasks WHERE session_id = ${sessionId}`);
     const threadIds = [sessionId, ...subagentRows.map((row) => `subagent-${row.id}`)];
     yield* Effect.forEach(
       threadIds,
@@ -1644,7 +1643,6 @@ const make = Effect.gen(function* () {
     const artifacts = (yield* run(sql`UPDATE work_artifacts SET locator = NULL, media_type = NULL,
         verification = 'source_deleted', source_deleted_at = ${now}, updated_at = ${now}
       WHERE task_id = ${taskId}`)).changes;
-    yield* run(sql`DELETE FROM background_task_results WHERE task_id = ${taskId}`);
     const events = (yield* run(sql`DELETE FROM run_events WHERE task_id = ${taskId}`)).changes;
     yield* run(sql`UPDATE agent_invocations SET message = '' WHERE task_id = ${taskId}`);
     yield* run(sql`UPDATE parent_notifications

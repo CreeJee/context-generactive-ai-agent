@@ -1050,10 +1050,6 @@ msgstr "Work Trace를 불러오지 못했습니다."
 msgid "Work Trace에서 보기"
 msgstr "Work Trace에서 보기"
 
-#: app/entry/chat/background-task-panel.tsx
-msgid "Work Trace에서 자세히 보려면 작업을 누르십시오."
-msgstr "Work Trace에서 자세히 보려면 작업을 누르십시오."
-
 #: app/entry/report/report-diagnosis.tsx
 msgid "가설 (검증되지 않음)"
 msgstr "가설 (검증되지 않음)"
@@ -1245,11 +1241,6 @@ msgstr "결과 {met}/{total} 충족"
 msgid "결과 없음"
 msgstr "결과 없음"
 
-#. Stage of an agent run at which it failed
-#: app/entry/session/attempt-failure.ts
-msgid "결과 저장 중"
-msgstr "결과 저장 중"
-
 #: app/entry/chat/message.tsx
 msgid "결과 확인"
 msgstr "결과 확인"
@@ -1269,10 +1260,6 @@ msgstr "결과를 맡기면 보드에서 Plan의 카드를 바로 실행합니�
 #: app/entry/chat/decision-prompt.tsx
 msgid "결과를 알 수 없는 도구 실행"
 msgstr "결과를 알 수 없는 도구 실행"
-
-#: app/entry/session/attempt-failure.ts
-msgid "결과를 저장하지 못했습니다"
-msgstr "결과를 저장하지 못했습니다"
 
 #: app/entry/chat/outcome-checklist.tsx
 msgid "결과를 확인하지 못했습니다. 다시 확인할 수 있습니다."
@@ -4340,11 +4327,6 @@ msgstr "외부 에이전트 {agent}"
 msgid "외부 에이전트 {agent}에게 작업을 맡길까요?"
 msgstr "외부 에이전트 {agent}에게 작업을 맡길까요?"
 
-#. {code} is the failure code the external coding agent reported
-#: app/entry/session/attempt-failure.ts
-msgid "외부 에이전트가 실패했습니다 ({code})"
-msgstr "외부 에이전트가 실패했습니다 ({code})"
-
 #: app/entry/settings/pages/recall.tsx
 msgid "외부 에이전트에 기억 보내기"
 msgstr "외부 에이전트에 기억 보내기"
@@ -5135,10 +5117,6 @@ msgstr "작업을 보관했습니다. Work Trace 기록과 프로젝트 기억�
 #: app/entry/chat/work-trace-panel.tsx
 msgid "작업을 선택하면 실행 근거가 표시됩니다."
 msgstr "작업을 선택하면 실행 근거가 표시됩니다."
-
-#: app/entry/session/attempt-failure.ts
-msgid "작업이 결과 없이 실패했습니다"
-msgstr "작업이 결과 없이 실패했습니다"
 
 #. Status badge: a background loop used up its retries
 #: app/entry/shared/loop-health.tsx
@@ -6205,25 +6183,6 @@ msgstr "폴더의 절대 경로를 입력해 주십시오. 등록한 폴더 안�
 #: app/entry/settings/pages/mcp-tool-hints.tsx
 msgid "표시 없음, 기본값: {shown}"
 msgstr "표시 없음, 기본값: {shown}"
-
-#. Stage of an agent run at which it failed
-#: app/entry/session/attempt-failure.ts
-msgid "프로세스 실행 중"
-msgstr "프로세스 실행 중"
-
-#. {signal} is the operating system signal name, such as SIGTERM
-#: app/entry/session/attempt-failure.ts
-msgid "프로세스가 {signal} 신호로 종료됐습니다"
-msgstr "프로세스가 {signal} 신호로 종료됐습니다"
-
-#: app/entry/session/attempt-failure.ts
-msgid "프로세스가 시간 제한을 넘었습니다"
-msgstr "프로세스가 시간 제한을 넘었습니다"
-
-#. {code} is the process exit code, or ? when it is unknown
-#: app/entry/session/attempt-failure.ts
-msgid "프로세스가 종료 코드 {code}로 끝났습니다"
-msgstr "프로세스가 종료 코드 {code}로 끝났습니다"
 
 #. Scope badge: set in this project's config
 #. Sidebar section of project settings

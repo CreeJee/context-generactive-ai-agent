@@ -104,7 +104,6 @@ import {
   type SlashContext,
 } from "./slash-commands";
 import { BackgroundTaskIndicator } from "./background-task-panel";
-import { runningBackgroundTasks } from "../session/background-tasks";
 import { useDelegatedWork } from "../session/delegated-work";
 import { chatPrompts } from "./prompts";
 
@@ -564,7 +563,7 @@ function ChatPanel({
     generating ||
     run.running !== null ||
     delegated.subagents.some((child) => child.status === "running") ||
-    runningBackgroundTasks(workTrace.tasks).length > 0;
+    run.background.length > 0;
   const [submitting, trackSubmission] = useLoading();
 
   // Messages the run took in, shown in the conversation until it is read again with them.
@@ -1276,9 +1275,9 @@ function ChatPanel({
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
-          {(context || runningBackgroundTasks(workTrace.tasks).length > 0) && (
+          {(context || run.background.length > 0) && (
             <div className="flex items-center gap-2 px-1 pt-1.5">
-              <BackgroundTaskIndicator tasks={workTrace.tasks} />
+              <BackgroundTaskIndicator tasks={run.background} />
               {context && (
                 <div className="ml-auto">
                   <ContextMeter context={context} />

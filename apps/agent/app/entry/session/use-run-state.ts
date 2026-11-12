@@ -81,6 +81,8 @@ function useRunStateBody(sessionId: string, holder: string, generating: boolean,
     providerRetry: state?.providerRetry ?? null,
     actions: state?.actions ?? null,
     uncertainRuns: state?.uncertainRuns ?? [],
+    /** Background tasks still going, oldest first. */
+    background: state?.background ?? [],
     moveWorkflow,
     notice: cancelPending
       ? RunNotice["cancel-pending"]()

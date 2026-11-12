@@ -222,10 +222,8 @@ export const goalRestartScenario = ({
           "golden:goal-restart",
           Effect.map(
             sqlGet(
-              `SELECT count(*) AS shells FROM agent_run_attempts a
-               JOIN work_tasks t ON t.id = a.task_id
-               WHERE t.origin_session_id = ? AND t.parent_tool_call_id LIKE 'goal-run@%'
-                 AND a.status = 'running'`,
+              `SELECT count(*) AS shells FROM background_tasks
+               WHERE session_id = ? AND tool_call_id LIKE 'goal-run@%' AND status = 'running'`,
               chat.sessionId,
             ),
             (row) => Number(row?.["shells"] ?? 0) > 0,

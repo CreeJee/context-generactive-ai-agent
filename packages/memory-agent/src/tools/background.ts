@@ -15,13 +15,12 @@ import {
   Stream,
 } from "effect";
 import { SecureRandom } from "effect/crypto";
-import { optionalProperty } from "../optional-property.ts";
+import { SqlClient, SqlSchema } from "effect/sql";
+import { BackgroundKind, RunningBackgroundTask } from "../agent/run-state.ts";
+import { AppEvents } from "../events/app-events.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
-import { AttemptFailureReason } from "../work-trace/contracts.ts";
-import { WorkTraceStore } from "../work-trace/store.ts";
 import { runTool, type RunTool } from "./run-tool.ts";
 import { failureAnnotations, failureTags } from "../runtime/logged-failures.ts";
-import { SqlClient, SqlSchema } from "effect/sql";
 
 export interface BackgroundBinding {
   readonly sessionId: string;
@@ -34,18 +33,13 @@ export class BackgroundOperationFailed extends Schema.TaggedError<
   { readonly brand: unique symbol }
 >()("BackgroundOperationFailed", { cause: Schema.Defect() }) {}
 
-export class BackgroundResultStoreFailed extends Schema.TaggedError<
-  BackgroundResultStoreFailed,
+export class BackgroundStoreFailed extends Schema.TaggedError<
+  BackgroundStoreFailed,
   { readonly brand: unique symbol }
->()("BackgroundResultStoreFailed", {
+>()("BackgroundStoreFailed", {
   operation: Schema.Literals(["read", "write", "decode"]),
   cause: Schema.Defect(),
 }) {}
-
-export class BackgroundTraceFailed extends Schema.TaggedError<
-  BackgroundTraceFailed,
-  { readonly brand: unique symbol }
->()("BackgroundTraceFailed", { cause: Schema.Defect() }) {}
 
 /** The model reads `message`; it is fixed and names no task data. */
 export class BackgroundTaskNotFound extends Schema.TaggedError<
@@ -69,29 +63,44 @@ const interruptIfAborted = (signal: AbortSignal) =>
     Effect.sync(() => signal.aborted),
   );
 
-/**
- * What a background operation returns: its report, and why it ended abnormally when it did. A
- * command that exited non-zero still reports its output; its attempt is recorded as failed.
- */
-export interface BackgroundOutcome {
-  readonly report: string;
-  readonly failure: AttemptFailureReason | null;
+/** How a background task ended. A command that exited non-zero still completed, with its output. */
+const EndedStatus = Schema.Literals(["completed", "failed", "cancelled", "interrupted"]);
+const Running = Schema.Literal("running");
+
+/** A task's saved result, once it ended. */
+const EndedTask = Schema.Struct({ status: EndedStatus, result: Schema.String });
+export type BackgroundResult = typeof EndedTask.Type;
+/** A task as its row stands: running without a result, or ended with one. */
+const TaskRow = Schema.Union([Schema.Struct({ status: Running, result: Schema.Null }), EndedTask]);
+
+/** A task's end that its session has not been told of yet. */
+export interface BackgroundEnd {
+  readonly taskId: string;
+  /** The run that started the task: a chat run, or one of the kanban board's (`isBoardRun`). */
+  readonly parentRunId: string;
+  readonly kind: BackgroundKind;
+  readonly title: string;
+  readonly status: BackgroundResult["status"];
 }
+
+const EndRow = Schema.Struct({
+  id: Schema.String,
+  parent_run_id: Schema.String,
+  kind: BackgroundKind,
+  title: Schema.String,
+  status: EndedStatus,
+});
+const RunningRow = Schema.Struct({
+  id: Schema.String,
+  kind: BackgroundKind,
+  title: Schema.String,
+  started_at: Schema.Finite,
+});
 
 const ResultInput = Schema.Struct({
   taskId: Schema.NonEmptyString,
   offset: Schema.optionalKey(Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0)))),
 });
-const SavedResult = Schema.Struct({
-  status: Schema.Literals(["completed", "failed", "cancelled"]),
-  result: Schema.String,
-});
-/** The trace event an attempt's terminal status records. */
-const attemptEvent = {
-  completed: "attempt_completed",
-  cancelled: "attempt_cancelled",
-  failed: "attempt_failed",
-} as const;
 
 const getBackgroundResult = {
   name: "get_background_result",
@@ -114,225 +123,159 @@ const cancelBackgroundTask = {
 const awaitedByServer =
   "Do not poll it or watch its progress: end your turn when nothing else is left, and its completion notification starts your next turn.";
 
+/** What a task whose end could not be saved reads as. */
+const endNotSaved: BackgroundResult = {
+  status: "failed",
+  result: "Result unavailable: its end could not be saved. Inspect its effects before retrying.",
+};
+
+/** What a task the previous process left running reads as. */
+const restartedResult =
+  "Stopped by a server restart before it finished. Inspect its effects before retrying.";
+
 const make = Effect.gen(function* () {
-  const trace = yield* WorkTraceStore;
-  const crypto = yield* SecureRandom.SecureRandom;
   const sql = yield* SqlClient.SqlClient;
-  const priorDispatch = SqlSchema.findOneOption({
-    Request: Schema.Struct({
-      idempotencyKey: Schema.String,
-      sessionId: Schema.String,
-      agentName: Schema.String,
-    }),
-    Result: Schema.Struct({
-      taskId: Schema.String,
-      attemptId: Schema.String,
-      status: Schema.String,
-    }),
-    execute: (request) => sql`
-      SELECT t.id AS taskId, a.id AS attemptId, a.status
-      FROM agent_invocations i JOIN work_tasks t ON t.id = i.task_id
-      JOIN agent_run_attempts a ON a.invocation_id = i.id
-      WHERE i.idempotency_key = ${request.idempotencyKey}
-        AND t.origin_session_id = ${request.sessionId} AND t.agent_name = ${request.agentName}`,
-  });
+  const crypto = yield* SecureRandom.SecureRandom;
   const redactor = yield* SecretRedactor;
+  const events = yield* AppEvents;
   const fibers = yield* FiberMap.make<string>();
   const dispatch = yield* Semaphore.make(1);
   /** Each running task's session, by task id. */
   const sessions = yield* Ref.make(HashMap.empty<string, string>());
-  const completions = yield* PubSub.unbounded<string>();
-  const selectResult = SqlSchema.findOneOption({
-    Request: Schema.String,
-    Result: SavedResult,
-    execute: (taskId) =>
-      sql`SELECT status, result FROM background_task_results WHERE task_id = ${taskId}`,
-  });
-  const loadResult = Effect.fn("BackgroundTasks.loadResult")((taskId: string) =>
-    Effect.mapError(selectResult(taskId), (cause) =>
-      BackgroundResultStoreFailed.make({
-        operation: cause._tag === "SchemaError" ? "decode" : "read",
-        cause,
-      }),
-    ),
-  );
-  const traceEffect = <A, E>(effect: Effect.Effect<A, E>) =>
-    Effect.mapError(effect, (cause) => BackgroundTraceFailed.make({ cause }));
+  /** Each task as it ends, with its session. */
+  const settled = yield* PubSub.unbounded<{
+    readonly taskId: string;
+    readonly sessionId: string;
+  }>();
 
+  const stored =
+    (operation: BackgroundStoreFailed["operation"]) =>
+    <A, E extends { readonly _tag: string }, R>(effect: Effect.Effect<A, E, R>) =>
+      Effect.mapError(effect, (cause) =>
+        BackgroundStoreFailed.make({
+          operation: cause._tag === "SchemaError" ? "decode" : operation,
+          cause,
+        }),
+      );
+
+  // Tasks the previous process left running ended with it; their end is told like any other.
+  yield* Effect.flatMap(
+    Clock.currentTimeMillis,
+    (now) =>
+      sql`UPDATE background_tasks
+      SET status = 'interrupted', result = ${restartedResult}, finished_at = ${now}
+      WHERE status = 'running'`,
+  ).pipe(stored("write"));
+
+  const selectTask = SqlSchema.findOneOption({
+    Request: Schema.Struct({ sessionId: Schema.String, taskId: Schema.String }),
+    Result: TaskRow,
+    execute: ({ sessionId, taskId }) =>
+      sql`SELECT status, result FROM background_tasks
+        WHERE id = ${taskId} AND session_id = ${sessionId}`,
+  });
   const owned = Effect.fn("BackgroundTasks.owned")(function* (sessionId: string, taskId: string) {
-    const detail = yield* traceEffect(trace.taskDetail(sessionId, taskId));
-    return yield* Effect.fromOption(
-      Option.fromNullishOr(detail).pipe(
-        Option.filter(
-          ({ task }) =>
-            task.agentName.startsWith("background_") &&
-            task.deletedAt === null &&
-            task.deleteRequestedAt === null,
-        ),
-      ),
-      () => BackgroundTaskNotFound.make({ message: "Background task not found in this session" }),
+    return yield* Effect.fromOption(yield* stored("read")(selectTask({ sessionId, taskId })), () =>
+      BackgroundTaskNotFound.make({ message: "Background task not found in this session" }),
     );
   });
-
-  /** What a task that failed without a saved result reads as. */
-  const storageFailed = {
-    status: "failed" as const,
-    result:
-      "Result unavailable: background_result_storage_failed. Inspect recorded effects before retrying.",
-  };
-  const readResult = Effect.fn("BackgroundTasks.readResult")(function* (
+  /**
+   * The task as the model reads it. One the database still has running but that runs no more in
+   * this process could not save its end.
+   */
+  const current = Effect.fn("BackgroundTasks.current")(function* (
     sessionId: string,
     taskId: string,
   ) {
-    const detail = yield* owned(sessionId, taskId);
-    const saved = yield* loadResult(taskId);
-    return Option.getOrNull(
-      Option.orElse(saved, () =>
-        Option.liftPredicate(storageFailed, () => detail.attempts.at(-1)?.status === "failed"),
-      ),
-    );
+    const task = yield* owned(sessionId, taskId);
+    const live = HashMap.has(yield* Ref.get(sessions), taskId);
+    return task.status === "running" && !live ? endNotSaved : task;
+  });
+  /** The task's result once it ended. */
+  const ended = (sessionId: string, taskId: string) =>
+    Effect.map(current(sessionId, taskId), Option.liftPredicate(Schema.is(EndedTask)));
+
+  const selectPrior = SqlSchema.findOneOption({
+    Request: Schema.Struct({ runId: Schema.String, toolCallId: Schema.String }),
+    Result: Schema.Struct({ taskId: Schema.String, status: Schema.Union([Running, EndedStatus]) }),
+    execute: ({ runId, toolCallId }) =>
+      sql`SELECT id AS taskId, status FROM background_tasks
+        WHERE parent_run_id = ${runId} AND tool_call_id = ${toolCallId}`,
   });
 
   const start = Effect.fn("BackgroundTasks.start")(function* (
     binding: BackgroundBinding,
     toolCallId: string,
-    kind: "shell" | "external_agent",
+    kind: BackgroundKind,
     request: string,
-    operation: Effect.Effect<BackgroundOutcome, BackgroundOperationFailed>,
+    /** The report the task saves when it ends; the model reads it with get_background_result. */
+    operation: Effect.Effect<string, BackgroundOperationFailed>,
   ) {
     yield* interruptIfAborted(binding.abortSignal);
+    const { sessionId } = binding;
     const hiddenRequest = yield* redactor.redactText(request);
     const launch = Effect.gen(function* () {
-      const handle = yield* traceEffect(
-        trace.startAttempt({
-          sessionId: binding.sessionId,
-          parentRunId: binding.runId,
-          parentToolCallId: toolCallId,
-          agentId: null,
-          agentName: `background_${kind}`,
-          title: hiddenRequest.text.replace(/\s+/gu, " ").slice(0, 80),
-          request: hiddenRequest.text,
-          kind: "start",
-          threadId: `background-${yield* traceEffect(crypto.uuidV4())}`,
-        }),
+      const taskId = yield* crypto.uuidV4();
+      yield* stored("write")(
+        Effect.flatMap(
+          Clock.currentTimeMillis,
+          (now) => sql`INSERT INTO background_tasks
+            (id, session_id, parent_run_id, tool_call_id, kind, title, status, started_at)
+            VALUES (${taskId}, ${sessionId}, ${binding.runId}, ${toolCallId}, ${kind},
+              ${hiddenRequest.text.replace(/\s+/gu, " ").slice(0, 80)}, 'running', ${now})`,
+        ),
       );
-      yield* Ref.update(sessions, HashMap.set(handle.taskId, binding.sessionId));
-      const save = Effect.fn("BackgroundTasks.saveResult")(function* (
-        status: typeof SavedResult.Type.status,
-        result: string,
+      yield* Ref.update(sessions, HashMap.set(taskId, sessionId));
+      const finish = Effect.fn("BackgroundTasks.finish")(function* (
+        exit: Exit.Exit<string, BackgroundOperationFailed>,
       ) {
-        const hidden = yield* redactor.redactText(result);
-        yield* Effect.mapError(
-          sql`INSERT INTO background_task_results (task_id, status, result)
-            VALUES (${handle.taskId}, ${status}, ${hidden.text})
-            ON CONFLICT (task_id) DO UPDATE SET status = excluded.status, result = excluded.result`,
-          (cause) => BackgroundResultStoreFailed.make({ operation: "write", cause }),
-        );
-      });
-      const finalize = Effect.fn("BackgroundTasks.finalize")(function* (
-        exit: Exit.Exit<BackgroundOutcome, BackgroundOperationFailed | BackgroundTraceFailed>,
-      ) {
-        // `saved` is what get_background_result returns; `failure` is why the attempt failed.
-        const { saved, failure } = Exit.match(exit, {
-          onSuccess: ({ report, failure }) => ({
-            saved: { status: "completed" as const, result: report },
-            failure,
-          }),
-          onFailure: (cause) =>
+        const end = Exit.match(exit, {
+          onSuccess: (report): BackgroundResult => ({ status: "completed", result: report }),
+          onFailure: (cause): BackgroundResult =>
             Cause.hasInterrupts(cause)
               ? {
-                  saved: {
-                    status: "cancelled" as const,
-                    result: "Operation stopped. Inspect its effects before retrying.",
-                  },
-                  failure: null,
+                  status: "cancelled",
+                  result: "Operation stopped. Inspect its effects before retrying.",
                 }
               : // Tags only: the cause can hold command output, paths or provider text.
                 {
-                  saved: {
-                    status: "failed" as const,
-                    result: `Operation failed (${failureTags(cause)}). Inspect its effects before retrying.`,
-                  },
-                  failure: AttemptFailureReason.cases.OperationFailed.make({}),
+                  status: "failed",
+                  result: `Operation failed (${failureTags(cause)}). Inspect its effects before retrying.`,
                 },
         });
-        // Persist once. A storage failure is not a second operation failure to save again.
-        const stored = yield* Effect.exit(save(saved.status, saved.result));
-        const recorded = Exit.match(stored, {
-          onSuccess: () => ({ failure, stage: "process" as const }),
-          onFailure: () => ({
-            failure: AttemptFailureReason.cases.ResultStorageFailed.make({}),
-            stage: "finish" as const,
-          }),
-        });
-        const failed = Option.map(Option.fromNullishOr(recorded.failure), (reason) => ({
-          reason,
-          stage: recorded.stage,
-        }));
-        const status = Option.match(failed, {
-          onSome: () => "failed" as const,
-          onNone: () =>
-            saved.status === "cancelled" ? ("cancelled" as const) : ("completed" as const),
-        });
-        yield* traceEffect(
-          trace.transitionAttempt(
-            handle,
-            binding.sessionId,
-            status,
-            attemptEvent[status],
-            Exit.match(stored, {
-              onSuccess: () =>
-                `Background ${kind} ${status}; retrieve with get_background_result taskId ${handle.taskId}`,
-              onFailure: () =>
-                `Background ${kind} ended but result storage failed; inspect effects before retrying`,
-            }),
-            Option.getOrNull(failed),
-            false,
-            binding.runId,
-          ),
-        );
-        // Before the wakeup, which holds the session's Plan while its background work runs.
-        yield* Ref.update(sessions, HashMap.remove(handle.taskId));
-        yield* PubSub.publish(completions, binding.sessionId);
+        const hidden = yield* redactor.redactText(end.result);
+        const now = yield* Clock.currentTimeMillis;
+        yield* stored("write")(sql`UPDATE background_tasks
+          SET status = ${end.status}, result = ${hidden.text}, finished_at = ${now}
+          WHERE id = ${taskId}`);
       });
-      const job = Effect.gen(function* () {
-        yield* traceEffect(
-          trace.transitionAttempt(
-            handle,
-            binding.sessionId,
-            "running",
-            "attempt_started",
-            `Background ${kind} started`,
-          ),
-        );
-        return yield* Effect.raceFirst(operation, parentInterrupted(binding.abortSignal));
-      }).pipe(
+      const job = Effect.raceFirst(operation, parentInterrupted(binding.abortSignal)).pipe(
         Effect.onExit((exit) =>
-          finalize(exit).pipe(
+          finish(exit).pipe(
             Effect.catch((error) =>
-              Effect.logError("Background terminal recording failed", {
-                taskId: handle.taskId,
+              Effect.logError("Background task end not recorded", {
+                taskId,
                 ...failureAnnotations(error),
               }),
             ),
           ),
         ),
         Effect.exit,
-        Effect.asVoid,
-        Effect.ensuring(Ref.update(sessions, HashMap.remove(handle.taskId))),
-      );
-      // The attempt beats while the operation runs; a lost fiber stops the beats.
-      yield* FiberMap.run(
-        fibers,
-        handle.taskId,
-        Effect.interruptible(
-          Effect.forkScoped(trace.keepAlive(handle)).pipe(Effect.andThen(job), Effect.scoped),
+        // Off the running list before the wakeup, which holds the session's Plan while its
+        // background work runs.
+        Effect.ensuring(
+          Ref.update(sessions, HashMap.remove(taskId)).pipe(
+            Effect.andThen(PubSub.publish(settled, { taskId, sessionId })),
+            Effect.andThen(events.publishSession(sessionId, "run-state")),
+          ),
         ),
+        Effect.asVoid,
       );
+      yield* FiberMap.run(fibers, taskId, Effect.interruptible(job));
+      yield* events.publishSession(sessionId, "run-state");
       return {
         status: "running" as const,
-        taskId: handle.taskId,
-        attemptId: handle.id,
+        taskId,
         nextAction: `Continue independent work. ${awaitedByServer} Retrieve the result with get_background_result then.`,
       };
     });
@@ -340,11 +283,7 @@ const make = Effect.gen(function* () {
       Effect.uninterruptible(
         Effect.gen(function* () {
           yield* interruptIfAborted(binding.abortSignal);
-          const prior = yield* priorDispatch({
-            idempotencyKey: `${binding.runId}:${toolCallId}`,
-            sessionId: binding.sessionId,
-            agentName: `background_${kind}`,
-          });
+          const prior = yield* stored("read")(selectPrior({ runId: binding.runId, toolCallId }));
           return yield* Option.match(prior, {
             onSome: (dispatched) =>
               Effect.succeed({
@@ -362,28 +301,18 @@ const make = Effect.gen(function* () {
   /** The tools' calls in `sessionId`. */
   const callsFor = (sessionId: string) => ({
     getResult: ({ taskId, offset = 0 }: typeof ResultInput.Type) =>
-      Effect.gen(function* () {
-        const detail = yield* owned(sessionId, taskId);
-        const result = yield* readResult(sessionId, taskId);
-        const running = HashMap.has(yield* Ref.get(sessions), taskId);
-        return Option.match(Option.fromNullishOr(result), {
-          onNone: () => ({
-            taskId,
-            status: detail.attempts.at(-1)?.status ?? "interrupted",
-            ...optionalProperty("nextAction", running ? awaitedByServer : undefined),
-          }),
-          onSome: (found) => {
-            const end = Math.min(offset + 4000, found.result.length);
-            return {
-              taskId,
-              status: found.status,
-              result: found.result.slice(offset, end),
-              offset,
-              nextOffset: end < found.result.length ? end : null,
-              length: found.result.length,
-            };
-          },
-        });
+      Effect.map(current(sessionId, taskId), (task) => {
+        if (task.status === "running")
+          return { taskId, status: task.status, nextAction: awaitedByServer };
+        const end = Math.min(offset + 4000, task.result.length);
+        return {
+          taskId,
+          status: task.status,
+          result: task.result.slice(offset, end),
+          offset,
+          nextOffset: end < task.result.length ? end : null,
+          length: task.result.length,
+        };
       }),
     cancel: ({ taskId }: typeof ResultInput.Type) =>
       Effect.gen(function* () {
@@ -393,50 +322,110 @@ const make = Effect.gen(function* () {
       }),
   });
 
+  const selectUntold = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: EndRow,
+    execute: (sessionId) =>
+      sql`SELECT id, parent_run_id, kind, title, status FROM background_tasks
+        WHERE session_id = ${sessionId} AND finished_at IS NOT NULL AND delivered_at IS NULL
+        ORDER BY finished_at, id`,
+  });
+  const selectRunning = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: RunningRow,
+    execute: (sessionId) =>
+      sql`SELECT id, kind, title, started_at FROM background_tasks
+        WHERE session_id = ${sessionId} AND status = 'running' ORDER BY started_at, id`,
+  });
+
   return {
     start,
+    /**
+     * The task's result once it ends, waiting at most `milliseconds`; null while it still runs. The
+     * run that waited read the result, so its end is not told again.
+     */
     waitResult: Effect.fn("BackgroundTasks.waitResult")(function* (
       sessionId: string,
       taskId: string,
       milliseconds: number,
     ) {
-      // One read, then a wait for the next trace change when there was no result yet.
-      const poll = Effect.gen(function* () {
-        const cursor = yield* traceEffect(trace.latestCursor(sessionId));
-        const result = Option.fromNullishOr(yield* readResult(sessionId, taskId));
-        yield* Effect.when(
-          traceEffect(trace.waitForChangeEffect({ sessionId, afterCursor: cursor })),
-          Effect.succeed(Option.isNone(result)),
-        );
-        return result;
-      });
-      const waited = Effect.gen(function* () {
-        const result = Option.flatten(
-          yield* poll.pipe(
-            Effect.repeat({ until: Option.isSome }),
-            Effect.timeoutOption(milliseconds),
+      const waited = Effect.scoped(
+        Effect.gen(function* () {
+          // Subscribed before the read, so an end between the two is not missed.
+          const ends = yield* PubSub.subscribe(settled);
+          const awaitEnd = PubSub.take(ends).pipe(
+            Effect.repeat({ until: (end) => end.taskId === taskId }),
+            Effect.andThen(ended(sessionId, taskId)),
+          );
+          return yield* Effect.flatMap(
+            ended(sessionId, taskId),
+            Option.match({ onSome: Effect.succeedSome, onNone: () => awaitEnd }),
+          ).pipe(Effect.timeoutOption(milliseconds), Effect.map(Option.flatten));
+        }),
+      );
+      const result = yield* milliseconds === 0 ? ended(sessionId, taskId) : waited;
+      yield* Effect.when(
+        stored("write")(
+          Effect.flatMap(
+            Clock.currentTimeMillis,
+            (now) => sql`UPDATE background_tasks
+              SET delivered_to_run_id = parent_run_id, delivered_at = ${now}
+              WHERE id = ${taskId} AND delivered_at IS NULL`,
           ),
-        );
-        const now = yield* Clock.currentTimeMillis;
-        yield* Effect.when(
-          sql`
-            UPDATE parent_notifications
-            SET delivered_to_run_id = (SELECT parent_run_id FROM work_tasks WHERE id = ${taskId}),
-              delivered_at = ${now}
-            WHERE task_id = ${taskId} AND delivered_at IS NULL`,
-          Effect.succeed(Option.isSome(result)),
-        );
-        return Option.getOrNull(result);
-      });
-      return yield* milliseconds === 0 ? readResult(sessionId, taskId) : waited;
+        ),
+        Effect.succeed(Option.isSome(result)),
+      );
+      return Option.getOrNull(result);
     }),
-    /** The session of each task as it settles. */
-    completions: Stream.fromPubSub(completions),
+    /**
+     * Takes the session's task ends not told yet for the run `runId`, oldest first. The run gives
+     * them back with `release` when it does not finish.
+     */
+    consume: (sessionId: string, runId: string) =>
+      Effect.gen(function* () {
+        const rows = yield* selectUntold(sessionId);
+        const now = yield* Clock.currentTimeMillis;
+        yield* sql`UPDATE background_tasks SET delivered_to_run_id = ${runId}, delivered_at = ${now}
+          WHERE session_id = ${sessionId} AND finished_at IS NOT NULL AND delivered_at IS NULL`;
+        return rows.map((row): BackgroundEnd => ({
+          taskId: row.id,
+          parentRunId: row.parent_run_id,
+          kind: row.kind,
+          title: row.title,
+          status: row.status,
+        }));
+      }).pipe(sql.withTransaction, stored("write")),
+    /** Gives the ends the run `runId` took back to the session's next run. */
+    release: (sessionId: string, runId: string) =>
+      stored("write")(
+        sql`UPDATE background_tasks SET delivered_to_run_id = NULL, delivered_at = NULL
+          WHERE session_id = ${sessionId} AND delivered_to_run_id = ${runId}`,
+      ).pipe(Effect.asVoid),
+    /** Whether the session has an end to be told, unless the user stopped its notifications. */
+    untold: (sessionId: string) =>
+      stored("read")(
+        sql`SELECT 1 FROM background_tasks b
+          WHERE b.session_id = ${sessionId} AND b.finished_at IS NOT NULL
+            AND b.delivered_at IS NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM parent_notification_holds h WHERE h.session_id = b.session_id
+            )
+          LIMIT 1`,
+      ).pipe(Effect.map((rows) => rows.length > 0)),
+    /** The session's tasks still going, oldest first. */
+    running: (sessionId: string) =>
+      Effect.map(stored("read")(selectRunning(sessionId)), (rows) =>
+        rows.map((row): RunningBackgroundTask => ({
+          id: row.id,
+          kind: row.kind,
+          title: row.title,
+          startedAt: row.started_at,
+        })),
+      ),
+    /** The session of each task as it ends. */
+    completions: Stream.map(Stream.fromPubSub(settled), ({ sessionId }) => sessionId),
     hasSession: (sessionId: string) =>
       Effect.map(Ref.get(sessions), (running) => HashMap.some(running, (id) => id === sessionId)),
-    stopTask(taskId: string) {
-      return FiberMap.remove(fibers, taskId);
-    },
     stopSession: Effect.fn("BackgroundTasks.stopSession")(function* (sessionId: string) {
       yield* Effect.forEach(
         HashMap.keys(HashMap.filter(yield* Ref.get(sessions), (id) => id === sessionId)),

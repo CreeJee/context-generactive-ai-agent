@@ -2,7 +2,6 @@ import { HashSet } from "effect";
 import { Function as EffectFunction } from "effect";
 import { Schema } from "effect";
 import { JsonValue } from "../json.ts";
-import { ExternalAgentFailureCode } from "../runtime/shown-failure.ts";
 
 /** Stable identity of a child agent. One-off agents have no reusable name. */
 export const AgentIdentityKind = Schema.Literals(["one_off", "named"]);
@@ -125,8 +124,6 @@ export const AttemptFailureStage = Schema.Literals([
   "model",
   "tool",
   "approval",
-  "finish",
-  "process",
   "restart",
 ]);
 export type AttemptFailureStage = typeof AttemptFailureStage.Type;
@@ -150,18 +147,6 @@ export const AttemptFailureReason = Schema.TaggedUnion({
   HeartbeatLost: {},
   /** The server stopped while the attempt was live. */
   ServerRestarted: {},
-  /** An external ACP agent ended without an answer. */
-  ExternalAgentFailed: { code: ExternalAgentFailureCode },
-  /** A background command exited unsuccessfully or was killed. */
-  ProcessExited: {
-    exitCode: Schema.NullOr(Schema.Finite),
-    signal: Schema.NullOr(Schema.String),
-  },
-  ProcessTimedOut: {},
-  /** A background operation failed before it produced a result. */
-  OperationFailed: {},
-  /** The operation ended but its result could not be stored. */
-  ResultStorageFailed: {},
 });
 export type AttemptFailureReason = typeof AttemptFailureReason.Type;
 
@@ -174,11 +159,6 @@ export const attemptFailureCode = AttemptFailureReason.match({
   AgentCrashed: () => "AgentCrashed",
   HeartbeatLost: () => "HeartbeatLost",
   ServerRestarted: () => "ServerRestarted",
-  ExternalAgentFailed: () => "ExternalAgentFailed",
-  ProcessExited: () => "ProcessExited",
-  ProcessTimedOut: () => "ProcessTimedOut",
-  OperationFailed: () => "OperationFailed",
-  ResultStorageFailed: () => "ResultStorageFailed",
 });
 
 export const AttemptFailure = Schema.Struct({

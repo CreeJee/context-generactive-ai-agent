@@ -4997,3 +4997,15 @@
   - 커밋된 `.agents/skills`는 저장소 코드로 보고 앱이 쓰지 않는다. 정식 스킬과 이름이 같으면 사본이 그 파일을 덮으므로 사용자에게 git 변경으로 보인다.
 - 열린 것: 카드에 명령 도구를 직접 줄지는 따로 정한다. 이 도구는 2026-10-14 `run_shell` 제거의 카드 예외가 된다. 이 결정은 카드가 지금처럼 `save_code_skill`로 후보를 저장한다는 전제로 한다.
 - 대체하는 결정: "`run_shell`을 셸 스킬로 바꿈"(2026-10-14)과 skills README의 "코드 스킬은 표준 스킬 폴더 `.agents/skills/<name>/`에 저장한다"는 부분. 이제 저장은 앱 저장소의 후보로 하고, 표준 폴더에는 정식 스킬의 사본만 쓴다.
+
+## 백그라운드 작업은 Work Trace에 남기지 않는다 (2026-11-12)
+
+- 계기: Work Trace에는 하위 에이전트 작업 사이에 백그라운드 셸 실행이 3,553건 쌓여 있었다. 대화가 지워진 뒤에도 그중 839건이 `deleted subagent`라는 이름으로 남아 있었다. 사용자: Work Trace에 쉘 실행 기록이 들어갈 이유가 없다. 앞으로도 들어가지 않게 하고, 외부 에이전트 턴도 같이 뺀다. 거기서 보고 싶은 것은 칸반 작업이다.
+- 결정: 백그라운드 작업(sh 스킬 실행, 외부 에이전트 턴)은 Work Trace task·attempt·event를 만들지 않고, 작업 한 개가 `background_tasks` 한 행이다. 셸 실행과 백그라운드 전환은 그대로 둔다.
+  - 이 행이 끝 알림도 맡는다. `delivered_to_run_id`·`delivered_at`이 비어 있으면 아직 알리지 않은 끝이다. 부모 run은 Work Trace 알림과 함께 이것을 받고(`agent/task-notifications.ts`), 끝나지 못하면 돌려준다. 사용자가 멈춘 대화의 알림 보류(`parent_notification_holds`)도 그대로 따른다.
+  - 상태는 결과의 상태다. 0이 아닌 코드로 끝난 명령도 출력을 남겼으면 `completed`이고, 출력 안의 종료 코드가 그 끝을 말한다. 그래서 Work Trace에만 쓰이던 실패 이유(`ExternalAgentFailed`, `ProcessExited`, `ProcessTimedOut`, `OperationFailed`, `ResultStorageFailed`)와 실패 단계(`process`, `finish`)를 지운다.
+  - 상태 표시줄의 "백그라운드 N개"는 run-state의 `background`에서 읽고, Work Trace로 이어지지 않는다. 시작과 끝에 `run-state` 이벤트를 보낸다.
+  - 끝을 저장하지 못한 작업은 데이터베이스에 실행 중으로 남지만, 이 프로세스에서 돌지 않으므로 `failed`로 읽는다. 다음 시작에 `interrupted`가 된다.
+  - 마이그레이션은 예전 작업의 저장된 결과를 새 표로 옮긴다. 예전 대화가 가리키는 taskId도 `get_background_result`로 계속 읽고, 그 끝은 이미 알린 것으로 친다. attempt의 thread가 `background-`로 시작하는 task를 모두 Work Trace에서 지우고(지운 대화의 것 포함), `background_task_results`를 지운다.
+- 확인: 사용자 DB 사본(2GB)에서 마이그레이션이 8.7초에 끝났고, 3,553건이 옮겨졌으며 Work Trace에 남은 백그라운드 attempt는 0건, 외래 키 위반은 없었다.
+- 다음: Work Trace를 지금 돌고 있는 작업만 보이게 다시 짠다.

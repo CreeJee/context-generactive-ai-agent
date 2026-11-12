@@ -48,6 +48,7 @@
 - `RunStore`(`finishedRun`)에 자식 run을 저장한다. `AppEvents.publishSession`으로 세션 이벤트를 발행한다.
 - 자식 모델 run은 `runChat`과 `ActiveProvider`를 통해 LLM provider를 호출한다(네트워크). `ApiUsage` hook으로 사용량 ledger를 기록한다.
 - 자식 tool 호출은 `runTool`과 `CodeTools`를 통해 공유 workspace의 파일을 읽고 쓸 수 있다. 권한은 `PermissionClassifier`, `PermissionReviews`, `RelayedApprovals`(`ApprovalRequester`)를 거친다.
+- `Subagents.toolsFor`의 `hook`은 run이 시작할 때 끝나지 않은 자식을 다시 시도한다. 상태 알림을 대화에 넣고 돌려주는 일은 `agent/task-notifications.ts`가 백그라운드 작업의 끝과 함께 맡는다.
 - 동시성 자원으로 `FiberMap`(activeChildren)을 쓰고, 자식 fiber를 `Effect.forkScoped`/`Effect.forkIn`으로 백그라운드 실행하며 `Deferred`로 결과를 기다린다. `PubSub.unbounded` completions 채널에는 sessionId로 완료 알림을 publish한다. 취소 경로에는 `AbortSignal`과 `Effect.interrupt`가 있다.
 - `Clock.currentTimeMillis`로 시각을 읽고, `SecureRandom.SecureRandom`으로 id를 생성한다.
 

@@ -24,7 +24,7 @@
 - `PermissionReviewPayload` / `PermissionReviewResponse` — 권한 검토 요청(`askedBy: review | every_call`)과 응답 계약
 - `definitions.ts` 재수출 묶음 — run-state, report(diagnosis/bundle/delivery), uncertain-runs, lease, shown-failure, subagent, loop-health, provider-retry, approvals, queue, improve 계약을 채팅 UI와 공유
 - `ApprovedTools` — 코드 스킬 저장·`run_skill`(sh 스킬 샌드박스 실행)·외부 파일 쓰기/삭제를 제공하는 서비스(`ApprovedTools.layer`)
-- `BackgroundTasks` / `BackgroundBinding` / `BackgroundOutcome` / `BackgroundOperationFailed` / `BackgroundResultStoreFailed` / `BackgroundTraceFailed` / `BackgroundTaskNotFound` — 백그라운드 작업 시작·결과 대기 서비스와 그 바인딩(`sessionId`, `runId`, `abortSignal`)·결과·오류
+- `BackgroundTasks` / `BackgroundBinding` / `BackgroundResult` / `BackgroundEnd` / `BackgroundOperationFailed` / `BackgroundStoreFailed` / `BackgroundTaskNotFound` — 백그라운드 작업(sh 스킬 실행, 외부 에이전트 턴) 서비스와 그 바인딩(`sessionId`, `runId`, `abortSignal`), 끝난 작업의 결과, 세션에 아직 알리지 않은 끝, 오류. 서비스는 작업 시작·결과 대기(`start`, `waitResult`), 끝 알림의 소비·반환(`consume`, `release`, `untold`), 실행 중 목록(`running`)을 맡는다
 - `FileTools` / `fileToolNames` / `listPageSize` — 프로젝트 파일 도구 서비스(`SecretRedactor.layer` 제공), 목록 페이지 크기 500
 - `OutsideTools` / `outsideReadToolNames` — 프로젝트 밖 파일 읽기 전용 도구(자격 증명 제외). 프로젝트 안 경로는 `FileTools`의 호출로 돈다
 - `byPathPlace` — 밖 파일 도구의 경로가 프로젝트 안이면 파일 도구의 호출을 돌리고 결과에 `insideProject` 문장을 붙인다. 밖이면 밖 파일 도구의 일을 한다
@@ -60,7 +60,9 @@
 - 프로젝트 안 경로의 `write_outside_file`·`delete_outside_file`은 `write_file`·`delete_file`처럼 승인을 묻지 않는다. 도구의 `plan`이 경로를 프로젝트 상대 경로로 바꾼 `Ungated` 호출로 정하므로, 승인 없이 돈 호출은 그 사이 경로가 바뀌어도 프로젝트 밖에 쓰지 못한다. 밖 경로를 승인받은 호출이 돌 때 경로가 프로젝트 안이면 파일 도구로 쓴다. 그래도 밖 도구의 경로 해석에 닿은 프로젝트 안 경로는 `inside_project`로 거부한다.
 - 칸반 카드에서 사용자 프로젝트 폴더 아래 절대 경로는 카드 worktree의 같은 자리로 읽고, 결과에 `pathMapped` 문장을 붙인다. `read_file`(과 그리로 도는 `read_outside_file`, 파일 하나의 `search_outside_file`)은 사용자 폴더에는 있고 카드 worktree에는 없는 파일(git이 추적하지 않는 `.env`·`node_modules` 같은 것)을 사용자 폴더에서 읽고, `pathMapped`가 그렇게 했다고 적는다. credential 거부는 그대로라 `.env`는 어느 쪽에서도 읽지 않는다. 쓰기는 늘 카드 worktree로 간다.
 - 카드에서 sh 스킬의 스크립트가 사용자 프로젝트 폴더를 적고 있으면(`folderMentions`가 찾는 표기), 승인된 텍스트에서 그 경로만 카드 worktree 경로로 바꿔 실행하고 `pathMapped`에 그렇게 했다고 적는다. 파일 도구가 같은 경로를 카드 worktree로 읽는 것과 같다. 경로마다 따로 정해, 사용자 폴더에는 있고 카드 worktree에는 없는 경로는 바꾸지 않아 사용자 폴더에서 읽고 `pathMapped`에 그 경로를 적는다(`mapUserFolderMentions`). 경로는 패턴(`*`·`?`·`[`)이나 변수(`$`)가 든 첫 마디 앞까지만 본다. 샌드박스 쓰기 목록은 그대로라 그 경로에는 쓰지 못한다. 카드 worktree 경로가 스크립트에 그대로 들어갈 수 없으면(`isPlainPath`가 아니면) 승인된 텍스트 그대로 실행하고 `pathWarning`을 붙인다.
-- 백그라운드 sh 스킬 결과: `failed`이면 `ProcessExited`, `timed_out`이면 `ProcessTimedOut`, `succeeded`/`cancelled`이면 실패 이유가 없다. 비정상 종료여도 출력은 보관한다.
+- 백그라운드 작업의 상태는 결과의 상태다. 0이 아닌 코드로 끝난 명령이나 답 없이 끝난 외부 에이전트도 보고서를 남겼으면 `completed`이고, 보고서 안의 `status`가 그 끝을 말한다. 작업 자체가 실패하면 `failed`, 멈추면 `cancelled`, 프로세스가 재시작되면 `interrupted`다.
+- 백그라운드 작업은 Work Trace task가 아니다(`docs/decisions.md` "백그라운드 작업은 Work Trace에 남기지 않는다"). 끝은 `background_tasks` 행의 `delivered_*`로 세션에 한 번 알리고, 알리지 않은 run이 끝나지 못하면 `release`로 돌려준다. `waitResult`로 결과를 받은 run은 그 끝을 이미 안 것으로 친다.
+- 데이터베이스에는 실행 중인데 이 프로세스에서 돌지 않는 작업은 끝을 저장하지 못한 것이므로 `failed`로 읽는다.
 - `reportRunToolsForSession`의 trace 콜백은 소스 세션으로 이미 범위가 정해져 있어야 한다. 세션 id를 콜백에 넘기지 않는다.
 
 ## Side Effects
@@ -69,7 +71,7 @@
 - 파일 시스템: `write_outside_file`/`delete_outside_file`이 프로젝트 밖 텍스트 파일을 생성·교체·삭제한다(`createTextFileEffect`, `replaceTextFileEffect`, `deleteTextFileEffect`). 작업 디렉터리 해석 때 `/tmp`와 호스트 임시 디렉터리의 canonical 경로를 읽는다(`temporaryRoots`).
 - 파일 시스템: `save_code_skill`이 `CodeSkills.save`로 `.agents/skills/<name>/`(SKILL.md, scripts/run.ts 또는 run.sh)에 스킬을 저장한다.
 - 프로젝트 파일 도구(`FileTools`)가 `write_file`/`edit_file`/`delete_file`로 프로젝트 파일을 바꾼다. 목록·검색은 파일 시스템 페이징/스냅샷 캐시만 쓴다(`effects.ts` 주석 근거).
-- 백그라운드 작업: `BackgroundTasks.start`/`waitResult`가 세션 단위 백그라운드 작업을 시작하고 결과를 기다린다. 마스킹한 결과는 `background_task_results`에 작업 한 개당 한 행으로 upsert한다. 결과 저장소·trace 실패 오류 타입이 따로 있다.
+- 백그라운드 작업: `BackgroundTasks.start`가 작업 한 개당 `background_tasks` 한 행을 만들고, 끝나면 마스킹한 결과로 그 행을 바꾼다. 시작할 때 앞 프로세스가 남긴 실행 중 행을 `interrupted`로 바꾼다. 시작과 끝에 세션의 `run-state` 이벤트를 발행한다.
 - 메모리 도구와 리포트 증거 도구는 범위가 정해진 SELECT만 하고 아무것도 기록하지 않는다(`effects.ts` 주석 근거).
 - 네트워크: `kagi_search`/`kagi_extract`가 원격 Kagi API를 호출한다. 응답이 실패해도 요금이 나올 수 있다(`effects.ts` 주석 근거).
 - 상태: `repeatGuardHook`이 반복 호출 감지 상태를 `Ref`로 보관한다.

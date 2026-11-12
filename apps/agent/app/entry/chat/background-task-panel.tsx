@@ -1,6 +1,7 @@
 import { Trans } from "@lingui/react/macro";
+import { DateTime } from "effect";
 import { TerminalIcon } from "lucide-react";
-import type { TraceTaskView } from "memory-agent";
+import type { RunningBackgroundTask } from "memory-agent";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import {
@@ -14,26 +15,22 @@ import {
 import {
   Popover,
   PopoverContent,
-  PopoverDescription,
   PopoverHeader,
   PopoverTitle,
   PopoverTrigger,
 } from "~/components/ui/popover";
 import { Spinner } from "~/components/ui/spinner";
-import { backgroundKindLabel, runningBackgroundTasks } from "../session/background-tasks";
-import { elapsed } from "./message";
-
-const openInWorkTrace = (taskId: string) =>
-  window.dispatchEvent(new CustomEvent("work-trace:open", { detail: { taskId } }));
+import { backgroundKindLabel } from "../session/background-tasks";
+import { duration } from "./message";
 
 /**
  * The status-line count of this conversation's background skill runs and external-agent
- * turns that are still going; its popover lists them, and each opens in Work Trace.
+ * turns that are still going; its popover lists them.
  */
-export function BackgroundTaskIndicator({ tasks }: { tasks: readonly TraceTaskView[] }) {
-  const running = runningBackgroundTasks(tasks);
-  const count = running.length;
+export function BackgroundTaskIndicator({ tasks }: { tasks: readonly RunningBackgroundTask[] }) {
+  const count = tasks.length;
   if (count === 0) return null;
+  const now = DateTime.toEpochMillis(DateTime.nowUnsafe());
 
   return (
     <Popover>
@@ -48,29 +45,20 @@ export function BackgroundTaskIndicator({ tasks }: { tasks: readonly TraceTaskVi
           <PopoverTitle>
             <Trans>실행 중인 백그라운드 작업</Trans>
           </PopoverTitle>
-          <PopoverDescription>
-            <Trans>Work Trace에서 자세히 보려면 작업을 누르십시오.</Trans>
-          </PopoverDescription>
         </PopoverHeader>
         <ItemGroup>
-          {running.map((task) => (
-            <Item
-              key={task.id}
-              variant="outline"
-              size="sm"
-              render={<button type="button" className="text-left" />}
-              onClick={() => openInWorkTrace(task.id)}
-            >
+          {tasks.map((task) => (
+            <Item key={task.id} variant="outline" size="sm">
               <ItemMedia variant="icon">
                 <TerminalIcon />
               </ItemMedia>
               <ItemContent className="min-w-0">
                 <ItemTitle className="w-full">
-                  <span className="min-w-0 truncate">{task.title || task.request}</span>
+                  <span className="min-w-0 truncate">{task.title}</span>
                 </ItemTitle>
                 <ItemDescription>
-                  <Badge variant="outline">{backgroundKindLabel(task)}</Badge> {elapsed(task)}
-                  {task.heartbeat?.step && ` · ${task.heartbeat.step}`}
+                  <Badge variant="outline">{backgroundKindLabel(task.kind)}</Badge>{" "}
+                  {duration(now - task.startedAt)}
                 </ItemDescription>
               </ItemContent>
             </Item>

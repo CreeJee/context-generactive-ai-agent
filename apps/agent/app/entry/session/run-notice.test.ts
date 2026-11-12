@@ -11,6 +11,7 @@ const record = (
 ): SessionRunState => ({
   actions: allowedWorkflowActions,
   uncertainRuns: [],
+  background: [],
   running,
   lastRun,
   lease: { state: "mine" },

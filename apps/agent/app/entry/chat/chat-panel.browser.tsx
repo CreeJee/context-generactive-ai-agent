@@ -68,6 +68,7 @@ const runState: SessionRunState = {
   workflow: { phase: "chat", mode: "plan", goal: null, plan: null, ledger: [] },
   actions: allowedWorkflowActions,
   uncertainRuns: [],
+  background: [],
 };
 
 /** A board card with only what the chat's list reads. */

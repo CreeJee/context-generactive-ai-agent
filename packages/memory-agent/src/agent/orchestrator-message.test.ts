@@ -22,14 +22,32 @@ const notification = (
 describe("endedTasks", () => {
   it("counts the tasks the chat started, not the board's card attempts and checks", () => {
     expect(
-      endedTasks([
-        notification("t1", "chat-run", "explorer"),
-        notification("t2", "chat-run", "background_shell"),
-        notification("t3", "chat-run", "explorer", "resumed"),
-        notification("c1", boardRunId("goal-1", "p1", 1), "card-p1-g1"),
-        notification("c2", boardRunId("goal-1", "p1", "verify", "x"), "card-p1-verify"),
-        notification("c3", boardRunId("goal-1", "p1", 2), "card-p1-g1", "failed"),
-      ]),
-    ).toEqual({ background: 1, subagent: 1 });
+      endedTasks({
+        tasks: [
+          notification("t1", "chat-run", "explorer"),
+          notification("t2", "chat-run", "reviewer", "failed"),
+          notification("t3", "chat-run", "explorer", "resumed"),
+          notification("c1", boardRunId("goal-1", "p1", 1), "card-p1-g1"),
+          notification("c2", boardRunId("goal-1", "p1", "verify", "x"), "card-p1-verify"),
+          notification("c3", boardRunId("goal-1", "p1", 2), "card-p1-g1", "failed"),
+        ],
+        background: [
+          {
+            taskId: "b1",
+            parentRunId: "chat-run",
+            kind: "shell",
+            title: "ls",
+            status: "completed",
+          },
+          {
+            taskId: "b2",
+            parentRunId: boardRunId("goal-1", "p1", 1),
+            kind: "shell",
+            title: "ls",
+            status: "failed",
+          },
+        ],
+      }),
+    ).toEqual({ background: 1, subagent: 2 });
   });
 });

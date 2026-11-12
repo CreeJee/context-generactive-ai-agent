@@ -31,7 +31,9 @@ export {
   serverRestartedCode,
   type CancelResult,
   type CompactResult,
+  type BackgroundKind,
   type ContextView,
+  type RunningBackgroundTask,
   type SessionRunState,
 } from "./agent/run-state.ts";
 export { ChatState } from "./chat-state/chat-state.ts";

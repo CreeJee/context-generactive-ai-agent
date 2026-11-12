@@ -744,6 +744,69 @@ export const boardChangesMigration = `
   CREATE INDEX workflow_board_changes_session ON workflow_board_changes(session_id, revision_id);
 `;
 
+export const backgroundTasksMigration = `
+  -- Background work, a sh skill run or an external agent's turn, is no longer a Work Trace task
+  -- (decisions.md "백그라운드 작업은 Work Trace에 남기지 않는다 (2026-11-12)"). A task is one row
+  -- that also says whether the parent has been told of its end. Earlier tasks keep their saved
+  -- result, so get_background_result still reads one an older conversation names; their ends count
+  -- as told. status is the result's: a command that exited non-zero still completed with its
+  -- output.
+  CREATE TABLE background_tasks (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    parent_run_id TEXT NOT NULL,
+    tool_call_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('shell', 'external_agent')),
+    title TEXT NOT NULL,
+    status TEXT NOT NULL
+      CHECK (status IN ('running', 'completed', 'failed', 'cancelled', 'interrupted')),
+    result TEXT,
+    started_at INTEGER NOT NULL,
+    finished_at INTEGER,
+    delivered_to_run_id TEXT,
+    delivered_at INTEGER,
+    UNIQUE (parent_run_id, tool_call_id),
+    CHECK ((status = 'running') = (finished_at IS NULL)),
+    CHECK ((status = 'running') = (result IS NULL))
+  );
+  CREATE INDEX background_tasks_session ON background_tasks(session_id, status);
+  CREATE INDEX background_tasks_untold ON background_tasks(session_id)
+    WHERE finished_at IS NOT NULL AND delivered_at IS NULL;
+  INSERT INTO background_tasks
+    (id, session_id, parent_run_id, tool_call_id, kind, title, status, result, started_at,
+     finished_at, delivered_to_run_id, delivered_at)
+    SELECT t.id, t.origin_session_id, t.parent_run_id, t.parent_tool_call_id,
+      substr(t.agent_name, length('background_') + 1), t.title,
+      coalesce(r.status,
+        CASE WHEN t.status IN ('completed', 'failed', 'cancelled') THEN t.status
+          ELSE 'interrupted' END),
+      coalesce(r.result, 'Result unavailable. Inspect its effects before retrying.'),
+      t.created_at, t.updated_at, t.parent_run_id, t.updated_at
+    FROM work_tasks t LEFT JOIN background_task_results r ON r.task_id = t.id
+    WHERE t.agent_name IN ('background_shell', 'background_external_agent')
+      AND t.deleted_at IS NULL AND t.origin_session_id IN (SELECT id FROM sessions);
+  -- Every background task leaves Work Trace, also those of deleted conversations, which were left
+  -- under the name 'deleted subagent'. Each one's attempt ran on a background- thread.
+  CREATE TEMP TABLE background_work AS
+    SELECT task_id AS id FROM agent_run_attempts WHERE thread_id LIKE 'background-%'
+    UNION SELECT id FROM work_tasks
+      WHERE agent_name IN ('background_shell', 'background_external_agent');
+  DELETE FROM run_events WHERE task_id IN (SELECT id FROM background_work);
+  DELETE FROM work_artifacts WHERE task_id IN (SELECT id FROM background_work);
+  DELETE FROM parent_notifications WHERE task_id IN (SELECT id FROM background_work);
+  DELETE FROM purge_receipts
+    WHERE target_kind = 'task' AND target_id IN (SELECT id FROM background_work);
+  DELETE FROM lifecycle_operations
+    WHERE target_kind = 'task' AND target_id IN (SELECT id FROM background_work);
+  DELETE FROM attempt_pending_tool_calls WHERE attempt_id IN (SELECT id FROM agent_run_attempts
+    WHERE task_id IN (SELECT id FROM background_work));
+  DELETE FROM agent_run_attempts WHERE task_id IN (SELECT id FROM background_work);
+  DELETE FROM agent_invocations WHERE task_id IN (SELECT id FROM background_work);
+  DELETE FROM work_tasks WHERE id IN (SELECT id FROM background_work);
+  DROP TABLE background_work;
+  DROP TABLE background_task_results;
+`;
+
 /**
  * Ordered schema steps. `PRAGMA user_version` records how many have been applied.
  * Append new steps; never edit an applied one.
@@ -2883,6 +2946,7 @@ export const migrations: readonly string[] = [
   DROP TABLE final_answer_sources;
   DROP TABLE final_answer_claims;
   `,
+  backgroundTasksMigration,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

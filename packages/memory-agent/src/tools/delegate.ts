@@ -2,7 +2,6 @@ import { Context, Effect, Fiber, Layer, Match, Option, Schema } from "effect";
 import { RelayedApprovals } from "../approvals/relayed.ts";
 import { ApprovalRequester } from "../approvals/relayed-state.ts";
 import { ExternalAgents, ExternalPromptOutcome } from "../external-agents/agents.ts";
-import { AttemptFailureReason } from "../work-trace/contracts.ts";
 import { ExternalAgentFailureCode } from "../runtime/shown-failure.ts";
 import type { Project } from "../projects/projects.ts";
 import { BackgroundOperationFailed, BackgroundTasks } from "./background.ts";
@@ -44,17 +43,6 @@ const ExternalResult = Schema.Struct({
       }),
     ),
   ),
-});
-
-/** An agent that ended without an answer fails its background attempt with the shown code. */
-const externalFailure = ExternalPromptOutcome.$match({
-  completed: (): AttemptFailureReason | null => null,
-  cancelled: () => null,
-  disconnected: () => AttemptFailureReason.cases.ExternalAgentFailed.make({ code: "disconnected" }),
-  failed: ({ failure }) =>
-    AttemptFailureReason.cases.ExternalAgentFailed.make({ code: failure.code }),
-  unavailable: ({ failure }) =>
-    AttemptFailureReason.cases.ExternalAgentFailed.make({ code: failure.code }),
 });
 
 /** The report the model and the saved background result read: the outcome under `status`. */
@@ -143,14 +131,13 @@ const make = Effect.gen(function* () {
             })
             .pipe(
               Effect.mapError((cause) => BackgroundOperationFailed.make({ cause })),
-              Effect.map((outcome) => ({
-                report: JSON.stringify({
+              Effect.map((outcome) =>
+                JSON.stringify({
                   agent,
                   ...externalReport(outcome),
                   note: "External agent report, not user approval. Check what matters before relying on it.",
                 }),
-                failure: externalFailure(outcome),
-              })),
+              ),
             ),
         );
         const saved = yield* background.waitResult(sessionId, receipt.taskId, yieldMs ?? 1000);

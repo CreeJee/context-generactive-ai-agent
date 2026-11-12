@@ -23,10 +23,13 @@ it.effect("what tasks and sessions kept in chat_metadata moves to tables of thei
         ('running', 'p', 'old'), ('blocked', 'p', 'old'), ('stopped', 'p', 'old'),
         ('broken', 'p', 'old'), ('retrying', 'p', 'old');
       INSERT INTO work_tasks
-        (id, project_id, parent_run_id, parent_tool_call_id, agent_name, status, title, request,
-         created_at, updated_at)
-        VALUES ('task', 'p', 'parent', 'call', 'background_shell', 'failed', 'Task', 'Do it', 1, 1),
-          ('odd', 'p', 'parent', 'call', 'background_shell', 'failed', 'Task', 'Do it', 1, 1);
+        (id, project_id, origin_session_id, parent_run_id, parent_tool_call_id, agent_name, status,
+         title, request, created_at, updated_at)
+        VALUES
+          ('task', 'p', 'running', 'parent', 'call', 'background_shell', 'failed', 'Task', 'Do it',
+            1, 1),
+          ('odd', 'p', 'running', 'parent', 'call2', 'background_shell', 'failed', 'Task', 'Do it',
+            1, 1);
       INSERT INTO chat_metadata (namespace, key, value) VALUES
         -- A task's saved status stays what it was, even where its attempt ended otherwise.
         ('background-task-result', 'task', json_object('status', 'completed', 'result', 'out')),
@@ -63,9 +66,18 @@ it.effect("what tasks and sessions kept in chat_metadata moves to tables of thei
 
     yield* migrateDatabase(db);
 
-    expect(db.prepare("SELECT * FROM background_task_results").all()).toEqual([
-      { task_id: "task", status: "completed", result: "out" },
-    ]);
+    // Background tasks have since left Work Trace for a table of their own (2026-11-12); one
+    // whose saved result did not decode keeps its task's status.
+    expect(db.prepare("SELECT id, status, result FROM background_tasks ORDER BY id").all()).toEqual(
+      [
+        {
+          id: "odd",
+          status: "failed",
+          result: "Result unavailable. Inspect its effects before retrying.",
+        },
+        { id: "task", status: "completed", result: "out" },
+      ],
+    );
     const none = {
       run_id: null,
       goal_version: null,

@@ -91,6 +91,20 @@ export const ContextView = Schema.Struct({
 });
 export type ContextView = typeof ContextView.Type;
 
+/** What a background task runs: a sh skill, or a turn of an external agent. */
+export const BackgroundKind = Schema.Literals(["shell", "external_agent"]);
+export type BackgroundKind = typeof BackgroundKind.Type;
+
+/** A background task of the session that is still going. */
+export const RunningBackgroundTask = Schema.Struct({
+  id: Schema.String,
+  kind: BackgroundKind,
+  /** The command or task, with secrets hidden, on one line of at most 80 characters. */
+  title: Schema.String,
+  startedAt: Schema.Finite,
+});
+export type RunningBackgroundTask = typeof RunningBackgroundTask.Type;
+
 /** `GET /api/sessions/:session`: run state that the transcript does not carry. */
 export const SessionRunState = Schema.Struct({
   running: Schema.NullOr(Schema.Struct({ runId: Schema.String })),
@@ -117,6 +131,8 @@ export const SessionRunState = Schema.Struct({
   actions: WorkflowActions,
   /** Ended Goal runs whose tools left their outcome unknown; a new run waits for the user. */
   uncertainRuns: Schema.Array(UncertainRun),
+  /** Background tasks still going, oldest first. */
+  background: Schema.Array(RunningBackgroundTask),
 });
 export type SessionRunState = typeof SessionRunState.Type;
 
