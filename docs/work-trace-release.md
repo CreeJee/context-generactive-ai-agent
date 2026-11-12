@@ -8,10 +8,11 @@ is paused and makes rollback non-destructive.
 
 `workTraceEnabled` is an optional boolean in `<storage>/config.json`:
 
-- absent or `true`: Work Trace session/project tree, detail, stream, resume, and archive APIs are
-  exposed;
+- absent or `true`: Work Trace session tree, detail, stream, resume, and archive APIs are
+  exposed. The panel lists only the conversation's running tasks (kanban card runs and
+  subagents); there is no history view;
 - `false`: those APIs return `404 { "error": "work_trace_disabled" }`;
-- Task/Attempt/Event/Evidence/Decision/Memory writes and schema migrations continue in shadow mode.
+- Task/Attempt/Event/Artifact writes and schema migrations continue in shadow mode.
 
 The server reads the flag for every request, so canary enable/disable does not require a restart.
 Never roll back by dropping Work Trace tables. Disable exposure first, retain the additive data, and
@@ -23,8 +24,7 @@ fix forward.
    active.
 2. Back up `<storage>/agent.db` (and `agent.db-wal`/`agent.db-shm` if using a file copy while stopped).
 3. Record `PRAGMA user_version`, `PRAGMA integrity_check`, row counts for `work_tasks`,
-   `agent_run_attempts`, `run_events`, `evidence_refs`, `knowledge_decisions`, and
-   `memory_candidates`.
+   `agent_run_attempts`, `run_events`, and `work_artifacts`.
 4. Start the new build with `workTraceEnabled: false`. Verify migration completion,
    `PRAGMA foreign_key_check` returning no rows, and shadow Task/Event growth.
 5. Restore rehearsal: stop the app, move the migrated files aside, restore the backup set, start the
@@ -39,22 +39,21 @@ the preflight backup or deploy a forward-fix build.
 
 1. **Shadow:** deploy with exposure false; compare Task and terminal-event counts with subagent runs.
 2. **Canary:** enable one local installation/project cohort; exercise parallel runs, approvals,
-   reconnect, restart recovery, safe resume, archive, adoption, and memory promotion/reuse.
+   reconnect, restart recovery, safe resume, and archive.
 3. **General:** enable by default after the verification matrix and limits below pass.
-4. **Rollback:** set exposure false. Keep collecting shadow records; do not delete or rewrite adopted
+4. **Rollback:** set exposure false. Keep collecting shadow records; do not delete or rewrite recorded
    provenance. Re-enable after a fixed build passes the same matrix.
 
 ## Verification matrix
 
-| Contract                                                               | Automated evidence                                                                         |
-| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| parallel child identity/order, approval, cancellation                  | `tests/subagents.test.ts`, `tests/approval.test.ts`                                        |
-| reconnect/restart and exactly-once parent notification                 | `tests/runs.test.ts`, `tests/work-trace-stream.test.ts`, `tests/work-trace-resume.test.ts` |
-| legacy migration, nullable origin, redaction/tombstone                 | `tests/work-trace-migrations.test.ts`, `tests/work-trace-evidence.test.ts`                 |
-| adoption and final-answer provenance                                   | `tests/work-trace-evidence.test.ts`                                                        |
-| user-governed Decision/Memory, deletion survival, retrieval versus use | `tests/knowledge-promotions.test.ts`                                                       |
-| exposure off/on without shadow-data loss                               | `tests/agent-chat.test.ts`                                                                 |
-| indexed large-tree/replay budget                                       | `tests/work-trace-release.test.ts`                                                         |
+| Contract                                               | Automated evidence                                                                                                 |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| parallel child identity/order, approval, cancellation  | `tests/agents/subagents.test.ts`, `tests/permission/approval.test.ts`                                              |
+| reconnect/restart and exactly-once parent notification | `tests/work-trace-stream.test.ts`, `tests/work-trace-resume.test.ts`                                               |
+| legacy migration, nullable origin, redaction/tombstone | `tests/work-trace-migrations.test.ts`, `tests/work-trace-provenance.test.ts`, `tests/work-trace-lifecycle.test.ts` |
+| background work kept out of Work Trace                 | `tests/background-tasks-migration.test.ts`, `tests/agents/background-tasks.test.ts`                                |
+| exposure off/on without shadow-data loss               | `tests/chat/turns.test.ts`                                                                                         |
+| indexed large-tree/replay budget                       | `tests/work-trace-release.test.ts`                                                                                 |
 
 Release verification commands:
 
@@ -68,7 +67,7 @@ pnpm build
 ## Capacity criteria
 
 The release test creates 1,000 live Tasks and 2,000 events, verifies SQLite selects
-`work_tasks_project` and `run_events_origin_cursor`, and requires a warm project-tree projection plus
+`work_tasks_origin_session` and `run_events_origin_cursor`, and requires a warm session-tree projection plus
 a bounded 500-event replay page to complete in under 1,000 ms on the test host. Replay must remain
 page-bounded and cursor-resumable; the UI must not request the full event history in one response.
 
@@ -80,8 +79,6 @@ active attempts occur, or recovery/purge jobs remain stuck.
 
 - Existing Work Trace rows migrate in-place; origin session references become nullable while
   project-owned provenance remains.
-- Historical reports are **not** automatically promoted into Decision/Memory. Promotion remains an
-  explicit user-authorized action over an adopted claim and verified Evidence.
 - Turning exposure off never backfills, purges, or rewrites records.
 - Destructive privacy purge and retention policy are handled by the archive/delete lifecycle, not by
   the release switch.
@@ -98,13 +95,13 @@ For a running Task or conversation, the parent run is cancelled first, each chil
 No resume or steer is accepted after delete has been requested. Archive keeps all content and is
 reversible. Delete is not reversible:
 
-- Task deletion removes checkpoints and activity payloads, tombstones Evidence/Artifact locators,
+- Task deletion removes checkpoints and activity payloads, tombstones Artifact locators,
   clears request/title/agent linkage, and retains a payload-free Task/Attempt identity.
 - Conversation deletion first applies Task deletion to every child, then removes transcript nodes,
   queues, approvals, workflow state, chat state, subagent rows, FTS entries, and unreferenced image
-  blobs. Project-owned Task tombstones, final-answer claims, adopted Decision/Memory, usage lineage,
-  lifecycle operations, and count-only purge receipts remain.
-- Nullable `origin_session_id` fields become `NULL`, so retained provenance explicitly says that its
+  blobs. Project-owned Task tombstones, lifecycle operations, and count-only purge receipts remain.
+  No page shows them; they stay as rows only.
+- Nullable `origin_session_id` fields become `NULL`, so retained rows explicitly say that their
   source conversation was deleted rather than pointing at a missing row.
 - Parent notifications use stable operation-derived idempotency keys and distinguish `archived` from
   `deleted`.
@@ -127,5 +124,5 @@ PRAGMA foreign_key_check;
 
 Pause lifecycle rollout if an operation remains `cancelling`, `waiting_for_stop`, or `purging` after
 a restart and no run is alive, if any completed delete lacks a receipt, or if deleted source text is
-still found in nodes, chat state, FTS, Evidence/Artifact locators, or attachment storage. Roll back UI
+still found in nodes, chat state, FTS, Artifact locators, or attachment storage. Roll back UI
 exposure with `workTraceEnabled: false`; never down-migrate or recreate purged private content.

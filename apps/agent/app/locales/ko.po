@@ -1035,10 +1035,6 @@ msgid "WebGPU를 쓸 수 없어 지금은 CPU에서 GPU용 모델을 돌리고 �
 msgstr "WebGPU를 쓸 수 없어 지금은 CPU에서 GPU용 모델을 돌리고 있습니다. 벡터는 같지만 더 느립니다."
 
 #: app/entry/chat/work-trace-panel.tsx
-msgid "Work Trace 보기 모드"
-msgstr "Work Trace 보기 모드"
-
-#: app/entry/chat/work-trace-panel.tsx
 msgid "Work Trace 열기"
 msgstr "Work Trace 열기"
 
@@ -3180,10 +3176,6 @@ msgstr "삭제 재시도"
 msgid "삭제 중"
 msgstr "삭제 중"
 
-#: app/entry/chat/work-trace-panel.tsx
-msgid "삭제된 대화 · 프로젝트 기록 유지"
-msgstr "삭제된 대화 · 프로젝트 기록 유지"
-
 #. Status badge of a task in Work Trace
 #. Status badge on a subagent task card
 #: app/entry/chat/message.tsx
@@ -3692,11 +3684,6 @@ msgstr "시작 중"
 msgid "시작하지 않은 카드만 보류할 수 있습니다."
 msgstr "시작하지 않은 카드만 보류할 수 있습니다."
 
-#. Label of the conversation that started a task, in Work Trace
-#: app/entry/chat/work-trace-panel.tsx
-msgid "시작한 대화"
-msgstr "시작한 대화"
-
 #: app/entry/settings/pages/embedding.tsx
 msgid "시험 임베딩을 하지 못했습니다."
 msgstr "시험 임베딩을 하지 못했습니다."
@@ -3728,11 +3715,6 @@ msgstr "신뢰한 에이전트 목록에 없습니다: {agent}"
 #: app/entry/chat/slash-commands.ts
 msgid "신뢰한 에이전트를 골라 주십시오."
 msgstr "신뢰한 에이전트를 골라 주십시오."
-
-#. Work Trace view mode: follow tasks as they change
-#: app/entry/chat/work-trace-panel.tsx
-msgid "실시간"
-msgstr "실시간"
 
 #. Work Trace live connection status
 #: app/entry/chat/work-trace-panel.tsx
@@ -3961,10 +3943,6 @@ msgstr "아직 <0/>개를 임베딩하지 않았습니다. 최근 대화부터 �
 #: app/entry/settings/pages/improvements.tsx
 msgid "아직 개선 항목을 찾은 적이 없습니다."
 msgstr "아직 개선 항목을 찾은 적이 없습니다."
-
-#: app/entry/chat/work-trace-panel.tsx
-msgid "아직 기록된 작업이 없습니다."
-msgstr "아직 기록된 작업이 없습니다."
 
 #: app/entry/navigation/sidebar.tsx
 msgid "아직 대화가 없습니다."
@@ -4583,6 +4561,10 @@ msgstr "이 대화로 아직 모델에 요청하지 않았습니다."
 msgid "이 대화를 쓸 수 있는지 확인하지 못했습니다"
 msgstr "이 대화를 쓸 수 있는지 확인하지 못했습니다"
 
+#: app/entry/chat/work-trace-panel.tsx
+msgid "이 대화에서 진행 중인 카드 작업과 하위 에이전트를 확인합니다."
+msgstr "이 대화에서 진행 중인 카드 작업과 하위 에이전트를 확인합니다."
+
 #: app/entry/chat/queue-panel.tsx
 msgid "이 메시지를 보내지 못했습니다. 보내기를 누르면 다시 보냅니다."
 msgstr "이 메시지를 보내지 못했습니다. 보내기를 누르면 다시 보냅니다."
@@ -5165,14 +5147,6 @@ msgstr "저장된 기억을 점검하고 있습니다."
 msgid "저장된 로그인 정보를 확인하지 못했습니다. 계정을 다시 추가해 주십시오."
 msgstr "저장된 로그인 정보를 확인하지 못했습니다. 계정을 다시 추가해 주십시오."
 
-#: app/entry/chat/work-trace-panel.tsx
-msgid "저장된 작업 계층과 실행 근거를 확인합니다."
-msgstr "저장된 작업 계층과 실행 근거를 확인합니다."
-
-#: app/entry/chat/work-trace-panel.tsx
-msgid "저장된 전체 기록"
-msgstr "저장된 전체 기록"
-
 #. Place filter option: conversations in the repository checkout, not a worktree
 #: app/entry/navigation/sidebar.tsx
 msgid "저장소 본체"
@@ -5230,11 +5204,6 @@ msgstr "전체 권한으로 바꾸기"
 #: app/entry/navigation/sidebar.tsx
 msgid "전체 권한으로 바꿀까요?"
 msgstr "전체 권한으로 바꿀까요?"
-
-#. Work Trace view mode: everything saved so far
-#: app/entry/chat/work-trace-panel.tsx
-msgid "전체 기록"
-msgstr "전체 기록"
 
 #: app/entry/report/report-draft.tsx
 msgid "전체 내용: 첨부 context-agent-evidence.json (세션 #{session}, run {runs}/{runCount}개)"
@@ -5532,6 +5501,10 @@ msgstr "진행 중인 대화가 없습니다."
 #: app/entry/chat/message.tsx
 msgid "진행 중인 작업에 알림"
 msgstr "진행 중인 작업에 알림"
+
+#: app/entry/chat/work-trace-panel.tsx
+msgid "진행 중인 작업이 없습니다."
+msgstr "진행 중인 작업이 없습니다."
 
 #: app/entry/chat/board/board-surface.tsx
 msgid "진행 중인 카드는 다른 대화로 옮길 수 없습니다. 끝나거나 멈춘 뒤에 옮겨 주십시오."

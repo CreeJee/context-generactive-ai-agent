@@ -12,7 +12,7 @@
 - `projects.ts` `ProjectsApiHandlers` — `/api/projects`, `/api/projects/pick`, `/api/projects/:project`과 그 아래 agents·mcp·skills·kanban·boards·decisions.
 - `providers.ts` `AuthApiHandlers`·`AccountsApiHandlers`·`ModelsApiHandlers` — `/api/auth`, `/api/accounts`, `/api/accounts/quota`, `/api/models`, `/api/models/:model`.
 - `sessions.ts` `SessionsApiHandlers` — `/api/sessions`, `/api/sessions/:session`과 그 아래 결정·보드·칸반·큐·하위 에이전트·중계 승인·run 제어.
-- `trace.ts` `TraceApiHandlers` — 세션과 프로젝트의 Work Trace, 세션 trace SSE(`/api/sessions/:session/trace/stream`).
+- `trace.ts` `TraceApiHandlers` — 세션의 Work Trace, 세션 trace SSE(`/api/sessions/:session/trace/stream`).
 - `btw.ts` `BtwThreadsApiHandlers` — `/api/sessions/:session/btw`, DELETE `/api/btw/:thread`.
 - `reports.ts` `ReportsApiHandlers` — `/api/reports/{sessions,evidence,diagnosis,delivery}`.
 - `media.ts` `MediaApiHandlers` — `/api/media/image`.

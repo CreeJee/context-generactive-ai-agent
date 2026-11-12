@@ -9,7 +9,7 @@
 - `WorkTraceStore` — `Context.Service<WorkTraceStore, Effect.Success<typeof make>>` 서비스 태그. `WorkTraceStore.layer = Layer.effect(WorkTraceStore, make).pipe(Layer.provide(NodeCrypto.layer))`
 - `WorkTraceStore` attempt 메서드 — `startAttempt`, `recordSteer`, `transitionAttempt`, `attemptHandle`, `activeAttemptForAgent`, `recoveredAttempts`, `claimRetries`
 - `WorkTraceStore` heartbeat·도구 메서드 — `beat`, `toolStarted`, `toolSettled`, `keepAlive`
-- `WorkTraceStore` 이벤트·조회 메서드 — `appendEvent`, `events`, `snapshot`, `snapshotEffect`, `latestCursor`, `projectLatestCursor`, `waitForChangeEffect`, `taskTree`, `projectTaskTree`, `taskDetail`, `projectTaskDetail`
+- `WorkTraceStore` 이벤트·조회 메서드 — `appendEvent`, `events`, `snapshot`, `snapshotEffect`, `latestCursor`, `waitForChangeEffect`, `taskTree`, `taskDetail`
 - `WorkTraceStore` 부모 알림 메서드 — `notifyParent`, `consumeParentNotifications`, `holdParentNotifications`, `resumeParentNotifications`, `parentNotificationsHeld`, `pendingParentNotificationSessions`, `releaseParentNotifications`
 - `WorkTraceStore` 산출물·최종 답변 메서드 — `recordArtifact`, `artifactsForTask`, `finalizeAnswerClaim`
 - `WorkTraceStore` resume·lifecycle 메서드 — `claimResume`, `requestResume`, `requestSessionLifecycle`, `finalizeSessionLifecycle`, `requestTaskLifecycle`, `finalizeTaskLifecycle`, `pendingSessionDeletes`, `recoverLifecycleOperations`, `archiveTask`

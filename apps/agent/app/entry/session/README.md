@@ -23,10 +23,10 @@
 - `useDelegatedWork` (dual: `(sessionId, _generating)`) — 서브에이전트와 relay된 승인 목록 스냅샷 훅
 - `requesterLabel` — `ApprovalRequester.match`로 승인 요청자(subagent/external_agent) 문구를 만든다
 - 문구 — 쓰이는 자리에 Lingui 메시지(`<Trans>`, `` t`…` ``, `msg`)로 쓴다. `app/locales/ko.po`로 추출되고 `lint/wording`이 검사한다.
-- `useWorkTrace(sessionId)` — 세션 trace 쿼리와 EventSource 구독을 묶은 훅. `{ tasks, connection }`을 돌려준다
+- `useWorkTrace(sessionId)` — 세션 trace 쿼리와 EventSource 구독을 묶은 훅. `{ tasks, connection, failed }`를 돌려준다
+- `activeTaskStatuses` / `runningTasks(tasks)` — 끝나지 않은 작업의 상태 목록과, 그 상태이면서 보관·삭제 요청이 없는 작업만 남기는 필터
 - `taskForToolCall` (dual: `(tasks, toolCallId)`) — `parentToolCallId`가 같은 마지막 durable task를 찾는다
 - `TraceConnection` — `"connecting" | "live" | "reconnecting"` 타입
-- `useProjectTraceConnection` (dual: `(projectId, sessionId, live)`) — 라이브 패널이 보일 때 work-trace SSE로 프로젝트 trace 쿼리를 무효화하고 연결 상태를 돌려준다
 - `sessionDrafts(sessionId)` — 세션의 미전송 텍스트 Effect atom 묶음 `{ text, follow }`. `text`를 쓰면 localStorage 키 `context-agent-session-draft:<sessionId>`에 저장하고, 빈 문자열이면 키를 지운다. 페이지가 `follow`를 마운트하면 저장된 값을 읽고, 탭이 다시 보일 때(`visibilitychange`)마다 다시 읽는다
 - `draftsIn({ storage, shown })` — `sessionDrafts`를 만드는 함수. 테스트가 storage와 다시 보임 신호를 바꿔 끼운다
 
@@ -62,7 +62,7 @@
 - 네트워크: TanStack Query mutation으로 큐 enqueue/edit, run 취소, workflow phase/control 변경 요청
 - EventSource SSE: `api.workTraceStreamUrl(sessionId[, cursor])`의 `open`, `trace`, `progress`, `snapshot`, `error` 이벤트를 받아 쿼리를 invalidate한다
 - DOM 이벤트 리스너: `window` `pagehide`, `work-trace:changed`, `document` `visibilitychange`
-- TanStack Query 캐시: `invalidateQueries`로 세션 trace와 프로젝트 trace를 무효화하고, `getQueryData`로 cursor를 읽는다
+- TanStack Query 캐시: `invalidateQueries`로 세션 trace와 그 아래 작업 상세 쿼리를 무효화하고, `getQueryData`로 cursor를 읽는다
 - `window.location.reload()`: `RunNoticeView`의 detached 상태 다시 연결 버튼
 - 암호 난수: `browserCrypto.uuidV4()`로 holder 토큰을 만든다
 

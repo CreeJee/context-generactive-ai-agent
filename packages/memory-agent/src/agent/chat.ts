@@ -887,7 +887,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   /** Every handler that looks a session up answers this when it does not exist. */
   /** The app API's methods refuse with the code instead. */
   const unknownSession = () => Effect.fail({ error: "session_not_found" } as const);
-  const unknownProject = () => Effect.fail({ error: "project_not_found" } as const);
   /** The selected model's provider cannot run now. */
   const unavailableProvider = ({ provider }: { readonly provider: ProviderId }) =>
     Effect.fail({ error: "provider_unavailable", provider } as const);
@@ -1193,7 +1192,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     });
 
   const api = {
-    /** Persisted Work Trace tree for live and review views. */
+    /** The conversation's Work Trace tree; the page shows its running tasks. */
     traceTree: (sessionId: string) =>
       Effect.gen(function* () {
         yield* traceShown;
@@ -1203,17 +1202,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           tasks: yield* workTrace.taskTree(sessionId),
         };
       }).pipe(Effect.catchTag("SessionNotFound", unknownSession)),
-
-    /** Project-owned review tree, including tasks whose origin conversation was deleted. */
-    projectTraceTree: (projectId: string) =>
-      Effect.gen(function* () {
-        yield* traceShown;
-        yield* projects.get(projectId);
-        return {
-          cursor: yield* workTrace.projectLatestCursor(projectId),
-          tasks: yield* workTrace.projectTaskTree(projectId),
-        };
-      }).pipe(Effect.catchTag("ProjectNotFound", unknownProject)),
 
     /** One task with immutable attempt lineage, checkpoints and visible events. */
     traceTask: (sessionId: string, taskId: string) =>
@@ -1270,14 +1258,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ? Effect.succeed(result)
           : Effect.fail(result);
       }).pipe(Effect.catchTag("SessionNotFound", unknownSession)),
-
-    /** Project-owned task detail remains available after its origin conversation is deleted. */
-    projectTraceTask: (projectId: string, taskId: string) =>
-      Effect.gen(function* () {
-        yield* traceShown;
-        yield* projects.get(projectId);
-        return yield* foundTask(yield* workTrace.projectTaskDetail(projectId, taskId));
-      }).pipe(Effect.catchTag("ProjectNotFound", unknownProject)),
 
     /**
      * The conversation's trace events after `after`, then a live tail; only wake-up notifications

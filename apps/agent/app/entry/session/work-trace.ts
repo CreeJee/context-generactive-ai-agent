@@ -9,6 +9,24 @@ import { sessionQueries, useSessionTraceQuery } from "../queries/session";
 
 export type TraceConnection = "connecting" | "live" | "reconnecting";
 
+/** Statuses of a task that has not ended: it runs, waits to, or waits on someone. */
+export const activeTaskStatuses: readonly TraceTaskView["status"][] = [
+  "queued",
+  "running",
+  "waiting",
+  "blocked",
+  "resuming",
+];
+
+/** Tasks still going, that nobody asked to archive or delete. */
+export const runningTasks = (tasks: readonly TraceTaskView[]) =>
+  tasks.filter(
+    (task) =>
+      activeTaskStatuses.includes(task.status) &&
+      task.archivedAt === null &&
+      task.deleteRequestedAt === null,
+  );
+
 /** Match a call to its latest durable task, including after a resumed attempt. */
 const taskForToolCallBody = (tasks: readonly TraceTaskView[], toolCallId: string) =>
   tasks.findLast((task) => task.parentToolCallId === toolCallId);
@@ -39,9 +57,7 @@ export function useWorkTrace(sessionId: string) {
         Effect.gen(function* () {
           while (active && dirty) {
             dirty = false;
-            yield* uiPromise(() =>
-              queryClient.invalidateQueries({ queryKey: options.queryKey, exact: true }),
-            );
+            yield* uiPromise(() => queryClient.invalidateQueries({ queryKey: options.queryKey }));
           }
         }).pipe(
           Effect.catchTag("UnknownError", () =>
@@ -73,9 +89,7 @@ export function useWorkTrace(sessionId: string) {
         source = null;
         setConnection("connecting");
       } else {
-        void queryClient
-          .invalidateQueries({ queryKey: options.queryKey, exact: true })
-          .finally(connect);
+        void queryClient.invalidateQueries({ queryKey: options.queryKey }).finally(connect);
       }
     };
     window.addEventListener("work-trace:changed", refresh);
@@ -91,5 +105,5 @@ export function useWorkTrace(sessionId: string) {
   }, [projectId, sessionId, queryClient]);
 
   const tasks = query.data?.tasks ?? [];
-  return { tasks, connection };
+  return { tasks, connection, failed: query.isError };
 }

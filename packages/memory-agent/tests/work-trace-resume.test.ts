@@ -243,7 +243,7 @@ describe("Work Trace logical resume", () => {
     ),
   );
 
-  it.effect("project review keeps task detail after the origin session and agent are deleted", () =>
+  it.effect("keeps the task's rows after the origin session and agent are deleted", () =>
     run(
       Effect.gen(function* () {
         const trace = yield* WorkTraceStore;
@@ -253,22 +253,28 @@ describe("Work Trace logical resume", () => {
         yield* sqlRun("DELETE FROM sessions WHERE id = 's1'");
 
         expect(yield* trace.taskTree("s1")).toEqual([]);
-        expect(yield* trace.projectLatestCursor("p1")).toBeGreaterThan(0);
-        expect(yield* trace.projectTaskTree("p1")).toEqual([
-          expect.objectContaining({
+        expect(
+          yield* sqlAll(
+            "SELECT id, project_id, origin_session_id, agent_id, agent_name FROM work_tasks",
+          ),
+        ).toEqual([
+          {
             id: handle.taskId,
-            projectId: "p1",
-            originSessionId: null,
-            agentId: null,
-            agentName: "researcher",
-          }),
+            project_id: "p1",
+            origin_session_id: null,
+            agent_id: null,
+            agent_name: "researcher",
+          },
         ]);
-        expect(yield* trace.projectTaskDetail("p1", handle.taskId)).toMatchObject({
-          task: { id: handle.taskId, originSessionId: null },
-          attempts: [{ id: handle.id, status: "interrupted" }],
-          events: expect.arrayContaining([expect.objectContaining({ taskId: handle.taskId })]),
-        });
-        expect(yield* trace.projectTaskDetail("another-project", handle.taskId)).toBeNull();
+        expect(yield* sqlAll("SELECT id, status FROM agent_run_attempts")).toEqual([
+          { id: handle.id, status: "interrupted" },
+        ]);
+        expect(
+          yield* sqlGet(
+            "SELECT count(*) AS count FROM run_events WHERE task_id = ?",
+            handle.taskId,
+          ),
+        ).not.toEqual({ count: 0 });
       }),
     ),
   );

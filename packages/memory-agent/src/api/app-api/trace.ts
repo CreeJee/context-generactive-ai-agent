@@ -42,10 +42,7 @@ const SettingsUnavailable = appRefusal(500, ["settings_unavailable"]);
 /** The session the path names does not exist. */
 const UnknownSession = appRefusal(404, ["session_not_found"]);
 
-/** The project the path names is not registered. */
-const UnknownProject = appRefusal(404, ["project_not_found"]);
-
-/** The session or project has no such task. */
+/** The session has no such task. */
 const UnknownTask = appRefusal(404, ["trace_task_not_found"]);
 
 /** Another page holds the session. */
@@ -59,7 +56,6 @@ export const traceRefusals = [
   WorkTraceDisabled,
   SettingsUnavailable,
   UnknownSession,
-  UnknownProject,
   UnknownTask,
   SessionInUse,
 ];
@@ -123,18 +119,6 @@ export class TraceGroup extends HttpApiGroup.make("trace")
         LifecycleBlocked,
         ResumeBlocked,
       ],
-    }),
-    /** The project's tasks, including those whose conversation was deleted. */
-    HttpApiEndpoint.get("projectTree", "/api/projects/:project/trace", {
-      params: { project: Schema.String },
-      success: TraceTreeSnapshot,
-      error: [WorkTraceDisabled, SettingsUnavailable, UnknownProject],
-    }),
-    /** One project task, also after its conversation was deleted. */
-    HttpApiEndpoint.get("projectTask", "/api/projects/:project/trace/tasks/:task", {
-      params: { project: Schema.String, ...task },
-      success: TraceTaskDetail,
-      error: [WorkTraceDisabled, SettingsUnavailable, UnknownProject, UnknownTask],
     }),
   )
   .middleware(SameSite) {}

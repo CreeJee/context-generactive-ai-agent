@@ -49,7 +49,7 @@ import { attachmentIdOf, attachmentUrl, type QueuedMessage } from "memory-agent/
 import { DrawingPicture, UserMessageBody } from "./images";
 import { codeHighlighter, Markdown } from "./markdown";
 import { failureLabel } from "../session/attempt-failure";
-import { taskForToolCall, type TraceConnection } from "../session/work-trace";
+import { activeTaskStatuses, taskForToolCall, type TraceConnection } from "../session/work-trace";
 
 type ToolCall = (typeof MessagePart.cases)["tool-call"]["Type"];
 type ToolResult = (typeof MessagePart.cases)["tool-result"]["Type"];
@@ -315,14 +315,6 @@ const callTrace = CallStatus.$match({
   }),
   blocked: (): CallTrace => ({ line: "error", label: msg`자동 검토로 막힘` }),
 });
-
-const activeTaskStatuses: readonly TraceTaskView["status"][] = [
-  "queued",
-  "running",
-  "waiting",
-  "blocked",
-  "resuming",
-];
 
 /** How long a task has run, or ran, in short Korean units. */
 export function elapsed(task: TraceTaskView): ReactNode {

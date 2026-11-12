@@ -1131,9 +1131,6 @@ const make = Effect.gen(function* () {
 
   const taskTree = (sessionId: string) => tasksWhere(sql`t.origin_session_id = ${sessionId}`);
 
-  /** Project-owned review projection, including tasks whose origin session was deleted. */
-  const projectTaskTree = (projectId: string) => tasksWhere(sql`t.project_id = ${projectId}`);
-
   const attemptsForTask = Effect.fnUntraced(function* (taskId: string) {
     const rows = yield* decodeAttemptViewRows(
       yield* sql`SELECT id, invocation_id, attempt_number, chat_run_id, thread_id, status,
@@ -1195,13 +1192,6 @@ const make = Effect.gen(function* () {
     const [task] = yield* tasksWhere(sql`t.id = ${taskId} AND t.origin_session_id = ${sessionId}`);
     if (!isTruthy(task)) return null;
     return yield* detailOf(task, taskEvents(taskId, sql`origin_session_id = ${sessionId}`));
-  });
-
-  const projectTaskDetail = Effect.fnUntraced(function* (projectId: string, taskId: string) {
-    const [task] = yield* tasksWhere(sql`t.id = ${taskId} AND t.project_id = ${projectId}`);
-    if (!isTruthy(task)) return null;
-    if (task.originSessionId !== null) return yield* taskDetail(task.originSessionId, taskId);
-    return yield* detailOf(task, taskEvents(taskId));
   });
 
   const resumeBlocked = (reason: ResumeBlocker): ResumeClaim => ResumeClaim.blocked({ reason });
@@ -1918,13 +1908,6 @@ const make = Effect.gen(function* () {
       Effect.map((row) => row.seq),
     );
 
-  const projectLatestCursor = (projectId: string) =>
-    first(sql`SELECT coalesce(max(e.seq), 0) AS seq
-      FROM run_events e JOIN work_tasks t ON t.id = e.task_id WHERE t.project_id = ${projectId}`).pipe(
-      Effect.flatMap(decodeCursor),
-      Effect.map((row) => row.seq),
-    );
-
   const snapshot = (sessionId: string, afterCursor = 0, limit = 500) =>
     Effect.gen(function* () {
       const upperCursor = yield* latestCursor(sessionId);
@@ -2077,9 +2060,7 @@ const make = Effect.gen(function* () {
     recordArtifact,
     artifactsForTask,
     taskTree,
-    projectTaskTree,
     taskDetail,
-    projectTaskDetail,
     claimResume,
     requestResume,
     requestSessionLifecycle,
@@ -2093,7 +2074,6 @@ const make = Effect.gen(function* () {
     events,
     snapshot,
     latestCursor,
-    projectLatestCursor,
     waitForChangeEffect,
     snapshotEffect,
     attemptHandle,

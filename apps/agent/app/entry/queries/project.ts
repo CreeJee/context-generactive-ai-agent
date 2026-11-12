@@ -42,11 +42,6 @@ export const projectQueries = {
       queryKey: appQueryKeys.project.skills(projectId),
       queryFn: () => api.skills(projectId),
     }),
-  trace: (projectId: string) =>
-    queryOptions({
-      queryKey: appQueryKeys.project.trace(projectId),
-      queryFn: () => api.projectWorkTrace(projectId),
-    }),
   decisions: (projectId: string) =>
     queryOptions({
       queryKey: appQueryKeys.project.decisions(projectId),
@@ -64,11 +59,6 @@ export const projectQueries = {
       queryKey: appQueryKeys.project.running(projectId),
       queryFn: () => api.runningSessions(projectId),
       staleTime: 0,
-    }),
-  traceTask: (projectId: string, taskId: string) =>
-    queryOptions({
-      queryKey: appQueryKeys.project.traceTask(projectId, taskId),
-      queryFn: () => api.projectWorkTraceTask(projectId, taskId),
     }),
   kanban: (projectId: string) =>
     queryOptions({
@@ -112,13 +102,6 @@ export const useDecisionInboxQuery = (projectId: string) =>
   useQuery(projectQueries.decisions(projectId));
 export const useProjectBoardsQuery = (projectId: string) =>
   useQuery(projectQueries.boards(projectId));
-export const useProjectTraceQuery = (projectId: string) =>
-  useQuery(projectQueries.trace(projectId));
-const useProjectTraceTaskQueryBody = (projectId: string, taskId: string | null) =>
-  useQuery({ ...projectQueries.traceTask(projectId, taskId ?? ""), enabled: taskId !== null });
-export const useProjectTraceTaskQuery: {
-  (taskId: string | null): (projectId: string) => ReturnType<typeof useProjectTraceTaskQueryBody>;
-} & typeof useProjectTraceTaskQueryBody = EffectFunction.dual(2, useProjectTraceTaskQueryBody);
 // No server event follows MCP servers, agents or skills (their files and connections change on
 // their own), so each settings page reads them again when it opens, showing the cached list first.
 export const useSuspenseMcpQuery = (projectId: string) =>

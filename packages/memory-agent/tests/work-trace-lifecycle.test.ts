@@ -432,9 +432,12 @@ describe("Work Trace task lifecycle", () => {
           expect(
             yield* sqlGet("SELECT origin_session_id FROM work_tasks WHERE id = ?", handle.taskId),
           ).toEqual({ origin_session_id: null });
-          expect((yield* trace.projectTaskDetail("p1", handle.taskId))?.task.status).toBe(
-            "deleted",
-          );
+          expect(
+            yield* sqlGet(
+              "SELECT deleted_at IS NOT NULL AS deleted FROM work_tasks WHERE id = ?",
+              handle.taskId,
+            ),
+          ).toEqual({ deleted: 1 });
           expect(yield* sqlGet("SELECT count(*) AS count FROM purge_receipts")).toEqual({
             count: 2,
           });

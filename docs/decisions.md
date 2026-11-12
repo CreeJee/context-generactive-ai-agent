@@ -5009,3 +5009,12 @@
   - 마이그레이션은 예전 작업의 저장된 결과를 새 표로 옮긴다. 예전 대화가 가리키는 taskId도 `get_background_result`로 계속 읽고, 그 끝은 이미 알린 것으로 친다. attempt의 thread가 `background-`로 시작하는 task를 모두 Work Trace에서 지우고(지운 대화의 것 포함), `background_task_results`를 지운다.
 - 확인: 사용자 DB 사본(2GB)에서 마이그레이션이 8.7초에 끝났고, 3,553건이 옮겨졌으며 Work Trace에 남은 백그라운드 attempt는 0건, 외래 키 위반은 없었다.
 - 다음: Work Trace를 지금 돌고 있는 작업만 보이게 다시 짠다.
+
+## Work Trace는 지금 진행 중인 작업만 보인다 (2026-11-12)
+
+- 계기: 사용자: Work Trace를 아예 다시 짜서 지금 돌고 있는 것만 보이게 한다. 진행 중인 작업은 칸반 카드 작업과 하위 에이전트, 그 둘만 보이면 된다.
+- 결정: Work Trace 패널은 열린 대화의 세션 trace에서 끝나지 않은 작업(queued·running·waiting·blocked·resuming, 보관·삭제 요청 없음)만 목록에 둔다. 칸반 카드 실행과 검증기도 세션 subagent로 돌아 Work Trace task가 되므로, 세션 trace에 있는 것이 곧 그 두 종류다.
+  - "실시간 / 전체 기록" 전환과 프로젝트 trace(`GET /api/projects/:project/trace`, `.../trace/tasks/:task`, `AgentChat.projectTraceTree`·`projectTraceTask`, 저장소의 `projectTaskTree`·`projectTaskDetail`·`projectLatestCursor`)를 지운다. 패널은 대화가 열려 있을 때만 그린다.
+  - 사용자가 고른 작업은 끝나도 상세에 그대로 남는다. 목록에서는 빠진다. 고른 작업이 없으면 첫 진행 중 작업의 상세를 보인다. 대화 안 작업 카드에서 끝난 작업을 열어도 그 상세를 보인다.
+  - 작업 상세는 세션 trace 키 아래의 쿼리라 trace 이벤트가 오면 목록과 함께 다시 읽는다.
+  - 대화를 지운 뒤 남는 Work Trace 행(`origin_session_id`가 NULL인 task 묘비)은 그대로 두지만 이제 어떤 화면도 보이지 않는다.

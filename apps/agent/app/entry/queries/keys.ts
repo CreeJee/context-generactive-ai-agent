@@ -30,13 +30,10 @@ export const appQueryKeys = {
     mcp: (projectId: string) => ["app", "project", projectId, "mcp"] as const,
     agents: (projectId: string) => ["app", "project", projectId, "agents"] as const,
     skills: (projectId: string) => ["app", "project", projectId, "skills"] as const,
-    trace: (projectId: string) => ["app", "project", projectId, "trace"] as const,
     decisions: (projectId: string) => ["app", "project", projectId, "decisions"] as const,
     boards: (projectId: string) => ["app", "project", projectId, "boards"] as const,
     running: (projectId: string) => ["app", "project", projectId, "running"] as const,
     kanban: (projectId: string) => ["app", "project", projectId, "kanban"] as const,
-    traceTask: (projectId: string, taskId: string) =>
-      ["app", "project", projectId, "trace", "task", taskId] as const,
   },
   session: {
     root: (projectId: string, sessionId: string) =>
@@ -51,6 +48,8 @@ export const appQueryKeys = {
       [...appQueryKeys.session.root(projectId, sessionId), "relayed-approvals"] as const,
     trace: (projectId: string, sessionId: string) =>
       [...appQueryKeys.session.root(projectId, sessionId), "trace"] as const,
+    traceTask: (projectId: string, sessionId: string, taskId: string) =>
+      [...appQueryKeys.session.trace(projectId, sessionId), "task", taskId] as const,
     btw: (projectId: string, sessionId: string) =>
       [...appQueryKeys.session.root(projectId, sessionId), "btw"] as const,
     board: (projectId: string, sessionId: string) =>

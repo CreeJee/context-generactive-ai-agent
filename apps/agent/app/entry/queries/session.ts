@@ -30,6 +30,11 @@ export const sessionQueries = {
       queryKey: appQueryKeys.session.trace(projectId, sessionId),
       queryFn: () => api.workTrace(sessionId),
     }),
+  traceTask: (projectId: string, sessionId: string, taskId: string) =>
+    queryOptions({
+      queryKey: appQueryKeys.session.traceTask(projectId, sessionId, taskId),
+      queryFn: () => api.workTraceTask(sessionId, taskId),
+    }),
   board: (projectId: string, sessionId: string) =>
     queryOptions({
       queryKey: appQueryKeys.session.board(projectId, sessionId),
@@ -111,3 +116,18 @@ const useSessionTraceQueryBody = (projectId: string, sessionId: string) =>
 export const useSessionTraceQuery: {
   (sessionId: string): (projectId: string) => ReturnType<typeof useSessionTraceQueryBody>;
 } & typeof useSessionTraceQueryBody = EffectFunction.dual(2, useSessionTraceQueryBody);
+const useSessionTraceTaskQueryBody = (
+  projectId: string,
+  sessionId: string,
+  taskId: string | null,
+) =>
+  useQuery({
+    ...sessionQueries.traceTask(projectId, sessionId, taskId ?? ""),
+    enabled: taskId !== null,
+  });
+export const useSessionTraceTaskQuery: {
+  (
+    sessionId: string,
+    taskId: string | null,
+  ): (projectId: string) => ReturnType<typeof useSessionTraceTaskQueryBody>;
+} & typeof useSessionTraceTaskQueryBody = EffectFunction.dual(3, useSessionTraceTaskQueryBody);

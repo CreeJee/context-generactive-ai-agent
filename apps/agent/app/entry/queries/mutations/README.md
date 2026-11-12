@@ -28,7 +28,7 @@
 - `WorkflowChange` / `useWorkflowMutation` — workflow 변경 tagged enum과 mutation. `api.moveWorkflow` 또는 `api.controlWorkflow`를 호출한다(301행 이후는 그래프로만 확인).
 - `useCancelRunMutation` / `useCompactSessionMutation` — 실행 취소(`api.cancelRun`)와 세션 compact. 성공하면 runState를 무효화한다.
 - `useEnqueueMutation` / `useEditQueueMutation` / `useRelayedApprovalMutation` — 메시지 큐 추가(`mode: "queue" | "steer"`)와 편집, 중계된 승인 응답. queue와 approvals 쿼리를 무효화한다.
-- `useResumeTraceTaskMutation` / `useArchiveTraceTaskMutation` / `useDeleteTraceTaskMutation` — work-trace task 재개(`confirmUncertain`), 보관, 삭제. 세션 trace와 project trace를 무효화한다.
+- `useResumeTraceTaskMutation` / `useArchiveTraceTaskMutation` / `useDeleteTraceTaskMutation` — work-trace task 재개(`confirmUncertain`), 보관, 삭제. 세션 trace를 무효화한다.
 - 하위 디렉터리 없음
 
 ## Invariants

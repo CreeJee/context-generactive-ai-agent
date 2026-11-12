@@ -228,10 +228,7 @@ function useEditQueueMutationBody(projectId: string, sessionId: string, holder: 
 function useTraceInvalidation(projectId: string, sessionId: string) {
   const client = useQueryClient();
   return () =>
-    Promise.all([
-      client.invalidateQueries({ queryKey: sessionQueries.trace(projectId, sessionId).queryKey }),
-      client.invalidateQueries({ queryKey: projectQueries.trace(projectId).queryKey }),
-    ]);
+    client.invalidateQueries({ queryKey: sessionQueries.trace(projectId, sessionId).queryKey });
 }
 
 export const useResumeTraceTaskMutation: {

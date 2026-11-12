@@ -73,7 +73,7 @@ describe("Work Trace artifact provenance", () => {
     ),
   );
 
-  it.effect("keeps project provenance after origin deletion and rejects unsafe file locators", () =>
+  it.effect("keeps provenance rows after origin deletion and rejects unsafe file locators", () =>
     run(
       Effect.gen(function* () {
         const trace = yield* WorkTraceStore;
@@ -102,10 +102,9 @@ describe("Work Trace artifact provenance", () => {
         yield* sqlRun("DELETE FROM subagents WHERE id = 'agent-1'");
         yield* sqlRun("DELETE FROM sessions WHERE id = 's1'");
         expect(yield* trace.taskDetail("s1", handle.taskId)).toBeNull();
-        expect(yield* trace.projectTaskDetail("p1", handle.taskId)).toEqual(
-          expect.objectContaining({ artifacts: [expect.any(Object)] }),
-        );
-        expect(yield* trace.projectTaskDetail("other", handle.taskId)).toBeNull();
+        expect(yield* sqlAll("SELECT task_id FROM work_artifacts")).toEqual([
+          { task_id: handle.taskId },
+        ]);
       }),
     ),
   );

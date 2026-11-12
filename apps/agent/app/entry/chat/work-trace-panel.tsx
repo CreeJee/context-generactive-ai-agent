@@ -27,10 +27,8 @@ import {
 import { Separator } from "~/components/ui/separator";
 import { koreanTimeOfDayOf } from "../shared/local-time";
 import { failureLabel } from "../session/attempt-failure";
-import type { TraceConnection } from "../session/work-trace";
-import { useProjectTraceConnection } from "../session/use-project-trace-connection";
-import { useProjectTraceQuery, useProjectTraceTaskQuery } from "../queries/project";
-type PanelMode = "live" | "review";
+import { runningTasks, useWorkTrace, type TraceConnection } from "../session/work-trace";
+import { useSessionTraceTaskQuery } from "../queries/session";
 const OpenTraceDetail = Schema.Struct({ taskId: Schema.String });
 const depthPadding = ["pl-2", "pl-5", "pl-8", "pl-11"] as const;
 
@@ -209,14 +207,6 @@ function TaskDetail({ detail }: { detail: TraceTaskDetail | null }) {
           <dd className="min-w-0 truncate font-mono" title={task.id}>
             {task.id}
           </dd>
-          <dt>
-            <Trans comment="Label of the conversation that started a task, in Work Trace">
-              시작한 대화
-            </Trans>
-          </dt>
-          <dd className="min-w-0 break-all">
-            {task.originSessionId ?? <Trans>삭제된 대화 · 프로젝트 기록 유지</Trans>}
-          </dd>
         </dl>
       </section>
       <Separator />
@@ -304,6 +294,10 @@ function TaskDetail({ detail }: { detail: TraceTaskDetail | null }) {
   );
 }
 
+/**
+ * The conversation's tasks still going: its kanban cards' runs and its subagents. A task stays in
+ * the detail when it ends while selected; the list keeps only the running ones.
+ */
 function PanelBody({
   projectId,
   sessionId,
@@ -311,55 +305,24 @@ function PanelBody({
   onSelectedTaskIdChange,
 }: {
   projectId: string;
-  sessionId: string | null;
+  sessionId: string;
   selectedTaskId: string | null;
   onSelectedTaskIdChange: (taskId: string | null) => void;
 }) {
   const { t } = useLingui();
-  const [mode, setMode] = useState<PanelMode>("live");
-  const traceQuery = useProjectTraceQuery(projectId);
-  const taskQuery = useProjectTraceTaskQuery(projectId, selectedTaskId);
-  const tasks = traceQuery.data?.tasks ?? [];
-  const detail = taskQuery.data ?? null;
-  const failed = traceQuery.isError;
-  const connection = useProjectTraceConnection(projectId, sessionId, mode === "live");
-  const shownTasks =
-    mode === "live" && isTruthy(sessionId)
-      ? tasks.filter((task) => task.originSessionId === sessionId)
-      : tasks;
-  useEffect(() => {
-    if (isTruthy(selectedTaskId) && shownTasks.some(({ id }) => id === selectedTaskId)) return;
-    onSelectedTaskIdChange(shownTasks[0]?.id ?? null);
-  }, [mode, sessionId, tasks]);
+  const { tasks, connection, failed } = useWorkTrace(sessionId);
+  const running = runningTasks(tasks);
+  const shownTaskId = selectedTaskId ?? running[0]?.id ?? null;
+  const detail = useSessionTraceTaskQuery(projectId, sessionId, shownTaskId).data ?? null;
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <div
-        className="flex min-w-0 items-center gap-1 border-b p-2"
-        role="toolbar"
-        aria-label={t`Work Trace 보기 모드`}
+      <p
+        className="flex min-w-0 items-center justify-end gap-1 border-b p-2 text-right text-xs text-muted-foreground"
+        role="status"
       >
-        <Button
-          size="sm"
-          variant={mode === "live" ? "secondary" : "ghost"}
-          onClick={() => setMode("live")}
-        >
-          <Trans comment="Work Trace view mode: follow tasks as they change">실시간</Trans>
-        </Button>
-        <Button
-          size="sm"
-          variant={mode === "review" ? "secondary" : "ghost"}
-          onClick={() => setMode("review")}
-        >
-          <Trans comment="Work Trace view mode: everything saved so far">전체 기록</Trans>
-        </Button>
-        <span
-          className="ml-auto flex min-w-0 items-center justify-end gap-1 text-right text-xs text-muted-foreground"
-          role="status"
-        >
-          {mode === "review" ? <Trans>저장된 전체 기록</Trans> : t(connectionLabel[connection])}
-          {connection === "reconnecting" && <RefreshCwIcon className="size-3" aria-hidden />}
-        </span>
-      </div>
+        {t(connectionLabel[connection])}
+        {connection === "reconnecting" && <RefreshCwIcon className="size-3" aria-hidden />}
+      </p>
       {failed && (
         <p className="border-b px-3 py-2 text-xs text-destructive">
           <Trans>Work Trace를 불러오지 못했습니다.</Trans>
@@ -369,14 +332,14 @@ function PanelBody({
         <div className="min-h-0 min-w-0 border-b">
           <ScrollArea className="h-full min-w-0">
             <div className="min-w-0 p-2">
-              {shownTasks.length === 0 ? (
+              {running.length === 0 ? (
                 <p className="p-3 text-sm text-muted-foreground">
-                  <Trans>아직 기록된 작업이 없습니다.</Trans>
+                  <Trans>진행 중인 작업이 없습니다.</Trans>
                 </p>
               ) : (
                 <TaskTree
-                  tasks={shownTasks}
-                  selectedTaskId={selectedTaskId}
+                  tasks={running}
+                  selectedTaskId={shownTaskId}
                   onSelect={onSelectedTaskIdChange}
                 />
               )}
@@ -391,13 +354,7 @@ function PanelBody({
   );
 }
 
-export function WorkTracePanel({
-  projectId,
-  sessionId,
-}: {
-  projectId: string;
-  sessionId: string | null;
-}) {
+export function WorkTracePanel({ projectId, sessionId }: { projectId: string; sessionId: string }) {
   const { t } = useLingui();
   const [open, setOpen] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -436,7 +393,7 @@ export function WorkTracePanel({
               </span>
             </SheetTitle>
             <SheetDescription>
-              <Trans>저장된 작업 계층과 실행 근거를 확인합니다.</Trans>
+              <Trans>이 대화에서 진행 중인 카드 작업과 하위 에이전트를 확인합니다.</Trans>
             </SheetDescription>
           </SheetHeader>
           <PanelBody

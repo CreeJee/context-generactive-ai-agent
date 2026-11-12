@@ -15,7 +15,7 @@ testAgent()("Work Trace release limits", (it) => {
     "uses covering indexes and projects 1,000 live tasks",
     () =>
       Effect.gen(function* () {
-        const { project, session } = yield* TestEnv;
+        const { session } = yield* TestEnv;
         const sql = yield* SqlClient.SqlClient;
         const trace = yield* WorkTraceStore;
         yield* sql`INSERT INTO subagents
@@ -39,19 +39,19 @@ testAgent()("Work Trace release limits", (it) => {
           { discard: true },
         ).pipe(sql.withTransaction);
 
-        const projectPlan = yield* planDetails(
+        const taskPlan = yield* planDetails(
           yield* sql`EXPLAIN QUERY PLAN SELECT * FROM work_tasks
-            WHERE project_id = ${project.id} ORDER BY created_at, id`,
+            WHERE origin_session_id = ${session.id} ORDER BY created_at, id`,
         );
         const eventPlan = yield* planDetails(
           yield* sql`EXPLAIN QUERY PLAN SELECT * FROM run_events
             WHERE origin_session_id = ${session.id} AND seq > ${0} ORDER BY seq`,
         );
-        expect(projectPlan).toContain("work_tasks_project");
+        expect(taskPlan).toContain("work_tasks_origin_session");
         expect(eventPlan).toContain("run_events_origin_cursor");
 
         const [tasks, snapshot] = yield* Effect.all([
-          trace.projectTaskTree(project.id),
+          trace.taskTree(session.id),
           trace.snapshot(session.id, 0),
         ]);
         expect(tasks).toHaveLength(1_000);

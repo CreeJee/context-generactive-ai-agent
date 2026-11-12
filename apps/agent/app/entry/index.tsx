@@ -830,7 +830,9 @@ export function App() {
           {projectId && sessionId && selection && (
             <BtwPanel key={sessionId} projectId={projectId} sessionId={sessionId} />
           )}
-          {projectId && <WorkTracePanel projectId={projectId} sessionId={sessionId} />}
+          {projectId && sessionId && (
+            <WorkTracePanel key={sessionId} projectId={projectId} sessionId={sessionId} />
+          )}
           {projectId && (boardsOpen === true || boardCardKeyParam !== null) && (
             <ProjectBoard
               projectId={projectId}

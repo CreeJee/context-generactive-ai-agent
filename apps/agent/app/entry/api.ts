@@ -915,10 +915,6 @@ export const api = {
 
   skills: (project: string) => appCall((client) => client.projects.skills({ params: { project } })),
 
-  projectWorkTrace: (project: string) =>
-    appCall((client) => client.trace.projectTree({ params: { project } })),
-  projectWorkTraceTask: (project: string, task: string) =>
-    appCall((client) => client.trace.projectTask({ params: { project, task } })),
   workTrace: (session: string) =>
     appCall((client) => client.trace.sessionTree({ params: { session } })),
   workTraceTask: (session: string, task: string) =>

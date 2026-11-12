@@ -5,7 +5,7 @@ import { AgentChat } from "memory-agent";
 import { AppApi } from "memory-agent/app-api";
 import { refusalsOnly } from "./agent-chat-refusals.ts";
 
-/** The trace group of `AppApi` (`/api/sessions/:session/trace*`, `/api/projects/:project/trace*`). */
+/** The trace group of `AppApi` (`/api/sessions/:session/trace*`). */
 export const TraceApiHandlers = HttpApiBuilder.group(
   AppApi,
   "trace",
@@ -38,9 +38,6 @@ export const TraceApiHandlers = HttpApiBuilder.group(
             payload.idempotencyKey ?? (yield* crypto.uuidV4()),
           );
         }).pipe(refusalsOnly),
-      projectTree: ({ params: { project } }) => refusalsOnly(chat.projectTraceTree(project)),
-      projectTask: ({ params: { project, task } }) =>
-        refusalsOnly(chat.projectTraceTask(project, task)),
     });
   }),
 );
