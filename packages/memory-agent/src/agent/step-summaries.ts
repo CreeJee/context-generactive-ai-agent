@@ -56,7 +56,8 @@ export const stepSummaryPrompt = (steps: StepsToSummarize) =>
 
 /**
  * Summarizes a run's earlier steps with the run's model at its cheapest effort, for compaction to
- * send in their place. A failure is logged and gives none, and compaction stops asking for the run.
+ * send in their place. A failure is logged and gives none; compaction asks again when a block is
+ * next due, until summaries fail `stepSummaryFailureLimit` times in a row.
  */
 export const stepSummarizer =
   (options: {

@@ -19,3 +19,8 @@ export const retrievalTokenLimit = 600;
 export const stepBlockSteps = 20;
 /** Latest steps of a run always sent in their original form, results cleared or not. */
 export const recentRawSteps = 10;
+/**
+ * Step summaries that fail in a row before a run stops asking for them. A timeout or a dropped
+ * connection passes, so one failure does not end them; a summary made resets the count.
+ */
+export const stepSummaryFailureLimit = 3;

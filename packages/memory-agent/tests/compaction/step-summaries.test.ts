@@ -6,6 +6,7 @@ import {
   messageText,
   type StepsToSummarize,
 } from "../../src/agent/compaction.ts";
+import { stepSummaryFailureLimit } from "../../src/agent/compaction-policy.ts";
 import { stepSummaryPrompt } from "../../src/agent/step-summaries.ts";
 import type { StoredMessage } from "../../src/chat-store/schema.ts";
 import { RunStore } from "../../src/loop/store.ts";
@@ -48,11 +49,14 @@ const sources = (rereadable: boolean) =>
  */
 const leaveOutAt = 40_000;
 
-/** One run under compaction whose step summaries `summarize` gives; what it asked, and was sent. */
+/**
+ * One run under compaction whose step summaries `summarize` gives by attempt, from 0; what it
+ * asked, and was sent.
+ */
 const run = Effect.fnUntraced(function* (
   name: string,
   rereadable: boolean,
-  summarize: Option.Option<string>,
+  summarize: (attempt: number) => Option.Option<string>,
   leaveOutAt: number,
 ) {
   const { project } = yield* TestEnv;
@@ -63,11 +67,7 @@ const run = Effect.fnUntraced(function* (
     budget: { compactAt: 0, leaveOutAt, inputCeiling: noLimit },
     restore: () => Effect.succeed(null),
     promptCacheFor: Duration.hours(1),
-    summarizeSteps: (steps) =>
-      Effect.as(
-        Ref.update(asked, (all) => [...all, steps]),
-        summarize,
-      ),
+    summarizeSteps: (steps) => Ref.modify(asked, (all) => [summarize(all.length), [...all, steps]]),
   });
   const conversation: ReadonlyArray<StoredMessage> = [{ role: "user", content: task }];
   const { invocations } = yield* scriptedRun({
@@ -99,7 +99,7 @@ testAgent()("step summaries", (it) => {
       const { asked, last, stage, saved } = yield* run(
         "summarized",
         true,
-        Option.some("- 요약"),
+        () => Option.some("- 요약"),
         leaveOutAt,
       );
       // One block: the first twenty steps, with the run's task and where to reread each output.
@@ -130,10 +130,25 @@ testAgent()("step summaries", (it) => {
     }),
   );
 
-  it.effect("a summary that could not be made is not asked for again in the run", () =>
+  it.effect("a summary that failed is asked for again, and the run's steps are sent as it", () =>
     Effect.gen(function* () {
-      const { asked, last } = yield* run("failed", true, Option.none(), leaveOutAt);
-      expect(asked).toHaveLength(1);
+      const { asked, last } = yield* run(
+        "retried",
+        true,
+        (attempt) => (attempt === 0 ? Option.none() : Option.some("- 요약")),
+        leaveOutAt,
+      );
+      expect(asked).toHaveLength(2);
+      expect(asked[1]?.messages[0]?.toolCalls?.[0]?.id).toBe("read-0");
+      expect(last[1]?.content).toContain("[Summary of steps 1-20 of this run");
+      expect(firstCall(last[2])).toBe("read-20");
+    }),
+  );
+
+  it.effect("summaries that keep failing are not asked for again in the run", () =>
+    Effect.gen(function* () {
+      const { asked, last } = yield* run("failed", true, () => Option.none(), leaveOutAt);
+      expect(asked).toHaveLength(stepSummaryFailureLimit);
       expect(last.some((message) => messageText(message).includes("[Summary of steps"))).toBe(
         false,
       );
@@ -144,14 +159,14 @@ testAgent()("step summaries", (it) => {
   it.effect("a run that ends before its request would be compacted again asks for no summary", () =>
     Effect.gen(function* () {
       // About 45,000 tokens at the end: steps are due past 40,000, but 20 more would not pass 80,000.
-      const { asked } = yield* run("short", true, Option.some("- 요약"), 80_000);
+      const { asked } = yield* run("short", true, () => Option.some("- 요약"), 80_000);
       expect(asked).toEqual([]);
     }),
   );
 
   it.effect("steps whose outputs cannot be read again are not summarized away", () =>
     Effect.gen(function* () {
-      const { asked } = yield* run("unrecorded", false, Option.some("- 요약"), leaveOutAt);
+      const { asked } = yield* run("unrecorded", false, () => Option.some("- 요약"), leaveOutAt);
       expect(asked).toEqual([]);
     }),
   );

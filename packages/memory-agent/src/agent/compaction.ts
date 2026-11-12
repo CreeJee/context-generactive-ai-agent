@@ -34,6 +34,7 @@ import {
   recentRawSteps,
   recentRawUserTurns,
   stepBlockSteps,
+  stepSummaryFailureLimit,
   summaryCharacters,
   userMessageCharacters,
 } from "./compaction-policy.ts";
@@ -1706,8 +1707,8 @@ export const compactionHook = Effect.fnUntraced(function* (options: {
     messages: ReadonlyArray<StoredMessage>,
   ) => Effect.Effect<ReadonlyArray<StoredMessage> | null, ModelHandoffFailed>;
   /**
-   * Summarizes a run's earlier steps, none when it could not. Without it, or once it could not, the
-   * run's steps are only cleared.
+   * Summarizes a run's earlier steps, none when it could not. Without it, or once it could not
+   * {@link stepSummaryFailureLimit} times in a row, the run's steps are only cleared.
    */
   readonly summarizeSteps?: (steps: StepsToSummarize) => Effect.Effect<Option.Option<string>>;
 }) {
@@ -1717,8 +1718,12 @@ export const compactionHook = Effect.fnUntraced(function* (options: {
   /** What the provider counted of the latest request it reported beyond {@link sentEstimate}. */
   const overhead = yield* Ref.make(options.overhead ?? Option.none<number>());
   const stepBlocks = yield* Ref.make<ReadonlyArray<StepBlock>>([]);
-  /** Set once a summary could not be made: asking again would likely fail again, every request. */
-  const stepsStopped = yield* Ref.make(false);
+  /**
+   * Summaries that could not be made in a row. Past {@link stepSummaryFailureLimit} the run stops
+   * asking: one that keeps failing would likely fail again, every request.
+   */
+  const stepFailures = yield* Ref.make(0);
+  const stepFailed = Ref.update(stepFailures, (failures) => failures + 1);
   const summarizing = yield* FiberHandle.make<void, never>();
   const lastRequests = yield* Option.match(Option.fromNullishOr(options.lastRequests), {
     onSome: Effect.succeed,
@@ -1762,19 +1767,20 @@ export const compactionHook = Effect.fnUntraced(function* (options: {
           Effect.flatMap(
             summarize({ task: due.task, messages: due.messages, rereads }),
             Option.match({
-              onNone: () => Ref.set(stepsStopped, true),
+              onNone: () => stepFailed,
               onSome: (text) =>
-                Ref.update(
-                  stepBlocks,
-                  EffectArray.append({ from: due.from, through: due.through, text }),
+                Effect.andThen(
+                  Ref.update(
+                    stepBlocks,
+                    EffectArray.append({ from: due.from, through: due.through, text }),
+                  ),
+                  Ref.set(stepFailures, 0),
                 ),
             }),
           ),
       });
     }).pipe(
-      Effect.catch((error) =>
-        Effect.andThen(logFailure("Step summaries stopped")(error), Ref.set(stepsStopped, true)),
-      ),
+      Effect.catch((error) => Effect.andThen(logFailure("Step summary failed")(error), stepFailed)),
     );
 
   /**
@@ -1801,7 +1807,7 @@ export const compactionHook = Effect.fnUntraced(function* (options: {
         onSome: ({ summarize, due }) =>
           Effect.when(
             FiberHandle.run(summarizing, stepBlock(summarize, due), { onlyIfMissing: true }),
-            Effect.map(Ref.get(stepsStopped), (stopped) => !stopped),
+            Effect.map(Ref.get(stepFailures), (failures) => failures < stepSummaryFailureLimit),
           ).pipe(Effect.asVoid),
       },
     );
