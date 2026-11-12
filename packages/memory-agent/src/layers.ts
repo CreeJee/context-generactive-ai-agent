@@ -75,6 +75,7 @@ import { Interpreter } from "./memory/interpret.ts";
 import { Interpretations } from "./memory/interpretations.ts";
 import { Nodes } from "./memory/nodes.ts";
 import { PlanNodes } from "./workflow/plan-nodes.ts";
+import { ProgressMemos } from "./memory/progress-memo.ts";
 import { Recorder } from "./memory/record.ts";
 import { MemorySearch, type SearchTuning } from "./memory/search.ts";
 import { PermissionClassifier } from "./permissions/classifier.ts";
@@ -325,6 +326,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
   const memory = Layer.mergeAll(
     Sessions.layer,
     PlanNodes.layer,
+    ProgressMemos.layer,
     Recorder.layer,
     DrawingPreviews.layer,
     Graph.layer,

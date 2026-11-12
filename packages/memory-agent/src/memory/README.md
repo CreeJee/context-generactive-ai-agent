@@ -18,7 +18,7 @@
 - `Graph` — 그래프 탐색 서비스(`Graph.layer`, 키 `memory-agent/memory/graph`). `traverse(seeds, options)`는 utility 우선으로 바깥쪽을 탐색하고(`beforeSeq`가 있으면 그 seq 전에 저장된 노드만 방문), `trace(id)`는 원인 사슬과 그 사슬을 정정·철회한 노드(`challengedBy`)를 돌려준다
 - `GraphReadFailed` / `Hop` / `Visit` / `TraverseOptions` / `TraverseResult` / `Provenance` — 그래프 읽기 실패 오류와 탐색·출처 결과 타입
 - `MemorySearch` — 이전 메시지를 찾는 서비스(`MemorySearch.layer`, `MemorySearch.tuned(partial)`). 벡터·텍스트 매치를 시드로 그래프를 탐색한다. `rerank`가 켜진 검색은 채널마다 상위 10개를 번갈아 합친 후보를 `Reranker`로 다시 줄 세우고, 그 후보들의 fused 점수를 새 순서대로 다시 나눠 준다(점수 크기는 그대로라 그래프 탐색의 utility 하한이 같은 뜻이다). `find`, `findMatches`, `allowedProjects`를 제공한다. `find`는 매치와 함께 아직 못 덮은 수(`unindexed`, `textUnindexed`, `uninterpreted`)를 세어 모델에 알리는 검색(find_memory, CLI)이 쓴다. `findMatches`는 그 수를 세지 않고 매치만 돌려준다. 턴의 기억 보충, 외부 agent의 기억 단서, 해석 후보 검색이 쓴다. 세는 검색도 전체 수는 자기 프로젝트 읽기에서만 세고, 다른 프로젝트 읽기는 그 프로젝트들의 미해석 수만 센다
-- `FindInput` / `Match` / `FoundMatches` / `SearchCoverage` / `FindResult` / `SkippedRead` / `NativeMemorySearchFailed` — 검색 입력(`beforeSeq`: 그 seq 전에 저장된 노드만 찾고 그래프로 닿는다. 지난 발언을 해석할 때 쓴다. 찾은 노드의 정정 표시는 지금 기준. `rerank`: reranker가 돌면 상위 결과를 그 순서로 둔다. find_memory, compaction의 기억 보충, 외부 agent의 기억 단서가 켜고, 해석 후보 검색은 끈다)과 결과(`Match.parentSessionId`·`agent`: 하위 에이전트 세션의 매치면 그 대화와 하위 에이전트 이름, 카드 에이전트는 `card-<card>-g<n>`, 대화 자신의 매치면 둘 다 null), 실패해도 건너뛰고 진행한 읽기의 기록(reason·stage·elapsedMs), 네이티브 검색 실패 오류
+- `FindInput` / `Match` / `FoundMatches` / `SearchCoverage` / `FindResult` / `SkippedRead` / `NativeMemorySearchFailed` — 검색 입력(`beforeSeq`: 그 seq 전에 저장된 노드만 찾고 그래프로 닿는다. 지난 발언을 해석할 때 쓴다. 찾은 노드의 정정 표시는 지금 기준. `rerank`: reranker가 돌면 상위 결과를 그 순서로 둔다. find_memory, compaction의 기억 보충, 외부 agent의 기억 단서가 켜고, 해석 후보 검색은 끈다)과 결과(`Match.parentSessionId`·`agent`: 하위 에이전트 세션의 매치면 그 대화와 하위 에이전트 이름, 카드 에이전트는 `card-<card>-g<n>`, 대화 자신의 매치면 둘 다 null. `Match.memo`: 진행 메모 node `note`의 매치에만 있고, 사용자가 확인한 말이 아니라는 라벨, 인용한 근거 node id, 그 항목을 대체한 뒤의 항목 id(`replacedBy`, 아직 서 있으면 null)를 담는다), 실패해도 건너뛰고 진행한 읽기의 기록(reason·stage·elapsedMs), 네이티브 검색 실패 오류
 - `fuseRanks` / `searchTerms` / `namesSomethingExactly` / `searchTuning` / `SearchTuning` — RRF 순위 병합, 검색어 분리(3자 이상은 lexical 색인의 trigram 구절, 두 글자는 그 글자로 시작하거나 끝나는 gram), 정확한 이름(에러 코드·경로·식별자·버전·해시·포트)이 든 질의인지 판별, 검색 튜닝 값
 - `readStructuredEvidence` — `Effect.fn("Memory.readStructuredEvidence")`. 노드 원문 페이지에 출처·변경·판정(`evidenceContext`)을 붙여 돌려준다. 노드가 없거나 범위 밖이면 null
 - `traceStructuredEvidence` / `EvidenceReadFailed` — 같은 범위·권한 규칙으로 출처 사슬, 적용된 변경(사유 포함), 미확정 변경을 요약한다. 저장소 읽기 실패는 stage만 담은 `EvidenceReadFailed`가 된다
@@ -27,6 +27,7 @@
 - `Interpreter` / `InterpretationFailed` — llm-interpret 서비스(`Interpreter.layer(automatic = true)`). 저장된 발화를 topic·correction·relation edge로 바꾼다. 실패 reason은 `model_call_failed` 또는 `unreadable_answer`
 - `interpretInstructions` / `normalizeTopic` — 해석 모델의 시스템 지시문, topic 라벨 정규화(한 줄, 앞뒤 공백 제거, 최대 60자)
 - `Recorder` / `makeRecordingHook` / `RunBinding` — 채팅 run을 메모리 노드로 바꾸는 서비스(`Recorder.layer`)와 Effect AI run의 `RunHook`을 만드는 함수(`Nodes`·`PermissionReviews` 필요). `RunBinding.replyTo`는 run이 답하는 node다. 메인 대화는 사용자 턴, 하위 에이전트 세션은 지시가 나온 부모 쪽 node이고, 없으면 assistant node에 `reply` edge를 달지 않는다. `RunBinding.reviewOf`는 호출의 권한 판정이 run의 세션에 call id로 있지 않을 때 그 위치다(하위 에이전트의 판정은 부모 세션에 `<thread id>:<call id>`로 남는다)
+- `ProgressMemos` / `MemoKind` / `MemoEntry` / `MemoBinding` / `memoText` / `memoView` (`progress-memo.ts`) — 세션마다 에이전트가 남기는 진행 메모 서비스(`ProgressMemos.layer`). 항목은 found·done·tried·open 종류의 `note` node이고 근거 node에 `cites` edge를 잇는다. `current(sessionId)`는 지금 서 있는 항목, `toolFor(binding)`은 `update_memo` 도구(add·replace·remove), `hookFor(sessionId)`는 메모가 있으면 요청 끝에 user 메시지로 붙이는 `request` hook이다. `memoText`는 그 메시지, `memoView`는 도구 답과 하위 에이전트 보고서의 모양이다
 - `MemoryGraphMaintenance` / `MemoryGraphRepairFailed` — 이전 버전이 잘못 쓴 링크를 자동으로 고치는 로컬 수리 서비스(`MemoryGraphMaintenance.layer`)와 그 실패 오류
 - `latestResolver` / `ChainReads` / `LatestEvidence` / `LatestHead` / `BranchHead` / `AppliedChange` / `ChainSource` / `ChangeRelation` — owner 저장소 읽기를 통해 한 발화에 기록된 변경이 어디서 끝나는지 해석한다
 - `createResultPageReader` / `ResultPageReadFailed` — append-only 노드 텍스트를 블록 캐시·텍스트 인덱스로 페이지 단위로 읽는 리더와 그 실패 오류
@@ -47,7 +48,7 @@
 - `readStructuredEvidence`와 `traceStructuredEvidence`는 읽기 시점에 조립만 한다. 새 검색, 모델 호출, 해석, 영속 사실을 만들지 않는다. root·원인·변경에 같은 범위를 적용하고, 노드가 없거나 범위 밖이면 null로 성공한다. 추적할 수 없는 노드도 `untraced` 증거로 보고한다
 - 그래프 탐색(`selectNode`)은 `memory_graph_suppressed_nodes`에 있는 노드를 빼지만, `trace`의 시작 노드는 억제 여부와 상관없이 읽는다. 대체된 읽기도 자기 출처는 남는다
 - `traverse`에서 노드의 utility는 부모 utility에 edge 가중치를 곱한 값이다. budget(빈 bridge 노드 포함), minUtility, projectIds, beforeSeq를 지켜야 한다. budget이 남은 후보보다 먼저 떨어지면 `complete: false`를 돌려준다
-- `edgeWeights` 값은 (0, 1] 범위다. writer가 선언할 수 있는 링크는 calls·returns·reply뿐이고, `next`와 `touches`는 규칙으로 파생된다
+- `edgeWeights` 값은 (0, 1] 범위다. writer가 선언할 수 있는 링크는 calls·returns·reply·cites·supersedes뿐이고, `next`와 `touches`는 규칙으로 파생된다
 - `Interpretations.record`는 양 끝 노드가 모두 존재하고 meaningful할 때만(count === 2) 한 트랜잭션 안에서 기록한다. applied 결론만 llm edge로도 넣고(`ON CONFLICT DO NOTHING`), unconfirmed는 사실이 아닌 질문으로 남긴다
 - Interpreter는 시작할 때 `running` 작업을 `pending`으로 되돌리고, assistant 노드의 pending 작업을 지운다. 사용자 발화만 해석한다. 삭제는 `EXISTS`로 조회한다. `IN (SELECT ...)` 전체 스캔이 네이티브 인덱스의 시작 deadline을 넘겨 event loop를 막았기 때문이다
 - Interpreter의 배치 순서: 생성 시각(`created_at`)이 가장 늦은 pending 발화의 세션을 먼저 고르고, 그 세션 안에서는 seq 오름차순으로 처리한다. 세션 선택에는 seq 순서를 쓰지 않는다. 고정값은 batchSize 8, 실행당 5배치, 최대 3회 시도, 모델 호출 타임아웃 90초다. `Semaphore(1)`로 실행은 한 번에 하나만 돈다
@@ -57,13 +58,16 @@
 - 모델 답은 문장마다 따로 읽는다. 답 전체가 JSON이 아니면 배치 전체가 `unreadable_answer`로 실패하지만, 한 문장의 모양만 틀리면 그 문장만 `unreadable_answer`로, 답에 없는 문장은 `missing_from_answer`로 실패하고 나머지는 기록된다
 - 해석 프롬프트는 발화 안의 텍스트를 데이터로 다루고, 그 안의 지시를 따르지 않는다. corrects·retracts는 user 발화만 할 수 있다
 - API 사용량(`memory-interpretation`)은 세션이 있는 발화에 대해서만 기록한다
+- 진행 메모의 node는 고치지 않는다. 항목을 바꾸거나 지우면 `supersedes` edge로 그 항목을 가리키는 뒤의 `note`를 쓴다(지울 때는 `memo: removed`). 같은 세션의 뒤 note가 대체한 항목과 removed note는 메모에 없다
+- `update_memo`는 바꿈 전체를 받거나 전체를 거절한다(`memo_not_updated`와 problems). 거절 이유는 없는 항목 id, 근거 없는 open 아닌 항목, 이 대화의 tool call id(호환 요청이 바꿔 보낸 id 포함)도 이 프로젝트의 node id도 아닌 근거, `summaryCharacters`를 넘으면서 늘어나는 메모다. 줄어드는 바꿈은 한도를 넘어도 받는다. 아직 기록되지 않은 call id는 1초까지 다시 찾는다
+- 메모 node는 `inFlow: false`라 대화 흐름의 `next` edge를 받지 않고, 임베딩 대상이 아니라 lexical 검색으로만 찾힌다
 - Layer 요구: `Graph`와 `Interpretations`에는 `SqlClient`가 필요하다. `Interpreter`에는 `SqlClient`, `Nodes`, `MemorySearch`, `Interpretations`, `ActiveProvider`, `ApiUsage`, `AppEvents`, `SecureRandom.SecureRandom`이 필요하다. 증거 함수에는 `Nodes`, `Graph`, `Interpretations`, `MemorySearch`가 필요하다. `MemorySearch`에는 `Reranker`가 필요하다
 
 ## Side Effects
 
 - SQLite 읽기: `nodes`, `edges`, `memory_graph_suppressed_nodes`, `interpretations`, `interpret_jobs`
 - SQLite 쓰기: `interpretations` INSERT와 applied 결론의 `edges` INSERT(llm origin), `interpret_jobs` 상태 갱신(running/done/failed/pending)과 시작 시 정리(UPDATE·DELETE), topic 노드 append(`nodes.append`)
-- SQLite 쓰기: `Nodes`의 append-only 노드와 구조 edge 기록, `Recorder`의 채팅 run 기록, `MemoryGraphMaintenance`의 링크 수리
+- SQLite 쓰기: `Nodes`의 append-only 노드와 구조 edge 기록, `Recorder`의 채팅 run 기록, `ProgressMemos`의 메모 `note` node와 cites·supersedes edge, `MemoryGraphMaintenance`의 링크 수리
 - 네트워크: `Interpreter`가 `ActiveProvider`가 고른 provider의 가장 싼 effort 모델을 `singleAnswer`로 부르고, `recordUsage`로 API 사용량 ledger에 기록한다
 - 네이티브 검색: `MemorySearch`는 native-search owner worker를 거쳐 벡터·controlled 읽기를 하고, 실패한 읽기를 `SkippedRead`로 남긴다
 - 난수: `Interpreter`는 모델 호출 threadId에 `uuidV4`를 쓴다

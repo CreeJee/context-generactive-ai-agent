@@ -330,6 +330,59 @@ testAgent()("MemorySearch.find", (it) => {
       }),
   );
 
+  it.effect(
+    "a memo entry it finds is labelled the agent's, with its evidence and replacement",
+    () =>
+      Effect.gen(function* () {
+        const { project, session } = yield* freshProject;
+        const nodes = yield* Nodes;
+        const at = { projectId: project.id, sessionId: session.id };
+        const read = yield* nodes.append({
+          ...at,
+          kind: "tool_result",
+          text: "retries: 3",
+          detail: { toolName: "read_file", toolCallId: "call-1", ok: true },
+        });
+        const first = yield* nodes.append({
+          ...at,
+          kind: "note",
+          text: "재시도 횟수는 세 번이다",
+          detail: { memo: "found" },
+          inFlow: false,
+          links: [{ kind: "cites", nodeId: read.id }],
+        });
+        const later = yield* nodes.append({
+          ...at,
+          kind: "note",
+          text: "재시도 횟수는 호출마다 세 번이다",
+          detail: { memo: "found" },
+          inFlow: false,
+          links: [
+            { kind: "cites", nodeId: read.id },
+            { kind: "supersedes", nodeId: first.id },
+          ],
+        });
+        yield* indexAll;
+        const result = yield* find({
+          query: "재시도 횟수",
+          projectId: project.id,
+          crossProject: false,
+        });
+        const byId = (id: string) => result.matches.find((match) => match.id === id);
+        expect(byId(first.id)?.memo).toEqual({
+          label: "agent memo, not user-confirmed",
+          evidence: [read.id],
+          replacedBy: later.id,
+        });
+        expect(byId(later.id)?.memo).toEqual({
+          label: "agent memo, not user-confirmed",
+          evidence: [read.id],
+          replacedBy: null,
+        });
+        expect(byId(read.id)?.memo).toBeUndefined();
+      }),
+  );
+
   it.effect("memory tools let the model find, read and trace earlier evidence in a chat run", () =>
     Effect.gen(function* () {
       const earlier = yield* earlierSession;

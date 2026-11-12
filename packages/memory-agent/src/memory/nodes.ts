@@ -67,6 +67,11 @@ export const NodeDetail = Schema.Struct({
    * again, so the version alone does not name one Plan.
    */
   planRevisionId: Schema.optional(Schema.Int),
+  /**
+   * note: what the progress memo entry is. `removed` takes an earlier entry out of the memo; the
+   * entry it supersedes stays as it was.
+   */
+  memo: Schema.optional(Schema.Literals(["found", "done", "tried", "open", "removed"])),
 });
 export type NodeDetail = typeof NodeDetail.Type;
 

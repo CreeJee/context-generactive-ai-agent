@@ -41,7 +41,7 @@
 ## Invariants
 
 - 새 내장 도구를 추가하면 `builtinToolEffects`에 `read`/`effectful`을 명시해야 한다. 소스 등록 커버리지 테스트가 이를 요구하고, 계약을 바꿀 때는 구현을 확인해야 한다. 알 수 없는/커스텀/MCP 도구는 effectful로 취급된다.
-- 대체된 도구 이름(`get_subagent_report`, `save_shell_skill`, `wait_subagents`)은 기록된 run·history에 남아 있으므로 `retiredToolEffects`에서 지우면 안 된다.
+- 대체된 도구 이름(`get_subagent_report`, `save_shell_skill`, `wait_subagents`, `read_subagent_tool_result`)은 기록된 run·history에 남아 있으므로 `retiredToolEffects`에서 지우면 안 된다.
 - `definitions.ts`는 브라우저에서 import해도 안전해야 한다. 서버 구현은 `approved.ts`에 둔다.
 - `gatedToolNames`의 도구는 어떤 권한 모드에서도 승인 없이 실행되지 않는다. `run_skill`은 호출마다 게이트하지 않고, 저장 시 승인된 프로그램만 실행한다(수정되었거나 승인 안 된 스킬은 다시 저장할 때까지 거부).
 - 루프는 게이트보다 먼저 인수를 디코드한다. 스키마에 맞지 않는 호출은 게이트에 닿지 않는다. 호출 준비는 `prepareRepaired`를 거쳐 TanStack이 수리한 인수도 받는다.

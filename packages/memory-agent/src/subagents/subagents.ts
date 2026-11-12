@@ -72,6 +72,7 @@ import { childRunTools } from "./role.ts";
 import { fallbackLogged, logFailure } from "../runtime/logged-failures.ts";
 import { Nodes } from "../memory/nodes.ts";
 import { Recorder } from "../memory/record.ts";
+import { memoView, ProgressMemos } from "../memory/progress-memo.ts";
 import { contextLimitExceededCode } from "../runtime/shown-failure.ts";
 
 export const subagentToolNames = [
@@ -105,6 +106,7 @@ function childInstructionsBody(name: string | null, instructions: string | null)
     "- Work in the shared project, report what you did and found briefly, and say plainly what you could not do or verify.",
     "- Complete only your assigned task. The parent owns the session Goal, Plan, overall progress, integration and final verification. Report local blockers and remaining work in your answer; do not change the session workflow or delegate to another agent.",
     "- Older completed tool outputs may be replaced by a reference. Use read_tool_result with its ID to read a page of it again when needed.",
+    "- Keep your progress memo with update_memo as you work: it stays in view when older messages are left out, and it goes back with your answer.",
     ...(isTruthy(instructions)
       ? [`Additional instructions from the parent agent:\n${instructions}`]
       : []),
@@ -282,6 +284,8 @@ export type SubagentReport =
       /** The child's final message. */
       readonly answer: string;
       readonly error: string | null;
+      /** The child's progress memo as it stands: what it found, did, tried and left open. */
+      readonly memo: ReturnType<typeof memoView>;
     }
   | {
       readonly status: "resume_blocked";
@@ -390,6 +394,7 @@ const make = Effect.gen(function* () {
   const crypto = yield* SecureRandom.SecureRandom;
   const nodes = yield* Nodes;
   const recorder = yield* Recorder;
+  const memos = yield* ProgressMemos;
 
   // A child cut off by a restart is not rerun on its own (R18).
   yield* sql`UPDATE subagents SET status = 'interrupted', updated_at = ${yield* Clock.currentTimeMillis}
@@ -676,7 +681,15 @@ const make = Effect.gen(function* () {
   ) =>
     Effect.gen(function* () {
       const threadId = subagentThreadId(row.id);
-      const ownTools = childRunTools(tools);
+      // The child keeps a progress memo of its own session, not its parent's.
+      const ownTools = [
+        ...childRunTools(tools),
+        memos.toolFor({
+          projectId: binding.project.id,
+          sessionId: threadId,
+          runId: handle.chatRunId,
+        }),
+      ];
       yield* childSession(binding.sessionId, threadId);
       // The calls that would wait on the relay gate stay with the child.
       const programs = codeTools.forRunTools(
@@ -762,6 +775,8 @@ const make = Effect.gen(function* () {
         relayGateHook,
         traceHook,
         compacting.hook,
+        // After compaction: the memo is shown at the end of every request, never left out.
+        memos.hookFor(threadId),
         skillReviews.hookFor(binding.project, binding.sessionId),
         apiUsageHook(usageLedger, {
           rootSessionId: binding.sessionId,
@@ -879,6 +894,7 @@ const make = Effect.gen(function* () {
         attemptId: handle.id,
         answer,
         error: failureCode,
+        memo: memoView(yield* memos.current(threadId)),
       } satisfies ChildOutcome;
     });
 
@@ -1236,6 +1252,7 @@ const make = Effect.gen(function* () {
       Effect.fromOption(found, gone),
     );
     const base = { subagentId, agent: row.name, taskId, attemptId };
+    const memo = memoView(yield* memos.current(subagentThreadId(subagentId)));
     const settled = Effect.map(runStore.thread(attempt.threadId), (messages): SubagentReport => {
       // The attempt's terminal event names its last assistant message.
       const answerId = detail.events.findLast(
@@ -1261,6 +1278,7 @@ const make = Effect.gen(function* () {
                 : "interrupted",
         answer,
         error: attempt.failure === null ? null : attemptFailureCode(attempt.failure.reason),
+        memo,
       };
     });
     return yield* terminal(attempt.status)

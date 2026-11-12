@@ -10,6 +10,8 @@ const parentToolNames = HashSet.fromIterable([
   "delegate_to_agent",
   "cancel_background_task",
   "get_background_result",
+  // A child keeps a memo of its own session instead.
+  "update_memo",
 ]);
 
 /** Children report local progress; the parent owns session planning and final adoption. */

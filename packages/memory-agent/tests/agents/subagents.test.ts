@@ -326,6 +326,26 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
     }),
   );
 
+  it.effect(
+    "a child's progress memo is kept in its own session and comes back with its report",
+    () =>
+      Effect.gen(function* () {
+        const { sessionId } = yield* parentSession("full");
+        const answer = yield* delegate(
+          sessionId,
+          'call run_subagent {"task":"call update_memo {\\"add\\":[{\\"kind\\":\\"open\\",\\"text\\":\\"which config wins\\"}]}"}',
+        );
+        const [child] = yield* (yield* Subagents).list(sessionId);
+        expect(
+          yield* sqlAll(
+            "SELECT session_id, json_extract(detail, '$.memo') AS memo FROM nodes WHERE kind = 'note' AND text = 'which config wins'",
+          ),
+        ).toEqual([{ session_id: subagentThreadId(child!.id), memo: "open" }]);
+        expect(answer).toContain('"memo":[{');
+        expect(answer).toContain("which config wins");
+      }),
+  );
+
   it.effect("resume_subagent retries the task as a new child attempt", () =>
     Effect.gen(function* () {
       const { sessionId } = yield* parentSession();

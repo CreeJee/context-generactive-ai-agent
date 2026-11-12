@@ -64,6 +64,15 @@ export interface Match {
   readonly parentSessionId: string | null;
   /** The subagent's name, when it has one: `card-<card>-g<n>` runs a card, `…-verify` checks one. */
   readonly agent: string | null;
+  /**
+   * A progress memo entry (`note`): an agent's own note, not anything the user confirmed, with the
+   * nodes it cites and the later entry of its session that replaced it, if one did.
+   */
+  readonly memo?: {
+    readonly label: "agent memo, not user-confirmed";
+    readonly evidence: readonly string[];
+    readonly replacedBy: string | null;
+  };
   readonly createdAt: string;
   /** Matched chunk's start, or original text's start. Read evidence before relying on it. */
   readonly snippet: string;
@@ -490,6 +499,40 @@ const make = (tuning: SearchTuning) =>
         ),
       );
 
+    const memoEvidence = SqlSchema.findAll({
+      Request: Schema.String,
+      Result: Schema.Struct({ id: Schema.String }),
+      execute: (noteId) => sql`SELECT to_id AS id FROM edges
+        WHERE from_id = ${noteId} AND kind = 'cites' ORDER BY created_at, rowid`,
+    });
+    const memoReplacement = SqlSchema.findOneOption({
+      Request: Schema.String,
+      Result: Schema.Struct({ id: Schema.String }),
+      execute: (noteId) => sql`SELECT later.id FROM edges e
+        JOIN nodes later ON later.id = e.from_id JOIN nodes n ON n.id = e.to_id
+        WHERE e.to_id = ${noteId} AND e.kind = 'supersedes'
+          AND later.session_id = n.session_id AND later.seq > n.seq
+        ORDER BY later.seq DESC LIMIT 1`,
+    });
+    /** What a memo entry rests on and whether it still stands; nothing for any other node. */
+    const memoOf = (node: { readonly id: string; readonly kind: NodeKind }) =>
+      node.kind !== "note"
+        ? Effect.succeed({})
+        : storageRead(
+            Effect.all({
+              evidence: memoEvidence(node.id),
+              replacedBy: memoReplacement(node.id),
+            }).pipe(
+              Effect.map(({ evidence, replacedBy }) => ({
+                memo: {
+                  label: "agent memo, not user-confirmed" as const,
+                  evidence: evidence.map((row) => row.id),
+                  replacedBy: Option.getOrNull(Option.map(replacedBy, (row) => row.id)),
+                },
+              })),
+            ),
+          );
+
     /** Which session a match comes from: a conversation's own, or a subagent's under one. */
     const sessionOrigin = (sessionId: string | null) =>
       sessionId === null
@@ -752,9 +795,17 @@ const make = (tuning: SearchTuning) =>
             supersededBy: appliedChanges(visit.node.id),
             unconfirmedChallenges: unconfirmedCount(visit.node.id),
             origin: sessionOrigin(visit.node.sessionId),
+            memo: memoOf(visit.node),
           }).pipe(
             Effect.map(
-              ({ latest, projectName, supersededBy, unconfirmedChallenges, origin }): Match => {
+              ({
+                latest,
+                projectName,
+                supersededBy,
+                unconfirmedChallenges,
+                origin,
+                memo,
+              }): Match => {
                 const matched = Option.getOrUndefined(MutableHashMap.get(spans, visit.node.id));
                 const start = matched?.start ?? 0;
                 return {
@@ -764,6 +815,7 @@ const make = (tuning: SearchTuning) =>
                   sessionId: visit.node.sessionId,
                   parentSessionId: origin.parentSessionId,
                   agent: origin.agent,
+                  ...memo,
                   createdAt: visit.node.createdAt,
                   snippet: visit.node.text.slice(start, start + snippetLength),
                   ...optionalProperty(

@@ -73,6 +73,7 @@ import { Indexer } from "../memory/embedding/indexer.ts";
 import { Interpreter } from "../memory/interpret.ts";
 import { Nodes } from "../memory/nodes.ts";
 import { Recorder } from "../memory/record.ts";
+import { ProgressMemos } from "../memory/progress-memo.ts";
 import { Projects, type Project } from "../projects/projects.ts";
 import { type GateBinding, PermissionGate } from "../permissions/gate.ts";
 import { Sessions } from "../sessions/sessions.ts";
@@ -564,6 +565,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const nodes = yield* Nodes;
   const recorder = yield* Recorder;
   const memoryTools = yield* MemoryTools;
+  const memos = yield* ProgressMemos;
   const fileTools = yield* FileTools;
   const drawingPreviews = yield* DrawingPreviews;
   const redactor = yield* SecretRedactor;
@@ -2051,6 +2053,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         });
         const allSharedTools = redactor.withHiddenResults([
           ...memoryTools.toolsFor(answers, memoryScope),
+          ...(reportSource !== null ? [] : [memos.toolFor({ projectId, sessionId, runId })]),
           // An SVG the model writes comes back with a picture of it, for the page to show.
           ...drawingPreviews.withPreviews(project, fileTools.toolsFor(project)),
           ...outsideTools.toolsFor(project),
@@ -2244,6 +2247,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           summaries.hookFor(sessionId),
           // Last to choose the history sent to the model; only retained local images are inlined.
           compacting.hook,
+          // After compaction: the memo is shown at the end of every request, never left out.
+          memos.hookFor(sessionId),
           yield* modelImagesHook(attachments),
           contextUsageHook({
             windowTokens: Effect.sync(window),

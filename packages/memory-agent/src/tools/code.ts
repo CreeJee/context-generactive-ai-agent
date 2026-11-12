@@ -68,6 +68,7 @@ const programCallable = {
   run_subagent: false,
   resume_subagent: false,
   get_subagent_reports: false,
+  update_memo: false,
   list_report_evidence: true,
   read_report_item: true,
   start_new_goal: false,

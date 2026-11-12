@@ -35,6 +35,8 @@ export const builtinToolEffects = {
   run_subagent: "effectful",
   resume_subagent: "effectful",
   get_subagent_reports: "read",
+  // Writes the session's progress memo, a memory record.
+  update_memo: "effectful",
   // Report-session evidence tools only perform scoped SELECTs and redaction.
   list_report_evidence: "read",
   read_report_item: "read",

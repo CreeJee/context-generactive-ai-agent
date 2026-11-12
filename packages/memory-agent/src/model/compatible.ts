@@ -136,6 +136,13 @@ const compatibleToolCallId = (id: string, attempt: number) =>
       ).slice(0, 8)}`
     : joinedToolCallId(id);
 
+/**
+ * The ids a compatible request may have given stored call `id` as it replayed another model's
+ * turn, the usual one first: what the model read in its place.
+ */
+export const replayedToolCallIds = (id: string) =>
+  Arr.makeBy(4, (attempt) => compatibleToolCallId(id, attempt));
+
 /** The model a compatible request goes to; turns any other model wrote are replayed as foreign. */
 export const compatibleTarget = (model: string): ReplayTarget => ({
   source: { provider: "openai-compatible", api: "openai-completions", model },
