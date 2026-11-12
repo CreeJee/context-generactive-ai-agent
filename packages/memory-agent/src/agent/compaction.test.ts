@@ -266,6 +266,26 @@ describe("compact", () => {
       expect(yield* Ref.get(intactCalls)).toBe(0);
     }),
   );
+
+  it.effect("keeps an answered output whole until it is recorded, as nothing could reread it", () =>
+    Effect.gen(function* () {
+      const clearedWith = (toolResultId: string | null) =>
+        Effect.map(
+          compactEffect({
+            messages: answeredShell,
+            state: fresh,
+            sources: lookupSources({ toolResultId: () => toolResultId, nodeText: () => null }),
+            budget: unlimited,
+          }),
+          (compacted) =>
+            compacted.messages.find(
+              (message) => message.role === "tool" && message.toolCallId === "old-1",
+            )?.content,
+        );
+      expect(yield* clearedWith(null)).toBe("large earlier output");
+      expect(yield* clearedWith("node-old-1")).toBe(clearedOutput("node-old-1"));
+    }),
+  );
 });
 
 describe("request history", () => {

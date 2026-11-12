@@ -197,13 +197,7 @@ const clearedPrefix = "[Tool output cleared.";
 export const clearedNotice = (whereToRead: string) => `${clearedPrefix} ${whereToRead}]`;
 
 /** What a cleared tool result of the conversation says: it is a memory node. */
-export function clearedOutput(nodeId: string | null) {
-  return clearedNotice(
-    isTruthy(nodeId)
-      ? `Reread: read_evidence ${nodeId}`
-      : "Find it with find_memory, then read_evidence.",
-  );
-}
+export const clearedOutput = (nodeId: string) => clearedNotice(`Reread: read_evidence ${nodeId}`);
 
 /** Tool results the model is sent in full. */
 const wholeToolOutputs = (messages: ReadonlyArray<ConversationMessage>) =>
@@ -371,8 +365,6 @@ export interface CompactionSources {
   readonly retrievalAppendix?: (
     sent: ReadonlyArray<ConversationMessage>,
   ) => Effect.Effect<CompactionMessage | null>;
-  /** What stands in for what a request leaves out; memory's ({@link memoryPointers}) by default. */
-  readonly pointers?: LeaveOutPointers;
   /**
    * The user's messages as memory recorded them, oldest first. Where a request leaves out earlier
    * messages, the user's words in them that still hold are sent in their place; without them, only
@@ -503,28 +495,22 @@ const stillSaid = (
 };
 
 /**
- * What compaction puts in place of what it leaves out, saying where to read it again. A tool
- * output is named by the id `CompactionSources.toolResultIds` gave it, null when it has none.
- * Only these differ between histories; when and what compaction leaves out is the same.
+ * What compaction puts in place of what it leaves out, saying where to read it again: a session's
+ * tool outputs and messages are memory nodes. A tool output is named by the id
+ * `CompactionSources.toolResultIds` gave it, null while it is not recorded yet. Such an output is
+ * never left out, as nothing could read it again, and no pointer promises an id not recorded.
  */
-export interface LeaveOutPointers {
-  /** A cleared tool output; none keeps it whole, as nothing could read it again. */
-  readonly cleared: (id: string | null) => Option.Option<string>;
+const memoryPointers = {
+  /** A cleared tool output; none keeps it whole. */
+  cleared: (nodeId: string | null) =>
+    Option.map(Option.liftPredicate(nodeId, isTruthy), clearedOutput),
   /** Where a previewed output's header says its full result is; none sends the output whole. */
-  readonly fullResult: (id: string | null) => Option.Option<string>;
-  /** What stands in for `count` messages left out. */
-  readonly dropped: (count: number) => string;
-}
-
-/** A session's: its tool outputs and messages are memory nodes. */
-export const memoryPointers: LeaveOutPointers = {
-  cleared: (nodeId) => Option.some(clearedOutput(nodeId)),
-  // Never promise an ID that has not been recorded.
-  fullResult: (nodeId) =>
+  fullResult: (nodeId: string | null) =>
     Option.map(
       Option.liftPredicate(nodeId, isTruthy),
       (id) => `read_tool_result ID ${id}, page by offset`,
     ),
+  /** What stands in for `count` messages left out. */
   dropped: droppedMarker,
 };
 
@@ -537,18 +523,14 @@ interface Recall {
 }
 
 const recallOf = (
-  sources: CompactionSources,
   toolResultId: (toolCallId: string) => string | null,
   stillSaidIn: (cut: ReadonlyArray<ConversationMessage>) => Option.Option<string> = Option.none,
-): Recall => {
-  const pointers = sources.pointers ?? memoryPointers;
-  return {
-    cleared: (toolCallId) => pointers.cleared(toolResultId(toolCallId)),
-    fullResult: (toolCallId) => pointers.fullResult(toolResultId(toolCallId)),
-    dropped: (cut) =>
-      [pointers.dropped(cut.length), ...Option.toArray(stillSaidIn(cut))].join("\n\n"),
-  };
-};
+): Recall => ({
+  cleared: (toolCallId) => memoryPointers.cleared(toolResultId(toolCallId)),
+  fullResult: (toolCallId) => memoryPointers.fullResult(toolResultId(toolCallId)),
+  dropped: (cut) =>
+    [memoryPointers.dropped(cut.length), ...Option.toArray(stillSaidIn(cut))].join("\n\n"),
+});
 
 const decodeToolArguments = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
@@ -1017,9 +999,7 @@ export const compactEffect = Effect.fnUntraced(function* <M extends Conversation
       ),
       { onNone: () => 0, onSome: ([, block]) => block.end },
     ) + userTurns(cut).length;
-  const recall = recallOf(sources, toolResultId, (cut) =>
-    stillSaid(messages, recorded, turnsIn(cut)),
-  );
+  const recall = recallOf(toolResultId, (cut) => stillSaid(messages, recorded, turnsIn(cut)));
 
   const clearedByHand = clearAnswered(
     messages.slice(0, manual.clearedThrough),
@@ -1218,14 +1198,13 @@ function lightweightToolResultsBody<M extends ConversationMessage>(
   messages: ReadonlyArray<M>,
   toolResultId: (toolCallId: string) => string | null,
 ): ReadonlyArray<M> {
-  return previewedResults(messages, toolResultId, memoryPointers);
+  return previewedResults(messages, toolResultId);
 }
 
-/** {@link lightweightToolResults}, each preview naming its full result as `pointers` say. */
+/** {@link lightweightToolResults}, each preview naming its full result in memory. */
 function previewedResults<M extends ConversationMessage>(
   messages: ReadonlyArray<M>,
   toolResultId: (toolCallId: string) => string | null,
-  pointers: LeaveOutPointers,
 ): ReadonlyArray<M> {
   const names = HashMap.fromIterable(
     messages.flatMap((message) =>
@@ -1240,7 +1219,7 @@ function previewedResults<M extends ConversationMessage>(
       const content = yield* Option.liftPredicate(message.content, isText);
       const name = yield* Option.filter(HashMap.get(names, toolCallId), Schema.is(PreviewedTool));
       const serialized = JSON.stringify(yield* previews[name](content));
-      const full = yield* pointers.fullResult(toolResultId(toolCallId));
+      const full = yield* memoryPointers.fullResult(toolResultId(toolCallId));
       const text = `[${name} preview; full result: ${full}. Check omitted entries before relying on them.]\n${serialized}`;
       return yield* Option.liftPredicate(
         text,
@@ -1311,7 +1290,7 @@ const compactedRequest = Effect.fnUntraced(function* <M extends ConversationMess
     restoredContext === undefined ? compacted.messages : [restoredContext, ...retained];
   const { toolResultId } = yield* memoryLookups(sources, outgoing, []);
   return {
-    messages: previewedResults(outgoing, toolResultId, sources.pointers ?? memoryPointers).filter(
+    messages: previewedResults(outgoing, toolResultId).filter(
       (message) => !isEmptyUserText(message),
     ),
     stage: restored !== null && compacted.stage === "none" ? "summarize" : compacted.stage,
@@ -1556,7 +1535,7 @@ const appendedTo = Effect.fnUntraced(function* (
   const { from, manual, prefix, sources, budget } = now;
   const added = from.slice(previous.from.length);
   const { toolResultId } = yield* memoryLookups(sources, added, []);
-  const shown = previewedResults(added, toolResultId, sources.pointers ?? memoryPointers).filter(
+  const shown = previewedResults(added, toolResultId).filter(
     (message) => !isEmptyUserText(message),
   );
   // What was sent is replayable already, so pairing calls with results keeps all of it.
@@ -1760,7 +1739,7 @@ export const compactionHook = Effect.fnUntraced(function* (options: {
   ) =>
     Effect.gen(function* () {
       const { toolResultId } = yield* memoryLookups(options.sources, due.messages, []);
-      yield* Option.match(rereadsOf(due.messages, recallOf(options.sources, toolResultId)), {
+      yield* Option.match(rereadsOf(due.messages, recallOf(toolResultId)), {
         // An output nothing can read again is not summarized away; it is due again once it can be.
         onNone: () => Effect.void,
         onSome: (rereads) =>

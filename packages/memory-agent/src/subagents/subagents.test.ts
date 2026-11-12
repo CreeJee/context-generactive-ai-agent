@@ -9,7 +9,7 @@ import {
   compactEffect,
   estimateConversation,
 } from "../agent/compaction.ts";
-import { childFailureOf, recordedOnly } from "./subagents.ts";
+import { childFailureOf } from "./subagents.ts";
 
 const noCompaction: CompactionState = {
   manual: { clearedThrough: 0, summarizedTurns: 0 },
@@ -45,7 +45,6 @@ const recordedIn = (saved: ReadonlyArray<ConversationMessage>): CompactionSource
       ),
     ),
   nodeTexts: () => Effect.succeed(HashMap.empty()),
-  pointers: recordedOnly,
 });
 
 /** A child's request as the conversation's compaction makes it, from the child's own session. */

@@ -29,13 +29,7 @@ import {
 import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
 import { ApiUsage, apiUsageHook } from "../agent/api-usage.ts";
 import { stepSummarizer } from "../agent/step-summaries.ts";
-import {
-  budgetFor,
-  clearedOutput,
-  compactionHook,
-  type LeaveOutPointers,
-  memoryPointers,
-} from "../agent/compaction.ts";
+import { budgetFor, compactionHook } from "../agent/compaction.ts";
 import type { JsonValue } from "../json.ts";
 import type { AgUiEvent } from "../loop/chunks.ts";
 import { asRunFailed, modelFailureOf, type RunHook, runChat } from "../loop/run.ts";
@@ -365,15 +359,6 @@ const childRunStep = (run: ChildRun, event: AgUiEvent): ChildRun =>
     }),
     Match.orElse(() => run),
   );
-
-/**
- * Memory's pointers, except that an output not recorded yet is never left out: nothing could read
- * it again. The child records each step as it ends, beside the run.
- */
-export const recordedOnly: LeaveOutPointers = {
-  ...memoryPointers,
-  cleared: (nodeId) => Option.map(Option.liftPredicate(nodeId, isTruthy), clearedOutput),
-};
 
 /** The terminal event of an attempt that answered carries its last assistant message id. */
 const isAnswerPayload = Schema.is(Schema.Struct({ messageId: Schema.String }));
@@ -745,7 +730,6 @@ const make = Effect.gen(function* () {
         sources: {
           toolResultIds: (toolCallIds) => nodes.toolResultIds(threadId, toolCallIds),
           nodeTexts: nodes.texts,
-          pointers: recordedOnly,
         },
         budget: budgetFor(runtime.contextWindow(binding.selection.model)),
         promptCacheFor: model.promptCacheFor,
